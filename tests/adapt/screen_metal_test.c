@@ -64,6 +64,9 @@ static int g_link;
              *(n) = 6; *(dur) = 0.016680417; } else if (g_link == 2) *(n) = 0; } while (0)
 #define YSCR__MTL_SCREEN_INTERVALS(m, mn, mx) \
     do { (void)(m); if (g_iv_min) { *(mn) = g_iv_min; *(mx) = g_iv_max; } } while (0)
+/* An older macOS than 14 while g_old_os is 1 (no such system was at hand). */
+static int g_old_os;
+#define YSCR__MTL_OS_14(ok) do { if (g_old_os) *(ok) = 0; } while (0)
 #define YSP_SCREEN_IMPLEMENTATION
 #include "ysp/screen.h"
 #define YSP_GFX_IMPLEMENTATION
@@ -330,10 +333,11 @@ static void period(const yscr_desc* d) {
         yscr_describe(&s, line, sizeof line);
         yscr_close(&s);
         p = strstr(line, "period=");
-        if (p) sscanf(p, "period=%lldns(%31[a-z])", &per, src);
+        if (p) sscanf(p, "period=%lldns(%31[a-z-])", &per, src);
         if (k == 1) check(per == 16680375 && !strcmp(src, "cadisplaylink"),
                           "period: from CADisplayLink's timestamps, named in the describe line");
-        else check(per > 0 && !strcmp(src, "cvdisplaylink"), "period: CVDisplayLink when no callback came");
+        else check(per > 0 && !strcmp(src, "cvdisplaylink-no-callback"),
+                   "period: CVDisplayLink when no callback came, the reason named");
     }
     g_link = 0;
     memset(&s, 0, sizeof s);
@@ -341,9 +345,27 @@ static void period(const yscr_desc* d) {
     yscr_describe(&s, line, sizeof line);
     yscr_close(&s);
     p = strstr(line, "period=");
-    if (p) sscanf(p, "period=%lldns(%31[a-z])", &per, src);
+    if (p) sscanf(p, "period=%lldns(%31[a-z-])", &per, src);
     printf("     the real read: period=%lldns(%s)%s\n", per, src,
-           strcmp(src, "cadisplaylink") ? " (no CADisplayLink callback: a display asleep, or before macOS 14)" : "");
+           strcmp(src, "cadisplaylink") ? " (no CADisplayLink callback: the display asleep?)" : "");
+}
+
+/* An older macOS than 14: refused before ANGLE loads, the floor named;
+ * then this system opens again. */
+static void old_os(const yscr_desc* d) {
+    static yscr_screen s;
+    const char* e;
+    memset(&s, 0, sizeof s);
+    g_old_os = 1;
+    check(!yscr_open(&s, d), "old os: an older macOS than 14 is refused");
+    e = yscr_error(&s);
+    printf("     %s\n", e);
+    check(strstr(e, "macOS 14 (Sonoma) or later") != NULL, "old os: the message names the floor");
+    if (yscr_is_open(&s)) yscr_close(&s);
+    g_old_os = 0;
+    memset(&s, 0, sizeof s);
+    check(yscr_open(&s, d), "old os: this system (14 or later) opens");
+    if (yscr_is_open(&s)) yscr_close(&s);
 }
 
 /* Variable refresh: refused, with the fix in the message; fixed: opens. */
@@ -394,6 +416,7 @@ int main(int argc, char** argv) {
      * on a shown screen the missing wait went unseen (0 of 180 frames) */
     run("sync", &d, 120, 400, 0, 1);
     gfx_origin(&d);
+    old_os(&d);
     vrr(&d);
     period(&d);
     d.color_depth = 10;

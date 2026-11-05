@@ -1,4 +1,4 @@
-/* ysp/screen.h - v0.13.1 - public domain single-header display library
+/* ysp/screen.h - v0.14.0 - public domain single-header display library
  *
  *   The window, the GL ES 3.0 context, the display mode and the swap path
  *   of a stimulus display, with flip at a time: each frame learns the
@@ -621,7 +621,8 @@
  *     page; not tested), codes (drawn through GL, always at risk:
  *     CODE_RISK_COMPOSED), the gamma ramp, raw mice and the panic watchdog
  *     (panic=n/a).
- *   YSCR_BACKEND_METAL (v0.11.0, measured in v0.12.0; macOS; AUTO there): SDL makes the
+ *   YSCR_BACKEND_METAL (v0.11.0, measured in v0.12.0; macOS 14 and later,
+ *     the project's floor: open() refuses an older system; AUTO there): SDL makes the
  *     window; the header makes its CAMetalLayer (SDL_Metal_CreateView) on
  *     the MTLDevice that ANGLE's Metal display reports. ANGLE draws each
  *     frame straight into the drawable, through a pbuffer on the drawable's
@@ -636,13 +637,14 @@
  *     drawable was not shown: the record is estimated, and OCCLUDED when
  *     the window was hidden or the session locked (locked= in the describe
  *     line). caps.period_ns comes from CADisplayLink's timestamps at
- *     open (macOS 14 and later; the step of up to 6 callbacks, which lie
- *     on presentedTime's grid: 16.680375 ms on a "60 Hz" HDMI mode, where
- *     the link's duration and CVDisplayLink's nominal period say 16.680417
- *     ms), else CVDisplayLink's nominal period (deprecated in macOS 15;
- *     before 14, or no callback in 250 ms, as with a display asleep), else
- *     the mode; never the mode's rounded rate. The describe line names the
- *     source (period=...ns(cadisplaylink)). The flips refine it. nextDrawable gives up after its
+ *     open (the step of up to 6 callbacks, which lie on presentedTime's
+ *     grid: 16.680375 ms on a "60 Hz" HDMI mode, where the link's duration
+ *     and CVDisplayLink's nominal period say 16.680417 ms). With no
+ *     callback in 250 ms (a display asleep gives none) it is CVDisplayLink's
+ *     nominal period, the one source measured right with the display
+ *     asleep; then the mode; never the mode's rounded rate. The describe
+ *     line names the source and why (period=...ns(cadisplaylink),
+ *     (cvdisplaylink-no-callback)). The flips refine it. nextDrawable gives up after its
  *     own 1 s timeout; a frame without a drawable draws into a 1 x 1
  *     pbuffer and is estimated (no_drawable= in the describe line). A
  *     presented handler that has not come 1 s after its target is given up
@@ -1460,8 +1462,8 @@
  *   mode (ProMotion, Adaptive-Sync), for the reason it refuses desc.vrr:
  *   the core's fixed grid would be wrong for every flip, and on macOS the
  *   panel varies the interval without being asked. It reads the window's
- *   NSScreen minimumRefreshInterval and maximumRefreshInterval (macOS 12
- *   and later) at open; more than 0.1% apart is a variable mode, and the
+ *   NSScreen minimumRefreshInterval and maximumRefreshInterval at open;
+ *   more than 0.1% apart is a variable mode, and the
  *   message says how to set a fixed rate (System Settings > Displays >
  *   Refresh Rate). Both are in the describe line (refresh_interval=). A
  *   mode change or a move to another screen while open is not watched.
@@ -1579,6 +1581,17 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.14.0 - METAL needs macOS 14 (Sonoma) or later, ysp's floor: on an
+ *          older system open() fails with a message that names the floor
+ *          (NSProcessInfo isOperatingSystemAtLeastVersion:, read once),
+ *          where an open on macOS 12 or 13 succeeded before. The guards for
+ *          older systems are gone (respondsToSelector: before CADisplayLink
+ *          and NSScreen's refresh intervals). CVDisplayLink stays, only for
+ *          a CADisplayLink that gives no callback in 250 ms, as with the
+ *          display asleep: measured asleep, it is the one source with the
+ *          display's period. The describe line names the source and why:
+ *          period=...ns(cadisplaylink), (cvdisplaylink-no-callback) or
+ *          (mode-no-display-link).
  *   v0.13.1 - METAL's period at open comes from CADisplayLink's
  *          timestamps (macOS 14 and later), not CVDisplayLink's nominal
  *          period, which stays as the fallback; caps.mode's refresh is then
@@ -1939,6 +1952,16 @@
  *          groups, input restamping, mode lists and the parameter table.
  *          The other swap paths are stubs that refuse to open.
  *
+ *   STATUS: v0.14.0 (METAL, the macOS 14 floor): no system older than 14
+ *   was at hand; tests/adapt/screen_metal_test.c acts as one through a seam
+ *   (YSCR__MTL_OS_14) and checks the refusal and its message. The asleep
+ *   measurement behind the CVDisplayLink case (2026-11-05, Apple M2, M27Q
+ *   over HDMI at "60 Hz", the display asleep, a 320 x 240 window, 1 s
+ *   each): CADisplayLink 0 callbacks; CAMetalDisplayLink 59 updates with
+ *   its drawables dropped, its targetPresentationTimestamp stepping exactly
+ *   16666667 ns (a 60.000 Hz grid, not the display's 16680375, so 0.8 ms
+ *   a second off), and 3 updates with them presented; CVDisplayLink's
+ *   nominal period 16680417 ns (2.5 ppm off).
  *   STATUS: v0.13.1 (METAL, the period): CADisplayLink's timestamps
  *   stepped by 16680375 ns (+-1) on the M27Q's "60 Hz", on presentedTime's
  *   grid, where its duration said 16680417 (the probe, 2026-11-05). The
@@ -2221,9 +2244,9 @@
 #define YSP_SCREEN_H_INCLUDED
 
 #define YSCR_VERSION_MAJOR 0
-#define YSCR_VERSION_MINOR 13
-#define YSCR_VERSION_PATCH 1
-#define YSCR_VERSION_STRING "0.13.1"
+#define YSCR_VERSION_MINOR 14
+#define YSCR_VERSION_PATCH 0
+#define YSCR_VERSION_STRING "0.14.0"
 
 #include "ysp/rt.h"
 #include "ysp/input.h"
@@ -5243,8 +5266,8 @@ static const char* yscr__mtl_kind_name(int kind) {
 /* Variable refresh (VARIABLE REFRESH): the window's screen in a variable
  * mode (ProMotion, Adaptive-Sync) has NSScreen.minimumRefreshInterval below
  * maximumRefreshInterval; a fixed mode has them equal (the M27Q at its
- * "60 Hz": 16.680416 ms both, measured). The intervals in ns, 0 when macOS
- * does not give them (before macOS 12). Returns 1 for a variable mode: more
+ * "60 Hz": 16.680416 ms both, measured). The intervals in ns, 0 when not
+ * read (no screen). Returns 1 for a variable mode: more
  * than 0.1% apart, so rounding never makes a fixed mode variable. */
 static int yscr__mtl_variable(int64_t min_ns, int64_t max_ns) {
     if (min_ns <= 0 || max_ns <= 0) return 0;
@@ -5263,8 +5286,8 @@ static int yscr__mtl_vrr_message(char* err, size_t cap, int64_t min_ns, int64_t 
 
 /* CVDisplayLink's nominal period, value / scale seconds, in ns; 0 when it
  * has none. The mode's refresh rate is a rounded label (60.000 for a
- * 59.9505 Hz HDMI mode, measured), never the period. The fallback before
- * macOS 14 (yscr__mtl_link_period is the source from macOS 14 on). */
+ * 59.9505 Hz HDMI mode, measured), never the period. Used only when
+ * CADisplayLink gives no callback (yscr__mtl_link_period is the source). */
 static int64_t yscr__mtl_period(int64_t value, int32_t scale) {
     if (value <= 0 || scale <= 0) return 0;
     return (int64_t)llround((double)value * 1e9 / (double)scale);
@@ -5461,11 +5484,15 @@ static struct {
     void *addPresented, *presentedTime, *commit, *status, *newSharedEvent, *signaledValue, *newBuffer;
     void *contents, *occlusionState, *styleMask, *waitUntilCompleted, *newTexture, *texDesc;
     void *setUsage, *setStorageMode, *setTimeout;
-    void *screen_, *respondsTo, *minRefresh, *maxRefresh;
+    void *screen_, *minRefresh, *maxRefresh;
     void *linkWithTarget, *addToRunLoop, *currentRunLoop, *invalidate, *timestamp, *duration, *alloc, *init, *tick;
     yscr__id cls_runloop, cls_target;
     yscr__id cls_texdesc;
+    int os14;   /* macOS 14 or later: the project's floor */
 } yscr__mac;
+
+/* NSOperatingSystemVersion: three NSIntegers, long on 64-bit macOS */
+typedef struct { long major, minor, patch; } yscr__osver;
 
 #define YSCR__MSG(ret, ...) ((ret (*)(__VA_ARGS__))yscr__mac.msg)
 static yscr__id yscr__o0(yscr__id o, void* s) { return YSCR__MSG(yscr__id, yscr__id, void*)(o, s); }
@@ -5562,7 +5589,7 @@ static int yscr__mac_load(const char* angle_dir, char* err, size_t cap) {
         YSCR__S(texDesc, "texture2DDescriptorWithPixelFormat:width:height:mipmapped:");
         YSCR__S(setUsage, "setUsage:"); YSCR__S(setStorageMode, "setStorageMode:");
         YSCR__S(setTimeout, "setAllowsNextDrawableTimeout:");
-        YSCR__S(screen_, "screen"); YSCR__S(respondsTo, "respondsToSelector:");
+        YSCR__S(screen_, "screen");
         YSCR__S(minRefresh, "minimumRefreshInterval"); YSCR__S(maxRefresh, "maximumRefreshInterval");
         YSCR__S(linkWithTarget, "displayLinkWithTarget:selector:"); YSCR__S(addToRunLoop, "addToRunLoop:forMode:");
         YSCR__S(currentRunLoop, "currentRunLoop"); YSCR__S(invalidate, "invalidate");
@@ -5572,7 +5599,27 @@ static int yscr__mac_load(const char* angle_dir, char* err, size_t cap) {
 #undef YSCR__S
         yscr__mac.cls_texdesc = yscr__mac.cls("MTLTextureDescriptor");
         yscr__mac.locked_key = yscr__mac.CFStringCreateWithCString(NULL, "CGSSessionScreenIsLocked", 0x08000100u);
+        {   /* one Foundation call; it reports the real version to a binary
+             * built with any SDK, where the ProductVersion plist can say 10.16 */
+            yscr__osver v14 = { 14, 0, 0 };
+            yscr__id info = yscr__o0(yscr__mac.cls("NSProcessInfo"), yscr__mac.sel("processInfo"));
+            yscr__mac.os14 = info && YSCR__MSG(signed char, yscr__id, void*, yscr__osver)(
+                                         info, yscr__mac.sel("isOperatingSystemAtLeastVersion:"), v14);
+        }
         yscr__mac.state = 1;
+    }
+    {   /* Test seam, not API: tests/adapt/screen_metal_test.c defines
+         * YSCR__MTL_OS_14(&ok) to act as an older system. Checked before
+         * ANGLE loads, so an older system gets this message first. */
+        int ok = yscr__mac.os14;
+#if defined(YSCR__MTL_OS_14)
+        YSCR__MTL_OS_14(&ok);
+#endif
+        if (!ok) {
+            yscr__copy(err, cap, "ysp_screen: METAL needs macOS 14 (Sonoma) or later, ysp's floor; "
+                       "this system is older. Update macOS.");
+            return YSCR_ERR_NOT_IMPLEMENTED;
+        }
     }
     if (!yscr__mac.lib[4]) {   /* ANGLE: desc.angle_dir, YSCR_ANGLE_DIR, then the loader's search */
         char path[1024];
@@ -5851,10 +5898,11 @@ static int yscr__mtl_selftest(yscr__mtl* m) {
 }
 
 /* The period's source, for the describe line. */
-#define YSCR__MTL_SRC_LINK  1   /* CADisplayLink's timestamps (macOS 14 and later) */
-#define YSCR__MTL_SRC_CV    2   /* CVDisplayLink's nominal period (before 14)     */
-#define YSCR__MTL_SRC_MODE  3   /* the mode's rate, a rounded label               */
-static const char* const yscr__mtl_src_name[4] = { "default", "cadisplaylink", "cvdisplaylink", "mode" };
+#define YSCR__MTL_SRC_LINK  1   /* CADisplayLink's timestamps                     */
+#define YSCR__MTL_SRC_CV    2   /* CVDisplayLink's nominal period: no CADisplayLink callback */
+#define YSCR__MTL_SRC_MODE  3   /* the mode's rate, a rounded label: no display link at all */
+static const char* const yscr__mtl_src_name[4] = { "default", "cadisplaylink", "cvdisplaylink-no-callback",
+                                                   "mode-no-display-link" };
 
 /* CADisplayLink's callbacks at open: open() runs on the main thread, and
  * nothing else reads these, so a plain state is enough. */
@@ -5871,7 +5919,7 @@ static void yscr__mtl_link_tick(yscr__id self, void* cmd, yscr__id link) {
     }
 }
 
-/* The period from CADisplayLink (macOS 14 and later), or 0. There is no
+/* The period from CADisplayLink, or 0. There is no
  * read without a callback: before its first callback the link's duration,
  * timestamp and targetTimestamp are 0, and duration alone is the nominal
  * timing (above). The callbacks come through the main run loop, and open()
@@ -5894,9 +5942,8 @@ static int64_t yscr__mtl_link_read(yscr__mtl* m) {
     yscr__mtl_link_n = 0;
     yscr__mtl_link_dur = 0;
     if (!m->view || !yscr__mac.allocClass || !yscr__mac.CFRunLoopRunInMode || !yscr__mac.cfDefaultMode ||
-        !yscr__mac.cfCommonModes ||
-        !YSCR__MSG(signed char, yscr__id, void*, void*)((yscr__id)m->view, yscr__mac.respondsTo, yscr__mac.linkWithTarget))
-        return 0;   /* before macOS 14 */
+        !yscr__mac.cfCommonModes)
+        return 0;
     if (!yscr__mac.cls_target) {   /* the callback's object: a class made once per process */
         yscr__id c = yscr__mac.cls("YSCRLinkTarget");
         if (!c) {
@@ -5932,15 +5979,13 @@ static int64_t yscr__mtl_link_read(yscr__mtl* m) {
     return yscr__mtl_link_period(yscr__mtl_link_ts, yscr__mtl_link_n, yscr__mtl_secs(yscr__mtl_link_dur));
 }
 
-/* NSScreen's refresh intervals for the window's screen (macOS 12 and
- * later; asked only where the screen responds to them). Test seam, not API:
+/* NSScreen's refresh intervals for the window's screen. Test seam, not API:
  * tests/adapt/screen_metal_test.c defines YSCR__MTL_SCREEN_INTERVALS(m,
  * min, max) to set them, as a ProMotion panel in its variable mode would. */
 static void yscr__mtl_intervals(yscr__mtl* m, int64_t* min_ns, int64_t* max_ns) {
     yscr__id screen = m->nswin ? yscr__o0(m->nswin, yscr__mac.screen_) : NULL;
     *min_ns = *max_ns = 0;
-    if (screen && YSCR__MSG(signed char, yscr__id, void*, void*)(screen, yscr__mac.respondsTo, yscr__mac.minRefresh) &&
-        YSCR__MSG(signed char, yscr__id, void*, void*)(screen, yscr__mac.respondsTo, yscr__mac.maxRefresh)) {
+    if (screen) {
         *min_ns = yscr__mtl_secs(YSCR__MSG(double, yscr__id, void*)(screen, yscr__mac.minRefresh));
         *max_ns = yscr__mtl_secs(YSCR__MSG(double, yscr__id, void*)(screen, yscr__mac.maxRefresh));
     }
@@ -6071,9 +6116,14 @@ static int yscr__mtl_open(void* vctx, const yscr_presenter_open* in, yscr_caps* 
             }
         }
     }
-    /* the period: CADisplayLink's timestamps (macOS 14 and later), else
-     * CVDisplayLink's nominal timing (deprecated in macOS 15, kept for the
-     * systems before 14), else the mode's rate; the flips then refine it */
+    /* the period: CADisplayLink's timestamps; with no callback, which a
+     * display asleep gives, CVDisplayLink's nominal timing. CVDisplayLink is
+     * deprecated in macOS 15 and kept for that case only, because it is the
+     * one source measured right asleep (2026-11-05, the M27Q asleep:
+     * CADisplayLink 0 callbacks in 1 s; CAMetalDisplayLink 59 updates in 1 s
+     * on a 16666667 ns grid, a 60 Hz default unrelated to the display's
+     * 16680375, 0.8 ms/s off; CVDisplayLink's nominal 16680417 ns, 2.5 ppm
+     * off). Then the mode's rate. The flips then refine it. */
     m->period_ns = yscr__mtl_link_read(m);
     if (m->period_ns > 0) {
         m->period_src = YSCR__MTL_SRC_LINK;

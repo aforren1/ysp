@@ -1676,6 +1676,31 @@ replace = '    per = duration_ns;'
 id = "mt-18"
 name = "open() skips CADisplayLink"
 test = "metal"
-why = "From macOS 14 the period comes from CADisplayLink; CVDisplayLink (deprecated in macOS 15) is the fallback only (v0.13.1)."
+why = "The period comes from CADisplayLink; CVDisplayLink (deprecated in macOS 15) is only for a link with no callback (v0.13.1, v0.14.0)."
 find = '    m->period_ns = yscr__mtl_link_read(m);'
 replace = '    m->period_ns = 0;'
+
+# v0.14.0's 3 (mt-19 to mt-21: the macOS 14 floor).
+[[mutant]]
+id = "mt-19"
+name = "open() does not refuse a system older than macOS 14"
+test = "metal"
+why = "macOS 14 is ysp's floor: on an older system METAL must refuse at open with a message that names it, not run untested code paths (v0.14.0)."
+find = '        if (!ok) {'
+replace = '        if (0) {'
+
+[[mutant]]
+id = "mt-20"
+name = "the version check asks for the wrong version"
+test = "metal"
+why = "The check must ask for 14.0 through NSProcessInfo; a wrong struct or version refuses a supported system, and only the real call shows it (v0.14.0)."
+find = '            yscr__osver v14 = { 14, 0, 0 };'
+replace = '            yscr__osver v14 = { 99, 0, 0 };'
+
+[[mutant]]
+id = "mt-21"
+name = "the describe line drops why CVDisplayLink was used"
+test = "metal"
+why = "The describe line names the period's source and why: CVDisplayLink only when CADisplayLink gave no callback, as with the display asleep (v0.14.0)."
+find = '"cvdisplaylink-no-callback",'
+replace = '"cvdisplaylink",'

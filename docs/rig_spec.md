@@ -1120,7 +1120,7 @@ There is no server. The only job that wants one is the build job.
 | Windows 10 | ANGLE, D3D11 | DXGI flip model | WASAPI | Media Foundation | any host, zig |
 | Linux X11 | native GL | GLX sync control | ALSA or PulseAudio | FFmpeg, opt-in | any host, zig, pinned glibc |
 | Linux Wayland | native GL | presentation-time | ALSA or PulseAudio | FFmpeg, opt-in | any host, zig |
-| macOS | ANGLE, Metal | measured, then claimed | CoreAudio | AVFoundation | a Mac |
+| macOS 14 and later | ANGLE, Metal | measured, then claimed | CoreAudio | AVFoundation | a Mac |
 | Web | WebGL2 | requestAnimationFrame, fixed grid | Web Audio | frame sequence, pl_mpeg | any host, Emscripten |
 
 Frame sequence and pl_mpeg run everywhere.
@@ -1128,6 +1128,14 @@ Frame sequence and pl_mpeg run everywhere.
 Windows 11 is the Windows target. Windows 10 is end of life: it stays
 supported where that costs little, for example through run-time lookup
 of newer APIs, but no design decision or measurement rests on it.
+
+macOS 14 (Sonoma) is the macOS floor. ysp/screen.h's METAL backend
+takes its period from `CADisplayLink` on the window's view, which macOS
+14 added, and CVDisplayLink, the older source, is deprecated in macOS
+15. Every macOS measurement ran on macOS 27, and no older system was at
+hand to test. So the `macos` CMake presets and the Python wheels target
+14.0, METAL refuses to open on an older system with a message that
+names the floor, and the code keeps no branch for a system before 14.
 
 ### 9.1 Android and iOS, not planned, not precluded
 
@@ -1183,7 +1191,7 @@ Details, versions and measurements per header are in
 |---|---|
 | 1. `ysp/rt.h` | Done, v0.10.0 (macOS: the clock is `mach_absolute_time()`). |
 | 2. `ysp/timeline.h` | Done for now, v0.8.1. Since v0.4.0: trigger channels (`ytl_trigger_ch()`), parameter tables for the ops and the desc. |
-| 3. `ysp/screen.h` | v0.10.4 on Windows: DXGI_FLIP and COMPOSITION, the window thread (on by default for native Windows), flip records, the abort and the panic, the web backend (v0.7.0). macOS: METAL (v0.11.0; v0.12.0 sets its constants from the probe's timing session, tier 2 for a shown flip; the header's own real-window test showed 120 of 120 frames with the screen unlocked; v0.13.0 refuses a display in a variable refresh mode, checked only through a test seam; docs/screen_macos_probe.md). X11 and Wayland are stubs. The X11 probe (docs/screen_x11_probe.md) has not run on the Linux rig. No photodiode run. |
+| 3. `ysp/screen.h` | v0.10.4 on Windows: DXGI_FLIP and COMPOSITION, the window thread (on by default for native Windows), flip records, the abort and the panic, the web backend (v0.7.0). macOS: METAL (v0.11.0; v0.12.0 sets its constants from the probe's timing session, tier 2 for a shown flip; the header's own real-window test showed 120 of 120 frames with the screen unlocked; v0.13.0 refuses a display in a variable refresh mode, checked only through a test seam; v0.13.1 takes the period from CADisplayLink; v0.14.0 refuses a macOS older than 14, the floor; docs/screen_macos_probe.md). X11 and Wayland are stubs. The X11 probe (docs/screen_x11_probe.md) has not run on the Linux rig. No photodiode run. |
 | 4. `ysp/audio.h` | v0.7.3 on WASAPI: onsets from a fit of device positions, tier 2, streams, WAV, capture. v0.8.0 on CoreAudio (one Mac, 2026-11-05): reports from the HAL's render time stamps, hog mode, the driver stack in the describe line; tier 3; timed on the built-in speakers and HDMI (0 underruns in 38 min; shortest safe lead 8 and 12 ms at a 128-frame IO buffer; the HDMI claim ends at the link, so the monitor's own delay needs a line-in or microphone run). ALSA and PulseAudio ran only as miniaudio's null device, in CI. No line-in run. |
 | 5. `ysp/gfx.h` | v0.17.3: stimuli, curve runs (text and artwork), batched text runs, parameter tables, frame capture. Open items in docs/gfx.md "Next". |
 | 6. `ysp/video.h` | v0.7.0: Media Foundation, AVFoundation with VideoToolbox (macOS; decode, open and seek timed on an M2) and pl_mpeg, the soundtrack on audio streams, UTF-8 paths, error codes. Not built: capture. |

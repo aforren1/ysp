@@ -3750,7 +3750,9 @@ the fallback exists for.
 
 ## macOS: the header owns the CAMetalLayer (v0.11.0, v0.12.0)
 
-`YSCR_BACKEND_METAL` is the macOS swap path, and AUTO there. The probe of
+`YSCR_BACKEND_METAL` is the macOS swap path, and AUTO there. It needs
+macOS 14 (Sonoma) or later, ysp's floor ([The macOS 14
+floor](#the-macos-14-floor-v0140)). The probe of
 [screen_macos_probe.md](screen_macos_probe.md) chose its shape; this note
 says what was built from the probe's functional results, what waits on
 its timing runs, and why the header calls Objective-C as it does.
@@ -3885,10 +3887,12 @@ window kind instead. The probe's runs decide each row: `present`'s
 
 ### Other choices
 
-- **The period.** CVDisplayLink's nominal period at open: the "60 Hz"
-  HDMI mode measured 400330 / 24000000 s, 16.680417 ms, 59.9505 Hz, where
-  CoreGraphics and SDL say 60.000. `caps.mode.refresh_num` and `_den`
-  are 24000000 and 400330. The flips refine it as on Windows.
+- **The period.** Never the mode's rate, which is a rounded label: the
+  "60 Hz" HDMI mode measured 16.680417 ms nominal, 59.9505 Hz, where
+  CoreGraphics and SDL say 60.000. v0.11.0 took CVDisplayLink's nominal
+  period at open; from v0.13.1 it comes from CADisplayLink
+  ([below](#the-period-from-cadisplaylink-v0131)). The flips refine it as
+  on Windows.
 - **The clock.** `presentedTime` is mach time. ysp/rt.h from v0.10.0 counts
   mach time on macOS; before, it read `CLOCK_MONOTONIC`, which counts
   sleep and is slewed (+0.58 ppm against mach time, measured). The
@@ -3916,10 +3920,9 @@ window kind instead. The probe's runs decide each row: `present`'s
 
 CVDisplayLink is deprecated in macOS 15 and does not exist on iOS. METAL
 used it only for the period at open. From v0.13.1 the period comes from
-`CADisplayLink` (`-[NSView displayLinkWithTarget:selector:]`, macOS 14 and
-later), and CVDisplayLink stays as the fallback for the systems before 14,
-which METAL still runs on (its other macOS floor is macOS 12, for the
-refresh intervals).
+`CADisplayLink` (`-[NSView displayLinkWithTarget:selector:]`). From
+v0.14.0 CVDisplayLink stays only for a CADisplayLink that gives no
+callback ([The macOS 14 floor](#the-macos-14-floor-v0140)).
 
 Which number: the probe's `links` run gave three candidates for the M27Q
 at its "60 Hz" (docs/screen_macos_probe.md, 6.4):
@@ -3942,8 +3945,9 @@ cannot deadlock against SDL's pump. With fewer than 2 callbacks it falls
 back to CVDisplayLink: with the display asleep (the session locked),
 CADisplayLink gave no callback in 2 s while CVDisplayLink went on.
 
-The describe line names the source: `period=16680375ns(cadisplaylink)`,
-`(cvdisplaylink)` or `(mode)`.
+The describe line names the source and, from v0.14.0, why:
+`period=16680375ns(cadisplaylink)`, `(cvdisplaylink-no-callback)` or
+`(mode-no-display-link)`.
 
 **The phase.** CADisplayLink's timestamps also lie on presentedTime's
 grid, so they could anchor the grid at open, before the first flip, where
@@ -3951,13 +3955,58 @@ the backend now takes it from the first presentedTimes. Not done in this
 change.
 
 **Not run with a callback.** During this change the display was asleep,
-so every real open here took the fallback: `period=16680417ns(cvdisplaylink)`.
+so every real open here took the fallback: `period=16680417ns(cvdisplaylink)`
+(`cvdisplaylink-no-callback` from v0.14.0).
 `tests/adapt/screen_metal_test.c` injects the callbacks' timestamps
 (`YSCR__MTL_LINK_TIMESTAMPS`): six a 16680375 ns step apart with a
 duration of 16.680417 ms give `period=16680375ns(cadisplaylink)`, and none
 gives `(cvdisplaylink)`. The core test checks the rule with the measured
 numbers, a missed callback, one callback and a step off the duration.
 Mutants `mt-17` and `mt-18`, 2 of 2 killed.
+
+### The macOS 14 floor (v0.14.0)
+
+macOS 14 (Sonoma) is ysp's macOS floor ([rig_spec.md, section
+9](rig_spec.md#9-platform-matrix)). Up to v0.13.1, METAL ran on macOS 12
+and 13 untested: it asked `respondsToSelector:` before CADisplayLink
+(macOS 14) and before NSScreen's refresh intervals (macOS 12), and took
+CVDisplayLink's nominal period where CADisplayLink was missing. v0.14.0
+removes those branches. `open()` asks
+`-[NSProcessInfo isOperatingSystemAtLeastVersion:]` for 14.0, once per
+process and before ANGLE loads, and on an older system fails with:
+
+```
+ysp_screen: METAL needs macOS 14 (Sonoma) or later, ysp's floor; this system is older. Update macOS.
+```
+
+That call reports the real version to a binary built with any SDK, where
+the system's version file can say 10.16 to an old one. An open that
+succeeded on macOS 12 or 13 now fails, so the version is a minor bump.
+
+**The case with no callback.** CADisplayLink gives no callback with the
+display asleep, so a period source is still needed for it. The candidates
+were measured with the display asleep (2026-11-05, Apple M2 Mac mini,
+macOS 27.0.1, the M27Q on HDMI at its "60 Hz", whose period is 16680375
+ns; the session locked; a 320 x 240 SDL window; 1 s each):
+
+| Source | Asleep | Period it gives |
+|---|---|---|
+| CADisplayLink | 0 callbacks | none |
+| CAMetalDisplayLink, drawables dropped | 59 updates | `targetPresentationTimestamp` steps exactly 16666667 ns: a 60.000 Hz grid, not the display's, 0.8 ms a second off |
+| CAMetalDisplayLink, drawables presented | 3 updates | too few to read |
+| CVDisplayLink | callbacks go on | nominal 16680417 ns, 2.5 ppm off |
+
+CAMetalDisplayLink would remove the deprecated API, but asleep it gives a
+period that is wrong by 0.08%, and nothing in its updates says so. So
+CVDisplayLink stays, only for this case, and the header's comment says
+why. The mode's rate stays the last resort, when neither link exists.
+
+**Tests.** No system older than 14 was at hand.
+`tests/adapt/screen_metal_test.c` acts as one through a seam
+(`YSCR__MTL_OS_14`): the open fails with the message above, and then
+the real system opens. Mutants `mt-19` (the check skipped), `mt-20` (the
+check asks for 99.0, so only the real call can kill it) and `mt-21` (the
+describe line drops the reason), 3 of 3 killed.
 
 ### Variable refresh refused (v0.13.0)
 
@@ -3983,8 +4032,7 @@ options were weighed against the existing rules:
   do; it does not make the fixed grid right.
 
 So `open()` reads the window's `NSScreen.minimumRefreshInterval` and
-`maximumRefreshInterval` (macOS 12 and later, each behind
-`respondsToSelector:`), and when they are more than 0.1% apart it fails
+`maximumRefreshInterval`, and when they are more than 0.1% apart it fails
 with:
 
 ```
@@ -4027,6 +4075,8 @@ something measured here.
   the Metal test (no wait on the signal, codes compared raw, the pbuffer
   cache off). The far-target hold has no mutant: no test can show a frame
   far ahead without a shown screen.
+- `mt-14` to `mt-21` (v0.13.0 to v0.14.0): variable refresh, the period's
+  source and the macOS 14 floor, each in its section above.
 
 ### Not done
 

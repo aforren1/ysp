@@ -30,7 +30,7 @@ C11 or C++17, and its top comment is its manual.
 | [color](docs/color.md) | `ycol_` | Display calibration and color space conversions | 0.4.0 | tested |
 | [rdk](docs/rdk.md) | `yrdk_` | Random dot kinematograms, reproducible bit for bit | 0.3.0 | tested |
 | [outline](docs/outline.md) | `yol_` | Paths, font glyphs and SVG into curve sets | 0.4.1 | tested |
-| [screen](docs/screen.md) | `yscr_` | Stimulus window, flip at a time, flip records; web and macOS backends | 0.13.1 | 2 machines |
+| [screen](docs/screen.md) | `yscr_` | Stimulus window, flip at a time, flip records; web and macOS backends | 0.14.0 | 2 machines |
 | [audio](docs/audio.md) | `yau_` | Sound at a time and its capture on the rig clock; CoreAudio on macOS; Web Audio in a browser | 0.8.1 | 2 machines |
 | [gfx](docs/gfx.md) | `ygfx_` | GL ES 3.0 stimuli: shapes, gratings, gabors, text, frame capture | 0.17.3 | 1 machine |
 | [video](docs/video.md) | `yvid_` | Movies as stimuli, frame by predicted onset | 0.7.0 | 2 machines |
@@ -42,6 +42,12 @@ and on one Mac; **no device** never ran
 on the hardware it drives.
 [docs/status.md](docs/status.md) has the platforms, the dependencies, the
 measurements and the hardware for each header.
+
+Platforms: Windows 11 (Windows 10 where it costs little), Linux,
+macOS 14 (Sonoma) and later, and browsers through Emscripten. macOS 14
+is the floor: the `macos` CMake presets and the Python wheels target
+14.0, and ysp/screen.h refuses to open on an older macOS
+([rig_spec.md, section 9](docs/rig_spec.md#9-platform-matrix)).
 
 ## Quick start
 
