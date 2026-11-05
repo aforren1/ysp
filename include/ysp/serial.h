@@ -1,4 +1,4 @@
-/* ysp/serial.h - v0.6.2 - public domain single-header serial-port library
+/* ysp/serial.h - v0.6.3 - public domain single-header serial-port library
  *
  *   REQUIRES ysp/rt.h, its sibling in this collection, on the include path.
  *   This header includes it for the clock, the waits, the scheduling ladder
@@ -379,6 +379,11 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.6.3 - macOS: desc.exclusive also takes flock(LOCK_EX | LOCK_NB)
+ *          and refuses the open when another handle or process holds it.
+ *          TIOCEXCL alone let a second open of a pseudo-terminal through.
+ *          The lock goes with the descriptor at yser_close(). No API
+ *          change.
  *   v0.6.2 - yser_pulse_off_at_ns() saturates start + width and
  *          return + hold at INT64_MAX, so yser_pulse() and
  *          yser_pulse_async() with a width near INT64_MAX hold `on` until
@@ -493,8 +498,8 @@
  * The string always matches the three numbers. */
 #define YSER_VERSION_MAJOR  0
 #define YSER_VERSION_MINOR  6
-#define YSER_VERSION_PATCH  2
-#define YSER_VERSION_STRING "0.6.2"
+#define YSER_VERSION_PATCH  3
+#define YSER_VERSION_STRING "0.6.3"
 
 /* CancelIoEx (Vista) is what lets yser_interrupt() end a pending overlapped
  * read. The MSVC SDK targets a recent Windows by default, but MinGW headers
@@ -670,8 +675,12 @@ typedef struct yser_desc {
                                        * rounded up to whole ms, so at least 1 ms;
                                        * YSER_TIMEOUT_INFINITE blocks; another
                                        * negative value fails yser_open()        */
-    bool           exclusive;         /* POSIX: TIOCEXCL, refuse other opens. Windows
-                                       * ports are always exclusive.                     */
+    bool           exclusive;         /* POSIX: TIOCEXCL, refuse other opens; on
+                                       * macOS also flock(LOCK_EX | LOCK_NB),
+                                       * which refuses another exclusive open
+                                       * (this header's, pyserial's) on any
+                                       * driver. Windows ports are always
+                                       * exclusive.                              */
     bool           low_latency;       /* request the driver's minimum RX latency;
                                        * see LOW LATENCY above                           */
     bool           dtr_low_on_open;   /* see DTR AND DEVICE RESET                         */
@@ -1057,6 +1066,7 @@ YSER_API int yser_send_break(yser_port* p, int64_t duration_ns);
         #include <linux/serial.h>   /* TIOCGSERIAL, ASYNC_LOW_LATENCY */
     #endif
     #if defined(__APPLE__)
+        #include <sys/file.h>     /* flock, for desc.exclusive */
         #include <sys/select.h>   /* Darwin waits with select(); see POSIX WAITS */
         /* IOSSIOSPEED is spelled out instead of including <IOKit/serial/ioss.h>:
          * the ioctl number is stable ABI, and the header would drag the IOKit
@@ -2224,6 +2234,19 @@ static bool yser__open_platform(yser_port* p, const yser_desc* d) {
         yser__set_error(p, "TIOCEXCL(%s): %s", p->device, strerror(errno));
         return yser__open_fail(p);
     }
+#if defined(__APPLE__)
+    /* TIOCEXCL is accepted on a macOS pseudo-terminal and still lets a
+     * second open through, and what each serial driver does is not known
+     * here. flock() refuses every opener that also locks (this header,
+     * pyserial's exclusive=True) on any driver; TIOCEXCL stays for openers
+     * that do not lock, where the driver honors it. Any other flock error
+     * leaves TIOCEXCL as all there is. */
+    if (d->exclusive && flock(p->fd, LOCK_EX | LOCK_NB) != 0 && errno == EWOULDBLOCK) {
+        yser__set_error(p, "%s is open with exclusive in another handle or process "
+                           "(flock: %s)", p->device, strerror(errno));
+        return yser__open_fail(p);
+    }
+#endif
 
     /* Self-pipe for yser_interrupt(): the reader polls [0], any thread writes
      * [1]. pipe() plus fcntl() rather than pipe2(), whose declaration glibc

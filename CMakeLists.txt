@@ -575,6 +575,8 @@ if(NOT YSP_LSL_DIR)
 endif()
 if(WIN32)
     set(_lsl_lib ${YSP_LSL_DIR}/lsl.dll)
+elseif(APPLE)
+    set(_lsl_lib ${YSP_LSL_DIR}/liblsl.dylib)
 else()
     set(_lsl_lib ${YSP_LSL_DIR}/liblsl.so)
 endif()
@@ -588,6 +590,11 @@ if(EXISTS ${_lsl_lib} AND EXISTS ${YSP_LSL_DIR}/lsl_c.h)
         add_test(NAME compile_lsl_abi COMMAND compile_lsl_abi)
     endif()
     message(STATUS "ysp/net.h: tests use liblsl at ${_lsl_lib}")
+elseif(APPLE)
+    # tools/vendor_lsl.py has no macOS archive the standard library unpacks
+    # (see ci.yml), so do not point at it.
+    message(STATUS "ysp/net.h: no liblsl.dylib in ${YSP_LSL_DIR}, so only the fake-liblsl unit test runs; "
+                   "set YSP_LSL_DIR to a folder with liblsl.dylib and lsl_c.h")
 elseif(CMAKE_SYSTEM_NAME IN_LIST YSP_PLATFORMS_net)
     message(STATUS "ysp/net.h: no liblsl in ${YSP_LSL_DIR}, so only the fake-liblsl unit test runs; "
                    "fetch it with: uv run --no-project python tools/vendor_lsl.py --write")

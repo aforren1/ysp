@@ -1,4 +1,4 @@
-/* ysp/trials.h - v0.6.0 - public domain single-header trial sequencing library
+/* ysp/trials.h - v0.6.1 - public domain single-header trial sequencing library
  *
  *   The layer above the adaptive methods: which trial comes next, and what
  *   happened on it. Conditions and repetitions (the method of constant
@@ -23,7 +23,8 @@
  *   ysp/table.h beside it (v0.2; its implementation is compiled with this
  *   one's, as ysp/gfx.h does ysp/color.h's), and otherwise only the C
  *   standard library (snprintf for the format functions; stdio, and
- *   _commit() or fsync() for YTR_FLUSH_SYNC, for the writer). It does not
+ *   _commit(), fsync() or on macOS fcntl(F_FULLFSYNC) for YTR_FLUSH_SYNC,
+ *   for the writer). It does not
  *   include the method headers: a track is an opaque pointer and an
  *   is-done callback, so this header interleaves anything and knows nothing
  *   about stimuli or levels.
@@ -951,7 +952,10 @@
  *     write before ytr_data_write() returns: the file has no stdio buffer,
  *     so a crash, an abort() or the screen header's panic exit keeps every
  *     row written. YTR_FLUSH_SYNC also waits for the disk (_commit() on
- *     Windows, fsync() elsewhere), so a power cut keeps them too. Write
+ *     Windows, fcntl(F_FULLFSYNC) on macOS, where fsync() leaves the bytes
+ *     in the drive's write cache, and fsync() elsewhere), so a power cut
+ *     keeps them too. A macOS volume that refuses F_FULLFSYNC gets fsync().
+ *     Write
  *     between trials: a row costs microseconds with YTR_FLUSH_ROW and
  *     milliseconds with YTR_FLUSH_SYNC (STATUS has the numbers). With a
  *     write function (desc.write instead of desc.path) each row is one
@@ -1163,6 +1167,10 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.6.1 - YTR_FLUSH_SYNC on macOS: fcntl(F_FULLFSYNC), and fsync() only
+ *          when the volume refuses it. fsync() alone left the rows in the
+ *          drive's write cache, so a power cut could lose rows that the
+ *          writer said were on disk. No API change.
  *   v0.6.0 - three gaps of the experiment definition (docs/
  *          experiment_format.md 1.4) and the column bound:
  *          - G3: variables (VARIABLES): desc.vars[] of ytr_var_choice(), a
@@ -1355,6 +1363,11 @@
  *          - ytr_condition_at() indexes the practice slots too.
  *   v0.0 - specification. Declarations and the manual, no implementation.
  *
+ *   STATUS: v0.6.1, 2026-11-04: an Apple M2 Mac mini, macOS 27.0.1, Apple clang 21, APFS; every
+ *   test passes, Release, ASan and UBSan. The data-file test counts one
+ *   F_FULLFSYNC a YTR_FLUSH_SYNC row and writes every row through fsync()
+ *   on a volume that refuses it. The cost of a synced row on the Mac is
+ *   not measured. No power cut was made.
  *   STATUS: v0.6.0, 2026-10-21. tests/adapt/trials_test_vars.h: every
  *   variable value and trial seed against a second implementation of the
  *   stream, three outputs pinned; a session with variables draws as one
@@ -1561,8 +1574,8 @@
  * string is the three numbers, and the test asserts that it stays so. */
 #define YTR_VERSION_MAJOR 0
 #define YTR_VERSION_MINOR 6
-#define YTR_VERSION_PATCH 0
-#define YTR_VERSION_STRING "0.6.0"
+#define YTR_VERSION_PATCH 1
+#define YTR_VERSION_STRING "0.6.1"
 
 /* fsync() and fileno() for YTR_FLUSH_SYNC under -std=c11: the feature-test
  * macro of ysp/rt.h and ysp/pack.h, set before the first system header
@@ -2374,6 +2387,9 @@ YTR_API void ytr_data_close(ytr_data* w);
 #include <wchar.h>
 #else
 #include <unistd.h>   /* fsync */
+#ifdef __APPLE__
+#include <fcntl.h>    /* F_FULLFSYNC */
+#endif
 /* glibc fixes its feature set at the first system header, so a caller who
  * includes one before this header under -std=c11 hides fileno() (guarded by
  * __USE_POSIX) whatever the macro above asks. The C library still has it. */
@@ -7488,12 +7504,23 @@ static FILE* ytr__fopen(const char* path, bool append) {
     return f;
 }
 
-/* Hand the file's bytes to the disk (YTR_FLUSH_SYNC). */
+/* Hand the file's bytes to the disk (YTR_FLUSH_SYNC). On macOS fsync()
+ * stops at the drive: the bytes can wait in its write cache, and a power cut
+ * loses them. F_FULLFSYNC also flushes that cache. A file system without it
+ * (a network or a FAT volume) refuses it, and fsync() is then the most there
+ * is, as SQLite does. The macro is a test's way in. */
+#if defined(__APPLE__) && !defined(YTR__FULLFSYNC)
+    #define YTR__FULLFSYNC(fd) fcntl((fd), F_FULLFSYNC)
+#endif
 static bool ytr__fsync(FILE* f) {
 #ifdef _WIN32
     return _commit(_fileno(f)) == 0;
 #else
-    return fsync(fileno(f)) == 0;
+    int fd = fileno(f);
+#if defined(__APPLE__)
+    if (YTR__FULLFSYNC(fd) == 0) return true;
+#endif
+    return fsync(fd) == 0;
 #endif
 }
 

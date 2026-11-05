@@ -129,8 +129,11 @@ def build(test, inc, src_dir, out_dir, tag):
         cmd[0] = shutil.which("cl", path=path) or "cl"
     else:
         gcc = find_gcc()
+        # setupapi is a Windows import library; the lists that name it
+        # (device, rigfile, net) also build on Linux and macOS without it.
+        libs = [f for f in test.get("libs", []) if WIN or f != "-lsetupapi"]
         cmd = [gcc] + [f.replace("{repo}", REPO) for f in test.get("flags", [])] + ["-I" + inc, "-o", exe, src] + \
-              [f.replace("{repo}", REPO) for f in test.get("libs", [])]
+              [f.replace("{repo}", REPO) for f in libs]
         env = dict(os.environ)
         env["PATH"] = os.path.dirname(gcc) + os.pathsep + env.get("PATH", "")
     r = subprocess.run(cmd, capture_output=True, text=True, env=env, cwd=out_dir)
@@ -409,6 +412,14 @@ def main():
         results = {}
 
         def task(m):
+            # A mutant of code that one OS alone compiles survives elsewhere
+            # by construction; running it there says nothing.
+            plat = m.get("platform")
+            if plat and not sys.platform.startswith(plat):
+                st, detail = "skipped", "runs on %s only" % plat
+                results[m["id"]] = (st, detail)
+                say("  %-10s %-12s %s: %s" % (m["id"], st, m["name"], detail))
+                return True
             st, detail = one(L, m)
             results[m["id"]] = (st, detail)
             exp = m.get("expect", "killed")

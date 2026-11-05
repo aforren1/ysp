@@ -70,7 +70,8 @@ static int64_t pctl(const int64_t* v, int n, double p) {
 /* seconds, the exact decimal of the ns */
 static const char* secs(char* out, int64_t ns) {
     uint64_t a = ns < 0 ? (uint64_t)0 - (uint64_t)ns : (uint64_t)ns;
-    sprintf(out, "%s%llu.%09llu", ns < 0 ? "-" : "", (unsigned long long)(a / 1000000000u), (unsigned long long)(a % 1000000000u));
+    /* out holds 32: a sign, 20 digits, the point, 9 digits and the NUL. */
+    snprintf(out, 32, "%s%llu.%09llu", ns < 0 ? "-" : "", (unsigned long long)(a / 1000000000u), (unsigned long long)(a % 1000000000u));
     return out;
 }
 
@@ -276,7 +277,7 @@ int main(int argc, char** argv) {
         {
             uint8_t d[32];
             yrig_sha256(data, dn, d);
-            for (i = 0; i < 32; i++) sprintf(hex + 2 * i, "%02x", d[i]);
+            for (i = 0; i < 32; i++) snprintf(hex + 2 * i, 3, "%02x", d[i]);
         }
         base = csv + strlen(csv);
         while (base > csv && base[-1] != '/' && base[-1] != '\\') base--;
@@ -316,7 +317,7 @@ int main(int argc, char** argv) {
         uint8_t d[32];
         const char* s = strstr(text, "samples_s");
         yrig_sha256(text, tl, d);
-        for (i = 0; i < 32; i++) sprintf(hex + 2 * i, "%02x", d[i]);
+        for (i = 0; i < 32; i++) snprintf(hex + 2 * i, 3, "%02x", d[i]);
         fwrite(text, 1, s ? (size_t)(s - text) : tl, stdout);
     }
     printf("sha256 %s  %s\n", hex, out);

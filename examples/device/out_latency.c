@@ -85,7 +85,7 @@ static void sha256_hex(const uint8_t* msg, size_t n, char out[65]) {
     uint8_t d[32];
     int i;
     yrig_sha256(msg, n, d);
-    for (i = 0; i < 32; i++) sprintf(out + 2 * i, "%02x", d[i]);
+    for (i = 0; i < 32; i++) snprintf(out + 2 * i, 3, "%02x", d[i]);
 }
 
 /* --- the simulation: an adapter's DTR into a board, or a board into itself -- */

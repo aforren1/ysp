@@ -717,8 +717,9 @@ Decisions, each with its reason:
 - **In trials.h, with stdio.** The session's columns are this header's,
   so the writer that joins them to the caller's belongs here. The file is
   opened with the C library (on Windows `_wfsopen` for a UTF-8 path), so
-  the header still makes no OS call of its own but `_commit()` or
-  `fsync()` for `YTR_FLUSH_SYNC`. A write function (`desc.write`) replaces
+  the header still makes no OS call of its own but `_commit()`,
+  `fsync()` or, on macOS, `fcntl(F_FULLFSYNC)` for `YTR_FLUSH_SYNC`
+  ([v0.6.1](#v061-f_fullfsync-on-macos)). A write function (`desc.write`) replaces
   the file for a caller with its own I/O (a pack, a socket, the tests'
   memory buffer).
 - **Columns declared at open, not added per row.** PsychoPy adds a column
@@ -1020,6 +1021,29 @@ other workers' builds; the table gives the first round). Per row, median
   v0.5.1 read 112 per column). `ytr_trials` 243,344 to 253,376 bytes
   (variables 8 KB, the table's level pointers 1.5 KB); 251,960 under
   emcc. `ytb_csv_desc` 1072 to 4144 bytes.
+
+## v0.6.1: F_FULLFSYNC on macOS
+
+`YTR_FLUSH_SYNC` promises that a power cut keeps every row written. On
+macOS `fsync()` does not keep that promise: it hands the data to the drive
+and returns, and the drive may hold it in its write cache (Apple's
+`fsync(2)` manual page). `fcntl(fd, F_FULLFSYNC)` also asks the drive to
+flush that cache.
+
+| Question | Decision | Why |
+|---|---|---|
+| The call on macOS | `fcntl(F_FULLFSYNC)` | The only call that reaches the drive's cache |
+| A volume that refuses it | `fsync()` | A network or FAT volume may not support it; `fsync()` is then the most there is. SQLite does the same (any failure, then `fsync()`) |
+| Other platforms | Unchanged | `_commit()` on Windows and `fsync()` on Linux reach the disk |
+| A test's way in | `YTR__FULLFSYNC(fd)`, defined by the header unless the translation unit defined it | The test counts the calls and makes the volume refuse; nothing else can show that the call happens |
+
+Checked on 2026-11-04 on an Apple M2 Mac mini (macOS 27.0.1, Apple clang
+21, APFS): `tests/adapt/trials_test.c` passes, Release and under ASan and
+UBSan; its data-file test counts one `F_FULLFSYNC` a row with
+`YTR_FLUSH_SYNC`, none with `YTR_FLUSH_ROW`, and with a refusing volume
+writes every row through `fsync()`. Mutants `mac-01` and `mac-02` in
+`tests/mutate/trials.toml`: 2 of 2 killed (they exist on macOS only). The
+cost of a synced row on the Mac is not measured yet. No power cut was made.
 
 ## Verification (v0.2)
 

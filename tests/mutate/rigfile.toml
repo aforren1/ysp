@@ -445,3 +445,40 @@ replace = '''    if (rc != YRIG_OK) return yrig__err(err, cap, rc, "%s: cannot w
 }
 
 YRIG_API int yrig_save('''
+
+# v0.5.2: F_FULLFSYNC on macOS (docs/device.md, "F_FULLFSYNC on macOS").
+# The code exists on macOS only, so these run there.
+
+[[mutant]]
+id = "rig-52"
+name = "a save's temporary file gets fsync() alone on macOS"
+test = "rig"
+platform = "darwin"
+why = "fsync() leaves the file in the drive's write cache; a power cut after the rename can leave a profile that does not load."
+find = '''    if (YRIG__FULLFSYNC(fd) == 0) return true;
+#endif
+    return fsync(fd) == 0;'''
+replace = '''#endif
+    return fsync(fd) == 0;'''
+
+[[mutant]]
+id = "rig-53"
+name = "no fsync() when F_FULLFSYNC is refused"
+test = "rig"
+platform = "darwin"
+why = "A volume without F_FULLFSYNC (network, FAT) would fail every save."
+find = '''    if (YRIG__FULLFSYNC(fd) == 0) return true;
+#endif
+    return fsync(fd) == 0;'''
+replace = '''    return YRIG__FULLFSYNC(fd) == 0;
+#endif
+    return fsync(fd) == 0;'''
+
+[[mutant]]
+id = "rig-54"
+name = "the folder is not synced after the rename"
+test = "rig"
+platform = "darwin"
+why = "A power cut after yrig_save() returned can bring the old profile back. The test sees it through the F_FULLFSYNC hook, so on macOS only."
+find = '''        yrig__sync_dir(path);'''
+replace = ''

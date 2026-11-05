@@ -113,6 +113,7 @@ download the bytes that `write` gets, or give a path. The zip is stored
 | `session.json` | `ysp/json.h`'s canonical form and one LF; `"closed": false` from the open, `true` at the finish | D9. The canonical form gives one byte string per content |
 | Atomic rewrite | Write `session.json.tmp`, sync it to the disk, rename it over | A reader or a crash sees the old file or the new one. The sync is before the rename, so a power cut cannot leave a renamed empty file |
 | Rename over a file on Windows | `MoveFileExW(MOVEFILE_REPLACE_EXISTING \| MOVEFILE_WRITE_THROUGH)`, 5 tries 10 ms apart | The C library's `rename()` refuses an existing target on Windows. `MoveFileExW` with REPLACE_EXISTING is one rename on the volume (the method `ysp/rigfile.h` uses for the rig profile). It fails while another program holds the file without FILE_SHARE_DELETE, which virus scanners do for milliseconds; the retries cover that. `ReplaceFileW` was not used: it fails in more cases (another volume, attributes) and gains nothing here. POSIX `rename()` replaces atomically; the folder is synced after it |
+| The sync on macOS (v0.2.1) | `fcntl(F_FULLFSYNC)` on `session.json.tmp` and on the folder after the rename; `fsync()` when the volume refuses it | macOS `fsync()` hands the data to the drive and returns; the drive may hold it in its write cache, and a power cut then loses it (Apple's `fsync(2)` manual page). `F_FULLFSYNC` also asks the drive to flush that cache. A network or FAT volume may refuse it, and `fsync()` is then the most there is (SQLite does the same). `YTR_FLUSH_SYNC` rows get the same in ysp/trials.h 0.6.1 |
 | Writer's keys | `format`, `version`, `closed`, `start_utc` (when absent), `rows` and `write_errors` | `rows` is the check that a file is whole, as the trials sidecar's `rows=N`; `write_errors` says which file has a hole |
 | frames.csv's first column | `frame`, not 2.10's `index` | events.csv has a `frame` column; one name joins the two tables. experiment_format.md 2.10 now says `frame` |
 | events.csv | One table, a `kind` column, a union of columns | 2.10 lists landings, responses, device events, outputs and marks in one file. A `kind` value per source keeps one file and one reader; an empty cell is a field that the kind does not have |
@@ -141,6 +142,22 @@ WSL2 Ubuntu 22.04 gcc 11.4, emcc under node 24.19.
 | pandas | pandas 2 reads every golden file with its defaults, the quoted line break included |
 | trials v0.6's data-line columns | A session with a variable and a seed: each row's variable text and `trial_seed` (`yds_seed_text()`) equal the trials writer's own data line (`ytr_format_row()`), and read back from trials.csv as text |
 | Mutants (`tests/mutate/dataset.toml`) | v0.2.0: 39 in all, MinGW gcc 16.1: 38 killed, among them the 6 new ones (ds-34 to ds-39: the abandon finishes, leaves the streams' files open, leaves the handle open; the existing folder reported as I/O; the open keeps an earlier code; a failure without a code). ds-35 needs Windows (a held file refuses a writer); on POSIX it survives. v0.1.0: 33 in all, 32 killed; ds-09 (no sync before the rename) survives as expected, since only a power cut shows it |
+
+### macOS (v0.2.1, 2026-11-04)
+
+The first run on a Mac: an Apple M2 Mac mini, macOS 27.0.1, Apple clang
+21, arm64, the internal SSD (APFS, case-insensitive, the default). Functional
+only: no cost was measured.
+
+| Check | Result |
+|---|---|
+| `tests/adapt/dataset_test.c` | 702 checks pass, Release and under ASan and UBSan (Debug). The crash test's child process (`_Exit()` after rows and a live change) leaves `"closed": false`, no temporary file and every row; the atomic rewrite keeps the old file when the temporary file cannot be made; streams that differ only in case are refused, as the volume needs |
+| `F_FULLFSYNC` (new) | Counted through a test hook: each rewrite of `session.json` calls it once on the file and once on the folder. With a volume that refuses it (the hook returns `ENOTSUP`), the open, a row and the finish still succeed through `fsync()`, and `session.json` says `"closed": true` |
+| On APFS | `fcntl(F_FULLFSYNC)` succeeds on a file and on a folder. On `/dev/null` it fails with `ENOTSUP` and `fsync()` succeeds, which is the fallback's case |
+| Mutants | `mac-01` to `mac-03` in `tests/mutate/dataset.toml` (the file without `F_FULLFSYNC`, the folder without it, no `fsync()` after a refusal): 3 of 3 killed. They exist on macOS only |
+
+Not done: a power cut. Nothing here shows that the bytes survive one; the
+change follows Apple's manual page.
 
 The handle's size on ysp/trials.h v0.6 (2026-10-21): the same laptop,
 MinGW-w64 gcc 16.1 -O2, under the measurement lock (load 1 %), A and B
@@ -298,4 +315,5 @@ budget, and keep `session_set()` and `sync=True` between trials.
 - No adapter for `ysp/device.h`'s output records (`YDEV_REC_OUT`) or an
   LSL inlet's samples: the player fills `yds_event` and stream rows from
   them.
-- No run on macOS or on a Linux disk under power loss.
+- No power cut on any disk. macOS ran the tests (v0.2.1); its costs are
+  not measured yet.

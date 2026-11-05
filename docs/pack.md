@@ -335,7 +335,14 @@ allocated after open. The header's manual is the reference; in short:
 - **A path** (`YPAK_FILE`, on unless `YPAK_NO_FILE`): one read-only
   mapping of the whole file (`CreateFileMappingW` and `MapViewOfFile` at
   offset 0, the path converted from UTF-8; `mmap` on POSIX). Windows maps
-  views only at 64 KB offsets, so per-entry views are not used.
+  views only at 64 KB offsets, so per-entry views are not used. On macOS,
+  as on Linux, the mapping is a plain `mmap(PROT_READ, MAP_PRIVATE)`: no
+  `madvise()` and no `F_NOCACHE`. Neither has been measured on any
+  platform; add one only if a cold-open measurement shows a gain. Apple
+  silicon maps 16 KB pages, so a mapped base is 16 KB aligned and every
+  entry keeps its 4096 alignment (checked by
+  `tests/adapt/pack_test.c` on an M2 Mac mini, macOS 27.0.1, 2026-11-04:
+  515 checks pass, Release and under ASan and UBSan).
 - **Memory**: the whole pack, 8-byte aligned; entry data is then at least
   8-byte aligned, and 4096-aligned when the base is.
 - **A range reader**: the reader copies the central directory and the
@@ -2393,4 +2400,5 @@ header skipped, the incremental refusal removed): 4 of 4 caught.
 - A pack file that another process truncates while it is mapped: by
   POSIX mmap rules a read of a lost page raises SIGBUS, in C as in the
   bindings. Not tested.
-- macOS and CPython 3.8 to 3.13 not run here; CI builds the abi3 wheels.
+- The bindings on macOS and CPython 3.8 to 3.13 not run here; CI builds
+  the abi3 wheels. The header's tests ran on macOS (2026-11-04).

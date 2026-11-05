@@ -1,4 +1,4 @@
-/* ysp/rt.h - v0.9.1 - public domain single-header real-time timing library
+/* ysp/rt.h - v0.10.0 - public domain single-header real-time timing library
  *
  *   The clock, the waits, the scheduling ladder, the one-shot deadline
  *   worker, the background-compute pump, the event ring, the clock
@@ -45,11 +45,17 @@
  *   ---------------------------------------------------------------------
  *   CLOCK
  *   ---------------------------------------------------------------------
- *   yrt_now_ns() reads a monotonic clock:
- *   CLOCK_MONOTONIC on Linux and macOS, QueryPerformanceCounter on Windows,
+ *   yrt_now_ns() reads a monotonic clock: CLOCK_MONOTONIC on Linux,
+ *   mach_absolute_time() on macOS, QueryPerformanceCounter on Windows,
  *   converted with integer arithmetic split so that a TSC-rate counter
  *   cannot overflow the multiply. The clock never steps and never goes
  *   backwards; its zero is arbitrary, so only differences mean anything.
+ *   On macOS it is the counter CoreAudio's host times, CVDisplayLink and
+ *   event timestamps count in; it stops while the Mac sleeps, as
+ *   CLOCK_MONOTONIC does on Linux. macOS's CLOCK_MONOTONIC is not used: it
+ *   counts in whole microseconds (clock_getres() says 1000 ns), takes
+ *   frequency adjustments (its manual page sets it against
+ *   CLOCK_MONOTONIC_RAW, which does not) and runs on while the Mac sleeps.
  *
  *   It returns int64_t, the type of every time in ysp, so the difference of
  *   two times is signed. Every header times against it: ysp/serial.h and
@@ -1051,6 +1057,14 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.10.0 - macOS: yrt_now_ns() reads mach_absolute_time(), converted by
+ *          the timebase, and yrt_ticks_to_ns() converts mach units the
+ *          same way (it returned its argument). CLOCK_MONOTONIC counted
+ *          in whole microseconds there (correlation widths of 1000 ns)
+ *          and takes frequency adjustments, and no OS
+ *          timestamp is in its units. yrt_get_clock_info() reports the
+ *          mach clock's resolution (42 ns on Apple silicon). Other
+ *          platforms unchanged.
  *   v0.9.1 - yrt_sleep_ns() near INT64_MAX ("forever") on the virtual
  *          clock waits to the clock's end: the deadline saturates at
  *          INT64_MAX. The plain sum overflowed (undefined behavior) and
@@ -1348,18 +1362,25 @@
  *   No browser has run any of it: the WEBASSEMBLY notes on the main thread,
  *   cross-origin isolation and coarsened clocks are the platform's
  *   documented rules, not measurements.
- *   The macOS pump, like the rest of the macOS path, has not been compiled or
- *   run here at all, so its relative condition wait and its
- *   THREAD_PRECEDENCE_POLICY rung are written, not tested; CI compiles them and
- *   a rig should print what yrt_pump_policy() reports before believing it.
- *   The top of the ladder is barely exercised: the test hosts run without
- *   CAP_SYS_NICE, so the tests see YRT_POLICY_TIME_CRITICAL (Windows) and
- *   YRT_POLICY_NORMAL. YRT_POLICY_DEADLINE was obtained once, by
- *   rt_ring_bench run as root under WSL2 (v0.5.0), and nothing timed there
- *   is a claim about a real kernel; YRT_POLICY_FIFO and
- *   YRT_POLICY_TIME_CONSTRAINT have never been obtained. Treat the
- *   real-time rungs as written, not as tested, and check what
- *   yrt_describe() reports on your rig.
+ *   macOS (v0.10.0, 2026-11-04): an Apple M2 Mac mini, macOS 27.0.1, Apple
+ *   clang 21, built with warnings as errors; tests/adapt/rt_test.c passes,
+ *   also under ASan and UBSan: the clock (resolution 42 ns, the mach
+ *   timebase 125/3), ticks to ns against a 128-bit reference, waits,
+ *   worker, pump (its relative condition wait and its
+ *   THREAD_PRECEDENCE_POLICY rung gave BELOW_NORMAL), ring, correlation
+ *   and the per-user folders (~/Library/Caches, ~/Library/Application
+ *   Support; /tmp, a symbolic link to /private/tmp, refused). An
+ *   unprivileged thread obtained YRT_POLICY_TIME_CONSTRAINT (the Mach
+ *   policy read back as asked, in mach units), and YRT_POLICY_FIFO when
+ *   Mach refused a 100 ms computation. Functional
+ *   only: no wait or clock cost was measured on the Mac.
+ *   The top of the ladder is barely exercised: the Windows and Linux test
+ *   hosts run without CAP_SYS_NICE, so the tests see
+ *   YRT_POLICY_TIME_CRITICAL (Windows) and YRT_POLICY_NORMAL.
+ *   YRT_POLICY_DEADLINE was obtained once, by rt_ring_bench run as root
+ *   under WSL2 (v0.5.0), and nothing timed there is a claim about a real
+ *   kernel. Treat the real-time rungs as written, not as tested, and check
+ *   what yrt_describe() reports on your rig.
  *   Outside this STATUS block, no number in this header is a measurement.
  *   Every latency statement is a bound or a pointer at rt_jitter.
  *
@@ -1372,9 +1393,9 @@
 /* The version of this header, for a binding's __version__ and for a log line.
  * The string always matches the three numbers. */
 #define YRT_VERSION_MAJOR  0
-#define YRT_VERSION_MINOR  9
-#define YRT_VERSION_PATCH  1
-#define YRT_VERSION_STRING "0.9.1"
+#define YRT_VERSION_MINOR  10
+#define YRT_VERSION_PATCH  0
+#define YRT_VERSION_STRING "0.10.0"
 
 /* Feature-test macro for clock_nanosleep() and mlockall() in the Linux
  * implementation. Defined here, before the first system header, so it takes
@@ -1431,8 +1452,8 @@ YRT_API const char* yrt_version(void);
 
 /* --- clock -------------------------------------------------------------- */
 
-/* Monotonic nanoseconds. CLOCK_MONOTONIC on Linux and macOS,
- * QueryPerformanceCounter on Windows. The zero point is arbitrary; only
+/* Monotonic nanoseconds. CLOCK_MONOTONIC on Linux, mach_absolute_time() on
+ * macOS, QueryPerformanceCounter on Windows. The zero point is arbitrary; only
  * differences are meaningful. This is the clock every deadline in ysp is
  * expressed in. Signed, like every other time in ysp, so a difference such
  * as `onset - yrt_now_ns()` is negative when the onset is past, instead of
@@ -1461,9 +1482,12 @@ YRT_API int64_t yrt_now_ns(void);
  * a QueryPerformanceCounter value (DXGI's SyncQPCTime, a WASAPI QPC
  * position, a raw LARGE_INTEGER), and the result is bit-identical to what
  * yrt_now_ns() returns for that counter value, so such a stamp is on the
- * ysp_rt clock exactly, with no correlation and no width. On Linux, macOS
- * and Emscripten the clock is clock_gettime(CLOCK_MONOTONIC), whose native
- * unit is already the nanosecond, and this returns `ticks` unchanged. A
+ * ysp_rt clock exactly, with no correlation and no width. On macOS `ticks`
+ * is a mach_absolute_time() value (an AudioTimeStamp's mHostTime, a
+ * CVTimeStamp's hostTime), converted by the timebase as yrt_now_ns()
+ * converts it, so again bit-identical. On Linux and Emscripten the clock
+ * is clock_gettime(CLOCK_MONOTONIC), whose native unit is already the
+ * nanosecond, and this returns `ticks` unchanged. A
  * negative `ticks` converts as minus the conversion of its magnitude, so a
  * difference of two counter values converts too. */
 YRT_API int64_t yrt_ticks_to_ns(int64_t ticks);
@@ -3342,6 +3366,45 @@ extern long syscall(long, ...);
     #include <mach/thread_act.h>
 #endif
 
+#if defined(YRT__DARWIN)
+/* mach_absolute_time(), not CLOCK_MONOTONIC: Darwin's CLOCK_MONOTONIC
+ * counts in whole microseconds and takes frequency adjustments, and every
+ * timestamp the OS hands out (CoreAudio's host time,
+ * CVDisplayLink, input events) is in mach units. The timebase (1/1 on
+ * Intel, 125/3 on Apple silicon) is read once; numer is stored last and
+ * read first, so a reader that sees it also sees denom. */
+static uint32_t yrt__tb_numer = 0, yrt__tb_denom = 0;
+
+/* Split like Windows' QPC conversion, so the multiply cannot overflow. The
+ * one conversion both yrt_now_ns() and yrt_ticks_to_ns() use, so the two
+ * agree to the bit. */
+static uint64_t yrt__mach_to_ns(uint64_t t) {
+    uint32_t n = yrt__rload(&yrt__tb_numer), d;
+    if (n == 0) {
+        mach_timebase_info_data_t tb;
+        if (mach_timebase_info(&tb) != KERN_SUCCESS || tb.numer == 0 || tb.denom == 0)
+            tb.numer = tb.denom = 1;
+        yrt__rstore(&yrt__tb_denom, tb.denom);
+        yrt__rstore(&yrt__tb_numer, tb.numer);
+        n = tb.numer;
+    }
+    d = yrt__rload(&yrt__tb_denom);
+    if (n == d) return t;
+    return (t / d) * n + (t % d) * n / d;
+}
+
+static uint64_t yrt__now(void) {
+    return yrt__mach_to_ns(mach_absolute_time());
+}
+
+int64_t yrt_ticks_to_ns(int64_t ticks) {
+    if (ticks < 0) return -(int64_t)yrt__mach_to_ns(0u - (uint64_t)ticks);
+    return (int64_t)yrt__mach_to_ns((uint64_t)ticks);
+}
+
+/* The clock clock_getres() describes for yrt_now_ns(): the same counter. */
+#define YRT__RES_CLOCK CLOCK_UPTIME_RAW
+#else
 static uint64_t yrt__now(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -3351,6 +3414,9 @@ static uint64_t yrt__now(void) {
 int64_t yrt_ticks_to_ns(int64_t ticks) {
     return ticks;   /* clock_gettime counts in nanoseconds already */
 }
+
+#define YRT__RES_CLOCK CLOCK_MONOTONIC
+#endif
 
 #if defined(YRT__EMSCRIPTEN)
 /* Emscripten's clock_getres answers 1 ns whatever the host does, and the host
@@ -3381,7 +3447,7 @@ static uint32_t yrt__step_cache = 0;   /* ns; 0 = not measured yet */
 static uint64_t yrt__clock_step_ns(void) {
     struct timespec res;
     uint64_t r = 1;
-    if (clock_getres(CLOCK_MONOTONIC, &res) == 0)
+    if (clock_getres(YRT__RES_CLOCK, &res) == 0)
         r = (uint64_t)res.tv_sec * 1000000000ull + (uint64_t)res.tv_nsec;
 #if defined(YRT__EMSCRIPTEN)
     {
@@ -3461,7 +3527,7 @@ static void yrt__coarse_wait_until(uint64_t until_ns) {
 void yrt_get_clock_info(yrt_clock_info* out) {
     if (!out) return;
     struct timespec res;
-    if (clock_getres(CLOCK_MONOTONIC, &res) == 0)
+    if (clock_getres(YRT__RES_CLOCK, &res) == 0)
         out->resolution_ns = (int64_t)res.tv_sec * 1000000000 + (int64_t)res.tv_nsec;
     else
         out->resolution_ns = 0;
