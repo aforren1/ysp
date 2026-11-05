@@ -4377,18 +4377,34 @@ no `YIN_UNLISTED`. Measured (locked and unlocked): `open()` with
 `YSCR_EV_DEVICE` record for "Dell MS116 USB Optical Mouse" (the name cut
 at 23 bytes).
 
-The hand run (v0.16.0's reader; `YSCR_TEST_MOUSE_S=5 test_screen_metal
-rawmice`, 2026-11-05 16:49, a person moving the Dell MS116 behind a USB
-hub, unlocked, a quiet machine):
+The measured numbers come from the hand run of v0.16.1's reader
+(`YSCR_TEST_MOUSE_S=5 test_screen_metal rawmice`, 2026-11-05 17:19:47, a
+person moving the Dell MS116 behind a USB hub, unlocked, a quiet
+machine; 6 of 6 checks):
+
+| Quantity | min | p50 | p99 | max |
+|---|---|---|---|---|
+| Report interval, ms (626 reports) | 7.926 | 8.000 | 8.055 | 8.074 |
+| Callback minus the value's stamp, us (1159 values kept) | 55.3 | 122.3 | 266.2 | 485.7 |
+
+The mouse reports at 125 Hz. The reader's callback comes 55 us after
+the HID driver's stamp at the least, 122 us at the median, 266 us at p99
+and 486 us at most. Of 1878 values, 1159 were kept, 719 were empty (a
+relative 0) and none stale; no report was unlisted and no event was
+earlier than the one before from its device. The USB poll comes before
+the stamp and is in none of these numbers.
+
+The runs before it are the history of the bug below. The first (v0.16.0's
+reader, 16:49, the same mouse and conditions):
 
 | Quantity | min | p50 | p99 | max |
 |---|---|---|---|---|
 | Report interval, ms (850 reports) | 7.926 | 8.000 | 8.069 | 256.015 |
 | Callback minus the value's stamp, us (1749 values) | 63.2 | 257.9 | 43,544,192.6 | 43,960,241.9 |
 
-The mouse reports at 125 Hz; the maximum interval is a pause of the
-hand. The callback came 63 us after the HID driver's stamp at the least
-and 258 us at the median. No report was unlisted.
+The maximum interval is a pause of the hand. The median callback time
+of that run (258 us) and its p99 and maximum include the stale values;
+the clean numbers are the table above. No report was unlisted.
 
 **A bug, fixed in v0.16.1: stale values.** At least 1% of the values had
 stamps 43.5 to 44.0 s old: from before the open. `IOHIDDeviceGetValue`
@@ -4444,8 +4460,11 @@ relative X of 0; only the fresh press and its release may reach
 counted the reader's real drops while the mouse moved: 48, not 2. It now
 counts the injected values by their stamps.) The hand run checks that no
 event of a device is earlier than the one before, and that every kept
-value came within 8 ms (one report) of its stamp. The hand run with
-these fixes is still to make:
+value came within 8 ms (one report) of its stamp. The hand run of these
+fixes (17:19:47) passed 6 of 6: the table at the top of this subsection.
+Its describe line said `raw_mice=946(inactive 0, stale 2, empty 1082)`;
+the 2 stale are the injected values. A run at 17:15:37 got no report
+because nobody moved the mouse; it is not a result. To run it again:
 
 ```
 YSCR_ANGLE_DIR=/Users/brainworks/ysp-deps/angle-electron-43.8.3 YSCR_TEST_MOUSE_S=5 ./build/macos/test_screen_metal rawmice

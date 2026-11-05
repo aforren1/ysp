@@ -133,7 +133,7 @@ static void check_raw_mouse(void) {
     CHECK_I(s.tier, YIN_TIER_UNKNOWN);
     /* v0.5.1: the note is the platform's own measurement */
 #if defined(__APPLE__)
-    CHECK_I(s.note && strstr(s.note, "macOS") && strstr(s.note, "63 us") && strstr(s.note, "258 us") &&
+    CHECK_I(s.note && strstr(s.note, "macOS") && strstr(s.note, "55 us") && strstr(s.note, "122 us") &&
             strstr(s.note, "125 Hz"), 1);
 #else
     CHECK_I(s.note && strstr(s.note, "0.15 to 0.40 ms") && !strstr(s.note, "macOS"), 1);

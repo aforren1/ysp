@@ -39,7 +39,7 @@ replace = '    if ((kind == YIN_KIND_KEYBOARD || kind == YIN_KIND_MOUSE) && ctx 
 id = "in-04"
 name = "macOS gets Windows' raw mouse note"
 test = "input"
-why = "On macOS the stamp is the HID driver's, 63 us to 258 us (median) before the read, not Windows' read time with injected input (v0.5.1)."
+why = "On macOS the stamp is the HID driver's, 55 us (minimum) to 122 us (median) before the read, not Windows' read time with injected input (v0.5.1)."
 find = '''#if defined(__APPLE__)
     s.note = "ysp_screen raw mice (macOS)'''
 replace = '''#if 0

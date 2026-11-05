@@ -1241,13 +1241,14 @@
  *   nothing), then a value dated before its start or before the newest
  *   stamp it took from that device (stale), and counts both:
  *   raw_mice=reports(inactive n, stale n, empty n) in the describe line.
- *   Measured (v0.16.0's reader, one Dell MS116 behind a USB hub, moved by
- *   hand for 5 s, 2026-11-05, unlocked, a quiet machine): 850 reports,
- *   one every 8.000 ms at the median (7.926 to 8.069 ms, p99; 125 Hz),
- *   none unlisted; the value callback 63 us after the stamp at the least
- *   and 258 us at the median (its p99 and maximum were the stale values;
- *   v0.16.1's run with them dropped is still to make). The USB poll (up
- *   to 8 ms here) comes before the stamp and is in no number above.
+ *   Measured (v0.16.1's reader, one Dell MS116 behind a USB hub, moved by
+ *   hand for 5 s, 2026-11-05 17:19, unlocked, a quiet machine): 626
+ *   reports, one every 8.000 ms at the median (7.926 to 8.074 ms; 125
+ *   Hz), none unlisted, no event earlier than the one before; the value
+ *   callback 55 us after the stamp at the least, 122 us at the median,
+ *   266 us at p99 and 486 us at most (1159 values kept, 719 empty, 0
+ *   stale). The USB poll (up to 8 ms here) comes before the stamp and is
+ *   in no number above. The runs of v0.16.0's reader: docs/screen.md.
  *   The input bridge (v0.4.0). One loop for every input: a producer on any
  *   thread (desc.raw_mice's reader, a response-box reader, an eye tracker)
  *   calls yscr_push_input(&e) with a ysp/input.h event stamped on the
@@ -2129,16 +2130,16 @@
  *          groups, input restamping, mode lists and the parameter table.
  *          The other swap paths are stubs that refuse to open.
  *
- *   STATUS: v0.16.1 (METAL, raw mice, 2026-11-05, unlocked): v0.16.0's
- *   reader moved by hand for 5 s gave 125 Hz reports (8.000 ms p50) and
- *   the callback 258 us after the stamp at the median, with stale values
- *   among them (INPUT). Two hand runs of the first fix (17:07, 17:08)
- *   showed the old values were relative 0s; the second fix drops them as
- *   empty. tests/adapt/screen_metal_test.c's rawmice case drops a value
- *   dated 44 s back, one older than its device's newest and a relative 0,
- *   and delivers a fresh press and release, through an accumulator of its
- *   own (a moving mouse cannot disturb it). The hand run of the second
- *   fix is still to make.
+ *   STATUS: v0.16.1 (METAL, raw mice, 2026-11-05, unlocked, a quiet
+ *   machine): v0.16.0's reader, moved by hand, gave values 12 to 44 s
+ *   old (relative 0s dated their last change); the fix drops them as
+ *   empty or stale. The hand run of the fix (17:19, the Dell MS116, 5 s):
+ *   6 of 6 checks, 626 reports at 125 Hz (8.000 ms p50, 7.926 to 8.074
+ *   ms), no event earlier than the one before, the callback 55 / 122 /
+ *   266 / 486 us after the stamp (min / p50 / p99 / max, 1159 values).
+ *   tests/adapt/screen_metal_test.c's rawmice case also checks the rules
+ *   with injected values, through an accumulator of its own; the whole
+ *   test 74 of 74 (17:21, unlocked).
  *   STATUS: v0.16.0 (METAL, 2026-11-05, M2 Mac mini, macOS 27.0.1, the
  *   M27Q on HDMI in its 1920 x 1080 mode at "60 Hz", AC, load average 0.8
  *   to 1.4): tests/adapt/screen_metal_test.c 73 of 73 unlocked, and its

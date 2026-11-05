@@ -166,8 +166,9 @@
  *   its source entry: on Windows stamped at read (host part measured
  *   with injected input only); on macOS the HID driver's stamp
  *   (IOHIDValueGetTimeStamp), earlier than the read, which ysp/screen.h
- *   measured 63 us after it at the least and 258 us at the median, on
- *   one mouse (docs/screen.md, "Raw mice").
+ *   v0.16.1 measured 55 us after it at the least, 122 us at the median,
+ *   266 us at p99 and 486 us at most, on one mouse at 125 Hz
+ *   (docs/screen.md, "Raw mice").
  *
  *   ---------------------------------------------------------------------
  *   CHANGELOG
@@ -176,8 +177,9 @@
  *          its v0.16.0), with the HID driver's stamp and the IORegistry
  *          id as the device: the comments said Windows only.
  *          yin_raw_mouse_source()'s note on macOS gives macOS's numbers
- *          (63 us minimum, 258 us median from the stamp to the read, one
- *          Dell MS116 at 125 Hz); elsewhere Windows' as before.
+ *          (55 us minimum, 122 us median, 266 us p99, 486 us maximum
+ *          from the stamp to the read, one Dell MS116 at 125 Hz);
+ *          elsewhere Windows' as before.
  *   v0.5.0 - yin_sdl_ctx gains os_stamps and t_os (16 bytes, was 2):
  *          t_os, when not 0, is the event's own OS time and replaces t_rt;
  *          with os_stamps, a key or mouse button without one gets tier 3.
@@ -440,10 +442,10 @@ static inline int yin_from_mouse(const yin_mouse_report* m, yin_event* out, int 
  * each). Windows: stamped like SDL's raw keyboard, when the reader read
  * the report (measured means of 0.15 to 0.40 ms after SendInput,
  * injected input only). macOS (v0.5.1): the HID driver's stamp,
- * IOHIDValueGetTimeStamp; the reader's callback came 63 us after it at
- * the least and 258 us at the median (one Dell MS116 moved by hand, 125
- * Hz; ysp/screen.h v0.16.0). Host part only: the USB poll comes before
- * the stamp. */
+ * IOHIDValueGetTimeStamp; the reader's callback came 55 us after it at
+ * the least, 122 us at the median, 266 us at p99 and 486 us at most (one
+ * Dell MS116 moved by hand, 125 Hz, 1159 values; ysp/screen.h v0.16.1).
+ * Host part only: the USB poll comes before the stamp. */
 static inline yin_source yin_raw_mouse_source(void) {
     yin_source s;
     memset(&s, 0, sizeof s);
@@ -451,8 +453,8 @@ static inline yin_source yin_raw_mouse_source(void) {
     s.tier = (uint8_t)YIN_TIER_UNKNOWN;
     s.partial = 1;
 #if defined(__APPLE__)
-    s.note = "ysp_screen raw mice (macOS): the HID driver's stamp; host part to the read 63 us min, 258 us median "
-             "(one Dell MS116, 125 Hz); USB poll not in it";
+    s.note = "ysp_screen raw mice (macOS): the HID driver's stamp; host part to the read 55 us min, 122 us median, "
+             "266 us p99, 486 us max (one Dell MS116, 125 Hz); USB poll not in it";
 #else
     s.note = "ysp_screen raw mice: stamped at read; host part 0.15 to 0.40 ms (means, injected); USB poll not measured";
 #endif
