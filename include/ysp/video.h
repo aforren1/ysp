@@ -6129,6 +6129,29 @@ YVID_API bool yvid_open(yvid_movie* mv, ygfx_gfx* g, const yvid_desc* desc) {
     in.path = desc->path; in.data = desc->data; in.size = desc->size;
     in.reader = desc->reader; in.reader_ctx = desc->reader_ctx;
     in.index = desc->index; in.index_size = desc->index_size;
+    /* The index belongs to this file (its size and the hashes of its ends):
+     * checked before the backend opens. After it, the frame thread read a
+     * yvid_reader while AVFoundation's resource loader read it on its own
+     * queue (ThreadSanitizer, v0.7.0); a reader is called one call at a
+     * time. An index that does not load is reported below, as before. */
+    if ((backend == YVID_BACKEND_PLMPEG || backend == YVID_BACKEND_MF || backend == YVID_BACKEND_AVF || desc->index ||
+         (backend == YVID_BACKEND_CUSTOM && desc->path)) &&
+        (backend == YVID_BACKEND_PLMPEG || backend == YVID_BACKEND_MF || backend == YVID_BACKEND_AVF || desc->path)) {
+        yvid__index ix0;
+        if (yvid__index_load(desc, &ix0, 0, e, sizeof e) == YVID_OK) {
+            yvid__src s;
+            uint64_t head = 0, tail = 0;
+            if (yvid__src_open(&s, desc->path, desc->data, desc->size, desc->reader, desc->reader_ctx) == YVID_OK) {
+                rc = s.size == ix0.media_size ? yvid__src_ends(&s, &head, &tail) : YVID_ERR_FORMAT;
+                yvid__src_close(&s);
+                if (rc < 0 || head != ix0.head || tail != ix0.tail) {
+                    yvid__err(mv, "ysp_video: the index does not belong to this file (size or hash of its ends differ); make it again");
+                    yvid__close_partial(mv);
+                    return yvid__ofail(mv, YVID_ERR_FORMAT);
+                }
+            }
+        }
+    }
     memset(&st, 0, sizeof st);
     st.frames = -1;
     e[0] = 0;
@@ -6153,19 +6176,6 @@ YVID_API bool yvid_open(yvid_movie* mv, ygfx_gfx* g, const yvid_desc* desc) {
         rc = yvid__index_load(desc, &ix, 1, e, sizeof e);
         if (rc < 0) { yvid__err(mv, "ysp_video: %s", e); yvid__close_partial(mv); return yvid__ofail(mv, rc); }
         mv->hashes = ix.hashes;
-        if (backend == YVID_BACKEND_PLMPEG || backend == YVID_BACKEND_MF || backend == YVID_BACKEND_AVF || desc->path) {
-            yvid__src s;
-            uint64_t head = 0, tail = 0;
-            if (yvid__src_open(&s, desc->path, desc->data, desc->size, desc->reader, desc->reader_ctx) == YVID_OK) {
-                rc = s.size == ix.media_size ? yvid__src_ends(&s, &head, &tail) : YVID_ERR_FORMAT;
-                yvid__src_close(&s);
-                if (rc < 0 || head != ix.head || tail != ix.tail) {
-                    yvid__err(mv, "ysp_video: the index does not belong to this file (size or hash of its ends differ); make it again");
-                    yvid__close_partial(mv);
-                    return yvid__ofail(mv, YVID_ERR_FORMAT);
-                }
-            }
-        }
         rc = YVID_OK;
         if (rc == YVID_OK) rc = yvid__fill(&c.w, ix.c.w, "width", e, sizeof e);
         if (rc == YVID_OK) rc = yvid__fill(&c.h, ix.c.h, "height", e, sizeof e);
