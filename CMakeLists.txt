@@ -628,6 +628,10 @@ endif()
 # Metal mutants.
 if(TARGET SDL3::SDL3 AND YSP_BUILD_TESTS AND APPLE)
     ysp_add_program(test_screen_metal tests/adapt/screen_metal_test.c rig)
+    # the input case posts keys and clicks (CoreGraphics) and reads
+    # NSEvent.timestamp through a monitor of its own (a Block, libobjc)
+    target_compile_options(test_screen_metal PRIVATE -fblocks)
+    target_link_libraries(test_screen_metal PRIVATE "-framework ApplicationServices" objc)
 endif()
 # Every header's parameter table against the one row shape (name, type,
 # min, max, def, unit, doc, values; docs/experiment_format.md, G6): one

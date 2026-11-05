@@ -226,7 +226,7 @@ int main(int argc, char** argv) {
         return fail(ytl_error(&tl));
 
     /* the response: f or j, within 1.5 s of the onset, none before 0.1 s */
-    source = yrsp_sdl_source(&(yrsp_sdl_ctx){ .raw_keyboard = caps.raw_keyboard }, YRSP_KIND_KEYBOARD);
+    source = yrsp_sdl_source(&(yrsp_sdl_ctx){ .raw_keyboard = caps.raw_keyboard, .os_stamps = caps.os_input_stamps }, YRSP_KIND_KEYBOARD);
     if (!yrsp_open(&rsp, &(yrsp_desc){ .choices = keys, .n_choices = 2, .duration_ns = YRT_S(RESPONSE_S),
                                        .min_rt_ns = YRT_S(MIN_RT_S), .sources = &source, .n_sources = 1 }))
         return fail(yrsp_error(&rsp));

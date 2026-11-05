@@ -2834,6 +2834,106 @@ static void test_unshown_and_tiers(void) {
     CHECK(!yscr_open(&s, &d));
 }
 
+/* NSEvent stamps (INPUT, macOS), without a Mac: SDL 3.4's arithmetic on a
+ * ring filled by hand. SDL's stamp is trunc(NSEvent.timestamp x 1e9) plus
+ * its offset OFF in SDL ns; ysp_rt is mach ns plus MOFF. */
+static int g_nsm_seq;
+static void nsm_put(yscr__nsev* ring, int cls, int64_t t) {
+    yscr__nsev* e = &ring[(uint32_t)++g_nsm_seq & (YSCR__NSM_N - 1)];
+    e->t_ns = t;
+    e->cls = (uint8_t)cls;
+    e->seq = g_nsm_seq;
+}
+
+static void test_nsm_rules(void) {
+    static yscr__nsev ring[YSCR__NSM_N];
+    yscr__nsm_state st;
+    const int64_t T = 1698580000000000LL;              /* mach ns: a Mac up 19.7 days      */
+    const uint64_t OFF = (uint64_t)-1698580570430167LL; /* measured: SDL ns minus mach ns + 600 us */
+    const int64_t BIAS = 600000, MOFF = 0;
+    int64_t s_rt;
+    int k;
+    memset(ring, 0, sizeof ring);
+    memset(&st, 0, sizeof st);
+    g_nsm_seq = 0;
+#define NSM_SDL(t) ((uint64_t)(t) + OFF)
+    /* the classes of NSEvent types: keys, buttons and the 8 modifiers */
+    CHECK_I(yscr__nsm_ns_class(10, 0x50), YSCR__NSM_KEY_DOWN);
+    CHECK_I(yscr__nsm_ns_class(11, 0x50), YSCR__NSM_KEY_UP);
+    CHECK_I(yscr__nsm_ns_class(1, 0), YSCR__NSM_BTN_DOWN);
+    CHECK_I(yscr__nsm_ns_class(3, 0), YSCR__NSM_BTN_DOWN);
+    CHECK_I(yscr__nsm_ns_class(25, 0), YSCR__NSM_BTN_DOWN);
+    CHECK_I(yscr__nsm_ns_class(2, 0), YSCR__NSM_BTN_UP);
+    CHECK_I(yscr__nsm_ns_class(4, 0), YSCR__NSM_BTN_UP);
+    CHECK_I(yscr__nsm_ns_class(26, 0), YSCR__NSM_BTN_UP);
+    CHECK_I(yscr__nsm_ns_class(12, 0x3B), YSCR__NSM_MOD + 0);   /* left control: SDL 224 */
+    CHECK_I(yscr__nsm_ns_class(12, 0x38), YSCR__NSM_MOD + 1);   /* left shift: 225       */
+    CHECK_I(yscr__nsm_ns_class(12, 0x3A), YSCR__NSM_MOD + 2);
+    CHECK_I(yscr__nsm_ns_class(12, 0x37), YSCR__NSM_MOD + 3);
+    CHECK_I(yscr__nsm_ns_class(12, 0x3E), YSCR__NSM_MOD + 4);
+    CHECK_I(yscr__nsm_ns_class(12, 0x3C), YSCR__NSM_MOD + 5);
+    CHECK_I(yscr__nsm_ns_class(12, 0x3D), YSCR__NSM_MOD + 6);
+    CHECK_I(yscr__nsm_ns_class(12, 0x36), YSCR__NSM_MOD + 7);   /* right command: 231    */
+    CHECK_I(yscr__nsm_ns_class(12, 0x39), -1);                  /* caps lock             */
+    CHECK_I(yscr__nsm_ns_class(5, 0), -1);                      /* mouse moved           */
+    /* a key down: its NSEvent's time, not SDL's */
+    nsm_put(ring, YSCR__NSM_KEY_DOWN, T);
+    s_rt = T + BIAS;
+    CHECK_I(yscr__nsm_pick(ring, (uint32_t)g_nsm_seq, &st, YSCR__NSM_KEY_DOWN, NSM_SDL(T), s_rt, MOFF), T);
+    CHECK_I(st.b_last, BIAS);
+    /* taken: the same SDL event again finds nothing */
+    CHECK_I(yscr__nsm_pick(ring, (uint32_t)g_nsm_seq, &st, YSCR__NSM_KEY_DOWN, NSM_SDL(T), s_rt, MOFF), 0);
+    /* an event SDL did not deliver (a click on the title bar) is passed over:
+     * its offset would be larger than SDL's */
+    nsm_put(ring, YSCR__NSM_BTN_DOWN, T + 10000000);
+    nsm_put(ring, YSCR__NSM_BTN_DOWN, T + 50000000);
+    CHECK_I(yscr__nsm_pick(ring, (uint32_t)g_nsm_seq, &st, YSCR__NSM_BTN_DOWN, NSM_SDL(T + 50000000),
+                           T + 50000000 + BIAS, MOFF), T + 50000000);
+    CHECK_I(st.passed, 1);
+    /* the classes stay apart: a key up does not take a button's entry */
+    nsm_put(ring, YSCR__NSM_BTN_UP, T + 60000000);
+    nsm_put(ring, YSCR__NSM_KEY_UP, T + 61000000);
+    CHECK_I(yscr__nsm_pick(ring, (uint32_t)g_nsm_seq, &st, YSCR__NSM_KEY_UP, NSM_SDL(T + 61000000),
+                           T + 61000000 + BIAS, MOFF), T + 61000000);
+    CHECK_I(yscr__nsm_pick(ring, (uint32_t)g_nsm_seq, &st, YSCR__NSM_BTN_UP, NSM_SDL(T + 60000000),
+                           T + 60000000 + BIAS, MOFF), T + 60000000);
+    /* SDL lowered its offset (a stamp would have come after the read): taken */
+    nsm_put(ring, YSCR__NSM_KEY_DOWN, T + 100000000);
+    CHECK_I(yscr__nsm_pick(ring, (uint32_t)g_nsm_seq, &st, YSCR__NSM_KEY_DOWN, NSM_SDL(T + 100000000) - 400000,
+                           T + 100000000 + BIAS - 400000, MOFF), T + 100000000);
+    CHECK_I(st.b_last, BIAS - 400000);
+    /* an SDL event with no NSEvent (SDL's key-up at a focus loss, at the
+     * read): its offset is larger, so SDL's stamp stays */
+    nsm_put(ring, YSCR__NSM_KEY_UP, T + 120000000);
+    CHECK_I(yscr__nsm_pick(ring, (uint32_t)g_nsm_seq, &st, YSCR__NSM_KEY_UP, NSM_SDL(T + 130000000),
+                           T + 130000000 + BIAS, MOFF), 0);
+    /* an NSEvent after SDL's stamp is not its pair */
+    nsm_put(ring, YSCR__NSM_KEY_DOWN, T + 200000000);
+    CHECK_I(yscr__nsm_pick(ring, (uint32_t)g_nsm_seq, &st, YSCR__NSM_KEY_DOWN, NSM_SDL(T + 190000000),
+                           T + 190000000 + BIAS, MOFF), 0);
+    /* a modifier, stamped by SDL at the read: no offset test, its key only */
+    nsm_put(ring, YSCR__NSM_MOD + 1, T + 300000000);
+    nsm_put(ring, YSCR__NSM_MOD + 5, T + 301000000);
+    CHECK_I(yscr__nsm_pick(ring, (uint32_t)g_nsm_seq, &st, YSCR__NSM_MOD + 5, NSM_SDL(T + 309000000),
+                           T + 309000000 + BIAS, MOFF), T + 301000000);
+    CHECK_I(yscr__nsm_pick(ring, (uint32_t)g_nsm_seq, &st, YSCR__NSM_MOD + 1, NSM_SDL(T + 309000000),
+                           T + 309000000 + BIAS, MOFF), T + 300000000);
+    /* more than 1 s old: not the pair */
+    nsm_put(ring, YSCR__NSM_MOD + 2, T + 400000000);
+    CHECK_I(yscr__nsm_pick(ring, (uint32_t)g_nsm_seq, &st, YSCR__NSM_MOD + 2, NSM_SDL(T + 1500000000),
+                           T + 1500000000 + BIAS, MOFF), 0);
+    /* the ring wrapped past the class's next entry: the search starts at
+     * the oldest entry kept (SDL's offset is the lowered one now); the
+     * mach offset adds */
+    for (k = 0; k < YSCR__NSM_N + 10; k++) nsm_put(ring, YSCR__NSM_BTN_UP, T + 2000000000LL + k * 1000000LL);
+    CHECK_I(yscr__nsm_pick(ring, (uint32_t)g_nsm_seq, &st, YSCR__NSM_BTN_UP,
+                           NSM_SDL(T + 2000000000LL + 10000000LL) - 400000,
+                           T + 2000000000LL + 10000000LL + BIAS - 400000 + 7, 7), T + 2000000000LL + 10000000LL + 7);
+    CHECK_I(yscr__nsm_pick(ring, (uint32_t)g_nsm_seq, &st, -1, 0, 0, 0), 0);
+    CHECK_I(st.found, 8);
+#undef NSM_SDL
+}
+
 /* The Metal presenter's rules (BACKENDS, METAL), without a Mac. */
 static void test_metal_rules(void) {
     yscr_vblank v;
@@ -4731,6 +4831,7 @@ int main(void) {
     yrt_thread_elevate(NULL);
     test_web_rules();
     test_metal_rules();
+    test_nsm_rules();
     test_metal_records();
     test_errors();
     test_mode_multiple();

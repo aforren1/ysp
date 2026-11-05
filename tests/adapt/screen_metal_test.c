@@ -93,6 +93,13 @@ static void sync_pixel(uint64_t id, uint32_t px) { (void)id; (void)px; }
 int main(void) { printf("screen_metal_test: macOS only (the METAL backend is)\n"); return 0; }
 #else
 
+#include <math.h>
+#include <pthread.h>
+#include <time.h>
+#include <unistd.h>
+#include <objc/message.h>
+#include <objc/runtime.h>
+
 static int g_fail, g_checks, g_opened;
 static void check(int ok, const char* what) {
     g_checks++;
@@ -430,6 +437,273 @@ static void vrr(const yscr_desc* d) {
     yscr_close(&s);
 }
 
+/* --- input: NSEvent stamps through yscr_event_input() --------------------- */
+
+/* CoreGraphics' event posting, declared here: Apple's headers bring
+ * CarbonCore's globals into this file (docs/screen.md, METAL). */
+typedef struct { double x, y; } in_pt;
+extern void* CGEventCreateKeyboardEvent(void* source, uint16_t key, bool down);
+extern void* CGEventCreateMouseEvent(void* source, uint32_t type, in_pt at, uint32_t button);
+extern void  CGEventPost(uint32_t tap, void* event);
+extern void  CGEventPostToPid(int pid, void* event);
+extern bool  CGPreflightPostEventAccess(void);
+extern void  CFRelease(const void* cf);
+
+#define IN_F19    0x50
+#define IN_LSHIFT 0x38
+enum { IN_KEY_DOWN, IN_KEY_UP, IN_BTN_DOWN, IN_BTN_UP, IN_MOD_DOWN, IN_MOD_UP, IN_KINDS };
+static const char* const in_kind_name[IN_KINDS] = { "key down", "key up", "button down", "button up",
+                                                    "shift down", "shift up" };
+#define IN_MAX 4096
+
+/* the poster's: kind, mach ns before and after the post call */
+static struct { int kind; int64_t a, b; } g_post[IN_MAX];
+static volatile int g_npost, g_post_done;
+/* the test's own NSEvent monitor: type, key code, NSEvent.timestamp in ns */
+static struct { unsigned long type; unsigned code; int64_t ts; } g_mon[IN_MAX];
+static volatile int g_nmon;
+/* yscr_event_input()'s: kind, the event's t, its stamp tier, yscr_poll()'s t */
+static struct { int kind; int64_t t, t_sdl; int stamp; } g_got[IN_MAX];
+static int g_ngot;
+
+static int64_t in_now(void) { return yrt_now_ns(); }
+
+typedef struct { int pid, to_pid, n, mods; in_pt at; } in_job;
+
+static void in_post(const in_job* j, int kind, void* ev) {
+    int k = g_npost;
+    if (k >= IN_MAX || !ev) { if (ev) CFRelease(ev); return; }
+    g_post[k].kind = kind;
+    g_post[k].a = in_now();
+    if (j->to_pid) CGEventPostToPid(j->pid, ev);
+    else CGEventPost(0, ev);   /* kCGHIDEventTap */
+    g_post[k].b = in_now();
+    __atomic_store_n(&g_npost, k + 1, __ATOMIC_RELEASE);
+    CFRelease(ev);
+}
+
+static void in_sleep_until(int64_t t) {
+    while (in_now() < t) {
+        struct timespec ts = { 0, 200000 };
+        nanosleep(&ts, NULL);
+    }
+}
+
+/* 40 to 50 ms apart at a random phase to the frames, as the probe's
+ * input section: key down, key up 15 ms later, then the same for the left
+ * button at the window's center, and with mods the left shift key. */
+static void* in_poster(void* p) {
+    const in_job* j = (const in_job*)p;
+    uint32_t rng = 777;
+    int64_t t = in_now() + 500000000;
+    int i;
+    for (i = 0; i < j->n; i++) {
+        int k;
+        for (k = 0; k < (j->mods ? 3 : 2); k++) {
+            rng = rng * 1664525u + 1013904223u;
+            t += 40000000 + (int64_t)((rng >> 8) % 10000000u);
+            in_sleep_until(t);
+            if (k == 0) in_post(j, IN_KEY_DOWN, CGEventCreateKeyboardEvent(NULL, IN_F19, true));
+            else if (k == 1) in_post(j, IN_BTN_DOWN, CGEventCreateMouseEvent(NULL, 1, j->at, 0));
+            else in_post(j, IN_MOD_DOWN, CGEventCreateKeyboardEvent(NULL, IN_LSHIFT, true));
+            in_sleep_until(t + 15000000);
+            if (k == 0) in_post(j, IN_KEY_UP, CGEventCreateKeyboardEvent(NULL, IN_F19, false));
+            else if (k == 1) in_post(j, IN_BTN_UP, CGEventCreateMouseEvent(NULL, 2, j->at, 0));
+            else in_post(j, IN_MOD_UP, CGEventCreateKeyboardEvent(NULL, IN_LSHIFT, false));
+        }
+    }
+    in_sleep_until(in_now() + 300000000);
+    __atomic_store_n(&g_post_done, 1, __ATOMIC_RELEASE);
+    return NULL;
+}
+
+static int in_kind_of_ns(unsigned long type, unsigned code) {
+    if (type == 10 && code == IN_F19) return IN_KEY_DOWN;
+    if (type == 11 && code == IN_F19) return IN_KEY_UP;
+    if (type == 1) return IN_BTN_DOWN;
+    if (type == 2) return IN_BTN_UP;
+    return -1;   /* flags changed: down or up by the order */
+}
+
+static int in_cmp(const void* a, const void* b) {
+    double x = *(const double*)a, y = *(const double*)b;
+    return x < y ? -1 : x > y;
+}
+
+/* min / p50 / p99 / max of n values, sorted in place */
+static void in_stats(double* v, int n, double* mn, double* p50, double* p99, double* mx) {
+    *mn = *p50 = *p99 = *mx = 0;
+    if (n <= 0) return;
+    qsort(v, (size_t)n, sizeof *v, in_cmp);
+    *mn = v[0];
+    *p50 = v[(n - 1) / 2];
+    *p99 = v[(int)((n - 1) * 0.99 + 0.5)];
+    *mx = v[n - 1];
+}
+
+/* One pass: post keys, buttons and shift while a frame loop reads them
+ * through yscr_poll() and yscr_event_input(); pair the k-th of each kind
+ * in the three lists. */
+static void in_pass(yscr_screen* s, const char* name, int to_pid, int n) {
+    static double a1[IN_MAX], a2[IN_MAX], a3[IN_MAX];
+    static int idx_post[IN_KINDS][IN_MAX / 2], idx_mon[IN_KINDS][IN_MAX / 2], idx_got[IN_KINDS][IN_MAX / 2];
+    int cnt_post[IN_KINDS], cnt_mon[IN_KINDS], cnt_got[IN_KINDS];
+    in_job j;
+    pthread_t th;
+    yscr_frame f;
+    int x = 0, y = 0, w = 0, h = 0, k, i, m_shift = 0;
+    char msg[256];
+    SDL_GetWindowPosition(yscr_window(s), &x, &y);
+    SDL_GetWindowSize(yscr_window(s), &w, &h);
+    memset(&j, 0, sizeof j);
+    j.pid = (int)getpid();
+    j.to_pid = to_pid;
+    j.n = n;
+    j.mods = to_pid;   /* shift through the HID tap would reach the active app's modifiers too */
+    j.at.x = x + w / 2.0;
+    j.at.y = y + h / 2.0;
+    g_npost = 0; g_post_done = 0; g_nmon = 0; g_ngot = 0;
+    pthread_create(&th, NULL, in_poster, &j);
+    while (!__atomic_load_n(&g_post_done, __ATOMIC_ACQUIRE)) {
+        SDL_Event ev;
+        int64_t t;
+        if (yscr_begin(s, &f) != YSCR_OK) break;
+        while (yscr_poll(s, &ev, &t)) {
+            yin_event e;
+            int kind = -1;
+            if (!yscr_event_input(s, &ev, &e)) continue;
+            if (e.kind == YIN_KIND_KEYBOARD && e.control == SDL_SCANCODE_F19 && !(e.flags & YIN_REPEAT))
+                kind = e.type == YIN_PRESS ? IN_KEY_DOWN : IN_KEY_UP;
+            else if (e.kind == YIN_KIND_KEYBOARD && e.control == SDL_SCANCODE_LSHIFT)
+                kind = e.type == YIN_PRESS ? IN_MOD_DOWN : IN_MOD_UP;
+            else if (e.kind == YIN_KIND_MOUSE && e.control == 1 && (e.type == YIN_PRESS || e.type == YIN_RELEASE))
+                kind = e.type == YIN_PRESS ? IN_BTN_DOWN : IN_BTN_UP;
+            if (kind >= 0 && g_ngot < IN_MAX) {
+                g_got[g_ngot].kind = kind;
+                g_got[g_ngot].t = e.t;
+                g_got[g_ngot].t_sdl = t;
+                g_got[g_ngot].stamp = e.stamp;
+                g_ngot++;
+            }
+        }
+        if (yscr_flip(s) != YSCR_OK) break;
+    }
+    pthread_join(th, NULL);
+    memset(cnt_post, 0, sizeof cnt_post);
+    memset(cnt_mon, 0, sizeof cnt_mon);
+    memset(cnt_got, 0, sizeof cnt_got);
+    for (i = 0; i < g_npost; i++) idx_post[g_post[i].kind][cnt_post[g_post[i].kind]++] = i;
+    for (i = 0; i < g_nmon; i++) {
+        int kind = in_kind_of_ns(g_mon[i].type, g_mon[i].code);
+        if (g_mon[i].type == 12 && g_mon[i].code == IN_LSHIFT) kind = (m_shift++ & 1) ? IN_MOD_UP : IN_MOD_DOWN;
+        if (kind >= 0) idx_mon[kind][cnt_mon[kind]++] = i;
+    }
+    for (i = 0; i < g_ngot; i++) idx_got[g_got[i].kind][cnt_got[g_got[i].kind]++] = i;
+    printf("     input %s: %d posted, the test's monitor saw %d, yscr_event_input() gave %d\n", name, g_npost, g_nmon,
+           g_ngot);
+    printf("     %-12s %5s %9s %20s %34s %34s\n", "kind", "n", "fallback", "|stamp - NSEvent| max",
+           "stamp - post min/p50/p99/max", "SDL - post min/p50/p99/max");
+    for (k = 0; k < IN_KINDS; k++) {
+        int n_k = cnt_post[k] < cnt_got[k] ? cnt_post[k] : cnt_got[k], nm = 0, fb = 0, bad = 0, before = 0;
+        double pmn, p50, p99, mx, qmn, q50, q99, qmx, rmn, r50, r99, rmx;
+        if (cnt_post[k] == 0) continue;
+        if (cnt_mon[k] < n_k) nm = cnt_mon[k]; else nm = n_k;
+        for (i = 0; i < n_k; i++) {
+            int gi = idx_got[k][i], pi = idx_post[k][i];
+            if (g_got[gi].stamp == YIN_TIER_3) fb++;
+            a2[i] = (double)(g_got[gi].t - g_post[pi].a) / 1000.0;
+            a3[i] = (double)(g_got[gi].t_sdl - g_post[pi].a) / 1000.0;
+            if (g_got[gi].t < g_post[pi].a) before++;
+        }
+        for (i = 0; i < nm; i++) {
+            int gi = idx_got[k][i];
+            int64_t d = g_got[gi].t - g_mon[idx_mon[k][i]].ts;
+            a1[i] = (double)(d < 0 ? -d : d) / 1000.0;
+            if (d < -1000 || d > 1000) bad++;
+        }
+        in_stats(a1, nm, &pmn, &p50, &p99, &mx);
+        in_stats(a2, n_k, &qmn, &q50, &q99, &qmx);
+        in_stats(a3, n_k, &rmn, &r50, &r99, &rmx);
+        printf("     %-12s %5d %9d %20.3f %7.1f / %6.1f / %6.1f / %7.1f %7.1f / %6.1f / %6.1f / %7.1f  us\n",
+               in_kind_name[k], n_k, fb, mx, qmn, q50, q99, qmx, rmn, r50, r99, rmx);
+        if (to_pid && (k == IN_BTN_DOWN || k == IN_BTN_UP)) {
+            /* SDL 3.4 delivers no button posted to the process (measured: 0
+             * of 20): the monitor's entries are events SDL drops, which the
+             * pairing must pass over; the keys' checks show that it did */
+            printf("     input %s, %s: SDL delivered %d of %d, the monitors saw %d\n", name, in_kind_name[k], n_k,
+                   cnt_post[k], cnt_mon[k]);
+            continue;
+        }
+        snprintf(msg, sizeof msg, "input %s, %s: %d of %d posted delivered, %d with SDL's stamp, %d of %d off the "
+                 "NSEvent stamp by more than 1 us, %d before the post", name, in_kind_name[k], n_k, cnt_post[k], fb,
+                 bad, nm, before);
+        check(n_k == cnt_post[k] && fb == 0 && nm == n_k && bad == 0 && before == 0, msg);
+    }
+}
+
+static void input(const yscr_desc* d0) {
+    static yscr_screen s;
+    yscr_desc d = *d0;
+    yscr_caps caps;
+    char line[1024];
+    id (^handler)(id) = ^id(id e) {
+        int k = g_nmon;
+        if (k < IN_MAX) {
+            unsigned long type = ((unsigned long (*)(id, SEL))objc_msgSend)(e, sel_registerName("type"));
+            double ts = ((double (*)(id, SEL))objc_msgSend)(e, sel_registerName("timestamp"));
+            g_mon[k].type = type;
+            g_mon[k].code = type >= 10 && type <= 12
+                                ? ((unsigned short (*)(id, SEL))objc_msgSend)(e, sel_registerName("keyCode")) : 0u;
+            g_mon[k].ts = (int64_t)llround(ts * 1e9);
+            g_nmon = k + 1;
+        }
+        return e;
+    };
+    id mon, app;
+    int n = getenv("YSCR_TEST_INPUT_N") ? atoi(getenv("YSCR_TEST_INPUT_N")) : 20, active = 0, tries;
+    if (n < 1) n = 1;
+    if (n > IN_MAX / 8) n = IN_MAX / 8;
+    if (!CGPreflightPostEventAccess()) {
+        printf("     input: posting events needs the Accessibility permission: not checked\n");
+        return;
+    }
+    memset(&s, 0, sizeof s);
+    if (!yscr_open(&s, &d)) { check(0, "input: open"); return; }
+    yscr_get_caps(&s, &caps);
+    check(caps.os_input_stamps, "input: caps.os_input_stamps on METAL");
+    yscr_describe(&s, line, sizeof line);
+    if (is_locked(&s)) {
+        printf("     input: the session is locked: not checked\n");
+        yscr_close(&s);
+        return;
+    }
+    mon = ((id (*)(id, SEL, unsigned long long, id))objc_msgSend)(
+        (id)objc_getClass("NSEvent"), sel_registerName("addLocalMonitorForEventsMatchingMask:handler:"),
+        (1ull << 1) | (1ull << 2) | (1ull << 10) | (1ull << 11) | (1ull << 12), (id)handler);
+    app = ((id (*)(id, SEL))objc_msgSend)((id)objc_getClass("NSApplication"), sel_registerName("sharedApplication"));
+    for (tries = 0; tries < 120 && !active; tries++) {   /* up to 2 s for the app to come to the front */
+        yscr_frame f;
+        SDL_Event ev;
+        if (yscr_begin(&s, &f) != YSCR_OK) break;
+        while (yscr_poll(&s, &ev, NULL)) {}
+        yscr_flip(&s);
+        active = ((signed char (*)(id, SEL))objc_msgSend)(app, sel_registerName("isActive")) != 0;
+    }
+    in_pass(&s, "CGEventPostToPid", 1, n);
+    /* a HID event goes to the active app: only when this one is */
+    if (active) in_pass(&s, "CGEventPost(HID)", 0, n);
+    else printf("     input CGEventPost(HID): skipped, this program is not the active app\n");
+    yscr_describe(&s, line, sizeof line);
+    {
+        const char* o = strstr(line, "os_stamps=");
+        char* e = o ? strchr(o, ')') : NULL;
+        if (e) e[1] = 0;
+        printf("     %s\n", o ? o : "(no os_stamps in the describe line)");
+    }
+    ((void (*)(id, SEL, id))objc_msgSend)((id)objc_getClass("NSEvent"), sel_registerName("removeMonitor:"), mon);
+    yscr_close(&s);
+}
+
 int main(int argc, char** argv) {
     yscr_desc d;
     const char* angle = argc > 1 ? argv[1] : getenv("YSCR_ANGLE_DIR");
@@ -448,6 +722,7 @@ int main(int argc, char** argv) {
     old_os(&d);
     vrr(&d);
     period(&d);
+    input(&d);
     d.color_depth = 10;
     run("tenbit", &d, 30, 400, 1, 0);
     d.color_depth = 0;

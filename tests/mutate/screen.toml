@@ -1529,8 +1529,9 @@ env = { YSCR_WINDOW_TEST_ONLY = "displays" }
 [test.metal]
 source = "tests/adapt/screen_metal_test.c"
 compiler = "gcc"
-flags = ["-std=c11", "-O1", "-w", "-I/Users/brainworks/sdl3/include"]
-libs = ["-L/Users/brainworks/sdl3/lib", "-lSDL3", "-Wl,-rpath,/Users/brainworks/sdl3/lib", "-lm"]
+flags = ["-std=c11", "-O1", "-w", "-fblocks", "-I/Users/brainworks/sdl3/include"]
+libs = ["-L/Users/brainworks/sdl3/lib", "-lSDL3", "-Wl,-rpath,/Users/brainworks/sdl3/lib", "-lm",
+        "-framework", "ApplicationServices", "-lobjc"]
 timeout = 300
 env_default = { YSCR_ANGLE_DIR = "/Users/brainworks/ysp-deps/angle-electron-43.8.3" }
 
@@ -1721,3 +1722,36 @@ test = "metal"
 why = "The describe line says why CVDisplayLink was used: no callback, or callbacks whose steps are off the duration; the two cases need different fixes (v0.14.1)."
 find = '            if (m->period_ns > 0) m->period_src = yscr__mtl_link_n >= 3 ? YSCR__MTL_SRC_CV_GRID : YSCR__MTL_SRC_CV;'
 replace = '            if (m->period_ns > 0) m->period_src = YSCR__MTL_SRC_CV;'
+
+# v0.15.0's 4 (mt-24 to mt-27: NSEvent stamps for keys and mouse buttons).
+[[mutant]]
+id = "mt-24"
+name = "no offset test"
+test = "screen"
+why = "An NSEvent SDL did not deliver (a title-bar click, a key IME took) is older than the pair, so its offset is larger than SDL's; without the test it takes the next SDL event (v0.15.0)."
+find = '            if (st->have_d && d > st->d_last + YSCR__NSM_D_TOL_NS) { st->passed++; continue; }'
+replace = '            if (0) { st->passed++; continue; }'
+
+[[mutant]]
+id = "mt-25"
+name = "an NSEvent after SDL's stamp taken"
+test = "screen"
+why = "SDL's stamp is never before its NSEvent's (its offset is at least the shortest read delay), so a later NSEvent is not the pair (v0.15.0)."
+find = '        if (b < -YSCR__NSM_EPS_NS) break;'
+replace = '        if (0) break;'
+
+[[mutant]]
+id = "mt-26"
+name = "modifiers held to the offset test"
+test = "screen"
+why = "SDL 3.4 stamps a modifier key at the read, not with NSEvent.timestamp plus its offset, so the offset test would refuse every modifier (v0.15.0)."
+find = '        if (cls < YSCR__NSM_MOD) {'
+replace = '        if (1) {'
+
+[[mutant]]
+id = "mt-27"
+name = "yscr_event_input() without the NSEvent stamp"
+test = "metal"
+why = "On macOS a key or mouse button must carry NSEvent.timestamp, not SDL 3.4's stamp with its per-process offset (v0.15.0)."
+find = '            ctx.t_os = yscr__nsm_stamp(ev, t);'
+replace = '            ctx.t_os = 0;'

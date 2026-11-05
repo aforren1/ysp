@@ -824,6 +824,9 @@ both passes. Times in us; "post" is the mach time before the
   meaning.
 - These are host times for synthetic keys. They leave out the
   keyboard's scan, debounce and USB poll.
+- `ysp/screen.h` v0.15.0 gives keys, modifier keys and mouse buttons
+  `NSEvent.timestamp` in place of SDL's stamp (docs/screen.md, "Keys and
+  mouse buttons: NSEvent.timestamp").
 
 ### 6.10 Other findings
 

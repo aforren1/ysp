@@ -1,4 +1,4 @@
-/* ysp/screen.h - v0.14.1 - public domain single-header display library
+/* ysp/screen.h - v0.15.0 - public domain single-header display library
  *
  *   The window, the GL ES 3.0 context, the display mode and the swap path
  *   of a stimulus display, with flip at a time: each frame learns the
@@ -699,6 +699,7 @@
  *     (v << 2 | v >> 6). Whether 10 bits reach the panel is not measured.
  *     Not on macOS: the panic watchdog, raw mice, the OS gamma ramp. A
  *     display in a variable refresh mode is refused (VARIABLE REFRESH).
+ *     Keys and mouse buttons get NSEvent.timestamp (INPUT, v0.15.0).
  *   Not implemented; open() refuses them with a message:
  *     YSCR_BACKEND_GLX_OML (Linux X11) and
  *     YSCR_BACKEND_WAYLAND (presentation-time). On Linux only SIM and
@@ -1070,6 +1071,24 @@
  *   before to 12.1 ms after the call. On X11 the server's 1 ms
  *   time, on Wayland the compositor's. Keyboards are not response boxes;
  *   use ysp/serial.h for reaction times.
+ *   On macOS (METAL, v0.15.0) SDL 3.4 stamps a key or mouse event with
+ *   NSEvent.timestamp plus a process-wide offset, the shortest read delay
+ *   seen so far (3.8 ms on a process's first key, then down to 0.2 ms),
+ *   and a modifier key when it reads it. yscr_event_input() gives keys,
+ *   modifier keys and mouse buttons NSEvent.timestamp itself, from a local
+ *   NSEvent monitor that the first METAL open adds and the last close
+ *   removes (it returns every event, so SDL still gets it). It pairs an
+ *   SDL event with its NSEvent by SDL's own arithmetic: SDL's stamp minus
+ *   the NSEvent's time is SDL's offset, which never grows, so an NSEvent
+ *   SDL did not deliver is passed over; an SDL event with no NSEvent keeps
+ *   SDL's stamp, tier 3. caps.os_input_stamps says the monitor was made;
+ *   pass it to yin_sdl_ctx.os_stamps for the source entry. Measured with
+ *   CGEventPost and CGEventPostToPid through this path (one Apple M2 Mac
+ *   mini, macOS 27.0.1; docs/screen.md): the stamp equal to
+ *   NSEvent.timestamp in 1600 of 1600, 49 us to 46.6 ms after the post
+ *   (p50 112 to 136 us). os_stamps=found/tried(passed n, bias us) in the
+ *   describe line. yscr_poll()'s time stays SDL's; motion, the wheel,
+ *   touch and pens keep SDL's stamps.
  *   With the raw path on, SDL 3.4 also sends a key from the window message
  *   when the message carries no scan code (read in SDL 3.4.0's source):
  *   keys injected by virtual-key code (SendInput with wVk only), keys with
@@ -1588,6 +1607,16 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.15.0 - METAL: yscr_event_input() gives keys, modifier keys and
+ *          mouse buttons NSEvent.timestamp in place of SDL 3.4's Cocoa
+ *          stamp, which is late by a per-process offset (INPUT). A local
+ *          NSEvent monitor, one per process, writes a ring of 64 entries
+ *          (no allocation per event); SDL events pair with their NSEvents
+ *          by SDL's own offset arithmetic, and keep SDL's stamp, tier 3,
+ *          where none fits. yscr_caps gains os_input_stamps (a bool in the
+ *          padding after raw_keyboard: no offset or size changes, a layout
+ *          change all the same); the describe line adds os_stamps=. Needs
+ *          ysp/input.h v0.5.0 (yin_sdl_ctx.os_stamps, t_os).
  *   v0.14.1 - METAL's first open in a process takes its period from
  *          CADisplayLink as the later opens do: the first callback's
  *          timestamp, off the grid in a process's first windowed open (15.8
@@ -1969,6 +1998,18 @@
  *          groups, input restamping, mode lists and the parameter table.
  *          The other swap paths are stubs that refuse to open.
  *
+ *   STATUS: v0.15.0 (METAL, input, 2026-11-05, unlocked, no Screen
+ *   Sharing, AC; Accessibility granted): tests/adapt/screen_metal_test.c
+ *   42 of 42. Its input case, run with 200 events per kind: F19, the
+ *   left shift key and the left button posted with CGEventPostToPid and
+ *   CGEventPost(kCGHIDEventTap) while a frame loop read them through
+ *   yscr_poll() and yscr_event_input(): 1600 of 1600 stamps equal to the
+ *   test's own NSEvent monitor's to the ns, none left with SDL's; stamp
+ *   minus post 49 us to 44.6 ms (p50 112 to 136 us, p99 up to 3.8 ms);
+ *   SDL's own stamps 0.5 to 0.8 ms later at the median, its modifier keys
+ *   8 to 9 ms (the frame's read). SDL delivered no button posted to the
+ *   process (0 of 200); the pairing passed over those entries. Not
+ *   measured: real keys and mice, IME, two windows.
  *   STATUS: v0.14.1 (METAL, 2026-11-05, unlocked, no Screen Sharing, AC,
  *   the M27Q at "60 Hz"): tests/adapt/screen_metal_test.c 33 of 33, the
  *   process's first open now period=16680375ns(cadisplaylink) (before:
@@ -2268,9 +2309,9 @@
 #define YSP_SCREEN_H_INCLUDED
 
 #define YSCR_VERSION_MAJOR 0
-#define YSCR_VERSION_MINOR 14
-#define YSCR_VERSION_PATCH 1
-#define YSCR_VERSION_STRING "0.14.1"
+#define YSCR_VERSION_MINOR 15
+#define YSCR_VERSION_PATCH 0
+#define YSCR_VERSION_STRING "0.15.0"
 
 #include "ysp/rt.h"
 #include "ysp/input.h"
@@ -2661,6 +2702,10 @@ typedef struct yscr_caps {
     yscr_mode mode;          /* the mode obtained, read back from the OS    */
     yscr_tier worst_tier;    /* the worst tier of any flip since open       */
     bool     raw_keyboard;     /* keys come on SDL's raw path now (INPUT)     */
+    bool     os_input_stamps;  /* yscr_event_input() gives keys and mouse
+                                * buttons their OS event's time (macOS:
+                                * NSEvent.timestamp; INPUT); set
+                                * yin_sdl_ctx.os_stamps from it            */
     int64_t  margin_ns;        /* the presenter's: the least time before a
                                 * vblank at which a present can still make
                                 * it; 0 = the core's (P/8, at most 1 ms)    */
@@ -5357,6 +5402,109 @@ static int64_t yscr__mtl_link_period(const int64_t* ts, int n, int64_t duration_
     return per;
 }
 
+/* --- NSEvent stamps for keys and mouse buttons (INPUT, macOS) --------------
+ * SDL 3.4 stamps a Cocoa key or mouse event with NSEvent.timestamp plus a
+ * process-wide offset (Cocoa_GetEventTimestamp): the first event's read
+ * delay, lowered only when it would put a stamp after the read. Measured:
+ * 3773 us on a process's first key, then 501, 316 and down to 207 us
+ * (docs/screen_macos_probe.md 6.9). It stamps a modifier key at the read
+ * (no NSEvent time). NSEvent.timestamp is mach time with no offset. On
+ * METAL a local NSEvent monitor keeps the newest YSCR__NSM_N key and mouse
+ * button stamps, and yscr_event_input() gives an SDL event its NSEvent's.
+ *
+ * The pairing key is SDL's own arithmetic, not a field of the event: SDL's
+ * stamp minus trunc(NSEvent.timestamp x 1e9) is SDL's offset, the same for
+ * every event until SDL lowers it, so it holds a pair to the nanosecond. A
+ * field would not do: a key's scan code needs SDL's private keyCode table,
+ * and a button misses SDL's remapping (with SDL's hint, a control-click is
+ * the right button).
+ * Entries are taken in order within their class (key down, key up, button
+ * down, button up, and each of the 8 modifiers): an SDL event takes the
+ * oldest entry not taken whose NSEvent came at most YSCR__NSM_EPS_NS after
+ * SDL's stamp and at most YSCR__NSM_WINDOW_NS before it, and, once an
+ * offset is known, whose offset is no larger than the last match's (SDL's
+ * offset never grows). An older entry that fails is an event SDL did not
+ * deliver (a click on the title bar, a key IME consumed, another window's)
+ * and is passed over; an SDL event with no entry (SDL's own key-ups at a
+ * focus loss, a release outside the window) keeps SDL's stamp, tier 3. A
+ * modifier, stamped at the read, takes the oldest entry of its key within
+ * the window, with no offset test. */
+#define YSCR__NSM_N         64           /* entries kept, a power of 2     */
+#define YSCR__NSM_KEY_DOWN  0
+#define YSCR__NSM_KEY_UP    1
+#define YSCR__NSM_BTN_DOWN  2
+#define YSCR__NSM_BTN_UP    3
+#define YSCR__NSM_MOD       4            /* + 0..7: SDL's LCTRL .. RGUI     */
+#define YSCR__NSM_CLASSES   12
+#define YSCR__NSM_WINDOW_NS 1000000000   /* an NSEvent this much older is not the pair */
+#define YSCR__NSM_EPS_NS    50000        /* the restamp's bracket (42 to 125 ns) many times over */
+#define YSCR__NSM_D_TOL_NS  1000         /* the offset test: SDL's sum is exact; 1 us of rounding */
+
+typedef struct yscr__nsev {
+    int64_t          t_ns;    /* trunc(NSEvent.timestamp x 1e9), SDL's rounding: mach ns */
+    volatile int32_t seq;     /* written last; 0 = empty                    */
+    uint8_t          cls, reserved_[3];
+} yscr__nsev;
+
+typedef struct yscr__nsm_state {
+    uint32_t next[YSCR__NSM_CLASSES];   /* per class, the first seq not taken */
+    int32_t  have_d;
+    int64_t  d_last;    /* SDL's stamp minus t_ns at the last offset match, SDL ns */
+    int64_t  b_last;    /* SDL's lateness then, ysp_rt ns: the describe line's os_bias */
+    uint32_t found, tried, passed;
+} yscr__nsm_state;
+
+/* The ysp_rt time of the NSEvent that an SDL event of class cls came from,
+ * or 0 when no entry fits. ring: the entries, written in seq order, head
+ * the newest seq; s_ticks: SDL's stamp; s_rt: it on the ysp_rt clock;
+ * mach_off: ysp_rt minus mach ns. Takes the entry. */
+static int64_t yscr__nsm_pick(const yscr__nsev* ring, uint32_t head, yscr__nsm_state* st, int cls,
+                              uint64_t s_ticks, int64_t s_rt, int64_t mach_off) {
+    uint32_t seq, first = head >= YSCR__NSM_N ? head - YSCR__NSM_N + 1 : 1;
+    if (cls < 0 || cls >= YSCR__NSM_CLASSES) return 0;
+    st->tried++;
+    seq = st->next[cls] < first ? first : st->next[cls];
+    for (; seq <= head; seq++) {
+        const yscr__nsev* e = &ring[seq & (YSCR__NSM_N - 1)];
+        int64_t b, d;
+        if ((uint32_t)e->seq != seq || e->cls != (uint8_t)cls) continue;
+        b = s_rt - (e->t_ns + mach_off);
+        if (b < -YSCR__NSM_EPS_NS) break;   /* this and the later ones came after SDL's stamp */
+        if (b > YSCR__NSM_WINDOW_NS) { st->passed++; continue; }
+        if (cls < YSCR__NSM_MOD) {
+            d = (int64_t)(s_ticks - (uint64_t)e->t_ns);
+            if (st->have_d && d > st->d_last + YSCR__NSM_D_TOL_NS) { st->passed++; continue; }
+            st->have_d = 1;
+            st->d_last = d;
+            st->b_last = b;
+        }
+        st->next[cls] = seq + 1;
+        st->found++;
+        return e->t_ns + mach_off;
+    }
+    return 0;
+}
+
+/* The class of an NSEvent: its type, and for flagsChanged the key code of
+ * the modifier; -1 for the rest (caps lock, fn: SDL sends no key for
+ * them as a modifier). */
+static int yscr__nsm_ns_class(unsigned long type, unsigned key_code) {
+    /* macOS key codes of LCTRL, LSHIFT, LALT, LGUI, RCTRL, RSHIFT, RALT,
+     * RGUI: SDL's modifier scan codes 224 to 231 in order */
+    static const unsigned short mods[8] = { 0x3B, 0x38, 0x3A, 0x37, 0x3E, 0x3C, 0x3D, 0x36 };
+    int k;
+    switch (type) {
+    case 10: return YSCR__NSM_KEY_DOWN;                        /* NSEventTypeKeyDown      */
+    case 11: return YSCR__NSM_KEY_UP;                          /* NSEventTypeKeyUp        */
+    case 1: case 3: case 25: return YSCR__NSM_BTN_DOWN;        /* left, right, other down */
+    case 2: case 4: case 26: return YSCR__NSM_BTN_UP;
+    case 12:                                                   /* NSEventTypeFlagsChanged */
+        for (k = 0; k < 8; k++) if (mods[k] == key_code) return YSCR__NSM_MOD + k;
+        return -1;
+    default: return -1;
+    }
+}
+
 /* One presented handler's report as a completion. presented_ns is
  * presentedTime on the ysp_rt clock, 0 when the drawable was not shown;
  * then the core estimates the flip, OCCLUDED when the window was hidden or
@@ -5768,6 +5916,103 @@ static int yscr__mtl_slot_take(void) {
     return -1;
 }
 
+/* --- the NSEvent monitor (INPUT, macOS) --------------------------------------
+ * One local monitor for the process, installed by the first METAL open and
+ * removed by the last close. Its handler runs on the main thread inside
+ * SDL's pump, before or after SDL takes the same event, and only writes a
+ * fixed ring: no allocation per event. It returns the event, so SDL still
+ * gets it. yscr_event_input() can run on another thread: it copies an entry
+ * and takes it only when its seq was the same before and after. */
+#define YSCR__NSM_MASK ((1ull << 1) | (1ull << 2) | (1ull << 3) | (1ull << 4) | (1ull << 10) | (1ull << 11) | \
+                        (1ull << 12) | (1ull << 25) | (1ull << 26))   /* buttons, keys, flags changed */
+
+typedef struct yscr__nsm_block {
+    void*       isa;
+    int32_t     flags, reserved;
+    yscr__id  (*invoke)(void*, yscr__id);
+    const void* descriptor;
+} yscr__nsm_block;
+
+/* NSEvent* (^)(NSEvent*): a global Block, as the presented handler's */
+static const yscr__mtl_block_desc yscr__nsm_bdesc = { 0, sizeof(yscr__nsm_block), "@16@?0@8" };
+
+static struct {
+    yscr__nsev      ring[YSCR__NSM_N];
+    volatile int32_t head;          /* the newest seq written             */
+    uint32_t        written;        /* the writer's count (main thread)   */
+    int32_t         users;          /* METAL screens open                 */
+    yscr__id        monitor;        /* +[NSEvent addLocalMonitor...]'s    */
+    yscr__nsm_block block;          /* static: alive as long as the process */
+    void           *sel_type, *sel_timestamp, *sel_key_code;
+    int64_t         mach_off;       /* ysp_rt minus mach ns, at install   */
+    yscr__nsm_state st;             /* the reader's                       */
+} yscr__nsm;
+
+static yscr__id yscr__nsm_handler(void* blk, yscr__id event) {
+    unsigned long type;
+    int cls;
+    (void)blk;
+    if (!event) return event;
+    type = yscr__u0(event, yscr__nsm.sel_type);
+    cls = yscr__nsm_ns_class(type, type == 12 ? (unsigned)YSCR__MSG(unsigned short, yscr__id, void*)(
+                                                    event, yscr__nsm.sel_key_code) : 0u);
+    if (cls >= 0) {
+        uint32_t seq = ++yscr__nsm.written;
+        yscr__nsev* e = &yscr__nsm.ring[seq & (YSCR__NSM_N - 1)];
+        double t = YSCR__MSG(double, yscr__id, void*)(event, yscr__nsm.sel_timestamp);
+        yscr__a_store(&e->seq, 0);
+        e->t_ns = (int64_t)(uint64_t)(t * 1000000000.0);   /* as SDL rounds it */
+        e->cls = (uint8_t)cls;
+        yscr__a_store(&e->seq, (int32_t)seq);
+        yscr__a_store(&yscr__nsm.head, (int32_t)seq);
+    }
+    return event;
+}
+
+/* On the main thread, in open(); 0 when the monitor could not be made
+ * (then keys and buttons keep SDL's stamps, caps.os_input_stamps false). */
+static int yscr__nsm_hold(int64_t mach_off) {
+    yscr__id cls;
+    void* pool;
+    if (yscr__nsm.users++ > 0) return 1;
+    cls = yscr__mac.cls("NSEvent");
+    if (!cls || !yscr__mac.global_block) { yscr__nsm.users = 0; return 0; }
+    yscr__nsm.sel_type = yscr__mac.sel("type");
+    yscr__nsm.sel_timestamp = yscr__mac.sel("timestamp");
+    yscr__nsm.sel_key_code = yscr__mac.sel("keyCode");
+    yscr__nsm.block.isa = yscr__mac.global_block;
+    yscr__nsm.block.flags = (int32_t)((1u << 28) | (1u << 30));   /* IS_GLOBAL, HAS_SIGNATURE */
+    yscr__nsm.block.reserved = 0;
+    yscr__nsm.block.invoke = yscr__nsm_handler;
+    yscr__nsm.block.descriptor = &yscr__nsm_bdesc;
+    /* ysp/rt.h reads mach time from v0.10.0, converted as here: an offset
+     * from the correlation would only add its noise (20 ns, bracket 42 ns) */
+#if YRT_VERSION_MAJOR > 0 || YRT_VERSION_MINOR >= 10
+    (void)mach_off;
+    yscr__nsm.mach_off = 0;
+#else
+    yscr__nsm.mach_off = mach_off;
+#endif
+    memset(&yscr__nsm.st, 0, sizeof yscr__nsm.st);
+    pool = yscr__mac.pool_push();
+    yscr__nsm.monitor = YSCR__MSG(yscr__id, yscr__id, void*, unsigned long long, void*)(
+        cls, yscr__mac.sel("addLocalMonitorForEventsMatchingMask:handler:"), YSCR__NSM_MASK, &yscr__nsm.block);
+    if (yscr__nsm.monitor) yscr__v0(yscr__nsm.monitor, yscr__mac.retain);
+    yscr__mac.pool_pop(pool);
+    if (!yscr__nsm.monitor) { yscr__nsm.users = 0; return 0; }
+    return 1;
+}
+
+static void yscr__nsm_release(void) {
+    void* pool;
+    if (yscr__nsm.users <= 0 || --yscr__nsm.users > 0) return;
+    pool = yscr__mac.pool_push();
+    if (yscr__nsm.monitor)
+        yscr__vo(yscr__mac.cls("NSEvent"), yscr__mac.sel("removeMonitor:"), yscr__nsm.monitor);
+    YSCR__MRELEASE(yscr__nsm.monitor);
+    yscr__mac.pool_pop(pool);
+}
+
 /* --- the presenter's state --------------------------------------------------- */
 #define YSCR__MTL_CACHE   6     /* pbuffers, one per drawable IOSurface      */
 #define YSCR__MTL_ARMED   8
@@ -5805,6 +6050,7 @@ typedef struct yscr__mtl {
     int32_t   period_src;          /* YSCR__MTL_SRC_*                         */
     int64_t   hidden_t;
     uint32_t  not_shown, no_drawable, no_slot, sync_failed, pbuffers, late_handlers, held_far;
+    int32_t   nsm_held;            /* this screen holds the NSEvent monitor   */
     char      angle[48];
 } yscr__mtl;
 
@@ -6220,6 +6466,7 @@ static int yscr__mtl_open(void* vctx, const yscr_presenter_open* in, yscr_caps* 
     m->kind = yscr__mtl_kind_now(m);
     (void)yscr__mtl_hidden(m);
     if (in->code_selftest && in->n_codes > 0) *in->code_selftest = yscr__mtl_selftest(m);
+    m->nsm_held = yscr__nsm_hold(m->mach_off);
     return YSCR_OK;
 }
 
@@ -6255,6 +6502,8 @@ static void yscr__mtl_close(void* vctx) {
     m->view = NULL;
     m->layer = NULL;
     m->dpy = NULL;
+    if (m->nsm_held) yscr__nsm_release();
+    m->nsm_held = 0;
 }
 
 static void yscr__mtl_bind(void* vctx) {
@@ -6562,11 +6811,44 @@ static int yscr__mtl_describe(void* vctx, char* buf, size_t cap) {
     m->kind = yscr__mtl_kind_now(m);
     return snprintf(buf, cap, "angle=%s kind=%s layer=%s period=%lldns(%s) refresh_interval=%lld..%lldns locked=%d not_shown=%u no_drawable=%u "
                     "no_handler=%u late_handler=%u held_far=%u sync_failed=%u pbuffers=%u mach_off=%lldns(%lldns) target_lead=%.2f "
-                    "tier=%d(no photodiode)",
+                    "tier=%d(no photodiode) os_stamps=%u/%u(passed %u, bias %lldus)",
                     m->angle, yscr__mtl_kind_name(m->kind), m->bits10 ? "bgr10a2" : "bgra8", (long long)m->period_ns,
                     yscr__mtl_src_name[m->period_src >= 0 && m->period_src <= 4 ? m->period_src : 0],
                     (long long)m->min_iv_ns, (long long)m->max_iv_ns, m->locked, m->not_shown, m->no_drawable, m->no_slot, m->late_handlers, m->held_far, m->sync_failed, m->pbuffers,
-                    (long long)m->mach_off, (long long)m->corr_w, YSCR__MTL_TARGET_LEAD, (int)yscr__mtl_tier(m->kind));
+                    (long long)m->mach_off, (long long)m->corr_w, YSCR__MTL_TARGET_LEAD, (int)yscr__mtl_tier(m->kind),
+                    yscr__nsm.st.found, yscr__nsm.st.tried, yscr__nsm.st.passed, (long long)(yscr__nsm.st.b_last / 1000));
+}
+
+/* The NSEvent time of an SDL key or mouse-button event (ysp_rt ns), or 0:
+ * not such an event, no monitor, or no entry fits (yscr__nsm_pick). */
+static int64_t yscr__nsm_stamp(const SDL_Event* ev, int64_t s_rt) {
+    yscr__nsev snap[YSCR__NSM_N];
+    uint32_t head;
+    int cls, k;
+    if (yscr__nsm.users <= 0) return 0;
+    switch (ev->type) {
+    case SDL_EVENT_KEY_DOWN:
+    case SDL_EVENT_KEY_UP:
+        if (ev->key.scancode >= SDL_SCANCODE_LCTRL && ev->key.scancode <= SDL_SCANCODE_RGUI)
+            cls = YSCR__NSM_MOD + (int)(ev->key.scancode - SDL_SCANCODE_LCTRL);
+        else cls = ev->key.down ? YSCR__NSM_KEY_DOWN : YSCR__NSM_KEY_UP;
+        break;
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+    case SDL_EVENT_MOUSE_BUTTON_UP:
+        if (ev->button.which == SDL_TOUCH_MOUSEID || ev->button.which == SDL_PEN_MOUSEID) return 0;
+        cls = ev->button.down ? YSCR__NSM_BTN_DOWN : YSCR__NSM_BTN_UP;
+        break;
+    default:
+        return 0;
+    }
+    head = (uint32_t)yscr__a_load(&yscr__nsm.head);
+    for (k = 0; k < YSCR__NSM_N; k++) {   /* a copy the handler cannot change under the pick */
+        int32_t q = yscr__a_load(&yscr__nsm.ring[k].seq);
+        snap[k].t_ns = yscr__nsm.ring[k].t_ns;
+        snap[k].cls = yscr__nsm.ring[k].cls;
+        snap[k].seq = yscr__a_load(&yscr__nsm.ring[k].seq) == q ? q : 0;
+    }
+    return yscr__nsm_pick(snap, head, &yscr__nsm.st, cls, ev->common.timestamp, s_rt, yscr__nsm.mach_off);
 }
 
 static yscr_proc yscr__mtl_gl_proc(void* vctx, const char* name) {
@@ -11244,6 +11526,7 @@ YSCR_API bool yscr_open(yscr_screen* s, const yscr_desc* desc) {
     (void)&yscr__mtl_target; (void)&yscr__mtl_vblank; (void)&yscr__mtl_period;   /* the core test calls them */
     (void)&yscr__mtl_pixel; (void)&yscr__mtl_code_of; (void)&yscr__mtl_kind_name;
     (void)&yscr__mtl_variable; (void)&yscr__mtl_vrr_message; (void)&yscr__mtl_link_period;
+    (void)&yscr__nsm_pick; (void)&yscr__nsm_ns_class;
 #endif
     if (desc->color_depth != 0 && desc->color_depth != 8 && desc->color_depth != 10) {
         yscr__copy(s->error, sizeof s->error, "ysp_screen: desc.color_depth must be 0, 8 or 10");
@@ -11617,6 +11900,17 @@ YSCR_API void yscr_close(yscr_screen* s) {
 YSCR_API const char* yscr_error(const yscr_screen* s) { return s ? s->error : "ysp_screen: NULL screen"; }
 YSCR_API bool yscr_is_open(const yscr_screen* s) { return s && s->open; }
 
+/* Whether yscr_event_input() gives keys and mouse buttons their OS
+ * event's time: a METAL screen whose NSEvent monitor was made. */
+static bool yscr__os_input_stamps(const yscr_screen* s) {
+#if defined(YSCR__METAL)
+    return s->open && s->backend == YSCR_BACKEND_METAL && ((const yscr__mtl*)(const void*)s->backend_mem)->nsm_held;
+#else
+    (void)s;
+    return false;
+#endif
+}
+
 /* Whether keys come on SDL's raw path now: the hint can change at any
  * time, and text input routes keys through the message path (INPUT). */
 static bool yscr__raw_keyboard(const yscr_screen* s) {
@@ -11634,6 +11928,7 @@ YSCR_API void yscr_get_caps(const yscr_screen* s, yscr_caps* out) {
     *out = s->caps;
     out->worst_tier = (yscr_tier)s->worst_tier;
     out->raw_keyboard = yscr__raw_keyboard(s);
+    out->os_input_stamps = yscr__os_input_stamps(s);
 }
 
 static const char* yscr__path_name(uint16_t p) {
@@ -12607,9 +12902,17 @@ YSCR_API bool yscr_event_input(yscr_screen* s, const union SDL_Event* ev, yin_ev
         return yscr__in_decode(s, ev->user.code, out) != 0 && yscr__key_keep(s, out);
     {
         yin_sdl_ctx ctx;
+        int64_t t = yscr_restamp(s, ev->common.timestamp);
+        memset(&ctx, 0, sizeof ctx);
         ctx.raw_keyboard = s ? yscr__raw_keyboard(s) : true;
         ctx.keep_synthetic = false;
-        if (!yin_from_sdl(ev, yscr_restamp(s, ev->common.timestamp), &ctx, out)) return false;
+#if defined(YSCR__METAL)
+        if (s && yscr__os_input_stamps(s)) {
+            ctx.os_stamps = true;
+            ctx.t_os = yscr__nsm_stamp(ev, t);
+        }
+#endif
+        if (!yin_from_sdl(ev, t, &ctx, out)) return false;
 #if defined(YSCR__WEB)
         if (s && s->open && s->backend == YSCR_BACKEND_WEB)
             yscr__web_dom_stamp((yscr__web*)(void*)s->backend_mem, ev, out);

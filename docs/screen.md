@@ -4113,6 +4113,99 @@ Sharing (3 of 3) and every frame but the first 6 without it (1 of 1).
 For timing work, close Screen Sharing. The header does not detect it: no
 public call that says the screen is being captured was found.
 
+### Keys and mouse buttons: NSEvent.timestamp (v0.15.0)
+
+SDL 3.4 on Cocoa stamps a key or mouse event with `NSEvent.timestamp`
+plus a process-wide offset: the shortest read delay seen so far (3.8 ms
+on a process's first key, then down to 0.2 ms; probe, 6.9). It stamps a
+modifier key when it reads it. Its `Cocoa_GetEventTimestamp` stamps keys
+(also the key IME holds), mouse buttons, motion and the wheel, touch,
+pinches and pen events. v0.15.0 corrects keys, modifier keys and mouse
+buttons: the presses and releases a response collector reads.
+
+**The monitor.** The first METAL open in a process adds a local NSEvent
+monitor (`+[NSEvent addLocalMonitorForEventsMatchingMask:handler:]`) for
+key down and up, flags changed and the mouse buttons; the last close
+removes it. The handler is a global Block built by hand in C, as the
+presented handler is (`isa` `_NSConcreteGlobalBlock`, flags IS_GLOBAL and
+HAS_SIGNATURE, signature `@16@?0@8` for `NSEvent* (^)(NSEvent*)`), in
+static storage, so it lives as long as the process. It returns the event,
+so SDL still gets it. It writes the event's class and
+`trunc(NSEvent.timestamp x 1e9)` into a ring of 64 entries of 16 bytes:
+no allocation per event. It runs on the main thread inside SDL's pump.
+`yscr_event_input()` may run on another thread, so it copies the ring and
+keeps an entry only when the entry's sequence number was the same before
+and after the copy.
+
+**The pairing key: SDL's own arithmetic.** SDL's stamp minus
+`trunc(NSEvent.timestamp x 1e9)` is SDL's offset, the same for every key
+and button until SDL lowers it. So the right entry gives that offset to
+the nanosecond, and an entry SDL did not deliver gives a larger one (it
+is older). A field of the event would not do: a key's scan code comes
+from SDL's private key-code table, and a button misses SDL's remapping (with
+SDL's hint, a control-click is the right button). The rule
+(`yscr__nsm_pick`):
+
+- An entry pairs only within its class: key down, key up, button down,
+  button up, and each of the 8 modifier keys apart.
+- Within a class an SDL event takes the oldest entry not taken whose
+  NSEvent came at most 50 us after SDL's stamp (on the ysp_rt clock) and
+  at most 1 s before it.
+- Once an offset is known, the entry's offset must be no larger than the
+  last match's plus 1 us: SDL's offset never grows. An older entry that
+  fails is an event SDL did not deliver (a click on the title bar, a key
+  IME took, an event posted to the process that SDL drops) and is passed
+  over.
+- A modifier key has no offset (SDL stamps it at the read): it takes the
+  oldest entry of its own key within the window.
+- An SDL event with no entry keeps SDL's stamp, and the adapter gives it
+  tier 3: SDL's own key-ups at a focus loss, a release outside the window.
+
+Key repeats have NSEvents of their own and pair as key downs. A second
+METAL screen shares the monitor; the ring is per process, as SDL's queue
+is. The describe line has `os_stamps=found/tried(passed n, bias us)`, the
+bias being SDL's lateness at the last match. `caps.os_input_stamps` says
+whether the monitor was made; pass it to `yin_sdl_ctx.os_stamps` for the
+source entry (ysp/input.h v0.5.0). `yscr_poll()`'s time is still SDL's.
+
+**Measured** through the rig's path, `tests/adapt/screen_metal_test.c`'s
+`input` case with `YSCR_TEST_INPUT_N=200`:
+
+Conditions: 2026-11-05 11:58, Apple M2 Mac mini, macOS 27.0.1, the M27Q
+on HDMI at "60 Hz", AC, the session unlocked, no Screen Sharing, nothing
+else running; Accessibility granted to the terminal's app. An 800 x 600
+METAL window ran a frame loop that read its events once a frame with
+`yscr_poll()` and `yscr_event_input()`, the path a rig uses. A thread
+posted F19, the left button at the window's center, and (to the process
+only) the left shift key, 40 to 50 ms apart at a random phase to the
+frames, 200 of each per pass. "post" is the mach time just before the
+post call. The test's own local NSEvent monitor gave the reference
+NSEvent.timestamp. Times in us.
+
+| Pass, kind | n | SDL's stamp kept | \|stamp - NSEvent\| max | stamp - post: min / p50 / p99 / max | SDL's stamp - post: min / p50 / p99 / max |
+|---|---|---|---|---|---|
+| `CGEventPostToPid`, key down | 200 | 0 | 0 | 68.8 / 113.7 / 3781 / 44567 | 585.5 / 782.4 / 6598 / 52827 |
+| `CGEventPostToPid`, key up | 200 | 0 | 0 | 49.3 / 115.3 / 3139 / 15397 | 566.0 / 772.1 / 4311 / 23657 |
+| `CGEventPostToPid`, left shift down | 200 | 0 | 0 | 68.1 / 113.6 / 2578 / 2803 | 546.0 / 8411 / 16940 / 17150 |
+| `CGEventPostToPid`, left shift up | 200 | 0 | 0 | 50.7 / 112.3 / 2788 / 3211 | 499.5 / 8996 / 16837 / 17049 |
+| `CGEventPostToPid`, left button down and up | 200 each | SDL delivered none | | | |
+| `CGEventPost(kCGHIDEventTap)`, key down | 200 | 0 | 0 | 75.8 / 135.7 / 3724 / 3743 | 592.4 / 652.4 / 4240 / 4259 |
+| `CGEventPost(kCGHIDEventTap)`, key up | 200 | 0 | 0 | 73.2 / 125.8 / 2933 / 3531 | 589.9 / 642.4 / 3450 / 4048 |
+| `CGEventPost(kCGHIDEventTap)`, left button down | 200 | 0 | 0 | 74.4 / 136.0 / 2917 / 3582 | 591.0 / 652.6 / 3433 / 4099 |
+| `CGEventPost(kCGHIDEventTap)`, left button up | 200 | 0 | 0 | 64.2 / 122.5 / 3194 / 3725 | 580.9 / 639.1 / 3711 / 4242 |
+
+Every pair was exact (1600 of 1600). The details are in
+[input.md](input.md#macos-nsevent-stamps-v050). With the test's
+default of 20 events per kind it is one of the Metal test's checks, and
+it runs only where posting is allowed (`CGPreflightPostEventAccess`) and
+the session is unlocked.
+
+**Not verified:** real keys and mice (scan, debounce, USB poll, and a
+real event's path to the window server); IME composition; a second
+window or screen open at the same time; events while another library's
+NSEvent monitor eats events; touch, pinch, pen, motion and wheel times
+(SDL's stamps, unchanged).
+
 ### Variable refresh refused (v0.13.0)
 
 A ProMotion MacBook, or an external display in an Adaptive-Sync mode,
@@ -4180,9 +4273,14 @@ something measured here.
   the Metal test (no wait on the signal, codes compared raw, the pbuffer
   cache off). The far-target hold has no mutant: no test can show a frame
   far ahead without a shown screen.
-- `mt-14` to `mt-23` (v0.13.0 to v0.14.1): variable refresh, the period's
-  source, the macOS 14 floor and the first open's period, each in its
-  section above.
+- `mt-14` to `mt-27` (v0.13.0 to v0.15.0): variable refresh, the period's
+  source, the macOS 14 floor, the first open's period and the NSEvent
+  stamps, each in its section above.
+- From v0.15.0 `tests/adapt/screen_metal_test.c`'s `input` case posts
+  keys, the shift key and clicks and checks each stamp against an NSEvent
+  monitor of its own (20 per kind; `YSCR_TEST_INPUT_N` for more). It
+  needs the Accessibility permission and an unlocked session, and says so
+  when it skips.
 - From v0.14.1 `tests/adapt/screen_metal_test.c` also runs 120 frames in
   a fullscreen space and checks one frame a vblank there.
 
