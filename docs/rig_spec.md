@@ -1184,7 +1184,7 @@ Details, versions and measurements per header are in
 | 1. `ysp/rt.h` | Done, v0.9.1. |
 | 2. `ysp/timeline.h` | Done for now, v0.8.1. Since v0.4.0: trigger channels (`ytl_trigger_ch()`), parameter tables for the ops and the desc. |
 | 3. `ysp/screen.h` | v0.10.4 on Windows: DXGI_FLIP and COMPOSITION, the window thread (on by default for native Windows), flip records, the abort and the panic, the web backend (v0.7.0). X11, Wayland and macOS are stubs. The X11 probe (docs/screen_x11_probe.md) has not run on the Linux rig. No photodiode run. |
-| 4. `ysp/audio.h` | v0.7.3 on WASAPI: onsets from a fit of device positions, tier 2, streams, WAV, capture. CoreAudio, ALSA and PulseAudio ran only as miniaudio's null device, in CI. No line-in run. |
+| 4. `ysp/audio.h` | v0.7.3 on WASAPI: onsets from a fit of device positions, tier 2, streams, WAV, capture. v0.8.0 on CoreAudio (one Mac, 2026-11-05): reports from the HAL's render time stamps, hog mode, the driver stack in the describe line; functional runs only, tier 3, the timing runs listed in docs/audio.md. ALSA and PulseAudio ran only as miniaudio's null device, in CI. No line-in run. |
 | 5. `ysp/gfx.h` | v0.17.2: stimuli, curve runs (text and artwork), batched text runs, parameter tables, frame capture. Open items in docs/gfx.md "Next". |
 | 6. `ysp/video.h` | v0.6.0: Media Foundation and pl_mpeg, the soundtrack on audio streams, UTF-8 paths, error codes. Not built: AVFoundation, capture. |
 | Also built | `ysp/outline.h` v0.4.1, `ysp/rdk.h` v0.3.0, `ysp/color.h` v0.4.0, `ysp/trials.h` v0.6.0, `ysp/table.h` v0.3.0, `ysp/dataset.h` v0.2.0, `ysp/json.h` v0.2.1, `ysp/pack.h` v0.4.0 and the pack tool v0.7.0 (item 6), the device headers of docs/devices_spec.md (input, response, box, device, rigfile, serial, parallel, net). The experiment format (docs/experiment_format.md) with its gaps G1 to G13 closed. |
@@ -1216,8 +1216,8 @@ Details, versions and measurements per header are in
 4. **Other platforms.** `ysp/screen.h` on Linux X11: run the probe on
    the Linux rig, then build the GLX backend from its results. Then
    Wayland (presentation-time), then macOS through ANGLE's Metal
-   backend. `ysp/audio.h` on ALSA, PulseAudio and CoreAudio with real
-   devices. A platform gets its tier from a photodiode or line-in run on
+   backend. `ysp/audio.h` on ALSA and PulseAudio with real devices, and
+   the CoreAudio timing runs (docs/audio.md, "CoreAudio"). A platform gets its tier from a photodiode or line-in run on
    that platform, not from CI.
 5. The designer.
 6. Build jobs.
@@ -1359,7 +1359,10 @@ The measurements are in docs/av_probe.md and docs/winthread_probe.md.
   set that disables its silent rate conversion. Answered for WASAPI
   (2026-10-05, docs/audio.md): ask for no format, rate or channel
   count, so the client format is the device's; exclusive mode opens at
-  the endpoint's Default Format. Other backends: not run.
+  the endpoint's Default Format. CoreAudio (2026-11-05, docs/audio.md,
+  "CoreAudio"): the AudioUnit takes the device's rate and format, so the
+  same strict open holds; miniaudio has no exclusive mode there, and
+  ysp/audio.h 0.8.0 takes hog mode itself. ALSA, PulseAudio: not run.
 - Whether SDL_GPU gains a browser backend, which would make it a
   candidate second implementation behind the `ysp/gfx.h` interface.
 - The first stimulus that needs compute, which would move the plan to
