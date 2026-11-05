@@ -742,6 +742,28 @@ returns before the transfer (docs/serial.md). The fit's bound was 65 to
 - Not measured, as before: a real TriggerBox, BioSemi, MMBT-S, XID box or
   line board (`p`), an FTDI bridge and Linux.
 
+With ysp/rt.h 0.10.1 (2026-11-05, 14:41 to 14:45 EST, the same Mac and
+board, 1-minute load 1.54 and 1.33 before the two runs; Spotlight's
+`corespotlightd` at 39 % of a core before the second): 0 of 2400 missed.
+Width error, median (p5 / p99 / max), microseconds:
+
+| Family | 1 ms | 5 ms |
+|---|---|---|
+| TriggerBox (a byte) | -20 (-81 / +1 / +5) | -23 (-86 / +13 / +25) |
+| LINES, DTR | -8 (-47 / +10 / +15) | -8 (-59 / +15 / +68) |
+| LINES, RTS | -9 (-74 / +12 / +16) | -10 (-80 / +12 / +19) |
+
+Onset, median (p99): byte 91 us (202), DTR 82 us (204), RTS 84 us (245).
+`ydev_out_pulse()` returned in 59 us median for a byte and 181 to 185 us
+for a line. The instance worker's wait was right with 0.10.0 already (it
+runs at TIME_CONSTRAINT, which ysp/rt.h 0.10.1 leaves on `nanosleep()`),
+so this run checks that the change did not make it worse. It did not:
+every p99 is under +16 us, and the medians are 8 to 17 us closer to 0.
+The two runs of 0.10.1 differed by up to 12.5 us in a cell (those of
+0.10.0 by up to 6 us), so the shift is about the size of the spread
+between runs; the worker's wait did not change. Summaries:
+`tests/compare/serial_pulse/results/2026-11-05-teensy40-macos-rt0101/`.
+
 ### Response rules: the lag (v0.5.0)
 
 `examples/device/response_lag.c` (`device_response_lag`), MSVC 19.44 /O2

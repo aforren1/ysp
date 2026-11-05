@@ -513,8 +513,9 @@ a spin, `nanosleep()` at `TIME_CONSTRAINT` woke 10 to 16 us late at the
 median and at most 43 us late; on the Windows laptop a normal-priority
 thread's waitable timer woke about 400 us late at the median ([the cost of now()](#measured-the-cost-of-now-and-the-lateness-of-a-wait)).
 With the default spin no wait was a measurable 0.1 us late. These are
-elevated threads on an idle machine; a normal thread under load was not
-measured.
+elevated threads on an idle machine. A normal thread was coalesced, a
+quarter to a half of each wait late, until v0.10.1: see [The wait on
+macOS](#the-wait-on-macos-v0101).
 
 The clock, ns a call: median of 7 runs of 20 M calls, the four clocks
 interleaved, two rounds (`build/scratch/clockcost.c`, a scratch bench
@@ -553,6 +554,123 @@ Every bar in [Against the bars](#against-the-bars) is met on the Mac.
 The 8-producer run's maximum is one 156 ms stall: 9 busy threads on 8
 cores, as in WSL2. The elevated producer's p99.9 (0.67 us) is under the
 10 us bar and 88 times below the mutex ring's.
+
+### The wait on macOS (v0.10.1)
+
+The runs above used elevated threads. On 2026-11-05 the serial pulse
+bench ([docs/serial.md](serial.md#the-wait-on-a-normal-thread)) found
+that on a thread without a real-time policy, every wait of v0.10.0 woke
+a quarter to a half of its length late. A 5 ms pulse timed on the
+caller's thread was 2.2 ms too wide.
+
+`tests/compare/serial_pulse/wait_leeway.c` measures the wait alone: 200
+waits of each length per cell, the coarse wait only (no spin), deadlines
+on `yrt_now_ns()`'s clock. It ran on three threads: the main thread of a
+Cocoa app with an SDL3 3.4.0 window open (the case of ysp/screen.h's
+presenter), a new pthread at the defaults, and a pthread that
+`yrt_thread_elevate()` put on TIME_CONSTRAINT. Conditions: the M2 Mac
+mini, macOS 27.0.1, AC power, Apple clang 21 `-O2`, no other agent
+running. v0.10.0 ran at 14:01 (1-minute load 1.30 before, 1.08 after;
+a VS Code renderer was at 52 % of a core when the run started).
+v0.10.1 ran at 14:18 (2.38 before, from the build just before it, and
+1.64 after). Lateness, median (max), microseconds:
+
+| Thread | Wait | 1 ms | 2 ms | 5 ms | 10 ms |
+|---|---|---|---|---|---|
+| ordinary | `nanosleep()` loop (v0.10.0's wait) | 516 (553) | 1016 (1066) | 2517 (2545) | 5018 (5046) |
+| ordinary | the same after `THREAD_LATENCY_QOS_POLICY` tier 0 | 266 (289) | 516 (544) | 1268 (1290) | 2022 (2050) |
+| ordinary | kevent timer, `NOTE_LEEWAY` with 0 (`kevent64`) | 534 (566) | 1034 (1140) | 2530 (2576) | 5030 (5072) |
+| ordinary | kevent timer, `NOTE_CRITICAL` | 33.5 (61) | 34.3 (86) | 38.6 (124) | 42.0 (98) |
+| ordinary | `yrt_sleep_until(t, 0)`, v0.10.0 | 266 (289) | 516 (541) | 1268 (1309) | 2022 (2044) |
+| ordinary | `yrt_sleep_until(t, 0)`, v0.10.1 | 30.0 (71) | 34.5 (69) | 37.9 (128) | 40.5 (90) |
+| ordinary | `yrt_sleep_until()` default spin, v0.10.0 | 15.7 (42) | 266 (294) | 1018 (1055) | 1823 (1859) |
+| ordinary | `yrt_sleep_until()` default spin, v0.10.1 | 0.1 (0.3) | 0.1 (0.2) | 0.1 (0.3) | 0.2 (0.2) |
+| main, SDL window | `nanosleep()` loop | 265 (288) | 516 (539) | 1270 (1305) | 2023 (2055) |
+| main, SDL window | kevent timer, `NOTE_CRITICAL` | 33.8 (62) | 34.4 (67) | 36.6 (60) | 35.8 (69) |
+| main, SDL window | `yrt_sleep_until(t, 0)`, v0.10.1 | 33.9 (63) | 34.5 (61) | 36.0 (100) | 35.9 (66) |
+| main, SDL window | `yrt_sleep_until()` default spin, v0.10.1 | 0.1 (0.2) | 0.1 (20.6) | 0.1 (0.2) | 0.1 (3.2) |
+| TIME_CONSTRAINT | `nanosleep()` loop | 14.4 (24) | 14.5 (31) | 15.0 (39) | 15.7 (56) |
+| TIME_CONSTRAINT | kevent timer, `NOTE_CRITICAL` | 42.0 (73) | 42.3 (63) | 42.7 (72) | 45.0 (78) |
+| TIME_CONSTRAINT | `yrt_sleep_until(t, 0)`, v0.10.1 | 14.3 (24) | 14.5 (29) | 15.4 (44) | 15.8 (39) |
+| TIME_CONSTRAINT | `yrt_sleep_until()` default spin, v0.10.1 | 0.1 (0.2) | 0.1 (0.2) | 0.1 (0.2) | 0.1 (0.2) |
+
+The rows without a version ran in both runs. The table gives the v0.10.0
+run; the v0.10.1 run agreed within 15 us at the median (the main thread's
+critical timer was 20 to 28 us there). The files are
+`tests/compare/serial_pulse/results/2026-11-05-teensy40-macos-rt0101/wait_leeway_*.txt`.
+
+What the table shows:
+
+- **Darwin coalesces the timers of an unprivileged thread** by a fixed
+  share of the wait: half on a new pthread, a quarter on the main thread
+  and on a thread whose latency tier was ever set. `nanosleep()`,
+  `mach_wait_until()` and a kevent timer behave alike. The latency tier 0
+  takes a new thread from a half to a quarter, never lower. `NOTE_LEEWAY`
+  with a leeway of 0 is not honored. The QoS class
+  (`QOS_CLASS_USER_INTERACTIVE`) and `taskpolicy -l 0` change nothing
+  (docs/serial.md).
+- **`NOTE_CRITICAL` removes it:** 34 to 42 us late at the median on any
+  unprivileged thread, at every length.
+- **A TIME_CONSTRAINT thread is not coalesced,** and there `nanosleep()`
+  wakes sooner than the critical timer (14 to 16 us against 42 to 45 us).
+  So v0.10.1 uses the critical timer only on threads that
+  `yrt_thread_elevate()` did not put on that rung. The TIME_CONSTRAINT
+  rows of v0.10.0 and v0.10.1 agree.
+- **With the default 200 us spin, every thread now ends 0.1 to 0.2 us late
+  at the median.** v0.10.0 came within 16 us only at 1 ms, where the
+  coalesced share of the 0.8 ms sleep stays inside the spin window. The
+  spin and the OS wait combine as WAITS in the header says: the OS wait
+  runs to deadline - spin_ns, then the clock is spun to the deadline, so
+  the spin covers the OS wait's lateness only up to its own length.
+
+| Question | Decision | Why |
+|---|---|---|
+| The wait | A one-shot `EVFILT_TIMER`, `NOTE_CRITICAL \| NOTE_ABSOLUTE \| NOTE_MACHTIME`, the deadline converted back to mach ticks | The one wait measured without coalescing on an unprivileged thread. Absolute, so a signal or an early wake does not shift it; the loop rechecks the clock |
+| Which threads | Every thread except one that `yrt_thread_elevate()` put on TIME_CONSTRAINT (a thread-local flag) | There `nanosleep()` is 27 to 29 us sooner. A thread put on that rung by other code (CoreAudio's IO thread) gets the critical timer, which is 42 us late there and is covered by the spin |
+| Who owns the kqueue | The calling thread: its first wait opens one (`kqueue()`, close on exec) and keeps it in a pthread key. `yrt_thread_cleanup()` or the thread's exit (the key's destructor) closes it. A fork child forgets the forking thread's descriptor (`pthread_atfork`), because a kqueue is not inherited, and opens its own | Allocation-free after the first wait. One descriptor per waiting thread. A process-wide kqueue does not work: kevent() returns any ready event, and another thread's timer would wake this one |
+| If `kqueue()` fails | That thread keeps the coalesced `nanosleep()` and does not try again | A descriptor limit should cost accuracy, not a syscall on every wait |
+| The worker | A worker without the TIME_CONSTRAINT rung (`no_elevate`, a refused rung) opens its own kqueue on its thread at start: a user event (`EVFILT_USER`, `EV_CLEAR`) for wakes and the critical timer for the deadline. It waits there with the lock released. A submit, a cancel and a close trigger the user event while it waits. `yrt_worker_close()` closes the kqueue after the join | Its timed condition wait was coalesced like any timer. A wake between the unlock and the kevent stays pending, so it is not lost. A wake that comes after a timer fire costs one spurious return, which the loop already handles |
+| The pump's done-wait, ysp/serial.h's `select()` timeouts | Unchanged | Timeouts, not deadlines: they end a wait for something that did not happen, and a late end costs nothing that is timed |
+| A wait from inside a TIME_CONSTRAINT worker's job | `nanosleep()` | The flag is per thread, and the worker set it when it elevated itself |
+
+Late outliers: in all the wait runs together, 3 waits of about 5000 on
+unprivileged threads were more than 1 ms late: 9.3, 5.8 and 5.9 ms. They
+came with the critical timer and with `nanosleep()` alike, and never on
+the TIME_CONSTRAINT thread. A later run of 3000 waits of 10 ms on an
+ordinary thread with each of the two waits, interleaved in blocks of 100,
+had none (the critical timer's worst was 163 us). That points at the
+unprivileged thread waiting for a core, not at the timer. Not traced.
+
+The serial pulses with v0.10.1 (docs/serial.md, [Results with ysp/rt.h
+0.10.1](serial.md#results-with-ysprth-0101)): `yser_pulse()`'s width error
+went from +0.7 to +2.2 ms at the median (2 to 10 ms) to -31 to -7 us, p99
+at most +37 us.
+
+Checks: `tests/adapt/rt_test_darwin_wait.h` (new, run by rt_test.c on
+macOS) checks the median lateness of 5 ms waits without a spin (under
+500 us) on an ordinary thread, on the main thread before and after
+`yrt_thread_cleanup()`, on a TIME_CONSTRAINT thread, in a fork child and
+on a `no_elevate` worker. It also checks that a replacing submit and a
+close wake the worker's timed wait (close in 0.68 to 0.77 ms during a 1 s
+wait), and that the thread's exit, `yrt_thread_cleanup()` and
+`yrt_worker_close()` each close one descriptor. rt_test passes with
+`-Wall -Wextra -Wpedantic -Wshadow -Werror`, under ASan with UBSan, and
+under ThreadSanitizer. ctest on the `macos` preset: 77 of 77. Mutants
+`mac-05` to `mac-11` in `tests/mutate/rt.toml`: 7 of 7 killed. The
+whole list on this Mac: 51 of 58 as expected. `dir-01` to `dir-07`
+mutate Windows-only code and survive here, and `dir-10` (POSIX code,
+expected to survive on the Windows runner) is killed here.
+
+The format attributes (v0.10.1): `yrt__trace_messagef()`,
+`yrt__messagef_check()` and the Tracy `yrt__tracy_messagef()` declared
+`__attribute__((format(printf, 1, 2)))`. MATLAB's `mex.h` defines `printf`
+as `mexPrintf`, so every MEX build with clang or gcc warned
+(`-Wignored-attributes`) and dropped the check. They are now spelled
+`__format__(__printf__, 1, 2)`, which no macro reaches. The MEX builds of
+`ysp_serial`, `ysp_rt`, `ysp_device` and `ysp_quest` (MATLAB R2026b, Apple
+clang 21) give 0 warnings (2 each before). With `#define printf
+mexPrintf` before the header, a wrong `YRT_MESSAGEF` argument still gives
+`-Wformat`.
 
 ## Windows 11 power throttling
 

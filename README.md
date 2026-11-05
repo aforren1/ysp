@@ -9,7 +9,7 @@ C11 or C++17, and its top comment is its manual.
 
 | Header | Prefix | Purpose | Version | Status |
 |---|---|---|---|---|
-| [rt](docs/rt.md) | `yrt_` | Clock, deadline waits, worker, pump, event ring, clock fit, virtual clock | 0.10.0 | 2 machines |
+| [rt](docs/rt.md) | `yrt_` | Clock, deadline waits, worker, pump, event ring, clock fit, virtual clock | 0.10.1 | 2 machines |
 | [parallel](docs/parallel.md) | `ypar_` | Parallel port trigger output and line input | 0.4.1 | no device |
 | [serial](docs/serial.md) | `yser_` | Serial port byte I/O for trigger and response boxes | 0.6.3 | 2 machines |
 | [trials](docs/trials.md) | `ytr_` | Trial orders, blocks, adaptive tracks, jitter, variables per trial, replay, a CSV row per trial | 0.6.1 | tested |

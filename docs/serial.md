@@ -1906,10 +1906,10 @@ opens and none for the ten RTS changes.
 These hold for a USB CDC device on Windows `usbser.sys`; an FTDI or other
 bridge has its own driver and latency timer, and a trigger box adds its own
 delay. On macOS, see [macOS with the Teensy 4.0 echo
-board](#macos-with-the-teensy-40-echo-board-2026-11-05): there, until
-ysp/rt.h's wait is fixed, use `yser_pulse_async()` for a width of 1 ms or
-more, because a width timed on the caller's thread is a quarter to a half
-of its sleep too long.
+board](#macos-with-the-teensy-40-echo-board-2026-11-05): use ysp/rt.h
+0.10.1 or later there. With 0.10.0 a width timed on the caller's thread
+(`yser_pulse()`) was a quarter to a half of its sleep too long; with
+0.10.1 it is -31 to -7 us at the median.
 
 - With ysp/serial.h 0.6.0, expect `yser_pulse` and `yser_pulse_async` to
   be within -0.22 to +0.10 ms of the requested width (min to p99), median
@@ -2212,15 +2212,61 @@ cells of 1 to 5 ms and a quarter in most cells of 10 ms; the five cells of
 the run 1 check had the other level. This program saw a quarter at every
 length. What sets the level for a given wait is not known.
 
-This is a defect of ysp/rt.h's wait on macOS, not of ysp/serial.h:
+This was a defect of ysp/rt.h's wait on macOS, not of ysp/serial.h:
 `yser_pulse()` and every `yrt_sleep_until()` or `yrt_sleep_ns()` on a
-caller's thread are late by a quarter of the wait or more. It was not
+caller's thread were late by a quarter of the wait or more. It was not
 measured before because docs/rt.md's macOS runs used elevated threads.
-Not fixed in this change. The measured candidate for the coarse part of
-the wait on Darwin is a one-shot `EVFILT_TIMER` with `NOTE_CRITICAL`,
-absolute in mach time. Until then, on macOS: use `yser_pulse_async()`
-(or ysp/device.h, whose instance worker times the width) for widths of
-1 ms or more, or wait on a thread that has a real-time policy.
+ysp/rt.h 0.10.1 fixes it with the critical timer; [The wait on
+macOS](rt.md#the-wait-on-macos-v0101) has the comparison on three kinds of
+thread and the design, and the next section the pulses.
+
+### Results with ysp/rt.h 0.10.1
+
+The pulse set again, with ysp/rt.h 0.10.1 (ysp/serial.h and ysp/device.h
+unchanged): `sh tests/compare/serial_macos.sh skip=raw,matlab`, 2026-11-05
+14:21 to 14:45 EST, the same Mac, board, port and build flags. The
+1-minute load was 1.16 to 1.54 before each step, so both runs are pooled.
+Spotlight's `corespotlightd` was at 39 % of a core before the second
+device run. 400 pulses per cell (two runs, 200 each, opposite orders).
+Missed: 0 of 11200 (and 0 of 2400 in ysp/device.h). The fit's bound was
+57 to 82 us. Summaries:
+`tests/compare/serial_pulse/results/2026-11-05-teensy40-macos-rt0101/`.
+
+Width error, median (p5 / p99), microseconds. For ysp_pulse, "was"
+gives its median with ysp/rt.h 0.10.0 (run 2 of [Pulses](#pulses)):
+
+| Mode | 1 ms | 2 ms | 5 ms | 10 ms | Max |
+|---|---|---|---|---|---|
+| ysp_pulse | -31 (-102 / +23) | -13 (-92 / +30), was +672 | -7 (-63 / +37), was +2186 | -12 (-74 / +35), was +2242 | +87 |
+| ysp_pulse_async | -13 (-85 / +4) | -14 (-98 / +9) | -9 (-63 / +19) | -10 (-69 / +42) | +84 |
+| ysp_dtr (from the return) | +148 (+132 / +262) | +148 (+131 / +242) | +150 (+133 / +252) | +149 (+134 / +294) | +415 |
+| ysp_rts (from the return) | +150 (+131 / +280) | +150 (+132 / +235) | +150 (+134 / +302) | +149 (+133 / +266) | +4618 |
+| raw_byte (from the return) | +10 (-22 / +25) | +10 (-21 / +25) | +10 (-44 / +96) | +12 (-26 / +47) | +189 |
+| raw_dtr (from the return) | +152 (+133 / +247) | +151 (+132 / +289) | +152 (+132 / +271) | +147 (+132 / +308) | +6898 |
+| raw_rts (from the return) | +150 (+132 / +242) | +148 (+131 / +266) | +152 (+134 / +248) | +149 (+132 / +248) | +564 |
+
+Onset, median (p99): byte 76 us (192) raw and 89 us (208) through
+`yser_pulse()`, 104 us (242) through `yser_pulse_async()`; DTR and RTS 83
+us (172 to 239). Call, median (p99): `yser_pulse()` 21 us (63) without the
+width, `yser_pulse_async()` 6.4 us (63), a DTR or RTS call 157 to 159 us
+(312 to 380).
+
+- **The quarter-to-half overshoot is gone.** `yser_pulse()` is -31 to
+  -7 us at the median, p99 at most +37 us, and every mode whose wait the
+  bench makes on its own thread follows it.
+- **What is left in the line modes is the line call.** The bench's own
+  DTR and RTS modes time the width from the return of the onset call,
+  which takes 157 to 159 us; the board sees each change about 83 us after
+  its call starts. So the width is the call's duration too long: +147 to
+  +152 us. ysp/device.h times the width from the start of the leading
+  write, and its LINES pulses are -10 to -8 us (docs/device.md). The byte
+  write returns in 21 us, so raw_byte is +10 to +12 us. With ysp/rt.h
+  0.10.0 the same line modes were +378 to +2433 us.
+- **The line call has a rare tail:** 3 of 12,800 DTR and RTS calls took
+  more than 1 ms (the longest 2975 and 4191 us), in both runs, in the raw
+  and the ysp modes alike. The two largest width errors (+4618 and
+  +6898 us) are in the cells of those calls. On Windows, 0.12 to 0.19 % of these calls did on a quiet
+  machine ([The DTR call tail](#the-dtr-call-tail)); here 0.02 %.
 
 ## Python async reader (ysp-serial 0.5.0.2)
 

@@ -1,7 +1,8 @@
 /* rt_test.c - self-checking test for yrt_pump, the event ring, the
  * trace macros, the clock correlation, the device clock fit
- * (rt_test_fit.h), the per-user folders (rt_test_userdir.h) and the
- * virtual clock (rt_test_virtual.h) in ysp/rt.h. No framework: it returns 0 when every check passed and 1 after
+ * (rt_test_fit.h), the per-user folders (rt_test_userdir.h), the
+ * virtual clock (rt_test_virtual.h) and, on macOS, the waits of
+ * unprivileged threads and workers (rt_test_darwin_wait.h) in ysp/rt.h. No framework: it returns 0 when every check passed and 1 after
  * printing each failure. With YRT_TEST_FIT_ONLY it runs the fit and the
  * folders only, as tests/mutate/rt.toml does.
  *
@@ -1523,6 +1524,7 @@ static void test_version(void) {
 #include "rt_test_fit.h"
 #include "rt_test_userdir.h"
 #include "rt_test_virtual.h"
+#include "rt_test_darwin_wait.h"
 
 /* -------------------------------------------------------------------- main */
 
@@ -1567,6 +1569,9 @@ int main(void) {
     test_core_types();
     test_platform();
     test_version();
+#if defined(__APPLE__)
+    test_darwin_waits();
+#endif
 
     printf("ysp_rt_pump_test: %s (%d failures, %.1f s)\n",
            g_failures ? "FAILED" : "all checks passed", g_failures,

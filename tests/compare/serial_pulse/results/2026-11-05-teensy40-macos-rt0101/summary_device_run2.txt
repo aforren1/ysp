@@ -1,0 +1,32 @@
+Times in microseconds. Columns: median p5 p95 p99 max; werr also min.
+onset = board's first edge (mapped) - call start; werr = board width - requested;
+call = call return - call start; off_lat = board's trailing edge (mapped) - trailing call start.
+
+ cell mode                w ms    n miss  fit+-  gap | onset | werr | call | off_lat | host_werr
+ 7100 dev051_byte            1  200    0   64.2    7 | 94.2 66.3 155.8 203.9 247.9 | -24.5 -87.0 -2.0 1.0 5.0 min -163.0 | 58.6 24.5 100.7 119.3 132.8 | 65.4 60.5 75.8 83.1 87.6 | -57.4 -101.2 -24.0 -21.8 -16.9
+ 7103 dev051_byte            5  200    0   77.1    7 | 89.0 63.1 173.8 218.7 257.4 | -16.9 -96.9 0.1 11.1 25.1 min -142.9 | 58.5 25.7 100.1 129.0 136.7 | 64.9 57.8 84.4 102.3 117.7 | -56.9 -101.5 -24.8 -23.5 -16.3
+ 7101 dev051_dtr             1  200    0   65.2    7 | 81.7 67.9 133.2 151.7 210.5 | -9.5 -51.0 7.0 9.0 10.0 min -119.0 | 181.3 146.3 276.2 337.7 341.6 | 73.1 64.8 91.1 96.7 107.2 | -180.5 -275.0 -145.8 -141.4 -115.3
+ 7104 dev051_dtr             5  200    0   80.0    7 | 81.7 69.2 150.8 209.2 247.2 | -7.9 -56.9 7.1 15.1 68.1 min -128.9 | 179.9 146.2 281.8 391.4 458.2 | 73.6 64.7 97.3 118.9 141.4 | -179.2 -295.1 -147.8 -135.8 -100.1
+ 7102 dev051_rts             1  200    0   69.9    7 | 83.1 71.5 163.8 210.2 224.7 | -9.5 -83.0 3.0 11.0 16.0 min -133.0 | 185.7 144.0 318.0 353.5 390.5 | 74.1 66.1 91.5 102.2 112.4 | -185.0 -322.4 -143.4 -138.8 -130.9
+ 7105 dev051_rts             5  200    0   71.8    7 | 81.9 67.7 123.0 146.5 153.2 | -8.9 -39.9 9.1 13.1 19.1 min -61.9 | 183.6 147.1 253.9 275.2 325.4 | 75.4 64.0 90.9 98.7 108.2 | -182.6 -253.3 -146.3 -140.2 -110.8
+
+Pooled over the cells given (runs), per mode and width: n, missed | werr median p5 p95 p99 max min
+dev051_byte            1   200    0 | -24.5 -87.0 -2.0 1.0 5.0 -163.0
+dev051_byte            5   200    0 | -16.9 -96.9 0.1 11.1 25.1 -142.9
+dev051_dtr             1   200    0 | -9.5 -51.0 7.0 9.0 10.0 -119.0
+dev051_dtr             5   200    0 | -7.9 -56.9 7.1 15.1 68.1 -128.9
+dev051_rts             1   200    0 | -9.5 -83.0 3.0 11.0 16.0 -133.0
+dev051_rts             5   200    0 | -8.9 -39.9 9.1 13.1 19.1 -61.9
+
+Pooled over widths and runs, per mode: n | onset median p5 p95 p99 max | call median p99 max (ysp_pulse, ysp_py_pulse: minus the width) | per-cell onset medians | fit +- range
+dev051_byte           400 | 91.3 64.3 169.1 210.2 257.4 | 58.6 127.7 136.7 | 89.0 to 94.2 | 64.2 to 77.1
+dev051_dtr            400 | 81.7 68.4 139.6 209.2 247.2 | 180.5 356.0 458.2 | 81.7 to 81.7 | 65.2 to 80.0
+dev051_rts            400 | 82.2 70.3 151.5 201.7 224.7 | 184.9 341.8 390.5 | 81.9 to 83.1 | 69.9 to 71.8
+
+Fits: cell, points, slope (ns per board us), bound min/max (us), largest residual (us), worker policy
+ 7100  11 1000.017877 60.9/64.2 3.2 TIME_CONSTRAINT
+ 7101  11 1000.017825 61.5/65.2 3.3 TIME_CONSTRAINT
+ 7102  12 1000.017902 61.8/69.9 5.2 TIME_CONSTRAINT
+ 7103  11 1000.018144 58.2/77.1 5.5 TIME_CONSTRAINT
+ 7104  12 1000.017722 60.2/80.0 5.0 TIME_CONSTRAINT
+ 7105  11 1000.017968 62.3/71.8 7.5 TIME_CONSTRAINT
