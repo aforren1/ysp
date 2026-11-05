@@ -4,13 +4,15 @@
  *
  * The MPEG-1 clip is the caller's (--mpg PATH, an MPEG-PS file; make one with
  * ffmpeg's testsrc2, docs/video.md). --mp4 PATH (with its index) measures
- * Media Foundation instead, in one decoder configuration (--hw), with open
- * and seek times (tests/media/make_video_clips.sh --long makes the clips).
+ * Media Foundation (Windows) or AVFoundation (macOS) instead, in one decoder
+ * configuration (--hw), with open and seek times
+ * (tests/media/make_video_clips.sh --long, or make_video_clips_mac.sh --long,
+ * makes the clips).
  * The other inputs are generated: a
  * smooth frame (gradient, bar, blocks, as video_play draws) and a noisy one,
  * which are QOI's best and worst cases.
  *
- * Usage: video_bench [--mpg PATH] [--mp4 PATH [--hw sw|dxva] [--seeks N]] [--size WxH] [--reps N]
+ * Usage: video_bench [--mpg PATH] [--mp4 PATH [--hw sw|dxva|vt] [--seeks N]] [--size WxH] [--reps N]
  * Exit code: 0; 1 when the clip does not decode; 2 for a bad argument.
  */
 #if defined(_MSC_VER) && !defined(_CRT_SECURE_NO_WARNINGS)
@@ -22,6 +24,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* Read after each timed copy, so the compiler cannot drop the copy into a
+ * slot nobody reads (clang -O2 did: 3.7 TB/s). */
+static volatile uint8_t g_sink;
 
 static int cmp_i64(const void* a, const void* b) {
     int64_t x = *(const int64_t*)a, y = *(const int64_t*)b;
@@ -153,13 +159,45 @@ static double cpu_s(int process) {
     return ((double)(((uint64_t)k.dwHighDateTime << 32) | k.dwLowDateTime) +
             (double)(((uint64_t)u.dwHighDateTime << 32) | u.dwLowDateTime)) / 1e7;
 }
+#define BENCH_DEC   yvid__mf
+#define BENCH_OTHER "Media Foundation's"
+#define BENCH_OPEN(m, in, st, hw, num, den, err, cap) yvid__mf_open_ex(m, in, st, hw, NULL, 0, num, den, err, cap)
+#define BENCH_NEXT  yvid__mf_next
+#define BENCH_SEEK  yvid__mf_seek
+#define BENCH_CLOSE yvid__mf_close
+#define BENCH_DESCRIBE yvid__mf_describe
+#elif YVID__AVF
+#include <sys/resource.h>
+#include <time.h>
+static double cpu_s(int process) {
+    struct timespec ts;
+    if (process) {
+        struct rusage ru;
+        if (getrusage(RUSAGE_SELF, &ru) != 0) return 0.0;
+        return (double)ru.ru_utime.tv_sec + (double)ru.ru_stime.tv_sec + (double)(ru.ru_utime.tv_usec + ru.ru_stime.tv_usec) / 1e6;
+    }
+    if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts) != 0) return 0.0;
+    return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+}
+#define BENCH_DEC   yvid__avf
+#define BENCH_OTHER "AVFoundation's and VideoToolbox's"
+#define BENCH_OPEN(m, in, st, hw, num, den, err, cap) yvid__avf_open_ex(m, in, st, hw, 0, num, den, err, cap)
+#define BENCH_NEXT  yvid__avf_next
+#define BENCH_SEEK  yvid__avf_seek
+#define BENCH_CLOSE yvid__avf_close
+#define BENCH_DESCRIBE yvid__avf_describe
+#endif
 
-/* Media Foundation, one decoder configuration: what the decode thread pays
- * per frame (ReadSample and the lock, which reads a DXVA surface back; the
- * hash; the NV12 to RGBA8 conversion), the CPU time of the whole process per
- * frame (Media Foundation's own threads included), open, and seeks. */
+#if YVID__MF || YVID__AVF
+
+/* Media Foundation or AVFoundation, one decoder configuration: what the
+ * decode thread pays per frame (Media Foundation: ReadSample and the lock,
+ * which reads a DXVA surface back; AVFoundation: the reader's sample and
+ * VideoToolbox's synchronous decode and lock; the hash; the NV12 to RGBA8
+ * conversion), the CPU time of the whole process per frame (the framework's
+ * own threads included), open, and seeks. */
 static int bench_mp4(const char* path, int hw, int seeks) {
-    yvid__mf* m = (yvid__mf*)malloc(sizeof(yvid__mf));
+    BENCH_DEC* m = (BENCH_DEC*)calloc(1, sizeof(BENCH_DEC));
     yvid_decoder_open in;
     yvid_stream st;
     yvid__index ix;
@@ -172,7 +210,7 @@ static int bench_mp4(const char* path, int hw, int seeks) {
     uint8_t* rgba;
     int16_t* rows;
     int rc;
-    static const char* const hwn[] = { "auto", "software", "DXVA" };
+    static const char* const hwn[] = { "auto", "software", "DXVA", "VideoToolbox" };
     if (!m) return 1;
     memset(&vd, 0, sizeof vd);
     vd.path = path;
@@ -182,19 +220,19 @@ static int bench_mp4(const char* path, int hw, int seeks) {
     for (k = 0; k < 5; k++) {   /* the first is the cold one */
         int64_t t0 = yrt_now_ns();
         memset(&st, 0, sizeof st);
-        rc = yvid__mf_open_ex(m, &in, &st, hw, NULL, 0, ix.c.fps_num, ix.c.fps_den, err, sizeof err);
+        rc = BENCH_OPEN(m, &in, &st, hw, ix.c.fps_num, ix.c.fps_den, err, sizeof err);
         if (rc == YVID_OK) {
             yvid_out o;
             yvid_planes d;
             memset(&o, 0, sizeof o);
-            rc = yvid__mf_next(m, &d, &o);   /* to the first frame in hand */
+            rc = BENCH_NEXT(m, &d, &o);   /* to the first frame in hand */
         }
         opens[k] = yrt_now_ns() - t0;
         if (rc != YVID_OK) { fprintf(stderr, "video_bench: %s: %s\n", path, err); return 1; }
-        if (k < 4) yvid__mf_close(m);
+        if (k < 4) BENCH_CLOSE(m);
     }
-    yvid__mf_describe(m, name, sizeof name);
-    yvid__mf_close(m);
+    BENCH_DESCRIBE(m, name, sizeof name);
+    BENCH_CLOSE(m);
     printf("%s: %d x %d, %d/%d fps, %lld frames; %s (asked: %s)\n", path, (int)ix.c.w, (int)ix.c.h, (int)ix.c.fps_num,
            (int)ix.c.fps_den, (long long)ix.c.frames, name, hwn[hw]);
     printf("  open to the first frame: %.1f ms cold, then %.1f %.1f %.1f %.1f ms\n", opens[0] / 1e6, opens[1] / 1e6,
@@ -211,14 +249,14 @@ static int bench_mp4(const char* path, int hw, int seeks) {
     rows = (int16_t*)malloc(yvid_yuv_rows_bytes(ix.c.w));
     if (!td || !th || !tc || !tt || !tp || !tq || !slot || !rgba || !rows) return 1;
     memset(&st, 0, sizeof st);
-    if (yvid__mf_open_ex(m, &in, &st, hw, NULL, 0, ix.c.fps_num, ix.c.fps_den, err, sizeof err) != YVID_OK) return 1;
+    if (BENCH_OPEN(m, &in, &st, hw, ix.c.fps_num, ix.c.fps_den, err, sizeof err) != YVID_OK) return 1;
     p0 = cpu_s(1); c0 = cpu_s(0);
     for (;;) {
         yvid_out o;
         yvid_planes d;
         int64_t t0 = yrt_now_ns(), t1, t2, t3, t4;
         memset(&o, 0, sizeof o);
-        if (n >= cap || yvid__mf_next(m, &d, &o) != YVID_OK) break;
+        if (n >= cap || BENCH_NEXT(m, &d, &o) != YVID_OK) break;
         t1 = yrt_now_ns();
         (void)yvid__hash_planes(YVID_FMT_NV12, &o.planes);
         t2 = yrt_now_ns();
@@ -237,14 +275,15 @@ static int bench_mp4(const char* path, int hw, int seeks) {
             }
         }
         t4 = yrt_now_ns();
+        g_sink = (uint8_t)(g_sink ^ slot[(size_t)n % (size_t)ix.c.w]);
         td[n] = t1 - t0; th[n] = t2 - t1; tc[n] = t3 - t2; tt[n] = t3 - t0; tp[n] = t4 - t3; tq[n] = (t2 - t0) + (t4 - t3);
         n++;
     }
     p1 = cpu_s(1); c1 = cpu_s(0);
     if (n == 0) { fprintf(stderr, "video_bench: no frames\n"); return 1; }
-    printf("  %lld frames; CPU per frame: process %.2f ms, this thread %.2f ms, the other threads (Media Foundation's) %.2f ms\n",
+    printf("  %lld frames; CPU per frame: process %.2f ms, this thread %.2f ms, the other threads (" BENCH_OTHER ") %.2f ms\n",
            (long long)n, (p1 - p0) * 1e3 / (double)n, (c1 - c0) * 1e3 / (double)n, ((p1 - p0) - (c1 - c0)) * 1e3 / (double)n);
-    report("ReadSample + lock (read back)", td, (int)n, 0);
+    report("next sample: read, decode, lock", td, (int)n, 0);
     report("XXH64 of the NV12 planes", th, (int)n, (double)ix.c.w * ix.c.h * 1.5);
     report("NV12 to RGBA8, sited", tc, (int)n, (double)ix.c.w * ix.c.h * 4);
     report("planes into a slot (planar path)", tp, (int)n, (double)ix.c.w * ix.c.h * 1.5);
@@ -262,17 +301,17 @@ static int bench_mp4(const char* path, int hw, int seeks) {
             target = (int64_t)(r % (uint64_t)ix.c.frames);
             key = target - target % ix.c.gop;
             t0 = yrt_now_ns();
-            if (yvid__mf_seek(m, key, 0) != YVID_OK) { fprintf(stderr, "video_bench: seek failed\n"); return 1; }
+            if (BENCH_SEEK(m, key, 0) != YVID_OK) { fprintf(stderr, "video_bench: seek failed\n"); return 1; }
             for (j = key; j <= target; j++) {
                 memset(&o, 0, sizeof o);
-                if (yvid__mf_next(m, j == target ? &d : NULL, &o) != YVID_OK) { fprintf(stderr, "video_bench: decode after seek failed\n"); return 1; }
+                if (BENCH_NEXT(m, j == target ? &d : NULL, &o) != YVID_OK) { fprintf(stderr, "video_bench: decode after seek failed\n"); return 1; }
             }
             ts[k] = yrt_now_ns() - t0;
         }
         report("seek to a random frame", ts, seeks, 0);
         free(ts);
     }
-    yvid__mf_close(m);
+    BENCH_CLOSE(m);
     free(td); free(th); free(tc); free(tt); free(tp); free(tq); free(slot); free(rgba); free(rows); free(m);
     return 0;
 }
@@ -287,21 +326,21 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--mp4") && i + 1 < argc) mp4 = argv[++i];
         else if (!strcmp(argv[i], "--hw") && i + 1 < argc) {
             const char* v = argv[++i];
-            hw = !strcmp(v, "sw") ? YVID_HW_OFF : !strcmp(v, "dxva") ? YVID_HW_DXVA : -1;
-            if (hw < 0) { fprintf(stderr, "video_bench: --hw sw or dxva\n"); return 2; }
+            hw = !strcmp(v, "sw") ? YVID_HW_OFF : !strcmp(v, "dxva") ? YVID_HW_DXVA : !strcmp(v, "vt") ? YVID_HW_VIDEOTOOLBOX : -1;
+            if (hw < 0) { fprintf(stderr, "video_bench: --hw sw, dxva or vt\n"); return 2; }
         }
         else if (!strcmp(argv[i], "--seeks") && i + 1 < argc) seeks = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--size") && i + 1 < argc && sscanf(argv[i + 1], "%dx%d", &w, &h) == 2) i++;
         else if (!strcmp(argv[i], "--reps") && i + 1 < argc) reps = atoi(argv[++i]);
-        else { fprintf(stderr, "usage: video_bench [--mpg PATH] [--mp4 PATH [--hw sw|dxva] [--seeks N]] [--size WxH] [--reps N]\n"); return 2; }
+        else { fprintf(stderr, "usage: video_bench [--mpg PATH] [--mp4 PATH [--hw sw|dxva|vt] [--seeks N]] [--size WxH] [--reps N]\n"); return 2; }
     }
     if (reps <= 0 || (w != 0 && (w <= 0 || h <= 0))) { fprintf(stderr, "video_bench: bad size or count\n"); return 2; }
     if (mp4) {
-#if YVID__MF
+#if YVID__MF || YVID__AVF
         return bench_mp4(mp4, hw, seeks);
 #else
         (void)hw; (void)seeks;
-        fprintf(stderr, "video_bench: MP4 needs Media Foundation (Windows)\n");
+        fprintf(stderr, "video_bench: MP4 needs Media Foundation (Windows) or AVFoundation (macOS)\n");
         return 1;
 #endif
     }
