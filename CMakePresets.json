@@ -72,6 +72,14 @@
       }
     },
     {
+      "name": "linux-ffmpeg",
+      "displayName": "As linux, with ysp/video.h's FFmpeg backend (needs FFmpeg's headers)",
+      "inherits": "linux",
+      "cacheVariables": {
+        "YSP_VIDEO_FFMPEG": "ON"
+      }
+    },
+    {
       "name": "clang",
       "displayName": "Linux, clang, Debug",
       "inherits": "linux-base",
@@ -109,6 +117,7 @@
     { "name": "msvc-full",     "inherits": "build-windows", "configurePreset": "msvc-full",     "configuration": "Release" },
     { "name": "mingw",         "inherits": "build-windows", "configurePreset": "mingw" },
     { "name": "linux",         "inherits": "build-linux",   "configurePreset": "linux" },
+    { "name": "linux-ffmpeg",  "inherits": "build-linux",   "configurePreset": "linux-ffmpeg" },
     { "name": "clang",         "inherits": "build-linux",   "configurePreset": "clang" },
     { "name": "sanitizers",    "inherits": "build-linux",   "configurePreset": "sanitizers" },
     { "name": "nothreads-cxx", "inherits": "build-linux",   "configurePreset": "nothreads-cxx" }
@@ -126,6 +135,7 @@
     { "name": "msvc-full",     "inherits": "test-windows", "configurePreset": "msvc-full",     "configuration": "Release" },
     { "name": "mingw",         "inherits": "test-windows", "configurePreset": "mingw" },
     { "name": "linux",         "inherits": "test-linux",   "configurePreset": "linux" },
+    { "name": "linux-ffmpeg",  "inherits": "test-linux",   "configurePreset": "linux-ffmpeg" },
     { "name": "clang",         "inherits": "test-linux",   "configurePreset": "clang" },
     {
       "name": "sanitizers",

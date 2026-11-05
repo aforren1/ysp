@@ -277,8 +277,8 @@ id = "pv-01"
 name = "hw_decode names swapped"
 test = "video"
 why = "v0.5.0: \"off\" must be YVID_HW_OFF; swapped, a definition asking for software decoding gets DXVA."
-find = '"auto=0,off=1,dxva=2" },'
-replace = '"auto=0,dxva=1,off=2" },'
+find = '"auto=0,off=1,dxva=2,vaapi=3" },'
+replace = '"auto=0,dxva=1,off=2,vaapi=3" },'
 
 [[mutant]]
 id = "pv-02"
@@ -350,3 +350,219 @@ test = "video"
 why = "v0.6.0: yvid_seq_open() returns bool; w.error_code gives the reason (NOT_FOUND for a missing folder)."
 find = "    w->error_code = (int32_t)code;"
 replace = "    (void)code;"
+
+# v0.7.0: the FFmpeg backend (Linux). Each needs YVID_TEST_MEDIA, or the clips
+# of tests/media/make_video_clips.sh in build/clips, and FFmpeg's headers and
+# libraries. A clip of the same library's decoder is no check of the bytes;
+# ff-02's reference is the only comparison with ffmpeg's own frames, and the
+# bars are burned in.
+[test.video_ff]
+source = "tests/adapt/video_test.c"
+compiler = "gcc"
+flags = ["-std=c11", "-O2", "-w", "-DYVID_FFMPEG"]
+libs = ["-lm", "-ldl", "-lpthread"]
+timeout = 1800
+env_default = { YVID_TEST_MEDIA = "{repo}/build/clips" }
+
+[test.video_ff_missing]
+source = "tests/adapt/video_ffmpeg_missing_test.c"
+compiler = "gcc"
+flags = ["-std=c11", "-O2", "-w", "-DYVID_FFMPEG", "-DYSCR_NO_SDL", "-DYVID_NO_PL_MPEG"]
+libs = ["-lm", "-ldl", "-lpthread"]
+timeout = 300
+
+[[mutant]]
+id = "ff-00"
+name = "the open runs on the caller's thread"
+test = "video_ff"
+why = "libavcodec's pool, started by avcodec_open2(), inherits the opener's policy: SCHED_FIFO on an elevated frame thread, which on a kernel without RT throttling froze the machine (docs/rt.md). The test reads each thread's policy before it decodes, and closes at once."
+find = "    rc = yvid__ff_off_rt(yvid__ff_open_body, &j, err, cap);"
+replace = "    (void)&yvid__ff_off_rt; rc = yvid__ff_open_body(&j);"
+
+[[mutant]]
+id = "ff-01"
+name = "the off-RT thread inherits"
+test = "video_ff"
+why = "PTHREAD_EXPLICIT_SCHED is what makes the helper SCHED_OTHER; with PTHREAD_INHERIT_SCHED the policy set beside it is ignored."
+find = "    rc = pthread_attr_setinheritsched(&a, PTHREAD_EXPLICIT_SCHED);"
+replace = "    rc = pthread_attr_setinheritsched(&a, PTHREAD_INHERIT_SCHED);"
+
+[[mutant]]
+id = "ff-02"
+name = "chroma planes interleaved Cr first"
+test = "video_ff"
+why = "The index would be made with the same swap, so only ffmpeg's NV12 frames (mf_ref_check) catch it: the one check against a reference outside the header."
+find = "o[2 * x] = u[x]; o[2 * x + 1] = v[x];"
+replace = "o[2 * x] = v[x]; o[2 * x + 1] = u[x];"
+
+[[mutant]]
+id = "ff-03"
+name = "B-frame check removed"
+test = "video_ff"
+why = "The canonical form has no B-frames: decode order must be display order."
+find = "        if (m->pkt->dts != m->pkt->pts) {"
+replace = "        if (0) {"
+[[mutant.also]]
+find = "        if (n1 > 0 && prev_ts >= ts) {"
+replace = "        if (0) {"
+
+[[mutant]]
+id = "ff-04"
+name = "the edit list is not read"
+test = "video_ff"
+why = "An edit list moves the picture against the track's times, and players differ on it."
+find = "    rc = yvid__mp4_edits(media_path, err, cap);\n    if (rc >= 0) rc = yvid__mp4_matrix"
+replace = "    rc = YVID_OK;\n    if (rc >= 0) rc = yvid__mp4_matrix"
+
+[[mutant]]
+id = "ff-05"
+name = "the display matrix is not read"
+test = "video_ff"
+why = "A rotated track would play on its side."
+find = "    if (rc >= 0) rc = yvid__mp4_matrix(media_path, err, cap);"
+replace = "    (void)&yvid__mp4_matrix;"
+
+[[mutant]]
+id = "ff-06"
+name = "the matrix's identity has the wrong last entry"
+test = "video_ff"
+why = "Every clip would be refused: the read's offset and the identity are checked by the clips that pass."
+find = "0, 0, 0, 0, 0, 0, 0, 0x40, 0, 0, 0 };\n            if (yvid__src_read(&s, tkhd, v, 4)"
+replace = "0, 0, 0, 0, 0, 0, 0, 0x41, 0, 0, 0 };\n            if (yvid__src_read(&s, tkhd, v, 4)"
+
+[[mutant]]
+id = "ff-07"
+name = "pixel aspect ignored"
+test = "video_ff"
+why = "The canonical form has square pixels."
+find = "            if (f->sample_aspect_ratio.num > 0 && f->sample_aspect_ratio.num != f->sample_aspect_ratio.den) {"
+replace = "            if (0) {"
+
+[[mutant]]
+id = "ff-08"
+name = "interlace ignored"
+test = "video_ff"
+why = "The canonical form is progressive."
+find = "        if (yvid__ff_interlaced(m->fr)) {"
+replace = "        if (0 && yvid__ff_interlaced(m->fr)) {"
+
+[[mutant]]
+id = "ff-09"
+name = "a seek does not flush the decoder"
+test = "video_ff"
+why = "Frames decoded before the seek would come out after it, and a P-frame's references would be the old GOP's."
+find = "    YVID__AV(avcodec_flush_buffers)(m->cc);"
+replace = "    (void)0;"
+
+[[mutant]]
+id = "ff-10"
+name = "a seek takes the keyframe after the target"
+test = "video_ff"
+why = "AVSEEK_FLAG_BACKWARD is at or before; without it the demuxer may land past the keyframe, and the forward read never sees it."
+find = "ticks, AVSEEK_FLAG_BACKWARD);"
+replace = "ticks, 0);"
+
+[[mutant]]
+id = "ff-11"
+name = "the keyframe a seek read is lost"
+test = "video_ff"
+why = "seek(key) must leave the keyframe for the next next(): the interface's promise, and the movie's frame count after a seek."
+find = "    if (m->have) m->have = 0;\n    else if ((rc = yvid__ff_recv(m)) != YVID_OK) return rc;"
+replace = "    if ((rc = yvid__ff_recv(m)) != YVID_OK) return rc;"
+
+[[mutant]]
+id = "ff-12"
+name = "transfer and primaries in each other's place"
+test = "video_ff"
+why = "c_mixcolor states three different fields so that a mix-up shows."
+find = "    int mat = (int)f->colorspace, trc = (int)f->color_trc, prim = (int)f->color_primaries;"
+replace = "    int mat = (int)f->colorspace, trc = (int)f->color_primaries, prim = (int)f->color_trc;"
+
+[[mutant]]
+id = "ff-13"
+name = "an unstated matrix is taken as BT.709"
+test = "video_ff"
+why = "A stream with no VUI states nothing; the index must get its color from the desc or refuse, as the H.264 parser of the Media Foundation path does."
+find = "mat == 9 ? YVID_MATRIX_BT2020 : mat == 2 ? -1 : -2;\n    out[1] = f->color_range"
+replace = "mat == 9 ? YVID_MATRIX_BT2020 : mat == 2 ? YVID_MATRIX_BT709 : -2;\n    out[1] = f->color_range"
+
+[[mutant]]
+id = "ff-14"
+name = "a left crop lands on the alignment"
+test = "video_ff"
+why = "Without AV_CODEC_FLAG_UNALIGNED lavc leaves a left crop on a 32-byte boundary, so the visible frame is shifted (c_cropleft's bars)."
+find = "AV_CODEC_FLAG_OUTPUT_CORRUPT | AV_CODEC_FLAG_UNALIGNED;"
+replace = "AV_CODEC_FLAG_OUTPUT_CORRUPT;"
+
+[[mutant]]
+id = "ff-15"
+name = "the frame's size is not checked against the slot"
+test = "video_ff"
+why = "An index whose frame is wider than the stream's would make the copy read past the decoder's rows; it must fail as a decode, not pass as a hash mismatch."
+find = "    if (f->width != d->w[0] || f->height != d->h[0]) return YVID_ERR_FORMAT;"
+replace = "    (void)0;"
+
+[[mutant]]
+id = "ff-16"
+name = "the time base is ignored in the 100 ns time"
+test = "video_ff"
+why = "Every frame's time comes from the stream's time base; a wrong one fails the rate fit."
+find = "    return a * m->tb_num * 10000000 + (b * m->tb_num * 10000000 + d / 2) / d;"
+replace = "    return a * m->tb_num * 10000000 + (b * m->tb_num * 1000000 + d / 2) / d;"
+
+[[mutant]]
+id = "ff-17"
+name = "a seek's time is the keyframe's own"
+test = "video_ff"
+expect = "survived"
+why = "Half a frame past the keyframe keeps a floor of the tick from landing a GOP early. The forward read then still finds the keyframe, a GOP's decode later, so the frames are right and only the seek's time differs; no test bounds that time. Kept as Media Foundation's mf-03 is."
+find = "    ns = (yvid_frame_time(m->num, m->den, key) + yvid_frame_time(m->num, m->den, key + 1)) / 2;"
+replace = "    ns = yvid_frame_time(m->num, m->den, key) - 1;"
+
+[[mutant]]
+id = "ff-18"
+name = "a missing library is not refused"
+test = "video_ff_missing"
+why = "The point of loading at run time: a program without FFmpeg starts and says why."
+find = "    if (yvid__ffl.rc < 0) { yvid__fmt(err, cap, \"%s\", yvid__ffl.why); return yvid__ffl.rc; }"
+replace = "    if (yvid__ffl.rc < 0) return YVID_ERR_DECODER;"
+
+[[mutant]]
+id = "ff-19"
+name = "index of a stream that is not 8-bit 4:2:0: profile check removed"
+test = "video_ff"
+why = "The refusal by name (High 10, 4:4:4) comes from the avcC's profile byte; without it the frame format check still refuses, with a message the caller cannot act on."
+find = "        int prof = par->extradata_size > 1 && par->extradata[0] == 1 ? par->extradata[1] : 0;"
+replace = "        int prof = 0;"
+
+[[mutant]]
+id = "ff-20"
+name = "AVIO reads past the end"
+test = "video_ff"
+why = "The demuxer's short read at the end of the file; a reader source must not be asked past its size."
+find = "    if (n > left) n = (int)left;"
+replace = "    (void)left;"
+
+[[mutant]]
+id = "ff-21"
+name = "VAAPI frames are not read back"
+test = "video_ff"
+why = "A VAAPI frame has no CPU planes: the copy must fail or read them."
+find = "        int r = YVID__AV(av_hwframe_transfer_data)(m->sw, m->fr, 0);"
+replace = "        int r = 0;"
+
+[[mutant]]
+id = "ff-22"
+name = "VAAPI takes a left crop"
+test = "video_ff"
+why = "The transfer starts at the frame's origin; a left crop comes out shifted, so such a stream must not run on VAAPI."
+find = "        if (m->fr->crop_left || m->fr->crop_top) {"
+replace = "        if (0) {"
+
+[[mutant]]
+id = "ff-23"
+name = "AUTO does not fall back to software"
+test = "video_ff"
+why = "AUTO on a machine or a stream without VAAPI must still play: the software decoder gives the same bytes."
+find = "    if (rc < 0 && automatic && hw == YVID_HW_VAAPI && rc != YVID_ERR_FORMAT"
+replace = "    if (0 && rc < 0 && automatic && hw == YVID_HW_VAAPI && rc != YVID_ERR_FORMAT"

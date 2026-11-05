@@ -1,4 +1,4 @@
-/* ysp/video.h - v0.6.0 - public domain single-header video playback library
+/* ysp/video.h - v0.7.0 - public domain single-header video playback library
  *
  *   A movie as a stimulus. On each display frame the header takes the
  *   frame's PREDICTED ONSET, asks the movie clock for the movie time at
@@ -9,13 +9,14 @@
  *   ahead on a ysp/rt.h pump and uploaded into a ysp/gfx.h IMAGE texture.
  *   Also a frame sequence container (raw or QOI frames, read and write,
  *   value-exact), MPEG-1 through pl_mpeg, H.264 and HEVC in MP4 through
- *   Media Foundation on Windows, and the Video decoder extension interface
- *   of the rig's spec (section 12).
+ *   Media Foundation on Windows and FFmpeg on Linux (opt-in), and the Video
+ *   decoder extension interface of the rig's spec (section 12).
  *
  *   REQUIRES ysp/gfx.h (so ysp/screen.h and ysp/rt.h) and ysp/timeline.h
  *   beside it. pl_mpeg.h (commit c871f2b, one MIT file) on the include path
  *   for MPEG-1; YVID_NO_PL_MPEG builds without it. Media Foundation is an
  *   OS API, loaded at run time (BUILDING); YVID_NO_MF builds without it.
+ *   FFmpeg's headers only with YVID_FFMPEG (Linux, off by default; FFMPEG).
  *   ysp/audio.h is optional: include it first and yvid_follow_audio()
  *   and yvid_soundtrack() appear.
  *
@@ -239,6 +240,49 @@
  *     a yvid_reader all reach Media Foundation through one IStream, whose
  *     read() Media Foundation calls from its own threads, one at a time.
  *
+ *   FFMPEG (Linux, with YVID_FFMPEG; desc.backend FFMPEG, or AUTO for an MP4)
+ *     The same files, the same refusals and the same index as Media
+ *     Foundation: MP4 with one H.264 or HEVC Main video track, read by
+ *     libavformat and decoded by libavcodec on the decode thread. The core
+ *     hashes and uploads NV12 whatever the decoder gives, so an index made
+ *     on either platform serves both. desc.hw_decode: OFF is libavcodec's
+ *     software decoder, with desc.decode_threads frame threads (0 = 4);
+ *     VAAPI is the GPU's decoder through libavcodec, each kept frame read
+ *     back (desc.hw_device names the render node; NULL is FFmpeg's choice,
+ *     its first node); AUTO is VAAPI, and software when no VAAPI device
+ *     opens or the hardware refuses the stream. DXVA is refused. Measured on
+ *     an i5-14500 with an AMD RX 6600 and its Intel UHD at 1080p
+ *     (docs/video.md, "Linux"): VAAPI costs 0.9 to 1.6 ms of process CPU a
+ *     frame against 16 to 18 ms for software at 40 Mb/s, and seeks in 27 to
+ *     56 ms against 67 to 117 ms with 4 threads; yvid_update() and the
+ *     drops were the same with every decoder. Software and both GPUs gave
+ *     the index's bytes on every frame compared. A stream that crops from
+ *     the left or the top runs in software: the read-back starts at the
+ *     frame's origin. A damaged frame: software shows it, flagged
+ *     HASH_MISMATCH; VAAPI's drivers refused it in the one case tried, and
+ *     the movie ended with YVID_ERR_DECODER at that frame. The stream's
+ *     color comes from the first decoded frame, for HEVC too, so an index
+ *     of an HEVC file needs no color in its desc here.
+ *     NOT LINKED: the libraries are loaded at run time, once, by the sonames
+ *     of the headers' major versions (libavcodec.so.59 for FFmpeg 5.1), and
+ *     stay loaded. Other major versions are refused by name: rebuild against
+ *     them. A program built this way starts without FFmpeg and plays frame
+ *     sequences and MPEG-1; an MP4 then fails to open, with the code
+ *     YVID_ERR_NOT_IMPLEMENTED and the library's name. No path reaches
+ *     FFmpeg: it reads through the header's byte source, so a memory source
+ *     and a yvid_reader work, and the demuxer is named, never probed.
+ *     THREADS: everything FFmpeg starts is SCHED_OTHER. The open runs on a
+ *     short-lived thread made with explicit SCHED_OTHER attributes, so
+ *     libavcodec's pool and the VAAPI driver's threads never inherit an
+ *     elevated frame thread's SCHED_FIFO (ysp/rt.h, INHERITED POLICY). They
+ *     do inherit its CPU pin: pin the frame thread after yvid_open().
+ *     yvid_close() joins the pool: 2 to 20 ms, so close between trials.
+ *     LICENSE: this header holds no FFmpeg code, and YVID_FFMPEG changes no
+ *     license of it. FFmpeg's license is the installed library's, and
+ *     yvid_describe() prints it (Debian's build says GPL). A program that
+ *     you distribute with that library is yours to license accordingly; one
+ *     that you distribute without it runs on whichever build the rig has.
+ *
  *   GPU PATH (desc.gpu_path YVID_PATH_GPU; Windows, Media Foundation)
  *     DXVA decodes on the screen's own D3D11 device, and the decode thread
  *     copies each kept frame on the GPU (CopySubresourceRegion) into one of
@@ -425,7 +469,11 @@
  *   (tests/compile/video_com.cpp checks them against the SDK), so no
  *   import library and no mfuuid.lib is needed; YVID_NO_MF leaves it
  *   out. Windows Server needs its Media Foundation feature installed; open()
- *   says so when the DLLs are missing. pl_mpeg.h on the include path, or
+ *   says so when the DLLs are missing. On Linux, define YVID_FFMPEG for MP4:
+ *   it needs FFmpeg's headers (libavformat, libavcodec, libavutil) to compile
+ *   and links nothing but -ldl and pthreads on glibc before 2.34; the other
+ *   platforms ignore it. CMake: YSP_VIDEO_FFMPEG=ON, or the linux-ffmpeg
+ *   preset. pl_mpeg.h on the include path, or
  *   YVID_NO_PL_MPEG. Its implementation is compiled here unless
  *   YVID_PL_MPEG_EXTERNAL (then yvid_index_make() and the reader
  *   source are not available for MPEG-1). Its heap calls go through
@@ -442,6 +490,16 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.7.0 - FFMPEG: H.264 and HEVC in MP4 on Linux with YVID_FFMPEG (off
+ *          by default), through libavformat and libavcodec loaded at run
+ *          time, software or VAAPI (desc.hw_decode; AUTO is VAAPI, by
+ *          measurement), each frame in NV12 with the index's hashes.
+ *          yvid_index_make() makes the same index there. yvid_desc gains
+ *          decode_threads and hw_device (layout change), yvid_hw gains
+ *          YVID_HW_VAAPI, and hw_decode's parameter row gains vaapi=3. Off
+ *          Linux or without YVID_FFMPEG nothing plays differently, and an MP4
+ *          on Linux without it is refused with a message that names the
+ *          option. yvid_describe() has room for a longer backend line.
  *   v0.6.0 - PATHS: every path is UTF-8, converted to UTF-16 for _wfsopen
  *          on Windows, as ysp/dataset.h and ysp/pack.h take paths. fopen()
  *          read them in the ANSI code page, so a folder named with a
@@ -548,6 +606,13 @@
  *          ysp/gfx.h, I420 and NV12 converted to RGBA8 on the decode
  *          thread, manual mode, seek, loop, the records.
  *
+ *   STATUS: v0.7.0: on Linux (Debian 12, i5-14500, AMD RX 6600, Mesa 22.3.6,
+ *   GLX_OML, FFmpeg 5.1.6): the frame sequence, pl_mpeg and FFmpeg paths on
+ *   the real display, fullscreen and in a window, with the soundtrack on
+ *   ALSA and PulseAudio; docs/video.md, "Linux". Software records against the
+ *   kernel's vblank times, no photodiode or line-in: no timing tier is
+ *   claimed from them. FFmpeg's other major versions and Windows did not run
+ *   here.
  *   STATUS: v0.6.0: tests/adapt/video_test.c opens, probes, writes and
  *   plays files in a folder named with non-Latin, CJK and non-BMP
  *   characters, and checks every open refusal's code; it passes on MSVC
@@ -581,7 +646,7 @@
  *   Mutations: 23 of 23 (v0.1), 29 of 31 (v0.2; two Media Foundation
  *   checks not caught, docs/video.md says why). Not measured: light
  *   and sound (no photodiode or microphone), fullscreen, slips on the
- *   real panel, another GPU. Not built: YVID_PATH_SHARED, AVFoundation, FFmpeg,
+ *   real panel, another GPU. Not built: YVID_PATH_SHARED, AVFoundation,
  *   capture; open() refuses the ones a desc can ask for, by name.
  *   Outside it and this block, a number in this header is a measurement
  *   only where the text says "measured".
@@ -590,9 +655,9 @@
 #define YSP_VIDEO_H_INCLUDED
 
 #define YVID_VERSION_MAJOR 0
-#define YVID_VERSION_MINOR 6
+#define YVID_VERSION_MINOR 7
 #define YVID_VERSION_PATCH 0
-#define YVID_VERSION_STRING "0.6.0"
+#define YVID_VERSION_STRING "0.7.0"
 
 #include "ysp/gfx.h"
 #include "ysp/timeline.h"
@@ -697,7 +762,7 @@ typedef enum yvid_backend {
     YVID_BACKEND_PLMPEG,     /* MPEG-1 in MPEG-PS, pl_mpeg, CPU             */
     YVID_BACKEND_MF,         /* Media Foundation (Windows): H.264, HEVC in MP4 */
     YVID_BACKEND_AVF,        /* AVFoundation: not built                     */
-    YVID_BACKEND_FFMPEG,     /* not built                                   */
+    YVID_BACKEND_FFMPEG,     /* FFmpeg (Linux, YVID_FFMPEG): H.264, HEVC in MP4 */
     YVID_BACKEND_CUSTOM      /* desc.decoder                                */
 } yvid_backend;
 
@@ -709,12 +774,14 @@ typedef enum yvid_path {
                                 * device, one GPU copy per frame, no upload  */
 } yvid_path;
 
-/* Media Foundation's decoder (desc.hw_decode). */
+/* The decoder of an MP4 file (desc.hw_decode). */
 typedef enum yvid_hw {
     YVID_HW_AUTO = 0,        /* DXVA, or the software decoder when no DXVA
-                                * device opens (measured, docs/video.md) */
-    YVID_HW_OFF,             /* Microsoft's software decoder                */
-    YVID_HW_DXVA             /* DXVA on a D3D11 device                      */
+                                * device opens (measured, docs/video.md);
+                                * FFmpeg: docs/video.md, "Linux"               */
+    YVID_HW_OFF,             /* Microsoft's or FFmpeg's software decoder    */
+    YVID_HW_DXVA,            /* DXVA on a D3D11 device                      */
+    YVID_HW_VAAPI            /* FFmpeg on Linux: VAAPI, each frame read back */
 } yvid_hw;
 
 typedef enum yvid_light {
@@ -831,7 +898,11 @@ typedef struct yvid_desc {
     const yvid_decoder* decoder;      /* YVID_BACKEND_CUSTOM               */
     void*                decoder_ctx;
     int32_t              pin_cpu;       /* decode thread; 0 = no pin           */
-    yvid_hw            hw_decode;     /* Media Foundation's decoder; 0 = AUTO */
+    yvid_hw            hw_decode;     /* the MP4 decoder; 0 = AUTO             */
+    int32_t              decode_threads; /* FFmpeg's software decoder's threads;
+                                          * 0 = its measured default             */
+    const char*          hw_device;     /* VAAPI's device ("/dev/dri/renderD128");
+                                         * NULL = FFmpeg's choice                */
 } yvid_desc;
 
 typedef struct yvid_info {
@@ -1174,9 +1245,10 @@ typedef struct yvid_index_desc {
     uint8_t matrix, range, transfer, primaries, siting;
     uint8_t reserved_[3];
     const char* note;                /* the command that made the file        */
-    yvid_backend backend;          /* 0 = from the file: MPEG-PS pl_mpeg, MP4 MF */
-    yvid_hw   hw;                  /* MF: the decoder that makes the hashes; 0 = OFF */
-    bool        no_seek_check;       /* MF: skip the decode from each keyframe */
+    yvid_backend backend;          /* 0 = from the file: MPEG-PS pl_mpeg, MP4 MF
+                                    * or, with YVID_FFMPEG on Linux, FFmpeg     */
+    yvid_hw   hw;                  /* MP4: the decoder that makes the hashes; 0 = OFF */
+    bool        no_seek_check;       /* MP4: skip the decode from each keyframe */
 } yvid_index_desc;
 YVID_API int64_t yvid_index_make(const char* media_path, const char* index_path,
                                      const yvid_index_desc* d, char* err, size_t cap);
@@ -1275,6 +1347,30 @@ YVID_API int yvid_soundtrack(yvid_movie* mv, yau_audio* au, const yvid_soundtrac
     #endif
 #else
     #define YVID__MF 0
+#endif
+/* FFmpeg: Linux, only with YVID_FFMPEG (off by default). Its headers give the
+ * types at build time; the libraries are loaded at run time, once, by the
+ * sonames of those headers' major versions. */
+#if defined(YVID_FFMPEG) && defined(__linux__)
+    #define YVID__FF 1
+    #include <dlfcn.h>
+    #include <pthread.h>
+    #include <sched.h>
+    #ifdef __cplusplus
+    extern "C" {
+    #endif
+    #include <libavformat/avformat.h>
+    #include <libavcodec/avcodec.h>
+    #include <libavutil/avutil.h>
+    #include <libavutil/frame.h>
+    #include <libavutil/hwcontext.h>
+    #include <libavutil/mem.h>
+    #include <libavutil/version.h>
+    #ifdef __cplusplus
+    }
+    #endif
+#else
+    #define YVID__FF 0
 #endif
 #include <errno.h>
 #if defined(_WIN32)
@@ -3741,6 +3837,514 @@ static const yvid_decoder yvid__mf_decoder = {
 
 #endif /* YVID__MF */
 
+/* --- FFmpeg (Linux, YVID_FFMPEG) ---------------------------------------------- */
+
+#if YVID__FF
+
+#define YVID__FF_STR2(x) #x
+#define YVID__FF_STR(x) YVID__FF_STR2(x)
+/* The sonames of the major versions these headers describe: FFmpeg's structs
+ * change layout between majors, so a program runs on the major it was built
+ * against or refuses to open. The defines are a test seam. */
+#ifndef YVID__FF_SO_UTIL
+#define YVID__FF_SO_UTIL "libavutil.so." YVID__FF_STR(LIBAVUTIL_VERSION_MAJOR)
+#endif
+#ifndef YVID__FF_SO_CODEC
+#define YVID__FF_SO_CODEC "libavcodec.so." YVID__FF_STR(LIBAVCODEC_VERSION_MAJOR)
+#endif
+#ifndef YVID__FF_SO_FORMAT
+#define YVID__FF_SO_FORMAT "libavformat.so." YVID__FF_STR(LIBAVFORMAT_VERSION_MAJOR)
+#endif
+
+/* The AVIO's buffer: about a frame of the 64 Mb/s clips, so one read a frame. */
+#define YVID__FF_IOBUF (256 * 1024)
+#ifndef YVID__FF_THREADS
+#define YVID__FF_THREADS 4     /* desc.decode_threads 0: docs/video.md, "Linux" */
+#endif
+/* desc.hw_decode AUTO: docs/video.md, "Linux". */
+#ifndef YVID__FF_HW_DEFAULT
+#define YVID__FF_HW_DEFAULT YVID_HW_VAAPI
+#endif
+
+#define YVID__FF_FNS(X) \
+    X(u, avutil_version) X(u, av_version_info) X(u, av_frame_alloc) X(u, av_frame_free) X(u, av_frame_unref) \
+    X(u, av_log_set_level) X(u, av_malloc) X(u, av_free) X(u, av_frame_get_buffer) X(u, av_buffer_ref) X(u, av_buffer_unref) \
+    X(u, av_hwdevice_ctx_create) X(u, av_hwframe_transfer_data) \
+    X(c, avcodec_version) X(c, avcodec_license) X(c, avcodec_find_decoder) X(c, avcodec_alloc_context3) \
+    X(c, avcodec_parameters_to_context) X(c, avcodec_open2) X(c, avcodec_send_packet) X(c, avcodec_receive_frame) \
+    X(c, avcodec_flush_buffers) X(c, avcodec_free_context) X(c, av_packet_alloc) X(c, av_packet_free) X(c, av_packet_unref) \
+    X(f, avformat_version) X(f, av_find_input_format) X(f, avformat_alloc_context) X(f, avformat_open_input) \
+    X(f, avformat_close_input) X(f, av_read_frame) X(f, av_seek_frame) X(f, avio_alloc_context) X(f, avio_context_free)
+
+static struct {
+    void* u;
+    void* c;
+    void* f;
+    int   rc;                    /* YVID_OK, or why not                      */
+    char  why[320];
+#define YVID__X(lib, name) __typeof__(&name) p_##name;
+    YVID__FF_FNS(YVID__X)
+#undef YVID__X
+} yvid__ffl;
+#define YVID__AV(name) yvid__ffl.p_##name
+
+static pthread_once_t yvid__ffl_once = PTHREAD_ONCE_INIT;
+
+/* Once per process and never unloaded: Debian's libavcodec pulls in 96 other
+ * libraries, and a process that plays one movie is likely to play another. */
+static void yvid__ffl_load(void) {
+    const char* e;
+    yvid__ffl.rc = YVID_ERR_NOT_IMPLEMENTED;
+    yvid__ffl.u = dlopen(YVID__FF_SO_UTIL, RTLD_NOW | RTLD_LOCAL);
+    e = yvid__ffl.u ? NULL : YVID__FF_SO_UTIL;
+    if (!e) { yvid__ffl.c = dlopen(YVID__FF_SO_CODEC, RTLD_NOW | RTLD_LOCAL); if (!yvid__ffl.c) e = YVID__FF_SO_CODEC; }
+    if (!e) { yvid__ffl.f = dlopen(YVID__FF_SO_FORMAT, RTLD_NOW | RTLD_LOCAL); if (!yvid__ffl.f) e = YVID__FF_SO_FORMAT; }
+    if (e) {
+        const char* d = dlerror();
+        yvid__fmt(yvid__ffl.why, sizeof yvid__ffl.why, "FFmpeg's %s did not load (%.200s); install it, or play a frame sequence or MPEG-1", e, d ? d : "no reason given");
+        return;
+    }
+#define YVID__X(lib, name) { void* p_ = dlsym(yvid__ffl.lib, #name); memcpy(&yvid__ffl.p_##name, &p_, sizeof p_); \
+        if (!p_) { yvid__fmt(yvid__ffl.why, sizeof yvid__ffl.why, "FFmpeg's %s is missing from its library", #name); return; } }
+    YVID__FF_FNS(YVID__X)
+#undef YVID__X
+    /* the structs are the headers' at build time: another major has other
+     * offsets, and reading through them would not fail cleanly */
+    if ((YVID__AV(avutil_version)() >> 16) != LIBAVUTIL_VERSION_MAJOR ||
+        (YVID__AV(avcodec_version)() >> 16) != LIBAVCODEC_VERSION_MAJOR ||
+        (YVID__AV(avformat_version)() >> 16) != LIBAVFORMAT_VERSION_MAJOR) {
+        yvid__fmt(yvid__ffl.why, sizeof yvid__ffl.why, "FFmpeg's libraries are not the major version this program was built against (libavcodec %u, built for %u)",
+                  YVID__AV(avcodec_version)() >> 16, (unsigned)LIBAVCODEC_VERSION_MAJOR);
+        return;
+    }
+    /* A damaged frame is flagged in its record; lavc's messages would be a
+     * console write per macroblock row on the decode thread. */
+    YVID__AV(av_log_set_level)(AV_LOG_QUIET);
+    yvid__ffl.rc = YVID_OK;
+}
+
+/* Runs fn on a short-lived SCHED_OTHER thread and waits for it. A thread
+ * inherits its creator's policy, and yvid_open() usually runs on an elevated
+ * frame thread (ysp/screen.h: raise it before open). libavcodec's pool, which
+ * avcodec_open2() starts, would then be SCHED_FIFO: 15 busy threads, and on a
+ * kernel without RT throttling inherited FIFO spin threads froze the machine
+ * (docs/rt.md). No fallback to an inherited policy when this cannot start. */
+typedef struct yvid__ff_job {
+    int (*fn)(void*);
+    void* arg;
+    int rc;
+} yvid__ff_job;
+
+static void* yvid__ff_job_main(void* p) {
+    yvid__ff_job* j = (yvid__ff_job*)p;
+    j->rc = j->fn(j->arg);
+    return NULL;
+}
+
+static int yvid__ff_off_rt(int (*fn)(void*), void* arg, char* err, size_t cap) {
+    yvid__ff_job j;
+    pthread_t t;
+    pthread_attr_t a;
+    struct sched_param sp;
+    int rc;
+    j.fn = fn; j.arg = arg; j.rc = YVID_ERR_DECODER;
+    memset(&sp, 0, sizeof sp);
+    if (pthread_attr_init(&a) != 0) { yvid__fmt(err, cap, "no thread attributes for FFmpeg's open"); return YVID_ERR_FULL; }
+    rc = pthread_attr_setinheritsched(&a, PTHREAD_EXPLICIT_SCHED);
+    if (rc == 0) rc = pthread_attr_setschedpolicy(&a, SCHED_OTHER);
+    if (rc == 0) rc = pthread_attr_setschedparam(&a, &sp);
+    if (rc == 0) rc = pthread_create(&t, &a, yvid__ff_job_main, &j);
+    pthread_attr_destroy(&a);
+    if (rc != 0) { yvid__fmt(err, cap, "no SCHED_OTHER thread for FFmpeg's open (error %d)", rc); return YVID_ERR_FULL; }
+    pthread_join(t, NULL);
+    return j.rc;
+}
+
+/* desc.hw_decode and desc.decode_threads, resolved */
+typedef struct yvid__ff {
+    yvid__src        src;
+    int64_t          pos;
+    AVFormatContext* fc;
+    AVIOContext*     io;
+    AVCodecContext*  cc;
+    AVPacket*        pkt;
+    AVFrame*         fr;
+    AVFrame*         sw;            /* VAAPI: the frame read back, kept: no
+                                     * allocation per frame                     */
+    AVBufferRef*     dev;           /* VAAPI's device                           */
+    int              hw;            /* YVID_HW_*, resolved                      */
+    int              si;            /* the video stream                         */
+    int              eof;           /* the demuxer ended; the decoder drains    */
+    int              have;          /* fr holds the frame a seek read           */
+    int              threads;       /* as resolved by avcodec_open2()           */
+    int32_t          codec;
+    int32_t          num, den;      /* the index's rate                         */
+    int64_t          tb_num, tb_den;
+    int              last_av;       /* the last failing FFmpeg call's code      */
+    /* set by yvid_open() before open(): the movie's choice */
+    int              req_hw;        /* YVID_HW_OFF or YVID_HW_VAAPI             */
+    int              req_auto;      /* AUTO: a VAAPI that fails falls to software */
+    int              req_threads;
+    const char*      req_device;
+    int32_t          req_num, req_den;
+    char             why_sw[160];   /* AUTO: why software                       */
+} yvid__ff;
+
+/* The AVIO over the header's byte source, so a pack entry read by range and
+ * memory play as a path does. FFmpeg's own file protocol is never used: no
+ * path reaches FFmpeg, and so no URL or protocol is parsed. */
+static int yvid__ff_read(void* o, uint8_t* buf, int n) {
+    yvid__ff* m = (yvid__ff*)o;
+    int64_t left = m->src.size - m->pos;
+    if (left <= 0) return AVERROR_EOF;
+    if (n > left) n = (int)left;
+    if (yvid__src_read(&m->src, m->pos, buf, n) != YVID_OK) return AVERROR(EIO);
+    m->pos += n;
+    return n;
+}
+
+static int64_t yvid__ff_iseek(void* o, int64_t off, int whence) {
+    yvid__ff* m = (yvid__ff*)o;
+    int64_t to;
+    whence &= ~AVSEEK_FORCE;
+    if (whence == AVSEEK_SIZE) return m->src.size;
+    to = whence == SEEK_SET ? off : whence == SEEK_CUR ? m->pos + off : whence == SEEK_END ? m->src.size + off : -1;
+    if (to < 0) return AVERROR(EINVAL);
+    m->pos = to;
+    return to;
+}
+
+/* The stream's time in 100 ns, Media Foundation's unit, so the rate fit and
+ * its tolerance are one for both backends. */
+static int64_t yvid__ff_t100(const yvid__ff* m, int64_t pts) {
+    int64_t d = m->tb_den, a = yvid__floordiv(pts, d), b = pts - a * d;
+    return a * m->tb_num * 10000000 + (b * m->tb_num * 10000000 + d / 2) / d;
+}
+
+static int64_t yvid__ff_index_of(const yvid__ff* m, int64_t t100) {
+    int64_t d = (int64_t)m->den * 10000000, a = yvid__floordiv(t100, d), b = t100 - a * d;
+    return m->num * a + (m->num * b + d / 2) / d;
+}
+
+static int yvid__ff_recv(yvid__ff* m);
+
+/* What yvid__ff_open_ex() needs on its SCHED_OTHER thread. */
+typedef struct yvid__ff_open_job {
+    yvid__ff* m;
+    const yvid_decoder_open* in;
+    int native;
+    char* err;
+    size_t cap;
+} yvid__ff_open_job;
+
+/* Only VAAPI: when the hardware has no profile for this stream, lavc's other
+ * entry is its software format, and a stream that claims VAAPI must fail here
+ * so that AUTO reopens in software and an explicit VAAPI is refused. */
+static enum AVPixelFormat yvid__ff_get_format(AVCodecContext* c, const enum AVPixelFormat* p) {
+    (void)c;
+    for (; *p != AV_PIX_FMT_NONE; p++) if (*p == AV_PIX_FMT_VAAPI) return *p;
+    return AV_PIX_FMT_NONE;
+}
+
+static int yvid__ff_open_body(void* p) {
+    yvid__ff_open_job* j = (yvid__ff_open_job*)p;
+    yvid__ff* m = j->m;
+    char* err = j->err;
+    size_t cap = j->cap;
+    const AVInputFormat* ifmt;
+    const AVCodec* dec;
+    AVCodecParameters* par;
+    AVStream* vs;
+    unsigned char* iobuf;
+    unsigned k, nvideo = 0;
+    int r, rc;
+    pthread_once(&yvid__ffl_once, yvid__ffl_load);
+    if (yvid__ffl.rc < 0) { yvid__fmt(err, cap, "%s", yvid__ffl.why); return yvid__ffl.rc; }
+    rc = yvid__src_open(&m->src, j->in->path, j->in->data, j->in->size, j->in->reader, j->in->reader_ctx);
+    if (rc < 0) { yvid__fmt(err, cap, "cannot open %s: %s", j->in->path ? j->in->path : "the source", yvid__open_why(rc)); return rc; }
+    m->si = -1;
+    iobuf = (unsigned char*)YVID__AV(av_malloc)(YVID__FF_IOBUF);
+    if (iobuf) m->io = YVID__AV(avio_alloc_context)(iobuf, YVID__FF_IOBUF, 0, m, yvid__ff_read, NULL, yvid__ff_iseek);
+    if (!m->io) { YVID__AV(av_free)(iobuf); yvid__fmt(err, cap, "out of memory"); return YVID_ERR_FULL; }
+    m->fc = YVID__AV(avformat_alloc_context)();
+    if (!m->fc) { yvid__fmt(err, cap, "out of memory"); return YVID_ERR_FULL; }
+    m->fc->pb = m->io;
+    m->fc->flags |= AVFMT_FLAG_CUSTOM_IO;
+    /* named, not probed: the file passed the "ftyp" test, and FFmpeg's other
+     * demuxers (playlists among them) must not see it */
+    ifmt = YVID__AV(av_find_input_format)("mp4");
+    r = ifmt ? YVID__AV(avformat_open_input)(&m->fc, NULL, ifmt, NULL) : -1;
+    if (r < 0) { m->last_av = r; yvid__fmt(err, cap, "FFmpeg cannot read it (%d): MP4 only; remux with -f mp4", r); return YVID_ERR_FORMAT; }
+    for (k = 0; k < m->fc->nb_streams; k++) {
+        AVStream* s = m->fc->streams[k];
+        if (s->codecpar->codec_type == AVMEDIA_TYPE_VIDEO && !(s->disposition & AV_DISPOSITION_ATTACHED_PIC)) {
+            if (m->si < 0) m->si = (int)k;
+            nvideo++;
+        } else {
+            s->discard = AVDISCARD_ALL;
+        }
+    }
+    if (nvideo != 1) { yvid__fmt(err, cap, "%u video streams; the canonical form has one", nvideo); return YVID_ERR_FORMAT; }
+    vs = m->fc->streams[m->si];
+    par = vs->codecpar;
+    m->tb_num = vs->time_base.num; m->tb_den = vs->time_base.den;
+    if (m->tb_num <= 0 || m->tb_den <= 0 || m->tb_num > 1000) { yvid__fmt(err, cap, "time base %lld/%lld", (long long)m->tb_num, (long long)m->tb_den); return YVID_ERR_FORMAT; }
+    /* The demuxer leaves par->profile unset here; the avcC and hvcC records
+     * state it in their second byte. */
+    if (par->codec_id == AV_CODEC_ID_H264) {
+        int prof = par->extradata_size > 1 && par->extradata[0] == 1 ? par->extradata[1] : 0;
+        m->codec = YVID_CODEC_H264;
+        if (prof == 110 || prof == 122 || prof == 244) {
+            yvid__fmt(err, cap, "H.264 profile %s: the canonical form is 8-bit 4:2:0 (High, Main or Baseline); re-encode with -pix_fmt yuv420p",
+                      prof == 110 ? "High 10" : prof == 122 ? "High 4:2:2" : "High 4:4:4");
+            return YVID_ERR_FORMAT;
+        }
+    } else if (par->codec_id == AV_CODEC_ID_HEVC) {
+        int prof = par->extradata_size > 1 && par->extradata[0] == 1 ? par->extradata[1] & 0x1f : 0;
+        m->codec = YVID_CODEC_HEVC;
+        if (prof > 1 && prof != 3) { yvid__fmt(err, cap, "HEVC profile %d: the canonical form is Main (8-bit 4:2:0)", prof); return YVID_ERR_FORMAT; }
+    } else {
+        char cc[5];
+        uint32_t tag = par->codec_tag;
+        memcpy(cc, &tag, 4); cc[4] = 0;
+        for (k = 0; k < 4; k++) if (cc[k] < 32 || cc[k] > 126) cc[k] = '?';
+        yvid__fmt(err, cap, "the video codec is '%s', not H.264 or HEVC; re-encode with libx264", cc);
+        return YVID_ERR_FORMAT;
+    }
+    m->pkt = YVID__AV(av_packet_alloc)();
+    m->fr = YVID__AV(av_frame_alloc)();
+    if (!m->pkt || !m->fr) { yvid__fmt(err, cap, "out of memory"); return YVID_ERR_FULL; }
+    if (j->native) return YVID_OK;   /* the index's first pass reads packets only */
+    dec = YVID__AV(avcodec_find_decoder)(par->codec_id);
+    if (!dec) { yvid__fmt(err, cap, "this FFmpeg has no %s decoder", m->codec == YVID_CODEC_H264 ? "H.264" : "HEVC"); return YVID_ERR_NOT_IMPLEMENTED; }
+    m->cc = YVID__AV(avcodec_alloc_context3)(dec);
+    if (!m->cc || YVID__AV(avcodec_parameters_to_context)(m->cc, par) < 0) { yvid__fmt(err, cap, "out of memory"); return YVID_ERR_FULL; }
+    m->cc->pkt_timebase = vs->time_base;
+    m->cc->thread_count = m->req_threads > 0 ? m->req_threads : YVID__FF_THREADS;
+    m->cc->thread_type = FF_THREAD_FRAME;
+    if (m->hw == YVID_HW_VAAPI) {
+        /* no libva header or link: FFmpeg's hwcontext holds it. One thread:
+         * the hardware decodes, and frame threads would only delay the frames */
+        r = YVID__AV(av_hwdevice_ctx_create)(&m->dev, AV_HWDEVICE_TYPE_VAAPI, m->req_device, NULL, 0);
+        if (r < 0) { m->last_av = r; yvid__fmt(err, cap, "no VAAPI device (%d)", r); return YVID_ERR_DECODER; }
+        m->cc->hw_device_ctx = YVID__AV(av_buffer_ref)(m->dev);
+        if (!m->cc->hw_device_ctx) { yvid__fmt(err, cap, "out of memory"); return YVID_ERR_FULL; }
+        m->cc->get_format = yvid__ff_get_format;
+        m->cc->thread_count = 1;
+    }
+    /* a damaged frame is still shown and flagged by its hash, as with Media
+     * Foundation; a left crop lands exactly, not on the alignment */
+    m->cc->flags |= AV_CODEC_FLAG_OUTPUT_CORRUPT | AV_CODEC_FLAG_UNALIGNED;
+    r = YVID__AV(avcodec_open2)(m->cc, dec, NULL);
+    if (r < 0) { m->last_av = r; yvid__fmt(err, cap, "FFmpeg's %s decoder did not open (%d)", m->codec == YVID_CODEC_H264 ? "H.264" : "HEVC", r); return YVID_ERR_DECODER; }
+    m->threads = m->cc->thread_count;
+    if (m->hw == YVID_HW_VAAPI) {
+        /* The first frame here, on this SCHED_OTHER thread: lavc makes the
+         * hardware's decoder at the first packet, so any driver thread starts
+         * then, and whether the hardware takes this stream is known only then. */
+        rc = yvid__ff_recv(m);
+        if (rc != YVID_OK) { yvid__fmt(err, cap, "VAAPI cannot decode this stream (%d)", m->last_av); return rc < 0 ? rc : YVID_ERR_DECODER; }
+        /* the transfer takes the frame from its origin: a left or top crop
+         * would come out shifted, and a software decoder crops it exactly */
+        if (m->fr->crop_left || m->fr->crop_top) { yvid__fmt(err, cap, "VAAPI: the stream crops %u columns from the left and %u rows from the top; use the software decoder", (unsigned)m->fr->crop_left, (unsigned)m->fr->crop_top); return YVID_ERR_DECODER; }
+        m->sw = YVID__AV(av_frame_alloc)();
+        if (!m->sw) { yvid__fmt(err, cap, "out of memory"); return YVID_ERR_FULL; }
+        m->sw->format = AV_PIX_FMT_NV12;
+        m->sw->width = m->fr->width;
+        m->sw->height = m->fr->height;
+        r = YVID__AV(av_frame_get_buffer)(m->sw, 0);
+        if (r < 0) { m->last_av = r; yvid__fmt(err, cap, "out of memory"); return YVID_ERR_FULL; }
+        m->have = 1;
+    }
+    return YVID_OK;
+}
+
+static int yvid__ff_open_ex2(yvid__ff* m, const yvid_decoder_open* in, yvid_stream* out, int native, int hw, int threads, const char* device, int32_t num, int32_t den, char* err, size_t cap) {
+    yvid__ff_open_job j;
+    int rc;
+    memset(m, 0, sizeof *m);
+    m->hw = native ? YVID_HW_OFF : hw;
+    m->req_device = device;
+    m->req_threads = threads;
+    m->num = num; m->den = den;
+    j.m = m; j.in = in; j.native = native; j.err = err; j.cap = cap;
+    rc = yvid__ff_off_rt(yvid__ff_open_body, &j, err, cap);
+    if (rc < 0) return rc;
+    memset(out, 0, sizeof *out);
+    out->format = native ? 0 : YVID_FMT_NV12;
+    out->frames = -1;
+    out->codec = m->codec;
+    out->timescale = 10000000;
+    out->caps = YVID_DEC_CPU;
+    return YVID_OK;
+}
+
+static int yvid__ff_open_ex(yvid__ff* m, const yvid_decoder_open* in, yvid_stream* out, int native, int hw, int threads, int32_t num, int32_t den, char* err, size_t cap) {
+    return yvid__ff_open_ex2(m, in, out, native, hw, threads, NULL, num, den, err, cap);
+}
+
+static void yvid__ff_close(void* ctx);
+
+static int yvid__ff_open(void* ctx, const yvid_decoder_open* in, yvid_stream* out, char* err, size_t cap) {
+    yvid__ff* m = (yvid__ff*)ctx;
+    int hw = m->req_hw, automatic = m->req_auto, threads = m->req_threads;
+    const char* device = m->req_device;
+    int32_t num = m->req_num, den = m->req_den;
+    int rc;
+    rc = yvid__ff_open_ex2(m, in, out, 0, hw, threads, device, num, den, err, cap);
+    if (rc < 0 && automatic && hw == YVID_HW_VAAPI && rc != YVID_ERR_FORMAT && rc != YVID_ERR_NOT_FOUND && yvid__ffl.rc == YVID_OK) {
+        /* AUTO: no VAAPI here, or none for this stream; the software decoder
+         * gives the same bytes, and describe() says which ran and why */
+        char why[160];
+        yvid__fmt(why, sizeof why, "%s", err);
+        yvid__ff_close(m);
+        rc = yvid__ff_open_ex2(m, in, out, 0, YVID_HW_OFF, threads, NULL, num, den, err, cap);
+        if (rc == YVID_OK) yvid__fmt(m->why_sw, sizeof m->why_sw, "%s", why);
+    }
+    return rc;
+}
+
+/* fr gets the next frame in presentation order, or ENDED, or an error. A
+ * packet the decoder refuses is not an end: the frames after it carry their
+ * own times, and the core flags a frame that is not the one it expects. */
+static int yvid__ff_recv(yvid__ff* m) {
+    for (;;) {
+        int r = YVID__AV(avcodec_receive_frame)(m->cc, m->fr);
+        if (r == 0) return YVID_OK;
+        if (r == AVERROR_EOF) return YVID_ENDED;
+        if (r != AVERROR(EAGAIN)) { m->last_av = r; return YVID_ERR_DECODER; }
+        if (m->eof) return YVID_ENDED;
+        r = YVID__AV(av_read_frame)(m->fc, m->pkt);
+        if (r < 0) {
+            if (r != AVERROR_EOF) { m->last_av = r; return YVID_ERR_DECODER; }
+            m->eof = 1;
+            (void)YVID__AV(avcodec_send_packet)(m->cc, NULL);
+            continue;
+        }
+        if (m->pkt->stream_index == m->si) {
+            r = YVID__AV(avcodec_send_packet)(m->cc, m->pkt);
+            if (r < 0 && r != AVERROR(EAGAIN)) m->last_av = r;
+        }
+        YVID__AV(av_packet_unref)(m->pkt);
+    }
+}
+
+static int yvid__ff_pts(const AVFrame* f, int64_t* pts) {
+    *pts = f->pts != AV_NOPTS_VALUE ? f->pts : f->best_effort_timestamp;
+    return *pts != AV_NOPTS_VALUE;
+}
+
+/* The frame into the core's tight NV12 planes. The core hashes and uploads
+ * NV12 whatever the decoder gives: one index serves Media Foundation and
+ * FFmpeg, so a pack made on either plays on both. */
+static int yvid__ff_copy(yvid__ff* m, const yvid_planes* d) {
+    const AVFrame* f = m->fr;
+    int i420, x, y;
+    if (m->sw) {
+        /* into the frame kept since the open: no allocation per frame */
+        int r = YVID__AV(av_hwframe_transfer_data)(m->sw, m->fr, 0);
+        if (r < 0) { m->last_av = r; return YVID_ERR_DECODER; }
+        f = m->sw;
+    }
+    i420 = f->format == AV_PIX_FMT_YUV420P || f->format == AV_PIX_FMT_YUVJ420P;
+    if (!i420 && f->format != AV_PIX_FMT_NV12) return YVID_ERR_FORMAT;
+    if (f->width != d->w[0] || f->height != d->h[0]) return YVID_ERR_FORMAT;
+    for (y = 0; y < d->h[0]; y++)
+        memcpy(d->data[0] + (size_t)y * (size_t)d->stride[0], f->data[0] + (ptrdiff_t)y * f->linesize[0], (size_t)d->w[0]);
+    for (y = 0; y < d->h[1]; y++) {
+        uint8_t* __restrict__ o = d->data[1] + (size_t)y * (size_t)d->stride[1];
+        if (i420) {
+            const uint8_t* __restrict__ u = f->data[1] + (ptrdiff_t)y * f->linesize[1];
+            const uint8_t* __restrict__ v = f->data[2] + (ptrdiff_t)y * f->linesize[2];
+            for (x = 0; x < d->w[1]; x++) { o[2 * x] = u[x]; o[2 * x + 1] = v[x]; }
+        } else {
+            memcpy(o, f->data[1] + (ptrdiff_t)y * f->linesize[1], (size_t)d->w[1] * 2);
+        }
+    }
+    return YVID_OK;
+}
+
+static int yvid__ff_next(void* ctx, yvid_planes* dst, yvid_out* out) {
+    yvid__ff* m = (yvid__ff*)ctx;
+    int64_t pts = 0;
+    int rc;
+    if (m->have) m->have = 0;
+    else if ((rc = yvid__ff_recv(m)) != YVID_OK) return rc;
+    if (!yvid__ff_pts(m->fr, &pts)) { YVID__AV(av_frame_unref)(m->fr); return YVID_ERR_DECODER; }
+    out->pts = yvid__ff_t100(m, pts);
+    out->index = -1;
+#if defined(AV_FRAME_FLAG_KEY)
+    if (m->fr->flags & AV_FRAME_FLAG_KEY) out->flags |= YVID_OUT_KEYFRAME;
+#else
+    if (m->fr->key_frame) out->flags |= YVID_OUT_KEYFRAME;
+#endif
+    rc = dst ? yvid__ff_copy(m, dst) : YVID_OK;
+    return rc;
+}
+
+static int yvid__ff_seek_to(void* ctx, int64_t key, int64_t key_pts) {
+    yvid__ff* m = (yvid__ff*)ctx;
+    int64_t ns, ticks, n;
+    int r;
+    (void)key_pts;
+    if (m->num <= 0) return YVID_ERR_ARG;
+    /* half a frame past the keyframe's time, as Media Foundation's seek: the
+     * demuxer takes the sync sample at or before it, and no rounding of the
+     * tick can fall short of the keyframe */
+    ns = (yvid_frame_time(m->num, m->den, key) + yvid_frame_time(m->num, m->den, key + 1)) / 2;
+    ticks = (int64_t)((double)ns * (double)m->tb_den / ((double)m->tb_num * 1e9));
+    r = YVID__AV(av_seek_frame)(m->fc, m->si, ticks, AVSEEK_FLAG_BACKWARD);
+    if (r < 0) { m->last_av = r; return YVID_ERR_DECODER; }
+    YVID__AV(avcodec_flush_buffers)(m->cc);
+    m->eof = 0;
+    m->have = 0;
+    /* forward to `key` itself, so next() returns it as the interface says */
+    for (n = 0; n < 100000; n++) {
+        int64_t pts = 0, i;
+        int rc = yvid__ff_recv(m);
+        if (rc != YVID_OK) return rc < 0 ? rc : YVID_ERR_DECODER;
+        if (!yvid__ff_pts(m->fr, &pts)) return YVID_ERR_DECODER;
+        i = yvid__ff_index_of(m, yvid__ff_t100(m, pts));
+        if (i == key) { m->have = 1; return YVID_OK; }
+        if (i > key) return YVID_ERR_DECODER;
+    }
+    return YVID_ERR_DECODER;
+}
+
+/* Joins libavcodec's pool: a frame thread that closes a movie pays for it. */
+static void yvid__ff_close(void* ctx) {
+    yvid__ff* m = (yvid__ff*)ctx;
+    if (m->cc) YVID__AV(avcodec_free_context)(&m->cc);
+    if (m->dev) YVID__AV(av_buffer_unref)(&m->dev);
+    if (m->sw) YVID__AV(av_frame_free)(&m->sw);
+    if (m->fr) YVID__AV(av_frame_free)(&m->fr);
+    if (m->pkt) YVID__AV(av_packet_free)(&m->pkt);
+    if (m->fc) YVID__AV(avformat_close_input)(&m->fc);
+    if (m->io) {
+        YVID__AV(av_free)(m->io->buffer);
+        YVID__AV(avio_context_free)(&m->io);
+    }
+    yvid__src_close(&m->src);
+}
+
+static int yvid__ff_describe(void* ctx, char* buf, size_t cap) {
+    const yvid__ff* m = (const yvid__ff*)ctx;
+    unsigned v = YVID__AV(avcodec_version)();
+    if (m->hw == YVID_HW_VAAPI)
+        return snprintf(buf, cap, "FFmpeg %s (libavcodec %u.%u, %s; %s, VAAPI, read back)", YVID__AV(av_version_info)(),
+                        v >> 16, (v >> 8) & 0xff, YVID__AV(avcodec_license)(), m->codec == YVID_CODEC_H264 ? "H.264" : "HEVC");
+    return snprintf(buf, cap, "FFmpeg %s (libavcodec %u.%u, %s; %s, software, %d threads%s%s)", YVID__AV(av_version_info)(),
+                    v >> 16, (v >> 8) & 0xff, YVID__AV(avcodec_license)(), m->codec == YVID_CODEC_H264 ? "H.264" : "HEVC", m->threads,
+                    m->why_sw[0] ? "; AUTO: " : "", m->why_sw);
+}
+
+static const yvid_decoder yvid__ff_decoder = {
+    YVID_DECODER_VERSION, "FFmpeg", yvid__ff_open, yvid__ff_next, yvid__ff_seek_to,
+    yvid__ff_close, yvid__ff_describe
+};
+
+#endif /* YVID__FF */
+
 /* --- making the index ------------------------------------------------------------ */
 
 /* Writes index_path (NULL = media_path + ".yspvi"): the header from c and the
@@ -3875,7 +4479,7 @@ fail:
 }
 #endif
 
-#if YVID__MF
+#if YVID__MF || YVID__FF
 /* A color field: the stream's when it states one, else the desc's; both
  * stated and different is refused, neither is refused. */
 static int yvid__color_pick(int16_t stream, uint8_t given, const char* what, const char* fix, uint8_t* out, char* err, size_t cap) {
@@ -3990,6 +4594,9 @@ static int yvid__mf_fit_rate(const int64_t* ts, int64_t n, int32_t* num, int32_t
     return 0;
 }
 
+#endif
+
+#if YVID__MF
 static int64_t yvid__index_make_mf(const char* media_path, const char* index_path,
                                      const yvid_index_desc* d, char* err, size_t cap) {
     yvid__mf* m;
@@ -4156,6 +4763,255 @@ fail:
 }
 #endif
 
+#if YVID__FF
+/* The video track's tkhd matrix: a rotation Media Foundation reports through
+ * its media type and FFmpeg only through side data whose API moved between
+ * majors, so the index maker reads the box. */
+static int yvid__mp4_matrix(const char* path, char* err, size_t cap) {
+    yvid__src s;
+    int64_t at = 0, body, next, moov = -1, moov_end = 0;
+    uint32_t type;
+    int rc = YVID_OK;
+    if (yvid__src_open(&s, path, NULL, 0, NULL, NULL) != YVID_OK) return YVID_OK;
+    while (yvid__mp4_box(&s, at, s.size, &type, &body, &next)) {
+        if (type == YVID__4CC('m', 'o', 'o', 'v')) { moov = body; moov_end = next; break; }
+        at = next;
+    }
+    for (at = moov; moov >= 0 && rc == YVID_OK && yvid__mp4_box(&s, at, moov_end, &type, &body, &next); at = next) {
+        int64_t t_at, t_body, t_next, tkhd = -1;
+        uint32_t t_type;
+        int video = 0;
+        if (type != YVID__4CC('t', 'r', 'a', 'k')) continue;
+        for (t_at = body; yvid__mp4_box(&s, t_at, next, &t_type, &t_body, &t_next); t_at = t_next) {
+            int64_t e_at, e_body, e_next;
+            uint32_t e_type;
+            if (t_type == YVID__4CC('t', 'k', 'h', 'd')) tkhd = t_body;
+            else if (t_type == YVID__4CC('m', 'd', 'i', 'a')) {
+                for (e_at = t_body; yvid__mp4_box(&s, e_at, t_next, &e_type, &e_body, &e_next); e_at = e_next) {
+                    uint8_t hd[12];
+                    if (e_type == YVID__4CC('h', 'd', 'l', 'r') && yvid__src_read(&s, e_body, hd, 12) == YVID_OK &&
+                        memcmp(hd + 8, "vide", 4) == 0) video = 1;
+                }
+            }
+        }
+        if (video && tkhd >= 0) {
+            /* version 0: 40 bytes to the matrix, version 1: 52 */
+            uint8_t v[4], mx[36];
+            static const uint8_t ident[36] = { 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x40, 0, 0, 0 };
+            if (yvid__src_read(&s, tkhd, v, 4) == YVID_OK && yvid__src_read(&s, tkhd + (v[0] == 1 ? 52 : 40), mx, 36) == YVID_OK &&
+                memcmp(mx, ident, 36) != 0) {
+                yvid__fmt(err, cap, "%s: the video track is rotated or mirrored (its display matrix is not the identity); re-encode with the rotation applied", path);
+                rc = YVID_ERR_FORMAT;
+            }
+        }
+    }
+    yvid__src_close(&s);
+    return rc;
+}
+
+/* What each pass of the index needs from the decoded frame. H.273's code
+ * points, which AVCOL_* are: the same table as the H.264 SPS parser's, and it
+ * reads HEVC's too, whose VUI Media Foundation's path does not. */
+static void yvid__ff_color(const AVFrame* f, int16_t out[5]) {
+    int mat = (int)f->colorspace, trc = (int)f->color_trc, prim = (int)f->color_primaries;
+    out[0] = mat == 1 ? YVID_MATRIX_BT709 : (mat == 5 || mat == 6) ? YVID_MATRIX_BT601 : mat == 9 ? YVID_MATRIX_BT2020 : mat == 2 ? -1 : -2;
+    out[1] = f->color_range == AVCOL_RANGE_MPEG ? YVID_RANGE_LIMITED : f->color_range == AVCOL_RANGE_JPEG ? YVID_RANGE_FULL : -1;
+    out[2] = (trc == 1 || trc == 6 || trc == 14 || trc == 15) ? YVID_TRC_BT1886 : trc == 13 ? YVID_TRC_SRGB : trc == 8 ? YVID_TRC_LINEAR : trc == 4 ? YVID_TRC_GAMMA22 : trc == 2 ? -1 : -2;
+    out[3] = prim == 1 ? YVID_PRIM_BT709 : prim == 5 ? YVID_PRIM_BT601_625 : (prim == 6 || prim == 7) ? YVID_PRIM_BT601_525 : prim == 9 ? YVID_PRIM_BT2020 : prim == 2 ? -1 : -2;
+    /* absent, both standards infer type 0 (H.264 E.2.1, HEVC E.3.1) */
+    out[4] = f->chroma_location == AVCHROMA_LOC_LEFT || f->chroma_location == AVCHROMA_LOC_UNSPECIFIED ? YVID_SITING_LEFT
+           : f->chroma_location == AVCHROMA_LOC_CENTER ? YVID_SITING_CENTER : -2;
+}
+
+static int yvid__ff_interlaced(const AVFrame* f) {
+#if defined(AV_FRAME_FLAG_INTERLACED)
+    return (f->flags & AV_FRAME_FLAG_INTERLACED) != 0;
+#else
+    return f->interlaced_frame != 0;
+#endif
+}
+
+static int64_t yvid__index_make_ff(const char* media_path, const char* index_path,
+                                   const yvid_index_desc* d, char* err, size_t cap) {
+    yvid__ff* m;
+    yvid_decoder_open in;
+    yvid_stream st;
+    yvid__canon c;
+    yvid_planes pl;
+    uint64_t* hashes = NULL;
+    int64_t* tsv = NULL;
+    uint8_t* scratch = NULL;
+    int64_t n = 0, n1 = 0, cap_h = 4096, cap_t = 4096, last_key = -1, gop = 0, prev_ts = 0, k;
+    int32_t num = 0, den = 0, w = 0, h = 0;
+    int16_t vui[5] = { -1, -1, -1, -1, -1 };
+    char e[256];
+    int rc, open_m = 0;
+    int hw = d && d->hw == YVID_HW_VAAPI ? YVID_HW_VAAPI : YVID_HW_OFF;
+    m = (yvid__ff*)yvid__malloc(sizeof *m);
+    if (!m) return YVID_ERR_FULL;
+    memset(m, 0, sizeof *m);
+    memset(&in, 0, sizeof in);
+    memset(&pl, 0, sizeof pl);
+    in.path = media_path;
+    /* 1. the compressed samples, in decode order: B-frames and keyframes */
+    tsv = (int64_t*)yvid__malloc((size_t)cap_t * 8);
+    if (!tsv) { rc = YVID_ERR_FULL; goto fail; }
+    rc = yvid__ff_open_ex(m, &in, &st, 1, YVID_HW_OFF, 1, 0, 0, e, sizeof e);
+    open_m = 1;
+    if (rc < 0) { yvid__fmt(err, cap, "%s: %s", media_path, e); goto fail; }
+    for (;;) {
+        int64_t ts;
+        int key;
+        int r = YVID__AV(av_read_frame)(m->fc, m->pkt);
+        if (r == AVERROR_EOF) break;
+        if (r < 0) { yvid__fmt(err, cap, "%s: cannot read sample %lld (%d)", media_path, (long long)n1, r); rc = YVID_ERR_FORMAT; goto fail; }
+        if (m->pkt->stream_index != m->si) { YVID__AV(av_packet_unref)(m->pkt); continue; }
+        ts = yvid__ff_t100(m, m->pkt->pts);
+        key = (m->pkt->flags & AV_PKT_FLAG_KEY) != 0;
+        if (m->pkt->dts != m->pkt->pts) {
+            yvid__fmt(err, cap, "%s: sample %lld decodes at %lld but shows at %lld (100 ns): B-frames; re-encode with -bf 0",
+                      media_path, (long long)n1, (long long)yvid__ff_t100(m, m->pkt->dts), (long long)ts);
+            YVID__AV(av_packet_unref)(m->pkt);
+            rc = YVID_ERR_FORMAT; goto fail;
+        }
+        YVID__AV(av_packet_unref)(m->pkt);
+        if (n1 > 0 && prev_ts >= ts) {
+            yvid__fmt(err, cap, "%s: sample %lld shows before the one decoded ahead of it: B-frames; re-encode with -bf 0", media_path, (long long)n1);
+            rc = YVID_ERR_FORMAT; goto fail;
+        }
+        rc = yvid__gop_step(media_path, n1, key, &last_key, &gop, err, cap);
+        if (rc < 0) goto fail;
+        prev_ts = ts;
+        if (n1 >= cap_t) {
+            int64_t* nt = (int64_t*)yvid__realloc(tsv, (size_t)cap_t * 2 * 8);
+            if (!nt) { rc = YVID_ERR_FULL; goto fail; }
+            tsv = nt; cap_t *= 2;
+        }
+        tsv[n1++] = ts;
+    }
+    yvid__ff_close(m);
+    open_m = 0;
+    if (n1 == 0) { yvid__fmt(err, cap, "%s: no frames", media_path); rc = YVID_ERR_FORMAT; goto fail; }
+    if (gop == 0) gop = n1;
+    rc = yvid__mp4_edits(media_path, err, cap);
+    if (rc >= 0) rc = yvid__mp4_matrix(media_path, err, cap);
+    if (rc < 0) goto fail;
+    if (tsv[0] != 0) {
+        yvid__fmt(err, cap, "%s: the first frame is at %.3f ms, not 0 (an edit list or a start offset); remux with -avoid_negative_ts make_zero", media_path, (double)tsv[0] / 1e4);
+        rc = YVID_ERR_FORMAT; goto fail;
+    }
+    if (!yvid__mf_fit_rate(tsv, n1, &num, &den)) {
+        double est = n1 > 1 ? (double)(n1 - 1) * 1e7 / (double)(tsv[n1 - 1] - tsv[0]) : 0.0;
+        yvid__fmt(err, cap, "%s: the frame times of %lld frames fit no constant rate (about %.4f fps); a variable rate, a dropped frame, or a coarse timescale: re-encode at a constant rate with -video_track_timescale set to a multiple of the rate",
+                  media_path, (long long)n1, est);
+        rc = YVID_ERR_FORMAT; goto fail;
+    }
+    yvid__free(tsv); tsv = NULL;
+    /* 2. every frame decoded: on the grid, and its hash */
+    rc = yvid__ff_open_ex(m, &in, &st, 0, hw, 0, num, den, e, sizeof e);
+    open_m = 1;
+    if (rc < 0) { yvid__fmt(err, cap, "%s: %s", media_path, e); goto fail; }
+    hashes = (uint64_t*)yvid__malloc((size_t)cap_h * 8);
+    if (!hashes) { rc = YVID_ERR_FULL; goto fail; }
+    for (;;) {
+        yvid_out o;
+        int64_t t, grid;
+        memset(&o, 0, sizeof o);
+        if (!m->have) {
+            rc = yvid__ff_recv(m);
+            if (rc == YVID_ENDED) break;
+            if (rc < 0) { yvid__fmt(err, cap, "%s: decode failed at frame %lld (%d)", media_path, (long long)n, m->last_av); goto fail; }
+            m->have = 1;
+        }
+        if (n == 0) {
+            const AVFrame* f = m->fr;
+            w = f->width; h = f->height;
+            if (f->sample_aspect_ratio.num > 0 && f->sample_aspect_ratio.num != f->sample_aspect_ratio.den) {
+                yvid__fmt(err, cap, "%s: pixel aspect %d:%d; the canonical form has square pixels: -vf setsar=1 (after scaling to the shape you want)",
+                          media_path, f->sample_aspect_ratio.num, f->sample_aspect_ratio.den);
+                rc = YVID_ERR_FORMAT; goto fail;
+            }
+            yvid__ff_color(f, vui);
+            scratch = (uint8_t*)yvid__malloc(yvid__planes_layout(YVID_FMT_NV12, w, h, NULL, NULL));
+            if (!scratch) { rc = YVID_ERR_FULL; goto fail; }
+            yvid__planes_layout(YVID_FMT_NV12, w, h, scratch, &pl);
+        }
+        if (yvid__ff_interlaced(m->fr)) {
+            yvid__fmt(err, cap, "%s: frame %lld is interlaced; the canonical form is progressive", media_path, (long long)n);
+            rc = YVID_ERR_FORMAT; goto fail;
+        }
+        rc = yvid__ff_next(m, &pl, &o);
+        if (rc < 0) { yvid__fmt(err, cap, "%s: frame %lld is not 8-bit 4:2:0 at %d x %d, or changed size", media_path, (long long)n, (int)w, (int)h); goto fail; }
+        t = o.pts * 100;
+        grid = yvid_frame_time(num, den, n);
+        if (n == 0 && t != 0) {
+            yvid__fmt(err, cap, "%s: the first frame is at %.3f ms, not 0 (an edit list or a start offset); remux with -avoid_negative_ts make_zero", media_path, (double)t / 1e6);
+            rc = YVID_ERR_FORMAT; goto fail;
+        }
+        if (grid - t > 100 || t - grid > 100) {
+            yvid__fmt(err, cap, "%s: frame %lld is at %lld ns, the grid of %d/%d fps puts it at %lld ns: a variable rate, a dropped frame, or a coarse timescale; re-encode at a constant rate with -video_track_timescale %d",
+                      media_path, (long long)n, (long long)t, (int)num, (int)den, (long long)grid, (int)(den == 1 ? num * 1000 : num));
+            rc = YVID_ERR_FORMAT; goto fail;
+        }
+        if ((rc = yvid__hashes_grow(&hashes, n, &cap_h)) < 0) goto fail;
+        hashes[n] = yvid__hash_planes(YVID_FMT_NV12, &pl);
+        n++;
+    }
+    if (n != n1) { yvid__fmt(err, cap, "%s: the decoder gave %lld frames for %lld samples", media_path, (long long)n, (long long)n1); rc = YVID_ERR_FORMAT; goto fail; }
+    /* 3. a seek to each keyframe decodes it and the next frame exactly: the
+     * property the movie's seeks rely on, proved for this file */
+    if (!(d && d->no_seek_check)) {
+        for (k = 0; k < n; k += gop) {
+            int64_t j;
+            if (yvid__ff_seek_to(m, k, 0) != YVID_OK) { yvid__fmt(err, cap, "%s: the seek to keyframe %lld failed (%d)", media_path, (long long)k, m->last_av); rc = YVID_ERR_FORMAT; goto fail; }
+            for (j = k; j < k + 2 && j < n; j++) {
+                yvid_out o;
+                memset(&o, 0, sizeof o);
+                rc = yvid__ff_next(m, &pl, &o);
+                if (rc < 0 || yvid__ff_index_of(m, o.pts) != j || yvid__hash_planes(YVID_FMT_NV12, &pl) != hashes[j]) {
+                    yvid__fmt(err, cap, "%s: frame %lld differs after a seek to keyframe %lld: a keyframe that is not a clean entry point (open GOP?); re-encode with -x264-params open-gop=0",
+                              media_path, (long long)j, (long long)k);
+                    rc = YVID_ERR_FORMAT; goto fail;
+                }
+            }
+        }
+    }
+    {
+        static const char* const what[5] = { "matrix", "range", "transfer", "primaries", "chroma siting" };
+        int j;
+        for (j = 0; j < 5; j++) {
+            if (vui[j] == -2) {
+                yvid__fmt(err, cap, "%s: the stream states a %s the canonical form does not have (an HDR transfer, RGB, or another chroma location); re-encode with BT.709 or BT.601 color", media_path, what[j]);
+                rc = YVID_ERR_FORMAT; goto fail;
+            }
+        }
+    }
+    memset(&c, 0, sizeof c);
+    c.codec = m->codec; c.w = w; c.h = h; c.format = YVID_FMT_NV12;
+    c.fps_num = num; c.fps_den = den; c.frames = n; c.gop = (int32_t)gop;
+    rc = yvid__color_pick(vui[0], d ? d->matrix : 0, "matrix", "-colorspace bt709", &c.matrix, e, sizeof e);
+    if (rc == YVID_OK) rc = yvid__color_pick(vui[1], d ? d->range : 0, "range", "-color_range tv", &c.range, e, sizeof e);
+    if (rc == YVID_OK) rc = yvid__color_pick(vui[2], d ? d->transfer : 0, "transfer", "-color_trc bt709", &c.transfer, e, sizeof e);
+    if (rc == YVID_OK) rc = yvid__color_pick(vui[3], d ? d->primaries : 0, "primaries", "-color_primaries bt709", &c.primaries, e, sizeof e);
+    if (rc == YVID_OK) rc = yvid__color_pick(vui[4], d ? d->siting : 0, "chroma siting", "-chroma_sample_location left", &c.siting, e, sizeof e);
+    if (rc == YVID_OK) rc = yvid__canon_check(&c, e, sizeof e);
+    if (rc < 0) { yvid__fmt(err, cap, "%s: %s", media_path, e); goto fail; }
+    yvid__ff_close(m);
+    yvid__free(m);
+    yvid__free(scratch);
+    rc = yvid__index_write(media_path, index_path, &c, hashes, n, d ? d->note : NULL, err, cap);
+    yvid__free(hashes);
+    return rc < 0 ? rc : n;
+fail:
+    if (open_m) yvid__ff_close(m);
+    yvid__free(m);
+    yvid__free(scratch);
+    yvid__free(hashes);
+    yvid__free(tsv);
+    return rc < 0 ? rc : YVID_ERR_FORMAT;
+}
+#endif
+
 static int yvid__backend_for(const yvid_desc* d);
 
 YVID_API int64_t yvid_index_make(const char* media_path, const char* index_path,
@@ -4178,9 +5034,15 @@ YVID_API int64_t yvid_index_make(const char* media_path, const char* index_path,
         return YVID_ERR_NOT_IMPLEMENTED;
 #endif
     }
+#if YVID__FF
+    if (b == YVID_BACKEND_FFMPEG) return yvid__index_make_ff(media_path, index_path, d, err, cap);
+#endif
     if (b == YVID_BACKEND_MF) {
 #if YVID__MF
         return yvid__index_make_mf(media_path, index_path, d, err, cap);
+#elif defined(__linux__)
+        yvid__fmt(err, cap, "%s: MP4 on Linux needs FFmpeg: build with YVID_FFMPEG; Media Foundation is Windows only", media_path);
+        return YVID_ERR_NOT_IMPLEMENTED;
 #else
         yvid__fmt(err, cap, "%s: MP4 needs Media Foundation (Windows); AVFoundation and FFmpeg are not built", media_path);
         return YVID_ERR_NOT_IMPLEMENTED;
@@ -4650,7 +5512,7 @@ static int yvid__backend_for(const yvid_desc* d) {
     yvid__src_close(&s);
     if (memcmp(b, "YSPVSEQ1", 8) == 0) return YVID_BACKEND_SEQ;
     if (b[0] == 0 && b[1] == 0 && b[2] == 1 && (b[3] == 0xBA || b[3] == 0xB3)) return YVID_BACKEND_PLMPEG;
-    if (memcmp(b + 4, "ftyp", 4) == 0) return YVID_BACKEND_MF;
+    if (memcmp(b + 4, "ftyp", 4) == 0) return YVID__FF ? YVID_BACKEND_FFMPEG : YVID_BACKEND_MF;
     return YVID_ERR_FORMAT;   /* none of the three */
 }
 
@@ -4680,7 +5542,7 @@ YVID_API int yvid_probe(const yvid_desc* d, yvid_info* out, char* err, size_t ca
         if (yvid__src_read(&s, 0, hdr, sizeof hdr) != YVID_OK) { yvid__src_close(&s); yvid__fmt(err, cap, "cannot read the file"); return YVID_ERR_IO; }
         yvid__src_close(&s);
         if ((rc = yvid__seq_parse(hdr, &c, &comp, &io, err, cap)) < 0) return rc;
-    } else if (b == YVID_BACKEND_PLMPEG || b == YVID_BACKEND_MF) {
+    } else if (b == YVID_BACKEND_PLMPEG || b == YVID_BACKEND_MF || (YVID__FF && b == YVID_BACKEND_FFMPEG)) {
         yvid__index ix;
         if ((rc = yvid__index_load(d, &ix, 0, err, cap)) < 0) return rc;
         c = ix.c;
@@ -4765,10 +5627,11 @@ YVID_API bool yvid_open(yvid_movie* mv, ygfx_gfx* g, const yvid_desc* desc) {
         if (desc->lead != 0.0 && mv->info.lead != tl_lead) { yvid__err(mv, "ysp_video: desc.lead (%g) differs from the timeline's (%g): video and annotations must share one rule", mv->info.lead, tl_lead); return yvid__ofail(mv, YVID_ERR_ARG); }
         mv->info.lead = tl_lead;
     }
-    if (desc->hw_decode != YVID_HW_AUTO && desc->hw_decode != YVID_HW_OFF && desc->hw_decode != YVID_HW_DXVA) {
+    if (desc->hw_decode != YVID_HW_AUTO && desc->hw_decode != YVID_HW_OFF && desc->hw_decode != YVID_HW_DXVA && !(YVID__FF && desc->hw_decode == YVID_HW_VAAPI)) {
         yvid__err(mv, "ysp_video: desc.hw_decode %d is not AUTO, OFF or DXVA", (int)desc->hw_decode);
         return yvid__ofail(mv, YVID_ERR_ARG);
     }
+    if (desc->decode_threads < 0 || desc->decode_threads > 64) { yvid__err(mv, "ysp_video: desc.decode_threads must be 0..64"); return yvid__ofail(mv, YVID_ERR_ARG); }
     if (desc->ahead < 0 || desc->ahead > YVID_MAX_SLOTS - 2) { yvid__err(mv, "ysp_video: desc.ahead must be 0..%d", YVID_MAX_SLOTS - 2); return yvid__ofail(mv, YVID_ERR_ARG); }
     if (desc->gpu_path == YVID_PATH_SHARED) {
         yvid__err(mv, "ysp_video: the SHARED GPU path is not built; YVID_PATH_GPU is (docs/video.md)");
@@ -4777,8 +5640,12 @@ YVID_API bool yvid_open(yvid_movie* mv, ygfx_gfx* g, const yvid_desc* desc) {
 
     backend = yvid__backend_for(desc);
     if (backend < 0) { yvid__backend_why(desc, backend, e, sizeof e); yvid__err(mv, "ysp_video: %s", e); return yvid__ofail(mv, backend); }
-    if ((backend == YVID_BACKEND_MF && !YVID__MF) || backend == YVID_BACKEND_AVF || backend == YVID_BACKEND_FFMPEG) {
+    if ((backend == YVID_BACKEND_MF && !YVID__MF) || backend == YVID_BACKEND_AVF || (backend == YVID_BACKEND_FFMPEG && !YVID__FF)) {
+#if defined(__linux__)
+        yvid__err(mv, "ysp_video: %s: H.264 and HEVC on Linux need FFmpeg: build with YVID_FFMPEG; Media Foundation is Windows only", desc->path ? desc->path : "the source");
+#else
         yvid__err(mv, "ysp_video: %s: H.264 and HEVC need Media Foundation (Windows, without YVID_NO_MF); AVFoundation and FFmpeg are not built", desc->path ? desc->path : "the source");
+#endif
         return yvid__ofail(mv, YVID_ERR_NOT_IMPLEMENTED);
     }
     if (backend == YVID_BACKEND_CUSTOM) {
@@ -4829,6 +5696,29 @@ YVID_API bool yvid_open(yvid_movie* mv, ygfx_gfx* g, const yvid_desc* desc) {
         mv->dec = &yvid__mf_decoder;
         mv->dec_ctx = m;
 #endif
+#if YVID__FF
+    } else if (backend == YVID_BACKEND_FFMPEG) {
+        yvid__ff* m;
+        yvid__index hx;
+        if (desc->hw_decode == YVID_HW_DXVA) {
+            yvid__err(mv, "ysp_video: desc.hw_decode DXVA is Media Foundation's; on FFmpeg it is AUTO, OFF or VAAPI");
+            return yvid__ofail(mv, YVID_ERR_REFUSED);
+        }
+        m = (yvid__ff*)yvid__malloc(sizeof(yvid__ff));
+        if (!m) { yvid__err(mv, "ysp_video: out of memory"); return yvid__ofail(mv, YVID_ERR_FULL); }
+        memset(m, 0, sizeof *m);
+        /* the rate is the index's, as for Media Foundation: the container's
+         * own statement of it is not the canonical one */
+        if ((rc = yvid__index_load(desc, &hx, 0, e, sizeof e)) < 0) { yvid__free(m); yvid__err(mv, "ysp_video: %s", e); return yvid__ofail(mv, rc); }
+        m->req_num = hx.c.fps_num; m->req_den = hx.c.fps_den;
+        m->req_threads = desc->decode_threads;
+        m->req_hw = desc->hw_decode == YVID_HW_AUTO ? YVID__FF_HW_DEFAULT : (int)desc->hw_decode;
+        m->req_auto = desc->hw_decode == YVID_HW_AUTO;
+        m->req_device = desc->hw_device;
+        mv->be_mem = m;
+        mv->dec = &yvid__ff_decoder;
+        mv->dec_ctx = m;
+#endif
     } else {
         yvid__err(mv, "ysp_video: unknown backend %d", backend);
         return yvid__ofail(mv, YVID_ERR_ARG);
@@ -4862,12 +5752,12 @@ YVID_API bool yvid_open(yvid_movie* mv, ygfx_gfx* g, const yvid_desc* desc) {
     c.transfer = (uint8_t)(st.transfer > 0 ? st.transfer : 0); c.primaries = (uint8_t)(st.primaries > 0 ? st.primaries : 0);
     c.siting = (uint8_t)(st.siting > 0 ? st.siting : 0);
     memset(&ix, 0, sizeof ix);
-    if (backend == YVID_BACKEND_PLMPEG || backend == YVID_BACKEND_MF || desc->index || (backend == YVID_BACKEND_CUSTOM && desc->path)) {
+    if (backend == YVID_BACKEND_PLMPEG || backend == YVID_BACKEND_MF || backend == YVID_BACKEND_FFMPEG || desc->index || (backend == YVID_BACKEND_CUSTOM && desc->path)) {
         int32_t v;
         rc = yvid__index_load(desc, &ix, 1, e, sizeof e);
         if (rc < 0) { yvid__err(mv, "ysp_video: %s", e); yvid__close_partial(mv); return yvid__ofail(mv, rc); }
         mv->hashes = ix.hashes;
-        if (backend == YVID_BACKEND_PLMPEG || backend == YVID_BACKEND_MF || desc->path) {
+        if (backend == YVID_BACKEND_PLMPEG || backend == YVID_BACKEND_MF || backend == YVID_BACKEND_FFMPEG || desc->path) {
             yvid__src s;
             uint64_t head = 0, tail = 0;
             if (yvid__src_open(&s, desc->path, desc->data, desc->size, desc->reader, desc->reader_ctx) == YVID_OK) {
@@ -4933,6 +5823,9 @@ YVID_API bool yvid_open(yvid_movie* mv, ygfx_gfx* g, const yvid_desc* desc) {
     mv->dec_caps = st.caps;
 #if YVID__MF
     if (backend == YVID_BACKEND_MF) mv->info.hw = (yvid_hw)((const yvid__mf*)mv->be_mem)->hw;
+#endif
+#if YVID__FF
+    if (backend == YVID_BACKEND_FFMPEG) mv->info.hw = (yvid_hw)((const yvid__ff*)mv->be_mem)->hw;
 #endif
     /* the display against the rate */
     if (yvid__display_rate(mv, &rn, &rd)) {
@@ -6005,7 +6898,7 @@ static const char* yvid__why_name(int w) {
 }
 
 YVID_API int yvid_describe(const yvid_movie* mv, char* buf, size_t cap) {
-    char cad[200], counts[300], be[96];
+    char cad[200], counts[300], be[320];
     int w, n;
     size_t used = 0;
     if (!mv || !mv->open) return snprintf(buf, cap, "ysp_video %s: not open", YVID_VERSION_STRING);
@@ -6081,14 +6974,15 @@ YVID_API const yscr_param* yvid_params(int* n) {
           "auto=0,codes=1,eotf=2" },
         { "gpu_path", "enum", 0, 3, 0, "", "how a frame reaches a texture; shared is not built",
           "auto=0,upload=1,shared=2,gpu=3" },
-        { "hw_decode", "enum", 0, 2, 0, "", "Media Foundation's decoder",
-          "auto=0,off=1,dxva=2" },
+        { "hw_decode", "enum", 0, 3, 0, "", "the MP4 decoder; dxva is Media Foundation's, vaapi FFmpeg's",
+          "auto=0,off=1,dxva=2,vaapi=3" },
         { "chroma", "enum", 0, 1, 0, "", "4:2:0 chroma upsampling: weighted at the stream's siting, or replicated",
           "sited=0,nearest=1" },
         { "base", "i32", 0, 7, 0, "", "the movie base on the timeline", NULL },
         { "min_tier", "i32", 0, 4, 0, "", "flag frames worse than this tier", NULL },
         { "movie_index", "u32", 0, 4294967295.0, 0, "", "aux of every record", NULL },
         { "pin_cpu", "i32", 0, 1024, 0, "", "decode thread's CPU; 0 = no pin", NULL },
+        { "decode_threads", "i32", 0, 64, 0, "", "FFmpeg's decoder threads; 0 = its measured default", NULL },
     };
     if (n) *n = (int)(sizeof p / sizeof p[0]);
     return p;
