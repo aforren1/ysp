@@ -1,4 +1,4 @@
-/* ysp/screen.h - v0.12.0 - public domain single-header display library
+/* ysp/screen.h - v0.13.0 - public domain single-header display library
  *
  *   The window, the GL ES 3.0 context, the display mode and the swap path
  *   of a stimulus display, with flip at a time: each frame learns the
@@ -683,7 +683,8 @@
  *     (ANGLE's Metal display has no 10-bit config; the pbuffer takes the
  *     IOSurface's format); 8-bit code values are spread over 10 bits
  *     (v << 2 | v >> 6). Whether 10 bits reach the panel is not measured.
- *     Not on macOS: the panic watchdog, raw mice, the OS gamma ramp.
+ *     Not on macOS: the panic watchdog, raw mice, the OS gamma ramp. A
+ *     display in a variable refresh mode is refused (VARIABLE REFRESH).
  *   Not implemented; open() refuses them with a message:
  *     YSCR_BACKEND_GLX_OML (Linux X11) and
  *     YSCR_BACKEND_WAYLAND (presentation-time). On Linux only SIM and
@@ -1450,6 +1451,17 @@
  *   off-grid times (YSCR_FLIP_GRID_UNSTABLE) and as a warning in the
  *   describe line; once most times are off the grid, the grid follows
  *   them (THE GRID).
+ *   METAL (v0.13.0) refuses to open on a display in a variable refresh
+ *   mode (ProMotion, Adaptive-Sync), for the reason it refuses desc.vrr:
+ *   the core's fixed grid would be wrong for every flip, and on macOS the
+ *   panel varies the interval without being asked. It reads the window's
+ *   NSScreen minimumRefreshInterval and maximumRefreshInterval (macOS 12
+ *   and later) at open; more than 0.1% apart is a variable mode, and the
+ *   message says how to set a fixed rate (System Settings > Displays >
+ *   Refresh Rate). Both are in the describe line (refresh_interval=). A
+ *   mode change or a move to another screen while open is not watched.
+ *   caps.vrr_capable stays false on METAL. No ProMotion or variable-mode
+ *   display has been tested: the refusal is checked through a test seam.
  *
  *   ---------------------------------------------------------------------
  *   SYNC GUARD
@@ -1562,6 +1574,11 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.13.0 - METAL refuses to open on a display in a variable refresh
+ *          mode (NSScreen's minimum and maximum refresh intervals more
+ *          than 0.1% apart): an open that succeeded before now fails, with
+ *          a message that names the fix. The intervals are in the describe
+ *          line (VARIABLE REFRESH).
  *   v0.12.0 - METAL's constants from the probe's timing session: target
  *          the planned vblank minus half a period (was a quarter); two
  *          frames in flight (one showed every other vblank); a 2 ms margin
@@ -1913,7 +1930,13 @@
  *          groups, input restamping, mode lists and the parameter table.
  *          The other swap paths are stubs that refuse to open.
  *
- *   STATUS: v0.12.0 (METAL; docs/screen_macos_probe.md section 6, timing
+ *   STATUS: v0.13.0 (METAL, variable refresh): no ProMotion or variable-
+ *   mode display was attached. tests/adapt/screen_metal_test.c injects the
+ *   two intervals through a seam (YSCR__MTL_SCREEN_INTERVALS): 8.333 and
+ *   33.333 ms are refused with the message, 8.333 and 8.333 ms open; the
+ *   M27Q's own read 16680416 ns for both (a fixed mode). 3 of 3 new
+ *   mutants killed.
+ *   v0.12.0 (METAL; docs/screen_macos_probe.md section 6, timing
  *   session of 2026-11-05 on the probe, not on this header): Apple M2, M27Q
  *   over HDMI at 59.9505 Hz (also 120 and 144 Hz), AC, a Screen Sharing
  *   session open (screensharingd about 11% CPU), unlocked. presentedTime
@@ -2182,9 +2205,9 @@
 #define YSP_SCREEN_H_INCLUDED
 
 #define YSCR_VERSION_MAJOR 0
-#define YSCR_VERSION_MINOR 12
+#define YSCR_VERSION_MINOR 13
 #define YSCR_VERSION_PATCH 0
-#define YSCR_VERSION_STRING "0.12.0"
+#define YSCR_VERSION_STRING "0.13.0"
 
 #include "ysp/rt.h"
 #include "ysp/input.h"
@@ -5201,6 +5224,27 @@ static const char* yscr__mtl_kind_name(int kind) {
     return kind == YSCR__MTL_KIND_SPACE ? "space" : kind == YSCR__MTL_KIND_FULLSCREEN ? "fullscreen" : "window";
 }
 
+/* Variable refresh (VARIABLE REFRESH): the window's screen in a variable
+ * mode (ProMotion, Adaptive-Sync) has NSScreen.minimumRefreshInterval below
+ * maximumRefreshInterval; a fixed mode has them equal (the M27Q at its
+ * "60 Hz": 16.680416 ms both, measured). The intervals in ns, 0 when macOS
+ * does not give them (before macOS 12). Returns 1 for a variable mode: more
+ * than 0.1% apart, so rounding never makes a fixed mode variable. */
+static int yscr__mtl_variable(int64_t min_ns, int64_t max_ns) {
+    if (min_ns <= 0 || max_ns <= 0) return 0;
+    return (double)(max_ns - min_ns) > 0.001 * (double)min_ns;
+}
+
+/* open()'s message for a variable mode: the header runs only a fixed grid,
+ * as it refuses desc.vrr, and says how to get one. */
+static int yscr__mtl_vrr_message(char* err, size_t cap, int64_t min_ns, int64_t max_ns) {
+    /* the screen's error holds 255 characters: kept under that */
+    return snprintf(err, cap, "ysp_screen: METAL: the display is in a variable refresh mode (%.3f to %.3f ms a "
+                    "frame), refused as desc.vrr is. Set a fixed rate: System Settings > Displays > Refresh Rate, "
+                    "not ProMotion; on an external display, its variable refresh off",
+                    (double)min_ns / 1e6, (double)max_ns / 1e6);
+}
+
 /* CVDisplayLink's nominal period, value / scale seconds, in ns; 0 when it
  * has none. The mode's refresh rate is a rounded label (60.000 for a
  * 59.9505 Hz HDMI mode, measured), never the period. */
@@ -5375,6 +5419,7 @@ static struct {
     void *addPresented, *presentedTime, *commit, *status, *newSharedEvent, *signaledValue, *newBuffer;
     void *contents, *occlusionState, *styleMask, *waitUntilCompleted, *newTexture, *texDesc;
     void *setUsage, *setStorageMode, *setTimeout;
+    void *screen_, *respondsTo, *minRefresh, *maxRefresh;
     yscr__id cls_texdesc;
 } yscr__mac;
 
@@ -5461,6 +5506,8 @@ static int yscr__mac_load(const char* angle_dir, char* err, size_t cap) {
         YSCR__S(texDesc, "texture2DDescriptorWithPixelFormat:width:height:mipmapped:");
         YSCR__S(setUsage, "setUsage:"); YSCR__S(setStorageMode, "setStorageMode:");
         YSCR__S(setTimeout, "setAllowsNextDrawableTimeout:");
+        YSCR__S(screen_, "screen"); YSCR__S(respondsTo, "respondsToSelector:");
+        YSCR__S(minRefresh, "minimumRefreshInterval"); YSCR__S(maxRefresh, "maximumRefreshInterval");
 #undef YSCR__S
         yscr__mac.cls_texdesc = yscr__mac.cls("MTLTextureDescriptor");
         yscr__mac.locked_key = yscr__mac.CFStringCreateWithCString(NULL, "CGSSessionScreenIsLocked", 0x08000100u);
@@ -5601,12 +5648,15 @@ typedef struct yscr__mtl {
     int64_t   period_ns, mach_off, corr_t, corr_w, t0, use;
     int32_t   w, h, bits10, region, bind_target;
     int32_t   kind, locked, hidden;
+    int64_t   min_iv_ns, max_iv_ns; /* NSScreen's refresh intervals at open; 0 = n/a */
     int64_t   hidden_t;
     uint32_t  not_shown, no_drawable, no_slot, sync_failed, pbuffers, late_handlers, held_far;
     char      angle[48];
 } yscr__mtl;
 
 typedef char yscr__mtl_fits[sizeof(yscr__mtl) <= sizeof(((yscr_screen*)0)->backend_mem) ? 1 : -1];
+
+static int64_t yscr__mtl_secs(double t) { return t > 0 ? (int64_t)llround(t * 1e9) : 0; }
 
 static uint64_t yscr__mach_read(void) {
     static uint32_t num, den;
@@ -5738,6 +5788,23 @@ static int yscr__mtl_selftest(yscr__mtl* m) {
     return bad ? -1 : 1;
 }
 
+/* NSScreen's refresh intervals for the window's screen (macOS 12 and
+ * later; asked only where the screen responds to them). Test seam, not API:
+ * tests/adapt/screen_metal_test.c defines YSCR__MTL_SCREEN_INTERVALS(m,
+ * min, max) to set them, as a ProMotion panel in its variable mode would. */
+static void yscr__mtl_intervals(yscr__mtl* m, int64_t* min_ns, int64_t* max_ns) {
+    yscr__id screen = m->nswin ? yscr__o0(m->nswin, yscr__mac.screen_) : NULL;
+    *min_ns = *max_ns = 0;
+    if (screen && YSCR__MSG(signed char, yscr__id, void*, void*)(screen, yscr__mac.respondsTo, yscr__mac.minRefresh) &&
+        YSCR__MSG(signed char, yscr__id, void*, void*)(screen, yscr__mac.respondsTo, yscr__mac.maxRefresh)) {
+        *min_ns = yscr__mtl_secs(YSCR__MSG(double, yscr__id, void*)(screen, yscr__mac.minRefresh));
+        *max_ns = yscr__mtl_secs(YSCR__MSG(double, yscr__id, void*)(screen, yscr__mac.maxRefresh));
+    }
+#if defined(YSCR__MTL_SCREEN_INTERVALS)
+    YSCR__MTL_SCREEN_INTERVALS(m, min_ns, max_ns);
+#endif
+}
+
 static int yscr__mtl_open(void* vctx, const yscr_presenter_open* in, yscr_caps* caps, char* err, size_t err_cap) {
     yscr__mtl* m = (yscr__mtl*)vctx;
     int32_t a[16];
@@ -5759,6 +5826,15 @@ static int yscr__mtl_open(void* vctx, const yscr_presenter_open* in, yscr_caps* 
     m->failed = in->code_failed;
     m->nswin = (yscr__id)SDL_GetPointerProperty(SDL_GetWindowProperties((SDL_Window*)m->win),
                                                 SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, NULL);
+    /* A variable mode is refused, as desc.vrr is (VARIABLE REFRESH): the
+     * core's grid would be wrong for every flip and nothing would flag it
+     * (a ProMotion panel varies the interval itself; Psychtoolbox's users
+     * on 120 Hz ProMotion MacBooks missed 341 to 401 of 600 deadlines). */
+    yscr__mtl_intervals(m, &m->min_iv_ns, &m->max_iv_ns);
+    if (yscr__mtl_variable(m->min_iv_ns, m->max_iv_ns)) {
+        yscr__mtl_vrr_message(err, err_cap, m->min_iv_ns, m->max_iv_ns);
+        return YSCR_ERR_NOT_IMPLEMENTED;
+    }
     /* ANGLE's Metal display: asked by name, because this ANGLE's default
      * back end on macOS is OpenGL (measured) */
     a[0] = YSCR__EGL_PLATFORM_ANGLE_TYPE; a[1] = YSCR__EGL_PLATFORM_METAL; a[2] = YSCR__EGL_NONE;
@@ -6232,11 +6308,11 @@ static int yscr__mtl_completions(void* vctx, yscr_vblank* out, int cap) {
 static int yscr__mtl_describe(void* vctx, char* buf, size_t cap) {
     yscr__mtl* m = (yscr__mtl*)vctx;
     m->kind = yscr__mtl_kind_now(m);
-    return snprintf(buf, cap, "angle=%s kind=%s layer=%s period=%lldns locked=%d not_shown=%u no_drawable=%u "
+    return snprintf(buf, cap, "angle=%s kind=%s layer=%s period=%lldns refresh_interval=%lld..%lldns locked=%d not_shown=%u no_drawable=%u "
                     "no_handler=%u late_handler=%u held_far=%u sync_failed=%u pbuffers=%u mach_off=%lldns(%lldns) target_lead=%.2f "
                     "tier=%d(no photodiode)",
                     m->angle, yscr__mtl_kind_name(m->kind), m->bits10 ? "bgr10a2" : "bgra8", (long long)m->period_ns,
-                    m->locked, m->not_shown, m->no_drawable, m->no_slot, m->late_handlers, m->held_far, m->sync_failed, m->pbuffers,
+                    (long long)m->min_iv_ns, (long long)m->max_iv_ns, m->locked, m->not_shown, m->no_drawable, m->no_slot, m->late_handlers, m->held_far, m->sync_failed, m->pbuffers,
                     (long long)m->mach_off, (long long)m->corr_w, YSCR__MTL_TARGET_LEAD, (int)yscr__mtl_tier(m->kind));
 }
 
@@ -10914,6 +10990,7 @@ YSCR_API bool yscr_open(yscr_screen* s, const yscr_desc* desc) {
 #if !defined(YSCR__METAL)
     (void)&yscr__mtl_target; (void)&yscr__mtl_vblank; (void)&yscr__mtl_period;   /* the core test calls them */
     (void)&yscr__mtl_pixel; (void)&yscr__mtl_code_of; (void)&yscr__mtl_kind_name;
+    (void)&yscr__mtl_variable; (void)&yscr__mtl_vrr_message;
 #endif
     if (desc->color_depth != 0 && desc->color_depth != 8 && desc->color_depth != 10) {
         yscr__copy(s->error, sizeof s->error, "ysp_screen: desc.color_depth must be 0, 8 or 10");

@@ -1520,8 +1520,8 @@ find = '''    if (!e) return out;   /* not from yscr_displays(): SDL judges it *
 replace = '''    return out;'''
 env = { YSCR_WINDOW_TEST_ONLY = "displays" }
 
-# v0.11.0's 10 (mt-, the METAL backend) and v0.11.1's 3 (mt-11 to mt-13, the
-# measured constants). mt-01 to mt-07 and mt-11 to mt-13 run the core test
+# v0.11.0's 10 (mt-, the METAL backend), v0.12.0's 3 (mt-11 to mt-13, the
+# measured constants) and v0.13.0's 3 (mt-14 to mt-16, variable refresh). mt-01 to mt-07 and mt-11 to mt-13 run the core test
 # on any platform; mt-08 to mt-10 run tests/adapt/screen_metal_test.c on
 # this Mac's window server with ANGLE (the screen may be locked: the sync
 # and code read-backs run without a shown frame).
@@ -1636,3 +1636,28 @@ test = "screen"
 why = "Core Animation's deadline was up to 1.18 ms past one period and the present call up to 0.45 ms at p99: the margin must cover both (v0.11.1)."
 find = '#define YSCR__MTL_MARGIN_NS 2000000'
 replace = '#define YSCR__MTL_MARGIN_NS 1000000'
+
+# v0.13.0's 3 (mt-14 to mt-16, a variable refresh mode refused on METAL).
+[[mutant]]
+id = "mt-14"
+name = "a variable mode taken as fixed"
+test = "screen"
+why = "NSScreen's refresh intervals apart mean ProMotion or Adaptive-Sync varies the refresh: the core's fixed grid would be wrong for every flip (v0.13.0, VARIABLE REFRESH)."
+find = '    return (double)(max_ns - min_ns) > 0.001 * (double)min_ns;'
+replace = '    return 0;'
+
+[[mutant]]
+id = "mt-15"
+name = "rounding taken as a variable mode"
+test = "screen"
+why = "A fixed mode's two intervals can differ in the last digits; only a gap over 0.1% is a variable mode, or a fixed display is refused."
+find = '    return (double)(max_ns - min_ns) > 0.001 * (double)min_ns;'
+replace = '    return max_ns != min_ns;'
+
+[[mutant]]
+id = "mt-16"
+name = "open() does not refuse a variable mode"
+test = "metal"
+why = "The METAL presenter must refuse a display in a variable refresh mode at open, as desc.vrr is refused, and say how to set a fixed rate (v0.13.0)."
+find = '    if (yscr__mtl_variable(m->min_iv_ns, m->max_iv_ns)) {'
+replace = '    if (0) {'
