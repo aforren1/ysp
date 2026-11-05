@@ -479,3 +479,11 @@ test = "video_avf"
 why = "VideoToolbox's software HEVC decoder pads 1280-wide rows to 1536 bytes; the planes are lent with the buffer's own bytes per row."
 find = "    out->planes.stride[0] = (int32_t)yvid__av.CVPixelBufferGetBytesPerRowOfPlane(pb, 0);"
 replace = "    out->planes.stride[0] = m->w;"
+
+[[mutant]]
+id = "avf-15"
+name = "a decode failure without the backend's reason"
+test = "video_avf"
+why = "v0.7.0: the decode thread's message must keep the backend's own reason (VideoToolbox's status), not only the code."
+find = "    if (why[0] && n + 3 < sizeof mv->dt_error) snprintf(mv->dt_error + n, sizeof mv->dt_error - n, \": %s\", why);"
+replace = "    (void)n;"

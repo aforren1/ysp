@@ -3403,6 +3403,8 @@ static void test_mf_sources(void) {
          * DECODER after the frames before it, or the hash flags it */
         printf("video_test: a damaged byte: %s\n", info.hash_mismatch > 0 ? "hash mismatch" : yvid_error(&g_mv));
         CHECK(info.hash_mismatch > 0 || (rc == YVID_ERR_DECODER && info.shown > 0 && strstr(yvid_error(&g_mv), "decode of frame")));
+        /* v0.7.0: the message keeps VideoToolbox's own reason */
+        if (info.hash_mismatch == 0) CHECK(strstr(yvid_error(&g_mv), "): VideoToolbox decode failed (") != NULL);
 #else
         CHECK(info.hash_mismatch > 0);
         CHECK(strstr(line, "NOT CANONICAL: hash mismatches") != NULL);
