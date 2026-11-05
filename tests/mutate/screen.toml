@@ -5,7 +5,7 @@
 # v0.3.5's 5 (raw mice; the 2 on its queue went with the queue),
 # v0.4.0's 6 (the input bridge), v0.4.1's 15 (the key filter, kd-) and
 # v0.4.2's 3 (kd-16 to kd-18, the key-up fix) and 13 (the sync guard,
-# sg-), v0.4.3's 9 (eg-, held frames), v0.4.4's 20 (dp-, the depth policy, the guessed grid, early flips), v0.5.0's 20 (st-, settling at open), v0.5.1's 7 (fg-, the foreground and the slot held after settling), v0.5.2's 7 (ch-, the context hook; ch-06 runs the gfx test), v0.6.0's 2 (cv-, the messages), v0.10.0's 19 (wt-, the window thread; wt-20 on run tests/adapt/screen_window_test.c on real windows), v0.10.1's 4 (gp-, the grid after a gap), v0.10.2's 1 (fg-08, the next screen's raise, on real windows), v0.10.3's 1 (bf-01, GL between frames on COMPOSITION), v0.10.4's 5 (lk-01, lk-02, the handles; bf-02, bf-03, no free buffer; ds-01, display ids). The 29 earlier mutants (docs/screen.md,
+# sg-), v0.4.3's 9 (eg-, held frames), v0.4.4's 20 (dp-, the depth policy, the guessed grid, early flips), v0.5.0's 20 (st-, settling at open), v0.5.1's 7 (fg-, the foreground and the slot held after settling), v0.5.2's 7 (ch-, the context hook; ch-06 runs the gfx test), v0.6.0's 2 (cv-, the messages), v0.10.0's 19 (wt-, the window thread; wt-20 on run tests/adapt/screen_window_test.c on real windows), v0.10.1's 4 (gp-, the grid after a gap), v0.10.2's 1 (fg-08, the next screen's raise, on real windows), v0.10.3's 1 (bf-01, GL between frames on COMPOSITION), v0.10.4's 5 (lk-01, lk-02, the handles; bf-02, bf-03, no free buffer; ds-01, display ids), v0.11.0's 10 (mt-, the METAL backend; mt-08 to mt-10 on run tests/adapt/screen_metal_test.c on a Mac). The 29 earlier mutants (docs/screen.md,
 # "Mutations") were run from scripts that were not kept.
 header = "ysp/screen.h"
 
@@ -1519,3 +1519,95 @@ why = "v0.10.4: SDL numbers the displays anew at each start of its video, so an 
 find = '''    if (!e) return out;   /* not from yscr_displays(): SDL judges it */'''
 replace = '''    return out;'''
 env = { YSCR_WINDOW_TEST_ONLY = "displays" }
+
+# v0.11.0's 10 (mt-, the METAL backend). mt-01 to mt-07 run the core test
+# on any platform; mt-08 to mt-10 run tests/adapt/screen_metal_test.c on
+# this Mac's window server with ANGLE (the screen may be locked: the sync
+# and code read-backs run without a shown frame).
+[test.metal]
+source = "tests/adapt/screen_metal_test.c"
+compiler = "gcc"
+flags = ["-std=c11", "-O1", "-w", "-I/Users/brainworks/sdl3/include"]
+libs = ["-L/Users/brainworks/sdl3/lib", "-lSDL3", "-Wl,-rpath,/Users/brainworks/sdl3/lib", "-lm"]
+timeout = 300
+env_default = { YSCR_ANGLE_DIR = "/Users/brainworks/ysp-deps/angle-electron-43.8.3" }
+
+[[mutant]]
+id = "mt-01"
+name = "target three quarters of a period early"
+test = "screen"
+why = "presentAtTime's target must lie less than half a period before the planned vblank, or a display that shows the nearest vblank shows the frame one early (BACKENDS, METAL, (a))."
+find = '#define YSCR__MTL_TARGET_LEAD 0.25'
+replace = '#define YSCR__MTL_TARGET_LEAD 0.75'
+
+[[mutant]]
+id = "mt-02"
+name = "target after the planned vblank"
+test = "screen"
+why = "A target after the planned vblank shows a vblank late on a display that shows the first vblank at or after it."
+find = '#define YSCR__MTL_TARGET_LEAD 0.25'
+replace = '#define YSCR__MTL_TARGET_LEAD -0.25'
+
+[[mutant]]
+id = "mt-03"
+name = "tier 1 before a measurement"
+test = "screen"
+why = "No Metal window kind claims a tier better than 3 until presentedTime is shown to be an observation (TIERS; docs/screen_macos_probe.md)."
+find = '    return (uint8_t)YSCR_TIER_3;'
+replace = '    return (uint8_t)YSCR_TIER_1;'
+
+[[mutant]]
+id = "mt-04"
+name = "a hidden window's frame not OCCLUDED"
+test = "screen"
+why = "presentedTime 0 in a hidden window or a locked session is an occluded frame, and its record must say so."
+find = '        v->flags = YSCR_FLIP_OCCLUDED;'
+replace = ''
+
+[[mutant]]
+id = "mt-05"
+name = "red and blue swapped in a BGRA8 pixel"
+test = "screen"
+why = "A code's red is in bits 0 to 7 of its value and in byte 2 of a BGRA8 pixel."
+find = '    if (!bits10) return 0xFF000000u | (r << 16) | (g << 8) | b;'
+replace = '    if (!bits10) return 0xFF000000u | (b << 16) | (g << 8) | r;'
+
+[[mutant]]
+id = "mt-06"
+name = "the display link's period truncated"
+test = "screen"
+why = "The period is CVDisplayLink's value / scale, rounded: 400330 / 24000000 s is 16680417 ns."
+find = '    return (int64_t)llround((double)value * 1e9 / (double)scale);'
+replace = '    return (int64_t)((double)value * 1e9 / (double)scale);'
+
+[[mutant]]
+id = "mt-07"
+name = "10 bits on a backend that draws 8"
+test = "screen"
+why = "desc.color_depth 10 is METAL's; elsewhere open() must refuse it, not draw 8 bits silently."
+find = '    if (desc->color_depth == 10 && s->backend != YSCR_BACKEND_METAL && s->backend != YSCR_BACKEND_CUSTOM) {'
+replace = '    if (0) {'
+
+[[mutant]]
+id = "mt-08"
+name = "no wait on ANGLE's signal"
+test = "metal"
+why = "ANGLE's queue and the header's are two: without the wait on the shared event, the header's command buffer reads frames ANGLE has not finished (2 to 5 of 120 under GPU load, docs/screen_macos_probe.md)."
+find = '        if (sync) YSCR__MSG(void, yscr__id, void*, yscr__id, uint64_t)(cb, yscr__mac.encodeWait, m->event, req->present_id);'
+replace = ''
+
+[[mutant]]
+id = "mt-09"
+name = "codes compared as raw pixels"
+test = "metal"
+why = "A read-back pixel is in the layer's format; it must be turned back into a code before the comparison."
+find = '            if (yscr__mtl_code_of(row[x + k], m->bits10) != want) bad = 1;'
+replace = '            if (row[x + k] != want) bad = 1;'
+
+[[mutant]]
+id = "mt-10"
+name = "the pbuffer cache misses every frame"
+test = "metal"
+why = "One pbuffer per drawable IOSurface, kept: the layer cycles 3 or 4, and a pbuffer made per frame churns ANGLE's surfaces (the describe line's pbuffers count)."
+find = '        if (m->key[k] == ios && m->pb[k]) { m->used[k] = ++m->use; return m->pb[k]; }'
+replace = ''

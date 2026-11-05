@@ -1181,11 +1181,11 @@ Details, versions and measurements per header are in
 
 | Step | State |
 |---|---|
-| 1. `ysp/rt.h` | Done, v0.9.1. |
+| 1. `ysp/rt.h` | Done, v0.10.0 (macOS: the clock is `mach_absolute_time()`). |
 | 2. `ysp/timeline.h` | Done for now, v0.8.1. Since v0.4.0: trigger channels (`ytl_trigger_ch()`), parameter tables for the ops and the desc. |
-| 3. `ysp/screen.h` | v0.10.4 on Windows: DXGI_FLIP and COMPOSITION, the window thread (on by default for native Windows), flip records, the abort and the panic, the web backend (v0.7.0). X11, Wayland and macOS are stubs. The X11 probe (docs/screen_x11_probe.md) has not run on the Linux rig. No photodiode run. |
+| 3. `ysp/screen.h` | v0.10.4 on Windows: DXGI_FLIP and COMPOSITION, the window thread (on by default for native Windows), flip records, the abort and the panic, the web backend (v0.7.0). macOS: METAL (v0.11.0), run only with the session locked, so tier 3 and no shown frame until the probe's timing runs (docs/screen_macos_probe.md). X11 and Wayland are stubs. The X11 probe (docs/screen_x11_probe.md) has not run on the Linux rig. No photodiode run. |
 | 4. `ysp/audio.h` | v0.7.3 on WASAPI: onsets from a fit of device positions, tier 2, streams, WAV, capture. v0.8.0 on CoreAudio (one Mac, 2026-11-05): reports from the HAL's render time stamps, hog mode, the driver stack in the describe line; functional runs only, tier 3, the timing runs listed in docs/audio.md. ALSA and PulseAudio ran only as miniaudio's null device, in CI. No line-in run. |
-| 5. `ysp/gfx.h` | v0.17.2: stimuli, curve runs (text and artwork), batched text runs, parameter tables, frame capture. Open items in docs/gfx.md "Next". |
+| 5. `ysp/gfx.h` | v0.17.3: stimuli, curve runs (text and artwork), batched text runs, parameter tables, frame capture. Open items in docs/gfx.md "Next". |
 | 6. `ysp/video.h` | v0.6.0: Media Foundation and pl_mpeg, the soundtrack on audio streams, UTF-8 paths, error codes. Not built: AVFoundation, capture. |
 | Also built | `ysp/outline.h` v0.4.1, `ysp/rdk.h` v0.3.0, `ysp/color.h` v0.4.0, `ysp/trials.h` v0.6.0, `ysp/table.h` v0.3.0, `ysp/dataset.h` v0.2.0, `ysp/json.h` v0.2.1, `ysp/pack.h` v0.4.0 and the pack tool v0.7.0 (item 6), the device headers of docs/devices_spec.md (input, response, box, device, rigfile, serial, parallel, net). The experiment format (docs/experiment_format.md) with its gaps G1 to G13 closed. |
 | Host bindings | Python wheels and MATLAB/Octave MEX for the headers above (docs/bindings.md); ysp-vis 0.10.4 (screen, gfx, video, text) on ysp-audio 0.7.3 and ysp-timeline through function tables (section 12). |
@@ -1329,11 +1329,37 @@ The measurements are in docs/av_probe.md and docs/winthread_probe.md.
 ## 13. Open questions, to be measured or verified, not decided
 
 - Does SDL3 create an EGL context on Cocoa against ANGLE's Metal
-  backend, and what present timing does that backend expose?
+  backend, and what present timing does that backend expose? Answered in
+  part (2026-11-05, docs/screen_macos_probe.md; Apple M2, macOS 27.0.1,
+  ANGLE from Electron 43.8.3, SDL 3.4.0): yes, with
+  `SDL_GL_EGL_PLATFORM` and a platform attribute callback that asks for
+  the Metal back end (this ANGLE's default on macOS is OpenGL). ANGLE then
+  owns a CAMetalLayer under SDL's view and exposes no timing: no sync
+  control, no frame timestamps, no presentation time. A header-owned
+  CAMetalLayer on ANGLE's own MTLDevice works: ANGLE draws into the
+  drawable's IOSurface (or an EGLImage of its texture), and an
+  `EGL_ANGLE_metal_shared_event_sync` event orders ANGLE's queue before
+  the header's (without it, 2 to 5 of 120 frames were read unfinished
+  under GPU load). The recommended design is that one, with
+  `presentDrawable:atTime:` and `MTLDrawable.presentedTime` as the onset;
+  it is built as `YSCR_BACKEND_METAL` in `ysp/screen.h` v0.11.0
+  (docs/screen.md), with the target, the depth and the tier as
+  conservative constants until these runs.
+  Waiting on the timing runs, which need an unlocked screen and a quiet
+  machine: depth per window kind, presentAtTime quantization, late frames,
+  the vblank sources' agreement, direct against composed, a 120 or 144 Hz
+  mode, key timestamps (posting keys needs the Accessibility permission,
+  not granted), and so the tier.
 - ANGLE's 10-bit surface configurations on D3D11 and Metal. Answered
   for D3D11 (2026-10-05, docs/gfx.md): RGBA 10/10/10/2 and RGBA16F
   configurations exist, and a client-buffer pbuffer on an
-  `R10G10B10A2` texture works. Metal: not run.
+  `R10G10B10A2` texture works. Metal (2026-11-05,
+  docs/screen_macos_probe.md): no 10-bit or half-float EGL configuration
+  exists, so SDL's EGL path cannot make a 10-bit window; but GL textures,
+  EGLImages of RGB10A2, BGR10A2 and RGBA16Float MTLTextures, and 'l10r'
+  and 'RGhA' IOSurface pbuffers keep 1024 levels of a 1024-step ramp, and
+  CAMetalLayer accepts BGR10A2Unorm, RGBA16Float and BGR10_XR. Whether
+  10 bits reach the M27Q (8 bits per sample by NSScreen): not measured.
 - Composition swapchain: how a target time between two vblanks is
   quantized, how far ahead the queue accepts presents, and whether a
   borderless fullscreen composition window gets independent flip on the

@@ -622,6 +622,13 @@ endif()
 if(TARGET SDL3::SDL3 AND YSP_BUILD_TESTS)
     ysp_add_program(test_screen_window tests/adapt/screen_window_test.c rig)
 endif()
+# ysp/screen.h's METAL backend on a real window: macOS, built and not
+# registered with ctest, because it needs a window server session and
+# ANGLE (YSCR_ANGLE_DIR); run by hand and by tests/mutate/screen.toml's
+# Metal mutants.
+if(TARGET SDL3::SDL3 AND YSP_BUILD_TESTS AND APPLE)
+    ysp_add_program(test_screen_metal tests/adapt/screen_metal_test.c rig)
+endif()
 # Every header's parameter table against the one row shape (name, type,
 # min, max, def, unit, doc, values; docs/experiment_format.md, G6): one
 # program that includes them all, as the player's loader will, without

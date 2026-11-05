@@ -1,4 +1,4 @@
-/* ysp/screen.h - v0.10.4 - public domain single-header display library
+/* ysp/screen.h - v0.11.0 - public domain single-header display library
  *
  *   The window, the GL ES 3.0 context, the display mode and the swap path
  *   of a stimulus display, with flip at a time: each frame learns the
@@ -621,10 +621,61 @@
  *     page; not tested), codes (drawn through GL, always at risk:
  *     CODE_RISK_COMPOSED), the gamma ramp, raw mice and the panic watchdog
  *     (panic=n/a).
+ *   YSCR_BACKEND_METAL (v0.11.0; macOS; AUTO there): SDL makes the
+ *     window; the header makes its CAMetalLayer (SDL_Metal_CreateView) on
+ *     the MTLDevice that ANGLE's Metal display reports. ANGLE draws each
+ *     frame straight into the drawable, through a pbuffer on the drawable's
+ *     IOSurface (EGL_ANGLE_iosurface_client_buffer), one per IOSurface,
+ *     kept. At the present, ANGLE's frame signals an MTLSharedEvent with
+ *     the present id (EGL_ANGLE_metal_shared_event_sync), and the header's
+ *     command buffer waits on it, draws the patch and the codes as blits,
+ *     reads codes back, and presents with presentDrawable:atTime:. The
+ *     flip's onset is MTLDrawable.presentedTime from the presented handler
+ *     (mach time: ysp/rt.h's clock from v0.10.0, an offset correlated at
+ *     open and every 10 s before it). A presentedTime of 0 means the
+ *     drawable was not shown: the record is estimated, and OCCLUDED when
+ *     the window was hidden or the session locked (locked= in the describe
+ *     line). caps.period_ns is CVDisplayLink's nominal period (a "60 Hz"
+ *     HDMI mode measured 16.680417 ms, 59.9505 Hz), never the mode's
+ *     rounded rate; the flips refine it. nextDrawable gives up after its
+ *     own 1 s timeout; a frame without a drawable draws into a 1 x 1
+ *     pbuffer and is estimated (no_drawable= in the describe line). A
+ *     presented handler that has not come 1 s after its target is given up
+ *     (late_handler=): its frame is estimated, and the frames after it
+ *     complete; a hidden window's handlers came late or not at all
+ *     (measured, docs/screen_macos_probe.md). GL's
+ *     row 0 is the top of the screen, as on Windows
+ *     (yscr_present_info.rows_top_down).
+ *     ANGLE: libEGL.dylib from desc.angle_dir, YSCR_ANGLE_DIR, or the
+ *     loader's search path; the Metal back end is asked for by name, because
+ *     ANGLE's default on macOS can be OpenGL (measured: Electron 43.8.3's).
+ *     It needs EGL_ANGLE_iosurface_client_buffer, EGL_ANGLE_device_metal
+ *     and EGL_ANGLE_metal_shared_event_sync; open() names what is missing.
+ *     Threads: open(), the frame loop and close() run on the process's
+ *     main thread (Cocoa's windows and SDL's video live there); open()
+ *     refuses another thread. There is no window thread on macOS
+ *     (window_thread=off(auto,platform)). The presented handlers run on
+ *     Metal's threads and touch only a process-wide table of 64 slots.
+ *     Not measured, each behind one constant with a conservative value
+ *     (docs/screen_macos_probe.md has the runs that decide them):
+ *     (a) the target: the planned vblank minus a quarter period
+ *     (YSCR__MTL_TARGET_LEAD), right whether Core Animation shows a frame
+ *     at the vblank nearest its time or at the first at or after it;
+ *     (b) the depth, 2 (the composed path's table), with 3 drawables and
+ *     one frame in flight; (c) the tier: 3 for every window kind
+ *     (window, fullscreen, space in the describe line), because
+ *     presentedTime is not yet shown to be an observation of the scanout.
+ *     macOS has no public call that says a window goes direct to the
+ *     display, so every flip's path is COMPOSED.
+ *     desc.color_depth 10 gives a BGR10A2Unorm layer and 'l10r' IOSurfaces
+ *     (ANGLE's Metal display has no 10-bit config; the pbuffer takes the
+ *     IOSurface's format); 8-bit code values are spread over 10 bits
+ *     (v << 2 | v >> 6). Whether 10 bits reach the panel is not measured.
+ *     Not on macOS: the panic watchdog, raw mice, the OS gamma ramp.
  *   Not implemented; open() refuses them with a message:
- *     YSCR_BACKEND_GLX_OML (Linux X11),
- *     YSCR_BACKEND_WAYLAND (presentation-time), YSCR_BACKEND_METAL
- *     (macOS through ANGLE). On Linux and macOS only SIM and CUSTOM open.
+ *     YSCR_BACKEND_GLX_OML (Linux X11) and
+ *     YSCR_BACKEND_WAYLAND (presentation-time). On Linux only SIM and
+ *     CUSTOM open.
  *
  *   ---------------------------------------------------------------------
  *   PRESENTER (the swap-path interface)
@@ -1499,6 +1550,14 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.11.0 - YSCR_BACKEND_METAL (macOS; AUTO there): a header-owned
+ *          CAMetalLayer, ANGLE drawing into the drawable's IOSurface, an
+ *          MTLSharedEvent between ANGLE's queue and the header's, onsets
+ *          from presentedTime (BACKENDS). desc.color_depth (0, 8 or 10;
+ *          10 on METAL only) and yscr_presenter_open.color_depth: struct
+ *          layouts change. The target lead, the depth and the tier are
+ *          unmeasured constants (tier 3). Objective-C through objc_msgSend
+ *          from C, nothing linked, as ysp/video.h's AVFoundation backend.
  *   v0.10.4 - COMPOSITION closes the 5 events its open got (the
  *          presentation manager's statistics and lost events, the 3
  *          buffers' available events): each open and close left 5 handles.
@@ -1834,7 +1893,22 @@
  *          groups, input restamping, mode lists and the parameter table.
  *          The other swap paths are stubs that refuse to open.
  *
- *   STATUS: v0.10.4 (docs/screen.md, "Handles, no free buffer, display
+ *   STATUS: v0.11.0 (METAL; docs/screen.md, "macOS: the header owns the
+ *   CAMetalLayer"): built and run on an Apple M2 Mac mini, macOS 27.0.1,
+ *   ANGLE from Electron 43.8.3, SDL 3.4.0, with the console session locked
+ *   the whole time, so no frame was shown: every presentedTime was 0, and
+ *   every record OCCLUDED, estimated and tier 3. What ran without a shown
+ *   frame: tests/adapt/screen_metal_test.c read every frame's center pixel
+ *   back after the wait on ANGLE's signal, under a 400-iteration fragment
+ *   loop, 120 of 120 frames its own (8 bits) and 30 of 30 (10 bits); with
+ *   the wait removed (mutant mt-08), 21 of 120 and 2 of 30 read the frame
+ *   two before; the code self test passed and 150 to 158 codes read back
+ *   in each 60-frame run with none differing; 2 pbuffers per run. A
+ *   gfx on a METAL screen has its origin at the top. Not measured: anything about a shown frame, so the
+ *   target lead, the depth, the tier, presentAtTime's rule, direct against
+ *   composed, other refresh rates, the panel's 10 bits, input timestamps
+ *   on macOS.
+ *   v0.10.4 (docs/screen.md, "Handles, no free buffer, display
  *   ids"): on the laptop below, 10 opens and closes a backend gained 40
  *   handles (Event 40) on COMPOSITION before, ON and OFF, and 0 after on
  *   COMPOSITION and DXGI_FLIP; the no-free-buffer case (a hook) in front:
@@ -2065,8 +2139,9 @@
  *   NOT done: any rate but 60 Hz, any other GPU, Windows 10 (COMPOSITION
  *   needs 11), ARM64 and x86 (COMPOSITION refuses them: the hidden-pointer returns
  *   are checked only on x64), two physical displays, variable refresh
- *   (refused), macOS, X11 and Wayland swap paths (stubs). Linux runs the
- *   core and the simulated display only.
+ *   (refused), X11 and Wayland swap paths (stubs), a shown frame on macOS
+ *   (METAL ran only with the session locked). Linux runs the core and the
+ *   simulated display only.
  *   Outside this STATUS block and docs/screen.md, a number in this
  *   header is a measurement only where the text says "measured".
  */
@@ -2074,9 +2149,9 @@
 #define YSP_SCREEN_H_INCLUDED
 
 #define YSCR_VERSION_MAJOR 0
-#define YSCR_VERSION_MINOR 10
-#define YSCR_VERSION_PATCH 4
-#define YSCR_VERSION_STRING "0.10.4"
+#define YSCR_VERSION_MINOR 11
+#define YSCR_VERSION_PATCH 0
+#define YSCR_VERSION_STRING "0.11.0"
 
 #include "ysp/rt.h"
 #include "ysp/input.h"
@@ -2415,7 +2490,7 @@ typedef enum yscr_backend {
     YSCR_BACKEND_COMPOSITION,    /* Windows 11 composition swapchain       */
     YSCR_BACKEND_GLX_OML,        /* Linux X11: stub                        */
     YSCR_BACKEND_WAYLAND,        /* stub                                   */
-    YSCR_BACKEND_METAL,          /* macOS: stub                            */
+    YSCR_BACKEND_METAL,          /* macOS: CAMetalLayer, ANGLE's Metal back end */
     YSCR_BACKEND_WEB,            /* Emscripten: WebGL2, requestAnimationFrame */
     YSCR_BACKEND_SIM,            /* no window, a vblank grid on ysp_rt     */
     YSCR_BACKEND_CUSTOM          /* desc.presenter                         */
@@ -2672,6 +2747,7 @@ typedef struct yscr_presenter_open {
     uint32_t*           code_failed;   /* codes that differed                */
     int32_t*            code_selftest; /* 1 passed, -1 failed, 0 not run     */
     int32_t             d3d11_video;   /* desc.d3d11_video                   */
+    int32_t             color_depth;   /* desc.color_depth: 0 or 8, or 10    */
 } yscr_presenter_open;
 
 typedef struct yscr_presenter {
@@ -2769,6 +2845,8 @@ typedef struct yscr_desc {
     void*          on_context_ctx;
     /* the window's own thread (WINDOW THREAD) */
     int32_t        window_thread;    /* YSCR_WINDOW_THREAD_*; 0 = AUTO         */
+    /* bits per channel of the frame (BACKENDS, METAL) */
+    int32_t        color_depth;      /* 0 or 8 = 8 bits; 10 = 10 bits (METAL) */
 } yscr_desc;
 
 /* Private. One flip between flip_at() and its completion. */
@@ -3321,6 +3399,17 @@ YSCR_API const yscr_param* yscr_params(int* n);
     #include <dwmapi.h>   /* the types only: dwmapi.dll is loaded at run time */
     #if !defined(YRT_NO_THREADS)
         #define YSCR__WT 1   /* the window thread (WINDOW THREAD) */
+    #endif
+#endif
+
+/* macOS: the Metal presenter. No Apple header beyond these three plain ones:
+ * the frameworks are loaded at run time (BACKENDS, METAL). */
+#if defined(__APPLE__) && !defined(YSCR_NO_SDL)
+    #include <TargetConditionals.h>
+    #if TARGET_OS_OSX
+        #define YSCR__METAL 1
+        #include <dlfcn.h>
+        #include <mach/mach_time.h>
     #endif
 #endif
 
@@ -5001,6 +5090,1091 @@ static const yscr_presenter yscr__web_presenter = {
 };
 
 #endif /* YSCR__WEB */
+
+/* --- Metal presenter (macOS): the rules, which compile everywhere ----------
+ * The macOS swap path (BACKENDS, METAL; docs/screen.md, "macOS: the header
+ * owns the CAMetalLayer"). These few rules compile on every platform, so the
+ * core test checks them without a Mac; the presenter itself is macOS's.
+ *
+ * Unmeasured, each in one place with a conservative value until the timing
+ * runs of docs/screen_macos_probe.md decide it:
+ *   (a) the time passed to presentDrawable:atTime: for a planned vblank;
+ *   (b) the depth and maximumDrawableCount;
+ *   (c) the tier of each window kind. */
+
+/* (a) The target is the planned vblank minus a quarter period. Core
+ * Animation's rule is not measured. Under "the vblank nearest the target"
+ * any lead from 0 to half a period lands on the planned vblank, and half a
+ * period exactly is the tie, which COMPOSITION gave to the earlier vblank
+ * (docs/screen.md, "Quantization"); under "the first vblank at or after
+ * the target" any lead from 0 up does. A quarter period is the middle of
+ * the range that suits both, so the grid may be off by a quarter period
+ * either way. */
+#define YSCR__MTL_TARGET_LEAD 0.25
+/* (b) Three drawables, one frame in flight, depth 2: the composed path's
+ * table depth (DEPTH); on a backend that holds frames to a target a depth
+ * too large costs latency only, one too small drops every frame. */
+#define YSCR__MTL_DRAWABLES 3
+/* Window kinds: macOS has no public call that says a window is shown
+ * direct to the display, so the kind is what the header can see. */
+#define YSCR__MTL_KIND_WINDOW     0
+#define YSCR__MTL_KIND_FULLSCREEN 1   /* SDL fullscreen without a space    */
+#define YSCR__MTL_KIND_SPACE      2   /* a fullscreen space                 */
+
+static int64_t yscr__mtl_target(int64_t vblank_ns, int64_t period_ns) {
+    return vblank_ns - (int64_t)llround(YSCR__MTL_TARGET_LEAD * (double)period_ns);
+}
+
+/* (c) Tier 3 on every kind: presentedTime is not yet shown to be an
+ * observation of the scanout (it may be WindowServer's plan, as
+ * COMPOSITION's composed time was), so no kind claims more (TIERS). */
+static uint8_t yscr__mtl_tier(int kind) {
+    (void)kind;
+    return (uint8_t)YSCR_TIER_3;
+}
+
+static const char* yscr__mtl_kind_name(int kind) {
+    return kind == YSCR__MTL_KIND_SPACE ? "space" : kind == YSCR__MTL_KIND_FULLSCREEN ? "fullscreen" : "window";
+}
+
+/* CVDisplayLink's nominal period, value / scale seconds, in ns; 0 when it
+ * has none. The mode's refresh rate is a rounded label (60.000 for a
+ * 59.9505 Hz HDMI mode, measured), never the period. */
+static int64_t yscr__mtl_period(int64_t value, int32_t scale) {
+    if (value <= 0 || scale <= 0) return 0;
+    return (int64_t)llround((double)value * 1e9 / (double)scale);
+}
+
+/* One presented handler's report as a completion. presented_ns is
+ * presentedTime on the ysp_rt clock, 0 when the drawable was not shown;
+ * then the core estimates the flip, OCCLUDED when the window was hidden or
+ * the session locked. count is the presenter's own vblank number of the
+ * time, counted on the period from t0. */
+static void yscr__mtl_vblank(uint64_t present_id, int64_t presented_ns, int hidden, int kind, int64_t t0,
+                             int64_t period_ns, yscr_vblank* v) {
+    memset(v, 0, sizeof *v);
+    v->present_id = present_id;
+    v->path = YSCR_PATH_COMPOSED;
+    v->tier = yscr__mtl_tier(kind);
+    if (presented_ns > 0) {
+        v->t_ns = presented_ns;
+        v->count = period_ns > 0 ? (int64_t)llround((double)(presented_ns - t0) / (double)period_ns) : 0;
+    } else if (hidden) {
+        v->flags = YSCR_FLIP_OCCLUDED;
+    }
+}
+
+/* A code value (0xBBGGRR) or a gray as the drawable's 32-bit pixel:
+ * BGRA8Unorm, or BGR10A2Unorm with each 8-bit value spread over 10 bits
+ * (v << 2 | v >> 6, so v10 >> 2 gives v back). */
+static uint32_t yscr__mtl_pixel(uint32_t rgb, int bits10) {
+    uint32_t r = rgb & 0xFFu, g = (rgb >> 8) & 0xFFu, b = (rgb >> 16) & 0xFFu;
+    if (!bits10) return 0xFF000000u | (r << 16) | (g << 8) | b;
+    return 0xC0000000u | (((r << 2) | (r >> 6)) << 20) | (((g << 2) | (g >> 6)) << 10) | ((b << 2) | (b >> 6));
+}
+
+/* The code value back from a drawable pixel. */
+static uint32_t yscr__mtl_code_of(uint32_t px, int bits10) {
+    if (!bits10) return ((px >> 16) & 0xFFu) | (px & 0xFF00u) | ((px & 0xFFu) << 16);
+    return (((px >> 20) & 0x3FFu) >> 2) | ((((px >> 10) & 0x3FFu) >> 2) << 8) | (((px & 0x3FFu) >> 2) << 16);
+}
+
+#if defined(YSCR__METAL)
+
+/* --- Metal presenter (macOS) ------------------------------------------------
+ * SDL makes the window; the header owns the CAMetalLayer (SDL_Metal_CreateView)
+ * on the MTLDevice ANGLE's Metal display reports. ANGLE draws each frame
+ * straight into the drawable through a pbuffer on the drawable's IOSurface
+ * (EGL_ANGLE_iosurface_client_buffer), one per IOSurface, cached. ANGLE's
+ * queue and the header's are two: ANGLE signals an MTLSharedEvent with the
+ * present id at the end of the frame (EGL_ANGLE_metal_shared_event_sync),
+ * and the header's command buffer waits on it before it draws the patch and
+ * the codes, reads codes back, and presents. Without the wait, 2 to 5 of 120
+ * frames were read unfinished under GPU load (docs/screen_macos_probe.md).
+ *
+ * The onset is MTLDrawable.presentedTime from the presented handler: mach
+ * time, which is ysp/rt.h's clock from v0.10.0 on, and an offset correlated
+ * at open (and every 10 s) before. 0 means not shown.
+ *
+ * Nothing is linked and no Apple header is included, as in ysp/video.h's
+ * AVFoundation backend: libobjc and the frameworks are loaded at run time,
+ * and every Objective-C call is objc_msgSend cast to the method's exact
+ * prototype, so the header stays C99 and C++ (docs/screen.md). The presented
+ * handler is a Block: a global Block literal built by hand to the Block ABI,
+ * one per handler slot, so Metal's copy of it is a no-op and it outlives any
+ * screen. */
+
+/* Test seam, not API: tests/adapt/screen_metal_test.c defines
+ * YSCR__MTL_SYNC_PIXEL(id, px) to get the center pixel of every frame as
+ * the header's command buffer read it, after its wait on ANGLE's signal. */
+#if defined(YSCR__MTL_SYNC_PIXEL)
+#define YSCR__MTL_SYNC_PIXEL_ON 1
+#else
+#define YSCR__MTL_SYNC_PIXEL_ON 0
+#endif
+
+typedef void* yscr__id;
+typedef struct yscr__mtl_size { unsigned long w, h, d; } yscr__mtl_size;     /* MTLSize   */
+typedef struct yscr__mtl_origin { unsigned long x, y, z; } yscr__mtl_origin; /* MTLOrigin */
+typedef struct yscr__cvtime { int64_t value; int32_t scale; int32_t flags; } yscr__cvtime; /* CVTime */
+typedef struct yscr__cgpoint { double x, y; } yscr__cgpoint;                  /* CGPoint   */
+
+#define YSCR__MTL_BGRA8       80u          /* MTLPixelFormatBGRA8Unorm          */
+#define YSCR__MTL_BGR10A2     94u          /* MTLPixelFormatBGR10A2Unorm        */
+#define YSCR__MTL_CB_DONE     4ul          /* MTLCommandBufferStatusCompleted   */
+#define YSCR__NS_VISIBLE      2ul          /* NSWindowOcclusionStateVisible     */
+#define YSCR__NS_FULLSCREEN   (1ul << 14)  /* NSWindowStyleMaskFullScreen       */
+#define YSCR__EGL_PLATFORM_ANGLE       0x3202
+#define YSCR__EGL_PLATFORM_ANGLE_TYPE  0x3203
+#define YSCR__EGL_PLATFORM_METAL       0x3489
+#define YSCR__EGL_DEVICE_EXT           0x322C
+#define YSCR__EGL_METAL_DEVICE         0x34A6
+#define YSCR__EGL_IOSURFACE            0x3454
+#define YSCR__EGL_IOSURFACE_PLANE      0x345A
+#define YSCR__EGL_TEXTURE_TYPE         0x345C
+#define YSCR__EGL_TEXTURE_INTERNAL_FMT 0x345D
+#define YSCR__EGL_BIND_TARGET          0x348D
+#define YSCR__EGL_TEXTURE_FORMAT       0x3080
+#define YSCR__EGL_TEXTURE_TARGET       0x3081
+#define YSCR__EGL_TEXTURE_RGBA         0x305E
+#define YSCR__EGL_TEXTURE_2D           0x305F
+#define YSCR__EGL_WIDTH                0x3057
+#define YSCR__EGL_HEIGHT               0x3056
+#define YSCR__EGL_EXTENSIONS           0x3055
+#define YSCR__EGL_SYNC_SHARED_EVENT    0x34D8
+#define YSCR__EGL_SYNC_EVENT_OBJECT    0x34D9
+#define YSCR__EGL_SYNC_EVENT_LO        0x34DA
+#define YSCR__EGL_SYNC_EVENT_HI        0x34DB
+#define YSCR__EGL_NONE                 0x3038
+#define YSCR__EGL_RED_SIZE             0x3024
+#define YSCR__EGL_GREEN_SIZE           0x3023
+#define YSCR__EGL_BLUE_SIZE            0x3022
+#define YSCR__EGL_ALPHA_SIZE           0x3021
+#define YSCR__EGL_SURFACE_TYPE         0x3033
+#define YSCR__EGL_PBUFFER_BIT          0x0001
+#define YSCR__EGL_RENDERABLE_TYPE      0x3040
+#define YSCR__EGL_OPENGL_ES3_BIT       0x0040
+#define YSCR__EGL_CONTEXT_MAJOR        0x3098
+#define YSCR__EGL_CONTEXT_MINOR        0x30FB
+#define YSCR__GL_BGRA_EXT              0x80E1
+#define YSCR__GL_RGB10_A2              0x8059
+#define YSCR__GL_UNSIGNED_BYTE         0x1401
+#define YSCR__GL_UINT_2_10_10_10_REV   0x8368
+
+/* Process-wide: the libraries are loaded once and never unloaded. Screens
+ * open and close on the main thread (Cocoa's rule), so a plain state is
+ * enough for the loader; the handler slots are atomics. */
+static struct {
+    int    state;                          /* 0 not tried, 1 loaded, -1 failed */
+    char   why[160];
+    void*  lib[5];                         /* libobjc, CF, CG, CV, libEGL      */
+    yscr_proc msg;                         /* objc_msgSend                     */
+    void* (*sel)(const char*);
+    yscr__id (*cls)(const char*);          /* objc_getClass                    */
+    void* (*pool_push)(void);
+    void  (*pool_pop)(void*);
+    void*  global_block;                   /* _NSConcreteGlobalBlock           */
+    int   (*main_np)(void);                /* pthread_main_np                  */
+    void  (*CFRelease)(const void*);
+    const void* (*CFDictionaryGetValue)(const void*, const void*);
+    unsigned char (*CFBooleanGetValue)(const void*);
+    const void* (*CFStringCreateWithCString)(const void*, const char*, uint32_t);
+    const void* (*CGSessionCopyCurrentDictionary)(void);
+    int32_t (*CGGetDisplaysWithPoint)(yscr__cgpoint, uint32_t, uint32_t*, uint32_t*);
+    int32_t (*CVDisplayLinkCreateWithCGDisplay)(uint32_t, void**);
+    yscr__cvtime (*CVDisplayLinkGetNominalOutputVideoRefreshPeriod)(void*);
+    void  (*CVDisplayLinkRelease)(void*);
+    const void* locked_key;                /* CFSTR("CGSSessionScreenIsLocked") */
+    /* EGL, ANGLE's */
+    yscr_proc (*eglGetProcAddress)(const char*);
+    void* (*eglGetPlatformDisplayEXT)(unsigned, void*, const int32_t*);
+    unsigned (*eglInitialize)(void*, int32_t*, int32_t*);
+    unsigned (*eglTerminate)(void*);
+    const char* (*eglQueryString)(void*, int32_t);
+    unsigned (*eglChooseConfig)(void*, const int32_t*, void**, int32_t, int32_t*);
+    unsigned (*eglGetConfigAttrib)(void*, void*, int32_t, int32_t*);
+    void* (*eglCreateContext)(void*, void*, void*, const int32_t*);
+    unsigned (*eglDestroyContext)(void*, void*);
+    void* (*eglCreatePbufferSurface)(void*, void*, const int32_t*);
+    void* (*eglCreatePbufferFromClientBuffer)(void*, unsigned, void*, void*, const int32_t*);
+    unsigned (*eglDestroySurface)(void*, void*);
+    unsigned (*eglMakeCurrent)(void*, void*, void*, void*);
+    int32_t (*eglGetError)(void);
+    unsigned (*eglQueryDisplayAttribEXT)(void*, int32_t, intptr_t*);
+    unsigned (*eglQueryDeviceAttribEXT)(void*, int32_t, intptr_t*);
+    void* (*eglCreateSync)(void*, unsigned, const intptr_t*);
+    unsigned (*eglDestroySync)(void*, void*);
+    /* selectors */
+    void *retain, *release, *setDevice, *setPixelFormat, *setFramebufferOnly, *setMaxDrawables, *setDisplaySync;
+    void *nextDrawable, *texture, *iosurface, *width, *height, *newCommandQueue, *commandBuffer, *encodeWait;
+    void *blitEncoder, *copyBufToTex, *copyTexToBuf, *endEncoding, *presentDrawable, *presentAtTime;
+    void *addPresented, *presentedTime, *commit, *status, *newSharedEvent, *signaledValue, *newBuffer;
+    void *contents, *occlusionState, *styleMask, *waitUntilCompleted, *newTexture, *texDesc;
+    void *setUsage, *setStorageMode, *setTimeout;
+    yscr__id cls_texdesc;
+} yscr__mac;
+
+#define YSCR__MSG(ret, ...) ((ret (*)(__VA_ARGS__))yscr__mac.msg)
+static yscr__id yscr__o0(yscr__id o, void* s) { return YSCR__MSG(yscr__id, yscr__id, void*)(o, s); }
+static void yscr__v0(yscr__id o, void* s) { YSCR__MSG(void, yscr__id, void*)(o, s); }
+static void yscr__vo(yscr__id o, void* s, yscr__id a) { YSCR__MSG(void, yscr__id, void*, yscr__id)(o, s, a); }
+static void yscr__vu(yscr__id o, void* s, unsigned long a) { YSCR__MSG(void, yscr__id, void*, unsigned long)(o, s, a); }
+static void yscr__vb(yscr__id o, void* s, int a) { YSCR__MSG(void, yscr__id, void*, signed char)(o, s, (signed char)a); }
+static unsigned long yscr__u0(yscr__id o, void* s) { return YSCR__MSG(unsigned long, yscr__id, void*)(o, s); }
+#define YSCR__MRELEASE(o) do { if (o) { yscr__v0((o), yscr__mac.release); (o) = NULL; } } while (0)
+
+static yscr_proc yscr__mac_sym(void* lib, const char* name) {
+    void* p = lib ? dlsym(lib, name) : NULL;
+    yscr_proc f;
+    memcpy(&f, &p, sizeof f);
+    return f;
+}
+
+static int yscr__mac_load(const char* angle_dir, char* err, size_t cap) {
+    static const char* const libs[4] = {
+        "/usr/lib/libobjc.A.dylib",
+        "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation",
+        "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics",
+        "/System/Library/Frameworks/CoreVideo.framework/CoreVideo" };
+    const char* miss = NULL;
+    int k;
+    if (yscr__mac.state < 0) { yscr__set_error(err, cap, "ysp_screen: %s", yscr__mac.why); return YSCR_ERR_NOT_IMPLEMENTED; }
+    if (yscr__mac.state == 0) {
+        for (k = 0; k < 4; k++) {
+            yscr__mac.lib[k] = dlopen(libs[k], RTLD_LAZY | RTLD_LOCAL);
+            if (!yscr__mac.lib[k] && !miss) miss = libs[k];
+        }
+#define YSCR__F(l, f, n) do { yscr_proc p_ = yscr__mac_sym(yscr__mac.lib[l], n); \
+        if (!p_ && !miss) miss = n; memcpy((void*)&yscr__mac.f, &p_, sizeof p_); } while (0)
+        yscr__mac.msg = yscr__mac_sym(yscr__mac.lib[0], "objc_msgSend");
+        if (!yscr__mac.msg && !miss) miss = "objc_msgSend";
+        YSCR__F(0, sel, "sel_registerName");
+        YSCR__F(0, cls, "objc_getClass");
+        YSCR__F(0, pool_push, "objc_autoreleasePoolPush");
+        YSCR__F(0, pool_pop, "objc_autoreleasePoolPop");
+        YSCR__F(1, CFRelease, "CFRelease");
+        YSCR__F(1, CFDictionaryGetValue, "CFDictionaryGetValue");
+        YSCR__F(1, CFBooleanGetValue, "CFBooleanGetValue");
+        YSCR__F(1, CFStringCreateWithCString, "CFStringCreateWithCString");
+        YSCR__F(2, CGSessionCopyCurrentDictionary, "CGSessionCopyCurrentDictionary");
+        YSCR__F(2, CGGetDisplaysWithPoint, "CGGetDisplaysWithPoint");
+        YSCR__F(3, CVDisplayLinkCreateWithCGDisplay, "CVDisplayLinkCreateWithCGDisplay");
+        YSCR__F(3, CVDisplayLinkGetNominalOutputVideoRefreshPeriod, "CVDisplayLinkGetNominalOutputVideoRefreshPeriod");
+        YSCR__F(3, CVDisplayLinkRelease, "CVDisplayLinkRelease");
+#undef YSCR__F
+        yscr__mac.global_block = dlsym(RTLD_DEFAULT, "_NSConcreteGlobalBlock");
+        {
+            void* p = dlsym(RTLD_DEFAULT, "pthread_main_np");
+            memcpy((void*)&yscr__mac.main_np, &p, sizeof p);
+        }
+        if (!yscr__mac.global_block && !miss) miss = "_NSConcreteGlobalBlock";
+        if (!yscr__mac.main_np && !miss) miss = "pthread_main_np";
+        if (miss) {
+            yscr__set_error(yscr__mac.why, sizeof yscr__mac.why, "macOS's %s is missing", miss);
+            yscr__mac.state = -1;
+            yscr__set_error(err, cap, "ysp_screen: %s", yscr__mac.why);
+            return YSCR_ERR_NOT_IMPLEMENTED;
+        }
+#define YSCR__S(f, n) yscr__mac.f = yscr__mac.sel(n)
+        YSCR__S(retain, "retain"); YSCR__S(release, "release"); YSCR__S(setDevice, "setDevice:");
+        YSCR__S(setPixelFormat, "setPixelFormat:"); YSCR__S(setFramebufferOnly, "setFramebufferOnly:");
+        YSCR__S(setMaxDrawables, "setMaximumDrawableCount:"); YSCR__S(setDisplaySync, "setDisplaySyncEnabled:");
+        YSCR__S(nextDrawable, "nextDrawable"); YSCR__S(texture, "texture"); YSCR__S(iosurface, "iosurface");
+        YSCR__S(width, "width"); YSCR__S(height, "height"); YSCR__S(newCommandQueue, "newCommandQueue");
+        YSCR__S(commandBuffer, "commandBuffer"); YSCR__S(encodeWait, "encodeWaitForEvent:value:");
+        YSCR__S(blitEncoder, "blitCommandEncoder");
+        YSCR__S(copyBufToTex, "copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:"
+                              "toTexture:destinationSlice:destinationLevel:destinationOrigin:");
+        YSCR__S(copyTexToBuf, "copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:"
+                              "toBuffer:destinationOffset:destinationBytesPerRow:destinationBytesPerImage:");
+        YSCR__S(endEncoding, "endEncoding"); YSCR__S(presentDrawable, "presentDrawable:");
+        YSCR__S(presentAtTime, "presentDrawable:atTime:"); YSCR__S(addPresented, "addPresentedHandler:");
+        YSCR__S(presentedTime, "presentedTime"); YSCR__S(commit, "commit"); YSCR__S(status, "status");
+        YSCR__S(newSharedEvent, "newSharedEvent"); YSCR__S(signaledValue, "signaledValue");
+        YSCR__S(newBuffer, "newBufferWithLength:options:"); YSCR__S(contents, "contents");
+        YSCR__S(occlusionState, "occlusionState"); YSCR__S(styleMask, "styleMask");
+        YSCR__S(waitUntilCompleted, "waitUntilCompleted"); YSCR__S(newTexture, "newTextureWithDescriptor:");
+        YSCR__S(texDesc, "texture2DDescriptorWithPixelFormat:width:height:mipmapped:");
+        YSCR__S(setUsage, "setUsage:"); YSCR__S(setStorageMode, "setStorageMode:");
+        YSCR__S(setTimeout, "setAllowsNextDrawableTimeout:");
+#undef YSCR__S
+        yscr__mac.cls_texdesc = yscr__mac.cls("MTLTextureDescriptor");
+        yscr__mac.locked_key = yscr__mac.CFStringCreateWithCString(NULL, "CGSSessionScreenIsLocked", 0x08000100u);
+        yscr__mac.state = 1;
+    }
+    if (!yscr__mac.lib[4]) {   /* ANGLE: desc.angle_dir, YSCR_ANGLE_DIR, then the loader's search */
+        char path[1024];
+        const char* dir = angle_dir && angle_dir[0] ? angle_dir : getenv("YSCR_ANGLE_DIR");
+        void* lib = NULL;
+        if (dir && dir[0]) {
+            snprintf(path, sizeof path, "%s/libEGL.dylib", dir);
+            lib = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+        }
+        if (!lib && !(angle_dir && angle_dir[0])) lib = dlopen("libEGL.dylib", RTLD_NOW | RTLD_LOCAL);
+        if (!lib) {
+            yscr__set_error(err, cap, "ysp_screen: ANGLE's libEGL.dylib not found (desc.angle_dir, YSCR_ANGLE_DIR, "
+                            "the loader's search path): %s", dlerror());
+            return YSCR_ERR_NOT_IMPLEMENTED;
+        }
+        yscr__mac.lib[4] = lib;
+        {
+            yscr_proc p = yscr__mac_sym(lib, "eglGetProcAddress");
+            memcpy((void*)&yscr__mac.eglGetProcAddress, &p, sizeof p);
+        }
+        miss = NULL;
+#define YSCR__E(f) do { yscr_proc p_ = yscr__mac.eglGetProcAddress ? yscr__mac.eglGetProcAddress(#f) : NULL; \
+        if (!p_) p_ = yscr__mac_sym(yscr__mac.lib[4], #f); \
+        if (!p_ && !miss) miss = #f; memcpy((void*)&yscr__mac.f, &p_, sizeof p_); } while (0)
+        YSCR__E(eglGetPlatformDisplayEXT); YSCR__E(eglInitialize); YSCR__E(eglTerminate); YSCR__E(eglQueryString);
+        YSCR__E(eglChooseConfig); YSCR__E(eglGetConfigAttrib); YSCR__E(eglCreateContext); YSCR__E(eglDestroyContext);
+        YSCR__E(eglCreatePbufferSurface); YSCR__E(eglCreatePbufferFromClientBuffer); YSCR__E(eglDestroySurface);
+        YSCR__E(eglMakeCurrent); YSCR__E(eglGetError); YSCR__E(eglQueryDisplayAttribEXT);
+        YSCR__E(eglQueryDeviceAttribEXT); YSCR__E(eglCreateSync); YSCR__E(eglDestroySync);
+#undef YSCR__E
+        if (miss) {
+            yscr__set_error(err, cap, "ysp_screen: the libEGL.dylib found is not ANGLE with EGL 1.5 and the "
+                            "device query (%s is missing)", miss);
+            yscr__mac.lib[4] = NULL;
+            return YSCR_ERR_NOT_IMPLEMENTED;
+        }
+    }
+    return YSCR_OK;
+}
+
+/* --- presented handlers: global Blocks over a process-wide slot table ----- */
+#define YSCR__MTL_SLOTS   64
+#define YSCR__SLOT_FREE   0
+#define YSCR__SLOT_ARMED  1
+#define YSCR__SLOT_FIRED  2
+#define YSCR__SLOT_ORPHAN 3   /* armed when its screen closed               */
+
+typedef struct yscr__mtl_slot {
+    volatile int32_t state;
+    int32_t          reserved_;
+    volatile int64_t presented;   /* mach ns; 0 = not shown                  */
+} yscr__mtl_slot;
+
+/* The Block ABI's literal and descriptor (clang's Block-ABI-Apple), with
+ * the slot number after the standard fields. IS_GLOBAL (1 << 28) makes
+ * Block_copy and Block_release no-ops; HAS_SIGNATURE (1 << 30) carries
+ * the type, void (^)(id<MTLDrawable>). */
+typedef struct yscr__mtl_block {
+    void*       isa;
+    int32_t     flags, reserved;
+    void      (*invoke)(void*, yscr__id);
+    const void* descriptor;
+    int32_t     slot;
+} yscr__mtl_block;
+
+typedef struct yscr__mtl_block_desc {
+    unsigned long reserved, size;
+    const char*   signature;
+} yscr__mtl_block_desc;
+
+static yscr__mtl_slot  yscr__mtl_tab[YSCR__MTL_SLOTS];
+static yscr__mtl_block yscr__mtl_blk[YSCR__MTL_SLOTS];
+static const yscr__mtl_block_desc yscr__mtl_bdesc = { 0, sizeof(yscr__mtl_block), "v16@?0@8" };
+
+/* Metal's thread, after the drawable was shown or dropped: the time, then
+ * the state; a slot whose screen closed goes back to the table. Touches no
+ * screen. */
+static void yscr__mtl_presented(void* blk, yscr__id drawable) {
+    int32_t k = ((yscr__mtl_block*)blk)->slot;
+    yscr__mtl_slot* sl = &yscr__mtl_tab[k];
+    double t = YSCR__MSG(double, yscr__id, void*)(drawable, yscr__mac.presentedTime);
+    yscr__a_store64(&sl->presented, t > 0 ? (int64_t)llround(t * 1e9) : 0);
+    if (!yscr__a_cas(&sl->state, YSCR__SLOT_ARMED, YSCR__SLOT_FIRED)) yscr__a_store(&sl->state, YSCR__SLOT_FREE);
+}
+
+static int yscr__mtl_slot_take(void) {
+    int k;
+    for (k = 0; k < YSCR__MTL_SLOTS; k++) {
+        if (yscr__a_cas(&yscr__mtl_tab[k].state, YSCR__SLOT_FREE, YSCR__SLOT_ARMED)) {
+            yscr__mtl_block* b = &yscr__mtl_blk[k];
+            yscr__a_store64(&yscr__mtl_tab[k].presented, 0);
+            b->isa = yscr__mac.global_block;
+            b->flags = (int32_t)((1u << 28) | (1u << 30));
+            b->reserved = 0;
+            b->invoke = yscr__mtl_presented;
+            b->descriptor = &yscr__mtl_bdesc;
+            b->slot = k;
+            return k;
+        }
+    }
+    return -1;
+}
+
+/* --- the presenter's state --------------------------------------------------- */
+#define YSCR__MTL_CACHE   6     /* pbuffers, one per drawable IOSurface      */
+#define YSCR__MTL_ARMED   8
+#define YSCR__MTL_REGIONS 3     /* staging regions: more than frames in flight */
+#define YSCR__MTL_STAGE   65536 /* 32-bit pixels per staging region          */
+#define YSCR__MTL_RB      8192  /* 32-bit pixels read back per present       */
+
+typedef struct yscr__mtl {
+    void*     win;               /* SDL_Window*                               */
+    void*     view;              /* SDL_MetalView                             */
+    yscr__id  nswin, layer, device, queue, event, staging, readback;
+    yscr__id  drawable, tex;     /* acquire() to present()                    */
+    yscr__id  rb_cb;             /* the command buffer of the pending read-back */
+    void     *dpy, *ctx, *cfg, *dummy, *surf;
+    void*     key[YSCR__MTL_CACHE];
+    void*     pb[YSCR__MTL_CACHE];
+    int64_t   used[YSCR__MTL_CACHE];
+    yscr__glFlush_fn flush;
+    int32_t   slot[YSCR__MTL_ARMED];
+    uint64_t  slot_id[YSCR__MTL_ARMED];
+    int64_t   slot_target[YSCR__MTL_ARMED];
+    int32_t   n_slot;
+    uint64_t  lost_id[4];        /* presents with no handler: not shown or not known */
+    int32_t   lost_hidden[4];
+    int32_t   n_lost;
+    uint64_t  rb_id;             /* the present whose codes were copied        */
+    const yscr_code_draw* rb_codes;
+    int32_t   rb_n, rb_region;
+    uint32_t* checked;
+    uint32_t* failed;
+    int64_t   period_ns, mach_off, corr_t, corr_w, t0, use;
+    int32_t   w, h, bits10, region, bind_target;
+    int32_t   kind, locked, hidden;
+    int64_t   hidden_t;
+    uint32_t  not_shown, no_drawable, no_slot, sync_failed, pbuffers, late_handlers;
+    char      angle[48];
+} yscr__mtl;
+
+typedef char yscr__mtl_fits[sizeof(yscr__mtl) <= sizeof(((yscr_screen*)0)->backend_mem) ? 1 : -1];
+
+static uint64_t yscr__mach_read(void) {
+    static uint32_t num, den;
+    uint64_t t = mach_absolute_time();
+    if (!den) {
+        mach_timebase_info_data_t tb;
+        mach_timebase_info(&tb);
+        num = tb.numer; den = tb.denom;
+    }
+    return (t / den) * num + (t % den) * num / den;
+}
+
+/* The ysp_rt time of mach ns: identical from ysp/rt.h v0.10.0 on (the
+ * offset is then 0 to the bracket); before, CLOCK_MONOTONIC, which counts
+ * sleep and is slewed, so the offset is measured again every 10 s. */
+static void yscr__mtl_correlate(yscr__mtl* m) {
+    yrt_corr_desc d;
+    yrt_corr c;
+    memset(&d, 0, sizeof d);
+    d.read = yscr__mach_read;
+    if (yrt_correlate(&d, &c) > 0) {
+        m->mach_off = c.rt_ns - (int64_t)c.other;
+        m->corr_w = c.width_ns;
+    }
+    m->corr_t = yscr__now();
+}
+
+/* The window can be seen: not hidden, and the session not locked. */
+static int yscr__mtl_hidden(yscr__mtl* m) {
+    int hidden = 0;
+    int64_t now = yscr__now();
+    if (now - m->hidden_t < 500000000 && m->hidden_t) return m->hidden;   /* asked at most twice a second */
+    if (m->nswin && !(yscr__u0(m->nswin, yscr__mac.occlusionState) & YSCR__NS_VISIBLE)) hidden = 1;
+    if (yscr__mac.CGSessionCopyCurrentDictionary) {
+        const void* d = yscr__mac.CGSessionCopyCurrentDictionary();
+        if (d) {
+            const void* v = yscr__mac.locked_key ? yscr__mac.CFDictionaryGetValue(d, yscr__mac.locked_key) : NULL;
+            m->locked = v && yscr__mac.CFBooleanGetValue(v);
+            yscr__mac.CFRelease(d);
+            if (m->locked) hidden = 1;
+        }
+    }
+    m->hidden = hidden;
+    m->hidden_t = now;
+    return hidden;
+}
+
+static int yscr__mtl_kind_now(yscr__mtl* m) {
+    if (m->nswin && (yscr__u0(m->nswin, yscr__mac.styleMask) & YSCR__NS_FULLSCREEN)) return YSCR__MTL_KIND_SPACE;
+    if (m->win && (SDL_GetWindowFlags((SDL_Window*)m->win) & SDL_WINDOW_FULLSCREEN)) return YSCR__MTL_KIND_FULLSCREEN;
+    return YSCR__MTL_KIND_WINDOW;
+}
+
+/* A pbuffer on the drawable's IOSurface, made once per IOSurface: the layer
+ * cycles 3 or 4 of them (measured). */
+static void* yscr__mtl_pbuffer(yscr__mtl* m, void* ios, int w, int h) {
+    int k, old = 0;
+    int32_t a[16];
+    for (k = 0; k < YSCR__MTL_CACHE; k++)
+        if (m->key[k] == ios && m->pb[k]) { m->used[k] = ++m->use; return m->pb[k]; }
+    for (k = 1; k < YSCR__MTL_CACHE; k++) if (m->used[k] < m->used[old]) old = k;
+    if (m->pb[old]) {
+        if (m->surf == m->pb[old]) {
+            yscr__mac.eglMakeCurrent(m->dpy, m->dummy, m->dummy, m->ctx);
+            m->surf = m->dummy;
+        }
+        yscr__mac.eglDestroySurface(m->dpy, m->pb[old]);
+    }
+    a[0] = YSCR__EGL_WIDTH; a[1] = w; a[2] = YSCR__EGL_HEIGHT; a[3] = h;
+    a[4] = YSCR__EGL_IOSURFACE_PLANE; a[5] = 0;
+    a[6] = YSCR__EGL_TEXTURE_TARGET; a[7] = m->bind_target;
+    a[8] = YSCR__EGL_TEXTURE_INTERNAL_FMT; a[9] = m->bits10 ? YSCR__GL_RGB10_A2 : YSCR__GL_BGRA_EXT;
+    a[10] = YSCR__EGL_TEXTURE_FORMAT; a[11] = YSCR__EGL_TEXTURE_RGBA;
+    a[12] = YSCR__EGL_TEXTURE_TYPE; a[13] = m->bits10 ? YSCR__GL_UINT_2_10_10_10_REV : YSCR__GL_UNSIGNED_BYTE;
+    a[14] = YSCR__EGL_NONE;
+    m->pb[old] = yscr__mac.eglCreatePbufferFromClientBuffer(m->dpy, YSCR__EGL_IOSURFACE, ios, m->cfg, a);
+    m->key[old] = m->pb[old] ? ios : NULL;
+    m->used[old] = ++m->use;
+    if (m->pb[old]) m->pbuffers++;
+    return m->pb[old];
+}
+
+static void yscr__mtl_close(void* vctx);
+
+/* The code self test: every value of every channel, in the layer's format,
+ * through the blits a present makes, into a 256 x 2 texture and back. */
+static int yscr__mtl_selftest(yscr__mtl* m) {
+    yscr__id desc, tex, cb, blit;
+    yscr__mtl_size sz;
+    yscr__mtl_origin o;
+    uint32_t* src;
+    const uint32_t* back;
+    void* pool = yscr__mac.pool_push();
+    int i, bad = 0;
+    unsigned long fmt = m->bits10 ? YSCR__MTL_BGR10A2 : YSCR__MTL_BGRA8;
+    desc = yscr__mac.cls_texdesc ? YSCR__MSG(yscr__id, yscr__id, void*, unsigned long, unsigned long, unsigned long, signed char)(
+               yscr__mac.cls_texdesc, yscr__mac.texDesc, fmt, 256ul, 2ul, (signed char)0) : NULL;
+    if (!desc) { yscr__mac.pool_pop(pool); return -1; }
+    yscr__vu(desc, yscr__mac.setUsage, 5ul);        /* ShaderRead | RenderTarget */
+    yscr__vu(desc, yscr__mac.setStorageMode, 2ul);  /* Private                   */
+    tex = YSCR__MSG(yscr__id, yscr__id, void*, yscr__id)(m->device, yscr__mac.newTexture, desc);
+    if (!tex) { yscr__mac.pool_pop(pool); return -1; }
+    src = (uint32_t*)yscr__o0(m->staging, yscr__mac.contents);
+    for (i = 0; i < 256; i++) {
+        uint32_t v = (uint32_t)i | ((uint32_t)(255 - i) << 8) | ((uint32_t)((i * 37 + 11) & 255) << 16);
+        src[i] = src[256 + i] = yscr__mtl_pixel(v, m->bits10);
+    }
+    cb = yscr__o0(m->queue, yscr__mac.commandBuffer);
+    blit = yscr__o0(cb, yscr__mac.blitEncoder);
+    sz.w = 256; sz.h = 2; sz.d = 1;
+    o.x = 0; o.y = 0; o.z = 0;
+    YSCR__MSG(void, yscr__id, void*, yscr__id, unsigned long, unsigned long, unsigned long, yscr__mtl_size, yscr__id,
+              unsigned long, unsigned long, yscr__mtl_origin)(blit, yscr__mac.copyBufToTex, m->staging, 0ul, 1024ul, 2048ul,
+              sz, tex, 0ul, 0ul, o);
+    YSCR__MSG(void, yscr__id, void*, yscr__id, unsigned long, unsigned long, yscr__mtl_origin, yscr__mtl_size, yscr__id,
+              unsigned long, unsigned long, unsigned long)(blit, yscr__mac.copyTexToBuf, tex, 0ul, 0ul, o, sz, m->readback,
+              0ul, 1024ul, 2048ul);
+    yscr__v0(blit, yscr__mac.endEncoding);
+    yscr__v0(cb, yscr__mac.commit);
+    yscr__v0(cb, yscr__mac.waitUntilCompleted);
+    back = (const uint32_t*)yscr__o0(m->readback, yscr__mac.contents);
+    for (i = 0; i < 512; i++) {
+        uint32_t v = (uint32_t)(i & 255) | ((uint32_t)(255 - (i & 255)) << 8) | ((uint32_t)(((i & 255) * 37 + 11) & 255) << 16);
+        if (yscr__mtl_code_of(back[i], m->bits10) != v) bad++;
+    }
+    yscr__v0(tex, yscr__mac.release);
+    yscr__mac.pool_pop(pool);
+    return bad ? -1 : 1;
+}
+
+static int yscr__mtl_open(void* vctx, const yscr_presenter_open* in, yscr_caps* caps, char* err, size_t err_cap) {
+    yscr__mtl* m = (yscr__mtl*)vctx;
+    int32_t a[16];
+    intptr_t edev = 0, emtl = 0;
+    int32_t maj = 0, min = 0, n = 0;
+    const char* ext;
+    int rc;
+    memset(m, 0, sizeof *m);
+    if ((rc = yscr__mac_load(in->angle_dir, err, err_cap)) < 0) return rc;
+    if (!yscr__mac.main_np()) {
+        yscr__set_error(err, err_cap, "ysp_screen: METAL: open() and the frame loop run on the process's main "
+                        "thread on macOS (Cocoa's windows, SDL's video)");
+        return YSCR_ERR_ARG;
+    }
+    if (!in->window) { yscr__copy(err, err_cap, "ysp_screen: METAL needs a window"); return YSCR_ERR_ARG; }
+    m->win = in->window;
+    m->bits10 = in->color_depth == 10;
+    m->checked = in->code_checked;
+    m->failed = in->code_failed;
+    m->nswin = (yscr__id)SDL_GetPointerProperty(SDL_GetWindowProperties((SDL_Window*)m->win),
+                                                SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, NULL);
+    /* ANGLE's Metal display: asked by name, because this ANGLE's default
+     * back end on macOS is OpenGL (measured) */
+    a[0] = YSCR__EGL_PLATFORM_ANGLE_TYPE; a[1] = YSCR__EGL_PLATFORM_METAL; a[2] = YSCR__EGL_NONE;
+    m->dpy = yscr__mac.eglGetPlatformDisplayEXT(YSCR__EGL_PLATFORM_ANGLE, NULL, a);
+    if (!m->dpy || !yscr__mac.eglInitialize(m->dpy, &maj, &min)) {
+        yscr__set_error(err, err_cap, "ysp_screen: ANGLE's Metal display did not initialize (EGL 0x%x)",
+                        yscr__mac.eglGetError());
+        m->dpy = NULL;
+        return YSCR_ERR_NOT_IMPLEMENTED;
+    }
+    ext = yscr__mac.eglQueryString(m->dpy, YSCR__EGL_EXTENSIONS);
+    if (!ext || !strstr(ext, "EGL_ANGLE_iosurface_client_buffer") || !strstr(ext, "EGL_ANGLE_metal_shared_event_sync")) {
+        yscr__copy(err, err_cap, "ysp_screen: this ANGLE's Metal display lacks EGL_ANGLE_iosurface_client_buffer "
+                   "or EGL_ANGLE_metal_shared_event_sync");
+        yscr__mtl_close(m);
+        return YSCR_ERR_NOT_IMPLEMENTED;
+    }
+    if (!yscr__mac.eglQueryDisplayAttribEXT(m->dpy, YSCR__EGL_DEVICE_EXT, &edev) || !edev ||
+        !yscr__mac.eglQueryDeviceAttribEXT((void*)edev, YSCR__EGL_METAL_DEVICE, &emtl) || !emtl) {
+        yscr__copy(err, err_cap, "ysp_screen: ANGLE did not give its MTLDevice (EGL_ANGLE_device_metal)");
+        yscr__mtl_close(m);
+        return YSCR_ERR_NOT_IMPLEMENTED;
+    }
+    m->device = (yscr__id)emtl;
+    yscr__v0(m->device, yscr__mac.retain);
+    /* the layer: on ANGLE's device, so one device serves both queues */
+    m->view = SDL_Metal_CreateView((SDL_Window*)m->win);
+    m->layer = m->view ? (yscr__id)SDL_Metal_GetLayer(m->view) : NULL;
+    if (!m->layer) {
+        yscr__set_error(err, err_cap, "ysp_screen: SDL_Metal_CreateView: %s", SDL_GetError());
+        yscr__mtl_close(m);
+        return YSCR_ERR_NOT_IMPLEMENTED;
+    }
+    yscr__vo(m->layer, yscr__mac.setDevice, m->device);
+    yscr__vu(m->layer, yscr__mac.setPixelFormat, m->bits10 ? YSCR__MTL_BGR10A2 : YSCR__MTL_BGRA8);
+    yscr__vb(m->layer, yscr__mac.setFramebufferOnly, 0);   /* the patch, codes and read-back are blits */
+    yscr__vu(m->layer, yscr__mac.setMaxDrawables, YSCR__MTL_DRAWABLES);
+    yscr__vb(m->layer, yscr__mac.setDisplaySync, 1);
+    yscr__vb(m->layer, yscr__mac.setTimeout, 1);   /* nextDrawable gives up after 1 s */
+    m->queue = yscr__o0(m->device, yscr__mac.newCommandQueue);
+    m->event = yscr__o0(m->device, yscr__mac.newSharedEvent);
+    m->staging = YSCR__MSG(yscr__id, yscr__id, void*, unsigned long, unsigned long)(
+        m->device, yscr__mac.newBuffer, (unsigned long)YSCR__MTL_REGIONS * YSCR__MTL_STAGE * 4ul, 0ul);
+    m->readback = YSCR__MSG(yscr__id, yscr__id, void*, unsigned long, unsigned long)(
+        m->device, yscr__mac.newBuffer, (unsigned long)YSCR__MTL_RB * 4ul, 0ul);
+    if (!m->queue || !m->event || !m->staging || !m->readback) {
+        yscr__copy(err, err_cap, "ysp_screen: Metal: the command queue, shared event or buffers were not made");
+        yscr__mtl_close(m);
+        return YSCR_ERR_LOST;
+    }
+    /* GL ES 3.0 on an RGBA8 config: a pbuffer's format is the IOSurface's,
+     * so 10 bits need no 10-bit config (ANGLE's Metal display has none) */
+    a[0] = YSCR__EGL_RED_SIZE; a[1] = 8; a[2] = YSCR__EGL_GREEN_SIZE; a[3] = 8; a[4] = YSCR__EGL_BLUE_SIZE; a[5] = 8;
+    a[6] = YSCR__EGL_ALPHA_SIZE; a[7] = 8; a[8] = YSCR__EGL_SURFACE_TYPE; a[9] = YSCR__EGL_PBUFFER_BIT;
+    a[10] = YSCR__EGL_RENDERABLE_TYPE; a[11] = YSCR__EGL_OPENGL_ES3_BIT; a[12] = YSCR__EGL_NONE;
+    if (!yscr__mac.eglChooseConfig(m->dpy, a, &m->cfg, 1, &n) || n < 1) {
+        yscr__copy(err, err_cap, "ysp_screen: ANGLE's Metal display has no RGBA8 ES 3 pbuffer config");
+        yscr__mtl_close(m);
+        return YSCR_ERR_NOT_IMPLEMENTED;
+    }
+    m->bind_target = YSCR__EGL_TEXTURE_2D;
+    yscr__mac.eglGetConfigAttrib(m->dpy, m->cfg, YSCR__EGL_BIND_TARGET, &m->bind_target);
+    a[0] = YSCR__EGL_CONTEXT_MAJOR; a[1] = 3; a[2] = YSCR__EGL_CONTEXT_MINOR; a[3] = 0; a[4] = YSCR__EGL_NONE;
+    m->ctx = yscr__mac.eglCreateContext(m->dpy, m->cfg, NULL, a);
+    a[0] = YSCR__EGL_WIDTH; a[1] = 1; a[2] = YSCR__EGL_HEIGHT; a[3] = 1; a[4] = YSCR__EGL_NONE;
+    m->dummy = m->ctx ? yscr__mac.eglCreatePbufferSurface(m->dpy, m->cfg, a) : NULL;
+    if (!m->ctx || !m->dummy || !yscr__mac.eglMakeCurrent(m->dpy, m->dummy, m->dummy, m->ctx)) {
+        yscr__set_error(err, err_cap, "ysp_screen: ES 3.0 context on ANGLE's Metal display failed (EGL 0x%x)",
+                        yscr__mac.eglGetError());
+        yscr__mtl_close(m);
+        return YSCR_ERR_LOST;
+    }
+    m->surf = m->dummy;
+    {
+        yscr_proc p = yscr__mac.eglGetProcAddress("glFlush");
+        yscr__glGetString_fn gs;
+        yscr_proc q = yscr__mac.eglGetProcAddress("glGetString");
+        memcpy((void*)&m->flush, &p, sizeof p);
+        memcpy((void*)&gs, &q, sizeof q);
+        if (gs) {
+            const char* v = (const char*)gs(YSCR__GL_VERSION);
+            const char* an = v ? strstr(v, "ANGLE ") : NULL;
+            yscr__copy(m->angle, sizeof m->angle, an ? an + 6 : (v ? v : "?"));
+            {   /* "2.1 git hash: unknown hash)" to "2.1/unknown hash", as on Windows */
+                char* x = strstr(m->angle, " git hash: ");
+                if (x) { memmove(x + 1, x + 11, strlen(x + 11) + 1); *x = '/'; }
+                x = strchr(m->angle, ')');
+                if (x) *x = '\0';
+                for (x = m->angle; *x; x++) if (*x == ' ') *x = '-';   /* one word in the describe line */
+            }
+        }
+    }
+    /* the period from the display link's nominal timing, the rate the flips
+     * then refine; the mode's refresh rate is only a label */
+    {
+        int x = 0, y = 0, w = 0, h = 0;
+        uint32_t ids[4], nd = 0;
+        yscr__cgpoint c;
+        void* link = NULL;
+        SDL_GetWindowPosition((SDL_Window*)m->win, &x, &y);
+        SDL_GetWindowSize((SDL_Window*)m->win, &w, &h);
+        c.x = x + w / 2.0; c.y = y + h / 2.0;
+        if (yscr__mac.CGGetDisplaysWithPoint(c, 4, ids, &nd) == 0 && nd > 0 &&
+            yscr__mac.CVDisplayLinkCreateWithCGDisplay(ids[0], &link) == 0 && link) {
+            yscr__cvtime t = yscr__mac.CVDisplayLinkGetNominalOutputVideoRefreshPeriod(link);
+            m->period_ns = yscr__mtl_period(t.value, t.scale);
+            if (m->period_ns > 0 && t.value <= 0x7fffffff && t.scale > 0) {
+                caps->mode.refresh_num = t.scale;
+                caps->mode.refresh_den = (int32_t)t.value;
+            }
+            yscr__mac.CVDisplayLinkRelease(link);
+        }
+    }
+    if (m->period_ns <= 0 && in->mode && in->mode->period_ns > 0) m->period_ns = in->mode->period_ns;
+    if (m->period_ns <= 0) m->period_ns = 16666667;
+    if (in->mode) {
+        caps->mode.w = in->mode->w;
+        caps->mode.h = in->mode->h;
+        caps->mode.format = in->mode->format;
+        caps->mode.density = in->mode->density;
+        if (!caps->mode.refresh_num) { caps->mode.refresh_num = in->mode->refresh_num; caps->mode.refresh_den = in->mode->refresh_den; }
+    }
+    caps->mode.period_ns = m->period_ns;
+    caps->period_ns = m->period_ns;
+    caps->kind = YSCR_FIXED_GRID;
+    caps->hw_onset = true;
+    caps->native_target = true;
+    caps->max_in_flight = 1;
+    yscr__mtl_correlate(m);
+    m->kind = yscr__mtl_kind_now(m);
+    (void)yscr__mtl_hidden(m);
+    if (in->code_selftest && in->n_codes > 0) *in->code_selftest = yscr__mtl_selftest(m);
+    return YSCR_OK;
+}
+
+static void yscr__mtl_close(void* vctx) {
+    yscr__mtl* m = (yscr__mtl*)vctx;
+    int k;
+    /* handlers still to come find their slots orphaned and free them */
+    for (k = 0; k < m->n_slot; k++) {
+        yscr__mtl_slot* sl = &yscr__mtl_tab[m->slot[k]];
+        if (!yscr__a_cas(&sl->state, YSCR__SLOT_ARMED, YSCR__SLOT_ORPHAN)) yscr__a_store(&sl->state, YSCR__SLOT_FREE);
+    }
+    m->n_slot = 0;
+    YSCR__MRELEASE(m->drawable);
+    YSCR__MRELEASE(m->rb_cb);
+    m->tex = NULL;
+    if (m->dpy) {
+        yscr__mac.eglMakeCurrent(m->dpy, NULL, NULL, NULL);
+        for (k = 0; k < YSCR__MTL_CACHE; k++) if (m->pb[k]) yscr__mac.eglDestroySurface(m->dpy, m->pb[k]);
+        if (m->dummy) yscr__mac.eglDestroySurface(m->dpy, m->dummy);
+        if (m->ctx) yscr__mac.eglDestroyContext(m->dpy, m->ctx);
+        yscr__mac.eglTerminate(m->dpy);
+    }
+    YSCR__MRELEASE(m->readback);
+    YSCR__MRELEASE(m->staging);
+    YSCR__MRELEASE(m->event);
+    YSCR__MRELEASE(m->queue);
+    YSCR__MRELEASE(m->device);
+    if (m->view) SDL_Metal_DestroyView(m->view);
+    m->view = NULL;
+    m->layer = NULL;
+    m->dpy = NULL;
+}
+
+static void yscr__mtl_bind(void* vctx) {
+    yscr__mtl* m = (yscr__mtl*)vctx;
+    yscr__mac.eglMakeCurrent(m->dpy, m->surf, m->surf, m->ctx);
+}
+
+/* One frame in flight: wait for the handler of the frame before, up to its
+ * target plus 3 periods (a hidden window's handlers can come late or not at
+ * all, measured), then take the next drawable. nextDrawable blocks for at
+ * most its own timeout (allowsNextDrawableTimeout, 1 s); without a drawable
+ * the frame draws into a 1 x 1 pbuffer and its record is estimated. */
+static int yscr__mtl_acquire(void* vctx, int64_t deadline_ns, yscr_vblank* newest) {
+    yscr__mtl* m = (yscr__mtl*)vctx;
+    void* pool;
+    newest->t_ns = 0;
+    if (m->n_slot > 0) {
+        int last = m->n_slot - 1;
+        int64_t limit = m->slot_target[last] + 3 * m->period_ns;
+        if (limit < yscr__now() + m->period_ns) limit = yscr__now() + m->period_ns;
+        if (limit > deadline_ns) limit = deadline_ns;
+        while (yscr__a_load(&yscr__mtl_tab[m->slot[last]].state) == YSCR__SLOT_ARMED && yscr__now() < limit)
+            YSCR__SLEEP_UNTIL((int64_t)(yscr__now() + 250000), 0);
+    }
+    if (yscr__now() - m->corr_t > 10000000000LL) yscr__mtl_correlate(m);
+    if (m->drawable) { yscr__mtl_bind(m); return YSCR_OK; }   /* not presented since */
+    pool = yscr__mac.pool_push();
+    m->drawable = yscr__o0(m->layer, yscr__mac.nextDrawable);
+    if (m->drawable) yscr__v0(m->drawable, yscr__mac.retain);
+    yscr__mac.pool_pop(pool);
+    m->surf = m->dummy;
+    if (m->drawable) {
+        void* ios;
+        m->tex = yscr__o0(m->drawable, yscr__mac.texture);
+        ios = m->tex ? (void*)yscr__o0(m->tex, yscr__mac.iosurface) : NULL;
+        m->w = m->tex ? (int32_t)yscr__u0(m->tex, yscr__mac.width) : 0;
+        m->h = m->tex ? (int32_t)yscr__u0(m->tex, yscr__mac.height) : 0;
+        if (ios) {
+            void* pb = yscr__mtl_pbuffer(m, ios, m->w, m->h);
+            if (pb) m->surf = pb;
+        }
+        if (m->surf == m->dummy) {   /* no IOSurface, or no pbuffer on it: drop this drawable */
+            YSCR__MRELEASE(m->drawable);
+            m->tex = NULL;
+            m->no_drawable++;
+        }
+    } else {
+        m->no_drawable++;
+    }
+    yscr__mtl_bind(m);
+    return YSCR_OK;
+}
+
+static void yscr__mtl_lost(yscr__mtl* m, uint64_t id, int hidden) {
+    if (m->n_lost == 4) { memmove(m->lost_id, m->lost_id + 1, 3 * sizeof m->lost_id[0]); memmove(m->lost_hidden, m->lost_hidden + 1, 3 * sizeof m->lost_hidden[0]); m->n_lost = 3; }
+    m->lost_id[m->n_lost] = id;
+    m->lost_hidden[m->n_lost] = hidden;
+    m->n_lost++;
+}
+
+/* A rectangle of one 32-bit value into the drawable, from a staging region:
+ * as many rows at a time as the region holds. */
+static void yscr__mtl_fill(yscr__mtl* m, yscr__id blit, uint32_t* stage, unsigned long off, int x, int y, int w, int h,
+                           uint32_t px) {
+    int rows, k, done;
+    yscr__mtl_size sz;
+    yscr__mtl_origin o;
+    if (w <= 0 || h <= 0 || x < 0 || y < 0 || x + w > m->w || y + h > m->h) return;
+    rows = YSCR__MTL_STAGE / w;
+    if (rows < 1) return;
+    if (rows > h) rows = h;
+    for (k = 0; k < w * rows; k++) stage[k] = px;
+    for (done = 0; done < h; done += rows) {
+        int r = h - done < rows ? h - done : rows;
+        sz.w = (unsigned long)w; sz.h = (unsigned long)r; sz.d = 1;
+        o.x = (unsigned long)x; o.y = (unsigned long)(y + done); o.z = 0;
+        YSCR__MSG(void, yscr__id, void*, yscr__id, unsigned long, unsigned long, unsigned long, yscr__mtl_size, yscr__id,
+                  unsigned long, unsigned long, yscr__mtl_origin)(blit, yscr__mac.copyBufToTex, m->staging, off,
+                  (unsigned long)w * 4ul, (unsigned long)w * 4ul * (unsigned long)r, sz, m->tex, 0ul, 0ul, o);
+    }
+}
+
+/* Codes one row each, read back from the drawable after the patch and the
+ * codes are drawn, into the read-back buffer: checked once the frame's
+ * handler came (the GPU is done then), as on DXGI. */
+static void yscr__mtl_rb_check(yscr__mtl* m) {
+    const uint32_t* row = (const uint32_t*)yscr__o0(m->readback, yscr__mac.contents);
+    int i, k, x = 0;
+    if (!m->rb_cb) return;
+    if (yscr__u0(m->rb_cb, yscr__mac.status) != YSCR__MTL_CB_DONE) return;
+    for (i = 0; m->rb_codes && i < m->rb_n; i++) {
+        const yscr_code_draw* c = &m->rb_codes[i];
+        int w = c->px ? c->w : (c->w < 64 ? c->w : 64), bad = 0;
+        for (k = 0; k < w && x + k < YSCR__MTL_RB - 1; k++) {
+            uint32_t want = (c->px ? c->px[k] : c->value) & 0xFFFFFFu;
+            if (yscr__mtl_code_of(row[x + k], m->bits10) != want) bad = 1;
+        }
+        x += w;
+        if (m->checked) (*m->checked)++;
+        if (bad && m->failed) (*m->failed)++;
+    }
+#if defined(YSCR__MTL_SYNC_PIXEL)
+    YSCR__MTL_SYNC_PIXEL(m->rb_id, row[YSCR__MTL_RB - 1]);
+#endif
+    m->rb_codes = NULL;
+    m->rb_n = 0;
+    YSCR__MRELEASE(m->rb_cb);
+}
+
+static int yscr__mtl_present(void* vctx, const yscr_present_req* req) {
+    yscr__mtl* m = (yscr__mtl*)vctx;
+    yscr__id cb, blit, d;
+    uint32_t* base;
+    unsigned long off;
+    int slot = -1, i, rb = 0;
+    void* pool;
+    if (!m->drawable) {   /* nothing to show this frame */
+        if (m->flush) m->flush();
+        yscr__mtl_lost(m, req->present_id, yscr__mtl_hidden(m));
+        return YSCR_OK;
+    }
+    /* The test seam reads every frame back, so it waits for the frame
+     * before; a header without it checks a read-back once it is done and
+     * skips one still running at the next verify. */
+    if (m->rb_cb && YSCR__MTL_SYNC_PIXEL_ON) yscr__v0(m->rb_cb, yscr__mac.waitUntilCompleted);
+    if (m->rb_cb) yscr__mtl_rb_check(m);
+    pool = yscr__mac.pool_push();
+    /* ANGLE's frame signals the event with the present id, after its work */
+    {
+        intptr_t sa[7];
+        void* sync;
+        sa[0] = YSCR__EGL_SYNC_EVENT_OBJECT; sa[1] = (intptr_t)m->event;
+        sa[2] = YSCR__EGL_SYNC_EVENT_LO; sa[3] = (intptr_t)(req->present_id & 0xFFFFFFFFu);
+        sa[4] = YSCR__EGL_SYNC_EVENT_HI; sa[5] = (intptr_t)(req->present_id >> 32);
+        sa[6] = YSCR__EGL_NONE;
+        sync = yscr__mac.eglCreateSync(m->dpy, YSCR__EGL_SYNC_SHARED_EVENT, sa);
+        if (m->flush) m->flush();
+        if (sync) yscr__mac.eglDestroySync(m->dpy, sync);
+        else {   /* no signal: wait on the CPU instead */
+            yscr_proc fin = yscr__mac.eglGetProcAddress("glFinish");
+            m->sync_failed++;
+            if (fin) fin();
+        }
+        cb = yscr__o0(m->queue, yscr__mac.commandBuffer);
+        if (sync) YSCR__MSG(void, yscr__id, void*, yscr__id, uint64_t)(cb, yscr__mac.encodeWait, m->event, req->present_id);
+    }
+    m->region = (m->region + 1) % YSCR__MTL_REGIONS;
+    off = (unsigned long)m->region * YSCR__MTL_STAGE * 4ul;
+    base = (uint32_t*)((unsigned char*)yscr__o0(m->staging, yscr__mac.contents) + off);
+    blit = yscr__o0(cb, yscr__mac.blitEncoder);
+    if (req->patch_on) {
+        uint32_t g = (uint32_t)lrintf(req->patch_value * 255.0f);
+        yscr__mtl_fill(m, blit, base, off, req->patch_x, req->patch_y, req->patch_w, req->patch_h,
+                       yscr__mtl_pixel(g | (g << 8) | (g << 16), m->bits10));
+    }
+    /* codes after the patch, each from its own part of the region */
+    {
+        unsigned long used = 0;
+        for (i = 0; i < req->n_codes; i++) {
+            const yscr_code_draw* c = &req->codes[i];
+            if (!c->px) {
+                int rows = c->w > 0 ? (int)((YSCR__MTL_STAGE - used) / (unsigned long)c->w) : 0;
+                if (rows < 1) continue;
+                yscr__mtl_fill(m, blit, base + used, off + used * 4ul, c->x, c->y, c->w, c->h,
+                               yscr__mtl_pixel(c->value, m->bits10));
+                used += (unsigned long)c->w * (unsigned long)(rows < c->h ? rows : c->h);
+            } else if (used + (unsigned long)c->w <= YSCR__MTL_STAGE && c->x + c->w <= m->w && c->y < m->h) {
+                yscr__mtl_size sz;
+                yscr__mtl_origin o;
+                int k;
+                for (k = 0; k < c->w; k++) base[used + (unsigned long)k] = yscr__mtl_pixel(c->px[k], m->bits10);
+                sz.w = (unsigned long)c->w; sz.h = 1; sz.d = 1;
+                o.x = (unsigned long)c->x; o.y = (unsigned long)c->y; o.z = 0;
+                YSCR__MSG(void, yscr__id, void*, yscr__id, unsigned long, unsigned long, unsigned long, yscr__mtl_size,
+                          yscr__id, unsigned long, unsigned long, yscr__mtl_origin)(blit, yscr__mac.copyBufToTex, m->staging,
+                          off + used * 4ul, (unsigned long)c->w * 4ul, (unsigned long)c->w * 4ul, sz, m->tex, 0ul, 0ul, o);
+                used += (unsigned long)c->w;
+            }
+        }
+    }
+    if ((req->verify && req->n_codes > 0) || YSCR__MTL_SYNC_PIXEL_ON) {
+        unsigned long x = 0;
+        for (i = 0; req->verify && i < req->n_codes; i++) {
+            const yscr_code_draw* c = &req->codes[i];
+            unsigned long w = (unsigned long)(c->px ? c->w : (c->w < 64 ? c->w : 64));
+            yscr__mtl_size sz;
+            yscr__mtl_origin o;
+            if (x + w > YSCR__MTL_RB - 1) w = YSCR__MTL_RB - 1 - x;
+            if (w == 0 || c->x + (int)w > m->w || c->y >= m->h) break;
+            sz.w = w; sz.h = 1; sz.d = 1;
+            o.x = (unsigned long)c->x; o.y = (unsigned long)c->y; o.z = 0;
+            YSCR__MSG(void, yscr__id, void*, yscr__id, unsigned long, unsigned long, yscr__mtl_origin, yscr__mtl_size,
+                      yscr__id, unsigned long, unsigned long, unsigned long)(blit, yscr__mac.copyTexToBuf, m->tex, 0ul, 0ul,
+                      o, sz, m->readback, x * 4ul, w * 4ul, w * 4ul);
+            x += w;
+        }
+        if (YSCR__MTL_SYNC_PIXEL_ON && m->w > 0 && m->h > 0) {   /* a pixel ANGLE drew: the sync's own check */
+            yscr__mtl_size sz;
+            yscr__mtl_origin o;
+            sz.w = 1; sz.h = 1; sz.d = 1;
+            o.x = (unsigned long)(m->w / 2); o.y = (unsigned long)(m->h / 2); o.z = 0;
+            YSCR__MSG(void, yscr__id, void*, yscr__id, unsigned long, unsigned long, yscr__mtl_origin, yscr__mtl_size,
+                      yscr__id, unsigned long, unsigned long, unsigned long)(blit, yscr__mac.copyTexToBuf, m->tex, 0ul, 0ul,
+                      o, sz, m->readback, (YSCR__MTL_RB - 1) * 4ul, 4ul, 4ul);
+        }
+        rb = 1;
+    }
+    yscr__v0(blit, yscr__mac.endEncoding);
+    d = m->drawable;
+    if (m->n_slot < YSCR__MTL_ARMED) slot = yscr__mtl_slot_take();
+    if (slot >= 0) {
+        yscr__vo(d, yscr__mac.addPresented, (yscr__id)&yscr__mtl_blk[slot]);
+        m->slot[m->n_slot] = slot;
+        m->slot_id[m->n_slot] = req->present_id;
+        m->slot_target[m->n_slot] = req->target_ns > 0 ? req->target_ns : yscr__now();
+        m->n_slot++;
+    } else {
+        m->no_slot++;
+        yscr__mtl_lost(m, req->present_id, 0);
+    }
+    {
+        int64_t t = req->target_ns > 0 ? yscr__mtl_target(req->target_ns, m->period_ns) : 0;
+        if (t > yscr__now()) YSCR__MSG(void, yscr__id, void*, yscr__id, double)(cb, yscr__mac.presentAtTime, d,
+                                                                               (double)(t - m->mach_off) * 1e-9);
+        else yscr__vo(cb, yscr__mac.presentDrawable, d);
+    }
+    if (rb) {
+        YSCR__MRELEASE(m->rb_cb);   /* one still pending is not checked */
+        yscr__v0(cb, yscr__mac.retain);
+        m->rb_cb = cb;
+        m->rb_id = req->present_id;
+        m->rb_codes = req->verify ? req->codes : NULL;
+        m->rb_n = req->verify ? req->n_codes : 0;
+    }
+    yscr__v0(cb, yscr__mac.commit);
+    yscr__mac.pool_pop(pool);
+    YSCR__MRELEASE(m->drawable);
+    m->tex = NULL;
+    m->surf = m->dummy;
+    yscr__mac.eglMakeCurrent(m->dpy, m->dummy, m->dummy, m->ctx);
+    return YSCR_OK;
+}
+
+static int yscr__mtl_completions(void* vctx, yscr_vblank* out, int cap) {
+    yscr__mtl* m = (yscr__mtl*)vctx;
+    int n = 0;
+    while (n < cap && m->n_lost > 0) {   /* presents with no handler: estimated */
+        yscr__mtl_vblank(m->lost_id[0], 0, m->lost_hidden[0], m->kind, m->t0, m->period_ns, &out[n++]);
+        memmove(m->lost_id, m->lost_id + 1, sizeof m->lost_id[0] * (size_t)(m->n_lost - 1));
+        memmove(m->lost_hidden, m->lost_hidden + 1, sizeof m->lost_hidden[0] * (size_t)(m->n_lost - 1));
+        m->n_lost--;
+    }
+    while (n < cap && m->n_slot > 0) {
+        yscr__mtl_slot* sl = &yscr__mtl_tab[m->slot[0]];
+        int64_t t;
+        if (yscr__a_load(&sl->state) != YSCR__SLOT_FIRED) {   /* in order */
+            /* A handler a second past its target may never come (a hidden
+             * window's): give its slot up, so the frames after it complete */
+            if (yscr__now() - m->slot_target[0] < 1000000000LL ||
+                !yscr__a_cas(&sl->state, YSCR__SLOT_ARMED, YSCR__SLOT_ORPHAN)) break;
+            m->not_shown++;
+            m->late_handlers++;
+            yscr__mtl_vblank(m->slot_id[0], 0, yscr__mtl_hidden(m), m->kind, m->t0, m->period_ns, &out[n++]);
+            m->n_slot--;
+            memmove(m->slot, m->slot + 1, sizeof m->slot[0] * (size_t)m->n_slot);
+            memmove(m->slot_id, m->slot_id + 1, sizeof m->slot_id[0] * (size_t)m->n_slot);
+            memmove(m->slot_target, m->slot_target + 1, sizeof m->slot_target[0] * (size_t)m->n_slot);
+            continue;
+        }
+        t = yscr__a_load64(&sl->presented);
+        if (t > 0) {
+            t += m->mach_off;
+            if (!m->t0) m->t0 = t;
+        } else {
+            m->not_shown++;
+        }
+        yscr__mtl_vblank(m->slot_id[0], t, t > 0 ? 0 : yscr__mtl_hidden(m), m->kind, m->t0, m->period_ns, &out[n++]);
+        yscr__a_store(&sl->state, YSCR__SLOT_FREE);
+        if (m->rb_cb && m->rb_id <= m->slot_id[0]) yscr__mtl_rb_check(m);
+        m->n_slot--;
+        memmove(m->slot, m->slot + 1, sizeof m->slot[0] * (size_t)m->n_slot);
+        memmove(m->slot_id, m->slot_id + 1, sizeof m->slot_id[0] * (size_t)m->n_slot);
+        memmove(m->slot_target, m->slot_target + 1, sizeof m->slot_target[0] * (size_t)m->n_slot);
+    }
+    return n;
+}
+
+static int yscr__mtl_describe(void* vctx, char* buf, size_t cap) {
+    yscr__mtl* m = (yscr__mtl*)vctx;
+    m->kind = yscr__mtl_kind_now(m);
+    return snprintf(buf, cap, "angle=%s kind=%s layer=%s period=%lldns locked=%d not_shown=%u no_drawable=%u "
+                    "no_handler=%u late_handler=%u sync_failed=%u pbuffers=%u mach_off=%lldns(%lldns) target_lead=%.2f(unmeasured) "
+                    "tier=%d(unmeasured)",
+                    m->angle, yscr__mtl_kind_name(m->kind), m->bits10 ? "bgr10a2" : "bgra8", (long long)m->period_ns,
+                    m->locked, m->not_shown, m->no_drawable, m->no_slot, m->late_handlers, m->sync_failed, m->pbuffers,
+                    (long long)m->mach_off, (long long)m->corr_w, YSCR__MTL_TARGET_LEAD, (int)yscr__mtl_tier(m->kind));
+}
+
+static yscr_proc yscr__mtl_gl_proc(void* vctx, const char* name) {
+    (void)vctx;
+    return yscr__mac.eglGetProcAddress ? yscr__mac.eglGetProcAddress(name) : NULL;
+}
+
+/* ANGLE's signal for a present is its GPU work done (the header's blits
+ * after it are a few microseconds). Any thread. */
+static uint64_t yscr__mtl_gpu_done(void* vctx) {
+    yscr__mtl* m = (yscr__mtl*)vctx;
+    return m->event ? YSCR__MSG(uint64_t, yscr__id, void*)(m->event, yscr__mac.signaledValue) : 0;
+}
+
+static const yscr_presenter yscr__mtl_presenter = {
+    YSCR_PRESENTER_VERSION, "metal", true, false, true,
+    yscr__mtl_open, yscr__mtl_close, yscr__mtl_acquire, yscr__mtl_present,
+    yscr__mtl_completions, yscr__mtl_gl_proc, yscr__mtl_bind, yscr__mtl_describe,
+    yscr__mtl_gpu_done
+};
+
+#endif /* YSCR__METAL */
 
 /* --- DXGI flip presenter (Windows 10 and 11) ------------------------------ */
 
@@ -9404,6 +10578,10 @@ static bool yscr__window_open(yscr_screen* s, const yscr_desc* desc, yscr_mode* 
     SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_FULLSCREEN_BOOLEAN, !desc->windowed);
 #endif
     SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_HIGH_PIXEL_DENSITY_BOOLEAN, true);
+#if defined(YSCR__METAL)
+    /* the header makes the window's CAMetalLayer (BACKENDS, METAL) */
+    if (s->backend == YSCR_BACKEND_METAL) SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_METAL_BOOLEAN, true);
+#endif
 #if defined(YSCR__WEB)
     yscr__web_fs_hold(1);
     s->window = SDL_CreateWindowWithProperties(props);
@@ -9645,6 +10823,14 @@ YSCR_API bool yscr_open(yscr_screen* s, const yscr_desc* desc) {
 #if !defined(YSCR__WEB)
     (void)&yscr__web_shown; (void)&yscr__web_steady;   /* the core test calls them */
 #endif
+#if !defined(YSCR__METAL)
+    (void)&yscr__mtl_target; (void)&yscr__mtl_vblank; (void)&yscr__mtl_period;   /* the core test calls them */
+    (void)&yscr__mtl_pixel; (void)&yscr__mtl_code_of; (void)&yscr__mtl_kind_name;
+#endif
+    if (desc->color_depth != 0 && desc->color_depth != 8 && desc->color_depth != 10) {
+        yscr__copy(s->error, sizeof s->error, "ysp_screen: desc.color_depth must be 0, 8 or 10");
+        return false;
+    }
     s->backend = desc->backend;
     s->auto_pick = YSCR_AUTO_NAMED;
     if (s->backend == YSCR_BACKEND_AUTO) {
@@ -9655,9 +10841,11 @@ YSCR_API bool yscr_open(yscr_screen* s, const yscr_desc* desc) {
         s->auto_pick = YSCR_AUTO_COMPOSITION;
 #elif defined(YSCR__WEB)
         s->backend = YSCR_BACKEND_WEB;
+#elif defined(YSCR__METAL)
+        s->backend = YSCR_BACKEND_METAL;
 #else
         yscr__copy(s->error, sizeof s->error, "ysp_screen: no display backend on this platform "
-                     "(Linux X11, Wayland and macOS are stubs); BACKEND_SIM runs without a display");
+                     "(Linux X11 and Wayland are stubs); BACKEND_SIM runs without a display");
         return false;
 #endif
     }
@@ -9689,6 +10877,12 @@ YSCR_API bool yscr_open(yscr_screen* s, const yscr_desc* desc) {
         s->pr_ctx = s->backend_mem;
         break;
 #endif
+#if defined(YSCR__METAL)
+    case YSCR_BACKEND_METAL:
+        s->pr = &yscr__mtl_presenter;
+        s->pr_ctx = s->backend_mem;
+        break;
+#endif
     case YSCR_BACKEND_CUSTOM:
         if (!desc->presenter || desc->presenter->version != YSCR_PRESENTER_VERSION ||
             !desc->presenter->open || !desc->presenter->acquire || !desc->presenter->present ||
@@ -9702,7 +10896,14 @@ YSCR_API bool yscr_open(yscr_screen* s, const yscr_desc* desc) {
         break;
     default:
         yscr__set_error(s->error, sizeof s->error, "ysp_screen: backend %d is not implemented on this platform "
-                          "(DXGI_FLIP and COMPOSITION on Windows, WEB under Emscripten, SIM and CUSTOM are)", (int)s->backend);
+                          "(DXGI_FLIP and COMPOSITION on Windows, METAL on macOS, WEB under Emscripten, SIM and CUSTOM are)",
+                          (int)s->backend);
+        return false;
+    }
+    if (desc->color_depth == 10 && s->backend != YSCR_BACKEND_METAL && s->backend != YSCR_BACKEND_CUSTOM) {
+        yscr__copy(s->error, sizeof s->error, "ysp_screen: desc.color_depth 10 is METAL's (BACKENDS); "
+                     "the other backends draw 8 bits");
+        s->pr = NULL;
         return false;
     }
 
@@ -9717,6 +10918,7 @@ YSCR_API bool yscr_open(yscr_screen* s, const yscr_desc* desc) {
     memset(&want, 0, sizeof want);
     memset(&in, 0, sizeof in);
     in.d3d11_video = desc->d3d11_video ? 1 : 0;
+    in.color_depth = desc->color_depth;
     in.display = desc->display;
     in.angle_dir = desc->angle_dir;
     in.sim_period_ns = desc->sim_period_ns;
@@ -10337,7 +11539,8 @@ static int yscr__flip_at(yscr_screen* s, int64_t t, yscr_record* out) {
         pi.onset = yscr__time_of(s, s->pred_count) + s->offset;
         pi.w = s->caps.mode.w;
         pi.h = s->caps.mode.h;
-        pi.rows_top_down = s->backend == YSCR_BACKEND_DXGI_FLIP || s->backend == YSCR_BACKEND_COMPOSITION;
+        pi.rows_top_down = s->backend == YSCR_BACKEND_DXGI_FLIP || s->backend == YSCR_BACKEND_COMPOSITION ||
+                           s->backend == YSCR_BACKEND_METAL;
         s->on_present(s->on_present_ctx, &pi);
         s->gl_epoch++;
     }
@@ -11135,7 +12338,7 @@ YSCR_API const yscr_param* yscr_params(int* n) {
         { "windowed",        "bool", 0, 1, 0, "",                 "a window instead of borderless fullscreen", NULL },
         { "window_w",        "i32",  0, 65535, 800, "px",         "window width", NULL },
         { "window_h",        "i32",  0, 65535, 600, "px",         "window height", NULL },
-        { "backend",         "enum", 0, 8, 0, "",                 "the presenting path; open() refuses the stubs glx_oml, wayland, metal",
+        { "backend",         "enum", 0, 8, 0, "",                 "the presenting path; open() refuses the stubs glx_oml, wayland",
           "auto=0,dxgi_flip=1,composition=2,glx_oml=3,wayland=4,metal=5,web=6,sim=7,custom=8" },
         { "lead",            "f64", -1, 0.999, 0.5, "frame",      "snap window; -1 = never before the target", NULL },
         { "display_index",   "u32",  0, 4294967295.0, 0, "",      "display number in the flip records", NULL },
@@ -11164,7 +12367,8 @@ YSCR_API const yscr_param* yscr_params(int* n) {
         { "settle_flips",    "i32",  0, 64, 6, "frame",           "clean flips in a row that settle the start", NULL },
         { "settle_min_ns",   "i64", -1, 6e10, 0, "ns",            "settle no sooner; 0 = 2.5 s in a window, none fullscreen; -1 = none", NULL },
         { "settle_max_ns",   "i64",  0, 6e10, 3000000000.0, "ns", "the settle cap from the open() call; 0 = 3 s fullscreen, 4 s window", NULL },
-        { "sim_period_ns",   "i64",  0, 1e10, 16666667, "ns",     "frame period of the simulated display", NULL }
+        { "sim_period_ns",   "i64",  0, 1e10, 16666667, "ns",     "frame period of the simulated display", NULL },
+        { "color_depth",     "i32",  0, 10, 0, "bit",             "bits per channel: 0 or 8, or 10 (METAL)", NULL }
     };
     if (n) *n = (int)(sizeof table / sizeof table[0]);
     return table;

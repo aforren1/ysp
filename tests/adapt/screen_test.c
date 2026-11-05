@@ -2834,6 +2834,185 @@ static void test_unshown_and_tiers(void) {
     CHECK(!yscr_open(&s, &d));
 }
 
+/* The Metal presenter's rules (BACKENDS, METAL), without a Mac. */
+static void test_metal_rules(void) {
+    yscr_vblank v;
+    int i, k, b;
+    const int64_t T = 5000000000LL;
+    /* (a) the target: a quarter period before the planned vblank */
+    CHECK_I(yscr__mtl_target(T, 16000000), T - 4000000);
+    CHECK_I(yscr__mtl_target(T, P_NS), T - P_NS / 4);
+    /* the display link's nominal period, as measured on the M27Q's "60 Hz" */
+    CHECK_I(yscr__mtl_period(400330, 24000000), 16680417);
+    CHECK_I(yscr__mtl_period(1, 60), 16666667);
+    CHECK_I(yscr__mtl_period(0, 24000000), 0);
+    CHECK_I(yscr__mtl_period(400330, 0), 0);
+    /* a shown drawable: its time, counted from t0; composed, tier 3 (c) */
+    yscr__mtl_vblank(7, T + 3 * P_NS + 1000, 0, YSCR__MTL_KIND_WINDOW, T, P_NS, &v);
+    CHECK_I((int64_t)v.present_id, 7);
+    CHECK_I(v.t_ns, T + 3 * P_NS + 1000);
+    CHECK_I(v.count, 3);
+    CHECK_I(v.path, YSCR_PATH_COMPOSED);
+    CHECK_I(v.tier, YSCR_TIER_3);
+    CHECK_I(v.flags, 0);
+    for (k = 0; k < 3; k++) CHECK_I(yscr__mtl_tier(k), YSCR_TIER_3);
+    CHECK(!strcmp(yscr__mtl_kind_name(YSCR__MTL_KIND_SPACE), "space"));
+    CHECK(!strcmp(yscr__mtl_kind_name(YSCR__MTL_KIND_FULLSCREEN), "fullscreen"));
+    CHECK(!strcmp(yscr__mtl_kind_name(YSCR__MTL_KIND_WINDOW), "window"));
+    /* not shown: no time; OCCLUDED only when the window was hidden */
+    yscr__mtl_vblank(8, 0, 1, YSCR__MTL_KIND_SPACE, T, P_NS, &v);
+    CHECK_I(v.t_ns, 0);
+    CHECK_I(v.flags, YSCR_FLIP_OCCLUDED);
+    CHECK_I(v.tier, YSCR_TIER_3);
+    yscr__mtl_vblank(9, 0, 0, YSCR__MTL_KIND_WINDOW, T, P_NS, &v);
+    CHECK_I(v.t_ns, 0);
+    CHECK_I(v.flags, 0);
+    /* pixels: BGRA8 with red in byte 2; BGR10A2 with 8 bits spread to 10 */
+    CHECK_I(yscr__mtl_pixel(0x0000FFu, 0), 0xFFFF0000u);
+    CHECK_I(yscr__mtl_pixel(0xFF0000u, 0), 0xFF0000FFu);
+    CHECK_I(yscr__mtl_pixel(0x0000FFu, 1), 0xC0000000u | (1023u << 20));
+    CHECK_I(yscr__mtl_pixel(0x000080u, 1), 0xC0000000u | (514u << 20));
+    for (b = 0; b < 2; b++)
+        for (i = 0; i < 256; i++) {
+            uint32_t c = (uint32_t)i | ((uint32_t)(255 - i) << 8) | ((uint32_t)((i * 37 + 11) & 255) << 16);
+            CHECK_I(yscr__mtl_code_of(yscr__mtl_pixel(c, b), b), c);
+        }
+    {   /* desc.color_depth: 0, 8 or 10, and 10 only where the backend draws it */
+        static yscr_screen s;
+        yscr_desc d;
+        memset(&s, 0, sizeof s);
+        memset(&d, 0, sizeof d);
+        d.backend = YSCR_BACKEND_SIM;
+        d.sim_period_ns = P_NS;
+        d.color_depth = 7;
+        CHECK(!yscr_open(&s, &d));
+        CHECK(strstr(yscr_error(&s), "color_depth") != NULL);
+        d.color_depth = 10;
+        CHECK(!yscr_open(&s, &d));
+        CHECK(strstr(yscr_error(&s), "METAL") != NULL);
+        d.color_depth = 8;
+        CHECK(yscr_open(&s, &d));
+        yscr_close(&s);
+    }
+}
+
+/* A display that shows a drawable as Core Animation might: at the vblank
+ * nearest its presentAtTime target (rule 0), or at the first vblank at or
+ * after it (rule 1), never before the vblank after the present call. The
+ * presenter's target and completion rules are the header's own. */
+typedef struct mtl_script {
+    int      rule, hide_from, hide_to, n;
+    int64_t  t0, target, made;
+    uint64_t id;
+    int      has, has_done;
+    yscr_vblank done;
+} mtl_script;
+
+static int ms_open(void* ctx, const yscr_presenter_open* in, yscr_caps* caps, char* err, size_t cap) {
+    mtl_script* c = (mtl_script*)ctx;
+    (void)in; (void)err; (void)cap;
+    c->t0 = now_ns();
+    caps->kind = YSCR_FIXED_GRID;
+    caps->period_ns = P_NS;
+    caps->native_target = true;
+    caps->hw_onset = true;
+    caps->max_in_flight = 1;
+    caps->mode.refresh_num = 250;
+    caps->mode.refresh_den = 1;
+    caps->mode.period_ns = P_NS;
+    return YSCR_OK;
+}
+static void ms_close(void* ctx) { (void)ctx; }
+static int ms_acquire(void* ctx, int64_t deadline_ns, yscr_vblank* newest) {
+    mtl_script* c = (mtl_script*)ctx;
+    (void)deadline_ns;
+    newest->t_ns = 0;
+    if (c->has) {
+        double k = (double)(c->target - c->t0) / (double)P_NS;
+        int64_t shown = c->rule == 0 ? (int64_t)llround(k) : (int64_t)ceil(k);
+        int64_t first = (c->made - c->t0) / P_NS + 1;
+        int64_t t;
+        int hidden = c->n >= c->hide_from && c->n < c->hide_to;
+        if (shown < first) shown = first;
+        t = c->t0 + shown * P_NS;
+        if (t > now_ns()) vsleep_until(t);
+        yscr__mtl_vblank(c->id, hidden ? 0 : t, hidden, YSCR__MTL_KIND_WINDOW, c->t0, P_NS, &c->done);
+        c->has_done = 1;
+        c->has = 0;
+        c->n++;
+    }
+    return YSCR_OK;
+}
+static int ms_present(void* ctx, const yscr_present_req* req) {
+    mtl_script* c = (mtl_script*)ctx;
+    c->id = req->present_id;
+    c->made = now_ns();
+    c->target = req->target_ns > 0 ? yscr__mtl_target(req->target_ns, P_NS) : c->made;
+    c->has = 1;
+    return YSCR_OK;
+}
+static int ms_completions(void* ctx, yscr_vblank* out, int cap) {
+    mtl_script* c = (mtl_script*)ctx;
+    if (!c->has_done || cap < 1) return 0;
+    out[0] = c->done;
+    c->has_done = 0;
+    return 1;
+}
+static const yscr_presenter g_mtl_scripted = {
+    YSCR_PRESENTER_VERSION, "metal-scripted", false, false, true,
+    ms_open, ms_close, ms_acquire, ms_present, ms_completions, NULL, NULL, NULL, NULL
+};
+
+static void test_metal_records(int rule) {
+    static mtl_script c;
+    static yscr_screen s;
+    static yscr_frame f;
+    yscr_desc d;
+    int i, j, n, shown = 0, hidden = 0;
+    memset(&c, 0, sizeof c);
+    c.rule = rule;
+    c.hide_from = 1000000;
+    memset(&s, 0, sizeof s);
+    memset(&d, 0, sizeof d);
+    d.backend = YSCR_BACKEND_CUSTOM;
+    d.presenter = &g_mtl_scripted;
+    d.presenter_ctx = &c;
+    d.ring = &g_ring;
+    ring_reset();
+    CHECK(yscr_open(&s, &d));
+    if (!yscr_is_open(&s)) return;
+    c.hide_from = c.n + 20;
+    c.hide_to = c.n + 23;
+    for (i = 0; i < 60; i++) {
+        CHECK_I(yscr_begin(&s, &f), YSCR_OK);
+        /* every target a third of a period off the grid, both ways */
+        CHECK_I(yscr_flip_at(&s, f.onset + ((i & 1) ? P_NS / 3 : -P_NS / 3), NULL), YSCR_OK);
+    }
+    yscr_close(&s);
+    n = ring_drain();
+    for (j = 0; j < n; j++) {
+        const yrt_event* e = &g_ev[j];
+        uint32_t flags, tier;
+        if (e->source != YRT_SRC_SCREEN || e->kind != YSCR_EV_FLIP) continue;
+        flags = YSCR_EV_FLAGS_OF(e->u.u16[5]);
+        tier = YSCR_EV_TIER_OF(e->u.u16[5]);
+        CHECK_I(tier, YSCR_TIER_3);   /* (c): no kind claims more */
+        /* the target snapped to the vblank a third of a period away */
+        CHECK_I(llabs((long long)((int64_t)e->t_ns - e->u.i64[0])), P_NS / 3);
+        if (flags & YSCR_FLIP_ESTIMATED) {
+            CHECK(flags & YSCR_FLIP_OCCLUDED);   /* onset: the planned vblank */
+            hidden++;
+        } else {
+            /* shown on the vblank planned: neither early nor late, under either rule */
+            CHECK(!(flags & (YSCR_FLIP_EARLY | YSCR_FLIP_LATE_TARGET)));
+            CHECK_I(e->u.u16[4], 0);
+            shown++;
+        }
+    }
+    CHECK_I(hidden, 3);
+    CHECK(shown >= 55);
+}
+
 /* Two screens as a group. */
 static void test_group(void) {
     static script c[2];
@@ -3041,7 +3220,7 @@ static const ptc_slot g_scr_fields[] = {
     SCR_D("min_tier", min_tier, NULL), SCR_D("depth", depth, NULL), SCR_D("depth_learn", depth_learn, NULL),
     SCR_D("settle", settle, scr_settle_name), SCR_D("settle_flips", settle_flips, NULL),
     SCR_D("settle_min_ns", settle_min_ns, NULL), SCR_D("settle_max_ns", settle_max_ns, NULL),
-    SCR_D("sim_period_ns", sim_period_ns, NULL),
+    SCR_D("sim_period_ns", sim_period_ns, NULL), SCR_D("color_depth", color_depth, NULL),
 };
 #undef SCR_D
 #define SCR_NF ((int)(sizeof g_scr_fields / sizeof g_scr_fields[0]))
@@ -4484,6 +4663,9 @@ static void test_gap_anchor(int mode) {
 int main(void) {
     yrt_thread_elevate(NULL);
     test_web_rules();
+    test_metal_rules();
+    test_metal_records(0);
+    test_metal_records(1);
     test_errors();
     test_mode_multiple();
     test_params();
