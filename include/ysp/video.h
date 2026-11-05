@@ -505,7 +505,9 @@
  *          and ends) before the backend opens, not after: the frame thread
  *          read a yvid_reader while AVFoundation's loader read it on its
  *          queue (ThreadSanitizer), and a reader is called one call at a
- *          time.
+ *          time. A decoder's failure message keeps the backend's reason:
+ *          "decode of frame 164 failed (-6): VideoToolbox decode failed
+ *          (-12909)" (Media Foundation: its HRESULT).
  *   v0.6.0 - PATHS: every path is UTF-8, converted to UTF-16 for _wfsopen
  *          on Windows, as ysp/dataset.h and ysp/pack.h take paths. fopen()
  *          read them in the ANSI code page, so a folder named with a
@@ -623,8 +625,15 @@
  *   rate, a GOP that changes, HEVC Main 10, non-square pixels, Motion JPEG,
  *   rotation, a 1 ms timescale, an edit list). Compile checks C99, C11,
  *   C++17, Objective-C with and without ARC; x86_64 compiled, not run.
- *   Mutations: 14 of 14 (avf-01 to avf-14). Not measured yet: decode cost, open
- *   and seek latency (docs/video.md lists the commands). Not built: the GPU
+ *   Mutations: 15 of 15 (avf-01 to avf-15). Measured (2026-11-05, the M2
+ *   on AC power, a quiet machine, docs/video.md M1, M3, M4 on macOS), the
+ *   decode thread per frame with the hardware decoder, mean / p99: 2.0 /
+ *   3.3 ms at 720p30, 3.6 / 6.7 ms at 1080p30 and 1080p60; the software
+ *   decoder 7.7 / 15 ms at 720p, 20 to 24 / 38 to 52 ms at 1080p (misses
+ *   the 1080p bars; AUTO is hardware). Open 68 to 93 ms cold, 9 to 14 ms
+ *   warm; a seek 37, 67, 129 ms (hardware, GOP 30, 30, 60). VideoToolbox
+ *   decodes in its own process, so this process's CPU does not show the
+ *   decoder's. Not measured: the frame thread in a window. Not built: the GPU
  *   path on macOS (ysp/screen.h's macOS swap path is a stub). Windows not
  *   rebuilt for v0.7.0: the Media Foundation code moved but did not change.
  *   STATUS: v0.6.0: tests/adapt/video_test.c opens, probes, writes and
@@ -5704,6 +5713,36 @@ static void yvid__dt_fail(yvid_movie* mv, int rc, const char* fmt, ...) {
     yvid__st32(&mv->dec_err, (uint32_t)(-rc));
 }
 
+/* A built-in backend's own reason for its last failure, or "". The
+ * decoder interface (version 1) has no call for a custom decoder's. */
+static const char* yvid__dec_why(const yvid_movie* mv, char* buf, size_t cap) {
+    buf[0] = 0;
+#if YVID__AVF
+    if (mv->dec == &yvid__avf_decoder) yvid__fmt(buf, cap, "%s", ((const yvid__avf*)mv->dec_ctx)->why);
+#endif
+#if YVID__MF
+    if (mv->dec == &yvid__mf_decoder && FAILED(((const yvid__mf*)mv->dec_ctx)->last_hr))
+        yvid__fmt(buf, cap, "Media Foundation 0x%08lx", (unsigned long)((const yvid__mf*)mv->dec_ctx)->last_hr);
+#endif
+    (void)mv; (void)cap;
+    return buf;
+}
+
+/* A decoder call failed: the message, then the backend's reason (v0.7.0;
+ * before, "decode of frame 164 failed (-6)" said nothing more). */
+static void yvid__dt_fail_dec(yvid_movie* mv, const char* fmt, ...) {
+    char why[200];
+    size_t n;
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(mv->dt_error, sizeof mv->dt_error, fmt, ap);
+    va_end(ap);
+    yvid__dec_why(mv, why, sizeof why);
+    n = strlen(mv->dt_error);
+    if (why[0] && n + 3 < sizeof mv->dt_error) snprintf(mv->dt_error + n, sizeof mv->dt_error - n, ": %s", why);
+    yvid__st32(&mv->dec_err, (uint32_t)(-YVID_ERR_DECODER));
+}
+
 static void yvid__on_msg(void* ctx, const void* msg, uint32_t seq) {
     yvid_movie* mv = (yvid_movie*)ctx;
     yvid__msg m;
@@ -5748,7 +5787,7 @@ static bool yvid__dstep(yvid_movie* mv) {
             YRT_ZONE(zs, "yvid.seek");
             rc = mv->dec->seek(mv->dec_ctx, key, mv->timescale > 0 ? yvid__ft(mv, key) / 1000 * mv->timescale / 1000000 : key);
             YRT_ZONE_END(zs);
-            if (rc < 0) { yvid__dt_fail(mv, YVID_ERR_DECODER, "ysp_video: %s: seek to keyframe %lld failed (%d)", mv->dec->name, (long long)key, rc); return false; }
+            if (rc < 0) { yvid__dt_fail_dec(mv, "ysp_video: %s: seek to keyframe %lld failed (%d)", mv->dec->name, (long long)key, rc); return false; }
             mv->dt_pos = key;
             mv->dt_key = key;
         }
@@ -5757,7 +5796,7 @@ static bool yvid__dstep(yvid_movie* mv) {
             out.index = -1;
             rc = mv->dec->next(mv->dec_ctx, NULL, &out);
             if (rc == YVID_PENDING) return yvid__pending(mv);
-            if (rc != YVID_OK) { yvid__dt_fail(mv, YVID_ERR_DECODER, "ysp_video: %s: the stream ended or failed at frame %lld while seeking (%d)", mv->dec->name, (long long)mv->dt_pos, rc); return false; }
+            if (rc != YVID_OK) { yvid__dt_fail_dec(mv, "ysp_video: %s: the stream ended or failed at frame %lld while seeking (%d)", mv->dec->name, (long long)mv->dt_pos, rc); return false; }
             mv->dt_pos++;
             mv->dt_discarded++;
             mv->dt_next = g;
@@ -5798,7 +5837,7 @@ static bool yvid__dstep(yvid_movie* mv) {
         }
         if (rc < 0) {
             mv->dt_spare = s;
-            yvid__dt_fail(mv, YVID_ERR_DECODER, "ysp_video: %s: decode of frame %lld failed (%d)", mv->dec->name, (long long)idx, rc);
+            yvid__dt_fail_dec(mv, "ysp_video: %s: decode of frame %lld failed (%d)", mv->dec->name, (long long)idx, rc);
             return false;
         }
         if (dt > yvid__ft(mv, 1) && mv->d.ring) {
