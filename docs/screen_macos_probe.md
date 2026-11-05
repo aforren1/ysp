@@ -557,6 +557,10 @@ Copy each kind's quantization table. Then:
 ## 7. Recommended design for `YSCR_BACKEND_METAL`
 
 From section 5, with the open items marked. Section 6 decides them.
+Built in `ysp/screen.h` v0.11.0 (docs/screen.md, "macOS: the header owns
+the CAMetalLayer"), with one change: the target of item 3 is the planned
+vblank minus a quarter period, which suits both quantization rules
+without a measurement.
 
 1. **Path: the header owns the CAMetalLayer** (question 1b). SDL3 makes
    the window; the header makes the layer with `SDL_Metal_CreateView`,

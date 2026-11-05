@@ -1183,7 +1183,7 @@ Details, versions and measurements per header are in
 |---|---|
 | 1. `ysp/rt.h` | Done, v0.9.1. |
 | 2. `ysp/timeline.h` | Done for now, v0.8.1. Since v0.4.0: trigger channels (`ytl_trigger_ch()`), parameter tables for the ops and the desc. |
-| 3. `ysp/screen.h` | v0.10.4 on Windows: DXGI_FLIP and COMPOSITION, the window thread (on by default for native Windows), flip records, the abort and the panic, the web backend (v0.7.0). X11, Wayland and macOS are stubs. The X11 probe (docs/screen_x11_probe.md) has not run on the Linux rig. No photodiode run. |
+| 3. `ysp/screen.h` | v0.10.4 on Windows: DXGI_FLIP and COMPOSITION, the window thread (on by default for native Windows), flip records, the abort and the panic, the web backend (v0.7.0). macOS: METAL (v0.11.0), run only with the session locked, so tier 3 and no shown frame until the probe's timing runs (docs/screen_macos_probe.md). X11 and Wayland are stubs. The X11 probe (docs/screen_x11_probe.md) has not run on the Linux rig. No photodiode run. |
 | 4. `ysp/audio.h` | v0.7.3 on WASAPI: onsets from a fit of device positions, tier 2, streams, WAV, capture. CoreAudio, ALSA and PulseAudio ran only as miniaudio's null device, in CI. No line-in run. |
 | 5. `ysp/gfx.h` | v0.17.2: stimuli, curve runs (text and artwork), batched text runs, parameter tables, frame capture. Open items in docs/gfx.md "Next". |
 | 6. `ysp/video.h` | v0.6.0: Media Foundation and pl_mpeg, the soundtrack on audio streams, UTF-8 paths, error codes. Not built: AVFoundation, capture. |
@@ -1341,7 +1341,10 @@ The measurements are in docs/av_probe.md and docs/winthread_probe.md.
   `EGL_ANGLE_metal_shared_event_sync` event orders ANGLE's queue before
   the header's (without it, 2 to 5 of 120 frames were read unfinished
   under GPU load). The recommended design is that one, with
-  `presentDrawable:atTime:` and `MTLDrawable.presentedTime` as the onset.
+  `presentDrawable:atTime:` and `MTLDrawable.presentedTime` as the onset;
+  it is built as `YSCR_BACKEND_METAL` in `ysp/screen.h` v0.11.0
+  (docs/screen.md), with the target, the depth and the tier as
+  conservative constants until these runs.
   Waiting on the timing runs, which need an unlocked screen and a quiet
   machine: depth per window kind, presentAtTime quantization, late frames,
   the vblank sources' agreement, direct against composed, a 120 or 144 Hz

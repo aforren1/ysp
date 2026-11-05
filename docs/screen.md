@@ -3748,6 +3748,171 @@ and the 17 on the window test (`wt-20` to `wt-29`, `fg-08`, `bf-01`,
 between frames wait until the test's 10 s watchdog ended it: the case
 the fallback exists for.
 
+## macOS: the header owns the CAMetalLayer (v0.11.0)
+
+`YSCR_BACKEND_METAL` is the macOS swap path, and AUTO there. The probe of
+[screen_macos_probe.md](screen_macos_probe.md) chose its shape; this note
+says what was built from the probe's functional results, what waits on
+its timing runs, and why the header calls Objective-C as it does.
+
+All runs below: Apple M2 Mac mini, macOS 27.0.1, SDL 3.4.0, ANGLE from
+Electron 43.8.3 (`EGL_VERSION` "1.5 (ANGLE 2.1 git hash: unknown hash)"),
+2026-11-05. **The console session was locked for every run**, so no
+frame reached the panel: every `presentedTime` was 0. Other agents
+compiled on the machine at the same time. Nothing below is a timing
+result.
+
+### The path
+
+SDL's EGL path on Cocoa gives a context, but ANGLE then owns the layer and
+exposes no flip time, no present time and no depth control (probe,
+section 5.5). So, as on Windows, SDL makes only the window:
+
+1. The window has `SDL_PROP_WINDOW_CREATE_METAL_BOOLEAN`, and the header
+   makes its CAMetalLayer with `SDL_Metal_CreateView`.
+2. ANGLE's display is asked for the Metal back end by name
+   (`EGL_PLATFORM_ANGLE_TYPE_METAL_ANGLE`): this ANGLE's default on macOS
+   is OpenGL. The layer's device is the one `EGL_METAL_DEVICE_ANGLE`
+   reports, so one device serves ANGLE's queue and the header's. ANGLE
+   does not take a caller's device (`eglCreateDeviceANGLE` gives
+   `EGL_BAD_ACCESS`) or queue.
+3. Each frame, `acquire()` takes the next drawable and makes current a
+   pbuffer on the drawable's own IOSurface
+   (`EGL_ANGLE_iosurface_client_buffer`), one per IOSurface, kept in a
+   cache of 6. The layer cycled 2 IOSurfaces per run here, and 3 or 4 in
+   the probe's `share` runs.
+4. `present()` ends ANGLE's frame with an `eglCreateSync` of type
+   `EGL_SYNC_METAL_SHARED_EVENT_ANGLE` on the header's MTLSharedEvent, with
+   the present id as the value, and `glFlush`. The header's command buffer
+   waits on that value (`encodeWaitForEvent:value:`), draws the patch and
+   the codes as blits from a staging buffer, copies code rows to a
+   read-back buffer when asked, and presents with
+   `presentDrawable:atTime:`.
+5. The presented handler reports `presentedTime`. A time of 0 is a
+   drawable not shown: the core estimates the flip, and it is OCCLUDED when
+   the window's `occlusionState` lacks Visible or the session is locked.
+
+GL's row 0 lands on IOSurface row 0, the top of the screen (checked with a
+scissored clear read back from the IOSurface; ANGLE's Metal display has no
+`EGL_ANGLE_surface_orientation`). So `rows_top_down` is 1 on METAL, as on
+DXGI_FLIP and COMPOSITION, and ysp/gfx.h v0.17.3 takes its origin from it.
+
+### The sync, checked by read-back
+
+`tests/adapt/screen_metal_test.c` draws each frame with a GL clear and a
+400-iteration fragment loop over the window, both writing the frame's
+own value, and the header's command buffer copies the center pixel after
+its wait (a test seam, `YSCR__MTL_SYNC_PIXEL`). The read-back needs no
+shown frame, so it ran on the locked screen:
+
+| Run | Frames read back | Not their own frame's |
+|---|---|---|
+| 8 bits, 800 x 600 window | 120 of 120 | 0 |
+| 10 bits (`desc.color_depth` 10) | 30 of 30 | 0 |
+| 8 bits, the wait removed (mutant mt-08) | 120 of 120 | 21, each the frame two before |
+| 10 bits, the wait removed | 30 of 30 | 2, each the frame two before |
+
+The seam waits for the frame before at each present, so every frame is
+read; without the seam, a read-back still running at the next verify is
+skipped, never waited for.
+
+The code self test (all 256 values of each channel through the blits, in
+the layer's format, into a texture and back) passed; 150 to 158 codes read
+back in a 60-frame fullscreen run, none differing.
+
+### Objective-C from C
+
+The header must compile as C99 and as C++ on every platform, and its
+implementation is one translation unit the caller picks. Two ways were
+open: require that translation unit to be Objective-C on macOS, or call
+the Objective-C runtime from C. The header calls the runtime from C:
+`objc_msgSend` cast to each method's exact prototype (the ABI needs the
+exact one: a `double` return, `MTLSize` and `MTLOrigin` passed by value),
+with libobjc, CoreFoundation, CoreGraphics, CoreVideo and ANGLE loaded at
+run time and no Apple header but `TargetConditionals.h`, `dlfcn.h` and
+`mach/mach_time.h`. Reasons:
+
+- ysp/video.h's AVFoundation backend, built at the same time by another
+  agent, made the same choice (its worktree, `include/ysp/video.h`,
+  "AVFoundation backend"): one rule for every Apple backend, and a caller
+  builds every ysp header the same way.
+- An Objective-C translation unit would change how the caller builds, and
+  the bindings (`ysp-vis`, MEX) compile the headers as C.
+- Apple's framework headers bring ApplicationServices and CarbonCore's
+  globals into the caller's translation unit (ysp/video.h found `pi` and
+  `Rect` there).
+
+The cost is a Block: Metal's presented handler takes one. The header
+builds global Block literals by hand to the Block ABI (`isa`
+`_NSConcreteGlobalBlock`, flags IS_GLOBAL and HAS_SIGNATURE, signature
+`v16@?0@8`), one per slot of a process-wide table of 64, so Metal's
+`Block_copy` is a no-op and a handler that comes after its screen closed
+finds its slot orphaned and frees it. A handler touches only that table.
+Nothing measured contradicts the choice; the read-backs above and the
+code self test went through it.
+
+### Unmeasured, each in one place
+
+| Item | Where | Value | Why this value |
+|---|---|---|---|
+| (a) the time passed to `presentDrawable:atTime:` | `YSCR__MTL_TARGET_LEAD` | the planned vblank minus a quarter period | Core Animation's rule is not measured. If it shows a frame at the vblank nearest its time, any lead from 0 to half a period lands on the planned vblank; half a period exactly is a tie, which COMPOSITION gave to the earlier vblank ([Quantization](#quantization)), so "minus half a period" can show a frame one early. If it shows the first vblank at or after the time, any lead from 0 up lands. A quarter period is the middle of the range that suits both, so the grid may be a quarter period off either way. The core test plays both rules (`test_metal_records`) |
+| (b) depth and drawables | `yscr__path_table` (COMPOSED: 2), `YSCR__MTL_DRAWABLES` | depth 2, 3 drawables, one frame in flight | On a backend that holds frames to a target, a depth too large costs latency only, one too small drops every frame |
+| (c) the tier per window kind | `yscr__mtl_tier()` | 3 for window, fullscreen and space | `presentedTime` is not yet shown to be an observation of the scanout; it may be WindowServer's plan, as COMPOSITION's composed time was ([Is the onset an observation?](#is-the-onset-an-observation-condition-c)) |
+
+macOS has no public call that says a window goes direct to the display,
+so every Metal flip's path is COMPOSED and the describe line names the
+window kind instead. The probe's runs decide each row: `present`'s
+`quant`, `asap` and `late` runs per kind, and the photodiode for the tier
+(probe, sections 6 and 8).
+
+### Other choices
+
+- **The period.** CVDisplayLink's nominal period at open: the "60 Hz"
+  HDMI mode measured 400330 / 24000000 s, 16.680417 ms, 59.9505 Hz, where
+  CoreGraphics and SDL say 60.000. `caps.mode.refresh_num` and `_den`
+  are 24000000 and 400330. The flips refine it as on Windows.
+- **The clock.** `presentedTime` is mach time. ysp/rt.h from v0.10.0 counts
+  mach time on macOS; before, it read `CLOCK_MONOTONIC`, which counts
+  sleep and is slewed (+0.58 ppm against mach time, measured). The
+  presenter correlates the two at open and every 10 s, so it is right
+  with either; with v0.10.0 the offset is 0 to the bracket.
+- **Threads.** Cocoa keeps windows on the main thread and SDL's video
+  lives there, so open(), the frame loop and close() run on the main
+  thread; open() refuses another. There is no window thread on macOS.
+- **nextDrawable** gives up after its 1 s timeout
+  (`allowsNextDrawableTimeout`, set explicitly). A frame without a drawable
+  draws into a 1 x 1 pbuffer and is estimated. With the screen locked the
+  first probe run waited the full second on most frames in a window at
+  normal level; in these runs every drawable came at once.
+- **10 bits.** ANGLE's Metal display has no 10-bit or half-float config, so
+  `desc.color_depth` 10 gives a BGR10A2Unorm layer and pbuffers on its
+  'l10r' IOSurfaces with an RGBA8 config: a pbuffer's format is the
+  IOSurface's. 8-bit codes are spread over 10 bits (`v << 2 | v >> 6`).
+  `color_depth` 10 on another backend is refused, not drawn in 8 bits.
+- **Input.** SDL's event times are restamped onto ysp_rt as on the other
+  backends (SDL's ticks are mach time plus a constant, measured). SDL's
+  Cocoa key times are not measured: posting keys needs the Accessibility
+  permission, which the machine did not grant (probe, section 5.8).
+
+### Tests and mutants
+
+- The core test (`tests/adapt/screen_test.c`): the rules without a Mac
+  (target, period, completion, pixels, tier) and a scripted Metal display
+  under both quantization rules, with hidden frames.
+- `tests/adapt/screen_metal_test.c`: the real presenter (above); built on
+  macOS as `test_screen_metal`, not registered with ctest (it needs a
+  window server session and ANGLE).
+- 10 mutants (`mt-01` to `mt-10`), 10 killed: 7 by the core test, 3 by
+  the Metal test (no wait on the signal, codes compared raw, the pbuffer
+  cache off).
+
+### Not done
+
+Everything about a shown frame: the three rows above, direct against
+composed, a 120 or 144 Hz mode, the panel's 10 bits, the light, key
+times on macOS. The panic watchdog, raw mice and the OS gamma ramp are
+Windows only.
+
 ## Bindings
 
 `ysp/screen.h` is bound in `ysp-vis` with `ysp/gfx.h` and `ysp/video.h`:
@@ -3893,7 +4058,10 @@ display ids) are fixed in v0.10.4
 - Light. No photodiode was attached. `tests/loopback/screen_loopback.c`
   is built, not run. Every onset here is DXGI's vblank time.
 - Any refresh other than 60 Hz; any GPU other than the Iris Xe; Windows 10.
-- X11, Wayland and macOS: stubs. The web: no light measured (web.md).
+- X11 and Wayland: stubs. macOS (METAL, v0.11.0): run only with the
+  session locked, so no shown frame; see
+  [macOS: the header owns the CAMetalLayer](#macos-the-header-owns-the-cametallayer-v0110).
+  The web: no light measured (web.md).
 - A DWM miss on the composed path of COMPOSITION: a second window loading
   the GPU did not cause one, so whether the record shows it is unknown.
 - COMPOSITION on a machine whose QPC does not run at 10 MHz, on ARM64
