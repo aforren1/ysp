@@ -447,9 +447,8 @@ in `tests/mutate/rt.toml`, 2 of 2 killed.
 ## macOS (v0.10.0)
 
 The macOS backend's first run, 2026-11-04: an Apple M2 Mac mini, macOS
-27.0.1, Apple clang 21, arm64. Every result in this section is
-functional. No wait lateness, clock cost or jitter was measured on the Mac;
-the measurements to make are listed at the end.
+27.0.1, Apple clang 21, arm64. The results are functional, but for
+[Measured on the Mac](#measured-on-the-mac), at the end.
 
 ### The clock is mach_absolute_time()
 
@@ -489,18 +488,71 @@ in `tests/mutate/rt.toml`: 4 of 4 killed (they exist on macOS only).
 | Thread id | `pthread_threadid_np()`, truncated to 32 bits |
 | Core types | Unknown: no macOS call is read. Apple silicon has P- and E-cores, and macOS gives no thread affinity, so `pin=none` is all the header can do |
 
-### Measurements still to make on the Mac
+### Measured on the Mac
 
-Each on a quiet machine, one at a time (CLAUDE.md), with the machine,
-the macOS version and the power state recorded:
+2026-11-05, 01:39 to 01:40, the M2 Mac mini (Apple M2, 4 P-cores and
+4 E-cores), macOS 27.0.1, AC power, the console locked and the display
+asleep. No other build or test ran (the coordinator stopped every other
+agent; `top` showed no process over 7 % CPU; the 1-minute load average
+was 1.7 to 2.7, falling from the earlier builds). The `macos` preset's
+Release build (Apple clang 21, `-O3`). macOS gives no thread affinity,
+so nothing was pinned. One run each unless stated.
 
-- `rt_jitter` (examples/rt/jitter.c) with no arguments, twice: wait
-  lateness with and without a spin window, and the rung it got.
-- The cost of `yrt_now_ns()` against `mach_absolute_time()` and
-  `clock_gettime(CLOCK_MONOTONIC)`: the timebase division is new on this
-  path.
-- `rt_ring_bench` (examples/rt/ring_bench.c) for the ring tables in
-  [Measured costs](#measured-costs).
+`rt_jitter` (examples/rt/jitter.c): the waiting thread and the worker got
+`YRT_POLICY_TIME_CONSTRAINT` without privilege. Lateness of
+`yrt_sleep_until()` for 2 ms waits, us, min / median / p99 / max:
+
+| Run | No spin | 200 us spin (default) | 1 ms spin |
+|---|---|---|---|
+| 200 waits, run 1 | 3.0 / 9.5 / 18.9 / 21.7 | 0.0 / 0.0 / 0.0 / 0.0 | 0.0 / 0.0 / 0.0 / 0.0 |
+| 200 waits, run 2 | 4.0 / 15.6 / 30.9 / 41.6 | 0.0 / 0.0 / 0.0 / 0.0 | 0.0 / 0.0 / 0.0 / 0.0 |
+| 2000 waits | 6.2 / 15.2 / 29.7 / 43.3 | 0.0 / 0.0 / 0.0 / 0.0 | 0.0 / 0.0 / 0.0 / 0.1 |
+
+The worker's 5 ms job ran 0.2, 0.2 and 0.8 us after its deadline. Without
+a spin, `nanosleep()` at `TIME_CONSTRAINT` woke 10 to 16 us late at the
+median and at most 43 us late; on the Windows laptop a normal-priority
+thread's waitable timer woke about 400 us late at the median ([the cost of now()](#measured-the-cost-of-now-and-the-lateness-of-a-wait)).
+With the default spin no wait was a measurable 0.1 us late. These are
+elevated threads on an idle machine; a normal thread under load was not
+measured.
+
+The clock, ns a call: median of 7 runs of 20 M calls, the four clocks
+interleaved, two rounds (`build/scratch/clockcost.c`, a scratch bench
+in the worktree, not kept):
+
+| Call | Round 1 | Round 2 |
+|---|---|---|
+| `yrt_now_ns()` (`mach_absolute_time()` and the timebase) | 12.30 | 12.31 |
+| `mach_absolute_time()` | 5.15 | 5.15 |
+| `clock_gettime_nsec_np(CLOCK_UPTIME_RAW)` | 9.22 | 9.43 |
+| `clock_gettime_nsec_np(CLOCK_MONOTONIC)`, about v0.9.1's clock | 14.31 | 14.31 |
+
+The two divisions by the timebase cost about 7 ns over the raw counter.
+The new clock is about 2 ns cheaper than the one it replaced, so no
+faster conversion was tried.
+
+`rt_ring_bench` with no arguments (1 M pushes, up to 8 producers, 2 s of
+B3), ns, mean / p99 (B3: p99 / p99.9):
+
+| Measure | Result |
+|---|---|
+| B1 push, stamps set | 13.0 / 14.3 |
+| B1 push, stamped (t_ns and tid 0) | 19.5 / 21.5 |
+| B2, 2 producers | 96 / 104 |
+| B2, 4 producers | 349 / 366 |
+| B2, 8 producers (8 CPUs, so 9 busy threads; 21 % refused) | 564 / 787; max 156 ms |
+| B3 control (clock reads), `TIME_CONSTRAINT` | 42 / 84 |
+| B3 wait-free ring, `TIME_CONSTRAINT`, 0 of 2000 refused | 584 / 667 |
+| B3 mutex ring (baseline) | 30,125 / 59,208 |
+| B4 drain, ns a record | 1.4 to 1.8 |
+| B5 zone pair, trace ring attached / not attached | 29.5 / 0.6 (means) |
+| B5 `yrt_now_ns()` | 13.4 / 13.7 |
+| B6 correlation width, `yrt_now_ns` itself and `CLOCK_MONOTONIC_RAW` | 42 ns (one tick), 0.6 to 0.7 us a call |
+
+Every bar in [Against the bars](#against-the-bars) is met on the Mac.
+The 8-producer run's maximum is one 156 ms stall: 9 busy threads on 8
+cores, as in WSL2. The elevated producer's p99.9 (0.67 us) is under the
+10 us bar and 88 times below the mutex ring's.
 
 ## Windows 11 power throttling
 

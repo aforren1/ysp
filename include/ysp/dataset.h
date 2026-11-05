@@ -262,7 +262,10 @@
  *   (case-insensitive); every test passes, Release, ASan and UBSan, the
  *   crash test's child process included. Each rewrite of session.json
  *   calls F_FULLFSYNC on the file and on the folder; a volume that
- *   refuses it gets fsync(). Costs on the Mac not measured. No power cut.
+ *   refuses it gets fsync(). On its SSD, median: a YTR_FLUSH_SYNC row
+ *   3.0 ms (fsync() alone: 26 us, which does not reach the flash), an
+ *   atomic rewrite of session.json 7.0 ms (0.18 ms), a YTR_FLUSH_ROW row
+ *   2 to 3 us (docs/dataset.md). No power cut.
  *   STATUS: v0.2.0, 2026-10-25: MSVC 19.44, MinGW-w64 gcc 16.1, WSL2 gcc
  *   11.4 (ASan, UBSan); v0.1.0 (2026-10-21) also under emcc. On an i7-1360P laptop's SSD (NTFS, MSVC
  *   /O2), median (p99): a frame or event row 12 us (25), a row with
