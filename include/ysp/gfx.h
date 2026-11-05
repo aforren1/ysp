@@ -1,4 +1,4 @@
-/* ysp/gfx.h - v0.17.2 - public domain single-header stimulus graphics library
+/* ysp/gfx.h - v0.17.3 - public domain single-header stimulus graphics library
  *   (with MIT-licensed parts: see below)
  *
  *   Stimuli on GL ES 3.0, on top of ysp/screen.h: signed-distance shapes
@@ -1260,8 +1260,10 @@
  *   (SIM) the null backend runs everything and draws nothing. A backend
  *   gets and returns rows bottom-up, GL's order.
  *   On DXGI_FLIP and COMPOSITION, ANGLE's client-buffer pbuffer puts GL's
- *   row 0 at the top of the screen (measured); the output stage writes
- *   the rows in that order. desc.rows overrides it for a custom presenter.
+ *   row 0 at the top of the screen (measured), and so does ysp/screen.h's
+ *   METAL backend (v0.11.0: ANGLE's pbuffer on the drawable's IOSurface,
+ *   measured on ANGLE's Metal back end); the output stage writes the rows
+ *   in that order. desc.rows overrides it for a custom presenter.
  *   GL state is cached and set only where it changes. Another program's GL
  *   calls between frames make the cache wrong: call ygfx_reset_state()
  *   after them. A ysp/screen.h present callback is followed for you: the
@@ -1343,6 +1345,9 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.17.3 - ysp/screen.h's METAL backend (v0.11.0) has GL's row 0 at the
+ *          top of the screen, as DXGI_FLIP and COMPOSITION do: the origin
+ *          follows it (BACKENDS). Not run on a shown macOS frame.
  *   v0.17.2 - CURVE RUNS: a run without YGFX_I_COLOR takes one of
  *          desc.max_draws' blocks (it took 3, so the default 1024 refused
  *          the 342nd run of a frame), and runs of one block next to each
@@ -1883,8 +1888,8 @@
 
 #define YGFX_VERSION_MAJOR 0
 #define YGFX_VERSION_MINOR 17
-#define YGFX_VERSION_PATCH 2
-#define YGFX_VERSION_STRING "0.17.2"
+#define YGFX_VERSION_PATCH 3
+#define YGFX_VERSION_STRING "0.17.3"
 
 #include "ysp/screen.h"
 #include "ysp/color.h"
@@ -6408,8 +6413,10 @@ static bool ygfx__open_a(ygfx_gfx* g, const ygfx_desc* d) {
         /* The simulated display has no size: desc.width, height, or 800 x 600. */
         if (g->w <= 0 || g->h <= 0) { g->w = d->width > 0 ? d->width : 800; g->h = d->height > 0 ? d->height : 600; }
         /* ANGLE's client-buffer pbuffer puts GL's row 0 at the top of the
-         * D3D texture (probe, docs/gfx.md). */
-        g->origin_top = sc.backend == YSCR_BACKEND_DXGI_FLIP || sc.backend == YSCR_BACKEND_COMPOSITION;
+         * D3D texture (probe, docs/gfx.md), and its IOSurface pbuffer at the
+         * top of the drawable on METAL (measured, docs/screen.md). */
+        g->origin_top = sc.backend == YSCR_BACKEND_DXGI_FLIP || sc.backend == YSCR_BACKEND_COMPOSITION ||
+                        sc.backend == YSCR_BACKEND_METAL;
         if (yscr_gl_proc(d->screen, "glGetString")) {
             in.gl_proc = (yscr_proc (*)(void*, const char*))yscr_gl_proc;
             in.gl_ctx = d->screen;

@@ -2,7 +2,8 @@
 # ysp/gfx.h mutants: the v0.4 list (docs/gfx.md, "v0.4 mutations"), then
 # later lists by prefix (pr-: v0.11 prime; os-: v0.11.1 open start; cv-:
 # v0.12.0 messages; cp-: v0.13.0 capture; ft-: v0.15.0 first trial; tp-:
-# v0.17.1 text paths; tb-: v0.17.2 text batches).
+# v0.17.1 text paths; tb-: v0.17.2 text batches; mo-: v0.17.3 the origin
+# on ysp/screen.h's METAL backend).
 # The v0.3 list (mutate03.py) was lost; docs/gfx.md keeps its table.
 # YGFX_TEST_PARTS limits a run to the parts that can see the fault, and
 # "none" runs the CPU half alone. YGFX_TEST_DEVICES=hardware is the GPU
@@ -1463,3 +1464,22 @@ env = { YGFX_TEST_PARTS = "v0.6 text", YGFX_TEST_DEVICES = "hardware" }
 why = "v0.17.2: the stim range holds 16 blocks and the vertex stage searches 16 runs; max_batch 1 must also give one draw a run."
 find = 'int more = ygfx__text_batch(g, i, sg->end, g->max_batch, &n_text);'
 replace = 'int more = ygfx__text_batch(g, i, sg->end, 64, &n_text);'
+
+# v0.17.3 (mo-: the origin on ysp/screen.h's METAL backend), run by
+# tests/adapt/screen_metal_test.c on this Mac with ANGLE.
+[test.metal]
+source = "tests/adapt/screen_metal_test.c"
+compiler = "gcc"
+flags = ["-std=c11", "-O1", "-w", "-I/Users/brainworks/sdl3/include"]
+libs = ["-L/Users/brainworks/sdl3/lib", "-lSDL3", "-Wl,-rpath,/Users/brainworks/sdl3/lib", "-lm"]
+timeout = 300
+env_default = { YSCR_ANGLE_DIR = "/Users/brainworks/ysp-deps/angle-electron-43.8.3" }
+
+[[mutant]]
+id = "mo-01"
+name = "METAL's rows taken bottom-up"
+test = "metal"
+why = "ANGLE's IOSurface pbuffer on METAL puts GL's row 0 at the top of the drawable, as the D3D client buffer does; the output stage must write rows top-down there (v0.17.3)."
+find = '''        g->origin_top = sc.backend == YSCR_BACKEND_DXGI_FLIP || sc.backend == YSCR_BACKEND_COMPOSITION ||
+                        sc.backend == YSCR_BACKEND_METAL;'''
+replace = '''        g->origin_top = sc.backend == YSCR_BACKEND_DXGI_FLIP || sc.backend == YSCR_BACKEND_COMPOSITION;'''
