@@ -1322,6 +1322,15 @@
  *   Tier 3 on every Linux input: no line-in or
  *   photodiode run (the Teensy needs a TRRS breakout and a divider into
  *   the combo jack's microphone contact, which this machine lacks).
+ *   STATUS: v0.8.0, 2026-11-04, after the merge with v0.7.3: the same
+ *   desktop. test_audio_pulse, test_audio_alsa, test_audio_alsa_capture and
+ *   test_audio_pulse_capture (output profile) pass; 43 of the 44 Linux mutants
+ *   give the expected result. The analog source's check fails: 39 to 104 us sd from a line, against a
+ *   limit of 30 us and the 0.8 and 3.6 us of 2026-10-13, in 8 alternating runs
+ *   each of the code before and after the merge, built the same way (median
+ *   74 and 63 us; PulseAudio 17.0, the source at 44100 Hz, duplex profile, idle
+ *   desktop). The merge did not cause it; the cause is not known. pulse-06 needs
+ *   that check, so it is not confirmed after the merge.
  *   STATUS: v0.7.3, 2026-10-27 (docs/audio.md, "32-bit Windows" and
  *   "UTF-8 paths"): the compile check, tests/adapt/audio_test.c and the
  *   ysp-audio wheel's tests build and pass with MSVC for x86 (Win32) and

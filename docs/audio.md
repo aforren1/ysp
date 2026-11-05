@@ -2614,6 +2614,18 @@ v0.6.0, before the merges with v0.5.0 (capture), v0.5.1 (exclusive start)
 and v0.5.2 to v0.7.3 above. The work is v0.8.0, and the sections say
 v0.8.0. Capture on Linux is in "Linux: capture".
 
+After the merge with v0.7.3 (2026-11-04, the same desktop),
+`test_audio_pulse`, `test_audio_alsa`, `test_audio_alsa_capture` and
+`test_audio_pulse_capture` in the output profile pass, and 43 of the 44
+Linux mutants give the expected result.
+
+The analog source's check fails: 39 to 104 us sd from a line, against a
+limit of 30 us and the 0.8 and 3.6 us of 2026-10-13, in 8 alternating runs
+each of the code before and after the merge, built the same way (median
+74 and 63 us; PulseAudio 17.0, the source at 44100 Hz, duplex profile, idle
+desktop). The merge did not cause it; the cause is not known. `pulse-06` needs
+that check, so it is not confirmed after the merge.
+
 The machine: Debian 12, kernel 6.11.5 liquorix, PulseAudio 16 (not
 PipeWire), the Intel HDA codec's analog output (ALC3246) as the default
 sink, miniaudio 0.11.25, gcc 12.2, ysp/audio.h v0.4.0.

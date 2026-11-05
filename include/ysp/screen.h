@@ -2240,7 +2240,9 @@
  *   GLX_OML (v0.11.0; measured as v0.8.0 on its branch, on the same code
  *   before the v0.6 to v0.10.4 changes came in; after v0.7.2, on 2026-10-13, test_screen_glx passed and
  *   its 31 glx- mutants gave the expected results, 30 killed and glx-21
- *   survived as listed, with SDL 3.4.18): one machine, Debian 12, kernel
+ *   survived as listed, with SDL 3.4.18; after v0.10.4, on 2026-11-04,
+ *   test_screen_glx passed and its 32 glx- mutants gave the expected results,
+ *   31 killed and 1 survived as listed, with the window thread off): one machine, Debian 12, kernel
  *   6.11.5-liquorix,
  *   Xorg 21.1 with the amdgpu DDX, Mesa 22.3.6 radeonsi on an AMD RX 6600,
  *   one 1920 x 1080 output at 60.000000 Hz (dot clock), Xfwm4 with its

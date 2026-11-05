@@ -3878,6 +3878,12 @@ unchanged: a record costs it 0.35 us (above).
 
 ## Linux X11: GLX_OML (v0.11.0)
 
+The numbers in this section were measured as v0.8.0, the branch's number,
+on the code before main's v0.8.0 to v0.10.4. After that merge (2026-11-04,
+the same machine), `test_screen_glx` passed and the 32 `glx-` mutants gave
+the expected results. The window thread is off on X11. No timing run was
+repeated.
+
 The design comes from the X11 probe ([screen_x11_probe.md](screen_x11_probe.md),
 section 5.6). This section records what the backend itself does and
 what was measured with it. The measurements ran on the backend's code
