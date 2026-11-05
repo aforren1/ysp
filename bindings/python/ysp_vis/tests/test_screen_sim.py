@@ -10,6 +10,7 @@ tests/test_window.py opens a real window (local only).
 import math
 import os
 import re
+import sys
 import threading
 
 import pytest
@@ -56,19 +57,52 @@ def test_headers_and_shared_tables():
     assert s["abi"] == 1
 
 
+DLL = ".dylib" if sys.platform == "darwin" else ".dll"
+
+
 def test_angle_dir_is_the_package_directory():
     d = os.path.normcase(os.path.abspath(yscr.ANGLE_DIR))
     assert d == os.path.normcase(os.path.dirname(os.path.abspath(_vis.__file__)))
-    assert os.path.exists(os.path.join(d, "libEGL.dll"))
-    assert os.path.exists(os.path.join(d, "libGLESv2.dll"))
-    assert os.path.exists(os.path.join(d, "ysp_vis-LICENSE.SDL3.txt"))
-    assert os.path.exists(os.path.join(d, "ysp_vis-LICENSE.ANGLE.txt"))
+    assert os.path.exists(os.path.join(d, "libEGL" + DLL))
+    assert os.path.exists(os.path.join(d, "libGLESv2" + DLL))
+    for n in ("SDL3", "ANGLE", "pl_mpeg", "Skribidi", "HarfBuzz", "SheenBidi", "libunibreak", "budouxc"):
+        assert os.path.exists(os.path.join(d, "ysp_vis-LICENSE.%s.txt" % n)), n
 
 
 def test_no_sdl3_dll_beside_the_module():
     # SDL3 is linked statically (docs/av_probe.md, section 5).
     d = os.path.dirname(os.path.abspath(_vis.__file__))
     assert not os.path.exists(os.path.join(d, "SDL3.dll"))
+    assert not [n for n in os.listdir(d) if n.startswith("libSDL3")]
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS: a window screen runs on the main thread only")
+def test_window_screen_off_the_main_thread_is_refused():
+    # Refused before SDL or Cocoa sees the call, so no window server is
+    # needed; the sim backend has no window and opens on any thread.
+    out = {}
+
+    def run():
+        try:
+            yscr.Screen(windowed=True)
+        except yscr.Error as e:
+            out["err"] = e
+        with sim() as s:
+            s.begin()
+            s.flip()
+            out["sim"] = len(s.records()) >= 0
+        try:
+            yscr.displays()
+        except yscr.Error as e:
+            out["displays"] = e
+
+    t = threading.Thread(target=run)
+    t.start()
+    t.join()
+    assert type(out["err"]) is yscr.Error
+    assert "main thread" in str(out["err"]) and "threading.Thread" in str(out["err"])
+    assert out["sim"] is True
+    assert "main thread" in str(out["displays"])
 
 
 def test_constants():
@@ -112,6 +146,9 @@ def test_frame_loop_records():
         c = s.caps()
         assert c["backend"] == "sim" and c["period_ns"] == PERIOD_NS
         assert abs(c["period"] - PERIOD) < 1e-12
+        # ysp/screen.h 0.12.0 and 0.15.0: the presenter's margin (0 = the
+        # core's) and whether keys get their OS event's time (METAL only)
+        assert c["margin_ns"] == 0 and c["margin"] == 0.0 and c["os_input_stamps"] is False
         assert "sim" in s.describe()
         last = None
         frames = []

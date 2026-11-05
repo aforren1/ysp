@@ -22,7 +22,11 @@
  * run on it; the host keeps a second thread out (Python: BusyError while a
  * call runs without the GIL). The on_flip hook runs on the frame thread
  * inside begin(), flip_at(), wait_flip() and close(), so the record ring
- * needs no lock. No host callback runs on a C thread.
+ * needs no lock. No host callback runs on a C thread. On macOS a window
+ * screen (METAL) has one frame thread only: the process's main thread
+ * (ysp/screen.h, BACKENDS, METAL). yv_main_thread_refusal() says when a
+ * call is on another thread; Python raises it, and the MEX core runs its
+ * calls on the main thread (ysp_vis.c, MAIN THREAD).
  *
  * MEMORY. A screen's record ring (YV_RECORDS) and event ring (YV_EVENTS)
  * are allocated once at open; begin(), flip(), records() and poll()
@@ -69,10 +73,14 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+#if defined(__APPLE__)
+#include <dlfcn.h>
+#include <pthread.h>
+#endif
 
 /* The distribution's version tracks screen.h's, with a fourth number for a
  * change of the binding alone (docs/bindings.md, ysp-vis). */
-#define YV_VERSION YSCR_VERSION_STRING   /* no fourth number: no change of the binding alone since screen.h 0.10.4 */
+#define YV_VERSION YSCR_VERSION_STRING   /* no fourth number: no change of the binding alone since screen.h 0.15.0 */
 
 #define YV_RECORDS 4096   /* flip records kept between records() calls */
 #define YV_EVENTS  1024   /* input events kept between poll() calls    */
@@ -103,8 +111,9 @@ static double yv_s(int64_t ns) { return (double)ns / 1e9; }
 /* ---- the module's own directory -------------------------------------------- */
 
 /* UTF-8, without the trailing separator; "" when unknown. ysp/screen.h loads
- * libEGL.dll from it by full path, so another ANGLE in the process (MATLAB's,
- * a Qt program's) is never the one used (docs/av_probe.md, section 2). */
+ * libEGL.dll (libEGL.dylib) from it by full path, so another ANGLE in the
+ * process (MATLAB's, a Qt program's, an Electron app's) is never the one
+ * used (docs/av_probe.md, section 2). */
 static const char* yv_module_dir(void) {
     static char dir[1024];
     static int done;
@@ -124,9 +133,46 @@ static const char* yv_module_dir(void) {
         path[cut] = 0;
         if (WideCharToMultiByte(CP_UTF8, 0, path, -1, dir, (int)sizeof dir, NULL, NULL) <= 0) dir[0] = 0;
     }
+#elif defined(__APPLE__)
+    {
+        Dl_info info;
+        const char* cut;
+        size_t n;
+        if (!dladdr((const void*)&yv_module_dir, &info) || !info.dli_fname) return dir;
+        cut = strrchr(info.dli_fname, '/');
+        if (!cut) return dir;
+        n = (size_t)(cut - info.dli_fname);
+        if (n >= sizeof dir) return dir;
+        memcpy(dir, info.dli_fname, n);
+        dir[n] = 0;
+    }
 #endif
     return dir;
 }
+
+/* ---- the main thread (macOS) ------------------------------------------------- */
+
+/* The refusal of a call off the process's main thread, or NULL when the call
+ * may run here. On macOS a window screen (any backend but sim and custom; at
+ * open, `backend` is the one asked for) needs the main thread: Cocoa's
+ * windows, SDL's video and the GL context live there, and ysp/screen.h's
+ * open() refuses another thread. A call that went on would pump SDL's events
+ * and draw on the wrong thread, so the binding stops it first. */
+static const char* yv_main_thread_refusal(int backend) {
+#if defined(__APPLE__)
+    if (backend != YSCR_BACKEND_SIM && backend != YSCR_BACKEND_CUSTOM && !pthread_main_np())
+        return "ysp_screen: on macOS a window screen opens, runs its frame loop, draws and closes on the "
+               "process's main thread (Cocoa's windows, SDL's video, ysp/screen.h's METAL backend); this call came "
+               "from another thread. Python: call it from the thread that runs the script, not a threading.Thread.";
+#else
+    (void)backend;
+#endif
+    return NULL;
+}
+
+/* The same for an open screen. */
+struct yv_screen;
+static const char* yv_screen_thread_refusal(const struct yv_screen* v);
 
 /* ---- open options ------------------------------------------------------------ */
 /* One table for both hosts, so a Python keyword and a MATLAB field are the
@@ -138,7 +184,8 @@ typedef struct yv_name { const char* name; int value; } yv_name;
 
 static const yv_name yv_backends[] = {
     { "auto", YSCR_BACKEND_AUTO }, { "dxgi_flip", YSCR_BACKEND_DXGI_FLIP },
-    { "composition", YSCR_BACKEND_COMPOSITION }, { "sim", YSCR_BACKEND_SIM }, { NULL, 0 } };
+    { "composition", YSCR_BACKEND_COMPOSITION }, { "metal", YSCR_BACKEND_METAL }, { "sim", YSCR_BACKEND_SIM },
+    { NULL, 0 } };
 static const yv_name yv_settles[] = {
     { "auto", YSCR_SETTLE_AUTO }, { "strict", YSCR_SETTLE_STRICT }, { "warn", YSCR_SETTLE_WARN },
     { "off", YSCR_SETTLE_OFF }, { NULL, 0 } };
@@ -166,7 +213,7 @@ static const yv_opt yv_opts[] = {
     { "size", YV_SIZE, 0, NULL, "the window's (w, h) in pixels; (0, 0) = 800 x 600" },
     { "display", YV_U32, YV_OFF(display), NULL, "a display's id from displays(); 0 = the primary" },
     { "mode", YV_MODE, 0, NULL, "a listed mode (w, h, refresh_num, refresh_den) to switch to; none = the desktop's" },
-    { "backend", YV_ENUM, YV_OFF(backend), yv_backends, "auto, dxgi_flip, composition or sim" },
+    { "backend", YV_ENUM, YV_OFF(backend), yv_backends, "auto, dxgi_flip, composition (Windows), metal (macOS) or sim" },
     { "lead", YV_F64, YV_OFF(lead), NULL, "flip_at's snap: 0 = 0.5 (the nearest vblank); -1 = never early" },
     { "show_cursor", YV_BOOL, YV_OFF(show_cursor), NULL, "keep the cursor over the window" },
     { "min_tier", YV_I32, YV_OFF(min_tier), NULL, "flag records whose tier is worse; 0 = off" },
@@ -185,6 +232,7 @@ static const yv_opt yv_opts[] = {
     { "panic_window", YV_SEC, YV_OFF(panic_window_ns), NULL, "within this time; 0 = 2 s" },
     { "panic_grace", YV_SEC, YV_OFF(panic_grace_ns), NULL, "no panic this long after an abort report; 0 = 10 s" },
     { "keep_os_gamma", YV_BOOL, YV_OFF(keep_os_gamma), NULL, "fullscreen: leave the OS gamma ramp alone" },
+    { "color_depth", YV_I32, YV_OFF(color_depth), NULL, "bits per channel: 0 or 8, or 10 (metal)" },
     { "key_dedup", YV_SEC_SIGNED, YV_OFF(key_dedup_ns), NULL, "a key's second report within this is dropped; 0 = 50 ms, < 0 = off" },
     { "gamepads", YV_BOOL, YV_OFF(gamepads), NULL, "open every gamepad" },
     { "patch", YV_BOOL, YV_OFF(patch.on), NULL, "the photodiode patch" },
@@ -385,6 +433,10 @@ static void yv_free(yv_screen* v) {
     yv_close(v);
     free(v->rec);
     free(v);
+}
+
+static const char* yv_screen_thread_refusal(const yv_screen* v) {
+    return v && v->open ? yv_main_thread_refusal(v->s.backend) : NULL;
 }
 
 static int yv_begin(yv_screen* v) {

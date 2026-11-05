@@ -4,6 +4,7 @@
 #
 #     uv run --no-project python tools/vendor_layout.py --write
 #     uv run --no-project python tools/vendor_vis.py --write --angle --sdl msvc --pl-mpeg --layout msvc
+#     (macOS: --sdl clang --layout clang)
 #     d=bindings/python/ysp_vis
 #     mkdir -p $d/include/ysp $d/include/share $d/natives
 #     cp include/ysp/*.h $d/include/ysp/
