@@ -142,6 +142,8 @@ static id<MTLTexture> solid(id<MTLDevice> dev, MTLPixelFormat fmt, float v) {
 }
 @end
 
+frame_rec* frames_new(int n) { return (frame_rec*)calloc((size_t)(n > 0 ? n : 1), sizeof(frame_rec)); }
+
 /* ---- analysis --------------------------------------------------------------- */
 const char* frames_header(void) {
     return "run,frame,mode,lead,frac,late_inj,t_req,t_got,t_commit,target,planned,live_vblank,sched,done,"
