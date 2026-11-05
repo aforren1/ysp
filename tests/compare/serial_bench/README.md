@@ -238,6 +238,38 @@ A fourth argument `rev` runs the modes in reverse order, `rt` skips the
 streams. Run it twice, once with `rev`: the first mode of a run measured
 40 to 80 us slower than the same calls later in the run.
 
+## The raw POSIX floor (macOS and Linux)
+
+`raw_posix.c` is the POSIX sibling of `raw_win32.c`: the same round trip,
+the same stream and the same metric names, with `open()`, termios, `write()`
+and `read()`. It has three floor modes: a blocking descriptor (`block`),
+`select()` (what ysp/serial.h does on macOS) and `kevent()` (`kqueue`, macOS
+and the BSDs). A fourth mode, `ysp_c`, makes the same exchanges through
+ysp/serial.h, so the header and the floor share one program, one method and
+one clock (`yrt_now_ns()`). Build and run it:
+
+```
+cc -O2 -Wall -I../../../include -o raw_posix raw_posix.c -lpthread -lm
+./raw_posix /dev/cu.usbmodemNNN /tmp/raw-out 1000
+```
+
+The arguments are the same as for `raw_win32`.
+
+## The whole set on macOS
+
+`tests/compare/serial_macos.sh` builds `raw_posix`, the pulse benches of
+`tests/compare/serial_pulse/` and the MEX binding, checks the board, and runs
+`raw_posix`, this bench, `pulse_bench` and `device_pulse`, each twice in
+opposite orders. From the repository root, on a quiet machine:
+
+```
+sh tests/compare/serial_macos.sh
+```
+
+Give `quick` for a functional run with small counts (about 2 minutes); its
+numbers are not results. The comment at the top of the script gives the
+other options and the output folder.
+
 ## Limits
 
 - The API order is fixed in a run, and the machine state drifts. Run the

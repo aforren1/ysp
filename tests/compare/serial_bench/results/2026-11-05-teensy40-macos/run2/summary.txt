@@ -1,0 +1,132 @@
+Times in microseconds unless the note says count or percent.
+api          part    metric                                  n     median        p99        max       mean  note
+ysp          clock   clock_pair                         100000      0.584      2.125      75.29     0.6968  two back-to-back now calls (seconds, reported in us)
+ysp          clock   clock_step                              1     0.4998     0.4998     0.4998     0.4998  smallest nonzero difference
+ysp          noport  floor_batch_mean                        1     0.6024     0.6024     0.6024     0.6024  mean of 100000 now calls: the cheapest call into the MEX
+ysp          noport  list_ports                            200       61.1      96.13      142.5      64.41  ysp_serial('list'), 3 ports found
+ysp          noport  open_absent                            50       1546       1860       1860       1563  open /dev/cu.ysp-absent, which does not exist: the error path, with try/catch
+ysp          noport  matlab_error_baseline                  50       2179       2504       2504       2196  try; error(...); catch; end, no port call
+ysp          calls   open                                   20       1252       1544       1544       1287  open with baud set, 8N1, DTR and RTS asserted
+ysp          calls   close                                  20      748.2      853.5      853.5      753.1  
+ysp          calls   write_1                              2000       9.25      14.62      68.37      9.212  gap 1000 us
+ysp          calls   write_8                              2000      9.167      9.875        122      9.043  gap 1000 us
+ysp          calls   write_64                             2000      9.166      9.625      32.38      8.908  gap 1000 us
+ysp          calls   write_512                            2000      9.458      9.958      32.25      9.203  gap 1000 us
+ysp          calls   read_empty                           2000      1.875      5.333      49.42      2.264  read(h, 64, 0) with nothing waiting
+ysp          calls   available                            2000      1.708      4.917      46.79      2.181  available(h)
+ysp          calls   read_waiting                          500      3.292      7.792      38.46      3.849  read(h, 35, 0) with the bytes waiting
+ysp          rt      block_failed                            1          0          0          0          0  exchanges with a missing or wrong answer (count)
+ysp          rt      block_rtt                            1000      131.8      159.2      252.7      133.7  write call start to read call return
+ysp          rt      block_write_call                     1000      18.46      28.17      104.5      19.35  write call duration inside the exchange
+ysp          rt      block_write_ret_to_read_ret          1000      112.6      139.5      226.2      114.3  write call return to read call return
+ysp          rt      block_host_to_board                  1000      63.83       82.5      178.9       64.3  write call start to board read (+-39 us from the fit)
+ysp          rt      block_write_ret_to_board             1000      44.79      59.08      160.5      44.95  write call return to board read (+-39 us)
+ysp          rt      block_board_to_host                  1000      68.17      86.96      187.1      69.11  board send stamp to read call return (+-39 us)
+ysp          rt      block_board_turnaround               1000          0          1          1      0.282  board: command read to answer stamp
+ysp          rt      block_fit_unc                           1       39.4       39.4       39.4       39.4  half the best path time: bound of the one-way split
+ysp          rt      block_fit_spread                        1      7.062      7.062      7.062      7.062  p99 distance of the fit points from the line
+ysp          rt      block_fit_ppm                           1          0          0          0          0  board clock rate error, 4 points over 0.6 s
+ysp          rt      poll_failed                             1          0          0          0          0  exchanges with a missing or wrong answer (count)
+ysp          rt      poll_rtt                             1000      110.1      131.4      358.9      109.1  write call start to read call return
+ysp          rt      poll_write_call                      1000       9.25      10.62      23.67      8.842  write call duration inside the exchange
+ysp          rt      poll_write_ret_to_read_ret           1000        101      121.6      335.2      100.3  write call return to read call return
+ysp          rt      poll_host_to_board                   1000      56.54      68.46       77.5       56.2  write call start to board read (+-28 us from the fit)
+ysp          rt      poll_write_ret_to_board              1000      47.42      59.25      68.33      47.36  write call return to board read (+-28 us)
+ysp          rt      poll_board_to_host                   1000      52.42         72      283.9      52.64  board send stamp to read call return (+-28 us)
+ysp          rt      poll_board_turnaround                1000          0          1          1      0.294  board: command read to answer stamp
+ysp          rt      poll_fit_unc                            1      27.56      27.56      27.56      27.56  half the best path time: bound of the one-way split
+ysp          rt      poll_fit_spread                         1      11.19      11.19      11.19      11.19  p99 distance of the fit points from the line
+ysp          rt      poll_fit_ppm                            1          0          0          0          0  board clock rate error, 4 points over 0.6 s
+ysp          stream  line_lines_missed                       1          0          0          0          0  of 10000 lines (count); read(h, 26, 0.2, 'all') per line
+ysp          stream  line_lines_duplicated                   1          0          0          0          0  count
+ysp          stream  line_bad_lines                          1          0          0          0          0  lines of the wrong length or kind (count)
+ysp          stream  line_lines_per_read                 10000          1          1          1          1  lines completed by one read (or callback)
+ysp          stream  line_coalesced_pct                      1          0          0          0          0  percent of lines that arrived in a read with another line
+ysp          stream  line_cpu_pct                            1          5          5          5          5  MATLAB process CPU time / wall time over 10.0 s, percent of one core
+ysp          stream  line_lat_host                       10000      99.25      188.9       3353      101.9  host time after the read returned minus mapped board send stamp (+-42 us)
+ysp          stream  line_fit_unc                            1      42.48      42.48      42.48      42.48  half the best probe path time
+ysp          stream  line_fit_ppm                            1          0          0          0          0  2 points over 10.2 s
+ysp          stream  poll_lines_missed                       1          0          0          0          0  of 10000 lines (count); tight loop of read(h, 4096, 0)
+ysp          stream  poll_lines_duplicated                   1          0          0          0          0  count
+ysp          stream  poll_bad_lines                          1          0          0          0          0  lines of the wrong length or kind (count)
+ysp          stream  poll_lines_per_read                 10000          1          1          1          1  lines completed by one read (or callback)
+ysp          stream  poll_coalesced_pct                      1          0          0          0          0  percent of lines that arrived in a read with another line
+ysp          stream  poll_cpu_pct                            1      100.2      100.2      100.2      100.2  MATLAB process CPU time / wall time over 10.0 s, percent of one core
+ysp          stream  poll_lat_host                       10000      71.89      160.1      187.5      67.22  host time after the read returned minus mapped board send stamp (+-42 us)
+ysp          stream  poll_fit_unc                            1      42.17      42.17      42.17      42.17  half the best probe path time
+ysp          stream  poll_fit_ppm                            1          0          0          0          0  2 points over 10.3 s
+ysp          stream  async_write_call                       20      15.73      73.37      73.37      18.77  write(h, newline) while the reader thread waits for a byte
+ysp          stream  async_cmd_write_call                    1      36.96      36.96      36.96      36.96  write(h, stream command) with the reader thread running
+ysp          stream  async_lines_missed                      1          0          0          0          0  of 10000 lines (count); async_start reader thread, stamp when the read with the newline returned (first-byte stamp differs on 0 lines); main thread in pause(0.1), then async_read; 0 dropped
+ysp          stream  async_lines_duplicated                  1          0          0          0          0  count
+ysp          stream  async_bad_lines                         1          0          0          0          0  lines of the wrong length or kind (count)
+ysp          stream  async_lines_per_read                10000          1          1          1          1  lines completed by one read (or callback)
+ysp          stream  async_coalesced_pct                     1          0          0          0          0  percent of lines that arrived in a read with another line
+ysp          stream  async_cpu_pct                           1      3.277      3.277      3.277      3.277  MATLAB process CPU time / wall time over 10.1 s, percent of one core
+ysp          stream  async_lat_stamp                     10000      89.99      118.5      196.1      90.06  API receive stamp minus mapped board send stamp (+-47 us)
+ysp          stream  async_fit_unc                           1      46.73      46.73      46.73      46.73  half the best probe path time
+ysp          stream  async_fit_ppm                           1     -18.08     -18.08     -18.08     -18.08  3 points over 10.5 s
+serialport   clock   clock_pair                         100000      0.125     0.1667      37.63     0.1415  two back-to-back toc(t0) calls
+serialport   clock   clock_step                              1    0.04167    0.04167    0.04167    0.04167  smallest nonzero difference
+serialport   noport  floor_batch_mean                        0        NaN        NaN        NaN        NaN  no call into serialport is possible without a port
+serialport   noport  list_ports                            200      219.7       2220  1.795e+05       1289  serialportlist('all'), 6 ports found
+serialport   noport  open_absent                            50  2.912e+04  2.874e+05  2.874e+05  3.745e+04  serialport('/dev/cu.ysp-absent', baud), which does not exist: the error path, with try/catch
+serialport   calls   open                                   20  1.216e+04  2.361e+05  2.361e+05  2.742e+04  serialport(port, baud) plus setDTR, setRTS, configureTerminator, Timeout
+serialport   calls   close                                  20       6987   5.78e+04   5.78e+04  1.145e+04  delete(s)
+serialport   calls   write_1                              2000      68.21      682.3  1.411e+04      100.5  write(s, data, 'uint8'); gap 1000 us
+serialport   calls   write_8                              2000      66.08        130       3329      71.77  write(s, data, 'uint8'); gap 1000 us
+serialport   calls   write_64                             2000      65.67      81.04      166.4      66.88  write(s, data, 'uint8'); gap 1000 us
+serialport   calls   write_512                            2000      65.92      81.29      113.9      66.92  write(s, data, 'uint8'); gap 1000 us
+serialport   calls   read_empty                              0        NaN        NaN        NaN        NaN  no non-blocking read: a poll is the NumBytesAvailable query
+serialport   calls   available                            2000      10.37      31.92        220      12.05  s.NumBytesAvailable
+serialport   calls   read_waiting                          500      71.83       2914       6888      242.1  read(s, 35, 'uint8') with the bytes waiting
+serialport   rt      block_failed                            1          0          0          0          0  exchanges with a missing or wrong answer (count)
+serialport   rt      block_rtt                            1000      737.2       1499  1.995e+04      764.2  write call start to read call return
+serialport   rt      block_write_call                     1000      71.71        226        391      80.45  write call duration inside the exchange
+serialport   rt      block_write_ret_to_read_ret          1000      660.6       1321  1.973e+04      683.8  write call return to read call return
+serialport   rt      block_host_to_board                  1000      125.5      205.6      345.7      128.7  write call start to board read (+-103 us from the fit)
+serialport   rt      block_write_ret_to_board             1000       51.4      67.15      70.69      48.23  write call return to board read (+-103 us)
+serialport   rt      block_board_to_host                  1000      609.9       1295  1.972e+04      635.3  board send stamp to read call return (+-103 us)
+serialport   rt      block_board_turnaround               1000          0          1          1      0.269  board: command read to answer stamp
+serialport   rt      block_fit_unc                           1      102.8      102.8      102.8      102.8  half the best path time: bound of the one-way split
+serialport   rt      block_fit_spread                        1      40.71      40.71      40.71      40.71  p99 distance of the fit points from the line
+serialport   rt      block_fit_ppm                           1          0          0          0          0  board clock rate error, 7 points over 1.1 s
+serialport   rt      poll_failed                             1          0          0          0          0  exchanges with a missing or wrong answer (count)
+serialport   rt      poll_rtt                             1000      742.1       1247       1561      752.1  write call start to read call return
+serialport   rt      poll_write_call                      1000      69.17      96.46      180.4      71.11  write call duration inside the exchange
+serialport   rt      poll_write_ret_to_read_ret           1000      671.4       1179       1482        681  write call return to read call return
+serialport   rt      poll_host_to_board                   1000      125.8      149.3        212      126.5  write call start to board read (+-125 us from the fit)
+serialport   rt      poll_write_ret_to_board              1000      55.63      69.67       76.5      55.35  write call return to board read (+-125 us)
+serialport   rt      poll_board_to_host                   1000      616.2       1130       1432      625.4  board send stamp to read call return (+-125 us)
+serialport   rt      poll_board_turnaround                1000          0          1          1      0.276  board: command read to answer stamp
+serialport   rt      poll_fit_unc                            1      124.7      124.7      124.7      124.7  half the best path time: bound of the one-way split
+serialport   rt      poll_fit_spread                         1      32.31      32.31      32.31      32.31  p99 distance of the fit points from the line
+serialport   rt      poll_fit_ppm                            1          0          0          0          0  board clock rate error, 7 points over 1.1 s
+serialport   stream  line_lines_missed                       1          0          0          0          0  of 10000 lines (count); read(s, 26, 'uint8') per line (blocking)
+serialport   stream  line_lines_duplicated                   1          0          0          0          0  count
+serialport   stream  line_bad_lines                          1          0          0          0          0  lines of the wrong length or kind (count)
+serialport   stream  line_lines_per_read                 10000          1          1          1          1  lines completed by one read (or callback)
+serialport   stream  line_coalesced_pct                      1          0          0          0          0  percent of lines that arrived in a read with another line
+serialport   stream  line_cpu_pct                            1        104        104        104        104  MATLAB process CPU time / wall time over 10.0 s, percent of one core
+serialport   stream  line_lat_host                       10000      669.7       1300       1976      681.2  host time after the read returned minus mapped board send stamp (+-126 us)
+serialport   stream  line_fit_unc                            1      125.9      125.9      125.9      125.9  half the best probe path time
+serialport   stream  line_fit_ppm                            1     -21.49     -21.49     -21.49     -21.49  5 points over 10.6 s
+serialport   stream  poll_lines_missed                       1          0          0          0          0  of 10000 lines (count); tight loop of NumBytesAvailable and read
+serialport   stream  poll_lines_duplicated                   1          0          0          0          0  count
+serialport   stream  poll_bad_lines                          1          0          0          0          0  lines of the wrong length or kind (count)
+serialport   stream  poll_lines_per_read                  7959          1          2          2      1.256  lines completed by one read (or callback)
+serialport   stream  poll_coalesced_pct                      1      40.82      40.82      40.82      40.82  percent of lines that arrived in a read with another line
+serialport   stream  poll_cpu_pct                            1      101.5      101.5      101.5      101.5  MATLAB process CPU time / wall time over 10.0 s, percent of one core
+serialport   stream  poll_lat_host                       10000      741.5       1352       1705      738.5  host time after the read returned minus mapped board send stamp (+-127 us)
+serialport   stream  poll_fit_unc                            1      127.1      127.1      127.1      127.1  half the best probe path time
+serialport   stream  poll_fit_ppm                            1     -15.36     -15.36     -15.36     -15.36  5 points over 10.5 s
+serialport   stream  async_lines_missed                      1          0          0          0          0  of 10000 lines (count); configureCallback 'terminator', the callback reads all bytes waiting; stamp = evt.AbsTime (datetime to toc offset spread 186 us)
+serialport   stream  async_lines_duplicated                  1          0          0          0          0  count
+serialport   stream  async_bad_lines                         1          0          0          0          0  lines of the wrong length or kind (count)
+serialport   stream  async_lines_per_read                 7709          1          2          8      1.297  lines completed by one read (or callback)
+serialport   stream  async_coalesced_pct                     1      45.46      45.46      45.46      45.46  percent of lines that arrived in a read with another line
+serialport   stream  async_cpu_pct                           1      74.95      74.95      74.95      74.95  MATLAB process CPU time / wall time over 10.0 s, percent of one core
+serialport   stream  async_lat_host                      10000      943.4       1696       8379      958.4  host time after the read returned minus mapped board send stamp (+-126 us)
+serialport   stream  async_lat_stamp                     10000      931.5       1658       7434      941.4  API receive stamp minus mapped board send stamp (+-126 us)
+serialport   stream  async_fit_unc                           1      125.9      125.9      125.9      125.9  half the best probe path time
+serialport   stream  async_fit_ppm                           1      -15.4      -15.4      -15.4      -15.4  4 points over 10.8 s
