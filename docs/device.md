@@ -408,15 +408,16 @@ cut after the rename can then leave a profile of zeros that does not load.
 |---|---|---|
 | The call on macOS | `fcntl(F_FULLFSYNC)` on the temporary file | It also asks the drive to flush its cache |
 | A volume that refuses it | `fsync()` | A network or FAT volume may not support it (SQLite does the same). ysp/dataset.h 0.2.1 and ysp/trials.h 0.6.1 do the same |
-| The folder after the rename | Not synced, as before | A power cut can bring the old profile back, never half of one; a profile is saved by hand, not each trial |
+| The folder after the rename | Synced on POSIX (`F_FULLFSYNC`, then `fsync()`, on macOS), as ysp/dataset.h does; a failure there does not fail the save | Without it a power cut after `yrig_save()` returned can bring the old profile back. A file system that cannot sync a folder (`EINVAL`) has nothing to sync |
 | A test's way in | `YRIG__FULLFSYNC(fd)` | The test counts the calls and makes the volume refuse |
 
 Checked on 2026-11-04, an Apple M2 Mac mini (macOS 27.0.1, Apple clang
-21, APFS): `tests/adapt/rigfile_test.c` passes, 564 checks, Release and
-under ASan and UBSan. A save calls `F_FULLFSYNC` once; with a volume that
-refuses it the save succeeds through `fsync()` and the profile loads.
-Mutants `rig-52` and `rig-53` in `tests/mutate/rigfile.toml`: 2 of 2
-killed (they exist on macOS only). No power cut was made.
+21, APFS): `tests/adapt/rigfile_test.c` passes, 566 checks, Release and
+under ASan and UBSan. A save calls `F_FULLFSYNC` once on the file and
+once on the folder; with a volume that refuses it the save succeeds
+through `fsync()` and the profile loads. Mutants `rig-52` to `rig-54` in
+`tests/mutate/rigfile.toml`: 3 of 3 killed (they run on macOS only). No
+power cut was made.
 
 ### The rig profile tools (`ysp/rigfile.h` v0.4.0, 2026-10-13)
 

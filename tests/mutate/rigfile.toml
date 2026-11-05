@@ -473,3 +473,12 @@ find = '''    if (YRIG__FULLFSYNC(fd) == 0) return true;
 replace = '''    return YRIG__FULLFSYNC(fd) == 0;
 #endif
     return fsync(fd) == 0;'''
+
+[[mutant]]
+id = "rig-54"
+name = "the folder is not synced after the rename"
+test = "rig"
+platform = "darwin"
+why = "A power cut after yrig_save() returned can bring the old profile back. The test sees it through the F_FULLFSYNC hook, so on macOS only."
+find = '''        yrig__sync_dir(path);'''
+replace = ''

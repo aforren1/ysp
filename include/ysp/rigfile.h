@@ -136,10 +136,11 @@
  *   (NAME is 1 to 63 of A-Z a-z 0-9 _ -), the player's --rig NAME.
  *   yrig_save() makes the folder (0700 on POSIX) and writes through a
  *   temporary file that it renames, so a reader never sees half a file.
- *   On POSIX the temporary file goes to the disk before the rename:
- *   fcntl(F_FULLFSYNC) on macOS, where fsync() leaves it in the drive's
- *   write cache, and fsync() elsewhere or on a macOS volume that refuses
- *   F_FULLFSYNC.
+ *   On POSIX the temporary file goes to the disk before the rename and the
+ *   folder after it, so a power cut after yrig_save() returned keeps the
+ *   new profile: fcntl(F_FULLFSYNC) on macOS, where fsync() leaves them in
+ *   the drive's write cache, and fsync() elsewhere or on a macOS volume
+ *   that refuses F_FULLFSYNC.
  *
  *   ---------------------------------------------------------------------
  *   CHECKS AT LOAD
@@ -192,7 +193,10 @@
  *          the rename, and fsync() only when the volume refuses it.
  *          fsync() alone left it in the drive's write cache, so a power
  *          cut after the rename could leave a profile that does not load.
- *          No API change.
+ *          POSIX: the folder is synced after the rename (F_FULLFSYNC, then
+ *          fsync(), on macOS), as ysp/dataset.h does, so a power cut after
+ *          the save returned cannot bring the old profile back. No API
+ *          change.
  *   v0.5.1 - Held files. yrig_save_file(), yrig_save() and
  *          yrig_store_loopback() try the rename 5 times, 10 ms apart, when
  *          another program has the file open (ERROR_ACCESS_DENIED,
@@ -235,8 +239,9 @@
  *
  *   STATUS: v0.5.2, 2026-11-04 (docs/device.md, "F_FULLFSYNC on
  *   macOS"): an Apple M2 Mac mini, macOS 27.0.1, Apple clang 21, APFS;
- *   tests/adapt/rigfile_test.c counts one F_FULLFSYNC a save and saves
- *   through fsync() on a volume that refuses it. Release, ASan and UBSan.
+ *   tests/adapt/rigfile_test.c counts one F_FULLFSYNC on the file and one
+ *   on the folder a save, and saves through fsync() on a volume that
+ *   refuses it. Release, ASan and UBSan.
  *   No power cut was made.
  *   STATUS: v0.5.1, 2026-10-27 (docs/device.md, "A held profile"):
  *   tests/adapt/rigfile_test.c holds the profile without
@@ -469,9 +474,7 @@ YRIG_API yin_source yrig_source_role(const yrig_profile* p, const char* role, yi
     #include <sys/stat.h>
     #include <sys/types.h>
     #include <unistd.h>
-    #if defined(__APPLE__)
-    #include <fcntl.h>     /* F_FULLFSYNC */
-    #endif
+    #include <fcntl.h>     /* open() of the folder; F_FULLFSYNC on macOS */
 #endif
 
 #ifdef __cplusplus
@@ -672,7 +675,8 @@ static bool yrig__mkdirs(const char* path) {
 }
 
 /* On macOS fsync() stops at the drive: the bytes can wait in its write
- * cache, and a power cut after the rename can leave a profile of zeros.
+ * cache, and a power cut after the rename can leave a profile of zeros, or
+ * bring the old one back.
  * F_FULLFSYNC also flushes that cache. A file system without it (a network
  * or a FAT volume) refuses it, and fsync() is then the most there is, as
  * SQLite does. The macro is a test's way in. */
@@ -680,12 +684,31 @@ static bool yrig__mkdirs(const char* path) {
     #define YRIG__FULLFSYNC(fd) fcntl((fd), F_FULLFSYNC)
 #endif
 #if !defined(_WIN32)
-static bool yrig__sync(FILE* f) {
-    int fd = fileno(f);
+static bool yrig__sync_fd(int fd) {
 #if defined(__APPLE__)
     if (YRIG__FULLFSYNC(fd) == 0) return true;
 #endif
     return fsync(fd) == 0;
+}
+
+/* The rename is in the folder's entries: sync them, so a power cut after
+ * yrig_save() returned cannot bring the old profile back. A file system
+ * that cannot sync a folder (EINVAL) has nothing to sync, and the rename
+ * stands either way, so a failure here is not the save's. */
+static void yrig__sync_dir(const char* path) {
+    char dir[1040];
+    const char* slash = strrchr(path, '/');
+    size_t k = slash ? (size_t)(slash - path) : 0;
+    int fd;
+    if (!slash) strcpy(dir, ".");
+    else if (k == 0) strcpy(dir, "/");
+    else if (k < sizeof dir) { memcpy(dir, path, k); dir[k] = '\0'; }
+    else return;
+    fd = open(dir, O_RDONLY);
+    if (fd >= 0) {
+        (void)yrig__sync_fd(fd);
+        close(fd);
+    }
 }
 #endif
 
@@ -726,12 +749,14 @@ static int yrig__write_file(const char* path, const void* data, size_t n, char* 
     }
     ok = fwrite(data, 1, n, f) == n;
     ok = fflush(f) == 0 && ok;
-    ok = yrig__sync(f) && ok;
+    ok = yrig__sync_fd(fileno(f)) && ok;
     ok = fclose(f) == 0 && ok;
     if (!ok) snprintf(why, cap, "cannot write its .tmp");
     else if (rename(tmp, path) != 0) {
         ok = false;
         snprintf(why, cap, "cannot replace it (errno %d); the old file stays", errno);
+    } else {
+        yrig__sync_dir(path);
     }
     if (!ok) remove(tmp);
 #endif
