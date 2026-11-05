@@ -7,7 +7,9 @@
  *
  * A virtual pair works: on Linux
  *     socat -d -d pty,raw,echo=0 pty,raw,echo=0 &
- * prints two /dev/pts/N names (com0com gives a pair on Windows). A thread
+ * prints two /dev/pts/N names (com0com gives a pair on Windows; without
+ * socat, as on macOS, tests/loopback/pty_pair.py does the same, and its
+ * python process's PID is the one to give). A thread
  * plays a ysp line protocol board on <board_port>: its clock is the host's
  * microseconds plus an offset, it sends a sync every 100 ms and an edge
  * every 50 ms, and it answers "i" and "q <seq>". ysp/device.h opens

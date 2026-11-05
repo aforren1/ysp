@@ -8,8 +8,10 @@ socat pty pair, including a reader thread and a writer thread on one handle
 under ThreadSanitizer and under AddressSanitizer plus UndefinedBehaviorSanitizer.
 The Windows backend ran on a Teensy 4.0 over `usbser.sys`
 ([Results with the Teensy 4.0 echo board](#results-with-the-teensy-40-echo-board),
-[Pulses: onset and width](#pulses-onset-and-width)). The macOS paths compile on macOS in CI
-but have never run on a device, for lack of a machine. The timing numbers in
+[Pulses: onset and width](#pulses-onset-and-width)). The macOS backend ran
+on an M2 Mac mini against a pseudo-terminal pair
+([macOS on a pseudo-terminal pair](#macos-on-a-pseudo-terminal-pair-2026-11-04)),
+but never on a device. The timing numbers in
 the header (v0.5.1) are from that one Windows setup; FTDI and other bridges,
 RS-232, Linux and macOS are not measured. On Linux the async worker has only ever run at
 `YSER_ASYNC_NORMAL`: the test machine grants no `CAP_SYS_NICE`, so the
@@ -729,8 +731,9 @@ through the Windows backend.
   when `ysp/serial.h` is compiled afterwards.
 - Loopback: `tests/loopback/serial_loopback.c`, built with
   `-DYSP_BUILD_LOOPBACK=ON` and run by hand with two device names, either a
-  virtual pair (`socat -d -d pty,raw,echo=0 pty,raw,echo=0`; com0com on
-  Windows) or one port name twice with TX tied to RX. It checks write N then
+  virtual pair (`socat -d -d pty,raw,echo=0 pty,raw,echo=0`, or
+  `tests/loopback/pty_pair.py` where socat is missing, as on macOS; com0com
+  on Windows) or one port name twice with TX tied to RX. It checks write N then
   `YSER_READ_ALL` N and the payload, `YSER_READ_ANY` with timeout 0 on an idle
   port (0 bytes, under 2 ms, so a poll cannot quietly become a wait),
   `YSER_READ_ANY` with a 100 ms timeout on an idle port (0 bytes after 95 to
@@ -791,6 +794,50 @@ through the Windows backend.
   driver calls if the numbers need explaining.
   `tests/compare/serial_bench/` is the bench for the MATLAB binding; see
   [Compared with MATLAB serialport and IOPort](#compared-with-matlab-serialport-and-ioport).
+
+### macOS on a pseudo-terminal pair (2026-11-04)
+
+The macOS backend's first run. An Apple M2 Mac mini, macOS 27.0.1, Apple
+clang 21, arm64. No serial device was attached: every result here is from
+pseudo-terminals, and none is a claim about a USB-serial driver, FTDI,
+`IOSSIOSPEED` on a real port, or RS-232.
+
+macOS has no socat, so `tests/loopback/pty_pair.py` (standard library only)
+does what `socat -d -d pty,raw,echo=0 pty,raw,echo=0` does: it opens two
+pseudo-terminals, prints the two slave names, and copies bytes between the
+two masters. To run the loopback:
+
+```sh
+uv run --no-project python tests/loopback/pty_pair.py &    # prints /dev/ttysN /dev/ttysM
+cmake -S . -B build/macos-loopback -G Ninja -DYSP_BUILD_LOOPBACK=ON
+cmake --build build/macos-loopback --target serial_loopback device_loopback
+build/macos-loopback/serial_loopback /dev/ttysN /dev/ttysM
+build/macos-loopback/device_loopback /dev/ttysN /dev/ttysM <the bridge's python PID>
+```
+
+| Check | Result |
+|---|---|
+| `serial_loopback`, Release | All checks passed: the read modes and their deadlines, available, purge, the write timeout (a short count after 67,584 bytes), the interrupt (40 us), `find_ports`, every async pulse case, three threads on one handle. The worker got `YRT_POLICY_TIME_CONSTRAINT` without privilege |
+| The same under ThreadSanitizer | All checks passed, no report |
+| The same under ASan and UBSan | All checks passed, no report |
+| `device_loopback` with the bridge's PID | All checks passed: 132 edges, 20 outputs; after the bridge was killed the device went `LOST` in 0.015 s |
+| A hangup on `select()` | A slave opened by `yser_open()`, its master closed 200 ms into a 2 s read: `yser_read()` returned `YSER_ERR_DISCONNECTED` at 204 ms, and the next `yser_write()` returned it too. `select()` reports the hangup as readable, and the read maps it, as [The wait call, per POSIX platform](#the-wait-call-per-posix-platform) says |
+| `yser_list_ports()` | `/dev/cu.Bluetooth-Incoming-Port` and `/dev/cu.debug-console`: the `cu.*` nodes only, no `tty.*` |
+
+What a pseudo-terminal does not support, so these ran but prove nothing
+about a real port:
+
+- `IOSSIOSPEED`: a nonstandard rate (250000) fails `yser_open()` with
+  `IOSSIOSPEED(250000): Inappropriate ioctl for device`. That is the
+  documented behavior for a driver that refuses the rate.
+- DTR, RTS and the line states: `TIOCMBIS`, `TIOCMBIC` and `TIOCMGET`
+  fail with `ENOTTY`, so `yser_set_dtr()`, `yser_set_rts()` and
+  `yser_get_lines()` return `YSER_ERR_IO`, with `misc_oserr` set.
+- `exclusive`: `TIOCEXCL` succeeds on a macOS pseudo-terminal slave, but a
+  second `open()` of it still succeeds. On Linux the same ioctl refuses
+  the second open. Whether a macOS USB-serial driver refuses it is not
+  known here. A lab that relies on `exclusive` on a Mac must check it on its
+  port.
 
 ## Compared with MATLAB serialport and IOPort
 
