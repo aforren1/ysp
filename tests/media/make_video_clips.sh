@@ -1,6 +1,6 @@
 #!/bin/sh
-# make_video_clips.sh - the MP4 clips ysp/video.h's Media Foundation tests and
-# benchmarks use, made with ffmpeg (libx264, libx265), the encoder the pack
+# make_video_clips.sh - the MP4 clips ysp/video.h's Media Foundation and FFmpeg
+# tests and benchmarks use, made with ffmpeg (libx264, libx265), the encoder the pack
 # tool uses. Nothing is downloaded.
 #
 # Usage: tests/media/make_video_clips.sh OUTDIR [--long | --av]
@@ -51,6 +51,20 @@ x264 c_1080p60   1920x1080 60          600 60 60000
 x264 c_2997      1280x720  30000/1001  150 15 30000
 x264 c_23976     1280x720  24000/1001   96 24 24000
 x264 c_crop      1280x718  30           60 30 30000
+
+# A stream that crops 16 columns from the left, so a decoder's left crop is
+# tested: the bars sit at the visible frame's left edge. x264 stores the crop in
+# the SPS, and the encoder's input is 1280 wide.
+$ff -f lavfi -i "testsrc2=size=1280x720:rate=30" -frames:v 60 \
+    -vf "pad=1280:720,geq=lum='if(lt(Y,64),if(lt(X,16),16,if(mod(floor(N/pow(2,floor((X-16)*16/1264))),2),235,16)),p(X,Y))':cb='if(lt(Y,32),128,p(X,Y))':cr='if(lt(Y,32),128,p(X,Y))'" \
+    -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p -profile:v high -bf 0 -g 30 -keyint_min 30 -sc_threshold 0 \
+    -x264-params "bframes=0:scenecut=0:open-gop=0:crop-rect=16,0,0,0:$vui" $color \
+    -video_track_timescale 30000 -movflags +faststart -an "$out/c_cropleft.mp4"
+
+# No VUI at all: nothing states the color, so an index needs it in its desc.
+$ff -f lavfi -i "testsrc2=size=320x240:rate=30" -frames:v 30 -c:v libx264 -crf 18 -pix_fmt yuv420p \
+    -bf 0 -g 30 -keyint_min 30 -sc_threshold 0 -x264-params "bframes=0:scenecut=0:open-gop=0" \
+    -video_track_timescale 30000 -an "$out/c_novui.mp4"
 
 # The first 3 frames as ffmpeg's own decoder gives them, raw NV12 (visible
 # rows only): an independent reference for the bytes Media Foundation gives
@@ -113,7 +127,10 @@ $ff -f lavfi -i "testsrc2=size=1280x720:rate=30" -frames:v 60 -c:v libx264 -crf 
 $ff -f lavfi -i "testsrc2=size=1280x720:rate=30" -frames:v 60 -c:v mpeg4 -q:v 3 -bf 0 -g 30 \
     -video_track_timescale 30000 -an "$out/r_mpeg4.mp4"
 # Remuxes of a canonical clip: rotation, a 1 ms timescale at 30000/1001, a start offset
-$ff -display_rotation 90 -i "$out/c_720p30.mp4" -c copy "$out/r_rotation.mp4"
+# -display_rotation is newer than ffmpeg 5.1, which refuses the option; there
+# the mov muxer writes the matrix from the stream's rotate tag instead.
+$ff -display_rotation 90 -i "$out/c_720p30.mp4" -c copy "$out/r_rotation.mp4" 2>/dev/null ||
+    $ff -i "$out/c_720p30.mp4" -c copy -metadata:s:v:0 rotate=90 "$out/r_rotation.mp4"
 $ff -i "$out/c_2997.mp4" -c copy -video_track_timescale 1000 "$out/r_ts1000.mp4"
 $ff -i "$out/c_720p30.mp4" -c copy -output_ts_offset 0.1 "$out/r_offset.mp4"
 
@@ -130,6 +147,11 @@ if [ "$long" = "--long" ]; then
     meas m_720p30   1280x720  30 1800 30 30000
     meas m_1080p30  1920x1080 30 1800 30 30000
     meas m_1080p60  1920x1080 60 3600 60 60000
+    # HEVC Main at 1080p30, 10 s.
+    $ff -f lavfi -i "testsrc2=size=1920x1080:rate=30" -frames:v 300 -vf "noise=alls=6:allf=t" \
+        -c:v libx265 -preset fast -crf 22 -pix_fmt yuv420p -tag:v hvc1 \
+        -x265-params "bframes=0:keyint=30:min-keyint=30:scenecut=0:open-gop=0:colorprim=bt709:transfer=bt709:colormatrix=bt709:range=limited:chromaloc=0:log-level=error" \
+        $color -video_track_timescale 30000 -movflags +faststart -an "$out/m_hevc1080p30.mp4"
     for f in "$out"/m_*.mp4; do
         printf '%s: ' "$f"; ffprobe -v error -show_entries format=bit_rate -of default=nw=1:nk=1 "$f"
     done
