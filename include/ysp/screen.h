@@ -639,7 +639,11 @@
  *     HDMI mode measured 16.680417 ms, 59.9505 Hz), never the mode's
  *     rounded rate; the flips refine it. nextDrawable gives up after its
  *     own 1 s timeout; a frame without a drawable draws into a 1 x 1
- *     pbuffer and is estimated (no_drawable= in the describe line). GL's
+ *     pbuffer and is estimated (no_drawable= in the describe line). A
+ *     presented handler that has not come 1 s after its target is given up
+ *     (late_handler=): its frame is estimated, and the frames after it
+ *     complete; a hidden window's handlers came late or not at all
+ *     (measured, docs/screen_macos_probe.md). GL's
  *     row 0 is the top of the screen, as on Windows
  *     (yscr_present_info.rows_top_down).
  *     ANGLE: libEGL.dylib from desc.angle_dir, YSCR_ANGLE_DIR, or the
@@ -5534,7 +5538,7 @@ typedef struct yscr__mtl {
     int32_t   w, h, bits10, region, bind_target;
     int32_t   kind, locked, hidden;
     int64_t   hidden_t;
-    uint32_t  not_shown, no_drawable, no_slot, sync_failed, pbuffers;
+    uint32_t  not_shown, no_drawable, no_slot, sync_failed, pbuffers, late_handlers;
     char      angle[48];
 } yscr__mtl;
 
@@ -6108,7 +6112,20 @@ static int yscr__mtl_completions(void* vctx, yscr_vblank* out, int cap) {
     while (n < cap && m->n_slot > 0) {
         yscr__mtl_slot* sl = &yscr__mtl_tab[m->slot[0]];
         int64_t t;
-        if (yscr__a_load(&sl->state) != YSCR__SLOT_FIRED) break;   /* in order */
+        if (yscr__a_load(&sl->state) != YSCR__SLOT_FIRED) {   /* in order */
+            /* A handler a second past its target may never come (a hidden
+             * window's): give its slot up, so the frames after it complete */
+            if (yscr__now() - m->slot_target[0] < 1000000000LL ||
+                !yscr__a_cas(&sl->state, YSCR__SLOT_ARMED, YSCR__SLOT_ORPHAN)) break;
+            m->not_shown++;
+            m->late_handlers++;
+            yscr__mtl_vblank(m->slot_id[0], 0, yscr__mtl_hidden(m), m->kind, m->t0, m->period_ns, &out[n++]);
+            m->n_slot--;
+            memmove(m->slot, m->slot + 1, sizeof m->slot[0] * (size_t)m->n_slot);
+            memmove(m->slot_id, m->slot_id + 1, sizeof m->slot_id[0] * (size_t)m->n_slot);
+            memmove(m->slot_target, m->slot_target + 1, sizeof m->slot_target[0] * (size_t)m->n_slot);
+            continue;
+        }
         t = yscr__a_load64(&sl->presented);
         if (t > 0) {
             t += m->mach_off;
@@ -6131,10 +6148,10 @@ static int yscr__mtl_describe(void* vctx, char* buf, size_t cap) {
     yscr__mtl* m = (yscr__mtl*)vctx;
     m->kind = yscr__mtl_kind_now(m);
     return snprintf(buf, cap, "angle=%s kind=%s layer=%s period=%lldns locked=%d not_shown=%u no_drawable=%u "
-                    "no_handler=%u sync_failed=%u pbuffers=%u mach_off=%lldns(%lldns) target_lead=%.2f(unmeasured) "
+                    "no_handler=%u late_handler=%u sync_failed=%u pbuffers=%u mach_off=%lldns(%lldns) target_lead=%.2f(unmeasured) "
                     "tier=%d(unmeasured)",
                     m->angle, yscr__mtl_kind_name(m->kind), m->bits10 ? "bgr10a2" : "bgra8", (long long)m->period_ns,
-                    m->locked, m->not_shown, m->no_drawable, m->no_slot, m->sync_failed, m->pbuffers,
+                    m->locked, m->not_shown, m->no_drawable, m->no_slot, m->late_handlers, m->sync_failed, m->pbuffers,
                     (long long)m->mach_off, (long long)m->corr_w, YSCR__MTL_TARGET_LEAD, (int)yscr__mtl_tier(m->kind));
 }
 
