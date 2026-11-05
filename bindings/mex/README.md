@@ -26,7 +26,7 @@ never reused, so a handle kept past its `close` always raises
 | `ysp_timeline.c` | [ysp/timeline.h](../../include/ysp/timeline.h) | [example_timeline.m](example_timeline.m) |
 | `ysp_dataset.c` | [ysp/dataset.h](../../include/ysp/dataset.h) | [example_dataset.m](example_dataset.m) |
 | `ysp_audio.c` | [ysp/audio.h](../../include/ysp/audio.h) | [example_audio.m](example_audio.m), [test_mex_audio.m](test_mex_audio.m) |
-| `ysp_vis.c` (the core), `ysp_screen.c`, `ysp_gfx.c`, `ysp_video.c` | [ysp/screen.h](../../include/ysp/screen.h), [ysp/gfx.h](../../include/ysp/gfx.h), [ysp/video.h](../../include/ysp/video.h) (ysp-vis, Windows only) | [example_screen.m](example_screen.m), [example_gfx_2afc.m](example_gfx_2afc.m), [example_gfx_rsvp.m](example_gfx_rsvp.m), [example_gfx_stroop.m](example_gfx_stroop.m), [example_gfx_reading.m](example_gfx_reading.m), [test_mex_vis.m](test_mex_vis.m), [test_mex_vis_gfx.m](test_mex_vis_gfx.m), [test_mex_vis_text.m](test_mex_vis_text.m), [test_mex_vis_window.m](test_mex_vis_window.m) |
+| `ysp_vis.c` (the core), `ysp_screen.c`, `ysp_gfx.c`, `ysp_video.c` | [ysp/screen.h](../../include/ysp/screen.h), [ysp/gfx.h](../../include/ysp/gfx.h), [ysp/video.h](../../include/ysp/video.h) (ysp-vis: Windows; MATLAB on macOS arm64) | [example_screen.m](example_screen.m), [example_gfx_2afc.m](example_gfx_2afc.m), [example_gfx_rsvp.m](example_gfx_rsvp.m), [example_gfx_stroop.m](example_gfx_stroop.m), [example_gfx_reading.m](example_gfx_reading.m), [test_mex_vis.m](test_mex_vis.m), [test_mex_vis_gfx.m](test_mex_vis_gfx.m), [test_mex_vis_text.m](test_mex_vis_text.m), [test_mex_vis_window.m](test_mex_vis_window.m) |
 
 The two transport headers build on the shared [ysp/rt.h](../../include/ysp/rt.h), so
 both MEX functions compile it too. `ysp_quest.c` and `ysp_aep.c` define
@@ -1563,7 +1563,10 @@ The display, its frame loop and the record of every flip
 lists, groups, instances and timeline bindings of
 [ysp/gfx.h](../../include/ysp/gfx.h) (phase B, 2026-10-27), and text laid
 out by pack/layout (phase C, MEX 1.2.0; Text in ysp_gfx, below). `ysp_video` plays
-movies (Movies: ysp_video, below; [example_video.m](example_video.m)). Windows only. [example_screen.m](example_screen.m) runs a
+movies (Movies: ysp_video, below; [example_video.m](example_video.m)). Windows (MATLAB, Octave) and, since
+1.3.0, MATLAB on macOS 14 or later on arm64 (the METAL backend; every
+call runs on the process's main thread: below). Not Linux, not Octave on
+macOS. [example_screen.m](example_screen.m) runs a
 3 s frame loop in a window; [example_gfx_2afc.m](example_gfx_2afc.m) a
 two-alternative grating trial; [example_gfx_rsvp.m](example_gfx_rsvp.m)
 an RSVP stream from an atlas; [example_gfx_stroop.m](example_gfx_stroop.m)
@@ -1604,6 +1607,26 @@ file (`-s`), and copies ANGLE's `libEGL.dll` and `libGLESv2.dll` and the
 license notices of SDL3, ANGLE, pl_mpeg and the text layout (Skribidi,
 HarfBuzz, SheenBidi, libunibreak, budouxc) into this directory. Without the natives it skips `ysp_vis.c`
 with a message. `ysp_audio` and `ysp_timeline` must be built here too.
+On macOS: `tools/vendor_vis.py --write --angle --pl-mpeg --sdl clang
+--layout clang` (Apple clang, arm64, macOS 14), and `build.m` links the
+static SDL3 with its frameworks, exports `ysp_vis_core` from the core, and
+copies `libEGL.dylib` and `libGLESv2.dylib` unchanged. MATLAB's
+`clang_maca64.xml` refuses a Mac with the Command Line Tools and no Xcode
+("Supported compiler not detected": it reads Xcode's license record); copy
+it from `<matlabroot>/bin/maca64/mexopts/`, delete its
+`<XCODE_AGREED_VERSION>` element, and set `YSP_MEX_OPTS` to the copy's
+path before `build` (`build.m` passes it to `mex -f`).
+
+**The main thread on macOS.** MATLAB runs MEX functions on a thread of
+its own, never on the main thread (R2026b: the desktop, `-nodesktop`,
+`-nojvm`, `-batch`), and Cocoa, SDL's video and the METAL backend need the
+main thread. So the core sends each `ysp_screen`, `ysp_gfx` and
+`ysp_video` call to the main dispatch queue, which MATLAB's run loop
+serves in all four modes, and waits for it: about 17 us more a call on
+the M2 Mac mini. Errors keep their ids. A call that the main thread does
+not start in 10 s raises `ysp_screen:main_thread` (or `ysp_gfx:`,
+`ysp_video:`) instead of hanging. [docs/bindings.md](../../docs/bindings.md#display-stimuli-movies-ysp-vis)
+has the measurements.
 
 **Layout and lifetime.** `ysp_vis.<mexext>` is the core: the three
 headers, the static SDL3, the one handle table and every command. The thin
@@ -1617,17 +1640,17 @@ directory ANGLE is loaded from and the SDL version. Handles start at
 
 | Command | Returns | Notes |
 |---|---|---|
-| `ysp_screen('version')` | `'1.2.1'`, and the header's | the same for `ysp_gfx`, `ysp_video`, `ysp_vis`; 1.1.0 added `ysp_gfx`'s stimuli and `ysp_video`'s movies, 1.2.0 the text, 1.2.1 `ysp_video`'s UTF-8 paths and error ids |
+| `ysp_screen('version')` | `'1.3.0'`, and the header's | the same for `ysp_gfx`, `ysp_video`, `ysp_vis`; 1.1.0 added `ysp_gfx`'s stimuli and `ysp_video`'s movies, 1.2.0 the text, 1.2.1 `ysp_video`'s UTF-8 paths and error ids, 1.3.0 macOS arm64, the caps `os_input_stamps` and `margin`, the options `backend` `'metal'` and `color_depth`, and a fix of `ysp_gfx('free')` |
 | `'displays'`, `'modes' [, display]`, `'mode_multiple', num, den, [w h], tol_ppm, display` | struct rows; `[k, mode, err_ppm]` | `'open'` takes a display's `id` and a mode struct |
 | `'options'`, `'constants'` | struct | the options with a line each; `TIER_*`, `PATH_*`, `FLIP_*`, `ABORT_*`, `KIND_*`, `PRESS` ... |
-| `'open' [, opts]` | `uint64` handle | a struct or name-value pairs: `windowed`, `size`, `display`, `mode`, `backend` (`'auto'`, `'dxgi_flip'`, `'composition'`, `'sim'`), `window_thread`, `lead`, `onset_offset` (s), `depth`, `depth_learn`, `settle`, `settle_flips`, `settle_min`, `settle_max` (s), `foreground`, `panic`, `panic_presses`, `panic_window`, `panic_grace` (s), `patch`, `patch_size`, `patch_corner`, `show_cursor`, `keep_os_gamma`, `key_dedup` (s), `gamepads`, `min_tier`, `sim_period` (s). Settles: 0.5 to 0.8 s fullscreen, 2.5 s in a window. Two options of the binding: `gfx` (`true` or a struct of `ysp_gfx('open')` options: the gfx starts while the screen settles, and `ysp_gfx('open', h)` finishes it) and `frame` (`'struct'`, the default, or `'row'`: see `'begin'`) |
+| `'open' [, opts]` | `uint64` handle | a struct or name-value pairs: `windowed`, `size`, `display`, `mode`, `backend` (`'auto'`, `'dxgi_flip'`, `'composition'`, `'metal'` (macOS), `'sim'`), `color_depth` (8, or 10 on `'metal'`), `window_thread`, `lead`, `onset_offset` (s), `depth`, `depth_learn`, `settle`, `settle_flips`, `settle_min`, `settle_max` (s), `foreground`, `panic`, `panic_presses`, `panic_window`, `panic_grace` (s), `patch`, `patch_size`, `patch_corner`, `show_cursor`, `keep_os_gamma`, `key_dedup` (s), `gamepads`, `min_tier`, `sim_period` (s). Settles: 0.5 to 0.8 s fullscreen, 2.5 s in a window. Two options of the binding: `gfx` (`true` or a struct of `ysp_gfx('open')` options: the gfx starts while the screen settles, and `ysp_gfx('open', h)` finishes it) and `frame` (`'struct'`, the default, or `'row'`: see `'begin'`) |
 | `[f, quit, done] = ('begin', h)` | frame | `f`: `onset`, `onset_ns`, `period`, `period_ns`, `index`, `vblank`, `n_done`, `done_lost` (`_ns` as `int64`); `done`: the records completed since the last begin, only when asked for (a third output). With `'frame', 'row'`: `f = [onset period index vblank n_done done_lost]` and `done` an n x 15 matrix (below). An abort raises `ysp_screen:abort`; `[f, quit] = ...` returns it in `quit` (`reasons`, `presses`, `t`, `t_ns`, `panic`) with `f` empty |
 | `'flip', h`, `'flip_at', h, t` | none | at the predicted onset, or at the vblank `t` snaps to |
 | `'wait_flip', h`, `'records', h` | record, record row | `records`: every record since the last call (4096 kept; the second output counts the overflow); an n x 15 matrix on a `'frame', 'row'` screen: `index target planned onset residual dropped path tier flags` and the six phases (seconds; `NaN` unknown) |
 | `'mark', h, phase` | none | `'evaluate'`, `'script'`, `'draw'`, `'upload'` |
 | `'poll', h [, max]` | event row | the shared event layout of `ysp_device` and `ysp_response` |
 | `'title', h, text`, `'cursor', h, show`, `'grab', h, on` | none | through the window thread; `:not_implemented` on `'sim'` |
-| `'describe', h`, `'caps', h`, `'settle', h`, `'sync', h`, `'set_patch', h, v` | | |
+| `'describe', h`, `'caps', h`, `'settle', h`, `'sync', h`, `'set_patch', h, v` | | `caps`: `kind`, `backend`, `period`, `mode`, `native_target`, `hw_onset`, `vrr_capable`, `max_in_flight`, `worst_tier`, `raw_keyboard`, `os_input_stamps` (keys and mouse buttons get their OS event's time: METAL's NSEvent.timestamp), `margin` (s; 0 = the core's, 2 ms on METAL), with `period_ns` and `margin_ns` |
 | `'request_abort'`, `'input_stats'`, `'now'`, `'now_ns'` | | |
 | `'close', h` | record row | lets the last flip complete; the gfx on it closes too |
 | `ysp_gfx('open', h, name, value, ...)` | gfx handle | `background`, `units` (`'px'`, `'deg'`), `view` (`[distance_mm width_mm]`), `dither`, `seed`, `cones`, `cal` and `lum` (the bytes of .yspcal and .ysplum files, uint8), `max_draws`, `max_instances`, `cache` (true: the per-user program cache, the default; false; or a folder), `prime`. One gfx per screen: its output stage writes every pixel. `ysp_gfx('open', h, 0.5)` (a background) works as in phase A |
@@ -1699,7 +1722,7 @@ ysp_gfx('set', t, 'text', 'GREEN', 'color', [0.05 0.45 0.05]);   % a new layout:
 |---|---|---|
 | `'font', g, src, 'face', k, 'name', s` | handle | `src` a path, the uint8 bytes of a font file, or a cell of them: a fallback list, tried in order for each run of one script. `'face'`: one, or one per file (a .ttc's face) |
 | `'font_info', f` | struct row | per file `name`, `face`, `sha256`, `units_per_em`, `glyphs`, `ascender`, `descender`, `line_gap` (em), `built` (glyphs in its curve set), `build_time` (s) |
-| `'text', g, str, name, value, ...` | handle | `font` (a font handle, a path or a cell of paths, made once per gfx; none: Segoe UI, else Arial), `size` (units per em; 32 px or 1 deg), `width` (wrap width; 0 none), `align` (`'start'`, `'center'` (the default), `'end'`), `line_height` (times the fonts' line; 0 = 1), `dir` (`'auto'`, `'ltr'`, `'rtl'`), `lang` (BCP 47; `'ja'`, `'zh-Hans'`, `'zh-Hant'`, `'th'` break at BudouX phrases), `spans` (k x 6 `[first last r g b size]`, char indices, last included; `NaN` color: the text's, size 0: the text's; at most 15 colors), and any stimulus parameter: `place`, `anchor`, `x`, `y`, `ori`, `color`, `space`, `opacity`, `visible`, `gate`, `group`, `blend`, `rays`, `aliased` |
+| `'text', g, str, name, value, ...` | handle | `font` (a font handle, a path or a cell of paths, made once per gfx; none: Segoe UI, else Arial; on macOS Arial, else Helvetica), `size` (units per em; 32 px or 1 deg), `width` (wrap width; 0 none), `align` (`'start'`, `'center'` (the default), `'end'`), `line_height` (times the fonts' line; 0 = 1), `dir` (`'auto'`, `'ltr'`, `'rtl'`), `lang` (BCP 47; `'ja'`, `'zh-Hans'`, `'zh-Hant'`, `'th'` break at BudouX phrases), `spans` (k x 6 `[first last r g b size]`, char indices, last included; `NaN` color: the text's, size 0: the text's; at most 15 colors), and any stimulus parameter: `place`, `anchor`, `x`, `y`, `ori`, `color`, `space`, `opacity`, `visible`, `gate`, `group`, `blend`, `rays`, `aliased` |
 | `'set', t, name, value, ...` | none | the text's own parameters (one layout; between frames, else `ysp_gfx:order`; a refused change leaves the text as it was) and the stimulus's |
 | `v = ('get', t, name)` | | the above, and `box` (`[w h]` units), `n_lines`, `n_glyphs`, `n_runs`, `n_chars`, `missing`, `resolved_dir`, `layout_time`, `build_time`, `upload_time` (s), `new_glyphs`, `stamp` (the layout's versions and the fonts' hashes, for a data file) |
 | `G = ('glyphs', t)` | n x 6 | `[char line x0 y0 x1 y1]`: each glyph's character, line and ink box (a space: its pen point) |

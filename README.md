@@ -115,7 +115,8 @@ return values, errors, units, threads) are in
 ## More
 
 - [docs/bindings.md](docs/bindings.md): Python wheels and MATLAB/Octave
-  MEX functions.
+  MEX functions. The display, stimuli and movies (`ysp-vis`) run on
+  Windows x64 and, in Python and MATLAB, on macOS 14 or later on arm64.
 - [docs/contributing.md](docs/contributing.md): repository layout, how to
   add a library, how to change a header.
 - [examples/README.md](examples/README.md): the example index.

@@ -1255,8 +1255,10 @@ built.
 - Windows: not rebuilt here. The Media Foundation code moved out of its
   block (the SPS parser, the edit list check, the color pick and the rate
   fit) and did not change; MSVC and MinGW should build it before a merge.
-- Bindings: `ysp-vis` and the MEX are Windows only; their `hw_decode` lists
-  do not have `videotoolbox`.
+- Bindings: `ysp-vis` 0.15.0 and the MEX 1.3.0 run on macOS arm64 too,
+  and their `hw_decode` lists have `videotoolbox`; an MP4 through the
+  bindings on macOS was not run (no ffmpeg on the test Mac to make the
+  clips).
 
 ### Measurements: decode thread, open, seek (M1, M3, M4 on macOS)
 
@@ -1376,7 +1378,8 @@ for r in 1 2 3; do for c in m_720p30 m_1080p30 m_1080p60; do for hw in vt sw; do
 `ysp.timeline` (`ysp_audio`, `ysp_timeline`), so a movie's soundtrack is
 the experiment's audio device and its clock a timeline built in the host.
 Phase A (2026-10-27) proved that path. Phase B (2026-10-27, `ysp-vis`
-0.10.1.1, MEX 1.1.0) binds the movies. Windows only. MPEG-1 is in: pl_mpeg
+0.10.1.1, MEX 1.1.0) binds the movies; Windows only until ysp-vis
+0.15.0 and MEX 1.3.0 (macOS arm64). MPEG-1 is in: pl_mpeg
 c871f2b, fetched and checked by SHA-256 (`tools/vendor_vis.py --pl-mpeg`);
 Media Foundation is loaded at run time, as the header does.
 

@@ -19,12 +19,16 @@ ysp/gfx.h (phase B, 2026-10-27; [Stimuli](#stimuli-yspgfx), below).
 and draws text (phase C, 0.10.2.1; [Text](#text-yspgfx), below).
 
 Phase B, movies (0.10.1.1): `ysp.video` binds ysp/video.h's movies (frame
-sequences, MPEG-1 through pl_mpeg, MP4 through Media Foundation), their
+sequences, MPEG-1 through pl_mpeg, MP4 through Media Foundation or, on
+macOS, AVFoundation), their
 soundtrack on a `ysp.audio.Audio`, the frame sequence writer and the index
 maker (How to play a movie, below).
 
-**Windows only.** The other screen backends of ysp/screen.h are stubs.
-The wheel is `cp310-abi3-win_amd64`: one build for CPython 3.10 and later.
+**Windows x64 and macOS arm64** (macOS 14 or later, the METAL backend;
+0.15.0). Linux is not supported: ysp/screen.h's X11 and Wayland backends
+are stubs. The wheels are `cp310-abi3-win_amd64` and
+`cp310-abi3-macosx_14_0_arm64`: one build each for CPython 3.10 and later.
+On macOS a window screen runs on the main thread only ([Threads](#threads)).
 
 ## What the wheel holds
 
@@ -36,6 +40,13 @@ The wheel is `cp310-abi3-win_amd64`: one build for CPython 3.10 and later.
 | `ysp/ysp_vis-LICENSE.SDL3.txt`, `ysp/ysp_vis-LICENSE.ANGLE.txt` | the license notices of SDL3 (zlib) and ANGLE (BSD) |
 | `ysp/ysp_vis-LICENSE.pl_mpeg.txt` | pl_mpeg's notice (MIT): its MPEG-1 decoder is compiled into the extension |
 | `ysp/ysp_vis-LICENSE.Skribidi.txt`, `.HarfBuzz.txt`, `.SheenBidi.txt`, `.libunibreak.txt`, `.budouxc.txt` | the license files of the text layout linked into the extension: Skribidi (MIT), HarfBuzz (Old MIT; its USE table MIT), SheenBidi (Apache-2.0), libunibreak (zlib), budouxc (MIT; BudouX's models Apache-2.0) |
+
+On macOS the extension is `ysp/_vis.abi3.so` and ANGLE's files are
+`ysp/libEGL.dylib` and `ysp/libGLESv2.dylib`: ANGLE 2.1.28042 (git
+b4f8ea825136) from the Electron v43.8.3 release for darwin-arm64, copied
+unchanged (their SHA-256 is `tools/vendor_vis.py`'s). The license files
+are the same. SDL3 and the text layout are static there too, built for
+macOS 14, so the extension imports system libraries only.
 
 The extension always loads ANGLE from its own directory
 (`desc.angle_dir`), so another ANGLE in the process (MATLAB's, a Qt
@@ -63,6 +74,12 @@ uv run --no-project python tools/vendor_layout.py --write
 uv run --no-project python tools/vendor_vis.py --write --angle --sdl msvc --pl-mpeg --layout msvc
 uv pip install ./bindings/python/ysp_audio ./bindings/python/ysp_timeline ./bindings/python/ysp_vis
 ```
+
+On macOS, the second line is
+`uv run --no-project python tools/vendor_vis.py --write --angle --sdl clang --pl-mpeg --layout clang`:
+Apple clang builds SDL3 and the text layout for arm64 and macOS 14 (CMake
+and Ninja on PATH), and ANGLE's two dylibs come from the Electron zip for
+darwin-arm64, checked by SHA-256.
 
 `tools/vendor_vis.py` downloads the SDL3 3.4.0 release tarball and the
 Electron zip, checks both by SHA-256, builds the static SDL3 with MSVC and
@@ -139,7 +156,8 @@ onset by ysp/video.h's rule (never a count of frames) and puts it in the
 texture. `draw()` goes between the gfx's `begin()` and `end()`. A file must
 be in the canonical form ([docs/video.md](../../../docs/video.md)): a frame
 sequence (`SeqWriter` writes one), MPEG-1 (pl_mpeg, built in) or an MP4
-with H.264 or HEVC (Windows Media Foundation), each MPEG-1 and MP4 file
+with H.264 or HEVC (Media Foundation; AVFoundation on macOS, not run
+through the binding: no ffmpeg on the test Mac), each MPEG-1 and MP4 file
 with its index beside it: `ysp.video.make_index("clip.mp4", matrix="bt709",
 range="limited", transfer="bt1886", primaries="bt709", siting="left")` (an
 MPEG-1 file needs no color arguments). A WAV soundtrack must be at the
@@ -158,7 +176,7 @@ a path or bytes (None: `path + ".yspvi"`), `timeline` a
 options are the header's desc (`ysp.video.options()` lists them): `loop`,
 `ahead`, `preroll`, `lead`, `light` (`'auto'`, `'codes'`, `'eotf'`),
 `chroma`, `backend` (`'auto'`, `'seq'`, `'plmpeg'`, `'mf'`), `hw_decode`
-(`'auto'`, `'off'`, `'dxva'`), `strict_cadence`, `inline_decode`,
+(`'auto'`, `'off'`, `'dxva'`, `'videotoolbox'` on macOS), `strict_cadence`, `inline_decode`,
 `inline_budget`, `refresh_num`, `refresh_den`, `movie_index`, `min_tier`,
 `pin_cpu`. Opening releases the GIL.
 
@@ -209,9 +227,13 @@ is held the same way.
 
 ## Between trials
 
-The window belongs to a thread of ysp/screen.h's own, so `time.sleep()`,
-`input()` or any other wait between trials does not hang it, and the first
-frame after the wait is on time. No pumping call is needed.
+On Windows the window belongs to a thread of ysp/screen.h's own, so
+`time.sleep()`, `input()` or any other wait between trials does not hang
+it, and the first frame after the wait is on time. No pumping call is
+needed. macOS has no window thread: during a wait nothing pumps the
+window. After a 6 s wait (`test_window.py`, one run) the frames drew, the
+first three flips were estimated (tier 3) and the fourth was tier 2 again;
+start a trial with a few frames that do not count.
 
 ## Reference
 
@@ -224,7 +246,8 @@ fullscreen, 2.5 s in a window. Keyword options only;
 | `windowed`, `size` | a window of `(w, h)` pixels in place of the full screen |
 | `display` | a display's `id` from `displays()`; 0 = the primary |
 | `mode` | a `Mode` from `modes()` to switch to; none = the desktop mode |
-| `backend` | `'auto'` (COMPOSITION where it runs, else DXGI_FLIP), `'dxgi_flip'`, `'composition'`, `'sim'` (no window: tests) |
+| `backend` | `'auto'` (Windows: COMPOSITION where it runs, else DXGI_FLIP; macOS: METAL), `'dxgi_flip'`, `'composition'`, `'metal'` (macOS), `'sim'` (no window: tests) |
+| `color_depth` | 8 (0 = 8), or 10 on METAL (a BGR10A2 layer) |
 | `window_thread` | `'auto'` (on), `'on'`, `'off'` |
 | `lead` | `flip_at()`'s snap: 0.5 (the nearest vblank) by default; -1 never early |
 | `onset_offset` | seconds added to every onset (a photodiode's measured delay) |
@@ -244,7 +267,7 @@ fullscreen, 2.5 s in a window. Keyword options only;
 | `s.poll(max=0)` | `list[Event]`: the input events since the last poll, in the shared layout of `ysp.device` and `ysp.response` |
 | `s.mark(phase)` | charge the time since `begin()` or the last mark to `PHASE_EVALUATE`, `_SCRIPT`, `_DRAW` or `_UPLOAD` |
 | `s.title(text)`, `s.cursor(show)`, `s.grab(on)` | through `yscr_window_call()`: the window thread does the SDL call |
-| `s.describe()`, `s.caps()`, `s.settle()`, `s.sync()` | the log line, the capabilities, open's settling, the sync guard |
+| `s.describe()`, `s.caps()`, `s.settle()`, `s.sync()` | the log line, the capabilities, open's settling, the sync guard. `caps()` has `os_input_stamps` (keys and mouse buttons get their OS event's time: METAL's NSEvent.timestamp) and `margin` (seconds, with `margin_ns`; 0 = the core's, 2 ms on METAL) since 0.15.0 |
 | `s.close()` | lets the last flip complete; closes a `Gfx` on the screen first |
 | `displays()`, `modes(display=0)`, `mode_multiple(num, den, ...)` | the displays and their modes |
 | `request_abort()`, `input_stats()`, `now()`, `now_ns()` | |
@@ -402,10 +425,10 @@ bytes of a font file, or a list of them (or of `(source, face)` pairs) as a
 fallback list. For each run of one script, the files that support it are
 tried in order, and the first that has the character draws it. A text's
 `font=` is a `Font`, a path or a list of paths (made once per `Gfx` and
-kept), or none: the system's sans font, Segoe UI, else Arial. No font file
-is in the wheel: Segoe UI is on every Windows machine, the only platform,
-and a bundled file would be another pin and another license to carry; give
-a file to have the same glyphs on every machine. `f.info` gives each
+kept), or none: the system's sans font, Segoe UI, else Arial (macOS:
+Arial, else Helvetica). No font file is in the wheel: each system has
+these, and a bundled file would be another pin and another license to
+carry; give a file to have the same glyphs on every machine. `f.info` gives each
 file's name, face, SHA-256 and metrics, and `t.stamp` (and `f.stamp()`)
 one line with the layout's versions and the hashes of the fonts a text
 used, for a data file. TrueType and CFF fonts; CFF2 and fonts without
@@ -481,7 +504,15 @@ per word, shown by a timeline) and the sentence's word boxes.
 ## Threads
 
 Use a `Screen`, its `Gfx` and the gfx's objects from one thread: the GL
-context is that thread's. The window thread and ysp/screen.h's other
+context is that thread's. On macOS that thread is the process's main
+thread, the one that runs the script: Cocoa's windows, SDL's video and the
+METAL backend need it. From another thread, a window `Screen()`,
+`displays()`, `modes()`, `mode_multiple()` and every call on an open
+window screen, its `Gfx` and their objects raise `ysp.screen.Error` ("on
+macOS a window screen opens, runs its frame loop, draws and closes on the
+process's main thread ...") before SDL or Cocoa sees the call. The
+simulated display opens on any thread. A `Screen` or `Gfx` freed by the
+garbage collector on another thread stays open until the process ends. The window thread and ysp/screen.h's other
 threads never take the GIL.
 `Screen()`, `close()`, `begin()`, `flip()`, `flip_at()`, `wait_flip()`,
 the display lists and the window calls release it. No Python function
@@ -503,8 +534,16 @@ lists, instances, bindings and lifetime rules of `ysp.gfx`.
 `test_window.py` opens a 1280 x 720 window with the bundled ANGLE, draws
 two seconds, idles 6 s without a call and draws again; then five stimuli
 made through `ysp.gfx` must draw the same scene, bit for bit, as the same
-stimuli made in C, and instances must match single stimuli. CI runs the
-simulated tests only.
+stimuli made in C, instances must match single stimuli, and a text in the
+system font draws. On macOS it also checks METAL's caps (2 frames in
+flight, a 2 ms margin, NSEvent stamps), that at least 100 of 120 flips
+were shown (tier 2), and that calls from a `threading.Thread` on an open
+window screen are refused. `test_screen_sim.py` checks the refusal of a
+window screen's open from a thread without a window. CI runs the
+simulated tests only. On the M2 Mac mini (macOS 27.0.1, 2026-11-05,
+CPython 3.12.16, the wheel built with `uv build`): 69 passed, 24 skipped
+(the Segoe UI text tests, the ffmpeg clips, the sound) with
+`YSP_VIS_WINDOW=1`.
 
 `test_text_sim.py` checks text on the simulated display: fonts by path,
 bytes and fallback list, bidi, wrapping, spans, a change of text between
