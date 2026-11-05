@@ -3915,9 +3915,10 @@ window kind instead. The probe's runs decide each row: `present`'s
   IOSurface's. 8-bit codes are spread over 10 bits (`v << 2 | v >> 6`).
   `color_depth` 10 on another backend is refused, not drawn in 8 bits.
 - **Input.** SDL's event times are restamped onto ysp_rt as on the other
-  backends (SDL's ticks are mach time plus a constant, measured). SDL's
-  Cocoa key times are not measured: posting keys needs the Accessibility
-  permission, which the machine did not grant (probe, section 5.8).
+  backends (SDL's ticks are mach time plus a constant, measured). SDL 3.4's
+  Cocoa key and button times are late by a per-process offset; from
+  v0.15.0 `yscr_event_input()` gives them `NSEvent.timestamp` (see "Keys
+  and mouse buttons: NSEvent.timestamp").
 
 ### The period from CADisplayLink (v0.13.1)
 
@@ -4288,8 +4289,8 @@ something measured here.
 
 A timing run of this header's own frame loop (only the functional test
 above ran), the light (tier 1), direct against composed (one sign only:
-the space's shorter queue), the panel's 10 bits, key times on macOS
-(posting keys needs the Accessibility permission), and a run that
+the space's shorter queue), the panel's 10 bits, keys pressed by hand
+(only posted keys were timed, v0.15.0), and a run that
 switches only Screen Sharing to show that it causes the blank windows of
 the probe's 6.3. The panic watchdog, raw mice and the OS gamma ramp are
 Windows only. Not exercised by a test: a presented handler given up 1 s
