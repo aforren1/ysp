@@ -2701,6 +2701,138 @@ static const yvid_decoder yvid__plm_decoder = {
  * processor: a stream that the decoder cannot give as NV12 is refused, not
  * converted. */
 #if YVID__MF
+/* --- the H.264 SPS's VUI ---------------------------------------------------------
+ * Media Foundation reports none of the color the stream states, so the
+ * index maker reads it from the sequence parameter set: colour_primaries,
+ * transfer_characteristics, matrix_coefficients, video_full_range_flag and
+ * the chroma sample location (H.264 Annex E). HEVC's SPS puts its VUI
+ * behind the profile_tier_level and short-term reference picture sets, so it
+ * is not parsed here: an HEVC index takes the color from its desc. */
+typedef struct yvid__bits { const uint8_t* p; size_t n, pos; int err; } yvid__bits;
+
+static uint32_t yvid__bu(yvid__bits* b, int k) {
+    uint32_t v = 0;
+    while (k-- > 0) {
+        if (b->pos >= b->n * 8) { b->err = 1; return 0; }
+        v = (v << 1) | ((b->p[b->pos >> 3] >> (7 - (b->pos & 7))) & 1u);
+        b->pos++;
+    }
+    return v;
+}
+static uint32_t yvid__bue(yvid__bits* b) {   /* ue(v) */
+    int z = 0;
+    while (!b->err && yvid__bu(b, 1) == 0) if (++z > 31) { b->err = 1; return 0; }
+    return z ? ((1u << z) - 1u) + yvid__bu(b, z) : 0u;
+}
+static int32_t yvid__bse(yvid__bits* b) {    /* se(v) */
+    uint32_t k = yvid__bue(b);
+    return (k & 1u) ? (int32_t)((k + 1) / 2) : -(int32_t)(k / 2);
+}
+
+/* out: matrix, range, transfer, primaries, siting as YVID_* values; -1
+ * not stated, -2 stated but not one the canonical form has. Returns 1 when
+ * an SPS was parsed. */
+static int yvid__h264_vui(const uint8_t* nal, size_t n, int16_t out[5]) {
+    uint8_t rb[512];
+    size_t i, m = 0;
+    int zeros = 0;
+    yvid__bits b;
+    uint32_t profile, k;
+    for (k = 0; k < 5; k++) out[k] = -1;
+    /* the RBSP: drop the emulation prevention bytes (00 00 03) */
+    for (i = 1; i < n && m < sizeof rb; i++) {
+        if (zeros >= 2 && nal[i] == 3) { zeros = 0; continue; }
+        zeros = nal[i] == 0 ? zeros + 1 : 0;
+        rb[m++] = nal[i];
+    }
+    b.p = rb; b.n = m; b.pos = 0; b.err = 0;
+    profile = yvid__bu(&b, 8);
+    yvid__bu(&b, 16);                 /* constraint flags, level            */
+    yvid__bue(&b);                    /* seq_parameter_set_id               */
+    if (profile == 100 || profile == 110 || profile == 122 || profile == 244 || profile == 44 || profile == 83 ||
+        profile == 86 || profile == 118 || profile == 128 || profile == 138 || profile == 139 || profile == 134 || profile == 135) {
+        uint32_t cf = yvid__bue(&b);
+        if (cf == 3) yvid__bu(&b, 1);
+        yvid__bue(&b); yvid__bue(&b);   /* bit depths                     */
+        yvid__bu(&b, 1);
+        if (yvid__bu(&b, 1)) {            /* scaling matrices               */
+            for (k = 0; k < (cf != 3 ? 8u : 12u) && !b.err; k++) {
+                if (yvid__bu(&b, 1)) {
+                    int size = k < 6 ? 16 : 64, j, last = 8, next = 8;
+                    for (j = 0; j < size && !b.err; j++) {
+                        if (next != 0) next = (last + yvid__bse(&b) + 256) % 256;
+                        last = next == 0 ? last : next;
+                    }
+                }
+            }
+        }
+    }
+    yvid__bue(&b);                    /* log2_max_frame_num_minus4          */
+    k = yvid__bue(&b);                /* pic_order_cnt_type                 */
+    if (k == 0) yvid__bue(&b);
+    else if (k == 1) {
+        uint32_t c, j;
+        yvid__bu(&b, 1); yvid__bse(&b); yvid__bse(&b);
+        c = yvid__bue(&b);
+        for (j = 0; j < c && j < 256 && !b.err; j++) yvid__bse(&b);
+    }
+    yvid__bue(&b); yvid__bu(&b, 1);   /* max_num_ref_frames, gaps         */
+    yvid__bue(&b); yvid__bue(&b);     /* size in macroblocks              */
+    if (!yvid__bu(&b, 1)) yvid__bu(&b, 1);   /* frame_mbs_only, mb_adaptive */
+    yvid__bu(&b, 1);                    /* direct_8x8_inference             */
+    if (yvid__bu(&b, 1)) { yvid__bue(&b); yvid__bue(&b); yvid__bue(&b); yvid__bue(&b); }   /* cropping */
+    if (b.err) return 0;
+    if (!yvid__bu(&b, 1)) { out[4] = YVID_SITING_LEFT; return 1; }   /* no VUI: type 0 inferred */
+    if (yvid__bu(&b, 1) && yvid__bu(&b, 8) == 255) yvid__bu(&b, 32);   /* aspect ratio */
+    if (yvid__bu(&b, 1)) yvid__bu(&b, 1);   /* overscan                     */
+    if (yvid__bu(&b, 1)) {              /* video_signal_type                */
+        uint32_t prim, trc, mat;
+        yvid__bu(&b, 3);
+        out[1] = yvid__bu(&b, 1) ? YVID_RANGE_FULL : YVID_RANGE_LIMITED;
+        if (yvid__bu(&b, 1)) {
+            prim = yvid__bu(&b, 8); trc = yvid__bu(&b, 8); mat = yvid__bu(&b, 8);
+            out[3] = prim == 1 ? YVID_PRIM_BT709 : prim == 5 ? YVID_PRIM_BT601_625 : (prim == 6 || prim == 7) ? YVID_PRIM_BT601_525 :
+                     prim == 9 ? YVID_PRIM_BT2020 : prim == 2 ? -1 : -2;
+            out[2] = (trc == 1 || trc == 6 || trc == 14 || trc == 15) ? YVID_TRC_BT1886 : trc == 13 ? YVID_TRC_SRGB :
+                     trc == 8 ? YVID_TRC_LINEAR : trc == 4 ? YVID_TRC_GAMMA22 : trc == 2 ? -1 : -2;
+            out[0] = mat == 1 ? YVID_MATRIX_BT709 : (mat == 5 || mat == 6) ? YVID_MATRIX_BT601 : mat == 9 ? YVID_MATRIX_BT2020 :
+                     mat == 2 ? -1 : -2;
+        }
+    }
+    if (yvid__bu(&b, 1)) {              /* chroma_loc_info                  */
+        uint32_t top = yvid__bue(&b);
+        yvid__bue(&b);
+        out[4] = top == 0 ? YVID_SITING_LEFT : top == 1 ? YVID_SITING_CENTER : -2;
+    } else {
+        /* absent, the standard infers type 0 (E.2.1): x264 omits it then */
+        out[4] = YVID_SITING_LEFT;
+    }
+    if (b.err) { for (k = 0; k < 5; k++) out[k] = -1; return 0; }
+    return 1;
+}
+
+/* The SPS in an avcC record or in Annex B NAL units (MF_MT_MPEG_SEQUENCE_HEADER
+ * is one or the other). */
+static int yvid__h264_seqhdr(const uint8_t* p, size_t n, int16_t out[5]) {
+    size_t i;
+    if (n > 8 && p[0] == 1) {   /* avcC: version 1, then the first SPS's length */
+        size_t len = (size_t)p[6] << 8 | p[7];
+        if ((p[5] & 0x1f) > 0 && 8 + len <= n && (p[8] & 0x1f) == 7) return yvid__h264_vui(p + 8, len, out);
+        return 0;
+    }
+    for (i = 0; i + 3 < n; i++) {
+        if (p[i] == 0 && p[i + 1] == 0 && p[i + 2] == 1 && (p[i + 3] & 0x1f) == 7) {
+            size_t j = i + 3;
+            while (j + 2 < n && !(p[j] == 0 && p[j + 1] == 0 && (p[j + 2] == 1 || p[j + 2] == 0))) j++;
+            if (j + 2 >= n) j = n;
+            return yvid__h264_vui(p + i + 3, j - (i + 3), out);
+        }
+    }
+    return 0;
+}
+#endif
+
+#if YVID__MF
 
 /* desc.hw_decode AUTO: chosen by measurement (docs/video.md, M1, M2). */
 #ifndef YVID__HW_DEFAULT
@@ -2954,136 +3086,6 @@ static const yvid__stm_vtbl yvid__stm_table = {
     #define YVID__REF(x)          (&(x))
 #endif
 #define YVID__REL(o) do { if (o) { YVID__CALL0((o), Release); (o) = NULL; } } while (0)
-
-/* --- the H.264 SPS's VUI ---------------------------------------------------------
- * Media Foundation reports none of the color the stream states, so the
- * index maker reads it from the sequence parameter set: colour_primaries,
- * transfer_characteristics, matrix_coefficients, video_full_range_flag and
- * the chroma sample location (H.264 Annex E). HEVC's SPS puts its VUI
- * behind the profile_tier_level and short-term reference picture sets, so it
- * is not parsed here: an HEVC index takes the color from its desc. */
-typedef struct yvid__bits { const uint8_t* p; size_t n, pos; int err; } yvid__bits;
-
-static uint32_t yvid__bu(yvid__bits* b, int k) {
-    uint32_t v = 0;
-    while (k-- > 0) {
-        if (b->pos >= b->n * 8) { b->err = 1; return 0; }
-        v = (v << 1) | ((b->p[b->pos >> 3] >> (7 - (b->pos & 7))) & 1u);
-        b->pos++;
-    }
-    return v;
-}
-static uint32_t yvid__bue(yvid__bits* b) {   /* ue(v) */
-    int z = 0;
-    while (!b->err && yvid__bu(b, 1) == 0) if (++z > 31) { b->err = 1; return 0; }
-    return z ? ((1u << z) - 1u) + yvid__bu(b, z) : 0u;
-}
-static int32_t yvid__bse(yvid__bits* b) {    /* se(v) */
-    uint32_t k = yvid__bue(b);
-    return (k & 1u) ? (int32_t)((k + 1) / 2) : -(int32_t)(k / 2);
-}
-
-/* out: matrix, range, transfer, primaries, siting as YVID_* values; -1
- * not stated, -2 stated but not one the canonical form has. Returns 1 when
- * an SPS was parsed. */
-static int yvid__h264_vui(const uint8_t* nal, size_t n, int16_t out[5]) {
-    uint8_t rb[512];
-    size_t i, m = 0;
-    int zeros = 0;
-    yvid__bits b;
-    uint32_t profile, k;
-    for (k = 0; k < 5; k++) out[k] = -1;
-    /* the RBSP: drop the emulation prevention bytes (00 00 03) */
-    for (i = 1; i < n && m < sizeof rb; i++) {
-        if (zeros >= 2 && nal[i] == 3) { zeros = 0; continue; }
-        zeros = nal[i] == 0 ? zeros + 1 : 0;
-        rb[m++] = nal[i];
-    }
-    b.p = rb; b.n = m; b.pos = 0; b.err = 0;
-    profile = yvid__bu(&b, 8);
-    yvid__bu(&b, 16);                 /* constraint flags, level            */
-    yvid__bue(&b);                    /* seq_parameter_set_id               */
-    if (profile == 100 || profile == 110 || profile == 122 || profile == 244 || profile == 44 || profile == 83 ||
-        profile == 86 || profile == 118 || profile == 128 || profile == 138 || profile == 139 || profile == 134 || profile == 135) {
-        uint32_t cf = yvid__bue(&b);
-        if (cf == 3) yvid__bu(&b, 1);
-        yvid__bue(&b); yvid__bue(&b);   /* bit depths                     */
-        yvid__bu(&b, 1);
-        if (yvid__bu(&b, 1)) {            /* scaling matrices               */
-            for (k = 0; k < (cf != 3 ? 8u : 12u) && !b.err; k++) {
-                if (yvid__bu(&b, 1)) {
-                    int size = k < 6 ? 16 : 64, j, last = 8, next = 8;
-                    for (j = 0; j < size && !b.err; j++) {
-                        if (next != 0) next = (last + yvid__bse(&b) + 256) % 256;
-                        last = next == 0 ? last : next;
-                    }
-                }
-            }
-        }
-    }
-    yvid__bue(&b);                    /* log2_max_frame_num_minus4          */
-    k = yvid__bue(&b);                /* pic_order_cnt_type                 */
-    if (k == 0) yvid__bue(&b);
-    else if (k == 1) {
-        uint32_t c, j;
-        yvid__bu(&b, 1); yvid__bse(&b); yvid__bse(&b);
-        c = yvid__bue(&b);
-        for (j = 0; j < c && j < 256 && !b.err; j++) yvid__bse(&b);
-    }
-    yvid__bue(&b); yvid__bu(&b, 1);   /* max_num_ref_frames, gaps         */
-    yvid__bue(&b); yvid__bue(&b);     /* size in macroblocks              */
-    if (!yvid__bu(&b, 1)) yvid__bu(&b, 1);   /* frame_mbs_only, mb_adaptive */
-    yvid__bu(&b, 1);                    /* direct_8x8_inference             */
-    if (yvid__bu(&b, 1)) { yvid__bue(&b); yvid__bue(&b); yvid__bue(&b); yvid__bue(&b); }   /* cropping */
-    if (b.err) return 0;
-    if (!yvid__bu(&b, 1)) { out[4] = YVID_SITING_LEFT; return 1; }   /* no VUI: type 0 inferred */
-    if (yvid__bu(&b, 1) && yvid__bu(&b, 8) == 255) yvid__bu(&b, 32);   /* aspect ratio */
-    if (yvid__bu(&b, 1)) yvid__bu(&b, 1);   /* overscan                     */
-    if (yvid__bu(&b, 1)) {              /* video_signal_type                */
-        uint32_t prim, trc, mat;
-        yvid__bu(&b, 3);
-        out[1] = yvid__bu(&b, 1) ? YVID_RANGE_FULL : YVID_RANGE_LIMITED;
-        if (yvid__bu(&b, 1)) {
-            prim = yvid__bu(&b, 8); trc = yvid__bu(&b, 8); mat = yvid__bu(&b, 8);
-            out[3] = prim == 1 ? YVID_PRIM_BT709 : prim == 5 ? YVID_PRIM_BT601_625 : (prim == 6 || prim == 7) ? YVID_PRIM_BT601_525 :
-                     prim == 9 ? YVID_PRIM_BT2020 : prim == 2 ? -1 : -2;
-            out[2] = (trc == 1 || trc == 6 || trc == 14 || trc == 15) ? YVID_TRC_BT1886 : trc == 13 ? YVID_TRC_SRGB :
-                     trc == 8 ? YVID_TRC_LINEAR : trc == 4 ? YVID_TRC_GAMMA22 : trc == 2 ? -1 : -2;
-            out[0] = mat == 1 ? YVID_MATRIX_BT709 : (mat == 5 || mat == 6) ? YVID_MATRIX_BT601 : mat == 9 ? YVID_MATRIX_BT2020 :
-                     mat == 2 ? -1 : -2;
-        }
-    }
-    if (yvid__bu(&b, 1)) {              /* chroma_loc_info                  */
-        uint32_t top = yvid__bue(&b);
-        yvid__bue(&b);
-        out[4] = top == 0 ? YVID_SITING_LEFT : top == 1 ? YVID_SITING_CENTER : -2;
-    } else {
-        /* absent, the standard infers type 0 (E.2.1): x264 omits it then */
-        out[4] = YVID_SITING_LEFT;
-    }
-    if (b.err) { for (k = 0; k < 5; k++) out[k] = -1; return 0; }
-    return 1;
-}
-
-/* The SPS in an avcC record or in Annex B NAL units (MF_MT_MPEG_SEQUENCE_HEADER
- * is one or the other). */
-static int yvid__h264_seqhdr(const uint8_t* p, size_t n, int16_t out[5]) {
-    size_t i;
-    if (n > 8 && p[0] == 1) {   /* avcC: version 1, then the first SPS's length */
-        size_t len = (size_t)p[6] << 8 | p[7];
-        if ((p[5] & 0x1f) > 0 && 8 + len <= n && (p[8] & 0x1f) == 7) return yvid__h264_vui(p + 8, len, out);
-        return 0;
-    }
-    for (i = 0; i + 3 < n; i++) {
-        if (p[i] == 0 && p[i + 1] == 0 && p[i + 2] == 1 && (p[i + 3] & 0x1f) == 7) {
-            size_t j = i + 3;
-            while (j + 2 < n && !(p[j] == 0 && p[j + 1] == 0 && (p[j + 2] == 1 || p[j + 2] == 0))) j++;
-            if (j + 2 >= n) j = n;
-            return yvid__h264_vui(p + i + 3, j - (i + 3), out);
-        }
-    }
-    return 0;
-}
 
 /* MFVideoArea, as the SDK lays it out (checked in video_com.cpp). */
 typedef struct yvid__mfarea { WORD fx; short x; WORD fy; short y; LONG cx, cy; } yvid__mfarea;
@@ -3990,6 +3992,9 @@ static int yvid__mf_fit_rate(const int64_t* ts, int64_t n, int32_t* num, int32_t
     return 0;
 }
 
+#endif
+
+#if YVID__MF
 static int64_t yvid__index_make_mf(const char* media_path, const char* index_path,
                                      const yvid_index_desc* d, char* err, size_t cap) {
     yvid__mf* m;
