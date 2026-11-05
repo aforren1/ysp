@@ -349,7 +349,9 @@ clock the binding's frames and decisions equal the C path's line by line
   and a gfx open (simulated, or a window) took 13 to 14 s from start to
   end, as one with nothing open (13 s): the close at exit did not wait for
   the 10 s withdrawal.
-- **Versions.** `ysp-vis` tracks `ysp/screen.h`'s version (0.15.0:
+- **Versions.** `ysp-vis` tracks `ysp/screen.h`'s version (0.16.0:
+  `ysp/screen.h` 0.16.0, its macOS panic, raw mice, gamma table and code
+  risk, no new caps or desc field; 0.15.0:
   `ysp/screen.h` 0.15.0, `ysp/gfx.h` 0.17.3 and `ysp/video.h` 0.7.0, with
   macOS arm64; 0.10.4 was `ysp/screen.h` 0.10.4 with the CPython 3.10
   floor, `ysp/gfx.h` 0.17.2 and `ysp/video.h` 0.6.0; 0.10.2.1 was 0.10.2
@@ -646,7 +648,8 @@ v0.8.1), and `ysp-audio` is 0.7.2, the header's. The adaptive MEX
 functions and `ysp_color` have no number of their own: `'version'`
 returns the header's.
 
-`ysp-vis` is 0.15.0 (2026-11-05): one distribution for three headers,
+`ysp-vis` is 0.16.0 (2026-11-05; `ysp/screen.h` 0.16.0, no change to the
+binding's calls): one distribution for three headers,
 so its version tracks `ysp/screen.h`'s, and a release for a change of
 `ysp/gfx.h` or `ysp/video.h` alone, or of the binding alone, adds the
 fourth number ([ysp-vis](#display-stimuli-movies-ysp-vis)); 0.10.1.1 was

@@ -4059,6 +4059,146 @@ static void test_panic_rule(void) {
     yscr_close(&s);
 }
 
+/* v0.16.0: the macOS panic key, gamma, code risk and raw mouse rules,
+ * without a Mac. */
+static void test_mac_rules(void) {
+    static float t[1024];
+    yscr__mac_color c;
+    yscr__hid_acc a;
+    yscr_mouse_event e;
+    int i, n;
+    /* the panic key: Esc, F1 to F12, letters and digits by position */
+    CHECK_I(yscr__kvk_of(yscr__scancode_us(YSCR_KEY_ESCAPE)), 53);
+    CHECK_I(yscr__kvk_of(yscr__scancode_us(0x4000003Au)), 122);   /* F1 */
+    CHECK_I(yscr__kvk_of(yscr__scancode_us(0x40000045u)), 111);   /* F12 */
+    CHECK_I(yscr__kvk_of(yscr__scancode_us(0x40000041u)), 100);   /* F8 */
+    CHECK_I(yscr__kvk_of(yscr__scancode_us(0x40000043u)), 109);   /* F10 */
+    CHECK_I(yscr__kvk_of(yscr__scancode_us('a')), 0);
+    CHECK_I(yscr__kvk_of(yscr__scancode_us('q')), 12);
+    CHECK_I(yscr__kvk_of(yscr__scancode_us('z')), 6);
+    CHECK_I(yscr__kvk_of(yscr__scancode_us('1')), 18);
+    CHECK_I(yscr__kvk_of(yscr__scancode_us('5')), 23);
+    CHECK_I(yscr__kvk_of(yscr__scancode_us('0')), 29);
+    CHECK_I(yscr__kvk_of(0), -1);
+    CHECK_I(yscr__kvk_of(104), -1);                                /* F13: not a panic key */
+    /* every key the panic takes has a code, and no two share one */
+    {
+        int seen[128];
+        uint32_t k;
+        memset(seen, 0, sizeof seen);
+        for (k = 0; k < 0x40000046u; k = k == 'z' ? 0x4000003Au : k + 1) {
+            int v;
+            if (!yscr__vk_known(k)) continue;
+            v = yscr__kvk_of(yscr__scancode_us(k));
+            CHECK(v >= 0 && v < 128);
+            if (v >= 0 && v < 128) { CHECK_I(seen[v], 0); seen[v] = 1; }
+        }
+    }
+    CHECK_I(yscr__cg_mods(0x00020000u), YSCR_MOD_SHIFT);
+    CHECK_I(yscr__cg_mods(0x00040000u | 0x00100000u), YSCR_MOD_CTRL | YSCR_MOD_GUI);
+    CHECK_I(yscr__cg_mods(0x00080000u | 0x100u), YSCR_MOD_ALT);   /* device bits are not modifiers */
+    CHECK_I(yscr__cg_mods(0x00010000u), 0);                        /* caps lock */
+    /* the transfer table: an 8-bit identity at 256 and 1024 entries */
+    for (n = 256; n <= 1024; n += 768) {
+        for (i = 0; i < n; i++) t[i] = (float)i / (float)(n - 1);
+        CHECK(yscr__table_identity(t, (uint32_t)n));
+        t[n / 2] += 1.0f / 255.0f;                                 /* one step off */
+        CHECK(!yscr__table_identity(t, (uint32_t)n));
+        t[n / 2] -= 1.0f / 255.0f;
+        t[n / 2] += 0.4f / 255.0f;                                 /* under half a step: the same at 8 bits */
+        CHECK(yscr__table_identity(t, (uint32_t)n));
+    }
+    for (i = 0; i < 256; i++) t[i] = (float)pow(i / 255.0, 1.0 / 1.8);   /* a gamma curve */
+    CHECK(!yscr__table_identity(t, 256));
+    CHECK(!yscr__table_identity(t, 1));
+    /* the code risk: the M27Q as read (2026-11-05): SDR, untagged, its
+     * 1920 x 1080 mode on a 2560 x 1440 panel, identity table */
+    memset(&c, 0, sizeof c);
+    c.have_screen = 1; c.edr = 1.0; c.edr_potential = 1.0; c.colorspace = YSCR__CS_UNTAGGED;
+    c.mode_w = 1920; c.mode_h = 1080; c.native_w = 2560; c.native_h = 1440; c.win_w = 1920; c.win_h = 1080;
+    c.gamma_ok = 1;
+    CHECK_I(yscr__mac_risk(&c), YSCR_CODE_RISK_SCALED);
+    c.windowed = 1;                                                /* a window: no SCALED, as on Windows */
+    CHECK_I(yscr__mac_risk(&c), 0);
+    c.windowed = 0;
+    c.mode_w = 2560; c.mode_h = 1440; c.win_w = 2560; c.win_h = 1440;
+    CHECK_I(yscr__mac_risk(&c), 0);
+    c.win_w = 1280; c.win_h = 720;                                 /* the compositor scales the window */
+    CHECK_I(yscr__mac_risk(&c), YSCR_CODE_RISK_SCALED);
+    c.win_w = 2560; c.win_h = 1440;
+    c.edr_potential = 16.0;                                        /* an XDR panel or an HDR mode */
+    CHECK_I(yscr__mac_risk(&c), YSCR_CODE_RISK_ADVANCED_COLOR);
+    c.edr_potential = 1.0; c.edr = 2.0;                            /* EDR shown now */
+    CHECK_I(yscr__mac_risk(&c), YSCR_CODE_RISK_ADVANCED_COLOR);
+    c.edr = 1.0; c.wants_edr = 1;
+    CHECK_I(yscr__mac_risk(&c), YSCR_CODE_RISK_ADVANCED_COLOR);
+    c.wants_edr = 0; c.colorspace = YSCR__CS_OTHER;                /* matched to the display */
+    CHECK_I(yscr__mac_risk(&c), YSCR_CODE_RISK_ADVANCED_COLOR);
+    c.colorspace = YSCR__CS_DISPLAY;                               /* the display's own: not matched */
+    CHECK_I(yscr__mac_risk(&c), 0);
+    c.gamma_ok = 0;
+    CHECK_I(yscr__mac_risk(&c), YSCR_CODE_RISK_GAMMA);
+    c.gamma_ok = 1; c.native_w = c.native_h = 0;                   /* no mode has the native flag */
+    CHECK_I(yscr__mac_risk(&c), YSCR_CODE_RISK_STATE_UNKNOWN);
+    c.native_w = 2560; c.native_h = 1440; c.have_screen = 0; c.edr_potential = 16.0;
+    CHECK_I(yscr__mac_risk(&c), YSCR_CODE_RISK_STATE_UNKNOWN);    /* not read: unknown, not a guess */
+    /* IOHIDValues into reports: the values of one report share (device, time) */
+    memset(&a, 0, sizeof a);
+    CHECK_I(yscr__hid_add(&a, 7, 1000, 1, 0x30, 3, 1, -127, 127, &e), 0);
+    CHECK_I(yscr__hid_add(&a, 7, 1000, 1, 0x31, -2, 1, -127, 127, &e), 0);
+    CHECK_I(yscr__hid_add(&a, 7, 1000, 9, 1, 1, 0, 0, 1, &e), 0);
+    CHECK_I(yscr__hid_add(&a, 7, 9000, 1, 0x38, -1, 1, -127, 127, &e), 1);   /* a new report closes it */
+    CHECK_I(e.t, 1000); CHECK_I(e.device, 7); CHECK_I(e.dx, 3); CHECK_I(e.dy, -2);
+    CHECK_I(e.down, YSCR_MOUSE_LEFT); CHECK_I(e.up, 0); CHECK_I(e.wheel, 0);
+    CHECK_I(yscr__hid_add(&a, 8, 9000, 9, 3, 1, 0, 0, 1, &e), 1);            /* another mouse at once */
+    CHECK_I(e.wheel, -120); CHECK_I(e.device, 7);
+    CHECK_I(yscr__hid_flush(&a, &e), 1);
+    CHECK_I(e.device, 8); CHECK_I(e.down, YSCR_MOUSE_MIDDLE);
+    CHECK_I(yscr__hid_flush(&a, &e), 0);
+    /* buttons 2, 4, 5 up; the horizontal wheel; an element it does not use opens nothing */
+    CHECK_I(yscr__hid_add(&a, 7, 20000, 0xFF00, 1, 5, 0, 0, 255, &e), 0);
+    CHECK_I(yscr__hid_flush(&a, &e), 0);
+    yscr__hid_add(&a, 7, 30000, 9, 2, 0, 0, 0, 1, &e);
+    yscr__hid_add(&a, 7, 30000, 9, 4, 0, 0, 0, 1, &e);
+    yscr__hid_add(&a, 7, 30000, 9, 5, 0, 0, 0, 1, &e);
+    yscr__hid_add(&a, 7, 30000, 0x0C, 0x238, 2, 1, -127, 127, &e);
+    CHECK_I(yscr__hid_flush(&a, &e), 1);
+    CHECK_I(e.up, YSCR_MOUSE_RIGHT | YSCR_MOUSE_X1 | YSCR_MOUSE_X2); CHECK_I(e.hwheel, 240);
+    /* an absolute pointer (a tablet): 0..65535 of the logical range */
+    yscr__hid_add(&a, 9, 40000, 1, 0x30, 0, 0, 0, 32767, &e);
+    yscr__hid_add(&a, 9, 40000, 1, 0x31, 32767, 0, 0, 32767, &e);
+    CHECK_I(yscr__hid_flush(&a, &e), 1);
+    CHECK_I(e.flags, YSCR_MOUSE_ABSOLUTE); CHECK_I(e.dx, 0); CHECK_I(e.dy, 65535);
+    yscr__hid_add(&a, 9, 50000, 1, 0x30, 99999, 0, 0, 32767, &e);   /* past the range: clamped */
+    yscr__hid_add(&a, 9, 50000, 1, 0x31, 5, 0, 7, 7, &e);           /* no range: 0 */
+    CHECK_I(yscr__hid_flush(&a, &e), 1);
+    CHECK_I(e.dx, 65535); CHECK_I(e.dy, 0);
+    /* a device's values at their extremes saturate, never wrap */
+    yscr__hid_add(&a, 1, 60000, 1, 0x30, INT64_MAX / 4, 1, 0, 0, &e);
+    yscr__hid_add(&a, 1, 60000, 1, 0x30, INT64_MAX / 4, 1, 0, 0, &e);
+    yscr__hid_add(&a, 1, 60000, 1, 0x38, -1000000, 1, 0, 0, &e);
+    CHECK_I(yscr__hid_flush(&a, &e), 1);
+    CHECK_I(e.dx, 2147483647); CHECK_I(e.wheel, -32767);
+    {   /* random values: every report comes out once, none lost */
+        uint32_t rng = 12345, closed = 0, opened = 0;
+        int64_t tt = 0;
+        memset(&a, 0, sizeof a);
+        for (i = 0; i < 20000; i++) {
+            uint32_t dev, page, usage;
+            rng = rng * 1664525u + 1013904223u;
+            dev = 1 + (rng >> 30);
+            if ((rng >> 8) % 3 == 0) tt += 1000;
+            page = (rng >> 12) % 2 ? 1 : 9;
+            usage = page == 1 ? 0x30 + (rng >> 16) % 2 : 1 + (rng >> 16) % 5;
+            if (!a.have || a.device != dev || a.t != tt) opened++;
+            closed += (uint32_t)yscr__hid_add(&a, dev, tt, page, usage, (int64_t)(rng % 255) - 127, page == 1, -127,
+                                              127, &e);
+        }
+        closed += (uint32_t)yscr__hid_flush(&a, &e);
+        CHECK_I(closed, opened);
+    }
+}
+
 /* The icon: each size fills its square, matches the art (FNV-1a of the
  * RGBA, from the previews' script) and has transparent corners. */
 static void test_icon(void) {
@@ -4889,6 +5029,7 @@ int main(void) {
     test_abort();
     test_abort_group();
     test_panic_rule();
+    test_mac_rules();
     test_icon();
     test_sim();
     test_sim_virtual();

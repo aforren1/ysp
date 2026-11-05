@@ -47,6 +47,25 @@
  *            OCCLUDED and estimated, and the test says that the presents
  *            were not checked.
  *
+ *   state    (v0.16.0) the code risk's checks ran (no STATE_UNKNOWN), SCALED
+ *            follows the mode against the panel's native pixels, the
+ *            layer is untagged, and an EDR display (a seam) sets
+ *            ADVANCED_COLOR.
+ *   gamma    (v0.16.0) a transfer table one entry off the identity is set
+ *            to it at a fullscreen open, read back, and put back at close;
+ *            a refused set (a seam) and keep_os_gamma leave it, with
+ *            CODE_RISK_GAMMA. ColorSync's table at the end.
+ *   rawmice  (v0.16.0) desc.raw_mice opens and logs the reader's mice;
+ *            YSCR_TEST_MOUSE_S=n: n s of a person moving the mouse, for the
+ *            report interval and the stamp against arrival.
+ *   panic    (v0.16.0) a child hangs with desc.panic and gets 3 presses
+ *            through the tap's function: exit 99 and panic_fn; a child that
+ *            pumps outside begin() is released and lives; presses for
+ *            another process do not count. panic-post (not in the full run):
+ *            the presses posted to the HID tap (Accessibility, unlocked).
+ *            These four run alone with "test_screen_metal <case>" or
+ *            YSCR_TEST_CASES=<case>, or all with "new".
+ *
  * It prints one line per check and returns 0 when every check passed, 1
  * otherwise. A window or a fullscreen display shows for about 15 s.
  *
@@ -76,6 +95,16 @@ static int g_link;
              *(n) = 6; *(dur) = 0.016680417; } else if (g_link == 2) *(n) = 0; } while (0)
 #define YSCR__MTL_SCREEN_INTERVALS(m, mn, mx) \
     do { (void)(m); if (g_iv_min) { *(mn) = g_iv_min; *(mx) = g_iv_max; } } while (0)
+/* v0.16.0: the panic armed in a window (as examples/screen/abort.c on
+ * Windows), a display that refuses a gamma table, an EDR-capable display
+ * (none attached), and each raw mouse value's stamp against its arrival. */
+static volatile int g_panic_windowed;
+#define YSCR__PANIC_WINDOWED g_panic_windowed
+static int g_gamma_refuse, g_hdr;
+#define YSCR__MAC_GAMMA_SET(d, n, r, g, b) (g_gamma_refuse ? 1001 : yscr__mx.CGSetDisplayTransferByTable((d), (n), (r), (g), (b)))
+#define YSCR__MAC_COLOR(c) do { if (g_hdr) (c)->edr_potential = 16.0; } while (0)
+static void rm_arrival(int64_t t);
+#define YSCR__RM_ARRIVAL(t) rm_arrival(t)
 /* An older macOS than 14 while g_old_os is 1 (no such system was at hand). */
 static int g_old_os;
 #define YSCR__MTL_OS_14(ok) do { if (g_old_os) *(ok) = 0; } while (0)
@@ -90,6 +119,7 @@ static int g_old_os;
 
 #if !defined(YSCR__METAL)
 static void sync_pixel(uint64_t id, uint32_t px) { (void)id; (void)px; }
+static void rm_arrival(int64_t t) { (void)t; }
 int main(void) { printf("screen_metal_test: macOS only (the METAL backend is)\n"); return 0; }
 #else
 
@@ -99,6 +129,8 @@ int main(void) { printf("screen_metal_test: macOS only (the METAL backend is)\n"
 #include <unistd.h>
 #include <objc/message.h>
 #include <objc/runtime.h>
+#include <sys/event.h>
+#include <sys/wait.h>
 
 static int g_fail, g_checks, g_opened;
 static void check(int ok, const char* what) {
@@ -463,7 +495,7 @@ static volatile int g_npost, g_post_done;
 static struct { unsigned long type; unsigned code; int64_t ts; } g_mon[IN_MAX];
 static volatile int g_nmon;
 /* yscr_event_input()'s: kind, the event's t, its stamp tier, yscr_poll()'s t */
-static struct { int kind; int64_t t, t_sdl; int stamp; } g_got[IN_MAX];
+static struct { int kind; int64_t t, t_sdl, t_poll; int stamp; } g_got[IN_MAX];
 static int g_ngot;
 
 static int64_t in_now(void) { return yrt_now_ns(); }
@@ -581,7 +613,8 @@ static void in_pass(yscr_screen* s, const char* name, int to_pid, int n) {
             if (kind >= 0 && g_ngot < IN_MAX) {
                 g_got[g_ngot].kind = kind;
                 g_got[g_ngot].t = e.t;
-                g_got[g_ngot].t_sdl = t;
+                g_got[g_ngot].t_sdl = yscr_restamp(s, ev.common.timestamp);   /* SDL's own */
+                g_got[g_ngot].t_poll = t;                                     /* yscr_poll()'s (v0.16.0) */
                 g_got[g_ngot].stamp = e.stamp;
                 g_ngot++;
             }
@@ -604,13 +637,14 @@ static void in_pass(yscr_screen* s, const char* name, int to_pid, int n) {
     printf("     %-12s %5s %9s %20s %34s %34s\n", "kind", "n", "fallback", "|stamp - NSEvent| max",
            "stamp - post min/p50/p99/max", "SDL - post min/p50/p99/max");
     for (k = 0; k < IN_KINDS; k++) {
-        int n_k = cnt_post[k] < cnt_got[k] ? cnt_post[k] : cnt_got[k], nm = 0, fb = 0, bad = 0, before = 0;
+        int n_k = cnt_post[k] < cnt_got[k] ? cnt_post[k] : cnt_got[k], nm = 0, fb = 0, bad = 0, before = 0, poll_off = 0;
         double pmn, p50, p99, mx, qmn, q50, q99, qmx, rmn, r50, r99, rmx;
         if (cnt_post[k] == 0) continue;
         if (cnt_mon[k] < n_k) nm = cnt_mon[k]; else nm = n_k;
         for (i = 0; i < n_k; i++) {
             int gi = idx_got[k][i], pi = idx_post[k][i];
             if (g_got[gi].stamp == YIN_TIER_3) fb++;
+            if (g_got[gi].t_poll != g_got[gi].t) poll_off++;
             a2[i] = (double)(g_got[gi].t - g_post[pi].a) / 1000.0;
             a3[i] = (double)(g_got[gi].t_sdl - g_post[pi].a) / 1000.0;
             if (g_got[gi].t < g_post[pi].a) before++;
@@ -635,9 +669,9 @@ static void in_pass(yscr_screen* s, const char* name, int to_pid, int n) {
             continue;
         }
         snprintf(msg, sizeof msg, "input %s, %s: %d of %d posted delivered, %d with SDL's stamp, %d of %d off the "
-                 "NSEvent stamp by more than 1 us, %d before the post", name, in_kind_name[k], n_k, cnt_post[k], fb,
-                 bad, nm, before);
-        check(n_k == cnt_post[k] && fb == 0 && nm == n_k && bad == 0 && before == 0, msg);
+                 "NSEvent stamp by more than 1 us, %d before the post, %d with yscr_poll()'s time not the event's",
+                 name, in_kind_name[k], n_k, cnt_post[k], fb, bad, nm, before, poll_off);
+        check(n_k == cnt_post[k] && fb == 0 && nm == n_k && bad == 0 && before == 0 && poll_off == 0, msg);
     }
 }
 
@@ -704,14 +738,402 @@ static void input(const yscr_desc* d0) {
     yscr_close(&s);
 }
 
-int main(int argc, char** argv) {
+/* --- v0.16.0: the display state, the gamma table, raw mice, the panic ----- */
+
+extern int32_t CGGetDisplayTransferByTable(uint32_t d, uint32_t cap, float* r, float* g, float* b, uint32_t* n);
+extern int32_t CGSetDisplayTransferByTable(uint32_t d, uint32_t n, const float* r, const float* g, const float* b);
+extern void    CGDisplayRestoreColorSyncSettings(void);
+
+/* the describe line's number after key, or -1 */
+static long long word_num(const char* line, const char* key) {
+    const char* p = strstr(line, key);
+    return p ? atoll(p + strlen(key)) : -1;
+}
+
+/* the describe line's word after key, up to a space */
+static void word(const char* line, const char* key, char* out, size_t cap) {
+    const char* p = strstr(line, key);
+    size_t n = 0;
+    out[0] = 0;
+    if (!p) return;
+    p += strlen(key);
+    while (p[n] && p[n] != ' ' && n + 1 < cap) { out[n] = p[n]; n++; }
+    out[n] = 0;
+}
+
+/* state: the code risk's checks run on METAL (STATE_UNKNOWN clear), and
+ * SCALED follows the display mode against the panel's native pixels. */
+static void state(const yscr_desc* d0) {
+    static yscr_screen s;
+    yscr_desc d = *d0;
+    char line[1600], g[48], msg[300];
+    long long pw, ph, mw, mh;
+    uint16_t r;
+    int fs;
+    for (fs = 1; fs >= 0; fs--) {
+        d.windowed = !fs;
+        memset(&s, 0, sizeof s);
+        if (!yscr_open(&s, &d)) { snprintf(msg, sizeof msg, "state: open: %s", yscr_error(&s)); check(0, msg); return; }
+        yscr_describe(&s, line, sizeof line);
+        r = yscr_code_risk(&s);
+        pw = ph = mw = mh = -1;
+        if (strstr(line, "panel=")) sscanf(strstr(line, "panel="), "panel=%lldx%lld", &pw, &ph);
+        if (strstr(line, "mode_px=")) sscanf(strstr(line, "mode_px="), "mode_px=%lldx%lld", &mw, &mh);
+        word(line, "os_gamma=", g, sizeof g);
+        printf("     state %s: risk 0x%x, panel %lldx%lld, mode %lldx%lld, os_gamma=%s\n", fs ? "fullscreen" : "window",
+               (unsigned)r, pw, ph, mw, mh, g);
+        {
+            const char* o = strstr(line, "display=");
+            if (o) printf("     %.*s\n", (int)(strstr(o, "nightshift") ? strstr(o, "nightshift") - o : 80), o);
+        }
+        snprintf(msg, sizeof msg, "state %s: every check ran (no STATE_UNKNOWN)", fs ? "fullscreen" : "window");
+        check(!(r & YSCR_CODE_RISK_STATE_UNKNOWN), msg);
+        snprintf(msg, sizeof msg, "state %s: SCALED is %s (mode %lldx%lld, panel %lldx%lld)", fs ? "fullscreen" : "window",
+                 fs && (pw != mw || ph != mh) ? "set" : "clear", mw, mh, pw, ph);
+        check(((r & YSCR_CODE_RISK_SCALED) != 0) == (fs && (pw != mw || ph != mh)), msg);
+        snprintf(msg, sizeof msg, "state %s: os_gamma=%s", fs ? "fullscreen" : "window", g);
+        check(fs ? (!strcmp(g, "identity") || !strcmp(g, "set")) : !strncmp(g, "identity(kept)", 14) ||
+                   !strcmp(g, "not-identity(kept)"), msg);
+        check(strstr(line, "layer_cs=untagged") != NULL, "state: the layer is untagged (no color matching)");
+        yscr_close(&s);
+    }
+    g_hdr = 1;   /* an EDR-capable display: ADVANCED_COLOR */
+    memset(&s, 0, sizeof s);
+    if (yscr_open(&s, &d)) {
+        check((yscr_code_risk(&s) & YSCR_CODE_RISK_ADVANCED_COLOR) != 0, "state: an EDR display sets ADVANCED_COLOR");
+        yscr_close(&s);
+    }
+    g_hdr = 0;
+}
+
+/* gamma: a table that is not the identity is set to it at a fullscreen
+ * open, read back, and put back at close; a refused set and
+ * keep_os_gamma leave it and set CODE_RISK_GAMMA. One entry of 1024 is
+ * changed, 0.5 to 0.52, for a few seconds; ColorSync's table at the end. */
+static void gamma_case(const yscr_desc* d0) {
+    static float r[1024], gg[1024], b[1024], back[3][1024];
+    static yscr_screen s;
+    yscr_desc d = *d0;
+    char line[1600], g[48], msg[300];
+    uint32_t did, n = 0, i;
+    int pass;
+    d.windowed = false;
+    memset(&s, 0, sizeof s);
+    if (!yscr_open(&s, &d)) { check(0, "gamma: open"); return; }
+    yscr_describe(&s, line, sizeof line);
+    did = (uint32_t)word_num(line, "display=");
+    yscr_close(&s);
+    for (i = 0; i < 1024; i++) r[i] = gg[i] = b[i] = (float)i / 1023.0f;
+    r[512] = 0.52f;
+    for (pass = 0; pass < 3; pass++) {
+        const char* want = pass == 0 ? "set" : pass == 1 ? "refused" : "not-identity(kept)";
+        CGSetDisplayTransferByTable(did, 1024, r, gg, b);
+        g_gamma_refuse = pass == 1;
+        d.keep_os_gamma = pass == 2;
+        memset(&s, 0, sizeof s);
+        if (!yscr_open(&s, &d)) { check(0, "gamma: open"); break; }
+        yscr_describe(&s, line, sizeof line);
+        word(line, "os_gamma=", g, sizeof g);
+        CGGetDisplayTransferByTable(did, 1024, back[0], back[1], back[2], &n);
+        snprintf(msg, sizeof msg, "gamma: os_gamma=%s (want %s), the table while open: R[512] %.4f", g, want, back[0][512]);
+        check(!strcmp(g, want) && (pass == 0 ? yscr__table_identity(back[0], n) : back[0][512] > 0.51f), msg);
+        snprintf(msg, sizeof msg, "gamma %s: CODE_RISK_GAMMA %s", want, pass == 0 ? "clear" : "set");
+        check(((yscr_code_risk(&s) & YSCR_CODE_RISK_GAMMA) != 0) == (pass != 0), msg);
+        yscr_close(&s);
+        CGGetDisplayTransferByTable(did, 1024, back[0], back[1], back[2], &n);
+        snprintf(msg, sizeof msg, "gamma %s: after close the table is the one before open (R[512] %.4f)", want, back[0][512]);
+        check(n == 1024 && back[0][512] > 0.519f && back[0][512] < 0.521f, msg);
+    }
+    g_gamma_refuse = 0;
+    CGDisplayRestoreColorSyncSettings();
+    CGGetDisplayTransferByTable(did, 1024, back[0], back[1], back[2], &n);
+    check(yscr__table_identity(back[0], n), "gamma: ColorSync's table again at the end");
+}
+
+/* rawmice: the reader opens (IOHIDManager, Input Monitoring), and its mice
+ * are YSCR_EV_DEVICE records. YSCR_TEST_MOUSE_S=n: n seconds of a person
+ * moving the mouse, for the report rate and the stamp against arrival. */
+static int64_t g_arr[8192];
+static volatile int g_narr;
+static void rm_arrival(int64_t t) {
+    int k = g_narr;
+    if (k < 8192) { g_arr[k] = yrt_now_ns() - t; g_narr = k + 1; }
+}
+
+static void rawmice(const yscr_desc* d0) {
+    static yscr_screen s;
+    static yrt_event ev[256];
+    static unsigned char ring_mem[YRT_RING_BYTES(4096) + 64];
+    static double iv[8192], lag[8192];
+    static int64_t ts[8192];
+    yrt_ring ring;
+    yrt_ring_desc rd;
+    yscr_desc d = *d0;
+    char msg[300];
+    int n, i, mice = 0, on = 0, secs = getenv("YSCR_TEST_MOUSE_S") ? atoi(getenv("YSCR_TEST_MOUSE_S")) : 0;
+    uint32_t ids[8];
+    memset(&rd, 0, sizeof rd);
+    rd.memory = ring_mem;
+    rd.bytes = sizeof ring_mem;
+    if (!yrt_ring_open(&ring, &rd)) { check(0, "rawmice: ring"); return; }
+    d.ring = &ring;
+    d.raw_mice = true;
+    memset(&s, 0, sizeof s);
+    if (!yscr_open(&s, &d)) {
+        snprintf(msg, sizeof msg, "rawmice: open: %s", yscr_error(&s));
+        check(0, msg);
+        yrt_ring_close(&ring);
+        return;
+    }
+    while ((n = yrt_ring_drain(&ring, ev, 256)) > 0)
+        for (i = 0; i < n; i++) {
+            if (ev[i].kind == YSCR_EV_RAW_MICE && ev[i].u.u32[0] == YSCR_RAW_MICE_ON) on++;
+            if (ev[i].kind == YSCR_EV_DEVICE && ev[i].u.u32[0] == YSCR_DEV_MOUSE && ev[i].u.u32[1] == YSCR_DEV_PRESENT && ev[i].u.u64[1] < 0x100000000ull &&
+                yscr__a_load(&yscr__rm.users) > 0) {
+                int k;
+                for (k = 0; k < YSCR__RM_DEVS; k++)
+                    if (yscr__rm.dev[k].id == (uint32_t)ev[i].u.u64[1] && mice < 8) {
+                        ids[mice++] = (uint32_t)ev[i].u.u64[1];
+                        printf("     rawmice: device 0x%08x \"%s\"\n", (unsigned)ev[i].u.u64[1], (const char*)ev[i].u.bytes + 16);
+                    }
+            }
+        }
+    check(on == 1, "rawmice: one YSCR_EV_RAW_MICE ON record");
+    snprintf(msg, sizeof msg, "rawmice: the reader's mice are YSCR_EV_DEVICE records, present at open (%d)", mice);
+    check(mice >= 1, msg);   /* present at open, not added at a later begin() */
+    if (secs > 0) {
+        yscr_frame f;
+        int64_t end, prev = 0;
+        int nts = 0, nev = 0, unlisted = 0;
+        printf("     rawmice: MOVE THE MOUSE for %d s now\n", secs);
+        fflush(stdout);
+        g_narr = 0;
+        end = yrt_now_ns() + (int64_t)secs * 1000000000;
+        while (yrt_now_ns() < end && yscr_begin(&s, &f) == YSCR_OK) {
+            SDL_Event e;
+            while (yscr_poll(&s, &e, NULL)) {
+                yin_event in;
+                if (!yscr_event_input(&s, &e, &in) || in.kind != YIN_KIND_MOUSE || e.type != yscr_input_event_type()) continue;
+                nev++;
+                if (in.flags & YIN_UNLISTED) unlisted++;
+                if (in.t != prev && nts < 8192) ts[nts++] = in.t;
+                prev = in.t;
+            }
+            if (yscr_flip(&s) != YSCR_OK) break;
+        }
+        for (i = 1; i < nts; i++) iv[i - 1] = (double)(ts[i] - ts[i - 1]) / 1e6;
+        for (i = 0; i < g_narr; i++) lag[i] = (double)g_arr[i] / 1e3;
+        {
+            double a, b, c, e2;
+            in_stats(iv, nts > 1 ? nts - 1 : 0, &a, &b, &c, &e2);
+            printf("     rawmice: %d reports, %d events, %d unlisted; report interval ms min/p50/p99/max %.3f / %.3f / %.3f / %.3f\n",
+                   nts, nev, unlisted, a, b, c, e2);
+            in_stats(lag, g_narr, &a, &b, &c, &e2);
+            printf("     rawmice: callback minus the value's stamp, us, min/p50/p99/max %.1f / %.1f / %.1f / %.1f (%d values)\n",
+                   a, b, c, e2, g_narr);
+        }
+        check(nts > 10 && unlisted == 0, "rawmice: reports came, none unlisted");
+    } else {
+        printf("     rawmice: YSCR_TEST_MOUSE_S not set: the report rate and the stamp need a person moving the mouse\n");
+    }
+    yscr_close(&s);
+    yrt_ring_close(&ring);
+}
+
+/* --- the panic: a child process hangs, and the watchdog ends it --------- */
+
+static yscr_screen g_ps;
+static int g_panic_other;   /* the presses go to another process */
+extern void* CGEventSourceCreate(int32_t state);
+
+static void panic_last_words(void* ctx) {
+    (void)ctx;
+    printf("panic_fn ran\n");
+    fflush(stdout);
+}
+
+/* 3 presses of Shift+Esc, 300 ms apart, from 1.5 s after the hang: by
+ * the seam (as the tap would call it) or posted to the HID tap. */
+static void* panic_presser(void* p) {
+    int post = *(int*)p, i;
+    /* YSCR_TEST_PANIC_DELAY_MS: a longer hang first, as the beach ball comes */
+    in_sleep_until(in_now() + (getenv("YSCR_TEST_PANIC_DELAY_MS") ? atoll(getenv("YSCR_TEST_PANIC_DELAY_MS")) : 1500) * 1000000LL);
+    for (i = 0; i < 3; i++) {
+        int64_t t = in_now();
+        if (i == 2) { printf("t3=%lld\n", (long long)t); fflush(stdout); }
+        if (post) {
+            void* down = CGEventCreateKeyboardEvent(NULL, 53, true);
+            void* up = CGEventCreateKeyboardEvent(NULL, 53, false);
+            void* sd = CGEventCreateKeyboardEvent(NULL, 0x38, true);
+            void* su = CGEventCreateKeyboardEvent(NULL, 0x38, false);
+            extern void CGEventSetFlags(void*, uint64_t);
+            CGEventSetFlags(down, 0x00020000u);
+            CGEventSetFlags(up, 0x00020000u);
+            CGEventPost(0, sd); CGEventPost(0, down);
+            in_sleep_until(t + 50000000);
+            CGEventPost(0, up); CGEventPost(0, su);
+            CFRelease(down); CFRelease(up); CFRelease(sd); CFRelease(su);
+        } else {
+            yscr__wd_feed(53, 1, 0x00020000u, g_panic_other ? 1 : (int64_t)getpid(), 0);
+            in_sleep_until(t + 50000000);
+            yscr__wd_feed(53, 0, 0x00020000u, g_panic_other ? 1 : (int64_t)getpid(), 0);
+        }
+        in_sleep_until(t + 300000000);
+    }
+    return NULL;
+}
+
+/* The child: open with desc.panic, 60 frames, then hang (the main thread
+ * sleeps) or pump without begin() (release). */
+static int panic_child(const char* mode, int fs, const char* angle) {
     yscr_desc d;
-    const char* angle = argc > 1 ? argv[1] : getenv("YSCR_ANGLE_DIR");
+    yscr_frame f;
+    pthread_t th;
+    int i, post = !strcmp(mode, "post"), release = !strcmp(mode, "release");
+    g_panic_other = !strcmp(mode, "other");
     memset(&d, 0, sizeof d);
     d.backend = YSCR_BACKEND_METAL;
     d.angle_dir = angle;
+    d.windowed = !fs;
+    d.settle = YSCR_SETTLE_WARN;
+    d.panic = true;
+    d.panic_fn = panic_last_words;
+    if (release) d.panic_grace_ns = 1000000000;
+    g_panic_windowed = 1;
+    if (!yscr_open(&g_ps, &d)) { printf("open: %s\n", yscr_error(&g_ps)); return 2; }
+    {
+        char line[1600];
+        yscr_describe(&g_ps, line, sizeof line);
+        printf("panic_word=%s\n", strstr(line, "panic=armed") ? "armed" : "not-armed");
+        if (strstr(line, "locked=1")) printf("locked\n");
+    }
+    for (i = 0; i < 60; i++) { if (yscr_begin(&g_ps, &f) != YSCR_OK) break; yscr_flip(&g_ps); }
+    fflush(stdout);
+    pthread_create(&th, NULL, panic_presser, &post);
+    if (!release) {
+        struct timespec ts = { g_panic_other ? 4 : 15, 0 };
+        nanosleep(&ts, NULL);   /* hung: no pump, no begin() */
+        printf("lived\n");
+        return 3;
+    } else {
+        int64_t end = in_now() + 4000000000LL;
+        int rc1, rc2;
+        uint32_t a1, a2;
+        while (in_now() < end) {   /* a loop outside begin() that pumps: an operator dialog */
+            struct timespec ts = { 0, 10000000 };
+            SDL_PumpEvents();
+            nanosleep(&ts, NULL);
+        }
+        pthread_join(th, NULL);
+        printf("before_begin minimized=%d\n", (SDL_GetWindowFlags(yscr_window(&g_ps)) & SDL_WINDOW_MINIMIZED) != 0);
+        rc1 = yscr_begin(&g_ps, &f); a1 = f.abort;
+        rc2 = yscr_begin(&g_ps, &f); a2 = f.abort;
+        printf("release=%.1fms begin1=%d abort=0x%x begin2=%d abort=0x%x minimized=%d fullscreen=%d nsfullscreen=%d\n",
+               (double)(yscr__wd.t_release - yscr__wd.t_panic) / 1e6, rc1, a1, rc2, a2,
+               (SDL_GetWindowFlags(yscr_window(&g_ps)) & SDL_WINDOW_MINIMIZED) != 0,
+               (SDL_GetWindowFlags(yscr_window(&g_ps)) & SDL_WINDOW_FULLSCREEN) != 0,
+               (int)((((unsigned long (*)(id, SEL))objc_msgSend)((id)SDL_GetPointerProperty(SDL_GetWindowProperties(
+                   yscr_window(&g_ps)), SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, NULL), sel_registerName("styleMask")) >> 14) & 1));
+        yscr_close(&g_ps);
+        return 0;
+    }
+}
+
+/* The parent: runs the child, reads its lines, and times the end against
+ * the third press. */
+static void panic_case(const char* self, const char* angle, const char* mode, int fs, int want_code) {
+    int fd[2], st = 0, kq;
+    pid_t pid;
+    char buf[4096], msg[300];
+    size_t got = 0;
+    ssize_t r;
+    long long t3 = 0;
+    int64_t t_end;
+    struct kevent kev;
+    if (pipe(fd) != 0) { check(0, "panic: pipe"); return; }
+    pid = fork();
+    if (pid == 0) {
+        dup2(fd[1], 1);
+        close(fd[0]);
+        execl(self, self, "panic-child", mode, fs ? "1" : "0", angle ? angle : "", (char*)0);
+        _exit(127);
+    }
+    close(fd[1]);
+    kq = kqueue();
+    EV_SET(&kev, pid, EVFILT_PROC, EV_ADD | EV_ONESHOT, NOTE_EXIT, 0, NULL);
+    kevent(kq, &kev, 1, NULL, 0, NULL);
+    kevent(kq, NULL, 0, &kev, 1, NULL);
+    t_end = in_now();
+    while (got + 1 < sizeof buf && (r = read(fd[0], buf + got, sizeof buf - 1 - got)) > 0) got += (size_t)r;
+    buf[got] = 0;
+    close(fd[0]);
+    close(kq);
+    waitpid(pid, &st, 0);
+    if (strstr(buf, "t3=")) t3 = atoll(strstr(buf, "t3=") + 3);
+    {
+        static char copy[4096];
+        char* p = copy;
+        memcpy(copy, buf, sizeof copy);
+        while (*p) { char* e = strchr(p, '\n'); if (e) *e = 0; printf("     panic %s %s: child: %s\n", mode, fs ? "fullscreen" : "window", p); if (!e) break; p = e + 1; }
+    }
+    snprintf(msg, sizeof msg, "panic %s %s: exit code %d (want %d), %.1f ms after press 3", mode,
+             fs ? "fullscreen" : "window", WIFEXITED(st) ? WEXITSTATUS(st) : -1, want_code,
+             t3 ? (double)(t_end - t3) / 1e6 : -1.0);
+    check(WIFEXITED(st) && WEXITSTATUS(st) == want_code, msg);
+    if (!strcmp(mode, "release")) {
+        snprintf(msg, sizeof msg, "panic release %s: the next begin() reports 0x21, the one after 0x20, the window "
+                 "minimized", fs ? "fullscreen" : "window");
+        check(strstr(buf, "abort=0x21") && strstr(buf, "abort=0x20") && strstr(buf, "minimized=1"), msg);
+    } else if (!strcmp(mode, "other")) {
+        snprintf(msg, sizeof msg, "panic other %s: presses for another process: no panic", fs ? "fullscreen" : "window");
+        check(strstr(buf, "lived") != NULL && strstr(buf, "panic_fn ran") == NULL, msg);
+    } else {
+        snprintf(msg, sizeof msg, "panic %s %s: panic_fn ran", mode, fs ? "fullscreen" : "window");
+        check(strstr(buf, "panic_fn ran") != NULL, msg);
+    }
+}
+
+/* the v0.16.0 cases: state, gamma, rawmice, panic (seam), panic-post
+ * (Shift+Esc posted to the HID tap: an unlocked session, Accessibility),
+ * new (all but panic-post) */
+static void new_cases(const char* which, const yscr_desc* d, const char* self, const char* angle) {
+    int all = !strcmp(which, "new");
+    if (all || !strcmp(which, "state")) state(d);
+    if (all || !strcmp(which, "gamma")) gamma_case(d);
+    if (all || !strcmp(which, "rawmice")) rawmice(d);
+    if (all || !strcmp(which, "panic")) {
+        panic_case(self, angle, "seam", 0, 99);
+        panic_case(self, angle, "seam", 1, 99);
+        panic_case(self, angle, "release", 0, 0);
+        panic_case(self, angle, "release", 1, 0);
+        panic_case(self, angle, "other", 0, 3);
+    }
+    if (!strcmp(which, "panic-post")) {
+        if (!CGPreflightPostEventAccess()) printf("     panic-post: posting needs Accessibility: not run\n");
+        else { panic_case(self, angle, "post", 0, 99); panic_case(self, angle, "post", 1, 99); }
+    }
+}
+
+int main(int argc, char** argv) {
+    yscr_desc d;
+    const char* angle = argc > 1 ? argv[1] : getenv("YSCR_ANGLE_DIR");
+    if (argc > 4 && !strcmp(argv[1], "panic-child")) return panic_child(argv[2], atoi(argv[3]), argv[4][0] ? argv[4] : NULL);
+    memset(&d, 0, sizeof d);
+    d.backend = YSCR_BACKEND_METAL;
     d.windowed = true;
     d.settle = YSCR_SETTLE_WARN;
+    {   /* one of the v0.16.0 cases: argv[1], or YSCR_TEST_CASES (the mutation list sets it) */
+        const char* c = argc > 1 ? argv[1] : getenv("YSCR_TEST_CASES");
+        if (c && (!strcmp(c, "new") || !strcmp(c, "state") || !strcmp(c, "gamma") || !strcmp(c, "rawmice") ||
+                  !strncmp(c, "panic", 5))) {
+            angle = argc > 2 ? argv[2] : getenv("YSCR_ANGLE_DIR");
+            d.angle_dir = angle;
+            new_cases(c, &d, argv[0], angle);
+            printf("screen_metal_test: %d of %d checks passed\n", g_checks - g_fail, g_checks);
+            return g_fail ? 1 : 0;
+        }
+    }
+    d.angle_dir = angle;
     /* about 4.5 ms of GPU time a frame: shown one a vblank */
     run("rate", &d, 120, 400, 1, 0);
     /* a minimized window: no frame shown, so frames are not paced and ANGLE's
@@ -723,6 +1145,7 @@ int main(int argc, char** argv) {
     vrr(&d);
     period(&d);
     input(&d);
+    new_cases("new", &d, argv[0], angle);
     d.color_depth = 10;
     run("tenbit", &d, 30, 400, 1, 0);
     d.color_depth = 0;

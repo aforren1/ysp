@@ -4255,6 +4255,225 @@ test checks the rule and that the message fits the screen's error buffer
 reports equal intervals is how Apple documents the properties, not
 something measured here.
 
+### The panic, raw mice, the gamma table and the code risk (v0.16.0)
+
+Before v0.16.0 four features were Windows only: the panic watchdog, raw
+mice, the OS gamma ramp and the code risk state (METAL left
+`CODE_RISK_STATE_UNKNOWN` set). v0.16.0 brings each to METAL with the
+records, flags, events and describe-line words of Windows.
+
+Conditions of every run below: Apple M2 Mac mini, macOS 27.0.1, SDL
+3.4.0, ANGLE from Electron 43.8.3, the Dell M27Q on HDMI in its 1920 x
+1080 mode at "60 Hz", AC, 2026-11-05. The coordinator said the machine
+was quiet; the load average before each run was 0.7 to 1.4. The session
+was locked for the first runs and unlocked for the rest; each table says
+which.
+
+#### Permissions
+
+Read with the probe in the worker's scratch (`CGPreflight*`,
+`IOHIDCheckAccess`), with Accessibility and Input Monitoring granted to
+VS Code, which runs the shell:
+
+| Call | Result | What it needs |
+|---|---|---|
+| `CGEventTapCreate`, listen-only, `kCGAnnotatedSessionEventTap` | made | Input Monitoring (`CGPreflightListenEventAccess` 1) |
+| `IOHIDManagerOpen`, mice | `kIOReturnSuccess`, the Dell MS116 listed | Input Monitoring (`IOHIDCheckAccess` granted) |
+| `CGGetDisplayTransferByTable`, `CGSetDisplayTransferByTable` | read and set | none |
+| a screen capture (`CGPreflightScreenCaptureAccess`) | 0 | Screen Recording, not granted |
+
+Both permissions were granted here, so which one Apple checks for the tap
+was not separated: Apple documents listen-only taps under
+`CGPreflightListenEventAccess` (Input Monitoring). `open()` names Input
+Monitoring when the tap or the HID manager is refused. No run was made
+without the permission.
+
+#### The panic
+
+The frame loop owns the main thread on macOS, so a hung loop stops the
+process's events. The candidates for a key while the main thread hangs:
+
+| Candidate | Thread | Permission | Decision |
+|---|---|---|---|
+| `NSEvent` global or local monitor | main | Accessibility for global | no: it needs the main thread |
+| `IOHIDManager` on the keyboards | its own | Input Monitoring | no: it does not say which process the key goes to |
+| `CGEventTap`, listen-only, at the annotated session tap | its own | Input Monitoring | yes |
+
+The tap sees each key after the window server chose its target, and
+`kCGEventTargetUnixProcessID` says which process gets it. That is the
+counterpart of Windows' foreground check: a key that another program in
+front takes does not count. Measured: posted presses reached the tap
+with the hung child's pid, after 1.5 s and after 7 s of a hang (the
+beach ball). macOS has no "Ghost" window: the hung app keeps its keys.
+
+"Release the display" on macOS. The main thread owns every window, so no
+other thread can order a window out or leave fullscreen safely. Windows'
+rule is kept with the main run loop in the window thread's place: an
+observer on the main run loop (entry, before waiting, exit) stamps a
+heartbeat, and the release is a function on the main queue
+(`dispatch_async_f`), which the main thread runs only while it pumps.
+While the heartbeat is newer than 1 s the watchdog asks for a release
+(each METAL window leaves fullscreen and is minimized; the cursor
+shows), else the process ends. A host that waits on the main thread
+(`input()`, MATLAB's `pause`) does not pump, so on macOS a panic there
+ends the process; on Windows the window thread keeps answering. The
+gamma tables and the display mode need no release: the window server
+puts back the tables and takes down the windows of a process that ends.
+
+`_exit(99)`, not `exit()`: atexit handlers can wait on locks the hung
+thread holds. `panic_fn` runs on its own thread for at most 1 s first.
+
+`tests/adapt/screen_metal_test.c` runs a child that opens a screen with
+`desc.panic` (a window through the test seam `YSCR__PANIC_WINDOWED`, or
+a fullscreen space), runs 60 frames, then sleeps on its main thread. The
+parent waits on the child's exit with `kqueue` (`NOTE_EXIT`). "post":
+Shift+Esc posted with `CGEventPost(kCGHIDEventTap)`, 3 presses 300 ms
+apart. "seam": the same presses given to the tap's function
+(`yscr__wd_feed`). Unlocked; ms from press 3 to the child's exit:
+
+| Case | Runs | Exit code | Press 3 to exit, ms |
+|---|---|---|---|
+| post, window, hang 1.5 s | 6 | 99, panic_fn ran | 17.0 to 25.5 |
+| post, fullscreen space, hang 1.5 s | 6 | 99, panic_fn ran | 24.1 to 29.6 |
+| post, window, hang 7 s | 3 | 99 | 23.4 to 25.1 |
+| post, fullscreen space, hang 7 s | 3 | 99 | 26.8 to 29.6 |
+| seam, window (locked and unlocked) | 3 | 99 | 17.8 to 23.9 |
+| seam, fullscreen space (locked and unlocked) | 7 | 99 | 23.4 to 30.6 |
+| seam, presses for another pid | 2 | 3 (lived) | no panic |
+
+Windows' table for comparison: 28 to 85 ms in a window, and 1.16 s for a
+switched mode to come back.
+
+Release, the child pumping SDL (`SDL_PumpEvents()` every 10 ms) without
+`begin()` and `panic_grace_ns` 1 s: the release ran 1.7 to 10.6 ms after
+the panic began (the 9 runs that printed it, window and space, locked and unlocked), the
+child's next `begin()` returned `YSCR_QUIT` with 0x21 and the one after
+with 0x20, and it exited 0 after close. In one locked run the fullscreen
+window was not minimized at the first ask (a minimize during the space's
+exit); `begin()` on a released METAL screen asks again.
+
+Not measured: keys pressed by hand (posted keys only), the injected flag
+on a hardware key (`kCGEventSourceUnixProcessID` 0 is assumed), a
+switched display mode (METAL opens in the desktop's mode unless
+`desc.mode` names one).
+
+#### Raw mice
+
+| Candidate | Per device | Unaccelerated | The device's rate | Permission |
+|---|---|---|---|---|
+| `NSEvent` deltas | no (one pointer) | no: `deltaX` is after acceleration | no: coalesced to the run loop | none |
+| `IOHIDManager` values on a thread of its own | yes (one `IOHIDDevice` each) | yes: the report's counts | yes: one callback per report | Input Monitoring |
+
+The header uses `IOHIDManager`. IOKit parses each report, so the header
+parses no device bytes (no fuzz target): it groups the values that share
+a device and `IOHIDValueGetTimeStamp` into one report, and closes the
+last one when its run loop goes idle (an observer, before waiting). The
+stamp is the time the HID driver took the report, in mach time, which is
+the ysp_rt clock from ysp/rt.h v0.10.0. The device id is the low 32 bits
+of the IORegistry entry id; a `YSCR_EV_DEVICE` record per mouse (present
+at open, added and removed at the next `begin()`), so the reports carry
+no `YIN_UNLISTED`. Measured (locked and unlocked): `open()` with
+`desc.raw_mice` made one `YSCR_EV_RAW_MICE` ON record and a
+`YSCR_EV_DEVICE` record for "Dell MS116 USB Optical Mouse" (the name cut
+at 23 bytes). The report rate and the stamp against arrival were not
+measured: they need a person to move the mouse. The run is ready:
+`YSCR_TEST_MOUSE_S=5 test_screen_metal rawmice` prints the report
+interval and the callback time minus each value's stamp.
+
+#### The gamma table
+
+A probe in the worker's scratch, the M27Q, 1024 entries a channel (its capacity):
+
+| Call | Locked: min / p50 / p99 / max, us | Unlocked |
+|---|---|---|
+| `CGGetDisplayTransferByTable`, 1024 (200) | 36.4 / 137.9 / 250.6 / 866.1 | 30.8 / 125.8 / 221.3 / 222.0 |
+| the same, 256 (200) | 36.2 / 38.5 / 59.1 / 1593.2 | 31.7 / 43.2 / 64.4 / 64.9 |
+| `CGSetDisplayTransferByTable`, the same table (50) | 37.5 / 41.1 / 47.7 / 3276.4 | 42.3 / 49.0 / 60.2 / 3048.8 |
+| set and read back (50) | 71.7 / 77.3 / 104.7 / 284.1 | 86.5 / 92.2 / 100.6 / 103.7 |
+| `CGDisplayRestoreColorSyncSettings` (20) | 23.1 / 24.9 / 26.2 / 37.4 | 27.6 / 29.3 / 30.3 / 46.6 |
+
+The first read of a process took 221 to 243 us. A read at open is cheap
+next to Windows' 0.8 ms, but the table is still read at open only.
+
+A child that set a table one entry off the identity and ended with
+`_exit` or with SIGKILL: the parent read the identity again as soon as
+`waitpid` returned (2 of 2). So a crash does not leave the table set on
+macOS, unlike Windows' ramp.
+
+`tests/adapt/screen_metal_test.c gamma` runs the set path on hardware:
+a table one entry off (0.5 to 0.52 at entry 512 of 1024) before a
+fullscreen open gives `os_gamma=set`, the identity read back while open,
+and the table of before after close; a refused set (test seam
+`YSCR__MAC_GAMMA_SET`) gives `refused` and `CODE_RISK_GAMMA`;
+`keep_os_gamma` gives `not-identity(kept)`. Passed locked and unlocked.
+
+Whether macOS applies the table on HDMI to the light was not measured. A
+read-back says the window server kept the table, not that the panel
+shows it. A capture needs Screen Recording, and a capture is before the
+table in any case; the proof is a photodiode on a gray step.
+
+#### The code risk state
+
+What the layer used: SDL 3.4.0's `CAMetalLayer` read
+`colorspace` = sRGB (`kCGColorSpaceSRGB`) at open, on a display whose
+profile is "M27Q colorspace". ColorSync therefore converted every frame
+from sRGB to the display's profile, in v0.11.0 to v0.15.0. A bare
+`[CAMetalLayer layer]` reads nil, so the tag comes from SDL's view or
+AppKit, not from the class. `CAMetalLayer.h` says: "If nil, no
+colormatching occurs. If non-nil, the rendered content will be
+colormatched to the colorspace of the context containing this layer
+(typically the display's colorspace)." v0.16.0 sets it to nil at open
+and reads it back for the risk (`layer_cs=untagged`). The display's own
+colorspace would also mean no conversion, but it changes with the
+profile the user picks; nil does not. Not verified with light or a
+capture (no Screen Recording permission).
+
+EDR. `NSScreen.maximumExtendedDynamicRangeColorComponentValue` (now) and
+`maximumPotentialExtendedDynamicRangeColorComponentValue` (the display
+can) read 1.00 and 1.00 on the M27Q; the layer's
+`wantsExtendedDynamicRangeContent` is NO. Either value above 1 sets
+`CODE_RISK_ADVANCED_COLOR`: an HDR mode or an XDR panel maps SDR values
+into its range. No such display was attached; the test seam
+`YSCR__MAC_COLOR` gives 16.0 and checks the flag.
+
+Scaled. The current `CGDisplayMode` is 1920 x 1080 pixels; the modes
+with the native flag (`kDisplayModeNativeFlag`, 0x02000000) are 2560 x
+1440 (1x and HiDPI "looks like 1280 x 720", at 60, 120 and 144 Hz). So a
+fullscreen screen on this display is `CODE_RISK_SCALED`: the panel
+scales 1920 x 1080 up. The window's pixels are compared with the mode's
+too: the compositor scales a window whose pixels differ. A window is not
+checked, as on Windows. `STATE_UNKNOWN` is set only when the screen, the
+layer, the mode or a native mode could not be read; on the M27Q every
+check ran (window and fullscreen).
+
+What the self test sees: the drawable as the header's blits wrote it,
+read back on the GPU, so the pixel format (BGRA8, BGR10A2) and the
+blits. It does not see what comes after the drawable: ColorSync, the
+gamma table, scaling, EDR mapping, Night Shift and True Tone (no public
+call reads them; `nightshift=unknown`), accessibility filters, and the
+panel.
+
+#### yscr_poll()'s time
+
+`yscr_poll()` now gives a key, a modifier key or a mouse button the same
+NSEvent time as `yscr_event_input()`. The pairing takes its entry, so
+the pair is made once: the last 16 events are kept with their result
+(keyed by SDL's stamp, type and key or button), and
+`yscr_event_input()` on the same event finds it there. The input case
+checks it: 160 of 160 events with `yscr_poll()`'s time equal to the
+event's.
+
+#### Tests and mutants
+
+The core test checks the rules (key codes, modifiers, the 8-bit
+identity, the risk, the value grouping, with 20,000 random values).
+`tests/adapt/screen_metal_test.c` gained `state`, `gamma`, `rawmice`,
+`panic` and `panic-post` (also selected by `YSCR_TEST_CASES`), and
+passed 73 of 73 unlocked. The fullscreen space's settling ends
+`FAILED(tier,...)` with `warn` there, as it did on v0.15.0 (checked on
+the same machine the same day): not a change of v0.16.0. `mt-28` to `mt-45`: see the mutation list;
+the results are in [status.md](status.md).
+
 ### Tests and mutants
 
 - The core test (`tests/adapt/screen_test.c`): the rules without a Mac
@@ -4292,8 +4511,9 @@ above ran), the light (tier 1), direct against composed (one sign only:
 the space's shorter queue), the panel's 10 bits, keys pressed by hand
 (only posted keys were timed, v0.15.0), and a run that
 switches only Screen Sharing to show that it causes the blank windows of
-the probe's 6.3. The panic watchdog, raw mice and the OS gamma ramp are
-Windows only. Not exercised by a test: a presented handler given up 1 s
+the probe's 6.3. From v0.16.0 the panic watchdog, raw mice, the OS gamma
+ramp and the code risk state run on macOS too ([above](#the-panic-raw-mice-the-gamma-table-and-the-code-risk-v0160));
+the raw mouse rate is not measured. Not exercised by a test: a presented handler given up 1 s
 after its target (`late_handler=`; no way to withhold one was found), a
 frame with no drawable (`no_drawable=`; every drawable came at once
 here), a failed shared-event sync (the `glFinish` fallback), a window

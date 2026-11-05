@@ -256,7 +256,7 @@ id = "rm-06"
 name = "raw mice accepted on the simulated display"
 test = "screen"
 why = "No reader runs without a window on Windows; open() must say so instead of delivering nothing (v0.3.5)."
-find = '    return "desc.raw_mice is Windows only, with a window";'
+find = '    return "desc.raw_mice is for Windows and macOS (METAL), with a window";'
 replace = '    return NULL;'
 
 [[mutant]]
@@ -1287,8 +1287,8 @@ id = "wt-07"
 name = "every screen released"
 test = "screen"
 why = "v0.10.0: the release minimizes the window thread's windows only; a screen it does not own sees the panic's abort once."
-find = '''static int yscr__released_on(const yscr_screen* s) { return s->wt && yscr__a_load(&yscr__released); }'''
-replace = '''static int yscr__released_on(const yscr_screen* s) { (void)s; return yscr__a_load(&yscr__released); }'''
+find = '''    return (s->wt || s->backend == YSCR_BACKEND_METAL) && yscr__a_load(&yscr__released);'''
+replace = '''    (void)s; return yscr__a_load(&yscr__released);'''
 
 [[mutant]]
 id = "wt-08"
@@ -1753,5 +1753,176 @@ id = "mt-27"
 name = "yscr_event_input() without the NSEvent stamp"
 test = "metal"
 why = "On macOS a key or mouse button must carry NSEvent.timestamp, not SDL 3.4's stamp with its per-process offset (v0.15.0)."
-find = '            ctx.t_os = yscr__nsm_stamp(ev, t);'
+find = '            ctx.t_os = yscr__nsm_stamp_once(ev, t);'
 replace = '            ctx.t_os = 0;'
+
+# v0.16.0's 18 (mt-28 to mt-45: the panic watchdog, the gamma table, the
+# code risk state and raw mice on METAL; yscr_poll()'s NSEvent time).
+# metal_new runs the Metal test's v0.16.0 cases only (state, gamma,
+# rawmice, panic): about 1.5 min a mutant instead of 4.
+[test.metal_new]
+source = "tests/adapt/screen_metal_test.c"
+compiler = "gcc"
+flags = ["-std=c11", "-O1", "-w", "-fblocks", "-I/Users/brainworks/sdl3/include"]
+libs = ["-L/Users/brainworks/sdl3/lib", "-lSDL3", "-Wl,-rpath,/Users/brainworks/sdl3/lib", "-lm",
+        "-framework", "ApplicationServices", "-lobjc"]
+timeout = 300
+env_default = { YSCR_ANGLE_DIR = "/Users/brainworks/ysp-deps/angle-electron-43.8.3" }
+env = { YSCR_TEST_CASES = "new" }
+
+[[mutant]]
+id = "mt-28"
+name = "Esc's macOS key code off by one"
+test = "screen"
+why = "The panic's tap compares virtual key codes; Esc is kVK_Escape, 53 (v0.16.0)."
+find = '    if (scancode == 41) return 53;'
+replace = '    if (scancode == 41) return 54;'
+
+[[mutant]]
+id = "mt-29"
+name = "Shift read from the caps lock bit"
+test = "screen"
+why = "The abort combination needs Shift held: kCGEventFlagMaskShift is 0x20000; 0x10000 is caps lock (v0.16.0)."
+find = '    if (flags & 0x00020000u) m |= YSCR_MOD_SHIFT;'
+replace = '    if (flags & 0x00010000u) m |= YSCR_MOD_SHIFT;'
+
+[[mutant]]
+id = "mt-30"
+name = "the transfer table compared as floats"
+test = "screen"
+why = "Identity is the 8-bit identity, as on Windows: a table that rounds to every index at 8 bits shows codes unchanged; a float compare would set the table again for nothing (v0.16.0)."
+find = '        if (lrint((double)t[i] * 255.0) != lrint((double)i * 255.0 / (double)(n - 1))) return 0;'
+replace = '        if (t[i] != (float)i / (float)(n - 1)) return 0;'
+
+[[mutant]]
+id = "mt-31"
+name = "an EDR-capable display not a risk"
+test = "screen"
+why = "An XDR panel or an HDR mode maps SDR values into its range, so codes may change (v0.16.0)."
+find = '    else if (c->edr > 1.0 + 1e-6 || c->edr_potential > 1.0 + 1e-6 || c->wants_edr || c->colorspace == YSCR__CS_OTHER)'
+replace = '    else if (c->edr > 1.0 + 1e-6 || c->wants_edr || c->colorspace == YSCR__CS_OTHER)'
+
+[[mutant]]
+id = "mt-32"
+name = "a window the compositor scales not a risk"
+test = "screen"
+why = "Window pixels other than the mode's are scaled by the compositor even in the panel's own mode (v0.16.0)."
+find = '                              (c->win_w && (c->win_w != c->mode_w || c->win_h != c->mode_h))))'
+replace = '                              0))'
+
+[[mutant]]
+id = "mt-33"
+name = "no native mode read as not scaled"
+test = "screen"
+why = "With no mode flagged native the panel is unknown: STATE_UNKNOWN, not a quiet pass (v0.16.0)."
+find = '    if (!c->mode_w || !c->native_w) r |= YSCR_CODE_RISK_STATE_UNKNOWN;'
+replace = '    if (!c->mode_w) r |= YSCR_CODE_RISK_STATE_UNKNOWN;'
+
+[[mutant]]
+id = "mt-34"
+name = "two mice at one time stamp made one report"
+test = "screen"
+why = "Reports are per device: two mice's values with one time stamp are two reports (v0.16.0)."
+find = '    if (a->have && (a->device != device || a->t != t)) {'
+replace = '    if (a->have && (a->t != t)) {'
+
+[[mutant]]
+id = "mt-35"
+name = "HID buttons 2 and 3 swapped"
+test = "screen"
+why = "HID button 2 is the right button and 3 the middle, as RAWMOUSE's order (v0.16.0)."
+find = '''    static const uint8_t button[5] = { YSCR_MOUSE_LEFT, YSCR_MOUSE_RIGHT, YSCR_MOUSE_MIDDLE, YSCR_MOUSE_X1,
+                                       YSCR_MOUSE_X2 };
+    int closed = 0, used = 1;'''
+replace = '''    static const uint8_t button[5] = { YSCR_MOUSE_LEFT, YSCR_MOUSE_MIDDLE, YSCR_MOUSE_RIGHT, YSCR_MOUSE_X1,
+                                       YSCR_MOUSE_X2 };
+    int closed = 0, used = 1;'''
+
+[[mutant]]
+id = "mt-36"
+name = "the idle flush gives a report twice"
+test = "screen"
+why = "Each report reaches the bridge once (v0.16.0)."
+find = '''    if (!a->have) return 0;
+    *done = a->e;
+    a->have = 0;
+    return 1;'''
+replace = '''    if (!a->have) return 0;
+    *done = a->e;
+    return 1;'''
+
+[[mutant]]
+id = "mt-37"
+name = "an element the reader does not use opens a report"
+test = "screen"
+why = "A vendor element alone would push an empty report (v0.16.0)."
+find = '    if (used && !a->have) {'
+replace = '    if (!a->have) {'
+
+[[mutant]]
+id = "mt-38"
+name = "the layer keeps SDL's sRGB tag"
+test = "metal_new"
+why = "The layer came tagged sRGB, so ColorSync converted every value to the display's profile; nil means no color matching (v0.16.0)."
+find = '    YSCR__MSG(void, yscr__id, void*, void*)(m->layer, yscr__mac.sel("setColorspace:"), NULL);'
+replace = ''
+
+[[mutant]]
+id = "mt-39"
+name = "a key for another process counts"
+test = "metal_new"
+why = "The tap sees the session's keys; only keys the window server routes to this process count, as Windows' foreground check (v0.16.0)."
+find = '    if (target_pid != (int64_t)getpid()) return 0;'
+replace = ''
+
+[[mutant]]
+id = "mt-40"
+name = "the panic never releases"
+test = "metal_new"
+why = "While the main run loop answers (a loop that pumps outside begin()), the panic releases the display and the process lives, as with Windows' window thread (v0.16.0)."
+find = '    if (yscr__wd_alive() && yscr__mx.dispatch_async_f && yscr__mx.main_q) {'
+replace = '    if (0) {'
+
+[[mutant]]
+id = "mt-41"
+name = "a released METAL screen begins frames again"
+test = "metal_new"
+why = "After a release every begin() returns YSCR_QUIT with YSCR_ABORT_PANIC: the program may only close (v0.16.0)."
+find = '    return (s->wt || s->backend == YSCR_BACKEND_METAL) && yscr__a_load(&yscr__released);'
+replace = '    return s->wt && yscr__a_load(&yscr__released);'
+
+[[mutant]]
+id = "mt-42"
+name = "close leaves the identity table"
+test = "metal_new"
+why = "close() puts back the table it read (v0.16.0)."
+find = '''static void yscr__mtl_gamma_release(yscr_screen* s) {
+    int k, any = 0;
+    if (s->gamma_owned) yscr__gamma_restore(s->gamma_owned - 1);'''
+replace = '''static void yscr__mtl_gamma_release(yscr_screen* s) {
+    int k, any = 0;'''
+
+[[mutant]]
+id = "mt-43"
+name = "keep_os_gamma ignored"
+test = "metal_new"
+why = "desc.keep_os_gamma leaves a fullscreen screen's table alone (v0.16.0)."
+find = '    if (desc->windowed || desc->keep_os_gamma) { *word = "not-identity(kept)"; return 0; }'
+replace = '    if (desc->windowed) { *word = "not-identity(kept)"; return 0; }'
+
+[[mutant]]
+id = "mt-44"
+name = "the reader's mice not logged at open"
+test = "metal_new"
+why = "The reader's mice are YSCR_EV_DEVICE records at open, so their reports carry no YIN_UNLISTED (v0.16.0)."
+find = '''    s->rm_frames = -1;
+    yscr__rm_devices(s, &s->rm_frames, YSCR_DEV_PRESENT);'''
+replace = '''    s->rm_frames = -1;'''
+
+[[mutant]]
+id = "mt-45"
+name = "yscr_poll() keeps SDL's time on macOS"
+test = "metal"
+why = "yscr_poll() gives a key or mouse button the NSEvent time yscr_event_input() gives it (v0.16.0)."
+find = '            if (t_os) *t_rt = t_os;'
+replace = '            (void)t_os;'

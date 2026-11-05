@@ -1,4 +1,4 @@
-/* ysp/screen.h - v0.15.0 - public domain single-header display library
+/* ysp/screen.h - v0.16.0 - public domain single-header display library
  *
  *   The window, the GL ES 3.0 context, the display mode and the swap path
  *   of a stimulus display, with flip at a time: each frame learns the
@@ -697,9 +697,13 @@
  *     (ANGLE's Metal display has no 10-bit config; the pbuffer takes the
  *     IOSurface's format); 8-bit code values are spread over 10 bits
  *     (v << 2 | v >> 6). Whether 10 bits reach the panel is not measured.
- *     Not on macOS: the panic watchdog, raw mice, the OS gamma ramp. A
- *     display in a variable refresh mode is refused (VARIABLE REFRESH).
- *     Keys and mouse buttons get NSEvent.timestamp (INPUT, v0.15.0).
+ *     From v0.16.0 the layer's colorspace is nil, so ColorSync does not
+ *     convert the frame: SDL's layer came tagged sRGB, and every value was
+ *     converted to the display's profile before (CODES). The panic
+ *     watchdog (PANIC), raw mice (INPUT), the OS gamma ramp (OS GAMMA) and
+ *     the code risk state (CODES) work on macOS from v0.16.0. A display in
+ *     a variable refresh mode is refused (VARIABLE REFRESH). Keys and
+ *     mouse buttons get NSEvent.timestamp (INPUT, v0.15.0).
  *   Not implemented; open() refuses them with a message:
  *     YSCR_BACKEND_GLX_OML (Linux X11) and
  *     YSCR_BACKEND_WAYLAND (presentation-time). On Linux only SIM and
@@ -784,9 +788,9 @@
  *   the patch (the default top-left patch is on the Pixel Mode pixel: move
  *   it with desc.patch.corner), slots outside the display, and codes on a
  *   windowed screen, which is not at the display's origin.
- *   Exactness. At open, DXGI_FLIP and COMPOSITION draw all 256 values of
- *   each channel through both drawing paths into a test texture and read
- *   them back (selftest= in the describe line). desc.verify_codes = N
+ *   Exactness. At open, DXGI_FLIP, COMPOSITION and METAL draw all 256
+ *   values of each channel through the drawing paths into a test texture
+ *   and read them back (selftest= in the describe line). desc.verify_codes = N
  *   copies the first row of each code to a staging texture every N flips
  *   and compares it one flip later (yscr_code_verify()). Both check the
  *   back buffer only. What happens after it, the header reports where it
@@ -794,12 +798,29 @@
  *     COMPOSED        this flip went through DWM
  *     ADVANCED_COLOR  HDR or auto color management is on (Windows
  *                     DisplayConfig); DWM and the display kernel convert
- *                     colors then
+ *                     colors then. macOS: the display can show EDR now or
+ *                     at all (NSScreen's EDR values above 1: an HDR mode,
+ *                     an XDR panel), the layer asks for EDR, or the layer
+ *                     is tagged with a colorspace that is not the
+ *                     display's (ColorSync converts it)
  *     GAMMA           the OS gamma ramp is not identity (OS GAMMA)
- *     SCALED          the mode is not the panel's preferred mode
+ *     SCALED          the mode is not the panel's preferred mode (macOS:
+ *                     the mode's pixels are not those of a mode with the
+ *                     native flag, or the window's pixels are not the
+ *                     mode's); fullscreen only
  *     UNVERIFIED      the self test did not run (SIM, a custom presenter)
  *     VERIFY_FAILED   a read-back differed (sticky)
  *     STATE_UNKNOWN   the display state could not be read
+ *   On macOS (METAL, v0.16.0) open() reads the window's NSScreen, the
+ *   layer, the CGDisplayMode and the transfer table; STATE_UNKNOWN stays
+ *   only when one of them could not be read. The describe line says
+ *   display=<CGDirectDisplayID> color=sdr|edr-or-matched(edr now/potential)
+ *   layer_cs=untagged|display|other(name) panel=WxH mode_px=WxH os_gamma=
+ *   nightshift=unknown. The self test reads the drawable back, before the
+ *   compositor: it sees the blits and the pixel format (8 bits, 10 bits),
+ *   and not ColorSync, the gamma table, scaling, EDR mapping, Night Shift,
+ *   True Tone, accessibility filters (invert, color filters) or the
+ *   display's own processing.
  *   It cannot see Night Light, accessibility color filters, the MHC
  *   calibration pipeline (matrix and LUT at scanout), GPU dithering, or the
  *   display's own processing; the describe line says mhc=unknown and
@@ -835,9 +856,22 @@
  *   whether Night Light replaces it, was not measured (it needs light or
  *   a capture card); do not rely on it there. Out of reach of this header:
  *   the MHC calibration pipeline, Night Light, HDR and auto color
- *   management. Later work: CGSetDisplayTransferByTable (macOS), the RandR
- *   CRTC gamma (X11), and wlr-gamma-control on wlroots compositors
- *   (Wayland has no general protocol).
+ *   management. Later work: the RandR CRTC gamma (X11), and
+ *   wlr-gamma-control on wlroots compositors (Wayland has no general
+ *   protocol).
+ *   macOS (METAL, v0.16.0): the same rule with the display's transfer
+ *   table, read at up to 1024 entries a channel
+ *   (CGGetDisplayTransferByTable; the M27Q's capacity is 1024) and set
+ *   with CGSetDisplayTransferByTable. Identity is the 8-bit identity: each
+ *   entry rounds to its index at 8 bits. The words and CODE_RISK_GAMMA are
+ *   Windows'. The header puts the table it read back at close, at exit,
+ *   on SDL's quit event and in a panic; the window server also puts back
+ *   the table of a process that ends, by _exit or by SIGKILL (measured:
+ *   back when waitpid returned). Measured on the M27Q (HDMI): a read of
+ *   1024 entries 31 to 222 us (p50 126 us), a set 42 to 60 us (p99; one
+ *   of 50 took 3.0 ms), a set and read-back 87 to 104 us. Not known:
+ *   whether the panel shows the table on HDMI. A read-back says macOS
+ *   kept it, not that the light changed; no light was measured.
  *
  *   ---------------------------------------------------------------------
  *   TRIGGERS (desc.triggers, yscr_trigger, yscr_trigger_at)
@@ -1087,8 +1121,10 @@
  *   mini, macOS 27.0.1; docs/screen.md): the stamp equal to
  *   NSEvent.timestamp in 1600 of 1600, 49 us to 46.6 ms after the post
  *   (p50 112 to 136 us). os_stamps=found/tried(passed n, bias us) in the
- *   describe line. yscr_poll()'s time stays SDL's; motion, the wheel,
- *   touch and pens keep SDL's stamps.
+ *   describe line. From v0.16.0 yscr_poll()'s time is the same NSEvent
+ *   time for those events (the pair is made once and kept for
+ *   yscr_event_input()); motion, the wheel, touch and pens keep SDL's
+ *   stamps.
  *   With the raw path on, SDL 3.4 also sends a key from the window message
  *   when the message carries no scan code (read in SDL 3.4.0's source):
  *   keys injected by virtual-key code (SendInput with wVk only), keys with
@@ -1173,12 +1209,34 @@
  *   mouse events carry the device then) and a YSCR_EV_RAW_MICE record
  *   says SUSPENDED; when it ends, or when other code took the mice, the
  *   reader registers again and the record says REGISTERED. Each screen with
- *   raw_mice shares the one reader; the last to close stops it. On other
- *   platforms, and with no window, open() refuses raw_mice. Measured with
+ *   raw_mice shares the one reader; the last to close stops it. On Linux,
+ *   the web and with no window, open() refuses raw_mice. Measured with
  *   injected input only (examples/screen/input.c --mice is the hand test
  *   for two physical mice): reports stamped 0.15 to 0.40 ms after
  *   SendInput (means of three runs), no report lost or doubled with SDL's
  *   raw keyboard running.
+ *   Raw mice on macOS (METAL, v0.16.0). One thread per process runs an
+ *   IOHIDManager for mice (usage page 1, usage 2) on its own run loop.
+ *   IOKit parses each report and calls back once per element that
+ *   changed; the reader joins the values that share a device and a time
+ *   stamp into one report and sends it over the input bridge as on
+ *   Windows (yin_from_mouse()). The stamp is IOHIDValueGetTimeStamp, the
+ *   time the HID driver took the report, in mach time: the ysp_rt clock.
+ *   The device id is the low 32 bits of the device's IORegistry entry id
+ *   (unique while it stays plugged in). Each mouse gets a YSCR_EV_DEVICE
+ *   record (present at open, added and removed at the next begin()), so
+ *   its reports carry no YIN_UNLISTED. Buttons 1 to 5, X and Y (counts,
+ *   relative; an absolute pointer gives 0..65535 of its logical range and
+ *   YSCR_MOUSE_ABSOLUTE), the wheel and AC Pan (120 per detent). The mice
+ *   are not seized: the cursor moves as before. Reports count only while
+ *   the process is the active app (NSRunningApplication.isActive), as on
+ *   Windows. SDL's relative mode reads NSEvent deltas, not the HID
+ *   manager, so there is no guard and no SUSPENDED record. Permission:
+ *   Input Monitoring for the program, or the terminal or app that runs it
+ *   (open() names it when IOHIDManagerOpen is refused). Measured: open,
+ *   the Dell MS116's record; not measured: its report rate and the stamp
+ *   against arrival, which need a person to move the mouse
+ *   (tests/adapt/screen_metal_test.c rawmice, YSCR_TEST_MOUSE_S).
  *   The input bridge (v0.4.0). One loop for every input: a producer on any
  *   thread (desc.raw_mice's reader, a response-box reader, an eye tracker)
  *   calls yscr_push_input(&e) with a ysp/input.h event stamped on the
@@ -1410,9 +1468,10 @@
  *   what it holds, so it must take no lock the frame loop uses); hardware
  *   a trigger left set (panic_fn may reset it).
  *   When it is armed: DXGI_FLIP and COMPOSITION in fullscreen, on
- *   Windows. A window has no ramp or mode to put back and its user has the
- *   desktop: the describe line says panic=idle(windowed); on SIM, CUSTOM
- *   and other platforms, panic=n/a. open() refuses desc.panic with
+ *   Windows; METAL in fullscreen, on macOS (v0.16.0). A window has no ramp
+ *   or mode to put back and its user has the desktop: the describe line
+ *   says panic=idle(windowed); on SIM, CUSTOM and other platforms,
+ *   panic=n/a. open() refuses desc.panic with
  *   abort_keys.off and with a key the hook cannot name (it takes Esc, F1
  *   to F12, a letter or a digit). The first armed screen's numbers hold
  *   until the last armed screen closes.
@@ -1425,6 +1484,44 @@
  *   stamped later with the hook armed (STATUS).
  *   Measured (examples/screen/abort.c; a window armed through a test
  *   seam, and fullscreen in a switched mode): see STATUS.
+ *   macOS (METAL, v0.16.0). The frame loop owns the main thread, so a
+ *   hung loop also stops the process's events: an NSEvent monitor needs
+ *   the main thread and sees nothing then. The watchdog is a thread with
+ *   its own run loop and a listen-only event tap (CGEventTapCreate at
+ *   kCGAnnotatedSessionEventTap, key down and key up). It takes no key:
+ *   SDL still gets each one. It counts a press only when the window server
+ *   routes the key to this process (kCGEventTargetUnixProcessID), the
+ *   counterpart of Windows' foreground check. The key is compared by its
+ *   macOS key code (a position: the layout's scan code for a letter or a
+ *   digit, from SDL at open). The main run loop takes the window thread's
+ *   part: an observer on it stamps a heartbeat each time it runs (SDL's
+ *   pump runs it), and a release is a function on the main queue
+ *   (dispatch_async_f), which runs only when the main thread pumps. While
+ *   the heartbeat is newer than 1 s, the panic asks for a release and
+ *   waits up to 1 s for it to begin and 5 s for it to end, as on Windows:
+ *   each METAL window leaves fullscreen and is minimized, the cursor
+ *   shows, the gamma tables go back, YSCR_EV_PANIC u.u32[1] 1, and the
+ *   next begin() reports 0x21, every later one 0x20. Else the process
+ *   ends: the tap is turned off, YSCR_EV_PANIC u.u32[1] 0, the gamma
+ *   tables go back, panic_fn gets up to 1 s on its own thread, and
+ *   _exit(YSCR_PANIC_EXIT_CODE = 99), not exit() (atexit handlers can
+ *   wait on locks the hung thread holds). The window server takes down
+ *   the windows and the space of a process that ended. Permission: Input
+ *   Monitoring for the program, or the terminal or app that runs it;
+ *   open() fails with a message that names it when the tap is refused.
+ *   Measured (tests/adapt/screen_metal_test.c panic and panic-post; M2
+ *   Mac mini, macOS 27.0.1, 2026-11-05, unlocked): Shift+Esc posted to
+ *   the HID tap 3 times, 300 ms apart, to a child whose main thread
+ *   sleeps: exit code 99 17.0 to 25.5 ms after press 3 in a window (6
+ *   runs), 24.1 to 29.6 ms in a fullscreen space (6 runs), and 23.4 to
+ *   29.6 ms after a 7 s hang (the beach ball; 3 runs each); panic_fn ran
+ *   each time. With the main thread pumping outside begin(), the release
+ *   took 1.7 to 10.6 ms and the child lived; the window was minimized at
+ *   the first ask in every run but one (a fullscreen space, in a locked
+ *   session; begin() asks again). Presses routed to another
+ *   process do not count. Not measured: keys pressed by hand (posted keys
+ *   only), a switched display mode (METAL opens in the desktop's mode
+ *   unless desc.mode names one).
  *   Later, X11: the watchdog opens its own display connection and selects
  *   XI_RawKeyPress and XI_RawKeyRelease on the root window (XInput 2.1),
  *   which arrive whatever has the focus and are not consumed. It checks
@@ -1607,6 +1704,20 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.16.0 - METAL gets the four features that were Windows only: the
+ *          panic watchdog (PANIC: a listen-only event tap on a thread of its
+ *          own, the main run loop's heartbeat, the release on the main
+ *          queue, else _exit(99)), raw mice (INPUT: an IOHIDManager on a
+ *          thread of its own, IOHIDValue time stamps), the OS gamma ramp
+ *          (OS GAMMA: the display's transfer table) and the code risk state
+ *          (CODES: EDR, the layer's colorspace, the mode against the
+ *          panel's native pixels; STATE_UNKNOWN cleared when each was
+ *          read). The layer's colorspace is set to nil: SDL's came tagged
+ *          sRGB, so ColorSync converted every value to the display's
+ *          profile. yscr_poll()'s time on METAL is the NSEvent time
+ *          yscr_event_input() gives. Both need Input Monitoring. No struct
+ *          or table changes; the minor bump is for the colorspace, which
+ *          changes the values shown.
  *   v0.15.0 - METAL: yscr_event_input() gives keys, modifier keys and
  *          mouse buttons NSEvent.timestamp in place of SDL 3.4's Cocoa
  *          stamp, which is late by a per-process offset (INPUT). A local
@@ -1998,6 +2109,18 @@
  *          groups, input restamping, mode lists and the parameter table.
  *          The other swap paths are stubs that refuse to open.
  *
+ *   STATUS: v0.16.0 (METAL, 2026-11-05, M2 Mac mini, macOS 27.0.1, the
+ *   M27Q on HDMI in its 1920 x 1080 mode at "60 Hz", AC, load average 0.8
+ *   to 1.4): tests/adapt/screen_metal_test.c 73 of 73 unlocked, and its
+ *   v0.16.0 cases (state, gamma, rawmice, panic) also locked. The layer
+ *   read sRGB-tagged before the fix and untagged after it; the code risk
+ *   SCALED (1920 x 1080 on a 2560 x 1440 panel) with STATE_UNKNOWN clear;
+ *   the gamma set path on hardware (a table one entry off, set to
+ *   identity, read back, put back at close); the panic's times in PANIC.
+ *   Not measured: the raw mouse report rate and stamp (a person must move
+ *   the mouse), the light (whether the table and the untagged layer reach
+ *   the panel unchanged: no Screen Recording permission for a capture, no
+ *   photodiode), keys by hand.
  *   STATUS: v0.15.0 (METAL, input, 2026-11-05, unlocked, no Screen
  *   Sharing, AC; Accessibility granted): tests/adapt/screen_metal_test.c
  *   42 of 42. Its input case, run with 200 events per kind: F19, the
@@ -2309,9 +2432,9 @@
 #define YSP_SCREEN_H_INCLUDED
 
 #define YSCR_VERSION_MAJOR 0
-#define YSCR_VERSION_MINOR 15
+#define YSCR_VERSION_MINOR 16
 #define YSCR_VERSION_PATCH 0
-#define YSCR_VERSION_STRING "0.15.0"
+#define YSCR_VERSION_STRING "0.16.0"
 
 #include "ysp/rt.h"
 #include "ysp/input.h"
@@ -3569,14 +3692,16 @@ YSCR_API const yscr_param* yscr_params(int* n);
     #endif
 #endif
 
-/* macOS: the Metal presenter. No Apple header beyond these three plain ones:
- * the frameworks are loaded at run time (BACKENDS, METAL). */
+/* macOS: the Metal presenter. No Apple header beyond these plain system
+ * ones: the frameworks are loaded at run time (BACKENDS, METAL). */
 #if defined(__APPLE__) && !defined(YSCR_NO_SDL)
     #include <TargetConditionals.h>
     #if TARGET_OS_OSX
         #define YSCR__METAL 1
         #include <dlfcn.h>
         #include <mach/mach_time.h>
+        #include <unistd.h>          /* getpid, _exit: the panic watchdog */
+        #include <pthread/qos.h>     /* the watchdog's and the mouse reader's QoS */
     #endif
 #endif
 
@@ -3850,8 +3975,11 @@ static struct {
  * YSCR_ABORT_PANIC, until the last such screen closes. */
 static volatile int32_t yscr__released;
 /* The panic released the display of this screen: begin() returns
- * YSCR_QUIT from now on. */
-static int yscr__released_on(const yscr_screen* s) { return s->wt && yscr__a_load(&yscr__released); }
+ * YSCR_QUIT from now on. On macOS the main run loop is the window
+ * thread's counterpart (PANIC). */
+static int yscr__released_on(const yscr_screen* s) {
+    return (s->wt || s->backend == YSCR_BACKEND_METAL) && yscr__a_load(&yscr__released);
+}
 
 /* With the window thread, SDL keeps the string of a text, IME, drop or
  * clipboard event in the memory of the thread that takes the event, and
@@ -4416,6 +4544,27 @@ static void yscr__slot_free(yscr_screen* s) {
 
 YSCR_API void yscr_request_abort(void) {
     yscr__abort_push(YSCR_ABORT_REQUEST, 0, 0, 0, yscr__now());
+}
+
+/* YSCR_EV_PANIC on each armed screen's ring (PANIC): from the watchdog's
+ * thread, as the release or the end of the process begins. */
+static void yscr__panic_records(int64_t now, uint32_t released) {
+    int i;
+    for (i = 0; i < YSCR__SLOTS; i++) {
+        yscr_screen* s = yscr__slot[i].s;
+        if (s && s->panic_armed == 1 && s->ring) {
+            yrt_event ev;
+            memset(&ev, 0, sizeof ev);
+            ev.source = (uint16_t)YRT_SRC_SCREEN;
+            ev.kind = (uint16_t)YSCR_EV_PANIC;
+            ev.t_ns = (uint64_t)now;
+            ev.aux = s->display_index;
+            ev.u.u32[0] = (uint32_t)yscr__ab.presses;
+            ev.u.u32[1] = released;
+            ev.u.i64[1] = yscr__a_load64(&yscr__ab.ack);
+            yrt_ring_push(s->ring, &ev);
+        }
+    }
 }
 
 /* --- the default window icon (WINDOW ICON) ---------------------------------
@@ -5539,6 +5688,174 @@ static uint32_t yscr__mtl_code_of(uint32_t px, int bits10) {
     return (((px >> 20) & 0x3FFu) >> 2) | ((((px >> 10) & 0x3FFu) >> 2) << 8) | (((px & 0x3FFu) >> 2) << 16);
 }
 
+/* --- the macOS panic, gamma, code risk and raw mice: the rules (v0.16.0) ---
+ * Pure, so the core test checks them without a Mac; the system calls are
+ * in the METAL block below. */
+
+/* The macOS virtual key code of an SDL scan code (USB HID usage), for the
+ * keys the panic takes: Esc, F1 to F12, a letter or a digit; -1 for the
+ * rest. A scan code is a key's position; macOS's codes are positions too
+ * (Events.h, kVK_*), so the table holds on every layout. */
+static int yscr__kvk_of(uint32_t scancode) {
+    static const uint8_t letter[26] = { 0, 11, 8, 2, 14, 3, 5, 4, 34, 38, 40, 37, 46, 45, 31, 35, 12, 15, 1, 17, 32,
+                                        9, 13, 7, 16, 6 };            /* a .. z: scan codes 4 .. 29   */
+    static const uint8_t digit[10] = { 18, 19, 20, 21, 23, 22, 26, 28, 25, 29 };   /* 1 .. 9, 0: 30 .. 39 */
+    static const uint8_t fkey[12] = { 122, 120, 99, 118, 96, 97, 98, 100, 101, 109, 103, 111 };   /* F1 .. F12: 58 .. 69 */
+    if (scancode >= 4 && scancode <= 29) return letter[scancode - 4];
+    if (scancode >= 30 && scancode <= 39) return digit[scancode - 30];
+    if (scancode == 41) return 53;                                    /* Esc */
+    if (scancode >= 58 && scancode <= 69) return fkey[scancode - 58];
+    return -1;
+}
+
+/* The scan code of a key the panic takes (yscr__vk_known), on a US layout.
+ * On macOS open() asks SDL for the scan code under the current layout
+ * (SDL_GetScancodeFromKey), and this is the fallback. 0 = none. */
+static uint32_t yscr__scancode_us(uint32_t key) {
+    if (key == YSCR_KEY_ESCAPE) return 41;
+    if (key >= 0x4000003Au && key <= 0x40000045u) return key & 0xFFu;   /* SDLK_F1..F12 carry their scan code */
+    if (key >= 'a' && key <= 'z') return 4 + (key - 'a');
+    if (key >= '1' && key <= '9') return 30 + (key - '1');
+    if (key == '0') return 39;
+    return 0;
+}
+
+/* CGEventFlags as YSCR_MOD_*: shift, control, option, command
+ * (kCGEventFlagMask*, CGEventTypes.h). */
+static uint32_t yscr__cg_mods(uint64_t flags) {
+    uint32_t m = 0;
+    if (flags & 0x00020000u) m |= YSCR_MOD_SHIFT;
+    if (flags & 0x00040000u) m |= YSCR_MOD_CTRL;
+    if (flags & 0x00080000u) m |= YSCR_MOD_ALT;
+    if (flags & 0x00100000u) m |= YSCR_MOD_GUI;
+    return m;
+}
+
+/* A float transfer table (CGGetDisplayTransferByTable) of n entries is the
+ * 8-bit identity: each entry at 8 bits is its index's. The same test as
+ * Windows' ramp, so a table the panel shows unchanged at 8 bits passes. */
+static int yscr__table_identity(const float* t, uint32_t n) {
+    uint32_t i;
+    if (n < 2) return 0;
+    for (i = 0; i < n; i++)
+        if (lrint((double)t[i] * 255.0) != lrint((double)i * 255.0 / (double)(n - 1))) return 0;
+    return 1;
+}
+
+/* What open() reads of a METAL screen's display: the code risk from it. */
+#define YSCR__CS_UNTAGGED 0   /* layer.colorspace nil: no color matching (CAMetalLayer.h) */
+#define YSCR__CS_DISPLAY  1   /* tagged with the display's own space                     */
+#define YSCR__CS_OTHER    2   /* tagged with another space: matched to the display's     */
+typedef struct yscr__mac_color {
+    int    have_screen;            /* NSScreen and its EDR values were read          */
+    double edr, edr_potential;     /* maximum(Potential)ExtendedDynamicRangeColorComponentValue */
+    int    wants_edr;              /* layer.wantsExtendedDynamicRangeContent          */
+    int    colorspace;             /* YSCR__CS_*                                      */
+    int    mode_w, mode_h;         /* the display mode's pixels; 0 = not read         */
+    int    native_w, native_h;     /* the panel's: a mode with the native flag; 0 = none */
+    int    win_w, win_h;           /* the window's pixels (caps.mode)                 */
+    int    windowed;
+    int    gamma_ok;               /* os_gamma identity, set or identity(kept)        */
+} yscr__mac_color;
+
+/* ADVANCED_COLOR: the display can show EDR or shows it now (an HDR mode,
+ * an XDR panel: macOS maps SDR values into its range), the layer asks for
+ * EDR, or the layer is tagged with a space that is not the display's
+ * (ColorSync converts it). SCALED, fullscreen only as on Windows: the mode
+ * is not the panel's own pixels, or the window's pixels are not the
+ * mode's (the compositor scales them). STATE_UNKNOWN when either could
+ * not be read. */
+static uint16_t yscr__mac_risk(const yscr__mac_color* c) {
+    uint16_t r = 0;
+    if (!c->have_screen) r |= YSCR_CODE_RISK_STATE_UNKNOWN;
+    else if (c->edr > 1.0 + 1e-6 || c->edr_potential > 1.0 + 1e-6 || c->wants_edr || c->colorspace == YSCR__CS_OTHER)
+        r |= YSCR_CODE_RISK_ADVANCED_COLOR;
+    if (!c->mode_w || !c->native_w) r |= YSCR_CODE_RISK_STATE_UNKNOWN;
+    else if (!c->windowed && (c->mode_w != c->native_w || c->mode_h != c->native_h ||
+                              (c->win_w && (c->win_w != c->mode_w || c->win_h != c->mode_h))))
+        r |= YSCR_CODE_RISK_SCALED;
+    if (!c->gamma_ok) r |= YSCR_CODE_RISK_GAMMA;
+    return r;
+}
+
+/* IOHIDValues into raw mouse reports (INPUT, "Raw mice", macOS). IOKit
+ * parses the device's reports and calls back once per element that
+ * changed, each value with its report's time stamp, so the values of one
+ * report share (device, time): a value with another device or time
+ * closes the report before it, and the reader closes the last one when
+ * its run loop goes idle. */
+typedef struct yscr__hid_acc {
+    int              have;
+    uint32_t         device;
+    int64_t          t;
+    yscr_mouse_event e;
+} yscr__hid_acc;
+
+static int32_t yscr__sat_add32(int32_t a, int64_t b) {
+    int64_t s = (int64_t)a + b;
+    return (int32_t)(s > 2147483647LL ? 2147483647LL : s < -2147483647LL ? -2147483647LL : s);
+}
+
+static int16_t yscr__sat_add16(int16_t a, int64_t b) {
+    int64_t s = (int64_t)a + b;
+    return (int16_t)(s > 32767 ? 32767 : s < -32767 ? -32767 : s);
+}
+
+/* An absolute axis's value as 0..65535 of its logical range. */
+static int32_t yscr__hid_abs(int64_t v, int64_t lmin, int64_t lmax) {
+    double x;
+    if (lmax <= lmin) return 0;
+    x = (double)(v - lmin) * 65535.0 / (double)(lmax - lmin);
+    return (int32_t)(x < 0 ? 0 : x > 65535.0 ? 65535 : x + 0.5);
+}
+
+/* One value. Returns 1 when *done holds the report the value closed. */
+static int yscr__hid_add(yscr__hid_acc* a, uint32_t device, int64_t t, uint32_t page, uint32_t usage, int64_t v,
+                         int relative, int64_t lmin, int64_t lmax, yscr_mouse_event* done) {
+    static const uint8_t button[5] = { YSCR_MOUSE_LEFT, YSCR_MOUSE_RIGHT, YSCR_MOUSE_MIDDLE, YSCR_MOUSE_X1,
+                                       YSCR_MOUSE_X2 };
+    int closed = 0, used = 1;
+    yscr_mouse_event* e = &a->e;
+    if (a->have && (a->device != device || a->t != t)) {
+        *done = a->e;
+        a->have = 0;
+        closed = 1;
+    }
+    if (!a->have) {
+        memset(e, 0, sizeof *e);
+        e->t = t;
+        e->device = device;
+    }
+    if (page == 1 && (usage == 0x30 || usage == 0x31)) {          /* X, Y */
+        int32_t* axis = usage == 0x30 ? &e->dx : &e->dy;
+        if (relative) *axis = yscr__sat_add32(*axis, v);
+        else { *axis = yscr__hid_abs(v, lmin, lmax); e->flags |= YSCR_MOUSE_ABSOLUTE; }
+    } else if (page == 1 && usage == 0x38) {                       /* the wheel, away from the user positive */
+        e->wheel = yscr__sat_add16(e->wheel, v * 120);
+    } else if (page == 0x0C && usage == 0x238) {                   /* AC Pan, the horizontal wheel */
+        e->hwheel = yscr__sat_add16(e->hwheel, v * 120);
+    } else if (page == 9 && usage >= 1 && usage <= 5) {            /* buttons: 1 left, 2 right, 3 middle */
+        if (v) e->down |= button[usage - 1];
+        else e->up |= button[usage - 1];
+    } else {
+        used = 0;
+    }
+    if (used && !a->have) {
+        a->have = 1;
+        a->device = device;
+        a->t = t;
+    }
+    return closed;
+}
+
+/* The report still open, when the reader goes idle. */
+static int yscr__hid_flush(yscr__hid_acc* a, yscr_mouse_event* done) {
+    if (!a->have) return 0;
+    *done = a->e;
+    a->have = 0;
+    return 1;
+}
+
 #if defined(YSCR__METAL)
 
 /* --- Metal presenter (macOS) ------------------------------------------------
@@ -6058,9 +6375,9 @@ typedef char yscr__mtl_fits[sizeof(yscr__mtl) <= sizeof(((yscr_screen*)0)->backe
 
 static int64_t yscr__mtl_secs(double t) { return t > 0 ? (int64_t)llround(t * 1e9) : 0; }
 
-static uint64_t yscr__mach_read(void) {
+/* mach ticks in ns (IOHIDValueGetTimeStamp gives ticks) */
+static uint64_t yscr__mach_ns(uint64_t t) {
     static uint32_t num, den;
-    uint64_t t = mach_absolute_time();
     if (!den) {
         mach_timebase_info_data_t tb;
         mach_timebase_info(&tb);
@@ -6068,6 +6385,8 @@ static uint64_t yscr__mach_read(void) {
     }
     return (t / den) * num + (t % den) * num / den;
 }
+
+static uint64_t yscr__mach_read(void) { return yscr__mach_ns(mach_absolute_time()); }
 
 /* The ysp_rt time of mach ns: identical from ysp/rt.h v0.10.0 on (the
  * offset is then 0 to the bracket); before, CLOCK_MONOTONIC, which counts
@@ -6354,6 +6673,12 @@ static int yscr__mtl_open(void* vctx, const yscr_presenter_open* in, yscr_caps* 
     yscr__vo(m->layer, yscr__mac.setDevice, m->device);
     yscr__vu(m->layer, yscr__mac.setPixelFormat, m->bits10 ? YSCR__MTL_BGR10A2 : YSCR__MTL_BGRA8);
     yscr__vb(m->layer, yscr__mac.setFramebufferOnly, 0);   /* the patch, codes and read-back are blits */
+    /* No color matching (v0.16.0): the layer came tagged sRGB (read at
+     * open on the M27Q, SDL 3.4.0), so ColorSync converted every value from
+     * sRGB to the display's profile; nil means "no colormatching occurs"
+     * (CAMetalLayer.h), so a code value and a stimulus value reach the
+     * display as drawn, as on Windows' SDR path. */
+    YSCR__MSG(void, yscr__id, void*, void*)(m->layer, yscr__mac.sel("setColorspace:"), NULL);
     yscr__vu(m->layer, yscr__mac.setMaxDrawables, YSCR__MTL_DRAWABLES);
     yscr__vb(m->layer, yscr__mac.setDisplaySync, 1);
     yscr__vb(m->layer, yscr__mac.setTimeout, 1);   /* nextDrawable gives up after 1 s */
@@ -6851,6 +7176,35 @@ static int64_t yscr__nsm_stamp(const SDL_Event* ev, int64_t s_rt) {
     return yscr__nsm_pick(snap, head, &yscr__nsm.st, cls, ev->common.timestamp, s_rt, yscr__nsm.mach_off);
 }
 
+/* The pick takes its entry, so an SDL event is paired once: yscr_poll()
+ * pairs it and yscr_event_input() on the same event finds the result
+ * here (v0.16.0). The last 16 events paired, keyed by SDL's stamp, type
+ * and key or button; the thread that polls. */
+#define YSCR__NSM_MEMO 16
+static struct { uint64_t ticks; uint32_t type, code; int64_t t_os; } yscr__nsm_memo[YSCR__NSM_MEMO];
+static uint32_t yscr__nsm_memo_next;
+
+static int64_t yscr__nsm_stamp_once(const SDL_Event* ev, int64_t s_rt) {
+    uint32_t code, i;
+    int64_t t;
+    if (ev->type != SDL_EVENT_KEY_DOWN && ev->type != SDL_EVENT_KEY_UP && ev->type != SDL_EVENT_MOUSE_BUTTON_DOWN &&
+        ev->type != SDL_EVENT_MOUSE_BUTTON_UP)
+        return 0;
+    code = ev->type == SDL_EVENT_KEY_DOWN || ev->type == SDL_EVENT_KEY_UP ? (uint32_t)ev->key.scancode
+                                                                          : (uint32_t)ev->button.button;
+    for (i = 0; i < YSCR__NSM_MEMO; i++)
+        if (yscr__nsm_memo[i].ticks == ev->common.timestamp && yscr__nsm_memo[i].type == ev->type &&
+            yscr__nsm_memo[i].code == code && yscr__nsm_memo[i].ticks)
+            return yscr__nsm_memo[i].t_os;
+    t = yscr__nsm_stamp(ev, s_rt);
+    i = yscr__nsm_memo_next++ % YSCR__NSM_MEMO;
+    yscr__nsm_memo[i].ticks = ev->common.timestamp;
+    yscr__nsm_memo[i].type = ev->type;
+    yscr__nsm_memo[i].code = code;
+    yscr__nsm_memo[i].t_os = t;
+    return t;
+}
+
 static yscr_proc yscr__mtl_gl_proc(void* vctx, const char* name) {
     (void)vctx;
     return yscr__mac.eglGetProcAddress ? yscr__mac.eglGetProcAddress(name) : NULL;
@@ -6869,6 +7223,878 @@ static const yscr_presenter yscr__mtl_presenter = {
     yscr__mtl_completions, yscr__mtl_gl_proc, yscr__mtl_bind, yscr__mtl_describe,
     yscr__mtl_gpu_done
 };
+
+/* --- macOS: the panic watchdog, the OS gamma ramp, the code risk state and
+ * raw mice (v0.16.0) ------------------------------------------------------
+ * The calls the Windows side makes through user32 and gdi32, made through
+ * CoreGraphics, CoreFoundation, IOKit and libdispatch, loaded at run time
+ * as the presenter's are. The rules are the pure functions above. */
+
+typedef void* yscr__cf;   /* any CFTypeRef */
+typedef void (*yscr__cf_observer_fn)(yscr__cf, unsigned long, void*);
+typedef void* (*yscr__cg_tap_fn)(void*, uint32_t, void*, void*);
+typedef void (*yscr__hid_value_fn)(void*, int32_t, void*, void*);
+typedef void (*yscr__hid_device_fn)(void*, int32_t, void*, void*);
+
+static struct {
+    int   state;                       /* 0 not tried, 1 loaded, -1 failed  */
+    char  why[96];
+    void* iokit;
+    /* CoreFoundation */
+    yscr__cf (*CFRunLoopGetCurrent)(void);
+    yscr__cf (*CFRunLoopGetMain)(void);
+    void (*CFRunLoopStop)(yscr__cf);
+    void (*CFRunLoopWakeUp)(yscr__cf);
+    void (*CFRunLoopAddSource)(yscr__cf, yscr__cf, const void*);
+    void (*CFRunLoopAddObserver)(yscr__cf, yscr__cf, const void*);
+    void (*CFRunLoopRemoveObserver)(yscr__cf, yscr__cf, const void*);
+    yscr__cf (*CFRunLoopObserverCreate)(const void*, unsigned long, unsigned char, long, yscr__cf_observer_fn, void*);
+    yscr__cf (*CFMachPortCreateRunLoopSource)(const void*, yscr__cf, long);
+    void (*CFMachPortInvalidate)(yscr__cf);
+    yscr__cf (*CFNumberCreate)(const void*, long, const void*);
+    unsigned char (*CFNumberGetValue)(yscr__cf, long, void*);
+    yscr__cf (*CFDictionaryCreate)(const void*, const void**, const void**, long, const void*, const void*);
+    unsigned char (*CFStringGetCString)(yscr__cf, char*, long, uint32_t);
+    unsigned long (*CFGetTypeID)(yscr__cf);
+    unsigned long (*CFStringGetTypeID)(void);
+    long (*CFSetGetCount)(yscr__cf);
+    void (*CFSetGetValues)(yscr__cf, const void**);
+    long (*CFArrayGetCount)(yscr__cf);
+    const void* (*CFArrayGetValueAtIndex)(yscr__cf, long);
+    unsigned char (*CFEqual)(yscr__cf, yscr__cf);
+    const void* dict_keys;             /* &kCFTypeDictionaryKeyCallBacks    */
+    const void* dict_values;           /* &kCFTypeDictionaryValueCallBacks  */
+    const void* cf_true;               /* kCFBooleanTrue                    */
+    /* CoreGraphics */
+    yscr__cf (*CGEventTapCreate)(uint32_t, uint32_t, uint32_t, uint64_t, yscr__cg_tap_fn, void*);
+    void (*CGEventTapEnable)(yscr__cf, unsigned char);
+    int64_t (*CGEventGetIntegerValueField)(yscr__cf, uint32_t);
+    uint64_t (*CGEventGetFlags)(yscr__cf);
+    int32_t (*CGGetDisplayTransferByTable)(uint32_t, uint32_t, float*, float*, float*, uint32_t*);
+    int32_t (*CGSetDisplayTransferByTable)(uint32_t, uint32_t, const float*, const float*, const float*);
+    uint32_t (*CGDisplayGammaTableCapacity)(uint32_t);
+    yscr__cf (*CGDisplayCopyDisplayMode)(uint32_t);
+    yscr__cf (*CGDisplayCopyAllDisplayModes)(uint32_t, yscr__cf);
+    size_t (*CGDisplayModeGetPixelWidth)(yscr__cf);
+    size_t (*CGDisplayModeGetPixelHeight)(yscr__cf);
+    uint32_t (*CGDisplayModeGetIOFlags)(yscr__cf);
+    void (*CGDisplayModeRelease)(yscr__cf);
+    yscr__cf (*CGColorSpaceCopyName)(yscr__cf);
+    const void* dup_low_res;           /* kCGDisplayShowDuplicateLowResolutionModes */
+    /* IOKit */
+    yscr__cf (*IOHIDManagerCreate)(const void*, uint32_t);
+    void (*IOHIDManagerSetDeviceMatching)(yscr__cf, yscr__cf);
+    void (*IOHIDManagerRegisterDeviceMatchingCallback)(yscr__cf, yscr__hid_device_fn, void*);
+    void (*IOHIDManagerRegisterDeviceRemovalCallback)(yscr__cf, yscr__hid_device_fn, void*);
+    void (*IOHIDManagerRegisterInputValueCallback)(yscr__cf, yscr__hid_value_fn, void*);
+    void (*IOHIDManagerScheduleWithRunLoop)(yscr__cf, yscr__cf, const void*);
+    void (*IOHIDManagerUnscheduleFromRunLoop)(yscr__cf, yscr__cf, const void*);
+    int32_t (*IOHIDManagerOpen)(yscr__cf, uint32_t);
+    int32_t (*IOHIDManagerClose)(yscr__cf, uint32_t);
+    yscr__cf (*IOHIDManagerCopyDevices)(yscr__cf);
+    yscr__cf (*IOHIDValueGetElement)(yscr__cf);
+    long (*IOHIDValueGetIntegerValue)(yscr__cf);
+    uint64_t (*IOHIDValueGetTimeStamp)(yscr__cf);
+    uint32_t (*IOHIDElementGetUsagePage)(yscr__cf);
+    uint32_t (*IOHIDElementGetUsage)(yscr__cf);
+    unsigned char (*IOHIDElementIsRelative)(yscr__cf);
+    long (*IOHIDElementGetLogicalMin)(yscr__cf);
+    long (*IOHIDElementGetLogicalMax)(yscr__cf);
+    yscr__cf (*IOHIDElementGetDevice)(yscr__cf);
+    yscr__cf (*IOHIDDeviceGetProperty)(yscr__cf, yscr__cf);
+    uint32_t (*IOHIDDeviceGetService)(yscr__cf);
+    int32_t (*IORegistryEntryGetRegistryEntryID)(uint32_t, uint64_t*);
+    uint32_t (*IOHIDCheckAccess)(uint32_t);   /* optional: macOS 10.15 */
+    /* libdispatch */
+    void (*dispatch_async_f)(void*, void*, void (*)(void*));
+    void* main_q;                      /* &_dispatch_main_q: dispatch_get_main_queue() */
+    yscr__cf product;                  /* CFSTR("Product"), kIOHIDProductKey */
+} yscr__mx;
+
+static const char* yscr__mx_load(void) {
+    const char* miss = NULL;
+    if (yscr__mx.state > 0) return NULL;
+    if (yscr__mx.state < 0) return yscr__mx.why;
+    if (yscr__mac.state <= 0) return "macOS's frameworks were not loaded (open a METAL screen)";
+    yscr__mx.iokit = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY | RTLD_LOCAL);
+#define YSCR__X(lib, f) do { yscr_proc p_ = yscr__mac_sym((lib), #f); \
+        if (!p_ && !miss) miss = #f; memcpy((void*)&yscr__mx.f, &p_, sizeof p_); } while (0)
+#define YSCR__XD(lib, f, n) do { void* p_ = (lib) ? dlsym((lib), n) : NULL; \
+        if (!p_ && !miss) miss = n; yscr__mx.f = p_; } while (0)
+    YSCR__X(yscr__mac.lib[1], CFRunLoopGetCurrent); YSCR__X(yscr__mac.lib[1], CFRunLoopGetMain);
+    YSCR__X(yscr__mac.lib[1], CFRunLoopStop); YSCR__X(yscr__mac.lib[1], CFRunLoopWakeUp);
+    YSCR__X(yscr__mac.lib[1], CFRunLoopAddSource); YSCR__X(yscr__mac.lib[1], CFRunLoopAddObserver);
+    YSCR__X(yscr__mac.lib[1], CFRunLoopRemoveObserver); YSCR__X(yscr__mac.lib[1], CFRunLoopObserverCreate);
+    YSCR__X(yscr__mac.lib[1], CFMachPortCreateRunLoopSource); YSCR__X(yscr__mac.lib[1], CFMachPortInvalidate);
+    YSCR__X(yscr__mac.lib[1], CFNumberCreate); YSCR__X(yscr__mac.lib[1], CFNumberGetValue);
+    YSCR__X(yscr__mac.lib[1], CFDictionaryCreate); YSCR__X(yscr__mac.lib[1], CFStringGetCString);
+    YSCR__X(yscr__mac.lib[1], CFGetTypeID); YSCR__X(yscr__mac.lib[1], CFStringGetTypeID);
+    YSCR__X(yscr__mac.lib[1], CFSetGetCount); YSCR__X(yscr__mac.lib[1], CFSetGetValues);
+    YSCR__X(yscr__mac.lib[1], CFArrayGetCount); YSCR__X(yscr__mac.lib[1], CFArrayGetValueAtIndex);
+    YSCR__X(yscr__mac.lib[1], CFEqual);
+    YSCR__XD(yscr__mac.lib[1], dict_keys, "kCFTypeDictionaryKeyCallBacks");
+    YSCR__XD(yscr__mac.lib[1], dict_values, "kCFTypeDictionaryValueCallBacks");
+    {   /* CFBooleanRef and CFStringRef constants: the value at the symbol */
+        void* p = yscr__mac.lib[1] ? dlsym(yscr__mac.lib[1], "kCFBooleanTrue") : NULL;
+        if (p) memcpy((void*)&yscr__mx.cf_true, p, sizeof(void*)); else if (!miss) miss = "kCFBooleanTrue";
+        p = yscr__mac.lib[2] ? dlsym(yscr__mac.lib[2], "kCGDisplayShowDuplicateLowResolutionModes") : NULL;
+        if (p) memcpy((void*)&yscr__mx.dup_low_res, p, sizeof(void*));
+        else if (!miss) miss = "kCGDisplayShowDuplicateLowResolutionModes";
+    }
+    YSCR__X(yscr__mac.lib[2], CGEventTapCreate); YSCR__X(yscr__mac.lib[2], CGEventTapEnable);
+    YSCR__X(yscr__mac.lib[2], CGEventGetIntegerValueField); YSCR__X(yscr__mac.lib[2], CGEventGetFlags);
+    YSCR__X(yscr__mac.lib[2], CGGetDisplayTransferByTable); YSCR__X(yscr__mac.lib[2], CGSetDisplayTransferByTable);
+    YSCR__X(yscr__mac.lib[2], CGDisplayGammaTableCapacity); YSCR__X(yscr__mac.lib[2], CGDisplayCopyDisplayMode);
+    YSCR__X(yscr__mac.lib[2], CGDisplayCopyAllDisplayModes); YSCR__X(yscr__mac.lib[2], CGDisplayModeGetPixelWidth);
+    YSCR__X(yscr__mac.lib[2], CGDisplayModeGetPixelHeight); YSCR__X(yscr__mac.lib[2], CGDisplayModeGetIOFlags);
+    YSCR__X(yscr__mac.lib[2], CGDisplayModeRelease); YSCR__X(yscr__mac.lib[2], CGColorSpaceCopyName);
+    YSCR__X(yscr__mx.iokit, IOHIDManagerCreate); YSCR__X(yscr__mx.iokit, IOHIDManagerSetDeviceMatching);
+    YSCR__X(yscr__mx.iokit, IOHIDManagerRegisterDeviceMatchingCallback);
+    YSCR__X(yscr__mx.iokit, IOHIDManagerRegisterDeviceRemovalCallback);
+    YSCR__X(yscr__mx.iokit, IOHIDManagerRegisterInputValueCallback);
+    YSCR__X(yscr__mx.iokit, IOHIDManagerScheduleWithRunLoop); YSCR__X(yscr__mx.iokit, IOHIDManagerUnscheduleFromRunLoop);
+    YSCR__X(yscr__mx.iokit, IOHIDManagerOpen); YSCR__X(yscr__mx.iokit, IOHIDManagerClose);
+    YSCR__X(yscr__mx.iokit, IOHIDManagerCopyDevices); YSCR__X(yscr__mx.iokit, IOHIDValueGetElement);
+    YSCR__X(yscr__mx.iokit, IOHIDValueGetIntegerValue); YSCR__X(yscr__mx.iokit, IOHIDValueGetTimeStamp);
+    YSCR__X(yscr__mx.iokit, IOHIDElementGetUsagePage); YSCR__X(yscr__mx.iokit, IOHIDElementGetUsage);
+    YSCR__X(yscr__mx.iokit, IOHIDElementIsRelative); YSCR__X(yscr__mx.iokit, IOHIDElementGetLogicalMin);
+    YSCR__X(yscr__mx.iokit, IOHIDElementGetLogicalMax); YSCR__X(yscr__mx.iokit, IOHIDElementGetDevice);
+    YSCR__X(yscr__mx.iokit, IOHIDDeviceGetProperty); YSCR__X(yscr__mx.iokit, IOHIDDeviceGetService);
+    YSCR__X(yscr__mx.iokit, IORegistryEntryGetRegistryEntryID);
+    YSCR__X(RTLD_DEFAULT, dispatch_async_f);
+    yscr__mx.main_q = dlsym(RTLD_DEFAULT, "_dispatch_main_q");
+    if (!yscr__mx.main_q && !miss) miss = "_dispatch_main_q";
+#undef YSCR__X
+#undef YSCR__XD
+    {
+        yscr_proc p = yscr__mac_sym(yscr__mx.iokit, "IOHIDCheckAccess");
+        memcpy((void*)&yscr__mx.IOHIDCheckAccess, &p, sizeof p);
+    }
+    yscr__mx.product = (yscr__cf)yscr__mac.CFStringCreateWithCString(NULL, "Product", 0x08000100u);
+    if (!yscr__mx.product && !miss) miss = "a CFString";
+    if (miss) {
+        yscr__set_error(yscr__mx.why, sizeof yscr__mx.why, "macOS's %s is missing", miss);
+        yscr__mx.state = -1;
+        return yscr__mx.why;
+    }
+    yscr__mx.state = 1;
+    return NULL;
+}
+
+/* A CFString of a C string; the caller releases it. */
+static yscr__cf yscr__mx_str(const char* s) {
+    return (yscr__cf)yscr__mac.CFStringCreateWithCString(NULL, s, 0x08000100u);
+}
+
+/* The CGDirectDisplayID of the screen's window: NSScreen's NSScreenNumber,
+ * else the display under the window's center. 0 = none. */
+static uint32_t yscr__mx_display(yscr__mtl* m) {
+    yscr__id screen = m->nswin ? yscr__o0(m->nswin, yscr__mac.screen_) : NULL;
+    uint32_t id = 0;
+    if (screen) {
+        yscr__id dd = yscr__o0(screen, yscr__mac.sel("deviceDescription"));
+        yscr__cf key = yscr__mx_str("NSScreenNumber");
+        yscr__id num = dd && key ? YSCR__MSG(yscr__id, yscr__id, void*, yscr__cf)(dd, yscr__mac.sel("objectForKey:"), key) : NULL;
+        if (num) id = (uint32_t)YSCR__MSG(unsigned int, yscr__id, void*)(num, yscr__mac.sel("unsignedIntValue"));
+        if (key) yscr__mac.CFRelease(key);
+    }
+    if (!id && m->win) {
+        int x = 0, y = 0, w = 0, h = 0;
+        uint32_t ids[4], nd = 0;
+        yscr__cgpoint c;
+        SDL_GetWindowPosition((SDL_Window*)m->win, &x, &y);
+        SDL_GetWindowSize((SDL_Window*)m->win, &w, &h);
+        c.x = x + w / 2.0; c.y = y + h / 2.0;
+        if (yscr__mac.CGGetDisplaysWithPoint(c, 4, ids, &nd) == 0 && nd > 0) id = ids[0];
+    }
+    return id;
+}
+
+/* --- the OS gamma ramp (OS GAMMA), macOS ---------------------------------
+ * Tables this process set, to put back at close, at exit, on SDL's quit
+ * and in a panic. The window server also puts a process's table back when
+ * the process ends, even by SIGKILL (measured, docs/screen.md). */
+#define YSCR__GAMMA_MAX 8
+#define YSCR__GAMMA_N   1024   /* the M27Q's capacity; a larger table is read at 1024 */
+static struct yscr__gamma_entry {
+    volatile int32_t used;
+    uint32_t display, n;
+    float    saved[3][YSCR__GAMMA_N];
+} yscr__gamma[YSCR__GAMMA_MAX];
+static int yscr__gamma_atexit, yscr__gamma_watch;
+
+/* close(), exit and the panic watchdog's thread can each get here: the
+ * exchange lets one of them restore an entry. CGSetDisplayTransferByTable
+ * talks to the window server and needs no thread of its own. */
+static void yscr__gamma_restore(int k) {
+    if (k < 0 || k >= YSCR__GAMMA_MAX) return;
+    if (!yscr__a_cas(&yscr__gamma[k].used, 1, 0)) return;
+    if (yscr__mx.CGSetDisplayTransferByTable)
+        yscr__mx.CGSetDisplayTransferByTable(yscr__gamma[k].display, yscr__gamma[k].n, yscr__gamma[k].saved[0],
+                                             yscr__gamma[k].saved[1], yscr__gamma[k].saved[2]);
+}
+
+static void yscr__gamma_restore_all(void) {
+    int k;
+    for (k = 0; k < YSCR__GAMMA_MAX; k++) yscr__gamma_restore(k);
+}
+
+static bool SDLCALL yscr__gamma_quit_watch(void* ud, SDL_Event* e) {
+    (void)ud;
+    if (e && e->type == SDL_EVENT_QUIT) yscr__gamma_restore_all();
+    return true;
+}
+
+/* Test seam, not API: tests/adapt/screen_metal_test.c defines
+ * YSCR__MAC_GAMMA_SET(display, n, r, g, b) to refuse a set, as a display
+ * that takes no table would. */
+#ifndef YSCR__MAC_GAMMA_SET
+#define YSCR__MAC_GAMMA_SET(d, n, r, g, b) yscr__mx.CGSetDisplayTransferByTable((d), (n), (r), (g), (b))
+#endif
+
+/* The table: identity (it was), set (the header set the identity and read
+ * it back), refused (macOS did not keep it), unreadable; the same with
+ * (kept) when the header may not change it. 1 when the word is identity,
+ * set or identity(kept). */
+static int yscr__mx_gamma(yscr_screen* s, const yscr_desc* desc, uint32_t did, const char** word) {
+    static float cur[3][YSCR__GAMMA_N], id[3][YSCR__GAMMA_N], back[3][YSCR__GAMMA_N];   /* main thread: open() */
+    uint32_t cap = did ? yscr__mx.CGDisplayGammaTableCapacity(did) : 0, n = 0, nb = 0, i;
+    int k, c;
+    if (cap > YSCR__GAMMA_N) cap = YSCR__GAMMA_N;
+    if (cap < 2 || yscr__mx.CGGetDisplayTransferByTable(did, cap, cur[0], cur[1], cur[2], &n) != 0 || n < 2) {
+        *word = desc->windowed || desc->keep_os_gamma ? "unreadable(kept)" : "unreadable";
+        return 0;
+    }
+    if (yscr__table_identity(cur[0], n) && yscr__table_identity(cur[1], n) && yscr__table_identity(cur[2], n)) {
+        *word = desc->windowed || desc->keep_os_gamma ? "identity(kept)" : "identity";
+        return 1;
+    }
+    /* a window never touches the table, which the whole display shares */
+    if (desc->windowed || desc->keep_os_gamma) { *word = "not-identity(kept)"; return 0; }
+    *word = "refused";
+    for (k = 0; k < YSCR__GAMMA_MAX && yscr__a_load(&yscr__gamma[k].used); k++) { }
+    if (k == YSCR__GAMMA_MAX) return 0;
+    for (c = 0; c < 3; c++) for (i = 0; i < n; i++) id[c][i] = (float)i / (float)(n - 1);
+    /* registered before the set, so an exit at any point puts the user's
+     * table back */
+    yscr__gamma[k].display = did;
+    yscr__gamma[k].n = n;
+    memcpy(yscr__gamma[k].saved, cur, sizeof cur);
+    yscr__a_store(&yscr__gamma[k].used, 1);
+    if (!yscr__gamma_atexit) { yscr__gamma_atexit = 1; atexit(yscr__gamma_restore_all); }
+    if (!yscr__gamma_watch) yscr__gamma_watch = SDL_AddEventWatch(yscr__gamma_quit_watch, NULL) ? 1 : 0;
+    if (YSCR__MAC_GAMMA_SET(did, n, id[0], id[1], id[2]) == 0 &&
+        yscr__mx.CGGetDisplayTransferByTable(did, cap, back[0], back[1], back[2], &nb) == 0 &&
+        yscr__table_identity(back[0], nb) && yscr__table_identity(back[1], nb) && yscr__table_identity(back[2], nb)) {
+        s->gamma_owned = k + 1;
+        *word = "set";
+        return 1;
+    }
+    yscr__gamma_restore(k);   /* a display may take a table and not keep it */
+    return 0;
+}
+
+static void yscr__mtl_gamma_release(yscr_screen* s) {
+    int k, any = 0;
+    if (s->gamma_owned) yscr__gamma_restore(s->gamma_owned - 1);
+    s->gamma_owned = 0;
+    for (k = 0; k < YSCR__GAMMA_MAX; k++) any |= yscr__a_load(&yscr__gamma[k].used);
+    if (!any && yscr__gamma_watch) { SDL_RemoveEventWatch(yscr__gamma_quit_watch, NULL); yscr__gamma_watch = 0; }
+}
+
+/* The panel's own pixels: the display modes with the native flag
+ * (kDisplayModeNativeFlag, 0x02000000), largest first. 0 when none has it. */
+static void yscr__mx_native(uint32_t did, int* w, int* h) {
+    const void* k[1];
+    const void* v[1];
+    yscr__cf opts, all;
+    long i, n;
+    *w = *h = 0;
+    k[0] = yscr__mx.dup_low_res;
+    v[0] = yscr__mx.cf_true;
+    opts = yscr__mx.CFDictionaryCreate(NULL, k, v, 1, yscr__mx.dict_keys, yscr__mx.dict_values);
+    all = yscr__mx.CGDisplayCopyAllDisplayModes(did, opts);
+    n = all ? yscr__mx.CFArrayGetCount(all) : 0;
+    for (i = 0; i < n; i++) {
+        yscr__cf md = (yscr__cf)yscr__mx.CFArrayGetValueAtIndex(all, i);
+        int mw = (int)yscr__mx.CGDisplayModeGetPixelWidth(md), mh = (int)yscr__mx.CGDisplayModeGetPixelHeight(md);
+        if ((yscr__mx.CGDisplayModeGetIOFlags(md) & 0x02000000u) && (int64_t)mw * mh > (int64_t)*w * *h) { *w = mw; *h = mh; }
+    }
+    if (all) yscr__mac.CFRelease(all);
+    if (opts) yscr__mac.CFRelease(opts);
+}
+
+/* Test seam, not API: tests/adapt/screen_metal_test.c defines
+ * YSCR__MAC_COLOR(c) to change what open() read (an HDR display, a
+ * tagged layer), as no such display was attached. */
+#ifndef YSCR__MAC_COLOR
+#define YSCR__MAC_COLOR(c) ((void)(c))
+#endif
+
+/* open(): what the header can read of the display's color path (CODES:
+ * code_risk), and the OS gamma ramp for a fullscreen screen unless
+ * desc.keep_os_gamma (OS GAMMA). On the main thread, after the presenter's
+ * open. */
+static void yscr__mtl_display_state(yscr_screen* s, const yscr_desc* desc) {
+    yscr__mtl* m = (yscr__mtl*)(void*)s->backend_mem;
+    yscr__mac_color c;
+    const char* gamma = "unreadable";
+    char csname[48] = "";
+    uint32_t did;
+    yscr__id screen;
+    void* pool;
+    memset(&c, 0, sizeof c);
+    c.windowed = desc->windowed ? 1 : 0;
+    c.win_w = s->caps.mode.w;
+    c.win_h = s->caps.mode.h;
+    s->code_risk = 0;
+    if (yscr__mx_load()) {
+        s->code_risk = YSCR_CODE_RISK_STATE_UNKNOWN | YSCR_CODE_RISK_GAMMA;
+        snprintf(s->os_color, sizeof s->os_color, "os_color=unknown(%s)", yscr__mx.why);
+        return;
+    }
+    pool = yscr__mac.pool_push();
+    did = yscr__mx_display(m);
+    screen = m->nswin ? yscr__o0(m->nswin, yscr__mac.screen_) : NULL;
+    if (screen) {
+        c.have_screen = 1;
+        c.edr = YSCR__MSG(double, yscr__id, void*)(screen, yscr__mac.sel("maximumExtendedDynamicRangeColorComponentValue"));
+        c.edr_potential = YSCR__MSG(double, yscr__id, void*)(
+            screen, yscr__mac.sel("maximumPotentialExtendedDynamicRangeColorComponentValue"));
+    }
+    if (m->layer) {
+        yscr__cf cs = YSCR__MSG(yscr__cf, yscr__id, void*)(m->layer, yscr__mac.sel("colorspace"));
+        c.wants_edr = YSCR__MSG(signed char, yscr__id, void*)(m->layer, yscr__mac.sel("wantsExtendedDynamicRangeContent")) != 0;
+        c.colorspace = YSCR__CS_UNTAGGED;
+        if (cs) {
+            yscr__id ns = screen ? yscr__o0(screen, yscr__mac.sel("colorSpace")) : NULL;
+            yscr__cf dcs = ns ? YSCR__MSG(yscr__cf, yscr__id, void*)(ns, yscr__mac.sel("CGColorSpace")) : NULL;
+            yscr__cf nm = yscr__mx.CGColorSpaceCopyName(cs);   /* NULL for an ICC profile's space */
+            c.colorspace = dcs && yscr__mx.CFEqual(cs, dcs) ? YSCR__CS_DISPLAY : YSCR__CS_OTHER;
+            if (nm) {
+                char full[96];
+                const char* k;
+                if (yscr__mx.CFStringGetCString(nm, full, (long)sizeof full, 0x08000100u)) {
+                    k = strncmp(full, "kCGColorSpace", 13) == 0 ? full + 13 : full;
+                    snprintf(csname, sizeof csname, "(%s)", k);
+                }
+                yscr__mac.CFRelease(nm);
+            } else {
+                yscr__copy(csname, sizeof csname, "(icc)");
+            }
+        }
+    } else {
+        c.have_screen = 0;
+    }
+    if (did) {
+        yscr__cf md = yscr__mx.CGDisplayCopyDisplayMode(did);
+        if (md) {
+            c.mode_w = (int)yscr__mx.CGDisplayModeGetPixelWidth(md);
+            c.mode_h = (int)yscr__mx.CGDisplayModeGetPixelHeight(md);
+            yscr__mx.CGDisplayModeRelease(md);
+        }
+        yscr__mx_native(did, &c.native_w, &c.native_h);
+        c.gamma_ok = yscr__mx_gamma(s, desc, did, &gamma);
+    }
+    yscr__mac.pool_pop(pool);
+    YSCR__MAC_COLOR(&c);
+    s->code_risk = yscr__mac_risk(&c);
+    snprintf(s->os_color, sizeof s->os_color, "display=%u color=%s(edr %.2f/%.2f) layer_cs=%s%s panel=%dx%d "
+             "mode_px=%dx%d os_gamma=%s nightshift=unknown", (unsigned)did,
+             !c.have_screen ? "unknown" : (s->code_risk & YSCR_CODE_RISK_ADVANCED_COLOR) ? "edr-or-matched" : "sdr",
+             c.edr, c.edr_potential,
+             c.colorspace == YSCR__CS_UNTAGGED ? "untagged" : c.colorspace == YSCR__CS_DISPLAY ? "display" : "other",
+             csname, c.native_w, c.native_h, c.mode_w, c.mode_h, gamma);
+}
+
+/* --- the panic watchdog (PANIC), macOS -----------------------------------
+ * The frame loop owns the main thread, so a hung loop also stops the
+ * process's events. A listen-only event tap (CGEventTapCreate at
+ * kCGAnnotatedSessionEventTap, on a thread of its own with its own run
+ * loop) sees each key as the window server routes it, with the process it
+ * goes to (kCGEventTargetUnixProcessID), whatever the main thread does. It
+ * takes nothing: SDL still gets every key. The "window thread" of
+ * Windows is the main run loop here: an observer on it stamps a
+ * heartbeat each time it runs (SDL's pump runs it), and a release is a
+ * function on the main queue (dispatch_async_f), which runs only when the
+ * main thread pumps. */
+#define YSCR__MX_ALIVE_NS 1000000000LL
+static struct {
+    pthread_t        thread;
+    int              have_thread;
+    yscr__cf         loop;          /* the watchdog's run loop                 */
+    yscr__cf         tap, source;
+    yscr__cf         observer;      /* on the main run loop: the heartbeat     */
+    volatile int32_t ready, quit, due, panicking, ended;
+    int              armed;         /* screens armed                           */
+    int32_t          kvk;           /* the key's macOS virtual key code        */
+    int32_t          key_down;      /* the tap's own state of the key: repeats */
+    yscr_panic_fn    fn;
+    void*            ctx;
+    volatile int32_t fn_done;
+    volatile int64_t beat;          /* the main run loop's last pass, rt ns   */
+    volatile int32_t release_req, release_start, release_done;
+    volatile int64_t t_panic, t_release;
+} yscr__wd;
+
+static void yscr__wd_beat(yscr__cf obs, unsigned long activity, void* info) {
+    (void)obs; (void)activity; (void)info;
+    yscr__a_store64(&yscr__wd.beat, yscr__now());
+}
+
+/* The main thread answered within the last second. */
+static int yscr__wd_alive(void) { return yscr__now() - yscr__a_load64(&yscr__wd.beat) < YSCR__MX_ALIVE_NS; }
+
+/* On the main thread, from the main queue: the display goes back to the
+ * operator and the process lives. A fullscreen window leaves fullscreen
+ * (which puts back a switched mode) and every window is minimized. */
+static void yscr__wd_release_main(void* arg) {
+    int32_t req = (int32_t)(intptr_t)arg;
+    int i;
+    yscr__a_store(&yscr__wd.release_start, req);
+    for (i = 0; i < YSCR__SLOTS; i++) {
+        yscr_screen* s = yscr__slot[i].s;
+        if (!s || !s->window || s->backend != YSCR_BACKEND_METAL) continue;
+        if (SDL_GetWindowFlags(s->window) & SDL_WINDOW_FULLSCREEN) SDL_SetWindowFullscreen(s->window, false);
+        SDL_MinimizeWindow(s->window);
+    }
+    SDL_ShowCursor();
+    yscr__a_store64(&yscr__wd.t_release, yscr__now());
+    yscr__a_store(&yscr__wd.release_done, req);
+}
+
+static void* yscr__wd_last_words(void* arg) {
+    (void)arg;
+    if (yscr__wd.fn) yscr__wd.fn(yscr__wd.ctx);
+    yscr__a_store(&yscr__wd.fn_done, 1);
+    return NULL;
+}
+
+/* Test seam, not API: tests/adapt/screen_metal_test.c defines
+ * YSCR__WD_END(code) to see the end without it (default _exit). */
+#ifndef YSCR__WD_END
+#define YSCR__WD_END(code) _exit(code)
+#endif
+
+/* The frame loop looks hung: release while the main thread answers, else
+ * put back the gamma tables, give panic_fn up to 1 s, and end the process.
+ * _exit, not exit(): exit runs atexit handlers, which can wait on locks
+ * the hung thread holds. The window server takes down the windows and
+ * puts back the tables of a process that ended (measured). */
+static void yscr__panic(void) {
+    int64_t now = yscr__now();
+    int k;
+    if (!yscr__a_cas(&yscr__wd.panicking, 0, 1)) return;
+    yscr__a_store64(&yscr__wd.t_panic, now);
+    if (yscr__wd_alive() && yscr__mx.dispatch_async_f && yscr__mx.main_q) {
+        int32_t req = yscr__a_inc(&yscr__wd.release_req);
+        yscr__mx.dispatch_async_f(yscr__mx.main_q, (void*)(intptr_t)req, yscr__wd_release_main);
+        if (yscr__mx.CFRunLoopWakeUp && yscr__mx.CFRunLoopGetMain) yscr__mx.CFRunLoopWakeUp(yscr__mx.CFRunLoopGetMain());
+        /* 1 s for the main thread to begin, 5 s for it to end (Windows'
+         * numbers: leaving fullscreen in a switched mode takes over 1 s) */
+        for (k = 0; k < 500 && yscr__a_load(&yscr__wd.release_done) != req &&
+                    (k < 100 || yscr__a_load(&yscr__wd.release_start) == req); k++)
+            yrt_sleep_until(yscr__now() + 10000000, 0);
+        if (yscr__a_load(&yscr__wd.release_done) == req) {
+            yscr__gamma_restore_all();
+            yscr__panic_records(now, 1);
+            yscr__abort_push(YSCR_ABORT_PANIC, YSCR__AB_HOOK, 0, 0, now);
+            yscr__a_store(&yscr__released, 1);
+            yscr__a_store(&yscr__wd.panicking, 0);
+            return;
+        }
+    }
+    if (yscr__wd.tap) yscr__mx.CGEventTapEnable(yscr__wd.tap, 0);
+    yscr__panic_records(now, 0);
+    yscr__gamma_restore_all();
+    if (yscr__wd.fn) {
+        pthread_t th;
+        yscr__a_store(&yscr__wd.fn_done, 0);
+        if (pthread_create(&th, NULL, yscr__wd_last_words, NULL) == 0) {
+            pthread_detach(th);
+            for (k = 0; k < 100 && !yscr__a_load(&yscr__wd.fn_done); k++) yrt_sleep_until(yscr__now() + 10000000, 0);
+        }
+    }
+    YSCR__WD_END(YSCR_PANIC_EXIT_CODE);
+    yscr__a_store(&yscr__wd.panicking, 0);   /* the test seam returned */
+}
+
+/* One key from the tap: its virtual key code, down or up, the flags, the
+ * process it goes to and whether a process posted it. Returns 1 when the
+ * panic rule is met. The tap's thread; the core test calls it too. */
+static int yscr__wd_key(int32_t kvk, int down, uint64_t flags, int64_t target_pid, int injected) {
+    if (kvk != yscr__wd.kvk) return 0;
+    if (!yscr__abort_edge(&yscr__wd.key_down, down)) return 0;
+    /* a key for this process only: another program in front takes its own keys */
+    if (target_pid != (int64_t)getpid()) return 0;
+    return yscr__abort_key(yscr__ab.key, yscr__cg_mods(flags), yscr__now(),
+                           YSCR__AB_HOOK | (injected ? YSCR__AB_INJECTED : 0u));
+}
+
+/* A key as the tap reads it; a panic due runs on the watchdog's thread,
+ * after the callback. tests/adapt/screen_metal_test.c calls it from a
+ * thread of its own, as a tap would, when no key can be posted. */
+static void yscr__wd_feed(int32_t kvk, int down, uint64_t flags, int64_t target_pid, int injected) {
+    if (yscr__wd_key(kvk, down, flags, target_pid, injected) && yscr__wd.loop) {
+        yscr__a_store(&yscr__wd.due, 1);
+        yscr__mx.CFRunLoopStop(yscr__wd.loop);
+    }
+}
+
+/* Every key of the session passes here while the watchdog is armed. The
+ * tap only listens, so a slow callback delays no key; it does a few
+ * compares and leaves the panic to its thread's loop. */
+static void* yscr__wd_tap(void* proxy, uint32_t type, void* event, void* info) {
+    (void)proxy; (void)info;
+    if (type == 0xFFFFFFFEu || type == 0xFFFFFFFFu) {   /* disabled by timeout or by user input: on again */
+        if (yscr__wd.tap) yscr__mx.CGEventTapEnable(yscr__wd.tap, 1);
+        return event;
+    }
+    if ((type == 10u || type == 11u) && event) {        /* kCGEventKeyDown, kCGEventKeyUp */
+        int32_t kvk = (int32_t)yscr__mx.CGEventGetIntegerValueField(event, 9);   /* kCGKeyboardEventKeycode */
+        if (kvk == yscr__wd.kvk)
+            yscr__wd_feed(kvk, type == 10u, yscr__mx.CGEventGetFlags(event),
+                          yscr__mx.CGEventGetIntegerValueField(event, 40),          /* kCGEventTargetUnixProcessID */
+                          yscr__mx.CGEventGetIntegerValueField(event, 41) != 0);    /* kCGEventSourceUnixProcessID */
+    }
+    return event;
+}
+
+static void* yscr__wd_main(void* arg) {
+    (void)arg;
+    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);   /* a busy frame thread must not hold it up */
+    yscr__wd.loop = yscr__mx.CFRunLoopGetCurrent();
+    yscr__wd.tap = yscr__mx.CGEventTapCreate(2u /* kCGAnnotatedSessionEventTap */, 0u /* head */,
+                                             1u /* kCGEventTapOptionListenOnly */, (1ull << 10) | (1ull << 11),
+                                             yscr__wd_tap, NULL);
+    yscr__wd.source = yscr__wd.tap ? yscr__mx.CFMachPortCreateRunLoopSource(NULL, yscr__wd.tap, 0) : NULL;
+    if (yscr__wd.source) yscr__mx.CFRunLoopAddSource(yscr__wd.loop, yscr__wd.source, yscr__mac.cfDefaultMode);
+    yscr__a_store(&yscr__wd.ready, yscr__wd.source ? 1 : -1);
+    if (!yscr__wd.source) return NULL;
+    while (!yscr__a_load(&yscr__wd.quit)) {
+        yscr__mac.CFRunLoopRunInMode(yscr__mac.cfDefaultMode, 0.5, 0);
+        if (yscr__a_cas(&yscr__wd.due, 1, 0)) yscr__panic();
+    }
+    yscr__mx.CFMachPortInvalidate(yscr__wd.tap);
+    yscr__mac.CFRelease(yscr__wd.source);
+    yscr__mac.CFRelease(yscr__wd.tap);
+    yscr__wd.source = yscr__wd.tap = NULL;
+    yscr__a_store(&yscr__wd.ended, 1);
+    return NULL;
+}
+
+/* The first armed screen starts the watchdog, with its desc's numbers. On
+ * the main thread (open()). */
+static const char* yscr__wd_arm(yscr_screen* s, const yscr_desc* d) {
+    if (yscr__wd.armed == 0) {
+        const char* e = yscr__mx_load();
+        uint32_t key = yscr__ab.key, sc = 0;
+        int k;
+        if (e) return e;
+        if (key >= 'a' && key <= 'z') sc = (uint32_t)SDL_GetScancodeFromKey((SDL_Keycode)key, NULL);
+        else if (key >= '0' && key <= '9') sc = (uint32_t)SDL_GetScancodeFromKey((SDL_Keycode)key, NULL);
+        if (!sc) sc = yscr__scancode_us(key);
+        yscr__wd.kvk = yscr__kvk_of(sc);
+        if (yscr__wd.kvk < 0) return "desc.panic: the abort key has no macOS key code";
+        yscr__wd.key_down = 0;
+        yscr__wd.fn = d->panic_fn;
+        yscr__wd.ctx = d->panic_ctx;
+        yscr__wd.panicking = yscr__wd.due = yscr__wd.quit = yscr__wd.ready = yscr__wd.ended = 0;
+        yscr__a_store64(&yscr__wd.beat, yscr__now());
+        if (pthread_create(&yscr__wd.thread, NULL, yscr__wd_main, NULL) != 0) return "desc.panic: no watchdog thread";
+        yscr__wd.have_thread = 1;
+        for (k = 0; k < 200 && !yscr__a_load(&yscr__wd.ready); k++) yrt_sleep_until(yscr__now() + 10000000, 0);
+        if (yscr__a_load(&yscr__wd.ready) != 1) {
+            yscr__a_store(&yscr__wd.quit, 1);
+            if (yscr__a_load(&yscr__wd.ready) == 0 && yscr__wd.loop) yscr__mx.CFRunLoopStop(yscr__wd.loop);
+            pthread_join(yscr__wd.thread, NULL);
+            yscr__wd.have_thread = 0;
+            yscr__wd.loop = NULL;
+            return "desc.panic: macOS refused the keyboard event tap: allow this program (or the terminal or app "
+                   "that runs it) in System Settings > Privacy & Security > Input Monitoring";
+        }
+        yscr__wd.observer = yscr__mx.CFRunLoopObserverCreate(NULL, 1ul | 32ul | 128ul /* entry, before waiting, exit */,
+                                                             1, 0, yscr__wd_beat, NULL);
+        if (yscr__wd.observer)
+            yscr__mx.CFRunLoopAddObserver(yscr__mx.CFRunLoopGetMain(), yscr__wd.observer, yscr__mac.cfCommonModes);
+        yscr__panic_config(d->panic_presses ? d->panic_presses : 3, d->panic_window_ns ? d->panic_window_ns : YRT_S(2),
+                           d->panic_grace_ns ? d->panic_grace_ns : YRT_S(10));
+    }
+    yscr__wd.armed++;
+    s->panic_armed = 1;
+    return NULL;
+}
+
+static void yscr__wd_disarm(yscr_screen* s) {
+    if (s->panic_armed != 1) return;
+    s->panic_armed = 0;
+    if (--yscr__wd.armed > 0) return;
+    yscr__panic_config(0, 0, 0);
+    if (yscr__wd.observer) {
+        yscr__mx.CFRunLoopRemoveObserver(yscr__mx.CFRunLoopGetMain(), yscr__wd.observer, yscr__mac.cfCommonModes);
+        yscr__mac.CFRelease(yscr__wd.observer);
+        yscr__wd.observer = NULL;
+    }
+    yscr__a_store(&yscr__wd.quit, 1);
+    if (yscr__wd.loop) { yscr__mx.CFRunLoopStop(yscr__wd.loop); yscr__mx.CFRunLoopWakeUp(yscr__wd.loop); }
+    /* A panic in progress may wait for a release on the main queue, and
+     * this is the main thread: run its loop until the watchdog ends, or
+     * the release would never run and the panic would end the process. */
+    if (yscr__wd.have_thread) {
+        int k;
+        for (k = 0; k < 800 && !yscr__a_load(&yscr__wd.ended); k++)
+            yscr__mac.CFRunLoopRunInMode(yscr__mac.cfDefaultMode, 0.01, 1);
+        pthread_join(yscr__wd.thread, NULL);
+    }
+    yscr__wd.have_thread = 0;
+    yscr__wd.loop = NULL;
+}
+
+/* --- the raw mouse reader (desc.raw_mice; INPUT, "Raw mice"), macOS --------
+ * One per process: an IOHIDManager for mice (usage page 1, usage 2) on a
+ * thread of its own, its run loop on that thread. IOKit parses each
+ * report and calls back per element (yscr__hid_add groups them again);
+ * each report carries the time the HID driver took it
+ * (IOHIDValueGetTimeStamp, mach time: the ysp_rt clock from ysp/rt.h
+ * v0.10.0). The devices are not seized: the cursor moves as before. As on
+ * Windows, reports count only while this process is the active app. */
+#define YSCR__RM_DEVS 16
+static struct {
+    volatile int32_t users;
+    pthread_t        thread;
+    yscr__cf         loop, mgr, observer;
+    volatile int32_t ready, quit;
+    int32_t          open_rc;                /* IOHIDManagerOpen's IOReturn       */
+    int64_t          mach_off;               /* ysp_rt minus mach ns              */
+    yscr__id         app;                    /* NSRunningApplication.currentApplication */
+    yscr__hid_acc    acc;
+    uint32_t         reports, dropped;       /* pushed; dropped while not active  */
+    /* the devices, for the frame thread's YSCR_EV_DEVICE records */
+    volatile int32_t dev_lock, dev_gen;
+    struct { uint32_t id; int32_t present; void* ref; char name[24]; } dev[YSCR__RM_DEVS];
+} yscr__rm;
+
+static uint32_t yscr__rm_dev_id(yscr__cf dev) {
+    uint64_t rid = 0;
+    uint32_t svc = dev ? yscr__mx.IOHIDDeviceGetService(dev) : 0;
+    if (svc) yscr__mx.IORegistryEntryGetRegistryEntryID(svc, &rid);
+    return (uint32_t)rid ? (uint32_t)rid : (uint32_t)(uintptr_t)dev;
+}
+
+static void yscr__rm_dev_set(yscr__cf dev, int present) {
+    uint32_t id = yscr__rm_dev_id(dev);
+    int i, at = -1;
+    while (!yscr__a_cas(&yscr__rm.dev_lock, 0, 1)) { }
+    for (i = 0; i < YSCR__RM_DEVS; i++) if (yscr__rm.dev[i].id == id) at = i;
+    if (at < 0 && present)
+        for (i = 0; i < YSCR__RM_DEVS && at < 0; i++) if (!yscr__rm.dev[i].id) at = i;
+    if (at >= 0 && yscr__rm.dev[at].present != present) {
+        yscr__cf name = present ? yscr__mx.IOHIDDeviceGetProperty(dev, yscr__mx.product) : NULL;
+        yscr__rm.dev[at].id = id;
+        yscr__rm.dev[at].present = present;
+        yscr__rm.dev[at].ref = present ? dev : NULL;
+        if (present) {
+            yscr__rm.dev[at].name[0] = 0;
+            char full[128];   /* CFStringGetCString writes nothing when the name does not fit */
+            if (name && yscr__mx.CFGetTypeID(name) == yscr__mx.CFStringGetTypeID() &&
+                yscr__mx.CFStringGetCString(name, full, (long)sizeof full, 0x08000100u))
+                yscr__copy(yscr__rm.dev[at].name, sizeof yscr__rm.dev[at].name, full);
+        }
+        yscr__a_inc(&yscr__rm.dev_gen);
+    }
+    yscr__a_store(&yscr__rm.dev_lock, 0);
+}
+
+/* The reader's thread: a device's id by its IOHIDDeviceRef, from the
+ * table its own callbacks keep (one IORegistry call per device, not per
+ * value). */
+static uint32_t yscr__rm_id_of(yscr__cf dev) {
+    int i;
+    for (i = 0; i < YSCR__RM_DEVS; i++) if (yscr__rm.dev[i].ref == dev && dev) return yscr__rm.dev[i].id;
+    return yscr__rm_dev_id(dev);
+}
+
+static void yscr__rm_matched(void* ctx, int32_t rc, void* sender, void* dev) { (void)ctx; (void)rc; (void)sender; yscr__rm_dev_set(dev, 1); }
+static void yscr__rm_removed(void* ctx, int32_t rc, void* sender, void* dev) { (void)ctx; (void)rc; (void)sender; yscr__rm_dev_set(dev, 0); }
+
+/* Test seam, not API: tests/adapt/screen_metal_test.c defines
+ * YSCR__RM_ARRIVAL(t) to compare each value's stamp with its arrival. */
+#ifndef YSCR__RM_ARRIVAL
+#define YSCR__RM_ARRIVAL(t) ((void)(t))
+#endif
+
+/* A report onto the input bridge, as Windows' reader does: only while the
+ * process is the active app (NSRunningApplication's state, which the main
+ * run loop updates). */
+static void yscr__rm_push(const yscr_mouse_event* e) {
+    yin_event ev[12];
+    int k, n;
+    if (yscr__rm.app && !YSCR__MSG(signed char, yscr__id, void*)(yscr__rm.app, yscr__mac.sel("isActive"))) {
+        yscr__rm.dropped++;
+        return;
+    }
+    n = yin_from_mouse(e, ev, 12);
+    if (n > 0) yscr__rm.reports++;
+    for (k = 0; k < n; k++) yscr__in_push(&ev[k], 1);
+}
+
+static void yscr__rm_value(void* ctx, int32_t rc, void* sender, void* value) {
+    yscr__cf el;
+    yscr_mouse_event done;
+    int64_t t;
+    (void)ctx; (void)rc; (void)sender;
+    if (!value) return;
+    el = yscr__mx.IOHIDValueGetElement(value);
+    if (!el) return;
+    t = (int64_t)yscr__mach_ns(yscr__mx.IOHIDValueGetTimeStamp(value)) + yscr__rm.mach_off;
+    YSCR__RM_ARRIVAL(t);
+    if (yscr__hid_add(&yscr__rm.acc, yscr__rm_id_of(yscr__mx.IOHIDElementGetDevice(el)), t,
+                      yscr__mx.IOHIDElementGetUsagePage(el), yscr__mx.IOHIDElementGetUsage(el),
+                      (int64_t)yscr__mx.IOHIDValueGetIntegerValue(value), yscr__mx.IOHIDElementIsRelative(el) != 0,
+                      (int64_t)yscr__mx.IOHIDElementGetLogicalMin(el), (int64_t)yscr__mx.IOHIDElementGetLogicalMax(el),
+                      &done))
+        yscr__rm_push(&done);
+}
+
+/* The run loop goes idle: every value of the last report has come. */
+static void yscr__rm_idle(yscr__cf obs, unsigned long activity, void* info) {
+    yscr_mouse_event done;
+    (void)obs; (void)activity; (void)info;
+    if (yscr__hid_flush(&yscr__rm.acc, &done)) yscr__rm_push(&done);
+}
+
+static void* yscr__rm_main(void* arg) {
+    const void* k[2];
+    const void* v[2];
+    int32_t page = 1, usage = 2;
+    yscr__cf match = NULL, devs;
+    void* pool;
+    (void)arg;
+    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);   /* SDL's raw keyboard thread's rank on Windows */
+    pool = yscr__mac.pool_push();
+    yscr__rm.loop = yscr__mx.CFRunLoopGetCurrent();
+    k[0] = yscr__mx_str("DeviceUsagePage");
+    k[1] = yscr__mx_str("DeviceUsage");
+    v[0] = yscr__mx.CFNumberCreate(NULL, 3 /* kCFNumberSInt32Type */, &page);
+    v[1] = yscr__mx.CFNumberCreate(NULL, 3, &usage);
+    if (k[0] && k[1] && v[0] && v[1]) match = yscr__mx.CFDictionaryCreate(NULL, k, v, 2, yscr__mx.dict_keys, yscr__mx.dict_values);
+    yscr__rm.mgr = yscr__mx.IOHIDManagerCreate(NULL, 0);
+    yscr__rm.open_rc = -1;
+    if (yscr__rm.mgr && match) {
+        yscr__mx.IOHIDManagerSetDeviceMatching(yscr__rm.mgr, match);
+        yscr__mx.IOHIDManagerRegisterDeviceMatchingCallback(yscr__rm.mgr, yscr__rm_matched, NULL);
+        yscr__mx.IOHIDManagerRegisterDeviceRemovalCallback(yscr__rm.mgr, yscr__rm_removed, NULL);
+        yscr__mx.IOHIDManagerRegisterInputValueCallback(yscr__rm.mgr, yscr__rm_value, NULL);
+        yscr__mx.IOHIDManagerScheduleWithRunLoop(yscr__rm.mgr, yscr__rm.loop, yscr__mac.cfDefaultMode);
+        yscr__rm.open_rc = yscr__mx.IOHIDManagerOpen(yscr__rm.mgr, 0);
+    }
+    for (page = 0; page < 2; page++) {
+        if (k[page]) yscr__mac.CFRelease(k[page]);
+        if (v[page]) yscr__mac.CFRelease(v[page]);
+    }
+    if (match) yscr__mac.CFRelease(match);
+    if (yscr__rm.open_rc == 0) {   /* the mice there now, before the frame thread reads the list */
+        devs = yscr__mx.IOHIDManagerCopyDevices(yscr__rm.mgr);
+        if (devs) {
+            const void* list[YSCR__RM_DEVS];
+            long i, n = yscr__mx.CFSetGetCount(devs);
+            if (n > YSCR__RM_DEVS) n = YSCR__RM_DEVS;
+            if (n > 0) { yscr__mx.CFSetGetValues(devs, list); for (i = 0; i < n; i++) yscr__rm_dev_set((yscr__cf)list[i], 1); }
+            yscr__mac.CFRelease(devs);
+        }
+        yscr__rm.observer = yscr__mx.CFRunLoopObserverCreate(NULL, 32ul /* before waiting */, 1, 0, yscr__rm_idle, NULL);
+        if (yscr__rm.observer) yscr__mx.CFRunLoopAddObserver(yscr__rm.loop, yscr__rm.observer, yscr__mac.cfDefaultMode);
+    }
+    yscr__mac.pool_pop(pool);
+    yscr__a_store(&yscr__rm.ready, yscr__rm.open_rc == 0 ? 1 : -1);
+    if (yscr__rm.open_rc == 0)
+        while (!yscr__a_load(&yscr__rm.quit)) yscr__mac.CFRunLoopRunInMode(yscr__mac.cfDefaultMode, 0.5, 0);
+    if (yscr__rm.observer) {
+        yscr__mx.CFRunLoopRemoveObserver(yscr__rm.loop, yscr__rm.observer, yscr__mac.cfDefaultMode);
+        yscr__mac.CFRelease(yscr__rm.observer);
+        yscr__rm.observer = NULL;
+    }
+    if (yscr__rm.mgr) {
+        if (yscr__rm.open_rc == 0) yscr__mx.IOHIDManagerClose(yscr__rm.mgr, 0);
+        yscr__mx.IOHIDManagerUnscheduleFromRunLoop(yscr__rm.mgr, yscr__rm.loop, yscr__mac.cfDefaultMode);
+        yscr__mac.CFRelease(yscr__rm.mgr);
+        yscr__rm.mgr = NULL;
+    }
+    return NULL;
+}
+
+/* The first raw_mice screen starts the reader; on the main thread. */
+static const char* yscr__rm_start(int64_t mach_off) {
+    static char why[200];
+    const char* e;
+    int k;
+    if (yscr__a_inc(&yscr__rm.users) > 1) return NULL;
+    e = yscr__mx_load();
+    if (e) { yscr__a_store(&yscr__rm.users, 0); return e; }
+#if YRT_VERSION_MAJOR > 0 || YRT_VERSION_MINOR >= 10
+    (void)mach_off;
+    yscr__rm.mach_off = 0;   /* ysp/rt.h reads mach time */
+#else
+    yscr__rm.mach_off = mach_off;
+#endif
+    memset(&yscr__rm.acc, 0, sizeof yscr__rm.acc);
+    memset(yscr__rm.dev, 0, sizeof yscr__rm.dev);
+    yscr__rm.reports = yscr__rm.dropped = 0;
+    yscr__rm.ready = yscr__rm.quit = 0;
+    {
+        void* pool = yscr__mac.pool_push();
+        yscr__id cls = yscr__mac.cls("NSRunningApplication");
+        yscr__rm.app = cls ? yscr__o0(cls, yscr__mac.sel("currentApplication")) : NULL;
+        if (yscr__rm.app) yscr__v0(yscr__rm.app, yscr__mac.retain);
+        yscr__mac.pool_pop(pool);
+    }
+    if (pthread_create(&yscr__rm.thread, NULL, yscr__rm_main, NULL) != 0) {
+        YSCR__MRELEASE(yscr__rm.app);
+        yscr__a_store(&yscr__rm.users, 0);
+        return "desc.raw_mice: no reader thread";
+    }
+    for (k = 0; k < 200 && !yscr__a_load(&yscr__rm.ready); k++) yrt_sleep_until(yscr__now() + 10000000, 0);
+    if (yscr__a_load(&yscr__rm.ready) != 1) {
+        uint32_t access = yscr__mx.IOHIDCheckAccess ? yscr__mx.IOHIDCheckAccess(1u /* listen event */) : 2u;
+        yscr__a_store(&yscr__rm.quit, 1);
+        if (yscr__rm.loop) yscr__mx.CFRunLoopStop(yscr__rm.loop);
+        pthread_join(yscr__rm.thread, NULL);
+        YSCR__MRELEASE(yscr__rm.app);
+        yscr__a_store(&yscr__rm.users, 0);
+        snprintf(why, sizeof why, "desc.raw_mice: IOHIDManagerOpen for mice failed (IOReturn 0x%x, Input Monitoring "
+                 "%s): allow this program in System Settings > Privacy & Security > Input Monitoring",
+                 (unsigned)yscr__rm.open_rc, access == 0 ? "granted" : access == 1 ? "denied" : "not decided");
+        return why;
+    }
+    return NULL;
+}
+
+static void yscr__rm_stop(void) {
+    if (yscr__a_load(&yscr__rm.users) <= 0) return;
+    yscr__a_dec(&yscr__rm.users);
+    if (yscr__a_load(&yscr__rm.users) > 0) return;
+    yscr__a_store(&yscr__rm.quit, 1);
+    if (yscr__rm.loop) { yscr__mx.CFRunLoopStop(yscr__rm.loop); yscr__mx.CFRunLoopWakeUp(yscr__rm.loop); }
+    pthread_join(yscr__rm.thread, NULL);
+    yscr__rm.loop = NULL;
+    YSCR__MRELEASE(yscr__rm.app);
+}
+
+/* Once a frame (begin()): the reader's devices as YSCR_EV_DEVICE records,
+ * so its reports carry no YIN_UNLISTED: present at open, added and
+ * removed later. seen: the device generation the screen logged. */
+static void yscr__rm_devices(yscr_screen* s, int32_t* seen, uint32_t change) {
+    int i, gen = yscr__a_load(&yscr__rm.dev_gen);
+    if (gen == *seen) return;
+    while (!yscr__a_cas(&yscr__rm.dev_lock, 0, 1)) { }
+    for (i = 0; i < YSCR__RM_DEVS; i++) {
+        if (!yscr__rm.dev[i].id) continue;
+        yscr__device_log(s, YSCR_DEV_MOUSE, yscr__rm.dev[i].present ? change : YSCR_DEV_REMOVED, yscr__rm.dev[i].id,
+                         yscr__rm.dev[i].present ? yscr__rm.dev[i].name : NULL);
+    }
+    yscr__a_store(&yscr__rm.dev_lock, 0);
+    *seen = gen;
+}
 
 #endif /* YSCR__METAL */
 
@@ -8995,25 +10221,6 @@ static void yscr__wd_bounded(LPTHREAD_START_ROUTINE fn) {
  * owns. Windows puts back a switched display mode as the process ends
  * (measured: ChangeDisplaySettingsExW from here blocked over 1 s on the
  * hung window and the mode came back no sooner). */
-static void yscr__panic_records(int64_t now, uint32_t released) {
-    int i;
-    for (i = 0; i < YSCR__SLOTS; i++) {
-        yscr_screen* s = yscr__slot[i].s;
-        if (s && s->panic_armed == 1 && s->ring) {
-            yrt_event ev;
-            memset(&ev, 0, sizeof ev);
-            ev.source = (uint16_t)YRT_SRC_SCREEN;
-            ev.kind = (uint16_t)YSCR_EV_PANIC;
-            ev.t_ns = (uint64_t)now;
-            ev.aux = s->display_index;
-            ev.u.u32[0] = (uint32_t)yscr__ab.presses;
-            ev.u.u32[1] = released;
-            ev.u.i64[1] = yscr__a_load64(&yscr__ab.ack);
-            yrt_ring_push(s->ring, &ev);
-        }
-    }
-}
-
 static void yscr__panic(void) {
     int64_t now = yscr__now();
     if (InterlockedCompareExchange(&yscr__wd.panicking, 1, 0) != 0) return;
@@ -11003,6 +12210,11 @@ static bool SDLCALL yscr__abort_watch(void* ud, SDL_Event* e) {
                 yscr__abort_key((uint32_t)e->key.key, yscr__mods_of(e->key.mod), t, YSCR__AB_SDL)) {
 #if defined(YSCR__DXGI)
                 if (yscr__wd.thread) yscr__win.post_thread(yscr__wd.tid, WM_APP, 0, 0);
+#elif defined(YSCR__METAL)
+                if (yscr__wd.have_thread && yscr__wd.loop) {
+                    yscr__a_store(&yscr__wd.due, 1);
+                    yscr__mx.CFRunLoopStop(yscr__wd.loop);
+                }
 #endif
             }
         } else if (e->type == SDL_EVENT_KEY_DOWN && !e->key.repeat && e->key.key == SDLK_F4 && (e->key.mod & SDL_KMOD_ALT)) {
@@ -11081,12 +12293,26 @@ static const char* yscr__rm_open(yscr_screen* s) {
     s->rm_state = 0;
     yscr__rm_log(s, YSCR_RAW_MICE_ON);
     return NULL;
+#elif defined(YSCR__METAL)
+    /* SDL's relative mode on macOS reads NSEvent deltas, not the HID
+     * manager, so the two do not take each other's mice: no guard */
+    const char* why;
+    if (!s->window) return "desc.raw_mice needs a window";
+    if (s->backend != YSCR_BACKEND_METAL) return "desc.raw_mice on macOS needs BACKEND_METAL";
+    why = yscr__rm_start(((const yscr__mtl*)(const void*)s->backend_mem)->mach_off);
+    if (why) return why;
+    s->raw_mice = 1;
+    s->rm_state = 0;
+    s->rm_frames = -1;
+    yscr__rm_devices(s, &s->rm_frames, YSCR_DEV_PRESENT);
+    yscr__rm_log(s, YSCR_RAW_MICE_ON);
+    return NULL;
 #else
 #if defined(YSCR__DXGI)
     (void)&yscr__rm_start; (void)&yscr__rm_check_registered; (void)&yscr__rm_request;
 #endif
     (void)s;
-    return "desc.raw_mice is Windows only, with a window";
+    return "desc.raw_mice is for Windows and macOS (METAL), with a window";
 #endif
 }
 
@@ -11104,6 +12330,11 @@ static void yscr__rm_check(yscr_screen* s) {
     act = yscr__rm_guard(&s->rm_state, rel, rel ? 1 : yscr__rm_check_registered());
     if (act == (int)YSCR_RAW_MICE_REGISTERED) yscr__rm_request();
     if (act) yscr__rm_log(s, (uint32_t)act);
+#elif defined(YSCR__METAL)
+    /* rm_frames holds the reader's device generation logged (one int read
+     * a frame); the guard and the decoder are Windows' */
+    yscr__rm_devices(s, &s->rm_frames, YSCR_DEV_ADDED);
+    (void)&yscr__rm_guard; (void)&yscr__mouse_decode;
 #else
     /* the reader and its guard run on Windows with SDL only; the core
      * test calls these directly */
@@ -11449,7 +12680,10 @@ static void yscr__wt_close(yscr_screen* s) {
     yscr__window_close_cb(&c);
     if (s->wt_user) {
         s->wt_user = 0;
-        if (--yscr__wt_mode_users == 0) yscr__wt_mode_now = 0;
+        if (--yscr__wt_mode_users == 0) {
+            yscr__wt_mode_now = 0;
+            yscr__a_store(&yscr__released, 0);   /* the next open is a new session (macOS's release) */
+        }
     }
 }
 
@@ -11527,6 +12761,11 @@ YSCR_API bool yscr_open(yscr_screen* s, const yscr_desc* desc) {
     (void)&yscr__mtl_pixel; (void)&yscr__mtl_code_of; (void)&yscr__mtl_kind_name;
     (void)&yscr__mtl_variable; (void)&yscr__mtl_vrr_message; (void)&yscr__mtl_link_period;
     (void)&yscr__nsm_pick; (void)&yscr__nsm_ns_class;
+    (void)&yscr__kvk_of; (void)&yscr__scancode_us; (void)&yscr__cg_mods; (void)&yscr__table_identity;
+    (void)&yscr__mac_risk; (void)&yscr__hid_add; (void)&yscr__hid_flush;
+#endif
+#if !defined(YSCR__DXGI) && !defined(YSCR__METAL)
+    (void)&yscr__panic_records;   /* the core test calls it */
 #endif
     if (desc->color_depth != 0 && desc->color_depth != 8 && desc->color_depth != 10) {
         yscr__copy(s->error, sizeof s->error, "ysp_screen: desc.color_depth must be 0, 8 or 10");
@@ -11748,6 +12987,18 @@ YSCR_API bool yscr_open(yscr_screen* s, const yscr_desc* desc) {
             else s->panic_armed = 2;
         }
 #endif
+#if defined(YSCR__METAL)
+        if (!e && s->backend == YSCR_BACKEND_METAL) {
+            yscr__mtl_display_state(s, desc);
+            if (desc->codes_strict && s->n_codes &&
+                (yscr_code_risk(s) & ~(uint16_t)YSCR_CODE_RISK_COMPOSED))
+                e = "desc.codes_strict: the display may change code pixels (see the describe line)";
+        }
+        if (!e && desc->panic && s->backend == YSCR_BACKEND_METAL) {
+            if (!desc->windowed || YSCR__PANIC_WINDOWED) e = yscr__wd_arm(s, desc);
+            else s->panic_armed = 2;
+        }
+#endif
         if (!e && desc->panic && !s->panic_armed) s->panic_armed = 3;
         if (e) {
             yscr__set_error(s->error, sizeof s->error, "ysp_screen: %s", e);
@@ -11819,7 +13070,7 @@ YSCR_API bool yscr_open(yscr_screen* s, const yscr_desc* desc) {
 YSCR_API void yscr_close(yscr_screen* s) {
     if (!s) return;
     if (s->raw_mice) {
-#if defined(YSCR__DXGI)
+#if defined(YSCR__DXGI) || defined(YSCR__METAL)
         yscr__rm_stop();
 #endif
         s->raw_mice = 0;
@@ -11870,6 +13121,10 @@ YSCR_API void yscr_close(yscr_screen* s) {
     if (s->fg == YSCR_FG_FORCED && s->fg_prev && s->hwnd && yscr__win.foreground && yscr__win.is_window &&
         yscr__win.set_foreground && yscr__win.foreground() == (HWND)s->hwnd && yscr__win.is_window((HWND)s->fg_prev))
         yscr__win.set_foreground((HWND)s->fg_prev);
+#endif
+#if defined(YSCR__METAL)
+    yscr__wd_disarm(s);
+    yscr__mtl_gamma_release(s);
 #endif
     s->fg = 0;
     s->fg_prev = NULL;
@@ -11996,7 +13251,7 @@ static const char* yscr__fg_name(uint32_t fg) {
 }
 
 YSCR_API int yscr_describe(const yscr_screen* s, char* buf, size_t cap) {
-    char extra[448], abort_s[40], settle_s[96];
+    char extra[640], abort_s[40], settle_s[96];
     double hz, ppm;
     if (!s || !buf || cap == 0) return YSCR_ERR_ARG;
     if (!s->open) return snprintf(buf, cap, "ysp_screen: closed");
@@ -12139,6 +13394,11 @@ static int yscr__begin(yscr_screen* s, yscr_frame* f) {
     yscr__in_log(s);
     if (yscr__abort_take(s, f)) { YRT_ZONE_END(z_begin); return YSCR_QUIT; }
     if (yscr__released_on(s)) {   /* only close() is left */
+#if defined(YSCR__METAL)
+        /* a minimize asked during a fullscreen space's exit can be dropped
+         * (1 of 5 runs, a locked session): ask again until it holds */
+        if (s->window && !(SDL_GetWindowFlags(s->window) & SDL_WINDOW_MINIMIZED)) SDL_MinimizeWindow(s->window);
+#endif
         memset(f, 0, sizeof *f);
         f->abort = YSCR_ABORT_PANIC;
         YRT_ZONE_END(z_begin);
@@ -12780,7 +14040,17 @@ YSCR_API bool yscr_poll(yscr_screen* s, union SDL_Event* ev, int64_t* t_rt) {
     if (yscr__wt_running()) {
         if (!yscr__take(ev) && (!yscr__in_rebell() || !yscr__take(ev))) return false;
     } else if (!SDL_PollEvent(ev) && (!yscr__in_rebell() || !SDL_PollEvent(ev))) return false;
-    if (t_rt) *t_rt = yscr_restamp(s, ev->common.timestamp);
+    if (t_rt) {
+        *t_rt = yscr_restamp(s, ev->common.timestamp);
+#if defined(YSCR__METAL)
+        /* a key or mouse button gets its NSEvent's time, as in
+         * yscr_event_input() (INPUT, macOS) */
+        if (s && yscr__os_input_stamps(s)) {
+            int64_t t_os = yscr__nsm_stamp_once(ev, *t_rt);
+            if (t_os) *t_rt = t_os;
+        }
+#endif
+    }
     if (s && s->sdl_gamepad && (ev->type == SDL_EVENT_GAMEPAD_ADDED || ev->type == SDL_EVENT_GAMEPAD_REMOVED)) {
         yscr__padev a;
         a.s = s;
@@ -12909,7 +14179,7 @@ YSCR_API bool yscr_event_input(yscr_screen* s, const union SDL_Event* ev, yin_ev
 #if defined(YSCR__METAL)
         if (s && yscr__os_input_stamps(s)) {
             ctx.os_stamps = true;
-            ctx.t_os = yscr__nsm_stamp(ev, t);
+            ctx.t_os = yscr__nsm_stamp_once(ev, t);
         }
 #endif
         if (!yin_from_sdl(ev, t, &ctx, out)) return false;
@@ -13070,14 +14340,14 @@ YSCR_API const yscr_param* yscr_params(int* n) {
         { "abort_keys.off",  "bool", 0, 1, 0, "",                 "no key combination aborts the frame loop", NULL },
         { "abort_keys.key",  "u32",  0, 4294967295.0, 27, "",     "SDL keycode of the abort combination; 0 = Esc", NULL },
         { "abort_keys.mods", "u32",  0, 255, 1, "",               "modifiers held: 1 shift, 2 ctrl, 4 alt, 8 gui, 128 none; 0 = shift", NULL },
-        { "panic",           "bool", 0, 1, 0, "",                 "arm the panic watchdog in fullscreen (Windows)", NULL },
+        { "panic",           "bool", 0, 1, 0, "",                 "arm the panic watchdog in fullscreen (Windows, macOS)", NULL },
         { "panic_presses",   "i32",  0, 16, 3, "",                "abort presses that end a hung program", NULL },
         { "panic_window_ns", "i64",  0, 6e10, 2e9, "ns",          "the time those presses must fall in", NULL },
         { "panic_grace_ns",  "i64",  0, 6e11, 1e10, "ns",         "no panic this long after the frame loop reported an abort", NULL },
         { "icon_sdl",        "bool", 0, 1, 0, "",                 "keep SDL's window icon instead of the header's", NULL },
         { "d3d11_video",     "bool", 0, 1, 0, "",                 "D3D11 device with video support and multithread protection", NULL },
         { "gamepads",        "bool", 0, 1, 0, "",                 "start SDL's gamepad subsystem and open every gamepad", NULL },
-        { "raw_mice",        "bool", 0, 1, 0, "",                 "read each mouse's Raw Input on a thread: per device, raw-timed (Windows)", NULL },
+        { "raw_mice",        "bool", 0, 1, 0, "",                 "read each mouse's reports on a thread: per device, raw-timed (Windows, macOS)", NULL },
         { "key_dedup_ns",    "i64", -1, 1e9, 5e7, "ns",           "drop a key's second report within this time; 0 = 50 ms, -1 = off", NULL },
         { "onset_offset_ns", "i64", -1e9, 1e9, 0, "ns",           "added to every onset; from the photodiode test", NULL },
         { "min_tier",        "i32",  0, 3, 0, "",                 "flag flips whose tier is worse; 0 = off", NULL },

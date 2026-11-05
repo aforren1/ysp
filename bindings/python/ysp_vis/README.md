@@ -25,7 +25,8 @@ soundtrack on a `ysp.audio.Audio`, the frame sequence writer and the index
 maker (How to play a movie, below).
 
 **Windows x64 and macOS arm64** (macOS 14 or later, the METAL backend;
-0.15.0). Linux is not supported: ysp/screen.h's X11 and Wayland backends
+from 0.15.0; 0.16.0 adds the panic watchdog, raw mice and the gamma
+table there, with no change to the binding's calls). Linux is not supported: ysp/screen.h's X11 and Wayland backends
 are stubs. The wheels are `cp310-abi3-win_amd64` and
 `cp310-abi3-macosx_14_0_arm64`: one build each for CPython 3.10 and later.
 On macOS a window screen runs on the main thread only ([Threads](#threads)).
