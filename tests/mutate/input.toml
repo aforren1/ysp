@@ -33,3 +33,14 @@ test = "input"
 why = "The measured bounds belong to NSEvent stamps; SDL's own Cocoa stamps are tier 3 with their own bounds (v0.5.0)."
 find = '    if ((kind == YIN_KIND_KEYBOARD || kind == YIN_KIND_MOUSE) && ctx && ctx->os_stamps) {'
 replace = '    if ((kind == YIN_KIND_KEYBOARD || kind == YIN_KIND_MOUSE) && ctx && !ctx->os_stamps) {'
+
+# input.h 0.5.1: the raw mouse note by platform (in-04 runs on a Mac).
+[[mutant]]
+id = "in-04"
+name = "macOS gets Windows' raw mouse note"
+test = "input"
+why = "On macOS the stamp is the HID driver's, 63 us to 258 us (median) before the read, not Windows' read time with injected input (v0.5.1)."
+find = '''#if defined(__APPLE__)
+    s.note = "ysp_screen raw mice (macOS)'''
+replace = '''#if 0
+    s.note = "ysp_screen raw mice (macOS)'''

@@ -163,19 +163,21 @@
  *   YIN_AXIS_ABSOLUTE sample (a tablet, remote desktop: x, y 0..1), a
  *   YIN_AXIS_WHEEL sample (value in notches, x the horizontal wheel). A
  *   mouse SDL does not list has YIN_UNLISTED. yin_raw_mouse_source() is
- *   its source entry, with Windows' numbers (stamped at read; host part
- *   measured with injected input only). On macOS the stamp is the HID
- *   driver's (IOHIDValueGetTimeStamp), earlier than the read: ysp/screen.h
- *   measured the read 63 us after it at the least and 258 us at the
- *   median, on one mouse (docs/screen.md, "Raw mice").
+ *   its source entry: on Windows stamped at read (host part measured
+ *   with injected input only); on macOS the HID driver's stamp
+ *   (IOHIDValueGetTimeStamp), earlier than the read, which ysp/screen.h
+ *   measured 63 us after it at the least and 258 us at the median, on
+ *   one mouse (docs/screen.md, "Raw mice").
  *
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
- *   v0.5.1 - Comments only: raw mice come from ysp/screen.h on macOS too
- *          (IOHIDManager, its v0.16.0), with the HID driver's stamp and
- *          the IORegistry id as the device; yin_raw_mouse_source()'s
- *          numbers are Windows'. No code changes.
+ *   v0.5.1 - Raw mice come from ysp/screen.h on macOS too (IOHIDManager,
+ *          its v0.16.0), with the HID driver's stamp and the IORegistry
+ *          id as the device: the comments said Windows only.
+ *          yin_raw_mouse_source()'s note on macOS gives macOS's numbers
+ *          (63 us minimum, 258 us median from the stamp to the read, one
+ *          Dell MS116 at 125 Hz); elsewhere Windows' as before.
  *   v0.5.0 - yin_sdl_ctx gains os_stamps and t_os (16 bytes, was 2):
  *          t_os, when not 0, is the event's own OS time and replaces t_rt;
  *          with os_stamps, a key or mouse button without one gets tier 3.
@@ -211,9 +213,9 @@
  *          the SDL3 adapter and the raw mouse adapter, renamed from
  *          yrsp_ to yin_ (ysp/response.h keeps its names as aliases).
  *
- *   STATUS: v0.5.1, 2026-11-05: comments only; v0.5.0's checks again
- *   (tests/adapt/input_test.c, the C and C++ compile checks, Apple clang
- *   21).
+ *   STATUS: v0.5.1, 2026-11-05: v0.5.0's checks again, and the raw mouse
+ *   note by platform (tests/adapt/input_test.c, the C and C++ compile
+ *   checks, Apple clang 21; the Windows note's branch not built here).
  *   STATUS: v0.5.0, 2026-11-05: v0.4.0's checks, and the new ctx fields
  *   on SDL events filled by hand (t_os replaces the time; os_stamps without
  *   t_os gives tier 3); the macOS source entries' bounds come from
@@ -434,18 +436,26 @@ static inline int yin_from_mouse(const yin_mouse_report* m, yin_event* out, int 
     return n;
 }
 
-/* The source table entry for raw mice, Windows': stamped like SDL's raw
- * keyboard, when the reader read the report; bounds not stated (measured
- * means of 0.15 to 0.40 ms after SendInput, injected input only). Its
- * note does not name the platform; on macOS the stamp is the HID
- * driver's, earlier than the read (RAW MICE). */
+/* The source table entry for raw mice; bounds not stated (one machine
+ * each). Windows: stamped like SDL's raw keyboard, when the reader read
+ * the report (measured means of 0.15 to 0.40 ms after SendInput,
+ * injected input only). macOS (v0.5.1): the HID driver's stamp,
+ * IOHIDValueGetTimeStamp; the reader's callback came 63 us after it at
+ * the least and 258 us at the median (one Dell MS116 moved by hand, 125
+ * Hz; ysp/screen.h v0.16.0). Host part only: the USB poll comes before
+ * the stamp. */
 static inline yin_source yin_raw_mouse_source(void) {
     yin_source s;
     memset(&s, 0, sizeof s);
     s.kind = (uint8_t)YIN_KIND_MOUSE;
     s.tier = (uint8_t)YIN_TIER_UNKNOWN;
     s.partial = 1;
+#if defined(__APPLE__)
+    s.note = "ysp_screen raw mice (macOS): the HID driver's stamp; host part to the read 63 us min, 258 us median "
+             "(one Dell MS116, 125 Hz); USB poll not in it";
+#else
     s.note = "ysp_screen raw mice: stamped at read; host part 0.15 to 0.40 ms (means, injected); USB poll not measured";
+#endif
     return s;
 }
 

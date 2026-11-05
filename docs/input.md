@@ -178,11 +178,14 @@ NSEvent.timestamp. Times in us.
 Two fields mean other things there: `t` is the HID driver's stamp
 (`IOHIDValueGetTimeStamp`), not the time the reader read the report,
 and `device` is the low 32 bits of the device's IORegistry entry id, not
-a Raw Input handle. `yin_raw_mouse_source()` keeps Windows' numbers. On
-one Dell MS116 the reader's callback came 63 us after the stamp at the
-least and 258 us at the median, at 125 Hz ([screen.md, "Raw
-mice"](screen.md#raw-mice)). v0.5.1 changes only the comments that said
-raw mice were Windows only.
+a Raw Input handle. On one Dell MS116 the reader's callback came 63 us
+after the stamp at the least and 258 us at the median, at 125 Hz
+([screen.md, "Raw mice"](screen.md#raw-mice)). v0.5.1 fixes the comments
+that said raw mice were Windows only, and `yin_raw_mouse_source()`'s
+note on macOS now gives those numbers ("the HID driver's stamp; host
+part to the read 63 us min, 258 us median (one Dell MS116, 125 Hz); USB
+poll not in it"); elsewhere it keeps Windows' (stamped at read, 0.15 to
+0.40 ms, injected). The bounds stay unstated: one mouse on one machine.
 
 ## Verification
 
