@@ -7294,7 +7294,7 @@ static const char* yvid__why_name(int w) {
 }
 
 YVID_API int yvid_describe(const yvid_movie* mv, char* buf, size_t cap) {
-    char cad[200], counts[300], be[96];
+    char cad[200], counts[300], be[128];
     int w, n;
     size_t used = 0;
     if (!mv || !mv->open) return snprintf(buf, cap, "ysp_video %s: not open", YVID_VERSION_STRING);
