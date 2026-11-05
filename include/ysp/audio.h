@@ -3975,7 +3975,8 @@ static void yau__ca_data(yau__ma* m, ma_uint32 n, yau_tick* tk) {
     yau__ca_tick(&m->ca, now, (int32_t)n, tk, &host);
     if (tk->pos < 0) return;
 #if YAU__RT_MACH
-    tk->pos_t = yrt_ticks_to_ns((int64_t)host);
+    /* yrt_ticks_to_ns()'s own arithmetic, on the timebase read at open */
+    tk->pos_t = yau__ca_ns(host, m->ca_numer, m->ca_denom);
 #else
     tk->pos_t = yau__ca_ns(host, m->ca_numer, m->ca_denom) + (tk->t_entry - yau__ca_ns(now, m->ca_numer, m->ca_denom));
 #endif
