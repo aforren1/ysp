@@ -3911,7 +3911,12 @@ window kind instead. The probe's runs decide each row: `present`'s
 Everything about a shown frame: the three rows above, direct against
 composed, a 120 or 144 Hz mode, the panel's 10 bits, the light, key
 times on macOS. The panic watchdog, raw mice and the OS gamma ramp are
-Windows only.
+Windows only. Not exercised by a test: a presented handler given up 1 s
+after its target (`late_handler=`; no way to withhold one was found), a
+frame with no drawable (`no_drawable=`; every drawable came at once
+here), a failed shared-event sync (the `glFinish` fallback), a window
+resized while open (new IOSurfaces, the cache's eviction), and the
+handler table full (64 slots across screens).
 
 ## Bindings
 
