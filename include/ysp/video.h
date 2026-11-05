@@ -501,6 +501,11 @@
  *          macOS opened YVID_ERR_NOT_IMPLEMENTED and now plays. Windows:
  *          the H.264 VUI parser, the edit list check, the color pick and the
  *          rate fit moved out of the Media Foundation block unchanged.
+ *          yvid_open() checks that the index belongs to the file (its size
+ *          and ends) before the backend opens, not after: the frame thread
+ *          read a yvid_reader while AVFoundation's loader read it on its
+ *          queue (ThreadSanitizer), and a reader is called one call at a
+ *          time.
  *   v0.6.0 - PATHS: every path is UTF-8, converted to UTF-16 for _wfsopen
  *          on Windows, as ysp/dataset.h and ysp/pack.h take paths. fopen()
  *          read them in the ANSI code page, so a folder named with a
@@ -615,9 +620,10 @@
  *   between them, the hardware and software decoders bit-exact with one
  *   index, memory and reader sources, a path outside ASCII, missing and
  *   truncated files, the refusals the clip set has (B-frames, a variable
- *   rate, a GOP that changes, HEVC Main 10, square pixels, Motion JPEG,
- *   rotation, a 1 ms timescale, an edit list). Compile checks C99, C11 and
- *   C++17; x86_64 compiled, not run. Not measured yet: decode cost, open
+ *   rate, a GOP that changes, HEVC Main 10, non-square pixels, Motion JPEG,
+ *   rotation, a 1 ms timescale, an edit list). Compile checks C99, C11,
+ *   C++17, Objective-C with and without ARC; x86_64 compiled, not run.
+ *   Mutations: 14 of 14 (avf-01 to avf-14). Not measured yet: decode cost, open
  *   and seek latency (docs/video.md lists the commands). Not built: the GPU
  *   path on macOS (ysp/screen.h's macOS swap path is a stub). Windows not
  *   rebuilt for v0.7.0: the Media Foundation code moved but did not change.
