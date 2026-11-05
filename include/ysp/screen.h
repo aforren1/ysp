@@ -1,4 +1,4 @@
-/* ysp/screen.h - v0.16.0 - public domain single-header display library
+/* ysp/screen.h - v0.16.1 - public domain single-header display library
  *
  *   The window, the GL ES 3.0 context, the display mode and the swap path
  *   of a stimulus display, with flip at a time: each frame learns the
@@ -1233,10 +1233,20 @@
  *   Windows. SDL's relative mode reads NSEvent deltas, not the HID
  *   manager, so there is no guard and no SUSPENDED record. Permission:
  *   Input Monitoring for the program, or the terminal or app that runs it
- *   (open() names it when IOHIDManagerOpen is refused). Measured: open,
- *   the Dell MS116's record; not measured: its report rate and the stamp
- *   against arrival, which need a person to move the mouse
- *   (tests/adapt/screen_metal_test.c rawmice, YSCR_TEST_MOUSE_S).
+ *   (open() names it when IOHIDManagerOpen is refused). Stale values
+ *   (v0.16.1): IOKit keeps each element's last value with the stamp of
+ *   the report that set it, and gave some of those values after the
+ *   open, dated before it (a hand run: values 43.5 to 44.0 s old, at
+ *   least 1% of 1749). The reader drops a value dated before its start
+ *   or before the newest stamp it took from that device, and counts it:
+ *   raw_mice=reports(inactive n, stale n) in the describe line.
+ *   Measured (v0.16.0's reader, one Dell MS116 behind a USB hub, moved by
+ *   hand for 5 s, 2026-11-05, unlocked, a quiet machine): 850 reports,
+ *   one every 8.000 ms at the median (7.926 to 8.069 ms, p99; 125 Hz),
+ *   none unlisted; the value callback 63 us after the stamp at the least
+ *   and 258 us at the median (its p99 and maximum were the stale values;
+ *   v0.16.1's run with them dropped is still to make). The USB poll (up
+ *   to 8 ms here) comes before the stamp and is in no number above.
  *   The input bridge (v0.4.0). One loop for every input: a producer on any
  *   thread (desc.raw_mice's reader, a response-box reader, an eye tracker)
  *   calls yscr_push_input(&e) with a ysp/input.h event stamped on the
@@ -1704,6 +1714,13 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.16.1 - METAL's raw mouse reader drops stale values: IOKit gave
+ *          cached element values dated before the reader's open (a hand
+ *          run: 43.5 to 44.0 s old), and the reader joined them into
+ *          reports of the past. A value dated before the reader's start,
+ *          or before the newest stamp taken from its device, is dropped
+ *          and counted (raw_mice= in the describe line). The report rate
+ *          and the stamp, measured: INPUT.
  *   v0.16.0 - METAL gets the four features that were Windows only: the
  *          panic watchdog (PANIC: a listen-only event tap on a thread of its
  *          own, the main run loop's heartbeat, the release on the main
@@ -2109,6 +2126,14 @@
  *          groups, input restamping, mode lists and the parameter table.
  *          The other swap paths are stubs that refuse to open.
  *
+ *   STATUS: v0.16.1 (METAL, raw mice, 2026-11-05, unlocked): v0.16.0's
+ *   reader moved by hand for 5 s gave 125 Hz reports (8.000 ms p50) and
+ *   the callback 258 us after the stamp at the median, with stale values
+ *   among them (INPUT). With the fix, tests/adapt/screen_metal_test.c's
+ *   rawmice case drops a value dated 44 s back and one older than its
+ *   device's newest, and delivers a fresh one (no hand on the mouse); the
+ *   whole test 74 of 74, unlocked. The hand run with the fix is still to
+ *   make.
  *   STATUS: v0.16.0 (METAL, 2026-11-05, M2 Mac mini, macOS 27.0.1, the
  *   M27Q on HDMI in its 1920 x 1080 mode at "60 Hz", AC, load average 0.8
  *   to 1.4): tests/adapt/screen_metal_test.c 73 of 73 unlocked, and its
@@ -2118,7 +2143,7 @@
  *   the gamma set path on hardware (a table one entry off, set to
  *   identity, read back, put back at close); the panic's times in PANIC.
  *   Not measured: the raw mouse report rate and stamp (a person must move
- *   the mouse), the light (whether the table and the untagged layer reach
+ *   the mouse; done for v0.16.1), the light (whether the table and the untagged layer reach
  *   the panel unchanged: no Screen Recording permission for a capture, no
  *   photodiode), keys by hand.
  *   STATUS: v0.15.0 (METAL, input, 2026-11-05, unlocked, no Screen
@@ -2433,8 +2458,8 @@
 
 #define YSCR_VERSION_MAJOR 0
 #define YSCR_VERSION_MINOR 16
-#define YSCR_VERSION_PATCH 0
-#define YSCR_VERSION_STRING "0.16.0"
+#define YSCR_VERSION_PATCH 1
+#define YSCR_VERSION_STRING "0.16.1"
 
 #include "ysp/rt.h"
 #include "ysp/input.h"
@@ -5848,6 +5873,18 @@ static int yscr__hid_add(yscr__hid_acc* a, uint32_t device, int64_t t, uint32_t 
     return closed;
 }
 
+/* A value that is not from a report read since the reader started (v0.16.1).
+ * IOKit keeps each element's last value with the stamp of the report that
+ * set it, and the value callback gave some of those cached values after
+ * the open, dated before it: a hand run got values 43.5 to 44.0 s old,
+ * and the reader made a report of them. Such a value is stale when its
+ * stamp is before the reader's start (t_start), or before the newest
+ * stamp already taken from its device (newest; 0 = none yet): the values
+ * of one report share a stamp and a device's reports come in order. */
+static int yscr__hid_stale(int64_t t, int64_t t_start, int64_t newest) {
+    return t < t_start || (newest && t < newest);
+}
+
 /* The report still open, when the reader goes idle. */
 static int yscr__hid_flush(yscr__hid_acc* a, yscr_mouse_event* done) {
     if (!a->have) return 0;
@@ -7869,9 +7906,11 @@ static struct {
     yscr__id         app;                    /* NSRunningApplication.currentApplication */
     yscr__hid_acc    acc;
     uint32_t         reports, dropped;       /* pushed; dropped while not active  */
+    uint32_t         stale;                  /* values dropped by yscr__hid_stale */
+    int64_t          t_start;                /* ysp_rt ns just before IOHIDManagerOpen */
     /* the devices, for the frame thread's YSCR_EV_DEVICE records */
     volatile int32_t dev_lock, dev_gen;
-    struct { uint32_t id; int32_t present; void* ref; char name[24]; } dev[YSCR__RM_DEVS];
+    struct { uint32_t id; int32_t present; void* ref; int64_t newest; char name[24]; } dev[YSCR__RM_DEVS];
 } yscr__rm;
 
 static uint32_t yscr__rm_dev_id(yscr__cf dev) {
@@ -7893,6 +7932,7 @@ static void yscr__rm_dev_set(yscr__cf dev, int present) {
         yscr__rm.dev[at].id = id;
         yscr__rm.dev[at].present = present;
         yscr__rm.dev[at].ref = present ? dev : NULL;
+        yscr__rm.dev[at].newest = 0;
         if (present) {
             yscr__rm.dev[at].name[0] = 0;
             char full[128];   /* CFStringGetCString writes nothing when the name does not fit */
@@ -7908,19 +7948,25 @@ static void yscr__rm_dev_set(yscr__cf dev, int present) {
 /* The reader's thread: a device's id by its IOHIDDeviceRef, from the
  * table its own callbacks keep (one IORegistry call per device, not per
  * value). */
-static uint32_t yscr__rm_id_of(yscr__cf dev) {
+static uint32_t yscr__rm_id_of(yscr__cf dev, int64_t** newest) {
     int i;
-    for (i = 0; i < YSCR__RM_DEVS; i++) if (yscr__rm.dev[i].ref == dev && dev) return yscr__rm.dev[i].id;
+    *newest = NULL;
+    for (i = 0; i < YSCR__RM_DEVS; i++)
+        if (yscr__rm.dev[i].ref == dev && dev) { *newest = &yscr__rm.dev[i].newest; return yscr__rm.dev[i].id; }
     return yscr__rm_dev_id(dev);
 }
 
 static void yscr__rm_matched(void* ctx, int32_t rc, void* sender, void* dev) { (void)ctx; (void)rc; (void)sender; yscr__rm_dev_set(dev, 1); }
 static void yscr__rm_removed(void* ctx, int32_t rc, void* sender, void* dev) { (void)ctx; (void)rc; (void)sender; yscr__rm_dev_set(dev, 0); }
 
-/* Test seam, not API: tests/adapt/screen_metal_test.c defines
- * YSCR__RM_ARRIVAL(t) to compare each value's stamp with its arrival. */
+/* Test seams, not API: tests/adapt/screen_metal_test.c defines
+ * YSCR__RM_ARRIVAL(t) to compare each kept value's stamp with its arrival,
+ * and YSCR__RM_VALUE(page, usage, v, t, stale) to log every value. */
 #ifndef YSCR__RM_ARRIVAL
 #define YSCR__RM_ARRIVAL(t) ((void)(t))
+#endif
+#ifndef YSCR__RM_VALUE
+#define YSCR__RM_VALUE(page, usage, v, t, stale) ((void)0)
 #endif
 
 /* A report onto the input bridge, as Windows' reader does: only while the
@@ -7938,22 +7984,32 @@ static void yscr__rm_push(const yscr_mouse_event* e) {
     for (k = 0; k < n; k++) yscr__in_push(&ev[k], 1);
 }
 
+/* One value: the stale rule, then the report it belongs to. The reader's
+ * thread (and the Metal test's, while the reader is idle). */
+static void yscr__rm_take(uint32_t device, int64_t* newest, int64_t t, uint32_t page, uint32_t usage, int64_t v,
+                          int relative, int64_t lmin, int64_t lmax) {
+    yscr_mouse_event done;
+    int stale = yscr__hid_stale(t, yscr__rm.t_start, newest ? *newest : 0);
+    YSCR__RM_VALUE(page, usage, v, t, stale);
+    if (stale) { yscr__rm.stale++; return; }
+    if (newest && t > *newest) *newest = t;
+    YSCR__RM_ARRIVAL(t);
+    if (yscr__hid_add(&yscr__rm.acc, device, t, page, usage, v, relative, lmin, lmax, &done)) yscr__rm_push(&done);
+}
+
 static void yscr__rm_value(void* ctx, int32_t rc, void* sender, void* value) {
     yscr__cf el;
-    yscr_mouse_event done;
-    int64_t t;
+    int64_t* newest;
+    uint32_t device;
     (void)ctx; (void)rc; (void)sender;
     if (!value) return;
     el = yscr__mx.IOHIDValueGetElement(value);
     if (!el) return;
-    t = (int64_t)yscr__mach_ns(yscr__mx.IOHIDValueGetTimeStamp(value)) + yscr__rm.mach_off;
-    YSCR__RM_ARRIVAL(t);
-    if (yscr__hid_add(&yscr__rm.acc, yscr__rm_id_of(yscr__mx.IOHIDElementGetDevice(el)), t,
-                      yscr__mx.IOHIDElementGetUsagePage(el), yscr__mx.IOHIDElementGetUsage(el),
-                      (int64_t)yscr__mx.IOHIDValueGetIntegerValue(value), yscr__mx.IOHIDElementIsRelative(el) != 0,
-                      (int64_t)yscr__mx.IOHIDElementGetLogicalMin(el), (int64_t)yscr__mx.IOHIDElementGetLogicalMax(el),
-                      &done))
-        yscr__rm_push(&done);
+    device = yscr__rm_id_of(yscr__mx.IOHIDElementGetDevice(el), &newest);
+    yscr__rm_take(device, newest, (int64_t)yscr__mach_ns(yscr__mx.IOHIDValueGetTimeStamp(value)) + yscr__rm.mach_off,
+                  yscr__mx.IOHIDElementGetUsagePage(el), yscr__mx.IOHIDElementGetUsage(el),
+                  (int64_t)yscr__mx.IOHIDValueGetIntegerValue(value), yscr__mx.IOHIDElementIsRelative(el) != 0,
+                  (int64_t)yscr__mx.IOHIDElementGetLogicalMin(el), (int64_t)yscr__mx.IOHIDElementGetLogicalMax(el));
 }
 
 /* The run loop goes idle: every value of the last report has come. */
@@ -7986,6 +8042,7 @@ static void* yscr__rm_main(void* arg) {
         yscr__mx.IOHIDManagerRegisterDeviceRemovalCallback(yscr__rm.mgr, yscr__rm_removed, NULL);
         yscr__mx.IOHIDManagerRegisterInputValueCallback(yscr__rm.mgr, yscr__rm_value, NULL);
         yscr__mx.IOHIDManagerScheduleWithRunLoop(yscr__rm.mgr, yscr__rm.loop, yscr__mac.cfDefaultMode);
+        yscr__rm.t_start = yscr__now();
         yscr__rm.open_rc = yscr__mx.IOHIDManagerOpen(yscr__rm.mgr, 0);
     }
     for (page = 0; page < 2; page++) {
@@ -8039,7 +8096,7 @@ static const char* yscr__rm_start(int64_t mach_off) {
 #endif
     memset(&yscr__rm.acc, 0, sizeof yscr__rm.acc);
     memset(yscr__rm.dev, 0, sizeof yscr__rm.dev);
-    yscr__rm.reports = yscr__rm.dropped = 0;
+    yscr__rm.reports = yscr__rm.dropped = yscr__rm.stale = 0;
     yscr__rm.ready = yscr__rm.quit = 0;
     {
         void* pool = yscr__mac.pool_push();
@@ -12762,7 +12819,7 @@ YSCR_API bool yscr_open(yscr_screen* s, const yscr_desc* desc) {
     (void)&yscr__mtl_variable; (void)&yscr__mtl_vrr_message; (void)&yscr__mtl_link_period;
     (void)&yscr__nsm_pick; (void)&yscr__nsm_ns_class;
     (void)&yscr__kvk_of; (void)&yscr__scancode_us; (void)&yscr__cg_mods; (void)&yscr__table_identity;
-    (void)&yscr__mac_risk; (void)&yscr__hid_add; (void)&yscr__hid_flush;
+    (void)&yscr__mac_risk; (void)&yscr__hid_add; (void)&yscr__hid_flush; (void)&yscr__hid_stale;
 #endif
 #if !defined(YSCR__DXGI) && !defined(YSCR__METAL)
     (void)&yscr__panic_records;   /* the core test calls it */
@@ -13288,6 +13345,14 @@ YSCR_API int yscr_describe(const yscr_screen* s, char* buf, size_t cap) {
             snprintf(extra + n, sizeof extra - n, " gap_anchors=%u(max %.0fus, refused %u)", (unsigned)s->gap_anchors,
                      (double)s->gap_shift_max / 1e3, (unsigned)s->gap_refused);
     }
+#if defined(YSCR__METAL)
+    if (s->raw_mice) {   /* the macOS reader's counts (INPUT, "Raw mice on macOS") */
+        size_t n = strlen(extra);
+        if (n < sizeof extra)
+            snprintf(extra + n, sizeof extra - n, " raw_mice=%u(inactive %u, stale %u)", (unsigned)yscr__rm.reports,
+                     (unsigned)yscr__rm.dropped, (unsigned)yscr__rm.stale);
+    }
+#endif
     {   /* the abort combination, as an operator reads it */
         uint32_t k = yscr__ab.key;
         size_t n = 0;

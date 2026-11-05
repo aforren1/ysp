@@ -1926,3 +1926,28 @@ test = "metal"
 why = "yscr_poll() gives a key or mouse button the NSEvent time yscr_event_input() gives it (v0.16.0)."
 find = '            if (t_os) *t_rt = t_os;'
 replace = '            (void)t_os;'
+
+# v0.16.1's 3 (mt-46 to mt-48: stale raw mouse values on macOS).
+[[mutant]]
+id = "mt-46"
+name = "values from before the reader's start kept"
+test = "screen"
+why = "IOKit gave cached element values dated 43.5 to 44.0 s before the open (a hand run); they are no report of now (v0.16.1)."
+find = '    return t < t_start || (newest && t < newest);'
+replace = '    return (newest && t < newest);'
+
+[[mutant]]
+id = "mt-47"
+name = "values older than their device's newest kept"
+test = "screen"
+why = "A device's reports come in order and the values of one report share a stamp, so an older stamp is a cached value (v0.16.1)."
+find = '    return t < t_start || (newest && t < newest);'
+replace = '    return t < t_start;'
+
+[[mutant]]
+id = "mt-48"
+name = "the reader's start not taken"
+test = "metal_new"
+why = "The stale rule needs the time just before IOHIDManagerOpen; with 0 a value 44 s old passes (v0.16.1)."
+find = '        yscr__rm.t_start = yscr__now();'
+replace = ''

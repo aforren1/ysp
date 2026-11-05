@@ -4375,10 +4375,60 @@ at open, added and removed at the next `begin()`), so the reports carry
 no `YIN_UNLISTED`. Measured (locked and unlocked): `open()` with
 `desc.raw_mice` made one `YSCR_EV_RAW_MICE` ON record and a
 `YSCR_EV_DEVICE` record for "Dell MS116 USB Optical Mouse" (the name cut
-at 23 bytes). The report rate and the stamp against arrival were not
-measured: they need a person to move the mouse. The run is ready:
-`YSCR_TEST_MOUSE_S=5 test_screen_metal rawmice` prints the report
-interval and the callback time minus each value's stamp.
+at 23 bytes).
+
+The hand run (v0.16.0's reader; `YSCR_TEST_MOUSE_S=5 test_screen_metal
+rawmice`, 2026-11-05 16:49, a person moving the Dell MS116 behind a USB
+hub, unlocked, a quiet machine):
+
+| Quantity | min | p50 | p99 | max |
+|---|---|---|---|---|
+| Report interval, ms (850 reports) | 7.926 | 8.000 | 8.069 | 256.015 |
+| Callback minus the value's stamp, us (1749 values) | 63.2 | 257.9 | 43,544,192.6 | 43,960,241.9 |
+
+The mouse reports at 125 Hz; the maximum interval is a pause of the
+hand. The callback came 63 us after the HID driver's stamp at the least
+and 258 us at the median. No report was unlisted.
+
+**A bug, fixed in v0.16.1: stale values.** At least 1% of the values had
+stamps 43.5 to 44.0 s old: from before the open. `IOHIDDeviceGetValue`
+shows that IOKit keeps each input element's last value with the stamp
+of the report that set it (read on the MS116 at rest: X and Y 95 s old,
+button 1 130 s, the wheel 155 s, buttons 2 and 3 hours), and the value
+callback gave some of those values after the open. With no hand on the
+mouse a probe got no value at all in 2 s after `IOHIDManagerOpen`, so
+they come later, with real reports; which element and when is for the
+next hand run to show (the test now prints each value more than 1 s old
+or dropped, with its page, usage, value and age). The reader grouped
+them by their stamps into reports dated 44 s back. No event in the run
+had such a time (the smallest interval was 7.9 ms, not negative), so the
+stale values carried no movement or button change here, but they split
+the report they arrived in, and a stale button value would be a press
+of the past.
+
+The fix: a value is stale when its stamp is before the reader's start
+(taken just before `IOHIDManagerOpen`) or before the newest stamp the
+reader took from that device (the values of one report share a stamp,
+and a device's reports come in order). It is dropped and counted:
+`raw_mice=reports(inactive n, stale n)` in the describe line. The other
+option was `IOHIDDeviceRegisterInputReportWithTimeStampCallback`, which
+gives each report once with its time. It was not taken: the header would
+then parse the report bytes against the device's report descriptor
+itself, a parser of untrusted input that needs a fuzz target, where now
+IOKit parses them. The stamp rule is two compares a value.
+
+The rawmice case checks the rule without a hand on the mouse: it gives
+the reader's own function a value dated 44 s back, a fresh one, and one
+older than the fresh one, and only the fresh one must reach
+`yscr_event_input()`. The hand run with the fix is still to make:
+
+```
+YSCR_ANGLE_DIR=/Users/brainworks/ysp-deps/angle-electron-43.8.3 YSCR_TEST_MOUSE_S=5 ./build/macos/test_screen_metal rawmice
+```
+
+It must print no value marked KEPT among the old ones, a nonzero stale
+count if IOKit gives cached values again, and a callback minus stamp
+maximum under 1 s (a check).
 
 #### The gamma table
 

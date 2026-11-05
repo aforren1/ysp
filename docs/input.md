@@ -171,6 +171,19 @@ NSEvent.timestamp. Times in us.
   pairing must pass over; the keys that followed them kept their exact
   stamps.
 
+## Raw mice on macOS (v0.5.1)
+
+`ysp/screen.h` v0.16.0 reads raw mice on macOS too, with an
+`IOHIDManager` on a thread of its own, into the same `yin_mouse_report`.
+Two fields mean other things there: `t` is the HID driver's stamp
+(`IOHIDValueGetTimeStamp`), not the time the reader read the report,
+and `device` is the low 32 bits of the device's IORegistry entry id, not
+a Raw Input handle. `yin_raw_mouse_source()` keeps Windows' numbers. On
+one Dell MS116 the reader's callback came 63 us after the stamp at the
+least and 258 us at the median, at 125 Hz ([screen.md, "Raw
+mice"](screen.md#raw-mice)). v0.5.1 changes only the comments that said
+raw mice were Windows only.
+
 ## Verification
 
 v0.5.0, on 2026-11-05 (Apple clang 21, macOS 27.0.1): `test_input_sdl`

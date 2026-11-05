@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ysp-vis"
-version = "0.16.0"  # ysp/screen.h's YSCR_VERSION_STRING (0.16.0: the panic, raw mice, the gamma table and the code risk on macOS; 0.15.0 carried macOS arm64, ysp/gfx.h 0.17.3 and ysp/video.h 0.7.0); a fourth number for a change of the binding, gfx.h or video.h alone (docs/bindings.md, ysp-vis); tests/test_screen_sim.py checks it
+version = "0.16.1"  # ysp/screen.h's YSCR_VERSION_STRING (0.16.1: the macOS raw mouse reader drops stale values; 0.16.0: the panic, raw mice, the gamma table and the code risk on macOS; 0.15.0 carried macOS arm64, ysp/gfx.h 0.17.3 and ysp/video.h 0.7.0); a fourth number for a change of the binding, gfx.h or video.h alone (docs/bindings.md, ysp-vis); tests/test_screen_sim.py checks it
 description = "A stimulus display with flip at a time and a record of every flip (ysp/screen.h), its stimuli (ysp/gfx.h) and movies (ysp/video.h)"
 readme = "README.md"
 requires-python = ">=3.10"

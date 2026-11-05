@@ -1,4 +1,4 @@
-/* ysp/input.h - v0.5.0 - public domain single-header input event
+/* ysp/input.h - v0.5.1 - public domain single-header input event
  *
  *   One timestamped input event for every device a rig reads: keyboards,
  *   mice, touch, pens, gamepads, response and button boxes, eye trackers.
@@ -153,8 +153,9 @@
  *   ---------------------------------------------------------------------
  *   RAW MICE (yin_mouse_report, yin_from_mouse)
  *   ---------------------------------------------------------------------
- *   ysp/screen.h's desc.raw_mice (Windows) reads each mouse's Raw Input on
- *   a thread into yin_mouse_reports. yin_from_mouse() turns one report
+ *   ysp/screen.h's desc.raw_mice reads each mouse's reports on a thread
+ *   into yin_mouse_reports: Raw Input on Windows, and IOHIDManager on
+ *   macOS from ysp/screen.h v0.16.0 (METAL). yin_from_mouse() turns one report
  *   into up to 12 events of YIN_KIND_MOUSE with the
  *   mouse's device id, in this order: presses, releases (buttons numbered
  *   as SDL's: 1 left, 2 middle, 3 right, 4 and 5 the side buttons), a
@@ -162,12 +163,19 @@
  *   YIN_AXIS_ABSOLUTE sample (a tablet, remote desktop: x, y 0..1), a
  *   YIN_AXIS_WHEEL sample (value in notches, x the horizontal wheel). A
  *   mouse SDL does not list has YIN_UNLISTED. yin_raw_mouse_source() is
- *   its source entry (stamped at read; host part measured with injected
- *   input only).
+ *   its source entry, with Windows' numbers (stamped at read; host part
+ *   measured with injected input only). On macOS the stamp is the HID
+ *   driver's (IOHIDValueGetTimeStamp), earlier than the read: ysp/screen.h
+ *   measured the read 63 us after it at the least and 258 us at the
+ *   median, on one mouse (docs/screen.md, "Raw mice").
  *
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.5.1 - Comments only: raw mice come from ysp/screen.h on macOS too
+ *          (IOHIDManager, its v0.16.0), with the HID driver's stamp and
+ *          the IORegistry id as the device; yin_raw_mouse_source()'s
+ *          numbers are Windows'. No code changes.
  *   v0.5.0 - yin_sdl_ctx gains os_stamps and t_os (16 bytes, was 2):
  *          t_os, when not 0, is the event's own OS time and replaces t_rt;
  *          with os_stamps, a key or mouse button without one gets tier 3.
@@ -203,6 +211,9 @@
  *          the SDL3 adapter and the raw mouse adapter, renamed from
  *          yrsp_ to yin_ (ysp/response.h keeps its names as aliases).
  *
+ *   STATUS: v0.5.1, 2026-11-05: comments only; v0.5.0's checks again
+ *   (tests/adapt/input_test.c, the C and C++ compile checks, Apple clang
+ *   21).
  *   STATUS: v0.5.0, 2026-11-05: v0.4.0's checks, and the new ctx fields
  *   on SDL events filled by hand (t_os replaces the time; os_stamps without
  *   t_os gives tier 3); the macOS source entries' bounds come from
@@ -231,8 +242,8 @@
 
 #define YIN_VERSION_MAJOR 0
 #define YIN_VERSION_MINOR 5
-#define YIN_VERSION_PATCH 0
-#define YIN_VERSION_STRING "0.5.0"
+#define YIN_VERSION_PATCH 1
+#define YIN_VERSION_STRING "0.5.1"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -347,8 +358,9 @@ static inline uint8_t yin_sdl_mouse_stamp(uint32_t which) {
     return (uint8_t)(which ? 0 : YIN_TIER_3);
 }
 
-/* One raw mouse report: what a Raw Input reader (ysp/screen.h's
- * desc.raw_mice) reads for one mouse at once. 32 bytes. */
+/* One raw mouse report: what a raw mouse reader (ysp/screen.h's
+ * desc.raw_mice: Raw Input on Windows, IOHIDManager on macOS) reads for
+ * one mouse at once. 32 bytes. */
 #define YIN_MOUSE_LEFT   0x01u   /* .down and .up: buttons                    */
 #define YIN_MOUSE_RIGHT  0x02u
 #define YIN_MOUSE_MIDDLE 0x04u
@@ -358,8 +370,11 @@ static inline uint8_t yin_sdl_mouse_stamp(uint32_t which) {
 #define YIN_MOUSE_VIRTUAL_DESKTOP 0x02u  /* ... over the virtual desktop         */
 #define YIN_MOUSE_UNLISTED        0x04u  /* a device SDL does not list           */
 typedef struct yin_mouse_report {
-    int64_t  t;          /* ysp_rt ns: when the reader read the report      */
-    uint32_t device;     /* the Raw Input handle: SDL's mouse id; 0 = injected */
+    int64_t  t;          /* ysp_rt ns: when the reader read the report
+                          * (Windows) or the HID driver took it (macOS)     */
+    uint32_t device;     /* Windows: the Raw Input handle, SDL's mouse id,
+                          * 0 = injected; macOS: the IORegistry entry id's
+                          * low 32 bits                                     */
     int32_t  dx, dy;     /* counts, unaccelerated; with ABSOLUTE a position */
     int16_t  wheel;      /* 120 per notch, away from the user positive      */
     int16_t  hwheel;     /* 120 per notch, right positive                   */
@@ -419,9 +434,11 @@ static inline int yin_from_mouse(const yin_mouse_report* m, yin_event* out, int 
     return n;
 }
 
-/* The source table entry for raw mice: stamped like SDL's raw keyboard,
- * when the reader read the report; bounds not stated (measured means of
- * 0.15 to 0.40 ms after SendInput, injected input only). */
+/* The source table entry for raw mice, Windows': stamped like SDL's raw
+ * keyboard, when the reader read the report; bounds not stated (measured
+ * means of 0.15 to 0.40 ms after SendInput, injected input only). Its
+ * note does not name the platform; on macOS the stamp is the HID
+ * driver's, earlier than the read (RAW MICE). */
 static inline yin_source yin_raw_mouse_source(void) {
     yin_source s;
     memset(&s, 0, sizeof s);

@@ -105,6 +105,9 @@ static int g_gamma_refuse, g_hdr;
 #define YSCR__MAC_COLOR(c) do { if (g_hdr) (c)->edr_potential = 16.0; } while (0)
 static void rm_arrival(int64_t t);
 #define YSCR__RM_ARRIVAL(t) rm_arrival(t)
+/* v0.16.1: every raw mouse value, to log the ones more than 1 s old */
+static void rm_value(uint32_t page, uint32_t usage, int64_t v, int64_t t, int stale);
+#define YSCR__RM_VALUE(page, usage, v, t, stale) rm_value((page), (usage), (v), (t), (stale))
 /* An older macOS than 14 while g_old_os is 1 (no such system was at hand). */
 static int g_old_os;
 #define YSCR__MTL_OS_14(ok) do { if (g_old_os) *(ok) = 0; } while (0)
@@ -120,6 +123,9 @@ static int g_old_os;
 #if !defined(YSCR__METAL)
 static void sync_pixel(uint64_t id, uint32_t px) { (void)id; (void)px; }
 static void rm_arrival(int64_t t) { (void)t; }
+static void rm_value(uint32_t page, uint32_t usage, int64_t v, int64_t t, int stale) {
+    (void)page; (void)usage; (void)v; (void)t; (void)stale;
+}
 int main(void) { printf("screen_metal_test: macOS only (the METAL backend is)\n"); return 0; }
 #else
 
@@ -860,6 +866,69 @@ static void rm_arrival(int64_t t) {
     if (k < 8192) { g_arr[k] = yrt_now_ns() - t; g_narr = k + 1; }
 }
 
+/* The values more than 1 s old at their callback, or found stale: the
+ * reader's thread writes, the test reads after the run. */
+static struct { uint32_t page, usage; int64_t v, age, since_start; int stale; } g_old[64];
+static volatile int g_nold, g_nall;
+static void rm_value(uint32_t page, uint32_t usage, int64_t v, int64_t t, int stale) {
+    int64_t now = yrt_now_ns();
+    int k = g_nold;
+    g_nall++;
+    if ((now - t > 1000000000 || stale) && k < 64) {
+        g_old[k].page = page; g_old[k].usage = usage; g_old[k].v = v; g_old[k].age = now - t;
+        g_old[k].since_start = now - yscr__rm.t_start; g_old[k].stale = stale;
+        g_nold = k + 1;
+    }
+}
+
+static void print_old(void) {
+    int k;
+    printf("     rawmice: %d values, %d of them more than 1 s old or stale:\n", g_nall, g_nold);
+    for (k = 0; k < g_nold; k++)
+        printf("       page 0x%02x usage 0x%03x value %lld: stamp %.3f s before its callback, callback %.3f s after the "
+               "reader's start, %s\n", (unsigned)g_old[k].page, (unsigned)g_old[k].usage, (long long)g_old[k].v,
+               (double)g_old[k].age / 1e9, (double)g_old[k].since_start / 1e9, g_old[k].stale ? "dropped" : "KEPT");
+}
+
+/* No hand on the mouse: a value dated before the reader's start (as IOKit
+ * gave cached values after the open) and one older than its device's
+ * newest are dropped, and a fresh one reaches yscr_event_input(). Calls
+ * the reader's own function from this thread while the reader is idle. */
+static void rm_stale_case(yscr_screen* s, uint32_t id, int64_t* newest) {
+    yscr_frame f;
+    uint32_t st0 = yscr__rm.stale;
+    int64_t now = yrt_now_ns(), seen_fresh = 0, seen_stale = 0, seen_old = 0;
+    int frames;
+    yscr_mouse_event done;
+    char msg[200];
+    /* a stale button 2 press, 44 s old, before the open: as the hand run's values */
+    yscr__rm_take(id, newest, now - 44000000000LL, 9, 2, 1, 0, 0, 1);
+    yscr__rm_take(id, newest, now, 9, 2, 1, 0, 0, 1);                 /* a fresh press */
+    yscr__rm_take(id, newest, now - 1000000, 9, 3, 1, 0, 0, 1);       /* older than the newest */
+    if (yscr__hid_flush(&yscr__rm.acc, &done)) yscr__rm_push(&done);
+    yscr__rm_take(id, newest, now + 1, 9, 2, 0, 0, 0, 1);             /* its release */
+    if (yscr__hid_flush(&yscr__rm.acc, &done)) yscr__rm_push(&done);
+    for (frames = 0; frames < 30 && yscr_begin(s, &f) == YSCR_OK; frames++) {
+        SDL_Event e;
+        while (yscr_poll(s, &e, NULL)) {
+            yin_event in;
+            if (!yscr_event_input(s, &e, &in) || in.kind != YIN_KIND_MOUSE || e.type != yscr_input_event_type()) continue;
+            if (in.t == now) seen_fresh++;
+            else if (in.t < yscr__rm.t_start) seen_stale++;
+            else if (in.t == now - 1000000) seen_old++;
+        }
+        if (yscr_flip(s) != YSCR_OK) break;
+    }
+    if (yscr__rm.dropped && !seen_fresh) {
+        printf("     rawmice: stale case: this program is not the active app, so the reader dropped every report: "
+               "not checked\n");
+        return;
+    }
+    snprintf(msg, sizeof msg, "rawmice: a value dated before the open and one older than its device's newest dropped "
+             "(%u counted), a fresh one delivered (%lld)", yscr__rm.stale - st0, (long long)seen_fresh);
+    check(yscr__rm.stale - st0 == 2 && seen_fresh == 1 && !seen_stale && !seen_old, msg);
+}
+
 static void rawmice(const yscr_desc* d0) {
     static yscr_screen s;
     static yrt_event ev[256];
@@ -901,6 +970,11 @@ static void rawmice(const yscr_desc* d0) {
     check(on == 1, "rawmice: one YSCR_EV_RAW_MICE ON record");
     snprintf(msg, sizeof msg, "rawmice: the reader's mice are YSCR_EV_DEVICE records, present at open (%d)", mice);
     check(mice >= 1, msg);   /* present at open, not added at a later begin() */
+    if (mice >= 1) {
+        int k;
+        for (k = 0; k < YSCR__RM_DEVS && yscr__rm.dev[k].id != ids[0]; k++) { }
+        if (k < YSCR__RM_DEVS) rm_stale_case(&s, ids[0], &yscr__rm.dev[k].newest);
+    }
     if (secs > 0) {
         yscr_frame f;
         int64_t end, prev = 0;
@@ -908,6 +982,7 @@ static void rawmice(const yscr_desc* d0) {
         printf("     rawmice: MOVE THE MOUSE for %d s now\n", secs);
         fflush(stdout);
         g_narr = 0;
+        g_nold = g_nall = 0;
         end = yrt_now_ns() + (int64_t)secs * 1000000000;
         while (yrt_now_ns() < end && yscr_begin(&s, &f) == YSCR_OK) {
             SDL_Event e;
@@ -932,7 +1007,18 @@ static void rawmice(const yscr_desc* d0) {
             printf("     rawmice: callback minus the value's stamp, us, min/p50/p99/max %.1f / %.1f / %.1f / %.1f (%d values)\n",
                    a, b, c, e2, g_narr);
         }
+        print_old();
+        {
+            char line[1600];
+            const char* r;
+            yscr_describe(&s, line, sizeof line);
+            r = strstr(line, "raw_mice=");
+            printf("     rawmice: %.*s\n", r ? (int)(strchr(r, ')') ? strchr(r, ')') - r + 1 : 40) : 4, r ? r : "none");
+        }
         check(nts > 10 && unlisted == 0, "rawmice: reports came, none unlisted");
+        snprintf(msg, sizeof msg, "rawmice: no value kept more than 1 s after its stamp (max %.1f ms)",
+                 g_narr ? lag[g_narr - 1] / 1e3 : 0.0);
+        check(g_narr > 0 && lag[g_narr - 1] < 1e6, msg);
     } else {
         printf("     rawmice: YSCR_TEST_MOUSE_S not set: the report rate and the stamp need a person moving the mouse\n");
     }

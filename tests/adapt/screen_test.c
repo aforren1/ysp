@@ -4179,6 +4179,14 @@ static void test_mac_rules(void) {
     yscr__hid_add(&a, 1, 60000, 1, 0x38, -1000000, 1, 0, 0, &e);
     CHECK_I(yscr__hid_flush(&a, &e), 1);
     CHECK_I(e.dx, 2147483647); CHECK_I(e.wheel, -32767);
+    /* v0.16.1: a value from before the reader's start, or older than its
+     * device's newest, is stale; the values of one report share a stamp */
+    CHECK(yscr__hid_stale(1000 - 44000000000LL, 1000, 0));
+    CHECK(!yscr__hid_stale(1000, 1000, 0));
+    CHECK(!yscr__hid_stale(5000, 1000, 0));
+    CHECK(!yscr__hid_stale(5000, 1000, 5000));                     /* the same report */
+    CHECK(!yscr__hid_stale(9000, 1000, 5000));                     /* the next one */
+    CHECK(yscr__hid_stale(4999, 1000, 5000));                      /* out of order */
     {   /* random values: every report comes out once, none lost */
         uint32_t rng = 12345, closed = 0, opened = 0;
         int64_t tt = 0;
