@@ -40,7 +40,7 @@ that a restart loses nothing.
 | v0.2.1 (2026-10-08): recovery after a decoder outage | Fixed: after `YVID_PENDING` the decode thread slept until the next seek. Tested (a deterministic threaded case and the real-time one); 2 of 2 mutations caught. See "Recovery after a decoder outage" |
 | Bindings, phase B (2026-10-27) | Done: `ysp.video` and `ysp_video` in ysp-vis 0.10.1.1 (MEX 1.1.0); frames equal to the C path on the simulated display; 60 s fullscreen runs with sound in Python and MATLAB. See "Bindings" |
 | v0.6.0 (2026-10-27): UTF-8 paths, error codes | Done: every path is UTF-8 (`_wfsopen` on Windows); `mv.error_code` and `w.error_code`; a missing file is `YVID_ERR_NOT_FOUND` from the probe; x86 MSVC atomics. 7 of 7 mutants caught. ysp-vis 0.10.4, MEX 1.2.1. See "UTF-8 paths and error codes (v0.6.0)" |
-| v0.7.0 (2026-11-05): AVFoundation | Done on macOS: AVAssetReader demuxes, VideoToolbox decodes (hardware or software, read back), loaded at run time from C99 and C++; the same index and checks; memory and reader sources through a resource loader; clips from VideoToolbox (`tests/media/make_video_clips_mac.sh`). Tested on an M2 (ASan, UBSan, TSan). Not measured yet; GPU path not built. See "AVFoundation (v0.7.0)" |
+| v0.7.0 (2026-11-05): AVFoundation | Done on macOS: AVAssetReader demuxes, VideoToolbox decodes (hardware or software, read back), loaded at run time from C99 and C++; the same index and checks; memory and reader sources through a resource loader; clips from VideoToolbox (`tests/media/make_video_clips_mac.sh`). Tested on an M2 (ASan, UBSan, TSan). Decode, open and seek measured (hardware 3.6 ms a 1080p frame); the frame thread not; GPU path not built. See "AVFoundation (v0.7.0)" |
 | Not in this task | Capture, FFmpeg |
 
 ## Decisions that changed the design
@@ -1134,9 +1134,8 @@ clips (`YVID_TEST_MEDIA`) were not run.
 
 2026-11-04 and 05. One machine: an Apple M2 Mac mini, macOS 27.0.1, Apple
 clang 21, Command Line Tools only. Other agents built and measured on the
-same machine at the same time, so nothing in this section is a timing
-measurement. The commands for the timing tables are at the end
-("Measurements to run").
+same machine while the backend was built and tested, so the timing is only
+in "Measurements: decode thread, open, seek", run later on a quiet machine.
 
 On macOS an MP4 file opens through `YVID_BACKEND_AVF`. It uses the same
 canonical form, the same index and the same checks as Media Foundation, and
@@ -1163,7 +1162,7 @@ one index serves both platforms.
 |---|---|---|
 | AVAssetReader sends buffers that hold no sample, at the start and at the end | every clip | Skipped (mutant avf-13) |
 | VideoToolbox decodes HEVC Main 10 into the 8-bit NV12 asked for, with no error | `r_10bit.mp4` | Refused by the `hvcC` record's profile, chroma format and bit depths, and by `BitsPerComponent` |
-| A damaged byte in the media data: VideoToolbox refuses the frame (a decode status, no image). Media Foundation conceals it, and the hash flags it | the test's damaged copy | The movie ends with `YVID_ERR_DECODER` after the 164 good frames before it. The test accepts either outcome on AVF |
+| A damaged byte in the media data: VideoToolbox refuses the frame (a decode status, no image). Media Foundation conceals it, and the hash flags it | the test's damaged copy | The movie ends with `YVID_ERR_DECODER` after the 164 good frames before it, and the message keeps VideoToolbox's status (-12909). The test accepts either outcome on AVF |
 | The software HEVC decoder pads 1280-pixel rows to 1536 bytes | `c_hevc.mp4`, OFF | The planes are lent with the buffer's bytes per row (mutant avf-14) |
 | Hardware and software decoders give the same bytes, and the index's, on every frame | `c_720p30`, `c_23976`, `c_hevc`, `c_crop`, `c_1080p60` | One index for both decoders. A decoder that differs is a hash mismatch |
 | ThreadSanitizer: during `yvid_open()` the frame thread read a `yvid_reader` (the index's check of the file's size and ends) while the resource loader read it on its queue | the reader case on `c_1080p60` | The check runs before the backend opens, for every backend. Not a mutant: only ThreadSanitizer sees it, and the mutation runner builds without it |
@@ -1224,9 +1223,12 @@ parses only the `avcC` record (the existing SPS parser, which the Media
 Foundation path already feeds from the file) and reads the `hvcC` record's
 first 19 bytes after a length check.
 
-Mutants (`tests/mutate/video.toml`, avf-01 to avf-14, test `video_avf`,
-Apple clang as `gcc`, the clips in `build-avf/clips`): 14 of 14 killed on
-the final header. avf-11 (the loader answers from offset 0) survived the
+Mutants (`tests/mutate/video.toml`, avf-01 to avf-15, test `video_avf`,
+Apple clang as `gcc`, the clips in `build-avf/clips`): 15 of 15 killed on
+the final header. avf-15 drops the backend's reason from a decode
+failure's message ("decode of frame 164 failed (-6): VideoToolbox decode
+failed (-12909)" is what the damaged byte now gives; the test checks the
+reason). avf-11 (the loader answers from offset 0) survived the
 first run: on `c_720p30` AVFoundation asked for offset 0 only. The reader
 case on `c_1080p60` was added and kills it. avf-03 (full range asked of a
 video-range stream) is killed only by the bars' luma check: the hashes of
@@ -1245,7 +1247,7 @@ built.
 
 ### Not done
 
-- Timing: decode cost, open, seek and the frame thread (below).
+- Timing of the frame thread (below).
 - The frame thread in a window: ysp/screen.h's macOS swap path is a stub.
 - x86_64 run (compiled only), iOS.
 - A clip whose `colr` box and SPS disagree, and an HEVC file without a
@@ -1256,30 +1258,75 @@ built.
 - Bindings: `ysp-vis` and the MEX are Windows only; their `hw_decode` lists
   do not have `videotoolbox`.
 
-### Measurements to run
+### Measurements: decode thread, open, seek (M1, M3, M4 on macOS)
 
-On a quiet machine, one table per command, from the repository root. First
-the clips and their indexes (about 1 min of encoding, then 1 min of
-decoding; not timed):
+2026-11-05 01:45 to 01:59 EST, an Apple M2 Mac mini (Mac14,3; 4
+performance and 4 efficiency cores, 16 GB), macOS 27.0.1 (26A434), on AC
+power, the console session locked and the display maybe asleep, no other
+agent running or building (the coordinator's word). Apple clang 21 `-O2`,
+`examples/video/bench.c --mp4 ... --hw vt|sw --seeks 50`, three rounds, the
+rows interleaved; the table gives the median over the rounds. The clips are
+`make_video_clips_mac.sh --long`: VideoToolbox H.264 High with temporal
+noise, GOP 30 (60 at 60 fps), 60 s; 1280 x 720 at 30 fps 16.7 Mb/s, 1920 x
+1080 at 30 fps 37.4 Mb/s, at 60 fps 74.8 Mb/s (the Windows clips were
+x264, 64 and 36 Mb/s at 1080p, so the rows do not compare one to one).
+The raw output is not kept in the tree; the commands are below.
+
+Decode thread per frame, mean / p99 ms. "next sample" is the reader's
+sample, VideoToolbox's synchronous decode and the lock; "Planar path" is
+what v0.7.0 does (next sample, hash, copy into a slot); "RGBA8 path" is
+v0.1's, with the conversion instead of the copy.
+
+| Clip | Decoder | next sample | Hash | Conversion | Copy | RGBA8 path | Planar path | Process CPU per frame (other threads) | Open cold / warm | Seek mean / p99 / max |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1280 x 720, 30 fps | hardware | 1.83 / 3.11 | 0.15 / 0.18 | 2.00 / 2.44 | 0.039 / 0.044 | 3.98 / 5.38 | 2.02 / 3.31 | 2.30 ms (0.08) | 68 / 8.9 ms | 37 / 69 / 69 ms |
+|  | software | 7.57 / 14.83 | 0.10 / 0.11 | 1.21 / 1.26 | 0.021 / 0.026 | 8.88 / 16.14 | 7.69 / 14.95 | 1.43 ms (0.07) | 90 / 15.6 ms | 126 / 230 / 230 ms |
+| 1920 x 1080, 30 fps | hardware | 3.27 / 6.35 | 0.26 / 0.29 | 3.42 / 3.76 | 0.051 / 0.057 | 6.94 / 10.15 | 3.58 / 6.67 | 3.82 ms (0.07) | 71 / 12.4 ms | 67 / 123 / 123 ms |
+|  | software | 23.16 / 51.21 | 0.28 / 0.34 | 3.67 / 4.51 | 0.065 / 0.096 | 27.11 / 55.63 | 23.51 / 51.59 | 4.16 ms (0.10) | 111 / 37.5 ms | 418 / 749 / 749 ms |
+| 1920 x 1080, 60 fps | hardware | 3.27 / 6.34 | 0.27 / 0.29 | 3.53 / 3.80 | 0.053 / 0.062 | 7.08 / 10.11 | 3.60 / 6.66 | 3.95 ms (0.07) | 93 / 13.7 ms | 129 / 236 / 236 ms |
+|  | software | 19.34 / 38.01 | 0.23 / 0.26 | 3.02 / 3.33 | 0.048 / 0.056 | 22.60 / 41.21 | 19.62 / 38.30 | 3.41 ms (0.08) | 121 / 46.4 ms | 588 / 1078 / 1078 ms |
+
+The round-to-round spread: the hardware rows within 3% (planar path), the
+software rows up to 50% (planar path at 1080p60: 17.3, 26.7 and 19.6 ms;
+seek 558 to 830 ms). The cause was not looked for.
+
+Against the bars of M1 to M4 (decode thread mean at most half a frame
+period and p99 at most one; open 300 ms; a seek at most GOP x the mean
+decode + 50 ms):
+
+- **Hardware meets every bar.** At 1080p60 the planar path is 3.60 ms mean
+  and 6.66 ms p99 against 8.3 and 16.7 ms (Media Foundation with DXVA on
+  the Iris Xe laptop: 5.34 and 8.53 ms on its own clip). Open is 68 to 93
+  ms cold and 9 to 14 ms warm. A seek costs 37, 67 and 129 ms: about 1 to 2
+  ms per frame decoded from the keyframe, plus the new reader.
+- **Software misses the decode bars at 1080p** (23.5 ms mean at 30 fps
+  against 16.7; 19.6 ms at 60 fps against 8.3) and meets them at 720p30.
+  Its seeks are slow (418 and 588 ms at 1080p) but within GOP x decode +
+  50 ms. So AUTO is the hardware decoder, as built; OFF is for a check.
+- **The process CPU column does not hold the decoder.** VideoToolbox
+  decodes in its own XPC service process, so a software frame of 7.6 ms
+  wall time shows 1.43 ms of this process's CPU, and the "other threads"
+  are 0.07 to 0.10 ms. The decoder's own CPU was not measured.
+- **The CPU reads the hardware decoder's planes more slowly**: the
+  conversion takes 2.00 against 1.21 ms at 720p, and the hash 0.15 against
+  0.10 ms, though the bytes are the same. The buffers' memory was not
+  examined. The copy into a slot, which the play path does, is 0.04 to
+  0.07 ms in every row.
+- Not measured: the frame thread (`yvid_update()` and the upload) in a
+  window, ysp/screen.h's METAL backend being on another branch; the
+  resource loader's cost against a file URL; a 4K clip.
+
+The commands, from the repository root (the clips and their indexes
+first, not timed):
 
 ```sh
 sh tests/media/make_video_clips_mac.sh build-avf/clips --long
 clang -std=c11 -O2 -Iinclude -DYSCR_NO_SDL -DYVID_NO_PL_MPEG -o build-avf/video_play examples/video/play.c -lm -pthread
 clang -std=c11 -O2 -Iinclude -DYSCR_NO_SDL -DYVID_NO_PL_MPEG -o build-avf/video_bench examples/video/bench.c -lm -pthread
 for c in m_720p30 m_1080p30 m_1080p60; do ./build-avf/video_play --sim --file build-avf/clips/$c.mp4 --index --seconds 1; done
-```
-
-M1, M3, M4 for AVFoundation (decode thread per frame, process CPU, open
-cold and warm, 50 random seeks), three rounds with the rows interleaved,
-hardware and software decoder. Expected 10 to 20 min:
-
-```sh
 for r in 1 2 3; do for c in m_720p30 m_1080p30 m_1080p60; do for hw in vt sw; do
   ./build-avf/video_bench --mp4 build-avf/clips/$c.mp4 --hw $hw --seeks 50; done; done; done > build-avf/m_avf.txt
 ```
-
-The resource loader against a file URL (the same table, a memory source):
-not in `video_bench` yet.
 
 ## Needed from the other headers
 
@@ -1317,8 +1364,7 @@ not in `video_bench` yet.
   decoder (a slow `next()`, not PENDING) on real media, which the same
   catch-up rule covers.
 - FFmpeg, capture.
-- macOS: the timing tables of "AVFoundation (v0.7.0)"; the frame thread in a
-  window and a GPU path (an IOSurface into ANGLE's Metal backend), both after
+- macOS: the frame thread in a window and a GPU path (an IOSurface into ANGLE's Metal backend), both after
   ysp/screen.h's macOS swap path.
 
 ## Bindings

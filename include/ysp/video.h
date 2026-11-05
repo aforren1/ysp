@@ -625,8 +625,15 @@
  *   rate, a GOP that changes, HEVC Main 10, non-square pixels, Motion JPEG,
  *   rotation, a 1 ms timescale, an edit list). Compile checks C99, C11,
  *   C++17, Objective-C with and without ARC; x86_64 compiled, not run.
- *   Mutations: 14 of 14 (avf-01 to avf-14). Not measured yet: decode cost, open
- *   and seek latency (docs/video.md lists the commands). Not built: the GPU
+ *   Mutations: 15 of 15 (avf-01 to avf-15). Measured (2026-11-05, the M2
+ *   on AC power, a quiet machine, docs/video.md M1, M3, M4 on macOS), the
+ *   decode thread per frame with the hardware decoder, mean / p99: 2.0 /
+ *   3.3 ms at 720p30, 3.6 / 6.7 ms at 1080p30 and 1080p60; the software
+ *   decoder 7.7 / 15 ms at 720p, 20 to 24 / 38 to 52 ms at 1080p (misses
+ *   the 1080p bars; AUTO is hardware). Open 68 to 93 ms cold, 9 to 14 ms
+ *   warm; a seek 37, 67, 129 ms (hardware, GOP 30, 30, 60). VideoToolbox
+ *   decodes in its own process, so this process's CPU does not show the
+ *   decoder's. Not measured: the frame thread in a window. Not built: the GPU
  *   path on macOS (ysp/screen.h's macOS swap path is a stub). Windows not
  *   rebuilt for v0.7.0: the Media Foundation code moved but did not change.
  *   STATUS: v0.6.0: tests/adapt/video_test.c opens, probes, writes and
