@@ -69,6 +69,21 @@ build('parallel')      % builds one
 - **Octave** needs the development package that provides `mex`/`mkoctfile`
   (`sudo apt install octave-dev`, or `liboctave-dev` on older releases).
 - **MATLAB** needs a configured compiler (`mex -setup`).
+- **MATLAB on macOS with only the Command Line Tools** (no Xcode app):
+  `mex -setup C` stops with "Xcode is installed, but its license has not
+  been accepted", because MATLAB's `clang_maca64.xml` reads the Xcode app's
+  license record. The Command Line Tools' clang builds the bindings. Copy
+  the options file without that check and name the copy in the environment
+  variable `YSP_MEXOPTS`; `build.m` then gives it to `mex -f`:
+
+  ```sh
+  sed '/<XCODE_AGREED_VERSION>/,/<\/XCODE_AGREED_VERSION>/d' \
+      /Applications/MATLAB_R2026b.app/bin/maca64/mexopts/clang_maca64.xml > /tmp/clang_maca64_clt.xml
+  YSP_MEXOPTS=/tmp/clang_maca64_clt.xml matlab -batch "run('bindings/mex/build.m')"
+  ```
+
+  Used on 2026-11-05 with MATLAB R2026b and Apple clang 21 (Command Line
+  Tools), macOS 27.0.1, for `ysp_serial`.
 
 The build adds `-I` for include/ under the repository root, where the headers live. That
 one path covers the transport header and the `ysp/rt.h` it includes. A

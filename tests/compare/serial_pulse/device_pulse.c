@@ -20,17 +20,27 @@
  *
  * Build (from a Developer Command Prompt; run under the timing guard):
  *   cl /O2 /W4 /I..\..\..\include device_pulse.c
- * Windows only, as pulse_bench.c.
+ * or macOS and Linux (on a quiet machine):
+ *   cc -O2 -Wall -I../../../include -o device_pulse device_pulse.c -lpthread
+ * and give the device path (/dev/cu.usbmodem..., /dev/ttyACM0) for COM3.
  *
  * Public domain / MIT-0, as the rest of ysp. */
 #define _CRT_SECURE_NO_WARNINGS
+#if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#endif
 #define YSP_DEVICE_IMPLEMENTATION
-#include "ysp/device.h"
+#include "ysp/device.h"   /* first on POSIX: ysp/serial.h sets _DEFAULT_SOURCE */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if !defined(_WIN32)
+#include <errno.h>
+#include <sys/stat.h>
+static void Sleep(unsigned ms) { (void)yrt_sleep_ns((int64_t)ms * 1000000); }
+#define CreateDirectoryA(dir, sec) ((void)(sec), mkdir((dir), 0777))
+#endif
 
 #define BLOCK 20
 #define N_PROBE 10
@@ -44,7 +54,11 @@ static ydev_device g_dev;
 static int64_t g_hold_ns = 0;
 
 static void die(const char* what) {
+#if defined(_WIN32)
     fprintf(stderr, "device_pulse: %s failed (os error %lu)\n", what, (unsigned long)GetLastError());
+#else
+    fprintf(stderr, "device_pulse: %s failed (%s)\n", what, strerror(errno));
+#endif
     exit(1);
 }
 
