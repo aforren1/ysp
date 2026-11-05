@@ -165,6 +165,7 @@ static ScreenObject* mv_screen(MovieObject* o) {
 static int mv_ready(MovieObject* o) {
     ScreenObject* s = mv_screen(o);
     if (s && s->busy) { PyErr_SetString(VsBusyError, "ysp_video: another thread is in a call on the movie's Screen"); return 0; }
+    if (s && !sc_thread(s)) return 0;
     if (!o->mv || !o->mv->open) {
         /* closed with its gfx or screen: the pins go back now */
         if (o->mv) yv_movie_unpin(o->mv);

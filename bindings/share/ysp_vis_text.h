@@ -109,8 +109,9 @@ static int yv_read_file(const char* path, uint8_t** out, size_t* n, char* err, s
     return 0;
 }
 
-/* The system's sans font, as ygfx_text_make() takes it on Windows: Segoe
- * UI, then Arial. "" when neither is there. */
+/* The system's sans font, as ygfx_text_make() takes it (ysp/gfx.h, TEXT):
+ * on Windows Segoe UI, then Arial; on macOS Arial, then Helvetica. "" when
+ * none is there. */
 static const char* yv_default_font_path(char* buf, size_t cap) {
 #if defined(_WIN32)
     static const char* names[] = { "segoeui.ttf", "arial.ttf" };
@@ -123,6 +124,14 @@ static const char* yv_default_font_path(char* buf, size_t cap) {
         snprintf(buf, cap, "%s\\Fonts\\%s", win, names[i]);
         fp = fopen(buf, "rb");
         if (fp) { fclose(fp); return buf; }
+    }
+#elif defined(__APPLE__)
+    static const char* paths[] = { "/System/Library/Fonts/Supplemental/Arial.ttf", "/Library/Fonts/Arial.ttf",
+                                   "/System/Library/Fonts/Helvetica.ttc" };
+    int i;
+    for (i = 0; i < 3; i++) {
+        FILE* fp = fopen(paths[i], "rb");
+        if (fp) { fclose(fp); snprintf(buf, cap, "%s", paths[i]); return buf; }
     }
 #endif
     if (cap) buf[0] = 0;
@@ -232,7 +241,7 @@ static yv_font* yv_font_default(yv_gfx* g, int* code, char* err, size_t cap) {
     char path[600];
     if (f) return f;
     if (!yv_default_font_path(path, sizeof path)[0]) {
-        *code = yv_fail(err, cap, YGFX_ERR_IO, "font: no system font (Segoe UI, Arial) was found: give font= a file");
+        *code = yv_fail(err, cap, YGFX_ERR_IO, "font: no system font (Segoe UI or Arial; Arial or Helvetica on macOS) was found: give font= a file");
         return NULL;
     }
     memset(&s, 0, sizeof s);

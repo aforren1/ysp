@@ -8,7 +8,7 @@ function test_mex_vis()
 %   lifetime rule: one handle table for the three MEX files, and a clear of
 %   one MEX file leaves the others' objects open until the last one goes.
 %   Build first (build.m: ysp_audio, ysp_timeline, ysp_vis, ysp_screen,
-%   ysp_gfx, ysp_video). Windows only. Prints PASS with the number of checks.
+%   ysp_gfx, ysp_video). Windows and macOS. Prints PASS with the number of checks.
 
     global YSP_VIS_CHECKS %#ok<GVMIS>
     YSP_VIS_CHECKS = 0;
@@ -20,16 +20,20 @@ function test_mex_vis()
 
     % ---- versions and the core
     [bv, hv] = ysp_screen('version');
-    check(strcmp(bv, '1.2.1') && ~isempty(regexp(hv, '^\d+\.\d+\.\d+$', 'once')), 'version: binding %s, header %s', bv, hv);
+    check(strcmp(bv, '1.3.0') && ~isempty(regexp(hv, '^\d+\.\d+\.\d+$', 'once')), 'version: binding %s, header %s', bv, hv);
     [~, gv] = ysp_gfx('version');
     [~, vv] = ysp_video('version');
     info = ysp_vis('info');
     check(info.users == 3 && strcmp(info.screen_h, hv) && strcmp(info.gfx_h, gv) && strcmp(info.video_h, vv), ...
           'the core: three thin files attached, the headers'' versions');
     check(strcmp(info.sdl, '3.4.0'), 'static SDL3 3.4.0 (got %s)', info.sdl);
-    check(exist(fullfile(info.module_dir, 'libEGL.dll'), 'file') == 2 && ...
-          exist(fullfile(info.module_dir, 'libGLESv2.dll'), 'file') == 2, 'ANGLE beside the core: %s', info.module_dir);
-    check(exist(fullfile(here, 'SDL3.dll'), 'file') ~= 2, 'no SDL3.dll beside the MEX files');
+    dll = '.dll';
+    if ismac, dll = '.dylib'; end
+    check(exist(fullfile(info.module_dir, ['libEGL' dll]), 'file') == 2 && ...
+          exist(fullfile(info.module_dir, ['libGLESv2' dll]), 'file') == 2, 'ANGLE beside the core: %s', info.module_dir);
+    check(strcmp(info.module_dir, here), 'the core''s directory is this one: %s', info.module_dir);
+    check(exist(fullfile(here, 'SDL3.dll'), 'file') ~= 2 && isempty(dir(fullfile(here, 'libSDL3*'))), ...
+          'no SDL3 library beside the MEX files (linked statically)');
     o = ysp_screen('options');
     check(isfield(o, 'windowed') && isfield(o, 'backend') && isfield(o, 'settle') && isfield(o, 'window_thread'), 'options');
     c = ysp_screen('constants');
@@ -57,6 +61,8 @@ function test_mex_vis()
     check(isa(h, 'uint64') && h > bitshift(uint64(1), 32), 'open: a uint64 handle of this module');
     caps = ysp_screen('caps', h);
     check(strcmp(caps.backend, 'sim') && caps.period_ns == int64(4000000), 'caps: sim, period');
+    check(caps.margin_ns == int64(0) && caps.margin == 0 && ~caps.os_input_stamps, ...
+          'caps: margin 0 (the core''s), no OS input stamps (METAL only)');
     check(~isempty(strfind(ysp_screen('describe', h), 'sim')), 'describe');
     on = zeros(1, 30);
     for i = 1:30
