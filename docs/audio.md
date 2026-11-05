@@ -5,7 +5,8 @@ what was measured. The manual in the header tells you how to use it. The
 plan that asked for the header is section 4.4 of
 [rig_spec.md](rig_spec.md).
 
-All numbers come from one machine: a Windows 11 25H2 laptop (build 26200),
+All numbers outside the CoreAudio section come from one machine: a
+Windows 11 25H2 laptop (build 26200),
 13th Gen Intel Core i7-1360P, on AC power, Balanced plan. The output is
 "Speakers (Realtek(R) Audio)", whose Default Format is 48000 Hz, 2
 channels, 24 bits in 32. The shared-mode mix format is float, 48000 Hz,
@@ -2488,6 +2489,294 @@ folder has Omega, Zhe and the CJK ideograph only: Octave's own `fopen`
 and `copyfile` fail on a character outside the BMP (`fopen` gives -1),
 so the test cannot make the file there.
 
+## CoreAudio (v0.8.0)
+
+Before v0.8.0, CoreAudio ran only as compiled code: no Mac had run it. On
+the first Mac, every CoreAudio onset was a callback-time fit, unconfirmed,
+and the claim left out the largest latency. This section tells what the
+HAL reports, what the header now does with it, and why.
+
+All numbers in this section come from a second machine: an Apple M2 Mac
+mini, macOS 27.0.1, Apple clang 21, miniaudio 0.11.25, ysp/rt.h 0.9.1. Its
+two outputs are a GBT M27Q monitor over HDMI and the built-in speakers. It
+has no audio input and no loopback cable. So every number here comes from
+the HAL's time stamps, the device's properties or the ysp_rt clock, and
+none from sound. Other agents compiled on the machine during these runs,
+so no number here is a timing result: the timing runs are in
+[Timing runs to do](#timing-runs-to-do). The probes are in
+`tests/probe/coreaudio/`.
+
+### What the HAL reports
+
+`hal_probe` opened each output through miniaudio as the header does
+(no format asked for) and read the properties:
+
+| Property | M27Q (HDMI) | Mac mini Speakers |
+|---|---|---|
+| Transport | `hdmi` | `bltn` |
+| UID | `1C540D27-0000-0000-0220-010380462778` | `BuiltInSpeakerDevice` |
+| Nominal and actual rate | 48000, 48000.000 | 48000, 48000.000 |
+| Virtual format (what the HAL mixes) | float, 2 channels, interleaved | float, 2 channels, interleaved |
+| Physical format | 24-bit integer in 32 bits | float |
+| Device latency (`kAudioDevicePropertyLatency`) | 88 frames | 72 frames |
+| Safety offset | 320 frames | 76 frames |
+| Stream latency (`kAudioStreamPropertyLatency`) | 0 frames | 408 frames |
+| IO buffer range | 15 to 4096 frames | 15 to 4096 frames |
+| Clock domain | `main` | `main` |
+| Claim from the IO point, v0.7.3 / v0.8.0 | 8.500 / 1.833 ms | 3.083 / 10.000 ms |
+| Claim from the callback, v0.7.3 / v0.8.0 | 18.500 / 18.500 ms | 13.083 / 21.583 ms |
+
+The AudioUnit's client format (input scope) and device format (output
+scope) were the same, float, 2 channels, 48000 Hz, and miniaudio's
+converter was a passthrough. So the strict open holds on this Mac with no
+change: miniaudio takes the rate from the AudioUnit's device side, and the
+AudioUnit converts nothing.
+
+v0.7.3's claim was the device latency plus the safety offset, and it left
+out the stream latency. On the built-in speakers that is 408 frames
+(8.5 ms), the largest part. The next section shows why the safety offset
+is not part of the claim from the position point.
+
+### The render time stamp
+
+miniaudio's render callback receives the render's `AudioTimeStamp` and
+drops it. A render notification on the same AudioUnit
+(`AudioUnitAddRenderNotify`) gets the same stamp on the IO thread, just
+before miniaudio's callback. Per render (`hal_probe`, 2 s, each device):
+
+- The sample time starts at 0 when the AudioUnit starts and moves by
+  exactly the frames of each render (480). It is the AudioUnit's own
+  count, a constant offset from the device's sample time.
+- The host time moves by 10.000 ms each render, and `mRateScalar` stays
+  between 0.999997 and 1.000001. So the stamps are a smooth line, the
+  HAL's model of the device clock, not raw observations.
+- The host time minus the callback's entry was 16.56 to 16.66 ms on HDMI
+  and 11.49 to 11.56 ms on the speakers. That is the IO buffer plus the
+  safety offset: 480 + 320 frames (16.67 ms) and 480 + 76 frames
+  (11.58 ms). So the stamp is the time at which the HAL puts the frame at
+  the IO point, the safety offset ahead of the hardware's position.
+
+After the IO point, Apple's headers give the device latency plus the
+stream latency ("the total latency for the stream is the device latency
+summed with the stream latency"). So the claim from the position point is
+that sum ("coreaudio:ltnc+strm"), and the claim from the callback adds the
+safety offset and the IO buffer.
+
+A stall. A 30 ms sleep in the 100th callback on the speakers: the next
+stamp's sample time moved 1944 frames, 1464 more than the 480 of the
+block before, and its host time 40.5 ms. The HAL sent one
+`kAudioDeviceProcessorOverload` notice. The callback after the stall was
+11.5 ms ahead of its stamp again. So the HAL skips the device frames that
+the stall took, and every later stream frame plays that many frames later.
+
+### Design
+
+**Position source.** Three options:
+
+1. Callback entry times, fitted by the lower envelope (v0.7.3). They are
+   late by the scheduler's jitter, and the onset is the callback's time,
+   16.7 ms (HDMI) before the frame reaches the IO point.
+2. `AudioDeviceGetCurrentTime()` in each callback. This gives the
+   device's sample and host time now, but a stream frame's device sample
+   still needs the render's stamp, and it is one more HAL call a block.
+3. The render stamps (kept). Each pairs the block's first stream frame
+   with the HAL's host time for it. They cost no extra call.
+
+The stamp's time is in the future when the block renders. As a report it
+would confirm a frame that the HAL has not yet taken. So the header keeps
+the last 128 renders, and a block's report is the newest earlier render
+whose host time has passed (8.5 ms old on the speakers, at 480 frames).
+That keeps CONFIRMATION's meaning: the frame has reached the IO point.
+128 renders hold the stamps up to 127 IO buffers ahead, which covers a
+15-frame buffer with a safety offset of 1800 frames.
+
+The report's position counts device frames since stream frame 0, so it
+includes the frames the HAL skipped. This is the case "a device whose
+position counts the silence it played" in UNDERRUNS. A render whose sample
+time moved more than the frames handed since the last one is a skip.
+Its own pair goes to the core at once, so the core sees the position past
+the frames written by exactly the skip. The core then records one XRUN
+with that gap and shifts the fit by it, and the fit stays ready. Before,
+a WASAPI-style halt restarted the fit, which takes 0.5 s to be ready
+again and 5 s to fit a slope. A sample time that moves back (not seen)
+gives YAU_TICK_XRUN and the fit starts over.
+
+**miniaudio or a backend of our own.** The header keeps miniaudio and
+adds direct CoreAudio calls beside it: two AudioUnit calls
+(`AudioUnitAddRenderNotify`, `AudioUnitRemoveRenderNotify`), taken from
+the framework that miniaudio loaded (with `MA_NO_RUNTIME_LINKING`,
+linked), property reads through miniaudio's `AudioObjectGetPropertyData`,
+and one property listener. miniaudio still does the device list, the
+format, the IO buffer size and the AudioUnit. An IOProc of the header's
+own (`AudioDeviceCreateIOProcID`) would skip the AudioUnit, but it is a
+second backend to keep. No measurement shows that the AudioUnit costs
+anything yet; the timing runs below can show it.
+
+**Host time to the ysp_rt clock.** `mHostTime` counts
+`mach_absolute_time()` units: 125/3 ns on this Mac (24 MHz).
+ysp/rt.h 0.9.1 reads `CLOCK_MONOTONIC` on macOS. `clock_offset` measured
+it against `mach_absolute_time()`:
+
+| Property | Result |
+|---|---|
+| `clock_getres(CLOCK_MONOTONIC)` | 1000 ns; every value read was a multiple of 1000 ns |
+| `CLOCK_MONOTONIC` minus `mach_absolute_time()` | 106946 s: it counts the time the Mac slept, and `mach_absolute_time()` does not |
+| The same over 32 s | steady within 0.6 us for 23 s, then down 152 us in 8 s (about -20 ppm): the clock's frequency is adjusted |
+| `CLOCK_MONOTONIC` minus `mach_continuous_time()` | -4.164 s, and it moved with the frequency adjustment |
+
+A reading is the largest of 20000 pairs every 0.1 s; single readings up
+to 27 us high were preemptions between the two reads (other agents were
+compiling). So with ysp/rt.h 0.9.1 no fixed conversion maps a host time
+to the ysp_rt clock. ysp/rt.h 0.10.0 moves `yrt_now_ns()` to
+`mach_absolute_time()` scaled by `mach_timebase_info()`, and
+`yrt_ticks_to_ns()` converts mach units. The header uses
+`yrt_ticks_to_ns(mHostTime)` when ysp/rt.h is 0.10.0 or later; the exact
+mapping needs it. With an older ysp/rt.h, each block maps its reports
+through the offset of the two clocks read at the callback's entry: the
+ysp_rt read is whole microseconds, so a report can be up to 1 us early,
+and the reports then follow the clock's frequency adjustment, as every
+other ysp_rt time does. The core test checks the conversion at 125/3 and
+1/1 (Intel Macs).
+
+**IO buffer.** miniaudio sets `kAudioDevicePropertyBufferFrameSize` to
+`desc.period` (480 by default, 10 ms). It is a setting of this process.
+`audio_clockstats --period 128` and `--period 32` ran with 2.667 ms and
+0.667 ms callbacks on the speakers, and 128 on HDMI, with no XRUN record
+in 3 s. So unlike the WASAPI laptop (10 ms only), the period is a real
+lever on a Mac, and it moves the lead. `caps.buffer` is now the IO buffer
+(it was miniaudio's 3 periods, which the HAL does not have).
+
+**Rate.** The nominal and actual rates were 48000 and 48000.000 at open on
+both devices, and both are in the clock domain `main`. The header reads
+the actual rate once, for the describe line; the fit measures the rate
+against the ysp_rt clock and tracks it. The functional runs saw drifts
+of +0.5 to +2.0 ppm against the ysp_rt clock of ysp/rt.h 0.9.1, whose own
+frequency moves; the timing runs measure it on the new clock.
+
+**Hog mode.** miniaudio refuses exclusive mode on CoreAudio
+(`MA_SHARE_MODE_NOT_SUPPORTED`), so `desc.exclusive` failed to open. Now
+the header opens shared and then takes hog mode
+(`kAudioDevicePropertyHogMode` set to its pid, read back). Measured: the
+open ran with `hog=1`; a second hog-mode open from another process failed
+and named the holder's pid; a shared open from another process still got
+callbacks and stamps (whether its sound played was not measured); after
+close the property read -1. Hog mode does not skip a mixer as WASAPI
+exclusive mode does: on macOS each client's IO goes through the same HAL
+path. Whether it changes timing is one of the timing runs. Kept for now:
+it stops other processes' hog-mode use of the stimulus device, and its
+cost is three property calls.
+
+**The default device.** Opened as "the default" (no device id),
+miniaudio follows a default-device change: it opens the new default at
+its own format, through its converter, and posts "rerouted". v0.7.3 then
+set LOST, but the sound went on, on the new device. Measured with
+`audio_clockstats` and `kAudioHardwarePropertyDefaultOutputDevice` set
+during the run: v0.7.3 gave LOST and one XRUN record, and its callbacks
+went on; v0.8.0 opens the default by its id, and the stream stayed on the
+speakers with 0 XRUN records. The sound stays where the program opened
+it, as an experiment needs.
+
+**The device goes away.** With the stream on HDMI, `pmset displaysleepnow`
+(3 runs): about 3.6 s later the monitor's audio device went away (its
+object answered `kAudioHardwareBadObjectError`), the IsAlive listener
+fired once and the device list changed. miniaudio posted nothing. The
+AudioUnit went on running on the built-in speakers
+(`kAudioOutputUnitProperty_CurrentDevice`), at 512 frames a render, with a
+jump in its sample time. So a sound meant for the monitor would have
+played on the speakers. The header now listens to
+`kAudioDevicePropertyDeviceIsAlive`: when the device dies it sets LOST,
+gives no more reports and writes silence. One `audio_schedule` run on
+HDMI lost its device this way during the run: the describe line said
+`dead` and LOST, and the onsets stopped. After the display woke, the
+monitor's device came back as a new object, with a suffix on its UID,
+and the system's default output stayed on the speakers.
+
+Two more states of the Mac stop audio. In a dark wake (display off, the
+system in a maintenance wake after idle sleep), an open got no callback
+in 5 s (2 opens of `audio_clockstats`); after a full wake it opened.
+Idle system sleep stops the IO thread. So a rig runs with display and
+system sleep off, or under `caffeinate -d -i`, and
+`tests/probe/coreaudio/run.sh` uses that.
+
+**The describe line** has the driver stack that rig_spec section 13
+asks for: `transport=hdmi uid=... reports=hal(N) latency=88 safety=320
+stream_latency=0 io_buffer=480 hal_rate=48000/48000.000 hog=0 skips=0`,
+and `dead` when the device went away.
+
+**The IO thread.** On CoreAudio, miniaudio sends its "started" notice on
+the thread that called start, not on the IO thread. So
+`yau_rt_thread_init()` ran on the frame thread: every ring record had the
+frame thread's tid, the trace named the frame thread "yau device", and
+ThreadSanitizer found the race on the tid. The IO thread now sets itself
+up in its first callback on CoreAudio.
+
+**Tier.** 3. The frames are confirmed by the HAL's stamps (no
+UNCONFIRMED flag), but no loopback has checked any Mac.
+
+### What ran
+
+All functional, on the shared machine, at -40 dBFS:
+
+| Program | Speakers | HDMI |
+|---|---|---|
+| `test_audio` (core test) | passed | |
+| `audio_clockstats`, 2 to 4 s | 480, 128, 32 frames; hog mode; a 30 ms stall: one XRUN record, gap 1460 frames, the fit kept | 480, 128 frames |
+| `audio_schedule` | 14 of 14 onsets on the planned frame, confirmed, tier 3; at 480 and 128 frames | 14 of 14, the same; one run lost the device at display sleep (above) |
+| `audio_tone` | 2 of 2 | 2 of 2 |
+| `audio_capstats` | no input: "Core Audio did not open the input (Invalid argument)" | |
+| `audio_clockstats` under ASan and UBSan, and ThreadSanitizer | clean, after the IO thread fix | |
+
+Builds: C99 to C11 with `-Wall -Wextra -Wpedantic -Wshadow
+-Wfloat-conversion -Werror`, C++17, and `MA_NO_RUNTIME_LINKING` with the
+three frameworks linked (that build also ran). The examples that need an
+input (first sound, voice RT, loopback latency, AV sync) did not run.
+
+### Tests and mutations
+
+The time line's arithmetic is in the core, so `tests/adapt/audio_test.c`
+runs it without a device (it defines `YAU__CA_CORE`).
+`test_coreaudio_math` checks the mach unit conversion (125/3 and 1/1), the
+claims from the two devices' properties, and the reports of a scripted
+time line: two renders ahead, a skip of 100 frames, a stamp without valid
+times, a rewind. `test_coreaudio_line` puts a scripted HAL under the
+core, at 480 and at 32 frames, 800 frames ahead: 20 of 20 onsets on the
+truth's frame and within 1 us of its time, confirmed, tier 3; no report
+from the future except the skip's own; a 30 ms stall gives one XRUN with
+`p_off` equal to the skipped frames, the fit stays ready, the sound in
+flight is flagged XRUN and the next lands on the truth; a rewind restarts
+the fit. Mutants `ca-01` to `ca-09` in `tests/mutate/audio.toml`: 9 of 9
+killed. Hog mode, the IsAlive listener and the silence after LOST need a
+device; they ran on the Mac as above and have no mutant.
+
+### Timing runs to do
+
+One command a condition, from the repository root, on a quiet machine,
+with the display awake (the script holds it awake). Each `clockstats`
+condition prints the program's summary and one table row from
+`analyze.py`: callbacks, interval, the reports' residual from one line and
+from 10 s lines, drift, report age and the time line's cost.
+
+| Command | Time | What it answers |
+|---|---|---|
+| `sh tests/probe/coreaudio/run.sh idle-spk` | 10 min | the HAL reports and the fit on the speakers |
+| `sh tests/probe/coreaudio/run.sh idle-hdmi` | 10 min | the same on HDMI |
+| `sh tests/probe/coreaudio/run.sh load-spk` | 3 min | under load |
+| `sh tests/probe/coreaudio/run.sh load-hdmi` | 3 min | |
+| `sh tests/probe/coreaudio/run.sh p128-spk` | 3 min | a 128-frame IO buffer |
+| `sh tests/probe/coreaudio/run.sh p128-hdmi` | 3 min | |
+| `sh tests/probe/coreaudio/run.sh p32-spk` | 3 min | a 32-frame IO buffer |
+| `sh tests/probe/coreaudio/run.sh hog-spk` | 3 min | hog mode against the shared idle run |
+| `sh tests/probe/coreaudio/run.sh stall-spk` | 1 min | 5 stalls: XRUN records and the fit across them |
+| `sh tests/probe/coreaudio/run.sh sched-spk` | 25 s | residuals and the shortest safe lead |
+| `sh tests/probe/coreaudio/run.sh sched-hdmi` | 25 s | |
+| `sh tests/probe/coreaudio/run.sh sched-spk-p128` | 25 s | |
+| `sh tests/probe/coreaudio/run.sh sched-hdmi-p128` | 25 s | |
+| `sh tests/probe/coreaudio/run.sh sched-spk-hog` | 25 s | |
+
+About 42 minutes in all. Run them after ysp/rt.h 0.10.0 is merged, so
+that the reports map by the timebase alone. The `sched-*` conditions play
+tones at -40 dBFS.
+
 ## Bindings
 
 `ysp-audio` 0.7.3 (Python `ysp.audio`) and the MEX function `ysp_audio`
@@ -2597,8 +2886,11 @@ or double (MEX). A forwarded call through the shared table costs about
   loopback cable; `--line` is built, not run. It
   reports the measured latency minus the OS's claim when it does.
   `--line --stream` (stream placement and latency) is built, not run.
-- CoreAudio, ALSA, PulseAudio: compiled, never run. PulseAudio
-  under WSLg plays to the Windows speakers and was not run.
+- ALSA, PulseAudio: compiled, never run. PulseAudio under WSLg plays to
+  the Windows speakers and was not run.
+- CoreAudio timing (the runs in "Timing runs to do"), CoreAudio capture
+  (no input on the Mac), an Intel Mac, a USB interface, and any rate but
+  48 kHz there.
 - Web Audio: run in Chrome 154 (and Firefox, [web.md](web.md)) on this
   laptop; sound at the speaker never measured, so the browser's
   `outputLatency` in every web onset is unchecked.

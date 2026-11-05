@@ -17,6 +17,7 @@
  *                  mismatch (CI runs this)
  *   --device NAME  the playback device whose name contains NAME
  *   --exclusive    WASAPI exclusive mode (every other program goes silent)
+ *                  or CoreAudio hog mode
  *   --period N     frames per callback asked for (desc.period)
  *   --queue Q      WASAPI shared periods queued ahead of the engine
  *                  (desc.queue: 1 or 2; default 2)
