@@ -146,8 +146,8 @@ WSL2 Ubuntu 22.04 gcc 11.4, emcc under node 24.19.
 ### macOS (v0.2.1, 2026-11-04)
 
 The first run on a Mac: an Apple M2 Mac mini, macOS 27.0.1, Apple clang
-21, arm64, the internal SSD (APFS, case-insensitive, the default). Functional
-only: no cost was measured.
+21, arm64, the internal SSD (APFS, case-insensitive, the default). The
+costs are below the table.
 
 | Check | Result |
 |---|---|
@@ -158,6 +158,29 @@ only: no cost was measured.
 
 Not done: a power cut. Nothing here shows that the bytes survive one; the
 change follows Apple's manual page.
+
+Costs on the Mac, 2026-11-05 at 01:40: the same Mac, AC power, the
+console locked, no other build or test running (load average 1.7 to 2.2,
+falling). `examples/dataset/bench.c` built twice with
+`clang -O2 -std=c11`: as shipped (`F_FULLFSYNC`), and with
+`-D'YDS__FULLFSYNC(fd)=(-1)' -D'YTR__FULLFSYNC(fd)=(-1)'`, which takes the
+`fsync()` fallback (what v0.2.0 did). Two rounds, alternating. Median
+(p99), the two rounds:
+
+| Call | n | `F_FULLFSYNC` (v0.2.1) | `fsync()` (v0.2.0) |
+|---|---|---|---|
+| Frame row, `YTR_FLUSH_ROW` | 10000 | 2.5 (5.4); 2.0 (4.0) us | 2.8 (5.9); 3.4 (8.2) us |
+| Frame row, `YTR_FLUSH_SYNC` | 500 | 2.99 (3.10); 2.99 (3.09) ms | 26 (36); 29 (37) us |
+| `yds_session_set()`, the atomic rewrite | 200 | 7.0 (8.1); 7.0 (8.0) ms | 0.18 (0.41); 0.18 (0.38) ms |
+| `yds_open()`, empty (n = 20) | 20 | 7.2; 7.3 ms | 0.45; 0.46 ms |
+| `yds_finish()` | 1 | 6.2; 7.0 ms | 0.52; 0.55 ms |
+
+`F_FULLFSYNC` makes a synced row 100 times dearer than `fsync()`: 3.0 ms,
+about the 2.9 ms that `_commit()` costs on the Windows laptop's SSD. The
+26 us of `fsync()` is the cost of not reaching the flash. The rewrite of
+`session.json` (two `F_FULLFSYNC` calls) costs 7 ms, the Windows laptop's
+8.2 ms. Both stay between trials, as before; no row of `YTR_FLUSH_ROW`
+changed.
 
 The handle's size on ysp/trials.h v0.6 (2026-10-21): the same laptop,
 MinGW-w64 gcc 16.1 -O2, under the measurement lock (load 1 %), A and B

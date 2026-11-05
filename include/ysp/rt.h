@@ -1372,8 +1372,13 @@
  *   Support; /tmp, a symbolic link to /private/tmp, refused). An
  *   unprivileged thread obtained YRT_POLICY_TIME_CONSTRAINT (the Mach
  *   policy read back as asked, in mach units), and YRT_POLICY_FIFO when
- *   Mach refused a 100 ms computation. Functional
- *   only: no wait or clock cost was measured on the Mac.
+ *   Mach refused a 100 ms computation. Measured 2026-11-05 (AC power, no
+ *   other load, elevated, one or two runs; docs/rt.md, "Measured on the
+ *   Mac"): yrt_now_ns() 12.3 ns a call (mach_absolute_time() 5.2,
+ *   CLOCK_MONOTONIC 14.3); 2 ms waits at TIME_CONSTRAINT 10 to 16 us late
+ *   at the median and at most 43 us without a spin, 0.0 us (p99 0.0, max
+ *   0.1) with the default spin; a ring push 13 ns, a zone pair 30 ns
+ *   attached; correlation 42 ns wide.
  *   The top of the ladder is barely exercised: the Windows and Linux test
  *   hosts run without CAP_SYS_NICE, so the tests see
  *   YRT_POLICY_TIME_CRITICAL (Windows) and YRT_POLICY_NORMAL.

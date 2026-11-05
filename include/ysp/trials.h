@@ -1366,8 +1366,9 @@
  *   STATUS: v0.6.1, 2026-11-04: an Apple M2 Mac mini, macOS 27.0.1, Apple clang 21, APFS; every
  *   test passes, Release, ASan and UBSan. The data-file test counts one
  *   F_FULLFSYNC a YTR_FLUSH_SYNC row and writes every row through fsync()
- *   on a volume that refuses it. The cost of a synced row on the Mac is
- *   not measured. No power cut was made.
+ *   on a volume that refuses it. A synced row costs 2.99 ms median, 3.1
+ *   ms p99 on its SSD (26 us with fsync() alone, which does not reach the
+ *   flash; docs/trials.md). No power cut was made.
  *   STATUS: v0.6.0, 2026-10-21. tests/adapt/trials_test_vars.h: every
  *   variable value and trial seed against a second implementation of the
  *   stream, three outputs pinned; a session with variables draws as one

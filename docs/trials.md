@@ -1043,7 +1043,14 @@ UBSan; its data-file test counts one `F_FULLFSYNC` a row with
 `YTR_FLUSH_SYNC`, none with `YTR_FLUSH_ROW`, and with a refusing volume
 writes every row through `fsync()`. Mutants `mac-01` and `mac-02` in
 `tests/mutate/trials.toml`: 2 of 2 killed (they exist on macOS only). The
-cost of a synced row on the Mac is not measured yet. No power cut was made.
+cost of a synced row on the Mac, measured on 2026-11-05 through
+`examples/dataset/bench.c` (its frame table is a `ytr_data` writer; the
+conditions are in [docs/dataset.md](dataset.md#macos-v021-2026-11-04)):
+2.99 ms median, 3.1 ms p99, in two rounds of 500 rows, against 26 to 29 us
+with `fsync()` alone. The Windows laptop's `_commit()` costs 1.7 ms in
+this header's bench ([above](#verification-and-cost-v04)) and 2.9 ms in
+ysp/dataset.h's: `YTR_FLUSH_SYNC` stays a between-trials choice, as on
+Windows. No power cut was made.
 
 ## Verification (v0.2)
 
