@@ -1,0 +1,35 @@
+# ysp/input.h mutants: the SDL adapter's OS stamps (v0.5.0). The test is
+# tests/adapt/input_test.c with its SDL part (YIN_TEST_SDL: SDL3's headers,
+# no SDL call); in-03 is macOS code and runs on a Mac.
+header = "ysp/input.h"
+
+[test.input]
+source = "tests/adapt/input_test.c"
+compiler = "gcc"
+flags = ["-std=c11", "-O1", "-w", "-DYIN_TEST_SDL", "-I/Users/brainworks/sdl3/include"]
+libs = ["-lm"]
+timeout = 120
+
+[[mutant]]
+id = "in-01"
+name = "the OS time ignored"
+test = "input"
+why = "ctx.t_os is the event's own OS time (NSEvent.timestamp on macOS); SDL 3.4's stamp there is late by a per-process offset (v0.5.0)."
+find = '    in.t = ctx && ctx->t_os ? ctx->t_os : t_rt;'
+replace = '    in.t = t_rt;'
+
+[[mutant]]
+id = "in-02"
+name = "the fallback not flagged"
+test = "input"
+why = "With OS stamps on, a key or button without one carries SDL's biased stamp and must say so (tier 3) (v0.5.0)."
+find = '    bool fallback = ctx && ctx->os_stamps && !ctx->t_os;'
+replace = '    bool fallback = false;'
+
+[[mutant]]
+id = "in-03"
+name = "the macOS source entry ignores the OS stamps"
+test = "input"
+why = "The measured bounds belong to NSEvent stamps; SDL's own Cocoa stamps are tier 3 with their own bounds (v0.5.0)."
+find = '    if ((kind == YIN_KIND_KEYBOARD || kind == YIN_KIND_MOUSE) && ctx && ctx->os_stamps) {'
+replace = '    if ((kind == YIN_KIND_KEYBOARD || kind == YIN_KIND_MOUSE) && ctx && !ctx->os_stamps) {'

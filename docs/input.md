@@ -91,7 +91,94 @@ unit.
 The event's `t` keeps its name: it is `int64_t` ns already, and every
 producer header writes it.
 
+## macOS: NSEvent stamps (v0.5.0)
+
+SDL 3.4 stamps a Cocoa key or mouse event with `NSEvent.timestamp` plus
+a static offset (`Cocoa_GetEventTimestamp`,
+`src/video/cocoa/SDL_cocoaevents.m`). The process's first such event sets
+the offset to its own read delay; later events only lower it, when it
+would put a stamp after the read. So every stamp is late by the shortest
+read delay seen so far in the process: 3773 us on the first key, then
+501, 316 and down to 207 us in the probe's run
+([screen_macos_probe.md](screen_macos_probe.md), 6.9). The same function
+stamps mouse buttons, motion and the wheel, touch, pinches and pens. A
+modifier key (shift, control, option, command) has no stamp: SDL stamps
+it when it reads it. `NSEvent.timestamp` has no offset: its clock is mach
+time, the ysp_rt clock on macOS.
+
+`ysp/screen.h` v0.15.0 reads `NSEvent.timestamp` for keys, modifier keys
+and mouse buttons and gives it to this header's adapter (docs/screen.md,
+"Keys and mouse buttons: NSEvent.timestamp"). The adapter takes it
+through the context, as it takes `raw_keyboard`:
+
+- `ctx.t_os`, when not 0, is the event's own OS time on the ysp_rt
+  clock, and replaces `t_rt`.
+- `ctx.os_stamps` says that the caller gives such times where it has
+  them (`ysp/screen.h`'s `caps.os_input_stamps`). A key or mouse button
+  without one then carries SDL's stamp, and gets tier 3, so a consumer
+  sees which events kept the offset.
+
+`yin_sdl_source()` on macOS:
+
+| Kind | `ctx.os_stamps` | Tier | Bounds (stamp minus post) | From |
+|---|---|---|---|---|
+| keyboard, mouse | true | unknown (host part only) | 49.3 us to 46.591 ms | the run below; the maximum of three runs |
+| keyboard, mouse | false | 3 | 262 us to 67.962 ms | SDL's own stamp: the probe's minimum, the maximum of the three runs below |
+| touch, pen | either | 3 | none | SDL's source, not measured |
+
+The bounds are the host part for synthetic events: they leave out the
+keyboard's scan, debounce and USB poll, and a real key's path into the
+window server.
+
+Conditions: 2026-11-05 11:58, Apple M2 Mac mini, macOS 27.0.1, the M27Q
+on HDMI at "60 Hz", AC, the session unlocked, no Screen Sharing, nothing
+else running; Accessibility granted to the terminal's app. An 800 x 600
+METAL window ran a frame loop that read its events once a frame with
+`yscr_poll()` and `yscr_event_input()`, the path a rig uses. A thread
+posted F19, the left button at the window's center, and (to the process
+only) the left shift key, 40 to 50 ms apart at a random phase to the
+frames, 200 of each per pass. "post" is the mach time just before the
+post call. The test's own local NSEvent monitor gave the reference
+NSEvent.timestamp. Times in us.
+
+| Pass, kind | n | SDL's stamp kept | \|stamp - NSEvent\| max | stamp - post: min / p50 / p99 / max | SDL's stamp - post: min / p50 / p99 / max |
+|---|---|---|---|---|---|
+| `CGEventPostToPid`, key down | 200 | 0 | 0 | 68.8 / 113.7 / 3781 / 44567 | 585.5 / 782.4 / 6598 / 52827 |
+| `CGEventPostToPid`, key up | 200 | 0 | 0 | 49.3 / 115.3 / 3139 / 15397 | 566.0 / 772.1 / 4311 / 23657 |
+| `CGEventPostToPid`, left shift down | 200 | 0 | 0 | 68.1 / 113.6 / 2578 / 2803 | 546.0 / 8411 / 16940 / 17150 |
+| `CGEventPostToPid`, left shift up | 200 | 0 | 0 | 50.7 / 112.3 / 2788 / 3211 | 499.5 / 8996 / 16837 / 17049 |
+| `CGEventPostToPid`, left button down and up | 200 each | SDL delivered none | | | |
+| `CGEventPost(kCGHIDEventTap)`, key down | 200 | 0 | 0 | 75.8 / 135.7 / 3724 / 3743 | 592.4 / 652.4 / 4240 / 4259 |
+| `CGEventPost(kCGHIDEventTap)`, key up | 200 | 0 | 0 | 73.2 / 125.8 / 2933 / 3531 | 589.9 / 642.4 / 3450 / 4048 |
+| `CGEventPost(kCGHIDEventTap)`, left button down | 200 | 0 | 0 | 74.4 / 136.0 / 2917 / 3582 | 591.0 / 652.6 / 3433 / 4099 |
+| `CGEventPost(kCGHIDEventTap)`, left button up | 200 | 0 | 0 | 64.2 / 122.5 / 3194 / 3725 | 580.9 / 639.1 / 3711 / 4242 |
+
+- The pairs are exact: the corrected stamp equals the test monitor's
+  `NSEvent.timestamp` to the nanosecond (1600 of 1600; `os_stamps=1600/1600`
+  in the describe line). The header and the test round the double to ns
+  in different ways; no difference reached 1 ns.
+- The corrected stamp came 49 to 136 us after the post at the median, and
+  up to 3.8 ms at p99 in both passes. Two process-posted keys came 15 and
+  44.6 ms after the post (the two runs before this one: 46.6 and 45.4 ms
+  at most). The probe saw such a delay once on the HID path (40 ms, during
+  a 26 ms post call). It is the event's own time, so the stamp keeps it.
+- SDL's own stamps came 0.5 to 0.8 ms later at the median: its offset in
+  this process (516 us at the end of the run). Its modifier keys came 8.4
+  to 9.0 ms after the post at the median, up to 17 ms: the time of the
+  frame's read, which is a frame long.
+- SDL 3.4 delivered no mouse button posted with `CGEventPostToPid` (0 of
+  200 down and up; both monitors saw all 200). These are events the
+  pairing must pass over; the keys that followed them kept their exact
+  stamps.
+
 ## Verification
+
+v0.5.0, on 2026-11-05 (Apple clang 21, macOS 27.0.1): `test_input_sdl`
+115 checks pass, with the new context fields (`t_os` replaces the time;
+`os_stamps` without it gives tier 3 to a key and a button) and the macOS
+source entries; the C and C++ compile checks build. The measurement is
+`ysp/screen.h`'s (above). 3 of 3 mutants in the new
+`tests/mutate/input.toml` caught.
 
 v0.4.0, on 2026-10-10: the test pins `yin_source`'s new offsets (`lo_ns`
 at 8, `hi_ns` at 16, `note` at 24) and its size (32), and the event's

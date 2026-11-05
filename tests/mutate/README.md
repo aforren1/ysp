@@ -81,6 +81,7 @@ values change from run to run.
 | `stair.toml` | gcc | `gcc -std=c99 -O2 -w -DYST_MAX_TRIALS=128 -DYST_MAX_REVERSALS=32 -I<copy> tests/adapt/stair_test.c -lm` |
 | `quest.toml` | gcc | `gcc -std=c11 -O2 -w -I<copy> tests/adapt/quest_test.c -lm` |
 | `aep.toml` | gcc | `gcc -std=c11 -O2 -w -I<copy> tests/adapt/aep_test.c -lm` (`YAEP_TEST_ONLY=params`: the parameter table and snapshot outcome checks only) |
+| `input.toml` | gcc | `gcc -std=c11 -O1 -w -DYIN_TEST_SDL -I<SDL3 include> -I<copy> tests/adapt/input_test.c -lm` (SDL3's headers only; the SDL3 path is the Mac's in the list) |
 
 These are the compilers of the original runs. The runner finds gcc in
 this order: the `YSP_MUT_GCC` environment variable,

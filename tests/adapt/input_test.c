@@ -157,6 +157,56 @@ static void check_sdl(void) {
     CHECK_I(e.stamp, YIN_TIER_3);
     ev.type = SDL_EVENT_WINDOW_SHOWN;
     CHECK_I(yin_from_sdl(&ev, 1, NULL, &e), 0);
+    {   /* v0.5.0: the OS's own time (ysp/screen.h on macOS: NSEvent.timestamp) */
+        yin_sdl_ctx ctx;
+        yin_source src;
+        memset(&ctx, 0, sizeof ctx);
+        ctx.os_stamps = true;
+        ctx.t_os = 1000;
+        ev.type = SDL_EVENT_MOUSE_BUTTON_DOWN;   /* which 0: tier 3 without OS stamps */
+        CHECK_I(yin_from_sdl(&ev, 1500, &ctx, &e), 1);
+        CHECK_I(e.t, 1000);
+        CHECK_I(e.stamp, 0);
+        memset(&ev, 0, sizeof ev);
+        ev.type = SDL_EVENT_KEY_UP;
+        ev.key.scancode = SDL_SCANCODE_J;
+        CHECK_I(yin_from_sdl(&ev, 1500, &ctx, &e), 1);   /* raw_keyboard off: tier 3 without */
+        CHECK_I(e.t, 1000);
+        CHECK_I(e.stamp, 0);
+        ctx.t_os = 0;   /* no NSEvent found: SDL's stamp, flagged */
+        CHECK_I(yin_from_sdl(&ev, 1500, &ctx, &e), 1);
+        CHECK_I(e.t, 1500);
+        CHECK_I(e.stamp, YIN_TIER_3);
+        ev.type = SDL_EVENT_MOUSE_BUTTON_UP;
+        CHECK_I(yin_from_sdl(&ev, 1500, &ctx, &e), 1);
+        CHECK_I(e.stamp, YIN_TIER_3);
+        ctx.os_stamps = false;   /* as before v0.5.0 */
+        ev.type = SDL_EVENT_KEY_DOWN;
+        ev.key.down = true;
+        CHECK_I(yin_from_sdl(&ev, 1500, &ctx, &e), 1);
+        CHECK_I(e.t, 1500);
+        CHECK_I(e.stamp, YIN_TIER_3);
+        ctx.raw_keyboard = true;
+        CHECK_I(yin_from_sdl(&ev, 1500, &ctx, &e), 1);
+        CHECK_I(e.stamp, 0);
+        ctx.os_stamps = true;
+        src = yin_sdl_source(&ctx, YIN_KIND_KEYBOARD);
+#if defined(__APPLE__)
+        CHECK_I(src.tier, YIN_TIER_UNKNOWN);
+        CHECK_I(src.partial, 1);
+        CHECK_I(src.lo_ns, 49300);
+        CHECK_I(src.hi_ns, 46591000);
+        src = yin_sdl_source(&ctx, YIN_KIND_MOUSE);
+        CHECK_I(src.lo_ns, 49300);
+        ctx.os_stamps = false;
+        src = yin_sdl_source(&ctx, YIN_KIND_KEYBOARD);
+        CHECK_I(src.tier, YIN_TIER_3);
+        CHECK_I(src.lo_ns, 262000);
+        CHECK_I(src.hi_ns, 67962000);
+#else
+        CHECK_I(src.note != NULL, 1);
+#endif
+    }
 }
 #endif
 
