@@ -1951,3 +1951,22 @@ test = "metal_new"
 why = "The stale rule needs the time just before IOHIDManagerOpen; with 0 a value 44 s old passes (v0.16.1)."
 find = '        yscr__rm.t_start = yscr__now();'
 replace = ''
+
+# v0.16.1, after the hand runs of 17:07 and 17:08: relative zeros (mt-49, mt-50).
+[[mutant]]
+id = "mt-49"
+name = "an absolute 0 dropped as empty"
+test = "screen"
+why = "A relative element at 0 says nothing; an absolute axis at 0 is a position (v0.16.1)."
+find = 'static int yscr__hid_empty(int relative, int64_t v) { return relative && v == 0; }'
+replace = 'static int yscr__hid_empty(int relative, int64_t v) { (void)relative; return v == 0; }'
+
+[[mutant]]
+id = "mt-50"
+name = "relative zeros kept"
+test = "metal_new"
+why = "IOKit calls back with a relative element's 0 dated its last change (the wheel's 12 to 44 s back, X's and Y's the report before); kept, one opened a report dated the last report before a pause, up to 72 ms late (v0.16.1)."
+find = '''    if (yscr__hid_empty(relative, v)) {
+        YSCR__RM_VALUE(page, usage, v, t, YSCR__RM_EMPTY);'''
+replace = '''    if (0) {
+        YSCR__RM_VALUE(page, usage, v, t, YSCR__RM_EMPTY);'''

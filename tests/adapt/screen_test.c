@@ -4187,6 +4187,9 @@ static void test_mac_rules(void) {
     CHECK(!yscr__hid_stale(5000, 1000, 5000));                     /* the same report */
     CHECK(!yscr__hid_stale(9000, 1000, 5000));                     /* the next one */
     CHECK(yscr__hid_stale(4999, 1000, 5000));                      /* out of order */
+    CHECK(yscr__hid_empty(1, 0));                                  /* a relative 0 says nothing */
+    CHECK(!yscr__hid_empty(1, -1));
+    CHECK(!yscr__hid_empty(0, 0));                                 /* an absolute 0 is a position */
     {   /* random values: every report comes out once, none lost */
         uint32_t rng = 12345, closed = 0, opened = 0;
         int64_t tt = 0;
