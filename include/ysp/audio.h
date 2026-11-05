@@ -1,4 +1,4 @@
-/* ysp/audio.h - v0.8.0 - public domain single-header audio library
+/* ysp/audio.h - v0.8.1 - public domain single-header audio library
  *
  *   Sound at a time on the ysp/rt.h clock. A buffer is played with
  *   yau_play_at(buf, t); the header plans its first sample on the device
@@ -987,6 +987,8 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.8.1 - Documentation only: the CoreAudio timing runs on HDMI
+ *          (STATUS). No code change.
  *   v0.8.0 - CoreAudio (BACKENDS, COREAUDIO): position reports from the
  *          HAL's render time stamps (a render notification on miniaudio's
  *          AudioUnit), so the fit is of the HAL's time line and onsets are
@@ -1168,6 +1170,16 @@
  *          positions, miniaudio's null device, the device and source
  *          interfaces, synthesis, the records, the parameter table.
  *
+ *   STATUS: v0.8.1, 2026-11-05 (docs/audio.md, "Timing runs"): HDMI
+ *   timed on the same Mac, quiet, display awake, a Screen Sharing session
+ *   active, ysp/rt.h 0.10.0: 0 XRUN records in 16 min at 480 and 128
+ *   frames, idle and under load; the HAL moves its HDMI time line in steps
+ *   (up to 15.7 us, about every 12288 frames), so the reports lie on 10 s
+ *   lines to 6.3 to 7.7 us p99 (speakers: 0.2 to 0.5 us); a bend of 8 to
+ *   15 us over minutes, as in three of the six speaker runs; +2.0 to +2.8
+ *   ppm; residuals -10.9 to +9.9 us; shortest safe lead 30 ms at 480
+ *   frames, 12 ms at 128. The HDMI claim ends at the link, not at the
+ *   monitor's speakers: tier 3.
  *   STATUS: v0.8.0, 2026-11-05 (docs/audio.md, "CoreAudio"): an Apple
  *   M2 Mac mini, macOS 27.0.1, Apple clang 21, on HDMI (a GBT M27Q
  *   monitor) and the built-in speakers, 48 kHz float: every example that
@@ -1367,8 +1379,8 @@
 
 #define YAU_VERSION_MAJOR 0
 #define YAU_VERSION_MINOR 8
-#define YAU_VERSION_PATCH 0
-#define YAU_VERSION_STRING "0.8.0"
+#define YAU_VERSION_PATCH 1
+#define YAU_VERSION_STRING "0.8.1"
 
 #include "ysp/rt.h"
 

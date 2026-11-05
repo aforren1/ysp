@@ -2756,88 +2756,128 @@ One command a condition, from the repository root, with the display awake
 (the script holds it awake). Each `clockstats` condition prints the
 program's summary and one table row from `analyze.py`.
 
-Conditions: the same Mac, 02:52 to 03:35, no other agent running, the
-session locked. The build is RelWithDebInfo, Apple clang 21, on the
-integration branch `mac-integration` at 6550b6e: this header with
-ysp/rt.h 0.10.0, whose `yrt_now_ns()` is `mach_absolute_time()` scaled by
-the timebase. So the reports map to the ysp_rt clock by the timebase
-alone. Before the runs the Mac was in a dark wake and the speakers gave no
-callback; `caffeinate -u` brought a full wake. Built-in speakers only,
-48 kHz. The M27Q's audio device was gone (its display asleep, the session
-locked), so no HDMI condition ran.
+Conditions, both outputs: the same Mac on AC power, no other agent
+running, one condition at a time. The build is RelWithDebInfo, Apple
+clang 21, in the integration worktree `mac-integration`: this header
+(0.8.0 with the host-time fix) with ysp/rt.h 0.10.0, whose `yrt_now_ns()`
+is `mach_absolute_time()` scaled by the timebase. So the reports map to
+the ysp_rt clock by the timebase alone.
+
+- Built-in speakers: 02:52 to 03:35, the session locked, the build at
+  6550b6e. Before the runs the Mac was in a dark wake and the speakers
+  gave no callback; `caffeinate -u` brought a full wake.
+- HDMI (the M27Q): later the same day, after the screen probe finished,
+  the display awake, a macOS Screen Sharing session active. The
+  coordinator ran them; this note's analysis is of their CSV files.
 
 `audio_clockstats`, silence (`load`: 8 spinning threads and a 60 Hz frame
 loop that spins 8 ms a frame and plays a silent sound each frame):
 
-| Condition | Callbacks | Interval p1 / p50 / p99 / max ms | XRUN records | Residual from one line: sd / p99 / max us | Residual from 10 s lines: p99 / max us | Drift ppm | Fit spread at the end | Report age p50 / max ms | Time line cost p50 / p99 us | Render mean / p99 us |
+| Condition | Callbacks | Interval p1 / p50 / p99 / max ms | XRUN records | Residual from one line: sd / p99 / max us | Residual from 10 s lines: p99 / max us | Steps over 1 us: count / max us | Bend: range of 10 s means us | Drift ppm | Report age p50 / max ms | Time line cost p50 / p99 us |
 |---|---|---|---|---|---|---|---|---|---|---|
-| idle, 480 frames, 10 min | 60036 | 9.90 / 10.00 / 10.11 / 10.18 | 0 | 3.97 / 11.64 / 12.87 | 0.17 / 1.57 | +2.74 | 150 ns | 8.47 / 8.61 | 0.96 / 3.12 | 7.8 / 23.3 |
-| load, 480 frames, 3 min | 18037 | 9.92 / 9.99 / 10.09 / 10.11 | 0 | 4.41 / 10.30 / 13.50 | 0.33 / 2.31 | +1.95 | 4434 ns | 8.44 / 8.56 | 0.67 / 2.12 | 8.4 / 17.7 |
-| idle, 128 frames, 3 min | 67624 | 2.64 / 2.67 / 2.69 / 2.70 | 0 | 3.30 / 7.50 / 8.69 | 0.53 / 1.33 | +2.47 | 3310 ns | 1.09 / 1.13 | 0.21 / 0.38 | 1.5 / 2.0 |
-| idle, 32 frames, 3 min | 270481 | 0.64 / 0.67 / 0.69 / 0.72 | 0 | 0.42 / 0.85 / 0.91 | 0.17 / 1.58 | +2.63 | 417 ns | 0.43 / 0.47 | 0.21 / 0.38 | 0.7 / 1.1 |
-| hog mode, 480 frames, 3 min | 18035 | 9.90 / 10.00 / 10.11 / 10.18 | 0 | 0.30 / 0.82 / 1.44 | 0.18 / 1.42 | +2.69 | 294 ns | 8.47 / 8.61 | 1.00 / 5.25 | 7.5 / 18.8 |
-| a 30 ms stall every 10 s, 1 min | 6017 | 9.92 / 10.00 / 10.10 / 40.71 | 6 of 6 stalls | 0.14 / 0.31 / 1.63 | 0.28 / 1.67 | +2.73 | 127 ns | 8.47 / 8.60 | 0.83 / 4.67 | |
-| HDMI conditions (idle, load, 128 frames) | not run: the M27Q's audio device was gone | | | | | | | | | |
+| speakers, idle, 480 frames, 10 min | 60036 | 9.90 / 10.00 / 10.11 / 10.18 | 0 | 3.97 / 11.64 / 12.87 | 0.17 / 1.57 | 1 / 1.51 | 16.23 | +2.74 | 8.47 / 8.61 | 0.96 / 3.12 |
+| speakers, load, 480 frames, 3 min | 18037 | 9.92 / 9.99 / 10.09 / 10.11 | 0 | 4.41 / 10.30 / 13.50 | 0.33 / 2.31 | 1 / 1.69 | 14.15 | +1.95 | 8.44 / 8.56 | 0.67 / 2.12 |
+| speakers, idle, 128 frames, 3 min | 67624 | 2.64 / 2.67 / 2.69 / 2.70 | 0 | 3.30 / 7.50 / 8.69 | 0.53 / 1.33 | 2 / 1.45 | 10.56 | +2.47 | 1.09 / 1.13 | 0.21 / 0.38 |
+| speakers, idle, 32 frames, 3 min | 270481 | 0.64 / 0.67 / 0.69 / 0.72 | 0 | 0.42 / 0.85 / 0.91 | 0.17 / 1.58 | 1 / 1.37 | 1.39 | +2.63 | 0.43 / 0.47 | 0.21 / 0.38 |
+| speakers, hog mode, 480 frames, 3 min | 18035 | 9.90 / 10.00 / 10.11 / 10.18 | 0 | 0.30 / 0.82 / 1.44 | 0.18 / 1.42 | 1 / 1.52 | 1.18 | +2.69 | 8.47 / 8.61 | 1.00 / 5.25 |
+| speakers, a 30 ms stall every 10 s, 1 min | 6017 | 9.92 / 10.00 / 10.10 / 40.71 | 6 of 6 stalls | 0.14 / 0.31 / 1.63 | 0.28 / 1.67 | 1 / 1.51 | 0.21 | +2.73 | 8.47 / 8.60 | 0.83 / 4.67 |
+| HDMI, idle, 480 frames, 10 min | 60015 | 9.96 / 10.00 / 10.05 / 10.15 | 0 | 3.35 / 8.77 / 14.17 | 7.65 / 10.67 | 1609 / 15.69 | 8.22 | +2.79 | 3.36 / 3.50 | 0.33 / 1.17 |
+| HDMI, load, 480 frames, 3 min | 18036 | 9.98 / 10.00 / 10.02 / 10.08 | 0 | 4.30 / 11.97 / 19.78 | 7.05 / 10.65 | 419 / 10.94 | 11.12 | +1.99 | 3.32 / 3.42 | 0.38 / 0.75 |
+| HDMI, idle, 128 frames, 3 min | 67548 | 2.64 / 2.67 / 2.69 / 2.73 | 0 | 4.45 / 10.68 / 13.07 | 6.32 / 8.79 | 454 / 13.04 | 14.65 | +2.49 | 1.35 / 1.41 | 0.17 / 0.29 |
 
-The frame thread under load: `yau_play_at()` and `yau_update()` 0.85 us
-mean, 1.67 us p99, 10.1 us max a frame.
+Render cost with 0 voices, mean / p99: 7.8 / 23.3 us (speakers, idle,
+480 frames), 6.0 / 15.0 us (HDMI, idle, 480 frames), 1.5 / 2.0 us at 128
+frames. The frame thread under load, `yau_play_at()` and `yau_update()` a
+frame: 0.85 us mean, 1.67 us p99 (speakers); 0.32 us mean, 0.79 us p99
+(HDMI).
 
 What the table says:
 
-- The HAL's reports lie on a line to 0.17 to 0.53 us p99 within any 10 s.
-  Over minutes the line bent in three runs (idle at 480 frames, load, 128
-  frames: one line's residual sd 3.3 to 4.4 us, at most 13.5 us) and not
-  in three (sd 0.14 to 0.42 us). The cause is not known; the HAL's own
-  rate estimate is a candidate. The fit refits each second, and its
-  spread at the end was 127 ns to 4.4 us. A wander of 13 us over minutes
-  is under a frame (20.8 us).
-- The speakers ran +1.95 to +2.75 ppm fast against `mach_absolute_time()`,
-  though both clocks are on the SoC (clock domain `main`).
-- No underrun in 22 minutes without stalls, at 480, 128 and 32 frames and
-  under load. Each 30 ms stall gave one XRUN record of 1468 to 1476
-  frames (30.6 to 30.75 ms), and the fit stayed (spread 127 ns at the
-  end; the reports' one line, in device frames, 0.14 us sd across all
-  six skips).
-- The time line costs 0.2 to 1.0 us a callback at the median and 5.3 us
-  at most at p99. A report is 8.5 ms old at 480 frames, 1.1 ms at 128 and
-  0.43 ms at 32.
-- Hog mode changed nothing measurable here: the same interval
-  percentiles, report age and 10 s residual as the shared idle run.
+- **No underrun** in 38 minutes without stalls on the two outputs, at 480,
+  128 and 32 frames and under load. Each 30 ms stall gave one XRUN record
+  of 1468 to 1476 frames (30.6 to 30.75 ms), and the fit stayed (spread
+  127 ns at the end; the reports' one line, in device frames, 0.14 us sd
+  across all six skips).
+- **Steps on HDMI.** On the speakers the HAL's line is smooth: each
+  report's time step is within 1 us of the line's for its frames in all
+  but 1 or 2 steps a run, and within 10 s the reports lie on a line to
+  0.17 to 0.53 us p99. On HDMI the HAL moves its line in steps: 419 to
+  1609 steps over 1 us a run, at most 15.7 us, and a residual from 10 s
+  lines of 6.3 to 7.7 us p99. The steps come every 26 renders at 480
+  frames and every 96 at 128, so about every 12288 frames (0.256 s) of
+  device time; the HAL's new anchor of its time line at each wrap of the
+  device's IO ring is the likely cause, not checked. The fit takes the
+  least late report of each 200 ms over 205 s, so a step moves it by a
+  part of a step: its spread at the end was 2.4 to 4.2 us on HDMI against
+  0.1 to 4.4 us on the speakers.
+- **Bend.** The line also bends over minutes: the mean residual of 10 s
+  windows ranged over 8.2 to 14.7 us in the three HDMI runs and 10.6 to
+  16.2 us in three of the six speaker runs (idle at 480 frames, load,
+  128 frames); in the other three (32 frames, hog mode, stalls) it stayed
+  in 0.2 to 1.4 us. So HDMI shows it too. The three speaker runs without
+  it ran last in the speaker session, so the bend follows the time of the
+  run, not the device; its cause is not known. The fit refits each second
+  and follows it. 16 us over minutes is under a frame (20.8 us).
+- **Drift.** +1.95 to +2.79 ppm against `mach_absolute_time()` on both
+  outputs, though all three clocks are on the SoC (clock domain `main`).
+  The two loaded runs had the lowest (+1.95 and +1.99 ppm).
+- **Cost.** The time line costs 0.2 to 1.0 us a callback at the median
+  and at most 5.3 us at p99. A report is 8.5 ms old on the speakers and
+  3.4 ms on HDMI at 480 frames (the stamp is 11.6 and 16.7 ms ahead), 1.1
+  and 1.4 ms at 128.
+- **Hog mode** changed nothing measurable on the speakers: the same
+  interval percentiles, report age and 10 s residual as the shared idle
+  run.
 
 `audio_schedule` at -40 dBFS (14 sounds, then the lead probe of 10 silent
 sounds a lead):
 
-| Condition | Onsets on the planned frame, confirmed, tier 3 | Residual min / max us | Shortest safe lead | `yau_lead_ns()` median |
+| Condition | Onsets confirmed, tier 3 | Residual min / max us | Shortest safe lead | `yau_lead_ns()` median |
 |---|---|---|---|---|
-| 480 frames | 14 of 14 | -7.6 / +10.2 | 25 ms (1 of 10 late at 20 ms) | 25.6 ms |
-| 128 frames | 14 of 14 | -2.5 / +6.4 | 8 ms | 8.2 ms |
-| hog mode, 480 frames | 14 of 14 | -0.3 / +8.9 | 20 ms | 26.3 ms |
-| HDMI, 480 and 128 frames | not run: the M27Q's audio device was gone | | | |
+| speakers, 480 frames | 14 of 14 | -7.6 / +10.2 | 25 ms (1 of 10 late at 20 ms) | 25.6 ms |
+| speakers, 128 frames | 14 of 14 | -2.5 / +6.4 | 8 ms | 8.2 ms |
+| speakers, hog mode, 480 frames | 14 of 14 | -0.3 / +8.9 | 20 ms | 26.3 ms |
+| HDMI, 480 frames | 14 of 14 | -10.9 / +9.9 | 30 ms (2 of 10 late at 25 ms) | 31.6 ms |
+| HDMI, 128 frames | 14 of 14 | -3.4 / +3.4 | 12 ms | 13.2 ms |
 
-Every residual is inside the half frame of rounding (10.4 us). The lead
-at 480 frames is 20 to 25 ms; one run each, so the 5 ms between shared
-and hog mode is one late sound in 10, not a property of hog mode. A
-128-frame IO buffer cuts it to 8 ms, against 40 ms on the WASAPI laptop.
-Every time here is the HAL's IO point on the device clock fit; the sound
-leaves the speakers the claimed 480 frames (10.0 ms) later, which nothing
-here checked.
+The plan puts each sound on the nearest frame by the fit of its time, so
+the residual is within the half frame (10.4 us) of that fit. The record's
+time is the fit when the frame is confirmed, a refit later; one HDMI
+residual is 0.5 us past the half frame because the fit moved that much
+between the two (a step, above). The lead at 480 frames is 20 to 25 ms on
+the speakers and 30 ms on HDMI, whose safety offset is 244 frames (5.1 ms)
+longer. One run each, so the 5 ms between shared and hog mode on the
+speakers is one late sound in 10, not a property of hog mode. A 128-frame
+IO buffer cuts the lead to 8 ms (speakers) and 12 ms (HDMI), against
+40 ms on the WASAPI laptop.
+
+Every time here is the HAL's IO point on the device clock fit. The claims
+put the output 480 frames (10.0 ms) later on the speakers and 88 frames
+(1.8 ms) later on HDMI. The HDMI claim ends at the HDMI link: it excludes
+whatever the monitor does with the sound before its speakers or its
+headphone jack, and nothing on the Mac can see that. Only a line-in or a
+microphone run on each output gives the acoustic offset
+(`desc.onset_offset_ns`), so both outputs stay tier 3.
 
 | Command | Time |
 |---|---|
 | `sh tests/probe/coreaudio/run.sh idle-spk` | 10 min |
-| `sh tests/probe/coreaudio/run.sh idle-hdmi` | 10 min, not run |
+| `sh tests/probe/coreaudio/run.sh idle-hdmi` | 10 min |
 | `sh tests/probe/coreaudio/run.sh load-spk` | 3 min |
-| `sh tests/probe/coreaudio/run.sh load-hdmi` | 3 min, not run |
+| `sh tests/probe/coreaudio/run.sh load-hdmi` | 3 min |
 | `sh tests/probe/coreaudio/run.sh p128-spk` | 3 min |
-| `sh tests/probe/coreaudio/run.sh p128-hdmi` | 3 min, not run |
+| `sh tests/probe/coreaudio/run.sh p128-hdmi` | 3 min |
 | `sh tests/probe/coreaudio/run.sh p32-spk` | 3 min |
 | `sh tests/probe/coreaudio/run.sh hog-spk` | 3 min |
 | `sh tests/probe/coreaudio/run.sh stall-spk` | 1 min, 6 stalls |
 | `sh tests/probe/coreaudio/run.sh sched-spk` | 25 s |
-| `sh tests/probe/coreaudio/run.sh sched-hdmi` | 25 s, not run |
+| `sh tests/probe/coreaudio/run.sh sched-hdmi` | 25 s |
 | `sh tests/probe/coreaudio/run.sh sched-spk-p128` | 25 s |
-| `sh tests/probe/coreaudio/run.sh sched-hdmi-p128` | 25 s, not run |
+| `sh tests/probe/coreaudio/run.sh sched-hdmi-p128` | 25 s |
 | `sh tests/probe/coreaudio/run.sh sched-spk-hog` | 25 s |
+
+Not run: 32 frames, hog mode and stalls on HDMI (the script has no such
+conditions).
 
 ## Bindings
 
@@ -2950,9 +2990,10 @@ or double (MEX). A forwarded call through the shared table costs about
   `--line --stream` (stream placement and latency) is built, not run.
 - ALSA, PulseAudio: compiled, never run. PulseAudio under WSLg plays to
   the Windows speakers and was not run.
-- CoreAudio on HDMI under the timing runs (the monitor's device was gone),
-  CoreAudio capture (no input on the Mac), an Intel Mac, a USB interface,
-  and any rate but 48 kHz there.
+- CoreAudio: sound at either output (no line-in; the HDMI claim ends at
+  the link, not at the monitor's speakers), capture (no input on the
+  Mac), 32 frames, hog mode and stalls on HDMI, an Intel Mac, a USB
+  interface, and any rate but 48 kHz there.
 - Web Audio: run in Chrome 154 (and Firefox, [web.md](web.md)) on this
   laptop; sound at the speaker never measured, so the browser's
   `outputLatency` in every web onset is unchecked.
