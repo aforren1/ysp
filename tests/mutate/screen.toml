@@ -1704,3 +1704,20 @@ test = "metal"
 why = "The describe line names the period's source and why: CVDisplayLink only when CADisplayLink gave no callback, as with the display asleep (v0.14.0)."
 find = '"cvdisplaylink-no-callback",'
 replace = '"cvdisplaylink",'
+
+# v0.14.1's 2 (mt-22, mt-23: the first open's period).
+[[mutant]]
+id = "mt-22"
+name = "the first callback's timestamp kept"
+test = "screen"
+why = "In a process's first windowed open the first CADisplayLink timestamp is off the grid (15.8 to 25.2 ms before the second, 5 of 5 processes); kept, the open fell back to CVDisplayLink with callbacks in hand (v0.14.1)."
+find = '    span = ts[n - 1] - ts[1];'
+replace = '    span = ts[n - 1] - ts[0];'
+
+[[mutant]]
+id = "mt-23"
+name = "an off-grid link named as no callback"
+test = "metal"
+why = "The describe line says why CVDisplayLink was used: no callback, or callbacks whose steps are off the duration; the two cases need different fixes (v0.14.1)."
+find = '            if (m->period_ns > 0) m->period_src = yscr__mtl_link_n >= 3 ? YSCR__MTL_SRC_CV_GRID : YSCR__MTL_SRC_CV;'
+replace = '            if (m->period_ns > 0) m->period_src = YSCR__MTL_SRC_CV;'

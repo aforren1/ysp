@@ -24,9 +24,16 @@
  *   period   the period comes from CADisplayLink's timestamps (injected
  *            through YSCR__MTL_LINK_TIMESTAMPS: 16680375 ns, not the
  *            duration's 16680417), from CVDisplayLink when no callback
- *            came, and the describe line names the source; the real read
- *            is printed (a display asleep gives no callback: then the
- *            fallback).
+ *            came or its steps are off the duration, and the describe line
+ *            names the source and why; a first timestamp off the grid (a
+ *            process's first windowed open, measured) is left out. The
+ *            real read is printed (a display asleep gives no callback:
+ *            then the fallback), and the process's first open, on an
+ *            unlocked screen, must name cadisplaylink.
+ *   fullscreen  rate's check in a fullscreen space at 1920 x 1080, with
+ *            the shader's load scaled to the pixels: one frame a vblank
+ *            at depth 2, where the probe's layer queued one drawable fewer
+ *            than in a window.
  *   gfx      ysp/gfx.h on a METAL screen writes rows top-down (GL's row 0
  *            is the top of the drawable, as on Windows).
  *   tenbit   the same as sync at desc.color_depth 10 (a BGR10A2Unorm layer,
@@ -57,10 +64,15 @@ static void sync_pixel(uint64_t id, uint32_t px);
 static long long g_iv_min, g_iv_max;
 /* CADisplayLink's callbacks at open, replaced while g_link is 1 (six
  * timestamps a 16680375 ns step apart, duration 16.680417 ms, as measured
- * on the M27Q) or 2 (none: the fallback to CVDisplayLink). */
+ * on the M27Q), 2 (none: the fallback to CVDisplayLink), 3 (as a process's
+ * first windowed open: the first timestamp 15.8355 ms before the second,
+ * measured) or 4 (a last step of 25 ms, off the grid). */
 static int g_link;
 #define YSCR__MTL_LINK_TIMESTAMPS(ts, n, dur) \
-    do { if (g_link == 1) { int j_; for (j_ = 0; j_ < 6; j_++) (ts)[j_] = 5000000000000LL + j_ * 16680375LL; \
+    do { if (g_link == 1 || g_link == 3 || g_link == 4) { int j_; \
+             for (j_ = 0; j_ < 6; j_++) (ts)[j_] = 5000000000000LL + j_ * 16680375LL; \
+             if (g_link == 3) (ts)[0] = (ts)[1] - 15835500LL; \
+             if (g_link == 4) (ts)[5] = (ts)[4] + 25000000LL; \
              *(n) = 6; *(dur) = 0.016680417; } else if (g_link == 2) *(n) = 0; } while (0)
 #define YSCR__MTL_SCREEN_INTERVALS(m, mn, mx) \
     do { (void)(m); if (g_iv_min) { *(mn) = g_iv_min; *(mx) = g_iv_max; } } while (0)
@@ -81,7 +93,7 @@ static void sync_pixel(uint64_t id, uint32_t px) { (void)id; (void)px; }
 int main(void) { printf("screen_metal_test: macOS only (the METAL backend is)\n"); return 0; }
 #else
 
-static int g_fail, g_checks;
+static int g_fail, g_checks, g_opened;
 static void check(int ok, const char* what) {
     g_checks++;
     if (!ok) g_fail++;
@@ -218,6 +230,18 @@ static void run(const char* name, const yscr_desc* d0, int n, int heavy, int rat
     yscr_describe(&s, line, sizeof line);
     printf("     %s\n", line);
     locked = is_locked(&s);
+    if (!g_opened++) {   /* the process's first open: the case that lost its period source */
+        const char* p = strstr(line, "period=");
+        char src[40] = "";
+        long long per = 0;
+        if (p) sscanf(p, "period=%lldns(%39[a-z-])", &per, src);
+        if (locked) {
+            printf("     first open: period=%lldns(%s), the session locked: not checked\n", per, src);
+        } else {
+            snprintf(msg, sizeof msg, "first open in the process: period=%lldns(%s), from CADisplayLink", per, src);
+            check(!strcmp(src, "cadisplaylink"), msg);
+        }
+    }
     if (hide) {
         SDL_MinimizeWindow(yscr_window(&s));
         SDL_SyncWindow(yscr_window(&s));
@@ -321,23 +345,28 @@ static void gfx_origin(const yscr_desc* d) {
 /* The period's source in the describe line. */
 static void period(const yscr_desc* d) {
     static yscr_screen s;
+    static const char* const what[5] = {
+        "", "period: from CADisplayLink's timestamps, named in the describe line",
+        "period: CVDisplayLink when no callback came, the reason named",
+        "period: CADisplayLink's off-grid first timestamp (a first open) left out",
+        "period: CVDisplayLink when CADisplayLink's steps are off its duration, the reason named" };
     char line[1024];
     const char* p;
     long long per = 0;
-    char src[32] = "";
+    char src[40] = "";
     int k;
-    for (k = 1; k >= 0; k--) {
-        g_link = k == 1 ? 1 : 2;
+    for (k = 1; k <= 4; k++) {
+        g_link = k;
         memset(&s, 0, sizeof s);
         if (!yscr_open(&s, d)) { check(0, "period: open"); g_link = 0; return; }
         yscr_describe(&s, line, sizeof line);
         yscr_close(&s);
         p = strstr(line, "period=");
-        if (p) sscanf(p, "period=%lldns(%31[a-z-])", &per, src);
-        if (k == 1) check(per == 16680375 && !strcmp(src, "cadisplaylink"),
-                          "period: from CADisplayLink's timestamps, named in the describe line");
-        else check(per > 0 && !strcmp(src, "cvdisplaylink-no-callback"),
-                   "period: CVDisplayLink when no callback came, the reason named");
+        per = 0; src[0] = 0;
+        if (p) sscanf(p, "period=%lldns(%39[a-z-])", &per, src);
+        if (k == 1 || k == 3) check(per == 16680375 && !strcmp(src, "cadisplaylink"), what[k]);
+        else if (k == 2) check(per > 0 && !strcmp(src, "cvdisplaylink-no-callback"), what[k]);
+        else check(per > 0 && !strcmp(src, "cvdisplaylink-link-off-grid"), what[k]);
     }
     g_link = 0;
     memset(&s, 0, sizeof s);
@@ -345,7 +374,7 @@ static void period(const yscr_desc* d) {
     yscr_describe(&s, line, sizeof line);
     yscr_close(&s);
     p = strstr(line, "period=");
-    if (p) sscanf(p, "period=%lldns(%31[a-z-])", &per, src);
+    if (p) sscanf(p, "period=%lldns(%39[a-z-])", &per, src);
     printf("     the real read: period=%lldns(%s)%s\n", per, src,
            strcmp(src, "cadisplaylink") ? " (no CADisplayLink callback: the display asleep?)" : "");
 }
@@ -422,6 +451,12 @@ int main(int argc, char** argv) {
     d.color_depth = 10;
     run("tenbit", &d, 30, 400, 1, 0);
     d.color_depth = 0;
+    /* fullscreen: a fullscreen space, where the probe's layer kept one
+     * drawable fewer queued than in a window (docs/screen.md, METAL); depth
+     * 2 and two frames in flight must still show one frame a vblank */
+    d.windowed = false;
+    run("fullscreen", &d, 120, 90, 1, 0);   /* 1920 x 1080: 90 iterations, about the window's GPU time */
+    d.windowed = true;
     {   /* codes: fullscreen, read back every frame */
         static yscr_screen s;
         static yscr_frame f;

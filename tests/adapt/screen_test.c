@@ -2844,7 +2844,7 @@ static void test_metal_rules(void) {
     CHECK_I(yscr__mtl_target(T, P_NS), T - P_NS / 2);
     /* (b) two frames in flight; the margin covers Core Animation's deadline */
     CHECK_I(YSCR__MTL_IN_FLIGHT, 2);
-    CHECK(YSCR__MTL_MARGIN_NS >= 1180000 + 450000);
+    CHECK(YSCR__MTL_MARGIN_NS >= 1170000 + 350000);   /* clean session: the deadline, the call's p99 */
     /* the display link's nominal period, as measured on the M27Q's "60 Hz" */
     CHECK_I(yscr__mtl_period(400330, 24000000), 16680417);
     CHECK_I(yscr__mtl_period(1, 60), 16666667);
@@ -2863,6 +2863,14 @@ static void test_metal_rules(void) {
         CHECK_I(yscr__mtl_link_period(ts, 6, 0), 0);
         for (j = 0; j < 6; j++) ts[j] = T + j * 17100000LL;     /* 2.5% off the duration */
         CHECK_I(yscr__mtl_link_period(ts, 6, 16680417), 0);
+        /* a process's first windowed open: the first timestamp 15.8 ms before
+         * the second, then the grid (measured, 5 of 5 processes) */
+        for (j = 0; j < 6; j++) ts[j] = T + j * 16680375LL;
+        ts[0] = ts[1] - 15835500LL;
+        CHECK_I(yscr__mtl_link_period(ts, 6, 16680417), 16680375);
+        ts[0] = ts[1] - 25207458LL;
+        CHECK_I(yscr__mtl_link_period(ts, 6, 16680417), 16680375);
+        CHECK_I(yscr__mtl_link_period(ts, 2, 16680417), 0);   /* two callbacks: one, after the first */
     }
     /* a shown drawable: its time, counted from t0; composed, tier 2 (c) */
     yscr__mtl_vblank(7, T + 3 * P_NS + 1000, 0, YSCR__MTL_KIND_WINDOW, T, P_NS, &v);

@@ -1,4 +1,4 @@
-/* ysp/screen.h - v0.14.0 - public domain single-header display library
+/* ysp/screen.h - v0.14.1 - public domain single-header display library
  *
  *   The window, the GL ES 3.0 context, the display mode and the swap path
  *   of a stimulus display, with flip at a time: each frame learns the
@@ -637,14 +637,16 @@
  *     drawable was not shown: the record is estimated, and OCCLUDED when
  *     the window was hidden or the session locked (locked= in the describe
  *     line). caps.period_ns comes from CADisplayLink's timestamps at
- *     open (the step of up to 6 callbacks, which lie on presentedTime's
- *     grid: 16.680375 ms on a "60 Hz" HDMI mode, where the link's duration
- *     and CVDisplayLink's nominal period say 16.680417 ms). With no
- *     callback in 250 ms (a display asleep gives none) it is CVDisplayLink's
- *     nominal period, the one source measured right with the display
- *     asleep; then the mode; never the mode's rounded rate. The describe
- *     line names the source and why (period=...ns(cadisplaylink),
- *     (cvdisplaylink-no-callback)). The flips refine it. nextDrawable gives up after its
+ *     open (the step of the callbacks after the first, which lie on
+ *     presentedTime's grid: 16.680375 ms on a "60 Hz" HDMI mode, where the
+ *     link's duration and CVDisplayLink's nominal period say 16.680417 ms;
+ *     the first callback's timestamp is off the grid in a process's first
+ *     windowed open). With no callback in 250 ms (a display asleep gives
+ *     none) it is CVDisplayLink's nominal period, the one source measured
+ *     right with the display asleep; then the mode; never the mode's
+ *     rounded rate. The describe line names the source and why
+ *     (period=...ns(cadisplaylink), (cvdisplaylink-no-callback),
+ *     (cvdisplaylink-link-off-grid)). The flips refine it. nextDrawable gives up after its
  *     own 1 s timeout; a frame without a drawable draws into a 1 x 1
  *     pbuffer and is estimated (no_drawable= in the describe line). A
  *     presented handler that has not come 1 s after its target is given up
@@ -663,17 +665,22 @@
  *     refuses another thread. There is no window thread on macOS
  *     (window_thread=off(auto,platform)). The presented handlers run on
  *     Metal's threads and touch only a process-wide table of 64 slots.
- *     Measured (v0.12.0; the probe's timing session, docs/screen_macos_probe.md
- *     section 6; one machine, a Screen Sharing session open), each one
- *     constant beside its rows: (a) a drawable shows at the first
- *     presentedTime vblank at or after its target (less about 0.4 ms), so
- *     the target is the planned vblank minus half a period
- *     (YSCR__MTL_TARGET_LEAD), the middle of the window that showed on it;
- *     (b) a commit needs a period plus up to 1.2 ms before its vblank and
- *     the presented handler comes 0.3 to 0.8 ms after it, so the depth is 2
- *     with two frames in flight (caps.max_in_flight 2: begin() waits for
- *     the frame two before) and a margin of 2 ms (caps.margin_ns); one in
- *     flight showed every other vblank; (c) tier 2 for a shown flip in
+ *     Measured (v0.12.0, checked again in v0.14.1; the probe's timing
+ *     sessions, docs/screen_macos_probe.md section 6; one machine, with
+ *     and without a Screen Sharing session), each constant beside its
+ *     rows: (a) a drawable shows at the first presentedTime vblank at or
+ *     after its target (less 0 to 0.6 ms), so the target is the planned
+ *     vblank minus half a period (YSCR__MTL_TARGET_LEAD), the middle of
+ *     the window that showed on it; (b) a commit needs a period plus up to
+ *     1.6 ms before its vblank and the presented handler comes 0.3 to 0.8
+ *     ms after it, so the depth is 2 with two frames in flight
+ *     (caps.max_in_flight 2: begin() waits for the frame two before) and a
+ *     margin of 2 ms (caps.margin_ns); one in flight showed every other
+ *     vblank. The same depth in every window kind: a fullscreen space kept
+ *     one drawable fewer queued than a window (the probe's three-deep
+ *     loop: 2 periods from commit to presentedTime against 3), which two
+ *     frames in flight never reach, and its commit deadline was a
+ *     window's; (c) tier 2 for a shown flip in
  *     every window kind (window, fullscreen, space in the describe line):
  *     presentedTime moved with every late frame and comes before its
  *     handler, so it is an OS time for the vblank shown, as DXGI_FLIP's
@@ -1581,6 +1588,16 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.14.1 - METAL's first open in a process takes its period from
+ *          CADisplayLink as the later opens do: the first callback's
+ *          timestamp, off the grid in a process's first windowed open (15.8
+ *          to 25.2 ms before the second, 5 of 5 processes), is left out, so
+ *          the open no longer fell back to CVDisplayLink with callbacks in
+ *          hand. A CADisplayLink whose steps are off its duration is named
+ *          (cvdisplaylink-link-off-grid). The constants' comments rest on
+ *          the clean timing session (no Screen Sharing); no constant
+ *          changed: a fullscreen space's shorter queue does not reach two
+ *          frames in flight.
  *   v0.14.0 - METAL needs macOS 14 (Sonoma) or later, ysp's floor: on an
  *          older system open() fails with a message that names the floor
  *          (NSProcessInfo isOperatingSystemAtLeastVersion:, read once),
@@ -1952,6 +1969,13 @@
  *          groups, input restamping, mode lists and the parameter table.
  *          The other swap paths are stubs that refuse to open.
  *
+ *   STATUS: v0.14.1 (METAL, 2026-11-05, unlocked, no Screen Sharing, AC,
+ *   the M27Q at "60 Hz"): tests/adapt/screen_metal_test.c 33 of 33, the
+ *   process's first open now period=16680375ns(cadisplaylink) (before:
+ *   cvdisplaylink-no-callback in every process); a fullscreen space ran
+ *   119 of 119 shown flips a vblank apart, 0 dropped, at depth 2. The
+ *   probe's clean session (docs/screen_macos_probe.md section 6) set no
+ *   new constant: depth, target and margin held in every kind.
  *   STATUS: v0.14.0 (METAL, the macOS 14 floor): no system older than 14
  *   was at hand; tests/adapt/screen_metal_test.c acts as one through a seam
  *   (YSCR__MTL_OS_14) and checks the refusal and its message. The asleep
@@ -2245,8 +2269,8 @@
 
 #define YSCR_VERSION_MAJOR 0
 #define YSCR_VERSION_MINOR 14
-#define YSCR_VERSION_PATCH 0
-#define YSCR_VERSION_STRING "0.14.0"
+#define YSCR_VERSION_PATCH 1
+#define YSCR_VERSION_STRING "0.14.1"
 
 #include "ysp/rt.h"
 #include "ysp/input.h"
@@ -5194,45 +5218,60 @@ static const yscr_presenter yscr__web_presenter = {
  * owns the CAMetalLayer"). These few rules compile on every platform, so the
  * core test checks them without a Mac; the presenter itself is macOS's.
  *
- * The constants come from the probe's timing session of 2026-11-05
+ * The constants come from the probe's timing sessions of 2026-11-05
  * (docs/screen_macos_probe.md, section 6; Apple M2, M27Q over HDMI at
- * 59.9505, 120 and 144 Hz, a Screen Sharing session open), each with the
- * row it rests on. The grid is presentedTime's: Core Animation's
- * presentedTime and CADisplayLink's timestamp lie on one computed grid
- * (residual under 1 us), 0.40 to 0.45 period after CVDisplayLink's inNow,
- * which jitters by up to 0.9 ms. */
+ * 59.9505, 120 and 144 Hz): set from the first, with a Screen Sharing
+ * session open, and checked on the clean one (no Screen Sharing), each
+ * with the rows it rests on (clean first). The grid is presentedTime's:
+ * Core Animation's presentedTime and CADisplayLink's timestamp lie on one
+ * computed grid (residual under 1 us), 0.31 to 0.45 period after
+ * CVDisplayLink's inNow (by rate and run), which jitters by up to 0.9 ms. */
 
 /* (a) The target is the planned vblank minus half a period. Measured: a
  * drawable shows at the first presentedTime vblank at or after its target
- * less about 0.4 ms. presentAtTime from 0.9 or 0.95 period before a
- * vblank 2, 3 or 5 vblanks ahead up to that vblank showed on it: 1440 of
- * 1440 at 59.95 Hz (four window kinds), 360 of 360 at 144 Hz; at 120 Hz
- * 355 of 360, the 5 others at 0.05 period after the vblank. 0.05 (59.95
- * Hz) to 0.1 period (120, 144 Hz) after it showed a vblank late, 60 of 60
- * per kind and rate. Half a period is the middle of the window that shows
- * on the vblank, so the grid may be off by close to half a period either
- * way. */
+ * less 0 to 0.6 ms. Clean: presentAtTime 2, 3 or 5 vblanks ahead, from
+ * 0.92 to 0.17 period before a vblank, showed on it, 1200 of 1200 at 59.95
+ * Hz (window, borderless, space, fullscreen); 0.81 to 0.06 period before
+ * it, 300 of 300 at 120 and at 144 Hz. 0.03 period (0.56 ms) after it
+ * showed on it in 91 of 240 at 59.95 Hz, a vblank late in the rest; 0.08
+ * period and more after it, a vblank late, 240 of 240 (59.95 Hz) and 120
+ * of 120 per rate. With Screen Sharing: 0.95 period before up to the
+ * vblank, 2155 of 2160. Half a period is the middle of the window that
+ * shows on the vblank, so the grid may be off by close to half a period
+ * either way. */
 #define YSCR__MTL_TARGET_LEAD 0.5
 /* (b) Two frames in flight, three drawables, depth 2 (the composed path's
- * table depth). Measured: a commit shows two vblanks later when it comes
- * at least one period plus 0.65 to 1.18 ms before that vblank (asap,
- * 60, 120, 144 Hz; one vblank later otherwise), and the presented handler
- * comes 0.3 to 0.76 ms after presentedTime. So a frame loop that waits for
- * the frame before to be shown runs at half rate (links: 1896 frames in
- * 60 s at 59.95 Hz, 1701 of 1896 steps of 2 vblanks), and one that waits
- * for the frame two before runs at full rate. With 2 drawables instead of
- * 3 nothing changed with one frame in flight (asap 300 of 300 shown both);
- * three leave one free while two are in flight. */
+ * table depth) in every window kind. Measured (asap, one frame in flight,
+ * frames 4 on): a commit under a period plus 0.3 ms before a vblank never
+ * showed on it; the latest that missed it came a period plus 0.53 to 1.17
+ * ms before it by kind at 59.95 Hz, 1.03 at 120 Hz and 1.00 at 144 Hz
+ * (clean), up to 1.56 ms at 120 Hz with Screen Sharing; every earlier
+ * commit showed on it. A fullscreen space's deadline was a
+ * window's (1.02 against 0.80 ms). The presented handler comes 0.3 to 0.8
+ * ms after presentedTime. So a frame loop that waits for the frame before
+ * to be shown runs at half rate (links, clean: 1819 frames in 60 s, 1777
+ * steps of 2 vblanks), and one that waits for the frame two before runs at
+ * full rate. A space kept one drawable fewer queued than a window: three
+ * frames queued showed 2 periods after their commit in a space and 3 in a
+ * window (pipe, clean; 3 in both with Screen Sharing). Two in flight never
+ * fill the queue, and the header's loop in a space showed 119 of 119
+ * frames a vblank apart (tests/adapt/screen_metal_test.c), so the depth
+ * does not follow the kind. With 2 drawables instead of 3 nothing changed
+ * with one frame in flight; three leave one free while two are in
+ * flight. */
 #define YSCR__MTL_IN_FLIGHT 2
 #define YSCR__MTL_DRAWABLES 3
 /* The core's margin before a planned vblank, at least this on METAL: the
- * commit's deadline (one period plus up to 1.18 ms, above) plus the
- * present call (encode and commit: p99 0.45 ms, max 0.93 ms). */
+ * commit's deadline (one period plus up to 1.56 ms, above) plus the
+ * present call (encode and commit: p99 0.28 to 0.35 ms clean, 0.45 ms
+ * with Screen Sharing; max 0.72 to 1.0 ms). Clean, 1.17 + 0.35 = 1.52 ms;
+ * with Screen Sharing the worst of each together is 2.01 ms. */
 #define YSCR__MTL_MARGIN_NS 2000000
 /* A target more than this far ahead is held by a sleep until it is this
- * far: targets 0.1 to 1.0 s ahead showed on their vblank (1 of 1 each),
- * 2 and 5 s ahead did not show, and every present of the layer after them
- * was dropped for about 6.5 s (presentedTime 0). */
+ * far: targets 0.1 to 1.0 s ahead showed on their vblank (1 of 1 each, in
+ * both sessions), 2 and 5 s ahead did not show, and every present of the
+ * layer after them was dropped for about 6.5 s (presentedTime 0; the
+ * window's late run, 0 of 300 shown, in both sessions). */
 #define YSCR__MTL_AHEAD_MAX_NS 500000000
 /* Window kinds: macOS has no public call that says a window is shown
  * direct to the display, so the kind is what the header can see. */
@@ -5246,14 +5285,15 @@ static int64_t yscr__mtl_target(int64_t vblank_ns, int64_t period_ns) {
 
 /* (c) Tier 2 on every kind: presentedTime is an OS time for the vblank a
  * frame showed on, not a plan: it moved with every late frame (30 of 30
- * per kind and rate), its handler comes after it (0.3 to 0.76 ms), and it
- * sits on its grid to 1 us. That is DXGI_FLIP's composed onset (TIERS):
- * good under the condition that the window is shown (else presentedTime
- * is 0 and the flip estimated, tier 3). Not tier 1: no photodiode run says
- * where the light is against presentedTime (CVDisplayLink puts the vblank
- * 0.45 period earlier), and no public call says whether a window goes
- * direct to the display; the same numbers came in a window, borderless,
- * and in a fullscreen space. */
+ * per kind and rate, both sessions), its handler comes after it (0.3 to
+ * 0.8 ms), and it sits on its grid to 1 us. That is DXGI_FLIP's composed
+ * onset (TIERS): good under the condition that the window is shown (else
+ * presentedTime is 0 and the flip estimated, tier 3). Not tier 1: no
+ * photodiode run says where the light is against presentedTime
+ * (CVDisplayLink puts the vblank 0.31 to 0.45 period earlier), and no
+ * public call says whether a window goes direct to the display. A
+ * fullscreen space's shorter queue (b) is the one sign of a direct path;
+ * the HUD's log was not captured. */
 static uint8_t yscr__mtl_tier(int kind) {
     (void)kind;
     return (uint8_t)YSCR_TIER_2;
@@ -5293,18 +5333,23 @@ static int64_t yscr__mtl_period(int64_t value, int32_t scale) {
     return (int64_t)llround((double)value * 1e9 / (double)scale);
 }
 
-/* The period from CADisplayLink's timestamps at open: the span of n
- * callbacks over the whole periods in it, counted on the link's duration.
- * The timestamps lie on presentedTime's grid (0.1 us apart, fit residual
- * 0.00 us) and step by the display's real period, 16680375 ns on the M27Q's
- * "60 Hz"; duration and targetTimestamp - timestamp give the nominal
- * timing, 16680417 ns, 2.5 ppm off it (measured, docs/screen_macos_probe.md
- * 6.4). A missed callback (a gap of two periods) keeps its count. 0 when
- * the timestamps do not span a period within 1% of the duration's. */
+/* The period from CADisplayLink's timestamps at open: the span of the
+ * callbacks after the first over the whole periods in it, counted on the
+ * link's duration. The timestamps lie on presentedTime's grid (0.1 us
+ * apart, fit residual 0.00 us) and step by the display's real period,
+ * 16680375 ns on the M27Q's "60 Hz"; duration and targetTimestamp -
+ * timestamp give the nominal timing, 16680417 ns, 2.5 ppm off it
+ * (measured, docs/screen_macos_probe.md 6.4). The first callback's
+ * timestamp is not on the grid in a process's first windowed open: it came
+ * 15.8 to 25.2 ms before the second, then every step was 16680375 ns (5 of
+ * 5 processes, 2026-11-05; the second open and fullscreen opens were on
+ * the grid), so it is left out. A missed callback (a gap of two periods)
+ * keeps its count. 0 with fewer than 3 callbacks, or when the timestamps
+ * do not span a period within 1% of the duration's. */
 static int64_t yscr__mtl_link_period(const int64_t* ts, int n, int64_t duration_ns) {
     int64_t span, k, per;
-    if (n < 2 || duration_ns <= 0) return 0;
-    span = ts[n - 1] - ts[0];
+    if (n < 3 || duration_ns <= 0) return 0;
+    span = ts[n - 1] - ts[1];
     k = (int64_t)llround((double)span / (double)duration_ns);
     if (k < 1) return 0;
     per = (int64_t)llround((double)span / (double)k);
@@ -5901,8 +5946,9 @@ static int yscr__mtl_selftest(yscr__mtl* m) {
 #define YSCR__MTL_SRC_LINK  1   /* CADisplayLink's timestamps                     */
 #define YSCR__MTL_SRC_CV    2   /* CVDisplayLink's nominal period: no CADisplayLink callback */
 #define YSCR__MTL_SRC_MODE  3   /* the mode's rate, a rounded label: no display link at all */
-static const char* const yscr__mtl_src_name[4] = { "default", "cadisplaylink", "cvdisplaylink-no-callback",
-                                                   "mode-no-display-link" };
+#define YSCR__MTL_SRC_CV_GRID 4 /* CVDisplayLink's: CADisplayLink's steps off its duration */
+static const char* const yscr__mtl_src_name[5] = { "default", "cadisplaylink", "cvdisplaylink-no-callback",
+                                                   "mode-no-display-link", "cvdisplaylink-link-off-grid" };
 
 /* CADisplayLink's callbacks at open: open() runs on the main thread, and
  * nothing else reads these, so a plain state is enough. */
@@ -5927,9 +5973,11 @@ static void yscr__mtl_link_tick(yscr__id self, void* cmd, yscr__id link) {
  * probe did when it measured them) and runs the run loop in its default
  * mode in 10 ms steps, pumping SDL's events as the probe's loop did (they
  * stay in SDL's queue for begin()), for up to YSCR__MTL_LINK_N callbacks or
- * 250 ms, then invalidates the link. Nothing waits on another thread, so
- * it cannot deadlock against SDL's pump: SDL's pump is this thread. With
- * fewer than 2 callbacks in 250 ms the caller falls back to CVDisplayLink:
+ * 250 ms, then invalidates the link. Nothing waits on another thread, so it
+ * cannot deadlock against SDL's pump: SDL's pump is this thread. The 6
+ * callbacks came within 86 to 141 ms of the link's start (first and second
+ * opens, 2026-11-05). With fewer than 3 callbacks in 250 ms the caller
+ * falls back to CVDisplayLink:
  * a display asleep gave CADisplayLink no callback at all (0 in 2 s, while
  * CVDisplayLink went on, 2026-11-05). Test seam, not API:
  * tests/adapt/screen_metal_test.c defines YSCR__MTL_LINK_TIMESTAMPS(ts, n,
@@ -6141,7 +6189,7 @@ static int yscr__mtl_open(void* vctx, const yscr_presenter_open* in, yscr_caps* 
             yscr__mac.CVDisplayLinkCreateWithCGDisplay(ids[0], &link) == 0 && link) {
             yscr__cvtime t = yscr__mac.CVDisplayLinkGetNominalOutputVideoRefreshPeriod(link);
             m->period_ns = yscr__mtl_period(t.value, t.scale);
-            if (m->period_ns > 0) m->period_src = YSCR__MTL_SRC_CV;
+            if (m->period_ns > 0) m->period_src = yscr__mtl_link_n >= 3 ? YSCR__MTL_SRC_CV_GRID : YSCR__MTL_SRC_CV;
             if (m->period_ns > 0 && t.value <= 0x7fffffff && t.scale > 0) {
                 caps->mode.refresh_num = t.scale;
                 caps->mode.refresh_den = (int32_t)t.value;
@@ -6516,7 +6564,7 @@ static int yscr__mtl_describe(void* vctx, char* buf, size_t cap) {
                     "no_handler=%u late_handler=%u held_far=%u sync_failed=%u pbuffers=%u mach_off=%lldns(%lldns) target_lead=%.2f "
                     "tier=%d(no photodiode)",
                     m->angle, yscr__mtl_kind_name(m->kind), m->bits10 ? "bgr10a2" : "bgra8", (long long)m->period_ns,
-                    yscr__mtl_src_name[m->period_src & 3],
+                    yscr__mtl_src_name[m->period_src >= 0 && m->period_src <= 4 ? m->period_src : 0],
                     (long long)m->min_iv_ns, (long long)m->max_iv_ns, m->locked, m->not_shown, m->no_drawable, m->no_slot, m->late_handlers, m->held_far, m->sync_failed, m->pbuffers,
                     (long long)m->mach_off, (long long)m->corr_w, YSCR__MTL_TARGET_LEAD, (int)yscr__mtl_tier(m->kind));
 }

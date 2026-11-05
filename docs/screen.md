@@ -3875,6 +3875,9 @@ bits 30 of 30 and 29 of 29. That is a functional test, not a timing run.
 | a target far ahead | `YSCR__MTL_AHEAD_MAX_NS` | none | held until 0.5 s ahead | 0.1 to 1.0 s ahead showed on target (1 of 1 each); 2 and 5 s ahead did not show, and every later present in that layer was dropped for 6.5 s. `flip_at()` sleeps until such a target is 0.5 s ahead (`held_far=`) |
 | (c) the tier | `yscr__mtl_tier()` | 3 | 2 for a shown flip, every kind | presentedTime moved with every late frame (30 of 30 per kind and rate), always came before its handler, and sits on its own grid to under 1 us (0.64 us max): an OS time for the vblank the frame showed on, not a plan. That is DXGI_FLIP's composed tier ([Tiers](#tiers)). Not tier 1: no photodiode has run, CVDisplayLink's `inNow` puts the vblank 0.40 to 0.45 period earlier (one of the two is not the scanout's vblank, or neither is), and the window kinds measured alike, so no path is known. An estimated flip (presentedTime 0) stays tier 3 |
 
+The clean session (no Screen Sharing, v0.14.1) checked every row and
+changed none ([Window kinds and Screen Sharing](#window-kinds-and-screen-sharing-v0141)).
+
 A planned vblank is on presentedTime's grid: the header's grid comes from
 the onsets it records, which are presentedTime. CADisplayLink's timestamp
 lies on the same grid (0.1 us apart); CVDisplayLink's `inNow` does not.
@@ -4008,6 +4011,108 @@ the real system opens. Mutants `mt-19` (the check skipped), `mt-20` (the
 check asks for 99.0, so only the real call can kill it) and `mt-21` (the
 describe line drops the reason), 3 of 3 killed.
 
+### The first open's period (v0.14.1)
+
+The clean timing session's run of `tests/adapt/screen_metal_test.c` (25
+of 25 passed) showed the process's first open with
+`period=16680417ns(cvdisplaylink-no-callback)` and every later open with
+`period=16680375ns(cadisplaylink)`, on an unlocked, awake screen.
+
+The reason was measured, not guessed. A scratch copy of the header logged
+each callback of the open's CADisplayLink (2026-11-05, the Mac of the
+sessions, unlocked, no Screen Sharing, the M27Q at "60 Hz"; 7 processes,
+two opens each). The first open did get its 6 callbacks, within 124 to
+141 ms of the link's start in the three processes that logged it; the window was visible and the app not yet
+active. But the first callback's timestamp was off the grid:
+
+| Open | Step from the first timestamp to the second | Steps after it | Source before v0.14.1 |
+|---|---|---|---|
+| A process's first, windowed (5 processes) | 15.8, 19.8, 24.9, 21.1, 25.2 ms | 16680375 ns (+-1), every one | cvdisplaylink (5 of 5) |
+| A process's second, windowed (5) | 16680375 ns | 16680375 ns | cadisplaylink (5 of 5) |
+| A process's first and second, fullscreen (2 processes) | 16680375 ns | 16680375 ns | cadisplaylink (4 of 4) |
+
+With the first step 1 to 5 ms off, the span of the 6 timestamps was no
+whole number of periods within 1%, so the rule returned no period, and
+the open fell back as if no callback had come. The fix leaves the first
+timestamp out: the period is the span of the callbacks after the first
+over the whole periods in it (at least 3 callbacks). Of the options:
+
+- Wait after the window is shown and pumped: the callbacks already came
+  in time (6 in 141 ms); the timing of the window was not the fault.
+- Keep the link alive and read it once frames run: a second run-loop
+  source for the life of the screen, for a number that 5 timestamps give
+  at open.
+- Take the period from presentedTime and drop the open's source: the
+  flips refine the period already (`measured=` in the describe line), but
+  the open needs a period before the first flip.
+
+Leaving one timestamp out costs nothing and adds no thread or wait. A
+CADisplayLink whose callbacks came but whose steps are off its duration
+is now named: `(cvdisplaylink-link-off-grid)`, apart from
+`(cvdisplaylink-no-callback)`.
+
+After the fix, on the same screen: `tests/adapt/screen_metal_test.c` 33 of
+33, its first check the process's first open,
+`period=16680375ns(cadisplaylink)`. The test injects the measured case
+(the first timestamp 15.8355 ms before the second: `cadisplaylink`) and a
+late step of 25 ms (`cvdisplaylink-link-off-grid`); the core test checks
+the rule with the first steps of 15.8 and 25.2 ms. Mutants `mt-22` (the
+first timestamp kept) and `mt-23` (the off-grid case named as no
+callback), 2 of 2 killed.
+
+### Window kinds and Screen Sharing (v0.14.1)
+
+The probe's clean session (docs/screen_macos_probe.md, section 6; the
+Mac above, unlocked, AC, no Screen Sharing) repeated the first session,
+which had a Screen Sharing session open. Per kind, on presentedTime's
+grid:
+
+| Kind | One commit: the latest that missed its vblank, a period plus | Three queued: commit to presentedTime p50 | Same, with Screen Sharing |
+|---|---|---|---|
+| window | 0.80 ms | 48.2 ms (3 periods) | 47.4 ms |
+| borderless | 1.17 ms | 48.7 ms (3) | 48.1 ms |
+| fullscreen space | 1.02 ms | **32.6 ms (2)** | 48.4 ms |
+| fullscreen (a space too) | 0.53 ms | **32.6 ms (2)** | 48.5 ms |
+| exclusive 120 Hz | 1.03 ms | 23.7 ms (2.84) | 23.8 ms |
+| exclusive 144 Hz | 1.00 ms | 19.5 ms (2.81) | 19.6 ms |
+
+The depth stays 2 in every kind, from the kind of evidence each option
+needs:
+
+- **Depth 1 in a space would plan wrong.** A depth of 1 says that a frame
+  committed less than a period before a vblank shows on it. In a space,
+  as in a window, no commit under a period plus 0.3 ms before a vblank
+  showed on it, and `presentAtTime` one vblank ahead showed a vblank late
+  in 140 of 140 per kind.
+- **The space's shorter queue is the queue, not the deadline.** With three
+  drawables queued, a space showed each frame two periods after its
+  commit and a window three; with two drawables both showed two. The
+  header keeps two frames in flight (`begin()` waits for the frame two
+  before), so its queue never holds three. Its own loop in a space
+  (`tests/adapt/screen_metal_test.c`, `fullscreen`, 1920 x 1080, `kind=space`):
+  120 of 120 shown, 119 of 119 a vblank apart, 0 dropped, at depth 2.
+  The first try, with the window's per-pixel load at 4.3 times the
+  pixels, dropped 24: the GPU's load, not the depth.
+- **No learning from presentedTime.** The core already corrects the grid
+  from the flips, and a frame shown early cannot happen with a target
+  half a period before its vblank. A learner would add a state with
+  nothing measured for it to find.
+
+The space's shorter queue is the one sign of a direct path: a display
+that holds the drawable on screen while the compositor holds no copy
+would give it. Nothing public says so, and the Metal HUD's present mode
+was not recorded (`log stream` needs an administrator here). The tier
+stays 2.
+
+**Screen Sharing changes the queue.** With a Screen Sharing session open,
+a space queued as a window (three periods), and SDL3's EGL path showed
+48.6 ms in a space against 32.8 ms without it. The one-commit deadline
+and the `presentAtTime` rule did not change. A window opened right after
+another process left a fullscreen space showed no frame with Screen
+Sharing (3 of 3) and every frame but the first 6 without it (1 of 1).
+For timing work, close Screen Sharing. The header does not detect it: no
+public call that says the screen is being captured was found.
+
 ### Variable refresh refused (v0.13.0)
 
 A ProMotion MacBook, or an external display in an Adaptive-Sync mode,
@@ -4075,17 +4180,20 @@ something measured here.
   the Metal test (no wait on the signal, codes compared raw, the pbuffer
   cache off). The far-target hold has no mutant: no test can show a frame
   far ahead without a shown screen.
-- `mt-14` to `mt-21` (v0.13.0 to v0.14.0): variable refresh, the period's
-  source and the macOS 14 floor, each in its section above.
+- `mt-14` to `mt-23` (v0.13.0 to v0.14.1): variable refresh, the period's
+  source, the macOS 14 floor and the first open's period, each in its
+  section above.
+- From v0.14.1 `tests/adapt/screen_metal_test.c` also runs 120 frames in
+  a fullscreen space and checks one frame a vblank there.
 
 ### Not done
 
 A timing run of this header's own frame loop (only the functional test
-above ran), the light (tier 1), direct against composed, every
-number without Screen Sharing, the panel's 10 bits, key times on macOS
-(posting keys needs the Accessibility permission), and why a window
-opened just after a process left a fullscreen space showed no frame in
-the probe (2 of 2 reruns; probe, 6.3). The panic watchdog, raw mice and the OS gamma ramp are
+above ran), the light (tier 1), direct against composed (one sign only:
+the space's shorter queue), the panel's 10 bits, key times on macOS
+(posting keys needs the Accessibility permission), and a run that
+switches only Screen Sharing to show that it causes the blank windows of
+the probe's 6.3. The panic watchdog, raw mice and the OS gamma ramp are
 Windows only. Not exercised by a test: a presented handler given up 1 s
 after its target (`late_handler=`; no way to withhold one was found), a
 frame with no drawable (`no_drawable=`; every drawable came at once
