@@ -54,7 +54,7 @@ value.
 | `timeout` | The test did not end in the test's `timeout`. A timeout agrees with `expect = "killed"`. |
 | `build-failed` | The mutated copy did not compile. Change the replacement so that it compiles. |
 | `no-match` | The anchor did not occur the expected number of times. The header changed: update the anchor (see [Add a mutant](#add-a-mutant)). |
-| `skipped` | The unmutated baseline did not compile. |
+| `skipped` | The unmutated baseline did not compile, or the mutant's `platform` is not this one. |
 
 The baseline is the unmutated test, built and run once for each test and
 environment. If the baseline fails some checks (for example, on a GPU
@@ -78,6 +78,12 @@ values change from run to run.
 | `rigfile.toml` | gcc | `gcc -std=c11 -O2 -w -I<copy> tests/adapt/rigfile_test.c -lsetupapi -lm` (Windows) |
 | `parallel.toml` | gcc | `gcc -std=c11 -O2 -w -I<copy> tests/adapt/parallel_test.c -lm` (Windows: the pulses run on stand-in `Out32` and `Inp32`) |
 | `net.toml` | gcc | `gcc -std=c11 -O2 -w -I<copy> tests/adapt/net_test.c -lsetupapi -lm` (Windows; `YNET_TEST_SECONDS=1`; a fake liblsl, none needed) |
+
+The runner leaves out `-lsetupapi` on Linux and macOS. On macOS `gcc` is
+Apple clang. The `mac-*` mutants of `trials.toml`, `dataset.toml` and
+`rt.toml` and `rig-52` and `rig-53` of `rigfile.toml` change code that only
+macOS compiles (`platform = "darwin"`): they run on a Mac, where they were
+killed (2026-11-04), and are `skipped` elsewhere.
 | `stair.toml` | gcc | `gcc -std=c99 -O2 -w -DYST_MAX_TRIALS=128 -DYST_MAX_REVERSALS=32 -I<copy> tests/adapt/stair_test.c -lm` |
 | `quest.toml` | gcc | `gcc -std=c11 -O2 -w -I<copy> tests/adapt/quest_test.c -lm` |
 | `aep.toml` | gcc | `gcc -std=c11 -O2 -w -I<copy> tests/adapt/aep_test.c -lm` (`YAEP_TEST_ONLY=params`: the parameter table and snapshot outcome checks only) |
@@ -184,6 +190,7 @@ newline directly after the opening quotes is not part of the text.
 | `env` | no | Environment variables for this mutant's test run (for example, `YGFX_TEST_PARTS`). |
 | `expect` | no | `killed` (default) or `survived`. Use `survived` for a control or for an equivalent mutant, and give the reason in `note`. |
 | `note` | no | Why the mutant is expected to survive. |
+| `platform` | no | A `sys.platform` prefix (`darwin`, `linux`, `win32`): the mutant runs only there and is `skipped` elsewhere. Use it for code that one OS alone compiles. |
 | `[[mutant.also]]` | no | More edits for the same mutant: `find`, `replace`, and optionally `count` and `file`. |
 
 ### Test fields
