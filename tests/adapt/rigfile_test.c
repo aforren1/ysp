@@ -12,6 +12,20 @@
 #if defined(_MSC_VER) && !defined(_CRT_SECURE_NO_WARNINGS)
 #define _CRT_SECURE_NO_WARNINGS
 #endif
+#if defined(__APPLE__)
+/* v0.5.2: a save's F_FULLFSYNC, counted. With g_full_refuse set the volume
+ * refuses it, as a network volume does, and the save must fall back to
+ * fsync(). */
+#include <errno.h>
+#include <fcntl.h>
+static int g_full_calls, g_full_refuse;
+static int test_fullfsync(int fd) {
+    g_full_calls++;
+    if (g_full_refuse) { errno = ENOTSUP; return -1; }
+    return fcntl(fd, F_FULLFSYNC);
+}
+#define YRIG__FULLFSYNC(fd) test_fullfsync(fd)
+#endif
 #define YSP_RIGFILE_IMPLEMENTATION
 #include "ysp/rigfile.h"
 
@@ -572,7 +586,20 @@ static void check_files(void) {
     CHECK_HAS(g_q.notes[0], "roles.trig.latency");
     CHECK_HAS(g_q.notes[0], "does not match the profile's summary: the role's tier is UNKNOWN");
     ROLE(&g_p, "trig")->latency.median_ns = 577000;
+#if defined(__APPLE__)
+    g_full_calls = 0;
+    g_full_refuse = 1;
     CHECK_I(yrig_save_file(&g_p, path, g_err, sizeof g_err), YRIG_OK);
+    CHECK_I(g_full_calls, 1);
+    g_full_refuse = 0;
+    CHECK_I(yrig_load_file(&g_q, path, g_err, sizeof g_err), YRIG_OK);
+    CHECK_I(ROLE(&g_q, "trig")->latency.check, YRIG_CHECK_OK);
+    g_full_calls = 0;
+#endif
+    CHECK_I(yrig_save_file(&g_p, path, g_err, sizeof g_err), YRIG_OK);
+#if defined(__APPLE__)
+    CHECK_I(g_full_calls, 1);
+#endif
     /* a loopback file changed: CHANGED */
     CHECK(write_text(lp, "format ysp-out-latency 1\nn 1\n"));
     CHECK_I(yrig_load_file(&g_q, path, g_err, sizeof g_err), YRIG_OK);

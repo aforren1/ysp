@@ -1,4 +1,4 @@
-/* ysp/dataset.h - v0.2.0 - public domain single-header session data set writer
+/* ysp/dataset.h - v0.2.1 - public domain single-header session data set writer
  *
  *   The folder a session's data goes into (docs/experiment_format.md D9 and
  *   2.10): session.json (canonical JSON, format "ysp-session" 1, written at
@@ -17,7 +17,8 @@
  *   unless the translation unit already does. Uses the C library's stdio
  *   and, for the folder and the atomic rewrite of session.json, the OS:
  *   CreateDirectoryW and MoveFileExW on Windows, mkdir, rename and fsync
- *   on POSIX and under Emscripten (its in-memory file system). C99 is the
+ *   on POSIX and under Emscripten (its in-memory file system), and
+ *   fcntl(F_FULLFSYNC) on macOS. C99 is the
  *   floor: it builds as C99, C11 and C++17.
  *
  *   ---------------------------------------------------------------------
@@ -111,10 +112,15 @@
  *   ATOMIC REWRITE. Each write of session.json (the open, every
  *   yds_session_set() and yds_session_push(), the finish) writes
  *   session.json.tmp, hands it to the disk (_commit() on Windows,
- *   fsync() elsewhere), and renames it over session.json, so a reader or a
+ *   fcntl(F_FULLFSYNC) on macOS, fsync() elsewhere), and renames it over
+ *   session.json, so a reader or a
  *   crash finds the old file or the new one, never a part. On POSIX
  *   rename() replaces the file atomically and the folder is synced after
- *   it. On Windows the C library's rename() refuses an existing target,
+ *   it. On macOS fsync() leaves the bytes in the drive's write cache, so the
+ *   file and the folder get F_FULLFSYNC, which also flushes that cache; a
+ *   volume that refuses it (a network or a FAT volume) gets fsync().
+ *   YTR_FLUSH_SYNC rows get the same (ysp/trials.h 0.6.1).
+ *   On Windows the C library's rename() refuses an existing target,
  *   so the writer calls MoveFileExW(MOVEFILE_REPLACE_EXISTING |
  *   MOVEFILE_WRITE_THROUGH): one rename on the volume (NTFS logs it as
  *   one metadata change). It fails while another program holds
@@ -164,7 +170,8 @@
  *   same "x" and 16 hex digits as trials' own line, which ysp/table.h,
  *   pandas and R read as text with all 64 bits. A stream's name follows the column rule
  *   ([A-Za-z_][A-Za-z0-9_]*, at most 63 bytes) and differs from every
- *   other stream's in more than case (Windows folders ignore case).
+ *   other stream's in more than case (Windows folders and macOS's default
+ *   APFS volumes ignore case).
  *   ADAPTERS. Inline, when their header was included before this one:
  *   yds_frame_from_screen() (ysp/screen.h), yds_event_from_input()
  *   (ysp/input.h), yds_event_from_timeline() (ysp/timeline.h),
@@ -235,6 +242,12 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.2.1 - macOS: session.json.tmp and the folder after the rename get
+ *          fcntl(F_FULLFSYNC), and fsync() only when the volume refuses
+ *          it. fsync() alone left them in the drive's write cache, so a
+ *          power cut could lose a rewrite that had returned. Needs
+ *          ysp/trials.h 0.6.1 for the same on YTR_FLUSH_SYNC rows. No API
+ *          change.
  *   v0.2.0 - yds_abandon(): an abnormal end that leaves "closed": false
  *          (a binding's teardown of a data set never closed, an exception
  *          path); ds.error_code, the YDS_ERR_* of the last failure, set by
@@ -245,6 +258,11 @@
  *          stored zip. On ysp/trials.h v0.6 (256 columns, a 38 KB writer):
  *          yds_seed_text() for a trial_seed column in trials' spelling.
  *
+ *   STATUS: v0.2.1, 2026-11-04: an Apple M2 Mac mini, macOS 27.0.1, Apple clang 21, APFS
+ *   (case-insensitive); every test passes, Release, ASan and UBSan, the
+ *   crash test's child process included. Each rewrite of session.json
+ *   calls F_FULLFSYNC on the file and on the folder; a volume that
+ *   refuses it gets fsync(). Costs on the Mac not measured. No power cut.
  *   STATUS: v0.2.0, 2026-10-25: MSVC 19.44, MinGW-w64 gcc 16.1, WSL2 gcc
  *   11.4 (ASan, UBSan); v0.1.0 (2026-10-21) also under emcc. On an i7-1360P laptop's SSD (NTFS, MSVC
  *   /O2), median (p99): a frame or event row 12 us (25), a row with
@@ -260,8 +278,8 @@
 
 #define YDS_VERSION_MAJOR 0
 #define YDS_VERSION_MINOR 2
-#define YDS_VERSION_PATCH 0
-#define YDS_VERSION_STRING "0.2.0"
+#define YDS_VERSION_PATCH 1
+#define YDS_VERSION_STRING "0.2.1"
 
 /* mkdir(), fsync() and fileno() under -std=c11: the feature-test macro of
  * ysp/rt.h and ysp/trials.h, set before the first system header (Linux and
@@ -807,11 +825,29 @@ static void yds__rmdir(const char* path) {
 #endif
 }
 
+/* On macOS fsync() stops at the drive: the bytes can wait in its write
+ * cache, and a power cut loses them. F_FULLFSYNC also flushes that cache. A
+ * file system without it (a network or a FAT volume) refuses it, and
+ * fsync() is then the most there is, as SQLite does. The macro is a test's
+ * way in. */
+#if defined(__APPLE__) && !defined(YDS__FULLFSYNC)
+    #define YDS__FULLFSYNC(fd) fcntl((fd), F_FULLFSYNC)
+#endif
+
+#if !defined(_WIN32)
+static int yds__fsync_fd(int fd) {
+#if defined(__APPLE__)
+    if (YDS__FULLFSYNC(fd) == 0) return 0;
+#endif
+    return fsync(fd);
+}
+#endif
+
 static bool yds__sync(FILE* f) {
 #if defined(_WIN32)
     return _commit(_fileno(f)) == 0;
 #else
-    return fsync(fileno(f)) == 0;
+    return yds__fsync_fd(fileno(f)) == 0;
 #endif
 }
 
@@ -840,7 +876,7 @@ static int yds__replace(const char* tmp, const char* path, const char* dir) {
      * folder (EINVAL) has nothing to sync. */
     fd = open(dir, O_RDONLY);
     if (fd >= 0) {
-        if (fsync(fd) != 0) { /* EINVAL: nothing to sync; else the rename stands */ }
+        if (yds__fsync_fd(fd) != 0) { /* EINVAL: nothing to sync; else the rename stands */ }
         close(fd);
     }
     return 0;
