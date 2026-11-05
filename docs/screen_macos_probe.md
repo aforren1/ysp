@@ -788,9 +788,42 @@ reach the panel needs a photometer. NSScreen: 8 bits per sample.
 
 ### 6.9 Input
 
-`AXIsProcessTrusted` 0, `CGPreflightPostEventAccess` 0 in both sessions:
-the 200 keys of each pass reached neither the NSEvent monitor nor SDL.
-Not measured.
+In both timing sessions `AXIsProcessTrusted` and
+`CGPreflightPostEventAccess` were 0 and no key arrived. On macOS 27 the
+Accessibility list showed no entry until a process asked for access
+(`AXIsProcessTrustedWithOptions` with the prompt option, or
+`CGRequestPostEventAccess`); after that, the permission applied to the
+running VS Code without a restart.
+
+Run 2026-11-05 11:33, clean session, `--kind window`, 200 keys per pass,
+all three permissions 1. Every key reached the NSEvent monitor and SDL in
+both passes. Times in us; "post" is the mach time before the
+`CGEventPost` call.
+
+| Pass | NSEvent.timestamp minus post, p50 / p99 / max | SDL timestamp minus post, min / p50 / p99 / max | SDL timestamp minus NSEvent.timestamp, p50 / max | SDL event read minus post, p50 / p99 |
+|---|---|---|---|---|
+| `CGEventPost(kCGHIDEventTap)` | 108 / 4567 / 40490 | 371 / 424 / 4883 / 44263 | 315 / 3773 | 1783 / 8126 |
+| `CGEventPostToPid(self)` | 111 / 3226 / 4902 | 262 / 318 / 3432 / 5109 | 207 / 316 | 1596 / 4443 |
+
+- SDL 3.4 adds an offset to every key's `NSEvent.timestamp`
+  (`Cocoa_GetEventTimestamp`, `src/video/cocoa/SDL_cocoaevents.m`). A
+  static variable holds the offset. The first event sets it to that
+  event's read delay (SDL's clock at the read minus the event's stamp).
+  Later events make it smaller only when it would put a stamp after the
+  read. Measured: 3773 us on the process's first key, 501 us on the
+  third, 316 us from the fourth, then 288, 278, 245, 238 and 207 us in the
+  second pass. Every SDL key stamp in a process is late by the shortest
+  read delay seen so far: never less, and not constant. A first event
+  read after a long frame starts the offset at that frame's length.
+- `NSEvent.timestamp` has no such offset: its clock is mach time.
+- One HID key was stamped 40 ms after the post, during a
+  `CGEventPost` call that took 26 ms. With `CGEventPostToPid` the largest
+  value was 4.9 ms.
+- `CGEventGetTimestamp` on the posted event read 0 for every key: the
+  caller's event copy gets no stamp. The probe's row for it has no
+  meaning.
+- These are host times for synthetic keys. They leave out the
+  keyboard's scan, debounce and USB poll.
 
 ### 6.10 Other findings
 
