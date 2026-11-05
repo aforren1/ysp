@@ -706,6 +706,15 @@ if(NOT TARGET ysp::pl_mpeg)
     endforeach()
 endif()
 
+# ysp/video.h loads AVFoundation, CoreMedia, CoreVideo, VideoToolbox and
+# libobjc at run time on Apple platforms (as it loads Media Foundation on
+# Windows), so its programs link nothing more. Only the SDK check, which
+# compares the header's copies with the frameworks' own symbols, links them.
+if(APPLE AND TARGET compile_video_avf)
+    target_link_libraries(compile_video_avf PRIVATE
+        "-framework CoreFoundation" "-framework CoreMedia" "-framework CoreVideo" "-framework VideoToolbox")
+endif()
+
 # ysp/audio.h, ysp/screen.h and ysp/video.h implemented in one translation
 # unit, audio first and screen first, as C and as C++: their Windows headers
 # must not redefine each other's macros under /WX (audio.h 0.7.1, C4005 on

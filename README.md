@@ -33,7 +33,7 @@ C11 or C++17, and its top comment is its manual.
 | [screen](docs/screen.md) | `yscr_` | Stimulus window, flip at a time, flip records; web and macOS backends | 0.11.0 | 2 machines |
 | [audio](docs/audio.md) | `yau_` | Sound at a time and its capture on the rig clock; CoreAudio on macOS; Web Audio in a browser | 0.8.0 | 2 machines |
 | [gfx](docs/gfx.md) | `ygfx_` | GL ES 3.0 stimuli: shapes, gratings, gabors, text, frame capture | 0.17.3 | 1 machine |
-| [video](docs/video.md) | `yvid_` | Movies as stimuli, frame by predicted onset | 0.6.0 | 1 machine |
+| [video](docs/video.md) | `yvid_` | Movies as stimuli, frame by predicted onset | 0.7.0 | 2 machines |
 
 Each header is `include/ysp/<name>.h`; macros use the uppercase prefix
 (`YRT_`). Status: **tested** is pure computation, checked by tests;
