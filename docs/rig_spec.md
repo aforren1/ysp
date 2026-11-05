@@ -2168,8 +2168,8 @@ and 15.3 name them.
 
 ## 16. Coverage of Psychtoolbox-3's demos
 
-Status: reference, 2026-10-09. This section maps each demo that
-Psychtoolbox-3 (PTB) ships in `Psychtoolbox/PsychDemos/` to the ysp
+Status: reference, 2026-10-09; corrected 2026-11-05. This section maps
+each demo that Psychtoolbox-3 (PTB) ships in `Psychtoolbox/PsychDemos/` to the ysp
 headers, and the timing and precision tests in `Psychtoolbox/PsychTests/`
 that have a ysp counterpart. It compares ysp with PTB on the features PTB
 is known for, ranks the gaps, merges them with 14.7 and 15.4, and
@@ -2224,9 +2224,11 @@ and names are not code.
 As in 15.1: Example, Possible, Gap, Out. PTB demos are scripts with no
 experiment layer, so no status here depends on the player.
 
-Totals: 154 demos. Example 45, Possible 53, Gap 20, Out 36. The 35
-tests in 16.3 are counted apart: Example 13, Possible 5, Gap 14, Out 3.
-Recounted 2026-10-09 after the 16.6 examples and `screen_sync_check`; at
+Totals: 154 demos. Example 49, Possible 52, Gap 17, Out 36. The 35
+tests in 16.3 are counted apart: Example 15, Possible 6, Gap 11, Out 3.
+Recounted from the tables 2026-11-05, after audio capture. On 2026-10-09,
+after the 16.6 examples and `screen_sync_check`: Example 45, Possible 53,
+Gap 20, Out 36 (demos), Example 13, Possible 5, Gap 14, Out 3 (tests). At
 the survey: Example 37, Possible 61 (demos), Example 8, Possible 10
 (tests).
 
@@ -2323,9 +2325,9 @@ folder.
 | `BasicAMAndMixScheduleDemo.m` | Voices mixed, with a volume per voice and amplitude modulation | audio (voices, `yau_gain_at()`, `yau_ramp()`) | Example: `audio_schedule` for the mix and a volume change at a time. AM only as a precomputed buffer: there is no modulator voice |
 | `BasicSoundChannelHoppingDemo.m` | A beep on each channel of a multichannel card in turn | audio (channel count, channel map) | Example: `audio_schedule` (left, right; more than 2 channels not run) |
 | `BasicSoundPhaseShiftDemo.m` | A tone with a changing phase, mixed live from a sine and a cosine | audio (two voices, `yau_gain_at()`) | Possible |
-| `BasicSoundInputDemo.m` | Record from the microphone, optionally after a voice trigger | audio | Gap: audio capture (14.7 rank 7) |
-| `SimpleVoiceTriggerDemo.m` | Voice onset time from the microphone | audio | Gap: audio capture |
-| `DelayedSoundFeedbackDemo.m` | Capture, then play back after a set delay | audio | Gap: audio capture (full duplex) |
+| `BasicSoundInputDemo.m` | Record from the microphone, optionally after a voice trigger | audio | Example: `audio_voice_rt` |
+| `SimpleVoiceTriggerDemo.m` | Voice onset time from the microphone | audio | Example: `audio_voice_rt` |
+| `DelayedSoundFeedbackDemo.m` | Capture, then play back after a set delay | audio | Possible (duplex capture and host-fed streams; no example) |
 | `TurnTableDemo.m` | A turntable: playback rate and direction from the mouse | audio | Out: `ysp/audio.h` never resamples (4.4) |
 | `AudioTunnel3DDemo.m`, `AudioTunnel3DDemo2.m` (2) | 3D sound sources through OpenAL | None | Out: spatial audio rendering is an Audio source extension (12) |
 
@@ -2347,7 +2349,7 @@ folder.
 | `VideoDelayLoopMiniDemo.m` | Delayed visual feedback from a camera | None | Gap: camera capture |
 | `VideoMultiCameraCaptureDemo.m` | Several cameras, optional hardware sync, recording | None | Gap: camera capture |
 | `VideoOfflineCaptureDemo.m` | Capture into memory, show it after | None | Gap: camera capture |
-| `VideoRecordingDemo.m` | Capture video and sound, encode to a file | None | Gap: camera and audio capture; the encoder (4.6) |
+| `VideoRecordingDemo.m` | Capture video and sound, encode to a file | None | Gap: camera capture; the encoder (4.6). The sound's capture is built |
 | `VideoDVCamCaptureDemo.m` | Capture from a DV camera | None | Out: deprecated hardware (DV, FireWire) |
 | `VideoIPWebcamCaptureDemo.m` | A network video stream from a phone app | None | Out: a network stream through GStreamer, not a rig camera |
 | `VideoPluginCaptureDemo.m` | A marker-tracking plugin on several cameras | None | Out: its help says experimental and not for regular users |
@@ -2361,7 +2363,7 @@ folder.
 |---|---|---|---|
 | `CalDemo.m` | The calibration structure: load, gamma, conversions | color (`ycol_cal`) | Example: `gfx_calib`, `color_convert` |
 | `DKLDemo.m` | The DKL isoluminant plane as a picture | color | Example: `color_convert` (DKL directions, the largest contrast per azimuth; no picture) |
-| `RenderDemo.m` | A patch at a CIE xyY through the calibration, the last way on the GPU | color, gfx | Possible (proposed `color_patch`, 15.5) |
+| `RenderDemo.m` | A patch at a CIE xyY through the calibration, the last way on the GPU | color, gfx | Example: `color_patch` |
 | `FitGammaDemo.m` | Parametric fits to gamma readings | color | Out: offline fitting (4.8). `gfx_calib` makes the CLUT from the readings by a monotone cubic, not a parametric fit |
 | `NomogramDemo.m`, `PhotopigmentNomogramDemo.m`, `IsomerizationsInDishDemo.m`, `IsomerizationsInEyeDemo.m`, `ValetonVanNorrenDemo.m` (5) | Photopigment nomograms, isomerization rates, a cone adaptation model | None | Out: colorimetric computation for analysis (4.8). `ysp/color.h` embeds the Stockman-Sharpe fundamentals only |
 | `DatarecordingFromSerialPortDemo.m` | Packets from a serial device, stamped on a background reader | serial, device | Possible (a decoder in caller code; `serial_trigger` shows the echo) |
@@ -2398,7 +2400,7 @@ folder.
 | `MovieDemos/PlayDualMoviesDemo.m` | Two movies at once, with sound | video, audio | Possible |
 | `MovieDemos/PlayMoviesWithoutGapDemo1.m`, `PlayMoviesWithoutGapDemo2.m` (2) | Movies one after another, the next opened in the background | video | Possible (a cold open took 115 to 308 ms, so open ahead; gaps not measured) |
 | `MovieDemos/LoadMovieIntoTexturesDemo.m` | Movie frames into textures for exact timing and order | video (frame sequence, value-exact), gfx | Possible |
-| `MovieDemos/DetectionRTInVideoDemo.m` | RT to a time-locked event in a movie | video, timeline, response | Possible (proposed `trial_movie`, 15.5) |
+| `MovieDemos/DetectionRTInVideoDemo.m` | RT to a time-locked event in a movie | video, timeline, response | Example: `trial_movie` |
 | `MovieDemos/PlayInterlacedMovieDemo.m` | Deinterlacing by shader | None | Out: the canonical form is progressive; `ysp/video.h` refuses interlaced input |
 
 #### OpenGL4MatlabDemos
@@ -2449,16 +2451,16 @@ display, input, sound or clock timing, or output precision. The other 61
 | `FlipTimingWithRTBoxPhotoDiodeTest.m` | Onset stamps against a photodiode on an RTBox, DataPixx or similar | screen, device, net | Example: `photodiode_check`, `net_labstreamer_flip` (both never run with the device) |
 | `HighColorPrecisionDrawingTest.m` | Drawing precision read back against a double reference | gfx | Example (a test): `tests/adapt/gfx_test.c` |
 | `BeampositionTest.m` | Scanout position queries | None | Out: ysp takes onsets from DXGI and DComp statistics; `D3DKMTGetScanLine` was polled once to check what they are (`ysp/screen.h` STATUS) |
-| `OMLBasicTest.m` | OML_sync_control flip stamps against the vblank and the clock (Linux) | screen (GLX_OML) | Match: each flip's vblank and time from Present events; `tests/compare/ptb_linux/` runs both on one machine |
-| `GraphicsDisplaySyncAcrossDualHeadsTest.m`, `GraphicsDisplaySyncAcrossDualHeadsTestLinux.m` (2) | The scanout phase of two display heads | screen | Gap: two physical displays not run; no scanout query |
+| `OMLBasicTest.m` | OML_sync_control flip stamps against the vblank and the clock (Linux) | screen (GLX_OML) | Example: `tests/compare/ptb_linux/`. Each flip's vblank and time from Present events; `tests/compare/ptb_linux/` runs both on one machine |
+| `GraphicsDisplaySyncAcrossDualHeadsTest.m`, `GraphicsDisplaySyncAcrossDualHeadsTestLinux.m` (2) | The scanout phase of two display heads | screen | Gap: no scanout query. Two physical displays not run on Windows; on Linux X11 two X screens ran, one process each |
 | `FrameSequentialStereoTest.m` | Frame-sequential stereo order and onset | None | Gap: stereo output modes |
 | `VRRTest.m`, `VRRFixedRateSwitchingTest.m` (2) | Variable refresh: flips at varying intervals; fast rate switching | screen | Gap: variable refresh (refused until the two sweeps, 4.2) |
 | `GetSecsTest.m` | The Windows timer against another clock | rt | Possible: `yrt_correlate()` against QueryInterruptTimePrecise (docs/rt.md B6); no example |
-| `KeyboardLatencyTest.m` | Key and mouse latency against a microphone that hears the key | audio, screen | Gap: audio capture. `screen_input` measures injected keys only |
+| `KeyboardLatencyTest.m` | Key and mouse latency against a microphone that hears the key | audio, screen | Possible (capture and key stamps are built; no example). `screen_input` measures injected keys only |
 | `HIDIntervalTest.m` | The sampling interval of keyboards and mice | screen, input | Possible (`screen_input --hand` stamps keys pressed by hand) |
 | `PsychPortAudioTimingTest.m` | Sound onset against a flip, by photodiode, microphone and oscilloscope | audio, screen | Example: `audio_av_sync` (the records; its board mode never run); `tests/loopback/audio_loopback.c` (never run with a cable) |
 | `PsychPortAudioDataPixxTimingTest.m` | The same, stamped by a DataPixx | None | Gap: `ysp/dpx.h` |
-| `AudioFeedbackLatencyTest.m` | Sound onset by capture of its own output | audio | Gap: audio capture |
+| `AudioFeedbackLatencyTest.m` | Sound onset by capture of its own output | audio | Example: `audio_loopback_latency` |
 | `VideoCaptureLatencyTest.m` | Camera to display latency | None | Gap: camera capture |
 | `HighPrecisionLuminanceOutputDriversImagingPipelineTest.m` | Each output formatter against a reference | None | Gap: high-precision output formatters. `gfx_luminance_bits` checks 8-bit, both dithers and PseudoGray code by code |
 | `DatapixxGPUDitherpatternTest.m` | GPU dithering, by DataPixx scanline readback | None | Gap: `ysp/dpx.h`. The header reads codes back through D3D (1800 of 1800 equal), not through a device |
@@ -2478,14 +2480,17 @@ the platforms it runs. A number on the ysp side is from the header's
 STATUS block or doc, on the one Windows 11 laptop (Iris Xe, 60 Hz panel)
 unless stated. No ysp number is a measurement of light or sound at the
 display or the jack: no photodiode or line-in run has been made
-(11, item 1). PTB numbers were measured on one machine only: the Linux
-desktop, 2026-10-12, PTB 3.0.19.14 under Octave against ysp/screen.h
-v0.11.0, both against the kernel's vblank and evdev times
-(`tests/compare/ptb_linux/README.md`).
+(11, item 1). PTB's Flip and KbQueue numbers come from one machine: the
+Linux desktop, 2026-10-12, PTB 3.0.19.14 under Octave against ysp/screen.h
+v0.8.0 (the number before the merge that made it v0.11.0), both against
+the kernel's vblank and evdev times (`tests/compare/ptb_linux/README.md`).
+No side-by-side flip or key run exists on Windows, and none was repeated
+on v0.11.0. IOPort ran on both machines (docs/serial.md). PsychPortAudio
+was not run.
 
 | Topic | PTB | ysp today | Verdict |
 |---|---|---|---|
-| `Screen('Flip')` timing and its tests | Flip blocks to the vblank and returns the vblank time, the onset estimate and a miss flag. Stamps from beamposition queries, from OML_sync_control, and from the kernel's vblank and flip events on Linux; VBLSyncTest, PerceptualVBLSyncTest, BeampositionTest, OMLBasicTest; FlipTimingWithRTBoxPhotoDiodeTest against a photodiode. Linux, Windows, macOS | A record per flip: planned and shown vblank, residual, drops, path, tier, phases (`ysp/screen.h`). DXGI_FLIP fullscreen: onset within 2.3 us of the prediction at p99 over 7200 frames, no drop; COMPOSITION independent flip: DisplayedTime 13 us p50, 77 us p99 after the vblank entry polled with D3DKMTGetScanLine. `screen_flipstats` is the VBLSyncTest analog. Linux X11 (GLX_OML, v0.11.0): beside PTB on one machine, 9600 flips (next vblank and held 1 to 5 frames, idle and with 20 spinning processes), both on the vblank asked for every time, both stamps the kernel's vblank time (PTB within 2 us, ysp exactly). Open: PTB 1.5 s with its sync tests, ysp 0.55 s for the whole process with its settle check. Wayland and macOS are stubs | Match on Linux X11 timing; exceeds in what each flip records (path, tier, the phase that was late, with no tool attached). Lacks macOS and Wayland, a photodiode run, and any rate but 60 Hz |
+| `Screen('Flip')` timing and its tests | Flip blocks to the vblank and returns the vblank time, the onset estimate and a miss flag. Stamps from beamposition queries, from OML_sync_control, and from the kernel's vblank and flip events on Linux; VBLSyncTest, PerceptualVBLSyncTest, BeampositionTest, OMLBasicTest; FlipTimingWithRTBoxPhotoDiodeTest against a photodiode. Linux, Windows, macOS | A record per flip: planned and shown vblank, residual, drops, path, tier, phases (`ysp/screen.h`). DXGI_FLIP fullscreen: onset within 2.3 us of the prediction at p99 over 7200 frames, no drop; COMPOSITION independent flip: DisplayedTime 13 us p50, 77 us p99 after the vblank entry polled with D3DKMTGetScanLine. `screen_flipstats` is the VBLSyncTest analog. Linux X11 (GLX_OML, measured as v0.8.0): beside PTB on one machine, 9600 flips (next vblank and held 1 to 5 frames, idle and with 20 spinning processes), both on the vblank asked for every time, both stamps the kernel's vblank time (PTB within 2 us, ysp exactly). Open: PTB 1.5 s with its sync tests, ysp 0.55 s for the whole process with its settle check. Wayland and macOS are stubs | Match on Linux X11 timing; exceeds in what each flip records (path, tier, the phase that was late, with no tool attached). Lacks macOS and Wayland, a photodiode run, and any rate but 60 Hz |
 | `when` scheduling | `Flip(win, when)`: the first vblank at or after `when`; the manual's idiom is `vbl + (n - 0.5) * ifi`. Async flips are separate calls | `yscr_flip_at(t)` never blocks. It snaps to the nearest vblank (lead 0.5), or never early (`YSCR_LEAD_NONE`); a late caller gets `LATE_TARGET`. Holds 0 to 4 vblanks ahead: 1800 of 1800 fullscreen and 2979 of 2998 windowed on the vblank asked for, 19 late, 0 early; overruns of 17 and 20 ms: 84 of 84 flagged | Match. The half-period lead is PTB's idiom made the default |
 | High-precision luminance | PseudoGray (bit-stealing); native 10, 11 and 16 bit framebuffers; Bits++, Bits# Mono++ and Color++; DataPixx M16 and C48; VideoSwitcher and attenuators; checked by HighPrecisionLuminanceOutputDriversImagingPipelineTest, BitsPlusIdentityClutTest | A float scene (RGBA16F, 11-bit mantissa), a CLUT of 2 to 4096 entries per channel, then rounding, an 8 x 8 ordered dither or a noise dither to 8 bits. All 256 codes, and 10-bit codes written as k/1023, read back exact; an `R10G10B10A2` swapchain and pbuffer work on D3D11 (docs/gfx.md). `YGFX_OUT_10`, `MONO_PP` and `COLOR_PP` are refused: the panel link is 8 bits and no device was there to verify | Lacks a path past 8 bits on the link. In caller code (`gfx_luminance_bits`, 2026-10-09, Iris Xe, nominal calibration, not photometered): PseudoGray reaches 1696 levels (10.7 bits) with uneven sub-steps of 0.13 to 0.78 % and a chromaticity shift up to 0.017 in x, y; a 0.40 % grating shows as 0.63 % undithered, 0.38 % ordered, 0.40 % noise, 0.455 % PseudoGray; 3,532,030 read-back codes matched |
 | Color and gamma calibration | PsychCal, PsychColorimetric, DKL, `LoadNormalizedGammaTable`; photometer drivers (MeasXYZ meters) | `ysp/color.h`: calibration from readings (monotone cubic CLUT), XYZ, LMS, DKL, cone contrast, gamut distance never clipped. Against PTB in MATLAB R2023a: `ComputeDKL_M` within 6.2e-16, `SensorToPrimary` within 1.5e-8, `MaximizeGamutContrast` within 7.3e-16, out-of-gamut flags equal on 500 colors. The CLUT is in the frame's shader; the OS ramp is set to identity | Match for the math (measured agreement). Lacks photometer drivers: `gfx_calib` takes readings typed in |
@@ -2493,8 +2498,8 @@ v0.11.0, both against the kernel's vblank and evdev times
 | HDR | PsychHDR: HDR-10 output in nits, HDR images and movies; HDRTest by colorimeter | None. The header detects HDR or auto color management (`ADVANCED_COLOR`) and flags display codes as at risk | Lacks |
 | Imaging pipeline, procedural shaders | PsychImaging: float framebuffers, procedural gabors, gratings and noise, GLSL operators, convolution, geometry correction, panel fitter, gain correction | Linear-light float scene; GRATING, GABOR, NOISE, DOTS, instances (16384 a frame), targets, the blur pass, the USER shader contract. Gabor pixels within 1.2e-6 of a double CPU reference (Iris Xe); 10000 instanced gabors 1.26 to 1.33 ms of GPU and 177 to 191 us of CPU; 1000 gabors of 256 x 256 9.3 to 11 ms of GPU | Match for procedural stimuli; exceeds in measured pixel accuracy on four renderers. Lacks GPU filtered noise, convolution operators, built-in geometry and gain correction |
 | Movies | GStreamer: most formats, rate and direction, gapless playback, HDR movies, frame stamps; movie sound goes through GStreamer, outside PsychPortAudio (docs/audio.md) | Canonical form through Media Foundation (DXVA), pl_mpeg or the frame sequence; a record per frame decision; the soundtrack on `ysp/audio.h`'s clock: each start within 14 us of its target on the fit, flips within -0.42 to +0.08 ms (p1 to p99) of each frame's time | Exceeds in records and in sound and picture on one clock (measured in a composed window). Lacks formats outside the canonical form, Linux and macOS decode, reverse play |
-| Audio | PsychPortAudio: low-latency classes (WASAPI exclusive, ASIO, Core Audio, ALSA), scheduled starts, schedules, slave voices, AM modulators, capture and full duplex; its help says sub-ms onsets and below 10 ms latency are possible; PsychPortAudioTimingTest by oscilloscope | `yau_play_at()` with onsets from a fit of device positions, tier 2: placement 67.3 us p99 from the median idle through WASAPI's loopback tap (bar 20.8 us, missed), 19.8 us under load. Shared mode only (10 ms period); the shortest lead with no late onset was 43.5 to 54.5 ms; exclusive mode delivered callbacks in bursts. No capture | Lacks low latency, capture and modulators. Scheduling matches in kind; its accuracy at the jack is not measured |
-| Keyboard | KbCheck, KbQueue per device with press and release times; KeyboardLatencyTest by microphone; HIDIntervalTest | SDL's raw keyboard path on Windows, a device id per keyboard, double reports dropped. Injected keys stamped 0.18 to 0.67 ms after `SendInput()` (the message path: 6.2 ms before to 12.1 ms after). Raw mice per device. Linux X11 (v0.11.0): the kernel's evdev time when the keyboard's node is readable (uinput keys: 0 error), else the X server's (1 to 2 ms early). PTB's KbQueue on the same uinput keys: 0.03 to 0.40 ms after the kernel's time idle, up to 2.0 ms under load | Match on Windows; exceeds on Linux X11 with the udev rule (the kernel's time, independent of load), lacks without it (1 to 2 ms early against KbQueue's 0.1 ms late). The physical key latency is not measured (no capture) |
+| Audio | PsychPortAudio: low-latency classes (WASAPI exclusive, ASIO, Core Audio, ALSA), scheduled starts, schedules, slave voices, AM modulators, capture and full duplex; its help says sub-ms onsets and below 10 ms latency are possible; PsychPortAudioTimingTest by oscilloscope | `yau_play_at()` with onsets from a fit of device positions. WASAPI shared, tier 2: placement 67.3 us p99 from the median idle through WASAPI's loopback tap (bar 20.8 us, missed), 19.8 us under load; shortest safe lead 40 ms at the default queue, 30 ms at queue 1. WASAPI exclusive on the laptop's driver: 125 ms, because the driver holds 30 to 110 ms and delivers callbacks in bursts. Linux ALSA exclusive, tier 3 (i5-14500, Intel HDA, measured before the merge): 64-frame periods (1.3 ms), no underrun idle, safe lead 3.6 to 5.8 ms. Capture and duplex on WASAPI, ALSA and PulseAudio (docs/audio.md) | Matches in kind on scheduling and capture. Low latency: ALSA is inside the range PTB's help states, the one Windows laptop is above it; no side-by-side run. Lacks AM modulators. Accuracy at the jack is not measured |
+| Keyboard | KbCheck, KbQueue per device with press and release times; KeyboardLatencyTest by microphone; HIDIntervalTest | SDL's raw keyboard path on Windows, a device id per keyboard, double reports dropped. Injected keys stamped 0.18 to 0.67 ms after `SendInput()` (the message path: 6.2 ms before to 12.1 ms after). Raw mice per device. Linux X11 (measured as v0.8.0): the kernel's evdev time when the keyboard's node is readable (uinput keys: 0 error), else the X server's (1 to 2 ms early). PTB's KbQueue on the same uinput keys: 0.03 to 0.40 ms after the kernel's time idle, up to 2.0 ms under load | Match on Windows; exceeds on Linux X11 with the udev rule (the kernel's time, independent of load), lacks without it (1 to 2 ms early against KbQueue's 0.1 ms late). The physical key latency is not measured (no capture) |
 | `GetSecs` clock | QPC on Windows; GetSecsTest checks it against another timer | `yrt_now_ns()` on QPC (10 MHz here, 100 ns steps); SDL's clock correlated within 0.1 us; device clocks fitted | Match |
 | IOPort serial | A reader thread per port, one stamp per read; device protocols in M-files (PsychRTBox clock sync, CedrusResponseBox) | `ysp/serial.h`; `ysp/device.h` reader threads with clock fits (FIT, BRACKET); `ysp/box.h` decoders (XID, the line protocol, photodiode frame, trigger boxes). On simulated devices: a wrapping us counter mapped within -12 to +46 us. On a Teensy 4.0 echo board (Windows usbser, Linux cdc_acm), beside IOPort from PTB's MATLAB and Python builds: round trips at the raw OS floor, as IOPort with its latency options (IOPort's defaults 2 to 6 times slower); pulses from `yser_pulse` and `ydev_out_pulse` within 1 us of the request at the median on Linux, -65 to -4 us on Windows; IOPort has no timed pulse call (docs/serial.md) | Exceeds in design (device clocks fitted, not stamped on read) and in timed pulses; matches IOPort's tuned reads. Lacks a vendor response box run and an RTBox decoder |
 | Datapixx and VPixx | PsychDataPixx: clock sync, M16 and C48 output, scanline readback, audio, Pixel Mode triggers | `ysp/screen.h` draws Pixel Mode codes and PTB's 8-pixel pixel sync (1800 read-backs through D3D, 0 differences); `ysp/dpx.h` is planned (docs/devices_spec.md) | Lacks |
@@ -2511,11 +2516,11 @@ that piece. A demo with two missing pieces counts for each. The 14.7 and
 
 | Rank | Gap | 14.7 | 15.4 | Where it goes | Blocks | Size |
 |---|---|---|---|---|---|---|
-| 1 | Capture: camera and microphone | 7 | 3 | `ysp/video.h` capture (4.6); `ysp/audio.h` input | 12 demos: 9 need a camera (`VideoRecordingDemo.m` also the microphone), 3 the microphone only and 3 tests (`KeyboardLatencyTest.m`, `AudioFeedbackLatencyTest.m`, `VideoCaptureLatencyTest.m`) | Medium |
+| 1 | Capture: camera (the microphone is built, `ysp/audio.h` v0.5.0) | 7 | 3 | `ysp/video.h` capture (4.6) | 9 demos and `VideoCaptureLatencyTest.m` | Medium |
 | 2 | HDR output and HDR image files | None | None (new) | `ysp/screen.h` (an HDR swap chain), `ysp/gfx.h` output stage | 4 demos, `HDRTest.m` | Medium; needs a colorimeter and an HDR panel |
 | 3 | Stereo output modes: frame-sequential, side by side, interleaved, dual display | None | None (new) | `ysp/gfx.h` output stage (4.3) | 3 demos (`StereoDemo.m`, `ImagingStereoDemo.m`, `SimpleHDRLinuxStereoDemo.m`), `FrameSequentialStereoTest.m`; outside PsychDemos, 4 BitsPlusDemos | Small for anaglyph and side by side; frame-sequential needs a 120 Hz panel and glasses |
 | 4 | High-precision luminance output: native 10 bit, PseudoGray, Bits# Mono++ and Color++, VPixx M16 and C48 | None | 5 | `ysp/gfx.h` output stage; `ysp/screen.h` 10-bit back buffer | 0 demos outright (the output half of `AdditiveBlendingForLinearSuperpositionTutorial.m`), 1 test; outside PsychDemos, all 8 BitsPlusDemos files. Ranked by count; by reputation it is PTB's first feature, and 16.6 puts it second | Small in code; needs a device, a 10-bit panel or a photometer to verify |
-| 5 | Linux X11 backend with OML and kernel stamps | None | None | `ysp/screen.h` GLX (11, item 4) | `OMLBasicTest.m`, `GraphicsDisplaySyncAcrossDualHeadsTestLinux.m`, `SimpleHDRLinuxStereoDemo.m` | Built: `ysp/screen.h` v0.11.0, one X screen per process |
+| 5 | Linux X11 backend with OML and kernel stamps | None | None | `ysp/screen.h` GLX (11, item 4) | None left: `OMLBasicTest.m` is closed; `GraphicsDisplaySyncAcrossDualHeadsTestLinux.m` still needs a scanout query, `SimpleHDRLinuxStereoDemo.m` HDR and stereo | Built: `ysp/screen.h` v0.11.0, one X screen per process |
 | 6 | Eye-tracker input source and calibration | 6 | 2 | `ysp/eyelink.h`, `ysp/tobii.h` | 0 in PsychDemos (the mouse stands in for gaze); the 10 SR Research demos outside | Medium per tracker |
 | 7 | GPU filters: filtered noise, convolution, mipmaps | None | 8 | `ysp/gfx.h` (fragment passes on targets) | `FastFilteredNoiseDemo.m`, `BlurredVideoCaptureDemo.m`, `BlurredMipmapDemo.m` (the last two also need capture) | Small to medium |
 | 8 | Two physical displays: scanout phase, groups verified | None | 9 (untimed screens) | `ysp/screen.h` | 2 tests | A second display and two photodiodes |
@@ -2525,8 +2530,7 @@ that piece. A demo with two missing pieces counts for each. The 14.7 and
 | 12 | 3D color LUT | None | None | `ysp/gfx.h` output stage | `Color3DLUTTest.m` | Small |
 
 Notes on the merge with 14.7 and 15.4:
-- Capture is the top gap in all three. PTB's demos weight the camera
-  most: 9 of the 12 capture demos are camera demos.
+- Capture is the top gap in all three. What is left of it is the camera.
 - 14.7 rank 1 (experiment flow) and 15.4 rank 1 do not show here: PTB
   ships no experiment layer, so its demos need none.
 - 15.4 rank 4 (network markers) is closed for LSL by `ysp/net.h`
@@ -2543,10 +2547,11 @@ Notes on the merge with 14.7 and 15.4:
 
 ### 16.6 Proposed C examples
 
-None of these repeats an example in `examples/`. `screen_flipstats`
+All eight were built by 2026-11-05. None of them repeats an earlier
+example in `examples/`. `screen_flipstats`
 already does what VBLSyncTest does, `gfx_load` and `gfx_bench` what the
 Garborium and procedural gabor benchmarks do, `screen_input` what KbDemo
-and KbQueueDemo do, and 15.5's `trial_movie` (not built) covers
+and KbQueueDemo do, and 15.5's `trial_movie` covers
 `DetectionRTInVideoDemo.m` and `LoadMovieIntoTexturesDemo.m`, so none of
 those is proposed again. Timing and luminance precision come first,
 because PTB is the reference there. Sizes are estimates from the
@@ -2570,10 +2575,10 @@ Example 2 is the base for `YGFX_OUT_10` once a 10-bit panel is on hand.
 
 - PTB demos past their first comment block, except the bodies named in
   the sources. EyelinkDemos and BitsPlusDemos: file names only.
-- PTB's timestamping methods (beamposition, OML, the kernel's flip
-  events) and its claims (sub-ms sound onsets, below 10 ms latency) are
-  from help text, not from source or a run. No PTB number was measured
-  here.
+- PTB's timestamping methods (beamposition, the kernel's flip events) and
+  its claims (sub-ms sound onsets, below 10 ms latency) are from help text,
+  not from source or a run. Measured here: Flip with OML stamps and KbQueue
+  on the Linux desktop, and IOPort on both machines (16.4).
 - PTB's `Flip` semantics in 16.4 (`when`, the half-IFI idiom, the
   return values) are from PTB's documentation, not from the files read.
 - Whether PTB's KbQueue separates keyboards on Windows.
