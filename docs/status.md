@@ -21,23 +21,32 @@ native USB (the serial and device rows). "Sim" below means simulated displays,
 fake transports, virtual serial pairs, null audio devices or software
 renderers, in tests and CI.
 
+An Apple M2 Mac mini (macOS 27.0.1, Apple clang 21, arm64, APFS) ran
+the tests of every header on 2026-11-04 with the `macos` and
+`macos-sanitizers` presets (73 of 73 in each), without SDL3, miniaudio or
+liblsl: ysp/screen.h, ysp/gfx.h, ysp/video.h and ysp/audio.h ran only
+their simulated and null paths, ysp/net.h only its fake liblsl. The serial
+and device loopbacks ran on a pseudo-terminal pair. No device was
+attached and nothing was timed: every macOS result in this page is
+functional.
+
 | Header | Ran on real hardware | Only in sim or CI | Source |
 |---|---|---|---|
 | screen | Windows 11, Iris Xe, internal panel, 60 Hz: flip records from software timestamps (both swap paths); the web backend's callback times in Chrome, Edge and Firefox | Light (no photodiode); another GPU, rate or display; Linux and macOS (simulated display only); light in a browser | screen.h STATUS; docs/screen.md; docs/web.md |
 | gfx | Windows 11, Iris Xe through ANGLE (D3D11) | Light (no photometer or photodiode); WARP, SwiftShader and Mesa llvmpipe are software | gfx.h STATUS; docs/gfx.md |
 | video | Windows 11, Iris Xe, Media Foundation with DXVA, a 640x360 window; soundtrack on the real WASAPI device | Light and sound; fullscreen | video.h STATUS |
 | audio | Windows 11, WASAPI on the Realtek speakers (shared 48 kHz, exclusive), placement checked by WASAPI loopback capture; capture from the SST microphone array (shared, exclusive, duplex with the speakers); Web Audio in Chrome 154 on the same speakers (the browser's estimates) | Sound at the speaker and capture times against a reference (no loopback cable: no delay to sound or from it is measured); capture on any other backend, and in a browser (compiled, never run); CoreAudio, ALSA, PulseAudio; Web Audio on a phone | audio.h STATUS; docs/audio.md |
-| rt | Windows 11: clock, waits, worker, event ring | The device clock fit: no real device has fed it; macOS | rt.h STATUS; docs/rt.md |
+| rt | Windows 11: clock, waits, worker, event ring. M2 Mac mini, macOS 27.0.1: the tests, the Mach time-constraint rung obtained without privilege (functional; no wait or clock cost measured) | The device clock fit: no real device has fed it; timing on macOS | rt.h STATUS; docs/rt.md, "macOS (v0.10.0)" |
 | input, response | Windows 11: keys sent with SendInput through SDL 3.4 | A key pressed by hand; mouse, touch, pen, gamepad timing; response boxes | input.h; docs/response.md |
 | net | Windows 11 and WSL2: the real liblsl (1.17.5, 1.17.7) over local loopback | No LabStreamer or other LSL device; macOS | net.h STATUS; docs/net.md |
-| serial | Windows 11, i7-1360P, 2026-10-11: the Windows backend on a Teensy 4.0 echo board over native USB CDC (usbser), through the MATLAB MEX binding. Round trip 172 to 288 us median, 279 to 424 us p99, against a raw Win32 floor of 167 to 229 us; IOPort with BlockingBackgroundRead=1 PollLatency=0 matches it | Linux virtual port pairs only; macOS, USB-serial bridges (FTDI) and RS-232 never ran | docs/serial.md, "Results with the Teensy 4.0 echo board" |
+| serial | Windows 11, i7-1360P, 2026-10-11: the Windows backend on a Teensy 4.0 echo board over native USB CDC (usbser), through the MATLAB MEX binding. Round trip 172 to 288 us median, 279 to 424 us p99, against a raw Win32 floor of 167 to 229 us; IOPort with BlockingBackgroundRead=1 PollLatency=0 matches it | Linux virtual port pairs; macOS on a pseudo-terminal pair only (M2 Mac mini, 2026-11-04, no device); USB-serial bridges (FTDI) and RS-232 never ran | docs/serial.md, "Results with the Teensy 4.0 echo board", "macOS on a pseudo-terminal pair" |
 | parallel | none on Windows; the "Linux tested" note does not say whether a real port was used | The Windows backend never reached hardware | parallel.h STATUS |
 | box | none | Pure protocol code; no byte from or to a vendor device; the firmware never ran on a board | box.h STATUS; docs/box.md |
-| device | Windows 11, i7-1360P, 2026-10-12: host-timed outputs (the TriggerBox byte path, DTR, RTS) into a Teensy 4.0 echo board over native USB CDC (usbser); width error -65 to -16 us median | Inputs from a real board; every vendor box, the line board, the parallel port; FTDI bridges; Linux and macOS | docs/device.md, "Host-timed pulses on a Teensy 4.0" |
+| device | Windows 11, i7-1360P, 2026-10-12: host-timed outputs (the TriggerBox byte path, DTR, RTS) into a Teensy 4.0 echo board over native USB CDC (usbser); width error -65 to -16 us median | Inputs from a real board; every vendor box, the line board, the parallel port; FTDI bridges; Linux; macOS on a pseudo-terminal pair only | docs/device.md, "Host-timed pulses on a Teensy 4.0" |
 | rigfile | none | Binds through a fake transport | docs/device.md |
 | color | not applicable (pure computation) | No number is a measurement of light | color.h; docs/color.md |
 | stair, quest, aep, trials, table, json, pack, timeline, rdk, outline | not applicable (pure computation) | | |
-| dataset | not applicable (files only): NTFS on Windows 11, ext4 on WSL2, Emscripten's in-memory file system | A power cut; macOS | docs/dataset.md |
+| dataset | not applicable (files only): NTFS on Windows 11, ext4 on WSL2, APFS on macOS 27.0.1, Emscripten's in-memory file system | A power cut | docs/dataset.md |
 
 ## Files to copy
 
@@ -87,13 +96,14 @@ Purpose: The shared base: monotonic clock, deadline waits, thread elevation, a o
 
 Status:
 
+- v0.10.0 (2026-11-04): on macOS `yrt_now_ns()` reads `mach_absolute_time()` and `yrt_ticks_to_ns()` converts mach units (CoreAudio host times, `CVTimeStamp`); `CLOCK_MONOTONIC` counted in whole microseconds there (correlation width 1000 ns, now 83 ns) and takes frequency adjustments. Other platforms unchanged. First run on a Mac (M2 Mac mini, macOS 27.0.1, Apple clang 21): `rt_test` passes, Release and ASan with UBSan; an unprivileged thread got `TIME_CONSTRAINT` (read back as asked) and `FIFO` when Mach refused a 100 ms computation; the pump got `BELOW_NORMAL`; the per-user folders are under `~/Library`. 4 of 4 new mutants killed (macOS only). Functional only: no wait or clock cost measured on the Mac. [macOS](rt.md#macos-v0100).
 - Bindings: `ysp-rt` 0.9.0 (Python) and the MEX `ysp_rt` 1.0.0: the clock (the one `ysp.serial.now()` and `ysp.parallel.now()` read, checked), deadline waits (the GIL released), clock correlation, the device clock fit, the virtual clock and the per-user folders, in seconds; worker, pump, ring and the scheduling ladder are not bound. On Windows a binding's wait returns the header's lateness (median 0.1 us with the default spin); the host's return adds 8 us in Python, 37 to 40 us in MATLAB and 65 us in Octave at the median. Tests pass on Windows and WSL2 (Python), MATLAB R2023a and Octave 10.1. [Bindings](rt.md#bindings).
 - v0.9.1 (2026-10-27): `yrt_sleep_ns()` near `INT64_MAX` ("forever") on the virtual clock saturates its deadline and moves the clock to its end; the plain sum overflowed and the wait returned at once. The real clock's sum is unsigned and was safe, and so was `yrt_pump_wait()`. MSVC, MinGW-w64, WSL2 gcc with ASan and UBSan; 2 of 2 new mutants killed. [A wait without end](rt.md#a-wait-without-end-v091).
 - v0.9.0: a virtual clock for simulated runs (`yrt_virtual_begin()`, virtual timers), and `yrt_real_ns()`, the real clock for costs on either clock: the driver thread's waits move it, other threads wait for it, and ysp/screen.h's SIM backend, ysp/audio.h's null device and ysp/video.h follow it. The CI list of 49 `--sim` and `--null` runs gave the same data files and output in three idle runs and two beside 24 CPU-bound processes (MSVC), and the same data with MinGW-w64; the lines that differ print real CPU time. Real-clock cost inside the run-to-run spread: `yrt_now_ns()` 24.3 to 26.3 ns against 23.5 to 26.1 ns pinned, the screen's per-frame header cost unchanged. 13 of 13 new mutants caught ([Virtual clock](rt.md#virtual-clock-v090)).
 - v0.8.0 (the [Conventions](conventions.md): `yrt_now_ns()` and every time `int64_t` ns, `YRT_S()`/`YRT_MS()`/`YRT_US()`, worker and pump open/close, `yrt_fit_open()`; 2 mutants added, both caught).
 - v0.7.0 (per-user folders: `yrt_user_dir()`, the rules of gfx's program cache folder, tested on Windows, WSL2 and emcc).
 - v0.6.0 (the device clock fit: on synthetic devices within tens of us of the truth for dense pairs, ms for sparse pairs behind a 16 ms timer; 17 of 17 mutants caught; no real device yet).
-- v0.5.0: event ring stress-tested with 2 to 8 producers (no torn or lost record unaccounted for), ThreadSanitizer clean; a push costs 11 to 37 ns natively and a TIME_CRITICAL producer's p99.9 stays near 2 us while 7 others push, against 0.1 to 0.5 ms behind a lock; Tracy mode built against Tracy v0.14.1 ([design notes and tables](rt.md)). Pump built and run on Windows, Linux and under node (Emscripten); on MinGW the worker and pump threads inherit the x87 control word so a thread computes the same bits as the caller, ThreadSanitizer clean including a wait-versus-stop hammer; the deadline worker as before: Windows measured with [rt_jitter](../examples/rt/jitter.c); Linux built and run under WSL2, worker clean under ThreadSanitizer; CI compiles the macOS backend, which has not run on a Mac. No test host grants CAP_SYS_NICE, so the SCHED_FIFO and Mach time-constraint rungs are unexercised.
+- v0.5.0: event ring stress-tested with 2 to 8 producers (no torn or lost record unaccounted for), ThreadSanitizer clean; a push costs 11 to 37 ns natively and a TIME_CRITICAL producer's p99.9 stays near 2 us while 7 others push, against 0.1 to 0.5 ms behind a lock; Tracy mode built against Tracy v0.14.1 ([design notes and tables](rt.md)). Pump built and run on Windows, Linux and under node (Emscripten); on MinGW the worker and pump threads inherit the x87 control word so a thread computes the same bits as the caller, ThreadSanitizer clean including a wait-versus-stop hammer; the deadline worker as before: Windows measured with [rt_jitter](../examples/rt/jitter.c); Linux built and run under WSL2, worker clean under ThreadSanitizer; CI compiles the macOS backend, which had not run on a Mac (v0.10.0 ran it). No test host grants CAP_SYS_NICE, so the SCHED_FIFO and Mach time-constraint rungs are unexercised (on macOS both need no privilege; see v0.10.0).
 
 ### ysp/parallel.h
 
@@ -122,6 +132,7 @@ Purpose: Serial port (RS-232, USB-serial, USB-CDC) byte I/O for trigger and resp
 
 Status:
 
+- macOS (2026-11-04, header unchanged): the first run, on an M2 Mac mini (macOS 27.0.1) against a pseudo-terminal pair (`tests/loopback/pty_pair.py`, as socat is missing): `serial_loopback` passes in Release, under ThreadSanitizer and under ASan with UBSan; `device_loopback` passes and goes LOST 15 ms after the pair's process dies; a hangup surfaces through `select()` as `YSER_ERR_DISCONNECTED`. On a pseudo-terminal `IOSSIOSPEED`, DTR, RTS and the line states fail with `ENOTTY`, and `TIOCEXCL` does not refuse a second open (it does on Linux); no device was attached, so a USB-serial driver's behavior is not known. [macOS on a pseudo-terminal pair](serial.md#macos-on-a-pseudo-terminal-pair-2026-11-04).
 - Hardware: the Windows backend ran on a Teensy 4.0 over native USB CDC (usbser), 2026-10-11, through the MATLAB MEX: round trip 172 to 288 us median, 279 to 424 us p99, against a raw Win32 floor of 167 to 229 us; IOPort with BlockingBackgroundRead=1 PollLatency=0 matches it. macOS and USB-serial bridges (FTDI) and RS-232 never ran. [Results](serial.md#results-with-the-teensy-40-echo-board).
 - Bindings: `ysp-serial` 0.6.2 (Python) and the MEX `ysp_serial` 2.2.0 take and return every time in seconds; both have an async line reader (the Python one since 0.5.0.2). [Bindings](bindings.md#versions).
 - v0.6.2 (2026-10-27): `yser_pulse_off_at_ns()` saturates start + width and return + hold at `INT64_MAX`, so a pulse width near `INT64_MAX` holds `on` (the plain sum overflowed and wrote `off` at once). Checked through `tests/adapt/device_test.c`; 3 of 3 new mutants killed. [A pulse without end](serial.md#a-pulse-without-end-v062).
@@ -142,6 +153,7 @@ Purpose: Trial sequencing above the adaptive methods: conditions and repetitions
 
 Status:
 
+- v0.6.1 (2026-11-04): `YTR_FLUSH_SYNC` on macOS calls `fcntl(F_FULLFSYNC)`, and `fsync()` only when the volume refuses it; `fsync()` alone left the rows in the drive's write cache. Other platforms unchanged. On an M2 Mac mini (macOS 27.0.1, APFS) the tests pass, Release and ASan with UBSan, counting one call a synced row and the fallback; 2 of 2 new mutants killed (macOS only). No power cut; the cost of a synced row on the Mac is not measured. [v0.6.1](trials.md#v061-f_fullfsync-on-macos).
 - v0.6.0: four gaps of the [experiment definition](experiment_format.md) closed. G3: variables drawn per trial (`desc.vars[]`, `ytr_var_choice()`, rules `var NAME choice ...`) from the trial's own stream of `desc.seed` and the trial index, logged in the data line, replayed by restore and snapshot (format 5), no draw from the session's generator; `ytr_trial_seed()`. G4: `weight COLUMN` times `reps`. G11: `rate=display` (`YTR_RATE_DISPLAY`, `desc.display_rate_num`). G10: 256 columns in a data file. The data line has a `trial_seed` column (`x` and 16 hex digits, text in pandas, R and ysp/table.h). Pins unchanged; 21 of 21 new mutations caught. The Python binding and, from 2026-10-22, the MEX binding take all of it (`seed`, `vars`, `display_rate`, `rate` `'display'`; `var`, `var_index`, `trial_seed`). [Design notes](trials.md#v06-variables-weight-x-reps-the-displays-rate-256-columns).
 - v0.5.1: the snapshot magic is `YTRL` (was the psy-era `PSTR`, now refused; no saved data existed).
 - v0.5.0: every column of seconds ends in `_s` (the user's decision, 2026-10-20: jsPsych writes `rt` in ms, PsychoPy in s). `ytr_data_open()` refuses, by name, a `TIME_NS` column without `_s` or `_ns` and a session jitter without `_s`; 6 new refusals tested, 4 of 4 new mutations caught. [Design notes](trials.md#v05-columns-of-seconds-end-in-_s).
@@ -154,13 +166,14 @@ Status:
 
 - Header: [ysp/dataset.h](../include/ysp/dataset.h)
 - Prefix: `yds_`, `YDS_`
-- Platforms: Windows, Linux, macOS (not run), Emscripten (its in-memory file system)
+- Platforms: Windows, Linux, macOS, Emscripten (its in-memory file system)
 - Needs: ysp/trials.h (and so ysp/table.h), ysp/json.h
 
 Purpose: A session's data set (experiment_format.md D9 and 2.10, gap G13): a folder with `session.json` (canonical JSON, format "ysp-session" 1, `"closed": false` until the finish, every rewrite atomic: a synced temporary file renamed over), `trials.csv` (the caller's columns), `frames.csv` (flip records), `events.csv` (landings, inputs, responses, outputs), `clock.csv` (clock pairs and fits) and `streams/<name>.csv`, each row in the OS when its write returns, through ysp/trials.h's writer. Inline adapters from `yscr_record`, `yin_event`, `ytl_event` and `yrt_fit_info`. A stored zip of the finished folder for the web. A folder that exists is refused.
 
 Status:
 
+- v0.2.1 (2026-11-04): on macOS the rewrite of `session.json` calls `fcntl(F_FULLFSYNC)` on the temporary file and on the folder, and `fsync()` only when the volume refuses it. First run on a Mac (M2 Mac mini, macOS 27.0.1, APFS, case-insensitive): 702 checks pass, Release and ASan with UBSan, the crash test's child process included; 3 of 3 new mutants killed (macOS only). No power cut; costs on the Mac not measured. [macOS](dataset.md#macos-v021-2026-11-04).
 - v0.2.0 (2026-10-25): `yds_abandon()`, an abnormal end that closes the files and leaves `"closed": false` (the bindings' teardown of a data set never closed and their exception paths used to finish it), and `ds.error_code`, the code of the last failure, set by `yds_open()` too. 662 checks on MSVC and MinGW, 656 on WSL2 gcc with ASan and UBSan; 38 of 39 mutants killed (the 6 new ones among them; ds-09 survives as before). emcc not run.
 - v0.1.0 (2026-10-21): the first version (gap G13). A synthetic session against golden bytes (session.json at the open and at the finish, four tables, a stream, the zip's digest), a crash in a child process (every file reads, `"closed": false`), the atomic rewrite against a blocked temporary file and a held session.json, refusals before the folder exists: on ysp/trials.h v0.6.0 (`trial_seed` in trials' spelling through `yds_seed_text()`): 561 checks on MSVC and MinGW, 555 on WSL2 gcc with ASan and UBSan, 536 under emcc; the zip opened by Python's zipfile, unzip and Expand-Archive, every CSV by pandas. 32 of 33 mutants killed (one survivor expected: the sync before the rename). On trials v0.6 the handle is 767 KB; the open leaves the pages of unused streams untouched, so its working set grows 340 to 352 KB (was 936 to 948). On the Iris Xe laptop's SSD: 12 us a frame or event row, 8.2 ms an atomic rewrite of session.json. [Design notes](dataset.md).
 - Bindings: `ysp-dataset` 0.2.0 (Python) and the MEX `ysp_dataset` write a session's data set from PsychoPy or Psychtoolbox; times in seconds; generic rows (the header takes no `ytr_trials` for trials.csv), checked against `ysp.trials`' and `ysp_trials`' data line; a killed writer, an exception, `abandon` and a teardown of a data set never closed leave `"closed": false` and every row. [Design notes](dataset.md#bindings).
@@ -184,7 +197,7 @@ Status:
 
 - Header: [ysp/pack.h](../include/ysp/pack.h)
 - Prefix: `ypak_`, `YPAK_`
-- Platforms: Windows, Linux, WebAssembly; macOS not run
+- Platforms: Windows, Linux, macOS (2026-11-04: the tests, the mapped file included), WebAssembly
 - Needs: OS file mapping (`YPAK_NO_FILE`: nothing)
 
 Purpose: Reads a ysp pack (a store-only zip, entries aligned to 4096, a JSON manifest, XXH64 over 1 MiB chunks, the pack ID in the comment): from a mapped file, memory, a range reader, or bytes a browser fetched; lookups by name, zero-copy entries verified on first use, cursors that verify each chunk as it streams; views of the pack's own forms (curve sets, artwork, glyph runs, shaders, textures with QOI). Hostile input is checked before any pointer leaves it. The pack tool (`pack/ysp/pack_tool.h`, the `ypak` CLI; `YSP_BUILD_PACK`) builds, verifies, rebuilds and appends packs; it needs lodepng, stb_image, pl_mpeg and libsamplerate (all fetched by `tools/vendor_pack.py`), and glyph runs also need the layout library (`YSP_BUILD_LAYOUT`, HarfBuzz and Skribidi)
@@ -339,7 +352,7 @@ Status:
 
 - Header: [ysp/device.h](../include/ysp/device.h)
 - Prefix: `ydev_`, `YDEV_`
-- Platforms: Windows, Linux, macOS
+- Platforms: Windows, Linux, macOS (2026-11-04: the tests and `device_loopback` on a pseudo-terminal pair; no device)
 - Needs: ysp/rt.h, ysp/input.h, ysp/box.h, ysp/serial.h; ysp/parallel.h for the parallel port
 
 Purpose: A response box, a trigger interface or a microcontroller board on the ysp_rt clock: one instance per device with its own reader thread (or manual polling), a ysp/box.h decoder and encoders, a ysp/rt.h clock fit fed by timer queries (bracketed pairs), match keys that find the device again after a replug, identify, LOST and reconnect with the fit restarted and the gap logged, records in a ysp/rt.h ring. Outputs: `ydev_out_set`, `_pulse`, `_mark`, each write a record with the times before and after it; pulses timed by the device (XID, line boards, the fixed 8 ms of BioSemi and MMBT-S) or by the instance's own worker; the callback for a ysp/screen.h trigger channel; response rules, which write a response's code on the input's reader thread; roles by index. The sink is the caller's: ysp/screen.h's input bridge in the example.
@@ -360,7 +373,7 @@ Status:
 
 - Header: [ysp/rigfile.h](../include/ysp/rigfile.h)
 - Prefix: `yrig_`, `YRIG_`
-- Platforms: Windows, Linux; macOS not run
+- Platforms: Windows, Linux, macOS
 - Needs: ysp/device.h, ysp/json.h
 
 Purpose: The rig profile ("ysp-rig 1", docs/devices_spec.md 11.2): which device plays each role and what the rig's loopbacks measured, in the user's config folder (refused when other users can write it). Load with errors that name the field, a SHA-256 check of each loopback and calibration file it names (a missing or changed file gives that role tier UNKNOWN, with a note), canonical bytes and their hash for the data file header, a role's desc and start on ysp/device.h, a binding (also of a Lab Streaming Layer stream, family `lsl`, for ysp/net.h), a stored loopback result, and the rig's viewing geometry for sizes in degrees.
@@ -368,6 +381,7 @@ Purpose: The rig profile ("ysp-rig 1", docs/devices_spec.md 11.2): which device 
 Status:
 
 - Bindings: `ysp-rigfile` 0.5.1 (Python) and the MEX `ysp_rigfile` 1.0.0: load, checks, notes, hash, roles, the tier rule, view, bind and save; `Profile.desc(role)` opens the role with `ysp.device.Device`. 10 Python tests (the planted-folder refusal on WSL2 only). [Bindings](device.md#bindings).
+- v0.5.2 (2026-11-04): on macOS a save's temporary file gets `fcntl(F_FULLFSYNC)` before the rename, and `fsync()` only when the volume refuses it. First run on a Mac (M2 Mac mini, macOS 27.0.1, APFS): 564 checks pass, Release and ASan with UBSan; 2 of 2 new mutants killed (macOS only). No power cut. [F_FULLFSYNC on macOS](device.md#f_fullfsync-on-macos-ysprigfileh-v052-2026-11-04).
 - v0.5.1 (2026-10-27): a save tries the rename 5 times, 10 ms apart, when another program holds the file (as ysp/dataset.h), and says which step failed with the OS error; files open shared (`_wfsopen()`), so a load works while another program has the profile open (MSVC's `_wfopen_s()` denied it). Under 4 copies of the test at a time, 1200 runs: 9 (MSVC) and 20 (MinGW-w64) `ERROR_ACCESS_DENIED` failures of the rename before; none in 1200 (MSVC) after. The test's crash after a failed save was the test's (a NULL role); every role a check reads goes through a NULL-safe helper. 572 checks; 6 of 6 new mutants killed. [A held profile](device.md#a-held-profile-ysprigfileh-v051-2026-10-27).
 - v0.5.0 (2026-10-21): `view` (`distance_mm`, `width_mm`, `width_px`) and `yrig_ppd()`, the pixels per degree by ysp/gfx.h's YGFX_DEG expression (gap G2 of experiment_format.md); a profile without `view` keeps its bytes and hash; `rigfile_profile --view` writes it; trial_2afc_adaptive reads it. 552 checks (51 new); 8 of 8 new mutants killed. Arithmetic and files only. [Decisions](device.md#the-viewing-geometry-ysprigfileh-v050-2026-10-21).
 - v0.4.0: `display.latency`, the photodiode run behind the onset offset, checked at load; `yrig_read_loopback()` reads the new input bounds and display onset files, and a bounds file is now compared with the profile (DIFFERS). Two tools: `rigfile_bounds` (an input's bounds against a reference line board, each difference widened by its bracket; in 160 of 160 simulated runs over seeds and USB tails the bounds contained the truth) and `rigfile_onset` (the offset from a photodiode run's CSV). 501 checks; 37 of 37 mutations caught (8 new). Run on simulated boards and a generated CSV only. [The tools](device.md#the-rig-profile-tools-ysprigfileh-v040-2026-10-13).
@@ -378,7 +392,7 @@ Status:
 
 - Header: [ysp/net.h](../include/ysp/net.h)
 - Prefix: `ynet_`, `YNET_`
-- Platforms: Windows, Linux; macOS not run
+- Platforms: Windows, Linux; macOS: the fake-liblsl test only (2026-11-04), no real liblsl
 - Needs: ysp/rt.h, ysp/input.h; liblsl at run time
 
 Purpose: Lab Streaming Layer on the ysp_rt clock, with liblsl (MIT) loaded at run time: marker outlets (string or int32, stamped now or with any ysp_rt time, and a ysp/screen.h trigger channel that sends one at the flip), numeric outlets, and inlets that find a stream by its match key, pull it on their own thread, map the sender's stamps to ysp_rt (a fit of the LSL clock and a fit of liblsl's time corrections), and give markers and threshold crossings as ysp/input.h events and every numeric sample to a stream ring with a newest-sample slot; LOST, reconnect and gaps in the log, as ysp/device.h. The LabStreamer binds as three roles (docs/net.md).

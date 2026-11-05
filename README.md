@@ -9,11 +9,11 @@ C11 or C++17, and its top comment is its manual.
 
 | Header | Prefix | Purpose | Version | Status |
 |---|---|---|---|---|
-| [rt](docs/rt.md) | `yrt_` | Clock, deadline waits, worker, pump, event ring, clock fit, virtual clock | 0.9.1 | 1 machine |
+| [rt](docs/rt.md) | `yrt_` | Clock, deadline waits, worker, pump, event ring, clock fit, virtual clock | 0.10.0 | 2 machines |
 | [parallel](docs/parallel.md) | `ypar_` | Parallel port trigger output and line input | 0.4.1 | no device |
 | [serial](docs/serial.md) | `yser_` | Serial port byte I/O for trigger and response boxes | 0.6.2 | 1 machine |
-| [trials](docs/trials.md) | `ytr_` | Trial orders, blocks, adaptive tracks, jitter, variables per trial, replay, a CSV row per trial | 0.6.0 | tested |
-| [dataset](docs/dataset.md) | `yds_` | A session's data set: session.json, trial, frame, event, clock and stream tables, a zip for the web | 0.2.0 | tested |
+| [trials](docs/trials.md) | `ytr_` | Trial orders, blocks, adaptive tracks, jitter, variables per trial, replay, a CSV row per trial | 0.6.1 | tested |
+| [dataset](docs/dataset.md) | `yds_` | A session's data set: session.json, trial, frame, event, clock and stream tables, a zip for the web | 0.2.1 | tested |
 | [table](docs/table.md) | `ytb_` | Typed tables and a bounded CSV parser | 0.3.0 | tested |
 | [pack](docs/pack.md) | `ypak_` | Read and verify ysp packs (store-only zip) | 0.4.0 | tested |
 | [json](docs/json.md) | `yjs_` | Strict JSON reader and canonical writer | 0.2.1 | tested |
@@ -25,7 +25,7 @@ C11 or C++17, and its top comment is its manual.
 | [response](docs/response.md) | `yrsp_` | Trial responses and RT from any input device | 0.7.0 | 1 machine |
 | [box](docs/box.md) | `ybox_` | Response and trigger box protocols, bytes to events | 0.3.1 | no device |
 | [device](docs/device.md) | `ydev_` | Boxes and boards on the rig clock, with outputs and response rules | 0.5.1 | 1 machine |
-| [rigfile](docs/device.md#how-to-keep-a-rigs-devices-and-latencies-in-its-rig-profile) | `yrig_` | Rig profile: devices per role, loopback results, viewing geometry | 0.5.1 | no device |
+| [rigfile](docs/device.md#how-to-keep-a-rigs-devices-and-latencies-in-its-rig-profile) | `yrig_` | Rig profile: devices per role, loopback results, viewing geometry | 0.5.2 | no device |
 | [net](docs/net.md) | `ynet_` | Lab Streaming Layer markers and streams | 0.3.1 | no device |
 | [color](docs/color.md) | `ycol_` | Display calibration and color space conversions | 0.4.0 | tested |
 | [rdk](docs/rdk.md) | `yrdk_` | Random dot kinematograms, reproducible bit for bit | 0.3.0 | tested |
@@ -37,7 +37,8 @@ C11 or C++17, and its top comment is its manual.
 
 Each header is `include/ysp/<name>.h`; macros use the uppercase prefix
 (`YRT_`). Status: **tested** is pure computation, checked by tests;
-**1 machine** ran on one Windows 11 laptop only; **no device** never ran
+**1 machine** ran on one Windows 11 laptop only; **2 machines** also ran
+on an M2 Mac mini (macOS), functional checks only; **no device** never ran
 on the hardware it drives.
 [docs/status.md](docs/status.md) has the platforms, the dependencies, the
 measurements and the hardware for each header.
