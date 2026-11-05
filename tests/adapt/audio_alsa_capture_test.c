@@ -43,6 +43,16 @@
  *      the card's suspension too, so after the output's close the card
  *      stays suspended, and after the input's it is resumed. exit() with
  *      both open (a child process): the card is resumed.
+ *   6b. The other order: the AUTO input, then the AUTO output, which holds
+ *      the card too (it opened on a card the input suspended, in an input
+ *      or duplex profile): after the input's close the card stays
+ *      suspended, after the output's it is resumed.
+ *   7. An overrun in a split duplex read at 960 and 1024 frames (a stall
+ *      30 ms past the buffer): the loss is counted with the first block
+ *      after the restart (the input's trigger stamp, read again in the
+ *      hook, says which), and the frames after it lie within 800 us of the
+ *      fit from before (the count leaves out the controller's FIFO, up to
+ *      36 frames; 14 and 80 us measured).
  *
  * Exit 0 on pass, 1 on a failed check; 0 with "SKIP" when the device does
  * not open, unless YAU_ALSA_TEST_REQUIRE=1 (the mutation list).
@@ -71,9 +81,30 @@ static void tst_on_capture(const void* c, const void* tk, int32_t n);
 static int64_t g_rp[NREP], g_rt[NREP], g_last_t = -1;
 static int g_nrep = 0, g_keep = 0;
 
+/* part 7: the duplex input's own status, read again in the hook, says
+ * which block is the first after a restart (its trigger stamp moved) */
+static yau__alc* g_watch_al = NULL;
+static void* g_watch_pcm = NULL;
+static int64_t g_watch_trig = 0;
+static int g_restarts_seen = 0, g_restarts_counted = 0;
+
 static void tst_on_capture(const void* cp, const void* tkp, int32_t n) {
     const yau_capture* c = (const yau_capture*)cp;
     const yau_tick* tk = (const yau_tick*)tkp;
+    if (g_watch_al && g_watch_pcm) {
+        static uint64_t st[YAU__AL_ST_BYTES / 8];
+        if (g_watch_al->al.status(g_watch_pcm, st) == 0) {
+            struct timespec tr;
+            int64_t trig;
+            g_watch_al->al.trigger(st, &tr);
+            trig = (int64_t)tr.tv_sec * 1000000000 + tr.tv_nsec;
+            if (g_watch_trig && trig != g_watch_trig) {
+                g_restarts_seen++;
+                if (c->dev_lost > 0) g_restarts_counted++;
+            }
+            g_watch_trig = trig;
+        }
+    }
     if (g_keep && tk->pos >= 0 && tk->pos_t != g_last_t && g_nrep < NREP) {
         g_last_t = tk->pos_t;
         g_rp[g_nrep] = tk->pos;
@@ -112,7 +143,12 @@ static double rep_sd(int skip) {
     return sqrt(ss / n);
 }
 
-static int sinks_suspended(void) { return system("pactl list short sinks 2>/dev/null | grep -q SUSPENDED") == 0; }
+/* a sink or source of ALSA card 0 is SUSPENDED (its State line comes
+ * before its properties in pactl's long listing) */
+static int sinks_suspended(void) {
+    return system("{ pactl list sinks; pactl list sources; } 2>/dev/null | awk '/^(Sink|Source) #/ {s = \"\"} "
+                  "/^\\tState:/ {s = $2} /alsa.card = \"0\"/ {if (s == \"SUSPENDED\") f = 1} END {exit !f}'") == 0;
+}
 
 static int g_failures = 0;
 #define CHECK(c) do { if (!(c)) { fprintf(stderr, "audio_alsa_capture_test: FAIL line %d: %s\n", __LINE__, #c); g_failures++; } } while (0)
@@ -493,6 +529,7 @@ int main(void) {
         CHECK(!yau_open(&g_au, &od));
         printf("duplex, the input's keep_sound_server: %s\n", yau_error(&g_au));
         CHECK(strstr(yau_error(&g_au), "YAU_BACKEND_PULSE") != NULL);
+        CHECK(strstr(yau_error(&g_au), "the capture desc.keep_sound_server") != NULL);
         if (yau_is_open(&g_au)) yau_close(&g_au);
     }
     /* 6: two hw: devices on one card. The output's open suspends the
@@ -537,6 +574,100 @@ int main(void) {
                 CHECK(WIFEXITED(st) && WEXITSTATUS(st) == 0);
                 CHECK(!sinks_suspended());
             }
+        }
+    }
+    /* 6b: the other order. The input first (where the profile holds the
+     * input, it suspends the card), then the output, which opens on the
+     * freed card without a busy error and holds it too: after the input's
+     * close the card stays suspended, after the output's it is resumed. */
+    {
+        yau_desc od;
+        int held;
+        char line[640];
+        memset(&od, 0, sizeof od);
+        memset(&d, 0, sizeof d);
+        CHECK(yau_capture_open(&g_cap, &d));
+        CHECK(yau_open(&g_au, &od));
+        if (yau_is_open(&g_au) && yau_capture_is_open(&g_cap)) {
+            yau_capture_describe(&g_cap, line, sizeof line);
+            held = strstr(line, "sound-server-suspended") != NULL;
+            yau_describe(&g_au, line, sizeof line);
+            if (system("pactl info > /dev/null 2>&1") == 0) CHECK(strstr(line, "sound-server-suspended") != NULL);
+            yau_capture_close(&g_cap);
+            yrt_sleep_ns(YRT_MS(300));
+            printf("input first (%s), input closed first: the card %s\n",
+                   held ? "it suspended the card" : "it needed no suspension",
+                   sinks_suspended() ? "stays suspended" : "was resumed");
+            if (system("pactl info > /dev/null 2>&1") == 0) CHECK(sinks_suspended());
+            yau_close(&g_au);
+            yrt_sleep_ns(YRT_MS(300));
+            CHECK(!sinks_suspended());
+        } else {
+            if (yau_is_open(&g_au)) yau_close(&g_au);
+            yau_capture_close(&g_cap);
+        }
+    }
+    /* 7: an overrun in a split duplex read (a stall of the device thread
+     * past the buffer): the loss is counted on the first block after the
+     * restart, and the frames after it lie on the fit from before */
+    {
+        static const int32_t periods[2] = { 960, 1024 };
+        int k;
+        for (k = 0; k < 2; k++) {
+            yau_desc od;
+            yau_caps oc;
+            yau__fit before;
+            yrt_event ev[256];
+            int m, e, xr = 0;
+            int64_t f_ref = 0, worst = 0, x, t_ref;
+            memset(&od, 0, sizeof od);
+            memset(&d, 0, sizeof d);
+            od.period = periods[k];
+            d.format.sample = YAU_S16;
+            d.ring = &g_ring;
+            od.capture = &g_cap;
+            od.capture_desc = &d;
+            if (!yau_open(&g_au, &od)) {
+                fprintf(stderr, "audio_alsa_capture_test: FAIL split duplex open: %s\n", yau_error(&g_au));
+                g_failures++;
+                continue;
+            }
+            yau_get_caps(&g_au, &oc);
+            g_watch_trig = 0;
+            g_restarts_seen = g_restarts_counted = 0;
+            g_watch_pcm = ((yau__ma*)(void*)g_au.backend_mem)->dev.alsa.pPCMCapture;
+            g_watch_al = &((yau__ma*)(void*)g_au.backend_mem)->cap_al;
+            (void)run(4.0, 1);
+            before = g_cap.fit_ft;
+            while (yrt_ring_drain(&g_ring, ev, 256) > 0) {}
+            g_stall_ns = (int64_t)oc.buffer * 1000000000LL / oc.rate + 30000000;
+            (void)run(7.0, 1);
+            g_watch_al = NULL;
+            g_watch_pcm = NULL;
+            yau_capture_get_info(&g_cap, &in);
+            while ((m = yrt_ring_drain(&g_ring, ev, 256)) > 0)
+                for (e = 0; e < m; e++)
+                    if (ev[e].source == YRT_SRC_AUDIO && ev[e].kind == YAU_EV_CAP_XRUN) {
+                        xr++;
+                        f_ref = ev[e].u.i64[0] + ev[e].u.i64[1];
+                    }
+            if (f_ref > 0 && before.ready)
+                for (x = f_ref; x < f_ref + 4 * 48000 && x < in.frames; x += 997) {
+                    t_ref = yau__fit_time(&before, x) - yau_capture_time_of(&g_cap, x) + g_cap.desc.offset_ns;
+                    if (t_ref < 0) t_ref = -t_ref;
+                    if (t_ref > worst) worst = t_ref;
+                }
+            printf("split duplex at %d, a stall of %.0f ms: restarts %d, counted on their first block %d; "
+                   "xruns %u, lost %.2f ms; frames after it at most %.1f us off the fit from before\n",
+                   (int)oc.period, (double)((int64_t)oc.buffer * 1000000000LL / oc.rate + 30000000) / 1e6,
+                   g_restarts_seen, g_restarts_counted, (unsigned)in.xruns, (double)in.lost / in.rate * 1e3,
+                   (double)worst / 1e3);
+            CHECK(g_restarts_seen == 1 && g_restarts_counted == 1);
+            CHECK(in.xruns == 1 && xr == 1 && in.lost > 0);
+            /* the count from the trigger stamp leaves out the controller's
+             * FIFO, 0 to 36 frames measured (750 us) */
+            CHECK(f_ref > 0 && worst < 800000);
+            yau_close(&g_au);
         }
     }
     if (g_failures) return 1;

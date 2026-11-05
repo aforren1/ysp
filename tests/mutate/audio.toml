@@ -868,7 +868,7 @@ id = "alsa-31"
 name = "the input's keep_sound_server ignored in duplex"
 test = "audio_alsa_capture"
 why = "A program that asked to keep the sound server would have it suspended by its duplex device."
-find = "    if (c->desc.keep_sound_server) m->keep_server = 1;"
+find = "    if (c->desc.keep_sound_server) m->keep_server |= 2;"
 replace = "    (void)0;"
 
 [[mutant]]
@@ -884,8 +884,10 @@ id = "cap-26"
 name = "the late-blocks rule on a device with reports"
 test = "audio"
 why = "Its blocks without a report come a pipeline late; after 200 ms that read as a loss (485 to 505 frames on hw:0,0 duplex with split reads)."
-find = "    } else if (c->dcaps.pos_source != YAU_POS_DEVICE) {"
-replace = "    } else {"
+find = """    } else if (c->dcaps.pos_source != YAU_POS_DEVICE) {
+        /* only a device with no reports"""
+replace = """    } else {
+        /* only a device with no reports"""
 
 [[mutant]]
 id = "cap-27"
@@ -894,3 +896,44 @@ test = "audio"
 why = "A device with a 100 ms buffer can deliver 400 ms apart without being lost."
 find = "            if (b4 > lim) lim = b4;"
 replace = "            (void)b4;"
+
+# Second review (v0.6.0): an overrun in a split duplex read, the output's
+# hold on a card the input suspended (only in an input or duplex profile,
+# where the input suspends the card), the message's field, and REPORTS
+# ONLY for the capture fit. Not listed: the suspension's rollback, which
+# needs a server that refuses or does not answer one of the card's
+# requests; no test here reaches it.
+
+[[mutant]]
+id = "alsa-32"
+name = "a restart in a split read counted when the read's last callback comes"
+test = "audio_alsa_capture"
+why = "Held full chunks delay the count by a read: the frames between are numbered as if nothing was lost (50 ms early)."
+find = "    if (p->trig != 0 && trig != p->trig) {"
+replace = "    if (0) {"
+
+[[mutant]]
+id = "alsa-33"
+name = "an output on a card the input suspended does not hold it"
+test = "audio_alsa_capture"
+why = "The input's close would resume the card under the output. Killed only where the profile has an input (the input then suspends the card)."
+find = "    if (r == MA_SUCCESS && m->backend == ma_backend_alsa && excl) yau__ma_join(pick, &m->suspended);"
+replace = "    (void)0;"
+
+[[mutant]]
+id = "alsa-34"
+name = "the duplex refusal names the output desc's keep_sound_server"
+test = "audio_alsa_capture"
+why = "The capture desc set it; the message must say which to change."
+find = "    if (keep == 2) return"
+replace = "    if (0) return"
+
+[[mutant]]
+id = "cap-28"
+name = "a report-less block's entry time in a reporting input's fit"
+test = "audio"
+why = "With a report each 300 ms, buckets of callback times only pulled the fit late."
+find = """    } else if (c->dcaps.pos_source != YAU_POS_DEVICE) {
+        /* REPORTS ONLY"""
+replace = """    } else {
+        /* REPORTS ONLY"""

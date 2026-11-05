@@ -472,8 +472,8 @@ foreach(lib IN LISTS YSP_LIBS)
             endif()
         endif()
         # ysp/audio.h with miniaudio's ALSA or PulseAudio backend left out,
-        # and with its Linux code off, as on a unix that has PulseAudio and
-        # is not Linux (illumos, Hurd): each must build clean and run.
+        # and with its Linux-only code (YAU__LINUX) compiled out: each must
+        # build clean and run.
         if(lib STREQUAL "audio" AND CMAKE_SYSTEM_NAME STREQUAL "Linux" AND TARGET ysp::miniaudio)
             foreach(v noalsa nopulse notlinux)
                 ysp_add_program(compile_audio_${v} tests/compile/audio.c ${group})

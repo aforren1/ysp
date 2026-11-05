@@ -1083,7 +1083,7 @@ static void test_capture_device_loss(void) {
 /* A device with reports on some blocks only (PulseAudio's every 50 ms; a
  * split duplex read's last callback): the blocks without one come a
  * pipeline late (Lin, 10 ms here, past the 5 ms gate), and that is no
- * loss. */
+ * loss, and they add no point to the fit (REPORTS ONLY). */
 static void test_capture_sparse_reports(void) {
     scap* s = &g_sc;
     yau_capture_info in;
@@ -1104,6 +1104,28 @@ static void test_capture_sparse_reports(void) {
         if (e > worst) worst = e;
     }
     CHECK(worst < 20000);
+    yau_capture_close(&g_cap);
+    /* a report each 30 blocks, 300 ms: buckets with no report. With the
+     * report-less blocks' entry times in the fit (late by Lin, 10 ms),
+     * those buckets pulled it late and the next reports read as early. */
+    sc_default(s);
+    s->pos_every = 30;
+    s->report_every = 1;
+    s->jitter_ns = 300000;
+    CHECK(cap_open(s, NULL));
+    sc_run_read(s, 12.0, &wrong);
+    (void)yau_capture_update(&g_cap);
+    yau_capture_get_info(&g_cap, &in);
+    CHECK_I(in.xruns, 0);
+    CHECK_I(in.lost, 0);
+    worst = 0;
+    for (x = s->dev_next - 24000; x < s->dev_next; x += 101) {
+        int64_t e = yau_capture_time_of(&g_cap, x) - sc_truth(s, (double)x);
+        if (e < 0) e = -e;
+        if (e > worst) worst = e;
+    }
+    printf("capture, a report each 300 ms: worst time error %.1f us\n", (double)worst / 1e3);
+    CHECK(worst < 50000);
     yau_capture_close(&g_cap);
 }
 

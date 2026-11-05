@@ -2081,7 +2081,7 @@ after). "Load" is 20 threads spinning at normal priority.
 
 | Desc | Device | Position | Buffer |
 |---|---|---|---|
-| AUTO | ALSA exclusive on the default card's first capture device (`hw:0,0`), 32 bits for a desc of 24 bits or more, 16 for `YAU_S16`, the desc's rate | the hw: PCM's status (`alsa:status`) | 40 ms, at least 3 and at most 32 periods (21 ms at 32-frame periods) |
+| AUTO | ALSA exclusive on the default card's first capture device (`hw:0,0`), 32 bits for a desc of 24 bits or more, 16 for `YAU_S16`, the desc's rate | the hw: PCM's status (`alsa:status`) | 40 ms, at least 3 and at most 32 periods (less where 32 periods are: period x 32 / rate) |
 | ALSA, `exclusive` | the card's device that `desc.device` names (an id like `hw:0,0`); refused without one | the same | the same |
 | ALSA, shared | the device `desc.device` names, else `"default"` | callback times | miniaudio's |
 | PULSE | the source `desc.device` names, else the server's default; a monitor is refused as the default | the record stream's timing info (`pulse:timing-info`) | miniaudio's |
@@ -2161,8 +2161,10 @@ the capture block (`YAU__ON_CAPTURE`), 6 a run:
 
 Every record had 0 frames numbered from before the loss. At 3 periods a
 stall of 6 ms set off further restarts (21 for 6 stalls). So the buffer
-is 40 ms, within 3 to 32 periods (so 21 ms at 32-frame periods at 48 kHz,
-the one case under 40 ms): for an input it adds no latency (the blocks still
+is 40 ms, within 3 to 32 periods: under 40 ms wherever 32 periods are
+less (period x 32 / rate < 40 ms: below 60 frames at 48 kHz, so 32 ms at
+48 frames and 21 ms at 32; 21 ms at 64 frames at 96 kHz). For an input it
+adds no latency (the blocks still
 come each period, the times come from the fit), only room to ride out a
 stall of the device thread. `test_audio_alsa_capture` checks a 25 ms
 stall (nothing lost) and a 70 ms one: one loss (71.6 to 72.4 ms in three
@@ -2257,6 +2259,20 @@ delay, leaves the silence out already.
   10 s: residuals -17 to +68 us against the final fit, spread 7.2 us,
   nothing lost. A callback reported short is 9 to 11 ms off, so the test
   bounds the sd at 100 us.
+- An overrun in a split read. The restart shows as a moved trigger
+  stamp; while the first callback after it was held, the count reached
+  the core a read later, and the frames between got numbers from before
+  the loss: 512 frames at 960, 1024 at 1024 (a simulation through the
+  real `yau__alc_pos` with a fake PCM, 50 ms lost). Now the first
+  callback after a restart reports at once: a read is all after the
+  restart, so the frames handed over before it are all from before, and
+  the frame at the converter is those plus the frames recorded since the
+  trigger stamp. That count leaves out the controller's FIFO (0 to 36
+  frames measured, "The ALSA position"). `test_audio_alsa_capture` part 7,
+  a stall of the duplex thread 30 ms past the buffer: at 960 frames 151.2
+  ms lost, at 1024 158.9 ms, each counted on the first block after the
+  restart, the frames after it within 13.6 and 79.6 us of the fit from
+  before.
 - That run also showed a fault in the core's loss rules: a device with
   reports ran the late-blocks rule (LOSS, for callback times) on its
   blocks without a report, whose entry is a pipeline late (10 ms here);
@@ -2265,6 +2281,19 @@ delay, leaves the silence out already.
   Now only a device with no reports runs that rule. PulseAudio's capture
   (a report each 50 ms) had the same exposure; its blocks were late by
   less than the 5 ms gate here.
+- REPORTS ONLY for the input, as v0.5.1 made it for the output
+  ("Exclusive start"): the capture fit took the entry time of a block
+  without a report even on a device with reports. Each bucket's least
+  late point won, so a report in the same 200 ms bucket hid it; a gap in
+  the reports of a bucket or more (PulseAudio's 50 ms timing replies
+  delayed, held split chunks, a WASAPI GetPosition that failed) put a
+  callback time, a pipeline late, into the fit. Now a device with reports
+  feeds the fit with reports only. On WASAPI every block carries a report
+  unless GetPosition fails, so the WASAPI fit is unchanged; the web input
+  and CoreAudio have no reports (callback times, unchanged); a CUSTOM
+  device that declares `YAU_POS_DEVICE` gets the output's rule. The core
+  test with a report each 300 ms: the worst time error 26.4 us
+  (`cap-28`, the old rule, fails it).
 - One card only: two cards are two clocks, and the queue would run out
   or grow. A capture desc that names an input on another card is
   refused.
@@ -2311,8 +2340,18 @@ does not close them. `test_audio_alsa_capture` part 6: output, then
 input, close the output: the card stays suspended; close the input:
 resumed; the child's exit(): resumed. A suspension that the
 server half refused (one sink of two, say) is taken back for the ones it
-did, so no card is left half suspended with no count to resume it. In
-duplex, either desc's `keep_sound_server` keeps the card's sound server.
+did, so no card is left half suspended with no count to resume it (all
+the card's devices the request went to: a reply that missed the deadline
+may still come). In duplex, either desc's `keep_sound_server` keeps the
+card's sound server, and the message names the one that was set. A
+duplex init that failed on the playback after a suspension left the
+capture PCM open while the card was resumed; it is closed first now.
+
+The other order works the same way: an AUTO input that suspended the
+card (where the profile holds the input), then an AUTO output on the
+freed card; part 6b checks that the input's close leaves the card
+suspended and the output's resumes it. In the output profile the input
+needs no suspension and the output suspends the card itself.
 
 ### The digital loopback
 

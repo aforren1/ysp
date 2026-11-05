@@ -583,7 +583,8 @@
  *   The points are position reports where the backend has them (WASAPI:
  *   the capture client's IAudioClock, fitted by least squares), else the
  *   callback times (the frame after the block, at the callback's entry,
- *   fitted by the lower envelope). A report is used only when its stamp is
+ *   fitted by the lower envelope); a device with reports adds no callback
+ *   point for a block without one (REPORTS ONLY, v0.6.0). A report is used only when its stamp is
  *   new: measured on the test laptop's microphone, WASAPI's capture clock
  *   moves the position every 10 ms but the stamp every 20 ms, and only
  *   the pair read when the stamp changes lies on the line. Once the fit is
@@ -821,7 +822,7 @@
  *     (os_claim=alsa:status): 3.0 to 9.4 us sd from a line over 30 s at
  *     64 to 480-frame periods, idle and loaded, against 77 to 615 us for
  *     callback times. A buffer of 40 ms, at least 3 and at most 32
- *     periods (so less at short periods: 21 ms at 32 frames, 48 kHz): for
+ *     periods (less where 32 periods are: period x 32 / rate): for
  *     an input it adds no latency, only room for a stall (36 ms rode out
  *     at 64 frames, 3 periods lost frames at 2 ms). RESTART (LOSS) counts an
  *     overrun to the frame. The card's sinks and sources are suspended as
@@ -844,7 +845,9 @@
  *     its playback buffer too, so a read can come in several callbacks (a
  *     16-bit input beside a 32-bit output past 512 frames; more output
  *     than input channels); the status is the whole read's, so only a
- *     read's last callback reports, a full chunk one callback late.
+ *     read's last callback reports, a full chunk one callback late. The
+ *     first callback after a restart reports at once, so its loss lands
+ *     before its frames.
  *     Tier 3 on every path: no line-in run (TIERS).
  *   YAU_BACKEND_COREAUDIO
  *     Compiled through miniaudio; no position, so every onset is
@@ -1060,7 +1063,10 @@
  *          Every hw: device on a suspended card holds the suspension; a
  *          suspension that half failed is taken back. A device with reports no longer runs
  *          the late-blocks loss rule on its blocks without one (it counted
- *          a pipeline's lateness as a loss when reports were sparse).
+ *          a pipeline's lateness as a loss when reports were sparse), and
+ *          REPORTS ONLY: such a block adds no point to the input's fit, as
+ *          v0.5.1 made it for the output (WASAPI, which reports with every
+ *          block, is unchanged).
  *          Tier 3 on every Linux input: no line-in run.
  *   v0.5.1 - EXCLUSIVE START: WASAPI exclusive mode writes one silent
  *          buffer before Start, and position reports count stream frames
@@ -2487,8 +2493,9 @@ YAU_API const yau_param* yau_params(int* n);
 #ifndef YSP_AUDIO_IMPLEMENTATION_GUARD
 #define YSP_AUDIO_IMPLEMENTATION_GUARD
 /* Linux desktop code (ALSA hw:, the PulseAudio suspension and checks).
- * tests/compile/audio.c builds with it 0 on Linux, as a unix with
- * PulseAudio and no Linux (illumos, Hurd) would. */
+ * tests/compile/audio.c also builds with it 0 on Linux, so the code
+ * outside it compiles clean without it (miniaudio's MA_SUPPORT_ALSA and
+ * MA_SUPPORT_PULSEAUDIO stay defined there). */
 #ifndef YAU__LINUX
 #if defined(__linux__) && !defined(__ANDROID__)
 #define YAU__LINUX 1
@@ -3822,7 +3829,7 @@ typedef struct yau__ma {
     ma_device  dev;
     int        ctx_up, dev_up, closing;
     int        auto_pick;   /* desc.backend was AUTO                        */
-    int        keep_server; /* desc.keep_sound_server                       */
+    int        keep_server; /* 1: desc.keep_sound_server; | 2: the capture desc's */
     int        suspended;   /* the ALSA card + 1 whose sound server sinks and
                              * sources this handle suspended; 0 = none     */
     int        elevated;    /* Linux: the device thread took ysp/rt.h's ladder */
@@ -4008,6 +4015,18 @@ static void yau__alc_pos(yau__alc* p, yau_capture* c, void* pcm, uint32_t rate, 
     delay = (int64_t)a->delay(a->st);
     raw = p->read + (int64_t)n + delay;
     if (p->chunk <= 0) { yau__alc_commit(p, c, raw, t, trig, rate, tk); return; }
+    if (p->trig != 0 && trig != p->trig) {
+        /* the PCM restarted (an overrun) before this read: count the loss
+         * with this block, not when the read's last callback comes. A
+         * read is all after the restart, so the frames handed over before
+         * it are all from before; the frame at the converter now is those
+         * plus the frames recorded since the trigger stamp (within the
+         * controller's FIFO, a few frames) */
+        p->held = 0;
+        raw = p->read + (int64_t)floor((double)(t - trig) * (double)rate / 1e9 + 0.5);
+        yau__alc_commit(p, c, raw, t, trig, rate, tk);
+        return;
+    }
     if (p->held) {
         double moved = (double)(t - p->h_t) * (double)rate / 1e9 - (double)(delay - p->h_delay);
         prev_ended = moved >= (double)n / 2.0;
@@ -4303,7 +4322,6 @@ static struct {
     int refs[YAU__PA_CARDS];   /* this process's open hw: devices on a suspended card */
     int caps[YAU__PA_CARDS];   /* this process's PulseAudio captures on a card  */
     int at_exit;
-    int suspends;              /* suspensions sent                             */
 } yau__pas;
 
 typedef void* (*yau__pa_v_fn)(void);
@@ -4460,15 +4478,15 @@ static int yau__pulse_suspend(int card, int on) {
     }
     ok = ok && n > 0 && yau__pac_wait(&p, ops, n);
     for (i = 0; i < n; i++) if (said[i] != 1) ok = 0;
-    if (on && n > 0) yau__pas.suspends++;
     if (on && !ok && n > 0) {
-        int m = 0;
+        /* every device the request went to: one whose reply had not come
+         * by the deadline may still be suspended by the server, and a
+         * resume of one that is not is harmless */
         p.end = yrt_now_ns() + 2000000000LL;
         for (i = 0; i < n; i++)
-            if (said[i] == 1)
-                ops[m++] = s.dev[who[i]].is_sink ? p.s_sink(p.c, s.dev[who[i]].index, 0, NULL, NULL)
-                                                 : p.s_src(p.c, s.dev[who[i]].index, 0, NULL, NULL);
-        if (m) (void)yau__pac_wait(&p, ops, m);
+            ops[i] = s.dev[who[i]].is_sink ? p.s_sink(p.c, s.dev[who[i]].index, 0, NULL, NULL)
+                                           : p.s_src(p.c, s.dev[who[i]].index, 0, NULL, NULL);
+        (void)yau__pac_wait(&p, ops, n);
     }
     yau__pac_close(&p);
     return ok;
@@ -4669,8 +4687,14 @@ static ma_result yau__ma_busy(ma_context* ctx, const ma_device_config* dc, ma_de
     if (got <= 0) return MA_BUSY;
     yau__ma_alsa_drop(ctx, dev);
     r = ma_device_init(ctx, dc, dev);
-    if (r == MA_SUCCESS) *held = card + 1;
-    else yau__pulse_give(card);
+    if (r == MA_SUCCESS) {
+        *held = card + 1;
+    } else {
+        /* a duplex init that failed on the playback PCM left the capture
+         * PCM open: closed before the resume, or the source's fails */
+        yau__ma_alsa_drop(ctx, dev);
+        yau__pulse_give(card);
+    }
     return r;
 }
 
@@ -4692,15 +4716,19 @@ static void yau__ma_join(const ma_device_id* pick, int* held) {
 }
 #endif
 
-/* The tail of a failed ALSA exclusive open's message. */
+/* The tail of a failed ALSA exclusive open's message. keep: 1 the yau_desc
+ * asked to keep the sound server, 2 the capture desc, 3 both. */
 static const char* yau__ma_busy_why(ma_backend b, int excl, ma_result r, int keep, int by_cap, int capture) {
     if (b != ma_backend_alsa || !excl || r != MA_BUSY) return "";
     if (by_cap) return "; a PulseAudio capture (YAU_BACKEND_PULSE) of this program records from this card, and "
                        "suspending the card would stop it: close it first, or record from the card's hw: device";
-    if (keep) return capture ? "; a sound server may hold the card: leave the capture desc.keep_sound_server off "
-                               "to suspend it, or record through it with YAU_BACKEND_PULSE"
-                             : "; a sound server may hold the card: leave desc.keep_sound_server off to "
-                               "suspend it, or play through it with YAU_BACKEND_PULSE";
+    (void)capture;
+    if (keep == 2) return "; a sound server may hold the card: leave the capture desc.keep_sound_server off "
+                          "to suspend it, or record through it with YAU_BACKEND_PULSE";
+    if (keep == 3) return "; a sound server may hold the card: leave desc.keep_sound_server and the capture "
+                          "desc's off to suspend it, or play and record through it with YAU_BACKEND_PULSE";
+    if (keep) return "; a sound server may hold the card: leave desc.keep_sound_server off to "
+                     "suspend it, or play through it with YAU_BACKEND_PULSE";
     return "; no sound server could be suspended to free it";
 }
 
@@ -5105,7 +5133,7 @@ typedef struct yau__mac {
     void*      clock;       /* WASAPI: the capture client's IAudioClock      */
     uint64_t   freq;
     int        auto_pick;   /* the capture desc's backend was AUTO           */
-    int        keep_server; /* its keep_sound_server                         */
+    int        keep_server; /* 2: its keep_sound_server (as yau__ma's bits)  */
     int        suspended;   /* the ALSA card + 1 this input suspended; 0 = none */
     int        elevated;    /* Linux: the device thread took ysp/rt.h's ladder */
 #if defined(MA_SUPPORT_ALSA)
@@ -5546,7 +5574,7 @@ static int yau__ma_cap_config(yau__ma* m, const yau_device_open* in, ma_device_c
     m->cap = c;
     /* either desc's keep_sound_server keeps the card's sound server: the
      * device suspends it for both halves or for neither */
-    if (c->desc.keep_sound_server) m->keep_server = 1;
+    if (c->desc.keep_sound_server) m->keep_server |= 2;
     dc->deviceType = ma_device_type_duplex;
     dc->capture.pDeviceID = yau__mac_pick(&m->ctx, c->desc.device, err, err_cap, &rc);
     if (rc < 0) return rc;
@@ -6274,7 +6302,7 @@ YAU_API bool yau_open(yau_audio* au, const yau_desc* desc) {
         yau__ma* m = (yau__ma*)(void*)au->backend_mem;
         if (!yau__ma_backend(d.backend, &m->backend)) { yau__err(au, "ysp_audio: unknown backend %d", (int)d.backend); return false; }
         m->auto_pick = d.backend == YAU_BACKEND_AUTO;
-        m->keep_server = d.keep_sound_server;
+        m->keep_server = d.keep_sound_server ? 1 : 0;
         m->au = au;
         au->dev = &yau__ma_device;
         au->dev_ctx = m;
@@ -7319,11 +7347,11 @@ static void yau__closs(yau_capture* c, int64_t now_t, int have_pos, int64_t pw, 
             c->loss_run = 0;
         }
     } else if (c->dcaps.pos_source != YAU_POS_DEVICE) {
-        /* a device with reports and a block without one (PulseAudio's
-         * reports every 50 ms; a split read's first callbacks) says
-         * nothing of a loss: its entry time is a pipeline late, which the
-         * reports' fit does not include, and read as a loss of that much
-         * after 200 ms */
+        /* only a device with no reports: on one with reports a block
+         * without one (PulseAudio's reports every 50 ms; a split read's
+         * held callbacks) says nothing of a loss. Its entry is a pipeline
+         * later than the reports' line, which REPORTS ONLY keeps out of
+         * the fit, and would read as a loss of that much after 200 ms */
         double r = (double)(now_t - yau__fit_time(&c->fit, fend));
         if (r > yau__cgate(c)) {
             if (!c->late_run) { c->late_run = 1; c->loss_since = now_t; c->late_min = r; c->loss_f0 = c->f; }
@@ -7440,7 +7468,14 @@ YAU_API void yau_capture_block(void* host, void* in, int32_t frames, const yau_t
             (void)yrt_ring_push(c->desc.ring, &ev);
             c->last_clock_t = tk->pos_t;
         }
-    } else {
+    } else if (c->dcaps.pos_source != YAU_POS_DEVICE) {
+        /* REPORTS ONLY, as v0.5.1 made the output's fit: on a device with
+         * reports a block without one (PulseAudio's reports come every 50
+         * ms, a split duplex read's held callbacks, a WASAPI GetPosition
+         * that failed) adds no callback point. Its entry is a pipeline
+         * later than the reports' line; in a bucket with no report, the
+         * gap of 200 ms or more, it would pull the fit late, and the next
+         * reports would read as early and reanchor it. */
         yau__cfeed(c, fend, now_t);
     }
 
@@ -7819,7 +7854,7 @@ YAU_API bool yau_capture_open(yau_capture* c, const yau_capture_desc* d) {
         yau__mac* m = (yau__mac*)(void*)c->backend_mem;
         if (!yau__ma_backend(c->desc.backend, &m->backend)) { yau__cerr(c, "ysp_audio: unknown backend %d", (int)c->desc.backend); return false; }
         m->auto_pick = c->desc.backend == YAU_BACKEND_AUTO;
-        m->keep_server = c->desc.keep_sound_server;
+        m->keep_server = c->desc.keep_sound_server ? 2 : 0;
         m->c = c;
         c->dev = &yau__mac_device;
         c->dev_ctx = m;
