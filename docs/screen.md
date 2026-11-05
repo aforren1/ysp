@@ -3912,6 +3912,53 @@ window kind instead. The probe's runs decide each row: `present`'s
   Cocoa key times are not measured: posting keys needs the Accessibility
   permission, which the machine did not grant (probe, section 5.8).
 
+### The period from CADisplayLink (v0.13.1)
+
+CVDisplayLink is deprecated in macOS 15 and does not exist on iOS. METAL
+used it only for the period at open. From v0.13.1 the period comes from
+`CADisplayLink` (`-[NSView displayLinkWithTarget:selector:]`, macOS 14 and
+later), and CVDisplayLink stays as the fallback for the systems before 14,
+which METAL still runs on (its other macOS floor is macOS 12, for the
+refresh intervals).
+
+Which number: the probe's `links` run gave three candidates for the M27Q
+at its "60 Hz" (docs/screen_macos_probe.md, 6.4):
+
+| Source | Value | Note |
+|---|---|---|
+| CADisplayLink `duration`, `targetTimestamp - timestamp` | 16680417 ns (+-1) | the nominal timing, as CVDisplayLink's nominal period |
+| CADisplayLink `timestamp` step | 16680375 ns (+-1) | 3597 steps; on presentedTime's grid, 0.1 us apart |
+| presentedTime fit | 16680370 to 16680380 ns | what the flips show |
+
+So the period is the step of the timestamps: the span of up to 6 callbacks
+over the whole periods in it, counted on the duration, so a missed
+callback keeps its count. There is no read without a callback: before its
+first callback the link's numbers are 0. Waiting for callbacks inside
+open(), which runs on the main thread: the link is added to the main run
+loop's common modes, and open() runs the run loop in its default mode in
+10 ms steps, pumping SDL's events (the events stay in SDL's queue), for
+up to 6 callbacks or 250 ms. Nothing waits on another thread, so it
+cannot deadlock against SDL's pump. With fewer than 2 callbacks it falls
+back to CVDisplayLink: with the display asleep (the session locked),
+CADisplayLink gave no callback in 2 s while CVDisplayLink went on.
+
+The describe line names the source: `period=16680375ns(cadisplaylink)`,
+`(cvdisplaylink)` or `(mode)`.
+
+**The phase.** CADisplayLink's timestamps also lie on presentedTime's
+grid, so they could anchor the grid at open, before the first flip, where
+the backend now takes it from the first presentedTimes. Not done in this
+change.
+
+**Not run with a callback.** During this change the display was asleep,
+so every real open here took the fallback: `period=16680417ns(cvdisplaylink)`.
+`tests/adapt/screen_metal_test.c` injects the callbacks' timestamps
+(`YSCR__MTL_LINK_TIMESTAMPS`): six a 16680375 ns step apart with a
+duration of 16.680417 ms give `period=16680375ns(cadisplaylink)`, and none
+gives `(cvdisplaylink)`. The core test checks the rule with the measured
+numbers, a missed callback, one callback and a step off the duration.
+Mutants `mt-17` and `mt-18`, 2 of 2 killed.
+
 ### Variable refresh refused (v0.13.0)
 
 A ProMotion MacBook, or an external display in an Adaptive-Sync mode,
