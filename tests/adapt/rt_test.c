@@ -49,6 +49,9 @@
 #define YRT_TRACE_RING
 #define YSP_RT_IMPLEMENTATION
 #include "ysp/rt.h"
+#if defined(__APPLE__)
+#include <mach/mach_time.h>
+#endif
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -1418,6 +1421,52 @@ static void test_ticks(void) {
 #endif
     printf("  ticks to ns: QPC at %lld Hz converts as yrt_now_ns() does\n",
            (long long)f.QuadPart);
+#elif defined(__APPLE__)
+    /* v0.10.0: mach_absolute_time() units, the way the Windows branch
+     * checks QPC. */
+    mach_timebase_info_data_t tb;
+    uint64_t a, b, sec;
+    int64_t now;
+    int i, bad = 0;
+    CHECK(mach_timebase_info(&tb) == KERN_SUCCESS && tb.numer > 0 && tb.denom > 0, "mach timebase");
+    for (i = 0; i < 1000; i++) {
+        a = mach_absolute_time();
+        now = yrt_now_ns();
+        b = mach_absolute_time();
+        if (yrt_ticks_to_ns((int64_t)a) > now || yrt_ticks_to_ns((int64_t)b) < now) bad++;
+        if (a == b && yrt_ticks_to_ns((int64_t)a) != now) bad++;
+    }
+    CHECK_I(bad, 0, "yrt_ticks_to_ns(mach) brackets yrt_now_ns(), and equals it on one tick");
+    /* A second of mach units is 1e9 * denom / numer: whole on Intel (1/1)
+     * and on Apple silicon (125/3, 24 MHz). */
+    sec = 1000000000ull * tb.denom / tb.numer;
+    CHECK(yrt_ticks_to_ns((int64_t)(sec * 3600)) == 3600000000000ll, "an hour of counts is an hour");
+    CHECK(yrt_ticks_to_ns(-(int64_t)sec) == -1000000000ll, "negative counts convert");
+#if defined(__SIZEOF_INT128__)
+    {
+        /* An independent reference in 128-bit arithmetic, over 40 days. */
+        __extension__ typedef unsigned __int128 u128;
+        uint64_t x = 88172645463325252ull;
+        int mism = 0;
+        for (i = 0; i < 100000; i++) {
+            int64_t t;
+            x ^= x << 13; x ^= x >> 7; x ^= x << 17;
+            t = (int64_t)(x % (sec * 3456000ull));
+            if ((u128)yrt_ticks_to_ns(t) != (u128)t * tb.numer / tb.denom)
+                mism++;
+        }
+        CHECK_I(mism, 0, "yrt_ticks_to_ns matches a 128-bit reference");
+    }
+#endif
+    {
+        /* The clock's own step: the resolution yrt_get_clock_info() states,
+         * not Darwin's CLOCK_MONOTONIC microsecond. */
+        yrt_clock_info ci;
+        yrt_get_clock_info(&ci);
+        CHECK(ci.resolution_ns > 0 && ci.resolution_ns < 1000, "the mach clock's resolution is under 1 us");
+    }
+    printf("  ticks to ns: mach units at %u/%u convert as yrt_now_ns() does\n",
+           tb.numer, tb.denom);
 #else
     CHECK(yrt_ticks_to_ns(123456789) == 123456789, "identity where the unit is the ns");
     CHECK(yrt_ticks_to_ns(-5) == -5, "identity for negatives");

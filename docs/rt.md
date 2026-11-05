@@ -444,6 +444,64 @@ on 2026-10-27: `tests/adapt/rt_test_virtual.h` sleeps `INT64_MAX` and
 MinGW-w64, WSL2 gcc with ASan and UBSan); mutants `ovf-01` and `ovf-02`
 in `tests/mutate/rt.toml`, 2 of 2 killed.
 
+## macOS (v0.10.0)
+
+The macOS backend's first run, 2026-11-04: an Apple M2 Mac mini, macOS
+27.0.1, Apple clang 21, arm64. Every result in this section is
+functional. No wait lateness, clock cost or jitter was measured on the Mac;
+the measurements to make are listed at the end.
+
+### The clock is mach_absolute_time()
+
+v0.9.1 read `clock_gettime(CLOCK_MONOTONIC)` on macOS, as on Linux. On this
+Mac that clock counts in whole microseconds: `clock_getres()` gives
+1000 ns, and 100,000 reads in a row were all multiples of 1000 ns. Apple's
+manual page sets it against `CLOCK_MONOTONIC_RAW`, which is "unaffected by
+frequency or time adjustments", and says it continues while the system
+sleeps.
+`tests/adapt/rt_test.c` saw the effect: a correlation of the clock with
+itself had a width of 1000 ns.
+
+| Question | Decision | Why |
+|---|---|---|
+| The counter | `mach_absolute_time()` | It is `CLOCK_UPTIME_RAW` (Apple's manual page). `clock_getres()` gives 42 ns, and the smallest step between two reads was 41 ns. CoreAudio's `mHostTime`, `CVTimeStamp.hostTime` and the event timestamps count in it, so `yrt_ticks_to_ns()` maps them with no correlation, as QPC stamps on Windows |
+| Sleep | It stops while the Mac sleeps | `CLOCK_MONOTONIC` on Linux stops during a suspend too (macOS's `CLOCK_MONOTONIC` does not). A trial does not span a sleep |
+| The conversion | `t / denom * numer + t % denom * numer / denom`, the timebase read once (125/3 here) | The split multiply of the QPC path. `yrt_now_ns()` and `yrt_ticks_to_ns()` share it, so they agree to the bit |
+| `clock_gettime_nsec_np(CLOCK_UPTIME_RAW)` | Not used | It converts inside libc, and a mach stamp then needs a second conversion that must agree with libc's to the bit |
+| `yrt_ticks_to_ns()` | Converts mach units; it returned its argument | A breaking change on macOS only, hence 0.10.0. No program ran on a Mac before |
+
+Checked: `tests/adapt/rt_test.c` brackets `yrt_now_ns()` between two
+`mach_absolute_time()` reads 1000 times (equal on one tick), converts an
+hour and a negative second, compares 100,000 random counts over 40 days
+against 128-bit arithmetic, and checks a resolution under 1 us. The
+correlation width is now 83 ns (two ticks). Mutants `mac-01` to `mac-04`
+in `tests/mutate/rt.toml`: 4 of 4 killed (they exist on macOS only).
+
+### The rest of the macOS path
+
+| Part | Result on the M2 Mac mini |
+|---|---|
+| `tests/adapt/rt_test.c` | All checks pass, Release and under ASan and UBSan (Debug) |
+| Scheduling ladder | An unprivileged thread got `YRT_POLICY_TIME_CONSTRAINT`. `thread_policy_get()` read back what was asked, in mach units: 2 ms of 16.67 ms with a 4 ms constraint gave computation 48,000, period 400,000, constraint 96,000, not preemptible. With a 100 ms computation in a 1 s period the rung was refused and the thread got `YRT_POLICY_FIFO`, also without privilege |
+| Pump below normal | `THREAD_PRECEDENCE_POLICY` gave `YRT_POLICY_BELOW_NORMAL` |
+| Relative condition waits | The worker and pump tests, including the wait against stop and restart hammer, pass |
+| Per-user folders | `~/Library/Caches/ysp/...` and `~/Library/Application Support/ysp/...` with the real `HOME`; `HOME=/tmp` is refused (`/tmp` is a symbolic link to `/private/tmp`, 1777, and `stat()` follows it) |
+| Thread id | `pthread_threadid_np()`, truncated to 32 bits |
+| Core types | Unknown: no macOS call is read. Apple silicon has P- and E-cores, and macOS gives no thread affinity, so `pin=none` is all the header can do |
+
+### Measurements still to make on the Mac
+
+Each on a quiet machine, one at a time (CLAUDE.md), with the machine,
+the macOS version and the power state recorded:
+
+- `rt_jitter` (examples/rt/jitter.c) with no arguments, twice: wait
+  lateness with and without a spin window, and the rung it got.
+- The cost of `yrt_now_ns()` against `mach_absolute_time()` and
+  `clock_gettime(CLOCK_MONOTONIC)`: the timebase division is new on this
+  path.
+- `rt_ring_bench` (examples/rt/ring_bench.c) for the ring tables in
+  [Measured costs](#measured-costs).
+
 ## Windows 11 power throttling
 
 Windows 11 can throttle a process when all its windows are minimized,
