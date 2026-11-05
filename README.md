@@ -38,7 +38,7 @@ C11 or C++17, and its top comment is its manual.
 Each header is `include/ysp/<name>.h`; macros use the uppercase prefix
 (`YRT_`). Status: **tested** is pure computation, checked by tests;
 **1 machine** ran on one Windows 11 laptop only; **2 machines** ran there
-and on one Mac (functional runs there, no timing table yet); **no device** never ran
+and on one Mac; **no device** never ran
 on the hardware it drives.
 [docs/status.md](docs/status.md) has the platforms, the dependencies, the
 measurements and the hardware for each header.

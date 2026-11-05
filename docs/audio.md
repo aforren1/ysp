@@ -2501,9 +2501,10 @@ mini, macOS 27.0.1, Apple clang 21, miniaudio 0.11.25, ysp/rt.h 0.9.1. Its
 two outputs are a GBT M27Q monitor over HDMI and the built-in speakers. It
 has no audio input and no loopback cable. So every number here comes from
 the HAL's time stamps, the device's properties or the ysp_rt clock, and
-none from sound. Other agents compiled on the machine during these runs,
-so no number here is a timing result: the timing runs are in
-[Timing runs to do](#timing-runs-to-do). The probes are in
+none from sound. Other agents compiled on the machine during the
+functional runs, so their numbers are not timing results; the timing
+runs ran later on the quiet machine, on ysp/rt.h 0.10.0
+([Timing runs](#timing-runs-2026-11-05)). The probes are in
 `tests/probe/coreaudio/`.
 
 ### What the HAL reports
@@ -2629,9 +2630,10 @@ to 27 us high were preemptions between the two reads (other agents were
 compiling). So with ysp/rt.h 0.9.1 no fixed conversion maps a host time
 to the ysp_rt clock. ysp/rt.h 0.10.0 moves `yrt_now_ns()` to
 `mach_absolute_time()` scaled by `mach_timebase_info()`, and
-`yrt_ticks_to_ns()` converts mach units. The header uses
-`yrt_ticks_to_ns(mHostTime)` when ysp/rt.h is 0.10.0 or later; the exact
-mapping needs it. With an older ysp/rt.h, each block maps its reports
+`yrt_ticks_to_ns()` converts mach units. With ysp/rt.h 0.10.0 or later
+the header converts `mHostTime` by the timebase alone, with
+`yrt_ticks_to_ns()`'s own split arithmetic on the timebase read at open;
+the exact mapping needs that ysp/rt.h. With an older ysp/rt.h, each block maps its reports
 through the offset of the two clocks read at the callback's entry: the
 ysp_rt read is whole microseconds, so a report can be up to 1 us early,
 and the reports then follow the clock's frequency adjustment, as every
@@ -2649,9 +2651,9 @@ lever on a Mac, and it moves the lead. `caps.buffer` is now the IO buffer
 **Rate.** The nominal and actual rates were 48000 and 48000.000 at open on
 both devices, and both are in the clock domain `main`. The header reads
 the actual rate once, for the describe line; the fit measures the rate
-against the ysp_rt clock and tracks it. The functional runs saw drifts
-of +0.5 to +2.0 ppm against the ysp_rt clock of ysp/rt.h 0.9.1, whose own
-frequency moves; the timing runs measure it on the new clock.
+against the ysp_rt clock and tracks it. The timing runs on ysp/rt.h
+0.10.0 measured the speakers +1.95 to +2.75 ppm fast against
+`mach_absolute_time()`.
 
 **Hog mode.** miniaudio refuses exclusive mode on CoreAudio
 (`MA_SHARE_MODE_NOT_SUPPORTED`), so `desc.exclusive` failed to open. Now
@@ -2748,34 +2750,94 @@ the fit. Mutants `ca-01` to `ca-09` in `tests/mutate/audio.toml`: 9 of 9
 killed. Hog mode, the IsAlive listener and the silence after LOST need a
 device; they ran on the Mac as above and have no mutant.
 
-### Timing runs to do
+### Timing runs (2026-11-05)
 
-One command a condition, from the repository root, on a quiet machine,
-with the display awake (the script holds it awake). Each `clockstats`
-condition prints the program's summary and one table row from
-`analyze.py`: callbacks, interval, the reports' residual from one line and
-from 10 s lines, drift, report age and the time line's cost.
+One command a condition, from the repository root, with the display awake
+(the script holds it awake). Each `clockstats` condition prints the
+program's summary and one table row from `analyze.py`.
 
-| Command | Time | What it answers |
-|---|---|---|
-| `sh tests/probe/coreaudio/run.sh idle-spk` | 10 min | the HAL reports and the fit on the speakers |
-| `sh tests/probe/coreaudio/run.sh idle-hdmi` | 10 min | the same on HDMI |
-| `sh tests/probe/coreaudio/run.sh load-spk` | 3 min | under load |
-| `sh tests/probe/coreaudio/run.sh load-hdmi` | 3 min | |
-| `sh tests/probe/coreaudio/run.sh p128-spk` | 3 min | a 128-frame IO buffer |
-| `sh tests/probe/coreaudio/run.sh p128-hdmi` | 3 min | |
-| `sh tests/probe/coreaudio/run.sh p32-spk` | 3 min | a 32-frame IO buffer |
-| `sh tests/probe/coreaudio/run.sh hog-spk` | 3 min | hog mode against the shared idle run |
-| `sh tests/probe/coreaudio/run.sh stall-spk` | 1 min | 5 stalls: XRUN records and the fit across them |
-| `sh tests/probe/coreaudio/run.sh sched-spk` | 25 s | residuals and the shortest safe lead |
-| `sh tests/probe/coreaudio/run.sh sched-hdmi` | 25 s | |
-| `sh tests/probe/coreaudio/run.sh sched-spk-p128` | 25 s | |
-| `sh tests/probe/coreaudio/run.sh sched-hdmi-p128` | 25 s | |
-| `sh tests/probe/coreaudio/run.sh sched-spk-hog` | 25 s | |
+Conditions: the same Mac, 02:52 to 03:35, no other agent running, the
+session locked. The build is RelWithDebInfo, Apple clang 21, on the
+integration branch `mac-integration` at 6550b6e: this header with
+ysp/rt.h 0.10.0, whose `yrt_now_ns()` is `mach_absolute_time()` scaled by
+the timebase. So the reports map to the ysp_rt clock by the timebase
+alone. Before the runs the Mac was in a dark wake and the speakers gave no
+callback; `caffeinate -u` brought a full wake. Built-in speakers only,
+48 kHz. The M27Q's audio device was gone (its display asleep, the session
+locked), so no HDMI condition ran.
 
-About 42 minutes in all. Run them after ysp/rt.h 0.10.0 is merged, so
-that the reports map by the timebase alone. The `sched-*` conditions play
-tones at -40 dBFS.
+`audio_clockstats`, silence (`load`: 8 spinning threads and a 60 Hz frame
+loop that spins 8 ms a frame and plays a silent sound each frame):
+
+| Condition | Callbacks | Interval p1 / p50 / p99 / max ms | XRUN records | Residual from one line: sd / p99 / max us | Residual from 10 s lines: p99 / max us | Drift ppm | Fit spread at the end | Report age p50 / max ms | Time line cost p50 / p99 us | Render mean / p99 us |
+|---|---|---|---|---|---|---|---|---|---|---|
+| idle, 480 frames, 10 min | 60036 | 9.90 / 10.00 / 10.11 / 10.18 | 0 | 3.97 / 11.64 / 12.87 | 0.17 / 1.57 | +2.74 | 150 ns | 8.47 / 8.61 | 0.96 / 3.12 | 7.8 / 23.3 |
+| load, 480 frames, 3 min | 18037 | 9.92 / 9.99 / 10.09 / 10.11 | 0 | 4.41 / 10.30 / 13.50 | 0.33 / 2.31 | +1.95 | 4434 ns | 8.44 / 8.56 | 0.67 / 2.12 | 8.4 / 17.7 |
+| idle, 128 frames, 3 min | 67624 | 2.64 / 2.67 / 2.69 / 2.70 | 0 | 3.30 / 7.50 / 8.69 | 0.53 / 1.33 | +2.47 | 3310 ns | 1.09 / 1.13 | 0.21 / 0.38 | 1.5 / 2.0 |
+| idle, 32 frames, 3 min | 270481 | 0.64 / 0.67 / 0.69 / 0.72 | 0 | 0.42 / 0.85 / 0.91 | 0.17 / 1.58 | +2.63 | 417 ns | 0.43 / 0.47 | 0.21 / 0.38 | 0.7 / 1.1 |
+| hog mode, 480 frames, 3 min | 18035 | 9.90 / 10.00 / 10.11 / 10.18 | 0 | 0.30 / 0.82 / 1.44 | 0.18 / 1.42 | +2.69 | 294 ns | 8.47 / 8.61 | 1.00 / 5.25 | 7.5 / 18.8 |
+| a 30 ms stall every 10 s, 1 min | 6017 | 9.92 / 10.00 / 10.10 / 40.71 | 6 of 6 stalls | 0.14 / 0.31 / 1.63 | 0.28 / 1.67 | +2.73 | 127 ns | 8.47 / 8.60 | 0.83 / 4.67 | |
+| HDMI conditions (idle, load, 128 frames) | not run: the M27Q's audio device was gone | | | | | | | | | |
+
+The frame thread under load: `yau_play_at()` and `yau_update()` 0.85 us
+mean, 1.67 us p99, 10.1 us max a frame.
+
+What the table says:
+
+- The HAL's reports lie on a line to 0.17 to 0.53 us p99 within any 10 s.
+  Over minutes the line bent in three runs (idle at 480 frames, load, 128
+  frames: one line's residual sd 3.3 to 4.4 us, at most 13.5 us) and not
+  in three (sd 0.14 to 0.42 us). The cause is not known; the HAL's own
+  rate estimate is a candidate. The fit refits each second, and its
+  spread at the end was 127 ns to 4.4 us. A wander of 13 us over minutes
+  is under a frame (20.8 us).
+- The speakers ran +1.95 to +2.75 ppm fast against `mach_absolute_time()`,
+  though both clocks are on the SoC (clock domain `main`).
+- No underrun in 22 minutes without stalls, at 480, 128 and 32 frames and
+  under load. Each 30 ms stall gave one XRUN record of 1468 to 1476
+  frames (30.6 to 30.75 ms), and the fit stayed (spread 127 ns at the
+  end; the reports' one line, in device frames, 0.14 us sd across all
+  six skips).
+- The time line costs 0.2 to 1.0 us a callback at the median and 5.3 us
+  at most at p99. A report is 8.5 ms old at 480 frames, 1.1 ms at 128 and
+  0.43 ms at 32.
+- Hog mode changed nothing measurable here: the same interval
+  percentiles, report age and 10 s residual as the shared idle run.
+
+`audio_schedule` at -40 dBFS (14 sounds, then the lead probe of 10 silent
+sounds a lead):
+
+| Condition | Onsets on the planned frame, confirmed, tier 3 | Residual min / max us | Shortest safe lead | `yau_lead_ns()` median |
+|---|---|---|---|---|
+| 480 frames | 14 of 14 | -7.6 / +10.2 | 25 ms (1 of 10 late at 20 ms) | 25.6 ms |
+| 128 frames | 14 of 14 | -2.5 / +6.4 | 8 ms | 8.2 ms |
+| hog mode, 480 frames | 14 of 14 | -0.3 / +8.9 | 20 ms | 26.3 ms |
+| HDMI, 480 and 128 frames | not run: the M27Q's audio device was gone | | | |
+
+Every residual is inside the half frame of rounding (10.4 us). The lead
+at 480 frames is 20 to 25 ms; one run each, so the 5 ms between shared
+and hog mode is one late sound in 10, not a property of hog mode. A
+128-frame IO buffer cuts it to 8 ms, against 40 ms on the WASAPI laptop.
+Every time here is the HAL's IO point on the device clock fit; the sound
+leaves the speakers the claimed 480 frames (10.0 ms) later, which nothing
+here checked.
+
+| Command | Time |
+|---|---|
+| `sh tests/probe/coreaudio/run.sh idle-spk` | 10 min |
+| `sh tests/probe/coreaudio/run.sh idle-hdmi` | 10 min, not run |
+| `sh tests/probe/coreaudio/run.sh load-spk` | 3 min |
+| `sh tests/probe/coreaudio/run.sh load-hdmi` | 3 min, not run |
+| `sh tests/probe/coreaudio/run.sh p128-spk` | 3 min |
+| `sh tests/probe/coreaudio/run.sh p128-hdmi` | 3 min, not run |
+| `sh tests/probe/coreaudio/run.sh p32-spk` | 3 min |
+| `sh tests/probe/coreaudio/run.sh hog-spk` | 3 min |
+| `sh tests/probe/coreaudio/run.sh stall-spk` | 1 min, 6 stalls |
+| `sh tests/probe/coreaudio/run.sh sched-spk` | 25 s |
+| `sh tests/probe/coreaudio/run.sh sched-hdmi` | 25 s, not run |
+| `sh tests/probe/coreaudio/run.sh sched-spk-p128` | 25 s |
+| `sh tests/probe/coreaudio/run.sh sched-hdmi-p128` | 25 s, not run |
+| `sh tests/probe/coreaudio/run.sh sched-spk-hog` | 25 s |
 
 ## Bindings
 
@@ -2888,9 +2950,9 @@ or double (MEX). A forwarded call through the shared table costs about
   `--line --stream` (stream placement and latency) is built, not run.
 - ALSA, PulseAudio: compiled, never run. PulseAudio under WSLg plays to
   the Windows speakers and was not run.
-- CoreAudio timing (the runs in "Timing runs to do"), CoreAudio capture
-  (no input on the Mac), an Intel Mac, a USB interface, and any rate but
-  48 kHz there.
+- CoreAudio on HDMI under the timing runs (the monitor's device was gone),
+  CoreAudio capture (no input on the Mac), an Intel Mac, a USB interface,
+  and any rate but 48 kHz there.
 - Web Audio: run in Chrome 154 (and Firefox, [web.md](web.md)) on this
   laptop; sound at the speaker never measured, so the browser's
   `outputLatency` in every web onset is unchecked.
