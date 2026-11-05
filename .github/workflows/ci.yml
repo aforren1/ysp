@@ -10,6 +10,13 @@ on:
 permissions:
   contents: read
 
+# macOS 14 is ysp's floor (README). Without a target, macos-latest builds
+# for its own newer macOS and code that needs an API after 14 passes;
+# with it, clang's availability warnings (errors under -Werror) catch it.
+# CMake and cibuildwheel read this too; Linux and Windows ignore it.
+env:
+  MACOSX_DEPLOYMENT_TARGET: "14.0"
+
 jobs:
   # --------------------------------------------------------------------- #
   # Headers: CMake builds every registered header's compile checks (C11,  #
