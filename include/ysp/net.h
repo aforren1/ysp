@@ -1,4 +1,4 @@
-/* ysp/net.h - v0.3.1 - public domain single-header Lab Streaming Layer glue
+/* ysp/net.h - v0.3.2 - public domain single-header Lab Streaming Layer glue
  *
  *   Lab Streaming Layer (LSL) on the ysp_rt clock: marker outlets for a
  *   rig's event codes and text, numeric outlets, and inlets that resolve a
@@ -232,6 +232,14 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.3.2 - TEXT records keep every character. A record holds 34
+ *          characters of text, or what "<what> " leaves of the 40-byte
+ *          payload; the next record starts where this one stopped. Before,
+ *          each record stepped 34 characters on, and a long `what` lost the
+ *          rest: 2 characters a record of an "outlet", "inlet" or "source"
+ *          text, 5 of an "ambiguous" message. "mark" and "in" records are
+ *          unchanged. gcc 15 reported the truncation (-Wformat-truncation),
+ *          which failed the -Werror build. No API change.
  *   v0.3.1 - Times near INT64_MAX. ynet_inlet_wait_running() with
  *          INT64_MAX ("forever") waits, and a desc.retry_ns or
  *          desc.correct_ns near INT64_MAX is "never": now plus the time
@@ -289,8 +297,8 @@
 
 #define YNET_VERSION_MAJOR 0
 #define YNET_VERSION_MINOR 3
-#define YNET_VERSION_PATCH 1
-#define YNET_VERSION_STRING "0.3.1"
+#define YNET_VERSION_PATCH 2
+#define YNET_VERSION_STRING "0.3.2"
 
 #include "ysp/rt.h"
 #include "ysp/input.h"
@@ -1159,18 +1167,30 @@ static void ynet__rec(yrt_ring* ring, uint32_t aux, uint16_t kind, int64_t t, co
     (void)yrt_ring_push(ring, &ev);
 }
 
-/* TEXT records "<what> <text>", 34 characters of text each. */
+/* TEXT records "<what> <text>": 34 characters of text each, fewer when
+ * "<what> " leaves less room in the 40-byte payload. The step is what was
+ * written: a fixed step of 34 dropped the characters a long `what`
+ * crowded out ("outlet" 2 a record, "ambiguous" 5). `what` is one of this
+ * file's short literals. */
 static void ynet__text(yrt_ring* ring, uint32_t aux, int64_t t, const char* what, const char* text) {
-    size_t n, i;
+    enum { CAP = (int)sizeof(((yrt_payload*)0)->text) };
+    size_t n, i, w, room;
     if (!ring || !text) return;
     n = strlen(text);
+    w = strlen(what);
+    if (w > CAP - 3) w = CAP - 3;
+    room = (size_t)CAP - 2 - w;
+    if (room > 34) room = 34;
     i = 0;
     do {
         yrt_payload u;
+        size_t k = n - i < room ? n - i : room;
         memset(&u, 0, sizeof u);
-        snprintf(u.text, sizeof u.text, "%s %.34s", what, text + i);
+        memcpy(u.text, what, w);
+        u.text[w] = ' ';
+        memcpy(u.text + w + 1, text + i, k);
         ynet__rec(ring, aux, (uint16_t)YNET_REC_TEXT, t, &u);
-        i += 34;
+        i += k;
     } while (i < n);
 }
 

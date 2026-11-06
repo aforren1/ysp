@@ -416,6 +416,7 @@ Purpose: Lab Streaming Layer on the ysp_rt clock, with liblsl (MIT) loaded at ru
 
 Status:
 
+- v0.3.2 (2026-11-06): TEXT records keep every character: a record holds 34 characters of text or the room `"<what> "` leaves, and the next starts where it stopped. A fixed step of 34 lost 1 to 5 characters a record of "inlet", "wrong", "outlet", "source" and "ambiguous" texts. gcc 15.2's `-Wformat-truncation` found it (the `-Werror` build failed on Ubuntu 26.04). macOS: 391 checks; 2 of 2 new mutants caught. [TEXT records keep every character](net.md#text-records-keep-every-character-v032).
 - v0.3.1 (2026-10-27): times near `INT64_MAX`: `ynet_inlet_wait_running()` with `INT64_MAX` waits (it timed out at once), and `desc.retry_ns` or `desc.correct_ns` near `INT64_MAX` is never (a resolve or a correction came at every poll); now + time saturates. 386 checks on MSVC, MinGW-w64 and WSL2 gcc (ASan, UBSan); 6 of 6 new mutants killed. [Times without end](net.md#times-without-end-v031).
 - v0.3.0: `ynet_stats.lsl_offset_ns` and `lsl_rtt_ns` (`int64_t`, rounded to the nearest ns at the liblsl call) replace `lsl_offset_s` and `lsl_rtt_s`; the conventions' open exception for them is closed.
 - v0.2.0 (the [Conventions](conventions.md): `ynet_lsl_open()`/`_close()`/`_error()`, outlet and inlet open/close, `ynet_inlet_wait_running()`, key and role copied, `int64_t` ns timeouts, liblsl's own values named `lsl_`; 2 mutants added, both caught).

@@ -242,3 +242,23 @@ test = "net"
 why = "A caller's clock near its end: the reader's correction there must be the last, not one at every poll."
 find = '''            in->next_corr = ynet__after(t, in->d.correct_ns);'''
 replace = '''            in->next_corr = t + in->d.correct_ns;'''
+
+# v0.3.2: TEXT records step by what they wrote.
+
+[[mutant]]
+id = "txt-01"
+name = "a TEXT record steps 34 characters whatever it wrote"
+test = "net"
+why = "An \"outlet\" record of a long key loses 2 characters a record; an \"ambiguous\" message 5."
+find = '''        i += k;
+    } while (i < n);'''
+replace = '''        i += 34;
+    } while (i < n);'''
+
+[[mutant]]
+id = "txt-02"
+name = "a TEXT record ignores the room \"<what> \" leaves"
+test = "net"
+why = "The text past the payload's 39 characters is cut off and the step goes past it: a long key comes back short."
+find = '''    room = (size_t)CAP - 2 - w;'''
+replace = '''    room = 34;'''
