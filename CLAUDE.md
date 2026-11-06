@@ -9,8 +9,9 @@ checks, `fuzz/`, `mutate/` mutation lists, `loopback/` hardware loopbacks),
 measurements), `firmware/` (Teensy and RP2040 sketches).
 
 Plans: `docs/rig_spec.md` (display, audio, video, pack, player,
-designer; section 11 is the order of work, 13 the open questions) and
-`docs/devices_spec.md`. Design notes in a header's doc win where they
+designer; section 11 is the order of work, 13 the open questions),
+`docs/devices_spec.md` and `docs/signal_spec.md` (continuous input to
+stimuli; draft, not built). Design notes in a header's doc win where they
 disagree with the spec. Read the relevant sections before proposing
 anything; some options were measured and reversed, and the specs say why.
 
