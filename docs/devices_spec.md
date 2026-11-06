@@ -508,7 +508,7 @@ hardware can check now.
 | Gazepoint | GP3 | TCP, XML (Open Gaze API, port 4242) | text | SDK if `TIME_TICK` is QPC (unverified), else HOST | `ysp/net.h` and `ysp/box.h` | No |
 | Pupil Labs | Core (ZMQ and msgpack), Neon (real-time API) | network | vendor | BRACKET (Core's `t` query; Neon's Time Echo) | later; or through their LSL app | No |
 | VPixx inputs | DATAPixx digital and analog in, button boxes on it | USB, libdpx | vendor | the device's clock, BRACKET | `ysp/dpx.h` | No |
-| Tablets, touch | Wacom, touch screens | SDL pen and touch | SDL | message time (tier 3 today) | `ysp/screen.h` | Touchpad only (it is a mouse to Windows) |
+| Tablets, touch | Wacom, touch screens | SDL pen and touch (Windows Ink, not Wintab) | SDL | message time on Windows and macOS (tier 3); SDL's queue time on X11 (docs/input.md, "Drawing tablets (pens)") | `ysp/screen.h` | Touchpad only (it is a mouse to Windows); no tablet |
 
 ### 10.2 Output families
 

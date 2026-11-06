@@ -2025,7 +2025,7 @@ Paths are from `psychopy/demos/coder/`.
 | `iohub/mouse_multi_window.py` | Mouse positions over windows on two monitors | screen | Possible (not verified across two screens, 15.6) |
 | `iohub/serial/customparser.py` (with `_parseserial.py`) | A serial device's bytes parsed into events | serial, box | Possible: a decoder in `ysp/box.h` or caller code on `ysp/serial.h`; `serial_trigger` shows the echo |
 | `iohub/serial/pstbox.py` | A PST Serial Response Box (the file says it does not work in Python 3) | None | Gap: a bit-state box decoder in `ysp/box.h` (docs/devices_spec.md 10.1) |
-| `iohub/wintab/pen_demo.py` (with `_wintabgraphics.py`) | Pen position, pressure and tilt from a Wintab tablet | screen, input (`YIN_KIND_PEN`) | Possible through SDL's pen events (not verified with a tablet, 15.6) |
+| `iohub/wintab/pen_demo.py` (with `_wintabgraphics.py`) | Pen position, pressure and tilt from a Wintab tablet | screen, input (`YIN_KIND_PEN`) | Possible through SDL's pen events, which read Windows Ink, not Wintab (docs/input.md, "Drawing tablets (pens)"; `trial_copying --input pen`; not verified with a tablet, 15.6) |
 | `iohub/eyetracking/simple.py` | An eye tracker: calibrate, record, gaze | None | Gap: eye-tracker input source (12; 14.7 rank 6) |
 | `iohub/eyetracking/validation.py` | Calibrate, validate, gaze cursor | None | Gap: as above |
 | `iohub/eyetracking/gcCursor/run.py` | A gaze cursor over images | None | Gap: as above |
@@ -2200,8 +2200,9 @@ and 15.3 name them.
   multiplies a carrier by the image (`gfx_gratings` tile 6, v0.10.4).
   The target and MULTIPLY route is `trial_images`'s.
 - Per-element opacity in instance records (`maskReveal.py`).
-- That SDL3's pen events from a Wintab tablet reach `yscr_poll()` with
-  pressure and tilt; that generic joysticks (not mapped as gamepads)
+- That SDL3's pen events from a tablet reach `yscr_poll()` with
+  pressure and tilt (SDL 3.4 reads Windows Ink, not Wintab: a
+  Wintab-only driver gives no pen events; docs/input.md); that generic joysticks (not mapped as gamepads)
   give events with `desc.gamepads`; mouse positions over two
   `yscr_screen` windows.
 - The MilliKey's serial command syntax, the NetStation protocol, and a
