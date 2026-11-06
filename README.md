@@ -12,7 +12,7 @@ C11 or C++17, and its top comment is its manual.
 | [rt](docs/rt.md) | `yrt_` | Clock, deadline waits, worker, pump, event ring, clock fit, virtual clock | 0.10.2 | 3 machines |
 | [parallel](docs/parallel.md) | `ypar_` | Parallel port trigger output and line input | 0.4.1 | no device |
 | [serial](docs/serial.md) | `yser_` | Serial port byte I/O for trigger and response boxes | 0.7.1 | 3 machines |
-| [trials](docs/trials.md) | `ytr_` | Trial orders, blocks, adaptive tracks, jitter, variables per trial, replay, a CSV row per trial | 0.6.1 | tested |
+| [trials](docs/trials.md) | `ytr_` | Trial orders, blocks, adaptive tracks, jitter, variables per trial, replay, a CSV row per trial | 0.7.0 | tested |
 | [dataset](docs/dataset.md) | `yds_` | A session's data set: session.json, trial, frame, event, clock and stream tables, a zip for the web | 0.2.1 | tested |
 | [table](docs/table.md) | `ytb_` | Typed tables and a bounded CSV parser | 0.3.1 | tested |
 | [pack](docs/pack.md) | `ypak_` | Read and verify ysp packs (store-only zip) | 0.4.0 | tested |
@@ -21,8 +21,8 @@ C11 or C++17, and its top comment is its manual.
 | [quest](docs/adapt.md) | `yqst_` | QUEST+, QUEST, Psi and Psi-marginal on a grid | 0.7.0 | tested |
 | [aep](docs/adapt.md) | `yaep_` | Gaussian-process adaptive estimation (AEPsych features) | 0.16.0 | tested |
 | [timeline](docs/timeline.md) | `ytl_` | Events, tracks and keyframes on the clock | 0.8.1 | tested |
-| [input](docs/input.md) | `yin_` | The input event that every device shares | 0.6.0 | 3 machines |
-| [response](docs/response.md) | `yrsp_` | Trial responses and RT from any input device | 0.8.0 | 1 machine |
+| [input](docs/input.md) | `yin_` | The input event that every device shares | 0.7.0 | 3 machines |
+| [response](docs/response.md) | `yrsp_` | Trial responses and RT from any input device | 0.8.1 | 1 machine |
 | [box](docs/box.md) | `ybox_` | Response and trigger box protocols, bytes to events | 0.3.1 | no device |
 | [device](docs/device.md) | `ydev_` | Boxes and boards on the rig clock, with outputs and response rules | 0.5.2 | 3 machines |
 | [rigfile](docs/device.md#how-to-keep-a-rigs-devices-and-latencies-in-its-rig-profile) | `yrig_` | Rig profile: devices per role, loopback results, viewing geometry | 0.5.2 | no device |
@@ -30,9 +30,9 @@ C11 or C++17, and its top comment is its manual.
 | [color](docs/color.md) | `ycol_` | Display calibration and color space conversions | 0.4.0 | tested |
 | [rdk](docs/rdk.md) | `yrdk_` | Random dot kinematograms, reproducible bit for bit | 0.3.1 | tested |
 | [outline](docs/outline.md) | `yol_` | Paths, font glyphs and SVG into curve sets | 0.4.1 | tested |
-| [screen](docs/screen.md) | `yscr_` | Stimulus window, flip at a time, flip records; Linux X11, macOS and web backends | 0.18.0 | 3 machines |
+| [screen](docs/screen.md) | `yscr_` | Stimulus window, flip at a time, flip records; Linux X11, macOS and web backends | 0.19.0 | 3 machines |
 | [audio](docs/audio.md) | `yau_` | Sound at a time and its capture on the rig clock; Linux ALSA exclusive, output and input; CoreAudio on macOS; Web Audio in a browser | 0.9.1 | 3 machines |
-| [gfx](docs/gfx.md) | `ygfx_` | GL ES 3.0 stimuli: shapes, gratings, gabors, text, frame capture | 0.18.0 | 2 machines |
+| [gfx](docs/gfx.md) | `ygfx_` | GL ES 3.0 stimuli: shapes, gratings, gabors, text, frame capture | 0.19.0 | 2 machines |
 | [video](docs/video.md) | `yvid_` | Movies as stimuli, frame by predicted onset; Linux MP4 through FFmpeg, opt-in | 0.8.0 | 3 machines |
 
 Each header is `include/ysp/<name>.h`; macros use the uppercase prefix

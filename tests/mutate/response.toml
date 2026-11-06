@@ -743,5 +743,5 @@ id = "v8-13"
 name = "data_set sets the caller's column"
 test = "response"
 why = "B3: a column bound to the caller's row with one of the names is the caller's; setting it fails and the row is lost."
-find = ''' && w->col[col].offset == YTR_UNBOUND) {'''
+find = ''' && ytr_data_col_settable(w, col)) {'''
 replace = ''') {'''

@@ -1,4 +1,4 @@
-/* ysp/gfx.h - v0.18.0 - public domain single-header stimulus graphics library
+/* ysp/gfx.h - v0.19.0 - public domain single-header stimulus graphics library
  *   (with MIT-licensed parts: see below)
  *
  *   Stimuli on GL ES 3.0, on top of ysp/screen.h: signed-distance shapes
@@ -548,11 +548,12 @@
  *   it; dash_snap fits a whole number of periods to a closed boundary.
  *   trim[0], trim[1] keep the part from start to end, as fractions of the
  *   length (0, 0 or 0, 1 = all). As (0, 0) is all, a trim[1] animated
- *   up from 0 shows the whole path on its first frame. Start it above 0
- *   (1e-6), or hide the stimulus (visible 0) while trim[1] is 0. A trim
- *   of zero length that is not (0, 0) draws nothing with cap BUTT, and
- *   its two caps with ROUND or SQUARE: a dot or a square the band's width
- *   across. cap shapes the ends of dashes, of a
+ *   up from 0 would show the whole path on its first frame: set the flag
+ *   YGFX_STIM_TRIM (desc.trim_set, the enum row trim_set; v0.19) and (0,
+ *   0) is a trim of zero length like any other, so the path grows from
+ *   nothing. A trim of zero length (with the flag, (0, 0) too) draws
+ *   nothing with cap BUTT, and its two caps with ROUND or SQUARE: a dot or
+ *   a square the band's width across. cap shapes the ends of dashes, of a
  *   trimmed outline and of an open path: BUTT (flat, at the end), ROUND
  *   or SQUARE (half the band width past it). A dash's soft edge across s
  *   uses the same profile as the boundary. CROSS, masks and compounds have
@@ -948,7 +949,8 @@
  *   window's size, sd->window_w and _h, unless gd->width and _height are
  *   set; 800 x 600 when neither is. A --sim run then lays a trial out as
  *   its window run does. (ygfx_open() on an open SIM screen cannot see
- *   the window size: there it is desc.width, height or 800 x 600.)
+ *   the window size: there it is desc.width, height or 800 x 600; set
+ *   them. ysp-vis does, from the screen's open option size.)
  *   ygfx_show_until_key(&gfx, stims, n, keys, n_keys, max_ns, &key) is a
  *   frame loop for an instruction or a break screen: it draws the stimuli
  *   each frame until a press of one of the keys (SDL scancodes; none: any
@@ -1364,6 +1366,16 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.19.0 - An explicit trim (docs/examples_findings.md, F17): the flag
+ *          YGFX_STIM_TRIM (desc.trim_set, the enum row trim_set, appended:
+ *          YGFX_E_COUNT grows by 1) makes trim (0, 0) a trim of zero
+ *          length, so a trim[1] animated up from 0 starts from nothing.
+ *          Without the flag (0, 0) is the whole path, as before.
+ *          ygfx_shape_desc gains trim_set in the padding after dash_snap
+ *          (its size and the other offsets stay on x86-64; a layout change
+ *          all the same); ygfx_stim is unchanged. ysp-vis passes a
+ *          simulated display's open option size to ygfx_open() (F12b;
+ *          OPEN SCREEN's note).
  *   v0.18.0 - Paths (POLYLINE, QBEZIER): a point equal to the one before
  *          it is skipped; the draw failed (a pen at rest repeats its
  *          sample). The quad is centered on the path's box, not on the
@@ -1693,6 +1705,14 @@
  *          source rectangle, not the sampler's.
  *   v0.1.0 - first release.
  *
+ *   STATUS: v0.19.0, 2026-11-06, the Linux desktop (GCC 12.2, Mesa
+ *   llvmpipe headless, no display): tests/adapt/gfx_test.c checks the
+ *   explicit trim on the CPU (ygfx_hit(): (0, 0) with the flag nothing
+ *   with BUTT, the dot with ROUND, (0, 1) the whole; the enum row) and on
+ *   the GPU (a ring trimmed (0, 0) with the flag has no pixel on it, and
+ *   without the flag every sampled pixel); the C and C++ compile checks.
+ *   Mutants tr-01 to tr-03 killed (3 of 3). Not run on ANGLE, WARP or a
+ *   hardware GPU.
  *   STATUS: v0.15.0, 2026-10-11: tests/adapt/gfx_test.c's part "v0.15
  *   first" (ANGLE on the Iris Xe; MSVC 19.44 and MinGW-w64 gcc 16.1): the
  *   one-call open and its refusal of a taken hook, the loop until max_ns
@@ -1918,9 +1938,9 @@
 #define YSP_GFX_H_INCLUDED
 
 #define YGFX_VERSION_MAJOR 0
-#define YGFX_VERSION_MINOR 18
+#define YGFX_VERSION_MINOR 19
 #define YGFX_VERSION_PATCH 0
-#define YGFX_VERSION_STRING "0.18.0"
+#define YGFX_VERSION_STRING "0.19.0"
 
 #include "ysp/screen.h"
 #include "ysp/color.h"
@@ -2451,7 +2471,8 @@ typedef struct ygfx_stim {
     float       dash[2];      /* px: dash and gap along the boundary; 0 = none   */
     float       dash_offset;  /* px along the boundary: march it                 */
     float       trim[2];      /* start, end as fractions of the length; 0, 0 =
-                               * the whole (DASHES AND TRIM: animating from 0) */
+                               * the whole, unless flags has YGFX_STIM_TRIM
+                               * (DASHES AND TRIM: animating from 0)        */
     uint8_t     cap;          /* ygfx_cap                                      */
     uint8_t     blend;        /* ygfx_blend_mode, color stimuli                */
     uint8_t     dash_snap;    /* closed boundaries: a whole number of periods    */
@@ -2530,6 +2551,9 @@ typedef struct ygfx_instances_desc {
 #define YGFX_STIM_COVERAGE     0x20u  /* IMAGE: red is coverage, tint the color
                                          * (v0.6)                               */
 #define YGFX_STIM_RAYS         0x40u  /* TEXT: the rays everywhere (v0.7)   */
+#define YGFX_STIM_TRIM         0x80u  /* SHAPE: trim is set: (0, 0) is a trim
+                                         * of zero length, not the whole
+                                         * (v0.19; DASHES AND TRIM)            */
 
 /* A flat group (GROUPS): place, anchor and box on the screen; its members'
  * place, x, y and ori are in its frame. One level: a group has no group. */
@@ -2566,6 +2590,7 @@ typedef struct ygfx_shape_desc {
     /* v0.3 */
     float offset; float dash[2]; float dash_offset; float trim[2];
     ygfx_cap cap; ygfx_blend_mode blend; bool dash_snap;
+    bool trim_set;                                             /* v0.19: YGFX_STIM_TRIM */
     const float* path; int n_path;                             /* POLYLINE, QBEZIER */
     const ygfx_fx* fx; const ygfx_paint* paint;
 } ygfx_shape_desc;
@@ -2762,6 +2787,7 @@ enum {
     YGFX_E_SQUARE, YGFX_E_DIST, YGFX_E_OCTAVES, YGFX_E_STROKE_ALIGN, YGFX_E_JOIN, YGFX_E_CAP,
     YGFX_E_BLEND, YGFX_E_DASH_SNAP, YGFX_E_MODULATION, YGFX_E_LINEAR, YGFX_E_ADD,
     YGFX_E_PREMULTIPLIED, YGFX_E_COVERAGE, YGFX_E_ALIASED, YGFX_E_RAYS,
+    YGFX_E_TRIM_SET,          /* v0.19 */
     YGFX_E_COUNT
 };
 
@@ -6982,6 +7008,7 @@ YGFX_API ygfx_stim ygfx_shape(const ygfx_shape_desc* d) {
     s.miter_limit = d->miter_limit; s.mask = d->mask; s.group = d->group;
     s.offset = d->offset; s.dash[0] = d->dash[0]; s.dash[1] = d->dash[1]; s.dash_offset = d->dash_offset;
     s.trim[0] = d->trim[0]; s.trim[1] = d->trim[1];
+    if (d->trim_set) s.flags |= YGFX_STIM_TRIM;
     s.cap = (uint8_t)d->cap; s.blend = (uint8_t)d->blend; s.dash_snap = (uint8_t)(d->dash_snap ? 1 : 0);
     s.path = d->path; s.n_path = d->n_path > 0 ? (uint32_t)d->n_path : 0u;
     s.fx = d->fx; s.paint = d->paint;
@@ -7586,8 +7613,13 @@ static int ygfx__miter(const ygfx_stim* s, int shape, float* ml) {
 }
 
 
+/* With YGFX_STIM_TRIM (v0.19) only (0, 1) and wider is the whole; without
+ * it (0, 0) is too (DASHES AND TRIM). */
+#define YGFX__TRIMMED(s) \
+    (!((s)->trim[0] <= 0.0f && (s)->trim[1] >= 1.0f) && \
+     (((s)->flags & YGFX_STIM_TRIM) || !((s)->trim[0] == 0.0f && (s)->trim[1] == 0.0f)))
 static int ygfx__trimmed(const ygfx_stim* s) {
-    return !(s->trim[0] == 0.0f && s->trim[1] == 0.0f) && !(s->trim[0] <= 0.0f && s->trim[1] >= 1.0f);
+    return YGFX__TRIMMED(s);
 }
 
 /* A glyph run: a SHAPE on a mask with glyph instances. */
@@ -11326,7 +11358,7 @@ static int ygfx__is_vector(const ygfx_stim* s) {
     if (sh >= YGFX_RRECT) return 1;
     if (sh == YGFX_POLYGON && s->shape_p[1] > 0.0f) return 1;
     if (s->fx || (s->paint && s->paint->kind != YGFX_PAINT_SOLID) || s->dash[0] > 0.0f) return 1;
-    return !(s->trim[0] == 0.0f && s->trim[1] == 0.0f) && !(s->trim[0] <= 0.0f && s->trim[1] >= 1.0f);
+    return YGFX__TRIMMED(s);
 }
 
 /* A POLYGON's boundary for the vector program: per vertex, the fillet's
@@ -11676,7 +11708,7 @@ static int ygfx__vpack(const ygfx_gfx* g, const ygfx_stim* s, float* b, double e
      * line; on a closed boundary they need a stroke */
     {
         int dsh = s->dash[0] > 0.0f;
-        int trm = !(s->trim[0] == 0.0f && s->trim[1] == 0.0f) && !(s->trim[0] <= 0.0f && s->trim[1] >= 1.0f);
+        int trm = YGFX__TRIMMED(s);
         if (dsh || trm) {
             double P, dash = s->dash[0], gap = s->dash[1] > 0.0f ? s->dash[1] : 0.0;
             if (L <= 0.0 || s->shape == YGFX_COMPOUND) { *err = "dashes and trim need a length (not a cross, mask or compound)"; return YGFX_ERR_ARG; }
@@ -12031,6 +12063,8 @@ static const ygfx_param ygfx__enum_params[YGFX_E_COUNT] = {
             YGFX__TXT, NULL),
     YGFX__E("rays", "bool", 0, 1, 0, "the rays program also where the exact area applies (flag YGFX_STIM_RAYS)",
             flags, YGFX__TXT, NULL),
+    YGFX__E("trim_set", "bool", 0, 1, 0, "trim is set: 0, 0 is a trim of zero length, not the whole (flag "
+            "YGFX_STIM_TRIM)", flags, YGFX__K(YGFX_SHAPE), NULL),
 };
 #undef YGFX__E
 #undef YGFX__TXT
@@ -12039,7 +12073,7 @@ static const ygfx_param ygfx__enum_params[YGFX_E_COUNT] = {
 /* The flag of each bool row from YGFX_E_MODULATION on. */
 static const uint32_t ygfx__enum_flags[YGFX_E_COUNT - YGFX_E_MODULATION] = {
     YGFX_STIM_MODULATION, YGFX_STIM_LINEAR, YGFX_STIM_ADD, YGFX_STIM_PREMULTIPLIED, YGFX_STIM_COVERAGE,
-    YGFX_STIM_ALIASED, YGFX_STIM_RAYS
+    YGFX_STIM_ALIASED, YGFX_STIM_RAYS, YGFX_STIM_TRIM
 };
 
 YGFX_API const ygfx_param* ygfx_enum_params(int* n) {

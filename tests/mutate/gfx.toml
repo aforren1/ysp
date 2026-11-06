@@ -1602,3 +1602,31 @@ env = { YGFX_TEST_PARTS = "none", YGFX_TEST_DEVICES = "none" }
 why = "desc.width and height, when set, are the simulated display's size."
 find = "    if (c.d.width <= 0 && d.window_w > 0) c.d.width = d.window_w;"
 replace = "    if (d.window_w > 0) c.d.width = d.window_w;"
+
+# v0.19.0 (tr-: an explicit trim, F17), the same test.
+[[mutant]]
+id = "tr-01"
+name = "desc.trim_set not passed on"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "none", YGFX_TEST_DEVICES = "none" }
+why = "A trim animated up from 0 showed the whole path on its first frame; the desc's switch is the fix (v0.19.0, F17)."
+find = "    if (d->trim_set) s.flags |= YGFX_STIM_TRIM;\n"
+replace = ""
+
+[[mutant]]
+id = "tr-02"
+name = "(0, 0) the whole path with the flag"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.3 kinds", YGFX_TEST_DEVICES = "mesa" }
+why = "With YGFX_STIM_TRIM, (0, 0) is a trim of zero length: nothing with BUTT (v0.19.0, F17)."
+find = "     (((s)->flags & YGFX_STIM_TRIM) || !((s)->trim[0] == 0.0f && (s)->trim[1] == 0.0f)))"
+replace = "     (!((s)->trim[0] == 0.0f && (s)->trim[1] == 0.0f)))"
+
+[[mutant]]
+id = "tr-03"
+name = "the enum row trim_set sets another flag"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "none", YGFX_TEST_DEVICES = "none" }
+why = "Bindings set the flag by the row's name; the row must reach YGFX_STIM_TRIM (v0.19.0, F17)."
+find = "    YGFX_STIM_ALIASED, YGFX_STIM_RAYS, YGFX_STIM_TRIM\n"
+replace = "    YGFX_STIM_ALIASED, YGFX_STIM_RAYS, YGFX_STIM_RAYS\n"

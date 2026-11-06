@@ -1,4 +1,4 @@
-/* ysp/input.h - v0.6.0 - public domain single-header input event
+/* ysp/input.h - v0.7.0 - public domain single-header input event
  *
  *   One timestamped input event for every device a rig reads: keyboards,
  *   mice, touch, pens, gamepads, response and button boxes, eye trackers.
@@ -132,10 +132,18 @@
  *   server's time (X11_GetEventTimestamp(), read in its source): a poll,
  *   tier 3. Left clicks through XTEST, one poll per 60 Hz frame, were
  *   stamped 1.50 to 16.65 ms after the injection (ysp/screen.h v0.18.0).
- *   Keys through ysp/screen.h carry the X server's ms time or the
- *   kernel's evdev time (its INPUT, "X11 key times"); the adapter marks
- *   them tier 3, as every key without ctx.raw_keyboard (caps.raw_keyboard
- *   is false there).
+ *   Keys through ysp/screen.h carry the kernel's evdev time, the X
+ *   server's ms time, or SDL's pump time (its INPUT, "X11 key times").
+ *   The tier follows the stamp (v0.7.0): with ctx.os_stamps (ysp/screen.h's
+ *   caps.os_input_stamps, set while it reads a keyboard's evdev node) a key
+ *   with the kernel's time in ctx.t_os takes the source entry: no tier,
+ *   host part 0.10 to 18.2 us after the write() to uinput (100 keys). A
+ *   key with the X server's or SDL's time gets tier 3 on the event: the
+ *   server's ms clock is 0.96 to 1.99 ms behind the kernel's. Without
+ *   os_stamps every key gets tier 3. The kernel's stamp is not a tier 1 or
+ *   2 stamp: no device clock is fit (tier 1), and no run from a key press
+ *   to the stamp (a photodiode or line-in on a key actuator) was made
+ *   (tier 2); it covers the host part only.
  *
  *   ---------------------------------------------------------------------
  *   SDL3 (yin_from_sdl, defined when SDL_events.h came first)
@@ -198,6 +206,13 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.7.0 - Linux X11 keys by their stamp (docs/examples_findings.md,
+ *          B7): yin_sdl_source() for keys with ctx.os_stamps is the
+ *          kernel's evdev time through ysp/screen.h v0.19.0 (tier UNKNOWN,
+ *          host part 101 to 18183 ns after the write() to uinput); without
+ *          it, the X server's time (tier 3, -1.99 to -0.96 ms from the
+ *          kernel's). Was tier 3 for every key, also with the kernel's
+ *          time. ctx.os_stamps and t_os now apply on Linux too (keys only).
  *   v0.6.0 - From the task examples (docs/examples_findings.md). Pen events
  *          carry SDL's pen_state in code (a proximity event from SDL
  *          3.4.16), and YIN_ERASER on every event while the eraser end
@@ -251,6 +266,12 @@
  *          the SDL3 adapter and the raw mouse adapter, renamed from
  *          yrsp_ to yin_ (ysp/response.h keeps its names as aliases).
  *
+ *   STATUS: v0.7.0, 2026-11-06: tests/adapt/input_test.c checks the two
+ *   Linux key entries and the per-event tier with and without t_os;
+ *   ysp/screen.h's tests/adapt/screen_glx_test.c part 11 gives 20 uinput
+ *   keys the kernel's time and stamp 0 through yscr_event_input(), part 4
+ *   20 XTEST keys tier 3 (GCC 12.2, SDL 3.4.18, the Linux desktop). Not
+ *   built here: Windows, macOS.
  *   STATUS: v0.6.0, 2026-11-06: tests/adapt/input_test.c converts every
  *   pen event (motion, axis with tilt, down, up, a barrel button,
  *   proximity in and out) with pen_state and the eraser, and checks the
@@ -287,9 +308,9 @@
 #define YSP_INPUT_H_INCLUDED
 
 #define YIN_VERSION_MAJOR 0
-#define YIN_VERSION_MINOR 6
+#define YIN_VERSION_MINOR 7
 #define YIN_VERSION_PATCH 0
-#define YIN_VERSION_STRING "0.6.0"
+#define YIN_VERSION_STRING "0.7.0"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -552,8 +573,9 @@ typedef struct yin_sdl_ctx {
                             * pen- and mouse-made touch events, flagged   */
     bool os_stamps;        /* the caller gives keys and mouse buttons their
                             * OS event's time in t_os where it has it
-                            * (ysp/screen.h's caps.os_input_stamps: macOS);
-                            * one without it gets tier 3                  */
+                            * (ysp/screen.h's caps.os_input_stamps: macOS's
+                            * NSEvent time; Linux X11's kernel evdev time,
+                            * keys only); one without it gets tier 3      */
     int64_t t_os;          /* this event's OS time, ysp_rt ns; 0 = none   */
 } yin_sdl_ctx;
 
@@ -727,6 +749,19 @@ static inline int yin_from_sdl(const SDL_Event* ev, int64_t t_rt, const yin_sdl_
 #define YIN__X11_BUTTON_LO_NS 1498000
 #define YIN__X11_BUTTON_HI_NS 16646000
 
+/* Linux X11 through ysp/screen.h (v0.7.0). A key with the kernel's evdev
+ * time: the stamp minus the start of the write() to uinput, min and max
+ * over 100 keys in five runs of tests/adapt/screen_glx_test.c part 11
+ * (ysp/screen.h v0.19.0). A key with
+ * the X server's time: that time minus the kernel's, min and max over a
+ * uinput keyboard and 300 keys of a wireless keyboard pressed by hand
+ * (ysp/screen.h v0.17.0, INPUT, "Kernel key times"): the server's clock
+ * runs about 1 ms behind and its ms truncates. */
+#define YIN__X11_KERNEL_LO_NS 101
+#define YIN__X11_KERNEL_HI_NS 18183
+#define YIN__X11_SERVER_LO_NS (-1990000)
+#define YIN__X11_SERVER_HI_NS (-960000)
+
 /* The source table entry for an SDL event kind, from what was measured or
  * read (SOURCES). Windows, macOS and Linux (X11); elsewhere UNKNOWN with
  * no bounds. */
@@ -777,9 +812,23 @@ static inline yin_source yin_sdl_source(const yin_sdl_ctx* ctx, int kind) {
     }
 #elif defined(__linux__) && !defined(__ANDROID__) && !defined(__EMSCRIPTEN__)
     /* SDL 3.4.18's X11 backend stamps these with SDL_GetTicksNS() at its
-     * pump (X11_GetEventTimestamp()); Wayland is not built (ysp/screen.h) */
-    (void)ctx;
-    if (kind == YIN_KIND_MOUSE) {
+     * pump (X11_GetEventTimestamp()); Wayland is not built (ysp/screen.h).
+     * Keys through ysp/screen.h carry the kernel's evdev time (os_stamps,
+     * v0.7.0) or the X server's ms time; a key with neither, SDL's. */
+    if (kind == YIN_KIND_KEYBOARD && ctx && ctx->os_stamps) {
+        s.tier = (uint8_t)YIN_TIER_UNKNOWN;
+        s.partial = 1;
+        s.lo_ns = YIN__X11_KERNEL_LO_NS;
+        s.hi_ns = YIN__X11_KERNEL_HI_NS;
+        s.note = "evdev kernel time (ysp/screen.h): host part measured with uinput; scan and USB poll not measured";
+    } else if (kind == YIN_KIND_KEYBOARD) {
+        s.tier = (uint8_t)YIN_TIER_3;
+        s.partial = 1;
+        s.lo_ns = YIN__X11_SERVER_LO_NS;
+        s.hi_ns = YIN__X11_SERVER_HI_NS;
+        s.note = "X11 through ysp/screen.h: the X server's ms time, measured against the kernel's; without "
+                 "ysp/screen.h's hook SDL's pump time";
+    } else if (kind == YIN_KIND_MOUSE) {
         s.tier = (uint8_t)YIN_TIER_3;
         s.partial = 1;
         s.lo_ns = YIN__X11_BUTTON_LO_NS;
@@ -788,11 +837,6 @@ static inline yin_source yin_sdl_source(const yin_sdl_ctx* ctx, int kind) {
     } else if (kind == YIN_KIND_TOUCH || kind == YIN_KIND_PEN) {
         s.tier = (uint8_t)YIN_TIER_3;
         s.note = "SDL 3.4 X11: its pump's time (read in SDL's source), not measured";
-    } else if (kind == YIN_KIND_KEYBOARD) {
-        s.tier = (uint8_t)YIN_TIER_3;
-        s.partial = 1;
-        s.note = "X11 through ysp/screen.h: the X server's ms time, or the kernel's evdev time (its describe line's "
-                 "key_time); without it SDL's pump time";
     } else {
         s.note = "not measured";
     }

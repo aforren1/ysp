@@ -2240,7 +2240,9 @@ static void check_v08(void) {
                                           YRSP_AXIS_POSITION, 0, 10.0f, 0 },
                                         { "f", NULL, 0, 0, 0, 0, 0, 0, 0, 0, 0 } };
     static const ytr_col cols[] = { YTR_COL(v8row, rt_ns, YTR_COL_TIME_NS), YTR_COL_SET("response", YTR_COL_STRING),
-                                    YTR_COL_SET("rsp_flags", YTR_COL_INT) };
+                                    YTR_COL_SET("rsp_flags", YTR_COL_INT),
+                                    /* v0.8.1: a fixed text of one of its names is skipped */
+                                    YTR_COL_TEXT("onset_tier", "x") };
     static mem_out mo;
     static ytr_data w;
     static yrsp_collector a, b;
@@ -2491,9 +2493,11 @@ static void check_v08(void) {
     dd.write = mem_write;
     dd.write_ctx = &mo;
     dd.cols = cols;
-    dd.n_cols = 3;
+    dd.n_cols = 4;
     CHECK(ytr_data_open(&w, &dd));
-    CHECK_S(mo.buf, "rt_s,response,rsp_flags\n");
+    CHECK_S(mo.buf, "rt_s,response,rsp_flags,onset_tier\n");
+    CHECK(!ytr_data_col_settable(&w, 0) && ytr_data_col_settable(&w, 1) && !ytr_data_col_settable(&w, 3));
+    CHECK(!ytr_data_col_settable(&w, -1) && !ytr_data_col_settable(&w, 4) && !ytr_data_col_settable(NULL, 1));
     d = fj_desc(1.0, 0);
     CHECK(yrsp_open(&g_c, &d));
     yrsp_arm(&g_c, 0);
@@ -2503,7 +2507,7 @@ static void check_v08(void) {
     CHECK_I(yrsp_data_set(&w, &r), 2);
     row.rt_ns = 123456789;
     CHECK_I(ytr_data_write(&w, &row), 0);
-    CHECK_HAS(mo.buf, "\n0.123456789,right,1\n");
+    CHECK_HAS(mo.buf, "\n0.123456789,right,1,x\n");
     ytr_data_close(&w);
     yrsp_close(&g_c);
 }

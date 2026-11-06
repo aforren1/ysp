@@ -621,6 +621,7 @@ static void test_enum_params(void) {
         { offsetof(ygfx_stim, flags), YGFX_STIM_COVERAGE, NULL, 0, EK(YGFX_IMAGE) },
         { offsetof(ygfx_stim, flags), YGFX_STIM_ALIASED, NULL, 0, EK(YGFX_TEXT) },
         { offsetof(ygfx_stim, flags), YGFX_STIM_RAYS, NULL, 0, EK(YGFX_TEXT) },
+        { offsetof(ygfx_stim, flags), YGFX_STIM_TRIM, NULL, 0, EK(YGFX_SHAPE) },   /* v0.19 */
     };
 #undef EK
 #undef EK_APT
@@ -3608,6 +3609,24 @@ static void gl_v03_fx(stats* st) {
             if (k == 0 || k == 179 || k == 180 || k == 359) continue;
             S5.trim_bad += on != (k < 180);
         }
+        /* v0.19: (0, 0) with YGFX_STIM_TRIM draws nothing (BUTT); without
+         * the flag, the whole ring */
+        d.trim[1] = 0.0f; d.trim_set = true;
+        s = ygfx_shape(&d);
+        gl_frame(&s, 1);
+        for (k = 0; k < 360; k++) {
+            double a = (k + 0.5) * 3.14159265358979323846 / 180.0;
+            int x = (int)floor(W / 2 + 75 * cos(a)), y = (int)floor(H / 2 + 75 * sin(a));
+            S5.trim_bad += R->scene[(y * W + x) * 4] > 0.5;
+        }
+        s.flags &= ~YGFX_STIM_TRIM;
+        gl_frame(&s, 1);
+        for (k = 0; k < 360; k++) {
+            double a = (k + 0.5) * 3.14159265358979323846 / 180.0;
+            int x = (int)floor(W / 2 + 75 * cos(a)), y = (int)floor(H / 2 + 75 * sin(a));
+            S5.trim_bad += !(R->scene[(y * W + x) * 4] > 0.5);
+        }
+        d.trim_set = false;
     }
     {   /* refusals: dashes on a fill, on a compound; 57 prims; MITER outside a polyline */
         static ygfx_prim pr[57];
@@ -8998,6 +9017,36 @@ static void test_v18_cpu(void) {
     CHECK(!ygfx_hit(&g, &a, 250.0f, 135.0f));
     a.trim[0] = 0.0f; a.trim[1] = 1e-6f; a.cap = YGFX_CAP_ROUND;
     CHECK(ygfx_hit(&g, &a, 219.0f, 130.0f) && ygfx_hit(&g, &a, 221.0f, 130.2f) && !ygfx_hit(&g, &a, 250.0f, 135.0f));
+    /* v0.19: with YGFX_STIM_TRIM (desc.trim_set, the enum row) (0, 0) is a
+     * trim of zero length: nothing with BUTT, the dot with ROUND; (0, 1)
+     * is still the whole */
+    d.trim_set = true;
+    a = ygfx_shape(&d);
+    CHECK((a.flags & YGFX_STIM_TRIM) != 0);
+    CHECK(!ygfx_hit(&g, &a, 250.0f, 135.0f) && !ygfx_hit(&g, &a, 219.0f, 130.0f) && !ygfx_hit(&g, &a, 221.0f, 130.2f));
+    a.cap = YGFX_CAP_ROUND;
+    CHECK(ygfx_hit(&g, &a, 219.0f, 130.0f) && !ygfx_hit(&g, &a, 250.0f, 135.0f));
+    a.trim[1] = 1.0f;
+    CHECK(ygfx_hit(&g, &a, 250.0f, 135.0f));
+    a.trim[1] = 0.0f;
+    CHECK(ygfx_enum_get(&a, YGFX_E_TRIM_SET) == 1);
+    CHECK(ygfx_enum_set(&a, YGFX_E_TRIM_SET, 0) == YGFX_OK && !(a.flags & YGFX_STIM_TRIM));
+    CHECK(ygfx_hit(&g, &a, 250.0f, 135.0f));   /* (0, 0) without the flag: the whole */
+    CHECK(ygfx_enum_set(&a, YGFX_E_TRIM_SET, 1) == YGFX_OK && !ygfx_hit(&g, &a, 250.0f, 135.0f));
+    {
+        int ne = 0;
+        const ygfx_param* ep = ygfx_enum_params(&ne);
+        CHECK(ne == YGFX_E_COUNT && !strcmp(ep[YGFX_E_TRIM_SET].name, "trim_set"));
+    }
+    {   /* drawn: the frame takes the zero-length trim */
+        yscr_frame f;
+        a.cap = YGFX_CAP_BUTT;
+        CHECK(yscr_begin(&scr, &f) == YSCR_OK);
+        CHECK(ygfx_begin(&g, &f) == YGFX_OK);
+        CHECK(ygfx_draw(&g, &a) == YGFX_OK);
+        CHECK(ygfx_end(&g) == YGFX_OK);
+        CHECK(yscr_flip(&scr) == YSCR_OK);
+    }
     ygfx_close(&g);
     yscr_close(&scr);
     /* the simulated display's size: the window's, desc's, or 800 x 600 */

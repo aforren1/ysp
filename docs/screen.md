@@ -5252,11 +5252,10 @@ event's `yscr_poll()` time is far from its real time. `ysp/input.h` does
 not convert wheel events, and the header does not use SDL's relative
 mode.
 
-Observed once and not explained: in part 12, the uinput mouse's 20
-clicks gave 20 raw reports through the bridge, but SDL's own stream had 21
-motion events and 1 button press (with `which` 0), and no release. The
-press and the release of each click were written to uinput together.
-XTEST clicks, also written together, gave 20 of 20.
+In part 12, the uinput mouse's 20 clicks gave 20 raw reports through
+the bridge, but SDL's own stream had 21 motion events, 1 button press
+(with `which` 0) and no release. v0.19.0 found the cause: Xorg's libinput
+driver debounces fast clicks ([Fast clicks on Linux X11](#fast-clicks-on-linux-x11-v0190)).
 
 Tests: `test_screen_glx` part 0 (no display): on SIM,
 `yscr_event_input_at()` gives a pen motion the caller's time and its
@@ -5268,6 +5267,112 @@ reports of 20 clicks and the 10 of the 5 clicks without the focus.
 `glx-31` to `glx-36` killed, and `glx-25` again, whose anchor moved with
 the counts (7 of 7, one at a time under a lock on the display). A
 SYN_DROPPED was not made: that count has no test.
+
+## Linux key tiers by stamp (v0.19.0)
+
+[examples_findings.md](examples_findings.md) B7: on Linux X11,
+`yscr_event_input()` gave every key tier 3, also a key with the kernel's
+evdev time. `ysp/input.h` gave tier 3 to each key without
+`ctx.raw_keyboard`, and `caps.raw_keyboard` is false on Linux. A key's
+time on GLX_OML comes from one of three sources
+([Kernel key times](#kernel-key-times)):
+
+| Stamp | When | Tier on the event | Source entry (`ysp/input.h` 0.7.0) |
+|---|---|---|---|
+| The kernel's evdev time (us) | The hook reads the keyboard's node | 0: the entry's | UNKNOWN, host part, 101 to 18183 ns after the start of the `write()` to uinput |
+| The X server's time (ms) | No readable node, XTEST, a key the kernel ring does not hold | 3 | 3, host part, -1.99 to -0.96 ms from the kernel's time |
+| SDL's pump time | Another X11 hook replaced the header's, or the server's time was off clock | 3 | as the X server's |
+
+The change follows macOS's NSEvent stamps (v0.15.0).
+`caps.os_input_stamps` is true while the hook reads at least one
+keyboard's node. `yscr_event_input()` then sets `yin_sdl_ctx.os_stamps`
+and puts the kernel's time of the key in `ctx.t_os` when `yscr_poll()`
+gave it one. A key without it is the fallback: tier 3 on the event. The
+pairing is a memo of the last 16 keys that `yscr_poll()` gave the
+kernel's time, keyed by the stamp it wrote, the key and the direction, as
+macOS's. `yscr_poll()` gives such a key the kernel's time exactly; the
+round trip through SDL's ticks rounded it to 1 us before.
+
+Why UNKNOWN and not a better tier. The tiers of `ysp/input.h` SOURCES
+cover the chain from the finger to the stamp. Tier 1 needs a device
+clock fit to `ysp_rt` and checked by a loopback; a keyboard has none.
+Tier 2 needs a measurement of that chain under stated conditions: a key
+pressed by an actuator and seen by a photodiode or a line-in, on this
+platform. That run was not made. The kernel's time covers the host part
+only: the keyboard's scan, its debounce and the USB poll (1 to 8 ms on
+common keyboards) come before it. It is not tier 3: it is neither a
+tick-quantized time nor a poll. The same rule gives Windows' raw keyboard
+path and macOS's NSEvent stamps UNKNOWN with host-part bounds.
+
+The bounds. `test_screen_glx` part 11, 5 runs of 20 uinput keys (the
+Linux desktop, under a lock on the display, other builds running): the
+kernel's time minus the start of the `write()`, 101 ns to 18183 ns (per
+run: 101 to 13351, 2599 to 18183, 1233 to 15895, 867 to 14174, 3849 to
+16789). Each key was inside its `write()` (to the kernel's 1 us
+truncation). The X server's bounds are the v0.17.0 numbers: its time is
+0.97 to 1.99 ms before the kernel's with uinput, 0.96 to 1.98 ms with a
+wireless keyboard pressed by hand (300 keys).
+
+Tests. `test_screen_glx` part 11: 20 of 20 uinput keys from
+`yscr_event_input()` with stamp 0 and the time `yscr_poll()` gave, with
+`caps.os_input_stamps` true. Part 4: 20 of 20 XTEST keys with stamp 3
+(the X server's time; XTEST has no evdev node). Both parts now send keys
+60 ms apart: `yscr_event_input()` takes a press of the same key within
+50 ms for a second report (INPUT, "Second key reports"), and the parts
+had sent one a frame. `tests/adapt/input_test.c` checks both entries and
+the tier with and without `t_os`. Mutants `glx-37` to `glx-39` and
+`in-10`, `in-11` killed (5 of 5); `in-08`'s anchor moved and it is still
+killed.
+
+## Fast clicks on Linux X11 (v0.19.0)
+
+[examples_findings.md](examples_findings.md) B8: 20 clicks from a
+uinput mouse gave SDL's event stream 1 press and no release; XTEST clicks
+gave 20 of 20. The cause is not SDL or this header: Xorg's libinput
+driver debounces the buttons before an X client sees them.
+
+`tests/probe/input_evdev/click_debounce.c` clicks a uinput mouse 20 times
+and counts each click at the kernel (an evdev reader), at libinput (its
+own context on the node, libinput 1.22.1, as Xorg's
+`xserver-xorg-input-libinput` 1.2.1 uses), at the X server (XI2 raw
+button events, through SDL's X11 hook) and in SDL's stream. The Linux
+desktop, a fullscreen GLX_OML window, press and release written
+together unless held:
+
+| Release to next press | Hold | Kernel | libinput | X raw | SDL |
+|---|---|---|---|---|---|
+| 5 ms | 0 | 20 / 20 | 1 / 1 | 1 / 1 | 1 / 1 |
+| 16 ms | 0 | 20 / 20 | 1 / 1 | 1 / 1 | 1 / 1 |
+| 24 ms | 0 | 20 / 20 | 1 / 1 | 1 / 1 | 1 / 1 |
+| 26 ms | 0 | 20 / 20 | 20 / 20 | 20 / 20 | 20 / 20 |
+| 30 ms | 0 | 20 / 20 | 20 / 20 | 20 / 20 | 20 / 20 |
+| 40 ms | 0 | 20 / 20 | 20 / 20 | 20 / 20 | 20 / 20 |
+| 16 ms | 50 ms | 20 / 20 | 20 / 20 | 20 / 20 | 20 / 20 |
+| 40 ms | 5 ms | 20 / 20 | 20 / 20 | 20 / 20 | 20 / 20 |
+| 30 ms | 50 ms | 20 / 20 | 20 / 20 | 20 / 20 | 20 / 20 |
+
+(press / release counts of the left button.) libinput loses the clicks
+by itself, without X. Its `src/evdev-debounce.c` (1.22.1) says why: two
+more changes of a button within 25 ms of a change are contact bounce
+(its cases 5 to 8). It drops them and starts its 25 ms timer again at
+each, so a series of such clicks gives one press and one release. A press
+or a release alone within 25 ms is delayed, not dropped (its cases 3
+and 4). Part 12 clicked once a frame with press and release together:
+every click was a bounce.
+
+Workarounds:
+
+- Read the clicks with `desc.raw_mice` (evdev, before libinput): part 12
+  got 20 of 20 from the same clicks.
+- In a script, hold a click at least 25 ms or leave at least 26 ms from
+  a release to the next press.
+- libinput's quirk `ModelBouncingKeys=1` turns its debouncing off for a
+  device (`src/evdev-debounce.c`, `fallback_init_debounce`), in a file
+  such as `/etc/libinput/local-overrides.quirks`. Not tried here: it
+  needs root.
+
+A person rarely clicks this fast; a script, a button box read as a mouse,
+or a worn switch that bounces can. Not measured: a real mouse.
 
 ## Not measured
 

@@ -4427,6 +4427,63 @@ pa-02 (a path of one point drawn) survived the first run: `ygfx_length()`
 refuses such a path through its own dash check whatever the pack does,
 so the test now also draws it and checks the refusal.
 
+## v0.19.0: an explicit trim
+
+[examples_findings.md](examples_findings.md) F17. A trim of (0, 0) is
+the whole path (DASHES AND TRIM, documented in v0.18.0), so a `trim[1]`
+animated up from 0 showed the whole path on its first frame. The
+program had to start at 1e-6 or hide the stimulus while `trim[1]` was 0.
+
+| Change | Why |
+|---|---|
+| The flag `YGFX_STIM_TRIM` (0x80) in `ygfx_stim.flags`: with it, only (0, 1) and wider is the whole path, and (0, 0) is a trim of zero length at the start | A bound `trim_end` channel can start at 0. A trim of zero length draws nothing with BUTT and the cap's dot or square with ROUND or SQUARE, as (0, 1e-6) did |
+| `ygfx_shape_desc.trim_set` sets the flag | The desc is how C programs make shapes |
+| The enum row `trim_set` (bool, SHAPE), appended: `YGFX_E_TRIM_SET`, `YGFX_E_COUNT` grows by 1 | Bindings and the parameter table set flags by row; ysp-vis's `trim_set` attribute comes from it with no binding code |
+
+A flag, not a new field, so `ygfx_stim` keeps its layout. `trim_set` in
+`ygfx_shape_desc` sits in the padding after `dash_snap`, so the desc's
+size and its other offsets stay (GCC 12.2, x86-64); it is a layout change
+all the same, hence the minor version. Without the flag nothing changes.
+With it, a shape with no length (CROSS, a mask, a compound) and the
+default trim (0, 0) is refused, as any trim on it is: set the flag only
+with a trim.
+
+F12b, the simulated display's size: `ygfx_open()` on an open SIM screen
+cannot see the window's size, which `ysp/screen.h` does not keep, and
+ysp-vis opened its gfx this way, so a `size=(1024, 768)` simulated
+screen drew at 800 x 600. ysp-vis now keeps the open option `size` of a
+SIM screen and puts it in `desc.width` and `height`. The alternative,
+`yscr_caps.mode` for SIM, would have given SIM a size: its code-slot check
+and the patch read `caps.mode`, and `ygfx_open_screen()`'s `gd->width`
+would no longer win over the window. The binding was the smaller change.
+
+### Tests
+
+`tests/adapt/gfx_test.c` (gcc 12.2, Mesa llvmpipe headless, no display):
+
+- `test_v18_cpu()`: the POLYLINE of the v0.18.0 trim cases with
+  `trim_set`: (0, 0) has no hit with BUTT at the start, the middle or
+  just past the start; with ROUND the dot at the start; (0, 1) the whole;
+  the enum row reads and clears the flag, and (0, 0) without it is the
+  whole again.
+- `gl_v03_kinds()`: a stroked ring trimmed (0, 0) with the flag has no
+  pixel above 0.5 at 360 points on its center line; without the flag all
+  360 are.
+- The enum table check has the new row (offset, flag, kinds).
+- `tests/compile/gfx.c` (C and C++): `trim_set` sets the flag and the
+  row reads it.
+
+ysp-vis: `tests/test_gfx_sim.py` gains `test_sim_size_from_the_window`
+(a 1024 x 768 SIM screen gives a gfx of 1024 x 768, was 800 x 600) and
+`test_trim_set`. Python 3.12: 80 passed, 3 skipped (the four simulated
+display files). Octave 7.3 with the MEX files built from this tree:
+`test_mex_vis` 93, `test_mex_vis_gfx` 105, `test_mex_video` 76,
+`test_mex_vis_text` 54 checks passed. Not run: the window tests (no
+display was free), MATLAB, Windows and macOS.
+
+Mutants `tr-01` to `tr-03` (the desc's switch dropped, the flag ignored
+in the trim rule, the enum row on another flag): 3 of 3 killed.
+
 ## Bindings
 
 `ysp/gfx.h` is bound in `ysp-vis` with `ysp/screen.h` and `ysp/video.h`

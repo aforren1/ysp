@@ -1052,6 +1052,22 @@ this header's bench ([above](#verification-and-cost-v04)) and 2.9 ms in
 ysp/dataset.h's: `YTR_FLUSH_SYNC` stays a between-trials choice, as on
 Windows. No power cut was made.
 
+## v0.7: a column query and sidecar lines at the end
+
+Two findings of the task examples
+([examples_findings.md](examples_findings.md), F16 and F18).
+
+| Change | Why |
+|---|---|
+| `ytr_data_col_settable(w, col)`: true for a `YTR_COL_SET` column; false for a column bound to the row struct, a `YTR_COL_TEXT` column, an index out of range and a writer that is not open | `ysp/response.h`'s `yrsp_data_set()` must skip a column of one of its names that the caller binds to the row. It read the writer's column record (`offset == YTR_UNBOUND`), a private field, so the two headers were coupled through it. The record also says `YTR_UNBOUND` for a fixed text, which the set refuses |
+| `ytr_data_meta(w, lines)`: appends lines to the sidecar now, adds a missing final newline; `YTR_ERR_ARG` with no sidecar or NULL lines, `YTR_ERR_CLOSED` after `finish()`, `YTR_ERR_IO` when the append fails. The CSV is not affected | The examples wrote `ysp/screen.h`'s describe line in `desc.meta` at open, when its counters (key times, raw mice) are all 0. A program now appends the line again before `finish()`, and `rows=N closed=1` stays the last line. The call opens the file by the writer's UTF-8 path (`_wfopen` on Windows), as `finish()` does |
+
+No struct changes. Tests: `tests/adapt/trials_test_data.h` checks the
+query on each column kind of the formats test and out of range, and the
+sidecar's order (`screen_end=x` before `rows=4 closed=1`), an empty
+call, NULL, and a call after `finish()`. Mutants `v07-01` to `v07-04`
+killed (4 of 4). Linux desktop, GCC 12.2; not run on Windows or macOS.
+
 ## Verification (v0.2)
 
 All on Windows 11 with MinGW-w64 gcc 16.1 (C11, C99, C++17, warnings as

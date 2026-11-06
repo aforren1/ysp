@@ -104,6 +104,12 @@ static void test_data_formats(void) {
     CHECK_I(ytr_data_col(&g_w, "rt_ns"), 5);  /* declared name */
     CHECK_I(ytr_data_col(&g_w, "rt_s"), 5);   /* written name */
     CHECK_I(ytr_data_col(&g_w, "count_s"), -1);  /* INT64: no rename */
+    /* v0.7: only a YTR_COL_SET column takes ytr_data_set_*() */
+    CHECK(ytr_data_col_settable(&g_w, 10));
+    CHECK(!ytr_data_col_settable(&g_w, 0));    /* bound to the row */
+    CHECK(!ytr_data_col_settable(&g_w, 9));    /* YTR_COL_TEXT */
+    CHECK(!ytr_data_col_settable(&g_w, 11) && !ytr_data_col_settable(&g_w, -1) && !ytr_data_col_settable(NULL, 10));
+    CHECK_I(ytr_data_meta(&g_w, "a=1"), YTR_ERR_ARG);   /* no sidecar */
 
     memset(&r, 0, sizeof(r));
     r.key = 42;
@@ -836,7 +842,12 @@ static void test_data_file(void) {
             CHECK_I(count_lines(text, n), k + 2);
             k++;
         }
+        /* v0.7: lines known at the end, before the closing line */
+        CHECK_I(ytr_data_meta(&g_w, "screen_end=x"), 0);
+        CHECK_I(ytr_data_meta(&g_w, ""), 0);
+        CHECK_I(ytr_data_meta(&g_w, NULL), YTR_ERR_ARG);
         CHECK_I(ytr_data_finish(&g_w), 0);
+        CHECK_I(ytr_data_meta(&g_w, "late=1"), YTR_ERR_CLOSED);
 #if defined(__APPLE__)
         CHECK_I(g_fullfsync_calls, mode ? 4 : 0);   /* one a row, refused or not */
         g_fullfsync_refuse = 0;
@@ -853,7 +864,7 @@ static void test_data_file(void) {
         {
             static const char* const head = "ysp_trials=" YTR_VERSION_STRING
                 " data=trials_test_data_\xC3\xA9.csv\nparticipant=P07\nrig=test\nysp_trials=";
-            static const char* const tail = "\nrows=4 closed=1\n";
+            static const char* const tail = "\nscreen_end=x\nrows=4 closed=1\n";
             CHECK(strncmp(text, head, strlen(head)) == 0);
             CHECK(n > strlen(tail) && strcmp(text + n - strlen(tail), tail) == 0);
         }

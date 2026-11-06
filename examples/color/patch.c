@@ -457,6 +457,13 @@ int main(int argc, char** argv) {
         yscr_flip(&scr);
         prev_vblank = f.vblank;
     }
+    {   /* the describe line again: its counters (key times, raw mice) are 0 at open */
+        char end[1100];
+        int mrc;
+        memcpy(end, "screen_end=", 11);
+        yscr_describe(&scr, end + 11, sizeof end - 11);
+        if ((mrc = ytr_data_meta(&data, end)) < 0 && mrc != YTR_ERR_CLOSED) fprintf(stderr, "%s\n", ytr_data_error(&data));
+    }
     if (ytr_data_finish(&data) < 0) { fprintf(stderr, "color_patch: %s\n", ytr_data_error(&data)); failed = 1; }
     yscr_describe(&scr, line, sizeof line);
     ygfx_close(&gfx);

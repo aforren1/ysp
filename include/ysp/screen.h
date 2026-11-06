@@ -1,4 +1,4 @@
-/* ysp/screen.h - v0.18.0 - public domain single-header display library
+/* ysp/screen.h - v0.19.0 - public domain single-header display library
  *
  *   The window, the GL ES 3.0 context, the display mode and the swap path
  *   of a stimulus display, with flip at a time: each frame learns the
@@ -1209,6 +1209,25 @@
  *   only (docs/screen.md, "Kernel key times"). The describe line counts
  *   them: key_time=kernel:n,x-server:n,unmatched:n,off-clock:n
  *   evdev_keyboards=n (the nodes open now).
+ *   The tier follows the stamp (v0.19.0). caps.os_input_stamps is true
+ *   while the hook reads a keyboard's node; yscr_event_input() then gives a
+ *   key with the kernel's time ysp/input.h's kernel entry (stamp 0: no
+ *   tier, host part 0.10 to 18.2 us after the write() to uinput, 100 keys)
+ *   and a key with the X server's or SDL's time tier 3 on the event. Pass
+ *   caps.os_input_stamps to yin_sdl_ctx.os_stamps for the source entry.
+ *   Mouse buttons keep SDL's stamps, tier 3.
+ *   Fast clicks (v0.19.0). Xorg's libinput driver debounces buttons
+ *   before an X client sees them. libinput 1.22.1 (src/evdev-debounce.c)
+ *   takes two more changes of a button within 25 ms of a change for
+ *   contact bounce: it drops them and starts its 25 ms timer again at
+ *   each, so a series of fast clicks gives one press and one release.
+ *   Measured with a uinput mouse, 20 clicks with the press and the release
+ *   written together: 20 of 20 reached the kernel; 1 press and 1 release
+ *   reached libinput (its own context on the node), the X server's raw
+ *   events and SDL when the next press came 5 to 24 ms after the release;
+ *   20 of 20 at 26 ms and more, or with the button held 50 ms. A hand on
+ *   a mouse rarely clicks that fast, a script does. desc.raw_mice reads
+ *   evdev and gets every click. XTEST is not debounced.
  *   On macOS (METAL, v0.15.0) SDL 3.4 stamps a key or mouse event with
  *   NSEvent.timestamp plus a process-wide offset, the shortest read delay
  *   seen so far (3.8 ms on a process's first key, then down to 0.2 ms),
@@ -1882,6 +1901,17 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.19.0 - Linux X11 key tiers by stamp (docs/examples_findings.md,
+ *          B7): caps.os_input_stamps is true while the X11 hook reads a
+ *          keyboard's evdev node, and yscr_event_input() then sets
+ *          yin_sdl_ctx.os_stamps and gives a key with the kernel's time
+ *          that time in t_os, so it takes ysp/input.h v0.7.0's kernel
+ *          entry; keys with the X server's or SDL's time get tier 3 on the
+ *          event. All keys got tier 3 before. yscr_poll() gives a key with
+ *          the kernel's time exactly (it rounded to 1 us through SDL's
+ *          ticks). INPUT: why fast uinput clicks did not reach SDL
+ *          (B8): Xorg's libinput debounces them, measured. Needs
+ *          ysp/input.h v0.7.0.
  *   v0.18.0 - Input, from the task examples (docs/examples_findings.md):
  *          desc.keep_synthetic: yscr_event_input() keeps the events SDL
  *          makes from another device (a tablet's mouse events), flagged
@@ -2339,6 +2369,15 @@
  *          groups, input restamping, mode lists and the parameter table.
  *          The other swap paths are stubs that refuse to open.
  *
+ *   STATUS: v0.19.0 (2026-11-06, the Linux desktop, under a lock on the
+ *   display): tests/adapt/screen_glx_test.c part 11 gives 20 of 20 uinput
+ *   keys stamp 0 and the kernel's time from yscr_event_input(), equal to
+ *   yscr_poll()'s, and part 4 20 of 20 XTEST keys tier 3, in five runs
+ *   (the keys are now 60 ms apart: the key filter takes a press within 50
+ *   ms for a second report). The libinput measurement:
+ *   tests/probe/input_evdev/click_debounce.c (docs/screen.md, "Fast clicks
+ *   on Linux X11"). Mutants glx-37 to glx-39 killed (3 of 3). Not built
+ *   here: Windows, macOS, the web.
  *   STATUS: v0.18.0 (2026-11-06, the Linux desktop of v0.17.0's STATUS,
  *   other builds running beside it): tests/adapt/screen_glx_test.c with
  *   its new checks (SDL's X11 button stamps through XTEST; the raw_mice
@@ -2718,9 +2757,9 @@
 #define YSP_SCREEN_H_INCLUDED
 
 #define YSCR_VERSION_MAJOR 0
-#define YSCR_VERSION_MINOR 18
+#define YSCR_VERSION_MINOR 19
 #define YSCR_VERSION_PATCH 0
-#define YSCR_VERSION_STRING "0.18.0"
+#define YSCR_VERSION_STRING "0.19.0"
 
 #include "ysp/rt.h"
 #include "ysp/input.h"
@@ -3113,7 +3152,8 @@ typedef struct yscr_caps {
     bool     raw_keyboard;     /* keys come on SDL's raw path now (INPUT)     */
     bool     os_input_stamps;  /* yscr_event_input() gives keys and mouse
                                 * buttons their OS event's time (macOS:
-                                * NSEvent.timestamp; INPUT); set
+                                * NSEvent.timestamp; Linux X11: the kernel's
+                                * evdev time, keys only; INPUT); set
                                 * yin_sdl_ctx.os_stamps from it            */
     int64_t  margin_ns;        /* the presenter's: the least time before a
                                 * vblank at which a present can still make
@@ -11366,20 +11406,50 @@ static bool SDLCALL yscr__xk_hook(void* ud, XEvent* xev) {
     return true;
 }
 
-/* The time of an SDL key event, on the ysp_rt clock, or 0. Entries before
- * the match are X events SDL folded or dropped (a held key's release and
- * press become one repeat). */
-static int64_t yscr__xk_take(uint16_t raw, int down) {
+/* The time of an SDL key event, on the ysp_rt clock, or 0; *kernel says
+ * whether it is the kernel's. Entries before the match are X events SDL
+ * folded or dropped (a held key's release and press become one repeat). */
+static int64_t yscr__xk_take(uint16_t raw, int down, int* kernel) {
+    *kernel = 0;
     while (yscr__xk.tail != yscr__xk.head) {
         uint32_t i = yscr__xk.tail++ % YSCR__XK_RING;
         if (yscr__xk.code[i] == (uint8_t)raw && yscr__xk.down[i] == (uint8_t)down) {
             if (!yscr__xk.t[i]) { yscr__xk.off_clock++; return 0; }
             if (yscr__xk.kernel[i]) yscr__xk.used_kernel++;
             else yscr__xk.used++;
+            *kernel = yscr__xk.kernel[i];
             return yscr__xk.t[i];
         }
     }
     yscr__xk.unmatched++;
+    return 0;
+}
+
+/* The keys yscr_poll() gave the kernel's time, for yscr_event_input() on
+ * the same event: only the kernel's time has the source entry's tier, the
+ * X server's and SDL's get tier 3 (v0.19.0). The last 16, keyed by the
+ * stamp yscr_poll() wrote, the key and the direction; the thread that
+ * polls. */
+#define YSCR__XK_MEMO 16
+static struct { uint64_t ticks; int64_t t; uint16_t raw; uint8_t down; } yscr__xk_memo[YSCR__XK_MEMO];
+static uint32_t yscr__xk_memo_next;
+
+static void yscr__xk_memo_put(const SDL_Event* ev, int64_t t) {
+    uint32_t i = yscr__xk_memo_next++ % YSCR__XK_MEMO;
+    yscr__xk_memo[i].ticks = ev->common.timestamp;
+    yscr__xk_memo[i].t = t;
+    yscr__xk_memo[i].raw = ev->key.raw;
+    yscr__xk_memo[i].down = (uint8_t)(ev->type == SDL_EVENT_KEY_DOWN);
+}
+
+/* The kernel's time of an SDL key event that yscr_poll() gave it, or 0. */
+static int64_t yscr__xk_kernel_time(const SDL_Event* ev) {
+    uint32_t i;
+    if (ev->type != SDL_EVENT_KEY_DOWN && ev->type != SDL_EVENT_KEY_UP) return 0;
+    for (i = 0; i < YSCR__XK_MEMO; i++)
+        if (yscr__xk_memo[i].t && yscr__xk_memo[i].ticks == ev->common.timestamp &&
+            yscr__xk_memo[i].raw == ev->key.raw && yscr__xk_memo[i].down == (uint8_t)(ev->type == SDL_EVENT_KEY_DOWN))
+            return yscr__xk_memo[i].t;
     return 0;
 }
 
@@ -15536,10 +15606,13 @@ YSCR_API const char* yscr_error(const yscr_screen* s) { return s ? s->error : "y
 YSCR_API bool yscr_is_open(const yscr_screen* s) { return s && s->open; }
 
 /* Whether yscr_event_input() gives keys and mouse buttons their OS
- * event's time: a METAL screen whose NSEvent monitor was made. */
+ * event's time: a METAL screen whose NSEvent monitor was made; a GLX_OML
+ * screen whose X11 hook reads a keyboard's evdev node (keys only). */
 static bool yscr__os_input_stamps(const yscr_screen* s) {
 #if defined(YSCR__METAL)
     return s->open && s->backend == YSCR_BACKEND_METAL && ((const yscr__mtl*)(const void*)s->backend_mem)->nsm_held;
+#elif defined(YSCR__GLX)
+    return s->open && s->backend == YSCR_BACKEND_GLX_OML && yscr__xk.users > 0 && yscr__xe.n > 0;
 #else
     (void)s;
     return false;
@@ -16440,16 +16513,27 @@ YSCR_API bool yscr_poll(yscr_screen* s, union SDL_Event* ev, int64_t* t_rt) {
         if (!yscr__take(ev) && (!yscr__in_rebell() || !yscr__take(ev))) return false;
     } else if (!SDL_PollEvent(ev) && (!yscr__in_rebell() || !SDL_PollEvent(ev))) return false;
 #if defined(YSCR__GLX)
-    /* the X server's time of a key, in SDL's units, so every consumer of
-     * the event (yscr_event_input(), ysp/response.h) gets it */
+    int64_t t_kernel = 0;
+    /* the X server's or the kernel's time of a key, in SDL's units, so every
+     * consumer of the event (yscr_event_input(), ysp/response.h) gets it */
     if (yscr__xk.users > 0 && s && s->sdl_width &&
         (ev->type == SDL_EVENT_KEY_DOWN || ev->type == SDL_EVENT_KEY_UP)) {
-        int64_t t = yscr__xk_take(ev->key.raw, ev->type == SDL_EVENT_KEY_DOWN);
+        int kernel;
+        int64_t t = yscr__xk_take(ev->key.raw, ev->type == SDL_EVENT_KEY_DOWN, &kernel);
         if (t) ev->common.timestamp = (Uint64)(t - s->sdl_rt + s->sdl_ticks);
+        if (t && kernel) {
+            t_kernel = t;
+            yscr__xk_memo_put(ev, t);
+        }
     }
 #endif
     if (t_rt) {
         *t_rt = yscr_restamp(s, ev->common.timestamp);
+#if defined(YSCR__GLX)
+        /* exact, as yscr_event_input() gives it: the round trip through
+         * SDL's ticks rounds to 1 us */
+        if (t_kernel) *t_rt = t_kernel;
+#endif
 #if defined(YSCR__METAL)
         /* a key or mouse button gets its NSEvent's time, as in
          * yscr_event_input() (INPUT, macOS) */
@@ -16590,6 +16674,13 @@ static bool yscr__event_input(yscr_screen* s, const union SDL_Event* ev, int giv
         if (!given && s && yscr__os_input_stamps(s)) {
             ctx.os_stamps = true;
             ctx.t_os = yscr__nsm_stamp_once(ev, t);
+        }
+#elif defined(YSCR__GLX)
+        /* a key with the kernel's time has the source entry's tier; one
+         * with the X server's or SDL's, tier 3 (INPUT, "X11 key times") */
+        if (!given && s && yscr__os_input_stamps(s)) {
+            ctx.os_stamps = true;
+            ctx.t_os = yscr__xk_kernel_time(ev);
         }
 #endif
         if (!yin_from_sdl(ev, t, &ctx, out)) return false;

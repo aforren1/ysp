@@ -259,6 +259,27 @@ def test_groups(sg):
     frame(s, g, r)
 
 
+def test_sim_size_from_the_window():
+    # ysp/gfx.h F12b: a gfx on a simulated display takes the open option size
+    with yscr.Screen(backend="sim", sim_period=PERIOD, size=(1024, 768)) as s:
+        g = ygfx.Gfx(s)
+        assert g.size == (1024, 768) and g.center == (512, 384)
+        g.close()
+
+
+def test_trim_set(sg):
+    # ysp/gfx.h 0.19.0, F17: with trim_set, trim (0, 0) draws nothing
+    s, g = sg
+    cx, cy = g.center
+    p = g.shape("polyline", w=100, h=12, path=[(-50, 0), (50, 0)], width=6)
+    assert p.hit(cx, cy)
+    p.trim_set = True
+    assert p.trim_set and not p.hit(cx, cy)
+    p.trim = (0, 1)
+    assert p.hit(cx, cy)
+    frame(s, g, p)
+
+
 def test_hit_tests(sg):
     s, g = sg
     cx, cy = g.center

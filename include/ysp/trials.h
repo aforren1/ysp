@@ -1,4 +1,4 @@
-/* ysp/trials.h - v0.6.1 - public domain single-header trial sequencing library
+/* ysp/trials.h - v0.7.0 - public domain single-header trial sequencing library
  *
  *   The layer above the adaptive methods: which trial comes next, and what
  *   happened on it. Conditions and repetitions (the method of constant
@@ -971,9 +971,10 @@
  *     THE SIDECAR (desc.meta_path). Lines of key=value written at open:
  *     "ysp_trials=<version> data=<path>", the caller's desc.meta text
  *     as given (participant, rig, seed, the rig profile's hash), and
- *     ytr_format_meta()'s line when there is a session. finish() appends
- *     "rows=N closed=1"; a sidecar without it belongs to a session that
- *     did not finish. A sidecar, not comment lines in the CSV, because
+ *     ytr_format_meta()'s line when there is a session. ytr_data_meta()
+ *     appends the caller's lines while the writer is open (v0.7: a
+ *     device's counters at the end). finish() appends "rows=N closed=1";
+ *     a sidecar without it belongs to a session that did not finish. A sidecar, not comment lines in the CSV, because
  *     ysp/table.h, pandas' defaults and R's read.csv take no comments.
  *
  *   RANDOMNESS
@@ -1167,6 +1168,14 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.7.0 - The data writer (docs/examples_findings.md, F16 and F18):
+ *          ytr_data_col_settable(w, col) says whether a caller column
+ *          takes ytr_data_set_*() values (YTR_COL_SET), so another
+ *          header's adapter (ysp/response.h's yrsp_data_set()) need not
+ *          read the writer's private column record. ytr_data_meta(w,
+ *          lines) appends lines to the sidecar before finish()'s closing
+ *          line: what is known only at the end, a screen's counters. No
+ *          struct changes.
  *   v0.6.1 - YTR_FLUSH_SYNC on macOS: fcntl(F_FULLFSYNC), and fsync() only
  *          when the volume refuses it. fsync() alone left the rows in the
  *          drive's write cache, so a power cut could lose rows that the
@@ -1363,6 +1372,10 @@
  *          - ytr_condition_at() indexes the practice slots too.
  *   v0.0 - specification. Declarations and the manual, no implementation.
  *
+ *   STATUS: v0.7.0, 2026-11-06, the Linux desktop (Debian 12, GCC 12.2):
+ *   tests/adapt/trials_test.c with the two new calls (each column kind,
+ *   indexes out of range, the sidecar's order, a closed writer); not run
+ *   on Windows or macOS.
  *   STATUS: v0.6.1, 2026-11-04: an Apple M2 Mac mini, macOS 27.0.1, Apple clang 21, APFS; every
  *   test passes, Release, ASan and UBSan. The data-file test counts one
  *   F_FULLFSYNC a YTR_FLUSH_SYNC row and writes every row through fsync()
@@ -1574,9 +1587,9 @@
 /* The version of this header, for a log line or a compile-time check. The
  * string is the three numbers, and the test asserts that it stays so. */
 #define YTR_VERSION_MAJOR 0
-#define YTR_VERSION_MINOR 6
-#define YTR_VERSION_PATCH 1
-#define YTR_VERSION_STRING "0.6.1"
+#define YTR_VERSION_MINOR 7
+#define YTR_VERSION_PATCH 0
+#define YTR_VERSION_STRING "0.7.0"
 
 /* fsync() and fileno() for YTR_FLUSH_SYNC under -std=c11: the feature-test
  * macro of ysp/rt.h and ysp/pack.h, set before the first system header
@@ -2329,6 +2342,18 @@ YTR_API const char* ytr_data_error(const ytr_data* w);
 /* The index of the caller column named `name` in desc.cols, or -1. A
  * TIME_NS column answers to its declared name too (rt_ns for rt_s). */
 YTR_API int ytr_data_col(const ytr_data* w, const char* name);
+/* Whether caller column `col` takes its value from ytr_data_set_*()
+ * (YTR_COL_SET), not from the row struct or a fixed text (v0.7). false for
+ * an index out of range and a writer that is not open. Another header's
+ * adapter (ysp/response.h's yrsp_data_set()) asks it before it sets a
+ * column of the caller's file. */
+YTR_API bool ytr_data_col_settable(const ytr_data* w, int col);
+/* Append `lines` (key=value lines) to the sidecar now, before the line
+ * finish() writes (v0.7): what is known only at the end, a device's
+ * counters. A missing final newline is added. Returns 0, or YTR_ERR_ARG
+ * (no sidecar, NULL lines), YTR_ERR_CLOSED or YTR_ERR_IO, with
+ * ytr_data_error() set; the CSV is not affected. */
+YTR_API int ytr_data_meta(ytr_data* w, const char* lines);
 
 /* Set column `col` (an index into desc.cols, of a YTR_COL_SET column of
  * that type) for the next row. A string must stay valid until the row is
@@ -7724,6 +7749,36 @@ YTR_API bool ytr_data_open(ytr_data* w, const ytr_data_desc* desc) {
 }
 
 YTR_API const char* ytr_data_error(const ytr_data* w) { return w ? w->error : ""; }
+
+YTR_API bool ytr_data_col_settable(const ytr_data* w, int col) {
+    if (!w || !w->open || col < 0 || col >= w->n_cols || col >= YTR_DATA_MAX_COLS) return false;
+    return w->col[col].offset == YTR_UNBOUND && w->col[col].type != (uint8_t)YTR_COL_CONST;
+}
+
+YTR_API int ytr_data_meta(ytr_data* w, const char* lines) {
+    FILE* m;
+    size_t n;
+    bool ok;
+    if (!w) return YTR_ERR_ARG;
+    if (!w->open) {
+        ytr__dfail(w, "ytr_data_meta: the writer is not open");
+        return YTR_ERR_CLOSED;
+    }
+    if (!lines || !w->meta_path[0]) {
+        ytr__dfail(w, "ytr_data_meta: %s", lines ? "no sidecar (desc.meta_path)" : "lines is NULL");
+        return YTR_ERR_ARG;
+    }
+    if ((n = strlen(lines)) == 0) return 0;
+    m = ytr__fopen(w->meta_path, true);
+    ok = m && fwrite(lines, 1, n, m) == n;
+    if (ok && lines[n - 1] != '\n') ok = fputc('\n', m) != EOF;
+    if (m) ok = fclose(m) == 0 && ok;
+    if (!ok) {
+        ytr__dfail(w, "ytr_data_meta: cannot append to '%s'", w->meta_path);
+        return YTR_ERR_IO;
+    }
+    return 0;
+}
 
 YTR_API int ytr_data_col(const ytr_data* w, const char* name) {
     int i;

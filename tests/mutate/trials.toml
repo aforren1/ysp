@@ -907,3 +907,38 @@ find = '''    if (YTR__FULLFSYNC(fd) == 0) return true;
 replace = '''    return YTR__FULLFSYNC(fd) == 0;
 #endif
     return fsync(fd) == 0;'''
+
+# v0.7.0: the data writer's public column query and sidecar lines
+# (F16, F18).
+[[mutant]]
+id = "v07-01"
+name = "a fixed text column counts as settable"
+test = "trials"
+why = "F16: a YTR_COL_TEXT column has no per-row value; an adapter that sets it fails, and the row is lost."
+find = '''    return w->col[col].offset == YTR_UNBOUND && w->col[col].type != (uint8_t)YTR_COL_CONST;'''
+replace = '''    return w->col[col].offset == YTR_UNBOUND;'''
+
+[[mutant]]
+id = "v07-02"
+name = "a bound column counts as settable"
+test = "trials"
+why = "F16: a column bound to the row struct is the caller's; ysp/response.h must not set it."
+find = '''    return w->col[col].offset == YTR_UNBOUND && w->col[col].type != (uint8_t)YTR_COL_CONST;'''
+replace = '''    return w->col[col].type != (uint8_t)YTR_COL_CONST;'''
+
+[[mutant]]
+id = "v07-03"
+name = "the caller's sidecar lines dropped"
+test = "trials"
+why = "F18: the screen's counters at the end go to the sidecar before its closing line."
+find = '''    ok = m && fwrite(lines, 1, n, m) == n;'''
+replace = '''    ok = m != NULL;'''
+
+[[mutant]]
+id = "v07-04"
+name = "sidecar lines without their newline"
+test = "trials"
+why = "F18: a line without a newline joins the closing line, and a reader no longer finds closed=1."
+find = '''    if (ok && lines[n - 1] != '\n') ok = fputc('\n', m) != EOF;'''
+replace = ''
+

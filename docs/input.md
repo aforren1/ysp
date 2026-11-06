@@ -312,7 +312,7 @@ B6, F14, D2, D6):
 |---|---|---|---|
 | mouse | 3, host part | 1.498 to 16.646 ms | SDL stamps X11 buttons and motion with `SDL_GetTicksNS()` at its pump (read in its source). `ysp/screen.h` v0.18.0's `test_screen_glx` clicked through XTEST, one poll per 60 Hz frame: 100 clicks in five runs ([screen.md](screen.md#input-from-the-task-examples-v0180)). The upper bound is a frame: a loop that polls less often stamps later |
 | touch, pen | 3 | none | the same pump time (read in SDL's source); no tablet or touch screen here |
-| keyboard | 3, host part | none | through `ysp/screen.h`, the X server's ms time or the kernel's evdev time ([screen.md, "Kernel key times"](screen.md#kernel-key-times)); without it, SDL's pump. Two stamps with different bounds, so the entry gives none. `yscr_event_input()` marks X11 keys tier 3 on the event (`caps.raw_keyboard` is false on Linux) |
+| keyboard | 3, host part | none | through `ysp/screen.h`, the X server's ms time or the kernel's evdev time ([screen.md, "Kernel key times"](screen.md#kernel-key-times)); without it, SDL's pump. Two stamps with different bounds, so the entry gives none. `yscr_event_input()` marks X11 keys tier 3 on the event (`caps.raw_keyboard` is false on Linux). v0.7.0 gives each stamp its own entry (below) |
 
 Tier 3 is the tier rule's "a tick-quantized OS time, a poll": the pump
 runs once a frame in a frame loop, and the measured stamps sit up to a
@@ -320,7 +320,45 @@ frame after the click. XTEST's buttons come with `which` 0, so the
 adapter marks them tier 3 on the event (`yin_sdl_mouse_stamp()`); the
 entry covers buttons that come with a device's id.
 
+## v0.7.0: Linux keys by their stamp
+
+[examples_findings.md](examples_findings.md) B7: on Linux,
+`yin_sdl_source()` gave keys one entry, tier 3, and `yscr_event_input()`
+marked every X11 key tier 3, also a key with the kernel's evdev time.
+`ysp/screen.h` gives a key one of three times
+([screen.md, "Linux key tiers by stamp"](screen.md#linux-key-tiers-by-stamp-v0190)).
+The tier now follows the stamp, as on macOS (v0.5.0):
+
+| Stamp | `ctx` from `ysp/screen.h` | Tier on the event | Entry: tier, bounds (stamp minus event) |
+|---|---|---|---|
+| the kernel's evdev time, us | `os_stamps` on, `t_os` the kernel's time | 0: the entry's | UNKNOWN, host part, 101 to 18183 ns (`YIN__X11_KERNEL_*`) |
+| the X server's time, ms | `os_stamps` on, `t_os` 0; or `os_stamps` off | 3 | 3, host part, -1.99 to -0.96 ms (`YIN__X11_SERVER_*`) |
+| SDL's pump time | as the X server's | 3 | as the X server's |
+
+`os_stamps` follows `ysp/screen.h`'s `caps.os_input_stamps`, true while
+its X11 hook reads at least one keyboard's evdev node. With it off,
+`yin_sdl_source()` gives the X server's entry, the stamp most keys then
+have. The kernel's stamp gets UNKNOWN, not tier 1 or 2: no device clock
+is fit (tier 1), and no run from a key press to the stamp was made with a
+photodiode or a line-in (tier 2). It covers the host part only, after
+the keyboard's scan and USB poll. The bounds of the kernel's entry are
+`ysp/screen.h`'s `test_screen_glx` part 11: the stamp minus the start of
+the `write()` to uinput, 100 keys in five runs. The X server's are
+`ysp/screen.h` v0.17.0's: its time minus the kernel's, with uinput and
+with a wireless keyboard pressed by hand.
+
+On Linux `ctx.os_stamps` and `t_os` apply to keys only. A mouse button
+with `os_stamps` on gets tier 3, as without it: SDL stamps X11 buttons at
+its pump.
+
 ## Verification
+
+v0.7.0, on 2026-11-06 (the Linux desktop, GCC 12.2, SDL 3.4.18):
+`test_input_sdl` checks both Linux key entries and a key's tier with and
+without `t_os`. `ysp/screen.h`'s `test_screen_glx` gives 20 of 20 uinput
+keys stamp 0 with the kernel's time and 20 of 20 XTEST keys tier 3.
+Mutants `in-10` and `in-11` killed; `in-07` and `in-08` again (`in-08`'s
+anchor moved). Not built: Windows, macOS, MSVC, clang.
 
 v0.6.0, on 2026-11-06 (the Linux desktop: Debian 12, GCC 12.2, SDL
 3.4.18's headers): `test_input_sdl` 178 checks pass (84 without SDL),

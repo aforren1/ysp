@@ -357,6 +357,9 @@ typedef struct yv_screen {
                                 * option gfx), until a host opens it      */
     int            frame_row;  /* MEX: begin gives the frame as a row (the
                                 * open option frame), not a struct        */
+    int32_t        sim_w, sim_h;  /* SIM: the open option size, which the
+                                   * screen does not keep: a gfx opened on
+                                   * it takes this size (F12b)            */
 } yv_screen;
 
 /* ysp_vis_video.h: the movies on a gfx get each flip record (their FRAME
@@ -426,6 +429,10 @@ static bool yv_open(yv_screen* v, yscr_desc* d) {
     v->rec = (yscr_record*)calloc(YV_RECORDS, sizeof(yscr_record));
     if (!v->rec) return false;
     d->angle_dir = yv_module_dir();
+    if (d->backend == YSCR_BACKEND_SIM) {
+        v->sim_w = d->window_w;
+        v->sim_h = d->window_h;
+    }
     if (v->gstart) {
         d->on_context = yv_gfx_on_context;
         d->on_context_ctx = v->gstart;

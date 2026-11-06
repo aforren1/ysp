@@ -80,11 +80,11 @@ id = "in-08"
 name = "SDL's X11 mouse stamps not tier 3"
 test = "input"
 why = "SDL 3.4 stamps X11 mouse events at its pump, once a frame: 1.5 to 16.6 ms after XTEST clicks (v0.6.0)."
-find = """    if (kind == YIN_KIND_MOUSE) {
+find = """ if (kind == YIN_KIND_MOUSE) {
         s.tier = (uint8_t)YIN_TIER_3;
         s.partial = 1;
         s.lo_ns = YIN__X11_BUTTON_LO_NS;"""
-replace = """    if (kind == YIN_KIND_MOUSE) {
+replace = """ if (kind == YIN_KIND_MOUSE) {
         s.tier = (uint8_t)YIN_TIER_UNKNOWN;
         s.partial = 1;
         s.lo_ns = YIN__X11_BUTTON_LO_NS;"""
@@ -96,3 +96,23 @@ test = "input"
 why = "SDL 3.4.16 gives proximity events the pen's state, the eraser among it (v0.6.0)."
 find = "        in.code = (uint32_t)ev->pproximity.pen_state;"
 replace = ""
+
+# input.h 0.7.0: Linux keys by their stamp (B7; in-10 and in-11 run on
+# Linux).
+[[mutant]]
+id = "in-10"
+name = "Linux keys with the kernel's time get tier 3"
+test = "input"
+why = "A key with the kernel's evdev time is not a tick or a poll; tier 3 hid the stamp ysp/screen.h measured inside the write() (v0.7.0)."
+find = """    if (kind == YIN_KIND_KEYBOARD && ctx && ctx->os_stamps) {
+        s.tier = (uint8_t)YIN_TIER_UNKNOWN;"""
+replace = """    if (kind == YIN_KIND_KEYBOARD && ctx && ctx->os_stamps) {
+        s.tier = (uint8_t)YIN_TIER_3;"""
+
+[[mutant]]
+id = "in-11"
+name = "Linux keys with the X server's time get the kernel's entry"
+test = "input"
+why = "The X server's time is a ms tick, 0.96 to 1.99 ms behind the kernel's: tier 3 (v0.7.0)."
+find = """    if (kind == YIN_KIND_KEYBOARD && ctx && ctx->os_stamps) {"""
+replace = """    if (kind == YIN_KIND_KEYBOARD) {"""

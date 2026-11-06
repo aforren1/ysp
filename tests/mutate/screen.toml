@@ -1851,6 +1851,35 @@ find = """#if defined(YSCR__GLX) && !defined(YRT_NO_THREADS)
     if (s->raw_mice) {   /* the evdev reader's counts"""
 replace = """#if 0
     if (s->raw_mice) {   /* the evdev reader's counts"""
+
+# v0.19.0 (B7): a key's tier follows its stamp on Linux X11 (parts 4 and
+# 11 of the test).
+[[mutant]]
+id = "glx-37"
+name = "no OS stamps on GLX_OML"
+test = "screen_glx"
+why = "Keys with the kernel's evdev time got tier 3, as keys with the X server's ms time (v0.19.0)."
+find = "    return s->open && s->backend == YSCR_BACKEND_GLX_OML && yscr__xk.users > 0 && yscr__xe.n > 0;"
+replace = "    return false;"
+
+[[mutant]]
+id = "glx-38"
+name = "a key's kernel time not passed on"
+test = "screen_glx"
+why = "With os_stamps on and no t_os, every key is SDL's fallback, tier 3 (v0.19.0)."
+find = "            ctx.t_os = yscr__xk_kernel_time(ev);"
+replace = "            ctx.t_os = 0;"
+
+[[mutant]]
+id = "glx-39"
+name = "the X server's time taken for the kernel's"
+test = "screen_glx"
+why = "An XTEST key, or a keyboard whose node is not readable, has the X server's ms time: tier 3, not the kernel entry (v0.19.0)."
+find = """        if (t && kernel) {
+            t_kernel = t;"""
+replace = """        if (t) {
+            t_kernel = t;"""
+
 # v0.11.0's 10 (mt-, the METAL backend), v0.12.0's 3 (mt-11 to mt-13, the
 # measured constants) and v0.13.0's 3 (mt-14 to mt-16, variable refresh) and v0.13.1's 2 (mt-17, mt-18, the
 # period from CADisplayLink). mt-01 to mt-07 and mt-11 to mt-13 run the core test

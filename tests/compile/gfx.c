@@ -94,6 +94,14 @@ int main(void) {
     gray = ygfx_texture(&g, &xd);
     if (gray.id == 0) return 16;
     if (ygfx_prime(&g) < 1) return 17;   /* v0.11: every program, once */
+    {   /* v0.19: an explicit trim; (0, 0) with it is a trim of zero length */
+        ygfx_shape_desc sd;
+        ygfx_stim ln;
+        memset(&sd, 0, sizeof sd);
+        sd.shape = YGFX_CAPSULE; sd.w = 40; sd.shape_p[0] = 2; sd.trim_set = true;
+        ln = ygfx_shape(&sd);
+        if (!(ln.flags & YGFX_STIM_TRIM) || ygfx_enum_get(&ln, YGFX_E_TRIM_SET) != 1) return 30;
+    }
     ygfx_texture_free(&g, gray);
     memset(&cd, 0, sizeof cd);
     cd.every = 2; cd.w = 64; cd.h = 32; cd.manual = true;
