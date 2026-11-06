@@ -54,6 +54,11 @@
  * thread that never serves the queue cannot hang MATLAB. A call that has
  * started runs to its end.
  */
+/* glibc declares dladdr(), which finds this file's directory
+ * (ysp_share_mex_load), only with _GNU_SOURCE, before the first include. */
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
 #include "mex.h"
 
 #define YSP_SHARE_MEX
@@ -443,6 +448,12 @@ static void vx_option(yscr_desc* d, const char* name, const mxArray* v) {
         char s[64];
         vx_string(v, s, sizeof s, name);
         if (yv_opt_enum(d, o, s, err, sizeof err) < 0) vx_err("arg", "%s", err);
+        return;
+    }
+    if (o->type == YV_STR) {
+        char s[512];
+        vx_string(v, s, sizeof s, name);
+        if (yv_opt_str(d, o, s, err, sizeof err) < 0) vx_err("arg", "%s", err);
         return;
     }
     if (o->type == YV_SIZE || o->type == YV_MODE) {

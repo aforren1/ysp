@@ -26,7 +26,8 @@ This page is reference: the language bindings of the headers.
   beside PsychoPy, questplus and AEPsych on one response stream. CI builds
   the wheels with cibuildwheel on Linux, Windows and macOS, except
   `ysp-parallel` on macOS, which its header does not support, and
-  `ysp-vis`, which has jobs of its own for Windows x64 and macOS arm64.
+  `ysp-vis`, which has jobs of its own for Windows x64, macOS arm64 and
+  Linux X11.
 - **MATLAB / Octave**: [bindings/mex/](../bindings/mex/), one MEX function
   per library (`ysp_parallel`, `ysp_serial`, `ysp_stair`, `ysp_quest`,
   `ysp_aep`, `ysp_trials`, `ysp_color`, `ysp_rdk`, `ysp_rt`, `ysp_box`,
@@ -158,10 +159,12 @@ not bound and why.
 
 ### Display, stimuli, movies: ysp-vis
 
-Platforms: Windows x64, and macOS 14 or later on arm64 (the METAL
-backend; `ysp-vis` 0.15.0 and the MEX files 1.3.0, 2026-11-05). Linux is
-not supported: the X11 and Wayland backends of `ysp/screen.h` are stubs.
-Octave on macOS is not built. Phase A (2026-10-27) binds the frame loop of `ysp/screen.h` in full
+Platforms: Windows x64; macOS 14 or later on arm64 (the METAL backend;
+`ysp-vis` 0.15.0 and the MEX files 1.3.0, 2026-11-05); and Linux x86_64
+on X11 (the GLX_OML backend; `ysp-vis` 0.17.0.1 and the MEX files 1.4.0,
+2026-11-06; [Linux X11](#linux-x11), below). Wayland is not supported:
+its backend in `ysp/screen.h` is a stub. Octave on macOS is not built.
+Phase A (2026-10-27) binds the frame loop of `ysp/screen.h` in full
 ([screen.md](screen.md#bindings)). Phase B's gfx part (2026-10-27) binds
 the stimuli of `ysp/gfx.h` as objects the binding owns, draw lists and
 bulk sets, groups, instances, textures, hit tests, capture, and timeline
@@ -340,7 +343,7 @@ clock the binding's frames and decisions equal the C path's line by line
   screen, and gives back `ysp_audio` and `ysp_timeline`, when the last
   thin file detaches; until then a clear of one file leaves the objects
   open, and the file finds its handles again when it loads again. Verified
-  in MATLAB R2023a and Octave 10.1 (`test_mex_vis.m`,
+  in MATLAB R2023a and Octave 10.1, MATLAB R2024a and Octave 7.3 on Linux (`test_mex_vis.m`,
   `test_mex_vis_gfx.m`; `test_mex_vis_window.m` with a window), and in
   MATLAB R2026b on macOS (the same files, `-batch`). On macOS the last
   detach closes on the main thread too; when the main thread does not take
@@ -362,8 +365,9 @@ clock the binding's frames and decisions equal the C path's line by line
   `ysp.screen.HEADER_VERSION`, `ysp.gfx.HEADER_VERSION` and
   `ysp.video.HEADER_VERSION` give the three headers' own. A change to
   `ysp/gfx.h` or `ysp/video.h` alone that changes the binding adds the
-  fourth number, as a binding-only change does. The MEX files have the
-  number 1.3.0 of their own (1.0.0 was phase A; 1.1.0 adds `ysp_gfx`'s stimuli and `ysp_video`'s movies; 1.2.0 the text; 1.2.1 `ysp_video`'s UTF-8 paths and its error ids by the header's code; 1.3.0 macOS, `caps` with `os_input_stamps` and `margin`, the open options `backend` `'metal'` and `color_depth`); their `'version'` gives it
+  fourth number, as a binding-only change does (0.17.0.1: the binding on
+  Linux X11). The MEX files have the
+  number 1.4.0 of their own (1.0.0 was phase A; 1.1.0 adds `ysp_gfx`'s stimuli and `ysp_video`'s movies; 1.2.0 the text; 1.2.1 `ysp_video`'s UTF-8 paths and its error ids by the header's code; 1.3.0 macOS, `caps` with `os_input_stamps` and `margin`, the open options `backend` `'metal'` and `color_depth`; 1.4.0 Linux X11, the open options `backend` `'glx_oml'`, `x_display` and `x11_override_redirect`, and the movie backends `'avf'` and `'ffmpeg'` in `info`); their `'version'` gives it
   and the header's as the second output. `ysp-audio` and `ysp-timeline` are dependencies
   of the same major.minor as the headers ysp-vis was built against
   (`>=0.8,<0.9` and `>=0.8.1,<0.9`), the rule of the tables (below).
@@ -393,7 +397,75 @@ clock the binding's frames and decisions equal the C path's line by line
   Python and in MATLAB (one run each), the next frames drew; the first
   three flips were estimated (tier 3, no presentedTime) and the fourth and
   later were tier 2 again. So start a trial with a few frames that do not
-  count.
+  count. Linux X11 has no window thread either; in one Python run with a
+  1280 x 720 window, the 60 frames after a 6 s wait were all Present
+  copies at tier 2, as the 120 before it.
+
+#### Linux X11
+
+The binding on Linux uses the GLX_OML backend of `ysp/screen.h`
+([screen.md](screen.md), "Linux X11: GLX_OML"). It differs from the other
+platforms in these ways:
+
+- **No ANGLE.** GLX_OML makes a GL ES 3.0 context through the system's
+  libGL, which `ysp/screen.h` loads at run time with libX11 and libxcb.
+  The module links none of them. `ANGLE_DIR` (and `info.module_dir` in
+  MEX) is still the module's directory, which holds the license files.
+- **SDL3 3.4.18, not 3.4.0.** Before 3.4.18, SDL's X11 event handler can
+  end the process on an X error ([screen.md](screen.md)).
+  `tools/vendor_vis.py --sdl gcc` builds it static and
+  position-independent, with the X11 driver and without Wayland. It
+  refuses a build whose X11 driver has no XRandR, XInput2 or XFixes, which
+  happens without the X11 development packages. The module hides the
+  static SDL3's symbols (`--exclude-libs`), so a `libSDL3.so` that another
+  module loaded first does not take its calls.
+- **MP4 through FFmpeg is a build option.** `setup.py` and `build.m`
+  define `YVID_FFMPEG` when `pkg-config` finds FFmpeg's development files.
+  `YSP_VIS_FFMPEG=0` leaves it out, and `YSP_VIS_FFMPEG=1` makes the build
+  fail without them. `ysp/video.h` loads the FFmpeg libraries of the major
+  versions it was built against at run time (BUILDING in ysp/video.h). A
+  module built with FFmpeg 5.1's headers (Debian 12) decodes MP4 only on a
+  system with libavcodec.so.59. Without FFmpeg, MP4 is refused, and frame
+  sequences and MPEG-1 play.
+- **One X screen per process.** SDL 3 drives one X screen per process.
+  The open option `x_display` (`":0.1"`) chooses it before the first
+  open; a later open on another X screen is refused.
+- **Fonts.** The default font is DejaVu Sans, else Liberation Sans, at the
+  paths of `ysp/gfx.h`'s list. The text tests use DejaVu Sans, Liberation
+  Sans and Droid Sans Fallback in place of Segoe UI, Arial and Microsoft
+  YaHei.
+- **No wheel from CI.** The `vis-linux` job builds and tests in Debian 12
+  and keeps no wheel: a wheel built there is not a manylinux wheel. A
+  manylinux wheel needs the natives built in the manylinux image, and a
+  choice of FFmpeg major version or none.
+
+Build, from the repository root:
+
+```sh
+uv run --no-project python tools/vendor_layout.py --write
+uv run --no-project python tools/vendor_vis.py --write --sdl gcc --pl-mpeg --layout gcc
+pip install ./bindings/python/ysp_audio ./bindings/python/ysp_timeline ./bindings/python/ysp_vis
+```
+
+In Octave or MATLAB: `cd bindings/mex; build`.
+
+What ran, on 2026-11-06, on the Linux desktop of [status.md](status.md)
+(Debian 12, RX 6600, Mesa 22.3.6, Xorg with Xfwm4, 60 Hz; gcc 12.2,
+CPython 3.12.14, FFmpeg 5.1, Octave 7.3.0, MATLAB R2024a Update 7):
+
+| Run | Result |
+|---|---|
+| Python tests, with `YSP_VIS_WINDOW=1` and `YSP_VIS_AUDIO=1` | 91 passed, 2 skipped (macOS only). The window tests draw the C path's scenes bit for bit (stimuli and text), and MP4 plays with VAAPI and in software |
+| Python, fullscreen, 120 frames | 120 flips, independent (Present flips), tier 1, 0 dropped |
+| MEX tests (simulated display), MATLAB and Octave | all pass: `test_mex_vis` 93 checks in each, `test_mex_vis_gfx` 105, `test_mex_video` 79 in MATLAB and 76 in Octave, `test_mex_vis_text` 55 and 54 |
+| `test_mex_vis_window.m`, MATLAB and Octave | 18 checks pass in each: the window's flips are Present copies at tier 2 before and after a 6 s pause, the last clear closes the window, and the stimuli and texts draw the C path's scenes bit for bit |
+| Octave, a 960 x 540 window, 300 frames | 300 records, Present copies, tier 2, 0 dropped |
+
+Octave's development files (`octave-dev`) were unpacked from Debian's
+package, not installed. MATLAB ran with the system's libstdc++ in
+`LD_PRELOAD`, as this machine's launcher starts it. CI's `matlab-mex` job
+builds the other MEX files on Linux but not ysp-vis: its runner has no
+natives, X11 headers or FFmpeg headers.
 
 ## Sharing one implementation across modules
 
@@ -652,8 +724,10 @@ v0.8.1), and `ysp-audio` is 0.7.2, the header's. The adaptive MEX
 functions and `ysp_color` have no number of their own: `'version'`
 returns the header's.
 
-`ysp-vis` is 0.17.0 (2026-11-05; `ysp/screen.h` 0.17.0, the Linux X11
-backend, no change to the binding's calls): one distribution for three headers,
+`ysp-vis` is 0.17.0.1 (2026-11-06: the binding on Linux X11, with the open
+options `backend="glx_oml"`, `x_display` and `x11_override_redirect`;
+0.17.0, 2026-11-05, was `ysp/screen.h` 0.17.0, the Linux X11 backend, with
+no change to the binding's calls): one distribution for three headers,
 so its version tracks `ysp/screen.h`'s, and a release for a change of
 `ysp/gfx.h` or `ysp/video.h` alone, or of the binding alone, adds the
 fourth number ([ysp-vis](#display-stimuli-movies-ysp-vis)); 0.10.1.1 was
@@ -666,8 +740,8 @@ macOS arm64 wheel (`cp310-abi3-macosx_14_0_arm64`), `caps()`'s `margin`
 and `os_input_stamps`, the open options `backend="metal"` and
 `color_depth`, the main-thread refusal, and `ysp-audio` 0.8 as the
 dependency. The MEX files of ysp-vis (`ysp_vis`,
-`ysp_screen`, `ysp_gfx`, `ysp_video`) are 1.3.0 (1.0.0 was phase A, 1.1.0
-phase B, 1.2.0 phase C, 1.2.1 UTF-8 paths, 1.3.0 macOS), one number for the four, because the thin files refuse a core
+`ysp_screen`, `ysp_gfx`, `ysp_video`) are 1.4.0 (1.0.0 was phase A, 1.1.0
+phase B, 1.2.0 phase C, 1.2.1 UTF-8 paths, 1.3.0 macOS, 1.4.0 Linux X11), one number for the four, because the thin files refuse a core
 of another build. 1.3.0 also fixes `ysp_gfx('free', obj)`, which read
 the handle's node after freeing it: on macOS the freed node's kind was
 gone, so the list or stimulus was not freed and its items kept their

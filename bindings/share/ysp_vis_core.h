@@ -73,14 +73,16 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+#if !defined(_WIN32)
+#include <dlfcn.h>   /* dladdr(): glibc declares it with _GNU_SOURCE, which Python.h and ysp_vis.c define */
+#endif
 #if defined(__APPLE__)
-#include <dlfcn.h>
 #include <pthread.h>
 #endif
 
 /* The distribution's version tracks screen.h's, with a fourth number for a
  * change of the binding alone (docs/bindings.md, ysp-vis). */
-#define YV_VERSION YSCR_VERSION_STRING   /* no fourth number: no change of the binding alone since screen.h 0.15.0 */
+#define YV_VERSION YSCR_VERSION_STRING ".1"   /* .1: Linux X11 (GLX_OML), a change of the binding alone */
 
 #define YV_RECORDS 4096   /* flip records kept between records() calls */
 #define YV_EVENTS  1024   /* input events kept between poll() calls    */
@@ -113,7 +115,9 @@ static double yv_s(int64_t ns) { return (double)ns / 1e9; }
 /* UTF-8, without the trailing separator; "" when unknown. ysp/screen.h loads
  * libEGL.dll (libEGL.dylib) from it by full path, so another ANGLE in the
  * process (MATLAB's, a Qt program's, an Electron app's) is never the one
- * used (docs/av_probe.md, section 2). */
+ * used (docs/av_probe.md, section 2). Linux has no ANGLE (GLX_OML loads the
+ * system's libGL); the directory still names where the module and its
+ * license files are. */
 static const char* yv_module_dir(void) {
     static char dir[1024];
     static int done;
@@ -133,7 +137,7 @@ static const char* yv_module_dir(void) {
         path[cut] = 0;
         if (WideCharToMultiByte(CP_UTF8, 0, path, -1, dir, (int)sizeof dir, NULL, NULL) <= 0) dir[0] = 0;
     }
-#elif defined(__APPLE__)
+#else
     {
         Dl_info info;
         const char* cut;
@@ -178,14 +182,14 @@ static const char* yv_screen_thread_refusal(const struct yv_screen* v);
 /* One table for both hosts, so a Python keyword and a MATLAB field are the
  * same option with the same unit. Times are seconds. */
 
-enum { YV_BOOL, YV_I32, YV_U32, YV_F64, YV_SEC, YV_SEC_SIGNED, YV_ENUM, YV_SIZE, YV_MODE };
+enum { YV_BOOL, YV_I32, YV_U32, YV_F64, YV_SEC, YV_SEC_SIGNED, YV_ENUM, YV_SIZE, YV_MODE, YV_STR };
 
 typedef struct yv_name { const char* name; int value; } yv_name;
 
 static const yv_name yv_backends[] = {
     { "auto", YSCR_BACKEND_AUTO }, { "dxgi_flip", YSCR_BACKEND_DXGI_FLIP },
-    { "composition", YSCR_BACKEND_COMPOSITION }, { "metal", YSCR_BACKEND_METAL }, { "sim", YSCR_BACKEND_SIM },
-    { NULL, 0 } };
+    { "composition", YSCR_BACKEND_COMPOSITION }, { "glx_oml", YSCR_BACKEND_GLX_OML }, { "metal", YSCR_BACKEND_METAL },
+    { "sim", YSCR_BACKEND_SIM }, { NULL, 0 } };
 static const yv_name yv_settles[] = {
     { "auto", YSCR_SETTLE_AUTO }, { "strict", YSCR_SETTLE_STRICT }, { "warn", YSCR_SETTLE_WARN },
     { "off", YSCR_SETTLE_OFF }, { NULL, 0 } };
@@ -213,7 +217,7 @@ static const yv_opt yv_opts[] = {
     { "size", YV_SIZE, 0, NULL, "the window's (w, h) in pixels; (0, 0) = 800 x 600" },
     { "display", YV_U32, YV_OFF(display), NULL, "a display's id from displays(); 0 = the primary" },
     { "mode", YV_MODE, 0, NULL, "a listed mode (w, h, refresh_num, refresh_den) to switch to; none = the desktop's" },
-    { "backend", YV_ENUM, YV_OFF(backend), yv_backends, "auto, dxgi_flip, composition (Windows), metal (macOS) or sim" },
+    { "backend", YV_ENUM, YV_OFF(backend), yv_backends, "auto, dxgi_flip, composition (Windows), glx_oml (Linux X11), metal (macOS) or sim" },
     { "lead", YV_F64, YV_OFF(lead), NULL, "flip_at's snap: 0 = 0.5 (the nearest vblank); -1 = never early" },
     { "show_cursor", YV_BOOL, YV_OFF(show_cursor), NULL, "keep the cursor over the window" },
     { "min_tier", YV_I32, YV_OFF(min_tier), NULL, "flag records whose tier is worse; 0 = off" },
@@ -238,6 +242,8 @@ static const yv_opt yv_opts[] = {
     { "patch", YV_BOOL, YV_OFF(patch.on), NULL, "the photodiode patch" },
     { "patch_size", YV_I32, YV_OFF(patch.size), NULL, "the patch's side in pixels; 0 = 32" },
     { "patch_corner", YV_ENUM, YV_OFF(patch.corner), yv_corners, "top_left, top_right, bottom_left or bottom_right" },
+    { "x_display", YV_STR, YV_OFF(x_display), NULL, "Linux X11: the X display and screen, ':0.1'; none = $DISPLAY (one X screen per process)" },
+    { "x11_override_redirect", YV_BOOL, YV_OFF(x11_override_redirect), NULL, "Linux X11, fullscreen: a window the window manager does not manage" },
     { NULL, 0, 0, NULL, NULL },
 };
 #undef YV_OFF
@@ -314,6 +320,19 @@ static int yv_opt_enum(yscr_desc* d, const yv_opt* o, const char* s, char* err, 
         len += (size_t)snprintf(list + len, sizeof list - len, "%s%s", i ? ", " : "", o->names[i].name);
     snprintf(err, cap, "%s: '%s' is not one of %s", o->name, s, list);
     return -1;
+}
+
+/* A text option (x_display, the only one). The desc holds a pointer that
+ * open() reads; the copy is static because opens run one at a time on the
+ * host's frame thread and open() keeps nothing of the string. 0, or -1. */
+static int yv_opt_str(yscr_desc* d, const yv_opt* o, const char* s, char* err, size_t cap) {
+    static char buf[256];
+    size_t n = strlen(s);
+    if (o->type != YV_STR) { snprintf(err, cap, "%s: not a text option", o->name); return -1; }
+    if (n >= sizeof buf) { snprintf(err, cap, "%s: at most %u bytes", o->name, (unsigned)(sizeof buf - 1)); return -1; }
+    memcpy(buf, s, n + 1);
+    *(const char**)((char*)d + o->off) = n ? buf : NULL;
+    return 0;
 }
 
 /* ---- the screen ------------------------------------------------------------- */

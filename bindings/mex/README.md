@@ -1580,8 +1580,9 @@ lists, groups, instances and timeline bindings of
 out by pack/layout (phase C, MEX 1.2.0; Text in ysp_gfx, below). `ysp_video` plays
 movies (Movies: ysp_video, below; [example_video.m](example_video.m)). Windows (MATLAB, Octave) and, since
 1.3.0, MATLAB on macOS 14 or later on arm64 (the METAL backend; every
-call runs on the process's main thread: below). Not Linux, not Octave on
-macOS. [example_screen.m](example_screen.m) runs a
+call runs on the process's main thread: below), and, since 1.4.0, MATLAB
+and Octave on Linux X11 (the GLX_OML backend; no ANGLE, no window
+thread). Not Wayland, not Octave on macOS. [example_screen.m](example_screen.m) runs a
 3 s frame loop in a window; [example_gfx_2afc.m](example_gfx_2afc.m) a
 two-alternative grating trial; [example_gfx_rsvp.m](example_gfx_rsvp.m)
 an RSVP stream from an atlas; [example_gfx_stroop.m](example_gfx_stroop.m)
@@ -1631,6 +1632,14 @@ copies `libEGL.dylib` and `libGLESv2.dylib` unchanged. MATLAB's
 it from `<matlabroot>/bin/maca64/mexopts/`, delete its
 `<XCODE_AGREED_VERSION>` element, and set `YSP_MEX_OPTS` to the copy's
 path before `build` (`build.m` passes it to `mex -f`).
+On Linux (MATLAB and Octave): `tools/vendor_vis.py --write --pl-mpeg --sdl
+gcc --layout gcc` (no `--angle`: GLX_OML uses the system's libGL; SDL3
+3.4.18; the X11 development packages, docs/bindings.md, "Linux X11").
+`build.m` adds MP4 through FFmpeg (`YVID_FFMPEG`) when `pkg-config` finds
+FFmpeg's development files (`YSP_VIS_FFMPEG=0` leaves it out, `=1`
+requires it), and copies the license notices only. Checked on 2026-11-06
+with MATLAB R2024a and Octave 7.3 on Debian 12: the four simulated-display
+tests and `test_mex_vis_window.m` pass in both.
 
 **The main thread on macOS.** MATLAB runs MEX functions on a thread of
 its own, never on the main thread (R2026b: the desktop, `-nodesktop`,

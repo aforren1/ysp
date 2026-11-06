@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ysp-vis"
-version = "0.17.0"  # ysp/screen.h's YSCR_VERSION_STRING (0.17.0: the Linux X11 backend, GLX_OML, merged over 0.16.1, and ysp/video.h 0.8.0, FFmpeg on Linux; 0.16.1: the macOS raw mouse reader drops stale values; 0.16.0: the panic, raw mice, the gamma table and the code risk on macOS; 0.15.0 carried macOS arm64, ysp/gfx.h 0.17.3 and ysp/video.h 0.7.0); a fourth number for a change of the binding, gfx.h or video.h alone (docs/bindings.md, ysp-vis); tests/test_screen_sim.py checks it
+version = "0.17.0.1"  # ysp/screen.h's YSCR_VERSION_STRING (0.17.0.1: the binding on Linux X11, GLX_OML; 0.17.0: the Linux X11 backend, GLX_OML, merged over 0.16.1, and ysp/video.h 0.8.0, FFmpeg on Linux; 0.16.1: the macOS raw mouse reader drops stale values; 0.16.0: the panic, raw mice, the gamma table and the code risk on macOS; 0.15.0 carried macOS arm64, ysp/gfx.h 0.17.3 and ysp/video.h 0.7.0); a fourth number for a change of the binding, gfx.h or video.h alone (docs/bindings.md, ysp-vis); tests/test_screen_sim.py checks it
 description = "A stimulus display with flip at a time and a record of every flip (ysp/screen.h), its stimuli (ysp/gfx.h) and movies (ysp/video.h)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -13,14 +13,14 @@ license = "MIT-0"
 # through their tables, which accept another patch and refuse another
 # major.minor (docs/bindings.md, "Versions of a table").
 dependencies = ["ysp-audio>=0.9,<0.10", "ysp-timeline>=0.8.1,<0.9"]
-classifiers = ["Operating System :: Microsoft :: Windows", "Operating System :: MacOS"]
+classifiers = ["Operating System :: Microsoft :: Windows", "Operating System :: MacOS", "Operating System :: POSIX :: Linux"]
 
 # The C extension is declared in setup.py as ysp._vis; ysp/screen.py, gfx.py
 # and video.py re-export from it. `ysp` is a PEP 420 namespace package: no
 # __init__.py is shipped. SDL3 is linked statically; ANGLE's two libraries
-# (.dll on Windows, .dylib on macOS) and the license notices of SDL3 (zlib),
-# ANGLE (BSD), pl_mpeg (MIT) and the text layout are installed beside the
-# extension (setup.py, BuildExt).
+# (.dll on Windows, .dylib on macOS; Linux has none) and the license notices
+# of SDL3 (zlib), ANGLE (BSD), pl_mpeg (MIT) and the text layout are
+# installed beside the extension (setup.py, BuildExt).
 
 [tool.cibuildwheel]
 # abi3: one cp310-abi3 wheel, built and tested on cp310 (CPython 3.10+).

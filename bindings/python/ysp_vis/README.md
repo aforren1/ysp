@@ -20,16 +20,19 @@ and draws text (phase C, 0.10.2.1; [Text](#text-yspgfx), below).
 
 Phase B, movies (0.10.1.1): `ysp.video` binds ysp/video.h's movies (frame
 sequences, MPEG-1 through pl_mpeg, MP4 through Media Foundation or, on
-macOS, AVFoundation), their
+macOS, AVFoundation, or, on Linux, FFmpeg in a build with it), their
 soundtrack on a `ysp.audio.Audio`, the frame sequence writer and the index
 maker (How to play a movie, below).
 
-**Windows x64 and macOS arm64** (macOS 14 or later, the METAL backend;
-from 0.15.0; 0.16.0 adds the panic watchdog, raw mice and the gamma
-table there, with no change to the binding's calls). Linux is not supported: ysp/screen.h's X11 and Wayland backends
-are stubs. The wheels are `cp310-abi3-win_amd64` and
-`cp310-abi3-macosx_14_0_arm64`: one build each for CPython 3.10 and later.
-On macOS a window screen runs on the main thread only ([Threads](#threads)).
+**Windows x64, macOS arm64 and Linux x86_64 on X11** (macOS 14 or later,
+the METAL backend, from 0.15.0; 0.16.0 adds the panic watchdog, raw mice
+and the gamma table there, with no change to the binding's calls; Linux
+X11, the GLX_OML backend, from 0.17.0.1). Wayland is not supported:
+ysp/screen.h's Wayland backend is a stub. The wheels are
+`cp310-abi3-win_amd64` and `cp310-abi3-macosx_14_0_arm64`: one build each
+for CPython 3.10 and later. Linux has no wheel yet: build from source
+([Linux](#linux)). On macOS a window screen runs on the main thread only
+([Threads](#threads)).
 
 ## What the wheel holds
 
@@ -48,6 +51,27 @@ b4f8ea825136) from the Electron v43.8.3 release for darwin-arm64, copied
 unchanged (their SHA-256 is `tools/vendor_vis.py`'s). The license files
 are the same. SDL3 and the text layout are static there too, built for
 macOS 14, so the extension imports system libraries only.
+
+## Linux
+
+A build from source, from the repository root, in an X session:
+
+```sh
+uv run --no-project python tools/vendor_layout.py --write
+uv run --no-project python tools/vendor_vis.py --write --sdl gcc --pl-mpeg --layout gcc
+pip install ./bindings/python/ysp_audio ./bindings/python/ysp_timeline ./bindings/python/ysp_vis
+```
+
+`tools/vendor_vis.py` builds SDL3 3.4.18 (X11 needs it; 3.4.0 can end the
+process on an X error) and needs the X11 development packages (Debian:
+`libx11-dev libxext-dev libxrandr-dev libxi-dev libxfixes-dev
+libxcursor-dev libxss-dev`). The extension is `ysp/_vis.abi3.so` with SDL3
+and the text layout static; there is no ANGLE: the GLX_OML backend loads
+the system's libGL, libX11 and libxcb at run time. MP4 plays through
+FFmpeg when the build finds FFmpeg's development files with `pkg-config`
+(`YSP_VIS_FFMPEG=0` leaves it out, `=1` requires it); the extension then
+needs the FFmpeg libraries of the same major versions at run time
+(docs/bindings.md, "Linux X11").
 
 The extension always loads ANGLE from its own directory
 (`desc.angle_dir`), so another ANGLE in the process (MATLAB's, a Qt
@@ -176,7 +200,7 @@ a path or bytes (None: `path + ".yspvi"`), `timeline` a
 `ysp.timeline.Timeline` whose `base=` (1 to 7) is the movie clock. The
 options are the header's desc (`ysp.video.options()` lists them): `loop`,
 `ahead`, `preroll`, `lead`, `light` (`'auto'`, `'codes'`, `'eotf'`),
-`chroma`, `backend` (`'auto'`, `'seq'`, `'plmpeg'`, `'mf'`), `hw_decode`
+`chroma`, `backend` (`'auto'`, `'seq'`, `'plmpeg'`, `'mf'`, `'avf'`, `'ffmpeg'`), `hw_decode`
 (`'auto'`, `'off'`, `'dxva'`, `'videotoolbox'` on macOS, `'vaapi'` on Linux with FFmpeg), `strict_cadence`, `inline_decode`,
 `inline_budget`, `refresh_num`, `refresh_den`, `movie_index`, `min_tier`,
 `pin_cpu`. Opening releases the GIL.
@@ -247,9 +271,11 @@ fullscreen, 2.5 s in a window. Keyword options only;
 | `windowed`, `size` | a window of `(w, h)` pixels in place of the full screen |
 | `display` | a display's `id` from `displays()`; 0 = the primary |
 | `mode` | a `Mode` from `modes()` to switch to; none = the desktop mode |
-| `backend` | `'auto'` (Windows: COMPOSITION where it runs, else DXGI_FLIP; macOS: METAL), `'dxgi_flip'`, `'composition'`, `'metal'` (macOS), `'sim'` (no window: tests) |
+| `backend` | `'auto'` (Windows: COMPOSITION where it runs, else DXGI_FLIP; macOS: METAL; Linux: GLX_OML in an X session), `'dxgi_flip'`, `'composition'`, `'glx_oml'` (Linux X11), `'metal'` (macOS), `'sim'` (no window: tests) |
+| `x_display` | Linux X11: the X display and screen, `':0.1'`; none = `$DISPLAY`. One X screen per process: SDL 3 drives one |
+| `x11_override_redirect` | Linux X11, fullscreen: a window the window manager does not manage (ysp/screen.h, BACKENDS) |
 | `color_depth` | 8 (0 = 8), or 10 on METAL (a BGR10A2 layer) |
-| `window_thread` | `'auto'` (on), `'on'`, `'off'` |
+| `window_thread` | `'auto'` (on Windows; off on macOS and Linux X11), `'on'`, `'off'` |
 | `lead` | `flip_at()`'s snap: 0.5 (the nearest vblank) by default; -1 never early |
 | `onset_offset` | seconds added to every onset (a photodiode's measured delay) |
 | `depth`, `depth_learn` | the depth pin (1 to 8) and the opt-in learner |
@@ -427,7 +453,7 @@ fallback list. For each run of one script, the files that support it are
 tried in order, and the first that has the character draws it. A text's
 `font=` is a `Font`, a path or a list of paths (made once per `Gfx` and
 kept), or none: the system's sans font, Segoe UI, else Arial (macOS:
-Arial, else Helvetica). No font file is in the wheel: each system has
+Arial, else Helvetica; Linux: DejaVu Sans, else Liberation Sans). No font file is in the wheel: each system has
 these, and a bundled file would be another pin and another license to
 carry; give a file to have the same glyphs on every machine. `f.info` gives each
 file's name, face, SHA-256 and metrics, and `t.stamp` (and `f.stamp()`)
@@ -544,14 +570,18 @@ window screen's open from a thread without a window. CI runs the
 simulated tests only. On the M2 Mac mini (macOS 27.0.1, 2026-11-05,
 CPython 3.12.16, the wheel built with `uv build`): 69 passed, 24 skipped
 (the Segoe UI text tests, the ffmpeg clips, the sound) with
-`YSP_VIS_WINDOW=1`.
+`YSP_VIS_WINDOW=1`. On Linux X11 it checks the GLX_OML backend in place of
+ANGLE, and that every flip of the window is a Present copy at tier 2. On the
+Linux desktop (Debian 12, RX 6600, 2026-11-06, CPython 3.12.14): 91 passed,
+2 skipped (macOS only) with `YSP_VIS_WINDOW=1` and `YSP_VIS_AUDIO=1`.
 
 `test_text_sim.py` checks text on the simulated display: fonts by path,
 bytes and fallback list, bidi, wrapping, spans, a change of text between
 trials and its refusals, the glyph, word and line boxes and hit tests,
 texts in lists and bindings, degrees, and the lifetime rules. It uses
-Windows's Segoe UI, Arial and Microsoft YaHei, and skips what needs a
-missing one. `YSP_VIS_WINDOW=1 pytest .../test_text_window.py`: two texts
+Windows's Segoe UI, Arial and Microsoft YaHei (on Linux DejaVu Sans,
+Liberation Sans and Droid Sans Fallback), and skips what needs a missing
+one. `YSP_VIS_WINDOW=1 pytest .../test_text_window.py`: two texts
 made through `ysp.gfx` (Latin; and Latin, CJK and Arabic from a fallback
 list, wrapped, with a colored span, turned 20 degrees) draw the same scene,
 bit for bit, as the same texts made in C with pack/layout and

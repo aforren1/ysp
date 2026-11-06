@@ -7,20 +7,30 @@ function test_mex_vis_text()
 %   glyphs, words and lines, hit tests, texts in lists and bindings, the
 %   refusals, and the lifetime rules (closing the gfx frees the handles;
 %   'free' refuses a font a text uses). Needs Segoe UI, Arial and Microsoft
-%   YaHei (Windows's). Build first (build.m). Prints PASS with the number
-%   of checks. This file is UTF-8.
+%   YaHei (Windows's), or on Linux DejaVu Sans, Liberation Sans and Droid
+%   Sans Fallback in their place. Build first (build.m). Prints PASS with
+%   the number of checks. This file is UTF-8.
 
     global YSP_TEXT_CHECKS %#ok<GVMIS>
     YSP_TEXT_CHECKS = 0;
     addpath(fileparts(mfilename('fullpath')));
-    fonts = fullfile(getenv('WINDIR'), 'Fonts');
-    segoe = fullfile(fonts, 'segoeui.ttf');
-    arial = fullfile(fonts, 'arial.ttf');
-    yahei = fullfile(fonts, 'msyh.ttc');
+    if isunix && ~ismac
+        % segoe is the system's default font on both (ysp_vis_text.h, yv_default_font_path)
+        segoe = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf';
+        arial = '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf';
+        yahei = '/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf';
+    else
+        fonts = fullfile(getenv('WINDIR'), 'Fonts');
+        segoe = fullfile(fonts, 'segoeui.ttf');
+        arial = fullfile(fonts, 'arial.ttf');
+        yahei = fullfile(fonts, 'msyh.ttc');
+    end
+    [~, n, e] = fileparts(segoe); segoe_name = [n e];
+    [~, n, e] = fileparts(arial); arial_name = [n e];
     has_cjk = exist(yahei, 'file') == 2;   % a machine without YaHei: the fallback checks are skipped
     if ~has_cjk
+        disp(['no ' yahei ': the CJK fallback checks are skipped']);
         yahei = arial;
-        disp(['no ' fullfile(fonts, 'msyh.ttc') ': the CJK fallback checks are skipped']);
     end
     is_octave = exist('OCTAVE_VERSION', 'builtin') ~= 0;
 
@@ -36,7 +46,7 @@ function test_mex_vis_text()
           ysp_gfx('get', t, 'missing') == 0 && strcmp(ysp_gfx('get', t, 'align'), 'center'), 'size, glyphs, lines, align');
     check(isequal(ysp_gfx('get', t, 'color'), [1 0 0]) && isempty(ysp_gfx('get', t, 'font')), 'color; the default font');
     st = ysp_gfx('get', t, 'stamp');
-    check(~isempty(strfind(st, 'harfbuzz=14.6.0')) && ~isempty(strfind(st, 'segoeui.ttf#0=')), 'stamp: %s', st);
+    check(~isempty(strfind(st, 'harfbuzz=14.6.0')) && ~isempty(strfind(st, [segoe_name '#0='])), 'stamp: %s', st);
     check(ysp_gfx('get', t, 'layout_time') > 0, 'layout_time in seconds');
     bb = ysp_gfx('bounds', t);
     check(abs(bb(1) - (400 - b(1) / 2)) < 1e-3 && abs(bb(4) - (300 + b(2) / 2)) < 1e-3, 'centered on the screen');
@@ -94,7 +104,7 @@ function test_mex_vis_text()
     % ---- fonts: path, bytes, fallback list
     f = ysp_gfx('font', g, arial);
     fi = ysp_gfx('font_info', f);
-    check(strcmp(fi(1).name, 'arial.ttf') && fi(1).units_per_em == 2048 && numel(fi(1).sha256) == 64, 'font_info');
+    check(strcmp(fi(1).name, arial_name) && fi(1).units_per_em == 2048 && numel(fi(1).sha256) == 64, 'font_info');
     fid = fopen(arial, 'r');
     raw = fread(fid, Inf, '*uint8');
     fclose(fid);

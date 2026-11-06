@@ -8,13 +8,16 @@ closes fails cleanly; a Font lives as long as a text uses it).
 tests/test_text_window.py checks pixels against the C path in a real window
 (local only).
 
-The fonts are Windows's (Segoe UI, Arial, Microsoft YaHei): a test that
-needs one the machine lacks is skipped.
+The fonts are Windows's (Segoe UI, Arial, Microsoft YaHei), and on Linux
+DejaVu Sans, Liberation Sans and Droid Sans Fallback in their place: a test
+that needs one the machine lacks is skipped. SEGOE is the system's default
+font on both (ysp_vis_text.h, yv_default_font_path).
 """
 import gc
 import hashlib
 import math
 import os
+import sys
 
 import pytest
 
@@ -22,10 +25,15 @@ import ysp.gfx as ygfx
 import ysp.screen as yscr
 import ysp.timeline as ytl
 
-FONTS = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts")
-SEGOE = os.path.join(FONTS, "segoeui.ttf")
-ARIAL = os.path.join(FONTS, "arial.ttf")
-YAHEI = os.path.join(FONTS, "msyh.ttc")
+if sys.platform.startswith("linux"):
+    SEGOE = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+    ARIAL = "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"
+    YAHEI = "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf"
+else:
+    FONTS = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts")
+    SEGOE = os.path.join(FONTS, "segoeui.ttf")
+    ARIAL = os.path.join(FONTS, "arial.ttf")
+    YAHEI = os.path.join(FONTS, "msyh.ttc")
 
 
 def need(*paths):
@@ -69,7 +77,7 @@ def test_a_text_and_its_layout(sg):
     # the stamp: the layout's versions and the font's SHA-256
     with open(SEGOE, "rb") as f:
         sha = hashlib.sha256(f.read()).hexdigest()
-    assert "skribidi=dee63d6" in t.stamp and "harfbuzz=14.6.0" in t.stamp and ("segoeui.ttf#0=" + sha) in t.stamp
+    assert "skribidi=dee63d6" in t.stamp and "harfbuzz=14.6.0" in t.stamp and (os.path.basename(SEGOE) + "#0=" + sha) in t.stamp
     # the box is centered on the screen (800 x 600), as every stimulus's
     x0, y0, x1, y1 = t.bounds()
     assert x0 == pytest.approx(400 - w / 2) and y1 == pytest.approx(300 + h / 2)
@@ -137,14 +145,14 @@ def test_fonts_paths_bytes_lists(sg):
     s, g = sg
     need(ARIAL)
     f = g.font(ARIAL)
-    assert isinstance(f, ygfx.Font) and f.info[0]["name"] == "arial.ttf" and f.info[0]["units_per_em"] == 2048
+    assert isinstance(f, ygfx.Font) and f.info[0]["name"] == os.path.basename(ARIAL) and f.info[0]["units_per_em"] == 2048
     with open(ARIAL, "rb") as fp:
         raw = fp.read()
     assert f.info[0]["sha256"] == hashlib.sha256(raw).hexdigest()
     fb = g.font(raw, name="Arial (bytes)")
     assert fb.info[0]["sha256"] == f.info[0]["sha256"] and fb.info[0]["name"] == "Arial (bytes)"
     t = g.text("Arial", font=f, size=30)
-    assert t.font is f and "arial.ttf#0=" in t.stamp
+    assert t.font is f and (os.path.basename(ARIAL) + "#0=") in t.stamp
     t2 = g.text("Arial", font=fb, size=30)
     assert t2.box == t.box                                   # the same bytes, the same layout
     # a path: the gfx makes the font once and keeps it
@@ -160,7 +168,7 @@ def test_fonts_paths_bytes_lists(sg):
         assert c.missing == 0 and c.n_runs == 2
         c2 = g.text("abc 中文", font=[SEGOE, YAHEI], size=30)  # a list of paths: made once too
         assert c2.missing == 0 and c2.box == c.box
-        assert [i["name"] for i in fl.info] == ["segoeui.ttf", "msyh.ttc"]
+        assert [i["name"] for i in fl.info] == [os.path.basename(SEGOE), os.path.basename(YAHEI)]
         frame(s, g, m, c, c2)
     with pytest.raises(yscr.Error, match="does not open"):
         g.font("C:/no/such/font.ttf")
@@ -323,7 +331,7 @@ def test_lifetime(sg):
     t = g.text("kept", font=f)
     del f
     gc.collect()
-    assert t.font.info[0]["name"] == "arial.ttf"             # the text holds its Font
+    assert t.font.info[0]["name"] == os.path.basename(ARIAL)             # the text holds its Font
     frame(s, g, t)
     w = t.words()
     g.close()

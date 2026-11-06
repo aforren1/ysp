@@ -8,7 +8,10 @@ through the window thread, idles 6 s without any call (past the 4.1 to
 4.6 s after which Windows marks a window that pumps nothing as hung), and
 checks the frames after the gap. On macOS the backend is METAL, with no
 window thread: the window's calls run on the main thread, which runs the
-test; a call from another thread on the open screen is refused.
+test; a call from another thread on the open screen is refused. On Linux
+the backend is GLX_OML on the X display, with no ANGLE and no window
+thread; a window is a Present copy, tier 2 (docs/screen.md, "Linux X11:
+GLX_OML").
 """
 import collections
 import os
@@ -36,6 +39,7 @@ def frames(s, g, n, color):
     return out
 
 
+LINUX = sys.platform.startswith("linux")
 # The bundled ANGLE (tools/vendor_vis.py), not another in the process.
 ANGLE = "2.1.28042/b4f8ea825136" if sys.platform == "darwin" else "2.1.25848"
 
@@ -43,8 +47,12 @@ ANGLE = "2.1.28042/b4f8ea825136" if sys.platform == "darwin" else "2.1.25848"
 def test_window_frames_records_and_idle():
     with yscr.Screen(windowed=True, size=(1280, 720)) as s, ygfx.Gfx(s, background=0.25) as g:
         line = s.describe()
-        assert ANGLE in line, line
         c = s.caps()
+        if LINUX:
+            assert c["backend"] == "glx_oml" and "backend=glx_oml" in line, line
+            assert "window_thread=off" in line, line
+        else:
+            assert ANGLE in line, line
         if sys.platform == "darwin":
             # ysp/screen.h 0.12.0 and 0.15.0 (BACKENDS, METAL; INPUT)
             assert c["backend"] == "metal" and "backend=metal" in line
@@ -72,6 +80,11 @@ def test_window_frames_records_and_idle():
             # screen gives estimated ones (tier 3)
             shown = [r for r in before if r.tier == yscr.TIER_2]
             assert len(shown) >= 100, collections.Counter(r.tier for r in before)
+        if LINUX:
+            # a window is a Present copy (PATH_COMPOSED), each with Present's
+            # time: tier 2, none estimated
+            assert all(r.path == yscr.PATH_COMPOSED and r.tier == yscr.TIER_2 for r in before + recs), \
+                collections.Counter((r.path, r.tier) for r in before + recs)
         print(line)
         print("before the gap:", collections.Counter((r.path, r.tier) for r in before))
         print("after the gap:", [(r.index, r.dropped, r.path, r.tier, hex(r.flags)) for r in recs[:5]])
@@ -155,11 +168,14 @@ def test_instances_match_single_stimuli():
 
 def test_text_with_the_system_font():
     # The default font: Segoe UI or Arial on Windows, Arial or Helvetica on
-    # macOS (bindings/share/ysp_vis_text.h, yv_default_font_path).
+    # macOS, DejaVu Sans or Liberation Sans on Linux
+    # (bindings/share/ysp_vis_text.h, yv_default_font_path).
     with yscr.Screen(windowed=True, size=(800, 600)) as s, ygfx.Gfx(s, background=0.5) as g:
         empty = scene(s, g, lambda: None)
         t = g.text("Hello, world", size=40, color=(1.0, 1.0, 1.0))
         assert t.n_glyphs == 12 and t.missing == 0
-        assert ("Arial.ttf#0=" if sys.platform == "darwin" else "segoeui.ttf#0=") in t.stamp, t.stamp
+        want = {"darwin": ("Arial.ttf#0=",), "win32": ("segoeui.ttf#0=",)}.get(
+            sys.platform, ("DejaVuSans.ttf#0=", "LiberationSans-Regular.ttf#0="))
+        assert any(w in t.stamp for w in want), t.stamp
         b = scene(s, g, lambda: g.draw(t))
         assert b != empty

@@ -15,8 +15,10 @@ function test_mex_vis_window()
 %   call on the main thread: ysp_vis.c, MAIN THREAD) the window has no
 %   window thread, the pause leaves it without a call, and the caps say
 %   METAL's depth, margin and NSEvent stamps; a text in the system font
-%   (Arial) draws. About 25 s. Prints PASS with the number of checks. This
-%   file is UTF-8.
+%   (Arial) draws. On Linux X11 (GLX_OML, no ANGLE, no window thread) the
+%   window's flips are Present copies at tier 2, and the texts of the C
+%   path use DejaVu Sans and Droid Sans Fallback. About 25 s. Prints PASS
+%   with the number of checks. This file is UTF-8.
 
     global YSP_VISW_CHECKS %#ok<GVMIS>
     YSP_VISW_CHECKS = 0;
@@ -26,11 +28,17 @@ function test_mex_vis_window()
     try
         g = ysp_gfx('open', h, 0.25);
         line = ysp_screen('describe', h);
+        is_linux = isunix && ~ismac;
         angle = '2.1.25848';
         if ismac
             angle = '2.1.28042/b4f8ea825136';
         end
-        check(~isempty(strfind(line, angle)), 'the bundled ANGLE: %s', line);
+        if is_linux
+            c = ysp_screen('caps', h);
+            check(strcmp(c.backend, 'glx_oml') && ~isempty(strfind(line, 'backend=glx_oml')), 'GLX_OML: %s', line);
+        else
+            check(~isempty(strfind(line, angle)), 'the bundled ANGLE: %s', line);
+        end
         if ismac
             c = ysp_screen('caps', h);
             check(strcmp(c.backend, 'metal') && c.max_in_flight == 2 && c.margin_ns == int64(2000000) && ...
@@ -48,6 +56,10 @@ function test_mex_vis_window()
         if ismac
             % shown flips are tier 2 (presentedTime); a locked screen gives none
             check(sum([r.tier] == 2) >= 100, '%d of 120 flips shown (tier 2)', sum([r.tier] == 2));
+        end
+        if is_linux
+            % a window is a Present copy (PATH_COMPOSED) with Present's time
+            check(all([r.path] == 1) && all([r.tier] == 2), 'Present copies at tier 2');
         end
         fprintf('before the pause: paths %s, tiers %s\n', mat2str(unique([r.path])), mat2str(unique([r.tier])));
         pause(6);                                  % no call: the window thread keeps the window alive
@@ -71,7 +83,7 @@ function test_mex_vis_window()
     check(info.users == 0 && info.screens == 0 && info.gfx == 0, 'the last clear closed the window');
     clear ysp_vis;
     pixel_check(granted);
-    if ispc
+    if ispc || (isunix && ~ismac)
         text_check();
     else
         text_default_check();
@@ -186,12 +198,20 @@ end
 % The texts of the C path (yv_ctext_setup() in bindings/share/ysp_vis_text.h)
 % made through ysp_gfx, compared scene by scene.
 function text_check()
-    fonts = fullfile(getenv('WINDIR'), 'Fonts');
+    % the system's default font and the C path's CJK fallback
+    % (ysp_vis_text.h, yv_default_font_path and yv_ctext_cjk_path)
+    if ispc
+        fonts = fullfile(getenv('WINDIR'), 'Fonts');
+        files = {fullfile(fonts, 'segoeui.ttf'), fullfile(fonts, 'msyh.ttc')};
+    else
+        files = {'/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', ...
+                 '/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf'};
+    end
     h = ysp_screen('open', 'windowed', true, 'size', [800 600]);
     try
         g = ysp_gfx('open', h, 'background', 0.25);
         ysp_gfx('_c_text_setup', g);
-        f = ysp_gfx('font', g, {fullfile(fonts, 'segoeui.ttf'), fullfile(fonts, 'msyh.ttc')});
+        f = ysp_gfx('font', g, files);
         tw = [ysp_gfx('text', g, 'Hello, world', 'size', 40, 'x', -120, 'y', -80, 'color', [0.9 0.6 0.2]), ...
               ysp_gfx('text', g, 'Ab 中文 مرحبا 12', 'font', f, 'size', 36, 'width', 220, 'align', 'start', ...
                       'line_height', 1.2, 'spans', [1 2 0.1 0.8 0.2 0], 'color', [0.8 0.8 0.8], 'ori', 20, ...

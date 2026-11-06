@@ -551,18 +551,23 @@ def mp4(tmp_path_factory):
     try:
         n = yvid.make_index(p, matrix="bt709", range="limited", transfer="bt1886", primaries="bt709", siting="left")
     except yvid.Error as e:
-        pytest.skip("Media Foundation: %s" % e)
+        pytest.skip("this build's MP4 backend: %s" % e)
     assert n == 60
     return p
 
 
-def test_mp4_media_foundation(sim, mp4):
+# The MP4 backend of each platform (ysp/video.h, BACKENDS); on Linux only
+# in a build with FFmpeg (setup.py, YSP_VIS_FFMPEG).
+MP4_BACKEND = {"win32": "mf", "darwin": "avf"}.get(sys.platform, "ffmpeg")
+
+
+def test_mp4(sim, mp4):
     s, g = sim
     i = yvid.probe(mp4)
     assert (i["codec"], i["format"], i["frames"], i["fps_num"], i["fps_den"]) == ("h264", "nv12", 60, 30, 1)
     for hw in ("off", "auto"):
         with yvid.Movie(g, mp4, hw_decode=hw) as m:
-            assert m.info["backend"] == "mf"
+            assert m.info["backend"] == MP4_BACKEND
             m.play()
             play_all(s, g, m)
             assert m.records()[-1].frame == 59

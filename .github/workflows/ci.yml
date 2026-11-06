@@ -624,9 +624,9 @@ jobs:
 
   # --------------------------------------------------------------------- #
   # ysp-vis (docs/bindings.md): ysp/screen.h, ysp/gfx.h and ysp/video.h   #
-  # in one Python extension and one MEX core, Windows here and macOS      #
-  # arm64 in vis-macos below (the X11 and Wayland screen backends are     #
-  # stubs). The natives come from tools/vendor_vis.py                     #
+  # in one Python extension and one MEX core, Windows here, macOS arm64   #
+  # in vis-macos and Linux X11 in vis-linux below (Wayland's screen       #
+  # backend is a stub). The natives come from tools/vendor_vis.py         #
   # (a static SDL3 built from the 3.4.0 tarball, ANGLE from the Electron  #
   # zip of the screen job; every download checked by SHA-256; the text    #
   # layout as static libraries from third_party/'s pinned trees), cached  #
@@ -818,6 +818,84 @@ jobs:
             bindings/mex/libEGL.dylib
             bindings/mex/libGLESv2.dylib
             bindings/mex/ysp_vis-LICENSE.*.txt
+
+  # --------------------------------------------------------------------- #
+  # ysp-vis on Linux X11 (the GLX_OML backend), in Debian 12, the system  #
+  # of the Linux desktop that ran it (docs/bindings.md, ysp-vis).         #
+  # tools/vendor_vis.py builds the static SDL3 3.4.18 and the text layout #
+  # with the system's gcc; there is no ANGLE (GLX_OML loads the system's  #
+  # libGL at run time). YSP_VIS_FFMPEG=1 makes the build fail without     #
+  # FFmpeg 5.1's headers, so MP4 is never left out by accident. The       #
+  # Python tests and the Octave 7.3 MEX tests run on the simulated        #
+  # display. No wheel is kept: one built here is not a manylinux wheel.   #
+  # Nothing here is a timing claim.                                       #
+  # --------------------------------------------------------------------- #
+  vis-linux:
+    name: ysp-vis (Linux X11, Debian 12)
+    runs-on: ubuntu-latest
+    container: debian:bookworm
+    env:
+      YSP_VIS_FFMPEG: "1"
+    steps:
+      # The X11 headers are for SDL3's X11 driver (tools/vendor_vis.py
+      # refuses a build without XRandR, XInput2 or XFixes); the fonts are
+      # the defaults and the stand-ins the text tests use on Linux.
+      - name: Build tools, X11 and FFmpeg headers, Octave 7.3, fonts
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates git curl build-essential cmake ninja-build \
+            pkg-config python3 python3-venv python3-dev \
+            libx11-dev libxext-dev libxrandr-dev libxi-dev libxfixes-dev libxcursor-dev libxss-dev \
+            libavformat-dev libavcodec-dev libavutil-dev ffmpeg octave octave-dev \
+            fonts-dejavu-core fonts-liberation fonts-droid-fallback
+
+      - uses: actions/checkout@v7
+
+      - name: Layout sources cache
+        uses: actions/cache@v6
+        with:
+          path: ~/ysp-layout-tarballs
+          key: layout-${{ hashFiles('third_party/MANIFEST.sha256', 'third_party/patches/*', 'tools/vendor_layout.py') }}
+
+      - name: Layout sources
+        run: python3 tools/vendor_layout.py --write --cache ~/ysp-layout-tarballs
+
+      - name: Natives cache
+        id: viscache
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/ysp-vis-downloads
+            third_party/vis
+          key: vis-natives-linux-bookworm-${{ hashFiles('tools/vendor_vis.py', 'tools/vis_layout/CMakeLists.txt', 'third_party/CMakeLists.txt', 'third_party/MANIFEST.sha256', 'third_party/patches/*', 'pack/layout.c', 'pack/ysp/layout.h', 'include/ysp/outline.h') }}-v1
+
+      - name: Natives (static SDL3 3.4.18 and text layout with gcc; pl_mpeg)
+        if: steps.viscache.outputs.cache-hit != 'true'
+        run: python3 tools/vendor_vis.py --write --sdl gcc --pl-mpeg --layout gcc --cache ~/ysp-vis-downloads
+
+      - name: Natives check
+        run: python3 tools/vendor_vis.py
+
+      - name: miniaudio.h
+        run: |
+          set -eu
+          mkdir -p bindings/python/ysp_audio/include bindings/mex/miniaudio
+          curl -sSfL -o bindings/mex/miniaudio/miniaudio.h https://raw.githubusercontent.com/mackron/miniaudio/0.11.25/miniaudio.h
+          echo "ac7af4de748b7e26b777f37e01cee313a308a7296a3eb080e2906b320cc55c89  bindings/mex/miniaudio/miniaudio.h" | sha256sum -c -
+          cp bindings/mex/miniaudio/miniaudio.h bindings/python/ysp_audio/include/
+
+      - name: Python build and test (simulated display)
+        run: |
+          set -eu
+          python3 -m venv /opt/venv
+          /opt/venv/bin/pip install -q pytest numpy
+          /opt/venv/bin/pip install ./bindings/python/ysp_audio ./bindings/python/ysp_timeline ./bindings/python/ysp_color ./bindings/python/ysp_vis
+          /opt/venv/bin/python -m pytest -q bindings/python/ysp_vis/tests
+
+      - name: Octave MEX build and test (simulated display)
+        working-directory: bindings/mex
+        run: |
+          octave-cli -q --eval "build('audio'); build('timeline'); build('vis'); build('screen'); build('gfx'); build('video'); test_mex_vis; test_mex_vis_gfx; test_mex_video; test_mex_vis_text"
 
   # --------------------------------------------------------------------- #
   # Octave: build every MEX with mkoctfile and smoke-test.                #

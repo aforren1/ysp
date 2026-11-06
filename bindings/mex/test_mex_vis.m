@@ -20,17 +20,25 @@ function test_mex_vis()
 
     % ---- versions and the core
     [bv, hv] = ysp_screen('version');
-    check(strcmp(bv, '1.3.0') && ~isempty(regexp(hv, '^\d+\.\d+\.\d+$', 'once')), 'version: binding %s, header %s', bv, hv);
+    check(strcmp(bv, '1.4.0') && ~isempty(regexp(hv, '^\d+\.\d+\.\d+$', 'once')), 'version: binding %s, header %s', bv, hv);
     [~, gv] = ysp_gfx('version');
     [~, vv] = ysp_video('version');
     info = ysp_vis('info');
     check(info.users == 3 && strcmp(info.screen_h, hv) && strcmp(info.gfx_h, gv) && strcmp(info.video_h, vv), ...
           'the core: three thin files attached, the headers'' versions');
-    check(strcmp(info.sdl, '3.4.0'), 'static SDL3 3.4.0 (got %s)', info.sdl);
+    is_linux = isunix && ~ismac;
+    sdl = '3.4.0';
+    if is_linux, sdl = '3.4.18'; end   % X11 needs 3.4.18 (tools/vendor_vis.py)
+    check(strcmp(info.sdl, sdl), 'static SDL3 %s (got %s)', sdl, info.sdl);
     dll = '.dll';
     if ismac, dll = '.dylib'; end
-    check(exist(fullfile(info.module_dir, ['libEGL' dll]), 'file') == 2 && ...
-          exist(fullfile(info.module_dir, ['libGLESv2' dll]), 'file') == 2, 'ANGLE beside the core: %s', info.module_dir);
+    if is_linux
+        % no ANGLE: GLX_OML uses the system's libGL
+        check(isempty(dir(fullfile(info.module_dir, 'libEGL*'))), 'no ANGLE beside the core on Linux: %s', info.module_dir);
+    else
+        check(exist(fullfile(info.module_dir, ['libEGL' dll]), 'file') == 2 && ...
+              exist(fullfile(info.module_dir, ['libGLESv2' dll]), 'file') == 2, 'ANGLE beside the core: %s', info.module_dir);
+    end
     check(strcmp(info.module_dir, here), 'the core''s directory is this one: %s', info.module_dir);
     check(exist(fullfile(here, 'SDL3.dll'), 'file') ~= 2 && isempty(dir(fullfile(here, 'libSDL3*'))), ...
           'no SDL3 library beside the MEX files (linked statically)');

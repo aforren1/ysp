@@ -9,6 +9,7 @@
     uv run --no-project python tools/vendor_vis.py --write --layout msvc    # text layout, MSVC
     uv run --no-project python tools/vendor_vis.py --write --layout mingw --mingw-bin DIR
     uv run --no-project python tools/vendor_vis.py --write --angle --sdl clang --pl-mpeg --layout clang   # macOS
+    uv run --no-project python tools/vendor_vis.py --write --sdl gcc --pl-mpeg --layout gcc               # Linux
     ... --cache DIR       keep the downloads between runs (CI)
 
 What it makes on Windows:
@@ -44,8 +45,24 @@ What it makes on macOS (arm64, macOS 14 and later: the METAL backend):
     third_party/vis/layout/clang/ the text layout, Apple clang, 14.0
     third_party/vis/pl_mpeg/      as on Windows
 
-Linux has no natives here: ysp/screen.h's X11 and Wayland backends are
-stubs.
+What it makes on Linux (x86_64, X11: the GLX_OML backend):
+
+    third_party/vis/sdl3/gcc/     include/SDL3/, lib/libSDL3.a: SDL3 3.4.18,
+                                  not 3.4.0 (before 3.4.18 SDL's X11 event
+                                  handler can end the process on an X error,
+                                  docs/screen.md), position-independent, with
+                                  the X11 video driver and its XRandR, XInput2
+                                  and XFixes parts (the build refuses without
+                                  them) and without Wayland (ysp/screen.h's
+                                  Wayland backend is a stub). Needs the X11
+                                  development packages (Debian: libx11-dev
+                                  libxext-dev libxrandr-dev libxi-dev
+                                  libxfixes-dev libxcursor-dev libxss-dev)
+    third_party/vis/layout/gcc/   the text layout, position-independent
+    third_party/vis/pl_mpeg/      as on Windows
+
+No ANGLE on Linux: GLX_OML makes a GL ES 3.0 context through the system's
+libGL, which ysp/screen.h loads at run time with libX11 and libxcb.
 
 Why static SDL3: a module that imports SDL3.dll binds to any SDL3.dll
 already loaded in the process (docs/av_probe.md, section 5). Why ANGLE from
@@ -119,6 +136,19 @@ ANGLE_MAC_FILES = {
 }
 # ysp's floor (README; CMakePresets.json macos-base, ci.yml).
 MACOS_TARGET = "14.0"
+
+# Linux: SDL3 3.4.18, the version ysp/screen.h asks for on X11 (BACKENDS,
+# GLX_OML) and the pin of ci.yml's screen job. Windows and macOS keep 3.4.0.
+SDL_LINUX_VERSION = "3.4.18"
+SDL_LINUX_URL = "https://github.com/libsdl-org/SDL/releases/download/release-%s/SDL3-%s.tar.gz" % (
+    SDL_LINUX_VERSION, SDL_LINUX_VERSION)
+SDL_LINUX_SHA256 = "9c75cf16330322c217dedd2e0609f1124f1b54b8633e763467b4684d0f4334a3"   # GitHub's digest of the asset
+# What SDL's X11 driver must have been built with: XRandR lists the displays
+# and modes (yscr_displays(), yscr_modes()); XInput2 and XFixes give the
+# relative mouse and the grab. Without the development packages SDL's
+# configure leaves them out without an error.
+SDL_LINUX_NEED = ["SDL_VIDEO_DRIVER_X11", "SDL_VIDEO_DRIVER_X11_XRANDR", "SDL_VIDEO_DRIVER_X11_XINPUT2",
+                  "SDL_VIDEO_DRIVER_X11_XFIXES"]
 
 # pl_mpeg has no release tags: the pin is a commit and the file's SHA-256,
 # the same as CMakeLists.txt's YSP_FETCH_PL_MPEG and tools/vendor_pack.py.
@@ -376,11 +406,15 @@ def compiler_id(toolchain, mingw_bin, env):
     if toolchain == "clang":
         v = subprocess.run(["clang", "--version"], capture_output=True, text=True).stdout.splitlines()
         return "%s, MACOSX_DEPLOYMENT_TARGET %s, arm64" % (v[0] if v else "clang", MACOS_TARGET)
+    if toolchain == "gcc":
+        v = subprocess.run(["gcc", "--version"], capture_output=True, text=True).stdout.splitlines()
+        g = subprocess.run(["ldd", "--version"], capture_output=True, text=True).stdout.splitlines()
+        return "%s, %s" % (v[0] if v else "gcc", g[0] if g else "glibc")
     return subprocess.run([os.path.join(mingw_bin, "gcc.exe"), "-dumpfullversion"], capture_output=True, text=True,
                           env=env).stdout.strip()
 
 
-def sdl_mac_libs_private(prefix):
+def sdl_pc_libs(prefix):
     """What the build's sdl3.pc links besides libSDL3.a itself (Libs and
     Libs.private), with -Wl, spellings split into plain linker arguments."""
     with open(os.path.join(prefix, "lib", "pkgconfig", "sdl3.pc"), encoding="utf-8") as f:
@@ -395,14 +429,36 @@ def sdl_mac_libs_private(prefix):
 
 
 def check_sdl_mac_link(prefix):
-    got = sdl_mac_libs_private(prefix)
+    got = sdl_pc_libs(prefix)
     if got != SDL_MAC_LINK:
         sys.exit("error: SDL3's sdl3.pc links %r; tools/vendor_vis.py's SDL_MAC_LINK is %r: update it"
                  % (got, SDL_MAC_LINK))
 
 
+def sdl_pin(toolchain):
+    """(version, url, sha256) of the SDL3 source a toolchain builds."""
+    if toolchain == "gcc":
+        return SDL_LINUX_VERSION, SDL_LINUX_URL, SDL_LINUX_SHA256
+    return SDL_VERSION, SDL_URL, SDL_SHA256
+
+
+def check_sdl_linux(build):
+    """Refuses an SDL build whose X11 driver lacks a part SDL_LINUX_NEED names.
+    SDL_build_config.h stays in the build tree; it is not installed."""
+    found = [os.path.join(d, "SDL_build_config.h") for d, _, files in os.walk(build) if "SDL_build_config.h" in files]
+    if len(found) != 1:
+        sys.exit("error: %d SDL_build_config.h in SDL3's build tree, expected 1" % len(found))
+    with open(found[0], encoding="utf-8") as f:
+        text = f.read()
+    missing = [n for n in SDL_LINUX_NEED if not re.search(r"^#define %s\b" % n, text, re.M)]
+    if missing:
+        sys.exit("error: SDL3 was built without %s: install the X11 development packages (the docstring)"
+                 % ", ".join(missing))
+
+
 def write_sdl(toolchain, cache, mingw_bin, jobs):
-    data = download(SDL_URL, SDL_SHA256, cache)
+    version, url, want = sdl_pin(toolchain)
+    data = download(url, want, cache)
     prefix = os.path.join(OUT, "sdl3", toolchain)
     work = tempfile.mkdtemp(prefix="ysp-sdl3-%s-" % toolchain)
     try:
@@ -411,7 +467,7 @@ def write_sdl(toolchain, cache, mingw_bin, jobs):
                 t.extractall(work, filter="data")
             else:
                 t.extractall(work)
-        src = os.path.join(work, "SDL3-%s" % SDL_VERSION)
+        src = os.path.join(work, "SDL3-%s" % version)
         with open(os.path.join(src, "LICENSE.txt"), "rb") as f:
             lic = f.read()
         os.makedirs(os.path.join(OUT, "sdl3"), exist_ok=True)
@@ -443,6 +499,15 @@ def write_sdl(toolchain, cache, mingw_bin, jobs):
             env["MACOSX_DEPLOYMENT_TARGET"] = MACOS_TARGET
             run([cfg, bld, ins], env=env)
             check_sdl_mac_link(prefix)
+        elif toolchain == "gcc":
+            # Position-independent: it is linked into a shared object (the
+            # extension, the MEX file). SDL loads libX11 and its extensions
+            # at run time (SDL_X11_SHARED, its default), so the module links
+            # no X library.
+            cfg += ["-DCMAKE_C_COMPILER=gcc", "-DCMAKE_POSITION_INDEPENDENT_CODE=ON", "-DSDL_X11=ON",
+                    "-DSDL_WAYLAND=OFF"]
+            run([cfg, bld, ins], env=env)
+            check_sdl_linux(build)
         else:
             if not mingw_bin:
                 sys.exit("error: --mingw-bin DIR: the mingw64/bin of the gcc that builds the MEX files "
@@ -454,13 +519,13 @@ def write_sdl(toolchain, cache, mingw_bin, jobs):
                     "-DCMAKE_RC_COMPILER=%s/windres.exe" % mb]
             run([cfg, bld, ins], env=env)
         cc = compiler_id(toolchain, mingw_bin, env)
+        link = SDL_MAC_LINK if toolchain == "clang" else sdl_pc_libs(prefix) if toolchain == "gcc" else SDL_SYSTEM_LIBS
         with open(os.path.join(prefix, "STAMP.txt"), "w", newline="\n") as f:
             f.write("SDL3 %s static, %s\nsource %s\nsha256 %s\ncompiler %s\nlink also: %s\n" % (
-                SDL_VERSION, toolchain, SDL_URL, SDL_SHA256, cc,
-                " ".join(SDL_MAC_LINK if toolchain == "clang" else SDL_SYSTEM_LIBS)))
+                version, toolchain, url, want, cc, " ".join(link)))
     finally:
         shutil.rmtree(work, ignore_errors=True)
-    print("ok: static SDL3 %s (%s) in %s" % (SDL_VERSION, toolchain, os.path.relpath(prefix, ROOT)))
+    print("ok: static SDL3 %s (%s) in %s" % (version, toolchain, os.path.relpath(prefix, ROOT)))
 
 
 # ---- text layout (pack/layout.c and third_party/'s layout stack) -------------
@@ -523,6 +588,10 @@ def write_layout(toolchain, mingw_bin, jobs):
             env["MACOSX_DEPLOYMENT_TARGET"] = MACOS_TARGET
             run([cfg, bld, ins], env=env)
             cc = compiler_id(toolchain, mingw_bin, env)
+        elif toolchain == "gcc":
+            cfg += ["-DCMAKE_C_COMPILER=gcc", "-DCMAKE_CXX_COMPILER=g++", "-DCMAKE_POSITION_INDEPENDENT_CODE=ON"]
+            run([cfg, bld, ins], env=env)
+            cc = compiler_id(toolchain, mingw_bin, env)
         else:
             if not mingw_bin:
                 sys.exit("error: --mingw-bin DIR: the mingw64/bin of the gcc that builds the MEX files "
@@ -554,7 +623,8 @@ def write_layout(toolchain, mingw_bin, jobs):
 
 def verify():
     bad = 0
-    for name, want in (ANGLE_MAC_FILES if sys.platform == "darwin" else ANGLE_FILES).items():
+    angle = {} if sys.platform.startswith("linux") else ANGLE_MAC_FILES if sys.platform == "darwin" else ANGLE_FILES
+    for name, want in angle.items():
         p = os.path.join(OUT, "angle", name)
         if not os.path.exists(p):
             print("missing: %s (--write --angle)" % os.path.relpath(p, ROOT))
@@ -577,19 +647,20 @@ def verify():
             bad += 1
         else:
             print("ok: %s" % os.path.relpath(p, ROOT))
-    for tc, lib in (("msvc", "SDL3-static.lib"), ("mingw", "libSDL3.a"), ("clang", "libSDL3.a")):
+    for tc, lib in (("msvc", "SDL3-static.lib"), ("mingw", "libSDL3.a"), ("clang", "libSDL3.a"), ("gcc", "libSDL3.a")):
         p = os.path.join(OUT, "sdl3", tc, "lib", lib)
         stamp = os.path.join(OUT, "sdl3", tc, "STAMP.txt")
         if not os.path.exists(p):
             print("missing: %s (--write --sdl %s)" % (os.path.relpath(p, ROOT), tc))
             continue   # one toolchain is enough for one host
         with open(stamp) as f:
-            if SDL_SHA256 not in f.read():
+            if sdl_pin(tc)[2] not in f.read():
                 print("stale: %s was built from another SDL3 source" % os.path.relpath(p, ROOT))
                 bad += 1
                 continue
         print("ok: %s" % os.path.relpath(p, ROOT))
-    for tc, lib in (("msvc", "ysp_harfbuzz.lib"), ("mingw", "libysp_harfbuzz.a"), ("clang", "libysp_harfbuzz.a")):
+    for tc, lib in (("msvc", "ysp_harfbuzz.lib"), ("mingw", "libysp_harfbuzz.a"), ("clang", "libysp_harfbuzz.a"),
+                    ("gcc", "libysp_harfbuzz.a")):
         p = os.path.join(OUT, "layout", tc, "lib", lib)
         stamp = os.path.join(OUT, "layout", tc, "STAMP.txt")
         if not os.path.exists(p):
@@ -610,18 +681,21 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--write", action="store_true", help="fetch and build into third_party/vis/")
     ap.add_argument("--angle", action="store_true", help="with --write: ANGLE's DLLs from the Electron zip")
-    ap.add_argument("--sdl", default="", help="with --write: msvc, mingw or msvc,mingw; clang on macOS")
+    ap.add_argument("--sdl", default="", help="with --write: msvc, mingw or msvc,mingw; clang on macOS; gcc on Linux")
     ap.add_argument("--pl-mpeg", action="store_true", help="with --write: pl_mpeg.h, the MPEG-1 decoder")
     ap.add_argument("--layout", default="", help="with --write: the text layout, msvc, mingw or msvc,mingw; "
-                                                 "clang on macOS (after tools/vendor_layout.py --write)")
+                                                 "clang on macOS; gcc on Linux (after tools/vendor_layout.py --write)")
     ap.add_argument("--mingw-bin", help="the mingw64/bin whose gcc builds the Octave MEX files")
     ap.add_argument("--cache", help="a folder that keeps the downloads between runs")
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 4)
     a = ap.parse_args()
-    if sys.platform not in ("win32", "darwin"):
-        sys.exit("ysp-vis natives: Windows and macOS only (the X11 and Wayland screen backends are stubs)")
-    tcs = ("clang",) if sys.platform == "darwin" else ("msvc", "mingw")
+    linux = sys.platform.startswith("linux")
+    if sys.platform not in ("win32", "darwin") and not linux:
+        sys.exit("ysp-vis natives: Windows, macOS and Linux only")
+    tcs = ("clang",) if sys.platform == "darwin" else ("gcc",) if linux else ("msvc", "mingw")
     if a.write:
+        if a.angle and linux:
+            sys.exit("error: --angle: no ANGLE on Linux (GLX_OML uses the system's libGL)")
         if a.angle:
             write_angle(a.cache)
         if a.pl_mpeg:

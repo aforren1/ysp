@@ -7,9 +7,11 @@ texts made in C with pack/layout and ygfx_crun() (yv_ctext_setup() in
 bindings/share/ysp_vis_text.h, as examples/layout/gfx_layout.c makes them);
 the ink drawn lies inside the glyph boxes that glyphs() reports; and a text
 changed and changed back draws its first scene again. Needs Segoe UI and
-Microsoft YaHei (Windows's).
+Microsoft YaHei (Windows's), or on Linux DejaVu Sans and Droid Sans
+Fallback.
 """
 import os
+import sys
 
 import pytest
 
@@ -18,9 +20,15 @@ import ysp.screen as yscr
 
 pytestmark = pytest.mark.skipif(os.environ.get("YSP_VIS_WINDOW") != "1", reason="set YSP_VIS_WINDOW=1 (opens a window)")
 
-FONTS = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts")
-SEGOE = os.path.join(FONTS, "segoeui.ttf")
-YAHEI = os.path.join(FONTS, "msyh.ttc")
+# The system's default font and the C path's CJK fallback
+# (ysp_vis_text.h, yv_default_font_path and yv_ctext_cjk_path).
+if sys.platform.startswith("linux"):
+    SEGOE = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+    YAHEI = "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf"
+else:
+    FONTS = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts")
+    SEGOE = os.path.join(FONTS, "segoeui.ttf")
+    YAHEI = os.path.join(FONTS, "msyh.ttc")
 
 
 def scene(s, g, draw):
@@ -63,7 +71,7 @@ def test_texts_match_the_c_path():
 def test_ink_inside_the_glyph_boxes_and_a_change_back():
     np = pytest.importorskip("numpy")
     if not os.path.exists(SEGOE):
-        pytest.skip("no Segoe UI")
+        pytest.skip("no %s" % SEGOE)
     with yscr.Screen(windowed=True, size=(800, 600)) as s, ygfx.Gfx(s, background=0.0) as g:
         t = g.text("Typography, kerning: AV To", size=44, color=1.0, x=-30, y=20)
         a = np.frombuffer(scene(s, g, lambda: g.draw(t)), np.float32).reshape(600, 800, 4)

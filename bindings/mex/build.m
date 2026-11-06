@@ -49,25 +49,33 @@ function build(name)
     % ysp_response.c (ysp/response.h with ysp/input.h) is pure computation
     % too and needs no library.
     % ysp-vis (ysp_vis.c, the core, and the thin ysp_screen.c, ysp_gfx.c,
-    % ysp_video.c; docs/bindings.md) is Windows and macOS (arm64, MATLAB):
-    % the X11 and Wayland screen backends are stubs.
+    % ysp_video.c; docs/bindings.md) is Windows, macOS (arm64, MATLAB) and
+    % Linux X11 (MATLAB and Octave): Octave on macOS is not built.
     is_octave = exist('OCTAVE_VERSION', 'builtin') ~= 0;
-    novis = ~ispc && ~(ismac && ~is_octave);
+    is_linux = isunix && ~ismac;
+    novis = ismac && is_octave;
     unsupported = {'ysp_parallel.c', ismac; 'ysp_vis.c', novis; 'ysp_screen.c', novis; ...
                    'ysp_gfx.c', novis; 'ysp_video.c', novis};
-    % ysp_vis.c links a static SDL3 3.4.0 and the static text layout
+    % ysp_vis.c links a static SDL3 (3.4.0; 3.4.18 on Linux) and the static text layout
     % (pack/layout.c, Skribidi, HarfBuzz, SheenBidi, libunibreak, budouxc),
     % and gets ANGLE's libEGL and libGLESv2 (.dll, .dylib) beside it, all
     % from third_party/vis/, which tools/vendor_vis.py makes (after
     % tools/vendor_layout.py --write): --sdl msvc --layout msvc for MATLAB,
     % --sdl mingw --layout mingw with Octave's own gcc for Octave, --sdl
-    % clang --layout clang on macOS.
+    % clang --layout clang on macOS, --sdl gcc --layout gcc on Linux (MATLAB
+    % and Octave; no ANGLE there: GLX_OML uses the system's libGL).
     vis = fullfile(here, '..', '..', 'third_party', 'vis');
     dll = '.dll';
     if ismac
         dll = '.dylib';
     end
-    if ismac && ~is_octave
+    if is_linux
+        vis_sdl = fullfile(vis, 'sdl3', 'gcc');
+        vis_lib = 'libSDL3.a';
+        vis_lay = fullfile(vis, 'layout', 'gcc');
+        vis_lay_lib = 'libysp_harfbuzz.a';
+        vis_tc = 'gcc';
+    elseif ismac && ~is_octave
         vis_sdl = fullfile(vis, 'sdl3', 'clang');
         vis_lib = 'libSDL3.a';
         vis_lay = fullfile(vis, 'layout', 'clang');
@@ -100,11 +108,15 @@ function build(name)
             continue;
         end
         if strcmp(srcs{i}, 'ysp_vis.c') && (~exist(fullfile(vis_sdl, 'lib', vis_lib), 'file') || ...
-                                            ~exist(fullfile(vis, 'angle', ['libEGL' dll]), 'file') || ...
+                                            (~is_linux && ~exist(fullfile(vis, 'angle', ['libEGL' dll]), 'file')) || ...
                                             ~exist(fullfile(vis, 'pl_mpeg', 'pl_mpeg.h'), 'file') || ...
                                             ~exist(fullfile(vis_lay, 'lib', vis_lay_lib), 'file'))
-            fprintf('skipping ysp_vis.c: no static SDL3, ANGLE, pl_mpeg or text layout in %s (tools/vendor_layout.py --write, then tools/vendor_vis.py --write --angle --pl-mpeg --sdl %s --layout %s)\n', ...
-                    vis, vis_tc, strtok(vis_tc));
+            angle = ' --angle';
+            if is_linux
+                angle = '';
+            end
+            fprintf('skipping ysp_vis.c: no static SDL3, ANGLE, pl_mpeg or text layout in %s (tools/vendor_layout.py --write, then tools/vendor_vis.py --write%s --pl-mpeg --sdl %s --layout %s)\n', ...
+                    vis, angle, vis_tc, strtok(vis_tc));
             continue;
         end
         if strcmp(srcs{i}, 'ysp_audio.c') && ~exist(fullfile(ma, 'miniaudio.h'), 'file')
@@ -145,7 +157,42 @@ function build(name)
                 args(end+1:end+2) = {'-ldl', '-lm'};   %#ok<AGROW>
             end
         end
-        if strcmp(srcs{i}, 'ysp_vis.c')
+        if strcmp(srcs{i}, 'ysp_vis.c') && is_linux
+            % SDL3's own list is -pthread -lm (tools/vendor_vis.py, the
+            % stamp); HarfBuzz needs libstdc++'s operator new; dl for the
+            % run-time loads on glibc before 2.34. The static SDL3 and the
+            % layout stack stay out of the exported symbols, so a libSDL3.so
+            % already in the process cannot take their calls: in MATLAB the
+            % version script above makes all but the entry points local; in
+            % Octave --exclude-libs does (MATLAB's mex refuses -Wl, flags).
+            args = [args, {['-I' fullfile(vis_sdl, 'include')], ['-I' fullfile(vis, 'pl_mpeg')], ['-L' fullfile(vis_sdl, 'lib')], ...
+                           ['-I' fullfile(vis_lay, 'include')], ['-L' fullfile(vis_lay, 'lib')]}];   %#ok<AGROW>
+            % MP4 through FFmpeg (ysp/video.h, YVID_FFMPEG) when pkg-config
+            % finds its development files, unless YSP_VIS_FFMPEG=0. The
+            % module then loads the FFmpeg libraries of those major
+            % versions at run time.
+            [st, ff] = system('pkg-config --cflags libavformat libavcodec libavutil 2>/dev/null');
+            if ~strcmp(getenv('YSP_VIS_FFMPEG'), '0') && st == 0
+                args = [args, {'-DYVID_FFMPEG'}, strsplit(strtrim(ff))];   %#ok<AGROW>
+                args = args(~cellfun(@isempty, args));
+                fprintf('ysp_vis.c: YVID_FFMPEG on\n');
+            elseif strcmp(getenv('YSP_VIS_FFMPEG'), '1')
+                error('ysp:build', 'YSP_VIS_FFMPEG=1, but pkg-config finds no FFmpeg development files');
+            else
+                fprintf('ysp_vis.c: YVID_FFMPEG off: MP4 is refused; frame sequences and MPEG-1 play\n');
+            end
+            lay = {'-lysp_vis_layout', '-lysp_skribidi', '-lysp_harfbuzz', '-lysp_sheenbidi', '-lysp_unibreak', '-lysp_budoux'};
+            args = [args, lay, {'-lSDL3', '-lstdc++', '-lm', '-ldl'}];   %#ok<AGROW>
+            if is_octave
+                args(end+1:end+2) = {'-Wl,--exclude-libs,ALL', '-s'};   %#ok<AGROW>
+            end
+            copyfile(fullfile(vis, 'sdl3', 'LICENSE.txt'), fullfile(here, 'ysp_vis-LICENSE.SDL3.txt'));
+            copyfile(fullfile(vis, 'pl_mpeg', 'LICENSE.txt'), fullfile(here, 'ysp_vis-LICENSE.pl_mpeg.txt'));
+            lic = {'Skribidi', 'HarfBuzz', 'SheenBidi', 'libunibreak', 'budouxc'};
+            for k = 1:numel(lic)
+                copyfile(fullfile(vis, 'layout', ['LICENSE.' lic{k} '.txt']), fullfile(here, ['ysp_vis-LICENSE.' lic{k} '.txt']));
+            end
+        elseif strcmp(srcs{i}, 'ysp_vis.c')
             % The system libraries SDL3.dll imports itself (tools/vendor_vis.py).
             sys = {'-luser32', '-lgdi32', '-lwinmm', '-limm32', '-lole32', '-loleaut32', '-lversion', ...
                    '-luuid', '-ladvapi32', '-lsetupapi', '-lshell32', '-ldinput8'};

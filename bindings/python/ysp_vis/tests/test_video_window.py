@@ -12,6 +12,7 @@ is a timing claim: tests/probe/vis/movie.py measures.
 import os
 import shutil
 import subprocess
+import sys
 
 import pytest
 
@@ -76,7 +77,11 @@ def win():
         yield s, g
 
 
-@pytest.mark.parametrize("name,opts", [("rgba", {}), ("i420", {}), ("mpeg1", {}), ("mp4", {"hw_decode": "dxva"}),
+# The hardware decoder of each platform (ysp/video.h, desc.hw_decode).
+HW = {"win32": "dxva", "darwin": "videotoolbox"}.get(sys.platform, "vaapi")
+
+
+@pytest.mark.parametrize("name,opts", [("rgba", {}), ("i420", {}), ("mpeg1", {}), ("mp4", {"hw_decode": HW}),
                                        ("mp4", {"hw_decode": "off"})])
 def test_movie_in_window(win, clips, name, opts):
     if name not in clips:

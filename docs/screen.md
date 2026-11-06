@@ -4744,7 +4744,7 @@ The header is v0.17.0: v0.11.0 after the first merge, and v0.17.0 after the
 merge over main's v0.11.0 to v0.16.1 (macOS). The numbers in this section
 were measured as v0.8.0, the branch's number,
 on the code before main's v0.8.0 to v0.10.4. After that merge (2026-11-04,
-the same machine), `test_screen_glx` passed and the 32 `glx-` mutants gave
+the same machine), `test_screen_glx` passed and the 31 `glx-` mutants gave
 the expected results. The window thread is off on X11. No timing run was
 repeated.
 

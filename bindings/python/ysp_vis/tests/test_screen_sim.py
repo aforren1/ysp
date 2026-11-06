@@ -58,14 +58,19 @@ def test_headers_and_shared_tables():
 
 
 DLL = ".dylib" if sys.platform == "darwin" else ".dll"
+LINUX = sys.platform.startswith("linux")
 
 
 def test_angle_dir_is_the_package_directory():
     d = os.path.normcase(os.path.abspath(yscr.ANGLE_DIR))
     assert d == os.path.normcase(os.path.dirname(os.path.abspath(_vis.__file__)))
-    assert os.path.exists(os.path.join(d, "libEGL" + DLL))
-    assert os.path.exists(os.path.join(d, "libGLESv2" + DLL))
-    for n in ("SDL3", "ANGLE", "pl_mpeg", "Skribidi", "HarfBuzz", "SheenBidi", "libunibreak", "budouxc"):
+    if LINUX:
+        # no ANGLE: GLX_OML uses the system's libGL
+        assert not [n for n in os.listdir(d) if n.startswith(("libEGL", "libGLESv2"))]
+    else:
+        assert os.path.exists(os.path.join(d, "libEGL" + DLL))
+        assert os.path.exists(os.path.join(d, "libGLESv2" + DLL))
+    for n in ("SDL3", "pl_mpeg", "Skribidi", "HarfBuzz", "SheenBidi", "libunibreak", "budouxc") + (() if LINUX else ("ANGLE",)):
         assert os.path.exists(os.path.join(d, "ysp_vis-LICENSE.%s.txt" % n)), n
 
 

@@ -24,7 +24,7 @@ function test_mex_video()
 
     % ---- versions
     [bv, hv] = ysp_video('version');
-    check(strcmp(bv, '1.3.0') && ~isempty(regexp(hv, '^\d+\.\d+\.\d+$', 'once')), 'version: binding %s, header %s', bv, hv);
+    check(strcmp(bv, '1.4.0') && ~isempty(regexp(hv, '^\d+\.\d+\.\d+$', 'once')), 'version: binding %s, header %s', bv, hv);
     o = ysp_video('options');
     check(isfield(o, 'loop') && isfield(o, 'hw_decode') && isfield(o, 'timeline') && isfield(o, 'records'), 'options');
     c = ysp_video('constants');
@@ -277,8 +277,10 @@ function test_mex_video()
 end
 
 function rm_tree(d)
-    if exist('OCTAVE_VERSION', 'builtin')
+    if exist('OCTAVE_VERSION', 'builtin') && ispc
         system(sprintf('rmdir /s /q "%s"', d));   % the temp folder's name is ASCII
+    elseif exist('OCTAVE_VERSION', 'builtin')
+        system(sprintf('rm -rf "%s"', d));        % Octave's rmdir(d, 's') asks first
     else
         rmdir(d, 's');
     end

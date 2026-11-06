@@ -381,6 +381,13 @@ static int sc_option(yscr_desc* d, const char* name, PyObject* val) {
         if (yv_opt_enum(d, opt, s, err, sizeof err) < 0) { PyErr_SetString(VsArgumentError, err); return -1; }
         return 0;
     }
+    if (opt->type == YV_STR) {
+        char s[512];
+        if (!PyUnicode_Check(val)) { PyErr_Format(PyExc_TypeError, "%s: a str", name); return -1; }
+        if (vs_utf8(val, s, sizeof s) < 0) return -1;
+        if (yv_opt_str(d, opt, s, err, sizeof err) < 0) { PyErr_SetString(VsArgumentError, err); return -1; }
+        return 0;
+    }
     if (opt->type == YV_SIZE || opt->type == YV_MODE) {
         long n[4] = { 0, 0, 0, 0 };
         Py_ssize_t k, want = opt->type == YV_SIZE ? 2 : 4, len = PySequence_Check(val) ? PySequence_Size(val) : -1;

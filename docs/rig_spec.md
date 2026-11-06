@@ -1197,7 +1197,7 @@ Details, versions and measurements per header are in
 | 5. `ysp/gfx.h` | v0.17.3: stimuli, curve runs (text and artwork), batched text runs, parameter tables, frame capture. Open items in docs/gfx.md "Next". |
 | 6. `ysp/video.h` | v0.8.0: Media Foundation, AVFoundation with VideoToolbox (macOS; decode, open and seek timed on an M2), FFmpeg on Linux (opt-in: VAAPI or software, loaded at run time) and pl_mpeg, the soundtrack on audio streams, UTF-8 paths, error codes. On Linux X11 it runs on GLX_OML. Not built: capture. |
 | Also built | `ysp/outline.h` v0.4.1, `ysp/rdk.h` v0.3.1, `ysp/color.h` v0.4.0, `ysp/trials.h` v0.6.1, `ysp/table.h` v0.3.0, `ysp/dataset.h` v0.2.1, `ysp/json.h` v0.2.1, `ysp/pack.h` v0.4.0 and the pack tool v0.7.0 (item 6), the device headers of docs/devices_spec.md (input, response, box, device, rigfile, serial, parallel, net). The experiment format (docs/experiment_format.md) with its gaps G1 to G13 closed. |
-| Host bindings | Python wheels and MATLAB/Octave MEX for the headers above (docs/bindings.md); ysp-vis 0.17.0 (screen, gfx, video, text; Windows x64 and macOS arm64) on ysp-audio 0.9.0 and ysp-timeline through function tables (section 12). |
+| Host bindings | Python wheels and MATLAB/Octave MEX for the headers above (docs/bindings.md); ysp-vis 0.17.0.1 (screen, gfx, video, text; Windows x64, macOS arm64 and Linux X11) on ysp-audio 0.9.0 and ysp-timeline through function tables (section 12). |
 | 7 and 8 | Not started. |
 | 9 | `ysp/net.h` v0.3.2 (Lab Streaming Layer) is built. Build jobs are not started. |
 

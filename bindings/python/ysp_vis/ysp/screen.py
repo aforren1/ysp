@@ -30,7 +30,7 @@ from ysp._vis import (Abort, ArgumentError, BusyError, ClosedError, Display, Err
 
 __version__ = _vis.__version__          # the ysp-vis distribution's
 HEADER_VERSION = _vis.SCREEN_VERSION    # ysp/screen.h's
-ANGLE_DIR = _vis.ANGLE_DIR              # where libEGL.dll is loaded from: always this package's directory
+ANGLE_DIR = _vis.ANGLE_DIR              # this package's directory: where libEGL.dll (.dylib) is loaded from; Linux has no ANGLE
 
 for _n in dir(_vis):
     if _n.isupper() and not _n.endswith("_VERSION") and _n != "ANGLE_DIR":

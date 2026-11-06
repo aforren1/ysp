@@ -110,7 +110,8 @@ static int yv_read_file(const char* path, uint8_t** out, size_t* n, char* err, s
 }
 
 /* The system's sans font, as ygfx_text_make() takes it (ysp/gfx.h, TEXT):
- * on Windows Segoe UI, then Arial; on macOS Arial, then Helvetica. "" when
+ * on Windows Segoe UI, then Arial; on macOS Arial, then Helvetica; on Linux
+ * DejaVu Sans, then Liberation Sans, at the paths of gfx.h's list. "" when
  * none is there. */
 static const char* yv_default_font_path(char* buf, size_t cap) {
 #if defined(_WIN32)
@@ -130,6 +131,16 @@ static const char* yv_default_font_path(char* buf, size_t cap) {
                                    "/System/Library/Fonts/Helvetica.ttc" };
     int i;
     for (i = 0; i < 3; i++) {
+        FILE* fp = fopen(paths[i], "rb");
+        if (fp) { fclose(fp); snprintf(buf, cap, "%s", paths[i]); return buf; }
+    }
+#else
+    static const char* paths[] = {
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSans.ttf", "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/liberation-sans/LiberationSans-Regular.ttf" };
+    int i;
+    for (i = 0; i < 5; i++) {
         FILE* fp = fopen(paths[i], "rb");
         if (fp) { fclose(fp); snprintf(buf, cap, "%s", paths[i]); return buf; }
     }
@@ -241,7 +252,7 @@ static yv_font* yv_font_default(yv_gfx* g, int* code, char* err, size_t cap) {
     char path[600];
     if (f) return f;
     if (!yv_default_font_path(path, sizeof path)[0]) {
-        *code = yv_fail(err, cap, YGFX_ERR_IO, "font: no system font (Segoe UI or Arial; Arial or Helvetica on macOS) was found: give font= a file");
+        *code = yv_fail(err, cap, YGFX_ERR_IO, "font: no system font (Segoe UI or Arial; Arial or Helvetica on macOS; DejaVu Sans or Liberation Sans on Linux) was found: give font= a file");
         return NULL;
     }
     memset(&s, 0, sizeof s);
@@ -1039,11 +1050,37 @@ static int yv_ctext_upload(yv_gfx* g, ylay_lib* L, ygfx_cset* sets, int nf) {
     return 0;
 }
 
-/* Lays out and uploads both texts; outside a frame. */
+/* The CJK fallback of the C path's second text: Microsoft YaHei on
+ * Windows, Droid Sans Fallback or Noto Sans CJK on Linux (the test's
+ * twins() names the same file). "" when none is there. */
+static const char* yv_ctext_cjk_path(char* buf, size_t cap) {
+#if defined(_WIN32)
+    char win[400];
+    FILE* fp;
+    if (!GetEnvironmentVariableA("WINDIR", win, (DWORD)sizeof win)) snprintf(win, sizeof win, "C:\\Windows");
+    snprintf(buf, cap, "%s\\Fonts\\msyh.ttc", win);
+    fp = fopen(buf, "rb");
+    if (fp) { fclose(fp); return buf; }
+#elif !defined(__APPLE__)
+    static const char* paths[] = { "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+                                   "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc" };
+    int i;
+    for (i = 0; i < 2; i++) {
+        FILE* fp = fopen(paths[i], "rb");
+        if (fp) { fclose(fp); snprintf(buf, cap, "%s", paths[i]); return buf; }
+    }
+#endif
+    if (cap) buf[0] = 0;
+    return buf;
+}
+
+/* Lays out and uploads both texts; outside a frame. The first text is in
+ * the system's default font (the binding's text without font=), the second
+ * in that font with the CJK fallback. */
 static int yv_ctext_setup(yv_gfx* g, char* err, size_t cap) {
-    static const char* files[2] = { "segoeui.ttf", "msyh.ttc" };
+    const char* files[2];
+    char paths[2][512];
     yv_ctext* c;
-    char win[400], path[600];
     ylay_desc ld;
     ylay_style st;
     ylay_span sp;
@@ -1055,14 +1092,16 @@ static int yv_ctext_setup(yv_gfx* g, char* err, size_t cap) {
     if (!c) return yv_fail(err, cap, YGFX_ERR_FULL, "out of memory");
     g->ctext = c;
     if (!yol_open(&c->ol, NULL)) goto fail;
-#if defined(_WIN32)
-    if (!GetEnvironmentVariableA("WINDIR", win, (DWORD)sizeof win)) snprintf(win, sizeof win, "C:\\Windows");
-#else
-    snprintf(win, sizeof win, "/usr/share");
-#endif
+    if (!yv_default_font_path(paths[0], sizeof paths[0])[0] || !yv_ctext_cjk_path(paths[1], sizeof paths[1])[0]) {
+        yv_ctext_free(g);
+        return yv_fail(err, cap, YGFX_ERR_IO, "_c_text_setup: no default font or no CJK fallback on this machine");
+    }
     for (i = 0; i < 2; i++) {
-        snprintf(path, sizeof path, "%s\\Fonts\\%s", win, files[i]);
-        if (yv_read_file(path, &c->bytes[i], &c->n[i], err, cap) < 0) { yv_ctext_free(g); return YGFX_ERR_IO; }
+        const char* slash = strrchr(paths[i], '/');
+        const char* back = strrchr(paths[i], '\\');
+        if (back && (!slash || back > slash)) slash = back;
+        files[i] = slash ? slash + 1 : paths[i];   /* the name the stamp gives */
+        if (yv_read_file(paths[i], &c->bytes[i], &c->n[i], err, cap) < 0) { yv_ctext_free(g); return YGFX_ERR_IO; }
     }
     memset(&ld, 0, sizeof ld);
     ld.ol = &c->ol;

@@ -208,7 +208,7 @@ static const yv_name yvv_lights[] = { { "auto", YVID_LIGHT_AUTO }, { "codes", YV
 static const yv_name yvv_chromas[] = { { "sited", YVID_CHROMA_SITED }, { "nearest", YVID_CHROMA_NEAREST }, { NULL, 0 } };
 static const yv_name yvv_backends[] = {
     { "auto", YVID_BACKEND_AUTO }, { "seq", YVID_BACKEND_SEQ }, { "plmpeg", YVID_BACKEND_PLMPEG }, { "mf", YVID_BACKEND_MF },
-    { NULL, 0 } };
+    { "avf", YVID_BACKEND_AVF }, { "ffmpeg", YVID_BACKEND_FFMPEG }, { NULL, 0 } };
 static const yv_name yvv_hws[] = { { "auto", YVID_HW_AUTO }, { "off", YVID_HW_OFF }, { "dxva", YVID_HW_DXVA },
                                     { "videotoolbox", YVID_HW_VIDEOTOOLBOX }, { "vaapi", YVID_HW_VAAPI },
                                     { NULL, 0 } };
