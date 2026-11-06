@@ -351,7 +351,7 @@
  *   ---------------------------------------------------------------------
  *   v0.5.2 - POSIX: the reader thread starts SCHED_OTHER, not with its
  *          creator's policy, so a no_elevate reader opened by an elevated
- *          frame thread is not SCHED_FIFO (ysp/rt.h v0.9.2, the same
+ *          frame thread is not SCHED_FIFO (ysp/rt.h v0.10.2, the same
  *          change). STATUS: the first Linux runs. No other change.
  *   v0.5.1 - Times near INT64_MAX. ydev_wait_running() with INT64_MAX
  *          ("forever", the bindings' inf) waits, and a desc.retry_ns or

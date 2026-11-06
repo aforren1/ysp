@@ -842,21 +842,23 @@ static void vx_gfx_cmd(const char* cmd, int nlhs, mxArray* plhs[], int nrhs, con
     } else if (!strcmp(cmd, "free")) {
         vx_node* nd;
         yv_obj* o;
+        int kind;
         vx_nargs(nrhs, 2, "ysp_gfx('free', obj)");
         nd = vx_node_of(prhs[1], "free");
-        if (nd->kind < VX_STIM) vx_err("handle", "free: a stimulus, list, group or texture handle (ysp_gfx('close', g) for a gfx)");
+        kind = nd->kind;   /* vx_unregister() frees nd */
+        if (kind < VX_STIM) vx_err("handle", "free: a stimulus, list, group or texture handle (ysp_gfx('close', g) for a gfx)");
         o = (yv_obj*)nd->obj;
         /* a list's own users are none; a stimulus in a list, a group, texture or font a stimulus uses: refused */
-        if (nd->kind != VX_LIST) {
+        if (kind != VX_LIST) {
             int bound = o->g ? vx_binds_of(o->g, o) : 0;   /* bindings go with it */
             if (o->users - bound > 0)
-                vx_err("busy", "free: %d list(s) or stimuli still use this %s; remove it from them first", o->users - bound, vx_kind_name(nd->kind));
+                vx_err("busy", "free: %d list(s) or stimuli still use this %s; remove it from them first", o->users - bound, vx_kind_name(kind));
         }
         vx_unregister(o);
-        if (nd->kind == VX_STIM) yv_stim_free((yv_stim*)o);
-        else if (nd->kind == VX_LIST) yv_list_free((yv_list*)o);
-        else if (nd->kind == VX_GROUP) yv_group_free((yv_group*)o);
-        else if (nd->kind == VX_FONT) yv_font_free((yv_font*)o);
+        if (kind == VX_STIM) yv_stim_free((yv_stim*)o);
+        else if (kind == VX_LIST) yv_list_free((yv_list*)o);
+        else if (kind == VX_GROUP) yv_group_free((yv_group*)o);
+        else if (kind == VX_FONT) yv_font_free((yv_font*)o);
         else yv_tex_free((yv_tex*)o);
     } else if (!strcmp(cmd, "bind")) {
         /* ysp_gfx('bind', g, target, name, tl, channels, first_element) */

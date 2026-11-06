@@ -1,4 +1,4 @@
-/* ysp/audio.h - v0.8.0 - public domain single-header audio library
+/* ysp/audio.h - v0.9.0 - public domain single-header audio library
  *
  *   Sound at a time on the ysp/rt.h clock. A buffer is played with
  *   yau_play_at(buf, t); the header plans its first sample on the device
@@ -15,7 +15,7 @@
  *   device and Audio source extensions. v0.5.0: CAPTURE, an input on the
  *   same clock, each captured frame mapped to ysp_rt time by a fit of the
  *   input's own clock, alone or as one duplex device; a voice key and a
- *   click finder (DETECTORS); a WAV writer (WAV OUT). v0.8.0: on Linux,
+ *   click finder (DETECTORS); a WAV writer (WAV OUT). v0.9.0: on Linux,
  *   ALSA exclusive on a card's hw: device with a device position (AUTO
  *   there) and PulseAudio's stream timing info as its position.
  *
@@ -99,19 +99,21 @@
  *     the unit ysp/timeline.h and ysp/screen.h take. A device that reports
  *     on another clock converts at the boundary: WASAPI's position stamp is
  *     QueryPerformanceCounter time in 100 ns units, the counter
- *     yrt_now_ns() reads.
+ *     yrt_now_ns() reads; CoreAudio's is mach_absolute_time(), which
+ *     yrt_now_ns() reads from ysp/rt.h 0.10.0 (BACKENDS, COREAUDIO).
  *
  *   THE STREAM
  *     The stream frame W counts the frames the header has handed to the
  *     device since open. Every plan and every record is in stream frames.
  *     A device position report (P, t) says that stream frame P was at the
  *     device's output at ysp_rt time t. On WASAPI it is
- *     IAudioClock::GetPosition(), read at every callback. On PulseAudio
- *     (v0.8.0) it is the stream's timing info: the bytes the server has
- *     read from the stream, less the sink's latency, at the reply's
- *     timestamp. The header asks for it at most every 50 ms; the reply
- *     comes in a later callback, and the callbacks between replies carry
- *     no report (they do not feed the fit).
+ *     IAudioClock::GetPosition(), read at every callback; on CoreAudio the
+ *     render time stamp of an earlier block (BACKENDS, COREAUDIO). On
+ *     PulseAudio (v0.9.0) it is the stream's timing info: the bytes the
+ *     server has read from the stream, less the sink's latency, at the
+ *     reply's timestamp. The header asks for it at most every 50 ms; the
+ *     reply comes in a later callback, and the callbacks between replies
+ *     carry no report (they do not feed the fit).
  *
  *   THE FIT
  *     The header fits t = t0 + (W - W0) * k to the reports (or, with no
@@ -256,9 +258,11 @@
  *        the capture against the record 67 us p99 from its median idle and
  *        20 us under load in one run (STATUS)
  *     3  unconfirmed (no report past the frame), or a path no loopback
- *        checked (WASAPI exclusive, which the loopback capture cannot see), or
- *        callback times only (CoreAudio, ALSA, Web Audio), or PulseAudio's
- *        position, which no loopback has checked yet (v0.8.0)
+ *        checked (WASAPI exclusive, which the loopback capture cannot see;
+ *        CoreAudio, confirmed by the HAL's time stamps but with no
+ *        loopback on any Mac), or callback times only (ALSA shared, Web
+ *        Audio), or PulseAudio's position, which no loopback has checked
+ *        yet (v0.9.0)
  *     YAU_TIER_SIM  the null device, or a device that says so
  *     desc.min_tier (1 to 3) flags BELOW_TIER on each onset worse than it;
  *     the run goes on.
@@ -317,11 +321,15 @@
  *     stream position of the sample that is currently playing through the
  *     speakers", so the claim is 0; the stream figure is
  *     IAudioClient::GetStreamLatency, "the maximum latency for the current
- *     stream". On CoreAudio (compiled, not run): kAudioDevicePropertyLatency
- *     plus kAudioDevicePropertySafetyOffset, and the buffer frame size on
- *     top for the stream figure. PulseAudio (v0.8.0): the position already
- *     subtracts the sink's latency, so the claim is 0
- *     ("pulse:timing-info"). ALSA: no claim.
+ *     stream". On CoreAudio (v0.8.0) the position point is the render time
+ *     stamp, the frame's time at the IO point, so the claim is
+ *     kAudioDevicePropertyLatency plus the first output stream's
+ *     kAudioStreamPropertyLatency ("coreaudio:ltnc+strm"; Apple: "the total
+ *     latency for the stream is the device latency summed with the stream
+ *     latency"), and the stream figure adds the safety offset and the IO
+ *     buffer, the frame's wait from the render callback to the IO point.
+ *     PulseAudio (v0.9.0): the position already subtracts the sink's
+ *     latency, so the claim is 0 ("pulse:timing-info"). ALSA: no claim.
  *     PortAudio's equivalents are Pa_GetStreamInfo()->outputLatency and a
  *     callback's outputBufferDacTime; PsychPortAudio reports the same
  *     figures in GetStatus as PredictedLatency. The loopback test's --line
@@ -578,7 +586,7 @@
  *   array may have 4 channels; the rate is the endpoint's Default Format
  *   under Sound > Recording. open() starts the input and waits until the
  *   fit spans 0.5 s, as yau_open() does. Backends: WASAPI reads the capture
- *   client's IAudioClock (shared and exclusive); on Linux (v0.8.0) ALSA
+ *   client's IAudioClock (shared and exclusive); on Linux (v0.9.0) ALSA
  *   exclusive reads the hw: PCM's status and PulseAudio its record
  *   stream's timing info (BACKENDS); every other backend fits callback
  *   times; the null backend's input is silence on a timer, tier SIM.
@@ -595,7 +603,7 @@
  *   the capture client's IAudioClock, fitted by least squares), else the
  *   callback times (the frame after the block, at the callback's entry,
  *   fitted by the lower envelope); a device with reports adds no callback
- *   point for a block without one (REPORTS ONLY, v0.8.0). A report is used only when its stamp is
+ *   point for a block without one (REPORTS ONLY, v0.9.0). A report is used only when its stamp is
  *   new: measured on the test laptop's microphone, WASAPI's capture clock
  *   moves the position every 10 ms but the stamp every 20 ms, and only
  *   the pair read when the stamp changes lies on the line. Once the fit is
@@ -667,7 +675,7 @@
  *   the first of them. A device that flags an underrun in its tick
  *   (YAU_TICK_XRUN) restarts the fit with no count. Every loss counts in
  *   .xruns; counts in .lost.
- *     RESTART (Linux, ALSA hw:, v0.8.0): miniaudio recovers an overrun
+ *     RESTART (Linux, ALSA hw:, v0.9.0): miniaudio recovers an overrun
  *     inside its read (the buffer is dropped, the PCM started again) and
  *     says nothing. The PCM's trigger stamp moves; the frames lost are the
  *     frame the last report puts at the new status stamp less the frame
@@ -676,7 +684,7 @@
  *     64-frame periods: each stall of 45 and 60 ms lost 46.4 to 47.3 and
  *     61.0 to 62.2 ms, found with the first block after the stall; the
  *     frames after a 70 ms stall lay within 30 us of the fit from before.
- *   WATCHDOG (v0.8.0): a device that stops calling back says nothing
+ *   WATCHDOG (v0.9.0): a device that stops calling back says nothing
  *   (a stalled PCM, a sound server suspended under its source). While no
  *   block has come for 200 ms or 4 buffers, whichever is longer,
  *   yau_capture_update() returns YAU_ERR_LOST and says so in
@@ -695,7 +703,7 @@
  *   input paces the device thread (miniaudio reads the input, then writes
  *   the output), so the output has no queue gate (desc.queue does not
  *   apply; caps.queue is 0). Not with YAU_BACKEND_CUSTOM: a custom device
- *   records through its own yau_capture (DEVICE). On Linux (v0.8.0) only
+ *   records through its own yau_capture (DEVICE). On Linux (v0.9.0) only
  *   with the output on a card's hw: device (AUTO, or ALSA exclusive) and
  *   the input on the same card (one converter clock): the capture desc's
  *   device, else the card's first input. Six periods per buffer and four
@@ -774,7 +782,7 @@
  *     silent buffer written before Start (EXCLUSIVE START: without it the
  *     test laptop's driver underran for the whole run in half the opens).
  *     Positions: IAudioClock, called in each callback.
- *   YAU_BACKEND_ALSA (Linux; AUTO there, exclusive, v0.8.0)
+ *   YAU_BACKEND_ALSA (Linux; AUTO there, exclusive, v0.9.0)
  *     AUTO on Linux is ALSA exclusive on the default card's first playback
  *     device (ALSA_CARD, as alsa-lib reads it, else card 0) unless
  *     desc.device names one, at 32 bits for a project of 24 bits or more:
@@ -782,7 +790,7 @@
  *     server says YAU_BACKEND_PULSE. Shared (YAU_BACKEND_ALSA without
  *     desc.exclusive): the device desc.device names, "default" without
  *     one (often a sound server's plugin); callback times only. Exclusive
- *     (desc.exclusive, v0.8.0): the card's own device (hw:), past any
+ *     (desc.exclusive, v0.9.0): the card's own device (hw:), past any
  *     sound server, with the shortest periods and a device position (the
  *     frames handed over less snd_pcm_status()'s delay, at its timestamp).
  *     desc.device must name it (an id like ":0,0" or "hw:0,0"); open()
@@ -816,13 +824,13 @@
  *     and the position counts only the frames the header handed over, so
  *     the start adds no frames to it (docs/audio.md, "Linux: ALSA
  *     exclusive").
- *   YAU_BACKEND_PULSE (Linux, v0.8.0)
+ *   YAU_BACKEND_PULSE (Linux, v0.9.0)
  *     Shared through the sound server, which keeps the desktop's sound:
  *     the choice for an operator's machine. Positions: the stream's timing
  *     info (THE STREAM), asked for at most every 50 ms; a fit spread of 3
  *     to 4 us, the shortest safe lead 15 to 17 ms here. Tier 3: no
  *     loopback.
- *   CAPTURE on Linux (v0.8.0; docs/audio.md, "Linux: capture")
+ *   CAPTURE on Linux (v0.9.0; docs/audio.md, "Linux: capture")
  *     AUTO: ALSA exclusive on the default card's first capture device
  *     (hw:0,0 here), 32 bits for a desc of 24 bits or more (16 for
  *     YAU_S16), the desc's rate, as the output. ALSA exclusive needs a
@@ -860,10 +868,53 @@
  *     first callback after a restart reports at once, so its loss lands
  *     before its frames.
  *     Tier 3 on every path: no line-in run (TIERS).
- *   YAU_BACKEND_COREAUDIO
- *     Compiled through miniaudio; no position, so every onset is
- *     unconfirmed (tier 3) and the fit uses callback times. It has not
- *     run here (STATUS).
+
+ *   YAU_BACKEND_COREAUDIO (macOS; AUTO there; v0.8.0)
+ *     Through miniaudio's AUHAL AudioUnit. desc.period is the device's IO
+ *     buffer (kAudioDevicePropertyBufferFrameSize, a setting of this
+ *     process), 15 to 4096 frames on the test Mac; it ran at 480, 128 and
+ *     32. The device's own rate and format, which the HAL mixes in
+ *     (float); the strict open refuses another rate as on WASAPI, so set
+ *     the rate in Audio MIDI Setup.
+ *     Positions: miniaudio drops the render's AudioTimeStamp, so the
+ *     header adds a render notification to miniaudio's AudioUnit
+ *     (AudioUnitAddRenderNotify) and keeps each render's mSampleTime and
+ *     mHostTime: the frame the block starts on and its time at the IO
+ *     point, which the HAL computes from its own time line. That time is
+ *     in the future when the block renders (the IO buffer plus the safety
+ *     offset ahead, measured), so a block's report is the newest earlier
+ *     render whose time has passed: the frame has reached the IO point,
+ *     and the fit and the confirmation come from those. mHostTime is
+ *     mach_absolute_time(): with ysp/rt.h 0.10.0 or later it maps to the
+ *     ysp_rt clock by the timebase alone (yrt_ticks_to_ns()'s arithmetic);
+ *     with an older ysp/rt.h (CLOCK_MONOTONIC, whole microseconds,
+ *     frequency-adjusted) by the offset of the two clocks read at the
+ *     callback's entry, within a microsecond. The position counts the frames the HAL skipped after
+ *     a late callback (measured: a 30 ms stall moved the sample time 1464
+ *     frames past the frames handed), so a skip is an underrun whose gap
+ *     is exactly those frames, and the fit shifts by them and stays
+ *     (UNDERRUNS). A sample time that moves back restarts the fit. Tier
+ *     3: no loopback has checked a Mac (TIERS).
+ *     The default device is opened by its id, so a default-device change
+ *     leaves the sound on the device opened (miniaudio would follow the
+ *     default, through its converter); a named device the same. When the
+ *     device goes away (kAudioDevicePropertyDeviceIsAlive; an HDMI
+ *     monitor's audio device did when its display slept), the AudioUnit
+ *     keeps running on another device: the header marks the device LOST
+ *     and writes silence from then on.
+ *     desc.exclusive takes hog mode (kAudioDevicePropertyHogMode) until
+ *     close or the process ends, and fails while another process holds
+ *     it. Measured: another process's shared open on the hogged device
+ *     still got its callbacks and stamps; whether its sound reached the
+ *     output was not measured. miniaudio itself has no exclusive mode on
+ *     CoreAudio. Whether hog mode changes any timing is not measured
+ *     yet (docs/audio.md, "CoreAudio"). The capture side (CAPTURE) fits
+ *     callback times, as before: no Mac here had an input.
+ *     The describe line's backend part is the driver stack the HAL shows:
+ *     transport (hdmi, bltn, usb, ...), the device UID, the reports, the
+ *     latency, safety offset and stream latency in frames, the IO buffer,
+ *     the nominal and actual rate, hog mode, the skips, and "dead".
+
  *   YAU_BACKEND_WEB (Emscripten; AUTO there; v0.4.1; docs/web.md)
  *     miniaudio's Web Audio backend, on one of its two paths:
  *       AudioWorklet  build with -DMA_ENABLE_AUDIO_WORKLETS -pthread
@@ -953,13 +1004,13 @@
  *     desc.dev and desc.dev_ctx: your device (DEVICE).
  *
  *   ---------------------------------------------------------------------
- *   DEVICES (desc.device, yau_list_devices(), v0.8.0)
+ *   DEVICES (desc.device, yau_list_devices(), v0.9.0)
  *   ---------------------------------------------------------------------
  *   desc.device is a device's id (WASAPI endpoint id, ALSA ":card,device"
  *   or "hw:card,device", PulseAudio sink name, CoreAudio UID), or a part of
  *   its name that only one device has. A part that two devices share is
  *   refused, and the message lists their ids: names repeat (one Linux
- *   desktop lists "HDA Intel PCH, HDMI 1" twice). Until v0.8.0 the first
+ *   desktop lists "HDA Intel PCH, HDMI 1" twice). Until v0.9.0 the first
  *   match was taken. yau_list_devices() gives each playback device's name,
  *   id and whether it is the backend's default; yau_list_inputs() the
  *   same for capture devices, and a capture desc.device follows the same
@@ -1017,7 +1068,9 @@
  *   producer calls (acquire, commit, write, end, reset, and yau_wav_feed,
  *   seek, step, on_msg) come from one other thread at a time, or the frame
  *   thread; yau_stream_get_info and yau_wav_wants from any. The device
- *   thread is miniaudio's; on WASAPI it joins MMCSS's "Pro Audio" task.
+ *   thread is miniaudio's; on WASAPI it joins MMCSS's "Pro Audio" task; on
+ *   CoreAudio it is the HAL's IO thread, which names itself in its first
+ *   callback (miniaudio's start notice comes on the caller's thread there).
  *
  *   ---------------------------------------------------------------------
  *   ERRORS
@@ -1046,8 +1099,13 @@
  *   resource manager, node graph and generation parts left out, unless the
  *   translation unit already included miniaudio's implementation or
  *   defines YAU_MINIAUDIO_EXTERNAL (miniaudio compiled elsewhere). Link
- *   -ldl -lpthread -lm on Linux. Windows links nothing: miniaudio loads its
- *   DLLs at run time. Define YAU_NO_MINIAUDIO to build the core with
+ *   -ldl -lpthread -lm on Linux. Windows and macOS link nothing: miniaudio
+ *   loads its DLLs and frameworks at run time, and the CoreAudio code
+ *   takes its two AudioUnit calls from the framework miniaudio loaded. With
+ *   MA_NO_RUNTIME_LINKING, link -framework CoreAudio -framework
+ *   AudioToolbox -framework CoreFoundation. The CoreAudio time line needs
+ *   miniaudio's implementation in the same translation unit (not
+ *   YAU_MINIAUDIO_EXTERNAL); without it CoreAudio fits callback times. Define YAU_NO_MINIAUDIO to build the core with
  *   YAU_BACKEND_CUSTOM only. Include ysp/audio.h (or ysp/rt.h) before
  *   any system header in the implementation file. On Windows the
  *   implementation includes <windows.h> (WIN32_LEAN_AND_MEAN) and
@@ -1063,7 +1121,9 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
- *   v0.8.0 - PulseAudio: the stream's timing info is a device position
+ *   v0.9.0 - Linux, numbered v0.8.0 on its branch and merged over
+ *          v0.8.0 and v0.8.1 (STATUS). PulseAudio: the stream's
+ *          timing info is a device position
  *          (THE STREAM), so the fit uses reports instead of callback times
  *          (spread 3 us against 0.5 ms). PulseAudio reports every few
  *          callbacks; v0.5.1's report-only fit keeps the callback times
@@ -1114,6 +1174,26 @@
  *          (docs/audio.md, "Clamped latencies"). A source woken from suspend
  *          gives reports up to 218 us off for about 15 s.
  *          Tier 3 on every Linux input: no line-in run.
+ *   v0.8.1 - Documentation only: the CoreAudio timing runs on HDMI
+ *          (STATUS). No code change.
+ *   v0.8.0 - CoreAudio (BACKENDS, COREAUDIO): position reports from the
+ *          HAL's render time stamps (a render notification on miniaudio's
+ *          AudioUnit), so the fit is of the HAL's time line and onsets are
+ *          confirmed, tier 3; a skip after a late callback is an underrun
+ *          of exactly the skipped frames and keeps the fit; the claim is
+ *          the device plus stream latency from the IO point (it was the
+ *          device latency plus the safety offset, and left out the stream
+ *          latency, 408 frames on the test Mac's speakers); caps.buffer is
+ *          the IO buffer; desc.exclusive takes hog mode (it failed: miniaudio
+ *          has no exclusive mode there); the default device is opened by
+ *          its id, so a default change no longer moves the stream to the
+ *          new default (LOST and still playing, before); a device that goes
+ *          away is LOST and gets silence (the AudioUnit moved itself to the
+ *          speakers); the describe line has the driver stack (transport,
+ *          UID, latencies in frames, IO buffer, rates, hog mode, skips).
+ *          The IO thread sets itself up in its first callback: miniaudio's
+ *          start notice came on the caller's thread, so ring records had the
+ *          frame thread's tid and ThreadSanitizer found a race.
  *   v0.7.3 - Builds for 32-bit Windows with MSVC: the 64-bit atomic store
  *          is a compare-exchange loop on x86, which has no
  *          _InterlockedExchange64 (LNK2001 in the cp39-win32 wheel). LEAD
@@ -1277,7 +1357,8 @@
  *          positions, miniaudio's null device, the device and source
  *          interfaces, synthesis, the records, the parameter table.
  *
- *   STATUS: v0.8.0, 2026-10-12 (docs/audio.md, "Linux: a position from
+ *   STATUS: v0.9.0 (numbered v0.8.0 on its branch),
+ *   2026-10-12 (docs/audio.md, "Linux: a position from
  *   PulseAudio", "Linux: ALSA exclusive", "AUTO on Linux"): the Linux
  *   desktop below (Debian 12, PulseAudio 16, Intel HDA analog output),
  *   gcc 12.2. ALSA exclusive on hw:0,0 with snd_pcm_status() positions
@@ -1291,7 +1372,7 @@
  *   web-02) were killed, on this work's first numbering (v0.5.0), and
  *   again after the merge with v0.5.0 (capture) and v0.5.1 (exclusive
  *   start), 2026-10-13. Tier 3: no loopback.
- *   STATUS: v0.8.0, 2026-10-13, capture on Linux (docs/audio.md, "Linux:
+ *   STATUS: v0.9.0, 2026-10-13, capture on Linux (docs/audio.md, "Linux:
  *   capture"): the same desktop (i5-14500, PulseAudio 17.0, the HDA
  *   codec's input, nothing plugged in), gcc 12.2. hw:0,0 capture's status
  *   position: 3.0 to 9.4 us sd from a line over 30 s at 64, 128 and 480
@@ -1325,7 +1406,7 @@
  *   Tier 3 on every Linux input: no line-in or
  *   photodiode run (the Teensy needs a TRRS breakout and a divider into
  *   the combo jack's microphone contact, which this machine lacks).
- *   STATUS: v0.8.0, 2026-11-05, after the merge with v0.7.3: the same
+ *   STATUS: v0.9.0, 2026-11-05, after the merge with v0.7.3: the same
  *   desktop (PulseAudio 17.0, the source at 44100 Hz). test_audio_pulse,
  *   test_audio_alsa, test_audio_alsa_capture and test_audio_pulse_capture
  *   pass, in the output profile and in 6 of 6 runs in the duplex profile
@@ -1333,6 +1414,42 @@
  *   spread 5.2 to 8.7 us). The 46 Linux mutants give the expected result:
  *   test_audio_pulse_capture's 11 after this fix (pulse-14 and pulse-15
  *   new), the others on the merge before it, which changed no code of theirs.
+ *   STATUS: v0.9.0, 2026-11-05, after the merge with v0.8.1 (CoreAudio):
+ *   the same desktop and tests pass, in the output profile and in the
+ *   duplex profile (both capture tests). Every mutant of audio.toml gives
+ *   the expected result on Linux except the Windows-only pa-01 and pa-03,
+ *   which survive there: 131 killed in the duplex profile, and alsa-23,
+ *   which needs the output profile (there the server holds the output
+ *   only, so the duplex init opens the input and then fails), killed in it.
+ *   STATUS: v0.8.1, 2026-11-05 (docs/audio.md, "Timing runs"): HDMI
+ *   timed on the same Mac, quiet, display awake, a Screen Sharing session
+ *   active, ysp/rt.h 0.10.0: 0 XRUN records in 16 min at 480 and 128
+ *   frames, idle and under load; the HAL moves its HDMI time line in steps
+ *   (up to 15.7 us, about every 12288 frames), so the reports lie on 10 s
+ *   lines to 6.3 to 7.7 us p99 (speakers: 0.2 to 0.5 us); a bend of 8 to
+ *   15 us over minutes, as in three of the six speaker runs; +2.0 to +2.8
+ *   ppm; residuals -10.9 to +9.9 us; shortest safe lead 30 ms at 480
+ *   frames, 12 ms at 128. The HDMI claim ends at the link, not at the
+ *   monitor's speakers: tier 3.
+ *   STATUS: v0.8.0, 2026-11-05 (docs/audio.md, "CoreAudio"): an Apple
+ *   M2 Mac mini, macOS 27.0.1, Apple clang 21, on HDMI (a GBT M27Q
+ *   monitor) and the built-in speakers, 48 kHz float: every example that
+ *   plays ran (audio_tone, audio_schedule, audio_clockstats with stalls,
+ *   periods 480, 128, 32 and hog mode); every onset on its planned frame,
+ *   confirmed, tier 3; a 30 ms stall one XRUN record of the skipped frames;
+ *   a default change kept the stream; the HDMI device's going away made it
+ *   LOST. Timed on the speakers, quiet machine, ysp/rt.h 0.10.0: 0 XRUN
+ *   records in 22 min at IO buffers of 480, 128 and 32 frames, idle and
+ *   under load; the HAL's reports on a line to 0.2 to 0.5 us p99 within
+ *   10 s, the device +2.0 to +2.8 ppm against mach time; each 30 ms stall
+ *   one XRUN record of 1468 to 1476 frames with the fit kept; residuals
+ *   -7.6 to +10.2 us, shortest safe lead 20 to 25 ms at 480 frames and
+ *   8 ms at 128; the time line 0.2 to 1.0 us a callback at the median;
+ *   hog mode no different. HDMI not timed (its device was gone). The core test
+ *   runs the time line's arithmetic and a scripted HAL; 9 of 9 new mutants
+ *   killed; ASan, UBSan and ThreadSanitizer clean on the device. No input
+ *   on that Mac: CoreAudio capture has not run. Every number there is from
+ *   the HAL's stamps or the ysp_rt clock, none from sound.
  *   STATUS: v0.7.3, 2026-10-27 (docs/audio.md, "32-bit Windows" and
  *   "UTF-8 paths"): the compile check, tests/adapt/audio_test.c and the
  *   ysp-audio wheel's tests build and pass with MSVC for x86 (Win32) and
@@ -1508,13 +1625,13 @@
  *   STRICT OPEN says; with a 16-bit project both ran 10 s idle and 30 s
  *   beside 20 spinning threads with 0 xruns and 0 gaps. ALSA reads no
  *   position, so its fit uses callback times (spread 0.45 to 0.61 ms).
- *   PulseAudio from v0.8.0 reads its stream timing info: fit spread 2.7 to
+ *   PulseAudio from v0.9.0 reads its stream timing info: fit spread 2.7 to
  *   3.9 us, 0 xruns, idle and with 20 spinning threads, 30 s each; the
  *   reports lie within 2.1 us sd (0.9 us loaded) of a straight line over
  *   60 s (tests/probe/audio_pulse). tests/adapt/audio_pulse_test.c checks
  *   it on a running server (not in ctest). Every Linux onset is still
  *   tier 3: no loopback has run there. Compiled, never run: CoreAudio (with its
- *   latency claims).
+ *   latency claims; run in v0.8.0), Web Audio (emcc as gnu11).
  *   Outside this STATUS block and docs/audio.md, a number in this header
  *   is a measurement only where the text says "measured".
  *
@@ -1523,9 +1640,9 @@
 #define YSP_AUDIO_H_INCLUDED
 
 #define YAU_VERSION_MAJOR 0
-#define YAU_VERSION_MINOR 8
+#define YAU_VERSION_MINOR 9
 #define YAU_VERSION_PATCH 0
-#define YAU_VERSION_STRING "0.8.0"
+#define YAU_VERSION_STRING "0.9.0"
 
 #include "ysp/rt.h"
 
@@ -2433,7 +2550,7 @@ YAU_API void        yau_get_caps(const yau_audio* au, yau_caps* out);
  * Returns snprintf's count. */
 YAU_API int         yau_describe(const yau_audio* au, char* buf, size_t cap);
 
-/* One playback device of a backend (DEVICES, v0.8.0). desc.device takes
+/* One playback device of a backend (DEVICES, v0.9.0). desc.device takes
  * the id exactly, or a part of the name that only one device has. */
 typedef struct yau_device_entry {
     char name[256];     /* the backend's name for it (miniaudio's length) */
@@ -2447,7 +2564,7 @@ typedef struct yau_device_entry {
  * YAU_ERR_ARG for CUSTOM or a build with YAU_NO_MINIAUDIO. */
 YAU_API int         yau_list_devices(yau_backend backend, yau_device_entry* out, int cap);
 
-/* The capture devices of a backend, the same way (DEVICES, v0.8.0). A
+/* The capture devices of a backend, the same way (DEVICES, v0.9.0). A
  * capture desc.device takes an input's id or a part of its name that only
  * one input has. On PulseAudio the list holds the sinks' monitors too. */
 YAU_API int         yau_list_inputs(yau_backend backend, yau_device_entry* out, int cap);
@@ -3899,9 +4016,147 @@ YAU_API void yau_rt_thread_init(void* host) {
     }
 }
 
+/* --- CoreAudio time line (BACKENDS, COREAUDIO) ------------------------------- */
+
+/* Pure arithmetic, no OS call, so the core test runs it without a device
+ * (it defines YAU__CA_CORE). A render's AudioTimeStamp gives the HAL's
+ * sample time and host time of the render's first frame at the IO point:
+ * measured on the test Mac, the host time is the callback's entry plus the
+ * IO buffer plus the safety offset (16.6 ms on HDMI at 480 + 320 frames,
+ * 11.5 ms on the built-in speakers at 480 + 76). That pair is in the
+ * future when the block is rendered, so a block's report is the newest
+ * earlier render whose host time has passed: the HAL has taken that frame
+ * to the IO point. The position is in device frames since stream frame 0,
+ * so it counts the frames the HAL skipped: after a 30 ms stall the next
+ * render's sample time was 1464 frames past the frames handed. */
+#if (defined(MA_SUPPORT_COREAUDIO) && defined(MA_APPLE_DESKTOP) && !defined(YAU_NO_MINIAUDIO)) \
+    || defined(YAU__CA_CORE)
+#define YAU__CA_HIST 128  /* renders kept: (io buffer + safety offset) / period + 1 must fit */
+
+typedef struct yau__cat {
+    uint32_t seq, used;      /* render notes written; the last one taken     */
+    int32_t  ok;             /* the newest note had sample and host times    */
+    int32_t  have0;          /* s0 is set                                    */
+    double   s;              /* the newest note's mSampleTime                */
+    uint64_t h;              /* its mHostTime (mach_absolute_time units)     */
+    int64_t  w;              /* stream frames handed before that render      */
+    double   s_prev;         /* the last render taken, and its w             */
+    int64_t  w_prev;
+    double   s0;             /* the sample time of stream frame 0            */
+    int64_t  frames;         /* stream frames handed                         */
+    int64_t  skipped;        /* device frames the HAL moved without data     */
+    uint32_t skips, rewinds; /* time line jumps forward, back                */
+    int32_t  hn, head;       /* the past renders                             */
+    int64_t  hp[YAU__CA_HIST];   /* device frames since stream frame 0       */
+    uint64_t hh[YAU__CA_HIST];   /* host time                                */
+} yau__cat;
+
+/* mach_absolute_time units to ns, split so a large count cannot overflow
+ * the multiply (125/3 on Apple silicon, 1/1 on Intel Macs) */
+static int64_t yau__ca_ns(uint64_t t, uint32_t numer, uint32_t denom) {
+    if (!denom) return (int64_t)t;
+    return (int64_t)((t / denom) * numer + (t % denom) * numer / denom);
+}
+
+/* OS LATENCY CLAIMS on CoreAudio, in frames: from the IO point (the time
+ * stamp, where the reports are) to the output the device latency plus the
+ * stream latency (Apple's AudioHardware.h: "the total latency for the
+ * stream is the device latency summed with the stream latency"); from the
+ * render callback, the IO buffer and the safety offset before that. */
+static void yau__ca_claims(uint32_t latency, uint32_t safety, uint32_t stream_latency, uint32_t buffer,
+                           uint32_t rate, int64_t* os_ns, int64_t* stream_ns) {
+    double ns = rate ? 1e9 / (double)rate : 0.0;
+    *os_ns = (int64_t)((double)((uint64_t)latency + stream_latency) * ns + 0.5);
+    *stream_ns = (int64_t)((double)((uint64_t)latency + stream_latency + safety + buffer) * ns + 0.5);
+}
+
+/* The render note (the AudioUnit's pre-render notification, on the IO
+ * thread before the render callback). valid: the stamp's sample and host
+ * times are valid. */
+static void yau__ca_note(yau__cat* c, double sample, uint64_t host, int valid) {
+    c->s = sample;
+    c->h = host;
+    c->w = c->frames;
+    c->ok = valid;
+    c->seq++;
+}
+
+/* A data call of n frames at host time now (mach units): tk->pos and
+ * *host get the report, or tk->pos stays -1. A render whose sample time
+ * moved more than the frames handed since the last is a skip: its own
+ * (future) pair is the report at once, so the core sees the position past
+ * the frames written by exactly the skip and shifts its fit (UNDERRUNS).
+ * One that moved less (never seen) restarts the fit (YAU_TICK_XRUN). */
+static void yau__ca_tick(yau__cat* c, uint64_t now, int32_t n, yau_tick* tk, uint64_t* host) {
+    int32_t i, jump = 0;
+    if (c->seq != c->used) {
+        c->used = c->seq;
+        if (c->ok) {
+            if (!c->have0) {
+                c->have0 = 1;
+                c->s0 = c->s - (double)c->w;
+            } else {
+                double d = (c->s - c->s_prev) - (double)(c->w - c->w_prev);
+                if (d >= 0.5) {
+                    c->skipped += (int64_t)floor(d + 0.5);
+                    c->skips++;
+                    c->hn = 0;
+                    jump = 1;
+                } else if (d <= -0.5) {
+                    c->rewinds++;
+                    c->s0 = c->s - (double)(c->w + c->skipped);
+                    c->hn = 0;
+                    tk->flags |= YAU_TICK_XRUN;
+                }
+            }
+            c->s_prev = c->s;
+            c->w_prev = c->w;
+            c->head = (c->head + 1) % YAU__CA_HIST;
+            c->hp[c->head] = (int64_t)floor(c->s - c->s0 + 0.5);
+            c->hh[c->head] = c->h;
+            if (c->hn < YAU__CA_HIST) c->hn++;
+            if (jump) {
+                tk->pos = c->hp[c->head];
+                *host = c->h;
+            }
+        }
+    }
+    if (!jump)
+        for (i = 0; i < c->hn; i++) {
+            int32_t k = (c->head - i + YAU__CA_HIST) % YAU__CA_HIST;
+            if (c->hh[k] <= now) {
+                tk->pos = c->hp[k];
+                *host = c->hh[k];
+                break;
+            }
+        }
+    c->frames += n;
+}
+#endif
+
 /* --- miniaudio backend ------------------------------------------------------- */
 
 #if !defined(YAU_NO_MINIAUDIO)
+
+/* BACKENDS, COREAUDIO: the HAL's own time line through the AudioUnit that
+ * miniaudio opens (macOS only; MA_APPLE_DESKTOP is set where miniaudio's
+ * implementation is compiled). */
+#if defined(MA_SUPPORT_COREAUDIO) && defined(MA_APPLE_DESKTOP)
+    #define YAU__CA 1
+    #include <mach/mach_time.h>
+    #include <unistd.h>
+    /* ysp/rt.h 0.10.0 and later count yrt_now_ns() in mach_absolute_time()
+     * units scaled to ns, so a HAL host time maps by the timebase
+     * alone; before, the clock was CLOCK_MONOTONIC (whole microseconds,
+     * counting sleep, frequency-adjusted), and each block maps its reports
+     * through the offset of the two clocks read at its entry. */
+    #if YRT_VERSION_MAJOR > 0 || YRT_VERSION_MINOR >= 10
+        #define YAU__RT_MACH 1
+    #else
+        #define YAU__RT_MACH 0
+    #endif
+typedef OSStatus (*yau__ca_rn_fn)(AudioUnit, AURenderCallback, void*);
+#endif
 
 /* DUPLEX, defined with the capture device below */
 struct yau__ma;
@@ -4059,6 +4314,21 @@ typedef struct yau__ma {
     uint32_t   gate_pad;    /* render when the WASAPI buffer holds at most this */
     int64_t    prefill;     /* exclusive: silent frames written before Start */
 #endif
+#if defined(YAU__CA)
+    yau__cat   ca;          /* the HAL's time line (IO thread only)        */
+    uint32_t   ca_numer, ca_denom;   /* mach_timebase_info                  */
+    uint32_t   ca_id;       /* the output's AudioObjectID                    */
+    uint32_t   ca_dead;     /* the device went away (the IsAlive listener)   */
+    uint32_t   ca_skips;    /* ca.skips + ca.rewinds, published              */
+    uint32_t   ca_reports;  /* blocks that carried a report, published       */
+    int        ca_listen;   /* the IsAlive listener is on                    */
+    int        ca_hog;      /* this process holds hog mode (desc.exclusive)  */
+    int        ca_thr;      /* the IO thread is set up (yau_rt_thread_init)  */
+    yau__ca_rn_fn ca_rn_remove;   /* set while the render note is on         */
+    uint32_t   ca_latency, ca_safety, ca_stream_latency, ca_buffer, ca_transport;
+    double     ca_nominal, ca_actual;
+    char       ca_uid[128];
+#endif
 #if defined(MA_HAS_WEBAUDIO)
     yau__web_pub pub;       /* the main thread writes it (JavaScript)      */
     int64_t    web_off;     /* ysp_rt ns minus performance.now() ns        */
@@ -4096,6 +4366,63 @@ typedef char yau__ma_fits[sizeof(yau__ma) <= sizeof(((yau_audio*)0)->backend_mem
 static void* yau__ma_malloc(size_t sz, void* ud) { ((yau__ma*)ud)->allocs++; return malloc(sz); }
 static void* yau__ma_realloc(void* p, size_t sz, void* ud) { ((yau__ma*)ud)->allocs++; return realloc(p, sz); }
 static void  yau__ma_free(void* p, void* ud) { if (p) ((yau__ma*)ud)->allocs++; free(p); }
+
+#if defined(YAU__CA)
+/* The AudioUnit's render notification, on the IO thread around each
+ * render: the pre-render one carries the stamp of the block about to be
+ * rendered, which miniaudio's render callback drops. */
+static OSStatus yau__ca_render_note(void* ud, AudioUnitRenderActionFlags* f, const AudioTimeStamp* ts, UInt32 bus,
+                                    UInt32 n, AudioBufferList* b) {
+    yau__ma* m = (yau__ma*)ud;
+    UInt32 both = kAudioTimeStampSampleTimeValid | kAudioTimeStampHostTimeValid;
+    (void)bus; (void)n; (void)b;
+    if (m && f && ts && (*f & kAudioUnitRenderAction_PreRender))
+        yau__ca_note(&m->ca, ts->mSampleTime, ts->mHostTime, (ts->mFlags & both) == both);
+    return noErr;
+}
+
+/* kAudioDevicePropertyDeviceIsAlive, on a HAL thread. Measured on the test
+ * Mac: when the HDMI monitor's display slept, its device went away and
+ * the AudioUnit, still running, moved itself to the built-in speakers and
+ * went on calling back. So the device is LOST, and the data callback
+ * writes silence from then on: a sound meant for one device never plays
+ * on another. */
+static OSStatus yau__ca_alive(AudioObjectID id, UInt32 na, const AudioObjectPropertyAddress* a, void* ud) {
+    yau__ma* m = (yau__ma*)ud;
+    AudioObjectPropertyAddress q;
+    UInt32 v = 0, sz = sizeof v;
+    (void)na; (void)a;
+    q.mSelector = kAudioDevicePropertyDeviceIsAlive;
+    q.mScope = kAudioObjectPropertyScopeGlobal;
+    q.mElement = 0;
+    if (((ma_AudioObjectGetPropertyData_proc)m->ctx.coreaudio.AudioObjectGetPropertyData)(id, &q, 0, NULL, &sz, &v) != noErr
+        || !v) {
+        yau__st32(&m->ca_dead, 1u);
+        if (!m->closing && m->au) yau__st32(&m->au->lost, 1u);
+        if (!m->closing && m->cap) yau__st32(&m->cap->gone, 1u);
+    }
+    return noErr;
+}
+
+/* The block's report from the HAL's time line (yau__ca_tick), its host
+ * time on the ysp_rt clock. */
+static void yau__ca_data(yau__ma* m, ma_uint32 n, yau_tick* tk) {
+    uint64_t now = mach_absolute_time(), host = 0;
+    uint32_t k;
+    if (yau__ld32(&m->ca_dead)) { m->ca.frames += n; return; }
+    yau__ca_tick(&m->ca, now, (int32_t)n, tk, &host);
+    if (tk->pos < 0) return;
+#if YAU__RT_MACH
+    /* yrt_ticks_to_ns()'s own arithmetic, on the timebase read at open */
+    tk->pos_t = yau__ca_ns(host, m->ca_numer, m->ca_denom);
+#else
+    tk->pos_t = yau__ca_ns(host, m->ca_numer, m->ca_denom) + (tk->t_entry - yau__ca_ns(now, m->ca_numer, m->ca_denom));
+#endif
+    yau__st32(&m->ca_reports, yau__ld32(&m->ca_reports) + 1u);
+    k = m->ca.skips + m->ca.rewinds;
+    if (k != yau__ld32(&m->ca_skips)) yau__st32(&m->ca_skips, k);
+}
+#endif
 
 #if defined(MA_SUPPORT_WASAPI)
 /* QUEUE: miniaudio renders a block, then waits until the WASAPI buffer has
@@ -4592,6 +4919,16 @@ static void yau__web_tick(yau__ma* m, ma_uint32 n, yau_tick* tk) {
 static void yau__ma_data(ma_device* d, void* out, const void* in, ma_uint32 n) {
     yau__ma* m = (yau__ma*)d->pUserData;
     yau_tick tk;
+#if defined(YAU__CA)
+    /* miniaudio's "started" comes on the thread that called start on
+     * CoreAudio, not on the IO thread (ThreadSanitizer, the test Mac): the
+     * IO thread sets itself up in its first callback */
+    if (!m->ca_thr && m->backend == ma_backend_coreaudio) {
+        m->ca_thr = 1;
+        yau_rt_thread_init(m->host);
+        if (m->cap) yau_capture_thread_init(m->cap);
+    }
+#endif
     if (m->cap && in) yau__ma_cap_in(m, d, in, n);
 #if defined(MA_SUPPORT_WASAPI)
     if (m->gate) yau__ma_gate(m, d);
@@ -4612,6 +4949,9 @@ static void yau__ma_data(ma_device* d, void* out, const void* in, ma_uint32 n) {
     tk.reserved_ = 0;
 #if defined(MA_HAS_WEBAUDIO)
     if (m->backend == ma_backend_webaudio) yau__web_tick(m, n, &tk);
+#endif
+#if defined(YAU__CA)
+    if (m->ca_rn_remove) yau__ca_data(m, n, &tk);
 #endif
 #if defined(MA_SUPPORT_WASAPI)
     if (m->clock && m->freq) {
@@ -4639,6 +4979,10 @@ static void yau__ma_data(ma_device* d, void* out, const void* in, ma_uint32 n) {
 #if defined(MA_SUPPORT_ALSA)
     m->al_written += n;
 #endif
+#if defined(YAU__CA)
+    if (yau__ld32(&m->ca_dead) && out)
+        memset(out, 0, (size_t)n * ma_get_bytes_per_frame(d->playback.format, d->playback.channels));
+#endif
 }
 
 static void yau__ma_note(const ma_device_notification* nt) {
@@ -4646,6 +4990,9 @@ static void yau__ma_note(const ma_device_notification* nt) {
     if (!m || !m->au) return;
     switch (nt->type) {
     case ma_device_notification_type_started:
+#if defined(YAU__CA)
+        if (m->backend == ma_backend_coreaudio) break;   /* the IO thread's first callback does it */
+#endif
         yau_rt_thread_init(m->host);
         if (m->cap) yau_capture_thread_init(m->cap);
         break;
@@ -4669,9 +5016,9 @@ static int yau__ma_out(ma_format f) {
     }
 }
 
-#if defined(MA_SUPPORT_COREAUDIO) && defined(MA_APPLE_DESKTOP)
+#if defined(YAU__CA)
 /* Defined after yau__ma_open, beside the CoreAudio property code it uses. */
-static void yau__coreaudio_claims(yau__ma* m, yau_device_caps* caps);
+static int yau__ca_open(yau__ma* m, const yau_device_open* in, yau_device_caps* caps, char* err, size_t err_cap);
 #endif
 
 #if YAU__LINUX
@@ -5153,6 +5500,23 @@ static int yau__ma_open(void* ctx, const yau_device_open* in, yau_device_caps* c
     if (m->backend == ma_backend_alsa && excl
         && (r = (ma_result)yau__ma_alsa_hw(m->backend, pick, 0, err, err_cap)) != 0)
         return (int)r;
+
+#if defined(YAU__CA)
+    /* The default output by its id, not as "the default": miniaudio
+     * follows a default it opened as such to the next default, and opens
+     * that at whatever format it has, through its converter. A
+     * default-device change then leaves the sound on the device opened. */
+    if (!pick && m->backend == ma_backend_coreaudio
+        && ma_context_get_devices(&m->ctx, &infos, &ninfo, NULL, NULL) == MA_SUCCESS)
+        for (i = 0; i < ninfo; i++)
+            if (infos[i].isDefault) { pick = &infos[i].id; break; }
+    if (pick && m->backend == ma_backend_coreaudio) {
+        size_t k = strlen(pick->coreaudio);
+        if (k >= sizeof m->ca_uid) k = sizeof m->ca_uid - 1;
+        memcpy(m->ca_uid, pick->coreaudio, k);
+        m->ca_uid[k] = 0;
+    }
+#endif
     (void)i;
     dc.playback.pDeviceID = pick;
     /* Ask for nothing, so the client format is the device's own and neither
@@ -5179,6 +5543,9 @@ static int yau__ma_open(void* ctx, const yau_device_open* in, yau_device_caps* c
 #endif
     dc.playback.pChannelMap = NULL;
     dc.playback.shareMode = excl ? ma_share_mode_exclusive : ma_share_mode_shared;
+    /* miniaudio has no exclusive mode on CoreAudio; the header takes hog
+     * mode itself after the open (BACKENDS, COREAUDIO) */
+    if (m->backend == ma_backend_coreaudio) dc.playback.shareMode = ma_share_mode_shared;
     dc.periodSizeInFrames = (ma_uint32)in->period;
     /* Exclusive mode: miniaudio's default of 3 makes one buffer of three
      * periods, filled by three callbacks in a burst per event; measured, it
@@ -5261,8 +5628,8 @@ static int yau__ma_open(void* ctx, const yau_device_open* in, yau_device_caps* c
         return YAU_ERR_FORMAT;
     }
     if ((r = (ma_result)yau__ma_cap_post(m, err, err_cap)) != 0) return (int)r;
-#if defined(MA_SUPPORT_COREAUDIO) && defined(MA_APPLE_DESKTOP)
-    if (m->backend == ma_backend_coreaudio) yau__coreaudio_claims(m, caps);
+#if defined(YAU__CA)
+    if (m->backend == ma_backend_coreaudio && (r = (ma_result)yau__ca_open(m, in, caps, err, err_cap)) != 0) return (int)r;
 #endif
 #if defined(MA_SUPPORT_ALSA)
     m->al_written = 0;
@@ -5363,27 +5730,144 @@ static int yau__ma_open(void* ctx, const yau_device_open* in, yau_device_caps* c
     return 0;
 }
 
-#if defined(MA_SUPPORT_COREAUDIO) && defined(MA_APPLE_DESKTOP)
-/* kAudioDevicePropertyLatency + kAudioDevicePropertySafetyOffset of the
- * output scope: the device's claim from the time stamp CoreAudio gives a
- * render callback to the output; the buffer frame size comes on top for
- * the stream figure. Read once at open. Compiled on macOS by CI; it has not
- * run (STATUS). */
-static void yau__coreaudio_claims(yau__ma* m, yau_device_caps* caps) {
+#if defined(YAU__CA)
+static OSStatus yau__ca_u32(yau__ma* m, uint32_t id, AudioObjectPropertySelector sel, AudioObjectPropertyScope scope,
+                            uint32_t* v) {
     AudioObjectPropertyAddress a;
-    UInt32 lat = 0, safe = 0, fsz = 0, n;
+    UInt32 n = sizeof *v;
+    a.mSelector = sel;
+    a.mScope = scope;
+    a.mElement = 0;
+    return ((ma_AudioObjectGetPropertyData_proc)m->ctx.coreaudio.AudioObjectGetPropertyData)(id, &a, 0, NULL, &n, v);
+}
+
+static double yau__ca_f64(yau__ma* m, uint32_t id, AudioObjectPropertySelector sel) {
+    AudioObjectPropertyAddress a;
+    Float64 v = 0;
+    UInt32 n = sizeof v;
+    a.mSelector = sel;
+    a.mScope = kAudioObjectPropertyScopeGlobal;
+    a.mElement = 0;
+    return ((ma_AudioObjectGetPropertyData_proc)m->ctx.coreaudio.AudioObjectGetPropertyData)(id, &a, 0, NULL, &n, &v) == noErr
+        ? (double)v : 0.0;
+}
+
+/* BACKENDS, COREAUDIO: what the HAL says about the output (read once),
+ * the claims from it, hog mode for desc.exclusive, the IsAlive listener,
+ * and the render note whose stamps are the position reports. */
+static int yau__ca_open(yau__ma* m, const yau_device_open* in, yau_device_caps* caps, char* err, size_t err_cap) {
+    AudioObjectPropertyAddress a;
     AudioObjectID id = (AudioObjectID)m->dev.coreaudio.deviceObjectIDPlayback;
-    ma_AudioObjectGetPropertyData_proc get = (ma_AudioObjectGetPropertyData_proc)m->ctx.coreaudio.AudioObjectGetPropertyData;
-    double ns = 1e9 / (double)caps->rate;
-    if (!get || !id) return;
+    AudioUnit unit = (AudioUnit)m->dev.coreaudio.audioUnitPlayback;
+    mach_timebase_info_data_t tb;
+    AudioStreamID st[8];
+    UInt32 n = sizeof st;
+    yau__ca_rn_fn add, rem;
+    int64_t os_ns, stream_ns;
+    if (!m->ctx.coreaudio.AudioObjectGetPropertyData || !id) return 0;
+    m->ca_id = id;
+    if (mach_timebase_info(&tb) == KERN_SUCCESS && tb.denom) { m->ca_numer = tb.numer; m->ca_denom = tb.denom; }
+    else { m->ca_numer = 1; m->ca_denom = 1; }
+    (void)yau__ca_u32(m, id, kAudioDevicePropertyLatency, kAudioObjectPropertyScopeOutput, &m->ca_latency);
+    (void)yau__ca_u32(m, id, kAudioDevicePropertySafetyOffset, kAudioObjectPropertyScopeOutput, &m->ca_safety);
+    (void)yau__ca_u32(m, id, kAudioDevicePropertyBufferFrameSize, kAudioObjectPropertyScopeOutput, &m->ca_buffer);
+    (void)yau__ca_u32(m, id, kAudioDevicePropertyTransportType, kAudioObjectPropertyScopeGlobal, &m->ca_transport);
+    m->ca_nominal = yau__ca_f64(m, id, kAudioDevicePropertyNominalSampleRate);
+    m->ca_actual = yau__ca_f64(m, id, kAudioDevicePropertyActualSampleRate);
+    /* the first output stream's, which carries channel 1 */
+    a.mSelector = kAudioDevicePropertyStreams;
     a.mScope = kAudioObjectPropertyScopeOutput;
     a.mElement = 0;
-    a.mSelector = kAudioDevicePropertyLatency;       n = sizeof lat;  if (get(id, &a, 0, NULL, &n, &lat) != noErr) return;
-    a.mSelector = kAudioDevicePropertySafetyOffset;  n = sizeof safe; if (get(id, &a, 0, NULL, &n, &safe) != noErr) return;
-    a.mSelector = kAudioDevicePropertyBufferFrameSize; n = sizeof fsz; if (get(id, &a, 0, NULL, &n, &fsz) != noErr) fsz = 0;
-    caps->os_latency_ns = (int64_t)((double)(lat + safe) * ns + 0.5);
-    caps->os_stream_latency_ns = (int64_t)((double)(lat + safe + fsz) * ns + 0.5);
-    snprintf(caps->os_latency_src, sizeof caps->os_latency_src, "coreaudio:ltnc+saft");
+    if (((ma_AudioObjectGetPropertyData_proc)m->ctx.coreaudio.AudioObjectGetPropertyData)(id, &a, 0, NULL, &n, st) == noErr
+        && n >= sizeof st[0])
+        (void)yau__ca_u32(m, st[0], kAudioStreamPropertyLatency, kAudioObjectPropertyScopeGlobal, &m->ca_stream_latency);
+    if (m->ca_buffer) caps->buffer = (int32_t)m->ca_buffer;
+    yau__ca_claims(m->ca_latency, m->ca_safety, m->ca_stream_latency, m->ca_buffer, caps->rate, &os_ns, &stream_ns);
+    caps->os_latency_ns = os_ns;
+    caps->os_stream_latency_ns = stream_ns;
+    snprintf(caps->os_latency_src, sizeof caps->os_latency_src, "coreaudio:ltnc+strm");
+    if (in->exclusive) {
+        /* hog mode: the device for this process alone; the HAL gives it
+         * back when the process ends */
+        pid_t me = getpid(), got = -1;
+        UInt32 k = sizeof got;
+        a.mSelector = kAudioDevicePropertyHogMode;
+        a.mScope = kAudioObjectPropertyScopeGlobal;
+        (void)((ma_AudioObjectSetPropertyData_proc)m->ctx.coreaudio.AudioObjectSetPropertyData)(id, &a, 0, NULL, sizeof me, &me);
+        if (((ma_AudioObjectGetPropertyData_proc)m->ctx.coreaudio.AudioObjectGetPropertyData)(id, &a, 0, NULL, &k, &got) != noErr
+            || got != me) {
+            snprintf(err, err_cap, "ysp_audio: Core Audio did not give device '%s' to this process in hog mode "
+                     "(desc.exclusive; held by pid %d)", caps->name, (int)got);
+            return YAU_ERR_LOST;
+        }
+        m->ca_hog = 1;
+        caps->exclusive = true;
+    }
+    a.mSelector = kAudioDevicePropertyDeviceIsAlive;
+    a.mScope = kAudioObjectPropertyScopeGlobal;
+    if (((ma_AudioObjectAddPropertyListener_proc)m->ctx.coreaudio.AudioObjectAddPropertyListener)(id, &a, yau__ca_alive, m)
+        == noErr)
+        m->ca_listen = 1;
+#if defined(MA_NO_RUNTIME_LINKING)
+    add = AudioUnitAddRenderNotify;
+    rem = AudioUnitRemoveRenderNotify;
+#else
+    add = (yau__ca_rn_fn)ma_dlsym(ma_context_get_log(&m->ctx), m->ctx.coreaudio.hAudioUnit, "AudioUnitAddRenderNotify");
+    rem = (yau__ca_rn_fn)ma_dlsym(ma_context_get_log(&m->ctx), m->ctx.coreaudio.hAudioUnit, "AudioUnitRemoveRenderNotify");
+#endif
+    if (unit && add && rem && add(unit, yau__ca_render_note, m) == noErr) {
+        m->ca_rn_remove = rem;
+        caps->pos_source = YAU_POS_DEVICE;
+        /* the HAL's time line, but no loopback has checked it: tier 3,
+         * the frames confirmed (TIERS) */
+        caps->tier = YAU_TIER_3;
+    }
+    return 0;
+}
+
+/* Undoes yau__ca_open: stage 0 the note and the listener, before the
+ * AudioUnit goes; stage 1 hog mode, after. */
+static void yau__ca_close(yau__ma* m, int stage) {
+    AudioObjectPropertyAddress a;
+    a.mElement = 0;
+    a.mScope = kAudioObjectPropertyScopeGlobal;
+    if (stage == 0) {
+        if (m->ca_rn_remove && m->dev_up)
+            (void)m->ca_rn_remove((AudioUnit)m->dev.coreaudio.audioUnitPlayback, yau__ca_render_note, m);
+        m->ca_rn_remove = NULL;
+        if (m->ca_listen) {
+            a.mSelector = kAudioDevicePropertyDeviceIsAlive;
+            (void)((ma_AudioObjectRemovePropertyListener_proc)m->ctx.coreaudio.AudioObjectRemovePropertyListener)(
+                m->ca_id, &a, yau__ca_alive, m);
+            m->ca_listen = 0;
+        }
+        return;
+    }
+    if (m->ca_hog && m->ctx_up) {
+        pid_t none = -1;
+        a.mSelector = kAudioDevicePropertyHogMode;
+        (void)((ma_AudioObjectSetPropertyData_proc)m->ctx.coreaudio.AudioObjectSetPropertyData)(m->ca_id, &a, 0, NULL,
+                                                                                              sizeof none, &none);
+    }
+    m->ca_hog = 0;
+}
+
+/* The describe line's backend part: the driver stack the HAL shows. */
+static int yau__ca_describe(yau__ma* m, char* buf, size_t cap) {
+    char tt[5];
+    int i;
+    for (i = 0; i < 4; i++) {
+        char ch = (char)((m->ca_transport >> (24 - 8 * i)) & 0xffu);
+        tt[i] = ch >= 0x21 && ch <= 0x7e ? ch : 0;
+        if (!tt[i]) break;
+    }
+    tt[i] = 0;
+    return snprintf(buf, cap, "%s transport=%s uid=%s reports=%s(%u) latency=%u safety=%u stream_latency=%u "
+                    "io_buffer=%u hal_rate=%.0f/%.3f hog=%d skips=%u%s",
+                    ma_get_backend_name(m->backend), tt[0] ? tt : "unknown", m->ca_uid[0] ? m->ca_uid : "?",
+                    m->ca_rn_remove ? "hal" : "none", (unsigned)yau__ld32(&m->ca_reports), (unsigned)m->ca_latency,
+                    (unsigned)m->ca_safety, (unsigned)m->ca_stream_latency, (unsigned)m->ca_buffer, m->ca_nominal,
+                    m->ca_actual, m->ca_hog, (unsigned)yau__ld32(&m->ca_skips), yau__ld32(&m->ca_dead) ? " dead" : "");
 }
 #endif
 
@@ -5488,7 +5972,13 @@ static void yau__ma_close(void* ctx) {
         m->dev.webaudio.pStackBuffer = NULL;
     }
 #endif
+#if defined(YAU__CA)
+    yau__ca_close(m, 0);
+#endif
     if (m->dev_up) { ma_device_uninit(&m->dev); m->dev_up = 0; }
+#if defined(YAU__CA)
+    yau__ca_close(m, 1);
+#endif
     if (m->ctx_up) { ma_context_uninit(&m->ctx); m->ctx_up = 0; }
 #if YAU__LINUX
     if (m->suspended) { yau__pulse_give(m->suspended - 1); m->suspended = 0; }
@@ -5497,6 +5987,9 @@ static void yau__ma_close(void* ctx) {
 
 static int yau__ma_describe(void* ctx, char* buf, size_t cap) {
     yau__ma* m = (yau__ma*)ctx;
+#if defined(YAU__CA)
+    if (m->backend == ma_backend_coreaudio && m->ca_id) return yau__ca_describe(m, buf, cap);
+#endif
 #if defined(MA_HAS_WEBAUDIO)
     if (m->backend == ma_backend_webaudio) {
         double base = m->pub.base_s, lat = m->pub.out_s;
@@ -5550,6 +6043,9 @@ typedef struct yau__mac {
     int        pa_card;     /* the source's ALSA card + 1, counted in yau__pas */
     int        pa_clamps;   /* an ALSA source that is no monitor: a latency of
                              * 0 is the server's clamp, not a value          */
+#endif
+#if defined(YAU__CA)
+    int        ca_thr;      /* the IO thread is set up (as yau__ma's)        */
 #endif
 } yau__mac;
 typedef char yau__mac_fits[sizeof(yau__mac) <= sizeof(((yau_capture*)0)->backend_mem) ? 1 : -1];
@@ -5735,6 +6231,12 @@ static void yau__mac_data(ma_device* d, void* out, const void* in, ma_uint32 n) 
      * no thread, so nothing inherits SCHED_FIFO from it. */
     if (!m->elevated) { m->elevated = 1; (void)yrt_thread_elevate(NULL); }
 #endif
+#if defined(YAU__CA)
+    if (!m->ca_thr && m->backend == ma_backend_coreaudio) {   /* as yau__ma_data */
+        m->ca_thr = 1;
+        yau_capture_thread_init(m->host);
+    }
+#endif
     tk.t_entry = yrt_now_ns();
     tk.pos = -1;
     tk.pos_t = 0;
@@ -5758,6 +6260,9 @@ static void yau__mac_note(const ma_device_notification* nt) {
     if (!m || !m->c) return;
     switch (nt->type) {
     case ma_device_notification_type_started:
+#if defined(YAU__CA)
+        if (m->backend == ma_backend_coreaudio) break;
+#endif
         yau_capture_thread_init(m->host);
         break;
     case ma_device_notification_type_stopped:
@@ -6632,7 +7137,7 @@ static const char* yau__out_name(int o) {
 
 YAU_API int yau_describe(const yau_audio* au, char* buf, size_t cap) {
     yau_caps c;
-    char be[160] = "", claim[96];   /* the web device's is about 120 bytes */
+    char be[256] = "", claim[96];   /* CoreAudio's is about 200 bytes with a long UID */
     if (!buf || cap == 0) return 0;
     if (!au || !au->open) return snprintf(buf, cap, "ysp_audio: closed");
     yau_get_caps(au, &c);
@@ -8280,7 +8785,7 @@ YAU_API void yau_capture_get_info(const yau_capture* c, yau_capture_info* out) {
 
 YAU_API int yau_capture_describe(const yau_capture* c, char* buf, size_t cap) {
     yau_capture_info in;
-    char be[160] = "", claim[96];   /* a duplex web device's is about 120 bytes */
+    char be[256] = "", claim[96];   /* a duplex CoreAudio device's is about 200 bytes */
     if (!buf || cap == 0) return 0;
     if (!c || !c->open) return snprintf(buf, cap, "ysp_audio capture: closed");
     yau_capture_get_info(c, &in);

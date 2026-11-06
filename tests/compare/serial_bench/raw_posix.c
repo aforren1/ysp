@@ -1,44 +1,76 @@
-/* raw_posix.c - the Linux floor for serial_bench: the same echo round trip and
- * the same stream as serial_bench.m and serial_bench_py, with open, termios,
- * read, write and poll only. No ysp code. The counterpart of raw_win32.c: it
- * bounds what any API can do on this port and driver, so the API numbers can
- * be read as "floor + API cost".
+/* raw_posix.c - the POSIX floor for serial_bench, the sibling of raw_win32.c:
+ * the same echo round trip and the same stream as serial_bench.m and
+ * serial_bench_py, with open(), termios, write() and read() only, plus one
+ * mode that makes the same exchanges through ysp/serial.h, so the header and
+ * the floor are measured by one program, one method and one clock. No
+ * MATLAB.
  *
  * Needs the echo board (firmware/ysp_echo) on the port.
  *
- *   raw_posix /dev/ttyACM0 [out_dir] [n_rt] [flags]
+ *   raw_posix /dev/cu.usbmodemNNN [out_dir] [n_rt] [flags]   (macOS)
+ *   raw_posix /dev/ttyACM0 [out_dir] [n_rt] [flags]          (Linux)
  *
- * flags: "rt" skips the streams; "rev" runs the modes in reverse order.
+ * flags: "rt" skips the streams; "rev" runs the modes in reverse order (the
+ * first mode of a run measured slower on Windows, docs/serial.md, Audit).
  *
- * Build:
- *   cc -O2 -Wall -o raw_posix raw_posix.c -lm
+ * Build (macOS or Linux):
+ *   cc -O2 -Wall -I../../../include -o raw_posix raw_posix.c -lpthread -lm
  *
  * Modes, each with its own open:
- *   block  a blocking descriptor, raw termios with VMIN = 1 and VTIME = 0:
- *          read() returns as soon as one byte is there, in the kernel. A
- *          timeout comes from poll() before the read.
- *   poll   O_NONBLOCK, poll() for POLLIN, then read() of what is buffered.
- *          ysp/serial.h waits this way.
+ *   block   a blocking descriptor, raw termios with VMIN = 0 and VTIME = 10:
+ *           read() returns as soon as one byte is there, or after 1 s, in
+ *           the kernel. write() blocks until the driver takes the bytes.
+ *           The plain termios way, as raw_win32's "sync".
+ *   select  O_NONBLOCK, select() for readable, then read() of what is
+ *           there; write(), with select() for writable on EAGAIN. This is
+ *           what ysp/serial.h does on macOS (POSIX WAITS in the header).
+ *   poll    O_NONBLOCK, poll(POLLIN), then read(); not on macOS. This is
+ *           what ysp/serial.h does on Linux.
+ *   kqueue  O_NONBLOCK, kevent(EVFILT_READ), then read(); macOS and the
+ *           BSDs only. Apple's poll(2) documents that it does not support
+ *           devices; kqueue is the other wait the kernel offers.
+ *   ysp     yser_write() and yser_read(YSER_READ_ANY) on a yser_port with
+ *           the defaults. Not a floor: the header under test, on the
+ *           floor's method.
+ *
+ * The 2026-10-12 Linux runs used an earlier, Linux-only version of this
+ * file: its block mode had VMIN = 1, VTIME = 0 and a poll() for the
+ * timeout, and it had no select or ysp mode (docs/serial.md, Results on
+ * Linux).
  *
  * Output: the metric names and statistics of raw_win32.c and serial_bench's
  * summary.txt (median, p99 at rank ceil(0.99 n), max, mean, in
  * microseconds), on stdout and in <out_dir>/raw_summary.txt, plus raw CSVs.
- * The clock is CLOCK_MONOTONIC, the clock of ysp/rt.h on Linux. The process
- * runs at normal priority.
+ * The clock is yrt_now_ns() (mach_absolute_time() on macOS, CLOCK_MONOTONIC
+ * on Linux) for every mode. The one-way split uses the clock fit of
+ * sb_fit.m: the best exchange of each 200 ms, symmetric delays assumed.
+ *
+ * The process runs at normal priority, as MATLAB does in the bench.
  *
  * Public domain / MIT-0, as the rest of ysp. */
-#define _DEFAULT_SOURCE
+#define YSP_SERIAL_IMPLEMENTATION
+#include "ysp/serial.h"   /* first: it sets _DEFAULT_SOURCE for glibc */
 #include <errno.h>
 #include <fcntl.h>
 #include <math.h>
-#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
+#include <sys/resource.h>
+#include <sys/select.h>
 #include <sys/stat.h>
 #include <termios.h>
-#include <time.h>
 #include <unistd.h>
+#if defined(__APPLE__) || defined(__FreeBSD__)
+#include <sys/event.h>
+#define RAW_HAVE_KQUEUE 1
+#endif
+/* Apple's poll(2) does not support devices, so the mode is left out there. */
+#if !defined(__APPLE__)
+#include <poll.h>
+#define RAW_HAVE_POLL 1
+#endif
 
 #define RT_LEN 35
 #define ST_LEN 26
@@ -48,20 +80,11 @@
 
 static FILE* g_sum;
 
-static double now_us(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (double)ts.tv_sec * 1e6 + (double)ts.tv_nsec / 1e3;
-}
+static double now_us(void) { return (double)yrt_now_ns() / 1e3; }
 
 static void spin_until(double t) { while (now_us() < t) { } }
 
-static void sleep_ms(int ms) {
-    struct timespec ts;
-    ts.tv_sec = ms / 1000;
-    ts.tv_nsec = (long)(ms % 1000) * 1000000L;
-    while (nanosleep(&ts, &ts) != 0 && errno == EINTR) { }
-}
+static void sleep_ms(int ms) { (void)yrt_sleep_ns((int64_t)ms * 1000000); }
 
 static void die(const char* what) {
     fprintf(stderr, "raw_posix: %s failed: %s\n", what, strerror(errno));
@@ -94,6 +117,7 @@ static void report(const char* api, const char* part, const char* metric,
                  api, part, metric, m, med, s[k - 1], s[m - 1], sum / m, note);
     }
     puts(line);
+    fflush(stdout);
     if (g_sum) fprintf(g_sum, "%s\n", line);
     free(s);
 }
@@ -104,68 +128,138 @@ static void report1(const char* api, const char* part, const char* metric, doubl
 
 /* --- the port ----------------------------------------------------------- */
 
+enum { M_BLOCK, M_SELECT, M_POLL, M_KQUEUE, M_YSP, M_COUNT };
+static const char* const mode_name[M_COUNT] = { "block", "select", "poll", "kqueue", "ysp" };
+
 typedef struct {
+    int mode;
     int fd;
-    int nonblock;       /* poll mode */
-    const char* name;
+    int kq;
+    yser_port sp;
 } port;
 
-static void port_open(port* p, const char* dev, const char* mode) {
-    struct termios t;
+static void port_open(port* p, const char* dev, int mode) {
     memset(p, 0, sizeof *p);
-    p->name = mode;
-    p->nonblock = strcmp(mode, "poll") == 0;
-    p->fd = open(dev, O_RDWR | O_NOCTTY | O_CLOEXEC | (p->nonblock ? O_NONBLOCK : 0));
+    p->mode = mode;
+    p->fd = p->kq = -1;
+    if (mode == M_YSP) {
+        yser_desc d;
+        memset(&d, 0, sizeof d);
+        d.device = dev;
+        if (!yser_open(&p->sp, &d)) {
+            fprintf(stderr, "raw_posix: open %s: %s\n", dev, yser_error(&p->sp));
+            exit(1);
+        }
+        yser_purge(&p->sp, YSER_PURGE_RX | YSER_PURGE_TX);
+        return;
+    }
+    p->fd = open(dev, O_RDWR | O_NOCTTY | O_NONBLOCK);
     if (p->fd < 0) die("open");
+    if (mode == M_BLOCK && fcntl(p->fd, F_SETFL, 0) != 0) die("fcntl");
+    struct termios t;
     if (tcgetattr(p->fd, &t) != 0) die("tcgetattr");
     cfmakeraw(&t);
-    t.c_cflag |= CLOCAL | CREAD | HUPCL;
-    t.c_cflag &= ~(tcflag_t)CRTSCTS;
-    t.c_cc[VMIN] = 1;
-    t.c_cc[VTIME] = 0;
+    t.c_cflag |= (tcflag_t)(CLOCAL | CREAD);
+    t.c_cflag &= (tcflag_t)~(CRTSCTS | HUPCL);
+    t.c_cc[VMIN] = 0;
+    t.c_cc[VTIME] = mode == M_BLOCK ? 10 : 0;
     cfsetispeed(&t, B115200);
     cfsetospeed(&t, B115200);
     if (tcsetattr(p->fd, TCSANOW, &t) != 0) die("tcsetattr");
+    int lines = TIOCM_DTR | TIOCM_RTS;
+    ioctl(p->fd, TIOCMBIS, &lines);
+#if defined(RAW_HAVE_KQUEUE)
+    if (mode == M_KQUEUE) {
+        struct kevent ev;
+        p->kq = kqueue();
+        if (p->kq < 0) die("kqueue");
+        EV_SET(&ev, p->fd, EVFILT_READ, EV_ADD | EV_CLEAR, 0, 0, NULL);
+        if (kevent(p->kq, &ev, 1, NULL, 0, NULL) != 0) die("kevent(EV_ADD)");
+    }
+#endif
     tcflush(p->fd, TCIOFLUSH);
 }
 
-static void port_close(port* p) { close(p->fd); }
+static void port_close(port* p) {
+    if (p->mode == M_YSP) { yser_close(&p->sp); return; }
+    if (p->kq >= 0) close(p->kq);
+    close(p->fd);
+}
+
+static void port_purge(port* p) {
+    if (p->mode == M_YSP) yser_purge(&p->sp, YSER_PURGE_RX);
+    else tcflush(p->fd, TCIFLUSH);
+}
 
 static void port_write(port* p, const void* buf, int len) {
-    const char* b = (const char*)buf;
-    while (len > 0) {
-        ssize_t w = write(p->fd, b, (size_t)len);
-        if (w < 0) {
-            if (errno == EINTR) continue;
-            if (errno == EAGAIN) {
-                struct pollfd pf = { p->fd, POLLOUT, 0 };
-                poll(&pf, 1, 1000);
-                continue;
-            }
-            die("write");
+    if (p->mode == M_YSP) {
+        if (yser_write(&p->sp, buf, len) != len) die("yser_write");
+        return;
+    }
+    int done = 0;
+    while (done < len) {
+        ssize_t w = write(p->fd, (const char*)buf + done, (size_t)(len - done));
+        if (w > 0) { done += (int)w; continue; }
+        if (w < 0 && errno == EINTR) continue;
+        if (w < 0 && errno == EAGAIN) {
+            fd_set s;
+            FD_ZERO(&s);
+            FD_SET(p->fd, &s);
+            select(p->fd + 1, NULL, &s, NULL, NULL);
+            continue;
         }
-        b += w;
-        len -= (int)w;
+        die("write");
     }
 }
 
-/* Whatever is there, waiting up to timeout_ms for the first byte. Returns
- * the byte count, 0 on timeout. */
+/* Whatever is there, waiting up to timeout_ms for the first byte. Returns the
+ * byte count, 0 on timeout. */
 static int port_read(port* p, unsigned char* buf, int cap, int timeout_ms) {
-    struct pollfd pf = { p->fd, POLLIN, 0 };
-    ssize_t r;
-    if (p->nonblock) {
-        r = read(p->fd, buf, (size_t)cap);   /* bytes already buffered */
-        if (r > 0) return (int)r;
-        if (poll(&pf, 1, timeout_ms) <= 0) return 0;
-        r = read(p->fd, buf, (size_t)cap);
-        return r > 0 ? (int)r : 0;
+    if (p->mode == M_YSP) {
+        int r = yser_read(&p->sp, buf, cap, YRT_MS(timeout_ms), YSER_READ_ANY);
+        if (r < 0) die("yser_read");
+        return r;
     }
-    /* VMIN = 1 alone would wait forever; poll() gives the timeout, and the
-     * read then returns what is there */
-    if (poll(&pf, 1, timeout_ms) <= 0) return 0;
-    r = read(p->fd, buf, (size_t)cap);
-    return r > 0 ? (int)r : 0;
+    if (p->mode == M_BLOCK) {
+        ssize_t r = read(p->fd, buf, (size_t)cap);   /* VTIME bounds the wait */
+        if (r < 0 && errno != EINTR) die("read");
+        return r < 0 ? 0 : (int)r;
+    }
+    for (;;) {
+        ssize_t r = read(p->fd, buf, (size_t)cap);
+        if (r > 0) return (int)r;
+        if (r < 0 && errno != EAGAIN && errno != EINTR) die("read");
+        if (p->mode == M_SELECT) {
+            fd_set s;
+            struct timeval tv;
+            FD_ZERO(&s);
+            FD_SET(p->fd, &s);
+            tv.tv_sec = timeout_ms / 1000;
+            tv.tv_usec = (timeout_ms % 1000) * 1000;
+            int k = select(p->fd + 1, &s, NULL, NULL, &tv);
+            if (k == 0) return 0;
+            if (k < 0 && errno != EINTR) die("select");
+        }
+#if defined(RAW_HAVE_POLL)
+        else if (p->mode == M_POLL) {
+            struct pollfd pf = { p->fd, POLLIN, 0 };
+            int k = poll(&pf, 1, timeout_ms);
+            if (k == 0) return 0;
+            if (k < 0 && errno != EINTR) die("poll");
+        }
+#endif
+#if defined(RAW_HAVE_KQUEUE)
+        else {
+            struct kevent ev;
+            struct timespec ts;
+            ts.tv_sec = timeout_ms / 1000;
+            ts.tv_nsec = (long)(timeout_ms % 1000) * 1000000L;
+            int k = kevent(p->kq, NULL, 0, &ev, 1, &ts);
+            if (k == 0) return 0;
+            if (k < 0 && errno != EINTR) die("kevent");
+        }
+#endif
+    }
 }
 
 /* Read exactly n bytes or give up after timeout_ms in total. */
@@ -185,7 +279,16 @@ static int port_read_all(port* p, unsigned char* buf, int n, double timeout_ms) 
 static void port_flush_board(port* p) {
     port_write(p, "x\n", 2);
     sleep_ms(50);
-    tcflush(p->fd, TCIFLUSH);
+    port_purge(p);
+}
+
+/* The bytes-available query, the call behind serialport's NumBytesAvailable
+ * and ysp_serial('available'). */
+static int port_available(port* p) {
+    if (p->mode == M_YSP) return yser_available(&p->sp);
+    int n = 0;
+    ioctl(p->fd, FIONREAD, &n);
+    return n;
 }
 
 /* --- parsing ------------------------------------------------------------ */
@@ -213,7 +316,7 @@ static double unwrap(double v, double ref) {
     return ref + d;
 }
 
-/* --- the clock fit, as sb_fit.m ----------------------------------------- */
+/* --- the clock fit, as sb_fit.m and raw_win32.c ------------------------- */
 
 typedef struct { int ok, npts; double x0, y0, slope, unc, span_s; } fit;
 
@@ -286,10 +389,12 @@ static void rt_alloc(rtrun* X, int n) {
 
 static void rt_free(rtrun* X) { free(X->t0); free(X->t1); free(X->t2); free(X->rx); free(X->tx); }
 
-/* gap_us: the spacing of the exchanges, 0 to gap_us at random. The stream's
- * probes use 2 to 3 ms: 0 to 1 ms puts 200 of them in one 200 ms bucket of
- * the fit, which then has 2 points and no slope (as serial_bench_py). */
-static void rt_run(port* p, rtrun* X, int n, double seq0, double gap_lo_us, double gap_hi_us) {
+/* gap_lo_us to gap_hi_us: the spacing of the exchanges, uniform at random.
+ * The stream's probes use 2 to 3 ms: at 0 to 1 ms all 200 fell in one 200 ms
+ * bucket of the fit, which then had 2 points and no slope (docs/serial.md,
+ * Stream fits of the raw floors). */
+static void rt_run(port* p, rtrun* X, int n, double seq0,
+                   double gap_lo_us, double gap_hi_us, double* avail) {
     unsigned char cmd[16], r[64];
     double ref = NAN;
     port_flush_board(p);
@@ -306,7 +411,7 @@ static void rt_run(port* p, rtrun* X, int n, double seq0, double gap_lo_us, doub
         if (!parse_reply(r, got, seq, &rx, &tx)) {
             X->failed++;
             sleep_ms(20);
-            tcflush(p->fd, TCIFLUSH);
+            port_purge(p);
             continue;
         }
         if (isnan(ref)) ref = rx;
@@ -314,6 +419,13 @@ static void rt_run(port* p, rtrun* X, int n, double seq0, double gap_lo_us, doub
         X->t0[k] = t0; X->t1[k] = t1; X->t2[k] = t2;
         X->rx[k] = unwrap(rx, ref);
         X->tx[k] = unwrap(tx, ref);
+        /* the bytes-available query, after the exchange so it does not
+         * delay it */
+        if (avail) {
+            double a = now_us();
+            (void)port_available(p);
+            avail[k] = now_us() - a;
+        }
     }
 }
 
@@ -345,7 +457,7 @@ static void rt_report(const char* api, const char* tag, rtrun* X) {
 
 static void rt_csv(const char* dir, const char* api, const char* tag, rtrun* X) {
     if (!dir) return;
-    char path[512];
+    char path[1024];
     snprintf(path, sizeof path, "%s/%s_rt_%s.csv", dir, api, tag);
     FILE* f = fopen(path, "wb");
     if (!f) return;
@@ -358,9 +470,10 @@ static void rt_csv(const char* dir, const char* api, const char* tag, rtrun* X) 
 /* --- the stream --------------------------------------------------------- */
 
 static double cpu_s(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &ts);
-    return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
+    struct rusage u;
+    getrusage(RUSAGE_SELF, &u);
+    return (double)u.ru_utime.tv_sec + (double)u.ru_utime.tv_usec * 1e-6 +
+           (double)u.ru_stime.tv_sec + (double)u.ru_stime.tv_usec * 1e-6;
 }
 
 static void stream_run(port* p, const char* api, const char* dir) {
@@ -377,7 +490,7 @@ static void stream_run(port* p, const char* api, const char* dir) {
 
     rtrun P;
     rt_alloc(&P, 2 * N_PROBE);
-    rt_run(p, &P, N_PROBE, 1e6, 2000, 3000);
+    rt_run(p, &P, N_PROBE, 1e6, 2000, 3000, NULL);
     char cmd[32];
     int clen = snprintf(cmd, sizeof cmd, "s %d %d\n", STREAM_HZ, nlines);
     double c0 = cpu_s(), w0 = now_us();
@@ -410,7 +523,7 @@ static void stream_run(port* p, const char* api, const char* dir) {
     port_flush_board(p);
     rtrun P2;
     rt_alloc(&P2, N_PROBE);
-    rt_run(p, &P2, N_PROBE, 2e6, 2000, 3000);
+    rt_run(p, &P2, N_PROBE, 2e6, 2000, 3000, NULL);
     for (int i = 0; i < P2.n; i++) {
         P.t0[P.n] = P2.t0[i]; P.t2[P.n] = P2.t2[i];
         /* both blocks unwrap against their own first stamp; within a run the
@@ -428,10 +541,15 @@ static void stream_run(port* p, const char* api, const char* dir) {
         if (k < 1 || k > nlines) continue;
         if (seen[k]) dup++; else { seen[k] = 1; nu++; }
     }
+    static const char* const how[M_COUNT] = {
+        "read() on a blocking descriptor, VMIN 0, VTIME 10",
+        "select(), then read() of what is there",
+        "poll(POLLIN), then read() of what is there",
+        "kevent(EVFILT_READ), then read() of what is there",
+        "yser_read(YSER_READ_ANY)"
+    };
     char note[200], m[64];
-    snprintf(note, sizeof note, "of %d lines (count); %s", nlines,
-             p->nonblock ? "poll(POLLIN), then read() of what is buffered"
-                         : "blocking read(), VMIN 1, first byte waits in the kernel");
+    snprintf(note, sizeof note, "of %d lines (count); %s", nlines, how[p->mode]);
     report1(api, "stream", "line_lines_missed", nlines - nu, note);
     report1(api, "stream", "line_lines_duplicated", dup, "count");
     report1(api, "stream", "line_bad_lines", bad, "lines of the wrong length or kind (count)");
@@ -452,8 +570,6 @@ static void stream_run(port* p, const char* api, const char* dir) {
     snprintf(note, sizeof note, "process CPU time / wall time over %.1f s, percent of one core", (w1 - w0) / 1e6);
     report1(api, "stream", "line_cpu_pct", 100.0 * (c1 - c0) / ((w1 - w0) / 1e6), note);
 
-    /* map board stamps: unwrap the line stamps against the first probe's rx
-     * reference (the probes were unwrapped against their own first rx) */
     fit F = fit_make(P.t0, P.t2, P.rx, P.tx, P.n);
     if (F.ok && nl > 0) {
         double ref = P.rx[0];
@@ -465,7 +581,7 @@ static void stream_run(port* p, const char* api, const char* dir) {
         snprintf(m, sizeof m, "%d points over %.1f s", F.npts, F.span_s);
         report1(api, "stream", "line_fit_ppm", (1 / F.slope - 1) * 1e6, m);
         if (dir) {
-            char path[512];
+            char path[1024];
             snprintf(path, sizeof path, "%s/%s_stream_line.csv", dir, api);
             FILE* f = fopen(path, "wb");
             if (f) {
@@ -483,7 +599,7 @@ static void stream_run(port* p, const char* api, const char* dir) {
 
 int main(int argc, char** argv) {
     if (argc < 2) {
-        fprintf(stderr, "usage: raw_posix /dev/ttyACMn [out_dir] [n_rt] [rt,rev]\n");
+        fprintf(stderr, "usage: raw_posix /dev/cu.usbmodemNNN|/dev/ttyACMn [out_dir] [n_rt] [rt,rev]\n");
         return 2;
     }
     const char* dev = argv[1];
@@ -493,7 +609,7 @@ int main(int argc, char** argv) {
     int rev = argc >= 5 && strstr(argv[4], "rev") != NULL;
     if (dir) {
         mkdir(dir, 0777);
-        char path[512];
+        char path[1024];
         snprintf(path, sizeof path, "%s/raw_summary.txt", dir);
         g_sum = fopen(path, "wb");
     }
@@ -505,26 +621,40 @@ int main(int argc, char** argv) {
     puts(hdr);
     if (g_sum) fprintf(g_sum, "Times in microseconds unless the note says count or percent.\n%s\n", hdr);
 
+    /* clock cost, as the bench's clock part */
     {
         int n = 100000;
         double* d = (double*)malloc((size_t)n * sizeof(double));
         for (int i = 0; i < n; i++) { double a = now_us(); d[i] = now_us() - a; }
-        report("raw", "clock", "clock_pair", d, n, "two back-to-back clock_gettime(CLOCK_MONOTONIC) reads");
+        report("raw", "clock", "clock_pair", d, n, "two back-to-back yrt_now_ns() reads");
         free(d);
     }
 
-    static const char* modes[] = { "block", "poll" };
-    for (int mj = 0; mj < 2; mj++) {
-        int mi = rev ? 1 - mj : mj;
+    int modes[M_COUNT], nm = 0;
+    for (int m = 0; m < M_COUNT; m++) {
+#if !defined(RAW_HAVE_KQUEUE)
+        if (m == M_KQUEUE) continue;
+#endif
+#if !defined(RAW_HAVE_POLL)
+        if (m == M_POLL) continue;
+#endif
+        modes[nm++] = m;
+    }
+    for (int mj = 0; mj < nm; mj++) {
+        int mi = modes[rev ? nm - 1 - mj : mj];
         port p;
-        port_open(&p, dev, modes[mi]);
+        port_open(&p, dev, mi);
         char api[16];
-        snprintf(api, sizeof api, "raw_%s", modes[mi]);
+        snprintf(api, sizeof api, mi == M_YSP ? "ysp_c" : "raw_%s", mode_name[mi]);
         rtrun X;
         rt_alloc(&X, n_rt);
-        rt_run(&p, &X, n_rt, 0, 0, 1000);
+        double* av = (double*)calloc((size_t)n_rt, sizeof(double));
+        rt_run(&p, &X, n_rt, 0, 0, 1000, av);
         rt_report(api, "block", &X);
         rt_csv(dir, api, "block", &X);
+        report(api, "calls", "bytes_available", av, X.n,
+               mi == M_YSP ? "yser_available()" : "ioctl(FIONREAD), the call behind a bytes-available query");
+        free(av);
         rt_free(&X);
         if (!rt_only) stream_run(&p, api, dir);
         port_close(&p);

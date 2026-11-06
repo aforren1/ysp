@@ -55,6 +55,9 @@ function R = serial_bench(varargin)
         'n_open', 20, 'n_calls', 2000, 'n_blocking', 200, 'n_read_waiting', 500, ...
         'n_rt', 1000, 'n_probe', 200, 'stream_hz', 1000, 'stream_s', 10, ...
         'max_block_s', 20, 'write_sizes', [1 8 64 512], 'absent_port', 'COM250');
+    if ~ispc
+        cfg.absent_port = '/dev/cu.ysp-absent';
+    end
     if mod(numel(varargin), 2) ~= 0
         error('serial_bench:args', 'options come in name-value pairs');
     end
@@ -222,6 +225,13 @@ function sb_write_conditions(cfg, avail)
         pw = strtrim(pw);
         if strcmp(pw, '2'), pw = 'AC'; elseif strcmp(pw, '1'), pw = 'battery'; end
         fprintf(fid, 'OS: %s\nCPU: %s\npower: %s\n', strtrim(os), strtrim(cpu), pw);
+    elseif ismac
+        [~, os] = system('sw_vers -productVersion');
+        [~, cpu] = system('sysctl -n machdep.cpu.brand_string');
+        [~, model] = system('sysctl -n hw.model');
+        [~, pw] = system('pmset -g batt | head -1');
+        fprintf(fid, 'OS: macOS %s\nCPU: %s (%s)\npower: %s\n', strtrim(os), strtrim(cpu), ...
+                strtrim(model), strtrim(pw));
     end
     fprintf(fid, 'port: %s\ndevice: %s\nbaud: %d\n', cfg.port, cfg.device, cfg.baud);
     ftdi = sb_ftdi_latency(cfg.port);

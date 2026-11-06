@@ -7,6 +7,7 @@
  *   --device NAME the playback device whose name contains NAME; default the
  *                 OS default device
  *   --exclusive   WASAPI exclusive mode (every other program goes silent)
+ *                 or CoreAudio hog mode
  *   --count N     tones, 300 ms apart (default 3)
  *   --db DB       peak level in dBFS (default -40; values above -30 are
  *                 refused, because this is a demo, not a stimulus)

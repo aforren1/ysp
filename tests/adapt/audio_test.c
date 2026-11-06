@@ -34,6 +34,9 @@ static void vsleep_until(long long t);
 #define YAU__NOW() ((int64_t)vnow())
 #define YAU__SLEEP_UNTIL(t) vsleep_until((long long)(t))
 
+/* the CoreAudio time line's arithmetic, which only a macOS miniaudio
+ * build compiles otherwise (BACKENDS, COREAUDIO) */
+#define YAU__CA_CORE 1
 #define YSP_AUDIO_IMPLEMENTATION
 #include "ysp/audio.h"
 #include <errno.h>
@@ -144,6 +147,19 @@ typedef struct sdev {
     int      entry_zero;    /* t_entry 0: an AudioWorklet with no clock       */
     int64_t  no_report_k;   /* blocks before this one carry no report (WASAPI
                                exclusive: the prefill is still playing)       */
+    /* hal: CoreAudio's HAL (BACKENDS, COREAUDIO). Each render's stamp is
+     * the device sample and IO time of its first frame, exact on the device
+     * clock; the callback comes hal_ahead frames before that IO time; the
+     * reports come from yau__ca_tick on 1/1 host units (ns); a stall makes
+     * the HAL skip the device frames it took (g), as measured; hal_rewind
+     * moves the stamps' sample time back from then on. With L = 0 the truth
+     * is the IO time. After a skip the callback is hal_ahead before its new
+     * IO time again, so late by the stall on the old line (measured: 11.5 ms
+     * ahead before and after a 30 ms stall on the built-in speakers). */
+    int      hal;
+    int64_t  hal_ahead, hal_rewind;
+    int64_t  hal_future;    /* reports whose time was after the call          */
+    yau__cat cat;
 } sdev;
 
 static sdev g_sd;
@@ -215,6 +231,27 @@ static void sd_block(sdev* s) {
     yau_tick tk;
     int64_t i;
     s->late_ns = 0;
+    if (s->hal) {
+        int64_t S, h;
+        uint64_t host = 0;
+        if (s->stall_ns) s->g += (int64_t)floor((double)s->stall_ns / kd + 0.5);
+        S = s->W + s->g;
+        h = s->T0 + (int64_t)floor((double)S * kd + 0.5);
+        t = h - (int64_t)floor((double)s->hal_ahead * kd + 0.5) + late;
+        s->stall_ns = 0;
+        if (t > g_vt) g_vt = t;
+        memset(&tk, 0, sizeof tk);
+        tk.t_entry = t;
+        tk.pos = -1;
+        /* AUHAL's sample time starts at its own zero, not the device's */
+        yau__ca_note(&s->cat, (double)(S - s->hal_rewind) + 777.0, (uint64_t)h, 1);
+        yau__ca_tick(&s->cat, (uint64_t)t, s->period, &tk, &host);
+        if (tk.pos >= 0) {
+            tk.pos_t = yau__ca_ns(host, 1, 1);
+            if (tk.pos_t > t) s->hal_future++;
+        }
+        goto rendered;
+    }
     if (s->halt_pipe > 0) {
         if (t < s->last_t) t = s->last_t;
         s->last_t = t;
@@ -3027,6 +3064,154 @@ static void test_misc(void) {
     }
 }
 
+/* BACKENDS, COREAUDIO without a device: the host-time conversion, the
+ * latency claims, and the time line's reports, skips and rewinds. */
+static void test_coreaudio_math(void) {
+    yau__cat c;
+    yau_tick tk;
+    uint64_t host;
+    int64_t os_ns, st_ns, i;
+    /* mach units: 125/3 ns on Apple silicon, 1/1 on Intel Macs */
+    CHECK_I(yau__ca_ns(3, 125, 3), 125);
+    CHECK_I(yau__ca_ns(1, 125, 3), 41);
+    CHECK_I(yau__ca_ns(3000000000000002ull, 125, 3), 125000000000000083LL);   /* 4 years of ticks */
+    CHECK_I(yau__ca_ns(123456789, 1, 1), 123456789);
+    CHECK_I(yau__ca_ns(77, 1, 0), 77);
+    /* the claims as the test Mac's HAL gave them: HDMI, built-in speakers */
+    yau__ca_claims(88, 320, 0, 480, 48000, &os_ns, &st_ns);
+    CHECK_I(os_ns, 1833333);
+    CHECK_I(st_ns, 18500000);
+    yau__ca_claims(72, 76, 408, 480, 48000, &os_ns, &st_ns);
+    CHECK_I(os_ns, 10000000);
+    CHECK_I(st_ns, 21583333);
+    yau__ca_claims(72, 76, 408, 480, 0, &os_ns, &st_ns);
+    CHECK_I(os_ns, 0);
+
+    /* one host unit a frame; IO time h_i = 10000 + 480 i, the call 800
+     * before it, so the newest past render is two back */
+    memset(&c, 0, sizeof c);
+    for (i = 0; i < 20; i++) {
+        int64_t skip = i >= 10 ? 100 : 0, back = i >= 14 ? 50 : 0;
+        uint64_t h = (uint64_t)(10000 + 480 * i + skip);
+        memset(&tk, 0, sizeof tk);
+        tk.pos = -1;
+        host = 0;
+        yau__ca_note(&c, (double)(1000 + 480 * i + skip - back), h, i != 17);
+        yau__ca_tick(&c, h - 800, 480, &tk, &host);
+        if (i < 2 || i == 11 || i == 14 || i == 15) {
+            CHECK_I(tk.pos, -1);
+        } else if (i == 10) {
+            /* the skip: this render's own pair, past the frames handed by
+             * exactly the skip */
+            CHECK_I(tk.pos, 480 * 10 + 100);
+            CHECK_I((int64_t)host, (int64_t)h);
+            CHECK_I(c.skipped, 100);
+        } else if (i < 10) {
+            CHECK_I(tk.pos, 480 * (i - 2));
+            CHECK_I((int64_t)host, 10000 + 480 * (i - 2));
+        } else if (i < 14) {
+            CHECK_I(tk.pos, 480 * (i - 2) + 100);
+            CHECK_I((int64_t)host, 10000 + 480 * (i - 2) + 100);
+        } else if (i == 18 || i == 19) {
+            /* 17's stamp was not valid: 16 is the newest past one */
+            CHECK_I(tk.pos, 480 * 16 + 100);
+        } else {
+            /* after the rewind the positions go on from the frames handed */
+            CHECK_I(tk.pos, 480 * (i - 2) + 100);
+        }
+        CHECK_I(tk.flags, i == 14 ? YAU_TICK_XRUN : 0u);
+    }
+    CHECK_I(c.skips, 1);
+    CHECK_I(c.rewinds, 1);
+    CHECK_I(c.frames, 20 * 480);
+}
+
+/* The time line through the core: reports exact on the device clock, the
+ * fit on them, every onset on the truth's frame and confirmed; a stall is a
+ * skip, which shifts the fit by exactly its frames (UNDERRUNS) and keeps
+ * it; a rewind restarts it. Also at a 32-frame period, where the newest
+ * past render is 26 back. */
+static void hal_case(int32_t period, int64_t ahead) {
+    sdev* s = &g_sd;
+    yau_buf b;
+    yau_onset r = { 0 };
+    yau_id id;
+    int64_t t;
+    int i, exact = 0;
+    uint32_t x0, gen0;
+    sd_default(s);
+    s->hal = 1;
+    s->L = 0;
+    s->period = period;
+    s->buffer = period;
+    s->hal_ahead = ahead;
+    s->tier = YAU_TIER_3;
+    s->T0 = g_vt + 50000000;
+    for (t = 0; t < 4800; t++) g_buf[t] = 0.25f;
+    memset(&b, 0, sizeof b);
+    b.frames = g_buf; b.n = 2400; b.channels = 1;
+    CHECK(open_dev(s, NULL));
+    sd_run_s(s, 8.0);
+    CHECK_I(s->hal_future, 0);
+    for (i = 0; i < 20; i++) {
+        t = g_vt + 60000000 + i * 1234567;
+        id = yau_play_at(&g_au, b, t);
+        sd_run_s(s, 0.2);
+        CHECK_I(yau_result(&g_au, id, &r), YAU_OK);
+        if (r.start_frame == sd_frame_of(s, t)) exact++;
+        CHECK(!(r.flags & (YAU_ONSET_UNCONFIRMED | YAU_ONSET_XRUN | YAU_ONSET_LATE)));
+        CHECK_I(r.tier, YAU_TIER_3);
+        CHECK(llabs(r.onset - sd_truth(s, r.start_frame)) < 1000);
+    }
+    CHECK_I(exact, 20);
+    /* a 30 ms stall while a sound plays: XRUN on it */
+    yau_update(&g_au);
+    x0 = g_au.xruns_ft;
+    gen0 = g_au.fit.gen;
+    t = g_vt + 40000000;
+    id = yau_play_at(&g_au, b, t);
+    sd_run_s(s, 0.06);
+    s->stall_ns = 30000000;
+    sd_run(s, 1);
+    CHECK(s->g > 0);
+    CHECK_I(g_au.p_off, s->g);
+    CHECK(g_au.fit.ready);
+    sd_run_s(s, 1.0);
+    yau_update(&g_au);
+    CHECK_I(g_au.xruns_ft, x0 + 1);
+    CHECK_I(s->hal_future, 1);
+    CHECK_I(yau_result(&g_au, id, &r), YAU_OK);
+    CHECK(r.flags & YAU_ONSET_XRUN);
+    CHECK(g_au.fit.gen > gen0);   /* refits went on: the fit was kept */
+    t = g_vt + 60000000;
+    id = yau_play_at(&g_au, b, t);
+    sd_run_s(s, 0.2);
+    CHECK_I(yau_result(&g_au, id, &r), YAU_OK);
+    CHECK_I(r.start_frame, sd_frame_of(s, t));
+    CHECK(!(r.flags & (YAU_ONSET_UNCONFIRMED | YAU_ONSET_XRUN)));
+    CHECK(llabs(r.onset - sd_truth(s, r.start_frame)) < 1000);
+    /* a rewind of the sample time: the fit starts over */
+    x0 = g_au.xruns_ft;
+    s->hal_rewind = 100;
+    sd_run_s(s, 0.2);
+    yau_update(&g_au);
+    CHECK_I(g_au.xruns_ft, x0 + 1);
+    CHECK_I(g_au.p_off, s->g);
+    sd_run_s(s, 8.0);
+    t = g_vt + 60000000;
+    id = yau_play_at(&g_au, b, t);
+    sd_run_s(s, 0.2);
+    CHECK_I(yau_result(&g_au, id, &r), YAU_OK);
+    CHECK_I(r.start_frame, sd_frame_of(s, t));
+    CHECK(!(r.flags & YAU_ONSET_UNCONFIRMED));
+    yau_close(&g_au);
+}
+
+static void test_coreaudio_line(void) {
+    hal_case(480, 800);   /* HDMI on the test Mac: 480 + 320 safety */
+    hal_case(32, 800);
+}
+
 /* v0.5.2: open()'s warm-up runs 3 s from the device's first callback, at
  * most 5 s from its start. A browser's context starts up to 0.8 s after it
  * is made; with 3 s from the start, a Firefox fit that needed 2.2 s after
@@ -3098,6 +3283,8 @@ int main(int argc, char** argv) {
     test_capture();
 #endif
     test_warm_end();
+    test_coreaudio_math();
+    test_coreaudio_line();
 #if YAU_VERSION_MINOR >= 6
     test_virtual_null();
 #endif

@@ -8,9 +8,10 @@
     uv run --no-project python tools/vendor_vis.py --write --pl-mpeg        # pl_mpeg.h (MPEG-1)
     uv run --no-project python tools/vendor_vis.py --write --layout msvc    # text layout, MSVC
     uv run --no-project python tools/vendor_vis.py --write --layout mingw --mingw-bin DIR
+    uv run --no-project python tools/vendor_vis.py --write --angle --sdl clang --pl-mpeg --layout clang   # macOS
     ... --cache DIR       keep the downloads between runs (CI)
 
-What it makes, Windows only (the other screen backends are stubs):
+What it makes on Windows:
 
     third_party/vis/sdl3/msvc/    include/SDL3/, lib/SDL3-static.lib (/MD): the
                                   Python wheel and the MATLAB MEX files
@@ -30,6 +31,21 @@ What it makes, Windows only (the other screen backends are stubs):
                                   first): the text of ysp.gfx and ysp_gfx
     third_party/vis/layout/mingw/ the same with Octave's gcc
     third_party/vis/layout/LICENSE.*.txt   their license files
+
+What it makes on macOS (arm64, macOS 14 and later: the METAL backend):
+
+    third_party/vis/sdl3/clang/   include/SDL3/, lib/libSDL3.a, built with
+                                  Apple clang for MACOSX_DEPLOYMENT_TARGET
+                                  14.0 (the Python wheel and the MATLAB MEX
+                                  files)
+    third_party/vis/angle/        libEGL.dylib, libGLESv2.dylib (from the
+                                  Electron zip for darwin-arm64, unchanged),
+                                  LICENSE.ANGLE.txt
+    third_party/vis/layout/clang/ the text layout, Apple clang, 14.0
+    third_party/vis/pl_mpeg/      as on Windows
+
+Linux has no natives here: ysp/screen.h's X11 and Wayland backends are
+stubs.
 
 Why static SDL3: a module that imports SDL3.dll binds to any SDL3.dll
 already loaded in the process (docs/av_probe.md, section 5). Why ANGLE from
@@ -82,6 +98,28 @@ ANGLE_FILES = {
     "libGLESv2.dll": "e5d96fb54dfbbf676b0b37c7915bcd907ff28f2ba63b49a72736a43ba3939a4e",
 }
 
+# macOS: ANGLE from the Electron release for darwin-arm64. 43.8.3 is the
+# Electron of the METAL backend's runs (docs/screen_macos_probe.md); those
+# used VS Code's copy, which Microsoft builds and signs itself, so its bytes
+# differ. This zip's build (ANGLE 2.1.28042, git b4f8ea825136, as the
+# describe line reports it) passed tests/adapt/screen_metal_test.c 42 of 42
+# on 2026-11-05 (docs/bindings.md, ysp-vis). The two files are ad hoc
+# signed by the linker and are installed unchanged, so their SHA-256 holds
+# beside the module: ysp/screen.h opens libEGL by full path and libEGL
+# opens libGLESv2 from its own folder, so no install name is used.
+ELECTRON_MAC_VERSION = "v43.8.3"
+ANGLE_MAC_VERSION = "2.1.28042 (git b4f8ea825136)"
+ELECTRON_MAC_URL = "https://github.com/electron/electron/releases/download/%s/electron-%s-darwin-arm64.zip" % (
+    ELECTRON_MAC_VERSION, ELECTRON_MAC_VERSION)
+ELECTRON_MAC_SHA256 = "08e693ae36cfd230105aabe70c626b1a243c13534a529c35a80c1b87cb8da7b4"   # the release's SHASUMS256.txt
+ANGLE_MAC_DIR = "Electron.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Libraries/"
+ANGLE_MAC_FILES = {
+    "libEGL.dylib": "86f4ff17a99bae62e45f2b64b8ae3b1e2d6bf1f9f6e567d2e72e2df5b85f517d",
+    "libGLESv2.dylib": "79c7eab0ca9a0411e5731fc6b65db8fa304ed0b5e353ee97b58196305f0c8aef",
+}
+# ysp's floor (README; CMakePresets.json macos-base, ci.yml).
+MACOS_TARGET = "14.0"
+
 # pl_mpeg has no release tags: the pin is a commit and the file's SHA-256,
 # the same as CMakeLists.txt's YSP_FETCH_PL_MPEG and tools/vendor_pack.py.
 PL_MPEG_COMMIT = "c871f2be022ece7ef4f64230b4fb8e1fb9eb6023"
@@ -96,6 +134,15 @@ DOWNLOAD_PAUSE_MAX = 30    # s between attempts, at most
 # a module that links the static library links these too.
 SDL_SYSTEM_LIBS = ["user32", "gdi32", "winmm", "imm32", "ole32", "oleaut32", "version", "uuid", "advapi32",
                    "setupapi", "shell32", "dinput8"]
+# macOS: what libSDL3.a needs, as the clang build's sdl3.pc gives it (its
+# Libs line after -lSDL3: a static-only build has no Libs.private); the
+# build refuses a list that differs. setup.py and build.m link with the same.
+SDL_MAC_LINK = ["-framework", "CoreMedia", "-framework", "CoreVideo", "-framework", "Cocoa",
+                "-weak_framework", "UniformTypeIdentifiers", "-framework", "IOKit", "-framework", "ForceFeedback",
+                "-framework", "Carbon", "-framework", "CoreAudio", "-framework", "AudioToolbox",
+                "-framework", "AVFoundation", "-framework", "Foundation", "-framework", "GameController",
+                "-framework", "Metal", "-framework", "QuartzCore", "-weak_framework", "CoreHaptics",
+                "-lpthread", "-lm"]
 
 
 def sha256(data):
@@ -227,6 +274,8 @@ def angle_notice(chromium_html):
 
 
 def write_angle(cache):
+    if sys.platform == "darwin":
+        return write_angle_mac(cache)
     data = download(ELECTRON_URL, ELECTRON_SHA256, cache)
     dest = os.path.join(OUT, "angle")
     os.makedirs(dest, exist_ok=True)
@@ -245,6 +294,29 @@ def write_angle(cache):
                 "LICENSES.chromium.html of the same release.\n\n%s" % (ANGLE_VERSION, ELECTRON_VERSION,
                                                                        ELECTRON_URL, notice))
     print("ok: ANGLE %s in %s" % (ANGLE_VERSION, os.path.relpath(dest, ROOT)))
+
+
+def write_angle_mac(cache):
+    data = download(ELECTRON_MAC_URL, ELECTRON_MAC_SHA256, cache)
+    dest = os.path.join(OUT, "angle")
+    os.makedirs(dest, exist_ok=True)
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        for name, want in ANGLE_MAC_FILES.items():
+            b = z.read(ANGLE_MAC_DIR + name)
+            if sha256(b) != want:
+                sys.exit("error: %s in the Electron zip has SHA-256 %s, expected %s" % (name, sha256(b), want))
+            p = os.path.join(dest, name)
+            with open(p, "wb") as f:
+                f.write(b)
+            os.chmod(p, 0o755)
+        notice = angle_notice(z.read("LICENSES.chromium.html"))
+    with open(os.path.join(dest, "LICENSE.ANGLE.txt"), "w", encoding="utf-8", newline="\n") as f:
+        f.write("ANGLE %s, libEGL.dylib and libGLESv2.dylib from the Electron %s release for darwin-arm64\n"
+                "(%s).\n\nANGLE's license, as that release's LICENSES.chromium.html gives it. ANGLE\n"
+                "compiles code of other projects into libGLESv2.dylib; their notices are in\n"
+                "LICENSES.chromium.html of the same release.\n\n%s" % (ANGLE_MAC_VERSION, ELECTRON_MAC_VERSION,
+                                                                         ELECTRON_MAC_URL, notice))
+    print("ok: ANGLE %s in %s" % (ANGLE_MAC_VERSION, os.path.relpath(dest, ROOT)))
 
 
 # ---- SDL3 ----------------------------------------------------------------------
@@ -298,6 +370,37 @@ def run(cmds, env=None, vcvars=None):
             sys.exit("error: %s failed (exit %d)" % (c[0], r.returncode))
 
 
+def compiler_id(toolchain, mingw_bin, env):
+    if toolchain == "msvc":
+        return "msvc"
+    if toolchain == "clang":
+        v = subprocess.run(["clang", "--version"], capture_output=True, text=True).stdout.splitlines()
+        return "%s, MACOSX_DEPLOYMENT_TARGET %s, arm64" % (v[0] if v else "clang", MACOS_TARGET)
+    return subprocess.run([os.path.join(mingw_bin, "gcc.exe"), "-dumpfullversion"], capture_output=True, text=True,
+                          env=env).stdout.strip()
+
+
+def sdl_mac_libs_private(prefix):
+    """What the build's sdl3.pc links besides libSDL3.a itself (Libs and
+    Libs.private), with -Wl, spellings split into plain linker arguments."""
+    with open(os.path.join(prefix, "lib", "pkgconfig", "sdl3.pc"), encoding="utf-8") as f:
+        text = f.read()
+    out = []
+    for m in re.finditer(r"^Libs(?:\.private)?:(.*)$", text, re.M):
+        for x in m.group(1).split():
+            if x.startswith("-L") or x == "-lSDL3":
+                continue
+            out += x[4:].split(",") if x.startswith("-Wl,") else [x]
+    return out
+
+
+def check_sdl_mac_link(prefix):
+    got = sdl_mac_libs_private(prefix)
+    if got != SDL_MAC_LINK:
+        sys.exit("error: SDL3's sdl3.pc links %r; tools/vendor_vis.py's SDL_MAC_LINK is %r: update it"
+                 % (got, SDL_MAC_LINK))
+
+
 def write_sdl(toolchain, cache, mingw_bin, jobs):
     data = download(SDL_URL, SDL_SHA256, cache)
     prefix = os.path.join(OUT, "sdl3", toolchain)
@@ -333,6 +436,13 @@ def write_sdl(toolchain, cache, mingw_bin, jobs):
             if not shutil.which("cl") and not vcvars:
                 sys.exit("error: no MSVC: run from a developer prompt or install Visual Studio's C++ tools")
             run([cfg, bld, ins], env=env, vcvars=vcvars)
+        elif toolchain == "clang":
+            # Apple clang for ysp's floor, arm64 (the zip's ANGLE is arm64).
+            cfg += ["-DCMAKE_C_COMPILER=clang", "-DCMAKE_OSX_DEPLOYMENT_TARGET=" + MACOS_TARGET,
+                    "-DCMAKE_OSX_ARCHITECTURES=arm64"]
+            env["MACOSX_DEPLOYMENT_TARGET"] = MACOS_TARGET
+            run([cfg, bld, ins], env=env)
+            check_sdl_mac_link(prefix)
         else:
             if not mingw_bin:
                 sys.exit("error: --mingw-bin DIR: the mingw64/bin of the gcc that builds the MEX files "
@@ -343,12 +453,11 @@ def write_sdl(toolchain, cache, mingw_bin, jobs):
             cfg += ["-DCMAKE_C_COMPILER=%s/gcc.exe" % mb, "-DCMAKE_CXX_COMPILER=%s/g++.exe" % mb,
                     "-DCMAKE_RC_COMPILER=%s/windres.exe" % mb]
             run([cfg, bld, ins], env=env)
-        cc = "msvc" if toolchain == "msvc" else subprocess.run(
-            [os.path.join(mingw_bin, "gcc.exe"), "-dumpfullversion"], capture_output=True, text=True,
-            env=env).stdout.strip()
+        cc = compiler_id(toolchain, mingw_bin, env)
         with open(os.path.join(prefix, "STAMP.txt"), "w", newline="\n") as f:
             f.write("SDL3 %s static, %s\nsource %s\nsha256 %s\ncompiler %s\nlink also: %s\n" % (
-                SDL_VERSION, toolchain, SDL_URL, SDL_SHA256, cc, " ".join(SDL_SYSTEM_LIBS)))
+                SDL_VERSION, toolchain, SDL_URL, SDL_SHA256, cc,
+                " ".join(SDL_MAC_LINK if toolchain == "clang" else SDL_SYSTEM_LIBS)))
     finally:
         shutil.rmtree(work, ignore_errors=True)
     print("ok: static SDL3 %s (%s) in %s" % (SDL_VERSION, toolchain, os.path.relpath(prefix, ROOT)))
@@ -408,6 +517,12 @@ def write_layout(toolchain, mingw_bin, jobs):
                 sys.exit("error: no MSVC: run from a developer prompt or install Visual Studio's C++ tools")
             run([cfg, bld, ins], env=env, vcvars=vcvars)
             cc = "msvc"
+        elif toolchain == "clang":
+            cfg += ["-DCMAKE_C_COMPILER=clang", "-DCMAKE_CXX_COMPILER=clang++",
+                    "-DCMAKE_OSX_DEPLOYMENT_TARGET=" + MACOS_TARGET, "-DCMAKE_OSX_ARCHITECTURES=arm64"]
+            env["MACOSX_DEPLOYMENT_TARGET"] = MACOS_TARGET
+            run([cfg, bld, ins], env=env)
+            cc = compiler_id(toolchain, mingw_bin, env)
         else:
             if not mingw_bin:
                 sys.exit("error: --mingw-bin DIR: the mingw64/bin of the gcc that builds the MEX files "
@@ -439,7 +554,7 @@ def write_layout(toolchain, mingw_bin, jobs):
 
 def verify():
     bad = 0
-    for name, want in ANGLE_FILES.items():
+    for name, want in (ANGLE_MAC_FILES if sys.platform == "darwin" else ANGLE_FILES).items():
         p = os.path.join(OUT, "angle", name)
         if not os.path.exists(p):
             print("missing: %s (--write --angle)" % os.path.relpath(p, ROOT))
@@ -462,7 +577,7 @@ def verify():
             bad += 1
         else:
             print("ok: %s" % os.path.relpath(p, ROOT))
-    for tc, lib in (("msvc", "SDL3-static.lib"), ("mingw", "libSDL3.a")):
+    for tc, lib in (("msvc", "SDL3-static.lib"), ("mingw", "libSDL3.a"), ("clang", "libSDL3.a")):
         p = os.path.join(OUT, "sdl3", tc, "lib", lib)
         stamp = os.path.join(OUT, "sdl3", tc, "STAMP.txt")
         if not os.path.exists(p):
@@ -474,7 +589,7 @@ def verify():
                 bad += 1
                 continue
         print("ok: %s" % os.path.relpath(p, ROOT))
-    for tc, lib in (("msvc", "ysp_harfbuzz.lib"), ("mingw", "libysp_harfbuzz.a")):
+    for tc, lib in (("msvc", "ysp_harfbuzz.lib"), ("mingw", "libysp_harfbuzz.a"), ("clang", "libysp_harfbuzz.a")):
         p = os.path.join(OUT, "layout", tc, "lib", lib)
         stamp = os.path.join(OUT, "layout", tc, "STAMP.txt")
         if not os.path.exists(p):
@@ -495,28 +610,29 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--write", action="store_true", help="fetch and build into third_party/vis/")
     ap.add_argument("--angle", action="store_true", help="with --write: ANGLE's DLLs from the Electron zip")
-    ap.add_argument("--sdl", default="", help="with --write: msvc, mingw or msvc,mingw")
+    ap.add_argument("--sdl", default="", help="with --write: msvc, mingw or msvc,mingw; clang on macOS")
     ap.add_argument("--pl-mpeg", action="store_true", help="with --write: pl_mpeg.h, the MPEG-1 decoder")
-    ap.add_argument("--layout", default="", help="with --write: the text layout, msvc, mingw or msvc,mingw "
-                                                 "(after tools/vendor_layout.py --write)")
+    ap.add_argument("--layout", default="", help="with --write: the text layout, msvc, mingw or msvc,mingw; "
+                                                 "clang on macOS (after tools/vendor_layout.py --write)")
     ap.add_argument("--mingw-bin", help="the mingw64/bin whose gcc builds the Octave MEX files")
     ap.add_argument("--cache", help="a folder that keeps the downloads between runs")
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 4)
     a = ap.parse_args()
-    if sys.platform != "win32":
-        sys.exit("ysp-vis natives: Windows only (the other screen backends are stubs)")
+    if sys.platform not in ("win32", "darwin"):
+        sys.exit("ysp-vis natives: Windows and macOS only (the X11 and Wayland screen backends are stubs)")
+    tcs = ("clang",) if sys.platform == "darwin" else ("msvc", "mingw")
     if a.write:
         if a.angle:
             write_angle(a.cache)
         if a.pl_mpeg:
             write_pl_mpeg(a.cache)
         for tc in [t for t in a.sdl.split(",") if t]:
-            if tc not in ("msvc", "mingw"):
-                sys.exit("error: --sdl takes msvc, mingw or both")
+            if tc not in tcs:
+                sys.exit("error: --sdl takes %s here" % " or ".join(tcs))
             write_sdl(tc, a.cache, a.mingw_bin, a.jobs)
         for tc in [t for t in a.layout.split(",") if t]:
-            if tc not in ("msvc", "mingw"):
-                sys.exit("error: --layout takes msvc, mingw or both")
+            if tc not in tcs:
+                sys.exit("error: --layout takes %s here" % " or ".join(tcs))
             write_layout(tc, a.mingw_bin, a.jobs)
     return 1 if verify() else 0
 

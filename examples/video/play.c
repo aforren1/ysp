@@ -10,7 +10,7 @@
  * Usage: video_play [--sim] [--file PATH [--index]] [--size WxH] [--frames N]
  *                   [--fps N] [--qoi] [--yuv] [--loop] [--seconds S]
  *                   [--window WxH] [--display ID] [--ahead N] [--csv PATH]
- *                   [--hw sw|dxva] [--gpu]
+ *                   [--hw sw|dxva|vt] [--gpu]
  *   --sim       no window and no GL: the simulated display, for CI
  *   --size      generated frames, pixels (default 320x180)
  *   --frames    generated frames (default 60)
@@ -20,7 +20,7 @@
  *   --window    window size (default 640x360)
  *   --csv       one line per display frame: index, decision, why, frame, the
  *               update's ns
- *   --hw        Media Foundation's decoder for an MP4 file (desc.hw_decode)
+ *   --hw        the MP4 decoder (desc.hw_decode): sw, dxva (Windows), vt (macOS)
  *   --gpu       decode and draw on the GPU (desc.gpu_path YVID_PATH_GPU;
  *               the screen opens with desc.d3d11_video)
  * It prints yvid_update()'s cost on frames that uploaded a new frame and
@@ -162,13 +162,13 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--gpu")) gpu = 1;
         else if (!strcmp(argv[i], "--hw") && i + 1 < argc) {
             const char* v = argv[++i];
-            hw = !strcmp(v, "sw") ? YVID_HW_OFF : !strcmp(v, "dxva") ? YVID_HW_DXVA : -1;
-            if (hw < 0) { fprintf(stderr, "video_play: --hw sw or dxva\n"); return 2; }
+            hw = !strcmp(v, "sw") ? YVID_HW_OFF : !strcmp(v, "dxva") ? YVID_HW_DXVA : !strcmp(v, "vt") ? YVID_HW_VIDEOTOOLBOX : -1;
+            if (hw < 0) { fprintf(stderr, "video_play: --hw sw, dxva or vt\n"); return 2; }
         }
         else {
             fprintf(stderr, "usage: video_play [--sim] [--file PATH [--index]] [--size WxH] [--frames N] [--fps N]\n"
                             "                  [--qoi] [--yuv] [--loop] [--seconds S] [--window WxH] [--display ID]\n"
-                            "                  [--ahead N] [--csv PATH] [--hw sw|dxva] [--gpu]\n");
+                            "                  [--ahead N] [--csv PATH] [--hw sw|dxva|vt] [--gpu]\n");
             return 2;
         }
     }

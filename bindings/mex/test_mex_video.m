@@ -10,7 +10,7 @@ function test_mex_video()
 %   it), a ysp_timeline handle as the movie base, a folder named with
 %   U+03A9, a CJK ideograph and an emoji (UTF-8 paths, ysp/video.h 0.6.0),
 %   and MPEG-1 when ffmpeg is on the path. Build first (build.m: ysp_audio, ysp_timeline, ysp_vis,
-%   ysp_screen, ysp_gfx, ysp_video). Windows only. Prints PASS with the
+%   ysp_screen, ysp_gfx, ysp_video). Windows and macOS. Prints PASS with the
 %   number of checks.
 
     global YSP_VV_CHECKS %#ok<GVMIS>
@@ -24,7 +24,7 @@ function test_mex_video()
 
     % ---- versions
     [bv, hv] = ysp_video('version');
-    check(strcmp(bv, '1.2.1') && ~isempty(regexp(hv, '^\d+\.\d+\.\d+$', 'once')), 'version: binding %s, header %s', bv, hv);
+    check(strcmp(bv, '1.3.0') && ~isempty(regexp(hv, '^\d+\.\d+\.\d+$', 'once')), 'version: binding %s, header %s', bv, hv);
     o = ysp_video('options');
     check(isfield(o, 'loop') && isfield(o, 'hw_decode') && isfield(o, 'timeline') && isfield(o, 'records'), 'options');
     c = ysp_video('constants');

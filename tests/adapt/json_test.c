@@ -192,7 +192,7 @@ static void check_grammar(void) {
         size_t p = 0;
         int i;
         t[p++] = '{';
-        for (i = 0; i < 5000; i++) p += (size_t)sprintf(t + p, "%s\"k%05d\":%d", i ? "," : "", i == 4321 ? 17 : i, i);
+        for (i = 0; i < 5000; i++) p += (size_t)snprintf(t + p, 200000 - p, "%s\"k%05d\":%d", i ? "," : "", i == 4321 ? 17 : i, i);
         t[p++] = '}';
         t[p] = 0;
         refuse_case(__LINE__, t, p, YJS_ERR_DUPLICATE, 1, (unsigned)(strstr(t, "\"k00017\":4321") - t + 1), "duplicate key \"k00017\"");
@@ -342,13 +342,13 @@ static void check_values(void) {
         size_t p = 0;
         int k, found = 0;
         t[p++] = '{';
-        for (k = 0; k < 10000; k++) p += (size_t)sprintf(t + p, "%s\"%d\":%d", k ? "," : "", (k * 7919) % 10007, k);
+        for (k = 0; k < 10000; k++) p += (size_t)snprintf(t + p, 400000 - p, "%s\"%d\":%d", k ? "," : "", (k * 7919) % 10007, k);
         t[p++] = '}';
         t[p] = 0;
         CHECK_I(parse_heap(&a, t, &v, &e), YJS_OK);
         for (k = 0; k < 10007; k++) {
             char key[16];
-            sprintf(key, "%d", k);
+            snprintf(key, sizeof key, "%d", k);
             if (yjs_get(v, key)) found++;
         }
         CHECK_I(found, 10000);
@@ -422,7 +422,7 @@ static void check_numbers(void) {
             if (rnd(2)) buf[p++] = '-';
             for (j = 0; j < nd; j++) buf[p++] = (char)('0' + (j == 0 ? 1 + rnd(9) : rnd(10)));
             if (rnd(2) && nd > 1) { memmove(buf + p - nd + 2, buf + p - nd + 1, (size_t)nd - 1); buf[p - nd + 1] = '.'; p++; }
-            p += sprintf(buf + p, "e%d", rnd(700) - 350);
+            p += snprintf(buf + p, sizeof buf - (size_t)p, "e%d", rnd(700) - 350);
             buf[p] = 0;
         } break;
         case 1: {
@@ -430,7 +430,7 @@ static void check_numbers(void) {
             int sh = rnd(10), d = rnd(3) - 1;
             uint64_t h = ((2 * a + 1) << sh);
             if (h >= 10000000000000000000ULL) h >>= 1;
-            sprintf(buf, "%llu", (unsigned long long)(h + (uint64_t)(int64_t)d));
+            snprintf(buf, sizeof buf, "%llu", (unsigned long long)(h + (uint64_t)(int64_t)d));
         } break;
         case 2: {
             uint64_t u = rnd64();
@@ -438,12 +438,12 @@ static void check_numbers(void) {
             if (rnd(4) == 0) u &= 0x000FFFFFFFFFFFFFULL;
             memcpy(&v, &u, sizeof v);
             if (v != v || v == HUGE_VAL || v == -HUGE_VAL) v = 1.0;
-            sprintf(buf, "%.*e", 13 + rnd(5), v);
+            snprintf(buf, sizeof buf, "%.*e", 13 + rnd(5), v);
         } break;
         default: {
             int nd = 17 + rnd(3), j, p = 0;
             for (j = 0; j < nd; j++) buf[p++] = (char)('0' + (j == 0 ? 1 + rnd(9) : (rnd(3) ? 0 : rnd(10))));
-            p += sprintf(buf + p, "e%d", rnd(80) - 40);
+            p += snprintf(buf + p, sizeof buf - (size_t)p, "e%d", rnd(80) - 40);
             buf[p] = 0;
         } break;
         }
@@ -795,7 +795,7 @@ static void check_arena(void) {
         size_t p = 0;
         int k;
         t[p++] = '[';
-        for (k = 0; k < 20000; k++) p += (size_t)sprintf(t + p, "%s%d", k ? "," : "", k);
+        for (k = 0; k < 20000; k++) p += (size_t)snprintf(t + p, 300000 - p, "%s%d", k ? "," : "", k);
         t[p++] = ']';
         t[p] = 0;
         CHECK_I(yjs_parse(&a, t, p, NULL, &v, &e), YJS_ERR_NOMEM);
@@ -985,7 +985,7 @@ static size_t text_stream(char* t) {
         if (s) t[p++] = s == 1 ? '+' : '-';
         for (z = sm_next() % 3; z > 0; z--) t[p++] = '0';
         ev = sm_next() % 8 == 0 ? sm_next() % 1000000000 : sm_next() % 400;
-        p += (size_t)sprintf(t + p, "%llu", (unsigned long long)ev);
+        p += (size_t)snprintf(t + p, 21, "%llu", (unsigned long long)ev);   /* 20 digits at most */
     }
     t[p] = 0;
     return p;

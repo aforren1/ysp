@@ -1,4 +1,4 @@
-/* ysp/input.h - v0.4.0 - public domain single-header input event
+/* ysp/input.h - v0.5.1 - public domain single-header input event
  *
  *   One timestamped input event for every device a rig reads: keyboards,
  *   mice, touch, pens, gamepads, response and button boxes, eye trackers.
@@ -114,6 +114,14 @@
  *   ms after the call; the message path 6.2 ms before to 12.1 ms after. Mouse, touch and pen
  *   events are stamped with the message time (read in SDL 3.4's source),
  *   not measured. yin_sdl_source() returns these as entries.
+ *   macOS (one Apple M2 Mac mini, macOS 27.0.1; docs/input.md): SDL 3.4
+ *   stamps a Cocoa key or mouse event with NSEvent.timestamp plus a
+ *   process-wide offset, the shortest read delay seen so far (3.8 ms on a
+ *   process's first key, then down to 0.2 ms), and a modifier key at the
+ *   read. ysp/screen.h's yscr_event_input() gives keys and mouse buttons
+ *   NSEvent.timestamp itself (ctx.os_stamps, ctx.t_os); with that,
+ *   keys posted with CGEventPost or CGEventPostToPid were stamped after
+ *   the post as yin_sdl_source() states (host part only).
  *
  *   ---------------------------------------------------------------------
  *   SDL3 (yin_from_sdl, defined when SDL_events.h came first)
@@ -131,7 +139,12 @@
  *   ImGui's SDL3 backend does): set ctx.raw_keyboard from ysp/screen.h's
  *   caps.raw_keyboard each frame, and those keys get tier 3. Mouse events
  *   with which 0 (SDL's absolute mode, message-timed) get tier 3
- *   (yin_sdl_mouse_stamp). Gamepad axes become -1..1 (triggers 0..1).
+ *   (yin_sdl_mouse_stamp). ctx.t_os, when not 0, is the event's own OS
+ *   time on the ysp_rt clock and replaces t_rt; with ctx.os_stamps set (the
+ *   caller gives OS times where it has them: ysp/screen.h's
+ *   caps.os_input_stamps), a key or mouse button without one gets tier 3,
+ *   the source's stamp being SDL's own. Zero the ctx ({ 0 } or memset)
+ *   before setting fields. Gamepad axes become -1..1 (triggers 0..1).
  *   Mouse and pen positions are SDL's window coordinates; touch positions
  *   are 0..1. ysp/screen.h starts SDL's video subsystem only: for gamepads
  *   set its desc.gamepads, or call SDL_InitSubSystem(SDL_INIT_GAMEPAD) and
@@ -140,8 +153,9 @@
  *   ---------------------------------------------------------------------
  *   RAW MICE (yin_mouse_report, yin_from_mouse)
  *   ---------------------------------------------------------------------
- *   ysp/screen.h's desc.raw_mice (Windows) reads each mouse's Raw Input on
- *   a thread into yin_mouse_reports. yin_from_mouse() turns one report
+ *   ysp/screen.h's desc.raw_mice reads each mouse's reports on a thread
+ *   into yin_mouse_reports: Raw Input on Windows, and IOHIDManager on
+ *   macOS from ysp/screen.h v0.16.0 (METAL). yin_from_mouse() turns one report
  *   into up to 12 events of YIN_KIND_MOUSE with the
  *   mouse's device id, in this order: presses, releases (buttons numbered
  *   as SDL's: 1 left, 2 middle, 3 right, 4 and 5 the side buttons), a
@@ -149,12 +163,32 @@
  *   YIN_AXIS_ABSOLUTE sample (a tablet, remote desktop: x, y 0..1), a
  *   YIN_AXIS_WHEEL sample (value in notches, x the horizontal wheel). A
  *   mouse SDL does not list has YIN_UNLISTED. yin_raw_mouse_source() is
- *   its source entry (stamped at read; host part measured with injected
- *   input only).
+ *   its source entry: on Windows stamped at read (host part measured
+ *   with injected input only); on macOS the HID driver's stamp
+ *   (IOHIDValueGetTimeStamp), earlier than the read, which ysp/screen.h
+ *   v0.16.1 measured 55 us after it at the least, 122 us at the median,
+ *   266 us at p99 and 486 us at most, on one mouse at 125 Hz
+ *   (docs/screen.md, "Raw mice").
  *
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.5.1 - Raw mice come from ysp/screen.h on macOS too (IOHIDManager,
+ *          its v0.16.0), with the HID driver's stamp and the IORegistry
+ *          id as the device: the comments said Windows only.
+ *          yin_raw_mouse_source()'s note on macOS gives macOS's numbers
+ *          (55 us minimum, 122 us median, 266 us p99, 486 us maximum
+ *          from the stamp to the read, one Dell MS116 at 125 Hz);
+ *          elsewhere Windows' as before.
+ *   v0.5.0 - yin_sdl_ctx gains os_stamps and t_os (16 bytes, was 2):
+ *          t_os, when not 0, is the event's own OS time and replaces t_rt;
+ *          with os_stamps, a key or mouse button without one gets tier 3.
+ *          ysp/screen.h v0.15.0 fills them on macOS from NSEvent.timestamp,
+ *          because SDL 3.4's Cocoa stamps carry a per-process offset.
+ *          yin_sdl_source() has macOS entries: keys and mouse buttons with
+ *          os_stamps (host part, measured with CGEventPost), and SDL's own
+ *          stamps (tier 3, the offset measured). A ctx that was not zeroed
+ *          now reads garbage in the new fields: zero it ({ 0 }).
  *   v0.4.0 - the repository conventions (README.md). Breaks the API:
  *          yin_source's bounds are int64_t ns, lo_ns and hi_ns (were
  *          int32_t us, lo_us and hi_us). yin_event.unc_us stays a uint16_t
@@ -181,7 +215,16 @@
  *          the SDL3 adapter and the raw mouse adapter, renamed from
  *          yrsp_ to yin_ (ysp/response.h keeps its names as aliases).
  *
- *   STATUS: v0.4.0, 2026-10-10: v0.3.0's checks, and yin_source's new
+ *   STATUS: v0.5.1, 2026-11-05: v0.5.0's checks again, and the raw mouse
+ *   note by platform (tests/adapt/input_test.c, the C and C++ compile
+ *   checks, Apple clang 21; the Windows note's branch not built here).
+ *   STATUS: v0.5.0, 2026-11-05: v0.4.0's checks, and the new ctx fields
+ *   on SDL events filled by hand (t_os replaces the time; os_stamps without
+ *   t_os gives tier 3); the macOS source entries' bounds come from
+ *   ysp/screen.h's measurement on one Apple M2 Mac mini (docs/input.md,
+ *   "macOS: NSEvent stamps"). Built as C99, C11 and C++17 with Apple clang
+ *   21.
+ *   v0.4.0, 2026-10-10: v0.3.0's checks, and yin_source's new
  *   layout (int64_t bounds at 8 and 16, 32 bytes); the event is still 48
  *   bytes. Measured with MinGW-w64 gcc 16.1 (x64): an int64_t unc_ns at
  *   the end would make the event 56 bytes and a ysp/screen.h input slot
@@ -202,9 +245,9 @@
 #define YSP_INPUT_H_INCLUDED
 
 #define YIN_VERSION_MAJOR 0
-#define YIN_VERSION_MINOR 4
-#define YIN_VERSION_PATCH 0
-#define YIN_VERSION_STRING "0.4.0"
+#define YIN_VERSION_MINOR 5
+#define YIN_VERSION_PATCH 1
+#define YIN_VERSION_STRING "0.5.1"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -319,8 +362,9 @@ static inline uint8_t yin_sdl_mouse_stamp(uint32_t which) {
     return (uint8_t)(which ? 0 : YIN_TIER_3);
 }
 
-/* One raw mouse report: what a Raw Input reader (ysp/screen.h's
- * desc.raw_mice) reads for one mouse at once. 32 bytes. */
+/* One raw mouse report: what a raw mouse reader (ysp/screen.h's
+ * desc.raw_mice: Raw Input on Windows, IOHIDManager on macOS) reads for
+ * one mouse at once. 32 bytes. */
 #define YIN_MOUSE_LEFT   0x01u   /* .down and .up: buttons                    */
 #define YIN_MOUSE_RIGHT  0x02u
 #define YIN_MOUSE_MIDDLE 0x04u
@@ -330,8 +374,11 @@ static inline uint8_t yin_sdl_mouse_stamp(uint32_t which) {
 #define YIN_MOUSE_VIRTUAL_DESKTOP 0x02u  /* ... over the virtual desktop         */
 #define YIN_MOUSE_UNLISTED        0x04u  /* a device SDL does not list           */
 typedef struct yin_mouse_report {
-    int64_t  t;          /* ysp_rt ns: when the reader read the report      */
-    uint32_t device;     /* the Raw Input handle: SDL's mouse id; 0 = injected */
+    int64_t  t;          /* ysp_rt ns: when the reader read the report
+                          * (Windows) or the HID driver took it (macOS)     */
+    uint32_t device;     /* Windows: the Raw Input handle, SDL's mouse id,
+                          * 0 = injected; macOS: the IORegistry entry id's
+                          * low 32 bits                                     */
     int32_t  dx, dy;     /* counts, unaccelerated; with ABSOLUTE a position */
     int16_t  wheel;      /* 120 per notch, away from the user positive      */
     int16_t  hwheel;     /* 120 per notch, right positive                   */
@@ -391,16 +438,26 @@ static inline int yin_from_mouse(const yin_mouse_report* m, yin_event* out, int 
     return n;
 }
 
-/* The source table entry for raw mice: stamped like SDL's raw keyboard,
- * when the reader read the report; bounds not stated (measured means of
- * 0.15 to 0.40 ms after SendInput, injected input only). */
+/* The source table entry for raw mice; bounds not stated (one machine
+ * each). Windows: stamped like SDL's raw keyboard, when the reader read
+ * the report (measured means of 0.15 to 0.40 ms after SendInput,
+ * injected input only). macOS (v0.5.1): the HID driver's stamp,
+ * IOHIDValueGetTimeStamp; the reader's callback came 55 us after it at
+ * the least, 122 us at the median, 266 us at p99 and 486 us at most (one
+ * Dell MS116 moved by hand, 125 Hz, 1159 values; ysp/screen.h v0.16.1).
+ * Host part only: the USB poll comes before the stamp. */
 static inline yin_source yin_raw_mouse_source(void) {
     yin_source s;
     memset(&s, 0, sizeof s);
     s.kind = (uint8_t)YIN_KIND_MOUSE;
     s.tier = (uint8_t)YIN_TIER_UNKNOWN;
     s.partial = 1;
+#if defined(__APPLE__)
+    s.note = "ysp_screen raw mice (macOS): the HID driver's stamp; host part to the read 55 us min, 122 us median, "
+             "266 us p99, 486 us max (one Dell MS116, 125 Hz); USB poll not in it";
+#else
     s.note = "ysp_screen raw mice: stamped at read; host part 0.15 to 0.40 ms (means, injected); USB poll not measured";
+#endif
     return s;
 }
 
@@ -431,6 +488,11 @@ typedef struct yin_sdl_ctx {
                             * tier 3                                      */
     bool keep_synthetic;   /* keep pen- and touch-made mouse events and
                             * pen- and mouse-made touch events, flagged   */
+    bool os_stamps;        /* the caller gives keys and mouse buttons their
+                            * OS event's time in t_os where it has it
+                            * (ysp/screen.h's caps.os_input_stamps: macOS);
+                            * one without it gets tier 3                  */
+    int64_t t_os;          /* this event's OS time, ysp_rt ns; 0 = none   */
 } yin_sdl_ctx;
 
 /* One SDL event at t_rt (yscr_poll()'s time) into *out. Returns 1 for
@@ -441,8 +503,10 @@ static inline int yin_from_sdl(const SDL_Event* ev, int64_t t_rt, const yin_sdl_
                                   yin_event* out) {
     yin_event in;
     bool keep = ctx && ctx->keep_synthetic;
+    /* with OS stamps on, SDL's own stamp is the fallback: tier 3 */
+    bool fallback = ctx && ctx->os_stamps && !ctx->t_os;
     memset(&in, 0, sizeof in);
-    in.t = t_rt;
+    in.t = ctx && ctx->t_os ? ctx->t_os : t_rt;
     switch (ev->type) {
     case SDL_EVENT_KEY_DOWN:
     case SDL_EVENT_KEY_UP:
@@ -453,7 +517,8 @@ static inline int yin_from_sdl(const SDL_Event* ev, int64_t t_rt, const yin_sdl_
         in.code = (uint32_t)ev->key.key;
         in.mods = (uint16_t)ev->key.mod;
         in.flags = (uint8_t)(ev->key.repeat ? YIN_REPEAT : 0u);
-        in.stamp = (uint8_t)(ctx && !ctx->raw_keyboard ? YIN_TIER_3 : 0);
+        if (ctx && ctx->os_stamps) in.stamp = (uint8_t)(fallback ? YIN_TIER_3 : 0);
+        else in.stamp = (uint8_t)(ctx && !ctx->raw_keyboard ? YIN_TIER_3 : 0);
         in.value = ev->key.down ? 1.0f : 0.0f;
         break;
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
@@ -465,7 +530,8 @@ static inline int yin_from_sdl(const SDL_Event* ev, int64_t t_rt, const yin_sdl_
         in.kind = (uint8_t)YIN_KIND_MOUSE;
         in.type = (uint8_t)(ev->button.down ? YIN_PRESS : YIN_RELEASE);
         in.device = (uint32_t)ev->button.which;
-        in.stamp = yin_sdl_mouse_stamp((uint32_t)ev->button.which);
+        if (ctx && ctx->os_stamps) in.stamp = (uint8_t)(fallback ? YIN_TIER_3 : 0);
+        else in.stamp = yin_sdl_mouse_stamp((uint32_t)ev->button.which);
         in.control = ev->button.button;
         in.x = ev->button.x;
         in.y = ev->button.y;
@@ -569,8 +635,14 @@ static inline int yin_from_sdl(const SDL_Event* ev, int64_t t_rt, const yin_sdl_
     return 1;
 }
 
+/* macOS with ysp/screen.h's NSEvent stamps: stamp minus the mach time
+ * before the post, min and max over keys and mouse buttons posted with
+ * CGEventPost and CGEventPostToPid (docs/input.md, "macOS: NSEvent stamps") */
+#define YIN__MAC_OS_LO_NS 49300
+#define YIN__MAC_OS_HI_NS 46591000
+
 /* The source table entry for an SDL event kind, from what was measured or
- * read (SOURCES). Windows only; elsewhere UNKNOWN with no bounds. */
+ * read (SOURCES). Windows and macOS; elsewhere UNKNOWN with no bounds. */
 static inline yin_source yin_sdl_source(const yin_sdl_ctx* ctx, int kind) {
     yin_source s;
     memset(&s, 0, sizeof s);
@@ -591,6 +663,28 @@ static inline yin_source yin_sdl_source(const yin_sdl_ctx* ctx, int kind) {
     } else if (kind == YIN_KIND_MOUSE || kind == YIN_KIND_TOUCH || kind == YIN_KIND_PEN) {
         s.tier = (uint8_t)YIN_TIER_3;
         s.note = "SDL 3.4 window message time (ms tick), not measured";
+    } else {
+        s.note = "not measured";
+    }
+#elif defined(__APPLE__)
+    /* docs/input.md, "macOS: NSEvent stamps": one Apple M2 Mac mini, macOS
+     * 27.0.1, keys and buttons posted with CGEventPost(kCGHIDEventTap) and
+     * CGEventPostToPid, stamp minus the mach time before the post */
+    if ((kind == YIN_KIND_KEYBOARD || kind == YIN_KIND_MOUSE) && ctx && ctx->os_stamps) {
+        s.tier = (uint8_t)YIN_TIER_UNKNOWN;
+        s.partial = 1;
+        s.lo_ns = YIN__MAC_OS_LO_NS;
+        s.hi_ns = YIN__MAC_OS_HI_NS;
+        s.note = "NSEvent.timestamp (ysp/screen.h): host part measured with CGEventPost; scan and USB poll not measured";
+    } else if (kind == YIN_KIND_KEYBOARD || kind == YIN_KIND_MOUSE) {
+        s.tier = (uint8_t)YIN_TIER_3;
+        s.partial = 1;
+        s.lo_ns = 262000;
+        s.hi_ns = 67962000;
+        s.note = "SDL 3.4 Cocoa stamp: NSEvent.timestamp plus the shortest read delay so far, measured with CGEventPost";
+    } else if (kind == YIN_KIND_TOUCH || kind == YIN_KIND_PEN) {
+        s.tier = (uint8_t)YIN_TIER_3;
+        s.note = "SDL 3.4 Cocoa stamp with a per-process offset (read in SDL's source), not measured";
     } else {
         s.note = "not measured";
     }

@@ -2834,6 +2834,352 @@ static void test_unshown_and_tiers(void) {
     CHECK(!yscr_open(&s, &d));
 }
 
+/* NSEvent stamps (INPUT, macOS), without a Mac: SDL 3.4's arithmetic on a
+ * ring filled by hand. SDL's stamp is trunc(NSEvent.timestamp x 1e9) plus
+ * its offset OFF in SDL ns; ysp_rt is mach ns plus MOFF. */
+static int g_nsm_seq;
+static void nsm_put(yscr__nsev* ring, int cls, int64_t t) {
+    yscr__nsev* e = &ring[(uint32_t)++g_nsm_seq & (YSCR__NSM_N - 1)];
+    e->t_ns = t;
+    e->cls = (uint8_t)cls;
+    e->seq = g_nsm_seq;
+}
+
+static void test_nsm_rules(void) {
+    static yscr__nsev ring[YSCR__NSM_N];
+    yscr__nsm_state st;
+    const int64_t T = 1698580000000000LL;              /* mach ns: a Mac up 19.7 days      */
+    const uint64_t OFF = (uint64_t)-1698580570430167LL; /* measured: SDL ns minus mach ns + 600 us */
+    const int64_t BIAS = 600000, MOFF = 0;
+    int64_t s_rt;
+    int k;
+    memset(ring, 0, sizeof ring);
+    memset(&st, 0, sizeof st);
+    g_nsm_seq = 0;
+#define NSM_SDL(t) ((uint64_t)(t) + OFF)
+    /* the classes of NSEvent types: keys, buttons and the 8 modifiers */
+    CHECK_I(yscr__nsm_ns_class(10, 0x50), YSCR__NSM_KEY_DOWN);
+    CHECK_I(yscr__nsm_ns_class(11, 0x50), YSCR__NSM_KEY_UP);
+    CHECK_I(yscr__nsm_ns_class(1, 0), YSCR__NSM_BTN_DOWN);
+    CHECK_I(yscr__nsm_ns_class(3, 0), YSCR__NSM_BTN_DOWN);
+    CHECK_I(yscr__nsm_ns_class(25, 0), YSCR__NSM_BTN_DOWN);
+    CHECK_I(yscr__nsm_ns_class(2, 0), YSCR__NSM_BTN_UP);
+    CHECK_I(yscr__nsm_ns_class(4, 0), YSCR__NSM_BTN_UP);
+    CHECK_I(yscr__nsm_ns_class(26, 0), YSCR__NSM_BTN_UP);
+    CHECK_I(yscr__nsm_ns_class(12, 0x3B), YSCR__NSM_MOD + 0);   /* left control: SDL 224 */
+    CHECK_I(yscr__nsm_ns_class(12, 0x38), YSCR__NSM_MOD + 1);   /* left shift: 225       */
+    CHECK_I(yscr__nsm_ns_class(12, 0x3A), YSCR__NSM_MOD + 2);
+    CHECK_I(yscr__nsm_ns_class(12, 0x37), YSCR__NSM_MOD + 3);
+    CHECK_I(yscr__nsm_ns_class(12, 0x3E), YSCR__NSM_MOD + 4);
+    CHECK_I(yscr__nsm_ns_class(12, 0x3C), YSCR__NSM_MOD + 5);
+    CHECK_I(yscr__nsm_ns_class(12, 0x3D), YSCR__NSM_MOD + 6);
+    CHECK_I(yscr__nsm_ns_class(12, 0x36), YSCR__NSM_MOD + 7);   /* right command: 231    */
+    CHECK_I(yscr__nsm_ns_class(12, 0x39), -1);                  /* caps lock             */
+    CHECK_I(yscr__nsm_ns_class(5, 0), -1);                      /* mouse moved           */
+    /* a key down: its NSEvent's time, not SDL's */
+    nsm_put(ring, YSCR__NSM_KEY_DOWN, T);
+    s_rt = T + BIAS;
+    CHECK_I(yscr__nsm_pick(ring, (uint32_t)g_nsm_seq, &st, YSCR__NSM_KEY_DOWN, NSM_SDL(T), s_rt, MOFF), T);
+    CHECK_I(st.b_last, BIAS);
+    /* taken: the same SDL event again finds nothing */
+    CHECK_I(yscr__nsm_pick(ring, (uint32_t)g_nsm_seq, &st, YSCR__NSM_KEY_DOWN, NSM_SDL(T), s_rt, MOFF), 0);
+    /* an event SDL did not deliver (a click on the title bar) is passed over:
+     * its offset would be larger than SDL's */
+    nsm_put(ring, YSCR__NSM_BTN_DOWN, T + 10000000);
+    nsm_put(ring, YSCR__NSM_BTN_DOWN, T + 50000000);
+    CHECK_I(yscr__nsm_pick(ring, (uint32_t)g_nsm_seq, &st, YSCR__NSM_BTN_DOWN, NSM_SDL(T + 50000000),
+                           T + 50000000 + BIAS, MOFF), T + 50000000);
+    CHECK_I(st.passed, 1);
+    /* the classes stay apart: a key up does not take a button's entry */
+    nsm_put(ring, YSCR__NSM_BTN_UP, T + 60000000);
+    nsm_put(ring, YSCR__NSM_KEY_UP, T + 61000000);
+    CHECK_I(yscr__nsm_pick(ring, (uint32_t)g_nsm_seq, &st, YSCR__NSM_KEY_UP, NSM_SDL(T + 61000000),
+                           T + 61000000 + BIAS, MOFF), T + 61000000);
+    CHECK_I(yscr__nsm_pick(ring, (uint32_t)g_nsm_seq, &st, YSCR__NSM_BTN_UP, NSM_SDL(T + 60000000),
+                           T + 60000000 + BIAS, MOFF), T + 60000000);
+    /* SDL lowered its offset (a stamp would have come after the read): taken */
+    nsm_put(ring, YSCR__NSM_KEY_DOWN, T + 100000000);
+    CHECK_I(yscr__nsm_pick(ring, (uint32_t)g_nsm_seq, &st, YSCR__NSM_KEY_DOWN, NSM_SDL(T + 100000000) - 400000,
+                           T + 100000000 + BIAS - 400000, MOFF), T + 100000000);
+    CHECK_I(st.b_last, BIAS - 400000);
+    /* an SDL event with no NSEvent (SDL's key-up at a focus loss, at the
+     * read): its offset is larger, so SDL's stamp stays */
+    nsm_put(ring, YSCR__NSM_KEY_UP, T + 120000000);
+    CHECK_I(yscr__nsm_pick(ring, (uint32_t)g_nsm_seq, &st, YSCR__NSM_KEY_UP, NSM_SDL(T + 130000000),
+                           T + 130000000 + BIAS, MOFF), 0);
+    /* an NSEvent after SDL's stamp is not its pair */
+    nsm_put(ring, YSCR__NSM_KEY_DOWN, T + 200000000);
+    CHECK_I(yscr__nsm_pick(ring, (uint32_t)g_nsm_seq, &st, YSCR__NSM_KEY_DOWN, NSM_SDL(T + 190000000),
+                           T + 190000000 + BIAS, MOFF), 0);
+    /* a modifier, stamped by SDL at the read: no offset test, its key only */
+    nsm_put(ring, YSCR__NSM_MOD + 1, T + 300000000);
+    nsm_put(ring, YSCR__NSM_MOD + 5, T + 301000000);
+    CHECK_I(yscr__nsm_pick(ring, (uint32_t)g_nsm_seq, &st, YSCR__NSM_MOD + 5, NSM_SDL(T + 309000000),
+                           T + 309000000 + BIAS, MOFF), T + 301000000);
+    CHECK_I(yscr__nsm_pick(ring, (uint32_t)g_nsm_seq, &st, YSCR__NSM_MOD + 1, NSM_SDL(T + 309000000),
+                           T + 309000000 + BIAS, MOFF), T + 300000000);
+    /* more than 1 s old: not the pair */
+    nsm_put(ring, YSCR__NSM_MOD + 2, T + 400000000);
+    CHECK_I(yscr__nsm_pick(ring, (uint32_t)g_nsm_seq, &st, YSCR__NSM_MOD + 2, NSM_SDL(T + 1500000000),
+                           T + 1500000000 + BIAS, MOFF), 0);
+    /* the ring wrapped past the class's next entry: the search starts at
+     * the oldest entry kept (SDL's offset is the lowered one now); the
+     * mach offset adds */
+    for (k = 0; k < YSCR__NSM_N + 10; k++) nsm_put(ring, YSCR__NSM_BTN_UP, T + 2000000000LL + k * 1000000LL);
+    CHECK_I(yscr__nsm_pick(ring, (uint32_t)g_nsm_seq, &st, YSCR__NSM_BTN_UP,
+                           NSM_SDL(T + 2000000000LL + 10000000LL) - 400000,
+                           T + 2000000000LL + 10000000LL + BIAS - 400000 + 7, 7), T + 2000000000LL + 10000000LL + 7);
+    CHECK_I(yscr__nsm_pick(ring, (uint32_t)g_nsm_seq, &st, -1, 0, 0, 0), 0);
+    CHECK_I(st.found, 8);
+#undef NSM_SDL
+}
+
+/* The Metal presenter's rules (BACKENDS, METAL), without a Mac. */
+static void test_metal_rules(void) {
+    yscr_vblank v;
+    int i, k, b;
+    const int64_t T = 5000000000LL;
+    /* (a) the target: half a period before the planned vblank (measured) */
+    CHECK_I(yscr__mtl_target(T, 16000000), T - 8000000);
+    CHECK_I(yscr__mtl_target(T, P_NS), T - P_NS / 2);
+    /* (b) two frames in flight; the margin covers Core Animation's deadline */
+    CHECK_I(YSCR__MTL_IN_FLIGHT, 2);
+    CHECK(YSCR__MTL_MARGIN_NS >= 1170000 + 350000);   /* clean session: the deadline, the call's p99 */
+    /* the display link's nominal period, as measured on the M27Q's "60 Hz" */
+    CHECK_I(yscr__mtl_period(400330, 24000000), 16680417);
+    CHECK_I(yscr__mtl_period(1, 60), 16666667);
+    CHECK_I(yscr__mtl_period(0, 24000000), 0);
+    CHECK_I(yscr__mtl_period(400330, 0), 0);
+    {   /* the period from CADisplayLink's timestamps: their step, not the
+         * duration's nominal timing (the M27Q: 16680375 against 16680417 ns) */
+        int64_t ts[6];
+        int j;
+        for (j = 0; j < 6; j++) ts[j] = T + j * 16680375LL + (j & 1);
+        CHECK_I(yscr__mtl_link_period(ts, 6, 16680417), 16680375);
+        ts[3] = ts[4] - 2 * 16680375LL;   /* a missed callback: a gap of two periods */
+        for (j = 4; j < 6; j++) ts[j - 1] = ts[j];
+        CHECK_I(yscr__mtl_link_period(ts, 5, 16680417), 16680375);
+        CHECK_I(yscr__mtl_link_period(ts, 1, 16680417), 0);   /* one callback: no period */
+        CHECK_I(yscr__mtl_link_period(ts, 6, 0), 0);
+        for (j = 0; j < 6; j++) ts[j] = T + j * 17100000LL;     /* 2.5% off the duration */
+        CHECK_I(yscr__mtl_link_period(ts, 6, 16680417), 0);
+        /* a process's first windowed open: the first timestamp 15.8 ms before
+         * the second, then the grid (measured, 5 of 5 processes) */
+        for (j = 0; j < 6; j++) ts[j] = T + j * 16680375LL;
+        ts[0] = ts[1] - 15835500LL;
+        CHECK_I(yscr__mtl_link_period(ts, 6, 16680417), 16680375);
+        ts[0] = ts[1] - 25207458LL;
+        CHECK_I(yscr__mtl_link_period(ts, 6, 16680417), 16680375);
+        CHECK_I(yscr__mtl_link_period(ts, 2, 16680417), 0);   /* two callbacks: one, after the first */
+    }
+    /* a shown drawable: its time, counted from t0; composed, tier 2 (c) */
+    yscr__mtl_vblank(7, T + 3 * P_NS + 1000, 0, YSCR__MTL_KIND_WINDOW, T, P_NS, &v);
+    CHECK_I((int64_t)v.present_id, 7);
+    CHECK_I(v.t_ns, T + 3 * P_NS + 1000);
+    CHECK_I(v.count, 3);
+    CHECK_I(v.path, YSCR_PATH_COMPOSED);
+    CHECK_I(v.tier, YSCR_TIER_2);
+    CHECK_I(v.flags, 0);
+    for (k = 0; k < 3; k++) CHECK_I(yscr__mtl_tier(k), YSCR_TIER_2);
+    CHECK(!strcmp(yscr__mtl_kind_name(YSCR__MTL_KIND_SPACE), "space"));
+    CHECK(!strcmp(yscr__mtl_kind_name(YSCR__MTL_KIND_FULLSCREEN), "fullscreen"));
+    CHECK(!strcmp(yscr__mtl_kind_name(YSCR__MTL_KIND_WINDOW), "window"));
+    /* variable refresh: NSScreen's two refresh intervals apart (VARIABLE REFRESH) */
+    CHECK(!yscr__mtl_variable(16680416, 16680416));   /* the M27Q at "60 Hz", measured */
+    CHECK(!yscr__mtl_variable(8333333, 8333340));     /* rounding is not a variable mode */
+    CHECK(!yscr__mtl_variable(0, 0));                 /* before macOS 12: no answer */
+    CHECK(!yscr__mtl_variable(0, 16666667));
+    CHECK(yscr__mtl_variable(8333333, 33333333));     /* ProMotion's variable mode */
+    CHECK(yscr__mtl_variable(6944444, 20833333));     /* Adaptive-Sync, 48 to 144 Hz */
+    CHECK(yscr__mtl_variable(16666667, 16700000));    /* 0.2% apart */
+    {
+        char m[512];
+        yscr__mtl_vrr_message(m, sizeof m, 8333333, 33333333);
+        CHECK(strstr(m, "8.333 to 33.333 ms") != NULL);
+        CHECK(strstr(m, "System Settings > Displays > Refresh Rate") != NULL);
+        CHECK(strstr(m, "refused as desc.vrr is") != NULL);
+        /* it fits the screen's error buffer whole, at the widest numbers */
+        CHECK(yscr__mtl_vrr_message(m, sizeof m, 41666667, 1000000000) < (int)sizeof(((yscr_screen*)0)->error));
+    }
+    /* not shown: no time; OCCLUDED only when the window was hidden; the core
+     * makes such a flip estimated, tier 3 */
+    yscr__mtl_vblank(8, 0, 1, YSCR__MTL_KIND_SPACE, T, P_NS, &v);
+    CHECK_I(v.t_ns, 0);
+    CHECK_I(v.flags, YSCR_FLIP_OCCLUDED);
+    yscr__mtl_vblank(9, 0, 0, YSCR__MTL_KIND_WINDOW, T, P_NS, &v);
+    CHECK_I(v.t_ns, 0);
+    CHECK_I(v.flags, 0);
+    /* pixels: BGRA8 with red in byte 2; BGR10A2 with 8 bits spread to 10 */
+    CHECK_I(yscr__mtl_pixel(0x0000FFu, 0), 0xFFFF0000u);
+    CHECK_I(yscr__mtl_pixel(0xFF0000u, 0), 0xFF0000FFu);
+    CHECK_I(yscr__mtl_pixel(0x0000FFu, 1), 0xC0000000u | (1023u << 20));
+    CHECK_I(yscr__mtl_pixel(0x000080u, 1), 0xC0000000u | (514u << 20));
+    for (b = 0; b < 2; b++)
+        for (i = 0; i < 256; i++) {
+            uint32_t c = (uint32_t)i | ((uint32_t)(255 - i) << 8) | ((uint32_t)((i * 37 + 11) & 255) << 16);
+            CHECK_I(yscr__mtl_code_of(yscr__mtl_pixel(c, b), b), c);
+        }
+    {   /* desc.color_depth: 0, 8 or 10, and 10 only where the backend draws it */
+        static yscr_screen s;
+        yscr_desc d;
+        memset(&s, 0, sizeof s);
+        memset(&d, 0, sizeof d);
+        d.backend = YSCR_BACKEND_SIM;
+        d.sim_period_ns = P_NS;
+        d.color_depth = 7;
+        CHECK(!yscr_open(&s, &d));
+        CHECK(strstr(yscr_error(&s), "color_depth") != NULL);
+        d.color_depth = 10;
+        CHECK(!yscr_open(&s, &d));
+        CHECK(strstr(yscr_error(&s), "METAL") != NULL);
+        d.color_depth = 8;
+        CHECK(yscr_open(&s, &d));
+        yscr_close(&s);
+    }
+}
+
+/* A display that shows a drawable as Core Animation did in the probe's
+ * timing session (docs/screen_macos_probe.md): at the first vblank at or
+ * after its target less 0.4 ms (here 0.1 ms; not the nearest vblank: a
+ * target 0.95 period before a vblank showed on it), but never before the first vblank that comes at least a
+ * period plus 1.1 ms (here 0.275 period) after the commit; the presented
+ * handler comes 0.5 ms (here 0.125 period) after the vblank. acquire()
+ * waits as the header's does: for the handler of the frame
+ * YSCR__MTL_IN_FLIGHT before. The target and completion rules are the
+ * header's own. */
+#define MS_DEADLINE (P_NS + P_NS * 275 / 1000)
+#define MS_HANDLER  (P_NS / 8)
+typedef struct mtl_script {
+    int      hide_from, hide_to, n, nq;
+    int64_t  t0, last_count;
+    uint64_t id[8];
+    int64_t  shown[8], target[8];
+    int      hidden[8];
+} mtl_script;
+
+static int ms_open(void* ctx, const yscr_presenter_open* in, yscr_caps* caps, char* err, size_t cap) {
+    mtl_script* c = (mtl_script*)ctx;
+    (void)in; (void)err; (void)cap;
+    c->t0 = now_ns();
+    c->last_count = -1;
+    caps->kind = YSCR_FIXED_GRID;
+    caps->period_ns = P_NS;
+    caps->native_target = true;
+    caps->hw_onset = true;
+    caps->max_in_flight = YSCR__MTL_IN_FLIGHT;
+    caps->margin_ns = MS_DEADLINE - P_NS + P_NS / 8;   /* the deadline's excess and the call */
+    caps->mode.refresh_num = 250;
+    caps->mode.refresh_den = 1;
+    caps->mode.period_ns = P_NS;
+    return YSCR_OK;
+}
+static void ms_close(void* ctx) { (void)ctx; }
+static int ms_acquire(void* ctx, int64_t deadline_ns, yscr_vblank* newest) {
+    mtl_script* c = (mtl_script*)ctx;
+    (void)deadline_ns;
+    newest->t_ns = 0;
+    if (c->nq >= YSCR__MTL_IN_FLIGHT) {
+        int64_t t = c->shown[c->nq - YSCR__MTL_IN_FLIGHT] + MS_HANDLER;
+        if (t > now_ns()) vsleep_until(t);
+    }
+    return YSCR_OK;
+}
+static int ms_present(void* ctx, const yscr_present_req* req) {
+    mtl_script* c = (mtl_script*)ctx;
+    int64_t made = now_ns(), tg = req->target_ns > 0 ? yscr__mtl_target(req->target_ns, P_NS) : made;
+    int64_t want = (int64_t)ceil((double)(tg - 100000 - c->t0) / (double)P_NS);
+    int64_t first = (int64_t)ceil((double)(made + MS_DEADLINE - c->t0) / (double)P_NS);
+    if (c->nq >= 8) return YSCR_ERR_LOST;
+    if (want < first) want = first;
+    if (want <= c->last_count) want = c->last_count + 1;
+    c->last_count = want;
+    c->id[c->nq] = req->present_id;
+    c->target[c->nq] = tg;
+    c->shown[c->nq] = c->t0 + want * P_NS;
+    c->hidden[c->nq] = c->n >= c->hide_from && c->n < c->hide_to;
+    c->nq++;
+    c->n++;
+    return YSCR_OK;
+}
+static int ms_completions(void* ctx, yscr_vblank* out, int cap) {
+    mtl_script* c = (mtl_script*)ctx;
+    int n = 0;
+    while (n < cap && c->nq > 0 && c->shown[0] + MS_HANDLER <= now_ns()) {
+        yscr__mtl_vblank(c->id[0], c->hidden[0] ? 0 : c->shown[0], c->hidden[0], YSCR__MTL_KIND_WINDOW, c->t0, P_NS, &out[n++]);
+        c->nq--;
+        memmove(c->id, c->id + 1, sizeof c->id[0] * (size_t)c->nq);
+        memmove(c->shown, c->shown + 1, sizeof c->shown[0] * (size_t)c->nq);
+        memmove(c->target, c->target + 1, sizeof c->target[0] * (size_t)c->nq);
+        memmove(c->hidden, c->hidden + 1, sizeof c->hidden[0] * (size_t)c->nq);
+    }
+    return n;
+}
+static const yscr_presenter g_mtl_scripted = {
+    YSCR_PRESENTER_VERSION, "metal-scripted", false, false, true,
+    ms_open, ms_close, ms_acquire, ms_present, ms_completions, NULL, NULL, NULL, NULL
+};
+
+/* 60 frames on the scripted Metal display: every target a third of a period
+ * off the grid, every 10th frame committed 0.8 period after a vblank (late
+ * in the period, inside the commit's deadline), 3 frames hidden. Every frame
+ * is shown on its planned vblank, one a vblank (full rate with two in
+ * flight), tier 2; the hidden ones are estimated and OCCLUDED. */
+static void test_metal_records(void) {
+    static mtl_script c;
+    static yscr_screen s;
+    static yscr_frame f;
+    yscr_desc d;
+    int i, j, n, shown = 0, hidden = 0, steps1 = 0;
+    int64_t prev = 0;
+    memset(&c, 0, sizeof c);
+    c.hide_from = 1000000;
+    memset(&s, 0, sizeof s);
+    memset(&d, 0, sizeof d);
+    d.backend = YSCR_BACKEND_CUSTOM;
+    d.presenter = &g_mtl_scripted;
+    d.presenter_ctx = &c;
+    d.ring = &g_ring;
+    ring_reset();
+    CHECK(yscr_open(&s, &d));
+    if (!yscr_is_open(&s)) return;
+    c.hide_from = c.n + 20;
+    c.hide_to = c.n + 23;
+    for (i = 0; i < 60; i++) {
+        CHECK_I(yscr_begin(&s, &f), YSCR_OK);
+        if (i % 10 == 5) {   /* work that ends late in a period */
+            int64_t t = now_ns() - c.t0;
+            vsleep_until(c.t0 + (t / P_NS) * P_NS + P_NS * 8 / 10 + (t % P_NS > P_NS * 8 / 10 ? P_NS : 0));
+        }
+        CHECK_I(yscr_flip_at(&s, f.onset + ((i & 1) ? P_NS / 3 : -P_NS / 3), NULL), YSCR_OK);
+    }
+    yscr_wait_flip(&s, NULL);
+    yscr_close(&s);
+    n = ring_drain();
+    for (j = 0; j < n; j++) {
+        const yrt_event* e = &g_ev[j];
+        uint32_t flags, tier;
+        if (e->source != YRT_SRC_SCREEN || e->kind != YSCR_EV_FLIP) continue;
+        flags = YSCR_EV_FLAGS_OF(e->u.u16[5]);
+        tier = YSCR_EV_TIER_OF(e->u.u16[5]);
+        if (flags & YSCR_FLIP_ESTIMATED) {
+            CHECK(flags & YSCR_FLIP_OCCLUDED);   /* onset: the planned vblank */
+            CHECK_I(tier, YSCR_TIER_3);
+            hidden++;
+        } else {
+            /* shown on the vblank planned: neither early nor dropped */
+            CHECK_I(tier, YSCR_TIER_2);
+            CHECK(!(flags & YSCR_FLIP_EARLY));
+            CHECK_I(e->u.u16[4], 0);
+            if (prev && (int64_t)e->t_ns - prev == P_NS) steps1++;
+            shown++;
+        }
+        prev = (int64_t)e->t_ns;
+    }
+    CHECK_I(hidden, 3);
+    CHECK(shown >= 55);
+    CHECK(steps1 >= 40);   /* full rate but for the frames with work and after the hidden ones */
+}
+
 /* Two screens as a group. */
 static void test_group(void) {
     static script c[2];
@@ -3042,7 +3388,7 @@ static const ptc_slot g_scr_fields[] = {
     SCR_D("settle", settle, scr_settle_name), SCR_D("settle_flips", settle_flips, NULL),
     SCR_D("settle_min_ns", settle_min_ns, NULL), SCR_D("settle_max_ns", settle_max_ns, NULL),
     SCR_D("x11_override_redirect", x11_override_redirect, NULL),
-    SCR_D("sim_period_ns", sim_period_ns, NULL),
+    SCR_D("sim_period_ns", sim_period_ns, NULL), SCR_D("color_depth", color_depth, NULL),
 };
 #undef SCR_D
 #define SCR_NF ((int)(sizeof g_scr_fields / sizeof g_scr_fields[0]))
@@ -3712,6 +4058,157 @@ static void test_panic_rule(void) {
         CHECK(strstr(line, "abort=shift+esc panic=n/a") != NULL);
     }
     yscr_close(&s);
+}
+
+/* v0.16.0: the macOS panic key, gamma, code risk and raw mouse rules,
+ * without a Mac. */
+static void test_mac_rules(void) {
+    static float t[1024];
+    yscr__mac_color c;
+    yscr__hid_acc a;
+    yscr_mouse_event e;
+    int i, n;
+    /* the panic key: Esc, F1 to F12, letters and digits by position */
+    CHECK_I(yscr__kvk_of(yscr__scancode_us(YSCR_KEY_ESCAPE)), 53);
+    CHECK_I(yscr__kvk_of(yscr__scancode_us(0x4000003Au)), 122);   /* F1 */
+    CHECK_I(yscr__kvk_of(yscr__scancode_us(0x40000045u)), 111);   /* F12 */
+    CHECK_I(yscr__kvk_of(yscr__scancode_us(0x40000041u)), 100);   /* F8 */
+    CHECK_I(yscr__kvk_of(yscr__scancode_us(0x40000043u)), 109);   /* F10 */
+    CHECK_I(yscr__kvk_of(yscr__scancode_us('a')), 0);
+    CHECK_I(yscr__kvk_of(yscr__scancode_us('q')), 12);
+    CHECK_I(yscr__kvk_of(yscr__scancode_us('z')), 6);
+    CHECK_I(yscr__kvk_of(yscr__scancode_us('1')), 18);
+    CHECK_I(yscr__kvk_of(yscr__scancode_us('5')), 23);
+    CHECK_I(yscr__kvk_of(yscr__scancode_us('0')), 29);
+    CHECK_I(yscr__kvk_of(0), -1);
+    CHECK_I(yscr__kvk_of(104), -1);                                /* F13: not a panic key */
+    /* every key the panic takes has a code, and no two share one */
+    {
+        int seen[128];
+        uint32_t k;
+        memset(seen, 0, sizeof seen);
+        for (k = 0; k < 0x40000046u; k = k == 'z' ? 0x4000003Au : k + 1) {
+            int v;
+            if (!yscr__vk_known(k)) continue;
+            v = yscr__kvk_of(yscr__scancode_us(k));
+            CHECK(v >= 0 && v < 128);
+            if (v >= 0 && v < 128) { CHECK_I(seen[v], 0); seen[v] = 1; }
+        }
+    }
+    CHECK_I(yscr__cg_mods(0x00020000u), YSCR_MOD_SHIFT);
+    CHECK_I(yscr__cg_mods(0x00040000u | 0x00100000u), YSCR_MOD_CTRL | YSCR_MOD_GUI);
+    CHECK_I(yscr__cg_mods(0x00080000u | 0x100u), YSCR_MOD_ALT);   /* device bits are not modifiers */
+    CHECK_I(yscr__cg_mods(0x00010000u), 0);                        /* caps lock */
+    /* the transfer table: an 8-bit identity at 256 and 1024 entries */
+    for (n = 256; n <= 1024; n += 768) {
+        for (i = 0; i < n; i++) t[i] = (float)i / (float)(n - 1);
+        CHECK(yscr__table_identity(t, (uint32_t)n));
+        t[n / 2] += 1.0f / 255.0f;                                 /* one step off */
+        CHECK(!yscr__table_identity(t, (uint32_t)n));
+        t[n / 2] -= 1.0f / 255.0f;
+        t[n / 2] += 0.4f / 255.0f;                                 /* under half a step: the same at 8 bits */
+        CHECK(yscr__table_identity(t, (uint32_t)n));
+    }
+    for (i = 0; i < 256; i++) t[i] = (float)pow(i / 255.0, 1.0 / 1.8);   /* a gamma curve */
+    CHECK(!yscr__table_identity(t, 256));
+    CHECK(!yscr__table_identity(t, 1));
+    /* the code risk: the M27Q as read (2026-11-05): SDR, untagged, its
+     * 1920 x 1080 mode on a 2560 x 1440 panel, identity table */
+    memset(&c, 0, sizeof c);
+    c.have_screen = 1; c.edr = 1.0; c.edr_potential = 1.0; c.colorspace = YSCR__CS_UNTAGGED;
+    c.mode_w = 1920; c.mode_h = 1080; c.native_w = 2560; c.native_h = 1440; c.win_w = 1920; c.win_h = 1080;
+    c.gamma_ok = 1;
+    CHECK_I(yscr__mac_risk(&c), YSCR_CODE_RISK_SCALED);
+    c.windowed = 1;                                                /* a window: no SCALED, as on Windows */
+    CHECK_I(yscr__mac_risk(&c), 0);
+    c.windowed = 0;
+    c.mode_w = 2560; c.mode_h = 1440; c.win_w = 2560; c.win_h = 1440;
+    CHECK_I(yscr__mac_risk(&c), 0);
+    c.win_w = 1280; c.win_h = 720;                                 /* the compositor scales the window */
+    CHECK_I(yscr__mac_risk(&c), YSCR_CODE_RISK_SCALED);
+    c.win_w = 2560; c.win_h = 1440;
+    c.edr_potential = 16.0;                                        /* an XDR panel or an HDR mode */
+    CHECK_I(yscr__mac_risk(&c), YSCR_CODE_RISK_ADVANCED_COLOR);
+    c.edr_potential = 1.0; c.edr = 2.0;                            /* EDR shown now */
+    CHECK_I(yscr__mac_risk(&c), YSCR_CODE_RISK_ADVANCED_COLOR);
+    c.edr = 1.0; c.wants_edr = 1;
+    CHECK_I(yscr__mac_risk(&c), YSCR_CODE_RISK_ADVANCED_COLOR);
+    c.wants_edr = 0; c.colorspace = YSCR__CS_OTHER;                /* matched to the display */
+    CHECK_I(yscr__mac_risk(&c), YSCR_CODE_RISK_ADVANCED_COLOR);
+    c.colorspace = YSCR__CS_DISPLAY;                               /* the display's own: not matched */
+    CHECK_I(yscr__mac_risk(&c), 0);
+    c.gamma_ok = 0;
+    CHECK_I(yscr__mac_risk(&c), YSCR_CODE_RISK_GAMMA);
+    c.gamma_ok = 1; c.native_w = c.native_h = 0;                   /* no mode has the native flag */
+    CHECK_I(yscr__mac_risk(&c), YSCR_CODE_RISK_STATE_UNKNOWN);
+    c.native_w = 2560; c.native_h = 1440; c.have_screen = 0; c.edr_potential = 16.0;
+    CHECK_I(yscr__mac_risk(&c), YSCR_CODE_RISK_STATE_UNKNOWN);    /* not read: unknown, not a guess */
+    /* IOHIDValues into reports: the values of one report share (device, time) */
+    memset(&a, 0, sizeof a);
+    CHECK_I(yscr__hid_add(&a, 7, 1000, 1, 0x30, 3, 1, -127, 127, &e), 0);
+    CHECK_I(yscr__hid_add(&a, 7, 1000, 1, 0x31, -2, 1, -127, 127, &e), 0);
+    CHECK_I(yscr__hid_add(&a, 7, 1000, 9, 1, 1, 0, 0, 1, &e), 0);
+    CHECK_I(yscr__hid_add(&a, 7, 9000, 1, 0x38, -1, 1, -127, 127, &e), 1);   /* a new report closes it */
+    CHECK_I(e.t, 1000); CHECK_I(e.device, 7); CHECK_I(e.dx, 3); CHECK_I(e.dy, -2);
+    CHECK_I(e.down, YSCR_MOUSE_LEFT); CHECK_I(e.up, 0); CHECK_I(e.wheel, 0);
+    CHECK_I(yscr__hid_add(&a, 8, 9000, 9, 3, 1, 0, 0, 1, &e), 1);            /* another mouse at once */
+    CHECK_I(e.wheel, -120); CHECK_I(e.device, 7);
+    CHECK_I(yscr__hid_flush(&a, &e), 1);
+    CHECK_I(e.device, 8); CHECK_I(e.down, YSCR_MOUSE_MIDDLE);
+    CHECK_I(yscr__hid_flush(&a, &e), 0);
+    /* buttons 2, 4, 5 up; the horizontal wheel; an element it does not use opens nothing */
+    CHECK_I(yscr__hid_add(&a, 7, 20000, 0xFF00, 1, 5, 0, 0, 255, &e), 0);
+    CHECK_I(yscr__hid_flush(&a, &e), 0);
+    yscr__hid_add(&a, 7, 30000, 9, 2, 0, 0, 0, 1, &e);
+    yscr__hid_add(&a, 7, 30000, 9, 4, 0, 0, 0, 1, &e);
+    yscr__hid_add(&a, 7, 30000, 9, 5, 0, 0, 0, 1, &e);
+    yscr__hid_add(&a, 7, 30000, 0x0C, 0x238, 2, 1, -127, 127, &e);
+    CHECK_I(yscr__hid_flush(&a, &e), 1);
+    CHECK_I(e.up, YSCR_MOUSE_RIGHT | YSCR_MOUSE_X1 | YSCR_MOUSE_X2); CHECK_I(e.hwheel, 240);
+    /* an absolute pointer (a tablet): 0..65535 of the logical range */
+    yscr__hid_add(&a, 9, 40000, 1, 0x30, 0, 0, 0, 32767, &e);
+    yscr__hid_add(&a, 9, 40000, 1, 0x31, 32767, 0, 0, 32767, &e);
+    CHECK_I(yscr__hid_flush(&a, &e), 1);
+    CHECK_I(e.flags, YSCR_MOUSE_ABSOLUTE); CHECK_I(e.dx, 0); CHECK_I(e.dy, 65535);
+    yscr__hid_add(&a, 9, 50000, 1, 0x30, 99999, 0, 0, 32767, &e);   /* past the range: clamped */
+    yscr__hid_add(&a, 9, 50000, 1, 0x31, 5, 0, 7, 7, &e);           /* no range: 0 */
+    CHECK_I(yscr__hid_flush(&a, &e), 1);
+    CHECK_I(e.dx, 65535); CHECK_I(e.dy, 0);
+    /* a device's values at their extremes saturate, never wrap */
+    yscr__hid_add(&a, 1, 60000, 1, 0x30, INT64_MAX / 4, 1, 0, 0, &e);
+    yscr__hid_add(&a, 1, 60000, 1, 0x30, INT64_MAX / 4, 1, 0, 0, &e);
+    yscr__hid_add(&a, 1, 60000, 1, 0x38, -1000000, 1, 0, 0, &e);
+    CHECK_I(yscr__hid_flush(&a, &e), 1);
+    CHECK_I(e.dx, 2147483647); CHECK_I(e.wheel, -32767);
+    /* v0.16.1: a value from before the reader's start, or older than its
+     * device's newest, is stale; the values of one report share a stamp */
+    CHECK(yscr__hid_stale(1000 - 44000000000LL, 1000, 0));
+    CHECK(!yscr__hid_stale(1000, 1000, 0));
+    CHECK(!yscr__hid_stale(5000, 1000, 0));
+    CHECK(!yscr__hid_stale(5000, 1000, 5000));                     /* the same report */
+    CHECK(!yscr__hid_stale(9000, 1000, 5000));                     /* the next one */
+    CHECK(yscr__hid_stale(4999, 1000, 5000));                      /* out of order */
+    CHECK(yscr__hid_empty(1, 0));                                  /* a relative 0 says nothing */
+    CHECK(!yscr__hid_empty(1, -1));
+    CHECK(!yscr__hid_empty(0, 0));                                 /* an absolute 0 is a position */
+    {   /* random values: every report comes out once, none lost */
+        uint32_t rng = 12345, closed = 0, opened = 0;
+        int64_t tt = 0;
+        memset(&a, 0, sizeof a);
+        for (i = 0; i < 20000; i++) {
+            uint32_t dev, page, usage;
+            rng = rng * 1664525u + 1013904223u;
+            dev = 1 + (rng >> 30);
+            if ((rng >> 8) % 3 == 0) tt += 1000;
+            page = (rng >> 12) % 2 ? 1 : 9;
+            usage = page == 1 ? 0x30 + (rng >> 16) % 2 : 1 + (rng >> 16) % 5;
+            if (!a.have || a.device != dev || a.t != tt) opened++;
+            closed += (uint32_t)yscr__hid_add(&a, dev, tt, page, usage, (int64_t)(rng % 255) - 127, page == 1, -127,
+                                              127, &e);
+        }
+        closed += (uint32_t)yscr__hid_flush(&a, &e);
+        CHECK_I(closed, opened);
+    }
 }
 
 /* The icon: each size fills its square, matches the art (FNV-1a of the
@@ -4485,6 +4982,9 @@ static void test_gap_anchor(int mode) {
 int main(void) {
     yrt_thread_elevate(NULL);
     test_web_rules();
+    test_metal_rules();
+    test_nsm_rules();
+    test_metal_records();
     test_errors();
     test_mode_multiple();
     test_params();
@@ -4541,6 +5041,7 @@ int main(void) {
     test_abort();
     test_abort_group();
     test_panic_rule();
+    test_mac_rules();
     test_icon();
     test_sim();
     test_sim_virtual();

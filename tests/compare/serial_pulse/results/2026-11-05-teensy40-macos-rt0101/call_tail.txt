@@ -1,0 +1,12 @@
+build/serial-macos/v0101/pulse1               raw_byte         n  1600 p50    19.0 p99    80.0 max    244.8 >1ms  0.00% >2ms  0.00%
+build/serial-macos/v0101/pulse1               raw_dtr          n  1600 p50   150.9 p99   326.9 max    427.8 >1ms  0.00% >2ms  0.00%
+build/serial-macos/v0101/pulse1               raw_rts          n  1600 p50   150.5 p99   277.5 max    341.3 >1ms  0.00% >2ms  0.00%
+build/serial-macos/v0101/pulse1               ysp_dtr          n  1600 p50   150.4 p99   299.9 max    364.5 >1ms  0.00% >2ms  0.00%
+build/serial-macos/v0101/pulse1               ysp_pulse_async  n   800 p50     6.7 p99    62.6 max     98.0 >1ms  0.00% >2ms  0.00%
+build/serial-macos/v0101/pulse1               ysp_rts          n  1600 p50   150.7 p99   383.1 max   4191.3 >1ms  0.12% >2ms  0.06%
+build/serial-macos/v0101/pulse2               raw_byte         n  1600 p50    18.5 p99    52.7 max     79.6 >1ms  0.00% >2ms  0.00%
+build/serial-macos/v0101/pulse2               raw_dtr          n  1600 p50   151.7 p99   329.5 max   2975.0 >1ms  0.06% >2ms  0.06%
+build/serial-macos/v0101/pulse2               raw_rts          n  1600 p50   150.8 p99   292.9 max    628.2 >1ms  0.00% >2ms  0.00%
+build/serial-macos/v0101/pulse2               ysp_dtr          n  1600 p50   150.7 p99   326.8 max    458.1 >1ms  0.00% >2ms  0.00%
+build/serial-macos/v0101/pulse2               ysp_pulse_async  n   800 p50     6.1 p99    61.4 max    142.9 >1ms  0.00% >2ms  0.00%
+build/serial-macos/v0101/pulse2               ysp_rts          n  1600 p50   151.4 p99   326.1 max    420.0 >1ms  0.00% >2ms  0.00%

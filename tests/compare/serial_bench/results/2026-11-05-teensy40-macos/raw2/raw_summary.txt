@@ -1,0 +1,75 @@
+Times in microseconds unless the note says count or percent.
+api        part    metric                                  n     median        p99        max       mean  note
+raw        clock   clock_pair                         100000          0    0.04199       4.75    0.01149  two back-to-back yrt_now_ns() reads
+ysp_c      rt      block_failed                            1          0          0          0          0  exchanges with a missing or wrong answer (count)
+ysp_c      rt      block_rtt                            1000      131.5      156.8      188.2      132.9  write call start to read call return
+ysp_c      rt      block_write_call                     1000      13.46      20.08      24.29      14.39  write call duration inside the exchange
+ysp_c      rt      block_write_ret_to_read_ret          1000      117.1      140.8      178.9      118.5  write call return to read call return
+ysp_c      rt      block_host_to_board                  1000      64.29       83.6      114.9      64.67  write call start to board read (+-55 us from the fit)
+ysp_c      rt      block_write_ret_to_board             1000      49.69      66.94      105.6      50.28  write call return to board read (+-55 us)
+ysp_c      rt      block_board_to_host                  1000      67.75      83.94      116.1      67.99  board send stamp to read call return (+-55 us)
+ysp_c      rt      block_fit_unc                           1      55.06      55.06      55.06      55.06  half the best path time: bound of the one-way split
+ysp_c      calls   bytes_available                      1000      0.792      1.333      1.833     0.8254  yser_available()
+ysp_c      stream  line_lines_missed                       1          0          0          0          0  of 10000 lines (count); yser_read(YSER_READ_ANY)
+ysp_c      stream  line_lines_duplicated                   1          0          0          0          0  count
+ysp_c      stream  line_bad_lines                          1          0          0          0          0  lines of the wrong length or kind (count)
+ysp_c      stream  line_lines_per_read                 10000          1          1          1          1  lines completed by one read
+ysp_c      stream  line_coalesced_pct                      1          0          0          0          0  percent of lines that arrived in a read with another line
+ysp_c      stream  line_cpu_pct                            1      1.556      1.556      1.556      1.556  process CPU time / wall time over 10.0 s, percent of one core
+ysp_c      stream  line_lat_host                       10000      78.29      169.4        237      79.53  host time after the read returned minus mapped board send stamp (+-36 us)
+ysp_c      stream  line_fit_unc                            1      36.35      36.35      36.35      36.35  half the best probe path time
+ysp_c      stream  line_fit_ppm                            1          0          0          0          0  2 points over 10.1 s
+raw_kqueue rt      block_failed                            1          0          0          0          0  exchanges with a missing or wrong answer (count)
+raw_kqueue rt      block_rtt                            1000      124.3      154.8      197.9      125.9  write call start to read call return
+raw_kqueue rt      block_write_call                     1000      6.667      7.458      9.166      6.341  write call duration inside the exchange
+raw_kqueue rt      block_write_ret_to_read_ret          1000      117.9      148.2        191      119.5  write call return to read call return
+raw_kqueue rt      block_host_to_board                  1000      60.58      80.27      123.8      61.52  write call start to board read (+-39 us from the fit)
+raw_kqueue rt      block_write_ret_to_board             1000      54.52      73.77      116.9      55.18  write call return to board read (+-39 us)
+raw_kqueue rt      block_board_to_host                  1000      63.56      84.19      108.6      64.03  board send stamp to read call return (+-39 us)
+raw_kqueue rt      block_fit_unc                           1      38.88      38.88      38.88      38.88  half the best path time: bound of the one-way split
+raw_kqueue calls   bytes_available                      1000      0.917      1.417      5.917      0.955  ioctl(FIONREAD), the call behind a bytes-available query
+raw_kqueue stream  line_lines_missed                       1          0          0          0          0  of 10000 lines (count); kevent(EVFILT_READ), then read() of what is there
+raw_kqueue stream  line_lines_duplicated                   1          0          0          0          0  count
+raw_kqueue stream  line_bad_lines                          1          0          0          0          0  lines of the wrong length or kind (count)
+raw_kqueue stream  line_lines_per_read                 10000          1          1          1          1  lines completed by one read
+raw_kqueue stream  line_coalesced_pct                      1          0          0          0          0  percent of lines that arrived in a read with another line
+raw_kqueue stream  line_cpu_pct                            1      1.518      1.518      1.518      1.518  process CPU time / wall time over 10.0 s, percent of one core
+raw_kqueue stream  line_lat_host                       10000      78.92      168.3        201      77.89  host time after the read returned minus mapped board send stamp (+-35 us)
+raw_kqueue stream  line_fit_unc                            1      34.73      34.73      34.73      34.73  half the best probe path time
+raw_kqueue stream  line_fit_ppm                            1          0          0          0          0  2 points over 10.2 s
+raw_select rt      block_failed                            1          0          0          0          0  exchanges with a missing or wrong answer (count)
+raw_select rt      block_rtt                            1000      124.2      148.6      181.6      125.8  write call start to read call return
+raw_select rt      block_write_call                     1000      6.584       7.25      9.417      6.279  write call duration inside the exchange
+raw_select rt      block_write_ret_to_read_ret          1000      117.8      142.6      175.6      119.5  write call return to read call return
+raw_select rt      block_host_to_board                  1000      64.05      80.11      119.7       64.2  write call start to board read (+-38 us from the fit)
+raw_select rt      block_write_ret_to_board             1000      57.55      73.49      113.7      57.92  write call return to board read (+-38 us)
+raw_select rt      block_board_to_host                  1000       61.3       78.8      84.22      61.34  board send stamp to read call return (+-38 us)
+raw_select rt      block_fit_unc                           1       37.9       37.9       37.9       37.9  half the best path time: bound of the one-way split
+raw_select calls   bytes_available                      1000      0.833       5.25      5.625     0.8805  ioctl(FIONREAD), the call behind a bytes-available query
+raw_select stream  line_lines_missed                       1          0          0          0          0  of 10000 lines (count); select(), then read() of what is there
+raw_select stream  line_lines_duplicated                   1          0          0          0          0  count
+raw_select stream  line_bad_lines                          1          0          0          0          0  lines of the wrong length or kind (count)
+raw_select stream  line_lines_per_read                 10000          1          1          1          1  lines completed by one read
+raw_select stream  line_coalesced_pct                      1          0          0          0          0  percent of lines that arrived in a read with another line
+raw_select stream  line_cpu_pct                            1      1.629      1.629      1.629      1.629  process CPU time / wall time over 10.0 s, percent of one core
+raw_select stream  line_lat_host                       10000      81.35      183.6      202.8      81.16  host time after the read returned minus mapped board send stamp (+-39 us)
+raw_select stream  line_fit_unc                            1      38.71      38.71      38.71      38.71  half the best probe path time
+raw_select stream  line_fit_ppm                            1          0          0          0          0  2 points over 10.2 s
+raw_block  rt      block_failed                            1          0          0          0          0  exchanges with a missing or wrong answer (count)
+raw_block  rt      block_rtt                            1000      124.7      150.8      244.4      126.6  write call start to read call return
+raw_block  rt      block_write_call                     1000       6.75        7.5      9.167       6.58  write call duration inside the exchange
+raw_block  rt      block_write_ret_to_read_ret          1000        118        144      235.2        120  write call return to read call return
+raw_block  rt      block_host_to_board                  1000      66.28      84.07      155.1      66.71  write call start to board read (+-51 us from the fit)
+raw_block  rt      block_write_ret_to_board             1000      59.45      77.07      145.9      60.13  write call return to board read (+-51 us)
+raw_block  rt      block_board_to_host                  1000      58.18      81.26       89.3      59.62  board send stamp to read call return (+-51 us)
+raw_block  rt      block_fit_unc                           1      51.38      51.38      51.38      51.38  half the best path time: bound of the one-way split
+raw_block  calls   bytes_available                      1000      0.958      5.875      5.958      1.073  ioctl(FIONREAD), the call behind a bytes-available query
+raw_block  stream  line_lines_missed                       1          0          0          0          0  of 10000 lines (count); read() on a blocking descriptor, VMIN 0, VTIME 10
+raw_block  stream  line_lines_duplicated                   1          0          0          0          0  count
+raw_block  stream  line_bad_lines                          1          0          0          0          0  lines of the wrong length or kind (count)
+raw_block  stream  line_lines_per_read                 10000          1          1          1          1  lines completed by one read
+raw_block  stream  line_coalesced_pct                      1          0          0          0          0  percent of lines that arrived in a read with another line
+raw_block  stream  line_cpu_pct                            1      1.234      1.234      1.234      1.234  process CPU time / wall time over 10.0 s, percent of one core
+raw_block  stream  line_lat_host                       10000      73.74      164.3      383.2      75.12  host time after the read returned minus mapped board send stamp (+-37 us)
+raw_block  stream  line_fit_unc                            1      37.42      37.42      37.42      37.42  half the best probe path time
+raw_block  stream  line_fit_ppm                            1          0          0          0          0  2 points over 10.2 s

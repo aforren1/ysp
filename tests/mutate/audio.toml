@@ -977,6 +977,7 @@ why = "miniaudio leaves the capture PCM open when the playback PCM is busy; the 
 find = """    if (got <= 0) return MA_BUSY;
     yau__ma_alsa_drop(ctx, dev);"""
 replace = """    if (got <= 0) return MA_BUSY;"""
+note = "Killed in the output profile only: in the duplex profile the server holds the input too, so the input open fails first and nothing is left open (survived there on 2026-11-05)."
 
 [[mutant]]
 id = "pulse-05"
@@ -1212,3 +1213,82 @@ find = """    } else if (c->dcaps.pos_source != YAU_POS_DEVICE) {
         /* REPORTS ONLY"""
 replace = """    } else {
         /* REPORTS ONLY"""
+# v0.8.0: the CoreAudio time line (docs/audio.md, "CoreAudio"). The
+# arithmetic only: the hog mode, the IsAlive listener and the silence after
+# LOST need a device, and were checked on the test Mac by hand.
+
+[[mutant]]
+id = "ca-01"
+name = "mach units lose the remainder"
+test = "audio"
+why = "On Apple silicon a tick is 125/3 ns; dropping the remainder is wrong by up to 41 ns a stamp, and by 125 ns at 3 ticks."
+find = '''    return (int64_t)((t / denom) * numer + (t % denom) * numer / denom);'''
+replace = '''    return (int64_t)((t / denom) * numer);'''
+
+[[mutant]]
+id = "ca-02"
+name = "the claim from the IO point counts the safety offset"
+test = "audio"
+why = "Measured: the stamp is the callback plus the IO buffer plus the safety offset, so the safety offset is before the position point; the claim after it is the device latency plus the stream latency (v0.7.3 added the safety offset and left out the stream latency, 408 frames on the built-in speakers)."
+find = '''    *os_ns = (int64_t)((double)((uint64_t)latency + stream_latency) * ns + 0.5);'''
+replace = '''    *os_ns = (int64_t)((double)((uint64_t)latency + safety) * ns + 0.5);'''
+
+[[mutant]]
+id = "ca-03"
+name = "the stream claim leaves out the IO buffer"
+test = "audio"
+why = "From the render callback the frame waits the IO buffer and the safety offset before the IO point."
+find = '''    *stream_ns = (int64_t)((double)((uint64_t)latency + stream_latency + safety + buffer) * ns + 0.5);'''
+replace = '''    *stream_ns = (int64_t)((double)((uint64_t)latency + stream_latency + safety) * ns + 0.5);'''
+
+[[mutant]]
+id = "ca-04"
+name = "a report in the future"
+test = "audio"
+why = "A render's stamp is its IO time, 11 to 17 ms after the call: as a report it would confirm frames the HAL has not reached. The report is the newest render whose host time has passed."
+find = '''            if (c->hh[k] <= now) {'''
+replace = '''            if (c->hh[k] <= now + 1000000000ull) {'''
+
+[[mutant]]
+id = "ca-05"
+name = "a skip waits for the history"
+test = "audio"
+why = "The skipped render's own pair goes to the core at once, so the core sees the position past the frames written by exactly the skip; reported later, the gap the core sees is the skip less the frames handed since."
+find = '''                    c->hn = 0;
+                    jump = 1;'''
+replace = '''                    c->hn = 0;'''
+
+[[mutant]]
+id = "ca-06"
+name = "a skip is not seen"
+test = "audio"
+why = "A 30 ms stall moved the sample time 1464 frames past the frames handed; a threshold of 1000 frames misses the unit test's 100-frame skip."
+find = '''                if (d >= 0.5) {'''
+replace = '''                if (d >= 1000.0) {'''
+
+[[mutant]]
+id = "ca-07"
+name = "a rewind is not an underrun"
+test = "audio"
+why = "A sample time that moves back says nothing the core can shift by: the fit must start over (YAU_TICK_XRUN)."
+find = '''                    c->hn = 0;
+                    tk->flags |= YAU_TICK_XRUN;'''
+replace = '''                    c->hn = 0;'''
+
+[[mutant]]
+id = "ca-08"
+name = "a rewind forgets the skipped frames"
+test = "audio"
+why = "The core subtracts every skip it saw (p_off) from the positions; after a rewind they must still count them."
+find = '''                    c->s0 = c->s - (double)(c->w + c->skipped);'''
+replace = '''                    c->s0 = c->s - (double)c->w;'''
+
+[[mutant]]
+id = "ca-09"
+name = "a stamp without valid times is kept"
+test = "audio"
+why = "AudioTimeStamp.mFlags says which fields hold; a render whose sample or host time is not valid adds no report."
+find = '''        if (c->ok) {
+            if (!c->have0) {'''
+replace = '''        if (1) {
+            if (!c->have0) {'''

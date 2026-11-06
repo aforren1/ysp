@@ -1040,7 +1040,7 @@ int main(int argc, char** argv) {
                         run_gp(&fd, &methods[use[i]], rep, &cfg, &st[use[i]]);
                 }
             }
-            sprintf(title, "== %s, beta = %g, %d replications ==",
+            snprintf(title, sizeof title, "== %s, beta = %g, %d replications ==",
                     pheno_name[fd.pheno], fd.beta, cfg.reps);
             print_table(title, st, use, n_use);
             print_diag(st, use, n_use);

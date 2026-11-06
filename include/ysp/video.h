@@ -1,4 +1,4 @@
-/* ysp/video.h - v0.6.0 - public domain single-header video playback library
+/* ysp/video.h - v0.7.0 - public domain single-header video playback library
  *
  *   A movie as a stimulus. On each display frame the header takes the
  *   frame's PREDICTED ONSET, asks the movie clock for the movie time at
@@ -9,13 +9,15 @@
  *   ahead on a ysp/rt.h pump and uploaded into a ysp/gfx.h IMAGE texture.
  *   Also a frame sequence container (raw or QOI frames, read and write,
  *   value-exact), MPEG-1 through pl_mpeg, H.264 and HEVC in MP4 through
- *   Media Foundation on Windows, and the Video decoder extension interface
- *   of the rig's spec (section 12).
+ *   Media Foundation on Windows and AVFoundation with VideoToolbox on
+ *   macOS, and the Video decoder extension interface of the rig's spec
+ *   (section 12).
  *
  *   REQUIRES ysp/gfx.h (so ysp/screen.h and ysp/rt.h) and ysp/timeline.h
  *   beside it. pl_mpeg.h (commit c871f2b, one MIT file) on the include path
- *   for MPEG-1; YVID_NO_PL_MPEG builds without it. Media Foundation is an
- *   OS API, loaded at run time (BUILDING); YVID_NO_MF builds without it.
+ *   for MPEG-1; YVID_NO_PL_MPEG builds without it. Media Foundation and
+ *   AVFoundation are OS APIs, loaded at run time (BUILDING); YVID_NO_MF and
+ *   YVID_NO_AVF build without them.
  *   ysp/audio.h is optional: include it first and yvid_follow_audio()
  *   and yvid_soundtrack() appear.
  *
@@ -69,6 +71,7 @@
  *   soundtrack's. On Windows it is converted to UTF-16 for _wfsopen, at
  *   most 1023 characters; a path that is not UTF-8 is YVID_ERR_ARG. Media
  *   Foundation never gets a path: it reads through the header's IStream.
+ *   AVFoundation gets a file URL made from the path's bytes.
  *
  *   Psychtoolbox and PsychoPy, for comparison (from their documentation):
  *
@@ -238,6 +241,36 @@
  *     in a single-threaded apartment, as SDL3 leaves it. A path, memory and
  *     a yvid_reader all reach Media Foundation through one IStream, whose
  *     read() Media Foundation calls from its own threads, one at a time.
+ *
+ *   AVFOUNDATION (Apple; desc.backend AVF, or AUTO for an MP4 file)
+ *     AVAssetReader demuxes (an AVAssetReaderTrackOutput with no output
+ *     settings: the compressed samples in decode order) and VideoToolbox
+ *     decodes them in a VTDecompressionSession, synchronously, one sample a
+ *     call on the decode thread, into NV12 at the stream's own range (420v,
+ *     or 420f for a full-range stream), so nothing converts. The same
+ *     canonical form, index and checks as Media Foundation; one index serves
+ *     both (the rate fit is in the same 100 ns unit). desc.hw_decode: AUTO is
+ *     VideoToolbox's hardware decoder, and its software decoder when no
+ *     hardware session opens; VIDEOTOOLBOX requires the hardware one; OFF is
+ *     the software one; DXVA is refused. The decoder in use is read back
+ *     from the session (UsingHardwareAcceleratedVideoDecoder) into info.hw
+ *     and the describe line. The planes are lent to the core (locked
+ *     read-only) and copied into the slot, as Media Foundation's are. A seek
+ *     makes a new reader whose time range starts half a frame past the
+ *     keyframe's time (an asset reader cannot seek), then reads forward to
+ *     it. The color comes from CoreMedia's format description (its colr
+ *     box, also for HEVC) and, for H.264, from the SPS; the two must agree.
+ *     Refused by name as on Windows, and also: a 10-bit, 4:2:2 or 4:4:4
+ *     stream (VideoToolbox would convert it to the NV12 asked for), more
+ *     than one sample description, and a clean aperture. A path is a file
+ *     URL; memory and a yvid_reader reach AVFoundation through an
+ *     AVAssetResourceLoader delegate made at run time, which answers each
+ *     request 1 MB at a time on its own serial queue (reader->read() is
+ *     called there, one call at a time). The times are the stream's own
+ *     presentation times (media time), never host time. A damaged frame:
+ *     VideoToolbox refuses it, so the movie ends with YVID_ERR_DECODER after
+ *     the frames before it (Media Foundation conceals it and the hash flags
+ *     it). The GPU path is not built here: UPLOAD only.
  *
  *   GPU PATH (desc.gpu_path YVID_PATH_GPU; Windows, Media Foundation)
  *     DXVA decodes on the screen's own D3D11 device, and the decode thread
@@ -425,7 +458,17 @@
  *   (tests/compile/video_com.cpp checks them against the SDK), so no
  *   import library and no mfuuid.lib is needed; YVID_NO_MF leaves it
  *   out. Windows Server needs its Media Foundation feature installed; open()
- *   says so when the DLLs are missing. pl_mpeg.h on the include path, or
+ *   says so when the DLLs are missing. On Apple platforms AVFoundation,
+ *   CoreMedia, CoreVideo, VideoToolbox, CoreFoundation, libobjc and
+ *   libdispatch are loaded at run time (dlopen) and no Apple header is
+ *   included: CoreVideo's would bring ApplicationServices, with CarbonCore's
+ *   global `pi`, `Rect` and `Point`, into this translation unit, and
+ *   dispatch.h's queues are ARC objects in Objective-C with ARC (the file
+ *   builds as C, C++ and Objective-C, with or without ARC). The few types and constants are
+ *   copies (tests/compile/video_avf.cpp checks them against the SDK), and
+ *   the asset reader's Objective-C methods are called through objc_msgSend
+ *   cast to each method's prototype, so the file stays C99 and C++ and
+ *   links nothing new; YVID_NO_AVF leaves it out. pl_mpeg.h on the include path, or
  *   YVID_NO_PL_MPEG. Its implementation is compiled here unless
  *   YVID_PL_MPEG_EXTERNAL (then yvid_index_make() and the reader
  *   source are not available for MPEG-1). Its heap calls go through
@@ -442,6 +485,29 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.7.0 - AVFOUNDATION (macOS): H.264 and HEVC in MP4 through
+ *          AVAssetReader (demux) and VideoToolbox (decode), loaded at run
+ *          time, from C99 and C++ through the Objective-C runtime; an MP4
+ *          file is YVID_BACKEND_AVF on Apple platforms. yvid_index_make()
+ *          makes the same index there (same checks, same 100 ns rate fit;
+ *          the color also from CoreMedia's format description, so HEVC needs
+ *          none in the desc). YVID_HW_VIDEOTOOLBOX (3) requires VideoToolbox's
+ *          hardware decoder; AUTO takes it and falls back to the software
+ *          one; DXVA is refused on Apple and VIDEOTOOLBOX on Windows
+ *          (YVID_ERR_REFUSED). Memory and yvid_reader sources through an
+ *          AVAssetResourceLoader delegate. yvid_params(): hw_decode lists
+ *          videotoolbox=3. Breaking: yvid_hw gains a value (a switch on it
+ *          without default stops compiling under -Wswitch); an MP4 file on
+ *          macOS opened YVID_ERR_NOT_IMPLEMENTED and now plays. Windows:
+ *          the H.264 VUI parser, the edit list check, the color pick and the
+ *          rate fit moved out of the Media Foundation block unchanged.
+ *          yvid_open() checks that the index belongs to the file (its size
+ *          and ends) before the backend opens, not after: the frame thread
+ *          read a yvid_reader while AVFoundation's loader read it on its
+ *          queue (ThreadSanitizer), and a reader is called one call at a
+ *          time. A decoder's failure message keeps the backend's reason:
+ *          "decode of frame 164 failed (-6): VideoToolbox decode failed
+ *          (-12909)" (Media Foundation: its HRESULT).
  *   v0.6.0 - PATHS: every path is UTF-8, converted to UTF-16 for _wfsopen
  *          on Windows, as ysp/dataset.h and ysp/pack.h take paths. fopen()
  *          read them in the ANSI code page, so a folder named with a
@@ -548,6 +614,28 @@
  *          ysp/gfx.h, I420 and NV12 converted to RGBA8 on the decode
  *          thread, manual mode, seek, loop, the records.
  *
+ *   STATUS: v0.7.0: AVFoundation on one Apple M2 Mac mini, macOS 27.0.1,
+ *   Apple clang 21: the core test with YVID_TEST_MEDIA on clips made by
+ *   VideoToolbox (tests/media/make_video_clips_mac.sh) passes as C11 and as
+ *   C++17, under ASan and UBSan, and under ThreadSanitizer: every frame's
+ *   time, keyframe flag and hash against the index, seeks to keyframes and
+ *   between them, the hardware and software decoders bit-exact with one
+ *   index, memory and reader sources, a path outside ASCII, missing and
+ *   truncated files, the refusals the clip set has (B-frames, a variable
+ *   rate, a GOP that changes, HEVC Main 10, non-square pixels, Motion JPEG,
+ *   rotation, a 1 ms timescale, an edit list). Compile checks C99, C11,
+ *   C++17, Objective-C with and without ARC; x86_64 compiled, not run.
+ *   Mutations: 15 of 15 (avf-01 to avf-15). Measured (2026-11-05, the M2
+ *   on AC power, a quiet machine, docs/video.md M1, M3, M4 on macOS), the
+ *   decode thread per frame with the hardware decoder, mean / p99: 2.0 /
+ *   3.3 ms at 720p30, 3.6 / 6.7 ms at 1080p30 and 1080p60; the software
+ *   decoder 7.7 / 15 ms at 720p, 20 to 24 / 38 to 52 ms at 1080p (misses
+ *   the 1080p bars; AUTO is hardware). Open 68 to 93 ms cold, 9 to 14 ms
+ *   warm; a seek 37, 67, 129 ms (hardware, GOP 30, 30, 60). VideoToolbox
+ *   decodes in its own process, so this process's CPU does not show the
+ *   decoder's. Not measured: the frame thread in a window. Not built: the GPU
+ *   path on macOS (ysp/screen.h's macOS swap path is a stub). Windows not
+ *   rebuilt for v0.7.0: the Media Foundation code moved but did not change.
  *   STATUS: v0.6.0: tests/adapt/video_test.c opens, probes, writes and
  *   plays files in a folder named with non-Latin, CJK and non-BMP
  *   characters, and checks every open refusal's code; it passes on MSVC
@@ -581,7 +669,7 @@
  *   Mutations: 23 of 23 (v0.1), 29 of 31 (v0.2; two Media Foundation
  *   checks not caught, docs/video.md says why). Not measured: light
  *   and sound (no photodiode or microphone), fullscreen, slips on the
- *   real panel, another GPU. Not built: YVID_PATH_SHARED, AVFoundation, FFmpeg,
+ *   real panel, another GPU. Not built: YVID_PATH_SHARED, FFmpeg,
  *   capture; open() refuses the ones a desc can ask for, by name.
  *   Outside it and this block, a number in this header is a measurement
  *   only where the text says "measured".
@@ -590,9 +678,9 @@
 #define YSP_VIDEO_H_INCLUDED
 
 #define YVID_VERSION_MAJOR 0
-#define YVID_VERSION_MINOR 6
+#define YVID_VERSION_MINOR 7
 #define YVID_VERSION_PATCH 0
-#define YVID_VERSION_STRING "0.6.0"
+#define YVID_VERSION_STRING "0.7.0"
 
 #include "ysp/gfx.h"
 #include "ysp/timeline.h"
@@ -696,7 +784,7 @@ typedef enum yvid_backend {
     YVID_BACKEND_SEQ,        /* frame sequence                              */
     YVID_BACKEND_PLMPEG,     /* MPEG-1 in MPEG-PS, pl_mpeg, CPU             */
     YVID_BACKEND_MF,         /* Media Foundation (Windows): H.264, HEVC in MP4 */
-    YVID_BACKEND_AVF,        /* AVFoundation: not built                     */
+    YVID_BACKEND_AVF,        /* AVFoundation (Apple): H.264, HEVC in MP4 (v0.7) */
     YVID_BACKEND_FFMPEG,     /* not built                                   */
     YVID_BACKEND_CUSTOM      /* desc.decoder                                */
 } yvid_backend;
@@ -709,12 +797,14 @@ typedef enum yvid_path {
                                 * device, one GPU copy per frame, no upload  */
 } yvid_path;
 
-/* Media Foundation's decoder (desc.hw_decode). */
+/* The MP4 decoder (desc.hw_decode): Media Foundation's or VideoToolbox's. */
 typedef enum yvid_hw {
-    YVID_HW_AUTO = 0,        /* DXVA, or the software decoder when no DXVA
-                                * device opens (measured, docs/video.md) */
-    YVID_HW_OFF,             /* Microsoft's software decoder                */
-    YVID_HW_DXVA             /* DXVA on a D3D11 device                      */
+    YVID_HW_AUTO = 0,        /* the platform's hardware decoder, or its
+                                * software decoder when that does not open:
+                                * DXVA (measured, docs/video.md), VideoToolbox */
+    YVID_HW_OFF,             /* the software decoder (Microsoft's, Apple's)  */
+    YVID_HW_DXVA,            /* Windows: DXVA on a D3D11 device              */
+    YVID_HW_VIDEOTOOLBOX     /* Apple: VideoToolbox's hardware decoder, required (v0.7) */
 } yvid_hw;
 
 typedef enum yvid_light {
@@ -831,7 +921,7 @@ typedef struct yvid_desc {
     const yvid_decoder* decoder;      /* YVID_BACKEND_CUSTOM               */
     void*                decoder_ctx;
     int32_t              pin_cpu;       /* decode thread; 0 = no pin           */
-    yvid_hw            hw_decode;     /* Media Foundation's decoder; 0 = AUTO */
+    yvid_hw            hw_decode;     /* the MP4 decoder; 0 = AUTO            */
 } yvid_desc;
 
 typedef struct yvid_info {
@@ -861,7 +951,7 @@ typedef struct yvid_info {
     uint64_t drops_by[YVID_WHY_COUNT];
     uint64_t ts_mismatch, hash_mismatch;
     uint64_t skipped;                /* annotations seeks passed over (ytl_skip) */
-    yvid_hw hw;                    /* Media Foundation: the decoder in use   */
+    yvid_hw hw;                    /* MP4: the decoder in use (OFF, DXVA, VIDEOTOOLBOX) */
 } yvid_info;
 
 /* The record of one display frame while playing. */
@@ -1162,21 +1252,22 @@ YVID_API int  yvid_seq_finish(yvid_seq* w);
 YVID_API void yvid_seq_close(yvid_seq* w);
 YVID_API const char* yvid_seq_error(const yvid_seq* w);
 
-/* The index of an MPEG-1 (pl_mpeg) or MP4 (Media Foundation) file: decodes
- * every frame, checks the canonical form, writes index_path (NULL =
- * media_path + ".yspvi"). color: matrix, range, transfer, primaries,
- * siting. MPEG-1: 0 = BT.601, LIMITED, BT1886, BT709, CENTER. MP4: what
- * the stream states, which Media Foundation does not report, so each
- * field must be given (BT.709, LIMITED, BT1886, BT709, LEFT for a usual
- * x264 file); a given field that differs from a reported one is refused.
- * Returns frames, or a negative code with err. */
+/* The index of an MPEG-1 (pl_mpeg) or MP4 (Media Foundation, AVFoundation)
+ * file: decodes every frame, checks the canonical form, writes index_path
+ * (NULL = media_path + ".yspvi"). color: matrix, range, transfer,
+ * primaries, siting. MPEG-1: 0 = BT.601, LIMITED, BT1886, BT709, CENTER.
+ * MP4: what the stream states (the H.264 SPS; on Apple also CoreMedia's
+ * format description, HEVC too); a field it does not state must be given
+ * (BT.709, LIMITED, BT1886, BT709, LEFT for a usual x264 file), and a
+ * given field that differs from a stated one is refused. Returns frames,
+ * or a negative code with err. */
 typedef struct yvid_index_desc {
     uint8_t matrix, range, transfer, primaries, siting;
     uint8_t reserved_[3];
     const char* note;                /* the command that made the file        */
-    yvid_backend backend;          /* 0 = from the file: MPEG-PS pl_mpeg, MP4 MF */
-    yvid_hw   hw;                  /* MF: the decoder that makes the hashes; 0 = OFF */
-    bool        no_seek_check;       /* MF: skip the decode from each keyframe */
+    yvid_backend backend;          /* 0 = from the file: MPEG-PS pl_mpeg, MP4 MF or AVF */
+    yvid_hw   hw;                  /* MP4: the decoder that makes the hashes; 0 = OFF */
+    bool        no_seek_check;       /* MP4: skip the decode from each keyframe */
 } yvid_index_desc;
 YVID_API int64_t yvid_index_make(const char* media_path, const char* index_path,
                                      const yvid_index_desc* d, char* err, size_t cap);
@@ -1275,6 +1366,23 @@ YVID_API int yvid_soundtrack(yvid_movie* mv, yau_audio* au, const yvid_soundtrac
     #endif
 #else
     #define YVID__MF 0
+#endif
+/* AVFoundation: Apple platforms, unless YVID_NO_AVF. Loaded at run time
+ * like Media Foundation, with no Apple header (docs/video.md,
+ * "AVFoundation"): CoreVideo's would bring ApplicationServices into this
+ * translation unit, and dispatch.h's queues are ARC objects when the unit
+ * is compiled as Objective-C with ARC. */
+#if defined(__APPLE__) && !defined(YVID_NO_AVF)
+    #define YVID__AVF 1
+    #include <dlfcn.h>
+#else
+    #define YVID__AVF 0
+#endif
+/* The backend that reads an MP4 file on this platform. */
+#if YVID__AVF
+    #define YVID__MP4_BACKEND YVID_BACKEND_AVF
+#else
+    #define YVID__MP4_BACKEND YVID_BACKEND_MF
 #endif
 #include <errno.h>
 #if defined(_WIN32)
@@ -2700,6 +2808,138 @@ static const yvid_decoder yvid__plm_decoder = {
  * nothing is linked. The reader may not insert a converter or a video
  * processor: a stream that the decoder cannot give as NV12 is refused, not
  * converted. */
+#if YVID__MF || YVID__AVF
+/* --- the H.264 SPS's VUI ---------------------------------------------------------
+ * Media Foundation reports none of the color the stream states, so the
+ * index maker reads it from the sequence parameter set: colour_primaries,
+ * transfer_characteristics, matrix_coefficients, video_full_range_flag and
+ * the chroma sample location (H.264 Annex E). HEVC's SPS puts its VUI
+ * behind the profile_tier_level and short-term reference picture sets, so it
+ * is not parsed here: an HEVC index takes the color from its desc. */
+typedef struct yvid__bits { const uint8_t* p; size_t n, pos; int err; } yvid__bits;
+
+static uint32_t yvid__bu(yvid__bits* b, int k) {
+    uint32_t v = 0;
+    while (k-- > 0) {
+        if (b->pos >= b->n * 8) { b->err = 1; return 0; }
+        v = (v << 1) | ((b->p[b->pos >> 3] >> (7 - (b->pos & 7))) & 1u);
+        b->pos++;
+    }
+    return v;
+}
+static uint32_t yvid__bue(yvid__bits* b) {   /* ue(v) */
+    int z = 0;
+    while (!b->err && yvid__bu(b, 1) == 0) if (++z > 31) { b->err = 1; return 0; }
+    return z ? ((1u << z) - 1u) + yvid__bu(b, z) : 0u;
+}
+static int32_t yvid__bse(yvid__bits* b) {    /* se(v) */
+    uint32_t k = yvid__bue(b);
+    return (k & 1u) ? (int32_t)((k + 1) / 2) : -(int32_t)(k / 2);
+}
+
+/* out: matrix, range, transfer, primaries, siting as YVID_* values; -1
+ * not stated, -2 stated but not one the canonical form has. Returns 1 when
+ * an SPS was parsed. */
+static int yvid__h264_vui(const uint8_t* nal, size_t n, int16_t out[5]) {
+    uint8_t rb[512];
+    size_t i, m = 0;
+    int zeros = 0;
+    yvid__bits b;
+    uint32_t profile, k;
+    for (k = 0; k < 5; k++) out[k] = -1;
+    /* the RBSP: drop the emulation prevention bytes (00 00 03) */
+    for (i = 1; i < n && m < sizeof rb; i++) {
+        if (zeros >= 2 && nal[i] == 3) { zeros = 0; continue; }
+        zeros = nal[i] == 0 ? zeros + 1 : 0;
+        rb[m++] = nal[i];
+    }
+    b.p = rb; b.n = m; b.pos = 0; b.err = 0;
+    profile = yvid__bu(&b, 8);
+    yvid__bu(&b, 16);                 /* constraint flags, level            */
+    yvid__bue(&b);                    /* seq_parameter_set_id               */
+    if (profile == 100 || profile == 110 || profile == 122 || profile == 244 || profile == 44 || profile == 83 ||
+        profile == 86 || profile == 118 || profile == 128 || profile == 138 || profile == 139 || profile == 134 || profile == 135) {
+        uint32_t cf = yvid__bue(&b);
+        if (cf == 3) yvid__bu(&b, 1);
+        yvid__bue(&b); yvid__bue(&b);   /* bit depths                     */
+        yvid__bu(&b, 1);
+        if (yvid__bu(&b, 1)) {            /* scaling matrices               */
+            for (k = 0; k < (cf != 3 ? 8u : 12u) && !b.err; k++) {
+                if (yvid__bu(&b, 1)) {
+                    int size = k < 6 ? 16 : 64, j, last = 8, next = 8;
+                    for (j = 0; j < size && !b.err; j++) {
+                        if (next != 0) next = (last + yvid__bse(&b) + 256) % 256;
+                        last = next == 0 ? last : next;
+                    }
+                }
+            }
+        }
+    }
+    yvid__bue(&b);                    /* log2_max_frame_num_minus4          */
+    k = yvid__bue(&b);                /* pic_order_cnt_type                 */
+    if (k == 0) yvid__bue(&b);
+    else if (k == 1) {
+        uint32_t c, j;
+        yvid__bu(&b, 1); yvid__bse(&b); yvid__bse(&b);
+        c = yvid__bue(&b);
+        for (j = 0; j < c && j < 256 && !b.err; j++) yvid__bse(&b);
+    }
+    yvid__bue(&b); yvid__bu(&b, 1);   /* max_num_ref_frames, gaps         */
+    yvid__bue(&b); yvid__bue(&b);     /* size in macroblocks              */
+    if (!yvid__bu(&b, 1)) yvid__bu(&b, 1);   /* frame_mbs_only, mb_adaptive */
+    yvid__bu(&b, 1);                    /* direct_8x8_inference             */
+    if (yvid__bu(&b, 1)) { yvid__bue(&b); yvid__bue(&b); yvid__bue(&b); yvid__bue(&b); }   /* cropping */
+    if (b.err) return 0;
+    if (!yvid__bu(&b, 1)) { out[4] = YVID_SITING_LEFT; return 1; }   /* no VUI: type 0 inferred */
+    if (yvid__bu(&b, 1) && yvid__bu(&b, 8) == 255) yvid__bu(&b, 32);   /* aspect ratio */
+    if (yvid__bu(&b, 1)) yvid__bu(&b, 1);   /* overscan                     */
+    if (yvid__bu(&b, 1)) {              /* video_signal_type                */
+        uint32_t prim, trc, mat;
+        yvid__bu(&b, 3);
+        out[1] = yvid__bu(&b, 1) ? YVID_RANGE_FULL : YVID_RANGE_LIMITED;
+        if (yvid__bu(&b, 1)) {
+            prim = yvid__bu(&b, 8); trc = yvid__bu(&b, 8); mat = yvid__bu(&b, 8);
+            out[3] = prim == 1 ? YVID_PRIM_BT709 : prim == 5 ? YVID_PRIM_BT601_625 : (prim == 6 || prim == 7) ? YVID_PRIM_BT601_525 :
+                     prim == 9 ? YVID_PRIM_BT2020 : prim == 2 ? -1 : -2;
+            out[2] = (trc == 1 || trc == 6 || trc == 14 || trc == 15) ? YVID_TRC_BT1886 : trc == 13 ? YVID_TRC_SRGB :
+                     trc == 8 ? YVID_TRC_LINEAR : trc == 4 ? YVID_TRC_GAMMA22 : trc == 2 ? -1 : -2;
+            out[0] = mat == 1 ? YVID_MATRIX_BT709 : (mat == 5 || mat == 6) ? YVID_MATRIX_BT601 : mat == 9 ? YVID_MATRIX_BT2020 :
+                     mat == 2 ? -1 : -2;
+        }
+    }
+    if (yvid__bu(&b, 1)) {              /* chroma_loc_info                  */
+        uint32_t top = yvid__bue(&b);
+        yvid__bue(&b);
+        out[4] = top == 0 ? YVID_SITING_LEFT : top == 1 ? YVID_SITING_CENTER : -2;
+    } else {
+        /* absent, the standard infers type 0 (E.2.1): x264 omits it then */
+        out[4] = YVID_SITING_LEFT;
+    }
+    if (b.err) { for (k = 0; k < 5; k++) out[k] = -1; return 0; }
+    return 1;
+}
+
+/* The SPS in an avcC record or in Annex B NAL units (MF_MT_MPEG_SEQUENCE_HEADER
+ * is one or the other). */
+static int yvid__h264_seqhdr(const uint8_t* p, size_t n, int16_t out[5]) {
+    size_t i;
+    if (n > 8 && p[0] == 1) {   /* avcC: version 1, then the first SPS's length */
+        size_t len = (size_t)p[6] << 8 | p[7];
+        if ((p[5] & 0x1f) > 0 && 8 + len <= n && (p[8] & 0x1f) == 7) return yvid__h264_vui(p + 8, len, out);
+        return 0;
+    }
+    for (i = 0; i + 3 < n; i++) {
+        if (p[i] == 0 && p[i + 1] == 0 && p[i + 2] == 1 && (p[i + 3] & 0x1f) == 7) {
+            size_t j = i + 3;
+            while (j + 2 < n && !(p[j] == 0 && p[j + 1] == 0 && (p[j + 2] == 1 || p[j + 2] == 0))) j++;
+            if (j + 2 >= n) j = n;
+            return yvid__h264_vui(p + i + 3, j - (i + 3), out);
+        }
+    }
+    return 0;
+}
+#endif
+
 #if YVID__MF
 
 /* desc.hw_decode AUTO: chosen by measurement (docs/video.md, M1, M2). */
@@ -2954,136 +3194,6 @@ static const yvid__stm_vtbl yvid__stm_table = {
     #define YVID__REF(x)          (&(x))
 #endif
 #define YVID__REL(o) do { if (o) { YVID__CALL0((o), Release); (o) = NULL; } } while (0)
-
-/* --- the H.264 SPS's VUI ---------------------------------------------------------
- * Media Foundation reports none of the color the stream states, so the
- * index maker reads it from the sequence parameter set: colour_primaries,
- * transfer_characteristics, matrix_coefficients, video_full_range_flag and
- * the chroma sample location (H.264 Annex E). HEVC's SPS puts its VUI
- * behind the profile_tier_level and short-term reference picture sets, so it
- * is not parsed here: an HEVC index takes the color from its desc. */
-typedef struct yvid__bits { const uint8_t* p; size_t n, pos; int err; } yvid__bits;
-
-static uint32_t yvid__bu(yvid__bits* b, int k) {
-    uint32_t v = 0;
-    while (k-- > 0) {
-        if (b->pos >= b->n * 8) { b->err = 1; return 0; }
-        v = (v << 1) | ((b->p[b->pos >> 3] >> (7 - (b->pos & 7))) & 1u);
-        b->pos++;
-    }
-    return v;
-}
-static uint32_t yvid__bue(yvid__bits* b) {   /* ue(v) */
-    int z = 0;
-    while (!b->err && yvid__bu(b, 1) == 0) if (++z > 31) { b->err = 1; return 0; }
-    return z ? ((1u << z) - 1u) + yvid__bu(b, z) : 0u;
-}
-static int32_t yvid__bse(yvid__bits* b) {    /* se(v) */
-    uint32_t k = yvid__bue(b);
-    return (k & 1u) ? (int32_t)((k + 1) / 2) : -(int32_t)(k / 2);
-}
-
-/* out: matrix, range, transfer, primaries, siting as YVID_* values; -1
- * not stated, -2 stated but not one the canonical form has. Returns 1 when
- * an SPS was parsed. */
-static int yvid__h264_vui(const uint8_t* nal, size_t n, int16_t out[5]) {
-    uint8_t rb[512];
-    size_t i, m = 0;
-    int zeros = 0;
-    yvid__bits b;
-    uint32_t profile, k;
-    for (k = 0; k < 5; k++) out[k] = -1;
-    /* the RBSP: drop the emulation prevention bytes (00 00 03) */
-    for (i = 1; i < n && m < sizeof rb; i++) {
-        if (zeros >= 2 && nal[i] == 3) { zeros = 0; continue; }
-        zeros = nal[i] == 0 ? zeros + 1 : 0;
-        rb[m++] = nal[i];
-    }
-    b.p = rb; b.n = m; b.pos = 0; b.err = 0;
-    profile = yvid__bu(&b, 8);
-    yvid__bu(&b, 16);                 /* constraint flags, level            */
-    yvid__bue(&b);                    /* seq_parameter_set_id               */
-    if (profile == 100 || profile == 110 || profile == 122 || profile == 244 || profile == 44 || profile == 83 ||
-        profile == 86 || profile == 118 || profile == 128 || profile == 138 || profile == 139 || profile == 134 || profile == 135) {
-        uint32_t cf = yvid__bue(&b);
-        if (cf == 3) yvid__bu(&b, 1);
-        yvid__bue(&b); yvid__bue(&b);   /* bit depths                     */
-        yvid__bu(&b, 1);
-        if (yvid__bu(&b, 1)) {            /* scaling matrices               */
-            for (k = 0; k < (cf != 3 ? 8u : 12u) && !b.err; k++) {
-                if (yvid__bu(&b, 1)) {
-                    int size = k < 6 ? 16 : 64, j, last = 8, next = 8;
-                    for (j = 0; j < size && !b.err; j++) {
-                        if (next != 0) next = (last + yvid__bse(&b) + 256) % 256;
-                        last = next == 0 ? last : next;
-                    }
-                }
-            }
-        }
-    }
-    yvid__bue(&b);                    /* log2_max_frame_num_minus4          */
-    k = yvid__bue(&b);                /* pic_order_cnt_type                 */
-    if (k == 0) yvid__bue(&b);
-    else if (k == 1) {
-        uint32_t c, j;
-        yvid__bu(&b, 1); yvid__bse(&b); yvid__bse(&b);
-        c = yvid__bue(&b);
-        for (j = 0; j < c && j < 256 && !b.err; j++) yvid__bse(&b);
-    }
-    yvid__bue(&b); yvid__bu(&b, 1);   /* max_num_ref_frames, gaps         */
-    yvid__bue(&b); yvid__bue(&b);     /* size in macroblocks              */
-    if (!yvid__bu(&b, 1)) yvid__bu(&b, 1);   /* frame_mbs_only, mb_adaptive */
-    yvid__bu(&b, 1);                    /* direct_8x8_inference             */
-    if (yvid__bu(&b, 1)) { yvid__bue(&b); yvid__bue(&b); yvid__bue(&b); yvid__bue(&b); }   /* cropping */
-    if (b.err) return 0;
-    if (!yvid__bu(&b, 1)) { out[4] = YVID_SITING_LEFT; return 1; }   /* no VUI: type 0 inferred */
-    if (yvid__bu(&b, 1) && yvid__bu(&b, 8) == 255) yvid__bu(&b, 32);   /* aspect ratio */
-    if (yvid__bu(&b, 1)) yvid__bu(&b, 1);   /* overscan                     */
-    if (yvid__bu(&b, 1)) {              /* video_signal_type                */
-        uint32_t prim, trc, mat;
-        yvid__bu(&b, 3);
-        out[1] = yvid__bu(&b, 1) ? YVID_RANGE_FULL : YVID_RANGE_LIMITED;
-        if (yvid__bu(&b, 1)) {
-            prim = yvid__bu(&b, 8); trc = yvid__bu(&b, 8); mat = yvid__bu(&b, 8);
-            out[3] = prim == 1 ? YVID_PRIM_BT709 : prim == 5 ? YVID_PRIM_BT601_625 : (prim == 6 || prim == 7) ? YVID_PRIM_BT601_525 :
-                     prim == 9 ? YVID_PRIM_BT2020 : prim == 2 ? -1 : -2;
-            out[2] = (trc == 1 || trc == 6 || trc == 14 || trc == 15) ? YVID_TRC_BT1886 : trc == 13 ? YVID_TRC_SRGB :
-                     trc == 8 ? YVID_TRC_LINEAR : trc == 4 ? YVID_TRC_GAMMA22 : trc == 2 ? -1 : -2;
-            out[0] = mat == 1 ? YVID_MATRIX_BT709 : (mat == 5 || mat == 6) ? YVID_MATRIX_BT601 : mat == 9 ? YVID_MATRIX_BT2020 :
-                     mat == 2 ? -1 : -2;
-        }
-    }
-    if (yvid__bu(&b, 1)) {              /* chroma_loc_info                  */
-        uint32_t top = yvid__bue(&b);
-        yvid__bue(&b);
-        out[4] = top == 0 ? YVID_SITING_LEFT : top == 1 ? YVID_SITING_CENTER : -2;
-    } else {
-        /* absent, the standard infers type 0 (E.2.1): x264 omits it then */
-        out[4] = YVID_SITING_LEFT;
-    }
-    if (b.err) { for (k = 0; k < 5; k++) out[k] = -1; return 0; }
-    return 1;
-}
-
-/* The SPS in an avcC record or in Annex B NAL units (MF_MT_MPEG_SEQUENCE_HEADER
- * is one or the other). */
-static int yvid__h264_seqhdr(const uint8_t* p, size_t n, int16_t out[5]) {
-    size_t i;
-    if (n > 8 && p[0] == 1) {   /* avcC: version 1, then the first SPS's length */
-        size_t len = (size_t)p[6] << 8 | p[7];
-        if ((p[5] & 0x1f) > 0 && 8 + len <= n && (p[8] & 0x1f) == 7) return yvid__h264_vui(p + 8, len, out);
-        return 0;
-    }
-    for (i = 0; i + 3 < n; i++) {
-        if (p[i] == 0 && p[i + 1] == 0 && p[i + 2] == 1 && (p[i + 3] & 0x1f) == 7) {
-            size_t j = i + 3;
-            while (j + 2 < n && !(p[j] == 0 && p[j + 1] == 0 && (p[j + 2] == 1 || p[j + 2] == 0))) j++;
-            if (j + 2 >= n) j = n;
-            return yvid__h264_vui(p + i + 3, j - (i + 3), out);
-        }
-    }
-    return 0;
-}
 
 /* MFVideoArea, as the SDK lays it out (checked in video_com.cpp). */
 typedef struct yvid__mfarea { WORD fx; short x; WORD fy; short y; LONG cx, cy; } yvid__mfarea;
@@ -3741,6 +3851,978 @@ static const yvid_decoder yvid__mf_decoder = {
 
 #endif /* YVID__MF */
 
+/* --- AVFoundation backend (Apple) -------------------------------------------
+ * AVAssetReader demuxes: an AVAssetReaderTrackOutput with no output settings
+ * gives the compressed samples in decode order, with their times and sync
+ * flags. VideoToolbox decodes them in a VTDecompressionSession, one sample
+ * at a time and synchronously, into NV12 at the stream's own range. So the
+ * decoder is chosen and checked here (desc.hw_decode), as Media Foundation's
+ * is on Windows: an asset reader that decodes reports neither which decoder
+ * it took nor whether it converted. AVAssetReader cannot seek; a seek makes
+ * a new reader whose time range starts half a frame past the keyframe.
+ *
+ * Nothing is linked and no Apple header is included: CoreVideo's header
+ * brings ApplicationServices, and with it CarbonCore's globals (`pi`,
+ * `Rect`, `Point`) into the caller's translation unit (the core test's
+ * local `pi` failed -Wshadow). The frameworks and libobjc are loaded at run
+ * time, as Media Foundation's DLLs are, and the few types are local copies
+ * that tests/compile/video_avf.cpp checks against the SDK. The asset reader
+ * is Objective-C; it is reached through objc_msgSend cast to each method's
+ * exact prototype (the ABI needs it), so this file stays C99 and C++. */
+#if YVID__AVF
+
+typedef void* yvid__id;                 /* an Objective-C object                */
+typedef const void* yvid__cf;           /* a CFTypeRef                          */
+/* CoreMedia and VideoToolbox lay these out under #pragma pack(push, 4):
+ * the same offsets, alignment 4 (tests/compile/video_avf.cpp) */
+#pragma pack(push, 4)
+typedef struct yvid__cmtime { int64_t value; int32_t timescale; uint32_t flags; int64_t epoch; } yvid__cmtime;   /* CMTime */
+typedef struct yvid__cmrange { yvid__cmtime start, duration; } yvid__cmrange;   /* CMTimeRange */
+#pragma pack(pop)
+typedef struct yvid__cgrect { double x, y, w, h; } yvid__cgrect;               /* CGRect, CGFloat double */
+typedef struct yvid__affine { double a, b, c, d, tx, ty; } yvid__affine;       /* CGAffineTransform */
+typedef struct yvid__dims { int32_t w, h; } yvid__dims;                        /* CMVideoDimensions */
+typedef void (*yvid__vt_out_fn)(void* ref, void* fref, int32_t st, uint32_t flags, yvid__cf image,
+                                yvid__cmtime pts, yvid__cmtime dur);
+#pragma pack(push, 4)
+typedef struct yvid__vtcb { yvid__vt_out_fn fn; void* ref; } yvid__vtcb;      /* VTDecompressionOutputCallbackRecord */
+#pragma pack(pop)
+
+#define YVID__CMT_VALID       1u           /* kCMTimeFlags_Valid                  */
+#define YVID__CMT_POS_INF     4u           /* kCMTimeFlags_PositiveInfinity       */
+#define YVID__CMT_ROUND       1u           /* kCMTimeRoundingMethod_RoundHalfAwayFromZero */
+#define YVID__CF_SINT32       3L           /* kCFNumberSInt32Type                 */
+#define YVID__CF_SINT64       4L           /* kCFNumberSInt64Type                 */
+#define YVID__CF_UTF8         0x08000100u  /* kCFStringEncodingUTF8               */
+#define YVID__CV_LOCK_RO      1ull         /* kCVPixelBufferLock_ReadOnly         */
+#define YVID__VT_NO_OUTPUT    2u           /* kVTDecodeFrame_DoNotOutputFrame     */
+#define YVID__PF_420V         0x34323076u  /* '420v': NV12, video range           */
+#define YVID__PF_420F         0x34323066u  /* '420f': NV12, full range            */
+#define YVID__CC_AVC1         0x61766331u
+#define YVID__CC_AVC3         0x61766333u
+#define YVID__CC_HVC1         0x68766331u
+#define YVID__CC_HEV1         0x68657631u
+#define YVID__CC_H264         0x61766331u  /* kCMVideoCodecType_H264              */
+#define YVID__CC_HEVC         0x68766331u  /* kCMVideoCodecType_HEVC              */
+
+/* Loaded once per process; movies open and close on one thread, as the rest
+ * of the API requires, so a plain state is enough. */
+static struct {
+    int state;                          /* 0 not tried, 1 loaded, -1 failed     */
+    char why[160];
+    void* lib[7];
+    /* libobjc */
+    void (*msg)(void);
+#if defined(__x86_64__)
+    void (*msg_stret)(void);
+#endif
+    yvid__id (*objc_getClass)(const char*);
+    void* (*sel_registerName)(const char*);
+    yvid__id (*objc_allocateClassPair)(yvid__id, const char*, size_t);
+    unsigned char (*class_addMethod)(yvid__id, void*, void (*)(void), const char*);
+    void (*objc_registerClassPair)(yvid__id);
+    yvid__id (*class_createInstance)(yvid__id, size_t);
+    void* (*object_getIndexedIvars)(yvid__id);
+    void* (*objc_autoreleasePoolPush)(void);
+    void (*objc_autoreleasePoolPop)(void*);
+    /* CoreFoundation */
+    void (*CFRelease)(yvid__cf);
+    yvid__cf (*CFRetain)(yvid__cf);
+    unsigned char (*CFEqual)(yvid__cf, yvid__cf);
+    unsigned long (*CFGetTypeID)(yvid__cf);
+    unsigned long (*CFDictionaryGetTypeID)(void);
+    unsigned long (*CFDataGetTypeID)(void);
+    unsigned long (*CFNumberGetTypeID)(void);
+    unsigned long (*CFBooleanGetTypeID)(void);
+    long (*CFArrayGetCount)(yvid__cf);
+    yvid__cf (*CFArrayGetValueAtIndex)(yvid__cf, long);
+    yvid__cf (*CFDictionaryGetValue)(yvid__cf, yvid__cf);
+    yvid__cf (*CFDictionaryCreate)(yvid__cf, const void**, const void**, long, const void*, const void*);
+    long (*CFDataGetLength)(yvid__cf);
+    const uint8_t* (*CFDataGetBytePtr)(yvid__cf);
+    yvid__cf (*CFDataCreateWithBytesNoCopy)(yvid__cf, const uint8_t*, long, yvid__cf);
+    yvid__cf (*CFNumberCreate)(yvid__cf, long, const void*);
+    unsigned char (*CFNumberGetValue)(yvid__cf, long, void*);
+    unsigned char (*CFBooleanGetValue)(yvid__cf);
+    unsigned char (*CFStringGetCString)(yvid__cf, char*, long, uint32_t);
+    yvid__cf (*CFURLCreateFromFileSystemRepresentation)(yvid__cf, const uint8_t*, long, unsigned char);
+    yvid__cf (*CFURLCreateWithBytes)(yvid__cf, const uint8_t*, long, uint32_t, yvid__cf);
+    yvid__cf (*CFStringCreateWithCString)(yvid__cf, const char*, uint32_t);
+    /* CoreMedia */
+    yvid__cmtime (*CMTimeConvertScale)(yvid__cmtime, int32_t, uint32_t);
+    int32_t (*CMTimeCompare)(yvid__cmtime, yvid__cmtime);
+    long (*CMSampleBufferGetNumSamples)(yvid__cf);
+    yvid__cf (*CMSampleBufferGetFormatDescription)(yvid__cf);
+    yvid__cmtime (*CMSampleBufferGetPresentationTimeStamp)(yvid__cf);
+    yvid__cmtime (*CMSampleBufferGetDecodeTimeStamp)(yvid__cf);
+    yvid__cf (*CMSampleBufferGetSampleAttachmentsArray)(yvid__cf, unsigned char);
+    yvid__cf (*CMFormatDescriptionGetExtensions)(yvid__cf);
+    uint32_t (*CMFormatDescriptionGetMediaSubType)(yvid__cf);
+    yvid__dims (*CMVideoFormatDescriptionGetDimensions)(yvid__cf);
+    yvid__cgrect (*CMVideoFormatDescriptionGetCleanAperture)(yvid__cf, unsigned char);
+    /* CoreVideo */
+    int32_t (*CVPixelBufferLockBaseAddress)(yvid__cf, uint64_t);
+    int32_t (*CVPixelBufferUnlockBaseAddress)(yvid__cf, uint64_t);
+    void* (*CVPixelBufferGetBaseAddressOfPlane)(yvid__cf, size_t);
+    size_t (*CVPixelBufferGetBytesPerRowOfPlane)(yvid__cf, size_t);
+    size_t (*CVPixelBufferGetWidth)(yvid__cf);
+    size_t (*CVPixelBufferGetHeight)(yvid__cf);
+    size_t (*CVPixelBufferGetPlaneCount)(yvid__cf);
+    uint32_t (*CVPixelBufferGetPixelFormatType)(yvid__cf);
+    yvid__cf (*CVPixelBufferRetain)(yvid__cf);
+    void (*CVPixelBufferRelease)(yvid__cf);
+    /* libdispatch: queues as plain pointers */
+    void* (*dispatch_queue_create)(const char*, void*);
+    void* (*dispatch_queue_attr_make_with_autorelease_frequency)(void*, unsigned long);
+    void (*dispatch_async_f)(void*, void*, void (*)(void*));
+    void (*dispatch_sync_f)(void*, void*, void (*)(void*));
+    void (*dispatch_release)(void*);
+    /* VideoToolbox */
+    int32_t (*VTDecompressionSessionCreate)(yvid__cf, yvid__cf, yvid__cf, yvid__cf, const yvid__vtcb*, yvid__cf*);
+    int32_t (*VTDecompressionSessionDecodeFrame)(yvid__cf, yvid__cf, uint32_t, void*, uint32_t*);
+    void (*VTDecompressionSessionInvalidate)(yvid__cf);
+    int32_t (*VTDecompressionSessionWaitForAsynchronousFrames)(yvid__cf);
+    int32_t (*VTSessionCopyProperty)(yvid__cf, yvid__cf, yvid__cf, void*);
+    unsigned char (*VTIsHardwareDecodeSupported)(uint32_t);
+    /* data */
+    yvid__cf kCFBooleanTrue, kCFBooleanFalse, kCFAllocatorMalloc;
+    const void* keyCB;                  /* &kCFTypeDictionaryKeyCallBacks       */
+    const void* valueCB;                /* &kCFTypeDictionaryValueCallBacks     */
+    yvid__cf AVMediaTypeVideo, NotSync, FullRange, Bits, Atoms, PixFmtKey;
+    yvid__cf Matrix, Transfer, Primaries, Chroma, FieldCount, PAR, PARh, PARv;
+    yvid__cf M709, M601, M2020, T709, T2020, T240, TsRGB, TLinear, P709, PEBU, PSMPTEC, P2020, CLeft, CCenter;
+    yvid__cf EnableHW, RequireHW, UsingHW;
+    /* Objective-C */
+    yvid__id AVURLAsset, AVAssetReader, AVAssetReaderTrackOutput, loader;
+    void *urlAsset, *tracksWithMediaType, *formatDescriptions, *naturalTimeScale, *nominalFrameRate, *preferredTransform;
+    void *readerWithAsset, *outputWithTrack, *setAlwaysCopies, *addOutput, *setTimeRange, *startReading, *cancelReading;
+    void *status, *error, *copyNext, *resourceLoader, *setDelegateQueue, *localizedDescription;
+    void *contentInformationRequest, *dataRequest, *setContentType, *setContentLength, *setByteRange;
+    void *requestedOffset, *requestedLength, *requestsAll, *respondWithData, *finishLoading, *finishWithError, *isCancelled;
+} yvid__av;
+
+/* Typed sends: objc_msgSend has no prototype of its own, so each call casts
+ * it to the method's. */
+#define YVID__MSG(ret, ...) ((ret (*)(__VA_ARGS__))yvid__av.msg)
+static yvid__id yvid__o0(yvid__id o, void* s) { return YVID__MSG(yvid__id, yvid__id, void*)(o, s); }
+static yvid__id yvid__o1(yvid__id o, void* s, yvid__cf a) { return YVID__MSG(yvid__id, yvid__id, void*, yvid__cf)(o, s, a); }
+static void yvid__v1(yvid__id o, void* s, yvid__cf a) { YVID__MSG(void, yvid__id, void*, yvid__cf)(o, s, a); }
+static unsigned char yvid__b0(yvid__id o, void* s) { return YVID__MSG(unsigned char, yvid__id, void*)(o, s); }
+static long yvid__l0(yvid__id o, void* s) { return YVID__MSG(long, yvid__id, void*)(o, s); }
+#define YVID__CFREL(o) do { if (o) { yvid__av.CFRelease((yvid__cf)(o)); (o) = NULL; } } while (0)
+
+static void yvid__avf_load_sym(int lib, const char* name, void* slot, int data, const char** miss) {
+    void* p = yvid__av.lib[lib] ? dlsym(yvid__av.lib[lib], name) : NULL;
+    if (!p) { if (!*miss) *miss = name; return; }
+    if (data == 1) memcpy(slot, p, sizeof(void*));          /* the constant's value */
+    else memcpy(slot, &p, sizeof(void*));                    /* a function, or an address */
+}
+
+static int yvid__avf_load(char* err, size_t cap) {
+    static const char* const libs[7] = {
+        "/usr/lib/libobjc.A.dylib",
+        "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation",
+        "/System/Library/Frameworks/CoreMedia.framework/CoreMedia",
+        "/System/Library/Frameworks/CoreVideo.framework/CoreVideo",
+        "/System/Library/Frameworks/VideoToolbox.framework/VideoToolbox",
+        "/System/Library/Frameworks/AVFoundation.framework/AVFoundation",
+        "/usr/lib/system/libdispatch.dylib" };
+    const char* miss = NULL;
+    int k;
+    if (yvid__av.state > 0) return YVID_OK;
+    if (yvid__av.state < 0) { yvid__fmt(err, cap, "%s", yvid__av.why); return YVID_ERR_NOT_IMPLEMENTED; }
+    for (k = 0; k < 7; k++) {
+        yvid__av.lib[k] = dlopen(libs[k], RTLD_LAZY | RTLD_LOCAL);
+        if (!yvid__av.lib[k] && !miss) miss = libs[k];
+    }
+#define YVID__F(l, f) yvid__avf_load_sym(l, #f, (void*)&yvid__av.f, 0, &miss)
+#define YVID__D(l, f, n) yvid__avf_load_sym(l, n, (void*)&yvid__av.f, 1, &miss)
+#define YVID__A(l, f, n) yvid__avf_load_sym(l, n, (void*)&yvid__av.f, 2, &miss)
+    yvid__avf_load_sym(0, "objc_msgSend", (void*)&yvid__av.msg, 0, &miss);
+#if defined(__x86_64__)
+    yvid__avf_load_sym(0, "objc_msgSend_stret", (void*)&yvid__av.msg_stret, 0, &miss);
+#endif
+    YVID__F(0, objc_getClass); YVID__F(0, sel_registerName); YVID__F(0, objc_allocateClassPair);
+    YVID__F(0, class_addMethod); YVID__F(0, objc_registerClassPair); YVID__F(0, class_createInstance);
+    YVID__F(0, object_getIndexedIvars); YVID__F(0, objc_autoreleasePoolPush); YVID__F(0, objc_autoreleasePoolPop);
+    YVID__F(1, CFRelease); YVID__F(1, CFRetain); YVID__F(1, CFEqual); YVID__F(1, CFGetTypeID);
+    YVID__F(1, CFDictionaryGetTypeID); YVID__F(1, CFDataGetTypeID); YVID__F(1, CFNumberGetTypeID); YVID__F(1, CFBooleanGetTypeID);
+    YVID__F(1, CFArrayGetCount); YVID__F(1, CFArrayGetValueAtIndex); YVID__F(1, CFDictionaryGetValue); YVID__F(1, CFDictionaryCreate);
+    YVID__F(1, CFDataGetLength); YVID__F(1, CFDataGetBytePtr); YVID__F(1, CFDataCreateWithBytesNoCopy);
+    YVID__F(1, CFNumberCreate); YVID__F(1, CFNumberGetValue); YVID__F(1, CFBooleanGetValue); YVID__F(1, CFStringGetCString);
+    YVID__F(1, CFURLCreateFromFileSystemRepresentation); YVID__F(1, CFURLCreateWithBytes); YVID__F(1, CFStringCreateWithCString);
+    YVID__D(1, kCFBooleanTrue, "kCFBooleanTrue"); YVID__D(1, kCFBooleanFalse, "kCFBooleanFalse");
+    YVID__D(1, kCFAllocatorMalloc, "kCFAllocatorMalloc");
+    YVID__A(1, keyCB, "kCFTypeDictionaryKeyCallBacks"); YVID__A(1, valueCB, "kCFTypeDictionaryValueCallBacks");
+    YVID__F(2, CMTimeConvertScale); YVID__F(2, CMTimeCompare); YVID__F(2, CMSampleBufferGetNumSamples);
+    YVID__F(2, CMSampleBufferGetFormatDescription); YVID__F(2, CMSampleBufferGetPresentationTimeStamp);
+    YVID__F(2, CMSampleBufferGetDecodeTimeStamp); YVID__F(2, CMSampleBufferGetSampleAttachmentsArray);
+    YVID__F(2, CMFormatDescriptionGetExtensions); YVID__F(2, CMFormatDescriptionGetMediaSubType);
+    YVID__F(2, CMVideoFormatDescriptionGetDimensions); YVID__F(2, CMVideoFormatDescriptionGetCleanAperture);
+    YVID__D(2, NotSync, "kCMSampleAttachmentKey_NotSync");
+    YVID__D(2, FullRange, "kCMFormatDescriptionExtension_FullRangeVideo");
+    YVID__D(2, Bits, "kCMFormatDescriptionExtension_BitsPerComponent");
+    YVID__D(2, Atoms, "kCMFormatDescriptionExtension_SampleDescriptionExtensionAtoms");
+    YVID__F(3, CVPixelBufferLockBaseAddress); YVID__F(3, CVPixelBufferUnlockBaseAddress);
+    YVID__F(3, CVPixelBufferGetBaseAddressOfPlane); YVID__F(3, CVPixelBufferGetBytesPerRowOfPlane);
+    YVID__F(3, CVPixelBufferGetWidth); YVID__F(3, CVPixelBufferGetHeight); YVID__F(3, CVPixelBufferGetPlaneCount);
+    YVID__F(3, CVPixelBufferGetPixelFormatType); YVID__F(3, CVPixelBufferRetain); YVID__F(3, CVPixelBufferRelease);
+    /* CoreMedia's color, aspect and field keys are CoreVideo's (macros there) */
+    YVID__D(3, PixFmtKey, "kCVPixelBufferPixelFormatTypeKey");
+    YVID__D(3, Matrix, "kCVImageBufferYCbCrMatrixKey"); YVID__D(3, Transfer, "kCVImageBufferTransferFunctionKey");
+    YVID__D(3, Primaries, "kCVImageBufferColorPrimariesKey"); YVID__D(3, Chroma, "kCVImageBufferChromaLocationTopFieldKey");
+    YVID__D(3, FieldCount, "kCVImageBufferFieldCountKey"); YVID__D(3, PAR, "kCVImageBufferPixelAspectRatioKey");
+    YVID__D(3, PARh, "kCVImageBufferPixelAspectRatioHorizontalSpacingKey");
+    YVID__D(3, PARv, "kCVImageBufferPixelAspectRatioVerticalSpacingKey");
+    YVID__D(3, M709, "kCVImageBufferYCbCrMatrix_ITU_R_709_2"); YVID__D(3, M601, "kCVImageBufferYCbCrMatrix_ITU_R_601_4");
+    YVID__D(3, M2020, "kCVImageBufferYCbCrMatrix_ITU_R_2020");
+    YVID__D(3, T709, "kCVImageBufferTransferFunction_ITU_R_709_2"); YVID__D(3, T2020, "kCVImageBufferTransferFunction_ITU_R_2020");
+    YVID__D(3, T240, "kCVImageBufferTransferFunction_SMPTE_240M_1995"); YVID__D(3, TsRGB, "kCVImageBufferTransferFunction_sRGB");
+    YVID__D(3, TLinear, "kCVImageBufferTransferFunction_Linear");
+    YVID__D(3, P709, "kCVImageBufferColorPrimaries_ITU_R_709_2"); YVID__D(3, PEBU, "kCVImageBufferColorPrimaries_EBU_3213");
+    YVID__D(3, PSMPTEC, "kCVImageBufferColorPrimaries_SMPTE_C"); YVID__D(3, P2020, "kCVImageBufferColorPrimaries_ITU_R_2020");
+    YVID__D(3, CLeft, "kCVImageBufferChromaLocation_Left"); YVID__D(3, CCenter, "kCVImageBufferChromaLocation_Center");
+    YVID__F(4, VTDecompressionSessionCreate); YVID__F(4, VTDecompressionSessionDecodeFrame);
+    YVID__F(4, VTDecompressionSessionInvalidate); YVID__F(4, VTDecompressionSessionWaitForAsynchronousFrames);
+    YVID__F(4, VTSessionCopyProperty); YVID__F(4, VTIsHardwareDecodeSupported);
+    YVID__D(4, EnableHW, "kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder");
+    YVID__D(4, RequireHW, "kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder");
+    YVID__D(4, UsingHW, "kVTDecompressionPropertyKey_UsingHardwareAcceleratedVideoDecoder");
+    YVID__D(5, AVMediaTypeVideo, "AVMediaTypeVideo");
+    YVID__F(6, dispatch_queue_create); YVID__F(6, dispatch_queue_attr_make_with_autorelease_frequency);
+    YVID__F(6, dispatch_async_f); YVID__F(6, dispatch_sync_f); YVID__F(6, dispatch_release);
+#undef YVID__F
+#undef YVID__D
+#undef YVID__A
+    if (!miss) {
+        yvid__av.AVURLAsset = yvid__av.objc_getClass("AVURLAsset");
+        yvid__av.AVAssetReader = yvid__av.objc_getClass("AVAssetReader");
+        yvid__av.AVAssetReaderTrackOutput = yvid__av.objc_getClass("AVAssetReaderTrackOutput");
+        if (!yvid__av.AVURLAsset || !yvid__av.AVAssetReader || !yvid__av.AVAssetReaderTrackOutput) miss = "AVAssetReader";
+    }
+    if (miss) {
+        yvid__fmt(yvid__av.why, sizeof yvid__av.why, "AVFoundation's asset reader is not available here (%s is missing)", miss);
+        yvid__av.state = -1;
+        yvid__fmt(err, cap, "%s", yvid__av.why);
+        return YVID_ERR_NOT_IMPLEMENTED;
+    }
+#define YVID__S(f, n) yvid__av.f = yvid__av.sel_registerName(n)
+    YVID__S(urlAsset, "URLAssetWithURL:options:");
+    YVID__S(tracksWithMediaType, "tracksWithMediaType:");
+    YVID__S(formatDescriptions, "formatDescriptions");
+    YVID__S(naturalTimeScale, "naturalTimeScale");
+    YVID__S(nominalFrameRate, "nominalFrameRate");
+    YVID__S(preferredTransform, "preferredTransform");
+    YVID__S(readerWithAsset, "assetReaderWithAsset:error:");
+    YVID__S(outputWithTrack, "assetReaderTrackOutputWithTrack:outputSettings:");
+    YVID__S(setAlwaysCopies, "setAlwaysCopiesSampleData:");
+    YVID__S(addOutput, "addOutput:");
+    YVID__S(setTimeRange, "setTimeRange:");
+    YVID__S(startReading, "startReading");
+    YVID__S(cancelReading, "cancelReading");
+    YVID__S(status, "status");
+    YVID__S(error, "error");
+    YVID__S(copyNext, "copyNextSampleBuffer");
+    YVID__S(resourceLoader, "resourceLoader");
+    YVID__S(setDelegateQueue, "setDelegate:queue:");
+    YVID__S(localizedDescription, "localizedDescription");
+    YVID__S(contentInformationRequest, "contentInformationRequest");
+    YVID__S(dataRequest, "dataRequest");
+    YVID__S(setContentType, "setContentType:");
+    YVID__S(setContentLength, "setContentLength:");
+    YVID__S(setByteRange, "setByteRangeAccessSupported:");
+    YVID__S(requestedOffset, "requestedOffset");
+    YVID__S(requestedLength, "requestedLength");
+    YVID__S(requestsAll, "requestsAllDataToEndOfResource");
+    YVID__S(respondWithData, "respondWithData:");
+    YVID__S(finishLoading, "finishLoading");
+    YVID__S(finishWithError, "finishLoadingWithError:");
+    YVID__S(isCancelled, "isCancelled");
+#undef YVID__S
+    yvid__av.state = 1;
+    return YVID_OK;
+}
+
+/* The message of an NSError, or "". */
+static const char* yvid__avf_errtext(yvid__id e, char* buf, size_t cap) {
+    yvid__id t;
+    buf[0] = 0;
+    if (!e) return buf;
+    t = yvid__o0(e, yvid__av.localizedDescription);
+    if (!t || !yvid__av.CFStringGetCString(t, buf, (long)cap, YVID__CF_UTF8)) buf[0] = 0;
+    return buf;
+}
+
+/* --- a byte source for AVFoundation: memory or a yvid_reader ------------------
+ * AVFoundation reads a URL. A path is a file URL; memory and a reader (a
+ * pack entry read by range) are a URL of this header's own scheme, which
+ * AVFoundation hands to an AVAssetResourceLoader delegate made here. The
+ * delegate answers each request a chunk at a time on its own serial queue,
+ * so a request AVFoundation cancels (it asks for "all data to the end" and
+ * cancels when it has enough) stops after one chunk, not after the file.
+ * The reader's read() is called on that queue, one call at a time. */
+typedef struct yvid__avsrc {
+    yvid__src        src;
+    int              closing;      /* set on the queue: no more answers     */
+    int              mov;          /* a QuickTime file, not MP4             */
+    void*            q;            /* the delegate's serial queue           */
+    int64_t          requests, bytes;
+} yvid__avsrc;
+
+typedef struct yvid__avreq {
+    yvid__id     req;
+    yvid__avsrc* s;
+    int64_t      at, end;
+} yvid__avreq;
+
+#define YVID__AV_CHUNK (1 << 20)
+
+static void yvid__avreq_done(yvid__avreq* r) {
+    yvid__av.CFRelease(r->req);
+    yvid__free(r);
+}
+
+static void yvid__avreq_step(void* ctx) {
+    yvid__avreq* r = (yvid__avreq*)ctx;
+    yvid__avsrc* s = r->s;
+    yvid__id dr;
+    if (s->closing || yvid__b0(r->req, yvid__av.isCancelled)) { yvid__avreq_done(r); return; }
+    dr = yvid__o0(r->req, yvid__av.dataRequest);
+    if (dr && r->at < r->end) {
+        int64_t k = r->end - r->at < YVID__AV_CHUNK ? r->end - r->at : YVID__AV_CHUNK;
+        uint8_t* b = (uint8_t*)malloc((size_t)k);   /* CFData frees it */
+        yvid__cf d = NULL;
+        if (b && yvid__src_read(&s->src, r->at, b, k) == YVID_OK)
+            d = yvid__av.CFDataCreateWithBytesNoCopy(NULL, b, (long)k, yvid__av.kCFAllocatorMalloc);
+        if (!d) {
+            free(b);
+            yvid__v1(r->req, yvid__av.finishWithError, NULL);
+            yvid__avreq_done(r);
+            return;
+        }
+        yvid__v1(dr, yvid__av.respondWithData, d);
+        yvid__av.CFRelease(d);
+        s->bytes += k;
+        r->at += k;
+        if (r->at < r->end) { yvid__av.dispatch_async_f(s->q, r, yvid__avreq_step); return; }
+    }
+    yvid__o0(r->req, yvid__av.finishLoading);
+    yvid__avreq_done(r);
+}
+
+/* -resourceLoader:shouldWaitForLoadingOfRequestedResource: */
+static unsigned char yvid__avf_should_wait(yvid__id self, void* cmd, yvid__id loader, yvid__id req) {
+    yvid__avsrc* s = *(yvid__avsrc**)yvid__av.object_getIndexedIvars(self);
+    yvid__id info, dr;
+    yvid__avreq* r;
+    (void)cmd; (void)loader;
+    if (!s || s->closing) return 0;
+    s->requests++;
+    info = yvid__o0(req, yvid__av.contentInformationRequest);
+    if (info) {
+        yvid__cf ct = yvid__av.CFStringCreateWithCString(NULL, s->mov ? "com.apple.quicktime-movie" : "public.mpeg-4", YVID__CF_UTF8);
+        yvid__v1(info, yvid__av.setContentType, ct);
+        if (ct) yvid__av.CFRelease(ct);
+        YVID__MSG(void, yvid__id, void*, long long)(info, yvid__av.setContentLength, (long long)s->src.size);
+        YVID__MSG(void, yvid__id, void*, unsigned char)(info, yvid__av.setByteRange, 1);
+    }
+    r = (yvid__avreq*)yvid__malloc(sizeof *r);
+    if (!r) return 0;
+    yvid__av.CFRetain(req);
+    r->req = req;
+    r->s = s;
+    r->at = r->end = 0;
+    dr = yvid__o0(req, yvid__av.dataRequest);
+    if (dr) {
+        long long off = YVID__MSG(long long, yvid__id, void*)(dr, yvid__av.requestedOffset);
+        long len = yvid__l0(dr, yvid__av.requestedLength);
+        r->at = off < 0 ? 0 : off > s->src.size ? s->src.size : off;
+        r->end = yvid__b0(dr, yvid__av.requestsAll) || r->at + (int64_t)len > s->src.size ? s->src.size : r->at + (int64_t)len;
+    }
+    yvid__avreq_step(r);
+    return 1;
+}
+
+/* The delegate's class, named after this copy of the code: two modules with
+ * this header each get their own. */
+static yvid__id yvid__avf_loader_class(void) {
+    char name[64];
+    yvid__id c;
+    if (yvid__av.loader) return yvid__av.loader;
+    yvid__fmt(name, sizeof name, "YspVideoLoader_%p", (void*)&yvid__av);
+    c = yvid__av.objc_getClass(name);
+    if (!c) {
+        c = yvid__av.objc_allocateClassPair(yvid__av.objc_getClass("NSObject"), name, 0);
+        if (!c) return NULL;
+        yvid__av.class_addMethod(c, yvid__av.sel_registerName("resourceLoader:shouldWaitForLoadingOfRequestedResource:"),
+                                 (void (*)(void))yvid__avf_should_wait, "c@:@@");
+        yvid__av.objc_registerClassPair(c);
+    }
+    yvid__av.loader = c;
+    return c;
+}
+
+typedef struct yvid__avf {
+    yvid__id          asset, track, reader, output;
+    yvid__id          del;           /* the resource loader's delegate          */
+    void*             q;             /* the delegate's serial queue (libdispatch) */
+    yvid__avsrc*      as;            /* memory or a reader                      */
+    yvid__cf          fd;            /* the track's one format description      */
+    yvid__cf          vt;            /* VTDecompressionSessionRef               */
+    yvid__cf          cur;           /* the frame lent to the core (locked)     */
+    yvid__cf          got;           /* the decoder's last output               */
+    int32_t           got_st;
+    yvid__cf          pend;          /* the keyframe a seek read                */
+    int32_t           timescale;     /* the track's                             */
+    int32_t           w, h, num, den, codec;
+    uint32_t          pixfmt;        /* 420v or 420f: the stream's range        */
+    uint32_t          subtype;
+    int               hw;            /* YVID_HW_*, resolved                     */
+    int               hw_avail;      /* VTIsHardwareDecodeSupported             */
+    int               native;        /* compressed samples only                 */
+    int               vui_found;
+    int16_t           vui[5];        /* the H.264 SPS's color                   */
+    int32_t           last_st;
+    char              why[200];      /* the last failure, for a message          */
+    char              name[16];
+    /* set by yvid_open() before open() */
+    int               req_hw, req_auto;
+    int32_t           req_num, req_den;
+} yvid__avf;
+
+static yvid__cmtime yvid__cmt(int64_t v, int32_t ts) {
+    yvid__cmtime t;
+    t.value = v; t.timescale = ts; t.flags = YVID__CMT_VALID; t.epoch = 0;
+    return t;
+}
+
+static int64_t yvid__avf_ns(yvid__cmtime t) {
+    return yvid__av.CMTimeConvertScale(t, 1000000000, YVID__CMT_ROUND).value;
+}
+
+static int64_t yvid__avf_index_of(const yvid__avf* m, yvid__cmtime t) {
+    /* round(ns * num / (den * 1e9)), split so a long stream cannot overflow */
+    int64_t ns = yvid__avf_ns(t), d = (int64_t)m->den * 1000000000, a = yvid__floordiv(ns, d), b = ns - a * d;
+    return a * (int64_t)m->num + (b * (int64_t)m->num + d / 2) / d;
+}
+
+static void yvid__avf_unlock(yvid__avf* m) {
+    if (m->cur) {
+        yvid__av.CVPixelBufferUnlockBaseAddress(m->cur, YVID__CV_LOCK_RO);
+        yvid__av.CVPixelBufferRelease(m->cur);
+        m->cur = NULL;
+    }
+}
+
+static void yvid__avf_drop_reader(yvid__avf* m) {
+    if (m->reader && yvid__l0(m->reader, yvid__av.status) == 1 /* reading */)
+        yvid__o0(m->reader, yvid__av.cancelReading);
+    YVID__CFREL(m->output);
+    YVID__CFREL(m->reader);
+}
+
+static void yvid__avf_no_more(void* ctx) {
+    yvid__avf* m = (yvid__avf*)ctx;
+    if (m->as) m->as->closing = 1;
+    if (m->del) *(yvid__avsrc**)yvid__av.object_getIndexedIvars(m->del) = NULL;
+}
+
+static void yvid__avf_close(void* ctx) {
+    yvid__avf* m = (yvid__avf*)ctx;
+    void* pool;
+    if (yvid__av.state <= 0) return;
+    pool = yvid__av.objc_autoreleasePoolPush();
+    yvid__avf_unlock(m);
+    if (m->got) { yvid__av.CVPixelBufferRelease(m->got); m->got = NULL; }
+    YVID__CFREL(m->pend);
+    if (m->vt) { yvid__av.VTDecompressionSessionInvalidate(m->vt); YVID__CFREL(m->vt); }
+    yvid__avf_drop_reader(m);
+    YVID__CFREL(m->track);
+    YVID__CFREL(m->asset);
+    YVID__CFREL(m->fd);
+    if (m->q) {
+        /* on the queue: no answer after this; a chunk queued before it sees
+         * `closing` and lets its request go */
+        yvid__av.dispatch_sync_f(m->q, m, yvid__avf_no_more);
+        yvid__av.dispatch_sync_f(m->q, m, yvid__avf_no_more);
+        yvid__av.dispatch_release(m->q);
+        m->q = NULL;
+    }
+    YVID__CFREL(m->del);
+    if (m->as) { yvid__src_close(&m->as->src); yvid__free(m->as); m->as = NULL; }
+    yvid__av.objc_autoreleasePoolPop(pool);
+}
+
+/* A reader from `start_ns` on (< 0: the whole track). */
+static int yvid__avf_reader(yvid__avf* m, int64_t start_ns) {
+    yvid__id e = NULL;
+    char t[160];
+    yvid__avf_drop_reader(m);
+    m->reader = YVID__MSG(yvid__id, yvid__id, void*, yvid__id, yvid__id*)(yvid__av.AVAssetReader, yvid__av.readerWithAsset, m->asset, &e);
+    if (!m->reader) { yvid__fmt(m->why, sizeof m->why, "AVAssetReader: %s", yvid__avf_errtext(e, t, sizeof t)); return YVID_ERR_DECODER; }
+    yvid__av.CFRetain(m->reader);
+    /* no settings: the compressed samples, decoded below */
+    m->output = YVID__MSG(yvid__id, yvid__id, void*, yvid__id, yvid__id)(yvid__av.AVAssetReaderTrackOutput, yvid__av.outputWithTrack, m->track, NULL);
+    if (!m->output) { yvid__fmt(m->why, sizeof m->why, "AVAssetReaderTrackOutput failed"); return YVID_ERR_DECODER; }
+    yvid__av.CFRetain(m->output);
+    YVID__MSG(void, yvid__id, void*, unsigned char)(m->output, yvid__av.setAlwaysCopies, 0);
+    yvid__v1(m->reader, yvid__av.addOutput, m->output);
+    if (start_ns >= 0) {
+        yvid__cmrange r;
+        r.start = yvid__cmt(start_ns, 1000000000);
+        r.duration = yvid__cmt(0, 0);
+        r.duration.flags = YVID__CMT_VALID | YVID__CMT_POS_INF;   /* kCMTimePositiveInfinity */
+        YVID__MSG(void, yvid__id, void*, yvid__cmrange)(m->reader, yvid__av.setTimeRange, r);
+    }
+    if (!yvid__b0(m->reader, yvid__av.startReading)) {
+        yvid__fmt(m->why, sizeof m->why, "AVAssetReader cannot start: %s", yvid__avf_errtext(yvid__o0(m->reader, yvid__av.error), t, sizeof t));
+        return YVID_ERR_DECODER;
+    }
+    return YVID_OK;
+}
+
+/* The next compressed sample (one sample, in decode order), ENDED, or an
+ * error with m->why. Buffers that carry no sample (AVFoundation's markers
+ * at the start and the end, seen on every test clip) are skipped. */
+static int yvid__avf_read(yvid__avf* m, yvid__cf* out) {
+    char t[160];
+    *out = NULL;
+    for (;;) {
+        yvid__cf sb = YVID__MSG(yvid__cf, yvid__id, void*)(m->output, yvid__av.copyNext);
+        yvid__cf f;
+        long ns;
+        if (!sb) {
+            long st = yvid__l0(m->reader, yvid__av.status);
+            if (st == 2 /* completed */) return YVID_ENDED;
+            yvid__fmt(m->why, sizeof m->why, "AVAssetReader failed (status %ld): %s", st,
+                        yvid__avf_errtext(yvid__o0(m->reader, yvid__av.error), t, sizeof t));
+            return YVID_ERR_DECODER;
+        }
+        ns = yvid__av.CMSampleBufferGetNumSamples(sb);
+        if (ns == 0) { yvid__av.CFRelease(sb); continue; }
+        if (ns != 1) {
+            yvid__av.CFRelease(sb);
+            yvid__fmt(m->why, sizeof m->why, "a sample buffer holds %ld video samples", ns);
+            return YVID_ERR_DECODER;
+        }
+        f = yvid__av.CMSampleBufferGetFormatDescription(sb);
+        if (!f || !yvid__av.CFEqual(f, m->fd)) {
+            yvid__av.CFRelease(sb);
+            yvid__fmt(m->why, sizeof m->why, "the stream's format changes; the canonical form has one");
+            return YVID_ERR_FORMAT;
+        }
+        *out = sb;
+        return YVID_OK;
+    }
+}
+
+static int yvid__avf_is_key(yvid__cf sb) {
+    yvid__cf a = yvid__av.CMSampleBufferGetSampleAttachmentsArray(sb, 0);
+    if (a && yvid__av.CFArrayGetCount(a) > 0) {
+        yvid__cf v = yvid__av.CFDictionaryGetValue(yvid__av.CFArrayGetValueAtIndex(a, 0), yvid__av.NotSync);
+        if (v && yvid__av.CFBooleanGetValue(v)) return 0;
+    }
+    return 1;
+}
+
+static void yvid__avf_out(void* ref, void* fref, int32_t st, uint32_t fl, yvid__cf ib, yvid__cmtime pts, yvid__cmtime dur) {
+    yvid__avf* m = (yvid__avf*)ref;
+    (void)fref; (void)fl; (void)pts; (void)dur;
+    m->got_st = st;
+    if (m->got) { yvid__av.CVPixelBufferRelease(m->got); m->got = NULL; }
+    if (st == 0 && ib) m->got = yvid__av.CVPixelBufferRetain(ib);
+}
+
+/* The decoder: hw OFF is VideoToolbox's software decoder (hardware not
+ * enabled), anything else its hardware decoder, required. It writes the
+ * stream's own range (420v or 420f), so no range conversion is asked for. */
+static int yvid__avf_session(yvid__avf* m, int hw) {
+    const void* sk[1];
+    const void* sv[1];
+    const void* ak[1];
+    const void* av[1];
+    yvid__cf spec, attrs, pf, using_hw = NULL;
+    int32_t pfv = (int32_t)m->pixfmt;
+    yvid__vtcb cb;
+    int32_t st;
+    sk[0] = hw == YVID_HW_OFF ? yvid__av.EnableHW : yvid__av.RequireHW;
+    sv[0] = hw == YVID_HW_OFF ? yvid__av.kCFBooleanFalse : yvid__av.kCFBooleanTrue;
+    spec = yvid__av.CFDictionaryCreate(NULL, sk, sv, 1, yvid__av.keyCB, yvid__av.valueCB);
+    pf = yvid__av.CFNumberCreate(NULL, YVID__CF_SINT32, &pfv);
+    ak[0] = yvid__av.PixFmtKey; av[0] = pf;
+    attrs = yvid__av.CFDictionaryCreate(NULL, ak, av, 1, yvid__av.keyCB, yvid__av.valueCB);
+    cb.fn = yvid__avf_out;
+    cb.ref = m;
+    st = yvid__av.VTDecompressionSessionCreate(NULL, m->fd, spec, attrs, &cb, &m->vt);
+    YVID__CFREL(spec); YVID__CFREL(attrs); YVID__CFREL(pf);
+    m->last_st = st;
+    if (st != 0) {
+        m->vt = NULL;
+        yvid__fmt(m->why, sizeof m->why, "VideoToolbox has no %s decoder for this stream (VTDecompressionSessionCreate %d)",
+                    hw == YVID_HW_OFF ? "software" : "hardware", (int)st);
+        return YVID_ERR_DECODER;
+    }
+    if (yvid__av.VTSessionCopyProperty(m->vt, yvid__av.UsingHW, NULL, &using_hw) != 0) using_hw = NULL;
+    m->hw = using_hw && yvid__av.CFBooleanGetValue(using_hw) ? YVID_HW_VIDEOTOOLBOX : YVID_HW_OFF;
+    YVID__CFREL(using_hw);
+    if (m->hw != (hw == YVID_HW_OFF ? YVID_HW_OFF : YVID_HW_VIDEOTOOLBOX)) {
+        yvid__fmt(m->why, sizeof m->why, "VideoToolbox gave its %s decoder for the %s one asked for",
+                    m->hw == YVID_HW_OFF ? "software" : "hardware", hw == YVID_HW_OFF ? "software" : "hardware");
+        return YVID_ERR_DECODER;
+    }
+    return YVID_OK;
+}
+
+/* CoreMedia's color strings against the values the canonical form has:
+ * -1 not stated, -2 stated but not one it has. */
+static int yvid__cfeq(yvid__cf a, yvid__cf b) { return a && b && yvid__av.CFEqual(a, b); }
+static void yvid__avf_color(yvid__cf ext, int16_t out[5]) {
+    yvid__cf v;
+    int k;
+    for (k = 0; k < 5; k++) out[k] = -1;
+    if (!ext) return;
+    v = yvid__av.CFDictionaryGetValue(ext, yvid__av.Matrix);
+    if (v) out[0] = yvid__cfeq(v, yvid__av.M709) ? YVID_MATRIX_BT709 : yvid__cfeq(v, yvid__av.M601) ? YVID_MATRIX_BT601
+                  : yvid__cfeq(v, yvid__av.M2020) ? YVID_MATRIX_BT2020 : -2;
+    v = yvid__av.CFDictionaryGetValue(ext, yvid__av.FullRange);
+    if (v && yvid__av.CFGetTypeID(v) == yvid__av.CFBooleanGetTypeID())
+        out[1] = yvid__av.CFBooleanGetValue(v) ? YVID_RANGE_FULL : YVID_RANGE_LIMITED;
+    v = yvid__av.CFDictionaryGetValue(ext, yvid__av.Transfer);
+    if (v) out[2] = (yvid__cfeq(v, yvid__av.T709) || yvid__cfeq(v, yvid__av.T2020) || yvid__cfeq(v, yvid__av.T240)) ? YVID_TRC_BT1886
+                  : yvid__cfeq(v, yvid__av.TsRGB) ? YVID_TRC_SRGB : yvid__cfeq(v, yvid__av.TLinear) ? YVID_TRC_LINEAR : -2;
+    v = yvid__av.CFDictionaryGetValue(ext, yvid__av.Primaries);
+    if (v) out[3] = yvid__cfeq(v, yvid__av.P709) ? YVID_PRIM_BT709 : yvid__cfeq(v, yvid__av.PEBU) ? YVID_PRIM_BT601_625
+                  : yvid__cfeq(v, yvid__av.PSMPTEC) ? YVID_PRIM_BT601_525 : yvid__cfeq(v, yvid__av.P2020) ? YVID_PRIM_BT2020 : -2;
+    v = yvid__av.CFDictionaryGetValue(ext, yvid__av.Chroma);
+    if (v) out[4] = yvid__cfeq(v, yvid__av.CLeft) ? YVID_SITING_LEFT : yvid__cfeq(v, yvid__av.CCenter) ? YVID_SITING_CENTER : -2;
+}
+
+static int64_t yvid__cf_int(yvid__cf v, int64_t def) {
+    int64_t x = def;
+    if (v && yvid__av.CFGetTypeID(v) == yvid__av.CFNumberGetTypeID() && yvid__av.CFNumberGetValue(v, YVID__CF_SINT64, &x)) return x;
+    return def;
+}
+
+/* The codec configuration record (avcC, hvcC) from the sample description. */
+static yvid__cf yvid__avf_atom(yvid__cf ext, const char* name) {
+    yvid__cf atoms = ext ? yvid__av.CFDictionaryGetValue(ext, yvid__av.Atoms) : NULL;
+    yvid__cf key, v = NULL;
+    if (!atoms || yvid__av.CFGetTypeID(atoms) != yvid__av.CFDictionaryGetTypeID()) return NULL;
+    key = yvid__av.CFStringCreateWithCString(NULL, name, YVID__CF_UTF8);
+    if (key) { v = yvid__av.CFDictionaryGetValue(atoms, key); yvid__av.CFRelease(key); }
+    return v && yvid__av.CFGetTypeID(v) == yvid__av.CFDataGetTypeID() ? v : NULL;
+}
+
+/* Opens the asset and the reader; native: the compressed samples, no
+ * decoder (the index maker's first pass). */
+static int yvid__avf_open_ex(yvid__avf* m, const yvid_decoder_open* in, yvid_stream* out, int hw, int native,
+                               int32_t num, int32_t den, char* err, size_t cap) {
+    void* pool;
+    yvid__cf url = NULL, tracks, fds, ext, cfg;
+    yvid__dims dim;
+    yvid__affine tr;
+    int16_t col[5];
+    int aut = m->req_auto;
+    int rc = YVID_OK;
+    memset(m, 0, sizeof *m);
+    m->req_auto = aut;
+    m->native = native;
+    m->req_num = num; m->req_den = den;
+    m->num = num; m->den = den;
+    m->hw = hw;
+    if ((rc = yvid__avf_load(err, cap)) < 0) return rc;
+    pool = yvid__av.objc_autoreleasePoolPush();
+    if (in->path) {
+        yvid__src s;
+        rc = yvid__src_open(&s, in->path, NULL, 0, NULL, NULL);
+        if (rc < 0) { yvid__fmt(err, cap, "cannot open %s: %s", in->path, yvid__open_why(rc)); goto out; }
+        yvid__src_close(&s);
+        /* the path's UTF-8 bytes are the file system's representation */
+        url = yvid__av.CFURLCreateFromFileSystemRepresentation(NULL, (const uint8_t*)in->path, (long)strlen(in->path), 0);
+    } else {
+        char u[64];
+        uint8_t h[12];
+        m->as = (yvid__avsrc*)yvid__malloc(sizeof *m->as);
+        if (!m->as) { yvid__fmt(err, cap, "out of memory"); rc = YVID_ERR_FULL; goto out; }
+        memset(m->as, 0, sizeof *m->as);
+        rc = yvid__src_open(&m->as->src, NULL, in->data, in->size, in->reader, in->reader_ctx);
+        if (rc < 0) { yvid__fmt(err, cap, "cannot open the source: %s", yvid__open_why(rc)); goto out; }
+        if (m->as->src.size >= 12 && yvid__src_read(&m->as->src, 0, h, 12) == YVID_OK && memcmp(h + 4, "ftypqt  ", 8) == 0) m->as->mov = 1;
+        /* one URL for every movie: a damaged copy opened after the intact
+         * one under the same URL decoded its own bytes (test) */
+        yvid__fmt(u, sizeof u, "yspvideo:///movie.%s", m->as->mov ? "mov" : "mp4");
+        url = yvid__av.CFURLCreateWithBytes(NULL, (const uint8_t*)u, (long)strlen(u), YVID__CF_UTF8, NULL);
+    }
+    if (!url) { yvid__fmt(err, cap, "cannot make a URL of %s", in->path ? in->path : "the source"); rc = YVID_ERR_ARG; goto out; }
+    m->asset = YVID__MSG(yvid__id, yvid__id, void*, yvid__cf, yvid__id)(yvid__av.AVURLAsset, yvid__av.urlAsset, url, NULL);
+    yvid__av.CFRelease(url);
+    if (!m->asset) { yvid__fmt(err, cap, "AVURLAsset failed"); rc = YVID_ERR_DECODER; goto out; }
+    yvid__av.CFRetain(m->asset);
+    if (m->as) {
+        yvid__id c = yvid__avf_loader_class();
+        if (!c) { yvid__fmt(err, cap, "the resource loader's class could not be made"); rc = YVID_ERR_DECODER; goto out; }
+        m->del = yvid__av.class_createInstance(c, sizeof(void*));
+        *(yvid__avsrc**)yvid__av.object_getIndexedIvars(m->del) = m->as;
+        /* serial (attr NULL), an autorelease pool per work item (1,
+         * DISPATCH_AUTORELEASE_FREQUENCY_WORK_ITEM) */
+        m->q = yvid__av.dispatch_queue_create("ysp.video.loader",
+                                              yvid__av.dispatch_queue_attr_make_with_autorelease_frequency(NULL, 1));
+        m->as->q = m->q;
+        /* the loader holds its delegate weakly; m->del is the strong one */
+        YVID__MSG(void, yvid__id, void*, yvid__id, void*)(yvid__o0(m->asset, yvid__av.resourceLoader), yvid__av.setDelegateQueue, m->del, (void*)m->q);
+    }
+    /* exactly one video track; an audio track is ignored, as on Windows */
+    tracks = yvid__o1(m->asset, yvid__av.tracksWithMediaType, yvid__av.AVMediaTypeVideo);
+    if (!tracks || yvid__av.CFArrayGetCount(tracks) != 1) {
+        if (!tracks || yvid__av.CFArrayGetCount(tracks) == 0)
+            yvid__fmt(err, cap, "AVFoundation reads no video track in it: MP4 or QuickTime with H.264 or HEVC only (a damaged or truncated file reads as none)");
+        else yvid__fmt(err, cap, "%ld video streams; the canonical form has one", yvid__av.CFArrayGetCount(tracks));
+        rc = YVID_ERR_FORMAT; goto out;
+    }
+    m->track = (yvid__id)yvid__av.CFArrayGetValueAtIndex(tracks, 0);
+    yvid__av.CFRetain(m->track);
+    fds = yvid__o0(m->track, yvid__av.formatDescriptions);
+    if (!fds || yvid__av.CFArrayGetCount(fds) != 1) {
+        yvid__fmt(err, cap, "the video track has %ld formats; the canonical form has one", fds ? yvid__av.CFArrayGetCount(fds) : 0L);
+        rc = YVID_ERR_FORMAT; goto out;
+    }
+    m->fd = yvid__av.CFArrayGetValueAtIndex(fds, 0);
+    yvid__av.CFRetain(m->fd);
+    ext = yvid__av.CMFormatDescriptionGetExtensions(m->fd);
+    m->subtype = yvid__av.CMFormatDescriptionGetMediaSubType(m->fd);
+    if (m->subtype == YVID__CC_AVC1 || m->subtype == YVID__CC_AVC3) m->codec = YVID_CODEC_H264;
+    else if (m->subtype == YVID__CC_HVC1 || m->subtype == YVID__CC_HEV1) m->codec = YVID_CODEC_HEVC;
+    else {
+        char c4[5];
+        int k;
+        for (k = 0; k < 4; k++) { c4[k] = (char)((m->subtype >> (24 - 8 * k)) & 0xff); if (c4[k] < 32 || c4[k] > 126) c4[k] = '?'; }
+        c4[4] = 0;
+        yvid__fmt(err, cap, "the video codec is '%s', not H.264 or HEVC; re-encode with libx264", c4);
+        rc = YVID_ERR_FORMAT; goto out;
+    }
+    /* 8-bit 4:2:0 only: VideoToolbox would convert a 10-bit or 4:4:4
+     * stream into the NV12 asked for (measured: Main 10 decodes to 420v
+     * without a word), and the canonical form has no converter */
+    if (m->codec == YVID_CODEC_H264 && (cfg = yvid__avf_atom(ext, "avcC")) != NULL && yvid__av.CFDataGetLength(cfg) > 8) {
+        const uint8_t* p = yvid__av.CFDataGetBytePtr(cfg);
+        unsigned prof = p[1];
+        if (prof == 110 || prof == 122 || prof == 244) {
+            yvid__fmt(err, cap, "H.264 profile %s: the canonical form is 8-bit 4:2:0 (High, Main or Baseline); re-encode with -pix_fmt yuv420p",
+                        prof == 110 ? "High 10" : prof == 122 ? "High 4:2:2" : "High 4:4:4");
+            rc = YVID_ERR_FORMAT; goto out;
+        }
+        m->vui_found = yvid__h264_seqhdr(p, (size_t)yvid__av.CFDataGetLength(cfg), m->vui);
+    } else if (m->codec == YVID_CODEC_HEVC && (cfg = yvid__avf_atom(ext, "hvcC")) != NULL && yvid__av.CFDataGetLength(cfg) > 18) {
+        /* HEVCDecoderConfigurationRecord: general_profile_idc, chroma_format_idc, bit depths */
+        const uint8_t* p = yvid__av.CFDataGetBytePtr(cfg);
+        unsigned prof = p[1] & 0x1fu, chroma = p[16] & 3u, yd = (p[17] & 7u) + 8u, cd = (p[18] & 7u) + 8u;
+        if (prof != 1 || chroma != 1 || yd != 8 || cd != 8) {
+            yvid__fmt(err, cap, "HEVC profile %u%s (%u-bit, chroma format %u): the canonical form is Main (8-bit 4:2:0)",
+                        prof, prof == 2 ? " (Main 10)" : prof == 4 ? " (Range Extensions)" : "", yd, chroma);
+            rc = YVID_ERR_FORMAT; goto out;
+        }
+    } else {
+        yvid__fmt(err, cap, "the sample description has no %s record", m->codec == YVID_CODEC_H264 ? "avcC" : "hvcC");
+        rc = YVID_ERR_FORMAT; goto out;
+    }
+    if (ext && yvid__cf_int(yvid__av.CFDictionaryGetValue(ext, yvid__av.Bits), 8) != 8) {
+        yvid__fmt(err, cap, "%d bits per component: the canonical form is 8-bit 4:2:0", (int)yvid__cf_int(yvid__av.CFDictionaryGetValue(ext, yvid__av.Bits), 0));
+        rc = YVID_ERR_FORMAT; goto out;
+    }
+    /* the track's matrix: no rotation is applied at play. The transform is
+     * 48 bytes, returned through memory: objc_msgSend_stret on x86_64 */
+#if defined(__x86_64__)
+    tr = ((yvid__affine (*)(yvid__id, void*))yvid__av.msg_stret)(m->track, yvid__av.preferredTransform);
+#else
+    tr = YVID__MSG(yvid__affine, yvid__id, void*)(m->track, yvid__av.preferredTransform);
+#endif
+    if (tr.b != 0.0 || tr.c != 0.0 || tr.a < 0.0 || tr.d < 0.0) {
+        double deg = atan2(tr.b, tr.a) * 180.0 / 3.14159265358979323846;
+        yvid__fmt(err, cap, "the stream is rotated by %d degrees; no rotation is applied at play: re-encode the pixels upright (-autorotate) or remux with -display_rotation 0",
+                    (int)floor((deg < 0 ? deg + 360.0 : deg) + 0.5));
+        rc = YVID_ERR_FORMAT; goto out;
+    }
+    if (ext) {
+        yvid__cf par = yvid__av.CFDictionaryGetValue(ext, yvid__av.PAR);
+        if (par && yvid__av.CFGetTypeID(par) == yvid__av.CFDictionaryGetTypeID()) {
+            int64_t hs = yvid__cf_int(yvid__av.CFDictionaryGetValue(par, yvid__av.PARh), 1);
+            int64_t vs = yvid__cf_int(yvid__av.CFDictionaryGetValue(par, yvid__av.PARv), 1);
+            if (hs != vs) {
+                yvid__fmt(err, cap, "pixel aspect %lld:%lld; the canonical form has square pixels: -vf setsar=1 (after scaling to the shape you want)", (long long)hs, (long long)vs);
+                rc = YVID_ERR_FORMAT; goto out;
+            }
+        }
+        if (yvid__cf_int(yvid__av.CFDictionaryGetValue(ext, yvid__av.FieldCount), 1) != 1) {
+            yvid__fmt(err, cap, "interlaced (%d fields); the canonical form is progressive", (int)yvid__cf_int(yvid__av.CFDictionaryGetValue(ext, yvid__av.FieldCount), 0));
+            rc = YVID_ERR_FORMAT; goto out;
+        }
+    }
+    dim = yvid__av.CMVideoFormatDescriptionGetDimensions(m->fd);
+    m->w = dim.w; m->h = dim.h;
+    {   /* a clean aperture smaller than the frame would be a crop at play */
+        yvid__cgrect r = yvid__av.CMVideoFormatDescriptionGetCleanAperture(m->fd, 1);
+        if ((int32_t)floor(r.w + 0.5) != m->w || (int32_t)floor(r.h + 0.5) != m->h || r.x != 0.0 || r.y != 0.0) {
+            yvid__fmt(err, cap, "a clean aperture of %.0f x %.0f at %.0f,%.0f in a %d x %d frame; crop the pixels instead",
+                        r.w, r.h, r.x, r.y, (int)m->w, (int)m->h);
+            rc = YVID_ERR_FORMAT; goto out;
+        }
+    }
+    m->timescale = YVID__MSG(int32_t, yvid__id, void*)(m->track, yvid__av.naturalTimeScale);
+    if (m->timescale <= 0) { yvid__fmt(err, cap, "the video track has no timescale"); rc = YVID_ERR_FORMAT; goto out; }
+    if (num > 0 && den > 0) {
+        /* AVFoundation's rate is a mean of the sample durations; the index's
+         * is the grid every frame is checked on */
+        double a = (double)YVID__MSG(float, yvid__id, void*)(m->track, yvid__av.nominalFrameRate), b = (double)num / den;
+        if (a > 0.0 && fabs(a / b - 1.0) > 1e-3) {
+            yvid__fmt(err, cap, "the stream runs %.4f fps, the index says %d/%d; the index is stale: make it again", a, (int)num, (int)den);
+            rc = YVID_ERR_FORMAT; goto out;
+        }
+    }
+    yvid__avf_color(ext, col);
+    out->w = m->w; out->h = m->h;
+    out->format = native ? 0 : YVID_FMT_NV12;
+    out->fps_num = 0; out->fps_den = 0;
+    out->frames = -1; out->gop = 0; out->codec = m->codec;
+    out->matrix = col[0]; out->range = col[1]; out->transfer = col[2]; out->primaries = col[3]; out->siting = col[4];
+    if (out->transfer == -2) { yvid__fmt(err, cap, "an HDR or other transfer (PQ, HLG); the canonical form is SDR"); rc = YVID_ERR_FORMAT; goto out; }
+    if (out->siting == -2) { yvid__fmt(err, cap, "chroma siting other than left or center; re-encode with -chroma_sample_location left"); rc = YVID_ERR_FORMAT; goto out; }
+    out->timescale = m->timescale;
+    out->caps = YVID_DEC_CPU;
+    m->pixfmt = (col[1] == YVID_RANGE_FULL || (col[1] < 0 && m->vui[1] == YVID_RANGE_FULL)) ? YVID__PF_420F : YVID__PF_420V;
+    m->hw_avail = yvid__av.VTIsHardwareDecodeSupported(m->codec == YVID_CODEC_HEVC ? YVID__CC_HEVC : YVID__CC_H264) ? 1 : 0;
+    if ((rc = yvid__avf_reader(m, -1)) < 0) { yvid__fmt(err, cap, "%s", m->why); goto out; }
+    if (!native) {
+        rc = yvid__avf_session(m, hw);
+        if (rc < 0 && m->req_auto && hw != YVID_HW_OFF) {
+            /* AUTO: no hardware decoder for this stream here; the software
+             * decoder gives the same bytes, and info.hw says which ran */
+            if (m->vt) { yvid__av.VTDecompressionSessionInvalidate(m->vt); YVID__CFREL(m->vt); }
+            rc = yvid__avf_session(m, YVID_HW_OFF);
+        }
+        if (rc < 0) { yvid__fmt(err, cap, "%s", m->why); goto out; }
+    }
+    yvid__fmt(m->name, sizeof m->name, "%s", native ? "compressed" : m->hw == YVID_HW_VIDEOTOOLBOX ? "hardware" : "software");
+out:
+    yvid__av.objc_autoreleasePoolPop(pool);
+    return rc;
+}
+
+static int yvid__avf_open(void* ctx, const yvid_decoder_open* in, yvid_stream* out, char* err, size_t cap) {
+    yvid__avf* m = (yvid__avf*)ctx;
+    int hw = m->req_hw, aut = m->req_auto;
+    int32_t num = m->req_num, den = m->req_den;
+    int rc = yvid__avf_open_ex(m, in, out, hw, 0, num, den, err, cap);
+    m->req_hw = hw; m->req_auto = aut;
+    return rc;
+}
+
+/* Decodes one sample; with want, the image is kept in m->got. */
+static int yvid__avf_decode(yvid__avf* m, yvid__cf sb, int want) {
+    uint32_t info = 0;
+    int32_t st;
+    if (m->got) { yvid__av.CVPixelBufferRelease(m->got); m->got = NULL; }
+    m->got_st = 0;
+    /* synchronous (no asynchronous flag): the output callback has run when
+     * the call returns, as there are no B-frames to hold back */
+    st = yvid__av.VTDecompressionSessionDecodeFrame(m->vt, sb, want ? 0u : YVID__VT_NO_OUTPUT, NULL, &info);
+    m->last_st = st != 0 ? st : m->got_st;
+    if (m->last_st != 0) { yvid__fmt(m->why, sizeof m->why, "VideoToolbox decode failed (%d)", (int)m->last_st); return YVID_ERR_DECODER; }
+    if (want && !m->got) { yvid__fmt(m->why, sizeof m->why, "VideoToolbox gave no frame (flags 0x%x)", (unsigned)info); return YVID_ERR_DECODER; }
+    return YVID_OK;
+}
+
+static int yvid__avf_next(void* ctx, yvid_planes* dst, yvid_out* out) {
+    yvid__avf* m = (yvid__avf*)ctx;
+    yvid__cf sb = NULL, pb;
+    void* pool;
+    int rc;
+    yvid__avf_unlock(m);
+    pool = yvid__av.objc_autoreleasePoolPush();
+    if (m->pend) { sb = m->pend; m->pend = NULL; rc = YVID_OK; }
+    else rc = yvid__avf_read(m, &sb);
+    if (rc != YVID_OK) { yvid__av.objc_autoreleasePoolPop(pool); return rc; }
+    out->pts = yvid__av.CMTimeConvertScale(yvid__av.CMSampleBufferGetPresentationTimeStamp(sb), m->timescale, YVID__CMT_ROUND).value;
+    out->index = -1;
+    if (yvid__avf_is_key(sb)) out->flags |= YVID_OUT_KEYFRAME;
+    rc = yvid__avf_decode(m, sb, dst != NULL);
+    yvid__av.CFRelease(sb);
+    yvid__av.objc_autoreleasePoolPop(pool);
+    if (rc < 0 || !dst) return rc;
+    pb = m->got;
+    m->got = NULL;
+    if (yvid__av.CVPixelBufferGetPixelFormatType(pb) != m->pixfmt || (int32_t)yvid__av.CVPixelBufferGetWidth(pb) != m->w ||
+        (int32_t)yvid__av.CVPixelBufferGetHeight(pb) != m->h || yvid__av.CVPixelBufferGetPlaneCount(pb) != 2) {
+        yvid__fmt(m->why, sizeof m->why, "VideoToolbox gave a %dx%d frame of format 0x%08x for %dx%d NV12",
+                    (int)yvid__av.CVPixelBufferGetWidth(pb), (int)yvid__av.CVPixelBufferGetHeight(pb),
+                    (unsigned)yvid__av.CVPixelBufferGetPixelFormatType(pb), (int)m->w, (int)m->h);
+        yvid__av.CVPixelBufferRelease(pb);
+        return YVID_ERR_FORMAT;
+    }
+    if (yvid__av.CVPixelBufferLockBaseAddress(pb, YVID__CV_LOCK_RO) != 0) {
+        yvid__av.CVPixelBufferRelease(pb);
+        yvid__fmt(m->why, sizeof m->why, "CVPixelBufferLockBaseAddress failed");
+        return YVID_ERR_DECODER;
+    }
+    m->cur = pb;
+    /* the decoder's planes, lent until the next call; the core copies them */
+    out->flags |= YVID_OUT_BORROWED;
+    out->planes.data[0] = (uint8_t*)yvid__av.CVPixelBufferGetBaseAddressOfPlane(pb, 0);
+    out->planes.stride[0] = (int32_t)yvid__av.CVPixelBufferGetBytesPerRowOfPlane(pb, 0);
+    out->planes.w[0] = m->w; out->planes.h[0] = m->h;
+    out->planes.data[1] = (uint8_t*)yvid__av.CVPixelBufferGetBaseAddressOfPlane(pb, 1);
+    out->planes.stride[1] = (int32_t)yvid__av.CVPixelBufferGetBytesPerRowOfPlane(pb, 1);
+    out->planes.w[1] = (m->w + 1) / 2; out->planes.h[1] = (m->h + 1) / 2;
+    return YVID_OK;
+}
+
+static int yvid__avf_seek(void* ctx, int64_t key, int64_t key_pts) {
+    yvid__avf* m = (yvid__avf*)ctx;
+    void* pool;
+    int64_t n;
+    int rc;
+    (void)key_pts;
+    yvid__avf_unlock(m);
+    YVID__CFREL(m->pend);
+    if (m->num <= 0) return YVID_ERR_ARG;
+    pool = yvid__av.objc_autoreleasePoolPush();
+    if (m->vt) yvid__av.VTDecompressionSessionWaitForAsynchronousFrames(m->vt);
+    /* A new reader from half a frame past the keyframe's time: it starts
+     * with the sync sample at or before that time, so rounding cannot fall
+     * short of the keyframe. Then forward to `key` itself, so next() returns
+     * it as the interface says. */
+    rc = yvid__avf_reader(m, (yvid_frame_time(m->num, m->den, key) + yvid_frame_time(m->num, m->den, key + 1)) / 2);
+    for (n = 0; rc == YVID_OK && n < 100000; n++) {
+        yvid__cf sb = NULL;
+        int64_t i;
+        rc = yvid__avf_read(m, &sb);
+        if (rc != YVID_OK) { rc = rc < 0 ? rc : YVID_ERR_DECODER; break; }
+        i = yvid__avf_index_of(m, yvid__av.CMSampleBufferGetPresentationTimeStamp(sb));
+        if (i == key) { m->pend = sb; break; }
+        yvid__av.CFRelease(sb);
+        if (i > key) {
+            yvid__fmt(m->why, sizeof m->why, "the reader started at frame %lld, after keyframe %lld", (long long)i, (long long)key);
+            rc = YVID_ERR_DECODER;
+        }
+    }
+    yvid__av.objc_autoreleasePoolPop(pool);
+    if (rc == YVID_OK && !m->pend) rc = YVID_ERR_DECODER;
+    return rc;
+}
+
+static int yvid__avf_describe(void* ctx, char* buf, size_t cap) {
+    const yvid__avf* m = (const yvid__avf*)ctx;
+    return snprintf(buf, cap, "AVFoundation (VideoToolbox %s %s decoder%s, NV12 %s range%s)", m->name,
+                    m->codec == YVID_CODEC_HEVC ? "HEVC" : "H.264", m->hw == YVID_HW_OFF && m->hw_avail ? "; hardware there" : "",
+                    m->pixfmt == YVID__PF_420F ? "full" : "video", m->as ? ", resource loader" : "");
+}
+
+static const yvid_decoder yvid__avf_decoder = {
+    YVID_DECODER_VERSION, "AVFoundation", yvid__avf_open, yvid__avf_next, yvid__avf_seek,
+    yvid__avf_close, yvid__avf_describe
+};
+
+#endif /* YVID__AVF */
+
 /* --- making the index ------------------------------------------------------------ */
 
 /* Writes index_path (NULL = media_path + ".yspvi"): the header from c and the
@@ -3875,7 +4957,7 @@ fail:
 }
 #endif
 
-#if YVID__MF
+#if YVID__MF || YVID__AVF
 /* A color field: the stream's when it states one, else the desc's; both
  * stated and different is refused, neither is refused. */
 static int yvid__color_pick(int16_t stream, uint8_t given, const char* what, const char* fix, uint8_t* out, char* err, size_t cap) {
@@ -3990,6 +5072,9 @@ static int yvid__mf_fit_rate(const int64_t* ts, int64_t n, int32_t* num, int32_t
     return 0;
 }
 
+#endif
+
+#if YVID__MF
 static int64_t yvid__index_make_mf(const char* media_path, const char* index_path,
                                      const yvid_index_desc* d, char* err, size_t cap) {
     yvid__mf* m;
@@ -4156,6 +5241,189 @@ fail:
 }
 #endif
 
+#if YVID__AVF
+/* ns from a pts in `ts` units, split so a long stream cannot overflow */
+static int64_t yvid__ts_ns(int64_t pts, int64_t ts) {
+    int64_t a = yvid__floordiv(pts, ts), b = pts - a * ts;
+    return a * 1000000000 + (b * 1000000000 + ts / 2) / ts;
+}
+
+static int64_t yvid__index_make_avf(const char* media_path, const char* index_path,
+                                      const yvid_index_desc* d, char* err, size_t cap) {
+    yvid__avf* m;
+    yvid_decoder_open in;
+    yvid_stream st;
+    yvid__canon c;
+    uint64_t* hashes = NULL;
+    int64_t* tsv = NULL;
+    int64_t n = 0, n1 = 0, cap_h = 4096, cap_t = 4096, last_key = -1, gop = 0, prev_ts = 0, k;
+    int32_t num = 0, den = 0;
+    int hw = d && d->hw ? (int)d->hw : YVID_HW_OFF;
+    int vui_found = 0, j;
+    int16_t vui[5] = { -1, -1, -1, -1, -1 };
+    char e[256];
+    int rc;
+    if (hw == YVID_HW_DXVA) { yvid__fmt(err, cap, "%s: hw DXVA is Windows's; AVFoundation decodes with VideoToolbox (OFF, VIDEOTOOLBOX or AUTO)", media_path); return YVID_ERR_ARG; }
+    m = (yvid__avf*)yvid__malloc(sizeof *m);
+    if (!m) return YVID_ERR_FULL;
+    memset(m, 0, sizeof *m);
+    memset(&in, 0, sizeof in);
+    memset(&st, 0, sizeof st);
+    in.path = media_path;
+    /* 1. the compressed samples, in decode order: B-frames and keyframes */
+    tsv = (int64_t*)yvid__malloc((size_t)cap_t * 8);
+    if (!tsv) { rc = YVID_ERR_FULL; goto fail; }
+    rc = yvid__avf_open_ex(m, &in, &st, YVID_HW_OFF, 1, 0, 0, e, sizeof e);
+    if (rc < 0) { yvid__fmt(err, cap, "%s: %s", media_path, e); goto fail; }
+    for (;;) {
+        yvid__cf sb = NULL;
+        yvid__cmtime pt, dt;
+        int64_t ts;
+        void* pool = yvid__av.objc_autoreleasePoolPush();
+        rc = yvid__avf_read(m, &sb);
+        yvid__av.objc_autoreleasePoolPop(pool);
+        if (rc == YVID_ENDED) break;
+        if (rc < 0) { yvid__fmt(err, cap, "%s: cannot read sample %lld: %s", media_path, (long long)n1, m->why); goto fail; }
+        pt = yvid__av.CMSampleBufferGetPresentationTimeStamp(sb);
+        dt = yvid__av.CMSampleBufferGetDecodeTimeStamp(sb);
+        /* 100 ns, Media Foundation's unit: the rate fit below is then the
+         * same on both platforms, so one file gets one index */
+        ts = yvid__av.CMTimeConvertScale(pt, 10000000, YVID__CMT_ROUND).value;
+        /* a numeric decode time (valid, not infinite or indefinite) that is
+         * not the presentation time */
+        if ((dt.flags & 29u) == YVID__CMT_VALID && yvid__av.CMTimeCompare(dt, pt) != 0) {
+            int64_t dts = yvid__av.CMTimeConvertScale(dt, 10000000, YVID__CMT_ROUND).value;
+            yvid__av.CFRelease(sb);
+            yvid__fmt(err, cap, "%s: sample %lld decodes at %lld but shows at %lld (100 ns): B-frames; re-encode with -bf 0",
+                        media_path, (long long)n1, (long long)dts, (long long)ts);
+            rc = YVID_ERR_FORMAT; goto fail;
+        }
+        k = yvid__avf_is_key(sb);
+        yvid__av.CFRelease(sb);
+        if (ts <= prev_ts && n1 > 0) {
+            yvid__fmt(err, cap, "%s: sample %lld shows before the one decoded ahead of it: B-frames; re-encode with -bf 0", media_path, (long long)n1);
+            rc = YVID_ERR_FORMAT; goto fail;
+        }
+        rc = yvid__gop_step(media_path, n1, (int)k, &last_key, &gop, err, cap);
+        if (rc < 0) goto fail;
+        prev_ts = ts;
+        if (n1 >= cap_t) {
+            int64_t* nt = (int64_t*)yvid__realloc(tsv, (size_t)cap_t * 2 * 8);
+            if (!nt) { rc = YVID_ERR_FULL; goto fail; }
+            tsv = nt; cap_t *= 2;
+        }
+        tsv[n1++] = ts;
+    }
+    vui_found = m->vui_found;
+    memcpy(vui, m->vui, sizeof vui);
+    yvid__avf_close(m);
+    if (n1 == 0) { yvid__fmt(err, cap, "%s: no frames", media_path); rc = YVID_ERR_FORMAT; goto fail; }
+    if (gop == 0) gop = n1;
+    rc = yvid__mp4_edits(media_path, err, cap);
+    if (rc < 0) goto fail;
+    if (tsv[0] != 0) {
+        yvid__fmt(err, cap, "%s: the first frame is at %.3f ms, not 0 (an edit list or a start offset); remux with -avoid_negative_ts make_zero", media_path, (double)tsv[0] / 1e4);
+        rc = YVID_ERR_FORMAT; goto fail;
+    }
+    if (!yvid__mf_fit_rate(tsv, n1, &num, &den)) {
+        double est = n1 > 1 ? (double)(n1 - 1) * 1e7 / (double)(tsv[n1 - 1] - tsv[0]) : 0.0;
+        yvid__fmt(err, cap, "%s: the frame times of %lld frames fit no constant rate (about %.4f fps); a variable rate, a dropped frame, or a coarse timescale: re-encode at a constant rate with -video_track_timescale set to a multiple of the rate",
+                    media_path, (long long)n1, est);
+        rc = YVID_ERR_FORMAT; goto fail;
+    }
+    yvid__free(tsv); tsv = NULL;
+    /* 2. every frame decoded: on the grid, and its hash */
+    m->req_auto = 0;
+    rc = yvid__avf_open_ex(m, &in, &st, hw == YVID_HW_AUTO ? YVID_HW_VIDEOTOOLBOX : hw, 0, num, den, e, sizeof e);
+    if (rc < 0) { yvid__fmt(err, cap, "%s: %s", media_path, e); goto fail; }
+    st.fps_num = num; st.fps_den = den;
+    hashes = (uint64_t*)yvid__malloc((size_t)cap_h * 8);
+    if (!hashes) { rc = YVID_ERR_FULL; goto fail; }
+    for (;;) {
+        yvid_out o;
+        yvid_planes dummy;
+        int64_t t, grid;
+        memset(&o, 0, sizeof o);
+        rc = yvid__avf_next(m, &dummy, &o);
+        if (rc == YVID_ENDED) break;
+        if (rc < 0) { yvid__fmt(err, cap, "%s: decode failed at frame %lld: %s", media_path, (long long)n, m->why); goto fail; }
+        t = yvid__ts_ns(o.pts, m->timescale);
+        grid = yvid_frame_time(st.fps_num, st.fps_den, n);
+        if (llabs(t - grid) > 100) {
+            yvid__fmt(err, cap, "%s: frame %lld is at %lld ns, the grid of %d/%d fps puts it at %lld ns: a variable rate, a dropped frame, or a coarse timescale; re-encode at a constant rate with -video_track_timescale %d",
+                        media_path, (long long)n, (long long)t, (int)st.fps_num, (int)st.fps_den, (long long)grid, (int)(st.fps_den == 1 ? st.fps_num * 1000 : st.fps_num));
+            rc = YVID_ERR_FORMAT; goto fail;
+        }
+        if ((rc = yvid__hashes_grow(&hashes, n, &cap_h)) < 0) goto fail;
+        hashes[n] = yvid__hash_planes(YVID_FMT_NV12, &o.planes);
+        n++;
+    }
+    if (n != n1) { yvid__fmt(err, cap, "%s: the decoder gave %lld frames for %lld samples", media_path, (long long)n, (long long)n1); rc = YVID_ERR_FORMAT; goto fail; }
+    /* 3. a seek to each keyframe decodes it and the next frame exactly: the
+     * property the movie's seeks rely on, proved for this file */
+    if (!(d && d->no_seek_check)) {
+        for (k = 0; k < n; k += gop) {
+            int64_t i;
+            if (yvid__avf_seek(m, k, 0) != YVID_OK) { yvid__fmt(err, cap, "%s: the seek to keyframe %lld failed: %s", media_path, (long long)k, m->why); rc = YVID_ERR_FORMAT; goto fail; }
+            for (i = k; i < k + 2 && i < n; i++) {
+                yvid_out o;
+                yvid_planes dummy;
+                memset(&o, 0, sizeof o);
+                rc = yvid__avf_next(m, &dummy, &o);
+                if (rc < 0 || llabs(yvid__ts_ns(o.pts, m->timescale) - yvid_frame_time(num, den, i)) > 100 ||
+                    yvid__hash_planes(YVID_FMT_NV12, &o.planes) != hashes[i]) {
+                    yvid__fmt(err, cap, "%s: frame %lld differs after a seek to keyframe %lld: a keyframe that is not a clean entry point (open GOP?); re-encode with -x264-params open-gop=0",
+                                media_path, (long long)i, (long long)k);
+                    rc = YVID_ERR_FORMAT; goto fail;
+                }
+            }
+        }
+    }
+    /* The stream's statement: CoreMedia's format description (the colr box,
+     * or what CoreMedia read from the parameter sets) and, for H.264, the
+     * SPS read here. Both stated and different is refused; a value the
+     * canonical form does not have is refused. */
+    {
+        static const char* const what[5] = { "matrix", "range", "transfer", "primaries", "chroma siting" };
+        int16_t* f[5];
+        f[0] = &st.matrix; f[1] = &st.range; f[2] = &st.transfer; f[3] = &st.primaries; f[4] = &st.siting;
+        for (j = 0; j < 5; j++) {
+            int16_t v = vui_found ? vui[j] : -1;
+            if (v == -2 || *f[j] == -2) {
+                yvid__fmt(err, cap, "%s: the stream states a %s the canonical form does not have (an HDR transfer, RGB, or another chroma location); re-encode with BT.709 or BT.601 color", media_path, what[j]);
+                rc = YVID_ERR_FORMAT; goto fail;
+            }
+            if (v > 0 && *f[j] > 0 && v != *f[j]) {
+                yvid__fmt(err, cap, "%s: the container states %s %d, the SPS %d; re-encode or remux so that they agree", media_path, what[j], (int)*f[j], (int)v);
+                rc = YVID_ERR_FORMAT; goto fail;
+            }
+            if (*f[j] <= 0 && v > 0) *f[j] = v;
+        }
+    }
+    memset(&c, 0, sizeof c);
+    c.codec = m->codec; c.w = st.w; c.h = st.h; c.format = YVID_FMT_NV12;
+    c.fps_num = st.fps_num; c.fps_den = st.fps_den; c.frames = n; c.gop = (int32_t)gop;
+    rc = yvid__color_pick(st.matrix, d ? d->matrix : 0, "matrix", "-colorspace bt709", &c.matrix, e, sizeof e);
+    if (rc == YVID_OK) rc = yvid__color_pick(st.range, d ? d->range : 0, "range", "-color_range tv", &c.range, e, sizeof e);
+    if (rc == YVID_OK) rc = yvid__color_pick(st.transfer, d ? d->transfer : 0, "transfer", "-color_trc bt709", &c.transfer, e, sizeof e);
+    if (rc == YVID_OK) rc = yvid__color_pick(st.primaries, d ? d->primaries : 0, "primaries", "-color_primaries bt709", &c.primaries, e, sizeof e);
+    if (rc == YVID_OK) rc = yvid__color_pick(st.siting, d ? d->siting : 0, "chroma siting", "-chroma_sample_location left", &c.siting, e, sizeof e);
+    if (rc == YVID_OK) rc = yvid__canon_check(&c, e, sizeof e);
+    if (rc < 0) { yvid__fmt(err, cap, "%s: %s", media_path, e); goto fail; }
+    yvid__avf_close(m);
+    yvid__free(m);
+    rc = yvid__index_write(media_path, index_path, &c, hashes, n, d ? d->note : NULL, err, cap);
+    yvid__free(hashes);
+    return rc < 0 ? rc : n;
+fail:
+    yvid__avf_close(m);
+    yvid__free(m);
+    yvid__free(hashes);
+    yvid__free(tsv);
+    return rc < 0 ? rc : YVID_ERR_FORMAT;
+}
+#endif
+
 static int yvid__backend_for(const yvid_desc* d);
 
 YVID_API int64_t yvid_index_make(const char* media_path, const char* index_path,
@@ -4180,9 +5448,18 @@ YVID_API int64_t yvid_index_make(const char* media_path, const char* index_path,
     }
     if (b == YVID_BACKEND_MF) {
 #if YVID__MF
+        if (d && d->hw == YVID_HW_VIDEOTOOLBOX) { yvid__fmt(err, cap, "%s: hw VIDEOTOOLBOX is Apple's; Media Foundation decodes with OFF, DXVA or AUTO", media_path); return YVID_ERR_ARG; }
         return yvid__index_make_mf(media_path, index_path, d, err, cap);
 #else
-        yvid__fmt(err, cap, "%s: MP4 needs Media Foundation (Windows); AVFoundation and FFmpeg are not built", media_path);
+        yvid__fmt(err, cap, "%s: Media Foundation is Windows's (or YVID_NO_MF is defined)", media_path);
+        return YVID_ERR_NOT_IMPLEMENTED;
+#endif
+    }
+    if (b == YVID_BACKEND_AVF) {
+#if YVID__AVF
+        return yvid__index_make_avf(media_path, index_path, d, err, cap);
+#else
+        yvid__fmt(err, cap, "%s: AVFoundation is Apple's (or YVID_NO_AVF is defined)", media_path);
         return YVID_ERR_NOT_IMPLEMENTED;
 #endif
     }
@@ -4436,6 +5713,36 @@ static void yvid__dt_fail(yvid_movie* mv, int rc, const char* fmt, ...) {
     yvid__st32(&mv->dec_err, (uint32_t)(-rc));
 }
 
+/* A built-in backend's own reason for its last failure, or "". The
+ * decoder interface (version 1) has no call for a custom decoder's. */
+static const char* yvid__dec_why(const yvid_movie* mv, char* buf, size_t cap) {
+    buf[0] = 0;
+#if YVID__AVF
+    if (mv->dec == &yvid__avf_decoder) yvid__fmt(buf, cap, "%s", ((const yvid__avf*)mv->dec_ctx)->why);
+#endif
+#if YVID__MF
+    if (mv->dec == &yvid__mf_decoder && FAILED(((const yvid__mf*)mv->dec_ctx)->last_hr))
+        yvid__fmt(buf, cap, "Media Foundation 0x%08lx", (unsigned long)((const yvid__mf*)mv->dec_ctx)->last_hr);
+#endif
+    (void)mv; (void)cap;
+    return buf;
+}
+
+/* A decoder call failed: the message, then the backend's reason (v0.7.0;
+ * before, "decode of frame 164 failed (-6)" said nothing more). */
+static void yvid__dt_fail_dec(yvid_movie* mv, const char* fmt, ...) {
+    char why[200];
+    size_t n;
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(mv->dt_error, sizeof mv->dt_error, fmt, ap);
+    va_end(ap);
+    yvid__dec_why(mv, why, sizeof why);
+    n = strlen(mv->dt_error);
+    if (why[0] && n + 3 < sizeof mv->dt_error) snprintf(mv->dt_error + n, sizeof mv->dt_error - n, ": %s", why);
+    yvid__st32(&mv->dec_err, (uint32_t)(-YVID_ERR_DECODER));
+}
+
 static void yvid__on_msg(void* ctx, const void* msg, uint32_t seq) {
     yvid_movie* mv = (yvid_movie*)ctx;
     yvid__msg m;
@@ -4480,7 +5787,7 @@ static bool yvid__dstep(yvid_movie* mv) {
             YRT_ZONE(zs, "yvid.seek");
             rc = mv->dec->seek(mv->dec_ctx, key, mv->timescale > 0 ? yvid__ft(mv, key) / 1000 * mv->timescale / 1000000 : key);
             YRT_ZONE_END(zs);
-            if (rc < 0) { yvid__dt_fail(mv, YVID_ERR_DECODER, "ysp_video: %s: seek to keyframe %lld failed (%d)", mv->dec->name, (long long)key, rc); return false; }
+            if (rc < 0) { yvid__dt_fail_dec(mv, "ysp_video: %s: seek to keyframe %lld failed (%d)", mv->dec->name, (long long)key, rc); return false; }
             mv->dt_pos = key;
             mv->dt_key = key;
         }
@@ -4489,7 +5796,7 @@ static bool yvid__dstep(yvid_movie* mv) {
             out.index = -1;
             rc = mv->dec->next(mv->dec_ctx, NULL, &out);
             if (rc == YVID_PENDING) return yvid__pending(mv);
-            if (rc != YVID_OK) { yvid__dt_fail(mv, YVID_ERR_DECODER, "ysp_video: %s: the stream ended or failed at frame %lld while seeking (%d)", mv->dec->name, (long long)mv->dt_pos, rc); return false; }
+            if (rc != YVID_OK) { yvid__dt_fail_dec(mv, "ysp_video: %s: the stream ended or failed at frame %lld while seeking (%d)", mv->dec->name, (long long)mv->dt_pos, rc); return false; }
             mv->dt_pos++;
             mv->dt_discarded++;
             mv->dt_next = g;
@@ -4530,7 +5837,7 @@ static bool yvid__dstep(yvid_movie* mv) {
         }
         if (rc < 0) {
             mv->dt_spare = s;
-            yvid__dt_fail(mv, YVID_ERR_DECODER, "ysp_video: %s: decode of frame %lld failed (%d)", mv->dec->name, (long long)idx, rc);
+            yvid__dt_fail_dec(mv, "ysp_video: %s: decode of frame %lld failed (%d)", mv->dec->name, (long long)idx, rc);
             return false;
         }
         if (dt > yvid__ft(mv, 1) && mv->d.ring) {
@@ -4650,7 +5957,7 @@ static int yvid__backend_for(const yvid_desc* d) {
     yvid__src_close(&s);
     if (memcmp(b, "YSPVSEQ1", 8) == 0) return YVID_BACKEND_SEQ;
     if (b[0] == 0 && b[1] == 0 && b[2] == 1 && (b[3] == 0xBA || b[3] == 0xB3)) return YVID_BACKEND_PLMPEG;
-    if (memcmp(b + 4, "ftyp", 4) == 0) return YVID_BACKEND_MF;
+    if (memcmp(b + 4, "ftyp", 4) == 0) return YVID__MP4_BACKEND;   /* MF on Windows, AVF on Apple */
     return YVID_ERR_FORMAT;   /* none of the three */
 }
 
@@ -4680,7 +5987,7 @@ YVID_API int yvid_probe(const yvid_desc* d, yvid_info* out, char* err, size_t ca
         if (yvid__src_read(&s, 0, hdr, sizeof hdr) != YVID_OK) { yvid__src_close(&s); yvid__fmt(err, cap, "cannot read the file"); return YVID_ERR_IO; }
         yvid__src_close(&s);
         if ((rc = yvid__seq_parse(hdr, &c, &comp, &io, err, cap)) < 0) return rc;
-    } else if (b == YVID_BACKEND_PLMPEG || b == YVID_BACKEND_MF) {
+    } else if (b == YVID_BACKEND_PLMPEG || b == YVID_BACKEND_MF || b == YVID_BACKEND_AVF) {
         yvid__index ix;
         if ((rc = yvid__index_load(d, &ix, 0, err, cap)) < 0) return rc;
         c = ix.c;
@@ -4765,8 +6072,9 @@ YVID_API bool yvid_open(yvid_movie* mv, ygfx_gfx* g, const yvid_desc* desc) {
         if (desc->lead != 0.0 && mv->info.lead != tl_lead) { yvid__err(mv, "ysp_video: desc.lead (%g) differs from the timeline's (%g): video and annotations must share one rule", mv->info.lead, tl_lead); return yvid__ofail(mv, YVID_ERR_ARG); }
         mv->info.lead = tl_lead;
     }
-    if (desc->hw_decode != YVID_HW_AUTO && desc->hw_decode != YVID_HW_OFF && desc->hw_decode != YVID_HW_DXVA) {
-        yvid__err(mv, "ysp_video: desc.hw_decode %d is not AUTO, OFF or DXVA", (int)desc->hw_decode);
+    if (desc->hw_decode != YVID_HW_AUTO && desc->hw_decode != YVID_HW_OFF && desc->hw_decode != YVID_HW_DXVA &&
+        desc->hw_decode != YVID_HW_VIDEOTOOLBOX) {
+        yvid__err(mv, "ysp_video: desc.hw_decode %d is not AUTO, OFF, DXVA or VIDEOTOOLBOX", (int)desc->hw_decode);
         return yvid__ofail(mv, YVID_ERR_ARG);
     }
     if (desc->ahead < 0 || desc->ahead > YVID_MAX_SLOTS - 2) { yvid__err(mv, "ysp_video: desc.ahead must be 0..%d", YVID_MAX_SLOTS - 2); return yvid__ofail(mv, YVID_ERR_ARG); }
@@ -4777,9 +6085,17 @@ YVID_API bool yvid_open(yvid_movie* mv, ygfx_gfx* g, const yvid_desc* desc) {
 
     backend = yvid__backend_for(desc);
     if (backend < 0) { yvid__backend_why(desc, backend, e, sizeof e); yvid__err(mv, "ysp_video: %s", e); return yvid__ofail(mv, backend); }
-    if ((backend == YVID_BACKEND_MF && !YVID__MF) || backend == YVID_BACKEND_AVF || backend == YVID_BACKEND_FFMPEG) {
-        yvid__err(mv, "ysp_video: %s: H.264 and HEVC need Media Foundation (Windows, without YVID_NO_MF); AVFoundation and FFmpeg are not built", desc->path ? desc->path : "the source");
+    if ((backend == YVID_BACKEND_MF && !YVID__MF) || (backend == YVID_BACKEND_AVF && !YVID__AVF) || backend == YVID_BACKEND_FFMPEG) {
+        yvid__err(mv, "ysp_video: %s: H.264 and HEVC need Media Foundation (Windows, without YVID_NO_MF) or AVFoundation (Apple, without YVID_NO_AVF); FFmpeg is not built", desc->path ? desc->path : "the source");
         return yvid__ofail(mv, YVID_ERR_NOT_IMPLEMENTED);
+    }
+    /* each platform's decoder by its name: an experiment that names one runs
+     * only there; AUTO and OFF run everywhere */
+    if ((backend == YVID_BACKEND_MF && desc->hw_decode == YVID_HW_VIDEOTOOLBOX) ||
+        (backend == YVID_BACKEND_AVF && desc->hw_decode == YVID_HW_DXVA)) {
+        yvid__err(mv, "ysp_video: desc.hw_decode %s is %s's; use AUTO (the hardware decoder, else the software one) or OFF",
+                    desc->hw_decode == YVID_HW_DXVA ? "DXVA" : "VIDEOTOOLBOX", desc->hw_decode == YVID_HW_DXVA ? "Windows" : "Apple");
+        return yvid__ofail(mv, YVID_ERR_REFUSED);
     }
     if (backend == YVID_BACKEND_CUSTOM) {
         if (!desc->decoder || desc->decoder->version != YVID_DECODER_VERSION || !desc->decoder->open ||
@@ -4829,6 +6145,21 @@ YVID_API bool yvid_open(yvid_movie* mv, ygfx_gfx* g, const yvid_desc* desc) {
         mv->dec = &yvid__mf_decoder;
         mv->dec_ctx = m;
 #endif
+#if YVID__AVF
+    } else if (backend == YVID_BACKEND_AVF) {
+        yvid__avf* m = (yvid__avf*)yvid__malloc(sizeof(yvid__avf));
+        yvid__index hx;
+        if (!m) { yvid__err(mv, "ysp_video: out of memory"); return yvid__ofail(mv, YVID_ERR_FULL); }
+        memset(m, 0, sizeof *m);
+        /* the rate is the index's: the grid every frame is checked on */
+        if ((rc = yvid__index_load(desc, &hx, 0, e, sizeof e)) < 0) { yvid__free(m); yvid__err(mv, "ysp_video: %s", e); return yvid__ofail(mv, rc); }
+        m->req_num = hx.c.fps_num; m->req_den = hx.c.fps_den;
+        m->req_hw = desc->hw_decode == YVID_HW_OFF ? YVID_HW_OFF : YVID_HW_VIDEOTOOLBOX;
+        m->req_auto = desc->hw_decode == YVID_HW_AUTO;
+        mv->be_mem = m;
+        mv->dec = &yvid__avf_decoder;
+        mv->dec_ctx = m;
+#endif
     } else {
         yvid__err(mv, "ysp_video: unknown backend %d", backend);
         return yvid__ofail(mv, YVID_ERR_ARG);
@@ -4843,6 +6174,29 @@ YVID_API bool yvid_open(yvid_movie* mv, ygfx_gfx* g, const yvid_desc* desc) {
     in.path = desc->path; in.data = desc->data; in.size = desc->size;
     in.reader = desc->reader; in.reader_ctx = desc->reader_ctx;
     in.index = desc->index; in.index_size = desc->index_size;
+    /* The index belongs to this file (its size and the hashes of its ends):
+     * checked before the backend opens. After it, the frame thread read a
+     * yvid_reader while AVFoundation's resource loader read it on its own
+     * queue (ThreadSanitizer, v0.7.0); a reader is called one call at a
+     * time. An index that does not load is reported below, as before. */
+    if ((backend == YVID_BACKEND_PLMPEG || backend == YVID_BACKEND_MF || backend == YVID_BACKEND_AVF || desc->index ||
+         (backend == YVID_BACKEND_CUSTOM && desc->path)) &&
+        (backend == YVID_BACKEND_PLMPEG || backend == YVID_BACKEND_MF || backend == YVID_BACKEND_AVF || desc->path)) {
+        yvid__index ix0;
+        if (yvid__index_load(desc, &ix0, 0, e, sizeof e) == YVID_OK) {
+            yvid__src s;
+            uint64_t head = 0, tail = 0;
+            if (yvid__src_open(&s, desc->path, desc->data, desc->size, desc->reader, desc->reader_ctx) == YVID_OK) {
+                rc = s.size == ix0.media_size ? yvid__src_ends(&s, &head, &tail) : YVID_ERR_FORMAT;
+                yvid__src_close(&s);
+                if (rc < 0 || head != ix0.head || tail != ix0.tail) {
+                    yvid__err(mv, "ysp_video: the index does not belong to this file (size or hash of its ends differ); make it again");
+                    yvid__close_partial(mv);
+                    return yvid__ofail(mv, YVID_ERR_FORMAT);
+                }
+            }
+        }
+    }
     memset(&st, 0, sizeof st);
     st.frames = -1;
     e[0] = 0;
@@ -4862,24 +6216,11 @@ YVID_API bool yvid_open(yvid_movie* mv, ygfx_gfx* g, const yvid_desc* desc) {
     c.transfer = (uint8_t)(st.transfer > 0 ? st.transfer : 0); c.primaries = (uint8_t)(st.primaries > 0 ? st.primaries : 0);
     c.siting = (uint8_t)(st.siting > 0 ? st.siting : 0);
     memset(&ix, 0, sizeof ix);
-    if (backend == YVID_BACKEND_PLMPEG || backend == YVID_BACKEND_MF || desc->index || (backend == YVID_BACKEND_CUSTOM && desc->path)) {
+    if (backend == YVID_BACKEND_PLMPEG || backend == YVID_BACKEND_MF || backend == YVID_BACKEND_AVF || desc->index || (backend == YVID_BACKEND_CUSTOM && desc->path)) {
         int32_t v;
         rc = yvid__index_load(desc, &ix, 1, e, sizeof e);
         if (rc < 0) { yvid__err(mv, "ysp_video: %s", e); yvid__close_partial(mv); return yvid__ofail(mv, rc); }
         mv->hashes = ix.hashes;
-        if (backend == YVID_BACKEND_PLMPEG || backend == YVID_BACKEND_MF || desc->path) {
-            yvid__src s;
-            uint64_t head = 0, tail = 0;
-            if (yvid__src_open(&s, desc->path, desc->data, desc->size, desc->reader, desc->reader_ctx) == YVID_OK) {
-                rc = s.size == ix.media_size ? yvid__src_ends(&s, &head, &tail) : YVID_ERR_FORMAT;
-                yvid__src_close(&s);
-                if (rc < 0 || head != ix.head || tail != ix.tail) {
-                    yvid__err(mv, "ysp_video: the index does not belong to this file (size or hash of its ends differ); make it again");
-                    yvid__close_partial(mv);
-                    return yvid__ofail(mv, YVID_ERR_FORMAT);
-                }
-            }
-        }
         rc = YVID_OK;
         if (rc == YVID_OK) rc = yvid__fill(&c.w, ix.c.w, "width", e, sizeof e);
         if (rc == YVID_OK) rc = yvid__fill(&c.h, ix.c.h, "height", e, sizeof e);
@@ -4933,6 +6274,9 @@ YVID_API bool yvid_open(yvid_movie* mv, ygfx_gfx* g, const yvid_desc* desc) {
     mv->dec_caps = st.caps;
 #if YVID__MF
     if (backend == YVID_BACKEND_MF) mv->info.hw = (yvid_hw)((const yvid__mf*)mv->be_mem)->hw;
+#endif
+#if YVID__AVF
+    if (backend == YVID_BACKEND_AVF) mv->info.hw = (yvid_hw)((const yvid__avf*)mv->be_mem)->hw;
 #endif
     /* the display against the rate */
     if (yvid__display_rate(mv, &rn, &rd)) {
@@ -6005,7 +7349,7 @@ static const char* yvid__why_name(int w) {
 }
 
 YVID_API int yvid_describe(const yvid_movie* mv, char* buf, size_t cap) {
-    char cad[200], counts[300], be[96];
+    char cad[200], counts[300], be[128];
     int w, n;
     size_t used = 0;
     if (!mv || !mv->open) return snprintf(buf, cap, "ysp_video %s: not open", YVID_VERSION_STRING);
@@ -6081,8 +7425,8 @@ YVID_API const yscr_param* yvid_params(int* n) {
           "auto=0,codes=1,eotf=2" },
         { "gpu_path", "enum", 0, 3, 0, "", "how a frame reaches a texture; shared is not built",
           "auto=0,upload=1,shared=2,gpu=3" },
-        { "hw_decode", "enum", 0, 2, 0, "", "Media Foundation's decoder",
-          "auto=0,off=1,dxva=2" },
+        { "hw_decode", "enum", 0, 3, 0, "", "the MP4 decoder: auto is the platform's hardware one, else software",
+          "auto=0,off=1,dxva=2,videotoolbox=3" },
         { "chroma", "enum", 0, 1, 0, "", "4:2:0 chroma upsampling: weighted at the stream's siting, or replicated",
           "sited=0,nearest=1" },
         { "base", "i32", 0, 7, 0, "", "the movie base on the timeline", NULL },

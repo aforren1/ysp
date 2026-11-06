@@ -592,6 +592,8 @@ if(NOT YSP_LSL_DIR)
 endif()
 if(WIN32)
     set(_lsl_lib ${YSP_LSL_DIR}/lsl.dll)
+elseif(APPLE)
+    set(_lsl_lib ${YSP_LSL_DIR}/liblsl.dylib)
 else()
     set(_lsl_lib ${YSP_LSL_DIR}/liblsl.so)
 endif()
@@ -605,6 +607,11 @@ if(EXISTS ${_lsl_lib} AND EXISTS ${YSP_LSL_DIR}/lsl_c.h)
         add_test(NAME compile_lsl_abi COMMAND compile_lsl_abi)
     endif()
     message(STATUS "ysp/net.h: tests use liblsl at ${_lsl_lib}")
+elseif(APPLE)
+    # tools/vendor_lsl.py has no macOS archive the standard library unpacks
+    # (see ci.yml), so do not point at it.
+    message(STATUS "ysp/net.h: no liblsl.dylib in ${YSP_LSL_DIR}, so only the fake-liblsl unit test runs; "
+                   "set YSP_LSL_DIR to a folder with liblsl.dylib and lsl_c.h")
 elseif(CMAKE_SYSTEM_NAME IN_LIST YSP_PLATFORMS_net)
     message(STATUS "ysp/net.h: no liblsl in ${YSP_LSL_DIR}, so only the fake-liblsl unit test runs; "
                    "fetch it with: uv run --no-project python tools/vendor_lsl.py --write")
@@ -650,6 +657,17 @@ endif()
 # it says so and returns 0.
 if(TARGET SDL3::SDL3 AND YSP_BUILD_TESTS)
     ysp_add_program(test_screen_window tests/adapt/screen_window_test.c rig)
+endif()
+# ysp/screen.h's METAL backend on a real window: macOS, built and not
+# registered with ctest, because it needs a window server session and
+# ANGLE (YSCR_ANGLE_DIR); run by hand and by tests/mutate/screen.toml's
+# Metal mutants.
+if(TARGET SDL3::SDL3 AND YSP_BUILD_TESTS AND APPLE)
+    ysp_add_program(test_screen_metal tests/adapt/screen_metal_test.c rig)
+    # the input case posts keys and clicks (CoreGraphics) and reads
+    # NSEvent.timestamp through a monitor of its own (a Block, libobjc)
+    target_compile_options(test_screen_metal PRIVATE -fblocks)
+    target_link_libraries(test_screen_metal PRIVATE "-framework ApplicationServices" objc)
 endif()
 # Every header's parameter table against the one row shape (name, type,
 # min, max, def, unit, doc, values; docs/experiment_format.md, G6): one
@@ -726,6 +744,15 @@ if(NOT TARGET ysp::pl_mpeg)
             target_compile_definitions(${t} PRIVATE YVID_NO_PL_MPEG)
         endif()
     endforeach()
+endif()
+
+# ysp/video.h loads AVFoundation, CoreMedia, CoreVideo, VideoToolbox and
+# libobjc at run time on Apple platforms (as it loads Media Foundation on
+# Windows), so its programs link nothing more. Only the SDK check, which
+# compares the header's copies with the frameworks' own symbols, links them.
+if(APPLE AND TARGET compile_video_avf)
+    target_link_libraries(compile_video_avf PRIVATE
+        "-framework CoreFoundation" "-framework CoreMedia" "-framework CoreVideo" "-framework VideoToolbox")
 endif()
 
 # ysp/audio.h, ysp/screen.h and ysp/video.h implemented in one translation

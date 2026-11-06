@@ -9,7 +9,7 @@
 # v0.3.5's 5 (raw mice; the 2 on its queue went with the queue),
 # v0.4.0's 6 (the input bridge), v0.4.1's 15 (the key filter, kd-) and
 # v0.4.2's 3 (kd-16 to kd-18, the key-up fix) and 13 (the sync guard,
-# sg-), v0.4.3's 9 (eg-, held frames), v0.4.4's 20 (dp-, the depth policy, the guessed grid, early flips), v0.5.0's 20 (st-, settling at open), v0.5.1's 7 (fg-, the foreground and the slot held after settling), v0.5.2's 7 (ch-, the context hook; ch-06 runs the gfx test), v0.6.0's 2 (cv-, the messages), v0.10.0's 19 (wt-, the window thread; wt-20 on run tests/adapt/screen_window_test.c on real windows), v0.10.1's 4 (gp-, the grid after a gap), v0.10.2's 1 (fg-08, the next screen's raise, on real windows), v0.10.3's 1 (bf-01, GL between frames on COMPOSITION), v0.10.4's 5 (lk-01, lk-02, the handles; bf-02, bf-03, no free buffer; ds-01, display ids). The 29 earlier mutants (docs/screen.md,
+# sg-), v0.4.3's 9 (eg-, held frames), v0.4.4's 20 (dp-, the depth policy, the guessed grid, early flips), v0.5.0's 20 (st-, settling at open), v0.5.1's 7 (fg-, the foreground and the slot held after settling), v0.5.2's 7 (ch-, the context hook; ch-06 runs the gfx test), v0.6.0's 2 (cv-, the messages), v0.10.0's 19 (wt-, the window thread; wt-20 on run tests/adapt/screen_window_test.c on real windows), v0.10.1's 4 (gp-, the grid after a gap), v0.10.2's 1 (fg-08, the next screen's raise, on real windows), v0.10.3's 1 (bf-01, GL between frames on COMPOSITION), v0.10.4's 5 (lk-01, lk-02, the handles; bf-02, bf-03, no free buffer; ds-01, display ids), v0.11.0's 10 (mt-, the METAL backend; mt-08 to mt-10 on run tests/adapt/screen_metal_test.c on a Mac). The 29 earlier mutants (docs/screen.md,
 # "Mutations") were run from scripts that were not kept.
 header = "ysp/screen.h"
 
@@ -268,7 +268,7 @@ id = "rm-06"
 name = "raw mice accepted on the simulated display"
 test = "screen"
 why = "No reader runs without a window on Windows; open() must say so instead of delivering nothing (v0.3.5)."
-find = '    return "desc.raw_mice needs a window (Windows, or Linux X11 on GLX_OML)";'
+find = '    return "desc.raw_mice is for Windows, macOS (METAL) and Linux X11 (GLX_OML), with a window";'
 replace = '    return NULL;'
 
 [[mutant]]
@@ -1307,8 +1307,8 @@ id = "wt-07"
 name = "every screen released"
 test = "screen"
 why = "v0.10.0: the release minimizes the window thread's windows only; a screen it does not own sees the panic's abort once."
-find = '''static int yscr__released_on(const yscr_screen* s) { return s->wt && yscr__a_load(&yscr__released); }'''
-replace = '''static int yscr__released_on(const yscr_screen* s) { (void)s; return yscr__a_load(&yscr__released); }'''
+find = '''    return (s->wt || s->backend == YSCR_BACKEND_METAL) && yscr__a_load(&yscr__released);'''
+replace = '''    (void)s; return yscr__a_load(&yscr__released);'''
 
 [[mutant]]
 id = "wt-08"
@@ -1798,3 +1798,453 @@ test = "screen_glx"
 why = "begin() tells the reader whether a window of this process has the keyboard focus; without it every report is dropped."
 find = "    yscr__a_store(&yscr__lm.focused, SDL_GetKeyboardFocus() != NULL);"
 replace = "    (void)0;"
+# v0.11.0's 10 (mt-, the METAL backend), v0.12.0's 3 (mt-11 to mt-13, the
+# measured constants) and v0.13.0's 3 (mt-14 to mt-16, variable refresh) and v0.13.1's 2 (mt-17, mt-18, the
+# period from CADisplayLink). mt-01 to mt-07 and mt-11 to mt-13 run the core test
+# on any platform; mt-08 to mt-10 run tests/adapt/screen_metal_test.c on
+# this Mac's window server with ANGLE (the screen may be locked: the sync
+# and code read-backs run without a shown frame).
+[test.metal]
+source = "tests/adapt/screen_metal_test.c"
+compiler = "gcc"
+flags = ["-std=c11", "-O1", "-w", "-fblocks", "-I/Users/brainworks/sdl3/include"]
+libs = ["-L/Users/brainworks/sdl3/lib", "-lSDL3", "-Wl,-rpath,/Users/brainworks/sdl3/lib", "-lm",
+        "-framework", "ApplicationServices", "-lobjc"]
+timeout = 300
+env_default = { YSCR_ANGLE_DIR = "/Users/brainworks/ysp-deps/angle-electron-43.8.3" }
+
+[[mutant]]
+id = "mt-01"
+name = "target a whole period early"
+test = "screen"
+why = "Core Animation shows a drawable at the first vblank at or after its target (measured, v0.11.1): a target a period before the planned vblank shows a vblank early (BACKENDS, METAL, (a))."
+find = '#define YSCR__MTL_TARGET_LEAD 0.5'
+replace = '#define YSCR__MTL_TARGET_LEAD 1.0'
+
+[[mutant]]
+id = "mt-02"
+name = "target after the planned vblank"
+test = "screen"
+why = "A target after the planned vblank shows a vblank late on a display that shows the first vblank at or after it."
+find = '#define YSCR__MTL_TARGET_LEAD 0.5'
+replace = '#define YSCR__MTL_TARGET_LEAD -0.25'
+
+[[mutant]]
+id = "mt-03"
+name = "tier 1 without a photodiode"
+test = "screen"
+why = "presentedTime is an OS time for the vblank shown (tier 2); tier 1 needs a photodiode run and a path the header can verify (TIERS; docs/screen_macos_probe.md)."
+find = '    return (uint8_t)YSCR_TIER_2;'
+replace = '    return (uint8_t)YSCR_TIER_1;'
+
+[[mutant]]
+id = "mt-04"
+name = "a hidden window's frame not OCCLUDED"
+test = "screen"
+why = "presentedTime 0 in a hidden window or a locked session is an occluded frame, and its record must say so."
+find = '        v->flags = YSCR_FLIP_OCCLUDED;'
+replace = ''
+
+[[mutant]]
+id = "mt-05"
+name = "red and blue swapped in a BGRA8 pixel"
+test = "screen"
+why = "A code's red is in bits 0 to 7 of its value and in byte 2 of a BGRA8 pixel."
+find = '    if (!bits10) return 0xFF000000u | (r << 16) | (g << 8) | b;'
+replace = '    if (!bits10) return 0xFF000000u | (b << 16) | (g << 8) | r;'
+
+[[mutant]]
+id = "mt-06"
+name = "the display link's period truncated"
+test = "screen"
+why = "The period is CVDisplayLink's value / scale, rounded: 400330 / 24000000 s is 16680417 ns."
+find = '    return (int64_t)llround((double)value * 1e9 / (double)scale);'
+replace = '    return (int64_t)((double)value * 1e9 / (double)scale);'
+
+[[mutant]]
+id = "mt-07"
+name = "10 bits on a backend that draws 8"
+test = "screen"
+why = "desc.color_depth 10 is METAL's; elsewhere open() must refuse it, not draw 8 bits silently."
+find = '    if (desc->color_depth == 10 && s->backend != YSCR_BACKEND_METAL && s->backend != YSCR_BACKEND_CUSTOM) {'
+replace = '    if (0) {'
+
+[[mutant]]
+id = "mt-08"
+name = "no wait on ANGLE's signal"
+test = "metal"
+why = "ANGLE's queue and the header's are two: without the wait on the shared event, the header's command buffer reads frames ANGLE has not finished (2 to 5 of 120 under GPU load, docs/screen_macos_probe.md)."
+find = '        if (sync) YSCR__MSG(void, yscr__id, void*, yscr__id, uint64_t)(cb, yscr__mac.encodeWait, m->event, req->present_id);'
+replace = ''
+
+[[mutant]]
+id = "mt-09"
+name = "codes compared as raw pixels"
+test = "metal"
+why = "A read-back pixel is in the layer's format; it must be turned back into a code before the comparison."
+find = '            if (yscr__mtl_code_of(row[x + k], m->bits10) != want) bad = 1;'
+replace = '            if (row[x + k] != want) bad = 1;'
+
+[[mutant]]
+id = "mt-10"
+name = "the pbuffer cache misses every frame"
+test = "metal"
+why = "One pbuffer per drawable IOSurface, kept: the layer cycles 3 or 4, and a pbuffer made per frame churns ANGLE's surfaces (the describe line's pbuffers count)."
+find = '        if (m->key[k] == ios && m->pb[k]) { m->used[k] = ++m->use; return m->pb[k]; }'
+replace = ''
+
+[[mutant]]
+id = "mt-11"
+name = "one frame in flight"
+test = "screen"
+why = "The presented handler comes about 0.5 ms after its vblank and a commit needs a period and about 1 ms before its own: waiting for the frame before shows every other vblank (measured, v0.11.1)."
+find = '#define YSCR__MTL_IN_FLIGHT 2'
+replace = '#define YSCR__MTL_IN_FLIGHT 1'
+
+[[mutant]]
+id = "mt-12"
+name = "the presenter's margin ignored"
+test = "screen"
+why = "A commit made in the last part of a period misses the vblank two later unless the core plans it one later (caps.margin_ns, v0.11.1)."
+find = '    if (s->caps.margin_ns > s->margin_ns) s->margin_ns = s->caps.margin_ns;'
+replace = ''
+
+[[mutant]]
+id = "mt-13"
+name = "METAL's margin of 1 ms"
+test = "screen"
+why = "Core Animation's deadline was up to 1.18 ms past one period and the present call up to 0.45 ms at p99: the margin must cover both (v0.11.1)."
+find = '#define YSCR__MTL_MARGIN_NS 2000000'
+replace = '#define YSCR__MTL_MARGIN_NS 1000000'
+
+# v0.13.0's 3 (mt-14 to mt-16, a variable refresh mode refused on METAL).
+[[mutant]]
+id = "mt-14"
+name = "a variable mode taken as fixed"
+test = "screen"
+why = "NSScreen's refresh intervals apart mean ProMotion or Adaptive-Sync varies the refresh: the core's fixed grid would be wrong for every flip (v0.13.0, VARIABLE REFRESH)."
+find = '    return (double)(max_ns - min_ns) > 0.001 * (double)min_ns;'
+replace = '    return 0;'
+
+[[mutant]]
+id = "mt-15"
+name = "rounding taken as a variable mode"
+test = "screen"
+why = "A fixed mode's two intervals can differ in the last digits; only a gap over 0.1% is a variable mode, or a fixed display is refused."
+find = '    return (double)(max_ns - min_ns) > 0.001 * (double)min_ns;'
+replace = '    return max_ns != min_ns;'
+
+[[mutant]]
+id = "mt-16"
+name = "open() does not refuse a variable mode"
+test = "metal"
+why = "The METAL presenter must refuse a display in a variable refresh mode at open, as desc.vrr is refused, and say how to set a fixed rate (v0.13.0)."
+find = '    if (yscr__mtl_variable(m->min_iv_ns, m->max_iv_ns)) {'
+replace = '    if (0) {'
+
+# v0.13.1's 2 (mt-17, mt-18: the period from CADisplayLink).
+[[mutant]]
+id = "mt-17"
+name = "the link's nominal duration as the period"
+test = "screen"
+why = "CADisplayLink's duration is the nominal timing (16680417 ns on the M27Q); its timestamps step by the display's real period (16680375 ns), on presentedTime's grid (v0.13.1)."
+find = '    per = (int64_t)llround((double)span / (double)k);'
+replace = '    per = duration_ns;'
+
+[[mutant]]
+id = "mt-18"
+name = "open() skips CADisplayLink"
+test = "metal"
+why = "The period comes from CADisplayLink; CVDisplayLink (deprecated in macOS 15) is only for a link with no callback (v0.13.1, v0.14.0)."
+find = '    m->period_ns = yscr__mtl_link_read(m);'
+replace = '    m->period_ns = 0;'
+
+# v0.14.0's 3 (mt-19 to mt-21: the macOS 14 floor).
+[[mutant]]
+id = "mt-19"
+name = "open() does not refuse a system older than macOS 14"
+test = "metal"
+why = "macOS 14 is ysp's floor: on an older system METAL must refuse at open with a message that names it, not run untested code paths (v0.14.0)."
+find = '        if (!ok) {'
+replace = '        if (0) {'
+
+[[mutant]]
+id = "mt-20"
+name = "the version check asks for the wrong version"
+test = "metal"
+why = "The check must ask for 14.0 through NSProcessInfo; a wrong struct or version refuses a supported system, and only the real call shows it (v0.14.0)."
+find = '            yscr__osver v14 = { 14, 0, 0 };'
+replace = '            yscr__osver v14 = { 99, 0, 0 };'
+
+[[mutant]]
+id = "mt-21"
+name = "the describe line drops why CVDisplayLink was used"
+test = "metal"
+why = "The describe line names the period's source and why: CVDisplayLink only when CADisplayLink gave no callback, as with the display asleep (v0.14.0)."
+find = '"cvdisplaylink-no-callback",'
+replace = '"cvdisplaylink",'
+
+# v0.14.1's 2 (mt-22, mt-23: the first open's period).
+[[mutant]]
+id = "mt-22"
+name = "the first callback's timestamp kept"
+test = "screen"
+why = "In a process's first windowed open the first CADisplayLink timestamp is off the grid (15.8 to 25.2 ms before the second, 5 of 5 processes); kept, the open fell back to CVDisplayLink with callbacks in hand (v0.14.1)."
+find = '    span = ts[n - 1] - ts[1];'
+replace = '    span = ts[n - 1] - ts[0];'
+
+[[mutant]]
+id = "mt-23"
+name = "an off-grid link named as no callback"
+test = "metal"
+why = "The describe line says why CVDisplayLink was used: no callback, or callbacks whose steps are off the duration; the two cases need different fixes (v0.14.1)."
+find = '            if (m->period_ns > 0) m->period_src = yscr__mtl_link_n >= 3 ? YSCR__MTL_SRC_CV_GRID : YSCR__MTL_SRC_CV;'
+replace = '            if (m->period_ns > 0) m->period_src = YSCR__MTL_SRC_CV;'
+
+# v0.15.0's 4 (mt-24 to mt-27: NSEvent stamps for keys and mouse buttons).
+[[mutant]]
+id = "mt-24"
+name = "no offset test"
+test = "screen"
+why = "An NSEvent SDL did not deliver (a title-bar click, a key IME took) is older than the pair, so its offset is larger than SDL's; without the test it takes the next SDL event (v0.15.0)."
+find = '            if (st->have_d && d > st->d_last + YSCR__NSM_D_TOL_NS) { st->passed++; continue; }'
+replace = '            if (0) { st->passed++; continue; }'
+
+[[mutant]]
+id = "mt-25"
+name = "an NSEvent after SDL's stamp taken"
+test = "screen"
+why = "SDL's stamp is never before its NSEvent's (its offset is at least the shortest read delay), so a later NSEvent is not the pair (v0.15.0)."
+find = '        if (b < -YSCR__NSM_EPS_NS) break;'
+replace = '        if (0) break;'
+
+[[mutant]]
+id = "mt-26"
+name = "modifiers held to the offset test"
+test = "screen"
+why = "SDL 3.4 stamps a modifier key at the read, not with NSEvent.timestamp plus its offset, so the offset test would refuse every modifier (v0.15.0)."
+find = '        if (cls < YSCR__NSM_MOD) {'
+replace = '        if (1) {'
+
+[[mutant]]
+id = "mt-27"
+name = "yscr_event_input() without the NSEvent stamp"
+test = "metal"
+why = "On macOS a key or mouse button must carry NSEvent.timestamp, not SDL 3.4's stamp with its per-process offset (v0.15.0)."
+find = '            ctx.t_os = yscr__nsm_stamp_once(ev, t);'
+replace = '            ctx.t_os = 0;'
+
+# v0.16.0's 18 (mt-28 to mt-45: the panic watchdog, the gamma table, the
+# code risk state and raw mice on METAL; yscr_poll()'s NSEvent time).
+# metal_new runs the Metal test's v0.16.0 cases only (state, gamma,
+# rawmice, panic): about 1.5 min a mutant instead of 4.
+[test.metal_new]
+source = "tests/adapt/screen_metal_test.c"
+compiler = "gcc"
+flags = ["-std=c11", "-O1", "-w", "-fblocks", "-I/Users/brainworks/sdl3/include"]
+libs = ["-L/Users/brainworks/sdl3/lib", "-lSDL3", "-Wl,-rpath,/Users/brainworks/sdl3/lib", "-lm",
+        "-framework", "ApplicationServices", "-lobjc"]
+timeout = 300
+env_default = { YSCR_ANGLE_DIR = "/Users/brainworks/ysp-deps/angle-electron-43.8.3" }
+env = { YSCR_TEST_CASES = "new" }
+
+[[mutant]]
+id = "mt-28"
+name = "Esc's macOS key code off by one"
+test = "screen"
+why = "The panic's tap compares virtual key codes; Esc is kVK_Escape, 53 (v0.16.0)."
+find = '    if (scancode == 41) return 53;'
+replace = '    if (scancode == 41) return 54;'
+
+[[mutant]]
+id = "mt-29"
+name = "Shift read from the caps lock bit"
+test = "screen"
+why = "The abort combination needs Shift held: kCGEventFlagMaskShift is 0x20000; 0x10000 is caps lock (v0.16.0)."
+find = '    if (flags & 0x00020000u) m |= YSCR_MOD_SHIFT;'
+replace = '    if (flags & 0x00010000u) m |= YSCR_MOD_SHIFT;'
+
+[[mutant]]
+id = "mt-30"
+name = "the transfer table compared as floats"
+test = "screen"
+why = "Identity is the 8-bit identity, as on Windows: a table that rounds to every index at 8 bits shows codes unchanged; a float compare would set the table again for nothing (v0.16.0)."
+find = '        if (lrint((double)t[i] * 255.0) != lrint((double)i * 255.0 / (double)(n - 1))) return 0;'
+replace = '        if (t[i] != (float)i / (float)(n - 1)) return 0;'
+
+[[mutant]]
+id = "mt-31"
+name = "an EDR-capable display not a risk"
+test = "screen"
+why = "An XDR panel or an HDR mode maps SDR values into its range, so codes may change (v0.16.0)."
+find = '    else if (c->edr > 1.0 + 1e-6 || c->edr_potential > 1.0 + 1e-6 || c->wants_edr || c->colorspace == YSCR__CS_OTHER)'
+replace = '    else if (c->edr > 1.0 + 1e-6 || c->wants_edr || c->colorspace == YSCR__CS_OTHER)'
+
+[[mutant]]
+id = "mt-32"
+name = "a window the compositor scales not a risk"
+test = "screen"
+why = "Window pixels other than the mode's are scaled by the compositor even in the panel's own mode (v0.16.0)."
+find = '                              (c->win_w && (c->win_w != c->mode_w || c->win_h != c->mode_h))))'
+replace = '                              0))'
+
+[[mutant]]
+id = "mt-33"
+name = "no native mode read as not scaled"
+test = "screen"
+why = "With no mode flagged native the panel is unknown: STATE_UNKNOWN, not a quiet pass (v0.16.0)."
+find = '    if (!c->mode_w || !c->native_w) r |= YSCR_CODE_RISK_STATE_UNKNOWN;'
+replace = '    if (!c->mode_w) r |= YSCR_CODE_RISK_STATE_UNKNOWN;'
+
+[[mutant]]
+id = "mt-34"
+name = "two mice at one time stamp made one report"
+test = "screen"
+why = "Reports are per device: two mice's values with one time stamp are two reports (v0.16.0)."
+find = '    if (a->have && (a->device != device || a->t != t)) {'
+replace = '    if (a->have && (a->t != t)) {'
+
+[[mutant]]
+id = "mt-35"
+name = "HID buttons 2 and 3 swapped"
+test = "screen"
+why = "HID button 2 is the right button and 3 the middle, as RAWMOUSE's order (v0.16.0)."
+find = '''    static const uint8_t button[5] = { YSCR_MOUSE_LEFT, YSCR_MOUSE_RIGHT, YSCR_MOUSE_MIDDLE, YSCR_MOUSE_X1,
+                                       YSCR_MOUSE_X2 };
+    int closed = 0, used = 1;'''
+replace = '''    static const uint8_t button[5] = { YSCR_MOUSE_LEFT, YSCR_MOUSE_MIDDLE, YSCR_MOUSE_RIGHT, YSCR_MOUSE_X1,
+                                       YSCR_MOUSE_X2 };
+    int closed = 0, used = 1;'''
+
+[[mutant]]
+id = "mt-36"
+name = "the idle flush gives a report twice"
+test = "screen"
+why = "Each report reaches the bridge once (v0.16.0)."
+find = '''    if (!a->have) return 0;
+    *done = a->e;
+    a->have = 0;
+    return 1;'''
+replace = '''    if (!a->have) return 0;
+    *done = a->e;
+    return 1;'''
+
+[[mutant]]
+id = "mt-37"
+name = "an element the reader does not use opens a report"
+test = "screen"
+why = "A vendor element alone would push an empty report (v0.16.0)."
+find = '    if (used && !a->have) {'
+replace = '    if (!a->have) {'
+
+[[mutant]]
+id = "mt-38"
+name = "the layer keeps SDL's sRGB tag"
+test = "metal_new"
+why = "The layer came tagged sRGB, so ColorSync converted every value to the display's profile; nil means no color matching (v0.16.0)."
+find = '    YSCR__MSG(void, yscr__id, void*, void*)(m->layer, yscr__mac.sel("setColorspace:"), NULL);'
+replace = ''
+
+[[mutant]]
+id = "mt-39"
+name = "a key for another process counts"
+test = "metal_new"
+why = "The tap sees the session's keys; only keys the window server routes to this process count, as Windows' foreground check (v0.16.0)."
+find = '    if (target_pid != (int64_t)getpid()) return 0;'
+replace = ''
+
+[[mutant]]
+id = "mt-40"
+name = "the panic never releases"
+test = "metal_new"
+why = "While the main run loop answers (a loop that pumps outside begin()), the panic releases the display and the process lives, as with Windows' window thread (v0.16.0)."
+find = '    if (yscr__wd_alive() && yscr__mx.dispatch_async_f && yscr__mx.main_q) {'
+replace = '    if (0) {'
+
+[[mutant]]
+id = "mt-41"
+name = "a released METAL screen begins frames again"
+test = "metal_new"
+why = "After a release every begin() returns YSCR_QUIT with YSCR_ABORT_PANIC: the program may only close (v0.16.0)."
+find = '    return (s->wt || s->backend == YSCR_BACKEND_METAL) && yscr__a_load(&yscr__released);'
+replace = '    return s->wt && yscr__a_load(&yscr__released);'
+
+[[mutant]]
+id = "mt-42"
+name = "close leaves the identity table"
+test = "metal_new"
+why = "close() puts back the table it read (v0.16.0)."
+find = '''static void yscr__mtl_gamma_release(yscr_screen* s) {
+    int k, any = 0;
+    if (s->gamma_owned) yscr__gamma_restore(s->gamma_owned - 1);'''
+replace = '''static void yscr__mtl_gamma_release(yscr_screen* s) {
+    int k, any = 0;'''
+
+[[mutant]]
+id = "mt-43"
+name = "keep_os_gamma ignored"
+test = "metal_new"
+why = "desc.keep_os_gamma leaves a fullscreen screen's table alone (v0.16.0)."
+find = '    if (desc->windowed || desc->keep_os_gamma) { *word = "not-identity(kept)"; return 0; }'
+replace = '    if (desc->windowed) { *word = "not-identity(kept)"; return 0; }'
+
+[[mutant]]
+id = "mt-44"
+name = "the reader's mice not logged at open"
+test = "metal_new"
+why = "The reader's mice are YSCR_EV_DEVICE records at open, so their reports carry no YIN_UNLISTED (v0.16.0)."
+find = '''    s->rm_frames = -1;
+    yscr__rm_devices(s, &s->rm_frames, YSCR_DEV_PRESENT);'''
+replace = '''    s->rm_frames = -1;'''
+
+[[mutant]]
+id = "mt-45"
+name = "yscr_poll() keeps SDL's time on macOS"
+test = "metal"
+why = "yscr_poll() gives a key or mouse button the NSEvent time yscr_event_input() gives it (v0.16.0)."
+find = '            if (t_os) *t_rt = t_os;'
+replace = '            (void)t_os;'
+
+# v0.16.1's 3 (mt-46 to mt-48: stale raw mouse values on macOS).
+[[mutant]]
+id = "mt-46"
+name = "values from before the reader's start kept"
+test = "screen"
+why = "IOKit gave cached element values dated 43.5 to 44.0 s before the open (a hand run); they are no report of now (v0.16.1)."
+find = '    return t < t_start || (newest && t < newest);'
+replace = '    return (newest && t < newest);'
+
+[[mutant]]
+id = "mt-47"
+name = "values older than their device's newest kept"
+test = "screen"
+why = "A device's reports come in order and the values of one report share a stamp, so an older stamp is a cached value (v0.16.1)."
+find = '    return t < t_start || (newest && t < newest);'
+replace = '    return t < t_start;'
+
+[[mutant]]
+id = "mt-48"
+name = "the reader's start not taken"
+test = "metal_new"
+why = "The stale rule needs the time just before IOHIDManagerOpen; with 0 a value 44 s old passes (v0.16.1)."
+find = '        yscr__rm.t_start = yscr__now();'
+replace = ''
+
+# v0.16.1, after the hand runs of 17:07 and 17:08: relative zeros (mt-49, mt-50).
+[[mutant]]
+id = "mt-49"
+name = "an absolute 0 dropped as empty"
+test = "screen"
+why = "A relative element at 0 says nothing; an absolute axis at 0 is a position (v0.16.1)."
+find = 'static int yscr__hid_empty(int relative, int64_t v) { return relative && v == 0; }'
+replace = 'static int yscr__hid_empty(int relative, int64_t v) { (void)relative; return v == 0; }'
+
+[[mutant]]
+id = "mt-50"
+name = "relative zeros kept"
+test = "metal_new"
+why = "IOKit calls back with a relative element's 0 dated its last change (the wheel's 12 to 44 s back, X's and Y's the report before); kept, one opened a report dated the last report before a pause, up to 72 ms late (v0.16.1)."
+find = '''    if (yscr__hid_empty(relative, v)) {
+        YSCR__RM_VALUE(page, usage, v, t, YSCR__RM_EMPTY);'''
+replace = '''    if (0) {
+        YSCR__RM_VALUE(page, usage, v, t, YSCR__RM_EMPTY);'''

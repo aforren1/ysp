@@ -14,6 +14,20 @@
  * wording (forward scans, per-level last positions), not a copy of the
  * header's backward-looking test, so the two can disagree.
  */
+#if defined(__APPLE__)
+/* YTR_FLUSH_SYNC's F_FULLFSYNC, counted. With g_fullfsync_refuse set the
+ * volume refuses it, as a network volume does, and the writer must fall
+ * back to fsync(). */
+#include <errno.h>
+#include <fcntl.h>
+static int g_fullfsync_calls, g_fullfsync_refuse;
+static int test_fullfsync(int fd) {
+    g_fullfsync_calls++;
+    if (g_fullfsync_refuse) { errno = ENOTSUP; return -1; }
+    return fcntl(fd, F_FULLFSYNC);
+}
+#define YTR__FULLFSYNC(fd) test_fullfsync(fd)
+#endif
 #define YSP_TRIALS_IMPLEMENTATION
 #include "ysp/trials.h"
 
@@ -250,7 +264,7 @@ static void test_version(void) {
              YTR_VERSION_MAJOR, YTR_VERSION_MINOR, YTR_VERSION_PATCH);
     CHECK(strcmp(YTR_VERSION_STRING, want) == 0);
     CHECK(strcmp(ytr_version(), YTR_VERSION_STRING) == 0);
-    CHECK(strcmp(ytr_version(), "0.6.0") == 0);
+    CHECK(strcmp(ytr_version(), "0.6.1") == 0);
 }
 
 /* splitmix64 from seed 0: the reference's first two outputs are
@@ -1798,7 +1812,7 @@ static void test_format(void) {
     CHECK_I(ytr_format_row(&g_t, 3, NULL, 0), n);
 
     n = ytr_format_meta(&g_t, buf, sizeof(buf));
-    CHECK_S(buf, "ysp_trials=0.6.0 conditions=6 factors=3 levels=2x3x1 reps=1 "
+    CHECK_S(buf, "ysp_trials=0.6.1 conditions=6 factors=3 levels=2x3x1 reps=1 "
                  "order=sequential constraints= max_swaps=100000 swaps=0 span_blocks=0 "
                  "tracks=1 interleave=random weights=1 track_rate=1 block_size=0 "
                  "practice=1 warmup=0 warmup_conditions= requeue_gap=0 record_size=8 "

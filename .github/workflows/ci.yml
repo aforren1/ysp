@@ -10,6 +10,13 @@ on:
 permissions:
   contents: read
 
+# macOS 14 is ysp's floor (README). Without a target, macos-latest builds
+# for its own newer macOS and code that needs an API after 14 passes;
+# with it, clang's availability warnings (errors under -Werror) catch it.
+# CMake and cibuildwheel read this too; Linux and Windows ignore it.
+env:
+  MACOSX_DEPLOYMENT_TARGET: "14.0"
+
 jobs:
   # --------------------------------------------------------------------- #
   # Headers: CMake builds every registered header's compile checks (C11,  #
@@ -588,8 +595,9 @@ jobs:
 
   # --------------------------------------------------------------------- #
   # ysp-vis (docs/bindings.md): ysp/screen.h, ysp/gfx.h and ysp/video.h   #
-  # in one Python extension and one MEX core, Windows only (the other     #
-  # screen backends are stubs). The natives come from tools/vendor_vis.py #
+  # in one Python extension and one MEX core, Windows here and macOS      #
+  # arm64 in vis-macos below (the X11 and Wayland screen backends are     #
+  # stubs). The natives come from tools/vendor_vis.py                     #
   # (a static SDL3 built from the 3.4.0 tarball, ANGLE from the Electron  #
   # zip of the screen job; every download checked by SHA-256; the text    #
   # layout as static libraries from third_party/'s pinned trees), cached  #
@@ -629,7 +637,7 @@ jobs:
           path: |
             ~/ysp-vis-downloads
             third_party/vis
-          key: vis-natives-${{ hashFiles('tools/vendor_vis.py', 'tools/vis_layout/CMakeLists.txt', 'third_party/CMakeLists.txt', 'third_party/MANIFEST.sha256', 'third_party/patches/*', 'pack/layout.c', 'pack/ysp/layout.h', 'include/ysp/outline.h') }}-v2
+          key: vis-natives-${{ hashFiles('tools/vendor_vis.py', 'tools/vis_layout/CMakeLists.txt', 'third_party/CMakeLists.txt', 'third_party/MANIFEST.sha256', 'third_party/patches/*', 'pack/layout.c', 'pack/ysp/layout.h', 'include/ysp/outline.h') }}-macos${{ env.MACOSX_DEPLOYMENT_TARGET }}-v2
 
       - name: Natives (static SDL3 and text layout with MSVC; ANGLE from the Electron zip; pl_mpeg)
         if: steps.viscache.outputs.cache-hit != 'true'
@@ -691,6 +699,95 @@ jobs:
             bindings/mex/ysp_*.mexw64
             bindings/mex/libEGL.dll
             bindings/mex/libGLESv2.dll
+            bindings/mex/ysp_vis-LICENSE.*.txt
+
+  # --------------------------------------------------------------------- #
+  # ysp-vis on macOS arm64 (the METAL backend). tools/vendor_vis.py       #
+  # builds the static SDL3 3.4.0 and the text layout with Apple clang for #
+  # MACOSX_DEPLOYMENT_TARGET 14.0 and takes ANGLE's two dylibs, unchanged #
+  # and checked by SHA-256, from the Electron 43.8.3 zip for              #
+  # darwin-arm64. The wheel's tests and the MEX tests run on the          #
+  # simulated display: a hosted runner has no display worth a window run, #
+  # and ANGLE's Metal back end was only run on an M2 Mac mini             #
+  # (docs/bindings.md, ysp-vis). The MEX calls run on the main thread     #
+  # through MATLAB's run loop (bindings/mex/ysp_vis.c, MAIN THREAD), in   #
+  # -batch here. Nothing here is a timing claim.                          #
+  # --------------------------------------------------------------------- #
+  vis-macos:
+    name: ysp-vis (macOS arm64)
+    runs-on: macos-latest
+    env:
+      MLM_LICENSE_TOKEN: ${{ secrets.MLM_LICENSE_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Layout sources cache
+        uses: actions/cache@v6
+        with:
+          path: ~/ysp-layout-tarballs
+          key: layout-${{ hashFiles('third_party/MANIFEST.sha256', 'third_party/patches/*', 'tools/vendor_layout.py') }}
+
+      - name: Layout sources
+        run: python3 tools/vendor_layout.py --write --cache ~/ysp-layout-tarballs
+
+      - name: Natives cache
+        id: viscache
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/ysp-vis-downloads
+            third_party/vis
+          key: vis-natives-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tools/vendor_vis.py', 'tools/vis_layout/CMakeLists.txt', 'third_party/CMakeLists.txt', 'third_party/MANIFEST.sha256', 'third_party/patches/*', 'pack/layout.c', 'pack/ysp/layout.h', 'include/ysp/outline.h') }}-macos${{ env.MACOSX_DEPLOYMENT_TARGET }}-v1
+
+      - name: Natives (static SDL3 and text layout with Apple clang; ANGLE from the Electron zip; pl_mpeg)
+        if: steps.viscache.outputs.cache-hit != 'true'
+        run: python3 tools/vendor_vis.py --write --angle --sdl clang --pl-mpeg --layout clang --cache ~/ysp-vis-downloads
+
+      # The dylibs again by SHA-256, cached or not.
+      - name: Natives check
+        run: python3 tools/vendor_vis.py
+
+      - name: Stage headers and natives
+        run: |
+          set -eu
+          for p in ysp_vis ysp_audio ysp_timeline ysp_color; do
+            d=bindings/python/$p/include
+            mkdir -p $d/ysp $d/share && cp include/ysp/*.h $d/ysp/ && cp bindings/share/*.h $d/share/
+          done
+          curl -sSfL -o bindings/python/ysp_audio/include/miniaudio.h https://raw.githubusercontent.com/mackron/miniaudio/0.11.25/miniaudio.h
+          echo "ac7af4de748b7e26b777f37e01cee313a308a7296a3eb080e2906b320cc55c89  bindings/python/ysp_audio/include/miniaudio.h" | shasum -a 256 -c -
+          mkdir -p bindings/mex/miniaudio && cp bindings/python/ysp_audio/include/miniaudio.h bindings/mex/miniaudio/
+          mkdir -p bindings/python/ysp_vis/natives && cp -r third_party/vis/angle third_party/vis/sdl3 third_party/vis/pl_mpeg third_party/vis/layout bindings/python/ysp_vis/natives/
+
+      - name: Build & test the wheel (simulated display)
+        uses: pypa/cibuildwheel@v4.1.0
+        with:
+          package-dir: bindings/python/ysp_vis
+          output-dir: wheelhouse
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: wheels-ysp_vis-macos-arm64
+          path: wheelhouse/*.whl
+
+      - name: Set up MATLAB
+        uses: matlab-actions/setup-matlab@v3
+
+      - name: MEX build and test (simulated display)
+        uses: matlab-actions/run-command@v3
+        with:
+          command: |
+            cd('bindings/mex');
+            build('audio'); build('timeline'); build('vis'); build('screen'); build('gfx'); build('video');
+            test_mex_vis; test_mex_vis_gfx; test_mex_video
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: matlab-mex-ysp-vis-macos-arm64
+          path: |
+            bindings/mex/ysp_*.mexmaca64
+            bindings/mex/libEGL.dylib
+            bindings/mex/libGLESv2.dylib
             bindings/mex/ysp_vis-LICENSE.*.txt
 
   # --------------------------------------------------------------------- #
@@ -1063,7 +1160,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/sdl3
-          key: sdl3-${{ env.SDL_VERSION }}-${{ runner.os }}-${{ runner.arch }}-v1
+          key: sdl3-${{ env.SDL_VERSION }}-${{ runner.os }}-${{ runner.arch }}-macos${{ env.MACOSX_DEPLOYMENT_TARGET }}-v1
 
       # A console build on Linux: the checks and the simulated display need no
       # X11 or Wayland, and the runner has neither's development packages.
@@ -1127,7 +1224,7 @@ jobs:
       # out of this list is compiled nowhere on CI. ctest below runs every
       # test that matches its pattern, built or not.
       - name: Build
-        run: cmake --build build --config Release --target compile_screen_c compile_screen_cxx compile_screen_com compile_screen_glx compile_audio_pulse test_screen test_screen_window screen_hello screen_flipstats screen_input screen_abort screen_gamma screen_sync_check screen_loopback compile_gfx_c compile_gfx_cxx test_gfx gfx_hello gfx_trial gfx_load gfx_calib gfx_bench gfx_gallery gfx_text gfx_gratings gfx_luminance_bits gfx_clut_sync gfx_filtered_noise gfx_gaze_contingent gfx_capture gfx_rdk gfx_rdk_bench trial_rdk compile_video_c compile_video_cxx compile_video_com compile_order_audio_screen_c compile_order_audio_screen_cxx compile_order_screen_audio_c compile_order_screen_audio_cxx compile_share_shims_c compile_share_shims_cxx test_video video_play video_bench video_check test_response_sdl test_input_sdl trial_keyboard trial_same_different trial_srt trial_adjustment trial_mouse_tracking trial_audio_keyboard trial_stop_signal trial_sternberg trial_2afc_adaptive trial_two_keyboards trial_eeg_triggers response_lag trial_scanner_sync gfx_gamma_null trial_movie color_patch audio_av_sync web_tutorial web_rdk_staircase web_selftest web_av_sync
+        run: cmake --build build --config Release --target compile_screen_c compile_screen_cxx compile_screen_com compile_screen_glx compile_audio_pulse test_screen test_screen_window screen_hello screen_flipstats screen_input screen_abort screen_gamma screen_sync_check screen_loopback compile_gfx_c compile_gfx_cxx test_gfx gfx_hello gfx_trial gfx_load gfx_calib gfx_bench gfx_gallery gfx_text gfx_gratings gfx_luminance_bits gfx_clut_sync gfx_filtered_noise gfx_gaze_contingent gfx_capture gfx_rdk gfx_rdk_bench trial_rdk compile_video_c compile_video_cxx compile_video_com compile_video_avf compile_order_audio_screen_c compile_order_audio_screen_cxx compile_order_screen_audio_c compile_order_screen_audio_cxx compile_share_shims_c compile_share_shims_cxx test_video video_play video_bench video_check test_response_sdl test_input_sdl trial_keyboard trial_same_different trial_srt trial_adjustment trial_mouse_tracking trial_audio_keyboard trial_stop_signal trial_sternberg trial_2afc_adaptive trial_two_keyboards trial_eeg_triggers response_lag trial_scanner_sync gfx_gamma_null trial_movie color_patch audio_av_sync web_tutorial web_rdk_staircase web_selftest web_av_sync
 
       # ysp/gfx.h's pixel checks must run where software GL exists; macOS has
       # no EGL, so its test runs the CPU checks only.

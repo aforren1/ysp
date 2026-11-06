@@ -1,0 +1,21 @@
+main thread QoS class 0x21, timebase 125/3
+yrt_sleep_until, spin 0         1 ms: late min   256.5, median   265.6, p90   268.8, max   291.1 us
+yrt_sleep_until, spin 0         2 ms: late min   274.7, median   516.2, p90   529.2, max   539.3 us
+yrt_sleep_until, spin 0         5 ms: late min   404.4, median  1266.8, p90  1276.3, max  1295.2 us
+yrt_sleep_until, spin 0        10 ms: late min   600.1, median  2517.3, p90  2529.8, max  2547.5 us
+yrt_sleep_until, spin 200 us    1 ms: late min     9.7, median    15.4, p90    19.2, max    29.2 us
+yrt_sleep_until, spin 200 us    2 ms: late min     0.1, median   266.0, p90   277.4, max   301.7 us
+yrt_sleep_until, spin 200 us    5 ms: late min     0.1, median  1016.6, p90  1027.6, max  1039.9 us
+yrt_sleep_until, spin 200 us   10 ms: late min     0.1, median  2267.8, p90  2280.1, max  2293.2 us
+mach_wait_until                 1 ms: late min    62.9, median   263.3, p90   271.0, max   283.9 us
+mach_wait_until                 2 ms: late min   403.0, median   513.5, p90   522.7, max   541.7 us
+mach_wait_until                 5 ms: late min    42.2, median  1266.1, p90  1279.4, max  1289.2 us
+mach_wait_until                10 ms: late min   117.3, median  2515.5, p90  2528.8, max  2604.7 us
+kevent NOTE_CRITICAL            1 ms: late min    19.9, median    33.9, p90    50.3, max    66.4 us
+kevent NOTE_CRITICAL            2 ms: late min    16.3, median    35.8, p90    56.8, max   311.8 us
+kevent NOTE_CRITICAL            5 ms: late min    17.1, median    35.4, p90    52.7, max    76.7 us
+kevent NOTE_CRITICAL           10 ms: late min    16.8, median    37.8, p90    58.0, max  9280.7 us
+nanosleep, USER_INTERACTIVE     1 ms: late min    51.8, median   264.8, p90   274.6, max   434.6 us
+nanosleep, USER_INTERACTIVE     2 ms: late min   404.2, median   514.2, p90   519.3, max   521.8 us
+nanosleep, USER_INTERACTIVE     5 ms: late min    26.0, median  1267.4, p90  1277.8, max  1306.4 us
+nanosleep, USER_INTERACTIVE    10 ms: late min   190.5, median  2519.8, p90  2550.2, max  2567.5 us
