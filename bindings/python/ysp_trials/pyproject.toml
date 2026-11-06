@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ysp-trials"
-version = "0.6.1.1"  # ysp/trials.h v0.6.1, binding change 1 (the CPython 3.10 floor); tests/test_trials.py checks it against __version__
+version = "0.7.0.1"  # ysp/trials.h v0.6.1, binding change 1 (the CPython 3.10 floor); tests/test_trials.py checks it against __version__
 description = "Trial sequencing for psychophysics: orders, constraints, interleaved adaptive tracks"
 readme = "README.md"
 requires-python = ">=3.10"
