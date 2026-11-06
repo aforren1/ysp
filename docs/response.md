@@ -354,6 +354,10 @@ The onset is the device-clock fit's time, tier 2 at best (ysp/audio.h).
 
 Add a trace (`desc.trace`, `desc.trace_cap`) to keep every sample of
 the window for a mouse-tracking or drawing task.
+`examples/response/trial_copying.c` keeps a drawn stroke this way, from
+a mouse, raw mice or a pen. For what a pen sends (pressure and tilt are
+events of their own) and how it is stamped, see
+[input.md, "Drawing tablets (pens)"](input.md#drawing-tablets-pens).
 
 ### Check that your keyboard reports each key once
 
