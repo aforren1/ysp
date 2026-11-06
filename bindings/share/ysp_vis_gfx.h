@@ -652,7 +652,7 @@ static int yv_attr_set(yv_stim* st, const yv_attr* a, const double* v, int n, in
     case YV_A_ENUM: {
         double d;
         int rc;
-        if (n != 1 || (d = v[0]) != floor(d)) return yv_fail(err, cap, YGFX_ERR_ARG, "%s: a name, or its integer value", a->name);
+        if (n != 1 || (d = v[0], d != floor(d))) return yv_fail(err, cap, YGFX_ERR_ARG, "%s: a name, or its integer value", a->name);
         rc = ygfx_enum_set(&st->s, a->row, (int)d);
         if (rc < 0) return yv_fail(err, cap, YGFX_ERR_ARG, "%s: %d is not one of its values for this stimulus", a->name, (int)d);
         return 0;

@@ -34,6 +34,22 @@
 #include "ysp/input.h"
 #include "ysp/timeline.h"
 #include "ysp/screen.h"
+#if defined(__APPLE__)
+/* The F_FULLFSYNC of session.json.tmp and of the folder, counted apart.
+ * With g_full_refuse set the volume refuses it, as a network volume does,
+ * and the writer must fall back to fsync(). */
+#include <errno.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+static int g_full_file, g_full_dir, g_full_refuse;
+static int test_fullfsync(int fd) {
+    struct stat st;
+    if (fstat(fd, &st) == 0 && S_ISDIR(st.st_mode)) g_full_dir++; else g_full_file++;
+    if (g_full_refuse) { errno = ENOTSUP; return -1; }
+    return fcntl(fd, F_FULLFSYNC);
+}
+#define YDS__FULLFSYNC(fd) test_fullfsync(fd)
+#endif
 #define YSP_DATASET_IMPLEMENTATION
 #include "ysp/dataset.h"
 
@@ -1166,6 +1182,31 @@ static void test_trials_v06(void) {
     ytr_close(&g_tr);
 }
 
+#if defined(__APPLE__)
+/* v0.2.1: each rewrite of session.json syncs the file and then the folder
+ * with F_FULLFSYNC; a volume that refuses it still gets the session. */
+static void test_fullfsync_calls(void) {
+    int dots, refuse;
+    for (refuse = 0; refuse < 2; refuse++) {
+        const char* s;
+        g_full_file = g_full_dir = 0;
+        g_full_refuse = refuse;
+        CHECK(open_set(&g_ds, refuse ? WORK "/full_refused" : WORK "/full", true, YTR_FLUSH_ROW));
+        CHECK(g_full_file >= 1);
+        CHECK_I(g_full_dir, g_full_file);
+        write_rows(&g_ds, &dots, 1);
+        CHECK_I(yds_finish(&g_ds), 0);
+        CHECK(g_full_file >= 2);
+        CHECK_I(g_full_dir, g_full_file);
+        yds_close(&g_ds);
+        s = read_file(0, refuse ? WORK "/full_refused/session.json" : WORK "/full/session.json");
+        CHECK_HAS(s, "\"closed\": true");
+    }
+    g_full_refuse = 0;
+    printf("  F_FULLFSYNC: file and folder at each rewrite; fsync() when refused\n");
+}
+#endif
+
 int main(int argc, char** argv) {
     bool print = argc > 1 && strcmp(argv[1], "--golden") == 0;
     if (argc > 2 && strcmp(argv[1], "--crash-child") == 0) return crash_child(argv[2]);
@@ -1179,6 +1220,9 @@ int main(int argc, char** argv) {
     test_refusals();
     test_atomic();
     test_variants();
+#if defined(__APPLE__)
+    test_fullfsync_calls();
+#endif
     test_trials_v06();
     if (g_failures == 0) rm_tree(WORK);
     yjs_arena_free(&g_a);

@@ -66,7 +66,7 @@ other machines, run nothing else while measuring.
 
 ## Linux X11 work
 
-`ysp/screen.h` v0.11.0 has the GLX backend (`YSCR_BACKEND_GLX_OML`;
+`ysp/screen.h` v0.17.0 has the GLX backend (`YSCR_BACKEND_GLX_OML`;
 design and numbers in `docs/screen.md`, "Linux X11: GLX_OML"; its basis
 in `docs/screen_x11_probe.md` section 5). Wayland is a stub. On a new
 rig, run the probe first (`sh tests/probe/screen_x11/run.sh` from the

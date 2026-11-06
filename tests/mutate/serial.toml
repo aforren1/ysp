@@ -1,0 +1,46 @@
+# ysp/serial.h mutants that tests/adapt/serial_test.c (a pseudo-terminal)
+# can see. The pulse rule's mutants are in device.toml (dev-33 and on),
+# which reaches them through ysp/device.h.
+header = "ysp/serial.h"
+
+[test.serial]
+source = "tests/adapt/serial_test.c"
+compiler = "gcc"
+flags = ["-std=c11", "-O2", "-w"]
+libs = []
+timeout = 60
+
+# v0.6.3: desc.exclusive on macOS (docs/serial.md, "macOS on a
+# pseudo-terminal pair").
+
+[[mutant]]
+id = "ser-01"
+name = "exclusive is TIOCEXCL alone on macOS"
+test = "serial"
+platform = "darwin"
+why = "A second exclusive open of the same port succeeds: two programs write one trigger line."
+find = '''    if (d->exclusive && flock(p->fd, LOCK_EX | LOCK_NB) != 0 && errno == EWOULDBLOCK) {'''
+replace = '''    if (0) {'''
+
+# v0.7.0: yser_close() clears TIOCEXCL. Linux keeps the mode until the
+# tty's last close, and the test's pseudo-terminal master keeps the tty
+# open, so the reopen after the close sees it. macOS let the reopen
+# through either way: these mutants live on Linux only.
+
+[[mutant]]
+id = "ser-02"
+name = "the close leaves TIOCEXCL set"
+test = "serial"
+platform = "linux"
+why = "After an exclusive handle closes, every open of the port fails with EBUSY while another descriptor (ModemManager) holds the tty."
+find = '''    if (p->fd >= 0 && p->exclusive) (void)ioctl(p->fd, TIOCNXCL);'''
+replace = ''''''
+
+[[mutant]]
+id = "ser-03"
+name = "the handle never records that it set TIOCEXCL"
+test = "serial"
+platform = "linux"
+why = "The close skips TIOCNXCL, so the port stays exclusive after it closes."
+find = '''    p->exclusive = d->exclusive;'''
+replace = '''    p->exclusive = false;'''

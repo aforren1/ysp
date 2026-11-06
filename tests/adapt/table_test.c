@@ -150,7 +150,7 @@ static void rand_decimal(char* buf) {
     }
     if (rnd(2)) {
         int e = rnd(700) - 360;
-        k += sprintf(buf + k, "%c%d", rnd(2) ? 'e' : 'E', e);
+        k += snprintf(buf + k, 16, "%c%d", rnd(2) ? 'e' : 'E', e);   /* an int and its letter */
     }
     buf[k] = '\0';
 }
@@ -192,7 +192,7 @@ static void check_numbers(void) {
             int sh = rnd(10), d = rnd(3) - 1;
             uint64_t h = ((2 * a + 1) << sh);
             if (h >= 10000000000000000000ULL) h >>= 1;
-            sprintf(buf, "%llu", (unsigned long long)(h + (uint64_t)(int64_t)d));
+            snprintf(buf, sizeof buf, "%llu", (unsigned long long)(h + (uint64_t)(int64_t)d));
             break;
         }
         case 3: {
@@ -203,7 +203,7 @@ static void check_numbers(void) {
             memcpy(&v, &u, sizeof(v));
             if (v != v || v == HUGE_VAL || v == -HUGE_VAL) v = 1.0;
             k = 13 + rnd(5);
-            sprintf(buf, "%.*e", k, v);
+            snprintf(buf, sizeof buf, "%.*e", k, v);
             break;
         }
         case 4: {
@@ -216,14 +216,14 @@ static void check_numbers(void) {
             u += (uint64_t)(rnd(5) - 2);
             memcpy(&v, &u, sizeof(v));
             if (v != v || v <= 0 || v == HUGE_VAL) v = 4.9406564584124654e-324;
-            sprintf(buf, "%.*e", 14 + rnd(4), v);
+            snprintf(buf, sizeof buf, "%.*e", 14 + rnd(4), v);
             break;
         }
         default: {
             /* Many digits around 19 and long zero runs. */
             int nd = 17 + rnd(4), j, p = 0;
             for (j = 0; j < nd; j++) buf[p++] = (char)('0' + (j == 0 ? 1 + rnd(9) : (rnd(3) ? 0 : rnd(10))));
-            p += sprintf(buf + p, "e%d", rnd(80) - 40);
+            p += snprintf(buf + p, sizeof buf - (size_t)p, "e%d", rnd(80) - 40);
             buf[p] = '\0';
             break;
         }
@@ -533,16 +533,16 @@ static void check_errors(void) {
     /* YTB_MAX_COLUMNS (256) columns fit, one more does not. */
     CHECK_I(YTB_MAX_COLUMNS, 256);
     k = 0;
-    for (i = 0; i < YTB_MAX_COLUMNS + 1; i++) k += sprintf(big + k, "%sc%d", i ? "," : "", i);
+    for (i = 0; i < YTB_MAX_COLUMNS + 1; i++) k += snprintf(big + k, sizeof big - (size_t)k, "%sc%d", i ? "," : "", i);
     big[k++] = '\n';
     big[k] = '\0';
     CHECK(!parse(&t, big, NULL));
     CHECK_HAS(ytb_error(&t), "more than 256 columns");
     k = 0;
-    for (i = 0; i < YTB_MAX_COLUMNS; i++) k += sprintf(big + k, "%sc%d", i ? "," : "", i);
-    k += sprintf(big + k, "\n");
-    for (i = 0; i < YTB_MAX_COLUMNS; i++) k += sprintf(big + k, "%s%d", i ? "," : "", i);
-    k += sprintf(big + k, "\n");
+    for (i = 0; i < YTB_MAX_COLUMNS; i++) k += snprintf(big + k, sizeof big - (size_t)k, "%sc%d", i ? "," : "", i);
+    k += snprintf(big + k, sizeof big - (size_t)k, "\n");
+    for (i = 0; i < YTB_MAX_COLUMNS; i++) k += snprintf(big + k, sizeof big - (size_t)k, "%s%d", i ? "," : "", i);
+    k += snprintf(big + k, sizeof big - (size_t)k, "\n");
     CHECK(parse(&t, big, NULL));
     CHECK_I(t.n_cols, YTB_MAX_COLUMNS);
     CHECK_I(ytb_int(&t, 0, YTB_MAX_COLUMNS - 1), YTB_MAX_COLUMNS - 1);
@@ -560,16 +560,16 @@ static void check_errors(void) {
     CHECK(!parse(&t, big, NULL));
     CHECK_HAS(ytb_error(&t), "is not a name");
     /* A field of 4096 bytes fits, 4097 does not, quoted or not. */
-    k = sprintf(big, "x\n");
+    k = snprintf(big, sizeof big, "x\n");
     memset(big + k, 'q', 4096);
     strcpy(big + k + 4096, "\n");
     CHECK(parse(&t, big, NULL));
-    k = sprintf(big, "x\n\"");
+    k = snprintf(big, sizeof big, "x\n\"");
     memset(big + k, 'q', 4097);
     strcpy(big + k + 4097, "\"\n");
     CHECK(!parse(&t, big, NULL));
     CHECK_HAS(ytb_error(&t), "a field of 4097 bytes (at most 4096)");
-    k = sprintf(big, "x\n\"");
+    k = snprintf(big, sizeof big, "x\n\"");
     for (i = 0; i < 2048; i++) { big[k++] = '"'; big[k++] = '"'; }
     strcpy(big + k, "\"\n");
     CHECK(parse(&t, big, NULL));
@@ -579,8 +579,8 @@ static void check_errors(void) {
 static void check_rows_bound(void) {
     static char buf[32769 * 8 + 64];
     ytb_table t;
-    int r, k = sprintf(buf, "n,m\n");
-    for (r = 0; r < YTB_MAX_ROWS; r++) k += sprintf(buf + k, "%d,%d\n", r, r % 7);
+    int r, k = snprintf(buf, sizeof buf, "n,m\n");
+    for (r = 0; r < YTB_MAX_ROWS; r++) k += snprintf(buf + k, sizeof buf - (size_t)k, "%d,%d\n", r, r % 7);
     CHECK(parse(&t, buf, NULL));
     CHECK_I(t.n_rows, YTB_MAX_ROWS);
     CHECK_I(ytb_n_levels(&t, 0), YTB_MAX_ROWS);
@@ -592,7 +592,7 @@ static void check_rows_bound(void) {
         const unsigned char* lb = ytb_level_bytes(&t, 0);
         CHECK(lb && (lb[600] | lb[601] << 8) == 300);
     }
-    sprintf(buf + k, "1,1\n");
+    snprintf(buf + k, sizeof buf - (size_t)k, "1,1\n");
     CHECK(!parse(&t, buf, NULL));
     CHECK_HAS(ytb_error(&t), "more than 32767 rows");
 }

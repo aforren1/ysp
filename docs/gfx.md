@@ -94,6 +94,16 @@ window confirmed it: a rect placed at the top-left showed at the window's
 top-left through GDI, with the same codes as `ygfx_read_output()`
 (140, 115, 102 for 0.55, 0.45, 0.40).
 
+v0.17.3 (2026-11-05): ysp/screen.h's METAL backend (v0.11.0) draws
+through ANGLE's pbuffer on the drawable's IOSurface
+(`EGL_ANGLE_iosurface_client_buffer`, ANGLE's Metal back end), and that
+pbuffer also puts GL's row 0 at the IOSurface's row 0, the top: a
+scissored clear of GL's row 0 read back as the IOSurface's first row
+(Apple M2, ANGLE from Electron 43.8.3). So the output stage writes the
+rows top-down on METAL too. No gfx frame has been drawn on macOS yet
+(the session was locked: docs/screen.md, "macOS: the header owns the
+CAMetalLayer").
+
 ## Coordinates
 
 The convention lives in one function, `ygfx__place()`, and its helpers.

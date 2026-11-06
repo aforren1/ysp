@@ -16,19 +16,23 @@
  * negative or NaN time is refused before the call. Records, frames and
  * events give the exact ns beside the seconds.
  *
- * THREADS: the window belongs to ysp/screen.h's window thread, so the host
- * may wait between trials for any time (time.sleep, input) without a hung
- * window. open, close, begin, flip, flip_at, wait_flip, the display lists
- * and the window calls release the GIL; a second thread's call on a Screen
- * meanwhile raises BusyError. No C thread takes the GIL: no Python callback
- * runs on one.
+ * THREADS: on Windows the window belongs to ysp/screen.h's window thread,
+ * so the host may wait between trials for any time (time.sleep, input)
+ * without a hung window. open, close, begin, flip, flip_at, wait_flip, the
+ * display lists and the window calls release the GIL; a second thread's
+ * call on a Screen meanwhile raises BusyError. No C thread takes the GIL: no
+ * Python callback runs on one. On macOS a window screen (METAL) and its gfx
+ * and movies run on the process's main thread only, which is the thread
+ * that runs a script: a call from another thread raises Error with the
+ * reason (yv_main_thread_refusal), before SDL or Cocoa sees it.
  *
  * SHARING: audio.h and timeline.h are declarations here; their calls go
  * through the tables of ysp.audio and ysp.timeline (bindings/share/), which
  * this module imports when it loads.
  *
- * NATIVES: SDL3 is linked statically; ANGLE's libEGL.dll and libGLESv2.dll
- * are beside this file, and desc.angle_dir is always this file's directory.
+ * NATIVES: SDL3 is linked statically; ANGLE's libEGL and libGLESv2 (.dll on
+ * Windows, .dylib on macOS) are beside this file, and desc.angle_dir is
+ * always this file's directory.
  */
 #ifndef Py_LIMITED_API
 #define Py_LIMITED_API 0x030A0000
@@ -314,10 +318,18 @@ static void vs_unlist(ScreenObject* o) {
     }
 }
 
+/* 0 with Error set when this thread may not call into the screen (macOS: a
+ * window screen's calls run on the main thread only). */
+static int sc_thread(ScreenObject* o) {
+    const char* r = o ? yv_screen_thread_refusal(o->v) : NULL;
+    if (r) { PyErr_SetString(VsError, r); return 0; }
+    return 1;
+}
+
 static int sc_ready(ScreenObject* o) {
     if (o->busy) { PyErr_SetString(VsBusyError, "ysp_screen: another thread is in a call on this Screen"); return 0; }
     if (!o->v || !o->v->open) { PyErr_SetString(VsClosedError, "ysp_screen: the screen is closed"); return 0; }
-    return 1;
+    return sc_thread(o);
 }
 
 static PyObject* sc_fail(ScreenObject* o, int code) {
@@ -339,8 +351,15 @@ static void Screen_dealloc(PyObject* self) {
     ScreenObject* o = SC_OF(self);
     PyTypeObject* tp = Py_TYPE(self);
     freefunc fr = (freefunc)PyType_GetSlot(tp, Py_tp_free);
-    sc_shut(o);
-    yv_free(o->v);
+    if (yv_screen_thread_refusal(o->v)) {
+        /* freed on another thread than the main one (macOS): closing here
+         * would touch Cocoa and GL off their thread, so the screen stays
+         * open until the process ends */
+        vs_unlist(o);
+    } else {
+        sc_shut(o);
+        yv_free(o->v);
+    }
     o->v = NULL;
     fr(self);
     Py_DECREF(tp);
@@ -423,6 +442,10 @@ static int Screen_init(PyObject* self, PyObject* args, PyObject* kw) {
         if (!strcmp(name, "gfx")) { gfx = val; continue; }
         if (sc_option(&d, name, val) < 0) return -1;
     }
+    {
+        const char* r = yv_main_thread_refusal(d.backend);
+        if (r) { PyErr_SetString(VsError, r); return -1; }
+    }
     o->v = (yv_screen*)calloc(1, sizeof(yv_screen));
     if (!o->v) { PyErr_NoMemory(); return -1; }
     if (gfx && gfx != Py_None && gfx != Py_False) {
@@ -450,6 +473,7 @@ static PyObject* Screen_close(PyObject* self, PyObject* unused) {
     ScreenObject* o = SC_OF(self);
     (void)unused;
     if (o->busy) { PyErr_SetString(VsBusyError, "ysp_screen: another thread is in a call on this Screen"); return NULL; }
+    if (!sc_thread(o)) return NULL;
     o->busy = 1;
     sc_shut(o);
     o->busy = 0;
@@ -644,13 +668,15 @@ static PyObject* Screen_caps(PyObject* self, PyObject* unused) {
     (void)unused;
     if (!sc_ready(o)) return NULL;
     yscr_get_caps(&o->v->s, &c);
-    return Py_BuildValue("{s:s,s:s,s:d,s:L,s:N,s:O,s:O,s:O,s:i,s:i,s:O}", "kind", vs_kind_name(c.kind), "backend",
-                         c.backend == YSCR_BACKEND_SIM ? "sim" : yv_value_name(yv_backends, c.backend), "period",
-                         yv_s(c.period_ns), "period_ns", (long long)c.period_ns, "mode", vs_mode(&c.mode),
+    return Py_BuildValue("{s:s,s:s,s:d,s:L,s:N,s:O,s:O,s:O,s:i,s:i,s:O,s:O,s:d,s:L}", "kind", vs_kind_name(c.kind),
+                         "backend", c.backend == YSCR_BACKEND_SIM ? "sim" : yv_value_name(yv_backends, c.backend),
+                         "period", yv_s(c.period_ns), "period_ns", (long long)c.period_ns, "mode", vs_mode(&c.mode),
                          "native_target", c.native_target ? Py_True : Py_False, "hw_onset",
                          c.hw_onset ? Py_True : Py_False, "vrr_capable", c.vrr_capable ? Py_True : Py_False,
                          "max_in_flight", (int)c.max_in_flight, "worst_tier", (int)c.worst_tier, "raw_keyboard",
-                         c.raw_keyboard ? Py_True : Py_False);
+                         c.raw_keyboard ? Py_True : Py_False, "os_input_stamps",
+                         c.os_input_stamps ? Py_True : Py_False, "margin", yv_s(c.margin_ns), "margin_ns",
+                         (long long)c.margin_ns);
 }
 
 static PyObject* Screen_settle(PyObject* self, PyObject* unused) {
@@ -774,11 +800,20 @@ static PyType_Spec Screen_spec = { "ysp.screen.Screen", sizeof(ScreenObject), 0,
 
 /* --- module functions ----------------------------------------------------------- */
 
+/* SDL's video calls of displays(), modes() and mode_multiple(): the main
+ * thread on macOS, as a window screen's. */
+static int m_thread(void) {
+    const char* r = yv_main_thread_refusal(YSCR_BACKEND_AUTO);
+    if (r) { PyErr_SetString(VsError, r); return 0; }
+    return 1;
+}
+
 static PyObject* m_displays(PyObject* m, PyObject* unused) {
     yscr_display_info d[16];
     int n, i;
     PyObject* list;
     (void)m;
+    if (!m_thread()) return NULL;
     (void)unused;
     Py_BEGIN_ALLOW_THREADS
     n = yscr_displays(d, 16);
@@ -812,6 +847,7 @@ static PyObject* m_modes(PyObject* m, PyObject* args, PyObject* kw) {
     PyObject* list;
     (void)m;
     if (!PyArg_ParseTupleAndKeywords(args, kw, "|I", kwlist, &disp)) return NULL;
+    if (!m_thread()) return NULL;
     Py_BEGIN_ALLOW_THREADS
     n = yscr_modes(disp, md, 256);
     Py_END_ALLOW_THREADS
@@ -834,6 +870,7 @@ static PyObject* m_mode_multiple(PyObject* m, PyObject* args, PyObject* kw) {
     yscr_mode out;
     (void)m;
     if (!PyArg_ParseTupleAndKeywords(args, kw, "i|iiidI", kwlist, &num, &den, &w, &h, &tol, &disp)) return NULL;
+    if (!m_thread()) return NULL;
     memset(&out, 0, sizeof out);
     Py_BEGIN_ALLOW_THREADS
     k = yscr_mode_multiple(disp, num, den, w, h, tol, &out, &err);

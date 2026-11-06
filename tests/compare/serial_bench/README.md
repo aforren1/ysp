@@ -238,18 +238,49 @@ A fourth argument `rev` runs the modes in reverse order, `rt` skips the
 streams. Run it twice, once with `rev`: the first mode of a run measured
 40 to 80 us slower than the same calls later in the run.
 
-`raw_posix.c` is the same floor on Linux (and other POSIX systems): `open`,
-termios, `read`, `write` and `poll`, in two ways (a blocking descriptor with
-VMIN 1; O_NONBLOCK with `poll`, as ysp/serial.h waits). Its stream probes
-are 2 to 3 ms apart, as the Python bench's are: 0 to 1 ms apart, all 200
-fell in one 200 ms bucket of the fit, which then had no slope.
-`raw_win32.c` still spaces them 0 to 1 ms apart; docs/serial.md, "Stream
-fits of the raw floors", says what that did to its committed runs.
+## The raw POSIX floor (macOS and Linux)
+
+`raw_posix.c` is the POSIX sibling of `raw_win32.c`: the same round trip,
+the same stream and the same metric names, with `open()`, termios, `write()`
+and `read()`. It has four floor modes: a blocking descriptor (`block`),
+`select()` (what ysp/serial.h does on macOS), `poll()` (what ysp/serial.h
+does on Linux; not on macOS, where poll(2) does not support devices) and
+`kevent()` (`kqueue`, macOS and the BSDs). A further mode, `ysp_c`, makes
+the same exchanges through ysp/serial.h, so the header and the floor share
+one program, one method and one clock (`yrt_now_ns()`). Build and run it:
 
 ```
-cc -O2 -Wall -o raw_posix raw_posix.c -lm
-./raw_posix /dev/ttyACM0 /tmp/raw-out 1000
+cc -O2 -Wall -I../../../include -o raw_posix raw_posix.c -lpthread -lm
+./raw_posix /dev/cu.usbmodemNNN /tmp/raw-out 1000     # macOS
+./raw_posix /dev/ttyACM0 /tmp/raw-out 1000            # Linux
 ```
+
+The arguments are the same as for `raw_win32`.
+
+The stream probes of `raw_posix.c` are 2 to 3 ms apart, as the Python
+bench's are. At 0 to 1 ms apart, all 200 fell in one 200 ms bucket of the
+fit, which then had no slope. The macOS runs of 2026-11-05 and
+`raw_win32.c` used 0 to 1 ms; docs/serial.md, "Stream fits of the raw
+floors", says what that did to their committed runs.
+
+The Linux runs of 2026-10-12 used an earlier, Linux-only `raw_posix.c`. Its
+`block` mode set VMIN 1 and VTIME 0 and waited in `poll()` before each
+`read()`; it had no `select` or `ysp_c` mode.
+
+## The whole set on macOS
+
+`tests/compare/serial_macos.sh` builds `raw_posix`, the pulse benches of
+`tests/compare/serial_pulse/` and the MEX binding, checks the board, and runs
+`raw_posix`, this bench, `pulse_bench` and `device_pulse`, each twice in
+opposite orders. From the repository root, on a quiet machine:
+
+```
+sh tests/compare/serial_macos.sh
+```
+
+Give `quick` for a functional run with small counts (about 2 minutes); its
+numbers are not results. The comment at the top of the script gives the
+other options and the output folder.
 
 ## Limits
 

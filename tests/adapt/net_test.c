@@ -1204,6 +1204,39 @@ static void test_wait(void) {
     printf("  the wait for RUNNING: running, closed, a wrong stream, nobody: ok\n");
 }
 
+/* v0.3.2: a TEXT record whose "<what> " leaves less than 34 characters
+ * of room stepped 34 on anyway and lost the rest. The outlet's key, read
+ * back from its "outlet" records, must be whole. */
+static void test_text_records(void) {
+    static ynet_outlet o;
+    ynet_outlet_desc od;
+    const char* key = "lsl:ysp-a-long-marker-stream-name:Markers:booth-two-left-side";
+    char back[128];
+    size_t len = 0;
+    int i, n = 0;
+    reset_fake();
+    ring_open();
+    memset(&od, 0, sizeof od);
+    od.lib = &g_lib; od.role = "marks"; od.key = key; od.device = 6; od.now = now_fn; od.ring = &g_ring;
+    CHECK(ynet_outlet_open(&o, &od));
+    ynet_outlet_close(&o);
+    ring_drain();
+    back[0] = 0;
+    for (i = 0; i < g_nrec; i++) {
+        const yrt_event* r = &g_rec[i];
+        if (r->source == YRT_SRC_NET && r->kind == YNET_REC_TEXT && strncmp(r->u.text, "outlet ", 7) == 0) {
+            size_t k = strlen(r->u.text + 7);
+            CHECK(r->u.text[39] == 0 && k <= 32);
+            if (len + k < sizeof back) { memcpy(back + len, r->u.text + 7, k + 1); len += k; }
+            n++;
+        }
+    }
+    CHECK(strcmp(back, key) == 0);
+    CHECK_I(n, 2);
+    CHECK_I(fk_infos_alive(), 0);
+    printf("  TEXT records keep a long key whole (%d records): ok\n", n);
+}
+
 /* v0.3.1: times near INT64_MAX. INT64_MAX is the bindings' "forever" (a
  * wait) and "never" (a desc time); now + it overflowed into the past, so
  * the wait timed out at once and a resolve or a correction came every
@@ -1570,6 +1603,7 @@ int main(void) {
     test_stream_ring();
     test_desc();
     test_wait();
+    test_text_records();
     test_forever();
     test_markers();
     test_remote_stream();

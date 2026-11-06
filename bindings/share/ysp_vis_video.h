@@ -209,7 +209,9 @@ static const yv_name yvv_chromas[] = { { "sited", YVID_CHROMA_SITED }, { "neares
 static const yv_name yvv_backends[] = {
     { "auto", YVID_BACKEND_AUTO }, { "seq", YVID_BACKEND_SEQ }, { "plmpeg", YVID_BACKEND_PLMPEG }, { "mf", YVID_BACKEND_MF },
     { NULL, 0 } };
-static const yv_name yvv_hws[] = { { "auto", YVID_HW_AUTO }, { "off", YVID_HW_OFF }, { "dxva", YVID_HW_DXVA }, { NULL, 0 } };
+static const yv_name yvv_hws[] = { { "auto", YVID_HW_AUTO }, { "off", YVID_HW_OFF }, { "dxva", YVID_HW_DXVA },
+                                    { "videotoolbox", YVID_HW_VIDEOTOOLBOX }, { "vaapi", YVID_HW_VAAPI },
+                                    { NULL, 0 } };
 static const yv_name yvv_paths[] = {
     { "auto", YVID_PATH_AUTO }, { "upload", YVID_PATH_UPLOAD }, { "shared", YVID_PATH_SHARED }, { "gpu", YVID_PATH_GPU }, { NULL, 0 } };
 static const yv_name yvv_aligns[] = {
@@ -266,7 +268,7 @@ static const yvv_opt yvv_opts[] = {
     { "light", YVV_ENUM, YVV_OFF(light), yvv_lights, "auto, codes or eotf" },
     { "chroma", YVV_ENUM, YVV_OFF(chroma), yvv_chromas, "sited or nearest" },
     { "backend", YVV_ENUM, YVV_OFF(backend), yvv_backends, "auto (from the file), seq, plmpeg or mf" },
-    { "hw_decode", YVV_ENUM, YVV_OFF(hw_decode), yvv_hws, "Media Foundation's decoder: auto, off or dxva" },
+    { "hw_decode", YVV_ENUM, YVV_OFF(hw_decode), yvv_hws, "the decoder: auto, off, dxva (Windows), videotoolbox (macOS) or vaapi (Linux, FFmpeg)" },
     { "strict_cadence", YVV_BOOL, YVV_OFF(strict_cadence), NULL, "refuse a refresh that is not a multiple of the rate" },
     { "inline_decode", YVV_BOOL, YVV_OFF(inline_decode), NULL, "decode inside update() (tests)" },
     { "inline_budget", YVV_I32, YVV_OFF(inline_budget), NULL, "decodes per update inline; 0 = no limit" },

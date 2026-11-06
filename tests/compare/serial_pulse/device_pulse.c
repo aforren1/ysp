@@ -20,8 +20,9 @@
  *
  * Build (from a Developer Command Prompt; run under the timing guard):
  *   cl /O2 /W4 /I..\..\..\include device_pulse.c
- * or Linux:
- *   cc -O2 -Wall -I../../../include -o device_pulse device_pulse.c -lpthread -lm
+ * or macOS and Linux (on a quiet machine):
+ *   cc -O2 -Wall -I../../../include -o device_pulse device_pulse.c -lpthread
+ * and give the device path (/dev/cu.usbmodem..., /dev/ttyACM0) for COM3.
  *
  * Public domain / MIT-0, as the rest of ysp. */
 #define _CRT_SECURE_NO_WARNINGS
@@ -30,14 +31,15 @@
 #include <windows.h>
 #endif
 #define YSP_DEVICE_IMPLEMENTATION
-#include "ysp/device.h"
+#include "ysp/device.h"   /* first on POSIX: ysp/serial.h sets _DEFAULT_SOURCE */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #if !defined(_WIN32)
 #include <errno.h>
 #include <sys/stat.h>
-#define Sleep(ms) yrt_sleep_ns(YRT_MS(ms))
+static void Sleep(unsigned ms) { (void)yrt_sleep_ns((int64_t)ms * 1000000); }
+#define CreateDirectoryA(dir, sec) ((void)(sec), mkdir((dir), 0777))
 #endif
 
 #define BLOCK 20
@@ -310,11 +312,7 @@ int main(int argc, char** argv) {
             for (char* t = strtok(tmp, ","); t && nw < 8; t = strtok(NULL, ",")) widths[nw++] = atof(t);
         } else n = atoi(argv[a]);
     }
-#if defined(_WIN32)
     CreateDirectoryA(dir, NULL);
-#else
-    mkdir(dir, 0777);
-#endif
     outs o;
     o.probes = open_csv(dir, "probes.csv", "cell,mode,width_us,t0_ns,t2_ns,rx_us,tx_us");
     o.pulses = open_csv(dir, "pulses.csv", "cell,mode,width_us,block,i,t_start_ns,t_ret_ns,t_off_ns,t_off_ret_ns,rc");

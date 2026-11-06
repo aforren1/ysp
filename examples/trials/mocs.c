@@ -38,6 +38,13 @@ static const ytr_trial_info ti_zero = { 0, 0, 0, 0, 0, false, false, false, fals
 
 static const double contrasts[5] = { 0.02, 0.04, 0.08, 0.16, 0.32 };
 
+/* ytr_level() returns a negative YTR_ERR_* for a bad row; an index into
+ * contrasts[] must not take it. */
+static double contrast_of(const ytr_trials* t, int condition) {
+    int lv = ytr_level(t, condition, 1);
+    return (lv >= 0 && lv < 5) ? contrasts[lv] : NAN;
+}
+
 /* 2AFC Weibull: 0.5 at zero contrast, 81.6% at alpha. */
 static double p_correct(double c) {
     const double alpha = 0.08, beta = 3.0;
@@ -102,7 +109,7 @@ int main(int argc, char** argv) {
 
     while (ytr_next(&t, &ti) >= 0) {
         shown r;
-        r.contrast_value = contrasts[ytr_level(&t, ti.condition, 1)];
+        r.contrast_value = contrast_of(&t, ti.condition);
         ytr_update(&t, ytr_splitmix(&sim) < p_correct(r.contrast_value) ? 1 : 0, NULL);
         ytr_data_write(&w, &r);
     }
@@ -114,7 +121,7 @@ int main(int argc, char** argv) {
 
     printf("\ncond  ori  contrast   n   p(correct)  true p\n");
     for (c = 0; c < ytr_n_conditions(&t); c++) {
-        double con = contrasts[ytr_level(&t, c, 1)];
+        double con = contrast_of(&t, c);
         printf("%4d  %3d  %8.3f  %3d   %9.3f  %6.3f\n", c, ytr_level(&t, c, 0), con,
                ytr_n_valid(&t, c), ytr_proportion(&t, c, 1), p_correct(con));
     }

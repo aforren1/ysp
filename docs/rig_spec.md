@@ -75,7 +75,7 @@ produces packs and talks to the player.
 | Emscripten | Accepted, for the web player | Required by SDL3's web backend. `ysp/rt.h` already has the branch. |
 | zig cc | Accepted, for the eject path and custom modules | One directory, cross-compiles to Windows and Linux with a pinned glibc. Driven as a compiler, version pinned, shipped with the designer. |
 | glslang, SPIRV-Cross | Accepted, in the tool only | Compile the user shader contract offline. Both have WebAssembly builds, so the designer runs them in the browser. Never in the runtime. |
-| FFmpeg | Accepted, opt-in, as a video backend on Linux and as the tool's transcoder | The tool shells out to the command line. The Linux backend (`YVID_FFMPEG`, off by default) compiles against FFmpeg's headers and loads its libraries at run time. Changed 2026-11-05 from "links the libraries": linking charged every program 15 ms and 24 MB at start and stopped it on a machine without FFmpeg (docs/video.md, "Linux (v0.7.0)"). |
+| FFmpeg | Accepted, opt-in, as a video backend on Linux and as the tool's transcoder | The tool shells out to the command line. The Linux backend (`YVID_FFMPEG`, off by default) compiles against FFmpeg's headers and loads its libraries at run time. Changed 2026-11-05 from "links the libraries": linking charged every program 15 ms and 24 MB at start and stopped it on a machine without FFmpeg (docs/video.md, "Linux (v0.8.0)"). |
 | pl_mpeg | Accepted, as the zero-install compressed video backend | Single header, MPEG-1 and MP2. |
 | QOI | Accepted, for lossless frame and texture compression | Single header, fast, exact. |
 | bgfx | Rejected | Hides the swap chain, runs a render thread, precompiled shaders per backend for every user, heavy build. |
@@ -1121,7 +1121,7 @@ There is no server. The only job that wants one is the build job.
 | Windows 10 | ANGLE, D3D11 | DXGI flip model | WASAPI | Media Foundation | any host, zig |
 | Linux X11 | native GL | GLX sync control | ALSA or PulseAudio | FFmpeg, opt-in: VAAPI, or software | any host, zig, pinned glibc |
 | Linux Wayland | native GL | presentation-time | ALSA or PulseAudio | FFmpeg, opt-in | any host, zig |
-| macOS | ANGLE, Metal | measured, then claimed | CoreAudio | AVFoundation | a Mac |
+| macOS 14 and later | ANGLE, Metal | measured, then claimed | CoreAudio | AVFoundation | a Mac |
 | Web | WebGL2 | requestAnimationFrame, fixed grid | Web Audio | frame sequence, pl_mpeg | any host, Emscripten |
 
 Frame sequence and pl_mpeg run everywhere.
@@ -1129,6 +1129,14 @@ Frame sequence and pl_mpeg run everywhere.
 Windows 11 is the Windows target. Windows 10 is end of life: it stays
 supported where that costs little, for example through run-time lookup
 of newer APIs, but no design decision or measurement rests on it.
+
+macOS 14 (Sonoma) is the macOS floor. ysp/screen.h's METAL backend
+takes its period from `CADisplayLink` on the window's view, which macOS
+14 added, and CVDisplayLink, the older source, is deprecated in macOS
+15. Every macOS measurement ran on macOS 27, and no older system was at
+hand to test. So the `macos` CMake presets and the Python wheels target
+14.0, METAL refuses to open on an older system with a message that
+names the floor, and the code keeps no branch for a system before 14.
 
 ### 9.1 Android and iOS, not planned, not precluded
 
@@ -1182,16 +1190,16 @@ Details, versions and measurements per header are in
 
 | Step | State |
 |---|---|
-| 1. `ysp/rt.h` | Done, v0.9.2. |
+| 1. `ysp/rt.h` | Done, v0.10.2 (macOS: the clock is `mach_absolute_time()`; Linux: SCHED_FIFO under an `rtprio` grant). |
 | 2. `ysp/timeline.h` | Done for now, v0.8.1. Since v0.4.0: trigger channels (`ytl_trigger_ch()`), parameter tables for the ops and the desc. |
-| 3. `ysp/screen.h` | v0.11.0. On Windows: DXGI_FLIP and COMPOSITION, the window thread (on by default for native Windows), flip records, the abort and the panic, the web backend (v0.7.0). On Linux X11: GLX with OML target vblanks and Present events (GLX_OML, section 16.4); one X screen per process. Wayland and macOS are stubs. |
-| 4. `ysp/audio.h` | v0.8.0. On WASAPI: onsets from a fit of device positions, tier 2, streams, WAV, capture. On Linux: ALSA exclusive on a card's hw: device (AUTO there) and PulseAudio, output and capture, tier 3. CoreAudio ran only as miniaudio's null device, in CI. No line-in run. |
-| 5. `ysp/gfx.h` | v0.17.2: stimuli, curve runs (text and artwork), batched text runs, parameter tables, frame capture. Open items in docs/gfx.md "Next". |
-| 6. `ysp/video.h` | v0.7.0: Media Foundation and pl_mpeg, FFmpeg on Linux (opt-in: VAAPI or software, loaded at run time), the soundtrack on audio streams, UTF-8 paths, error codes. On Linux X11 it runs on GLX_OML. Not built: AVFoundation, capture. |
-| Also built | `ysp/outline.h` v0.4.1, `ysp/rdk.h` v0.3.1, `ysp/color.h` v0.4.0, `ysp/trials.h` v0.6.0, `ysp/table.h` v0.3.0, `ysp/dataset.h` v0.2.0, `ysp/json.h` v0.2.1, `ysp/pack.h` v0.4.0 and the pack tool v0.7.0 (item 6), the device headers of docs/devices_spec.md (input, response, box, device, rigfile, serial, parallel, net). The experiment format (docs/experiment_format.md) with its gaps G1 to G13 closed. |
-| Host bindings | Python wheels and MATLAB/Octave MEX for the headers above (docs/bindings.md); ysp-vis 0.11.0 (screen, gfx, video, text) on ysp-audio 0.8.0 and ysp-timeline through function tables (section 12). |
+| 3. `ysp/screen.h` | v0.17.0. On Windows: DXGI_FLIP and COMPOSITION, the window thread (on by default for native Windows), flip records, the abort and the panic, the web backend (v0.7.0). On Linux X11: GLX with OML target vblanks and Present events (GLX_OML, section 16.4); one X screen per process. macOS: METAL (v0.11.0; v0.12.0 sets its constants from the probe's timing session, tier 2 for a shown flip; the header's own real-window test showed 120 of 120 frames with the screen unlocked; v0.13.0 refuses a display in a variable refresh mode, checked only through a test seam; v0.13.1 takes the period from CADisplayLink; v0.14.0 refuses a macOS older than 14, the floor; v0.14.1 takes the first open's period from CADisplayLink too, and the probe's clean session (no Screen Sharing) changed no constant; v0.15.0 gives keys and mouse buttons NSEvent.timestamp in place of SDL 3.4's offset stamps; v0.16.0 the panic, raw mice, the gamma table and the code risk; docs/screen_macos_probe.md). Wayland is a stub. No photodiode run. |
+| 4. `ysp/audio.h` | v0.9.0. On WASAPI: onsets from a fit of device positions, tier 2, streams, WAV, capture. On CoreAudio (v0.8.0, one Mac, 2026-11-05): reports from the HAL's render time stamps, hog mode, the driver stack in the describe line; tier 3; timed on the built-in speakers and HDMI (0 underruns in 38 min; shortest safe lead 8 and 12 ms at a 128-frame IO buffer; the HDMI claim ends at the link, so the monitor's own delay needs a line-in or microphone run). On Linux: ALSA exclusive on a card's hw: device (AUTO there) and PulseAudio, output and capture, tier 3. No line-in run. |
+| 5. `ysp/gfx.h` | v0.17.3: stimuli, curve runs (text and artwork), batched text runs, parameter tables, frame capture. Open items in docs/gfx.md "Next". |
+| 6. `ysp/video.h` | v0.8.0: Media Foundation, AVFoundation with VideoToolbox (macOS; decode, open and seek timed on an M2), FFmpeg on Linux (opt-in: VAAPI or software, loaded at run time) and pl_mpeg, the soundtrack on audio streams, UTF-8 paths, error codes. On Linux X11 it runs on GLX_OML. Not built: capture. |
+| Also built | `ysp/outline.h` v0.4.1, `ysp/rdk.h` v0.3.1, `ysp/color.h` v0.4.0, `ysp/trials.h` v0.6.1, `ysp/table.h` v0.3.0, `ysp/dataset.h` v0.2.1, `ysp/json.h` v0.2.1, `ysp/pack.h` v0.4.0 and the pack tool v0.7.0 (item 6), the device headers of docs/devices_spec.md (input, response, box, device, rigfile, serial, parallel, net). The experiment format (docs/experiment_format.md) with its gaps G1 to G13 closed. |
+| Host bindings | Python wheels and MATLAB/Octave MEX for the headers above (docs/bindings.md); ysp-vis 0.17.0 (screen, gfx, video, text; Windows x64 and macOS arm64) on ysp-audio 0.9.0 and ysp-timeline through function tables (section 12). |
 | 7 and 8 | Not started. |
-| 9 | `ysp/net.h` v0.3.1 (Lab Streaming Layer) is built. Build jobs are not started. |
+| 9 | `ysp/net.h` v0.3.2 (Lab Streaming Layer) is built. Build jobs are not started. |
 
 ### Next, in order
 
@@ -1215,12 +1223,12 @@ Details, versions and measurements per header are in
    its definition key, and give the loader the defaults that a
    canonical definition leaves out (D2).
 4. **Other platforms.** `ysp/screen.h` on Linux X11 (GLX sync control)
-   is built: v0.11.0, one X screen per process; it needs a photodiode
-   run for its tier. `ysp/audio.h` on ALSA and PulseAudio is built, tier 3
-   until a line-in run. Next: Wayland (presentation-time), then macOS
-   through ANGLE's Metal backend, and `ysp/audio.h` on CoreAudio with
-   real devices. A platform gets its tier from a photodiode or line-in
-   run on that platform, not from CI.
+   is built: v0.17.0, one X screen per process; it needs a photodiode
+   run for its tier. On macOS, METAL is built (tier 2 for a shown flip,
+   from OS times; no photodiode run). `ysp/audio.h` on ALSA, PulseAudio
+   and CoreAudio is built, tier 3 until a line-in run. Next: Wayland
+   (presentation-time). A platform gets its tier from a photodiode or
+   line-in run on that platform, not from CI.
 5. The designer.
 6. Build jobs.
 
@@ -1331,11 +1339,43 @@ The measurements are in docs/av_probe.md and docs/winthread_probe.md.
 ## 13. Open questions, to be measured or verified, not decided
 
 - Does SDL3 create an EGL context on Cocoa against ANGLE's Metal
-  backend, and what present timing does that backend expose?
+  backend, and what present timing does that backend expose? Answered in
+  part (2026-11-05, docs/screen_macos_probe.md; Apple M2, macOS 27.0.1,
+  ANGLE from Electron 43.8.3, SDL 3.4.0): yes, with
+  `SDL_GL_EGL_PLATFORM` and a platform attribute callback that asks for
+  the Metal back end (this ANGLE's default on macOS is OpenGL). ANGLE then
+  owns a CAMetalLayer under SDL's view and exposes no timing: no sync
+  control, no frame timestamps, no presentation time. A header-owned
+  CAMetalLayer on ANGLE's own MTLDevice works: ANGLE draws into the
+  drawable's IOSurface (or an EGLImage of its texture), and an
+  `EGL_ANGLE_metal_shared_event_sync` event orders ANGLE's queue before
+  the header's (without it, 2 to 5 of 120 frames were read unfinished
+  under GPU load). The recommended design is that one, with
+  `presentDrawable:atTime:` and `MTLDrawable.presentedTime` as the onset;
+  it is built as `YSCR_BACKEND_METAL` in `ysp/screen.h` v0.11.0
+  (docs/screen.md). The timing session of 2026-11-05 (a Screen Sharing
+  session open; docs/screen_macos_probe.md, section 6) answered the
+  present timing: a drawable shows at the first presentedTime vblank at
+  or after its target; a commit needs a period plus up to 1.2 ms; the
+  presented handler comes about 0.5 ms after its vblank, so two frames
+  must be in flight; presentedTime moves with late frames and sits on an
+  exact grid, with CADisplayLink, 0.40 to 0.45 period after
+  CVDisplayLink's `inNow`; the same at 120 and 144 Hz and in every window
+  kind. `ysp/screen.h` v0.12.0 takes its constants from it, tier 2 for a
+  shown flip. Open: the light against presentedTime (photodiode, for tier
+  1), direct against composed, a run without Screen Sharing, and key
+  timestamps (posting keys needs the Accessibility permission, not
+  granted).
 - ANGLE's 10-bit surface configurations on D3D11 and Metal. Answered
   for D3D11 (2026-10-05, docs/gfx.md): RGBA 10/10/10/2 and RGBA16F
   configurations exist, and a client-buffer pbuffer on an
-  `R10G10B10A2` texture works. Metal: not run.
+  `R10G10B10A2` texture works. Metal (2026-11-05,
+  docs/screen_macos_probe.md): no 10-bit or half-float EGL configuration
+  exists, so SDL's EGL path cannot make a 10-bit window; but GL textures,
+  EGLImages of RGB10A2, BGR10A2 and RGBA16Float MTLTextures, and 'l10r'
+  and 'RGhA' IOSurface pbuffers keep 1024 levels of a 1024-step ramp, and
+  CAMetalLayer accepts BGR10A2Unorm, RGBA16Float and BGR10_XR. Whether
+  10 bits reach the M27Q (8 bits per sample by NSScreen): not measured.
 - Composition swapchain: how a target time between two vblanks is
   quantized, how far ahead the queue accepts presents, and whether a
   borderless fullscreen composition window gets independent flip on the
@@ -1357,7 +1397,7 @@ The measurements are in docs/av_probe.md and docs/winthread_probe.md.
   than the default (`:0.1`). Answered 2026-10-12 (SDL 3.4.18, Xorg,
   docs/screen.md "Two X screens"): with `DISPLAY=:0.1` yes; from a
   process on `:0.0`, no, the window lands on screen 0. So
-  `ysp/screen.h` v0.11.0's `desc.x_display` picks the X screen per
+  `ysp/screen.h` v0.17.0's `desc.x_display` picks the X screen per
   process.
 - Whether the composition swapchain's present-at-time removes the need
   for the spin-wait under variable refresh.
@@ -1365,7 +1405,10 @@ The measurements are in docs/av_probe.md and docs/winthread_probe.md.
   set that disables its silent rate conversion. Answered for WASAPI
   (2026-10-05, docs/audio.md): ask for no format, rate or channel
   count, so the client format is the device's; exclusive mode opens at
-  the endpoint's Default Format. Other backends: not run.
+  the endpoint's Default Format. CoreAudio (2026-11-05, docs/audio.md,
+  "CoreAudio"): the AudioUnit takes the device's rate and format, so the
+  same strict open holds; miniaudio has no exclusive mode there, and
+  ysp/audio.h 0.8.0 takes hog mode itself. ALSA, PulseAudio: not run.
 - Whether SDL_GPU gains a browser backend, which would make it a
   candidate second implementation behind the `ysp/gfx.h` interface.
 - The first stimulus that needs compute, which would move the plan to
@@ -1400,7 +1443,7 @@ The measurements are in docs/av_probe.md and docs/winthread_probe.md.
   test with `screen_sync_check` (docs/screen.md, "Hand test: the Intel
   setting"). AMD, NVIDIA: not run. Mesa on X11, `vblank_mode=0` in the
   environment (2026-10-12, Mesa 22.3.6): the swap interval reads back 0
-  after asking for 1, and the GLX backend (screen.h v0.11.0) refuses to
+  after asking for 1, and the GLX backend (screen.h v0.17.0) refuses to
   open, so the guard never sees that case; a driconf file setting was
   not tried.
 - Exclusive-mode audio on hardware other than the development laptop

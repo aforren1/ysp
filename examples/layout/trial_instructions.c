@@ -325,7 +325,7 @@ int main(int argc, char** argv) {
     ygfx_prime(&gfx);
 
     /* the page keys: Right on the first page, Left and Right after it */
-    source = yrsp_sdl_source(&(yrsp_sdl_ctx){ .raw_keyboard = caps.raw_keyboard }, YRSP_KIND_KEYBOARD);
+    source = yrsp_sdl_source(&(yrsp_sdl_ctx){ .raw_keyboard = caps.raw_keyboard, .os_stamps = caps.os_input_stamps }, YRSP_KIND_KEYBOARD);
     memset(&pd, 0, sizeof pd);
     pd.sources = &source;
     pd.n_sources = 1;

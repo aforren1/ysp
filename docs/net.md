@@ -189,6 +189,35 @@ error -35.1 to +6.9 us (v0.1.0: -39 to +68 us). Mutant `net-20`
 (truncation, not rounding) is caught, and `net-16`, whose anchor moved,
 still is.
 
+### TEXT records keep every character (v0.3.2)
+
+A TEXT record is `"<what> <text>"` in the 40-byte payload: 39 characters
+and a NUL. Each record took 34 characters of text and the next record
+started 34 characters on. That fits for "mark" (5 + 34) and "in" (3 + 34),
+but not for a longer `what`: "<what> " left fewer than 34 characters, and
+the characters past the payload were lost.
+
+| `what` | Text characters a record | Lost a record before v0.3.2 |
+|---|---|---|
+| "in", "uid" | 34 (the cap) | 0 |
+| "mark", "role", "name", "type", "host" | 34 | 0 |
+| "inlet", "wrong" | 33 | 1 |
+| "outlet", "source" | 32 | 2 |
+| "ambiguous" | 29 | 5 |
+
+| Question | Decision | Why |
+|---|---|---|
+| The step | What the record holds: 34 characters, or the room `"<what> "` leaves | The next record starts where this one stopped; a reader that joins the records gets the text whole |
+| The cap of 34 | Kept | The manual says "34 characters each" for "mark" and "in" records; those records do not change |
+| `snprintf` | Replaced by two `memcpy` calls | gcc 15.2 (Ubuntu 26.04) reported the truncation as `-Wformat-truncation` in a Release build, which failed the `-Werror` build of `compile_net_c`, `compile_net_cxx` and `test_net` |
+
+Checked on 2026-11-06 on the M2 Mac mini (macOS 27.0.1, Apple clang):
+`tests/adapt/net_test.c` (391 checks) opens an outlet with a 60-character
+key and reads it back whole from 2 "outlet" records of at most 32
+characters. Mutants `txt-01` (the step of 34) and `txt-02` (the room
+ignored) are caught. In an Ubuntu 26.04 arm64 container (gcc 15.2), the
+net targets build with `-Werror` and their tests pass.
+
 ### Times without end (v0.3.1)
 
 The sum that ysp/audio.h 0.7.2 fixed (a clock reading plus a duration,

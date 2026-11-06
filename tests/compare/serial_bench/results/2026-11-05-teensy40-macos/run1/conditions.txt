@@ -1,0 +1,39 @@
+date: 2026-11-05 13:19:10
+label: Teensy 4.0 echo, macOS, run 1
+MATLAB: 26.2.0.3433840 (R2026b) Update 1, MACA64
+OS: macOS 27.0.1
+CPU: Apple M2 (Mac14,3)
+power: Now drawing from 'AC Power'
+port: /dev/cu.usbmodem75925601
+device: echo
+baud: 115200
+FTDI latency timer: not an FTDI port, or not readable
+api serialport: true
+api ioport: false
+api ioport_tuned: false
+api ysp: true
+ysp_serial: /Users/brainworks/dev/ysp/.claude/worktrees/agent-a3d39df1e8cd0f611/bindings/mex/ysp_serial.mexmaca64
+cfg.port: /dev/cu.usbmodem75925601
+cfg.device: echo
+cfg.baud: 115200
+cfg.apis: serialport ioport ioport_tuned ysp
+cfg.parts: clock noport calls rt stream
+cfg.ioport_dir: 
+cfg.ysp_dir: /Users/brainworks/dev/ysp/.claude/worktrees/agent-a3d39df1e8cd0f611/tests/compare/serial_bench/../../../bindings/mex
+cfg.out: build/serial-macos/phase2/matlab1
+cfg.label: Teensy 4.0 echo, macOS, run 1
+cfg.n_clock: 100000
+cfg.n_floor: 100000
+cfg.n_enum: 200
+cfg.n_open_absent: 50
+cfg.n_open: 20
+cfg.n_calls: 2000
+cfg.n_blocking: 200
+cfg.n_read_waiting: 500
+cfg.n_rt: 1000
+cfg.n_probe: 200
+cfg.stream_hz: 1000
+cfg.stream_s: 10
+cfg.max_block_s: 20
+cfg.write_sizes: [1 8 64 512]
+cfg.absent_port: /dev/cu.ysp-absent

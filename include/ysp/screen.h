@@ -1,4 +1,4 @@
-/* ysp/screen.h - v0.11.0 - public domain single-header display library
+/* ysp/screen.h - v0.17.0 - public domain single-header display library
  *
  *   The window, the GL ES 3.0 context, the display mode and the swap path
  *   of a stimulus display, with flip at a time: each frame learns the
@@ -626,6 +626,90 @@
  *     page; not tested), codes (drawn through GL, always at risk:
  *     CODE_RISK_COMPOSED), the gamma ramp, raw mice and the panic watchdog
  *     (panic=n/a).
+ *   YSCR_BACKEND_METAL (v0.11.0, measured in v0.12.0; macOS 14 and later,
+ *     the project's floor: open() refuses an older system; AUTO there): SDL makes the
+ *     window; the header makes its CAMetalLayer (SDL_Metal_CreateView) on
+ *     the MTLDevice that ANGLE's Metal display reports. ANGLE draws each
+ *     frame straight into the drawable, through a pbuffer on the drawable's
+ *     IOSurface (EGL_ANGLE_iosurface_client_buffer), one per IOSurface,
+ *     kept. At the present, ANGLE's frame signals an MTLSharedEvent with
+ *     the present id (EGL_ANGLE_metal_shared_event_sync), and the header's
+ *     command buffer waits on it, draws the patch and the codes as blits,
+ *     reads codes back, and presents with presentDrawable:atTime:. The
+ *     flip's onset is MTLDrawable.presentedTime from the presented handler
+ *     (mach time: ysp/rt.h's clock from v0.10.0, an offset correlated at
+ *     open and every 10 s before it). A presentedTime of 0 means the
+ *     drawable was not shown: the record is estimated, and OCCLUDED when
+ *     the window was hidden or the session locked (locked= in the describe
+ *     line). caps.period_ns comes from CADisplayLink's timestamps at
+ *     open (the step of the callbacks after the first, which lie on
+ *     presentedTime's grid: 16.680375 ms on a "60 Hz" HDMI mode, where the
+ *     link's duration and CVDisplayLink's nominal period say 16.680417 ms;
+ *     the first callback's timestamp is off the grid in a process's first
+ *     windowed open). With no callback in 250 ms (a display asleep gives
+ *     none) it is CVDisplayLink's nominal period, the one source measured
+ *     right with the display asleep; then the mode; never the mode's
+ *     rounded rate. The describe line names the source and why
+ *     (period=...ns(cadisplaylink), (cvdisplaylink-no-callback),
+ *     (cvdisplaylink-link-off-grid)). The flips refine it. nextDrawable gives up after its
+ *     own 1 s timeout; a frame without a drawable draws into a 1 x 1
+ *     pbuffer and is estimated (no_drawable= in the describe line). A
+ *     presented handler that has not come 1 s after its target is given up
+ *     (late_handler=): its frame is estimated, and the frames after it
+ *     complete; a hidden window's handlers came late or not at all
+ *     (measured, docs/screen_macos_probe.md). GL's
+ *     row 0 is the top of the screen, as on Windows
+ *     (yscr_present_info.rows_top_down).
+ *     ANGLE: libEGL.dylib from desc.angle_dir, YSCR_ANGLE_DIR, or the
+ *     loader's search path; the Metal back end is asked for by name, because
+ *     ANGLE's default on macOS can be OpenGL (measured: Electron 43.8.3's).
+ *     It needs EGL_ANGLE_iosurface_client_buffer, EGL_ANGLE_device_metal
+ *     and EGL_ANGLE_metal_shared_event_sync; open() names what is missing.
+ *     Threads: open(), the frame loop and close() run on the process's
+ *     main thread (Cocoa's windows and SDL's video live there); open()
+ *     refuses another thread. There is no window thread on macOS
+ *     (window_thread=off(auto,platform)). The presented handlers run on
+ *     Metal's threads and touch only a process-wide table of 64 slots.
+ *     Measured (v0.12.0, checked again in v0.14.1; the probe's timing
+ *     sessions, docs/screen_macos_probe.md section 6; one machine, with
+ *     and without a Screen Sharing session), each constant beside its
+ *     rows: (a) a drawable shows at the first presentedTime vblank at or
+ *     after its target (less 0 to 0.6 ms), so the target is the planned
+ *     vblank minus half a period (YSCR__MTL_TARGET_LEAD), the middle of
+ *     the window that showed on it; (b) a commit needs a period plus up to
+ *     1.6 ms before its vblank and the presented handler comes 0.3 to 0.8
+ *     ms after it, so the depth is 2 with two frames in flight
+ *     (caps.max_in_flight 2: begin() waits for the frame two before) and a
+ *     margin of 2 ms (caps.margin_ns); one in flight showed every other
+ *     vblank. The same depth in every window kind: a fullscreen space kept
+ *     one drawable fewer queued than a window (the probe's three-deep
+ *     loop: 2 periods from commit to presentedTime against 3), which two
+ *     frames in flight never reach, and its commit deadline was a
+ *     window's; (c) tier 2 for a shown flip in
+ *     every window kind (window, fullscreen, space in the describe line):
+ *     presentedTime moved with every late frame and comes before its
+ *     handler, so it is an OS time for the vblank shown, as DXGI_FLIP's
+ *     composed onset; tier 1 waits for a photodiode, because CVDisplayLink
+ *     puts the vblank 0.40 to 0.45 period before presentedTime and macOS
+ *     has no public call that says a window goes direct to the display.
+ *     Every flip's path is COMPOSED. A target more than 0.5 s ahead is
+ *     held by a sleep in flip_at() until it is 0.5 s ahead (held_far= in
+ *     the describe line): 2 and 5 s ahead did not show and broke the
+ *     layer's presents for about 6.5 s. A frame loop faster than the
+ *     display while no frame is shown (a hidden window: handlers at once)
+ *     is held there too, because flip_at() plans one frame a vblank.
+ *     desc.color_depth 10 gives a BGR10A2Unorm layer and 'l10r' IOSurfaces
+ *     (ANGLE's Metal display has no 10-bit config; the pbuffer takes the
+ *     IOSurface's format); 8-bit code values are spread over 10 bits
+ *     (v << 2 | v >> 6). Whether 10 bits reach the panel is not measured.
+ *     From v0.16.0 the layer's colorspace is nil, so ColorSync does not
+ *     convert the frame: SDL's layer came tagged sRGB, and every value was
+ *     converted to the display's profile before (CODES). The panic
+ *     watchdog (PANIC), raw mice (INPUT), the OS gamma ramp (OS GAMMA) and
+ *     the code risk state (CODES) work on macOS from v0.16.0. A display in
+ *     a variable refresh mode is refused (VARIABLE REFRESH). Keys and
+ *     mouse buttons get NSEvent.timestamp (INPUT, v0.15.0).
+
  *   YSCR_BACKEND_GLX_OML (Linux X11; AUTO picks it when DISPLAY is set and
  *   XDG_SESSION_TYPE is not wayland)
  *     SDL3 makes the window, on its x11 video driver (the header sets
@@ -675,9 +759,9 @@
  *     libxcb allocates each event
  *     it returns; the header frees it at once: one malloc and free per
  *     flip that are not the header's own.
- *   Not implemented; open() refuses them with a message:
- *     YSCR_BACKEND_WAYLAND (presentation-time), YSCR_BACKEND_METAL
- *     (macOS through ANGLE). On macOS only SIM and CUSTOM open.
+
+ *   Not implemented; open() refuses it with a message:
+ *     YSCR_BACKEND_WAYLAND (presentation-time).
  *
  *   ---------------------------------------------------------------------
  *   PRESENTER (the swap-path interface)
@@ -758,9 +842,9 @@
  *   the patch (the default top-left patch is on the Pixel Mode pixel: move
  *   it with desc.patch.corner), slots outside the display, and codes on a
  *   windowed screen, which is not at the display's origin.
- *   Exactness. At open, DXGI_FLIP and COMPOSITION draw all 256 values of
- *   each channel through both drawing paths into a test texture and read
- *   them back (selftest= in the describe line). desc.verify_codes = N
+ *   Exactness. At open, DXGI_FLIP, COMPOSITION and METAL draw all 256
+ *   values of each channel through the drawing paths into a test texture
+ *   and read them back (selftest= in the describe line). desc.verify_codes = N
  *   copies the first row of each code to a staging texture every N flips
  *   and compares it one flip later (yscr_code_verify()). Both check the
  *   back buffer only. What happens after it, the header reports where it
@@ -768,12 +852,29 @@
  *     COMPOSED        this flip went through DWM
  *     ADVANCED_COLOR  HDR or auto color management is on (Windows
  *                     DisplayConfig); DWM and the display kernel convert
- *                     colors then
+ *                     colors then. macOS: the display can show EDR now or
+ *                     at all (NSScreen's EDR values above 1: an HDR mode,
+ *                     an XDR panel), the layer asks for EDR, or the layer
+ *                     is tagged with a colorspace that is not the
+ *                     display's (ColorSync converts it)
  *     GAMMA           the OS gamma ramp is not identity (OS GAMMA)
- *     SCALED          the mode is not the panel's preferred mode
+ *     SCALED          the mode is not the panel's preferred mode (macOS:
+ *                     the mode's pixels are not those of a mode with the
+ *                     native flag, or the window's pixels are not the
+ *                     mode's); fullscreen only
  *     UNVERIFIED      the self test did not run (SIM, a custom presenter)
  *     VERIFY_FAILED   a read-back differed (sticky)
  *     STATE_UNKNOWN   the display state could not be read
+ *   On macOS (METAL, v0.16.0) open() reads the window's NSScreen, the
+ *   layer, the CGDisplayMode and the transfer table; STATE_UNKNOWN stays
+ *   only when one of them could not be read. The describe line says
+ *   display=<CGDirectDisplayID> color=sdr|edr-or-matched(edr now/potential)
+ *   layer_cs=untagged|display|other(name) panel=WxH mode_px=WxH os_gamma=
+ *   nightshift=unknown. The self test reads the drawable back, before the
+ *   compositor: it sees the blits and the pixel format (8 bits, 10 bits),
+ *   and not ColorSync, the gamma table, scaling, EDR mapping, Night Shift,
+ *   True Tone, accessibility filters (invert, color filters) or the
+ *   display's own processing.
  *   It cannot see Night Light, accessibility color filters, the MHC
  *   calibration pipeline (matrix and LUT at scanout), GPU dithering, or the
  *   display's own processing; the describe line says mhc=unknown and
@@ -822,8 +923,21 @@
  *   After a switch, os_gamma says identity: the switch reset the ramp, and
  *   close puts the user's back. The describe line says
  *   display=<RandR output> os_gamma=... Later work:
- *   CGSetDisplayTransferByTable (macOS) and wlr-gamma-control on wlroots
- *   compositors (Wayland has no general protocol).
+ *   wlr-gamma-control on wlroots compositors (Wayland has no general
+ *   protocol).
+ *   macOS (METAL, v0.16.0): the same rule with the display's transfer
+ *   table, read at up to 1024 entries a channel
+ *   (CGGetDisplayTransferByTable; the M27Q's capacity is 1024) and set
+ *   with CGSetDisplayTransferByTable. Identity is the 8-bit identity: each
+ *   entry rounds to its index at 8 bits. The words and CODE_RISK_GAMMA are
+ *   Windows'. The header puts the table it read back at close, at exit,
+ *   on SDL's quit event and in a panic; the window server also puts back
+ *   the table of a process that ends, by _exit or by SIGKILL (measured:
+ *   back when waitpid returned). Measured on the M27Q (HDMI): a read of
+ *   1024 entries 31 to 222 us (p50 126 us), a set 42 to 60 us (p99; one
+ *   of 50 took 3.0 ms), a set and read-back 87 to 104 us. Not known:
+ *   whether the panel shows the table on HDMI. A read-back says macOS
+ *   kept it, not that the light changed; no light was measured.
  *
  *   ---------------------------------------------------------------------
  *   TRIGGERS (desc.triggers, yscr_trigger, yscr_trigger_at)
@@ -1058,7 +1172,7 @@
  *   before to 12.1 ms after the call. On Wayland the compositor's time
  *   (not built). Keyboards are not response boxes; use ysp/serial.h for
  *   reaction times.
- *   X11 key times (GLX_OML, v0.11.0). SDL stamps an X11 key when it reads
+ *   X11 key times (GLX_OML, v0.17.0). SDL stamps an X11 key when it reads
  *   the X socket, which is in begin()'s pump, once per frame: measured,
  *   keys injected through XTEST at a random point in the frame were
  *   stamped 8.6 to 16.6 ms after the injection (mean 12.7, 199 keys). The
@@ -1073,7 +1187,7 @@
  *   used. SDL has one X11 hook per process: setting your own replaces this
  *   one, and keys then keep SDL's stamps. Mouse buttons keep SDL's stamps
  *   (not measured).
- *   Kernel key times (v0.11.0). Xorg stamps a keyboard's key the same way,
+ *   Kernel key times (v0.17.0). Xorg stamps a keyboard's key the same way,
  *   with its own clock when it reads the key, not with the kernel's time:
  *   measured with a uinput keyboard, 0.97 to 1.99 ms before the kernel's
  *   time. When the user can read the keyboards' evdev nodes, the hook
@@ -1090,6 +1204,26 @@
  *   only (docs/screen.md, "Kernel key times"). The describe line counts
  *   them: key_time=kernel:n,x-server:n,unmatched:n,off-clock:n
  *   evdev_keyboards=n (the nodes open now).
+ *   On macOS (METAL, v0.15.0) SDL 3.4 stamps a key or mouse event with
+ *   NSEvent.timestamp plus a process-wide offset, the shortest read delay
+ *   seen so far (3.8 ms on a process's first key, then down to 0.2 ms),
+ *   and a modifier key when it reads it. yscr_event_input() gives keys,
+ *   modifier keys and mouse buttons NSEvent.timestamp itself, from a local
+ *   NSEvent monitor that the first METAL open adds and the last close
+ *   removes (it returns every event, so SDL still gets it). It pairs an
+ *   SDL event with its NSEvent by SDL's own arithmetic: SDL's stamp minus
+ *   the NSEvent's time is SDL's offset, which never grows, so an NSEvent
+ *   SDL did not deliver is passed over; an SDL event with no NSEvent keeps
+ *   SDL's stamp, tier 3. caps.os_input_stamps says the monitor was made;
+ *   pass it to yin_sdl_ctx.os_stamps for the source entry. Measured with
+ *   CGEventPost and CGEventPostToPid through this path (one Apple M2 Mac
+ *   mini, macOS 27.0.1; docs/screen.md): the stamp equal to
+ *   NSEvent.timestamp in 1600 of 1600, 49 us to 46.6 ms after the post
+ *   (p50 112 to 136 us). os_stamps=found/tried(passed n, bias us) in the
+ *   describe line. From v0.16.0 yscr_poll()'s time is the same NSEvent
+ *   time for those events (the pair is made once and kept for
+ *   yscr_event_input()); motion, the wheel, touch and pens keep SDL's
+ *   stamps.
  *   With the raw path on, SDL 3.4 also sends a key from the window message
  *   when the message carries no scan code (read in SDL 3.4.0's source):
  *   keys injected by virtual-key code (SendInput with wVk only), keys with
@@ -1174,13 +1308,13 @@
  *   mouse events carry the device then) and a YSCR_EV_RAW_MICE record
  *   says SUSPENDED; when it ends, or when other code took the mice, the
  *   reader registers again and the record says REGISTERED. Each screen with
- *   raw_mice shares the one reader; the last to close stops it. On other
- *   platforms, and with no window, open() refuses raw_mice. Measured with
+ *   raw_mice shares the one reader; the last to close stops it. On Linux,
+ *   the web and with no window, open() refuses raw_mice. Measured with
  *   injected input only (examples/screen/input.c --mice is the hand test
  *   for two physical mice): reports stamped 0.15 to 0.40 ms after
  *   SendInput (means of three runs), no report lost or doubled with SDL's
  *   raw keyboard running.
- *   Raw mice on Linux X11 (GLX_OML, v0.11.0). One thread per process
+ *   Raw mice on Linux X11 (GLX_OML, v0.17.0). One thread per process
  *   (started SCHED_OTHER) reads every mouse's evdev node the user can read
  *   (relative X and Y and a left button; tablets and touchpads are not
  *   read), the uaccess rule's mouse line (tools/linux/70-ysp-input.rules),
@@ -1201,6 +1335,40 @@
  *   repeat them); a SYN_DROPPED (the kernel's buffer overflowed) drops up
  *   to the next report. open() refuses raw_mice when no mouse node is
  *   readable, and with no window.
+ *   Raw mice on macOS (METAL, v0.16.0). One thread per process runs an
+ *   IOHIDManager for mice (usage page 1, usage 2) on its own run loop.
+ *   IOKit parses each report and calls back once per element that
+ *   changed; the reader joins the values that share a device and a time
+ *   stamp into one report and sends it over the input bridge as on
+ *   Windows (yin_from_mouse()). The stamp is IOHIDValueGetTimeStamp, the
+ *   time the HID driver took the report, in mach time: the ysp_rt clock.
+ *   The device id is the low 32 bits of the device's IORegistry entry id
+ *   (unique while it stays plugged in). Each mouse gets a YSCR_EV_DEVICE
+ *   record (present at open, added and removed at the next begin()), so
+ *   its reports carry no YIN_UNLISTED. Buttons 1 to 5, X and Y (counts,
+ *   relative; an absolute pointer gives 0..65535 of its logical range and
+ *   YSCR_MOUSE_ABSOLUTE), the wheel and AC Pan (120 per detent). The mice
+ *   are not seized: the cursor moves as before. Reports count only while
+ *   the process is the active app (NSRunningApplication.isActive), as on
+ *   Windows. SDL's relative mode reads NSEvent deltas, not the HID
+ *   manager, so there is no guard and no SUSPENDED record. Permission:
+ *   Input Monitoring for the program, or the terminal or app that runs it
+ *   (open() names it when IOHIDManagerOpen is refused). Empty and stale
+ *   values (v0.16.1): IOKit calls back with a relative element's 0 after
+ *   a report that moved it, dated the element's last change (hand runs:
+ *   the wheel's 0 with every report, 12 to 44 s old; X's and Y's 0 dated
+ *   the report before). The reader drops a relative 0 (empty: it adds
+ *   nothing), then a value dated before its start or before the newest
+ *   stamp it took from that device (stale), and counts both:
+ *   raw_mice=reports(inactive n, stale n, empty n) in the describe line.
+ *   Measured (v0.16.1's reader, one Dell MS116 behind a USB hub, moved by
+ *   hand for 5 s, 2026-11-05 17:19, unlocked, a quiet machine): 626
+ *   reports, one every 8.000 ms at the median (7.926 to 8.074 ms; 125
+ *   Hz), none unlisted, no event earlier than the one before; the value
+ *   callback 55 us after the stamp at the least, 122 us at the median,
+ *   266 us at p99 and 486 us at most (1159 values kept, 719 empty, 0
+ *   stale). The USB poll (up to 8 ms here) comes before the stamp and is
+ *   in no number above. The runs of v0.16.0's reader: docs/screen.md.
  *   The input bridge (v0.4.0). One loop for every input: a producer on any
  *   thread (desc.raw_mice's reader, a response-box reader, an eye tracker)
  *   calls yscr_push_input(&e) with a ysp/input.h event stamped on the
@@ -1432,9 +1600,10 @@
  *   what it holds, so it must take no lock the frame loop uses); hardware
  *   a trigger left set (panic_fn may reset it).
  *   When it is armed: DXGI_FLIP and COMPOSITION in fullscreen, on
- *   Windows, and GLX_OML in fullscreen on X11. A window has no ramp or mode to put back and its user has the
- *   desktop: the describe line says panic=idle(windowed); on SIM, CUSTOM
- *   and other platforms, panic=n/a. open() refuses desc.panic with
+ *   Windows; GLX_OML in fullscreen, on X11; METAL in fullscreen, on macOS
+ *   (v0.16.0). A window has no ramp or mode to put back and its user has
+ *   the desktop: the describe line says panic=idle(windowed); on SIM,
+ *   CUSTOM and other platforms, panic=n/a. open() refuses desc.panic with
  *   abort_keys.off and with a key the hook cannot name (it takes Esc, F1
  *   to F12, a letter or a digit). The first armed screen's numbers hold
  *   until the last armed screen closes.
@@ -1447,7 +1616,7 @@
  *   stamped later with the hook armed (STATUS).
  *   Measured (examples/screen/abort.c; a window armed through a test
  *   seam, and fullscreen in a switched mode): see STATUS.
- *   X11 (GLX_OML, v0.11.0): the watchdog is a thread with its own X
+ *   X11 (GLX_OML, v0.17.0): the watchdog is a thread with its own X
  *   connection that selects XInput 2's raw key events (libxcb-xinput,
  *   loaded at run time) on X screen 0's root: they come whatever window
  *   has the focus, are not taken from it, and come while the frame thread
@@ -1462,6 +1631,45 @@
  *   numbers and refusals as on Windows; with YRT_NO_THREADS open() refuses
  *   desc.panic. Wayland has no global key events: no panic there; the
  *   compositor undoes a dead client's fullscreen.
+ *   macOS (METAL, v0.16.0). The frame loop owns the main thread, so a
+ *   hung loop also stops the process's events: an NSEvent monitor needs
+ *   the main thread and sees nothing then. The watchdog is a thread with
+ *   its own run loop and a listen-only event tap (CGEventTapCreate at
+ *   kCGAnnotatedSessionEventTap, key down and key up). It takes no key:
+ *   SDL still gets each one. It counts a press only when the window server
+ *   routes the key to this process (kCGEventTargetUnixProcessID), the
+ *   counterpart of Windows' foreground check. The key is compared by its
+ *   macOS key code (a position: the layout's scan code for a letter or a
+ *   digit, from SDL at open). The main run loop takes the window thread's
+ *   part: an observer on it stamps a heartbeat each time it runs (SDL's
+ *   pump runs it), and a release is a function on the main queue
+ *   (dispatch_async_f), which runs only when the main thread pumps. While
+ *   the heartbeat is newer than 1 s, the panic asks for a release and
+ *   waits up to 1 s for it to begin and 5 s for it to end, as on Windows:
+ *   each METAL window leaves fullscreen and is minimized, the cursor
+ *   shows, the gamma tables go back, YSCR_EV_PANIC u.u32[1] 1, and the
+ *   next begin() reports 0x21, every later one 0x20. Else the process
+ *   ends: the tap is turned off, YSCR_EV_PANIC u.u32[1] 0, the gamma
+ *   tables go back, panic_fn gets up to 1 s on its own thread, and
+ *   _exit(YSCR_PANIC_EXIT_CODE = 99), not exit() (atexit handlers can
+ *   wait on locks the hung thread holds). The window server takes down
+ *   the windows and the space of a process that ended. Permission: Input
+ *   Monitoring for the program, or the terminal or app that runs it;
+ *   open() fails with a message that names it when the tap is refused.
+ *   Measured (tests/adapt/screen_metal_test.c panic and panic-post; M2
+ *   Mac mini, macOS 27.0.1, 2026-11-05, unlocked): Shift+Esc posted to
+ *   the HID tap 3 times, 300 ms apart, to a child whose main thread
+ *   sleeps: exit code 99 17.0 to 25.5 ms after press 3 in a window (6
+ *   runs), 24.1 to 29.6 ms in a fullscreen space (6 runs), and 23.4 to
+ *   29.6 ms after a 7 s hang (the beach ball; 3 runs each); panic_fn ran
+ *   each time. With the main thread pumping outside begin(), the release
+ *   took 1.7 to 10.6 ms and the child lived; the window was minimized at
+ *   the first ask in every run but one (a fullscreen space, in a locked
+ *   session; begin() asks again). Presses routed to another
+ *   process do not count. Not measured: keys pressed by hand (posted keys
+ *   only), a switched display mode (METAL opens in the desktop's mode
+ *   unless desc.mode names one).
+
  *
  *   ---------------------------------------------------------------------
  *   WINDOW ICON (desc.icon_rgba, desc.icon_sdl)
@@ -1524,6 +1732,17 @@
  *   off-grid times (YSCR_FLIP_GRID_UNSTABLE) and as a warning in the
  *   describe line; once most times are off the grid, the grid follows
  *   them (THE GRID).
+ *   METAL (v0.13.0) refuses to open on a display in a variable refresh
+ *   mode (ProMotion, Adaptive-Sync), for the reason it refuses desc.vrr:
+ *   the core's fixed grid would be wrong for every flip, and on macOS the
+ *   panel varies the interval without being asked. It reads the window's
+ *   NSScreen minimumRefreshInterval and maximumRefreshInterval at open;
+ *   more than 0.1% apart is a variable mode, and the
+ *   message says how to set a fixed rate (System Settings > Displays >
+ *   Refresh Rate). Both are in the describe line (refresh_interval=). A
+ *   mode change or a move to another screen while open is not watched.
+ *   caps.vrr_capable stays false on METAL. No ProMotion or variable-mode
+ *   display has been tested: the refusal is checked through a test seam.
  *
  *   ---------------------------------------------------------------------
  *   SYNC GUARD
@@ -1645,8 +1864,9 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
- *   v0.11.0 - Linux X11, numbered v0.8.0 on its branch, measured there
- *          and merged over v0.8.0 to v0.10.4 (STATUS):
+ *   v0.17.0 - Linux X11, numbered v0.8.0 on its branch and v0.11.0
+ *          after its merge over v0.8.0 to v0.10.4, measured there, and
+ *          merged over v0.11.0 to v0.16.1 (STATUS):
  *          YSCR_BACKEND_GLX_OML (BACKENDS), and AUTO picks it
  *          in an X session. SDL3 makes the window; the header makes a GL ES
  *          3.0 GLX context on its own X connection, holds each frame with
@@ -1671,8 +1891,87 @@
  *          X11: evdev mice with kernel times and SDL's ids (INPUT).
  *          On GLX_OML the copy path (a window) is depth
  *          1: X11's Present copies on the next vblank (DEPTH's table gave
- *          it DWM's 2). New enum values and desc fields; nothing changes on Windows
- *          or the web.
+ *          it DWM's 2). New enum values and desc fields; nothing changes on Windows,
+ *          macOS or the web.
+ *   v0.16.1 - METAL's raw mouse reader drops empty and stale values:
+ *          IOKit called back with relative elements at 0 dated their last
+ *          change (the wheel's 12 to 44 s back), and the reader made
+ *          reports of the past of them, or kept one dated the last report
+ *          before a pause (up to 72 ms late). A relative 0 is dropped as
+ *          empty; a value dated before the reader's start, or before the
+ *          newest stamp taken from its device, as stale; both counted
+ *          (raw_mice= in the describe line). The report rate and the
+ *          stamp, measured: INPUT.
+ *   v0.16.0 - METAL gets the four features that were Windows only: the
+ *          panic watchdog (PANIC: a listen-only event tap on a thread of its
+ *          own, the main run loop's heartbeat, the release on the main
+ *          queue, else _exit(99)), raw mice (INPUT: an IOHIDManager on a
+ *          thread of its own, IOHIDValue time stamps), the OS gamma ramp
+ *          (OS GAMMA: the display's transfer table) and the code risk state
+ *          (CODES: EDR, the layer's colorspace, the mode against the
+ *          panel's native pixels; STATE_UNKNOWN cleared when each was
+ *          read). The layer's colorspace is set to nil: SDL's came tagged
+ *          sRGB, so ColorSync converted every value to the display's
+ *          profile. yscr_poll()'s time on METAL is the NSEvent time
+ *          yscr_event_input() gives. Both need Input Monitoring. No struct
+ *          or table changes; the minor bump is for the colorspace, which
+ *          changes the values shown.
+ *   v0.15.0 - METAL: yscr_event_input() gives keys, modifier keys and
+ *          mouse buttons NSEvent.timestamp in place of SDL 3.4's Cocoa
+ *          stamp, which is late by a per-process offset (INPUT). A local
+ *          NSEvent monitor, one per process, writes a ring of 64 entries
+ *          (no allocation per event); SDL events pair with their NSEvents
+ *          by SDL's own offset arithmetic, and keep SDL's stamp, tier 3,
+ *          where none fits. yscr_caps gains os_input_stamps (a bool in the
+ *          padding after raw_keyboard: no offset or size changes, a layout
+ *          change all the same); the describe line adds os_stamps=. Needs
+ *          ysp/input.h v0.5.0 (yin_sdl_ctx.os_stamps, t_os).
+ *   v0.14.1 - METAL's first open in a process takes its period from
+ *          CADisplayLink as the later opens do: the first callback's
+ *          timestamp, off the grid in a process's first windowed open (15.8
+ *          to 25.2 ms before the second, 5 of 5 processes), is left out, so
+ *          the open no longer fell back to CVDisplayLink with callbacks in
+ *          hand. A CADisplayLink whose steps are off its duration is named
+ *          (cvdisplaylink-link-off-grid). The constants' comments rest on
+ *          the clean timing session (no Screen Sharing); no constant
+ *          changed: a fullscreen space's shorter queue does not reach two
+ *          frames in flight.
+ *   v0.14.0 - METAL needs macOS 14 (Sonoma) or later, ysp's floor: on an
+ *          older system open() fails with a message that names the floor
+ *          (NSProcessInfo isOperatingSystemAtLeastVersion:, read once),
+ *          where an open on macOS 12 or 13 succeeded before. The guards for
+ *          older systems are gone (respondsToSelector: before CADisplayLink
+ *          and NSScreen's refresh intervals). CVDisplayLink stays, only for
+ *          a CADisplayLink that gives no callback in 250 ms, as with the
+ *          display asleep: measured asleep, it is the one source with the
+ *          display's period. The describe line names the source and why:
+ *          period=...ns(cadisplaylink), (cvdisplaylink-no-callback) or
+ *          (mode-no-display-link).
+ *   v0.13.1 - METAL's period at open comes from CADisplayLink's
+ *          timestamps (macOS 14 and later), not CVDisplayLink's nominal
+ *          period, which stays as the fallback; caps.mode's refresh is then
+ *          1e9 / period. The describe line names the source.
+ *   v0.13.0 - METAL refuses to open on a display in a variable refresh
+ *          mode (NSScreen's minimum and maximum refresh intervals more
+ *          than 0.1% apart): an open that succeeded before now fails, with
+ *          a message that names the fix. The intervals are in the describe
+ *          line (VARIABLE REFRESH).
+ *   v0.12.0 - METAL's constants from the probe's timing session: target
+ *          the planned vblank minus half a period (was a quarter); two
+ *          frames in flight (one showed every other vblank); a 2 ms margin
+ *          before a vblank, through the new caps.margin_ns (yscr_caps'
+ *          layout changes; the core takes the larger of its own and the
+ *          presenter's); tier 2 for a shown flip (was 3); a target more
+ *          than 0.5 s ahead held until it is near. The last frame's code
+ *          read-back is checked at close.
+ *   v0.11.0 - YSCR_BACKEND_METAL (macOS; AUTO there): a header-owned
+ *          CAMetalLayer, ANGLE drawing into the drawable's IOSurface, an
+ *          MTLSharedEvent between ANGLE's queue and the header's, onsets
+ *          from presentedTime (BACKENDS). desc.color_depth (0, 8 or 10;
+ *          10 on METAL only) and yscr_presenter_open.color_depth: struct
+ *          layouts change. The target lead, the depth and the tier are
+ *          unmeasured constants (tier 3). Objective-C through objc_msgSend
+ *          from C, nothing linked, as ysp/video.h's AVFoundation backend.
  *   v0.10.4 - COMPOSITION closes the 5 events its open got (the
  *          presentation manager's statistics and lost events, the 3
  *          buffers' available events): each open and close left 5 handles.
@@ -2008,8 +2307,100 @@
  *          groups, input restamping, mode lists and the parameter table.
  *          The other swap paths are stubs that refuse to open.
  *
- *   STATUS: v0.11.0 (GLX_OML, at the end of this block).
- *   STATUS: v0.10.4 (docs/screen.md, "Handles, no free buffer, display
+ *   STATUS: v0.17.0 (GLX_OML, at the end of this block).
+ *   STATUS: v0.16.1 (METAL, raw mice, 2026-11-05, unlocked, a quiet
+ *   machine): v0.16.0's reader, moved by hand, gave values 12 to 44 s
+ *   old (relative 0s dated their last change); the fix drops them as
+ *   empty or stale. The hand run of the fix (17:19, the Dell MS116, 5 s):
+ *   6 of 6 checks, 626 reports at 125 Hz (8.000 ms p50, 7.926 to 8.074
+ *   ms), no event earlier than the one before, the callback 55 / 122 /
+ *   266 / 486 us after the stamp (min / p50 / p99 / max, 1159 values).
+ *   tests/adapt/screen_metal_test.c's rawmice case also checks the rules
+ *   with injected values, through an accumulator of its own; the whole
+ *   test 74 of 74 (17:21, unlocked).
+ *   STATUS: v0.16.0 (METAL, 2026-11-05, M2 Mac mini, macOS 27.0.1, the
+ *   M27Q on HDMI in its 1920 x 1080 mode at "60 Hz", AC, load average 0.8
+ *   to 1.4): tests/adapt/screen_metal_test.c 73 of 73 unlocked, and its
+ *   v0.16.0 cases (state, gamma, rawmice, panic) also locked. The layer
+ *   read sRGB-tagged before the fix and untagged after it; the code risk
+ *   SCALED (1920 x 1080 on a 2560 x 1440 panel) with STATE_UNKNOWN clear;
+ *   the gamma set path on hardware (a table one entry off, set to
+ *   identity, read back, put back at close); the panic's times in PANIC.
+ *   Not measured: the raw mouse report rate and stamp (a person must move
+ *   the mouse; done for v0.16.1), the light (whether the table and the untagged layer reach
+ *   the panel unchanged: no Screen Recording permission for a capture, no
+ *   photodiode), keys by hand.
+ *   STATUS: v0.15.0 (METAL, input, 2026-11-05, unlocked, no Screen
+ *   Sharing, AC; Accessibility granted): tests/adapt/screen_metal_test.c
+ *   42 of 42. Its input case, run with 200 events per kind: F19, the
+ *   left shift key and the left button posted with CGEventPostToPid and
+ *   CGEventPost(kCGHIDEventTap) while a frame loop read them through
+ *   yscr_poll() and yscr_event_input(): 1600 of 1600 stamps equal to the
+ *   test's own NSEvent monitor's to the ns, none left with SDL's; stamp
+ *   minus post 49 us to 44.6 ms (p50 112 to 136 us, p99 up to 3.8 ms);
+ *   SDL's own stamps 0.5 to 0.8 ms later at the median, its modifier keys
+ *   8 to 9 ms (the frame's read). SDL delivered no button posted to the
+ *   process (0 of 200); the pairing passed over those entries. Not
+ *   measured: real keys and mice, IME, two windows.
+ *   STATUS: v0.14.1 (METAL, 2026-11-05, unlocked, no Screen Sharing, AC,
+ *   the M27Q at "60 Hz"): tests/adapt/screen_metal_test.c 33 of 33, the
+ *   process's first open now period=16680375ns(cadisplaylink) (before:
+ *   cvdisplaylink-no-callback in every process); a fullscreen space ran
+ *   119 of 119 shown flips a vblank apart, 0 dropped, at depth 2. The
+ *   probe's clean session (docs/screen_macos_probe.md section 6) set no
+ *   new constant: depth, target and margin held in every kind.
+ *   STATUS: v0.14.0 (METAL, the macOS 14 floor): no system older than 14
+ *   was at hand; tests/adapt/screen_metal_test.c acts as one through a seam
+ *   (YSCR__MTL_OS_14) and checks the refusal and its message. The asleep
+ *   measurement behind the CVDisplayLink case (2026-11-05, Apple M2, M27Q
+ *   over HDMI at "60 Hz", the display asleep, a 320 x 240 window, 1 s
+ *   each): CADisplayLink 0 callbacks; CAMetalDisplayLink 59 updates with
+ *   its drawables dropped, its targetPresentationTimestamp stepping exactly
+ *   16666667 ns (a 60.000 Hz grid, not the display's 16680375, so 0.8 ms
+ *   a second off), and 3 updates with them presented; CVDisplayLink's
+ *   nominal period 16680417 ns (2.5 ppm off).
+ *   STATUS: v0.13.1 (METAL, the period): CADisplayLink's timestamps
+ *   stepped by 16680375 ns (+-1) on the M27Q's "60 Hz", on presentedTime's
+ *   grid, where its duration said 16680417 (the probe, 2026-11-05). The
+ *   header's own read did not get a callback here: the display was asleep
+ *   (the session locked), so every real open took the CVDisplayLink
+ *   fallback (16680417 ns); the CADisplayLink path ran only with its
+ *   timestamps injected through a test seam. 2 of 2 new mutants killed.
+ *   STATUS: v0.13.0 (METAL, variable refresh): no ProMotion or variable-
+ *   mode display was attached. tests/adapt/screen_metal_test.c injects the
+ *   two intervals through a seam (YSCR__MTL_SCREEN_INTERVALS): 8.333 and
+ *   33.333 ms are refused with the message, 8.333 and 8.333 ms open; the
+ *   M27Q's own read 16680416 ns for both (a fixed mode). 3 of 3 new
+ *   mutants killed.
+ *   v0.12.0 (METAL; docs/screen_macos_probe.md section 6, timing
+ *   session of 2026-11-05 on the probe, not on this header): Apple M2, M27Q
+ *   over HDMI at 59.9505 Hz (also 120 and 144 Hz), AC, a Screen Sharing
+ *   session open (screensharingd about 11% CPU), unlocked. presentedTime
+ *   sat on its own grid to 0.64 us (max over every run) and moved with 30
+ *   of 30 late frames per kind and rate; presentAtTime 2 to 5 vblanks
+ *   ahead showed on the planned vblank from 0.9 or 0.95 period before it
+ *   up to it (2155 of 2160); a frame loop waiting for the frame before
+ *   showed every other vblank (1701 of 1896 steps of 2). This header's own
+ *   frame loop afterwards (tests/adapt/screen_metal_test.c, unlocked, 800
+ *   x 600 window at 59.95 Hz, about 4.5 ms of GPU time a frame): 120 of 120
+ *   shown, 119 of 119 a vblank after the one before, 0 dropped, tier 2; 10
+ *   bits 30 of 30 and 29 of 29. No timing run of the header's own.
+ *   v0.11.0 (METAL; docs/screen.md, "macOS: the header owns the
+ *   CAMetalLayer"): built and run on an Apple M2 Mac mini, macOS 27.0.1,
+ *   ANGLE from Electron 43.8.3, SDL 3.4.0, with the console session locked
+ *   the whole time, so no frame was shown: every presentedTime was 0, and
+ *   every record OCCLUDED, estimated and tier 3. What ran without a shown
+ *   frame: tests/adapt/screen_metal_test.c read every frame's center pixel
+ *   back after the wait on ANGLE's signal, under a 400-iteration fragment
+ *   loop, 120 of 120 frames its own (8 bits) and 30 of 30 (10 bits); with
+ *   the wait removed (mutant mt-08), 21 of 120 and 2 of 30 read the frame
+ *   two before; the code self test passed and 150 to 158 codes read back
+ *   in each 60-frame run with none differing; 2 pbuffers per run. A
+ *   gfx on a METAL screen has its origin at the top. Not measured: anything about a shown frame, so the
+ *   target lead, the depth, the tier, presentAtTime's rule, direct against
+ *   composed, other refresh rates, the panel's 10 bits, input timestamps
+ *   on macOS.
+ *   v0.10.4 (docs/screen.md, "Handles, no free buffer, display
  *   ids"): on the laptop below, 10 opens and closes a backend gained 40
  *   handles (Event 40) on COMPOSITION before, ON and OFF, and 0 after on
  *   COMPOSITION and DXGI_FLIP; the no-free-buffer case (a hook) in front:
@@ -2237,12 +2628,13 @@
  *   drawn (read back, 96 dpi).
  *   tests/compile/screen_com.cpp checks every COM slot and struct the
  *   header declares against the Windows SDK (MSVC; MinGW for DComp only).
- *   GLX_OML (v0.11.0; measured as v0.8.0 on its branch, on the same code
+ *   GLX_OML (v0.17.0, v0.11.0 before the merge over v0.16.1; measured as v0.8.0 on its branch, on the same code
  *   before the v0.6 to v0.10.4 changes came in; after v0.7.2, on 2026-10-13, test_screen_glx passed and
  *   its 31 glx- mutants gave the expected results, 30 killed and glx-21
  *   survived as listed, with SDL 3.4.18; after v0.10.4, on 2026-11-04,
- *   test_screen_glx passed and its 32 glx- mutants gave the expected results,
- *   31 killed and 1 survived as listed, with the window thread off): one machine, Debian 12, kernel
+ *   test_screen_glx passed and its 31 glx- mutants gave the expected results,
+ *   30 killed and 1 survived as listed, with the window thread off; after
+ *   v0.16.1, on 2026-11-05, the same, 30 killed and glx-21 survived): one machine, Debian 12, kernel
  *   6.11.5-liquorix,
  *   Xorg 21.1 with the amdgpu DDX, Mesa 22.3.6 radeonsi on an AMD RX 6600,
  *   one 1920 x 1080 output at 60.000000 Hz (dot clock), Xfwm4 with its
@@ -2272,7 +2664,8 @@
  *   NOT done: any rate but 60 Hz, any other GPU, Windows 10 (COMPOSITION
  *   needs 11), ARM64 and x86 (COMPOSITION refuses them: the hidden-pointer returns
  *   are checked only on x64), two physical displays, variable refresh
- *   (refused), macOS and Wayland swap paths (stubs). On X11: a
+ *   (refused), the Wayland swap path (a stub), a shown frame on macOS
+ *   (METAL ran only with the session locked). On X11: a
  *   compositing manager other than Xfwm4's, two X screens in one process
  *   (SDL 3 cannot), XWayland, NVIDIA's driver, the delay from a key or a
  *   click to its kernel time (the device's scan and polling are in no
@@ -2285,9 +2678,9 @@
 #define YSP_SCREEN_H_INCLUDED
 
 #define YSCR_VERSION_MAJOR 0
-#define YSCR_VERSION_MINOR 11
+#define YSCR_VERSION_MINOR 17
 #define YSCR_VERSION_PATCH 0
-#define YSCR_VERSION_STRING "0.11.0"
+#define YSCR_VERSION_STRING "0.17.0"
 
 #include "ysp/rt.h"
 #include "ysp/input.h"
@@ -2626,7 +3019,7 @@ typedef enum yscr_backend {
     YSCR_BACKEND_COMPOSITION,    /* Windows 11 composition swapchain       */
     YSCR_BACKEND_GLX_OML,        /* Linux X11                              */
     YSCR_BACKEND_WAYLAND,        /* stub                                   */
-    YSCR_BACKEND_METAL,          /* macOS: stub                            */
+    YSCR_BACKEND_METAL,          /* macOS: CAMetalLayer, ANGLE's Metal back end */
     YSCR_BACKEND_WEB,            /* Emscripten: WebGL2, requestAnimationFrame */
     YSCR_BACKEND_SIM,            /* no window, a vblank grid on ysp_rt     */
     YSCR_BACKEND_CUSTOM          /* desc.presenter                         */
@@ -2674,10 +3067,17 @@ typedef struct yscr_caps {
     bool     native_target;    /* the OS takes a target vblank or time        */
     bool     hw_onset;         /* onsets are OS vblank timestamps             */
     bool     vrr_capable;      /* necessary, not sufficient                   */
-    int32_t  max_in_flight;    /* 1                                           */
+    int32_t  max_in_flight;    /* 1; METAL 2                                  */
     yscr_mode mode;          /* the mode obtained, read back from the OS    */
     yscr_tier worst_tier;    /* the worst tier of any flip since open       */
     bool     raw_keyboard;     /* keys come on SDL's raw path now (INPUT)     */
+    bool     os_input_stamps;  /* yscr_event_input() gives keys and mouse
+                                * buttons their OS event's time (macOS:
+                                * NSEvent.timestamp; INPUT); set
+                                * yin_sdl_ctx.os_stamps from it            */
+    int64_t  margin_ns;        /* the presenter's: the least time before a
+                                * vblank at which a present can still make
+                                * it; 0 = the core's (P/8, at most 1 ms)    */
 } yscr_caps;
 
 typedef struct yscr_patch {
@@ -2883,6 +3283,7 @@ typedef struct yscr_presenter_open {
     uint32_t*           code_failed;   /* codes that differed                */
     int32_t*            code_selftest; /* 1 passed, -1 failed, 0 not run     */
     int32_t             d3d11_video;   /* desc.d3d11_video                   */
+    int32_t             color_depth;   /* desc.color_depth: 0 or 8, or 10    */
 } yscr_presenter_open;
 
 typedef struct yscr_presenter {
@@ -2988,6 +3389,8 @@ typedef struct yscr_desc {
     void*          on_context_ctx;
     /* the window's own thread (WINDOW THREAD) */
     int32_t        window_thread;    /* YSCR_WINDOW_THREAD_*; 0 = AUTO         */
+    /* bits per channel of the frame (BACKENDS, METAL) */
+    int32_t        color_depth;      /* 0 or 8 = 8 bits; 10 = 10 bits (METAL) */
 } yscr_desc;
 
 /* Private. One flip between flip_at() and its completion. */
@@ -3564,6 +3967,19 @@ YSCR_API const yscr_param* yscr_params(int* n);
     #endif
 #endif
 
+/* macOS: the Metal presenter. No Apple header beyond these plain system
+ * ones: the frameworks are loaded at run time (BACKENDS, METAL). */
+#if defined(__APPLE__) && !defined(YSCR_NO_SDL)
+    #include <TargetConditionals.h>
+    #if TARGET_OS_OSX
+        #define YSCR__METAL 1
+        #include <dlfcn.h>
+        #include <mach/mach_time.h>
+        #include <unistd.h>          /* getpid, _exit: the panic watchdog */
+        #include <pthread/qos.h>     /* the watchdog's and the mouse reader's QoS */
+    #endif
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -3834,8 +4250,11 @@ static struct {
  * YSCR_ABORT_PANIC, until the last such screen closes. */
 static volatile int32_t yscr__released;
 /* The panic released the display of this screen: begin() returns
- * YSCR_QUIT from now on. */
-static int yscr__released_on(const yscr_screen* s) { return s->wt && yscr__a_load(&yscr__released); }
+ * YSCR_QUIT from now on. On macOS the main run loop is the window
+ * thread's counterpart (PANIC). */
+static int yscr__released_on(const yscr_screen* s) {
+    return (s->wt || s->backend == YSCR_BACKEND_METAL) && yscr__a_load(&yscr__released);
+}
 
 /* With the window thread, SDL keeps the string of a text, IME, drop or
  * clipboard event in the memory of the thread that takes the event, and
@@ -4400,6 +4819,27 @@ static void yscr__slot_free(yscr_screen* s) {
 
 YSCR_API void yscr_request_abort(void) {
     yscr__abort_push(YSCR_ABORT_REQUEST, 0, 0, 0, yscr__now());
+}
+
+/* YSCR_EV_PANIC on each armed screen's ring (PANIC): from the watchdog's
+ * thread, as the release or the end of the process begins. */
+static void yscr__panic_records(int64_t now, uint32_t released) {
+    int i;
+    for (i = 0; i < YSCR__SLOTS; i++) {
+        yscr_screen* s = yscr__slot[i].s;
+        if (s && s->panic_armed == 1 && s->ring) {
+            yrt_event ev;
+            memset(&ev, 0, sizeof ev);
+            ev.source = (uint16_t)YRT_SRC_SCREEN;
+            ev.kind = (uint16_t)YSCR_EV_PANIC;
+            ev.t_ns = (uint64_t)now;
+            ev.aux = s->display_index;
+            ev.u.u32[0] = (uint32_t)yscr__ab.presses;
+            ev.u.u32[1] = released;
+            ev.u.i64[1] = yscr__a_load64(&yscr__ab.ack);
+            yrt_ring_push(s->ring, &ev);
+        }
+    }
 }
 
 /* --- the default window icon (WINDOW ICON) ---------------------------------
@@ -5241,6 +5681,2750 @@ static const yscr_presenter yscr__web_presenter = {
 };
 
 #endif /* YSCR__WEB */
+
+/* --- Metal presenter (macOS): the rules, which compile everywhere ----------
+ * The macOS swap path (BACKENDS, METAL; docs/screen.md, "macOS: the header
+ * owns the CAMetalLayer"). These few rules compile on every platform, so the
+ * core test checks them without a Mac; the presenter itself is macOS's.
+ *
+ * The constants come from the probe's timing sessions of 2026-11-05
+ * (docs/screen_macos_probe.md, section 6; Apple M2, M27Q over HDMI at
+ * 59.9505, 120 and 144 Hz): set from the first, with a Screen Sharing
+ * session open, and checked on the clean one (no Screen Sharing), each
+ * with the rows it rests on (clean first). The grid is presentedTime's:
+ * Core Animation's presentedTime and CADisplayLink's timestamp lie on one
+ * computed grid (residual under 1 us), 0.31 to 0.45 period after
+ * CVDisplayLink's inNow (by rate and run), which jitters by up to 0.9 ms. */
+
+/* (a) The target is the planned vblank minus half a period. Measured: a
+ * drawable shows at the first presentedTime vblank at or after its target
+ * less 0 to 0.6 ms. Clean: presentAtTime 2, 3 or 5 vblanks ahead, from
+ * 0.92 to 0.17 period before a vblank, showed on it, 1200 of 1200 at 59.95
+ * Hz (window, borderless, space, fullscreen); 0.81 to 0.06 period before
+ * it, 300 of 300 at 120 and at 144 Hz. 0.03 period (0.56 ms) after it
+ * showed on it in 91 of 240 at 59.95 Hz, a vblank late in the rest; 0.08
+ * period and more after it, a vblank late, 240 of 240 (59.95 Hz) and 120
+ * of 120 per rate. With Screen Sharing: 0.95 period before up to the
+ * vblank, 2155 of 2160. Half a period is the middle of the window that
+ * shows on the vblank, so the grid may be off by close to half a period
+ * either way. */
+#define YSCR__MTL_TARGET_LEAD 0.5
+/* (b) Two frames in flight, three drawables, depth 2 (the composed path's
+ * table depth) in every window kind. Measured (asap, one frame in flight,
+ * frames 4 on): a commit under a period plus 0.3 ms before a vblank never
+ * showed on it; the latest that missed it came a period plus 0.53 to 1.17
+ * ms before it by kind at 59.95 Hz, 1.03 at 120 Hz and 1.00 at 144 Hz
+ * (clean), up to 1.56 ms at 120 Hz with Screen Sharing; every earlier
+ * commit showed on it. A fullscreen space's deadline was a
+ * window's (1.02 against 0.80 ms). The presented handler comes 0.3 to 0.8
+ * ms after presentedTime. So a frame loop that waits for the frame before
+ * to be shown runs at half rate (links, clean: 1819 frames in 60 s, 1777
+ * steps of 2 vblanks), and one that waits for the frame two before runs at
+ * full rate. A space kept one drawable fewer queued than a window: three
+ * frames queued showed 2 periods after their commit in a space and 3 in a
+ * window (pipe, clean; 3 in both with Screen Sharing). Two in flight never
+ * fill the queue, and the header's loop in a space showed 119 of 119
+ * frames a vblank apart (tests/adapt/screen_metal_test.c), so the depth
+ * does not follow the kind. With 2 drawables instead of 3 nothing changed
+ * with one frame in flight; three leave one free while two are in
+ * flight. */
+#define YSCR__MTL_IN_FLIGHT 2
+#define YSCR__MTL_DRAWABLES 3
+/* The core's margin before a planned vblank, at least this on METAL: the
+ * commit's deadline (one period plus up to 1.56 ms, above) plus the
+ * present call (encode and commit: p99 0.28 to 0.35 ms clean, 0.45 ms
+ * with Screen Sharing; max 0.72 to 1.0 ms). Clean, 1.17 + 0.35 = 1.52 ms;
+ * with Screen Sharing the worst of each together is 2.01 ms. */
+#define YSCR__MTL_MARGIN_NS 2000000
+/* A target more than this far ahead is held by a sleep until it is this
+ * far: targets 0.1 to 1.0 s ahead showed on their vblank (1 of 1 each, in
+ * both sessions), 2 and 5 s ahead did not show, and every present of the
+ * layer after them was dropped for about 6.5 s (presentedTime 0; the
+ * window's late run, 0 of 300 shown, in both sessions). */
+#define YSCR__MTL_AHEAD_MAX_NS 500000000
+/* Window kinds: macOS has no public call that says a window is shown
+ * direct to the display, so the kind is what the header can see. */
+#define YSCR__MTL_KIND_WINDOW     0
+#define YSCR__MTL_KIND_FULLSCREEN 1   /* SDL fullscreen without a space    */
+#define YSCR__MTL_KIND_SPACE      2   /* a fullscreen space                 */
+
+static int64_t yscr__mtl_target(int64_t vblank_ns, int64_t period_ns) {
+    return vblank_ns - (int64_t)llround(YSCR__MTL_TARGET_LEAD * (double)period_ns);
+}
+
+/* (c) Tier 2 on every kind: presentedTime is an OS time for the vblank a
+ * frame showed on, not a plan: it moved with every late frame (30 of 30
+ * per kind and rate, both sessions), its handler comes after it (0.3 to
+ * 0.8 ms), and it sits on its grid to 1 us. That is DXGI_FLIP's composed
+ * onset (TIERS): good under the condition that the window is shown (else
+ * presentedTime is 0 and the flip estimated, tier 3). Not tier 1: no
+ * photodiode run says where the light is against presentedTime
+ * (CVDisplayLink puts the vblank 0.31 to 0.45 period earlier), and no
+ * public call says whether a window goes direct to the display. A
+ * fullscreen space's shorter queue (b) is the one sign of a direct path;
+ * the HUD's log was not captured. */
+static uint8_t yscr__mtl_tier(int kind) {
+    (void)kind;
+    return (uint8_t)YSCR_TIER_2;
+}
+
+static const char* yscr__mtl_kind_name(int kind) {
+    return kind == YSCR__MTL_KIND_SPACE ? "space" : kind == YSCR__MTL_KIND_FULLSCREEN ? "fullscreen" : "window";
+}
+
+/* Variable refresh (VARIABLE REFRESH): the window's screen in a variable
+ * mode (ProMotion, Adaptive-Sync) has NSScreen.minimumRefreshInterval below
+ * maximumRefreshInterval; a fixed mode has them equal (the M27Q at its
+ * "60 Hz": 16.680416 ms both, measured). The intervals in ns, 0 when not
+ * read (no screen). Returns 1 for a variable mode: more
+ * than 0.1% apart, so rounding never makes a fixed mode variable. */
+static int yscr__mtl_variable(int64_t min_ns, int64_t max_ns) {
+    if (min_ns <= 0 || max_ns <= 0) return 0;
+    return (double)(max_ns - min_ns) > 0.001 * (double)min_ns;
+}
+
+/* open()'s message for a variable mode: the header runs only a fixed grid,
+ * as it refuses desc.vrr, and says how to get one. */
+static int yscr__mtl_vrr_message(char* err, size_t cap, int64_t min_ns, int64_t max_ns) {
+    /* the screen's error holds 255 characters: kept under that */
+    return snprintf(err, cap, "ysp_screen: METAL: the display is in a variable refresh mode (%.3f to %.3f ms a "
+                    "frame), refused as desc.vrr is. Set a fixed rate: System Settings > Displays > Refresh Rate, "
+                    "not ProMotion; on an external display, its variable refresh off",
+                    (double)min_ns / 1e6, (double)max_ns / 1e6);
+}
+
+/* CVDisplayLink's nominal period, value / scale seconds, in ns; 0 when it
+ * has none. The mode's refresh rate is a rounded label (60.000 for a
+ * 59.9505 Hz HDMI mode, measured), never the period. Used only when
+ * CADisplayLink gives no callback (yscr__mtl_link_period is the source). */
+static int64_t yscr__mtl_period(int64_t value, int32_t scale) {
+    if (value <= 0 || scale <= 0) return 0;
+    return (int64_t)llround((double)value * 1e9 / (double)scale);
+}
+
+/* The period from CADisplayLink's timestamps at open: the span of the
+ * callbacks after the first over the whole periods in it, counted on the
+ * link's duration. The timestamps lie on presentedTime's grid (0.1 us
+ * apart, fit residual 0.00 us) and step by the display's real period,
+ * 16680375 ns on the M27Q's "60 Hz"; duration and targetTimestamp -
+ * timestamp give the nominal timing, 16680417 ns, 2.5 ppm off it
+ * (measured, docs/screen_macos_probe.md 6.4). The first callback's
+ * timestamp is not on the grid in a process's first windowed open: it came
+ * 15.8 to 25.2 ms before the second, then every step was 16680375 ns (5 of
+ * 5 processes, 2026-11-05; the second open and fullscreen opens were on
+ * the grid), so it is left out. A missed callback (a gap of two periods)
+ * keeps its count. 0 with fewer than 3 callbacks, or when the timestamps
+ * do not span a period within 1% of the duration's. */
+static int64_t yscr__mtl_link_period(const int64_t* ts, int n, int64_t duration_ns) {
+    int64_t span, k, per;
+    if (n < 3 || duration_ns <= 0) return 0;
+    span = ts[n - 1] - ts[1];
+    k = (int64_t)llround((double)span / (double)duration_ns);
+    if (k < 1) return 0;
+    per = (int64_t)llround((double)span / (double)k);
+    if ((double)(per > duration_ns ? per - duration_ns : duration_ns - per) > 0.01 * (double)duration_ns) return 0;
+    return per;
+}
+
+/* --- NSEvent stamps for keys and mouse buttons (INPUT, macOS) --------------
+ * SDL 3.4 stamps a Cocoa key or mouse event with NSEvent.timestamp plus a
+ * process-wide offset (Cocoa_GetEventTimestamp): the first event's read
+ * delay, lowered only when it would put a stamp after the read. Measured:
+ * 3773 us on a process's first key, then 501, 316 and down to 207 us
+ * (docs/screen_macos_probe.md 6.9). It stamps a modifier key at the read
+ * (no NSEvent time). NSEvent.timestamp is mach time with no offset. On
+ * METAL a local NSEvent monitor keeps the newest YSCR__NSM_N key and mouse
+ * button stamps, and yscr_event_input() gives an SDL event its NSEvent's.
+ *
+ * The pairing key is SDL's own arithmetic, not a field of the event: SDL's
+ * stamp minus trunc(NSEvent.timestamp x 1e9) is SDL's offset, the same for
+ * every event until SDL lowers it, so it holds a pair to the nanosecond. A
+ * field would not do: a key's scan code needs SDL's private keyCode table,
+ * and a button misses SDL's remapping (with SDL's hint, a control-click is
+ * the right button).
+ * Entries are taken in order within their class (key down, key up, button
+ * down, button up, and each of the 8 modifiers): an SDL event takes the
+ * oldest entry not taken whose NSEvent came at most YSCR__NSM_EPS_NS after
+ * SDL's stamp and at most YSCR__NSM_WINDOW_NS before it, and, once an
+ * offset is known, whose offset is no larger than the last match's (SDL's
+ * offset never grows). An older entry that fails is an event SDL did not
+ * deliver (a click on the title bar, a key IME consumed, another window's)
+ * and is passed over; an SDL event with no entry (SDL's own key-ups at a
+ * focus loss, a release outside the window) keeps SDL's stamp, tier 3. A
+ * modifier, stamped at the read, takes the oldest entry of its key within
+ * the window, with no offset test. */
+#define YSCR__NSM_N         64           /* entries kept, a power of 2     */
+#define YSCR__NSM_KEY_DOWN  0
+#define YSCR__NSM_KEY_UP    1
+#define YSCR__NSM_BTN_DOWN  2
+#define YSCR__NSM_BTN_UP    3
+#define YSCR__NSM_MOD       4            /* + 0..7: SDL's LCTRL .. RGUI     */
+#define YSCR__NSM_CLASSES   12
+#define YSCR__NSM_WINDOW_NS 1000000000   /* an NSEvent this much older is not the pair */
+#define YSCR__NSM_EPS_NS    50000        /* the restamp's bracket (42 to 125 ns) many times over */
+#define YSCR__NSM_D_TOL_NS  1000         /* the offset test: SDL's sum is exact; 1 us of rounding */
+
+typedef struct yscr__nsev {
+    int64_t          t_ns;    /* trunc(NSEvent.timestamp x 1e9), SDL's rounding: mach ns */
+    volatile int32_t seq;     /* written last; 0 = empty                    */
+    uint8_t          cls, reserved_[3];
+} yscr__nsev;
+
+typedef struct yscr__nsm_state {
+    uint32_t next[YSCR__NSM_CLASSES];   /* per class, the first seq not taken */
+    int32_t  have_d;
+    int64_t  d_last;    /* SDL's stamp minus t_ns at the last offset match, SDL ns */
+    int64_t  b_last;    /* SDL's lateness then, ysp_rt ns: the describe line's os_bias */
+    uint32_t found, tried, passed;
+} yscr__nsm_state;
+
+/* The ysp_rt time of the NSEvent that an SDL event of class cls came from,
+ * or 0 when no entry fits. ring: the entries, written in seq order, head
+ * the newest seq; s_ticks: SDL's stamp; s_rt: it on the ysp_rt clock;
+ * mach_off: ysp_rt minus mach ns. Takes the entry. */
+static int64_t yscr__nsm_pick(const yscr__nsev* ring, uint32_t head, yscr__nsm_state* st, int cls,
+                              uint64_t s_ticks, int64_t s_rt, int64_t mach_off) {
+    uint32_t seq, first = head >= YSCR__NSM_N ? head - YSCR__NSM_N + 1 : 1;
+    if (cls < 0 || cls >= YSCR__NSM_CLASSES) return 0;
+    st->tried++;
+    seq = st->next[cls] < first ? first : st->next[cls];
+    for (; seq <= head; seq++) {
+        const yscr__nsev* e = &ring[seq & (YSCR__NSM_N - 1)];
+        int64_t b, d;
+        if ((uint32_t)e->seq != seq || e->cls != (uint8_t)cls) continue;
+        b = s_rt - (e->t_ns + mach_off);
+        if (b < -YSCR__NSM_EPS_NS) break;   /* this and the later ones came after SDL's stamp */
+        if (b > YSCR__NSM_WINDOW_NS) { st->passed++; continue; }
+        if (cls < YSCR__NSM_MOD) {
+            d = (int64_t)(s_ticks - (uint64_t)e->t_ns);
+            if (st->have_d && d > st->d_last + YSCR__NSM_D_TOL_NS) { st->passed++; continue; }
+            st->have_d = 1;
+            st->d_last = d;
+            st->b_last = b;
+        }
+        st->next[cls] = seq + 1;
+        st->found++;
+        return e->t_ns + mach_off;
+    }
+    return 0;
+}
+
+/* The class of an NSEvent: its type, and for flagsChanged the key code of
+ * the modifier; -1 for the rest (caps lock, fn: SDL sends no key for
+ * them as a modifier). */
+static int yscr__nsm_ns_class(unsigned long type, unsigned key_code) {
+    /* macOS key codes of LCTRL, LSHIFT, LALT, LGUI, RCTRL, RSHIFT, RALT,
+     * RGUI: SDL's modifier scan codes 224 to 231 in order */
+    static const unsigned short mods[8] = { 0x3B, 0x38, 0x3A, 0x37, 0x3E, 0x3C, 0x3D, 0x36 };
+    int k;
+    switch (type) {
+    case 10: return YSCR__NSM_KEY_DOWN;                        /* NSEventTypeKeyDown      */
+    case 11: return YSCR__NSM_KEY_UP;                          /* NSEventTypeKeyUp        */
+    case 1: case 3: case 25: return YSCR__NSM_BTN_DOWN;        /* left, right, other down */
+    case 2: case 4: case 26: return YSCR__NSM_BTN_UP;
+    case 12:                                                   /* NSEventTypeFlagsChanged */
+        for (k = 0; k < 8; k++) if (mods[k] == key_code) return YSCR__NSM_MOD + k;
+        return -1;
+    default: return -1;
+    }
+}
+
+/* One presented handler's report as a completion. presented_ns is
+ * presentedTime on the ysp_rt clock, 0 when the drawable was not shown;
+ * then the core estimates the flip, OCCLUDED when the window was hidden or
+ * the session locked. count is the presenter's own vblank number of the
+ * time, counted on the period from t0. */
+static void yscr__mtl_vblank(uint64_t present_id, int64_t presented_ns, int hidden, int kind, int64_t t0,
+                             int64_t period_ns, yscr_vblank* v) {
+    memset(v, 0, sizeof *v);
+    v->present_id = present_id;
+    v->path = YSCR_PATH_COMPOSED;
+    v->tier = yscr__mtl_tier(kind);
+    if (presented_ns > 0) {
+        v->t_ns = presented_ns;
+        v->count = period_ns > 0 ? (int64_t)llround((double)(presented_ns - t0) / (double)period_ns) : 0;
+    } else if (hidden) {
+        v->flags = YSCR_FLIP_OCCLUDED;
+    }
+}
+
+/* A code value (0xBBGGRR) or a gray as the drawable's 32-bit pixel:
+ * BGRA8Unorm, or BGR10A2Unorm with each 8-bit value spread over 10 bits
+ * (v << 2 | v >> 6, so v10 >> 2 gives v back). */
+static uint32_t yscr__mtl_pixel(uint32_t rgb, int bits10) {
+    uint32_t r = rgb & 0xFFu, g = (rgb >> 8) & 0xFFu, b = (rgb >> 16) & 0xFFu;
+    if (!bits10) return 0xFF000000u | (r << 16) | (g << 8) | b;
+    return 0xC0000000u | (((r << 2) | (r >> 6)) << 20) | (((g << 2) | (g >> 6)) << 10) | ((b << 2) | (b >> 6));
+}
+
+/* The code value back from a drawable pixel. */
+static uint32_t yscr__mtl_code_of(uint32_t px, int bits10) {
+    if (!bits10) return ((px >> 16) & 0xFFu) | (px & 0xFF00u) | ((px & 0xFFu) << 16);
+    return (((px >> 20) & 0x3FFu) >> 2) | ((((px >> 10) & 0x3FFu) >> 2) << 8) | (((px & 0x3FFu) >> 2) << 16);
+}
+
+/* --- the macOS panic, gamma, code risk and raw mice: the rules (v0.16.0) ---
+ * Pure, so the core test checks them without a Mac; the system calls are
+ * in the METAL block below. */
+
+/* The macOS virtual key code of an SDL scan code (USB HID usage), for the
+ * keys the panic takes: Esc, F1 to F12, a letter or a digit; -1 for the
+ * rest. A scan code is a key's position; macOS's codes are positions too
+ * (Events.h, kVK_*), so the table holds on every layout. */
+static int yscr__kvk_of(uint32_t scancode) {
+    static const uint8_t letter[26] = { 0, 11, 8, 2, 14, 3, 5, 4, 34, 38, 40, 37, 46, 45, 31, 35, 12, 15, 1, 17, 32,
+                                        9, 13, 7, 16, 6 };            /* a .. z: scan codes 4 .. 29   */
+    static const uint8_t digit[10] = { 18, 19, 20, 21, 23, 22, 26, 28, 25, 29 };   /* 1 .. 9, 0: 30 .. 39 */
+    static const uint8_t fkey[12] = { 122, 120, 99, 118, 96, 97, 98, 100, 101, 109, 103, 111 };   /* F1 .. F12: 58 .. 69 */
+    if (scancode >= 4 && scancode <= 29) return letter[scancode - 4];
+    if (scancode >= 30 && scancode <= 39) return digit[scancode - 30];
+    if (scancode == 41) return 53;                                    /* Esc */
+    if (scancode >= 58 && scancode <= 69) return fkey[scancode - 58];
+    return -1;
+}
+
+/* The scan code of a key the panic takes (yscr__vk_known), on a US layout.
+ * On macOS open() asks SDL for the scan code under the current layout
+ * (SDL_GetScancodeFromKey), and this is the fallback. 0 = none. */
+static uint32_t yscr__scancode_us(uint32_t key) {
+    if (key == YSCR_KEY_ESCAPE) return 41;
+    if (key >= 0x4000003Au && key <= 0x40000045u) return key & 0xFFu;   /* SDLK_F1..F12 carry their scan code */
+    if (key >= 'a' && key <= 'z') return 4 + (key - 'a');
+    if (key >= '1' && key <= '9') return 30 + (key - '1');
+    if (key == '0') return 39;
+    return 0;
+}
+
+/* CGEventFlags as YSCR_MOD_*: shift, control, option, command
+ * (kCGEventFlagMask*, CGEventTypes.h). */
+static uint32_t yscr__cg_mods(uint64_t flags) {
+    uint32_t m = 0;
+    if (flags & 0x00020000u) m |= YSCR_MOD_SHIFT;
+    if (flags & 0x00040000u) m |= YSCR_MOD_CTRL;
+    if (flags & 0x00080000u) m |= YSCR_MOD_ALT;
+    if (flags & 0x00100000u) m |= YSCR_MOD_GUI;
+    return m;
+}
+
+/* A float transfer table (CGGetDisplayTransferByTable) of n entries is the
+ * 8-bit identity: each entry at 8 bits is its index's. The same test as
+ * Windows' ramp, so a table the panel shows unchanged at 8 bits passes. */
+static int yscr__table_identity(const float* t, uint32_t n) {
+    uint32_t i;
+    if (n < 2) return 0;
+    for (i = 0; i < n; i++)
+        if (lrint((double)t[i] * 255.0) != lrint((double)i * 255.0 / (double)(n - 1))) return 0;
+    return 1;
+}
+
+/* What open() reads of a METAL screen's display: the code risk from it. */
+#define YSCR__CS_UNTAGGED 0   /* layer.colorspace nil: no color matching (CAMetalLayer.h) */
+#define YSCR__CS_DISPLAY  1   /* tagged with the display's own space                     */
+#define YSCR__CS_OTHER    2   /* tagged with another space: matched to the display's     */
+typedef struct yscr__mac_color {
+    int    have_screen;            /* NSScreen and its EDR values were read          */
+    double edr, edr_potential;     /* maximum(Potential)ExtendedDynamicRangeColorComponentValue */
+    int    wants_edr;              /* layer.wantsExtendedDynamicRangeContent          */
+    int    colorspace;             /* YSCR__CS_*                                      */
+    int    mode_w, mode_h;         /* the display mode's pixels; 0 = not read         */
+    int    native_w, native_h;     /* the panel's: a mode with the native flag; 0 = none */
+    int    win_w, win_h;           /* the window's pixels (caps.mode)                 */
+    int    windowed;
+    int    gamma_ok;               /* os_gamma identity, set or identity(kept)        */
+} yscr__mac_color;
+
+/* ADVANCED_COLOR: the display can show EDR or shows it now (an HDR mode,
+ * an XDR panel: macOS maps SDR values into its range), the layer asks for
+ * EDR, or the layer is tagged with a space that is not the display's
+ * (ColorSync converts it). SCALED, fullscreen only as on Windows: the mode
+ * is not the panel's own pixels, or the window's pixels are not the
+ * mode's (the compositor scales them). STATE_UNKNOWN when either could
+ * not be read. */
+static uint16_t yscr__mac_risk(const yscr__mac_color* c) {
+    uint16_t r = 0;
+    if (!c->have_screen) r |= YSCR_CODE_RISK_STATE_UNKNOWN;
+    else if (c->edr > 1.0 + 1e-6 || c->edr_potential > 1.0 + 1e-6 || c->wants_edr || c->colorspace == YSCR__CS_OTHER)
+        r |= YSCR_CODE_RISK_ADVANCED_COLOR;
+    if (!c->mode_w || !c->native_w) r |= YSCR_CODE_RISK_STATE_UNKNOWN;
+    else if (!c->windowed && (c->mode_w != c->native_w || c->mode_h != c->native_h ||
+                              (c->win_w && (c->win_w != c->mode_w || c->win_h != c->mode_h))))
+        r |= YSCR_CODE_RISK_SCALED;
+    if (!c->gamma_ok) r |= YSCR_CODE_RISK_GAMMA;
+    return r;
+}
+
+/* IOHIDValues into raw mouse reports (INPUT, "Raw mice", macOS). IOKit
+ * parses the device's reports and calls back once per element that
+ * changed, each value with its report's time stamp, so the values of one
+ * report share (device, time): a value with another device or time
+ * closes the report before it, and the reader closes the last one when
+ * its run loop goes idle. */
+typedef struct yscr__hid_acc {
+    int              have;
+    uint32_t         device;
+    int64_t          t;
+    yscr_mouse_event e;
+} yscr__hid_acc;
+
+static int32_t yscr__sat_add32(int32_t a, int64_t b) {
+    int64_t s = (int64_t)a + b;
+    return (int32_t)(s > 2147483647LL ? 2147483647LL : s < -2147483647LL ? -2147483647LL : s);
+}
+
+static int16_t yscr__sat_add16(int16_t a, int64_t b) {
+    int64_t s = (int64_t)a + b;
+    return (int16_t)(s > 32767 ? 32767 : s < -32767 ? -32767 : s);
+}
+
+/* An absolute axis's value as 0..65535 of its logical range. */
+static int32_t yscr__hid_abs(int64_t v, int64_t lmin, int64_t lmax) {
+    double x;
+    if (lmax <= lmin) return 0;
+    x = (double)(v - lmin) * 65535.0 / (double)(lmax - lmin);
+    return (int32_t)(x < 0 ? 0 : x > 65535.0 ? 65535 : x + 0.5);
+}
+
+/* One value. Returns 1 when *done holds the report the value closed. */
+static int yscr__hid_add(yscr__hid_acc* a, uint32_t device, int64_t t, uint32_t page, uint32_t usage, int64_t v,
+                         int relative, int64_t lmin, int64_t lmax, yscr_mouse_event* done) {
+    static const uint8_t button[5] = { YSCR_MOUSE_LEFT, YSCR_MOUSE_RIGHT, YSCR_MOUSE_MIDDLE, YSCR_MOUSE_X1,
+                                       YSCR_MOUSE_X2 };
+    int closed = 0, used = 1;
+    yscr_mouse_event* e = &a->e;
+    if (a->have && (a->device != device || a->t != t)) {
+        *done = a->e;
+        a->have = 0;
+        closed = 1;
+    }
+    if (!a->have) {
+        memset(e, 0, sizeof *e);
+        e->t = t;
+        e->device = device;
+    }
+    if (page == 1 && (usage == 0x30 || usage == 0x31)) {          /* X, Y */
+        int32_t* axis = usage == 0x30 ? &e->dx : &e->dy;
+        if (relative) *axis = yscr__sat_add32(*axis, v);
+        else { *axis = yscr__hid_abs(v, lmin, lmax); e->flags |= YSCR_MOUSE_ABSOLUTE; }
+    } else if (page == 1 && usage == 0x38) {                       /* the wheel, away from the user positive */
+        e->wheel = yscr__sat_add16(e->wheel, v * 120);
+    } else if (page == 0x0C && usage == 0x238) {                   /* AC Pan, the horizontal wheel */
+        e->hwheel = yscr__sat_add16(e->hwheel, v * 120);
+    } else if (page == 9 && usage >= 1 && usage <= 5) {            /* buttons: 1 left, 2 right, 3 middle */
+        if (v) e->down |= button[usage - 1];
+        else e->up |= button[usage - 1];
+    } else {
+        used = 0;
+    }
+    if (used && !a->have) {
+        a->have = 1;
+        a->device = device;
+        a->t = t;
+    }
+    return closed;
+}
+
+/* A value that is not from a report read since the reader started (v0.16.1).
+ * IOKit keeps each element's last value with the stamp of the report that
+ * set it, and the value callback gave some of those cached values after
+ * the open, dated before it: a hand run got values 43.5 to 44.0 s old,
+ * and the reader made a report of them. Such a value is stale when its
+ * stamp is before the reader's start (t_start), or before the newest
+ * stamp already taken from its device (newest; 0 = none yet): the values
+ * of one report share a stamp and a device's reports come in order. */
+static int yscr__hid_stale(int64_t t, int64_t t_start, int64_t newest) {
+    return t < t_start || (newest && t < newest);
+}
+
+/* A value that says nothing (v0.16.1): a relative element at 0. The hand
+ * runs showed IOKit calls back with a relative element's 0 after a report
+ * that moved it, dated with the element's last change: the wheel's 0 with
+ * every report of a move, 12 to 44 s old, and X's or Y's 0 with the stamp
+ * of the report before (8 to 32 ms old). A relative 0 adds nothing to a
+ * report, but its stamp would open a report of its own, or one dated the
+ * last report before a pause. An absolute axis at 0 is a position: kept. */
+static int yscr__hid_empty(int relative, int64_t v) { return relative && v == 0; }
+
+/* The report still open, when the reader goes idle. */
+static int yscr__hid_flush(yscr__hid_acc* a, yscr_mouse_event* done) {
+    if (!a->have) return 0;
+    *done = a->e;
+    a->have = 0;
+    return 1;
+}
+
+#if defined(YSCR__METAL)
+
+/* --- Metal presenter (macOS) ------------------------------------------------
+ * SDL makes the window; the header owns the CAMetalLayer (SDL_Metal_CreateView)
+ * on the MTLDevice ANGLE's Metal display reports. ANGLE draws each frame
+ * straight into the drawable through a pbuffer on the drawable's IOSurface
+ * (EGL_ANGLE_iosurface_client_buffer), one per IOSurface, cached. ANGLE's
+ * queue and the header's are two: ANGLE signals an MTLSharedEvent with the
+ * present id at the end of the frame (EGL_ANGLE_metal_shared_event_sync),
+ * and the header's command buffer waits on it before it draws the patch and
+ * the codes, reads codes back, and presents. Without the wait, 2 to 5 of 120
+ * frames were read unfinished under GPU load (docs/screen_macos_probe.md).
+ *
+ * The onset is MTLDrawable.presentedTime from the presented handler: mach
+ * time, which is ysp/rt.h's clock from v0.10.0 on, and an offset correlated
+ * at open (and every 10 s) before. 0 means not shown.
+ *
+ * Nothing is linked and no Apple header is included, as in ysp/video.h's
+ * AVFoundation backend: libobjc and the frameworks are loaded at run time,
+ * and every Objective-C call is objc_msgSend cast to the method's exact
+ * prototype, so the header stays C99 and C++ (docs/screen.md). The presented
+ * handler is a Block: a global Block literal built by hand to the Block ABI,
+ * one per handler slot, so Metal's copy of it is a no-op and it outlives any
+ * screen. */
+
+/* Test seam, not API: tests/adapt/screen_metal_test.c defines
+ * YSCR__MTL_SYNC_PIXEL(id, px) to get the center pixel of every frame as
+ * the header's command buffer read it, after its wait on ANGLE's signal. */
+#if defined(YSCR__MTL_SYNC_PIXEL)
+#define YSCR__MTL_SYNC_PIXEL_ON 1
+#else
+#define YSCR__MTL_SYNC_PIXEL_ON 0
+#endif
+
+typedef void* yscr__id;
+typedef struct yscr__mtl_size { unsigned long w, h, d; } yscr__mtl_size;     /* MTLSize   */
+typedef struct yscr__mtl_origin { unsigned long x, y, z; } yscr__mtl_origin; /* MTLOrigin */
+typedef struct yscr__cvtime { int64_t value; int32_t scale; int32_t flags; } yscr__cvtime; /* CVTime */
+typedef struct yscr__cgpoint { double x, y; } yscr__cgpoint;                  /* CGPoint   */
+
+#define YSCR__MTL_BGRA8       80u          /* MTLPixelFormatBGRA8Unorm          */
+#define YSCR__MTL_BGR10A2     94u          /* MTLPixelFormatBGR10A2Unorm        */
+#define YSCR__MTL_CB_DONE     4ul          /* MTLCommandBufferStatusCompleted   */
+#define YSCR__NS_VISIBLE      2ul          /* NSWindowOcclusionStateVisible     */
+#define YSCR__NS_FULLSCREEN   (1ul << 14)  /* NSWindowStyleMaskFullScreen       */
+#define YSCR__EGL_PLATFORM_ANGLE       0x3202
+#define YSCR__EGL_PLATFORM_ANGLE_TYPE  0x3203
+#define YSCR__EGL_PLATFORM_METAL       0x3489
+#define YSCR__EGL_DEVICE_EXT           0x322C
+#define YSCR__EGL_METAL_DEVICE         0x34A6
+#define YSCR__EGL_IOSURFACE            0x3454
+#define YSCR__EGL_IOSURFACE_PLANE      0x345A
+#define YSCR__EGL_TEXTURE_TYPE         0x345C
+#define YSCR__EGL_TEXTURE_INTERNAL_FMT 0x345D
+#define YSCR__EGL_BIND_TARGET          0x348D
+#define YSCR__EGL_TEXTURE_FORMAT       0x3080
+#define YSCR__EGL_TEXTURE_TARGET       0x3081
+#define YSCR__EGL_TEXTURE_RGBA         0x305E
+#define YSCR__EGL_TEXTURE_2D           0x305F
+#define YSCR__EGL_WIDTH                0x3057
+#define YSCR__EGL_HEIGHT               0x3056
+#define YSCR__EGL_EXTENSIONS           0x3055
+#define YSCR__EGL_SYNC_SHARED_EVENT    0x34D8
+#define YSCR__EGL_SYNC_EVENT_OBJECT    0x34D9
+#define YSCR__EGL_SYNC_EVENT_LO        0x34DA
+#define YSCR__EGL_SYNC_EVENT_HI        0x34DB
+#define YSCR__EGL_NONE                 0x3038
+#define YSCR__EGL_RED_SIZE             0x3024
+#define YSCR__EGL_GREEN_SIZE           0x3023
+#define YSCR__EGL_BLUE_SIZE            0x3022
+#define YSCR__EGL_ALPHA_SIZE           0x3021
+#define YSCR__EGL_SURFACE_TYPE         0x3033
+#define YSCR__EGL_PBUFFER_BIT          0x0001
+#define YSCR__EGL_RENDERABLE_TYPE      0x3040
+#define YSCR__EGL_OPENGL_ES3_BIT       0x0040
+#define YSCR__EGL_CONTEXT_MAJOR        0x3098
+#define YSCR__EGL_CONTEXT_MINOR        0x30FB
+#define YSCR__GL_BGRA_EXT              0x80E1
+#define YSCR__GL_RGB10_A2              0x8059
+#define YSCR__GL_UNSIGNED_BYTE         0x1401
+#define YSCR__GL_UINT_2_10_10_10_REV   0x8368
+
+/* Process-wide: the libraries are loaded once and never unloaded. Screens
+ * open and close on the main thread (Cocoa's rule), so a plain state is
+ * enough for the loader; the handler slots are atomics. */
+static struct {
+    int    state;                          /* 0 not tried, 1 loaded, -1 failed */
+    char   why[160];
+    void*  lib[5];                         /* libobjc, CF, CG, CV, libEGL      */
+    yscr_proc msg;                         /* objc_msgSend                     */
+    void* (*sel)(const char*);
+    yscr__id (*cls)(const char*);          /* objc_getClass                    */
+    yscr__id (*allocClass)(yscr__id, const char*, size_t);
+    unsigned char (*addMethod)(yscr__id, void*, yscr_proc, const char*);
+    void  (*registerClass)(yscr__id);
+    int32_t (*CFRunLoopRunInMode)(const void*, double, unsigned char);
+    const void* cfDefaultMode;             /* kCFRunLoopDefaultMode            */
+    const void* cfCommonModes;             /* kCFRunLoopCommonModes            */
+    void* (*pool_push)(void);
+    void  (*pool_pop)(void*);
+    void*  global_block;                   /* _NSConcreteGlobalBlock           */
+    int   (*main_np)(void);                /* pthread_main_np                  */
+    void  (*CFRelease)(const void*);
+    const void* (*CFDictionaryGetValue)(const void*, const void*);
+    unsigned char (*CFBooleanGetValue)(const void*);
+    const void* (*CFStringCreateWithCString)(const void*, const char*, uint32_t);
+    const void* (*CGSessionCopyCurrentDictionary)(void);
+    int32_t (*CGGetDisplaysWithPoint)(yscr__cgpoint, uint32_t, uint32_t*, uint32_t*);
+    int32_t (*CVDisplayLinkCreateWithCGDisplay)(uint32_t, void**);
+    yscr__cvtime (*CVDisplayLinkGetNominalOutputVideoRefreshPeriod)(void*);
+    void  (*CVDisplayLinkRelease)(void*);
+    const void* locked_key;                /* CFSTR("CGSSessionScreenIsLocked") */
+    /* EGL, ANGLE's */
+    yscr_proc (*eglGetProcAddress)(const char*);
+    void* (*eglGetPlatformDisplayEXT)(unsigned, void*, const int32_t*);
+    unsigned (*eglInitialize)(void*, int32_t*, int32_t*);
+    unsigned (*eglTerminate)(void*);
+    const char* (*eglQueryString)(void*, int32_t);
+    unsigned (*eglChooseConfig)(void*, const int32_t*, void**, int32_t, int32_t*);
+    unsigned (*eglGetConfigAttrib)(void*, void*, int32_t, int32_t*);
+    void* (*eglCreateContext)(void*, void*, void*, const int32_t*);
+    unsigned (*eglDestroyContext)(void*, void*);
+    void* (*eglCreatePbufferSurface)(void*, void*, const int32_t*);
+    void* (*eglCreatePbufferFromClientBuffer)(void*, unsigned, void*, void*, const int32_t*);
+    unsigned (*eglDestroySurface)(void*, void*);
+    unsigned (*eglMakeCurrent)(void*, void*, void*, void*);
+    int32_t (*eglGetError)(void);
+    unsigned (*eglQueryDisplayAttribEXT)(void*, int32_t, intptr_t*);
+    unsigned (*eglQueryDeviceAttribEXT)(void*, int32_t, intptr_t*);
+    void* (*eglCreateSync)(void*, unsigned, const intptr_t*);
+    unsigned (*eglDestroySync)(void*, void*);
+    /* selectors */
+    void *retain, *release, *setDevice, *setPixelFormat, *setFramebufferOnly, *setMaxDrawables, *setDisplaySync;
+    void *nextDrawable, *texture, *iosurface, *width, *height, *newCommandQueue, *commandBuffer, *encodeWait;
+    void *blitEncoder, *copyBufToTex, *copyTexToBuf, *endEncoding, *presentDrawable, *presentAtTime;
+    void *addPresented, *presentedTime, *commit, *status, *newSharedEvent, *signaledValue, *newBuffer;
+    void *contents, *occlusionState, *styleMask, *waitUntilCompleted, *newTexture, *texDesc;
+    void *setUsage, *setStorageMode, *setTimeout;
+    void *screen_, *minRefresh, *maxRefresh;
+    void *linkWithTarget, *addToRunLoop, *currentRunLoop, *invalidate, *timestamp, *duration, *alloc, *init, *tick;
+    yscr__id cls_runloop, cls_target;
+    yscr__id cls_texdesc;
+    int os14;   /* macOS 14 or later: the project's floor */
+} yscr__mac;
+
+/* NSOperatingSystemVersion: three NSIntegers, long on 64-bit macOS */
+typedef struct { long major, minor, patch; } yscr__osver;
+
+#define YSCR__MSG(ret, ...) ((ret (*)(__VA_ARGS__))yscr__mac.msg)
+static yscr__id yscr__o0(yscr__id o, void* s) { return YSCR__MSG(yscr__id, yscr__id, void*)(o, s); }
+static void yscr__v0(yscr__id o, void* s) { YSCR__MSG(void, yscr__id, void*)(o, s); }
+static void yscr__vo(yscr__id o, void* s, yscr__id a) { YSCR__MSG(void, yscr__id, void*, yscr__id)(o, s, a); }
+static void yscr__vu(yscr__id o, void* s, unsigned long a) { YSCR__MSG(void, yscr__id, void*, unsigned long)(o, s, a); }
+static void yscr__vb(yscr__id o, void* s, int a) { YSCR__MSG(void, yscr__id, void*, signed char)(o, s, (signed char)a); }
+static unsigned long yscr__u0(yscr__id o, void* s) { return YSCR__MSG(unsigned long, yscr__id, void*)(o, s); }
+#define YSCR__MRELEASE(o) do { if (o) { yscr__v0((o), yscr__mac.release); (o) = NULL; } } while (0)
+
+static yscr_proc yscr__mac_sym(void* lib, const char* name) {
+    void* p = lib ? dlsym(lib, name) : NULL;
+    yscr_proc f;
+    memcpy(&f, &p, sizeof f);
+    return f;
+}
+
+static int yscr__mac_load(const char* angle_dir, char* err, size_t cap) {
+    static const char* const libs[4] = {
+        "/usr/lib/libobjc.A.dylib",
+        "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation",
+        "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics",
+        "/System/Library/Frameworks/CoreVideo.framework/CoreVideo" };
+    const char* miss = NULL;
+    int k;
+    if (yscr__mac.state < 0) { yscr__set_error(err, cap, "ysp_screen: %s", yscr__mac.why); return YSCR_ERR_NOT_IMPLEMENTED; }
+    if (yscr__mac.state == 0) {
+        for (k = 0; k < 4; k++) {
+            yscr__mac.lib[k] = dlopen(libs[k], RTLD_LAZY | RTLD_LOCAL);
+            if (!yscr__mac.lib[k] && !miss) miss = libs[k];
+        }
+#define YSCR__F(l, f, n) do { yscr_proc p_ = yscr__mac_sym(yscr__mac.lib[l], n); \
+        if (!p_ && !miss) miss = n; memcpy((void*)&yscr__mac.f, &p_, sizeof p_); } while (0)
+        yscr__mac.msg = yscr__mac_sym(yscr__mac.lib[0], "objc_msgSend");
+        if (!yscr__mac.msg && !miss) miss = "objc_msgSend";
+        YSCR__F(0, sel, "sel_registerName");
+        YSCR__F(0, cls, "objc_getClass");
+        YSCR__F(0, allocClass, "objc_allocateClassPair");
+        YSCR__F(0, addMethod, "class_addMethod");
+        YSCR__F(0, registerClass, "objc_registerClassPair");
+        YSCR__F(1, CFRunLoopRunInMode, "CFRunLoopRunInMode");
+        YSCR__F(0, pool_push, "objc_autoreleasePoolPush");
+        YSCR__F(0, pool_pop, "objc_autoreleasePoolPop");
+        YSCR__F(1, CFRelease, "CFRelease");
+        YSCR__F(1, CFDictionaryGetValue, "CFDictionaryGetValue");
+        YSCR__F(1, CFBooleanGetValue, "CFBooleanGetValue");
+        YSCR__F(1, CFStringCreateWithCString, "CFStringCreateWithCString");
+        YSCR__F(2, CGSessionCopyCurrentDictionary, "CGSessionCopyCurrentDictionary");
+        YSCR__F(2, CGGetDisplaysWithPoint, "CGGetDisplaysWithPoint");
+        YSCR__F(3, CVDisplayLinkCreateWithCGDisplay, "CVDisplayLinkCreateWithCGDisplay");
+        YSCR__F(3, CVDisplayLinkGetNominalOutputVideoRefreshPeriod, "CVDisplayLinkGetNominalOutputVideoRefreshPeriod");
+        YSCR__F(3, CVDisplayLinkRelease, "CVDisplayLinkRelease");
+        {   /* a CFStringRef constant: the value at the symbol */
+            void* p = yscr__mac.lib[1] ? dlsym(yscr__mac.lib[1], "kCFRunLoopDefaultMode") : NULL;
+            if (p) memcpy((void*)&yscr__mac.cfDefaultMode, p, sizeof(void*));
+            else if (!miss) miss = "kCFRunLoopDefaultMode";
+            p = yscr__mac.lib[1] ? dlsym(yscr__mac.lib[1], "kCFRunLoopCommonModes") : NULL;
+            if (p) memcpy((void*)&yscr__mac.cfCommonModes, p, sizeof(void*));
+            else if (!miss) miss = "kCFRunLoopCommonModes";
+        }
+#undef YSCR__F
+        yscr__mac.global_block = dlsym(RTLD_DEFAULT, "_NSConcreteGlobalBlock");
+        {
+            void* p = dlsym(RTLD_DEFAULT, "pthread_main_np");
+            memcpy((void*)&yscr__mac.main_np, &p, sizeof p);
+        }
+        if (!yscr__mac.global_block && !miss) miss = "_NSConcreteGlobalBlock";
+        if (!yscr__mac.main_np && !miss) miss = "pthread_main_np";
+        if (miss) {
+            yscr__set_error(yscr__mac.why, sizeof yscr__mac.why, "macOS's %s is missing", miss);
+            yscr__mac.state = -1;
+            yscr__set_error(err, cap, "ysp_screen: %s", yscr__mac.why);
+            return YSCR_ERR_NOT_IMPLEMENTED;
+        }
+#define YSCR__S(f, n) yscr__mac.f = yscr__mac.sel(n)
+        YSCR__S(retain, "retain"); YSCR__S(release, "release"); YSCR__S(setDevice, "setDevice:");
+        YSCR__S(setPixelFormat, "setPixelFormat:"); YSCR__S(setFramebufferOnly, "setFramebufferOnly:");
+        YSCR__S(setMaxDrawables, "setMaximumDrawableCount:"); YSCR__S(setDisplaySync, "setDisplaySyncEnabled:");
+        YSCR__S(nextDrawable, "nextDrawable"); YSCR__S(texture, "texture"); YSCR__S(iosurface, "iosurface");
+        YSCR__S(width, "width"); YSCR__S(height, "height"); YSCR__S(newCommandQueue, "newCommandQueue");
+        YSCR__S(commandBuffer, "commandBuffer"); YSCR__S(encodeWait, "encodeWaitForEvent:value:");
+        YSCR__S(blitEncoder, "blitCommandEncoder");
+        YSCR__S(copyBufToTex, "copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:"
+                              "toTexture:destinationSlice:destinationLevel:destinationOrigin:");
+        YSCR__S(copyTexToBuf, "copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:"
+                              "toBuffer:destinationOffset:destinationBytesPerRow:destinationBytesPerImage:");
+        YSCR__S(endEncoding, "endEncoding"); YSCR__S(presentDrawable, "presentDrawable:");
+        YSCR__S(presentAtTime, "presentDrawable:atTime:"); YSCR__S(addPresented, "addPresentedHandler:");
+        YSCR__S(presentedTime, "presentedTime"); YSCR__S(commit, "commit"); YSCR__S(status, "status");
+        YSCR__S(newSharedEvent, "newSharedEvent"); YSCR__S(signaledValue, "signaledValue");
+        YSCR__S(newBuffer, "newBufferWithLength:options:"); YSCR__S(contents, "contents");
+        YSCR__S(occlusionState, "occlusionState"); YSCR__S(styleMask, "styleMask");
+        YSCR__S(waitUntilCompleted, "waitUntilCompleted"); YSCR__S(newTexture, "newTextureWithDescriptor:");
+        YSCR__S(texDesc, "texture2DDescriptorWithPixelFormat:width:height:mipmapped:");
+        YSCR__S(setUsage, "setUsage:"); YSCR__S(setStorageMode, "setStorageMode:");
+        YSCR__S(setTimeout, "setAllowsNextDrawableTimeout:");
+        YSCR__S(screen_, "screen");
+        YSCR__S(minRefresh, "minimumRefreshInterval"); YSCR__S(maxRefresh, "maximumRefreshInterval");
+        YSCR__S(linkWithTarget, "displayLinkWithTarget:selector:"); YSCR__S(addToRunLoop, "addToRunLoop:forMode:");
+        YSCR__S(currentRunLoop, "currentRunLoop"); YSCR__S(invalidate, "invalidate");
+        YSCR__S(timestamp, "timestamp"); YSCR__S(duration, "duration");
+        YSCR__S(alloc, "alloc"); YSCR__S(init, "init"); YSCR__S(tick, "yscrTick:");
+        yscr__mac.cls_runloop = yscr__mac.cls("NSRunLoop");
+#undef YSCR__S
+        yscr__mac.cls_texdesc = yscr__mac.cls("MTLTextureDescriptor");
+        yscr__mac.locked_key = yscr__mac.CFStringCreateWithCString(NULL, "CGSSessionScreenIsLocked", 0x08000100u);
+        {   /* one Foundation call; it reports the real version to a binary
+             * built with any SDK, where the ProductVersion plist can say 10.16 */
+            yscr__osver v14 = { 14, 0, 0 };
+            yscr__id info = yscr__o0(yscr__mac.cls("NSProcessInfo"), yscr__mac.sel("processInfo"));
+            yscr__mac.os14 = info && YSCR__MSG(signed char, yscr__id, void*, yscr__osver)(
+                                         info, yscr__mac.sel("isOperatingSystemAtLeastVersion:"), v14);
+        }
+        yscr__mac.state = 1;
+    }
+    {   /* Test seam, not API: tests/adapt/screen_metal_test.c defines
+         * YSCR__MTL_OS_14(&ok) to act as an older system. Checked before
+         * ANGLE loads, so an older system gets this message first. */
+        int ok = yscr__mac.os14;
+#if defined(YSCR__MTL_OS_14)
+        YSCR__MTL_OS_14(&ok);
+#endif
+        if (!ok) {
+            yscr__copy(err, cap, "ysp_screen: METAL needs macOS 14 (Sonoma) or later, ysp's floor; "
+                       "this system is older. Update macOS.");
+            return YSCR_ERR_NOT_IMPLEMENTED;
+        }
+    }
+    if (!yscr__mac.lib[4]) {   /* ANGLE: desc.angle_dir, YSCR_ANGLE_DIR, then the loader's search */
+        char path[1024];
+        const char* dir = angle_dir && angle_dir[0] ? angle_dir : getenv("YSCR_ANGLE_DIR");
+        void* lib = NULL;
+        if (dir && dir[0]) {
+            snprintf(path, sizeof path, "%s/libEGL.dylib", dir);
+            lib = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+        }
+        if (!lib && !(angle_dir && angle_dir[0])) lib = dlopen("libEGL.dylib", RTLD_NOW | RTLD_LOCAL);
+        if (!lib) {
+            yscr__set_error(err, cap, "ysp_screen: ANGLE's libEGL.dylib not found (desc.angle_dir, YSCR_ANGLE_DIR, "
+                            "the loader's search path): %s", dlerror());
+            return YSCR_ERR_NOT_IMPLEMENTED;
+        }
+        yscr__mac.lib[4] = lib;
+        {
+            yscr_proc p = yscr__mac_sym(lib, "eglGetProcAddress");
+            memcpy((void*)&yscr__mac.eglGetProcAddress, &p, sizeof p);
+        }
+        miss = NULL;
+#define YSCR__E(f) do { yscr_proc p_ = yscr__mac.eglGetProcAddress ? yscr__mac.eglGetProcAddress(#f) : NULL; \
+        if (!p_) p_ = yscr__mac_sym(yscr__mac.lib[4], #f); \
+        if (!p_ && !miss) miss = #f; memcpy((void*)&yscr__mac.f, &p_, sizeof p_); } while (0)
+        YSCR__E(eglGetPlatformDisplayEXT); YSCR__E(eglInitialize); YSCR__E(eglTerminate); YSCR__E(eglQueryString);
+        YSCR__E(eglChooseConfig); YSCR__E(eglGetConfigAttrib); YSCR__E(eglCreateContext); YSCR__E(eglDestroyContext);
+        YSCR__E(eglCreatePbufferSurface); YSCR__E(eglCreatePbufferFromClientBuffer); YSCR__E(eglDestroySurface);
+        YSCR__E(eglMakeCurrent); YSCR__E(eglGetError); YSCR__E(eglQueryDisplayAttribEXT);
+        YSCR__E(eglQueryDeviceAttribEXT); YSCR__E(eglCreateSync); YSCR__E(eglDestroySync);
+#undef YSCR__E
+        if (miss) {
+            yscr__set_error(err, cap, "ysp_screen: the libEGL.dylib found is not ANGLE with EGL 1.5 and the "
+                            "device query (%s is missing)", miss);
+            yscr__mac.lib[4] = NULL;
+            return YSCR_ERR_NOT_IMPLEMENTED;
+        }
+    }
+    return YSCR_OK;
+}
+
+/* --- presented handlers: global Blocks over a process-wide slot table ----- */
+#define YSCR__MTL_SLOTS   64
+#define YSCR__SLOT_FREE   0
+#define YSCR__SLOT_ARMED  1
+#define YSCR__SLOT_FIRED  2
+#define YSCR__SLOT_ORPHAN 3   /* armed when its screen closed               */
+
+typedef struct yscr__mtl_slot {
+    volatile int32_t state;
+    int32_t          reserved_;
+    volatile int64_t presented;   /* mach ns; 0 = not shown                  */
+} yscr__mtl_slot;
+
+/* The Block ABI's literal and descriptor (clang's Block-ABI-Apple), with
+ * the slot number after the standard fields. IS_GLOBAL (1 << 28) makes
+ * Block_copy and Block_release no-ops; HAS_SIGNATURE (1 << 30) carries
+ * the type, void (^)(id<MTLDrawable>). */
+typedef struct yscr__mtl_block {
+    void*       isa;
+    int32_t     flags, reserved;
+    void      (*invoke)(void*, yscr__id);
+    const void* descriptor;
+    int32_t     slot;
+} yscr__mtl_block;
+
+typedef struct yscr__mtl_block_desc {
+    unsigned long reserved, size;
+    const char*   signature;
+} yscr__mtl_block_desc;
+
+static yscr__mtl_slot  yscr__mtl_tab[YSCR__MTL_SLOTS];
+static yscr__mtl_block yscr__mtl_blk[YSCR__MTL_SLOTS];
+static const yscr__mtl_block_desc yscr__mtl_bdesc = { 0, sizeof(yscr__mtl_block), "v16@?0@8" };
+
+/* Metal's thread, after the drawable was shown or dropped: the time, then
+ * the state; a slot whose screen closed goes back to the table. Touches no
+ * screen. */
+static void yscr__mtl_presented(void* blk, yscr__id drawable) {
+    int32_t k = ((yscr__mtl_block*)blk)->slot;
+    yscr__mtl_slot* sl = &yscr__mtl_tab[k];
+    double t = YSCR__MSG(double, yscr__id, void*)(drawable, yscr__mac.presentedTime);
+    yscr__a_store64(&sl->presented, t > 0 ? (int64_t)llround(t * 1e9) : 0);
+    if (!yscr__a_cas(&sl->state, YSCR__SLOT_ARMED, YSCR__SLOT_FIRED)) yscr__a_store(&sl->state, YSCR__SLOT_FREE);
+}
+
+static int yscr__mtl_slot_take(void) {
+    int k;
+    for (k = 0; k < YSCR__MTL_SLOTS; k++) {
+        if (yscr__a_cas(&yscr__mtl_tab[k].state, YSCR__SLOT_FREE, YSCR__SLOT_ARMED)) {
+            yscr__mtl_block* b = &yscr__mtl_blk[k];
+            yscr__a_store64(&yscr__mtl_tab[k].presented, 0);
+            b->isa = yscr__mac.global_block;
+            b->flags = (int32_t)((1u << 28) | (1u << 30));
+            b->reserved = 0;
+            b->invoke = yscr__mtl_presented;
+            b->descriptor = &yscr__mtl_bdesc;
+            b->slot = k;
+            return k;
+        }
+    }
+    return -1;
+}
+
+/* --- the NSEvent monitor (INPUT, macOS) --------------------------------------
+ * One local monitor for the process, installed by the first METAL open and
+ * removed by the last close. Its handler runs on the main thread inside
+ * SDL's pump, before or after SDL takes the same event, and only writes a
+ * fixed ring: no allocation per event. It returns the event, so SDL still
+ * gets it. yscr_event_input() can run on another thread: it copies an entry
+ * and takes it only when its seq was the same before and after. */
+#define YSCR__NSM_MASK ((1ull << 1) | (1ull << 2) | (1ull << 3) | (1ull << 4) | (1ull << 10) | (1ull << 11) | \
+                        (1ull << 12) | (1ull << 25) | (1ull << 26))   /* buttons, keys, flags changed */
+
+typedef struct yscr__nsm_block {
+    void*       isa;
+    int32_t     flags, reserved;
+    yscr__id  (*invoke)(void*, yscr__id);
+    const void* descriptor;
+} yscr__nsm_block;
+
+/* NSEvent* (^)(NSEvent*): a global Block, as the presented handler's */
+static const yscr__mtl_block_desc yscr__nsm_bdesc = { 0, sizeof(yscr__nsm_block), "@16@?0@8" };
+
+static struct {
+    yscr__nsev      ring[YSCR__NSM_N];
+    volatile int32_t head;          /* the newest seq written             */
+    uint32_t        written;        /* the writer's count (main thread)   */
+    int32_t         users;          /* METAL screens open                 */
+    yscr__id        monitor;        /* +[NSEvent addLocalMonitor...]'s    */
+    yscr__nsm_block block;          /* static: alive as long as the process */
+    void           *sel_type, *sel_timestamp, *sel_key_code;
+    int64_t         mach_off;       /* ysp_rt minus mach ns, at install   */
+    yscr__nsm_state st;             /* the reader's                       */
+} yscr__nsm;
+
+static yscr__id yscr__nsm_handler(void* blk, yscr__id event) {
+    unsigned long type;
+    int cls;
+    (void)blk;
+    if (!event) return event;
+    type = yscr__u0(event, yscr__nsm.sel_type);
+    cls = yscr__nsm_ns_class(type, type == 12 ? (unsigned)YSCR__MSG(unsigned short, yscr__id, void*)(
+                                                    event, yscr__nsm.sel_key_code) : 0u);
+    if (cls >= 0) {
+        uint32_t seq = ++yscr__nsm.written;
+        yscr__nsev* e = &yscr__nsm.ring[seq & (YSCR__NSM_N - 1)];
+        double t = YSCR__MSG(double, yscr__id, void*)(event, yscr__nsm.sel_timestamp);
+        yscr__a_store(&e->seq, 0);
+        e->t_ns = (int64_t)(uint64_t)(t * 1000000000.0);   /* as SDL rounds it */
+        e->cls = (uint8_t)cls;
+        yscr__a_store(&e->seq, (int32_t)seq);
+        yscr__a_store(&yscr__nsm.head, (int32_t)seq);
+    }
+    return event;
+}
+
+/* On the main thread, in open(); 0 when the monitor could not be made
+ * (then keys and buttons keep SDL's stamps, caps.os_input_stamps false). */
+static int yscr__nsm_hold(int64_t mach_off) {
+    yscr__id cls;
+    void* pool;
+    if (yscr__nsm.users++ > 0) return 1;
+    cls = yscr__mac.cls("NSEvent");
+    if (!cls || !yscr__mac.global_block) { yscr__nsm.users = 0; return 0; }
+    yscr__nsm.sel_type = yscr__mac.sel("type");
+    yscr__nsm.sel_timestamp = yscr__mac.sel("timestamp");
+    yscr__nsm.sel_key_code = yscr__mac.sel("keyCode");
+    yscr__nsm.block.isa = yscr__mac.global_block;
+    yscr__nsm.block.flags = (int32_t)((1u << 28) | (1u << 30));   /* IS_GLOBAL, HAS_SIGNATURE */
+    yscr__nsm.block.reserved = 0;
+    yscr__nsm.block.invoke = yscr__nsm_handler;
+    yscr__nsm.block.descriptor = &yscr__nsm_bdesc;
+    /* ysp/rt.h reads mach time from v0.10.0, converted as here: an offset
+     * from the correlation would only add its noise (20 ns, bracket 42 ns) */
+#if YRT_VERSION_MAJOR > 0 || YRT_VERSION_MINOR >= 10
+    (void)mach_off;
+    yscr__nsm.mach_off = 0;
+#else
+    yscr__nsm.mach_off = mach_off;
+#endif
+    memset(&yscr__nsm.st, 0, sizeof yscr__nsm.st);
+    pool = yscr__mac.pool_push();
+    yscr__nsm.monitor = YSCR__MSG(yscr__id, yscr__id, void*, unsigned long long, void*)(
+        cls, yscr__mac.sel("addLocalMonitorForEventsMatchingMask:handler:"), YSCR__NSM_MASK, &yscr__nsm.block);
+    if (yscr__nsm.monitor) yscr__v0(yscr__nsm.monitor, yscr__mac.retain);
+    yscr__mac.pool_pop(pool);
+    if (!yscr__nsm.monitor) { yscr__nsm.users = 0; return 0; }
+    return 1;
+}
+
+static void yscr__nsm_release(void) {
+    void* pool;
+    if (yscr__nsm.users <= 0 || --yscr__nsm.users > 0) return;
+    pool = yscr__mac.pool_push();
+    if (yscr__nsm.monitor)
+        yscr__vo(yscr__mac.cls("NSEvent"), yscr__mac.sel("removeMonitor:"), yscr__nsm.monitor);
+    YSCR__MRELEASE(yscr__nsm.monitor);
+    yscr__mac.pool_pop(pool);
+}
+
+/* --- the presenter's state --------------------------------------------------- */
+#define YSCR__MTL_CACHE   6     /* pbuffers, one per drawable IOSurface      */
+#define YSCR__MTL_ARMED   8
+#define YSCR__MTL_REGIONS 3     /* staging regions: more than frames in flight */
+#define YSCR__MTL_STAGE   65536 /* 32-bit pixels per staging region          */
+#define YSCR__MTL_RB      8192  /* 32-bit pixels read back per present       */
+
+typedef struct yscr__mtl {
+    void*     win;               /* SDL_Window*                               */
+    void*     view;              /* SDL_MetalView                             */
+    yscr__id  nswin, layer, device, queue, event, staging, readback;
+    yscr__id  drawable, tex;     /* acquire() to present()                    */
+    yscr__id  rb_cb;             /* the command buffer of the pending read-back */
+    void     *dpy, *ctx, *cfg, *dummy, *surf;
+    void*     key[YSCR__MTL_CACHE];
+    void*     pb[YSCR__MTL_CACHE];
+    int64_t   used[YSCR__MTL_CACHE];
+    yscr__glFlush_fn flush;
+    int32_t   slot[YSCR__MTL_ARMED];
+    uint64_t  slot_id[YSCR__MTL_ARMED];
+    int64_t   slot_target[YSCR__MTL_ARMED];
+    int32_t   n_slot;
+    uint64_t  lost_id[4];        /* presents with no handler: not shown or not known */
+    int32_t   lost_hidden[4];
+    int32_t   n_lost;
+    uint64_t  rb_id;             /* the present whose codes were copied        */
+    const yscr_code_draw* rb_codes;
+    int32_t   rb_n, rb_region;
+    uint32_t* checked;
+    uint32_t* failed;
+    int64_t   period_ns, mach_off, corr_t, corr_w, t0, use;
+    int32_t   w, h, bits10, region, bind_target;
+    int32_t   kind, locked, hidden;
+    int64_t   min_iv_ns, max_iv_ns; /* NSScreen's refresh intervals at open; 0 = n/a */
+    int32_t   period_src;          /* YSCR__MTL_SRC_*                         */
+    int64_t   hidden_t;
+    uint32_t  not_shown, no_drawable, no_slot, sync_failed, pbuffers, late_handlers, held_far;
+    int32_t   nsm_held;            /* this screen holds the NSEvent monitor   */
+    char      angle[48];
+} yscr__mtl;
+
+typedef char yscr__mtl_fits[sizeof(yscr__mtl) <= sizeof(((yscr_screen*)0)->backend_mem) ? 1 : -1];
+
+static int64_t yscr__mtl_secs(double t) { return t > 0 ? (int64_t)llround(t * 1e9) : 0; }
+
+/* mach ticks in ns (IOHIDValueGetTimeStamp gives ticks) */
+static uint64_t yscr__mach_ns(uint64_t t) {
+    static uint32_t num, den;
+    if (!den) {
+        mach_timebase_info_data_t tb;
+        mach_timebase_info(&tb);
+        num = tb.numer; den = tb.denom;
+    }
+    return (t / den) * num + (t % den) * num / den;
+}
+
+static uint64_t yscr__mach_read(void) { return yscr__mach_ns(mach_absolute_time()); }
+
+/* The ysp_rt time of mach ns: identical from ysp/rt.h v0.10.0 on (the
+ * offset is then 0 to the bracket); before, CLOCK_MONOTONIC, which counts
+ * sleep and is slewed, so the offset is measured again every 10 s. */
+static void yscr__mtl_correlate(yscr__mtl* m) {
+    yrt_corr_desc d;
+    yrt_corr c;
+    memset(&d, 0, sizeof d);
+    d.read = yscr__mach_read;
+    if (yrt_correlate(&d, &c) > 0) {
+        m->mach_off = c.rt_ns - (int64_t)c.other;
+        m->corr_w = c.width_ns;
+    }
+    m->corr_t = yscr__now();
+}
+
+/* The window can be seen: not hidden, and the session not locked. */
+static int yscr__mtl_hidden(yscr__mtl* m) {
+    int hidden = 0;
+    int64_t now = yscr__now();
+    if (now - m->hidden_t < 500000000 && m->hidden_t) return m->hidden;   /* asked at most twice a second */
+    if (m->nswin && !(yscr__u0(m->nswin, yscr__mac.occlusionState) & YSCR__NS_VISIBLE)) hidden = 1;
+    if (yscr__mac.CGSessionCopyCurrentDictionary) {
+        const void* d = yscr__mac.CGSessionCopyCurrentDictionary();
+        if (d) {
+            const void* v = yscr__mac.locked_key ? yscr__mac.CFDictionaryGetValue(d, yscr__mac.locked_key) : NULL;
+            m->locked = v && yscr__mac.CFBooleanGetValue(v);
+            yscr__mac.CFRelease(d);
+            if (m->locked) hidden = 1;
+        }
+    }
+    m->hidden = hidden;
+    m->hidden_t = now;
+    return hidden;
+}
+
+static int yscr__mtl_kind_now(yscr__mtl* m) {
+    if (m->nswin && (yscr__u0(m->nswin, yscr__mac.styleMask) & YSCR__NS_FULLSCREEN)) return YSCR__MTL_KIND_SPACE;
+    if (m->win && (SDL_GetWindowFlags((SDL_Window*)m->win) & SDL_WINDOW_FULLSCREEN)) return YSCR__MTL_KIND_FULLSCREEN;
+    return YSCR__MTL_KIND_WINDOW;
+}
+
+/* A pbuffer on the drawable's IOSurface, made once per IOSurface: the layer
+ * cycles 3 or 4 of them (measured). */
+static void* yscr__mtl_pbuffer(yscr__mtl* m, void* ios, int w, int h) {
+    int k, old = 0;
+    int32_t a[16];
+    for (k = 0; k < YSCR__MTL_CACHE; k++)
+        if (m->key[k] == ios && m->pb[k]) { m->used[k] = ++m->use; return m->pb[k]; }
+    for (k = 1; k < YSCR__MTL_CACHE; k++) if (m->used[k] < m->used[old]) old = k;
+    if (m->pb[old]) {
+        if (m->surf == m->pb[old]) {
+            yscr__mac.eglMakeCurrent(m->dpy, m->dummy, m->dummy, m->ctx);
+            m->surf = m->dummy;
+        }
+        yscr__mac.eglDestroySurface(m->dpy, m->pb[old]);
+    }
+    a[0] = YSCR__EGL_WIDTH; a[1] = w; a[2] = YSCR__EGL_HEIGHT; a[3] = h;
+    a[4] = YSCR__EGL_IOSURFACE_PLANE; a[5] = 0;
+    a[6] = YSCR__EGL_TEXTURE_TARGET; a[7] = m->bind_target;
+    a[8] = YSCR__EGL_TEXTURE_INTERNAL_FMT; a[9] = m->bits10 ? YSCR__GL_RGB10_A2 : YSCR__GL_BGRA_EXT;
+    a[10] = YSCR__EGL_TEXTURE_FORMAT; a[11] = YSCR__EGL_TEXTURE_RGBA;
+    a[12] = YSCR__EGL_TEXTURE_TYPE; a[13] = m->bits10 ? YSCR__GL_UINT_2_10_10_10_REV : YSCR__GL_UNSIGNED_BYTE;
+    a[14] = YSCR__EGL_NONE;
+    m->pb[old] = yscr__mac.eglCreatePbufferFromClientBuffer(m->dpy, YSCR__EGL_IOSURFACE, ios, m->cfg, a);
+    m->key[old] = m->pb[old] ? ios : NULL;
+    m->used[old] = ++m->use;
+    if (m->pb[old]) m->pbuffers++;
+    return m->pb[old];
+}
+
+static void yscr__mtl_close(void* vctx);
+static void yscr__mtl_rb_check(yscr__mtl* m);
+
+/* The code self test: every value of every channel, in the layer's format,
+ * through the blits a present makes, into a 256 x 2 texture and back. */
+static int yscr__mtl_selftest(yscr__mtl* m) {
+    yscr__id desc, tex, cb, blit;
+    yscr__mtl_size sz;
+    yscr__mtl_origin o;
+    uint32_t* src;
+    const uint32_t* back;
+    void* pool = yscr__mac.pool_push();
+    int i, bad = 0;
+    unsigned long fmt = m->bits10 ? YSCR__MTL_BGR10A2 : YSCR__MTL_BGRA8;
+    desc = yscr__mac.cls_texdesc ? YSCR__MSG(yscr__id, yscr__id, void*, unsigned long, unsigned long, unsigned long, signed char)(
+               yscr__mac.cls_texdesc, yscr__mac.texDesc, fmt, 256ul, 2ul, (signed char)0) : NULL;
+    if (!desc) { yscr__mac.pool_pop(pool); return -1; }
+    yscr__vu(desc, yscr__mac.setUsage, 5ul);        /* ShaderRead | RenderTarget */
+    yscr__vu(desc, yscr__mac.setStorageMode, 2ul);  /* Private                   */
+    tex = YSCR__MSG(yscr__id, yscr__id, void*, yscr__id)(m->device, yscr__mac.newTexture, desc);
+    if (!tex) { yscr__mac.pool_pop(pool); return -1; }
+    src = (uint32_t*)yscr__o0(m->staging, yscr__mac.contents);
+    for (i = 0; i < 256; i++) {
+        uint32_t v = (uint32_t)i | ((uint32_t)(255 - i) << 8) | ((uint32_t)((i * 37 + 11) & 255) << 16);
+        src[i] = src[256 + i] = yscr__mtl_pixel(v, m->bits10);
+    }
+    cb = yscr__o0(m->queue, yscr__mac.commandBuffer);
+    blit = yscr__o0(cb, yscr__mac.blitEncoder);
+    sz.w = 256; sz.h = 2; sz.d = 1;
+    o.x = 0; o.y = 0; o.z = 0;
+    YSCR__MSG(void, yscr__id, void*, yscr__id, unsigned long, unsigned long, unsigned long, yscr__mtl_size, yscr__id,
+              unsigned long, unsigned long, yscr__mtl_origin)(blit, yscr__mac.copyBufToTex, m->staging, 0ul, 1024ul, 2048ul,
+              sz, tex, 0ul, 0ul, o);
+    YSCR__MSG(void, yscr__id, void*, yscr__id, unsigned long, unsigned long, yscr__mtl_origin, yscr__mtl_size, yscr__id,
+              unsigned long, unsigned long, unsigned long)(blit, yscr__mac.copyTexToBuf, tex, 0ul, 0ul, o, sz, m->readback,
+              0ul, 1024ul, 2048ul);
+    yscr__v0(blit, yscr__mac.endEncoding);
+    yscr__v0(cb, yscr__mac.commit);
+    yscr__v0(cb, yscr__mac.waitUntilCompleted);
+    back = (const uint32_t*)yscr__o0(m->readback, yscr__mac.contents);
+    for (i = 0; i < 512; i++) {
+        uint32_t v = (uint32_t)(i & 255) | ((uint32_t)(255 - (i & 255)) << 8) | ((uint32_t)(((i & 255) * 37 + 11) & 255) << 16);
+        if (yscr__mtl_code_of(back[i], m->bits10) != v) bad++;
+    }
+    yscr__v0(tex, yscr__mac.release);
+    yscr__mac.pool_pop(pool);
+    return bad ? -1 : 1;
+}
+
+/* The period's source, for the describe line. */
+#define YSCR__MTL_SRC_LINK  1   /* CADisplayLink's timestamps                     */
+#define YSCR__MTL_SRC_CV    2   /* CVDisplayLink's nominal period: no CADisplayLink callback */
+#define YSCR__MTL_SRC_MODE  3   /* the mode's rate, a rounded label: no display link at all */
+#define YSCR__MTL_SRC_CV_GRID 4 /* CVDisplayLink's: CADisplayLink's steps off its duration */
+static const char* const yscr__mtl_src_name[5] = { "default", "cadisplaylink", "cvdisplaylink-no-callback",
+                                                   "mode-no-display-link", "cvdisplaylink-link-off-grid" };
+
+/* CADisplayLink's callbacks at open: open() runs on the main thread, and
+ * nothing else reads these, so a plain state is enough. */
+#define YSCR__MTL_LINK_N 6
+static int64_t yscr__mtl_link_ts[YSCR__MTL_LINK_N];
+static int     yscr__mtl_link_n;
+static double  yscr__mtl_link_dur;
+
+static void yscr__mtl_link_tick(yscr__id self, void* cmd, yscr__id link) {
+    (void)self; (void)cmd;
+    if (yscr__mtl_link_n < YSCR__MTL_LINK_N) {
+        yscr__mtl_link_ts[yscr__mtl_link_n++] = yscr__mtl_secs(YSCR__MSG(double, yscr__id, void*)(link, yscr__mac.timestamp));
+        yscr__mtl_link_dur = YSCR__MSG(double, yscr__id, void*)(link, yscr__mac.duration);
+    }
+}
+
+/* The period from CADisplayLink, or 0. There is no
+ * read without a callback: before its first callback the link's duration,
+ * timestamp and targetTimestamp are 0, and duration alone is the nominal
+ * timing (above). The callbacks come through the main run loop, and open()
+ * runs on the main thread, so it adds the link in the common modes (as the
+ * probe did when it measured them) and runs the run loop in its default
+ * mode in 10 ms steps, pumping SDL's events as the probe's loop did (they
+ * stay in SDL's queue for begin()), for up to YSCR__MTL_LINK_N callbacks or
+ * 250 ms, then invalidates the link. Nothing waits on another thread, so it
+ * cannot deadlock against SDL's pump: SDL's pump is this thread. The 6
+ * callbacks came within 86 to 141 ms of the link's start (first and second
+ * opens, 2026-11-05). With fewer than 3 callbacks in 250 ms the caller
+ * falls back to CVDisplayLink:
+ * a display asleep gave CADisplayLink no callback at all (0 in 2 s, while
+ * CVDisplayLink went on, 2026-11-05). Test seam, not API:
+ * tests/adapt/screen_metal_test.c defines YSCR__MTL_LINK_TIMESTAMPS(ts, n,
+ * duration) to replace the callbacks' timestamps (mach ns), their count
+ * and the duration (s). */
+static int64_t yscr__mtl_link_read(yscr__mtl* m) {
+    yscr__id target, link, loop;
+    int64_t end;
+    void* pool;
+    yscr__mtl_link_n = 0;
+    yscr__mtl_link_dur = 0;
+    if (!m->view || !yscr__mac.allocClass || !yscr__mac.CFRunLoopRunInMode || !yscr__mac.cfDefaultMode ||
+        !yscr__mac.cfCommonModes)
+        return 0;
+    if (!yscr__mac.cls_target) {   /* the callback's object: a class made once per process */
+        yscr__id c = yscr__mac.cls("YSCRLinkTarget");
+        if (!c) {
+            yscr_proc imp;
+            void (*f)(yscr__id, void*, yscr__id) = yscr__mtl_link_tick;
+            memcpy(&imp, &f, sizeof imp);
+            c = yscr__mac.allocClass(yscr__mac.cls("NSObject"), "YSCRLinkTarget", 0);
+            if (!c) return 0;
+            yscr__mac.addMethod(c, yscr__mac.tick, imp, "v@:@");
+            yscr__mac.registerClass(c);
+        }
+        yscr__mac.cls_target = c;
+    }
+    pool = yscr__mac.pool_push();
+    target = yscr__o0(yscr__o0(yscr__mac.cls_target, yscr__mac.alloc), yscr__mac.init);
+    link = YSCR__MSG(yscr__id, yscr__id, void*, yscr__id, void*)((yscr__id)m->view, yscr__mac.linkWithTarget, target,
+                                                                    yscr__mac.tick);
+    loop = yscr__o0(yscr__mac.cls_runloop, yscr__mac.currentRunLoop);
+    if (link && loop) {
+        YSCR__MSG(void, yscr__id, void*, yscr__id, const void*)(link, yscr__mac.addToRunLoop, loop, yscr__mac.cfCommonModes);
+        end = yscr__now() + 250000000;
+        while (yscr__mtl_link_n < YSCR__MTL_LINK_N && yscr__now() < end) {
+            SDL_PumpEvents();
+            yscr__mac.CFRunLoopRunInMode(yscr__mac.cfDefaultMode, 0.01, 1);
+        }
+        yscr__v0(link, yscr__mac.invalidate);
+    }
+    if (target) yscr__v0(target, yscr__mac.release);
+    yscr__mac.pool_pop(pool);
+#if defined(YSCR__MTL_LINK_TIMESTAMPS)
+    YSCR__MTL_LINK_TIMESTAMPS(yscr__mtl_link_ts, &yscr__mtl_link_n, &yscr__mtl_link_dur);
+#endif
+    return yscr__mtl_link_period(yscr__mtl_link_ts, yscr__mtl_link_n, yscr__mtl_secs(yscr__mtl_link_dur));
+}
+
+/* NSScreen's refresh intervals for the window's screen. Test seam, not API:
+ * tests/adapt/screen_metal_test.c defines YSCR__MTL_SCREEN_INTERVALS(m,
+ * min, max) to set them, as a ProMotion panel in its variable mode would. */
+static void yscr__mtl_intervals(yscr__mtl* m, int64_t* min_ns, int64_t* max_ns) {
+    yscr__id screen = m->nswin ? yscr__o0(m->nswin, yscr__mac.screen_) : NULL;
+    *min_ns = *max_ns = 0;
+    if (screen) {
+        *min_ns = yscr__mtl_secs(YSCR__MSG(double, yscr__id, void*)(screen, yscr__mac.minRefresh));
+        *max_ns = yscr__mtl_secs(YSCR__MSG(double, yscr__id, void*)(screen, yscr__mac.maxRefresh));
+    }
+#if defined(YSCR__MTL_SCREEN_INTERVALS)
+    YSCR__MTL_SCREEN_INTERVALS(m, min_ns, max_ns);
+#endif
+}
+
+static int yscr__mtl_open(void* vctx, const yscr_presenter_open* in, yscr_caps* caps, char* err, size_t err_cap) {
+    yscr__mtl* m = (yscr__mtl*)vctx;
+    int32_t a[16];
+    intptr_t edev = 0, emtl = 0;
+    int32_t maj = 0, min = 0, n = 0;
+    const char* ext;
+    int rc;
+    memset(m, 0, sizeof *m);
+    if ((rc = yscr__mac_load(in->angle_dir, err, err_cap)) < 0) return rc;
+    if (!yscr__mac.main_np()) {
+        yscr__set_error(err, err_cap, "ysp_screen: METAL: open() and the frame loop run on the process's main "
+                        "thread on macOS (Cocoa's windows, SDL's video)");
+        return YSCR_ERR_ARG;
+    }
+    if (!in->window) { yscr__copy(err, err_cap, "ysp_screen: METAL needs a window"); return YSCR_ERR_ARG; }
+    m->win = in->window;
+    m->bits10 = in->color_depth == 10;
+    m->checked = in->code_checked;
+    m->failed = in->code_failed;
+    m->nswin = (yscr__id)SDL_GetPointerProperty(SDL_GetWindowProperties((SDL_Window*)m->win),
+                                                SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, NULL);
+    /* A variable mode is refused, as desc.vrr is (VARIABLE REFRESH): the
+     * core's grid would be wrong for every flip and nothing would flag it
+     * (a ProMotion panel varies the interval itself; Psychtoolbox's users
+     * on 120 Hz ProMotion MacBooks missed 341 to 401 of 600 deadlines). */
+    yscr__mtl_intervals(m, &m->min_iv_ns, &m->max_iv_ns);
+    if (yscr__mtl_variable(m->min_iv_ns, m->max_iv_ns)) {
+        yscr__mtl_vrr_message(err, err_cap, m->min_iv_ns, m->max_iv_ns);
+        return YSCR_ERR_NOT_IMPLEMENTED;
+    }
+    /* ANGLE's Metal display: asked by name, because this ANGLE's default
+     * back end on macOS is OpenGL (measured) */
+    a[0] = YSCR__EGL_PLATFORM_ANGLE_TYPE; a[1] = YSCR__EGL_PLATFORM_METAL; a[2] = YSCR__EGL_NONE;
+    m->dpy = yscr__mac.eglGetPlatformDisplayEXT(YSCR__EGL_PLATFORM_ANGLE, NULL, a);
+    if (!m->dpy || !yscr__mac.eglInitialize(m->dpy, &maj, &min)) {
+        yscr__set_error(err, err_cap, "ysp_screen: ANGLE's Metal display did not initialize (EGL 0x%x)",
+                        yscr__mac.eglGetError());
+        m->dpy = NULL;
+        return YSCR_ERR_NOT_IMPLEMENTED;
+    }
+    ext = yscr__mac.eglQueryString(m->dpy, YSCR__EGL_EXTENSIONS);
+    if (!ext || !strstr(ext, "EGL_ANGLE_iosurface_client_buffer") || !strstr(ext, "EGL_ANGLE_metal_shared_event_sync")) {
+        yscr__copy(err, err_cap, "ysp_screen: this ANGLE's Metal display lacks EGL_ANGLE_iosurface_client_buffer "
+                   "or EGL_ANGLE_metal_shared_event_sync");
+        yscr__mtl_close(m);
+        return YSCR_ERR_NOT_IMPLEMENTED;
+    }
+    if (!yscr__mac.eglQueryDisplayAttribEXT(m->dpy, YSCR__EGL_DEVICE_EXT, &edev) || !edev ||
+        !yscr__mac.eglQueryDeviceAttribEXT((void*)edev, YSCR__EGL_METAL_DEVICE, &emtl) || !emtl) {
+        yscr__copy(err, err_cap, "ysp_screen: ANGLE did not give its MTLDevice (EGL_ANGLE_device_metal)");
+        yscr__mtl_close(m);
+        return YSCR_ERR_NOT_IMPLEMENTED;
+    }
+    m->device = (yscr__id)emtl;
+    yscr__v0(m->device, yscr__mac.retain);
+    /* the layer: on ANGLE's device, so one device serves both queues */
+    m->view = SDL_Metal_CreateView((SDL_Window*)m->win);
+    m->layer = m->view ? (yscr__id)SDL_Metal_GetLayer(m->view) : NULL;
+    if (!m->layer) {
+        yscr__set_error(err, err_cap, "ysp_screen: SDL_Metal_CreateView: %s", SDL_GetError());
+        yscr__mtl_close(m);
+        return YSCR_ERR_NOT_IMPLEMENTED;
+    }
+    yscr__vo(m->layer, yscr__mac.setDevice, m->device);
+    yscr__vu(m->layer, yscr__mac.setPixelFormat, m->bits10 ? YSCR__MTL_BGR10A2 : YSCR__MTL_BGRA8);
+    yscr__vb(m->layer, yscr__mac.setFramebufferOnly, 0);   /* the patch, codes and read-back are blits */
+    /* No color matching (v0.16.0): the layer came tagged sRGB (read at
+     * open on the M27Q, SDL 3.4.0), so ColorSync converted every value from
+     * sRGB to the display's profile; nil means "no colormatching occurs"
+     * (CAMetalLayer.h), so a code value and a stimulus value reach the
+     * display as drawn, as on Windows' SDR path. */
+    YSCR__MSG(void, yscr__id, void*, void*)(m->layer, yscr__mac.sel("setColorspace:"), NULL);
+    yscr__vu(m->layer, yscr__mac.setMaxDrawables, YSCR__MTL_DRAWABLES);
+    yscr__vb(m->layer, yscr__mac.setDisplaySync, 1);
+    yscr__vb(m->layer, yscr__mac.setTimeout, 1);   /* nextDrawable gives up after 1 s */
+    m->queue = yscr__o0(m->device, yscr__mac.newCommandQueue);
+    m->event = yscr__o0(m->device, yscr__mac.newSharedEvent);
+    m->staging = YSCR__MSG(yscr__id, yscr__id, void*, unsigned long, unsigned long)(
+        m->device, yscr__mac.newBuffer, (unsigned long)YSCR__MTL_REGIONS * YSCR__MTL_STAGE * 4ul, 0ul);
+    m->readback = YSCR__MSG(yscr__id, yscr__id, void*, unsigned long, unsigned long)(
+        m->device, yscr__mac.newBuffer, (unsigned long)YSCR__MTL_RB * 4ul, 0ul);
+    if (!m->queue || !m->event || !m->staging || !m->readback) {
+        yscr__copy(err, err_cap, "ysp_screen: Metal: the command queue, shared event or buffers were not made");
+        yscr__mtl_close(m);
+        return YSCR_ERR_LOST;
+    }
+    /* GL ES 3.0 on an RGBA8 config: a pbuffer's format is the IOSurface's,
+     * so 10 bits need no 10-bit config (ANGLE's Metal display has none) */
+    a[0] = YSCR__EGL_RED_SIZE; a[1] = 8; a[2] = YSCR__EGL_GREEN_SIZE; a[3] = 8; a[4] = YSCR__EGL_BLUE_SIZE; a[5] = 8;
+    a[6] = YSCR__EGL_ALPHA_SIZE; a[7] = 8; a[8] = YSCR__EGL_SURFACE_TYPE; a[9] = YSCR__EGL_PBUFFER_BIT;
+    a[10] = YSCR__EGL_RENDERABLE_TYPE; a[11] = YSCR__EGL_OPENGL_ES3_BIT; a[12] = YSCR__EGL_NONE;
+    if (!yscr__mac.eglChooseConfig(m->dpy, a, &m->cfg, 1, &n) || n < 1) {
+        yscr__copy(err, err_cap, "ysp_screen: ANGLE's Metal display has no RGBA8 ES 3 pbuffer config");
+        yscr__mtl_close(m);
+        return YSCR_ERR_NOT_IMPLEMENTED;
+    }
+    m->bind_target = YSCR__EGL_TEXTURE_2D;
+    yscr__mac.eglGetConfigAttrib(m->dpy, m->cfg, YSCR__EGL_BIND_TARGET, &m->bind_target);
+    a[0] = YSCR__EGL_CONTEXT_MAJOR; a[1] = 3; a[2] = YSCR__EGL_CONTEXT_MINOR; a[3] = 0; a[4] = YSCR__EGL_NONE;
+    m->ctx = yscr__mac.eglCreateContext(m->dpy, m->cfg, NULL, a);
+    a[0] = YSCR__EGL_WIDTH; a[1] = 1; a[2] = YSCR__EGL_HEIGHT; a[3] = 1; a[4] = YSCR__EGL_NONE;
+    m->dummy = m->ctx ? yscr__mac.eglCreatePbufferSurface(m->dpy, m->cfg, a) : NULL;
+    if (!m->ctx || !m->dummy || !yscr__mac.eglMakeCurrent(m->dpy, m->dummy, m->dummy, m->ctx)) {
+        yscr__set_error(err, err_cap, "ysp_screen: ES 3.0 context on ANGLE's Metal display failed (EGL 0x%x)",
+                        yscr__mac.eglGetError());
+        yscr__mtl_close(m);
+        return YSCR_ERR_LOST;
+    }
+    m->surf = m->dummy;
+    {
+        yscr_proc p = yscr__mac.eglGetProcAddress("glFlush");
+        yscr__glGetString_fn gs;
+        yscr_proc q = yscr__mac.eglGetProcAddress("glGetString");
+        memcpy((void*)&m->flush, &p, sizeof p);
+        memcpy((void*)&gs, &q, sizeof q);
+        if (gs) {
+            const char* v = (const char*)gs(YSCR__GL_VERSION);
+            const char* an = v ? strstr(v, "ANGLE ") : NULL;
+            yscr__copy(m->angle, sizeof m->angle, an ? an + 6 : (v ? v : "?"));
+            {   /* "2.1 git hash: unknown hash)" to "2.1/unknown hash", as on Windows */
+                char* x = strstr(m->angle, " git hash: ");
+                if (x) { memmove(x + 1, x + 11, strlen(x + 11) + 1); *x = '/'; }
+                x = strchr(m->angle, ')');
+                if (x) *x = '\0';
+                for (x = m->angle; *x; x++) if (*x == ' ') *x = '-';   /* one word in the describe line */
+            }
+        }
+    }
+    /* the period: CADisplayLink's timestamps; with no callback, which a
+     * display asleep gives, CVDisplayLink's nominal timing. CVDisplayLink is
+     * deprecated in macOS 15 and kept for that case only, because it is the
+     * one source measured right asleep (2026-11-05, the M27Q asleep:
+     * CADisplayLink 0 callbacks in 1 s; CAMetalDisplayLink 59 updates in 1 s
+     * on a 16666667 ns grid, a 60 Hz default unrelated to the display's
+     * 16680375, 0.8 ms/s off; CVDisplayLink's nominal 16680417 ns, 2.5 ppm
+     * off). Then the mode's rate. The flips then refine it. */
+    m->period_ns = yscr__mtl_link_read(m);
+    if (m->period_ns > 0) {
+        m->period_src = YSCR__MTL_SRC_LINK;
+        caps->mode.refresh_num = 1000000000;
+        caps->mode.refresh_den = (int32_t)(m->period_ns > 0x7fffffff ? 0x7fffffff : m->period_ns);
+    } else {
+        int x = 0, y = 0, w = 0, h = 0;
+        uint32_t ids[4], nd = 0;
+        yscr__cgpoint c;
+        void* link = NULL;
+        SDL_GetWindowPosition((SDL_Window*)m->win, &x, &y);
+        SDL_GetWindowSize((SDL_Window*)m->win, &w, &h);
+        c.x = x + w / 2.0; c.y = y + h / 2.0;
+        if (yscr__mac.CGGetDisplaysWithPoint(c, 4, ids, &nd) == 0 && nd > 0 &&
+            yscr__mac.CVDisplayLinkCreateWithCGDisplay(ids[0], &link) == 0 && link) {
+            yscr__cvtime t = yscr__mac.CVDisplayLinkGetNominalOutputVideoRefreshPeriod(link);
+            m->period_ns = yscr__mtl_period(t.value, t.scale);
+            if (m->period_ns > 0) m->period_src = yscr__mtl_link_n >= 3 ? YSCR__MTL_SRC_CV_GRID : YSCR__MTL_SRC_CV;
+            if (m->period_ns > 0 && t.value <= 0x7fffffff && t.scale > 0) {
+                caps->mode.refresh_num = t.scale;
+                caps->mode.refresh_den = (int32_t)t.value;
+            }
+            yscr__mac.CVDisplayLinkRelease(link);
+        }
+    }
+    if (m->period_ns <= 0 && in->mode && in->mode->period_ns > 0) {
+        m->period_ns = in->mode->period_ns;
+        m->period_src = YSCR__MTL_SRC_MODE;
+    }
+    if (m->period_ns <= 0) m->period_ns = 16666667;
+    if (in->mode) {
+        caps->mode.w = in->mode->w;
+        caps->mode.h = in->mode->h;
+        caps->mode.format = in->mode->format;
+        caps->mode.density = in->mode->density;
+        if (!caps->mode.refresh_num) { caps->mode.refresh_num = in->mode->refresh_num; caps->mode.refresh_den = in->mode->refresh_den; }
+    }
+    caps->mode.period_ns = m->period_ns;
+    caps->period_ns = m->period_ns;
+    caps->kind = YSCR_FIXED_GRID;
+    caps->hw_onset = true;
+    caps->native_target = true;
+    caps->max_in_flight = YSCR__MTL_IN_FLIGHT;
+    caps->margin_ns = YSCR__MTL_MARGIN_NS;
+    yscr__mtl_correlate(m);
+    m->kind = yscr__mtl_kind_now(m);
+    (void)yscr__mtl_hidden(m);
+    if (in->code_selftest && in->n_codes > 0) *in->code_selftest = yscr__mtl_selftest(m);
+    m->nsm_held = yscr__nsm_hold(m->mach_off);
+    return YSCR_OK;
+}
+
+static void yscr__mtl_close(void* vctx) {
+    yscr__mtl* m = (yscr__mtl*)vctx;
+    int k;
+    /* handlers still to come find their slots orphaned and free them */
+    for (k = 0; k < m->n_slot; k++) {
+        yscr__mtl_slot* sl = &yscr__mtl_tab[m->slot[k]];
+        if (!yscr__a_cas(&sl->state, YSCR__SLOT_ARMED, YSCR__SLOT_ORPHAN)) yscr__a_store(&sl->state, YSCR__SLOT_FREE);
+    }
+    m->n_slot = 0;
+    YSCR__MRELEASE(m->drawable);
+    if (m->rb_cb) {   /* the last frame's read-back: done at once, or soon */
+        yscr__v0(m->rb_cb, yscr__mac.waitUntilCompleted);
+        yscr__mtl_rb_check(m);
+    }
+    YSCR__MRELEASE(m->rb_cb);
+    m->tex = NULL;
+    if (m->dpy) {
+        yscr__mac.eglMakeCurrent(m->dpy, NULL, NULL, NULL);
+        for (k = 0; k < YSCR__MTL_CACHE; k++) if (m->pb[k]) yscr__mac.eglDestroySurface(m->dpy, m->pb[k]);
+        if (m->dummy) yscr__mac.eglDestroySurface(m->dpy, m->dummy);
+        if (m->ctx) yscr__mac.eglDestroyContext(m->dpy, m->ctx);
+        yscr__mac.eglTerminate(m->dpy);
+    }
+    YSCR__MRELEASE(m->readback);
+    YSCR__MRELEASE(m->staging);
+    YSCR__MRELEASE(m->event);
+    YSCR__MRELEASE(m->queue);
+    YSCR__MRELEASE(m->device);
+    if (m->view) SDL_Metal_DestroyView(m->view);
+    m->view = NULL;
+    m->layer = NULL;
+    m->dpy = NULL;
+    if (m->nsm_held) yscr__nsm_release();
+    m->nsm_held = 0;
+}
+
+static void yscr__mtl_bind(void* vctx) {
+    yscr__mtl* m = (yscr__mtl*)vctx;
+    yscr__mac.eglMakeCurrent(m->dpy, m->surf, m->surf, m->ctx);
+}
+
+/* YSCR__MTL_IN_FLIGHT frames in flight: wait for the handler of the frame
+ * that many before, up to its target plus 3 periods (a hidden window's
+ * handlers can come late or not at all, measured), then take the next
+ * drawable. The handler comes about 0.5 ms after its vblank and a commit
+ * needs a period and about 1 ms before its own, so waiting for the frame
+ * before would show every other vblank (measured). nextDrawable blocks for
+ * at most its own timeout (allowsNextDrawableTimeout, 1 s); without a
+ * drawable the frame draws into a 1 x 1 pbuffer and its record is
+ * estimated. */
+static int yscr__mtl_acquire(void* vctx, int64_t deadline_ns, yscr_vblank* newest) {
+    yscr__mtl* m = (yscr__mtl*)vctx;
+    void* pool;
+    newest->t_ns = 0;
+    if (m->n_slot >= YSCR__MTL_IN_FLIGHT) {
+        int last = m->n_slot - YSCR__MTL_IN_FLIGHT;
+        int64_t limit = m->slot_target[last] + 3 * m->period_ns;
+        if (limit < yscr__now() + m->period_ns) limit = yscr__now() + m->period_ns;
+        if (limit > deadline_ns) limit = deadline_ns;
+        while (yscr__a_load(&yscr__mtl_tab[m->slot[last]].state) == YSCR__SLOT_ARMED && yscr__now() < limit)
+            YSCR__SLEEP_UNTIL((int64_t)(yscr__now() + 250000), 0);
+    }
+    if (yscr__now() - m->corr_t > 10000000000LL) yscr__mtl_correlate(m);
+    if (m->drawable) { yscr__mtl_bind(m); return YSCR_OK; }   /* not presented since */
+    pool = yscr__mac.pool_push();
+    m->drawable = yscr__o0(m->layer, yscr__mac.nextDrawable);
+    if (m->drawable) yscr__v0(m->drawable, yscr__mac.retain);
+    yscr__mac.pool_pop(pool);
+    m->surf = m->dummy;
+    if (m->drawable) {
+        void* ios;
+        m->tex = yscr__o0(m->drawable, yscr__mac.texture);
+        ios = m->tex ? (void*)yscr__o0(m->tex, yscr__mac.iosurface) : NULL;
+        m->w = m->tex ? (int32_t)yscr__u0(m->tex, yscr__mac.width) : 0;
+        m->h = m->tex ? (int32_t)yscr__u0(m->tex, yscr__mac.height) : 0;
+        if (ios) {
+            void* pb = yscr__mtl_pbuffer(m, ios, m->w, m->h);
+            if (pb) m->surf = pb;
+        }
+        if (m->surf == m->dummy) {   /* no IOSurface, or no pbuffer on it: drop this drawable */
+            YSCR__MRELEASE(m->drawable);
+            m->tex = NULL;
+            m->no_drawable++;
+        }
+    } else {
+        m->no_drawable++;
+    }
+    yscr__mtl_bind(m);
+    return YSCR_OK;
+}
+
+static void yscr__mtl_lost(yscr__mtl* m, uint64_t id, int hidden) {
+    if (m->n_lost == 4) { memmove(m->lost_id, m->lost_id + 1, 3 * sizeof m->lost_id[0]); memmove(m->lost_hidden, m->lost_hidden + 1, 3 * sizeof m->lost_hidden[0]); m->n_lost = 3; }
+    m->lost_id[m->n_lost] = id;
+    m->lost_hidden[m->n_lost] = hidden;
+    m->n_lost++;
+}
+
+/* A rectangle of one 32-bit value into the drawable, from a staging region:
+ * as many rows at a time as the region holds. */
+static void yscr__mtl_fill(yscr__mtl* m, yscr__id blit, uint32_t* stage, unsigned long off, int x, int y, int w, int h,
+                           uint32_t px) {
+    int rows, k, done;
+    yscr__mtl_size sz;
+    yscr__mtl_origin o;
+    if (w <= 0 || h <= 0 || x < 0 || y < 0 || x + w > m->w || y + h > m->h) return;
+    rows = YSCR__MTL_STAGE / w;
+    if (rows < 1) return;
+    if (rows > h) rows = h;
+    for (k = 0; k < w * rows; k++) stage[k] = px;
+    for (done = 0; done < h; done += rows) {
+        int r = h - done < rows ? h - done : rows;
+        sz.w = (unsigned long)w; sz.h = (unsigned long)r; sz.d = 1;
+        o.x = (unsigned long)x; o.y = (unsigned long)(y + done); o.z = 0;
+        YSCR__MSG(void, yscr__id, void*, yscr__id, unsigned long, unsigned long, unsigned long, yscr__mtl_size, yscr__id,
+                  unsigned long, unsigned long, yscr__mtl_origin)(blit, yscr__mac.copyBufToTex, m->staging, off,
+                  (unsigned long)w * 4ul, (unsigned long)w * 4ul * (unsigned long)r, sz, m->tex, 0ul, 0ul, o);
+    }
+}
+
+/* Codes one row each, read back from the drawable after the patch and the
+ * codes are drawn, into the read-back buffer: checked once the frame's
+ * handler came (the GPU is done then), as on DXGI. */
+static void yscr__mtl_rb_check(yscr__mtl* m) {
+    const uint32_t* row = (const uint32_t*)yscr__o0(m->readback, yscr__mac.contents);
+    int i, k, x = 0;
+    if (!m->rb_cb) return;
+    if (yscr__u0(m->rb_cb, yscr__mac.status) != YSCR__MTL_CB_DONE) return;
+    for (i = 0; m->rb_codes && i < m->rb_n; i++) {
+        const yscr_code_draw* c = &m->rb_codes[i];
+        int w = c->px ? c->w : (c->w < 64 ? c->w : 64), bad = 0;
+        for (k = 0; k < w && x + k < YSCR__MTL_RB - 1; k++) {
+            uint32_t want = (c->px ? c->px[k] : c->value) & 0xFFFFFFu;
+            if (yscr__mtl_code_of(row[x + k], m->bits10) != want) bad = 1;
+        }
+        x += w;
+        if (m->checked) (*m->checked)++;
+        if (bad && m->failed) (*m->failed)++;
+    }
+#if defined(YSCR__MTL_SYNC_PIXEL)
+    YSCR__MTL_SYNC_PIXEL(m->rb_id, row[YSCR__MTL_RB - 1]);
+#endif
+    m->rb_codes = NULL;
+    m->rb_n = 0;
+    YSCR__MRELEASE(m->rb_cb);
+}
+
+static int yscr__mtl_present(void* vctx, const yscr_present_req* req) {
+    yscr__mtl* m = (yscr__mtl*)vctx;
+    yscr__id cb, blit, d;
+    uint32_t* base;
+    unsigned long off;
+    int slot = -1, i, rb = 0;
+    void* pool;
+    if (!m->drawable) {   /* nothing to show this frame */
+        if (m->flush) m->flush();
+        yscr__mtl_lost(m, req->present_id, yscr__mtl_hidden(m));
+        return YSCR_OK;
+    }
+    /* The test seam reads every frame back, so it waits for the frame
+     * before; a header without it checks a read-back once it is done and
+     * skips one still running at the next verify. */
+    if (m->rb_cb && YSCR__MTL_SYNC_PIXEL_ON) yscr__v0(m->rb_cb, yscr__mac.waitUntilCompleted);
+    /* A target far ahead broke the layer for seconds (measured): hold the
+     * frame here, before ANGLE's frame is ended, until it is near. A loop
+     * that runs faster than the display (no frame shown: its handlers come
+     * at once) plans one frame a vblank and so is held here too. */
+    if (req->target_ns > 0) {
+        int64_t t = yscr__mtl_target(req->target_ns, m->period_ns);
+        if (t - yscr__now() > YSCR__MTL_AHEAD_MAX_NS) {
+            m->held_far++;
+            YSCR__SLEEP_UNTIL((int64_t)(t - YSCR__MTL_AHEAD_MAX_NS), YRT_DEFAULT_SPIN_NS);
+        }
+    }
+    if (m->rb_cb) yscr__mtl_rb_check(m);
+    pool = yscr__mac.pool_push();
+    /* ANGLE's frame signals the event with the present id, after its work */
+    {
+        intptr_t sa[7];
+        void* sync;
+        sa[0] = YSCR__EGL_SYNC_EVENT_OBJECT; sa[1] = (intptr_t)m->event;
+        sa[2] = YSCR__EGL_SYNC_EVENT_LO; sa[3] = (intptr_t)(req->present_id & 0xFFFFFFFFu);
+        sa[4] = YSCR__EGL_SYNC_EVENT_HI; sa[5] = (intptr_t)(req->present_id >> 32);
+        sa[6] = YSCR__EGL_NONE;
+        sync = yscr__mac.eglCreateSync(m->dpy, YSCR__EGL_SYNC_SHARED_EVENT, sa);
+        if (m->flush) m->flush();
+        if (sync) yscr__mac.eglDestroySync(m->dpy, sync);
+        else {   /* no signal: wait on the CPU instead */
+            yscr_proc fin = yscr__mac.eglGetProcAddress("glFinish");
+            m->sync_failed++;
+            if (fin) fin();
+        }
+        cb = yscr__o0(m->queue, yscr__mac.commandBuffer);
+        if (sync) YSCR__MSG(void, yscr__id, void*, yscr__id, uint64_t)(cb, yscr__mac.encodeWait, m->event, req->present_id);
+    }
+    m->region = (m->region + 1) % YSCR__MTL_REGIONS;
+    off = (unsigned long)m->region * YSCR__MTL_STAGE * 4ul;
+    base = (uint32_t*)((unsigned char*)yscr__o0(m->staging, yscr__mac.contents) + off);
+    blit = yscr__o0(cb, yscr__mac.blitEncoder);
+    if (req->patch_on) {
+        uint32_t g = (uint32_t)lrintf(req->patch_value * 255.0f);
+        yscr__mtl_fill(m, blit, base, off, req->patch_x, req->patch_y, req->patch_w, req->patch_h,
+                       yscr__mtl_pixel(g | (g << 8) | (g << 16), m->bits10));
+    }
+    /* codes after the patch, each from its own part of the region */
+    {
+        unsigned long used = 0;
+        for (i = 0; i < req->n_codes; i++) {
+            const yscr_code_draw* c = &req->codes[i];
+            if (!c->px) {
+                int rows = c->w > 0 ? (int)((YSCR__MTL_STAGE - used) / (unsigned long)c->w) : 0;
+                if (rows < 1) continue;
+                yscr__mtl_fill(m, blit, base + used, off + used * 4ul, c->x, c->y, c->w, c->h,
+                               yscr__mtl_pixel(c->value, m->bits10));
+                used += (unsigned long)c->w * (unsigned long)(rows < c->h ? rows : c->h);
+            } else if (used + (unsigned long)c->w <= YSCR__MTL_STAGE && c->x + c->w <= m->w && c->y < m->h) {
+                yscr__mtl_size sz;
+                yscr__mtl_origin o;
+                int k;
+                for (k = 0; k < c->w; k++) base[used + (unsigned long)k] = yscr__mtl_pixel(c->px[k], m->bits10);
+                sz.w = (unsigned long)c->w; sz.h = 1; sz.d = 1;
+                o.x = (unsigned long)c->x; o.y = (unsigned long)c->y; o.z = 0;
+                YSCR__MSG(void, yscr__id, void*, yscr__id, unsigned long, unsigned long, unsigned long, yscr__mtl_size,
+                          yscr__id, unsigned long, unsigned long, yscr__mtl_origin)(blit, yscr__mac.copyBufToTex, m->staging,
+                          off + used * 4ul, (unsigned long)c->w * 4ul, (unsigned long)c->w * 4ul, sz, m->tex, 0ul, 0ul, o);
+                used += (unsigned long)c->w;
+            }
+        }
+    }
+    if ((req->verify && req->n_codes > 0) || YSCR__MTL_SYNC_PIXEL_ON) {
+        unsigned long x = 0;
+        for (i = 0; req->verify && i < req->n_codes; i++) {
+            const yscr_code_draw* c = &req->codes[i];
+            unsigned long w = (unsigned long)(c->px ? c->w : (c->w < 64 ? c->w : 64));
+            yscr__mtl_size sz;
+            yscr__mtl_origin o;
+            if (x + w > YSCR__MTL_RB - 1) w = YSCR__MTL_RB - 1 - x;
+            if (w == 0 || c->x + (int)w > m->w || c->y >= m->h) break;
+            sz.w = w; sz.h = 1; sz.d = 1;
+            o.x = (unsigned long)c->x; o.y = (unsigned long)c->y; o.z = 0;
+            YSCR__MSG(void, yscr__id, void*, yscr__id, unsigned long, unsigned long, yscr__mtl_origin, yscr__mtl_size,
+                      yscr__id, unsigned long, unsigned long, unsigned long)(blit, yscr__mac.copyTexToBuf, m->tex, 0ul, 0ul,
+                      o, sz, m->readback, x * 4ul, w * 4ul, w * 4ul);
+            x += w;
+        }
+        if (YSCR__MTL_SYNC_PIXEL_ON && m->w > 0 && m->h > 0) {   /* a pixel ANGLE drew: the sync's own check */
+            yscr__mtl_size sz;
+            yscr__mtl_origin o;
+            sz.w = 1; sz.h = 1; sz.d = 1;
+            o.x = (unsigned long)(m->w / 2); o.y = (unsigned long)(m->h / 2); o.z = 0;
+            YSCR__MSG(void, yscr__id, void*, yscr__id, unsigned long, unsigned long, yscr__mtl_origin, yscr__mtl_size,
+                      yscr__id, unsigned long, unsigned long, unsigned long)(blit, yscr__mac.copyTexToBuf, m->tex, 0ul, 0ul,
+                      o, sz, m->readback, (YSCR__MTL_RB - 1) * 4ul, 4ul, 4ul);
+        }
+        rb = 1;
+    }
+    yscr__v0(blit, yscr__mac.endEncoding);
+    d = m->drawable;
+    if (m->n_slot < YSCR__MTL_ARMED) slot = yscr__mtl_slot_take();
+    if (slot >= 0) {
+        yscr__vo(d, yscr__mac.addPresented, (yscr__id)&yscr__mtl_blk[slot]);
+        m->slot[m->n_slot] = slot;
+        m->slot_id[m->n_slot] = req->present_id;
+        m->slot_target[m->n_slot] = req->target_ns > 0 ? req->target_ns : yscr__now();
+        m->n_slot++;
+    } else {
+        m->no_slot++;
+        yscr__mtl_lost(m, req->present_id, 0);
+    }
+    {
+        int64_t t = req->target_ns > 0 ? yscr__mtl_target(req->target_ns, m->period_ns) : 0;
+        if (t > yscr__now()) YSCR__MSG(void, yscr__id, void*, yscr__id, double)(cb, yscr__mac.presentAtTime, d,
+                                                                               (double)(t - m->mach_off) * 1e-9);
+        else yscr__vo(cb, yscr__mac.presentDrawable, d);
+    }
+    if (rb) {
+        YSCR__MRELEASE(m->rb_cb);   /* one still pending is not checked */
+        yscr__v0(cb, yscr__mac.retain);
+        m->rb_cb = cb;
+        m->rb_id = req->present_id;
+        m->rb_codes = req->verify ? req->codes : NULL;
+        m->rb_n = req->verify ? req->n_codes : 0;
+    }
+    yscr__v0(cb, yscr__mac.commit);
+    yscr__mac.pool_pop(pool);
+    YSCR__MRELEASE(m->drawable);
+    m->tex = NULL;
+    m->surf = m->dummy;
+    yscr__mac.eglMakeCurrent(m->dpy, m->dummy, m->dummy, m->ctx);
+    return YSCR_OK;
+}
+
+static int yscr__mtl_completions(void* vctx, yscr_vblank* out, int cap) {
+    yscr__mtl* m = (yscr__mtl*)vctx;
+    int n = 0;
+    while (n < cap && m->n_lost > 0) {   /* presents with no handler: estimated */
+        yscr__mtl_vblank(m->lost_id[0], 0, m->lost_hidden[0], m->kind, m->t0, m->period_ns, &out[n++]);
+        memmove(m->lost_id, m->lost_id + 1, sizeof m->lost_id[0] * (size_t)(m->n_lost - 1));
+        memmove(m->lost_hidden, m->lost_hidden + 1, sizeof m->lost_hidden[0] * (size_t)(m->n_lost - 1));
+        m->n_lost--;
+    }
+    while (n < cap && m->n_slot > 0) {
+        yscr__mtl_slot* sl = &yscr__mtl_tab[m->slot[0]];
+        int64_t t;
+        if (yscr__a_load(&sl->state) != YSCR__SLOT_FIRED) {   /* in order */
+            /* A handler a second past its target may never come (a hidden
+             * window's): give its slot up, so the frames after it complete */
+            if (yscr__now() - m->slot_target[0] < 1000000000LL ||
+                !yscr__a_cas(&sl->state, YSCR__SLOT_ARMED, YSCR__SLOT_ORPHAN)) break;
+            m->not_shown++;
+            m->late_handlers++;
+            yscr__mtl_vblank(m->slot_id[0], 0, yscr__mtl_hidden(m), m->kind, m->t0, m->period_ns, &out[n++]);
+            m->n_slot--;
+            memmove(m->slot, m->slot + 1, sizeof m->slot[0] * (size_t)m->n_slot);
+            memmove(m->slot_id, m->slot_id + 1, sizeof m->slot_id[0] * (size_t)m->n_slot);
+            memmove(m->slot_target, m->slot_target + 1, sizeof m->slot_target[0] * (size_t)m->n_slot);
+            continue;
+        }
+        t = yscr__a_load64(&sl->presented);
+        if (t > 0) {
+            t += m->mach_off;
+            if (!m->t0) m->t0 = t;
+        } else {
+            m->not_shown++;
+        }
+        yscr__mtl_vblank(m->slot_id[0], t, t > 0 ? 0 : yscr__mtl_hidden(m), m->kind, m->t0, m->period_ns, &out[n++]);
+        yscr__a_store(&sl->state, YSCR__SLOT_FREE);
+        if (m->rb_cb && m->rb_id <= m->slot_id[0]) yscr__mtl_rb_check(m);
+        m->n_slot--;
+        memmove(m->slot, m->slot + 1, sizeof m->slot[0] * (size_t)m->n_slot);
+        memmove(m->slot_id, m->slot_id + 1, sizeof m->slot_id[0] * (size_t)m->n_slot);
+        memmove(m->slot_target, m->slot_target + 1, sizeof m->slot_target[0] * (size_t)m->n_slot);
+    }
+    return n;
+}
+
+static int yscr__mtl_describe(void* vctx, char* buf, size_t cap) {
+    yscr__mtl* m = (yscr__mtl*)vctx;
+    m->kind = yscr__mtl_kind_now(m);
+    return snprintf(buf, cap, "angle=%s kind=%s layer=%s period=%lldns(%s) refresh_interval=%lld..%lldns locked=%d not_shown=%u no_drawable=%u "
+                    "no_handler=%u late_handler=%u held_far=%u sync_failed=%u pbuffers=%u mach_off=%lldns(%lldns) target_lead=%.2f "
+                    "tier=%d(no photodiode) os_stamps=%u/%u(passed %u, bias %lldus)",
+                    m->angle, yscr__mtl_kind_name(m->kind), m->bits10 ? "bgr10a2" : "bgra8", (long long)m->period_ns,
+                    yscr__mtl_src_name[m->period_src >= 0 && m->period_src <= 4 ? m->period_src : 0],
+                    (long long)m->min_iv_ns, (long long)m->max_iv_ns, m->locked, m->not_shown, m->no_drawable, m->no_slot, m->late_handlers, m->held_far, m->sync_failed, m->pbuffers,
+                    (long long)m->mach_off, (long long)m->corr_w, YSCR__MTL_TARGET_LEAD, (int)yscr__mtl_tier(m->kind),
+                    yscr__nsm.st.found, yscr__nsm.st.tried, yscr__nsm.st.passed, (long long)(yscr__nsm.st.b_last / 1000));
+}
+
+/* The NSEvent time of an SDL key or mouse-button event (ysp_rt ns), or 0:
+ * not such an event, no monitor, or no entry fits (yscr__nsm_pick). */
+static int64_t yscr__nsm_stamp(const SDL_Event* ev, int64_t s_rt) {
+    yscr__nsev snap[YSCR__NSM_N];
+    uint32_t head;
+    int cls, k;
+    if (yscr__nsm.users <= 0) return 0;
+    switch (ev->type) {
+    case SDL_EVENT_KEY_DOWN:
+    case SDL_EVENT_KEY_UP:
+        if (ev->key.scancode >= SDL_SCANCODE_LCTRL && ev->key.scancode <= SDL_SCANCODE_RGUI)
+            cls = YSCR__NSM_MOD + (int)(ev->key.scancode - SDL_SCANCODE_LCTRL);
+        else cls = ev->key.down ? YSCR__NSM_KEY_DOWN : YSCR__NSM_KEY_UP;
+        break;
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+    case SDL_EVENT_MOUSE_BUTTON_UP:
+        if (ev->button.which == SDL_TOUCH_MOUSEID || ev->button.which == SDL_PEN_MOUSEID) return 0;
+        cls = ev->button.down ? YSCR__NSM_BTN_DOWN : YSCR__NSM_BTN_UP;
+        break;
+    default:
+        return 0;
+    }
+    head = (uint32_t)yscr__a_load(&yscr__nsm.head);
+    for (k = 0; k < YSCR__NSM_N; k++) {   /* a copy the handler cannot change under the pick */
+        int32_t q = yscr__a_load(&yscr__nsm.ring[k].seq);
+        snap[k].t_ns = yscr__nsm.ring[k].t_ns;
+        snap[k].cls = yscr__nsm.ring[k].cls;
+        snap[k].seq = yscr__a_load(&yscr__nsm.ring[k].seq) == q ? q : 0;
+    }
+    return yscr__nsm_pick(snap, head, &yscr__nsm.st, cls, ev->common.timestamp, s_rt, yscr__nsm.mach_off);
+}
+
+/* The pick takes its entry, so an SDL event is paired once: yscr_poll()
+ * pairs it and yscr_event_input() on the same event finds the result
+ * here (v0.16.0). The last 16 events paired, keyed by SDL's stamp, type
+ * and key or button; the thread that polls. */
+#define YSCR__NSM_MEMO 16
+static struct { uint64_t ticks; uint32_t type, code; int64_t t_os; } yscr__nsm_memo[YSCR__NSM_MEMO];
+static uint32_t yscr__nsm_memo_next;
+
+static int64_t yscr__nsm_stamp_once(const SDL_Event* ev, int64_t s_rt) {
+    uint32_t code, i;
+    int64_t t;
+    if (ev->type != SDL_EVENT_KEY_DOWN && ev->type != SDL_EVENT_KEY_UP && ev->type != SDL_EVENT_MOUSE_BUTTON_DOWN &&
+        ev->type != SDL_EVENT_MOUSE_BUTTON_UP)
+        return 0;
+    code = ev->type == SDL_EVENT_KEY_DOWN || ev->type == SDL_EVENT_KEY_UP ? (uint32_t)ev->key.scancode
+                                                                          : (uint32_t)ev->button.button;
+    for (i = 0; i < YSCR__NSM_MEMO; i++)
+        if (yscr__nsm_memo[i].ticks == ev->common.timestamp && yscr__nsm_memo[i].type == ev->type &&
+            yscr__nsm_memo[i].code == code && yscr__nsm_memo[i].ticks)
+            return yscr__nsm_memo[i].t_os;
+    t = yscr__nsm_stamp(ev, s_rt);
+    i = yscr__nsm_memo_next++ % YSCR__NSM_MEMO;
+    yscr__nsm_memo[i].ticks = ev->common.timestamp;
+    yscr__nsm_memo[i].type = ev->type;
+    yscr__nsm_memo[i].code = code;
+    yscr__nsm_memo[i].t_os = t;
+    return t;
+}
+
+static yscr_proc yscr__mtl_gl_proc(void* vctx, const char* name) {
+    (void)vctx;
+    return yscr__mac.eglGetProcAddress ? yscr__mac.eglGetProcAddress(name) : NULL;
+}
+
+/* ANGLE's signal for a present is its GPU work done (the header's blits
+ * after it are a few microseconds). Any thread. */
+static uint64_t yscr__mtl_gpu_done(void* vctx) {
+    yscr__mtl* m = (yscr__mtl*)vctx;
+    return m->event ? YSCR__MSG(uint64_t, yscr__id, void*)(m->event, yscr__mac.signaledValue) : 0;
+}
+
+static const yscr_presenter yscr__mtl_presenter = {
+    YSCR_PRESENTER_VERSION, "metal", true, false, true,
+    yscr__mtl_open, yscr__mtl_close, yscr__mtl_acquire, yscr__mtl_present,
+    yscr__mtl_completions, yscr__mtl_gl_proc, yscr__mtl_bind, yscr__mtl_describe,
+    yscr__mtl_gpu_done
+};
+
+/* --- macOS: the panic watchdog, the OS gamma ramp, the code risk state and
+ * raw mice (v0.16.0) ------------------------------------------------------
+ * The calls the Windows side makes through user32 and gdi32, made through
+ * CoreGraphics, CoreFoundation, IOKit and libdispatch, loaded at run time
+ * as the presenter's are. The rules are the pure functions above. */
+
+typedef void* yscr__cf;   /* any CFTypeRef */
+typedef void (*yscr__cf_observer_fn)(yscr__cf, unsigned long, void*);
+typedef void* (*yscr__cg_tap_fn)(void*, uint32_t, void*, void*);
+typedef void (*yscr__hid_value_fn)(void*, int32_t, void*, void*);
+typedef void (*yscr__hid_device_fn)(void*, int32_t, void*, void*);
+
+static struct {
+    int   state;                       /* 0 not tried, 1 loaded, -1 failed  */
+    char  why[96];
+    void* iokit;
+    /* CoreFoundation */
+    yscr__cf (*CFRunLoopGetCurrent)(void);
+    yscr__cf (*CFRunLoopGetMain)(void);
+    void (*CFRunLoopStop)(yscr__cf);
+    void (*CFRunLoopWakeUp)(yscr__cf);
+    void (*CFRunLoopAddSource)(yscr__cf, yscr__cf, const void*);
+    void (*CFRunLoopAddObserver)(yscr__cf, yscr__cf, const void*);
+    void (*CFRunLoopRemoveObserver)(yscr__cf, yscr__cf, const void*);
+    yscr__cf (*CFRunLoopObserverCreate)(const void*, unsigned long, unsigned char, long, yscr__cf_observer_fn, void*);
+    yscr__cf (*CFMachPortCreateRunLoopSource)(const void*, yscr__cf, long);
+    void (*CFMachPortInvalidate)(yscr__cf);
+    yscr__cf (*CFNumberCreate)(const void*, long, const void*);
+    unsigned char (*CFNumberGetValue)(yscr__cf, long, void*);
+    yscr__cf (*CFDictionaryCreate)(const void*, const void**, const void**, long, const void*, const void*);
+    unsigned char (*CFStringGetCString)(yscr__cf, char*, long, uint32_t);
+    unsigned long (*CFGetTypeID)(yscr__cf);
+    unsigned long (*CFStringGetTypeID)(void);
+    long (*CFSetGetCount)(yscr__cf);
+    void (*CFSetGetValues)(yscr__cf, const void**);
+    long (*CFArrayGetCount)(yscr__cf);
+    const void* (*CFArrayGetValueAtIndex)(yscr__cf, long);
+    unsigned char (*CFEqual)(yscr__cf, yscr__cf);
+    const void* dict_keys;             /* &kCFTypeDictionaryKeyCallBacks    */
+    const void* dict_values;           /* &kCFTypeDictionaryValueCallBacks  */
+    const void* cf_true;               /* kCFBooleanTrue                    */
+    /* CoreGraphics */
+    yscr__cf (*CGEventTapCreate)(uint32_t, uint32_t, uint32_t, uint64_t, yscr__cg_tap_fn, void*);
+    void (*CGEventTapEnable)(yscr__cf, unsigned char);
+    int64_t (*CGEventGetIntegerValueField)(yscr__cf, uint32_t);
+    uint64_t (*CGEventGetFlags)(yscr__cf);
+    int32_t (*CGGetDisplayTransferByTable)(uint32_t, uint32_t, float*, float*, float*, uint32_t*);
+    int32_t (*CGSetDisplayTransferByTable)(uint32_t, uint32_t, const float*, const float*, const float*);
+    uint32_t (*CGDisplayGammaTableCapacity)(uint32_t);
+    yscr__cf (*CGDisplayCopyDisplayMode)(uint32_t);
+    yscr__cf (*CGDisplayCopyAllDisplayModes)(uint32_t, yscr__cf);
+    size_t (*CGDisplayModeGetPixelWidth)(yscr__cf);
+    size_t (*CGDisplayModeGetPixelHeight)(yscr__cf);
+    uint32_t (*CGDisplayModeGetIOFlags)(yscr__cf);
+    void (*CGDisplayModeRelease)(yscr__cf);
+    yscr__cf (*CGColorSpaceCopyName)(yscr__cf);
+    const void* dup_low_res;           /* kCGDisplayShowDuplicateLowResolutionModes */
+    /* IOKit */
+    yscr__cf (*IOHIDManagerCreate)(const void*, uint32_t);
+    void (*IOHIDManagerSetDeviceMatching)(yscr__cf, yscr__cf);
+    void (*IOHIDManagerRegisterDeviceMatchingCallback)(yscr__cf, yscr__hid_device_fn, void*);
+    void (*IOHIDManagerRegisterDeviceRemovalCallback)(yscr__cf, yscr__hid_device_fn, void*);
+    void (*IOHIDManagerRegisterInputValueCallback)(yscr__cf, yscr__hid_value_fn, void*);
+    void (*IOHIDManagerScheduleWithRunLoop)(yscr__cf, yscr__cf, const void*);
+    void (*IOHIDManagerUnscheduleFromRunLoop)(yscr__cf, yscr__cf, const void*);
+    int32_t (*IOHIDManagerOpen)(yscr__cf, uint32_t);
+    int32_t (*IOHIDManagerClose)(yscr__cf, uint32_t);
+    yscr__cf (*IOHIDManagerCopyDevices)(yscr__cf);
+    yscr__cf (*IOHIDValueGetElement)(yscr__cf);
+    long (*IOHIDValueGetIntegerValue)(yscr__cf);
+    uint64_t (*IOHIDValueGetTimeStamp)(yscr__cf);
+    uint32_t (*IOHIDElementGetUsagePage)(yscr__cf);
+    uint32_t (*IOHIDElementGetUsage)(yscr__cf);
+    unsigned char (*IOHIDElementIsRelative)(yscr__cf);
+    long (*IOHIDElementGetLogicalMin)(yscr__cf);
+    long (*IOHIDElementGetLogicalMax)(yscr__cf);
+    yscr__cf (*IOHIDElementGetDevice)(yscr__cf);
+    yscr__cf (*IOHIDDeviceGetProperty)(yscr__cf, yscr__cf);
+    uint32_t (*IOHIDDeviceGetService)(yscr__cf);
+    int32_t (*IORegistryEntryGetRegistryEntryID)(uint32_t, uint64_t*);
+    uint32_t (*IOHIDCheckAccess)(uint32_t);   /* optional: macOS 10.15 */
+    /* libdispatch */
+    void (*dispatch_async_f)(void*, void*, void (*)(void*));
+    void* main_q;                      /* &_dispatch_main_q: dispatch_get_main_queue() */
+    yscr__cf product;                  /* CFSTR("Product"), kIOHIDProductKey */
+} yscr__mx;
+
+static const char* yscr__mx_load(void) {
+    const char* miss = NULL;
+    if (yscr__mx.state > 0) return NULL;
+    if (yscr__mx.state < 0) return yscr__mx.why;
+    if (yscr__mac.state <= 0) return "macOS's frameworks were not loaded (open a METAL screen)";
+    yscr__mx.iokit = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY | RTLD_LOCAL);
+#define YSCR__X(lib, f) do { yscr_proc p_ = yscr__mac_sym((lib), #f); \
+        if (!p_ && !miss) miss = #f; memcpy((void*)&yscr__mx.f, &p_, sizeof p_); } while (0)
+#define YSCR__XD(lib, f, n) do { void* p_ = (lib) ? dlsym((lib), n) : NULL; \
+        if (!p_ && !miss) miss = n; yscr__mx.f = p_; } while (0)
+    YSCR__X(yscr__mac.lib[1], CFRunLoopGetCurrent); YSCR__X(yscr__mac.lib[1], CFRunLoopGetMain);
+    YSCR__X(yscr__mac.lib[1], CFRunLoopStop); YSCR__X(yscr__mac.lib[1], CFRunLoopWakeUp);
+    YSCR__X(yscr__mac.lib[1], CFRunLoopAddSource); YSCR__X(yscr__mac.lib[1], CFRunLoopAddObserver);
+    YSCR__X(yscr__mac.lib[1], CFRunLoopRemoveObserver); YSCR__X(yscr__mac.lib[1], CFRunLoopObserverCreate);
+    YSCR__X(yscr__mac.lib[1], CFMachPortCreateRunLoopSource); YSCR__X(yscr__mac.lib[1], CFMachPortInvalidate);
+    YSCR__X(yscr__mac.lib[1], CFNumberCreate); YSCR__X(yscr__mac.lib[1], CFNumberGetValue);
+    YSCR__X(yscr__mac.lib[1], CFDictionaryCreate); YSCR__X(yscr__mac.lib[1], CFStringGetCString);
+    YSCR__X(yscr__mac.lib[1], CFGetTypeID); YSCR__X(yscr__mac.lib[1], CFStringGetTypeID);
+    YSCR__X(yscr__mac.lib[1], CFSetGetCount); YSCR__X(yscr__mac.lib[1], CFSetGetValues);
+    YSCR__X(yscr__mac.lib[1], CFArrayGetCount); YSCR__X(yscr__mac.lib[1], CFArrayGetValueAtIndex);
+    YSCR__X(yscr__mac.lib[1], CFEqual);
+    YSCR__XD(yscr__mac.lib[1], dict_keys, "kCFTypeDictionaryKeyCallBacks");
+    YSCR__XD(yscr__mac.lib[1], dict_values, "kCFTypeDictionaryValueCallBacks");
+    {   /* CFBooleanRef and CFStringRef constants: the value at the symbol */
+        void* p = yscr__mac.lib[1] ? dlsym(yscr__mac.lib[1], "kCFBooleanTrue") : NULL;
+        if (p) memcpy((void*)&yscr__mx.cf_true, p, sizeof(void*)); else if (!miss) miss = "kCFBooleanTrue";
+        p = yscr__mac.lib[2] ? dlsym(yscr__mac.lib[2], "kCGDisplayShowDuplicateLowResolutionModes") : NULL;
+        if (p) memcpy((void*)&yscr__mx.dup_low_res, p, sizeof(void*));
+        else if (!miss) miss = "kCGDisplayShowDuplicateLowResolutionModes";
+    }
+    YSCR__X(yscr__mac.lib[2], CGEventTapCreate); YSCR__X(yscr__mac.lib[2], CGEventTapEnable);
+    YSCR__X(yscr__mac.lib[2], CGEventGetIntegerValueField); YSCR__X(yscr__mac.lib[2], CGEventGetFlags);
+    YSCR__X(yscr__mac.lib[2], CGGetDisplayTransferByTable); YSCR__X(yscr__mac.lib[2], CGSetDisplayTransferByTable);
+    YSCR__X(yscr__mac.lib[2], CGDisplayGammaTableCapacity); YSCR__X(yscr__mac.lib[2], CGDisplayCopyDisplayMode);
+    YSCR__X(yscr__mac.lib[2], CGDisplayCopyAllDisplayModes); YSCR__X(yscr__mac.lib[2], CGDisplayModeGetPixelWidth);
+    YSCR__X(yscr__mac.lib[2], CGDisplayModeGetPixelHeight); YSCR__X(yscr__mac.lib[2], CGDisplayModeGetIOFlags);
+    YSCR__X(yscr__mac.lib[2], CGDisplayModeRelease); YSCR__X(yscr__mac.lib[2], CGColorSpaceCopyName);
+    YSCR__X(yscr__mx.iokit, IOHIDManagerCreate); YSCR__X(yscr__mx.iokit, IOHIDManagerSetDeviceMatching);
+    YSCR__X(yscr__mx.iokit, IOHIDManagerRegisterDeviceMatchingCallback);
+    YSCR__X(yscr__mx.iokit, IOHIDManagerRegisterDeviceRemovalCallback);
+    YSCR__X(yscr__mx.iokit, IOHIDManagerRegisterInputValueCallback);
+    YSCR__X(yscr__mx.iokit, IOHIDManagerScheduleWithRunLoop); YSCR__X(yscr__mx.iokit, IOHIDManagerUnscheduleFromRunLoop);
+    YSCR__X(yscr__mx.iokit, IOHIDManagerOpen); YSCR__X(yscr__mx.iokit, IOHIDManagerClose);
+    YSCR__X(yscr__mx.iokit, IOHIDManagerCopyDevices); YSCR__X(yscr__mx.iokit, IOHIDValueGetElement);
+    YSCR__X(yscr__mx.iokit, IOHIDValueGetIntegerValue); YSCR__X(yscr__mx.iokit, IOHIDValueGetTimeStamp);
+    YSCR__X(yscr__mx.iokit, IOHIDElementGetUsagePage); YSCR__X(yscr__mx.iokit, IOHIDElementGetUsage);
+    YSCR__X(yscr__mx.iokit, IOHIDElementIsRelative); YSCR__X(yscr__mx.iokit, IOHIDElementGetLogicalMin);
+    YSCR__X(yscr__mx.iokit, IOHIDElementGetLogicalMax); YSCR__X(yscr__mx.iokit, IOHIDElementGetDevice);
+    YSCR__X(yscr__mx.iokit, IOHIDDeviceGetProperty); YSCR__X(yscr__mx.iokit, IOHIDDeviceGetService);
+    YSCR__X(yscr__mx.iokit, IORegistryEntryGetRegistryEntryID);
+    YSCR__X(RTLD_DEFAULT, dispatch_async_f);
+    yscr__mx.main_q = dlsym(RTLD_DEFAULT, "_dispatch_main_q");
+    if (!yscr__mx.main_q && !miss) miss = "_dispatch_main_q";
+#undef YSCR__X
+#undef YSCR__XD
+    {
+        yscr_proc p = yscr__mac_sym(yscr__mx.iokit, "IOHIDCheckAccess");
+        memcpy((void*)&yscr__mx.IOHIDCheckAccess, &p, sizeof p);
+    }
+    yscr__mx.product = (yscr__cf)yscr__mac.CFStringCreateWithCString(NULL, "Product", 0x08000100u);
+    if (!yscr__mx.product && !miss) miss = "a CFString";
+    if (miss) {
+        yscr__set_error(yscr__mx.why, sizeof yscr__mx.why, "macOS's %s is missing", miss);
+        yscr__mx.state = -1;
+        return yscr__mx.why;
+    }
+    yscr__mx.state = 1;
+    return NULL;
+}
+
+/* A CFString of a C string; the caller releases it. */
+static yscr__cf yscr__mx_str(const char* s) {
+    return (yscr__cf)yscr__mac.CFStringCreateWithCString(NULL, s, 0x08000100u);
+}
+
+/* The CGDirectDisplayID of the screen's window: NSScreen's NSScreenNumber,
+ * else the display under the window's center. 0 = none. */
+static uint32_t yscr__mx_display(yscr__mtl* m) {
+    yscr__id screen = m->nswin ? yscr__o0(m->nswin, yscr__mac.screen_) : NULL;
+    uint32_t id = 0;
+    if (screen) {
+        yscr__id dd = yscr__o0(screen, yscr__mac.sel("deviceDescription"));
+        yscr__cf key = yscr__mx_str("NSScreenNumber");
+        yscr__id num = dd && key ? YSCR__MSG(yscr__id, yscr__id, void*, yscr__cf)(dd, yscr__mac.sel("objectForKey:"), key) : NULL;
+        if (num) id = (uint32_t)YSCR__MSG(unsigned int, yscr__id, void*)(num, yscr__mac.sel("unsignedIntValue"));
+        if (key) yscr__mac.CFRelease(key);
+    }
+    if (!id && m->win) {
+        int x = 0, y = 0, w = 0, h = 0;
+        uint32_t ids[4], nd = 0;
+        yscr__cgpoint c;
+        SDL_GetWindowPosition((SDL_Window*)m->win, &x, &y);
+        SDL_GetWindowSize((SDL_Window*)m->win, &w, &h);
+        c.x = x + w / 2.0; c.y = y + h / 2.0;
+        if (yscr__mac.CGGetDisplaysWithPoint(c, 4, ids, &nd) == 0 && nd > 0) id = ids[0];
+    }
+    return id;
+}
+
+/* --- the OS gamma ramp (OS GAMMA), macOS ---------------------------------
+ * Tables this process set, to put back at close, at exit, on SDL's quit
+ * and in a panic. The window server also puts a process's table back when
+ * the process ends, even by SIGKILL (measured, docs/screen.md). */
+#define YSCR__GAMMA_MAX 8
+#define YSCR__GAMMA_N   1024   /* the M27Q's capacity; a larger table is read at 1024 */
+static struct yscr__gamma_entry {
+    volatile int32_t used;
+    uint32_t display, n;
+    float    saved[3][YSCR__GAMMA_N];
+} yscr__gamma[YSCR__GAMMA_MAX];
+static int yscr__gamma_atexit, yscr__gamma_watch;
+
+/* close(), exit and the panic watchdog's thread can each get here: the
+ * exchange lets one of them restore an entry. CGSetDisplayTransferByTable
+ * talks to the window server and needs no thread of its own. */
+static void yscr__gamma_restore(int k) {
+    if (k < 0 || k >= YSCR__GAMMA_MAX) return;
+    if (!yscr__a_cas(&yscr__gamma[k].used, 1, 0)) return;
+    if (yscr__mx.CGSetDisplayTransferByTable)
+        yscr__mx.CGSetDisplayTransferByTable(yscr__gamma[k].display, yscr__gamma[k].n, yscr__gamma[k].saved[0],
+                                             yscr__gamma[k].saved[1], yscr__gamma[k].saved[2]);
+}
+
+static void yscr__gamma_restore_all(void) {
+    int k;
+    for (k = 0; k < YSCR__GAMMA_MAX; k++) yscr__gamma_restore(k);
+}
+
+static bool SDLCALL yscr__gamma_quit_watch(void* ud, SDL_Event* e) {
+    (void)ud;
+    if (e && e->type == SDL_EVENT_QUIT) yscr__gamma_restore_all();
+    return true;
+}
+
+/* Test seam, not API: tests/adapt/screen_metal_test.c defines
+ * YSCR__MAC_GAMMA_SET(display, n, r, g, b) to refuse a set, as a display
+ * that takes no table would. */
+#ifndef YSCR__MAC_GAMMA_SET
+#define YSCR__MAC_GAMMA_SET(d, n, r, g, b) yscr__mx.CGSetDisplayTransferByTable((d), (n), (r), (g), (b))
+#endif
+
+/* The table: identity (it was), set (the header set the identity and read
+ * it back), refused (macOS did not keep it), unreadable; the same with
+ * (kept) when the header may not change it. 1 when the word is identity,
+ * set or identity(kept). */
+static int yscr__mx_gamma(yscr_screen* s, const yscr_desc* desc, uint32_t did, const char** word) {
+    static float cur[3][YSCR__GAMMA_N], id[3][YSCR__GAMMA_N], back[3][YSCR__GAMMA_N];   /* main thread: open() */
+    uint32_t cap = did ? yscr__mx.CGDisplayGammaTableCapacity(did) : 0, n = 0, nb = 0, i;
+    int k, c;
+    if (cap > YSCR__GAMMA_N) cap = YSCR__GAMMA_N;
+    if (cap < 2 || yscr__mx.CGGetDisplayTransferByTable(did, cap, cur[0], cur[1], cur[2], &n) != 0 || n < 2) {
+        *word = desc->windowed || desc->keep_os_gamma ? "unreadable(kept)" : "unreadable";
+        return 0;
+    }
+    if (yscr__table_identity(cur[0], n) && yscr__table_identity(cur[1], n) && yscr__table_identity(cur[2], n)) {
+        *word = desc->windowed || desc->keep_os_gamma ? "identity(kept)" : "identity";
+        return 1;
+    }
+    /* a window never touches the table, which the whole display shares */
+    if (desc->windowed || desc->keep_os_gamma) { *word = "not-identity(kept)"; return 0; }
+    *word = "refused";
+    for (k = 0; k < YSCR__GAMMA_MAX && yscr__a_load(&yscr__gamma[k].used); k++) { }
+    if (k == YSCR__GAMMA_MAX) return 0;
+    for (c = 0; c < 3; c++) for (i = 0; i < n; i++) id[c][i] = (float)i / (float)(n - 1);
+    /* registered before the set, so an exit at any point puts the user's
+     * table back */
+    yscr__gamma[k].display = did;
+    yscr__gamma[k].n = n;
+    memcpy(yscr__gamma[k].saved, cur, sizeof cur);
+    yscr__a_store(&yscr__gamma[k].used, 1);
+    if (!yscr__gamma_atexit) { yscr__gamma_atexit = 1; atexit(yscr__gamma_restore_all); }
+    if (!yscr__gamma_watch) yscr__gamma_watch = SDL_AddEventWatch(yscr__gamma_quit_watch, NULL) ? 1 : 0;
+    if (YSCR__MAC_GAMMA_SET(did, n, id[0], id[1], id[2]) == 0 &&
+        yscr__mx.CGGetDisplayTransferByTable(did, cap, back[0], back[1], back[2], &nb) == 0 &&
+        yscr__table_identity(back[0], nb) && yscr__table_identity(back[1], nb) && yscr__table_identity(back[2], nb)) {
+        s->gamma_owned = k + 1;
+        *word = "set";
+        return 1;
+    }
+    yscr__gamma_restore(k);   /* a display may take a table and not keep it */
+    return 0;
+}
+
+static void yscr__mtl_gamma_release(yscr_screen* s) {
+    int k, any = 0;
+    if (s->gamma_owned) yscr__gamma_restore(s->gamma_owned - 1);
+    s->gamma_owned = 0;
+    for (k = 0; k < YSCR__GAMMA_MAX; k++) any |= yscr__a_load(&yscr__gamma[k].used);
+    if (!any && yscr__gamma_watch) { SDL_RemoveEventWatch(yscr__gamma_quit_watch, NULL); yscr__gamma_watch = 0; }
+}
+
+/* The panel's own pixels: the display modes with the native flag
+ * (kDisplayModeNativeFlag, 0x02000000), largest first. 0 when none has it. */
+static void yscr__mx_native(uint32_t did, int* w, int* h) {
+    const void* k[1];
+    const void* v[1];
+    yscr__cf opts, all;
+    long i, n;
+    *w = *h = 0;
+    k[0] = yscr__mx.dup_low_res;
+    v[0] = yscr__mx.cf_true;
+    opts = yscr__mx.CFDictionaryCreate(NULL, k, v, 1, yscr__mx.dict_keys, yscr__mx.dict_values);
+    all = yscr__mx.CGDisplayCopyAllDisplayModes(did, opts);
+    n = all ? yscr__mx.CFArrayGetCount(all) : 0;
+    for (i = 0; i < n; i++) {
+        yscr__cf md = (yscr__cf)yscr__mx.CFArrayGetValueAtIndex(all, i);
+        int mw = (int)yscr__mx.CGDisplayModeGetPixelWidth(md), mh = (int)yscr__mx.CGDisplayModeGetPixelHeight(md);
+        if ((yscr__mx.CGDisplayModeGetIOFlags(md) & 0x02000000u) && (int64_t)mw * mh > (int64_t)*w * *h) { *w = mw; *h = mh; }
+    }
+    if (all) yscr__mac.CFRelease(all);
+    if (opts) yscr__mac.CFRelease(opts);
+}
+
+/* Test seam, not API: tests/adapt/screen_metal_test.c defines
+ * YSCR__MAC_COLOR(c) to change what open() read (an HDR display, a
+ * tagged layer), as no such display was attached. */
+#ifndef YSCR__MAC_COLOR
+#define YSCR__MAC_COLOR(c) ((void)(c))
+#endif
+
+/* open(): what the header can read of the display's color path (CODES:
+ * code_risk), and the OS gamma ramp for a fullscreen screen unless
+ * desc.keep_os_gamma (OS GAMMA). On the main thread, after the presenter's
+ * open. */
+static void yscr__mtl_display_state(yscr_screen* s, const yscr_desc* desc) {
+    yscr__mtl* m = (yscr__mtl*)(void*)s->backend_mem;
+    yscr__mac_color c;
+    const char* gamma = "unreadable";
+    char csname[48] = "";
+    uint32_t did;
+    yscr__id screen;
+    void* pool;
+    memset(&c, 0, sizeof c);
+    c.windowed = desc->windowed ? 1 : 0;
+    c.win_w = s->caps.mode.w;
+    c.win_h = s->caps.mode.h;
+    s->code_risk = 0;
+    if (yscr__mx_load()) {
+        s->code_risk = YSCR_CODE_RISK_STATE_UNKNOWN | YSCR_CODE_RISK_GAMMA;
+        snprintf(s->os_color, sizeof s->os_color, "os_color=unknown(%s)", yscr__mx.why);
+        return;
+    }
+    pool = yscr__mac.pool_push();
+    did = yscr__mx_display(m);
+    screen = m->nswin ? yscr__o0(m->nswin, yscr__mac.screen_) : NULL;
+    if (screen) {
+        c.have_screen = 1;
+        c.edr = YSCR__MSG(double, yscr__id, void*)(screen, yscr__mac.sel("maximumExtendedDynamicRangeColorComponentValue"));
+        c.edr_potential = YSCR__MSG(double, yscr__id, void*)(
+            screen, yscr__mac.sel("maximumPotentialExtendedDynamicRangeColorComponentValue"));
+    }
+    if (m->layer) {
+        yscr__cf cs = YSCR__MSG(yscr__cf, yscr__id, void*)(m->layer, yscr__mac.sel("colorspace"));
+        c.wants_edr = YSCR__MSG(signed char, yscr__id, void*)(m->layer, yscr__mac.sel("wantsExtendedDynamicRangeContent")) != 0;
+        c.colorspace = YSCR__CS_UNTAGGED;
+        if (cs) {
+            yscr__id ns = screen ? yscr__o0(screen, yscr__mac.sel("colorSpace")) : NULL;
+            yscr__cf dcs = ns ? YSCR__MSG(yscr__cf, yscr__id, void*)(ns, yscr__mac.sel("CGColorSpace")) : NULL;
+            yscr__cf nm = yscr__mx.CGColorSpaceCopyName(cs);   /* NULL for an ICC profile's space */
+            c.colorspace = dcs && yscr__mx.CFEqual(cs, dcs) ? YSCR__CS_DISPLAY : YSCR__CS_OTHER;
+            if (nm) {
+                char full[96];
+                const char* k;
+                if (yscr__mx.CFStringGetCString(nm, full, (long)sizeof full, 0x08000100u)) {
+                    k = strncmp(full, "kCGColorSpace", 13) == 0 ? full + 13 : full;
+                    snprintf(csname, sizeof csname, "(%s)", k);
+                }
+                yscr__mac.CFRelease(nm);
+            } else {
+                yscr__copy(csname, sizeof csname, "(icc)");
+            }
+        }
+    } else {
+        c.have_screen = 0;
+    }
+    if (did) {
+        yscr__cf md = yscr__mx.CGDisplayCopyDisplayMode(did);
+        if (md) {
+            c.mode_w = (int)yscr__mx.CGDisplayModeGetPixelWidth(md);
+            c.mode_h = (int)yscr__mx.CGDisplayModeGetPixelHeight(md);
+            yscr__mx.CGDisplayModeRelease(md);
+        }
+        yscr__mx_native(did, &c.native_w, &c.native_h);
+        c.gamma_ok = yscr__mx_gamma(s, desc, did, &gamma);
+    }
+    yscr__mac.pool_pop(pool);
+    YSCR__MAC_COLOR(&c);
+    s->code_risk = yscr__mac_risk(&c);
+    snprintf(s->os_color, sizeof s->os_color, "display=%u color=%s(edr %.2f/%.2f) layer_cs=%s%s panel=%dx%d "
+             "mode_px=%dx%d os_gamma=%s nightshift=unknown", (unsigned)did,
+             !c.have_screen ? "unknown" : (s->code_risk & YSCR_CODE_RISK_ADVANCED_COLOR) ? "edr-or-matched" : "sdr",
+             c.edr, c.edr_potential,
+             c.colorspace == YSCR__CS_UNTAGGED ? "untagged" : c.colorspace == YSCR__CS_DISPLAY ? "display" : "other",
+             csname, c.native_w, c.native_h, c.mode_w, c.mode_h, gamma);
+}
+
+/* --- the panic watchdog (PANIC), macOS -----------------------------------
+ * The frame loop owns the main thread, so a hung loop also stops the
+ * process's events. A listen-only event tap (CGEventTapCreate at
+ * kCGAnnotatedSessionEventTap, on a thread of its own with its own run
+ * loop) sees each key as the window server routes it, with the process it
+ * goes to (kCGEventTargetUnixProcessID), whatever the main thread does. It
+ * takes nothing: SDL still gets every key. The "window thread" of
+ * Windows is the main run loop here: an observer on it stamps a
+ * heartbeat each time it runs (SDL's pump runs it), and a release is a
+ * function on the main queue (dispatch_async_f), which runs only when the
+ * main thread pumps. */
+#define YSCR__MX_ALIVE_NS 1000000000LL
+static struct {
+    pthread_t        thread;
+    int              have_thread;
+    yscr__cf         loop;          /* the watchdog's run loop                 */
+    yscr__cf         tap, source;
+    yscr__cf         observer;      /* on the main run loop: the heartbeat     */
+    volatile int32_t ready, quit, due, panicking, ended;
+    int              armed;         /* screens armed                           */
+    int32_t          kvk;           /* the key's macOS virtual key code        */
+    int32_t          key_down;      /* the tap's own state of the key: repeats */
+    yscr_panic_fn    fn;
+    void*            ctx;
+    volatile int32_t fn_done;
+    volatile int64_t beat;          /* the main run loop's last pass, rt ns   */
+    volatile int32_t release_req, release_start, release_done;
+    volatile int64_t t_panic, t_release;
+} yscr__wd;
+
+static void yscr__wd_beat(yscr__cf obs, unsigned long activity, void* info) {
+    (void)obs; (void)activity; (void)info;
+    yscr__a_store64(&yscr__wd.beat, yscr__now());
+}
+
+/* The main thread answered within the last second. */
+static int yscr__wd_alive(void) { return yscr__now() - yscr__a_load64(&yscr__wd.beat) < YSCR__MX_ALIVE_NS; }
+
+/* On the main thread, from the main queue: the display goes back to the
+ * operator and the process lives. A fullscreen window leaves fullscreen
+ * (which puts back a switched mode) and every window is minimized. */
+static void yscr__wd_release_main(void* arg) {
+    int32_t req = (int32_t)(intptr_t)arg;
+    int i;
+    yscr__a_store(&yscr__wd.release_start, req);
+    for (i = 0; i < YSCR__SLOTS; i++) {
+        yscr_screen* s = yscr__slot[i].s;
+        if (!s || !s->window || s->backend != YSCR_BACKEND_METAL) continue;
+        if (SDL_GetWindowFlags(s->window) & SDL_WINDOW_FULLSCREEN) SDL_SetWindowFullscreen(s->window, false);
+        SDL_MinimizeWindow(s->window);
+    }
+    SDL_ShowCursor();
+    yscr__a_store64(&yscr__wd.t_release, yscr__now());
+    yscr__a_store(&yscr__wd.release_done, req);
+}
+
+static void* yscr__wd_last_words(void* arg) {
+    (void)arg;
+    if (yscr__wd.fn) yscr__wd.fn(yscr__wd.ctx);
+    yscr__a_store(&yscr__wd.fn_done, 1);
+    return NULL;
+}
+
+/* Test seam, not API: tests/adapt/screen_metal_test.c defines
+ * YSCR__WD_END(code) to see the end without it (default _exit). */
+#ifndef YSCR__WD_END
+#define YSCR__WD_END(code) _exit(code)
+#endif
+
+/* The frame loop looks hung: release while the main thread answers, else
+ * put back the gamma tables, give panic_fn up to 1 s, and end the process.
+ * _exit, not exit(): exit runs atexit handlers, which can wait on locks
+ * the hung thread holds. The window server takes down the windows and
+ * puts back the tables of a process that ended (measured). */
+static void yscr__panic(void) {
+    int64_t now = yscr__now();
+    int k;
+    if (!yscr__a_cas(&yscr__wd.panicking, 0, 1)) return;
+    yscr__a_store64(&yscr__wd.t_panic, now);
+    if (yscr__wd_alive() && yscr__mx.dispatch_async_f && yscr__mx.main_q) {
+        int32_t req = yscr__a_inc(&yscr__wd.release_req);
+        yscr__mx.dispatch_async_f(yscr__mx.main_q, (void*)(intptr_t)req, yscr__wd_release_main);
+        if (yscr__mx.CFRunLoopWakeUp && yscr__mx.CFRunLoopGetMain) yscr__mx.CFRunLoopWakeUp(yscr__mx.CFRunLoopGetMain());
+        /* 1 s for the main thread to begin, 5 s for it to end (Windows'
+         * numbers: leaving fullscreen in a switched mode takes over 1 s) */
+        for (k = 0; k < 500 && yscr__a_load(&yscr__wd.release_done) != req &&
+                    (k < 100 || yscr__a_load(&yscr__wd.release_start) == req); k++)
+            yrt_sleep_until(yscr__now() + 10000000, 0);
+        if (yscr__a_load(&yscr__wd.release_done) == req) {
+            yscr__gamma_restore_all();
+            yscr__panic_records(now, 1);
+            yscr__abort_push(YSCR_ABORT_PANIC, YSCR__AB_HOOK, 0, 0, now);
+            yscr__a_store(&yscr__released, 1);
+            yscr__a_store(&yscr__wd.panicking, 0);
+            return;
+        }
+    }
+    if (yscr__wd.tap) yscr__mx.CGEventTapEnable(yscr__wd.tap, 0);
+    yscr__panic_records(now, 0);
+    yscr__gamma_restore_all();
+    if (yscr__wd.fn) {
+        pthread_t th;
+        yscr__a_store(&yscr__wd.fn_done, 0);
+        if (pthread_create(&th, NULL, yscr__wd_last_words, NULL) == 0) {
+            pthread_detach(th);
+            for (k = 0; k < 100 && !yscr__a_load(&yscr__wd.fn_done); k++) yrt_sleep_until(yscr__now() + 10000000, 0);
+        }
+    }
+    YSCR__WD_END(YSCR_PANIC_EXIT_CODE);
+    yscr__a_store(&yscr__wd.panicking, 0);   /* the test seam returned */
+}
+
+/* One key from the tap: its virtual key code, down or up, the flags, the
+ * process it goes to and whether a process posted it. Returns 1 when the
+ * panic rule is met. The tap's thread; the core test calls it too. */
+static int yscr__wd_key(int32_t kvk, int down, uint64_t flags, int64_t target_pid, int injected) {
+    if (kvk != yscr__wd.kvk) return 0;
+    if (!yscr__abort_edge(&yscr__wd.key_down, down)) return 0;
+    /* a key for this process only: another program in front takes its own keys */
+    if (target_pid != (int64_t)getpid()) return 0;
+    return yscr__abort_key(yscr__ab.key, yscr__cg_mods(flags), yscr__now(),
+                           YSCR__AB_HOOK | (injected ? YSCR__AB_INJECTED : 0u));
+}
+
+/* A key as the tap reads it; a panic due runs on the watchdog's thread,
+ * after the callback. tests/adapt/screen_metal_test.c calls it from a
+ * thread of its own, as a tap would, when no key can be posted. */
+static void yscr__wd_feed(int32_t kvk, int down, uint64_t flags, int64_t target_pid, int injected) {
+    if (yscr__wd_key(kvk, down, flags, target_pid, injected) && yscr__wd.loop) {
+        yscr__a_store(&yscr__wd.due, 1);
+        yscr__mx.CFRunLoopStop(yscr__wd.loop);
+    }
+}
+
+/* Every key of the session passes here while the watchdog is armed. The
+ * tap only listens, so a slow callback delays no key; it does a few
+ * compares and leaves the panic to its thread's loop. */
+static void* yscr__wd_tap(void* proxy, uint32_t type, void* event, void* info) {
+    (void)proxy; (void)info;
+    if (type == 0xFFFFFFFEu || type == 0xFFFFFFFFu) {   /* disabled by timeout or by user input: on again */
+        if (yscr__wd.tap) yscr__mx.CGEventTapEnable(yscr__wd.tap, 1);
+        return event;
+    }
+    if ((type == 10u || type == 11u) && event) {        /* kCGEventKeyDown, kCGEventKeyUp */
+        int32_t kvk = (int32_t)yscr__mx.CGEventGetIntegerValueField(event, 9);   /* kCGKeyboardEventKeycode */
+        if (kvk == yscr__wd.kvk)
+            yscr__wd_feed(kvk, type == 10u, yscr__mx.CGEventGetFlags(event),
+                          yscr__mx.CGEventGetIntegerValueField(event, 40),          /* kCGEventTargetUnixProcessID */
+                          yscr__mx.CGEventGetIntegerValueField(event, 41) != 0);    /* kCGEventSourceUnixProcessID */
+    }
+    return event;
+}
+
+static void* yscr__wd_main(void* arg) {
+    (void)arg;
+    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);   /* a busy frame thread must not hold it up */
+    yscr__wd.loop = yscr__mx.CFRunLoopGetCurrent();
+    yscr__wd.tap = yscr__mx.CGEventTapCreate(2u /* kCGAnnotatedSessionEventTap */, 0u /* head */,
+                                             1u /* kCGEventTapOptionListenOnly */, (1ull << 10) | (1ull << 11),
+                                             yscr__wd_tap, NULL);
+    yscr__wd.source = yscr__wd.tap ? yscr__mx.CFMachPortCreateRunLoopSource(NULL, yscr__wd.tap, 0) : NULL;
+    if (yscr__wd.source) yscr__mx.CFRunLoopAddSource(yscr__wd.loop, yscr__wd.source, yscr__mac.cfDefaultMode);
+    yscr__a_store(&yscr__wd.ready, yscr__wd.source ? 1 : -1);
+    if (!yscr__wd.source) return NULL;
+    while (!yscr__a_load(&yscr__wd.quit)) {
+        yscr__mac.CFRunLoopRunInMode(yscr__mac.cfDefaultMode, 0.5, 0);
+        if (yscr__a_cas(&yscr__wd.due, 1, 0)) yscr__panic();
+    }
+    yscr__mx.CFMachPortInvalidate(yscr__wd.tap);
+    yscr__mac.CFRelease(yscr__wd.source);
+    yscr__mac.CFRelease(yscr__wd.tap);
+    yscr__wd.source = yscr__wd.tap = NULL;
+    yscr__a_store(&yscr__wd.ended, 1);
+    return NULL;
+}
+
+/* The first armed screen starts the watchdog, with its desc's numbers. On
+ * the main thread (open()). */
+static const char* yscr__wd_arm(yscr_screen* s, const yscr_desc* d) {
+    if (yscr__wd.armed == 0) {
+        const char* e = yscr__mx_load();
+        uint32_t key = yscr__ab.key, sc = 0;
+        int k;
+        if (e) return e;
+        if (key >= 'a' && key <= 'z') sc = (uint32_t)SDL_GetScancodeFromKey((SDL_Keycode)key, NULL);
+        else if (key >= '0' && key <= '9') sc = (uint32_t)SDL_GetScancodeFromKey((SDL_Keycode)key, NULL);
+        if (!sc) sc = yscr__scancode_us(key);
+        yscr__wd.kvk = yscr__kvk_of(sc);
+        if (yscr__wd.kvk < 0) return "desc.panic: the abort key has no macOS key code";
+        yscr__wd.key_down = 0;
+        yscr__wd.fn = d->panic_fn;
+        yscr__wd.ctx = d->panic_ctx;
+        yscr__wd.panicking = yscr__wd.due = yscr__wd.quit = yscr__wd.ready = yscr__wd.ended = 0;
+        yscr__a_store64(&yscr__wd.beat, yscr__now());
+        if (pthread_create(&yscr__wd.thread, NULL, yscr__wd_main, NULL) != 0) return "desc.panic: no watchdog thread";
+        yscr__wd.have_thread = 1;
+        for (k = 0; k < 200 && !yscr__a_load(&yscr__wd.ready); k++) yrt_sleep_until(yscr__now() + 10000000, 0);
+        if (yscr__a_load(&yscr__wd.ready) != 1) {
+            yscr__a_store(&yscr__wd.quit, 1);
+            if (yscr__a_load(&yscr__wd.ready) == 0 && yscr__wd.loop) yscr__mx.CFRunLoopStop(yscr__wd.loop);
+            pthread_join(yscr__wd.thread, NULL);
+            yscr__wd.have_thread = 0;
+            yscr__wd.loop = NULL;
+            return "desc.panic: macOS refused the keyboard event tap: allow this program (or the terminal or app "
+                   "that runs it) in System Settings > Privacy & Security > Input Monitoring";
+        }
+        yscr__wd.observer = yscr__mx.CFRunLoopObserverCreate(NULL, 1ul | 32ul | 128ul /* entry, before waiting, exit */,
+                                                             1, 0, yscr__wd_beat, NULL);
+        if (yscr__wd.observer)
+            yscr__mx.CFRunLoopAddObserver(yscr__mx.CFRunLoopGetMain(), yscr__wd.observer, yscr__mac.cfCommonModes);
+        yscr__panic_config(d->panic_presses ? d->panic_presses : 3, d->panic_window_ns ? d->panic_window_ns : YRT_S(2),
+                           d->panic_grace_ns ? d->panic_grace_ns : YRT_S(10));
+    }
+    yscr__wd.armed++;
+    s->panic_armed = 1;
+    return NULL;
+}
+
+static void yscr__wd_disarm(yscr_screen* s) {
+    if (s->panic_armed != 1) return;
+    s->panic_armed = 0;
+    if (--yscr__wd.armed > 0) return;
+    yscr__panic_config(0, 0, 0);
+    if (yscr__wd.observer) {
+        yscr__mx.CFRunLoopRemoveObserver(yscr__mx.CFRunLoopGetMain(), yscr__wd.observer, yscr__mac.cfCommonModes);
+        yscr__mac.CFRelease(yscr__wd.observer);
+        yscr__wd.observer = NULL;
+    }
+    yscr__a_store(&yscr__wd.quit, 1);
+    if (yscr__wd.loop) { yscr__mx.CFRunLoopStop(yscr__wd.loop); yscr__mx.CFRunLoopWakeUp(yscr__wd.loop); }
+    /* A panic in progress may wait for a release on the main queue, and
+     * this is the main thread: run its loop until the watchdog ends, or
+     * the release would never run and the panic would end the process. */
+    if (yscr__wd.have_thread) {
+        int k;
+        for (k = 0; k < 800 && !yscr__a_load(&yscr__wd.ended); k++)
+            yscr__mac.CFRunLoopRunInMode(yscr__mac.cfDefaultMode, 0.01, 1);
+        pthread_join(yscr__wd.thread, NULL);
+    }
+    yscr__wd.have_thread = 0;
+    yscr__wd.loop = NULL;
+}
+
+/* --- the raw mouse reader (desc.raw_mice; INPUT, "Raw mice"), macOS --------
+ * One per process: an IOHIDManager for mice (usage page 1, usage 2) on a
+ * thread of its own, its run loop on that thread. IOKit parses each
+ * report and calls back per element (yscr__hid_add groups them again);
+ * each report carries the time the HID driver took it
+ * (IOHIDValueGetTimeStamp, mach time: the ysp_rt clock from ysp/rt.h
+ * v0.10.0). The devices are not seized: the cursor moves as before. As on
+ * Windows, reports count only while this process is the active app. */
+#define YSCR__RM_DEVS 16
+static struct {
+    volatile int32_t users;
+    pthread_t        thread;
+    yscr__cf         loop, mgr, observer;
+    volatile int32_t ready, quit;
+    int32_t          open_rc;                /* IOHIDManagerOpen's IOReturn       */
+    int64_t          mach_off;               /* ysp_rt minus mach ns              */
+    yscr__id         app;                    /* NSRunningApplication.currentApplication */
+    yscr__hid_acc    acc;
+    volatile int32_t reports, dropped;       /* pushed; dropped while not active  */
+    volatile int32_t stale, empty;           /* values: yscr__hid_stale, _empty   */
+    int64_t          t_start;                /* ysp_rt ns just before IOHIDManagerOpen */
+    /* the devices, for the frame thread's YSCR_EV_DEVICE records */
+    volatile int32_t dev_lock, dev_gen;
+    struct { uint32_t id; int32_t present; void* ref; int64_t newest; char name[24]; } dev[YSCR__RM_DEVS];
+} yscr__rm;
+
+static uint32_t yscr__rm_dev_id(yscr__cf dev) {
+    uint64_t rid = 0;
+    uint32_t svc = dev ? yscr__mx.IOHIDDeviceGetService(dev) : 0;
+    if (svc) yscr__mx.IORegistryEntryGetRegistryEntryID(svc, &rid);
+    return (uint32_t)rid ? (uint32_t)rid : (uint32_t)(uintptr_t)dev;
+}
+
+static void yscr__rm_dev_set(yscr__cf dev, int present) {
+    uint32_t id = yscr__rm_dev_id(dev);
+    int i, at = -1;
+    while (!yscr__a_cas(&yscr__rm.dev_lock, 0, 1)) { }
+    for (i = 0; i < YSCR__RM_DEVS; i++) if (yscr__rm.dev[i].id == id) at = i;
+    if (at < 0 && present)
+        for (i = 0; i < YSCR__RM_DEVS && at < 0; i++) if (!yscr__rm.dev[i].id) at = i;
+    if (at >= 0 && yscr__rm.dev[at].present != present) {
+        yscr__cf name = present ? yscr__mx.IOHIDDeviceGetProperty(dev, yscr__mx.product) : NULL;
+        yscr__rm.dev[at].id = id;
+        yscr__rm.dev[at].present = present;
+        yscr__rm.dev[at].ref = present ? dev : NULL;
+        yscr__rm.dev[at].newest = 0;
+        if (present) {
+            yscr__rm.dev[at].name[0] = 0;
+            char full[128];   /* CFStringGetCString writes nothing when the name does not fit */
+            if (name && yscr__mx.CFGetTypeID(name) == yscr__mx.CFStringGetTypeID() &&
+                yscr__mx.CFStringGetCString(name, full, (long)sizeof full, 0x08000100u))
+                yscr__copy(yscr__rm.dev[at].name, sizeof yscr__rm.dev[at].name, full);
+        }
+        yscr__a_inc(&yscr__rm.dev_gen);
+    }
+    yscr__a_store(&yscr__rm.dev_lock, 0);
+}
+
+/* The reader's thread: a device's id by its IOHIDDeviceRef, from the
+ * table its own callbacks keep (one IORegistry call per device, not per
+ * value). */
+static uint32_t yscr__rm_id_of(yscr__cf dev, int64_t** newest) {
+    int i;
+    *newest = NULL;
+    for (i = 0; i < YSCR__RM_DEVS; i++)
+        if (yscr__rm.dev[i].ref == dev && dev) { *newest = &yscr__rm.dev[i].newest; return yscr__rm.dev[i].id; }
+    return yscr__rm_dev_id(dev);
+}
+
+static void yscr__rm_matched(void* ctx, int32_t rc, void* sender, void* dev) { (void)ctx; (void)rc; (void)sender; yscr__rm_dev_set(dev, 1); }
+static void yscr__rm_removed(void* ctx, int32_t rc, void* sender, void* dev) { (void)ctx; (void)rc; (void)sender; yscr__rm_dev_set(dev, 0); }
+
+/* Test seams, not API: tests/adapt/screen_metal_test.c defines
+ * YSCR__RM_ARRIVAL(t) to compare each kept value's stamp with its arrival,
+ * and YSCR__RM_VALUE(page, usage, v, t, stale) to log every value. */
+#ifndef YSCR__RM_ARRIVAL
+#define YSCR__RM_ARRIVAL(t) ((void)(t))
+#endif
+#ifndef YSCR__RM_VALUE
+#define YSCR__RM_VALUE(page, usage, v, t, stale) ((void)0)
+#endif
+
+/* A report onto the input bridge, as Windows' reader does: only while the
+ * process is the active app (NSRunningApplication's state, which the main
+ * run loop updates). */
+static void yscr__rm_push(const yscr_mouse_event* e) {
+    yin_event ev[12];
+    int k, n;
+    if (yscr__rm.app && !YSCR__MSG(signed char, yscr__id, void*)(yscr__rm.app, yscr__mac.sel("isActive"))) {
+        yscr__a_inc(&yscr__rm.dropped);
+        return;
+    }
+    n = yin_from_mouse(e, ev, 12);
+    if (n > 0) yscr__a_inc(&yscr__rm.reports);
+    for (k = 0; k < n; k++) yscr__in_push(&ev[k], 1);
+}
+
+/* One value: the empty and stale rules, then the report it belongs to, in
+ * acc (the reader's; the Metal test passes its own). The reader's thread,
+ * and the Metal test's with its own acc and newest. */
+#define YSCR__RM_KEPT  0
+#define YSCR__RM_STALE 1
+#define YSCR__RM_EMPTY 2
+static void yscr__rm_take(yscr__hid_acc* acc, uint32_t device, int64_t* newest, int64_t t, uint32_t page,
+                          uint32_t usage, int64_t v, int relative, int64_t lmin, int64_t lmax) {
+    yscr_mouse_event done;
+    if (yscr__hid_empty(relative, v)) {
+        YSCR__RM_VALUE(page, usage, v, t, YSCR__RM_EMPTY);
+        yscr__a_inc(&yscr__rm.empty);
+        return;
+    }
+    if (yscr__hid_stale(t, yscr__rm.t_start, newest ? *newest : 0)) {
+        YSCR__RM_VALUE(page, usage, v, t, YSCR__RM_STALE);
+        yscr__a_inc(&yscr__rm.stale);
+        return;
+    }
+    YSCR__RM_VALUE(page, usage, v, t, YSCR__RM_KEPT);
+    if (newest && t > *newest) *newest = t;
+    YSCR__RM_ARRIVAL(t);
+    if (yscr__hid_add(acc, device, t, page, usage, v, relative, lmin, lmax, &done)) yscr__rm_push(&done);
+}
+
+static void yscr__rm_value(void* ctx, int32_t rc, void* sender, void* value) {
+    yscr__cf el;
+    int64_t* newest;
+    uint32_t device;
+    (void)ctx; (void)rc; (void)sender;
+    if (!value) return;
+    el = yscr__mx.IOHIDValueGetElement(value);
+    if (!el) return;
+    device = yscr__rm_id_of(yscr__mx.IOHIDElementGetDevice(el), &newest);
+    yscr__rm_take(&yscr__rm.acc, device, newest, (int64_t)yscr__mach_ns(yscr__mx.IOHIDValueGetTimeStamp(value)) + yscr__rm.mach_off,
+                  yscr__mx.IOHIDElementGetUsagePage(el), yscr__mx.IOHIDElementGetUsage(el),
+                  (int64_t)yscr__mx.IOHIDValueGetIntegerValue(value), yscr__mx.IOHIDElementIsRelative(el) != 0,
+                  (int64_t)yscr__mx.IOHIDElementGetLogicalMin(el), (int64_t)yscr__mx.IOHIDElementGetLogicalMax(el));
+}
+
+/* The run loop goes idle: every value of the last report has come. */
+static void yscr__rm_idle(yscr__cf obs, unsigned long activity, void* info) {
+    yscr_mouse_event done;
+    (void)obs; (void)activity; (void)info;
+    if (yscr__hid_flush(&yscr__rm.acc, &done)) yscr__rm_push(&done);
+}
+
+static void* yscr__rm_main(void* arg) {
+    const void* k[2];
+    const void* v[2];
+    int32_t page = 1, usage = 2;
+    yscr__cf match = NULL, devs;
+    void* pool;
+    (void)arg;
+    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);   /* SDL's raw keyboard thread's rank on Windows */
+    pool = yscr__mac.pool_push();
+    yscr__rm.loop = yscr__mx.CFRunLoopGetCurrent();
+    k[0] = yscr__mx_str("DeviceUsagePage");
+    k[1] = yscr__mx_str("DeviceUsage");
+    v[0] = yscr__mx.CFNumberCreate(NULL, 3 /* kCFNumberSInt32Type */, &page);
+    v[1] = yscr__mx.CFNumberCreate(NULL, 3, &usage);
+    if (k[0] && k[1] && v[0] && v[1]) match = yscr__mx.CFDictionaryCreate(NULL, k, v, 2, yscr__mx.dict_keys, yscr__mx.dict_values);
+    yscr__rm.mgr = yscr__mx.IOHIDManagerCreate(NULL, 0);
+    yscr__rm.open_rc = -1;
+    if (yscr__rm.mgr && match) {
+        yscr__mx.IOHIDManagerSetDeviceMatching(yscr__rm.mgr, match);
+        yscr__mx.IOHIDManagerRegisterDeviceMatchingCallback(yscr__rm.mgr, yscr__rm_matched, NULL);
+        yscr__mx.IOHIDManagerRegisterDeviceRemovalCallback(yscr__rm.mgr, yscr__rm_removed, NULL);
+        yscr__mx.IOHIDManagerRegisterInputValueCallback(yscr__rm.mgr, yscr__rm_value, NULL);
+        yscr__mx.IOHIDManagerScheduleWithRunLoop(yscr__rm.mgr, yscr__rm.loop, yscr__mac.cfDefaultMode);
+        yscr__rm.t_start = yscr__now();
+        yscr__rm.open_rc = yscr__mx.IOHIDManagerOpen(yscr__rm.mgr, 0);
+    }
+    for (page = 0; page < 2; page++) {
+        if (k[page]) yscr__mac.CFRelease(k[page]);
+        if (v[page]) yscr__mac.CFRelease(v[page]);
+    }
+    if (match) yscr__mac.CFRelease(match);
+    if (yscr__rm.open_rc == 0) {   /* the mice there now, before the frame thread reads the list */
+        devs = yscr__mx.IOHIDManagerCopyDevices(yscr__rm.mgr);
+        if (devs) {
+            const void* list[YSCR__RM_DEVS];
+            long i, n = yscr__mx.CFSetGetCount(devs);
+            if (n > YSCR__RM_DEVS) n = YSCR__RM_DEVS;
+            if (n > 0) { yscr__mx.CFSetGetValues(devs, list); for (i = 0; i < n; i++) yscr__rm_dev_set((yscr__cf)list[i], 1); }
+            yscr__mac.CFRelease(devs);
+        }
+        yscr__rm.observer = yscr__mx.CFRunLoopObserverCreate(NULL, 32ul /* before waiting */, 1, 0, yscr__rm_idle, NULL);
+        if (yscr__rm.observer) yscr__mx.CFRunLoopAddObserver(yscr__rm.loop, yscr__rm.observer, yscr__mac.cfDefaultMode);
+    }
+    yscr__mac.pool_pop(pool);
+    yscr__a_store(&yscr__rm.ready, yscr__rm.open_rc == 0 ? 1 : -1);
+    if (yscr__rm.open_rc == 0)
+        while (!yscr__a_load(&yscr__rm.quit)) yscr__mac.CFRunLoopRunInMode(yscr__mac.cfDefaultMode, 0.5, 0);
+    if (yscr__rm.observer) {
+        yscr__mx.CFRunLoopRemoveObserver(yscr__rm.loop, yscr__rm.observer, yscr__mac.cfDefaultMode);
+        yscr__mac.CFRelease(yscr__rm.observer);
+        yscr__rm.observer = NULL;
+    }
+    if (yscr__rm.mgr) {
+        if (yscr__rm.open_rc == 0) yscr__mx.IOHIDManagerClose(yscr__rm.mgr, 0);
+        yscr__mx.IOHIDManagerUnscheduleFromRunLoop(yscr__rm.mgr, yscr__rm.loop, yscr__mac.cfDefaultMode);
+        yscr__mac.CFRelease(yscr__rm.mgr);
+        yscr__rm.mgr = NULL;
+    }
+    return NULL;
+}
+
+/* The first raw_mice screen starts the reader; on the main thread. */
+static const char* yscr__rm_start(int64_t mach_off) {
+    static char why[200];
+    const char* e;
+    int k;
+    if (yscr__a_inc(&yscr__rm.users) > 1) return NULL;
+    e = yscr__mx_load();
+    if (e) { yscr__a_store(&yscr__rm.users, 0); return e; }
+#if YRT_VERSION_MAJOR > 0 || YRT_VERSION_MINOR >= 10
+    (void)mach_off;
+    yscr__rm.mach_off = 0;   /* ysp/rt.h reads mach time */
+#else
+    yscr__rm.mach_off = mach_off;
+#endif
+    memset(&yscr__rm.acc, 0, sizeof yscr__rm.acc);
+    memset(yscr__rm.dev, 0, sizeof yscr__rm.dev);
+    yscr__rm.reports = yscr__rm.dropped = yscr__rm.stale = yscr__rm.empty = 0;
+    yscr__rm.ready = yscr__rm.quit = 0;
+    {
+        void* pool = yscr__mac.pool_push();
+        yscr__id cls = yscr__mac.cls("NSRunningApplication");
+        yscr__rm.app = cls ? yscr__o0(cls, yscr__mac.sel("currentApplication")) : NULL;
+        if (yscr__rm.app) yscr__v0(yscr__rm.app, yscr__mac.retain);
+        yscr__mac.pool_pop(pool);
+    }
+    if (pthread_create(&yscr__rm.thread, NULL, yscr__rm_main, NULL) != 0) {
+        YSCR__MRELEASE(yscr__rm.app);
+        yscr__a_store(&yscr__rm.users, 0);
+        return "desc.raw_mice: no reader thread";
+    }
+    for (k = 0; k < 200 && !yscr__a_load(&yscr__rm.ready); k++) yrt_sleep_until(yscr__now() + 10000000, 0);
+    if (yscr__a_load(&yscr__rm.ready) != 1) {
+        uint32_t access = yscr__mx.IOHIDCheckAccess ? yscr__mx.IOHIDCheckAccess(1u /* listen event */) : 2u;
+        yscr__a_store(&yscr__rm.quit, 1);
+        if (yscr__rm.loop) yscr__mx.CFRunLoopStop(yscr__rm.loop);
+        pthread_join(yscr__rm.thread, NULL);
+        YSCR__MRELEASE(yscr__rm.app);
+        yscr__a_store(&yscr__rm.users, 0);
+        snprintf(why, sizeof why, "desc.raw_mice: IOHIDManagerOpen for mice failed (IOReturn 0x%x, Input Monitoring "
+                 "%s): allow this program in System Settings > Privacy & Security > Input Monitoring",
+                 (unsigned)yscr__rm.open_rc, access == 0 ? "granted" : access == 1 ? "denied" : "not decided");
+        return why;
+    }
+    return NULL;
+}
+
+static void yscr__rm_stop(void) {
+    if (yscr__a_load(&yscr__rm.users) <= 0) return;
+    yscr__a_dec(&yscr__rm.users);
+    if (yscr__a_load(&yscr__rm.users) > 0) return;
+    yscr__a_store(&yscr__rm.quit, 1);
+    if (yscr__rm.loop) { yscr__mx.CFRunLoopStop(yscr__rm.loop); yscr__mx.CFRunLoopWakeUp(yscr__rm.loop); }
+    pthread_join(yscr__rm.thread, NULL);
+    yscr__rm.loop = NULL;
+    YSCR__MRELEASE(yscr__rm.app);
+}
+
+/* Once a frame (begin()): the reader's devices as YSCR_EV_DEVICE records,
+ * so its reports carry no YIN_UNLISTED: present at open, added and
+ * removed later. seen: the device generation the screen logged. */
+static void yscr__rm_devices(yscr_screen* s, int32_t* seen, uint32_t change) {
+    int i, gen = yscr__a_load(&yscr__rm.dev_gen);
+    if (gen == *seen) return;
+    while (!yscr__a_cas(&yscr__rm.dev_lock, 0, 1)) { }
+    for (i = 0; i < YSCR__RM_DEVS; i++) {
+        if (!yscr__rm.dev[i].id) continue;
+        yscr__device_log(s, YSCR_DEV_MOUSE, yscr__rm.dev[i].present ? change : YSCR_DEV_REMOVED, yscr__rm.dev[i].id,
+                         yscr__rm.dev[i].present ? yscr__rm.dev[i].name : NULL);
+    }
+    yscr__a_store(&yscr__rm.dev_lock, 0);
+    *seen = gen;
+}
+
+#endif /* YSCR__METAL */
 
 /* --- DXGI flip presenter (Windows 10 and 11) ------------------------------ */
 
@@ -7365,25 +10549,6 @@ static void yscr__wd_bounded(LPTHREAD_START_ROUTINE fn) {
  * owns. Windows puts back a switched display mode as the process ends
  * (measured: ChangeDisplaySettingsExW from here blocked over 1 s on the
  * hung window and the mode came back no sooner). */
-static void yscr__panic_records(int64_t now, uint32_t released) {
-    int i;
-    for (i = 0; i < YSCR__SLOTS; i++) {
-        yscr_screen* s = yscr__slot[i].s;
-        if (s && s->panic_armed == 1 && s->ring) {
-            yrt_event ev;
-            memset(&ev, 0, sizeof ev);
-            ev.source = (uint16_t)YRT_SRC_SCREEN;
-            ev.kind = (uint16_t)YSCR_EV_PANIC;
-            ev.t_ns = (uint64_t)now;
-            ev.aux = s->display_index;
-            ev.u.u32[0] = (uint32_t)yscr__ab.presses;
-            ev.u.u32[1] = released;
-            ev.u.i64[1] = yscr__a_load64(&yscr__ab.ack);
-            yrt_ring_push(s->ring, &ev);
-        }
-    }
-}
-
 static void yscr__panic(void) {
     int64_t now = yscr__now();
     if (InterlockedCompareExchange(&yscr__wd.panicking, 1, 0) != 0) return;
@@ -9535,6 +12700,9 @@ static void yscr__update_lead(yscr_screen* s) {
     s->lead_ns = s->lead < 0 ? 0 : (int64_t)(s->lead * s->period_f);
     s->margin_ns = (int64_t)(s->period_f / 8);
     if (s->margin_ns > 1000000) s->margin_ns = 1000000;
+    /* a presenter's own (METAL: Core Animation needs a commit a period and
+     * up to 1.2 ms before its vblank, measured) */
+    if (s->caps.margin_ns > s->margin_ns) s->margin_ns = s->caps.margin_ns;
 }
 
 static void yscr__push(yscr_screen* s, const yrt_event* ev) {
@@ -11240,6 +14408,11 @@ static bool SDLCALL yscr__abort_watch(void* ud, SDL_Event* e) {
                 yscr__abort_key((uint32_t)e->key.key, yscr__mods_of(e->key.mod), t, YSCR__AB_SDL)) {
 #if defined(YSCR__DXGI)
                 if (yscr__wd.thread) yscr__win.post_thread(yscr__wd.tid, WM_APP, 0, 0);
+#elif defined(YSCR__METAL)
+                if (yscr__wd.have_thread && yscr__wd.loop) {
+                    yscr__a_store(&yscr__wd.due, 1);
+                    yscr__mx.CFRunLoopStop(yscr__wd.loop);
+                }
 #endif
             }
         } else if (e->type == SDL_EVENT_KEY_DOWN && !e->key.repeat && e->key.key == SDLK_F4 && (e->key.mod & SDL_KMOD_ALT)) {
@@ -11329,12 +14502,26 @@ static const char* yscr__rm_open(yscr_screen* s) {
     s->rm_state = 0;
     yscr__rm_log(s, YSCR_RAW_MICE_ON);
     return NULL;
+#elif defined(YSCR__METAL)
+    /* SDL's relative mode on macOS reads NSEvent deltas, not the HID
+     * manager, so the two do not take each other's mice: no guard */
+    const char* why;
+    if (!s->window) return "desc.raw_mice needs a window";
+    if (s->backend != YSCR_BACKEND_METAL) return "desc.raw_mice on macOS needs BACKEND_METAL";
+    why = yscr__rm_start(((const yscr__mtl*)(const void*)s->backend_mem)->mach_off);
+    if (why) return why;
+    s->raw_mice = 1;
+    s->rm_state = 0;
+    s->rm_frames = -1;
+    yscr__rm_devices(s, &s->rm_frames, YSCR_DEV_PRESENT);
+    yscr__rm_log(s, YSCR_RAW_MICE_ON);
+    return NULL;
 #else
 #if defined(YSCR__DXGI)
     (void)&yscr__rm_start; (void)&yscr__rm_check_registered; (void)&yscr__rm_request;
 #endif
     (void)s;
-    return "desc.raw_mice needs a window (Windows, or Linux X11 on GLX_OML)";
+    return "desc.raw_mice is for Windows, macOS (METAL) and Linux X11 (GLX_OML), with a window";
 #endif
 }
 
@@ -11359,6 +14546,11 @@ static void yscr__rm_check(yscr_screen* s) {
     yscr__a_store(&yscr__lm.focused, SDL_GetKeyboardFocus() != NULL);
     (void)&yscr__rm_guard; (void)&yscr__mouse_decode;
     (void)s;
+#elif defined(YSCR__METAL)
+    /* rm_frames holds the reader's device generation logged (one int read
+     * a frame); the guard and the decoder are Windows' */
+    yscr__rm_devices(s, &s->rm_frames, YSCR_DEV_ADDED);
+    (void)&yscr__rm_guard; (void)&yscr__mouse_decode;
 #else
     /* the reader and its guard run on Windows with SDL only; the core
      * test calls these directly */
@@ -11551,6 +14743,10 @@ static bool yscr__window_open(yscr_screen* s, const yscr_desc* desc, yscr_mode* 
     SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_FULLSCREEN_BOOLEAN, !desc->windowed);
 #endif
     SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_HIGH_PIXEL_DENSITY_BOOLEAN, true);
+#if defined(YSCR__METAL)
+    /* the header makes the window's CAMetalLayer (BACKENDS, METAL) */
+    if (s->backend == YSCR_BACKEND_METAL) SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_METAL_BOOLEAN, true);
+#endif
 #if defined(YSCR__WEB)
     yscr__web_fs_hold(1);
     s->window = SDL_CreateWindowWithProperties(props);
@@ -11742,7 +14938,10 @@ static void yscr__wt_close(yscr_screen* s) {
     yscr__window_close_cb(&c);
     if (s->wt_user) {
         s->wt_user = 0;
-        if (--yscr__wt_mode_users == 0) yscr__wt_mode_now = 0;
+        if (--yscr__wt_mode_users == 0) {
+            yscr__wt_mode_now = 0;
+            yscr__a_store(&yscr__released, 0);   /* the next open is a new session (macOS's release) */
+        }
     }
 }
 
@@ -11815,6 +15014,22 @@ YSCR_API bool yscr_open(yscr_screen* s, const yscr_desc* desc) {
 #if !defined(YSCR__WEB)
     (void)&yscr__web_shown; (void)&yscr__web_steady;   /* the core test calls them */
 #endif
+#if !defined(YSCR__METAL)
+    (void)&yscr__mtl_target; (void)&yscr__mtl_vblank; (void)&yscr__mtl_period;   /* the core test calls them */
+    (void)&yscr__mtl_pixel; (void)&yscr__mtl_code_of; (void)&yscr__mtl_kind_name;
+    (void)&yscr__mtl_variable; (void)&yscr__mtl_vrr_message; (void)&yscr__mtl_link_period;
+    (void)&yscr__nsm_pick; (void)&yscr__nsm_ns_class;
+    (void)&yscr__kvk_of; (void)&yscr__scancode_us; (void)&yscr__cg_mods; (void)&yscr__table_identity;
+    (void)&yscr__mac_risk; (void)&yscr__hid_add; (void)&yscr__hid_flush; (void)&yscr__hid_stale;
+    (void)&yscr__hid_empty;
+#endif
+#if !defined(YSCR__DXGI) && !defined(YSCR__METAL)
+    (void)&yscr__panic_records;   /* the core test calls it */
+#endif
+    if (desc->color_depth != 0 && desc->color_depth != 8 && desc->color_depth != 10) {
+        yscr__copy(s->error, sizeof s->error, "ysp_screen: desc.color_depth must be 0, 8 or 10");
+        return false;
+    }
     s->backend = desc->backend;
     s->auto_pick = YSCR_AUTO_NAMED;
     if (s->backend == YSCR_BACKEND_AUTO) {
@@ -11836,9 +15051,11 @@ YSCR_API bool yscr_open(yscr_screen* s, const yscr_desc* desc) {
                          "stub; GLX_OML needs an X session); BACKEND_SIM runs without a display");
             return false;
         }
+#elif defined(YSCR__METAL)
+        s->backend = YSCR_BACKEND_METAL;
 #else
         yscr__copy(s->error, sizeof s->error, "ysp_screen: no display backend on this platform "
-                     "(Wayland and macOS are stubs); BACKEND_SIM runs without a display");
+                     "(Wayland is a stub); BACKEND_SIM runs without a display");
         return false;
 #endif
     }
@@ -11876,6 +15093,12 @@ YSCR_API bool yscr_open(yscr_screen* s, const yscr_desc* desc) {
         s->pr_ctx = s->backend_mem;
         break;
 #endif
+#if defined(YSCR__METAL)
+    case YSCR_BACKEND_METAL:
+        s->pr = &yscr__mtl_presenter;
+        s->pr_ctx = s->backend_mem;
+        break;
+#endif
     case YSCR_BACKEND_CUSTOM:
         if (!desc->presenter || desc->presenter->version != YSCR_PRESENTER_VERSION ||
             !desc->presenter->open || !desc->presenter->acquire || !desc->presenter->present ||
@@ -11889,7 +15112,14 @@ YSCR_API bool yscr_open(yscr_screen* s, const yscr_desc* desc) {
         break;
     default:
         yscr__set_error(s->error, sizeof s->error, "ysp_screen: backend %d is not implemented on this platform "
-                          "(DXGI_FLIP and COMPOSITION on Windows, GLX_OML on Linux X11, WEB under Emscripten, SIM and CUSTOM are)", (int)s->backend);
+                          "(DXGI_FLIP and COMPOSITION on Windows, METAL on macOS, GLX_OML on Linux X11, WEB under Emscripten, SIM and CUSTOM are)",
+                          (int)s->backend);
+        return false;
+    }
+    if (desc->color_depth == 10 && s->backend != YSCR_BACKEND_METAL && s->backend != YSCR_BACKEND_CUSTOM) {
+        yscr__copy(s->error, sizeof s->error, "ysp_screen: desc.color_depth 10 is METAL's (BACKENDS); "
+                     "the other backends draw 8 bits");
+        s->pr = NULL;
         return false;
     }
 
@@ -11915,6 +15145,7 @@ YSCR_API bool yscr_open(yscr_screen* s, const yscr_desc* desc) {
     memset(&want, 0, sizeof want);
     memset(&in, 0, sizeof in);
     in.d3d11_video = desc->d3d11_video ? 1 : 0;
+    in.color_depth = desc->color_depth;
     in.display = desc->display;
     in.angle_dir = desc->angle_dir;
     in.sim_period_ns = desc->sim_period_ns;
@@ -12056,6 +15287,18 @@ YSCR_API bool yscr_open(yscr_screen* s, const yscr_desc* desc) {
             else s->panic_armed = 2;
         }
 #endif
+#if defined(YSCR__METAL)
+        if (!e && s->backend == YSCR_BACKEND_METAL) {
+            yscr__mtl_display_state(s, desc);
+            if (desc->codes_strict && s->n_codes &&
+                (yscr_code_risk(s) & ~(uint16_t)YSCR_CODE_RISK_COMPOSED))
+                e = "desc.codes_strict: the display may change code pixels (see the describe line)";
+        }
+        if (!e && desc->panic && s->backend == YSCR_BACKEND_METAL) {
+            if (!desc->windowed || YSCR__PANIC_WINDOWED) e = yscr__wd_arm(s, desc);
+            else s->panic_armed = 2;
+        }
+#endif
         if (!e && desc->panic && !s->panic_armed) s->panic_armed = 3;
         if (e) {
             yscr__set_error(s->error, sizeof s->error, "ysp_screen: %s", e);
@@ -12127,7 +15370,7 @@ YSCR_API bool yscr_open(yscr_screen* s, const yscr_desc* desc) {
 YSCR_API void yscr_close(yscr_screen* s) {
     if (!s) return;
     if (s->raw_mice) {
-#if defined(YSCR__DXGI)
+#if defined(YSCR__DXGI) || defined(YSCR__METAL)
         yscr__rm_stop();
 #elif defined(YSCR__GLX)
         yscr__lm_stop();
@@ -12187,6 +15430,10 @@ YSCR_API void yscr_close(yscr_screen* s) {
         yscr__x11_gamma_release(s);
     }
 #endif
+#if defined(YSCR__METAL)
+    yscr__wd_disarm(s);
+    yscr__mtl_gamma_release(s);
+#endif
     s->fg = 0;
     s->fg_prev = NULL;
     s->panic_armed = 0;
@@ -12219,6 +15466,17 @@ YSCR_API void yscr_close(yscr_screen* s) {
 YSCR_API const char* yscr_error(const yscr_screen* s) { return s ? s->error : "ysp_screen: NULL screen"; }
 YSCR_API bool yscr_is_open(const yscr_screen* s) { return s && s->open; }
 
+/* Whether yscr_event_input() gives keys and mouse buttons their OS
+ * event's time: a METAL screen whose NSEvent monitor was made. */
+static bool yscr__os_input_stamps(const yscr_screen* s) {
+#if defined(YSCR__METAL)
+    return s->open && s->backend == YSCR_BACKEND_METAL && ((const yscr__mtl*)(const void*)s->backend_mem)->nsm_held;
+#else
+    (void)s;
+    return false;
+#endif
+}
+
 /* Whether keys come on SDL's raw path now: the hint can change at any
  * time, and text input routes keys through the message path (INPUT). */
 static bool yscr__raw_keyboard(const yscr_screen* s) {
@@ -12236,6 +15494,7 @@ YSCR_API void yscr_get_caps(const yscr_screen* s, yscr_caps* out) {
     *out = s->caps;
     out->worst_tier = (yscr_tier)s->worst_tier;
     out->raw_keyboard = yscr__raw_keyboard(s);
+    out->os_input_stamps = yscr__os_input_stamps(s);
 }
 
 static const char* yscr__path_name(uint16_t p) {
@@ -12303,7 +15562,7 @@ static const char* yscr__fg_name(uint32_t fg) {
 }
 
 YSCR_API int yscr_describe(const yscr_screen* s, char* buf, size_t cap) {
-    char extra[448], abort_s[40], settle_s[96];
+    char extra[640], abort_s[40], settle_s[96];
     double hz, ppm;
     if (!s || !buf || cap == 0) return YSCR_ERR_ARG;
     if (!s->open) return snprintf(buf, cap, "ysp_screen: closed");
@@ -12340,6 +15599,15 @@ YSCR_API int yscr_describe(const yscr_screen* s, char* buf, size_t cap) {
             snprintf(extra + n, sizeof extra - n, " gap_anchors=%u(max %.0fus, refused %u)", (unsigned)s->gap_anchors,
                      (double)s->gap_shift_max / 1e3, (unsigned)s->gap_refused);
     }
+#if defined(YSCR__METAL)
+    if (s->raw_mice) {   /* the macOS reader's counts (INPUT, "Raw mice on macOS") */
+        size_t n = strlen(extra);
+        if (n < sizeof extra)
+            snprintf(extra + n, sizeof extra - n, " raw_mice=%u(inactive %u, stale %u, empty %u)",
+                     (unsigned)yscr__rm.reports, (unsigned)yscr__rm.dropped, (unsigned)yscr__rm.stale,
+                     (unsigned)yscr__rm.empty);
+    }
+#endif
     {   /* the abort combination, as an operator reads it */
         uint32_t k = yscr__ab.key;
         size_t n = 0;
@@ -12446,6 +15714,11 @@ static int yscr__begin(yscr_screen* s, yscr_frame* f) {
     yscr__in_log(s);
     if (yscr__abort_take(s, f)) { YRT_ZONE_END(z_begin); return YSCR_QUIT; }
     if (yscr__released_on(s)) {   /* only close() is left */
+#if defined(YSCR__METAL)
+        /* a minimize asked during a fullscreen space's exit can be dropped
+         * (1 of 5 runs, a locked session): ask again until it holds */
+        if (s->window && !(SDL_GetWindowFlags(s->window) & SDL_WINDOW_MINIMIZED)) SDL_MinimizeWindow(s->window);
+#endif
         memset(f, 0, sizeof *f);
         f->abort = YSCR_ABORT_PANIC;
         YRT_ZONE_END(z_begin);
@@ -12559,7 +15832,8 @@ static int yscr__flip_at(yscr_screen* s, int64_t t, yscr_record* out) {
         pi.onset = yscr__time_of(s, s->pred_count) + s->offset;
         pi.w = s->caps.mode.w;
         pi.h = s->caps.mode.h;
-        pi.rows_top_down = s->backend == YSCR_BACKEND_DXGI_FLIP || s->backend == YSCR_BACKEND_COMPOSITION;
+        pi.rows_top_down = s->backend == YSCR_BACKEND_DXGI_FLIP || s->backend == YSCR_BACKEND_COMPOSITION ||
+                           s->backend == YSCR_BACKEND_METAL;
         s->on_present(s->on_present_ctx, &pi);
         s->gl_epoch++;
     }
@@ -13095,7 +16369,17 @@ YSCR_API bool yscr_poll(yscr_screen* s, union SDL_Event* ev, int64_t* t_rt) {
         if (t) ev->common.timestamp = (Uint64)(t - s->sdl_rt + s->sdl_ticks);
     }
 #endif
-    if (t_rt) *t_rt = yscr_restamp(s, ev->common.timestamp);
+    if (t_rt) {
+        *t_rt = yscr_restamp(s, ev->common.timestamp);
+#if defined(YSCR__METAL)
+        /* a key or mouse button gets its NSEvent's time, as in
+         * yscr_event_input() (INPUT, macOS) */
+        if (s && yscr__os_input_stamps(s)) {
+            int64_t t_os = yscr__nsm_stamp_once(ev, *t_rt);
+            if (t_os) *t_rt = t_os;
+        }
+#endif
+    }
     if (s && s->sdl_gamepad && (ev->type == SDL_EVENT_GAMEPAD_ADDED || ev->type == SDL_EVENT_GAMEPAD_REMOVED)) {
         yscr__padev a;
         a.s = s;
@@ -13217,9 +16501,17 @@ YSCR_API bool yscr_event_input(yscr_screen* s, const union SDL_Event* ev, yin_ev
         return yscr__in_decode(s, ev->user.code, out) != 0 && yscr__key_keep(s, out);
     {
         yin_sdl_ctx ctx;
+        int64_t t = yscr_restamp(s, ev->common.timestamp);
+        memset(&ctx, 0, sizeof ctx);
         ctx.raw_keyboard = s ? yscr__raw_keyboard(s) : true;
         ctx.keep_synthetic = false;
-        if (!yin_from_sdl(ev, yscr_restamp(s, ev->common.timestamp), &ctx, out)) return false;
+#if defined(YSCR__METAL)
+        if (s && yscr__os_input_stamps(s)) {
+            ctx.os_stamps = true;
+            ctx.t_os = yscr__nsm_stamp_once(ev, t);
+        }
+#endif
+        if (!yin_from_sdl(ev, t, &ctx, out)) return false;
 #if defined(YSCR__WEB)
         if (s && s->open && s->backend == YSCR_BACKEND_WEB)
             yscr__web_dom_stamp((yscr__web*)(void*)s->backend_mem, ev, out);
@@ -13366,7 +16658,7 @@ YSCR_API const yscr_param* yscr_params(int* n) {
         { "windowed",        "bool", 0, 1, 0, "",                 "a window instead of borderless fullscreen", NULL },
         { "window_w",        "i32",  0, 65535, 800, "px",         "window width", NULL },
         { "window_h",        "i32",  0, 65535, 600, "px",         "window height", NULL },
-        { "backend",         "enum", 0, 8, 0, "",                 "the presenting path; open() refuses the stubs wayland, metal",
+        { "backend",         "enum", 0, 8, 0, "",                 "the presenting path; open() refuses the stub wayland",
           "auto=0,dxgi_flip=1,composition=2,glx_oml=3,wayland=4,metal=5,web=6,sim=7,custom=8" },
         { "lead",            "f64", -1, 0.999, 0.5, "frame",      "snap window; -1 = never before the target", NULL },
         { "display_index",   "u32",  0, 4294967295.0, 0, "",      "display number in the flip records", NULL },
@@ -13377,14 +16669,14 @@ YSCR_API const yscr_param* yscr_params(int* n) {
         { "abort_keys.off",  "bool", 0, 1, 0, "",                 "no key combination aborts the frame loop", NULL },
         { "abort_keys.key",  "u32",  0, 4294967295.0, 27, "",     "SDL keycode of the abort combination; 0 = Esc", NULL },
         { "abort_keys.mods", "u32",  0, 255, 1, "",               "modifiers held: 1 shift, 2 ctrl, 4 alt, 8 gui, 128 none; 0 = shift", NULL },
-        { "panic",           "bool", 0, 1, 0, "",                 "arm the panic watchdog in fullscreen (Windows)", NULL },
+        { "panic",           "bool", 0, 1, 0, "",                 "arm the panic watchdog in fullscreen (Windows, macOS)", NULL },
         { "panic_presses",   "i32",  0, 16, 3, "",                "abort presses that end a hung program", NULL },
         { "panic_window_ns", "i64",  0, 6e10, 2e9, "ns",          "the time those presses must fall in", NULL },
         { "panic_grace_ns",  "i64",  0, 6e11, 1e10, "ns",         "no panic this long after the frame loop reported an abort", NULL },
         { "icon_sdl",        "bool", 0, 1, 0, "",                 "keep SDL's window icon instead of the header's", NULL },
         { "d3d11_video",     "bool", 0, 1, 0, "",                 "D3D11 device with video support and multithread protection", NULL },
         { "gamepads",        "bool", 0, 1, 0, "",                 "start SDL's gamepad subsystem and open every gamepad", NULL },
-        { "raw_mice",        "bool", 0, 1, 0, "",                 "read each mouse's Raw Input on a thread: per device, raw-timed (Windows)", NULL },
+        { "raw_mice",        "bool", 0, 1, 0, "",                 "read each mouse's reports on a thread: per device, raw-timed (Windows, macOS)", NULL },
         { "key_dedup_ns",    "i64", -1, 1e9, 5e7, "ns",           "drop a key's second report within this time; 0 = 50 ms, -1 = off", NULL },
         { "onset_offset_ns", "i64", -1e9, 1e9, 0, "ns",           "added to every onset; from the photodiode test", NULL },
         { "min_tier",        "i32",  0, 3, 0, "",                 "flag flips whose tier is worse; 0 = off", NULL },
@@ -13396,7 +16688,8 @@ YSCR_API const yscr_param* yscr_params(int* n) {
         { "settle_min_ns",   "i64", -1, 6e10, 0, "ns",            "settle no sooner; 0 = 2.5 s in a window, none fullscreen; -1 = none", NULL },
         { "settle_max_ns",   "i64",  0, 6e10, 3000000000.0, "ns", "the settle cap from the open() call; 0 = 3 s fullscreen, 4 s window", NULL },
         { "x11_override_redirect", "bool", 0, 1, 0, "",           "Linux X11 fullscreen: an override-redirect window with the keyboard focus (flips under a compositor)", NULL },
-        { "sim_period_ns",   "i64",  0, 1e10, 16666667, "ns",     "frame period of the simulated display", NULL }
+        { "sim_period_ns",   "i64",  0, 1e10, 16666667, "ns",     "frame period of the simulated display", NULL },
+        { "color_depth",     "i32",  0, 10, 0, "bit",             "bits per channel: 0 or 8, or 10 (METAL)", NULL }
     };
     if (n) *n = (int)(sizeof table / sizeof table[0]);
     return table;

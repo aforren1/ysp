@@ -788,7 +788,8 @@ static size_t slurp(const char* path, const wchar_t* wpath, char* out, size_t ca
     return n;
 }
 
-/* A real file and its sidecar, with a UTF-8 name, in both flush modes. */
+/* A real file and its sidecar, with a UTF-8 name, in both flush modes; on
+ * macOS a third pass syncs on a volume that refuses F_FULLFSYNC. */
 static void test_data_file(void) {
     static char text[1 << 16];
     static const char* const path = "trials_test_data_\xC3\xA9.csv";
@@ -803,8 +804,16 @@ static void test_data_file(void) {
     int mode;
     c[0] = (ytr_col)YTR_COL_SET("rt_ns", YTR_COL_TIME_NS);
     c[1] = (ytr_col)YTR_COL_TEXT("session", "s1");
+#if defined(__APPLE__)
+    for (mode = 0; mode < 3; mode++) {
+#else
     for (mode = 0; mode < 2; mode++) {
+#endif
         int k = 0;
+#if defined(__APPLE__)
+        g_fullfsync_calls = 0;
+        g_fullfsync_refuse = mode == 2;
+#endif
         zero_desc(&d);
         d.n_conditions = 2;
         d.reps = 2;
@@ -828,6 +837,10 @@ static void test_data_file(void) {
             k++;
         }
         CHECK_I(ytr_data_finish(&g_w), 0);
+#if defined(__APPLE__)
+        CHECK_I(g_fullfsync_calls, mode ? 4 : 0);   /* one a row, refused or not */
+        g_fullfsync_refuse = 0;
+#endif
         n = slurp(path, wpath, text, sizeof(text));
         CHECK(read_back(text, n, false));
         if (g_back.base) {

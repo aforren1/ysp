@@ -45,7 +45,7 @@ static const serial_api g_api = {
 /* The desc's time field by name and type, written the way the USAGE block
  * writes a desc (zeroed, then set: C99 and C++17 both). */
 static int64_t g_forever = YSER_TIMEOUT_INFINITE;
-typedef char yser_version_is_0_6[YSER_VERSION_MAJOR == 0 && YSER_VERSION_MINOR == 6 ? 1 : -1];
+typedef char yser_version_is_0_7[YSER_VERSION_MAJOR == 0 && YSER_VERSION_MINOR == 7 ? 1 : -1];
 typedef char yser_units_are_ns[YSER_DEFAULT_WRITE_TIMEOUT_NS == 1000000000 && YSER_TIMEOUT_INFINITE == -1 &&
                                YSER_DEFAULT_MIN_HOLD_NS == 250000 ? 1 : -1];
 
@@ -56,7 +56,7 @@ int main(void) {
     memset(&p, 0, sizeof p);
     d.device = "ysp-compile-check-no-such-port";
     d.write_timeout_ns = YRT_MS(100);
-    (void)sizeof(yser_version_is_0_6);
+    (void)sizeof(yser_version_is_0_7);
     (void)sizeof(yser_units_are_ns);
     /* Calls on a closed handle: no device is needed, and the codes are the
      * documented ones. */

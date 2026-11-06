@@ -32,9 +32,11 @@
 
 /* The binding's own version (docs/bindings.md, Versions): the thin files and
  * the core must be the same build. */
-#define YV_MEX_VERSION "1.2.1"   /* 1.1.0: ysp_gfx stimuli, lists, groups, textures, bindings; the slim frame; ysp_video movies;
+#define YV_MEX_VERSION "1.3.0"   /* 1.1.0: ysp_gfx stimuli, lists, groups, textures, bindings; the slim frame; ysp_video movies;
                                   * 1.2.0: ysp_gfx text (fonts, texts laid out by Skribidi, glyph and word boxes);
-                                  * 1.2.1: ysp_video paths in UTF-8 and error ids by the header's code (ysp/video.h 0.6.0) */
+                                  * 1.2.1: ysp_video paths in UTF-8 and error ids by the header's code (ysp/video.h 0.6.0);
+                                  * 1.3.0: macOS arm64 (METAL; every call on the main thread), caps os_input_stamps and
+                                  *        margin, the open options backend 'metal' and color_depth (ysp/screen.h 0.15.0) */
 #define YV_CORE_ABI 1
 #define YV_CORE_SYMBOL "ysp_vis_core"
 
@@ -52,7 +54,7 @@ typedef struct yv_core {
 #ifdef YV_THIN
 /* ---- a thin MEX file: define YV_THIN to YV_WHICH_SCREEN, _GFX or _VIDEO and
  * YV_THIN_NAME to its name, then include this file. */
-#define YSP_SHARE_MEX   /* ysp_share_mex_load(): Windows only, as ysp-vis */
+#define YSP_SHARE_MEX   /* ysp_share_mex_load(): LoadLibrary on Windows, dlopen on macOS */
 #include "ysp_share.h"
 
 static const yv_core* yv_thin_core = NULL;

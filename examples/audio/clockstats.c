@@ -12,8 +12,9 @@
  *   --device NAME  the playback device whose name contains NAME
  *   --s16          a 16-bit project (YAU_S16), for a device that runs 16-bit
  *                  samples (PulseAudio's default sink format)
- *   --exclusive    WASAPI exclusive mode; at most 30 s, because every other
- *                  program is silent meanwhile, unless --long is given
+ *   --exclusive    WASAPI exclusive mode or CoreAudio hog mode; at most
+ *                  30 s, because every other program is silent meanwhile,
+ *                  unless --long is given
  *   --period N     frames per callback asked for (default: the header's)
  *   --queue Q      desc.queue: WASAPI shared periods queued ahead of the
  *                  engine (1 or 2; default 2)

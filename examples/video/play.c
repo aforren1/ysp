@@ -10,7 +10,7 @@
  * Usage: video_play [--sim] [--file PATH [--index]] [--size WxH] [--frames N]
  *                   [--fps N] [--qoi] [--yuv] [--loop] [--seconds S]
  *                   [--window WxH] [--fullscreen] [--display ID] [--ahead N]
- *                   [--csv PATH] [--hw sw|dxva|vaapi] [--device PATH] [--gpu] [--threads N] [--elevate]
+ *                   [--csv PATH] [--hw sw|dxva|vt|vaapi] [--device PATH] [--gpu] [--threads N] [--elevate]
  *   --sim       no window and no GL: the simulated display, for CI
  *   --size      generated frames, pixels (default 320x180)
  *   --frames    generated frames (default 60)
@@ -21,8 +21,8 @@
  *   --fullscreen the whole display, in place of a window
  *   --csv       one line per display frame: index, decision, why, frame, the
  *               update's ns
- *   --hw        the decoder of an MP4 file (desc.hw_decode); --device: VAAPI's
- *               (desc.hw_device)
+ *   --hw        the MP4 decoder (desc.hw_decode): sw, dxva (Windows), vt
+ *               (macOS), vaapi (Linux); --device: VAAPI's (desc.hw_device)
  *   --gpu       decode and draw on the GPU (desc.gpu_path YVID_PATH_GPU;
  *               the screen opens with desc.d3d11_video)
  *   --threads   FFmpeg's decoder threads (desc.decode_threads)
@@ -171,13 +171,14 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--elevate")) elevate = 1;
         else if (!strcmp(argv[i], "--hw") && i + 1 < argc) {
             const char* v = argv[++i];
-            hw = !strcmp(v, "sw") ? YVID_HW_OFF : !strcmp(v, "dxva") ? YVID_HW_DXVA : !strcmp(v, "vaapi") ? YVID_HW_VAAPI : -1;
-            if (hw < 0) { fprintf(stderr, "video_play: --hw sw, dxva or vaapi\n"); return 2; }
+            hw = !strcmp(v, "sw") ? YVID_HW_OFF : !strcmp(v, "dxva") ? YVID_HW_DXVA : !strcmp(v, "vt") ? YVID_HW_VIDEOTOOLBOX
+               : !strcmp(v, "vaapi") ? YVID_HW_VAAPI : -1;
+            if (hw < 0) { fprintf(stderr, "video_play: --hw sw, dxva, vt or vaapi\n"); return 2; }
         }
         else {
             fprintf(stderr, "usage: video_play [--sim] [--file PATH [--index]] [--size WxH] [--frames N] [--fps N]\n"
                             "                  [--qoi] [--yuv] [--loop] [--seconds S] [--window WxH] [--fullscreen] [--display ID]\n"
-                            "                  [--ahead N] [--csv PATH] [--hw sw|dxva|vaapi] [--device PATH] [--gpu] [--threads N] [--elevate]\n");
+                            "                  [--ahead N] [--csv PATH] [--hw sw|dxva|vt|vaapi] [--device PATH] [--gpu] [--threads N] [--elevate]\n");
             return 2;
         }
     }

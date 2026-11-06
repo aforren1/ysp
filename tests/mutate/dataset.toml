@@ -362,3 +362,37 @@ why = "Every failing call writes the code beside the message (the conventions' e
 find = '''    if (!ds) return code;
     ds->error_code = code;'''
 replace = '''    if (!ds) return code;'''
+
+# v0.2.1: F_FULLFSYNC on macOS (docs/dataset.md, "F_FULLFSYNC on macOS").
+# The code exists on macOS only, so these run there.
+
+[[mutant]]
+id = "mac-01"
+name = "session.json.tmp gets fsync() alone on macOS"
+test = "dataset"
+platform = "darwin"
+why = "fsync() leaves the file in the drive's write cache; a power cut after the rename can lose the rewrite."
+find = '''    return yds__fsync_fd(fileno(f)) == 0;'''
+replace = '''    return fsync(fileno(f)) == 0;'''
+
+[[mutant]]
+id = "mac-02"
+name = "the folder gets fsync() alone on macOS"
+test = "dataset"
+platform = "darwin"
+why = "The rename stays in the drive's write cache; a power cut can bring the old session.json back."
+find = '''        if (yds__fsync_fd(fd) != 0) { /* EINVAL: nothing to sync; else the rename stands */ }'''
+replace = '''        if (fsync(fd) != 0) { /* EINVAL: nothing to sync; else the rename stands */ }'''
+
+[[mutant]]
+id = "mac-03"
+name = "no fsync() when F_FULLFSYNC is refused"
+test = "dataset"
+platform = "darwin"
+why = "A volume without F_FULLFSYNC (network, FAT) would fail every rewrite of session.json, the open included."
+find = '''    if (YDS__FULLFSYNC(fd) == 0) return 0;
+#endif
+    return fsync(fd);'''
+replace = '''    return YDS__FULLFSYNC(fd);
+#endif
+    return fsync(fd);'''

@@ -9,7 +9,7 @@ function test_mex_vis_gfx()
 %   and the row frame, and the lifetime rules (closing a gfx or its screen
 %   frees its objects' handles; 'free' refuses what is in use).
 %   Build first (build.m: ysp_audio, ysp_timeline, ysp_vis, ysp_screen,
-%   ysp_gfx, ysp_video). Windows only. Prints PASS with the number of checks.
+%   ysp_gfx, ysp_video). Windows and macOS. Prints PASS with the number of checks.
 
     global YSP_GFX_CHECKS %#ok<GVMIS>
     YSP_GFX_CHECKS = 0;
@@ -20,7 +20,7 @@ function test_mex_vis_gfx()
 
     % ---- the frame: no records unless asked; the row form
     [bv, gv] = ysp_gfx('version');
-    check(strcmp(bv, '1.2.1') && ~isempty(regexp(gv, '^\d+\.\d+\.\d+$', 'once')), 'version: binding %s, gfx.h %s', bv, gv);
+    check(strcmp(bv, '1.3.0') && ~isempty(regexp(gv, '^\d+\.\d+\.\d+$', 'once')), 'version: binding %s, gfx.h %s', bv, gv);
     h = ysp_screen('open', sim{:});
     for i = 1:3, ysp_screen('begin', h); ysp_screen('flip', h); end
     [f, quit, done] = ysp_screen('begin', h);

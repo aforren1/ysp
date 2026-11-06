@@ -2,7 +2,7 @@
  *
  * A thin file: the commands are the core's (ysp_vis.c), which this file
  * loads from its own directory and calls (ysp_vis_mex.h, LIFETIME). Build
- * with build.m; ysp_vis.<mexext> and ANGLE's two DLLs must sit beside it.
+ * with build.m; ysp_vis.<mexext> and ANGLE's two libraries must sit beside it.
  */
 #define YV_THIN YV_WHICH_GFX
 #define YV_THIN_NAME "ysp_gfx"
