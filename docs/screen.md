@@ -5202,6 +5202,73 @@ commands.
   the kernel's time idle, with a tail to 2.0 ms under load; ysp gives the
   kernel's time ("Kernel key times").
 
+## Input from the task examples (v0.18.0)
+
+Four example programs (`examples/response/trial_posner.c`,
+`trial_visuomotor.c`, `trial_timed_response.c`, `trial_copying.c`) found
+these problems in the input path
+([examples_findings.md](examples_findings.md), F13, F15, D1). The
+machine is the Linux desktop of
+[Linux X11: GLX_OML](#linux-x11-glx_oml-v0170), 2026-11-06, with other
+builds running beside the tests.
+
+| Change | Why |
+|---|---|
+| `desc.keep_synthetic` | SDL makes mouse events from a pen or touch (`which` `SDL_PEN_MOUSEID`, `SDL_TOUCH_MOUSEID`) and touch events from a pen or mouse. `yscr_event_input()` dropped them with no switch, so a program that reads a tablet as a mouse got nothing through the screen. With the flag it keeps them, flagged `YIN_SYNTHETIC` (`ysp/input.h`'s `ctx.keep_synthetic`). Off by default: each physical action then reaches a consumer once. The field sits in padding: `yscr_desc` stays 536 bytes and every other offset stays (GCC 12.2, x86-64) |
+| `yscr_event_input_at(s, ev, t, out)` | `yscr_event_input()` takes an SDL event's time from the screen's clock map, which a SIM screen does not have (`yscr_restamp()` returns 0). A program that makes SDL events for a simulated participant had to call `yin_from_sdl()` itself and lost the screen's key filter and `keep_synthetic`. The new call is `yscr_event_input()` with the caller's time. It skips macOS's NSEvent pairing, which reads SDL's own stamp |
+| `raw_mice=reports(nodes n, unfocused n, syn_dropped n)` in the describe line on Linux X11 | The macOS reader had its counts there; the Linux reader had none, so a run with no raw mouse events could not show why: no readable node, the focus gate, or the kernel's overflows |
+| The comments | INPUT, the desc field and the parameter table said raw mice are Windows (or Windows and macOS) only |
+
+SDL's X11 button stamps. INPUT said that mouse buttons keep SDL's stamps,
+not measured. SDL 3.4.18's X11 backend stamps buttons, motion, touch and
+pens with `SDL_GetTicksNS()` when its pump reads the X event
+(`X11_GetEventTimestamp()` in `src/video/x11/SDL_x11events.c`, which has
+a FIXME to use the X time; pens pass 0, which SDL also turns into its
+current tick). `test_screen_glx` part 4 now clicks the left button 20
+times through XTEST at the window's center, at phases 0 to 15 ms after
+the frame's poll, in the fullscreen window (one poll per 60 Hz frame):
+
+| Run | Received | Stamp minus injection, ms: min / mean / max |
+|---|---|---|
+| 1 | 20 of 20 | 1.546 / 9.236 / 16.606 |
+| 2 | 20 of 20 | 1.498 / 9.238 / 16.635 |
+| 3 | 20 of 20 | 1.556 / 9.263 / 16.607 |
+| 4 | 20 of 20 | 1.512 / 9.230 / 16.593 |
+| 5 | 20 of 20 | 1.532 / 9.230 / 16.646 |
+
+No stamp came before its injection, and every XTEST button came with
+`which` 0, the core pointer's, so `ysp/input.h` gives it tier 3 on the
+event. `ysp/input.h` v0.6.0's Linux entry for SDL mice is tier 3 with
+these bounds (1.498 to 16.646 ms, host part). The upper bound is about a
+frame: it moved by 11 us in the fifth run, and a loop that polls less
+often than once a 60 Hz frame stamps later.
+
+Read in SDL's source, not measured, and not used by the header: SDL
+3.4.18 passes the X server's millisecond time as a nanosecond stamp for
+two kinds of X11 event, the wheel from XInput 2 scroll valuators and
+relative-mode motion (`SDL_SendMouseWheel(xev->time, ...)`,
+`SDL_SendMouseMotion(rawev->time, ...)` in `SDL_x11xinput2.c`). Such an
+event's `yscr_poll()` time is far from its real time. `ysp/input.h` does
+not convert wheel events, and the header does not use SDL's relative
+mode.
+
+Observed once and not explained: in part 12, the uinput mouse's 20
+clicks gave 20 raw reports through the bridge, but SDL's own stream had 21
+motion events and 1 button press (with `which` 0), and no release. The
+press and the release of each click were written to uinput together.
+XTEST clicks, also written together, gave 20 of 20.
+
+Tests: `test_screen_glx` part 0 (no display): on SIM,
+`yscr_event_input_at()` gives a pen motion the caller's time and its
+`pen_state`, `yscr_event_input()` gives it 0, and a pen's mouse button
+passes only with `desc.keep_synthetic`, flagged. Part 12: the describe
+line counted `raw_mice=40(nodes 3, unfocused 10, syn_dropped 0)`, the 40
+reports of 20 clicks and the 10 of the 5 clicks without the focus.
+`tests/compile/screen.c` (C and C++, on CI) runs part 0's checks. Mutants
+`glx-31` to `glx-36` killed, and `glx-25` again, whose anchor moved with
+the counts (7 of 7, one at a time under a lock on the display). A
+SYN_DROPPED was not made: that count has no test.
+
 ## Not measured
 
 The open findings of v0.10.0 (5 handles an open and close, SDL's

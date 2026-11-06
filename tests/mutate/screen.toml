@@ -1755,8 +1755,8 @@ id = "glx-25"
 name = "raw mice without the focus gate"
 test = "screen_glx"
 why = "evdev gives every mouse's input whatever window has the focus; without the gate a participant's clicks on another program reach the experiment."
-find = "                if (yscr__lm.dirty[i] && !yscr__lm.dropped[i] && yscr__a_load(&yscr__lm.focused)) {"
-replace = "                if (yscr__lm.dirty[i] && !yscr__lm.dropped[i]) {"
+find = "                if (yscr__lm.dirty[i] && !yscr__lm.dropped[i] && !yscr__a_load(&yscr__lm.focused)) {"
+replace = "                if (0) {"
 
 [[mutant]]
 id = "glx-26"
@@ -1798,6 +1798,59 @@ test = "screen_glx"
 why = "begin() tells the reader whether a window of this process has the keyboard focus; without it every report is dropped."
 find = "    yscr__a_store(&yscr__lm.focused, SDL_GetKeyboardFocus() != NULL);"
 replace = "    (void)0;"
+
+# v0.18.0 (from the task examples): synthetic events kept on request, an
+# SDL event at the caller's time (part 0 of the test, SIM, no display),
+# and the raw mouse reader's counts in the describe line (part 12).
+[[mutant]]
+id = "glx-31"
+name = "synthetic events dropped whatever the desc says"
+test = "screen_glx"
+why = "A tablet read as a mouse comes as SDL's pen-made mouse events; desc.keep_synthetic is the program's switch for them (v0.18.0)."
+find = "        ctx.keep_synthetic = s && s->keep_synthetic;"
+replace = "        ctx.keep_synthetic = false;"
+
+[[mutant]]
+id = "glx-32"
+name = "desc.keep_synthetic not kept at open"
+test = "screen_glx"
+why = "The screen must keep the desc's switch for its later yscr_event_input() calls (v0.18.0)."
+find = "    s->keep_synthetic = desc->keep_synthetic ? 1 : 0;"
+replace = "    s->keep_synthetic = 0;"
+
+[[mutant]]
+id = "glx-33"
+name = "yscr_event_input_at() ignores the caller's time"
+test = "screen_glx"
+why = "On SIM yscr_restamp() is 0, so a program's own SDL events would all get t 0 (v0.18.0)."
+find = "        int64_t t = given ? t_rt : yscr_restamp(s, ev->common.timestamp);"
+replace = "        int64_t t = yscr_restamp(s, ev->common.timestamp);"
+
+[[mutant]]
+id = "glx-34"
+name = "raw mouse reports without the focus not counted"
+test = "screen_glx"
+why = "The describe line must show reports the focus gate dropped: a participant's clicks while another program had the focus (v0.18.0)."
+find = "                    yscr__a_inc(&yscr__lm.unfocused);"
+replace = "                    (void)0;"
+
+[[mutant]]
+id = "glx-35"
+name = "raw mouse reports sent not counted"
+test = "screen_glx"
+why = "The describe line's first raw_mice count is the reports that reached the bridge (v0.18.0)."
+find = "                    yscr__a_inc(&yscr__lm.reports);"
+replace = ""
+
+[[mutant]]
+id = "glx-36"
+name = "no raw_mice counts in the Linux describe line"
+test = "screen_glx"
+why = "On Linux the describe line had no raw mouse state (v0.18.0)."
+find = """#if defined(YSCR__GLX) && !defined(YRT_NO_THREADS)
+    if (s->raw_mice) {   /* the evdev reader's counts"""
+replace = """#if 0
+    if (s->raw_mice) {   /* the evdev reader's counts"""
 # v0.11.0's 10 (mt-, the METAL backend), v0.12.0's 3 (mt-11 to mt-13, the
 # measured constants) and v0.13.0's 3 (mt-14 to mt-16, variable refresh) and v0.13.1's 2 (mt-17, mt-18, the
 # period from CADisplayLink). mt-01 to mt-07 and mt-11 to mt-13 run the core test

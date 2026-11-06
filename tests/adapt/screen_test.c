@@ -3383,6 +3383,7 @@ static const ptc_slot g_scr_fields[] = {
     SCR_D("panic_presses", panic_presses, NULL), SCR_D("panic_window_ns", panic_window_ns, NULL),
     SCR_D("panic_grace_ns", panic_grace_ns, NULL), SCR_D("icon_sdl", icon_sdl, NULL),
     SCR_D("d3d11_video", d3d11_video, NULL), SCR_D("gamepads", gamepads, NULL), SCR_D("raw_mice", raw_mice, NULL),
+    SCR_D("keep_synthetic", keep_synthetic, NULL),
     SCR_D("key_dedup_ns", key_dedup_ns, NULL), SCR_D("onset_offset_ns", onset_offset_ns, NULL),
     SCR_D("min_tier", min_tier, NULL), SCR_D("depth", depth, NULL), SCR_D("depth_learn", depth_learn, NULL),
     SCR_D("settle", settle, scr_settle_name), SCR_D("settle_flips", settle_flips, NULL),

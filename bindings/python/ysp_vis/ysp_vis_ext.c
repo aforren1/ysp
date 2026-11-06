@@ -225,7 +225,7 @@ static PyStructSequence_Field vs_event_fields[] = {
     { "t_ns", "the same time, exact int ns" },
     { "device", "the instance within the kind" },
     { "control", "button, channel or scancode" },
-    { "code", "keyboard: SDL keycode; else the device's" },
+    { "code", "keyboard: SDL keycode; pen: SDL's pen_state; else the device's" },
     { "mods", "keyboard: SDL_Keymod" },
     { "kind", "KIND_*" },
     { "type", "PRESS, RELEASE, SAMPLE, PROXIMITY" },

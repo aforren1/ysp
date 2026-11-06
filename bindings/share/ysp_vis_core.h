@@ -82,7 +82,7 @@
 
 /* The distribution's version tracks screen.h's, with a fourth number for a
  * change of the binding alone (docs/bindings.md, ysp-vis). */
-#define YV_VERSION YSCR_VERSION_STRING ".1"   /* .1: Linux X11 (GLX_OML), a change of the binding alone */
+#define YV_VERSION YSCR_VERSION_STRING
 
 #define YV_RECORDS 4096   /* flip records kept between records() calls */
 #define YV_EVENTS  1024   /* input events kept between poll() calls    */

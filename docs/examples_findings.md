@@ -16,7 +16,6 @@ runs used scripted input.
 | # | Header | Problem | Proposed change | From |
 |---|---|---|---|---|
 | B5 | gfx.h:11537 | A repeated consecutive point makes the whole POLYLINE fail at draw time | Skip zero-length segments | copying |
-| B6 | input.h:449-460, 693 | Linux raw mice carry Windows' source note ("stamped at read, 0.15 to 0.40 ms") and tier UNKNOWN; `yin_sdl_source()` has no Linux branch (pen and mouse tier 0) | Linux branches: evdev's kernel stamp for raw mice; SDL's queue time for X11 pointer and pen | visuomotor, copying |
 
 ## Missing features
 
@@ -30,28 +29,20 @@ runs used scripted input.
 | F10 | outline.h | A short word without pack/layout takes about 25 lines (also repeated in `trial_sternberg`) | `yol_text_path(ctx, font, utf8, size, &path)` and a shared bitmap fallback | posner |
 | F11 | gfx.h:11529 | The POLYLINE quad is symmetric about the stimulus origin: a path away from the origin costs twice (10.6 vs 5.1 ms for a 224-point chunk). Every pixel evaluates every segment | Center the quad on the path's box; a segment-instanced stroke primitive | copying |
 | F12 | gfx.h:6413 | The SIM backend ignores `yscr_desc.window_w/h` (800 x 600), so `--sim` geometry differs from a window run (also `trial_mouse_tracking`) | SIM takes the window size | visuomotor |
-| F13 | screen.h:16507, 16241 | `yscr_event_input()` drops synthetic mouse events (a tablet's), with no switch; `yscr_restamp()` returns 0 on SIM, so synthetic SDL events cannot go through it in `--sim` | A desc flag; `yscr_event_input_at(s, ev, t, out)` | copying |
-| F14 | input.h:570-614 | Pen `pen_state` and `device_type` are dropped; `YIN_ERASER` is only on down and up | Carry `pen_state` in `code` | copying |
-| F15 | screen.h:15602 | The describe line has no raw-mouse state on Linux | `raw_mice=<nodes>(reports n, unfocused n, syn_dropped n)` | visuomotor |
 
 ## Docs
 
 | # | Where | Fix | From |
 |---|---|---|---|
-| D1 | screen.h:1311, 16679 | Two places still say raw mice are Windows (or Windows and macOS) only (response.h's fixed in v0.8.0) | visuomotor |
-| D2 | input.h:72 | Pen tilt is in `value` of AXIS samples, not in x, y | copying |
 | D5 | gfx.h:541 | Trim (0, 0) means "whole": an animated trim from 0 shows the full path on its first frame | copying |
-| D6 | input.h | `yin_from_mouse()` puts a report's press before its movement | copying |
 | D7 | audio.h:339-360 | AUTO on Linux takes the card exclusively; through PulseAudio the format must match the sink (s16 here) | timed |
 | D8 | table.h | The per-table arena overhead is not stated (an 8-row, 1-column CSV needs 4560 bytes) | visuomotor |
-| D9 | CLAUDE.md | GCC 12's AddressSanitizer also needs `setarch -R` on this kernel (16 of 40 `trial_posner` runs hung without it) | posner |
-
-## Tests
-
-- `tests/adapt/response_test.c` converts PEN_DOWN and a pressure axis
-  only; no test converts PEN_MOTION, PEN_UP, tilt or proximity.
 
 ## Rejected
+
+- F14's `device_type` (input.h 0.6.0 carries `pen_state` only). It is
+  the pen's, the same on every event, and SDL 3.4.18 added it: ask SDL
+  once with `SDL_GetPenDeviceType(which)`, or log it with the device.
 
 - Physical screen size from EDID in `yscr_caps` (posner). EDID sizes are
   often 0 or wrong, and extenders and network video present an EDID that
