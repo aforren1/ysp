@@ -72,7 +72,15 @@ function test_mex_video()
     expect_error('ysp_video:order', @() ysp_video('update', m));      % before the screen's begin
     n = play_all(h, g, m, 10000);
     r = ysp_video('records', m);
-    check(numel(r) == n - 1 && r(end).frame == 89, 'records: one per display frame but the last (%d of %d)', numel(r), n);
+    check(numel(r) == n - 1, 'records: one per display frame but the last (%d of %d)', numel(r), n);
+    % The sim display on the real clock skips vblanks when the host stalls
+    % (CI did: 600 display frames for a 3 s movie at 4 ms). A stall over the
+    % last frame's window drops it (an event, not a record), so the last
+    % record can be an earlier frame. Every frame is shown or dropped.
+    in = ysp_video('info', m);
+    shown = unique([r(strcmp({r.decision}, 'shown')).frame]);
+    check((r(end).frame == 89 || in.dropped > 0) && numel(shown) + in.dropped == 90, ...
+          'records: frames 0..89 shown or dropped (last %d, %d shown, %d dropped)', r(end).frame, numel(shown), in.dropped);
     check(isa(r(1).onset_ns, 'int64') && r(1).onset == double(r(1).onset_ns) / 1e9 && ...
           r(1).residual_ns == r(1).onset_ns - r(1).due_ns, 'records: seconds and int64 ns');
     check(strcmp(r(1).decision, 'shown') && strcmp(r(1).why, 'due') && r(1).frame == 0, 'records: the first frame shown, due');
