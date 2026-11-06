@@ -173,7 +173,15 @@ static void check_validation(void) {
     CHECK(!yrsp_open(&g_c, &d));
     CHECK_HAS(yrsp_error(&g_c), "duration");
     d = fj_desc(1.5, 0.1);
-    d.min_rt_ns = -1;
+    d.min_rt_ns = -1;                          /* v0.8: valid before the onset */
+    CHECK(yrsp_open(&g_c, &d));
+    d.min_rt_ns = -YRT_S(1e6);
+    CHECK(yrsp_open(&g_c, &d));
+    d.min_rt_ns = -YRT_S(1e6) - 1;
+    CHECK(!yrsp_open(&g_c, &d));
+    CHECK_HAS(yrsp_error(&g_c), "min_rt_ns");
+    d.min_rt_ns = YRT_S(1e6) + 1;
+    d.duration_ns = 0;
     CHECK(!yrsp_open(&g_c, &d));
     CHECK_HAS(yrsp_error(&g_c), "min_rt_ns");
     d = fj_desc(1.5, 0.1);
@@ -1771,7 +1779,7 @@ static void check_frame_loop(void) {
     r = finish();
     CHECK_I(yrsp_data_set(&w, &r), YRSP_N_DATA_COLS);
     CHECK_I(ytr_data_write(&w, NULL), 0);
-    CHECK_S(mo.buf, ",,,,,,,,,," "18,0,0\n");      /* NO_ONSET | TIMEOUT */
+    CHECK_S(mo.buf, ",,,,,,,,,," "16,0,0\n");      /* NO_ONSET; no deadline ran (v0.8) */
     CHECK_I(yrsp_data_set(&w, NULL), YTR_ERR_ARG);
     ytr_data_close(&w);
     yrsp_close(&g_c);
@@ -2221,6 +2229,285 @@ static void check_sent(void) {
            "refused, doubled, persist: ok\n");
 }
 
+/* v0.8: the fixes and calls from the four task examples
+ * (docs/examples_findings.md, B1 to B4, F1, F2, F4, F5). */
+typedef struct v8row { int64_t rt_ns; } v8row;
+
+static float v8_at(float o, float g, int64_t n) { return (float)((double)o + (double)g * (double)n); }
+
+static void check_v08(void) {
+    static const yrsp_choice dist[] = { { NULL, "moved", YRSP_KIND_MOUSE, 0, YRSP_CROSS_DISTANCE, 0, 0,
+                                          YRSP_AXIS_POSITION, 0, 10.0f, 0 },
+                                        { "f", NULL, 0, 0, 0, 0, 0, 0, 0, 0, 0 } };
+    static const ytr_col cols[] = { YTR_COL(v8row, rt_ns, YTR_COL_TIME_NS), YTR_COL_SET("response", YTR_COL_STRING),
+                                    YTR_COL_SET("rsp_flags", YTR_COL_INT) };
+    static mem_out mo;
+    static ytr_data w;
+    static yrsp_collector a, b;
+    ytr_data_desc dd;
+    yrsp_desc d = fj_desc(1.0, 0.1);
+    yrsp_result r;
+    yrsp_onset o;
+    yrsp_cursor cur;
+    yrsp_input in;
+    v8row row;
+    const yrsp_entry* e;
+    int i, n, bad;
+    int64_t sum;
+
+    /* B1: TIMEOUT only when the deadline ended the window */
+    CHECK(yrsp_open(&g_c, &d));
+    yrsp_arm(&g_c, 0);                                /* aborted: no onset */
+    r = finish();
+    CHECK_I(r.flags, YRSP_R_NO_ONSET);
+    yrsp_arm(&g_c, 0);                                /* aborted before the deadline */
+    onset(MS(500), 1);
+    CHECK_I(yrsp_update(&g_c, MS(1499)), YRSP_OPEN);
+    r = finish();
+    CHECK_I(r.flags, 0);
+    yrsp_arm(&g_c, 0);
+    onset(MS(500), 1);
+    CHECK_I(yrsp_update(&g_c, MS(1500)), YRSP_ENDED);
+    r = finish();
+    CHECK_I(r.flags, YRSP_R_TIMEOUT);
+
+    /* F1: a negative minimum, presses before the onset with a negative rt */
+    d = fj_desc(1.0, 0);
+    d.min_rt_ns = -MS(300);
+    CHECK(yrsp_open(&g_c, &d));
+    yrsp_arm(&g_c, 0);
+    onset(MS(500), 1);
+    CHECK_I(key(MS(199), SC_F, 1), YRSP_OPEN);        /* rt -301 ms: EARLY */
+    CHECK_I(key(MS(200), SC_J, 1), YRSP_ENDED);       /* rt -300 ms: the bound is valid */
+    r = finish();
+    CHECK_I(r.rt_ns, -MS(300));
+    CHECK_S(r.response_name, "right");
+    CHECK_I(r.n_early, 1);
+    CHECK_I(r.n_anticipations, 0);
+    CHECK(!(r.flags & YRSP_R_RECLASSIFIED));
+    key(MS(700), SC_F, 0);
+    key(MS(700), SC_J, 0);
+    /* before any onset: EARLY until it comes, then the response */
+    yrsp_arm(&g_c, 0);
+    CHECK_I(key(MS(400), SC_F, 1), YRSP_OPEN);
+    e = yrsp_entries(&g_c, &n);
+    CHECK(n == 1 && (e[0].flags & YRSP_E_EARLY));
+    CHECK_I(onset(MS(500), 0), YRSP_ENDED);
+    r = finish();
+    CHECK_I(r.rt_ns, -MS(100));
+    CHECK(r.flags & YRSP_R_RECLASSIFIED);
+    key(MS(700), SC_F, 0);
+    /* a plan before the landing classifies on arrival */
+    yrsp_arm(&g_c, 0);
+    memset(&o, 0, sizeof o);
+    o.t_ns = MS(500);
+    o.frame = -1;
+    o.src = YRSP_ONSET_PLAN;
+    yrsp_set_onset(&g_c, &o);
+    CHECK_I(key(MS(450), SC_F, 1), YRSP_ENDED);
+    onset(MS(510), 1);                                /* the flip: 10 ms later */
+    r = finish();
+    CHECK_I(r.rt_ns, -MS(60));
+    CHECK_I(r.plan_residual, 0);
+    CHECK(!(r.flags & (YRSP_R_RECLASSIFIED | YRSP_R_ENDED_EARLY | YRSP_R_ONSET_PLAN)));
+    key(MS(700), SC_F, 0);
+
+    /* F2: this window's minimum and deadline; the next arm has the desc's */
+    d = fj_desc(0, 0);
+    CHECK(yrsp_open(&g_c, &d));
+    CHECK_I(yrsp_set_window(&g_c, 0, MS(500)), YRSP_ERR_STATE);   /* not armed */
+    CHECK_HAS(yrsp_error(&g_c), "yrsp_set_window");
+    yrsp_arm(&g_c, 0);
+    CHECK_I(yrsp_set_window(&g_c, -MS(200), MS(500)), YRSP_OPEN);
+    onset(MS(1000), 1);
+    CHECK_I(yrsp_update(&g_c, MS(1499)), YRSP_OPEN);
+    CHECK_I(yrsp_update(&g_c, MS(1500)), YRSP_ENDED);
+    r = finish();
+    CHECK_I(r.flags, YRSP_R_TIMEOUT);
+    yrsp_arm(&g_c, 0);
+    onset(MS(1000), 1);
+    CHECK_I(yrsp_update(&g_c, YRT_S(100)), YRSP_OPEN);
+    CHECK_I(key(MS(900), SC_F, 1), YRSP_OPEN);        /* desc's minimum 0: EARLY */
+    CHECK_I(yrsp_set_window(&g_c, -MS(200), 0), YRSP_ENDED);   /* classified again */
+    r = finish();
+    CHECK_I(r.rt_ns, -MS(100));
+    key(MS(950), SC_F, 0);
+    yrsp_arm(&g_c, 0);
+    onset(0, 1);
+    CHECK_I(yrsp_set_window(&g_c, MS(200), 0), YRSP_OPEN);
+    CHECK_I(key(MS(100), SC_F, 1), YRSP_OPEN);        /* an anticipation now */
+    CHECK_I(yrsp_set_window(&g_c, 0, 0), YRSP_ENDED);
+    key(MS(150), SC_F, 0);
+    CHECK_I(yrsp_set_window(&g_c, MS(500), MS(500)), YRSP_ERR_ARG);
+    CHECK_I(yrsp_set_window(&g_c, 0, -1), YRSP_ERR_ARG);
+    CHECK_I(yrsp_set_window(&g_c, 0, YRT_S(1e6) + 1), YRSP_ERR_ARG);
+    CHECK_I(yrsp_set_window(&g_c, -YRT_S(1e6) - 1, 0), YRSP_ERR_ARG);
+    CHECK_I(yrsp_set_window(&g_c, YRT_S(1e6) + 1, 0), YRSP_ERR_ARG);
+    CHECK_I(yrsp_set_window(NULL, 0, 0), YRSP_ERR_STATE);
+    yrsp_close(&g_c);
+    CHECK_I(yrsp_set_window(&g_c, 0, 0), YRSP_ERR_STATE);
+
+    /* B4: down state is per collector. A release that one collector did
+     * not see leaves the key down there: its next press is HELD */
+    d = fj_desc(0, 0);
+    CHECK(yrsp_open(&a, &d) && yrsp_open(&b, &d));
+    in = ev(YRSP_KIND_KEYBOARD, YRSP_PRESS, MS(10), SC_F);
+    yrsp_feed(&a, &in);
+    yrsp_feed(&b, &in);
+    in = ev(YRSP_KIND_KEYBOARD, YRSP_RELEASE, MS(90), SC_F);
+    yrsp_feed(&b, &in);                               /* a does not see it */
+    yrsp_arm(&a, MS(100));
+    yrsp_arm(&b, MS(100));
+    memset(&o, 0, sizeof o);
+    o.final = 1;
+    yrsp_set_onset(&a, &o);
+    yrsp_set_onset(&b, &o);
+    in = ev(YRSP_KIND_KEYBOARD, YRSP_PRESS, MS(300), SC_F);
+    CHECK_I(yrsp_feed(&a, &in), YRSP_OPEN);           /* held: never a response */
+    CHECK_I(yrsp_feed(&b, &in), YRSP_ENDED);
+    yrsp_finish(&a, &r);
+    CHECK_I(r.n_held, 1);
+    CHECK(r.flags & YRSP_R_HELD_AT_OPEN);
+
+    /* F4: the onset while armed, plan or final */
+    d = fj_desc(1.0, 0);
+    CHECK(yrsp_open(&g_c, &d));
+    CHECK(!yrsp_onset_now(&g_c, &o));                 /* not armed */
+    yrsp_arm(&g_c, 0);
+    CHECK(!yrsp_onset_now(&g_c, &o));                 /* no onset yet */
+    onset(MS(500), 0);
+    memset(&o, 0, sizeof o);
+    CHECK(yrsp_onset_now(&g_c, &o));
+    CHECK(o.t_ns == MS(500) && !o.final && o.frame == 42 && o.src == YRSP_ONSET_PLAN);
+    CHECK_I(yrsp_plan_frame(&g_c), 42);
+    onset(MS(517), 1);
+    CHECK(yrsp_onset_now(&g_c, &o));
+    CHECK(o.t_ns == MS(517) && o.final && o.tier == 1);
+    CHECK_I(yrsp_plan_frame(&g_c), -1);               /* final: no frame to wait for */
+    CHECK(!yrsp_onset_now(&g_c, NULL));
+    CHECK(!yrsp_onset_now(NULL, &o));
+    yrsp_close(&g_c);
+    CHECK(!yrsp_onset_now(&g_c, &o));
+
+    /* F5: a DISTANCE choice's origin */
+    memset(&d, 0, sizeof d);
+    d.choices = dist;
+    d.n_choices = 2;
+    CHECK(yrsp_open(&g_c, &d));
+    CHECK_I(yrsp_set_origin(&g_c, -1, 0, 0), YRSP_ERR_STATE);     /* not armed */
+    sample(YRSP_KIND_MOUSE, MS(10), YRSP_AXIS_POSITION, 0, 0, 0);
+    yrsp_arm(&g_c, MS(100));
+    onset(MS(100), 1);
+    CHECK_I(yrsp_set_origin(&g_c, -1, 100, 100), 0);
+    CHECK_I(sample(YRSP_KIND_MOUSE, MS(200), YRSP_AXIS_POSITION, 0, 109.9f, 100), YRSP_OPEN);
+    CHECK_I(sample(YRSP_KIND_MOUSE, MS(210), YRSP_AXIS_POSITION, 0, 100, 110), YRSP_ENDED);
+    r = finish();
+    CHECK_I(r.rt_ns, MS(110));
+    CHECK_S(r.response_name, "moved");
+    /* without it: from where the channel was at arm() */
+    yrsp_arm(&g_c, MS(300));
+    onset(MS(300), 1);
+    CHECK_I(sample(YRSP_KIND_MOUSE, MS(400), YRSP_AXIS_POSITION, 0, 100, 119.5f), YRSP_OPEN);   /* 9.5 from (100, 110) */
+    CHECK_I(sample(YRSP_KIND_MOUSE, MS(410), YRSP_AXIS_POSITION, 0, 100, 120.5f), YRSP_ENDED);
+    yrsp_arm(&g_c, MS(500));
+    CHECK_I(yrsp_set_origin(&g_c, 0, 0, 0), 0);
+    CHECK_I(yrsp_set_origin(&g_c, 1, 0, 0), YRSP_ERR_ARG);        /* a key */
+    CHECK_I(yrsp_set_origin(&g_c, 2, 0, 0), YRSP_ERR_ARG);
+    CHECK_I(yrsp_set_origin(&g_c, -2, 0, 0), YRSP_ERR_ARG);
+    CHECK_I(yrsp_set_origin(&g_c, -1, (float)NAN, 0), YRSP_ERR_ARG);
+    CHECK_I(yrsp_set_origin(&g_c, -1, 0, (float)INFINITY), YRSP_ERR_ARG);
+    CHECK_HAS(yrsp_error(&g_c), "yrsp_set_origin");
+    CHECK(yrsp_open(&g_c, &(yrsp_desc){ .choices = dist + 1, .n_choices = 1 }));
+    yrsp_arm(&g_c, 0);
+    CHECK_I(yrsp_set_origin(&g_c, -1, 0, 0), YRSP_ERR_ARG);       /* no DISTANCE choice */
+    CHECK_I(yrsp_set_origin(NULL, -1, 0, 0), YRSP_ERR_STATE);
+    yrsp_close(&g_c);
+
+    /* B2: the cursor stays on the count grid at gain 0.1. The float sum of
+     * v0.7 drifted off it */
+    memset(&cur, 0, sizeof cur);
+    cur.gain = 0.1f;
+    cur.w = 2000;
+    cur.h = 2000;
+    cur.x = cur.y = 512;
+    memset(&in, 0, sizeof in);
+    in.kind = YRSP_KIND_MOUSE;
+    in.type = YRSP_SAMPLE;
+    in.control = YRSP_AXIS_DELTA;
+    for (bad = 0, sum = 0, i = 0; i < 200000; i++) {
+        int dx = (i * 7919) % 23 - 11;
+        in.x = (float)dx;
+        in.y = (float)-dx;
+        yrsp_cursor_feed(&cur, &in);
+        sum += dx;
+        bad += cur.x != v8_at(512, 0.1f, sum) || cur.y != v8_at(512, 0.1f, -sum);
+    }
+    CHECK_I(bad, 0);
+    CHECK(cur.nx_ == sum && cur.ny_ == -sum);
+    /* placing it: a new origin, the counts from there */
+    cur.x = 30.25f;
+    in.x = 3;
+    in.y = 0;
+    yrsp_cursor_feed(&cur, &in);
+    CHECK(cur.x == v8_at(30.25f, 0.1f, 3) && cur.nx_ == 3);
+    /* the clamp holds the sum on the last grid point inside; a move back
+     * leaves the edge at once */
+    memset(&cur, 0, sizeof cur);
+    cur.gain = 0.3f;
+    cur.w = 100;
+    cur.h = 100;
+    cur.x = 10;
+    cur.y = 50;
+    in.x = 1000;
+    in.y = -1000;
+    yrsp_cursor_feed(&cur, &in);
+    CHECK(cur.x <= 100 && cur.x == v8_at(10, 0.3f, cur.nx_) && v8_at(10, 0.3f, cur.nx_ + 1) > 100);
+    CHECK(cur.y >= 0 && cur.y == v8_at(50, 0.3f, cur.ny_) && v8_at(50, 0.3f, cur.ny_ - 1) < 0);
+    n = (int)cur.nx_;
+    in.x = -1;
+    in.y = 1;
+    yrsp_cursor_feed(&cur, &in);
+    CHECK(cur.nx_ == n - 1 && cur.x == v8_at(10, 0.3f, n - 1));
+    CHECK(cur.y == v8_at(50, 0.3f, cur.ny_) && cur.y > 0);
+    /* a count no mouse sends is no move */
+    in.x = (float)NAN;
+    CHECK_I(yrsp_cursor_feed(&cur, &in), 0);
+    in.x = 1e10f;
+    CHECK_I(yrsp_cursor_feed(&cur, &in), 0);
+    CHECK(cur.nx_ == n - 1);
+    /* an area narrower than a count: inside it, off the grid */
+    memset(&cur, 0, sizeof cur);
+    cur.gain = 2;
+    cur.w = 1;
+    cur.x = 0.5f;
+    in.x = 1;
+    in.y = 0;
+    yrsp_cursor_feed(&cur, &in);
+    CHECK(cur.x >= 0 && cur.x <= 1);
+
+    /* B3: a column of the caller's row with one of the names is skipped */
+    memset(&mo, 0, sizeof mo);
+    memset(&dd, 0, sizeof dd);
+    dd.write = mem_write;
+    dd.write_ctx = &mo;
+    dd.cols = cols;
+    dd.n_cols = 3;
+    CHECK(ytr_data_open(&w, &dd));
+    CHECK_S(mo.buf, "rt_s,response,rsp_flags\n");
+    d = fj_desc(1.0, 0);
+    CHECK(yrsp_open(&g_c, &d));
+    yrsp_arm(&g_c, 0);
+    onset(0, 1);
+    key(MS(250), SC_J, 1);
+    r = finish();
+    CHECK_I(yrsp_data_set(&w, &r), 2);
+    row.rt_ns = 123456789;
+    CHECK_I(ytr_data_write(&w, &row), 0);
+    CHECK_HAS(mo.buf, "\n0.123456789,right,1\n");
+    ytr_data_close(&w);
+    yrsp_close(&g_c);
+}
+
 int main(void) {
     printf("ysp_response %s\n", yrsp_version());
     check_names();
@@ -2247,6 +2534,7 @@ int main(void) {
     check_helpers();
     check_frame_loop();
     check_sent();
+    check_v08();
 #if defined(YRSP_TEST_SDL)
     check_sdl();
 #endif

@@ -30,7 +30,7 @@
 
 /* The MEX function's own version (docs/bindings.md, Versions); the
  * header's is the second output of 'version'. */
-#define MEX_BINDING_VERSION "1.0.0"
+#define MEX_BINDING_VERSION "1.1.0"
 
 #define YSP_RESPONSE_IMPLEMENTATION
 #include "ysp/response.h"
@@ -465,7 +465,7 @@ static uint64_t rsp_open(const mxArray* d) {
         if ((f = pm_field(d, "mode"))) desc.mode = rsp_enum(f, rsp_param_values("mode"), 0, 2, "mode");
         if ((f = pm_field(d, "kinds"))) desc.kinds = rsp_kinds(f, "kinds");
         if ((f = pm_field(d, "trace_kinds"))) desc.trace_kinds = rsp_kinds(f, "trace_kinds");
-        if ((f = pm_field(d, "min_rt"))) desc.min_rt_ns = rsp_seconds(f, "min_rt", 0);
+        if ((f = pm_field(d, "min_rt"))) desc.min_rt_ns = rsp_seconds(f, "min_rt", S_NEG);   /* v0.8: may be < 0 */
         if ((f = pm_field(d, "duration"))) {
             desc.duration_ns = rsp_seconds(f, "duration", S_INF);
             if (desc.duration_ns == INT64_MAX) desc.duration_ns = 0;   /* Inf: no deadline */
@@ -680,6 +680,16 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
         e.type = (uint8_t)(down ? YIN_PRESS : YIN_RELEASE);
         e.value = down ? 1.0f : 0.0f;
         rc = yrsp_feed(&h->c, &e);
+        rsp_check(h, rc);
+        plhs[0] = mxCreateDoubleScalar(rc);
+    } else if (strcmp(cmd, "set_window") == 0) {
+        /* v0.8: this window's min_rt (may be < 0) and duration (Inf: none) */
+        int rc;
+        int64_t lo, dur;
+        pm_nargs(nrhs, 4, "st = ysp_response('set_window', h, min_rt, duration)");
+        lo = rsp_seconds(prhs[2], "min_rt", S_NEG);
+        dur = rsp_seconds(prhs[3], "duration", S_INF);
+        rc = yrsp_set_window(&h->c, lo, dur == INT64_MAX ? 0 : dur);
         rsp_check(h, rc);
         plhs[0] = mxCreateDoubleScalar(rc);
     } else if (strcmp(cmd, "update") == 0) {

@@ -31,10 +31,15 @@
  * --gradual ramps the rotation 1 deg per trial. Targets in random order
  * within each cycle of 8 (ysp/trials.h, YTR_ORDER_RANDOM).
  *
- * Measures. Movement onset: a DISTANCE crossing of 1 cm of hand travel
- * (--cpi counts per inch times the gain, in px; the same px of pointer
- * travel with --sdl-mouse) from where the hand was at the hold's end, by
- * the collector, from the target's flip onset. Hand angles relative to
+ * Measures. Movement onset: a DISTANCE crossing of 10% of the target
+ * radius (--onset-frac; 26.9 px at the default radius) of cursor travel
+ * from where the hand was at the hold's end, by the collector, from the
+ * target's flip onset. The rotation keeps distances from the start, so
+ * the hand and the cursor travel the same px. The data file's header
+ * gives the same distance as hand travel in cm (from --cpi and --gain;
+ * 0.27 cm at the defaults). A fixed hand distance would not do: at a
+ * gain fast enough for a mouse it can lie past 1/3 of the radius, where
+ * the angle is read. Hand angles relative to
  * the target: at the first sample past 1/3 of the
  * target radius, at peak speed (over a 10 ms lag), and at the crossing.
  * No interpolation between samples (the collector's rule, CROSSINGS).
@@ -48,8 +53,8 @@
  * hand_end_deg, cursor_end_deg, peak_speed_px_s, n_samples, input (raw,
  * sdl or script), onset_tier, onset_src, move_tier (the onset sample's
  * stamp tier: 0 on the raw path, which has no tier yet; 3 for SDL's; 4
- * scripted), rsp_flags, early_move (the hand moved 1 cm between the
- * hold's end and the target's onset). --traj, one row
+ * scripted), rsp_flags, early_move (the hand crossed the onset distance
+ * between the hold's end and the target's onset). --traj, one row
  * per hand sample from the hold's end to the crossing: trial_index, t_s
  * (from the target's onset), hand_x, hand_y, cursor_x, cursor_y (px from
  * the window's top-left). Shift+Esc stops; the rows so far are kept.
@@ -62,13 +67,18 @@
  * early. The checks: each hand angle and the model within the counts'
  * quantization, the rotation, the times of the movement onset, the
  * first sample past 1/3 of the radius and the crossing to the ns, the
- * early move flagged. The angle checks need a power-of-2 gain (the
- * default 1/8): yrsp_cursor sums floats, and 0.1 drifted 0.03 px off the
- * count grid in 160 trials. --auto runs the same hand in a window. Under
- * 0.1 s: the virtual clock does not wait.
+ * early move flagged. The checks hold at any --gain: yrsp_cursor (v0.8)
+ * sums whole counts, so the hand stays on the count grid (a float sum
+ * drifted 0.033 px off it in 160 trials at gain 0.1). --auto runs the same
+ * hand in a window. Under 0.1 s: the virtual clock does not wait.
  *
  * Usage: trial_visuomotor [--sim | --auto] [--sdl-mouse] [--schedule B,R,W] [--rotation DEG] [--gradual]
- *          [--endpoint-only] [--gain PX] [--cpi N] [--radius PX] [--seed N] [--out FILE] [--traj FILE]
+ *          [--endpoint-only] [--gain PX] [--cpi N] [--radius PX] [--onset-frac F] [--seed N] [--out FILE]
+ *          [--traj FILE]
+ *   --gain PX        px per count (default 0.25: about 2.7 cm of hand travel
+ *                    to a 269 px target at 1000 CPI)
+ *   --onset-frac F   movement onset as a fraction of the radius, 0 < F < 1/3
+ *                    (default 0.1)
  * Exit code: 0 (also after Shift+Esc), 1 when something did not open or a
  * check failed, 2 for a bad argument.
  */
@@ -101,9 +111,9 @@
 #define ROTATION_N    80
 #define WASHOUT_N     40
 #define RAMP_DEG      1.0     /* --gradual: per rotation trial               */
-#define GAIN          0.125f  /* px per count; a power of 2 keeps the float sum exact */
+#define GAIN          0.25f   /* px per count                                */
 #define CPI           1000.0  /* the mouse's counts per inch                 */
-#define ONSET_CM      1.0     /* movement onset: hand travel                 */
+#define ONSET_FRAC    0.10    /* movement onset: cursor travel, of the radius */
 #define PV_LAG_S      0.010   /* speed over this lag, for the peak           */
 #define N_TARGETS     8
 #define VMA_PI        3.14159265358979323846
@@ -125,7 +135,7 @@ static const char* const block_name[] = { "baseline", "rotation", "washout" };
 
 static const char conditions_csv[] = "target_deg\n0\n45\n90\n135\n180\n225\n270\n315\n";
 
-static yrsp_choice moved[1];    /* level set at run time from --cpi and --gain */
+static yrsp_choice moved[1];    /* level set at run time from the radius */
 
 static yscr_screen scr;
 static int raw = 1;
@@ -309,10 +319,9 @@ int main(int argc, char** argv) {
     const char* out_path = "trial_visuomotor.csv";
     const char* traj_path = "trial_visuomotor_trajectory.csv";
     uint64_t seed = 20261106, seed0;
-    int i, n, exact, sim = 0, autorun = 0, gradual = 0, endpoint_only = 0, aborted = 0, failed = 0, rows = 0, in_trial = 0;
-    int64_t landing = -1;
+    int i, n, sim = 0, autorun = 0, gradual = 0, endpoint_only = 0, aborted = 0, failed = 0, rows = 0, in_trial = 0;
     int target_seen = 0, fb_seen = 0, reach_made = 0, sched[3] = { BASELINE_N, ROTATION_N, WASHOUT_N }, total, deg_col;
-    double rotation = ROTATION_DEG, cpi = CPI, onset_px, target_deg = 0, radius_arg = 0;
+    double rotation = ROTATION_DEG, cpi = CPI, onset_px, onset_frac = ONSET_FRAC, target_deg = 0, radius_arg = 0;
     float W, H, gain = GAIN, xy[2];
     static double hand_end[MAX_TRIALS], rot_of[MAX_TRIALS], hand_dev = 0;
     static int fb_of[MAX_TRIALS];
@@ -331,13 +340,14 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--gain") && i + 1 < argc) gain = (float)atof(argv[++i]);
         else if (!strcmp(argv[i], "--cpi") && i + 1 < argc) cpi = atof(argv[++i]);
         else if (!strcmp(argv[i], "--radius") && i + 1 < argc) radius_arg = atof(argv[++i]);
+        else if (!strcmp(argv[i], "--onset-frac") && i + 1 < argc) onset_frac = atof(argv[++i]);
         else if (!strcmp(argv[i], "--seed") && i + 1 < argc) seed = (uint64_t)strtoull(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "--out") && i + 1 < argc) out_path = argv[++i];
         else if (!strcmp(argv[i], "--traj") && i + 1 < argc) traj_path = argv[++i];
         else {
             fprintf(stderr, "usage: trial_visuomotor [--sim | --auto] [--sdl-mouse] [--schedule B,R,W] [--rotation DEG] "
-                            "[--gradual] [--endpoint-only] [--gain PX] [--cpi N] [--radius PX] [--seed N] [--out FILE] "
-                            "[--traj FILE]\n");
+                            "[--gradual] [--endpoint-only] [--gain PX] [--cpi N] [--radius PX] [--onset-frac F] [--seed N] "
+                            "[--out FILE] [--traj FILE]\n");
             return 2;
         }
     }
@@ -347,16 +357,12 @@ int main(int argc, char** argv) {
         fprintf(stderr, "trial_visuomotor: --schedule takes B,R,W, multiples of 8, 8..800 in all\n");
         return 2;
     }
-    if (!(gain > 0) || !(cpi > 0) || !(fabs(rotation) <= 180) || radius_arg < 0) {
-        fprintf(stderr, "trial_visuomotor: --gain and --cpi must be > 0, --rotation in -180..180\n");
+    if (!(gain > 0) || !(cpi > 0) || !(fabs(rotation) <= 180) || radius_arg < 0 || !(onset_frac > 0 && onset_frac < 1 / 3.0)) {
+        fprintf(stderr, "trial_visuomotor: --gain and --cpi must be > 0, --rotation in -180..180, --onset-frac in (0, 1/3)\n");
         return 2;
     }
     /* --sim runs on ysp/rt.h's virtual clock: the same records on any host */
     if (sim) yrt_virtual_begin(0);
-    {   /* gain 2^k: the drawn cursor's float sum is exact, so are the angle checks */
-        int e2;
-        exact = frexpf(gain, &e2) == 0.5f;
-    }
     seed0 = seed;
     if (sim) sd.backend = YSCR_BACKEND_SIM;
     sd.windowed = true;
@@ -373,12 +379,9 @@ int main(int argc, char** argv) {
     ygfx_size(&gfx, &W, &H);
     ygfx_center(&gfx, &sx, &sy);
     radius = radius_arg > 0 ? (float)radius_arg : (float)(RADIUS_FRAC * (W < H ? W : H));
-    onset_px = ONSET_CM / 2.54 * cpi * gain;
-    if (onset_px >= radius / 3) {
-        fprintf(stderr, "trial_visuomotor: the 1 cm onset (%.1f px) must be inside 1/3 of the radius (%.1f px)\n",
-                onset_px, radius / 3.0);
-        return 2;
-    }
+    /* in cursor px, so it stays inside 1/3 of the radius (where the angle
+     * is read) at any gain */
+    onset_px = onset_frac * radius;
     start = shape(sx, sy, 2 * START_R, 0, 0.9f, 0.9f, 0.9f);
     target = shape(sx, sy, 2 * TARGET_R, 0, 0.1f, 0.8f, 0.2f);
     dot = shape(sx, sy, 8, 0, 1, 1, 0.2f);
@@ -443,8 +446,10 @@ int main(int argc, char** argv) {
     fprintf(out, "# ysp_response %s; hand: %s%s\n", yrsp_version(),
             raw ? "raw mice, counts integrated, no acceleration; " : "SDL window coordinates, OS acceleration; ",
             sim || autorun ? "scripted (tier SIM)" : sources[0].note ? sources[0].note : "");
-    if (raw) fprintf(out, "# gain %.6g px/count, cpi %.0f, onset %.2f px (1 cm)", gain, cpi, onset_px);
-    else fprintf(out, "# onset %.2f pointer px", onset_px);
+    if (raw)
+        fprintf(out, "# gain %.6g px/count, cpi %.0f, onset %.2f px (%.3g of the radius; %.3f cm of hand travel)", gain, cpi,
+                onset_px, onset_frac, onset_px / gain / cpi * 2.54);
+    else fprintf(out, "# onset %.2f pointer px (%.3g of the radius)", onset_px, onset_frac);
     fprintf(out, "; start (%.1f, %.1f) r %.0f px; target radius %.2f px\n", sx, sy, START_R, radius);
     fprintf(out, "trial_index,block,cycle,target_deg,rotation_deg,feedback,rt_s,mt_s,cross_s,hand_third_deg,hand_pv_deg,"
                  "hand_end_deg,cursor_end_deg,peak_speed_px_s,n_samples,input,onset_tier,onset_src,move_tier,rsp_flags,"
@@ -481,14 +486,14 @@ int main(int argc, char** argv) {
             ytl_anchor(&tl, TRIAL, f.onset, 0);
             in_trial = 1;
             target_seen = fb_seen = reach_made = 0;
-            landing = -1;
             if (phase != HOLD) phase = RETURN;
             else t_in = f.onset;   /* the first trial: the hand is on the start */
             if ((sim || autorun) && phase == RETURN) {
                 int64_t t_end = f.onset + YRT_MS(400);
                 if (ti.index == SIM_EARLY && f.period > 0) {
                     /* the hold ends half a frame before a vblank, so the
-                     * flick has that long to move 1 cm before the target */
+                     * flick has that long to cross the onset distance before
+                     * the target */
                     int64_t m = (t_end + YRT_S(HOLD_S) + f.period / 2 - f.onset + f.period - 1) / f.period;
                     t_end = f.onset + m * f.period - f.period / 2 - YRT_S(HOLD_S);
                 }
@@ -517,15 +522,17 @@ int main(int argc, char** argv) {
                 reach_made = 1;
             }
         }
-        /* the script's reach: from the target's flip record, as a participant would */
-        for (i = 0; (sim || autorun) && !reach_made && phase == REACH && i < f.n_done; i++)
-            if (f.done[i].index == landing && f.done[i].onset) {
-                int64_t t0 = f.done[i].onset;
-                sim_onset[ti.index] = t0;
-                sim_reach(t0 + YRT_MS(300 + 10 * (ti.index % 7)), target_deg + sim_x[ti.index], 0, onset_px,
+        /* the script's reach: from the target's flip onset, as a participant
+         * would see it (the collector's onset once final) */
+        if ((sim || autorun) && !reach_made && phase == REACH) {
+            yrsp_onset on;
+            if (yrsp_onset_now(&rsp, &on) && on.final) {
+                sim_onset[ti.index] = on.t_ns;
+                sim_reach(on.t_ns + YRT_MS(300 + 10 * (ti.index % 7)), target_deg + sim_x[ti.index], 0, onset_px,
                           sim_t[ti.index]);
                 reach_made = 1;
             }
+        }
         if (phase == FEEDBACK && !fb_seen) {   /* frozen endpoint, then the target off */
             ytl_seq q = ytl_seq_on(&tl, TRIAL);
             ytl_base_time(&tl, TRIAL, f.onset, &bt);
@@ -538,8 +545,7 @@ int main(int argc, char** argv) {
         }
 
         n = ytl_evaluate(&tl, &(ytl_frame){ f.onset, f.period, f.index }, fired, 64);
-        i = yrsp_set_landing(&rsp, fired, n, TARGET_ON);   /* the frame the script waits for */
-        if (i >= 0) landing = fired[i].frame;
+        yrsp_set_landing(&rsp, fired, n, TARGET_ON);   /* the plan, until the flip record */
         for (i = 0; i < n; i++) {
             if (fired[i].kind == YTL_MARK && fired[i].code == END_OF_TRIAL) {
                 /* the onset is final; the trace holds the reach */
@@ -604,7 +610,7 @@ int main(int argc, char** argv) {
                     if (third) dev = fmax(dev, fabs(a_third - x) - quant_deg(dist(third->x, third->y)));
                     if (pv) dev = fmax(dev, fabs(a_pv - x) - quant_deg(dist(pv->x, pv->y)));
                     dev = fmax(dev, fabs(c_end - a_end - rot_deg) - 1e-3);
-                    if ((dev > 0 && exact) || !third || !pv || early != (ti.index == SIM_EARLY) ||
+                    if (dev > 0 || !third || !pv || early != (ti.index == SIM_EARLY) ||
                         cross_of[ti.index] != sim_t[ti.index][2] - res.t_onset || third->t != sim_t[ti.index][1] ||
                         (!early && (rt_of[ti.index] != sim_t[ti.index][0] - sim_onset[ti.index] ||
                                     res.t_onset != sim_onset[ti.index]))) {
@@ -689,8 +695,7 @@ int main(int argc, char** argv) {
             double bound = SIM_B * quant_deg(radius) / (1 - SIM_A + SIM_B);
             printf("hand angles within %.4f deg of the script's (quantization %.4f deg at 1/3 radius); the script within "
                    "%.4f deg of the open-loop model (bound %.4f)\n", hand_dev, quant_deg(radius / 3), model_max, bound);
-            if (model_max > bound && exact) failed = 1;
-            if (!exact) printf("the angle checks need a power-of-2 --gain: yrsp_cursor's float sum leaves the count grid\n");
+            if (model_max > bound) failed = 1;
         }
     }
     if ((sim || autorun) && !aborted && rows != total) failed = 1;

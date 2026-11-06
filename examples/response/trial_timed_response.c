@@ -34,13 +34,17 @@
  * times through the timeline's audio look-ahead (ytl_peek() of
  * [last end, now + yau_lead_ns() + two frames) each frame); the symbol
  * lands on the frame nearest its time. The measured PT is the response's
- * key time minus the symbol's flip onset (its flip record); the timing
- * error is the key time minus the fourth tone's onset (its yau_onset
- * record: the device-clock fit's time). The row keeps the plan, both
- * measurements, and each source's residual and tier. The response
- * window runs from the first tone's record (a forced response may come
- * before the symbol: ysp/response.h counts a press before its onset as
- * EARLY, never as a response), to 0.8 s after the fourth tone.
+ * RT from the symbol's flip onset (its flip record): the collector's
+ * onset is the symbol, from the schedule's time until it lands, then the
+ * landing's plan, then the record. A forced response may come before the
+ * symbol: the window's minimum RT is negative (ysp/response.h v0.8), so
+ * such a press is a response with a negative PT. Each forced trial sets
+ * its window with yrsp_set_window(): from the first tone to 0.8 s after
+ * the fourth, as RTs from the symbol (to within the symbol's residual,
+ * half a frame at most). The timing error is the key time minus the
+ * fourth tone's onset (its yau_onset record: the device-clock fit's
+ * time). The row keeps the plan, both measurements, and each source's
+ * residual and tier.
  *
  * Data (--out): one row per trial: block, block_type, mapping, trial,
  * sub_block, stimulus (0..3), remapped, correct_key, response, correct,
@@ -205,11 +209,9 @@ static ytl_timeline tl;
 static ytl_event storage[64];
 static ytr_trials trials;
 static ytr_data data;
-/* Two collectors, one per deadline (forced; none). Both get every event:
- * a key released while the other is in use would stay down in it, and its
- * next press would be a held key, never a response. */
-enum { RSP_FORCED, RSP_OPEN };
-static yrsp_collector col[2], *rsp;
+/* One collector: a forced trial sets its own window (yrsp_set_window()),
+ * the others have the desc's (no deadline). */
+static yrsp_collector col, *rsp = &col;
 static yau_buf snd[N_SND];
 /* 7250: an order with a run across a sub-block boundary unless the rule
  * spans them, so --sim checks constraints_span_blocks */
@@ -401,15 +403,13 @@ static void sim_feed(int64_t now) {
             if (sp[i].key < 0) sp[i].key = sim_forced_choice(sp[i].t);
             e.t = sp[i].t; e.type = YRSP_PRESS; e.value = 1;
             e.control = (uint32_t)yrsp_scancode(key_names[sp[i].key]);
-            yrsp_feed(&col[0], &e);
-            yrsp_feed(&col[1], &e);
+            yrsp_feed(rsp, &e);
             sp[i].state = 1;
         }
         if (sp[i].state == 1 && sp[i].t + YRT_MS(80) <= now) {
             e.t = sp[i].t + YRT_MS(80); e.type = YRSP_RELEASE;
             e.control = (uint32_t)yrsp_scancode(key_names[sp[i].key]);
-            yrsp_feed(&col[0], &e);
-            yrsp_feed(&col[1], &e);
+            yrsp_feed(rsp, &e);
             sp[i].state = 2;
         }
     }
@@ -489,7 +489,6 @@ static int open_block(const block* b) {
     d.rng_ctx = &seed;
     ytr_close(&trials);
     if (!ytr_open(&trials, &d)) { fprintf(stderr, "trial_timed_response: %s\n", ytr_error(&trials)); return 0; }
-    rsp = &col[b->type == FORCED ? RSP_FORCED : RSP_OPEN];
     n_lg = criterion_met = 0;
     memset(streak, 0, sizeof streak);
     return 1;
@@ -545,9 +544,12 @@ static int start_trial(const yscr_frame* f) {
         tr.stim_target = tr.tone_t[N_TONES - 1] - tr.pt_planned;
         ytl_at(&q, tr.stim_target - f->onset);
         ytl_on(&q, STIM_ON);
-        /* the window from the first tone, a plan until its record */
+        /* RT from the symbol, from the first tone (a negative minimum) to
+         * 0.8 s after the fourth; the symbol's schedule is the onset until
+         * it lands, so a press before it is a response when it comes */
+        yrsp_set_window(rsp, tr.tone_t[0] - tr.stim_target, tr.tone_t[N_TONES - 1] + YRT_S(LATE_LIMIT_S) - tr.stim_target);
         memset(&plan, 0, sizeof plan);
-        plan.t_ns = tr.tone_t[0];
+        plan.t_ns = tr.stim_target;
         plan.frame = -1;
         plan.src = YRSP_ONSET_PLAN;
         yrsp_set_onset(rsp, &plan);
@@ -648,8 +650,8 @@ static void write_row(void) {
     r.first_response = tr.type == TRAINING && tr.first >= 0 ? key_names[tr.first] : NULL;
     r.n_errors = tr.type == TRAINING ? tr.n_errors : YTR_MISSING_INT;
     r.pt_planned_ns = tr.pt_planned;
-    r.pt_ns = tr.type == FORCED && t_key ? t_key - tr.stim_rec.onset : YTR_MISSING_NS;
-    r.symbol_rt_ns = tr.type != FORCED && t_key ? t_key - tr.stim_rec.onset : YTR_MISSING_NS;
+    r.pt_ns = tr.type == FORCED && t_key ? tr.res.rt_ns : YTR_MISSING_NS;
+    r.symbol_rt_ns = tr.type != FORCED && t_key ? tr.res.rt_ns : YTR_MISSING_NS;
     r.timing_error_ns = tr.type == FORCED && t_key ? t_key - tr.tone_rec[N_TONES - 1].onset : YTR_MISSING_NS;
     r.too_early = r.timing_error_ns != YTR_MISSING_NS && r.timing_error_ns < -YRT_S(TIMING_TOL_S);
     r.too_late = tr.type == FORCED && (!t_key || r.timing_error_ns > YRT_S(TIMING_TOL_S));
@@ -936,16 +938,11 @@ int main(int argc, char** argv) {
         fprintf(stderr, "trial_timed_response: %s\n", ytl_error(&tl));
         return 1;
     }
-    /* forced: from the first tone to 0.8 s after the fourth; the others:
-     * from the symbol, no deadline */
+    /* from the symbol, no deadline; a forced trial sets its own window */
     memset(&pd, 0, sizeof pd);
     pd.choices = keys;
     pd.n_choices = N_STIM;
-    pd.duration_ns = YRT_S(PT_MAX_S + LATE_LIMIT_S);
-    if (!yrsp_open(&col[RSP_FORCED], &pd)) { fprintf(stderr, "trial_timed_response: %s\n", yrsp_error(&col[0])); return 1; }
-    pd.duration_ns = 0;
-    if (!yrsp_open(&col[RSP_OPEN], &pd)) { fprintf(stderr, "trial_timed_response: %s\n", yrsp_error(&col[1])); return 1; }
-    rsp = &col[RSP_FORCED];
+    if (!yrsp_open(rsp, &pd)) { fprintf(stderr, "trial_timed_response: %s\n", yrsp_error(rsp)); return 1; }
 
     yscr_describe(&scr, line, sizeof line);
     yau_describe(&au, aline, sizeof aline);
@@ -982,17 +979,13 @@ int main(int argc, char** argv) {
                 tr.stim_seen = 1;
                 if (scripted && tr.type != FORCED) sim_queue(tr.stim_rec.onset);
             }
-        /* the tones' records; the forced window runs from the first */
+        /* the tones' records */
         for (k = 0; k < tr.n_tones; k++)
             if (tr.tone_id[k] > 0 && tr.tone_rc[k] == YAU_PENDING) {
                 tr.tone_rc[k] = yau_result(&au, tr.tone_id[k], &tr.tone_rec[k]);
                 if (tr.tone_rc[k] != YAU_OK && tr.tone_rc[k] != YAU_PENDING) {
                     fprintf(stderr, "trial_timed_response: tone record: %s\n", yau_strerror(tr.tone_rc[k]));
                     failed = 1;
-                }
-                if (tr.type == FORCED && k == 0 && tr.tone_rc[0] == YAU_OK) {
-                    yrsp_onset o = yrsp_onset_audio(&tr.tone_rec[0]);
-                    yrsp_set_onset(rsp, &o);
                 }
             }
         schedule_tones(f.period);
@@ -1006,10 +999,9 @@ int main(int argc, char** argv) {
             tr.penalty = 0;
             tr.responding = 1;
         }
-        yrsp_feed_screen(&scr, col, 2);
+        yrsp_feed_screen(&scr, rsp, 1);
         if (scripted) sim_feed(f.onset);
-        if ((tr.type == FORCED ? yrsp_update(rsp, f.onset) : yrsp_update_frame(rsp, &f)) == YRSP_ENDED && tr.responding &&
-            !tr.penalty) {
+        if (yrsp_update_frame(rsp, &f) == YRSP_ENDED && tr.responding && !tr.penalty) {
             tr.responding = 0;
             on_response(&f);
         }
@@ -1020,7 +1012,7 @@ int main(int argc, char** argv) {
             if (e->kind == YTL_ONSET && e->target == STIM_ON && tr.stim_frame < 0) {
                 tr.stim_frame = e->frame;
                 tr.stim_land = e->onset;
-                if (tr.type != FORCED) { yrsp_onset o = yrsp_onset_landing(e); yrsp_set_onset(rsp, &o); }
+                yrsp_set_landing(rsp, e, 1, STIM_ON);
             }
             /* a tone the look-ahead missed: late, and its record says so */
             if (e->kind == YTL_MARK && e->code >= TONE_MARK && e->code < TONE_MARK + N_TONES && !tr.tone_id[e->code - TONE_MARK])

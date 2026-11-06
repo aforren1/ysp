@@ -1,6 +1,7 @@
 # ysp/response.h
 
-Status: v0.7.0, 2026-10-21. v0.7.0 adds the helpers for `ysp/device.h`'s
+Status: v0.8.0, 2026-11-06. v0.8.0 has the fixes and calls that four
+task examples asked for ("The task examples (v0.8.0)"). v0.7.0 adds the helpers for `ysp/device.h`'s
 response rule ("Response triggers (v0.7.0)"). v0.4.0, 2026-10-10, adds helpers for the frame loop
 (`yrsp_update_frame()`, `yrsp_feed_screen()`, `yrsp_set_landing()`) and
 the data file (`YRSP_DATA_COLS`, `yrsp_data_set()`); "The first trial
@@ -153,6 +154,11 @@ Each pass of the `while` loop is one frame:
    onset that RT runs from. Then it returns `YRSP_ENDED` at the first
    response or at the deadline. The program then hides the stimulus and
    shows the feedback.
+   A program that ends a trial on an early press (a press before the
+   target) checks `yrsp_entries()` here, before step 5. In the frame
+   where the target lands, `ytl_evaluate()` puts the target in this
+   frame's values, so a check after it shows the target for one frame on
+   a trial that it aborts (`examples/response/trial_posner.c`).
 5. `ytl_evaluate()` gives the events that land on this frame.
    `yrsp_set_landing(&rsp, fired, n, stim_ch)` takes the stimulus's
    onset event, if it is there: its planned onset is the onset until the
@@ -275,8 +281,9 @@ Limits:
 
 ### Give each participant a mouse
 
-`ysp/screen.h` v0.3.5 reads every mouse's Raw Input on its own thread when
-asked (`desc.raw_mice`, Windows): each report carries the mouse's device
+`ysp/screen.h` reads every mouse's raw reports on its own thread when
+asked (`desc.raw_mice`: Raw Input on Windows since v0.3.5; macOS and
+Linux X11 too, see its manual): each report carries the mouse's device
 id and is stamped when read, like the raw keyboard. The system cursor,
 the operator's console and ImGui keep working.
 
@@ -309,7 +316,12 @@ the operator's console and ImGui keep working.
 5. A drawn cursor per participant: `yrsp_cursor` with `device`, `gain`
    (pixels per count) and the area. The movement is unaccelerated, so it
    does not follow the system cursor's ballistics. State the gain in the
-   data.
+   data. Set `x` and `y` to place the cursor (at the start of a trial,
+   for example); it then moves by whole counts from there, at any gain
+   (v0.8.0). The cursor is the hand. A visuomotor rotation or a mirror
+   is the program's: apply it to the cursor's position after
+   `yrsp_cursor_feed()`. The area's clamp bounds the hand, not the drawn
+   point.
 
 Reports from devices SDL does not list carry `YRSP_IN_UNLISTED`.
 Device 0 is every pointer Windows synthesizes itself: a precision
@@ -350,7 +362,9 @@ The onset is the device-clock fit's time, tier 2 at best (ysp/audio.h).
   `YRSP_AXIS_PEN_PRESSURE`, level about 0.05.
 - Mouse: a DISTANCE crossing on `YRSP_KIND_MOUSE`, control
   `YRSP_AXIS_POSITION`, level in window coordinates. The distance is
-  measured from the position at `yrsp_arm()`.
+  measured from the position at `yrsp_arm()`. To measure from a fixed
+  point (the start circle's center), call `yrsp_set_origin(&c, -1, x, y)`
+  after `yrsp_arm()` (v0.8.0).
 
 Add a trace (`desc.trace`, `desc.trace_cap`) to keep every sample of
 the window for a mouse-tracking or drawing task.
@@ -391,6 +405,9 @@ The header's comment block lists every field and flag. In short:
 | `yrsp_close(&c)` | Ends the use; safe on a zeroed collector and twice. |
 | `yrsp_arm(&c, t)` | Opens a window; keeps which keys are down. |
 | `yrsp_set_onset(&c, &o)` | Sets or refines the onset; classifies again. |
+| `yrsp_set_window(&c, min_rt_ns, duration_ns)` | This window's minimum RT and deadline, until the next arm (v0.8.0). |
+| `yrsp_onset_now(&c, &o)` | The onset while armed, plan or final (v0.8.0). |
+| `yrsp_set_origin(&c, choice, x, y)` | A DISTANCE choice's reference point for this window (v0.8.0). |
 | `yrsp_feed(&c, &in)` | One input event, armed or not. |
 | `yrsp_update(&c, now_ns)` | The deadline, and `max_hold_ns` while waiting for a release. |
 | `yrsp_finish(&c, &r)` | The result. Call it again after a late release or onset. |
@@ -412,7 +429,7 @@ jsPsych option to ysp field:
 | `"NO_KEYS"` | `mode = YRSP_CHOICES_NONE` | Presses are logged |
 | `trial_duration` | `desc.duration_ns`, from the onset | ns; from the stimulus, not the trial start |
 | `response_ends_trial: false`, `persist` | `desc.persist`, `desc.max_responses` | |
-| `minimum_valid_rt` | `desc.min_rt_ns` | Earlier presses are logged as anticipations, not dropped |
+| `minimum_valid_rt` | `desc.min_rt_ns` | Earlier presses are logged as anticipations, not dropped. A negative value makes presses before the onset responses (v0.8.0) |
 | `allow_held_key` | `desc.allow_held_key` | Same rule; held responses are flagged |
 | `wait_for_key_release` | `desc.wait_for_key_release`, `desc.max_hold_ns` | Gives up after `max_hold_ns` |
 | `rt` | `result.rt_ns`; data column `rt_s` | ns in C, seconds in the file (jsPsych writes ms); from the flip onset, with its tier; `YRSP_NO_TIME` for null |
@@ -1020,9 +1037,64 @@ the refused choices. Mutants `rule-12` to `rule-15` (in
 `tests/mutate/device.toml`, on this header) caught, 4 of 4. No rule of
 the collector changed.
 
+## The task examples (v0.8.0)
+
+Four task examples (`trial_posner`, `trial_visuomotor`,
+`trial_timed_response` and `trial_copying` in `examples/response/`)
+found the problems that v0.8.0 fixes ([examples_findings.md](examples_findings.md)
+lists what is still open).
+
+| Change | Why |
+|---|---|
+| `YRSP_R_TIMEOUT` only when the deadline ended the window (`ended_by` 2) | A trial aborted on an early press, before any onset, got TIMEOUT \| NO_ONSET, and the row said the participant was too slow |
+| `yrsp_cursor` keeps an `int64_t` count sum per axis; the position is the placed point plus gain x counts, rounded to float once | The float sum drifted 0.033 px off the count grid in 160 reaches at gain 0.1, so the data depended on the gain's binary value. `trial_visuomotor` had to restrict its exact checks to powers of 2 |
+| Setting `x` and `y` places the cursor | The struct's fields stay the API. A position the cursor did not compute is the caller's: a new origin, counts from 0. A gain change does the same, so the position does not jump |
+| The clamp holds the count sum on the last grid point inside the area | The edge stays on the grid; a move back leaves the edge at once, as before |
+| `yrsp_data_set()` skips a column bound to the caller's row with one of its names | A row struct with an `rt_ns` field has a column `rt_s`. Setting it failed, and the row was lost. The skip reads the writer's column record (`YTR_UNBOUND`), because ysp/trials.h has no call that says whether a column is set per row |
+| A negative `min_rt_ns`: presses in `[onset + min_rt_ns, onset)` are responses with a negative rt | A forced-response (timed-response) task: a response before the stimulus is data. EARLY becomes `rt < 0 and rt < min_rt_ns`; with `min_rt_ns >= 0` nothing changes. The bound is -1e6 s, as the durations' |
+| `yrsp_set_window(&c, min_rt_ns, duration_ns)`, for one window | Blocks with different deadlines took two collectors. Down state is per collector, so a key released while the other was fed stayed down, its next press was HELD, and the trial hung. HELD KEYS now says that every collector must see every event |
+| `yrsp_onset_now(&c, &o)` | `yrsp_plan_frame()` returns -1 once the onset is final, so a script that waited for the target's onset searched `f.done` for the landing frame itself. A first version of `trial_visuomotor` hung on this |
+| `yrsp_set_origin(&c, choice, x, y)` | A DISTANCE crossing measured from the last position fed before the arm; the reference could not be set |
+| THE FRAME LOOP: the early-press check before `ytl_evaluate()` | After it, the landing frame already shows the target |
+
+What the examples do now:
+
+- `trial_timed_response` uses one collector. A forced trial's onset is
+  the symbol: the schedule's time as a plan at the arm, then the
+  landing, then the flip record. `yrsp_set_window()` sets the window from
+  the first tone to 0.8 s after the fourth, as RTs from the symbol, so the
+  minimum is negative. The measured PT is `result.rt_ns`. Before, the
+  collector's onset was the first tone, and the program did the PT
+  arithmetic itself.
+- `trial_visuomotor` checks its angles exactly at any gain, and its
+  scripted hand waits for `yrsp_onset_now()` to be final. Its default
+  gain is now 0.25 px per count, and its movement onset is 10% of the
+  target radius in cursor px (`--onset-frac`), with the hand distance in
+  cm in the data file's header. 1 cm of hand travel was past 1/3 of the
+  radius at gains a mouse needs.
+- `trial_posner` checks the early trial's `rsp_flags` (NO_ONSET only)
+  and TIMEOUT on every row without a press.
+- `trial_copying` keeps the click (pen down) as the stroke's start. Its
+  stroke runs from where the press was, and a pen moves before it
+  touches, so a DISTANCE crossing from a point set at the arm would fire
+  on hover. `yrsp_set_origin()` does not make it better.
+
+Not changed: down state stays per collector. A shared table would need
+the collectors to agree on one event stream, which is the rule anyway.
+
+Tests: `check_v08()` in `tests/adapt/response_test.c` (111 checks:
+TIMEOUT with and without a deadline, the negative minimum and its bound,
+a press before any onset and before the landing, the per-window bounds
+and their reset at the arm, two collectors' down state, the onset while
+armed, the DISTANCE origin, 200,000 cursor steps at gain 0.1 against the
+count grid, the clamp's grid point, a placement, a bound `rt_s` column).
+Mutants `v8-01` to `v8-13` caught, 13 of 13; `w-03`, `w-12`, `o-04` and
+`ms-02` moved to the new code and are caught. Linux desktop (Debian 12,
+GCC 12.2).
+
 ## Bindings
 
-`ysp-response` 0.7.0 (Python, `bindings/python/ysp_response`, the module
+`ysp-response` 0.8.0 (Python, `bindings/python/ysp_response`, the module
 `ysp.response`) and the MEX `ysp_response` (`bindings/mex/ysp_response.c`)
 bind the collector for a PsychoPy or Psychtoolbox experiment and for an
 analysis script. Each compiles this header and `ysp/input.h`, nothing
@@ -1062,9 +1134,21 @@ Not bound, and why:
   entries of SDL and raw mice: a PsychoPy, Psychtoolbox or analysis user
   has no SDL events or raw mouse reports.
 - `yrsp_params()`: the loader's and the designer's table, in ns.
+- `yrsp_onset_now()` and `yrsp_set_origin()` (v0.8.0): a script sets the
+  onset itself, so it has it; no binding user has asked for a DISTANCE
+  origin yet. `set_window()` (Python) and `'set_window'` (MEX 1.1.0) are
+  bound, and `min_rt` may be negative.
 - A clock: the header has none, so the binding has none. Give every time
   on one clock (PsychoPy's `win.flip()` and `tDown`, Psychtoolbox's
   `GetSecs`, or ysp's clock for `ysp.box` and `ysp.device` events).
+
+v0.8.0, 2026-11-06, Linux desktop (Debian 12, GCC 12.2, CPython 3.12):
+`test_response.py` 23 of 23 (a new test: a negative `min_rt`,
+`set_window()`, no TIMEOUT without a deadline), `example.py` runs. MEX
+1.1.0 compiles against MATLAB R2024a's headers (`gcc -fsyntax-only`);
+`test_mex_response.m`, with its new v0.8.0 checks, was not run (MATLAB
+did not start in a batch session within 400 s; Octave there has no
+`mkoctfile`).
 
 Checked on 2026-10-25:
 

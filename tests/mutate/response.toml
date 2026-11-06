@@ -33,10 +33,8 @@ id = "w-03"
 name = "early against arm"
 test = "response"
 why = "EARLY is before the stimulus onset, not before the window opened at the fixation."
-find = '''    rt = t - c->onset.t_ns;
-    if (rt < 0) return YRSP_E_EARLY;'''
-replace = '''    rt = t - c->onset.t_ns;
-    if (t < c->t_arm) return YRSP_E_EARLY;'''
+find = '''    if (rt < 0 && rt < c->min_rt_ns) return YRSP_E_EARLY;'''
+replace = '''    if (t < c->t_arm) return YRSP_E_EARLY;'''
 
 [[mutant]]
 id = "w-04"
@@ -105,10 +103,8 @@ id = "w-12"
 name = "timeout without a deadline"
 test = "response"
 why = "TIMEOUT means a deadline passed; with no deadline there is none."
-find = '''    } else if (c->duration_ns > 0) {
-        r->flags |= YRSP_R_TIMEOUT;'''
-replace = '''    } else {
-        r->flags |= YRSP_R_TIMEOUT;'''
+find = '''    } else if (c->ended_by == 2) {'''
+replace = '''    } else {'''
 
 [[mutant]]
 id = "w-13"
@@ -181,11 +177,11 @@ id = "o-04"
 name = "set_onset does not end"
 test = "response"
 why = "A press that arrived before its onset was known ends the window when the onset comes."
-find = '''    yrsp__reclassify(c);
-    yrsp__check_end(c);
-    return c->status;'''
-replace = '''    yrsp__reclassify(c);
-    return c->status;'''
+find = '''    c->have_onset = 1;
+    yrsp__reclassify(c);
+    yrsp__check_end(c);'''
+replace = '''    c->have_onset = 1;
+    yrsp__reclassify(c);'''
 
 [[mutant]]
 id = "o-05"
@@ -383,8 +379,8 @@ id = "ms-02"
 name = "cursor gain ignored"
 test = "response"
 why = "The gain is the design's counts-to-pixels ratio, stated in the data."
-find = '    c->x += g * in->x;'
-replace = '    c->x += in->x;'
+find = '    double g = c->gain > 0 ? (double)c->gain : 1.0;'
+replace = '    double g = 1.0;'
 
 [[mutant]]
 id = "ms-03"
@@ -640,3 +636,112 @@ test = "response"
 why = "With persist every VALID press is a response, and each needs its code."
 find = '''(c->d.persist || k == best) && !coded[k]) bad = 1;'''
 replace = '''(k == best) && !coded[k]) bad = 1;'''
+
+# --- v0.8: the four task examples (docs/examples_findings.md) -------------
+
+[[mutant]]
+id = "v8-01"
+name = "timeout with a deadline that did not run"
+test = "response"
+why = "B1: a window aborted before its deadline (or before any onset) did not time out."
+find = '''    } else if (c->ended_by == 2) {'''
+replace = '''    } else if (c->duration_ns > 0) {'''
+
+[[mutant]]
+id = "v8-02"
+name = "negative minimum ignored"
+test = "response"
+why = "F1: with min_rt_ns < 0, a press in [onset + min_rt_ns, onset) is a response with a negative rt."
+find = '''    if (rt < 0 && rt < c->min_rt_ns) return YRSP_E_EARLY;'''
+replace = '''    if (rt < 0) return YRSP_E_EARLY;'''
+
+[[mutant]]
+id = "v8-03"
+name = "minimum's lower bound exclusive"
+test = "response"
+why = "F1: a press exactly at onset + min_rt_ns is valid; the window is [min_rt, duration)."
+find = '''    if (rt < 0 && rt < c->min_rt_ns) return YRSP_E_EARLY;'''
+replace = '''    if (rt < 0 && rt <= c->min_rt_ns) return YRSP_E_EARLY;'''
+
+[[mutant]]
+id = "v8-04"
+name = "a window's bounds outlive the arm"
+test = "response"
+why = "F2: yrsp_set_window() lasts one window; the next arm() goes back to the desc's."
+find = '''    c->min_rt_ns = c->d.min_rt_ns;     /* yrsp_set_window() lasts one arm */
+    c->duration_ns = c->d.duration_ns;'''
+replace = ''
+
+[[mutant]]
+id = "v8-05"
+name = "set_window does not classify again"
+test = "response"
+why = "F2: a press logged before the window changed takes the new bounds, and can end the window."
+find = '''    c->duration_ns = duration_ns;
+    yrsp__reclassify(c);
+    yrsp__check_end(c);'''
+replace = '''    c->duration_ns = duration_ns;'''
+
+[[mutant]]
+id = "v8-06"
+name = "set_window takes a minimum past the deadline"
+test = "response"
+why = "F2: the same rule as yrsp_open(): a minimum at or past the deadline leaves no time."
+find = '''        (duration_ns > 0 && min_rt_ns >= duration_ns))'''
+replace = '''        0)'''
+
+[[mutant]]
+id = "v8-07"
+name = "open takes any negative minimum"
+test = "response"
+why = "F1: -1e6 s bounds the minimum so that onset + min_rt_ns cannot overflow."
+find = '''static bool yrsp__min_rt_ok(int64_t ns) { return ns >= -YRT_S(1e6) && ns <= YRT_S(1e6); }'''
+replace = '''static bool yrsp__min_rt_ok(int64_t ns) { return ns <= YRT_S(1e6); }'''
+
+[[mutant]]
+id = "v8-08"
+name = "onset_now hides a plan"
+test = "response"
+why = "F4: the plan is the onset until the flip record comes; a caller that waits for a final onset reads o.final."
+find = '''    if (!c || !c->ok || !c->armed || !c->have_onset || !out) return false;'''
+replace = '''    if (!c || !c->ok || !c->armed || !c->have_onset || !out || !c->onset.final) return false;'''
+
+[[mutant]]
+id = "v8-09"
+name = "set_origin keeps the old point"
+test = "response"
+why = "F5: the DISTANCE reference is the point given, not where the channel was."
+find = '''        ch->rx = x;'''
+replace = '''        ch->rx = ch->x;'''
+
+[[mutant]]
+id = "v8-10"
+name = "cursor sums floats"
+test = "response"
+why = "B2: placing again at every sample is the v0.7 float sum; at gain 0.1 it leaves the count grid."
+find = '''    if (*x != yrsp__cursor_at(*o, g, *n)) { *o = *x; *n = 0; }'''
+replace = '''    { *o = *x; *n = 0; }'''
+
+[[mutant]]
+id = "v8-11"
+name = "cursor clamps off the grid"
+test = "response"
+why = "B2: the clamp holds the count sum, so the edge is a grid point and a move back leaves it at once."
+find = '''    if (p > w) {'''
+replace = '''    if (0) {'''
+
+[[mutant]]
+id = "v8-12"
+name = "cursor ignores a placement"
+test = "response"
+why = "B2: setting x and y places the cursor; the counts start again from there."
+find = '''    if (*x != yrsp__cursor_at(*o, g, *n)) { *o = *x; *n = 0; }'''
+replace = ''
+
+[[mutant]]
+id = "v8-13"
+name = "data_set sets the caller's column"
+test = "response"
+why = "B3: a column bound to the caller's row with one of the names is the caller's; setting it fails and the row is lost."
+find = ''' && w->col[col].offset == YTR_UNBOUND) {'''
+replace = ''') {'''

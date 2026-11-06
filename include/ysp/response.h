@@ -1,4 +1,4 @@
-/* ysp/response.h - v0.7.0 - public domain single-header response collector
+/* ysp/response.h - v0.8.0 - public domain single-header response collector
  *
  *   Turns timestamped input events from any device into the response of a
  *   trial: which key or button, when, measured from the stimulus onset that
@@ -127,11 +127,21 @@
  *   yrsp_arm(t) starts a window: presses from then on are logged.
  *   yrsp_set_onset() gives the onset that RT is measured from. For each
  *   press, rt = t - onset, and the press is
- *     EARLY         rt < 0, or no onset yet
+ *     EARLY         rt < 0 and rt < min_rt_ns, or no onset yet
  *     ANTICIPATION  0 <= rt < min_rt_ns (jsPsych's minimum_valid_rt)
  *     on time       min_rt_ns <= rt < duration_ns (no upper bound when
  *                   duration_ns is 0)
  *     LATE          rt >= duration_ns
+ *   A negative min_rt_ns (v0.8) makes presses before the onset valid, with
+ *   a negative rt: a forced-response (timed-response) task, where a
+ *   response before the stimulus is data. Presses before onset +
+ *   min_rt_ns are EARLY. A press that arrives before any onset is EARLY
+ *   until an onset comes; give the plan before the stimulus lands (THE
+ *   ONSET) to classify it on arrival.
+ *   yrsp_set_window(c, min_rt_ns, duration_ns) (v0.8) sets both for this
+ *   window only, after yrsp_arm(); the next arm() goes back to the desc's.
+ *   One collector then serves blocks or trials with different deadlines
+ *   (HELD KEYS says why one is better than two).
  *   An on-time press of a choice is VALID: a response. EARLY, ANTICIPATION
  *   and LATE presses are logged and counted, never dropped, and never end
  *   the window. jsPsych drops a press before minimum_valid_rt; ysp keeps
@@ -178,7 +188,15 @@
  *   The first plan since arm() is kept apart: result.plan_residual is its
  *   residual (a timeline event's landing residual), after the final onset
  *   replaced it. A later plan (a never-shown frame's record) does not
- *   replace it.
+ *   replace it. A plan can come before the stimulus lands: the schedule's
+ *   time, src PLAN, frame -1. Presses are then classified on arrival (a
+ *   negative min_rt_ns needs it to end the window at a press before the
+ *   landing); the landing's plan and the flip record refine it, but that
+ *   early plan is the first plan, so plan_residual is its residual (0).
+ *   yrsp_onset_now(c, &o) (v0.8) reads the onset as it is now, plan or
+ *   final (o.final), while armed: a scripted participant or a gaze check
+ *   that acts on the stimulus's onset needs no copy of the flip record.
+ *   It returns false before an onset comes.
  *
  *   ---------------------------------------------------------------------
  *   THE FRAME LOOP (v0.4)
@@ -206,6 +224,16 @@
  *   record is the stimulus's onset with the lateness in its residual
  *   (onset_residual) and the drops in the record. A frame never shown
  *   (SKIPPED) leaves the onset a plan: the row says ONSET_PLAN.
+ *   The order in a frame: yscr_begin(), the input (yrsp_feed_screen()),
+ *   yrsp_update_frame(), then ytl_evaluate() and yrsp_set_landing(). A
+ *   program that ends a trial on an early press (an EARLY entry of a
+ *   choice: a press before the target) checks yrsp_entries() before
+ *   ytl_evaluate(). In the frame where the target lands, ytl_evaluate()
+ *   has already put the target in this frame's values: a check after it
+ *   shows the target for a frame on a trial that it aborts. Before it,
+ *   the class is the same: a press polled in that frame is before the
+ *   frame's onset, EARLY before and after the landing (with min_rt_ns >=
+ *   0).
  *
  *   ---------------------------------------------------------------------
  *   DATA (v0.4)
@@ -230,7 +258,10 @@
  *     n_anticipations, n_early
  *   The onset's source, tier and residual are in every row, so a row whose
  *   RT came from a plan says so. A file that wants fewer declares them by
- *   name with YTR_COL_SET; yrsp_data_set() finds the columns by name.
+ *   name with YTR_COL_SET; yrsp_data_set() finds the columns by name. A
+ *   column of the caller's row struct with one of these names (an rt_ns
+ *   field is column rt_s) is the caller's: yrsp_data_set() skips it (v0.8;
+ *   before, the call failed and the row was lost).
  *
  *   ---------------------------------------------------------------------
  *   RESPONSE TRIGGERS (v0.7)
@@ -254,9 +285,11 @@
  *   close it: a press stamped before the deadline still counts here, so
  *   its code still goes. The rule fires for each press it sees as a
  *   response, at most max_fires per arm (set it from persist and
- *   max_responses). What it cannot see: a press it took for a response
- *   that a later final onset reclassifies (a frame shown late), and the
- *   earliest-stamp rule when two devices' presses arrive out of order.
+ *   max_responses). After yrsp_set_window(), call yrsp_rule_window(): the
+ *   rule keeps the bounds it last got. What it cannot see: a press it
+ *   took for a response that a later final onset reclassifies (a frame
+ *   shown late), and the earliest-stamp rule when two devices' presses
+ *   arrive out of order.
  *   CODES SENT records those in the trial's row:
  *     yrsp_rule_sent(r, c)                      before yrsp_finish(): the
  *         rule's fires of this arm (ydev_rule_fires()) become the
@@ -330,8 +363,8 @@
  *   ---------------------------------------------------------------------
  *   MICE (yrsp_from_mouse, yrsp_cursor)
  *   ---------------------------------------------------------------------
- *   With ysp/screen.h's desc.raw_mice (v0.3.5, Windows), each report of
- *   yscr_poll_mouse() becomes inputs of YRSP_KIND_MOUSE with the
+ *   With ysp/screen.h's desc.raw_mice (Windows, macOS, Linux X11), each
+ *   report of yscr_poll_mouse() becomes inputs of YRSP_KIND_MOUSE with the
  *   mouse's device id: presses and releases (buttons 1 left, 2 middle, 3
  *   right, 4 and 5 the side buttons), a YRSP_AXIS_DELTA sample (x, y in
  *   counts, unaccelerated), a YRSP_AXIS_ABSOLUTE sample for a tablet or
@@ -345,12 +378,28 @@
  *   reads positions) or a crossing on the cursor's position. yrsp_cursor
  *   is one participant's cursor: gain pixels per count, clamped to an
  *   area, no acceleration, so the gain goes in the data file.
+ *   yrsp_cursor integrates the hand: the position is where the cursor was
+ *   placed plus gain x the sum of the counts since then (v0.8: an int64
+ *   sum per axis, so the position stays on the count grid at any gain; a
+ *   float sum drifted 0.033 px off it in 160 reaches at gain 0.1). Place
+ *   it by setting x and y; the next sample moves from there. The clamp
+ *   holds the count sum inside the area, so the cursor stops on the last
+ *   grid point inside it and a move back leaves the edge at once. A
+ *   mapping from hand to drawn cursor (a visuomotor rotation, a mirror, a
+ *   gain change mid-trial) is the caller's, applied after
+ *   yrsp_cursor_feed(); the clamp bounds the hand, not what is drawn.
  *
  *   ---------------------------------------------------------------------
  *   HELD KEYS (desc.allow_held_key)
  *   ---------------------------------------------------------------------
  *   The collector tracks which keys and buttons are down from every event
- *   fed, armed or not, so feed events between windows too. jsPsych's rule
+ *   fed, armed or not, so feed events between windows too. That state is
+ *   the collector's own: EVERY COLLECTOR MUST SEE EVERY EVENT. A key
+ *   released while another collector was fed stays down in the first, and
+ *   its next press there is HELD: never a response, and a trial that waits
+ *   for one hangs. yrsp_feed_screen() feeds every collector it is given.
+ *   One collector with yrsp_set_window() per arm replaces one collector
+ *   per deadline. jsPsych's rule
  *   (KeyboardListenerAPI.ts, getKeyboardResponse): with allow_held_key
  *   false, a keydown of a key already down (seen down, no keyup since) is
  *   not a response, so a key held from before the window and its OS
@@ -390,7 +439,10 @@
  *     FALLING   a sample <= level while armed; armed again above level +
  *               hysteresis
  *     DISTANCE  (x, y) at a distance >= level from where the channel was
- *               at arm() (or its first sample after arm()): movement onset
+ *               at arm() (or its first sample after arm()): movement onset.
+ *               yrsp_set_origin(c, choice, x, y) (v0.8) sets that point
+ *               for this window (choice -1: every DISTANCE choice): the
+ *               start circle's center, not wherever the last sample was
  *   A channel starts armed (at rest). A channel past its level at arm() is
  *   held: no crossing until it re-arms, whatever allow_held_key says, and
  *   HELD_AT_OPEN is set. No interpolation between samples: SDL sends an
@@ -437,8 +489,8 @@
  *   thread goes from the reader through a ysp/device.h rule (RESPONSE
  *   TRIGGERS).
  *   Errors: yrsp_open() clears the message, and a failed open leaves one.
- *   Every other call that returns an error code (set_onset, feed, update,
- *   finish) writes the message before it returns ("ysp_response:
+ *   Every other call that returns an error code (set_onset, set_window,
+ *   set_origin, feed, update, finish) writes the message before it returns ("ysp_response:
  *   yrsp_feed: bad argument"), on the failure path only. yrsp_close()
  *   marks the collector closed (it owns nothing) and keeps the message;
  *   it is safe on a zeroed collector, after a failed open, and twice.
@@ -474,6 +526,22 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.8.0 - From four task examples (docs/examples_findings.md). A
+ *          negative desc.min_rt_ns makes presses before the onset valid,
+ *          with a negative rt (a forced-response task); EARLY is now rt <
+ *          0 and rt < min_rt_ns. yrsp_set_window(): this window's min_rt_ns
+ *          and duration_ns, so one collector serves several deadlines.
+ *          yrsp_onset_now(): the onset while armed. yrsp_set_origin(): a
+ *          DISTANCE choice's reference point for this window. Fixes:
+ *          YRSP_R_TIMEOUT only when the deadline ended the window (an
+ *          aborted trial with no onset got TIMEOUT | NO_ONSET);
+ *          yrsp_cursor sums int64 counts per axis, so its position stays
+ *          on the count grid at any gain (the struct grew 24 bytes);
+ *          yrsp_data_set() skips a column of the caller's row struct with
+ *          one of its names (it failed, and the row was lost). HELD KEYS:
+ *          every collector must see every event. THE FRAME LOOP: the
+ *          early-press check goes before ytl_evaluate(). The collector's
+ *          layout is unchanged.
  *   v0.7.0 - RESPONSE TRIGGERS: yrsp_rule_choices(), yrsp_rule_arm(),
  *          yrsp_rule_window() and yrsp_rule_sent(), inline where
  *          ysp/device.h came first (or with this header included again
@@ -546,6 +614,15 @@
  *          releases, the trace, the result and its CSV row, the SDL3
  *          adapter.
  *
+ *   STATUS: v0.8.0, 2026-11-06, Linux desktop (Debian 12, GCC 12.2): the
+ *   test (21,230 checks) and the compile checks (C99, C11, C++17) pass;
+ *   v8-01 to v8-13 caught, and w-03, w-12, o-04, ms-02 on the new code.
+ *   The CI --sim runs of every example that includes this header pass;
+ *   their data files match v0.7.0's but for the version line, the early
+ *   trials' rsp_flags in trial_posner (16, was 18: no TIMEOUT) and
+ *   trial_visuomotor's new defaults. trial_visuomotor --sim passes at
+ *   gains 0.1, 0.3, 0.5 and 1 (v0.7.0 needed a power of 2). Not run: MSVC,
+ *   MinGW, macOS, a window run.
  *   STATUS: v0.7.0, 2026-10-21: CODES SENT checked in the test (21,119
  *   checks: agreeing, each disagreement, persist, ALL mode, arguments);
  *   the rule glue in tests/adapt/device_test.c (which includes this
@@ -594,9 +671,9 @@
 #define YSP_RESPONSE_H_INCLUDED
 
 #define YRSP_VERSION_MAJOR 0
-#define YRSP_VERSION_MINOR 7
+#define YRSP_VERSION_MINOR 8
 #define YRSP_VERSION_PATCH 0
-#define YRSP_VERSION_STRING "0.7.0"
+#define YRSP_VERSION_STRING "0.8.0"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -691,25 +768,64 @@ typedef yin_source yrsp_source;
 /* One participant's cursor from one mouse's raw movement: each DELTA
  * sample of `device` (0 = any) moves it by gain pixels per count, clamped
  * to [0, w] x [0, h]. No acceleration: the gain is the design's, stated in
- * the data. Absolute devices (ABSOLUTE samples) are not integrated. */
+ * the data. Absolute devices (ABSOLUTE samples) are not integrated. The
+ * position is the placed point plus gain x the count sum (MICE): set x
+ * and y to place it. A rotation or other mapping is the caller's. */
 typedef struct yrsp_cursor {
     uint32_t device;
     float    gain;             /* pixels per count; 0 = 1                  */
     float    w, h;             /* the area, pixels                         */
-    float    x, y;             /* the position, start it where it belongs  */
+    float    x, y;             /* the position; set both to place it       */
+    float    ox_, oy_;         /* v0.8, private: where it was placed       */
+    int64_t  nx_, ny_;         /* v0.8, private: counts since then         */
 } yrsp_cursor;
+
+/* The position n counts from o, rounded to float once: the same count
+ * gives the same position however the counts came. */
+static inline float yrsp__cursor_at(float o, double g, int64_t n) { return (float)((double)o + g * (double)n); }
+
+/* A count near q, in int64 range; the callers step it to the edge. */
+static inline int64_t yrsp__cursor_k(double q) {
+    return q > 4e18 ? (int64_t)4e18 : q < -4e18 ? -(int64_t)4e18 : (int64_t)q;
+}
+
+/* One axis: d more counts, the sum held inside [0, w] (the last grid
+ * point inside, so a move back leaves the edge at once). */
+static inline void yrsp__cursor_axis(float* x, float* o, int64_t* n, double g, float w, int64_t d) {
+    int64_t k;
+    int i;
+    float p;
+    /* a position this cursor did not compute was set by the caller: a new
+     * origin (also after the gain changed) */
+    if (*x != yrsp__cursor_at(*o, g, *n)) { *o = *x; *n = 0; }
+    *n += d;
+    p = yrsp__cursor_at(*o, g, *n);
+    if (p > w) {
+        k = yrsp__cursor_k(((double)w - *o) / g);
+        for (i = 0; i < 4 && yrsp__cursor_at(*o, g, k) > w; i++) k--;
+        for (i = 0; i < 4 && yrsp__cursor_at(*o, g, k + 1) <= w; i++) k++;
+        *n = k;
+    }
+    if (yrsp__cursor_at(*o, g, *n) < 0) {
+        k = yrsp__cursor_k(-(double)*o / g);
+        for (i = 0; i < 4 && yrsp__cursor_at(*o, g, k) < 0; i++) k++;
+        for (i = 0; i < 4 && yrsp__cursor_at(*o, g, k - 1) >= 0; i++) k--;
+        *n = k;
+    }
+    p = yrsp__cursor_at(*o, g, *n);
+    /* an area narrower than a count: off the grid, placed again next time */
+    *x = p < 0 ? 0 : p > w ? w : p;
+}
 
 /* Returns 1 when the sample moved this cursor. */
 static inline int yrsp_cursor_feed(yrsp_cursor* c, const yrsp_input* in) {
-    float g = c->gain > 0 ? c->gain : 1.0f;
+    double g = c->gain > 0 ? (double)c->gain : 1.0;
     if (in->kind != YRSP_KIND_MOUSE || in->type != YRSP_SAMPLE || in->control != YRSP_AXIS_DELTA) return 0;
     if (c->device && in->device != c->device) return 0;
-    c->x += g * in->x;
-    c->y += g * in->y;
-    if (c->x < 0) c->x = 0;
-    if (c->x > c->w) c->x = c->w;
-    if (c->y < 0) c->y = 0;
-    if (c->y > c->h) c->y = c->h;
+    /* raw counts are whole; NaN or a count no mouse sends is not a move */
+    if (!(in->x > -1e9f && in->x < 1e9f && in->y > -1e9f && in->y < 1e9f)) return 0;
+    yrsp__cursor_axis(&c->x, &c->ox_, &c->nx_, g, c->w, (int64_t)(in->x < 0 ? in->x - 0.5f : in->x + 0.5f));
+    yrsp__cursor_axis(&c->y, &c->oy_, &c->ny_, g, c->h, (int64_t)(in->y < 0 ? in->y - 0.5f : in->y + 0.5f));
     return 1;
 }
 
@@ -759,8 +875,11 @@ typedef struct yrsp_desc {
                                      * YRSP_KINDS_ALL = every kind but
                                      * SYNC                                */
     int64_t   min_rt_ns;            /* jsPsych's minimum_valid_rt; earlier
-                                     * is ANTICIPATION, logged; >= 0       */
-    int64_t   duration_ns;          /* from the onset; 0 = no deadline     */
+                                     * is ANTICIPATION, logged. v0.8: < 0
+                                     * makes presses before the onset
+                                     * valid (THE WINDOW AND RT)           */
+    int64_t   duration_ns;          /* from the onset; 0 = no deadline.
+                                     * Both: yrsp_set_window() per arm     */
     bool      persist;              /* the first response does not end it  */
     int       max_responses;        /* with persist: end after this many;
                                      * 0 = never                           */
@@ -826,7 +945,7 @@ typedef struct yrsp_entry {
 
 /* Result flags */
 #define YRSP_R_RESPONDED    0x0001u
-#define YRSP_R_TIMEOUT      0x0002u /* a deadline, no response           */
+#define YRSP_R_TIMEOUT      0x0002u /* the deadline ended it, no response */
 #define YRSP_R_ENDED_EARLY  0x0004u /* ended on a press that no longer counts */
 #define YRSP_R_ONSET_PLAN   0x0008u /* RT from a plan, no final onset    */
 #define YRSP_R_NO_ONSET     0x0010u /* no onset: no RT                   */
@@ -930,6 +1049,24 @@ YRSP_API void yrsp_arm(yrsp_collector* c, int64_t t_ns);
 /* Sets or refines the onset and classifies every entry again. A plan
  * (final 0) does not replace a final onset. Returns the status. */
 YRSP_API int  yrsp_set_onset(yrsp_collector* c, const yrsp_onset* o);
+
+/* v0.8: this window's min_rt_ns and duration_ns (the desc's rules for
+ * them), until the next yrsp_arm(), which goes back to the desc's. Call it
+ * after yrsp_arm(); it classifies every entry again, as set_onset() does.
+ * Returns the status, YRSP_ERR_ARG for a value yrsp_open() would refuse,
+ * or YRSP_ERR_STATE when the collector is not open or not armed. */
+YRSP_API int  yrsp_set_window(yrsp_collector* c, int64_t min_rt_ns, int64_t duration_ns);
+
+/* v0.8: the onset as it is now (a plan, or final: out->final) into *out.
+ * false when not armed or no onset came since the arm. */
+YRSP_API bool yrsp_onset_now(const yrsp_collector* c, yrsp_onset* out);
+
+/* v0.8: the point a DISTANCE choice measures from in this window (choice
+ * -1: every DISTANCE choice), in place of where its channel was at arm().
+ * Call it after yrsp_arm(). Returns 0, YRSP_ERR_ARG for a choice that is no
+ * DISTANCE choice or a coordinate that is not finite, or YRSP_ERR_STATE
+ * when the collector is not open or not armed. */
+YRSP_API int  yrsp_set_origin(yrsp_collector* c, int choice, float x, float y);
 
 /* One input, armed or not. Returns the status, or YRSP_ERR_ARG for a
  * type or kind out of range. */
@@ -1109,14 +1246,20 @@ static inline int yrsp_set_landing(yrsp_collector* c, const ytl_event* fired, in
 
 /* Sets, for the next ytr_data_write(), each YRSP_DATA_COLS column that
  * the file has (found by name, so a file may declare some of them with
- * YTR_COL_SET). Call it between trials. Returns the columns set, or the
- * first negative code (ytr_data_error() set). */
+ * YTR_COL_SET). A column of that name bound to the caller's row struct is
+ * the caller's and is skipped (v0.8). Call it between trials. Returns the
+ * columns set, or the first negative code (ytr_data_error() set). */
 static inline int yrsp_data_set(ytr_data* w, const yrsp_result* r) {
     int n = 0, rc = 0, col;
     bool on = r && r->t_onset != 0;
     if (!r) return YTR_ERR_ARG;
+    /* ysp/trials.h has no call that says whether a column is set per row;
+     * its column record holds YTR_UNBOUND for one, as YTR_COL_SET writes */
 #define YRSP__DSET(name, call) \
-    if (rc >= 0 && (col = ytr_data_col(w, name)) >= 0) { rc = call; if (rc >= 0) n++; }
+    if (rc >= 0 && (col = ytr_data_col(w, name)) >= 0 && w->col[col].offset == YTR_UNBOUND) { \
+        rc = call;                                                                            \
+        if (rc >= 0) n++;                                                                     \
+    }
     YRSP__DSET("response", ytr_data_set_string(w, col, r->response_name))
     YRSP__DSET("rt_s", ytr_data_set_time_ns(w, col, r->rt_ns))
     YRSP__DSET("rt_key_duration_s", ytr_data_set_time_ns(w, col, r->rt_key_duration_ns))
@@ -1336,8 +1479,8 @@ YRSP_API const yrsp_param* yrsp_params(int* n) {
           "all=0,list=1,none=2" },
         { "kinds", "u16", 0, 65535, 1, "", "all mode: bits 1 << yin_kind; 0 = the keyboard only; 65535 = all but sync",
           NULL },
-        { "min_rt_ns", "i64", 0, 1e15, 0, "ns", "earlier from the onset is an anticipation, logged (minimum_valid_rt)",
-          NULL },
+        { "min_rt_ns", "i64", -1e15, 1e15, 0, "ns",
+          "earlier from the onset is an anticipation, logged (minimum_valid_rt); < 0: valid before the onset", NULL },
         { "duration_ns", "i64", 0, 1e15, 0, "ns", "the deadline from the onset; 0 = none (trial_duration)", NULL },
         { "persist", "bool", 0, 1, 0, "", "a response does not end the window (response_ends_trial false)", NULL },
         { "max_responses", "i32", 0, 2147483647.0, 0, "", "with persist: end after this many; 0 = never", NULL },
@@ -1373,6 +1516,10 @@ static bool yrsp__dur(yrsp_collector* c, const char* what, int64_t ns, int64_t* 
     *out = ns;
     return true;
 }
+
+/* min_rt_ns may be negative (v0.8): valid presses before the onset. The
+ * same bound keeps onset + min_rt_ns from overflowing. */
+static bool yrsp__min_rt_ok(int64_t ns) { return ns >= -YRT_S(1e6) && ns <= YRT_S(1e6); }
 
 YRSP_API bool yrsp_open(yrsp_collector* c, const yrsp_desc* d) {
     int i;
@@ -1447,8 +1594,10 @@ YRSP_API bool yrsp_open(yrsp_collector* c, const yrsp_desc* d) {
     if (d->trace_cap < 0 || (d->trace_cap > 0 && !d->trace))
         return yrsp__fail(c, "ysp_response: trace_cap %d with %s trace", d->trace_cap, d->trace ? "a" : "a NULL");
     if (d->max_responses < 0) return yrsp__fail(c, "ysp_response: max_responses %d < 0", d->max_responses);
-    if (!yrsp__dur(c, "min_rt_ns", d->min_rt_ns, &c->min_rt_ns) ||
-        !yrsp__dur(c, "duration_ns", d->duration_ns, &c->duration_ns) ||
+    if (!yrsp__min_rt_ok(d->min_rt_ns))
+        return yrsp__fail(c, "ysp_response: desc.min_rt_ns %.9g s is outside -1e6..1e6 s", YRT_TO_S(d->min_rt_ns));
+    c->min_rt_ns = d->min_rt_ns;
+    if (!yrsp__dur(c, "duration_ns", d->duration_ns, &c->duration_ns) ||
         !yrsp__dur(c, "max_hold_ns", d->max_hold_ns, &c->max_hold_ns))
         return false;
     if (c->duration_ns > 0 && c->min_rt_ns >= c->duration_ns)
@@ -1525,7 +1674,8 @@ static uint16_t yrsp__time_class(const yrsp_collector* c, int64_t t) {
     int64_t rt;
     if (!c->have_onset) return YRSP_E_EARLY;
     rt = t - c->onset.t_ns;
-    if (rt < 0) return YRSP_E_EARLY;
+    /* a negative minimum makes [min_rt, 0) valid: a forced response */
+    if (rt < 0 && rt < c->min_rt_ns) return YRSP_E_EARLY;
     if (rt < c->min_rt_ns) return YRSP_E_ANTICIPATION;
     if (c->duration_ns > 0 && rt >= c->duration_ns) return YRSP_E_LATE;
     return 0;
@@ -1732,6 +1882,8 @@ YRSP_API void yrsp_arm(yrsp_collector* c, int64_t t_ns) {
     memset(&c->plan, 0, sizeof c->plan);
     c->t_arm = t_ns;
     c->t_end = 0;
+    c->min_rt_ns = c->d.min_rt_ns;     /* yrsp_set_window() lasts one arm */
+    c->duration_ns = c->d.duration_ns;
     c->status = YRSP_OPEN;
     c->ended_by = 0;
     c->end_entry = -1;
@@ -1780,6 +1932,49 @@ YRSP_API int yrsp_set_onset(yrsp_collector* c, const yrsp_onset* o) {
     yrsp__reclassify(c);
     yrsp__check_end(c);
     return c->status;
+}
+
+YRSP_API int yrsp_set_window(yrsp_collector* c, int64_t min_rt_ns, int64_t duration_ns) {
+    if (!c || !c->ok) return yrsp__err(c, YRSP_ERR_STATE, "yrsp_set_window");
+    if (!c->armed) {
+        snprintf(c->error, sizeof c->error, "ysp_response: yrsp_set_window: not armed (call it after yrsp_arm())");
+        return YRSP_ERR_STATE;
+    }
+    if (!yrsp__min_rt_ok(min_rt_ns) || duration_ns < 0 || duration_ns > YRT_S(1e6) ||
+        (duration_ns > 0 && min_rt_ns >= duration_ns))
+        return yrsp__err(c, YRSP_ERR_ARG, "yrsp_set_window");
+    c->min_rt_ns = min_rt_ns;
+    c->duration_ns = duration_ns;
+    yrsp__reclassify(c);
+    yrsp__check_end(c);
+    return c->status;
+}
+
+YRSP_API bool yrsp_onset_now(const yrsp_collector* c, yrsp_onset* out) {
+    if (!c || !c->ok || !c->armed || !c->have_onset || !out) return false;
+    *out = c->onset;
+    return true;
+}
+
+YRSP_API int yrsp_set_origin(yrsp_collector* c, int choice, float x, float y) {
+    int i, n = 0;
+    if (!c || !c->ok) return yrsp__err(c, YRSP_ERR_STATE, "yrsp_set_origin");
+    if (!c->armed) {
+        snprintf(c->error, sizeof c->error, "ysp_response: yrsp_set_origin: not armed (call it after yrsp_arm())");
+        return YRSP_ERR_STATE;
+    }
+    if (choice < -1 || choice >= c->d.n_choices || !yrsp__finite(x) || !yrsp__finite(y) ||
+        (choice >= 0 && c->ch[choice].cross != YRSP_CROSS_DISTANCE))
+        return yrsp__err(c, YRSP_ERR_ARG, "yrsp_set_origin");
+    for (i = 0; i < c->d.n_choices; i++) {
+        yrsp__chan* ch = &c->chan[i];
+        if (c->ch[i].cross != YRSP_CROSS_DISTANCE || (choice >= 0 && i != choice)) continue;
+        ch->rx = x;
+        ch->ry = y;
+        ch->has_ref = 1;
+        n++;
+    }
+    return n ? 0 : yrsp__err(c, YRSP_ERR_ARG, "yrsp_set_origin");   /* -1 with no DISTANCE choice */
 }
 
 YRSP_API int yrsp_feed(yrsp_collector* c, const yrsp_input* in) {
@@ -1930,7 +2125,8 @@ YRSP_API int yrsp_finish(yrsp_collector* c, yrsp_result* r) {
             r->stamp_lo_ns = s->lo_ns;
             r->stamp_hi_ns = s->hi_ns;
         }
-    } else if (c->duration_ns > 0) {
+    } else if (c->ended_by == 2) {
+        /* the deadline ran out; not a window aborted before it */
         r->flags |= YRSP_R_TIMEOUT;
     }
     if (c->have_sent && yrsp__sent_mismatch(c, r, best)) r->flags |= YRSP_R_SENT_MISMATCH;

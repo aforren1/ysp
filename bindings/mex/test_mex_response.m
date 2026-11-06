@@ -162,6 +162,26 @@ function test_mex_response()
 
     % errors carry their id
     expect_error('ysp_response:arg', @() ysp_response('arm', h, -1));
+    % v0.8: a negative min_rt, one window's own bounds, TIMEOUT from the deadline only
+    g = ysp_response('open', struct('choices', {{'f', 'j'}}, 'min_rt', -0.3));
+    ysp_response('arm', g, 0);
+    ysp_response('set_onset', g, 0.5);
+    check(ysp_response('key', g, 0.3, 'j') == K.ENDED, 'a press before the onset is a response');
+    r8 = ysp_response('finish', g);
+    check(r8.rt_ns == int64(-200000000) && abs(r8.rt + 0.2) < 1e-12, 'negative rt');
+    ysp_response('arm', g, 1);
+    check(ysp_response('set_window', g, -0.1, 0.5) == K.OPEN, 'set_window');
+    ysp_response('set_onset', g, 1);
+    check(ysp_response('update', g, 1.5) == K.ENDED, 'the window''s deadline');
+    r8 = ysp_response('finish', g);
+    check(bitand(r8.flags, K.R_TIMEOUT) ~= 0, 'timeout');
+    ysp_response('arm', g, 2);
+    ysp_response('set_onset', g, 2);
+    check(ysp_response('update', g, 1e5) == K.OPEN, 'the next arm has the desc''s window');
+    r8 = ysp_response('finish', g);
+    check(bitand(r8.flags, K.R_TIMEOUT) == 0, 'no deadline ran: no timeout');
+    expect_error('ysp_response:arg', @() ysp_response('set_window', g, 0.5, 0.5));
+    ysp_response('close', g);
     expect_error('ysp_response:arg', @() ysp_response('set_onset', h, NaN));
     expect_error('ysp_response:arg', @() ysp_response('key', h, 1, 'nokey'));
     expect_error('ysp_response:arg', @() ysp_response('feed', h, struct('t', 1, 'type', 0)));

@@ -1451,7 +1451,8 @@ a choice `struct('name', 'left', 'control', KbName('f'))` and events whose
 the header's choice fields `key`, `name`, `kind`, `match`, `cross`,
 `device`, `control`, `code`, `level`, `hysteresis`), `mode` (`'all'`,
 `'list'`, `'none'`), `kinds` (a mask, `'all'`, or a cell of kinds),
-`min_rt`, `duration` (`Inf`: no deadline), `persist`, `max_responses`,
+`min_rt` (v0.8: negative makes presses before the onset responses, with
+a negative `rt`), `duration` (`Inf`: no deadline), `persist`, `max_responses`,
 `allow_held_key`, `wait_for_key_release`, `max_hold`, `sources` (a struct
 array: `kind`, `device`, `tier`, `partial`, `lo`, `hi`, `note`),
 `trace_cap`, `trace_kinds`. An enum takes its name or its number. An
@@ -1475,7 +1476,8 @@ them in place.
 | `st = ysp_response('set_onset', h, t, [opts])` | `opts`: `final` (default true), `src` (`'flip'`, `'audio'`, `'plan'`, `'other'`), `tier`, `residual`, `uncertainty`, `frame`. `t` may be an int64 ns |
 | `st = ysp_response('feed', h, events)` | Input events, in order |
 | `st = ysp_response('key', h, t, key, [down], [device])` | One keyboard event; `key` is a name or a scancode |
-| `st = ysp_response('update', h, now)` | The deadline; 0 idle, 1 open, 2 ended |
+| `st = ysp_response('set_window', h, min_rt, duration)` | This window's `min_rt` and `duration` (`Inf`: none), after `arm`; the next `arm` goes back to the desc's (1.1.0) |
+| `st = ysp_response('update', h, now)` | The deadline; 0 idle, 1 open, 2 ended. `R_TIMEOUT` only when the deadline ended the window (ysp/response.h v0.8) |
 | `[r, row] = ysp_response('finish', h)` | The result and its data columns (`YRSP_DATA_COLS`, NaN or `''` for an empty field) |
 | `[r, row] = ysp_response('score', h, events, onset, [opts])` | Offline: one logged trial. `opts` also takes `arm` (default: the onset) and `end`. Events stamped before `arm` at the start are fed before the arm |
 | `e = ysp_response('entries', h)` | Every press of the window |
@@ -1487,7 +1489,7 @@ them in place.
 | `ev = ysp_response('event', s)` | A full event struct from some of its fields (type PRESS by default) |
 | `ysp_response('scancode', name)`, `ysp_response('key_name', sc)` | Key names |
 | `K = ysp_response('constants')` | `KIND_*`, `PRESS`, `TIER_*`, `E_*`, `R_*` and the others |
-| `[v, vh] = ysp_response('version')` | the MEX function's version (1.0.0) and ysp/response.h's |
+| `[v, vh] = ysp_response('version')` | the MEX function's version (1.1.0) and ysp/response.h's |
 
 The result's `choice` and `entry`, and an entry's `choice`, are 1-based,
 0 for none. A missing time is `NaN` in seconds and `intmin('int64')`

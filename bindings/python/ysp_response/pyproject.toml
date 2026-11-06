@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ysp-response"
-version = "0.7.0.1"  # ysp/response.h v0.7.0, binding change 1 (the CPython 3.10 floor); tests/test_response.py checks it against __version__
+version = "0.8.0"  # ysp/response.h v0.8.0 (0.7.0.1 was v0.7.0 plus binding change 1, the CPython 3.10 floor); tests/test_response.py checks it against __version__
 description = "The response of a trial from any input device: choices, the window, RT from the stimulus onset and the timing quality of both"
 readme = "README.md"
 requires-python = ">=3.10"

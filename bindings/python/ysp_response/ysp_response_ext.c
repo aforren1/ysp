@@ -644,11 +644,12 @@ static int coll_kinds(PyObject* o, const char* what, uint16_t* out) {
     }
 }
 
-/* A duration of the desc: None, 0 and math.inf are "none" where allowed. */
-static int coll_dur(PyObject* o, const char* what, int inf_none, int64_t* out) {
+/* A duration of the desc: None, 0 and math.inf (S_INF) are "none" where
+ * allowed; S_NEG for min_rt, which may be negative (ysp/response.h v0.8). */
+static int coll_dur(PyObject* o, const char* what, int flags, int64_t* out) {
     int64_t ns;
     if (!o || o == Py_None) { *out = 0; return 0; }
-    if (rsp_seconds(o, what, inf_none ? S_INF : 0, &ns) < 0) return -1;
+    if (rsp_seconds(o, what, flags, &ns) < 0) return -1;
     *out = ns == INT64_MAX ? 0 : ns;
     return 0;
 }
@@ -691,7 +692,7 @@ static int Coll_init(PyObject* self, PyObject* args, PyObject* kwds) {
     }
     if (kinds != Py_None && coll_kinds(kinds, "kinds", &d.kinds) < 0) return -1;
     if (trace_kinds != Py_None && coll_kinds(trace_kinds, "trace_kinds", &d.trace_kinds) < 0) return -1;
-    if (coll_dur(min_rt, "min_rt", 0, &d.min_rt_ns) < 0 || coll_dur(duration, "duration", 1, &d.duration_ns) < 0 ||
+    if (coll_dur(min_rt, "min_rt", S_NEG, &d.min_rt_ns) < 0 || coll_dur(duration, "duration", S_INF, &d.duration_ns) < 0 ||
         coll_dur(max_hold, "max_hold", 0, &d.max_hold_ns) < 0)
         return -1;
     d.persist = persist != 0;
@@ -848,6 +849,18 @@ static PyObject* Coll_key(PyObject* self, PyObject* args, PyObject* kwds) {
     e.stamp = (uint8_t)stamp;
     e.value = down ? 1.0f : 0.0f;
     return coll_status(s, yrsp_feed(&s->c, &e));
+}
+
+/* v0.8: this window's min_rt and duration, until the next arm(). */
+static PyObject* Coll_set_window(PyObject* self, PyObject* args, PyObject* kwds) {
+    static char* kw[] = { "min_rt", "duration", NULL };
+    CollObject* s = (CollObject*)self;
+    PyObject *min_rt = NULL, *duration = Py_None;
+    int64_t lo, dur;
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|O", kw, &min_rt, &duration)) return NULL;
+    if (coll_open(s) < 0 || coll_dur(min_rt, "min_rt", S_NEG, &lo) < 0 || coll_dur(duration, "duration", S_INF, &dur) < 0)
+        return NULL;
+    return coll_status(s, yrsp_set_window(&s->c, lo, dur));
 }
 
 static PyObject* Coll_update(PyObject* self, PyObject* arg) {
@@ -1083,6 +1096,8 @@ static PyMethodDef Coll_methods[] = {
     { "key", KWF(Coll_key),
       "key(t, key, down=True, *, device=0, repeat=False, stamp=0, code=0, t_ns=None) -> status. One keyboard event: "
       "key is a name ('f', 'space', 'left') or a scancode." },
+    { "set_window", KWF(Coll_set_window), "set_window(min_rt, duration=None) -> status. This window's min_rt (s, may be "
+      "negative: valid before the onset) and duration (None or inf: none), until the next arm()." },
     { "update", Coll_update, METH_O, "update(now) -> status. The deadline, and max_hold while waiting for a release." },
     { "finish", Coll_finish, METH_NOARGS, "finish() -> Result. Call it again after a late release, onset or report." },
     { "entries", Coll_entries, METH_NOARGS, "entries() -> tuple of Entry: every press of the window, in arrival order." },
@@ -1258,7 +1273,7 @@ PyMODINIT_FUNC PyInit_response(void) {
     Py_DECREF(base2);
     RspStateError = rsp_add_exc(m, "ysp.response.StateError", "StateError", RspError);
     if (!RspArgumentError || !RspStateError) goto fail;
-    if (PyModule_AddStringConstant(m, "__version__", YRSP_VERSION_STRING ".1") < 0) goto fail;   /* .1: the CPython 3.10 floor (2026-10-27) */
+    if (PyModule_AddStringConstant(m, "__version__", YRSP_VERSION_STRING) < 0) goto fail;   /* no binding change since v0.8.0 */
     if (PyModule_AddStringConstant(m, "INPUT_VERSION", YIN_VERSION_STRING) < 0) goto fail;
 #define C(name, v) if (PyModule_AddIntConstant(m, name, (long)(v)) < 0) goto fail;
     /* ysp/input.h */

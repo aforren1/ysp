@@ -585,7 +585,7 @@ int main(int argc, char** argv) {
         const char* who = sim ? "--sim" : "--auto";
         /* the script's effects to the nanosecond: every RT of a cell is the
          * same. One early press and one false alarm, when their trials ran. */
-        int want_rows = max_trials && max_trials < n_total ? max_trials : n_total, bad = rows != want_rows, nb, rt_c, cor_c, early_c, catch_c, meas_c, tier_c, ctier_c, idx_c, rsp_c, tside_c;
+        int want_rows = max_trials && max_trials < n_total ? max_trials : n_total, bad = rows != want_rows, nb, rt_c, cor_c, early_c, catch_c, meas_c, tier_c, ctier_c, idx_c, rsp_c, tside_c, flags_c;
         double soa_err = 0;
         if (bad) fprintf(stderr, "trial_posner: %s: %d rows, not %d\n", who, rows, want_rows);
         k = n_fa[0] + n_fa[1];
@@ -611,16 +611,25 @@ int main(int argc, char** argv) {
         soa_col = ytb_col(&back, "soa_s"); rt_c = ytb_col(&back, "rt_s"); cor_c = ytb_col(&back, "correct");
         early_c = ytb_col(&back, "early"); catch_c = ytb_col(&back, "catch_trial"); meas_c = ytb_col(&back, "soa_measured_s");
         tier_c = ytb_col(&back, "onset_tier"); ctier_c = ytb_col(&back, "cue_tier"); rsp_c = ytb_col(&back, "response");
-        tside_c = ytb_col(&back, "target_side");
+        tside_c = ytb_col(&back, "target_side"); flags_c = ytb_col(&back, "rsp_flags");
         for (nb = i = 0; i < back.n_rows; i++) {
             int idx = ytb_int(&back, i, idx_c), c = !strcmp(ytb_text(&back, i, cue_col), "endo");
             int v = !strcmp(ytb_text(&back, i, val_col), "valid"), ca = (int)ytb_num(&back, i, catch_c);
             double plan = ytb_num(&back, i, soa_col), rt = ytb_num(&back, i, rt_c), meas = ytb_num(&back, i, meas_c), want;
             int s = plan < 0.2 ? 0 : plan < 0.5 ? 1 : 2, ok, cor = (int)ytb_num(&back, i, cor_c);
-            if (idx == early_trial) { ok = ytb_num(&back, i, early_c) == 1 && cor == 0 && rt != rt && meas != meas; nb += !ok; continue; }
+            int fl = (int)ytb_num(&back, i, flags_c);
+            /* the early trial ended before the target: no onset, no deadline
+             * ran, so no TIMEOUT (ysp/response.h v0.8) */
+            if (idx == early_trial) {
+                ok = ytb_num(&back, i, early_c) == 1 && cor == 0 && rt != rt && meas != meas && fl == YRSP_R_NO_ONSET;
+                if (!ok) fprintf(stderr, "trial_posner: %s: the early trial's row (rsp_flags %d)\n", who, fl);
+                nb += !ok;
+                continue;
+            }
             want = ca ? (idx == fa_trial ? SIM_FA_S : NAN) : sim_rt(c, v, s);
             ok = ytb_num(&back, i, early_c) == 0 && ca == !strcmp(ytb_text(&back, i, val_col), "catch") &&
                  (want == want ? fabs(rt - want) < 0.5e-9 : rt != rt) && cor == (ca ? idx != fa_trial : 1) &&
+                 !(fl & YRSP_R_TIMEOUT) == (want == want) &&   /* the deadline ended every window without a press */
                  (!sim || (ytb_num(&back, i, tier_c) == YSCR_TIER_SIM && ytb_num(&back, i, ctier_c) == YSCR_TIER_SIM));
             if (loc && !ca) ok = ok && !strcmp(ytb_text(&back, i, rsp_c), ytb_text(&back, i, tside_c));
             if (!(fabs(meas - plan) <= soa_err)) soa_err = meas == meas ? fabs(meas - plan) : INFINITY;   /* NaN: missing */

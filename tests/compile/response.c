@@ -25,9 +25,13 @@ typedef struct rsp_api {
     int (*update)(yrsp_collector*, int64_t);
     const yrsp_param* (*params)(int*);   /* v0.6 */
     int (*set_sent)(yrsp_collector*, const yrsp_sent*, int, int);   /* v0.7 */
+    int (*set_window)(yrsp_collector*, int64_t, int64_t);           /* v0.8 */
+    bool (*onset_now)(const yrsp_collector*, yrsp_onset*);           /* v0.8 */
+    int (*set_origin)(yrsp_collector*, int, float, float);           /* v0.8 */
 } rsp_api;
 
-static const rsp_api g_api = { yrsp_open, yrsp_close, yrsp_error, yrsp_arm, yrsp_update, yrsp_params, yrsp_set_sent };
+static const rsp_api g_api = { yrsp_open, yrsp_close, yrsp_error, yrsp_arm, yrsp_update, yrsp_params, yrsp_set_sent,
+                               yrsp_set_window, yrsp_onset_now, yrsp_set_origin };
 
 /* The unit macros are constant expressions. */
 static const int64_t g_window[2] = { YRT_MS(100), YRT_S(1.5) };
@@ -78,6 +82,19 @@ int main(void) {
         if (!ytr_data_open(&w, &dd) || yrsp_data_set(&w, &r2) != YRSP_N_DATA_COLS || ytr_data_write(&w, NULL) != 0) return 1;
         ytr_data_close(&w);
         if (r2.t_onset != 1200 || bytes == 0) return 1;
+    }
+    {   /* v0.8: a window's own bounds, the onset while armed, the cursor */
+        yrsp_onset now;
+        yrsp_cursor cur;
+        memset(&cur, 0, sizeof(cur));
+        g_api.arm(&c, 0);
+        if (g_api.set_window(&c, -YRT_MS(100), YRT_S(1)) != YRSP_OPEN || g_api.onset_now(&c, &now)) return 1;
+        if (yrsp_set_onset(&c, &o) != YRSP_OPEN || !g_api.onset_now(&c, &now) || now.t_ns != 1000) return 1;
+        if (g_api.set_origin(&c, -1, 0, 0) != YRSP_ERR_ARG) return 1;   /* no DISTANCE choice */
+        cur.gain = 0.1f; cur.w = cur.h = 100; cur.x = cur.y = 50;
+        in.kind = YRSP_KIND_MOUSE; in.type = YRSP_SAMPLE; in.control = YRSP_AXIS_DELTA; in.x = 3; in.y = -3;
+        if (!yrsp_cursor_feed(&cur, &in) || cur.nx_ != 3 || cur.ny_ != -3) return 1;
+        in.kind = YRSP_KIND_KEYBOARD; in.type = YRSP_PRESS; in.x = in.y = 0;
     }
     g_api.close(&c);
     if (g_api.update(&c, 0) != YRSP_ERR_STATE) return 1;

@@ -22,7 +22,7 @@ def test_version_matches_pyproject():
     text = open(os.path.join(HERE, "pyproject.toml")).read()
     m = re.search(r'^version = "([^"]+)"', text, re.M)
     assert m and yr.__version__ == m.group(1)
-    assert yr.__version__.startswith(yr.version() + ".")
+    assert yr.__version__ == yr.version() or yr.__version__.startswith(yr.version() + ".")
 
 
 @pytest.mark.skipif(not os.path.exists(HEADER), reason="needs the repository's include/")
@@ -202,6 +202,32 @@ def test_keyboard_trial_rt_from_the_onset():
     assert [x.flags & yr.E_CLASS_MASK for x in e] == [yr.E_EARLY, yr.E_ANTICIPATION, yr.E_ANTICIPATION, yr.E_VALID]
     assert e[3].t_release_ns == 10970000000 and e[3].choice == 1 and e[2].choice is None
     assert c.choices == ("f", "j")
+
+
+def test_negative_min_rt_and_set_window():
+    # v0.8: a forced response before the onset is a response, rt < 0
+    c = yr.Collector(["f", "j"], min_rt=-0.3)
+    c.arm(0.0)
+    c.set_onset(0.5)
+    assert c.key(0.19, "f") == yr.OPEN          # EARLY: before onset + min_rt
+    assert c.key(0.3, "j") == yr.ENDED
+    r = c.finish()
+    assert r.response == "j" and r.rt_ns == -200000000 and r.n_early == 1
+    # one window's own bounds; the next arm has the desc's again
+    c.arm(1.0)
+    assert c.set_window(-0.1, 0.5) == yr.OPEN
+    c.set_onset(1.0)
+    assert c.update(1.4999) == yr.OPEN and c.update(1.5) == yr.ENDED
+    assert c.finish().flags & yr.R_TIMEOUT
+    c.arm(2.0)
+    c.set_onset(2.0)
+    assert c.update(1e5) == yr.OPEN              # no deadline: the desc's
+    with pytest.raises(yr.ArgumentError):
+        c.set_window(0.5, 0.5)                   # no time left
+    # an aborted window is no timeout
+    d = trial()
+    d.arm(0.0)
+    assert not d.finish().flags & yr.R_TIMEOUT
 
 
 def test_timeout_and_no_deadline():
@@ -399,7 +425,7 @@ def test_seconds_give_back_their_ns_below_2_23_s():
 
 def test_errors_and_state():
     for kw in (dict(choices=["nokey"]), dict(choices=[{"controll": 4}]), dict(choices=["f"], mode="none"),
-               dict(min_rt=-0.1), dict(duration=math.nan), dict(min_rt=2.0, duration=1.0), dict(max_hold=math.inf),
+               dict(min_rt=-1e6 - 1), dict(duration=math.nan), dict(min_rt=2.0, duration=1.0), dict(max_hold=math.inf),
                dict(choices=[{"kind": "keyboard"}]), dict(kinds=["nope"]), dict(choices=["f"] * 33),
                dict(sources=[{"tier": 9}])):
         with pytest.raises(yr.ArgumentError):

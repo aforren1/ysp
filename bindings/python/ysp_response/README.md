@@ -134,7 +134,8 @@ for min_rt in (0.1, 0.15):
 persist=False, max_responses=0, allow_held_key=False,
 wait_for_key_release=False, max_hold=0, sources=None, trace_cap=0,
 trace_kinds=None)`: `yrsp_open()`. `duration` None, 0 or `math.inf` is no
-deadline. `kinds` and `trace_kinds` take a bit mask, `"all"` (every kind
+deadline. A negative `min_rt` (v0.8) makes presses up to that long before
+the onset responses, with a negative `rt`: a forced-response task. `kinds` and `trace_kinds` take a bit mask, `"all"` (every kind
 but SYNC) or a list of kinds. `trace_cap` allocates the trace array once,
 here.
 
@@ -144,7 +145,8 @@ here.
 | `set_onset(t, *, final=True, src="other", tier=0, residual=0, uncertainty=0, frame=None, t_ns=None)` | The onset RT runs from (`src`: `"flip"`, `"audio"`, `"plan"`, `"other"`). A plan (`final=False`) does not replace a final onset. Returns the status |
 | `feed(event)`, `feed_many(events)` | Input events. Return the status |
 | `key(t, key, down=True, *, device=0, repeat=False, stamp=0, code=0, t_ns=None)` | One keyboard event |
-| `update(now)` | The deadline and `max_hold`. Returns `IDLE`, `OPEN` or `ENDED` |
+| `set_window(min_rt, duration=None)` | This window's `min_rt` and `duration` (v0.8), after `arm()`; the next `arm()` goes back to the collector's. One collector then serves trials with different deadlines. Returns the status |
+| `update(now)` | The deadline and `max_hold`. Returns `IDLE`, `OPEN` or `ENDED`. `R_TIMEOUT` (v0.8) only when the deadline ended the window |
 | `finish()` | The `Result`. Call it again after a late release, onset or report |
 | `entries()` | Every press of the window, as `Entry` structseqs |
 | `trace()` | The traced inputs up to the last `finish()` |
