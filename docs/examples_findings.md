@@ -1,8 +1,9 @@
-# Findings from four task examples (2026-11-06)
+# Findings from the task examples (2026-11-06)
 
-Status: open list. Each item names a header problem that one of the four
+Status: open list. Each item names a header problem that one of the five
 new examples showed: `trial_posner`, `trial_visuomotor`,
-`trial_timed_response` and `trial_copying` (examples/response/), or that
+`trial_timed_response`, `trial_copying` and `trial_bimanual`
+(examples/response/), or that
 the fixes of response.h 0.8.0, input.h 0.6.0, screen.h 0.18.0, gfx.h
 0.18.0, table.h 0.3.1 and audio.h 0.9.1 showed. Those versions fixed the
 first list's bugs B1 to B6, features F1, F2, F4, F5, F12 to F15 and the
@@ -17,9 +18,11 @@ Machine for every run: the Linux desktop (Debian 12, GCC 12.2, RX 6600,
 X11 GLX_OML, 59.9994 Hz). No tablet, no photodiode, no line-in; window
 runs used scripted input.
 
-## Bugs (wrong data or a hang)
+## Bugs (wrong data, a hang or a failed build)
 
-None open.
+| # | Header | Problem | Proposed change | From |
+|---|---|---|---|---|
+| B9 | timeline.h:1805, 2701 | `ytl_base_time()` leaves `*out` unset when it returns false; GCC 12 at `-O2 -Werror` then stops a caller's build with maybe-uninitialized (seen at timeline.h:3766), so each caller writes `bt = 0` first | Set `*out = 0` on failure | bimanual |
 
 ## Missing features
 
@@ -31,6 +34,13 @@ None open.
 | F8 | trials.h | Weights are per row; per-factor weights are multiplied by hand. A `weight` column becomes a factor | Factor weights in `ytr_factor_desc`, or a weight column kept out of the factors | posner |
 | F9 | trials.h:2267 | The data writer is bound to one session; blocks of different designs need a new session or a session-less writer | `ytr_data_rebind()`, or a note in DATA FILE | timed |
 | F10 | outline.h | A short word without pack/layout takes about 25 lines (also repeated in `trial_sternberg`) | `yol_text_path(ctx, font, utf8, size, &path)` and a shared bitmap fallback | posner |
+| F19 | response.h:1086-1092 | No way to read the trace while the window is open: `yrsp_finish()` stops it. The reach target's color needs the peak speed when the hold starts, and a hold can break and start again, so the program keeps its own position ring (trial_bimanual.c:375-389) | `yrsp_trace_now(c, &n)`, as `yrsp_onset_now()` | bimanual |
+| F20 | response.h, input.h | A position made from two devices (one mouse per hand) is fed as one DISTANCE channel, so `result.device` and `stamp_tier` are those of the hand whose report crossed; the other hand's part is up to one report interval old. The program adds a `move_hand` column | A note in MICE, or a derived-sample flag in input.h whose tier is the worst of its sources | bimanual |
+| F21 | response.h:774-781 | `yrsp_cursor` clamps to [0, w] x [0, h]; a hand kept as a displacement needs a false 2W x 2H area placed at (W, H) | Explicit clamp bounds, or w = h = 0 for no clamp | bimanual |
+| F22 | timeline.h:104-112 | No channel whose value is a function of time: the sum-of-sines target is computed outside the timeline, which gives only the anchor, the ramp tween and the end mark. Part of the continuous-control design (a signal path from inputs and generators to stimulus properties), not a separate fix | `ytl_set_fn(tl, ch, base, fn, ctx)` evaluated at the frame's base time, or the signal-path header | bimanual |
+| F23 | trials.h:1888, 4488 | `block_size` is one value for all blocks; a list of blocks of different sizes and kinds needs a one-row-per-block table under `ORDER_LIST`, which refuses `reps = 1`; `ti.block` stays 0, so the program finds blocks by row change. Values drawn per block (the phases) have no home: vars are per trial | `desc.block_sizes[]` or a block column; vars per block | bimanual |
+| F24 | screen.h | No call for a device's name: `SDL_GetMouseNameForID()` names the listed mice, and an unlisted node's name is only in ring records, cut at 23 bytes. Click-to-assign with its refusals is about 25 lines, as in `trial_two_keyboards` | `yscr_device_name()` and a small assign helper | bimanual |
+| D10 | response.md | A frame's flip record arrives in the next `yscr_begin()`, before that frame's input is polled; hand values read at a record's onset need the input polled first (the first `--auto` failed on this) | A note in THE FRAME LOOP | bimanual |
 | F11 | gfx.h | Every pixel of a POLYLINE chunk's quad evaluates every segment: 5841 points cost 51 ms of GPU a frame as chunks of 224, 1.8 ms as chunks of 16, and one LINE instance per segment 0.66 ms (Intel UHD 770 through Mesa 22.3.6, headless 1024 x 768: the ink benchmark ran on the iGPU surfaceless EGL picks, not the RX 6600; its 0.10 ms LINE row was an artifact of the row before it). The quad's centering on the path's box is done (gfx.h 0.18.0) | A segment-instanced stroke primitive | copying |
 
 ## Rejected
