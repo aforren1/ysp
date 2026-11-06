@@ -3467,7 +3467,7 @@ static void test_mf_play(void) {
     /* 24000/1001: the rate is the index's, fitted from the sample times */
     mf_desc(&vd, "c_23976.mp4");
     CHECK(mf_play_all(&vd, 96, 0) == 96);
-#if YVID__MF
+#if YVID__MF || YVID__AVF
     /* every decoder gives the software decoder's bytes (the index's) */
     g_case = "mf decoders";
     for (hi = 0; hi < sizeof hws / sizeof hws[0]; hi++) {
@@ -3479,7 +3479,7 @@ static void test_mf_play(void) {
         CHECK_I(mf_play_all(&vd, 600, 0), 600);
         if (yvid_open(&g_mv, &g_gfx, &vd)) {
             memset(&info, 0, sizeof info);
-    yvid_get_info(&g_mv, &info);
+            yvid_get_info(&g_mv, &info);
             yvid_describe(&g_mv, line, sizeof line);
             printf("video_test: hw %d: %.160s\n", hw, line);
 #if YVID__AVF
