@@ -264,7 +264,9 @@ from the slot that belongs to the failing role (`rd_oserr`, `wr_oserr` or
 
 ## Version
 
-`ysp-serial` 0.6.1 is `ysp/serial.h` v0.6.1: the port's `driver` and
+`ysp-serial` 0.7.0.1 is `ysp/serial.h` v0.7.0: closing an exclusive
+port releases it on Linux, also while another process holds the tty.
+0.6.1 is `ysp/serial.h` v0.6.1: the port's `driver` and
 `rts_via_dtr`, the `driver` key of `list_ports`, and `set_rts` sends the
 extra DTR request only on `usbser.sys`.
 0.6.0 is `ysp/serial.h` v0.6.0. `pulse_async` queues the

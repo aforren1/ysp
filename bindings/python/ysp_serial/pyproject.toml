@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ysp-serial"
-version = "0.6.2.1"  # ysp/serial.h v0.6.2, binding change 1 (the CPython 3.10 floor; 0.5.0.1 was times in seconds, 0.5.0.2 the async reader); tests/test_serial.py checks it against __version__
+version = "0.7.0.1"  # ysp/serial.h v0.7.0, binding change 1 (the CPython 3.10 floor; 0.5.0.1 was times in seconds, 0.5.0.2 the async reader); tests/test_serial.py checks it against __version__
 description = "Serial-port byte I/O for trigger and response boxes"
 readme = "README.md"
 requires-python = ">=3.10"

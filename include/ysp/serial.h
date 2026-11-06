@@ -1,4 +1,4 @@
-/* ysp/serial.h - v0.6.3 - public domain single-header serial-port library
+/* ysp/serial.h - v0.7.0 - public domain single-header serial-port library
  *
  *   REQUIRES ysp/rt.h, its sibling in this collection, on the include path.
  *   This header includes it for the clock, the waits, the scheduling ladder
@@ -379,6 +379,13 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.7.0 - POSIX: yser_close() of an exclusive handle clears TIOCEXCL
+ *          (TIOCNXCL), as does a failed yser_open() after it set it.
+ *          Linux keeps the mode until the tty's last close, so another
+ *          descriptor of the tty (a pseudo-terminal's master, a
+ *          ModemManager probe) made every later open fail with EBUSY.
+ *          New yser_port.exclusive (true when this handle set the mode),
+ *          in former padding; the minor version is for the layout.
  *   v0.6.3 - macOS: desc.exclusive also takes flock(LOCK_EX | LOCK_NB)
  *          and refuses the open when another handle or process holds it.
  *          TIOCEXCL alone let a second open of a pseudo-terminal through.
@@ -497,9 +504,9 @@
 /* The version of this header, for a binding's __version__ and for a log line.
  * The string always matches the three numbers. */
 #define YSER_VERSION_MAJOR  0
-#define YSER_VERSION_MINOR  6
-#define YSER_VERSION_PATCH  3
-#define YSER_VERSION_STRING "0.6.3"
+#define YSER_VERSION_MINOR  7
+#define YSER_VERSION_PATCH  0
+#define YSER_VERSION_STRING "0.7.0"
 
 /* CancelIoEx (Vista) is what lets yser_interrupt() end a pending overlapped
  * read. The MSVC SDK targets a recent Windows by default, but MinGW headers
@@ -748,6 +755,9 @@ typedef struct yser_port {
     bool           rts_via_dtr;     /* yser_set_rts() also sends a DTR request:
                                      * true on Windows when `driver` is
                                      * "usbser"; see yser_set_rts()           */
+    bool           exclusive;       /* POSIX: this handle set TIOCEXCL (and on
+                                     * macOS took the flock); yser_close()
+                                     * clears TIOCEXCL. false on Windows      */
     yser_sched_deadline sched;      /* effective worker reservation            */
     yser_async_policy   async_policy; /* rung the worker got; final once
                                        * yser_open() returns                   */
@@ -2132,6 +2142,14 @@ YSER_API int yser_list_ports(yser_port_info* out, int max) {
 /* --- lifecycle ---------------------------------------------------------- */
 
 static bool yser__open_fail(yser_port* p) {
+    /* TIOCEXCL belongs to the tty, not to the descriptor: on Linux it lasts
+     * until the tty's last close, so another descriptor of it (a
+     * pseudo-terminal's master, a ModemManager probe) kept a closed handle's
+     * exclusive mode and refused every later open with EBUSY. Only a handle
+     * that set the mode clears it: on macOS a refused flock means another
+     * handle holds it. */
+    if (p->fd >= 0 && p->exclusive) (void)ioctl(p->fd, TIOCNXCL);
+    p->exclusive = false;
     if (p->fd >= 0) close(p->fd);
     if (p->wake_fd[0] >= 0) close(p->wake_fd[0]);
     if (p->wake_fd[1] >= 0) close(p->wake_fd[1]);
@@ -2247,6 +2265,7 @@ static bool yser__open_platform(yser_port* p, const yser_desc* d) {
         return yser__open_fail(p);
     }
 #endif
+    p->exclusive = d->exclusive;
 
     /* Self-pipe for yser_interrupt(): the reader polls [0], any thread writes
      * [1]. pipe() plus fcntl() rather than pipe2(), whose declaration glibc

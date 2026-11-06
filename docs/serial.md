@@ -862,6 +862,31 @@ On a real driver (2026-11-05, the Teensy 4.0 on `AppleUSBACMData`),
 pseudo-terminals that let the open through
 ([functional checks](#functional-checks)).
 
+### The release of exclusive mode (v0.7.0)
+
+The problem. `TIOCEXCL` sets a flag on the tty, not on the descriptor.
+Linux clears the flag only at the tty's last close. When another
+descriptor keeps the tty open, the flag stays after `yser_close()`, and
+every later `open()` of the port fails with `EBUSY`. The other descriptor
+can be a pseudo-terminal's master or a second process that opened the
+port before (ModemManager probes USB CDC devices). CI found it on
+2026-11-06: on the Linux runners, `tests/adapt/serial_test.c` failed "an
+exclusive open after the close" with `open(/dev/pts/0): Device or resource
+busy`. macOS let that reopen through.
+
+| Question | Decision | Why |
+|---|---|---|
+| The release | `yser_close()` calls `ioctl(TIOCNXCL)` before it closes the descriptor; a failed `yser_open()` does the same | The handle that set the mode clears it. A port that closed is free again, as the `exclusive` field's comment says |
+| Which handle clears | Only a handle that set the mode: the new `yser_port.exclusive` is true after `TIOCEXCL` (and on macOS the `flock()`) succeeded | On macOS a refused `flock()` means that another handle holds the port; that handle's mode must stay |
+| The version | 0.7.0 | `yser_port` has a new field. It fills former padding: on arm64 the size (528 bytes) and the offsets of `sched`, `driver` and `error` did not change. `ysp/device.h` embeds `yser_port` |
+| Linux `TIOCGEXCL` instead of a field | Not used | It reads the tty's flag, so a handle without `exclusive` would clear the mode of another handle |
+
+Checked on 2026-11-06 on the M2 Mac mini (macOS 27.0.1):
+`tests/adapt/serial_test.c` passes (12 checks); the full suite passes,
+94 of 94. Mutants `ser-02` and `ser-03` (platform linux) were added and not
+run: no Linux machine is here, and CI does not run the mutation lists.
+The CI Linux jobs run the test.
+
 ## Compared with MATLAB serialport and IOPort
 
 `tests/compare/serial_bench/serial_bench.m` runs the same measurements on

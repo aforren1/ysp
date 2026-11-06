@@ -23,16 +23,16 @@
 #include <stdio.h>
 #include <string.h>
 
-static int g_checks, g_failures;
-#define CHECK(cond, what) do { g_checks++; if (!(cond)) { g_failures++; \
-    printf("serial_test: FAIL line %d: %s\n", __LINE__, (what)); } } while (0)
-
 #if defined(_WIN32)
 int main(void) {
     printf("serial_test: no pseudo-terminal on Windows; nothing to run\n");
     return 0;
 }
 #else
+static int g_checks, g_failures;
+#define CHECK(cond, what) do { g_checks++; if (!(cond)) { g_failures++; \
+    printf("serial_test: FAIL line %d: %s\n", __LINE__, (what)); } } while (0)
+
 #include <fcntl.h>
 #include <stdlib.h>
 #include <unistd.h>
