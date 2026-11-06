@@ -364,7 +364,9 @@ int main(int argc, char** argv) {
     sd.window_h = 768;
     sd.raw_mice = raw && !sim;    /* the simulated display has no window: the script feeds counts itself */
 
-    if (!ygfx_open_screen(&gfx, &scr, &sd, &(ygfx_desc){ .background = { 0.3f, 0.3f, 0.3f } })) {
+    /* the simulated display has no size of its own: the window's, so --sim
+     * has the geometry of a window run */
+    if (!ygfx_open_screen(&gfx, &scr, &sd, &(ygfx_desc){ .background = { 0.3f, 0.3f, 0.3f }, .width = 1024, .height = 768 })) {
         fprintf(stderr, "trial_visuomotor: %s\n", ygfx_error(&gfx));
         return 1;
     }
