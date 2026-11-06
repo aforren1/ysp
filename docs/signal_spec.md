@@ -76,6 +76,43 @@ trackers, joysticks, force sensors and streams from Lab Streaming Layer
 need the same parts with other sources. The graph covers them all with
 one mechanism.
 
+### 2.4 Prior art: miniaudio's node graph
+
+miniaudio 0.11.25 (the version `ysp/audio.h` builds on; its manual,
+section 7) routes audio through a node graph. Its nodes have input and
+output buses with fixed channel counts, stock nodes, custom nodes
+through a vtable, flags for nodes that only observe, and starts and
+stops scheduled on the graph's clock. The comparison:
+
+| | miniaudio `ma_node_graph` | This draft |
+|---|---|---|
+| Data | Blocks of float frames at one sample rate, which the data sources set | Samples at irregular times, each with its own `t`; sources at different rates, with no common tick |
+| Evaluation | Pull: each `ma_node_graph_read_pcm_frames()` reads the endpoint, which reads its inputs recursively | Push: a sample runs the nodes after its source (section 5.1); a frame reads held values |
+| Time | A global clock and a clock per node, in frames, exact because audio is isochronous | The rig clock in ns, per sample; a frame reads at its onset |
+| Two outputs into one input | Mixed (summed) without a node | Only through `sum`, `mean`, `diff` or `join`, each holding its inputs' latest values |
+| One output into two inputs | A splitter node | Any later node reads any earlier node's output |
+| Changes to the graph | Attach and detach at any time from any thread: spinlocks per bus, and a detach waits for the audio thread | Fixed for a trial, given as data, checked at load; one thread |
+| Custom nodes | `ma_node_vtable`, with `ma_node_base` as the first member | Custom ops through a vtable (section 5.4) |
+| Changes inside a run | A start and a stop per node, at a frame of the global clock | A node's inputs change with a timeline channel; its parameters do not (principle 3) |
+| Nodes that only observe | `MA_NODE_FLAG_PASSTHROUGH`, `MA_NODE_FLAG_SILENT_OUTPUT` | `record` and `detect` sinks |
+| Nodes with no input | `MA_NODE_FLAG_CONTINUOUS_PROCESSING` | Generators, at the frame rate |
+| Two rates | `MA_NODE_FLAG_DIFFERENT_PROCESSING_RATES` (resampling) | Sample rate and frame rate, joined by the held value (section 6.2) |
+| Memory | Allocation callbacks per node; the caller owns each node struct | One arena from the caller, sized by `ysig_arena_size()` |
+
+What this draft takes from it: custom nodes through a vtable, channel
+counts checked when two nodes connect, and changes at a set time inside
+a run (here through a node's inputs). What it does not take, and why:
+
+- **Mixing without a node.** Right for audio, wrong for positions: two
+  hands summed by an extra edge is a silent error.
+- **Pull evaluation.** An input device cannot be asked for a sample at a
+  time; it delivers one. A recursive pull also computes a shared node
+  once for each reader.
+- **Changes to the graph during a run.** They are the cause of
+  miniaudio's locks and of its rules for a node's lifetime. A graph
+  fixed for a trial needs none of them, and only a fixed graph can be
+  checked at load, stored in the definition and replayed.
+
 ## 3. Scope
 
 ### 3.1 In scope
@@ -109,7 +146,7 @@ Uses:
 
 | Need | Why not here | Where |
 |---|---|---|
-| A virtual object with dynamics (a ball in a cup, a mass on a spring) | state beyond a linear filter, and its own integration step | a script, or a separate dynamics node set later |
+| A virtual object with dynamics (a ball in a cup, a mass on a spring) | state beyond a linear filter, and its own integration step | a custom op (section 5.4), or a script |
 | A target placed from where the hand stopped | a value that depends on the trial's history, not on the signal | a script |
 | Branches on performance | task logic | the definition's nodes (`if`, `loop`) or a script |
 | An ink trail that grows with the pen | a growing path, not a value | `ysp/gfx.h` (F11: a segment-instanced stroke) |
@@ -126,9 +163,12 @@ Uses:
    drifted 0.033 px off the count grid in 160 reaches at gain 0.1).
    Arithmetic inside the graph is double; a channel value is float.
 3. **The graph is fixed for a trial.** Its nodes and edges are set at
-   open. Parameters change between trials, not during one. The loader
-   checks the whole graph before the session, as `ytl_check_ops()` does
-   for timelines.
+   open. A node's parameters (`p[]`) change between trials, not during
+   one. A node's inputs change at any sample: a value that must change
+   inside a trial at a set time (a rotation that turns on in the middle
+   of a reach) is an input, from a `channel` node that a timeline step
+   drives. The loader checks the whole graph before the session, as
+   `ytl_check_ops()` does for timelines.
 4. **No allocation after open.** The caller gives the state arena. A
    frame's work has a stated cost per node and per sample (section 9).
 5. **Values reach stimuli as channels.** A sink writes a float channel
@@ -150,7 +190,19 @@ Uses:
 A graph is an array of nodes. A node has an op, up to four inputs (other
 nodes' outputs), parameters, and one output. An output is a vector of
 1 to 4 lanes (x, y, z, w). Nodes come in an order where each input
-precedes its user; the loader refuses a cycle.
+precedes its user; the loader refuses a cycle, and refuses an edge whose
+lane count the op does not accept.
+
+`ysig_open()` compiles two schedules, so that no evaluation walks the
+graph:
+
+- **Per source:** for each source, the ordered list of nodes that
+  depend on it. A sample runs that list and nothing else, so its cost
+  is fixed at open.
+- **Per frame:** the generators, then the `bind`, `detect` (frame-rate
+  tests) and `record (frame)` sinks, in node order.
+
+A node that two sources reach (a `join` of two hands) is on both lists.
 
 Two rates:
 
@@ -190,6 +242,14 @@ Two rates:
 Every op has a parameter table in the shared row shape
 (`ytl_op_params()`, `ygfx_params()`), so the designer and the bindings
 read names, types, units, bounds and defaults from one place.
+
+A mid-reach rotation, with the angle as an input:
+
+```
+hand  = integrate(source(role "hand", MOUSE, DELTA), gain)
+angle = channel(timeline channel ROT)      # a timeline step sets 30 deg
+cur   = affine(hand, rotation by input angle, about start)
+```
 
 ### 5.3 Examples as graphs
 
@@ -236,6 +296,35 @@ bind(p -> cursor)
 
 The numbers in these sketches are the examples' values or placeholders,
 not recommendations.
+
+### 5.4 Custom ops
+
+An op the built-in set lacks (a mass with damping driven by a force
+sensor, a motion-capture model) comes as a vtable, as miniaudio's
+custom nodes do (section 2.4), through the extension mechanism of
+rig_spec section 12:
+
+```c
+typedef struct ysig_op_vtable {
+    uint32_t version;                 /* YSIG_OP_ABI */
+    const char* name;                 /* the op's name in definitions */
+    uint8_t lanes_in[4], lanes_out;   /* 0 = any, checked at load */
+    size_t state_size;                /* bytes in the graph's arena */
+    const ysig_param* params; int n_params;
+    void (*reset)(void* state, const double* p, int64_t t_ns);
+    void (*sample)(void* state, const double* p, const ysig_value* in, int n_in,
+                   ysig_value* out);  /* at a sample; no allocation, no I/O */
+    void (*frame)(void* state, const double* p, int64_t onset_ns, ysig_value* out);
+} ysig_op_vtable;
+```
+
+- The graph allocates the op's state in its arena; the op allocates
+  nothing.
+- A custom op runs on the frame thread under the same rules as a
+  built-in one, and its time per call is a zone in the trace.
+- The definition names the op; the pack manifest names the module, by
+  hash. A run whose module is missing does not start.
+- Replay needs the same module. The run's record has the module's hash.
 
 ## 6. Time
 
@@ -333,6 +422,7 @@ typedef struct ysig_node {
 
 typedef struct ysig_desc {
     const ysig_node* nodes; int n_nodes;
+    const ysig_op_vtable* const* custom; int n_custom; /* ops YSIG_OP_CUSTOM + i */
     void* arena; size_t arena_size;   /* state; ysig_arena_size() gives it */
     float* channels; int n_channels;  /* where bind sinks write */
 } ysig_desc;
@@ -392,7 +482,11 @@ graph is data. The four worked examples of experiment_format.md section
 - **Generators here or in the timeline.** Section 6.3 puts them here.
   A timeline track already gives ramps; a `channel` node reads it.
 - **Dynamics.** Whether a small, fixed set of linear dynamics (a mass
-  with damping, driven by a force sensor) belongs here or with scripts.
+  with damping, driven by a force sensor) is built in, or only a custom
+  op (section 5.4).
+- **Custom op ABI.** The `ysig_value` type (lanes, `t`, `t_oldest`,
+  tier), and whether a custom op can also be a source (a device with
+  its own reader thread, as rig_spec section 12's input source).
 
 ## 12. Verification
 
