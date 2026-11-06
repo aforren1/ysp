@@ -1092,6 +1092,15 @@ Mutants `v8-01` to `v8-13` caught, 13 of 13; `w-03`, `w-12`, `o-04` and
 `ms-02` moved to the new code and are caught. Linux desktop (Debian 12,
 GCC 12.2).
 
+v0.8.1: `yrsp_data_set()` asks `ysp/trials.h` v0.7.0's
+`ytr_data_col_settable()` whether a column takes per-row values. It read
+the writer's private column record before
+([examples_findings.md](examples_findings.md), F16). A `YTR_COL_TEXT`
+column of one of its names is now skipped; the set failed before. The
+adapter needs `ysp/trials.h` v0.7.0 and stops the build with an `#error`
+on an older one. `check_v08()` adds a fixed-text column and the query's
+answers; `v8-13`'s anchor moved and it is caught.
+
 ## Bindings
 
 `ysp-response` 0.8.0 (Python, `bindings/python/ysp_response`, the module

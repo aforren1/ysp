@@ -360,9 +360,33 @@ static void check_sdl(void) {
         CHECK_I(src.lo_ns == 0 && src.hi_ns == 0, 1);
         src = yin_sdl_source(NULL, YIN_KIND_TOUCH);
         CHECK_I(src.tier, YIN_TIER_3);
+        /* v0.7.0: keys by stamp: the kernel's evdev time (os_stamps) has
+         * no tier and host-part bounds; the X server's, tier 3 */
+        src = yin_sdl_source(&ctx, YIN_KIND_KEYBOARD);
+        CHECK_I(src.tier, YIN_TIER_UNKNOWN);
+        CHECK_I(src.partial, 1);
+        CHECK_I(src.lo_ns, 101);
+        CHECK_I(src.hi_ns, 18183);
+        CHECK_I(src.note && strstr(src.note, "evdev kernel time"), 1);
         src = yin_sdl_source(NULL, YIN_KIND_KEYBOARD);
         CHECK_I(src.tier, YIN_TIER_3);
-        CHECK_I(src.note && strstr(src.note, "kernel"), 1);
+        CHECK_I(src.partial, 1);
+        CHECK_I(src.lo_ns, -1990000);
+        CHECK_I(src.hi_ns, -960000);
+        CHECK_I(src.note && strstr(src.note, "X server"), 1);
+        /* a key with the kernel's time in t_os: the entry's tier; one
+         * without (the X server's or SDL's time): tier 3 */
+        ev.type = SDL_EVENT_KEY_DOWN;
+        ev.key.down = true;
+        ctx.raw_keyboard = false;
+        ctx.t_os = 2500;
+        CHECK_I(yin_from_sdl(&ev, 1500, &ctx, &e), 1);
+        CHECK_I(e.t, 2500);
+        CHECK_I(e.stamp, 0);
+        ctx.t_os = 0;
+        CHECK_I(yin_from_sdl(&ev, 1500, &ctx, &e), 1);
+        CHECK_I(e.t, 1500);
+        CHECK_I(e.stamp, YIN_TIER_3);
         src = yin_sdl_source(NULL, YIN_KIND_GAMEPAD);
         CHECK_I(src.tier, YIN_TIER_UNKNOWN);
 #else

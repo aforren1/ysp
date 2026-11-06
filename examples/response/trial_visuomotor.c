@@ -659,6 +659,9 @@ int main(int argc, char** argv) {
         ygfx_end(&gfx);
         yscr_flip(&scr);
     }
+    /* the describe line again: its counters (key times, raw mice) are 0 at open */
+    yscr_describe(&scr, line, sizeof line);
+    fprintf(out, "# at the end: %s\n", line);
     fclose(out);
     fclose(traj);
     ygfx_close(&gfx);

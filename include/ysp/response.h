@@ -1,4 +1,4 @@
-/* ysp/response.h - v0.8.0 - public domain single-header response collector
+/* ysp/response.h - v0.8.1 - public domain single-header response collector
  *
  *   Turns timestamped input events from any device into the response of a
  *   trial: which key or button, when, measured from the stimulus onset that
@@ -526,6 +526,12 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.8.1 - yrsp_data_set() asks ysp/trials.h v0.7.0's
+ *          ytr_data_col_settable() whether to set a column, where it read
+ *          the data writer's private column record (docs/
+ *          examples_findings.md, F16). A YTR_COL_TEXT column of one of its
+ *          names is skipped now (the set failed). Needs ysp/trials.h
+ *          v0.7.0 when both are included.
  *   v0.8.0 - From four task examples (docs/examples_findings.md). A
  *          negative desc.min_rt_ns makes presses before the onset valid,
  *          with a negative rt (a forced-response task); EARLY is now rt <
@@ -614,6 +620,10 @@
  *          releases, the trace, the result and its CSV row, the SDL3
  *          adapter.
  *
+ *   STATUS: v0.8.1, 2026-11-06, Linux desktop (GCC 12.2): the test with a
+ *   fixed-text column of one of the names, and the compile checks pass;
+ *   v8-13 caught at its new anchor. The CI --sim runs of the examples
+ *   pass.
  *   STATUS: v0.8.0, 2026-11-06, Linux desktop (Debian 12, GCC 12.2): the
  *   test (21,230 checks) and the compile checks (C99, C11, C++17) pass;
  *   v8-01 to v8-13 caught, and w-03, w-12, o-04, ms-02 on the new code.
@@ -672,8 +682,8 @@
 
 #define YRSP_VERSION_MAJOR 0
 #define YRSP_VERSION_MINOR 8
-#define YRSP_VERSION_PATCH 0
-#define YRSP_VERSION_STRING "0.8.0"
+#define YRSP_VERSION_PATCH 1
+#define YRSP_VERSION_STRING "0.8.1"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -1226,6 +1236,9 @@ static inline int yrsp_set_landing(yrsp_collector* c, const ytl_event* fired, in
 #endif
 
 #if defined(YSP_TRIALS_H_INCLUDED)
+#if YTR_VERSION_MAJOR == 0 && YTR_VERSION_MINOR < 7
+#error "ysp/response.h v0.8.1 needs ysp/trials.h v0.7.0 or later (ytr_data_col_settable)"
+#endif
 /* v0.4, DATA: the result's columns for ysp/trials.h's data writer, in a
  * ytr_col array: { YTR_COL(row, correct, YTR_COL_BOOL), YRSP_DATA_COLS }.
  * Times in seconds; an empty field where the result has none. */
@@ -1246,17 +1259,17 @@ static inline int yrsp_set_landing(yrsp_collector* c, const ytl_event* fired, in
 
 /* Sets, for the next ytr_data_write(), each YRSP_DATA_COLS column that
  * the file has (found by name, so a file may declare some of them with
- * YTR_COL_SET). A column of that name bound to the caller's row struct is
- * the caller's and is skipped (v0.8). Call it between trials. Returns the
+ * YTR_COL_SET). A column of that name bound to the caller's row struct, or
+ * a YTR_COL_TEXT column, is the caller's and is skipped (v0.8; asked of
+ * ysp/trials.h's ytr_data_col_settable() from v0.8.1). Call it between
+ * trials. Returns the
  * columns set, or the first negative code (ytr_data_error() set). */
 static inline int yrsp_data_set(ytr_data* w, const yrsp_result* r) {
     int n = 0, rc = 0, col;
     bool on = r && r->t_onset != 0;
     if (!r) return YTR_ERR_ARG;
-    /* ysp/trials.h has no call that says whether a column is set per row;
-     * its column record holds YTR_UNBOUND for one, as YTR_COL_SET writes */
 #define YRSP__DSET(name, call) \
-    if (rc >= 0 && (col = ytr_data_col(w, name)) >= 0 && w->col[col].offset == YTR_UNBOUND) { \
+    if (rc >= 0 && (col = ytr_data_col(w, name)) >= 0 && ytr_data_col_settable(w, col)) { \
         rc = call;                                                                            \
         if (rc >= 0) n++;                                                                     \
     }

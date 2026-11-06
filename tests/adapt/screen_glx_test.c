@@ -119,6 +119,8 @@ static void clear(yscr_screen* s) {
     if (cc && cl) { cc(0.2f, 0.2f, 0.2f, 1.0f); cl(0x4000u); }
 }
 
+static int g_xtest_tier3;
+
 /* Part 4. Returns the keys that came back within the window, or -1 when
  * XTEST or the focus is missing. */
 static int xtest_keys(yscr_screen* s, int* received) {
@@ -141,16 +143,26 @@ static int xtest_keys(yscr_screen* s, int* received) {
         SDL_Event ev;
         int64_t t_ev;
         if (yscr_begin(s, &f) != YSCR_OK) break;
-        while (yscr_poll(s, &ev, &t_ev))
+        while (yscr_poll(s, &ev, &t_ev)) {
+            yin_event in;
+            /* every key, so the key filter sees each press's release */
+            bool have = yscr_event_input(s, &ev, &in);
             if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.raw == 192 && waiting) {
                 (*received)++;
+                /* the X server's time (XTEST has no evdev node): tier 3 on
+                 * the event, with kernel key times on or off (v0.19.0) */
+                if (have && in.stamp == YIN_TIER_3) g_xtest_tier3++;
                 if (t_ev >= t_inj - 3000000 && t_ev <= t_inj + 1000000) ok++;
                 else printf("  key %d: stamp %+.3f ms from the injection, outside -3 to +1\n", *received,
                             (double)(t_ev - t_inj) / 1e6);
                 waiting = 0;
             }
+        }
         if (waiting && (int64_t)yrt_now_ns() > give_up) waiting = 0;
-        if (!waiting && injected < 20 && SDL_GetKeyboardFocus() == yscr_window(s)) {
+        /* 60 ms apart: yscr_event_input() takes a press of the same key
+         * within 50 ms for a second report (INPUT) */
+        if (!waiting && injected < 20 && SDL_GetKeyboardFocus() == yscr_window(s) &&
+            (int64_t)yrt_now_ns() - t_inj >= 60000000) {
             yrt_sleep_until(yrt_now_ns() + 2000000u * (uint64_t)(injected % 4), 0);
             t_inj = (int64_t)yrt_now_ns();
             fake_key(dpy, 192, 1, 0);
@@ -287,6 +299,13 @@ static void uinput_key(int fd, int down) {
     if (write(fd, e, sizeof e) != (ssize_t)sizeof e) perror("uinput");
 }
 
+/* Part 11 (v0.19.0): keys with the kernel's time from yscr_event_input():
+ * the stamp equal to yscr_poll()'s, stamp 0 (the source entry's tier, not
+ * tier 3), and the stamp minus the write()'s start, min and max (ysp/input.h's
+ * YIN__X11_KERNEL bounds). */
+static int g_kernel_tier_ok, g_kernel_n;
+static int64_t g_kernel_lo = INT64_MAX, g_kernel_hi = INT64_MIN;
+
 /* Sends n keys after the first that comes back (Xorg adds a new keyboard
  * about a second after it appears). Returns the keys whose press came back
  * with a time inside the write(), or -1 when none came back. */
@@ -299,17 +318,29 @@ static int uinput_keys(yscr_screen* s, int fd, int n, int* received) {
         SDL_Event ev;
         int64_t t_ev;
         if (yscr_begin(s, &f) != YSCR_OK) break;
-        while (yscr_poll(s, &ev, &t_ev))
+        while (yscr_poll(s, &ev, &t_ev)) {
+            yin_event in;
+            bool have = yscr_event_input(s, &ev, &in);   /* every key: the filter pairs releases */
             if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.raw == 192 && waiting) {
                 waiting = 0;
                 if (!warm) { warm = 1; continue; }
                 (*received)++;
-                /* the round trip through SDL's ticks rounds to 1 us */
-                if (t_ev >= w0 - 2000 && t_ev <= w1 + 2000) ok++;
+                /* the kernel's us truncates: up to 1 us before the call */
+                if (t_ev >= w0 - 1000 && t_ev <= w1) ok++;
                 else printf("  key %d: stamp %+.3f ms from the write\n", *received, (double)(t_ev - w0) / 1e6);
+                {
+                    yscr_caps c;
+                    yscr_get_caps(s, &c);
+                    if (c.os_input_stamps && have && in.stamp == 0 && in.t == t_ev) g_kernel_tier_ok++;
+                    g_kernel_n++;
+                    if (t_ev - w0 < g_kernel_lo) g_kernel_lo = t_ev - w0;
+                    if (t_ev - w0 > g_kernel_hi) g_kernel_hi = t_ev - w0;
+                }
             }
+        }
         if (waiting && (int64_t)yrt_now_ns() > give_up) waiting = 0;
-        if (!waiting && injected < n && SDL_GetKeyboardFocus() == yscr_window(s)) {
+        if (!waiting && injected < n && SDL_GetKeyboardFocus() == yscr_window(s) &&
+            (int64_t)yrt_now_ns() - w0 >= 60000000) {   /* as in part 4 */
             yrt_sleep_until(yrt_now_ns() + 2000000u * (uint64_t)(injected % 4), 0);
             w0 = (int64_t)yrt_now_ns();
             uinput_key(fd, 1);
@@ -347,8 +378,24 @@ static void part11(void) {
     if (b >= 0) { ioctl(b, UI_DEV_DESTROY); close(b); }
     printf("kernel key times: before open %d of %d, plugged in while open %d of %d; %s\n", ok_a, got_a, ok_b, got_b,
            strstr(line, "key_time=") ? strstr(line, "key_time=") : "?");
+    printf("kernel key times: %d of %d with stamp 0 from yscr_event_input(); stamp minus the write's start "
+           "%lld to %lld ns\n", g_kernel_tier_ok, g_kernel_n, (long long)g_kernel_lo, (long long)g_kernel_hi);
     CHECK(got_a == 10 && ok_a == 10);
     CHECK(got_b == 10 && ok_b == 10);
+    CHECK(g_kernel_n == 20 && g_kernel_tier_ok == 20);
+    {   /* the entry such a key gets (ysp/input.h v0.7.0), and the bounds */
+        yin_sdl_ctx ctx;
+        yin_source k, x;
+        memset(&ctx, 0, sizeof ctx);
+        x = yin_sdl_source(&ctx, YIN_KIND_KEYBOARD);
+        ctx.os_stamps = true;
+        k = yin_sdl_source(&ctx, YIN_KIND_KEYBOARD);
+        CHECK(k.tier == YIN_TIER_UNKNOWN && k.partial && x.tier == YIN_TIER_3);
+        /* bounds from five runs; a run's own spread is printed above, and
+         * each key is checked inside its write() */
+        CHECK(k.lo_ns >= 0 && k.hi_ns > k.lo_ns && x.hi_ns < 0);
+        printf("kernel key times: ysp/input.h's entry %lld to %lld ns\n", (long long)k.lo_ns, (long long)k.hi_ns);
+    }
 }
 
 /* Part 12: a mouse made through uinput, or -1; *readable as uinput_kbd. */
@@ -892,8 +939,10 @@ int main(int argc, char** argv) {
         int got = 0, ok = xtest_keys(&scr, &got);
         if (ok < 0) printf("keys: skipped (no libXtst, or the window never had the focus)\n");
         else {
-            printf("keys: 20 injected, %d received, %d with the X server's time\n", got, ok);
+            printf("keys: 20 injected, %d received, %d with the X server's time, %d tier 3 from yscr_event_input()\n",
+                   got, ok, g_xtest_tier3);
             CHECK(got == 20);
+            CHECK(g_xtest_tier3 == 20);
             /* one key of 20 was late in 2 of 10 runs (7.3 ms, the one
              * printed): the server handled the XTEST request late */
             CHECK(ok >= 19);

@@ -724,7 +724,12 @@ v0.8.1), and `ysp-audio` is 0.7.2, the header's. The adaptive MEX
 functions and `ysp_color` have no number of their own: `'version'`
 returns the header's.
 
-`ysp-vis` is 0.18.0 (2026-11-06: `ysp/screen.h` 0.18.0, whose new
+`ysp-vis` is 0.19.0 (2026-11-06: `ysp/screen.h` 0.19.0, Linux key
+tiers by stamp, which the binding does not use; `ysp/gfx.h` 0.19.0, the
+shape attribute `trim_set`, with which trim (0, 0) draws nothing; a gfx
+opened on a simulated display takes the screen's open option `size`,
+where it took 800 x 600, because `ygfx_open()` cannot see a simulated
+display's size. 0.18.0 was `ysp/screen.h` 0.18.0, whose new
 `desc.keep_synthetic`, `yscr_event_input_at()` and Linux `raw_mice`
 counts the binding does not use; pen events now carry SDL's `pen_state`
 in the event's `code` (`ysp/input.h` 0.6.0). 0.17.0.1 was the binding on

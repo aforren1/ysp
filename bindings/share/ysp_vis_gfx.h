@@ -398,7 +398,14 @@ static int yv_gfx_options(yv_gfx* g, yv_kv* kv, int n, char* err, size_t cap) {
 /* Points the desc at the gfx's own storage: it must stay valid until
  * ygfx_open() returns (OPEN START), and yv_gfx does not move. */
 static void yv_gfx_bind_desc(yv_gfx* g, yscr_screen* s) {
+    const yv_screen* v = (const yv_screen*)(const void*)s;   /* s is its first member */
     g->desc.screen = s;
+    /* ygfx_open() cannot see a simulated display's size: give it the
+     * window's, as ygfx_open_screen() does (ysp/gfx.h, OPEN SCREEN) */
+    if (g->desc.width <= 0 && g->desc.height <= 0 && v->sim_w > 0 && v->sim_h > 0) {
+        g->desc.width = v->sim_w;
+        g->desc.height = v->sim_h;
+    }
     g->desc.cal = g->has_cal ? &g->cal : NULL;
     g->desc.lum = g->has_lum ? &g->lum : NULL;
     g->desc.cache = g->cache_dir[0] ? ygfx_file_cache_init(&g->fc, g->cache_dir) : NULL;

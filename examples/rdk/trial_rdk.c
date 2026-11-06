@@ -367,6 +367,13 @@ int main(int argc, char** argv) {
         ygfx_end(&gfx);
         yscr_flip(&scr);
     }
+    {   /* the describe line again: its counters (key times, raw mice) are 0 at open */
+        char end[1100];
+        int mrc;
+        memcpy(end, "screen_end=", 11);
+        yscr_describe(&scr, end + 11, sizeof end - 11);
+        if ((mrc = ytr_data_meta(&data, end)) < 0 && mrc != YTR_ERR_CLOSED) fprintf(stderr, "%s\n", ytr_data_error(&data));
+    }
     if (ytr_data_finish(&data) < 0) failed = fail(ytr_data_error(&data));
     fclose(sout);
     ygfx_close(&gfx);
