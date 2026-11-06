@@ -248,38 +248,51 @@ def test_wait_forever(au):
 
 
 def test_wait_releases_the_gil(au):
+    # wait() ends on a timeout, not on an onset: when the main thread gets
+    # the GIL back is up to the scheduler. On a GitHub macOS VM, and here under
+    # taskpolicy -b (about 100 ms per GIL handoff), it entered wait() after a
+    # 0.3 s onset or after a single update() at 50 ms.
     b = au.click(0.1)
-    sid = au.play_at(b, yau.now() + 0.3)
+    sid = au.play_at(b, yau.now() + 30.0)
     n = [0]
     stop = threading.Event()
     errors = []
+    pokes = []
 
     def spin():
         while not stop.is_set():
             n[0] += 1
-        try:
-            pass
-        except Exception as e:  # pragma: no cover
-            errors.append(e)
 
+    # update() holds the GIL, so it cannot overlap the entry to wait().
     def poke():
-        time.sleep(0.05)
-        try:
-            au.update()
-        except yau.BusyError as e:
-            errors.append(e)
+        while not stop.is_set():
+            time.sleep(0.01)
+            pokes.append(time.perf_counter())
+            try:
+                au.update()
+            except yau.BusyError as e:
+                errors.append(e)
+                return
 
     th = threading.Thread(target=spin)
     pk = threading.Thread(target=poke)
+    t0 = time.perf_counter()
     th.start()
     pk.start()
     c0 = n[0]
-    au.wait(sid)
+    w0 = time.perf_counter()
+    with pytest.raises(yau.TimeoutError):
+        au.wait(sid, timeout=1.0)
+    w1 = time.perf_counter()
     stop.set()
     th.join()
     pk.join()
-    assert n[0] - c0 > 1000                 # the other thread ran meanwhile
-    assert len(errors) == 1 and "wait()" in str(errors[0])   # one frame thread
+    au.cancel(sid)
+    au.wait(sid)
+    when = (f"wait() {1e3 * (w0 - t0):.1f} to {1e3 * (w1 - t0):.1f} ms; "
+            f"{len(pokes)} update() calls, last at {1e3 * (pokes[-1] - t0) if pokes else -1:.1f} ms")
+    assert n[0] - c0 > 1000, when           # the other thread ran meanwhile
+    assert len(errors) == 1 and "wait()" in str(errors[0]), when   # one frame thread
 
 
 def test_buffers_belong_to_their_audio(au):
