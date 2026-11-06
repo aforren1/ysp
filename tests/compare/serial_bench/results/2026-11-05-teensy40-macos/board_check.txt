@@ -1,0 +1,20 @@
+pass  yser_list_ports lists the port               3 ports
+info  its info                                     vid 0000 pid 0000 serial "" location "" driver ""
+pass  yser_find_ports by name                      1 found
+pass  yser_open                                    driver "", rts_via_dtr 0, worker TIME_CONSTRAINT, open 1.5 ms (not a timing result)
+pass  the board is ysp_echo version 2              "V ysp-echo 2 teensy b l g"
+pass  "i" answers the line protocol                "I ysp-line 1 teensy echo"
+pass  500 echoes, length, seq, stamps in order     500 good, 500 in order
+pass  DTR and RTS changes reach the board          4 of 4 states reported
+pass  yser_get_lines on the driver                 0 (the input lines' mask)
+pass  write_byte, pulse, pulse_async reach the board rc 1 2 1 1, board saw A5 55 00 66 01 77 02
+pass  a second exclusive open is refused           first 1, second 0: open(/dev/cu.usbmodem75925601): Resource busy
+info  a plain open beside an exclusive one         open(/dev/cu.usbmodem75925601): Resource busy
+info  open at 250000 baud                          opened; "v" answers "V ysp-echo 2 teensy b l g"
+pass  TriggerBox: set, pulse reach the board       rc 0 0 0, board saw 55 00 2A 00 11
+info  TriggerBox: mark                             rc 0 (board saw 11)
+pass  LINES: both low after the open               L 0 0
+pass  LINES: codes 1 0 2 0 3 0 as DTR, RTS         6 of 6 reported
+pass  LINES: pulse on RTS                          rc 0, on 1, off 1
+
+all checks passed (0 failures)

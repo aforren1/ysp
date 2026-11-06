@@ -114,15 +114,16 @@ static PyObject* vg_raise(int code, const char* msg) {
 static int gf_ready(GfxObject* o) {
     if (!o->g || !o->g->open) { PyErr_SetString(VsClosedError, "ysp_gfx: the gfx (or its screen) is closed"); return 0; }
     if (SC_OF(o->screen)->busy) { PyErr_SetString(VsBusyError, "ysp_gfx: another thread is in a call on its Screen"); return 0; }
-    return 1;
+    return sc_thread(SC_OF(o->screen));
 }
 
-/* An object of a Gfx: open, and no other thread in a call on its screen. */
+/* An object of a Gfx: open, no other thread in a call on its screen, and
+ * the screen's thread (macOS: the main one). */
 static int vg_obj_ready(PyObject* gfx) {
     GfxObject* g = GF_OF(gfx);
     if (!g->g || !g->g->open) { PyErr_SetString(VsClosedError, "ysp_gfx: its gfx (or the gfx's screen) is closed"); return 0; }
     if (g->screen && SC_OF(g->screen)->busy) { PyErr_SetString(VsBusyError, "ysp_gfx: another thread is in a call on its Screen"); return 0; }
-    return 1;
+    return g->screen ? sc_thread(SC_OF(g->screen)) : 1;
 }
 
 /* ---- arguments: Python values to the core's yv_kv --------------------------------- */
@@ -443,11 +444,13 @@ static void Gfx_dealloc(PyObject* self) {
     GfxObject* o = GF_OF(self);
     PyTypeObject* tp = Py_TYPE(self);
     freefunc fr = (freefunc)PyType_GetSlot(tp, Py_tp_free);
-    if (o->g) {
+    /* freed off the screen's thread (macOS): its GL objects stay until the
+     * process ends, as the screen does (Screen_dealloc) */
+    if (o->g && !(o->screen && yv_screen_thread_refusal(SC_OF(o->screen)->v))) {
         yv_gfx_close(o->g);
         free(o->g);
-        o->g = NULL;
     }
+    o->g = NULL;
     Py_XDECREF(o->screen);
     fr(self);
     Py_DECREF(tp);
@@ -519,6 +522,7 @@ static PyObject* Gfx_close(PyObject* self, PyObject* unused) {
     GfxObject* o = GF_OF(self);
     (void)unused;
     if (o->screen && SC_OF(o->screen)->busy) { PyErr_SetString(VsBusyError, "ysp_gfx: another thread is in a call on its Screen"); return NULL; }
+    if (o->screen && !sc_thread(SC_OF(o->screen))) return NULL;
     if (o->g) yv_gfx_close(o->g);
     Py_RETURN_NONE;
 }

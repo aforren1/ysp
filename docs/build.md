@@ -17,13 +17,30 @@ ctest --test-dir build/default
 
 `CMakePresets.json` names the configurations in use: `msvc` (Visual Studio
 2022, examples and tests), `msvc-full` (`msvc` with SDL3, ANGLE, the layout
-library, the loopback tests and both downloads), `mingw`, and on Linux the CI
-sets `linux`, `clang`, `sanitizers` and `nothreads-cxx`. Each preset builds
-into `build/<preset>/`: `cmake --preset msvc`, then
+library, the loopback tests and both downloads), `mingw`, on Linux the CI
+sets `linux`, `clang`, `sanitizers` and `nothreads-cxx`, and on macOS
+`macos` (Apple clang, Ninja, Release, examples and tests) and
+`macos-sanitizers` (the same, Debug, with ASan and UBSan). Each preset
+builds into `build/<preset>/`: `cmake --preset msvc`, then
 `cmake --build --preset msvc` and `ctest --preset msvc`. `msvc-full` reads
 `SDL3_DIR` and `YSP_ANGLE_DIR` from the environment; to keep paths for one
 machine, write a `CMakeUserPresets.json` (git ignores it) that inherits a
 preset.
+
+The Linux and macOS presets download miniaudio and pl_mpeg, as CI does. To
+build without a download, turn the two fetches off; ysp/audio.h and
+ysp/video.h then build only their `tests/adapt` tests:
+
+```sh
+cmake --preset macos -DYSP_FETCH_MINIAUDIO=OFF -DYSP_FETCH_PL_MPEG=OFF
+cmake --build --preset macos
+ctest --preset macos
+```
+
+On macOS, Ninja must be on `PATH`. Without SDL3, ysp/screen.h, ysp/gfx.h
+and ysp/video.h build only their `tests/adapt` tests, and no liblsl build
+exists for macOS, so ysp/net.h runs only its fake-liblsl test. ysp/parallel.h
+does not build on macOS (no parallel port).
 
 Three options need files that are fetched, not committed. Run each fetch
 once from the repository root:

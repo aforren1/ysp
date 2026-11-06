@@ -289,7 +289,7 @@ int main(int argc, char** argv) {
         fprintf(stderr, "gfx_gamma_null: %s\n", ytl_error(&tl));
         return 1;
     }
-    source = yrsp_sdl_source(&(yrsp_sdl_ctx){ .raw_keyboard = caps.raw_keyboard }, YRSP_KIND_KEYBOARD);
+    source = yrsp_sdl_source(&(yrsp_sdl_ctx){ .raw_keyboard = caps.raw_keyboard, .os_stamps = caps.os_input_stamps }, YRSP_KIND_KEYBOARD);
     if (!yrsp_open(&rsp, &(yrsp_desc){ .choices = keys, .n_choices = 2, .duration_ns = YRT_S(RESPONSE_S),
                                        .sources = &source, .n_sources = 1 })) {
         fprintf(stderr, "gfx_gamma_null: %s\n", yrsp_error(&rsp));

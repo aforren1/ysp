@@ -92,6 +92,39 @@
       }
     },
     {
+      "name": "macos-base",
+      "hidden": true,
+      "inherits": "base",
+      "generator": "Ninja",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Darwin" },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "14.0",
+        "YSP_BUILD_EXAMPLES": "ON",
+        "YSP_FETCH_MINIAUDIO": "ON",
+        "YSP_FETCH_PL_MPEG": "ON"
+      }
+    },
+    {
+      "name": "macos",
+      "displayName": "macOS, Apple clang, Ninja, Release, examples and tests",
+      "inherits": "macos-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "macos-sanitizers",
+      "displayName": "macOS, Apple clang, ASan and UBSan, Debug",
+      "inherits": "macos-base",
+      "cacheVariables": {
+        "CMAKE_C_FLAGS": "-fsanitize=address,undefined -fno-omit-frame-pointer",
+        "CMAKE_CXX_FLAGS": "-fsanitize=address,undefined -fno-omit-frame-pointer"
+      }
+    },
+    {
       "name": "nothreads-cxx",
       "displayName": "Linux, gcc, Y<X>_NO_THREADS in the C++ compile checks, Debug",
       "inherits": "linux-base",
@@ -105,13 +138,16 @@
   "buildPresets": [
     { "name": "build-windows", "hidden": true, "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" } },
     { "name": "build-linux",   "hidden": true, "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" } },
+    { "name": "build-macos",   "hidden": true, "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Darwin" } },
     { "name": "msvc",          "inherits": "build-windows", "configurePreset": "msvc",          "configuration": "Release" },
     { "name": "msvc-full",     "inherits": "build-windows", "configurePreset": "msvc-full",     "configuration": "Release" },
     { "name": "mingw",         "inherits": "build-windows", "configurePreset": "mingw" },
     { "name": "linux",         "inherits": "build-linux",   "configurePreset": "linux" },
     { "name": "clang",         "inherits": "build-linux",   "configurePreset": "clang" },
     { "name": "sanitizers",    "inherits": "build-linux",   "configurePreset": "sanitizers" },
-    { "name": "nothreads-cxx", "inherits": "build-linux",   "configurePreset": "nothreads-cxx" }
+    { "name": "nothreads-cxx", "inherits": "build-linux",   "configurePreset": "nothreads-cxx" },
+    { "name": "macos",            "inherits": "build-macos", "configurePreset": "macos" },
+    { "name": "macos-sanitizers", "inherits": "build-macos", "configurePreset": "macos-sanitizers" }
   ],
   "testPresets": [
     {
@@ -122,6 +158,7 @@
     },
     { "name": "test-windows", "hidden": true, "inherits": "test-base", "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" } },
     { "name": "test-linux",   "hidden": true, "inherits": "test-base", "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" } },
+    { "name": "test-macos",   "hidden": true, "inherits": "test-base", "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Darwin" } },
     { "name": "msvc",          "inherits": "test-windows", "configurePreset": "msvc",          "configuration": "Release" },
     { "name": "msvc-full",     "inherits": "test-windows", "configurePreset": "msvc-full",     "configuration": "Release" },
     { "name": "mingw",         "inherits": "test-windows", "configurePreset": "mingw" },
@@ -137,6 +174,16 @@
         "UBSAN_OPTIONS": "halt_on_error=1:print_stacktrace=1:exitcode=42"
       }
     },
-    { "name": "nothreads-cxx", "inherits": "test-linux",   "configurePreset": "nothreads-cxx" }
+    { "name": "nothreads-cxx", "inherits": "test-linux",   "configurePreset": "nothreads-cxx" },
+    { "name": "macos",         "inherits": "test-macos",   "configurePreset": "macos" },
+    {
+      "name": "macos-sanitizers",
+      "inherits": "test-macos",
+      "configurePreset": "macos-sanitizers",
+      "environment": {
+        "ASAN_OPTIONS": "exitcode=42",
+        "UBSAN_OPTIONS": "halt_on_error=1:print_stacktrace=1:exitcode=42"
+      }
+    }
   ]
 }

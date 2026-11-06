@@ -51,14 +51,15 @@ if sys.platform != "win32":
     extra_link_args.append("-pthread")
     libraries += ["m"] + (["dl"] if sys.platform.startswith("linux") else [])
 
-# python.org's CPython 3.10 and 3.11 builds target macOS 10.9. Below 10.12,
-# miniaudio 0.11.25's timer counts whole seconds, so its null device hands
-# over a second of frames at once (docs/audio.md, "The null device on
-# macOS"). 10.13 is what python.org's CPython 3.12+ targets.
+# macOS 14 is ysp's floor (README). python.org's CPython targets 10.9
+# (3.10, 3.11) or 10.13 (3.12+), and an extension built for its Python's
+# target below 10.12 gets miniaudio 0.11.25's whole-second timer, so its null
+# device hands over a second of frames at once (docs/audio.md, "The null
+# device on macOS").
 if sys.platform == "darwin":
     target = os.environ.get("MACOSX_DEPLOYMENT_TARGET", "")
-    if not target or tuple(int(x) for x in target.split(".")[:2]) < (10, 12):
-        os.environ["MACOSX_DEPLOYMENT_TARGET"] = "10.13"
+    if not target or tuple(int(x) for x in target.split(".")[:2]) < (14, 0):
+        os.environ["MACOSX_DEPLOYMENT_TARGET"] = "14.0"
 
 # Target the CPython 3.10+ stable ABI (Limited API): one .abi3.so works across
 # Python versions. The macro must match Py_LIMITED_API in the C source.

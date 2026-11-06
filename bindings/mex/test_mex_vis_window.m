@@ -11,8 +11,12 @@ function test_mex_vis_window()
 %   match single stimuli. The second window gets the foreground as the first
 %   did. Two texts made through ysp_gfx draw the same scene, bit for bit,
 %   as the same texts made in C with pack/layout and ygfx_crun() (needs
-%   Segoe UI and Microsoft YaHei). About 25 s. Prints PASS with the number
-%   of checks. This file is UTF-8.
+%   Segoe UI and Microsoft YaHei; Windows only). On macOS (METAL, every
+%   call on the main thread: ysp_vis.c, MAIN THREAD) the window has no
+%   window thread, the pause leaves it without a call, and the caps say
+%   METAL's depth, margin and NSEvent stamps; a text in the system font
+%   (Arial) draws. About 25 s. Prints PASS with the number of checks. This
+%   file is UTF-8.
 
     global YSP_VISW_CHECKS %#ok<GVMIS>
     YSP_VISW_CHECKS = 0;
@@ -22,7 +26,16 @@ function test_mex_vis_window()
     try
         g = ysp_gfx('open', h, 0.25);
         line = ysp_screen('describe', h);
-        check(~isempty(strfind(line, '2.1.25848')), 'the bundled ANGLE: %s', line);
+        angle = '2.1.25848';
+        if ismac
+            angle = '2.1.28042/b4f8ea825136';
+        end
+        check(~isempty(strfind(line, angle)), 'the bundled ANGLE: %s', line);
+        if ismac
+            c = ysp_screen('caps', h);
+            check(strcmp(c.backend, 'metal') && c.max_in_flight == 2 && c.margin_ns == int64(2000000) && ...
+                  c.os_input_stamps, 'caps: metal, 2 in flight, margin 2 ms, NSEvent stamps');
+        end
         granted = ~isempty(strfind(line, 'foreground=granted'));
         ysp_screen('title', h, 'ysp-vis MEX test');
         ysp_screen('cursor', h, true);
@@ -32,6 +45,10 @@ function test_mex_vis_window()
         r = ysp_screen('records', h);
         check(numel(r) == 120 && all(ismember([r.path], [1 2 3])) && all(ismember([r.tier], [1 2 3])), ...
               '120 records on a real path');
+        if ismac
+            % shown flips are tier 2 (presentedTime); a locked screen gives none
+            check(sum([r.tier] == 2) >= 100, '%d of 120 flips shown (tier 2)', sum([r.tier] == 2));
+        end
         fprintf('before the pause: paths %s, tiers %s\n', mat2str(unique([r.path])), mat2str(unique([r.tier])));
         pause(6);                                  % no call: the window thread keeps the window alive
         f = frames(h, g, 60, [0 1 0]);
@@ -54,7 +71,11 @@ function test_mex_vis_window()
     check(info.users == 0 && info.screens == 0 && info.gfx == 0, 'the last clear closed the window');
     clear ysp_vis;
     pixel_check(granted);
-    text_check();
+    if ispc
+        text_check();
+    else
+        text_default_check();
+    end
     fprintf('PASS test_mex_vis_window (%d checks)\n', YSP_VISW_CHECKS);
 end
 
@@ -142,6 +163,24 @@ function P = scene(h, g, what)
     ysp_gfx('end', g);
     P = ysp_gfx('read_scene', g, [0 0 800 600]);
     ysp_screen('flip', h);
+end
+
+% A text in the system font (Arial on macOS) draws.
+function text_default_check()
+    h = ysp_screen('open', 'windowed', true, 'size', [800 600]);
+    try
+        g = ysp_gfx('open', h, 'background', 0.5);
+        t = ysp_gfx('text', g, 'Hello, world', 'size', 40, 'color', [1 1 1]);
+        st = ysp_gfx('get', t, 'stamp');
+        check(~isempty(strfind(st, 'Arial.ttf#0=')) && ysp_gfx('get', t, 'missing') == 0, 'text in Arial: %s', st);
+        empty = text_scene(h, g, []);
+        b = text_scene(h, g, t);
+        check(~isequal(b, empty), 'the text draws');
+    catch e
+        try, ysp_screen('close', h); catch, end
+        rethrow(e);
+    end
+    ysp_screen('close', h);
 end
 
 % The texts of the C path (yv_ctext_setup() in bindings/share/ysp_vis_text.h)

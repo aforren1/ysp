@@ -284,9 +284,9 @@ why = "A negative hold moves the trailing write before the leading write's retur
 find = '''    if (desc->min_hold_ns < 0) YDEV__FAIL("desc.min_hold_ns must be >= 0");'''
 replace = ''
 
-# ysp/serial.h has no list of its own: its tests need a port. The rule of
-# yser_pulse_off_at_ns() is pure, and device_test reaches it through
-# ysp/device.h.
+# ysp/serial.h's own list (serial.toml) holds what a pseudo-terminal
+# shows. The rule of yser_pulse_off_at_ns() is pure, and device_test
+# reaches it through ysp/device.h.
 
 [[mutant]]
 id = "dev-33"

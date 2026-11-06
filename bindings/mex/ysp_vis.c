@@ -2,7 +2,8 @@
  *
  * One library holds the implementation and the one handle table; the thin
  * MEX files ysp_screen, ysp_gfx and ysp_video load it and pass their calls
- * here (ysp_vis_mex.h: the layout and the LIFETIME rule). Windows only.
+ * here (ysp_vis_mex.h: the layout and the LIFETIME rule). Windows (MATLAB,
+ * Octave) and macOS on arm64 (MATLAB; MAIN THREAD below).
  *
  *     h = ysp_screen('open', 'windowed', true);          % settles: 0.5 to 2.5 s
  *     g = ysp_gfx('open', h, 0.5);                      % background gray
@@ -21,16 +22,37 @@
  * negative or NaN time is refused. Records, frames and events carry the
  * exact ns beside the seconds as int64.
  *
- * THREADS: the window belongs to ysp/screen.h's window thread, so pause()
- * between trials does not hang it (in Octave too). No MATLAB callback runs
- * on a C thread.
+ * THREADS: on Windows the window belongs to ysp/screen.h's window thread,
+ * so pause() between trials does not hang it (in Octave too). No MATLAB
+ * callback runs on a C thread. On macOS every call runs on the process's
+ * main thread (MAIN THREAD below).
  *
  * SHARING: ysp/audio.h and ysp/timeline.h are declarations here; their calls
  * go through the tables of ysp_audio and ysp_timeline, loaded from this
  * file's directory when first needed ('shared' loads them now).
  *
- * NATIVES: SDL3 is linked statically; ANGLE's libEGL.dll and libGLESv2.dll
- * sit beside this file, and desc.angle_dir is always this file's directory.
+ * NATIVES: SDL3 is linked statically; ANGLE's libEGL and libGLESv2 (.dll on
+ * Windows, .dylib on macOS) sit beside this file, and desc.angle_dir is
+ * always this file's directory.
+ *
+ * MAIN THREAD (macOS). MATLAB runs a MEX function on its own thread, never
+ * on the process's main thread: measured with pthread_main_np() in R2026b
+ * on an M2 Mac mini (macOS 27.0.1) in the desktop, with -nodesktop, with
+ * -nojvm and with -batch, 0 in each. Cocoa's windows, SDL's video, the GL
+ * context and ysp/screen.h's METAL backend need the main thread, and
+ * open() refuses another. MATLAB's main thread runs its NSApplication's run
+ * loop, which serves the main dispatch queue in each of the four modes: a
+ * block sent from a MEX function ran there 16 to 31 us later, and a
+ * dispatch_sync round trip took 5 to 8 us at best and 9 to 11 us on
+ * average (20 each). So on macOS each ysp_screen, ysp_gfx and ysp_video
+ * call runs whole on the main queue while the MATLAB thread waits
+ * (vx_hop). The calls stay in order, and one at a time: the queue is
+ * serial and MATLAB's thread blocks. An error there leaves through
+ * vx_err's longjmp back to the hop, on the main thread, and the MATLAB
+ * thread raises it. A call that the main thread has not started after
+ * VX_HOP_WAIT_S is withdrawn and raises <name>:main_thread, so a main
+ * thread that never serves the queue cannot hang MATLAB. A call that has
+ * started runs to its end.
  */
 #include "mex.h"
 
@@ -42,10 +64,31 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+#if defined(__APPLE__)
+#include <dispatch/dispatch.h>
+#include <pthread.h>
+#include <setjmp.h>
+#endif
 
 /* ---- the module of the call ------------------------------------------------- */
 
 static const char* vx_mod = "ysp_vis";   /* the error ids' prefix: the thin MEX called */
+
+#if defined(__APPLE__)
+/* The call that runs on the main thread now (vx_hop), or NULL. */
+typedef struct vx_hop_call {
+    int            which, nlhs, nrhs;
+    void         (*fn)(void);   /* vx_on_main: a function instead of a command */
+    mxArray**      plhs;
+    const mxArray** prhs;
+    jmp_buf        jb;
+    int            failed;
+    char           id[64], msg[1024];
+    volatile int   state;   /* VX_HOP_*, changed with __atomic CAS */
+    dispatch_semaphore_t done;
+} vx_hop_call;
+static vx_hop_call* vx_hop_now;
+#endif
 
 static void vx_err(const char* code, const char* fmt, ...) {
     char id[64], msg[1024];
@@ -54,6 +97,17 @@ static void vx_err(const char* code, const char* fmt, ...) {
     va_start(ap, fmt);
     vsnprintf(msg, sizeof msg, fmt, ap);
     va_end(ap);
+#if defined(__APPLE__)
+    if (vx_hop_now && pthread_main_np()) {
+        /* on the main thread: mexErrMsgIdAndTxt must not unwind it, so the
+         * error goes back to the hop and the MATLAB thread raises it */
+        vx_hop_call* c = vx_hop_now;
+        snprintf(c->id, sizeof c->id, "%s", id);
+        snprintf(c->msg, sizeof c->msg, "%s", msg);
+        c->failed = 1;
+        longjmp(c->jb, 1);
+    }
+#endif
     mexErrMsgIdAndTxt(id, "%s", msg);
 }
 
@@ -171,10 +225,15 @@ static void vx_close_all(void) {
 
 static void vx_attach(void) { vx_users++; }
 
+static int vx_on_main(void (*fn)(void));
+
 static void vx_detach(void) {
     if (vx_users > 0) vx_users--;
     if (vx_users > 0) return;
-    vx_close_all();
+    /* macOS: the windows and GL objects close on the main thread. A main
+     * thread that does not take the call leaves them, and the owners'
+     * modules they pin, to the process's end. */
+    if (!vx_on_main(vx_close_all)) return;
     /* The movies and the gfx gave back their pins above; now the owners' modules. */
     ysp_share_mex_unload(ysp_audio_api_module);
     ysp_share_mex_unload(ysp_timeline_api_module);
@@ -683,12 +742,13 @@ static void vx_screen_cmd(const char* cmd, int nlhs, mxArray* plhs[], int nrhs, 
         plhs[0] = mxCreateString(line);
     } else if (!strcmp(cmd, "caps")) {
         static const char* f[] = { "kind", "backend", "period", "period_ns", "mode", "native_target", "hw_onset",
-                                   "vrr_capable", "max_in_flight", "worst_tier", "raw_keyboard" };
+                                   "vrr_capable", "max_in_flight", "worst_tier", "raw_keyboard", "os_input_stamps",
+                                   "margin", "margin_ns" };
         yscr_caps c;
         mxArray* s;
         vx_nargs(nrhs, 2, "c = ysp_screen('caps', h)");
         yscr_get_caps(&vx_scr(prhs[1])->s, &c);
-        s = mxCreateStructMatrix(1, 1, 11, f);
+        s = mxCreateStructMatrix(1, 1, 14, f);
         mxSetFieldByNumber(s, 0, 0, mxCreateString(c.kind == YSCR_FIXED_GRID ? "fixed_grid" : c.kind == YSCR_CONTINUOUS ? "continuous" : "callback"));
         mxSetFieldByNumber(s, 0, 1, mxCreateString(yv_value_name(yv_backends, c.backend)));
         mxSetFieldByNumber(s, 0, 2, vx_d(yv_s(c.period_ns)));
@@ -700,6 +760,9 @@ static void vx_screen_cmd(const char* cmd, int nlhs, mxArray* plhs[], int nrhs, 
         mxSetFieldByNumber(s, 0, 8, vx_d(c.max_in_flight));
         mxSetFieldByNumber(s, 0, 9, vx_d(c.worst_tier));
         mxSetFieldByNumber(s, 0, 10, mxCreateLogicalScalar(c.raw_keyboard));
+        mxSetFieldByNumber(s, 0, 11, mxCreateLogicalScalar(c.os_input_stamps));
+        mxSetFieldByNumber(s, 0, 12, vx_d(yv_s(c.margin_ns)));
+        mxSetFieldByNumber(s, 0, 13, vx_i64(c.margin_ns));
         plhs[0] = s;
     } else if (!strcmp(cmd, "settle")) {
         static const char* f[] = { "result", "mode", "source", "condition", "time", "flips", "run", "need",
@@ -895,7 +958,7 @@ static void vx_vis_cmd(const char* cmd, int nlhs, mxArray* plhs[], int nrhs, con
     }
 }
 
-static void vx_dispatch(int which, int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
+static void vx_run(int which, int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     char cmd[32];
     static const char* mods[] = { "ysp_vis", "ysp_screen", "ysp_gfx", "ysp_video" };
     vx_mod = which >= 0 && which <= 3 ? mods[which] : "ysp_vis";
@@ -908,6 +971,95 @@ static void vx_dispatch(int which, int nlhs, mxArray* plhs[], int nrhs, const mx
     default: vx_vis_cmd(cmd, nlhs, plhs, nrhs, prhs); break;
     }
 }
+
+/* ---- MAIN THREAD (macOS) ------------------------------------------------------------ */
+
+#if defined(__APPLE__)
+#define VX_HOP_WAIT_S 10   /* the main thread takes a call in 16 to 31 us when it serves its queue */
+enum { VX_HOP_PENDING = 0, VX_HOP_RUNNING = 1, VX_HOP_DONE = 2, VX_HOP_WITHDRAWN = 3 };
+
+static int vx_hop_cas(vx_hop_call* c, int from, int to) {
+    int f = from;
+    return __atomic_compare_exchange_n(&c->state, &f, to, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
+}
+
+static void vx_hop_free(vx_hop_call* c) {
+    dispatch_release(c->done);
+    free(c);
+}
+
+/* On the main thread. A withdrawn call is the block's to free. */
+static void vx_hop_block(void* p) {
+    vx_hop_call* c = (vx_hop_call*)p;
+    if (!vx_hop_cas(c, VX_HOP_PENDING, VX_HOP_RUNNING)) { vx_hop_free(c); return; }
+    vx_hop_now = c;
+    if (setjmp(c->jb) == 0) {
+        if (c->fn) c->fn();
+        else vx_run(c->which, c->nlhs, c->plhs, c->nrhs, c->prhs);
+    }
+    vx_hop_now = NULL;
+    __atomic_store_n(&c->state, VX_HOP_DONE, __ATOMIC_RELEASE);
+    dispatch_semaphore_signal(c->done);
+}
+
+/* Runs the call on the main queue and waits for it. 0 when it ran (failed
+ * says how), -1 when the main thread did not start it in time. */
+static int vx_hop(vx_hop_call* c) {
+    c->done = dispatch_semaphore_create(0);
+    c->state = VX_HOP_PENDING;
+    dispatch_async_f(dispatch_get_main_queue(), c, vx_hop_block);
+    if (dispatch_semaphore_wait(c->done, dispatch_time(DISPATCH_TIME_NOW, (int64_t)VX_HOP_WAIT_S * 1000000000)) != 0) {
+        if (vx_hop_cas(c, VX_HOP_PENDING, VX_HOP_WITHDRAWN)) return -1;   /* the block frees it */
+        dispatch_semaphore_wait(c->done, DISPATCH_TIME_FOREVER);         /* it started: it ends */
+    }
+    return 0;
+}
+
+static int vx_on_main(void (*fn)(void)) {
+    vx_hop_call* c;
+    if (pthread_main_np()) { fn(); return 1; }
+    c = (vx_hop_call*)calloc(1, sizeof *c);
+    if (!c) return 0;
+    c->fn = fn;
+    if (vx_hop(c) < 0) return 0;
+    vx_hop_free(c);
+    return 1;
+}
+
+static void vx_dispatch(int which, int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
+    static const char* mods[] = { "ysp_vis", "ysp_screen", "ysp_gfx", "ysp_video" };
+    vx_hop_call* c;
+    char id[64], msg[1024];
+    if (pthread_main_np()) { vx_run(which, nlhs, plhs, nrhs, prhs); return; }
+    c = (vx_hop_call*)calloc(1, sizeof *c);
+    if (!c) mexErrMsgIdAndTxt("ysp_vis:memory", "out of memory");
+    c->which = which;
+    c->nlhs = nlhs;
+    c->plhs = plhs;
+    c->nrhs = nrhs;
+    c->prhs = prhs;
+    if (vx_hop(c) < 0) {
+        const char* m = which >= 0 && which <= 3 ? mods[which] : "ysp_vis";
+        snprintf(id, sizeof id, "%s:main_thread", m);
+        mexErrMsgIdAndTxt(id, "%s: the process's main thread did not take the call in %d s. On macOS ysp_screen, "
+                          "ysp_gfx and ysp_video run on the main thread (Cocoa, SDL's video, the METAL backend), "
+                          "which MATLAB's run loop serves; something holds it now.", m, VX_HOP_WAIT_S);
+    }
+    if (c->failed) {
+        snprintf(id, sizeof id, "%s", c->id);
+        snprintf(msg, sizeof msg, "%s", c->msg);
+        vx_hop_free(c);
+        mexErrMsgIdAndTxt(id, "%s", msg);
+    }
+    vx_hop_free(c);
+}
+#else
+static int vx_on_main(void (*fn)(void)) { fn(); return 1; }
+
+static void vx_dispatch(int which, int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
+    vx_run(which, nlhs, plhs, nrhs, prhs);
+}
+#endif
 
 static const yv_core vx_core = { YV_CORE_ABI, sizeof(yv_core), YV_MEX_VERSION, vx_attach, vx_detach, vx_dispatch };
 

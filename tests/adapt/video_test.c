@@ -10,7 +10,8 @@
  * reference, XXH64 against its published vectors, replay, the heap, the
  * soundtrack on ysp/audio.h's scripted device (every sample on its frame,
  * the movie clock on the audio's, controls, loop, late start, refusals),
- * and Media Foundation on generated clips (Windows, YVID_TEST_MEDIA).
+ * and Media Foundation (Windows) or AVFoundation (macOS) on generated clips
+ * (YVID_TEST_MEDIA).
  * No framework: it returns 0 when every check passed and 1 after printing
  * each failure.
  *
@@ -222,8 +223,8 @@ static uint8_t g_up_copy[64 * 64 * 16];
  * collected in order from g_planes_off = 0, and the Y plane is kept. */
 static uint8_t g_planes[1 << 20];
 static size_t g_planes_off;
-#if YVID__MF
-/* Only the Media Foundation cases read these; elsewhere clang's
+#if YVID__MF || YVID__AVF
+/* Only the MP4 cases read these; elsewhere clang's
  * -Wunused-but-set-global (emcc 6) fails the build. */
 static int g_up_w;
 static const uint8_t* g_up_y;
@@ -237,7 +238,7 @@ static int rec_update(void* c, uint32_t id, int x, int y, int w, int h, const vo
     int k;
     (void)c; (void)id; (void)x; (void)y; (void)w; (void)h; (void)stride;
     g_up_n++;
-#if YVID__MF
+#if YVID__MF || YVID__AVF
     g_up_w = w;
     if (g_plane_i == 0) g_up_y = p;
 #endif
@@ -1497,6 +1498,11 @@ static void test_open_refusals(void) {
     REFUSE(vd.backend = YVID_BACKEND_MF, "no index", YVID_ERR_NOT_FOUND);
 #else
     REFUSE(vd.backend = YVID_BACKEND_MF, "Media Foundation", YVID_ERR_NOT_IMPLEMENTED);
+#endif
+#if YVID__AVF
+    REFUSE(vd.backend = YVID_BACKEND_AVF, "no index", YVID_ERR_NOT_FOUND);
+#else
+    REFUSE(vd.backend = YVID_BACKEND_AVF, "AVFoundation", YVID_ERR_NOT_IMPLEMENTED);
 #endif
     /* an index that disagrees with the stream, field by field */
     memset(&c, 0, sizeof c);
@@ -3005,12 +3011,21 @@ static void test_rates(void) {
     }
 }
 
-/* ------------------------------------------------- Media Foundation (Windows)
- * Real decoding of the clips tests/media/make_video_clips.sh makes, in the
- * directory YVID_TEST_MEDIA names. Each frame carries its index in 16 bars
- * across the top rows, so the test reads which frame the upload holds.
- * Skipped, with a message, without the clips or without Media Foundation. */
-#if YVID__MF
+/* ------------------------- Media Foundation (Windows), AVFoundation (macOS)
+ * Real decoding of the clips tests/media/make_video_clips.sh (ffmpeg) or
+ * make_video_clips_mac.sh (VideoToolbox) makes, in the directory
+ * YVID_TEST_MEDIA names. Each frame carries its index in 16 bars across the
+ * top rows, so the test reads which frame the upload holds. A clip one set
+ * does not make is skipped by name. Skipped, with a message, without the
+ * clips or without either backend. */
+#if YVID__MF || YVID__AVF
+#if YVID__AVF
+    #define MP4_NAME "AVFoundation"
+    #define MP4_HW_HARD YVID_HW_VIDEOTOOLBOX
+#else
+    #define MP4_NAME "Media Foundation"
+    #define MP4_HW_HARD YVID_HW_DXVA
+#endif
 
 static char g_media[512];
 
@@ -3083,8 +3098,9 @@ static void test_mf_index(void) {
         { "c_2997.mp4", 150, NULL }, { "c_23976.mp4", 96, NULL }, { "c_crop.mp4", 60, NULL },
         { "c_audio.mp4", 90, NULL },
         { "r_bframes.mp4", 0, "B-frames" }, { "r_vfr.mp4", 0, "no constant rate" }, { "r_gop.mp4", 0, "GOP length changes" },
-        { "r_10bit.mp4", 0, "High 10" }, { "r_444.mp4", 0, "4:4:4" }, { "r_sar.mp4", 0, "square pixels" },
+        { "r_10bit.mp4", 0, " 10" }, { "r_444.mp4", 0, "4:4:4" }, { "r_sar.mp4", 0, "square pixels" },
         { "r_interlace.mp4", 0, "interlaced" }, { "r_mpeg4.mp4", 0, "not H.264 or HEVC" },
+        { "r_jpeg.mov", 0, "not H.264 or HEVC" },
         { "r_rotation.mp4", 0, "rotated" }, { "r_ts1000.mp4", 0, "no constant rate" }, { "r_offset.mp4", 0, "edit list" },
     };
     yvid_index_desc d;
@@ -3093,6 +3109,9 @@ static void test_mf_index(void) {
     int64_t n;
     g_case = "mf index";
     for (i = 0; i < sizeof t / sizeof t[0]; i++) {
+        FILE* fh = fopen(media(t[i].clip), "rb");
+        if (!fh) { printf("video_test: %s: not in this clip set, skipped\n", t[i].clip); continue; }
+        fclose(fh);
         index_desc_bt709(&d);
         err[0] = 0;
         n = yvid_index_make(media(t[i].clip), NULL, &d, err, sizeof err);
@@ -3161,17 +3180,35 @@ static void test_mf_index(void) {
             } else fail(__LINE__, err);
         }
         remove(media("c_mixcolor.vui.yspvi"));
-        /* HEVC's VUI is not read: its color must be stated */
+        /* HEVC's VUI is not read here: Media Foundation needs its color
+         * stated; CoreMedia's format description states it */
         memset(&d, 0, sizeof d);
         n = yvid_index_make(media("c_hevc.mp4"), media("c_hevc.vui.yspvi"), &d, err, sizeof err);
+#if YVID__AVF
+        if (n != 120) { fprintf(stderr, "  %s\n", err); fail(__LINE__, "HEVC color from the format description"); }
+#else
         CHECK(n < 0 && (strstr(err, "does not state its matrix") || strstr(err, "HEVC")));
+#endif
         remove(media("c_hevc.vui.yspvi"));
     }
 }
 
 /* Plays a clip from frame 0 to the end on 60 Hz and checks every shown
- * frame's bar code against its index; returns the shown count. */
+ * frame's bar code against its index; returns the shown count. The bars'
+ * luma at their centers stays in video range (16 and 235 coded): a
+ * decoder that converted the range (235 to 255) would pass the hashes of
+ * an index it made itself, and fails here. */
 static int32_t g_mf_w, g_mf_h;
+static int g_bar_lo, g_bar_hi;
+static void bars_range(void) {
+    int k;
+    if (!g_up_y || g_up_w < 16) return;
+    for (k = 0; k < 16; k++) {
+        int v = g_up_row32[(k * g_mv.info.w) / 16 + g_mv.info.w / 32];
+        if (v < g_bar_lo) g_bar_lo = v;
+        if (v > g_bar_hi) g_bar_hi = v;
+    }
+}
 static int64_t mf_play_all(const yvid_desc* vd, int64_t frames, int check_heap) {
     disp d;
     yscr_frame f;
@@ -3180,6 +3217,7 @@ static int64_t mf_play_all(const yvid_desc* vd, int64_t frames, int check_heap) 
     int rc = YVID_OK;
     rec_reset();
     g_up_bytes = 0;
+    g_bar_lo = 255; g_bar_hi = 0;
     if (!yvid_open(&g_mv, &g_gfx, vd)) { fprintf(stderr, "  open: %s\n", yvid_error(&g_mv)); fail(__LINE__, "open"); return 0; }
     disp_init(&d, 60.0, 0.01);
     CHECK(yvid_play_at(&g_mv, YVID_ASAP) > 0);
@@ -3190,6 +3228,7 @@ static int64_t mf_play_all(const yvid_desc* vd, int64_t frames, int check_heap) 
         if (g_mv.has_last && g_mv.last.display == f.index && g_mv.last.decision == YVID_SHOWN) {
             shown++;
             if (up_bars() != (int)(g_mv.last.frame & 0xffff)) bad++;
+            bars_range();
         }
     }
     CHECK_I(rc, YVID_ENDED);
@@ -3199,6 +3238,8 @@ static int64_t mf_play_all(const yvid_desc* vd, int64_t frames, int check_heap) 
     CHECK_I(info.ts_mismatch, 0);
     CHECK_I(info.hash_mismatch, 0);
     g_mf_w = info.w; g_mf_h = info.h;
+    /* measured 16 to 235 on every clip (macOS, VideoToolbox's clips) */
+    if (g_bar_lo < 8 || g_bar_hi > 245) fail_i(__LINE__, "bars' luma outside video range (lowest, highest)", g_bar_lo, g_bar_hi);
     yvid_close(&g_mv);
     return shown;
 }
@@ -3207,7 +3248,12 @@ static void test_mf_play(void) {
     yvid_desc vd;
     yvid_index_desc id;
     char err[600], line[1024];
-    int hw;
+    size_t hi;
+#if YVID__AVF
+    static const int hws[] = { YVID_HW_OFF, YVID_HW_VIDEOTOOLBOX, YVID_HW_AUTO };
+#else
+    static const int hws[] = { YVID_HW_OFF, YVID_HW_DXVA };
+#endif
     g_case = "mf play";
     mf_desc(&vd, "c_720p30.mp4");
     CHECK_I(mf_play_all(&vd, 300, 1), 300);
@@ -3223,7 +3269,8 @@ static void test_mf_play(void) {
     CHECK(mf_play_all(&vd, 96, 0) == 96);
     /* every decoder gives the software decoder's bytes (the index's) */
     g_case = "mf decoders";
-    for (hw = YVID_HW_OFF; hw <= YVID_HW_DXVA; hw++) {
+    for (hi = 0; hi < sizeof hws / sizeof hws[0]; hi++) {
+        int hw = hws[hi];
         yvid_info info;
         mf_desc(&vd, "c_1080p60.mp4");
         vd.hw_decode = (yvid_hw)hw;
@@ -3232,13 +3279,17 @@ static void test_mf_play(void) {
         if (yvid_open(&g_mv, &g_gfx, &vd)) {
             yvid_get_info(&g_mv, &info);
             yvid_describe(&g_mv, line, sizeof line);
-            printf("video_test: hw %d: %.140s\n", hw, line);
+            printf("video_test: hw %d: %.160s\n", hw, line);
+#if YVID__AVF
+            /* the decoder that ran, as asked; AUTO is the hardware one here */
+            CHECK_I(info.hw, hw == YVID_HW_OFF ? YVID_HW_OFF : YVID_HW_VIDEOTOOLBOX);
+#endif
             yvid_close(&g_mv);
         }
     }
-    /* an index made by DXVA serves the software decoder */
+    /* an index made by the hardware decoder serves the software decoder */
     index_desc_bt709(&id);
-    id.hw = YVID_HW_DXVA;
+    id.hw = MP4_HW_HARD;
     CHECK_I(yvid_index_make(media("c_720p30.mp4"), media("c_720p30.dxva.yspvi"), &id, err, sizeof err), 300);
     mf_desc(&vd, "c_720p30.mp4");
     {
@@ -3289,9 +3340,11 @@ static void test_mf_seek(void) {
 
 static uint8_t* g_mf_file;
 static int64_t g_mf_size;
+static int64_t g_rd_max_off;   /* the largest offset asked for */
 static int64_t mf_rd(void* ctx, int64_t off, void* buf, int64_t n) {
     (void)ctx;
     if (off < 0 || off >= g_mf_size) return -1;
+    if (off > g_rd_max_off) g_rd_max_off = off;
     if (n > g_mf_size - off) n = g_mf_size - off;
     if (n > 65536) n = 65536;   /* short reads, as a range request gives */
     memcpy(buf, g_mf_file + off, (size_t)n);
@@ -3344,8 +3397,18 @@ static void test_mf_sources(void) {
         for (k = 0; k < 700 && rc == YVID_OK; k++) { disp_next(&d, &f); rc = yvid_update(&g_mv, &f); }
         yvid_get_info(&g_mv, &info);
         yvid_describe(&g_mv, line, sizeof line);
+#if YVID__AVF
+        /* VideoToolbox's decoders refuse the damaged frame (a status, no
+         * image) where Media Foundation's conceal it: the movie ends with
+         * DECODER after the frames before it, or the hash flags it */
+        printf("video_test: a damaged byte: %s\n", info.hash_mismatch > 0 ? "hash mismatch" : yvid_error(&g_mv));
+        CHECK(info.hash_mismatch > 0 || (rc == YVID_ERR_DECODER && info.shown > 0 && strstr(yvid_error(&g_mv), "decode of frame")));
+        /* v0.7.0: the message keeps VideoToolbox's own reason */
+        if (info.hash_mismatch == 0) CHECK(strstr(yvid_error(&g_mv), "): VideoToolbox decode failed (") != NULL);
+#else
         CHECK(info.hash_mismatch > 0);
         CHECK(strstr(line, "NOT CANONICAL: hash mismatches") != NULL);
+#endif
         yvid_close(&g_mv);
     } else fail(__LINE__, yvid_error(&g_mv));
     /* a stale index: another clip's */
@@ -3369,6 +3432,7 @@ static void test_mf_threaded(void) {
     yscr_frame f;
     int64_t k, t0, P = 16666667, last = -1, order_bad = 0, shown = 0, bars_bad = 0;
     int rc = YVID_OK;
+#if YVID__MF
     HRESULT co = E_FAIL;
     /* looked up, so the test links nothing beyond what the header does */
     typedef HRESULT (WINAPI *co_init_fn)(void*, DWORD);
@@ -3376,9 +3440,12 @@ static void test_mf_threaded(void) {
     HMODULE ole = LoadLibraryW(L"ole32.dll");
     co_init_fn co_init = ole ? (co_init_fn)(void (*)(void))GetProcAddress(ole, "CoInitializeEx") : NULL;
     co_uninit_fn co_uninit = ole ? (co_uninit_fn)(void (*)(void))GetProcAddress(ole, "CoUninitialize") : NULL;
+#endif
     g_case = "mf threaded";
     g_virtual = 0;
+#if YVID__MF
     if (co_init) co = co_init(NULL, COINIT_APARTMENTTHREADED);
+#endif
     mf_desc(&vd, "c_720p30.mp4");
     vd.inline_decode = false;
     rec_reset();
@@ -3405,33 +3472,303 @@ static void test_mf_threaded(void) {
     CHECK_I(bars_bad, 0);
     if (shown < 150) fail_i(__LINE__, "frames shown", shown, 150);
     yvid_close(&g_mv);
+#if YVID__MF
     if (SUCCEEDED(co) && co_uninit) co_uninit();
+#endif
     g_virtual = 1;
 }
+
+#if YVID__AVF
+/* AVFoundation's own cases, on the decoder directly: every frame's time,
+ * keyframe flag and hash against the index and the frame count; seeks to
+ * keyframes and between them; then a missing file, a path outside ASCII, a
+ * truncated file, DXVA refused and the resource loader. */
+static int avf_index(const char* clip, yvid__index* ix) {
+    yvid_desc vd;
+    char err[300];
+    memset(&vd, 0, sizeof vd);
+    vd.path = media(clip);
+    if (yvid__index_load(&vd, ix, 1, err, sizeof err) < 0) { fprintf(stderr, "  %s: %s\n", clip, err); fail(__LINE__, "index"); return 0; }
+    return 1;
+}
+
+static int avf_open(yvid__avf* m, const char* clip, const yvid__index* ix, yvid_stream* st, int hw) {
+    yvid_decoder_open in;
+    char err[300];
+    memset(&in, 0, sizeof in);
+    memset(st, 0, sizeof *st);
+    in.path = media(clip);
+    m->req_auto = 1;
+    if (yvid__avf_open_ex(m, &in, st, hw, 0, ix->c.fps_num, ix->c.fps_den, err, sizeof err) < 0) {
+        fprintf(stderr, "  %s: %s\n", clip, err);
+        fail(__LINE__, "AVFoundation open");
+        yvid__avf_close(m);
+        return 0;
+    }
+    return 1;
+}
+
+static void avf_walk(const char* clip, int hw) {
+    static yvid__avf m;
+    yvid__index ix;
+    yvid_stream st;
+    int64_t i = 0, bad_t = 0, bad_k = 0, bad_h = 0;
+    int rc;
+    if (!avf_index(clip, &ix)) return;
+    if (avf_open(&m, clip, &ix, &st, hw)) {
+        for (;;) {
+            yvid_out o;
+            yvid_planes dst;
+            memset(&o, 0, sizeof o);
+            rc = yvid__avf_next(&m, &dst, &o);
+            if (rc != YVID_OK) break;
+            /* exactly frame i's time in the track's timescale */
+            if (o.pts * ix.c.fps_num != i * (int64_t)ix.c.fps_den * st.timescale) bad_t++;
+            if (((o.flags & YVID_OUT_KEYFRAME) != 0) != (i % ix.c.gop == 0)) bad_k++;
+            if (yvid__hash_planes(YVID_FMT_NV12, &o.planes) != ix.hashes[i]) bad_h++;
+            i++;
+        }
+        CHECK_I(rc, YVID_ENDED);
+        CHECK_I(i, ix.c.frames);
+        CHECK_I(bad_t, 0); CHECK_I(bad_k, 0); CHECK_I(bad_h, 0);
+        printf("video_test: %s, %s decoder: %lld frames, each at its time (timescale %d), keyframes every %d, hashes equal\n",
+               clip, m.hw == YVID_HW_OFF ? "software" : "hardware", (long long)i, (int)st.timescale, (int)ix.c.gop);
+        yvid__avf_close(&m);
+    }
+    yvid__free(ix.hashes);
+}
+
+/* A seek to the target's keyframe, frames before the target decoded and
+ * not output, then the target itself: its time and its bytes. */
+static void avf_seeks(const char* clip, const int64_t* targets, int n) {
+    static yvid__avf m;
+    yvid__index ix;
+    yvid_stream st;
+    int k;
+    if (!avf_index(clip, &ix)) return;
+    if (avf_open(&m, clip, &ix, &st, YVID_HW_VIDEOTOOLBOX)) {
+        for (k = 0; k < n; k++) {
+            int64_t t = targets[k], key = t - t % ix.c.gop, i;
+            yvid_out o;
+            yvid_planes dst;
+            int rc = yvid__avf_seek(&m, key, 0);
+            if (rc != YVID_OK) { fprintf(stderr, "  seek %lld: %s\n", (long long)key, m.why); fail(__LINE__, "seek"); continue; }
+            for (i = key; i < t; i++) {
+                memset(&o, 0, sizeof o);
+                if (yvid__avf_next(&m, NULL, &o) != YVID_OK) break;
+                if (i == key && !(o.flags & YVID_OUT_KEYFRAME)) fail_i(__LINE__, "the seek's first frame is a keyframe", i, key);
+            }
+            memset(&o, 0, sizeof o);
+            rc = yvid__avf_next(&m, &dst, &o);
+            CHECK_I(rc, YVID_OK);
+            if (rc == YVID_OK) {
+                if (o.pts * ix.c.fps_num != t * (int64_t)ix.c.fps_den * st.timescale) fail_i(__LINE__, "the target's time", o.pts, t);
+                if (yvid__hash_planes(YVID_FMT_NV12, &o.planes) != ix.hashes[t]) fail_i(__LINE__, "the target's bytes", t, t);
+            }
+        }
+        yvid__avf_close(&m);
+    }
+    yvid__free(ix.hashes);
+}
+
+static int avf_copy(const char* from, const char* to, int64_t bytes) {
+    int64_t n = 0;
+    uint8_t* b = slurp(from, &n);
+    int ok;
+    if (!b) return 0;
+    if (bytes >= 0 && bytes < n) n = bytes;
+    ok = tp_write(to, b, (size_t)n);
+    free(b);
+    return ok;
+}
+
+static void test_avf(void) {
+    static const int64_t targets[] = { 0, 30, 45, 59, 60, 61, 299, 150, 1 };
+    yvid_desc vd;
+    yvid_info info;
+    yvid_index_desc id;
+    char err[600], line[1024];
+    int64_t n;
+    g_case = "avf decoder";
+    avf_walk("c_720p30.mp4", YVID_HW_VIDEOTOOLBOX);
+    avf_walk("c_23976.mp4", YVID_HW_VIDEOTOOLBOX);
+    avf_walk("c_hevc.mp4", YVID_HW_VIDEOTOOLBOX);
+    /* the software decoders give the same bytes; HEVC's pads its rows */
+    avf_walk("c_hevc.mp4", YVID_HW_OFF);
+    avf_walk("c_crop.mp4", YVID_HW_OFF);
+    g_case = "avf seeks";
+    avf_seeks("c_720p30.mp4", targets, (int)(sizeof targets / sizeof targets[0]));
+    {
+        static const int64_t t2[] = { 95, 24, 47, 48, 0 };
+        avf_seeks("c_23976.mp4", t2, 5);
+        static const int64_t t3[] = { 119, 30, 31, 89 };
+        avf_seeks("c_hevc.mp4", t3, 4);
+    }
+    /* a missing file */
+    g_case = "avf missing";
+    mf_desc(&vd, "no_such_clip.mp4");
+    CHECK(!yvid_open(&g_mv, &g_gfx, &vd));
+    CHECK_I(g_mv.error_code, YVID_ERR_NOT_FOUND);
+    CHECK_I(yvid_probe(&vd, &info, err, sizeof err), YVID_ERR_NOT_FOUND);
+    index_desc_bt709(&id);
+    CHECK_I(yvid_index_make(media("no_such_clip.mp4"), NULL, &id, err, sizeof err), YVID_ERR_NOT_FOUND);
+    /* the index there, the media file not: still NOT_FOUND */
+    vd.index = "x"; vd.index_size = 1;
+    CHECK(!yvid_open(&g_mv, &g_gfx, &vd));
+    CHECK(g_mv.error_code == YVID_ERR_NOT_FOUND || g_mv.error_code == YVID_ERR_FORMAT);
+    /* DXVA is Windows's */
+    g_case = "avf hw";
+    mf_desc(&vd, "c_720p30.mp4");
+    vd.hw_decode = YVID_HW_DXVA;
+    CHECK(!yvid_open(&g_mv, &g_gfx, &vd));
+    CHECK_I(g_mv.error_code, YVID_ERR_REFUSED);
+    CHECK(strstr(yvid_error(&g_mv), "Windows") != NULL);
+    id.hw = YVID_HW_DXVA;
+    CHECK_I(yvid_index_make(media("c_720p30.mp4"), media("c_720p30.x.yspvi"), &id, err, sizeof err), YVID_ERR_ARG);
+    /* a path outside ASCII: the clip and its index in a folder named with
+     * non-Latin, CJK and non-BMP characters, indexed and played there */
+    g_case = "avf utf-8";
+    {
+        static char dir[700], mp4[800], ix[800];
+        snprintf(dir, sizeof dir, "%s/%s", g_media, TP_DIR);
+        snprintf(mp4, sizeof mp4, "%s/clip.mp4", dir);
+        snprintf(ix, sizeof ix, "%s/clip.mp4.yspvi", dir);
+        CHECK(tp_mkdir(dir));
+        CHECK(avf_copy(media("c_720p30.mp4"), mp4, -1));
+        index_desc_bt709(&id);
+        CHECK_I(yvid_index_make(mp4, NULL, &id, err, sizeof err), 300);
+        memset(&vd, 0, sizeof vd);
+        mf_desc(&vd, "c_720p30.mp4");
+        vd.path = mp4;
+        CHECK_I(mf_play_all(&vd, 300, 0), 300);
+        CHECK_I(yvid_probe(&vd, &info, err, sizeof err), YVID_OK);
+        CHECK_I(info.backend, YVID_BACKEND_AVF);
+        tp_remove(ix); tp_remove(mp4); tp_rmdir(dir);
+    }
+    /* truncated files: half of it, and all but the last 64 KB (the moov box
+     * is at the front, so the reader opens and the samples run out) */
+    g_case = "avf truncated";
+    {
+        static char half[700], tail[700];
+        int64_t size = 0;
+        uint8_t* whole = slurp(media("c_720p30.mp4"), &size);
+        int64_t isz = 0;
+        uint8_t* ixb = slurp(media("c_720p30.mp4.yspvi"), &isz);
+        free(whole);
+        snprintf(half, sizeof half, "%s/t_half.mp4", g_media);
+        snprintf(tail, sizeof tail, "%s/t_tail.mp4", g_media);
+        CHECK(avf_copy(media("c_720p30.mp4"), half, size / 2));
+        CHECK(avf_copy(media("c_720p30.mp4"), tail, size - 65536));
+        index_desc_bt709(&id);
+        n = yvid_index_make(half, NULL, &id, err, sizeof err);
+        printf("video_test: half a clip: index %lld: %s\n", (long long)n, err);
+        CHECK(n < 0);
+        n = yvid_index_make(tail, NULL, &id, err, sizeof err);
+        printf("video_test: a clip without its last 64 KB: index %lld: %s\n", (long long)n, err);
+        CHECK(n < 0);
+        /* with the whole file's index: refused at open, not played short */
+        memset(&vd, 0, sizeof vd);
+        mf_desc(&vd, "c_720p30.mp4");
+        vd.path = tail;
+        vd.index = ixb; vd.index_size = (size_t)isz;
+        CHECK(!yvid_open(&g_mv, &g_gfx, &vd));
+        CHECK_I(g_mv.error_code, YVID_ERR_FORMAT);
+        remove(half); remove(tail);
+        free(ixb);
+    }
+    /* a reader, through the resource loader, on a clip large enough that
+     * AVFoundation asks for bytes after the start (measured on c_1080p60:
+     * 3 requests at open, 15.7 MB read of 11.0 MB by a seek and 60 frames
+     * more); every frame shown and hashed, and a seek */
+    g_case = "avf reader";
+    {
+        int64_t isz = 0;
+        uint8_t* ixb = slurp(media("c_1080p60.mp4.yspvi"), &isz);
+        yvid_reader rd;
+        g_mf_file = slurp(media("c_1080p60.mp4"), &g_mf_size);
+        g_rd_max_off = 0;
+        if (g_mf_file && ixb) {
+            mf_desc(&vd, "c_1080p60.mp4");
+            rd.read = mf_rd; rd.size = g_mf_size;
+            vd.path = NULL; vd.reader = &rd; vd.index = ixb; vd.index_size = (size_t)isz;
+            vd.refresh_num = 120;
+            CHECK_I(mf_play_all(&vd, 600, 0), 600);
+            if (yvid_open(&g_mv, &g_gfx, &vd)) {
+                disp d;
+                yscr_frame f;
+                int k, landed = 0;
+                disp_init(&d, 120.0, 0.01);
+                yvid_play_at(&g_mv, YVID_ASAP);
+                for (k = 0; k < 10; k++) { disp_next(&d, &f); yvid_update(&g_mv, &f); }
+                CHECK(yvid_seek_frame(&g_mv, 480, YVID_STAY_PAUSED) > 0);
+                for (k = 0; k < 60 && !landed; k++) {
+                    disp_next(&d, &f);
+                    CHECK(yvid_update(&g_mv, &f) >= 0);
+                    landed = g_mv.state == YVID__PAUSED && g_mv.shown_g == 480;
+                }
+                CHECK(landed);
+                CHECK_I(up_bars(), 480);
+                yvid_get_info(&g_mv, &info);
+                CHECK_I(info.hash_mismatch, 0);
+                yvid_close(&g_mv);
+            } else fail(__LINE__, yvid_error(&g_mv));
+            /* else the check above never met an offset after 0 */
+            if (g_rd_max_off == 0) fail(__LINE__, "the loader was asked for no offset after 0");
+        } else fail(__LINE__, "read c_1080p60");
+        free(g_mf_file); g_mf_file = NULL;
+        free(ixb);
+    }
+    /* memory: the resource loader, named in the describe line */
+    g_case = "avf loader";
+    {
+        int64_t isz = 0, msz = 0;
+        uint8_t* ixb = slurp(media("c_720p30.mp4.yspvi"), &isz);
+        uint8_t* mb = slurp(media("c_720p30.mp4"), &msz);
+        mf_desc(&vd, "c_720p30.mp4");
+        vd.path = NULL; vd.data = mb; vd.size = (size_t)msz; vd.index = ixb; vd.index_size = (size_t)isz;
+        if (mb && ixb && yvid_open(&g_mv, &g_gfx, &vd)) {
+            const yvid__avf* m = (const yvid__avf*)g_mv.be_mem;
+            yvid_describe(&g_mv, line, sizeof line);
+            CHECK(strstr(line, "resource loader") != NULL);
+            printf("video_test: memory source: %lld requests, %lld of %lld bytes at open\n",
+                   (long long)m->as->requests, (long long)m->as->bytes, (long long)msz);
+            yvid_close(&g_mv);
+        } else fail(__LINE__, yvid_error(&g_mv));
+        free(ixb); free(mb);
+    }
+}
+#endif
 
 static void test_mf(void) {
     const char* dir = getenv("YVID_TEST_MEDIA");
     char probe[600];
     FILE* fh;
-    if (!dir || !dir[0]) { printf("video_test: Media Foundation cases skipped: set YVID_TEST_MEDIA to the clips of tests/media/make_video_clips.sh\n"); return; }
+    if (!dir || !dir[0]) { printf("video_test: " MP4_NAME " cases skipped: set YVID_TEST_MEDIA to the clips of tests/media/make_video_clips.sh\n"); return; }
     snprintf(g_media, sizeof g_media, "%s", dir);
     snprintf(probe, sizeof probe, "%s/c_720p30.mp4", dir);
     fh = fopen(probe, "rb");
-    if (!fh) { printf("video_test: Media Foundation cases skipped: no %s\n", probe); return; }
+    if (!fh) { printf("video_test: " MP4_NAME " cases skipped: no %s\n", probe); return; }
     fclose(fh);
     {
         char err[256];
+#if YVID__MF
         if (yvid__mf_load(err, sizeof err) < 0) { printf("video_test: Media Foundation cases skipped: %s\n", err); return; }
         yvid__mf_unload();
+#else
+        if (yvid__avf_load(err, sizeof err) < 0) { printf("video_test: AVFoundation cases skipped: %s\n", err); return; }
+#endif
     }
     test_mf_index();
     test_mf_play();
     test_mf_seek();
     test_mf_sources();
     test_mf_threaded();
+#if YVID__AVF
+    test_avf();
+#endif
 }
 #else
-static void test_mf(void) { printf("video_test: Media Foundation cases skipped: not Windows, or YVID_NO_MF\n"); }
+static void test_mf(void) { printf("video_test: MP4 cases skipped: neither Media Foundation (Windows) nor AVFoundation (macOS) in this build\n"); }
 #endif
 
 /* ------------------------------------------------- parameter table (v0.5) */
@@ -3464,6 +3801,7 @@ static const char* vid_hw_name(int v) {
     case YVID_HW_AUTO: return "auto";
     case YVID_HW_OFF: return "off";
     case YVID_HW_DXVA: return "dxva";
+    case YVID_HW_VIDEOTOOLBOX: return "videotoolbox";
     }
     return NULL;
 }

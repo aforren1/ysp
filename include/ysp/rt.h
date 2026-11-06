@@ -1,4 +1,4 @@
-/* ysp/rt.h - v0.9.1 - public domain single-header real-time timing library
+/* ysp/rt.h - v0.10.1 - public domain single-header real-time timing library
  *
  *   The clock, the waits, the scheduling ladder, the one-shot deadline
  *   worker, the background-compute pump, the event ring, the clock
@@ -45,11 +45,17 @@
  *   ---------------------------------------------------------------------
  *   CLOCK
  *   ---------------------------------------------------------------------
- *   yrt_now_ns() reads a monotonic clock:
- *   CLOCK_MONOTONIC on Linux and macOS, QueryPerformanceCounter on Windows,
+ *   yrt_now_ns() reads a monotonic clock: CLOCK_MONOTONIC on Linux,
+ *   mach_absolute_time() on macOS, QueryPerformanceCounter on Windows,
  *   converted with integer arithmetic split so that a TSC-rate counter
  *   cannot overflow the multiply. The clock never steps and never goes
  *   backwards; its zero is arbitrary, so only differences mean anything.
+ *   On macOS it is the counter CoreAudio's host times, CVDisplayLink and
+ *   event timestamps count in; it stops while the Mac sleeps, as
+ *   CLOCK_MONOTONIC does on Linux. macOS's CLOCK_MONOTONIC is not used: it
+ *   counts in whole microseconds (clock_getres() says 1000 ns), takes
+ *   frequency adjustments (its manual page sets it against
+ *   CLOCK_MONOTONIC_RAW, which does not) and runs on while the Mac sleeps.
  *
  *   It returns int64_t, the type of every time in ysp, so the difference of
  *   two times is signed. Every header times against it: ysp/serial.h and
@@ -94,9 +100,17 @@
  *              accuracy is bounded below by the thread's timer slack (50 us
  *              by default; see yrt_thread_set_timer_slack) and above by
  *              whatever else the scheduler is doing.
- *     macOS:   no absolute clock_nanosleep exists, so the wait is a relative
- *              nanosleep recomputed from the clock on each iteration. A
- *              short wake does not shorten the total.
+ *     macOS:   Darwin coalesces the timers of a thread without a real-time
+ *              policy: its nanosleep(), mach_wait_until() and timed
+ *              condition waits wake a quarter to a half of the wait late
+ *              (measured; docs/rt.md, The wait on macOS), whatever its QoS
+ *              class or latency tier. So such a thread waits on a one-shot
+ *              kevent timer flagged NOTE_CRITICAL, absolute in mach time,
+ *              which is not coalesced. A thread that yrt_thread_elevate()
+ *              put on TIME_CONSTRAINT is not coalesced either and keeps a
+ *              relative nanosleep, recomputed from the clock on each
+ *              iteration, which wakes sooner there. A worker without that
+ *              rung waits on its own kqueue the same way.
  *     Windows: a waitable timer created with
  *              CREATE_WAITABLE_TIMER_HIGH_RESOLUTION (Win10 1803+). If that
  *              is refused, the fallback timer only fires on the system tick,
@@ -141,7 +155,19 @@
  *   No wait in this header allocates. On Windows each thread that calls
  *   yrt_sleep_until() creates one waitable timer on first use and reuses
  *   it; yrt_thread_cleanup() releases it for a thread that is about to
- *   end and will not wait again.
+ *   end and will not wait again. On macOS a thread without the
+ *   TIME_CONSTRAINT rung opens one kqueue on its first wait (a descriptor)
+ *   and reuses it; the thread owns it, and yrt_thread_cleanup() or the
+ *   thread's exit closes it. A fork child does not inherit it and opens its
+ *   own. A worker's kqueue is opened on the worker thread at its start and
+ *   closed by yrt_worker_close().
+ *
+ *   The spin and the OS wait combine the same way everywhere: the OS wait
+ *   runs to deadline - spin_ns, then the clock is spun to the deadline. A
+ *   wait that wakes later than the window ends late by the difference, so
+ *   the window must cover the OS wait's lateness. On macOS before v0.10.1
+ *   it did not: a coalesced 10 ms wait woke 2 to 5 ms late, far beyond
+ *   200 us.
  *
  *   ---------------------------------------------------------------------
  *   VIRTUAL CLOCK (v0.9.0)
@@ -951,8 +977,8 @@
  *              yrt_get_clock_info() MEASURES the smallest step two reads
  *              can see and reports that instead. Log it: it is the
  *              resolution of every timestamp you take.
- *     Waits    yrt_sleep_until() is the relative nanosleep loop macOS uses,
- *              then the spin. In a pthread (a Web Worker) or on node's main
+ *     Waits    yrt_sleep_until() is a relative nanosleep loop, recomputed
+ *              from the clock, then the spin. In a pthread (a Web Worker) or on node's main
  *              thread that is a real blocking wait on a futex. On a
  *              BROWSER'S MAIN THREAD it is not usable: blocking there freezes
  *              rendering and input, and Emscripten turns a main-thread sleep
@@ -1051,6 +1077,28 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.10.1 - macOS: the waits of a thread without the TIME_CONSTRAINT rung
+ *          are no longer coalesced. yrt_sleep_until() and yrt_sleep_ns()
+ *          on such a thread wait on a one-shot kevent timer flagged
+ *          NOTE_CRITICAL (absolute, mach time) in a kqueue the thread owns;
+ *          a worker without the rung waits on its own kqueue, which a
+ *          submit, a cancel and a close wake. Before, the nanosleep() and
+ *          the timed condition wait woke a quarter to a half of the wait
+ *          late (a 10 ms wait 2 to 5 ms), far beyond the 200 us spin: a
+ *          caller-timed pulse width of ysp/serial.h was that much too long
+ *          (docs/serial.md). A thread elevated to TIME_CONSTRAINT keeps
+ *          nanosleep(). yrt_thread_cleanup() closes the thread's kqueue.
+ *          All: the printf format attributes are spelled __format__ and
+ *          __printf__, so a `#define printf mexPrintf` (MATLAB's mex.h)
+ *          no longer drops the format check. No API or layout change.
+ *   v0.10.0 - macOS: yrt_now_ns() reads mach_absolute_time(), converted by
+ *          the timebase, and yrt_ticks_to_ns() converts mach units the
+ *          same way (it returned its argument). CLOCK_MONOTONIC counted
+ *          in whole microseconds there (correlation widths of 1000 ns)
+ *          and takes frequency adjustments, and no OS
+ *          timestamp is in its units. yrt_get_clock_info() reports the
+ *          mach clock's resolution (42 ns on Apple silicon). Other
+ *          platforms unchanged.
  *   v0.9.1 - yrt_sleep_ns() near INT64_MAX ("forever") on the virtual
  *          clock waits to the clock's end: the deadline saturates at
  *          INT64_MAX. The plain sum overflowed (undefined behavior) and
@@ -1348,18 +1396,39 @@
  *   No browser has run any of it: the WEBASSEMBLY notes on the main thread,
  *   cross-origin isolation and coarsened clocks are the platform's
  *   documented rules, not measurements.
- *   The macOS pump, like the rest of the macOS path, has not been compiled or
- *   run here at all, so its relative condition wait and its
- *   THREAD_PRECEDENCE_POLICY rung are written, not tested; CI compiles them and
- *   a rig should print what yrt_pump_policy() reports before believing it.
- *   The top of the ladder is barely exercised: the test hosts run without
- *   CAP_SYS_NICE, so the tests see YRT_POLICY_TIME_CRITICAL (Windows) and
- *   YRT_POLICY_NORMAL. YRT_POLICY_DEADLINE was obtained once, by
- *   rt_ring_bench run as root under WSL2 (v0.5.0), and nothing timed there
- *   is a claim about a real kernel; YRT_POLICY_FIFO and
- *   YRT_POLICY_TIME_CONSTRAINT have never been obtained. Treat the
- *   real-time rungs as written, not as tested, and check what
- *   yrt_describe() reports on your rig.
+ *   macOS (v0.10.0, 2026-11-04): an Apple M2 Mac mini, macOS 27.0.1, Apple
+ *   clang 21, built with warnings as errors; tests/adapt/rt_test.c passes,
+ *   also under ASan and UBSan: the clock (resolution 42 ns, the mach
+ *   timebase 125/3), ticks to ns against a 128-bit reference, waits,
+ *   worker, pump (its relative condition wait and its
+ *   THREAD_PRECEDENCE_POLICY rung gave BELOW_NORMAL), ring, correlation
+ *   and the per-user folders (~/Library/Caches, ~/Library/Application
+ *   Support; /tmp, a symbolic link to /private/tmp, refused). An
+ *   unprivileged thread obtained YRT_POLICY_TIME_CONSTRAINT (the Mach
+ *   policy read back as asked, in mach units), and YRT_POLICY_FIFO when
+ *   Mach refused a 100 ms computation. Measured 2026-11-05 (AC power, no
+ *   other load, elevated, one or two runs; docs/rt.md, "Measured on the
+ *   Mac"): yrt_now_ns() 12.3 ns a call (mach_absolute_time() 5.2,
+ *   CLOCK_MONOTONIC 14.3); 2 ms waits at TIME_CONSTRAINT 10 to 16 us late
+ *   at the median and at most 43 us without a spin, 0.0 us (p99 0.0, max
+ *   0.1) with the default spin; a ring push 13 ns, a zone pair 30 ns
+ *   attached; correlation 42 ns wide.
+ *   macOS (v0.10.1, 2026-11-05, the same Mac, quiet; docs/rt.md, "The wait
+ *   on macOS"): waits of 1 to 10 ms without a spin on an UNPRIVILEGED thread
+ *   (a new pthread, and the main thread of an SDL window) 30 to 41 us late
+ *   at the median, at most 128 us in 1600; v0.10.0's nanosleep() was a
+ *   quarter to a half of the wait late there (1.27 to 2.52 ms at 5 ms).
+ *   With the default spin 0.1 to 0.2 us at the median on every thread.
+ *   TIME_CONSTRAINT threads unchanged (14 to 16 us without a spin).
+ *   tests/adapt/rt_test.c passes, also under ASan with UBSan and under
+ *   ThreadSanitizer; MEX builds with MATLAB R2026b give no warning.
+ *   The top of the ladder is barely exercised: the Windows and Linux test
+ *   hosts run without CAP_SYS_NICE, so the tests see
+ *   YRT_POLICY_TIME_CRITICAL (Windows) and YRT_POLICY_NORMAL.
+ *   YRT_POLICY_DEADLINE was obtained once, by rt_ring_bench run as root
+ *   under WSL2 (v0.5.0), and nothing timed there is a claim about a real
+ *   kernel. Treat the real-time rungs as written, not as tested, and check
+ *   what yrt_describe() reports on your rig.
  *   Outside this STATUS block, no number in this header is a measurement.
  *   Every latency statement is a bound or a pointer at rt_jitter.
  *
@@ -1372,9 +1441,9 @@
 /* The version of this header, for a binding's __version__ and for a log line.
  * The string always matches the three numbers. */
 #define YRT_VERSION_MAJOR  0
-#define YRT_VERSION_MINOR  9
+#define YRT_VERSION_MINOR  10
 #define YRT_VERSION_PATCH  1
-#define YRT_VERSION_STRING "0.9.1"
+#define YRT_VERSION_STRING "0.10.1"
 
 /* Feature-test macro for clock_nanosleep() and mlockall() in the Linux
  * implementation. Defined here, before the first system header, so it takes
@@ -1431,8 +1500,8 @@ YRT_API const char* yrt_version(void);
 
 /* --- clock -------------------------------------------------------------- */
 
-/* Monotonic nanoseconds. CLOCK_MONOTONIC on Linux and macOS,
- * QueryPerformanceCounter on Windows. The zero point is arbitrary; only
+/* Monotonic nanoseconds. CLOCK_MONOTONIC on Linux, mach_absolute_time() on
+ * macOS, QueryPerformanceCounter on Windows. The zero point is arbitrary; only
  * differences are meaningful. This is the clock every deadline in ysp is
  * expressed in. Signed, like every other time in ysp, so a difference such
  * as `onset - yrt_now_ns()` is negative when the onset is past, instead of
@@ -1461,9 +1530,12 @@ YRT_API int64_t yrt_now_ns(void);
  * a QueryPerformanceCounter value (DXGI's SyncQPCTime, a WASAPI QPC
  * position, a raw LARGE_INTEGER), and the result is bit-identical to what
  * yrt_now_ns() returns for that counter value, so such a stamp is on the
- * ysp_rt clock exactly, with no correlation and no width. On Linux, macOS
- * and Emscripten the clock is clock_gettime(CLOCK_MONOTONIC), whose native
- * unit is already the nanosecond, and this returns `ticks` unchanged. A
+ * ysp_rt clock exactly, with no correlation and no width. On macOS `ticks`
+ * is a mach_absolute_time() value (an AudioTimeStamp's mHostTime, a
+ * CVTimeStamp's hostTime), converted by the timebase as yrt_now_ns()
+ * converts it, so again bit-identical. On Linux and Emscripten the clock
+ * is clock_gettime(CLOCK_MONOTONIC), whose native unit is already the
+ * nanosecond, and this returns `ticks` unchanged. A
  * negative `ticks` converts as minus the conversion of its magnitude, so a
  * difference of two counter values converts too. */
 YRT_API int64_t yrt_ticks_to_ns(int64_t ticks);
@@ -1553,10 +1625,12 @@ YRT_API int64_t yrt_sleep_ns(int64_t ns);
 YRT_API int64_t yrt_spin_until(int64_t deadline_ns);
 
 /* Release the per-thread resources ysp/rt.h created for the CALLING thread
- * (today: the Windows waitable timer yrt_sleep_until() caches). Optional.
- * A thread that exits without calling it leaks one timer handle until the
- * process ends, which is why a long-lived experiment thread need not bother
- * and a worker pool should. No-op on POSIX. */
+ * (today: the Windows waitable timer and the macOS kqueue that
+ * yrt_sleep_until() caches). Optional. On Windows a thread that exits
+ * without calling it leaks one timer handle until the process ends, which
+ * is why a long-lived experiment thread need not bother and a worker pool
+ * should; on macOS the thread's exit closes the kqueue anyway. A later wait
+ * on the same thread opens a new one. No-op on Linux and Emscripten. */
 YRT_API void yrt_thread_cleanup(void);
 
 /* --- virtual clock (v0.9.0) --------------------------------------------- */
@@ -2220,10 +2294,10 @@ YRT_API void yrt__trace_message(const char* text, size_t len);
 YRT_API void yrt__trace_thread_name(const char* name);
 #if defined(__GNUC__) || defined(__clang__)
 YRT_API void yrt__trace_messagef(const char* fmt, ...)
-    __attribute__((format(printf, 1, 2)));
+    __attribute__((__format__(__printf__, 1, 2)));
 /* Declared and never defined: the default mode names it inside sizeof, so a
  * YRT_MESSAGEF format is checked even when nothing is compiled. */
-int yrt__messagef_check(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
+int yrt__messagef_check(const char* fmt, ...) __attribute__((__format__(__printf__, 1, 2)));
 #else
 YRT_API void yrt__trace_messagef(const char* fmt, ...);
 int yrt__messagef_check(const char* fmt, ...);
@@ -2290,7 +2364,7 @@ int yrt__messagef_check(const char* fmt, ...);
     }
     #if defined(__GNUC__) || defined(__clang__)
     static inline void yrt__tracy_messagef(const char* fmt, ...)
-        __attribute__((format(printf, 1, 2)));
+        __attribute__((__format__(__printf__, 1, 2)));
     #endif
     static inline void yrt__tracy_messagef(const char* fmt, ...) {
         char buf[128];
@@ -3340,8 +3414,49 @@ extern long syscall(long, ...);
     #include <mach/mach_time.h>
     #include <mach/thread_policy.h>
     #include <mach/thread_act.h>
+    #include <fcntl.h>
+    #include <sys/event.h>   /* the critical timer of the waits; see WAITS */
 #endif
 
+#if defined(YRT__DARWIN)
+/* mach_absolute_time(), not CLOCK_MONOTONIC: Darwin's CLOCK_MONOTONIC
+ * counts in whole microseconds and takes frequency adjustments, and every
+ * timestamp the OS hands out (CoreAudio's host time,
+ * CVDisplayLink, input events) is in mach units. The timebase (1/1 on
+ * Intel, 125/3 on Apple silicon) is read once; numer is stored last and
+ * read first, so a reader that sees it also sees denom. */
+static uint32_t yrt__tb_numer = 0, yrt__tb_denom = 0;
+
+/* Split like Windows' QPC conversion, so the multiply cannot overflow. The
+ * one conversion both yrt_now_ns() and yrt_ticks_to_ns() use, so the two
+ * agree to the bit. */
+static uint64_t yrt__mach_to_ns(uint64_t t) {
+    uint32_t n = yrt__rload(&yrt__tb_numer), d;
+    if (n == 0) {
+        mach_timebase_info_data_t tb;
+        if (mach_timebase_info(&tb) != KERN_SUCCESS || tb.numer == 0 || tb.denom == 0)
+            tb.numer = tb.denom = 1;
+        yrt__rstore(&yrt__tb_denom, tb.denom);
+        yrt__rstore(&yrt__tb_numer, tb.numer);
+        n = tb.numer;
+    }
+    d = yrt__rload(&yrt__tb_denom);
+    if (n == d) return t;
+    return (t / d) * n + (t % d) * n / d;
+}
+
+static uint64_t yrt__now(void) {
+    return yrt__mach_to_ns(mach_absolute_time());
+}
+
+int64_t yrt_ticks_to_ns(int64_t ticks) {
+    if (ticks < 0) return -(int64_t)yrt__mach_to_ns(0u - (uint64_t)ticks);
+    return (int64_t)yrt__mach_to_ns((uint64_t)ticks);
+}
+
+/* The clock clock_getres() describes for yrt_now_ns(): the same counter. */
+#define YRT__RES_CLOCK CLOCK_UPTIME_RAW
+#else
 static uint64_t yrt__now(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -3351,6 +3466,9 @@ static uint64_t yrt__now(void) {
 int64_t yrt_ticks_to_ns(int64_t ticks) {
     return ticks;   /* clock_gettime counts in nanoseconds already */
 }
+
+#define YRT__RES_CLOCK CLOCK_MONOTONIC
+#endif
 
 #if defined(YRT__EMSCRIPTEN)
 /* Emscripten's clock_getres answers 1 ns whatever the host does, and the host
@@ -3381,7 +3499,7 @@ static uint32_t yrt__step_cache = 0;   /* ns; 0 = not measured yet */
 static uint64_t yrt__clock_step_ns(void) {
     struct timespec res;
     uint64_t r = 1;
-    if (clock_getres(CLOCK_MONOTONIC, &res) == 0)
+    if (clock_getres(YRT__RES_CLOCK, &res) == 0)
         r = (uint64_t)res.tv_sec * 1000000000ull + (uint64_t)res.tv_nsec;
 #if defined(YRT__EMSCRIPTEN)
     {
@@ -3429,9 +3547,96 @@ static void yrt__ns_to_ts(uint64_t ns, struct timespec* ts) {
     ts->tv_nsec = (long)(ns % 1000000000ull);
 }
 
+#if defined(YRT__DARWIN)
+/* Darwin coalesces the timers of a thread without a real-time policy: its
+ * nanosleep(), mach_wait_until() and timed condition waits wake a quarter to
+ * a half of the wait late (2.5 to 5 ms on a 10 ms wait, measured; docs/rt.md,
+ * The wait on macOS). Neither the thread's QoS class nor its latency tier
+ * changes that, and NOTE_LEEWAY 0 does not either. A kevent timer flagged
+ * NOTE_CRITICAL does: 34 to 42 us late at the median at every length. A
+ * TIME_CONSTRAINT thread is not coalesced, and there nanosleep() is the
+ * better wait (14 to 16 us against 42 us), so a thread this header elevated
+ * to that rung keeps it. */
+static YRT__THREAD_LOCAL int yrt__tc_self = 0;
+
+/* yrt's nanoseconds to mach absolute ticks: the inverse of yrt__mach_to_ns,
+ * split the same way so the multiply cannot overflow, and capped at the
+ * kevent data's INT64_MAX. */
+static int64_t yrt__ns_to_mach(uint64_t ns) {
+    uint32_t n, d;
+    uint64_t t;
+    (void)yrt__mach_to_ns(0);   /* reads the timebase once */
+    n = yrt__rload(&yrt__tb_numer);
+    d = yrt__rload(&yrt__tb_denom);
+    t = (n == d) ? ns : (ns / n) * d + (ns % n) * d / n;
+    return t > (uint64_t)INT64_MAX ? INT64_MAX : (int64_t)t;
+}
+
+/* Arms an absolute, critical one-shot timer (ident 0) on kq and waits for
+ * any event of kq. False when kevent failed for another reason than a
+ * signal; the caller then falls back to the coalesced waits. */
+static bool yrt__kq_timer_wait(int kq, uint64_t until_ns) {
+    struct kevent ev, out;
+    EV_SET(&ev, 0, EVFILT_TIMER, EV_ADD | EV_ONESHOT, NOTE_CRITICAL | NOTE_ABSOLUTE | NOTE_MACHTIME,
+           yrt__ns_to_mach(until_ns), NULL);
+    return kevent(kq, &ev, 1, &out, 1, NULL) >= 0 || errno == EINTR;
+}
+
+/* The calling thread's kqueue for its waits. The thread owns it: its first
+ * wait opens it (one kqueue() call; later waits allocate nothing), and
+ * yrt_thread_cleanup() or the thread's exit (the key's destructor) closes
+ * it. A kqueue is not inherited by fork(), so the child forgets the
+ * forking thread's descriptor number. -1 when none can be had; a thread
+ * whose kqueue() failed once keeps the coalesced wait rather than try again
+ * on every wait. The key's value is the descriptor plus one; (void*)-1 marks
+ * the failure. */
+static pthread_key_t  yrt__kq_key;
+static pthread_once_t yrt__kq_once = PTHREAD_ONCE_INIT;
+static int            yrt__kq_key_ok = 0;
+
+static void yrt__kq_dtor(void* v) {
+    if ((intptr_t)v > 0) close((int)((intptr_t)v - 1));
+}
+
+static void yrt__kq_forget(void) {
+    if (yrt__kq_key_ok) (void)pthread_setspecific(yrt__kq_key, NULL);
+}
+
+static void yrt__kq_key_init(void) {
+    if (pthread_key_create(&yrt__kq_key, yrt__kq_dtor) != 0) return;
+    yrt__kq_key_ok = 1;
+    (void)pthread_atfork(NULL, NULL, yrt__kq_forget);
+}
+
+static int yrt__thread_kq(void) {
+    void* v;
+    int kq;
+    (void)pthread_once(&yrt__kq_once, yrt__kq_key_init);
+    if (!yrt__kq_key_ok) return -1;
+    v = pthread_getspecific(yrt__kq_key);
+    if (v == (void*)(intptr_t)-1) return -1;
+    if (v) return (int)((intptr_t)v - 1);
+    kq = kqueue();
+    if (kq >= 0) (void)fcntl(kq, F_SETFD, FD_CLOEXEC);
+    if (pthread_setspecific(yrt__kq_key, kq >= 0 ? (void*)(intptr_t)(kq + 1) : (void*)(intptr_t)-1) != 0 && kq >= 0) {
+        close(kq);
+        return -1;
+    }
+    return kq;
+}
+#endif /* YRT__DARWIN */
+
 void yrt_thread_cleanup(void) {
-    /* POSIX waits need no per-thread object; the entry point exists so
-     * portable shutdown code does not have to be #ifdef'd. */
+#if defined(YRT__DARWIN)
+    /* The wait's kqueue, if this thread opened one. */
+    if (yrt__kq_key_ok) {
+        void* v = pthread_getspecific(yrt__kq_key);
+        yrt__kq_dtor(v);
+        (void)pthread_setspecific(yrt__kq_key, NULL);
+    }
+#endif
+    /* Linux and Emscripten waits need no per-thread object; the entry point
+     * exists so portable shutdown code does not have to be #ifdef'd. */
 }
 
 static void yrt__coarse_wait_until(uint64_t until_ns) {
@@ -3441,9 +3646,20 @@ static void yrt__coarse_wait_until(uint64_t until_ns) {
      * says, so the remainder is recomputed from the clock each time round: an
      * early or interrupted wake cannot shorten the total, and a late one is
      * not paid twice. */
+#if defined(YRT__DARWIN)
+    /* The critical timer is absolute; the loop is for a signal or a stale
+     * event of an earlier wait, either of which only wakes it early. */
+    int kq = yrt__tc_self ? -1 : yrt__thread_kq();
+#endif
     for (;;) {
         uint64_t now = yrt__now();
         if (now >= until_ns) return;
+#if defined(YRT__DARWIN)
+        if (kq >= 0) {
+            if (yrt__kq_timer_wait(kq, until_ns)) continue;
+            kq = -1;
+        }
+#endif
         struct timespec rel;
         yrt__ns_to_ts(until_ns - now, &rel);
         if (nanosleep(&rel, NULL) == 0) return;
@@ -3461,7 +3677,7 @@ static void yrt__coarse_wait_until(uint64_t until_ns) {
 void yrt_get_clock_info(yrt_clock_info* out) {
     if (!out) return;
     struct timespec res;
-    if (clock_getres(CLOCK_MONOTONIC, &res) == 0)
+    if (clock_getres(YRT__RES_CLOCK, &res) == 0)
         out->resolution_ns = (int64_t)res.tv_sec * 1000000000 + (int64_t)res.tv_nsec;
     else
         out->resolution_ns = 0;
@@ -3632,8 +3848,13 @@ yrt_policy yrt_thread_elevate(const yrt_sched_deadline* rt) {
         if (yrt__setattr(&a) == 0) return YRT_POLICY_DEADLINE;
     }
 #elif defined(YRT__DARWIN)
-    if (have_rt && yrt__darwin_time_constraint(&r))
+    /* The waits of this thread pick their timer by it; see the critical timer
+     * above yrt_thread_cleanup(). */
+    yrt__tc_self = 0;
+    if (have_rt && yrt__darwin_time_constraint(&r)) {
+        yrt__tc_self = 1;
         return YRT_POLICY_TIME_CONSTRAINT;
+    }
 #else
     (void)have_rt;
 #endif
@@ -4831,6 +5052,12 @@ typedef struct yrt__wstate {
     pthread_t       thread;
     pthread_mutex_t mtx;
     pthread_cond_t  cv;
+#if defined(YRT__DARWIN)
+    int             kq;          /* the timed wait of a worker without the
+                                  * TIME_CONSTRAINT rung, or -1; see
+                                  * yrt__worker_wait_until                  */
+    int             kq_waiting;  /* the worker is in that wait (lock held)   */
+#endif
 } yrt__wstate;
 
 #else
@@ -4954,6 +5181,25 @@ static void yrt__worker_wait_idle(yrt_worker* w) {
 static void yrt__worker_wait_until(yrt_worker* w, uint64_t until_ns) {
     yrt__wstate* s = yrt__w(w);
 #if defined(YRT__DARWIN)
+    if (s->kq >= 0) {
+        /* A worker without the TIME_CONSTRAINT rung: a timed condition wait
+         * would be coalesced like any timer of its thread, so it waits on its
+         * own kqueue for the critical timer or for a wake (EVFILT_USER, which
+         * yrt__worker_wake triggers while kq_waiting is set). The lock is
+         * released for the wait, as the condition wait releases it. */
+        bool ok;
+        s->kq_waiting = 1;
+        pthread_mutex_unlock(&s->mtx);
+        ok = yrt__kq_timer_wait(s->kq, until_ns);
+        pthread_mutex_lock(&s->mtx);
+        s->kq_waiting = 0;
+        if (!ok) {
+            /* Not a signal: back to the condition wait for good. */
+            close(s->kq);
+            s->kq = -1;
+        }
+        return;
+    }
     /* Darwin has no pthread_condattr_setclock, so an absolute wait would run
      * against CLOCK_REALTIME and step with the wall clock. Wait relative to
      * the monotonic clock instead. */
@@ -4970,8 +5216,42 @@ static void yrt__worker_wait_until(yrt_worker* w, uint64_t until_ns) {
 }
 
 static void yrt__worker_wake(yrt_worker* w) {
-    pthread_cond_signal(&yrt__w(w)->cv);
+    yrt__wstate* s = yrt__w(w);
+    pthread_cond_signal(&s->cv);
+#if defined(YRT__DARWIN)
+    if (s->kq >= 0 && s->kq_waiting) {
+        /* Pending until the worker's kevent takes it, so a wake between its
+         * unlock and its kevent is not lost; EV_CLEAR resets it there. */
+        struct kevent ev;
+        EV_SET(&ev, 1, EVFILT_USER, 0, NOTE_TRIGGER, 0, NULL);
+        (void)kevent(s->kq, &ev, 1, NULL, 0, NULL);
+    }
+#endif
 }
+
+#if defined(YRT__DARWIN)
+/* On the worker thread, after its elevation: a worker that did not get the
+ * TIME_CONSTRAINT rung opens its kqueue for the timed wait. The worker owns
+ * it; yrt_worker_close() closes it after the join. No kqueue: the timed
+ * condition wait, coalesced. */
+static void yrt__worker_kq_open(yrt__wstate* s) {
+    struct kevent ev;
+    int kq = kqueue();
+    if (kq < 0) return;
+    (void)fcntl(kq, F_SETFD, FD_CLOEXEC);
+    EV_SET(&ev, 1, EVFILT_USER, EV_ADD | EV_CLEAR, 0, 0, NULL);
+    if (kevent(kq, &ev, 1, NULL, 0, NULL) != 0) {
+        close(kq);
+        return;
+    }
+    s->kq = kq;
+}
+
+static void yrt__worker_kq_close(yrt__wstate* s) {
+    if (s->kq >= 0) close(s->kq);
+    s->kq = -1;
+}
+#endif
 
 static void yrt__worker_loop(yrt_worker* w);
 
@@ -4979,6 +5259,11 @@ static void* yrt__worker_main(void* arg) {
     yrt_worker* w = (yrt_worker*)arg;
     yrt_policy pol = w->no_elevate ? YRT_POLICY_NORMAL
                                      : yrt_thread_elevate(&w->sched);
+#if defined(YRT__DARWIN)
+    /* Before the handshake that publishes it, so no submit can see it half
+     * made. */
+    if (pol != YRT_POLICY_TIME_CONSTRAINT) yrt__worker_kq_open(yrt__w(w));
+#endif
     /* Before the handshake, so a tracer allocates its per-thread state now
      * and not inside the first job. */
     YRT_THREAD_INIT("yrt worker");
@@ -5019,6 +5304,9 @@ bool yrt_worker_open(yrt_worker* w, const yrt_worker_desc* desc) {
     w->policy     = YRT_POLICY_NONE;
 
     yrt__wstate* s = yrt__w(w);
+#if defined(YRT__DARWIN)
+    s->kq = -1;   /* the memset made it 0, which is a descriptor */
+#endif
     /* Priority inheritance: a normal-priority submitter holds the mutex for a
      * few instructions, and without PI the real-time worker would wait behind
      * whatever preempted that submitter. */
@@ -5062,6 +5350,9 @@ bool yrt_worker_open(yrt_worker* w, const yrt_worker_desc* desc) {
          * can be in the lock; join it before the objects it used go away.
          * w->error already holds the hook's message. */
         pthread_join(s->thread, NULL);
+#if defined(YRT__DARWIN)
+        yrt__worker_kq_close(s);
+#endif
         pthread_cond_destroy(&s->cv);
         pthread_mutex_destroy(&s->mtx);
         return false;
@@ -5079,9 +5370,12 @@ void yrt_worker_close(yrt_worker* w) {
     yrt__flag_store(&w->running, 0);
     pthread_mutex_lock(&s->mtx);
     w->quit = 1;
-    pthread_cond_signal(&s->cv);
+    yrt__worker_wake(w);   /* the condition and, on Darwin, the kqueue */
     pthread_mutex_unlock(&s->mtx);
     pthread_join(s->thread, NULL);
+#if defined(YRT__DARWIN)
+    yrt__worker_kq_close(s);
+#endif
     pthread_cond_destroy(&s->cv);
     pthread_mutex_destroy(&s->mtx);
     w->policy = YRT_POLICY_NONE;

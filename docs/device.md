@@ -397,6 +397,28 @@ MinGW-w64, 559 on WSL2 gcc 11.4 (also with ASan and UBSan), where a POSIX
 rename replaces an open file and the held-file case does not run. Mutants
 `rig-46` to `rig-51`: 6 of 6 killed.
 
+### F_FULLFSYNC on macOS (`ysp/rigfile.h` v0.5.2, 2026-11-04)
+
+A save writes `<name>.json.tmp`, syncs it and renames it over the profile.
+On macOS `fsync()` hands the file to the drive and returns, and the drive
+may hold it in its write cache (Apple's `fsync(2)` manual page): a power
+cut after the rename can then leave a profile of zeros that does not load.
+
+| Question | Decision | Why |
+|---|---|---|
+| The call on macOS | `fcntl(F_FULLFSYNC)` on the temporary file | It also asks the drive to flush its cache |
+| A volume that refuses it | `fsync()` | A network or FAT volume may not support it (SQLite does the same). ysp/dataset.h 0.2.1 and ysp/trials.h 0.6.1 do the same |
+| The folder after the rename | Synced on POSIX (`F_FULLFSYNC`, then `fsync()`, on macOS), as ysp/dataset.h does; a failure there does not fail the save | Without it a power cut after `yrig_save()` returned can bring the old profile back. A file system that cannot sync a folder (`EINVAL`) has nothing to sync |
+| A test's way in | `YRIG__FULLFSYNC(fd)` | The test counts the calls and makes the volume refuse |
+
+Checked on 2026-11-04, an Apple M2 Mac mini (macOS 27.0.1, Apple clang
+21, APFS): `tests/adapt/rigfile_test.c` passes, 566 checks, Release and
+under ASan and UBSan. A save calls `F_FULLFSYNC` once on the file and
+once on the folder; with a volume that refuses it the save succeeds
+through `fsync()` and the profile loads. Mutants `rig-52` to `rig-54` in
+`tests/mutate/rigfile.toml`: 3 of 3 killed (they run on macOS only). No
+power cut was made.
+
 ### The rig profile tools (`ysp/rigfile.h` v0.4.0, 2026-10-13)
 
 devices_spec 11.2 names the fields (`bounds` per input, the display's
@@ -661,9 +683,86 @@ call makes the leading write itself.
   return plus the hold. At 5 ms the p99 is +18 and +33 us.
 - Not measured: a real TriggerBox, BioSemi, MMBT-S, XID box or line board
   (`p`), whose edge is an output pin, not a receive time; the parallel
-  port (none here); an FTDI or other bridge; Linux and macOS. The
-  device-timed families (XID, line board, BioSemi, MMBT-S at P) do not
+  port (none here); an FTDI or other bridge; Linux. macOS: [the next
+  section](#host-timed-pulses-on-macos-v051). The device-timed families (XID, line board, BioSemi, MMBT-S at P) do not
   use the rule.
+
+### Host-timed pulses on macOS (v0.5.1)
+
+The same board and bench on a Mac: the Teensy 4.0 echo board on
+`AppleUSBACMData`, an M2 Mac mini, macOS 27.0.1, AC power, Apple clang 21
+`-O2`, 2026-11-05 13:41 to 13:46 EST, the 1-minute load 1.07 and 1.13
+before the two runs. These are the conditions of docs/serial.md's [macOS
+with the Teensy 4.0 echo board](serial.md#macos-with-the-teensy-40-echo-board-2026-11-05),
+whose script (`tests/compare/serial_macos.sh`) ran this step too.
+`device_pulse.c` now builds on POSIX. v0.5.1 with ysp/serial.h 0.6.3. Two
+runs in opposite orders, 200 pulses per cell, at 1 and 5 ms; the cell
+medians of the two runs agree within 6 us, so they are pooled. The
+instance's worker got `YRT_POLICY_TIME_CONSTRAINT`. Summaries:
+`tests/compare/serial_pulse/results/2026-11-05-teensy40-macos/`.
+
+Missed: 0 of 2400.
+
+Width error (board width minus requested), 400 pulses per cell,
+microseconds:
+
+| Family | Width | Median (p5 / p95 / p99 / max) | Windows v0.3.1, median (p5 / p95 / p99) |
+|---|---|---|---|
+| TriggerBox (a byte) | 1 ms | -37 (-114 / -7 / +1 / +8) | -65 (-137 / -6 / +87) |
+| | 5 ms | -31 (-92 / -6 / 0 / +17) | -47 (-149 / +18 / +60) |
+| LINES, DTR | 1 ms | -19 (-69 / 0 / +6 / +12) | -29 (-55 / +65 / +664) |
+| | 5 ms | -20 (-59 / 0 / +9 / +39) | -16 (-45 / +7 / +18) |
+| LINES, RTS | 1 ms | -19 (-59 / -1 / +8 / +11) | -34 (-72 / +503 / +4163) |
+| | 5 ms | -21 (-62 / 0 / +12 / +13) | -27 (-71 / +11 / +33) |
+
+Onset (the board's edge minus the time before `ydev_out_pulse()`), median
+(p99): byte 101 us (217), DTR 94 us (179), RTS 94 us (192). On Windows:
+212 (342), 88 (153) and 116 (187). `ydev_out_pulse()` returned in 59 us
+median (p99 129) for a byte and 197 to 198 us (p99 348 to 376) for a line:
+the call makes the leading write itself, and on this driver a `write()`
+returns before the transfer (docs/serial.md). The fit's bound was 65 to
+97 us.
+
+- **Every width is within -0.16 to +0.04 ms of the request** (min to max,
+  2400 pulses), and p99 is at most +12 us. On Windows the p99 of the line
+  pulses reached +0.66 and +4.2 ms at 1 ms. That tail was the DTR call tail
+  of docs/serial.md, which came with a load on that machine; this run was
+  quiet. So the difference in the tail is partly conditions, and this data
+  cannot say how much is the driver.
+- **The worker is why the width is right on macOS.** A width that a
+  caller's own thread times on macOS is a quarter to a half of its sleep
+  too long, because the kernel coalesces the timers of unprivileged
+  threads ([The wait on a normal
+  thread](serial.md#the-wait-on-a-normal-thread)). The instance's worker
+  runs at `TIME_CONSTRAINT`, and its trailing edges are on time.
+- **The byte arrives about 110 us sooner than on Windows** (101 against
+  212 us median), as in docs/serial.md: `write()` returns at once and the
+  bulk transfer follows. DTR and RTS arrive at the same time as on
+  Windows, within 6 to 22 us at the median.
+- Not measured, as before: a real TriggerBox, BioSemi, MMBT-S, XID box or
+  line board (`p`), an FTDI bridge and Linux.
+
+With ysp/rt.h 0.10.1 (2026-11-05, 14:41 to 14:45 EST, the same Mac and
+board, 1-minute load 1.54 and 1.33 before the two runs; Spotlight's
+`corespotlightd` at 39 % of a core before the second): 0 of 2400 missed.
+Width error, median (p5 / p99 / max), microseconds:
+
+| Family | 1 ms | 5 ms |
+|---|---|---|
+| TriggerBox (a byte) | -20 (-81 / +1 / +5) | -23 (-86 / +13 / +25) |
+| LINES, DTR | -8 (-47 / +10 / +15) | -8 (-59 / +15 / +68) |
+| LINES, RTS | -9 (-74 / +12 / +16) | -10 (-80 / +12 / +19) |
+
+Onset, median (p99): byte 91 us (202), DTR 82 us (204), RTS 84 us (245).
+`ydev_out_pulse()` returned in 59 us median for a byte and 181 to 185 us
+for a line. The instance worker's wait was right with 0.10.0 already (it
+runs at TIME_CONSTRAINT, which ysp/rt.h 0.10.1 leaves on `nanosleep()`),
+so this run checks that the change did not make it worse. It did not:
+every p99 is under +16 us, and the medians are 8 to 17 us closer to 0.
+The two runs of 0.10.1 differed by up to 12.5 us in a cell (those of
+0.10.0 by up to 6 us), so the shift is about the size of the spread
+between runs; the worker's wait did not change. Summaries:
+`tests/compare/serial_pulse/results/2026-11-05-teensy40-macos-rt0101/`.
 
 ### Response rules: the lag (v0.5.0)
 
@@ -899,4 +998,5 @@ compared: pair a reading of each clock before you mix their times.
   open-source code (docs/box.md).
 - A vendor device on this layer; inputs from a real board. The only
   timing numbers on a device are the host-timed outputs into the Teensy
-  4.0 echo board ([v0.3.1](#host-timed-pulses-on-a-teensy-40-v031)).
+  4.0 echo board, on Windows ([v0.3.1](#host-timed-pulses-on-a-teensy-40-v031))
+  and on macOS ([v0.5.1](#host-timed-pulses-on-macos-v051)).

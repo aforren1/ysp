@@ -8,8 +8,10 @@ socat pty pair, including a reader thread and a writer thread on one handle
 under ThreadSanitizer and under AddressSanitizer plus UndefinedBehaviorSanitizer.
 The Windows backend ran on a Teensy 4.0 over `usbser.sys`
 ([Results with the Teensy 4.0 echo board](#results-with-the-teensy-40-echo-board),
-[Pulses: onset and width](#pulses-onset-and-width)). The macOS paths compile on macOS in CI
-but have never run on a device, for lack of a machine. The timing numbers in
+[Pulses: onset and width](#pulses-onset-and-width)). The macOS backend ran
+on an M2 Mac mini against a pseudo-terminal pair
+([macOS on a pseudo-terminal pair](#macos-on-a-pseudo-terminal-pair-2026-11-04)),
+but never on a device. The timing numbers in
 the header (v0.5.1) are from that one Windows setup; FTDI and other bridges,
 RS-232, Linux and macOS are not measured. On Linux the async worker has only ever run at
 `YSER_ASYNC_NORMAL`: the test machine grants no `CAP_SYS_NICE`, so the
@@ -729,8 +731,9 @@ through the Windows backend.
   when `ysp/serial.h` is compiled afterwards.
 - Loopback: `tests/loopback/serial_loopback.c`, built with
   `-DYSP_BUILD_LOOPBACK=ON` and run by hand with two device names, either a
-  virtual pair (`socat -d -d pty,raw,echo=0 pty,raw,echo=0`; com0com on
-  Windows) or one port name twice with TX tied to RX. It checks write N then
+  virtual pair (`socat -d -d pty,raw,echo=0 pty,raw,echo=0`, or
+  `tests/loopback/pty_pair.py` where socat is missing, as on macOS; com0com
+  on Windows) or one port name twice with TX tied to RX. It checks write N then
   `YSER_READ_ALL` N and the payload, `YSER_READ_ANY` with timeout 0 on an idle
   port (0 bytes, under 2 ms, so a poll cannot quietly become a wait),
   `YSER_READ_ANY` with a 100 ms timeout on an idle port (0 bytes after 95 to
@@ -791,6 +794,73 @@ through the Windows backend.
   driver calls if the numbers need explaining.
   `tests/compare/serial_bench/` is the bench for the MATLAB binding; see
   [Compared with MATLAB serialport and IOPort](#compared-with-matlab-serialport-and-ioport).
+
+### macOS on a pseudo-terminal pair (2026-11-04)
+
+The macOS backend's first run. An Apple M2 Mac mini, macOS 27.0.1, Apple
+clang 21, arm64. No serial device was attached: every result here is from
+pseudo-terminals, and none is a claim about a USB-serial driver, FTDI,
+`IOSSIOSPEED` on a real port, or RS-232.
+
+macOS has no socat, so `tests/loopback/pty_pair.py` (standard library only)
+does what `socat -d -d pty,raw,echo=0 pty,raw,echo=0` does: it opens two
+pseudo-terminals, prints the two slave names, and copies bytes between the
+two masters. To run the loopback:
+
+```sh
+uv run --no-project python tests/loopback/pty_pair.py &    # prints /dev/ttysN /dev/ttysM
+cmake -S . -B build/macos-loopback -G Ninja -DYSP_BUILD_LOOPBACK=ON
+cmake --build build/macos-loopback --target serial_loopback device_loopback
+build/macos-loopback/serial_loopback /dev/ttysN /dev/ttysM
+build/macos-loopback/device_loopback /dev/ttysN /dev/ttysM <the bridge's python PID>
+```
+
+| Check | Result |
+|---|---|
+| `serial_loopback`, Release | All checks passed: the read modes and their deadlines, available, purge, the write timeout (a short count after 67,584 bytes), the interrupt (40 us), `find_ports`, every async pulse case, three threads on one handle. The worker got `YRT_POLICY_TIME_CONSTRAINT` without privilege |
+| The same under ThreadSanitizer | All checks passed, no report |
+| The same under ASan and UBSan | All checks passed, no report |
+| `device_loopback` with the bridge's PID | All checks passed: 132 edges, 20 outputs; after the bridge was killed the device went `LOST` in 0.015 s |
+| A hangup on `select()` | A slave opened by `yser_open()`, its master closed 200 ms into a 2 s read: `yser_read()` returned `YSER_ERR_DISCONNECTED` at 204 ms, and the next `yser_write()` returned it too. `select()` reports the hangup as readable, and the read maps it, as [The wait call, per POSIX platform](#the-wait-call-per-posix-platform) says |
+| `yser_list_ports()` | `/dev/cu.Bluetooth-Incoming-Port` and `/dev/cu.debug-console`: the `cu.*` nodes only, no `tty.*` |
+
+What a pseudo-terminal does not support, so these ran but prove nothing
+about a real port:
+
+- `IOSSIOSPEED`: a nonstandard rate (250000) fails `yser_open()` with
+  `IOSSIOSPEED(250000): Inappropriate ioctl for device`. That is the
+  documented behavior for a driver that refuses the rate.
+- DTR, RTS and the line states: `TIOCMBIS`, `TIOCMBIC` and `TIOCMGET`
+  fail with `ENOTTY`, so `yser_set_dtr()`, `yser_set_rts()` and
+  `yser_get_lines()` return `YSER_ERR_IO`, with `misc_oserr` set.
+- `exclusive` before v0.6.3: `TIOCEXCL` succeeds on a macOS
+  pseudo-terminal slave, but a second `open()` of it still succeeds. On
+  Linux the same ioctl refuses the second open.
+
+### Exclusive on macOS (v0.6.3)
+
+| Question | Decision | Why |
+|---|---|---|
+| The lock | On macOS, `desc.exclusive` also takes `flock(fd, LOCK_EX \| LOCK_NB)` after `TIOCEXCL`; `EWOULDBLOCK` fails `yser_open()` with "`<port>` is open with exclusive in another handle or process" | `TIOCEXCL` let a second open of a pseudo-terminal through, and what each macOS serial driver does is not known here. The lock refuses every opener that also locks (this header, pyserial's `exclusive=True`, which does the same) on any driver. `TIOCEXCL` stays for openers that do not lock, where the driver honors it |
+| Another `flock()` error | Ignored; `TIOCEXCL` is all there is | A device whose file system cannot lock should still open |
+| Linux | Unchanged | `TIOCEXCL` refuses the second open there |
+| The release | The descriptor's close at `yser_close()` | A `flock()` lock belongs to the open file |
+| One port twice | Unaffected | The TX-to-RX loopback opens one name twice without `exclusive`; with `exclusive` the second open was meant to fail |
+
+Checked on 2026-11-04 on the M2 Mac mini: `tests/adapt/serial_test.c`
+(new, in ctest; a pseudo-terminal from `posix_openpt()`, so no device)
+passes, 12 checks, Release and under ASan and UBSan: bytes both ways, a
+read that times out, a second exclusive open refused with the message, an
+exclusive open after the close, and `YSER_ERR_DISCONNECTED` after the
+master closes. Mutant `ser-01` in the new `tests/mutate/serial.toml`
+(platform darwin): killed. Linux and Windows did not run the new test
+here; on Windows it prints a note and passes.
+
+On a real driver (2026-11-05, the Teensy 4.0 on `AppleUSBACMData`),
+`TIOCEXCL` itself refuses a second open with `EBUSY`, also an open without
+`exclusive`, so the lock is not needed there; it stays for drivers and
+pseudo-terminals that let the open through
+([functional checks](#functional-checks)).
 
 ## Compared with MATLAB serialport and IOPort
 
@@ -1797,7 +1867,7 @@ fix is for one driver, so v0.6.1 applies it only there.
 | Which drivers get the second request | `usbser` only (case-insensitive) | It is the one driver measured to drop an RTS change. On another driver the request is a second USB or UART transaction for nothing |
 | A port SetupAPI does not list | `driver` is `""`, no second request | com0com and other virtual pairs may not register the COM port interface; they are not `usbser.sys` |
 | Expose it | `yser_port.driver`, `yser_port.rts_via_dtr`, `yser_port_info.driver`; the bindings' `Port.driver`, `Port.rts_via_dtr` and `'info'` | A log of trigger timing must say which driver carried it; the flag says why an RTS call costs a DTR request |
-| Linux and macOS | `""` and false | Linux's `cdc_acm` sends SET_CONTROL_LINE_STATE with both bits for every modem-line ioctl (`acm_tty_tiocmset` in `drivers/usb/class/cdc-acm.c`); not measured here |
+| Linux and macOS | `""` and false | Linux's `cdc_acm` sends SET_CONTROL_LINE_STATE with both bits for every modem-line ioctl (`acm_tty_tiocmset` in `drivers/usb/class/cdc-acm.c`); not measured. macOS's `AppleUSBACMData` sends an RTS change by itself: 0 of 1600 RTS pulses missed on the Teensy 4.0 ([macOS with the Teensy 4.0 echo board](#macos-with-the-teensy-40-echo-board-2026-11-05)) |
 
 Measured 2026-10-12 on the Teensy 4.0 (`tests/compare/serial_pulse/`,
 the conditions of [Results with v0.6.1](#results-with-v061)), 100 calls
@@ -1835,7 +1905,11 @@ opens and none for the ten RTS changes.
 
 These hold for a USB CDC device on Windows `usbser.sys`; an FTDI or other
 bridge has its own driver and latency timer, and a trigger box adds its own
-delay.
+delay. On macOS, see [macOS with the Teensy 4.0 echo
+board](#macos-with-the-teensy-40-echo-board-2026-11-05): use ysp/rt.h
+0.10.1 or later there. With 0.10.0 a width timed on the caller's thread
+(`yser_pulse()`) was a quarter to a half of its sleep too long; with
+0.10.1 it is -31 to -7 us at the median.
 
 - With ysp/serial.h 0.6.0, expect `yser_pulse` and `yser_pulse_async` to
   be within -0.22 to +0.10 ms of the requested width (min to p99), median
@@ -1871,7 +1945,9 @@ delay.
   those of [Results with v0.6.0](#results-with-v060).
 
 Not run: MATLAB (the `ysp_serial` MEX pulse, IOPort `Write` with
-`WaitSecs`), an FTDI bridge, Linux and macOS. To run the bench (the
+`WaitSecs`), an FTDI bridge and Linux. macOS ran in C on 2026-11-05
+([macOS with the Teensy 4.0 echo board](#macos-with-the-teensy-40-echo-board-2026-11-05)).
+To run the bench (the
 Python half needs pyserial and ysp-serial 0.5.0.2 or later):
 
 ```
@@ -1885,6 +1961,312 @@ python tests\compare\serial_pulse\pulse_stats.py out
 `device_pulse.c` runs ysp/device.h's host-timed pulses the same way
 (docs/device.md), and `call_tail.py out` gives the share of DTR, RTS and
 byte calls over 1 and 2 ms ([The DTR call tail](#the-dtr-call-tail)).
+
+## macOS with the Teensy 4.0 echo board (2026-11-05)
+
+The Windows measurements of this document, repeated on a Mac with the same
+board. Until this run, macOS ran on a pseudo-terminal pair only
+([macOS on a pseudo-terminal pair](#macos-on-a-pseudo-terminal-pair-2026-11-04)).
+
+Conditions: 2026-11-05, 13:15 to 13:46 EST. An Apple M2 Mac mini (Mac14,3,
+4 P-cores and 4 E-cores), macOS 27.0.1 (26A434), AC power. Apple clang 21
+(Command Line Tools), `-O2`. MATLAB R2026b Update 1 in `-batch` mode, with
+`ysp_serial.mexmaca64` (binding 2.2.0) built from this tree (a631d23,
+with only an environment variable of the MEX build renamed). ysp/serial.h
+0.6.3, ysp/device.h 0.5.1, ysp/rt.h 0.10.0. The board: the Teensy 4.0 of
+the Windows runs, `firmware/ysp_echo` version 2 (not flashed again; it
+answered `V ysp-echo 2 teensy b l g`), Teensyduino `bcdDevice` 0x0279, on
+a USB port of the Mac (not on a hub), high speed, Apple's
+`AppleUSBACMData` driver, `/dev/cu.usbmodem75925601`. Every program ran at
+normal priority, from a shell, as the Windows runs did. The other work on
+the machine was stopped before the run. One command ran everything:
+
+```sh
+sh tests/compare/serial_macos.sh
+```
+
+That script (30 min 24 s) records the load average and the five busiest
+processes before each step. The 1-minute load was 1.07 to 2.27 before
+each step, except `pulse_bench` run 1, at 2.75: the bench's own MATLAB
+step had held one core at 100 % in its poll loops just before, and no
+other process was above 15 % of a core. That run counts as high load
+(more than twice the quiet machine's 1.3), so its numbers are not pooled
+into the results below. They are shown only as a check. The
+summaries and conditions are in
+`tests/compare/serial_bench/results/2026-11-05-teensy40-macos/` and
+`tests/compare/serial_pulse/results/2026-11-05-teensy40-macos/`.
+
+The Windows numbers in the comparisons are from the same board on another
+machine (Windows 11, Intel Core i7-1360P laptop; [Audit
+runs](#audit-runs-ioport-tuned-the-raw-win32-floor-and-three-async-readers),
+[Results with v0.6.1](#results-with-v061)). A difference between the two
+can come from the OS and its driver, from the machine, or from the
+conditions of the run. The text below says which of these the data can
+separate.
+
+### Functional checks
+
+`tests/compare/serial_pulse/board_check.c` (new) checks the port and every
+output path against the board, without timing. All checks passed, also
+built with ASan and UBSan and with ThreadSanitizer (no reports):
+
+| Check | Result |
+|---|---|
+| Enumeration | `yser_list_ports()` lists the port; `yser_find_ports()` with the name finds it. No vid, pid or serial number on macOS, as [Enumeration, per platform](#enumeration-per-platform) says; `driver` is `""` |
+| Echo | 500 `e <seq>` exchanges, every answer with the right length, sequence number and stamp order |
+| DTR and RTS | `yser_set_dtr()` and `yser_set_rts()`: the board reports every change with both bits right. RTS reaches the board by itself: `AppleUSBACMData` sends the change, so the second request that `usbser.sys` needs ([RTS on usbser.sys](#rts-on-usbsersys)) is not necessary here |
+| Bytes and pulses | `yser_write_byte()`, `yser_pulse()` and `yser_pulse_async()` (also with a zero width): the board stamps every byte, in order |
+| Exclusive | A second exclusive open fails. On this driver `TIOCEXCL` refuses it already (`open()` gives `EBUSY`), also for an opener without `exclusive`; on a pseudo-terminal it did not ([Exclusive on macOS](#exclusive-on-macos-v063)) |
+| A nonstandard rate | `IOSSIOSPEED` accepts 250000 baud on this port (USB CDC ignores the rate) |
+| ysp/device.h, its own serial transport | A TriggerBox (`ydev_out_set()`, `ydev_out_pulse()`) reaches the board as bytes; a LINES device's codes 1, 0, 2, 0, 3, 0 and an RTS pulse reach it as DTR and RTS. The transport's read is left out so that the check can read the board on a second handle; open, write, lines and close are the header's |
+
+### Round trip and stream in C: the termios floor
+
+`tests/compare/serial_bench/raw_posix.c` (new) is the POSIX sibling of
+`raw_win32.c`: the same exchanges, metrics and clock fit. It has three
+floor modes (a blocking descriptor with `VTIME`, `select()`, `kevent()`) and
+one mode through ysp/serial.h (`ysp_c`). Two runs, the second in the
+reverse mode order; each cell gives run 1, run 2. 1000 round trips per
+cell, no failure; 10000 stream lines per cell, none missed. Microseconds.
+The one-way times are good to the fit's bound, 36 to 55 us.
+
+| Mode | RTT median | RTT p99 | Write call median | Host to board | Board to host, median / p99 | Stream latency, median / p99 | CPU % |
+|---|---|---|---|---|---|---|---|
+| block | 122.1, 124.7 | 147.5, 150.8 | 4.3, 6.8 | 61.5, 66.3 | 60.7, 58.2 / 79.9, 81.3 | 83.5, 73.7 / 184.6, 164.3 | 1.2, 1.2 |
+| select | 124.1, 124.2 | 148.5, 148.6 | 6.6, 6.6 | 67.2, 64.1 | 57.1, 61.3 / 76.3, 78.8 | 80.4, 81.4 / 172.1, 183.6 | 1.6, 1.6 |
+| kqueue | 125.4, 124.3 | 150.8, 154.8 | 6.7, 6.7 | 62.0, 60.6 | 63.1, 63.6 / 82.8, 84.2 | 84.5, 78.9 / 171.3, 168.3 | 1.5, 1.5 |
+| ysp_c (ysp/serial.h) | 134.6, 131.5 | 157.9, 156.8 | 13.6, 13.5 | 62.7, 64.3 | 71.5, 67.8 / 86.6, 83.9 | 83.5, 78.3 / 176.4, 169.4 | 1.6, 1.6 |
+
+The bytes-available query (`FIONREAD`, or `yser_available()`) costs 0.8 to
+1.0 us median. The largest stream latency was 11.1 ms (block, run 1, one
+line); every other cell stayed under 0.51 ms.
+
+- **ysp/serial.h is at the floor.** Its round trip is 7 to 12 us longer at
+  the median than the `select()` floor and 7 to 9 us at p99. The write call
+  is 7 us longer (13.5 against 6.6 us): with the async worker alive, a
+  write takes the worker's lock and cancels a pending trailing byte (see
+  [Async pulse](#async-pulse)). The stream latency is the floor's.
+- **The three waits are the same** within the run-to-run spread, so
+  `select()`, which ysp/serial.h uses, costs nothing against `kevent()`.
+- **Against Windows** (the raw Win32 floor: RTT 167 to 229 us median, 303
+  to 399 us p99; stream 121 to 155 us median, 269 to 394 us p99): the macOS
+  floor is 45 to 105 us shorter at the median and about half at p99. Most
+  of it is the write. On `usbser.sys` a write returns after the board has
+  read the command (128 to 170 us); on `AppleUSBACMData` it returns when
+  the driver has the bytes (4 to 7 us), and the board reads the command
+  about 60 us later. That is a property of the driver, not of the run: it
+  is the same in every mode and both runs. The rest (host to board 60 to
+  67 us against 78 to 104 us; board to host 57 to 64 us against 71 to
+  128 us) mixes the driver, the host controller and the machine, which
+  this data cannot separate. The spread between opens is not: on Windows
+  the median of one open moved by 100 to 150 us ([Audit](#audit-is-the-comparison-fair),
+  difference 7). Here the median of a mode moved by at most 3 us between
+  the two runs, and the three floor modes agree within 4 us.
+
+### Round trip and stream in MATLAB
+
+`serial_bench.m` with `ysp_serial` and `serialport`, two runs (run 1:
+serialport, then ysp; run 2: the reverse). IOPort did not run: Psychtoolbox
+is not installed on this Mac. Each cell gives run 1, run 2. No failure, no
+missed line. Microseconds.
+
+| API | Read | RTT median | RTT p99 | Host to board | Board to host, median / p99 |
+|---|---|---|---|---|---|
+| ysp | blocking | 132.5, 131.8 | 153.7, 159.2 | 64.0, 63.8 | 68.2, 68.2 / 87.9, 87.0 |
+| ysp | poll | 109.6, 110.1 | 131.1, 131.4 | 57.3, 56.5 | 52.2, 52.4 / 71.8, 72.0 |
+| serialport | blocking | 775.5, 737.2 | 1453, 1499 | 117.3, 125.5 | 653.8, 609.9 / 1289, 1295 |
+| serialport | poll | 737.0, 742.1 | 1248, 1247 | 127.5, 125.8 | 611.2, 616.2 / 1125, 1130 |
+
+| API | Stream mode | Latency median | Latency p99 | Max | CPU, % of one core |
+|---|---|---|---|---|---|
+| ysp | blocking read per line | 93.6, 99.3 | 189.4, 188.9 | 3271, 3353 | 5.3, 5.0 |
+| ysp | poll loop | 62.1, 71.9 | 162.1, 160.1 | 235, 188 | 100.3, 100.2 |
+| ysp | async reader, its stamp | 90.1, 90.0 | 119.0, 118.5 | 147, 196 | 3.2, 3.3 |
+| serialport | blocking read per line | 679.3, 669.7 | 1301, 1300 | 2025, 1976 | 103.9, 104.0 |
+| serialport | poll loop | 720.2, 741.5 | 1333, 1352 | 1646, 1705 | 101.6, 101.5 |
+| serialport | callback, `evt.AbsTime` | 939.2, 931.5 | 1659, 1658 | 6555, 7434 | 77.7, 75.0 |
+
+Call costs, median (p99): write of 1 to 512 bytes, ysp 9.2 to 9.5 (9.6 to
+15.2), serialport 65 to 68 (80 to 682); read with nothing waiting, ysp 1.9
+to 2.3 (5.3 to 6.8); bytes available, ysp 1.7 to 2.0, serialport 9.2 to
+10.4; a write beside the running async reader, ysp 15.7 to 15.9 (47 to
+73); open, ysp 1252 to 1279 us, serialport 12.0 to 12.2 ms; port list, ysp
+61 us, serialport 220 to 228 us.
+
+- **The MEX binding adds nothing measurable to the C path:** its blocking
+  round trip (132 us) equals `ysp_c`'s (132 to 135 us). Its poll loop is
+  shorter (110 us) because the thread never sleeps.
+- **serialport is 5.6 to 5.9 times ysp's round trip** (737 to 776 against 132 us
+  median) and uses a whole core in every stream mode. On Windows it was 20
+  times, with a 15 ms p99; here its p99 is 1.2 to 1.5 ms. Its callback
+  mode is again the slowest reader.
+- **Against Windows, ysp:** round trip 132 against 172 to 292 us median,
+  p99 154 to 159 against 279 to 424 us; async stamp 90 against 152 us
+  median, 119 against 350 to 380 us p99. The round-trip part is the write
+  of the floor above. A blocking read per line had a single latency of
+  3.3 ms in each run, against 1.1 ms on Windows; its p99 stayed under
+  0.19 ms.
+
+### Pulses
+
+`pulse_bench.c` and `device_pulse.c` now build on POSIX; the raw modes use
+`write()` and `ioctl(TIOCMBIS / TIOCMBIC)`. Seven modes, widths 1, 2, 5 and
+10 ms, 200 pulses per cell, the method of [How the bench
+measures](#how-the-bench-measures). Run 2 only (run 1 began at high
+load, above). Missed: 0 of 5600 in run 2, 0 of 5600 in run 1. The fit's
+bound was 59 to 83 us. Microseconds.
+
+Width error (board width minus requested), run 2, median (p5 / p99):
+
+| Mode | 1 ms | 2 ms | 5 ms | 10 ms |
+|---|---|---|---|---|
+| ysp_pulse_async | -16.5 (-52 / -2) | -14.0 (-69 / 0) | -14.9 (-61 / +7) | -15.3 (-56 / 0) |
+| ysp_pulse | -18.5 (-121 / +238) | +672 (+586 / +747) | +2186 (+1666 / +2248) | +2242 (+758 / +2319) |
+| ysp_dtr (from the return) | +381 (+357 / +463) | +884 (+856 / +1013) | +2381 (+1603 / +2518) | +2433 (+1317 / +2556) |
+| ysp_rts (from the return) | +378 (+358 / +500) | +889 (+853 / +1008) | +2382 (+806 / +2504) | +2433 (+854 / +2549) |
+| raw_byte (from the return) | +237 (+201 / +264) | +739 (+669 / +762) | +2238 (+1377 / +2272) | +2289 (+803 / +2318) |
+| raw_dtr (from the return) | +380 (+357 / +483) | +882 (+859 / +984) | +1183 (+479 / +2474) | +2433 (+690 / +2572) |
+| raw_rts (from the return) | +381 (+356 / +485) | +882 (+840 / +977) | +1185 (+1148 / +1282) | +2438 (+685 / +2589) |
+
+Onset and call, run 2, 800 pulses per mode:
+
+| Mode | Onset median | Onset p5 / p95 / p99 / max | Call median / p99 / max |
+|---|---|---|---|
+| raw_byte | 84.4 | 67.6 / 142 / 159 / 207 | 28.4 / 55.9 / 139 |
+| ysp_dtr | 93.8 | 74.6 / 140 / 159 / 208 | 171 / 331 / 470 |
+| raw_dtr | 95.1 | 76.3 / 143 / 177 / 231 | 171 / 332 / 401 |
+| ysp_rts | 96.3 | 74.5 / 156 / 184 / 250 | 175 / 357 / 449 |
+| raw_rts | 96.6 | 77.1 / 155 / 206 / 255 | 172 / 335 / 434 |
+| ysp_pulse | 105.0 | 72.6 / 183 / 216 / 262 | 777 / 2343 / 2350 (minus w) |
+| ysp_pulse_async | 111.8 | 85.1 / 179 / 205 / 250 | 9.5 / 80.7 / 134 |
+
+Run 1, the check: every cell median within 8 us of run 2's, except five.
+In four of them one run had half the sleep as excess and the other a
+quarter (next section): raw_dtr and raw_rts at 5 ms, +2391 and +2384 us in
+run 1 against +1183 and +1185 us in run 2; ysp_dtr and ysp_pulse at 10 ms,
++4878 and +4682 us in run 1 against +2433 and +2242 us. The fifth is
+ysp_pulse_async at 1 ms, -41 against -16.5 us.
+
+- **`yser_pulse_async` is the best host-timed pulse measured so far:**
+  -17 to -14 us median, p99 at most +7 us, the largest error +13 us in
+  800 pulses. On Windows the same call gave -46 to 0 us median, p99 up to
+  +123 us. Its worker runs at `YRT_POLICY_TIME_CONSTRAINT`.
+- **Every width timed on the caller's thread is too long by a quarter to
+  a half of its sleep.** That covers `yser_pulse()` and every mode in
+  which the bench waits itself. The error grows with the width: about
+  +0.7, +2.2 and +2.2 ms at 2, 5 and 10 ms for `yser_pulse()`, and +4.7 ms
+  at 10 ms in run 1. It is the same for bytes, DTR and RTS, and for the raw
+  modes, so the port and ysp/serial.h are not the cause. The cause is the
+  wait: see [The wait on a normal thread](#the-wait-on-a-normal-thread).
+  At 1 ms, `yser_pulse()` sleeps about 0.77 ms (its deadline counts from
+  the start of the onset write), and the excess of that sleep falls mostly
+  inside the 200 us spin window: -18.5 us median, but +213 and +238 us at
+  p95 and p99.
+- **The onsets are the driver's.** A byte arrives 84 us after the call,
+  DTR and RTS 94 to 97 us after it. On Windows a byte arrived 211 to 235 us
+  and DTR 83 to 87 us after the call. The byte is 130 to 150 us earlier
+  here for the reason of the round trip above: `write()` returns at once
+  and the bulk transfer starts. DTR and RTS are control requests on
+  either OS and land within 10 us of each other.
+- **The DTR and RTS calls have no millisecond tail here:** 171 to 175 us
+  median, at most 470 us in 3200 calls. On Windows the median was 289 to
+  412 us, and 3 to 7 % of calls took more than 1 ms. That tail came with a
+  load on that machine ([The DTR call tail](#the-dtr-call-tail)). This run
+  was quiet, so this data does not say whether `AppleUSBACMData` has such a
+  tail under load.
+- **ysp/serial.h is at the floor:** ysp_dtr and raw_dtr, ysp_rts and
+  raw_rts are within 3 us of each other in onset and call. A
+  `yser_pulse()` byte arrives 21 us after a raw `write()` byte. The
+  worker's lock on the write path (above) is a likely part of that; it was
+  not traced.
+
+### The wait on a normal thread
+
+`tests/compare/serial_pulse/wait_leeway.c` (new) measures the wait alone,
+without a port: 100 waits of each width on the main thread, at its default
+scheduling (QoS class `USER_INTERACTIVE`, 0x21). The same session and
+conditions, after the bench (1-minute load 1.21 to 1.25). Lateness (wake
+minus deadline), median (max), microseconds:
+
+| Wait | 1 ms | 2 ms | 5 ms | 10 ms |
+|---|---|---|---|---|
+| `yrt_sleep_until()`, no spin | 266 (291) | 516 (539) | 1267 (1295) | 2517 (2548) |
+| `yrt_sleep_until()`, 200 us spin (the default) | 15.4 (29) | 266 (302) | 1017 (1040) | 2268 (2293) |
+| `mach_wait_until()` | 263 (284) | 514 (542) | 1266 (1289) | 2516 (2605) |
+| `nanosleep()` after `QOS_CLASS_USER_INTERACTIVE` | 265 (435) | 514 (522) | 1267 (1306) | 2520 (2568) |
+| `kevent()` timer, `NOTE_CRITICAL`, absolute | 33.9 (66) | 35.8 (312) | 35.4 (77) | 37.8 (9281) |
+
+Here a wait of a normal thread wakes a quarter of its length late, with
+almost no spread. `nanosleep()` and `mach_wait_until()` agree; the thread's QoS
+class does not change it, and neither does the latency tier 0 of
+`taskpolicy -l 0` (2516 us at 10 ms). This matches Darwin's timer
+coalescing, in which the kernel gives a timer of an unprivileged thread a leeway proportional
+to its interval. A spin window covers only its own length, so the default
+200 us spin covers a wait up to about 1 ms. A timer flagged
+`NOTE_CRITICAL` wakes 34 to 38 us late at the median at every length.
+On that normal thread, one wait in 400 was 9.3 ms late. A
+`TIME_CONSTRAINT` thread is not coalesced: in [docs/rt.md](rt.md) such a
+thread's 2 ms `nanosleep()` woke 10 to 16 us late, and the async worker's
+widths above agree. In the bench the excess was half of the sleep in most
+cells of 1 to 5 ms and a quarter in most cells of 10 ms; the five cells of
+the run 1 check had the other level. This program saw a quarter at every
+length. What sets the level for a given wait is not known.
+
+This was a defect of ysp/rt.h's wait on macOS, not of ysp/serial.h:
+`yser_pulse()` and every `yrt_sleep_until()` or `yrt_sleep_ns()` on a
+caller's thread were late by a quarter of the wait or more. It was not
+measured before because docs/rt.md's macOS runs used elevated threads.
+ysp/rt.h 0.10.1 fixes it with the critical timer; [The wait on
+macOS](rt.md#the-wait-on-macos-v0101) has the comparison on three kinds of
+thread and the design, and the next section the pulses.
+
+### Results with ysp/rt.h 0.10.1
+
+The pulse set again, with ysp/rt.h 0.10.1 (ysp/serial.h and ysp/device.h
+unchanged): `sh tests/compare/serial_macos.sh skip=raw,matlab`, 2026-11-05
+14:21 to 14:45 EST, the same Mac, board, port and build flags. The
+1-minute load was 1.16 to 1.54 before each step, so both runs are pooled.
+Spotlight's `corespotlightd` was at 39 % of a core before the second
+device run. 400 pulses per cell (two runs, 200 each, opposite orders).
+Missed: 0 of 11200 (and 0 of 2400 in ysp/device.h). The fit's bound was
+57 to 82 us. Summaries:
+`tests/compare/serial_pulse/results/2026-11-05-teensy40-macos-rt0101/`.
+
+Width error, median (p5 / p99), microseconds. For ysp_pulse, "was"
+gives its median with ysp/rt.h 0.10.0 (run 2 of [Pulses](#pulses)):
+
+| Mode | 1 ms | 2 ms | 5 ms | 10 ms | Max |
+|---|---|---|---|---|---|
+| ysp_pulse | -31 (-102 / +23) | -13 (-92 / +30), was +672 | -7 (-63 / +37), was +2186 | -12 (-74 / +35), was +2242 | +87 |
+| ysp_pulse_async | -13 (-85 / +4) | -14 (-98 / +9) | -9 (-63 / +19) | -10 (-69 / +42) | +84 |
+| ysp_dtr (from the return) | +148 (+132 / +262) | +148 (+131 / +242) | +150 (+133 / +252) | +149 (+134 / +294) | +415 |
+| ysp_rts (from the return) | +150 (+131 / +280) | +150 (+132 / +235) | +150 (+134 / +302) | +149 (+133 / +266) | +4618 |
+| raw_byte (from the return) | +10 (-22 / +25) | +10 (-21 / +25) | +10 (-44 / +96) | +12 (-26 / +47) | +189 |
+| raw_dtr (from the return) | +152 (+133 / +247) | +151 (+132 / +289) | +152 (+132 / +271) | +147 (+132 / +308) | +6898 |
+| raw_rts (from the return) | +150 (+132 / +242) | +148 (+131 / +266) | +152 (+134 / +248) | +149 (+132 / +248) | +564 |
+
+Onset, median (p99): byte 76 us (192) raw and 89 us (208) through
+`yser_pulse()`, 104 us (242) through `yser_pulse_async()`; DTR and RTS 83
+us (172 to 239). Call, median (p99): `yser_pulse()` 21 us (63) without the
+width, `yser_pulse_async()` 6.4 us (63), a DTR or RTS call 157 to 159 us
+(312 to 380).
+
+- **The quarter-to-half overshoot is gone.** `yser_pulse()` is -31 to
+  -7 us at the median, p99 at most +37 us, and every mode whose wait the
+  bench makes on its own thread follows it.
+- **What is left in the line modes is the line call.** The bench's own
+  DTR and RTS modes time the width from the return of the onset call,
+  which takes 157 to 159 us; the board sees each change about 83 us after
+  its call starts. So the width is the call's duration too long: +147 to
+  +152 us. ysp/device.h times the width from the start of the leading
+  write, and its LINES pulses are -10 to -8 us (docs/device.md). The byte
+  write returns in 21 us, so raw_byte is +10 to +12 us. With ysp/rt.h
+  0.10.0 the same line modes were +378 to +2433 us.
+- **The line call has a rare tail:** 3 of 12,800 DTR and RTS calls took
+  more than 1 ms (the longest 2975 and 4191 us), in both runs, in the raw
+  and the ysp modes alike. The two largest width errors (+4618 and
+  +6898 us) are in the cells of those calls. On Windows, 0.12 to 0.19 % of these calls did on a quiet
+  machine ([The DTR call tail](#the-dtr-call-tail)); here 0.02 %.
 
 ## Python async reader (ysp-serial 0.5.0.2)
 

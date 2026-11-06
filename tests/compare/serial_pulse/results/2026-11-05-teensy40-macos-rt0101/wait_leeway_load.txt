@@ -1,0 +1,16 @@
+14:01:54
+{ 1.30 1.35 1.31 }
+ 52.3 /Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper (Renderer).app/Contents/MacOS/Code Helper (Renderer)
+  2.0 /Users/brainworks/.vscode/extensions/anthropic.claude-code-2.1.318-darwin-arm64/resources/native-binary/claude
+  0.9 /Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper (Renderer).app/Contents/MacOS/Code Helper (Renderer)
+  0.0 zsh
+14:03:14
+{ 1.08 1.27 1.28 }
+14:18:06
+{ 2.38 2.49 2.06 }
+  8.0 /Users/brainworks/.vscode/extensions/anthropic.claude-code-2.1.318-darwin-arm64/resources/native-binary/claude
+  4.5 /Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper (Renderer).app/Contents/MacOS/Code Helper (Renderer)
+  0.4 /usr/libexec/opendirectoryd
+  0.3 /usr/libexec/PerfPowerServices
+14:19:23
+{ 1.64 2.24 2.00 }

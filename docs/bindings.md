@@ -25,7 +25,8 @@ This page is reference: the language bindings of the headers.
   `tests/compare/` runs the adaptive bindings
   beside PsychoPy, questplus and AEPsych on one response stream. CI builds
   the wheels with cibuildwheel on Linux, Windows and macOS, except
-  `ysp-parallel` on macOS, which its header does not support.
+  `ysp-parallel` on macOS, which its header does not support, and
+  `ysp-vis`, which has jobs of its own for Windows x64 and macOS arm64.
 - **MATLAB / Octave**: [bindings/mex/](../bindings/mex/), one MEX function
   per library (`ysp_parallel`, `ysp_serial`, `ysp_stair`, `ysp_quest`,
   `ysp_aep`, `ysp_trials`, `ysp_color`, `ysp_rdk`, `ysp_rt`, `ysp_box`,
@@ -157,8 +158,10 @@ not bound and why.
 
 ### Display, stimuli, movies: ysp-vis
 
-Windows only: the other screen backends of `ysp/screen.h` are stubs. Phase
-A (2026-10-27) binds the frame loop of `ysp/screen.h` in full
+Platforms: Windows x64, and macOS 14 or later on arm64 (the METAL
+backend; `ysp-vis` 0.15.0 and the MEX files 1.3.0, 2026-11-05). Linux is
+not supported: the X11 and Wayland backends of `ysp/screen.h` are stubs.
+Octave on macOS is not built. Phase A (2026-10-27) binds the frame loop of `ysp/screen.h` in full
 ([screen.md](screen.md#bindings)). Phase B's gfx part (2026-10-27) binds
 the stimuli of `ysp/gfx.h` as objects the binding owns, draw lists and
 bulk sets, groups, instances, textures, hit tests, capture, and timeline
@@ -199,7 +202,9 @@ clock the binding's frames and decisions equal the C path's line by line
   layout's sources), then
   `uv run --no-project python tools/vendor_vis.py --write --angle --pl-mpeg --sdl msvc --layout msvc`
   (Python and MATLAB), and `--sdl mingw --layout mingw --mingw-bin <Octave>/mingw64/bin`
-  for Octave. Then Python: `uv pip install ./bindings/python/ysp_audio
+  for Octave. On macOS:
+  `uv run --no-project python tools/vendor_vis.py --write --angle --pl-mpeg --sdl clang --layout clang`
+  (CMake, Ninja and Apple clang). Then Python: `uv pip install ./bindings/python/ysp_audio
   ./bindings/python/ysp_timeline ./bindings/python/ysp_vis`; MATLAB or
   Octave: `build` in `bindings/mex/` (ysp_audio, ysp_timeline, ysp_vis,
   ysp_screen, ysp_gfx, ysp_video). Everything sits in one directory: the
@@ -232,10 +237,89 @@ clock the binding's frames and decisions equal the C path's line by line
   are installed beside the module (`ysp_vis-LICENSE.Skribidi.txt`,
   `.HarfBuzz.txt`, `.SheenBidi.txt`, `.libunibreak.txt`, `.budouxc.txt`).
   No font file is bundled: the default is the system's Segoe UI (Arial
-  when it is missing), and a text's stamp records the SHA-256 of the
-  fonts it used.
-- **MATLAB and Octave layout.** `ysp_vis.<mexext>` is the core: the three
-  headers, the static SDL3, the one handle table and every command. It is
+  when it is missing); on macOS Arial
+  (`/System/Library/Fonts/Supplemental/Arial.ttf`), then Helvetica, as
+  ysp/gfx.h's own list. A text's stamp records the SHA-256 of the fonts it
+  used.
+- **Natives on macOS.** The same parts, built for arm64 and
+  `MACOSX_DEPLOYMENT_TARGET` 14.0, ysp's floor. SDL3 3.4.0 and the text
+  layout are static libraries that `tools/vendor_vis.py --sdl clang
+  --layout clang` builds with Apple clang (the tarball and the layout
+  trees checked as on Windows); the build refuses an SDL3 whose `sdl3.pc`
+  asks for other frameworks than the list setup.py and build.m link. So
+  the extension and the MEX core import system libraries only (Cocoa,
+  Metal, QuartzCore, AVFoundation, GameController and the others SDL3
+  needs, libc++ and libobjc): no `@rpath` or `@loader_path` entry, and no
+  `libSDL3.dylib` to carry, for the reason of the Windows build. ANGLE's
+  `libEGL.dylib` and `libGLESv2.dylib` come from the Electron v43.8.3 zip
+  for darwin-arm64 (the zip and both files checked by SHA-256; ANGLE
+  2.1.28042, git b4f8ea825136, as the describe line reports it) and are
+  copied beside the module unchanged, so their SHA-256 holds there and
+  their own ad hoc signature (the linker's) stays valid. Their install
+  names (`./libEGL.dylib`) are never used: ysp/screen.h opens libEGL by
+  full path from `desc.angle_dir`, and libEGL opens libGLESv2 from its own
+  folder. The extension and the MEX files are ad hoc signed by the linker;
+  nothing is signed again. The header's measurements on macOS used VS
+  Code's copy of Electron 43.8.3's ANGLE, which Microsoft builds and signs
+  itself (other bytes, `ANGLE 2.1 git hash: unknown hash`); the zip's
+  build passed `tests/adapt/screen_metal_test.c` 42 of 42 on 2026-11-05
+  (M2 Mac mini, macOS 27.0.1, unlocked, no Screen Sharing). The license
+  notices are the same files as on Windows, ANGLE's taken from the macOS
+  zip's `LICENSES.chromium.html`.
+- **macOS: the main thread.** Cocoa's windows, SDL's video, the GL
+  context and ysp/screen.h's METAL backend live on the process's main
+  thread; `open()` refuses another thread. Measured on the M2 Mac mini,
+  macOS 27.0.1, 2026-11-05:
+  - Python: a script's code runs on the process's main thread (the
+    window tests pass through the wheel). From a `threading.Thread`, a
+    window `Screen()`, `displays()`, `modes()`, `mode_multiple()` and
+    every call on an open window screen, its `Gfx`, the gfx's objects and
+    its movies raise `ysp.screen.Error` before SDL or Cocoa sees them:
+    "ysp_screen: on macOS a window screen opens, runs its frame loop,
+    draws and closes on the process's main thread (...); this call came
+    from another thread. Python: call it from the thread that runs the
+    script, not a threading.Thread." The simulated display opens on any
+    thread. A `Screen` or `Gfx` that the garbage collector frees on
+    another thread stays open until the process ends: closing it there
+    would touch Cocoa and GL off their thread.
+  - MATLAB R2026b runs a MEX function on its own thread, never on the
+    main thread: `pthread_main_np()` was 0 in the desktop, with
+    `-nodesktop`, with `-nojvm` and with `-batch`. Its main thread runs
+    an NSApplication run loop that serves the main dispatch queue in all
+    four: a block sent from a MEX function ran there 16 to 31 us later,
+    and a `dispatch_sync` round trip took 5 to 8 us at best. So on macOS
+    the core runs each `ysp_screen`, `ysp_gfx` and `ysp_video` call whole
+    on the main queue while the MATLAB thread waits (`bindings/mex/ysp_vis.c`,
+    MAIN THREAD). An error there goes back to the MATLAB thread, which
+    raises it with its usual id. A call that the main thread does not
+    start in 10 s is withdrawn and raises `ysp_screen:main_thread` (or
+    `ysp_gfx:`, `ysp_video:`), so a main thread that does not serve its
+    queue cannot hang MATLAB; a call that has started runs to its end.
+    With every launch mode, a window opened, ran 3.5 s of frames (209 or
+    210 records, all tier 2), got 36 to 40 of 40 F19 key events posted
+    with `CGEventPostToPid` (taps 50 ms apart, so the others were most
+    likely second reports that `key_dedup` drops; not checked), every
+    one with its NSEvent.timestamp (`stamp` 0, describe `os_stamps=38/38`
+    to `40/40`), and closed. The cost of the hop: a
+    `ysp_screen('now')` took 18.0 to 18.3 us a call against 0.8 to 0.9 us
+    for `ysp_rt('now')`, which does not hop (the mean of 5000 calls, one
+    run in each mode; not a quiet-machine timing run), so about 17 us for
+    each call of a frame. Not verified: the withdrawal (no state was found in which
+    MATLAB's main thread stops serving its queue), and a MATLAB UI event
+    that waits for the MATLAB thread while a call runs (SDL's event pump
+    inside a call dispatches MATLAB's own events too). `usejava('desktop')`
+    is 0 in R2026b's desktop.
+- **MATLAB and Octave layout.** `ysp_vis.<mexext>` (`.mexw64`,
+  `.mexmaca64`) is the core: the three headers, the static SDL3, the one
+  handle table and every command; ANGLE's two libraries and the
+  `ysp_vis-LICENSE.*.txt` notices sit beside it. On macOS `build.m` gives
+  the linker an export list with `ysp_vis_core` beside `mexFunction`, as
+  for the owners' tables. With the Command Line Tools and no Xcode,
+  MATLAB's `clang_maca64.xml` refuses ("Supported compiler not detected")
+  because it reads Xcode's license record; a copy of the file without its
+  `XCODE_AGREED_VERSION` element works, and `build.m` passes the file in
+  the environment variable `YSP_MEX_OPTS` to `mex -f` (how the MEX files
+  here were built). It is
   a MEX file too, so it sits beside the others with their extension and
   loads `ysp_audio` and `ysp_timeline` from its own directory as any
   consumer does; called itself it answers `'version'` and `'info'`.
@@ -257,19 +341,40 @@ clock the binding's frames and decisions equal the C path's line by line
   thin file detaches; until then a clear of one file leaves the objects
   open, and the file finds its handles again when it loads again. Verified
   in MATLAB R2023a and Octave 10.1 (`test_mex_vis.m`,
-  `test_mex_vis_gfx.m`; `test_mex_vis_window.m` with a window).
-- **Versions.** `ysp-vis` tracks `ysp/screen.h`'s version (0.10.4:
-  `ysp/screen.h` 0.10.4 with the CPython 3.10 floor, `ysp/gfx.h` 0.17.2
-  and `ysp/video.h` 0.6.0; 0.10.2.1 was 0.10.2 with phase C, text, a
-  binding-only change; 0.10.1.1 was 0.10.1 and phase B, gfx and movies), and
+  `test_mex_vis_gfx.m`; `test_mex_vis_window.m` with a window), and in
+  MATLAB R2026b on macOS (the same files, `-batch`). On macOS the last
+  detach closes on the main thread too; when the main thread does not take
+  it (the withdrawal above), the objects and the owners' modules stay to
+  the process's end. Measured: a `-batch` run that exits with a screen
+  and a gfx open (simulated, or a window) took 13 to 14 s from start to
+  end, as one with nothing open (13 s): the close at exit did not wait for
+  the 10 s withdrawal.
+- **Versions.** `ysp-vis` tracks `ysp/screen.h`'s version (0.16.1:
+  the macOS raw mouse reader's stale values dropped; 0.16.0:
+  `ysp/screen.h` 0.16.0, its macOS panic, raw mice, gamma table and code
+  risk, no new caps or desc field; 0.15.0:
+  `ysp/screen.h` 0.15.0, `ysp/gfx.h` 0.17.3 and `ysp/video.h` 0.7.0, with
+  macOS arm64; 0.10.4 was `ysp/screen.h` 0.10.4 with the CPython 3.10
+  floor, `ysp/gfx.h` 0.17.2 and `ysp/video.h` 0.6.0; 0.10.2.1 was 0.10.2
+  with phase C, text, a binding-only change; 0.10.1.1 was 0.10.1 and phase
+  B, gfx and movies), and
   `ysp.screen.HEADER_VERSION`, `ysp.gfx.HEADER_VERSION` and
   `ysp.video.HEADER_VERSION` give the three headers' own. A change to
   `ysp/gfx.h` or `ysp/video.h` alone that changes the binding adds the
   fourth number, as a binding-only change does. The MEX files have the
-  number 1.2.1 of their own (1.0.0 was phase A; 1.1.0 adds `ysp_gfx`'s stimuli and `ysp_video`'s movies; 1.2.0 the text; 1.2.1 `ysp_video`'s UTF-8 paths and its error ids by the header's code); their `'version'` gives it
+  number 1.3.0 of their own (1.0.0 was phase A; 1.1.0 adds `ysp_gfx`'s stimuli and `ysp_video`'s movies; 1.2.0 the text; 1.2.1 `ysp_video`'s UTF-8 paths and its error ids by the header's code; 1.3.0 macOS, `caps` with `os_input_stamps` and `margin`, the open options `backend` `'metal'` and `color_depth`); their `'version'` gives it
   and the header's as the second output. `ysp-audio` and `ysp-timeline` are dependencies
   of the same major.minor as the headers ysp-vis was built against
-  (`>=0.7,<0.8` and `>=0.8.1,<0.9`), the rule of the tables (below).
+  (`>=0.8,<0.9` and `>=0.8.1,<0.9`), the rule of the tables (below).
+- **caps.** `caps()` (`ysp_screen('caps', h)`) gives `ysp/screen.h`
+  0.12.0's `margin` (seconds, with `margin_ns`: the presenter's least time
+  before a vblank; 0 means the core's, 2 ms on METAL) and 0.15.0's
+  `os_input_stamps` (true when keys and mouse buttons get their OS event's
+  time: METAL's NSEvent monitor). The binding's input path is
+  `yscr_event_input()`, which sets `yin_sdl_ctx.os_stamps` itself from
+  that, so on macOS a key or mouse button carries NSEvent.timestamp
+  (`stamp` 0, the source entry's tier) and one without its NSEvent keeps
+  SDL's stamp at tier 3.
 - **The frame in MATLAB and Octave.** Since 1.1.0 `ysp_screen('begin')`
   returns the frame without its records; they come as a third output when
   asked for, or from `'records'` per trial. A screen opened with
@@ -280,9 +385,14 @@ clock the binding's frames and decisions equal the C path's line by line
   the struct without records 9.3 and 55 us, the row 3.8 and 13.5 us (a
   bare call 3.7 and 3.6 us; medians of 3 runs).
 - **Between trials** a host waits as it likes (`time.sleep`, `input`,
-  `pause`): the window belongs to ysp/screen.h's window thread and does
-  not hang, and no pumping call is needed (measured:
-  [screen.md](screen.md#bindings)).
+  `pause`): on Windows the window belongs to ysp/screen.h's window thread
+  and does not hang, and no pumping call is needed (measured:
+  [screen.md](screen.md#bindings)). macOS has no window thread: nothing
+  pumps the window's events during the wait. After 6 s without a call, in
+  Python and in MATLAB (one run each), the next frames drew; the first
+  three flips were estimated (tier 3, no presentedTime) and the fourth and
+  later were tier 2 again. So start a trial with a few frames that do not
+  count.
 
 ## Sharing one implementation across modules
 
@@ -479,7 +589,7 @@ call can poll. [Conventions](conventions.md) lists the exceptions.
 | `ysp.audio` and `ysp_audio` (MEX) | `now()` (`now_ns()` exact), every time argument (`play_at(t)`, `play(at=)`, `stop(at=, ramp=)`, `gain(at=, ramp=)`, `wait(timeout)`, the synthesis `duration`, `ramp`, `period`, `onset_offset`, a ring's and a preroll's length, `frame_at(t)`, `sample_at(t)`, a capture's `frame_at(t)` and `offset`) and result (`lead` with `lead_ns`, `caps()` and `info()` times, `time_of()` as `(s, ns)`); a record gives `target`, `onset`, `residual` and `rendered_at` in seconds and their `_ns` exactly. Frame and sample counts stay integers |
 | `ysp.timeline` and `ysp_timeline` (MEX) | every time argument (`evaluate(onset, period)`, `anchor`, `skip`, `rate`, `wait`, `at`, the tween options `duration`, `delay`, `start`, `stagger`, key and event times, track `t0` and `period`, `peek`'s window) and result (`base_time`, `rt_time`, `window`, `next_due`, `horizon`, a sequence's cursor); a landing record gives `time`, `onset` and `residual` in seconds and `time_ns`, `onset_ns` and `residual_ns` exactly |
 | `ysp.video` (ysp-vis) and `ysp_video` (MEX) | `play(at)`, `pause(at)`, `seek(t, resume)`, `seek_frame(i, resume)`, `movie_time(t)`, the soundtrack's `ramp` and `ring`; a record's `onset`, `due`, `residual` and `movie_t`, an event's `t` and its other times (`requested`, `target`, `length`), `info` and `probe()`'s `duration`; the exact ns beside each (`_ns`, `int64` in MEX). Frame counts and indexes stay integers |
-| `ysp.screen`, `ysp.gfx` (ysp-vis) and `ysp_screen`, `ysp_gfx` (MEX) | `flip_at(t)`, the options `onset_offset`, `sim_period`, `settle_min`, `settle_max`, `panic_window`, `panic_grace`, `key_dedup`; a frame's `onset` and `period`, a record's `target`, `planned`, `onset`, `residual` and `phases`, an event's `t` and `unc`, an abort's `t`, a mode's `period`, `caps()` and `settle()` times, `now()`; the exact ns beside each absolute time and the residual (`_ns`, `int64` in MEX). A text's `layout_time`, `build_time` and `upload_time`, a font's `build_time` |
+| `ysp.screen`, `ysp.gfx` (ysp-vis) and `ysp_screen`, `ysp_gfx` (MEX) | `flip_at(t)`, the options `onset_offset`, `sim_period`, `settle_min`, `settle_max`, `panic_window`, `panic_grace`, `key_dedup`; a frame's `onset` and `period`, a record's `target`, `planned`, `onset`, `residual` and `phases`, an event's `t` and `unc`, an abort's `t`, a mode's `period`, `caps()` (`period`, `margin`) and `settle()` times, `now()`; the exact ns beside each absolute time and the residual (`_ns`, `int64` in MEX). A text's `layout_time`, `build_time` and `upload_time`, a font's `build_time` |
 
 ## Versions
 
@@ -539,14 +649,23 @@ v0.8.1), and `ysp-audio` is 0.7.2, the header's. The adaptive MEX
 functions and `ysp_color` have no number of their own: `'version'`
 returns the header's.
 
-`ysp-vis` is 0.10.4 (2026-10-27): one distribution for three headers,
+`ysp-vis` is 0.16.1 (2026-11-05; `ysp/screen.h` 0.16.1, no change to the
+binding's calls): one distribution for three headers,
 so its version tracks `ysp/screen.h`'s, and a release for a change of
 `ysp/gfx.h` or `ysp/video.h` alone, or of the binding alone, adds the
 fourth number ([ysp-vis](#display-stimuli-movies-ysp-vis)); 0.10.1.1 was
 0.10.1 with phase B (the gfx and the movies), 0.10.2.1 was 0.10.2
-with phase C (the text), and 0.10.4 is `ysp/screen.h` 0.10.4 with the
+with phase C (the text), 0.10.4 was `ysp/screen.h` 0.10.4 with the
 CPython 3.10 floor, `ysp/gfx.h` 0.17.2 (text runs batched) and
-`ysp/video.h` 0.6.0 (UTF-8 paths, error codes). The MEX files of ysp-vis (`ysp_vis`,
-`ysp_screen`, `ysp_gfx`, `ysp_video`) are 1.2.1 (1.0.0 was phase A, 1.1.0
-phase B, 1.2.0 phase C), one number for the four, because the thin files refuse a core
-of another build.
+`ysp/video.h` 0.6.0 (UTF-8 paths, error codes), and 0.15.0 is
+`ysp/screen.h` 0.15.0, `ysp/gfx.h` 0.17.3 and `ysp/video.h` 0.7.0 with a
+macOS arm64 wheel (`cp310-abi3-macosx_14_0_arm64`), `caps()`'s `margin`
+and `os_input_stamps`, the open options `backend="metal"` and
+`color_depth`, the main-thread refusal, and `ysp-audio` 0.8 as the
+dependency. The MEX files of ysp-vis (`ysp_vis`,
+`ysp_screen`, `ysp_gfx`, `ysp_video`) are 1.3.0 (1.0.0 was phase A, 1.1.0
+phase B, 1.2.0 phase C, 1.2.1 UTF-8 paths, 1.3.0 macOS), one number for the four, because the thin files refuse a core
+of another build. 1.3.0 also fixes `ysp_gfx('free', obj)`, which read
+the handle's node after freeing it: on macOS the freed node's kind was
+gone, so the list or stimulus was not freed and its items kept their
+users (`test_mex_vis_gfx.m` failed there; Windows's heap kept the bytes).

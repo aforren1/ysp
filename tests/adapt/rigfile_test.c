@@ -12,6 +12,22 @@
 #if defined(_MSC_VER) && !defined(_CRT_SECURE_NO_WARNINGS)
 #define _CRT_SECURE_NO_WARNINGS
 #endif
+#if defined(__APPLE__)
+/* v0.5.2: a save's F_FULLFSYNC, of the file and of the folder, counted
+ * apart. With g_full_refuse set the volume refuses it, as a network volume
+ * does, and the save must fall back to fsync(). */
+#include <errno.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+static int g_full_calls, g_full_dirs, g_full_refuse;
+static int test_fullfsync(int fd) {
+    struct stat st;
+    if (fstat(fd, &st) == 0 && S_ISDIR(st.st_mode)) g_full_dirs++; else g_full_calls++;
+    if (g_full_refuse) { errno = ENOTSUP; return -1; }
+    return fcntl(fd, F_FULLFSYNC);
+}
+#define YRIG__FULLFSYNC(fd) test_fullfsync(fd)
+#endif
 #define YSP_RIGFILE_IMPLEMENTATION
 #include "ysp/rigfile.h"
 
@@ -177,7 +193,7 @@ static void sha_hex(const char* s, size_t n, char out[65]) {
     uint8_t d[32];
     int i;
     yrig_sha256(s, n, d);
-    for (i = 0; i < 32; i++) sprintf(out + 2 * i, "%02x", d[i]);
+    for (i = 0; i < 32; i++) snprintf(out + 2 * i, 3, "%02x", d[i]);
 }
 
 /* ------------------------------------------------------------ the format */
@@ -389,16 +405,16 @@ static void check_refusals(void) {
     {
         char t[8192];
         int k, p = 0;
-        p += sprintf(t + p, "{\"format\":\"ysp-rig 1\",\"rig\":\"r\",\"written\":\"2026-01-01T00:00:00Z\",\"roles\":{");
-        for (k = 0; k < 33; k++) p += sprintf(t + p, "%s\"r%d\":{\"family\":\"line\",\"key\":\"k\"}", k ? "," : "", k);
-        p += sprintf(t + p, "}}");
+        p += snprintf(t + p, sizeof t - (size_t)p, "{\"format\":\"ysp-rig 1\",\"rig\":\"r\",\"written\":\"2026-01-01T00:00:00Z\",\"roles\":{");
+        for (k = 0; k < 33; k++) p += snprintf(t + p, sizeof t - (size_t)p, "%s\"r%d\":{\"family\":\"line\",\"key\":\"k\"}", k ? "," : "", k);
+        p += snprintf(t + p, sizeof t - (size_t)p, "}}");
         CHECK_I(yrig_parse(&g_q, t, (size_t)p, NULL, g_err, sizeof g_err), YRIG_ERR_FORMAT);
         CHECK_HAS(g_err, "roles: more than 32 roles");
         /* 32 is fine */
         p = 0;
-        p += sprintf(t + p, "{\"format\":\"ysp-rig 1\",\"rig\":\"r\",\"written\":\"2026-01-01T00:00:00Z\",\"roles\":{");
-        for (k = 0; k < 32; k++) p += sprintf(t + p, "%s\"r%d\":{\"family\":\"line\",\"key\":\"k\"}", k ? "," : "", k);
-        p += sprintf(t + p, "}}");
+        p += snprintf(t + p, sizeof t - (size_t)p, "{\"format\":\"ysp-rig 1\",\"rig\":\"r\",\"written\":\"2026-01-01T00:00:00Z\",\"roles\":{");
+        for (k = 0; k < 32; k++) p += snprintf(t + p, sizeof t - (size_t)p, "%s\"r%d\":{\"family\":\"line\",\"key\":\"k\"}", k ? "," : "", k);
+        p += snprintf(t + p, sizeof t - (size_t)p, "}}");
         CHECK_I(yrig_parse(&g_q, t, (size_t)p, NULL, g_err, sizeof g_err), YRIG_OK);
         CHECK_I(g_q.n_roles, 32);
     }
@@ -430,7 +446,7 @@ static void check_edit(void) {
     CHECK(yrig_add(&g_q, "bad name") == NULL);
     CHECK(yrig_add(&g_q, "") == NULL);
     for (k = 0; k < YRIG_MAX_ROLES; k++) {
-        sprintf(name, "r%d", k);
+        snprintf(name, sizeof name, "r%d", k);
         CHECK(yrig_add(&g_q, name) != NULL);
     }
     CHECK(yrig_add(&g_q, "r5") == &g_q.role[5]);        /* found, not added */
@@ -572,7 +588,22 @@ static void check_files(void) {
     CHECK_HAS(g_q.notes[0], "roles.trig.latency");
     CHECK_HAS(g_q.notes[0], "does not match the profile's summary: the role's tier is UNKNOWN");
     ROLE(&g_p, "trig")->latency.median_ns = 577000;
+#if defined(__APPLE__)
+    g_full_calls = g_full_dirs = 0;
+    g_full_refuse = 1;
     CHECK_I(yrig_save_file(&g_p, path, g_err, sizeof g_err), YRIG_OK);
+    CHECK_I(g_full_calls, 1);
+    CHECK_I(g_full_dirs, 1);
+    g_full_refuse = 0;
+    CHECK_I(yrig_load_file(&g_q, path, g_err, sizeof g_err), YRIG_OK);
+    CHECK_I(ROLE(&g_q, "trig")->latency.check, YRIG_CHECK_OK);
+    g_full_calls = g_full_dirs = 0;
+#endif
+    CHECK_I(yrig_save_file(&g_p, path, g_err, sizeof g_err), YRIG_OK);
+#if defined(__APPLE__)
+    CHECK_I(g_full_calls, 1);
+    CHECK_I(g_full_dirs, 1);
+#endif
     /* a loopback file changed: CHANGED */
     CHECK(write_text(lp, "format ysp-out-latency 1\nn 1\n"));
     CHECK_I(yrig_load_file(&g_q, path, g_err, sizeof g_err), YRIG_OK);
@@ -606,7 +637,7 @@ static void check_files(void) {
         yrig_init(&g_p, "many");
         for (k = 0; k < 20; k++) {
             char name[8];
-            sprintf(name, "r%d", k);
+            snprintf(name, sizeof name, "r%d", k);
             CHECK_I(yrig_bind(&g_p, name, YBOX_XID, "k"), YRIG_OK);
             r = ROLE(&g_p, name);
             r->bounds.set = true;

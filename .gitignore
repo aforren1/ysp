@@ -5,6 +5,7 @@ compile_commands.json
 *.obj
 *.so
 *.dll
+*.dylib
 *.pyd
 *.mex*
 *.oct

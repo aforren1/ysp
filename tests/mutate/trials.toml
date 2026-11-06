@@ -878,3 +878,32 @@ test = "trials"
 why = "The header and the rows would have different column counts."
 find = 'if (k == 0 && t->v6) return "trial_seed";'
 replace = 'if (0) return "trial_seed";'
+
+# v0.6.1: YTR_FLUSH_SYNC on macOS (docs/trials.md, "F_FULLFSYNC on
+# macOS"). The code exists on macOS only, so these run there; elsewhere the
+# anchor matches and the test cannot see the change.
+
+[[mutant]]
+id = "mac-01"
+name = "YTR_FLUSH_SYNC is fsync() alone on macOS"
+test = "trials"
+platform = "darwin"
+why = "fsync() leaves the rows in the drive's write cache; a power cut loses rows the writer said were on disk."
+find = '''    if (YTR__FULLFSYNC(fd) == 0) return true;
+#endif
+    return fsync(fd) == 0;'''
+replace = '''#endif
+    return fsync(fd) == 0;'''
+
+[[mutant]]
+id = "mac-02"
+name = "no fsync() when F_FULLFSYNC is refused"
+test = "trials"
+platform = "darwin"
+why = "A volume without F_FULLFSYNC (network, FAT) would fail every YTR_FLUSH_SYNC row."
+find = '''    if (YTR__FULLFSYNC(fd) == 0) return true;
+#endif
+    return fsync(fd) == 0;'''
+replace = '''    return YTR__FULLFSYNC(fd) == 0;
+#endif
+    return fsync(fd) == 0;'''

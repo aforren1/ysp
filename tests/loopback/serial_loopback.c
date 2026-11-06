@@ -9,7 +9,8 @@
  * Give it either
  *   - a virtual pair:      socat -d -d pty,raw,echo=0 pty,raw,echo=0
  *                          then the two /dev/pts/N names it prints
- *                          (com0com on Windows: CNCA0 CNCB0), or
+ *                          (com0com on Windows: CNCA0 CNCB0; without
+ *                          socat, as on macOS, tests/loopback/pty_pair.py), or
  *   - a physical loopback: the same port name twice, with TX tied to RX on
  *                          the connector.
  *

@@ -277,8 +277,8 @@ id = "pv-01"
 name = "hw_decode names swapped"
 test = "video"
 why = "v0.5.0: \"off\" must be YVID_HW_OFF; swapped, a definition asking for software decoding gets DXVA."
-find = '"auto=0,off=1,dxva=2" },'
-replace = '"auto=0,dxva=1,off=2" },'
+find = '"auto=0,off=1,dxva=2,videotoolbox=3" },'
+replace = '"auto=0,dxva=1,off=2,videotoolbox=3" },'
 
 [[mutant]]
 id = "pv-02"
@@ -350,3 +350,140 @@ test = "video"
 why = "v0.6.0: yvid_seq_open() returns bool; w.error_code gives the reason (NOT_FOUND for a missing folder)."
 find = "    w->error_code = (int32_t)code;"
 replace = "    (void)code;"
+
+# v0.7.0: AVFoundation (macOS). Needs the clips of
+# tests/media/make_video_clips_mac.sh in build-avf/clips, or YVID_TEST_MEDIA
+# set to their directory. gcc is Apple clang there.
+[test.video_avf]
+source = "tests/adapt/video_test.c"
+compiler = "gcc"
+flags = ["-std=c11", "-O2", "-w"]
+libs = ["-lm", "-pthread"]
+timeout = 1800
+env_default = { YVID_TEST_MEDIA = "{repo}/build-avf/clips" }
+
+[[mutant]]
+id = "avf-01"
+name = "pts in another timescale"
+test = "video_avf"
+why = "out.pts is in the track's timescale, which the core divides by; a pts in ms maps every frame to the wrong index."
+find = "    out->pts = yvid__av.CMTimeConvertScale(yvid__av.CMSampleBufferGetPresentationTimeStamp(sb), m->timescale, YVID__CMT_ROUND).value;"
+replace = "    out->pts = yvid__av.CMTimeConvertScale(yvid__av.CMSampleBufferGetPresentationTimeStamp(sb), 1000, YVID__CMT_ROUND).value;"
+
+[[mutant]]
+id = "avf-02"
+name = "every sample a keyframe"
+test = "video_avf"
+why = "kCMSampleAttachmentKey_NotSync marks the P-frames; read as sync, the GOP is 1 and a seek lands on a P-frame."
+find = "        if (v && yvid__av.CFBooleanGetValue(v)) return 0;"
+replace = "        (void)v;"
+
+[[mutant]]
+id = "avf-03"
+name = "full range asked of a video-range stream"
+test = "video_avf"
+why = "The decoder must write the stream's own range: asked for 420f, VideoToolbox converts 16..235 to 0..255, and an index made the same way hides it. The bars' luma check catches it."
+find = "    m->pixfmt = (col[1] == YVID_RANGE_FULL || (col[1] < 0 && m->vui[1] == YVID_RANGE_FULL)) ? YVID__PF_420F : YVID__PF_420V;"
+replace = "    m->pixfmt = YVID__PF_420F;"
+
+[[mutant]]
+id = "avf-04"
+name = "B-frame checks removed"
+test = "video_avf"
+why = "Samples that decode before they show (B-frames) must be refused by name."
+find = "        if ((dt.flags & 29u) == YVID__CMT_VALID && yvid__av.CMTimeCompare(dt, pt) != 0) {"
+replace = "        if (0) {"
+[[mutant.also]]
+find = "        if (ts <= prev_ts && n1 > 0) {"
+replace = "        if (0) {"
+
+[[mutant]]
+id = "avf-05"
+name = "10-bit HEVC accepted"
+test = "video_avf"
+why = "VideoToolbox decodes HEVC Main 10 into the 8-bit NV12 asked for, a conversion the canonical form refuses."
+find = "        if (prof != 1 || chroma != 1 || yd != 8 || cd != 8) {"
+replace = "        if (0) {"
+[[mutant.also]]
+find = "    if (ext && yvid__cf_int(yvid__av.CFDictionaryGetValue(ext, yvid__av.Bits), 8) != 8) {"
+replace = "    if (0) {"
+
+[[mutant]]
+id = "avf-06"
+name = "rotation ignored"
+test = "video_avf"
+why = "The track matrix rotates the picture in other players; the canonical form has none."
+find = "    if (tr.b != 0.0 || tr.c != 0.0 || tr.a < 0.0 || tr.d < 0.0) {"
+replace = "    if (0) {"
+
+[[mutant]]
+id = "avf-07"
+name = "pixel aspect ignored"
+test = "video_avf"
+why = "Non-square pixels must be refused."
+find = "            if (hs != vs) {"
+replace = "            if (0) {"
+
+[[mutant]]
+id = "avf-08"
+name = "AUTO opens the software decoder"
+test = "video_avf"
+why = "AUTO is VideoToolbox's hardware decoder where it opens; info.hw must say which ran."
+find = "        m->req_hw = desc->hw_decode == YVID_HW_OFF ? YVID_HW_OFF : YVID_HW_VIDEOTOOLBOX;"
+replace = "        m->req_hw = YVID_HW_OFF;"
+
+[[mutant]]
+id = "avf-09"
+name = "OFF does not disable the hardware decoder"
+test = "video_avf"
+why = "OFF must be the software decoder; with hardware enabled VideoToolbox takes the hardware one, and the read-back check refuses the session."
+find = "    sv[0] = hw == YVID_HW_OFF ? yvid__av.kCFBooleanFalse : yvid__av.kCFBooleanTrue;"
+replace = "    sv[0] = yvid__av.kCFBooleanTrue;"
+
+[[mutant]]
+id = "avf-10"
+name = "a seek's reader starts past the keyframe"
+test = "video_avf"
+why = "The new reader must start at the keyframe's sync sample; from a later one the target's references are missing, and the seek must fail, not land on another frame."
+find = "    rc = yvid__avf_reader(m, (yvid_frame_time(m->num, m->den, key) + yvid_frame_time(m->num, m->den, key + 1)) / 2);"
+replace = "    rc = yvid__avf_reader(m, yvid_frame_time(m->num, m->den, key + 40));"
+
+[[mutant]]
+id = "avf-11"
+name = "the loader answers from offset 0"
+test = "video_avf"
+why = "A resource loader request names its offset; memory and reader sources must answer the bytes there."
+find = "        r->at = off < 0 ? 0 : off > s->src.size ? s->src.size : off;"
+replace = "        r->at = 0; (void)off;"
+
+[[mutant]]
+id = "avf-12"
+name = "the format description's color ignored"
+test = "video_avf"
+why = "CoreMedia states HEVC's color, which the H.264-only SPS parser cannot; an empty index desc then takes it."
+find = "    v = yvid__av.CFDictionaryGetValue(ext, yvid__av.Matrix);"
+replace = "    v = NULL;"
+
+[[mutant]]
+id = "avf-13"
+name = "empty marker buffers taken as samples"
+test = "video_avf"
+why = "AVAssetReader sends buffers with no sample at the start and the end of every clip; they are not frames."
+find = "        if (ns == 0) { yvid__av.CFRelease(sb); continue; }"
+replace = "        if (ns == 0) { yvid__av.CFRelease(sb); yvid__fmt(m->why, sizeof m->why, \"empty\"); return YVID_ERR_DECODER; }"
+
+[[mutant]]
+id = "avf-14"
+name = "the plane's pitch taken as the width"
+test = "video_avf"
+why = "VideoToolbox's software HEVC decoder pads 1280-wide rows to 1536 bytes; the planes are lent with the buffer's own bytes per row."
+find = "    out->planes.stride[0] = (int32_t)yvid__av.CVPixelBufferGetBytesPerRowOfPlane(pb, 0);"
+replace = "    out->planes.stride[0] = m->w;"
+
+[[mutant]]
+id = "avf-15"
+name = "a decode failure without the backend's reason"
+test = "video_avf"
+why = "v0.7.0: the decode thread's message must keep the backend's own reason (VideoToolbox's status), not only the code."
+find = "    if (why[0] && n + 3 < sizeof mv->dt_error) snprintf(mv->dt_error + n, sizeof mv->dt_error - n, \": %s\", why);"
+replace = "    (void)n;"

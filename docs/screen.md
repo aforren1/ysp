@@ -3748,6 +3748,868 @@ and the 17 on the window test (`wt-20` to `wt-29`, `fg-08`, `bf-01`,
 between frames wait until the test's 10 s watchdog ended it: the case
 the fallback exists for.
 
+## macOS: the header owns the CAMetalLayer (v0.11.0, v0.12.0)
+
+`YSCR_BACKEND_METAL` is the macOS swap path, and AUTO there. It needs
+macOS 14 (Sonoma) or later, ysp's floor ([The macOS 14
+floor](#the-macos-14-floor-v0140)). The probe of
+[screen_macos_probe.md](screen_macos_probe.md) chose its shape; this note
+says what was built from the probe's functional results, what waits on
+its timing runs, and why the header calls Objective-C as it does.
+
+All runs below: Apple M2 Mac mini, macOS 27.0.1, SDL 3.4.0, ANGLE from
+Electron 43.8.3 (`EGL_VERSION` "1.5 (ANGLE 2.1 git hash: unknown hash)"),
+2026-11-05. **The console session was locked for every run**, so no
+frame reached the panel: every `presentedTime` was 0. Other agents
+compiled on the machine at the same time. Nothing below is a timing
+result.
+
+### The path
+
+SDL's EGL path on Cocoa gives a context, but ANGLE then owns the layer and
+exposes no flip time, no present time and no depth control (probe,
+section 5.5). So, as on Windows, SDL makes only the window:
+
+1. The window has `SDL_PROP_WINDOW_CREATE_METAL_BOOLEAN`, and the header
+   makes its CAMetalLayer with `SDL_Metal_CreateView`.
+2. ANGLE's display is asked for the Metal back end by name
+   (`EGL_PLATFORM_ANGLE_TYPE_METAL_ANGLE`): this ANGLE's default on macOS
+   is OpenGL. The layer's device is the one `EGL_METAL_DEVICE_ANGLE`
+   reports, so one device serves ANGLE's queue and the header's. ANGLE
+   does not take a caller's device (`eglCreateDeviceANGLE` gives
+   `EGL_BAD_ACCESS`) or queue.
+3. Each frame, `acquire()` takes the next drawable and makes current a
+   pbuffer on the drawable's own IOSurface
+   (`EGL_ANGLE_iosurface_client_buffer`), one per IOSurface, kept in a
+   cache of 6. The layer cycled 2 IOSurfaces per run here, and 3 or 4 in
+   the probe's `share` runs.
+4. `present()` ends ANGLE's frame with an `eglCreateSync` of type
+   `EGL_SYNC_METAL_SHARED_EVENT_ANGLE` on the header's MTLSharedEvent, with
+   the present id as the value, and `glFlush`. The header's command buffer
+   waits on that value (`encodeWaitForEvent:value:`), draws the patch and
+   the codes as blits from a staging buffer, copies code rows to a
+   read-back buffer when asked, and presents with
+   `presentDrawable:atTime:`.
+5. The presented handler reports `presentedTime`. A time of 0 is a
+   drawable not shown: the core estimates the flip, and it is OCCLUDED when
+   the window's `occlusionState` lacks Visible or the session is locked.
+
+GL's row 0 lands on IOSurface row 0, the top of the screen (checked with a
+scissored clear read back from the IOSurface; ANGLE's Metal display has no
+`EGL_ANGLE_surface_orientation`). So `rows_top_down` is 1 on METAL, as on
+DXGI_FLIP and COMPOSITION, and ysp/gfx.h v0.17.3 takes its origin from it.
+
+### The sync, checked by read-back
+
+`tests/adapt/screen_metal_test.c` draws each frame with a GL clear and a
+400-iteration fragment loop over the window, both writing the frame's
+own value, and the header's command buffer copies the center pixel after
+its wait (a test seam, `YSCR__MTL_SYNC_PIXEL`). The read-back needs no
+shown frame, so it ran on the locked screen:
+
+| Run | Frames read back | Not their own frame's |
+|---|---|---|
+| 8 bits, 800 x 600 window | 120 of 120 | 0 |
+| 10 bits (`desc.color_depth` 10) | 30 of 30 | 0 |
+| 8 bits, the wait removed (mutant mt-08) | 120 of 120 | 21, each the frame two before |
+| 10 bits, the wait removed | 30 of 30 | 2, each the frame two before |
+
+The seam waits for the frame before at each present, so every frame is
+read; without the seam, a read-back still running at the next verify is
+skipped, never waited for.
+
+The code self test (all 256 values of each channel through the blits, in
+the layer's format, into a texture and back) passed; 150 to 158 codes read
+back in a 60-frame fullscreen run, none differing.
+
+### Objective-C from C
+
+The header must compile as C99 and as C++ on every platform, and its
+implementation is one translation unit the caller picks. Two ways were
+open: require that translation unit to be Objective-C on macOS, or call
+the Objective-C runtime from C. The header calls the runtime from C:
+`objc_msgSend` cast to each method's exact prototype (the ABI needs the
+exact one: a `double` return, `MTLSize` and `MTLOrigin` passed by value),
+with libobjc, CoreFoundation, CoreGraphics, CoreVideo and ANGLE loaded at
+run time and no Apple header but `TargetConditionals.h`, `dlfcn.h` and
+`mach/mach_time.h`. Reasons:
+
+- ysp/video.h's AVFoundation backend, built at the same time by another
+  agent, made the same choice (its worktree, `include/ysp/video.h`,
+  "AVFoundation backend"): one rule for every Apple backend, and a caller
+  builds every ysp header the same way.
+- An Objective-C translation unit would change how the caller builds, and
+  the bindings (`ysp-vis`, MEX) compile the headers as C.
+- Apple's framework headers bring ApplicationServices and CarbonCore's
+  globals into the caller's translation unit (ysp/video.h found `pi` and
+  `Rect` there).
+
+The cost is a Block: Metal's presented handler takes one. The header
+builds global Block literals by hand to the Block ABI (`isa`
+`_NSConcreteGlobalBlock`, flags IS_GLOBAL and HAS_SIGNATURE, signature
+`v16@?0@8`), one per slot of a process-wide table of 64, so Metal's
+`Block_copy` is a no-op and a handler that comes after its screen closed
+finds its slot orphaned and frees it. A handler touches only that table.
+Nothing measured contradicts the choice; the read-backs above and the
+code self test went through it.
+
+### The constants, measured (v0.12.0)
+
+v0.11.0 shipped three unmeasured constants. The probe's timing session of
+2026-11-05 ([screen_macos_probe.md](screen_macos_probe.md), section 6:
+the M27Q at 59.9505, 120 and 144 Hz, unlocked, AC, **a Screen Sharing
+session open**) set them, and found two more. The numbers below are the
+probe's, on its own CAMetalLayer. This header's own frame loop then ran
+in `tests/adapt/screen_metal_test.c` on the unlocked screen (800 x 600
+window at 59.95 Hz, about 4.5 ms of GPU time a frame): 120 of 120 frames
+shown, 119 of 119 a vblank after the one before, 0 dropped, tier 2; at 10
+bits 30 of 30 and 29 of 29. That is a functional test, not a timing run.
+
+| Item | Where | v0.11.0 | v0.12.0 | The rows |
+|---|---|---|---|---|
+| (a) the target passed to `presentDrawable:atTime:` | `YSCR__MTL_TARGET_LEAD` | planned vblank minus 0.25 period | minus 0.5 period | A drawable shows at the first presentedTime vblank at or after its target, less about 0.4 ms, not at the nearest: targets from 0.9 or 0.95 period before a vblank up to it showed on it (2155 of 2160, every kind and rate), 0.05 to 0.1 period after it a vblank late (360 of 360). Half a period is that window's middle. The tie that made "minus half a period" a risk is a rule of COMPOSITION's, not Core Animation's |
+| (b) frames in flight | `YSCR__MTL_IN_FLIGHT`, `caps.max_in_flight` | 1 | 2 | The presented handler comes 0.30 to 0.76 ms after presentedTime, and a commit needs a period plus 0.65 to 1.18 ms before its vblank. So waiting for the frame before showed every other vblank (the probe's `links`: 1896 frames in 60 s, 1701 of 1896 steps of 2 vblanks); `begin()` now waits for the frame two before |
+| (b) depth | `yscr__path_table` (COMPOSED) | 2 | 2 | Every commit up to phase 0.907 to 0.940 of a period showed two vblanks later, every kind and rate |
+| (b) margin before a vblank | `YSCR__MTL_MARGIN_NS`, new `caps.margin_ns` | the core's, at most 1 ms | 2 ms | The deadline's excess over a period (up to 1.18 ms) plus the present call (encode and commit p99 0.45 ms, max 0.93 ms). `caps.margin_ns` is new in `yscr_caps`: a presenter states its own, and the core takes the larger |
+| (b) drawables | `YSCR__MTL_DRAWABLES` | 3 | 3 | 2 or 3 changed nothing with one frame in flight (300 of 300 shown both); with two in flight and one drawn, 3 keep one free |
+| a target far ahead | `YSCR__MTL_AHEAD_MAX_NS` | none | held until 0.5 s ahead | 0.1 to 1.0 s ahead showed on target (1 of 1 each); 2 and 5 s ahead did not show, and every later present in that layer was dropped for 6.5 s. `flip_at()` sleeps until such a target is 0.5 s ahead (`held_far=`) |
+| (c) the tier | `yscr__mtl_tier()` | 3 | 2 for a shown flip, every kind | presentedTime moved with every late frame (30 of 30 per kind and rate), always came before its handler, and sits on its own grid to under 1 us (0.64 us max): an OS time for the vblank the frame showed on, not a plan. That is DXGI_FLIP's composed tier ([Tiers](#tiers)). Not tier 1: no photodiode has run, CVDisplayLink's `inNow` puts the vblank 0.40 to 0.45 period earlier (one of the two is not the scanout's vblank, or neither is), and the window kinds measured alike, so no path is known. An estimated flip (presentedTime 0) stays tier 3 |
+
+The clean session (no Screen Sharing, v0.14.1) checked every row and
+changed none ([Window kinds and Screen Sharing](#window-kinds-and-screen-sharing-v0141)).
+
+A planned vblank is on presentedTime's grid: the header's grid comes from
+the onsets it records, which are presentedTime. CADisplayLink's timestamp
+lies on the same grid (0.1 us apart); CVDisplayLink's `inNow` does not.
+
+macOS has no public call that says a window goes direct to the display,
+so every Metal flip's path is COMPOSED and the describe line names the
+window kind instead. The probe's runs decide each row: `present`'s
+`quant`, `asap` and `late` runs per kind, and the photodiode for the tier
+(probe, sections 6 and 8).
+
+### Other choices
+
+- **The period.** Never the mode's rate, which is a rounded label: the
+  "60 Hz" HDMI mode measured 16.680417 ms nominal, 59.9505 Hz, where
+  CoreGraphics and SDL say 60.000. v0.11.0 took CVDisplayLink's nominal
+  period at open; from v0.13.1 it comes from CADisplayLink
+  ([below](#the-period-from-cadisplaylink-v0131)). The flips refine it as
+  on Windows.
+- **The clock.** `presentedTime` is mach time. ysp/rt.h from v0.10.0 counts
+  mach time on macOS; before, it read `CLOCK_MONOTONIC`, which counts
+  sleep and is slewed (+0.58 ppm against mach time, measured). The
+  presenter correlates the two at open and every 10 s, so it is right
+  with either; with v0.10.0 the offset is 0 to the bracket.
+- **Threads.** Cocoa keeps windows on the main thread and SDL's video
+  lives there, so open(), the frame loop and close() run on the main
+  thread; open() refuses another. There is no window thread on macOS.
+- **nextDrawable** gives up after its 1 s timeout
+  (`allowsNextDrawableTimeout`, set explicitly). A frame without a drawable
+  draws into a 1 x 1 pbuffer and is estimated. With the screen locked the
+  first probe run waited the full second on most frames in a window at
+  normal level; in these runs every drawable came at once.
+- **10 bits.** ANGLE's Metal display has no 10-bit or half-float config, so
+  `desc.color_depth` 10 gives a BGR10A2Unorm layer and pbuffers on its
+  'l10r' IOSurfaces with an RGBA8 config: a pbuffer's format is the
+  IOSurface's. 8-bit codes are spread over 10 bits (`v << 2 | v >> 6`).
+  `color_depth` 10 on another backend is refused, not drawn in 8 bits.
+- **Input.** SDL's event times are restamped onto ysp_rt as on the other
+  backends (SDL's ticks are mach time plus a constant, measured). SDL 3.4's
+  Cocoa key and button times are late by a per-process offset; from
+  v0.15.0 `yscr_event_input()` gives them `NSEvent.timestamp` (see "Keys
+  and mouse buttons: NSEvent.timestamp").
+
+### The period from CADisplayLink (v0.13.1)
+
+CVDisplayLink is deprecated in macOS 15 and does not exist on iOS. METAL
+used it only for the period at open. From v0.13.1 the period comes from
+`CADisplayLink` (`-[NSView displayLinkWithTarget:selector:]`). From
+v0.14.0 CVDisplayLink stays only for a CADisplayLink that gives no
+callback ([The macOS 14 floor](#the-macos-14-floor-v0140)).
+
+Which number: the probe's `links` run gave three candidates for the M27Q
+at its "60 Hz" (docs/screen_macos_probe.md, 6.4):
+
+| Source | Value | Note |
+|---|---|---|
+| CADisplayLink `duration`, `targetTimestamp - timestamp` | 16680417 ns (+-1) | the nominal timing, as CVDisplayLink's nominal period |
+| CADisplayLink `timestamp` step | 16680375 ns (+-1) | 3597 steps; on presentedTime's grid, 0.1 us apart |
+| presentedTime fit | 16680370 to 16680380 ns | what the flips show |
+
+So the period is the step of the timestamps: the span of up to 6 callbacks
+over the whole periods in it, counted on the duration, so a missed
+callback keeps its count. There is no read without a callback: before its
+first callback the link's numbers are 0. Waiting for callbacks inside
+open(), which runs on the main thread: the link is added to the main run
+loop's common modes, and open() runs the run loop in its default mode in
+10 ms steps, pumping SDL's events (the events stay in SDL's queue), for
+up to 6 callbacks or 250 ms. Nothing waits on another thread, so it
+cannot deadlock against SDL's pump. With fewer than 2 callbacks it falls
+back to CVDisplayLink: with the display asleep (the session locked),
+CADisplayLink gave no callback in 2 s while CVDisplayLink went on.
+
+The describe line names the source and, from v0.14.0, why:
+`period=16680375ns(cadisplaylink)`, `(cvdisplaylink-no-callback)` or
+`(mode-no-display-link)`.
+
+**The phase.** CADisplayLink's timestamps also lie on presentedTime's
+grid, so they could anchor the grid at open, before the first flip, where
+the backend now takes it from the first presentedTimes. Not done in this
+change.
+
+**Not run with a callback.** During this change the display was asleep,
+so every real open here took the fallback: `period=16680417ns(cvdisplaylink)`
+(`cvdisplaylink-no-callback` from v0.14.0).
+`tests/adapt/screen_metal_test.c` injects the callbacks' timestamps
+(`YSCR__MTL_LINK_TIMESTAMPS`): six a 16680375 ns step apart with a
+duration of 16.680417 ms give `period=16680375ns(cadisplaylink)`, and none
+gives `(cvdisplaylink)`. The core test checks the rule with the measured
+numbers, a missed callback, one callback and a step off the duration.
+Mutants `mt-17` and `mt-18`, 2 of 2 killed.
+
+### The macOS 14 floor (v0.14.0)
+
+macOS 14 (Sonoma) is ysp's macOS floor ([rig_spec.md, section
+9](rig_spec.md#9-platform-matrix)). Up to v0.13.1, METAL ran on macOS 12
+and 13 untested: it asked `respondsToSelector:` before CADisplayLink
+(macOS 14) and before NSScreen's refresh intervals (macOS 12), and took
+CVDisplayLink's nominal period where CADisplayLink was missing. v0.14.0
+removes those branches. `open()` asks
+`-[NSProcessInfo isOperatingSystemAtLeastVersion:]` for 14.0, once per
+process and before ANGLE loads, and on an older system fails with:
+
+```
+ysp_screen: METAL needs macOS 14 (Sonoma) or later, ysp's floor; this system is older. Update macOS.
+```
+
+That call reports the real version to a binary built with any SDK, where
+the system's version file can say 10.16 to an old one. An open that
+succeeded on macOS 12 or 13 now fails, so the version is a minor bump.
+
+**The case with no callback.** CADisplayLink gives no callback with the
+display asleep, so a period source is still needed for it. The candidates
+were measured with the display asleep (2026-11-05, Apple M2 Mac mini,
+macOS 27.0.1, the M27Q on HDMI at its "60 Hz", whose period is 16680375
+ns; the session locked; a 320 x 240 SDL window; 1 s each):
+
+| Source | Asleep | Period it gives |
+|---|---|---|
+| CADisplayLink | 0 callbacks | none |
+| CAMetalDisplayLink, drawables dropped | 59 updates | `targetPresentationTimestamp` steps exactly 16666667 ns: a 60.000 Hz grid, not the display's, 0.8 ms a second off |
+| CAMetalDisplayLink, drawables presented | 3 updates | too few to read |
+| CVDisplayLink | callbacks go on | nominal 16680417 ns, 2.5 ppm off |
+
+CAMetalDisplayLink would remove the deprecated API, but asleep it gives a
+period that is wrong by 0.08%, and nothing in its updates says so. So
+CVDisplayLink stays, only for this case, and the header's comment says
+why. The mode's rate stays the last resort, when neither link exists.
+
+**Tests.** No system older than 14 was at hand.
+`tests/adapt/screen_metal_test.c` acts as one through a seam
+(`YSCR__MTL_OS_14`): the open fails with the message above, and then
+the real system opens. Mutants `mt-19` (the check skipped), `mt-20` (the
+check asks for 99.0, so only the real call can kill it) and `mt-21` (the
+describe line drops the reason), 3 of 3 killed.
+
+### The first open's period (v0.14.1)
+
+The clean timing session's run of `tests/adapt/screen_metal_test.c` (25
+of 25 passed) showed the process's first open with
+`period=16680417ns(cvdisplaylink-no-callback)` and every later open with
+`period=16680375ns(cadisplaylink)`, on an unlocked, awake screen.
+
+The reason was measured, not guessed. A scratch copy of the header logged
+each callback of the open's CADisplayLink (2026-11-05, the Mac of the
+sessions, unlocked, no Screen Sharing, the M27Q at "60 Hz"; 7 processes,
+two opens each). The first open did get its 6 callbacks, within 124 to
+141 ms of the link's start in the three processes that logged it; the window was visible and the app not yet
+active. But the first callback's timestamp was off the grid:
+
+| Open | Step from the first timestamp to the second | Steps after it | Source before v0.14.1 |
+|---|---|---|---|
+| A process's first, windowed (5 processes) | 15.8, 19.8, 24.9, 21.1, 25.2 ms | 16680375 ns (+-1), every one | cvdisplaylink (5 of 5) |
+| A process's second, windowed (5) | 16680375 ns | 16680375 ns | cadisplaylink (5 of 5) |
+| A process's first and second, fullscreen (2 processes) | 16680375 ns | 16680375 ns | cadisplaylink (4 of 4) |
+
+With the first step 1 to 5 ms off, the span of the 6 timestamps was no
+whole number of periods within 1%, so the rule returned no period, and
+the open fell back as if no callback had come. The fix leaves the first
+timestamp out: the period is the span of the callbacks after the first
+over the whole periods in it (at least 3 callbacks). Of the options:
+
+- Wait after the window is shown and pumped: the callbacks already came
+  in time (6 in 141 ms); the timing of the window was not the fault.
+- Keep the link alive and read it once frames run: a second run-loop
+  source for the life of the screen, for a number that 5 timestamps give
+  at open.
+- Take the period from presentedTime and drop the open's source: the
+  flips refine the period already (`measured=` in the describe line), but
+  the open needs a period before the first flip.
+
+Leaving one timestamp out costs nothing and adds no thread or wait. A
+CADisplayLink whose callbacks came but whose steps are off its duration
+is now named: `(cvdisplaylink-link-off-grid)`, apart from
+`(cvdisplaylink-no-callback)`.
+
+After the fix, on the same screen: `tests/adapt/screen_metal_test.c` 33 of
+33, its first check the process's first open,
+`period=16680375ns(cadisplaylink)`. The test injects the measured case
+(the first timestamp 15.8355 ms before the second: `cadisplaylink`) and a
+late step of 25 ms (`cvdisplaylink-link-off-grid`); the core test checks
+the rule with the first steps of 15.8 and 25.2 ms. Mutants `mt-22` (the
+first timestamp kept) and `mt-23` (the off-grid case named as no
+callback), 2 of 2 killed.
+
+### Window kinds and Screen Sharing (v0.14.1)
+
+The probe's clean session (docs/screen_macos_probe.md, section 6; the
+Mac above, unlocked, AC, no Screen Sharing) repeated the first session,
+which had a Screen Sharing session open. Per kind, on presentedTime's
+grid:
+
+| Kind | One commit: the latest that missed its vblank, a period plus | Three queued: commit to presentedTime p50 | Same, with Screen Sharing |
+|---|---|---|---|
+| window | 0.80 ms | 48.2 ms (3 periods) | 47.4 ms |
+| borderless | 1.17 ms | 48.7 ms (3) | 48.1 ms |
+| fullscreen space | 1.02 ms | **32.6 ms (2)** | 48.4 ms |
+| fullscreen (a space too) | 0.53 ms | **32.6 ms (2)** | 48.5 ms |
+| exclusive 120 Hz | 1.03 ms | 23.7 ms (2.84) | 23.8 ms |
+| exclusive 144 Hz | 1.00 ms | 19.5 ms (2.81) | 19.6 ms |
+
+The depth stays 2 in every kind, from the kind of evidence each option
+needs:
+
+- **Depth 1 in a space would plan wrong.** A depth of 1 says that a frame
+  committed less than a period before a vblank shows on it. In a space,
+  as in a window, no commit under a period plus 0.3 ms before a vblank
+  showed on it, and `presentAtTime` one vblank ahead showed a vblank late
+  in 140 of 140 per kind.
+- **The space's shorter queue is the queue, not the deadline.** With three
+  drawables queued, a space showed each frame two periods after its
+  commit and a window three; with two drawables both showed two. The
+  header keeps two frames in flight (`begin()` waits for the frame two
+  before), so its queue never holds three. Its own loop in a space
+  (`tests/adapt/screen_metal_test.c`, `fullscreen`, 1920 x 1080, `kind=space`):
+  120 of 120 shown, 119 of 119 a vblank apart, 0 dropped, at depth 2.
+  The first try, with the window's per-pixel load at 4.3 times the
+  pixels, dropped 24: the GPU's load, not the depth.
+- **No learning from presentedTime.** The core already corrects the grid
+  from the flips, and a frame shown early cannot happen with a target
+  half a period before its vblank. A learner would add a state with
+  nothing measured for it to find.
+
+The space's shorter queue is the one sign of a direct path: a display
+that holds the drawable on screen while the compositor holds no copy
+would give it. Nothing public says so, and the Metal HUD's present mode
+was not recorded (`log stream` needs an administrator here). The tier
+stays 2.
+
+**Screen Sharing changes the queue.** With a Screen Sharing session open,
+a space queued as a window (three periods), and SDL3's EGL path showed
+48.6 ms in a space against 32.8 ms without it. The one-commit deadline
+and the `presentAtTime` rule did not change. A window opened right after
+another process left a fullscreen space showed no frame with Screen
+Sharing (3 of 3) and every frame but the first 6 without it (1 of 1).
+For timing work, close Screen Sharing. The header does not detect it: no
+public call that says the screen is being captured was found.
+
+### Keys and mouse buttons: NSEvent.timestamp (v0.15.0)
+
+SDL 3.4 on Cocoa stamps a key or mouse event with `NSEvent.timestamp`
+plus a process-wide offset: the shortest read delay seen so far (3.8 ms
+on a process's first key, then down to 0.2 ms; probe, 6.9). It stamps a
+modifier key when it reads it. Its `Cocoa_GetEventTimestamp` stamps keys
+(also the key IME holds), mouse buttons, motion and the wheel, touch,
+pinches and pen events. v0.15.0 corrects keys, modifier keys and mouse
+buttons: the presses and releases a response collector reads.
+
+**The monitor.** The first METAL open in a process adds a local NSEvent
+monitor (`+[NSEvent addLocalMonitorForEventsMatchingMask:handler:]`) for
+key down and up, flags changed and the mouse buttons; the last close
+removes it. The handler is a global Block built by hand in C, as the
+presented handler is (`isa` `_NSConcreteGlobalBlock`, flags IS_GLOBAL and
+HAS_SIGNATURE, signature `@16@?0@8` for `NSEvent* (^)(NSEvent*)`), in
+static storage, so it lives as long as the process. It returns the event,
+so SDL still gets it. It writes the event's class and
+`trunc(NSEvent.timestamp x 1e9)` into a ring of 64 entries of 16 bytes:
+no allocation per event. It runs on the main thread inside SDL's pump.
+`yscr_event_input()` may run on another thread, so it copies the ring and
+keeps an entry only when the entry's sequence number was the same before
+and after the copy.
+
+**The pairing key: SDL's own arithmetic.** SDL's stamp minus
+`trunc(NSEvent.timestamp x 1e9)` is SDL's offset, the same for every key
+and button until SDL lowers it. So the right entry gives that offset to
+the nanosecond, and an entry SDL did not deliver gives a larger one (it
+is older). A field of the event would not do: a key's scan code comes
+from SDL's private key-code table, and a button misses SDL's remapping (with
+SDL's hint, a control-click is the right button). The rule
+(`yscr__nsm_pick`):
+
+- An entry pairs only within its class: key down, key up, button down,
+  button up, and each of the 8 modifier keys apart.
+- Within a class an SDL event takes the oldest entry not taken whose
+  NSEvent came at most 50 us after SDL's stamp (on the ysp_rt clock) and
+  at most 1 s before it.
+- Once an offset is known, the entry's offset must be no larger than the
+  last match's plus 1 us: SDL's offset never grows. An older entry that
+  fails is an event SDL did not deliver (a click on the title bar, a key
+  IME took, an event posted to the process that SDL drops) and is passed
+  over.
+- A modifier key has no offset (SDL stamps it at the read): it takes the
+  oldest entry of its own key within the window.
+- An SDL event with no entry keeps SDL's stamp, and the adapter gives it
+  tier 3: SDL's own key-ups at a focus loss, a release outside the window.
+
+Key repeats have NSEvents of their own and pair as key downs. A second
+METAL screen shares the monitor; the ring is per process, as SDL's queue
+is. The describe line has `os_stamps=found/tried(passed n, bias us)`, the
+bias being SDL's lateness at the last match. `caps.os_input_stamps` says
+whether the monitor was made; pass it to `yin_sdl_ctx.os_stamps` for the
+source entry (ysp/input.h v0.5.0). `yscr_poll()`'s time is still SDL's.
+
+**Measured** through the rig's path, `tests/adapt/screen_metal_test.c`'s
+`input` case with `YSCR_TEST_INPUT_N=200`:
+
+Conditions: 2026-11-05 11:58, Apple M2 Mac mini, macOS 27.0.1, the M27Q
+on HDMI at "60 Hz", AC, the session unlocked, no Screen Sharing, nothing
+else running; Accessibility granted to the terminal's app. An 800 x 600
+METAL window ran a frame loop that read its events once a frame with
+`yscr_poll()` and `yscr_event_input()`, the path a rig uses. A thread
+posted F19, the left button at the window's center, and (to the process
+only) the left shift key, 40 to 50 ms apart at a random phase to the
+frames, 200 of each per pass. "post" is the mach time just before the
+post call. The test's own local NSEvent monitor gave the reference
+NSEvent.timestamp. Times in us.
+
+| Pass, kind | n | SDL's stamp kept | \|stamp - NSEvent\| max | stamp - post: min / p50 / p99 / max | SDL's stamp - post: min / p50 / p99 / max |
+|---|---|---|---|---|---|
+| `CGEventPostToPid`, key down | 200 | 0 | 0 | 68.8 / 113.7 / 3781 / 44567 | 585.5 / 782.4 / 6598 / 52827 |
+| `CGEventPostToPid`, key up | 200 | 0 | 0 | 49.3 / 115.3 / 3139 / 15397 | 566.0 / 772.1 / 4311 / 23657 |
+| `CGEventPostToPid`, left shift down | 200 | 0 | 0 | 68.1 / 113.6 / 2578 / 2803 | 546.0 / 8411 / 16940 / 17150 |
+| `CGEventPostToPid`, left shift up | 200 | 0 | 0 | 50.7 / 112.3 / 2788 / 3211 | 499.5 / 8996 / 16837 / 17049 |
+| `CGEventPostToPid`, left button down and up | 200 each | SDL delivered none | | | |
+| `CGEventPost(kCGHIDEventTap)`, key down | 200 | 0 | 0 | 75.8 / 135.7 / 3724 / 3743 | 592.4 / 652.4 / 4240 / 4259 |
+| `CGEventPost(kCGHIDEventTap)`, key up | 200 | 0 | 0 | 73.2 / 125.8 / 2933 / 3531 | 589.9 / 642.4 / 3450 / 4048 |
+| `CGEventPost(kCGHIDEventTap)`, left button down | 200 | 0 | 0 | 74.4 / 136.0 / 2917 / 3582 | 591.0 / 652.6 / 3433 / 4099 |
+| `CGEventPost(kCGHIDEventTap)`, left button up | 200 | 0 | 0 | 64.2 / 122.5 / 3194 / 3725 | 580.9 / 639.1 / 3711 / 4242 |
+
+Every pair was exact (1600 of 1600). The details are in
+[input.md](input.md#macos-nsevent-stamps-v050). With the test's
+default of 20 events per kind it is one of the Metal test's checks, and
+it runs only where posting is allowed (`CGPreflightPostEventAccess`) and
+the session is unlocked.
+
+**Not verified:** real keys and mice (scan, debounce, USB poll, and a
+real event's path to the window server); IME composition; a second
+window or screen open at the same time; events while another library's
+NSEvent monitor eats events; touch, pinch, pen, motion and wheel times
+(SDL's stamps, unchanged).
+
+### Variable refresh refused (v0.13.0)
+
+A ProMotion MacBook, or an external display in an Adaptive-Sync mode,
+varies the time between frames on its own. The core's grid assumes a
+fixed period, so every planned onset, every snap and every record would
+be wrong, and no flag would say so; Psychtoolbox's users on 120 Hz
+ProMotion MacBooks missed 341 to 401 of 600 deadlines
+(psychtoolbox.discourse.group, thread 5767).
+
+The header already refuses variable refresh (VARIABLE REFRESH):
+`desc.vrr` fails the open until the panel has passed the photodiode
+interval sweep and the luminance-versus-interval sweep. A display that is
+in a variable mode is that same variable refresh, chosen by the system
+instead of the caller, so METAL refuses it the same way. The other
+options were weighed against the existing rules:
+
+- Open with every record flagged and tier 3: the header does that only for
+  what it finds while running (the sync guard, off-grid times), never for a
+  condition it knows at open; and a run whose every onset is wrong in a
+  known way is not a run to make.
+- Report `caps.vrr_capable` and open: the field says what a panel could
+  do; it does not make the fixed grid right.
+
+So `open()` reads the window's `NSScreen.minimumRefreshInterval` and
+`maximumRefreshInterval`, and when they are more than 0.1% apart it fails
+with:
+
+```
+ysp_screen: METAL: the display is in a variable refresh mode (8.333 to 33.333 ms a frame), refused as desc.vrr is. Set a fixed rate: System Settings > Displays > Refresh Rate, not ProMotion; on an external display, its variable refresh off
+```
+
+The intervals are in the describe line as `refresh_interval=min..maxns`;
+the M27Q at its "60 Hz" reads `refresh_interval=16680416..16680416ns`
+(measured, 2026-11-05). The display link's nominal period is no help: it
+is a single number. A mode change or a move to another screen while the
+screen is open is not watched (the backend tracks neither).
+
+**Not tested on a variable display.** No ProMotion or variable-mode display
+was attached. `tests/adapt/screen_metal_test.c` injects the intervals
+through a test seam (`YSCR__MTL_SCREEN_INTERVALS`): 8.333 to 33.333 ms is
+refused with the message above, 8.333 and 8.333 ms (ProMotion set to a
+fixed 120 Hz) opens, and the real screen's intervals are equal. The core
+test checks the rule and that the message fits the screen's error buffer
+(255 characters) at the widest numbers. Mutants `mt-14` to `mt-16`, 3 of
+3 killed. Whether a ProMotion panel at a fixed rate in System Settings
+reports equal intervals is how Apple documents the properties, not
+something measured here.
+
+### The panic, raw mice, the gamma table and the code risk (v0.16.0)
+
+Before v0.16.0 four features were Windows only: the panic watchdog, raw
+mice, the OS gamma ramp and the code risk state (METAL left
+`CODE_RISK_STATE_UNKNOWN` set). v0.16.0 brings each to METAL with the
+records, flags, events and describe-line words of Windows.
+
+Conditions of every run below: Apple M2 Mac mini, macOS 27.0.1, SDL
+3.4.0, ANGLE from Electron 43.8.3, the Dell M27Q on HDMI in its 1920 x
+1080 mode at "60 Hz", AC, 2026-11-05. The coordinator said the machine
+was quiet; the load average before each run was 0.7 to 1.4. The session
+was locked for the first runs and unlocked for the rest; each table says
+which.
+
+#### Permissions
+
+Read with the probe in the worker's scratch (`CGPreflight*`,
+`IOHIDCheckAccess`), with Accessibility and Input Monitoring granted to
+VS Code, which runs the shell:
+
+| Call | Result | What it needs |
+|---|---|---|
+| `CGEventTapCreate`, listen-only, `kCGAnnotatedSessionEventTap` | made | Input Monitoring (`CGPreflightListenEventAccess` 1) |
+| `IOHIDManagerOpen`, mice | `kIOReturnSuccess`, the Dell MS116 listed | Input Monitoring (`IOHIDCheckAccess` granted) |
+| `CGGetDisplayTransferByTable`, `CGSetDisplayTransferByTable` | read and set | none |
+| a screen capture (`CGPreflightScreenCaptureAccess`) | 0 | Screen Recording, not granted |
+
+Both permissions were granted here, so which one Apple checks for the tap
+was not separated: Apple documents listen-only taps under
+`CGPreflightListenEventAccess` (Input Monitoring). `open()` names Input
+Monitoring when the tap or the HID manager is refused. No run was made
+without the permission.
+
+#### The panic
+
+The frame loop owns the main thread on macOS, so a hung loop stops the
+process's events. The candidates for a key while the main thread hangs:
+
+| Candidate | Thread | Permission | Decision |
+|---|---|---|---|
+| `NSEvent` global or local monitor | main | Accessibility for global | no: it needs the main thread |
+| `IOHIDManager` on the keyboards | its own | Input Monitoring | no: it does not say which process the key goes to |
+| `CGEventTap`, listen-only, at the annotated session tap | its own | Input Monitoring | yes |
+
+The tap sees each key after the window server chose its target, and
+`kCGEventTargetUnixProcessID` says which process gets it. That is the
+counterpart of Windows' foreground check: a key that another program in
+front takes does not count. Measured: posted presses reached the tap
+with the hung child's pid, after 1.5 s and after 7 s of a hang (the
+beach ball). macOS has no "Ghost" window: the hung app keeps its keys.
+
+"Release the display" on macOS. The main thread owns every window, so no
+other thread can order a window out or leave fullscreen safely. Windows'
+rule is kept with the main run loop in the window thread's place: an
+observer on the main run loop (entry, before waiting, exit) stamps a
+heartbeat, and the release is a function on the main queue
+(`dispatch_async_f`), which the main thread runs only while it pumps.
+While the heartbeat is newer than 1 s the watchdog asks for a release
+(each METAL window leaves fullscreen and is minimized; the cursor
+shows), else the process ends. A host that waits on the main thread
+(`input()`, MATLAB's `pause`) does not pump, so on macOS a panic there
+ends the process; on Windows the window thread keeps answering. The
+gamma tables and the display mode need no release: the window server
+puts back the tables and takes down the windows of a process that ends.
+
+`_exit(99)`, not `exit()`: atexit handlers can wait on locks the hung
+thread holds. `panic_fn` runs on its own thread for at most 1 s first.
+
+`tests/adapt/screen_metal_test.c` runs a child that opens a screen with
+`desc.panic` (a window through the test seam `YSCR__PANIC_WINDOWED`, or
+a fullscreen space), runs 60 frames, then sleeps on its main thread. The
+parent waits on the child's exit with `kqueue` (`NOTE_EXIT`). "post":
+Shift+Esc posted with `CGEventPost(kCGHIDEventTap)`, 3 presses 300 ms
+apart. "seam": the same presses given to the tap's function
+(`yscr__wd_feed`). Unlocked; ms from press 3 to the child's exit:
+
+| Case | Runs | Exit code | Press 3 to exit, ms |
+|---|---|---|---|
+| post, window, hang 1.5 s | 6 | 99, panic_fn ran | 17.0 to 25.5 |
+| post, fullscreen space, hang 1.5 s | 6 | 99, panic_fn ran | 24.1 to 29.6 |
+| post, window, hang 7 s | 3 | 99 | 23.4 to 25.1 |
+| post, fullscreen space, hang 7 s | 3 | 99 | 26.8 to 29.6 |
+| seam, window (locked and unlocked) | 3 | 99 | 17.8 to 23.9 |
+| seam, fullscreen space (locked and unlocked) | 7 | 99 | 23.4 to 30.6 |
+| seam, presses for another pid | 2 | 3 (lived) | no panic |
+
+Windows' table for comparison: 28 to 85 ms in a window, and 1.16 s for a
+switched mode to come back.
+
+Release, the child pumping SDL (`SDL_PumpEvents()` every 10 ms) without
+`begin()` and `panic_grace_ns` 1 s: the release ran 1.7 to 10.6 ms after
+the panic began (the 9 runs that printed it, window and space, locked and unlocked), the
+child's next `begin()` returned `YSCR_QUIT` with 0x21 and the one after
+with 0x20, and it exited 0 after close. In one locked run the fullscreen
+window was not minimized at the first ask (a minimize during the space's
+exit); `begin()` on a released METAL screen asks again.
+
+Not measured: keys pressed by hand (posted keys only), the injected flag
+on a hardware key (`kCGEventSourceUnixProcessID` 0 is assumed), a
+switched display mode (METAL opens in the desktop's mode unless
+`desc.mode` names one).
+
+#### Raw mice
+
+| Candidate | Per device | Unaccelerated | The device's rate | Permission |
+|---|---|---|---|---|
+| `NSEvent` deltas | no (one pointer) | no: `deltaX` is after acceleration | no: coalesced to the run loop | none |
+| `IOHIDManager` values on a thread of its own | yes (one `IOHIDDevice` each) | yes: the report's counts | yes: one callback per report | Input Monitoring |
+
+The header uses `IOHIDManager`. IOKit parses each report, so the header
+parses no device bytes (no fuzz target): it groups the values that share
+a device and `IOHIDValueGetTimeStamp` into one report, and closes the
+last one when its run loop goes idle (an observer, before waiting). The
+stamp is the time the HID driver took the report, in mach time, which is
+the ysp_rt clock from ysp/rt.h v0.10.0. The device id is the low 32 bits
+of the IORegistry entry id; a `YSCR_EV_DEVICE` record per mouse (present
+at open, added and removed at the next `begin()`), so the reports carry
+no `YIN_UNLISTED`. Measured (locked and unlocked): `open()` with
+`desc.raw_mice` made one `YSCR_EV_RAW_MICE` ON record and a
+`YSCR_EV_DEVICE` record for "Dell MS116 USB Optical Mouse" (the name cut
+at 23 bytes).
+
+The measured numbers come from the hand run of v0.16.1's reader
+(`YSCR_TEST_MOUSE_S=5 test_screen_metal rawmice`, 2026-11-05 17:19:47, a
+person moving the Dell MS116 behind a USB hub, unlocked, a quiet
+machine; 6 of 6 checks):
+
+| Quantity | min | p50 | p99 | max |
+|---|---|---|---|---|
+| Report interval, ms (626 reports) | 7.926 | 8.000 | 8.055 | 8.074 |
+| Callback minus the value's stamp, us (1159 values kept) | 55.3 | 122.3 | 266.2 | 485.7 |
+
+The mouse reports at 125 Hz. The reader's callback comes 55 us after
+the HID driver's stamp at the least, 122 us at the median, 266 us at p99
+and 486 us at most. Of 1878 values, 1159 were kept, 719 were empty (a
+relative 0) and none stale; no report was unlisted and no event was
+earlier than the one before from its device. The USB poll comes before
+the stamp and is in none of these numbers.
+
+The runs before it are the history of the bug below. The first (v0.16.0's
+reader, 16:49, the same mouse and conditions):
+
+| Quantity | min | p50 | p99 | max |
+|---|---|---|---|---|
+| Report interval, ms (850 reports) | 7.926 | 8.000 | 8.069 | 256.015 |
+| Callback minus the value's stamp, us (1749 values) | 63.2 | 257.9 | 43,544,192.6 | 43,960,241.9 |
+
+The maximum interval is a pause of the hand. The median callback time
+of that run (258 us) and its p99 and maximum include the stale values;
+the clean numbers are the table above. No report was unlisted.
+
+**A bug, fixed in v0.16.1: stale values.** At least 1% of the values had
+stamps 43.5 to 44.0 s old: from before the open. `IOHIDDeviceGetValue`
+shows that IOKit keeps each input element's last value with the stamp
+of the report that set it (read on the MS116 at rest: X and Y 95 s old,
+button 1 130 s, the wheel 155 s, buttons 2 and 3 hours). With no hand on
+the mouse a probe got no value at all in 2 s after `IOHIDManagerOpen`:
+the old values come with real reports. The reader grouped them by their
+stamps into reports of the past. No event in the run had such a time
+(the smallest interval was 7.9 ms, not negative).
+
+The first fix (a value dated before the reader's start, or before the
+newest stamp taken from its device, is stale) went to two more hand runs
+(17:07:54 and 17:08:10, the same mouse, 5 s each), which printed every
+value more than 1 s old or dropped. Run 2: 1089 values; the old ones
+were all relative elements at 0: the wheel's 0 (page 1, usage 0x38) with
+every report of a move, dated the wheel's last real change (12.6 to 30.1
+s back, the stamp fixed, so the age grew by 8 ms a report), and X's or
+Y's 0 dated the report before (8 to 192 ms back). So IOKit calls back
+with a relative element's 0 after a report that moved it, with the
+element's previous stamp. The stamp rule dropped most of them (531
+stale), but a 0 whose stamp was the newest taken (the last report before
+a pause) was kept and arrived up to a pause later: the kept values'
+callback minus stamp had a p99 of 8.16 ms (one report) and a maximum of
+72.2 ms. Such a 0 opened a report of its own with no event in it (no
+event went back in time; the test now checks that per device) and closed
+the report it arrived in early.
+
+The fix, both in v0.16.1:
+
+- **Empty values.** A relative element at 0 (X, Y, the wheel, AC Pan) is
+  dropped before any other rule and counted as empty: it adds nothing to
+  a report. An absolute axis at 0 is a position and is kept.
+- **Stale values.** A value dated before the reader's start (taken just
+  before `IOHIDManagerOpen`) or before the newest stamp the reader took
+  from its device is dropped and counted (the values of one report share
+  a stamp, and a device's reports come in order). With the empty rule
+  first, this catches a cached button value.
+
+The describe line says `raw_mice=reports(inactive n, stale n, empty n)`.
+The other option was `IOHIDDeviceRegisterInputReportWithTimeStampCallback`,
+which gives each report once with its time. It was not taken: the header
+would then parse the report bytes against the device's report descriptor
+itself, a parser of untrusted input that needs a fuzz target, where now
+IOKit parses them. The rules are three compares a value.
+
+The rawmice case checks the rules without a hand on the mouse, and
+whatever the mouse does meanwhile: it gives the reader's own function,
+with an accumulator and a device id of the test's own, a button value
+dated 44 s back, a fresh one, one older than the fresh one, and a
+relative X of 0; only the fresh press and its release may reach
+`yscr_event_input()`. (In the 17:08 run that check failed only because it
+counted the reader's real drops while the mouse moved: 48, not 2. It now
+counts the injected values by their stamps.) The hand run checks that no
+event of a device is earlier than the one before, and that every kept
+value came within 8 ms (one report) of its stamp. The hand run of these
+fixes (17:19:47) passed 6 of 6: the table at the top of this subsection.
+Its describe line said `raw_mice=946(inactive 0, stale 2, empty 1082)`;
+the 2 stale are the injected values. A run at 17:15:37 got no report
+because nobody moved the mouse; it is not a result. To run it again:
+
+```
+YSCR_ANGLE_DIR=/Users/brainworks/ysp-deps/angle-electron-43.8.3 YSCR_TEST_MOUSE_S=5 ./build/macos/test_screen_metal rawmice
+```
+
+#### The gamma table
+
+A probe in the worker's scratch, the M27Q, 1024 entries a channel (its capacity):
+
+| Call | Locked: min / p50 / p99 / max, us | Unlocked |
+|---|---|---|
+| `CGGetDisplayTransferByTable`, 1024 (200) | 36.4 / 137.9 / 250.6 / 866.1 | 30.8 / 125.8 / 221.3 / 222.0 |
+| the same, 256 (200) | 36.2 / 38.5 / 59.1 / 1593.2 | 31.7 / 43.2 / 64.4 / 64.9 |
+| `CGSetDisplayTransferByTable`, the same table (50) | 37.5 / 41.1 / 47.7 / 3276.4 | 42.3 / 49.0 / 60.2 / 3048.8 |
+| set and read back (50) | 71.7 / 77.3 / 104.7 / 284.1 | 86.5 / 92.2 / 100.6 / 103.7 |
+| `CGDisplayRestoreColorSyncSettings` (20) | 23.1 / 24.9 / 26.2 / 37.4 | 27.6 / 29.3 / 30.3 / 46.6 |
+
+The first read of a process took 221 to 243 us. A read at open is cheap
+next to Windows' 0.8 ms, but the table is still read at open only.
+
+A child that set a table one entry off the identity and ended with
+`_exit` or with SIGKILL: the parent read the identity again as soon as
+`waitpid` returned (2 of 2). So a crash does not leave the table set on
+macOS, unlike Windows' ramp.
+
+`tests/adapt/screen_metal_test.c gamma` runs the set path on hardware:
+a table one entry off (0.5 to 0.52 at entry 512 of 1024) before a
+fullscreen open gives `os_gamma=set`, the identity read back while open,
+and the table of before after close; a refused set (test seam
+`YSCR__MAC_GAMMA_SET`) gives `refused` and `CODE_RISK_GAMMA`;
+`keep_os_gamma` gives `not-identity(kept)`. Passed locked and unlocked.
+
+Whether macOS applies the table on HDMI to the light was not measured. A
+read-back says the window server kept the table, not that the panel
+shows it. A capture needs Screen Recording, and a capture is before the
+table in any case; the proof is a photodiode on a gray step.
+
+#### The code risk state
+
+What the layer used: SDL 3.4.0's `CAMetalLayer` read
+`colorspace` = sRGB (`kCGColorSpaceSRGB`) at open, on a display whose
+profile is "M27Q colorspace". ColorSync therefore converted every frame
+from sRGB to the display's profile, in v0.11.0 to v0.15.0. A bare
+`[CAMetalLayer layer]` reads nil, so the tag comes from SDL's view or
+AppKit, not from the class. `CAMetalLayer.h` says: "If nil, no
+colormatching occurs. If non-nil, the rendered content will be
+colormatched to the colorspace of the context containing this layer
+(typically the display's colorspace)." v0.16.0 sets it to nil at open
+and reads it back for the risk (`layer_cs=untagged`). The display's own
+colorspace would also mean no conversion, but it changes with the
+profile the user picks; nil does not. Not verified with light or a
+capture (no Screen Recording permission).
+
+EDR. `NSScreen.maximumExtendedDynamicRangeColorComponentValue` (now) and
+`maximumPotentialExtendedDynamicRangeColorComponentValue` (the display
+can) read 1.00 and 1.00 on the M27Q; the layer's
+`wantsExtendedDynamicRangeContent` is NO. Either value above 1 sets
+`CODE_RISK_ADVANCED_COLOR`: an HDR mode or an XDR panel maps SDR values
+into its range. No such display was attached; the test seam
+`YSCR__MAC_COLOR` gives 16.0 and checks the flag.
+
+Scaled. The current `CGDisplayMode` is 1920 x 1080 pixels; the modes
+with the native flag (`kDisplayModeNativeFlag`, 0x02000000) are 2560 x
+1440 (1x and HiDPI "looks like 1280 x 720", at 60, 120 and 144 Hz). So a
+fullscreen screen on this display is `CODE_RISK_SCALED`: the panel
+scales 1920 x 1080 up. The window's pixels are compared with the mode's
+too: the compositor scales a window whose pixels differ. A window is not
+checked, as on Windows. `STATE_UNKNOWN` is set only when the screen, the
+layer, the mode or a native mode could not be read; on the M27Q every
+check ran (window and fullscreen).
+
+What the self test sees: the drawable as the header's blits wrote it,
+read back on the GPU, so the pixel format (BGRA8, BGR10A2) and the
+blits. It does not see what comes after the drawable: ColorSync, the
+gamma table, scaling, EDR mapping, Night Shift and True Tone (no public
+call reads them; `nightshift=unknown`), accessibility filters, and the
+panel.
+
+#### yscr_poll()'s time
+
+`yscr_poll()` now gives a key, a modifier key or a mouse button the same
+NSEvent time as `yscr_event_input()`. The pairing takes its entry, so
+the pair is made once: the last 16 events are kept with their result
+(keyed by SDL's stamp, type and key or button), and
+`yscr_event_input()` on the same event finds it there. The input case
+checks it: 160 of 160 events with `yscr_poll()`'s time equal to the
+event's.
+
+#### Tests and mutants
+
+The core test checks the rules (key codes, modifiers, the 8-bit
+identity, the risk, the value grouping, with 20,000 random values).
+`tests/adapt/screen_metal_test.c` gained `state`, `gamma`, `rawmice`,
+`panic` and `panic-post` (also selected by `YSCR_TEST_CASES`), and
+passed 73 of 73 unlocked. The fullscreen space's settling ends
+`FAILED(tier,...)` with `warn` there, as it did on v0.15.0 (checked on
+the same machine the same day): not a change of v0.16.0. `mt-28` to `mt-45`: see the mutation list;
+the results are in [status.md](status.md).
+
+### Tests and mutants
+
+- The core test (`tests/adapt/screen_test.c`): the rules without a Mac
+  (target, period, completion, pixels, tier, in flight, margin, variable
+  refresh) and, from
+  v0.12.0, a scripted display that behaves as the timing session measured:
+  the first vblank at or after the target, a commit deadline of a period
+  plus 0.275 period, the handler 0.125 period after the vblank; 60 frames
+  with targets a third of a period off the grid, work that ends late in a
+  period on every 10th frame, and 3 hidden frames: every shown frame on
+  its planned vblank, tier 2, nearly all one vblank apart.
+- `tests/adapt/screen_metal_test.c`: the real presenter (above); built on
+  macOS as `test_screen_metal`, not registered with ctest (it needs a
+  window server session and ANGLE). A shown flip must be tier 2 and an
+  estimated one tier 3; the last frame's read-back is checked at close.
+- 13 mutants (`mt-01` to `mt-13`), 13 killed: 10 by the core test, 3 by
+  the Metal test (no wait on the signal, codes compared raw, the pbuffer
+  cache off). The far-target hold has no mutant: no test can show a frame
+  far ahead without a shown screen.
+- `mt-14` to `mt-27` (v0.13.0 to v0.15.0): variable refresh, the period's
+  source, the macOS 14 floor, the first open's period and the NSEvent
+  stamps, each in its section above.
+- From v0.15.0 `tests/adapt/screen_metal_test.c`'s `input` case posts
+  keys, the shift key and clicks and checks each stamp against an NSEvent
+  monitor of its own (20 per kind; `YSCR_TEST_INPUT_N` for more). It
+  needs the Accessibility permission and an unlocked session, and says so
+  when it skips.
+- From v0.14.1 `tests/adapt/screen_metal_test.c` also runs 120 frames in
+  a fullscreen space and checks one frame a vblank there.
+
+### Not done
+
+A timing run of this header's own frame loop (only the functional test
+above ran), the light (tier 1), direct against composed (one sign only:
+the space's shorter queue), the panel's 10 bits, keys pressed by hand
+(only posted keys were timed, v0.15.0), and a run that
+switches only Screen Sharing to show that it causes the blank windows of
+the probe's 6.3. From v0.16.0 the panic watchdog, raw mice, the OS gamma
+ramp and the code risk state run on macOS too ([above](#the-panic-raw-mice-the-gamma-table-and-the-code-risk-v0160));
+the raw mouse rate is not measured. Not exercised by a test: a presented handler given up 1 s
+after its target (`late_handler=`; no way to withhold one was found), a
+frame with no drawable (`no_drawable=`; every drawable came at once
+here), a failed shared-event sync (the `glFinish` fallback), a window
+resized while open (new IOSurfaces, the cache's eviction), and the
+handler table full (64 slots across screens).
+
 ## Bindings
 
 `ysp/screen.h` is bound in `ysp-vis` with `ysp/gfx.h` and `ysp/video.h`:
@@ -3893,12 +4755,17 @@ display ids) are fixed in v0.10.4
 - Light. No photodiode was attached. `tests/loopback/screen_loopback.c`
   is built, not run. Every onset here is DXGI's vblank time.
 - Any refresh other than 60 Hz; any GPU other than the Iris Xe; Windows 10.
-- X11, Wayland and macOS: stubs. The web: no light measured (web.md).
+- X11 and Wayland: stubs. macOS (METAL, v0.11.0): run only with the
+  session locked; its constants set in v0.12.0 from the probe's timing
+  session, not from a run of the header itself; see
+  [macOS: the header owns the CAMetalLayer](#macos-the-header-owns-the-cametallayer-v0110-v0120).
+  The web: no light measured (web.md).
 - A DWM miss on the composed path of COMPOSITION: a second window loading
   the GPU did not cause one, so whether the record shows it is unknown.
 - COMPOSITION on a machine whose QPC does not run at 10 MHz, on ARM64
   (refused), and on Windows 10 (not available).
-- Variable refresh: refused.
+- Variable refresh: refused (`desc.vrr`; on METAL also a display in a
+  variable mode, v0.13.0, checked only through a test seam).
 - Two physical displays. The group calls ran on two windows on one display.
 - The keyboard itself: its scan, USB polling and the HID stack are not in
   the input times above.

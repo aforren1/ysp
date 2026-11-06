@@ -10,7 +10,11 @@ function build(name)
 %   Each MEX file is written next to its source as ysp_<name>.<mexext>.
 %
 %   Octave needs the development package (e.g. `octave-dev`) for `mex`.
-%   MATLAB needs a configured C compiler (`mex -setup`).
+%   MATLAB needs a configured C compiler (`mex -setup`). With the
+%   environment variable YSP_MEX_OPTS set to an options file, every call
+%   of mex gets '-f' and that file (macOS with the Command Line Tools and
+%   no Xcode: MATLAB's clang_maca64.xml refuses without Xcode's license
+%   record; docs/bindings.md, ysp-vis, has the workaround).
 
     here = fileparts(mfilename('fullpath'));
     root = fullfile(here, '..', '..', 'include'); % include/ysp/ holds the headers
@@ -45,19 +49,31 @@ function build(name)
     % ysp_response.c (ysp/response.h with ysp/input.h) is pure computation
     % too and needs no library.
     % ysp-vis (ysp_vis.c, the core, and the thin ysp_screen.c, ysp_gfx.c,
-    % ysp_video.c; docs/bindings.md) is Windows only: the other screen
-    % backends are stubs.
-    unsupported = {'ysp_parallel.c', ismac; 'ysp_vis.c', ~ispc; 'ysp_screen.c', ~ispc; ...
-                   'ysp_gfx.c', ~ispc; 'ysp_video.c', ~ispc};
+    % ysp_video.c; docs/bindings.md) is Windows and macOS (arm64, MATLAB):
+    % the X11 and Wayland screen backends are stubs.
+    is_octave = exist('OCTAVE_VERSION', 'builtin') ~= 0;
+    novis = ~ispc && ~(ismac && ~is_octave);
+    unsupported = {'ysp_parallel.c', ismac; 'ysp_vis.c', novis; 'ysp_screen.c', novis; ...
+                   'ysp_gfx.c', novis; 'ysp_video.c', novis};
     % ysp_vis.c links a static SDL3 3.4.0 and the static text layout
     % (pack/layout.c, Skribidi, HarfBuzz, SheenBidi, libunibreak, budouxc),
-    % and gets ANGLE's libEGL.dll and libGLESv2.dll beside it, all from
-    % third_party/vis/, which tools/vendor_vis.py makes (after
+    % and gets ANGLE's libEGL and libGLESv2 (.dll, .dylib) beside it, all
+    % from third_party/vis/, which tools/vendor_vis.py makes (after
     % tools/vendor_layout.py --write): --sdl msvc --layout msvc for MATLAB,
-    % --sdl mingw --layout mingw with Octave's own gcc for Octave.
+    % --sdl mingw --layout mingw with Octave's own gcc for Octave, --sdl
+    % clang --layout clang on macOS.
     vis = fullfile(here, '..', '..', 'third_party', 'vis');
-    is_octave = exist('OCTAVE_VERSION', 'builtin') ~= 0;
-    if is_octave
+    dll = '.dll';
+    if ismac
+        dll = '.dylib';
+    end
+    if ismac && ~is_octave
+        vis_sdl = fullfile(vis, 'sdl3', 'clang');
+        vis_lib = 'libSDL3.a';
+        vis_lay = fullfile(vis, 'layout', 'clang');
+        vis_lay_lib = 'libysp_harfbuzz.a';
+        vis_tc = 'clang';
+    elseif is_octave
         vis_sdl = fullfile(vis, 'sdl3', 'mingw');
         vis_lib = 'libSDL3.a';
         vis_lay = fullfile(vis, 'layout', 'mingw');
@@ -75,6 +91,7 @@ function build(name)
     % sources so the result lands in bindings/mex regardless of the caller's cwd.
     old = cd(here);
     cleanup = onCleanup(@() cd(old));   %#ok<NASGU>
+    opts = getenv('YSP_MEX_OPTS');
 
     for i = 1:numel(srcs)
         k = find(strcmp(unsupported(:, 1), srcs{i}), 1);
@@ -83,7 +100,7 @@ function build(name)
             continue;
         end
         if strcmp(srcs{i}, 'ysp_vis.c') && (~exist(fullfile(vis_sdl, 'lib', vis_lib), 'file') || ...
-                                            ~exist(fullfile(vis, 'angle', 'libEGL.dll'), 'file') || ...
+                                            ~exist(fullfile(vis, 'angle', ['libEGL' dll]), 'file') || ...
                                             ~exist(fullfile(vis, 'pl_mpeg', 'pl_mpeg.h'), 'file') || ...
                                             ~exist(fullfile(vis_lay, 'lib', vis_lay_lib), 'file'))
             fprintf('skipping ysp_vis.c: no static SDL3, ANGLE, pl_mpeg or text layout in %s (tools/vendor_layout.py --write, then tools/vendor_vis.py --write --angle --pl-mpeg --sdl %s --layout %s)\n', ...
@@ -95,12 +112,20 @@ function build(name)
             continue;
         end
         args = {['-I' root], ['-I' share], srcs{i}};
+        if ~isempty(opts)
+            args = [{'-f', opts}, args];   %#ok<AGROW>
+        end
         % The owners of a shared table export ysp_<name>_api_table() too
-        % (docs/bindings.md, "Sharing one implementation across modules").
+        % (docs/bindings.md, "Sharing one implementation across modules"),
+        % and the ysp-vis core exports ysp_vis_core() to its thin files.
         % MATLAB on Linux and macOS links a MEX file with a list that exports
-        % mexFunction alone; this list adds the table function.
-        if any(strcmp(srcs{i}, {'ysp_audio.c', 'ysp_timeline.c'})) && ~ispc && ~exist('OCTAVE_VERSION', 'builtin')
-            sym = [srcs{i}(1:end-2) '_api_table'];
+        % mexFunction alone; this list adds the function.
+        if any(strcmp(srcs{i}, {'ysp_audio.c', 'ysp_timeline.c', 'ysp_vis.c'})) && ~ispc && ~exist('OCTAVE_VERSION', 'builtin')
+            if strcmp(srcs{i}, 'ysp_vis.c')
+                sym = 'ysp_vis_core';
+            else
+                sym = [srcs{i}(1:end-2) '_api_table'];
+            end
             lst = [tempname() '.map'];
             fid = fopen(lst, 'w');
             if ismac
@@ -124,6 +149,25 @@ function build(name)
             % The system libraries SDL3.dll imports itself (tools/vendor_vis.py).
             sys = {'-luser32', '-lgdi32', '-lwinmm', '-limm32', '-lole32', '-loleaut32', '-lversion', ...
                    '-luuid', '-ladvapi32', '-lsetupapi', '-lshell32', '-ldinput8'};
+            if ismac
+                % What libSDL3.a needs (tools/vendor_vis.py, SDL_MAC_LINK),
+                % libc++ for HarfBuzz's operator new, and ysp's floor: the
+                % static libraries are built for macOS 14.
+                sys = {};   % MATLAB's LINKLIBS has -lc++
+                fw = {'CoreMedia', 'CoreVideo', 'Cocoa', '-UniformTypeIdentifiers', 'IOKit', 'ForceFeedback', ...
+                      'Carbon', 'CoreAudio', 'AudioToolbox', 'AVFoundation', 'Foundation', 'GameController', ...
+                      'Metal', 'QuartzCore', '-CoreHaptics'};
+                ld = '';
+                for k = 1:numel(fw)
+                    if fw{k}(1) == '-'
+                        ld = [ld ' -Wl,-weak_framework,' fw{k}(2:end)];   %#ok<AGROW>
+                    else
+                        ld = [ld ' -Wl,-framework,' fw{k}];   %#ok<AGROW>
+                    end
+                end
+                args(end+1:end+2) = {'CFLAGS=$CFLAGS -mmacosx-version-min=14.0', ...
+                                     ['LDFLAGS=$LDFLAGS -mmacosx-version-min=14.0' ld]};   %#ok<AGROW>
+            end
             args = [args, {['-I' fullfile(vis_sdl, 'include')], ['-I' fullfile(vis, 'pl_mpeg')], ['-L' fullfile(vis_sdl, 'lib')], ...
                            ['-I' fullfile(vis_lay, 'include')], ['-L' fullfile(vis_lay, 'lib')]}];   %#ok<AGROW>
             % The text layout, in link order (tools/vendor_vis.py, LAYOUT_LIBS).
@@ -131,13 +175,16 @@ function build(name)
             if is_octave
                 % Stripped: about 10 MB to 5 MB (docs/winthread_probe.md, section 6).
                 args = [args, lay, {'-lSDL3'}, sys, {'-s'}];   %#ok<AGROW>
+            elseif ismac
+                args = [args, lay, {'-lSDL3'}, sys];   %#ok<AGROW>
             else
                 args = [args, lay, {'-lSDL3-static'}, sys];   %#ok<AGROW>
             end
-            % Beside the core: ysp/screen.h loads libEGL.dll from the core's own
-            % directory (desc.angle_dir), and libEGL loads libGLESv2.dll from its own.
-            copyfile(fullfile(vis, 'angle', 'libEGL.dll'), here);
-            copyfile(fullfile(vis, 'angle', 'libGLESv2.dll'), here);
+            % Beside the core: ysp/screen.h loads libEGL from the core's own
+            % directory (desc.angle_dir), and libEGL loads libGLESv2 from its
+            % own. Unchanged: their SHA-256 is tools/vendor_vis.py's.
+            copyfile(fullfile(vis, 'angle', ['libEGL' dll]), here);
+            copyfile(fullfile(vis, 'angle', ['libGLESv2' dll]), here);
             copyfile(fullfile(vis, 'angle', 'LICENSE.ANGLE.txt'), fullfile(here, 'ysp_vis-LICENSE.ANGLE.txt'));
             copyfile(fullfile(vis, 'sdl3', 'LICENSE.txt'), fullfile(here, 'ysp_vis-LICENSE.SDL3.txt'));
             copyfile(fullfile(vis, 'pl_mpeg', 'LICENSE.txt'), fullfile(here, 'ysp_vis-LICENSE.pl_mpeg.txt'));
