@@ -2,12 +2,19 @@
  * machine: callback timing, position reports, the fit and its quality.
  * Records the input; plays nothing (with --duplex, silence).
  *
- *     audio_capstats [--null] [--device NAME] [--exclusive] [--s16] [--period N]
- *                    [--seconds S] [--load N] [--duplex] [--ring S]
+ *     audio_capstats [--null] [--backend B] [--device NAME] [--exclusive] [--s16]
+ *                    [--period N] [--seconds S] [--load N] [--duplex] [--ring S]
  *                    [--stall-at S --stall MS [--stall-every S]] [--csv PREFIX]
+ *                    [--keep-server] [--list]
  *
- *   --device NAME  the input whose name contains NAME (default: the OS's)
- *   --exclusive    WASAPI exclusive mode; at most 30 s
+ *   --backend B    auto (default), wasapi, coreaudio, alsa, pulse or null
+ *                  (--null is --backend null)
+ *   --device NAME  the input's id, or a part of its name only it has
+ *                  (default: AUTO's, the OS's elsewhere)
+ *   --exclusive    exclusive mode (WASAPI: at most 30 s; ALSA: a hw: device)
+ *   --keep-server  Linux, ALSA exclusive: fail where a sound server holds
+ *                  the card, instead of suspending it
+ *   --list         print the backend's inputs (yau_list_inputs) and stop
  *   --s16          accept a 16-bit input (the default asks for 24 bits or
  *                  float: STRICT OPEN)
  *   --period N     frames per block asked for (default: the header's)
@@ -89,6 +96,14 @@ static void cs_on_capture_end(void) {
     g_nblk = i + 1;
 }
 
+/* The entry time of the last block that ended at or before frame f: when
+ * the input last delivered before a loss found at frame f. */
+static int64_t g_last_before(int64_t f) {
+    long i;
+    for (i = g_nblk - 1; i >= 0; i--) if (g_blk[i].f + g_blk[i].n <= f) return g_blk[i].t_entry;
+    return 0;
+}
+
 static volatile int g_stop = 0;
 static volatile unsigned long g_sink = 0;
 #if defined(_WIN32)
@@ -124,7 +139,7 @@ int main(int argc, char** argv) {
     yau_capture_desc cd;
     const char* csv = NULL;
     double seconds = 10, stall_at = 0, ring_s = 2;
-    int i, load = 0, duplex = 0, nxr = 0, ndrop = 0;
+    int i, load = 0, duplex = 0, nxr = 0, ndrop = 0, list = 0;
     long n;
     char line[640];
     double peak = 0, sumsq = 0, nsamp = 0;
@@ -132,6 +147,18 @@ int main(int argc, char** argv) {
     memset(&cd, 0, sizeof cd);
     for (i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--null")) cd.backend = YAU_BACKEND_NULL;
+        else if (!strcmp(argv[i], "--backend") && i + 1 < argc) {
+            const char* b = argv[++i];
+            if (!strcmp(b, "auto")) cd.backend = YAU_BACKEND_AUTO;
+            else if (!strcmp(b, "wasapi")) cd.backend = YAU_BACKEND_WASAPI;
+            else if (!strcmp(b, "coreaudio")) cd.backend = YAU_BACKEND_COREAUDIO;
+            else if (!strcmp(b, "alsa")) cd.backend = YAU_BACKEND_ALSA;
+            else if (!strcmp(b, "pulse")) cd.backend = YAU_BACKEND_PULSE;
+            else if (!strcmp(b, "null")) cd.backend = YAU_BACKEND_NULL;
+            else { fprintf(stderr, "audio_capstats: unknown backend %s\n", b); return 2; }
+        }
+        else if (!strcmp(argv[i], "--keep-server")) cd.keep_sound_server = true;
+        else if (!strcmp(argv[i], "--list")) list = 1;
         else if (!strcmp(argv[i], "--device") && i + 1 < argc) cd.device = argv[++i];
         else if (!strcmp(argv[i], "--exclusive")) cd.exclusive = true;
         else if (!strcmp(argv[i], "--s16")) cd.format.sample = YAU_S16;
@@ -151,6 +178,13 @@ int main(int argc, char** argv) {
         fprintf(stderr, "audio_capstats: bad --seconds (exclusive: at most 30), --load or --ring\n");
         return 2;
     }
+    if (list) {
+        static yau_device_entry e[64];
+        int k = yau_list_inputs(cd.backend, e, 64);
+        if (k < 0) { fprintf(stderr, "audio_capstats: the backend lists no inputs (%s)\n", yau_strerror(k)); return 1; }
+        for (i = 0; i < k && i < 64; i++) printf("%s%s  '%s'\n", e[i].is_default ? "* " : "  ", e[i].id, e[i].name);
+        return 0;
+    }
     yrt_ring_open(&g_ring, &(yrt_ring_desc){ .memory = g_ring_mem, .bytes = sizeof g_ring_mem });
     cd.ring = &g_ring;
     cd.frames = (int64_t)(ring_s * 48000);
@@ -159,6 +193,7 @@ int main(int argc, char** argv) {
         yau_desc d;
         memset(&d, 0, sizeof d);
         d.backend = cd.backend;
+        d.keep_sound_server = cd.keep_sound_server;
         d.exclusive = cd.exclusive;
         d.period = cd.period;
         d.arena_bytes = 1 << 16;
@@ -200,8 +235,12 @@ int main(int argc, char** argv) {
                     if (g_ev[j].source != YRT_SRC_AUDIO) continue;
                     if (g_ev[j].kind == YAU_EV_CAP_XRUN) {
                         nxr++;
-                        printf("capture xrun at frame %lld: %lld frames lost%s\n", (long long)g_ev[j].u.i64[0],
-                               (long long)g_ev[j].u.i64[1], g_ev[j].u.i64[1] ? "" : " (count not known; fit restarted)");
+                        printf("capture xrun at frame %lld: %lld frames lost%s; %lld frames before it numbered "
+                               "from before the loss; found %.2f ms after the last block before it\n",
+                               (long long)g_ev[j].u.i64[0], (long long)g_ev[j].u.i64[1],
+                               g_ev[j].u.i64[1] ? "" : " (count not known; fit restarted)",
+                               (long long)(g_ev[j].u.i64[0] - g_ev[j].u.i64[2]),
+                               (double)((int64_t)g_ev[j].t_ns - g_last_before(g_ev[j].u.i64[2])) / 1e6);
                     } else if (g_ev[j].kind == YAU_EV_CAP_DROP) {
                         ndrop++;
                     }

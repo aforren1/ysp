@@ -1,0 +1,35 @@
+date: 2026-10-12 13:24:42
+label: Teensy 4.0 echo, Linux, run 2
+api order: ysp ioport_tuned ioport pyserial
+orchestrator Python: 3.10.18 (main, Sep  2 2025, 14:19:37) [Clang 20.1.4 ]
+OS: Linux-6.11.5-1-liquorix-amd64-x86_64-with-glibc2.36
+api ysp: ysp.serial 0.6.1 from <uv cache>; clock ysp.serial.now; Python 3.13.15 at <uv cache>
+api ysp: board identity: I ysp-line 1 teensy echo
+api ioport_tuned: psychtoolbox 3.0.22.2 (IOPort 3.0.22.754581919) from <uv cache>; clock GetSecs; Python 3.13.15 at <uv cache>
+api ioport_tuned: board identity: I ysp-line 1 teensy echo
+api ioport: psychtoolbox 3.0.22.2 (IOPort 3.0.22.754581919) from <uv cache>; clock GetSecs; Python 3.13.15 at <uv cache>
+api ioport: board identity: I ysp-line 1 teensy echo
+api pyserial: pyserial 3.5 from <uv cache>; clock time.perf_counter; Python 3.13.15 at <uv cache>
+api pyserial: board identity: I ysp-line 1 teensy echo
+cfg.absent_port: /dev/ttyACM250
+cfg.baud: 115200
+cfg.device: echo
+cfg.label: Teensy 4.0 echo, Linux, run 2
+cfg.max_block_s: 20
+cfg.n_blocking: 200
+cfg.n_calls: 2000
+cfg.n_clock: 100000
+cfg.n_enum: 200
+cfg.n_floor: 100000
+cfg.n_open: 20
+cfg.n_open_absent: 50
+cfg.n_probe: 200
+cfg.n_read_waiting: 500
+cfg.n_rt: 1000
+cfg.parts: ['clock', 'noport', 'calls', 'rt', 'stream']
+cfg.port: /dev/ttyACM0
+cfg.probe_gap_s: [0.002, 0.003]
+cfg.python: 3.13
+cfg.stream_hz: 1000
+cfg.stream_s: 10
+cfg.write_sizes: [1, 8, 64, 512]

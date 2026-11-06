@@ -349,7 +349,8 @@ clock the binding's frames and decisions equal the C path's line by line
   and a gfx open (simulated, or a window) took 13 to 14 s from start to
   end, as one with nothing open (13 s): the close at exit did not wait for
   the 10 s withdrawal.
-- **Versions.** `ysp-vis` tracks `ysp/screen.h`'s version (0.16.1:
+- **Versions.** `ysp-vis` tracks `ysp/screen.h`'s version (0.17.0:
+  `ysp/screen.h` 0.17.0, the Linux X11 backend, merged over 0.16.1; 0.16.1:
   the macOS raw mouse reader's stale values dropped; 0.16.0:
   `ysp/screen.h` 0.16.0, its macOS panic, raw mice, gamma table and code
   risk, no new caps or desc field; 0.15.0:
@@ -598,14 +599,16 @@ binding alone adds a fourth number, which counts such changes and goes away
 when the header's version moves: `ysp-serial` 0.5.0.1 is `ysp/serial.h`
 v0.5.0 with the change to seconds, and `ysp-parallel` 0.4.0.1 is
 `ysp/parallel.h` v0.4.0 with the same change, and so was `ysp-rdk`
-0.2.0.1 for `ysp/rdk.h` v0.2.0 (now 0.3.0, the header's v0.3.0). `ysp-serial` 0.5.0.2 is the second
+0.2.0.1 for `ysp/rdk.h` v0.2.0 (now 0.3.1, the header's v0.3.1). `ysp-serial` 0.5.0.2 is the second
 binding-only change to `ysp/serial.h` v0.5.0: the async reader. `ysp-serial`
 0.5.1 is `ysp/serial.h` v0.5.1 (a comment change) without a fourth number,
 and has the API of 0.5.0.2; 0.6.0 is `ysp/serial.h` v0.6.0 (`pulse_async`
 without I/O, the width from the onset write's start, `min_hold`), and
 0.6.1 is `ysp/serial.h` v0.6.1 (`Port.driver`, `Port.rts_via_dtr`, the
-`driver` key of `list_ports`); 0.6.2 is `ysp/serial.h` v0.6.2 (a pulse
-width near `INT64_MAX` saturates). `ysp-parallel` is 0.4.1, `ysp/parallel.h`
+`driver` key of `list_ports`); 0.6.2 was `ysp/serial.h` v0.6.2 (a pulse
+width near `INT64_MAX` saturates); 0.7.0.1 was `ysp/serial.h` v0.7.0
+(closing an exclusive port releases it on Linux); 0.7.1 is `ysp/serial.h`
+v0.7.1 (its documentation only). `ysp-parallel` is 0.4.1, `ysp/parallel.h`
 v0.4.1, without the fourth number. PEP 440 accepts the fourth
 number as a release segment, and 0.5.0.1 sorts after 0.5.0 and before
 0.5.1. A post-release (0.5.0.post1) was not used: it means "no code
@@ -649,8 +652,8 @@ v0.8.1), and `ysp-audio` is 0.7.2, the header's. The adaptive MEX
 functions and `ysp_color` have no number of their own: `'version'`
 returns the header's.
 
-`ysp-vis` is 0.16.1 (2026-11-05; `ysp/screen.h` 0.16.1, no change to the
-binding's calls): one distribution for three headers,
+`ysp-vis` is 0.17.0 (2026-11-05; `ysp/screen.h` 0.17.0, the Linux X11
+backend, no change to the binding's calls): one distribution for three headers,
 so its version tracks `ysp/screen.h`'s, and a release for a change of
 `ysp/gfx.h` or `ysp/video.h` alone, or of the binding alone, adds the
 fourth number ([ysp-vis](#display-stimuli-movies-ysp-vis)); 0.10.1.1 was

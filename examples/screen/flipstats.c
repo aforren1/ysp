@@ -1,6 +1,6 @@
 /* screen_flipstats.c - measure ysp/screen.h's swap path on this machine.
  *
- *     screen_flipstats [--sim | --backend dxgi|composition] [--windowed] [--topmost]
+ *     screen_flipstats [--sim | --backend dxgi|composition|glx] [--windowed] [--topmost]
  *                      [--cover N] [--frames N] [--load N]
  *                      [--overrun MS] [--miss N] [--gpu N] [--hold] [--patch]
  *                      [--depth N | --depth-learn] [--long]
@@ -9,13 +9,17 @@
  *                      [--group] [--allocs | --allocs-control] [--csv FILE]
  *
  *   --sim        the simulated display: no window, no GPU (CI runs this)
- *   --backend B  dxgi (DXGI_FLIP) or composition (COMPOSITION); default AUTO
+ *   --backend B  dxgi (DXGI_FLIP), composition (COMPOSITION) or glx
+ *                (GLX_OML, Linux X11); default AUTO
  *   --topmost    keep the window on top and take the foreground (Windows): a
  *                covered window gets no flip statistics on COMPOSITION
  *   --cover N    from frame N on, put a small window over a corner of ours
  *                (Windows), which forces the composed path; takes the
  *                foreground but does not keep the window on top
  *   --windowed   an 800 x 600 window instead of borderless fullscreen
+ *   --override-redirect  GLX_OML fullscreen as an override-redirect window
+ *                (desc.x11_override_redirect)
+ *   --x-display D  GLX_OML on X display and screen D, ":0.1" (desc.x_display)
  *   --frames N   frames to run (default 600). Fullscreen runs stop at 7200
  *                (2 minutes at 60 Hz), because the display is somebody's
  *   --load N     N threads spin at normal priority beside the frame loop
@@ -118,8 +122,19 @@ static void start_load(int n) {
         HANDLE h = CreateThread(NULL, 0, load_main, NULL, 0, NULL);
         if (h) CloseHandle(h);
 #else
+        /* SCHED_OTHER, not the main thread's policy: after yrt_thread_elevate()
+         * they would inherit SCHED_FIFO, and N spinning FIFO threads on N CPUs
+         * froze a kernel without RT throttling (docs/rt.md). */
         pthread_t t;
-        if (pthread_create(&t, NULL, load_main, NULL) == 0) pthread_detach(t);
+        pthread_attr_t a;
+        struct sched_param sp;
+        memset(&sp, 0, sizeof sp);
+        if (pthread_attr_init(&a) != 0) continue;
+        if (pthread_attr_setinheritsched(&a, PTHREAD_EXPLICIT_SCHED) == 0 &&
+            pthread_attr_setschedpolicy(&a, SCHED_OTHER) == 0 && pthread_attr_setschedparam(&a, &sp) == 0 &&
+            pthread_create(&t, &a, load_main, NULL) == 0)
+            pthread_detach(t);
+        pthread_attr_destroy(&a);
 #endif
     }
 }
@@ -352,7 +367,8 @@ static int quit_requested(yscr_screen* s) {
 }
 
 int main(int argc, char** argv) {
-    int sim = 0, windowed = 0, frames = 600, load = 0, hold = 0, patch = 0;
+    int sim = 0, windowed = 0, frames = 600, load = 0, hold = 0, patch = 0, override_redirect = 0;
+    const char* x_display = NULL;
     int group = 0, allocs = 0, i, n_screens = 1, quit = 0, ran = 0, topmost = 0, cover = 0;
     yscr_backend backend = YSCR_BACKEND_AUTO;
 #if defined(_WIN32)
@@ -378,13 +394,16 @@ int main(int argc, char** argv) {
     for (i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--sim")) sim = 1;
         else if (!strcmp(argv[i], "--windowed")) windowed = 1;
+        else if (!strcmp(argv[i], "--override-redirect")) override_redirect = 1;
+        else if (!strcmp(argv[i], "--x-display") && i + 1 < argc) x_display = argv[++i];
         else if (!strcmp(argv[i], "--topmost")) topmost = 1;
         else if (!strcmp(argv[i], "--cover") && i + 1 < argc) cover = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--backend") && i + 1 < argc) {
             i++;
             if (!strcmp(argv[i], "dxgi")) backend = YSCR_BACKEND_DXGI_FLIP;
             else if (!strcmp(argv[i], "composition")) backend = YSCR_BACKEND_COMPOSITION;
-            else { fprintf(stderr, "--backend: dxgi or composition\n"); return 2; }
+            else if (!strcmp(argv[i], "glx")) backend = YSCR_BACKEND_GLX_OML;
+            else { fprintf(stderr, "--backend: dxgi, composition or glx\n"); return 2; }
         }
         else if (!strcmp(argv[i], "--frames") && i + 1 < argc) frames = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--load") && i + 1 < argc) load = atoi(argv[++i]);
@@ -446,6 +465,8 @@ int main(int argc, char** argv) {
         memset(&d, 0, sizeof d);
         d.backend = sim ? YSCR_BACKEND_SIM : backend;
         d.windowed = windowed != 0;
+        d.x11_override_redirect = override_redirect != 0;
+        d.x_display = x_display;
         d.window_w = group ? 480 : 800;
         d.window_h = group ? 360 : 600;
         d.ring = &g_ring;

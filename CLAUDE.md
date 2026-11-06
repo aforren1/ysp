@@ -66,9 +66,34 @@ other machines, run nothing else while measuring.
 
 ## Linux X11 work
 
-`ysp/screen.h`'s X11 and Wayland backends are stubs. Start with the
-probe (`docs/screen_x11_probe.md`; `sh tests/probe/screen_x11/run.sh`
-from the repo root, in the X session): run it, read its results, then design
-the backend from them and from `docs/rig_spec.md` 4.2 (GLX sync control,
-separate X screens) and `docs/screen.md` (flip records, paths, depth,
-slack, flip_at). Do not assume what the driver does; the probe measures it.
+`ysp/screen.h` v0.17.0 has the GLX backend (`YSCR_BACKEND_GLX_OML`;
+design and numbers in `docs/screen.md`, "Linux X11: GLX_OML"; its basis
+in `docs/screen_x11_probe.md` section 5). Wayland is a stub. On a new
+rig, run the probe first (`sh tests/probe/screen_x11/run.sh` from the
+repo root, in the X session) and add its column to section 5; do not
+assume what the driver does. Use SDL 3.4.18 or later on X11 (3.4.0 can
+end the process on an X error). `test_screen_glx` checks the backend on
+a display (not in ctest); the `glx-` mutants need `YSP_SDL3` set to an
+SDL3 prefix. The display test changes the CRTC's mode and ramp on X
+screen 0 and puts them back; if a run dies, `xrandr --output <out> --mode
+1920x1080 --rate 60 --gamma 1:1:1` restores them. Key times, and
+`desc.raw_mice` on Linux, come from evdev nodes the user can read
+(`tools/linux/70-ysp-input.rules`); `test_screen_glx` part 11 needs that
+rule and the `uinput` module, else it skips. No socat on the Linux
+desktop: `tests/loopback/pty_pair.py` gives the pty pair. GCC 12's
+ThreadSanitizer needs `setarch -R` on this kernel. `ysp/audio.h` reads
+PulseAudio's stream timing info as its position (docs/audio.md); the
+`pulse-` mutants and `test_audio_pulse` need a running PulseAudio and
+`YSP_MINIAUDIO` set to the folder holding miniaudio.h; the `alsa-` ones
+and `test_audio_alsa` need `hw:0,0`. AUTO on Linux is ALSA exclusive
+and suspends PulseAudio while open; if a run dies, `pactl suspend-sink
+0` brings the desktop's sound back. Open: separate X screens in
+one process (SDL 3 drives one; `desc.x_display` picks it per process).
+
+## Linux real-time priority
+
+ysp threads elevate to SCHED_FIFO under an `rtprio` grant (docs/rt.md,
+"Linux real-time priority"). A thread made by an elevated thread inherits
+SCHED_FIFO; on the Linux rig's PDS kernel (no RT throttling) inherited
+spin threads froze the machine. Start busy threads before elevating, or
+with explicit SCHED_OTHER attributes.

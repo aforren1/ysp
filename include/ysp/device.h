@@ -1,4 +1,4 @@
-/* ysp/device.h - v0.5.1 - public domain single-header device layer
+/* ysp/device.h - v0.5.2 - public domain single-header device layer
  *
  *   A response box, a trigger box or a microcontroller board as a producer
  *   of ysp/input.h events with times on the ysp_rt clock, and as a target
@@ -349,6 +349,10 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.5.2 - POSIX: the reader thread starts SCHED_OTHER, not with its
+ *          creator's policy, so a no_elevate reader opened by an elevated
+ *          frame thread is not SCHED_FIFO (ysp/rt.h v0.10.2, the same
+ *          change). STATUS: the first Linux runs. No other change.
  *   v0.5.1 - Times near INT64_MAX. ydev_wait_running() with INT64_MAX
  *          ("forever", the bindings' inf) waits, and a desc.retry_ns or
  *          desc.probe_ns near INT64_MAX is "never": now plus the time
@@ -426,9 +430,14 @@
  *   adapter and board. v0.3.1, 2026-10-12: the host-timed outputs (the
  *   TriggerBox byte path, DTR, RTS) into a Teensy 4.0 echo board on
  *   Windows' usbser.sys (tests/compare/serial_pulse/device_pulse.c), width
- *   error -65 to -16 us median, 0 of 2400 missed. No vendor box, line
- *   board, parallel port or FTDI bridge has been opened. docs/device.md
- *   has the numbers.
+ *   error -65 to -16 us median, 0 of 2400 missed. v0.5.2, 2026-10-12, Linux
+ *   (Debian 12, kernel 6.11 liquorix, i5-14500): the same outputs into the
+ *   same board on cdc_acm, width error -1.0 to +0.1 us median, p99 within
+ *   +39 us, 0 of 2400 missed, the worker on SCHED_FIFO 1; and
+ *   tests/loopback/device_loopback.c on a pty pair (pty_pair.py, as
+ *   socat), plain and under ThreadSanitizer. No vendor box, line board,
+ *   parallel port or FTDI bridge has been opened. docs/device.md has the
+ *   numbers.
  *
  *   ---------------------------------------------------------------------
  *   LICENSE: public domain / MIT-0, see end of file.
@@ -438,8 +447,8 @@
 
 #define YDEV_VERSION_MAJOR 0
 #define YDEV_VERSION_MINOR 5
-#define YDEV_VERSION_PATCH 1
-#define YDEV_VERSION_STRING "0.5.1"
+#define YDEV_VERSION_PATCH 2
+#define YDEV_VERSION_STRING "0.5.2"
 
 #include "ysp/rt.h"
 #include "ysp/input.h"
@@ -2106,7 +2115,20 @@ YDEV_API bool ydev_open(ydev_device* dev, const ydev_desc* desc) {
         pthread_t th;
         typedef char ydev__thread_fits[sizeof(pthread_t) <= sizeof dev->thread_mem ? 1 : -1];
         (void)sizeof(ydev__thread_fits);
-        if (pthread_create(&th, NULL, ydev__thread, dev) == 0) {
+        /* SCHED_OTHER, not the creator's policy: opened by an elevated
+         * frame thread, a no_elevate reader would otherwise run SCHED_FIFO
+         * (docs/rt.md, "Inherited policy"). It elevates itself if asked. */
+        pthread_attr_t a;
+        struct sched_param sp;
+        int made = 0;
+        memset(&sp, 0, sizeof sp);
+        if (pthread_attr_init(&a) == 0) {
+            if (pthread_attr_setinheritsched(&a, PTHREAD_EXPLICIT_SCHED) == 0 &&
+                pthread_attr_setschedpolicy(&a, SCHED_OTHER) == 0 && pthread_attr_setschedparam(&a, &sp) == 0)
+                made = pthread_create(&th, &a, ydev__thread, dev) == 0;
+            pthread_attr_destroy(&a);
+        }
+        if (made || pthread_create(&th, NULL, ydev__thread, dev) == 0) {
             memcpy(dev->thread_mem.b, &th, sizeof th);
             dev->have_thread = 1;
         }

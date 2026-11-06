@@ -19,8 +19,8 @@ name = "control: no change (must pass)"
 test = "rdk"
 expect = "survived"
 why = "Control: a change with no effect. The test must pass, so a failure here means the setup is wrong, not the header."
-find = '#define YRDK_VERSION_PATCH 0'
-replace = '#define YRDK_VERSION_PATCH 0 '
+find = '#define YRDK_VERSION_PATCH 1'
+replace = '#define YRDK_VERSION_PATCH 1 '
 
 [[mutant]]
 id = "01"

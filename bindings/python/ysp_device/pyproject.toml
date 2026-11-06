@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ysp-device"
-version = "0.5.1.1"  # ysp/device.h v0.5.1, binding change 1 (the CPython 3.10 floor); tests/test_device.py checks it against __version__
+version = "0.5.2"  # ysp/device.h v0.5.2 (0.5.1.1 was v0.5.1 plus binding change 1, the CPython 3.10 floor); tests/test_device.py checks it against __version__
 description = "Response boxes, trigger boxes and boards as events on the ysp_rt clock, and trigger outputs"
 readme = "README.md"
 requires-python = ">=3.10"

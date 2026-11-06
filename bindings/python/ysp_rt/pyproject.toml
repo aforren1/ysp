@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ysp-rt"
-version = "0.10.1.1"  # ysp/rt.h v0.10.1, binding change 1 (the CPython 3.10 floor); tests/test_rt.py checks it against __version__
+version = "0.10.2"  # ysp/rt.h v0.10.2 (0.10.1.1 was v0.10.1 and 0.9.1.1 v0.9.1, each plus binding change 1, the CPython 3.10 floor); tests/test_rt.py checks it against __version__
 description = "The ysp clock, deadline waits, clock correlation and device clock fit"
 readme = "README.md"
 requires-python = ">=3.10"

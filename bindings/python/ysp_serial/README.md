@@ -264,8 +264,10 @@ from the slot that belongs to the failing role (`rd_oserr`, `wr_oserr` or
 
 ## Version
 
-`ysp-serial` 0.7.0.1 is `ysp/serial.h` v0.7.0: closing an exclusive
-port releases it on Linux, also while another process holds the tty.
+`ysp-serial` 0.7.1 is `ysp/serial.h` v0.7.1, which changes only its
+documentation (the first Linux timing). 0.7.0.1 was `ysp/serial.h` v0.7.0:
+closing an exclusive port releases it on Linux, also while another
+process holds the tty.
 0.6.1 is `ysp/serial.h` v0.6.1: the port's `driver` and
 `rts_via_dtr`, the `driver` key of `list_ports`, and `set_rts` sends the
 extra DTR request only on `usbser.sys`.
@@ -294,7 +296,7 @@ Most tests need no port:
 
 ```sh
 uv build --wheel -o dist
-uv run --no-project --with pytest --with dist/ysp_serial-0.6.1-cp310-abi3-<platform>.whl pytest tests
+uv run --no-project --with pytest --with dist/ysp_serial-0.7.1-cp310-abi3-<platform>.whl pytest tests
 ```
 
 On Linux, `tests/test_async_pty.py` runs the async reader on a
@@ -307,7 +309,7 @@ of a write while the reader runs. Add `-s` to see the numbers;
 `YSP_SERIAL_RESULTS=<dir>` also writes them to `<dir>/async_device.json`.
 
 ```sh
-YSP_SERIAL_PORT=COM3 uv run --no-project --with pytest --with dist/ysp_serial-0.6.1-cp310-abi3-<platform>.whl pytest tests -s
+YSP_SERIAL_PORT=COM3 uv run --no-project --with pytest --with dist/ysp_serial-0.7.1-cp310-abi3-<platform>.whl pytest tests -s
 ```
 
 Device naming, USB latency, DTR-driven board resets and what a serial trigger

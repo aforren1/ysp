@@ -486,6 +486,23 @@ foreach(lib IN LISTS YSP_LIBS)
                 target_compile_options(compile_color_macros PRIVATE -Wno-missing-field-initializers)
             endif()
         endif()
+        # ysp/audio.h with miniaudio's ALSA or PulseAudio backend left out,
+        # and with its Linux-only code (YAU__LINUX) compiled out: each must
+        # build clean and run.
+        if(lib STREQUAL "audio" AND CMAKE_SYSTEM_NAME STREQUAL "Linux" AND TARGET ysp::miniaudio)
+            foreach(v noalsa nopulse notlinux)
+                ysp_add_program(compile_audio_${v} tests/compile/audio.c ${group})
+                add_test(NAME compile_audio_${v} COMMAND compile_audio_${v})
+            endforeach()
+            target_compile_definitions(compile_audio_noalsa PRIVATE MA_NO_ALSA)
+            target_compile_definitions(compile_audio_nopulse PRIVATE MA_NO_PULSEAUDIO)
+            # miniaudio 0.11.25's own: only its PulseAudio backend calls
+            # ma_device__on_notification_rerouted
+            if(NOT MSVC)
+                target_compile_options(compile_audio_nopulse PRIVATE -Wno-unused-function)
+            endif()
+            target_compile_definitions(compile_audio_notlinux PRIVATE YAU__LINUX=0)
+        endif()
         # ysp/outline.h's desc structs set by designated initializers.
         if(TARGET compile_outline_desc)
             set_target_properties(compile_outline_desc PROPERTIES CXX_STANDARD 20)
@@ -614,6 +631,25 @@ if(TARGET SDL3::Headers AND YSP_BUILD_TESTS)
     target_compile_definitions(test_input_sdl PRIVATE YIN_TEST_SDL)
     target_link_libraries(test_input_sdl PRIVATE SDL3::Headers)
     add_test(NAME test_input_sdl COMMAND test_input_sdl)
+endif()
+# ysp/screen.h's GLX_OML backend on an X display: self-checking, but it needs
+# an X session with Mesa and takes the screen for about 6 s, so it is built
+# and run by hand (and by the glx- mutants), never registered with ctest.
+if(TARGET SDL3::SDL3 AND YSP_BUILD_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    ysp_add_program(test_screen_glx tests/adapt/screen_glx_test.c rig)
+endif()
+# ysp/audio.h's PulseAudio position source on a running sound server: 10 s
+# of silence, so by hand (and by the pulse- mutants), not ctest.
+if(TARGET ysp::miniaudio AND YSP_BUILD_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    ysp_add_program(test_audio_pulse tests/adapt/audio_pulse_test.c rig)
+    # ALSA exclusive on hw:0,0 (YAU_ALSA_TEST_DEVICE); AUTO suspends the
+    # card's PulseAudio sinks and sources when they hold it: by hand and by
+    # the alsa- mutants
+    ysp_add_program(test_audio_alsa tests/adapt/audio_alsa_test.c rig)
+    # capture: hw:0,0's input (about 50 s), and PulseAudio's record stream
+    # through the default sink's monitor (about 15 s)
+    ysp_add_program(test_audio_alsa_capture tests/adapt/audio_alsa_capture_test.c rig)
+    ysp_add_program(test_audio_pulse_capture tests/adapt/audio_pulse_capture_test.c rig)
 endif()
 # ysp/screen.h's window thread on real windows (WINDOW THREAD): built with
 # the tests and not registered with ctest, because it needs a display; run

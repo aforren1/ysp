@@ -85,7 +85,7 @@ static PyObject* PsClosed;
  * header that does not exist. When the header's version moves, the suffix
  * goes, here and in pyproject.toml (0.6.0 has none);
  * tests/test_serial.py checks that the two agree. */
-#define PS_VERSION YSER_VERSION_STRING ".1"   /* .1: the CPython 3.10 floor (2026-10-27) */
+#define PS_VERSION YSER_VERSION_STRING
 
 /* ps_seconds() flags. */
 #define PS_S_INF  1  /* math.inf means "forever" (YSER_TIMEOUT_INFINITE) */

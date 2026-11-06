@@ -1,0 +1,17 @@
+run            cell                n lost |   err med |err|p99      max |    on late early | late flagd false flag | real-mono span us
+run1           ptb_next          600    0 |    -0.037    0.389    0.541 |   599    0     0 |    0 of 0            0 | 1.2
+run1           ysp_next          600    0 |     0.000    0.000    0.000 |   600    0     0 |    0 of 0            0 | 1.2
+run1           ptb_hold          600    0 |    -0.033    0.417    0.537 |   599    0     0 |    0 of 0            0 | 1.2
+run1           ysp_hold          600    0 |     0.000    0.000    0.000 |   600    0     0 |    0 of 0            0 | 2.3
+run1           ptb_next_load     600    0 |    -0.016    0.352    0.376 |   599    0     0 |    0 of 0            0 | 0.0
+run1           ysp_next_load     600    0 |     0.000    0.000    0.000 |   600    0     0 |    0 of 0            0 | 0.0
+run1           ptb_hold_load     600    0 |    -0.016    0.348    0.372 |   599    0     0 |    0 of 0            0 | 0.1
+run1           ysp_hold_load     600    0 |     0.000    0.000    0.000 |   600    0     0 |    0 of 0            0 | 1.1
+run2           ptb_next          600    0 |    -0.005    0.429    0.517 |   599    0     0 |    0 of 0            0 | 0.1
+run2           ysp_next          600    0 |     0.000    0.000    0.000 |   600    0     0 |    0 of 0            0 | 0.1
+run2           ptb_hold          600    0 |     0.024    0.408    0.520 |   599    0     0 |    0 of 0            0 | 5.2
+run2           ysp_hold          600    0 |     0.000    0.000    0.000 |   600    0     0 |    0 of 0            0 | 6.1
+run2           ptb_next_load     600    0 |     0.024    0.368    2.032 |   599    0     0 |    0 of 0            0 | 0.0
+run2           ysp_next_load     600    0 |     0.000    0.000    0.000 |   600    0     0 |    0 of 0            0 | 0.0
+run2           ptb_hold_load     600    0 |     0.004    0.360    0.424 |   599    0     0 |    0 of 0            0 | 0.0
+run2           ysp_hold_load     600    0 |     0.000    0.000    0.000 |   600    0     0 |    0 of 0            0 | 0.8

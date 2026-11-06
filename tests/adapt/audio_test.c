@@ -60,8 +60,25 @@ static void vsleep_until(long long t) {
 #else
 #include <pthread.h>
 #endif
+#if defined(__linux__)
+#include <dirent.h>
+#endif
 
 /* ---------------------------------------------------------------- harness */
+
+/* The process's open descriptors on Linux (a leak check); 0 elsewhere. */
+static int open_fds(void) {
+#if defined(__linux__)
+    DIR* d = opendir("/proc/self/fd");
+    int n = 0;
+    if (!d) return 0;
+    while (readdir(d)) n++;
+    closedir(d);
+    return n;
+#else
+    return 0;
+#endif
+}
 
 static int g_failures = 0;
 static void fail(int line, const char* what) {
@@ -125,7 +142,8 @@ typedef struct sdev {
     int      started, stopped, closed;
     int32_t  queue_asked;   /* yau_device_open.queue at the last open          */
     int      report_every;  /* a report in every Nth block only (a browser's
-                               timer); 0 or 1 = every block                   */
+                               timer, PulseAudio's timing replies); 0 or 1 =
+                               every block                                    */
     int      entry_zero;    /* t_entry 0: an AudioWorklet with no clock       */
     int64_t  no_report_k;   /* blocks before this one carry no report (WASAPI
                                exclusive: the prefill is still playing)       */
@@ -494,6 +512,32 @@ static void test_fit_drift(void) {
         CHECK(llabs(err_env) < 5000);
         yau_close(&g_au);
     }
+}
+
+/* Reports every fifth block (PulseAudio's timing replies): the callbacks
+ * between them must not feed the fit. Before ysp/audio.h v0.5.1 they fed
+ * the frames written at callback entry, a queue ahead of the reports: the
+ * fit sat that far early and every report read as late, a false halt each
+ * 0.9 s on PulseAudio. */
+static void test_sparse_reports(void) {
+    sdev* s = &g_sd;
+    yau_caps c;
+    int64_t err;
+    sd_default(s);
+    s->tape = NULL;
+    s->report_every = 5;
+    CHECK(open_dev(s, NULL));
+    sd_run_s(s, 30.0);
+    yau_update(&g_au);
+    yau_get_caps(&g_au, &c);
+    err = yau_time_of(&g_au, g_au.w + 4800) - sd_truth(s, g_au.w + 4800);
+    printf("sparse reports (1 in 5): drift %+.3f ppm, offset error %+.1f us, xruns %u\n",
+           c.drift_ppm, (double)err / 1e3, (unsigned)g_au.xruns_ft);
+    CHECK(g_au.xruns_ft == 0);
+    CHECK(fabs(c.drift_ppm - s->drift_ppm) < 0.5);
+    /* a fifth of the points: 5.6 us here; the fault was about 8 ms */
+    CHECK(llabs(err) < 20000);
+    yau_close(&g_au);
 }
 
 /* LATE, cancel, stop with a ramp, gain, loops, routing, clipping. */
@@ -2639,7 +2683,11 @@ static void test_wav(void) {
         {
             yau_wav_info pi;
             char pe[256];
+            int fds0 = open_fds();
             CHECK_I(yau_wav_probe(&(yau_wav_desc){ .path = path }, &pi, pe, sizeof pe), 0);
+            /* the probe closed its file (remove() below sees a leak only on
+             * Windows; Linux removes an open file) */
+            CHECK(open_fds() == fds0);
             CHECK(memcmp(&pi, &g_wav.info, sizeof pi) == 0);
             CHECK_I(yau_wav_probe(&(yau_wav_desc){ .reader = &rd }, &pi, pe, sizeof pe), 0);
             CHECK(memcmp(&pi, &g_wav.info, sizeof pi) == 0);
@@ -2942,7 +2990,7 @@ static const ptc_slot g_au_fields[] = {
     AU_D("format.rate", format.rate, NULL), AU_D("format.channels", format.channels, NULL),
     AU_D("format.sample", format.sample, au_sample_name), AU_D("backend", backend, au_backend_name),
     AU_D("exclusive", exclusive, NULL), AU_D("period", period, NULL), AU_D("queue", queue, NULL),
-    AU_D("voices", voices, NULL), AU_D("device_index", device_index, NULL), AU_D("min_tier", min_tier, NULL),
+    AU_D("keep_sound_server", keep_sound_server, NULL), AU_D("voices", voices, NULL), AU_D("device_index", device_index, NULL), AU_D("min_tier", min_tier, NULL),
     AU_D("onset_offset_ns", onset_offset_ns, NULL),
     /* a size_t: the row's u32 is the range open() takes, 4 bytes of it */
     { "arena_bytes", offsetof(yau_desc, arena_bytes), 4, NULL },
@@ -3195,6 +3243,7 @@ int main(int argc, char** argv) {
     }
     test_plan_and_placement();
     test_fit_drift();
+    test_sparse_reports();
     test_controls();
     test_replan();
     test_xrun();

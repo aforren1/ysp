@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ysp-rdk"
-version = "0.3.0.1"  # ysp/rdk.h v0.3.0, binding change 1 (the CPython 3.10 floor); tests/test_rdk.py checks it against __version__
+version = "0.3.1"  # ysp/rdk.h v0.3.1 (0.3.0.1 was v0.3.0 plus binding change 1, the CPython 3.10 floor); tests/test_rdk.py checks it against __version__
 description = "Random dot kinematograms that regenerate bit for bit: the analysis side of ysp/rdk.h"
 readme = "README.md"
 requires-python = ">=3.10"

@@ -3387,6 +3387,7 @@ static const ptc_slot g_scr_fields[] = {
     SCR_D("min_tier", min_tier, NULL), SCR_D("depth", depth, NULL), SCR_D("depth_learn", depth_learn, NULL),
     SCR_D("settle", settle, scr_settle_name), SCR_D("settle_flips", settle_flips, NULL),
     SCR_D("settle_min_ns", settle_min_ns, NULL), SCR_D("settle_max_ns", settle_max_ns, NULL),
+    SCR_D("x11_override_redirect", x11_override_redirect, NULL),
     SCR_D("sim_period_ns", sim_period_ns, NULL), SCR_D("color_depth", color_depth, NULL),
 };
 #undef SCR_D

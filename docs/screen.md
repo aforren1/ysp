@@ -5,7 +5,7 @@ what was measured. The manual in the header tells you how to use it. The
 plan that asked for the header is section 4.2 of
 [rig_spec.md](rig_spec.md).
 
-All numbers come from one machine: a Windows 11 25H2 laptop (build 26200)
+The Windows numbers come from one machine: a Windows 11 25H2 laptop (build 26200)
 with an Intel Iris Xe that drives the internal 1920 x 1200 panel and an
 NVIDIA RTX A500 with no outputs. The panel has only 60 Hz modes; SDL3
 reports the refresh as 15413000/256880 Hz, 60.0008 Hz, and the vblank
@@ -14,7 +14,8 @@ Desktop's Electron front end, `2.1.23876 git hash: fffbc739779a`, not a
 pinned build. SDL3 is 3.4.0. The frame thread ran at
 `THREAD_PRIORITY_TIME_CRITICAL`. No photodiode was attached, so every
 onset below is a software timestamp: the vblank time DXGI reports, not
-light on the panel.
+light on the panel. The Linux X11 numbers come from a second machine,
+described in [Linux X11: GLX_OML](#linux-x11-glx_oml-v0170).
 
 ## Windows: the header owns the swapchain
 
@@ -2673,8 +2674,8 @@ video v0.5.0.
 
 The doc text of `backend` listed 0, 1, 2, 7 and 8, and its range said 0
 to 8, so a reader could not tell whether 3 to 6 exist. They do: the C
-enum has them, and `open()` refuses the stubs (GLX_OML, WAYLAND, METAL)
-with a message and WEB outside Emscripten. `values` lists the C enum,
+enum has them, and `open()` refuses the stubs (at v0.9.0 GLX_OML, WAYLAND
+and METAL; GLX_OML is built since v0.17.0, numbered v0.11.0 before the merge with v0.16.1) with a message and WEB outside Emscripten. `values` lists the C enum,
 not what opens here; the doc says which are stubs. `patch.corner` and
 `settle` are `YSCR_` macros, not a C enum, so the test's names of them
 need a case by review when a macro is added.
@@ -4737,6 +4738,470 @@ the order of the forms held. The cause of the difference between the runs
 was not found. Python's `Frame` is
 unchanged: a record costs it 0.35 us (above).
 
+## Linux X11: GLX_OML (v0.17.0)
+
+The header is v0.17.0: v0.11.0 after the first merge, and v0.17.0 after the
+merge over main's v0.11.0 to v0.16.1 (macOS). The numbers in this section
+were measured as v0.8.0, the branch's number,
+on the code before main's v0.8.0 to v0.10.4. After that merge (2026-11-04,
+the same machine), `test_screen_glx` passed and the 32 `glx-` mutants gave
+the expected results. The window thread is off on X11. No timing run was
+repeated.
+
+The design comes from the X11 probe ([screen_x11_probe.md](screen_x11_probe.md),
+section 5.6). This section records what the backend itself does and
+what was measured with it. The measurements ran on the backend's code
+before screen.h's v0.5 to v0.7.2 changes (settling, the foreground, the
+messages, the web backend) were merged under it. After the merge with
+v0.7.2 (2026-10-13), `test_screen_glx` passed and the 31 `glx-` mutants
+gave the expected results (30 killed; `glx-21` survives, as its entry
+says), with SDL 3.4.18. With SDL before 3.4.18 the test ended on an X
+error (BadWindow in X_TranslateCoords) in its first part, and the mutant
+runner's baseline failed.
+
+The machine: Debian 12, kernel 6.11.5-liquorix, Xorg 21.1 with the
+amdgpu DDX, Mesa 22.3.6 (radeonsi) on an AMD RX 6600, one 1920 x 1080
+output at 60.000000 Hz (dot clock), Xfwm4 with its compositor off,
+SDL 3.4.18, gcc 12.2. The frame thread ran at normal priority
+(`yrt_thread_elevate()` was not granted). No photodiode was attached.
+
+### SDL makes the window, the header makes the context
+
+As on Windows, SDL3 owns the window, and the header owns the swap path.
+SDL's own GL context would work, but the header needs GL ES 3.0, a
+GLXWindow and the OML entry points on a display connection that SDL's
+event pump does not read. So the header opens a second Xlib connection
+to the same display, makes the context there on a GLXWindow over SDL's
+window, and opens a third connection, through xcb, that selects the
+window's PresentCompleteNotify events. The X server sends a copy of each
+event to every client that selects it, so Mesa's own queue is not
+touched. The probe had verified this with its own window; the backend
+does it on SDL's.
+
+The window is SDL's fullscreen window, which the window manager makes
+fullscreen (`_NET_WM_STATE_FULLSCREEN`). The probe measured only an
+override-redirect window. With Xfwm4, every frame of the SDL window was
+a Present flip.
+
+### Measurements
+
+`examples/screen/flipstats.c --backend glx`, one run at a time, nothing
+else on the machine:
+
+| Run | Frames | Path | Late target | Dropped | Early | Estimated | Prediction p50 / p99 / max, us |
+|---|---|---|---|---|---|---|---|
+| fullscreen, patch, idle | 3600 | flip 3600 | 0 | 0 | 0 | 0 | 0.15 / 2.15 / 17.15 |
+| fullscreen, patch, 20 spinning threads | 3600 | flip 3600 | 0 | 0 | 0 | 0 | 0.15 / 1.16 / 16.15 |
+| fullscreen, patch, `--miss 300` | 3600 | flip 3600 | 0 | 0 | 0 | 0 | 0.15 / 1.85 / 17.15 |
+| fullscreen, `--hold` (0 to 4 vblanks ahead) | 600 | flip 600 | 0 | 0 | 0 | 0 | 600 of 600 on the vblank asked for |
+| fullscreen, `--overrun 20` | 600 | flip 600 | 17 | 0 | 0 | 0 | 0.15 / 2.15 / 2.86 |
+| 800 x 600 window | 600 | copy 600 | 0 | 0 | 0 | 0 | 0.15 / 2.86 / 3.15 |
+
+- Every flip of the fullscreen runs is tier 1; every copy of the window
+  run is tier 2.
+- The 17 overruns of 20 ms were all flagged LATE_TARGET and charged to
+  the draw phase; no other frame was late.
+- `--miss 300` adds 1500 clears to 3 frames in 300. That was not enough
+  to make this GPU miss a vblank, so no frame dropped, and the path that
+  raises the depth after misses did not run.
+- The header's own CPU time per frame (idle run): `yscr_begin()` without
+  its wait 4.5 us p50, 14.8 us p99; `yscr_flip_at()` without the swap
+  call 5.5 us p50, 17.0 us p99. The swap call itself
+  (`glXSwapBuffersMscOML`) took 36 us p50.
+- The present return to onset was 17.0 ms p50: one frame in flight, the
+  record of a flip completes as its vblank begins, and the next frame is
+  planned for the vblank after. flipstats' "on the first vblank after
+  the return" counted 1 of 3600 idle: the event of the flip that just
+  completed comes about 0.4 ms before that flip's UST, the next present
+  returns within that time, so the UST of the flip already on the screen
+  counts as the first vblank after the return. Under load the frame
+  thread woke later, after that UST, in 21.9% of frames.
+
+`tests/adapt/screen_glx_test.c` checks the same on a display in about
+6 s: 120 frames on time, 120 held frames on the vblank asked for, every
+record observed, independent and tier 1, the onset on the ysp_rt clock,
+`_VARIABLE_REFRESH` 0, and a refusal under `vblank_mode=0`. ctest does
+not run it. Its six mutants (`tests/mutate/screen.toml`, `glx-`) were all
+killed.
+
+### SDL before 3.4.18 ends the process on an X error
+
+With SDL 3.4.0, CI's version, 7 of 14 short GLX runs ended at open with
+an X error: `BadWindow` on `X_TranslateCoords`, for a window of another
+client. A bare SDL program with no ysp code, a fullscreen window open for
+0.6 s, ended the same way in 2 of 10 runs. SDL's ConfigureNotify handler
+asks the server for the window's parent (`XQueryTree`) and then
+translates coordinates against it (`XTranslateCoordinates`), with no X
+error handler. When the window manager destroys its frame window between
+the two calls, Xlib's default handler ends the process. SDL 3.4.18 puts
+a handler around the calls (3.4.16 does not): 0 of 20 bare runs and 0 of
+20 GLX runs failed. The describe line warns when SDL is older than
+3.4.18. CI pins 3.4.18 since v0.17.0 (v0.11.0 on its branch).
+
+### Mesa sets _VARIABLE_REFRESH at the first swap
+
+The probe found `_VARIABLE_REFRESH = 1` on each fullscreen window. Mesa
+sets it when its driconf option `adaptive_sync` is on, which is the
+default. The first backend set the property to 0 after making the
+context current, and the describe line read 1 at the end of the run:
+Mesa sets it at the first swap, not at drawable creation. The backend
+now sets it to 0 after open's test swap; it read 0 at the end of every
+run since. On this monitor (`vrr_capable` 0) the property changes
+nothing; on a variable-refresh monitor with the DDX's `VariableRefresh`
+option on, it would let the refresh vary.
+
+### X11 key times
+
+SDL 3 stamps an X11 key event when it reads the event from the X
+socket, inside `SDL_PumpEvents()`. A frame loop pumps once per frame,
+in `yscr_begin()`, so a key's stamp is the next pump, not the key.
+`examples/screen/input.c` on Linux injects keycode 192 through XTEST
+(the X server's test extension, the analog of SendInput) at a random
+point in each frame, in a 400 x 300 window with the focus, and compares
+the stamp with the injection time:
+
+| Stamp | Keys | Stamp minus injection, ms: min / mean / max |
+|---|---|---|
+| SDL's (`SDL_GetTicksNS()` at the pump) | 199 | 8.59 / 12.67 / 16.63 |
+| The X event's server time, as ms of CLOCK_MONOTONIC | 199 | -1.97 / -1.40 / -0.97 |
+| `yscr_poll()` from v0.17.0 (the server time) | 200 | -1.96 / -1.47 / -0.99 |
+
+The server time sits 1 to 2 ms before the injection, always: Xorg's
+millisecond clock lags by up to a tick (HZ=1000 here) and the
+milliseconds truncate. If the server counted another clock, the second
+row would be off by years. So the header takes SDL's X11 event hook,
+queues each KeyPress and KeyRelease with its server time, and
+`yscr_poll()` writes that time into the SDL key event it returns. A held
+key's release and press, which SDL folds into one repeat, are skipped in
+the queue. A time more than 1 s from now is not used.
+
+XTEST keys do not come from a device, so they keep the server's time.
+Keys from a keyboard get the kernel's time when the user can read the
+keyboard's evdev node (next section). `test_screen_glx` checks 20 XTEST
+keys; mutants `glx-06` and `glx-07`, killed.
+
+### Kernel key times
+
+The server's time is not the kernel's. `tests/probe/input_evdev/keys_probe.c`
+makes a keyboard through uinput, sends 300 presses of F24 at random gaps
+of 20 to 50 ms, and records for each press: the time before and after
+the `write()` to uinput, the kernel's evdev time (asked for on
+CLOCK_MONOTONIC), when a reader thread's `read()` returned it, and the
+X server's time of the XInput 2 raw event. Same machine, idle, then with
+20 spinning threads (one for each hardware thread) at normal priority:
+
+| Interval, ms: min / mean / p99 / max | Idle | 20 spinning threads |
+|---|---|---|
+| Kernel's time minus the start of `write()` | 0.001 / 0.009 / 0.023 / 0.029 | 0.000 / 0.002 / 0.006 / 0.007 |
+| evdev `read()` returned, minus the kernel's time | 0.006 / 0.021 / 0.038 / 0.042 | 0.005 / 0.021 / 0.039 / 0.058 |
+| X server's time minus the kernel's time | -1.979 / -1.453 / -0.980 / -0.973 | -1.989 / -1.491 / -1.005 / -1.000 |
+| Xlib returned the event, minus the kernel's time | 0.025 / 0.080 / 0.137 / 0.320 | 0.017 / 0.034 / 0.071 / 2.080 |
+
+Xorg read each key within 0.3 ms (2.1 ms once under load), but it
+stamps the key with its own millisecond clock, not with the kernel's time:
+0.97 to 1.99 ms before the kernel's time, so that clock runs about 1 ms
+behind CLOCK_MONOTONIC before the ms truncates (a coarse clock one tick
+behind would do that, and this kernel's tick is 1 ms; Xorg's source was
+not checked). A keyboard's key gets the same 1 to 2 ms early stamp as an
+XTEST key, and the kernel's microsecond time is lost. With the reader on SCHED_FIFO 1 under the same
+load the X column was -1.990 / -1.460 / -0.637 / -0.334.
+
+From v0.17.0 the X11 key hook reads the keyboards' evdev nodes itself.
+Every reader of a node gets every event with the kernel's time, buffered
+until it reads, and the kernel queues an event for all readers before
+Xorg can read it. So when SDL's X11 hook sees a KeyPress or KeyRelease,
+the header reads its nodes (non-blocking; nothing to wait for) and takes
+the newest kernel event of that key (keycode minus 8) and direction from
+3 ms after the server's stamp to 100 ms before it. Older events of the
+key are keys another window had and are dropped. No thread: the kernel's
+time does not change with when the header reads it. With no match (an
+XTEST key, a node the user cannot read, the server more than 100 ms
+late) the key keeps the server's time.
+
+The nodes are opened at the first GLX_OML open: every readable
+`/dev/input/event*` with keys below `BTN_MISC` (mice have buttons only),
+up to 16, read-only and not grabbed, so the desktop and other programs
+keep their keys. inotify on `/dev/input` (IN_CREATE, and IN_ATTRIB
+because udev sets the ACL after it makes the node) opens keyboards
+plugged in later, checked on every X event: Xorg adds a new keyboard
+about a second after its node appears, and SDL then gets the hierarchy
+events. The describe line counts what came from where:
+`key_time=kernel:n,x-server:n,unmatched:n,off-clock:n evdev_keyboards=n`.
+
+Access. By default only root and the `input` group read evdev nodes.
+Membership in `input` gives every program of that user every key, at all
+times, from any session. The rule in `tools/linux/70-ysp-input.rules`
+adds the `uaccess` tag to keyboards instead, so systemd-logind gives the
+user at the seat (the one logged in at the rig's screen, not over SSH) an
+ACL on keyboard nodes only, removed at logout:
+
+```sh
+sudo cp tools/linux/70-ysp-input.rules /etc/udev/rules.d/
+sudo udevadm control --reload && sudo udevadm trigger
+getfacl /dev/input/by-id/*-event-kbd   # user:<you>:rw- on each keyboard
+```
+
+Without it, nothing fails: keys keep the server's time, and the describe
+line says `evdev_keyboards=0`. The rule's second line lets the same user
+make uinput devices, which only `test_screen_glx` needs (with
+`sudo modprobe uinput`).
+
+`test_screen_glx` part 11: two uinput keyboards, one made before open and
+one while the screen is open, send keycode 192 (KEY_F14) 10 times each.
+Each press must come back from `yscr_poll()` with a time inside the
+`write()` to uinput, which the server's time never is. 10 of 10 and 10 of
+10, in 9 runs. Mutants `glx-18` to `glx-20` and `glx-22` to `glx-24`,
+killed: the kernel time not used, the evdev clock not set to
+CLOCK_MONOTONIC, no hotplug, a match window that ends at the server's
+stamp, the evdev code taken as the X keycode, and no device accepted as a
+keyboard. `glx-21` (no IN_ATTRIB)
+survives on purpose: udev finished the node about 4 ms after the kernel
+made it (`udevadm monitor`), and the hook reads inotify only on X events,
+which for a new keyboard come about a second later. IN_ATTRIB matters only
+when some other X event falls in those 4 ms, which a test cannot place.
+
+A keyboard pressed by hand: a Dell wireless keyboard on its USB receiver
+(`usbhid`, full speed), 300 presses, `keys_probe --keyboard
+/dev/input/by-id/usb-Dell_Computer_Corp_Dell_Universal_Receiver-event-kbd
+--hand --n 300`, same machine, idle:
+
+| Interval, ms: min / mean / p50 / p99 / max | Dell receiver, by hand |
+|---|---|
+| evdev `read()` returned, minus the kernel's time | 0.007 / 0.023 / 0.022 / 0.042 / 0.046 |
+| X server's time minus the kernel's time | -1.976 / -1.537 / -1.931 / -0.963 / -0.956 |
+| Xlib returned the event, minus the kernel's time | 0.039 / 0.108 / 0.103 / 0.205 / 0.222 |
+
+The same 1 to 2 ms early stamp as the uinput keyboard, so the kernel's
+time corrects a real keyboard's keys too. The median sits near the -2 ms
+end, unlike the uinput run's: most likely the receiver's 1 ms polling held
+a phase against the kernel's tick (not checked).
+
+Not measured: the delay from the key to the kernel's time, which is when
+the USB host controller's interrupt delivered the report: the keyboard's
+scan and debounce, the receiver's radio link and its polling interval. No
+host stamp sees it; a photodiode, a microphone on the key or a solenoid
+does.
+
+### GPU-late frames and the depth
+
+`examples/gfx/stress.c --kind noise` on this machine: full-screen layers
+of gradient noise, 120 frames a level, doubled from 16, then bisected.
+
+Before the merge under v0.4.4's rule ("Depth from the path"), the core
+raised the depth after three misses in a row and lowered it only on
+slack evidence. At 64 layers the GPU missed, the depth went to 2, and it
+never came down: 16 layers, which had run at one frame per vblank, then
+ran at half the rate for the rest of the run, with no frame counted as
+dropped. Slack measures when the present call returns, not when the GPU
+finishes, so at depth 2 the evidence for depth 1 never came.
+
+With the depth from the path (v0.17.0 on GLX_OML):
+
+| Layers | Dropped | Slow frames (2+ vblanks after the one before) | Depth |
+|---|---|---|---|
+| 16, 32 | 0 | 0 | 1 |
+| 64 | 120 | 119 | 1 |
+| 48 | 120 | 119 | 1 |
+| 40 | 97 | 96 | 1 |
+| 36, 38, 39 | 0 | 0 | 1 |
+| 16 again, 600 frames | 0 | 0 | 1 |
+
+A GPU-late frame is a drop and nothing more, the screen is back to one
+frame per vblank as soon as the load is, and the knee is real: 39 layers
+in 120 frames dropped nothing, 40 dropped 97.
+
+A window is the copy path, which the depth table gave 2, from DWM's
+composed path on Windows: a GLX window then ran 33.7 ms from present to
+onset with no drop. X11's copy shows on the next vblank (the probe's
+window runs), so GLX_OML's copy path is depth 1: 17.0 ms, 600 of 600 on
+time. `test_screen_glx` checks the window's depth; mutant `glx-08`,
+killed.
+
+### A compositing manager
+
+Xfwm4's compositor switched on (`use_compositing`, with
+`unredirect_overlays` on, its default), 600 frames each, then switched
+off again:
+
+| Window | Present path | Tier | Dropped |
+|---|---|---|---|
+| SDL fullscreen (the window manager's fullscreen) | copy 600 | 3 on all 600 | 0 |
+| 800 x 600 window | copy 600 | 3 on all 600 | 0 |
+| SDL fullscreen as an override-redirect window (`SDL_X11_FORCE_OVERRIDE_REDIRECT=1`) | flip 600 | 1 on all 600 | 0 |
+
+Xfwm4 kept SDL's fullscreen window redirected, although SDL sets
+`_NET_WM_BYPASS_COMPOSITOR`: it unredirects override-redirect windows
+only. A copy into a redirected window completes when the server copies,
+not when the compositor shows the frame, so the backend gives every
+frame tier 3 when a compositing manager owned the screen at open. The
+records were right; the timing claim was not available.
+
+An override-redirect window gets no keyboard focus from the window
+manager: in `test_screen_glx` no injected key reached it. With an
+explicit `XSetInputFocus()` on the window after open, all 20 keys
+arrived with the X server's time.
+
+On v0.17.0, settling (v0.5.0, SETTLE) is strict in fullscreen and needs
+tier 1, so the default fullscreen window under Xfwm4's compositor does
+not open: "the display did not settle in 3.0 s (fullscreen, strict):
+tier ...". `desc.x11_override_redirect` (opt-in) asks SDL for an
+override-redirect window for this screen only (SDL's hint is set around
+the window's creation and put back) and gives it the keyboard focus. With
+the compositor on: 300 of 300 frames Present flips, tier 1, settled in
+0.61 s. The cost is the window manager's help: it neither stacks nor
+focuses the window, so another program that takes the focus (a dialog, a
+notification that asks for input) takes the keys, the abort keys too.
+`test_screen_glx` part 7 checks the window and the 20 keys; mutants
+`glx-09` (no focus) and `glx-10` (no hint), killed.
+
+### X11: gamma, mode and panic
+
+Measured on the Linux rig, both X screens, with `xrandr` and scratch
+xcb programs:
+
+- Both CRTCs' ramps (1024 entries) were exactly i * 65535 / (n - 1),
+  which `xrandr --gamma 1:1:1` also sets: that is the identity.
+- A ramp `xrandr` set stayed after `xrandr` exited (5369 counts from
+  identity).
+- A RandR mode an SDL program switched to (59.94 Hz) stayed after the
+  program was killed with SIGKILL. On Windows the system puts a mode back
+  when the process ends (PANIC); X does not.
+- A mode set resets the CRTC's ramp to identity, but after it returns: a
+  ramp set at once read back right, and was identity 50 ms later. Set 10
+  ms after the mode set, it was lost; set 20, 34, 50 or 100 ms after, it
+  stayed. SDL's fullscreen window in the desktop mode did not reset it.
+
+So on GLX_OML (v0.17.0) the header does what OS GAMMA does on Windows,
+through RandR on a short-lived connection of its own, and more: before a
+`desc.mode` switch it keeps every active CRTC's mode and ramp; close,
+`exit()` and the panic put the modes back, wait 150 ms, put the ramps
+back and read them back 60 ms after each set. The panic watchdog reads
+XInput 2's raw key events on X screen 0's root window on its own
+connection, keeps its own modifier state, and counts a press while one of
+the armed screens' windows has the input focus.
+
+`test_screen_glx`:
+
+| Part | What | Result |
+|---|---|---|
+| 8 | A child opens fullscreen with `desc.panic` and a 59.94 Hz mode over a dimmed ramp, then stops calling `begin()`; Shift+Esc x 3 through XTEST | exit 99, 0.34 to 0.95 s after the third press (5 runs); the dimmed ramp and 60 Hz back |
+| 9 | A clean close over a dimmed ramp, in the desktop mode and after a 59.94 Hz switch | `os_gamma=set`, then identity after the switch; the dimmed ramp and the mode back after both closes |
+
+The first version set each ramp right after its mode set and checked it
+at once: it read back right and was then reset, so the user's ramp was
+lost. The read-back now waits. Mutants `glx-11` to `glx-15` (the raw
+keycode's offset, the wait and read-back, the snapshot's ramps, the ramp
+to identity, the focus check), all killed. A test leaves the CRTC as it
+found it, so that a failed run does not change the next one's start.
+
+### Two X screens
+
+The rig's two monitors as two X screens (ZaphodHeads, `:0.0` and `:0.1`,
+one output each). The probe's two-screen phases (each screen's own
+connection and thread, `oml_k1`, 600 swaps a phase): each screen alone,
+both timed at once, and screen 0 timed beside screen 1 swapping as fast
+as it goes (28,410 swaps a second) all gave 600 of 600 on target with no
+late frame; beside the untimed screen, screen 0's grid residual rose to
+8.9 us max (1.9 alone). Its cross-screen offset line (p50 0.0 us, min
+-50,000 us, drift -99.6 ppm) is not explained.
+
+SDL 3.4.18 lists the displays of both X screens, but puts every window on
+$DISPLAY's screen: asked for the display on screen 1 from `:0.0`, the
+window was on screen 0 (GLX and EGL). With `DISPLAY=:0.1` the window and
+its context were on screen 1. So `desc.x_display` (":0.1") sets DISPLAY
+before SDL's video starts, and one process drives one X screen; a second
+screen asking for another X screen in that process is refused.
+
+Not taken, measured: a window the header makes on screen 1, wrapped by
+SDL on screen 0 (`SDL_PROP_WINDOW_CREATE_X11_WINDOW_NUMBER`). SDL
+delivered its keys, 19 of 20 (the first key after the wrap was lost, 3
+runs of 3), but reported the window on screen 0's display, and SDL's mode
+switching would act on the wrong output. It is the way to an operator
+window in the same process, if one is needed.
+
+`examples/screen/flipstats.c --x-display :0.1` from a process on `:0.0`:
+600 of 600 tier 1 on DisplayPort-5. Two processes, one per X screen,
+1200 frames each at once, three times: tier 1 on every frame; one frame
+dropped per run, on whichever process was running when the other opened.
+Timed: the running screen dropped a frame when a GL program opened on the
+other X screen (1 vblank) and when it closed (2 vblanks). Between those,
+no drop. So start the operator program before the run.
+`test_screen_glx` part 10; mutants `glx-16` and `glx-17`, killed.
+
+### vblank_mode=0
+
+Under `vblank_mode=0`, Mesa makes the swap interval 0, and Present then
+flips without waiting for the vblank. The backend asks for interval 1 and
+reads it back: with `vblank_mode=0` in the environment it read 0, and
+open() refused with a message that names the variable. This answers the
+X11 part of the open question in [rig_spec.md](rig_spec.md) section 13
+for the environment variable. A driconf file setting was not tried.
+
+### Raw mice on Linux
+
+`desc.raw_mice` was Windows only (Raw Input). On Linux X11 the reader is
+evdev, as the kernel key times are: one thread per process, started
+SCHED_OTHER, reading every mouse node the user can read (the uaccess
+rule's mouse line, `tools/linux/70-ysp-input.rules`) and new ones by
+inotify. A report is everything the kernel sent up to a `SYN_REPORT`,
+stamped with the kernel's time of it. The reports go over the input
+bridge as on Windows (`yin_from_mouse()`), so `yscr_poll()` and
+`yscr_event_input()` deliver them.
+
+Three things differ from Raw Input:
+
+- The device id. SDL 3's mouse ids on X11 are XInput 2 device ids (SDL
+  3.4.18 listed ids 2, 4, 9, 10, 12 and 13 here, as `xinput list` does).
+  The reader asks X for each device's "Device Node" property and gives a
+  report the id of the device whose node it read, so a raw report and
+  SDL's event name a mouse the same way; a node X does not list gets
+  `0x45560000` plus its node number and `YSCR_MOUSE_UNLISTED`.
+- The focus. Raw Input without RIDEV_INPUTSINK gives a process its mice
+  only while it is in front; evdev gives everything. `begin()` passes the
+  reader whether SDL's keyboard focus is in a window of this process, and
+  the reader drops reports while it is not. A focus change takes effect at
+  the next `begin()`.
+- No guard: SDL's relative mode does not take evdev.
+
+`test_screen_glx` part 12: a uinput mouse, made before open so X has
+added it, sends 20 clicks with a move of (3, -2) while the window has the
+focus: 20 presses, each with a time inside the `write()` (the kernel's),
+SDL's id of that mouse (21) and the move, none flagged unlisted. With the
+X focus moved to the root window and one frame later, 5 more clicks gave
+0 events. Injected in the same frame as the focus change, before a
+`begin()` had passed it on, 10 events got through: the gate lags the
+focus by up to a frame.
+A screen with no window is refused. Mutants `glx-25` to `glx-30` and
+`rm-07`, killed: no focus gate, no id match, the read time, the default
+clock, the left button as the right, the focus never passed.
+
+Not measured: two physical mice by hand (`examples/screen/input.c
+--mice`), the delay from a click to the kernel, tablets and touchpads
+(absolute devices are not read).
+
+### Compared with Psychtoolbox
+
+On this machine, Psychtoolbox 3.0.19.14 under Octave beside
+`screen_flipstats`, both checked against every vblank the kernel reported
+for the output (`drmWaitVBlank` in a separate process).
+`tests/compare/ptb_linux/README.md` has the method, the tables and the
+commands.
+
+- Flips: 9600, 4800 each, for the next vblank and held 1 to 5 frames,
+  idle and with 20 spinning processes. Both landed every flip on the
+  vblank asked for, and both report the kernel's vblank time: ysp's
+  records exactly, PTB's within 2 us (its seconds are a double of
+  CLOCK_REALTIME). On this driver the two tie on flip timing.
+- The kernel's vblank time is the end of the vertical blank: PTB's Flip
+  returned 0.15 to 0.41 ms before the time it reported (the blank is 45
+  lines, 0.67 ms), so an onset stamp here is the start of the new frame's
+  scanout.
+- Open: PTB's OpenWindow 1.5 s with its default sync tests, 0.65 s
+  without; a whole `flipstats` process 0.55 s, its settle 0.48 s.
+- Keys, 200 uinput taps: PTB's KbQueue stamped them 0.03 to 0.40 ms after
+  the kernel's time idle, with a tail to 2.0 ms under load; ysp gives the
+  kernel's time ("Kernel key times").
+
 ## Not measured
 
 The open findings of v0.10.0 (5 handles an open and close, SDL's
@@ -4755,11 +5220,15 @@ display ids) are fixed in v0.10.4
 - Light. No photodiode was attached. `tests/loopback/screen_loopback.c`
   is built, not run. Every onset here is DXGI's vblank time.
 - Any refresh other than 60 Hz; any GPU other than the Iris Xe; Windows 10.
-- X11 and Wayland: stubs. macOS (METAL, v0.11.0): run only with the
+- Wayland: a stub. macOS (METAL, v0.11.0): run only with the
   session locked; its constants set in v0.12.0 from the probe's timing
   session, not from a run of the header itself; see
   [macOS: the header owns the CAMetalLayer](#macos-the-header-owns-the-cametallayer-v0110-v0120).
   The web: no light measured (web.md).
+- On X11: a compositing manager other than Xfwm4's, one window per
+  output of one X screen, two X screens in one process, XWayland, NVIDIA's driver, a real
+  keyboard's key times, and whether a ramp RandR reads back is the one
+  the panel shows (no light or capture card).
 - A DWM miss on the composed path of COMPOSITION: a second window loading
   the GPU did not cause one, so whether the record shows it is unknown.
 - COMPOSITION on a machine whose QPC does not run at 10 MHz, on ARM64

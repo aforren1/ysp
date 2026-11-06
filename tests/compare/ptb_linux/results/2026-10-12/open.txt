@@ -1,0 +1,17 @@
+Screen('OpenWindow', 0, 64) wall time (GetSecs around the call), 2026-10-12,
+PTB 3.0.19.14, Octave 7.3.0, each in a new octave-cli process.
+
+PTB_SKIPSPLASH=1:
+level 0 open 1.503 s / 1.510 s / 1.544 s
+level 1 open 1.547 s / 1.542 s / 1.524 s
+level 2 open 0.675 s / 0.685 s / 0.649 s
+
+Without PTB_SKIPSPLASH (no ~/.Psychtoolbox/welcomemsgdone):
+level 0 open 11.519 s / 11.540 s
+level 1 open 11.546 s / 11.536 s
+level 2 open 10.690 s / 10.680 s
+strace -k: clock_nanosleep 9.9996 s in PsychYieldIntervalSeconds from
+PsychOpenOnscreenWindow (the splash wait, PsychWindowSupport.c).
+
+ysp: whole screen_flipstats --backend glx --frames 1 process
+0.556 s / 0.549 s / 0.549 s (settle=0.48s(22 flips) in its describe line).

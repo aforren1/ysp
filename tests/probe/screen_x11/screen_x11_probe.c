@@ -1559,7 +1559,7 @@ static void ust_report(const char* what, int n, const int64_t* ust, int64_t* con
     if (n <= 0) return;
     double* d = malloc(sizeof(double) * (size_t)n);
     int verdict = -1, vunit = 0;
-    say("  %s: read time minus UST, for each clock and unit (expected: 0 to about one period, %.3f ms):\n", what, per / 1e6);
+    say("  %s: read time minus UST, for each clock and unit (expected: -2 ms to about one period, %.3f ms):\n", what, per / 1e6);
     for (int k = 0; k < 4; k++)
         for (int u = 0; u < 2; u++) {
             double scale = u == 0 ? 1000.0 : 1.0;
@@ -1567,7 +1567,11 @@ static void ust_report(const char* what, int n, const int64_t* ust, int64_t* con
             for (int i = 0; i < n; i++) {
                 double v = (double)after[k][i] - (double)ust[i] * scale;
                 d[i] = v;
-                if (v >= -50e3 && v <= 2.0 * per + 2e6) ok++;
+                /* A UST is the end of its vblank, the start of scanout;
+                 * events and reads come from the vblank's start, so they
+                 * can precede it by the vertical blanking time (0.44 ms
+                 * p50 on the first rig). */
+                if (v >= -2e6 && v <= 2.0 * per + 2e6) ok++;
             }
             dist ds = dist_of(d, n);
             say("    %-20s %s: %4d of %d in range, p50 %.3f ms, min %.3f ms, max %.3f ms\n", k_clock_names[k],
@@ -1703,14 +1707,19 @@ static void vblank_test(ctx* c) {
     c->nnm = 0;
     uint32_t* ser = calloc((size_t)M, sizeof(uint32_t));
     int64_t base = c->last_msc;
-    for (int j = 0; j < M; j++) {
-        ser[j] = 0x40000000u | (++c->nm_serial & 0x3fffffffu);
-        xcb_present_notify_msc(c->xc, (xcb_window_t)c->win, ser[j], (uint64_t)(base + 2 + j), 0, 0);
-    }
-    xcb_flush(c->xc);
     double per = ctx_period(c);
-    int64_t deadline = now_ns() + (int64_t)((M + 30) * per);
-    while (c->nnm < M && now_ns() < deadline && !g_stop) po_pump(c, 50);
+    /* In batches: on the first rig (amdgpu DDX) the server completed every
+     * NotifyMSC beyond 128 outstanding at once, with the current MSC. */
+    for (int j0 = 0; j0 < M && !g_stop; j0 += 64) {
+        int j1 = j0 + 64 < M ? j0 + 64 : M;
+        for (int j = j0; j < j1; j++) {
+            ser[j] = 0x40000000u | (++c->nm_serial & 0x3fffffffu);
+            xcb_present_notify_msc(c->xc, (xcb_window_t)c->win, ser[j], (uint64_t)(base + 2 + j), 0, 0);
+        }
+        xcb_flush(c->xc);
+        int64_t deadline = now_ns() + (int64_t)((j1 - j0 + 30) * per);
+        while (c->nnm < j1 && now_ns() < deadline && !g_stop) po_pump(c, 50);
+    }
     int n = c->nnm < M ? c->nnm : M;
     double *x = malloc(sizeof(double) * (size_t)n + 8), *y = malloc(sizeof(double) * (size_t)n + 8),
            *iv = malloc(sizeof(double) * (size_t)n + 8), *ar = malloc(sizeof(double) * (size_t)n + 8);

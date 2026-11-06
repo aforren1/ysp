@@ -1,4 +1,4 @@
-/* ysp/rt.h - v0.10.1 - public domain single-header real-time timing library
+/* ysp/rt.h - v0.10.2 - public domain single-header real-time timing library
  *
  *   The clock, the waits, the scheduling ladder, the one-shot deadline
  *   worker, the background-compute pump, the event ring, the clock
@@ -249,7 +249,13 @@
  *                                   maximum when that is lower. 80 is above
  *                                   the kernel's threaded IRQ handlers (50)
  *                                   and below migration and the watchdog
- *                                   (99). Needs CAP_SYS_NICE on Linux.
+ *                                   (99). Needs CAP_SYS_NICE on Linux, or
+ *                                   an RLIMIT_RTPRIO grant (limits.conf
+ *                                   "rtprio"): then the grant when it is
+ *                                   above 50, else priority 1, because at
+ *                                   or below 50 it cannot clear the IRQ
+ *                                   threads, and FIFO 1, 49 and 50 measured
+ *                                   the same (docs/rt.md).
  *     YRT_POLICY_TIME_CRITICAL    Windows THREAD_PRIORITY_TIME_CRITICAL.
  *                                   On every rung it gets, the Windows
  *                                   thread is also opted out of EcoQoS; see
@@ -259,6 +265,20 @@
  *                                   rounds up to its own floor), which is free
  *                                   and removes 50 us of deliberate lateness
  *                                   from every wait.
+ *
+ *   INHERITED POLICY (POSIX). A thread inherits the scheduling policy of
+ *   the thread that creates it: every thread an elevated thread starts is
+ *   SCHED_FIFO too, unless it is made with explicit attributes. ysp's own
+ *   threads (the worker, the pump, ysp/device.h's reader) start
+ *   SCHED_OTHER and elevate themselves only if asked. Other libraries'
+ *   threads do not: measured on Linux, Mesa's command-submission, shader
+ *   compiler and driver threads made by yscr_open() after the frame thread
+ *   was elevated ran SCHED_FIFO, and so do your own threads. A kernel
+ *   without RT throttling (liquorix's PDS has none; mainline keeps 5% of
+ *   each second for normal threads) lets a FIFO thread that never sleeps
+ *   keep its CPU: 20 inherited FIFO spin threads on 20 CPUs froze such a
+ *   machine. Start a busy thread before you elevate, or with
+ *   PTHREAD_EXPLICIT_SCHED and SCHED_OTHER.
  *
  *   One rung sits BELOW that floor and is not part of this ladder:
  *   YRT_POLICY_BELOW_NORMAL, which only yrt_pump asks for and only when
@@ -1077,6 +1097,16 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.10.2 - Linux, numbered v0.9.2 on its branch and merged over v0.10.0
+ *          and v0.10.1: yrt_thread_elevate() takes SCHED_FIFO under
+ *          RLIMIT_RTPRIO when FIFO 80 is refused (limits.conf "rtprio",
+ *          as Psychtoolbox's setup grants): the grant when it is above
+ *          50, else FIFO 1. POSIX: the worker and pump threads start
+ *          SCHED_OTHER instead of inheriting their creator's policy, so a
+ *          no_elevate worker or the pump opened by an elevated thread no
+ *          longer runs SCHED_FIFO while it reports NORMAL (INHERITED
+ *          POLICY). Before this, no test host granted any FIFO, so neither
+ *          path had run.
  *   v0.10.1 - macOS: the waits of a thread without the TIME_CONSTRAINT rung
  *          are no longer coalesced. yrt_sleep_until() and yrt_sleep_ns()
  *          on such a thread wait on a one-shot kevent timer flagged
@@ -1442,8 +1472,8 @@
  * The string always matches the three numbers. */
 #define YRT_VERSION_MAJOR  0
 #define YRT_VERSION_MINOR  10
-#define YRT_VERSION_PATCH  1
-#define YRT_VERSION_STRING "0.10.1"
+#define YRT_VERSION_PATCH  2
+#define YRT_VERSION_STRING "0.10.2"
 
 /* Feature-test macro for clock_nanosleep() and mlockall() in the Linux
  * implementation. Defined here, before the first system header, so it takes
@@ -3869,6 +3899,24 @@ yrt_policy yrt_thread_elevate(const yrt_sched_deadline* rt) {
     if (top > 0 && sp.sched_priority > top) sp.sched_priority = top;
     if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &sp) == 0)
         return YRT_POLICY_FIFO;
+#if defined(YRT__LINUX)
+    /* Without CAP_SYS_NICE, RLIMIT_RTPRIO is the ceiling: lab setups grant
+     * it through limits.conf (Psychtoolbox's group gets 50), and asking for
+     * more than it is refused outright. Above 50 the ceiling still clears
+     * the threaded IRQ handlers, the reason for 80. At 50 or below it can
+     * only tie with or sit under them, and FIFO 1, 49 and 50 measured the
+     * same (docs/rt.md, "RLIMIT_RTPRIO"), so it takes 1, as Psychtoolbox
+     * does: above every normal thread, below everything else. */
+    {
+        struct rlimit rl;
+        if (getrlimit(RLIMIT_RTPRIO, &rl) == 0 && rl.rlim_cur != RLIM_INFINITY &&
+            rl.rlim_cur > 0 && (long)rl.rlim_cur < (long)sp.sched_priority) {
+            sp.sched_priority = rl.rlim_cur > 50 ? (int)rl.rlim_cur : 1;
+            if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &sp) == 0)
+                return YRT_POLICY_FIFO;
+        }
+    }
+#endif
 
     /* No privilege for any of that. Dropping the timer slack costs nothing
      * and removes 50 us of deliberate lateness from every wait this thread
@@ -5255,6 +5303,31 @@ static void yrt__worker_kq_close(yrt__wstate* s) {
 
 static void yrt__worker_loop(yrt_worker* w);
 
+/* A thread made with default attributes inherits its creator's scheduling
+ * policy: opened by an elevated frame thread, a no_elevate worker or the
+ * pump runs SCHED_FIFO while it reports NORMAL. On a kernel without RT
+ * throttling (liquorix's PDS) that is not a detail: 20 inherited FIFO spin
+ * threads on 20 CPUs froze the machine (docs/rt.md, "Inherited policy").
+ * So each thread starts SCHED_OTHER and elevates itself if it should. */
+static int yrt__thread_create(pthread_t* t, void* (*fn)(void*), void* arg) {
+    pthread_attr_t a;
+    struct sched_param sp;
+    int rc;
+    memset(&sp, 0, sizeof(sp));
+    if (pthread_attr_init(&a) != 0) return pthread_create(t, NULL, fn, arg);
+    if (pthread_attr_setinheritsched(&a, PTHREAD_EXPLICIT_SCHED) == 0 &&
+        pthread_attr_setschedpolicy(&a, SCHED_OTHER) == 0 &&
+        pthread_attr_setschedparam(&a, &sp) == 0) {
+        rc = pthread_create(t, &a, fn, arg);
+        pthread_attr_destroy(&a);
+        if (rc != EPERM && rc != EINVAL && rc != ENOTSUP) return rc;
+    } else {
+        pthread_attr_destroy(&a);
+    }
+    /* a platform that refuses explicit attributes (some wasm builds) */
+    return pthread_create(t, NULL, fn, arg);
+}
+
 static void* yrt__worker_main(void* arg) {
     yrt_worker* w = (yrt_worker*)arg;
     yrt_policy pol = w->no_elevate ? YRT_POLICY_NORMAL
@@ -5333,7 +5406,7 @@ bool yrt_worker_open(yrt_worker* w, const yrt_worker_desc* desc) {
         return false;
     }
     /* pthread_create returns the error; it does not set errno. */
-    int rc = pthread_create(&s->thread, NULL, yrt__worker_main, w);
+    int rc = yrt__thread_create(&s->thread, yrt__worker_main, w);
     if (rc != 0) {
         pthread_cond_destroy(&s->cv);
         pthread_mutex_destroy(&s->mtx);
@@ -6155,7 +6228,7 @@ bool yrt_pump_open(yrt_pump* p, const yrt_pump_desc* desc) {
      * waiters; see yrt__pump_close_door(). */
     yrt__sc_store(&p->locks_live, 1);
     /* pthread_create returns the error; it does not set errno. */
-    rc_thread = pthread_create(&s->thread, NULL, yrt__pump_main, p);
+    rc_thread = yrt__thread_create(&s->thread, yrt__pump_main, p);
     if (rc_thread != 0) {
         /* No thread will ever set `exited`, so do it here: a wait that got in
          * through the open door must not be left parked. */

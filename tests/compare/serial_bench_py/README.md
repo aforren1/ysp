@@ -48,8 +48,8 @@ and `noport` parts run. `--parts rt,stream` runs fewer parts.
 `--python 3.13` selects the interpreter (the default).
 
 The median of a port changes from day to day. Run `raw_win32.exe`
-([../serial_bench/](../serial_bench/README.md#the-tuned-ioport-and-the-raw-win32-floor))
-in the same session, twice, the second time with `rev`, and compare each
+([../serial_bench/](../serial_bench/README.md#the-tuned-ioport-and-the-raw-win32-floor)),
+or `raw_posix` on Linux, in the same session, twice, the second time with `rev`, and compare each
 API with that floor, not with the floor of another day.
 
 ## Read the results

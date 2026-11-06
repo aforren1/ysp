@@ -1,3 +1,7 @@
+# v0.11.0: the glx- mutants run tests/adapt/screen_glx_test.c, which needs
+# an X session with Mesa and takes the screen for about 7 s per mutant.
+# Set YSP_SDL3 to an SDL3 install prefix (3.4.18 or later on Xfwm4: 3.4.0
+# can end the process on an X error, docs/screen.md). Run them with -j 1.
 
 # ysp/screen.h mutants: the v0.3.1 list (aborts, panic, icon), the 12 of the
 # 41 that ysp/screen.h's header comment counts, v0.3.2's 2 (text input,
@@ -37,6 +41,14 @@ libs = ["C:/sdk/SDL3-3.4.0/lib/x64/SDL3.lib", "user32.lib"]
 timeout = 300
 env_default = { YSCR_ANGLE_DIR = "C:/Program Files/Docker/Docker/frontend" }
 env = { PATH = "C:/sdk/SDL3-3.4.0/lib/x64;C:/Windows/System32;C:/Windows" }
+
+[test.screen_glx]
+source = "tests/adapt/screen_glx_test.c"
+compiler = "gcc"
+flags = ["-std=c11", "-O1", "-w", "-I$YSP_SDL3/include"]
+libs = ["-L$YSP_SDL3/lib", "-Wl,-rpath,$YSP_SDL3/lib", "-lSDL3", "-lm", "-lpthread", "-ldl"]
+timeout = 120
+env = { YSCR_GLX_TEST_REQUIRE = "1" }
 
 [[mutant]]
 id = "abort-00"
@@ -256,8 +268,16 @@ id = "rm-06"
 name = "raw mice accepted on the simulated display"
 test = "screen"
 why = "No reader runs without a window on Windows; open() must say so instead of delivering nothing (v0.3.5)."
-find = '    return "desc.raw_mice is for Windows and macOS (METAL), with a window";'
+find = '    return "desc.raw_mice is for Windows, macOS (METAL) and Linux X11 (GLX_OML), with a window";'
 replace = '    return NULL;'
+
+[[mutant]]
+id = "rm-07"
+name = "raw mice accepted on the simulated display (Linux)"
+test = "screen_glx"
+why = "On Linux the reader is evdev, which needs no window, but SDL's mouse ids and the focus gate do; open() must refuse a screen with no window (v0.11.0)."
+find = '    if (!s->window || s->backend != YSCR_BACKEND_GLX_OML) return "desc.raw_mice needs a window (Windows, or Linux X11 on GLX_OML)";'
+replace = '    if (0) return "";'
 
 [[mutant]]
 id = "br-00"
@@ -730,8 +750,8 @@ id = "dp-10"
 name = "composed at depth 1"
 test = "screen"
 why = "The compositor copies the frame: a vblank more (measured 2 on DXGI_FLIP and COMPOSITION)."
-find = '    case YSCR_PATH_COMPOSED:    return 2;'
-replace = '    case YSCR_PATH_COMPOSED:    return 1;'
+find = '    case YSCR_PATH_COMPOSED:    return s->backend == YSCR_BACKEND_GLX_OML ? 1 : 2;'
+replace = '    case YSCR_PATH_COMPOSED:    return s->backend == YSCR_BACKEND_GLX_OML ? 1 : 1;'
 
 [[mutant]]
 id = "dp-11"
@@ -1520,6 +1540,264 @@ find = '''    if (!e) return out;   /* not from yscr_displays(): SDL judges it *
 replace = '''    return out;'''
 env = { YSCR_WINDOW_TEST_ONLY = "displays" }
 
+[[mutant]]
+id = "glx-00"
+name = "every Present mode is a copy"
+test = "screen_glx"
+why = "A Present flip is the independent path and tier 1; reporting every flip as composed hides the path change a copy means."
+find = 'v.path = ev[YSCR__PEV_MODE] == YSCR__PRESENT_MODE_FLIP ? YSCR_PATH_INDEPENDENT : YSCR_PATH_COMPOSED;'
+replace = 'v.path = YSCR_PATH_COMPOSED;'
+
+[[mutant]]
+id = "glx-01"
+name = "serial off by one"
+test = "screen_glx"
+why = "Each Present event must complete the swap whose SBC is its serial; matching the wrong swap leaves every record without an observed onset."
+find = 'if (g->map_sbc[k] && (uint32_t)g->map_sbc[k] == serial) {'
+replace = 'if (g->map_sbc[k] && (uint32_t)g->map_sbc[k] == serial + 1u) {'
+
+[[mutant]]
+id = "glx-02"
+name = "target vblank not passed"
+test = "screen_glx"
+why = "GLX_OML holds a frame by passing the planned vblank to glXSwapBuffersMscOML; without it a held frame shows early."
+find = 'sbc = yscr__x.SwapBuffersMsc(g->dpy, g->gwin, req->target_count > 0 ? req->target_count : 0, 0, 0);'
+replace = 'sbc = yscr__x.SwapBuffersMsc(g->dpy, g->gwin, 0, 0, 0);'
+
+[[mutant]]
+id = "glx-03"
+name = "variable refresh left on"
+test = "screen_glx"
+why = "Mesa sets _VARIABLE_REFRESH = 1 at the first swap; the header must clear it after that swap."
+find = 'if (g->vrr_atom) yscr__x.change_property(g->xc, 0, g->win, g->vrr_atom, YSCR__XCB_ATOM_CARDINAL, 32, 1, &zero);'
+replace = '(void)zero;'
+
+[[mutant]]
+id = "glx-04"
+name = "UST taken as nanoseconds"
+test = "screen_glx"
+why = "Present's UST is CLOCK_MONOTONIC in microseconds; read as nanoseconds, every onset is off the ysp_rt clock, and open() must refuse."
+find = '    v.t_ns = (int64_t)ust * 1000;'
+replace = '    v.t_ns = (int64_t)ust;'
+
+[[mutant]]
+id = "glx-05"
+name = "swap interval not checked"
+test = "screen_glx"
+why = "vblank_mode=0 turns swap interval 1 into 0, and Present then flips without the vblank; open() must refuse it."
+find = '        if (iv != 1) {'
+replace = '        if (0) {'
+
+[[mutant]]
+id = "glx-06"
+name = "keys keep SDL's stamp"
+test = "screen_glx"
+why = "On X11 SDL stamps a key at the next frame's pump, 8 to 17 ms late; yscr_poll() must give it the X server's time."
+find = "        if (t) ev->common.timestamp = (Uint64)(t - s->sdl_rt + s->sdl_ticks);"
+replace = "        (void)t;"
+
+[[mutant]]
+id = "glx-07"
+name = "server time read as us"
+test = "screen_glx"
+why = "The X server's time is in ms of CLOCK_MONOTONIC; read in another unit it is off the clock, and the key falls back to SDL's late stamp."
+find = "    t = t > now_ms + 1000 || t < now_ms - 1000 ? 0 : t * 1000000;"
+replace = "    t = t > now_ms + 1000 || t < now_ms - 1000 ? 0 : t * 1000;"
+
+[[mutant]]
+id = "glx-08"
+name = "an X copy at the composed depth"
+test = "screen_glx"
+why = "An X11 Present copy shows on the next vblank; at DWM's composed depth of 2 a GLX window waits a vblank more on every frame."
+find = "    case YSCR_PATH_COMPOSED:    return s->backend == YSCR_BACKEND_GLX_OML ? 1 : 2;"
+replace = "    case YSCR_PATH_COMPOSED:    return 2;"
+
+[[mutant]]
+id = "glx-09"
+name = "override-redirect without the focus"
+test = "screen_glx"
+why = "No window manager focuses an override-redirect window; without XSetInputFocus every key, the abort keys too, goes to another window."
+find = "        yscr__x.SetInputFocus(g->dpy, (yscr__XID)g->win, 2, 0);"
+replace = "        (void)yscr__x.SetInputFocus;"
+
+[[mutant]]
+id = "glx-10"
+name = "the hint left out"
+test = "screen_glx"
+why = "desc.x11_override_redirect must reach SDL's window creation, or the compositor keeps the window and every frame is a copy."
+find = "        int or_set = s->backend == YSCR_BACKEND_GLX_OML && desc->x11_override_redirect, had = 0;"
+replace = "        int or_set = 0, had = 0;"
+
+[[mutant]]
+id = "glx-11"
+name = "raw key's time read as its keycode"
+test = "screen_glx"
+why = "XInput2's raw key event has the server time at 12 and the keycode at 16; reading 12, the watchdog never sees the abort key and a hung program is not ended."
+find = "    memcpy(&code, ev + 16, 4);   /* detail; the server time is at 12 */"
+replace = "    memcpy(&code, ev + 12, 4);"
+
+[[mutant]]
+id = "glx-12"
+name = "ramps set once, at once"
+test = "screen_glx"
+why = "A RandR mode set resets the ramp a frame after it returns; a ramp set at once and not read back later is lost. (Either the wait or the later read-back alone puts it back.)"
+find = "    if (changed) YSCR__SLEEP_UNTIL(yscr__now() + YRT_MS(150), 0);"
+replace = "    (void)changed;"
+
+[[mutant.also]]
+find = "    for (tries = 0; tries < 3; tries++) {\n        int set = 0;"
+replace = "    for (tries = 0; tries < 1; tries++) {\n        int set = 0;"
+
+[[mutant.also]]
+find = "        if (!set) break;\n        YSCR__SLEEP_UNTIL(yscr__now() + YRT_MS(60), 0);"
+replace = "        if (!set) break;"
+
+[[mutant]]
+id = "glx-13"
+name = "the mode snapshot without ramps"
+test = "screen_glx"
+why = "A mode switch resets the user's ramp; without the ramp in the snapshot, close and the panic leave it at identity."
+find = "                                yscr__xm.c[yscr__xm.n].n_ramp = gn;"
+replace = "                                yscr__xm.c[yscr__xm.n].n_ramp = 0;"
+
+[[mutant]]
+id = "glx-14"
+name = "a ramp that is not identity kept"
+test = "screen_glx"
+why = "A fullscreen screen takes the CRTC ramp to identity, or code values and calibrated levels are not exact."
+find = "            int ident = yscr__xg_is_identity(r, gg, b, n);"
+replace = "            int ident = 1;"
+
+[[mutant]]
+id = "glx-15"
+name = "focus never ours"
+test = "screen_glx"
+why = "The watchdog counts presses only while one of the screens' windows has the focus; a check that never matches never ends a hung program."
+find = "    for (i = 0; i < YSCR__SLOTS; i++) ours |= f && yscr__xwd.win[i] == f;"
+replace = "    for (i = 0; i < YSCR__SLOTS; i++) ours |= 0;"
+
+[[mutant]]
+id = "glx-16"
+name = "x_display ignored"
+test = "screen_glx"
+why = "SDL 3 puts every window on $DISPLAY's screen; without DISPLAY set from desc.x_display before SDL's video starts, the stimulus window is on the wrong X screen."
+find = "        setenv(\"DISPLAY\", desc->x_display, 1);"
+replace = "        (void)0;"
+
+[[mutant]]
+id = "glx-17"
+name = "a second X screen in one process allowed"
+test = "screen_glx"
+why = "With SDL's video up on one X screen, a screen asking for another must be refused: SDL would put its window on the first."
+find = "        if (SDL_WasInit(SDL_INIT_VIDEO) && !(cur && strcmp(cur, desc->x_display) == 0)) {"
+replace = "        if (0) {"
+
+[[mutant]]
+id = "glx-18"
+name = "kernel key time not used"
+test = "screen_glx"
+why = "Xorg stamps a key with its own coarse ms clock, 0.97 to 1.99 ms before the kernel's time; a key matched in evdev must carry the kernel's time."
+find = "    yscr__xk.t[i] = k ? k : t;"
+replace = "    yscr__xk.t[i] = t;"
+
+[[mutant]]
+id = "glx-19"
+name = "evdev on the realtime clock"
+test = "screen_glx"
+why = "evdev stamps with CLOCK_REALTIME unless asked; the ysp_rt clock is CLOCK_MONOTONIC, so no key would match."
+find = "    if (!keys || ioctl(fd, EVIOCSCLOCKID, &clk) < 0) { close(fd); return; }"
+replace = "    if (!keys) { close(fd); return; }"
+
+[[mutant]]
+id = "glx-20"
+name = "no hotplug"
+test = "screen_glx"
+why = "A keyboard plugged in while the screen is open must be read too; its keys would keep the X server's time."
+find = "    if (!e) return true;\n    yscr__xe_hotplug();"
+replace = "    if (!e) return true;"
+
+[[mutant]]
+id = "glx-21"
+name = "no IN_ATTRIB"
+test = "screen_glx"
+why = "udev's ACL comes after the node: a node opened at IN_CREATE alone may not be readable yet, and nothing tries again."
+expect = "survived"
+note = "The hook reads inotify only on X events, and udev finished the node about 4 ms after the kernel made it (udevadm monitor), long before Xorg adds the keyboard (about 1 s) and SDL gets its hierarchy events. IN_ATTRIB matters only when another X event falls in those 4 ms, which the test cannot place. Kept as a record of why the mask has it."
+find = "inotify_add_watch(yscr__xe.ino, \"/dev/input\", IN_CREATE | IN_ATTRIB)"
+replace = "inotify_add_watch(yscr__xe.ino, \"/dev/input\", IN_CREATE)"
+
+[[mutant]]
+id = "glx-22"
+name = "kernel time after the server's"
+test = "screen_glx"
+why = "The server's ms stamp is up to 2 ms before the kernel's; a window that ends at the server's stamp matches nothing."
+find = "yscr__xe.t[i] <= x + 3000000 &&"
+replace = "yscr__xe.t[i] <= x &&"
+
+[[mutant]]
+id = "glx-23"
+name = "evdev code as the X keycode"
+test = "screen_glx"
+why = "Xorg's keycode is the evdev code plus 8; without it no key matches its kernel event."
+find = "            yscr__xe.code[k] = (uint8_t)(b[j].code + 8);   /* Xorg's keycode */"
+replace = "            yscr__xe.code[k] = (uint8_t)b[j].code;"
+
+[[mutant]]
+id = "glx-24"
+name = "no keyboard has keys"
+test = "screen_glx"
+why = "The capability check must accept a device with keys below BTN_MISC."
+find = "        for (i = 0; i < (int)(sizeof bits / sizeof bits[0]); i++) keys |= bits[i] != 0;"
+replace = "        for (i = 0; i < (int)(sizeof bits / sizeof bits[0]); i++) keys |= 0;"
+
+[[mutant]]
+id = "glx-25"
+name = "raw mice without the focus gate"
+test = "screen_glx"
+why = "evdev gives every mouse's input whatever window has the focus; without the gate a participant's clicks on another program reach the experiment."
+find = "                if (yscr__lm.dirty[i] && !yscr__lm.dropped[i] && yscr__a_load(&yscr__lm.focused)) {"
+replace = "                if (yscr__lm.dirty[i] && !yscr__lm.dropped[i]) {"
+
+[[mutant]]
+id = "glx-26"
+name = "raw mice not matched to SDL's ids"
+test = "screen_glx"
+why = "A report's device must be SDL's mouse id (the XInput 2 device id), so ysp/response.h and the device records name one mouse one way."
+find = "    return found ? found : (YSCR__LM_UNLISTED | (uint32_t)(rdev & 0xffff));"
+replace = "    return (YSCR__LM_UNLISTED | (uint32_t)(rdev & 0xffff));"
+
+[[mutant]]
+id = "glx-27"
+name = "raw mice stamped when read"
+test = "screen_glx"
+why = "The kernel's time is the report's; the reader's read is later by its own scheduling."
+find = "                    a->t = (int64_t)e->input_event_sec * 1000000000 + (int64_t)e->input_event_usec * 1000;"
+replace = "                    a->t = YSCR__NOW();"
+
+[[mutant]]
+id = "glx-28"
+name = "raw mice on the evdev default clock"
+test = "screen_glx"
+why = "evdev stamps with CLOCK_REALTIME unless asked; the ysp_rt clock is CLOCK_MONOTONIC."
+find = """        !(keys[BTN_LEFT / (8 * sizeof(unsigned long))] & (1ul << (BTN_LEFT % (8 * sizeof(unsigned long))))) ||
+        ioctl(fd, EVIOCSCLOCKID, &clk) < 0) {"""
+replace = """        !(keys[BTN_LEFT / (8 * sizeof(unsigned long))] & (1ul << (BTN_LEFT % (8 * sizeof(unsigned long)))))) {"""
+
+[[mutant]]
+id = "glx-29"
+name = "the left button read as the right"
+test = "screen_glx"
+why = "Buttons are numbered as SDL's (left 1, middle 2, right 3)."
+find = "    case BTN_LEFT:   return YSCR_MOUSE_LEFT;"
+replace = "    case BTN_LEFT:   return YSCR_MOUSE_RIGHT;"
+
+[[mutant]]
+id = "glx-30"
+name = "the focus never passed to the reader"
+test = "screen_glx"
+why = "begin() tells the reader whether a window of this process has the keyboard focus; without it every report is dropped."
+find = "    yscr__a_store(&yscr__lm.focused, SDL_GetKeyboardFocus() != NULL);"
+replace = "    (void)0;"
 # v0.11.0's 10 (mt-, the METAL backend), v0.12.0's 3 (mt-11 to mt-13, the
 # measured constants) and v0.13.0's 3 (mt-14 to mt-16, variable refresh) and v0.13.1's 2 (mt-17, mt-18, the
 # period from CADisplayLink). mt-01 to mt-07 and mt-11 to mt-13 run the core test

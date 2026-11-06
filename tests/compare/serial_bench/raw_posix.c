@@ -1,12 +1,14 @@
 /* raw_posix.c - the POSIX floor for serial_bench, the sibling of raw_win32.c:
- * the same echo round trip and the same stream as serial_bench.m, with
- * open(), termios, write() and read() only, plus one mode that makes the same
- * exchanges through ysp/serial.h, so the header and the floor are measured
- * by one program, one method and one clock. No MATLAB.
+ * the same echo round trip and the same stream as serial_bench.m and
+ * serial_bench_py, with open(), termios, write() and read() only, plus one
+ * mode that makes the same exchanges through ysp/serial.h, so the header and
+ * the floor are measured by one program, one method and one clock. No
+ * MATLAB.
  *
  * Needs the echo board (firmware/ysp_echo) on the port.
  *
- *   raw_posix /dev/cu.usbmodemNNN [out_dir] [n_rt] [flags]
+ *   raw_posix /dev/cu.usbmodemNNN [out_dir] [n_rt] [flags]   (macOS)
+ *   raw_posix /dev/ttyACM0 [out_dir] [n_rt] [flags]          (Linux)
  *
  * flags: "rt" skips the streams; "rev" runs the modes in reverse order (the
  * first mode of a run measured slower on Windows, docs/serial.md, Audit).
@@ -22,12 +24,19 @@
  *   select  O_NONBLOCK, select() for readable, then read() of what is
  *           there; write(), with select() for writable on EAGAIN. This is
  *           what ysp/serial.h does on macOS (POSIX WAITS in the header).
+ *   poll    O_NONBLOCK, poll(POLLIN), then read(); not on macOS. This is
+ *           what ysp/serial.h does on Linux.
  *   kqueue  O_NONBLOCK, kevent(EVFILT_READ), then read(); macOS and the
  *           BSDs only. Apple's poll(2) documents that it does not support
  *           devices; kqueue is the other wait the kernel offers.
  *   ysp     yser_write() and yser_read(YSER_READ_ANY) on a yser_port with
  *           the defaults. Not a floor: the header under test, on the
  *           floor's method.
+ *
+ * The 2026-10-12 Linux runs used an earlier, Linux-only version of this
+ * file: its block mode had VMIN = 1, VTIME = 0 and a poll() for the
+ * timeout, and it had no select or ysp mode (docs/serial.md, Results on
+ * Linux).
  *
  * Output: the metric names and statistics of raw_win32.c and serial_bench's
  * summary.txt (median, p99 at rank ceil(0.99 n), max, mean, in
@@ -56,6 +65,11 @@
 #if defined(__APPLE__) || defined(__FreeBSD__)
 #include <sys/event.h>
 #define RAW_HAVE_KQUEUE 1
+#endif
+/* Apple's poll(2) does not support devices, so the mode is left out there. */
+#if !defined(__APPLE__)
+#include <poll.h>
+#define RAW_HAVE_POLL 1
 #endif
 
 #define RT_LEN 35
@@ -114,8 +128,8 @@ static void report1(const char* api, const char* part, const char* metric, doubl
 
 /* --- the port ----------------------------------------------------------- */
 
-enum { M_BLOCK, M_SELECT, M_KQUEUE, M_YSP, M_COUNT };
-static const char* const mode_name[M_COUNT] = { "block", "select", "kqueue", "ysp" };
+enum { M_BLOCK, M_SELECT, M_POLL, M_KQUEUE, M_YSP, M_COUNT };
+static const char* const mode_name[M_COUNT] = { "block", "select", "poll", "kqueue", "ysp" };
 
 typedef struct {
     int mode;
@@ -226,6 +240,14 @@ static int port_read(port* p, unsigned char* buf, int cap, int timeout_ms) {
             if (k == 0) return 0;
             if (k < 0 && errno != EINTR) die("select");
         }
+#if defined(RAW_HAVE_POLL)
+        else if (p->mode == M_POLL) {
+            struct pollfd pf = { p->fd, POLLIN, 0 };
+            int k = poll(&pf, 1, timeout_ms);
+            if (k == 0) return 0;
+            if (k < 0 && errno != EINTR) die("poll");
+        }
+#endif
 #if defined(RAW_HAVE_KQUEUE)
         else {
             struct kevent ev;
@@ -367,14 +389,19 @@ static void rt_alloc(rtrun* X, int n) {
 
 static void rt_free(rtrun* X) { free(X->t0); free(X->t1); free(X->t2); free(X->rx); free(X->tx); }
 
-static void rt_run(port* p, rtrun* X, int n, double seq0, double* avail) {
+/* gap_lo_us to gap_hi_us: the spacing of the exchanges, uniform at random.
+ * The stream's probes use 2 to 3 ms: at 0 to 1 ms all 200 fell in one 200 ms
+ * bucket of the fit, which then had 2 points and no slope (docs/serial.md,
+ * Stream fits of the raw floors). */
+static void rt_run(port* p, rtrun* X, int n, double seq0,
+                   double gap_lo_us, double gap_hi_us, double* avail) {
     unsigned char cmd[16], r[64];
     double ref = NAN;
     port_flush_board(p);
     for (int i = 0; i < n; i++) {
         double seq = seq0 + i + 1;
         snprintf((char*)cmd, sizeof cmd, "e %010.0f\n", seq);
-        spin_until(now_us() + (double)rand() / RAND_MAX * 1000.0); /* leave the USB frame phase */
+        spin_until(now_us() + gap_lo_us + (double)rand() / RAND_MAX * (gap_hi_us - gap_lo_us)); /* leave the USB frame phase */
         double t0 = now_us();
         port_write(p, cmd, 13);
         double t1 = now_us();
@@ -463,7 +490,7 @@ static void stream_run(port* p, const char* api, const char* dir) {
 
     rtrun P;
     rt_alloc(&P, 2 * N_PROBE);
-    rt_run(p, &P, N_PROBE, 1e6, NULL);
+    rt_run(p, &P, N_PROBE, 1e6, 2000, 3000, NULL);
     char cmd[32];
     int clen = snprintf(cmd, sizeof cmd, "s %d %d\n", STREAM_HZ, nlines);
     double c0 = cpu_s(), w0 = now_us();
@@ -496,7 +523,7 @@ static void stream_run(port* p, const char* api, const char* dir) {
     port_flush_board(p);
     rtrun P2;
     rt_alloc(&P2, N_PROBE);
-    rt_run(p, &P2, N_PROBE, 2e6, NULL);
+    rt_run(p, &P2, N_PROBE, 2e6, 2000, 3000, NULL);
     for (int i = 0; i < P2.n; i++) {
         P.t0[P.n] = P2.t0[i]; P.t2[P.n] = P2.t2[i];
         /* both blocks unwrap against their own first stamp; within a run the
@@ -517,6 +544,7 @@ static void stream_run(port* p, const char* api, const char* dir) {
     static const char* const how[M_COUNT] = {
         "read() on a blocking descriptor, VMIN 0, VTIME 10",
         "select(), then read() of what is there",
+        "poll(POLLIN), then read() of what is there",
         "kevent(EVFILT_READ), then read() of what is there",
         "yser_read(YSER_READ_ANY)"
     };
@@ -571,7 +599,7 @@ static void stream_run(port* p, const char* api, const char* dir) {
 
 int main(int argc, char** argv) {
     if (argc < 2) {
-        fprintf(stderr, "usage: raw_posix /dev/cu.usbmodemNNN [out_dir] [n_rt] [rt,rev]\n");
+        fprintf(stderr, "usage: raw_posix /dev/cu.usbmodemNNN|/dev/ttyACMn [out_dir] [n_rt] [rt,rev]\n");
         return 2;
     }
     const char* dev = argv[1];
@@ -607,6 +635,9 @@ int main(int argc, char** argv) {
 #if !defined(RAW_HAVE_KQUEUE)
         if (m == M_KQUEUE) continue;
 #endif
+#if !defined(RAW_HAVE_POLL)
+        if (m == M_POLL) continue;
+#endif
         modes[nm++] = m;
     }
     for (int mj = 0; mj < nm; mj++) {
@@ -618,7 +649,7 @@ int main(int argc, char** argv) {
         rtrun X;
         rt_alloc(&X, n_rt);
         double* av = (double*)calloc((size_t)n_rt, sizeof(double));
-        rt_run(&p, &X, n_rt, 0, av);
+        rt_run(&p, &X, n_rt, 0, 0, 1000, av);
         rt_report(api, "block", &X);
         rt_csv(dir, api, "block", &X);
         report(api, "calls", "bytes_available", av, X.n,

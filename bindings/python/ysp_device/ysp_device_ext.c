@@ -48,7 +48,7 @@
 #include <math.h>
 #include <string.h>
 
-#define DV_VERSION YDEV_VERSION_STRING ".1"   /* .1: the CPython 3.10 floor (2026-10-27) */
+#define DV_VERSION YDEV_VERSION_STRING
 #define DV_QUEUE_DEFAULT 1024
 #define DV_QUEUE_MAX (1u << 20)
 
