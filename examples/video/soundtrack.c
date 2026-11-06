@@ -22,7 +22,7 @@
  *   --hw        the decoder (desc.hw_decode) of an MP4 file on FFmpeg
  *   --threads   the decoder's threads (desc.decode_threads) on FFmpeg
  *   --csv       the FRAME records: display, frame, decision, why, onset_ns,
- *               residual_ns, flags
+ *               residual_ns, flags, ahead (frames ready after this one)
  * Shift+Esc ends it. Exit code: 0; 1 when something did not open or a frame
  * update failed; 2 for a bad argument. It needs a display and a sound
  * device, so it is not a ctest.
@@ -86,8 +86,8 @@ static void drain(void) {
                     n_repeated++;
                     if (why < YVID_WHY_COUNT) reps_by[why]++;
                 }
-                if (csv) fprintf(csv, "%u,%lld,%u,%u,%lld,%lld,%u\n", (unsigned)e->u.u32[9], (long long)e->u.i64[0], dec, why,
-                                 (long long)e->t_ns, (long long)residual, (unsigned)e->u.u32[6]);
+                if (csv) fprintf(csv, "%u,%lld,%u,%u,%lld,%lld,%u,%u\n", (unsigned)e->u.u32[9], (long long)e->u.i64[0], dec, why,
+                                 (long long)e->t_ns, (long long)residual, (unsigned)e->u.u32[6], (unsigned)e->u.u16[15]);
             } else if (e->kind == YVID_EV_DROP) {
                 unsigned why = (unsigned)e->u.u16[14];
                 if (why < YVID_WHY_COUNT) drops_by[why] += e->u.i64[1];
@@ -209,7 +209,7 @@ int main(int argc, char** argv) {
     if (csv_path) {
         csv = fopen(csv_path, "w");
         if (!csv) { fprintf(stderr, "video_soundtrack: cannot write %s\n", csv_path); return 1; }
-        fprintf(csv, "display,frame,decision,why,onset_ns,residual_ns,flags\n");
+        fprintf(csv, "display,frame,decision,why,onset_ns,residual_ns,flags,ahead\n");
     }
     if (yvid_play_at(&mv, YVID_ASAP) < 0) { fprintf(stderr, "video_soundtrack: %s\n", yvid_error(&mv)); return 1; }
     while (yscr_begin(&scr, &f) == YSCR_OK) {
