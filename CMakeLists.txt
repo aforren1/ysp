@@ -227,6 +227,7 @@ set(YSP_EXAMPLES_ACROSS
     net/labstreamer_flip.c     -
     audio/av_sync.c            -
     response/trial_two_keyboards.c -
+    response/trial_bimanual.c  -
     video/trial_movie.c        -
     video/soundtrack.c         -
     color/patch.c              -
@@ -700,7 +701,7 @@ endif()
 if(TARGET SDL3::SDL3 AND YSP_BUILD_EXAMPLES)
     # The jsPsych-style trials of examples/response/ (docs/response.md,
     # "What the examples show"); the two with a sound need miniaudio.
-    foreach(_t keyboard same_different srt adjustment mouse_tracking visuomotor copying two_keyboards posner)
+    foreach(_t keyboard same_different srt adjustment mouse_tracking visuomotor copying two_keyboards posner bimanual)
         ysp_add_program(trial_${_t} examples/response/trial_${_t}.c rig methods)
     endforeach()
     # The 2AFC staircase reads its viewing geometry from the rig profile
