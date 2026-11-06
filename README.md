@@ -14,7 +14,7 @@ C11 or C++17, and its top comment is its manual.
 | [serial](docs/serial.md) | `yser_` | Serial port byte I/O for trigger and response boxes | 0.7.1 | 3 machines |
 | [trials](docs/trials.md) | `ytr_` | Trial orders, blocks, adaptive tracks, jitter, variables per trial, replay, a CSV row per trial | 0.6.1 | tested |
 | [dataset](docs/dataset.md) | `yds_` | A session's data set: session.json, trial, frame, event, clock and stream tables, a zip for the web | 0.2.1 | tested |
-| [table](docs/table.md) | `ytb_` | Typed tables and a bounded CSV parser | 0.3.0 | tested |
+| [table](docs/table.md) | `ytb_` | Typed tables and a bounded CSV parser | 0.3.1 | tested |
 | [pack](docs/pack.md) | `ypak_` | Read and verify ysp packs (store-only zip) | 0.4.0 | tested |
 | [json](docs/json.md) | `yjs_` | Strict JSON reader and canonical writer | 0.2.1 | tested |
 | [stair](docs/adapt.md) | `yst_` | Adaptive staircases | 0.3.0 | tested |
@@ -31,8 +31,8 @@ C11 or C++17, and its top comment is its manual.
 | [rdk](docs/rdk.md) | `yrdk_` | Random dot kinematograms, reproducible bit for bit | 0.3.1 | tested |
 | [outline](docs/outline.md) | `yol_` | Paths, font glyphs and SVG into curve sets | 0.4.1 | tested |
 | [screen](docs/screen.md) | `yscr_` | Stimulus window, flip at a time, flip records; Linux X11, macOS and web backends | 0.18.0 | 3 machines |
-| [audio](docs/audio.md) | `yau_` | Sound at a time and its capture on the rig clock; Linux ALSA exclusive, output and input; CoreAudio on macOS; Web Audio in a browser | 0.9.0 | 3 machines |
-| [gfx](docs/gfx.md) | `ygfx_` | GL ES 3.0 stimuli: shapes, gratings, gabors, text, frame capture | 0.17.3 | 2 machines |
+| [audio](docs/audio.md) | `yau_` | Sound at a time and its capture on the rig clock; Linux ALSA exclusive, output and input; CoreAudio on macOS; Web Audio in a browser | 0.9.1 | 3 machines |
+| [gfx](docs/gfx.md) | `ygfx_` | GL ES 3.0 stimuli: shapes, gratings, gabors, text, frame capture | 0.18.0 | 2 machines |
 | [video](docs/video.md) | `yvid_` | Movies as stimuli, frame by predicted onset; Linux MP4 through FFmpeg, opt-in | 0.8.0 | 3 machines |
 
 Each header is `include/ysp/<name>.h`; macros use the uppercase prefix

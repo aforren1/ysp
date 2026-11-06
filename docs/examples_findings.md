@@ -2,10 +2,13 @@
 
 Status: open list. Each item names a header problem that one of the four
 new examples showed: `trial_posner`, `trial_visuomotor`,
-`trial_timed_response` and `trial_copying` (examples/response/). No
-header was changed. Each change below is a proposal and needs the usual
-header work (CLAUDE.md, "Changing a header"). Remove an item when it is
-fixed or rejected.
+`trial_timed_response` and `trial_copying` (examples/response/), or that
+the fixes of response.h 0.8.0, input.h 0.6.0, screen.h 0.18.0, gfx.h
+0.18.0, table.h 0.3.1 and audio.h 0.9.1 showed. Those versions fixed the
+first list's bugs B1 to B6, features F1, F2, F4, F5, F12 to F15 and the
+first part of F11, and docs D1 to D9. Each change below is a proposal
+and needs the usual header work (CLAUDE.md, "Changing a header"). Remove
+an item when it is fixed or rejected.
 
 Machine for every run: the Linux desktop (Debian 12, GCC 12.2, RX 6600,
 X11 GLX_OML, 59.9994 Hz). No tablet, no photodiode, no line-in; window
@@ -15,7 +18,8 @@ runs used scripted input.
 
 | # | Header | Problem | Proposed change | From |
 |---|---|---|---|---|
-| B5 | gfx.h:11537 | A repeated consecutive point makes the whole POLYLINE fail at draw time | Skip zero-length segments | copying |
+| B7 | screen.h, input.h | On Linux `yscr_event_input()` gives every key tier 3, because `caps.raw_keyboard` is false there, also when the key carries the kernel's evdev time (checked 2026-11-06 with a uinput keyboard: the key time fell 59 to 65 us after the write) | A Linux key source entry by stamp kind: kernel, X server, SDL | input-screen fix |
+| B8 | screen.h (SDL) | 20 clicks from a uinput mouse gave SDL's own event stream 1 press (which 0) and no release; XTEST clicks gave 20 of 20. Cause not known (docs/screen.md) | Find the cause before a raw-mouse claim about buttons through SDL | input-screen fix |
 
 ## Missing features
 
@@ -27,16 +31,11 @@ runs used scripted input.
 | F8 | trials.h | Weights are per row; per-factor weights are multiplied by hand. A `weight` column becomes a factor | Factor weights in `ytr_factor_desc`, or a weight column kept out of the factors | posner |
 | F9 | trials.h:2267 | The data writer is bound to one session; blocks of different designs need a new session or a session-less writer | `ytr_data_rebind()`, or a note in DATA FILE | timed |
 | F10 | outline.h | A short word without pack/layout takes about 25 lines (also repeated in `trial_sternberg`) | `yol_text_path(ctx, font, utf8, size, &path)` and a shared bitmap fallback | posner |
-| F11 | gfx.h:11529 | The POLYLINE quad is symmetric about the stimulus origin: a path away from the origin costs twice (10.6 vs 5.1 ms for a 224-point chunk). Every pixel evaluates every segment | Center the quad on the path's box; a segment-instanced stroke primitive | copying |
-| F12 | gfx.h:6413 | The SIM backend ignores `yscr_desc.window_w/h` (800 x 600), so `--sim` geometry differs from a window run (also `trial_mouse_tracking`) | SIM takes the window size | visuomotor |
-
-## Docs
-
-| # | Where | Fix | From |
-|---|---|---|---|
-| D5 | gfx.h:541 | Trim (0, 0) means "whole": an animated trim from 0 shows the full path on its first frame | copying |
-| D7 | audio.h:339-360 | AUTO on Linux takes the card exclusively; through PulseAudio the format must match the sink (s16 here) | timed |
-| D8 | table.h | The per-table arena overhead is not stated (an 8-row, 1-column CSV needs 4560 bytes) | visuomotor |
+| F12b | gfx.h, ysp-vis | `ygfx_open()` on an open SIM screen cannot see the window size, so it stays `desc.width`/`height` or 800 x 600; ysp-vis opens its gfx this way | Report the SIM size in `yscr_caps.mode` (screen.h), or set it in the binding | gfx fix |
+| F16 | response.h, trials.h | `yrsp_data_set()` skips a caller's column by reading the data writer's private column record (`offset == YTR_UNBOUND`): two headers coupled through a private field | A public query in trials.h (is this column set per row?) | response fix |
+| F17 | gfx.h:541 | Trim (0, 0) means "whole" (documented in 0.18.0); an animated trim from 0 needs a workaround | A flag that marks an explicit trim, so (0, 0) with it is empty (changes the struct layout) | gfx fix |
+| F18 | examples | The examples write the screen's describe line at open, so its counters (key_time, raw_mice) are always 0 in the .meta file | Write the describe line again at close | user run, 2026-11-06 |
+| F11 | gfx.h | Every pixel of a POLYLINE chunk's quad evaluates every segment: 5841 points cost 51 ms of GPU a frame as chunks of 224, 1.8 ms as chunks of 16, and one LINE instance per segment 0.66 ms (Intel UHD 770 through Mesa 22.3.6, headless 1024 x 768: the ink benchmark ran on the iGPU surfaceless EGL picks, not the RX 6600; its 0.10 ms LINE row was an artifact of the row before it). The quad's centering on the path's box is done (gfx.h 0.18.0) | A segment-instanced stroke primitive | copying |
 
 ## Rejected
 

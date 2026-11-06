@@ -1,4 +1,4 @@
-/* ysp/gfx.h - v0.17.3 - public domain single-header stimulus graphics library
+/* ysp/gfx.h - v0.18.0 - public domain single-header stimulus graphics library
  *   (with MIT-licensed parts: see below)
  *
  *   Stimuli on GL ES 3.0, on top of ysp/screen.h: signed-distance shapes
@@ -476,6 +476,15 @@
  *               (at most 223; a curve that needs more is refused).
  *     POLYLINE  path = 2 to 224 points; [0] the width; join ROUND, MITER
  *               (with miter_limit) or BEVEL; cap BUTT, ROUND or SQUARE.
+ *               A point equal to the one before it is skipped (sampled
+ *               ink repeats points); a path whose points are all one is
+ *               refused.
+ *   A path's quad covers the path's own box, wherever the points lie
+ *   from the box center: a stroke chunk far from it costs the GPU what
+ *   one at the center does. (Before v0.18.0 the quad was symmetric about
+ *   the center: a chunk off to one side cost twice the fragments.) Every
+ *   pixel of the quad still tests every segment, so GPU time grows with
+ *   the points per chunk times the chunk's box (docs/gfx.md, "v0.18.0").
  *     POLYGON   shape_p[1] > 0 rounds every corner with a fillet of that
  *               radius, convex or concave.
  *   offset (px, every SHAPE, v0.2 kinds and glyph runs included) moves the
@@ -538,7 +547,12 @@
  *   dash_offset (px) moves the pattern along s, so a bound channel marches
  *   it; dash_snap fits a whole number of periods to a closed boundary.
  *   trim[0], trim[1] keep the part from start to end, as fractions of the
- *   length (0, 0 or 0, 1 = all). cap shapes the ends of dashes, of a
+ *   length (0, 0 or 0, 1 = all). As (0, 0) is all, a trim[1] animated
+ *   up from 0 shows the whole path on its first frame. Start it above 0
+ *   (1e-6), or hide the stimulus (visible 0) while trim[1] is 0. A trim
+ *   of zero length that is not (0, 0) draws nothing with cap BUTT, and
+ *   its two caps with ROUND or SQUARE: a dot or a square the band's width
+ *   across. cap shapes the ends of dashes, of a
  *   trimmed outline and of an open path: BUTT (flat, at the end), ROUND
  *   or SQUARE (half the band width past it). A dash's soft edge across s
  *   uses the same profile as the boundary. CROSS, masks and compounds have
@@ -929,7 +943,12 @@
  *   finish and ygfx_prime() in one call: the screen opens with the hook
  *   (sd->on_context must be NULL), the gfx finishes on it, the built-in
  *   kinds are primed. On a failure both handles are closed and
- *   ygfx_error() has the reason, the screen's too.
+ *   ygfx_error() has the reason, the screen's too. On the simulated
+ *   display (BACKEND_SIM, no pixels of its own) the scene takes the
+ *   window's size, sd->window_w and _h, unless gd->width and _height are
+ *   set; 800 x 600 when neither is. A --sim run then lays a trial out as
+ *   its window run does. (ygfx_open() on an open SIM screen cannot see
+ *   the window size: there it is desc.width, height or 800 x 600.)
  *   ygfx_show_until_key(&gfx, stims, n, keys, n_keys, max_ns, &key) is a
  *   frame loop for an instruction or a break screen: it draws the stimuli
  *   each frame until a press of one of the keys (SDL scancodes; none: any
@@ -1345,6 +1364,18 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.18.0 - Paths (POLYLINE, QBEZIER): a point equal to the one before
+ *          it is skipped; the draw failed (a pen at rest repeats its
+ *          sample). The quad is centered on the path's box, not on the
+ *          stimulus's center: 224-point chunks off to one side cost 5.1
+ *          ms of GPU a frame, was 10.6 (Intel UHD 770, headless; docs/
+ *          gfx.md "v0.18.0"); the bounds and the draw order's boxes are
+ *          the path's. Pixels move by float rounding only (1e-6). An
+ *          element template keeps its old quad. The program is unchanged.
+ *          ygfx_open_screen() on the simulated display takes the
+ *          window's size (sd->window_w, _h) unless gd->width, _height are
+ *          set (was 800 x 600): --sim geometry is the window run's. Docs:
+ *          trim (0, 0) is the whole path (DASHES AND TRIM).
  *   v0.17.3 - ysp/screen.h's METAL backend (v0.11.0) has GL's row 0 at the
  *          top of the screen, as DXGI_FLIP and COMPOSITION do: the origin
  *          follows it (BACKENDS). Not run on a shown macOS frame.
@@ -1887,9 +1918,9 @@
 #define YSP_GFX_H_INCLUDED
 
 #define YGFX_VERSION_MAJOR 0
-#define YGFX_VERSION_MINOR 17
-#define YGFX_VERSION_PATCH 3
-#define YGFX_VERSION_STRING "0.17.3"
+#define YGFX_VERSION_MINOR 18
+#define YGFX_VERSION_PATCH 0
+#define YGFX_VERSION_STRING "0.18.0"
 
 #include "ysp/screen.h"
 #include "ysp/color.h"
@@ -2117,7 +2148,9 @@ typedef struct ygfx_desc {
     yscr_proc   (*gl_proc)(void* ctx, const char* name);  /* headless: a GL ES
                                      * 3.0 context current on this thread       */
     void*           gl_ctx;
-    int32_t         width, height;  /* headless only: framebuffer 0's size      */
+    int32_t         width, height;  /* headless: framebuffer 0's size; SIM: 0 =
+                                     * the window's in ygfx_open_screen(), else
+                                     * 800 x 600; ignored with a mode          */
     float           background[3];  /* linear device RGB, 0..1; 0 = black       */
     ygfx_units    units;          /* 0 = PX                                   */
     ygfx_view     view;           /* DEG only                                 */
@@ -2418,7 +2451,7 @@ typedef struct ygfx_stim {
     float       dash[2];      /* px: dash and gap along the boundary; 0 = none   */
     float       dash_offset;  /* px along the boundary: march it                 */
     float       trim[2];      /* start, end as fractions of the length; 0, 0 =
-                               * the whole                                       */
+                               * the whole (DASHES AND TRIM: animating from 0) */
     uint8_t     cap;          /* ygfx_cap                                      */
     uint8_t     blend;        /* ygfx_blend_mode, color stimuli                */
     uint8_t     dash_snap;    /* closed boundaries: a whole number of periods    */
@@ -3530,7 +3563,7 @@ static const float* ygfx__gauss_table(void);   /* NOISE GAUSSIAN, further down *
 typedef struct ygfx__gn { uint32_t r[8], z[8]; int32_t w[8]; int n; } ygfx__gn;
 static const char* ygfx__gn_setup(const ygfx_gfx* g, const ygfx_stim* s, ygfx__gn* out);
 static uint32_t ygfx__vspec_pick(const ygfx_gfx* g, const float* b, uint32_t pipe);
-static int ygfx__vpack(const ygfx_gfx* g, const ygfx_stim* s, float* b, double ext[2], int* clipped, const char** err);
+static int ygfx__vpack(const ygfx_gfx* g, const ygfx_stim* s, float* b, double ext[2], double sh2[2], int* clipped, const char** err);
 static int ygfx__vhard(const float* b, double px, double py);
 static double ygfx__edge_reach(const ygfx_stim* s);
 /* v0.6: a run's packing, with the curve sets further down */
@@ -6410,7 +6443,8 @@ static bool ygfx__open_a(ygfx_gfx* g, const ygfx_desc* d) {
         if (!yscr_is_open(d->screen)) { ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: the screen is not open"); return false; }
         yscr_get_caps(d->screen, &sc);
         g->w = sc.mode.w; g->h = sc.mode.h;
-        /* The simulated display has no size: desc.width, height, or 800 x 600. */
+        /* The simulated display has no size: desc.width, height, or 800 x 600
+         * (ygfx_open_screen() fills them from the screen's window). */
         if (g->w <= 0 || g->h <= 0) { g->w = d->width > 0 ? d->width : 800; g->h = d->height > 0 ? d->height : 600; }
         /* ANGLE's client-buffer pbuffer puts GL's row 0 at the top of the
          * D3D texture (probe, docs/gfx.md), and its IOSurface pbuffer at the
@@ -7313,13 +7347,22 @@ static void ygfx__frame_px(const ygfx_gfx* g, const ygfx_stim* s, double W, doub
 
 /* For the pass being recorded: the scene is GL's bottom-up rows, a target's
  * rows are top first. */
-static void ygfx__place(const ygfx_gfx* g, const ygfx_stim* s, float out[4]) {
+/* The placement of a frame whose origin is at sh2 (px) in the stimulus
+ * frame: a vector path's, centered on its box (ygfx__vpack). */
+static void ygfx__place_at(const ygfx_gfx* g, const ygfx_stim* s, const double sh2[2], float out[4]) {
     double a[2], m[2], c, sn;
     ygfx__frame_px(g, s, (double)g->cur_w, (double)g->cur_h, a, m, &c, &sn);
+    m[0] += sh2[0] * c - sh2[1] * sn;
+    m[1] += sh2[0] * sn + sh2[1] * c;
     out[0] = (float)m[0];
     out[1] = g->cur_top ? (float)m[1] : (float)((double)g->cur_h - m[1]);
     out[2] = (float)c;
     out[3] = g->cur_top ? (float)sn : (float)-sn;
+}
+
+static void ygfx__place(const ygfx_gfx* g, const ygfx_stim* s, float out[4]) {
+    static const double zero[2] = { 0.0, 0.0 };
+    ygfx__place_at(g, s, zero, out);
 }
 
 YGFX_API void ygfx_center(const ygfx_gfx* g, float* x, float* y) {
@@ -7368,10 +7411,14 @@ YGFX_API void ygfx_bounds(const ygfx_gfx* g, const ygfx_stim* s, float* x0, floa
         shape = ygfx__geom(g, s, &hx, &hy, sp);
         if (ygfx__is_vector(s)) {
             float blk[16 * 64];
-            double e2[2];
+            double e2[2], sh2[2];
             const char* err;
             int clip;
-            if (ygfx__vpack(g, s, blk, e2, &clip, &err) >= 0) { hx = (float)e2[0]; hy = (float)e2[1]; }
+            if (ygfx__vpack(g, s, blk, e2, sh2, &clip, &err) >= 0) {
+                hx = (float)e2[0]; hy = (float)e2[1];
+                m[0] += sh2[0] * c - sh2[1] * sn;
+                m[1] += sh2[0] * sn + sh2[1] * c;
+            }
         } else if (s->kind == YGFX_DOTS) {
             float r = 0.5f * s->dot_size + ygfx__outer(s, YGFX_CIRCLE);
             hx += r; hy += r;
@@ -7561,11 +7608,11 @@ YGFX_API bool ygfx_hit(const ygfx_gfx* g, const ygfx_stim* s, float px, float py
     ygfx_local(g, s, px, py, &lx, &ly);
     if (ygfx__is_vector(s)) {   /* the vector program's field, on the CPU */
         float blk[16 * 64];
-        double ext[2];
+        double ext[2], sh2[2];
         const char* err;
         int clip;
-        if (ygfx__vpack(g, s, blk, ext, &clip, &err) < 0) return false;
-        return ygfx__vhard(blk, lx, ly) != 0;
+        if (ygfx__vpack(g, s, blk, ext, sh2, &clip, &err) < 0) return false;
+        return ygfx__vhard(blk, lx - sh2[0], ly - sh2[1]) != 0;
     }
     shape = ygfx__geom(g, s, &hx, &hy, sp);
     if (shape == YGFX_MASK_TEX) return false;   /* its distances live on the GPU */
@@ -7666,12 +7713,12 @@ static uint32_t ygfx__pack(ygfx_gfx* g, const ygfx_stim* s, float* b, ygfx__cmd*
     if (s->kind != YGFX_SHAPE && (s->offset != 0.0f || s->dash[0] > 0.0f || ygfx__trimmed(s) || s->fx || s->paint || s->prims))
         return ygfx__refuse(g, why, YGFX_ERR_ARG, "offset, dashes, trim, fx, paint and prims are SHAPE fields");
     if (ygfx__is_vector(s)) {   /* the vector program: its own block layout */
-        double ext[2];
+        double ext[2], sh2[2];
         const char* err = "";
         int clip = 0, n;
-        ygfx__place(g, s, b);
-        n = ygfx__vpack(g, s, b, ext, &clip, &err);
+        n = ygfx__vpack(g, s, b, ext, sh2, &clip, &err);
         if (n < 0) return ygfx__refuse(g, why, n, err);
+        ygfx__place_at(g, s, sh2, b);
         cmd->nblk = (uint32_t)n;
         g->clipped += (uint32_t)clip;
         if (!s->paint || s->paint->kind == YGFX_PAINT_SOLID)
@@ -11398,8 +11445,8 @@ static void ygfx__from_space(const ygfx_gfx* g, int space, const double c[3], do
 
 /* The paint block: header, geometry, colors from vec4 2 (stops or the
  * vertices'), and from vec4 18 the space's matrix rows. */
-static int ygfx__vpaint(const ygfx_gfx* g, const ygfx_stim* s, const ygfx_paint* pt, double ppu, float* vd, int o,
-                          int poly_g0, int* used, int* clipped, const char** err) {
+static int ygfx__vpaint(const ygfx_gfx* g, const ygfx_stim* s, const ygfx_paint* pt, double ppu, const double sh2[2], float* vd,
+                          int o, int poly_g0, int* used, int* clipped, const char** err) {
     int n = pt->n, k, j, clip = 0;
     double c[3], prev_az = 0.0;
     if (pt->kind < YGFX_PAINT_LINEAR || pt->kind > YGFX_PAINT_VERTEX || pt->space > YGFX_SPACE_DKL_POLAR) {
@@ -11423,12 +11470,14 @@ static int ygfx__vpaint(const ygfx_gfx* g, const ygfx_stim* s, const ygfx_paint*
         if (!ygfx__vput(vd, o + 1, poly_g0, r > 0.0 ? 1.0 / r : 1.0, 0, 0)) return YGFX_ERR_FULL;
     } else if (pt->kind == YGFX_PAINT_RADIAL) {
         if (!(pt->x1 > 0.0f)) { *err = "a radial paint needs a radius"; return YGFX_ERR_ARG; }
-        if (!ygfx__vput(vd, o + 1, pt->x0 * ppu, pt->y0 * ppu, pt->x1 * ppu, 0)) return YGFX_ERR_FULL;
+        if (!ygfx__vput(vd, o + 1, pt->x0 * ppu - sh2[0], pt->y0 * ppu - sh2[1], pt->x1 * ppu, 0)) return YGFX_ERR_FULL;
     } else if (pt->kind == YGFX_PAINT_ANGULAR) {
-        if (!ygfx__vput(vd, o + 1, pt->x0 * ppu, pt->y0 * ppu, (double)pt->x1 * YGFX__PI / 180.0, 0)) return YGFX_ERR_FULL;
+        if (!ygfx__vput(vd, o + 1, pt->x0 * ppu - sh2[0], pt->y0 * ppu - sh2[1], (double)pt->x1 * YGFX__PI / 180.0, 0))
+            return YGFX_ERR_FULL;
     } else {
         if (pt->x0 == pt->x1 && pt->y0 == pt->y1) { *err = "a linear paint needs two points"; return YGFX_ERR_ARG; }
-        if (!ygfx__vput(vd, o + 1, pt->x0 * ppu, pt->y0 * ppu, pt->x1 * ppu, pt->y1 * ppu)) return YGFX_ERR_FULL;
+        if (!ygfx__vput(vd, o + 1, pt->x0 * ppu - sh2[0], pt->y0 * ppu - sh2[1], pt->x1 * ppu - sh2[0], pt->y1 * ppu - sh2[1]))
+            return YGFX_ERR_FULL;
     }
     for (k = 0; k < n; k++) {
         const float* rgb = pt->kind == YGFX_PAINT_VERTEX ? pt->vertex_colors + 3 * k : pt->stops[k].color;
@@ -11469,14 +11518,17 @@ static int ygfx__vpaint(const ygfx_gfx* g, const ygfx_stim* s, const ygfx_paint*
 /* Packs a vector stimulus: its block from vec4 1 (vec4 0, the placement,
  * is the caller's) and the data region after it. Returns the blocks used,
  * or a negative code with *err set. ext gets the content's half extents
- * px (the bounds), before edges and effects. */
-static int ygfx__vpack(const ygfx_gfx* g, const ygfx_stim* s, float* b, double ext[2], int* clipped, const char** err) {
+ * px (the bounds), before edges and effects, about sh2: the packed
+ * frame's origin in the stimulus frame, px (0, 0 except for a path), which
+ * the placement must move to (ygfx__place_at). */
+static int ygfx__vpack(const ygfx_gfx* g, const ygfx_stim* s, float* b, double ext[2], double sh2[2], int* clipped, const char** err) {
     const double ppu = (double)g->ppu * ygfx__scale(s), er = ygfx__edge_reach(s);
     float* vd = b + 36;
     int nd = 0, np = 0, fl = 0, i, rc, pathlike = 0, kindv = 0, poly_g0 = -1;
     double L = -1.0, qx = 0.0, qy = 0.0, phw = 0.0, kmax = 0.0, a1 = 0.0, a2 = 0.0, outer, reach, gate;
     *err = "";
     *clipped = 0;
+    sh2[0] = sh2[1] = 0.0;
     memset(b + 4, 0, (size_t)(16 * 64 - 4) * sizeof(float));
     if (s->join != YGFX_JOIN_ROUND && s->shape != YGFX_POLYLINE) {
         *err = "MITER and BEVEL in the vector program: POLYLINE only"; return YGFX_ERR_ARG;
@@ -11519,57 +11571,69 @@ static int ygfx__vpack(const ygfx_gfx* g, const ygfx_stim* s, float* b, double e
             kindv = 4; poly_g0 = 4; nd = 4 + 3 * (int)s->shape_p[0];
             qx = e2[0]; qy = e2[1];
         } else if (sh == YGFX_POLYLINE || sh == YGFX_QBEZIER) {
-            int n = (int)s->n_path, k;
+            double pt[2 * YGFX_MAX_PATH], x0 = 1e300, x1 = -1e300, y0 = 1e300, y1 = -1e300, px = 0.0, py = 0.0;
+            int n = (int)s->n_path, k, m = 0;
             double hw = 0.5 * s->shape_p[0] * ppu, sacc = 0.0, lim = s->miter_limit > 0.0f ? s->miter_limit : 4.0;
             if (!s->path || hw <= 0.0 || (sh == YGFX_QBEZIER ? n != 3 : (n < 2 || n > YGFX_MAX_PATH))) {
                 *err = "a path needs points (QBEZIER 3, POLYLINE 2 to 224) and a width"; return YGFX_ERR_ARG;
             }
-            for (k = 0; k < n; k++) {
-                double x = (double)s->path[2 * k] * ppu, y = (double)s->path[2 * k + 1] * ppu;
-                if (fabs(x) > qx) qx = fabs(x);
-                if (fabs(y) > qy) qy = fabs(y);
-            }
             if (sh == YGFX_POLYLINE) {
-                for (k = 0; k < n; k++) {
-                    double x = (double)s->path[2 * k] * ppu, y = (double)s->path[2 * k + 1] * ppu;
-                    if (k > 0) {
-                        double dx = x - (double)s->path[2 * k - 2] * ppu, dy = y - (double)s->path[2 * k - 1] * ppu, l = sqrt(dx * dx + dy * dy);
-                        if (l == 0.0) { *err = "a polyline with a repeated point"; return YGFX_ERR_ARG; }
-                        sacc += l;
-                    }
-                    ygfx__vput(vd, 4 + k, x, y, sacc, 0.0);
-                }
-                C[0] = C[1] = 0.0f; C[2] = (float)hw; C[3] = (float)s->join;
-                D[0] = (float)lim; D[1] = (float)s->cap; D[2] = 4.0f; D[3] = (float)n;
-                kindv = 16; nd = 4 + n;
-                hw *= s->join == YGFX_JOIN_MITER ? lim : 1.0;
+                for (k = 0; k < n; k++) { pt[2 * k] = (double)s->path[2 * k] * ppu; pt[2 * k + 1] = (double)s->path[2 * k + 1] * ppu; }
             } else {
                 double Ax = s->path[0] * ppu, Ay = s->path[1] * ppu, Bx = s->path[2] * ppu, By = s->path[3] * ppu;
                 double Cx = s->path[4] * ppu, Cy = s->path[5] * ppu, bx = Ax - 2.0 * Bx + Cx, by = Ay - 2.0 * By + Cy;
-                double px = Ax, py = Ay;
-                int q, m;
+                int q;
                 /* Chords on the CPU, drawn as a polyline with round joins: a
                  * chord over dt leaves the curve by at most |b| dt^2 / 4, b =
                  * A - 2B + C, so m chords keep it within 0.005 px. (IQ's
                  * closed form plus a Newton step held 4e-5 px but doubled the
                  * vector program's compile time through ANGLE.) */
-                m = (int)ceil(sqrt(sqrt(bx * bx + by * by) / (4.0 * 0.005)));
-                if (m < 1) m = 1;
-                if (m > YGFX_MAX_PATH - 1) { *err = "a Bezier this curved needs more than 223 chords at 0.005 px"; return YGFX_ERR_ARG; }
+                n = (int)ceil(sqrt(sqrt(bx * bx + by * by) / (4.0 * 0.005)));
+                if (n < 1) n = 1;
+                if (n > YGFX_MAX_PATH - 1) { *err = "a Bezier this curved needs more than 223 chords at 0.005 px"; return YGFX_ERR_ARG; }
                 if ((Bx - Ax) * (Bx - Ax) + (By - Ay) * (By - Ay) == 0.0 && (Cx - Bx) * (Cx - Bx) + (Cy - By) * (Cy - By) == 0.0) {
                     *err = "a Bezier with no length"; return YGFX_ERR_ARG;
                 }
-                for (q = 0; q <= m; q++) {
-                    double t = (double)q / m, x = (1 - t) * (1 - t) * Ax + 2 * (1 - t) * t * Bx + t * t * Cx;
-                    double y = (1 - t) * (1 - t) * Ay + 2 * (1 - t) * t * By + t * t * Cy;
-                    if (q > 0) sacc += sqrt((x - px) * (x - px) + (y - py) * (y - py));
-                    ygfx__vput(vd, 4 + q, x, y, sacc, 0.0);
-                    px = x; py = y;
+                for (q = 0; q <= n; q++) {
+                    double t = (double)q / n;
+                    pt[2 * q] = (1 - t) * (1 - t) * Ax + 2 * (1 - t) * t * Bx + t * t * Cx;
+                    pt[2 * q + 1] = (1 - t) * (1 - t) * Ay + 2 * (1 - t) * t * By + t * t * Cy;
                 }
-                C[0] = C[1] = 0.0f; C[2] = (float)hw; C[3] = (float)YGFX_JOIN_ROUND;
-                D[0] = 4.0f; D[1] = (float)s->cap; D[2] = 4.0f; D[3] = (float)(m + 1);
-                kindv = 16; nd = 5 + m;
+                n++;
             }
+            /* The quad is centered on the path's box, not on the origin: a
+             * path away from the origin paid for the empty mirror half (10.6
+             * against 5.1 ms of GPU for 224 points, docs/gfx.md, "v0.18.0").
+             * An element template keeps the origin: its element's center
+             * comes from the anchor alone. */
+            for (k = 0; k < n; k++) {
+                double x = pt[2 * k], y = pt[2 * k + 1];
+                if (x < x0) x0 = x;
+                if (x > x1) x1 = x;
+                if (y < y0) y0 = y;
+                if (y > y1) y1 = y;
+            }
+            if (!(s->inst && s->n_inst)) { sh2[0] = 0.5 * (x0 + x1); sh2[1] = 0.5 * (y0 + y1); }
+            qx = fmax(fabs(x0 - sh2[0]), fabs(x1 - sh2[0]));
+            qy = fmax(fabs(y0 - sh2[1]), fabs(y1 - sh2[1]));
+            /* A repeated point has no direction to join or cap by: it is
+             * skipped (sampled ink repeats points while the pen rests). */
+            for (k = 0; k < n; k++) {
+                double x = pt[2 * k], y = pt[2 * k + 1];
+                if (m > 0) {
+                    double l = sqrt((x - px) * (x - px) + (y - py) * (y - py));
+                    if (l == 0.0) continue;
+                    sacc += l;
+                }
+                ygfx__vput(vd, 4 + m, x - sh2[0], y - sh2[1], sacc, 0.0);
+                px = x; py = y; m++;
+            }
+            if (m < 2) { *err = "a path with no length (all its points are one)"; return YGFX_ERR_ARG; }
+            C[0] = C[1] = 0.0f; C[2] = (float)hw;
+            C[3] = (float)(sh == YGFX_POLYLINE ? (int)s->join : (int)YGFX_JOIN_ROUND);
+            D[0] = sh == YGFX_POLYLINE ? (float)lim : 4.0f; D[1] = (float)s->cap; D[2] = 4.0f; D[3] = (float)m;
+            kindv = 16; nd = 4 + m;
+            if (sh == YGFX_POLYLINE && s->join == YGFX_JOIN_MITER) hw *= lim;
             L = sacc; phw = 0.5 * s->shape_p[0] * ppu; pathlike = 1;
             qx += hw + (s->cap == YGFX_CAP_SQUARE ? phw : 0.0);
             qy += hw + (s->cap == YGFX_CAP_SQUARE ? phw : 0.0);
@@ -11670,7 +11734,7 @@ static int ygfx__vpack(const ygfx_gfx* g, const ygfx_stim* s, float* b, double e
     }
     if (s->paint && s->paint->kind != YGFX_PAINT_SOLID) {
         int used = 0;
-        rc = ygfx__vpaint(g, s, s->paint, ppu, vd, nd, poly_g0, &used, clipped, err);
+        rc = ygfx__vpaint(g, s, s->paint, ppu, sh2, vd, nd, poly_g0, &used, clipped, err);
         if (rc < 0) return rc;
         b[33] = (float)nd;
         nd += used;
@@ -11853,7 +11917,7 @@ YGFX_API const ygfx_param* ygfx_paint_params(int* n) {
 
 YGFX_API double ygfx_length(const ygfx_gfx* g, const ygfx_stim* s) {
     float blk[16 * 64];
-    double ext[2];
+    double ext[2], sh2[2];
     const char* err;
     int clip, n;
     ygfx_stim t;
@@ -11865,7 +11929,7 @@ YGFX_API double ygfx_length(const ygfx_gfx* g, const ygfx_stim* s) {
     t.join = YGFX_JOIN_ROUND; t.shape_p[1] = t.shape == YGFX_POLYGON && t.shape_p[1] <= 0.0f ? 0.0f : t.shape_p[1];
     t.dash[0] = 1.0f; t.dash[1] = 1.0f; t.dash_snap = 0;
     if (t.stroke <= 0.0f) t.stroke = 1.0f;   /* a length needs no stroke; the pack asks for one */
-    n = ygfx__vpack(g, &t, blk, ext, &clip, &err);
+    n = ygfx__vpack(g, &t, blk, ext, sh2, &clip, &err);
     if (n < 0) return n;
     return (double)blk[19];
 }
@@ -12263,6 +12327,11 @@ YGFX_API bool ygfx_open_screen(ygfx_gfx* g, yscr_screen* s, const yscr_desc* sd,
     }
     if (sd) d = *sd; else memset(&d, 0, sizeof d);
     if (gd) c.d = *gd; else memset(&c.d, 0, sizeof c.d);
+    /* A simulated display has no size: it takes the window's, so a --sim
+     * run lays a trial out as the window run does. A screen with a mode
+     * ignores desc.width and height. */
+    if (c.d.width <= 0 && d.window_w > 0) c.d.width = d.window_w;
+    if (c.d.height <= 0 && d.window_h > 0) c.d.height = d.window_h;
     if (d.on_context) {
         ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: ygfx_open_screen: sd->on_context is set; "
                         "open with yscr_open() and call ygfx_open_start() from that hook");

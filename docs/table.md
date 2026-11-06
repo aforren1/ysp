@@ -217,6 +217,39 @@ and twice. The fuzz target builds against the new names.
   (the view refuses the widest block) are caught. The pinned block hash
   did not move.
 
+## The arena's fixed part (v0.3.1)
+
+`trial_visuomotor` gave a static arena of 8 KB to an 8-row, 1-column
+conditions file, after a first guess of a few hundred bytes failed: the
+parse needed 4560 bytes for a 34-byte file. MEMORY AND COST said "about
+24 bytes per cell plus three times the input", which hides a fixed part.
+From the parse's `need` sum (`ytb_open_csv()`, the line that sets
+`tab->need`):
+
+- Fixed, 4232 bytes: a field's scratch (`YTB_MAX_FIELD` + 8 = 4104),
+  the 48-byte block header, the smallest hash table (16 slots of 4
+  bytes) and 16 bytes of slack.
+- Per cell, about 26 bytes: an 8-byte scan entry, a 16-byte level and a
+  2-byte level number (the header's names are cells too).
+- Per column 32 bytes, per row 8 to 16 (the hash table, 2 slots a row
+  rounded up to a power of two, one column at a time), and the unquoted
+  text twice (the scan's pool and the block's).
+
+Measured (gcc 12.2, Linux desktop, 2026-11-06), `tab.need` with `arena`
+NULL, then a parse at exactly `need` (passes) and at `need` - 1 (fails):
+
+| Input | Bytes | `need` | Block |
+|---|---|---|---|
+| 1 row, 1 column | 4 | 4320 | 112 |
+| 8 rows, 1 column (`trial_visuomotor`) | 34 | 4560 | 264 |
+| 10 rows, 4 columns, 13 levels | 103 | 5720 | 1016 |
+| 100 rows, 4 columns, 13 levels | 905 | 17576 | 1936 |
+| 1000 rows, 8 columns, 13 levels | 17869 | 256424 | 18224 |
+
+So a small file's arena is mostly the fixed part. The header now states
+it (MEMORY AND COST); nothing in the parse changed. `tests/adapt/
+table_test.c` pins the first two rows of the table.
+
 ## Not done
 
 - No big-endian host: parse and view refuse with a message. No supported

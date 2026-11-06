@@ -3294,6 +3294,16 @@ default card's first device), and the refusal under
 not exclusive, no suspension, no resume, no 32-bit request, the card's
 last device.
 
+v0.9.1 (2026-11-06, documentation only): `trial_timed_response`
+(examples/response/) found both rules the hard way. Run with no backend
+on the Linux desktop, it took the card, and the desktop's sound stopped
+for the run; with `YAU_BACKEND_PULSE` it was refused until it asked for
+`YAU_S16`, because the sink is `s16le` ("Linux: first runs"). The
+header's BACKENDS now says both where a reader chooses a backend: AUTO
+takes the card for the program alone, and through PulseAudio the
+project's resolution must not pass the sink's (`desc.format.sample =
+YAU_S16`, or `default-sample-format = float32le` in `daemon.conf`).
+
 ## Linux: capture (v0.9.0)
 
 Until this section the capture had not run on Linux. v0.5.0's code there

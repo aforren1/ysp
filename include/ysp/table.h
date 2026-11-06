@@ -1,4 +1,4 @@
-/* ysp/table.h - v0.3.0 - public domain single-header typed tables
+/* ysp/table.h - v0.3.1 - public domain single-header typed tables
  *
  *   A table of rows and named, typed columns, as one read-only block of
  *   bytes: conditions files, trial lists, event lists. A CSV parser with
@@ -204,11 +204,20 @@
  *   desc.arena (8-byte aligned) and uses the space after it as scratch: an
  *   8-byte entry per cell (at the arena's top, written while scanning), the
  *   unquoted text, and a hash table per column in turn. tab.need is set
- *   once the input is scanned (with arena NULL the call only sets it): about
- *   24 bytes per cell plus three times the input. The finished block is
- *   tab.size bytes, 2 bytes per cell plus 16 per level plus the text; the
- *   arena space after it is free again. Two passes over the input (scan,
- *   then write a column at a time).
+ *   once the input is scanned (with arena NULL the call only sets it).
+ *   Every table needs 4232 bytes whatever its size: a field's scratch of
+ *   YTB_MAX_FIELD + 8 bytes, the 48-byte block header, the smallest hash
+ *   table (64 bytes) and 16 bytes of slack. On top of that, about 26 bytes
+ *   per cell (the header's names count as cells), 32 per column, 8 to 16
+ *   per row and twice the input. Measured: 1 row and 1 column need 4320
+ *   bytes, 8 rows and 1 column 4560 (a 34-byte file), 100 rows and 4
+ *   columns 17576 (905 bytes). So a small conditions file needs an arena
+ *   of 5 KB or more, not a few hundred bytes; ask with arena NULL first,
+ *   or give the static arena 4 KB more than the estimate. The finished
+ *   block is tab.size bytes, 2 bytes per cell plus 16 per level plus the
+ *   text (264 bytes for the 8-row file); the arena space after it is free
+ *   again. Two passes over the input (scan, then write a column at a
+ *   time).
  *
  *   ---------------------------------------------------------------------
  *   FILE LOADER (YTB_STDIO)
@@ -228,6 +237,10 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.3.1 - Documentation only (MEMORY AND COST): the arena's fixed 4232
+ *          bytes per table, measured, and the per-cell, per-row and input
+ *          terms, which replace "about 24 bytes per cell plus three times
+ *          the input".
  *   v0.3.0 - YTB_MAX_COLUMNS is 256 (was 64): a trial row with many
  *          recorded stimuli is wider than 64 columns (docs/
  *          experiment_format.md, gap G10), and ysp/trials.h's writer keeps
@@ -291,8 +304,8 @@
 
 #define YTB_VERSION_MAJOR 0
 #define YTB_VERSION_MINOR 3
-#define YTB_VERSION_PATCH 0
-#define YTB_VERSION_STRING "0.3.0"
+#define YTB_VERSION_PATCH 1
+#define YTB_VERSION_STRING "0.3.1"
 
 #include <stdint.h>
 #include <stdbool.h>
