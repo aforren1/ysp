@@ -883,9 +883,12 @@ busy`. macOS let that reopen through.
 
 Checked on 2026-11-06 on the M2 Mac mini (macOS 27.0.1):
 `tests/adapt/serial_test.c` passes (12 checks); the full suite passes,
-94 of 94. Mutants `ser-02` and `ser-03` (platform linux) were added and not
-run: no Linux machine is here, and CI does not run the mutation lists.
-The CI Linux jobs run the test.
+94 of 94. On Linux, in an Ubuntu 24.04 arm64 container (Apple's
+`container` 1.6.1 on the same Mac, gcc, an unprivileged user: root may
+reopen an exclusive tty, so the defect does not show as root): v0.6.3
+fails the test as CI did ("an exclusive open after the close", `EBUSY`),
+v0.7.0 passes (11 checks), and mutants `ser-02` and `ser-03` (platform
+linux) are killed.
 
 ## Compared with MATLAB serialport and IOPort
 
