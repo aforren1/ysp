@@ -70,3 +70,6 @@ CMakeUserPresets.json
 /.claude/worktrees/
 # The rigfile tests write here when run from the repo root.
 rig_test_work/
+
+# scratch/temporary files
+scratch/
