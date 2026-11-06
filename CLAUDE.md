@@ -48,7 +48,10 @@ the compile checks, and its mutation list
 run the mutants you add). Parsers of untrusted input get a fuzz target.
 A change to a struct's layout or to a function a bindings/share table
 carries bumps at least the minor version (consumers accept another patch).
-CI is `.github/workflows/ci.yml`.
+Most Python bindings report their header's version as `__version__`, so
+any bump, documentation only too, also bumps the binding's
+`pyproject.toml` (`test_version_matches_pyproject`); run that binding's
+tests. CI is `.github/workflows/ci.yml`.
 
 ## Building
 
