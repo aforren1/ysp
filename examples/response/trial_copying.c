@@ -48,11 +48,13 @@
  * tablets". NOT verified with a tablet. The stroke is the offset from where
  * it started, so a pen inks from the starting point wherever it touches.
  *
- * Ink. A growing stroke is POLYLINE chunks of 32 points, each centered on
- * its own bounding box: the vector program evaluates every segment of a
- * polyline at every pixel of its quad. Measured on an AMD RX 6600 (Mesa,
- * headless 1024 x 768, 2026-11-06): a 900 px stroke as chunks of 32 takes
- * 0.6 ms of GPU a frame; as chunks of 224 centered on the box, 10.6 ms.
+ * Ink. A growing stroke is POLYLINE chunks of 32 points: the vector
+ * program evaluates every segment of a polyline at every pixel of its
+ * quad, so short chunks keep that product small. Measured on an Intel UHD
+ * 770 (Mesa 22.3.6, headless 1024 x 768, 2026-11-06; not the RX 6600): a
+ * 900 px stroke as chunks of 32 takes 0.6 ms of GPU a frame; as chunks of
+ * 224, 5.1 ms (10.6 ms before ysp/gfx.h 0.18.0 centered the quad on the
+ * path's box).
  *
  * Data. --out, a row per trial: block, trial (0..4), kind (copy, track),
  * rotation, pattern, rt_s (the stroke's start from the starting point's
@@ -313,7 +315,7 @@ static void place(int i, int deg, int rev, double cx, double cy, poly* d) {
 
 static void poly_add(poly* p, float x, float y) {
     float l = p->n ? hypotf(x - p->pt[p->n - 1][0], y - p->pt[p->n - 1][1]) : 0;
-    if (p->n >= MAX_PTS || (p->n && l < INK_STEP)) return;   /* a polyline refuses a repeated point */
+    if (p->n >= MAX_PTS || (p->n && l < INK_STEP)) return;   /* fewer segments per pixel */
     p->pt[p->n][0] = x;
     p->pt[p->n][1] = y;
     p->s[p->n] = p->n ? p->s[p->n - 1] + l : 0;
@@ -451,10 +453,11 @@ static struct {
     int n_pts;
 } script;
 
-/* One event through the adapter a real run uses, stamped SIM. */
+/* One event through the screen's path a real run uses (its key filter and
+ * synthetic-mouse rule), stamped SIM. */
 static void sim_sdl(SDL_Event* e, int64_t t) {
     yrsp_input in;
-    if (yin_from_sdl(e, t, NULL, &in)) {
+    if (yscr_event_input_at(&scr, e, t, &in)) {
         in.stamp = YRSP_TIER_SIM;
         input(&in, 0);
     }
