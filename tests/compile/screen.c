@@ -79,6 +79,34 @@ int main(void) {
     if (g_api.wait_flip(&s, NULL) != YSCR_OK || g_api.begin(&s, &f) != YSCR_OK) return 10;
     if (g_api.begin(&s, &f) != YSCR_ERR_ORDER || !strstr(g_api.error(&s), "begin")) return 11;
     if (g_api.flip(&s) != YSCR_OK) return 12;
+    {   /* v0.18.0: a program's own SDL events at its time on SIM, where
+         * yscr_event_input() has no clock map; a pen's mouse button only
+         * with desc.keep_synthetic */
+        SDL_Event ev;
+        yin_event in;
+        yscr_screen k;
+        memset(&ev, 0, sizeof ev);
+        ev.type = SDL_EVENT_PEN_MOTION;
+        ev.pmotion.which = 7;
+        ev.pmotion.x = 10.0f;
+        if (!yscr_event_input_at(&s, &ev, 12345, &in) || in.t != 12345 || in.kind != YIN_KIND_PEN) return 16;
+        if (!yscr_event_input(&s, &ev, &in) || in.t != 0) return 17;
+        memset(&ev, 0, sizeof ev);
+        ev.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+        ev.button.which = SDL_PEN_MOUSEID;
+        ev.button.button = 1;
+        ev.button.down = true;
+        if (yscr_event_input_at(&s, &ev, 12345, &in) || yscr_event_input(&s, &ev, &in)) return 18;
+        memset(&k, 0, sizeof k);
+        memset(&d, 0, sizeof d);
+        d.backend = YSCR_BACKEND_SIM;
+        d.keep_synthetic = true;
+        if (!yscr_open(&k, &d)) return 19;
+        if (!yscr_event_input_at(&k, &ev, 12345, &in) || in.t != 12345 || !(in.flags & YIN_SYNTHETIC) ||
+            in.kind != YIN_KIND_MOUSE || in.type != YIN_PRESS)
+            return 20;
+        yscr_close(&k);
+    }
     yscr_close(&s);
 #if !defined(__EMSCRIPTEN__)
     memset(&d, 0, sizeof d);

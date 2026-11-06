@@ -724,9 +724,12 @@ v0.8.1), and `ysp-audio` is 0.7.2, the header's. The adaptive MEX
 functions and `ysp_color` have no number of their own: `'version'`
 returns the header's.
 
-`ysp-vis` is 0.17.0.1 (2026-11-06: the binding on Linux X11, with the open
-options `backend="glx_oml"`, `x_display` and `x11_override_redirect`;
-0.17.0, 2026-11-05, was `ysp/screen.h` 0.17.0, the Linux X11 backend, with
+`ysp-vis` is 0.18.0 (2026-11-06: `ysp/screen.h` 0.18.0, whose new
+`desc.keep_synthetic`, `yscr_event_input_at()` and Linux `raw_mice`
+counts the binding does not use; pen events now carry SDL's `pen_state`
+in the event's `code` (`ysp/input.h` 0.6.0). 0.17.0.1 was the binding on
+Linux X11, with the open options `backend="glx_oml"`, `x_display` and
+`x11_override_redirect`; 0.17.0, 2026-11-05, was `ysp/screen.h` 0.17.0, the Linux X11 backend, with
 no change to the binding's calls): one distribution for three headers,
 so its version tracks `ysp/screen.h`'s, and a release for a change of
 `ysp/gfx.h` or `ysp/video.h` alone, or of the binding alone, adds the

@@ -18,7 +18,11 @@
  *      before to 1 ms after the injection (SDL's own stamp is the next
  *      frame's pump, 8 to 17 ms later); one of 20 may be late (the server
  *      handled the request late in 2 of 10 runs). Skipped without libXtst
- *      or focus.
+ *      or focus. Then 20 left clicks through XTEST at the window's center
+ *      (v0.18.0): each comes back with SDL's stamp, its pump's time, not
+ *      before the injection, and with the per-event tier ysp/input.h gives
+ *      its `which` (XTEST's are 0, the core pointer's: tier 3); the
+ *      stamps' spread is printed (ysp/input.h's Linux mouse bounds).
  *   5. With vblank_mode=0 in the environment, open() refuses.
  *   6. In an 800 x 600 window (the Present copy path): depth 1, so 60
  *      frames each show on the next vblank, tier 2.
@@ -53,7 +57,13 @@
  *      focus: each press comes from yscr_event_input() with the kernel's
  *      time (inside the write()), SDL's id of that mouse (not UNLISTED),
  *      the left button, and the move. With the focus moved to the root
- *      window, 5 more clicks give nothing. Skipped like part 11.
+ *      window, 5 more clicks give nothing. The describe line's raw_mice=
+ *      counts at least the 40 reports, 10 dropped without the focus and
+ *      no SYN_DROPPED (v0.18.0). Skipped like part 11.
+ *
+ *   0. With no display (v0.18.0): on SIM, yscr_event_input_at() gives an
+ *      SDL event the caller's time, and desc.keep_synthetic keeps a pen's
+ *      mouse button, flagged YIN_SYNTHETIC; without it, it is dropped.
  *
  * Exit 0 on pass, 1 on a failed check; 0 with "SKIP" when there is no X
  * display or the backend does not open (no SDL X11 driver, no DRI3). With
@@ -145,6 +155,78 @@ static int xtest_keys(yscr_screen* s, int* received) {
             t_inj = (int64_t)yrt_now_ns();
             fake_key(dpy, 192, 1, 0);
             fake_key(dpy, 192, 0, 0);
+            flush(dpy);
+            give_up = t_inj + 500000000;
+            waiting = 1;
+            injected++;
+        }
+        clear(s);
+        yscr_flip(s);
+    }
+    close_display(dpy);
+    return injected == 0 ? -1 : ok;
+}
+
+/* Part 4, mouse buttons. SDL 3.4.18 stamps an X11 button with
+ * SDL_GetTicksNS() when its pump reads it (X11_GetEventTimestamp() in
+ * src/video/x11/SDL_x11events.c), and the header keeps that stamp. 20 left
+ * clicks through XTEST at the window's center, at phases 0 to 15 ms after
+ * the frame's poll. Returns the presses whose stamp is not before the
+ * injection, or -1 when XTEST or the focus is missing; lo, hi, sum: stamp
+ * minus injection, ns, over the presses received. */
+static int xtest_buttons(yscr_screen* s, int* received, int64_t* lo, int64_t* hi, int64_t* sum, int* stamp0,
+                         int* which0) {
+    void* (*open_display)(const char*) = NULL;
+    int (*close_display)(void*) = NULL;
+    int (*flush)(void*) = NULL;
+    int (*fake_button)(void*, unsigned int, int, unsigned long) = NULL;
+    int (*fake_motion)(void*, int, int, int, unsigned long) = NULL;
+    void *x11 = dlopen("libX11.so.6", RTLD_NOW | RTLD_GLOBAL), *xtst = dlopen("libXtst.so.6", RTLD_NOW), *p, *dpy;
+    int injected = 0, ok = 0, waiting = 0, w = 0, h = 0, moved = 0;
+    int64_t t_inj = 0, give_up = 0, end = (int64_t)yrt_now_ns() + 10000000000LL;
+    *received = 0;
+    *lo = INT64_MAX; *hi = INT64_MIN; *sum = 0; *stamp0 = *which0 = 0;
+    if (!x11 || !xtst) return -1;
+    p = dlsym(x11, "XOpenDisplay");  memcpy(&open_display, &p, sizeof p);
+    p = dlsym(x11, "XCloseDisplay"); memcpy(&close_display, &p, sizeof p);
+    p = dlsym(x11, "XFlush");        memcpy(&flush, &p, sizeof p);
+    p = dlsym(xtst, "XTestFakeButtonEvent"); memcpy(&fake_button, &p, sizeof p);
+    p = dlsym(xtst, "XTestFakeMotionEvent"); memcpy(&fake_motion, &p, sizeof p);
+    if (!open_display || !close_display || !flush || !fake_button || !fake_motion || !(dpy = open_display(NULL)))
+        return -1;
+    SDL_GetWindowSize(yscr_window(s), &w, &h);
+    while ((injected < 20 || waiting) && (int64_t)yrt_now_ns() < end) {
+        yscr_frame f;
+        SDL_Event ev;
+        int64_t t_ev;
+        if (yscr_begin(s, &f) != YSCR_OK) break;
+        while (yscr_poll(s, &ev, &t_ev)) {
+            yin_event in;
+            if (ev.type != SDL_EVENT_MOUSE_BUTTON_DOWN || ev.button.button != 1 || !waiting) continue;
+            (*received)++;
+            if (t_ev - t_inj < *lo) *lo = t_ev - t_inj;
+            if (t_ev - t_inj > *hi) *hi = t_ev - t_inj;
+            *sum += t_ev - t_inj;
+            if (t_ev >= t_inj) ok++;
+            else printf("  button %d: stamp %+.3f ms from the injection, before it\n", *received,
+                        (double)(t_ev - t_inj) / 1e6);
+            /* XTEST's buttons come as the core pointer's (which 0): tier 3
+             * on the event; a device's id: the source table's tier */
+            if (yscr_event_input(s, &ev, &in) && in.t == t_ev &&
+                in.stamp == (ev.button.which ? 0 : YIN_TIER_3)) (*stamp0)++;
+            if (ev.button.which == 0) (*which0)++;
+            waiting = 0;
+        }
+        if (waiting && (int64_t)yrt_now_ns() > give_up) waiting = 0;
+        if (!moved && SDL_GetKeyboardFocus() == yscr_window(s)) {
+            fake_motion(dpy, -1, w / 2, h / 2, 0);
+            flush(dpy);
+            moved = 1;
+        } else if (moved && !waiting && injected < 20 && SDL_GetMouseFocus() == yscr_window(s)) {
+            yrt_sleep_until(yrt_now_ns() + 1000000u * (uint64_t)((injected * 7) % 16), 0);
+            t_inj = (int64_t)yrt_now_ns();
+            fake_button(dpy, 1, 1, 0);
+            fake_button(dpy, 1, 0, 0);
             flush(dpy);
             give_up = t_inj + 500000000;
             waiting = 1;
@@ -433,6 +515,20 @@ static void part12(void) {
                                                                 SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0);
         if (win) x_focus(win);
     }
+    {   /* v0.18.0: the reader's counts. Each click is two reports (the
+         * press with the move, the release); the 5 without the focus are
+         * dropped as unfocused */
+        char line[1024];
+        unsigned rep_n = 0, unf = 0, syn = 0;
+        int nodes = 0;
+        const char* r;
+        yscr_describe(&scr, line, sizeof line);
+        r = strstr(line, " raw_mice=");
+        if (r) sscanf(r, " raw_mice=%u(nodes %d, unfocused %u, syn_dropped %u)", &rep_n, &nodes, &unf, &syn);
+        printf("raw mice: %s\n", r ? r + 1 : "(no raw_mice= in the describe line)");
+        CHECK(r != NULL);
+        CHECK(rep_n >= 40 && nodes >= 1 && unf >= 10 && syn == 0);
+    }
     yscr_close(&scr);
     ioctl(m, UI_DEV_DESTROY);
     close(m);
@@ -444,6 +540,40 @@ static void part12(void) {
     CHECK(ok_id == 20);
     CHECK(ok_move == 20);
     CHECK(stray == 0);
+}
+
+/* Part 0 (v0.18.0), no display: on SIM, yscr_event_input_at() gives an
+ * SDL event the caller's time (yscr_event_input() gives 0, no clock map),
+ * and a pen's mouse button passes only with desc.keep_synthetic, flagged. */
+static void part0(void) {
+    static yscr_screen a, b;
+    yscr_desc d;
+    SDL_Event ev;
+    yin_event in;
+    memset(&d, 0, sizeof d);
+    d.backend = YSCR_BACKEND_SIM;
+    CHECK(yscr_open(&a, &d));
+    d.keep_synthetic = true;
+    CHECK(yscr_open(&b, &d));
+    memset(&ev, 0, sizeof ev);
+    ev.type = SDL_EVENT_PEN_MOTION;
+    ev.pmotion.which = 7;
+    ev.pmotion.pen_state = SDL_PEN_INPUT_DOWN;
+    CHECK(yscr_event_input_at(&a, &ev, 12345, &in) && in.t == 12345 && in.kind == YIN_KIND_PEN &&
+          in.code == SDL_PEN_INPUT_DOWN);
+    CHECK(yscr_event_input(&a, &ev, &in) && in.t == 0);
+    memset(&ev, 0, sizeof ev);
+    ev.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+    ev.button.which = SDL_PEN_MOUSEID;
+    ev.button.button = 1;
+    ev.button.down = true;
+    CHECK(!yscr_event_input_at(&a, &ev, 12345, &in));
+    CHECK(!yscr_event_input(&a, &ev, &in));
+    CHECK(yscr_event_input_at(&b, &ev, 12345, &in) && in.t == 12345 && (in.flags & YIN_SYNTHETIC) &&
+          in.kind == YIN_KIND_MOUSE && in.type == YIN_PRESS);
+    CHECK(yscr_event_input(&b, &ev, &in) && (in.flags & YIN_SYNTHETIC));
+    yscr_close(&b);
+    yscr_close(&a);
 }
 
 /* Part 10's child: exit 0 when every check holds. */
@@ -725,7 +855,11 @@ int main(int argc, char** argv) {
     const char* dsp = getenv("DISPLAY");
     if (argc == 3 && !strcmp(argv[1], "--panic-child")) return panic_child(atoi(argv[2]));
     if (argc == 2 && !strcmp(argv[1], "--screen1-child")) return screen1_child();
-    if (!dsp || !dsp[0]) { printf("screen_glx_test: SKIP (no DISPLAY)\n"); return 0; }
+    part0();
+    if (!dsp || !dsp[0]) {
+        printf("screen_glx_test: SKIP (no DISPLAY)%s\n", g_failures ? "; part 0 FAILED" : "");
+        return g_failures ? 1 : 0;
+    }
     if (!open_glx(&scr)) {
         const char* req = getenv("YSCR_GLX_TEST_REQUIRE");
         if (req && req[0] == '1') {
@@ -763,6 +897,20 @@ int main(int argc, char** argv) {
             /* one key of 20 was late in 2 of 10 runs (7.3 ms, the one
              * printed): the server handled the XTEST request late */
             CHECK(ok >= 19);
+        }
+    }
+    {
+        int got = 0, st0 = 0, w0 = 0, ok;
+        int64_t lo, hi, sum;
+        ok = xtest_buttons(&scr, &got, &lo, &hi, &sum, &st0, &w0);
+        if (ok < 0) printf("buttons: skipped (no libXtst, or the window never had the focus)\n");
+        else {
+            printf("buttons: 20 injected, %d received, %d not before the injection, %d with which 0, %d with the "
+                   "adapter's tier for it; SDL's stamp minus the injection %.3f / %.3f / %.3f ms (min / mean / max)\n",
+                   got, ok, w0, st0, (double)lo / 1e6, got ? (double)sum / got / 1e6 : 0.0, (double)hi / 1e6);
+            CHECK(got == 20);
+            CHECK(ok == 20);
+            CHECK(st0 == 20);
         }
     }
     yscr_describe(&scr, line, sizeof line);

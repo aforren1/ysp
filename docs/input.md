@@ -1,6 +1,6 @@
 # ysp/input.h
 
-Status: v0.3.0, 2026-10-08. The header's manual (its comment block) is the
+Status: v0.6.0, 2026-11-06. The header's manual (its comment block) is the
 reference for each field and constant. This page records why the header
 exists and how it was checked.
 
@@ -206,30 +206,43 @@ process.
 
 | SDL event | `type` | `control` | `x`, `y` | `value` | `flags` |
 |---|---|---|---|---|---|
-| `PEN_PROXIMITY_IN`, `_OUT` | `PROXIMITY` | 0 | 0 (SDL gives no position) | 1 in, 0 out | |
-| `PEN_DOWN`, `PEN_UP` | `PRESS`, `RELEASE` | 0, the tip | window px | 1, 0 | `YIN_ERASER` for the eraser end |
-| `PEN_BUTTON_DOWN`, `_UP` | `PRESS`, `RELEASE` | the barrel button, 1 to 5 | window px | 1, 0 | |
-| `PEN_MOTION` | `SAMPLE` | `YIN_AXIS_POSITION` (0) | window px | 0 | |
-| `PEN_AXIS` | `SAMPLE` | `YIN_AXIS_PEN` + `SDL_PenAxis`: 16 pressure, 17 x tilt, 18 y tilt, 19 distance, 20 rotation, 21 slider, 22 tangential pressure | window px, the pen's position | the axis: pressure 0 to 1, tilt -90 to 90 deg, rotation -180 to 180 deg | |
+| `PEN_PROXIMITY_IN`, `_OUT` | `PROXIMITY` | 0 | 0 (SDL gives no position) | 1 in, 0 out | `YIN_ERASER` (SDL 3.4.16 or later) |
+| `PEN_DOWN`, `PEN_UP` | `PRESS`, `RELEASE` | 0, the tip | window px | 1, 0 | `YIN_ERASER` |
+| `PEN_BUTTON_DOWN`, `_UP` | `PRESS`, `RELEASE` | the barrel button, 1 to 5 | window px | 1, 0 | `YIN_ERASER` |
+| `PEN_MOTION` | `SAMPLE` | `YIN_AXIS_POSITION` (0) | window px | 0 | `YIN_ERASER` |
+| `PEN_AXIS` | `SAMPLE` | `YIN_AXIS_PEN` + `SDL_PenAxis`: 16 pressure, 17 x tilt, 18 y tilt, 19 distance, 20 rotation, 21 slider, 22 tangential pressure | window px, the pen's position | the axis: pressure 0 to 1, tilt -90 to 90 deg, rotation -180 to 180 deg | `YIN_ERASER` |
+
+From v0.6.0 every pen event has SDL's `pen_state` (`SDL_PenInputFlags`:
+`SDL_PEN_INPUT_DOWN`, `_BUTTON_1` to `_5`, `_ERASER_TIP`,
+`_IN_PROXIMITY`) in `code`, and `YIN_ERASER` when its eraser bit is set.
+A proximity event has them from SDL 3.4.16, which added `pen_state` to
+it; built against older headers its `code` stays 0. SDL sets the eraser
+bit when the eraser end touches and clears it when the tip touches, so
+hover before the first touch is not flagged, and hover after an eraser
+stroke is.
 
 Rules for a consumer:
 
 - Pressure and tilt are separate `SAMPLE` events, not fields of the
-  position sample. In SDL 3.4 every backend (Windows, X11, Wayland,
+  position sample: tilt is in `value`, and `x`, `y` are the pen's
+  position. In SDL 3.4 every backend (Windows, X11, Wayland,
   Cocoa) sends the motion of one report first and its axes after it. So
   give an axis value to the position sample before it.
 - SDL sends a motion or an axis event only when the value changes.
 - A position sample can come while the pen is in range but does not
   touch. Use `PRESS` and `RELEASE` with control 0 to know when the pen
   draws.
-- The adapter does not copy `pen_state` (the down, button, eraser and
-  in-range bits of each event) or `device_type` (direct or indirect, SDL
-  3.4.18). `YIN_ERASER` is on `PRESS` and `RELEASE` only.
+- `code & SDL_PEN_INPUT_DOWN` says on every sample whether the pen
+  touches (v0.6.0). The adapter does not copy `device_type` (direct or
+  indirect, SDL 3.4.18): it is the device's, the same on every event, so
+  ask SDL for it once (`SDL_GetPenDeviceType(which)`).
 - By default SDL also makes mouse events (`which` `SDL_PEN_MOUSEID`) and
   touch events (`SDL_PEN_TOUCHID`) from pen input. `yin_from_sdl()`
-  drops them unless `ctx.keep_synthetic`. `yscr_event_input()` always
-  drops them. So a program that reads only `YIN_KIND_MOUSE` gets nothing
-  from a tablet. Read `YIN_KIND_PEN`.
+  drops them unless `ctx.keep_synthetic`. `yscr_event_input()` drops
+  them unless the screen's `desc.keep_synthetic` (`ysp/screen.h`
+  v0.18.0). So a program that reads only `YIN_KIND_MOUSE` gets nothing
+  from a tablet by default. Read `YIN_KIND_PEN`, or set the flag and read
+  the events flagged `YIN_SYNTHETIC`.
 - `desc.raw_mice` does not read tablets on Linux (the evdev reader takes
   relative mice only). On Windows, Raw Input gives a tablet in mouse mode
   as `YIN_AXIS_ABSOLUTE` samples (0 to 1), with no pressure.
@@ -245,7 +258,7 @@ stamp is measured on any platform.
 |---|---|---|---|
 | Windows | Windows Ink pointer messages (`WM_POINTER`, `GetPointerPenInfo`); pressure is `pressure / 1024` | the window message's time, a ms tick | 3 |
 | macOS | Cocoa tablet events | `NSEvent.timestamp` plus SDL's offset for the process (macOS: NSEvent stamps, above); `ysp/screen.h` does not correct pen events | 3 |
-| Linux X11 | XInput 2; a device with an absolute pressure valuator is a pen | the time SDL queues the event (SDL passes 0, so `SDL_GetTicksNS()` at the queue), not the X server's time | 0, not measured |
+| Linux X11 | XInput 2; a device with an absolute pressure valuator is a pen | the time SDL queues the event (SDL passes 0, so `SDL_GetTicksNS()` at the queue), not the X server's time | 3 (v0.6.0; was 0): SDL's pump, as for its X11 buttons, which `ysp/screen.h` v0.18.0 measured with XTEST |
 | Linux Wayland | `zwp_tablet_tool_v2` (tablet protocol, unstable v2) | the compositor's frame time, ms | 0; `ysp/screen.h`'s Wayland backend is a stub |
 
 SDL 3 does not read Wintab. A tablet whose driver gives Wintab only, and
@@ -266,20 +279,59 @@ sample. `trial_copying --sim --input pen` sends SDL pen events made in
 the program (in range, a hover, down, motion each followed by a pressure
 axis, up, a hover) through `yin_from_sdl()`. It checks that hover input
 makes no ink and that each sample has the pressure of the axis event
-after it. It does not use `yscr_event_input()`: that call takes its time
-from the screen's clock map, which a simulated screen does not have
-(`yscr_restamp()` returns 0 there).
+after it. It calls `yin_from_sdl()` itself, not `yscr_event_input()`:
+that call takes its time from the screen's clock map, which a simulated
+screen does not have (`yscr_restamp()` returns 0 there).
+`ysp/screen.h` v0.18.0 adds `yscr_event_input_at()`, the same conversion
+with the caller's time, for such events.
 
 ### Not verified
 
 - Any tablet with ysp: events, positions, pressure range, tilt, the
   eraser, rates and stamps (docs/rig_spec.md, 15.6).
 - The stamps in the table above. They are read from SDL's source.
-- `tests/adapt/response_test.c` converts `PEN_DOWN` with the eraser and
-  a pressure `PEN_AXIS`. No test converts `PEN_MOTION`, `PEN_UP`, a tilt
-  axis or a proximity event.
+- `pen_state` and `YIN_ERASER` from a real eraser: SDL's rule above is
+  read in its source.
+
+## v0.6.0: pens, Linux sources, raw mouse order
+
+From the four task examples ([examples_findings.md](examples_findings.md),
+B6, F14, D2, D6):
+
+| Change | Why |
+|---|---|
+| A pen event's `code` is SDL's `pen_state`; `YIN_ERASER` on every pen event while the eraser end touched last | `trial_copying` needs to know on every sample whether the pen draws and with which end. The adapter dropped `pen_state` and set the eraser on `PRESS` and `RELEASE` only |
+| `yin_raw_mouse_source()` on Linux: "the kernel's evdev stamp of the report; inside the uinput write() in 20 of 20 (injected); USB poll not in it" | It gave Windows' note ("stamped at read, 0.15 to 0.40 ms"). Tier unknown, partial, no bounds: one machine, injected input only, as on Windows and macOS |
+| `yin_sdl_source()` on Linux | It returned tier 0, "not measured on this platform", for every kind |
+| THE EVENT: tilt is an axis sample's `value` | The comment said that `x`, `y` hold the tilt |
+| RAW MICE: a report's press comes before its movement | Both have the report's time, but a cursor summed from the samples is still at the report's start when the press arrives |
+
+`yin_sdl_source()` on Linux (X11, SDL 3.4.18; Wayland is not built):
+
+| Kind | Tier | Bounds (stamp minus event) | From |
+|---|---|---|---|
+| mouse | 3, host part | 1.498 to 16.646 ms | SDL stamps X11 buttons and motion with `SDL_GetTicksNS()` at its pump (read in its source). `ysp/screen.h` v0.18.0's `test_screen_glx` clicked through XTEST, one poll per 60 Hz frame: 100 clicks in five runs ([screen.md](screen.md#input-from-the-task-examples-v0180)). The upper bound is a frame: a loop that polls less often stamps later |
+| touch, pen | 3 | none | the same pump time (read in SDL's source); no tablet or touch screen here |
+| keyboard | 3, host part | none | through `ysp/screen.h`, the X server's ms time or the kernel's evdev time ([screen.md, "Kernel key times"](screen.md#kernel-key-times)); without it, SDL's pump. Two stamps with different bounds, so the entry gives none. `yscr_event_input()` marks X11 keys tier 3 on the event (`caps.raw_keyboard` is false on Linux) |
+
+Tier 3 is the tier rule's "a tick-quantized OS time, a poll": the pump
+runs once a frame in a frame loop, and the measured stamps sit up to a
+frame after the click. XTEST's buttons come with `which` 0, so the
+adapter marks them tier 3 on the event (`yin_sdl_mouse_stamp()`); the
+entry covers buttons that come with a device's id.
 
 ## Verification
+
+v0.6.0, on 2026-11-06 (the Linux desktop: Debian 12, GCC 12.2, SDL
+3.4.18's headers): `test_input_sdl` 178 checks pass (84 without SDL),
+with every pen event converted (motion, x and y tilt and pressure axes,
+down, up with the eraser and the tip, a barrel button, proximity in and
+out) and the Linux entries. Built as C99 and C11 with `-Wall -Wextra
+-Wpedantic -Wshadow -Werror` against SDL 3.4.0's headers too (no
+proximity state there) and as C++17 against 3.4.18's. Mutants `in-05`
+to `in-09` killed, and `in-01`, `in-02` again; `ms-01` and `ms-04` of
+`ysp/response.h`'s list, which edit this header, killed. Not built:
+Windows, macOS, MSVC, clang.
 
 v0.5.0, on 2026-11-05 (Apple clang 21, macOS 27.0.1): `test_input_sdl`
 115 checks pass, with the new context fields (`t_os` replaces the time;

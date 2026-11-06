@@ -1,4 +1,4 @@
-/* ysp/input.h - v0.5.1 - public domain single-header input event
+/* ysp/input.h - v0.6.0 - public domain single-header input event
  *
  *   One timestamped input event for every device a rig reads: keyboards,
  *   mice, touch, pens, gamepads, response and button boxes, eye trackers.
@@ -53,7 +53,9 @@
  *              (YIN_AXIS_POSITION, YIN_AXIS_PEN + SDL_PenAxis,
  *              YIN_AXIS_GAMEPAD + SDL_GamepadAxis), except touch, whose
  *              SAMPLE control is the contact
- *     code     keyboard: the SDL keycode (the layout's key); else yours
+ *     code     keyboard: the SDL keycode (the layout's key); pen: SDL's
+ *              pen_state (SDL_PenInputFlags: down, buttons, eraser, in
+ *              range) at the event; eye: the eye; else yours
  *     mods     keyboard: SDL_Keymod
  *     flags    YIN_REPEAT (the OS's auto-repeat of a held key),
  *              YIN_SYNTHETIC (made by the OS or SDL from another
@@ -70,8 +72,10 @@
  *              slot (16 bytes of state and the event) 72, past one cache
  *              line. Its name says the unit
  *     x, y     position: window coordinates for mouse and pen, 0..1 for
- *              touch; pen tilt
- *     value    an axis value, pressure; 1 for a press, 0 for a release
+ *              touch. A pen axis sample (tilt among them) has the pen's
+ *              position here and the axis in value
+ *     value    an axis value (pressure, tilt in degrees); 1 for a press,
+ *              0 for a release
  *     aux      yours
  *     ticks    with YIN_DEVTICKS: the low 32 bits of the device's own
  *              clock for this event, in the source's unit, so the analysis
@@ -122,6 +126,16 @@
  *   NSEvent.timestamp itself (ctx.os_stamps, ctx.t_os); with that,
  *   keys posted with CGEventPost or CGEventPostToPid were stamped after
  *   the post as yin_sdl_source() states (host part only).
+ *   Linux X11 (the Linux desktop of ysp/screen.h's STATUS, SDL 3.4.18):
+ *   SDL stamps a mouse button, motion, touch or pen event with
+ *   SDL_GetTicksNS() when its pump reads the X event, not with the X
+ *   server's time (X11_GetEventTimestamp(), read in its source): a poll,
+ *   tier 3. Left clicks through XTEST, one poll per 60 Hz frame, were
+ *   stamped 1.50 to 16.65 ms after the injection (ysp/screen.h v0.18.0).
+ *   Keys through ysp/screen.h carry the X server's ms time or the
+ *   kernel's evdev time (its INPUT, "X11 key times"); the adapter marks
+ *   them tier 3, as every key without ctx.raw_keyboard (caps.raw_keyboard
+ *   is false there).
  *
  *   ---------------------------------------------------------------------
  *   SDL3 (yin_from_sdl, defined when SDL_events.h came first)
@@ -146,33 +160,55 @@
  *   the source's stamp being SDL's own. Zero the ctx ({ 0 } or memset)
  *   before setting fields. Gamepad axes become -1..1 (triggers 0..1).
  *   Mouse and pen positions are SDL's window coordinates; touch positions
- *   are 0..1. ysp/screen.h starts SDL's video subsystem only: for gamepads
- *   set its desc.gamepads, or call SDL_InitSubSystem(SDL_INIT_GAMEPAD) and
- *   open each gamepad (SDL_OpenGamepad) yourself.
+ *   are 0..1. A pen event carries SDL's pen_state in code (v0.6.0; on a
+ *   proximity event from SDL 3.4.16) and YIN_ERASER while the pen's last
+ *   touch was with its eraser end: SDL learns the end at a touch, so
+ *   hover before the first touch is not flagged. ysp/screen.h starts
+ *   SDL's video subsystem only: for gamepads set its desc.gamepads, or
+ *   call SDL_InitSubSystem(SDL_INIT_GAMEPAD) and open each gamepad
+ *   (SDL_OpenGamepad) yourself.
  *
  *   ---------------------------------------------------------------------
  *   RAW MICE (yin_mouse_report, yin_from_mouse)
  *   ---------------------------------------------------------------------
  *   ysp/screen.h's desc.raw_mice reads each mouse's reports on a thread
- *   into yin_mouse_reports: Raw Input on Windows, and IOHIDManager on
- *   macOS from ysp/screen.h v0.16.0 (METAL). yin_from_mouse() turns one report
+ *   into yin_mouse_reports: Raw Input on Windows, IOHIDManager on
+ *   macOS from ysp/screen.h v0.16.0 (METAL), and evdev on Linux X11 from
+ *   v0.17.0 (GLX_OML). yin_from_mouse() turns one report
  *   into up to 12 events of YIN_KIND_MOUSE with the
  *   mouse's device id, in this order: presses, releases (buttons numbered
  *   as SDL's: 1 left, 2 middle, 3 right, 4 and 5 the side buttons), a
  *   YIN_AXIS_DELTA sample (x, y in counts, unaccelerated) or a
  *   YIN_AXIS_ABSOLUTE sample (a tablet, remote desktop: x, y 0..1), a
- *   YIN_AXIS_WHEEL sample (value in notches, x the horizontal wheel). A
+ *   YIN_AXIS_WHEEL sample (value in notches, x the horizontal wheel). All
+ *   have the report's time. The press comes before the movement of its
+ *   own report, so a cursor summed from the samples is still at the
+ *   report's start when a press arrives: for the position at the press,
+ *   add the movement that follows it with the same t and device. A
  *   mouse SDL does not list has YIN_UNLISTED. yin_raw_mouse_source() is
  *   its source entry: on Windows stamped at read (host part measured
  *   with injected input only); on macOS the HID driver's stamp
  *   (IOHIDValueGetTimeStamp), earlier than the read, which ysp/screen.h
  *   v0.16.1 measured 55 us after it at the least, 122 us at the median,
  *   266 us at p99 and 486 us at most, on one mouse at 125 Hz
- *   (docs/screen.md, "Raw mice").
+ *   (docs/screen.md, "Raw mice"); on Linux the kernel's evdev time of the
+ *   report's SYN_REPORT, which for clicks injected through uinput fell
+ *   inside the write() in 20 of 20 (ysp/screen.h v0.17.0).
  *
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.6.0 - From the task examples (docs/examples_findings.md). Pen events
+ *          carry SDL's pen_state in code (a proximity event from SDL
+ *          3.4.16), and YIN_ERASER on every event while the eraser end
+ *          touched last (was on PRESS and RELEASE only). Linux has source
+ *          entries: yin_raw_mouse_source() the kernel's evdev stamp (it
+ *          gave Windows' note); yin_sdl_source() tier 3 for mouse, touch
+ *          and pen (SDL's pump time on X11, measured for buttons with
+ *          XTEST) and for keys (it gave UNKNOWN, "not measured"). The
+ *          comments: pen tilt is an axis sample's value, not x and y; a
+ *          raw mouse report's press comes before its movement. code on a
+ *          pen event is no longer zero.
  *   v0.5.1 - Raw mice come from ysp/screen.h on macOS too (IOHIDManager,
  *          its v0.16.0), with the HID driver's stamp and the IORegistry
  *          id as the device: the comments said Windows only.
@@ -215,6 +251,12 @@
  *          the SDL3 adapter and the raw mouse adapter, renamed from
  *          yrsp_ to yin_ (ysp/response.h keeps its names as aliases).
  *
+ *   STATUS: v0.6.0, 2026-11-06: tests/adapt/input_test.c converts every
+ *   pen event (motion, axis with tilt, down, up, a barrel button,
+ *   proximity in and out) with pen_state and the eraser, and checks the
+ *   Linux entries; the C and C++ compile checks (GCC 12.2, SDL 3.4.18's
+ *   headers). The SDL button stamps on X11: ysp/screen.h v0.18.0's
+ *   tests/adapt/screen_glx_test.c. Not built here: Windows, macOS.
  *   STATUS: v0.5.1, 2026-11-05: v0.5.0's checks again, and the raw mouse
  *   note by platform (tests/adapt/input_test.c, the C and C++ compile
  *   checks, Apple clang 21; the Windows note's branch not built here).
@@ -245,9 +287,9 @@
 #define YSP_INPUT_H_INCLUDED
 
 #define YIN_VERSION_MAJOR 0
-#define YIN_VERSION_MINOR 5
-#define YIN_VERSION_PATCH 1
-#define YIN_VERSION_STRING "0.5.1"
+#define YIN_VERSION_MINOR 6
+#define YIN_VERSION_PATCH 0
+#define YIN_VERSION_STRING "0.6.0"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -330,7 +372,7 @@ typedef struct yin_event {
     int64_t  t;          /* ysp_rt ns                                      */
     uint32_t device;     /* instance within the kind; 0 = unknown          */
     uint32_t control;    /* scancode, button, contact, axis (THE EVENT)    */
-    uint32_t code;       /* keyboard: SDL keycode; else yours              */
+    uint32_t code;       /* keyboard: SDL keycode; pen: SDL's pen_state    */
     uint16_t mods;       /* keyboard: SDL_Keymod                           */
     uint8_t  kind;       /* yin_kind                                    */
     uint8_t  type;       /* yin_type                                    */
@@ -357,14 +399,15 @@ typedef struct yin_source {
 
 /* The stamp tier of an SDL mouse event by its `which`: 0 is SDL's absolute
  * mode, stamped with the window message's time (tier 3); another id is a
- * Raw Input device (relative mode), the source table's. */
+ * Raw Input device (relative mode) or, on X11, an XInput 2 device, the
+ * source table's. */
 static inline uint8_t yin_sdl_mouse_stamp(uint32_t which) {
     return (uint8_t)(which ? 0 : YIN_TIER_3);
 }
 
 /* One raw mouse report: what a raw mouse reader (ysp/screen.h's
- * desc.raw_mice: Raw Input on Windows, IOHIDManager on macOS) reads for
- * one mouse at once. 32 bytes. */
+ * desc.raw_mice: Raw Input on Windows, IOHIDManager on macOS, evdev on
+ * Linux X11) reads for one mouse at once. 32 bytes. */
 #define YIN_MOUSE_LEFT   0x01u   /* .down and .up: buttons                    */
 #define YIN_MOUSE_RIGHT  0x02u
 #define YIN_MOUSE_MIDDLE 0x04u
@@ -375,10 +418,11 @@ static inline uint8_t yin_sdl_mouse_stamp(uint32_t which) {
 #define YIN_MOUSE_UNLISTED        0x04u  /* a device SDL does not list           */
 typedef struct yin_mouse_report {
     int64_t  t;          /* ysp_rt ns: when the reader read the report
-                          * (Windows) or the HID driver took it (macOS)     */
+                          * (Windows), the HID driver took it (macOS), the
+                          * kernel's SYN_REPORT (Linux)                     */
     uint32_t device;     /* Windows: the Raw Input handle, SDL's mouse id,
                           * 0 = injected; macOS: the IORegistry entry id's
-                          * low 32 bits                                     */
+                          * low 32 bits; Linux X11: SDL's (XInput 2) id     */
     int32_t  dx, dy;     /* counts, unaccelerated; with ABSOLUTE a position */
     int16_t  wheel;      /* 120 per notch, away from the user positive      */
     int16_t  hwheel;     /* 120 per notch, right positive                   */
@@ -390,9 +434,11 @@ typedef struct yin_mouse_report {
 
 /* One raw mouse report (ysp/screen.h's desc.raw_mice) into up to 12
  * inputs, in this order: presses, releases, the movement (a DELTA or
- * ABSOLUTE sample), the wheel (a WHEEL sample). Buttons are numbered as
- * SDL's: left 1, middle 2, right 3, X1 4, X2 5. Returns how many, at most
- * cap. The stamp tier comes from the source table (yin_raw_mouse_source). */
+ * ABSOLUTE sample), the wheel (a WHEEL sample), all at the report's time.
+ * A press is at the position before its own report's movement (RAW
+ * MICE). Buttons are numbered as SDL's: left 1, middle 2, right 3, X1 4,
+ * X2 5. Returns how many, at most cap. The stamp tier comes from the
+ * source table (yin_raw_mouse_source). */
 static inline int yin_from_mouse(const yin_mouse_report* m, yin_event* out, int cap) {
     static const uint8_t bit[5] = { YIN_MOUSE_LEFT, YIN_MOUSE_MIDDLE, YIN_MOUSE_RIGHT,
                                     YIN_MOUSE_X1, YIN_MOUSE_X2 };
@@ -445,7 +491,11 @@ static inline int yin_from_mouse(const yin_mouse_report* m, yin_event* out, int 
  * IOHIDValueGetTimeStamp; the reader's callback came 55 us after it at
  * the least, 122 us at the median, 266 us at p99 and 486 us at most (one
  * Dell MS116 moved by hand, 125 Hz, 1159 values; ysp/screen.h v0.16.1).
- * Host part only: the USB poll comes before the stamp. */
+ * Linux (v0.6.0): the kernel's evdev time of the report's SYN_REPORT, so
+ * the reader's scheduling is in no stamp; uinput clicks came back with a
+ * time inside the write() in 20 of 20 (ysp/screen.h v0.17.0). Host part
+ * only: the USB poll comes before the stamp. Tier UNKNOWN on each: no
+ * chain from the button to the stamp was measured. */
 static inline yin_source yin_raw_mouse_source(void) {
     yin_source s;
     memset(&s, 0, sizeof s);
@@ -455,6 +505,9 @@ static inline yin_source yin_raw_mouse_source(void) {
 #if defined(__APPLE__)
     s.note = "ysp_screen raw mice (macOS): the HID driver's stamp; host part to the read 55 us min, 122 us median, "
              "266 us p99, 486 us max (one Dell MS116, 125 Hz); USB poll not in it";
+#elif defined(__linux__) && !defined(__ANDROID__) && !defined(__EMSCRIPTEN__)
+    s.note = "ysp_screen raw mice (Linux): the kernel's evdev stamp of the report; inside the uinput write() in 20 of 20 "
+             "(injected); USB poll not in it";
 #else
     s.note = "ysp_screen raw mice: stamped at read; host part 0.15 to 0.40 ms (means, injected); USB poll not measured";
 #endif
@@ -476,6 +529,15 @@ static inline yin_source yin_raw_mouse_source(void) {
 #if defined(SDL_events_h_) && !defined(YSP_INPUT_SDL_INCLUDED)
 #define YSP_INPUT_SDL_INCLUDED
 
+/* SDL_events.h does not include it; the proximity events' pen_state came
+ * in SDL 3.4.16, and this header builds against 3.2 too. */
+#include <SDL3/SDL_version.h>
+#if SDL_VERSION_ATLEAST(3, 4, 16)
+#define YIN__SDL_PROXIMITY_STATE 1
+#else
+#define YIN__SDL_PROXIMITY_STATE 0
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -494,6 +556,12 @@ typedef struct yin_sdl_ctx {
                             * one without it gets tier 3                  */
     int64_t t_os;          /* this event's OS time, ysp_rt ns; 0 = none   */
 } yin_sdl_ctx;
+
+/* SDL sets the eraser bit at the eraser end's touch and clears it at the
+ * tip's, so the pen's other events carry the end it last touched with. */
+static inline uint8_t yin__pen_flags(uint32_t pen_state) {
+    return (uint8_t)((pen_state & SDL_PEN_INPUT_ERASER_TIP) ? YIN_ERASER : 0u);
+}
 
 /* One SDL event at t_rt (yscr_poll()'s time) into *out. Returns 1 for
  * keyboard, mouse button and motion, touch, pen and gamepad events; 0 for
@@ -573,6 +641,7 @@ static inline int yin_from_sdl(const SDL_Event* ev, int64_t t_rt, const yin_sdl_
         in.type = (uint8_t)(ev->ptouch.down ? YIN_PRESS : YIN_RELEASE);
         in.device = (uint32_t)ev->ptouch.which;
         in.control = 0;
+        in.code = (uint32_t)ev->ptouch.pen_state;
         in.flags = (uint8_t)(ev->ptouch.eraser ? YIN_ERASER : 0u);
         in.x = ev->ptouch.x;
         in.y = ev->ptouch.y;
@@ -584,6 +653,8 @@ static inline int yin_from_sdl(const SDL_Event* ev, int64_t t_rt, const yin_sdl_
         in.type = (uint8_t)(ev->pbutton.down ? YIN_PRESS : YIN_RELEASE);
         in.device = (uint32_t)ev->pbutton.which;
         in.control = ev->pbutton.button;
+        in.code = (uint32_t)ev->pbutton.pen_state;
+        in.flags = yin__pen_flags(in.code);
         in.x = ev->pbutton.x;
         in.y = ev->pbutton.y;
         in.value = ev->pbutton.down ? 1.0f : 0.0f;
@@ -593,6 +664,8 @@ static inline int yin_from_sdl(const SDL_Event* ev, int64_t t_rt, const yin_sdl_
         in.type = (uint8_t)YIN_SAMPLE;
         in.device = (uint32_t)ev->pmotion.which;
         in.control = YIN_AXIS_POSITION;
+        in.code = (uint32_t)ev->pmotion.pen_state;
+        in.flags = yin__pen_flags(in.code);
         in.x = ev->pmotion.x;
         in.y = ev->pmotion.y;
         break;
@@ -601,6 +674,8 @@ static inline int yin_from_sdl(const SDL_Event* ev, int64_t t_rt, const yin_sdl_
         in.type = (uint8_t)YIN_SAMPLE;
         in.device = (uint32_t)ev->paxis.which;
         in.control = YIN_AXIS_PEN + (uint32_t)ev->paxis.axis;
+        in.code = (uint32_t)ev->paxis.pen_state;
+        in.flags = yin__pen_flags(in.code);
         in.x = ev->paxis.x;
         in.y = ev->paxis.y;
         in.value = ev->paxis.value;
@@ -611,6 +686,10 @@ static inline int yin_from_sdl(const SDL_Event* ev, int64_t t_rt, const yin_sdl_
         in.type = (uint8_t)YIN_PROXIMITY;
         in.device = (uint32_t)ev->pproximity.which;
         in.value = ev->type == SDL_EVENT_PEN_PROXIMITY_IN ? 1.0f : 0.0f;
+#if YIN__SDL_PROXIMITY_STATE
+        in.code = (uint32_t)ev->pproximity.pen_state;
+        in.flags = yin__pen_flags(in.code);
+#endif
         break;
     case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
     case SDL_EVENT_GAMEPAD_BUTTON_UP:
@@ -641,8 +720,16 @@ static inline int yin_from_sdl(const SDL_Event* ev, int64_t t_rt, const yin_sdl_
 #define YIN__MAC_OS_LO_NS 49300
 #define YIN__MAC_OS_HI_NS 46591000
 
+/* Linux X11, SDL 3.4.18: SDL's stamp of a left click minus its XTEST
+ * injection, min and max over 100 clicks in five runs of
+ * tests/adapt/screen_glx_test.c, one poll per 60 Hz frame (ysp/screen.h
+ * v0.18.0, INPUT, "X11 key times") */
+#define YIN__X11_BUTTON_LO_NS 1498000
+#define YIN__X11_BUTTON_HI_NS 16646000
+
 /* The source table entry for an SDL event kind, from what was measured or
- * read (SOURCES). Windows and macOS; elsewhere UNKNOWN with no bounds. */
+ * read (SOURCES). Windows, macOS and Linux (X11); elsewhere UNKNOWN with
+ * no bounds. */
 static inline yin_source yin_sdl_source(const yin_sdl_ctx* ctx, int kind) {
     yin_source s;
     memset(&s, 0, sizeof s);
@@ -685,6 +772,27 @@ static inline yin_source yin_sdl_source(const yin_sdl_ctx* ctx, int kind) {
     } else if (kind == YIN_KIND_TOUCH || kind == YIN_KIND_PEN) {
         s.tier = (uint8_t)YIN_TIER_3;
         s.note = "SDL 3.4 Cocoa stamp with a per-process offset (read in SDL's source), not measured";
+    } else {
+        s.note = "not measured";
+    }
+#elif defined(__linux__) && !defined(__ANDROID__) && !defined(__EMSCRIPTEN__)
+    /* SDL 3.4.18's X11 backend stamps these with SDL_GetTicksNS() at its
+     * pump (X11_GetEventTimestamp()); Wayland is not built (ysp/screen.h) */
+    (void)ctx;
+    if (kind == YIN_KIND_MOUSE) {
+        s.tier = (uint8_t)YIN_TIER_3;
+        s.partial = 1;
+        s.lo_ns = YIN__X11_BUTTON_LO_NS;
+        s.hi_ns = YIN__X11_BUTTON_HI_NS;
+        s.note = "SDL 3.4 X11: its pump's time, one poll per 60 Hz frame; buttons measured with XTEST";
+    } else if (kind == YIN_KIND_TOUCH || kind == YIN_KIND_PEN) {
+        s.tier = (uint8_t)YIN_TIER_3;
+        s.note = "SDL 3.4 X11: its pump's time (read in SDL's source), not measured";
+    } else if (kind == YIN_KIND_KEYBOARD) {
+        s.tier = (uint8_t)YIN_TIER_3;
+        s.partial = 1;
+        s.note = "X11 through ysp/screen.h: the X server's ms time, or the kernel's evdev time (its describe line's "
+                 "key_time); without it SDL's pump time";
     } else {
         s.note = "not measured";
     }

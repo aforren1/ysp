@@ -6,7 +6,8 @@ header = "ysp/input.h"
 [test.input]
 source = "tests/adapt/input_test.c"
 compiler = "gcc"
-flags = ["-std=c11", "-O1", "-w", "-DYIN_TEST_SDL", "-I/Users/brainworks/sdl3/include"]
+# YSP_SDL3: an SDL3 prefix elsewhere (3.4.16 or later for in-09)
+flags = ["-std=c11", "-O1", "-w", "-DYIN_TEST_SDL", "-I/Users/brainworks/sdl3/include", "-I$YSP_SDL3/include"]
 libs = ["-lm"]
 timeout = 120
 
@@ -44,3 +45,54 @@ find = '''#if defined(__APPLE__)
     s.note = "ysp_screen raw mice (macOS)'''
 replace = '''#if 0
     s.note = "ysp_screen raw mice (macOS)'''
+
+# input.h 0.6.0, from the task examples: pen_state and the eraser on every
+# pen event, the Linux source entries (in-07 and in-08 run on Linux; in-09
+# needs SDL 3.4.16's headers or later).
+[[mutant]]
+id = "in-05"
+name = "pen motion without pen_state"
+test = "input"
+why = "A consumer reads whether the pen draws from pen_state's DOWN bit on each sample (v0.6.0)."
+find = "        in.code = (uint32_t)ev->pmotion.pen_state;"
+replace = ""
+
+[[mutant]]
+id = "in-06"
+name = "the eraser on down and up only"
+test = "input"
+why = "A sample or an axis from the eraser end must say so, or the eraser's strokes read as ink (v0.6.0)."
+find = "    return (uint8_t)((pen_state & SDL_PEN_INPUT_ERASER_TIP) ? YIN_ERASER : 0u);"
+replace = "    return (uint8_t)(pen_state & 0u);"
+
+[[mutant]]
+id = "in-07"
+name = "Linux raw mice get Windows' note"
+test = "input"
+why = "On Linux the stamp is the kernel's evdev time, not the read time measured on Windows (v0.6.0)."
+find = """#elif defined(__linux__) && !defined(__ANDROID__) && !defined(__EMSCRIPTEN__)
+    s.note = "ysp_screen raw mice (Linux)"""
+replace = """#elif 0
+    s.note = "ysp_screen raw mice (Linux)"""
+
+[[mutant]]
+id = "in-08"
+name = "SDL's X11 mouse stamps not tier 3"
+test = "input"
+why = "SDL 3.4 stamps X11 mouse events at its pump, once a frame: 1.5 to 16.6 ms after XTEST clicks (v0.6.0)."
+find = """    if (kind == YIN_KIND_MOUSE) {
+        s.tier = (uint8_t)YIN_TIER_3;
+        s.partial = 1;
+        s.lo_ns = YIN__X11_BUTTON_LO_NS;"""
+replace = """    if (kind == YIN_KIND_MOUSE) {
+        s.tier = (uint8_t)YIN_TIER_UNKNOWN;
+        s.partial = 1;
+        s.lo_ns = YIN__X11_BUTTON_LO_NS;"""
+
+[[mutant]]
+id = "in-09"
+name = "proximity without pen_state"
+test = "input"
+why = "SDL 3.4.16 gives proximity events the pen's state, the eraser among it (v0.6.0)."
+find = "        in.code = (uint32_t)ev->pproximity.pen_state;"
+replace = ""

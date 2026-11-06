@@ -1,4 +1,4 @@
-/* ysp/screen.h - v0.17.0 - public domain single-header display library
+/* ysp/screen.h - v0.18.0 - public domain single-header display library
  *
  *   The window, the GL ES 3.0 context, the display mode and the swap path
  *   of a stimulus display, with flip at a time: each frame learns the
@@ -1185,8 +1185,13 @@
  *   keys): the server's clock runs about 1 ms behind and the ms truncates.
  *   A server time more than 1 s from now (a server on another clock) is not
  *   used. SDL has one X11 hook per process: setting your own replaces this
- *   one, and keys then keep SDL's stamps. Mouse buttons keep SDL's stamps
- *   (not measured).
+ *   one, and keys then keep SDL's stamps. Mouse buttons, motion, touch and
+ *   pens keep SDL's stamps: SDL 3.4.18 stamps every X11 event of these
+ *   with SDL_GetTicksNS() when its pump reads it (read in its source;
+ *   ysp/input.h gives them tier 3 on Linux). Measured (v0.18.0): 20 left
+ *   clicks through XTEST, one poll per 60 Hz frame, stamped 1.50 to 16.65
+ *   ms after the injection (means 9.23 to 9.26, five runs); XTEST's
+ *   buttons came with which 0 (the core pointer's).
  *   Kernel key times (v0.17.0). Xorg stamps a keyboard's key the same way,
  *   with its own clock when it reads the key, not with the kernel's time:
  *   measured with a uinput keyboard, 0.97 to 1.99 ms before the kernel's
@@ -1308,8 +1313,9 @@
  *   mouse events carry the device then) and a YSCR_EV_RAW_MICE record
  *   says SUSPENDED; when it ends, or when other code took the mice, the
  *   reader registers again and the record says REGISTERED. Each screen with
- *   raw_mice shares the one reader; the last to close stops it. On Linux,
- *   the web and with no window, open() refuses raw_mice. Measured with
+ *   raw_mice shares the one reader; the last to close stops it. On the web
+ *   and with no window, open() refuses raw_mice (Linux X11 and macOS have
+ *   readers of their own, below). Measured with
  *   injected input only (examples/screen/input.c --mice is the hand test
  *   for two physical mice): reports stamped 0.15 to 0.40 ms after
  *   SendInput (means of three runs), no report lost or doubled with SDL's
@@ -1334,7 +1340,10 @@
  *   guard. Wheel notches are REL_WHEEL's (120 each; the _HI_RES events
  *   repeat them); a SYN_DROPPED (the kernel's buffer overflowed) drops up
  *   to the next report. open() refuses raw_mice when no mouse node is
- *   readable, and with no window.
+ *   readable, and with no window. The describe line counts (v0.18.0)
+ *   raw_mice=reports(nodes n, unfocused n, syn_dropped n): reports sent
+ *   over the bridge, the nodes open now, reports dropped without the
+ *   focus, and the kernel's overflows (each drops up to its next report).
  *   Raw mice on macOS (METAL, v0.16.0). One thread per process runs an
  *   IOHIDManager for mice (usage page 1, usage 2) on its own run loop.
  *   IOKit parses each report and calls back once per element that
@@ -1389,6 +1398,15 @@
  *   gamepad events through ysp/input.h's adapter, with the screen's raw
  *   keyboard state and the ysp_rt time. A bridged event keeps the
  *   producer's stamp; SDL's push time is never used for it.
+ *   Synthetic events (v0.18.0). SDL makes mouse events from a pen or
+ *   touch (which SDL_PEN_MOUSEID, SDL_TOUCH_MOUSEID) and touch events from
+ *   a pen or mouse. yscr_event_input() drops them, so each physical
+ *   action reaches a consumer once; desc.keep_synthetic keeps them,
+ *   flagged YIN_SYNTHETIC, for a program that reads a tablet as a mouse.
+ *   yscr_event_input_at(s, ev, t, out) converts an SDL event with the
+ *   caller's time t in place of its stamp: a program's own SDL events (a
+ *   simulated participant) take the same path as SDL's, on SIM too, where
+ *   yscr_restamp() gives 0 and yscr_event_input() gives such events t 0.
  *   Order: one producer's events come in its push order. Against SDL's own
  *   events, a doorbell sits where SDL queued it, so the stream is arrival
  *   order to within one pump of SDL's queue; every event carries its
@@ -1864,6 +1882,20 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.18.0 - Input, from the task examples (docs/examples_findings.md):
+ *          desc.keep_synthetic: yscr_event_input() keeps the events SDL
+ *          makes from another device (a tablet's mouse events), flagged
+ *          YIN_SYNTHETIC; it dropped them with no switch.
+ *          yscr_event_input_at(s, ev, t, out): the same conversion with
+ *          the caller's time, so a program's own SDL events take the
+ *          screen's path on SIM too (yscr_restamp() is 0 there). The
+ *          describe line on Linux X11 counts the raw mouse reader:
+ *          raw_mice=reports(nodes n, unfocused n, syn_dropped n). The
+ *          comments that said raw mice are Windows only (INPUT, the desc,
+ *          the parameter table) name Linux X11 and macOS too; INPUT gives
+ *          SDL's X11 button stamps as measured with XTEST. A new desc
+ *          field (in padding: the size and the other offsets stay) and a
+ *          new field in yscr_screen.
  *   v0.17.0 - Linux X11, numbered v0.8.0 on its branch and v0.11.0
  *          after its merge over v0.8.0 to v0.10.4, measured there, and
  *          merged over v0.11.0 to v0.16.1 (STATUS):
@@ -2307,6 +2339,14 @@
  *          groups, input restamping, mode lists and the parameter table.
  *          The other swap paths are stubs that refuse to open.
  *
+ *   STATUS: v0.18.0 (2026-11-06, the Linux desktop of v0.17.0's STATUS,
+ *   other builds running beside it): tests/adapt/screen_glx_test.c with
+ *   its new checks (SDL's X11 button stamps through XTEST; the raw_mice
+ *   counts in the describe line) under a lock on the display;
+ *   tests/compile/screen.c converts a pen-made SDL button with
+ *   yscr_event_input_at() on SIM with and without desc.keep_synthetic.
+ *   Mutants glx-31 to glx-36 and glx-25 (its anchor moved) killed, 7 of 7.
+ *   Not built here: Windows, macOS, the web.
  *   STATUS: v0.17.0 (GLX_OML, at the end of this block).
  *   STATUS: v0.16.1 (METAL, raw mice, 2026-11-05, unlocked, a quiet
  *   machine): v0.16.0's reader, moved by hand, gave values 12 to 44 s
@@ -2678,9 +2718,9 @@
 #define YSP_SCREEN_H_INCLUDED
 
 #define YSCR_VERSION_MAJOR 0
-#define YSCR_VERSION_MINOR 17
+#define YSCR_VERSION_MINOR 18
 #define YSCR_VERSION_PATCH 0
-#define YSCR_VERSION_STRING "0.17.0"
+#define YSCR_VERSION_STRING "0.18.0"
 
 #include "ysp/rt.h"
 #include "ysp/input.h"
@@ -3359,8 +3399,12 @@ typedef struct yscr_desc {
     /* input (INPUT) */
     bool           gamepads;         /* start SDL's gamepad subsystem and open
                                       * every gamepad                         */
-    bool           raw_mice;         /* read every mouse's Raw Input on a
-                                      * thread: per device, raw-timed (Windows) */
+    bool           raw_mice;         /* read every mouse's reports on a thread:
+                                      * per device, raw-timed (Windows, macOS,
+                                      * Linux X11) */
+    bool           keep_synthetic;   /* yscr_event_input() keeps the events SDL
+                                      * makes from another device (a tablet's
+                                      * mouse events), flagged YIN_SYNTHETIC */
     int64_t        key_dedup_ns;     /* yscr_event_input() drops a key's second
                                       * report within this time; 0 = 50 ms,
                                       * < 0 = off, at most 1 s (INPUT)       */
@@ -3463,6 +3507,7 @@ typedef struct yscr_screen {
     int32_t                 raw_mice;                 /* desc.raw_mice: a reader user */
     int32_t                 rm_state;                 /* 1 while relative mode holds the mice */
     int32_t                 rm_rel, rm_frames;        /* the guard's last relative mode, frames */
+    int32_t                 keep_synthetic;           /* desc.keep_synthetic */
     int64_t                 key_dedup_ns;             /* desc.key_dedup_ns: 0 = 50 ms, < 0 off */
     yscr_caps             caps;
     yrt_ring*             ring;
@@ -3844,10 +3889,19 @@ YSCR_API uint32_t yscr_input_event_type(void);
  * keyboard, mouse, touch, pen and gamepad events go through ysp/input.h's
  * adapter, with this screen's raw-keyboard state and the ysp_rt time.
  * false for any other event, a doorbell already decoded, a doorbell
- * whose record was overwritten (counted as lost), or a second report of a
- * key press or its key-up (counted; INPUT, "Second key reports"). s may
+ * whose record was overwritten (counted as lost), a second report of a
+ * key press or its key-up (counted; INPUT, "Second key reports"), or an
+ * event SDL made from another device without desc.keep_synthetic. s may
  * be NULL. */
 YSCR_API bool     yscr_event_input(yscr_screen* s, const union SDL_Event* ev, yin_event* out);
+
+/* yscr_event_input() with t_rt as the time of an SDL event, in place of
+ * its own stamp moved onto the ysp_rt clock: for SDL events a program
+ * makes (a simulated participant, on SIM too, where the screen has no
+ * clock map and yscr_restamp() gives 0). The rest is yscr_event_input()'s:
+ * the key filter, desc.keep_synthetic; no OS stamp pairing (macOS). A
+ * doorbell keeps its producer's stamp. s may be NULL. */
+YSCR_API bool     yscr_event_input_at(yscr_screen* s, const union SDL_Event* ev, int64_t t_rt, yin_event* out);
 
 /* The same key filter on an event that did not come from
  * yscr_event_input(), which applies it already: your own SDL adapter, a
@@ -12424,6 +12478,10 @@ static void yscr__xwd_disarm(yscr_screen* s) { (void)s; }
 #define YSCR__LM_UNLISTED 0x45560000u   /* "EV" and the node's number */
 static struct {
     volatile int32_t users, focused;
+    /* the describe line's counts, read on the frame's thread: reports
+     * sent, dropped without the focus, the kernel's buffer overflows, the
+     * nodes open (n is the reader's own) */
+    volatile int32_t reports, unfocused, syn_dropped, nodes;
     pthread_t th;
     int      stop[2], ino, n;
     int      fd[YSCR__LM_MAX];
@@ -12486,6 +12544,7 @@ static void yscr__lm_add(const char* path) {
         return;
     }
     i = yscr__lm.n++;
+    yscr__a_store(&yscr__lm.nodes, yscr__lm.n);
     yscr__lm.fd[i] = fd;
     yscr__lm.dev[i] = st.st_rdev;
     yscr__lm.id[i] = yscr__lm_xid(path, st.st_rdev);
@@ -12559,14 +12618,18 @@ static int yscr__lm_read(int i) {
             } else if (e->type == EV_SYN && e->code == SYN_DROPPED) {
                 /* the kernel's buffer overflowed: drop up to the next report */
                 yscr__lm.dropped[i] = 1;
+                yscr__a_inc(&yscr__lm.syn_dropped);
             } else if (e->type == EV_SYN && e->code == SYN_REPORT) {
-                if (yscr__lm.dirty[i] && !yscr__lm.dropped[i] && yscr__a_load(&yscr__lm.focused)) {
+                if (yscr__lm.dirty[i] && !yscr__lm.dropped[i] && !yscr__a_load(&yscr__lm.focused)) {
+                    yscr__a_inc(&yscr__lm.unfocused);
+                } else if (yscr__lm.dirty[i] && !yscr__lm.dropped[i]) {
                     yin_event ev[12];
                     int k, n;
                     a->t = (int64_t)e->input_event_sec * 1000000000 + (int64_t)e->input_event_usec * 1000;
                     a->device = yscr__lm.id[i];
                     n = yin_from_mouse(a, ev, 12);
                     for (k = 0; k < n; k++) yscr__in_push(&ev[k], 1);
+                    yscr__a_inc(&yscr__lm.reports);
                 }
                 memset(a, 0, sizeof *a);
                 yscr__lm.dirty[i] = yscr__lm.dropped[i] = 0;
@@ -12593,6 +12656,7 @@ static void* yscr__lm_main(void* arg) {
             if (pf[base + i].revents && !yscr__lm_read(i)) {   /* unplugged */
                 close(yscr__lm.fd[i]);
                 yscr__lm.n--;
+                yscr__a_store(&yscr__lm.nodes, yscr__lm.n);
                 yscr__lm.fd[i] = yscr__lm.fd[yscr__lm.n];
                 yscr__lm.dev[i] = yscr__lm.dev[yscr__lm.n];
                 yscr__lm.id[i] = yscr__lm.id[yscr__lm.n];
@@ -12624,6 +12688,10 @@ static const char* yscr__lm_start(void) {
     yscr__lm.n = 0;
     yscr__lm.stop[0] = yscr__lm.stop[1] = -1;
     yscr__a_store(&yscr__lm.focused, 0);
+    yscr__a_store(&yscr__lm.reports, 0);
+    yscr__a_store(&yscr__lm.unfocused, 0);
+    yscr__a_store(&yscr__lm.syn_dropped, 0);
+    yscr__a_store(&yscr__lm.nodes, 0);
     yscr__lm.ino = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
     if (yscr__lm.ino >= 0 && inotify_add_watch(yscr__lm.ino, "/dev/input", IN_CREATE | IN_ATTRIB) < 0) {
         close(yscr__lm.ino);
@@ -15225,6 +15293,7 @@ YSCR_API bool yscr_open(yscr_screen* s, const yscr_desc* desc) {
     s->lead = desc->lead == 0 ? 0.5 : desc->lead;
     s->offset = desc->onset_offset_ns;
     s->key_dedup_ns = desc->key_dedup_ns;
+    s->keep_synthetic = desc->keep_synthetic ? 1 : 0;
     s->patch = desc->patch;
     s->nominal_f = (double)s->caps.period_ns;
     s->period_f = s->nominal_f;
@@ -15606,6 +15675,16 @@ YSCR_API int yscr_describe(const yscr_screen* s, char* buf, size_t cap) {
             snprintf(extra + n, sizeof extra - n, " raw_mice=%u(inactive %u, stale %u, empty %u)",
                      (unsigned)yscr__rm.reports, (unsigned)yscr__rm.dropped, (unsigned)yscr__rm.stale,
                      (unsigned)yscr__rm.empty);
+    }
+#endif
+#if defined(YSCR__GLX) && !defined(YRT_NO_THREADS)
+    if (s->raw_mice) {   /* the evdev reader's counts (INPUT, "Raw mice on Linux X11") */
+        size_t n = strlen(extra);
+        if (n < sizeof extra)
+            snprintf(extra + n, sizeof extra - n, " raw_mice=%u(nodes %d, unfocused %u, syn_dropped %u)",
+                     (unsigned)yscr__a_load(&yscr__lm.reports), (int)yscr__a_load(&yscr__lm.nodes),
+                     (unsigned)yscr__a_load(&yscr__lm.unfocused),
+                     (unsigned)yscr__a_load(&yscr__lm.syn_dropped));
     }
 #endif
     {   /* the abort combination, as an operator reads it */
@@ -16494,19 +16573,21 @@ YSCR_API bool yscr_key_filter(yscr_screen* s, const yin_event* e) {
     return e && yscr__key_keep(s, e) != 0;
 }
 
-YSCR_API bool yscr_event_input(yscr_screen* s, const union SDL_Event* ev, yin_event* out) {
+/* given: t_rt is the caller's time for the event (yscr_event_input_at) */
+static bool yscr__event_input(yscr_screen* s, const union SDL_Event* ev, int given, int64_t t_rt, yin_event* out) {
     if (!ev || !out) return false;
 #if !defined(YSCR_NO_SDL)
     if (yscr__in.type && ev->type == yscr__in.type)
         return yscr__in_decode(s, ev->user.code, out) != 0 && yscr__key_keep(s, out);
     {
         yin_sdl_ctx ctx;
-        int64_t t = yscr_restamp(s, ev->common.timestamp);
+        int64_t t = given ? t_rt : yscr_restamp(s, ev->common.timestamp);
         memset(&ctx, 0, sizeof ctx);
         ctx.raw_keyboard = s ? yscr__raw_keyboard(s) : true;
-        ctx.keep_synthetic = false;
+        ctx.keep_synthetic = s && s->keep_synthetic;
 #if defined(YSCR__METAL)
-        if (s && yscr__os_input_stamps(s)) {
+        /* the pairing reads SDL's own stamp; a given time has no NSEvent */
+        if (!given && s && yscr__os_input_stamps(s)) {
             ctx.os_stamps = true;
             ctx.t_os = yscr__nsm_stamp_once(ev, t);
         }
@@ -16519,10 +16600,18 @@ YSCR_API bool yscr_event_input(yscr_screen* s, const union SDL_Event* ev, yin_ev
         return yscr__key_keep(s, out);
     }
 #else
-    (void)s;
+    (void)s; (void)given; (void)t_rt;
     (void)&yscr__in_decode;
     return false;
 #endif
+}
+
+YSCR_API bool yscr_event_input(yscr_screen* s, const union SDL_Event* ev, yin_event* out) {
+    return yscr__event_input(s, ev, 0, 0, out);
+}
+
+YSCR_API bool yscr_event_input_at(yscr_screen* s, const union SDL_Event* ev, int64_t t_rt, yin_event* out) {
+    return yscr__event_input(s, ev, 1, t_rt, out);
 }
 
 #if !defined(YSCR_NO_SDL)
@@ -16676,7 +16765,8 @@ YSCR_API const yscr_param* yscr_params(int* n) {
         { "icon_sdl",        "bool", 0, 1, 0, "",                 "keep SDL's window icon instead of the header's", NULL },
         { "d3d11_video",     "bool", 0, 1, 0, "",                 "D3D11 device with video support and multithread protection", NULL },
         { "gamepads",        "bool", 0, 1, 0, "",                 "start SDL's gamepad subsystem and open every gamepad", NULL },
-        { "raw_mice",        "bool", 0, 1, 0, "",                 "read each mouse's reports on a thread: per device, raw-timed (Windows, macOS)", NULL },
+        { "raw_mice",        "bool", 0, 1, 0, "",                 "read each mouse's reports on a thread: per device, raw-timed (Windows, macOS, Linux X11)", NULL },
+        { "keep_synthetic",  "bool", 0, 1, 0, "",                 "yscr_event_input() keeps the events SDL makes from another device (a pen's mouse events), flagged", NULL },
         { "key_dedup_ns",    "i64", -1, 1e9, 5e7, "ns",           "drop a key's second report within this time; 0 = 50 ms, -1 = off", NULL },
         { "onset_offset_ns", "i64", -1e9, 1e9, 0, "ns",           "added to every onset; from the photodiode test", NULL },
         { "min_tier",        "i32",  0, 3, 0, "",                 "flag flips whose tier is worse; 0 = off", NULL },
