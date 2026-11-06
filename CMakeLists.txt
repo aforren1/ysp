@@ -211,6 +211,7 @@ set(YSP_EXAMPLES_ACROSS
     response/trial_visuomotor.c -
     response/trial_audio_keyboard.c -
     response/trial_stop_signal.c -
+    response/trial_timed_response.c -
     response/trial_2afc_adaptive.c -
     rdk/trial_rdk.c            -
     response/trial_stroop.c    -
@@ -713,7 +714,7 @@ if(TARGET SDL3::SDL3 AND YSP_BUILD_EXAMPLES)
     ysp_add_program(web_rdk_staircase examples/web/rdk_staircase.c rig methods)
     ysp_add_program(web_selftest examples/web/selftest.c rig)
     if(TARGET ysp::miniaudio)
-        foreach(_t audio_keyboard stop_signal)
+        foreach(_t audio_keyboard stop_signal timed_response)
             ysp_add_program(trial_${_t} examples/response/trial_${_t}.c rig methods)
         endforeach()
         # PTB's PsychPortAudioTimingTest (docs/rig_spec.md 16.6): a flash and
