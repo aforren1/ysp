@@ -75,5 +75,8 @@ headers include, and the libraries an implementation file needs:
   `ysp/outline.h`, `ysp/rdk.h`, `ysp/video.h` and `ysp/audio.h`, and links
   `ysp::core`, `ysp::devices`, `libdl`, and the SDL3, miniaudio and pl_mpeg
   that exist when it is added (from `find_package(SDL3)`,
-  `YSP_MINIAUDIO_DIR` and `YSP_PL_MPEG_DIR`).
+  `YSP_MINIAUDIO_DIR` and `YSP_PL_MPEG_DIR`). With `YSP_VIDEO_FFMPEG=ON` (Linux, or the
+  `linux-ffmpeg` preset) it also defines `YVID_FFMPEG` and adds FFmpeg's
+  include directories from pkg-config; `libavformat`, `libavcodec` and
+  `libavutil` are not linked, and load at run time.
 - `ysp::ysp` links all four groups.

@@ -9,8 +9,8 @@
  *
  * Usage: video_play [--sim] [--file PATH [--index]] [--size WxH] [--frames N]
  *                   [--fps N] [--qoi] [--yuv] [--loop] [--seconds S]
- *                   [--window WxH] [--display ID] [--ahead N] [--csv PATH]
- *                   [--hw sw|dxva|vt] [--gpu]
+ *                   [--window WxH] [--fullscreen] [--display ID] [--ahead N]
+ *                   [--csv PATH] [--hw sw|dxva|vt|vaapi] [--device PATH] [--gpu] [--threads N] [--elevate]
  *   --sim       no window and no GL: the simulated display, for CI
  *   --size      generated frames, pixels (default 320x180)
  *   --frames    generated frames (default 60)
@@ -18,11 +18,15 @@
  *   --qoi       QOI frames (RGBA8); --yuv: I420 frames, converted on the pump
  *   --seconds   stop after S seconds (default: the movie's end)
  *   --window    window size (default 640x360)
+ *   --fullscreen the whole display, in place of a window
  *   --csv       one line per display frame: index, decision, why, frame, the
  *               update's ns
- *   --hw        the MP4 decoder (desc.hw_decode): sw, dxva (Windows), vt (macOS)
+ *   --hw        the MP4 decoder (desc.hw_decode): sw, dxva (Windows), vt
+ *               (macOS), vaapi (Linux); --device: VAAPI's (desc.hw_device)
  *   --gpu       decode and draw on the GPU (desc.gpu_path YVID_PATH_GPU;
  *               the screen opens with desc.d3d11_video)
+ *   --threads   FFmpeg's decoder threads (desc.decode_threads)
+ *   --elevate   yrt_thread_elevate() before the screen opens
  * It prints yvid_update()'s cost on frames that uploaded a new frame and
  * on repeats separately, the draw and flip's cost, and the process's CPU,
  * after frame 120. Shift+Esc ends it (ysp/screen.h's default abort).
@@ -128,9 +132,10 @@ int main(int argc, char** argv) {
     yscr_frame f;
     const char* file = NULL;
     const char* csv = NULL;
+    const char* device = NULL;
     const char* gen = "video_play_demo.yspseq";
     int w = 320, h = 180, n = 60, fps = 30, qoi = 0, yuv = 0, loop = 0, index = 0, ahead = 0;
-    int ww = 640, wh = 360, i, rc = YVID_OK, failed = 0, hw = 0, gpu = 0;
+    int ww = 640, wh = 360, i, rc = YVID_OK, failed = 0, hw = 0, gpu = 0, threads = 0, elevate = 0;
     unsigned display = 0;
     double seconds = 0;
     int64_t* cost = NULL;
@@ -156,19 +161,24 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--yuv")) yuv = 1;
         else if (!strcmp(argv[i], "--loop")) loop = 1;
         else if (!strcmp(argv[i], "--seconds") && i + 1 < argc) seconds = atof(argv[++i]);
+        else if (!strcmp(argv[i], "--fullscreen")) sd.windowed = false;
         else if (!strcmp(argv[i], "--display") && i + 1 < argc) display = (unsigned)strtoul(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "--ahead") && i + 1 < argc) ahead = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--csv") && i + 1 < argc) csv = argv[++i];
         else if (!strcmp(argv[i], "--gpu")) gpu = 1;
+        else if (!strcmp(argv[i], "--threads") && i + 1 < argc) threads = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--device") && i + 1 < argc) device = argv[++i];
+        else if (!strcmp(argv[i], "--elevate")) elevate = 1;
         else if (!strcmp(argv[i], "--hw") && i + 1 < argc) {
             const char* v = argv[++i];
-            hw = !strcmp(v, "sw") ? YVID_HW_OFF : !strcmp(v, "dxva") ? YVID_HW_DXVA : !strcmp(v, "vt") ? YVID_HW_VIDEOTOOLBOX : -1;
-            if (hw < 0) { fprintf(stderr, "video_play: --hw sw, dxva or vt\n"); return 2; }
+            hw = !strcmp(v, "sw") ? YVID_HW_OFF : !strcmp(v, "dxva") ? YVID_HW_DXVA : !strcmp(v, "vt") ? YVID_HW_VIDEOTOOLBOX
+               : !strcmp(v, "vaapi") ? YVID_HW_VAAPI : -1;
+            if (hw < 0) { fprintf(stderr, "video_play: --hw sw, dxva, vt or vaapi\n"); return 2; }
         }
         else {
             fprintf(stderr, "usage: video_play [--sim] [--file PATH [--index]] [--size WxH] [--frames N] [--fps N]\n"
-                            "                  [--qoi] [--yuv] [--loop] [--seconds S] [--window WxH] [--display ID]\n"
-                            "                  [--ahead N] [--csv PATH] [--hw sw|dxva|vt] [--gpu]\n");
+                            "                  [--qoi] [--yuv] [--loop] [--seconds S] [--window WxH] [--fullscreen] [--display ID]\n"
+                            "                  [--ahead N] [--csv PATH] [--hw sw|dxva|vt|vaapi] [--device PATH] [--gpu] [--threads N] [--elevate]\n");
             return 2;
         }
     }
@@ -186,6 +196,7 @@ int main(int argc, char** argv) {
         printf("video_play: indexed %lld frames of %s\n", (long long)k, file);
     }
 
+    if (elevate) printf("video_play: the frame thread's policy: %d\n", (int)yrt_thread_elevate(NULL));
     /* In C99 the opens are compound literals with designated initializers:
      *   yvid_open(&mv, &gfx, &(yvid_desc){ .path = file, .loop = loop });
      * Written out field by field so the file also builds as C++17. */
@@ -203,6 +214,8 @@ int main(int argc, char** argv) {
     vd.loop = loop != 0;
     vd.ahead = ahead;
     vd.hw_decode = (yvid_hw)hw;
+    vd.decode_threads = threads;
+    vd.hw_device = device;
     if (gpu) vd.gpu_path = YVID_PATH_GPU;
     if (!yvid_open(&mv, &gfx, &vd)) { fprintf(stderr, "video_play: %s\n", yvid_error(&mv)); return 1; }
     memset(&st, 0, sizeof st);

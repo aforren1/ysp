@@ -237,6 +237,35 @@ jobs:
   #                  (gfx also -Os, -Og; gcc 11.4, 16.1), which Release    #
   #                  (-O3) and Debug (-O0) both miss.                      #
   # --------------------------------------------------------------------- #
+  # ysp/video.h's FFmpeg backend (off by default, Linux): the runner's FFmpeg is
+  # another major version than the development machine's, so this also checks
+  # that the header's fields compile against it. Bars and index on generated
+  # clips; no display and no GPU, so software decode only.
+  video-ffmpeg:
+    name: ysp/video.h on FFmpeg
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install FFmpeg and its headers
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg libavformat-dev libavcodec-dev libavutil-dev
+      - name: Make the clips
+        run: sh tests/media/make_video_clips.sh "$RUNNER_TEMP/clips"
+      - name: Build and run
+        run: |
+          W="-Wall -Wextra -Wpedantic -Wshadow -Wfloat-conversion -Werror"
+          F="-Iinclude -DYVID_FFMPEG"
+          L="-lm -ldl -lpthread"
+          gcc -std=c11 -O2 $W $F -o test_video_ff tests/adapt/video_test.c $L
+          YVID_TEST_MEDIA="$RUNNER_TEMP/clips" ./test_video_ff
+          gcc -std=c11 -O2 $W $F -DYSCR_NO_SDL -DYVID_NO_PL_MPEG -o test_video_ff_missing tests/adapt/video_ffmpeg_missing_test.c $L
+          ./test_video_ff_missing
+          gcc -std=c11 -O2 $W $F -DYSCR_NO_SDL -DYVID_NO_PL_MPEG -o compile_video_ff_c tests/compile/video.c $L
+          ./compile_video_ff_c
+          g++ -std=c++17 -O2 $W $F -DYSCR_NO_SDL -DYVID_NO_PL_MPEG -o compile_video_ff_cxx tests/compile/video.cpp $L
+          ./compile_video_ff_cxx
+          gcc -std=c11 -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all $F -DYSCR_NO_SDL -DYVID_NO_PL_MPEG -DYSP_FUZZ_SELF -o video_mp4_self tests/fuzz/video_mp4_fuzz.c $L
+          ./video_mp4_self 50000
+
   linux-extra:
     name: Linux ${{ matrix.name }}
     runs-on: ubuntu-latest
@@ -1224,7 +1253,7 @@ jobs:
       # out of this list is compiled nowhere on CI. ctest below runs every
       # test that matches its pattern, built or not.
       - name: Build
-        run: cmake --build build --config Release --target compile_screen_c compile_screen_cxx compile_screen_com compile_screen_glx compile_audio_pulse test_screen test_screen_window screen_hello screen_flipstats screen_input screen_abort screen_gamma screen_sync_check screen_loopback compile_gfx_c compile_gfx_cxx test_gfx gfx_hello gfx_trial gfx_load gfx_calib gfx_bench gfx_gallery gfx_text gfx_gratings gfx_luminance_bits gfx_clut_sync gfx_filtered_noise gfx_gaze_contingent gfx_capture gfx_rdk gfx_rdk_bench trial_rdk compile_video_c compile_video_cxx compile_video_com compile_video_avf compile_order_audio_screen_c compile_order_audio_screen_cxx compile_order_screen_audio_c compile_order_screen_audio_cxx compile_share_shims_c compile_share_shims_cxx test_video video_play video_bench video_check test_response_sdl test_input_sdl trial_keyboard trial_same_different trial_srt trial_adjustment trial_mouse_tracking trial_audio_keyboard trial_stop_signal trial_sternberg trial_2afc_adaptive trial_two_keyboards trial_eeg_triggers response_lag trial_scanner_sync gfx_gamma_null trial_movie color_patch audio_av_sync web_tutorial web_rdk_staircase web_selftest web_av_sync
+        run: cmake --build build --config Release --target compile_screen_c compile_screen_cxx compile_screen_com compile_screen_glx compile_audio_pulse test_screen test_screen_window screen_hello screen_flipstats screen_input screen_abort screen_gamma screen_sync_check screen_loopback compile_gfx_c compile_gfx_cxx test_gfx gfx_hello gfx_trial gfx_load gfx_calib gfx_bench gfx_gallery gfx_text gfx_gratings gfx_luminance_bits gfx_clut_sync gfx_filtered_noise gfx_gaze_contingent gfx_capture gfx_rdk gfx_rdk_bench trial_rdk compile_video_c compile_video_cxx compile_video_com compile_video_avf compile_order_audio_screen_c compile_order_audio_screen_cxx compile_order_screen_audio_c compile_order_screen_audio_cxx compile_share_shims_c compile_share_shims_cxx test_video video_play video_bench video_check video_soundtrack test_response_sdl test_input_sdl trial_keyboard trial_same_different trial_srt trial_adjustment trial_mouse_tracking trial_audio_keyboard trial_stop_signal trial_sternberg trial_2afc_adaptive trial_two_keyboards trial_eeg_triggers response_lag trial_scanner_sync gfx_gamma_null trial_movie color_patch audio_av_sync web_tutorial web_rdk_staircase web_selftest web_av_sync
 
       # ysp/gfx.h's pixel checks must run where software GL exists; macOS has
       # no EGL, so its test runs the CPU checks only.
@@ -1356,6 +1385,7 @@ jobs:
           expect 0 "$bin/video_play" --sim --yuv --size 64x48 --frames 20
           expect 0 "$bin/video_bench" --size 64x48 --reps 3
           expect 2 "$bin/video_play" --bogus
+          expect 2 "$bin/video_soundtrack" --bogus
 
       # pack/layout (docs/layout.md): the vendored Skribidi and
       # HarfBuzz, the glue's test, and gfx_layout on the simulated display.

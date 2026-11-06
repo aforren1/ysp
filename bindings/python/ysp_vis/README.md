@@ -177,7 +177,7 @@ a path or bytes (None: `path + ".yspvi"`), `timeline` a
 options are the header's desc (`ysp.video.options()` lists them): `loop`,
 `ahead`, `preroll`, `lead`, `light` (`'auto'`, `'codes'`, `'eotf'`),
 `chroma`, `backend` (`'auto'`, `'seq'`, `'plmpeg'`, `'mf'`), `hw_decode`
-(`'auto'`, `'off'`, `'dxva'`, `'videotoolbox'` on macOS), `strict_cadence`, `inline_decode`,
+(`'auto'`, `'off'`, `'dxva'`, `'videotoolbox'` on macOS, `'vaapi'` on Linux with FFmpeg), `strict_cadence`, `inline_decode`,
 `inline_budget`, `refresh_num`, `refresh_den`, `movie_index`, `min_tier`,
 `pin_cpu`. Opening releases the GIL.
 

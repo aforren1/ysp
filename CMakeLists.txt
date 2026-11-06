@@ -75,6 +75,21 @@ function(ysp_link_rig_deps sdl_hint)
     endif()
 endfunction()
 
+# ysp/video.h's FFmpeg backend (Linux): H.264 and HEVC in MP4. Off by default.
+# It needs FFmpeg's headers to compile and links nothing: the libraries are
+# loaded at run time (docs/video.md, "Linux"), and a build without this option
+# has no FFmpeg in it at all.
+option(YSP_VIDEO_FFMPEG "ysp/video.h: FFmpeg backend on Linux; needs libavformat, libavcodec and libavutil headers" OFF)
+if(YSP_VIDEO_FFMPEG)
+    if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        message(FATAL_ERROR "YSP_VIDEO_FFMPEG is for Linux; Media Foundation decodes MP4 on Windows")
+    endif()
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(YSP_LIBAV REQUIRED libavformat libavcodec libavutil)
+    target_compile_definitions(ysp_rig INTERFACE YVID_FFMPEG)
+    target_include_directories(ysp_rig SYSTEM INTERFACE ${YSP_LIBAV_INCLUDE_DIRS})
+endif()
+
 # Nothing below applies when ysp is pulled in as a subproject.
 if(NOT CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     ysp_link_rig_deps("call find_package(SDL3) before add_subdirectory(ysp)")
@@ -209,6 +224,7 @@ set(YSP_EXAMPLES_ACROSS
     audio/av_sync.c            -
     response/trial_two_keyboards.c -
     video/trial_movie.c        -
+    video/soundtrack.c         -
     color/patch.c              -
     layout/trial_instructions.c -)
 
@@ -706,6 +722,9 @@ if(TARGET SDL3::SDL3 AND YSP_BUILD_EXAMPLES)
         # PsychoPy's movie demos (docs/rig_spec.md 15.5): RT from a video
         # frame's flip record, pause and seek by keys, a soundtrack stream.
         ysp_add_program(trial_movie examples/video/trial_movie.c rig methods)
+        # docs/video.md's "Soundtrack" measurement: a movie on the sound
+        # device's clock, with the numbers of its tables.
+        ysp_add_program(video_soundtrack examples/video/soundtrack.c rig methods)
     endif()
     # PsychoPy's color and monitor demos (docs/rig_spec.md 15.5): a patch
     # through the calibration, walked in hue and chroma by keys.
@@ -739,7 +758,7 @@ endif()
 # without MPEG-1. The test has its own scripted decoder; it compares QOI
 # bytes with qoi.h when that was fetched.
 if(NOT TARGET ysp::pl_mpeg)
-    foreach(t compile_video_c compile_video_cxx video_play video_bench trial_movie)
+    foreach(t compile_video_c compile_video_cxx video_play video_bench trial_movie video_soundtrack)
         if(TARGET ${t})
             target_compile_definitions(${t} PRIVATE YVID_NO_PL_MPEG)
         endif()
@@ -790,6 +809,15 @@ if(YSP_BUILD_TESTS AND TARGET SDL3::SDL3 AND CMAKE_SYSTEM_NAME IN_LIST YSP_PLATF
         target_include_directories(compile_share_shims_${lang} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/bindings/share)
         add_test(NAME compile_share_shims_${lang} COMMAND compile_share_shims_${lang})
     endforeach()
+endif()
+# Built with YVID_FFMPEG, run as if FFmpeg were not installed: a program must
+# start and a frame sequence must play.
+if(YSP_VIDEO_FFMPEG AND YSP_BUILD_TESTS AND TARGET SDL3::SDL3)
+    ysp_add_program(test_video_ffmpeg_missing tests/adapt/video_ffmpeg_missing_test.c rig)
+    add_test(NAME test_video_ffmpeg_missing COMMAND test_video_ffmpeg_missing)
+    if(NOT TARGET ysp::pl_mpeg)
+        target_compile_definitions(test_video_ffmpeg_missing PRIVATE YVID_NO_PL_MPEG)
+    endif()
 endif()
 if(TARGET test_video AND YSP_QOI_DIR)
     target_include_directories(test_video PRIVATE ${YSP_QOI_DIR})

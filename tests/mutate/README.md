@@ -99,7 +99,7 @@ killed (2026-11-04), and are `skipped` elsewhere.
 | List | Needs |
 |---|---|
 | `gfx.toml` | Windows, a D3D11 GPU, and ANGLE (`libEGL.dll`, `libGLESv2.dll`) in `YSCR_ANGLE_DIR`. Default: `C:/Program Files/Docker/Docker/frontend`. |
-| `video.toml` | For the `mf-` mutants: Windows (Media Foundation) and the clips of `tests/media/make_video_clips.sh` in `build-vid/media`, or `YVID_TEST_MEDIA` set to their directory. |
+| `video.toml` | For the `mf-` mutants: Windows (Media Foundation) and the clips of `tests/media/make_video_clips.sh` in `build-vid/media`, or `YVID_TEST_MEDIA` set to their directory. For the `ff-` mutants: Linux, FFmpeg's headers and libraries, and the clips in `build/clips` or `YVID_TEST_MEDIA`. `ff-00`, `ff-01` need an `rtprio` grant; `ff-21` to `ff-23` a VAAPI device. |
 
 ### Shared machine
 

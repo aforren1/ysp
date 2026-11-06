@@ -95,6 +95,16 @@ int main(void) {
     ygfx_close(&g);
     yscr_close(&s);
     remove(path);
+    {   /* v0.7.0: the decoder's options, by type: AUTO, VAAPI by name, and the
+         * thread count and device; nothing here needs FFmpeg */
+        yvid_hw hws[2];
+        int32_t* threads = &vd.decode_threads;
+        const char** device = &vd.hw_device;
+        hws[0] = YVID_HW_AUTO; hws[1] = YVID_HW_VAAPI;
+        *threads = 0;
+        *device = NULL;
+        if (hws[0] == hws[1]) return 19;
+    }
     {   /* v0.6.0: the code beside the message, by type: a missing file is
          * NOT_FOUND from the open, the probe and the writer */
         yvid_info info;

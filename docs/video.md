@@ -4,7 +4,8 @@ This note explains why `ysp/video.h` has its current form and records what
 was measured. The manual in the header tells you how to use it. The plan
 that asked for the header is section 4.6 of [rig_spec.md](rig_spec.md).
 
-All numbers come from one machine: a Windows 11 25H2 laptop, i7-1360P, on
+The numbers come from one machine unless a section names another (sections
+"AVFoundation (v0.7.0)" and "Linux (v0.8.0)"): a Windows 11 25H2 laptop, i7-1360P, on
 AC power, Intel Iris Xe, the 1920 x 1200 panel at 60.0008 Hz
 (`\\.\DISPLAY1`), ANGLE 2.1.23876 from Docker Desktop. Window runs were
 640 x 360, composed (tier 2), with low-contrast content. Timing runs held
@@ -41,7 +42,8 @@ that a restart loses nothing.
 | Bindings, phase B (2026-10-27) | Done: `ysp.video` and `ysp_video` in ysp-vis 0.10.1.1 (MEX 1.1.0); frames equal to the C path on the simulated display; 60 s fullscreen runs with sound in Python and MATLAB. See "Bindings" |
 | v0.6.0 (2026-10-27): UTF-8 paths, error codes | Done: every path is UTF-8 (`_wfsopen` on Windows); `mv.error_code` and `w.error_code`; a missing file is `YVID_ERR_NOT_FOUND` from the probe; x86 MSVC atomics. 7 of 7 mutants caught. ysp-vis 0.10.4, MEX 1.2.1. See "UTF-8 paths and error codes (v0.6.0)" |
 | v0.7.0 (2026-11-05): AVFoundation | Done on macOS: AVAssetReader demuxes, VideoToolbox decodes (hardware or software, read back), loaded at run time from C99 and C++; the same index and checks; memory and reader sources through a resource loader; clips from VideoToolbox (`tests/media/make_video_clips_mac.sh`). Tested on an M2 (ASan, UBSan, TSan). Decode, open and seek measured (hardware 3.6 ms a 1080p frame); the frame thread not; GPU path not built. See "AVFoundation (v0.7.0)" |
-| Not in this task | Capture, FFmpeg |
+| v0.8.0 (2026-11-05): Linux (numbered v0.7.0 on its branch) | Done: frame sequence, pl_mpeg and the new FFmpeg backend on GLX_OML on the real display, with the soundtrack on ALSA and PulseAudio. AUTO is VAAPI, by measurement. See "Linux (v0.8.0)" |
+| Not in this task | Capture |
 
 ## Decisions that changed the design
 
@@ -1329,6 +1331,336 @@ for c in m_720p30 m_1080p30 m_1080p60; do ./build-avf/video_play --sim --file bu
 for r in 1 2 3; do for c in m_720p30 m_1080p30 m_1080p60; do for hw in vt sw; do
   ./build-avf/video_bench --mp4 build-avf/clips/$c.mp4 --hw $hw --seeks 50; done; done; done > build-avf/m_avf.txt
 ```
+## Linux (v0.8.0)
+
+Measured as v0.7.0 on its branch, before the merge over v0.7.0 (AVFoundation),
+which renumbered `YVID_HW_VAAPI` from 3 to 4. This section records the first movie runs on a real Linux display, and the
+FFmpeg backend that those runs led to. The rest of this document describes the
+Windows laptop. Windows did not run here.
+
+The machine, 2026-11-05: Debian 12, kernel 6.11.5 liquorix (PDS), i5-14500 (20
+logical CPUs), AMD RX 6600 on 1 output at 1920 x 1080, 60.000 Hz, Mesa 22.3.6,
+Xorg with Xfwm4 and its compositor off, `ysp/screen.h` v0.11.0 on GLX_OML, SDL
+3.4.18, gcc 12.2 at `-O3` (the `linux` and `linux-ffmpeg` presets), FFmpeg 5.1.6
+from Debian. The Intel UHD of the same CPU has no display and served as a second
+VAAPI device. One job measured at a time, and each run started with the load
+average under 1.5. One overlap of two runs happened; both rows were run again.
+
+These numbers are software records against the kernel's vblank times and against
+`ysp/audio.h`'s fit of the device clock. No photodiode and no line-in were
+attached. So no number here is a measurement of light or sound, and no timing
+tier comes from them.
+
+### Baseline: frame sequence and MPEG-1
+
+The first step ran the header as it was (v0.6.0), with no change, through
+`video_bench`, `video_play`, `trial_movie --auto` and the new `video_soundtrack`.
+Nothing in `ysp/video.h` broke, and it needed no change for these paths. Only a
+decoder was missing.
+
+`yvid_update()` on display frames with an upload, ms, after the 120th display
+frame; 20 s or 600 frames each. The window is 640 x 360 (tier 2, a copy); the
+fullscreen runs flip (tier 1).
+
+| Movie | Mode | Mean | p50 | p99 | Max | Process CPU, % of a core |
+|---|---|---|---|---|---|---|
+| 1280 x 720 RGBA8 frame sequence, raw | window | 0.392 | 0.421 | 0.487 | 0.501 | 3.8 |
+| 1920 x 1080 RGBA8 frame sequence, raw | window | 0.665 | 0.662 | 0.765 | 0.952 | 8.1 |
+| 1280 x 720 RGBA8 frame sequence, QOI | window | 0.355 | 0.328 | 0.470 | 1.258 | 3.8 |
+| 1280 x 720 I420 frame sequence | window | 0.104 | 0.102 | 0.149 | 0.174 | 1.6 |
+| 1280 x 720 MPEG-1, 30 fps | window | 0.170 | 0.168 | 0.199 | 0.220 | 7.5 |
+| 1280 x 720 MPEG-1, 24000/1001 fps | window | 0.106 | 0.105 | 0.145 | 0.165 | 5.4 |
+| 1920 x 1080 MPEG-1, 30 fps | window | 0.313 | 0.300 | 0.486 | 0.500 | 17.7 |
+| 1920 x 1080 MPEG-1, 60 fps | window | 0.293 | 0.295 | 0.334 | 0.423 | 31.5 |
+| 1920 x 1080 MPEG-1, 30 fps | fullscreen | 0.290 | 0.290 | 0.323 | 0.398 | 13.6 |
+| 1920 x 1080 MPEG-1, 60 fps | fullscreen | 0.286 | 0.284 | 0.321 | 0.358 | 26.9 |
+
+Every run: no dropped frame, no late flip, 0 heap calls after frame 120 (the
+header's count). A repeat costs 0.002 to 0.004 ms. The draw and flip together cost
+0.05 to 0.07 ms mean, 0.13 ms p99 at most.
+
+`video_bench` on the decode thread, mean / p99, ms: pl_mpeg 1.88 / 2.88 at 720p
+and 3.69 / 4.11 at 1080p; XXH64 of the planes 0.18 / 0.20 at 1080p; QOI at 1080p
+2.14 / 2.14 (smooth) and 5.41 / 5.93 (noise).
+
+`trial_movie --auto` in a window and fullscreen, with ALSA: every trial as
+scripted, 0 video frames dropped, 0 late flips. `video_soundtrack` with MPEG-1
+at 1080p30 is in "The soundtrack on Linux".
+
+Two faults outside the header showed in this step:
+
+- `tests/media/make_video_clips.sh` stopped at `-display_rotation`, which ffmpeg
+  5.1 does not have. The script now falls back to the `rotate` tag on the stream.
+- `yau_open()` on PulseAudio at 44100 Hz says "On Windows the rate is the device's
+  Default Format". The refusal is right; the advice is for another platform.
+  Reported, not changed. The ALSA backend's device scan also prints two
+  `ALSA lib pcm_dmix` lines to stderr.
+
+### FFmpeg
+
+`YVID_FFMPEG` on Linux gives `YVID_BACKEND_FFMPEG`: the same MP4 files, the same
+refusals and the same index as Media Foundation. Each decision below has its
+measurement. The options that measured no better are not in the header.
+
+| Decision | Choice | Why |
+|---|---|---|
+| Link or load | Load at run time: `dlopen()` of the headers' sonames | Below. This changes the spec's "links the libraries" (rig_spec.md section 3) |
+| Headers | FFmpeg's, at build time, only with `YVID_FFMPEG` | The types come from them, so no FFmpeg text is in this project. A local copy of the layouts per major version could run without headers, but it would copy LGPL declarations, and only one major could be tested here. Not built |
+| Software or VAAPI | AUTO is VAAPI, software when VAAPI cannot open the stream | Below (M1, M2, M4) |
+| Threads | Frame threads, 4 by default for software; slice threads not used | Below (M1) |
+| How frames reach gfx | NV12 planes through the existing upload | Below (M2) |
+| The format | Always NV12, the index's form | Software decoding gives I420. The interleave costs 0.26 to 0.38 ms at 1080p on the decode thread. One index then serves Media Foundation and FFmpeg; an I420 index would not |
+| Demuxer | libavformat's `mov`, by name, over the header's byte source | No path or URL reaches FFmpeg, and memory and reader sources work. It is never probed: FFmpeg's other demuxers must not see the file |
+| Rotation | Read from the `tkhd` box by the header | FFmpeg's side-data API for it moved between majors. `tests/fuzz/video_mp4_fuzz.c` covers the box readers: 1,000,000 mutated inputs under ASan and UBSan, no finding |
+
+**Link or load.** `libavcodec.so.59` on Debian 12 pulls in 96 other libraries,
+`libavformat.so.59` 134. Three small programs, median of 50 starts, 3 interleaved
+rounds:
+
+| Program | Start to exit, ms |
+|---|---|
+| No FFmpeg | 0.19 |
+| Linked to libavformat and libavcodec | 15.04 to 15.08 |
+| `dlopen()` of the three libraries | 14.32 to 14.35 |
+
+`dlopen()` takes 13.6 to 14.0 ms and adds 24.5 MB to the RSS. So linking charges
+every program 15 ms and 24 MB, also a program that shows only gratings.
+Loading charges only the first MP4 open, which has room for it (M3). The libraries
+start no thread when they load (1 task after `dlopen()`). A linked program also
+does not start on a machine without FFmpeg, where the same program with loading
+plays frame sequences and MPEG-1 and names the library when an MP4 opens
+(`test_video_ffmpeg_missing`). Other major versions are refused by their version
+numbers, because the structs' layouts differ.
+
+**License.** The header holds no FFmpeg code, and this project stays MIT-0.
+`avcodec_license()` is in the describe line: Debian's build says "GPL version 2 or
+later", because it is configured with `--enable-gpl`. What the rig's installed
+library requires is the rig's to meet. Nothing is linked, so a program can run on
+an LGPL build by swapping the library of the same major. This is a design note,
+not legal advice.
+
+**M1, M3, M4: the decode thread.** `video_bench --mp4` on the clips of
+`make_video_clips.sh --long`, ABBA over all rows: the two values of a range are the
+two runs. Each run decodes the whole clip as fast as it can.
+
+The script is Windows's, but this ffmpeg gives lower bit rates from it: 1080p30 is
+39.7 Mb/s here against 64 Mb/s, 1080p60 19.9 Mb/s against 36 Mb/s, and 720p30
+17.6 Mb/s. Compare the rows with Windows with that in mind. Windows's numbers are
+another machine's too.
+
+"Total" is what the decode thread pays: `avcodec_receive_frame()` with the demux, the
+frame into a slot (the interleave, or for VAAPI the read-back and a copy), and the
+hash. AMD is the display's RX 6600 (`renderD129`); Intel is the UHD (`renderD128`).
+
+| Clip | Decoder | Process CPU per frame, ms | Total mean / p99, ms | Read-back + slot mean / p99, ms | Open to first frame, cold; warm, ms | Random seek mean / p99, ms | Close, ms |
+|---|---|---|---|---|---|---|---|
+| 1280 x 720, 30 fps | software, 1 thread | 6.7 to 7.9 | 6.7 to 7.9 / 13.9 to 17.3 | 0.11 to 0.14 / 0.19 | 25 to 26; 9 | 109 to 132 / 198 to 250 | 0.2 |
+| | software, 2 | 7.4 to 7.5 | 3.0 to 3.1 / 7.2 to 10.8 | 0.15 / 0.20 | 26 to 33; 9 | 73 / 130 | 8.0 |
+| | software, 4 | 6.9 to 7.0 | 0.7 to 0.9 / 7.4 to 7.7 | 0.12 to 0.16 / 0.20 | 26 to 33; 10 | 43 / 66 | 6.5 |
+| | software, 8 | 7.1 to 7.2 | 0.3 / 3.1 to 3.3 | 0.12 / 0.20 | 29 to 34; 11 | 35 to 40 / 49 to 54 | 7 to 8 |
+| | software, 16 | 7.6 | 0.3 / 0.3 to 0.4 | 0.12 to 0.16 / 0.23 | 34 to 39; 12 | 39 to 40 / 53 to 54 | 13 |
+| | VAAPI, AMD | 0.5 | 2.4 / 3.7 to 3.8 | 2.2 / 3.5 | 38 to 49; 13 | 30 / 51 | 10 |
+| | VAAPI, Intel | 0.8 | 1.5 to 1.6 / 2.4 | 1.3 to 1.4 / 2.1 | 22; 4 | 12 / 21 | 4.5 |
+| 1920 x 1080, 30 fps | software, 1 | 18.0 to 18.2 | 18.0 to 18.3 / 39.3 to 39.5 | 0.34 / 0.43 | 36 to 37; 19 | 272 to 299 / 552 to 577 | 1 |
+| | software, 2 | 15.8 to 18.1 | 6.6 to 7.5 / 28 to 30 | 0.27 to 0.36 / 0.50 | 37; 20 | 148 to 175 / 258 to 321 | 1.6 |
+| | software, 4 | 15.9 to 17.4 | 2.1 to 2.8 / 18 to 28 | 0.26 / 0.38 | 38 to 40; 21 | 102 to 117 / 163 to 190 | 7 to 17 |
+| | software, 8 | 16.6 to 17.3 | 0.8 to 0.9 / 7.8 to 13.6 | 0.31 / 0.48 | 39 to 41; 21 | 80 to 83 / 115 to 132 | 15 to 19 |
+| | software, 16 | 17.2 to 17.4 | 0.6 / 0.8 | 0.33 / 0.46 | 50; 24 to 27 | 80 to 81 / 105 to 106 | 19 to 20 |
+| | VAAPI, AMD | 1.1 to 1.3 | 4.3 to 4.5 / 7.6 to 7.7 | 3.9 to 4.1 / 7.0 | 43 to 44; 17 | 53 to 54 / 92 | 4 to 12 |
+| | VAAPI, Intel | 1.5 to 1.6 | 3.1 to 3.2 / 4.7 to 4.8 | 2.8 to 2.9 / 4.3 | 32 to 44; 6 | 27 / 47 to 48 | 2 to 3 |
+| 1920 x 1080, 60 fps | software, 1 | 6.3 to 6.5 | 6.3 to 6.5 / 20.3 to 20.4 | 0.29 to 0.31 / 0.40 | 26; 9 | 180 to 214 / 323 to 408 | 0.6 |
+| | software, 2 | 6.5 to 7.1 | 1.6 to 1.8 / 16.4 to 17.2 | 0.31 to 0.38 / 0.48 | 27; 10 | 106 to 135 / 217 to 228 | 1.8 |
+| | software, 4 | 6.1 | 0.6 / 9.6 to 9.9 | 0.26 / 0.38 | 28; 11 | 67 to 79 / 106 to 138 | 2.7 |
+| | software, 8 | 6.3 to 6.5 | 0.5 / 0.7 to 0.8 | 0.31 / 0.50 | 31; 12 | 55 to 61 / 90 to 92 | 6 to 8 |
+| | software, 16 | 6.4 to 6.6 | 0.6 / 0.7 to 0.8 | 0.33 / 0.51 | 47 to 49; 15 | 56 to 57 / 84 to 86 | 10 |
+| | VAAPI, AMD | 0.9 to 1.0 | 3.1 to 3.2 / 5.1 to 5.2 | 2.8 / 4.8 | 41 to 42; 16 | 55 to 56 / 89 to 93 | 12 |
+| | VAAPI, Intel | 1.5 | 2.6 / 3.6 | 2.3 / 3.2 | 25 to 41; 5 | 32 / 55 | 2 to 3 |
+
+A separate benchmark (scratch, ABBA, the same clips) gave slice threads at 4
+threads 56 to 65 fps on the 1080p30 clip, against 55 to 56 fps with one thread and
+204 to 218 fps with 4 frame threads. These clips have one slice a frame, as x264
+gives by default, so slice threads have nothing to share. Slice threads are not an
+option in the header.
+
+Against the bars:
+
+- Decode thread (mean at most half a frame period, p99 at most one): one software
+  thread misses at 1080p: 18 ms against 16.7 and 39 ms against 33.3 at 1080p30 (its
+  keyframes take 39 ms at 40 Mb/s), and 20 ms against 16.7 at p99 at 1080p60. Two
+  threads sit on the p99 bar at 1080p60 (16.4 to 17.2 ms). 4 or more threads and VAAPI
+  meet it in every row.
+- Cold open (300 ms): at most 50 ms in every row, with the libraries in the page
+  cache. `yvid_open()` itself took 23 to 45 ms in `video_soundtrack`, the first in
+  its process. A cold page cache was not measured: it needs root.
+- Seek (GOP x the mean decode + 50 ms): met in every row except 8 and 16 software
+  threads at 1080p30 (80 to 83 ms against 68 to 76 ms), where a pipeline's short
+  mean makes the bar tight.
+- The frame: see M2.
+
+**M2: the frame thread.** `video_play`, 30 s a run, two rounds in opposite order, the
+640 x 360 window on the normal policy and fullscreen with `--elevate` (SCHED_FIFO 1).
+Ranges over the rounds. `yvid_update()` with an upload; draw and flip on every display
+frame.
+
+| Clip | Mode | Decoder | `yvid_update()` mean / p99 / max, ms | Draw + flip mean / p99 / max, ms | Process CPU, % of a core | Drops |
+|---|---|---|---|---|---|---|
+| 1080p30 | window | software, 4 | 0.298 to 0.304 / 0.329 to 0.331 / 0.378 to 0.390 | 0.060 to 0.062 / 0.106 to 0.116 / 0.150 to 0.242 | 51.1 to 51.4 | 0 |
+| | | software, 8 | 0.286 to 0.294 / 0.321 to 0.322 / 0.359 to 0.402 | 0.057 to 0.060 / 0.114 to 0.115 / 0.168 to 0.268 | 49.6 to 53.0 | 0 |
+| | | VAAPI, AMD | 0.292 to 0.293 / 0.319 to 0.322 / 0.367 to 0.382 | 0.054 to 0.056 / 0.103 to 0.109 / 0.202 to 0.288 | 4.4 | 0 |
+| | | VAAPI, Intel | 0.288 to 0.291 / 0.320 to 0.330 / 0.356 to 0.368 | 0.052 to 0.055 / 0.094 to 0.116 / 0.154 | 6.3 to 6.9 | 0 |
+| | fullscreen | software, 4 | 0.305 to 0.307 / 0.331 to 0.336 / 0.390 to 0.610 | 0.067 to 0.070 / 0.105 to 0.112 / 0.130 | 50.8 to 52.9 | 0 |
+| | | software, 8 | 0.458 to 0.474 / 0.501 to 0.519 / 0.535 to 0.590 | 0.088 to 0.091 / 0.127 to 0.128 / 0.151 | 53.1 to 53.7 | 0 |
+| | | VAAPI, AMD | 0.294 to 0.463 / 0.333 to 0.516 / 0.354 to 0.535 | 0.049 to 0.088 / 0.087 to 0.119 / 0.143 | 5.1 to 5.7 | 0 |
+| | | VAAPI, Intel | 0.291 to 0.298 / 0.323 to 0.327 / 0.373 to 0.387 | 0.055 to 0.059 / 0.098 to 0.106 / 0.164 | 6.7 to 7.0 | 0 |
+| 1080p60 | window | software, 4 | 0.296 to 0.299 / 0.329 to 0.338 / 0.379 to 0.496 | 0.062 to 0.074 / 0.126 to 0.139 / 0.321 to 0.592 | 39.3 to 39.8 | 0 |
+| | | software, 8 | 0.295 to 0.392 / 0.322 to 0.517 / 0.365 to 0.627 | 0.066 to 0.092 / 0.133 to 0.162 / 0.193 | 40.0 to 44.9 | 0 |
+| | | VAAPI, AMD | 0.284 to 0.298 / 0.310 to 0.482 / 0.336 to 0.509 | 0.053 to 0.056 / 0.102 to 0.116 / 0.134 | 7.7 to 8.5 | 0 |
+| | | VAAPI, Intel | 0.289 to 0.425 / 0.325 to 0.504 / 0.389 to 0.522 | 0.066 to 0.101 / 0.116 to 0.148 / 0.174 | 11.5 to 15.6 | 0 |
+| | fullscreen | software, 4 | 0.303 to 0.305 / 0.338 to 0.349 / 0.398 to 0.422 | 0.065 to 0.073 / 0.119 to 0.129 / 0.176 | 39.7 to 47.4 | 0 |
+| | | software, 8 | 0.295 to 0.343 / 0.316 to 0.497 / 0.361 to 0.570 | 0.070 to 0.095 / 0.106 to 0.154 / 0.184 | 41.9 to 44.2 | 0 |
+| | | VAAPI, AMD | 0.289 to 0.295 / 0.318 to 0.332 / 0.369 to 0.404 | 0.058 to 0.066 / 0.083 to 0.093 / 0.164 | 8.7 to 9.0 | 0 |
+| | | VAAPI, Intel | 0.292 to 0.366 / 0.359 to 0.509 / 0.390 to 0.573 | 0.071 to 0.080 / 0.122 to 0.146 / 0.195 | 11.9 to 15.3 | 0 |
+
+0 dropped and 0 decode-late repeats in all 32 runs; every repeat DUE; worst tier 2 in
+the window and 1 fullscreen; 0 heap calls of the header's after frame 120. Some
+runs of each decoder sit near 0.46 ms and others near 0.29 ms for the same upload.
+That follows the run, not the decoder, and was not investigated. A frame's work fits: the
+largest `yvid_update()` and the largest draw and flip, added, are 1.2 ms, 7% of the 16.7 ms frame.
+
+Decisions from M1, M2 and M4:
+
+- **AUTO is VAAPI.** The frame thread pays the same with every decoder and nothing
+  dropped, so the decoder is chosen by what else it costs. VAAPI uses 4 to 16% of a
+  core against 39 to 54%, and seeks up to 4 times faster than 4 software threads
+  (27 against 102 to 117 ms). It opens as fast. This is the same result as DXVA on
+  Windows (M1, M2 above). AUTO falls to software when VAAPI cannot open the stream,
+  and the describe line says why.
+- **The default device is FFmpeg's choice**: its first DRM render node, here the Intel
+  UHD, which also read back faster (2.3 to 2.9 ms against 2.8 to 4.1 ms at 1080p).
+  `desc.hw_device` names another. No flip here showed a cost from decoding on the
+  display's GPU.
+- **Software default: 4 threads.** One thread misses the bar at 1080p; 2 sit on it
+  at 1080p60; 4 run the 1080p30 clip at about 7 times real time; 8 gain 20 to
+  30% on a seek and cost twice the close time. `desc.decode_threads` is the knob.
+- **Planes through the upload; no GPU path.** The upload costs 0.3 to 0.5 ms a frame,
+  against a 16.7 ms frame. A path that avoids it would need a DMA-BUF import: `vaExportSurfaceHandle()`
+  (libva's own header is not installed here, and a header may not depend on it) and an
+  EGLImage import, which the header's GLX context does not have. It could save at
+  most the read-back on the decode thread (2.3 to 4.1 ms, which has room) and the
+  upload. On Windows the GPU path took the upload off the frame thread and lengthened the
+  draw's tail (M7), and UPLOAD stayed the default. So it is not built here.
+
+**HEVC.** It costs no code beyond the codec's id. `m_hevc1080p30` (HEVC Main, 16.6 Mb/s, 300 frames, x265
+`-preset fast`), two runs each: software with 4 threads 13.4 to 14.1 ms of process CPU a frame, 2.5 to 2.6 / 19.2 to 20.4 ms
+on the decode thread, seek 116 to 131 ms; VAAPI on AMD 0.8 ms, 3.4 / 5.3 to 5.4 ms, seek 29 ms; on Intel 1.5 ms, 2.4 / 3.6 ms,
+seek 12 ms. Fullscreen, one 10 s run each: `yvid_update()` 0.29 to 0.30 ms mean, 0.39 ms at most, 0 drops, process CPU 38% against 4 to
+6%. Both GPUs gave the index's bytes on all 300 frames.
+
+**Which build measured what.** M1, M2 and the ALSA soundtrack rows on FFmpeg ran on this backend's code before the version bump,
+so their describe lines say 0.6.0. The backend changed after M1 and M2 only in AUTO's default and the size of the describe line's
+buffer. The baseline's frame sequence and MPEG-1 rows ran on v0.6.0 itself. The PulseAudio rows and HEVC ran on v0.7.0.
+
+**Allocations.** `yvid_heap_calls()` is 0 per frame. An interposer that counts `malloc`,
+`calloc`, `realloc` and `posix_memalign` per thread, between a 10 s and a 30 s run
+(600 video frames of the 1080p30 clip, 1200 display frames): the frame thread makes 10.2 calls a
+display frame with every decoder and 11.4 with MPEG-1, none from this header. They were not traced
+further: the GL and X libraries, `ysp/gfx.h` and `ysp/screen.h` run there too.
+The decode thread makes 57 a frame with software (and 9 on each of 4 workers), and
+75 to 77 with VAAPI: FFmpeg's packets, frame references and the driver's maps. That thread
+has no real-time duty. Slots are the header's, and no slot is allocated per frame.
+
+**Threads and SCHED_FIFO.** A thread inherits its creator's policy, and `yvid_open()`
+usually runs on an elevated frame thread (`ysp/screen.h`, THREADS). `avcodec_open2()`
+starts libavcodec's pool, so `yvid__ff_open_ex()` runs the open on a short-lived thread with
+explicit SCHED_OTHER attributes, and gives up rather than fall back to an inherited policy. The first frame of a VAAPI
+open decodes there too: lavc makes the hardware's decoder at the first packet, so any driver thread starts then. `test_ff_policy` opens
+from a SCHED_FIFO thread, reads every thread's policy from the kernel before anything
+decodes, closes at once if a thread inherited, and otherwise decodes and seeks and
+reads them again. Mutants ff-00 and ff-01 show it catches both ways of inheriting; each
+stopped before a decode, so neither ran a FIFO pool under load. During a `video_play
+--elevate` run, `ps -L`: the frame thread and Mesa's GL threads (made by `yscr_open()`, as
+`ysp/screen.h` says) are FIFO 1; the 4 FFmpeg workers and the decode thread are SCHED_OTHER.
+Threads do inherit the opener's CPU mask (measured: every thread on CPU 2 after a pin
+before the open), so pin the frame thread after `yvid_open()`.
+
+### What checks the bytes
+
+The section "Tests" above notes that the test clips' reference frames come from ffmpeg's
+decoder. For this backend that check is not independent: it is the same library. The
+independent checks are:
+
+- **Two other decoders.** `video_check --raw` compares each frame of a tight NV12 file with
+  the index. The index was made by libavcodec's software decoder; the raw files came
+  from the AMD VCN and the Intel decoder through `ffmpeg -hwaccel vaapi`. 0 frames differ on
+  c_720p30 (300), c_1080p30 (300), c_1080p60 (600), c_2997 (150), c_23976 (96), c_crop (60),
+  c_audio (90), c_hevc (120), m_720p30 (1800), and m_1080p60 (the first 2639 of 3600: the
+  scratch disk filled), on both GPUs. `test_mf_play` also makes an index through VAAPI
+  and wants it byte-equal to the software index.
+- **The burned-in bars.** The tests read the frame number from the upload of every shown
+  frame. `video_check --upload-only` reads it from the screen through the real GL context
+  (`ygfx_read_scene()`): 40 frames, with jumps across GOPs, right on c_720p30, c_1080p30, c_1080p60, c_crop,
+  c_cropleft, c_23976 and c_hevc.
+
+What these do not show: that an index made by Media Foundation matches here. No such index
+was on this machine, the clips here come from this machine's ffmpeg, and Windows did not run. The
+design wants equal bytes (H.264 and HEVC decoding are exact by the standards, the same NV12
+hash), and a first Windows-made pack is the check. They also do not show conformance on
+streams x264 and x265 did not make.
+
+### The soundtrack on Linux
+
+`video_soundtrack --script`: the docs' 60 s run, on the 10 min A/V clip (1080p30, 48 kHz or 44.1 kHz
+WAV at about -50 dB): play, at 20 s a seek to 300 s, at 36 s a pause, at 38 s a resume, with `yvid_follow_audio()`
+on every frame. Two runs a row, except the MPEG-1 row. "A/V" is each shown frame's flip onset
+minus its time on the audio clock.
+
+| Decoder, display, sound | Frames | A/V p1 / p50 / p99 / max, ms | Sound starts from their targets, us | Late, dropped | Gaps, underruns |
+|---|---|---|---|---|---|
+| pl_mpeg (g_1080p30), window, ALSA | 1495 | -0.001 / +0.083 / +0.209 / +0.209 | -8.4 to +7.4 | 0, 0 | 0, 0 |
+| pl_mpeg (g_1080p30), fullscreen, ALSA | 1495 | -0.001 / +0.084 / +0.208 / +0.209 | -9.2 to +7.9 | 0, 0 | 0, 0 |
+| VAAPI, fullscreen elevated, ALSA | 1732 to 1733 | 0.000 to -0.001 / +0.103 / +0.250 to +0.271 / +0.272 | -8.1 to +10.3 | 0, 0 | 0, 0 |
+| Software 4 threads, fullscreen elevated, ALSA | 1731 to 1732 | 0.000 to -0.001 / +0.104 / +0.292 / +0.292 | -6.5 to +5.8 | 0, 0 | 0, 0 |
+| VAAPI, window, ALSA | 1733 | 0.000 to -0.001 / +0.104 / +0.271 / +0.273 | -5.0 to +8.1 | 0, 0 | 0, 0 |
+| VAAPI, fullscreen elevated, PulseAudio (44.1 kHz) | 1733 | 0.000 to -0.001 / +0.091 to +0.114 / +0.272 to +0.318 / +0.320 | -7.3 to +10.8 | 0, 0 | 0, 0 |
+
+ALSA is exclusive (`hw:0,0`, period 480); the device ran 3.4 to 3.7 ppm slow against the
+ysp_rt clock, the fit's spread 0.4 to 1.8 us. On PulseAudio the spread is 4.9 to 5.4 us. The decoder
+does not move the numbers. These are two clocks of this machine compared; `ysp/audio.h` rates these
+onsets tier 3 until a line-in run.
+
+### Builds and tests
+
+`linux` (option off) and `linux-ffmpeg` (option on) presets, gcc 12.2: no warnings, ctest as in
+docs/status.md. The core test with `YVID_TEST_MEDIA` runs the Media Foundation cases
+on FFmpeg, plus: a left crop (`c_cropleft`), a stream with no VUI (`c_novui`, each unstated field refused),
+HEVC's color from its VUI, thread counts 1, 2, 4, 8 against the index, VAAPI's index and play,
+AUTO's fallback, an index that overstates the width, a damaged byte on each decoder, and `test_ff_policy`.
+`test_video_ffmpeg_missing` runs the header without the libraries. The core test passes under ASan and UBSan with
+the clips (no report; FFmpeg's libraries are not instrumented).
+
+ThreadSanitizer: FFmpeg's libraries are not instrumented, so TSan cannot see their
+atomics, and it reports each frame buffer they hand over as a race, in `av_buffer_unref`,
+`av_frame_unref` and `yvid__ff_copy`. With those frames suppressed
+(`called_from_lib` for FFmpeg's libraries, libva and the Intel driver, and those three functions), the test passes with
+one report: a double lock of a mutex in Intel's `libigdgmm.so.12`, which is not this
+project's. So the run checks ysp's own threads against each other. It cannot
+check the handover from FFmpeg to `yvid__ff_copy`.
+
+Mutants (`tests/mutate/video.toml`, ff-00 to ff-23), on this machine with the clips: 23 of 24 killed.
+ff-17 (a seek's time on the keyframe, not half a frame past it) survives as expected: the forward
+read still lands on the keyframe, a GOP later, so only the seek's time differs, and no test bounds it.
+No mutant covers the major-version check: it needs another major's library, which this machine does not have.
+
+On Windows nothing plays differently: the backend is under `#if`, and AUTO, the refusals and the index
+maker there keep their code paths. `yvid_desc` grew two fields, and `hw_decode`'s parameter row has
+`vaapi=3` (`vaapi=4` after the merge over v0.7.0, where 3 is `videotoolbox`). These changes were
+not compiled or run on Windows, MinGW or emcc here. After the merge, Media Foundation and AVFoundation
+refuse `YVID_HW_VAAPI` by name (`YVID_ERR_REFUSED` at open, `YVID_ERR_ARG` in the index maker), and
+FFmpeg refuses DXVA and VIDEOTOOLBOX the same way; only FFmpeg's refusals ran here.
+
+Not measured: a decode thread under load, two movies at once, a full 10 min run, a GPU without VAAPI's
+H.264 (the fallback ran only by the left crop), other FFmpeg majors (CI's `video-ffmpeg` job compiles
+and tests against the runner's; it has not run yet), a cold page cache.
 
 ## Needed from the other headers
 
@@ -1365,7 +1697,11 @@ for r in 1 2 3; do for c in m_720p30 m_1080p30 m_1080p60; do for hw in vt sw; do
   outage"). Not measured: the recovery after a hiccup of a built-in
   decoder (a slow `next()`, not PENDING) on real media, which the same
   catch-up rule covers.
-- FFmpeg, capture.
+- Capture.
+- An index made by Media Foundation or AVFoundation played on FFmpeg, and the reverse: the
+  design wants them equal, and no Windows or macOS run has checked it ("What checks the bytes").
+- The pack tool on Linux with `YVID_FFMPEG`, so it can index an MP4 there. Not built:
+  `pack/CMakeLists.txt` does not link `ysp::rig`, and the tool's MP4 step still says Windows.
 - macOS: the frame thread in a window and a GPU path (an IOSurface into ANGLE's Metal backend), both after
   ysp/screen.h's macOS swap path.
 
