@@ -45,17 +45,24 @@ static int dw_open_fds(void) {
     return n;
 }
 
-/* 1 in a virtual machine. The GitHub macOS runner (a VM) slept 5 ms with
- * nanosleep() 918 us late at the median on a TIME_CONSTRAINT thread
- * (2026-11-06), against 14 to 16 us on the M2 Mac mini: the guest's timer,
- * not the header. There the elevated thread's and the fork child's bounds
- * are printed, not checked; the critical timer's other bounds held on the
- * runner (73 to 100 us). */
+/* 1 in a virtual machine. On the GitHub macOS runner (a VM) a 5 ms wait
+ * was late at the median by, on 2026-11-06: critical timer 73 to 100 us in
+ * one run and 2522 us (half the wait) in the next, on the same code;
+ * nanosleep() on a TIME_CONSTRAINT thread 918 and 1964 us. The M2 Mac mini
+ * gives 22 to 47 us and 14 to 16 us, also under taskpolicy -b, -l 5 and
+ * -t 5. The guest's timers, not the header, and they change from run to
+ * run, so in a VM the lateness bounds are printed, not checked; the
+ * descriptor and wake checks hold everywhere. */
+static int dw_vm = -1;
 static int dw_in_vm(void) {
-    int v = 0;
-    size_t n = sizeof v;
-    return sysctlbyname("kern.hv_vmm_present", &v, &n, NULL, 0) == 0 && v == 1;
+    if (dw_vm < 0) {
+        int v = 0;
+        size_t n = sizeof v;
+        dw_vm = sysctlbyname("kern.hv_vmm_present", &v, &n, NULL, 0) == 0 && v == 1;
+    }
+    return dw_vm;
 }
+#define DW_LATE_OK(late, what) do { if (!dw_in_vm()) CHECK((late) < DW_BOUND_NS, what); } while (0)
 
 static int64_t dw_thread_late;
 
@@ -89,6 +96,8 @@ static void test_darwin_waits(void) {
     pthread_t th;
     int fd0, fd1;
 
+    if (dw_in_vm()) printf("  darwin waits: a virtual machine: lateness printed, not checked\n");
+
     /* the caller's thread, ordinary: the critical timer */
     fd0 = dw_open_fds();
     dw_thread_late = -1;
@@ -96,30 +105,28 @@ static void test_darwin_waits(void) {
     pthread_join(th, NULL);
     fd1 = dw_open_fds();
     printf("  darwin waits: ordinary thread, 5 ms, median %.1f us late\n", dw_thread_late / 1e3);
-    CHECK(dw_thread_late >= 0 && dw_thread_late < DW_BOUND_NS,
-          "an ordinary thread's 5 ms wait must not be coalesced (median under 500 us late)");
+    CHECK(dw_thread_late >= 0, "an ordinary thread's waits ran");
+    DW_LATE_OK(dw_thread_late, "an ordinary thread's 5 ms wait must not be coalesced (median under 500 us late)");
     CHECK_I(fd1, fd0, "the thread's exit must close its wait's kqueue");
 
     /* the main thread, then yrt_thread_cleanup() and a wait after it */
     int64_t m = dw_median_late();
-    CHECK(m < DW_BOUND_NS, "the main thread's 5 ms wait must not be coalesced");
+    DW_LATE_OK(m, "the main thread's 5 ms wait must not be coalesced");
     fd0 = dw_open_fds();
     yrt_thread_cleanup();
     fd1 = dw_open_fds();
     CHECK_I(fd1, fd0 - 1, "yrt_thread_cleanup() must close this thread's kqueue");
     m = dw_median_late();
-    CHECK(m < DW_BOUND_NS, "a wait after yrt_thread_cleanup() must open a new kqueue and not be coalesced");
+    DW_LATE_OK(m, "a wait after yrt_thread_cleanup() must open a new kqueue and not be coalesced");
     yrt_thread_cleanup();
 
     /* a TIME_CONSTRAINT thread keeps nanosleep(), which is not coalesced */
     dw_thread_late = -1;
     pthread_create(&th, NULL, dw_elevated, NULL);
     pthread_join(th, NULL);
-    const int vm = dw_in_vm();
-    printf("  darwin waits: elevated thread, 5 ms, median %.1f us late%s\n", dw_thread_late / 1e3,
-           vm ? " (a virtual machine: not checked)" : "");
+    printf("  darwin waits: elevated thread, 5 ms, median %.1f us late\n", dw_thread_late / 1e3);
     CHECK(dw_thread_late >= 0, "an elevated thread's 5 ms wait ran");
-    if (!vm) CHECK(dw_thread_late < DW_BOUND_NS, "an elevated thread's 5 ms wait");
+    DW_LATE_OK(dw_thread_late, "an elevated thread's 5 ms wait");
 
     /* a fork child: the parent's kqueue is not inherited, and the child's
      * first wait must open its own (one descriptor more), not use the
@@ -147,10 +154,8 @@ static void test_darwin_waits(void) {
                r[0] / 1e3, (long long)r[1]);
         CHECK(WIFEXITED(st) && WEXITSTATUS(st) == 0, "the fork child exited cleanly");
         CHECK_I((int)r[1], 1, "a fork child's first wait must open its own kqueue");
-        /* The child's wait failed the bound on the runner (2026-11-06) with
-         * no number recorded; until a run shows it, a VM prints it only. */
         CHECK(r[0] >= 0, "the fork child's waits ran");
-        if (!vm) CHECK(r[0] < DW_BOUND_NS, "a fork child's 5 ms wait must not be coalesced");
+        DW_LATE_OK(r[0], "a fork child's 5 ms wait must not be coalesced");
     }
 
     /* a worker without the TIME_CONSTRAINT rung: its own kqueue */
@@ -173,7 +178,7 @@ static void test_darwin_waits(void) {
         }
         qsort(late, DW_N, sizeof late[0], dw_cmp);
         printf("  darwin waits: normal worker, 5 ms, median %.1f us late\n", late[DW_N / 2] / 1e3);
-        CHECK(late[DW_N / 2] < DW_BOUND_NS, "a normal worker's 5 ms wait must not be coalesced");
+        DW_LATE_OK(late[DW_N / 2], "a normal worker's 5 ms wait must not be coalesced");
 
         /* a replacement wakes the timed wait: a job 1 s ahead, replaced
          * after 10 ms by one 5 ms ahead */

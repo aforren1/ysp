@@ -661,6 +661,24 @@ whole list on this Mac: 51 of 58 as expected. `dir-01` to `dir-07`
 mutate Windows-only code and survive here, and `dir-10` (POSIX code,
 expected to survive on the Windows runner) is killed here.
 
+A background process (2026-11-06, the same Mac, rt_test, 15 waits of 5 ms
+at the median, no spin). Under `taskpolicy -b` (the policy of a launchd job
+with `ProcessType` `Background`), the TIME_CONSTRAINT thread's
+`nanosleep()` was 88 and 94 ms late in two runs (16 us without `-b`), and
+the critical timer of the ordinary thread, the fork child and the
+`no_elevate` worker stayed at 19 to 25 us. A rig's process must not run as
+a background task: its elevated threads are throttled worst. Latency tier 5
+(`-l 5`) and throughput tier 5 (`-t 5`) changed nothing (40 to 47 us,
+14 to 16 us). Not handled by the header; `yrt_thread_elevate()` reports
+TIME_CONSTRAINT either way.
+
+In a VM (the GitHub macOS runner, 2026-11-06), the critical timer's median
+was 73 to 100 us in one run and 2522 us, half the wait, in the next; the
+TIME_CONSTRAINT `nanosleep()` 918 and 1964 us. rt_test prints the lateness
+there and does not check it (`kern.hv_vmm_present`); the descriptor and
+wake checks run everywhere. Mutant `mac-09` is caught by the fork child's
+descriptor count, so it is caught in a VM too.
+
 The format attributes (v0.10.1): `yrt__trace_messagef()`,
 `yrt__messagef_check()` and the Tracy `yrt__tracy_messagef()` declared
 `__attribute__((format(printf, 1, 2)))`. MATLAB's `mex.h` defines `printf`
