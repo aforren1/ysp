@@ -2842,13 +2842,20 @@ static double along_ref(const float* b, double cm, double nn, double hh, double 
     }
 }
 
+/* The last vector pack's frame origin in the stimulus frame (ygfx__vpack's
+ * sh2, v0.18.0: a path's frame is its box's center): the CPU field is read
+ * at a stimulus-frame point less it. */
+static double g_vsh[2];
+#define VPACK(s, blk, ext, clip, err) ygfx__vpack(&R->g, (s), (blk), (ext), g_vsh, (clip), (err))
+#define VFIELD(b, x, y, f0, f1) ygfx__vfield((b), (x) - g_vsh[0], (y) - g_vsh[1], (f0), (f1))
+
 /* The main layer's coverage of a vector stimulus on the CPU, at a pixel. */
 static double vec_ref(const float* b, const ygfx_stim* s, int i, int j, int* tie) {
     float lx, ly;
     double f0[4], f1[4], d, hw = b[15], c = b[11], cm, w = b[22];
     int prof = (int)b[21], fl = (int)b[23];
     ygfx_local(&R->g, s, (float)i + 0.5f, (float)j + 0.5f, &lx, &ly);
-    ygfx__vfield(b, lx, ly, f0, f1);
+    VFIELD(b, lx, ly, f0, f1);
     d = f0[0] - b[10];
     *tie = hw > 0 ? (fabs(d - c - hw) < 1e-3 || fabs(d - c + hw) < 1e-3) : fabs(d) < 1e-3;
     cm = hw > 0 ? cov(prof, w, d - c - hw) - cov(prof, w, d - c + hw) : cov(prof, w, d);
@@ -2882,7 +2889,7 @@ static void vec_check(const ygfx_stim* s, const char* what) {
     const char* err = "";
     int clip, i, j, tie, n;
     vc_ctx vc;
-    n = ygfx__vpack(&R->g, s, blk, ext, &clip, &err);
+    n = VPACK(s, blk, ext, &clip, &err);
     if (n < 0) { fprintf(stderr, "gfx_test [%s]: %s refused: %s\n", g_where, what, err); g_failures++; return; }
     gl_frame(s, 1);
     S4.n_shapes++;
@@ -2912,7 +2919,7 @@ static void vec_check(const ygfx_stim* s, const char* what) {
                     float lx, ly;
                     double f0[4], f1[4];
                     ygfx_local(&R->g, s, (float)i + 0.5f, (float)j + 0.5f, &lx, &ly);
-                    ygfx__vfield(blk, lx, ly, f0, f1);
+                    VFIELD(blk, lx, ly, f0, f1);
                     fprintf(stderr, "  %s: worst %.3g at %d %d local %.2f %.2f: got %.5f want %.5f (d %.4f s %.3f)\n",
                             what, worst, i, j, lx, ly, got, want, f0[0], f0[3]);
                     j = H; break;
@@ -2926,8 +2933,11 @@ static void gl_v03_kinds(stats* st) {
     static const float zig[8] = { -110, 30, -40, -40, 20, 35, 100, -20 };
     static const float conc[10] = { -60, -50, 60, -50, 60, 50, 0, 0, -60, 50 };
     static const float tri[6] = { -60, 45, 60, 45, 0, -55 };
-    ygfx_shape_desc base[24];
-    const char* names[24];
+    /* v0.18.0: away from the origin, with repeated points (sampled ink) */
+    static const float far_[12] = { 25, 40, 25, 40, 60, 5, 90, 50, 90, 50, 110, 20 };
+    static const float qfar[6] = { 20, 45, 70, -25, 115, 40 };
+    ygfx_shape_desc base[26];
+    const char* names[26];
     int nb = 0, k, e, o, st2;
     (void)st;
     if (!gl_open(0, YGFX_RGBA32F, YGFX_DITHER_NONE)) return;
@@ -2953,6 +2963,8 @@ static void gl_v03_kinds(stats* st) {
     { ygfx_shape_desc* d = ADD_("polyline miter"); d->shape = YGFX_POLYLINE; d->path = zig; d->n_path = 4; d->shape_p[0] = 12; d->join = YGFX_JOIN_MITER; d->cap = YGFX_CAP_SQUARE; }
     { ygfx_shape_desc* d = ADD_("polyline round"); d->shape = YGFX_POLYLINE; d->path = zig; d->n_path = 4; d->shape_p[0] = 12; d->cap = YGFX_CAP_ROUND; d->trim[0] = 0.1f; d->trim[1] = 0.8f; }
     { ygfx_shape_desc* d = ADD_("polyline bevel"); d->shape = YGFX_POLYLINE; d->path = zig; d->n_path = 4; d->shape_p[0] = 12; d->join = YGFX_JOIN_BEVEL; }
+    { ygfx_shape_desc* d = ADD_("polyline far"); d->shape = YGFX_POLYLINE; d->path = far_; d->n_path = 6; d->shape_p[0] = 10; d->join = YGFX_JOIN_MITER; d->cap = YGFX_CAP_SQUARE; }
+    { ygfx_shape_desc* d = ADD_("qbezier far"); d->shape = YGFX_QBEZIER; d->path = qfar; d->n_path = 3; d->shape_p[0] = 8; d->cap = YGFX_CAP_ROUND; d->trim[0] = 0.15f; d->trim[1] = 0.9f; }
     { ygfx_shape_desc* d = ADD_("polygon concave fillet"); d->shape = YGFX_POLYGON; d->vertices = conc; d->shape_p[0] = 5; d->shape_p[1] = 8; }
     { ygfx_shape_desc* d = ADD_("polygon triangle fillet"); d->shape = YGFX_POLYGON; d->vertices = tri; d->shape_p[0] = 3; d->shape_p[1] = 12; d->dash[0] = 25; d->dash[1] = 10; d->stroke = 5; }
 #undef ADD_
@@ -3140,7 +3152,7 @@ static void tc_row(void* p, int j) {
         double f0[4], f1[4];
         ygfx_local(&R->g, c->s, (float)i + 0.5f, (float)j + 0.5f, &lx, &ly);
         c->db[j * W + i] = pc_dist_lim(lx, ly, 6 * c->sg);
-        if (c->f && fabs(c->db[j * W + i]) <= 6 * c->sg) { ygfx__vfield(c->blk, lx, ly, f0, f1); c->f[j * W + i] = f0[0]; }
+        if (c->f && fabs(c->db[j * W + i]) <= 6 * c->sg) { VFIELD(c->blk, lx, ly, f0, f1); c->f[j * W + i] = f0[0]; }
     }
 }
 static double truth_check(const ygfx_stim* s, double sg, double* dist) {
@@ -3150,7 +3162,7 @@ static double truth_check(const ygfx_stim* s, double sg, double* dist) {
     const char* err;
     int clip, i, j;
     tc_ctx tc;
-    if (ygfx__vpack(&R->g, s, blk, ext, &clip, &err) < 0) { fprintf(stderr, "truth: %s\n", err); g_failures++; return 1; }
+    if (VPACK(s, blk, ext, &clip, &err) < 0) { fprintf(stderr, "truth: %s\n", err); g_failures++; return 1; }
     gl_frame(s, 1);
     tc.blk = blk; tc.s = s; tc.sg = sg; tc.db = dbs; tc.f = dist ? fs : NULL;
     pc_prep();
@@ -3192,7 +3204,7 @@ static void zs_row(void* p, int j) {
         double f0[4], f1[4], best = 13.0 * 13.0;
         c->best[j * W + i] = 1e300;
         ygfx_local(&R->g, c->s, (float)i + 0.5f, (float)j + 0.5f, &lx, &ly);
-        ygfx__vfield(c->blk, lx, ly, f0, f1);
+        VFIELD(c->blk, lx, ly, f0, f1);
         if (fabs(f0[0]) > 14) continue;
         for (cy = zs_cy(ly - 13.0); cy <= zs_cy(ly + 13.0); cy++)
             for (cx = zs_cx(lx - 13.0); cx <= zs_cx(lx + 13.0); cx++)
@@ -3368,12 +3380,12 @@ static void gl_v03_truth(stats* st) {
             cd.prims = pr; cd.n = 2; cd.w = 200; cd.h = 100;
             cd.edge = YGFX_EDGE_GAUSSIAN; cd.edge_width = 2; cd.color[0] = cd.color[1] = cd.color[2] = 1;
             s = ygfx_compound(&cd);
-            ygfx__vpack(&R->g, &s, blk, ext, &clip, &err);
+            VPACK(&s, blk, ext, &clip, &err);
             for (j = 0; j < 2400 && nz < 59000; j++) {   /* sign changes along rows, 0.05 px */
                 double y = -60 + j * 0.05, prev = 0, f0[4], f1[4];
                 for (i = 0; i < 3600; i++) {
                     double x = -90 + i * 0.05;
-                    ygfx__vfield(blk, x, y, f0, f1);
+                    VFIELD(blk, x, y, f0, f1);
                     if (i && (f0[0] > 0) != (prev > 0) && nz < 59000) { zx[nz] = x - 0.05 * f0[0] / (f0[0] - prev); zy[nz++] = y; }
                     prev = f0[0];
                 }
@@ -3382,7 +3394,7 @@ static void gl_v03_truth(stats* st) {
                 double x = -90 + i * 0.05, prev = 0, f0[4], f1[4];
                 for (j = 0; j < 2400; j++) {
                     double y = -60 + j * 0.05;
-                    ygfx__vfield(blk, x, y, f0, f1);
+                    VFIELD(blk, x, y, f0, f1);
                     if (j && (f0[0] > 0) != (prev > 0) && nz < 59000) { zy[nz] = y - 0.05 * f0[0] / (f0[0] - prev); zx[nz++] = x; }
                     prev = f0[0];
                 }
@@ -3413,7 +3425,7 @@ static void fx_ref(const float* b, const ygfx_stim* s, int i, int j, double out[
     int prof = (int)b[21], fl = (int)b[23], k;
     const float* vd = b + 36;
     ygfx_local(&R->g, s, (float)i + 0.5f, (float)j + 0.5f, &lx, &ly);
-    ygfx__vfield(b, lx, ly, f0, f1);
+    VFIELD(b, lx, ly, f0, f1);
     d = f0[0] - b[10]; d1 = f1[0] - b[10];
     cm = hw > 0 ? cov(prof, w, d - c - hw) - cov(prof, w, d - c + hw) : cov(prof, w, d);
     for (k = 0; k < 3; k++) col[k] = b[12 + k];
@@ -3475,7 +3487,7 @@ static void gl_v03_fx(stats* st) {
     for (k = 0; k < 2; k++) {
         d.ori = k ? 20.0f : 0.0f;
         s = ygfx_shape(&d);
-        ygfx__vpack(&R->g, &s, blk, ext, &clip, &err);
+        VPACK(&s, blk, ext, &clip, &err);
         gl_frame(&s, 1);
         for (j = 0; j < H; j++)
             for (i = 0; i < W; i++) {
@@ -3569,7 +3581,7 @@ static void gl_v03_fx(stats* st) {
         d.shape = YGFX_CIRCLE; d.w = 150; d.stroke = 4; d.dash[0] = 13; d.dash[1] = 7; d.dash_snap = true; d.color[0] = 1;
         d.edge = YGFX_EDGE_COSINE; d.edge_width = 1.5f;
         s = ygfx_shape(&d);
-        ygfx__vpack(&R->g, &s, blk, ext, &clip, &err);
+        VPACK(&s, blk, ext, &clip, &err);
         P = blk[16] + blk[17];
         gl_frame(&s, 1);
         memcpy(a1, R->scene, sizeof a1);
@@ -6090,6 +6102,10 @@ static void gl_v11_prime(stats* st);
 static void gl_v11_start(stats* st);
 static void gl_v12_capture(stats* st);
 static void gl_v15_first(stats* st);
+static void gl_v18_paths(stats* st);
+/* v0.18.0 paths (gl_v18_paths) */
+typedef struct stats18 { double moved, paint_moved, inst; long quad_bad; int ran; } stats18;
+static stats18 S18;
 static void s11_report(void);
 static void test_v10_simplex_cpu(void);
 typedef struct stats9 {
@@ -6291,13 +6307,13 @@ static int gl_suite(const char* name, ygfx_hl_device dev) {
                                                  gl_alpha_passes, gl_edge_truth, gl_v03_kinds, gl_v03_truth, gl_v03_fx, gl_v03_paint, gl_v03_msdf,
                                                  gl_v04_cache, gl_v04_fixes, gl_v04_video, gl_v04_inst, gl_v04_order, gl_v05_color,
                                                  gl_v06_text, gl_v06_blur, gl_v05_kinds, gl_v08, gl_v10_simplex, gl_v10_user_tex,
-                                                 gl_v11_prime, gl_v11_start, gl_v12_capture, gl_v15_first };
+                                                 gl_v11_prime, gl_v11_start, gl_v12_capture, gl_v15_first, gl_v18_paths };
         static const char* const names[] = { "shapes", "gratings", "gabors", "dots", "images", "noise",
                                              "output", "user+batch+rows", "strokes", "masks", "sprites", "tint",
                                              "groups", "targets", "alpha+passes", "edge truth", "v0.3 kinds", "v0.3 truth", "v0.3 fx", "v0.3 paint", "v0.3 msdf",
                                              "v0.4 cache", "v0.4 fixes", "v0.4 video", "v0.4 inst", "v0.4 order", "v0.5 color",
                                              "v0.6 text", "v0.6 blur", "vspec", "v0.8", "v0.10 simplex", "v0.10 user tex",
-                                             "v0.11 prime", "v0.11.1 start", "v0.12 capture", "v0.15 first" };
+                                             "v0.11 prime", "v0.11.1 start", "v0.12 capture", "v0.15 first", "v0.18 paths" };
         int k;
         memset(&S2, 0, sizeof S2);
         memset(&S3, 0, sizeof S3);
@@ -6307,6 +6323,7 @@ static int gl_suite(const char* name, ygfx_hl_device dev) {
         memset(&S7, 0, sizeof S7);
         memset(&S8, 0, sizeof S8);
         memset(&SK, 0, sizeof SK);
+        memset(&S18, 0, sizeof S18);
         mc_clear(&g_mc);
         printf("  seconds:");
         for (k = 0; k < (int)(sizeof parts / sizeof parts[0]); k++) {
@@ -6427,6 +6444,15 @@ static int gl_suite(const char* name, ygfx_hl_device dev) {
         const int ss = dev == YGFX_HL_SWIFTSHADER;
         CHECK_LE(S4.soft, ss ? 3e-4 : 5e-5);
         CHECK_LE(S4.dash_soft, ss ? 1e-2 : 1.5e-3);
+    }
+    if (S18.ran) {
+        printf("  v0.18 paths: moved by x, y against in its points %.2e, with a LINEAR paint %.2e; quad, reach and bounds "
+               "wrong %ld; an element template away from the origin against its elements alone %.2e\n",
+               S18.moved, S18.paint_moved, S18.quad_bad, S18.inst);
+        CHECK_LE(S18.moved, 1e-4);
+        CHECK_LE(S18.paint_moved, 1e-4);
+        CHECK(S18.quad_bad == 0);
+        CHECK_LE(S18.inst, 1e-4);
     }
     printf("  v0.3 truth: QBEZIER (chords) GPU - F(brute force) %.2e, distance error %.4f px\n", S5.t2_qb_cov, S5.t2_qb_dist);
     printf("  v0.3 truth: exact kinds, GPU - F(brute-force Euclidean d) max %.2e (%s), the CPU form's distance error %.2e px\n"
@@ -8816,6 +8842,186 @@ static void gl_v15_first(stats* st) {
     ygfx_close(&R->g);
 }
 
+/* v0.18.0: a path's quad is centered on its box, and a repeated point is
+ * skipped. Off-center paths against the CPU form (and the hit test) run in
+ * gl_v03_kinds; here a path moved by the stimulus's x, y against the same
+ * path moved in its points: the pixels, a LINEAR paint's (its points move
+ * with the packed frame), the quad and the bounds. Then an element
+ * template away from the origin against its elements drawn alone. */
+static void gl_v18_paths(stats* st) {
+    static const float p0[12] = { 25, 40, 25, 40, 60, 5, 90, 50, 90, 50, 110, 20 };
+    static const float tp[6] = { 40, 10, 70, 30, 55, 45 };
+    static float p1[12], a1[W * H * 4], blk[2][16 * 64];
+    static ygfx_inst el[4];
+    ygfx_shape_desc d;
+    ygfx_paint pt;
+    ygfx_stim s[2], t;
+    ygfx_instances_desc id;
+    double ext[2][2];
+    float bx[2][4];
+    const char* err;
+    int k, i, pass, clip;
+    (void)st;
+    if (!gl_open(0, YGFX_RGBA32F, YGFX_DITHER_NONE)) return;
+    S18.ran = 1;
+    /* the box of p0 is x 25..110, y 5..50: p1 is p0 centered on it */
+    for (k = 0; k < 6; k++) { p1[2 * k] = p0[2 * k] - 67.5f; p1[2 * k + 1] = p0[2 * k + 1] - 27.5f; }
+    for (pass = 0; pass < 2; pass++) {
+        memset(&d, 0, sizeof d);
+        d.shape = YGFX_POLYLINE; d.path = p0; d.n_path = 6; d.shape_p[0] = 10;
+        d.join = YGFX_JOIN_MITER; d.cap = YGFX_CAP_SQUARE;
+        d.edge = YGFX_EDGE_COSINE; d.edge_width = 2; d.color[0] = d.color[1] = d.color[2] = 1;
+        memset(&pt, 0, sizeof pt);
+        if (pass) {
+            pt.kind = YGFX_PAINT_LINEAR; pt.space = YGFX_SPACE_RGB; pt.n = 2;
+            pt.x0 = 25; pt.y0 = 5; pt.x1 = 110; pt.y1 = 50;
+            pt.stops[0].color[0] = 1; pt.stops[1].t = 1; pt.stops[1].color[2] = 1;
+            d.paint = &pt;
+        }
+        s[0] = ygfx_shape(&d);
+        gl_frame(&s[0], 1);
+        memcpy(a1, R->scene, sizeof a1);
+        d.path = p1; d.x = 67.5f; d.y = 27.5f;
+        pt.x0 -= 67.5f; pt.x1 -= 67.5f; pt.y0 -= 27.5f; pt.y1 -= 27.5f;
+        s[1] = ygfx_shape(&d);
+        gl_frame(&s[1], 1);
+        for (i = 0; i < W * H * 4; i++) {
+            double e = fabs(a1[i] - R->scene[i]);
+            if (pass) S18.paint_moved = maxd(S18.paint_moved, e); else S18.moved = maxd(S18.moved, e);
+        }
+        for (k = 0; k < 2; k++) {
+            CHECK(VPACK(&s[k], blk[k], ext[k], &clip, &err) > 0);
+            ygfx_bounds(&R->g, &s[k], &bx[k][0], &bx[k][1], &bx[k][2], &bx[k][3]);
+        }
+        /* the quad's half size, its reach and the bounds: equal (before
+         * v0.18.0 the first was 42.5 px wider and 22.5 px taller) */
+        for (k = 4; k < 8; k++) S18.quad_bad += fabsf(blk[0][k] - blk[1][k]) > 1e-4f;
+        for (k = 0; k < 4; k++) S18.quad_bad += fabsf(bx[0][k] - bx[1][k]) > 1e-3f;
+        S18.quad_bad += fabs(ext[0][0] - ext[1][0]) > 1e-9 || fabs(ext[0][1] - ext[1][1]) > 1e-9;
+    }
+    /* an element template keeps its origin: its elements' centers come
+     * from the anchor */
+    memset(&d, 0, sizeof d);
+    d.shape = YGFX_POLYLINE; d.path = tp; d.n_path = 3; d.shape_p[0] = 6; d.cap = YGFX_CAP_ROUND;
+    d.edge = YGFX_EDGE_COSINE; d.edge_width = 2; d.color[0] = 0.8f; d.color[1] = 0.6f; d.color[2] = 0.4f;
+    d.x = -80; d.y = -40; d.ori = 10;
+    t = ygfx_shape(&d);
+    memset(el, 0, sizeof el);
+    el[0].x = 0; el[0].y = 0; el[0].ori = 0; el[0].scale = 1;
+    el[1].x = 60; el[1].y = 70; el[1].ori = 35; el[1].scale = 0.8f;
+    el[2].x = 150; el[2].y = 20; el[2].ori = -50; el[2].scale = 1.2f;
+    memset(&id, 0, sizeof id);
+    id.inst = el; id.n = 3; id.fields = YGFX_I_XY | YGFX_I_ORI | YGFX_I_SCALE;
+    s[0] = ygfx_instances(&R->g, &t, &id);
+    CHECK(s[0].n_inst == 3);
+    if (s[0].n_inst == 3) S18.inst = inst_vs_alone(&s[0], 0);
+    ygfx_close(&R->g);
+}
+
+/* v0.18.0, without GL: a repeated point is skipped (the same length,
+ * bounds and hit test as the path without it), a path of one point is
+ * refused, the bounds of a path away from the origin are its box, and on
+ * a simulated display ygfx_open_screen() takes the window's size. */
+static void test_v18_cpu(void) {
+    static ygfx_gfx g;
+    static yscr_screen scr;
+    static const float rep_[16] = { 60, 30, 60, 30, 120, 40, 120, 40, 120, 40, 90, 80, 140, 85, 140, 85 };
+    static const float clean[8] = { 60, 30, 120, 40, 90, 80, 140, 85 };
+    static const float one[4] = { 5, 5, 5, 5 };
+    yscr_desc sd;
+    ygfx_desc gd;
+    ygfx_shape_desc d;
+    ygfx_stim a, b;
+    float x0, y0, x1, y1, w, h, c0, c1, c2, c3;
+    int i, j, k, bad = 0;
+    memset(&sd, 0, sizeof sd);
+    sd.backend = YSCR_BACKEND_SIM;
+    memset(&gd, 0, sizeof gd);
+    gd.width = 320; gd.height = 200;
+    CHECK(ygfx_open_screen(&g, &scr, &sd, &gd));
+    if (!ygfx_is_open(&g)) return;
+    for (k = 0; k < 3; k++) {
+        memset(&d, 0, sizeof d);
+        d.shape = YGFX_POLYLINE; d.path = rep_; d.n_path = 8; d.shape_p[0] = 6; d.color[0] = 1;
+        d.join = k == 0 ? YGFX_JOIN_ROUND : (k == 1 ? YGFX_JOIN_MITER : YGFX_JOIN_BEVEL);
+        d.cap = k == 0 ? YGFX_CAP_ROUND : (k == 1 ? YGFX_CAP_SQUARE : YGFX_CAP_BUTT);
+        d.ori = 20.0f * (float)k;
+        a = ygfx_shape(&d);
+        d.path = clean; d.n_path = 4;
+        b = ygfx_shape(&d);
+        CHECK(ygfx_length(&g, &a) > 0 && ygfx_length(&g, &a) == ygfx_length(&g, &b));
+        ygfx_bounds(&g, &a, &x0, &y0, &x1, &y1);
+        ygfx_bounds(&g, &b, &c0, &c1, &c2, &c3);
+        CHECK(x0 == c0 && y0 == c1 && x1 == c2 && y1 == c3);
+        for (j = 0; j < 200; j += 2)
+            for (i = 0; i < 320; i += 2) bad += ygfx_hit(&g, &a, (float)i + 0.5f, (float)j + 0.5f) != ygfx_hit(&g, &b, (float)i + 0.5f, (float)j + 0.5f);
+        if (k == 0) {
+            /* the box x 60..140, y 30..85 and the half width 3 about the
+             * box center (100, 57.5) from the screen center (160, 100) */
+            CHECK(fabsf(x0 - 217.0f) < 1e-3f && fabsf(x1 - 303.0f) < 1e-3f);
+            CHECK(fabsf(y0 - 127.0f) < 1e-3f && fabsf(y1 - 188.0f) < 1e-3f);
+            CHECK(ygfx_hit(&g, &a, 220.0f, 130.0f) && !ygfx_hit(&g, &a, 100.0f, 70.0f));
+            /* a quarter turn about the anchor: (60, 30) lands at (130, 160) */
+            a.ori = 90;
+            ygfx_bounds(&g, &a, &x0, &y0, &x1, &y1);
+            CHECK(fabsf(x0 - 72.0f) < 1e-3f && fabsf(x1 - 133.0f) < 1e-3f);
+            CHECK(fabsf(y0 - 157.0f) < 1e-3f && fabsf(y1 - 243.0f) < 1e-3f);
+            CHECK(ygfx_hit(&g, &a, 130.0f, 160.0f) && !ygfx_hit(&g, &a, 220.0f, 130.0f));
+        }
+    }
+    CHECK(bad == 0);
+    d.path = one; d.n_path = 2;
+    a = ygfx_shape(&d);
+    CHECK(ygfx_length(&g, &a) == YGFX_ERR_ARG && !ygfx_hit(&g, &a, 165.0f, 105.0f));
+    {   /* the draw names it */
+        yscr_frame f;
+        CHECK(yscr_begin(&scr, &f) == YSCR_OK);
+        CHECK(ygfx_begin(&g, &f) == YGFX_OK);
+        CHECK(ygfx_draw(&g, &a) == YGFX_ERR_ARG);
+        CHECK(strstr(ygfx_error(&g), "no length") != NULL);
+        CHECK(ygfx_draw(&g, &b) == YGFX_OK);
+        CHECK(ygfx_end(&g) == YGFX_OK);
+        CHECK(yscr_flip(&scr) == YSCR_OK);
+    }
+    /* trim, as DASHES AND TRIM states it: (0, 0) is the whole path; a
+     * trim of zero length is nothing with BUTT, the cap's dot with ROUND.
+     * The path from (60, 30) to (120, 40): (220, 130) is its start,
+     * (250, 135) its middle. */
+    memset(&d, 0, sizeof d);
+    d.shape = YGFX_POLYLINE; d.path = clean; d.n_path = 4; d.shape_p[0] = 6; d.color[0] = 1;
+    d.cap = YGFX_CAP_BUTT;
+    a = ygfx_shape(&d);
+    CHECK(ygfx_hit(&g, &a, 250.0f, 135.0f) && ygfx_hit(&g, &a, 221.0f, 130.2f));
+    a.trim[1] = 1e-6f;
+    CHECK(!ygfx_hit(&g, &a, 250.0f, 135.0f) && !ygfx_hit(&g, &a, 219.0f, 130.0f) && !ygfx_hit(&g, &a, 221.0f, 130.2f));
+    a.trim[0] = a.trim[1] = 0.5f;
+    CHECK(!ygfx_hit(&g, &a, 250.0f, 135.0f));
+    a.trim[0] = 0.0f; a.trim[1] = 1e-6f; a.cap = YGFX_CAP_ROUND;
+    CHECK(ygfx_hit(&g, &a, 219.0f, 130.0f) && ygfx_hit(&g, &a, 221.0f, 130.2f) && !ygfx_hit(&g, &a, 250.0f, 135.0f));
+    ygfx_close(&g);
+    yscr_close(&scr);
+    /* the simulated display's size: the window's, desc's, or 800 x 600 */
+    sd.window_w = 1024; sd.window_h = 768;
+    memset(&gd, 0, sizeof gd);
+    CHECK(ygfx_open_screen(&g, &scr, &sd, &gd));
+    ygfx_size(&g, &w, &h);
+    CHECK(w == 1024.0f && h == 768.0f);
+    ygfx_close(&g);
+    yscr_close(&scr);
+    gd.width = 640; gd.height = 480;
+    CHECK(ygfx_open_screen(&g, &scr, &sd, &gd));
+    ygfx_size(&g, &w, &h);
+    CHECK(w == 640.0f && h == 480.0f);
+    ygfx_close(&g);
+    yscr_close(&scr);
+    sd.window_w = sd.window_h = 0;
+    CHECK(ygfx_open_screen(&g, &scr, &sd, NULL));
+    ygfx_size(&g, &w, &h);
+    CHECK(w == 800.0f && h == 600.0f);
+    ygfx_close(&g);
+    yscr_close(&scr);
+}
+
 static void s11_report(void) {
     if (!S11.ran) return;
     printf("  v0.10 simplex: GPU against ygfx_simplex_value(), 6 fields: wrong %ld of %ld; turned: largest |value| %.3f, "
@@ -9192,6 +9398,7 @@ int main(void) {
     test_v06_cset_cpu();
     test_v10_simplex_cpu();
     test_v17_text_paths_cpu();
+    test_v18_cpu();
     printf("v0.4 instances: the shader's cosine and sine of degrees, -720 to 720, against double: max %.2e\n", S6.csd_err);
     printf("v0.7 ellipse: the quarter perimeter against Simpson's rule, aspect 1 to 20: max relative %.2e\n", S4.ell_quarter);
     R = (rig*)calloc(1, sizeof *R);

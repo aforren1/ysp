@@ -4278,6 +4278,155 @@ the 1025th refused; it fails on 0.17.1), and the same 2 checks in
 Octave 10.1). 7 new mutants (`tests/mutate/gfx.toml`, tb-): 7 of 7
 killed on the Iris Xe.
 
+## v0.18.0: paths on their own box, repeated points, the simulated display's size
+
+Three findings of the task examples (docs/examples_findings.md, B5, F11
+and F12; `trial_copying`, `trial_visuomotor`, `trial_mouse_tracking`).
+
+### A repeated point
+
+A POLYLINE with two equal points in a row failed at draw time ("a
+polyline with a repeated point"), so one repeated sample lost a whole
+chunk of `trial_copying`'s ink: a pen at rest repeats its sample. A
+segment of zero length has no direction: the MITER and BEVEL joins and
+the BUTT and SQUARE ends normalize it. The pack now skips a point equal
+to the one before it (compared in px, after the scale). A path whose
+points are all one is refused ("a path with no length"), as a Bezier
+with no length already was.
+
+The other paths:
+
+- QBEZIER's chords: with the end points equal and an odd chord count,
+  the two chords about t = 0.5 meet at one point, a chord of zero
+  length. It drew (QBEZIER has round joins, which guard the division)
+  but cost a segment; the same skip removes it.
+- POLYGON still refuses a repeated vertex: VERTEX paint ties a color to
+  each vertex number, and a skip would move the colors.
+- Curve sets (text, ysp/outline.h): a curve of zero length gives no
+  crossing in the winding count (`ygfx__cset_cross()`: its three control
+  values lie on one side of the ray), so nothing to change.
+
+### The quad on the path's box
+
+A path's quad was symmetric about the stimulus center: its half size was
+the largest |x| and |y| of the points. `trial_copying` draws ink as
+chunks placed at the writing box's center, so a chunk off to one side
+paid for the empty mirror half too. The pack now moves the packed
+frame's origin to the center of the path's box: the points, and a
+LINEAR, RADIAL or ANGULAR paint's points, are packed from there, and the
+placement (block vec4 0) moves there along the stimulus's turned axes
+(`ygfx__place_at()`). The quad, the draw order's box (`ygfx__cmd_box()`)
+and `ygfx_bounds()` are then the path's box; `ygfx_hit()` moves its
+point into the packed frame. The vector program did not change, so a
+program cache from v0.17 still hits. An element template keeps its
+origin: an element's center comes from the template's anchor (block 1
+of the range), which does not carry the offset. A template's data must
+fit its block (3 points), so this costs little.
+
+Measured with `ink_bench.c` (a scratch benchmark, not in the tree): a
+stroke along a Lissajous figure in a 240 px box, sampled every 1.5 px,
+3 px wide, round caps, cosine edge, drawn as POLYLINE chunks; "own box"
+places each chunk at its box center (`trial_copying`'s workaround),
+"box center" at the center of the whole stroke's box (the layout
+before the workaround). 300 frames a row, wall time per frame with one
+`glFinish()` at the end (so it is throughput), headless (ysp's
+`tests/adapt/gfx_headless.h`, surfaceless EGL) at 1024 x 768. The GPU is
+the one surfaceless EGL picked: the Intel UHD 770 (ADL-S GT1) of the
+Linux desktop's i5-14500, Mesa 22.3.6, not the RX 6600 that drives the
+monitors. 2026-11-06, two runs of each build, alternated; other workers
+built ysp at the time (load average 1.4 to 6.6), which moved the CPU
+column and not the GPU one (run to run within 0.1 %). GPU ms a frame:
+
+| Stroke | Chunks of 224 points | 0.17.3 own box | 0.17.3 box center | 0.18.0 own box | 0.18.0 box center |
+|---|---|---|---|---|---|
+| 900 px, 587 points | 3 | 5.093, 5.088 | 10.628, 10.623 | 5.086, 5.087 | 5.086, 5.087 |
+| 3000 px, 1949 points | 9 | 17.636, 17.630 | 35.395, 35.392 | 17.629, 17.629 | 17.630, 17.629 |
+| 9000 px, 5841 points | 27 | 51.008, 50.998 | 66.737, 66.732 | 51.001, 51.000 | 51.006, 50.999 |
+
+A chunk placed anywhere now costs what one placed on its own box does,
+so `trial_copying`'s per-chunk centering is no longer needed. Rows with
+16, 32, 64 and 128 points a chunk did not change (within 0.4 %).
+
+The pack's CPU cost did not grow: a 224-point POLYLINE packed by
+`ygfx_bounds()` (which runs the whole pack), best of 7 rounds of 20000,
+pinned to one core, three runs of each build alternated with the load
+average at 1.3: 0.706 us in 0.17.3 and 0.686 to 0.690 us in 0.18.0
+(i5-14500, gcc 12.2 -O2; `packbench.c`, scratch). The CPU column of the
+table above moved with the other workers' load, not with the build.
+
+Two notes on the benchmark:
+
+- Every pixel of a chunk's quad still tests every segment of the chunk:
+  5841 points in chunks of 224 cost 51 ms, in chunks of 16 1.8 ms. A
+  segment-instanced stroke (one quad per segment) stays open
+  (docs/examples_findings.md).
+- Its "LINE instances" row (one LINE template, an instance per segment)
+  read 0.104 ms for 5840 instances right after the 67 ms row, and 0.651
+  to 0.668 ms when that row ran with a lighter row (0.18.0) or alone
+  (both builds): the low figure is the benchmark's, not the GPU's. LINE
+  instances do not reach the pack this change touched.
+
+### The simulated display's size
+
+ysp/screen.h's SIM backend has no pixels, so its mode reports no size,
+and `ygfx_open()` took `desc.width` and `height`, or 800 x 600. Examples
+that open a 1024 x 768 window then laid a `--sim` run out at 800 x 600:
+`trial_visuomotor` set `width` and `height` by hand, and
+`trial_mouse_tracking`'s simulated targets landed elsewhere than in its
+window runs. `ygfx_open_screen()` has the screen's desc, so on SIM it
+now passes `sd->window_w` and `window_h` as the size when the gfx desc
+gives none (each axis alone); a screen with a mode still ignores both.
+`ygfx_open()` on a screen opened apart cannot see the window size: there
+it is `desc.width`, `height` or 800 x 600, as before. A size in
+`yscr_caps.mode` for SIM would cover both calls, but that is
+ysp/screen.h's change; ysp-vis opens its gfx that way (no gfx `width`
+option), so its SIM scene stays 800 x 600.
+
+### Trim
+
+Not a change: trim (0, 0) is the whole path, as (0, 1) is, so a
+`trim[1]` animated up from 0 shows the whole path on its first frame
+(`trial_copying` hit it). DASHES AND TRIM now says so, with the two ways
+round it (start at 1e-6, or `visible` 0 while `trim[1]` is 0), and what
+a zero-length trim draws (nothing with BUTT; with ROUND or SQUARE its
+two caps, a dot or a square; the BUTT and ROUND cases checked by
+`ygfx_hit()` in `test_v18_cpu()`). A cleaner API
+would mark an explicit trim (a flag, so (0, 0) with it is empty); it is
+not built, because the field layout would change for a case two lines
+of caller code handle.
+
+### Tests
+
+`tests/adapt/gfx_test.c`:
+
+- `test_v18_cpu()` (no GL): a path with repeated points against the
+  same path without them, three join and cap pairs, turned 0, 20 and 40
+  degrees: the same length, bounds and `ygfx_hit()` at 16000 points; a
+  path of one point refused; the bounds of a path off the center, plain
+  and on a quarter turn, against the box by hand; the trim cases above;
+  `ygfx_open_screen()` on SIM: the window's size, the desc's over it,
+  800 x 600 with neither.
+- `gl_v03_kinds()`: two more paths off the center, a POLYLINE with
+  repeats (MITER, SQUARE) and a trimmed QBEZIER, against the CPU form
+  and the hit test at 0 and 25 degrees, three edges, filled and
+  stroked (261 stimuli, was 243).
+- `gl_v18_paths()`: a path moved by `x`, `y` against the same path moved
+  in its points, plain and with a LINEAR paint (0 difference: both pack
+  the same block), the quad, its reach and the bounds equal; a template
+  of 3 points off its origin against its elements drawn alone (9.5e-6).
+
+On Mesa llvmpipe (gcc 12.2), every check before and after: the v0.3
+kinds' soft-edge maximum 8.17e-6 before and 7.89e-6 after, dashes and
+trim 5.79e-5 and 8.13e-5 (the float rounding of points packed from
+another origin; the tolerances are 5e-5 and 1.5e-3), hard and hit
+wrong 0. Not run on ANGLE, WARP, SwiftShader or the Iris Xe.
+
+11 mutants (`tests/mutate/gfx.toml`, pa-, a new `gfx_linux` test entry
+with gcc 12.2 on the Linux desktop, Mesa llvmpipe): 11 of 11 killed.
+pa-02 (a path of one point drawn) survived the first run: `ygfx_length()`
+refuses such a path through its own dash check whatever the pack does,
+so the test now also draws it and checks the refusal.
+
 ## Bindings
 
 `ysp/gfx.h` is bound in `ysp-vis` with `ysp/screen.h` and `ysp/video.h`

@@ -369,6 +369,21 @@ static void check_basic(void) {
         d.arena_size = need;
         CHECK(!ytb_open_csv(&u, &d));
         CHECK_HAS(ytb_error(&u), "aligned");
+        /* MEMORY AND COST's numbers (v0.3.1): a small table's arena is
+         * mostly the fixed 4232 bytes */
+        d.arena = NULL;
+        d.text = "a\n1\n";
+        d.len = 4;
+        CHECK(!ytb_open_csv(&u, &d));
+        CHECK_I(u.need, 4320);
+        d.text = "angle\n0\n45\n90\n135\n180\n225\n270\n315\n";
+        d.len = strlen((const char*)d.text);
+        CHECK(!ytb_open_csv(&u, &d));
+        CHECK_I(u.need, 4560);
+        d.arena = g_arena2;
+        d.arena_size = 4560;
+        CHECK(ytb_open_csv(&u, &d));
+        CHECK_I(u.size, 264);
     }
 }
 

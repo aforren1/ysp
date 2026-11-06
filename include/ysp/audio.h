@@ -1,4 +1,4 @@
-/* ysp/audio.h - v0.9.0 - public domain single-header audio library
+/* ysp/audio.h - v0.9.1 - public domain single-header audio library
  *
  *   Sound at a time on the ysp/rt.h clock. A buffer is played with
  *   yau_play_at(buf, t); the header plans its first sample on the device
@@ -786,8 +786,11 @@
  *     AUTO on Linux is ALSA exclusive on the default card's first playback
  *     device (ALSA_CARD, as alsa-lib reads it, else card 0) unless
  *     desc.device names one, at 32 bits for a project of 24 bits or more:
- *     the fastest path measured here. A program that wants the sound
- *     server says YAU_BACKEND_PULSE. Shared (YAU_BACKEND_ALSA without
+ *     the fastest path measured here. AUTO takes the card for this
+ *     program alone: while it is open, the desktop's other sound on that
+ *     card stops (its PulseAudio sinks and sources are suspended, below),
+ *     also on a machine where a person works beside the rig. A program
+ *     that wants the sound server says YAU_BACKEND_PULSE. Shared (YAU_BACKEND_ALSA without
  *     desc.exclusive): the device desc.device names, "default" without
  *     one (often a sound server's plugin); callback times only. Exclusive
  *     (desc.exclusive, v0.9.0): the card's own device (hw:), past any
@@ -826,7 +829,12 @@
  *     exclusive").
  *   YAU_BACKEND_PULSE (Linux, v0.9.0)
  *     Shared through the sound server, which keeps the desktop's sound:
- *     the choice for an operator's machine. Positions: the stream's timing
+ *     the choice for an operator's machine. The device format is the
+ *     sink's: PulseAudio's default-sample-format, s16le unless configured
+ *     (as on the Linux desktop here). STRICT OPEN then refuses the default
+ *     float project ("takes s16 samples, fewer bits than the project's"):
+ *     open with desc.format.sample = YAU_S16, or set default-sample-format
+ *     = float32le in PulseAudio's daemon.conf. Positions: the stream's timing
  *     info (THE STREAM), asked for at most every 50 ms; a fit spread of 3
  *     to 4 us, the shortest safe lead 15 to 17 ms here. Tier 3: no
  *     loopback.
@@ -1121,6 +1129,10 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.9.1 - Documentation only (BACKENDS): AUTO on Linux takes the card
+ *          for the program alone, and through PulseAudio the project's
+ *          format must not be wider than the sink's (s16le unless
+ *          configured): a float project is refused there.
  *   v0.9.0 - Linux, numbered v0.8.0 on its branch and merged over
  *          v0.8.0 and v0.8.1 (STATUS). PulseAudio: the stream's
  *          timing info is a device position
@@ -1641,8 +1653,8 @@
 
 #define YAU_VERSION_MAJOR 0
 #define YAU_VERSION_MINOR 9
-#define YAU_VERSION_PATCH 0
-#define YAU_VERSION_STRING "0.9.0"
+#define YAU_VERSION_PATCH 1
+#define YAU_VERSION_STRING "0.9.1"
 
 #include "ysp/rt.h"
 

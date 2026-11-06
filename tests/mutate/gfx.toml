@@ -3,7 +3,8 @@
 # later lists by prefix (pr-: v0.11 prime; os-: v0.11.1 open start; cv-:
 # v0.12.0 messages; cp-: v0.13.0 capture; ft-: v0.15.0 first trial; tp-:
 # v0.17.1 text paths; tb-: v0.17.2 text batches; mo-: v0.17.3 the origin
-# on ysp/screen.h's METAL backend).
+# on ysp/screen.h's METAL backend; pa-: v0.18.0 paths and the simulated
+# display's size, run on the Linux desktop with Mesa llvmpipe).
 # The v0.3 list (mutate03.py) was lost; docs/gfx.md keeps its table.
 # YGFX_TEST_PARTS limits a run to the parts that can see the fault, and
 # "none" runs the CPU half alone. YGFX_TEST_DEVICES=hardware is the GPU
@@ -1483,3 +1484,121 @@ why = "ANGLE's IOSurface pbuffer on METAL puts GL's row 0 at the top of the draw
 find = '''        g->origin_top = sc.backend == YSCR_BACKEND_DXGI_FLIP || sc.backend == YSCR_BACKEND_COMPOSITION ||
                         sc.backend == YSCR_BACKEND_METAL;'''
 replace = '''        g->origin_top = sc.backend == YSCR_BACKEND_DXGI_FLIP || sc.backend == YSCR_BACKEND_COMPOSITION;'''
+
+# v0.18.0 (pa-: a path's quad on its box, repeated points, the simulated
+# display's size from the window), run by tests/adapt/gfx_test.c with gcc
+# on the Linux desktop: YGFX_TEST_DEVICES=mesa is Mesa llvmpipe, "none"
+# the CPU half alone. YSP_SDL3 is an SDL3 prefix (3.4.18 or later).
+[test.gfx_linux]
+source = "tests/adapt/gfx_test.c"
+compiler = "gcc"
+flags = ["-std=c11", "-O2", "-w", "-I$YSP_SDL3/include"]
+libs = ["-L$YSP_SDL3/lib", "-Wl,-rpath,$YSP_SDL3/lib", "-lSDL3", "-lm", "-lpthread", "-ldl"]
+timeout = 600
+
+[[mutant]]
+id = "pa-01"
+name = "a repeated point packed"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.3 kinds", YGFX_TEST_DEVICES = "mesa" }
+why = "A zero-length segment has no direction: a MITER join or a SQUARE cap beside it normalizes a zero vector (v0.18.0, B5)."
+find = "                    if (l == 0.0) continue;\n"
+replace = ""
+
+[[mutant]]
+id = "pa-02"
+name = "a path of one point drawn"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "none", YGFX_TEST_DEVICES = "none" }
+why = "Every point of the path one: nothing to stroke; it is refused, as a Bezier with no length is."
+find = "if (m < 2) { *err = \"a path with no length (all its points are one)\"; return YGFX_ERR_ARG; }"
+replace = "if (m < 1) { *err = \"a path with no length (all its points are one)\"; return YGFX_ERR_ARG; }"
+
+[[mutant]]
+id = "pa-03"
+name = "the quad about the stimulus center"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.18 paths", YGFX_TEST_DEVICES = "mesa" }
+why = "A path off to one side drew a quad twice its box (10.6 against 5.1 ms of GPU for 224 points): the quad, the bounds and the draw order's box are the path's box (v0.18.0, F11)."
+find = "if (!(s->inst && s->n_inst)) { sh2[0] = 0.5 * (x0 + x1); sh2[1] = 0.5 * (y0 + y1); }"
+replace = "if (0) { sh2[0] = 0.5 * (x0 + x1); sh2[1] = 0.5 * (y0 + y1); }"
+
+[[mutant]]
+id = "pa-04"
+name = "the placement not moved to the box"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.3 kinds", YGFX_TEST_DEVICES = "mesa" }
+why = "The points are packed from the box center: the placement must move there, or the path draws shifted."
+find = "        ygfx__place_at(g, s, sh2, b);\n"
+replace = "        ygfx__place(g, s, b);\n"
+
+[[mutant]]
+id = "pa-05"
+name = "the placement moved along unturned axes"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.3 kinds", YGFX_TEST_DEVICES = "mesa" }
+why = "The box center is in the stimulus frame: on a turned stimulus it moves along the turned axes."
+find = """    m[0] += sh2[0] * c - sh2[1] * sn;
+    m[1] += sh2[0] * sn + sh2[1] * c;
+    out[0] = (float)m[0];"""
+replace = """    m[0] += sh2[0];
+    m[1] += sh2[1];
+    out[0] = (float)m[0];"""
+
+[[mutant]]
+id = "pa-06"
+name = "the hit test in the stimulus frame"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "none", YGFX_TEST_DEVICES = "none" }
+why = "The CPU field is the packed one: a point is moved into the packed frame first."
+find = "return ygfx__vhard(blk, lx - sh2[0], ly - sh2[1]) != 0;"
+replace = "return ygfx__vhard(blk, lx, ly) != 0;"
+
+[[mutant]]
+id = "pa-07"
+name = "the bounds about the stimulus center"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "none", YGFX_TEST_DEVICES = "none" }
+why = "ygfx_bounds() gives the path's box: its half size is about the box center, not the stimulus's."
+find = """                hx = (float)e2[0]; hy = (float)e2[1];
+                m[0] += sh2[0] * c - sh2[1] * sn;
+                m[1] += sh2[0] * sn + sh2[1] * c;"""
+replace = """                hx = (float)e2[0]; hy = (float)e2[1];"""
+
+[[mutant]]
+id = "pa-08"
+name = "a LINEAR paint not moved with the frame"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.18 paths", YGFX_TEST_DEVICES = "mesa" }
+why = "A paint's points are in the stimulus frame; the shader reads them in the packed one."
+find = "pt->x0 * ppu - sh2[0], pt->y0 * ppu - sh2[1], pt->x1 * ppu - sh2[0], pt->y1 * ppu - sh2[1]"
+replace = "pt->x0 * ppu, pt->y0 * ppu, pt->x1 * ppu, pt->y1 * ppu"
+
+[[mutant]]
+id = "pa-09"
+name = "an element template centered on its box"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.18 paths", YGFX_TEST_DEVICES = "mesa" }
+why = "An element's center comes from the template's anchor (block 1), which does not carry the box's offset: a template keeps its origin."
+find = "if (!(s->inst && s->n_inst)) { sh2[0] = 0.5 * (x0 + x1); sh2[1] = 0.5 * (y0 + y1); }"
+replace = "{ sh2[0] = 0.5 * (x0 + x1); sh2[1] = 0.5 * (y0 + y1); }"
+
+[[mutant]]
+id = "pa-10"
+name = "SIM at 800 x 600 whatever the window"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "none", YGFX_TEST_DEVICES = "none" }
+why = "A --sim run lays a trial out at the window's size, as its window run does (v0.18.0, F12)."
+find = """    if (c.d.width <= 0 && d.window_w > 0) c.d.width = d.window_w;
+    if (c.d.height <= 0 && d.window_h > 0) c.d.height = d.window_h;
+"""
+replace = ""
+
+[[mutant]]
+id = "pa-11"
+name = "the window's size over the desc's"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "none", YGFX_TEST_DEVICES = "none" }
+why = "desc.width and height, when set, are the simulated display's size."
+find = "    if (c.d.width <= 0 && d.window_w > 0) c.d.width = d.window_w;"
+replace = "    if (d.window_w > 0) c.d.width = d.window_w;"

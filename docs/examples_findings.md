@@ -19,7 +19,6 @@ runs used scripted input.
 | B2 | response.h:703-715 | `yrsp_cursor` sums float positions, so the cursor drifts off the count grid (0.033 px in 160 trials at gain 0.1). The gain's value changes the data | Keep an int64 count sum per axis; position = origin + gain x count | visuomotor |
 | B3 | response.h:1114-1134 | A caller column with the same name as a `yrsp_data_set()` column (`rt_s`) makes the call fail and the row is lost | Skip non-SET columns, or refuse the clash at `ytr_data_open` | timed |
 | B4 | response.h, HELD KEYS | Held-key state is per collector. A key released while another collector was fed stays down in the first; its next press is HELD and the trial hangs | Document that every collector must see every event; with per-arm durations (F2) one collector is enough | timed |
-| B5 | gfx.h:11537 | A repeated consecutive point makes the whole POLYLINE fail at draw time | Skip zero-length segments | copying |
 | B6 | input.h:449-460, 693 | Linux raw mice carry Windows' source note ("stamped at read, 0.15 to 0.40 ms") and tier UNKNOWN; `yin_sdl_source()` has no Linux branch (pen and mouse tier 0) | Linux branches: evdev's kernel stamp for raw mice; SDL's queue time for X11 pointer and pen | visuomotor, copying |
 
 ## Missing features
@@ -36,8 +35,7 @@ runs used scripted input.
 | F8 | trials.h | Weights are per row; per-factor weights are multiplied by hand. A `weight` column becomes a factor | Factor weights in `ytr_factor_desc`, or a weight column kept out of the factors | posner |
 | F9 | trials.h:2267 | The data writer is bound to one session; blocks of different designs need a new session or a session-less writer | `ytr_data_rebind()`, or a note in DATA FILE | timed |
 | F10 | outline.h | A short word without pack/layout takes about 25 lines (also repeated in `trial_sternberg`) | `yol_text_path(ctx, font, utf8, size, &path)` and a shared bitmap fallback | posner |
-| F11 | gfx.h:11529 | The POLYLINE quad is symmetric about the stimulus origin: a path away from the origin costs twice (10.6 vs 5.1 ms for a 224-point chunk). Every pixel evaluates every segment | Center the quad on the path's box; a segment-instanced stroke primitive | copying |
-| F12 | gfx.h:6413 | The SIM backend ignores `yscr_desc.window_w/h` (800 x 600), so `--sim` geometry differs from a window run (also `trial_mouse_tracking`) | SIM takes the window size | visuomotor |
+| F11 | gfx.h | Every pixel of a POLYLINE chunk's quad evaluates every segment: 5841 points cost 51 ms of GPU a frame as chunks of 224, 1.8 ms as chunks of 16, and one LINE instance per segment 0.66 ms (Intel UHD 770 through Mesa 22.3.6, headless 1024 x 768: the ink benchmark ran on the iGPU surfaceless EGL picks, not the RX 6600; its 0.10 ms LINE row was an artifact of the row before it). The quad's centering on the path's box is done (gfx.h 0.18.0) | A segment-instanced stroke primitive | copying |
 | F13 | screen.h:16507, 16241 | `yscr_event_input()` drops synthetic mouse events (a tablet's), with no switch; `yscr_restamp()` returns 0 on SIM, so synthetic SDL events cannot go through it in `--sim` | A desc flag; `yscr_event_input_at(s, ev, t, out)` | copying |
 | F14 | input.h:570-614 | Pen `pen_state` and `device_type` are dropped; `YIN_ERASER` is only on down and up | Carry `pen_state` in `code` | copying |
 | F15 | screen.h:15602 | The describe line has no raw-mouse state on Linux | `raw_mice=<nodes>(reports n, unfocused n, syn_dropped n)` | visuomotor |
@@ -50,10 +48,7 @@ runs used scripted input.
 | D2 | input.h:72 | Pen tilt is in `value` of AXIS samples, not in x, y | copying |
 | D3 | response.h, THE FRAME LOOP | An early-press check must run before `ytl_evaluate()` in the frame where the target lands | posner |
 | D4 | response.h:695-700 | `yrsp_cursor` integrates the hand; a rotation or other mapping is the caller's, after the feed, and the clamp bounds the hand, not the drawn cursor | visuomotor |
-| D5 | gfx.h:541 | Trim (0, 0) means "whole": an animated trim from 0 shows the full path on its first frame | copying |
 | D6 | input.h | `yin_from_mouse()` puts a report's press before its movement | copying |
-| D7 | audio.h:339-360 | AUTO on Linux takes the card exclusively; through PulseAudio the format must match the sink (s16 here) | timed |
-| D8 | table.h | The per-table arena overhead is not stated (an 8-row, 1-column CSV needs 4560 bytes) | visuomotor |
 | D9 | CLAUDE.md | GCC 12's AddressSanitizer also needs `setarch -R` on this kernel (16 of 40 `trial_posner` runs hung without it) | posner |
 
 ## Tests

@@ -474,13 +474,15 @@ int main(int argc, char** argv) {
     if (sim && !failed && reps != 1) printf("--sim: the self-check needs the default --reps\n");
     else if (sim && !failed) {
         /* 64 samples after the start click. The movement onset is the
-         * sample that passes 10 px: trial 0's first step is 8.7 px, so its
-         * second sample; trial 1 bends, so its first. Samples run from
+         * sample that passes 10 px: on the 1024 x 768 window (the
+         * simulated display takes its size, ysp/gfx.h 0.18.0) trial 0's
+         * first step is 11.8 px, and trial 1 bends: the first sample for
+         * both (at 800 x 600 trial 0's was 8.6 px). Samples run from
          * 0.3 s after the click (0.6 s after the script's t0), one per
          * 8 ms; the init is from the disc's flip record, the first vblank
          * at or after the click. On the virtual clock all of it is exact,
          * with raw counts too. */
-        static const int cross[2] = { 2, 1 };
+        static const int cross[2] = { 1, 1 };
         int bad = rows != 2;
         if (bad) fprintf(stderr, "trial_mouse_tracking: --sim: %d rows, not 2\n", rows);
         for (i = 0; i < rows && i < 2; i++) {
