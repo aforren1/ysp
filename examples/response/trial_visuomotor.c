@@ -669,7 +669,12 @@ int main(int argc, char** argv) {
          * target goes on the first frame whose onset is at or after it, so
          * this is decided up to a frame early, and a hand that leaves in
          * that last frame counts as an early move, not as a broken hold */
-        ysig_frame(&sg, &(ysig_frame_in){ f.index, f.onset, 0, NULL, 0, sim || autorun ? f.onset : yrt_now_ns() });
+        /* -1 can only be a programming error (a bad argument) */
+        if (ysig_frame(&sg, &(ysig_frame_in){ f.index, f.onset, 0, NULL, 0, sim || autorun ? f.onset : yrt_now_ns() }) != 0) {
+            fprintf(stderr, "trial_visuomotor: %s\n", ysig_error(&sg));
+            failed = 1;
+            break;
+        }
         frame_hits();
         if (phase >= REACH && !target_seen) {   /* the target on this frame */
             ytl_seq q = ytl_seq_on(&tl, TRIAL);

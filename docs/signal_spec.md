@@ -477,11 +477,14 @@ arrival order. Within one source they rise. So:
   holds the latest value of each input and runs when either changes.
   Its output's `t` is the newer input's `t`; its `t_oldest` is the older
   input's `t`; its tier is the worse of the two (principle 6). As built:
-  the output's `t`, device and source come from the input that changed
-  in this evaluation, along the path: the arriving sample's (the report
+  in a sample's pass the output's `t`, device and source come from the
+  input that changed, along the path: the arriving sample's (the report
   that made the value, the one that crossed), even when the other
   input's held part is newer in time, and after a delay the delayed
-  sample's; `t_oldest` stays the oldest input's.
+  sample's; in a frame's pass and in a read at a past time, from the
+  newest input; `t_oldest` stays the oldest input's. A detect, emit or
+  record never moves its own time back (the later of the new and its
+  last, counted).
 - A sample whose `t` is older than its source's last sample is counted
   and dropped. The count goes in the describe record. As built: order is
   kept per source and device (two mice on one any-device source do not
@@ -506,10 +509,12 @@ frame without changing their state: a still mouse sends nothing, and its
 speed must still fall to 0. A view never infers stillness from the gap
 between the last sample and a planned onset, which is in the future when
 the frame is prepared: the frame gives the poll's time (the latest time
-input is known up to; required, and refused when before the newest event
-fed), a view uses input up to the earlier of the onset and the poll, and
-a velocity or speed is 0 only when its input was silent for the lag up to
-the poll. A stateless node with a generator input is read at a past time
+input is known up to); the poll used is the later of it and the newest
+event fed (a later event is counted as a late poll); a view uses input
+up to the earlier of the onset and that poll; and a velocity or speed is
+0 only when its input was silent for the lag up to it. A frame is refused
+only for bad arguments and for a poll of 0 in a graph with a view, on
+every call; a reset does not change the newest event's time. A stateless node with a generator input is read at a past time
 from its inputs' rings, as one after two sources. History rings hold values at sample times;
 a view never enters them. These five ops keep state per sample, so the
 loader refuses one with no source upstream (on a generator or a channel
@@ -751,7 +756,7 @@ needed by a ported example or found by a measurement.
 | 5.2 | Parameters in 16 doubles | Also a data array per node, copied at open | 7 + 7 sines need 42 numbers |
 | 5.5 | Four unit spaces | `display_px` added | The examples are designed in window pixels |
 | 6.1 | The worse tier | SIM, 1, 2, 3, UNKNOWN from best to worst; a source's tier for stamp 0 is a parameter (the source table's) | ysp/input.h orders no tiers; an unmeasured stamp is the worst |
-| 6.1 | A value's `t` is the newer input's | The arriving sample's `t`, device and source; `t_oldest` the oldest input's | The derived event must name the report that crossed, not the other hand's |
+| 6.1 | A value's `t` is the newer input's | In a sample's pass the changed input's (the arriving sample's) `t`, device and source; in a frame's pass the newest input's; a sink's time never goes back; `t_oldest` the oldest input's | The derived event must name the report that crossed, not the other hand's; a frame must not move a value's time back |
 | 6.1 | Order per source | Per source and device; raw mouse counts never dropped | Two mice on one any-device source dropped each other's counts |
 | 6.2 | A sink reads at the onset | Held values at `ysig_frame()`; `ysig_value_at()` from rings of sample-time values for a later onset; views for velocity, speed, delay, low-pass, rate integration up to the poll's time | The flip record comes a frame later (D10); a still mouse sends nothing; a planned onset is in the future |
 | 6.2 | | Stateful sample-rate ops need a source upstream | They would never run; a frame-rate form is not built |

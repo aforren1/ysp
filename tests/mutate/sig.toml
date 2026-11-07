@@ -459,15 +459,15 @@ id = "54"
 name = "frame: the poll ignored"
 test = "sig"
 why = "Views would run to the planned onset, a frame past the input."
-find = 'g->t_known = f->poll_ns < f->onset_ns ? f->poll_ns : f->onset_ns;'
-replace = 'g->t_known = f->onset_ns;'
+find = '        g->t_known = poll < f->onset_ns ? poll : f->onset_ns;'
+replace = '        g->t_known = f->onset_ns;'
 
 [[mutant]]
 id = "55"
-name = "frame: a poll before the input taken"
+name = "frame: poll 0 taken with a view"
 test = "sig"
-why = "A zeroed poll would freeze every view of a still input (review Q1)."
-find = '    if (f->poll_ns < g->t_fed) {'
+why = "A graph with a view and no poll would run its views to the planned onset (review Q1)."
+find = '    if (g->has_view && f->poll_ns == 0) {'
 replace = '    if (0) {'
 
 [[mutant]]
@@ -611,9 +611,84 @@ id = "75"
 name = "run: a node not marked as changed"
 test = "sig"
 why = "Downstream nodes would take the newest input, not the one that changed."
-find = '''    }
+find = '''    if (mode != 0) changed = 0;
     n->pass = g->pass;'''
-replace = '    }'
+replace = '    if (mode != 0) changed = 0;'
+
+[[mutant]]
+id = "77"
+name = "frame: no graph has a view"
+test = "sig"
+why = "poll_ns 0 would never be refused."
+find = '        if (g->nd[i].flags & YSIG__F_VIEW) g->has_view = 1;'
+replace = '        (void)0;'
+
+[[mutant]]
+id = "78"
+name = "frame: the given poll even when an event came later"
+test = "sig"
+why = "A view would stop at a poll that input already passed."
+find = '            poll = g->t_fed;'
+replace = '            (void)0;'
+
+[[mutant]]
+id = "79"
+name = "frame: late polls not counted"
+test = "sig"
+why = "A program whose poll lags its input would not know."
+find = '                g->st.late_poll++;'
+replace = '                (void)0;'
+
+[[mutant]]
+id = "80"
+name = "frame: the largest late excess not kept"
+test = "sig"
+why = "The size of the lag would be lost."
+find = '                if (ex > g->st.late_poll_max_ns) g->st.late_poll_max_ns = ex;'
+replace = '                (void)ex;'
+
+[[mutant]]
+id = "81"
+name = "frame: an unset poll counted as late"
+test = "sig"
+why = "A graph without views would count every frame."
+find = '            if (f->poll_ns != 0) {'
+replace = '            if (1) {'
+
+[[mutant]]
+id = "82"
+name = "reset: the fed time moved to the reset's"
+test = "sig"
+why = "A reset at a planned onset would make the next poll look late (review N2)."
+find = '''    g->n_hit = g->n_der = 0;
+    g->pass++;'''
+replace = '''    g->n_hit = g->n_der = 0;
+    g->t_fed = t;
+    g->pass++;'''
+
+[[mutant]]
+id = "83"
+name = "meta: a frame takes the changed input"
+test = "sig"
+why = "A join's time would go back to a standing view's sample (review N3)."
+find = '    if (mode != 0) changed = 0;'
+replace = '    (void)0;'
+
+[[mutant]]
+id = "84"
+name = "sink: time may go back"
+test = "sig"
+why = "A record, emit or detect would move back in time."
+find = '    if (t < n->sink_t) { g->st.time_clamped++; return n->sink_t; }'
+replace = '    (void)0;'
+
+[[mutant]]
+id = "85"
+name = "sink: last time kept across resets"
+test = "sig"
+why = "After a reset to an earlier time every sink would hold the old trial's time."
+find = '        n->sink_t = INT64_MIN;'
+replace = '        (void)0;'
 
 [[mutant]]
 id = "76"

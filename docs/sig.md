@@ -82,11 +82,13 @@ Each raw mouse report moves the hand by its counts, and the cursor
 follows at once. `ysig_frame()` writes the bound channels. Feed the
 frame's input before `ysig_frame()`: a sink reads held values
 ([examples_findings.md](examples_findings.md), D10). The last field is
-the poll's time: the graph knows input up to there, and no further. It is
-required: `ysig_frame()` refuses a poll before the newest event a source
-took (-1, and `ysig_error()` says why), so a zeroed field fails as soon
-as input comes. On the virtual clock of `--sim`, where the script feeds
-input up to the onset, the poll is the onset.
+the poll's time: the graph knows input up to there, and no further. The
+graph uses the later of it and the newest event a source took, and counts
+a given poll before that event (`late_poll`, `late_poll_max_ns`).
+`ysig_frame()` refuses only bad arguments and, on every call, a poll of 0
+in a graph with a view (velocity, speed, delay, lowpass, rate integrate):
+a configuration error, never the data. On the virtual clock of `--sim`,
+where the script feeds input up to the onset, the poll is the onset.
 
 `examples/response/trial_visuomotor.c` is this graph in a whole task, with
 the hold, the reach and the movement onset.
@@ -113,7 +115,8 @@ for (i = 0; i < n; i++) yrsp_feed(&rsp, &der[i]);
 ```
 
 The event's `t` is the time of the report that arrived and made it (also
-when the other hand's held part is newer in time), its `unc_us` that
+when the other hand's held part is newer in time; never before the emit's
+last event, which it keeps when a report arrives out of order, counted), its `unc_us` that
 report's, its `stamp` the worst tier of its inputs, and its `code` that
 report's source node (low 16 bits) and the oldest input's (high 16
 bits). A cursor from two hands says which hand's report crossed
@@ -276,11 +279,14 @@ seconds, as in a definition. A zero field means the row's `def`.
 
 ### Time
 
-- A value's `t`, device, `unc_us` and source node come from the input
-  that changed in this evaluation, along the path: at a sample, the
-  arriving report's (also when another hand's held part is newer); after
-  a delay, the delayed sample's, so `record(delay(x))` and
-  `record(offset(delay(x)))` agree. It also carries `t_oldest` (the
+- A value's `t`, device, `unc_us` and source node: in a sample's pass,
+  from the input that changed, along the path (the arriving report's,
+  also when another hand's held part is newer; after a delay, the delayed
+  sample's, so `record(delay(x))` and `record(offset(delay(x)))` agree);
+  in a frame's pass and in `ysig_value_at()`, from the newest input. A
+  detect, emit or record never moves its own time back: it keeps the
+  later of the new t and its last, and counts the clamp
+  (`time_clamped`). It also carries `t_oldest` (the
   oldest input's time) and its source, and the worst tier of its inputs
   (SIM, 1, 2, 3, UNKNOWN from best to worst). Before its first sample a source has no value: tier UNKNOWN,
   an empty ring.
@@ -295,8 +301,9 @@ seconds, as in a definition. A zero field means the row's `def`.
 - `ysig_frame()` runs, in node order, the generators at the frame's base
   time; velocity, speed, delay, lowpass and rate integrators as views,
   their state unchanged; every node after those; then bind, frame
-  records and detects. A view uses input up to `poll_ns`, which is
-  required, and never past it to the planned onset: a velocity or speed
+  records and detects. A view uses input up to the earlier of the onset
+  and the poll, the poll being the later of `poll_ns` and the newest
+  event a source took: a velocity or speed
   reads 0 only when its input was silent for the lag up to the poll. A
   sample-rate detect on a view tests at the view's time, so its hold
   completes at a poll, up to a frame after the onset that would end a
@@ -479,12 +486,12 @@ digest. No sanitizer report, no graph that the check passed and the
 open refused, no replay that differed. One finding during the fixes: the
 default poll first came from every event fed, also those no source
 took; a journal holds only the taken ones, so a replay saw another poll
-and another view (fixed; mutant 68). The second review made the poll
-required, so there is no default now. After it: 20,000,000 inputs (seed
-780, polls zeroed, early, at the newest event, at and past the onset) in
-9 min 6 s; 14,558,916 refused by `ysig_check()`, 5,440,151 graphs opened
-and ran (35.0 million events taken, 14.7 million rows, 0.97 million
-hits), no finding.
+and another view (fixed; mutant 68). After the second review: 20,000,000
+inputs (seed 780) in 9 min 6 s, no finding. The third review's rules
+(frames never refused for data) added two checks to the target: every
+frame with a poll (or poll 0 in a graph with no view) returns 0, also
+after INT64_MAX and far-future stamps, and every bound channel holds its
+bind's input after it. FUZZ3
 - `tests/mutate/sig.toml`: 75 mutants and a control; 75 of 75 killed.
   Mutants 70 and 71 remove the saturation of time arithmetic; the test
   built with `-fsanitize=undefined` (the list's `sig_ubsan` test) catches

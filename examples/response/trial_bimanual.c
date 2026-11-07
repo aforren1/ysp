@@ -1512,8 +1512,13 @@ int main(int argc, char** argv) {
              * ramp from the timeline, the binds */
             int64_t bt = 0;
             ytl_base_time(&tl, TRIAL, f.onset, &bt);
-            ysig_frame(&sg, &(ysig_frame_in){ f.index, f.onset, bt, ytl_values(&tl), N_CHANNELS,
-                                              is_script ? f.onset : yrt_now_ns() });
+            /* -1 can only be a programming error (a bad argument) */
+            if (ysig_frame(&sg, &(ysig_frame_in){ f.index, f.onset, bt, ytl_values(&tl), N_CHANNELS,
+                                                  is_script ? f.onset : yrt_now_ns() }) != 0) {
+                fprintf(stderr, "trial_bimanual: %s\n", ysig_error(&sg));
+                failed = 1;
+                break;
+            }
         }
         for (i = 0; i < n; i++)
             if (fired[i].kind == YTL_MARK && fired[i].code == END_OF_TRACK && state == S_T_MOVE) {

@@ -1333,7 +1333,14 @@ static void test_order(void) {
     e.unc_us = 250;
     ysig_feed(&g, &e);
     CHECK(ysig_derived(&g, der, 8) == 1);
-    CHECK(der[0].x == 50 && der[0].t == 10 * MS - 300000 && (der[0].code & 0xFFFFu) == 1 && der[0].unc_us == 250);
+    /* the report is R's; the emit's time does not go back past its last
+     * event's (L's 10 ms), and the clamp is counted */
+    CHECK(der[0].x == 50 && der[0].t == 10 * MS && (der[0].code & 0xFFFFu) == 1 && der[0].unc_us == 250);
+    {
+        ysig_stats st2;
+        ysig_get_stats(&g, &st2);
+        CHECK(st2.time_clamped == 1 && ysig_value_of(&g, 4)->t == 10 * MS - 300000);
+    }
     CHECK(ysig_value_of(&g, 4)->t_oldest == 10 * MS - 300000 && (der[0].code >> 16) == 1);
 }
 
@@ -1398,14 +1405,14 @@ static void test_views(void) {
     ysig_get_stats(&g, &st);
     CHECK(st.history_skipped == 0);
     CHECK(ysig_value_at(&g, 3, 250 * MS + 500000, &v) == 1 && v.t == 250 * MS && v.v[0] == 1000);
-    /* the poll is required: one before the newest event fed is refused
-     * (a zeroed field fails once input came); 0 before any input is
-     * valid on a clock that starts at 0 */
+    /* a graph with a view refuses poll_ns 0 on every call, before any
+     * input too: a configuration error, not a data one */
+    if (!open_desc(&g, &d)) { g_failures++; return; }
     ysig_reset(&g, 0);
     {
         ysig_frame_in f = frame_at(0, 10 * MS, 0, NULL, 0);
         f.poll_ns = 0;
-        CHECK(ysig_frame(&g, &f) == 0);
+        CHECK(ysig_frame(&g, &f) == -1 && strstr(ysig_error(&g), "poll_ns is 0"));
     }
     for (k = 1; k <= 20; k++) {
         yin_event e = axis(k * MS, YIN_KIND_PEN, YIN_AXIS_POSITION, 0, (float)k, 0, 0, YIN_TIER_SIM);
@@ -1419,11 +1426,169 @@ static void test_views(void) {
         key.type = YIN_PRESS;
         CHECK(ysig_feed(&g, &key) == 0);
         f.poll_ns = 0;
-        CHECK(ysig_frame(&g, &f) == -1 && strstr(ysig_error(&g), "poll_ns"));
+        CHECK(ysig_frame(&g, &f) == -1 && strstr(ysig_error(&g), "poll_ns is 0"));
         f.poll_ns = 20 * MS;
         CHECK(ysig_frame(&g, &f) == 0);
         CHECK_NEAR(ysig_value_of(&g, 1)->v[0], 1000, 1e-6);
+        /* a poll before the newest event fed: that event's time is the
+         * poll, counted with the excess, and the frame runs */
+        f.index = 2;
+        f.poll_ns = 15 * MS;
+        CHECK(ysig_frame(&g, &f) == 0);
+        ysig_get_stats(&g, &st);
+        CHECK(st.late_poll == 1 && st.late_poll_max_ns == 5 * MS);
+        CHECK_NEAR(ysig_value_of(&g, 1)->v[0], 1000, 1e-6);
     }
+}
+
+/* The third review: ysig_frame never refuses because of data (R1, R1b,
+ * R2); a frame's value takes its newest input's time (R3); a sink's time
+ * never goes back; least-recently-used order slots (lru.c). */
+static int g_frows;
+static ysig_row g_frow[64];
+static void f_row(void* user, const ysig_row* r);
+static yin_event pen3(int64_t t, int dev, float v) {
+    return axis(t, YIN_KIND_PEN, YIN_AXIS_POSITION, dev, v, 0, v, YIN_TIER_SIM);
+}
+static void test_review3(void) {
+    ysig_node n[5];
+    ysig_desc d;
+    ysig_graph g;
+    ysig_stats st;
+    yin_event e;
+    int k, bad = 0;
+    g_where = "a stamp in the future";
+    n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 1);
+    n[1] = ysig_node_of(YSIG_OP_BIND, 0, -1);
+    d = desc_of(n, 2);
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    e = pen3(10 * MS, 1, 1);
+    ysig_feed(&g, &e);
+    e = pen3(10 * MS + 60LL * 1000000000LL, 2, 2);   /* 60 s ahead: a device clock glitch */
+    ysig_feed(&g, &e);
+    for (k = 1; k <= 600; k++) {
+        ysig_frame_in f;
+        e = pen3(10 * MS + k * 16 * MS, 1, (float)(3 + k));
+        ysig_feed(&g, &e);
+        f = frame_at(k, e.t + 16 * MS, 0, NULL, 0);
+        f.poll_ns = e.t;
+        if (ysig_frame(&g, &f) != 0) bad++;
+    }
+    CHECK(bad == 0 && g_ch[0] == 603);
+    ysig_get_stats(&g, &st);
+    CHECK(st.late_poll == 600);
+    /* INT64_MAX on a new device of an any-device source */
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    e = pen3(10 * MS, 1, 1);
+    ysig_feed(&g, &e);
+    e = pen3(INT64_MAX, 3, 2);
+    ysig_feed(&g, &e);
+    {
+        ysig_frame_in f = frame_at(1, 30 * MS, 0, NULL, 0);
+        f.poll_ns = 20 * MS;
+        CHECK(ysig_frame(&g, &f) == 0 && g_ch[0] == 2);
+        ysig_get_stats(&g, &st);
+        CHECK(st.late_poll == 1 && st.late_poll_max_ns == INT64_MAX - 20 * MS);
+        /* no view: poll 0 runs, and a poll not given is no late poll */
+        f.poll_ns = 0;
+        CHECK(ysig_frame(&g, &f) == 0);
+        ysig_get_stats(&g, &st);
+        CHECK(st.late_poll == 1);
+    }
+    /* the newest event fed is the poll when the given one is earlier: pen
+     * A still since 60 ms, pen B at 140 ms, a poll of 90 ms: A has been
+     * silent 80 ms, past its 40 ms lag (30 ms by the given poll) */
+    n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 1);
+    n[1] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 2, 1);
+    n[2] = ysig_node_of(YSIG_OP_SPEED, 0, -1);
+    n[2].p[0] = 0.040;
+    d = desc_of(n, 3);
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    for (k = 1; k <= 60; k++) {
+        e = pen3(k * MS, 1, (float)k);
+        ysig_feed(&g, &e);
+    }
+    CHECK_NEAR(ysig_value_of(&g, 2)->v[0], 1000, 1e-6);
+    e = pen3(140 * MS, 2, 0);
+    ysig_feed(&g, &e);
+    {
+        ysig_frame_in f = frame_at(1, 160 * MS, 0, NULL, 0);
+        f.poll_ns = 90 * MS;
+        CHECK(ysig_frame(&g, &f) == 0);
+        CHECK(ysig_value_of(&g, 2)->v[0] == 0 && ysig_value_of(&g, 2)->t == 140 * MS);
+    }
+
+    g_where = "reset keeps the fed time";
+    /* a reset at the planned onset, the frame polled before it (a live
+     * run's first trial) */
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 1000 * MS);
+    {
+        ysig_frame_in f = frame_at(1, 1000 * MS, 0, NULL, 0);
+        f.poll_ns = 990 * MS;
+        CHECK(ysig_frame(&g, &f) == 0);
+        ysig_get_stats(&g, &st);
+        CHECK(st.late_poll == 0);
+    }
+
+    g_where = "a frame's newest input";
+    n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 1);
+    n[1] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 2, 1);
+    n[2] = ysig_node_of(YSIG_OP_SPEED, 0, -1);
+    n[2].p[0] = 0.010;
+    n[3] = ysig_node_of(YSIG_OP_JOIN, 2, 1);
+    n[4] = ysig_node_of(YSIG_OP_RECORD, 3, -1);
+    d = desc_of(n, 5);
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    for (k = 1; k <= 20; k++) {
+        e = pen3(k * MS, 1, (float)k);
+        ysig_feed(&g, &e);
+    }
+    e = pen3(25 * MS, 2, 7);
+    ysig_feed(&g, &e);
+    CHECK(ysig_value_of(&g, 3)->t == 25 * MS && ysig_value_of(&g, 3)->src == 1);
+    {
+        ysig_frame_in f = frame_at(1, 40 * MS, 0, NULL, 0);
+        f.poll_ns = 26 * MS;   /* A silent 6 ms, under the lag: the speed stands */
+        ysig_frame(&g, &f);
+        CHECK(ysig_value_of(&g, 3)->t == 25 * MS && ysig_value_of(&g, 3)->src == 1);
+    }
+    /* a sample-pass value whose t goes back (A's report of 22 ms after
+     * B's of 25 ms): the record keeps 25 ms, counted */
+    g_frows = 0;
+    d.on_row = f_row;
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    e = pen3(25 * MS, 2, 7);
+    ysig_feed(&g, &e);
+    e = pen3(22 * MS, 1, 1);
+    ysig_feed(&g, &e);
+    ysig_get_stats(&g, &st);
+    CHECK(g_frows == 2 && g_frow[0].value.t == 25 * MS && g_frow[1].value.t == 25 * MS && st.time_clamped == 1);
+
+    g_where = "least recently used slots";
+    n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 1);
+    d = desc_of(n, 1);
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    for (k = 1; k <= 8; k++) {
+        e = pen3(100 + k, k, 0);
+        ysig_feed(&g, &e);
+    }
+    e = pen3(200, 1, 0);
+    ysig_feed(&g, &e);     /* device 1 busy again */
+    e = pen3(300, 9, 0);
+    ysig_feed(&g, &e);     /* takes device 2's slot */
+    e = pen3(150, 1, 0);
+    CHECK(ysig_feed(&g, &e) == 0);
+    e = pen3(50, 2, 0);
+    CHECK(ysig_feed(&g, &e) == 1);   /* device 2 back, late: passes (the 8-device limit) */
+    ysig_get_stats(&g, &st);
+    CHECK(st.dropped_order == 1 && st.order_evicted == 2);
 }
 
 /* A still input with the poll given: speed 0, a low-pass and a held stick's
@@ -1474,8 +1639,6 @@ static void q4_row(void* user, const ysig_row* r) {
     (void)user;
     if (r->value.t == 20 * MS) g_q4_rc = ysig_value_at(g_q4, 4, 5 * MS, &g_q4_v);
 }
-static int g_frows;
-static ysig_row g_frow[64];
 static void f_row(void* user, const ysig_row* r) {
     (void)user;
     if (g_frows < 64) g_frow[g_frows++] = *r;
@@ -1781,6 +1944,7 @@ int main(void) {
     test_views();
     test_still();
     test_review2();
+    test_review3();
     test_review();
     if (g_failures) { fprintf(stderr, "sig_test: %d failures\n", g_failures); return 1; }
     printf("sig_test: all checks passed\n");

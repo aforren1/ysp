@@ -203,7 +203,37 @@ static void run_one(const uint8_t* data, size_t size) {
                           : pb % 5 == 3 ? t : t + 1000;
                 if (pb >= 250) { f.onset_ns = pb & 1 ? INT64_MAX : INT64_MIN + 1; f.poll_ns = f.onset_ns; }
             }
-            g_sink += ysig_frame(&g, &f);
+            {
+                /* frames never stop because of data: after any event
+                 * (INT64_MAX and far-future stamps too) a frame with a
+                 * poll runs, and every bind holds its input's value */
+                int rc = ysig_frame(&g, &f), b;
+                if (rc != (f.poll_ns == 0 && g.has_view ? -1 : 0)) {
+                    fprintf(stderr, "sig_fuzz: ysig_frame returned %d (poll %lld): %s\n", rc, (long long)f.poll_ns,
+                            ysig_error(&g));
+                    abort();
+                }
+                float want[16];
+                int set[16], c;
+                memset(set, 0, sizeof set);
+                /* binds run in node order: the last one on a channel wins */
+                for (b = 0; rc == 0 && b < n; b++) {
+                    const ysig_value* x;
+                    int lane;
+                    if (nodes[b].op != YSIG_OP_BIND) continue;
+                    x = ysig_value_of(&g, nodes[b].in[0]);
+                    for (lane = 0; lane < x->lanes; lane++) {
+                        c = (int)g.nd[b].p[0] + lane;   /* ysig_set may have moved it */
+                        want[c] = (float)x->v[lane];
+                        set[c] = 1;
+                    }
+                }
+                for (c = 0; rc == 0 && c < 16; c++)
+                    if (set[c] && memcmp(&want[c], &g_ch[c], sizeof want[c])) {
+                        fprintf(stderr, "sig_fuzz: channel %d holds %g, its bind's input %g\n", c, g_ch[c], want[c]);
+                        abort();
+                    }
+            }
             break;
         }
         case 5: {
