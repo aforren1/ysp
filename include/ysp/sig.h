@@ -237,7 +237,7 @@
  *
  *   STATUS: v0.1.0, 2026-11-07, Linux desktop (Debian 12, GCC 12.2):
  *   tests/adapt/sig_test.c, the compile checks (C99, C11, C++17), the
- *   fuzz target under ASan and UBSan (20 million inputs), 75 of 75
+ *   fuzz target under ASan and UBSan (20 million inputs), 84 of 84
  *   mutants killed, and trial_visuomotor and trial_bimanual ported onto
  *   it with byte-identical CI data files. Four raw mice at 8 kHz into 32
  *   nodes: 141 ns a sample and 0.28 us a ysig_frame() at the median on a

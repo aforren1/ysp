@@ -421,6 +421,7 @@ hits, over its 533 samples; "a frame" is 533 samples, two
 | E-core, first review | 249.4 ns, 248.1 ns, 293.1 ns | 538 ns, 1.40 us, 3.15 us | 152 ns, 255 ns | 132.9 us |
 | P-core, second review | 142.5 ns, 141.4 ns, 175.0 ns | 276 ns, 529 ns, 1.76 us | 107 ns, 193 ns | 75.7 us |
 | E-core, second review | 276.4 ns, 275.6 ns, 309.4 ns | 551 ns, 1.55 us, 3.16 us | 152 ns, 256 ns | 147.6 us |
+| P-core, third review | 143.0 ns, 141.9 ns, 176.2 ns | 281 ns, 508 ns, 2.32 us | 105 ns, 203 ns | 76.0 us |
 
 The second review's cost is the digest's finalizer: built with the plain
 xor-multiply step in its place, the same bench gave 130.6 and 130.8 ns a
@@ -439,7 +440,7 @@ frame (148 us after the second review), is under 0.9% of a 16.7 ms frame
 at 32,000 samples a second; the budget
 (a trial's frame work in one frame) holds with room.
 
-The bench's arena is 1,644,384 bytes. Most of it is history: five rings
+The bench's arena is 1,644,640 bytes (third review). Most of it is history: five rings
 of 4096 values of 64 bytes (the four hands and one cursor), 1,310,720
 bytes. The three velocity and speed rings of 256 values are 49,152
 bytes; the 32 nodes, their values and the schedules are the rest. Not measured: the
@@ -466,7 +467,7 @@ counts this program's allocator calls during the 60 s run (glibc).
   values at a time, roles and adapters, a custom op, `ysig_set()`, a
   golden digest, 40 refusals of bad graphs, and one test per item of the
   two reviews (`test_order`, `test_views`, `test_review`, `test_still`,
-  `test_review2`). It passes under ASan and UBSan
+  `test_review2`, `test_review3`). It passes under ASan and UBSan
   (`setarch -R` on the Linux desktop) and as C++.
 - `tests/compile/sig.c` and `sig.cpp`: C99, C11 and C++17 with warnings
   as errors.
@@ -491,8 +492,11 @@ inputs (seed 780) in 9 min 6 s, no finding. The third review's rules
 (frames never refused for data) added two checks to the target: every
 frame with a poll (or poll 0 in a graph with no view) returns 0, also
 after INT64_MAX and far-future stamps, and every bound channel holds its
-bind's input after it. FUZZ3
-- `tests/mutate/sig.toml`: 75 mutants and a control; 75 of 75 killed.
+bind's input after it. After the third review: 20,000,000 inputs (seed
+781) in 9 min 33 s; 14,562,777 refused by `ysig_check()`, 5,436,289
+graphs opened and ran (35.0 million events taken, 14.7 million rows,
+0.97 million hits), no finding.
+- `tests/mutate/sig.toml`: 84 mutants and a control; 84 of 84 killed.
   Mutants 70 and 71 remove the saturation of time arithmetic; the test
   built with `-fsanitize=undefined` (the list's `sig_ubsan` test) catches
   them.
