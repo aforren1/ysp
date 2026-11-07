@@ -1669,14 +1669,12 @@ static double ysig__gauss(uint64_t* s) {
     return sqrt(-2.0 * log(u1)) * cos(2 * YSIG__PI * u2);
 }
 
-/* The velocity's lookup: the newest kept value at least lag before t. */
-static const ysig_value* ysig__lagged(const ysig__ring* r, int64_t t, int64_t lag, int skip_newest) {
-    int k;
-    for (k = r->n - 1 - skip_newest; k >= 0; k--) {
-        const ysig_value* q = ysig__ring_at(r, k);
-        if (t - q->t >= lag) return q;
-    }
-    return NULL;
+/* The velocity's lookup: the newest kept value at least lag before t, by
+ * bisection (the ring is in time order). A linear scan from the newest cost
+ * 73% of a 32-node graph's time at 16 kHz into one node (docs/sig.md). */
+static const ysig_value* ysig__lagged(const ysig__ring* r, int64_t t, int64_t lag) {
+    int f = ysig__ring_find(r, t - lag);
+    return f < 0 ? NULL : ysig__ring_at(r, f);
 }
 
 static void ysig__velocity_out(const ysig__nd* n, const ysig_value* x, const ysig_value* q, int64_t t, ysig_value* o) {
@@ -1833,16 +1831,17 @@ static void ysig__run(ysig_graph* g, int i, int mode, int64_t t) {
             break;
         }
         if (mode == 0) {
-            if (r->n == r->cap) {
-                const ysig_value* old = ysig__ring_at(r, 0);
-                if (x->t - old->t < n->kns[0]) g->st.ring_short++;
+            /* kept in time order: a value older than the newest (two
+             * sources out of order) is used, not kept */
+            if (!r->n || x->t >= ysig__ring_at(r, r->n - 1)->t) {
+                if (r->n == r->cap && x->t - ysig__ring_at(r, 0)->t < n->kns[0]) g->st.ring_short++;
+                ysig__ring_push(r, x);
             }
-            ysig__ring_push(r, x);
-            q = ysig__lagged(r, x->t, n->kns[0], 1);
+            q = ysig__lagged(r, x->t, n->kns[0]);
             if (q) ysig__velocity_out(n, x, q, x->t, o);
         } else {
             if (t <= x->t) break;
-            q = ysig__lagged(r, t, n->kns[0], 0);
+            q = ysig__lagged(r, t, n->kns[0]);
             if (q) ysig__velocity_out(n, x, q, t, o);
             o->t = t;
         }
@@ -1859,7 +1858,7 @@ static void ysig__run(ysig_graph* g, int i, int mode, int64_t t) {
             *o = *x;
             break;
         }
-        if (mode == 0) ysig__ring_push(r, x);
+        if (mode == 0 && (!r->n || x->t >= ysig__ring_at(r, r->n - 1)->t)) ysig__ring_push(r, x);
         f = ysig__ring_find(r, now - n->kns[0]);
         if (f < 0) {
             if (r->n == r->cap) g->st.ring_short++;

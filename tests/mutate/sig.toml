@@ -1,0 +1,413 @@
+# ysp/sig.h mutants (docs/sig.md, "Mutations"). Mutant 00 is a control
+# with no effect; it must survive.
+header = "ysp/sig.h"
+
+[test.sig]
+source = "tests/adapt/sig_test.c"
+compiler = "gcc"
+flags = ["-std=c99", "-O2", "-w"]
+libs = ["-lm"]
+timeout = 60
+
+[[mutant]]
+id = "00"
+name = "control: no change (must pass)"
+test = "sig"
+expect = "survived"
+why = "Control: a change with no effect. The test must pass, so a failure here means the setup is wrong, not the header."
+find = '#define YSIG_VERSION_PATCH 0'
+replace = '#define YSIG_VERSION_PATCH 0 '
+
+[[mutant]]
+id = "01"
+name = "integrate: counts truncated, not rounded"
+test = "sig"
+why = "A negative count of -3.0 read as -2: the hand drifts toward the origin, off the exact count sum."
+find = 'dc = (int64_t)(v < 0 ? v - 0.5 : v + 0.5);'
+replace = 'dc = (int64_t)(v + 0.5);'
+
+[[mutant]]
+id = "02"
+name = "tier: the better of two, not the worse"
+test = "sig"
+why = "A value from a tier-1 and a tier-3 source would claim tier 1 (principle 6, F20)."
+find = 'return ra >= rb ? (ra == 4'
+replace = 'return ra <= rb ? (ra == 4'
+
+[[mutant]]
+id = "03"
+name = "meta: t from the older input"
+test = "sig"
+why = "A joined value would carry its older part's time: a crossing would be stamped one report early."
+find = 'if (in[j]->t > o->t) {'
+replace = 'if (in[j]->t < o->t) {'
+
+[[mutant]]
+id = "04"
+name = "meta: t_oldest from the newer input"
+test = "sig"
+why = "The age of the oldest part (F20) would be lost."
+find = 'if (in[j]->t_oldest < o->t_oldest) {'
+replace = 'if (in[j]->t_oldest > o->t_oldest) {'
+
+[[mutant]]
+id = "05"
+name = "feed: no out-of-order drop"
+test = "sig"
+why = "A late sample of one source would move its integrator after newer ones (section 6.1)."
+find = 'if (s->has && e->t < s->last_t) {'
+replace = 'if (0 && s->has && e->t < s->last_t) {'
+
+[[mutant]]
+id = "06"
+name = "schedule: frame-only sinks run per sample"
+test = "sig"
+why = "A frame-rate detect would test samples: a hit between frames, at a sample's time."
+find = 'if (!reach[id] || ysig__frame_only(a->node[id])) continue;'
+replace = 'if (!reach[id]) continue;'
+
+[[mutant]]
+id = "07"
+name = "affine: zero terms not skipped"
+test = "sig"
+why = "0 x and -0: a mirror would give +0 for -0, and a sign of zero changes a printed column."
+find = 'if (m[c] != 0) {'
+replace = 'if (1) {'
+
+[[mutant]]
+id = "08"
+name = "affine: post added when zero"
+test = "sig"
+why = "+0 + -0 is +0: the same loss of the sign of zero."
+find = 'if (post != 0) { acc = post; has = 1; }'
+replace = 'if (1) { acc = post; has = 1; }'
+
+[[mutant]]
+id = "09"
+name = "mean: the inputs' count, not the weights' sum"
+test = "sig"
+why = "A weighted mean would be scaled by the weights."
+find = 'for (j = 0; j < n->n_in; j++) ws += n->p[j] != 0 ? n->p[j] : 1;'
+replace = 'for (j = 0; j < n->n_in; j++) ws += 1;'
+
+[[mutant]]
+id = "10"
+name = "select: lanes in order, not by p[]"
+test = "sig"
+why = "\"x of the left mouse\" would read whatever lane comes first."
+find = 'for (k = 0; k < L; k++) o->v[k] = x[(int)n->p[k]];'
+replace = 'for (k = 0; k < L; k++) o->v[k] = x[k];'
+
+[[mutant]]
+id = "11"
+name = "lowpass: cutoff off by 2"
+test = "sig"
+why = "The filter's corner at half the stated frequency."
+find = 'double a = 1 - exp(-2 * YSIG__PI * n->p[0] * dt);'
+replace = 'double a = 1 - exp(-1 * YSIG__PI * n->p[0] * dt);'
+
+[[mutant]]
+id = "12"
+name = "velocity: no lag"
+test = "sig"
+why = "The difference over no time: a division by zero."
+find = 'int f = ysig__ring_find(r, t - lag);'
+replace = 'int f = ysig__ring_find(r, t);'
+
+[[mutant]]
+id = "13"
+name = "delay: no delay"
+test = "sig"
+why = "The delay node passes its input through."
+find = 'f = ysig__ring_find(r, now - n->kns[0]);'
+replace = 'f = ysig__ring_find(r, now);'
+
+[[mutant]]
+id = "14"
+name = "detect: ready again without the hysteresis"
+test = "sig"
+why = "A value that dips just under the level and back would cross twice."
+find = '} else if (!s->ready && !ysig__test(n, v, -n->p[3])) {'
+replace = '} else if (!s->ready && !r) {'
+
+[[mutant]]
+id = "15"
+name = "detect: a hold met at once"
+test = "sig"
+why = "\"In the start for 0.5 s\" would end at the first sample inside."
+find = 'if (!s->holding || t < s->t_start + n->kns[0]) return 0;'
+replace = 'if (!s->holding || t < s->t_start) return 0;'
+
+[[mutant]]
+id = "16"
+name = "detect: a value past the test at arm is not held"
+test = "sig"
+why = "A hand already past the radius at the hold's end would end the reach at once (CROSSINGS)."
+find = '''        s->ready = !r;
+        s->holding = 0;'''
+replace = '''        s->ready = 1;
+        s->holding = 0;'''
+
+[[mutant]]
+id = "17"
+name = "emit: no oldest source in code"
+test = "sig"
+why = "The collector's result could not say which hand's part was older (F20)."
+find = 'e->code = (uint32_t)v->src | ((uint32_t)v->src_oldest << 16);'
+replace = 'e->code = (uint32_t)v->src;'
+
+[[mutant]]
+id = "18"
+name = "emit: kind USER, not USER + p0"
+test = "sig"
+why = "Two emit nodes would collide on one kind."
+find = 'e->kind = (uint8_t)(YIN_KIND_USER + (int)n->p[0]);'
+replace = 'e->kind = (uint8_t)YIN_KIND_USER;'
+
+[[mutant]]
+id = "19"
+name = "emit: device 0"
+test = "sig"
+why = "Device 0 matches any device in the collector: every emit node would feed every choice."
+find = 'e->device = (uint32_t)i;'
+replace = 'e->device = 0;'
+
+[[mutant]]
+id = "20"
+name = "record: sample rows flagged as frame rows"
+test = "sig"
+why = "A data file would mix up its two kinds of rows."
+find = 'if (mode == 0 && n->p[0] == 0) ysig__row_out(g, i, 0, x);'
+replace = 'if (mode == 0 && n->p[0] == 0) ysig__row_out(g, i, 1, x);'
+
+[[mutant]]
+id = "21"
+name = "digest: no multiply"
+test = "sig"
+why = "The digest stops mixing: two runs that differ could give one digest."
+find = 'for (i = 0; i < n; i++) { h ^= b[i]; h *= 1099511628211ull; }'
+replace = 'for (i = 0; i < n; i++) { h ^= b[i]; }'
+
+[[mutant]]
+id = "22"
+name = "history: not passed to the inputs"
+test = "sig"
+why = "A cursor made from two hands could not be read at a flip record's onset."
+find = 'if (a->hist[u] < a->hist[id]) a->hist[u] = a->hist[id];'
+replace = '(void)u;'
+
+[[mutant]]
+id = "23"
+name = "history: a second value at one time is a new entry"
+test = "sig"
+why = "Two reports at one time would take two places in the ring, so it holds less time than its size says."
+find = 'if (v->t == last->t) { *last = *v; return; }'
+replace = '(void)0;'
+
+[[mutant]]
+id = "24"
+name = "ring: a full ring writes at its head"
+test = "sig"
+why = "The newest value would overwrite the wrong slot."
+find = 'if (r->n == r->cap) { r->head = (r->head + 1) % r->cap; at = (r->head + r->n - 1) % r->cap; }'
+replace = 'if (r->n == r->cap) { at = r->head; r->head = (r->head + 1) % r->cap; at = r->head; }'
+
+[[mutant]]
+id = "25"
+name = "roles: a relative adapter always taken"
+test = "sig"
+why = "A mouse would bind to a position role that never allowed it (section 5.5)."
+find = '!(r->type == YSIG_TYPE_POSITION2D && ad->type == YSIG_TYPE_POSITION2D_RELATIVE && r->allow_relative))'
+replace = '!(r->type == YSIG_TYPE_POSITION2D && ad->type == YSIG_TYPE_POSITION2D_RELATIVE))'
+
+[[mutant]]
+id = "26"
+name = "roles: units not compared"
+test = "sig"
+why = "An adapter in device units would feed a role in cm."
+find = 'if (ad->units != r->units)'
+replace = 'if (0)'
+
+[[mutant]]
+id = "27"
+name = "check: a node may read itself"
+test = "sig"
+why = "A cycle would open."
+find = '                if (v >= i)'
+replace = '                if (v > i)'
+
+[[mutant]]
+id = "28"
+name = "check: bind's last channel not counted"
+test = "sig"
+why = "A 2-lane bind at the last channel would write past desc.channels."
+find = 'if ((int)nd->p[0] + in0 > d->n_channels)'
+replace = 'if ((int)nd->p[0] > d->n_channels)'
+
+[[mutant]]
+id = "29"
+name = "set: a ring's capacity changes after open"
+test = "sig"
+why = "The ring would outgrow its arena block."
+find = 'case YSIG_OP_VELOCITY: case YSIG_OP_SPEED: case YSIG_OP_DELAY: return param != 1;'
+replace = 'case YSIG_OP_VELOCITY: case YSIG_OP_SPEED: case YSIG_OP_DELAY: return 1;'
+
+[[mutant]]
+id = "30"
+name = "replay: feeds skipped"
+test = "sig"
+why = "A replay would not run the samples."
+find = 'case YSIG_J_FEED: ok = ysig_feed(g, &e[i].event) >= 0; break;'
+replace = 'case YSIG_J_FEED: ok = 1; break;'
+
+[[mutant]]
+id = "31"
+name = "reset: detects not armed"
+test = "sig"
+why = "A detect armed at reset would wait for ysig_arm()."
+find = 'if (n->p[6] == 0) ysig__det_arm(g, id, t);'
+replace = 'if (0) ysig__det_arm(g, id, t);'
+
+[[mutant]]
+id = "32"
+name = "sines: no ramp"
+test = "sig"
+why = "The target would start at full amplitude."
+find = 'tt < n->p[1] ? tt / n->p[1] : 1;'
+replace = 'tt < n->p[1] ? 1 : 1;'
+
+[[mutant]]
+id = "33"
+name = "noise: the seed ignored"
+test = "sig"
+why = "Every trial's noise would be the same (D8)."
+find = 's->s = (uint64_t)n->p[0];'
+replace = 's->s = 0;'
+
+[[mutant]]
+id = "34"
+name = "deadzone: no shrink"
+test = "sig"
+why = "A stick just past the deadzone would jump to its full value."
+find = 'x[k] * ((r - R) / r);'
+replace = 'x[k];'
+
+[[mutant]]
+id = "35"
+name = "clamp: a lane bounded only with both bounds nonzero"
+test = "sig"
+why = "A clamp at [0, 4] would not clamp."
+find = 'if (lo != 0 || hi != 0) v = v < lo ? lo : v > hi ? hi : v;'
+replace = 'if (lo != 0 && hi != 0) v = v < lo ? lo : v > hi ? hi : v;'
+
+[[mutant]]
+id = "36"
+name = "scale: the factor input ignored"
+test = "sig"
+why = "A gain from a timeline channel would do nothing."
+find = 'if (n->n_in > 1) o->v[k] = o->v[k] * in[1]->v[0];'
+replace = '(void)0;'
+
+[[mutant]]
+id = "37"
+name = "integrate: rate dt in ms"
+test = "sig"
+why = "Rate control 1000 times too fast."
+find = 'double dt = s->has && now > s->t_prev ? (double)(now - s->t_prev) / 1e9 : 0;'
+replace = 'double dt = s->has && now > s->t_prev ? (double)(now - s->t_prev) / 1e6 : 0;'
+
+[[mutant]]
+id = "38"
+name = "integrate: bounds ignored"
+test = "sig"
+why = "The hand would leave its area (F21's bound on the hand)."
+find = 'if (lo == 0 && hi == 0) return p;'
+replace = 'return p;'
+
+[[mutant]]
+id = "39"
+name = "source: the table's tier not used"
+test = "sig"
+why = "A stamp of 0 would stay 0, not the source table's tier."
+find = 'o->tier = e->stamp ? e->stamp : (uint8_t)n->p[4];'
+replace = 'o->tier = e->stamp;'
+
+[[mutant]]
+id = "40"
+name = "analysis: frame activity not passed on"
+test = "sig"
+why = "An affine whose angle comes from a timeline channel would not change at the frame."
+find = 'if (a->flags[u] & YSIG__F_FRAME) fl |= YSIG__F_FRAME;'
+replace = '(void)0;'
+
+[[mutant]]
+id = "41"
+name = "bind: every channel gets lane 0"
+test = "sig"
+why = "The cursor's y would be its x."
+find = 'g->channels[(int)n->p[0] + k] = (float)x->v[k];'
+replace = 'g->channels[(int)n->p[0] + k] = (float)x->v[0];'
+
+[[mutant]]
+id = "42"
+name = "detect: samples before the arm's time count"
+test = "sig"
+why = "A sample stamped before the window would end it."
+find = 'if (!s->armed || t < s->t_arm) return;'
+replace = 'if (!s->armed) return;'
+
+[[mutant]]
+id = "43"
+name = "analysis: no node is after two sources"
+test = "sig"
+why = "A mean of two hands would keep a ring in arrival order: read at a time, a late report is lost."
+find = 'if (s1 == -2) fl |= YSIG__F_MULTI;'
+replace = '(void)s1;'
+
+[[mutant]]
+id = "44"
+name = "check: parameters not checked against the table"
+test = "sig"
+why = "A cutoff of 0 or a gain out of range would open."
+find = 'if (k < nr && !ysig__param_ok(&rows[k], nd->p[k]))'
+replace = 'if (0 && k < nr && !ysig__param_ok(&rows[k], nd->p[k]))'
+
+[[mutant]]
+id = "45"
+name = "source: one lane is x, not value"
+test = "sig"
+why = "A box's analog line or a trigger would read the x field."
+find = 'if (L == 1) o->v[0] = (double)e->value;'
+replace = 'if (0) o->v[0] = (double)e->value;'
+
+[[mutant]]
+id = "46"
+name = "affine: the rotation's sine sign"
+test = "sig"
+why = "A rotation by +90 deg would turn by -90."
+find = 'n->k[1] = c * m[1] - s * m[3];'
+replace = 'n->k[1] = c * m[1] + s * m[3];'
+
+[[mutant]]
+id = "47"
+name = "source: fields as one lane"
+test = "sig"
+why = "A source with fields x and value would give one lane."
+find = 'lanes = m ? ysig__popcount4(m) : (nd->lanes ? nd->lanes : 2);'
+replace = 'lanes = m ? 1 : (nd->lanes ? nd->lanes : 2);'
+
+[[mutant]]
+id = "48"
+name = "detect: no hold completed by a frame"
+test = "sig"
+why = "A still hand sends nothing: its hold would never end."
+find = 'if (!s->armed || n->kns[0] <= 0 || onset < s->t_arm) return;'
+replace = 'return;'
+
+[[mutant]]
+id = "49"
+name = "integrate: DELTA not detected"
+test = "sig"
+why = "Raw counts would be integrated as a rate."
+find = '                fl |= YSIG__F_COUNTS;'
+replace = '                (void)0;'

@@ -164,6 +164,9 @@ jobs:
           # The RDK bench in its short form: it runs, it does not time anything.
           expect 0 "$bin/rdk_bench" --quick
           expect 2 "$bin/rdk_bench" --bogus
+          # The signal path's bench in its short form: it runs and checks its replay, it times nothing.
+          expect 0 "$bin/sig_bench" --quick
+          expect 2 "$bin/sig_bench" --bogus
           # The outline examples need a font file: without one, usage and
           # "no font here" exits (the bench is built, not timed).
           expect 2 "$bin/outline_font"
@@ -1379,6 +1382,10 @@ jobs:
           expect 2 "$bin/trial_posner" --cue both-ways
           expect 0 "$bin/trial_visuomotor" --sim --out "$RUNNER_TEMP/trial_visuomotor.csv" --traj "$RUNNER_TEMP/trial_visuomotor_trajectory.csv"
           expect 0 "$bin/trial_visuomotor" --sim --sdl-mouse --gradual --endpoint-only --out "$RUNNER_TEMP/trial_visuomotor_sdl.csv" --traj "$RUNNER_TEMP/trial_visuomotor_sdl_trajectory.csv"
+          # ysp/sig.h's roles: the same task graph through a tablet adapter; its rows and trajectory equal the raw mouse's.
+          expect 0 "$bin/trial_visuomotor" --sim --pen --out "$RUNNER_TEMP/trial_visuomotor_pen.csv" --traj "$RUNNER_TEMP/trial_visuomotor_pen_trajectory.csv"
+          expect 0 diff <(grep -v '^#' "$RUNNER_TEMP/trial_visuomotor.csv") <(grep -v '^#' "$RUNNER_TEMP/trial_visuomotor_pen.csv")
+          expect 0 cmp "$RUNNER_TEMP/trial_visuomotor_trajectory.csv" "$RUNNER_TEMP/trial_visuomotor_pen_trajectory.csv"
           expect 0 "$bin/trial_copying" --sim --out "$RUNNER_TEMP/trial_copying.csv" --samples "$RUNNER_TEMP/trial_copying_samples.csv"
           expect 0 "$bin/trial_copying" --sim --input pen --out "$RUNNER_TEMP/trial_copying_pen.csv" --samples "$RUNNER_TEMP/trial_copying_pen_samples.csv"
           expect 0 "$bin/trial_copying" --sim --mode track --backward --input raw --out "$RUNNER_TEMP/trial_copying_track.csv" --samples "$RUNNER_TEMP/trial_copying_track_samples.csv"

@@ -291,6 +291,7 @@ static void test_maps(void) {
     n[8] = ysig_node_of(YSIG_OP_SUM, 0, 3);
     n[8].p[1] = 0.5;
     n[9] = ysig_node_of(YSIG_OP_MEAN, 0, 3);
+    n[9].p[0] = 3;                                            /* weighted */
     n[10] = ysig_node_of(YSIG_OP_DIFF, 0, 3);
     n[11] = ysig_node_of(YSIG_OP_DEADZONE, 0, -1);
     n[11].p[0] = 5;
@@ -298,10 +299,12 @@ static void test_maps(void) {
     n[13] = ysig_node_of(YSIG_OP_SELECT, 0, -1);
     n[13].lanes = 1; n[13].p[0] = 0;
     n[14] = ysig_node_of(YSIG_OP_SCALE, 0, 13);               /* times x */
-    d = desc_of(n, 15);
+    n[15] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 0);
+    n[15].p[3] = 1 | 4;                                       /* x and value */
+    d = desc_of(n, 16);
     if (!open_desc(&g, &d)) { g_failures++; return; }
     ysig_reset(&g, 0);
-    e = axis(MS, YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 13, 24, 0, YIN_TIER_SIM);
+    e = axis(MS, YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 13, 24, 0.5f, YIN_TIER_SIM);
     ysig_feed(&g, &e);
     v = ysig_value_of(&g, 1);    /* (3, 4) about (10, 20) by 90 deg: (-4, 3) */
     CHECK_NEAR(v->v[0], 10 - 4, 1e-12);
@@ -321,8 +324,8 @@ static void test_maps(void) {
     CHECK(v->v[0] == 24 && v->v[1] == 13 && v->v[2] == 13 && v->v[3] == 24);
     v = ysig_value_of(&g, 8);        /* (13, 24) + 0.5 (26, -72) */
     CHECK(v->v[0] == 26 && v->v[1] == -12);
-    v = ysig_value_of(&g, 9);
-    CHECK(v->v[0] == 19.5 && v->v[1] == -24);
+    v = ysig_value_of(&g, 9);        /* (3 (13, 24) + (26, -72)) / 4 */
+    CHECK(v->v[0] == 16.25 && v->v[1] == 0);
     v = ysig_value_of(&g, 10);
     CHECK(v->v[0] == -13 && v->v[1] == 96);
     v = ysig_value_of(&g, 11);       /* |(13, 24)| = 27.29.., shrunk by 5 */
@@ -332,6 +335,8 @@ static void test_maps(void) {
     CHECK(v->v[0] == 13 && v->v[1] == 24);
     v = ysig_value_of(&g, 14);
     CHECK(v->v[0] == 169 && v->v[1] == 312);
+    v = ysig_value_of(&g, 15);
+    CHECK(v->lanes == 2 && v->v[0] == 13 && v->v[1] == 0.5);
     /* the mirror keeps the sign of zero: a skipped zero term */
     e = axis(2 * MS, YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 7, -0.0f, 0, YIN_TIER_SIM);
     ysig_feed(&g, &e);
@@ -568,9 +573,11 @@ static void test_time(void) {
     CHECK(ysig_derived(&g, der, 8) == 2);
     CHECK(der[0].kind == YIN_KIND_USER + 7 && der[0].device == 5 && der[0].type == YIN_SAMPLE);
     CHECK(der[0].t == 10 * MS && der[0].stamp == YIN_TIER_2 && der[0].x == 2 && der[0].y == 0);
+    CHECK(der[0].code == (0u | (1u << 16)));   /* newest: the left's source; oldest: the right's reset */
     CHECK(der[1].t == 12 * MS && der[1].stamp == YIN_TIER_3 && der[1].code == (1u | (0u << 16)));
     /* the right hand's sample ran nothing of the left's: one row */
     CHECK(g_rows == 1 && g_row[0].node == 6 && !strcmp(g_row[0].name, "left") && g_row[0].value.t == 10 * MS);
+    CHECK(g_row[0].per_frame == 0 && g_row[0].value.v[0] == 4);
     /* an older sample of one source is dropped and counted; equal t passes */
     g_where = "out of order";
     e = delta(9 * MS, 1, 100, 0);
@@ -628,11 +635,12 @@ static void test_detect(void) {
     ysig_reset(&g, 0);
     /* (0, 0) at reset: 10 from (10, 0), past 5: held, no hit */
     {
-        static const float xs[] = { 12, 9, 15, 14.5f, 13.9f, 16, 4 };
-        static const int hit[] = { 0, 0, 1, 0, 0, 1, 0 };
-        /* 12: |2| < 5, ready; 15: hit; 14.5: no (still past); 13.9: below
-         * 5 - 1? no, 3.9 < 4: ready; 16: hit; 4: |6| hit? not ready yet */
-        for (i = 0; i < 7; i++) {
+        static const float xs[] = { 12, 9, 15, 14.5f, 15.5f, 13.9f, 16, 4 };
+        static const int hit[] = { 0, 0, 1, 0, 0, 0, 1, 0 };
+        /* 12: |2| < 5, ready; 15: hit; 14.5: 4.5 is under 5 but not under
+         * 5 - 1: not ready; 15.5: no hit; 13.9: 3.9 < 4, ready; 16: hit;
+         * 4: |6|, not ready yet */
+        for (i = 0; i < 8; i++) {
             int got;
             e = axis((i + 1) * 10 * MS, YIN_KIND_PEN, YIN_AXIS_POSITION, 0, xs[i], 0, 0, YIN_TIER_SIM);
             ysig_feed(&g, &e);
@@ -658,6 +666,21 @@ static void test_detect(void) {
     ysig_feed(&g, &e);
     CHECK(ysig_detected(&g, h, 8) == 0);
     CHECK(ysig_value_of(&g, 2)->v[0] == 1);  /* the test's state */
+    e = axis(160 * MS, YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 1, 0, 0, YIN_TIER_SIM);
+    ysig_feed(&g, &e);
+    ysig_arm(&g, 2, 300 * MS);                /* ready; from 0.3 s on */
+    e = axis(170 * MS, YIN_KIND_PEN, YIN_AXIS_POSITION, 0, -1, 0, 0, YIN_TIER_SIM);
+    ysig_feed(&g, &e);
+    CHECK(ysig_detected(&g, h, 8) == 0);      /* before the arm's time */
+    e = axis(310 * MS, YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 1, 0, 0, YIN_TIER_SIM);
+    ysig_feed(&g, &e);
+    e = axis(320 * MS, YIN_KIND_PEN, YIN_AXIS_POSITION, 0, -1, 0, 0, YIN_TIER_SIM);
+    ysig_feed(&g, &e);
+    {
+        int got = ysig_detected(&g, h, 8), found = 0;
+        for (i = 0; i < got; i++) found |= h[i].node == 2 && h[i].t == 320 * MS;
+        CHECK(found);
+    }
 
     /* a hold: completed by a later sample (before it is tested) and by a
      * frame (a still hand sends nothing) */
@@ -816,6 +839,35 @@ static void test_replay(void) {
     }
 }
 
+/* ---------------------------------------------------------------- digest */
+
+/* A graph of exact arithmetic (counts, the integer grid) and its digest:
+ * the same number on every host. */
+static void test_digest(void) {
+    ysig_node n[4];
+    ysig_desc d;
+    ysig_graph g;
+    ysig_stats st;
+    int i;
+    g_where = "digest";
+    n[0] = src_node(YIN_KIND_MOUSE, YIN_AXIS_DELTA, 0, 2);
+    n[1] = ysig_node_of(YSIG_OP_INTEGRATE, 0, -1);
+    n[1].p[0] = n[1].p[1] = 0.25;
+    n[2] = ysig_node_of(YSIG_OP_RECORD, 1, -1);
+    n[3] = ysig_node_of(YSIG_OP_DETECT, 1, -1);
+    n[3].p[2] = 10; n[3].p[7] = 1; n[3].p[3] = 1;
+    d = desc_of(n, 4);
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    for (i = 0; i < 200; i++) {
+        yin_event e = delta(i * MS, 3, (float)((i * 7) % 11 - 5), (float)((i * 3) % 7 - 3));
+        ysig_feed(&g, &e);
+    }
+    ysig_get_stats(&g, &st);
+    if (st.digest != 0xecf0e13dcc99cc1cull) fprintf(stderr, "  digest %016llx\n", (unsigned long long)st.digest);
+    CHECK(st.rows == 200 && st.digest == 0xecf0e13dcc99cc1cull);
+}
+
 /* ---------------------------------------------------------------- history */
 
 static void test_history(void) {
@@ -846,6 +898,11 @@ static void test_history(void) {
         e = delta(i * MS + 500000, 2, 0, 1);
         ysig_feed(&g, &e);
     }
+    /* a second report at the left's last time replaces its entry: the
+     * ring keeps one value per time */
+    e = delta(20 * MS, 1, 1, 0);
+    ysig_feed(&g, &e);
+    CHECK(ysig_value_at(&g, 2, 20 * MS, &v) == 1 && v.v[0] == 21);
     /* left at 15.7 ms: its sample of 15 ms (15 counts); right of 12.5 ms */
     CHECK(ysig_value_at(&g, 2, 15 * MS + 700000, &v) == 1 && v.v[0] == 15 && v.t == 15 * MS);
     CHECK(ysig_value_at(&g, 6, 12 * MS + 700000, &v) == 1 && v.v[0] == 6 && v.v[1] == 6);
@@ -854,6 +911,16 @@ static void test_history(void) {
     /* older than the left's 8 entries: its oldest, and 0 */
     CHECK(ysig_value_at(&g, 2, 5 * MS, &v) == 0 && v.v[0] == 13);
     CHECK(ysig_value_at(&g, 6, -1, &v) == 0);
+    /* the right's report of 31.5 ms comes before the left's of 31 ms: the
+     * mean at 31.2 ms is from each hand's own ring, not from the order */
+    e = delta(30 * MS, 1, 1, 0);
+    ysig_feed(&g, &e);
+    e = delta(31 * MS + 500000, 2, 0, 1);
+    ysig_feed(&g, &e);
+    e = delta(31 * MS, 1, 1, 0);
+    ysig_feed(&g, &e);
+    CHECK(ysig_value_at(&g, 6, 31 * MS + 200000, &v) == 1 && v.v[0] == 23.0 / 2 && v.v[1] == 20.0 / 2);
+    CHECK(v.t == 31 * MS && v.t_oldest == 20 * MS + 500000);
     CHECK(ysig_value_at(&g, 99, 5 * MS, &v) == -1);
 }
 
@@ -1197,6 +1264,7 @@ int main(void) {
     test_time();
     test_detect();
     test_replay();
+    test_digest();
     test_history();
     test_roles();
     test_set();

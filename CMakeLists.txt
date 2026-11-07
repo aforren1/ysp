@@ -5,7 +5,7 @@ project(ysp LANGUAGES C CXX)
 # program includes:
 #   ysp::core     rt, timeline, table, json, pack
 #   ysp::methods  stair, quest, aep, trials, dataset
-#   ysp::devices  serial, parallel, input, response, box, device, rigfile, net
+#   ysp::devices  serial, parallel, input, response, sig, box, device, rigfile, net
 #   ysp::rig      screen, gfx, color, outline, rdk, video, audio
 # or ysp::ysp, all four. Each group carries the include path, the groups its
 # headers include, and what an IMPLEMENTATION translation unit needs to link,
@@ -190,7 +190,7 @@ endif()
 # program registered with ctest too, and one with YSP_ASYNC_<name> ON gets
 # the compile check and that test built a second time with
 # Y<X>_ASYNC defined, which is the opt-in layer that pulls in ysp/rt.h.
-set(YSP_LIBS rt parallel serial stair quest aep table json pack trials dataset timeline input response box device rigfile net color rdk outline screen audio gfx video)
+set(YSP_LIBS rt parallel serial stair quest aep table json pack trials dataset timeline input response sig box device rigfile net color rdk outline screen audio gfx video)
 
 # Examples that sit in the folder of the header they mainly show but need
 # another header's build: path, program name (the file's own name, kept from
@@ -318,6 +318,13 @@ set(YSP_PREFIX_response    YRSP)
 set(YSP_GROUP_response     devices)
 set(YSP_PLATFORMS_response Windows Linux Darwin)
 set(YSP_THREADS_response   OFF)
+
+# The signal path requires ysp/input.h and nothing else: pure computation
+# on the caller's arena, so every platform and no thread.
+set(YSP_PREFIX_sig         YSIG)
+set(YSP_GROUP_sig          devices)
+set(YSP_PLATFORMS_sig      Windows Linux Darwin)
+set(YSP_THREADS_sig        OFF)
 
 # Box protocols are pure (decoders and query bytes, no I/O). The device
 # layer runs them on reader threads over ysp/serial.h; it has no
