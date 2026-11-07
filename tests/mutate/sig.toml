@@ -1,11 +1,19 @@
-# ysp/sig.h mutants (docs/sig.md, "Mutations"). Mutant 00 is a control
-# with no effect; it must survive.
+# ysp/sig.h mutants (docs/sig.md, "Tests, fuzzing and mutations"). Mutant
+# 00 is a control with no effect; it must survive. The saturation mutants
+# (70, 71) run the test built with UBSan: without it an overflow is silent.
 header = "ysp/sig.h"
 
 [test.sig]
 source = "tests/adapt/sig_test.c"
 compiler = "gcc"
 flags = ["-std=c99", "-O2", "-w"]
+libs = ["-lm"]
+timeout = 60
+
+[test.sig_ubsan]
+source = "tests/adapt/sig_test.c"
+compiler = "gcc"
+flags = ["-std=c99", "-O1", "-w", "-fsanitize=undefined", "-fno-sanitize-recover=all"]
 libs = ["-lm"]
 timeout = 60
 
@@ -54,9 +62,9 @@ replace = 'if (in[j]->t_oldest > o->t_oldest) {'
 id = "05"
 name = "feed: no out-of-order drop"
 test = "sig"
-why = "A late sample of one source would move its integrator after newer ones (section 6.1)."
-find = 'if (s->has && e->t < s->last_t) {'
-replace = 'if (0 && s->has && e->t < s->last_t) {'
+why = "A late position of one device would replace a newer one (section 6.1)."
+find = '} else if (e->t < s->last_t[d] && !counts) {'
+replace = '} else if (0) {'
 
 [[mutant]]
 id = "06"
@@ -111,7 +119,7 @@ id = "12"
 name = "velocity: no lag"
 test = "sig"
 why = "The difference over no time: a division by zero."
-find = 'int f = ysig__ring_find(r, t - lag);'
+find = 'int f = ysig__ring_find(r, ysig__sub(t, lag));'
 replace = 'int f = ysig__ring_find(r, t);'
 
 [[mutant]]
@@ -119,8 +127,8 @@ id = "13"
 name = "delay: no delay"
 test = "sig"
 why = "The delay node passes its input through."
-find = 'f = ysig__ring_find(r, now - n->kns[0]);'
-replace = 'f = ysig__ring_find(r, now);'
+find = '        f = ysig__ring_find(r, want);'
+replace = '        f = ysig__ring_find(r, want + n->kns[0]);'
 
 [[mutant]]
 id = "14"
@@ -135,7 +143,7 @@ id = "15"
 name = "detect: a hold met at once"
 test = "sig"
 why = "\"In the start for 0.5 s\" would end at the first sample inside."
-find = 'if (!s->holding || t < s->t_start + n->kns[0]) return 0;'
+find = 'if (!s->holding || t < ysig__add(s->t_start, n->kns[0])) return 0;'
 replace = 'if (!s->holding || t < s->t_start) return 0;'
 
 [[mutant]]
@@ -143,10 +151,10 @@ id = "16"
 name = "detect: a value past the test at arm is not held"
 test = "sig"
 why = "A hand already past the radius at the hold's end would end the reach at once (CROSSINGS)."
-find = '''        s->ready = !r;
-        s->holding = 0;'''
-replace = '''        s->ready = 1;
-        s->holding = 0;'''
+find = '''        /* past the test at arm: held until it re-arms (CROSSINGS) */
+        s->ready = !r;'''
+replace = '''        /* past the test at arm: held until it re-arms (CROSSINGS) */
+        s->ready = 1;'''
 
 [[mutant]]
 id = "17"
@@ -313,8 +321,8 @@ id = "37"
 name = "integrate: rate dt in ms"
 test = "sig"
 why = "Rate control 1000 times too fast."
-find = 'double dt = s->has && now > s->t_prev ? (double)(now - s->t_prev) / 1e9 : 0;'
-replace = 'double dt = s->has && now > s->t_prev ? (double)(now - s->t_prev) / 1e6 : 0;'
+find = 'double dt = s->has && now > s->t_prev ? (double)ysig__sub(now, s->t_prev) / 1e9 : 0;'
+replace = 'double dt = s->has && now > s->t_prev ? (double)ysig__sub(now, s->t_prev) / 1e6 : 0;'
 
 [[mutant]]
 id = "38"
@@ -345,8 +353,8 @@ id = "41"
 name = "bind: every channel gets lane 0"
 test = "sig"
 why = "The cursor's y would be its x."
-find = 'g->channels[(int)n->p[0] + k] = (float)x->v[k];'
-replace = 'g->channels[(int)n->p[0] + k] = (float)x->v[0];'
+find = '                    float c = (float)x->v[k];'
+replace = '                    float c = (float)x->v[0];'
 
 [[mutant]]
 id = "42"
@@ -411,3 +419,183 @@ test = "sig"
 why = "Raw counts would be integrated as a rate."
 find = '                fl |= YSIG__F_COUNTS;'
 replace = '                (void)0;'
+
+[[mutant]]
+id = "50"
+name = "order: raw counts dropped when late"
+test = "sig"
+why = "Two mice on one any-device source: the second's earlier report would be lost (review P3)."
+find = '} else if (e->t < s->last_t[d] && !counts) {'
+replace = '} else if (e->t < s->last_t[d]) {'
+
+[[mutant]]
+id = "51"
+name = "order: one slot for every device"
+test = "sig"
+why = "Order per source again: two pens interleaving would drop each other."
+find = 'for (d = 0; d < s->n && s->dev[d] != e->device; d++) { }'
+replace = 'for (d = 0; d < s->n && 0; d++) { }'
+
+[[mutant]]
+id = "52"
+name = "meta: the newest-in-time input, not the arriving report"
+test = "sig"
+why = "A derived event would name the other hand and carry its time (review P4)."
+find = '    if (g && g->arr_on) {'
+replace = '    if (0) {'
+
+[[mutant]]
+id = "53"
+name = "view: still from any gap"
+test = "sig"
+why = "A view would read 0 while the hand moves between a poll and the onset (review P8)."
+find = 'if (ysig__sub(g->t_known, last) < n->kns[0]) break;'
+replace = 'if (0) break;'
+
+[[mutant]]
+id = "54"
+name = "frame: the poll ignored"
+test = "sig"
+why = "Views would run to the planned onset, a frame past the input."
+find = 'g->t_known = f->poll_ns ? f->poll_ns : g->t_fed;'
+replace = 'g->t_known = f->onset_ns;'
+
+[[mutant]]
+id = "55"
+name = "frame: no poll means the onset"
+test = "sig"
+why = "Without a poll the gap to the onset would read as stillness."
+find = 'g->t_known = f->poll_ns ? f->poll_ns : g->t_fed;'
+replace = 'g->t_known = f->poll_ns ? f->poll_ns : f->onset_ns;'
+
+[[mutant]]
+id = "56"
+name = "history: frame values enter the rings"
+test = "sig"
+why = "value_at would return a view, not a sample (review P1)."
+find = '''    if (mode != 1 || (n->flags & YSIG__F_NOSRC)) ysig__hist_push(g, n, o);
+}'''
+replace = '''    ysig__hist_push(g, n, o);
+}'''
+
+[[mutant]]
+id = "57"
+name = "check: a stateful op with no source opens"
+test = "sig"
+why = "A low-pass of noise would never run (review P2)."
+find = 'if (s1 == -1 && (op == YSIG_OP_INTEGRATE ||'
+replace = 'if (0 && (op == YSIG_OP_INTEGRATE ||'
+
+[[mutant]]
+id = "58"
+name = "check: mean's weights may sum to 0"
+test = "sig"
+why = "A division by zero at every sample."
+find = 'if (ws == 0) return ysig__fail(err, es,'
+replace = 'if (0) return ysig__fail(err, es,'
+
+[[mutant]]
+id = "59"
+name = "detect: entry fresh ignored"
+test = "sig"
+why = "A hold armed while true would complete without a fresh entry (review P5)."
+find = 'if (n->kns[0] > 0 && n->p[12] == 0) {'
+replace = 'if (n->kns[0] > 0) {'
+
+[[mutant]]
+id = "60"
+name = "integrate: counts for any DELTA control"
+test = "sig"
+why = "A box's analog channel 1 would be rounded to counts (review P6)."
+find = '                a->node[a->in[id][0]]->p[0] == YIN_KIND_MOUSE)'
+replace = '                1)'
+
+[[mutant]]
+id = "61"
+name = "set: a source's kind and control change"
+test = "sig"
+why = "The integrator would keep the counts mode of another device (review P7)."
+find = 'case YSIG_OP_SOURCE: return param != 3 && param != 0 && param != 1;'
+replace = 'case YSIG_OP_SOURCE: return param != 3;'
+
+[[mutant]]
+id = "62"
+name = "custom: inputs read as neighbors in val[]"
+test = "sig"
+why = "A two-input custom op would read the wrong node (review P9)."
+find = 'for (j = 0; j < n->n_in; j++) iv[j] = *in[j];'
+replace = 'for (j = 0; j < n->n_in; j++) iv[j] = g->val[n->in[0] + j];'
+
+[[mutant]]
+id = "63"
+name = "reset: a source has tier SIM before a sample"
+test = "sig"
+why = "A value from a hand that never reported would claim exact stamps."
+find = '''            o->tier = YIN_TIER_UNKNOWN;
+            o->lanes = n->lanes;
+            continue;'''
+replace = '''            o->lanes = n->lanes;
+            continue;'''
+
+[[mutant]]
+id = "64"
+name = "digest: frames not in it"
+test = "sig"
+why = "Two runs whose frame onsets differ would give one digest."
+find = 'ysig__digest(g, &f->onset_ns, sizeof f->onset_ns);'
+replace = '(void)0;'
+
+[[mutant]]
+id = "65"
+name = "digest: derived events not in it"
+test = "sig"
+why = "Two runs whose derived events differ would give one digest."
+find = '''    ysig__digest(g, &i, sizeof i);
+    ysig__digest_value(g, v);
+    if (g->n_der >= YSIG_QUEUE_CAP)'''
+replace = '    if (g->n_der >= YSIG_QUEUE_CAP)'
+
+[[mutant]]
+id = "66"
+name = "emit: unc_us dropped"
+test = "sig"
+why = "The report's own uncertainty would not reach the collector."
+find = 'e->unc_us = v->unc_us;'
+replace = '(void)0;'
+
+[[mutant]]
+id = "67"
+name = "detect: a view tested at the onset"
+test = "sig"
+why = "A movement end would be stamped at the planned onset, past the input."
+find = '                    if (at_frame) v.t = t;'
+replace = '                    v.t = t;'
+
+[[mutant]]
+id = "68"
+name = "feed: the default poll from every event"
+test = "sig"
+why = "A journal holds only the events a source saw: a replay would see another poll."
+find = '    g->st.fed++;'
+replace = '''    g->st.fed++;
+    if (e->t > g->t_fed) g->t_fed = e->t;'''
+
+[[mutant]]
+id = "70"
+name = "saturation: no low clamp in a difference"
+test = "sig_ubsan"
+why = "t - lag at INT64_MIN + 10 overflows: undefined behavior (review ub.c). Caught by the UBSan build of the test."
+find = '''    if (b > 0 && a < INT64_MIN + b) return INT64_MIN;
+    return a - b;'''
+replace = '    return a - b;'
+
+[[mutant]]
+id = "71"
+name = "saturation: no high clamp in a sum"
+test = "sig_ubsan"
+why = "A hold's start + hold at INT64_MAX - 5 overflows. Caught by the UBSan build."
+find = '''    if (b > 0 && a > INT64_MAX - b) return INT64_MAX;
+    if (b < 0 && a < INT64_MIN - b) return INT64_MIN;
+    return a + b;'''
+replace = '''    if (b < 0 && a < INT64_MIN - b) return INT64_MIN;
+    return a + b;'''

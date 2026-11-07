@@ -220,8 +220,10 @@ Uses:
    drifted 0.033 px off the count grid in 160 reaches at gain 0.1).
    Arithmetic inside the graph is double; a channel value is float.
 3. **The graph is fixed for a trial.** Its nodes and edges are set at
-   open. A node's parameters (`p[]`) change between trials, not during
-   one. A node's inputs change at any sample: a value that must change
+   open. The player sets a node's parameters (`p[]`) at trial
+   boundaries, not during a trial; the C API applies a set at once and
+   journals it, so a replay sees it where it came. A node's inputs change
+   at any sample: a value that must change
    inside a trial at a set time (a rotation that turns on in the middle
    of a reach) is an input, from a `channel` node that a timeline step
    drives. The loader checks the whole graph before the session, as
@@ -474,9 +476,18 @@ arrival order. Within one source they rise. So:
 - A node with inputs from two sources (`join`, `sum`, `mean`, `diff`)
   holds the latest value of each input and runs when either changes.
   Its output's `t` is the newer input's `t`; its `t_oldest` is the older
-  input's `t`; its tier is the worse of the two (principle 6).
+  input's `t`; its tier is the worse of the two (principle 6). As built:
+  the output's `t`, device and source are the arriving sample's (the
+  report that made the value, the one that crossed), even when the other
+  input's held part is newer in time; `t_oldest` stays the oldest
+  input's.
 - A sample whose `t` is older than its source's last sample is counted
-  and dropped. The count goes in the describe record.
+  and dropped. The count goes in the describe record. As built: order is
+  kept per source and device (two mice on one any-device source do not
+  drop each other), and a raw mouse's counts are never dropped, because
+  a sum does not depend on the order of its terms.
+- As built: a source has no value before its first sample (tier
+  UNKNOWN, nothing in its ring), and times saturate at the ends of int64.
 
 ### 6.2 Reading at a frame
 
@@ -488,9 +499,17 @@ before it arrives, the plan's. As built: `ysig_frame()` reads held values
 arrives a frame later, is read with `ysig_value_at()` from rings a node
 keeps on request; a stateless node after two sources is computed from its
 inputs' rings, so a late report of one source is placed by its time.
-Velocity, speed, delay, low-pass and rate integration give their value at
-the onset from the held input without changing their state: a still mouse
-sends nothing, and its speed must still fall to 0.
+Velocity, speed, delay, low-pass and rate integration give a view at a
+frame without changing their state: a still mouse sends nothing, and its
+speed must still fall to 0. A view never infers stillness from the gap
+between the last sample and a planned onset, which is in the future when
+the frame is prepared: the frame gives the poll's time (the latest time
+input is known up to), a view uses input up to the earlier of the onset
+and the poll, and a velocity or speed is 0 only when its input was silent
+for the lag up to the poll. History rings hold values at sample times;
+a view never enters them. These five ops keep state per sample, so the
+loader refuses one with no source upstream (on a generator or a channel
+alone); a frame-rate form can come later.
 
 **Prediction** is a per-sink option, off by default: extrapolate the
 value from its last samples to the onset with a stated horizon and
@@ -571,7 +590,8 @@ As built (ysp/sig.h v0.1.0), the sketch below changed: `ysig_node` has a
 (sines' components do not fit in 16 parameters); `ysig_check()` and
 `ysig_arena_size()` take the whole desc (roles, adapters, custom ops and
 the channel count are part of the check and the size); `ysig_frame()`
-takes a `ysig_frame_in` (index, onset, base time, the timeline's values)
+takes a `ysig_frame_in` (index, onset, base time, the timeline's values,
+the poll's time)
 instead of a `yscr_frame`, so the header needs `ysp/input.h` only; and
 `ysig_value_at()`, `ysig_derived()`, `ysig_arm()`, `ysig_set_data()` and
 `ysig_replay()` are added.
@@ -727,7 +747,11 @@ needed by a ported example or found by a measurement.
 | 5.2 | Parameters in 16 doubles | Also a data array per node, copied at open | 7 + 7 sines need 42 numbers |
 | 5.5 | Four unit spaces | `display_px` added | The examples are designed in window pixels |
 | 6.1 | The worse tier | SIM, 1, 2, 3, UNKNOWN from best to worst; a source's tier for stamp 0 is a parameter (the source table's) | ysp/input.h orders no tiers; an unmeasured stamp is the worst |
-| 6.2 | A sink reads at the onset | Held values at `ysig_frame()`; `ysig_value_at()` from rings for a later onset; views at the onset for velocity, speed, delay, low-pass, rate integration | The flip record comes a frame later (D10); a still mouse sends nothing |
+| 6.1 | A value's `t` is the newer input's | The arriving sample's `t`, device and source; `t_oldest` the oldest input's | The derived event must name the report that crossed, not the other hand's |
+| 6.1 | Order per source | Per source and device; raw mouse counts never dropped | Two mice on one any-device source dropped each other's counts |
+| 6.2 | A sink reads at the onset | Held values at `ysig_frame()`; `ysig_value_at()` from rings of sample-time values for a later onset; views for velocity, speed, delay, low-pass, rate integration up to the poll's time | The flip record comes a frame later (D10); a still mouse sends nothing; a planned onset is in the future |
+| 6.2 | | Stateful sample-rate ops need a source upstream | They would never run; a frame-rate form is not built |
+| 7 | A hold | A hold armed while its test is true counts from the arm (default) or waits for a fresh entry (a parameter) | The reach task's first hold starts with the hand on the start |
 | 6.4 | Parameters apply at the reset | `ysig_set()` applies at once, state kept | A reach task keeps its hand across trials |
 | 8 | Replay from the source rows | A journal of every call; bit for bit on one build | Frames, channel values, arms and sets change values too |
 | 8 | Rows to `yds_stream()` | A callback | No I/O in the header |

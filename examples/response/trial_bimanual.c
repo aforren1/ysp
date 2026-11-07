@@ -180,7 +180,7 @@
 #define RING_CAP      4096               /* per hand: 4 s at 1 kHz            */
 /* The signal path: the hands, the mapping, the cursor, the target */
 enum { B_SRC_L, B_SRC_R, B_LPX, B_RPX, B_L, B_R, B_LX, B_RY, B_U, B_C, B_EMIT, B_SPEED, B_AMP, B_SINES, B_TGT,
-       B_ERR, B_INSIDE, B_TPX, B_BIND_T, B_N };
+       B_TPX, B_BIND_T, B_N };
 enum { CH_TGT_X, CH_TGT_Y, N_SIG_CH };
 #define BM_PI         3.14159265358979323846
 /* The scripted participant (--sim, --auto) */
@@ -1075,12 +1075,6 @@ static bool open_graph(void) {
     n[B_SINES].data = sines_data;
     n[B_SINES].n_data = 2 * N_SINES * 3;
     n[B_TGT] = ysig_node_of(YSIG_OP_SCALE, B_SINES, B_AMP);   /* the ramp: the timeline's tween */
-    n[B_ERR] = ysig_node_of(YSIG_OP_DIFF, B_C, B_TGT);
-    n[B_INSIDE] = ysig_node_of(YSIG_OP_DETECT, B_ERR, -1);    /* the target's color */
-    n[B_INSIDE].p[0] = YSIG_TEST_LE;
-    n[B_INSIDE].p[1] = -1;
-    n[B_INSIDE].p[2] = TARGET_R;
-    n[B_INSIDE].p[5] = 1;                                     /* at each frame */
     n[B_TPX] = ysig_node_of(YSIG_OP_AFFINE, B_TGT, -1);       /* px for drawing */
     n[B_TPX].p[0] = ppc;
     n[B_TPX].p[3] = -ppc;
@@ -1518,7 +1512,8 @@ int main(int argc, char** argv) {
              * ramp from the timeline, the binds */
             int64_t bt = 0;
             ytl_base_time(&tl, TRIAL, f.onset, &bt);
-            ysig_frame(&sg, &(ysig_frame_in){ f.index, f.onset, bt, ytl_values(&tl), N_CHANNELS });
+            ysig_frame(&sg, &(ysig_frame_in){ f.index, f.onset, bt, ytl_values(&tl), N_CHANNELS,
+                                              is_script ? f.onset : yrt_now_ns() });
         }
         for (i = 0; i < n; i++)
             if (fired[i].kind == YTL_MARK && fired[i].code == END_OF_TRACK && state == S_T_MOVE) {
@@ -1550,10 +1545,11 @@ int main(int argc, char** argv) {
             ygfx_draw(&gfx, &box[1]);
         } else {
             if (state == S_T_WAIT || state == S_T_MOVE || state == S_T_FINISH) {
-                /* moving: the graph's target and its inside detect; else at
-                 * the center */
-                int inside = state == S_T_MOVE ? ysig_value_of(&sg, B_INSIDE)->v[0] != 0
-                                               : c[0] * c[0] + c[1] * c[1] <= TARGET_R * TARGET_R;
+                /* the color from this frame's cursor c, which the start and
+                 * hold tests read too (with this block's P); the target's
+                 * position from the graph's bind */
+                double tx = state == S_T_MOVE ? fr[n_fr - 1].tg[0] : 0, ty = state == S_T_MOVE ? fr[n_fr - 1].tg[1] : 0;
+                int inside = (c[0] - tx) * (c[0] - tx) + (c[1] - ty) * (c[1] - ty) <= TARGET_R * TARGET_R;
                 tgt.x = state == S_T_MOVE ? sig_ch[CH_TGT_X] : px_x(0);
                 tgt.y = state == S_T_MOVE ? sig_ch[CH_TGT_Y] : px_y(0);
                 tgt.w = tgt.h = (float)(2 * TARGET_R * ppc);

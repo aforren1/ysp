@@ -73,7 +73,7 @@ why.
 /* every frame, after yscr_begin() */
 while (yscr_poll(&scr, &ev, NULL))
     if (yscr_event_input(&scr, &ev, &in)) ysig_feed(&g, &in);
-ysig_frame(&g, &(ysig_frame_in){ f.index, f.onset, 0, NULL, 0 });
+ysig_frame(&g, &(ysig_frame_in){ f.index, f.onset, 0, NULL, 0, yrt_now_ns() });
 dot.x = channels[0];
 dot.y = channels[1];
 ```
@@ -81,7 +81,8 @@ dot.y = channels[1];
 Each raw mouse report moves the hand by its counts, and the cursor
 follows at once. `ysig_frame()` writes the bound channels. Feed the
 frame's input before `ysig_frame()`: a sink reads held values
-([examples_findings.md](examples_findings.md), D10).
+([examples_findings.md](examples_findings.md), D10). The last field is
+the poll's time: the graph knows input up to there, and no further.
 
 `examples/response/trial_visuomotor.c` is this graph in a whole task, with
 the hold, the reach and the movement onset.
@@ -107,10 +108,14 @@ n = ysig_derived(&g, der, 8);
 for (i = 0; i < n; i++) yrsp_feed(&rsp, &der[i]);
 ```
 
-The event's `t` is the newest input's time, its `stamp` the worst tier of
-its inputs, and its `code` the newest input's source node (low 16 bits)
-and the oldest's (high 16 bits). A cursor from two hands says which hand's
-report crossed (`trial_bimanual.c`'s `move_hand` column).
+The event's `t` is the time of the report that arrived and made it (also
+when the other hand's held part is newer in time), its `unc_us` that
+report's, its `stamp` the worst tier of its inputs, and its `code` that
+report's source node (low 16 bits) and the oldest input's (high 16
+bits). A cursor from two hands says which hand's report crossed
+(`trial_bimanual.c`'s `move_hand` column). The source table's bounds do
+not travel: the collector sees kind USER, so its result's `stamp_lo_ns`
+and `stamp_hi_ns` are 0. Take them from the hand's own source entry.
 
 ### End a step on a hold
 
@@ -130,9 +135,12 @@ The hit's `t` is the hold's start plus 0.5 s. The next sample finds it
 (before it is tested, so a hand that leaves after the hold ended counts as
 movement), or a frame whose onset is at or after it, so a still hand that
 sends nothing completes it. Read hits with `ysig_detected()`. With
-`p[6] = 1` the detect waits for `ysig_arm(&g, node, t)`; a value that
-meets the test at the arm is held until it fails again (the collector's
-CROSSINGS rule).
+`p[6] = 1` the detect waits for `ysig_arm(&g, node, t)`. A crossing
+detect (no hold) armed while its test is true is held until the test
+fails (the collector's CROSSINGS rule). A hold armed while its test is
+true counts from the arm with `p[12] = 0` (entry `arm`, the default: a
+hand already on the start at a trial's first frame), or waits for the
+test to fail and come true again with `p[12] = 1` (entry `fresh`).
 
 ### Read a value at a flip record's onset
 
@@ -189,7 +197,7 @@ n[AMP].p[0] = AMP_CHANNEL;
 n[TARGET] = ysig_node_of(YSIG_OP_SCALE, SINES, AMP);
 ...
 ytl_base_time(&tl, TRIAL, f.onset, &bt);
-ysig_frame(&g, &(ysig_frame_in){ f.index, f.onset, bt, ytl_values(&tl), n_channels });
+ysig_frame(&g, &(ysig_frame_in){ f.index, f.onset, bt, ytl_values(&tl), n_channels, yrt_now_ns() });
 ```
 
 A late frame shows the value for its own base time (F22). Set the phases
@@ -209,7 +217,8 @@ ysig_get_stats(&g2, &b);
 /* a.digest == b.digest: every row and hit, bit for bit */
 ```
 
-The digest is FNV-1a over every record row and hit. Replay is bit for bit
+The digest is FNV-1a over every record row, hit and derived event, every
+bound channel value and every frame's index and onset. Replay is bit for bit
 on one build. Across compilers and platforms, `cos`, `exp` and fused
 multiply-adds can differ in the last bit ([rdk.md](rdk.md), "Why the state
 is integers"); a graph of counts and exact gains (0.25 px per count) gives
@@ -235,9 +244,9 @@ seconds, as in a definition. A zero field means the row's `def`.
 |---|---|---|---|
 | `source` | none, 1 to 4 | kind, control, device (0 any), fields (x 1, y 2, value 4, aux 8), tier (for stamp 0), type (0 sample) | Without fields: x, y, value, aux by lanes; 1 lane is value |
 | `role` | none (its adapter), the type's | role index | |
-| `integrate` | 1, n | gain[4] (0 = 1), origin[4], low[4], high[4] | A DELTA source: int64 count sum per lane, held inside the bounds. Else rate: gain x held value x dt |
+| `integrate` | 1, n | gain[4] (0 = 1), origin[4], low[4], high[4] | A raw mouse's DELTA source (kind MOUSE): int64 count sum per lane, held inside the bounds. Else rate: gain x held value x dt. Needs a source upstream |
 | `lowpass` | 1, n | cutoff Hz, order (1 or 2), rate Hz (for the Nyquist check) | First-order sections on each sample's dt |
-| `velocity`, `speed` | 1, n (speed: 1) | lag s, capacity (256) | Difference over at least the lag; at a frame, 0 once the hand is still for the lag |
+| `velocity`, `speed` | 1, n (speed: 1) | lag s, capacity (256) | Difference over at least the lag; at a frame, 0 once the input was silent for the lag up to the poll |
 | `delay` | 1, n | delay s, capacity (1024) | The input as it was |
 | `deadzone` | 1, n | radius | Radial; past it the norm shrinks by the radius |
 | `affine` | 1 or 2 (angle), 2 | m.xx m.xy m.yx m.yy (all 0 = identity), pre.x/y, post.x/y, angle deg | out = Rot(angle + input) M (in - pre) + post |
@@ -252,22 +261,34 @@ seconds, as in a definition. A zero field means the row's `def`.
 | `noise` | none, 1 to 4 | seed, sd, cutoff Hz | Set again at each reset |
 | `channel` | none, 1 | timeline channel | From the frame's values |
 | `bind` | 1, none | first channel | Writes float at each frame |
-| `detect` | 1, 1 (the test) | test (ge, le, in_rect, out_rect), lane (-1 norm), level, hysteresis, hold s, at (sample, frame), start (reset, arm), repeat (once, every), a.x a.y b.x b.y | |
+| `detect` | 1, 1 (the test) | test (ge, le, in_rect, out_rect), lane (-1 norm), level, hysteresis, hold s, at (sample, frame), start (reset, arm), repeat (once, every), a.x a.y b.x b.y, entry (arm, fresh) | |
 | `record` | 1, none | per (sample, frame) | `desc.on_row` |
 | `emit` | 1, none | kind (USER + 0..7), control | `ysig_derived()` |
 
 ### Time
 
-- A sample's value carries `t` (the newest input's time), `t_oldest`,
-  the worst tier (SIM, 1, 2, 3, UNKNOWN from best to worst), the device of
-  the newest sample, and the source nodes of the newest and the oldest
-  input.
-- A sample older than its source's last sample is dropped and counted
-  (`dropped_order`). Equal times pass.
+- A value made at a sample carries that sample's `t`, device, `unc_us`
+  and source node, `t_oldest` (the oldest input's time) and its source,
+  and the worst tier of its inputs (SIM, 1, 2, 3, UNKNOWN from best to
+  worst). Before its first sample a source has no value: tier UNKNOWN,
+  an empty ring.
+- Order is kept per source and device: a sample older than the last of
+  its device is dropped and counted (`dropped_order`), so two mice on one
+  any-device source do not drop each other. Equal times pass. A raw
+  mouse's counts are never dropped: a sum does not depend on order.
 - `ysig_frame()` runs, in node order, the generators at the frame's base
-  time; velocity, speed, delay, lowpass and rate integrators at the onset
-  from their held input, their state unchanged; every node after those;
-  then bind, frame records and detects.
+  time; velocity, speed, delay, lowpass and rate integrators as views,
+  their state unchanged; every node after those; then bind, frame
+  records and detects. A view uses input up to `poll_ns` (0: the newest
+  event a source took) and never past it to the planned onset: a
+  velocity or speed reads 0 only when its input was silent for the lag
+  up to the poll.
+- History rings hold values at sample times; a frame's view never
+  enters them.
+- Integrate, lowpass, velocity, speed and delay need a source upstream:
+  they keep state per sample, and `ysig_check()` refuses them on a
+  generator or a channel alone.
+- Times saturate at the ends of int64 instead of overflowing.
 
 ### Limits
 
@@ -296,15 +317,23 @@ files came out byte-identical.
   answer it. A stateless node after two sources is computed from its
   inputs' rings, so arrival order across sources does not matter (the
   test feeds a late report and checks it).
-- **Views at the onset.** A mouse sends nothing while it is still. A
+- **Views up to the poll.** A mouse sends nothing while it is still. A
   velocity or a filter that changed only at samples would hold the last
-  moving value forever. These nodes also give their value at the frame's
-  onset from the held input, and keep their state, so the per-sample
-  values do not depend on when frames ran.
+  moving value forever. These nodes also give a view at a frame, and keep
+  their state, so the per-sample values do not depend on when frames ran.
+  The first build ran the view to the frame's planned onset, a frame past
+  the input: a hand moving at 1000 px/s read as slower, and a "speed
+  under 50" detect hit 29 times in 30 frames while the hand moved (the
+  review's P8). The view now runs to the poll's time, and a velocity
+  reads 0 only after the input was silent for the lag up to the poll.
 - **The sign of zero.** An affine skips exact zero terms. A mirror
   (`[[0, 1], [1, 0]]`) then gives `y` exactly, -0 included, as the old
   `trial_bimanual` did; without the skip, `0 + -0` is `+0` and its track
   file printed `0.0000` for `-0.0000` (mutants 07 and 08).
+- **The target's color in `trial_bimanual`.** It reads the frame's cursor
+  `c`, as before the port, not a detect on the graph's held cursor: after
+  a block change the held cursor keeps the old block's P until the next
+  report, while `c` is computed at the onset with the new P.
 - **Derived events, no new flag.** The emit node's events use a USER kind
   and the emit node's index as the device. The collector needs nothing
   more. A consumer that logs every event cannot tell a derived event from
@@ -403,7 +432,7 @@ ASan and UBSan with GCC 12.2 and `setarch -R`, in 9 min 28 s.
 ran, with 50.7 million events taken, 24.0 million rows and 2.5 million
 hits. No sanitizer report, no graph that the check passed and the open
 refused, no replay that differed.
-- `tests/mutate/sig.toml`: 49 mutants and a control; 49 of 49 killed.
+- `tests/mutate/sig.toml`: MUTANT_RESULT
 
 ## Not done
 
@@ -419,4 +448,8 @@ refused, no replay that differed.
 - A dataset glue: a record row goes to `desc.on_row`, and the program
   writes it (to `yds_stream()` or its own file).
 - Bindings: no Python or MEX binding yet.
+- The layout's size_t overflow check is not tested: it needs a 32-bit
+  build (a 64-bit size_t holds the largest graph).
+- A frame-rate form of integrate, lowpass, velocity, speed and delay (on
+  a generator or a channel alone).
 - Not run: MSVC, macOS, a window, a real device, a photodiode.

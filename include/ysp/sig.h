@@ -61,10 +61,11 @@
  *     source     0, 1..4   the samples of one kind, type, control and
  *                          device (0 = any): fields x, y, value, aux
  *     role       0, type   a role's value (ROLES AND ADAPTERS)
- *     integrate  n, n      DELTA from a source: an int64 count sum per lane,
- *                          position = origin + gain x counts, the count sum
- *                          held inside optional bounds (yrsp_cursor's rule);
- *                          otherwise rate control: gain x value x dt
+ *     integrate  n, n      a raw mouse's DELTA (kind MOUSE): an int64 count
+ *                          sum per lane, position = origin + gain x counts,
+ *                          the count sum held inside optional bounds
+ *                          (yrsp_cursor's rule); otherwise rate control:
+ *                          gain x held value x dt
  *     lowpass    n, n      first or second order, on each sample's dt
  *     velocity   n, n      the difference over at least `lag` s
  *     speed      n, 1      its norm
@@ -96,24 +97,37 @@
  *   in order) and a frame list, so no evaluation walks the graph. A sample
  *   runs its source's list and nothing else. A node that two sources
  *   reach is on both lists and reads its inputs' held values.
- *   Each value carries t (the newest input sample's time), t_oldest (the
- *   oldest's), the worst stamp tier of its inputs (SIM best, then 1, 2,
- *   3, UNKNOWN worst), and the source nodes of the newest and the oldest
- *   input. A source's tier is the event's stamp, or p4 where it is 0.
- *   A sample older than its source's last is counted and dropped
- *   (ysig_stats.dropped_order); equal times pass (a raw mouse report).
+ *   A value made at a sample carries that sample's t, device, unc_us and
+ *   source node (the report that arrived, even when another source's held
+ *   part is newer in time), t_oldest (the oldest input's time) and its
+ *   source, and the worst stamp tier of its inputs (SIM best, then 1, 2,
+ *   3, UNKNOWN worst). A source's tier is the event's stamp, or p4 where
+ *   it is 0; before its first sample a source has no value: tier UNKNOWN,
+ *   nothing in its ring. Order is kept per source and device: a sample
+ *   older than the last of its device is counted and dropped
+ *   (ysig_stats.dropped_order); equal times pass; a raw mouse's counts
+ *   are never dropped (a sum does not depend on order). Times saturate
+ *   at the ends of int64.
  *   ysig_frame() runs, in node order: the generators (sines, noise,
  *   channel, a custom op with no input) at the frame's base time; the
  *   nodes that change with time alone (velocity, speed, delay, lowpass,
- *   rate integrate: their value at the onset from the held input, state
- *   unchanged); every node after those; then the sinks: bind, frame
- *   records, detects. A sink reads held values: poll and feed the
- *   frame's input before ysig_frame() (docs/examples_findings.md, D10).
+ *   rate integrate); every node after those; then the sinks: bind, frame
+ *   records, detects. The time-alone nodes give a view, state unchanged,
+ *   up to the time input is known, f.poll_ns (0: the newest event a
+ *   source took), never past it to a planned onset: a lowpass or a rate
+ *   integral runs to the poll, a delay reads at most there, and a
+ *   velocity or speed is 0 only when its input was silent for the lag up
+ *   to the poll (else the last sample's value stands). A sink reads held
+ *   values: poll and feed the frame's input before ysig_frame()
+ *   (docs/examples_findings.md, D10).
  *   A value at another time: ysig_value_at() for a node with
- *   node.history > 0 (a ring of its past values) reads the last value at
- *   or before t; a stateless node after two sources (join, mean,
- *   affine of those) is computed from its inputs' values at t, so their
- *   rings are kept instead. For a flip record that arrives a frame later.
+ *   node.history > 0 (a ring of its values at sample times; a frame's
+ *   view never enters it) reads the last value at or before t; a
+ *   stateless node after two sources (join, mean, affine of those) is
+ *   computed from its inputs' values at t, so their rings are kept
+ *   instead. For a flip record that arrives a frame later. Integrate,
+ *   lowpass, velocity, speed and delay keep state per sample: with no
+ *   source upstream they are refused at open.
  *
  *   ---------------------------------------------------------------------
  *   DETECTORS (detect, emit, ysig_detected, ysig_derived)
@@ -127,15 +141,23 @@
  *   With hold > 0 a hit needs the test true for hold s: the hit is at
  *   start + hold, found by the next value (before it is tested) or by a
  *   frame whose onset is at or after it, so a still hand that sends no
- *   samples completes a hold. p6: armed at reset (0) or by ysig_arm().
+ *   samples completes a hold. A hold armed while its test is true counts
+ *   from the arm (p12 entry arm, 0: a hand already on the start), or
+ *   waits for the test to fail and come true again (entry fresh, 1).
+ *   A sample-rate detect on a view tests it at the view's time; a frame-
+ *   rate one at the onset. p6: armed at reset (0) or by ysig_arm().
  *   p7: one hit per arm (0) or every crossing. A detect at frame rate
  *   (p5) tests the held value at each onset. Hits queue (64, the rest
  *   counted) until ysig_detected().
  *   emit makes a derived yin_event of its input at each update, for the
  *   response collector (docs/signal_spec.md section 7, way (a)): kind
  *   YIN_KIND_USER + p0, device the emit node's index, control p1, type
- *   SAMPLE, x y value aux the lanes (float), t the value's t, stamp its
- *   tier, code the newest input's source node | the oldest's << 16.
+ *   SAMPLE, x y value aux the lanes (float), t the value's t (the report
+ *   that arrived), unc_us that report's, stamp the value's tier, code the
+ *   arriving report's source node | the oldest input's << 16. The source
+ *   table's bounds (yin_source lo_ns, hi_ns) do not travel: the
+ *   collector sees kind USER, so its result's stamp_lo_ns and stamp_hi_ns
+ *   are 0; take them from the hand's source entry.
  *   ysp/input.h has no flag for a derived event: tell it by kind and
  *   device (docs/sig.md, "Derived events"). Queued (64) until
  *   ysig_derived().
@@ -145,7 +167,9 @@
  *   ---------------------------------------------------------------------
  *   record calls desc.on_row with a ysig_row: per sample of its input
  *   (p0 = 0) or per frame (p0 = 1: the frame index, the onset, the held
- *   value). Every row and hit goes into a 64-bit digest (ysig_stats).
+ *   value). Every row, hit and derived event, every bound channel value
+ *   and every frame's index and onset go into a 64-bit digest
+ *   (ysig_stats).
  *   desc.journal gets every call that changes the graph: reset, set,
  *   set_data, arm, disarm, every event a source takes or drops, every
  *   frame (with its channel values, valid during the call). ysig_replay()
@@ -279,14 +303,15 @@ typedef struct ysig_node {
 /* A node's output. 64 bytes. */
 typedef struct ysig_value {
     double   v[YSIG_LANES];
-    int64_t  t;                 /* the newest input sample's, ns         */
+    int64_t  t;                 /* the arriving sample's, else the newest */
     int64_t  t_oldest;          /* the oldest input sample's, ns         */
-    uint32_t device;            /* the newest sample's device            */
-    uint16_t src;               /* the source node of the newest input   */
+    uint32_t device;            /* that sample's device                  */
+    uint16_t src;               /* that sample's source node             */
     uint16_t src_oldest;        /* ... of the oldest                     */
     uint8_t  tier;              /* the worst (yin_tier)                  */
     uint8_t  lanes;
-    uint8_t  reserved_[6];
+    uint16_t unc_us;            /* the arriving event's unc_us           */
+    uint8_t  reserved_[4];
 } ysig_value;
 
 /* A parameter row, the shape of the other headers' tables. */
@@ -347,6 +372,8 @@ typedef struct ysig_frame_in {
     int64_t      base_ns;       /* the trial base's time (ytl_base_time) */
     const float* values;        /* timeline channels for channel nodes   */
     int          n_values;
+    int64_t      poll_ns;       /* input is known up to here (the poll's
+                                 * time); 0 = the newest event fed       */
 } ysig_frame_in;
 
 typedef struct ysig_row {
@@ -390,7 +417,8 @@ typedef struct ysig_stats {
     int64_t  rows, hits;
     int64_t  ring_short;        /* a delay or velocity ring too short    */
     int64_t  history_skipped;   /* a value older than its ring's newest  */
-    uint64_t digest;            /* FNV-1a over rows and hits             */
+    uint64_t digest;            /* FNV-1a: rows, hits, events, binds,
+                                 * frames                                */
 } ysig_stats;
 
 struct ysig__nd;
@@ -431,8 +459,14 @@ typedef struct ysig_graph {
     int32_t           adapter_base[16], adapter_n[16];
     int               n_adapters;
     int64_t           frame_index, onset, base;  /* the frame being run  */
+    int64_t           t_known;    /* min(onset, poll): views stop here    */
+    int64_t           t_fed;      /* the newest event time fed            */
     const float*      fvals;
     int               n_fvals;
+    int               arr_on;     /* a sample's schedule is running       */
+    int64_t           arr_t;      /* ... its event: t, device, source     */
+    uint32_t          arr_dev;
+    uint16_t          arr_src, arr_unc;
     ysig_stats        st;
     float*            channels;
     int               n_channels;
@@ -547,6 +581,7 @@ extern "C" {
 #define YSIG__F_SINK   0x10u
 #define YSIG__F_GEN    0x20u
 #define YSIG__F_VIEW   0x40u  /* has a value at the onset (state kept)    */
+#define YSIG__F_NOSRC  0x80u  /* no source upstream: changes at frames only */
 
 /* op classes */
 #define YSIG__K_PURE  0x01u
@@ -575,7 +610,15 @@ typedef struct ysig__nd {
     uint8_t               n_in, lanes, flags, reserved_;
 } ysig__nd;
 
-typedef struct ysig__src_st { int64_t last_t; int has; int reserved_; } ysig__src_st;
+/* A source's last time per device: order holds within one device, not
+ * across two mice on one any-device source. Eight devices, then the oldest
+ * slot is reused. */
+#define YSIG__SRC_DEVS 8
+typedef struct ysig__src_st {
+    int64_t  last_t[YSIG__SRC_DEVS];
+    uint32_t dev[YSIG__SRC_DEVS];
+    int      n, next;
+} ysig__src_st;
 typedef struct ysig__int_st {
     int64_t n[4];
     double  acc[4], x[4];
@@ -723,6 +766,8 @@ static const ysig_param ysig__p_detect[] = {
     YSIG__F64("a.y", -YSIG__BIG, YSIG__BIG, 0, "", "the center's y, or the rectangle's low y"),
     YSIG__F64("b.x", -YSIG__BIG, YSIG__BIG, 0, "", "the center's z, or the rectangle's high x"),
     YSIG__F64("b.y", -YSIG__BIG, YSIG__BIG, 0, "", "the center's w, or the rectangle's high y"),
+    { "entry", "enum", 0, 1, 0, "", "a hold armed while its test is true: counts from the arm, or waits for the test "
+      "to fail and come true again", "arm=0,fresh=1" },
 };
 static const ysig_param ysig__p_record[] = {
     { "per", "enum", 0, 1, 0, "", "a row per sample of the input, or per frame", "sample=0,frame=1" },
@@ -1118,7 +1163,10 @@ static bool ysig__analyze(const ysig_desc* d, ysig__an* a, char* err, size_t es)
                     return ysig__fail(err, es, "ysig: node %d (%s): a bounded lane needs a positive gain (flip with affine)",
                                       id, ysig__nm(nd));
             }
-            if (a->node[a->in[id][0]]->op == YSIG_OP_SOURCE && (uint32_t)a->node[a->in[id][0]]->p[1] == YIN_AXIS_DELTA)
+            /* counts: a raw mouse's DELTA samples only (a box's channel 1
+             * is not a count) */
+            if (a->node[a->in[id][0]]->op == YSIG_OP_SOURCE && (uint32_t)a->node[a->in[id][0]]->p[1] == YIN_AXIS_DELTA &&
+                a->node[a->in[id][0]]->p[0] == YIN_KIND_MOUSE)
                 fl |= YSIG__F_COUNTS;
             else fl |= YSIG__F_FRAME | YSIG__F_VIEW;
             break;
@@ -1160,6 +1208,18 @@ static bool ysig__analyze(const ysig_desc* d, ysig__an* a, char* err, size_t es)
         if (kind & YSIG__K_SINK) fl |= YSIG__F_SINK;
         if (kind & YSIG__K_VIEW) fl |= YSIG__F_FRAME | YSIG__F_VIEW;
         if (s1 == -2) fl |= YSIG__F_MULTI;
+        if (s1 == -1 && rule != YSIG__R_SOURCE) fl |= YSIG__F_NOSRC;
+        /* these keep state from sample to sample: with no source upstream
+         * they would never run (a frame-rate form is not built) */
+        if (s1 == -1 && (op == YSIG_OP_INTEGRATE || op == YSIG_OP_LOWPASS || op == YSIG_OP_VELOCITY ||
+                         op == YSIG_OP_SPEED || op == YSIG_OP_DELAY))
+            return ysig__fail(err, es, "ysig: node %d (%s): %s keeps state per sample and has no source upstream", id,
+                              ysig__nm(nd), ysig__ops[op].name);
+        if (op == YSIG_OP_MEAN) {
+            double ws = 0;
+            for (j = 0; j < a->n_in[id]; j++) ws += nd->p[j] != 0 ? nd->p[j] : 1;
+            if (ws == 0) return ysig__fail(err, es, "ysig: node %d (%s): mean's weights sum to 0", id, ysig__nm(nd));
+        }
         a->lanes[id] = (uint8_t)lanes;
         a->flags[id] = fl;
         a->src1[id] = s1;
@@ -1186,8 +1246,13 @@ static bool ysig__analyze(const ysig_desc* d, ysig__an* a, char* err, size_t es)
 
 /* --- layout ------------------------------------------------------------------ */
 
+/* A block at the next 16 bytes; on a size_t wrap (32-bit hosts and big
+ * rings) *off becomes SIZE_MAX and stays there. */
 static size_t ysig__al(size_t* off, size_t size) {
-    size_t at = (*off + 15u) & ~(size_t)15u;
+    size_t at;
+    if (*off > SIZE_MAX - 15u) { *off = SIZE_MAX; return 0; }
+    at = (*off + 15u) & ~(size_t)15u;
+    if (size > SIZE_MAX - at) { *off = SIZE_MAX; return 0; }
     *off = at + size;
     return at;
 }
@@ -1255,7 +1320,7 @@ static size_t ysig__layout(const ysig_desc* d, const ysig__an* a, ysig_graph* g,
             }
         }
     }
-    return off + 16;
+    return off > SIZE_MAX - 16 ? 0 : off + 16;   /* 0: more than size_t holds */
 }
 
 /* The analysis is about 14 KB on the stack: no allocation, no static. */
@@ -1292,6 +1357,19 @@ static void ysig__digest_value(ysig_graph* g, const ysig_value* v) {
 }
 
 static int64_t ysig__ns(double s) { return (int64_t)llround(s * 1e9); }
+
+/* Times near INT64_MIN or INT64_MAX: a difference or a sum saturates
+ * instead of overflowing (undefined in C). */
+static int64_t ysig__sub(int64_t a, int64_t b) {
+    if (b < 0 && a > INT64_MAX + b) return INT64_MAX;
+    if (b > 0 && a < INT64_MIN + b) return INT64_MIN;
+    return a - b;
+}
+static int64_t ysig__add(int64_t a, int64_t b) {
+    if (b > 0 && a > INT64_MAX - b) return INT64_MAX;
+    if (b < 0 && a < INT64_MIN - b) return INT64_MIN;
+    return a + b;
+}
 
 /* Derived constants from p[]: after open and after ysig_set(). */
 static void ysig__prepare(ysig_graph* g, int i) {
@@ -1359,7 +1437,6 @@ static void ysig__hist_push(ysig_graph* g, ysig__nd* n, const ysig_value* v) {
  * tier, their sources. */
 static void ysig__meta(const ysig_graph* g, const ysig__nd* n, const ysig_value* const* in, ysig_value* o) {
     int j;
-    (void)g;
     if (!n->n_in) return;
     o->t = in[0]->t;
     o->t_oldest = in[0]->t_oldest;
@@ -1367,10 +1444,24 @@ static void ysig__meta(const ysig_graph* g, const ysig__nd* n, const ysig_value*
     o->src = in[0]->src;
     o->src_oldest = in[0]->src_oldest;
     o->device = in[0]->device;
+    o->unc_us = in[0]->unc_us;
     for (j = 1; j < n->n_in; j++) {
-        if (in[j]->t > o->t) { o->t = in[j]->t; o->src = in[j]->src; o->device = in[j]->device; }
+        if (in[j]->t > o->t) {
+            o->t = in[j]->t;
+            o->src = in[j]->src;
+            o->device = in[j]->device;
+            o->unc_us = in[j]->unc_us;
+        }
         if (in[j]->t_oldest < o->t_oldest) { o->t_oldest = in[j]->t_oldest; o->src_oldest = in[j]->src_oldest; }
         o->tier = ysig_tier_worst(o->tier, in[j]->tier);
+    }
+    /* during a sample: the value is that report's, at its time, even when
+     * another source's held part is newer (the report that crossed) */
+    if (g && g->arr_on) {
+        o->t = g->arr_t;
+        o->src = g->arr_src;
+        o->device = g->arr_dev;
+        o->unc_us = g->arr_unc;
     }
 }
 
@@ -1521,12 +1612,17 @@ static void ysig__det_arm(ysig_graph* g, int i, int64_t t) {
     s->armed = 1;
     s->t_arm = t;
     s->state = r;
-    if (n->kns[0] > 0) {
-        /* a hold counts from the arm when the test is true then */
+    if (n->kns[0] > 0 && n->p[12] == 0) {
+        /* a hold counts from the arm when the test is true then (entry
+         * arm, the default: a hand on the start at a trial's start) */
         s->ready = 1;
         s->holding = r;
         s->t_start = t;
         s->v_start = *v;
+    } else if (n->kns[0] > 0) {
+        /* entry fresh: true at the arm waits for a fresh entry */
+        s->ready = !r;
+        s->holding = 0;
     } else {
         /* past the test at arm: held until it re-arms (CROSSINGS) */
         s->ready = !r;
@@ -1538,8 +1634,8 @@ static void ysig__det_arm(ysig_graph* g, int i, int64_t t) {
 static int ysig__det_hold_done(ysig_graph* g, int i, int64_t t) {
     ysig__nd* n = &g->nd[i];
     ysig__det_st* s = (ysig__det_st*)n->st;
-    if (!s->holding || t < s->t_start + n->kns[0]) return 0;
-    ysig__hit(g, i, s->t_start + n->kns[0], t, &s->v_start);
+    if (!s->holding || t < ysig__add(s->t_start, n->kns[0])) return 0;
+    ysig__hit(g, i, ysig__add(s->t_start, n->kns[0]), t, &s->v_start);
     s->holding = 0;
     s->ready = 0;
     if (n->p[7] == 0) { s->armed = 0; return 1; }
@@ -1590,6 +1686,8 @@ static void ysig__emit(ysig_graph* g, int i, const ysig_value* v) {
     ysig__nd* n = &g->nd[i];
     yin_event* e;
     int k;
+    ysig__digest(g, &i, sizeof i);
+    ysig__digest_value(g, v);
     if (g->n_der >= YSIG_QUEUE_CAP) { g->st.derived_lost++; return; }
     e = &g->derq[g->n_der++];
     memset(e, 0, sizeof *e);
@@ -1599,6 +1697,7 @@ static void ysig__emit(ysig_graph* g, int i, const ysig_value* v) {
     e->device = (uint32_t)i;
     e->control = (uint32_t)n->p[1];
     e->stamp = v->tier;
+    e->unc_us = v->unc_us;
     e->code = (uint32_t)v->src | ((uint32_t)v->src_oldest << 16);
     for (k = 0; k < v->lanes && k < 4; k++) {
         float f = (float)v->v[k];
@@ -1676,12 +1775,12 @@ static double ysig__gauss(uint64_t* s) {
  * bisection (the ring is in time order). A linear scan from the newest cost
  * 73% of a 32-node graph's time at 16 kHz into one node (docs/sig.md). */
 static const ysig_value* ysig__lagged(const ysig__ring* r, int64_t t, int64_t lag) {
-    int f = ysig__ring_find(r, t - lag);
+    int f = ysig__ring_find(r, ysig__sub(t, lag));
     return f < 0 ? NULL : ysig__ring_at(r, f);
 }
 
 static void ysig__velocity_out(const ysig__nd* n, const ysig_value* x, const ysig_value* q, int64_t t, ysig_value* o) {
-    double dt = (double)(t - q->t) / 1e9;
+    double dt = (double)ysig__sub(t, q->t) / 1e9;
     int k;
     if (n->op == YSIG_OP_SPEED) {
         double s = 0;
@@ -1704,7 +1803,11 @@ static void ysig__run(ysig_graph* g, int i, int mode, int64_t t) {
         switch (n->op) {
         case YSIG_OP_BIND:
             if (mode == 1)
-                for (k = 0; k < x->lanes; k++) g->channels[(int)n->p[0] + k] = (float)x->v[k];
+                for (k = 0; k < x->lanes; k++) {
+                    float c = (float)x->v[k];
+                    g->channels[(int)n->p[0] + k] = c;
+                    ysig__digest(g, &c, sizeof c);
+                }
             break;
         case YSIG_OP_RECORD:
             if (mode == 0 && n->p[0] == 0) ysig__row_out(g, i, 0, x);
@@ -1718,9 +1821,11 @@ static void ysig__run(ysig_graph* g, int i, int mode, int64_t t) {
             if (mode == 1) {
                 int at_frame = n->p[5] == 1, view = (g->nd[n->in[0]].flags & YSIG__F_FRAME) != 0;
                 if (at_frame || view) {
+                    /* a frame-rate test is at the onset; a sample-rate one
+                     * on a view, at the view's time (the poll at most) */
                     ysig_value v = *x;
-                    v.t = t;
-                    ysig__det_value(g, i, &v, t);
+                    if (at_frame) v.t = t;
+                    ysig__det_value(g, i, &v, v.t);
                 } else {
                     ysig__det_frame(g, i, t);
                 }
@@ -1739,10 +1844,18 @@ static void ysig__run(ysig_graph* g, int i, int mode, int64_t t) {
                 if (n->vt->reset) n->vt->reset(n->st, n->p, t);
                 for (k = 0; k < n->lanes; k++) o->v[k] = 0;
             } else {
-                n->vt->sample(n->st, n->p, in[0], n->n_in, o);
+                /* the op takes its inputs as one array: gathered, since
+                 * the nodes need not be neighbors in val[] */
+                ysig_value iv[4];
+                for (j = 0; j < n->n_in; j++) iv[j] = *in[j];
+                n->vt->sample(n->st, n->p, iv, n->n_in, o);
             }
         } else {
-            if (mode == 2) { if (n->vt->reset) n->vt->reset(n->st, n->p, t); o->t = o->t_oldest = t; }
+            if (mode == 2) {
+                if (n->vt->reset) n->vt->reset(n->st, n->p, t);
+                for (k = 0; k < n->lanes; k++) o->v[k] = 0;
+                o->t = o->t_oldest = t;
+            }
             else if (mode == 1) {
                 o->t = o->t_oldest = t;
                 o->tier = YIN_TIER_SIM;
@@ -1751,7 +1864,7 @@ static void ysig__run(ysig_graph* g, int i, int mode, int64_t t) {
             }
         }
         o->lanes = n->lanes;
-        ysig__hist_push(g, n, o);
+        if (mode != 1 || (n->flags & YSIG__F_NOSRC)) ysig__hist_push(g, n, o);
         return;
     }
     switch (n->op) {
@@ -1777,16 +1890,17 @@ static void ysig__run(ysig_graph* g, int i, int mode, int64_t t) {
                 o->v[k] = ysig__counts_axis(&s->n[k], n->p[4 + k], ysig__gain(n, k), n->p[8 + k], n->p[12 + k], dc);
             }
         } else {
-            /* rate: the held input over the time since the last value */
-            int64_t now = mode == 1 ? t : x->t;
-            double dt = s->has && now > s->t_prev ? (double)(now - s->t_prev) / 1e9 : 0;
+            /* rate: the held input over the time since the last value; a
+             * view runs only to the time input is known (t_known) */
+            int64_t now = mode == 1 ? g->t_known : x->t;
+            double dt = s->has && now > s->t_prev ? (double)ysig__sub(now, s->t_prev) / 1e9 : 0;
             for (k = 0; k < n->lanes; k++) {
                 double v = ysig__bound(n, k, s->acc[k] + ysig__gain(n, k) * s->x[k] * dt);
                 o->v[k] = v;
                 if (mode == 0) { s->acc[k] = v; s->x[k] = x->v[k]; }
             }
             if (mode == 0) { s->t_prev = now > s->t_prev || !s->has ? now : s->t_prev; s->has = 1; }
-            else o->t = t;
+            else o->t = now > o->t ? now : o->t;
         }
         break;
     }
@@ -1808,8 +1922,8 @@ static void ysig__run(ysig_graph* g, int i, int mode, int64_t t) {
             break;
         }
         {
-            int64_t now = mode == 1 ? t : x->t;
-            double dt = now > s->t_prev ? (double)(now - s->t_prev) / 1e9 : 0;
+            int64_t now = mode == 1 ? g->t_known : x->t;
+            double dt = now > s->t_prev ? (double)ysig__sub(now, s->t_prev) / 1e9 : 0;
             double a = 1 - exp(-2 * YSIG__PI * n->p[0] * dt);
             for (k = 0; k < n->lanes; k++) {
                 double y1 = s->y1[k] + a * (x->v[k] - s->y1[k]);
@@ -1818,7 +1932,7 @@ static void ysig__run(ysig_graph* g, int i, int mode, int64_t t) {
                 if (mode == 0) { s->y1[k] = y1; s->y2[k] = y2; }
             }
             if (mode == 0 && now > s->t_prev) s->t_prev = now;
-            if (mode == 1) o->t = t;
+            if (mode == 1 && now > o->t) o->t = now;
         }
         break;
     }
@@ -1837,23 +1951,27 @@ static void ysig__run(ysig_graph* g, int i, int mode, int64_t t) {
             /* kept in time order: a value older than the newest (two
              * sources out of order) is used, not kept */
             if (!r->n || x->t >= ysig__ring_at(r, r->n - 1)->t) {
-                if (r->n == r->cap && x->t - ysig__ring_at(r, 0)->t < n->kns[0]) g->st.ring_short++;
+                if (r->n == r->cap && ysig__sub(x->t, ysig__ring_at(r, 0)->t) < n->kns[0]) g->st.ring_short++;
                 ysig__ring_push(r, x);
             }
             q = ysig__lagged(r, x->t, n->kns[0]);
             if (q) ysig__velocity_out(n, x, q, x->t, o);
         } else {
-            if (t <= x->t) break;
-            q = ysig__lagged(r, t, n->kns[0]);
-            if (q) ysig__velocity_out(n, x, q, t, o);
-            o->t = t;
+            /* at a frame: still only when the input was silent for the
+             * lag up to the time input is known (the poll), never from the
+             * gap to a planned onset; then the difference over the lag is
+             * 0. Otherwise the last sample's value stands. */
+            int64_t last = r->n ? ysig__ring_at(r, r->n - 1)->t : x->t;
+            if (ysig__sub(g->t_known, last) < n->kns[0]) break;
+            for (k = 0; k < n->lanes; k++) o->v[k] = 0;
+            o->t = g->t_known;
         }
         break;
     }
     case YSIG_OP_DELAY: {
         ysig__ring* r = (ysig__ring*)n->st;
         const ysig_value* x = in[0];
-        int64_t now = mode == 1 ? t : x->t;
+        int64_t want = ysig__sub(mode == 1 ? t : x->t, n->kns[0]);
         int f;
         if (mode == 2) {
             r->n = r->head = 0;
@@ -1862,7 +1980,9 @@ static void ysig__run(ysig_graph* g, int i, int mode, int64_t t) {
             break;
         }
         if (mode == 0 && (!r->n || x->t >= ysig__ring_at(r, r->n - 1)->t)) ysig__ring_push(r, x);
-        f = ysig__ring_find(r, now - n->kns[0]);
+        /* a view reads no later than the time input is known */
+        if (mode == 1 && want > g->t_known) want = g->t_known;
+        f = ysig__ring_find(r, want);
         if (f < 0) {
             if (r->n == r->cap) g->st.ring_short++;
             f = 0;
@@ -1899,7 +2019,7 @@ static void ysig__run(ysig_graph* g, int i, int mode, int64_t t) {
         if (mode == 1) {
             double sd = n->p[1] != 0 ? n->p[1] : 1, a = 1;
             if (n->p[2] > 0 && s->init) {
-                double dt = t > s->t_prev ? (double)(t - s->t_prev) / 1e9 : 0;
+                double dt = t > s->t_prev ? (double)ysig__sub(t, s->t_prev) / 1e9 : 0;
                 a = 1 - exp(-2 * YSIG__PI * n->p[2] * dt);
             }
             for (k = 0; k < n->lanes; k++) {
@@ -1931,7 +2051,9 @@ static void ysig__run(ysig_graph* g, int i, int mode, int64_t t) {
         break;
     }
     o->lanes = n->lanes;
-    ysig__hist_push(g, n, o);
+    /* rings hold values at sample times: a frame's value (a view at the
+     * onset) would make the samples after it look late */
+    if (mode != 1 || (n->flags & YSIG__F_NOSRC)) ysig__hist_push(g, n, o);
 }
 
 /* --- API ------------------------------------------------------------------- */
@@ -1950,17 +2072,19 @@ static void ysig__gen_meta(ysig_value* o, int i, int64_t t) {
 static void ysig__reset(ysig_graph* g, int64_t t) {
     int k;
     g->n_hit = g->n_der = 0;
+    g->t_fed = t;
     for (k = 0; k < g->n; k++) {
         int id = g->order[k];
         ysig__nd* n = &g->nd[id];
         ysig_value* o = &g->val[id];
         n->hist.n = n->hist.head = 0;
         if (n->op == YSIG_OP_SOURCE) {
+            /* no sample yet: no value, tier UNKNOWN, an empty ring */
             memset(n->st, 0, sizeof(ysig__src_st));
             memset(o, 0, sizeof *o);
             ysig__gen_meta(o, id, t);
+            o->tier = YIN_TIER_UNKNOWN;
             o->lanes = n->lanes;
-            ysig__hist_push(g, n, o);
             continue;
         }
         if (!(n->flags & YSIG__F_SINK) && !n->n_in) ysig__gen_meta(o, id, t);
@@ -1986,6 +2110,10 @@ YSIG_API bool ysig_open(ysig_graph* g, const ysig_desc* d) {
     memset(g, 0, sizeof *g);
     if (!ysig__analyze(d, &a, g->err, sizeof g->err)) return false;
     need = ysig__layout(d, &a, NULL, NULL);
+    if (!need) {
+        snprintf(g->err, sizeof g->err, "ysig_open: the graph needs more memory than size_t can count");
+        return false;
+    }
     if (!d->arena || d->arena_size < need) {
         snprintf(g->err, sizeof g->err, "ysig_open: the arena has %lu bytes; the graph needs %lu (ysig_arena_size())",
                  (unsigned long)d->arena_size, (unsigned long)need);
@@ -2055,7 +2183,12 @@ static bool ysig__set_ok(const ysig_graph* g, const ysig__nd* n, int param, doub
     q[param] = v;
     switch (n->op) {
     case YSIG_OP_ROLE: return false;
-    case YSIG_OP_SOURCE: return param != 3;   /* the lanes */
+    case YSIG_OP_SOURCE: return param != 3 && param != 0 && param != 1;   /* the lanes; integrate's counts mode */
+    case YSIG_OP_MEAN: {
+        double ws = 0;
+        for (k = 0; k < n->n_in; k++) ws += q[k] != 0 ? q[k] : 1;
+        return ws != 0;
+    }
     case YSIG_OP_VELOCITY: case YSIG_OP_SPEED: case YSIG_OP_DELAY: return param != 1;
     case YSIG_OP_SINES: return param != 0;
     case YSIG_OP_RECORD: return false;
@@ -2132,6 +2265,9 @@ YSIG_API int ysig_feed(ysig_graph* g, const yin_event* e) {
         int L = n->lanes, at = 0;
         float f[4];
         if (!ysig__source_takes(n, e)) continue;
+        /* the newest time a source saw is the default poll
+         * (ysig_frame_in.poll_ns); only those events are journaled */
+        if (e->t > g->t_fed) g->t_fed = e->t;
         if (!journaled && g->journal) {
             ysig_entry j;
             memset(&j, 0, sizeof j);
@@ -2140,11 +2276,23 @@ YSIG_API int ysig_feed(ysig_graph* g, const yin_event* e) {
             ysig__journal(g, &j);
             journaled = 1;
         }
-        /* within one source times rise (ysp/input.h); an older one is
-         * counted and dropped */
-        if (s->has && e->t < s->last_t) { g->st.dropped_order++; continue; }
-        s->has = 1;
-        s->last_t = e->t;
+        /* within one device of a source times rise (ysp/input.h); an older
+         * sample is counted and dropped. Raw mouse counts are never
+         * dropped: a sum does not depend on the order of its terms. */
+        {
+            int d, counts = n->p[0] == YIN_KIND_MOUSE && (uint32_t)n->p[1] == YIN_AXIS_DELTA;
+            for (d = 0; d < s->n && s->dev[d] != e->device; d++) { }
+            if (d == s->n) {
+                if (s->n < YSIG__SRC_DEVS) d = s->n++;
+                else { d = s->next; s->next = (s->next + 1) % YSIG__SRC_DEVS; }
+                s->dev[d] = e->device;
+                s->last_t[d] = e->t;
+            } else if (e->t < s->last_t[d] && !counts) {
+                g->st.dropped_order++;
+                continue;
+            }
+            if (e->t > s->last_t[d]) s->last_t[d] = e->t;
+        }
         f[0] = e->x; f[1] = e->y; f[2] = e->value; f[3] = e->aux;
         if (!m) {
             if (L == 1) o->v[0] = (double)e->value;
@@ -2157,9 +2305,16 @@ YSIG_API int ysig_feed(ysig_graph* g, const yin_event* e) {
         o->device = e->device;
         o->tier = e->stamp ? e->stamp : (uint8_t)n->p[4];
         o->src = o->src_oldest = (uint16_t)id;
+        o->unc_us = e->unc_us;
         o->lanes = (uint8_t)L;
         ysig__hist_push(g, n, o);
+        g->arr_on = 1;
+        g->arr_t = e->t;
+        g->arr_dev = e->device;
+        g->arr_src = (uint16_t)id;
+        g->arr_unc = e->unc_us;
         for (k = g->src_off[i]; k < g->src_off[i + 1]; k++) ysig__run(g, g->sched[k], 0, e->t);
+        g->arr_on = 0;
         taken++;
     }
     g->st.taken += taken;
@@ -2179,6 +2334,11 @@ YSIG_API int ysig_frame(ysig_graph* g, const ysig_frame_in* f) {
     g->base = f->base_ns;
     g->fvals = f->values;
     g->n_fvals = f->n_values;
+    /* views use input up to the poll, never the gap to a planned onset */
+    g->t_known = f->poll_ns ? f->poll_ns : g->t_fed;
+    if (g->t_known > f->onset_ns) g->t_known = f->onset_ns;
+    ysig__digest(g, &f->index, sizeof f->index);
+    ysig__digest(g, &f->onset_ns, sizeof f->onset_ns);
     for (k = 0; k < g->n_frame; k++) ysig__run(g, g->frame[k], 1, f->onset_ns);
     g->fvals = NULL;
     g->n_fvals = 0;

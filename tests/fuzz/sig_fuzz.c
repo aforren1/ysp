@@ -169,10 +169,12 @@ static void run_one(const uint8_t* data, size_t size) {
             memset(&e, 0, sizeof e);
             t += (int64_t)(rb(&r) % 16) * 100000 - ((k & 0x80) ? 300000 : 0);
             e.t = t;
+            /* the ends of int64: the time arithmetic must saturate */
+            if ((k & 0x60) == 0x60) e.t = (k & 0x10) ? INT64_MAX - (int64_t)(k & 7) : INT64_MIN + (int64_t)(k & 7);
             e.kind = (uint8_t)(k % 9);
             e.type = (uint8_t)(1 + rb(&r) % 4);
             e.control = rb(&r) % 4;
-            e.device = rb(&r) % 4;
+            e.device = rb(&r) % 12;   /* more than a source's 8 device slots */
             e.x = (float)g_vals[rb(&r) % 29];
             e.y = (float)((int)rb(&r) - 128);
             e.value = (float)g_vals[rb(&r) % 29];
@@ -192,6 +194,11 @@ static void run_one(const uint8_t* data, size_t size) {
             f.base_ns = (int64_t)rb(&r) * 10000000 - 500000000;
             f.values = v;
             f.n_values = (int)(rb(&r) % 5);
+            {
+                unsigned pb = rb(&r);   /* the poll: unknown, before the onset, at it, or after */
+                f.poll_ns = pb % 4 == 0 ? 0 : pb % 4 == 1 ? t - (int64_t)pb * 100000 : pb % 4 == 2 ? t : t + 1000;
+                if (pb >= 250) { f.onset_ns = pb & 1 ? INT64_MAX : INT64_MIN + 1; f.poll_ns = f.onset_ns; }
+            }
             g_sink += ysig_frame(&g, &f);
             break;
         }

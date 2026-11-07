@@ -1386,6 +1386,10 @@ jobs:
           expect 0 "$bin/trial_visuomotor" --sim --pen --out "$RUNNER_TEMP/trial_visuomotor_pen.csv" --traj "$RUNNER_TEMP/trial_visuomotor_pen_trajectory.csv"
           expect 0 diff <(grep -v '^#' "$RUNNER_TEMP/trial_visuomotor.csv") <(grep -v '^#' "$RUNNER_TEMP/trial_visuomotor_pen.csv")
           expect 0 cmp "$RUNNER_TEMP/trial_visuomotor_trajectory.csv" "$RUNNER_TEMP/trial_visuomotor_pen_trajectory.csv"
+          # A trace of 280 rows a reach: the return's 300 rows must not fill it before the hold's end.
+          expect 0 "$bin/trial_visuomotor" --sim --trace-cap 280 --out "$RUNNER_TEMP/trial_visuomotor_cap.csv" --traj "$RUNNER_TEMP/trial_visuomotor_cap_trajectory.csv"
+          expect 0 cmp "$RUNNER_TEMP/trial_visuomotor_trajectory.csv" "$RUNNER_TEMP/trial_visuomotor_cap_trajectory.csv"
+          expect 2 "$bin/trial_visuomotor" --sim --trace-cap 10
           expect 0 "$bin/trial_copying" --sim --out "$RUNNER_TEMP/trial_copying.csv" --samples "$RUNNER_TEMP/trial_copying_samples.csv"
           expect 0 "$bin/trial_copying" --sim --input pen --out "$RUNNER_TEMP/trial_copying_pen.csv" --samples "$RUNNER_TEMP/trial_copying_pen_samples.csv"
           expect 0 "$bin/trial_copying" --sim --mode track --backward --input raw --out "$RUNNER_TEMP/trial_copying_track.csv" --samples "$RUNNER_TEMP/trial_copying_track_samples.csv"

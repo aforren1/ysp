@@ -85,11 +85,13 @@
  *
  * Usage: trial_visuomotor [--sim | --auto] [--sdl-mouse | --pen] [--schedule B,R,W] [--rotation DEG] [--gradual]
  *          [--endpoint-only] [--gain PX] [--cpi N] [--radius PX] [--onset-frac F] [--seed N] [--out FILE]
- *          [--traj FILE]
+ *          [--traj FILE] [--trace-cap N]
  *   --gain PX        px per count (default 0.25: about 2.7 cm of hand travel
  *                    to a 269 px target at 1000 CPI)
  *   --onset-frac F   movement onset as a fraction of the radius, 0 < F < 1/3
  *                    (default 0.1)
+ *   --trace-cap N    trajectory rows kept per reach, 64..16384 (default 16384;
+ *                    rows past it are counted, and --sim fails)
  * Exit code: 0 (also after Shift+Esc), 1 when something did not open or a
  * check failed, 2 for a bad argument.
  */
@@ -173,7 +175,7 @@ static float sig_ch[N_SIG_CH];
 /* The record node's rows, the hand and the cursor per sample (px) */
 typedef struct trace_row { int64_t t; float hx, hy, cx, cy; } trace_row;
 static trace_row trace[TRACE_CAP];
-static int n_trace, n_trace_lost;
+static int n_trace, n_trace_lost, trace_cap = TRACE_CAP;   /* --trace-cap: rows a reach keeps */
 static uint64_t table_arena[1024];
 static ytb_table tab;
 static yrsp_result res;
@@ -224,11 +226,15 @@ static void arm(int64_t t) {
     n_trace = m;
 }
 
-/* The record node's rows: every hand sample, until the crossing. */
+/* The record node's rows: every hand sample from the hold's end to the
+ * crossing. Before the hold's end only the newest row is kept: the sample
+ * that ends the hold comes through the graph before arm() sees it, and the
+ * return's hundreds of rows must not fill the trace before the reach. */
 static void on_row(void* user, const ysig_row* r) {
     (void)user;
     if (phase == FEEDBACK) return;
-    if (n_trace == TRACE_CAP) { n_trace_lost++; return; }
+    if (phase != REACH) n_trace = 0;
+    if (n_trace == trace_cap) { n_trace_lost++; return; }
     trace[n_trace].t = r->value.t;
     trace[n_trace].hx = (float)r->value.v[0];
     trace[n_trace].hy = (float)r->value.v[1];
@@ -474,6 +480,7 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--seed") && i + 1 < argc) seed = (uint64_t)strtoull(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "--out") && i + 1 < argc) out_path = argv[++i];
         else if (!strcmp(argv[i], "--traj") && i + 1 < argc) traj_path = argv[++i];
+        else if (!strcmp(argv[i], "--trace-cap") && i + 1 < argc) trace_cap = atoi(argv[++i]);
         else {
             fprintf(stderr, "usage: trial_visuomotor [--sim | --auto] [--sdl-mouse | --pen] [--schedule B,R,W] [--rotation DEG] "
                             "[--gradual] [--endpoint-only] [--gain PX] [--cpi N] [--radius PX] [--onset-frac F] [--seed N] "
@@ -482,6 +489,10 @@ int main(int argc, char** argv) {
         }
     }
     raw = input == IN_RAW;
+    if (trace_cap < 64 || trace_cap > TRACE_CAP) {
+        fprintf(stderr, "trial_visuomotor: --trace-cap takes 64..%d\n", TRACE_CAP);
+        return 2;
+    }
     total = sched[0] + sched[1] + sched[2];
     if (sched[0] < 0 || sched[1] < 0 || sched[2] < 0 || total < N_TARGETS || total > MAX_TRIALS ||
         sched[0] % N_TARGETS || sched[1] % N_TARGETS || sched[2] % N_TARGETS) {
@@ -658,7 +669,7 @@ int main(int argc, char** argv) {
          * target goes on the first frame whose onset is at or after it, so
          * this is decided up to a frame early, and a hand that leaves in
          * that last frame counts as an early move, not as a broken hold */
-        ysig_frame(&sg, &(ysig_frame_in){ f.index, f.onset, 0, NULL, 0 });
+        ysig_frame(&sg, &(ysig_frame_in){ f.index, f.onset, 0, NULL, 0, sim || autorun ? f.onset : yrt_now_ns() });
         frame_hits();
         if (phase >= REACH && !target_seen) {   /* the target on this frame */
             ytl_seq q = ytl_seq_on(&tl, TRIAL);
@@ -819,6 +830,8 @@ int main(int argc, char** argv) {
     yscr_close(&scr);
     printf("%d trials written to %s, samples to %s%s\n", rows, out_path, traj_path,
            aborted ? " (stopped with Shift+Esc)" : "");
+    printf("trace rows lost (a reach longer than --trace-cap %d): %d\n", trace_cap, n_trace_lost);
+    if ((sim || autorun) && n_trace_lost) failed = 1;
 
     /* The learning curve: the mean endpoint hand angle per cycle of 8. */
     if (rows >= N_TARGETS) {

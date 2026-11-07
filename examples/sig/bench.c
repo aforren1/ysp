@@ -271,6 +271,7 @@ int main(int argc, char** argv) {
         fi.base_ns = f * P_NS;
         fi.values = &amp;
         fi.n_values = 1;
+        fi.poll_ns = onset;   /* the frame's samples run up to its onset */
         if (ysig_frame(&g, &fi) != 0) failed = 1;
         while (ysig_detected(&g, hits, 64) > 0) { }
         t3 = yrt_now_ns();
