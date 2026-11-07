@@ -333,6 +333,11 @@ decimal (a hand of 0.0094 cm, which was 0.0094 + 6e-5 off the count
 grid). The graph's values are the ones on the count grid. Both programs'
 own checks pass at both gains.
 
+`trial_bimanual --sim` (14 virtual minutes, about 1.7 million hand
+reports) took 424 to 426 ms of wall time on the Linux desktop's P-core,
+336 to 337 ms before the port (three runs each): about 50 ns a report
+for the graph over the hand-written arithmetic.
+
 The ports changed no column. Each prints its graph on stdout, not in the
 data file, so the files keep their bytes.
 

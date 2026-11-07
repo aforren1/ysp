@@ -118,8 +118,10 @@
  * count grid, fast or slow as scripted. Over a 10 ms lag the count grid
  * moves the direction up to 1.9 deg from the script's line; the hands'
  * reports 0.5 ms apart move it 0.055 deg. The default --sim (12 trials of
- * 46 s and 120 reaches, 14 virtual minutes) took 0.33 s of wall time on
- * the Linux desktop (Release, quiet), 0.73 s with a load average of 4.5.
+ * 46 s and 120 reaches, 14 virtual minutes) took 0.42 s of wall time on
+ * the Linux desktop (Release, quiet, one performance core), 0.34 s before
+ * the signal path: the graph's 1.7 million hand reports cost about 50 ns
+ * each more than the hand-written arithmetic.
  * --auto: the same script in a window, checks (1) and (3) and the reaches.
  *
  * Usage: trial_bimanual [--sim | --auto] [--mapping split|mean] [--perturb rotation|mirror] [--rotation DEG]
