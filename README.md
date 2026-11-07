@@ -23,6 +23,7 @@ C11 or C++17, and its top comment is its manual.
 | [timeline](docs/timeline.md) | `ytl_` | Events, tracks and keyframes on the clock | 0.8.1 | tested |
 | [input](docs/input.md) | `yin_` | The input event that every device shares | 0.7.0 | 3 machines |
 | [response](docs/response.md) | `yrsp_` | Trial responses and RT from any input device | 0.8.1 | 1 machine |
+| [sig](docs/sig.md) | `ysig_` | Signal path: continuous input to stimulus channels, detectors and records through a fixed graph | 0.1.0 | tested |
 | [box](docs/box.md) | `ybox_` | Response and trigger box protocols, bytes to events | 0.3.1 | no device |
 | [device](docs/device.md) | `ydev_` | Boxes and boards on the rig clock, with outputs and response rules | 0.5.2 | 3 machines |
 | [rigfile](docs/device.md#how-to-keep-a-rigs-devices-and-latencies-in-its-rig-profile) | `yrig_` | Rig profile: devices per role, loopback results, viewing geometry | 0.5.2 | no device |

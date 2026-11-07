@@ -59,7 +59,7 @@ result in this page is functional.
 | device | Windows 11, i7-1360P, 2026-10-12: host-timed outputs (the TriggerBox byte path, DTR, RTS) into a Teensy 4.0 echo board over native USB CDC (usbser); width error -65 to -16 us median. M2 Mac mini, macOS 27.0.1, 2026-11-05: the same outputs into the same board on `AppleUSBACMData`; width error -37 to -19 us median, p99 at most +12 us. Linux desktop, i5-14500, 2026-10-12: the same outputs into the same board on `cdc_acm`; width error -1.0 to +0.1 us median, p99 within +39 us | Inputs from a real board; every vendor box, the line board, the parallel port; FTDI bridges | docs/device.md, "Host-timed pulses on a Teensy 4.0" and "Host-timed pulses on Linux (v0.5.2)" |
 | rigfile | none | Binds through a fake transport | docs/device.md |
 | color | not applicable (pure computation) | No number is a measurement of light | color.h; docs/color.md |
-| stair, quest, aep, trials, table, json, pack, timeline, rdk, outline | not applicable (pure computation) | | |
+| stair, quest, aep, trials, table, json, pack, timeline, rdk, outline, sig | not applicable (pure computation) | | |
 | dataset | not applicable (files only): NTFS on Windows 11, ext4 on WSL2, APFS on macOS 27.0.1, Emscripten's in-memory file system | A power cut | docs/dataset.md |
 
 ## Files to copy
@@ -80,6 +80,7 @@ unless your file already did.
 | parallel | rt.h | parallel.h, rt.h | InpOut driver on Windows |
 | serial | rt.h | serial.h, rt.h | none |
 | response | input.h | response.h, input.h | none |
+| sig | input.h | sig.h, input.h | none |
 | box | input.h | box.h, input.h | none |
 | device | rt.h, input.h, box.h, serial.h | device.h, rt.h, input.h, box.h, serial.h (+ parallel.h for `YBOX_PARALLEL`) | none |
 | rigfile | device.h, json.h | rigfile.h, json.h, device.h, rt.h, input.h, box.h, serial.h | none |
@@ -358,6 +359,19 @@ Status:
 - v0.1.4: ALL mode excludes SYNC events.
 - v0.1.3: the event moved to ysp/input.h. Every rule checked on synthetic streams (20,576 checks, 20,000 random streams); 43 of 43 mutations caught; gcc, MinGW, MSVC. `examples/response/` has ten trials as small experiments (keyboard, same-different, serial RT, adjustment, mouse tracking, audio-keyboard, stop-signal, two keyboards, a 2AFC staircase and QUEST+, Stroop), each with a self-checking `--sim` run; what they show about the header is in the design notes. Not measured: a key pressed by hand, mouse, touch, pen and gamepad timing. [Tutorial, how-to guides and design notes](response.md).
 - Bindings: `ysp-response` 0.7.0 (Python) and the MEX `ysp_response`: the collector, the shared input event, an offline rescore and the data columns, every time in seconds with the exact ns beside the absolute times; feeding an event allocates nothing. [Bindings](response.md#bindings).
+
+### ysp/sig.h
+
+- Header: [ysp/sig.h](../include/ysp/sig.h)
+- Prefix: `ysig_`, `YSIG_`
+- Platforms: any
+- Needs: ysp/input.h
+
+Purpose: The signal path ([signal_spec.md](signal_spec.md)): a small graph, fixed at open and checked before a session, from input sources (raw mouse counts, positions, pen, gamepad, eye, box lines) through per-sample transforms (an exact int64 count sum, low-pass, velocity, speed, delay, deadzone), maps (affine with a rotation input, scale, offset, clamp) and combinations (select, join, sum, mean, diff) to stimulus channels (`bind`), detectors with holds (`detect`), derived events for the response collector (`emit`) and records; generators (sines at the frame's base time, noise, timeline channels). Every value carries its newest and oldest input time and the worst stamp tier of its inputs. Roles and adapters: one task graph reads a typed, unit-tagged role, and the rig's adapter makes it from a device, checked at open. Custom ops through a vtable. A journal replays a run bit for bit. No heap, no I/O, no clock: the caller's arena.
+
+Status:
+
+- v0.1.0 (2026-11-07): `trial_visuomotor` and `trial_bimanual` run on it; their CI `--sim` data files are byte-identical to before (20 files); `trial_visuomotor --sim --pen` runs the same task graph through a tablet adapter and gives the raw mouse run's rows. Measured on the Linux desktop (i5-14500, GCC 12.2, Release): four raw mice at 8 kHz into 32 nodes, about 0.13 us a sample and 0.3 us a `ysig_frame()` at the median, no allocator call ([Cost](sig.md#cost)). `tests/adapt/sig_test.c`, the C and C++ compile checks, a fuzz target under ASan and UBSan, and 49 of 49 mutants killed. Not run: MSVC, macOS, a window, a real device. [Manual and design notes](sig.md).
 
 ### ysp/box.h
 

@@ -1,8 +1,10 @@
 # Continuous input: specification draft
 
-Status: draft for review, 2026-11-06. Nothing in this document is
-built. It proposes one header, called `ysp/sig.h` (prefix `ysig_`) here;
-the name is open (section 11). Read it with
+Status: draft for review, 2026-11-06. Steps 2 to 4 of section 13 (the C
+side) are built as `ysp/sig.h` v0.1.0 (prefix `ysig_`, 2026-11-07;
+[sig.md](sig.md) is its manual). Section 14 lists where the header
+differs from this draft and why; the sections below say so where they
+changed. Read it with
 [rig_spec.md](rig_spec.md) section 6 (the player),
 [experiment_format.md](experiment_format.md) D6 and D7 (no expression
 language; anything else is a script) and
@@ -279,20 +281,21 @@ Two rates:
 | | `delay` | n, n | s | a ring of the past samples, sized at open |
 | | `deadzone` | n, n | radius | for sticks |
 | | `rectify`, `envelope` | 1, 1 | cutoff Hz | EMG |
-| Map | `affine` | 2, 2 | 2x2 matrix, offset | gain, rotation, mirror, an error-clamp projection |
-| | `scale`, `offset` | n, n | per lane | |
+| Map | `affine` | 2 (+ 1, an angle), 2 | 2x2 matrix, center (pre), offset (post), angle | gain, rotation, mirror, an error-clamp projection; out = Rot(angle) M (in - center) + offset; built: the angle input is a timeline channel |
+| | `scale`, `offset` | n (+ 1, a factor), n | per lane | built: scale's second input multiplies every lane (a ramp channel) |
 | | `clamp` | n, n | low, high per lane | bounds on the drawn value, not the hand (F21) |
 | | `curve` | 1, 1 | a table of (in, out) points | monotone, piecewise linear |
 | | `units` | n, n | from, to (counts, px, cm, deg) | through the rig profile's `view` and the device's CPI |
 | Combine | `select` | n, m | lane list | "x of the left mouse" |
-| | `join` | 1 + 1, 2 | none | two scalars into a vector |
+| | `join` | 1 to 4 inputs, their lanes (at most 4) | none | two scalars into a vector; built for any lanes (a hand and a cursor into one record) |
 | | `sum`, `mean`, `diff` | k x n, n | weights | the cursor of two hands; a tracking error |
 | Generator | `sines` | 0, 1 to 2 | amplitudes, frequencies, phases, ramp s | a tracking target (Yang, Cowan and Haith 2021) |
 | | `noise` | 0, n | seed, cutoff Hz | seeded per trial (D8) |
 | | `channel` | 0, 1 | timeline channel | a timeline value into the graph (a ramp, a gain set per trial) |
 | Sink | `bind` | n, 0 | stimulus property per lane | writes the channel `ygfx_apply()` reads |
-| | `detect` | n, 0 | test, level, hold s | section 7 |
+| | `detect` | n, 1 | test, level, hysteresis, hold s, sample or frame rate, armed at reset or by a call, once or every | section 7; built with one output lane, the test's state, for a color while the cursor is inside |
 | | `record` | n, 0 | stream name, `sample` or `frame` | section 8 |
+| | `emit` | n, 0 | kind, control | built: section 7's way (a), a derived `yin_event` per update |
 
 Every op has a parameter table in the shared row shape
 (`ytl_op_params()`, `ygfx_params()`), so the designer and the bindings
@@ -409,8 +412,10 @@ definition:
 
 Unit spaces: `workspace_cm` (the plane the hand moves in, origin and axes
 from the rig's calibration), `display_cm` and `display_deg` (from the
-profile's `view` block), `device` (no conversion; the definition then
-depends on the device and says so).
+profile's `view` block), `display_px` (window pixels; added in ysp/sig.h
+because the examples' tasks are designed in pixels, and a role in pixels
+keeps their data files byte-identical), `device` (no conversion; the
+definition then depends on the device and says so).
 
 **An adapter** is a subgraph in the rig profile (devices_spec section
 11.2) that ends in the role's value, in the role's type and units:
@@ -478,7 +483,14 @@ arrival order. Within one source they rise. So:
 A sink reads the held value of its input as of the frame's onset: the
 result of the last sample with `t <= onset`. The frame loop polls input
 before it reads (D10). With a flip record, the onset is the record's;
-before it arrives, the plan's.
+before it arrives, the plan's. As built: `ysig_frame()` reads held values
+(the caller feeds the frame's input first), and the record's onset, which
+arrives a frame later, is read with `ysig_value_at()` from rings a node
+keeps on request; a stateless node after two sources is computed from its
+inputs' rings, so a late report of one source is placed by its time.
+Velocity, speed, delay, low-pass and rate integration give their value at
+the onset from the held input without changing their state: a still mouse
+sends nothing, and its speed must still fall to 0.
 
 **Prediction** is a per-sink option, off by default: extrapolate the
 value from its last samples to the onset with a stated horizon and
@@ -498,7 +510,10 @@ channel of F22 and makes `ytl_set_fn()` unnecessary in `ysp/timeline.h`.
 At a trial's start the program calls `ysig_reset()`: integrators go to
 their origins, filters to their first sample, delays empty. Parameters
 the trial sets (a rotation per block, a gain per condition) apply at the
-reset. A source keeps its device across trials.
+reset. A source keeps its device across trials. As built: `ysig_set()`
+takes effect at once and keeps the state, because a center-out task keeps
+its hand across trials (the hand returns to the start; a reset would move
+it there); a parameter that sizes the arena or a schedule is refused.
 
 ## 7. Detectors and ysp/response.h
 
@@ -538,10 +553,28 @@ today. Section 11 keeps this open.
 - `ysig_replay()` runs the graph on the recorded source rows with the
   definition's parameters and seeds, and gives the same values bit for
   bit. The player's verify step and the examples' `--sim` checks use it.
+  As built: it runs a journal of every call that changed the graph
+  (resets, sets, arms, the events a source took or dropped, the frames
+  with their channel values), and gives the same rows, hits and digest
+  on the same build. Across builds, libm and fused multiply-adds can
+  change a last bit ([rdk.md](rdk.md)).
+- As built, a record row goes to a callback (`desc.on_row`): the header
+  does no I/O, and the program writes the row (to `yds_stream()` or its
+  own file).
 - A run also writes the graph's definition and a digest of every
   recorded node, as an `rdk` stimulus writes `<name>_digest`.
 
 ## 9. C API, sketch
+
+As built (ysp/sig.h v0.1.0), the sketch below changed: `ysig_node` has a
+`history` (past values kept for `ysig_value_at()`) and a `data` array
+(sines' components do not fit in 16 parameters); `ysig_check()` and
+`ysig_arena_size()` take the whole desc (roles, adapters, custom ops and
+the channel count are part of the check and the size); `ysig_frame()`
+takes a `ysig_frame_in` (index, onset, base time, the timeline's values)
+instead of a `yscr_frame`, so the header needs `ysp/input.h` only; and
+`ysig_value_at()`, `ysig_derived()`, `ysig_arm()`, `ysig_set_data()` and
+`ysig_replay()` are added.
 
 ```c
 typedef struct ysig_node {
@@ -579,7 +612,9 @@ const ysig_param* ysig_op_params(int op, int* n);
 - Cost: to measure before the API is fixed. The budget is the project's
   rule that a trial's frame work fits in one 16 ms frame. The test is four
   raw mice at 8 kHz each and 32 nodes, on the Linux desktop and the
-  Windows development machine, with Tracy zones per op.
+  Windows development machine, with Tracy zones per op. Measured on the
+  Linux desktop: [sig.md](sig.md), "Cost" (no Tracy zones yet; the
+  Windows machine not run).
 
 ## 10. Experiment definition
 
@@ -601,6 +636,14 @@ graph is data. The four worked examples of experiment_format.md section
 2.14 do not change.
 
 ## 11. Open questions
+
+Decided for the build of 2026-11-07: the name `ysp/sig.h`; detectors both
+ways ((b) `detect` sinks for flow events, (a) an `emit` node's derived
+events for responses, without a new flag: section 14); 4 lanes, `pose`
+left out; prediction left out; roles and adapters on the C side, the rig
+profile's block not built; the stream sample's struct defined, not read;
+custom ops through a vtable. The questions below stay open where they
+were not decided.
 
 - **The name.** `ysp/sig.h` avoids the standard `<signal.h>`; "control"
   is already the axis field of `yin_event`.
@@ -653,6 +696,10 @@ graph is data. The four worked examples of experiment_format.md section
 
 ## 13. Order of work
 
+Steps 2 to 4 are built on the C side (ysp/sig.h v0.1.0): step 4 without
+the rig profile's adapter block, with a mouse and a tablet adapter in
+`trial_visuomotor` (`--pen`).
+
 1. Settle section 11's detector question and the name.
 2. The header with sources, `integrate`, `affine`, `select`, `join`,
    `bind` and `record`; rewrite `trial_visuomotor` on it.
@@ -664,3 +711,25 @@ graph is data. The four worked examples of experiment_format.md section
 6. The stream sample and a motion-capture adapter with its calibration
    procedure, on a rig with a tracker.
 7. Eye tracker and gamepad sources with a device on a rig.
+
+## 14. As built: ysp/sig.h v0.1.0
+
+Where the header differs from the sections above, and why. Each was
+needed by a ported example or found by a measurement.
+
+| Section | Draft | Built | Why |
+|---|---|---|---|
+| 5.2 | `join` takes 1 + 1 | 1 to 4 inputs of any lanes, at most 4 out | `trial_visuomotor` records the hand and the cursor as one row |
+| 5.2 | `detect` has no output | One lane, the test's state | `trial_bimanual`'s target is yellow while the cursor is inside: a state, not an event |
+| 5.2, 7 | Way (a) needs `YIN_DERIVED` | An `emit` node; kind USER + p0, device the node's index, code the sources of the newest and oldest input; no flag | The collector needs no flag; ysp/input.h is unchanged. The flag stays proposed ([sig.md](sig.md), "Not done") |
+| 5.2 | `affine` has a matrix and an offset | A center subtracted first (pre), an offset added after (post), an angle in degrees, and an optional angle input | A rotation about the start; the angle input is principle 3's mid-trial rotation |
+| 5.2 | `scale` per lane | A second input, a factor for every lane | The tracking target's ramp is a timeline tween: sines times a channel |
+| 5.2 | Parameters in 16 doubles | Also a data array per node, copied at open | 7 + 7 sines need 42 numbers |
+| 5.5 | Four unit spaces | `display_px` added | The examples are designed in window pixels |
+| 6.1 | The worse tier | SIM, 1, 2, 3, UNKNOWN from best to worst; a source's tier for stamp 0 is a parameter (the source table's) | ysp/input.h orders no tiers; an unmeasured stamp is the worst |
+| 6.2 | A sink reads at the onset | Held values at `ysig_frame()`; `ysig_value_at()` from rings for a later onset; views at the onset for velocity, speed, delay, low-pass, rate integration | The flip record comes a frame later (D10); a still mouse sends nothing |
+| 6.4 | Parameters apply at the reset | `ysig_set()` applies at once, state kept | A reach task keeps its hand across trials |
+| 8 | Replay from the source rows | A journal of every call; bit for bit on one build | Frames, channel values, arms and sets change values too |
+| 8 | Rows to `yds_stream()` | A callback | No I/O in the header |
+| 9 | `ysig_check(nodes, n)`, `ysig_arena_size(nodes, n)`, `ysig_frame(g, yscr_frame*, base)` | Both take the desc; `ysig_frame(g, ysig_frame_in*)` | Roles, adapters, custom ops and channels are part of the check and the size; ysp/input.h is the only dependency |
+

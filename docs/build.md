@@ -68,8 +68,8 @@ headers include, and the libraries an implementation file needs:
 - `ysp::methods` holds `ysp/stair.h`, `ysp/quest.h`, `ysp/aep.h`,
   `ysp/trials.h` and `ysp/dataset.h`, and links `ysp::core`.
 - `ysp::devices` holds `ysp/serial.h`, `ysp/parallel.h`, `ysp/input.h`,
-  `ysp/response.h`, `ysp/box.h`, `ysp/device.h`, `ysp/rigfile.h` and
-  `ysp/net.h`, and links `ysp::core`, `setupapi` on Windows and `libdl`
+  `ysp/response.h`, `ysp/sig.h`, `ysp/box.h`, `ysp/device.h`,
+  `ysp/rigfile.h` and `ysp/net.h`, and links `ysp::core`, `setupapi` on Windows and `libdl`
   (ysp/net.h loads liblsl).
 - `ysp::rig` holds `ysp/screen.h`, `ysp/gfx.h`, `ysp/color.h`,
   `ysp/outline.h`, `ysp/rdk.h`, `ysp/video.h` and `ysp/audio.h`, and links
