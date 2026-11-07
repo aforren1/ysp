@@ -21,7 +21,10 @@ from input sources, through per-sample transforms and maps, to stimulus
 properties, detectors and data streams. A cursor is one graph; a
 gaze-contingent mask is another. The graph is data, so the player can
 load it from the experiment definition, check it at load, run it
-without a script, and record it so that a run can be replayed.
+without a script, and record it so that a run can be replayed. The
+experiment's graph reads typed roles in physical units; the rig profile
+binds each role to a device through an adapter, so one definition runs
+with a mouse, a tablet or a motion-capture system (section 5.5).
 
 The signal path does not replace scripts. Task logic, physics with
 state, and stimuli placed from the participant's behavior stay with the
@@ -113,6 +116,57 @@ a run (here through a node's inputs). What it does not take, and why:
   fixed for a trial needs none of them, and only a fixed graph can be
   checked at load, stored in the definition and replayed.
 
+### 2.5 Prior art: Unity's Input System
+
+Unity's Input System package (manual for version 1.11) separates what a
+game wants from the device that gives it. Section 5.5 takes the same
+split. From the manual:
+
+- An **action** is what the game reads ("look", "move"). Its type is
+  `Value`, `Button` or `PassThrough`.
+- A **binding** connects an action to a control by a path, as
+  `"<Mouse>/delta"` or `"<Gamepad>/leftStick"`.
+- A **composite** "source[s] values from other Bindings ... and then
+  synthesize[s] input on the fly from those values": `2DVector` makes a
+  Vector2 from four keys.
+- A **processor** changes a value: Clamp, Invert, Normalize, Scale (each
+  also for Vector2 and Vector3), AxisDeadzone, StickDeadzone. "Processors
+  must be stateless." A processor goes on a binding, on an action or on
+  a control; the binding's runs first.
+- An **interaction** finds a pattern: Press, Hold, Tap, SlowTap and
+  MultiTap, with `duration` and `pressPoint`. Interactions can keep
+  state.
+- A **control scheme** groups the bindings for one kind of device
+  ("Keyboard&Mouse", "Gamepad"), so one action map serves both.
+
+| Unity | This draft |
+|---|---|
+| Action, with a type | Role, with a type and a unit (section 5.5) |
+| Binding path | An adapter's source node |
+| Composite | `join`, `select`, `sum`, `mean` |
+| Processor on a binding | A node in the rig's adapter |
+| Processor on an action | A node in the experiment's graph |
+| Interaction | `detect` |
+| Control scheme | An adapter in the rig profile |
+
+Where this draft differs, and why:
+
+- **State in the transforms.** Unity's processors are stateless, so an
+  integrator, a filter or a delay has no place in the chain. A
+  psychophysics rig needs all three, run on each sample.
+- **Units and calibration.** Unity's values are in device units: pixels,
+  or -1 to 1 for a stick. A role here has physical units, and the
+  rig's adapter gives them, so a threshold in cm means the same on every
+  device.
+- **Who binds.** In Unity the game's asset holds the bindings, and the
+  player can rebind them. Here the experiment declares roles and the rig
+  profile binds them, because a device's calibration belongs to the rig,
+  not to the experiment or the participant.
+- **Time.** Each value here keeps the time and tier of the sample that
+  made it (principle 1, principle 6). The Unity pages read for this
+  section do not say whether an action's value keeps each event's time;
+  they name three update modes (dynamic, fixed, manual).
+
 ## 3. Scope
 
 ### 3.1 In scope
@@ -129,6 +183,7 @@ values of other nodes.
 | Gaze | EYE, `YIN_EYE_GAZE` (x, y window pixels, value the pupil) | the tracker's rate |
 | A box's analog line, a force sensor, EMG | BOX or USER, the device's control | the device's rate |
 | A Lab Streaming Layer stream | the kind `ysp/net.h` gives it | the stream's rate |
+| A motion-capture marker (3D position, or position and orientation) | a stream sample (section 5.5), through LSL or an input-source extension | 120 to 240 Hz |
 
 Rates in this table are typical device rates, not measurements on a ysp
 rig.
@@ -326,6 +381,83 @@ typedef struct ysig_op_vtable {
   hash. A run whose module is missing does not start.
 - Replay needs the same module. The run's record has the module's hash.
 
+### 5.5 Roles, types and adapters
+
+Aim: one definition runs on a mouse rig and on a motion-capture rig.
+Only the rig profile changes.
+
+The graph has two parts:
+
+- **The experiment's part** reads roles. It holds the design: the
+  display gain, the rotation, the targets, the thresholds in cm, the
+  detectors and the records.
+- **The rig's part** is one adapter per role. It reads a device and
+  makes the role's value. It holds what the rig knows: the device, its
+  counts per inch or its size, a calibration, a filter.
+
+**A role** has a name, a type and a unit space, declared in the
+definition:
+
+| Type | Lanes | Meaning |
+|---|---|---|
+| `position2d` | x, y | an absolute position in the workspace plane |
+| `position2d_relative` | x, y | a position integrated from motion; lifting the device moves the hand without the cursor |
+| `position3d` | x, y, z | an absolute position in the workspace |
+| `pose` | position and orientation | a rigid body |
+| `scalar` | 1 | a force, a pressure, an EMG envelope |
+| `gaze` | x, y | a point of regard in the display plane |
+
+Unit spaces: `workspace_cm` (the plane the hand moves in, origin and axes
+from the rig's calibration), `display_cm` and `display_deg` (from the
+profile's `view` block), `device` (no conversion; the definition then
+depends on the device and says so).
+
+**An adapter** is a subgraph in the rig profile (devices_spec section
+11.2) that ends in the role's value, in the role's type and units:
+
+```
+# mouse rig: role "hand", position2d_relative, workspace_cm
+hand = scale(integrate(source(MOUSE, DELTA)), 2.54 / cpi)    # cpi from the profile
+
+# tablet rig: role "hand", position2d, workspace_cm
+hand = affine(source(PEN, POSITION), tablet_px_to_cm)        # from the tablet's size
+
+# motion-capture rig: role "hand", position2d, workspace_cm
+m    = source(stream "markers", marker 3)
+hand = lowpass(select(affine3(m, calibration), x, y), 30 Hz)  # calibration from the profile
+```
+
+The experiment's part of a visuomotor task is then the same on all
+three rigs:
+
+```
+cur = affine(scale(role("hand"), display_gain), rotation 30 deg about start)
+bind(cur -> cursor)              # display_cm to px through the view block
+detect(role("hand"), distance from start >= 1 cm) -> movement onset
+```
+
+Rules:
+
+- The loader refuses a run where an adapter's type or units differ from
+  the role's. A role of type `position2d` accepts a `position2d_relative`
+  adapter only when the definition allows it, because a relative device
+  needs a step that the task must design (move the cursor back to the
+  start without the hand; recenter).
+- A calibration is measured, not typed in: a procedure (touch known
+  points, fit an affine or a rigid transform) writes it to the profile
+  with its date, its residual in mm and the points it used, as the
+  `view` block is measured. A run records the calibration's hash.
+- The data records, per role: the adapter, the device and its identity,
+  the calibration's hash, and the raw samples in device units (for
+  replay). The derived columns are in the role's units, so the columns
+  of a mouse run and of a motion-capture run are the same.
+- A source with more values than `yin_event` holds (3D position,
+  orientation, many markers) comes as a **stream sample**: `t`, a
+  stream id, a sample index, the stamp's tier and N doubles, posted by
+  `ysp/net.h` or by an input-source extension (rig_spec section 12).
+  `yin_event` stays 48 bytes; its cache-line layout in ysp/screen.h's
+  input slot does not change.
+
 ## 6. Time
 
 ### 6.1 Order of samples
@@ -457,6 +589,12 @@ step takes `{"until": "detector name"}`, and a response choice takes
 `{"signal": "detector name"}` (section 7, way (a)). Parameters take
 `$variables`, set at the trial's reset.
 
+The definition's top level gains `roles`: name to type and unit space
+(section 5.5), for example `"hand": {"type": "position2d", "units":
+"workspace_cm"}`. The graph reads a role with `{"role": "hand"}`. The
+definition has no device nodes unless a role's units are `device`; the
+rig profile supplies the adapters.
+
 This is a change to D7 (the three-part template), so it is format
 version 2 (D12). It keeps "a data-only experiment has no script": a
 graph is data. The four worked examples of experiment_format.md section
@@ -468,12 +606,21 @@ graph is data. The four worked examples of experiment_format.md section
   is already the axis field of `yin_event`.
 - **Detectors: way (a), (b) or both** (section 7). (a) needs a
   `YIN_DERIVED` flag and a rule for the tier in `ysp/input.h`.
-- **Lanes.** Four lanes cover position, pressure and tilt. Is a 3D
-  motion-capture marker plus orientation (7 values) a source to plan
-  for now?
-- **Units.** Where a mouse's CPI and a tablet's size live: the rig
-  profile's device entry is the likely place (devices_spec 11.2), beside
-  the `view` block that gives degrees.
+- **Lanes.** Four lanes cover position, pressure and tilt. A `pose`
+  role (section 5.5) needs 7 (position and a quaternion): a wider value,
+  or a pose as two linked values?
+- **The rig profile's adapter block** (section 5.5). Its schema in
+  devices_spec section 11.2: the device, the adapter's nodes, the
+  counts per inch or the tablet's size, the calibration. The profile's
+  hash changes with it, as with the `view` block.
+- **The calibration procedure**: which points, which fit (affine or
+  rigid), the residual that fails it, and how often a rig repeats it.
+- **The role types.** Is the list in section 5.5 enough? A
+  `position2d_relative` role and the recentering it needs: does the
+  definition design the recentering step, or does the adapter give a
+  standard one?
+- **The stream sample** (section 5.5): its struct, its ring, and
+  whether `ysp/net.h`'s LSL inlets post it.
 - **Prediction** (section 6.2): which methods, and whether the designer
   shows the extra error it costs.
 - **Eye tracker latency.** A tracker with a device clock gets the clock
@@ -510,5 +657,10 @@ graph is data. The four worked examples of experiment_format.md section
 2. The header with sources, `integrate`, `affine`, `select`, `join`,
    `bind` and `record`; rewrite `trial_visuomotor` on it.
 3. Filters, `speed`, `detect`, `sines`; rewrite `trial_bimanual`.
-4. The loader in the player and format version 2.
-5. Eye tracker and gamepad sources with a device on a rig.
+4. Roles and adapters (section 5.5): the rig profile's adapter block,
+   a mouse and a tablet adapter, and `trial_visuomotor` run with each
+   from one definition.
+5. The loader in the player and format version 2.
+6. The stream sample and a motion-capture adapter with its calibration
+   procedure, on a rig with a tracker.
+7. Eye tracker and gamepad sources with a device on a rig.
