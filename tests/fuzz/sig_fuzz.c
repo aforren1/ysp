@@ -196,19 +196,20 @@ static void run_one(const uint8_t* data, size_t size) {
             f.values = v;
             f.n_values = (int)(rb(&r) % 5);
             {
-                /* the poll: zeroed or early (refused once input came), the
-                 * newest event (the least valid), the onset, past it */
+                /* the poll: none (refused with a view), 0 as a time, early,
+                 * the newest event, the onset, past it */
                 unsigned pb = rb(&r);
-                f.poll_ns = pb % 5 == 0 ? 0 : pb % 5 == 1 ? t - (int64_t)pb * 100000 : pb % 5 == 2 ? tfed
-                          : pb % 5 == 3 ? t : t + 1000;
-                if (pb >= 250) { f.onset_ns = pb & 1 ? INT64_MAX : INT64_MIN + 1; f.poll_ns = f.onset_ns; }
+                f.has_poll = pb % 6 != 0;
+                f.poll_ns = pb % 6 == 1 ? 0 : pb % 6 == 2 ? t - (int64_t)pb * 100000 : pb % 6 == 3 ? tfed
+                          : pb % 6 == 4 ? t : t + 1000;
+                if (pb >= 250) { f.onset_ns = pb & 1 ? INT64_MAX : INT64_MIN + 1; f.poll_ns = f.onset_ns; f.has_poll = true; }
             }
             {
                 /* frames never stop because of data: after any event
                  * (INT64_MAX and far-future stamps too) a frame with a
                  * poll runs, and every bind holds its input's value */
                 int rc = ysig_frame(&g, &f), b;
-                if (rc != (f.poll_ns == 0 && g.has_view ? -1 : 0)) {
+                if (rc != (!f.has_poll && g.has_view ? -1 : 0)) {
                     fprintf(stderr, "sig_fuzz: ysig_frame returned %d (poll %lld): %s\n", rc, (long long)f.poll_ns,
                             ysig_error(&g));
                     abort();

@@ -73,7 +73,7 @@ why.
 /* every frame, after yscr_begin() */
 while (yscr_poll(&scr, &ev, NULL))
     if (yscr_event_input(&scr, &ev, &in)) ysig_feed(&g, &in);
-ysig_frame(&g, &(ysig_frame_in){ f.index, f.onset, 0, NULL, 0, yrt_now_ns() });
+ysig_frame(&g, &(ysig_frame_in){ f.index, f.onset, 0, NULL, 0, yrt_now_ns(), true });
 dot.x = channels[0];
 dot.y = channels[1];
 ```
@@ -81,13 +81,15 @@ dot.y = channels[1];
 Each raw mouse report moves the hand by its counts, and the cursor
 follows at once. `ysig_frame()` writes the bound channels. Feed the
 frame's input before `ysig_frame()`: a sink reads held values
-([examples_findings.md](examples_findings.md), D10). The last field is
-the poll's time: the graph knows input up to there, and no further. The
-graph uses the later of it and the newest event a source took, and counts
-a given poll before that event (`late_poll`, `late_poll_max_ns`).
-`ysig_frame()` refuses only bad arguments and, on every call, a poll of 0
-in a graph with a view (velocity, speed, delay, lowpass, rate integrate):
-a configuration error, never the data. On the virtual clock of `--sim`,
+([examples_findings.md](examples_findings.md), D10). The last two fields
+are the poll's time and `has_poll`: the graph knows input up to the poll,
+and no further. An event stamped after the poll is counted (`late_poll`,
+`late_poll_max_ns`) and moves nothing, so one bad stamp cannot make the
+views run to the planned onset. `ysig_frame()` refuses only bad
+arguments and, on every call, a frame without a poll (`has_poll` false,
+as in a zeroed `ysig_frame_in`) in a graph with a view (velocity, speed,
+delay, lowpass, rate integrate): a configuration error, never the data.
+A poll of 0 with `has_poll` is a valid time. On the virtual clock of `--sim`,
 where the script feeds input up to the onset, the poll is the onset.
 
 `examples/response/trial_visuomotor.c` is this graph in a whole task, with
@@ -207,7 +209,7 @@ n[AMP].p[0] = AMP_CHANNEL;
 n[TARGET] = ysig_node_of(YSIG_OP_SCALE, SINES, AMP);
 ...
 ytl_base_time(&tl, TRIAL, f.onset, &bt);
-ysig_frame(&g, &(ysig_frame_in){ f.index, f.onset, bt, ytl_values(&tl), n_channels, yrt_now_ns() });
+ysig_frame(&g, &(ysig_frame_in){ f.index, f.onset, bt, ytl_values(&tl), n_channels, yrt_now_ns(), true });
 ```
 
 A late frame shows the value for its own base time (F22). Set the phases
@@ -244,7 +246,9 @@ Fill a `ysig_op_vtable` and pass it in `desc.custom`; op
 bytes of its arena, checks the lanes and the parameters by the op's
 table, and fills the output's time, tier and sources before `sample()`.
 An op without inputs is a generator: its `frame()` runs at each frame.
-`sig_test.c` has a mass on a damped spring.
+`sig_test.c` has a mass on a damped spring. A custom op gets the frame's
+onset, not the poll, so it cannot implement a view (a value at a frame
+from input known up to the poll): a limit of this version.
 
 ## Reference
 
@@ -304,8 +308,8 @@ seconds, as in a definition. A zero field means the row's `def`.
   time; velocity, speed, delay, lowpass and rate integrators as views,
   their state unchanged; every node after those; then bind, frame
   records and detects. A view uses input up to the earlier of the onset
-  and the poll, the poll being the later of `poll_ns` and the newest
-  event a source took: a velocity or speed
+  and `poll_ns`, as given (an event stamped after it moves nothing): a
+  velocity or speed
   reads 0 only when its input was silent for the lag up to the poll. A
   sample-rate detect on a view tests at the view's time, so its hold
   completes at a poll, up to a frame after the onset that would end a
@@ -424,6 +428,7 @@ hits, over its 533 samples; "a frame" is 533 samples, two
 | P-core, second review | 142.5 ns, 141.4 ns, 175.0 ns | 276 ns, 529 ns, 1.76 us | 107 ns, 193 ns | 75.7 us |
 | E-core, second review | 276.4 ns, 275.6 ns, 309.4 ns | 551 ns, 1.55 us, 3.16 us | 152 ns, 256 ns | 147.6 us |
 | P-core, third review | 143.0 ns, 141.9 ns, 176.2 ns | 281 ns, 508 ns, 2.32 us | 105 ns, 203 ns | 76.0 us |
+| P-core, final review | 142.5 ns, 141.6 ns, 177.0 ns | 284 ns, 593 ns, 2.43 us | 105 ns, 176 ns | 75.9 us |
 
 The second review's cost is the digest's finalizer: built with the plain
 xor-multiply step in its place, the same bench gave 130.6 and 130.8 ns a
@@ -492,13 +497,13 @@ took; a journal holds only the taken ones, so a replay saw another poll
 and another view (fixed; mutant 68). After the second review: 20,000,000
 inputs (seed 780) in 9 min 6 s, no finding. The third review's rules
 (frames never refused for data) added two checks to the target: every
-frame with a poll (or poll 0 in a graph with no view) returns 0, also
+frame with a poll (or without one in a graph with no view) returns 0, also
 after INT64_MAX and far-future stamps, and every bound channel holds its
 bind's input after it. After the third review: 20,000,000 inputs (seed
 781) in 9 min 33 s; 14,562,777 refused by `ysig_check()`, 5,436,289
 graphs opened and ran (35.0 million events taken, 14.7 million rows,
 0.97 million hits), no finding.
-- `tests/mutate/sig.toml`: 86 mutants and a control; 86 of 86 killed.
+- `tests/mutate/sig.toml`: 87 mutants and a control; 87 of 87 killed.
   Mutants 70 and 71 remove the saturation of time arithmetic; the test
   built with `-fsanitize=undefined` (the list's `sig_ubsan` test) catches
   them.

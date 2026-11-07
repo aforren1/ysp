@@ -670,7 +670,7 @@ int main(int argc, char** argv) {
          * this is decided up to a frame early, and a hand that leaves in
          * that last frame counts as an early move, not as a broken hold */
         /* -1 can only be a programming error (a bad argument) */
-        if (ysig_frame(&sg, &(ysig_frame_in){ f.index, f.onset, 0, NULL, 0, sim || autorun ? f.onset : yrt_now_ns() }) != 0) {
+        if (ysig_frame(&sg, &(ysig_frame_in){ f.index, f.onset, 0, NULL, 0, sim || autorun ? f.onset : yrt_now_ns(), true }) != 0) {
             fprintf(stderr, "trial_visuomotor: %s\n", ysig_error(&sg));
             failed = 1;
             break;
@@ -724,6 +724,9 @@ int main(int argc, char** argv) {
                 ent = yrsp_entries(&rsp, &n_ent);
                 for (k = 0; k < n_ent; k++)
                     if ((ent[k].flags & YRSP_E_CROSSING) && (ent[k].flags & YRSP_E_EARLY)) early = 1;
+                /* rows to the crossing; the loop stops at the first row past
+                 * it, so with two mice on an any-device source (rows out
+                 * of time order) a reach's last rows can be out of order */
                 for (k = 0; k < n_trace && trace[k].t <= t_cross; k++) {
                     p = &trace[k];
                     fprintf(traj, "%d,%.9f,%.3f,%.3f,%.3f,%.3f\n", ti.index, (double)(p->t - res.t_onset) / 1e9, p->hx,

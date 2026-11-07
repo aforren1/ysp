@@ -42,6 +42,7 @@
  *       // every frame, after the input is polled:
  *       ysig_feed(&g, &e);                                  // each input event
  *       fi.onset_ns = f.onset; fi.poll_ns = yrt_now_ns();  // input known to here
+ *       fi.has_poll = true;
  *       ysig_frame(&g, &fi);                                // binds, records
  *       ygfx_apply(binds, 2, values);
  *
@@ -122,12 +123,14 @@
  *   nodes that change with time alone (velocity, speed, delay, lowpass,
  *   rate integrate); every node after those; then the sinks: bind, frame
  *   records, detects. The time-alone nodes give a view, state unchanged,
- *   up to min(onset, poll), where poll is max(f.poll_ns, the newest event
- *   a source took); a given poll_ns before that event is counted
- *   (ysig_stats.late_poll, late_poll_max_ns). ysig_frame() refuses only
- *   bad arguments, and poll_ns 0 in a graph with a view (velocity, speed,
- *   delay, lowpass, rate integrate), on every call: never because of the
- *   data. A reset does not change the newest event's time. a lowpass or a rate
+ *   up to min(onset, f.poll_ns). An event a source took that is stamped
+ *   after the poll is counted (ysig_stats.late_poll, late_poll_max_ns)
+ *   and moves nothing; a view whose last sample is past the poll stands.
+ *   ysig_frame() refuses only bad arguments, and a frame without a poll
+ *   (has_poll false, as in a zeroed ysig_frame_in) in a graph with a view
+ *   (velocity, speed, delay, lowpass, rate integrate), on every call:
+ *   never because of the data. poll_ns 0 with has_poll is a valid time.
+ *   A reset does not change the newest event's time. a lowpass or a rate
  *   integral runs to the poll, a delay reads at most there, and a
  *   velocity or speed is 0 only when its input was silent for the lag up
  *   to the poll (else the last sample's value stands). A sink reads held
@@ -212,7 +215,8 @@
  *   out (0 = input 0's), state_size bytes in the arena, a parameter table,
  *   reset, sample (with inputs) and frame (without: a generator). The
  *   graph fills out's t, tier and sources before sample(); the op writes
- *   the lanes. No allocation, no I/O in the calls. version must be
+ *   the lanes. frame() gets the onset, not the poll: a custom op cannot
+ *   implement a view. No allocation, no I/O in the calls. version must be
  *   YSIG_OP_ABI.
  *
  *   ---------------------------------------------------------------------
@@ -240,7 +244,7 @@
  *
  *   STATUS: v0.1.0, 2026-11-07, Linux desktop (Debian 12, GCC 12.2):
  *   tests/adapt/sig_test.c, the compile checks (C99, C11, C++17), the
- *   fuzz target under ASan and UBSan (20 million inputs), 86 of 86
+ *   fuzz target under ASan and UBSan (20 million inputs), 87 of 87
  *   mutants killed, and trial_visuomotor and trial_bimanual ported onto
  *   it with byte-identical CI data files. Four raw mice at 8 kHz into 32
  *   nodes: 141 ns a sample and 0.28 us a ysig_frame() at the median on a
@@ -390,8 +394,9 @@ typedef struct ysig_frame_in {
     const float* values;        /* timeline channels for channel nodes   */
     int          n_values;
     int64_t      poll_ns;       /* input is known up to here (the poll's
-                                 * time); 0 is refused in a graph with a
-                                 * view                                  */
+                                 * time), with has_poll                  */
+    bool         has_poll;      /* poll_ns is set; false (a zeroed struct)
+                                 * is refused in a graph with a view     */
 } ysig_frame_in;
 
 typedef struct ysig_row {
@@ -1693,7 +1698,16 @@ static void ysig__det_value(ysig_graph* g, int i, const ysig_value* v, int64_t t
     s->state = r;
     g->val[i].v[0] = r ? 1.0 : 0.0;
     g->val[i].t = tc;
-    if (!s->armed || t < s->t_arm) return;
+    if (!s->armed) return;
+    if (t < s->t_arm) {
+        /* before the arm: no hit and no start, but a hold's failing value
+         * breaks it whatever its t (a late report of a hand that left) */
+        if (n->kns[0] > 0 && !r) {
+            s->holding = 0;
+            if (!ysig__test(n, v, -n->p[3])) s->ready = 1;
+        }
+        return;
+    }
     if (n->kns[0] > 0) {
         if (ysig__det_hold_done(g, i, tc)) return;
         if (r) {
@@ -2393,11 +2407,11 @@ YSIG_API int ysig_frame(ysig_graph* g, const ysig_frame_in* f) {
     ysig_entry e;
     int k;
     if (!g || !g->ok || !f || f->n_values < 0 || (f->n_values && !f->values)) return -1;
-    /* a graph with a view needs the poll's time: 0 is a configuration
+    /* a graph with a view needs the poll's time: none is a configuration
      * error, refused on every call whatever the data */
-    if (g->has_view && f->poll_ns == 0) {
-        snprintf(g->err, sizeof g->err, "ysig_frame: poll_ns is 0 and the graph has a velocity, speed, delay, lowpass or "
-                 "rate integrate: give the time input was polled up to");
+    if (g->has_view && !f->has_poll) {
+        snprintf(g->err, sizeof g->err, "ysig_frame: no poll (has_poll false) and the graph has a velocity, speed, delay, "
+                 "lowpass or rate integrate: give the time input was polled up to");
         return -1;
     }
     memset(&e, 0, sizeof e);
@@ -2409,19 +2423,19 @@ YSIG_API int ysig_frame(ysig_graph* g, const ysig_frame_in* f) {
     g->base = f->base_ns;
     g->fvals = f->values;
     g->n_fvals = f->n_values;
-    /* views use input up to the poll, never the gap to a planned onset;
-     * an event fed past the given poll moves the poll there (counted) */
-    {
-        int64_t poll = f->poll_ns;
-        if (g->t_fed > poll) {
-            if (f->poll_ns != 0) {
-                int64_t ex = ysig__sub(g->t_fed, f->poll_ns);
-                g->st.late_poll++;
-                if (ex > g->st.late_poll_max_ns) g->st.late_poll_max_ns = ex;
-            }
-            poll = g->t_fed;
+    /* views use input up to the given poll, never the gap to a planned
+     * onset. An event stamped past the poll is counted and moves nothing:
+     * one bad stamp must not make every later view run to the onset (a
+     * view whose last sample is past the poll stands) */
+    if (f->has_poll) {
+        if (g->t_fed > f->poll_ns) {
+            int64_t ex = ysig__sub(g->t_fed, f->poll_ns);
+            g->st.late_poll++;
+            if (ex > g->st.late_poll_max_ns) g->st.late_poll_max_ns = ex;
         }
-        g->t_known = poll < f->onset_ns ? poll : f->onset_ns;
+        g->t_known = f->poll_ns < f->onset_ns ? f->poll_ns : f->onset_ns;
+    } else {
+        g->t_known = f->onset_ns;   /* no view reads it (refused above) */
     }
     ysig__digest_word(g, (uint64_t)f->index);
     ysig__digest_word(g, (uint64_t)f->onset_ns);

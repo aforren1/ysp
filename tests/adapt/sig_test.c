@@ -120,6 +120,7 @@ static ysig_frame_in frame_at(int64_t index, int64_t onset, int64_t base, const 
     f.values = v;
     f.n_values = nv;
     f.poll_ns = onset;   /* input known up to the onset, as on the virtual clock */
+    f.has_poll = true;
     return f;
 }
 
@@ -1405,14 +1406,18 @@ static void test_views(void) {
     ysig_get_stats(&g, &st);
     CHECK(st.history_skipped == 0);
     CHECK(ysig_value_at(&g, 3, 250 * MS + 500000, &v) == 1 && v.t == 250 * MS && v.v[0] == 1000);
-    /* a graph with a view refuses poll_ns 0 on every call, before any
-     * input too: a configuration error, not a data one */
+    /* a graph with a view refuses a frame without a poll on every call,
+     * before any input too: a configuration error, not a data one; poll 0
+     * with has_poll is a valid time */
     if (!open_desc(&g, &d)) { g_failures++; return; }
     ysig_reset(&g, 0);
     {
-        ysig_frame_in f = frame_at(0, 10 * MS, 0, NULL, 0);
-        f.poll_ns = 0;
-        CHECK(ysig_frame(&g, &f) == -1 && strstr(ysig_error(&g), "poll_ns is 0"));
+        ysig_frame_in f;
+        memset(&f, 0, sizeof f);   /* zeroed: no poll */
+        f.onset_ns = 10 * MS;
+        CHECK(ysig_frame(&g, &f) == -1 && strstr(ysig_error(&g), "no poll"));
+        f.has_poll = true;
+        CHECK(ysig_frame(&g, &f) == 0);
     }
     for (k = 1; k <= 20; k++) {
         yin_event e = axis(k * MS, YIN_KIND_PEN, YIN_AXIS_POSITION, 0, (float)k, 0, 0, YIN_TIER_SIM);
@@ -1425,13 +1430,15 @@ static void test_views(void) {
         ysig_frame_in f = frame_at(1, 60 * MS, 0, NULL, 0);
         key.type = YIN_PRESS;
         CHECK(ysig_feed(&g, &key) == 0);
-        f.poll_ns = 0;
-        CHECK(ysig_frame(&g, &f) == -1 && strstr(ysig_error(&g), "poll_ns is 0"));
+        f.has_poll = false;
+        CHECK(ysig_frame(&g, &f) == -1 && strstr(ysig_error(&g), "no poll"));
+        f.has_poll = true;
         f.poll_ns = 20 * MS;
         CHECK(ysig_frame(&g, &f) == 0);
         CHECK_NEAR(ysig_value_of(&g, 1)->v[0], 1000, 1e-6);
-        /* a poll before the newest event fed: that event's time is the
-         * poll, counted with the excess, and the frame runs */
+        /* a poll before the newest event fed: counted with the excess; the
+         * frame runs, and the speed, whose last sample is past the poll,
+         * stands */
         f.index = 2;
         f.poll_ns = 15 * MS;
         CHECK(ysig_frame(&g, &f) == 0);
@@ -1491,15 +1498,16 @@ static void test_review3(void) {
         CHECK(ysig_frame(&g, &f) == 0 && g_ch[0] == 2);
         ysig_get_stats(&g, &st);
         CHECK(st.late_poll == 1 && st.late_poll_max_ns == INT64_MAX - 20 * MS);
-        /* no view: poll 0 runs, and a poll not given is no late poll */
-        f.poll_ns = 0;
+        /* no view: a frame without a poll runs, and is no late poll */
+        f.has_poll = false;
         CHECK(ysig_frame(&g, &f) == 0);
         ysig_get_stats(&g, &st);
         CHECK(st.late_poll == 1);
     }
-    /* the newest event fed is the poll when the given one is earlier: pen
-     * A still since 60 ms, pen B at 140 ms, a poll of 90 ms: A has been
-     * silent 80 ms, past its 40 ms lag (30 ms by the given poll) */
+    /* the given poll is used as is: pen A still since 60 ms, pen B at
+     * 140 ms, a poll of 90 ms: A has been silent 30 ms by the poll, under
+     * its 40 ms lag, so its speed stands; B's later stamp moves nothing
+     * and is counted */
     n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 1);
     n[1] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 2, 1);
     n[2] = ysig_node_of(YSIG_OP_SPEED, 0, -1);
@@ -1518,7 +1526,83 @@ static void test_review3(void) {
         ysig_frame_in f = frame_at(1, 160 * MS, 0, NULL, 0);
         f.poll_ns = 90 * MS;
         CHECK(ysig_frame(&g, &f) == 0);
-        CHECK(ysig_value_of(&g, 2)->v[0] == 0 && ysig_value_of(&g, 2)->t == 140 * MS);
+        CHECK_NEAR(ysig_value_of(&g, 2)->v[0], 1000, 1e-6);
+        ysig_get_stats(&g, &st);
+        CHECK(st.late_poll == 1 && st.late_poll_max_ns == 50 * MS);
+    }
+    /* the final review's S1: after one bad stamp (60 s ahead, or INT64_MAX
+     * and a reset) the views still run to the poll: speed 1000 at every
+     * onset while the hand moves, no movement-end hit */
+    g_where = "one bad stamp";
+    {
+        static const int64_t badt[3] = { 0, 60LL * 1000000000LL, INT64_MAX };
+        int c, fr;
+        for (c = 0; c < 3; c++) {
+            ysig_hit h[8];
+            int total = 0, ok_speed = 1;
+            n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 2);
+            n[1] = ysig_node_of(YSIG_OP_SPEED, 0, -1);
+            n[1].p[0] = 0.010;
+            n[2] = ysig_node_of(YSIG_OP_DETECT, 1, -1);
+            n[2].p[0] = YSIG_TEST_LE; n[2].p[2] = 50; n[2].p[6] = 1; n[2].p[7] = 1;
+            n[3] = ysig_node_of(YSIG_OP_BIND, 1, -1);
+            n[4] = src_node(YIN_KIND_SYNC, 0, 0, 1);   /* a TTL line */
+            d = desc_of(n, 5);
+            if (!open_desc(&g, &d)) { g_failures++; return; }
+            ysig_reset(&g, 0);
+            if (badt[c]) {
+                e = axis(badt[c], YIN_KIND_SYNC, 0, 1, 1, 0, 1, YIN_TIER_SIM);
+                ysig_feed(&g, &e);
+            }
+            if (c == 2) ysig_reset(&g, 0);
+            k = 1;
+            for (fr = 1; fr <= 30; fr++) {
+                int64_t poll = fr * 16666667LL;
+                ysig_frame_in f = frame_at(fr, poll + 16666667LL, 0, NULL, 0);
+                f.poll_ns = poll;
+                for (; k * MS <= poll; k++) {
+                    e = pen3(k * MS, 1, (float)k);
+                    ysig_feed(&g, &e);
+                }
+                if (fr == 2) ysig_arm(&g, 2, poll);
+                CHECK(ysig_frame(&g, &f) == 0);
+                total += ysig_detected(&g, h, 8);
+                if (fr > 1 && g_ch[0] != 1000) ok_speed = 0;
+            }
+            CHECK(total == 0 && ok_speed);
+        }
+    }
+
+    /* the final review's S2: a hold armed at 100 ms with both hands in;
+     * hand B's report of 99 ms, outside, arrives late: it cannot hit or
+     * start a hold, but it breaks the one that runs */
+    g_where = "a late failing report";
+    n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 1);
+    n[1] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 2, 1);
+    n[2] = ysig_node_of(YSIG_OP_JOIN, 0, 1);
+    n[3] = ysig_node_of(YSIG_OP_DETECT, 2, -1);
+    n[3].p[0] = YSIG_TEST_LE; n[3].p[1] = -1; n[3].p[2] = 10; n[3].p[4] = 0.5; n[3].p[6] = 1;
+    d = desc_of(n, 4);
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    e = pen3(90 * MS, 1, 0);
+    ysig_feed(&g, &e);
+    e = pen3(91 * MS, 2, 0);
+    ysig_feed(&g, &e);
+    ysig_arm(&g, 3, 100 * MS);
+    e = pen3(99 * MS, 2, 50);
+    ysig_feed(&g, &e);
+    {
+        ysig_hit h[4];
+        ysig_frame_in f = frame_at(1, 700 * MS, 0, NULL, 0);
+        ysig_frame(&g, &f);
+        CHECK(ysig_detected(&g, h, 4) == 0);
+        /* B back in at 800 ms: the hold counts from there */
+        e = pen3(800 * MS, 2, 0);
+        ysig_feed(&g, &e);
+        f = frame_at(2, 1400 * MS, 0, NULL, 0);
+        ysig_frame(&g, &f);
+        CHECK(ysig_detected(&g, h, 4) == 1 && h[0].t == 1300 * MS);
     }
 
     g_where = "reset keeps the fed time";

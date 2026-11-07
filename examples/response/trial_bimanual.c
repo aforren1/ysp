@@ -1514,7 +1514,7 @@ int main(int argc, char** argv) {
             ytl_base_time(&tl, TRIAL, f.onset, &bt);
             /* -1 can only be a programming error (a bad argument) */
             if (ysig_frame(&sg, &(ysig_frame_in){ f.index, f.onset, bt, ytl_values(&tl), N_CHANNELS,
-                                                  is_script ? f.onset : yrt_now_ns() }) != 0) {
+                                                  is_script ? f.onset : yrt_now_ns(), true }) != 0) {
                 fprintf(stderr, "trial_bimanual: %s\n", ysig_error(&sg));
                 failed = 1;
                 break;

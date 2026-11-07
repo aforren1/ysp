@@ -510,12 +510,14 @@ frame without changing their state: a still mouse sends nothing, and its
 speed must still fall to 0. A view never infers stillness from the gap
 between the last sample and a planned onset, which is in the future when
 the frame is prepared: the frame gives the poll's time (the latest time
-input is known up to); the poll used is the later of it and the newest
-event fed (a later event is counted as a late poll); a view uses input
-up to the earlier of the onset and that poll; and a velocity or speed is
-0 only when its input was silent for the lag up to it. A frame is refused
-only for bad arguments and for a poll of 0 in a graph with a view, on
-every call; a reset does not change the newest event's time. A stateless node with a generator input is read at a past time
+input is known up to, with a flag that it is set); a view uses input up
+to the earlier of the onset and that poll, as given (an event stamped
+after it is counted as a late poll and moves nothing); and a velocity or
+speed is 0 only when its input was silent for the lag up to it. A frame
+is refused only for bad arguments and for a frame without a poll in a
+graph with a view, on every call; a poll of 0 is a valid time; a reset
+does not change the newest event's time. A custom op gets the onset, not
+the poll, so it cannot implement a view. A stateless node with a generator input is read at a past time
 from its inputs' rings, as one after two sources. History rings hold values at sample times;
 a view never enters them. These five ops keep state per sample, so the
 loader refuses one with no source upstream (on a generator or a channel

@@ -363,8 +363,8 @@ id = "42"
 name = "detect: samples before the arm's time count"
 test = "sig"
 why = "A sample stamped before the window would end it."
-find = 'if (!s->armed || t < s->t_arm) return;'
-replace = 'if (!s->armed) return;'
+find = '    if (t < s->t_arm) {'
+replace = '    if (0) {'
 
 [[mutant]]
 id = "43"
@@ -459,7 +459,7 @@ id = "54"
 name = "frame: the poll ignored"
 test = "sig"
 why = "Views would run to the planned onset, a frame past the input."
-find = '        g->t_known = poll < f->onset_ns ? poll : f->onset_ns;'
+find = '        g->t_known = f->poll_ns < f->onset_ns ? f->poll_ns : f->onset_ns;'
 replace = '        g->t_known = f->onset_ns;'
 
 [[mutant]]
@@ -467,7 +467,7 @@ id = "55"
 name = "frame: poll 0 taken with a view"
 test = "sig"
 why = "A graph with a view and no poll would run its views to the planned onset (review Q1)."
-find = '    if (g->has_view && f->poll_ns == 0) {'
+find = '    if (g->has_view && !f->has_poll) {'
 replace = '    if (0) {'
 
 [[mutant]]
@@ -625,35 +625,43 @@ replace = '        (void)0;'
 
 [[mutant]]
 id = "78"
-name = "frame: the given poll even when an event came later"
+name = "frame: the newest event moves the poll"
 test = "sig"
-why = "A view would stop at a poll that input already passed."
-find = '            poll = g->t_fed;'
-replace = '            (void)0;'
+why = "One bad stamp would make every later view run to the onset (final review S1)."
+find = '        g->t_known = f->poll_ns < f->onset_ns ? f->poll_ns : f->onset_ns;'
+replace = '        g->t_known = g->t_fed > f->poll_ns ? (g->t_fed < f->onset_ns ? g->t_fed : f->onset_ns) : (f->poll_ns < f->onset_ns ? f->poll_ns : f->onset_ns);'
 
 [[mutant]]
 id = "79"
 name = "frame: late polls not counted"
 test = "sig"
 why = "A program whose poll lags its input would not know."
-find = '                g->st.late_poll++;'
-replace = '                (void)0;'
+find = '            g->st.late_poll++;'
+replace = '            (void)0;'
 
 [[mutant]]
 id = "80"
 name = "frame: the largest late excess not kept"
 test = "sig"
 why = "The size of the lag would be lost."
-find = '                if (ex > g->st.late_poll_max_ns) g->st.late_poll_max_ns = ex;'
-replace = '                (void)ex;'
+find = '            if (ex > g->st.late_poll_max_ns) g->st.late_poll_max_ns = ex;'
+replace = '            (void)ex;'
 
 [[mutant]]
 id = "81"
-name = "frame: an unset poll counted as late"
+name = "frame: a frame without a poll counted as late"
 test = "sig"
 why = "A graph without views would count every frame."
-find = '            if (f->poll_ns != 0) {'
-replace = '            if (1) {'
+find = '    if (f->has_poll) {'
+replace = '    if (1) {'
+
+[[mutant]]
+id = "88"
+name = "detect: a late failing report ignored"
+test = "sig"
+why = "A hand that left before the arm, reported late, would not break the hold (final review S2)."
+find = '        if (n->kns[0] > 0 && !r) {'
+replace = '        if (0) {'
 
 [[mutant]]
 id = "82"
