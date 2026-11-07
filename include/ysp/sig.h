@@ -1,0 +1,2319 @@
+/* ysp/sig.h - v0.1.0 - public domain single-header signal path
+ *
+ *   Continuous input to stimuli: a small graph, fixed at open, from input
+ *   sources through per-sample transforms and maps to stimulus channels,
+ *   detectors, derived events and records. A cursor from a raw mouse is one
+ *   graph; one cursor from two hands is another. The graph is data, so a
+ *   loader can check it before a session and a run can be replayed bit for
+ *   bit (docs/signal_spec.md is the design; docs/sig.md the manual).
+ *
+ *   REQUIRES ysp/input.h beside it (the input event, its kinds and tiers).
+ *   Pure computation: no heap, no OS calls, no threads, no file I/O, no
+ *   clock. The caller gives the state arena (ysig_arena_size()). C99 is the
+ *   floor: it builds as C99, C11 and C++17.
+ *
+ *   ---------------------------------------------------------------------
+ *   USAGE
+ *   ---------------------------------------------------------------------
+ *   Do this:
+ *
+ *       #define YSP_SIG_IMPLEMENTATION
+ *
+ *   in *one* C or C++ file before including this header. A cursor from
+ *   one raw mouse at 0.25 px per count, turned 30 deg about the start, on
+ *   two channels that ygfx_apply() reads:
+ *
+ *       ysig_node n[4];
+ *       n[0] = ysig_node_of(YSIG_OP_SOURCE, -1, -1);
+ *       n[0].p[0] = YIN_KIND_MOUSE; n[0].p[1] = YIN_AXIS_DELTA; n[0].lanes = 2;
+ *       n[1] = ysig_node_of(YSIG_OP_INTEGRATE, 0, -1);      // hand, px
+ *       n[1].p[0] = n[1].p[1] = 0.25; n[1].p[4] = sx; n[1].p[5] = sy;
+ *       n[2] = ysig_node_of(YSIG_OP_AFFINE, 1, -1);         // cursor
+ *       n[2].p[4] = n[2].p[6] = sx; n[2].p[5] = n[2].p[7] = sy;
+ *       n[2].p[8] = -30;                                    // y down: ccw on screen
+ *       n[3] = ysig_node_of(YSIG_OP_BIND, 2, -1);           // channels 0, 1
+ *       ysig_desc d = { 0 };
+ *       d.nodes = n; d.n_nodes = 4;
+ *       d.channels = values; d.n_channels = 2;
+ *       d.arena_size = ysig_arena_size(&d);
+ *       d.arena = arena;                                    // that many bytes
+ *       if (!ysig_open(&g, &d)) { fputs(ysig_error(&g), stderr); return 1; }
+ *       ysig_reset(&g, t0);
+ *       // every frame, after the input is polled:
+ *       ysig_feed(&g, &e);                                  // each input event
+ *       ysig_frame(&g, &fi);                                // binds, records
+ *       ygfx_apply(binds, 2, values);
+ *
+ *   ---------------------------------------------------------------------
+ *   THE GRAPH (ysig_node)
+ *   ---------------------------------------------------------------------
+ *   An array of nodes. A node has an op, up to 4 inputs (other nodes'
+ *   indices, -1 = none, leading, no gaps), 16 parameters p[] whose meaning
+ *   is the op's table (ysig_op_params()), an optional data array (sines'
+ *   components), and one output of 1 to 4 lanes (x, y, z, w). Each input
+ *   comes before its user: an input at or after the node is refused, so a
+ *   cycle cannot be built. node.lanes 0 takes the op's rule. Start from
+ *   ysig_node_of(), which sets unused inputs to -1: a zeroed in[] reads
+ *   node 0 four times. Durations in p[] are seconds, as in a definition.
+ *   Arithmetic is double; a channel is float.
+ *
+ *   Ops (lanes in, out):
+ *     source     0, 1..4   the samples of one kind, type, control and
+ *                          device (0 = any): fields x, y, value, aux
+ *     role       0, type   a role's value (ROLES AND ADAPTERS)
+ *     integrate  n, n      DELTA from a source: an int64 count sum per lane,
+ *                          position = origin + gain x counts, the count sum
+ *                          held inside optional bounds (yrsp_cursor's rule);
+ *                          otherwise rate control: gain x value x dt
+ *     lowpass    n, n      first or second order, on each sample's dt
+ *     velocity   n, n      the difference over at least `lag` s
+ *     speed      n, 1      its norm
+ *     delay      n, n      the input as it was `delay` s ago
+ *     deadzone   n, n      radial: 0 inside `radius`, then shifted by it
+ *     affine     2, 2      out = M_eff (in - pre) + post; M_eff = Rot(angle) M,
+ *                          angle = p8 + input 1 (deg); a zero term is skipped
+ *     scale      n, n      per lane, times input 1 (1 lane) when given
+ *     offset     n, n      plus per lane
+ *     clamp      n, n      low, high per lane
+ *     select     n, m      out lane k = input lane p[k]
+ *     join       k x n, sum(n) <= 4   lanes concatenated
+ *     sum, mean  k x n, n  weighted; mean divides by the weights' sum
+ *     diff       2 x n, n  input 0 minus input 1
+ *     sines      0, 1..2   A(t) sum a cos(2 pi f t + phi) at the frame's
+ *                          base time; A ramps 0 to 1 over `ramp` s
+ *     noise      0, 1..4   seeded Gaussian, optionally low-passed
+ *     channel    0, 1      a timeline channel's value at the frame
+ *     bind       n, -      writes desc.channels[p0 + lane] at each frame
+ *     detect     n, 1      a test with a hold (DETECTORS); out = the test
+ *     record     n, -      one row per sample or per frame (RECORDS)
+ *     emit       n, -      a derived yin_event per update (DETECTORS)
+ *     custom     YSIG_OP_CUSTOM + i: desc.custom[i] (CUSTOM OPS)
+ *
+ *   ---------------------------------------------------------------------
+ *   SCHEDULES AND TIME
+ *   ---------------------------------------------------------------------
+ *   ysig_open() compiles a list per source (every node the source reaches,
+ *   in order) and a frame list, so no evaluation walks the graph. A sample
+ *   runs its source's list and nothing else. A node that two sources
+ *   reach is on both lists and reads its inputs' held values.
+ *   Each value carries t (the newest input sample's time), t_oldest (the
+ *   oldest's), the worst stamp tier of its inputs (SIM best, then 1, 2,
+ *   3, UNKNOWN worst), and the source nodes of the newest and the oldest
+ *   input. A source's tier is the event's stamp, or p4 where it is 0.
+ *   A sample older than its source's last is counted and dropped
+ *   (ysig_stats.dropped_order); equal times pass (a raw mouse report).
+ *   ysig_frame() runs, in node order: the generators (sines, noise,
+ *   channel, a custom op with no input) at the frame's base time; the
+ *   nodes that change with time alone (velocity, speed, delay, lowpass,
+ *   rate integrate: their value at the onset from the held input, state
+ *   unchanged); every node after those; then the sinks: bind, frame
+ *   records, detects. A sink reads held values: poll and feed the
+ *   frame's input before ysig_frame() (docs/examples_findings.md, D10).
+ *   A value at another time: ysig_value_at() for a node with
+ *   node.history > 0 (a ring of its past values) reads the last value at
+ *   or before t; a stateless node after two sources (join, mean,
+ *   affine of those) is computed from its inputs' values at t, so their
+ *   rings are kept instead. For a flip record that arrives a frame later.
+ *
+ *   ---------------------------------------------------------------------
+ *   DETECTORS (detect, emit, ysig_detected, ysig_derived)
+ *   ---------------------------------------------------------------------
+ *   detect tests its input: >= or <= on a lane or on the norm of (value -
+ *   center), inside or outside a rectangle on lanes 0 and 1. The crossing
+ *   rule is ysp/response.h's (CROSSINGS): the first value past the test
+ *   while ready is a hit at that value's t; ready again when the test is
+ *   false with the level moved back by the hysteresis. A value that meets
+ *   the test when the detect is armed is held: no hit until it re-arms.
+ *   With hold > 0 a hit needs the test true for hold s: the hit is at
+ *   start + hold, found by the next value (before it is tested) or by a
+ *   frame whose onset is at or after it, so a still hand that sends no
+ *   samples completes a hold. p6: armed at reset (0) or by ysig_arm().
+ *   p7: one hit per arm (0) or every crossing. A detect at frame rate
+ *   (p5) tests the held value at each onset. Hits queue (64, the rest
+ *   counted) until ysig_detected().
+ *   emit makes a derived yin_event of its input at each update, for the
+ *   response collector (docs/signal_spec.md section 7, way (a)): kind
+ *   YIN_KIND_USER + p0, device the emit node's index, control p1, type
+ *   SAMPLE, x y value aux the lanes (float), t the value's t, stamp its
+ *   tier, code the newest input's source node | the oldest's << 16.
+ *   ysp/input.h has no flag for a derived event: tell it by kind and
+ *   device (docs/sig.md, "Derived events"). Queued (64) until
+ *   ysig_derived().
+ *
+ *   ---------------------------------------------------------------------
+ *   RECORDS AND REPLAY
+ *   ---------------------------------------------------------------------
+ *   record calls desc.on_row with a ysig_row: per sample of its input
+ *   (p0 = 0) or per frame (p0 = 1: the frame index, the onset, the held
+ *   value). Every row and hit goes into a 64-bit digest (ysig_stats).
+ *   desc.journal gets every call that changes the graph: reset, set,
+ *   set_data, arm, disarm, every event a source takes or drops, every
+ *   frame (with its channel values, valid during the call). ysig_replay()
+ *   runs such a journal on a graph opened from the same desc and gives
+ *   the same values, rows, hits and digest bit for bit.
+ *
+ *   ---------------------------------------------------------------------
+ *   ROLES AND ADAPTERS (ysig_role, ysig_adapter)
+ *   ---------------------------------------------------------------------
+ *   The experiment's nodes read roles (op role, p0 the role's index): a
+ *   name, a type (position2d, position2d_relative, position3d, scalar,
+ *   gaze) and units (device, workspace_cm, display_cm, display_deg,
+ *   display_px). The rig supplies one adapter per role: nodes that end in
+ *   the role's value. At open an adapter of another type or units is
+ *   refused; a position2d role takes a position2d_relative adapter only
+ *   with allow_relative. The experiment's nodes keep their indices 0..n-1;
+ *   adapter a's node i is ysig_adapter_node(g, a, i).
+ *
+ *   ---------------------------------------------------------------------
+ *   CUSTOM OPS (ysig_op_vtable)
+ *   ---------------------------------------------------------------------
+ *   desc.custom[i] is op YSIG_OP_CUSTOM + i: lanes per input (0 = any) and
+ *   out (0 = input 0's), state_size bytes in the arena, a parameter table,
+ *   reset, sample (with inputs) and frame (without: a generator). The
+ *   graph fills out's t, tier and sources before sample(); the op writes
+ *   the lanes. No allocation, no I/O in the calls. version must be
+ *   YSIG_OP_ABI.
+ *
+ *   ---------------------------------------------------------------------
+ *   LIMITS, THREADS AND MEMORY
+ *   ---------------------------------------------------------------------
+ *   YSIG_MAX_NODES (512) nodes with the adapters'; 64 hits and 64 derived
+ *   events between drains; 4 lanes. Nothing is allocated: the arena holds
+ *   the nodes, values (64 bytes each), schedules, state, rings and queues.
+ *   One thread, the frame thread. Errors: ysig_open() writes
+ *   ysig_error(); ysig_check() writes the caller's buffer.
+ *
+ *   ---------------------------------------------------------------------
+ *   NOT DONE
+ *   ---------------------------------------------------------------------
+ *   The ops rectify, envelope, curve and units; pose (7 values); a stream
+ *   sample source (ysig_stream_sample is defined, not read); prediction;
+ *   the JSON loader and the rig profile's adapter block.
+ *
+ *   ---------------------------------------------------------------------
+ *   CHANGELOG
+ *   ---------------------------------------------------------------------
+ *   v0.1.0 - first version: the ops above, the schedules, detectors,
+ *          derived events, records, journal and replay, roles and
+ *          adapters, custom ops, parameter tables.
+ *
+ *   STATUS: v0.1.0, 2026-11-07, Linux desktop (Debian 12, GCC 12.2):
+ *   tests/adapt/sig_test.c, the compile checks (C99, C11, C++17), the
+ *   fuzz target under ASan and UBSan, the mutation list, and
+ *   trial_visuomotor and trial_bimanual ported onto it (docs/sig.md).
+ *   Not run: MSVC, macOS, a window, a real device.
+ *
+ *   ---------------------------------------------------------------------
+ *   LICENSE: public domain / MIT-0, see end of file.
+ */
+#ifndef YSP_SIG_H_INCLUDED
+#define YSP_SIG_H_INCLUDED
+
+#define YSIG_VERSION_MAJOR 0
+#define YSIG_VERSION_MINOR 1
+#define YSIG_VERSION_PATCH 0
+#define YSIG_VERSION_STRING "0.1.0"
+
+#include <stdint.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <string.h>
+#include "ysp/input.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#ifndef YSIG_API
+#define YSIG_API extern
+#endif
+
+#define YSIG_LANES     4
+#define YSIG_NP        16
+#define YSIG_MAX_IN    4
+#define YSIG_MAX_NODES 512
+#define YSIG_QUEUE_CAP 64
+#define YSIG_MAX_HISTORY (1 << 20)
+#define YSIG_OP_ABI    1
+#define YSIG_NONE      (-1)
+
+typedef enum ysig_op {
+    YSIG_OP_NONE = 0,
+    YSIG_OP_SOURCE, YSIG_OP_ROLE, YSIG_OP_INTEGRATE, YSIG_OP_LOWPASS, YSIG_OP_VELOCITY, YSIG_OP_SPEED,
+    YSIG_OP_DELAY, YSIG_OP_DEADZONE, YSIG_OP_AFFINE, YSIG_OP_SCALE, YSIG_OP_OFFSET, YSIG_OP_CLAMP,
+    YSIG_OP_SELECT, YSIG_OP_JOIN, YSIG_OP_SUM, YSIG_OP_MEAN, YSIG_OP_DIFF, YSIG_OP_SINES, YSIG_OP_NOISE,
+    YSIG_OP_CHANNEL, YSIG_OP_BIND, YSIG_OP_DETECT, YSIG_OP_RECORD, YSIG_OP_EMIT,
+    YSIG_OP_COUNT,
+    YSIG_OP_CUSTOM = 64             /* + i: desc.custom[i]                 */
+} ysig_op;
+
+/* detect p0 */
+typedef enum ysig_test { YSIG_TEST_GE = 0, YSIG_TEST_LE = 1, YSIG_TEST_IN_RECT = 2, YSIG_TEST_OUT_RECT = 3 } ysig_test;
+
+/* Role types and unit spaces (ROLES AND ADAPTERS). */
+typedef enum ysig_type {
+    YSIG_TYPE_NONE = 0, YSIG_TYPE_POSITION2D, YSIG_TYPE_POSITION2D_RELATIVE, YSIG_TYPE_POSITION3D,
+    YSIG_TYPE_SCALAR, YSIG_TYPE_GAZE, YSIG_TYPE_COUNT
+} ysig_type;
+typedef enum ysig_units {
+    YSIG_UNITS_DEVICE = 0, YSIG_UNITS_WORKSPACE_CM, YSIG_UNITS_DISPLAY_CM, YSIG_UNITS_DISPLAY_DEG,
+    YSIG_UNITS_DISPLAY_PX, YSIG_UNITS_COUNT
+} ysig_units;
+
+/* One node of the graph (THE GRAPH). */
+typedef struct ysig_node {
+    uint16_t      op;           /* ysig_op                               */
+    int16_t       in[4];        /* node indices; -1 = none               */
+    uint8_t       lanes;        /* 1..4; 0 = the op's rule               */
+    uint8_t       reserved_;
+    int32_t       history;      /* past values kept for ysig_value_at()  */
+    double        p[YSIG_NP];   /* by the op's table (ysig_op_params())  */
+    const double* data;         /* sines: lanes x n x (a, f, phi); copied */
+    int32_t       n_data;
+    const char*   name;         /* records and errors; not copied        */
+} ysig_node;
+
+/* A node's output. 64 bytes. */
+typedef struct ysig_value {
+    double   v[YSIG_LANES];
+    int64_t  t;                 /* the newest input sample's, ns         */
+    int64_t  t_oldest;          /* the oldest input sample's, ns         */
+    uint32_t device;            /* the newest sample's device            */
+    uint16_t src;               /* the source node of the newest input   */
+    uint16_t src_oldest;        /* ... of the oldest                     */
+    uint8_t  tier;              /* the worst (yin_tier)                  */
+    uint8_t  lanes;
+    uint8_t  reserved_[6];
+} ysig_value;
+
+/* A parameter row, the shape of the other headers' tables. */
+typedef struct ysig_param {
+    const char* name;
+    const char* type;           /* "f64", "i32", "u32", "enum"           */
+    double      min, max;       /* inclusive                             */
+    double      def;            /* what a zero field means               */
+    const char* unit;
+    const char* doc;
+    const char* values;         /* enum: "name=value" pairs; else NULL   */
+} ysig_param;
+
+/* A custom op (CUSTOM OPS). */
+typedef struct ysig_op_vtable {
+    uint32_t          version;    /* YSIG_OP_ABI                         */
+    const char*       name;
+    uint8_t           lanes_in[4], lanes_out; /* 0 = any, input 0's      */
+    size_t            state_size;
+    const ysig_param* params;
+    int               n_params;
+    void (*reset)(void* state, const double* p, int64_t t_ns);
+    void (*sample)(void* state, const double* p, const ysig_value* in, int n_in, ysig_value* out);
+    void (*frame)(void* state, const double* p, int64_t onset_ns, ysig_value* out);
+} ysig_op_vtable;
+
+typedef struct ysig_role {
+    const char* name;
+    uint8_t     type;           /* ysig_type                             */
+    uint8_t     units;          /* ysig_units                            */
+    bool        allow_relative; /* position2d takes position2d_relative  */
+} ysig_role;
+
+typedef struct ysig_adapter {
+    const char*      role;      /* the role's name                       */
+    const char*      name;      /* the adapter's, for the data           */
+    uint8_t          type, units;
+    const ysig_node* nodes;     /* the last node is the role's value     */
+    int              n_nodes;
+} ysig_adapter;
+
+/* A stream sample (docs/signal_spec.md 5.5): more values than yin_event
+ * holds. Defined for sources to come; nothing here reads it yet. */
+typedef struct ysig_stream_sample {
+    int64_t       t;
+    uint32_t      stream;
+    uint8_t       tier;
+    uint8_t       reserved_[3];
+    uint64_t      index;
+    const double* values;
+    int32_t       n_values;
+} ysig_stream_sample;
+
+/* One frame for ysig_frame(). */
+typedef struct ysig_frame_in {
+    int64_t      index;
+    int64_t      onset_ns;      /* the plan's, or the flip record's      */
+    int64_t      base_ns;       /* the trial base's time (ytl_base_time) */
+    const float* values;        /* timeline channels for channel nodes   */
+    int          n_values;
+} ysig_frame_in;
+
+typedef struct ysig_row {
+    const char* name;           /* the record node's name                */
+    int32_t     node;
+    int32_t     per_frame;      /* 0: a sample row; 1: a frame row       */
+    int64_t     frame;          /* frame rows: the index                 */
+    int64_t     onset;          /* frame rows: the onset                 */
+    ysig_value  value;
+} ysig_row;
+
+typedef struct ysig_hit {
+    int32_t    node;            /* the detect                            */
+    int32_t    reserved_;
+    int64_t    t;               /* the test met: a value's t, or a hold's
+                                 * start + hold                           */
+    int64_t    t_found;         /* the value or onset that found it      */
+    ysig_value value;           /* the input that met it                 */
+} ysig_hit;
+
+typedef enum ysig_entry_kind {
+    YSIG_J_RESET = 1, YSIG_J_SET, YSIG_J_SET_DATA, YSIG_J_ARM, YSIG_J_DISARM, YSIG_J_FEED, YSIG_J_FRAME
+} ysig_entry_kind;
+
+/* One journal entry (RECORDS AND REPLAY). */
+typedef struct ysig_entry {
+    int32_t       kind;         /* ysig_entry_kind                       */
+    int32_t       node, param;  /* SET, SET_DATA (param: the index), ARM */
+    int32_t       reserved_;
+    double        value;        /* SET, SET_DATA                         */
+    int64_t       t;            /* RESET, ARM                            */
+    yin_event     event;        /* FEED                                  */
+    ysig_frame_in frame;        /* FRAME                                 */
+} ysig_entry;
+
+typedef struct ysig_stats {
+    int64_t  fed;               /* ysig_feed() calls                     */
+    int64_t  taken;             /* events a source took                  */
+    int64_t  dropped_order;     /* older than their source's last        */
+    int64_t  hits_lost, derived_lost;
+    int64_t  rows, hits;
+    int64_t  ring_short;        /* a delay or velocity ring too short    */
+    int64_t  history_skipped;   /* a value older than its ring's newest  */
+    uint64_t digest;            /* FNV-1a over rows and hits             */
+} ysig_stats;
+
+struct ysig__nd;
+typedef struct ysig_desc {
+    const ysig_node*              nodes;
+    int                           n_nodes;
+    const ysig_role*              roles;
+    int                           n_roles;
+    const ysig_adapter*           adapters;
+    int                           n_adapters;
+    const ysig_op_vtable* const*  custom;
+    int                           n_custom;
+    void*                         arena;      /* 8-byte aligned          */
+    size_t                        arena_size;
+    float*                        channels;   /* bind writes here        */
+    int                           n_channels;
+    void (*on_row)(void* user, const ysig_row* row);
+    void (*journal)(void* user, const ysig_entry* e);
+    void*                         user;
+} ysig_desc;
+
+/* The handle: caller-allocated, all state in the arena. */
+typedef struct ysig_graph {
+    int               ok;
+    int               n;          /* nodes, adapters' included            */
+    int               n_exp;      /* the experiment's                     */
+    int               n_src, n_frame;
+    struct ysig__nd*  nd;
+    ysig_value*       val;
+    int16_t*          src_ids;    /* source nodes                         */
+    int32_t*          src_off;    /* n_src + 1 offsets into sched         */
+    int16_t*          sched;
+    int16_t*          frame;
+    int16_t*          order;      /* every node, inputs first             */
+    ysig_hit*         hitq;
+    yin_event*        derq;
+    int               n_hit, n_der;
+    int32_t           adapter_base[16], adapter_n[16];
+    int               n_adapters;
+    int64_t           frame_index, onset, base;  /* the frame being run  */
+    const float*      fvals;
+    int               n_fvals;
+    ysig_stats        st;
+    float*            channels;
+    int               n_channels;
+    void (*on_row)(void* user, const ysig_row* row);
+    void (*journal)(void* user, const ysig_entry* e);
+    void*             user;
+    char              err[256];
+} ysig_graph;
+
+/* A node with op and inputs set, every other input -1, the rest zero. */
+static inline ysig_node ysig_node_of(int op, int in0, int in1) {
+    ysig_node n;
+    memset(&n, 0, sizeof n);
+    n.op = (uint16_t)op;
+    n.in[0] = (int16_t)in0;
+    n.in[1] = (int16_t)in1;
+    n.in[2] = n.in[3] = -1;
+    return n;
+}
+
+YSIG_API const char* ysig_version(void);
+
+/* Check a desc as ysig_open() would, but the arena. false with the reason
+ * in err (may be NULL). */
+YSIG_API bool ysig_check(const ysig_desc* d, char* err, size_t err_size);
+
+/* Bytes of arena a desc needs; 0 when ysig_check() refuses it. */
+YSIG_API size_t ysig_arena_size(const ysig_desc* d);
+
+YSIG_API bool ysig_open(ysig_graph* g, const ysig_desc* d);
+YSIG_API const char* ysig_error(const ysig_graph* g);
+
+/* Trial start: integrators to their origins, filters, rings, delays and
+ * queues empty, detects armed by p6. Every value gets t. */
+YSIG_API void ysig_reset(ysig_graph* g, int64_t t_ns);
+
+/* p[param] of node := v, checked by the op's table; between trials. A
+ * parameter that sizes the arena (a ring's capacity, sines' count) is
+ * refused. State is kept. */
+YSIG_API bool ysig_set(ysig_graph* g, int node, int param, double v);
+YSIG_API bool ysig_set_data(ysig_graph* g, int node, int index, double v);
+
+/* Every input event. Returns how many sources took it (0 or more), -1 for
+ * a bad argument. */
+YSIG_API int ysig_feed(ysig_graph* g, const yin_event* e);
+
+/* Once per frame, after the frame's input was fed. 0, or -1. */
+YSIG_API int ysig_frame(ysig_graph* g, const ysig_frame_in* f);
+
+/* Detects: arm from t (DETECTORS), or stop. */
+YSIG_API bool ysig_arm(ysig_graph* g, int node, int64_t t_ns);
+YSIG_API bool ysig_disarm(ysig_graph* g, int node);
+
+/* The queues since the last call: hits, derived events. */
+YSIG_API int ysig_detected(ysig_graph* g, ysig_hit* out, int cap);
+YSIG_API int ysig_derived(ysig_graph* g, yin_event* out, int cap);
+
+/* A node's held value; NULL for a bad index. */
+YSIG_API const ysig_value* ysig_value_of(const ysig_graph* g, int node);
+
+/* The value at or before t (SCHEDULES AND TIME): 1, or 0 when t is older
+ * than the ring (the oldest given) or the ring is empty (the held value);
+ * -1 when the node keeps no history. */
+YSIG_API int ysig_value_at(const ysig_graph* g, int node, int64_t t_ns, ysig_value* out);
+
+/* Adapter a's node i, or -1. */
+YSIG_API int ysig_adapter_node(const ysig_graph* g, int adapter, int i);
+
+YSIG_API void ysig_get_stats(const ysig_graph* g, ysig_stats* out);
+
+/* Run a journal (RECORDS AND REPLAY). The number of entries run, -1 at
+ * the first bad one. */
+YSIG_API int ysig_replay(ysig_graph* g, const ysig_entry* e, int n);
+
+/* The parameter table of op `op`: one row per p[] it reads, in order.
+ * YSIG_OP_NONE gives the one row "op", whose values name every op. */
+YSIG_API const ysig_param* ysig_op_params(int op, int* n);
+YSIG_API const char* ysig_op_name(int op);
+
+/* The worse of two stamp tiers (SIM best, UNKNOWN worst). */
+static inline uint8_t ysig_tier_worst(uint8_t a, uint8_t b) {
+    int ra = a == YIN_TIER_SIM ? 0 : (a >= 1 && a <= 3) ? a : 4;
+    int rb = b == YIN_TIER_SIM ? 0 : (b >= 1 && b <= 3) ? b : 4;
+    return ra >= rb ? (ra == 4 ? (uint8_t)YIN_TIER_UNKNOWN : a) : (rb == 4 ? (uint8_t)YIN_TIER_UNKNOWN : b);
+}
+
+#ifdef __cplusplus
+} /* extern "C" */
+#endif
+
+#endif /* YSP_SIG_H_INCLUDED */
+
+/* ======================================================================== */
+#if defined(YSP_SIG_IMPLEMENTATION) && !defined(YSP_SIG_IMPLEMENTED)
+#define YSP_SIG_IMPLEMENTED
+
+#include <math.h>
+#include <stdio.h>
+#include <stdarg.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define YSIG__PI 3.14159265358979323846
+
+/* node flags */
+#define YSIG__F_FRAME  0x01u  /* changes at a frame                       */
+#define YSIG__F_MULTI  0x02u  /* two or more sources reach it             */
+#define YSIG__F_AT     0x04u  /* value_at computes it from its inputs     */
+#define YSIG__F_COUNTS 0x08u  /* integrate: an int64 count sum            */
+#define YSIG__F_SINK   0x10u
+#define YSIG__F_GEN    0x20u
+#define YSIG__F_VIEW   0x40u  /* has a value at the onset (state kept)    */
+
+/* op classes */
+#define YSIG__K_PURE  0x01u
+#define YSIG__K_GEN   0x02u
+#define YSIG__K_SINK  0x04u
+#define YSIG__K_VIEW  0x08u
+
+/* lane rules */
+enum { YSIG__R_SOURCE, YSIG__R_ROLE, YSIG__R_SAME, YSIG__R_ONE, YSIG__R_JOIN, YSIG__R_SELECT, YSIG__R_GEN,
+       YSIG__R_SINK, YSIG__R_TWO };
+
+typedef struct ysig__ring { int32_t cap, head, n, reserved_; ysig_value* buf; } ysig__ring;
+
+typedef struct ysig__nd {
+    double                p[YSIG_NP];
+    double                k[8];        /* derived: affine's matrix, ...     */
+    int64_t               kns[2];      /* derived durations                 */
+    const ysig_op_vtable* vt;
+    const char*           name;
+    double*               data;
+    void*                 st;
+    ysig__ring            hist;
+    int32_t               n_data;
+    uint16_t              op;
+    int16_t               in[4];
+    uint8_t               n_in, lanes, flags, reserved_;
+} ysig__nd;
+
+typedef struct ysig__src_st { int64_t last_t; int has; int reserved_; } ysig__src_st;
+typedef struct ysig__int_st {
+    int64_t n[4];
+    double  acc[4], x[4];
+    int64_t t_prev;
+    int     has, reserved_;
+} ysig__int_st;
+typedef struct ysig__lp_st { double y1[4], y2[4]; int64_t t_prev; int init, reserved_; } ysig__lp_st;
+typedef struct ysig__det_st {
+    int64_t    t_arm, t_start;
+    int        armed, ready, holding, state;
+    ysig_value v_start;
+} ysig__det_st;
+typedef struct ysig__noise_st { uint64_t s; double y[4]; int64_t t_prev; int init, reserved_; } ysig__noise_st;
+
+/* --- the op table -------------------------------------------------------- */
+
+#define YSIG__F64(n, lo, hi, d, u, doc) { n, "f64", lo, hi, d, u, doc, NULL }
+#define YSIG__BIG 1e12
+
+static const ysig_param ysig__p_none[] = {
+    { "op", "enum", 0, 24, 0, "", "the node's operation",
+      "none=0,source=1,role=2,integrate=3,lowpass=4,velocity=5,speed=6,delay=7,deadzone=8,affine=9,scale=10,"
+      "offset=11,clamp=12,select=13,join=14,sum=15,mean=16,diff=17,sines=18,noise=19,channel=20,bind=21,"
+      "detect=22,record=23,emit=24" }
+};
+static const ysig_param ysig__p_source[] = {
+    { "kind", "enum", 0, 15, 0, "", "the event's kind (ysp/input.h)",
+      "keyboard=0,mouse=1,touch=2,pen=3,gamepad=4,box=5,eye=6,sync=7,user=8" },
+    { "control", "u32", 0, 4294967295.0, 0, "", "the event's control: an axis (YIN_AXIS_*), a button", NULL },
+    { "device", "u32", 0, 4294967295.0, 0, "", "the device; 0 = any", NULL },
+    { "fields", "u32", 0, 15, 0, "", "lanes from x (1), y (2), value (4), aux (8), in that order; 0 = x, y, value, "
+      "aux by lanes, or value alone for 1 lane", NULL },
+    { "tier", "enum", 0, 4, 0, "", "the source table's tier, for events with stamp 0",
+      "unknown=0,tier_1=1,tier_2=2,tier_3=3,sim=4" },
+    { "type", "enum", 0, 4, 3, "", "the event's type; 0 = sample", "press=1,release=2,sample=3,proximity=4" },
+};
+static const ysig_param ysig__p_role[] = {
+    { "role", "i32", 0, 255, 0, "", "the index of the role in desc.roles", NULL },
+};
+static const ysig_param ysig__p_integrate[] = {
+    YSIG__F64("gain.x", -1e9, 1e9, 1, "", "per count (DELTA) or per unit-second (rate); 0 = 1"),
+    YSIG__F64("gain.y", -1e9, 1e9, 1, "", "lane 2's"),
+    YSIG__F64("gain.z", -1e9, 1e9, 1, "", "lane 3's"),
+    YSIG__F64("gain.w", -1e9, 1e9, 1, "", "lane 4's"),
+    YSIG__F64("origin.x", -YSIG__BIG, YSIG__BIG, 0, "", "the value at reset"),
+    YSIG__F64("origin.y", -YSIG__BIG, YSIG__BIG, 0, "", "lane 2's"),
+    YSIG__F64("origin.z", -YSIG__BIG, YSIG__BIG, 0, "", "lane 3's"),
+    YSIG__F64("origin.w", -YSIG__BIG, YSIG__BIG, 0, "", "lane 4's"),
+    YSIG__F64("low.x", -YSIG__BIG, YSIG__BIG, 0, "", "lower bound; low and high both 0 = no bound"),
+    YSIG__F64("low.y", -YSIG__BIG, YSIG__BIG, 0, "", "lane 2's"),
+    YSIG__F64("low.z", -YSIG__BIG, YSIG__BIG, 0, "", "lane 3's"),
+    YSIG__F64("low.w", -YSIG__BIG, YSIG__BIG, 0, "", "lane 4's"),
+    YSIG__F64("high.x", -YSIG__BIG, YSIG__BIG, 0, "", "upper bound"),
+    YSIG__F64("high.y", -YSIG__BIG, YSIG__BIG, 0, "", "lane 2's"),
+    YSIG__F64("high.z", -YSIG__BIG, YSIG__BIG, 0, "", "lane 3's"),
+    YSIG__F64("high.w", -YSIG__BIG, YSIG__BIG, 0, "", "lane 4's"),
+};
+static const ysig_param ysig__p_lowpass[] = {
+    YSIG__F64("cutoff", 1e-6, 1e6, 0, "Hz", "the -3 dB frequency of each first-order section"),
+    { "order", "i32", 0, 2, 1, "", "1 or 2 (two sections); 0 = 1", NULL },
+    YSIG__F64("rate", 0, 1e7, 0, "Hz", "the source's sample rate, when known: the cutoff must be under half of it"),
+};
+static const ysig_param ysig__p_velocity[] = {
+    YSIG__F64("lag", 1e-6, 10, 0, "s", "the difference is over at least this"),
+    { "capacity", "i32", 0, 1048576, 256, "", "samples kept for the lag; 0 = 256", NULL },
+};
+static const ysig_param ysig__p_delay[] = {
+    YSIG__F64("delay", 0, 100, 0, "s", "the input as it was this long ago"),
+    { "capacity", "i32", 0, 1048576, 1024, "", "samples kept; 0 = 1024", NULL },
+};
+static const ysig_param ysig__p_deadzone[] = {
+    YSIG__F64("radius", 0, YSIG__BIG, 0, "", "values within it give 0; past it the norm shrinks by it"),
+};
+static const ysig_param ysig__p_affine[] = {
+    YSIG__F64("m.xx", -YSIG__BIG, YSIG__BIG, 0, "", "the matrix, row-major; all four 0 = the identity"),
+    YSIG__F64("m.xy", -YSIG__BIG, YSIG__BIG, 0, "", "row 1, column 2"),
+    YSIG__F64("m.yx", -YSIG__BIG, YSIG__BIG, 0, "", "row 2, column 1"),
+    YSIG__F64("m.yy", -YSIG__BIG, YSIG__BIG, 0, "", "row 2, column 2"),
+    YSIG__F64("pre.x", -YSIG__BIG, YSIG__BIG, 0, "", "subtracted before the matrix: the rotation's center"),
+    YSIG__F64("pre.y", -YSIG__BIG, YSIG__BIG, 0, "", "lane 2's"),
+    YSIG__F64("post.x", -YSIG__BIG, YSIG__BIG, 0, "", "added after it"),
+    YSIG__F64("post.y", -YSIG__BIG, YSIG__BIG, 0, "", "lane 2's"),
+    YSIG__F64("angle", -36000, 36000, 0, "deg", "a rotation after the matrix, counterclockwise with y up; plus "
+              "input 2"),
+};
+static const ysig_param ysig__p_scale[] = {
+    YSIG__F64("k.x", -YSIG__BIG, YSIG__BIG, 1, "", "the factor; 0 = 1"),
+    YSIG__F64("k.y", -YSIG__BIG, YSIG__BIG, 1, "", "lane 2's"),
+    YSIG__F64("k.z", -YSIG__BIG, YSIG__BIG, 1, "", "lane 3's"),
+    YSIG__F64("k.w", -YSIG__BIG, YSIG__BIG, 1, "", "lane 4's"),
+};
+static const ysig_param ysig__p_offset[] = {
+    YSIG__F64("d.x", -YSIG__BIG, YSIG__BIG, 0, "", "added"),
+    YSIG__F64("d.y", -YSIG__BIG, YSIG__BIG, 0, "", "lane 2's"),
+    YSIG__F64("d.z", -YSIG__BIG, YSIG__BIG, 0, "", "lane 3's"),
+    YSIG__F64("d.w", -YSIG__BIG, YSIG__BIG, 0, "", "lane 4's"),
+};
+static const ysig_param ysig__p_clamp[] = {
+    YSIG__F64("low.x", -YSIG__BIG, YSIG__BIG, 0, "", "low and high both 0 = no bound"),
+    YSIG__F64("low.y", -YSIG__BIG, YSIG__BIG, 0, "", "lane 2's"),
+    YSIG__F64("low.z", -YSIG__BIG, YSIG__BIG, 0, "", "lane 3's"),
+    YSIG__F64("low.w", -YSIG__BIG, YSIG__BIG, 0, "", "lane 4's"),
+    YSIG__F64("high.x", -YSIG__BIG, YSIG__BIG, 0, "", "upper bound"),
+    YSIG__F64("high.y", -YSIG__BIG, YSIG__BIG, 0, "", "lane 2's"),
+    YSIG__F64("high.z", -YSIG__BIG, YSIG__BIG, 0, "", "lane 3's"),
+    YSIG__F64("high.w", -YSIG__BIG, YSIG__BIG, 0, "", "lane 4's"),
+};
+static const ysig_param ysig__p_select[] = {
+    { "lane.x", "i32", 0, 3, 0, "", "the input lane of output lane 1", NULL },
+    { "lane.y", "i32", 0, 3, 0, "", "of output lane 2", NULL },
+    { "lane.z", "i32", 0, 3, 0, "", "of output lane 3", NULL },
+    { "lane.w", "i32", 0, 3, 0, "", "of output lane 4", NULL },
+};
+static const ysig_param ysig__p_sum[] = {
+    YSIG__F64("w.0", -YSIG__BIG, YSIG__BIG, 1, "", "input 1's weight; 0 = 1"),
+    YSIG__F64("w.1", -YSIG__BIG, YSIG__BIG, 1, "", "input 2's"),
+    YSIG__F64("w.2", -YSIG__BIG, YSIG__BIG, 1, "", "input 3's"),
+    YSIG__F64("w.3", -YSIG__BIG, YSIG__BIG, 1, "", "input 4's"),
+};
+static const ysig_param ysig__p_sines[] = {
+    { "n", "i32", 1, 64, 1, "", "components per lane; data holds lanes x n x (amplitude, Hz, phase rad)", NULL },
+    YSIG__F64("ramp", 0, 1e6, 0, "s", "the amplitude rises from 0 to 1 over this from base time 0; 0 = none"),
+};
+static const ysig_param ysig__p_noise[] = {
+    YSIG__F64("seed", 0, 9007199254740992.0, 0, "", "the generator's seed, set again at each reset"),
+    YSIG__F64("sd", 0, YSIG__BIG, 1, "", "the standard deviation before the filter; 0 = 1"),
+    YSIG__F64("cutoff", 0, 1e6, 0, "Hz", "a first-order low-pass per frame; 0 = white"),
+};
+static const ysig_param ysig__p_channel[] = {
+    { "channel", "i32", 0, 65535, 0, "", "the timeline channel (ytl_values()) the frame gives", NULL },
+};
+static const ysig_param ysig__p_bind[] = {
+    { "channel", "i32", 0, 65535, 0, "", "desc.channels[channel + lane] := lane, as float, at each frame", NULL },
+};
+static const ysig_param ysig__p_detect[] = {
+    { "test", "enum", 0, 3, 0, "", "the test", "ge=0,le=1,in_rect=2,out_rect=3" },
+    { "lane", "i32", -1, 3, 0, "", "ge and le: the lane, or -1 for the norm of value - center", NULL },
+    YSIG__F64("level", -YSIG__BIG, YSIG__BIG, 0, "", "ge and le: the threshold"),
+    YSIG__F64("hysteresis", 0, YSIG__BIG, 0, "", "ready again when the test fails by this much"),
+    YSIG__F64("hold", 0, 1e6, 0, "s", "the test true for this long; 0 = at once"),
+    { "at", "enum", 0, 1, 0, "", "test each sample, or each frame's held value", "sample=0,frame=1" },
+    { "start", "enum", 0, 1, 0, "", "armed at reset, or by ysig_arm()", "reset=0,arm=1" },
+    { "repeat", "enum", 0, 1, 0, "", "one hit per arm, or every crossing", "once=0,every=1" },
+    YSIG__F64("a.x", -YSIG__BIG, YSIG__BIG, 0, "", "the center (norm), or the rectangle's low x"),
+    YSIG__F64("a.y", -YSIG__BIG, YSIG__BIG, 0, "", "the center's y, or the rectangle's low y"),
+    YSIG__F64("b.x", -YSIG__BIG, YSIG__BIG, 0, "", "the center's z, or the rectangle's high x"),
+    YSIG__F64("b.y", -YSIG__BIG, YSIG__BIG, 0, "", "the center's w, or the rectangle's high y"),
+};
+static const ysig_param ysig__p_record[] = {
+    { "per", "enum", 0, 1, 0, "", "a row per sample of the input, or per frame", "sample=0,frame=1" },
+};
+static const ysig_param ysig__p_emit[] = {
+    { "kind", "i32", 0, 7, 0, "", "the derived event's kind is YIN_KIND_USER + this", NULL },
+    { "control", "u32", 0, 4294967295.0, 0, "", "the derived event's control", NULL },
+};
+
+typedef struct ysig__opinfo {
+    const char*       name;
+    uint8_t           min_in, max_in, rule, kind;
+    const ysig_param* params;
+    int               n_params;
+} ysig__opinfo;
+
+#define YSIG__N(a) ((int)(sizeof(a) / sizeof((a)[0])))
+static const ysig__opinfo ysig__ops[YSIG_OP_COUNT] = {
+    { "none", 0, 0, YSIG__R_SINK, 0, ysig__p_none, 1 },
+    { "source", 0, 0, YSIG__R_SOURCE, 0, ysig__p_source, YSIG__N(ysig__p_source) },
+    { "role", 0, 0, YSIG__R_ROLE, YSIG__K_PURE, ysig__p_role, YSIG__N(ysig__p_role) },
+    { "integrate", 1, 1, YSIG__R_SAME, 0, ysig__p_integrate, YSIG__N(ysig__p_integrate) },
+    { "lowpass", 1, 1, YSIG__R_SAME, YSIG__K_VIEW, ysig__p_lowpass, YSIG__N(ysig__p_lowpass) },
+    { "velocity", 1, 1, YSIG__R_SAME, YSIG__K_VIEW, ysig__p_velocity, YSIG__N(ysig__p_velocity) },
+    { "speed", 1, 1, YSIG__R_ONE, YSIG__K_VIEW, ysig__p_velocity, YSIG__N(ysig__p_velocity) },
+    { "delay", 1, 1, YSIG__R_SAME, YSIG__K_VIEW, ysig__p_delay, YSIG__N(ysig__p_delay) },
+    { "deadzone", 1, 1, YSIG__R_SAME, YSIG__K_PURE, ysig__p_deadzone, YSIG__N(ysig__p_deadzone) },
+    { "affine", 1, 2, YSIG__R_TWO, YSIG__K_PURE, ysig__p_affine, YSIG__N(ysig__p_affine) },
+    { "scale", 1, 2, YSIG__R_SAME, YSIG__K_PURE, ysig__p_scale, YSIG__N(ysig__p_scale) },
+    { "offset", 1, 1, YSIG__R_SAME, YSIG__K_PURE, ysig__p_offset, YSIG__N(ysig__p_offset) },
+    { "clamp", 1, 1, YSIG__R_SAME, YSIG__K_PURE, ysig__p_clamp, YSIG__N(ysig__p_clamp) },
+    { "select", 1, 1, YSIG__R_SELECT, YSIG__K_PURE, ysig__p_select, YSIG__N(ysig__p_select) },
+    { "join", 1, 4, YSIG__R_JOIN, YSIG__K_PURE, NULL, 0 },
+    { "sum", 1, 4, YSIG__R_SAME, YSIG__K_PURE, ysig__p_sum, YSIG__N(ysig__p_sum) },
+    { "mean", 1, 4, YSIG__R_SAME, YSIG__K_PURE, ysig__p_sum, YSIG__N(ysig__p_sum) },
+    { "diff", 2, 2, YSIG__R_SAME, YSIG__K_PURE, NULL, 0 },
+    { "sines", 0, 0, YSIG__R_GEN, YSIG__K_GEN, ysig__p_sines, YSIG__N(ysig__p_sines) },
+    { "noise", 0, 0, YSIG__R_GEN, YSIG__K_GEN, ysig__p_noise, YSIG__N(ysig__p_noise) },
+    { "channel", 0, 0, YSIG__R_GEN, YSIG__K_GEN, ysig__p_channel, YSIG__N(ysig__p_channel) },
+    { "bind", 1, 1, YSIG__R_SINK, YSIG__K_SINK, ysig__p_bind, YSIG__N(ysig__p_bind) },
+    { "detect", 1, 1, YSIG__R_ONE, YSIG__K_SINK, ysig__p_detect, YSIG__N(ysig__p_detect) },
+    { "record", 1, 1, YSIG__R_SINK, YSIG__K_SINK, ysig__p_record, YSIG__N(ysig__p_record) },
+    { "emit", 1, 1, YSIG__R_SINK, YSIG__K_SINK, ysig__p_emit, YSIG__N(ysig__p_emit) },
+};
+
+YSIG_API const char* ysig_version(void) { return YSIG_VERSION_STRING; }
+
+YSIG_API const ysig_param* ysig_op_params(int op, int* n) {
+    if (op < 0 || op >= YSIG_OP_COUNT) { if (n) *n = 0; return NULL; }
+    if (n) *n = ysig__ops[op].n_params;
+    return ysig__ops[op].params;
+}
+
+YSIG_API const char* ysig_op_name(int op) {
+    return op >= 0 && op < YSIG_OP_COUNT ? ysig__ops[op].name : NULL;
+}
+
+/* --- analysis: the combined graph, from a desc ----------------------------- */
+
+/* Node ids: the experiment's 0..n-1, then each adapter's in turn. The
+ * evaluation order puts the adapters first: a role reads its adapter's last
+ * node. */
+typedef struct ysig__an {
+    int      n, n_exp, n_src, sched_total, n_frame;
+    int32_t  base[16];
+    const ysig_node* node[YSIG_MAX_NODES];
+    int16_t  in[YSIG_MAX_NODES][4];
+    uint8_t  n_in[YSIG_MAX_NODES], lanes[YSIG_MAX_NODES], flags[YSIG_MAX_NODES];
+    int16_t  src1[YSIG_MAX_NODES];        /* -1 none, -2 two or more     */
+    int32_t  hist[YSIG_MAX_NODES];
+    int16_t  order[YSIG_MAX_NODES];
+} ysig__an;
+
+static bool ysig__fail(char* err, size_t size, const char* fmt, ...) {
+    va_list ap;
+    if (err && size) {
+        va_start(ap, fmt);
+        vsnprintf(err, size, fmt, ap);
+        va_end(ap);
+    }
+    return false;
+}
+
+static const char* ysig__nm(const ysig_node* n) { return n && n->name ? n->name : "(unnamed)"; }
+
+static int ysig__type_lanes(int type) {
+    switch (type) {
+    case YSIG_TYPE_POSITION2D: case YSIG_TYPE_POSITION2D_RELATIVE: case YSIG_TYPE_GAZE: return 2;
+    case YSIG_TYPE_POSITION3D: return 3;
+    case YSIG_TYPE_SCALAR: return 1;
+    default: return 0;
+    }
+}
+
+static int ysig__popcount4(unsigned m) { return (int)((m & 1u) + ((m >> 1) & 1u) + ((m >> 2) & 1u) + ((m >> 3) & 1u)); }
+
+static const ysig_op_vtable* ysig__vt(const ysig_desc* d, int op) {
+    int i = op - YSIG_OP_CUSTOM;
+    if (op < YSIG_OP_CUSTOM || !d->custom || i >= d->n_custom) return NULL;
+    return d->custom[i];
+}
+
+static const ysig_param* ysig__table(const ysig_desc* d, int op, int* n) {
+    const ysig_op_vtable* vt;
+    if (op < YSIG_OP_COUNT) { *n = ysig__ops[op].n_params; return ysig__ops[op].params; }
+    vt = ysig__vt(d, op);
+    *n = vt ? vt->n_params : 0;
+    return vt ? vt->params : NULL;
+}
+
+/* A value against its row: range, and whole numbers for the integer and
+ * enum types. */
+static bool ysig__param_ok(const ysig_param* r, double v) {
+    if (!(v >= r->min && v <= r->max)) return false;
+    if (r->type && r->type[0] != 'f' && v != floor(v)) return false;
+    return true;
+}
+
+static bool ysig__role_idx(const ysig_desc* d, const char* name) {
+    int i;
+    for (i = 0; i < d->n_roles; i++)
+        if (d->roles[i].name && name && !strcmp(d->roles[i].name, name)) return true;
+    return false;
+}
+
+/* A frame-only sink is in no sample's list. */
+static int ysig__frame_only(const ysig_node* nd) {
+    return nd->op == YSIG_OP_BIND || (nd->op == YSIG_OP_RECORD && nd->p[0] == 1) ||
+           (nd->op == YSIG_OP_DETECT && nd->p[5] == 1);
+}
+
+static int ysig__in_frame(const ysig__an* a, int id) {
+    const ysig_node* nd = a->node[id];
+    switch (nd->op) {
+    case YSIG_OP_BIND: case YSIG_OP_DETECT: return 1;
+    case YSIG_OP_RECORD: return nd->p[0] == 1;
+    case YSIG_OP_EMIT: return (a->flags[a->in[id][0]] & YSIG__F_FRAME) != 0;
+    default: return (a->flags[id] & YSIG__F_FRAME) && !(a->flags[id] & YSIG__F_SINK);
+    }
+}
+
+/* The schedules, counted (pointers NULL) or written: per source, every
+ * node it reaches in evaluation order; per frame, the frame list. */
+static void ysig__sched(ysig__an* a, int16_t* src_ids, int32_t* src_off, int16_t* sched, int16_t* frame) {
+    uint8_t reach[YSIG_MAX_NODES];
+    int k, j, q, ns = 0, total = 0, nf = 0;
+    for (k = 0; k < a->n; k++) {
+        int s = a->order[k];
+        if (a->node[s]->op != YSIG_OP_SOURCE) continue;
+        if (src_ids) { src_ids[ns] = (int16_t)s; src_off[ns] = total; }
+        ns++;
+        memset(reach, 0, (size_t)a->n);
+        reach[s] = 1;
+        for (j = k + 1; j < a->n; j++) {
+            int id = a->order[j];
+            for (q = 0; q < a->n_in[id]; q++)
+                if (reach[a->in[id][q]]) { reach[id] = 1; break; }
+            if (!reach[id] || ysig__frame_only(a->node[id])) continue;
+            if (sched) sched[total] = (int16_t)id;
+            total++;
+        }
+    }
+    if (src_off) src_off[ns] = total;
+    for (k = 0; k < a->n; k++) {
+        int id = a->order[k];
+        if (!ysig__in_frame(a, id)) continue;
+        if (frame) frame[nf] = (int16_t)id;
+        nf++;
+    }
+    a->n_src = ns;
+    a->sched_total = total;
+    a->n_frame = nf;
+}
+
+static bool ysig__analyze(const ysig_desc* d, ysig__an* a, char* err, size_t es) {
+    int i, j, k, part, total;
+    memset(a->n_in, 0, sizeof a->n_in);
+    if (!d) return ysig__fail(err, es, "ysig: no desc");
+    if (!d->nodes || d->n_nodes < 1) return ysig__fail(err, es, "ysig: no nodes");
+    if (d->n_roles < 0 || d->n_adapters < 0 || d->n_custom < 0 || d->n_channels < 0)
+        return ysig__fail(err, es, "ysig: a negative count");
+    if (d->n_adapters > 16) return ysig__fail(err, es, "ysig: %d adapters; at most 16", d->n_adapters);
+    if ((d->n_roles && !d->roles) || (d->n_adapters && !d->adapters) || (d->n_custom && !d->custom) ||
+        (d->n_channels && !d->channels))
+        return ysig__fail(err, es, "ysig: a count without its array");
+    if (d->n_roles > 256) return ysig__fail(err, es, "ysig: %d roles; at most 256", d->n_roles);
+    total = d->n_nodes;
+    for (i = 0; i < d->n_adapters; i++) {
+        if (!d->adapters[i].nodes || d->adapters[i].n_nodes < 1)
+            return ysig__fail(err, es, "ysig: adapter %d has no nodes", i);
+        if (d->adapters[i].n_nodes > YSIG_MAX_NODES) return ysig__fail(err, es, "ysig: adapter %d too long", i);
+        total += d->adapters[i].n_nodes;
+        if (total > YSIG_MAX_NODES) break;
+    }
+    if (d->n_nodes > YSIG_MAX_NODES || total > YSIG_MAX_NODES)
+        return ysig__fail(err, es, "ysig: more than %d nodes", YSIG_MAX_NODES);
+    for (i = 0; i < d->n_custom; i++) {
+        const ysig_op_vtable* vt = d->custom[i];
+        if (!vt || vt->version != YSIG_OP_ABI || !vt->name)
+            return ysig__fail(err, es, "ysig: custom op %d: no vtable, or ABI %u (want %d)", i, vt ? vt->version : 0u,
+                              YSIG_OP_ABI);
+        if ((vt->n_params && !vt->params) || vt->n_params < 0 || vt->n_params > YSIG_NP || vt->state_size > (1u << 24) ||
+            vt->lanes_out > 4)
+            return ysig__fail(err, es, "ysig: custom op %s: bad table, state or lanes", vt->name);
+        for (j = 0; j < 4; j++)
+            if (vt->lanes_in[j] > 4) return ysig__fail(err, es, "ysig: custom op %s: lanes_in > 4", vt->name);
+    }
+    a->n = total;
+    a->n_exp = d->n_nodes;
+    /* ids and inputs; the experiment's part is part -1 */
+    {
+        int id = d->n_nodes;
+        for (part = 0; part < d->n_adapters; part++) {
+            a->base[part] = id;
+            id += d->adapters[part].n_nodes;
+        }
+    }
+    for (part = -1; part < d->n_adapters; part++) {
+        const ysig_node* arr = part < 0 ? d->nodes : d->adapters[part].nodes;
+        int cnt = part < 0 ? d->n_nodes : d->adapters[part].n_nodes, base = part < 0 ? 0 : a->base[part];
+        for (i = 0; i < cnt; i++) {
+            const ysig_node* nd = &arr[i];
+            int id = base + i, op = nd->op, mn, mx, gap = 0;
+            const ysig_param* rows;
+            int nr;
+            a->node[id] = nd;
+            if (op == YSIG_OP_NONE || (op >= YSIG_OP_COUNT && !ysig__vt(d, op)))
+                return ysig__fail(err, es, "ysig: node %d (%s): unknown op %d", id, ysig__nm(nd), op);
+            if (op == YSIG_OP_ROLE && part >= 0)
+                return ysig__fail(err, es, "ysig: node %d (%s): a role inside an adapter", id, ysig__nm(nd));
+            for (k = 0; k < 4; k++) {
+                int v = nd->in[k];
+                if (v < 0) { if (v != -1) return ysig__fail(err, es, "ysig: node %d: input %d is %d", id, k, v); gap = 1; continue; }
+                if (gap) return ysig__fail(err, es, "ysig: node %d (%s): input %d after a -1", id, ysig__nm(nd), k);
+                if (v >= i)
+                    return ysig__fail(err, es, "ysig: node %d (%s): input %d is node %d, not before it (a cycle)", id,
+                                      ysig__nm(nd), k, v);
+                a->in[id][k] = (int16_t)(base + v);
+                a->n_in[id]++;
+            }
+            for (k = a->n_in[id]; k < 4; k++) a->in[id][k] = -1;
+            if (op < YSIG_OP_COUNT) { mn = ysig__ops[op].min_in; mx = ysig__ops[op].max_in; }
+            else { mn = 0; mx = 4; }
+            if (a->n_in[id] < mn || a->n_in[id] > mx)
+                return ysig__fail(err, es, "ysig: node %d (%s): %s takes %d to %d inputs, has %d", id, ysig__nm(nd),
+                                  op < YSIG_OP_COUNT ? ysig__ops[op].name : "custom", mn, mx, a->n_in[id]);
+            rows = ysig__table(d, op, &nr);
+            for (k = 0; k < YSIG_NP; k++) {
+                if (!isfinite(nd->p[k])) return ysig__fail(err, es, "ysig: node %d (%s): p[%d] not finite", id, ysig__nm(nd), k);
+                if (k < nr && !ysig__param_ok(&rows[k], nd->p[k]))
+                    return ysig__fail(err, es, "ysig: node %d (%s): %s = %g out of [%g, %g]", id, ysig__nm(nd), rows[k].name,
+                                      nd->p[k], rows[k].min, rows[k].max);
+            }
+            if (nd->n_data < 0 || (nd->n_data && !nd->data) || nd->n_data > 4096)
+                return ysig__fail(err, es, "ysig: node %d (%s): bad data", id, ysig__nm(nd));
+            if (nd->n_data && op != YSIG_OP_SINES && op < YSIG_OP_COUNT)
+                return ysig__fail(err, es, "ysig: node %d (%s): data on an op that reads none", id, ysig__nm(nd));
+            for (k = 0; k < nd->n_data; k++)
+                if (!isfinite(nd->data[k])) return ysig__fail(err, es, "ysig: node %d: data[%d] not finite", id, k);
+            if (nd->history < 0 || nd->history > YSIG_MAX_HISTORY)
+                return ysig__fail(err, es, "ysig: node %d (%s): history %d", id, ysig__nm(nd), (int)nd->history);
+            if (nd->lanes > 4) return ysig__fail(err, es, "ysig: node %d (%s): %d lanes", id, ysig__nm(nd), nd->lanes);
+        }
+    }
+    /* the order: adapters, then the experiment */
+    k = 0;
+    for (part = 0; part < d->n_adapters; part++)
+        for (i = 0; i < d->adapters[part].n_nodes; i++) a->order[k++] = (int16_t)(a->base[part] + i);
+    for (i = 0; i < d->n_nodes; i++) a->order[k++] = (int16_t)i;
+    /* roles resolve to their adapter's last node */
+    for (i = 0; i < d->n_roles; i++) {
+        const ysig_role* r = &d->roles[i];
+        if (!r->name || r->type == YSIG_TYPE_NONE || r->type >= YSIG_TYPE_COUNT || r->units >= YSIG_UNITS_COUNT)
+            return ysig__fail(err, es, "ysig: role %d: no name, or a bad type or units", i);
+        for (j = 0; j < i; j++)
+            if (!strcmp(d->roles[j].name, r->name)) return ysig__fail(err, es, "ysig: role %s twice", r->name);
+    }
+    for (part = 0; part < d->n_adapters; part++) {
+        const ysig_adapter* ad = &d->adapters[part];
+        if (!ad->role || !ysig__role_idx(d, ad->role))
+            return ysig__fail(err, es, "ysig: adapter %d is for no declared role (%s)", part, ad->role ? ad->role : "NULL");
+        for (j = 0; j < part; j++)
+            if (!strcmp(d->adapters[j].role, ad->role)) return ysig__fail(err, es, "ysig: two adapters for role %s", ad->role);
+    }
+    for (i = 0; i < d->n_nodes; i++) {
+        const ysig_node* nd = &d->nodes[i];
+        const ysig_role* r;
+        const ysig_adapter* ad = NULL;
+        int ri;
+        if (nd->op != YSIG_OP_ROLE) continue;
+        ri = (int)nd->p[0];
+        if (ri < 0 || ri >= d->n_roles) return ysig__fail(err, es, "ysig: node %d (%s): role %d not declared", i, ysig__nm(nd), ri);
+        r = &d->roles[ri];
+        for (part = 0; part < d->n_adapters; part++)
+            if (!strcmp(d->adapters[part].role, r->name)) { ad = &d->adapters[part]; break; }
+        if (!ad) return ysig__fail(err, es, "ysig: role %s has no adapter", r->name);
+        if (ad->units != r->units)
+            return ysig__fail(err, es, "ysig: role %s: the adapter's units (%d) are not the role's (%d)", r->name, ad->units,
+                              r->units);
+        if (ad->type != r->type &&
+            !(r->type == YSIG_TYPE_POSITION2D && ad->type == YSIG_TYPE_POSITION2D_RELATIVE && r->allow_relative))
+            return ysig__fail(err, es, "ysig: role %s: the adapter's type (%d) is not the role's (%d)%s", r->name, ad->type,
+                              r->type, r->type == YSIG_TYPE_POSITION2D && ad->type == YSIG_TYPE_POSITION2D_RELATIVE
+                                           ? "; a relative device needs allow_relative" : "");
+        a->in[i][0] = (int16_t)(a->base[part] + ad->n_nodes - 1);
+        a->n_in[i] = 1;
+    }
+    /* lanes and flags, in evaluation order */
+    a->n_src = a->sched_total = a->n_frame = 0;
+    for (k = 0; k < total; k++) {
+        int id = a->order[k], op = a->node[id]->op, lanes = 0, in0 = a->n_in[id] ? a->lanes[a->in[id][0]] : 0;
+        const ysig_node* nd = a->node[id];
+        const ysig_op_vtable* vt = op >= YSIG_OP_COUNT ? ysig__vt(d, op) : NULL;
+        int rule = vt ? -1 : ysig__ops[op].rule, kind = vt ? 0 : ysig__ops[op].kind;
+        uint8_t fl = 0;
+        int16_t s1 = -1;
+        for (j = 0; j < a->n_in[id]; j++) {
+            int u = a->in[id][j];
+            if (a->flags[u] & YSIG__F_SINK)
+                return ysig__fail(err, es, "ysig: node %d (%s): input %d is a sink", id, ysig__nm(nd), j);
+            if (a->flags[u] & YSIG__F_FRAME) fl |= YSIG__F_FRAME;
+            if (a->src1[u] == -2 || (a->src1[u] >= 0 && s1 >= 0 && a->src1[u] != s1)) s1 = -2;
+            else if (a->src1[u] >= 0 && s1 == -1) s1 = a->src1[u];
+        }
+        switch (rule) {
+        case YSIG__R_SOURCE: {
+            unsigned m = (unsigned)nd->p[3];
+            lanes = m ? ysig__popcount4(m) : (nd->lanes ? nd->lanes : 2);
+            s1 = (int16_t)id;
+            break;
+        }
+        case YSIG__R_ROLE: {
+            int want = ysig__type_lanes(d->roles[(int)nd->p[0]].type);
+            if (in0 != want)
+                return ysig__fail(err, es, "ysig: node %d (%s): the adapter gives %d lanes, the role's type %d", id,
+                                  ysig__nm(nd), in0, want);
+            lanes = want;
+            break;
+        }
+        case YSIG__R_SAME:
+            lanes = in0;
+            for (j = 1; j < a->n_in[id]; j++) {
+                int lj = a->lanes[a->in[id][j]];
+                if (op == YSIG_OP_SCALE ? lj != 1 : lj != in0)
+                    return ysig__fail(err, es, "ysig: node %d (%s): input %d has %d lanes, %s", id, ysig__nm(nd), j, lj,
+                                      op == YSIG_OP_SCALE ? "the factor takes 1" : "input 1 has a different count");
+            }
+            break;
+        case YSIG__R_ONE: lanes = 1; break;
+        case YSIG__R_TWO:
+            if (in0 != 2 || (a->n_in[id] > 1 && a->lanes[a->in[id][1]] != 1))
+                return ysig__fail(err, es, "ysig: node %d (%s): affine takes 2 lanes and a 1-lane angle", id, ysig__nm(nd));
+            lanes = 2;
+            break;
+        case YSIG__R_JOIN:
+            for (j = 0; j < a->n_in[id]; j++) lanes += a->lanes[a->in[id][j]];
+            if (lanes > 4) return ysig__fail(err, es, "ysig: node %d (%s): join gives %d lanes; at most 4", id, ysig__nm(nd), lanes);
+            break;
+        case YSIG__R_SELECT:
+            lanes = nd->lanes;
+            if (lanes < 1) return ysig__fail(err, es, "ysig: node %d (%s): select needs lanes", id, ysig__nm(nd));
+            for (j = 0; j < lanes; j++)
+                if ((int)nd->p[j] >= in0)
+                    return ysig__fail(err, es, "ysig: node %d (%s): lane %d of a %d-lane input", id, ysig__nm(nd), (int)nd->p[j], in0);
+            break;
+        case YSIG__R_GEN:
+            lanes = nd->lanes ? nd->lanes : 1;
+            break;
+        case YSIG__R_SINK: lanes = 0; break;
+        default: /* custom */
+            for (j = 0; j < a->n_in[id]; j++)
+                if (vt->lanes_in[j] && vt->lanes_in[j] != a->lanes[a->in[id][j]])
+                    return ysig__fail(err, es, "ysig: node %d (%s): %s's input %d takes %d lanes", id, ysig__nm(nd), vt->name, j,
+                                      vt->lanes_in[j]);
+            lanes = vt->lanes_out ? vt->lanes_out : a->n_in[id] ? in0 : nd->lanes;
+            if (lanes < 1) return ysig__fail(err, es, "ysig: node %d (%s): no lanes", id, ysig__nm(nd));
+            if (!a->n_in[id]) { kind = YSIG__K_GEN; if (!vt->frame) return ysig__fail(err, es, "ysig: %s: no frame()", vt->name); }
+            else if (!vt->sample) return ysig__fail(err, es, "ysig: %s: no sample()", vt->name);
+            break;
+        }
+        if (nd->lanes && lanes && nd->lanes != lanes)
+            return ysig__fail(err, es, "ysig: node %d (%s): lanes %d, the op gives %d", id, ysig__nm(nd), nd->lanes, lanes);
+        if (rule != YSIG__R_SINK && (lanes < 1 || lanes > 4))
+            return ysig__fail(err, es, "ysig: node %d (%s): %d lanes", id, ysig__nm(nd), lanes);
+        /* the op's own rules */
+        switch (op) {
+        case YSIG_OP_INTEGRATE:
+            for (j = 0; j < lanes; j++) {
+                double lo = nd->p[8 + j], hi = nd->p[12 + j], gn = nd->p[j];
+                if ((lo != 0 || hi != 0) && !(lo < hi))
+                    return ysig__fail(err, es, "ysig: node %d (%s): bound %d: low %g not below high %g", id, ysig__nm(nd), j, lo, hi);
+                if ((lo != 0 || hi != 0) && gn < 0)
+                    return ysig__fail(err, es, "ysig: node %d (%s): a bounded lane needs a positive gain (flip with affine)",
+                                      id, ysig__nm(nd));
+            }
+            if (a->node[a->in[id][0]]->op == YSIG_OP_SOURCE && (uint32_t)a->node[a->in[id][0]]->p[1] == YIN_AXIS_DELTA)
+                fl |= YSIG__F_COUNTS;
+            else fl |= YSIG__F_FRAME | YSIG__F_VIEW;
+            break;
+        case YSIG_OP_LOWPASS:
+            if (nd->p[2] > 0 && !(nd->p[0] < nd->p[2] / 2))
+                return ysig__fail(err, es, "ysig: node %d (%s): cutoff %g Hz at %g Hz sampling (Nyquist)", id, ysig__nm(nd),
+                                  nd->p[0], nd->p[2]);
+            break;
+        case YSIG_OP_CLAMP:
+            for (j = 0; j < lanes; j++)
+                if ((nd->p[j] != 0 || nd->p[4 + j] != 0) && nd->p[j] > nd->p[4 + j])
+                    return ysig__fail(err, es, "ysig: node %d (%s): clamp %d: low above high", id, ysig__nm(nd), j);
+            break;
+        case YSIG_OP_SINES:
+            if (lanes > 2) return ysig__fail(err, es, "ysig: node %d (%s): sines gives 1 or 2 lanes", id, ysig__nm(nd));
+            if (nd->n_data != lanes * 3 * (int)nd->p[0])
+                return ysig__fail(err, es, "ysig: node %d (%s): data has %d values; %d lanes x %d x 3 = %d", id, ysig__nm(nd),
+                                  nd->n_data, lanes, (int)nd->p[0], lanes * 3 * (int)nd->p[0]);
+            break;
+        case YSIG_OP_CHANNEL:
+            if (lanes != 1) return ysig__fail(err, es, "ysig: node %d (%s): channel gives 1 lane", id, ysig__nm(nd));
+            break;
+        case YSIG_OP_BIND:
+            if ((int)nd->p[0] + in0 > d->n_channels)
+                return ysig__fail(err, es, "ysig: node %d (%s): channels %d..%d, desc has %d", id, ysig__nm(nd), (int)nd->p[0],
+                                  (int)nd->p[0] + in0 - 1, d->n_channels);
+            break;
+        case YSIG_OP_DETECT:
+            if ((int)nd->p[1] >= in0)
+                return ysig__fail(err, es, "ysig: node %d (%s): lane %d of %d", id, ysig__nm(nd), (int)nd->p[1], in0);
+            if ((nd->p[0] == YSIG_TEST_IN_RECT || nd->p[0] == YSIG_TEST_OUT_RECT) && in0 < 2)
+                return ysig__fail(err, es, "ysig: node %d (%s): a rectangle needs 2 lanes", id, ysig__nm(nd));
+            if (nd->p[0] >= YSIG_TEST_IN_RECT && (nd->p[8] > nd->p[10] || nd->p[9] > nd->p[11]))
+                return ysig__fail(err, es, "ysig: node %d (%s): the rectangle's low corner is above its high", id, ysig__nm(nd));
+            break;
+        default: break;
+        }
+        if (kind & YSIG__K_GEN) fl |= YSIG__F_GEN | YSIG__F_FRAME;
+        if (kind & YSIG__K_SINK) fl |= YSIG__F_SINK;
+        if (kind & YSIG__K_VIEW) fl |= YSIG__F_FRAME | YSIG__F_VIEW;
+        if (s1 == -2) fl |= YSIG__F_MULTI;
+        a->lanes[id] = (uint8_t)lanes;
+        a->flags[id] = fl;
+        a->src1[id] = s1;
+        a->hist[id] = nd->history;
+    }
+    /* history: a stateless node after two sources is computed from its
+     * inputs at the time asked, so they keep the rings */
+    for (k = total - 1; k >= 0; k--) {
+        int id = a->order[k], op = a->node[id]->op;
+        if (!a->hist[id]) continue;
+        if ((a->flags[id] & YSIG__F_MULTI) && op < YSIG_OP_COUNT && (ysig__ops[op].kind & YSIG__K_PURE)) {
+            a->flags[id] |= YSIG__F_AT;
+            for (j = 0; j < a->n_in[id]; j++) {
+                int u = a->in[id][j];
+                if (a->hist[u] < a->hist[id]) a->hist[u] = a->hist[id];
+            }
+            a->hist[id] = 0;
+        }
+    }
+    ysig__sched(a, NULL, NULL, NULL, NULL);
+    (void)i;
+    return true;
+}
+
+/* --- layout ------------------------------------------------------------------ */
+
+static size_t ysig__al(size_t* off, size_t size) {
+    size_t at = (*off + 15u) & ~(size_t)15u;
+    *off = at + size;
+    return at;
+}
+
+static int ysig__ring_cap(const ysig_node* nd) {
+    int c = (int)nd->p[1];
+    if (nd->op == YSIG_OP_DELAY) return c ? c : 1024;
+    return c ? c : 256;
+}
+
+static size_t ysig__state_size(const ysig_desc* d, const ysig_node* nd) {
+    const ysig_op_vtable* vt;
+    switch (nd->op) {
+    case YSIG_OP_SOURCE: return sizeof(ysig__src_st);
+    case YSIG_OP_INTEGRATE: return sizeof(ysig__int_st);
+    case YSIG_OP_LOWPASS: return sizeof(ysig__lp_st);
+    case YSIG_OP_VELOCITY: case YSIG_OP_SPEED: case YSIG_OP_DELAY:
+        return sizeof(ysig__ring) + 16 + (size_t)ysig__ring_cap(nd) * sizeof(ysig_value);
+    case YSIG_OP_DETECT: return sizeof(ysig__det_st);
+    case YSIG_OP_NOISE: return sizeof(ysig__noise_st);
+    default:
+        vt = nd->op >= YSIG_OP_CUSTOM ? ysig__vt(d, nd->op) : NULL;
+        return vt ? vt->state_size : 0;
+    }
+}
+
+/* Every block of the arena, measured (g NULL) or placed. */
+static size_t ysig__layout(const ysig_desc* d, const ysig__an* a, ysig_graph* g, char* base) {
+    size_t off = 0, at;
+    int i, n = a->n;
+    at = ysig__al(&off, sizeof(ysig__nd) * (size_t)n);
+    if (g) g->nd = (ysig__nd*)(void*)(base + at);
+    at = ysig__al(&off, sizeof(ysig_value) * (size_t)n);
+    if (g) g->val = (ysig_value*)(void*)(base + at);
+    at = ysig__al(&off, sizeof(int16_t) * (size_t)n);
+    if (g) g->order = (int16_t*)(void*)(base + at);
+    at = ysig__al(&off, sizeof(int16_t) * (size_t)(a->n_src + 1));
+    if (g) g->src_ids = (int16_t*)(void*)(base + at);
+    at = ysig__al(&off, sizeof(int32_t) * (size_t)(a->n_src + 1));
+    if (g) g->src_off = (int32_t*)(void*)(base + at);
+    at = ysig__al(&off, sizeof(int16_t) * (size_t)(a->sched_total + 1));
+    if (g) g->sched = (int16_t*)(void*)(base + at);
+    at = ysig__al(&off, sizeof(int16_t) * (size_t)(a->n_frame + 1));
+    if (g) g->frame = (int16_t*)(void*)(base + at);
+    at = ysig__al(&off, sizeof(ysig_hit) * YSIG_QUEUE_CAP);
+    if (g) g->hitq = (ysig_hit*)(void*)(base + at);
+    at = ysig__al(&off, sizeof(yin_event) * YSIG_QUEUE_CAP);
+    if (g) g->derq = (yin_event*)(void*)(base + at);
+    for (i = 0; i < n; i++) {
+        const ysig_node* nd = a->node[i];
+        size_t s = ysig__state_size(d, nd);
+        if (s) {
+            at = ysig__al(&off, s);
+            if (g) g->nd[i].st = base + at;
+        }
+        if (nd->n_data) {
+            at = ysig__al(&off, sizeof(double) * (size_t)nd->n_data);
+            if (g) g->nd[i].data = (double*)(void*)(base + at);
+        }
+        if (a->hist[i]) {
+            at = ysig__al(&off, sizeof(ysig_value) * (size_t)a->hist[i]);
+            if (g) {
+                g->nd[i].hist.buf = (ysig_value*)(void*)(base + at);
+                g->nd[i].hist.cap = a->hist[i];
+            }
+        }
+    }
+    return off + 16;
+}
+
+/* The analysis is about 14 KB on the stack: no allocation, no static. */
+YSIG_API bool ysig_check(const ysig_desc* d, char* err, size_t err_size) {
+    ysig__an a;
+    if (err && err_size) err[0] = 0;
+    return ysig__analyze(d, &a, err, err_size);
+}
+
+YSIG_API size_t ysig_arena_size(const ysig_desc* d) {
+    ysig__an a;
+    if (!ysig__analyze(d, &a, NULL, 0)) return 0;
+    return ysig__layout(d, &a, NULL, NULL);
+}
+
+YSIG_API const char* ysig_error(const ysig_graph* g) { return g ? g->err : "ysig: no graph"; }
+
+/* --- evaluation -------------------------------------------------------------- */
+
+static void ysig__digest(ysig_graph* g, const void* p, size_t n) {
+    const unsigned char* b = (const unsigned char*)p;
+    uint64_t h = g->st.digest;
+    size_t i;
+    for (i = 0; i < n; i++) { h ^= b[i]; h *= 1099511628211ull; }
+    g->st.digest = h;
+}
+static void ysig__digest_value(ysig_graph* g, const ysig_value* v) {
+    int k;
+    ysig__digest(g, &v->t, sizeof v->t);
+    ysig__digest(g, &v->t_oldest, sizeof v->t_oldest);
+    ysig__digest(g, &v->tier, 1);
+    ysig__digest(g, &v->lanes, 1);
+    for (k = 0; k < v->lanes && k < 4; k++) ysig__digest(g, &v->v[k], sizeof(double));
+}
+
+static int64_t ysig__ns(double s) { return (int64_t)llround(s * 1e9); }
+
+/* Derived constants from p[]: after open and after ysig_set(). */
+static void ysig__prepare(ysig_graph* g, int i) {
+    ysig__nd* n = &g->nd[i];
+    double a;
+    switch (n->op) {
+    case YSIG_OP_AFFINE: {
+        double m[4], c, s;
+        int k;
+        for (k = 0; k < 4; k++) m[k] = n->p[k];
+        if (m[0] == 0 && m[1] == 0 && m[2] == 0 && m[3] == 0) { m[0] = 1; m[3] = 1; }
+        a = n->p[8];
+        if (a != 0) {
+            double r = a * YSIG__PI / 180;
+            c = cos(r);
+            s = sin(r);
+            n->k[0] = c * m[0] - s * m[2];
+            n->k[1] = c * m[1] - s * m[3];
+            n->k[2] = s * m[0] + c * m[2];
+            n->k[3] = s * m[1] + c * m[3];
+        } else {
+            for (k = 0; k < 4; k++) n->k[k] = m[k];
+        }
+        for (k = 0; k < 4; k++) n->k[4 + k] = m[k];   /* before the angle, for an angle input */
+        break;
+    }
+    case YSIG_OP_VELOCITY: case YSIG_OP_SPEED: n->kns[0] = ysig__ns(n->p[0]); break;
+    case YSIG_OP_DELAY: n->kns[0] = ysig__ns(n->p[0]); break;
+    case YSIG_OP_DETECT: n->kns[0] = ysig__ns(n->p[4]); break;
+    default: break;
+    }
+}
+
+static void ysig__ring_push(ysig__ring* r, const ysig_value* v) {
+    int at = (r->head + r->n) % r->cap;
+    if (r->n == r->cap) { r->head = (r->head + 1) % r->cap; at = (r->head + r->n - 1) % r->cap; }
+    else r->n++;
+    r->buf[at] = *v;
+}
+static const ysig_value* ysig__ring_at(const ysig__ring* r, int k) { return &r->buf[(r->head + k) % r->cap]; }
+
+/* The newest entry with t <= limit (rings in time order), or -1. */
+static int ysig__ring_find(const ysig__ring* r, int64_t limit) {
+    int lo = 0, hi = r->n - 1, best = -1;
+    while (lo <= hi) {
+        int mid = lo + (hi - lo) / 2;
+        if (ysig__ring_at(r, mid)->t <= limit) { best = mid; lo = mid + 1; }
+        else hi = mid - 1;
+    }
+    return best;
+}
+
+static void ysig__hist_push(ysig_graph* g, ysig__nd* n, const ysig_value* v) {
+    ysig__ring* r = &n->hist;
+    if (!r->cap) return;
+    if (r->n) {
+        ysig_value* last = &r->buf[(r->head + r->n - 1) % r->cap];
+        if (v->t < last->t) { g->st.history_skipped++; return; }
+        if (v->t == last->t) { *last = *v; return; }
+    }
+    ysig__ring_push(r, v);
+}
+
+/* The generic part of a value from its inputs: newest t, oldest t, worst
+ * tier, their sources. */
+static void ysig__meta(const ysig_graph* g, const ysig__nd* n, const ysig_value* const* in, ysig_value* o) {
+    int j;
+    (void)g;
+    if (!n->n_in) return;
+    o->t = in[0]->t;
+    o->t_oldest = in[0]->t_oldest;
+    o->tier = in[0]->tier;
+    o->src = in[0]->src;
+    o->src_oldest = in[0]->src_oldest;
+    o->device = in[0]->device;
+    for (j = 1; j < n->n_in; j++) {
+        if (in[j]->t > o->t) { o->t = in[j]->t; o->src = in[j]->src; o->device = in[j]->device; }
+        if (in[j]->t_oldest < o->t_oldest) { o->t_oldest = in[j]->t_oldest; o->src_oldest = in[j]->src_oldest; }
+        o->tier = ysig_tier_worst(o->tier, in[j]->tier);
+    }
+}
+
+/* r = sum of the nonzero terms m[c] * d[c], after post when nonzero: an
+ * exact zero adds nothing, so a mirror or a selection stays exact, the
+ * sign of zero included. */
+static double ysig__row(double post, const double* m, const double* dd) {
+    double acc = 0;
+    int has = 0, c;
+    if (post != 0) { acc = post; has = 1; }
+    for (c = 0; c < 2; c++)
+        if (m[c] != 0) {
+            double t = m[c] * dd[c];
+            acc = has ? acc + t : t;
+            has = 1;
+        }
+    return has ? acc : 0.0;
+}
+
+/* The stateless ops: out from in, nothing else read. */
+static void ysig__pure(const ysig__nd* n, const ysig_value* const* in, ysig_value* o) {
+    int k, j, L = n->lanes;
+    const double* x = in[0]->v;
+    switch (n->op) {
+    case YSIG_OP_ROLE:
+        for (k = 0; k < L; k++) o->v[k] = x[k];
+        break;
+    case YSIG_OP_DEADZONE: {
+        double r2 = 0, r, R = n->p[0];
+        for (k = 0; k < L; k++) r2 += x[k] * x[k];
+        r = sqrt(r2);
+        for (k = 0; k < L; k++) o->v[k] = r <= R ? 0.0 : x[k] * ((r - R) / r);
+        break;
+    }
+    case YSIG_OP_AFFINE: {
+        double dd[2], m[4];
+        const double* mm = n->k;
+        dd[0] = x[0] - n->p[4];
+        dd[1] = x[1] - n->p[5];
+        if (n->n_in > 1) {
+            double a = n->p[8] + in[1]->v[0];
+            if (a != 0) {
+                double r = a * YSIG__PI / 180, c = cos(r), s = sin(r);
+                const double* b = n->k + 4;
+                m[0] = c * b[0] - s * b[2];
+                m[1] = c * b[1] - s * b[3];
+                m[2] = s * b[0] + c * b[2];
+                m[3] = s * b[1] + c * b[3];
+            } else {
+                for (k = 0; k < 4; k++) m[k] = n->k[4 + k];
+            }
+            mm = m;
+        }
+        o->v[0] = ysig__row(n->p[6], mm, dd);
+        o->v[1] = ysig__row(n->p[7], mm + 2, dd);
+        break;
+    }
+    case YSIG_OP_SCALE:
+        for (k = 0; k < L; k++) {
+            double s = n->p[k] != 0 ? n->p[k] : 1;
+            o->v[k] = s == 1 ? x[k] : x[k] * s;
+            if (n->n_in > 1) o->v[k] = o->v[k] * in[1]->v[0];
+        }
+        break;
+    case YSIG_OP_OFFSET:
+        for (k = 0; k < L; k++) o->v[k] = x[k] + n->p[k];
+        break;
+    case YSIG_OP_CLAMP:
+        for (k = 0; k < L; k++) {
+            double v = x[k], lo = n->p[k], hi = n->p[4 + k];
+            if (lo != 0 || hi != 0) v = v < lo ? lo : v > hi ? hi : v;
+            o->v[k] = v;
+        }
+        break;
+    case YSIG_OP_SELECT:
+        for (k = 0; k < L; k++) o->v[k] = x[(int)n->p[k]];
+        break;
+    case YSIG_OP_JOIN: {
+        int at = 0;
+        for (j = 0; j < n->n_in; j++)
+            for (k = 0; k < in[j]->lanes; k++) o->v[at++] = in[j]->v[k];
+        break;
+    }
+    case YSIG_OP_SUM:
+    case YSIG_OP_MEAN: {
+        double ws = 0;
+        for (k = 0; k < L; k++) {
+            double s = 0;
+            for (j = 0; j < n->n_in; j++) {
+                double w = n->p[j] != 0 ? n->p[j] : 1;
+                s = j == 0 ? (w == 1 ? in[j]->v[k] : w * in[j]->v[k]) : s + (w == 1 ? in[j]->v[k] : w * in[j]->v[k]);
+            }
+            o->v[k] = s;
+        }
+        if (n->op == YSIG_OP_MEAN) {
+            for (j = 0; j < n->n_in; j++) ws += n->p[j] != 0 ? n->p[j] : 1;
+            for (k = 0; k < L; k++) o->v[k] = o->v[k] / ws;
+        }
+        break;
+    }
+    case YSIG_OP_DIFF:
+        for (k = 0; k < L; k++) o->v[k] = x[k] - in[1]->v[k];
+        break;
+    default: break;
+    }
+}
+
+static void ysig__hit(ysig_graph* g, int node, int64_t t, int64_t t_found, const ysig_value* v) {
+    ysig_hit* h;
+    g->st.hits++;
+    ysig__digest(g, &node, sizeof node);
+    ysig__digest(g, &t, sizeof t);
+    ysig__digest_value(g, v);
+    if (g->n_hit >= YSIG_QUEUE_CAP) { g->st.hits_lost++; return; }
+    h = &g->hitq[g->n_hit++];
+    memset(h, 0, sizeof *h);
+    h->node = node;
+    h->t = t;
+    h->t_found = t_found;
+    h->value = *v;
+}
+
+/* The detect's test on one value; with hyst, the test moved back by the
+ * hysteresis (for "ready again"). */
+static int ysig__test(const ysig__nd* n, const ysig_value* v, double hyst) {
+    int test = (int)n->p[0], lane = (int)n->p[1];
+    double q, x = v->v[0], y = v->v[1];
+    if (test == YSIG_TEST_IN_RECT || test == YSIG_TEST_OUT_RECT) {
+        int in = x >= n->p[8] + hyst && x <= n->p[10] - hyst && y >= n->p[9] + hyst && y <= n->p[11] - hyst;
+        int out = x < n->p[8] - hyst || x > n->p[10] + hyst || y < n->p[9] - hyst || y > n->p[11] + hyst;
+        return test == YSIG_TEST_IN_RECT ? in : out;
+    }
+    if (lane >= 0) q = v->v[lane];
+    else {
+        double s = 0, dd;
+        int k;
+        for (k = 0; k < v->lanes; k++) { dd = v->v[k] - n->p[8 + k]; s += dd * dd; }
+        q = sqrt(s);
+    }
+    return test == YSIG_TEST_GE ? q >= n->p[2] + hyst : q <= n->p[2] - hyst;
+}
+
+static void ysig__det_arm(ysig_graph* g, int i, int64_t t) {
+    ysig__nd* n = &g->nd[i];
+    ysig__det_st* s = (ysig__det_st*)n->st;
+    const ysig_value* v = &g->val[n->in[0]];
+    int r = ysig__test(n, v, 0);
+    s->armed = 1;
+    s->t_arm = t;
+    s->state = r;
+    if (n->kns[0] > 0) {
+        /* a hold counts from the arm when the test is true then */
+        s->ready = 1;
+        s->holding = r;
+        s->t_start = t;
+        s->v_start = *v;
+    } else {
+        /* past the test at arm: held until it re-arms (CROSSINGS) */
+        s->ready = !r;
+        s->holding = 0;
+    }
+}
+
+/* A hold met by time `t`: the held value was true from t_start on. */
+static int ysig__det_hold_done(ysig_graph* g, int i, int64_t t) {
+    ysig__nd* n = &g->nd[i];
+    ysig__det_st* s = (ysig__det_st*)n->st;
+    if (!s->holding || t < s->t_start + n->kns[0]) return 0;
+    ysig__hit(g, i, s->t_start + n->kns[0], t, &s->v_start);
+    s->holding = 0;
+    s->ready = 0;
+    if (n->p[7] == 0) { s->armed = 0; return 1; }
+    return 0;
+}
+
+/* One value for a detect at time t (a sample's t, or an onset). */
+static void ysig__det_value(ysig_graph* g, int i, const ysig_value* v, int64_t t) {
+    ysig__nd* n = &g->nd[i];
+    ysig__det_st* s = (ysig__det_st*)n->st;
+    int r = ysig__test(n, v, 0);
+    s->state = r;
+    g->val[i].v[0] = r ? 1.0 : 0.0;
+    g->val[i].t = t;
+    if (!s->armed || t < s->t_arm) return;
+    if (n->kns[0] > 0) {
+        if (ysig__det_hold_done(g, i, t)) return;
+        if (r) {
+            if (!s->holding && s->ready) {
+                s->holding = 1;
+                s->t_start = t;
+                s->v_start = *v;
+            }
+        } else {
+            s->holding = 0;
+            if (!ysig__test(n, v, -n->p[3])) s->ready = 1;
+        }
+        return;
+    }
+    if (r && s->ready) {
+        ysig__hit(g, i, t, t, v);
+        s->ready = 0;
+        if (n->p[7] == 0) s->armed = 0;
+    } else if (!s->ready && !ysig__test(n, v, -n->p[3])) {
+        /* ready again once the test fails with the level moved back */
+        s->ready = 1;
+    }
+}
+
+static void ysig__det_frame(ysig_graph* g, int i, int64_t onset) {
+    ysig__nd* n = &g->nd[i];
+    ysig__det_st* s = (ysig__det_st*)n->st;
+    if (!s->armed || n->kns[0] <= 0 || onset < s->t_arm) return;
+    (void)ysig__det_hold_done(g, i, onset);
+}
+
+static void ysig__emit(ysig_graph* g, int i, const ysig_value* v) {
+    ysig__nd* n = &g->nd[i];
+    yin_event* e;
+    int k;
+    if (g->n_der >= YSIG_QUEUE_CAP) { g->st.derived_lost++; return; }
+    e = &g->derq[g->n_der++];
+    memset(e, 0, sizeof *e);
+    e->t = v->t;
+    e->kind = (uint8_t)(YIN_KIND_USER + (int)n->p[0]);
+    e->type = (uint8_t)YIN_SAMPLE;
+    e->device = (uint32_t)i;
+    e->control = (uint32_t)n->p[1];
+    e->stamp = v->tier;
+    e->code = (uint32_t)v->src | ((uint32_t)v->src_oldest << 16);
+    for (k = 0; k < v->lanes && k < 4; k++) {
+        float f = (float)v->v[k];
+        if (k == 0) e->x = f;
+        else if (k == 1) e->y = f;
+        else if (k == 2) e->value = f;
+        else e->aux = f;
+    }
+}
+
+static void ysig__row_out(ysig_graph* g, int i, int per_frame, const ysig_value* v) {
+    ysig_row r;
+    memset(&r, 0, sizeof r);
+    r.name = g->nd[i].name;
+    r.node = i;
+    r.per_frame = per_frame;
+    r.frame = per_frame ? g->frame_index : 0;
+    r.onset = per_frame ? g->onset : 0;
+    r.value = *v;
+    g->st.rows++;
+    ysig__digest(g, &i, sizeof i);
+    ysig__digest(g, &r.frame, sizeof r.frame);
+    ysig__digest_value(g, v);
+    if (g->on_row) g->on_row(g->user, &r);
+}
+
+/* Integrate, DELTA: one axis, d more counts held inside [lo, hi] (the last
+ * grid point inside, so a move back leaves the edge at once; yrsp_cursor's
+ * rule in double). */
+static int64_t ysig__kq(double q) { return q > 4e18 ? (int64_t)4e18 : q < -4e18 ? -(int64_t)4e18 : (int64_t)q; }
+static double ysig__counts_axis(int64_t* n, double o, double gn, double lo, double hi, int64_t d) {
+    double p;
+    int i;
+    *n += d;
+    p = o + gn * (double)*n;
+    if (lo == 0 && hi == 0) return p;
+    if (p > hi) {
+        int64_t k = ysig__kq((hi - o) / gn);
+        for (i = 0; i < 4 && o + gn * (double)k > hi; i++) k--;
+        for (i = 0; i < 4 && o + gn * (double)(k + 1) <= hi; i++) k++;
+        *n = k;
+    }
+    if (o + gn * (double)*n < lo) {
+        int64_t k = ysig__kq((lo - o) / gn);
+        for (i = 0; i < 4 && o + gn * (double)k < lo; i++) k++;
+        for (i = 0; i < 4 && o + gn * (double)(k - 1) >= lo; i++) k--;
+        *n = k;
+    }
+    p = o + gn * (double)*n;
+    return p < lo ? lo : p > hi ? hi : p;
+}
+
+static double ysig__gain(const ysig__nd* n, int k) { return n->p[k] != 0 ? n->p[k] : 1.0; }
+
+static double ysig__bound(const ysig__nd* n, int k, double v) {
+    double lo = n->p[8 + k], hi = n->p[12 + k];
+    if (lo == 0 && hi == 0) return v;
+    return v < lo ? lo : v > hi ? hi : v;
+}
+
+/* splitmix64 and a Gaussian by Box-Muller: the same numbers on every host */
+static uint64_t ysig__mix(uint64_t* s) {
+    uint64_t z = (*s += 0x9E3779B97F4A7C15ull);
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+    return z ^ (z >> 31);
+}
+static double ysig__gauss(uint64_t* s) {
+    double u1 = ((double)(ysig__mix(s) >> 11) + 1.0) / 9007199254740993.0;
+    double u2 = (double)(ysig__mix(s) >> 11) / 9007199254740992.0;
+    return sqrt(-2.0 * log(u1)) * cos(2 * YSIG__PI * u2);
+}
+
+/* The velocity's lookup: the newest kept value at least lag before t. */
+static const ysig_value* ysig__lagged(const ysig__ring* r, int64_t t, int64_t lag, int skip_newest) {
+    int k;
+    for (k = r->n - 1 - skip_newest; k >= 0; k--) {
+        const ysig_value* q = ysig__ring_at(r, k);
+        if (t - q->t >= lag) return q;
+    }
+    return NULL;
+}
+
+static void ysig__velocity_out(const ysig__nd* n, const ysig_value* x, const ysig_value* q, int64_t t, ysig_value* o) {
+    double dt = (double)(t - q->t) / 1e9;
+    int k;
+    if (n->op == YSIG_OP_SPEED) {
+        double s = 0;
+        for (k = 0; k < x->lanes; k++) s += (x->v[k] - q->v[k]) * (x->v[k] - q->v[k]);
+        o->v[0] = sqrt(s) / dt;
+    } else {
+        for (k = 0; k < x->lanes; k++) o->v[k] = (x->v[k] - q->v[k]) / dt;
+    }
+}
+
+/* Run node i: mode 0 a sample, 1 a frame (at onset t), 2 the reset. */
+static void ysig__run(ysig_graph* g, int i, int mode, int64_t t) {
+    ysig__nd* n = &g->nd[i];
+    ysig_value* o = &g->val[i];
+    const ysig_value* in[4] = { NULL, NULL, NULL, NULL };
+    int k, j;
+    for (j = 0; j < n->n_in; j++) in[j] = &g->val[n->in[j]];
+    if (n->flags & YSIG__F_SINK) {
+        const ysig_value* x = in[0];
+        switch (n->op) {
+        case YSIG_OP_BIND:
+            if (mode == 1)
+                for (k = 0; k < x->lanes; k++) g->channels[(int)n->p[0] + k] = (float)x->v[k];
+            break;
+        case YSIG_OP_RECORD:
+            if (mode == 0 && n->p[0] == 0) ysig__row_out(g, i, 0, x);
+            else if (mode == 1 && n->p[0] == 1) ysig__row_out(g, i, 1, x);
+            break;
+        case YSIG_OP_EMIT:
+            if (mode != 2) ysig__emit(g, i, x);
+            break;
+        case YSIG_OP_DETECT:
+            if (mode == 2) break;
+            if (mode == 1) {
+                int at_frame = n->p[5] == 1, view = (g->nd[n->in[0]].flags & YSIG__F_FRAME) != 0;
+                if (at_frame || view) {
+                    ysig_value v = *x;
+                    v.t = t;
+                    ysig__det_value(g, i, &v, t);
+                } else {
+                    ysig__det_frame(g, i, t);
+                }
+            } else {
+                ysig__det_value(g, i, x, x->t);
+            }
+            break;
+        default: break;
+        }
+        return;
+    }
+    if (n->op >= YSIG_OP_CUSTOM) {
+        if (n->n_in) {
+            ysig__meta(g, n, in, o);
+            if (mode == 2) {
+                if (n->vt->reset) n->vt->reset(n->st, n->p, t);
+                for (k = 0; k < n->lanes; k++) o->v[k] = 0;
+            } else {
+                n->vt->sample(n->st, n->p, in[0], n->n_in, o);
+            }
+        } else {
+            if (mode == 2) { if (n->vt->reset) n->vt->reset(n->st, n->p, t); o->t = o->t_oldest = t; }
+            else if (mode == 1) {
+                o->t = o->t_oldest = t;
+                o->tier = YIN_TIER_SIM;
+                o->src = o->src_oldest = (uint16_t)i;
+                n->vt->frame(n->st, n->p, t, o);
+            }
+        }
+        o->lanes = n->lanes;
+        ysig__hist_push(g, n, o);
+        return;
+    }
+    switch (n->op) {
+    case YSIG_OP_SOURCE: break; /* ysig_feed() writes it */
+    case YSIG_OP_INTEGRATE: {
+        ysig__int_st* s = (ysig__int_st*)n->st;
+        const ysig_value* x = in[0];
+        ysig__meta(g, n, in, o);
+        if (mode == 2) {
+            memset(s, 0, sizeof *s);
+            for (k = 0; k < n->lanes; k++) { s->acc[k] = n->p[4 + k]; o->v[k] = n->p[4 + k]; }
+            s->t_prev = t;
+            break;
+        }
+        if (n->flags & YSIG__F_COUNTS) {
+            if (mode != 0) break;
+            for (k = 0; k < n->lanes; k++) {
+                double v = x->v[k];
+                int64_t dc;
+                /* raw counts are whole; NaN or a count no mouse sends is no move */
+                if (!(v > -1e9 && v < 1e9)) v = 0;
+                dc = (int64_t)(v < 0 ? v - 0.5 : v + 0.5);
+                o->v[k] = ysig__counts_axis(&s->n[k], n->p[4 + k], ysig__gain(n, k), n->p[8 + k], n->p[12 + k], dc);
+            }
+        } else {
+            /* rate: the held input over the time since the last value */
+            int64_t now = mode == 1 ? t : x->t;
+            double dt = s->has && now > s->t_prev ? (double)(now - s->t_prev) / 1e9 : 0;
+            for (k = 0; k < n->lanes; k++) {
+                double v = ysig__bound(n, k, s->acc[k] + ysig__gain(n, k) * s->x[k] * dt);
+                o->v[k] = v;
+                if (mode == 0) { s->acc[k] = v; s->x[k] = x->v[k]; }
+            }
+            if (mode == 0) { s->t_prev = now > s->t_prev || !s->has ? now : s->t_prev; s->has = 1; }
+            else o->t = t;
+        }
+        break;
+    }
+    case YSIG_OP_LOWPASS: {
+        ysig__lp_st* s = (ysig__lp_st*)n->st;
+        const ysig_value* x = in[0];
+        int order2 = n->p[1] == 2;
+        ysig__meta(g, n, in, o);
+        if (mode == 2) {
+            s->init = 0;
+            for (k = 0; k < n->lanes; k++) o->v[k] = x->v[k];
+            break;
+        }
+        if (!s->init) {
+            if (mode == 1) break;
+            for (k = 0; k < n->lanes; k++) { s->y1[k] = s->y2[k] = x->v[k]; o->v[k] = x->v[k]; }
+            s->t_prev = x->t;
+            s->init = 1;
+            break;
+        }
+        {
+            int64_t now = mode == 1 ? t : x->t;
+            double dt = now > s->t_prev ? (double)(now - s->t_prev) / 1e9 : 0;
+            double a = 1 - exp(-2 * YSIG__PI * n->p[0] * dt);
+            for (k = 0; k < n->lanes; k++) {
+                double y1 = s->y1[k] + a * (x->v[k] - s->y1[k]);
+                double y2 = s->y2[k] + a * (y1 - s->y2[k]);
+                o->v[k] = order2 ? y2 : y1;
+                if (mode == 0) { s->y1[k] = y1; s->y2[k] = y2; }
+            }
+            if (mode == 0 && now > s->t_prev) s->t_prev = now;
+            if (mode == 1) o->t = t;
+        }
+        break;
+    }
+    case YSIG_OP_VELOCITY:
+    case YSIG_OP_SPEED: {
+        ysig__ring* r = (ysig__ring*)n->st;
+        const ysig_value* x = in[0];
+        const ysig_value* q;
+        ysig__meta(g, n, in, o);
+        if (mode == 2) {
+            r->n = r->head = 0;
+            for (k = 0; k < n->lanes; k++) o->v[k] = 0;
+            break;
+        }
+        if (mode == 0) {
+            if (r->n == r->cap) {
+                const ysig_value* old = ysig__ring_at(r, 0);
+                if (x->t - old->t < n->kns[0]) g->st.ring_short++;
+            }
+            ysig__ring_push(r, x);
+            q = ysig__lagged(r, x->t, n->kns[0], 1);
+            if (q) ysig__velocity_out(n, x, q, x->t, o);
+        } else {
+            if (t <= x->t) break;
+            q = ysig__lagged(r, t, n->kns[0], 0);
+            if (q) ysig__velocity_out(n, x, q, t, o);
+            o->t = t;
+        }
+        break;
+    }
+    case YSIG_OP_DELAY: {
+        ysig__ring* r = (ysig__ring*)n->st;
+        const ysig_value* x = in[0];
+        int64_t now = mode == 1 ? t : x->t;
+        int f;
+        if (mode == 2) {
+            r->n = r->head = 0;
+            ysig__ring_push(r, x);
+            *o = *x;
+            break;
+        }
+        if (mode == 0) ysig__ring_push(r, x);
+        f = ysig__ring_find(r, now - n->kns[0]);
+        if (f < 0) {
+            if (r->n == r->cap) g->st.ring_short++;
+            f = 0;
+        }
+        *o = *ysig__ring_at(r, f);
+        break;
+    }
+    case YSIG_OP_SINES:
+        if (mode == 2) { for (k = 0; k < n->lanes; k++) o->v[k] = 0; o->t = o->t_oldest = t; break; }
+        if (mode == 1) {
+            double tt = (double)g->base / 1e9, A = 1;
+            int nc = (int)n->p[0], c;
+            if (n->p[1] > 0) A = tt <= 0 ? 0 : tt < n->p[1] ? tt / n->p[1] : 1;
+            for (k = 0; k < n->lanes; k++) {
+                const double* q = n->data + k * nc * 3;
+                double s = 0;
+                for (c = 0; c < nc; c++) s += q[3 * c] * cos(2 * YSIG__PI * q[3 * c + 1] * tt + q[3 * c + 2]);
+                o->v[k] = n->p[1] > 0 ? A * s : s;
+            }
+            o->t = o->t_oldest = t;
+            o->tier = YIN_TIER_SIM;
+            o->src = o->src_oldest = (uint16_t)i;
+        }
+        break;
+    case YSIG_OP_NOISE: {
+        ysig__noise_st* s = (ysig__noise_st*)n->st;
+        if (mode == 2) {
+            memset(s, 0, sizeof *s);
+            s->s = (uint64_t)n->p[0];
+            for (k = 0; k < n->lanes; k++) o->v[k] = 0;
+            o->t = o->t_oldest = t;
+            break;
+        }
+        if (mode == 1) {
+            double sd = n->p[1] != 0 ? n->p[1] : 1, a = 1;
+            if (n->p[2] > 0 && s->init) {
+                double dt = t > s->t_prev ? (double)(t - s->t_prev) / 1e9 : 0;
+                a = 1 - exp(-2 * YSIG__PI * n->p[2] * dt);
+            }
+            for (k = 0; k < n->lanes; k++) {
+                double z = ysig__gauss(&s->s);
+                s->y[k] = s->init && n->p[2] > 0 ? s->y[k] + a * (z - s->y[k]) : z;
+                o->v[k] = sd * s->y[k];
+            }
+            s->init = 1;
+            s->t_prev = t;
+            o->t = o->t_oldest = t;
+            o->tier = YIN_TIER_SIM;
+            o->src = o->src_oldest = (uint16_t)i;
+        }
+        break;
+    }
+    case YSIG_OP_CHANNEL:
+        if (mode == 2) { o->v[0] = 0; o->t = o->t_oldest = t; break; }
+        if (mode == 1) {
+            int c = (int)n->p[0];
+            if (g->fvals && c < g->n_fvals) o->v[0] = (double)g->fvals[c];
+            o->t = o->t_oldest = t;
+            o->tier = YIN_TIER_SIM;
+            o->src = o->src_oldest = (uint16_t)i;
+        }
+        break;
+    default: /* the stateless ops */
+        ysig__meta(g, n, in, o);
+        ysig__pure(n, in, o);
+        break;
+    }
+    o->lanes = n->lanes;
+    ysig__hist_push(g, n, o);
+}
+
+/* --- API ------------------------------------------------------------------- */
+
+static void ysig__journal(ysig_graph* g, const ysig_entry* e) {
+    if (g->journal) g->journal(g->user, e);
+}
+
+static void ysig__gen_meta(ysig_value* o, int i, int64_t t) {
+    o->t = o->t_oldest = t;
+    o->tier = YIN_TIER_SIM;
+    o->src = o->src_oldest = (uint16_t)i;
+    o->device = 0;
+}
+
+static void ysig__reset(ysig_graph* g, int64_t t) {
+    int k;
+    g->n_hit = g->n_der = 0;
+    for (k = 0; k < g->n; k++) {
+        int id = g->order[k];
+        ysig__nd* n = &g->nd[id];
+        ysig_value* o = &g->val[id];
+        n->hist.n = n->hist.head = 0;
+        if (n->op == YSIG_OP_SOURCE) {
+            memset(n->st, 0, sizeof(ysig__src_st));
+            memset(o, 0, sizeof *o);
+            ysig__gen_meta(o, id, t);
+            o->lanes = n->lanes;
+            ysig__hist_push(g, n, o);
+            continue;
+        }
+        if (!(n->flags & YSIG__F_SINK) && !n->n_in) ysig__gen_meta(o, id, t);
+        if (n->op == YSIG_OP_DETECT) {
+            memset(n->st, 0, sizeof(ysig__det_st));
+            memset(o, 0, sizeof *o);
+            ysig__gen_meta(o, id, t);
+            o->lanes = 1;
+            if (n->p[6] == 0) ysig__det_arm(g, id, t);
+            o->v[0] = ((ysig__det_st*)n->st)->state ? 1.0 : 0.0;
+            continue;
+        }
+        ysig__run(g, id, 2, t);
+    }
+}
+
+YSIG_API bool ysig_open(ysig_graph* g, const ysig_desc* d) {
+    ysig__an a;
+    size_t need;
+    char* base;
+    int i, k;
+    if (!g) return false;
+    memset(g, 0, sizeof *g);
+    if (!ysig__analyze(d, &a, g->err, sizeof g->err)) return false;
+    need = ysig__layout(d, &a, NULL, NULL);
+    if (!d->arena || d->arena_size < need) {
+        snprintf(g->err, sizeof g->err, "ysig_open: the arena has %lu bytes; the graph needs %lu (ysig_arena_size())",
+                 (unsigned long)d->arena_size, (unsigned long)need);
+        return false;
+    }
+    base = (char*)d->arena;
+    if (((uintptr_t)base & 7u) != 0) {
+        snprintf(g->err, sizeof g->err, "ysig_open: the arena is not 8-byte aligned");
+        return false;
+    }
+    memset(base, 0, need);
+    ysig__layout(d, &a, g, base);
+    g->n = a.n;
+    g->n_exp = a.n_exp;
+    g->n_adapters = d->n_adapters;
+    for (i = 0; i < d->n_adapters; i++) { g->adapter_base[i] = a.base[i]; g->adapter_n[i] = d->adapters[i].n_nodes; }
+    for (i = 0; i < a.n; i++) {
+        ysig__nd* n = &g->nd[i];
+        const ysig_node* s = a.node[i];
+        memcpy(n->p, s->p, sizeof n->p);
+        n->op = s->op;
+        for (k = 0; k < 4; k++) n->in[k] = a.in[i][k];
+        n->n_in = a.n_in[i];
+        n->lanes = a.lanes[i];
+        n->flags = a.flags[i];
+        n->name = s->name;
+        n->vt = s->op >= YSIG_OP_CUSTOM ? ysig__vt(d, s->op) : NULL;
+        n->n_data = s->n_data;
+        if (s->n_data) memcpy(n->data, s->data, sizeof(double) * (size_t)s->n_data);
+        if (s->op == YSIG_OP_VELOCITY || s->op == YSIG_OP_SPEED || s->op == YSIG_OP_DELAY) {
+            ysig__ring* r = (ysig__ring*)n->st;
+            r->cap = ysig__ring_cap(s);
+            r->buf = (ysig_value*)(void*)((char*)n->st + ((sizeof(ysig__ring) + 15u) & ~(size_t)15u));
+        }
+        ysig__prepare(g, i);
+    }
+    for (k = 0; k < a.n; k++) g->order[k] = a.order[k];
+    ysig__sched(&a, g->src_ids, g->src_off, g->sched, g->frame);
+    g->n_src = a.n_src;
+    g->n_frame = a.n_frame;
+    g->channels = d->channels;
+    g->n_channels = d->n_channels;
+    g->on_row = d->on_row;
+    g->journal = d->journal;
+    g->user = d->user;
+    g->ok = 1;
+    ysig__reset(g, 0);
+    g->st.digest = 14695981039346656037ull;
+    return true;
+}
+
+YSIG_API void ysig_reset(ysig_graph* g, int64_t t_ns) {
+    ysig_entry e;
+    if (!g || !g->ok) return;
+    memset(&e, 0, sizeof e);
+    e.kind = YSIG_J_RESET;
+    e.t = t_ns;
+    ysig__journal(g, &e);
+    ysig__reset(g, t_ns);
+}
+
+/* A value for p[param] of node n that the op allows after open. */
+static bool ysig__set_ok(const ysig_graph* g, const ysig__nd* n, int param, double v) {
+    double q[YSIG_NP];
+    int k, L = n->lanes;
+    memcpy(q, n->p, sizeof q);
+    q[param] = v;
+    switch (n->op) {
+    case YSIG_OP_ROLE: return false;
+    case YSIG_OP_SOURCE: return param != 3;   /* the lanes */
+    case YSIG_OP_VELOCITY: case YSIG_OP_SPEED: case YSIG_OP_DELAY: return param != 1;
+    case YSIG_OP_SINES: return param != 0;
+    case YSIG_OP_RECORD: return false;
+    case YSIG_OP_DETECT:
+        if (param == 5) return false;
+        if ((int)q[1] >= g->val[n->in[0]].lanes) return false;
+        if (q[0] >= YSIG_TEST_IN_RECT && (g->val[n->in[0]].lanes < 2 || q[8] > q[10] || q[9] > q[11])) return false;
+        return true;
+    case YSIG_OP_SELECT: return (int)v < g->val[n->in[0]].lanes;
+    case YSIG_OP_BIND: return (int)v + g->val[n->in[0]].lanes <= g->n_channels;
+    case YSIG_OP_LOWPASS: return !(q[2] > 0) || q[0] < q[2] / 2;
+    case YSIG_OP_INTEGRATE:
+        for (k = 0; k < L; k++)
+            if ((q[8 + k] != 0 || q[12 + k] != 0) && (!(q[8 + k] < q[12 + k]) || q[k] < 0)) return false;
+        return true;
+    case YSIG_OP_CLAMP:
+        for (k = 0; k < L; k++)
+            if ((q[k] != 0 || q[4 + k] != 0) && q[k] > q[4 + k]) return false;
+        return true;
+    default: return true;
+    }
+}
+
+YSIG_API bool ysig_set(ysig_graph* g, int node, int param, double v) {
+    const ysig_param* rows;
+    ysig__nd* n;
+    ysig_entry e;
+    int nr;
+    if (!g || !g->ok || node < 0 || node >= g->n || param < 0 || param >= YSIG_NP || !isfinite(v)) return false;
+    n = &g->nd[node];
+    if (n->vt) { rows = n->vt->params; nr = n->vt->n_params; }
+    else rows = ysig_op_params(n->op, &nr);
+    if (param >= nr || !ysig__param_ok(&rows[param], v) || !ysig__set_ok(g, n, param, v)) return false;
+    memset(&e, 0, sizeof e);
+    e.kind = YSIG_J_SET;
+    e.node = node;
+    e.param = param;
+    e.value = v;
+    ysig__journal(g, &e);
+    n->p[param] = v;
+    ysig__prepare(g, node);
+    return true;
+}
+
+YSIG_API bool ysig_set_data(ysig_graph* g, int node, int index, double v) {
+    ysig_entry e;
+    if (!g || !g->ok || node < 0 || node >= g->n || index < 0 || index >= g->nd[node].n_data || !isfinite(v)) return false;
+    memset(&e, 0, sizeof e);
+    e.kind = YSIG_J_SET_DATA;
+    e.node = node;
+    e.param = index;
+    e.value = v;
+    ysig__journal(g, &e);
+    g->nd[node].data[index] = v;
+    return true;
+}
+
+static int ysig__source_takes(const ysig__nd* n, const yin_event* e) {
+    uint32_t type = n->p[5] != 0 ? (uint32_t)n->p[5] : (uint32_t)YIN_SAMPLE;
+    return e->kind == (uint8_t)n->p[0] && e->type == type && e->control == (uint32_t)n->p[1] &&
+           (n->p[2] == 0 || e->device == (uint32_t)n->p[2]);
+}
+
+YSIG_API int ysig_feed(ysig_graph* g, const yin_event* e) {
+    int i, k, taken = 0, journaled = 0;
+    if (!g || !g->ok || !e) return -1;
+    g->st.fed++;
+    for (i = 0; i < g->n_src; i++) {
+        int id = g->src_ids[i];
+        ysig__nd* n = &g->nd[id];
+        ysig__src_st* s = (ysig__src_st*)n->st;
+        ysig_value* o = &g->val[id];
+        unsigned m = (unsigned)n->p[3];
+        int L = n->lanes, at = 0;
+        float f[4];
+        if (!ysig__source_takes(n, e)) continue;
+        if (!journaled && g->journal) {
+            ysig_entry j;
+            memset(&j, 0, sizeof j);
+            j.kind = YSIG_J_FEED;
+            j.event = *e;
+            ysig__journal(g, &j);
+            journaled = 1;
+        }
+        /* within one source times rise (ysp/input.h); an older one is
+         * counted and dropped */
+        if (s->has && e->t < s->last_t) { g->st.dropped_order++; continue; }
+        s->has = 1;
+        s->last_t = e->t;
+        f[0] = e->x; f[1] = e->y; f[2] = e->value; f[3] = e->aux;
+        if (!m) {
+            if (L == 1) o->v[0] = (double)e->value;
+            else for (k = 0; k < L; k++) o->v[k] = (double)f[k];
+        } else {
+            for (k = 0; k < 4; k++)
+                if (m & (1u << k)) o->v[at++] = (double)f[k];
+        }
+        o->t = o->t_oldest = e->t;
+        o->device = e->device;
+        o->tier = e->stamp ? e->stamp : (uint8_t)n->p[4];
+        o->src = o->src_oldest = (uint16_t)id;
+        o->lanes = (uint8_t)L;
+        ysig__hist_push(g, n, o);
+        for (k = g->src_off[i]; k < g->src_off[i + 1]; k++) ysig__run(g, g->sched[k], 0, e->t);
+        taken++;
+    }
+    g->st.taken += taken;
+    return taken;
+}
+
+YSIG_API int ysig_frame(ysig_graph* g, const ysig_frame_in* f) {
+    ysig_entry e;
+    int k;
+    if (!g || !g->ok || !f || f->n_values < 0 || (f->n_values && !f->values)) return -1;
+    memset(&e, 0, sizeof e);
+    e.kind = YSIG_J_FRAME;
+    e.frame = *f;
+    ysig__journal(g, &e);
+    g->frame_index = f->index;
+    g->onset = f->onset_ns;
+    g->base = f->base_ns;
+    g->fvals = f->values;
+    g->n_fvals = f->n_values;
+    for (k = 0; k < g->n_frame; k++) ysig__run(g, g->frame[k], 1, f->onset_ns);
+    g->fvals = NULL;
+    g->n_fvals = 0;
+    return 0;
+}
+
+YSIG_API bool ysig_arm(ysig_graph* g, int node, int64_t t_ns) {
+    ysig_entry e;
+    if (!g || !g->ok || node < 0 || node >= g->n || g->nd[node].op != YSIG_OP_DETECT) return false;
+    memset(&e, 0, sizeof e);
+    e.kind = YSIG_J_ARM;
+    e.node = node;
+    e.t = t_ns;
+    ysig__journal(g, &e);
+    ysig__det_arm(g, node, t_ns);
+    return true;
+}
+
+YSIG_API bool ysig_disarm(ysig_graph* g, int node) {
+    ysig_entry e;
+    ysig__det_st* s;
+    if (!g || !g->ok || node < 0 || node >= g->n || g->nd[node].op != YSIG_OP_DETECT) return false;
+    memset(&e, 0, sizeof e);
+    e.kind = YSIG_J_DISARM;
+    e.node = node;
+    ysig__journal(g, &e);
+    s = (ysig__det_st*)g->nd[node].st;
+    s->armed = s->holding = 0;
+    return true;
+}
+
+YSIG_API int ysig_detected(ysig_graph* g, ysig_hit* out, int cap) {
+    int n;
+    if (!g || !g->ok || cap < 0 || (cap && !out)) return -1;
+    n = g->n_hit < cap ? g->n_hit : cap;
+    if (n) memcpy(out, g->hitq, sizeof *out * (size_t)n);
+    if (n < g->n_hit) memmove(g->hitq, g->hitq + n, sizeof *out * (size_t)(g->n_hit - n));
+    g->n_hit -= n;
+    return n;
+}
+
+YSIG_API int ysig_derived(ysig_graph* g, yin_event* out, int cap) {
+    int n;
+    if (!g || !g->ok || cap < 0 || (cap && !out)) return -1;
+    n = g->n_der < cap ? g->n_der : cap;
+    if (n) memcpy(out, g->derq, sizeof *out * (size_t)n);
+    if (n < g->n_der) memmove(g->derq, g->derq + n, sizeof *out * (size_t)(g->n_der - n));
+    g->n_der -= n;
+    return n;
+}
+
+YSIG_API const ysig_value* ysig_value_of(const ysig_graph* g, int node) {
+    if (!g || !g->ok || node < 0 || node >= g->n) return NULL;
+    return &g->val[node];
+}
+
+YSIG_API int ysig_value_at(const ysig_graph* g, int node, int64_t t_ns, ysig_value* out) {
+    const ysig__nd* n;
+    if (!g || !g->ok || node < 0 || node >= g->n || !out) return -1;
+    n = &g->nd[node];
+    if (n->hist.cap) {
+        int f;
+        if (!n->hist.n) { *out = g->val[node]; return 0; }
+        f = ysig__ring_find(&n->hist, t_ns);
+        *out = *ysig__ring_at(&n->hist, f < 0 ? 0 : f);
+        return f < 0 ? 0 : 1;
+    }
+    if (n->flags & YSIG__F_AT) {
+        ysig_value iv[4];
+        const ysig_value* in[4];
+        int j, rc = 1;
+        for (j = 0; j < n->n_in; j++) {
+            int r = ysig_value_at(g, n->in[j], t_ns, &iv[j]);
+            if (r < 0) return -1;
+            if (r < rc) rc = r;
+            in[j] = &iv[j];
+        }
+        memset(out, 0, sizeof *out);
+        ysig__meta(g, n, in, out);
+        ysig__pure(n, in, out);
+        out->lanes = n->lanes;
+        return rc;
+    }
+    return -1;
+}
+
+YSIG_API int ysig_adapter_node(const ysig_graph* g, int adapter, int i) {
+    if (!g || !g->ok || adapter < 0 || adapter >= g->n_adapters || i < 0 || i >= g->adapter_n[adapter]) return -1;
+    return g->adapter_base[adapter] + i;
+}
+
+YSIG_API void ysig_get_stats(const ysig_graph* g, ysig_stats* out) {
+    if (!out) return;
+    if (!g) { memset(out, 0, sizeof *out); return; }
+    *out = g->st;
+}
+
+YSIG_API int ysig_replay(ysig_graph* g, const ysig_entry* e, int n) {
+    int i;
+    if (!g || !g->ok || n < 0 || (n && !e)) return -1;
+    for (i = 0; i < n; i++) {
+        bool ok = true;
+        switch (e[i].kind) {
+        case YSIG_J_RESET: ysig_reset(g, e[i].t); break;
+        case YSIG_J_SET: ok = ysig_set(g, e[i].node, e[i].param, e[i].value); break;
+        case YSIG_J_SET_DATA: ok = ysig_set_data(g, e[i].node, e[i].param, e[i].value); break;
+        case YSIG_J_ARM: ok = ysig_arm(g, e[i].node, e[i].t); break;
+        case YSIG_J_DISARM: ok = ysig_disarm(g, e[i].node); break;
+        case YSIG_J_FEED: ok = ysig_feed(g, &e[i].event) >= 0; break;
+        case YSIG_J_FRAME: ok = ysig_frame(g, &e[i].frame) == 0; break;
+        default: ok = false; break;
+        }
+        if (!ok) return -1;
+    }
+    return n;
+}
+
+#ifdef __cplusplus
+} /* extern "C" */
+#endif
+
+#endif /* YSP_SIG_IMPLEMENTATION */
+
+/* ------------------------------------------------------------------------
+ * This software is available under the MIT-0 (MIT No Attribution) license.
+ *
+ * Copyright (c) 2026 ysp contributors
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY.
+ * ------------------------------------------------------------------------ */
