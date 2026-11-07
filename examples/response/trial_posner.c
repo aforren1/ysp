@@ -401,11 +401,10 @@ static bool start_trial(const yscr_frame* f) {
     return true;
 }
 
-/* The trial's end from base time bt: `off` hidden, "too early" for a
- * while when asked, then the ITI and the end mark. */
-static int end_trial(int64_t bt, int off, int feedback) {
-    ytl_seq q = ytl_seq_on(&tl, TRIAL);
-    ytl_at(&q, bt);
+/* The trial's end from the frame at RT time `onset`: `off` hidden, "too
+ * early" for a while when asked, then the ITI and the end mark. */
+static int end_trial(int64_t onset, int off, int feedback) {
+    ytl_seq q = ytl_seq_at(&tl, TRIAL, onset);
     if (off >= 0) ytl_off(&q, off);
     if (feedback) {
         ytl_on(&q, FEEDBACK);
@@ -487,7 +486,7 @@ static void print_summary(void) {
 }
 
 int main(int argc, char** argv) {
-    char end[1100];
+    char line[1024];
     uint64_t seed0;
     int i, n, rc, in_trial = 0, aborted = 0, failed = 0;
 
@@ -502,7 +501,6 @@ int main(int argc, char** argv) {
         ytl_event fired[64];   /* the timeline's capacity: all that can fire */
         const yrsp_input* scripted;
         yrsp_result res;
-        int64_t bt = 0;
         int landed;
         rc = yscr_begin(&scr, &f);
         if (rc == YSCR_QUIT) { aborted = 1; break; }
@@ -529,9 +527,8 @@ int main(int argc, char** argv) {
             const yrsp_entry* e = yrsp_entries(&rsp, &n);
             for (i = 0; i < n && !early; i++) early = (e[i].flags & YRSP_E_EARLY) && !(e[i].flags & YRSP_E_NOT_CHOICE);
             if (early) {
-                ytl_base_time(&tl, TRIAL, f.onset, &bt);
                 ytl_clear(&tl, TRIAL);   /* the cue and the target that have not come yet go */
-                if ((rc = end_trial(bt, -1, 1)) != 0) { fail(ytl_strerror(rc)); failed = 1; break; }
+                if ((rc = end_trial(f.onset, -1, 1)) != 0) { fail(ytl_strerror(rc)); failed = 1; break; }
                 responding = 0;
                 target_frame = -1;
             }
@@ -539,8 +536,7 @@ int main(int argc, char** argv) {
         /* the target's flip record when it arrives; a response or the deadline ends it */
         if (yrsp_update_frame(&rsp, &f) == YRSP_ENDED && responding) {
             yrsp_finish(&rsp, &res);   /* again at the end: a late record still lands */
-            ytl_base_time(&tl, TRIAL, f.onset, &bt);
-            rc = end_trial(bt, cond.is_catch ? CATCH : TARGET, cond.is_catch && (res.flags & YRSP_R_RESPONDED));   /* a false alarm */
+            rc = end_trial(f.onset, cond.is_catch ? CATCH : TARGET, cond.is_catch && (res.flags & YRSP_R_RESPONDED));   /* a false alarm */
             if (rc != 0) { fail(ytl_strerror(rc)); failed = 1; break; }
             responding = 0;
         }
@@ -550,11 +546,10 @@ int main(int argc, char** argv) {
             if (fired[i].kind == YTL_ONSET && (fired[i].target == CUE_BOX || fired[i].target == ARROW)) cue_frame = fired[i].frame;
         landed = yrsp_set_landing(&rsp, fired, n, cond.is_catch ? CATCH : TARGET);   /* its planned onset, for now */
         if (landed >= 0) target_frame = fired[landed].frame;
-        for (i = 0; i < n; i++)
-            if (fired[i].kind == YTL_MARK && fired[i].code == END_OF_TRIAL) {
-                if (!write_row()) failed = 1;
-                in_trial = 0;
-            }
+        if (ytl_find_mark(fired, n, END_OF_TRIAL) >= 0) {
+            if (!write_row()) failed = 1;
+            in_trial = 0;
+        }
         ygfx_apply(binds, (int)(sizeof binds / sizeof binds[0]), ytl_values(&tl));
         fix.visible = arrow.visible >= 0.5f ? 0.0f : 1.0f;   /* the arrow replaces the cross */
         yscr_mark(&scr, YSCR_PHASE_EVALUATE);
@@ -570,9 +565,8 @@ int main(int argc, char** argv) {
     }
 
     /* the describe line again: its counters (key times, raw mice) are 0 at open */
-    memcpy(end, "screen_end=", 11);
-    yscr_describe(&scr, end + 11, sizeof end - 11);
-    if ((rc = ytr_data_meta(&data, end)) < 0 && rc != YTR_ERR_CLOSED) fprintf(stderr, "%s\n", ytr_data_error(&data));
+    yscr_describe(&scr, line, sizeof line);
+    if ((rc = ytr_data_meta_kv(&data, "screen_end", line)) < 0 && rc != YTR_ERR_CLOSED) fprintf(stderr, "%s\n", ytr_data_error(&data));
     if (ytr_data_finish(&data) < 0) { fail(ytr_data_error(&data)); failed = 1; }
     ygfx_close(&gfx);
     yscr_close(&scr);

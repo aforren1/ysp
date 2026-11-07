@@ -5,7 +5,8 @@
 # all caught; 26 v0.7.0 mutants (v07-*: yoyo, records, prune), all caught;
 # 14 v0.8.0 mutants (v08-*: trigger channels, parameter tables), all caught;
 # v08-02 (ytl_trigger_ch()'s own negative check) went in v0.8.1, when the
-# check moved into ytl_add() (v081-*, 4 mutants).
+# check moved into ytl_add() (v081-*, 4 mutants). v0.8.2: ytl_seq_at() and
+# ytl_find_mark() (v082-*, 6 mutants).
 # The v0.3.0 list (23) was not kept.
 header = "ysp/timeline.h"
 
@@ -1029,3 +1030,67 @@ test = "timeline"
 why = "Only a TRIGGER's target is a channel; a MARK's and a user kind's are the caller's, any value."
 find = '    if (e->kind == YTL_TRIGGER && e->target < 0) return YTL_ERR_ARG;'
 replace = '    if (e->kind <= YTL_TRIGGER && e->target < 0) return YTL_ERR_ARG;'
+
+# --- v0.8.2: ytl_seq_at() and ytl_find_mark() ------------------------------
+
+[[mutant]]
+id = "v082-00"
+name = "ytl_seq_at() takes a base with no time there"
+test = "timeline"
+why = "A stopped base gave a cursor at 0 (B9): the response's events would land at the trial's start."
+find = '''    if (!ytl_base_time(tl, base, rt, &q.t)) {'''
+replace = '''    if ((void)ytl_base_time(tl, base, rt, &q.t), 0) {'''
+
+[[mutant]]
+id = "v082-01"
+name = "ytl_seq_at() leaves prev_start at 0"
+test = "timeline"
+why = "\"<\" right after ytl_seq_at() is the cursor, as after ytl_seq_on() and ytl_seq_now()."
+find = '''    q.prev_start = q.t;
+    q.prev_end = q.t;
+    return q;
+}'''
+replace = '''    q.prev_end = q.t;
+    return q;
+}'''
+
+[[mutant]]
+id = "v082-02"
+name = "ytl_seq_at() goes on after a closed handle or a bad base"
+test = "timeline"
+why = "The first error is the one reported: CLOSED for a closed handle, not ARG from the time query."
+find = '''    ytl_seq q = ytl__seq_make(tl, base, false);
+    if (q.err < 0) return q;'''
+replace = '''    ytl_seq q = ytl__seq_make(tl, base, false);
+    if (!tl) return q;'''
+
+[[mutant]]
+id = "v082-03"
+name = "ytl_find_mark() matches any kind"
+test = "timeline"
+why = "A TRIGGER or an ONSET with the same code is not the end mark."
+find = '''        if (fired[i].kind == YTL_MARK && fired[i].code == code) return i;'''
+replace = '''        if (fired[i].code == code) return i;'''
+
+[[mutant]]
+id = "v082-04"
+name = "ytl_find_mark() reads fired[n]"
+test = "timeline"
+why = "n bounds the scan: past it are events evaluate did not copy, or past the array."
+find = '''    for (i = 0; fired && i < n; i++)
+        if (fired[i].kind == YTL_MARK && fired[i].code == code) return i;'''
+replace = '''    for (i = 0; fired && i <= n; i++)
+        if (fired[i].kind == YTL_MARK && fired[i].code == code) return i;'''
+
+[[mutant]]
+id = "v082-05"
+name = "ytl_find_mark() returns the last match"
+test = "timeline"
+why = "The first, as yrsp_set_landing() finds the first ONSET."
+find = '''    for (i = 0; fired && i < n; i++)
+        if (fired[i].kind == YTL_MARK && fired[i].code == code) return i;
+    return -1;'''
+replace = '''    int last = -1;
+    for (i = 0; fired && i < n; i++)
+        if (fired[i].kind == YTL_MARK && fired[i].code == code) last = i;
+    return last;'''

@@ -86,6 +86,7 @@ int main(void) {
     /* v0.7: the column query; no sidecar here, so meta is refused */
     if (!ytr_data_col_settable(&w, ytr_data_col(&w, "note"))) return 6;
     if (ytr_data_meta(&w, "a=1") != YTR_ERR_ARG) return 6;
+    if (ytr_data_meta_kv(&w, "a", "1") != YTR_ERR_ARG) return 6;   /* v0.7.1 */
     if (g_trials_api.data_write(&w, &r) != 0) return 7;
     (void)g_trials_api.data_set_time_ns;
     if (g_trials_api.data_finish(&w) != 0) return 8;

@@ -1498,6 +1498,75 @@ with pack (82 of 82); WSL Ubuntu gcc 11.4 (`linux` preset, the Tracy
 check off for the same reason; 79 of 79); and the timeline's compile
 check and test under emscripten (CI's wasm flags) in node.
 
+## A sequence from a frame's onset, and the end mark (v0.8.2)
+
+Two findings of the layout pilot
+([examples_findings.md](examples_findings.md), F26 and F28). A response
+adds the trial's end from the frame that saw it: 22 of the 26
+`ytl_base_time()` calls in `examples/` only put a new sequence's cursor
+at the frame's onset, with `ytl_seq_on()`, then
+`ytl_base_time(&tl, TRIAL, f.onset, &bt)`, then `ytl_at(&q, bt)`, and a
+variable that each caller sets to 0 first (B9). And 20 programs scanned
+the fired events for their end mark with the same `if`.
+
+```c
+/* before */
+ytl_seq q = ytl_seq_on(&tl, TRIAL);
+ytl_base_time(&tl, TRIAL, f.onset, &bt);
+ytl_at(&q, bt);
+/* v0.8.2 */
+ytl_seq q = ytl_seq_at(&tl, TRIAL, f.onset);
+
+/* before */
+for (i = 0; i < n; i++)
+    if (fired[i].kind == YTL_MARK && fired[i].code == END_OF_TRIAL) { ... }
+/* v0.8.2 */
+if (ytl_find_mark(fired, n, END_OF_TRIAL) >= 0) { ... }
+```
+
+Decisions:
+
+- **An RT time, not a frame.** `ytl_seq_at(tl, base, rt_ns)` takes the
+  time the caller already has (`f.onset`); a `ysp/screen.h` frame would
+  tie this header to another one. The cursor is what `ytl_base_time()`
+  gives at that time: at any rate, and the frozen time of a paused base.
+- **Not `ytl_seq_now()`.** "Now" is the base time of the last evaluate.
+  A response is handled before this frame's evaluate, so "now" is one
+  frame behind the onset the response belongs to.
+- **A base with no time there is an error.** `ytl_base_time()` answers
+  false for a stopped base or a time out of range and leaves the caller's
+  variable as it was: 0 in every example, so the sequence went to the
+  trial's start with no error. `ytl_seq_at()` sets `q.err` to
+  `YTL_ERR_ARG` with `err_call` -1, as `ytl_seq_on()` does for a bad
+  base, and the sequence adds nothing. B9 itself (`*out` unset) stays
+  open: `ytl_base_time()` is in the shared table, and a caller that
+  wants the time still needs the variable.
+- **`ytl_find_mark()` returns the first match, or -1.** As
+  `yrsp_set_landing()` finds the first ONSET. `n` is at most the array's
+  size: `min(ytl_evaluate()'s return, cap)`. A loop that also does other
+  work per event (8 of the 20 sites: a cue's landing, a trigger code)
+  keeps its loop.
+- **A patch version.** No struct and no function of the shared table
+  (`bindings/share/ysp_timeline_api.h`) changes, so a module built
+  against 0.8.1 takes a 0.8.2 owner, and `ysp-vis`'s dependency range
+  (`>=0.8.1,<0.9`) holds. The calls are not bound in Python or MEX: a
+  script there builds its sequences with the binding's own calls.
+
+### Verification
+
+`tests/adapt/timeline_test.c`, `test_seq_at()`: the sequence equals
+`ytl_seq_on()`, `ytl_base_time()` and `ytl_at()` on a second timeline
+event for event; its cursor, `prev_start` and `prev_end` at a base
+anchored at 40 ms; at rate 1/2 and paused, the time `ytl_base_time()`
+gives; base 0 is the RT time itself; a stopped base, a time at 2^62, a
+bad base and a closed handle are refused, and the refused sequence adds
+no event. `ytl_find_mark()` finds the mark an evaluate reports, skips a
+TRIGGER and an ONSET with the same code, returns the first of two, and
+reads no further than `n` (0, -1 and NULL give -1). The compile check
+(C99, C11, C++17) runs a response on frame 3 whose end mark it finds on
+frame 18. 6 of 6 new mutants caught (`v082-00` to `v082-05` in
+[tests/mutate/timeline.toml](../tests/mutate/timeline.toml)).
+
 ## Animate a stimulus field
 
 This how-to animates the fields of ysp/gfx.h stimuli with targets. The

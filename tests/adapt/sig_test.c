@@ -154,6 +154,81 @@ static void test_conventions(void) {
     CHECK(ysig_tier_worst(YIN_TIER_3, YIN_TIER_SIM) == YIN_TIER_3);
 }
 
+/* The p[] names: each YSIG_<OP>_<ROW> is the row of that name in the op's
+ * table, and every row of a built-in op has exactly one, so a program that
+ * writes p[] by name writes the row the table documents. */
+typedef struct pname { int op, idx; const char* name; } pname;
+#define PN(op, c) { YSIG_OP_##op, c, #c }
+static const pname g_pnames[] = {
+    PN(SOURCE, YSIG_SOURCE_KIND), PN(SOURCE, YSIG_SOURCE_CONTROL), PN(SOURCE, YSIG_SOURCE_DEVICE),
+    PN(SOURCE, YSIG_SOURCE_FIELDS), PN(SOURCE, YSIG_SOURCE_TIER), PN(SOURCE, YSIG_SOURCE_TYPE),
+    PN(ROLE, YSIG_ROLE_ROLE), PN(INTEGRATE, YSIG_INTEGRATE_GAIN_X), PN(INTEGRATE, YSIG_INTEGRATE_GAIN_Y),
+    PN(INTEGRATE, YSIG_INTEGRATE_GAIN_Z), PN(INTEGRATE, YSIG_INTEGRATE_GAIN_W),
+    PN(INTEGRATE, YSIG_INTEGRATE_ORIGIN_X), PN(INTEGRATE, YSIG_INTEGRATE_ORIGIN_Y),
+    PN(INTEGRATE, YSIG_INTEGRATE_ORIGIN_Z), PN(INTEGRATE, YSIG_INTEGRATE_ORIGIN_W),
+    PN(INTEGRATE, YSIG_INTEGRATE_LOW_X), PN(INTEGRATE, YSIG_INTEGRATE_LOW_Y), PN(INTEGRATE, YSIG_INTEGRATE_LOW_Z),
+    PN(INTEGRATE, YSIG_INTEGRATE_LOW_W), PN(INTEGRATE, YSIG_INTEGRATE_HIGH_X),
+    PN(INTEGRATE, YSIG_INTEGRATE_HIGH_Y), PN(INTEGRATE, YSIG_INTEGRATE_HIGH_Z),
+    PN(INTEGRATE, YSIG_INTEGRATE_HIGH_W), PN(LOWPASS, YSIG_LOWPASS_CUTOFF), PN(LOWPASS, YSIG_LOWPASS_ORDER),
+    PN(LOWPASS, YSIG_LOWPASS_RATE), PN(VELOCITY, YSIG_VELOCITY_LAG), PN(VELOCITY, YSIG_VELOCITY_CAPACITY),
+    PN(SPEED, YSIG_SPEED_LAG), PN(SPEED, YSIG_SPEED_CAPACITY), PN(DELAY, YSIG_DELAY_DELAY),
+    PN(DELAY, YSIG_DELAY_CAPACITY), PN(DEADZONE, YSIG_DEADZONE_RADIUS), PN(AFFINE, YSIG_AFFINE_M_XX),
+    PN(AFFINE, YSIG_AFFINE_M_XY), PN(AFFINE, YSIG_AFFINE_M_YX), PN(AFFINE, YSIG_AFFINE_M_YY),
+    PN(AFFINE, YSIG_AFFINE_PRE_X), PN(AFFINE, YSIG_AFFINE_PRE_Y), PN(AFFINE, YSIG_AFFINE_POST_X),
+    PN(AFFINE, YSIG_AFFINE_POST_Y), PN(AFFINE, YSIG_AFFINE_ANGLE), PN(SCALE, YSIG_SCALE_K_X),
+    PN(SCALE, YSIG_SCALE_K_Y), PN(SCALE, YSIG_SCALE_K_Z), PN(SCALE, YSIG_SCALE_K_W), PN(OFFSET, YSIG_OFFSET_D_X),
+    PN(OFFSET, YSIG_OFFSET_D_Y), PN(OFFSET, YSIG_OFFSET_D_Z), PN(OFFSET, YSIG_OFFSET_D_W),
+    PN(CLAMP, YSIG_CLAMP_LOW_X), PN(CLAMP, YSIG_CLAMP_LOW_Y), PN(CLAMP, YSIG_CLAMP_LOW_Z),
+    PN(CLAMP, YSIG_CLAMP_LOW_W), PN(CLAMP, YSIG_CLAMP_HIGH_X), PN(CLAMP, YSIG_CLAMP_HIGH_Y),
+    PN(CLAMP, YSIG_CLAMP_HIGH_Z), PN(CLAMP, YSIG_CLAMP_HIGH_W), PN(SELECT, YSIG_SELECT_LANE_X),
+    PN(SELECT, YSIG_SELECT_LANE_Y), PN(SELECT, YSIG_SELECT_LANE_Z), PN(SELECT, YSIG_SELECT_LANE_W),
+    PN(SUM, YSIG_SUM_W_0), PN(SUM, YSIG_SUM_W_1), PN(SUM, YSIG_SUM_W_2), PN(SUM, YSIG_SUM_W_3),
+    PN(MEAN, YSIG_MEAN_W_0), PN(MEAN, YSIG_MEAN_W_1), PN(MEAN, YSIG_MEAN_W_2), PN(MEAN, YSIG_MEAN_W_3),
+    PN(SINES, YSIG_SINES_N), PN(SINES, YSIG_SINES_RAMP), PN(NOISE, YSIG_NOISE_SEED), PN(NOISE, YSIG_NOISE_SD),
+    PN(NOISE, YSIG_NOISE_CUTOFF), PN(CHANNEL, YSIG_CHANNEL_CHANNEL), PN(BIND, YSIG_BIND_CHANNEL),
+    PN(DETECT, YSIG_DETECT_TEST), PN(DETECT, YSIG_DETECT_LANE), PN(DETECT, YSIG_DETECT_LEVEL),
+    PN(DETECT, YSIG_DETECT_HYSTERESIS), PN(DETECT, YSIG_DETECT_HOLD), PN(DETECT, YSIG_DETECT_AT),
+    PN(DETECT, YSIG_DETECT_START), PN(DETECT, YSIG_DETECT_REPEAT), PN(DETECT, YSIG_DETECT_A_X),
+    PN(DETECT, YSIG_DETECT_A_Y), PN(DETECT, YSIG_DETECT_B_X), PN(DETECT, YSIG_DETECT_B_Y),
+    PN(DETECT, YSIG_DETECT_ENTRY), PN(RECORD, YSIG_RECORD_PER), PN(EMIT, YSIG_EMIT_KIND),
+    PN(EMIT, YSIG_EMIT_CONTROL)
+};
+#undef PN
+
+static void test_param_names(void) {
+    uint32_t seen[YSIG_OP_COUNT];
+    char want[64];
+    int i, k, n, op;
+    g_where = "param names";
+    memset(seen, 0, sizeof seen);
+    for (i = 0; i < (int)(sizeof g_pnames / sizeof g_pnames[0]); i++) {
+        const pname* q = &g_pnames[i];
+        const ysig_param* p = ysig_op_params(q->op, &n);
+        const char* on = ysig_op_name(q->op);
+        size_t w = 0;
+        CHECK(p != NULL && q->idx >= 0 && q->idx < n);
+        if (!p || q->idx < 0 || q->idx >= n || !on) continue;
+        w += (size_t)snprintf(want, sizeof want, "YSIG_");
+        for (k = 0; on[k] && w + 1 < sizeof want; k++) want[w++] = (char)(on[k] - 'a' + 'A');
+        want[w++] = '_';
+        for (k = 0; p[q->idx].name[k] && w + 1 < sizeof want; k++) {
+            char c = p[q->idx].name[k];
+            want[w++] = c == '.' ? '_' : (c >= 'a' && c <= 'z') ? (char)(c - 'a' + 'A') : c;
+        }
+        want[w] = 0;
+        if (strcmp(want, q->name) != 0)
+            fprintf(stderr, "sig_test [%s]: %s is row %d, \"%s\" (want %s)\n", g_where, q->name, q->idx,
+                    p[q->idx].name, want);
+        CHECK(!strcmp(want, q->name));
+        CHECK(!(seen[q->op] & (1u << q->idx)));   /* one name per row */
+        seen[q->op] |= 1u << q->idx;
+    }
+    for (op = 1; op < YSIG_OP_COUNT; op++) {
+        (void)ysig_op_params(op, &n);
+        CHECK(seen[op] == (n ? (1u << n) - 1u : 0u));   /* every row named */
+    }
+}
+
 /* ---------------------------------------------------------------- integrate */
 
 /* The largest n with o + g n <= hi, and the smallest with o + g n >= lo,
@@ -2060,6 +2135,7 @@ static void test_review(void) {
 
 int main(void) {
     test_conventions();
+    test_param_names();
     test_integrate();
     test_maps();
     test_filters();

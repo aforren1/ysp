@@ -942,3 +942,55 @@ why = "F18: a line without a newline joins the closing line, and a reader no lon
 find = '''    if (ok && lines[n - 1] != '\n') ok = fputc('\n', m) != EOF;'''
 replace = ''
 
+
+# v0.7.1: ytr_data_meta_kv(), one key=value line in the sidecar.
+
+[[mutant]]
+id = "v071-01"
+name = "meta_kv: a key with '=' taken"
+test = "trials"
+why = "A reader splits a line at its first '=': key a=b would read as key a."
+find = '''    if (!key || !key[0] || strpbrk(key, "=\r\n") || !value || strpbrk(value, "\r\n")) {'''
+replace = '''    if (!key || !key[0] || strpbrk(key, "\r\n") || !value || strpbrk(value, "\r\n")) {'''
+
+[[mutant]]
+id = "v071-02"
+name = "meta_kv: a value with a line break taken"
+test = "trials"
+why = "A line break in the value writes another line: a forged rows=N closed=1 among them."
+find = '''    if (!key || !key[0] || strpbrk(key, "=\r\n") || !value || strpbrk(value, "\r\n")) {'''
+replace = '''    if (!key || !key[0] || strpbrk(key, "=\r\n") || !value) {'''
+
+[[mutant]]
+id = "v071-03"
+name = "meta_kv: an empty key taken"
+test = "trials"
+why = "A line =value has no key to read it by."
+find = '''    if (!key || !key[0] || strpbrk(key, "=\r\n") || !value || strpbrk(value, "\r\n")) {'''
+replace = '''    if (!key || strpbrk(key, "=\r\n") || !value || strpbrk(value, "\r\n")) {'''
+
+[[mutant]]
+id = "v071-04"
+name = "meta_kv: no '=' between key and value"
+test = "trials"
+why = "The line is key=value, as the open's lines and ytr_data_meta()'s."
+find = '''    ok = m && fprintf(m, "%s=%s\n", key, value) > 0;'''
+replace = '''    ok = m && fprintf(m, "%s %s\n", key, value) > 0;'''
+
+[[mutant]]
+id = "v071-05"
+name = "meta_kv: no line break after the line"
+test = "trials"
+why = "The next line (finish()'s rows=N closed=1) would join it."
+find = '''    ok = m && fprintf(m, "%s=%s\n", key, value) > 0;'''
+replace = '''    ok = m && fprintf(m, "%s=%s", key, value) > 0;'''
+
+[[mutant]]
+id = "v071-06"
+name = "meta_kv: a closed writer is an argument error"
+test = "trials"
+why = "YTR_ERR_CLOSED after finish(), as ytr_data_meta(): the examples tolerate that code at the end."
+find = '''        ytr__dfail(w, "ytr_data_meta_kv: the writer is not open");
+        return YTR_ERR_CLOSED;'''
+replace = '''        ytr__dfail(w, "ytr_data_meta_kv: the writer is not open");
+        return YTR_ERR_ARG;'''

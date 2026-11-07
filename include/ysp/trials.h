@@ -1,4 +1,4 @@
-/* ysp/trials.h - v0.7.0 - public domain single-header trial sequencing library
+/* ysp/trials.h - v0.7.1 - public domain single-header trial sequencing library
  *
  *   The layer above the adaptive methods: which trial comes next, and what
  *   happened on it. Conditions and repetitions (the method of constant
@@ -973,7 +973,8 @@
  *     as given (participant, rig, seed, the rig profile's hash), and
  *     ytr_format_meta()'s line when there is a session. ytr_data_meta()
  *     appends the caller's lines while the writer is open (v0.7: a
- *     device's counters at the end). finish() appends "rows=N closed=1";
+ *     device's counters at the end), ytr_data_meta_kv() one key=value
+ *     line (v0.7.1). finish() appends "rows=N closed=1";
  *     a sidecar without it belongs to a session that did not finish. A sidecar, not comment lines in the CSV, because
  *     ysp/table.h, pandas' defaults and R's read.csv take no comments.
  *
@@ -1168,6 +1169,11 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.7.1 - ytr_data_meta_kv(w, key, value) appends one key=value line
+ *          to the sidecar (docs/examples_findings.md, F29): a value known
+ *          only at the end, such as ysp/screen.h's describe line, with no
+ *          key copied in front of it by hand, and a key or a value that
+ *          would break the line refused. No struct changes.
  *   v0.7.0 - The data writer (docs/examples_findings.md, F16 and F18):
  *          ytr_data_col_settable(w, col) says whether a caller column
  *          takes ytr_data_set_*() values (YTR_COL_SET), so another
@@ -1372,6 +1378,14 @@
  *          - ytr_condition_at() indexes the practice slots too.
  *   v0.0 - specification. Declarations and the manual, no implementation.
  *
+ *   STATUS: v0.7.1, 2026-11-07, the Linux desktop (Debian 12, GCC 12.2):
+ *   ytr_data_meta_kv() in tests/adapt/trials_test_data.h (the lines and
+ *   their order in the sidecar, each refusal with its code and message)
+ *   and the compile checks (C99, C11, C++17); the test under ASan and
+ *   UBSan as C and C++ (C++ with -fno-sanitize=enum: the test stores 7 in
+ *   a ytr_flush on purpose, as at v0.7.0); 6 of 6 new mutants caught.
+ *   trial_posner writes its screen_end line with it, byte-identical but
+ *   the version string. Not run on Windows or macOS.
  *   STATUS: v0.7.0, 2026-11-06, the Linux desktop (Debian 12, GCC 12.2):
  *   tests/adapt/trials_test.c with the two new calls (each column kind,
  *   indexes out of range, the sidecar's order, a closed writer); not run
@@ -1588,8 +1602,8 @@
  * string is the three numbers, and the test asserts that it stays so. */
 #define YTR_VERSION_MAJOR 0
 #define YTR_VERSION_MINOR 7
-#define YTR_VERSION_PATCH 0
-#define YTR_VERSION_STRING "0.7.0"
+#define YTR_VERSION_PATCH 1
+#define YTR_VERSION_STRING "0.7.1"
 
 /* fsync() and fileno() for YTR_FLUSH_SYNC under -std=c11: the feature-test
  * macro of ysp/rt.h and ysp/pack.h, set before the first system header
@@ -2354,6 +2368,12 @@ YTR_API bool ytr_data_col_settable(const ytr_data* w, int col);
  * (no sidecar, NULL lines), YTR_ERR_CLOSED or YTR_ERR_IO, with
  * ytr_data_error() set; the CSV is not affected. */
 YTR_API int ytr_data_meta(ytr_data* w, const char* lines);
+/* Append the one line key=value to the sidecar now (v0.7.1), as
+ * ytr_data_meta() does: ytr_data_meta_kv(&data, "screen_end", line) for
+ * the describe line at the end. YTR_ERR_ARG also for an empty key, a key
+ * with '=' or a line break, and a value with a line break: each would make
+ * another line or key. */
+YTR_API int ytr_data_meta_kv(ytr_data* w, const char* key, const char* value);
 
 /* Set column `col` (an index into desc.cols, of a YTR_COL_SET column of
  * that type) for the next row. A string must stay valid until the row is
@@ -7775,6 +7795,35 @@ YTR_API int ytr_data_meta(ytr_data* w, const char* lines) {
     if (m) ok = fclose(m) == 0 && ok;
     if (!ok) {
         ytr__dfail(w, "ytr_data_meta: cannot append to '%s'", w->meta_path);
+        return YTR_ERR_IO;
+    }
+    return 0;
+}
+
+YTR_API int ytr_data_meta_kv(ytr_data* w, const char* key, const char* value) {
+    FILE* m;
+    bool ok;
+    if (!w) return YTR_ERR_ARG;
+    if (!w->open) {
+        ytr__dfail(w, "ytr_data_meta_kv: the writer is not open");
+        return YTR_ERR_CLOSED;
+    }
+    if (!w->meta_path[0]) {
+        ytr__dfail(w, "ytr_data_meta_kv: no sidecar (desc.meta_path)");
+        return YTR_ERR_ARG;
+    }
+    /* a reader splits the sidecar at line breaks and each line at its
+     * first '=': anything else here would change another key */
+    if (!key || !key[0] || strpbrk(key, "=\r\n") || !value || strpbrk(value, "\r\n")) {
+        ytr__dfail(w, "ytr_data_meta_kv: %s", !key || !key[0] ? "no key" : !value ? "value is NULL"
+                   : strpbrk(key, "=\r\n") ? "the key has '=' or a line break" : "the value has a line break");
+        return YTR_ERR_ARG;
+    }
+    m = ytr__fopen(w->meta_path, true);
+    ok = m && fprintf(m, "%s=%s\n", key, value) > 0;
+    if (m) ok = fclose(m) == 0 && ok;
+    if (!ok) {
+        ytr__dfail(w, "ytr_data_meta_kv: cannot append to '%s'", w->meta_path);
         return YTR_ERR_IO;
     }
     return 0;

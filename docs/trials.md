@@ -227,7 +227,7 @@ The header's DATA FILE section is the full reference. A summary:
 | Line endings, encoding | LF; UTF-8 without a BOM; no comment lines. The decimal point is `.` in every locale. |
 | When a row is on disk | `YTR_FLUSH_ROW` (default): in the OS when `ytr_data_write()` returns, so a crash of the program keeps it. `YTR_FLUSH_SYNC`: on the disk, so a power cut keeps it. |
 | When to write | After `ytr_update()` or `ytr_requeue()` and before the next `ytr_next()`. Else `YTR_ERR_ORDER`. |
-| Sidecar | `meta_path`: `ysp_trials=<version> data=<path>`, the caller's `meta` lines, `ytr_format_meta()`'s line, and at finish `rows=N closed=1`. |
+| Sidecar | `meta_path`: `ysp_trials=<version> data=<path>`, the caller's `meta` lines, `ytr_format_meta()`'s line, the lines `ytr_data_meta()` and `ytr_data_meta_kv()` append while the writer is open (`screen_end=` at the end), and at finish `rows=N closed=1`. |
 
 ## What v0.2 adds
 
@@ -1067,6 +1067,52 @@ query on each column kind of the formats test and out of range, and the
 sidecar's order (`screen_end=x` before `rows=4 closed=1`), an empty
 call, NULL, and a call after `finish()`. Mutants `v07-01` to `v07-04`
 killed (4 of 4). Linux desktop, GCC 12.2; not run on Windows or macOS.
+
+## v0.7.1: one key=value line in the sidecar
+
+A finding of the layout pilot ([examples_findings.md](examples_findings.md),
+F29). 16 programs append the describe line at the end with the key copied
+in front by hand, and the copy's length written twice:
+
+```c
+/* before */
+memcpy(end, "screen_end=", 11);
+yscr_describe(&scr, end + 11, sizeof end - 11);
+if ((rc = ytr_data_meta(&data, end)) < 0 && rc != YTR_ERR_CLOSED) ...
+/* v0.7.1 */
+yscr_describe(&scr, line, sizeof line);
+if ((rc = ytr_data_meta_kv(&data, "screen_end", line)) < 0 && rc != YTR_ERR_CLOSED) ...
+```
+
+Decisions:
+
+- **A key and a value, not a `ysp/screen.h` helper.** A call that wrote
+  the describe line itself would hide `yscr_describe()`, the call the
+  example shows, and tie this header to the screen's. The key and value
+  pair serves any value known only at the end (a device's counters).
+- **It refuses what would break the line.** A reader splits the sidecar
+  at line breaks and each line at its first `=`. So an empty key, a key
+  with `=` or a line break, and a value with a line break are
+  `YTR_ERR_ARG` with the reason in `ytr_data_error()`: a value with a
+  line break could write a second `rows=N closed=1`. `=` in a value is
+  the value's. `ytr_data_meta()` checks nothing in its lines and stays
+  as it is.
+- **The other codes are `ytr_data_meta()`'s**: `YTR_ERR_ARG` with no
+  sidecar, `YTR_ERR_CLOSED` after `finish()`, `YTR_ERR_IO` when the
+  append fails. The examples keep their test for `YTR_ERR_CLOSED`.
+- **The programs that write their own CSV keep their two lines**
+  (`yscr_describe()`, then `fprintf(out, "# at the end: %s\n", line)`):
+  there is no key to copy there.
+- **A patch version.** A function more, no struct change; no binding
+  carries it.
+
+No struct changes. Tests: `tests/adapt/trials_test_data.h` writes two
+lines (one value with `=` in it, one empty value) and finds them before
+`rows=4 closed=1`; it refuses an empty key, NULL key and value, a key with
+`=` and with a line break, a value with LF and with CR, a NULL writer, a
+writer with no sidecar and one after `finish()`, each with its code and
+message. The compile check (C99, C11, C++17) calls it on a writer with no
+sidecar. Mutants `v071-01` to `v071-06` killed (6 of 6).
 
 ## Verification (v0.2)
 

@@ -5660,6 +5660,103 @@ static void test_seq_cancel(void) {
     CHECK_I(ytl_seq_cancel(&q), YTL_ERR_CLOSED);
 }
 
+/* v0.8.2: ytl_seq_at() is ytl_seq_on(), ytl_base_time() and ytl_at() in
+ * one call, at rate 1, at another rate and paused; it refuses a base with
+ * no time there (stopped, out of range) instead of leaving the cursor at
+ * 0. ytl_find_mark() finds a MARK by code among the fired events. */
+static void test_seq_at(void) {
+    ytl_seq q, r;
+    ytl_event fired[8];
+    int64_t bt = -1;
+    int n, k;
+    CHECK(seq_open(&g_tl, g_store, 64, g_ka, 64, SQ_NCH, NULL));
+    CHECK(seq_open(&g_tl2, g_store2, 64, g_kb, 64, SQ_NCH, NULL));
+    CHECK_I(ytl_anchor(&g_tl, 1, T0, YRT_MS(40)), 0);
+    CHECK_I(ytl_anchor(&g_tl2, 1, T0, YRT_MS(40)), 0);
+    /* the same events as the three calls, on a second timeline */
+    q = ytl_seq_at(&g_tl, 1, T0 + YRT_MS(250));
+    CHECK_I(q.err, 0);
+    CHECK_I(q.err_call, -1);
+    CHECK_I(q.t, YRT_MS(290));
+    CHECK_I(q.prev_start, YRT_MS(290));
+    CHECK_I(q.prev_end, YRT_MS(290));
+    ytl_off(&q, SQ_FIX);
+    ytl_wait(&q, YRT_MS(500));
+    ytl_mark(&q, 7, 0);
+    CHECK_I(q.err, 0);
+    r = ytl_seq_on(&g_tl2, 1);
+    CHECK(ytl_base_time(&g_tl2, 1, T0 + YRT_MS(250), &bt));
+    ytl_at(&r, bt);
+    ytl_off(&r, SQ_FIX);
+    ytl_wait(&r, YRT_MS(500));
+    ytl_mark(&r, 7, 0);
+    CHECK_I(n_events(&g_tl, 1), 2);
+    CHECK_I(n_events(&g_tl2, 1), 2);
+    {
+        const ytl_event* a = ytl_events(&g_tl, 1, &n);
+        const ytl_event* b = ytl_events(&g_tl2, 1, &k);
+        CHECK_I(n, k);
+        for (k = 0; a && b && k < n; k++) {
+            CHECK_I(a[k].time_ns, b[k].time_ns);
+            CHECK_I(a[k].kind, b[k].kind);
+            CHECK_I(a[k].code, b[k].code);
+        }
+    }
+    /* the mark, found among what an evaluate reports */
+    n = eval_at(&g_tl, T0 + YRT_MS(750), P60, 3, fired, 8);
+    CHECK_I(n, 2);
+    CHECK_I(ytl_find_mark(fired, n, 7), 1);
+    CHECK_I(ytl_find_mark(fired, n, 8), -1);
+    CHECK_I(ytl_find_mark(fired, 1, 7), -1);   /* n bounds the scan */
+    /* at half rate, and paused: ytl_base_time()'s answer */
+    CHECK_I(ytl_rate(&g_tl, 1, T0 + YRT_MS(800), 1, 2), 0);
+    CHECK(ytl_base_time(&g_tl, 1, T0 + YRT_S(2), &bt));
+    q = ytl_seq_at(&g_tl, 1, T0 + YRT_S(2));
+    CHECK_I(q.err, 0);
+    CHECK_I(q.t, bt);
+    CHECK_I(q.t, YRT_MS(840) + YRT_MS(600));
+    CHECK_I(ytl_pause(&g_tl, 1, T0 + YRT_S(3)), 0);
+    q = ytl_seq_at(&g_tl, 1, T0 + YRT_S(9));
+    CHECK_I(q.t, YRT_MS(840) + YRT_MS(1100));
+    /* base 0 is the RT clock */
+    q = ytl_seq_at(&g_tl, YTL_BASE_RT, T0 + 123);
+    CHECK_I(q.err, 0);
+    CHECK_I(q.t, T0 + 123);
+    /* no time there: refused, and the sequence adds nothing */
+    n = n_events(&g_tl, 2);
+    q = ytl_seq_at(&g_tl, 2, T0);   /* never anchored: stopped */
+    CHECK_I(q.err, YTL_ERR_ARG);
+    CHECK_I(q.err_call, -1);
+    CHECK(strstr(ytl_error(&g_tl), "ytl_seq_at") != NULL);
+    ytl_on(&q, SQ_GRATING);
+    CHECK_I(q.err, YTL_ERR_ARG);
+    CHECK_I(n_events(&g_tl, 2), n);
+    q = ytl_seq_at(&g_tl, YTL_BASE_RT, LIM62);   /* out of range */
+    CHECK_I(q.err, YTL_ERR_ARG);
+    q = ytl_seq_at(&g_tl, YTL_MAX_BASES, T0);
+    CHECK_I(q.err, YTL_ERR_ARG);
+    q = ytl_seq_at(&g_closed, 1, T0);
+    CHECK_I(q.err, YTL_ERR_CLOSED);
+    /* ytl_find_mark() alone: kinds other than MARK do not match */
+    memset(fired, 0, sizeof fired);
+    fired[0].kind = YTL_TRIGGER;
+    fired[0].code = 5;
+    fired[1].kind = YTL_ONSET;
+    fired[1].code = 5;
+    fired[2].kind = YTL_MARK;
+    fired[2].code = 3;
+    fired[3].kind = YTL_MARK;
+    fired[3].code = 5;
+    fired[4].kind = YTL_MARK;
+    fired[4].code = 5;
+    CHECK_I(ytl_find_mark(fired, 5, 5), 3);   /* the first of two */
+    CHECK_I(ytl_find_mark(fired, 5, 3), 2);
+    CHECK_I(ytl_find_mark(fired, 3, 5), -1);
+    CHECK_I(ytl_find_mark(fired, 0, 3), -1);
+    CHECK_I(ytl_find_mark(fired, -1, 3), -1);
+    CHECK_I(ytl_find_mark(NULL, 5, 3), -1);
+}
+
 /* A sequence's one tween equals ytl_tween() with the same desc: the
  * same takeover from a moving track, the same keys, the same bits. */
 static void test_seq_vs_tween(void) {
@@ -7706,6 +7803,7 @@ int main(void) {
     test_seq_trial();
     test_seq_run();
     test_seq_cancel();
+    test_seq_at();
     test_seq_vs_tween();
     test_seq_arena();
     test_seq_on_n();

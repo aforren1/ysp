@@ -2419,7 +2419,7 @@ PyMODINIT_FUNC PyInit_trials(void) {
 
     /* From the compiled implementation, so it names the header actually built
      * in; the tests check pyproject.toml against it. */
-    if (PyModule_AddStringConstant(m, "__version__", YTR_VERSION_STRING ".1") < 0) goto fail;   /* .1: the CPython 3.10 floor (2026-10-27) */
+    if (PyModule_AddStringConstant(m, "__version__", YTR_VERSION_STRING) < 0) goto fail;   /* no binding change since v0.7.0.1 (the CPython 3.10 floor) */
     PyModule_AddIntConstant(m, "DONE", YTR_DONE);
     PyModule_AddIntConstant(m, "ERR_ARG", YTR_ERR_ARG);
     PyModule_AddIntConstant(m, "ERR_CLOSED", YTR_ERR_CLOSED);

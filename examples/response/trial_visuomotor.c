@@ -317,62 +317,62 @@ static void pointer(const yrsp_input* ev) {
 }
 
 /* The graph: the task's nodes on the role "hand", and the adapter of the
- * input path. A node's p[] are the rows of ysig_op_params() (docs/sig.md,
- * "Ops"). */
+ * input path. A node's p[] are the rows of ysig_op_params(), by name
+ * (docs/sig.md, "Ops"). */
 static bool open_graph(void) {
     ysig_adapter ad = { .role = "hand", .units = YSIG_UNITS_DISPLAY_PX, .nodes = ad_nodes, .n_nodes = 1 };
     int k;
     for (k = 0; k < N_EXP; k++) exp_nodes[k] = ysig_node_of(YSIG_OP_NONE, -1, -1);
     exp_nodes[N_HAND] = ysig_node_of(YSIG_OP_ROLE, -1, -1);
     exp_nodes[N_CUR] = ysig_node_of(YSIG_OP_AFFINE, N_HAND, -1);    /* turned about the start */
-    exp_nodes[N_CUR].p[4] = exp_nodes[N_CUR].p[6] = sx;
-    exp_nodes[N_CUR].p[5] = exp_nodes[N_CUR].p[7] = sy;
+    exp_nodes[N_CUR].p[YSIG_AFFINE_PRE_X] = exp_nodes[N_CUR].p[YSIG_AFFINE_POST_X] = sx;
+    exp_nodes[N_CUR].p[YSIG_AFFINE_PRE_Y] = exp_nodes[N_CUR].p[YSIG_AFFINE_POST_Y] = sy;
     exp_nodes[N_TRACE] = ysig_node_of(YSIG_OP_JOIN, N_HAND, N_CUR);
     exp_nodes[N_REC] = ysig_node_of(YSIG_OP_RECORD, N_TRACE, -1);
     exp_nodes[N_REC].name = "trace";
     exp_nodes[N_EMIT] = ysig_node_of(YSIG_OP_EMIT, N_HAND, -1);
-    exp_nodes[N_EMIT].p[0] = 7;                                      /* YIN_KIND_USER + 7 */
+    exp_nodes[N_EMIT].p[YSIG_EMIT_KIND] = 7;                         /* YIN_KIND_USER + 7 */
     exp_nodes[N_HOLD] = ysig_node_of(YSIG_OP_DETECT, N_HAND, -1);   /* in the start for HOLD_S */
-    exp_nodes[N_HOLD].p[0] = YSIG_TEST_LE;
-    exp_nodes[N_HOLD].p[1] = -1;
-    exp_nodes[N_HOLD].p[2] = START_R;
-    exp_nodes[N_HOLD].p[4] = HOLD_S;
-    exp_nodes[N_HOLD].p[8] = sx;
-    exp_nodes[N_HOLD].p[9] = sy;
+    exp_nodes[N_HOLD].p[YSIG_DETECT_TEST] = YSIG_TEST_LE;
+    exp_nodes[N_HOLD].p[YSIG_DETECT_LANE] = -1;                     /* the norm of hand - center */
+    exp_nodes[N_HOLD].p[YSIG_DETECT_LEVEL] = START_R;
+    exp_nodes[N_HOLD].p[YSIG_DETECT_HOLD] = HOLD_S;
+    exp_nodes[N_HOLD].p[YSIG_DETECT_A_X] = sx;
+    exp_nodes[N_HOLD].p[YSIG_DETECT_A_Y] = sy;
     exp_nodes[N_REACH] = ysig_node_of(YSIG_OP_DETECT, N_HAND, -1);  /* past the target radius */
-    exp_nodes[N_REACH].p[0] = YSIG_TEST_GE;
-    exp_nodes[N_REACH].p[1] = -1;
-    exp_nodes[N_REACH].p[2] = radius;
-    exp_nodes[N_REACH].p[6] = 1;                                     /* armed at the hold's end */
-    exp_nodes[N_REACH].p[8] = sx;
-    exp_nodes[N_REACH].p[9] = sy;
+    exp_nodes[N_REACH].p[YSIG_DETECT_TEST] = YSIG_TEST_GE;
+    exp_nodes[N_REACH].p[YSIG_DETECT_LANE] = -1;
+    exp_nodes[N_REACH].p[YSIG_DETECT_LEVEL] = radius;
+    exp_nodes[N_REACH].p[YSIG_DETECT_START] = 1;                    /* armed at the hold's end */
+    exp_nodes[N_REACH].p[YSIG_DETECT_A_X] = sx;
+    exp_nodes[N_REACH].p[YSIG_DETECT_A_Y] = sy;
     exp_nodes[N_BIND_CUR] = ysig_node_of(YSIG_OP_BIND, N_CUR, -1);
-    exp_nodes[N_BIND_CUR].p[0] = CH_CUR_X;
+    exp_nodes[N_BIND_CUR].p[YSIG_BIND_CHANNEL] = CH_CUR_X;
     exp_nodes[N_BIND_HAND] = ysig_node_of(YSIG_OP_BIND, N_HAND, -1);
-    exp_nodes[N_BIND_HAND].p[0] = CH_HAND_X;
+    exp_nodes[N_BIND_HAND].p[YSIG_BIND_CHANNEL] = CH_HAND_X;
     ad_nodes[0] = ysig_node_of(YSIG_OP_SOURCE, -1, -1);
     ad_nodes[0].lanes = 2;
     if (opt.input == IN_RAW) {
         /* counts integrated from the start, held inside the window */
         ad.name = "raw mouse";
         ad.type = YSIG_TYPE_POSITION2D_RELATIVE;
-        ad_nodes[0].p[0] = YIN_KIND_MOUSE;
-        ad_nodes[0].p[1] = YIN_AXIS_DELTA;
-        ad_nodes[0].p[4] = yin_raw_mouse_source().tier;
+        ad_nodes[0].p[YSIG_SOURCE_KIND] = YIN_KIND_MOUSE;
+        ad_nodes[0].p[YSIG_SOURCE_CONTROL] = YIN_AXIS_DELTA;
+        ad_nodes[0].p[YSIG_SOURCE_TIER] = yin_raw_mouse_source().tier;
         ad_nodes[1] = ysig_node_of(YSIG_OP_INTEGRATE, 0, -1);
-        ad_nodes[1].p[0] = ad_nodes[1].p[1] = opt.gain;
-        ad_nodes[1].p[4] = sx;
-        ad_nodes[1].p[5] = sy;
-        ad_nodes[1].p[12] = W;    /* [0, W] x [0, H]: the count sum stays in the window */
-        ad_nodes[1].p[13] = H;
+        ad_nodes[1].p[YSIG_INTEGRATE_GAIN_X] = ad_nodes[1].p[YSIG_INTEGRATE_GAIN_Y] = opt.gain;
+        ad_nodes[1].p[YSIG_INTEGRATE_ORIGIN_X] = sx;
+        ad_nodes[1].p[YSIG_INTEGRATE_ORIGIN_Y] = sy;
+        ad_nodes[1].p[YSIG_INTEGRATE_HIGH_X] = W;    /* [0, W] x [0, H]: the count sum stays in the window */
+        ad_nodes[1].p[YSIG_INTEGRATE_HIGH_Y] = H;
         ad.n_nodes = 2;
     } else {
         int kind = opt.input == IN_PEN ? YIN_KIND_PEN : YIN_KIND_MOUSE;
         ad.name = opt.input == IN_PEN ? "tablet pen" : "SDL pointer";
         ad.type = YSIG_TYPE_POSITION2D;
-        ad_nodes[0].p[0] = kind;
-        ad_nodes[0].p[1] = YIN_AXIS_POSITION;
-        ad_nodes[0].p[4] = yin_sdl_source(NULL, kind).tier;
+        ad_nodes[0].p[YSIG_SOURCE_KIND] = kind;
+        ad_nodes[0].p[YSIG_SOURCE_CONTROL] = YIN_AXIS_POSITION;
+        ad_nodes[0].p[YSIG_SOURCE_TIER] = yin_sdl_source(NULL, kind).tier;
     }
     /* relative: the hand is placed on the start at the first trial */
     if (!ysig_open(&sg, &(ysig_desc){ .nodes = exp_nodes, .n_nodes = N_EXP,
@@ -483,7 +483,7 @@ static bool start_trial(const yscr_frame* f) {
     fb_of[ti.index] = b == 2 ? FB_NONE : opt.endpoint_only ? FB_ENDPOINT : FB_ONLINE;
     rot_of[ti.index] = rot_deg;
     /* the cursor's turn, counterclockwise on the screen: y is down */
-    if (!ysig_set(&sg, N_CUR, 8, -rot_deg)) { fprintf(stderr, "trial_visuomotor: rotation %g\n", rot_deg); return false; }
+    if (!ysig_set(&sg, N_CUR, YSIG_AFFINE_ANGLE, -rot_deg)) { fprintf(stderr, "trial_visuomotor: rotation %g\n", rot_deg); return false; }
     target_deg = ytb_num(&tab, ti.condition, deg_col);
     target.x = (float)(sx + radius * cos(target_deg * VMA_PI / 180));
     target.y = (float)(sy - radius * sin(target_deg * VMA_PI / 180));
@@ -625,7 +625,7 @@ static void print_summary(void) {
 int main(int argc, char** argv) {
     char line[1024];
     uint64_t seed0;
-    int i, n, rc, in_trial = 0, aborted = 0, failed = 0;
+    int n, rc, in_trial = 0, aborted = 0, failed = 0;
 
     if ((rc = parse_options(argc, argv)) != 0) return rc;
     if (opt.sim) yrt_virtual_begin(0);   /* ysp/rt.h's virtual clock: the same records on any host */
@@ -640,7 +640,6 @@ int main(int argc, char** argv) {
         const yrsp_input* scripted;
         yscr_frame f;
         ytl_event fired[64];
-        int64_t bt = 0;
         rc = yscr_begin(&scr, &f);
         if (rc == YSCR_QUIT) { aborted = 1; break; }
         if (rc != YSCR_OK) { fail(yscr_error(&scr)); failed = 1; break; }
@@ -669,18 +668,14 @@ int main(int argc, char** argv) {
         }
         frame_hits();
         if (phase >= REACH && !target_seen) {   /* the target on this frame */
-            ytl_seq q = ytl_seq_on(&tl, TRIAL);
-            ytl_base_time(&tl, TRIAL, f.onset, &bt);
-            ytl_at(&q, bt);
+            ytl_seq q = ytl_seq_at(&tl, TRIAL, f.onset);
             ytl_on(&q, TARGET_ON);
             if (q.err) { fprintf(stderr, "trial_visuomotor: timeline error %d\n", q.err); failed = 1; break; }
             target_seen = 1;
         }
         sim_frame(ti.index, target_deg, phase, t_arm);
         if (phase == FEEDBACK && !fb_seen) {   /* frozen endpoint, then the target off */
-            ytl_seq q = ytl_seq_on(&tl, TRIAL);
-            ytl_base_time(&tl, TRIAL, f.onset, &bt);
-            ytl_at(&q, bt);
+            ytl_seq q = ytl_seq_at(&tl, TRIAL, f.onset);
             ytl_wait(&q, YRT_S(FEEDBACK_S));
             ytl_off(&q, TARGET_ON);
             ytl_mark(&q, END_OF_TRIAL, 0);
@@ -690,11 +685,10 @@ int main(int argc, char** argv) {
 
         n = ytl_evaluate(&tl, &(ytl_frame){ f.onset, f.period, f.index }, fired, 64);
         yrsp_set_landing(&rsp, fired, n, TARGET_ON);   /* the plan, until the flip record */
-        for (i = 0; i < n; i++)
-            if (fired[i].kind == YTL_MARK && fired[i].code == END_OF_TRIAL) {
-                finish_trial(&f);
-                in_trial = 0;
-            }
+        if (ytl_find_mark(fired, n, END_OF_TRIAL) >= 0) {
+            finish_trial(&f);
+            in_trial = 0;
+        }
         ygfx_apply(binds, (int)(sizeof binds / sizeof binds[0]), ytl_values(&tl));
         place_cursor(fb_of[ti.index]);
         yscr_mark(&scr, YSCR_PHASE_EVALUATE);

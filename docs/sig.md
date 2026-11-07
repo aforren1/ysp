@@ -20,7 +20,9 @@ channel, as `ygfx_apply()` does.
 ### 1. Write the graph
 
 A graph is an array of nodes. Each input comes before its user.
-`ysig_node_of()` sets the unused inputs to -1.
+`ysig_node_of()` sets the unused inputs to -1. A parameter's index has a
+name: `YSIG_<OP>_<ROW>` is the row of that name in the op's table
+([Ops](#ops)).
 
 ```c
 #define YSP_SIG_IMPLEMENTATION
@@ -30,16 +32,16 @@ enum { MOUSE, HAND, CURSOR, BIND, N };
 ysig_node n[N];
 n[MOUSE] = ysig_node_of(YSIG_OP_SOURCE, -1, -1);
 n[MOUSE].lanes = 2;
-n[MOUSE].p[0] = YIN_KIND_MOUSE;      /* kind */
-n[MOUSE].p[1] = YIN_AXIS_DELTA;      /* control: raw counts */
+n[MOUSE].p[YSIG_SOURCE_KIND] = YIN_KIND_MOUSE;
+n[MOUSE].p[YSIG_SOURCE_CONTROL] = YIN_AXIS_DELTA;   /* raw counts */
 n[HAND] = ysig_node_of(YSIG_OP_INTEGRATE, MOUSE, -1);
-n[HAND].p[0] = n[HAND].p[1] = 0.25;  /* px per count */
-n[HAND].p[4] = 512;                  /* origin: the start */
-n[HAND].p[5] = 384;
+n[HAND].p[YSIG_INTEGRATE_GAIN_X] = n[HAND].p[YSIG_INTEGRATE_GAIN_Y] = 0.25;   /* px per count */
+n[HAND].p[YSIG_INTEGRATE_ORIGIN_X] = 512;          /* the start */
+n[HAND].p[YSIG_INTEGRATE_ORIGIN_Y] = 384;
 n[CURSOR] = ysig_node_of(YSIG_OP_AFFINE, HAND, -1);
-n[CURSOR].p[4] = n[CURSOR].p[6] = 512;   /* about the start */
-n[CURSOR].p[5] = n[CURSOR].p[7] = 384;
-n[CURSOR].p[8] = -30;                /* y is down: -30 turns counterclockwise on screen */
+n[CURSOR].p[YSIG_AFFINE_PRE_X] = n[CURSOR].p[YSIG_AFFINE_POST_X] = 512;   /* about the start */
+n[CURSOR].p[YSIG_AFFINE_PRE_Y] = n[CURSOR].p[YSIG_AFFINE_POST_Y] = 384;
+n[CURSOR].p[YSIG_AFFINE_ANGLE] = -30;   /* y is down: -30 turns counterclockwise on screen */
 n[BIND] = ysig_node_of(YSIG_OP_BIND, CURSOR, -1);   /* channels 0 and 1 */
 ```
 
@@ -100,13 +102,13 @@ the hold, the reach and the movement onset.
 ### Feed a movement onset to the response collector
 
 Use an `emit` node. It makes a derived `yin_event` of its input at each
-update: kind `YIN_KIND_USER + p0`, device the emit node's index, control
-`p1`, the lanes in x, y, value and aux. Give the collector a DISTANCE
+update: kind `YIN_KIND_USER +` its `kind` parameter, device the emit
+node's index, control its `control` parameter, the lanes in x, y, value and aux. Give the collector a DISTANCE
 choice of that kind and device:
 
 ```c
 n[EMIT] = ysig_node_of(YSIG_OP_EMIT, HAND, -1);
-n[EMIT].p[0] = 7;                        /* YIN_KIND_USER + 7 */
+n[EMIT].p[YSIG_EMIT_KIND] = 7;           /* YIN_KIND_USER + 7 */
 moved.kind = YIN_KIND_USER + 7;
 moved.device = EMIT;
 moved.control = YIN_AXIS_POSITION;
@@ -133,24 +135,25 @@ Use a `detect` with `hold`. "In the start circle for 0.5 s":
 
 ```c
 n[HOLD] = ysig_node_of(YSIG_OP_DETECT, HAND, -1);
-n[HOLD].p[0] = YSIG_TEST_LE;   /* the norm of hand - center <= level */
-n[HOLD].p[1] = -1;             /* the norm, not one lane */
-n[HOLD].p[2] = 12;             /* px */
-n[HOLD].p[4] = 0.5;            /* s */
-n[HOLD].p[8] = 512;            /* the center */
-n[HOLD].p[9] = 384;
+n[HOLD].p[YSIG_DETECT_TEST] = YSIG_TEST_LE;   /* the norm of hand - center <= level */
+n[HOLD].p[YSIG_DETECT_LANE] = -1;             /* the norm, not one lane */
+n[HOLD].p[YSIG_DETECT_LEVEL] = 12;            /* px */
+n[HOLD].p[YSIG_DETECT_HOLD] = 0.5;            /* s */
+n[HOLD].p[YSIG_DETECT_A_X] = 512;             /* the center */
+n[HOLD].p[YSIG_DETECT_A_Y] = 384;
 ```
 
 The hit's `t` is the hold's start plus 0.5 s. The next sample finds it
 (before it is tested, so a hand that leaves after the hold ended counts as
 movement), or a frame whose onset is at or after it, so a still hand that
 sends nothing completes it. Read hits with `ysig_detected()`. With
-`p[6] = 1` the detect waits for `ysig_arm(&g, node, t)`. A crossing
-detect (no hold) armed while its test is true is held until the test
-fails (the collector's CROSSINGS rule). A hold armed while its test is
-true counts from the arm with `p[12] = 0` (entry `arm`, the default: a
-hand already on the start at a trial's first frame), or waits for the
-test to fail and come true again with `p[12] = 1` (entry `fresh`).
+`p[YSIG_DETECT_START] = 1` (start `arm`) the detect waits for
+`ysig_arm(&g, node, t)`. A crossing detect (no hold) armed while its test
+is true is held until the test fails (the collector's CROSSINGS rule). A
+hold armed while its test is true counts from the arm with
+`p[YSIG_DETECT_ENTRY] = 0` (entry `arm`, the default: a hand already on
+the start at a trial's first frame), or waits for the test to fail and
+come true again with `p[YSIG_DETECT_ENTRY] = 1` (entry `fresh`).
 
 ### Read a value at a flip record's onset
 
@@ -178,7 +181,7 @@ Declare a role in the experiment's part and give an adapter per rig:
 
 ```c
 ysig_role hand = { "hand", YSIG_TYPE_POSITION2D, YSIG_UNITS_DISPLAY_PX, true };
-n[HAND] = ysig_node_of(YSIG_OP_ROLE, -1, -1);   /* p[0] = 0: roles[0] */
+n[HAND] = ysig_node_of(YSIG_OP_ROLE, -1, -1);   /* p[YSIG_ROLE_ROLE] = 0: roles[0] */
 
 /* mouse rig */
 ysig_adapter ad = { "hand", "raw mouse", YSIG_TYPE_POSITION2D_RELATIVE, YSIG_UNITS_DISPLAY_PX, mouse_nodes, 2 };
@@ -201,11 +204,11 @@ ramp:
 ```c
 n[SINES] = ysig_node_of(YSIG_OP_SINES, -1, -1);
 n[SINES].lanes = 2;
-n[SINES].p[0] = 7;                 /* components per lane */
+n[SINES].p[YSIG_SINES_N] = 7;      /* components per lane */
 n[SINES].data = comp;              /* 2 x 7 x (amplitude, Hz, phase rad) */
 n[SINES].n_data = 42;
 n[AMP] = ysig_node_of(YSIG_OP_CHANNEL, -1, -1);
-n[AMP].p[0] = AMP_CHANNEL;
+n[AMP].p[YSIG_CHANNEL_CHANNEL] = AMP_CHANNEL;
 n[TARGET] = ysig_node_of(YSIG_OP_SCALE, SINES, AMP);
 ...
 ytl_base_time(&tl, TRIAL, f.onset, &bt);
@@ -254,8 +257,12 @@ from input known up to the poll): a limit of this version.
 
 ### Ops
 
-p[] indices are the rows of `ysig_op_params(op, &n)`. Durations are
-seconds, as in a definition. A zero field means the row's `def`.
+p[] indices are the rows of `ysig_op_params(op, &n)`. Each has a name,
+`YSIG_<OP>_<ROW>`: the op and the row's name in upper case, a dot as an
+underscore (`YSIG_DETECT_LEVEL`, `YSIG_AFFINE_ANGLE`,
+`YSIG_INTEGRATE_ORIGIN_X`). `speed` has `velocity`'s rows and `mean`
+`sum`'s, under their own names too. Durations are seconds, as in a
+definition. A zero field means the row's `def`.
 
 | Op | Inputs, lanes | p[] | Notes |
 |---|---|---|---|
@@ -302,7 +309,7 @@ seconds, as in a definition. A zero field means the row's `def`.
   mouse's counts are never dropped: a sum does not depend on order. A
   source keeps the last time of 8 devices; a ninth takes the slot of the
   least recently seen one (`order_evicted`), and that device's next late
-  sample passes. Give a source a device (`p[2]`) when more than 8 share
+  sample passes. Give a source a device (`YSIG_SOURCE_DEVICE`) when more than 8 share
   a kind and control.
 - `ysig_frame()` runs, in node order, the generators at the frame's base
   time; velocity, speed, delay, lowpass and rate integrators as views,
@@ -369,6 +376,20 @@ files came out byte-identical.
   and the emit node's index as the device. The collector needs nothing
   more. A consumer that logs every event cannot tell a derived event from
   a USER device's. `ysp/input.h` has no flag for it: see "Not done".
+- **Parameters by name, not constructors.** A graph set `p[8] = sx`; a
+  reader needed the table to see that it is a detect's center
+  ([examples_findings.md](examples_findings.md), F25). Each index now has
+  the name of its row, `YSIG_DETECT_A_X`, made from the table by one rule
+  that the test checks for every row, so a name cannot drift from the
+  table. `p[]` and `ysig_set()` by number still work: the fuzz target and
+  the journal use numbers. Constructors for the common shapes (a hold in
+  a circle) were not added: each has five or six numbers in a fixed
+  order, the same problem as `p[]`, and they would cover few of the
+  graphs. The names do not carry units (`YSIG_DETECT_HOLD`, not
+  `_HOLD_S`): every duration in `p[]` is seconds, and the row says so.
+  `trial_visuomotor` and `trial_bimanual` set their graphs by name (57
+  lines, no line more or fewer); `examples/sig/bench.c` keeps its 31
+  numbers.
 
 ### Byte-identical ports
 
@@ -474,8 +495,10 @@ counts this program's allocator calls during the 60 s run (glibc).
   values at a time, roles and adapters, a custom op, `ysig_set()`, a
   golden digest, 40 refusals of bad graphs, and one test per item of the
   two reviews (`test_order`, `test_views`, `test_review`, `test_still`,
-  `test_review2`, `test_review3`). It passes under ASan and UBSan
-  (`setarch -R` on the Linux desktop) and as C++.
+  `test_review2`, `test_review3`), and `test_param_names`: every
+  `YSIG_<OP>_<ROW>` against the row of that name, and one name for each
+  row of every op. It passes under ASan and UBSan (`setarch -R` on the
+  Linux desktop) and as C++.
 - `tests/compile/sig.c` and `sig.cpp`: C99, C11 and C++17 with warnings
   as errors.
 - `tests/fuzz/sig_fuzz.c`: arbitrary node arrays (and roles and adapters)
@@ -503,7 +526,9 @@ bind's input after it. After the third review: 20,000,000 inputs (seed
 781) in 9 min 33 s; 14,562,777 refused by `ysig_check()`, 5,436,289
 graphs opened and ran (35.0 million events taken, 14.7 million rows,
 0.97 million hits), no finding.
-- `tests/mutate/sig.toml`: 87 mutants and a control; 87 of 87 killed.
+- `tests/mutate/sig.toml`: 92 mutants and a control; 92 of 92 killed.
+  Mutants 89 to 93 move a name off its row (a swap, a gap, the shared
+  tables of `speed` and `mean`).
   Mutants 70 and 71 remove the saturation of time arithmetic; the test
   built with `-fsanitize=undefined` (the list's `sig_ubsan` test) catches
   them.

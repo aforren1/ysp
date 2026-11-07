@@ -340,8 +340,8 @@ static void on_input(const yrsp_input* in, int from_bridge) {
         if (++setup == 1) printf("click the right hand's mouse (left button)\n");
         else {
             /* both placed now: L and R are displacements from here */
-            ysig_set(&sg, B_SRC_L, 2, dev[0]);
-            ysig_set(&sg, B_SRC_R, 2, dev[1]);
+            ysig_set(&sg, B_SRC_L, YSIG_SOURCE_DEVICE, dev[0]);
+            ysig_set(&sg, B_SRC_R, YSIG_SOURCE_DEVICE, dev[1]);
             ysig_reset(&sg, in->t);
             if (is_script) script_placed(in->t);
         }
@@ -1013,9 +1013,9 @@ static int start_tracking(const yscr_frame* f) {
  * phases into the graph, between trials. */
 static void set_graph_block(int b) {
     int k, a, ok = 1;
-    for (k = 0; k < 4; k++) ok &= ysig_set(&sg, B_C, k, 0);   /* all zero: the identity */
-    ok &= ysig_set(&sg, B_C, 8, pert_on && perturb == 1 ? rot_deg : 0);
-    if (pert_on && perturb == 2) ok &= ysig_set(&sg, B_C, 1, 1) && ysig_set(&sg, B_C, 2, 1);
+    for (k = 0; k < 4; k++) ok &= ysig_set(&sg, B_C, YSIG_AFFINE_M_XX + k, 0);   /* all zero: the identity */
+    ok &= ysig_set(&sg, B_C, YSIG_AFFINE_ANGLE, pert_on && perturb == 1 ? rot_deg : 0);
+    if (pert_on && perturb == 2) ok &= ysig_set(&sg, B_C, YSIG_AFFINE_M_XY, 1) && ysig_set(&sg, B_C, YSIG_AFFINE_M_YX, 1);
     for (a = 0; a < 2; a++)
         for (k = 0; k < N_SINES; k++) ok &= ysig_set_data(&sg, B_SINES, (a * N_SINES + k) * 3 + 2, phase[b][a][k]);
     if (!ok) { fprintf(stderr, "trial_bimanual: the graph refused block %d's parameters\n", b); failed = 1; }
@@ -1031,38 +1031,38 @@ static bool open_graph(void) {
     for (k = 0; k < 2; k++) {
         n[B_SRC_L + k] = ysig_node_of(YSIG_OP_SOURCE, -1, -1);
         n[B_SRC_L + k].lanes = 2;
-        n[B_SRC_L + k].p[0] = YIN_KIND_MOUSE;
-        n[B_SRC_L + k].p[1] = YIN_AXIS_DELTA;
-        n[B_SRC_L + k].p[2] = 4294967295.0;   /* no mouse until the setup names it */
-        n[B_SRC_L + k].p[4] = yin_raw_mouse_source().tier;
+        n[B_SRC_L + k].p[YSIG_SOURCE_KIND] = YIN_KIND_MOUSE;
+        n[B_SRC_L + k].p[YSIG_SOURCE_CONTROL] = YIN_AXIS_DELTA;
+        n[B_SRC_L + k].p[YSIG_SOURCE_DEVICE] = 4294967295.0;   /* no mouse until the setup names it */
+        n[B_SRC_L + k].p[YSIG_SOURCE_TIER] = yin_raw_mouse_source().tier;
         n[B_LPX + k] = ysig_node_of(YSIG_OP_INTEGRATE, B_SRC_L + k, -1);   /* px, from (W, H) */
-        n[B_LPX + k].p[0] = n[B_LPX + k].p[1] = gain;
-        n[B_LPX + k].p[4] = W;
-        n[B_LPX + k].p[5] = H;
-        n[B_LPX + k].p[12] = 2 * (double)W;   /* a hand stops at the window's size from there */
-        n[B_LPX + k].p[13] = 2 * (double)H;
+        n[B_LPX + k].p[YSIG_INTEGRATE_GAIN_X] = n[B_LPX + k].p[YSIG_INTEGRATE_GAIN_Y] = gain;
+        n[B_LPX + k].p[YSIG_INTEGRATE_ORIGIN_X] = W;
+        n[B_LPX + k].p[YSIG_INTEGRATE_ORIGIN_Y] = H;
+        n[B_LPX + k].p[YSIG_INTEGRATE_HIGH_X] = 2 * (double)W;   /* a hand stops at the window's size from there */
+        n[B_LPX + k].p[YSIG_INTEGRATE_HIGH_Y] = 2 * (double)H;
         n[B_L + k] = ysig_node_of(YSIG_OP_AFFINE, B_LPX + k, -1);          /* cm, y up */
-        n[B_L + k].p[0] = 1 / ppc;
-        n[B_L + k].p[3] = -1 / ppc;
-        n[B_L + k].p[4] = W;
-        n[B_L + k].p[5] = H;
+        n[B_L + k].p[YSIG_AFFINE_M_XX] = 1 / ppc;
+        n[B_L + k].p[YSIG_AFFINE_M_YY] = -1 / ppc;
+        n[B_L + k].p[YSIG_AFFINE_PRE_X] = W;
+        n[B_L + k].p[YSIG_AFFINE_PRE_Y] = H;
         n[B_L + k].history = RING_CAP;
     }
     n[B_LX] = ysig_node_of(YSIG_OP_SELECT, B_L, -1);
     n[B_LX].lanes = 1;
     n[B_RY] = ysig_node_of(YSIG_OP_SELECT, B_R, -1);
     n[B_RY].lanes = 1;
-    n[B_RY].p[0] = 1;
+    n[B_RY].p[YSIG_SELECT_LANE_X] = 1;   /* R's y */
     n[B_U] = mapping ? ysig_node_of(YSIG_OP_MEAN, B_L, B_R) : ysig_node_of(YSIG_OP_JOIN, B_LX, B_RY);
     n[B_C] = ysig_node_of(YSIG_OP_AFFINE, B_U, -1);   /* P, per block */
     n[B_C].history = RING_CAP;                        /* computed from the hands' rings at t */
     n[B_U].history = RING_CAP;
     n[B_EMIT] = ysig_node_of(YSIG_OP_EMIT, B_C, -1);
-    n[B_EMIT].p[0] = 7;                               /* YIN_KIND_USER + 7 */
+    n[B_EMIT].p[YSIG_EMIT_KIND] = 7;                  /* YIN_KIND_USER + 7 */
     n[B_SPEED] = ysig_node_of(YSIG_OP_SPEED, B_C, -1);
-    n[B_SPEED].p[0] = VEL_LAG_S;
+    n[B_SPEED].p[YSIG_SPEED_LAG] = VEL_LAG_S;
     n[B_AMP] = ysig_node_of(YSIG_OP_CHANNEL, -1, -1);
-    n[B_AMP].p[0] = AMP;
+    n[B_AMP].p[YSIG_CHANNEL_CHANNEL] = AMP;
     for (a = 0; a < 2; a++)
         for (k = 0; k < N_SINES; k++) {
             sines_data[(a * N_SINES + k) * 3] = amp_cm[a][k];
@@ -1071,17 +1071,17 @@ static bool open_graph(void) {
         }
     n[B_SINES] = ysig_node_of(YSIG_OP_SINES, -1, -1);
     n[B_SINES].lanes = 2;
-    n[B_SINES].p[0] = N_SINES;
+    n[B_SINES].p[YSIG_SINES_N] = N_SINES;
     n[B_SINES].data = sines_data;
     n[B_SINES].n_data = 2 * N_SINES * 3;
     n[B_TGT] = ysig_node_of(YSIG_OP_SCALE, B_SINES, B_AMP);   /* the ramp: the timeline's tween */
     n[B_TPX] = ysig_node_of(YSIG_OP_AFFINE, B_TGT, -1);       /* px for drawing */
-    n[B_TPX].p[0] = ppc;
-    n[B_TPX].p[3] = -ppc;
-    n[B_TPX].p[6] = cx;
-    n[B_TPX].p[7] = cy;
+    n[B_TPX].p[YSIG_AFFINE_M_XX] = ppc;
+    n[B_TPX].p[YSIG_AFFINE_M_YY] = -ppc;
+    n[B_TPX].p[YSIG_AFFINE_POST_X] = cx;
+    n[B_TPX].p[YSIG_AFFINE_POST_Y] = cy;
     n[B_BIND_T] = ysig_node_of(YSIG_OP_BIND, B_TPX, -1);
-    n[B_BIND_T].p[0] = CH_TGT_X;
+    n[B_BIND_T].p[YSIG_BIND_CHANNEL] = CH_TGT_X;
     memset(&d, 0, sizeof d);
     d.nodes = n;
     d.n_nodes = B_N;

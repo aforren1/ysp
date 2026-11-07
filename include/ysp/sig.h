@@ -25,12 +25,17 @@
  *
  *       ysig_node n[4];
  *       n[0] = ysig_node_of(YSIG_OP_SOURCE, -1, -1);
- *       n[0].p[0] = YIN_KIND_MOUSE; n[0].p[1] = YIN_AXIS_DELTA; n[0].lanes = 2;
+ *       n[0].p[YSIG_SOURCE_KIND] = YIN_KIND_MOUSE;
+ *       n[0].p[YSIG_SOURCE_CONTROL] = YIN_AXIS_DELTA;
+ *       n[0].lanes = 2;
  *       n[1] = ysig_node_of(YSIG_OP_INTEGRATE, 0, -1);      // hand, px
- *       n[1].p[0] = n[1].p[1] = 0.25; n[1].p[4] = sx; n[1].p[5] = sy;
+ *       n[1].p[YSIG_INTEGRATE_GAIN_X] = n[1].p[YSIG_INTEGRATE_GAIN_Y] = 0.25;
+ *       n[1].p[YSIG_INTEGRATE_ORIGIN_X] = sx;
+ *       n[1].p[YSIG_INTEGRATE_ORIGIN_Y] = sy;
  *       n[2] = ysig_node_of(YSIG_OP_AFFINE, 1, -1);         // cursor
- *       n[2].p[4] = n[2].p[6] = sx; n[2].p[5] = n[2].p[7] = sy;
- *       n[2].p[8] = -30;                                    // y down: ccw on screen
+ *       n[2].p[YSIG_AFFINE_PRE_X] = n[2].p[YSIG_AFFINE_POST_X] = sx;
+ *       n[2].p[YSIG_AFFINE_PRE_Y] = n[2].p[YSIG_AFFINE_POST_Y] = sy;
+ *       n[2].p[YSIG_AFFINE_ANGLE] = -30;                    // y down: ccw on screen
  *       n[3] = ysig_node_of(YSIG_OP_BIND, 2, -1);           // channels 0, 1
  *       ysig_desc d = { 0 };
  *       d.nodes = n; d.n_nodes = 4;
@@ -51,8 +56,9 @@
  *   ---------------------------------------------------------------------
  *   An array of nodes. A node has an op, up to 4 inputs (other nodes'
  *   indices, -1 = none, leading, no gaps), 16 parameters p[] whose meaning
- *   is the op's table (ysig_op_params()), an optional data array (sines'
- *   components), and one output of 1 to 4 lanes (x, y, z, w). Each input
+ *   is the op's table (ysig_op_params()) and whose indices have names
+ *   (YSIG_DETECT_LEVEL is detect's row "level"), an optional data array
+ *   (sines' components), and one output of 1 to 4 lanes (x, y, z, w). Each input
  *   comes before its user: an input at or after the node is refused, so a
  *   cycle cannot be built. node.lanes 0 takes the op's rule. Start from
  *   ysig_node_of(), which sets unused inputs to -1: a zeroed in[] reads
@@ -240,13 +246,15 @@
  *   ---------------------------------------------------------------------
  *   v0.1.0 - first version: the ops above, the schedules, detectors,
  *          derived events, records, journal and replay, roles and
- *          adapters, custom ops, parameter tables.
+ *          adapters, custom ops, parameter tables, and a name for
+ *          each p[] index (YSIG_<OP>_<ROW>).
  *
  *   STATUS: v0.1.0, 2026-11-07, Linux desktop (Debian 12, GCC 12.2):
  *   tests/adapt/sig_test.c, the compile checks (C99, C11, C++17), the
- *   fuzz target under ASan and UBSan (20 million inputs), 87 of 87
- *   mutants killed, and trial_visuomotor and trial_bimanual ported onto
- *   it with byte-identical CI data files. Four raw mice at 8 kHz into 32
+ *   fuzz target under ASan and UBSan (20 million inputs), 92 of 92
+ *   mutants killed (89 to 93: the p[] names), and trial_visuomotor and
+ *   trial_bimanual ported onto it with byte-identical CI data files (and
+ *   again, set by name). Four raw mice at 8 kHz into 32
  *   nodes: 141 ns a sample and 0.28 us a ysig_frame() at the median on a
  *   performance core of the i5-14500, no allocator call (docs/sig.md,
  *   "Cost"). Not run: MSVC, macOS, a window, a real device.
@@ -297,6 +305,43 @@ typedef enum ysig_op {
 
 /* detect p0 */
 typedef enum ysig_test { YSIG_TEST_GE = 0, YSIG_TEST_LE = 1, YSIG_TEST_IN_RECT = 2, YSIG_TEST_OUT_RECT = 3 } ysig_test;
+
+/* p[] indices by name (THE GRAPH): YSIG_<OP>_<ROW> is the row of
+ * ysig_op_params(op) named <row>, in upper case with '.' as '_', so a
+ * graph reads n.p[YSIG_DETECT_LEVEL] and ysig_set(g, k, YSIG_AFFINE_ANGLE,
+ * deg) without the table beside it. speed has velocity's rows and mean
+ * sum's, under their own names too. The test checks every name against
+ * its row. */
+enum { YSIG_SOURCE_KIND = 0, YSIG_SOURCE_CONTROL, YSIG_SOURCE_DEVICE, YSIG_SOURCE_FIELDS, YSIG_SOURCE_TIER,
+       YSIG_SOURCE_TYPE };
+enum { YSIG_ROLE_ROLE = 0 };
+enum { YSIG_INTEGRATE_GAIN_X = 0, YSIG_INTEGRATE_GAIN_Y, YSIG_INTEGRATE_GAIN_Z, YSIG_INTEGRATE_GAIN_W,
+       YSIG_INTEGRATE_ORIGIN_X, YSIG_INTEGRATE_ORIGIN_Y, YSIG_INTEGRATE_ORIGIN_Z, YSIG_INTEGRATE_ORIGIN_W,
+       YSIG_INTEGRATE_LOW_X, YSIG_INTEGRATE_LOW_Y, YSIG_INTEGRATE_LOW_Z, YSIG_INTEGRATE_LOW_W,
+       YSIG_INTEGRATE_HIGH_X, YSIG_INTEGRATE_HIGH_Y, YSIG_INTEGRATE_HIGH_Z, YSIG_INTEGRATE_HIGH_W };
+enum { YSIG_LOWPASS_CUTOFF = 0, YSIG_LOWPASS_ORDER, YSIG_LOWPASS_RATE };
+enum { YSIG_VELOCITY_LAG = 0, YSIG_VELOCITY_CAPACITY };
+enum { YSIG_SPEED_LAG = 0, YSIG_SPEED_CAPACITY };
+enum { YSIG_DELAY_DELAY = 0, YSIG_DELAY_CAPACITY };
+enum { YSIG_DEADZONE_RADIUS = 0 };
+enum { YSIG_AFFINE_M_XX = 0, YSIG_AFFINE_M_XY, YSIG_AFFINE_M_YX, YSIG_AFFINE_M_YY, YSIG_AFFINE_PRE_X,
+       YSIG_AFFINE_PRE_Y, YSIG_AFFINE_POST_X, YSIG_AFFINE_POST_Y, YSIG_AFFINE_ANGLE };
+enum { YSIG_SCALE_K_X = 0, YSIG_SCALE_K_Y, YSIG_SCALE_K_Z, YSIG_SCALE_K_W };
+enum { YSIG_OFFSET_D_X = 0, YSIG_OFFSET_D_Y, YSIG_OFFSET_D_Z, YSIG_OFFSET_D_W };
+enum { YSIG_CLAMP_LOW_X = 0, YSIG_CLAMP_LOW_Y, YSIG_CLAMP_LOW_Z, YSIG_CLAMP_LOW_W, YSIG_CLAMP_HIGH_X,
+       YSIG_CLAMP_HIGH_Y, YSIG_CLAMP_HIGH_Z, YSIG_CLAMP_HIGH_W };
+enum { YSIG_SELECT_LANE_X = 0, YSIG_SELECT_LANE_Y, YSIG_SELECT_LANE_Z, YSIG_SELECT_LANE_W };
+enum { YSIG_SUM_W_0 = 0, YSIG_SUM_W_1, YSIG_SUM_W_2, YSIG_SUM_W_3 };
+enum { YSIG_MEAN_W_0 = 0, YSIG_MEAN_W_1, YSIG_MEAN_W_2, YSIG_MEAN_W_3 };
+enum { YSIG_SINES_N = 0, YSIG_SINES_RAMP };
+enum { YSIG_NOISE_SEED = 0, YSIG_NOISE_SD, YSIG_NOISE_CUTOFF };
+enum { YSIG_CHANNEL_CHANNEL = 0 };
+enum { YSIG_BIND_CHANNEL = 0 };
+enum { YSIG_DETECT_TEST = 0, YSIG_DETECT_LANE, YSIG_DETECT_LEVEL, YSIG_DETECT_HYSTERESIS, YSIG_DETECT_HOLD,
+       YSIG_DETECT_AT, YSIG_DETECT_START, YSIG_DETECT_REPEAT, YSIG_DETECT_A_X, YSIG_DETECT_A_Y, YSIG_DETECT_B_X,
+       YSIG_DETECT_B_Y, YSIG_DETECT_ENTRY };
+enum { YSIG_RECORD_PER = 0 };
+enum { YSIG_EMIT_KIND = 0, YSIG_EMIT_CONTROL };
 
 /* Role types and unit spaces (ROLES AND ADAPTERS). */
 typedef enum ysig_type {
@@ -530,12 +575,12 @@ YSIG_API bool ysig_open(ysig_graph* g, const ysig_desc* d);
 YSIG_API const char* ysig_error(const ysig_graph* g);
 
 /* Trial start: integrators to their origins, filters, rings, delays and
- * queues empty, detects armed by p6. Every value gets t. */
+ * queues empty, detects armed by YSIG_DETECT_START. Every value gets t. */
 YSIG_API void ysig_reset(ysig_graph* g, int64_t t_ns);
 
-/* p[param] of node := v, checked by the op's table; between trials. A
- * parameter that sizes the arena (a ring's capacity, sines' count) is
- * refused. State is kept. */
+/* p[param] of node := v, checked by the op's table; between trials. param
+ * is the row's index, by name YSIG_<OP>_<ROW>. A parameter that sizes the
+ * arena (a ring's capacity, sines' count) is refused. State is kept. */
 YSIG_API bool ysig_set(ysig_graph* g, int node, int param, double v);
 YSIG_API bool ysig_set_data(ysig_graph* g, int node, int index, double v);
 

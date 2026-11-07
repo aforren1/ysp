@@ -258,7 +258,6 @@ int main(int argc, char** argv) {
         yscr_frame f;
         ytl_event fired[64];   /* the timeline's capacity: all that can fire */
         const yrsp_input* scripted;
-        int64_t bt = 0;
         int n, landed;
         rc = yscr_begin(&scr, &f);
         if (rc == YSCR_QUIT) { aborted = 1; break; }
@@ -273,9 +272,7 @@ int main(int argc, char** argv) {
         /* the target's flip record when it arrives; a key: the target goes
          * off on this frame, the next comes after the RSI */
         if (yrsp_update_frame(&rsp, &f) == YRSP_ENDED && responding) {
-            ytl_seq q = ytl_seq_on(&tl, TRIAL);
-            ytl_base_time(&tl, TRIAL, f.onset, &bt);
-            ytl_at(&q, bt);
+            ytl_seq q = ytl_seq_at(&tl, TRIAL, f.onset);
             ytl_off(&q, TARGET_ON);
             ytl_wait(&q, YRT_S(RSI_S));
             ytl_mark(&q, END_OF_TRIAL, 0);
@@ -286,11 +283,10 @@ int main(int argc, char** argv) {
         n = ytl_evaluate(&tl, &(ytl_frame){ f.onset, f.period, f.index }, fired, 64);
         landed = yrsp_set_landing(&rsp, fired, n, TARGET_ON);   /* the target landed: its planned onset */
         if (landed >= 0) sim_target_landed(fired[landed].onset, opt.blocks[block], ti.index, position, trial_index);
-        for (i = 0; i < n; i++)
-            if (fired[i].kind == YTL_MARK && fired[i].code == END_OF_TRIAL) {
-                write_row();
-                in_trial = 0;
-            }
+        if (ytl_find_mark(fired, n, END_OF_TRIAL) >= 0) {
+            write_row();
+            in_trial = 0;
+        }
         ygfx_apply(binds, (int)(sizeof binds / sizeof binds[0]), ytl_values(&tl));
         yscr_mark(&scr, YSCR_PHASE_EVALUATE);
         ygfx_begin(&gfx, &f);

@@ -6,7 +6,8 @@
  * an op table both apply. v0.6.0: target tweens on a stimulus's fields,
  * written as a caller writes them, with no cast in C++. v0.7.0: a set's
  * record, a prune and the horizon. v0.8.0: a trigger on a channel, by
- * call and by op, and the parameter tables. */
+ * call and by op, and the parameter tables. v0.8.2: a response's sequence
+ * from a frame's onset and its end mark found among the fired events. */
 #define YSP_TIMELINE_IMPLEMENTATION
 #include "ysp/timeline.h"
 
@@ -27,12 +28,40 @@ typedef struct tl_api {
     void (*trigger_ch)(ytl_seq*, int, int32_t);             /* v0.8.0 */
     const ytl_param* (*op_params)(int, int*);
     const ytl_param* (*desc_params)(int*);
+    ytl_seq (*seq_at)(ytl_timeline*, int, int64_t);         /* v0.8.2 */
+    int (*find_mark)(const ytl_event*, int, int32_t);
 } tl_api;
 
 static const tl_api g_api = {
     ytl_open, ytl_close, ytl_error, ytl_peek, ytl_clamped, ytl_check_ops, ytl_wait, ytl_ns, ytl_horizon,
-    ytl_trigger_ch, ytl_op_params, ytl_desc_params
+    ytl_trigger_ch, ytl_op_params, ytl_desc_params, ytl_seq_at, ytl_find_mark
 };
+
+/* A response on frame 3: the stimulus off from that frame's onset, the end
+ * mark 0.25 s later, found by the frame loop when it fires. */
+static int response(ytl_timeline* tl) {
+    ytl_event fired[16];
+    ytl_frame f;
+    ytl_seq q;
+    int i, n, found = -1;
+    if (ytl_anchor(tl, 1, 0, 0) != 0) return 1;
+    for (i = 0; i < 40 && found < 0; i++) {
+        f.onset = i * YRT_US(16667);
+        f.period = YRT_US(16667);
+        f.index = i;
+        if (i == 3) {
+            q = g_api.seq_at(tl, 1, f.onset);
+            ytl_off(&q, 0);
+            ytl_wait(&q, YRT_MS(250));
+            ytl_mark(&q, 9, 0);
+            if (q.err != 0) return 1;
+        }
+        n = ytl_evaluate(tl, &f, fired, 16);
+        if (n < 0) return 1;
+        if (g_api.find_mark(fired, n < 16 ? n : 16, 9) >= 0) found = i;
+    }
+    return found == 3 + 15 ? 0 : 1;   /* 0.25 s = 15 frames of 16.667 ms */
+}
 
 /* A designer's panel from the tables: every kind's rows, by name. */
 static int params(void) {
@@ -198,6 +227,7 @@ int main(void) {
     ytl_then(&q, 2, &up);
     if (q.err != 0) return 1;
     if (open_tl(&tl, ev, keys) || targets(&tl)) return 1;
+    if (open_tl(&tl, ev, keys) || response(&tl)) return 1;
 #ifndef __cplusplus
     /* The op table: designated initializers, C99 (C++20 in
      * timeline_ops.cpp). */

@@ -110,6 +110,8 @@ static void test_data_formats(void) {
     CHECK(!ytr_data_col_settable(&g_w, 9));    /* YTR_COL_TEXT */
     CHECK(!ytr_data_col_settable(&g_w, 11) && !ytr_data_col_settable(&g_w, -1) && !ytr_data_col_settable(NULL, 10));
     CHECK_I(ytr_data_meta(&g_w, "a=1"), YTR_ERR_ARG);   /* no sidecar */
+    CHECK_I(ytr_data_meta_kv(&g_w, "a", "1"), YTR_ERR_ARG);
+    CHECK(strstr(ytr_data_error(&g_w), "no sidecar") != NULL);
 
     memset(&r, 0, sizeof(r));
     r.key = 42;
@@ -846,8 +848,21 @@ static void test_data_file(void) {
         CHECK_I(ytr_data_meta(&g_w, "screen_end=x"), 0);
         CHECK_I(ytr_data_meta(&g_w, ""), 0);
         CHECK_I(ytr_data_meta(&g_w, NULL), YTR_ERR_ARG);
+        /* v0.7.1: one key=value line; '=' in a value is the value's */
+        CHECK_I(ytr_data_meta_kv(&g_w, "screen_end", "sim 60 Hz; a=b"), 0);
+        CHECK_I(ytr_data_meta_kv(&g_w, "empty", ""), 0);
+        CHECK_I(ytr_data_meta_kv(&g_w, "", "x"), YTR_ERR_ARG);
+        CHECK_I(ytr_data_meta_kv(&g_w, NULL, "x"), YTR_ERR_ARG);
+        CHECK_I(ytr_data_meta_kv(&g_w, "k", NULL), YTR_ERR_ARG);
+        CHECK_I(ytr_data_meta_kv(&g_w, "a=b", "x"), YTR_ERR_ARG);
+        CHECK_I(ytr_data_meta_kv(&g_w, "a\nb", "x"), YTR_ERR_ARG);
+        CHECK_I(ytr_data_meta_kv(&g_w, "k", "x\nrows=9 closed=1"), YTR_ERR_ARG);
+        CHECK_I(ytr_data_meta_kv(&g_w, "k", "x\ry"), YTR_ERR_ARG);
+        CHECK(strstr(ytr_data_error(&g_w), "ytr_data_meta_kv: the value has a line break") != NULL);
+        CHECK_I(ytr_data_meta_kv(NULL, "k", "x"), YTR_ERR_ARG);
         CHECK_I(ytr_data_finish(&g_w), 0);
         CHECK_I(ytr_data_meta(&g_w, "late=1"), YTR_ERR_CLOSED);
+        CHECK_I(ytr_data_meta_kv(&g_w, "late", "1"), YTR_ERR_CLOSED);
 #if defined(__APPLE__)
         CHECK_I(g_fullfsync_calls, mode ? 4 : 0);   /* one a row, refused or not */
         g_fullfsync_refuse = 0;
@@ -864,7 +879,7 @@ static void test_data_file(void) {
         {
             static const char* const head = "ysp_trials=" YTR_VERSION_STRING
                 " data=trials_test_data_\xC3\xA9.csv\nparticipant=P07\nrig=test\nysp_trials=";
-            static const char* const tail = "\nscreen_end=x\nrows=4 closed=1\n";
+            static const char* const tail = "\nscreen_end=x\nscreen_end=sim 60 Hz; a=b\nempty=\nrows=4 closed=1\n";
             CHECK(strncmp(text, head, strlen(head)) == 0);
             CHECK(n > strlen(tail) && strcmp(text + n - strlen(tail), tail) == 0);
         }

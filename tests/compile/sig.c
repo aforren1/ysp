@@ -57,11 +57,13 @@ int main(void) {
     ysig_frame_in f = { 0 };
 #endif
     n[0] = ysig_node_of(YSIG_OP_SOURCE, -1, -1);
-    n[0].p[0] = YIN_KIND_MOUSE;
-    n[0].p[1] = YIN_AXIS_DELTA;
+    n[0].p[YSIG_SOURCE_KIND] = YIN_KIND_MOUSE;   /* the p[] names are int constants in C and C++ */
+    n[0].p[YSIG_SOURCE_CONTROL] = YIN_AXIS_DELTA;
     n[0].lanes = 2;
     n[1] = ysig_node_of(YSIG_OP_INTEGRATE, 0, -1);
+    n[1].p[YSIG_INTEGRATE_GAIN_X] = 1;
     n[2] = ysig_node_of(YSIG_OP_BIND, 1, -1);
+    n[2].p[YSIG_BIND_CHANNEL] = 0;
     d.nodes = n;
     d.n_nodes = 3;
     d.channels = ch;

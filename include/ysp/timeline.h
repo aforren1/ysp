@@ -1,4 +1,4 @@
-/* ysp/timeline.h - v0.8.1 - public domain single-header timeline library
+/* ysp/timeline.h - v0.8.2 - public domain single-header timeline library
  *
  *   What a frame shows, as a function of when the frame appears. Events
  *   (onsets, offsets, value changes, triggers, annotations) at times on a
@@ -467,6 +467,7 @@
  *     base runs, and onset - residual when it is paused; at rate 1 the two
  *     are equal. Across bases at different rates, onset - residual would
  *     order by lateness in base ns instead of by time.
+ *     ytl_find_mark(fired, n, code) finds a MARK among them (v0.8.2).
  *
  *   QUANTIZATION (desc.lead, ytl_window)
  *     An event lands on the first evaluated frame whose window reaches its
@@ -681,7 +682,9 @@
  *   SEQUENCES (ytl_seq, ytl_op, desc.keys)
  *     A sequence is a cursor on one base, in base time, for writing a trial
  *     in the order it plays. ytl_seq_on(tl, b) puts the cursor at 0,
- *     ytl_seq_now(tl, b) at the base's "now" (TWEENS). Against GSAP:
+ *     ytl_seq_now(tl, b) at the base's "now" (TWEENS), ytl_seq_at(tl, b,
+ *     rt) at the base's time at RT time rt: a response's sequence from
+ *     the frame's onset (v0.8.2). Against GSAP:
  *       ytl_on, ytl_off, ytl_set_value   .set(): ONSET, OFFSET or SET
  *                                              of a channel at the cursor
  *       ytl_trigger, ytl_mark(q, code, user)  .call(): a TRIGGER or a
@@ -1029,6 +1032,14 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.8.2 - two helpers for a frame loop (SEQUENCES, EVALUATE):
+ *          ytl_seq_at(tl, base, rt_ns), a sequence whose cursor is the
+ *          base's time at an RT time, in place of ytl_seq_on(),
+ *          ytl_base_time() and ytl_at(), and with an error, not a cursor
+ *          at 0, when the base has no time there; ytl_find_mark(fired, n,
+ *          code), the index of a MARK among the fired events, or -1. No
+ *          struct and no shared-table function changes; the same calls
+ *          give the same values and bytes.
  *   v0.8.1 - ytl_add() and ytl_add_n() refuse a TRIGGER with a negative
  *          target (YTL_ERR_ARG, nothing added), as the sequence calls and
  *          op tables have since v0.8.0, so every path gives a fired
@@ -1146,6 +1157,15 @@
  *          prune, remove and clear; the record of where every event
  *          landed.
  *
+ *   STATUS: v0.8.2, 2026-11-07, the Linux desktop (Debian 12, GCC 12.2):
+ *   ytl_seq_at() and ytl_find_mark() in tests/adapt/timeline_test.c
+ *   (test_seq_at: against ytl_seq_on(), ytl_base_time() and ytl_at(), at
+ *   rate 1/2, paused, on base 0, and each refusal) and the compile checks
+ *   (C99, C11, C++17); the test under ASan and UBSan as C and C++; 6 of 6
+ *   new mutants caught and the whole list as expected (112 caught, the 3
+ *   known equivalents survive). trial_srt, trial_posner and
+ *   trial_visuomotor use both: their --sim files are byte-identical to
+ *   v0.8.1's but the version string. Not run on Windows or macOS.
  *   STATUS: v0.8.0. Trigger channels and parameter tables, tested by the
  *   writer of the implementation (tests/adapt/timeline_test.c, 11e and
  *   11f): channels from the calls and the macros in the report and in a
@@ -1292,8 +1312,8 @@
 /* The version of this header, for a log line or a compile-time check. */
 #define YTL_VERSION_MAJOR 0
 #define YTL_VERSION_MINOR 8
-#define YTL_VERSION_PATCH 1
-#define YTL_VERSION_STRING "0.8.1"
+#define YTL_VERSION_PATCH 2
+#define YTL_VERSION_STRING "0.8.2"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -1902,6 +1922,13 @@ YTL_API int ytl_tween(ytl_timeline* tl, int channel, int base,
 YTL_API ytl_seq ytl_seq_on(ytl_timeline* tl, int base);
 YTL_API ytl_seq ytl_seq_now(ytl_timeline* tl, int base);
 
+/* v0.8.2: a sequence on `base` with its cursor at the base's time at RT
+ * time rt_ns (ytl_base_time()), as ytl_seq_on() and ytl_at() with that
+ * time: what a response adds from a frame's onset on. A stopped base, or
+ * a time out of range there, sets err YTL_ERR_ARG (err_call -1), so the
+ * sequence adds nothing. */
+YTL_API ytl_seq ytl_seq_at(ytl_timeline* tl, int base, int64_t rt_ns);
+
 /* Move the cursor by dt_ns, or to base time t_ns. */
 YTL_API void ytl_wait(ytl_seq* q, int64_t dt_ns);
 YTL_API void ytl_at(ytl_seq* q, int64_t t_ns);
@@ -2019,6 +2046,11 @@ YTL_API int ytl_tween_count(const ytl_timeline* tl, int* n_targets);
  * YTL_ERR_ORDER (onset below the last one). */
 YTL_API int ytl_evaluate(ytl_timeline* tl, const ytl_frame* f,
                              ytl_event* fired, int cap);
+
+/* v0.8.2: the index in fired[0 .. n - 1] of the first MARK with `code`,
+ * or -1: a trial's end mark among what ytl_evaluate() reported. n is at
+ * most fired's size, min(ytl_evaluate()'s return, its cap). */
+YTL_API int ytl_find_mark(const ytl_event* fired, int n, int32_t code);
 
 /* The earliest RT time of a pending event on a running base, and true; a
  * late event's time is in the past. False when nothing is pending. */
@@ -3486,6 +3518,21 @@ static ytl_seq ytl__seq_make(ytl_timeline* tl, int base, bool at_now) {
 
 YTL_API ytl_seq ytl_seq_on(ytl_timeline* tl, int base) { return ytl__seq_make(tl, base, false); }
 YTL_API ytl_seq ytl_seq_now(ytl_timeline* tl, int base) { return ytl__seq_make(tl, base, true); }
+
+YTL_API ytl_seq ytl_seq_at(ytl_timeline* tl, int base, int64_t rt) {
+    ytl_seq q = ytl__seq_make(tl, base, false);
+    if (q.err < 0) return q;
+    /* ytl_base_time() leaves the cursor at 0 when it answers false: a
+     * sequence there would land at the trial's start, not at rt */
+    if (!ytl_base_time(tl, base, rt, &q.t)) {
+        q.err = YTL_ERR_ARG;
+        snprintf(tl->error, sizeof(tl->error), "ysp_timeline: ytl_seq_at: base %d has no time at that RT time "
+                 "(stopped, or out of range)", base);
+    }
+    q.prev_start = q.t;
+    q.prev_end = q.t;
+    return q;
+}
 
 /* Counts the call; false when the sequence has stopped. */
 static bool ytl__seq_go(ytl_seq* q) {
@@ -5084,6 +5131,12 @@ YTL_API int ytl_kill_tween(ytl_timeline* tl, int id) {
 }
 YTL_API int ytl_evaluate(ytl_timeline* tl, const ytl_frame* f, ytl_event* fired, int cap) {
     return ytl__err(tl, ytl__evaluate(tl, f, fired, cap), "ytl_evaluate");
+}
+YTL_API int ytl_find_mark(const ytl_event* fired, int n, int32_t code) {
+    int i;
+    for (i = 0; fired && i < n; i++)
+        if (fired[i].kind == YTL_MARK && fired[i].code == code) return i;
+    return -1;
 }
 YTL_API int ytl_peek(ytl_timeline* tl, int base, int64_t from_rt_ns, int64_t to_rt_ns,
                      ytl_event* out, int cap) {

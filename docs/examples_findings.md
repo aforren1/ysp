@@ -10,7 +10,9 @@ first list's bugs B1 to B6, features F1, F2, F4, F5, F12 to F15 and the
 first part of F11, and docs D1 to D9. input.h 0.7.0, screen.h 0.19.0,
 gfx.h 0.19.0, trials.h 0.7.0, response.h 0.8.1 and ysp-vis 0.19.0 fixed
 B7, B8 (the cause: Xorg's libinput debounce, docs/screen.md), F12b, F16,
-F17 and F18. Each change below is a proposal
+F17 and F18. The layout pilot's findings (2026-11-07) went in sig.h 0.1.0
+(F25, the p[] names), timeline.h 0.8.2 (F26, F28) and trials.h 0.7.1
+(F29); F27 is rejected. Each change below is a proposal
 and needs the usual header work (CLAUDE.md, "Changing a header"). Remove
 an item when it is fixed or rejected.
 
@@ -43,22 +45,17 @@ runs used scripted input.
 | D10 | response.md | A frame's flip record arrives in the next `yscr_begin()`, before that frame's input is polled; hand values read at a record's onset need the input polled first (the first `--auto` failed on this) | A note in THE FRAME LOOP | bimanual |
 | F11 | gfx.h | Every pixel of a POLYLINE chunk's quad evaluates every segment: 5841 points cost 51 ms of GPU a frame as chunks of 224, 1.8 ms as chunks of 16, and one LINE instance per segment 0.66 ms (Intel UHD 770 through Mesa 22.3.6, headless 1024 x 768: the ink benchmark ran on the iGPU surfaceless EGL picks, not the RX 6600; its 0.10 ms LINE row was an artifact of the row before it). The quad's centering on the path's box is done (gfx.h 0.18.0) | A segment-instanced stroke primitive | copying |
 
-### From the layout pilot (2026-11-07)
-
-The pilot of "How an example is laid out" (examples/README.md) on
-`trial_srt`, `trial_posner` and `trial_visuomotor` found these. Counts
-over `examples/` are by grep on the simplify-examples branch (110
-programs).
-
-| # | Header | Need | Proposed change | From |
-|---|---|---|---|---|
-| F25 | sig.h:318 | A node's parameters are positions in `p[]`: `trial_visuomotor.c:328-375` sets 27 of them (`exp_nodes[N_HOLD].p[8] = sx` is the hold zone's center x), and `ysig_set(&sg, N_CUR, 8, -rot_deg)` (line 486) sets the affine's angle. A reader needs `ysig_op_params()` or docs/sig.md, "Ops", to read the graph. Also 23 in `trial_bimanual.c` and 31 in `examples/sig/bench.c` | Named indices per op (`YSIG_DETECT_LEVEL`, `YSIG_DETECT_HOLD_S`, `YSIG_DETECT_AX`, `YSIG_AFFINE_ANGLE`, ...), or small constructors for the common shapes (`ysig_detect_near(in, cx, cy, r, hold_s)`) | visuomotor |
-| F26 | timeline.h | A sequence from the current frame takes three calls and a variable: `ytl_seq_on()`, `ytl_base_time(&tl, TRIAL, f.onset, &bt)`, `ytl_at(&q, bt)` (`trial_srt.c:276-278`, `trial_posner.c:532` and `542`, `trial_visuomotor.c:672-674` and `681-683`). 23 of the 26 `ytl_base_time()` calls in `examples/` are followed by `ytl_at()` | `ytl_seq_at(tl, base, onset_ns)`: a sequence placed at the base's time for that onset; it also removes B9's uninitialized `bt` on that path | srt, posner, visuomotor |
-| F27 | timeline.h, screen.h | `ytl_evaluate(&tl, &(ytl_frame){ f.onset, f.period, f.index }, ...)` copies three fields of `yscr_frame` by hand in 25 programs (`trial_srt.c:286`) | An inline `ytl_frame_of(&f)` when both headers are included, as F6 proposes for the audio path | srt, posner, visuomotor |
-| F28 | timeline.h | Each program scans the fired events for its end mark: `if (fired[i].kind == YTL_MARK && fired[i].code == END_OF_TRIAL)` in 20 programs (`trial_srt.c:290`) | `ytl_find_mark(fired, n, code)`, the index or -1, as `yrsp_set_landing()` finds the landing | srt, posner, visuomotor |
-| F29 | screen.h, trials.h | The describe line goes into the data twice by hand, at the open and again at the end for its counters, in 22 programs. With the data writer it needs a key prefix copied in front (`trial_posner.c:573-575`) | `ytr_data_meta_kv(&data, "screen_end", line)`, or a note in DATA FILE that shows the end line | srt, posner, visuomotor |
-
 ## Rejected
+
+- F27 (the layout pilot, 2026-11-07): `ytl_frame_of(&f)` or an
+  evaluate that takes a `yscr_frame`, for
+  `ytl_evaluate(&tl, &(ytl_frame){ f.onset, f.period, f.index }, ...)`
+  in 25 programs. The literal is one line and a helper saves none. It
+  shows the three fields the timeline reads; a second evaluate entry
+  point, as glue between ysp/timeline.h and ysp/screen.h, costs more than
+  it saves. A swapped field is caught at once: with period and index
+  swapped, `trial_srt --sim` failed its check on 24 of 24 trials and
+  `trial_posner --sim` exited 1 (the Linux desktop, 2026-11-07).
 
 - F14's `device_type` (input.h 0.6.0 carries `pen_state` only). It is
   the pen's, the same on every event, and SDL 3.4.18 added it: ask SDL

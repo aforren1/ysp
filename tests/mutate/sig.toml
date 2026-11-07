@@ -741,3 +741,46 @@ find = '''    if (b > 0 && a > INT64_MAX - b) return INT64_MAX;
     return a + b;'''
 replace = '''    if (b < 0 && a < INT64_MIN - b) return INT64_MIN;
     return a + b;'''
+
+# --- the p[] names (YSIG_<OP>_<ROW>): test_param_names checks each against
+# the row of that name, and that every row has exactly one.
+
+[[mutant]]
+id = "89"
+name = "p[] names: detect's hold and hysteresis swapped"
+test = "sig"
+why = "n.p[YSIG_DETECT_HOLD] must write the row named hold; swapped, a hold of 0.5 s becomes a hysteresis."
+find = 'YSIG_DETECT_LEVEL, YSIG_DETECT_HYSTERESIS, YSIG_DETECT_HOLD,'
+replace = 'YSIG_DETECT_LEVEL, YSIG_DETECT_HOLD, YSIG_DETECT_HYSTERESIS,'
+
+[[mutant]]
+id = "90"
+name = "p[] names: affine's angle on post.y"
+test = "sig"
+why = "ysig_set(g, k, YSIG_AFFINE_ANGLE, deg) is how a program turns a cursor between trials."
+find = 'YSIG_AFFINE_POST_Y, YSIG_AFFINE_ANGLE };'
+replace = 'YSIG_AFFINE_POST_Y, YSIG_AFFINE_ANGLE = 7 };'
+
+[[mutant]]
+id = "91"
+name = "p[] names: integrate's low and high one row late"
+test = "sig"
+why = "A gap in the run shifts every later name; the bounds would land one lane off."
+find = 'YSIG_INTEGRATE_ORIGIN_Z, YSIG_INTEGRATE_ORIGIN_W,'
+replace = 'YSIG_INTEGRATE_ORIGIN_Z, YSIG_INTEGRATE_ORIGIN_W = 8,'
+
+[[mutant]]
+id = "92"
+name = "p[] names: speed's lag on velocity's capacity"
+test = "sig"
+why = "speed shares velocity's table; its own names must start at the same row."
+find = 'enum { YSIG_SPEED_LAG = 0, YSIG_SPEED_CAPACITY };'
+replace = 'enum { YSIG_SPEED_LAG = 1, YSIG_SPEED_CAPACITY };'
+
+[[mutant]]
+id = "93"
+name = "p[] names: mean's weights one row late"
+test = "sig"
+why = "mean shares sum's table; w.0 is input 1's weight."
+find = 'enum { YSIG_MEAN_W_0 = 0, YSIG_MEAN_W_1, YSIG_MEAN_W_2, YSIG_MEAN_W_3 };'
+replace = 'enum { YSIG_MEAN_W_0 = 1, YSIG_MEAN_W_1, YSIG_MEAN_W_2, YSIG_MEAN_W_3 };'
