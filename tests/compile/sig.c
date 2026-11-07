@@ -79,6 +79,7 @@ int main(void) {
     e.x = 3;
     if (g_sig_api.feed(&g, &e) != 1) return 3;
     f.onset_ns = 2000;
+    f.poll_ns = 2000;   /* required: input is known up to here */
     if (g_sig_api.frame(&g, &f) != 0 || ch[0] != 3.0f) return 4;
     g_sig_api.get_stats(&g, &st);
     if (st.taken != 1 || !g_sig_api.op_params(YSIG_OP_INTEGRATE, &np) || np != 16) return 5;

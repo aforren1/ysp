@@ -863,8 +863,8 @@ static void test_digest(void) {
         ysig_feed(&g, &e);
     }
     ysig_get_stats(&g, &st);
-    if (st.digest != 0x72c6c0f9d51180c5ull) fprintf(stderr, "  digest %016llx\n", (unsigned long long)st.digest);
-    CHECK(st.rows == 200 && st.digest == 0x72c6c0f9d51180c5ull);
+    if (st.digest != 0xfa88821532bc868aull) fprintf(stderr, "  digest %016llx\n", (unsigned long long)st.digest);
+    CHECK(st.rows == 200 && st.digest == 0xfa88821532bc868aull);
     /* derived events, bound channel values and frame onsets are in the
      * digest too: a graph without a record or a detect still has one */
     {
@@ -1398,24 +1398,204 @@ static void test_views(void) {
     ysig_get_stats(&g, &st);
     CHECK(st.history_skipped == 0);
     CHECK(ysig_value_at(&g, 3, 250 * MS + 500000, &v) == 1 && v.t == 250 * MS && v.v[0] == 1000);
-    /* with poll 0, the newest event fed is the poll: no stillness from the
-     * gap to the onset */
+    /* the poll is required: one before the newest event fed is refused
+     * (a zeroed field fails once input came); 0 before any input is
+     * valid on a clock that starts at 0 */
     ysig_reset(&g, 0);
+    {
+        ysig_frame_in f = frame_at(0, 10 * MS, 0, NULL, 0);
+        f.poll_ns = 0;
+        CHECK(ysig_frame(&g, &f) == 0);
+    }
     for (k = 1; k <= 20; k++) {
         yin_event e = axis(k * MS, YIN_KIND_PEN, YIN_AXIS_POSITION, 0, (float)k, 0, 0, YIN_TIER_SIM);
         ysig_feed(&g, &e);
     }
     {
         /* an event no source takes says nothing of the pen: a replay's
-         * journal would not have it */
+         * journal would not have it, so it does not move the bound */
         yin_event key = axis(40 * MS, YIN_KIND_KEYBOARD, 4, 0, 0, 0, 1, 0);
         ysig_frame_in f = frame_at(1, 60 * MS, 0, NULL, 0);
         key.type = YIN_PRESS;
         CHECK(ysig_feed(&g, &key) == 0);
         f.poll_ns = 0;
-        ysig_frame(&g, &f);
+        CHECK(ysig_frame(&g, &f) == -1 && strstr(ysig_error(&g), "poll_ns"));
+        f.poll_ns = 20 * MS;
+        CHECK(ysig_frame(&g, &f) == 0);
         CHECK_NEAR(ysig_value_of(&g, 1)->v[0], 1000, 1e-6);
     }
+}
+
+/* A still input with the poll given: speed 0, a low-pass and a held stick's
+ * rate integral run on to the poll (the review's Q1). */
+static void test_still(void) {
+    ysig_node n[5];
+    ysig_desc d;
+    ysig_graph g;
+    int k, fr;
+    g_where = "still input";
+    n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 1);
+    n[1] = ysig_node_of(YSIG_OP_SPEED, 0, -1);
+    n[1].p[0] = 0.010;
+    n[2] = ysig_node_of(YSIG_OP_LOWPASS, 0, -1);
+    n[2].p[0] = 5;
+    n[3] = src_node(YIN_KIND_GAMEPAD, YIN_AXIS_GAMEPAD, 0, 1);
+    n[4] = ysig_node_of(YSIG_OP_INTEGRATE, 3, -1);
+    d = desc_of(n, 5);
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    {
+        yin_event e = axis(MS, YIN_KIND_GAMEPAD, YIN_AXIS_GAMEPAD, 1, 0, 0, 1.0f, YIN_TIER_SIM);
+        ysig_feed(&g, &e);
+    }
+    for (k = 2; k <= 100; k++) {
+        yin_event e = axis(k * MS, YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 0, 0, (float)k, YIN_TIER_SIM);
+        ysig_feed(&g, &e);
+    }
+    for (fr = 1; fr <= 120; fr++) {
+        int64_t onset = 100 * MS + fr * 16666667LL;
+        ysig_frame_in f = frame_at(fr, onset, 0, NULL, 0);
+        f.poll_ns = onset - MS;
+        CHECK(ysig_frame(&g, &f) == 0);
+    }
+    CHECK(ysig_value_of(&g, 1)->v[0] == 0);
+    CHECK_NEAR(ysig_value_of(&g, 2)->v[0], 100, 1e-6);
+    /* held at 1.0 from 1 ms to the last poll */
+    CHECK_NEAR(ysig_value_of(&g, 4)->v[0], (double)(100 * MS + 120 * 16666667LL - MS - MS) / 1e9, 1e-9);
+}
+
+/* The second review: values at a time of a node with a generator input
+ * (Q2), the digest's sign flips (Q3), value_at from on_row (Q4), busy
+ * devices keep their order slot (Q5), a delay's time downstream (F). */
+static ysig_graph* g_q4;
+static int g_q4_rc;
+static ysig_value g_q4_v;
+static void q4_row(void* user, const ysig_row* r) {
+    (void)user;
+    if (r->value.t == 20 * MS) g_q4_rc = ysig_value_at(g_q4, 4, 5 * MS, &g_q4_v);
+}
+static int g_frows;
+static ysig_row g_frow[64];
+static void f_row(void* user, const ysig_row* r) {
+    (void)user;
+    if (g_frows < 64) g_frow[g_frows++] = *r;
+}
+static uint64_t q3_run(float a, float b) {
+    ysig_node n[2];
+    ysig_desc d;
+    ysig_graph g;
+    ysig_stats st;
+    yin_event e;
+    n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 1);
+    n[1] = ysig_node_of(YSIG_OP_RECORD, 0, -1);
+    d = desc_of(n, 2);
+    if (!open_desc(&g, &d)) return 0;
+    ysig_reset(&g, 0);
+    e = axis(MS, YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 0, 0, a, YIN_TIER_SIM);
+    ysig_feed(&g, &e);
+    e = axis(2 * MS, YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 0, 0, b, YIN_TIER_SIM);
+    ysig_feed(&g, &e);
+    ysig_get_stats(&g, &st);
+    return st.digest;
+}
+
+static void test_review2(void) {
+    static double comp[3] = { 1, 1, 0 };   /* cos(2 pi t) */
+    ysig_node n[6];
+    ysig_desc d;
+    ysig_graph g;
+    ysig_value v;
+    ysig_stats st;
+    yin_event e;
+    int fr, k;
+    g_where = "value at, generator input";
+    n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 1);
+    n[1] = ysig_node_of(YSIG_OP_SINES, -1, -1);
+    n[1].p[0] = 1; n[1].data = comp; n[1].n_data = 3;
+    n[2] = ysig_node_of(YSIG_OP_SUM, 0, 1);       /* hand + perturbation */
+    n[2].history = 256;
+    d = desc_of(n, 3);
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    e = axis(MS, YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 0, 0, 10, YIN_TIER_SIM);
+    ysig_feed(&g, &e);
+    for (fr = 1; fr <= 30; fr++) {
+        ysig_frame_in f = frame_at(fr, fr * 16666667LL, fr * 16666667LL, NULL, 0);
+        ysig_frame(&g, &f);
+    }
+    CHECK(ysig_value_at(&g, 2, 12 * 16666667LL, &v) == 1);
+    CHECK_NEAR(v.v[0], 10 + cos(2 * PI_ * (double)(12 * 16666667LL) / 1e9), 1e-12);
+
+    g_where = "digest sign flips";
+    CHECK(q3_run(1, 2) != q3_run(-1, -2));
+    CHECK(q3_run(0.0f, 0.0f) != q3_run(-0.0f, -0.0f));
+    CHECK(q3_run(1, 2) != q3_run(1, 4) && q3_run(1, 2) == q3_run(1, 2));
+
+    g_where = "value at from on_row";
+    n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 1);
+    n[1] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 2, 1);
+    n[2] = ysig_node_of(YSIG_OP_OFFSET, 0, -1);
+    n[2].history = 64;
+    n[3] = ysig_node_of(YSIG_OP_OFFSET, 1, -1);
+    n[3].history = 64;
+    n[4] = ysig_node_of(YSIG_OP_JOIN, 2, 3);
+    n[4].history = 64;
+    n[5] = ysig_node_of(YSIG_OP_RECORD, 4, -1);
+    d = desc_of(n, 6);
+    d.on_row = q4_row;
+    g_q4 = &g;
+    g_q4_rc = -9;
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    e = axis(MS, YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 0, 0, 1, YIN_TIER_SIM);
+    ysig_feed(&g, &e);
+    e = axis(2 * MS, YIN_KIND_PEN, YIN_AXIS_POSITION, 2, 0, 0, 2, YIN_TIER_SIM);
+    ysig_feed(&g, &e);
+    e = axis(20 * MS, YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 0, 0, 3, YIN_TIER_SIM);
+    ysig_feed(&g, &e);
+    CHECK(g_q4_rc == 1 && g_q4_v.t == 2 * MS && g_q4_v.v[0] == 1 && g_q4_v.v[1] == 2);
+
+    g_where = "order slots";
+    n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 1);
+    d = desc_of(n, 1);
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    /* device 1 reports between every other device's: the ninth device
+     * takes the least recently seen slot, not device 1's */
+    for (k = 2; k <= 9; k++) {
+        e = axis(100 * MS + 2 * k, YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 0, 0, 1, YIN_TIER_SIM);
+        ysig_feed(&g, &e);
+        e = axis(100 * MS + 2 * k + 1, YIN_KIND_PEN, YIN_AXIS_POSITION, (uint32_t)k, 0, 0, (float)k, YIN_TIER_SIM);
+        ysig_feed(&g, &e);
+    }
+    e = axis(50 * MS, YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 0, 0, 99, YIN_TIER_SIM);
+    CHECK(ysig_feed(&g, &e) == 0);
+    ysig_get_stats(&g, &st);
+    CHECK(st.dropped_order == 1 && st.order_evicted == 1 && ysig_value_of(&g, 0)->v[0] == 9);
+
+    g_where = "a delay's time downstream";
+    n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 1);
+    n[1] = ysig_node_of(YSIG_OP_DELAY, 0, -1);
+    n[1].p[0] = 0.005;
+    n[2] = ysig_node_of(YSIG_OP_OFFSET, 1, -1);
+    n[2].p[0] = 100;
+    n[3] = ysig_node_of(YSIG_OP_RECORD, 1, -1);
+    n[4] = ysig_node_of(YSIG_OP_RECORD, 2, -1);
+    d = desc_of(n, 5);
+    d.on_row = f_row;
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    g_frows = 0;
+    for (k = 1; k <= 20; k++) {
+        e = axis(k * MS, YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 0, 0, (float)k, YIN_TIER_SIM);
+        ysig_feed(&g, &e);
+    }
+    CHECK(g_frows == 40);
+    for (k = 0; k + 1 < g_frows && k < 64; k += 2) {
+        CHECK(g_frow[k].node == 3 && g_frow[k + 1].node == 4);
+        CHECK(g_frow[k].value.t == g_frow[k + 1].value.t && g_frow[k + 1].value.v[0] == g_frow[k].value.v[0] + 100);
+    }
+    CHECK(g_frow[39].value.t == 15 * MS && g_frow[39].value.v[0] == 115);
 }
 
 /* A custom op with two inputs reads its inputs (P9). */
@@ -1599,6 +1779,8 @@ int main(void) {
     test_refusals();
     test_order();
     test_views();
+    test_still();
+    test_review2();
     test_review();
     if (g_failures) { fprintf(stderr, "sig_test: %d failures\n", g_failures); return 1; }
     printf("sig_test: all checks passed\n");

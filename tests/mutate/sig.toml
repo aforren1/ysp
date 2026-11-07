@@ -46,9 +46,9 @@ replace = 'return ra <= rb ? (ra == 4'
 id = "03"
 name = "meta: t from the older input"
 test = "sig"
-why = "A joined value would carry its older part's time: a crossing would be stamped one report early."
-find = 'if (in[j]->t > o->t) {'
-replace = 'if (in[j]->t < o->t) {'
+why = "A value read at a past time would carry its older part's time."
+find = '        if (pick < 0 || in[j]->t > in[pick]->t) pick = j;'
+replace = '        if (pick < 0 || in[j]->t < in[pick]->t) pick = j;'
 
 [[mutant]]
 id = "04"
@@ -190,11 +190,13 @@ replace = 'if (mode == 0 && n->p[0] == 0) ysig__row_out(g, i, 1, x);'
 
 [[mutant]]
 id = "21"
-name = "digest: no multiply"
+name = "digest: no finalizer"
 test = "sig"
-why = "The digest stops mixing: two runs that differ could give one digest."
-find = 'for (i = 0; i < n; i++) { h ^= b[i]; h *= 1099511628211ull; }'
-replace = 'for (i = 0; i < n; i++) { h ^= b[i]; }'
+why = "Two sign flips, or -0 for +0, would leave the digest as it was (review Q3)."
+find = '''    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+    g->st.digest = z ^ (z >> 31);'''
+replace = '    g->st.digest = z * 1099511628211ull;'
 
 [[mutant]]
 id = "22"
@@ -438,11 +440,11 @@ replace = 'for (d = 0; d < s->n && 0; d++) { }'
 
 [[mutant]]
 id = "52"
-name = "meta: the newest-in-time input, not the arriving report"
+name = "meta: the newest input, not the one that changed"
 test = "sig"
-why = "A derived event would name the other hand and carry its time (review P4)."
-find = '    if (g && g->arr_on) {'
-replace = '    if (0) {'
+why = "A derived event would name the other hand and its time (review P4), and a delay's downstream would take the report's time (review F)."
+find = '        if (changed && !((changed >> j) & 1u)) continue;'
+replace = '        (void)changed;'
 
 [[mutant]]
 id = "53"
@@ -457,16 +459,16 @@ id = "54"
 name = "frame: the poll ignored"
 test = "sig"
 why = "Views would run to the planned onset, a frame past the input."
-find = 'g->t_known = f->poll_ns ? f->poll_ns : g->t_fed;'
+find = 'g->t_known = f->poll_ns < f->onset_ns ? f->poll_ns : f->onset_ns;'
 replace = 'g->t_known = f->onset_ns;'
 
 [[mutant]]
 id = "55"
-name = "frame: no poll means the onset"
+name = "frame: a poll before the input taken"
 test = "sig"
-why = "Without a poll the gap to the onset would read as stillness."
-find = 'g->t_known = f->poll_ns ? f->poll_ns : g->t_fed;'
-replace = 'g->t_known = f->poll_ns ? f->poll_ns : f->onset_ns;'
+why = "A zeroed poll would freeze every view of a still input (review Q1)."
+find = '    if (f->poll_ns < g->t_fed) {'
+replace = '    if (0) {'
 
 [[mutant]]
 id = "56"
@@ -542,15 +544,15 @@ id = "64"
 name = "digest: frames not in it"
 test = "sig"
 why = "Two runs whose frame onsets differ would give one digest."
-find = 'ysig__digest(g, &f->onset_ns, sizeof f->onset_ns);'
-replace = '(void)0;'
+find = '    ysig__digest_word(g, (uint64_t)f->onset_ns);'
+replace = '    (void)0;'
 
 [[mutant]]
 id = "65"
 name = "digest: derived events not in it"
 test = "sig"
 why = "Two runs whose derived events differ would give one digest."
-find = '''    ysig__digest(g, &i, sizeof i);
+find = '''    ysig__digest_word(g, (uint64_t)(uint32_t)i);
     ysig__digest_value(g, v);
     if (g->n_der >= YSIG_QUEUE_CAP)'''
 replace = '    if (g->n_der >= YSIG_QUEUE_CAP)'
@@ -579,6 +581,47 @@ why = "A journal holds only the events a source saw: a replay would see another 
 find = '    g->st.fed++;'
 replace = '''    g->st.fed++;
     if (e->t > g->t_fed) g->t_fed = e->t;'''
+
+[[mutant]]
+id = "72"
+name = "order: slot reuse in insertion order"
+test = "sig"
+why = "A busy device would lose its slot to a ninth device, and its late sample would pass (review Q5)."
+find = '                        if (s->used[q] < s->used[d]) d = q;'
+replace = '                        (void)q;'
+
+[[mutant]]
+id = "73"
+name = "order: a slot's use not recorded"
+test = "sig"
+why = "Every slot looks unused: the first is always the one reused."
+find = '            s->used[d] = ++s->clock;'
+replace = '            (void)0;'
+
+[[mutant]]
+id = "74"
+name = "order: evictions not counted"
+test = "sig"
+why = "A source with more than 8 devices would not say so."
+find = '                    g->st.order_evicted++;'
+replace = '                    (void)0;'
+
+[[mutant]]
+id = "75"
+name = "run: a node not marked as changed"
+test = "sig"
+why = "Downstream nodes would take the newest input, not the one that changed."
+find = '''    }
+    n->pass = g->pass;'''
+replace = '    }'
+
+[[mutant]]
+id = "76"
+name = "history: a generator's input not computed at t"
+test = "sig"
+why = "value_at of a hand plus a perturbation would keep the perturbation of the last sample (review Q2)."
+find = 'if ((a->flags[id] & (YSIG__F_MULTI | YSIG__F_FRAME)) && op < YSIG_OP_COUNT'
+replace = 'if ((a->flags[id] & YSIG__F_MULTI) && op < YSIG_OP_COUNT'
 
 [[mutant]]
 id = "70"

@@ -175,7 +175,7 @@ static float sig_ch[N_SIG_CH];
 /* The record node's rows, the hand and the cursor per sample (px) */
 typedef struct trace_row { int64_t t; float hx, hy, cx, cy; } trace_row;
 static trace_row trace[TRACE_CAP];
-static int n_trace, n_trace_lost, trace_cap = TRACE_CAP;   /* --trace-cap: rows a reach keeps */
+static int n_trace, n_trace_lost, trial_lost, trace_cap = TRACE_CAP;   /* --trace-cap: rows a reach keeps */
 static uint64_t table_arena[1024];
 static ytb_table tab;
 static yrsp_result res;
@@ -234,7 +234,7 @@ static void on_row(void* user, const ysig_row* r) {
     (void)user;
     if (phase == FEEDBACK) return;
     if (phase != REACH) n_trace = 0;
-    if (n_trace == trace_cap) { n_trace_lost++; return; }
+    if (n_trace == trace_cap) { n_trace_lost++; trial_lost++; return; }
     trace[n_trace].t = r->value.t;
     trace[n_trace].hx = (float)r->value.v[0];
     trace[n_trace].hy = (float)r->value.v[1];
@@ -787,6 +787,11 @@ int main(int argc, char** argv) {
                 rows++;
                 in_trial = 0;
                 phase = RETURN;
+                /* the trial's trajectory is short by the rows past the
+                 * cap: said here, not in a column (the data file keeps its
+                 * columns) */
+                if (trial_lost) printf("trial %d: %d trajectory rows lost past --trace-cap %d\n", ti.index, trial_lost, trace_cap);
+                trial_lost = 0;
                 n_trace = 0;
                 ysig_arm(&sg, N_HOLD, f.onset);   /* the next hold, once the hand is back */
             }

@@ -18,6 +18,8 @@ compile_commands.json
 /*.csv
 /*.ppm
 /*.pgm
+/*.csv.meta
+/capture_sim/
 
 # libFuzzer artifacts (tests/fuzz/)
 crash-*

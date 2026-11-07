@@ -82,7 +82,11 @@ Each raw mouse report moves the hand by its counts, and the cursor
 follows at once. `ysig_frame()` writes the bound channels. Feed the
 frame's input before `ysig_frame()`: a sink reads held values
 ([examples_findings.md](examples_findings.md), D10). The last field is
-the poll's time: the graph knows input up to there, and no further.
+the poll's time: the graph knows input up to there, and no further. It is
+required: `ysig_frame()` refuses a poll before the newest event a source
+took (-1, and `ysig_error()` says why), so a zeroed field fails as soon
+as input comes. On the virtual clock of `--sim`, where the script feeds
+input up to the onset, the poll is the onset.
 
 `examples/response/trial_visuomotor.c` is this graph in a whole task, with
 the hold, the reach and the movement onset.
@@ -157,7 +161,9 @@ if (ysig_value_at(&g, LEFT, rec.onset, &v) < 1) ring_miss++;
 A stateless node after two sources (a `join` or `mean` of two hands, an
 `affine` of that) keeps no ring of its own: its value at t is computed
 from its inputs' values at t, so a report that arrives late from one hand
-is still placed by its time. `trial_bimanual.c` reads L, R, u and the
+is still placed by its time. So is a stateless node with a generator
+input (a hand plus a sum-of-sines perturbation): the generator keeps a
+ring of its frames. `ysig_value_at()` is safe inside `desc.on_row`. `trial_bimanual.c` reads L, R, u and the
 cursor this way.
 
 ### Run one task graph with a mouse or a tablet
@@ -217,8 +223,11 @@ ysig_get_stats(&g2, &b);
 /* a.digest == b.digest: every row and hit, bit for bit */
 ```
 
-The digest is FNV-1a over every record row, hit and derived event, every
-bound channel value and every frame's index and onset. Replay is bit for bit
+The digest takes every record row, hit and derived event, every bound
+channel value and every frame's index and onset, a 64-bit word at a time,
+each step through splitmix64's finalizer: a sign flip in two values, or
+-0 for +0, changes it. Words, not bytes, so the digest does not depend on
+byte order. Replay is bit for bit
 on one build. Across compilers and platforms, `cos`, `exp` and fused
 multiply-adds can differ in the last bit ([rdk.md](rdk.md), "Why the state
 is integers"); a graph of counts and exact gains (0.25 px per count) gives
@@ -267,22 +276,31 @@ seconds, as in a definition. A zero field means the row's `def`.
 
 ### Time
 
-- A value made at a sample carries that sample's `t`, device, `unc_us`
-  and source node, `t_oldest` (the oldest input's time) and its source,
-  and the worst tier of its inputs (SIM, 1, 2, 3, UNKNOWN from best to
-  worst). Before its first sample a source has no value: tier UNKNOWN,
+- A value's `t`, device, `unc_us` and source node come from the input
+  that changed in this evaluation, along the path: at a sample, the
+  arriving report's (also when another hand's held part is newer); after
+  a delay, the delayed sample's, so `record(delay(x))` and
+  `record(offset(delay(x)))` agree. It also carries `t_oldest` (the
+  oldest input's time) and its source, and the worst tier of its inputs
+  (SIM, 1, 2, 3, UNKNOWN from best to worst). Before its first sample a source has no value: tier UNKNOWN,
   an empty ring.
 - Order is kept per source and device: a sample older than the last of
   its device is dropped and counted (`dropped_order`), so two mice on one
   any-device source do not drop each other. Equal times pass. A raw
-  mouse's counts are never dropped: a sum does not depend on order.
+  mouse's counts are never dropped: a sum does not depend on order. A
+  source keeps the last time of 8 devices; a ninth takes the slot of the
+  least recently seen one (`order_evicted`), and that device's next late
+  sample passes. Give a source a device (`p[2]`) when more than 8 share
+  a kind and control.
 - `ysig_frame()` runs, in node order, the generators at the frame's base
   time; velocity, speed, delay, lowpass and rate integrators as views,
   their state unchanged; every node after those; then bind, frame
-  records and detects. A view uses input up to `poll_ns` (0: the newest
-  event a source took) and never past it to the planned onset: a
-  velocity or speed reads 0 only when its input was silent for the lag
-  up to the poll.
+  records and detects. A view uses input up to `poll_ns`, which is
+  required, and never past it to the planned onset: a velocity or speed
+  reads 0 only when its input was silent for the lag up to the poll. A
+  sample-rate detect on a view tests at the view's time, so its hold
+  completes at a poll, up to a frame after the onset that would end a
+  hold on samples.
 - History rings hold values at sample times; a frame's view never
   enters them.
 - Integrate, lowpass, velocity, speed and delay need a source upstream:
@@ -448,8 +466,9 @@ digest. No sanitizer report, no graph that the check passed and the
 open refused, no replay that differed. One finding during the fixes: the
 default poll first came from every event fed, also those no source
 took; a journal holds only the taken ones, so a replay saw another poll
-and another view (fixed; mutant 68).
-- `tests/mutate/sig.toml`: 70 mutants and a control; 70 of 70 killed.
+and another view (fixed; mutant 68). The second review made the poll
+required, so there is no default now. FUZZ2
+- `tests/mutate/sig.toml`: MUT2
   Mutants 70 and 71 remove the saturation of time arithmetic; the test
   built with `-fsanitize=undefined` (the list's `sig_ubsan` test) catches
   them.
@@ -468,8 +487,10 @@ and another view (fixed; mutant 68).
 - A dataset glue: a record row goes to `desc.on_row`, and the program
   writes it (to `yds_stream()` or its own file).
 - Bindings: no Python or MEX binding yet.
-- The layout's size_t overflow check is not tested: it needs a 32-bit
-  build (a 64-bit size_t holds the largest graph).
+- The layout's size_t overflow check (`ysig_check()` refuses such a
+  graph, so `ysig_arena_size()` is never 0 for a graph the check takes)
+  is not tested: it needs a 32-bit build (a 64-bit size_t holds the
+  largest graph).
 - A frame-rate form of integrate, lowpass, velocity, speed and delay (on
   a generator or a channel alone).
 - Not run: MSVC, macOS, a window, a real device, a photodiode.

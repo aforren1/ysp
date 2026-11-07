@@ -109,7 +109,7 @@ static void run_one(const uint8_t* data, size_t size) {
     char err[256];
     int n, i, ops = 0;
     unsigned b0;
-    int64_t t = 1000;
+    int64_t t = 1000, tfed = 1000;   /* tfed: the newest event time fed, the least valid poll */
     r.p = data;
     r.n = size;
     r.at = 0;
@@ -179,6 +179,7 @@ static void run_one(const uint8_t* data, size_t size) {
             e.y = (float)((int)rb(&r) - 128);
             e.value = (float)g_vals[rb(&r) % 29];
             e.stamp = (uint8_t)(rb(&r) % 6);
+            if (e.t > tfed) tfed = e.t;
             g_sink += ysig_feed(&g, &e);
             break;
         }
@@ -195,8 +196,11 @@ static void run_one(const uint8_t* data, size_t size) {
             f.values = v;
             f.n_values = (int)(rb(&r) % 5);
             {
-                unsigned pb = rb(&r);   /* the poll: unknown, before the onset, at it, or after */
-                f.poll_ns = pb % 4 == 0 ? 0 : pb % 4 == 1 ? t - (int64_t)pb * 100000 : pb % 4 == 2 ? t : t + 1000;
+                /* the poll: zeroed or early (refused once input came), the
+                 * newest event (the least valid), the onset, past it */
+                unsigned pb = rb(&r);
+                f.poll_ns = pb % 5 == 0 ? 0 : pb % 5 == 1 ? t - (int64_t)pb * 100000 : pb % 5 == 2 ? tfed
+                          : pb % 5 == 3 ? t : t + 1000;
                 if (pb >= 250) { f.onset_ns = pb & 1 ? INT64_MAX : INT64_MIN + 1; f.poll_ns = f.onset_ns; }
             }
             g_sink += ysig_frame(&g, &f);
@@ -224,7 +228,7 @@ static void run_one(const uint8_t* data, size_t size) {
         default: {
             int node = (int)(rb(&r) % (unsigned)(g.n + 1));
             unsigned b = rb(&r);
-            if (b % 3 == 0) ysig_reset(&g, t);
+            if (b % 3 == 0) { ysig_reset(&g, t); tfed = t; }
             else if (b % 3 == 1) g_sink += ysig_arm(&g, node, t - (int64_t)(b % 7) * 1000000);
             else g_sink += ysig_disarm(&g, node);
             break;
