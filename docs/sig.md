@@ -115,9 +115,10 @@ for (i = 0; i < n; i++) yrsp_feed(&rsp, &der[i]);
 ```
 
 The event's `t` is the time of the report that arrived and made it (also
-when the other hand's held part is newer in time; never before the emit's
-last event, which it keeps when a report arrives out of order, counted), its `unc_us` that
-report's, its `stamp` the worst tier of its inputs, and its `code` that
+when the other hand's held part is newer in time, and also when it is
+earlier than the emit's last event: as `ysp/input.h` says of events,
+times need not rise in arrival order, and the collector reads `t`), its
+`unc_us` that report's, its `stamp` the worst tier of its inputs, and its `code` that
 report's source node (low 16 bits) and the oldest input's (high 16
 bits). A cursor from two hands says which hand's report crossed
 (`trial_bimanual.c`'s `move_hand` column). The source table's bounds do
@@ -274,7 +275,7 @@ seconds, as in a definition. A zero field means the row's `def`.
 | `channel` | none, 1 | timeline channel | From the frame's values |
 | `bind` | 1, none | first channel | Writes float at each frame |
 | `detect` | 1, 1 (the test) | test (ge, le, in_rect, out_rect), lane (-1 norm), level, hysteresis, hold s, at (sample, frame), start (reset, arm), repeat (once, every), a.x a.y b.x b.y, entry (arm, fresh) | |
-| `record` | 1, none | per (sample, frame) | `desc.on_row` |
+| `record` | 1, none | per (sample, frame) | `desc.on_row`. A row has its value's true `t`: a sample stream may be out of time order when two sources feed the node, as `ysp/input.h` says of events |
 | `emit` | 1, none | kind (USER + 0..7), control | `ysig_derived()` |
 
 ### Time
@@ -283,10 +284,11 @@ seconds, as in a definition. A zero field means the row's `def`.
   from the input that changed, along the path (the arriving report's,
   also when another hand's held part is newer; after a delay, the delayed
   sample's, so `record(delay(x))` and `record(offset(delay(x)))` agree);
-  in a frame's pass and in `ysig_value_at()`, from the newest input. A
-  detect, emit or record never moves its own time back: it keeps the
-  later of the new t and its last, and counts the clamp
-  (`time_clamped`). It also carries `t_oldest` (the
+  in a frame's pass and in `ysig_value_at()`, from the newest input.
+  Emit and record carry that true `t`. A detect's hold clock never goes
+  back: a hold starts and ends on the later of the new `t` and the
+  detect's last, and the clamp is counted (`time_clamped`); a crossing's
+  hit has the time of the value that met the test. A value also carries `t_oldest` (the
   oldest input's time) and its source, and the worst tier of its inputs
   (SIM, 1, 2, 3, UNKNOWN from best to worst). Before its first sample a source has no value: tier UNKNOWN,
   an empty ring.
@@ -496,7 +498,7 @@ bind's input after it. After the third review: 20,000,000 inputs (seed
 781) in 9 min 33 s; 14,562,777 refused by `ysig_check()`, 5,436,289
 graphs opened and ran (35.0 million events taken, 14.7 million rows,
 0.97 million hits), no finding.
-- `tests/mutate/sig.toml`: 84 mutants and a control; 84 of 84 killed.
+- `tests/mutate/sig.toml`: 86 mutants and a control; 86 of 86 killed.
   Mutants 70 and 71 remove the saturation of time arithmetic; the test
   built with `-fsanitize=undefined` (the list's `sig_ubsan` test) catches
   them.

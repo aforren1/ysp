@@ -482,9 +482,10 @@ arrival order. Within one source they rise. So:
   that made the value, the one that crossed), even when the other
   input's held part is newer in time, and after a delay the delayed
   sample's; in a frame's pass and in a read at a past time, from the
-  newest input; `t_oldest` stays the oldest input's. A detect, emit or
-  record never moves its own time back (the later of the new and its
-  last, counted).
+  newest input; `t_oldest` stays the oldest input's. Emit and record
+  carry that true `t`, which need not rise in arrival order; a detect's
+  hold clock never goes back (the later of the new and its last,
+  counted), and a crossing's hit has the time of the value that met it.
 - A sample whose `t` is older than its source's last sample is counted
   and dropped. The count goes in the describe record. As built: order is
   kept per source and device (two mice on one any-device source do not
@@ -756,7 +757,7 @@ needed by a ported example or found by a measurement.
 | 5.2 | Parameters in 16 doubles | Also a data array per node, copied at open | 7 + 7 sines need 42 numbers |
 | 5.5 | Four unit spaces | `display_px` added | The examples are designed in window pixels |
 | 6.1 | The worse tier | SIM, 1, 2, 3, UNKNOWN from best to worst; a source's tier for stamp 0 is a parameter (the source table's) | ysp/input.h orders no tiers; an unmeasured stamp is the worst |
-| 6.1 | A value's `t` is the newer input's | In a sample's pass the changed input's (the arriving sample's) `t`, device and source; in a frame's pass the newest input's; a sink's time never goes back; `t_oldest` the oldest input's | The derived event must name the report that crossed, not the other hand's; a frame must not move a value's time back |
+| 6.1 | A value's `t` is the newer input's | In a sample's pass the changed input's (the arriving sample's) `t`, device and source; in a frame's pass the newest input's; emit and record carry it as is; a detect's hold clock never goes back; `t_oldest` the oldest input's | The derived event must name the report that crossed, at its time; a frame must not move a value's time back; a hold must not end early on a late report |
 | 6.1 | Order per source | Per source and device; raw mouse counts never dropped | Two mice on one any-device source dropped each other's counts |
 | 6.2 | A sink reads at the onset | Held values at `ysig_frame()`; `ysig_value_at()` from rings of sample-time values for a later onset; views for velocity, speed, delay, low-pass, rate integration up to the poll's time | The flip record comes a frame later (D10); a still mouse sends nothing; a planned onset is in the future |
 | 6.2 | | Stateful sample-rate ops need a source upstream | They would never run; a frame-rate form is not built |

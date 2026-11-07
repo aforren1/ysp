@@ -102,9 +102,11 @@
  *   the input that changed, along the path (the report that arrived, also
  *   when another source's held part is newer in time; after a delay, the
  *   delayed sample's); in a frame's pass and in ysig_value_at(), from the
- *   newest input. A detect, emit or record never moves its own time back:
- *   it keeps max(new t, its last t), clamps counted in
- *   ysig_stats.time_clamped. A value also carries t_oldest (the oldest
+ *   newest input. Emit and record carry the value's true t, which need
+ *   not rise in arrival order (as ysp/input.h's events). A detect's hold
+ *   clock never goes back: a hold starts and ends on max(new t, its last
+ *   t), clamps counted in ysig_stats.time_clamped; a hit at a crossing
+ *   has the time of the value that met the test. A value also carries t_oldest (the oldest
  *   input's time) and its source, and the worst stamp tier of its inputs (SIM best, then 1, 2,
  *   3, UNKNOWN worst). A source's tier is the event's stamp, or p4 where
  *   it is 0; before its first sample a source has no value: tier UNKNOWN,
@@ -181,7 +183,8 @@
  *   ---------------------------------------------------------------------
  *   record calls desc.on_row with a ysig_row: per sample of its input
  *   (p0 = 0) or per frame (p0 = 1: the frame index, the onset, the held
- *   value). Every row, hit and derived event, every bound channel value
+ *   value). A row has its value's true t: a sample stream may be out of
+ *   time order when two sources feed the node. Every row, hit and derived event, every bound channel value
  *   and every frame's index and onset go into a 64-bit digest
  *   (ysig_stats).
  *   desc.journal gets every call that changes the graph: reset, set,
@@ -237,7 +240,7 @@
  *
  *   STATUS: v0.1.0, 2026-11-07, Linux desktop (Debian 12, GCC 12.2):
  *   tests/adapt/sig_test.c, the compile checks (C99, C11, C++17), the
- *   fuzz target under ASan and UBSan (20 million inputs), 84 of 84
+ *   fuzz target under ASan and UBSan (20 million inputs), 86 of 86
  *   mutants killed, and trial_visuomotor and trial_bimanual ported onto
  *   it with byte-identical CI data files. Four raw mice at 8 kHz into 32
  *   nodes: 141 ns a sample and 0.28 us a ysig_frame() at the median on a
@@ -437,8 +440,8 @@ typedef struct ysig_stats {
     int64_t  late_poll;         /* frames whose poll_ns was before the
                                  * newest event fed (that time was used)  */
     int64_t  late_poll_max_ns;  /* the largest such excess                */
-    int64_t  time_clamped;      /* a detect, emit or record held its time
-                                 * where a value's t went back            */
+    int64_t  time_clamped;      /* a detect held its hold clock where a
+                                 * value's t went back                    */
     uint64_t digest;            /* FNV-1a: rows, hits, events, binds,
                                  * frames                                */
 } ysig_stats;
@@ -627,7 +630,7 @@ typedef struct ysig__nd {
     void*                 st;
     ysig__ring            hist;
     int64_t               pass;        /* the evaluation it last ran in     */
-    int64_t               sink_t;      /* a sink's last time: never back    */
+    int64_t               sink_t;      /* a detect's hold clock: never back */
     int32_t               n_data;
     uint16_t              op;
     int16_t               in[4];
@@ -1680,20 +1683,23 @@ static int ysig__det_hold_done(ysig_graph* g, int i, int64_t t) {
 }
 
 /* One value for a detect at time t (a sample's t, or an onset). */
-static void ysig__det_value(ysig_graph* g, int i, const ysig_value* v, int64_t t) {
+/* One value for a detect: t is its time (a hit's time), tc the detect's
+ * own clock, which never goes back (ysig__sink_t): a hold starts and ends
+ * on tc. */
+static void ysig__det_value(ysig_graph* g, int i, const ysig_value* v, int64_t t, int64_t tc) {
     ysig__nd* n = &g->nd[i];
     ysig__det_st* s = (ysig__det_st*)n->st;
     int r = ysig__test(n, v, 0);
     s->state = r;
     g->val[i].v[0] = r ? 1.0 : 0.0;
-    g->val[i].t = t;
+    g->val[i].t = tc;
     if (!s->armed || t < s->t_arm) return;
     if (n->kns[0] > 0) {
-        if (ysig__det_hold_done(g, i, t)) return;
+        if (ysig__det_hold_done(g, i, tc)) return;
         if (r) {
             if (!s->holding && s->ready) {
                 s->holding = 1;
-                s->t_start = t;
+                s->t_start = tc;
                 s->v_start = *v;
             }
         } else {
@@ -1719,22 +1725,20 @@ static void ysig__det_frame(ysig_graph* g, int i, int64_t onset) {
     (void)ysig__det_hold_done(g, i, onset);
 }
 
-/* A detect, emit or record never moves its own time back: a value whose
- * t went back (a frame's newest input after a later sample) keeps the
- * sink's last time, counted. */
+/* A detect's hold clock never goes back: a value whose t went back (a
+ * report from another source that arrived late) keeps the detect's last
+ * time, counted. Emit and record carry the true t (ysp/input.h: times need
+ * not rise in arrival order). */
 static int64_t ysig__sink_t(ysig_graph* g, ysig__nd* n, int64_t t) {
     if (t < n->sink_t) { g->st.time_clamped++; return n->sink_t; }
     n->sink_t = t;
     return t;
 }
 
-static void ysig__emit(ysig_graph* g, int i, const ysig_value* vin) {
+static void ysig__emit(ysig_graph* g, int i, const ysig_value* v) {
     ysig__nd* n = &g->nd[i];
     yin_event* e;
-    ysig_value w = *vin;
-    const ysig_value* v = &w;
     int k;
-    w.t = ysig__sink_t(g, n, vin->t);
     ysig__digest_word(g, (uint64_t)(uint32_t)i);
     ysig__digest_value(g, v);
     if (g->n_der >= YSIG_QUEUE_CAP) { g->st.derived_lost++; return; }
@@ -1766,7 +1770,6 @@ static void ysig__row_out(ysig_graph* g, int i, int per_frame, const ysig_value*
     r.frame = per_frame ? g->frame_index : 0;
     r.onset = per_frame ? g->onset : 0;
     r.value = *v;
-    r.value.t = ysig__sink_t(g, &g->nd[i], v->t);
     g->st.rows++;
     ysig__digest_word(g, (uint64_t)(uint32_t)i);
     ysig__digest_word(g, (uint64_t)r.frame);
@@ -1885,15 +1888,12 @@ static void ysig__run(ysig_graph* g, int i, int mode, int64_t t) {
                      * on a view, at the view's time (the poll at most) */
                     ysig_value v = *x;
                     if (at_frame) v.t = t;
-                    v.t = ysig__sink_t(g, n, v.t);
-                    ysig__det_value(g, i, &v, v.t);
+                    ysig__det_value(g, i, &v, v.t, ysig__sink_t(g, n, v.t));
                 } else {
                     ysig__det_frame(g, i, t);
                 }
             } else {
-                ysig_value v = *x;
-                v.t = ysig__sink_t(g, n, x->t);
-                ysig__det_value(g, i, &v, v.t);
+                ysig__det_value(g, i, x, x->t, ysig__sink_t(g, n, x->t));
             }
             break;
         default: break;

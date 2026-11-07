@@ -691,6 +691,22 @@ find = '        n->sink_t = INT64_MIN;'
 replace = '        (void)0;'
 
 [[mutant]]
+id = "86"
+name = "detect: a hold starts on the report's time"
+test = "sig"
+why = "A late report from another hand would start a hold before the detect's last time, and end it early."
+find = '                s->t_start = tc;'
+replace = '                s->t_start = t;'
+
+[[mutant]]
+id = "87"
+name = "detect: a crossing hit on the clock"
+test = "sig"
+why = "A hit would carry the detect's clock, not the time of the report that met the test."
+find = '        ysig__hit(g, i, t, t, v);'
+replace = '        ysig__hit(g, i, tc, tc, v);'
+
+[[mutant]]
 id = "76"
 name = "history: a generator's input not computed at t"
 test = "sig"

@@ -1333,13 +1333,13 @@ static void test_order(void) {
     e.unc_us = 250;
     ysig_feed(&g, &e);
     CHECK(ysig_derived(&g, der, 8) == 1);
-    /* the report is R's; the emit's time does not go back past its last
-     * event's (L's 10 ms), and the clamp is counted */
-    CHECK(der[0].x == 50 && der[0].t == 10 * MS && (der[0].code & 0xFFFFu) == 1 && der[0].unc_us == 250);
+    /* the report is R's, at its own time: an emit carries the true t,
+     * which need not rise in arrival order (ysp/input.h) */
+    CHECK(der[0].x == 50 && der[0].t == 10 * MS - 300000 && (der[0].code & 0xFFFFu) == 1 && der[0].unc_us == 250);
     {
         ysig_stats st2;
         ysig_get_stats(&g, &st2);
-        CHECK(st2.time_clamped == 1 && ysig_value_of(&g, 4)->t == 10 * MS - 300000);
+        CHECK(st2.time_clamped == 0 && ysig_value_of(&g, 4)->t == 10 * MS - 300000);
     }
     CHECK(ysig_value_of(&g, 4)->t_oldest == 10 * MS - 300000 && (der[0].code >> 16) == 1);
 }
@@ -1558,7 +1558,8 @@ static void test_review3(void) {
         CHECK(ysig_value_of(&g, 3)->t == 25 * MS && ysig_value_of(&g, 3)->src == 1);
     }
     /* a sample-pass value whose t goes back (A's report of 22 ms after
-     * B's of 25 ms): the record keeps 25 ms, counted */
+     * B's of 25 ms): the record's rows carry the true times, out of order,
+     * and nothing is clamped */
     g_frows = 0;
     d.on_row = f_row;
     if (!open_desc(&g, &d)) { g_failures++; return; }
@@ -1568,7 +1569,54 @@ static void test_review3(void) {
     e = pen3(22 * MS, 1, 1);
     ysig_feed(&g, &e);
     ysig_get_stats(&g, &st);
-    CHECK(g_frows == 2 && g_frow[0].value.t == 25 * MS && g_frow[1].value.t == 25 * MS && st.time_clamped == 1);
+    CHECK(g_frows == 2 && g_frow[0].value.t == 25 * MS && g_frow[1].value.t == 22 * MS && st.time_clamped == 0);
+
+    /* a detect on two hands: a crossing hit has the time of the report that
+     * met the test, also out of order; a hold's clock never goes back */
+    g_where = "detect clock";
+    n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 1);
+    n[1] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 2, 1);
+    n[2] = ysig_node_of(YSIG_OP_SUM, 0, 1);
+    n[3] = ysig_node_of(YSIG_OP_DETECT, 2, -1);       /* sum >= 10, every */
+    n[3].p[0] = YSIG_TEST_GE; n[3].p[2] = 10; n[3].p[7] = 1;
+    n[4] = ysig_node_of(YSIG_OP_DETECT, 2, -1);       /* sum >= 5 for 100 ms */
+    n[4].p[0] = YSIG_TEST_GE; n[4].p[2] = 5; n[4].p[4] = 0.1;
+    d = desc_of(n, 5);
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    e = pen3(25 * MS, 2, 4);                          /* B: 4, under both levels */
+    ysig_feed(&g, &e);
+    e = pen3(22 * MS, 1, 7);                          /* A late: 11, past both; the hold starts at 25 ms */
+    ysig_feed(&g, &e);
+    {
+        ysig_hit h[4];
+        int nh = ysig_detected(&g, h, 4);
+        CHECK(nh == 1 && h[0].node == 3 && h[0].t == 22 * MS);
+        e = pen3(124 * MS, 2, 4);                     /* still past 5: the hold ends at 125 ms, not 122 */
+        ysig_feed(&g, &e);
+        CHECK(ysig_detected(&g, h, 4) == 0);
+        e = pen3(126 * MS, 2, 4);
+        ysig_feed(&g, &e);
+        nh = ysig_detected(&g, h, 4);
+        CHECK(nh == 1 && h[0].node == 4 && h[0].t == 125 * MS);
+    }
+    ysig_get_stats(&g, &st);
+    CHECK(st.time_clamped == 2);   /* both detects saw A's 22 ms after 25 ms */
+    /* a reset starts the clock again: a trial at earlier times holds from
+     * its own samples */
+    ysig_reset(&g, 0);
+    e = pen3(10 * MS, 2, 4);
+    ysig_feed(&g, &e);
+    e = pen3(11 * MS, 1, 7);
+    ysig_feed(&g, &e);
+    e = pen3(112 * MS, 2, 4);
+    ysig_feed(&g, &e);
+    {
+        ysig_hit h[4];
+        int nh = ysig_detected(&g, h, 4), found = 0, k2;
+        for (k2 = 0; k2 < nh; k2++) found |= h[k2].node == 4 && h[k2].t == 111 * MS;
+        CHECK(found);
+    }
 
     g_where = "least recently used slots";
     n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 1);
