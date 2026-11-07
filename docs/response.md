@@ -589,12 +589,19 @@ with `sim` out with its body. On the current sources the script gives
 exactly the rows of `trial_audio_keyboard` (66, 8) and
 `trial_stop_signal` (120, 9), and 101 and 10 for `trial_keyboard`, whose
 loop has changed since its row was counted.
+`trial_srt` was counted again on 2026-11-07, after its frame loop moved
+into `start_trial()` and `write_row()` (examples/README.md, "How an
+example is laid out"): the loop and those two functions, a line that
+names a `sim` variable out with the block it opens. Before the move the
+same count gave 66 and 5 (the row's 100 and 11 were counted before
+v0.4.0's helpers); the 11 more lines are the two functions' own lines
+(signatures, declarations, returns).
 
 | Example | jsPsych | Trial logic | yrsp lines | `ysp/response.h` features used | Plain SDL events would need |
 |---|---|---|---|---|---|
 | `trial_keyboard` | `html-keyboard-response` | 123 | 12 | Choices by scancode; `duration` from the onset; `minimum_valid_rt`; the onset as a plan, then the flip record; R3 duplicates; release pairing (`rt_key_duration`); counts; the stamp tier | A list of presses kept until the flip record arrives, then classified against it; a deadline that moves with the onset; a table of keys that are down; a second-report filter; release pairing |
 | `trial_same_different` | `same-different-html` | 121 | 13 | As `trial_keyboard`, and EARLY: the window opens at the fixation, so presses during the first bar and the gap are logged and counted (`n_early`), not responses | As `trial_keyboard`. The SOA (second onset minus first, from flip records) is the example's own code with or without the header |
-| `trial_srt` | `serial-reaction-time` | 100 | 11 | Four choices, no deadline, the first key ends the window; the onset as a plan, then the flip record; presses in the RSI are AFTER_END, because `yrsp_finish()` comes at the end of the RSI (`n_rsi_presses`) | A map from scancode to position; the first key-down at or after the onset, with OS repeats skipped; a counter for key-downs in the RSI. With no deadline and no minimum RT, no press needs a class before the final onset |
+| `trial_srt` | `serial-reaction-time` | 77 | 6 | Four choices, no deadline, the first key ends the window; the onset as a plan, then the flip record; presses in the RSI are AFTER_END, because `yrsp_finish()` comes at the end of the RSI (`n_rsi_presses`) | A map from scancode to position; the first key-down at or after the onset, with OS repeats skipped; a counter for key-downs in the RSI. With no deadline and no minimum RT, no press needs a class before the final onset |
 | `trial_adjustment` | `reconstruction` | 152 | 16 | The confirm key only: RT from the flip onset, the down state of the key across trials | The confirm key: one scancode test and the repeat flag. The adjustment steps read `ysp/input.h` events in both versions |
 | `trial_mouse_tracking` | `extension-mouse-tracking` (MouseTracker style) | 150 | 17 | A DISTANCE crossing (movement onset, 10 px from the position at `yrsp_arm()`); `persist`; the trace (one entry per event); the source's tier (3 for SDL's pointer, 0 for raw mice); `yrsp_cursor` for raw counts; `yrsp_entries()` for an EARLY crossing | A start point and a distance test; an array of samples; the onset kept to subtract. The hit tests, the conversion of raw counts to positions and the choice between SDL's and the bridge's mouse events are the example's own code in both versions |
 | `trial_audio_keyboard` | `audio-keyboard-response` | 66 | 8 | The onset from the tone's record (`yrsp_onset_audio()`: the target time, then the fit's time); `duration` from that onset; EARLY in the foreperiod; anticipations; the onset tier in the row | As `trial_keyboard`, with the record from `yau_result()` in place of the flip record |

@@ -28,6 +28,53 @@ times on either clock. `gfx_capture` stays on the real clock: its writer
 thread is real, and on the virtual clock the frame loop outran it. A script still times its synthetic input from the stimulus's flip
 record, not from a frame count, so it also runs on a real display.
 
+## How an example is laid out
+
+`response/trial_srt.c`, `response/trial_posner.c` and
+`response/trial_visuomotor.c` use this layout; the other examples do not
+yet. Read one from top to bottom: each part uses only what comes before
+it.
+
+1. The header comment: what the task is, the trial's timeline as a short
+   list, the data columns, the usage line with the flags that matter,
+   and the exit codes. Design notes and measurements go in the header's
+   manual (`docs/<name>.md`), and the comment links to them.
+2. The includes, then the design's constants in one block (times in s,
+   sizes in px or deg).
+3. The prototypes of the scripted participant (item 7).
+4. The state, as file-scope statics: the headers' objects, the options
+   (`opt`), then where the run is.
+5. Functions named for the task's steps, in the order that they run:
+   `parse_options()`, `open_task()`, `open_data()`, `start_trial()`,
+   `write_row()`, `print_summary()`. Each is shorter than about 80 lines.
+6. `main()`, shorter than about 100 lines: parse the options, select the
+   clock and the display (`--sim`: the virtual clock and the simulated
+   display), open, run the frame loop, print the summary. The frame loop
+   stays in `main()`, because it shows the order of the calls in a frame:
+   begin, input, the collector, the timeline, the landing, draw, flip.
+7. The scripted participant and the self-checks, in one section at the
+   end of the file, which starts with `/* ---- The scripted participant`.
+   The task calls it through a small number of `sim_*()` functions, and
+   each of them does nothing without `--sim` or `--auto`. Scripted input
+   comes from `sim_input_due(t)` and goes through the same call as a
+   device's events (`yrsp_feed()`, or the program's input function). To
+   make a program without `--sim`, delete the section and its calls.
+
+Rules:
+
+- Keep the ysp calls in the task's code. Move into a function only code
+  that is not about the headers shown: option parsing, file reading,
+  error messages.
+- Branch on `--sim` only where the program selects the clock, the
+  display backend and the input source, and where the data file names
+  the input.
+- Set a desc with a designated initializer (a compound literal), not
+  with `memset()` and one assignment per field. The examples compile as
+  C11 (`ysp_add_program()` in `CMakeLists.txt`); none compiles as C++.
+- `fail(why)` writes `<program>: why` to stderr and returns false.
+- A change to the layout does not change the output: the `--sim` data
+  files stay byte-identical.
+
 ## aep
 
 | Program | Shows | Headers | Run | Needs |

@@ -67,7 +67,7 @@ static const yrsp_choice keys[] = { { .key = "d" }, { .key = "f" }, { .key = "j"
  * file. Without sim_begin() each call does nothing. */
 static void sim_begin(int reps, const char* blocks);
 static void sim_target_landed(int64_t onset, char block_type, int index_in_block, int pos, int trial);
-static void sim_feed(yrsp_collector* c, int64_t now);
+static const yrsp_input* sim_input_due(int64_t now);
 static void sim_check_row(int trial, const yrsp_result* r, int correct);
 static int sim_check_end(int n_rows);
 
@@ -257,6 +257,7 @@ int main(int argc, char** argv) {
     for (;;) {
         yscr_frame f;
         ytl_event fired[64];   /* the timeline's capacity: all that can fire */
+        const yrsp_input* scripted;
         int64_t bt = 0;
         int n, landed;
         rc = yscr_begin(&scr, &f);
@@ -268,7 +269,7 @@ int main(int argc, char** argv) {
         }
 
         yrsp_feed_screen(&scr, &rsp, 1);
-        sim_feed(&rsp, f.onset);
+        while ((scripted = sim_input_due(f.onset)) != NULL) yrsp_feed(&rsp, scripted);
         /* the target's flip record when it arrives; a key: the target goes
          * off on this frame, the next comes after the RSI */
         if (yrsp_update_frame(&rsp, &f) == YRSP_ENDED && responding) {
@@ -354,8 +355,8 @@ static void sim_target_landed(int64_t onset, char block_type, int index_in_block
     }
 }
 
-static void sim_feed(yrsp_collector* c, int64_t now) {
-    while (sim_next < n_sim_ev && sim_ev[sim_next].t <= now) yrsp_feed(c, &sim_ev[sim_next++]);
+static const yrsp_input* sim_input_due(int64_t now) {
+    return sim_next < n_sim_ev && sim_ev[sim_next].t <= now ? &sim_ev[sim_next++] : NULL;
 }
 
 static void sim_check_row(int trial, const yrsp_result* r, int correct) {
