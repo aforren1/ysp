@@ -1,11 +1,15 @@
 /* trial_bimanual.c - continuous tracking and point-to-point reaches with
  * one mouse per hand, under a rotation or a mirror (Yang, Cowan and Haith
  * 2021, eLife 10:e62578, made bimanual): ysp/screen.h's raw mice,
- * ysp/gfx.h, ysp/timeline.h, ysp/trials.h and ysp/response.h.
+ * ysp/gfx.h, ysp/timeline.h, ysp/trials.h, ysp/response.h and ysp/sig.h.
  *
- * Hands. Two mice, read through ysp/screen.h's desc.raw_mice, each
- * integrated by its own yrsp_cursor at --gain px per count (no
- * acceleration). L and R are each hand's displacement in cm (y up) from
+ * Hands. Two mice, read through ysp/screen.h's desc.raw_mice. A signal
+ * path (ysp/sig.h) makes every value from them: each mouse's counts
+ * integrated at --gain px per count (no acceleration), each hand in cm,
+ * the mapping, the perturbation, the cursor's speed, the target (sines at
+ * the frame's base time times the timeline's ramp), the derived events
+ * the collector reads, and each value at a flip record's onset from the
+ * hands' rings. L and R are each hand's displacement in cm (y up) from
  * where it was placed at the end of the setup; a hand stops at the
  * window's size from there. Setup: click the left hand's mouse, then the
  * right hand's (left button); the console says which, and the lit box
@@ -139,6 +143,8 @@
 #include "ysp/trials.h"
 #define YSP_RESPONSE_IMPLEMENTATION
 #include "ysp/response.h"
+#define YSP_SIG_IMPLEMENTATION
+#include "ysp/sig.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -170,6 +176,10 @@
 #define FRAME_CAP     (46 * 240 + 256)   /* 46 s at 240 Hz                    */
 #define TRACE_CAP     32768              /* 16 s of two 1 kHz mice; 1.5 MB    */
 #define RING_CAP      4096               /* per hand: 4 s at 1 kHz            */
+/* The signal path: the hands, the mapping, the cursor, the target */
+enum { B_SRC_L, B_SRC_R, B_LPX, B_RPX, B_L, B_R, B_LX, B_RY, B_U, B_C, B_EMIT, B_SPEED, B_AMP, B_SINES, B_TGT,
+       B_ERR, B_INSIDE, B_TPX, B_BIND_T, B_N };
+enum { CH_TGT_X, CH_TGT_Y, N_SIG_CH };
 #define BM_PI         3.14159265358979323846
 /* The scripted participant (--sim, --auto) */
 #define SIM_G         0.8
@@ -222,15 +232,19 @@ static double ppc;                 /* px per cm */
 static int mapping;                /* 0 split, 1 mean */
 static int perturb;                /* 1 rotation, 2 mirror (pert_name) */
 static int pert_on;                /* this block's */
-static double rot_rad;
+static double rot_rad, rot_deg;     /* the rotation; rot_rad = rot_deg pi / 180 */
 static uint32_t dev[2];            /* the hands' mice: L, R */
-static yrsp_cursor hand[2];
+static float gain;                 /* px per count */
 static int n_other, n_dev0;        /* reports from other mice; device 0 */
+static ysig_graph sg;
+static uint64_t sig_arena[(2u << 20) / 8];
+static float sig_ch[N_SIG_CH];
 
-/* A hand's displacement from where it was placed, cm, y up. */
-static void hand_cm(const yrsp_cursor* h, double out[2]) {
-    out[0] = ((double)h->x - (double)W) / ppc;
-    out[1] = -((double)h->y - (double)H) / ppc;
+/* A hand's displacement from where it was placed, cm, y up, from its
+ * position in px. */
+static void hand_cm(float x, float y, double out[2]) {
+    out[0] = ((double)x - (double)W) / ppc;
+    out[1] = -((double)y - (double)H) / ppc;
 }
 static void map_u(const double L[2], const double R[2], double u[2]) {
     if (mapping) { u[0] = (L[0] + R[0]) / 2; u[1] = (L[1] + R[1]) / 2; }
@@ -262,23 +276,14 @@ static float coll_dist(float x, float y, float rx, float ry) {
     return (float)sqrt((double)(x - rx) * (x - rx) + (double)(y - ry) * (y - ry));
 }
 
-/* Each hand's reports since placement: where its cursor was after each,
- * to read a frame's hand at the onset its flip record gives. */
-typedef struct ring_e { int64_t t; float x, y; } ring_e;
-static ring_e ring[2][RING_CAP];
-static int64_t ring_n[2];
+/* A node's value at t (a flip record's onset): the hands keep rings of
+ * their values, so the mapping and the cursor at t come from theirs. */
 static int ring_miss;
-static void ring_at(int h, int64_t t, double out[2]) {
-    int64_t k, lo = ring_n[h] > RING_CAP ? ring_n[h] - RING_CAP : 0;
-    yrsp_cursor c = hand[h];
-    for (k = ring_n[h] - 1; k >= lo; k--) {
-        const ring_e* e = &ring[h][k % RING_CAP];
-        if (e->t <= t) { c.x = e->x; c.y = e->y; hand_cm(&c, out); return; }
-    }
-    if (lo > 0) ring_miss++;   /* older than the ring: its oldest */
-    c.x = lo > 0 ? ring[h][lo % RING_CAP].x : W;
-    c.y = lo > 0 ? ring[h][lo % RING_CAP].y : H;
-    hand_cm(&c, out);
+static void value_at(int node, int64_t t, double out[2]) {
+    ysig_value v;
+    if (ysig_value_at(&sg, node, t, &v) < 1) ring_miss++;   /* older than the ring: its oldest */
+    out[0] = v.v[0];
+    out[1] = v.v[1];
 }
 
 /* --- the target --------------------------------------------------------- */
@@ -298,13 +303,10 @@ static double ramp_of(double t) { return t <= 0 ? 0 : t < RAMP_S ? t / RAMP_S : 
 
 static int setup = 0, refused = 0;     /* 0: waiting for L, 1: for R, 2: done */
 static int is_script;
-static float gain = GAIN;
 static void script_placed(int64_t t);
-/* The cursor after each hand report, for the reach's peak speed: the
- * collector's trace is readable only after yrsp_finish(), which stops it,
- * and the target's color needs the peak at the hold's start. */
-static ring_e cring[1024];
-static int64_t cring_n;
+/* The cursor's speed over VEL_LAG_S, the graph's speed node at each hand
+ * report: the target's color needs the peak at the hold's start (the
+ * collector's trace is readable only after yrsp_finish(); F19). */
 static double peak_run;                /* cm/s since the target appeared */
 
 /* Every mouse event: the setup's clicks, then each hand's counts. After a
@@ -336,15 +338,9 @@ static void on_input(const yrsp_input* in, int from_bridge) {
         if (++setup == 1) printf("click the right hand's mouse (left button)\n");
         else {
             /* both placed now: L and R are displacements from here */
-            for (h = 0; h < 2; h++) {
-                memset(&hand[h], 0, sizeof hand[h]);
-                hand[h].device = dev[h];
-                hand[h].gain = gain;
-                hand[h].w = 2 * W;
-                hand[h].h = 2 * H;
-                hand[h].x = W;
-                hand[h].y = H;
-            }
+            ysig_set(&sg, B_SRC_L, 2, dev[0]);
+            ysig_set(&sg, B_SRC_R, 2, dev[1]);
+            ysig_reset(&sg, in->t);
             if (is_script) script_placed(in->t);
         }
         return;
@@ -356,37 +352,14 @@ static void on_input(const yrsp_input* in, int from_bridge) {
         return;
     }
     if (in->type == YRSP_PRESS || in->type == YRSP_RELEASE) n_clicks_raw[in->type == YRSP_RELEASE]++;
-    if (yrsp_cursor_feed(&hand[h], in)) {
-        double L[2], R[2], u[2], c[2];
-        yrsp_input e = *in;
-        ring_e* r = &ring[h][ring_n[h]++ % RING_CAP];
-        r->t = in->t;
-        r->x = hand[h].x;
-        r->y = hand[h].y;
-        hand_cm(&hand[0], L);
-        hand_cm(&hand[1], R);
-        cursor_of(L, R, u, c);
-        e.control = YRSP_AXIS_POSITION;
-        e.x = (float)c[0];
-        e.y = (float)c[1];
-        yrsp_feed(&rsp, &e);
-        /* speed over VEL_LAG_S: one report per ms is too coarse in counts */
-        r = &cring[cring_n++ % 1024];
-        r->t = in->t;
-        r->x = e.x;
-        r->y = e.y;
-        {
-            int64_t k;
-            for (k = cring_n - 2; k >= 0 && k > cring_n - 1024; k--) {
-                const ring_e* p = &cring[k % 1024];
-                if (in->t - p->t >= YRT_S(VEL_LAG_S)) {
-                    double v = sqrt((double)(e.x - p->x) * (e.x - p->x) + (double)(e.y - p->y) * (e.y - p->y)) /
-                               YRT_TO_S(in->t - p->t);
-                    if (v > peak_run) peak_run = v;
-                    break;
-                }
-            }
-        }
+    if (ysig_feed(&sg, in) > 0) {
+        /* the cursor (cm) to the collector, stamped and tagged with this
+         * report's time and the worse tier of the two hands */
+        yin_event der[8];
+        int n = ysig_derived(&sg, der, 8), k;
+        double v = ysig_value_of(&sg, B_SPEED)->v[0];
+        for (k = 0; k < n; k++) yrsp_feed(&rsp, &der[k]);
+        if (v > peak_run) peak_run = v;
     }
 }
 
@@ -556,8 +529,8 @@ static void script_emit(int64_t t_upto) {
             int64_t kx, ky;
             if (!sc.ts || t <= sc.ts) continue;
             hand_exact(m, t, v);
-            kx = lround(v[0] * ppc / hand[m].gain);
-            ky = lround(-v[1] * ppc / hand[m].gain);
+            kx = lround(v[0] * ppc / gain);
+            ky = lround(-v[1] * ppc / gain);
             if (kx == sc.n[m][0] && ky == sc.n[m][1]) continue;   /* a mouse reports only movement */
             e.device = m ? DEV_R : DEV_L;
             e.x = (float)(kx - sc.n[m][0]);
@@ -569,15 +542,10 @@ static void script_emit(int64_t t_upto) {
         if (m < 2 && sc.watch && !sc.found && t >= sc.from) {
             /* the cursor the program has now, by its own arithmetic */
             double L[2], R[2], u[2], c[2];
-            yrsp_cursor q[2];
-            int k;
-            for (k = 0; k < 2; k++) {
-                q[k] = hand[k];
-                q[k].x = (float)((double)W + (double)hand[k].gain * (double)sc.n[k][0]);
-                q[k].y = (float)((double)H + (double)hand[k].gain * (double)sc.n[k][1]);
-            }
-            hand_cm(&q[0], L);
-            hand_cm(&q[1], R);
+            hand_cm((float)((double)W + (double)gain * (double)sc.n[0][0]),
+                    (float)((double)H + (double)gain * (double)sc.n[0][1]), L);
+            hand_cm((float)((double)W + (double)gain * (double)sc.n[1][0]),
+                    (float)((double)H + (double)gain * (double)sc.n[1][1]), R);
             cursor_of(L, R, u, c);
             if (coll_dist((float)c[0], (float)c[1], sc.ox, sc.oy) >= sc.level) { sc.found = 1; sc.t_found = t; }
         }
@@ -722,9 +690,10 @@ static reach_exp rexp[MAX_REACHES];
 static void finalize(int k, int64_t ta) {
     fr[k].ta = ta;
     fr[k].have = 1;
-    ring_at(0, ta, fp[k].L);
-    ring_at(1, ta, fp[k].R);
-    cursor_of(fp[k].L, fp[k].R, fp[k].u, fp[k].c);
+    value_at(B_L, ta, fp[k].L);
+    value_at(B_R, ta, fp[k].R);
+    value_at(B_U, ta, fp[k].u);
+    value_at(B_C, ta, fp[k].c);
     if (is_script) {
         script_values(ta, 0, fx[k].L, fx[k].R);
         cursor_of(fx[k].L, fx[k].R, fx[k].u, fx[k].c);
@@ -930,7 +899,8 @@ static void end_reach(void) {
         snprintf(rt, sizeof rt, "%.9f", YRT_TO_S(res.rt_ns));
         snprintf(mt, sizeof mt, "%.9f", YRT_TO_S(t_hold - res.t_response));
         if (!isnan(init)) snprintf(it, sizeof it, "%.4f", init);
-        hand_moved = res.device == dev[0] ? 0 : res.device == dev[1] ? 1 : -1;
+        /* the derived event's code: the source node of the newest report */
+        hand_moved = (res.code & 0xFFFFu) == B_SRC_L ? 0 : (res.code & 0xFFFFu) == B_SRC_R ? 1 : -1;
     }
     fprintf(rout, "%d,%d,%d,%s,%.4f,%.4f,%.4f,%.4f,%.3f,%s,%s,%.2f,%d,%s,%u,%u,%u,%s,%u\n", reach_index, cur_block, block_reach,
             pert_on ? pert_name[perturb] : "none", start_c[0], start_c[1], tgt_c[0], tgt_c[1], tdeg, rt, it, peak_hold,
@@ -1037,6 +1007,96 @@ static int start_tracking(const yscr_frame* f) {
     return 1;
 }
 
+/* The block's cursor map P (identity, rotation or mirror) and target
+ * phases into the graph, between trials. */
+static void set_graph_block(int b) {
+    int k, a, ok = 1;
+    for (k = 0; k < 4; k++) ok &= ysig_set(&sg, B_C, k, 0);   /* all zero: the identity */
+    ok &= ysig_set(&sg, B_C, 8, pert_on && perturb == 1 ? rot_deg : 0);
+    if (pert_on && perturb == 2) ok &= ysig_set(&sg, B_C, 1, 1) && ysig_set(&sg, B_C, 2, 1);
+    for (a = 0; a < 2; a++)
+        for (k = 0; k < N_SINES; k++) ok &= ysig_set_data(&sg, B_SINES, (a * N_SINES + k) * 3 + 2, phase[b][a][k]);
+    if (!ok) { fprintf(stderr, "trial_bimanual: the graph refused block %d's parameters\n", b); failed = 1; }
+}
+
+/* The graph: two mice to the cursor, the target, the derived events. */
+static ysig_node sig_nodes[B_N];
+static double sines_data[2 * N_SINES * 3];
+static bool open_graph(void) {
+    ysig_node* n = sig_nodes;
+    ysig_desc d;
+    int k, a;
+    for (k = 0; k < 2; k++) {
+        n[B_SRC_L + k] = ysig_node_of(YSIG_OP_SOURCE, -1, -1);
+        n[B_SRC_L + k].lanes = 2;
+        n[B_SRC_L + k].p[0] = YIN_KIND_MOUSE;
+        n[B_SRC_L + k].p[1] = YIN_AXIS_DELTA;
+        n[B_SRC_L + k].p[2] = 4294967295.0;   /* no mouse until the setup names it */
+        n[B_SRC_L + k].p[4] = yin_raw_mouse_source().tier;
+        n[B_LPX + k] = ysig_node_of(YSIG_OP_INTEGRATE, B_SRC_L + k, -1);   /* px, from (W, H) */
+        n[B_LPX + k].p[0] = n[B_LPX + k].p[1] = gain;
+        n[B_LPX + k].p[4] = W;
+        n[B_LPX + k].p[5] = H;
+        n[B_LPX + k].p[12] = 2 * (double)W;   /* a hand stops at the window's size from there */
+        n[B_LPX + k].p[13] = 2 * (double)H;
+        n[B_L + k] = ysig_node_of(YSIG_OP_AFFINE, B_LPX + k, -1);          /* cm, y up */
+        n[B_L + k].p[0] = 1 / ppc;
+        n[B_L + k].p[3] = -1 / ppc;
+        n[B_L + k].p[4] = W;
+        n[B_L + k].p[5] = H;
+        n[B_L + k].history = RING_CAP;
+    }
+    n[B_LX] = ysig_node_of(YSIG_OP_SELECT, B_L, -1);
+    n[B_LX].lanes = 1;
+    n[B_RY] = ysig_node_of(YSIG_OP_SELECT, B_R, -1);
+    n[B_RY].lanes = 1;
+    n[B_RY].p[0] = 1;
+    n[B_U] = mapping ? ysig_node_of(YSIG_OP_MEAN, B_L, B_R) : ysig_node_of(YSIG_OP_JOIN, B_LX, B_RY);
+    n[B_C] = ysig_node_of(YSIG_OP_AFFINE, B_U, -1);   /* P, per block */
+    n[B_C].history = RING_CAP;                        /* computed from the hands' rings at t */
+    n[B_U].history = RING_CAP;
+    n[B_EMIT] = ysig_node_of(YSIG_OP_EMIT, B_C, -1);
+    n[B_EMIT].p[0] = 7;                               /* YIN_KIND_USER + 7 */
+    n[B_SPEED] = ysig_node_of(YSIG_OP_SPEED, B_C, -1);
+    n[B_SPEED].p[0] = VEL_LAG_S;
+    n[B_AMP] = ysig_node_of(YSIG_OP_CHANNEL, -1, -1);
+    n[B_AMP].p[0] = AMP;
+    for (a = 0; a < 2; a++)
+        for (k = 0; k < N_SINES; k++) {
+            sines_data[(a * N_SINES + k) * 3] = amp_cm[a][k];
+            sines_data[(a * N_SINES + k) * 3 + 1] = freq_hz[a][k];
+            sines_data[(a * N_SINES + k) * 3 + 2] = phase[0][a][k];
+        }
+    n[B_SINES] = ysig_node_of(YSIG_OP_SINES, -1, -1);
+    n[B_SINES].lanes = 2;
+    n[B_SINES].p[0] = N_SINES;
+    n[B_SINES].data = sines_data;
+    n[B_SINES].n_data = 2 * N_SINES * 3;
+    n[B_TGT] = ysig_node_of(YSIG_OP_SCALE, B_SINES, B_AMP);   /* the ramp: the timeline's tween */
+    n[B_ERR] = ysig_node_of(YSIG_OP_DIFF, B_C, B_TGT);
+    n[B_INSIDE] = ysig_node_of(YSIG_OP_DETECT, B_ERR, -1);    /* the target's color */
+    n[B_INSIDE].p[0] = YSIG_TEST_LE;
+    n[B_INSIDE].p[1] = -1;
+    n[B_INSIDE].p[2] = TARGET_R;
+    n[B_INSIDE].p[5] = 1;                                     /* at each frame */
+    n[B_TPX] = ysig_node_of(YSIG_OP_AFFINE, B_TGT, -1);       /* px for drawing */
+    n[B_TPX].p[0] = ppc;
+    n[B_TPX].p[3] = -ppc;
+    n[B_TPX].p[6] = cx;
+    n[B_TPX].p[7] = cy;
+    n[B_BIND_T] = ysig_node_of(YSIG_OP_BIND, B_TPX, -1);
+    n[B_BIND_T].p[0] = CH_TGT_X;
+    memset(&d, 0, sizeof d);
+    d.nodes = n;
+    d.n_nodes = B_N;
+    d.channels = sig_ch;
+    d.n_channels = N_SIG_CH;
+    d.arena = sig_arena;
+    d.arena_size = sizeof sig_arena;
+    if (!ysig_open(&sg, &d)) { fprintf(stderr, "trial_bimanual: %s\n", ysig_error(&sg)); return false; }
+    return true;
+}
+
 /* The next trial from the session: a new block, or the block's next. */
 static int next_trial(const yscr_frame* f) {
     ytr_trial_info ti;
@@ -1050,6 +1110,7 @@ static int next_trial(const yscr_frame* f) {
         block_trial = block_reach = blk_fast = 0;
         blk_err = 0;
         pert_on = bpert[b];
+        set_graph_block(b);
         printf("block %d: %s%s\n", b, btype[b] ? "reaching" : "tracking", pert_on ? " (perturbed)" : "");
         if (is_script) {
             double z[2] = { 0, 0 };
@@ -1082,6 +1143,7 @@ int main(int argc, char** argv) {
     uint64_t seed = 20261106;
     int i, n, autorun = 0, fullscreen = 0, aborted = 0, total = 0, want_t = 0, want_r = 0, have_prev = 0;
     double rotation = ROTATION_DEG, cpi = CPI, ppc_arg = 0, peak[2] = { 0, 0 }, c_prev[2] = { 0, 0 };
+    gain = GAIN;
     int64_t prev_onset = 0;
     ygfx_stim tgt, cur, start, box[2];
 
@@ -1145,6 +1207,7 @@ int main(int argc, char** argv) {
         fprintf(stderr, "trial_bimanual: %d trials; at most %d\n", total, YTR_MAX_TRIALS);
         return 2;
     }
+    rot_deg = rotation;
     rot_rad = rotation * BM_PI / 180;
     /* a multiple of 20 s, so every frequency falls on a bin, starting at
      * least 1 s after the ramp */
@@ -1201,6 +1264,7 @@ int main(int argc, char** argv) {
                  "cm on the screen", NOMINAL_CM, ppc);
     }
     if (!is_script) yscr_window_call(&scr, grab_on_window, NULL);
+    if (!open_graph()) return 1;
 
     /* the stimuli, px from the top-left */
     {
@@ -1262,7 +1326,8 @@ int main(int argc, char** argv) {
     /* movement onset: the cursor (cm) 1 cm from the start's center */
     memset(&moved, 0, sizeof moved);
     moved.name = "moved";
-    moved.kind = YRSP_KIND_MOUSE;
+    moved.kind = YRSP_KIND_USER + 7;   /* the emit node's derived events */
+    moved.device = B_EMIT;
     moved.cross = YRSP_CROSS_DISTANCE;
     moved.control = YRSP_AXIS_POSITION;
     moved.level = (float)START_R;
@@ -1275,7 +1340,7 @@ int main(int argc, char** argv) {
     pd.n_sources = 1;
     pd.trace = trace;
     pd.trace_cap = TRACE_CAP;
-    pd.trace_kinds = YRSP_KIND_BIT(YRSP_KIND_MOUSE);
+    pd.trace_kinds = YRSP_KIND_BIT(YRSP_KIND_USER + 7);
     if (!yrsp_open(&rsp, &pd)) { fprintf(stderr, "trial_bimanual: %s\n", yrsp_error(&rsp)); return 1; }
 
     out = fopen(out_path, "w");
@@ -1345,7 +1410,7 @@ int main(int argc, char** argv) {
     for (;;) {
         SDL_Event ev;
         yrsp_input in;
-        double L[2], R[2], u[2], c[2] = { 0, 0 }, speed = 0;
+        double c[2] = { 0, 0 }, speed = 0;
         int rc = yscr_begin(&scr, &f), pass, ok = 1;
         if (rc == YSCR_QUIT) { aborted = 1; break; }
         if (rc != YSCR_OK) { fprintf(stderr, "trial_bimanual: %s\n", yscr_error(&scr)); failed = 1; break; }
@@ -1367,11 +1432,10 @@ int main(int argc, char** argv) {
             if (f.done[i].onset) dv.resid = fmax(dv.resid, fabs((double)(f.done[i].onset - fr[k].tp)));
         }
 
-        /* the cursor now: the start and hold tests read it once a frame */
+        /* the cursor at the frame's onset: the start and hold tests read it
+         * once a frame (the graph's value at t, with this block's P) */
         if (setup == 2) {
-            hand_cm(&hand[0], L);
-            hand_cm(&hand[1], R);
-            cursor_of(L, R, u, c);
+            value_at(B_C, f.onset, c);
             if (have_prev && f.onset > prev_onset)
                 speed = cabs2(c[0] - c_prev[0], c[1] - c_prev[1]) / YRT_TO_S(f.onset - prev_onset);
             have_prev = 1;
@@ -1447,6 +1511,13 @@ int main(int argc, char** argv) {
 
         n = ytl_evaluate(&tl, &(ytl_frame){ f.onset, f.period, f.index }, fired, 64);
         yrsp_set_landing(&rsp, fired, n, TARGET_ON);
+        {
+            /* the graph's frame: the target at the frame's base time, the
+             * ramp from the timeline, the binds */
+            int64_t bt = 0;
+            ytl_base_time(&tl, TRIAL, f.onset, &bt);
+            ysig_frame(&sg, &(ysig_frame_in){ f.index, f.onset, bt, ytl_values(&tl), N_CHANNELS });
+        }
         for (i = 0; i < n; i++)
             if (fired[i].kind == YTL_MARK && fired[i].code == END_OF_TRACK && state == S_T_MOVE) {
                 state = S_T_FINISH;
@@ -1456,10 +1527,10 @@ int main(int argc, char** argv) {
         if (state == S_T_MOVE) {
             /* the target on this frame: the sum at the frame's base time */
             frame_rec* r = &fr[n_fr];
-            int64_t bt = 0;
+            const ysig_value* tg = ysig_value_of(&sg, B_TGT);
             if (n_fr >= FRAME_CAP) { fprintf(stderr, "trial_bimanual: more frames than %d\n", FRAME_CAP); failed = 1; break; }
-            ytl_base_time(&tl, TRIAL, f.onset, &bt);
-            target_at(cur_block, YRT_TO_S(bt), ytl_values(&tl)[AMP], r->tg);
+            r->tg[0] = tg->v[0];
+            r->tg[1] = tg->v[1];
             r->index = f.index;
             r->tp = f.onset;
             r->ta = 0;
@@ -1477,10 +1548,12 @@ int main(int argc, char** argv) {
             ygfx_draw(&gfx, &box[1]);
         } else {
             if (state == S_T_WAIT || state == S_T_MOVE || state == S_T_FINISH) {
-                double tx = state == S_T_MOVE ? fr[n_fr - 1].tg[0] : 0, ty = state == S_T_MOVE ? fr[n_fr - 1].tg[1] : 0;
-                int inside = (c[0] - tx) * (c[0] - tx) + (c[1] - ty) * (c[1] - ty) <= TARGET_R * TARGET_R;
-                tgt.x = px_x(tx);
-                tgt.y = px_y(ty);
+                /* moving: the graph's target and its inside detect; else at
+                 * the center */
+                int inside = state == S_T_MOVE ? ysig_value_of(&sg, B_INSIDE)->v[0] != 0
+                                               : c[0] * c[0] + c[1] * c[1] <= TARGET_R * TARGET_R;
+                tgt.x = state == S_T_MOVE ? sig_ch[CH_TGT_X] : px_x(0);
+                tgt.y = state == S_T_MOVE ? sig_ch[CH_TGT_Y] : px_y(0);
                 tgt.w = tgt.h = (float)(2 * TARGET_R * ppc);
                 tgt.color[0] = inside ? 1.0f : 0.35f;
                 tgt.color[1] = inside ? 0.85f : 0.35f;
