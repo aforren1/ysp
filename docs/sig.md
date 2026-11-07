@@ -400,16 +400,27 @@ second-order low-pass, a velocity, two emits, a sample record, 7 + 7
 sines times a channel, a tracking error with a frame-rate detect, a
 distance detect, a bind).
 
-After the review fixes (2026-11-07), three runs pinned with `taskset` to
-a performance core (CPU 2) and one to an efficiency core (CPU 14). "Per
+After the second review's fixes (2026-11-07), one run pinned with
+`taskset` to a performance core (CPU 2) and one to an efficiency core (CPU
+14); the rows before them are the first review's, three runs on the P-core
+and one on the E-core. "Per
 sample" is a frame's feeds and the drains of its derived events and
 hits, over its 533 samples; "a frame" is 533 samples, two
 `ysig_value_at()` reads and one `ysig_frame()`.
 
 | Core | Per sample: mean, median, p99 | `ysig_frame()`: median, p99, max | Two `ysig_value_at()`: median, p99 | A frame, median |
 |---|---|---|---|---|
-| P-core | 128.2 to 128.4 ns, 127.4 to 127.6 ns, 158.5 to 163.6 ns | 274 to 277 ns, 499 to 846 ns, 1.77 to 2.45 us | 105 ns, 163 to 181 ns | 68.3 to 68.4 us |
-| E-core | 249.4 ns, 248.1 ns, 293.1 ns | 538 ns, 1.40 us, 3.15 us | 152 ns, 255 ns | 132.9 us |
+| P-core, first review | 128.2 to 128.4 ns, 127.4 to 127.6 ns, 158.5 to 163.6 ns | 274 to 277 ns, 499 to 846 ns, 1.77 to 2.45 us | 105 ns, 163 to 181 ns | 68.3 to 68.4 us |
+| E-core, first review | 249.4 ns, 248.1 ns, 293.1 ns | 538 ns, 1.40 us, 3.15 us | 152 ns, 255 ns | 132.9 us |
+| P-core, second review | 142.5 ns, 141.4 ns, 175.0 ns | 276 ns, 529 ns, 1.76 us | 107 ns, 193 ns | 75.7 us |
+| E-core, second review | 276.4 ns, 275.6 ns, 309.4 ns | 551 ns, 1.55 us, 3.16 us | 152 ns, 256 ns | 147.6 us |
+
+The second review's cost is the digest's finalizer: built with the plain
+xor-multiply step in its place, the same bench gave 130.6 and 130.8 ns a
+sample (median, two runs) against 141.0 and 143.6 ns with the
+finalizer, about 11 ns a sample for three digested values a sample (a
+record row and two derived events). The rest (the changed-input
+propagation, least-recently-used order slots) is about 3 ns.
 
 Before the fixes the same bench gave 129.4 to 129.8 ns a sample (median)
 on the P-core and 261.8 to 268.1 ns on the E-core. The fixes put derived
@@ -417,10 +428,11 @@ events, bound channels and frames into the digest: hashed a byte at a
 time, that took the P-core to 156 ns a sample (18% of the time in the
 digest, by `perf`); hashed a 64-bit word at a time, 127 ns. Unpinned, the
 scheduler puts the run on either kind of core. The worst median, 133 us a
-frame, is 0.8% of a 16.7 ms frame at 32,000 samples a second; the budget
+frame (148 us after the second review), is under 0.9% of a 16.7 ms frame
+at 32,000 samples a second; the budget
 (a trial's frame work in one frame) holds with room.
 
-The bench's arena is 1,643,872 bytes. Most of it is history: five rings
+The bench's arena is 1,644,384 bytes. Most of it is history: five rings
 of 4096 values of 64 bytes (the four hands and one cursor), 1,310,720
 bytes. The three velocity and speed rings of 256 values are 49,152
 bytes; the 32 nodes, their values and the schedules are the rest. Not measured: the
@@ -445,8 +457,9 @@ counts this program's allocator calls during the 60 s run (glibc).
   form, the schedules, the tier and `t_oldest` rule, the out-of-order
   drop, detectors, derived events, records, reset, replay bit for bit,
   values at a time, roles and adapters, a custom op, `ysig_set()`, a
-  golden digest, 40 refusals of bad graphs, and one test per item of the review
-  (`test_order`, `test_views`, `test_review`). It passes under ASan and UBSan
+  golden digest, 40 refusals of bad graphs, and one test per item of the
+  two reviews (`test_order`, `test_views`, `test_review`, `test_still`,
+  `test_review2`). It passes under ASan and UBSan
   (`setarch -R` on the Linux desktop) and as C++.
 - `tests/compile/sig.c` and `sig.cpp`: C99, C11 and C++17 with warnings
   as errors.
@@ -467,8 +480,12 @@ open refused, no replay that differed. One finding during the fixes: the
 default poll first came from every event fed, also those no source
 took; a journal holds only the taken ones, so a replay saw another poll
 and another view (fixed; mutant 68). The second review made the poll
-required, so there is no default now. FUZZ2
-- `tests/mutate/sig.toml`: MUT2
+required, so there is no default now. After it: 20,000,000 inputs (seed
+780, polls zeroed, early, at the newest event, at and past the onset) in
+9 min 6 s; 14,558,916 refused by `ysig_check()`, 5,440,151 graphs opened
+and ran (35.0 million events taken, 14.7 million rows, 0.97 million
+hits), no finding.
+- `tests/mutate/sig.toml`: 75 mutants and a control; 75 of 75 killed.
   Mutants 70 and 71 remove the saturation of time arithmetic; the test
   built with `-fsanitize=undefined` (the list's `sig_ubsan` test) catches
   them.
