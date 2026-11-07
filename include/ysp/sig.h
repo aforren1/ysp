@@ -223,10 +223,10 @@
  *
  *   STATUS: v0.1.0, 2026-11-07, Linux desktop (Debian 12, GCC 12.2):
  *   tests/adapt/sig_test.c, the compile checks (C99, C11, C++17), the
- *   fuzz target under ASan and UBSan (20 million inputs), 49 of 49
+ *   fuzz target under ASan and UBSan (20 million inputs), 70 of 70
  *   mutants killed, and trial_visuomotor and trial_bimanual ported onto
  *   it with byte-identical CI data files. Four raw mice at 8 kHz into 32
- *   nodes: 130 ns a sample and 0.3 us a ysig_frame() at the median on a
+ *   nodes: 127 ns a sample and 0.27 us a ysig_frame() at the median on a
  *   performance core of the i5-14500, no allocator call (docs/sig.md,
  *   "Cost"). Not run: MSVC, macOS, a window, a real device.
  *
@@ -1347,13 +1347,21 @@ static void ysig__digest(ysig_graph* g, const void* p, size_t n) {
     for (i = 0; i < n; i++) { h ^= b[i]; h *= 1099511628211ull; }
     g->st.digest = h;
 }
+/* A value a 64-bit word at a time: two derived events a sample made the
+ * byte-wise form 18% of the bench's time (docs/sig.md, "Cost"). */
+static void ysig__digest_word(ysig_graph* g, uint64_t w) {
+    g->st.digest = (g->st.digest ^ w) * 1099511628211ull;
+}
 static void ysig__digest_value(ysig_graph* g, const ysig_value* v) {
     int k;
-    ysig__digest(g, &v->t, sizeof v->t);
-    ysig__digest(g, &v->t_oldest, sizeof v->t_oldest);
-    ysig__digest(g, &v->tier, 1);
-    ysig__digest(g, &v->lanes, 1);
-    for (k = 0; k < v->lanes && k < 4; k++) ysig__digest(g, &v->v[k], sizeof(double));
+    ysig__digest_word(g, (uint64_t)v->t);
+    ysig__digest_word(g, (uint64_t)v->t_oldest);
+    ysig__digest_word(g, (uint64_t)v->tier | ((uint64_t)v->lanes << 8));
+    for (k = 0; k < v->lanes && k < 4; k++) {
+        uint64_t w;
+        memcpy(&w, &v->v[k], sizeof w);
+        ysig__digest_word(g, w);
+    }
 }
 
 static int64_t ysig__ns(double s) { return (int64_t)llround(s * 1e9); }

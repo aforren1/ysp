@@ -863,8 +863,8 @@ static void test_digest(void) {
         ysig_feed(&g, &e);
     }
     ysig_get_stats(&g, &st);
-    if (st.digest != 0xecf0e13dcc99cc1cull) fprintf(stderr, "  digest %016llx\n", (unsigned long long)st.digest);
-    CHECK(st.rows == 200 && st.digest == 0xecf0e13dcc99cc1cull);
+    if (st.digest != 0x72c6c0f9d51180c5ull) fprintf(stderr, "  digest %016llx\n", (unsigned long long)st.digest);
+    CHECK(st.rows == 200 && st.digest == 0x72c6c0f9d51180c5ull);
     /* derived events, bound channel values and frame onsets are in the
      * digest too: a graph without a record or a detect still has one */
     {

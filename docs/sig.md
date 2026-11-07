@@ -382,20 +382,30 @@ second-order low-pass, a velocity, two emits, a sample record, 7 + 7
 sines times a channel, a tracking error with a frame-rate detect, a
 distance detect, a bind).
 
-Three runs each, pinned with `taskset` to a performance core (CPU 2) and
-to an efficiency core (CPU 14). "Per sample" is a frame's feeds and the
-drains of its derived events and hits, over its 533 samples; "a frame" is
-533 samples, two `ysig_value_at()` reads and one `ysig_frame()`.
+After the review fixes (2026-11-07), three runs pinned with `taskset` to
+a performance core (CPU 2) and one to an efficiency core (CPU 14). "Per
+sample" is a frame's feeds and the drains of its derived events and
+hits, over its 533 samples; "a frame" is 533 samples, two
+`ysig_value_at()` reads and one `ysig_frame()`.
 
 | Core | Per sample: mean, median, p99 | `ysig_frame()`: median, p99, max | Two `ysig_value_at()`: median, p99 | A frame, median |
 |---|---|---|---|---|
-| P-core | 130.3 to 130.7 ns, 129.4 to 129.8 ns, 159.4 to 163.2 ns | 292 to 297 ns, 515 to 867 ns, 1.96 to 2.39 us | 102 ns, 146 to 163 ns | 69.4 to 69.6 us |
-| E-core | 262.5 to 268.8 ns, 261.8 to 268.1 ns, 289.1 to 296.9 ns | 582 to 599 ns, 1.44 to 1.61 us, 2.69 to 53.1 us | 150 to 155 ns, 235 to 264 ns | 140.3 to 143.7 us |
+| P-core | 128.2 to 128.4 ns, 127.4 to 127.6 ns, 158.5 to 163.6 ns | 274 to 277 ns, 499 to 846 ns, 1.77 to 2.45 us | 105 ns, 163 to 181 ns | 68.3 to 68.4 us |
+| E-core | 249.4 ns, 248.1 ns, 293.1 ns | 538 ns, 1.40 us, 3.15 us | 152 ns, 255 ns | 132.9 us |
 
-Unpinned, the scheduler put the run on either kind of core (one run at
-130 ns a sample, two at 250 ns). The worst median, 144 us a frame, is
-0.9% of a 16.7 ms frame at 32,000 samples a second; the budget (a
-trial's frame work in one frame) holds with room. Not measured: the
+Before the fixes the same bench gave 129.4 to 129.8 ns a sample (median)
+on the P-core and 261.8 to 268.1 ns on the E-core. The fixes put derived
+events, bound channels and frames into the digest: hashed a byte at a
+time, that took the P-core to 156 ns a sample (18% of the time in the
+digest, by `perf`); hashed a 64-bit word at a time, 127 ns. Unpinned, the
+scheduler puts the run on either kind of core. The worst median, 133 us a
+frame, is 0.8% of a 16.7 ms frame at 32,000 samples a second; the budget
+(a trial's frame work in one frame) holds with room.
+
+The bench's arena is 1,643,872 bytes. Most of it is history: five rings
+of 4096 values of 64 bytes (the four hands and one cursor), 1,310,720
+bytes. The three velocity and speed rings of 256 values are 49,152
+bytes; the 32 nodes, their values and the schedules are the rest. Not measured: the
 Windows development machine, Tracy zones per op.
 
 The first build scanned a velocity's ring linearly from the newest value:
@@ -417,22 +427,32 @@ counts this program's allocator calls during the 60 s run (glibc).
   form, the schedules, the tier and `t_oldest` rule, the out-of-order
   drop, detectors, derived events, records, reset, replay bit for bit,
   values at a time, roles and adapters, a custom op, `ysig_set()`, a
-  golden digest, and 25 refusals. It passes under ASan and UBSan
+  golden digest, 40 refusals of bad graphs, and one test per item of the review
+  (`test_order`, `test_views`, `test_review`). It passes under ASan and UBSan
   (`setarch -R` on the Linux desktop) and as C++.
 - `tests/compile/sig.c` and `sig.cpp`: C99, C11 and C++17 with warnings
   as errors.
 - `tests/fuzz/sig_fuzz.c`: arbitrary node arrays (and roles and adapters)
   into `ysig_check()` and `ysig_open()`, then every call on a graph that
-  opened, and a replay of its journal to the same digest. No libFuzzer
-here (clang is not installed on the Linux desktop): the self-driven
-mode (`-DYSP_FUZZ_SELF`) ran 20,000,000 inputs (seed 777: random
-bytes, mutated seeds, and random graphs in the decoder's form) under
-ASan and UBSan with GCC 12.2 and `setarch -R`, in 9 min 28 s.
-14,537,934 were refused by `ysig_check()`; 5,461,054 graphs opened and
-ran, with 50.7 million events taken, 24.0 million rows and 2.5 million
-hits. No sanitizer report, no graph that the check passed and the open
-refused, no replay that differed.
-- `tests/mutate/sig.toml`: MUTANT_RESULT
+  opened, and a replay of its journal to the same digest. It also feeds
+times at the ends of int64, twelve devices on a source (more than its
+eight order slots) and frames with polls before, at and after the
+onset. No libFuzzer here (clang is not installed on the Linux desktop):
+the self-driven mode (`-DYSP_FUZZ_SELF`) ran under ASan and UBSan with
+GCC 12.2 and `setarch -R`. Before the review: 20,000,000 inputs (seed
+777) in 9 min 28 s, no finding. After it: 20,000,000 inputs (seed 778)
+in 9 min 27 s; 14,565,670 refused by `ysig_check()`, 5,433,396 graphs
+opened and ran (35.0 million events taken, 14.7 million rows, 0.97
+million hits); then 2,000,000 more (seed 779) after the word-wise
+digest. No sanitizer report, no graph that the check passed and the
+open refused, no replay that differed. One finding during the fixes: the
+default poll first came from every event fed, also those no source
+took; a journal holds only the taken ones, so a replay saw another poll
+and another view (fixed; mutant 68).
+- `tests/mutate/sig.toml`: 70 mutants and a control; 70 of 70 killed.
+  Mutants 70 and 71 remove the saturation of time arithmetic; the test
+  built with `-fsanitize=undefined` (the list's `sig_ubsan` test) catches
+  them.
 
 ## Not done
 
