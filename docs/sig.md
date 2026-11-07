@@ -338,8 +338,9 @@ data file, so the files keep their bytes.
 
 ### Cost
 
-On the Linux desktop (i5-14500, Debian 12, GCC 12.2 at `-O3`, Release,
-nothing else running), `examples/sig/bench.c` runs 60 s of input: four raw
+On the Linux desktop (i5-14500, Debian 12, liquorix 6.11, GCC 12.2 at
+`-O3`, Release, nothing else running, 2026-11-07), `examples/sig/bench.c`
+runs 60 s of input: four raw
 mice at 8 kHz each into a 32-node graph (the visuomotor and bimanual
 graphs side by side, widened: four integrators, four hands in cm with
 rings of 4096, a split mapping and a mean, two cursors, two speeds, a
@@ -347,13 +348,28 @@ second-order low-pass, a velocity, two emits, a sample record, 7 + 7
 sines times a channel, a tracking error with a frame-rate detect, a
 distance detect, a bind).
 
-MEASUREMENT_TABLE
+Three runs each, pinned with `taskset` to a performance core (CPU 2) and
+to an efficiency core (CPU 14). "Per sample" is a frame's feeds and the
+drains of its derived events and hits, over its 533 samples; "a frame" is
+533 samples, two `ysig_value_at()` reads and one `ysig_frame()`.
+
+| Core | Per sample: mean, median, p99 | `ysig_frame()`: median, p99, max | Two `ysig_value_at()`: median, p99 | A frame, median |
+|---|---|---|---|---|
+| P-core | 130.3 to 130.7 ns, 129.4 to 129.8 ns, 159.4 to 163.2 ns | 292 to 297 ns, 515 to 867 ns, 1.96 to 2.39 us | 102 ns, 146 to 163 ns | 69.4 to 69.6 us |
+| E-core | 262.5 to 268.8 ns, 261.8 to 268.1 ns, 289.1 to 296.9 ns | 582 to 599 ns, 1.44 to 1.61 us, 2.69 to 53.1 us | 150 to 155 ns, 235 to 264 ns | 140.3 to 143.7 us |
+
+Unpinned, the scheduler put the run on either kind of core (one run at
+130 ns a sample, two at 250 ns). The worst median, 144 us a frame, is
+0.9% of a 16.7 ms frame at 32,000 samples a second; the budget (a
+trial's frame work in one frame) holds with room. Not measured: the
+Windows development machine, Tracy zones per op.
 
 The first build scanned a velocity's ring linearly from the newest value:
-at 16 kHz into one node and a 10 ms lag, 160 values a sample, and the run
-measured 459.6 ns a sample (mean, 10 s of input; `perf` put 73% of the
-time in `ysig__run`). The ring is in time order, so a bisection finds the
-same value: 134.7 ns a sample on the same run. The ring now keeps a value
+at 16 kHz into one node and a 10 ms lag, 160 values a sample. `perf` put
+73% of the time in `ysig__run`. The ring is in time order, so a bisection
+finds the same value. On the P-core, three runs each of the same bench:
+454.3 to 456.7 ns a sample (mean) with the scan, 130.3 to 130.5 ns with
+the bisection. The ring now keeps a value
 only when it is not older than its newest (two sources out of order), so
 the bisection stays correct.
 
@@ -373,7 +389,15 @@ counts this program's allocator calls during the 60 s run (glibc).
   as errors.
 - `tests/fuzz/sig_fuzz.c`: arbitrary node arrays (and roles and adapters)
   into `ysig_check()` and `ysig_open()`, then every call on a graph that
-  opened, and a replay of its journal to the same digest. FUZZ_RESULT
+  opened, and a replay of its journal to the same digest. No libFuzzer
+here (clang is not installed on the Linux desktop): the self-driven
+mode (`-DYSP_FUZZ_SELF`) ran 20,000,000 inputs (seed 777: random
+bytes, mutated seeds, and random graphs in the decoder's form) under
+ASan and UBSan with GCC 12.2 and `setarch -R`, in 9 min 28 s.
+14,537,934 were refused by `ysig_check()`; 5,461,054 graphs opened and
+ran, with 50.7 million events taken, 24.0 million rows and 2.5 million
+hits. No sanitizer report, no graph that the check passed and the open
+refused, no replay that differed.
 - `tests/mutate/sig.toml`: 49 mutants and a control; 49 of 49 killed.
 
 ## Not done

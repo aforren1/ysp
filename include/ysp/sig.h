@@ -199,9 +199,12 @@
  *
  *   STATUS: v0.1.0, 2026-11-07, Linux desktop (Debian 12, GCC 12.2):
  *   tests/adapt/sig_test.c, the compile checks (C99, C11, C++17), the
- *   fuzz target under ASan and UBSan, the mutation list, and
- *   trial_visuomotor and trial_bimanual ported onto it (docs/sig.md).
- *   Not run: MSVC, macOS, a window, a real device.
+ *   fuzz target under ASan and UBSan (20 million inputs), 49 of 49
+ *   mutants killed, and trial_visuomotor and trial_bimanual ported onto
+ *   it with byte-identical CI data files. Four raw mice at 8 kHz into 32
+ *   nodes: 130 ns a sample and 0.3 us a ysig_frame() at the median on a
+ *   performance core of the i5-14500, no allocator call (docs/sig.md,
+ *   "Cost"). Not run: MSVC, macOS, a window, a real device.
  *
  *   ---------------------------------------------------------------------
  *   LICENSE: public domain / MIT-0, see end of file.
