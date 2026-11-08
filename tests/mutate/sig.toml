@@ -784,3 +784,11 @@ test = "sig"
 why = "mean shares sum's table; w.0 is input 1's weight."
 find = 'enum { YSIG_MEAN_W_0 = 0, YSIG_MEAN_W_1, YSIG_MEAN_W_2, YSIG_MEAN_W_3 };'
 replace = 'enum { YSIG_MEAN_W_0 = 1, YSIG_MEAN_W_1, YSIG_MEAN_W_2, YSIG_MEAN_W_3 };'
+
+[[mutant]]
+id = "94"
+name = "YSIG_NODE: the unused inputs 0, not -1"
+test = "sig"
+why = "Input 0 is a real node; an unused input left at 0 would wire every node to the graph's first."
+find = '(int16_t)(in1_), -1, -1 }'
+replace = '(int16_t)(in1_), 0, 0 }'

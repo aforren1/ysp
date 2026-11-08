@@ -1532,6 +1532,29 @@ static void f_row(void* user, const ysig_row* r);
 static yin_event pen3(int64_t t, int dev, float v) {
     return axis(t, YIN_KIND_PEN, YIN_AXIS_POSITION, dev, v, 0, v, YIN_TIER_SIM);
 }
+#ifndef __cplusplus
+/* YSIG_NODE must build what ysig_node_of() and assignments build: the two
+ * unused inputs -1 (0 is a real node), every field not named zero. */
+static void test_node_macro(void) {
+    static const double data[3] = { 1, 2, 3 };
+    ysig_node a = ysig_node_of(YSIG_OP_DETECT, 3, -1), b;
+    int i;
+    a.p[YSIG_DETECT_LEVEL] = 12;
+    a.p[YSIG_DETECT_HOLD] = 0.5;
+    a.name = "hold";
+    a.lanes = 1;
+    a.history = 8;
+    a.data = data;
+    a.n_data = 3;
+    b = YSIG_NODE(YSIG_OP_DETECT, 3, -1, .name = "hold", .lanes = 1, .history = 8, .data = data, .n_data = 3,
+                  .p = { [YSIG_DETECT_LEVEL] = 12, [YSIG_DETECT_HOLD] = 0.5 });
+    CHECK(b.op == a.op && b.lanes == a.lanes && b.history == a.history);
+    CHECK(b.data == a.data && b.n_data == a.n_data && !strcmp(b.name, a.name));
+    for (i = 0; i < 4; i++) CHECK(b.in[i] == a.in[i]);
+    for (i = 0; i < YSIG_NP; i++) CHECK(b.p[i] == a.p[i]);
+}
+#endif
+
 static void test_review3(void) {
     ysig_node n[5];
     ysig_desc d;
@@ -2153,6 +2176,9 @@ int main(void) {
     test_still();
     test_review2();
     test_review3();
+#ifndef __cplusplus
+    test_node_macro();
+#endif
     test_review();
     if (g_failures) { fprintf(stderr, "sig_test: %d failures\n", g_failures); return 1; }
     printf("sig_test: all checks passed\n");

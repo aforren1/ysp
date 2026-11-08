@@ -24,6 +24,14 @@ A graph is an array of nodes. Each input comes before its user.
 name: `YSIG_<OP>_<ROW>` is the row of that name in the op's table
 ([Ops](#ops)).
 
+In C, `YSIG_NODE()` writes one node in one expression; the examples use
+it. This tutorial assigns the fields one by one, which also works in C++:
+
+```c
+n[HOLD] = YSIG_NODE(YSIG_OP_DETECT, HAND, -1, .name = "hold", .p = {
+    [YSIG_DETECT_LEVEL] = 12, [YSIG_DETECT_HOLD] = 0.5 });
+```
+
 ```c
 #define YSP_SIG_IMPLEMENTATION
 #include "ysp/sig.h"
@@ -526,7 +534,7 @@ bind's input after it. After the third review: 20,000,000 inputs (seed
 781) in 9 min 33 s; 14,562,777 refused by `ysig_check()`, 5,436,289
 graphs opened and ran (35.0 million events taken, 14.7 million rows,
 0.97 million hits), no finding.
-- `tests/mutate/sig.toml`: 92 mutants and a control; 92 of 92 killed.
+- `tests/mutate/sig.toml`: 93 mutants and a control; 93 of 93 killed.
   Mutants 89 to 93 move a name off its row (a swap, a gap, the shared
   tables of `speed` and `mean`).
   Mutants 70 and 71 remove the saturation of time arithmetic; the test

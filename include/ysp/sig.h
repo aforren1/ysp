@@ -251,7 +251,7 @@
  *
  *   STATUS: v0.1.0, 2026-11-07, Linux desktop (Debian 12, GCC 12.2):
  *   tests/adapt/sig_test.c, the compile checks (C99, C11, C++17), the
- *   fuzz target under ASan and UBSan (20 million inputs), 92 of 92
+ *   fuzz target under ASan and UBSan (20 million inputs), 93 of 93
  *   mutants killed (89 to 93: the p[] names), and trial_visuomotor and
  *   trial_bimanual ported onto it with byte-identical CI data files (and
  *   again, set by name). Four raw mice at 8 kHz into 32
@@ -561,6 +561,16 @@ static inline ysig_node ysig_node_of(int op, int in0, int in1) {
     n.in[2] = n.in[3] = -1;
     return n;
 }
+
+/* One node in one C expression. The trailing arguments are designated
+ * initializers of ysig_node, so a graph reads node by node:
+ *     n[HOLD] = YSIG_NODE(YSIG_OP_DETECT, HAND, -1, .name = "hold", .p = {
+ *         [YSIG_DETECT_LEVEL] = 12, [YSIG_DETECT_HOLD] = 0.5 });
+ * Fields not named are zero, as after ysig_node_of(). At least one must be
+ * named; a node with none is ysig_node_of(). C only: C++ has no array
+ * designators, so C++ uses ysig_node_of() and assigns. */
+#define YSIG_NODE(op_, in0_, in1_, ...) \
+    ((ysig_node){ .op = (uint16_t)(op_), .in = { (int16_t)(in0_), (int16_t)(in1_), -1, -1 }, __VA_ARGS__ })
 
 YSIG_API const char* ysig_version(void);
 

@@ -64,6 +64,9 @@ int main(void) {
     n[1].p[YSIG_INTEGRATE_GAIN_X] = 1;
     n[2] = ysig_node_of(YSIG_OP_BIND, 1, -1);
     n[2].p[YSIG_BIND_CHANNEL] = 0;
+#ifndef __cplusplus
+    n[2] = YSIG_NODE(YSIG_OP_BIND, 1, -1, .p = { [YSIG_BIND_CHANNEL] = 0 });
+#endif
     d.nodes = n;
     d.n_nodes = 3;
     d.channels = ch;

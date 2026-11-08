@@ -316,64 +316,61 @@ static void pointer(const yrsp_input* ev) {
         }
 }
 
-/* The graph: the task's nodes on the role "hand", and the adapter of the
- * input path. A node's p[] are the rows of ysig_op_params(), by name
+/* The task's part of the graph: it reads the role "hand" and knows nothing
+ * of the device. A node's p[] are the rows of ysig_op_params(), by name
  * (docs/sig.md, "Ops"). */
-static bool open_graph(void) {
+static void task_nodes(void) {
+    ysig_node* n = exp_nodes;
+    n[N_HAND] = ysig_node_of(YSIG_OP_ROLE, -1, -1);
+    n[N_CUR] = YSIG_NODE(YSIG_OP_AFFINE, N_HAND, -1, .p = {     /* turned about the start */
+        [YSIG_AFFINE_PRE_X] = sx, [YSIG_AFFINE_POST_X] = sx,
+        [YSIG_AFFINE_PRE_Y] = sy, [YSIG_AFFINE_POST_Y] = sy });
+    n[N_TRACE] = ysig_node_of(YSIG_OP_JOIN, N_HAND, N_CUR);
+    n[N_REC] = YSIG_NODE(YSIG_OP_RECORD, N_TRACE, -1, .name = "trace");
+    n[N_EMIT] = YSIG_NODE(YSIG_OP_EMIT, N_HAND, -1, .p = {
+        [YSIG_EMIT_KIND] = 7 });                                /* YIN_KIND_USER + 7 */
+    n[N_HOLD] = YSIG_NODE(YSIG_OP_DETECT, N_HAND, -1, .p = {    /* in the start for HOLD_S */
+        [YSIG_DETECT_TEST] = YSIG_TEST_LE, [YSIG_DETECT_LANE] = -1,   /* the norm of hand - center */
+        [YSIG_DETECT_LEVEL] = START_R, [YSIG_DETECT_HOLD] = HOLD_S,
+        [YSIG_DETECT_A_X] = sx, [YSIG_DETECT_A_Y] = sy });
+    n[N_REACH] = YSIG_NODE(YSIG_OP_DETECT, N_HAND, -1, .p = {   /* past the target radius */
+        [YSIG_DETECT_TEST] = YSIG_TEST_GE, [YSIG_DETECT_LANE] = -1,
+        [YSIG_DETECT_LEVEL] = radius, [YSIG_DETECT_START] = 1,  /* armed at the hold's end */
+        [YSIG_DETECT_A_X] = sx, [YSIG_DETECT_A_Y] = sy });
+    n[N_BIND_CUR] = YSIG_NODE(YSIG_OP_BIND, N_CUR, -1, .p = { [YSIG_BIND_CHANNEL] = CH_CUR_X });
+    n[N_BIND_HAND] = YSIG_NODE(YSIG_OP_BIND, N_HAND, -1, .p = { [YSIG_BIND_CHANNEL] = CH_HAND_X });
+}
+
+/* The rig's part: the adapter that makes the role "hand" from this run's
+ * input device. */
+static ysig_adapter input_adapter(void) {
     ysig_adapter ad = { .role = "hand", .units = YSIG_UNITS_DISPLAY_PX, .nodes = ad_nodes, .n_nodes = 1 };
-    int k;
-    for (k = 0; k < N_EXP; k++) exp_nodes[k] = ysig_node_of(YSIG_OP_NONE, -1, -1);
-    exp_nodes[N_HAND] = ysig_node_of(YSIG_OP_ROLE, -1, -1);
-    exp_nodes[N_CUR] = ysig_node_of(YSIG_OP_AFFINE, N_HAND, -1);    /* turned about the start */
-    exp_nodes[N_CUR].p[YSIG_AFFINE_PRE_X] = exp_nodes[N_CUR].p[YSIG_AFFINE_POST_X] = sx;
-    exp_nodes[N_CUR].p[YSIG_AFFINE_PRE_Y] = exp_nodes[N_CUR].p[YSIG_AFFINE_POST_Y] = sy;
-    exp_nodes[N_TRACE] = ysig_node_of(YSIG_OP_JOIN, N_HAND, N_CUR);
-    exp_nodes[N_REC] = ysig_node_of(YSIG_OP_RECORD, N_TRACE, -1);
-    exp_nodes[N_REC].name = "trace";
-    exp_nodes[N_EMIT] = ysig_node_of(YSIG_OP_EMIT, N_HAND, -1);
-    exp_nodes[N_EMIT].p[YSIG_EMIT_KIND] = 7;                         /* YIN_KIND_USER + 7 */
-    exp_nodes[N_HOLD] = ysig_node_of(YSIG_OP_DETECT, N_HAND, -1);   /* in the start for HOLD_S */
-    exp_nodes[N_HOLD].p[YSIG_DETECT_TEST] = YSIG_TEST_LE;
-    exp_nodes[N_HOLD].p[YSIG_DETECT_LANE] = -1;                     /* the norm of hand - center */
-    exp_nodes[N_HOLD].p[YSIG_DETECT_LEVEL] = START_R;
-    exp_nodes[N_HOLD].p[YSIG_DETECT_HOLD] = HOLD_S;
-    exp_nodes[N_HOLD].p[YSIG_DETECT_A_X] = sx;
-    exp_nodes[N_HOLD].p[YSIG_DETECT_A_Y] = sy;
-    exp_nodes[N_REACH] = ysig_node_of(YSIG_OP_DETECT, N_HAND, -1);  /* past the target radius */
-    exp_nodes[N_REACH].p[YSIG_DETECT_TEST] = YSIG_TEST_GE;
-    exp_nodes[N_REACH].p[YSIG_DETECT_LANE] = -1;
-    exp_nodes[N_REACH].p[YSIG_DETECT_LEVEL] = radius;
-    exp_nodes[N_REACH].p[YSIG_DETECT_START] = 1;                    /* armed at the hold's end */
-    exp_nodes[N_REACH].p[YSIG_DETECT_A_X] = sx;
-    exp_nodes[N_REACH].p[YSIG_DETECT_A_Y] = sy;
-    exp_nodes[N_BIND_CUR] = ysig_node_of(YSIG_OP_BIND, N_CUR, -1);
-    exp_nodes[N_BIND_CUR].p[YSIG_BIND_CHANNEL] = CH_CUR_X;
-    exp_nodes[N_BIND_HAND] = ysig_node_of(YSIG_OP_BIND, N_HAND, -1);
-    exp_nodes[N_BIND_HAND].p[YSIG_BIND_CHANNEL] = CH_HAND_X;
-    ad_nodes[0] = ysig_node_of(YSIG_OP_SOURCE, -1, -1);
-    ad_nodes[0].lanes = 2;
     if (opt.input == IN_RAW) {
         /* counts integrated from the start, held inside the window */
         ad.name = "raw mouse";
         ad.type = YSIG_TYPE_POSITION2D_RELATIVE;
-        ad_nodes[0].p[YSIG_SOURCE_KIND] = YIN_KIND_MOUSE;
-        ad_nodes[0].p[YSIG_SOURCE_CONTROL] = YIN_AXIS_DELTA;
-        ad_nodes[0].p[YSIG_SOURCE_TIER] = yin_raw_mouse_source().tier;
-        ad_nodes[1] = ysig_node_of(YSIG_OP_INTEGRATE, 0, -1);
-        ad_nodes[1].p[YSIG_INTEGRATE_GAIN_X] = ad_nodes[1].p[YSIG_INTEGRATE_GAIN_Y] = opt.gain;
-        ad_nodes[1].p[YSIG_INTEGRATE_ORIGIN_X] = sx;
-        ad_nodes[1].p[YSIG_INTEGRATE_ORIGIN_Y] = sy;
-        ad_nodes[1].p[YSIG_INTEGRATE_HIGH_X] = W;    /* [0, W] x [0, H]: the count sum stays in the window */
-        ad_nodes[1].p[YSIG_INTEGRATE_HIGH_Y] = H;
         ad.n_nodes = 2;
+        ad_nodes[0] = YSIG_NODE(YSIG_OP_SOURCE, -1, -1, .lanes = 2, .p = {
+            [YSIG_SOURCE_KIND] = YIN_KIND_MOUSE, [YSIG_SOURCE_CONTROL] = YIN_AXIS_DELTA,
+            [YSIG_SOURCE_TIER] = yin_raw_mouse_source().tier });
+        ad_nodes[1] = YSIG_NODE(YSIG_OP_INTEGRATE, 0, -1, .p = {
+            [YSIG_INTEGRATE_GAIN_X] = opt.gain, [YSIG_INTEGRATE_GAIN_Y] = opt.gain,
+            [YSIG_INTEGRATE_ORIGIN_X] = sx, [YSIG_INTEGRATE_ORIGIN_Y] = sy,
+            [YSIG_INTEGRATE_HIGH_X] = W, [YSIG_INTEGRATE_HIGH_Y] = H });   /* the count sum stays in the window */
     } else {
         int kind = opt.input == IN_PEN ? YIN_KIND_PEN : YIN_KIND_MOUSE;
         ad.name = opt.input == IN_PEN ? "tablet pen" : "SDL pointer";
         ad.type = YSIG_TYPE_POSITION2D;
-        ad_nodes[0].p[YSIG_SOURCE_KIND] = kind;
-        ad_nodes[0].p[YSIG_SOURCE_CONTROL] = YIN_AXIS_POSITION;
-        ad_nodes[0].p[YSIG_SOURCE_TIER] = yin_sdl_source(NULL, kind).tier;
+        ad_nodes[0] = YSIG_NODE(YSIG_OP_SOURCE, -1, -1, .lanes = 2, .p = {
+            [YSIG_SOURCE_KIND] = kind, [YSIG_SOURCE_CONTROL] = YIN_AXIS_POSITION,
+            [YSIG_SOURCE_TIER] = yin_sdl_source(NULL, kind).tier });
     }
+    return ad;
+}
+
+static bool open_graph(void) {
+    ysig_adapter ad = input_adapter();
+    task_nodes();
     /* relative: the hand is placed on the start at the first trial */
     if (!ysig_open(&sg, &(ysig_desc){ .nodes = exp_nodes, .n_nodes = N_EXP,
                                       .roles = &(ysig_role){ .name = "hand", .type = YSIG_TYPE_POSITION2D,

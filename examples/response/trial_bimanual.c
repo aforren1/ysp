@@ -1029,59 +1029,41 @@ static bool open_graph(void) {
     ysig_desc d;
     int k, a;
     for (k = 0; k < 2; k++) {
-        n[B_SRC_L + k] = ysig_node_of(YSIG_OP_SOURCE, -1, -1);
-        n[B_SRC_L + k].lanes = 2;
-        n[B_SRC_L + k].p[YSIG_SOURCE_KIND] = YIN_KIND_MOUSE;
-        n[B_SRC_L + k].p[YSIG_SOURCE_CONTROL] = YIN_AXIS_DELTA;
-        n[B_SRC_L + k].p[YSIG_SOURCE_DEVICE] = 4294967295.0;   /* no mouse until the setup names it */
-        n[B_SRC_L + k].p[YSIG_SOURCE_TIER] = yin_raw_mouse_source().tier;
-        n[B_LPX + k] = ysig_node_of(YSIG_OP_INTEGRATE, B_SRC_L + k, -1);   /* px, from (W, H) */
-        n[B_LPX + k].p[YSIG_INTEGRATE_GAIN_X] = n[B_LPX + k].p[YSIG_INTEGRATE_GAIN_Y] = gain;
-        n[B_LPX + k].p[YSIG_INTEGRATE_ORIGIN_X] = W;
-        n[B_LPX + k].p[YSIG_INTEGRATE_ORIGIN_Y] = H;
-        n[B_LPX + k].p[YSIG_INTEGRATE_HIGH_X] = 2 * (double)W;   /* a hand stops at the window's size from there */
-        n[B_LPX + k].p[YSIG_INTEGRATE_HIGH_Y] = 2 * (double)H;
-        n[B_L + k] = ysig_node_of(YSIG_OP_AFFINE, B_LPX + k, -1);          /* cm, y up */
-        n[B_L + k].p[YSIG_AFFINE_M_XX] = 1 / ppc;
-        n[B_L + k].p[YSIG_AFFINE_M_YY] = -1 / ppc;
-        n[B_L + k].p[YSIG_AFFINE_PRE_X] = W;
-        n[B_L + k].p[YSIG_AFFINE_PRE_Y] = H;
-        n[B_L + k].history = RING_CAP;
+        n[B_SRC_L + k] = YSIG_NODE(YSIG_OP_SOURCE, -1, -1, .lanes = 2, .p = {
+            [YSIG_SOURCE_KIND] = YIN_KIND_MOUSE, [YSIG_SOURCE_CONTROL] = YIN_AXIS_DELTA,
+            [YSIG_SOURCE_DEVICE] = 4294967295.0,   /* no mouse until the setup names it */
+            [YSIG_SOURCE_TIER] = yin_raw_mouse_source().tier });
+        n[B_LPX + k] = YSIG_NODE(YSIG_OP_INTEGRATE, B_SRC_L + k, -1, .p = {   /* px, from (W, H) */
+            [YSIG_INTEGRATE_GAIN_X] = gain, [YSIG_INTEGRATE_GAIN_Y] = gain,
+            [YSIG_INTEGRATE_ORIGIN_X] = W, [YSIG_INTEGRATE_ORIGIN_Y] = H,
+            [YSIG_INTEGRATE_HIGH_X] = 2 * (double)W,   /* a hand stops at the window's size from there */
+            [YSIG_INTEGRATE_HIGH_Y] = 2 * (double)H });
+        n[B_L + k] = YSIG_NODE(YSIG_OP_AFFINE, B_LPX + k, -1, .history = RING_CAP, .p = {   /* cm, y up */
+            [YSIG_AFFINE_M_XX] = 1 / ppc, [YSIG_AFFINE_M_YY] = -1 / ppc,
+            [YSIG_AFFINE_PRE_X] = W, [YSIG_AFFINE_PRE_Y] = H });
     }
-    n[B_LX] = ysig_node_of(YSIG_OP_SELECT, B_L, -1);
-    n[B_LX].lanes = 1;
-    n[B_RY] = ysig_node_of(YSIG_OP_SELECT, B_R, -1);
-    n[B_RY].lanes = 1;
-    n[B_RY].p[YSIG_SELECT_LANE_X] = 1;   /* R's y */
-    n[B_U] = mapping ? ysig_node_of(YSIG_OP_MEAN, B_L, B_R) : ysig_node_of(YSIG_OP_JOIN, B_LX, B_RY);
-    n[B_C] = ysig_node_of(YSIG_OP_AFFINE, B_U, -1);   /* P, per block */
-    n[B_C].history = RING_CAP;                        /* computed from the hands' rings at t */
-    n[B_U].history = RING_CAP;
-    n[B_EMIT] = ysig_node_of(YSIG_OP_EMIT, B_C, -1);
-    n[B_EMIT].p[YSIG_EMIT_KIND] = 7;                  /* YIN_KIND_USER + 7 */
-    n[B_SPEED] = ysig_node_of(YSIG_OP_SPEED, B_C, -1);
-    n[B_SPEED].p[YSIG_SPEED_LAG] = VEL_LAG_S;
-    n[B_AMP] = ysig_node_of(YSIG_OP_CHANNEL, -1, -1);
-    n[B_AMP].p[YSIG_CHANNEL_CHANNEL] = AMP;
+    n[B_LX] = YSIG_NODE(YSIG_OP_SELECT, B_L, -1, .lanes = 1);
+    n[B_RY] = YSIG_NODE(YSIG_OP_SELECT, B_R, -1, .lanes = 1, .p = { [YSIG_SELECT_LANE_X] = 1 });   /* R's y */
+    n[B_U] = mapping ? YSIG_NODE(YSIG_OP_MEAN, B_L, B_R, .history = RING_CAP)
+                     : YSIG_NODE(YSIG_OP_JOIN, B_LX, B_RY, .history = RING_CAP);
+    /* P, per block; history: computed from the hands' rings at t */
+    n[B_C] = YSIG_NODE(YSIG_OP_AFFINE, B_U, -1, .history = RING_CAP);
+    n[B_EMIT] = YSIG_NODE(YSIG_OP_EMIT, B_C, -1, .p = { [YSIG_EMIT_KIND] = 7 });   /* YIN_KIND_USER + 7 */
+    n[B_SPEED] = YSIG_NODE(YSIG_OP_SPEED, B_C, -1, .p = { [YSIG_SPEED_LAG] = VEL_LAG_S });
+    n[B_AMP] = YSIG_NODE(YSIG_OP_CHANNEL, -1, -1, .p = { [YSIG_CHANNEL_CHANNEL] = AMP });
     for (a = 0; a < 2; a++)
         for (k = 0; k < N_SINES; k++) {
             sines_data[(a * N_SINES + k) * 3] = amp_cm[a][k];
             sines_data[(a * N_SINES + k) * 3 + 1] = freq_hz[a][k];
             sines_data[(a * N_SINES + k) * 3 + 2] = phase[0][a][k];
         }
-    n[B_SINES] = ysig_node_of(YSIG_OP_SINES, -1, -1);
-    n[B_SINES].lanes = 2;
-    n[B_SINES].p[YSIG_SINES_N] = N_SINES;
-    n[B_SINES].data = sines_data;
-    n[B_SINES].n_data = 2 * N_SINES * 3;
+    n[B_SINES] = YSIG_NODE(YSIG_OP_SINES, -1, -1, .lanes = 2, .data = sines_data, .n_data = 2 * N_SINES * 3,
+                           .p = { [YSIG_SINES_N] = N_SINES });
     n[B_TGT] = ysig_node_of(YSIG_OP_SCALE, B_SINES, B_AMP);   /* the ramp: the timeline's tween */
-    n[B_TPX] = ysig_node_of(YSIG_OP_AFFINE, B_TGT, -1);       /* px for drawing */
-    n[B_TPX].p[YSIG_AFFINE_M_XX] = ppc;
-    n[B_TPX].p[YSIG_AFFINE_M_YY] = -ppc;
-    n[B_TPX].p[YSIG_AFFINE_POST_X] = cx;
-    n[B_TPX].p[YSIG_AFFINE_POST_Y] = cy;
-    n[B_BIND_T] = ysig_node_of(YSIG_OP_BIND, B_TPX, -1);
-    n[B_BIND_T].p[YSIG_BIND_CHANNEL] = CH_TGT_X;
+    n[B_TPX] = YSIG_NODE(YSIG_OP_AFFINE, B_TGT, -1, .p = {    /* px for drawing */
+        [YSIG_AFFINE_M_XX] = ppc, [YSIG_AFFINE_M_YY] = -ppc,
+        [YSIG_AFFINE_POST_X] = cx, [YSIG_AFFINE_POST_Y] = cy });
+    n[B_BIND_T] = YSIG_NODE(YSIG_OP_BIND, B_TPX, -1, .p = { [YSIG_BIND_CHANNEL] = CH_TGT_X });
     memset(&d, 0, sizeof d);
     d.nodes = n;
     d.n_nodes = B_N;
