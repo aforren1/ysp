@@ -292,11 +292,16 @@ def do_oddball(a, ex):
     events = read_csv(os.path.join(p, "events.csv"))
     frames = read_csv(os.path.join(p, "frames.csv"))
     planned = {r["frame"]: r["planned_s"] for r in frames}
-    outs = [e for e in events if e["kind"] == "out"]
+    outs = [e for e in events if e["kind"] == "out" and e["code"] in ("1", "2")]
+    resp_outs = [e for e in events if e["kind"] == "out" and e["code"] not in ("1", "2")]
+    want = {"left": "101", "right": "102"}
+    resp_ok = len(resp_outs) == len(rows) and all(e["code"] == want[r["response"]] for e, r in zip(resp_outs, rows))
+    report_resp = ("response.trigger: code by the response (101, 102)", "%d/%d" % (len(resp_outs), len(rows)), "exact" if resp_ok else "FAIL", "out rows with the choice's code; --sim sends from the frame, not a device rule")
     bad = 0
     report = []
-    n_trig_ok = sum(1 for r in rows if r["trig_n"] == "1" and r["trig_failed"] == "0")
-    report.append(("trig_n, trig_failed per trial", "%d/%d" % (n_trig_ok, len(rows)), "exact" if n_trig_ok == len(rows) else "FAIL", "one code per trial, none refused by the channel"))
+    # one code from the table at the picture's flip, one for the response
+    n_trig_ok = sum(1 for r in rows if r["trig_n"] == "2" and r["trig_failed"] == "0")
+    report.append(("trig_n, trig_failed per trial", "%d/%d" % (n_trig_ok, len(rows)), "exact" if n_trig_ok == len(rows) else "FAIL", "two codes per trial (stimulus and response), none refused by the channel"))
     if n_trig_ok != len(rows):
         bad += 1
     # each `out` row: the code from the row's table, at its flip's planned vblank

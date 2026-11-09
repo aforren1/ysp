@@ -294,6 +294,9 @@ typedef struct pl_args {
     int64_t max_seconds;       /* virtual seconds before giving up; default 2 days */
     bool  quiet;
     bool  measure;             /* real-clock cost of each frame's work      */
+    const char* def_text;      /* the fuzz target: use these bytes for the
+                                * experiment entry, keeping the pack's tables */
+    size_t def_len;
 } pl_args;
 
 typedef struct pl_script_row { int trial; char* resp; bool silent; double rt_s, hold_s; } pl_script_row;

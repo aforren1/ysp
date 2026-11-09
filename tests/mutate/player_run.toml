@@ -1,0 +1,102 @@
+# player/run.c mutants: the trial's lowering decisions: after's start time,
+# requeue, a loop, the method's update, the outcome, the rows.
+header = "run.c"
+
+[test.player]
+source = "tests/player/mut_test.c"
+compiler = "gcc"
+flags = ["-std=c11", "-O1", "-w", "-DYSCR_NO_SDL", "-DPIN_A0=\"x3b4a1c5afe219da5\"", "-I$YSP_MINIAUDIO"]
+libs = ["-lm", "-lpthread", "-ldl"]
+timeout = 300
+env = { YPL_REPO = "{repo}", YPAK = "{repo}/build/linux/pack/ypak" }
+
+[[mutant]]
+id = "r-01"
+name = "after starts at the response's end alone"
+test = "player"
+why = "2.5: after starts at max(end, events_end); the test responds early."
+find = '''if (pl_build_after(p, bt > p->events_end ? bt : p->events_end) < 0) return -1;'''
+replace = '''if (pl_build_after(p, bt) < 0) return -1;'''
+
+[[mutant]]
+id = "r-02"
+name = "a timeout is updated, not re-queued"
+test = "player"
+why = "2.4: requeue no_response calls ytr_requeue() for a timeout."
+find = '''        int r = ytr_requeue(&p->trials);'''
+replace = '''        int r = ytr_update(&p->trials, YTR_INVALID, NULL);'''
+
+[[mutant]]
+id = "r-03"
+name = "the loop runs once more at the criterion"
+test = "player"
+why = "2.4: a loop stops when the accuracy reaches the criterion."
+find = '''                if (acc < n->loop_until && p->leaf_loop_pass < n->loop_max) {'''
+replace = '''                if (acc <= n->loop_until && p->leaf_loop_pass < n->loop_max) {'''
+
+[[mutant]]
+id = "r-04"
+name = "correct is inverted"
+test = "player"
+why = "2.3: $correct is the response's key equal to key_answer."
+find = '''    e->correct = e->has_correct && e->responded && strcmp(e->response, p->key_answer) == 0;'''
+replace = '''    e->correct = e->has_correct && e->responded && strcmp(e->response, p->key_answer) != 0;'''
+
+[[mutant]]
+id = "r-05"
+name = "a timeout is told to the method"
+test = "player"
+why = "2.4: a track trial that timed out is not told to its method; it runs again."
+find = '''    if (p->track && d->method_value && have_res && p->env.responded) {'''
+replace = '''    if (p->track && d->method_value && have_res) {'''
+
+[[mutant]]
+id = "r-06"
+name = "no floor before a log10"
+test = "player"
+why = "A method value of 0 must not reach log10; the C program floors at 1e-4."
+find = '''    if (m->log_domain && value < 1e-4) value = 1e-4;'''
+replace = ''''''
+expect = "killed"
+
+[[mutant]]
+id = "r-07"
+name = "the field's seed is not the trial's"
+test = "player"
+why = "D8: an rdk uses $trial_seed; the column must equal the trial stream."
+find = '''            s->rdk_seed = ytr_trial_seed(&p->trials, p->ti.index);'''
+replace = '''            s->rdk_seed = 1;'''
+
+[[mutant]]
+id = "r-08"
+name = "trial_index restarts per leaf"
+test = "player"
+why = "2.10: trial_index joins the session's tables; the test has two leaves."
+find = '''        case CS_TRIAL_INDEX: v = r->trial_index; have = 1; break;'''
+replace = '''        case CS_TRIAL_INDEX: v = p->ti.index; have = 1; break;'''
+
+[[mutant]]
+id = "r-09"
+name = "the press is not at the RT"
+test = "player"
+why = "The scripted press is at the stimulus's onset + RT; the row's rt_s pins it."
+find = '''    p->press_at = onset + (int64_t)llround(p->press_rt * 1e9);'''
+replace = '''    p->press_at = onset + (int64_t)llround(p->press_rt * 2e9);'''
+
+[[mutant]]
+id = "r-10"
+name = "the participant answers without the key"
+test = "player"
+why = "--participant correct answers key_answer on each trial."
+find = '''                if (pl_eval_text(p, &p->env, d->response->key_answer, p->key_answer, sizeof p->key_answer) < 0) return -1;
+                p->env.key_answer_known = true;'''
+replace = '''                if (pl_eval_text(p, &p->env, d->response->key_answer, p->key_answer, sizeof p->key_answer) < 0) return -1;'''
+
+[[mutant]]
+id = "r-11"
+name = "the after-phase keys are never applied"
+test = "player"
+why = "2.7: a stimulus key known in `after` is set when after is built."
+find = '''        if (pl_apply_writes(p, s, PL_KEY_AFTER) < 0) return -1;'''
+replace = ''''''
+expect = "killed"

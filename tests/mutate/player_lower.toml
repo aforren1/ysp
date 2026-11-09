@@ -1,0 +1,60 @@
+# player/lower.c mutants: the seed, the channels, the op tables and the
+# stimulus keys. The test (tests/player/mut_test.c) compiles the mutated
+# file into itself and runs definitions in process.
+header = "lower.c"
+
+[test.player]
+source = "tests/player/mut_test.c"
+compiler = "gcc"
+flags = ["-std=c11", "-O1", "-w", "-DYSCR_NO_SDL", "-DPIN_A0=\"x3b4a1c5afe219da5\"", "-I$YSP_MINIAUDIO"]
+libs = ["-lm", "-lpthread", "-ldl"]
+timeout = 300
+env = { YPL_REPO = "{repo}", YPAK = "{repo}/build/linux/pack/ypak" }
+
+[[mutant]]
+id = "pl-01"
+name = "the node seed ignores the path"
+test = "player"
+why = "D8: two nodes must not share a generator; the trial_seed pin sees it."
+find = '''ypak_sha256_update(&st, path, strlen(path));'''
+replace = '''ypak_sha256_update(&st, "x", 1);'''
+
+[[mutant]]
+id = "pl-02"
+name = "the node seed ignores the iteration"
+test = "player"
+why = "D8: a looped node must draw again; a repeat iteration would be a copy."
+find = '''uint32_t it = (uint32_t)iters[i];'''
+replace = '''uint32_t it = 0;'''
+
+[[mutant]]
+id = "pl-03"
+name = "the stagger is twice as long"
+test = "player"
+why = "ytl_on_n() puts onset i at i x stagger; the test measures it."
+find = '''                    o->t_ns = stagger;'''
+replace = '''                    o->t_ns = 2 * stagger;'''
+
+[[mutant]]
+id = "pl-04"
+name = "input roles become trigger channels"
+test = "player"
+why = "2.9: only an output role is a trigger channel; the out_n column would go."
+find = '''if (p->def->roles[i].direction != 0) p->trigger_roles'''
+replace = '''if (p->def->roles[i].direction == 0) p->trigger_roles'''
+
+[[mutant]]
+id = "pl-05"
+name = "a trigger code above 255 accepted"
+test = "player"
+why = "A port takes a byte: code 300 must be refused, not truncated."
+find = '''if (code < 0 || code > 255) {'''
+replace = '''if (code < 0) {'''
+
+[[mutant]]
+id = "pl-06"
+name = "a key that depends on the response is applied at trial start"
+test = "player"
+why = "2.7: a value known only in `after` (the lookup by $outcome) must wait."
+find = '''    if (pass == PL_KEY_TRIAL && pl_value_after(v)) return 0;'''
+replace = '''    if (pass == PL_KEY_TRIAL && 0) return 0;'''

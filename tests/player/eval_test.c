@@ -170,6 +170,7 @@ static void test_values(void) {
     CHECK(pl_mark_index(&p, "m1") == pl_mark_index(&p, "m1"), "mark index stable");
     CHECK(pl_mark_index(&p, "m2") != pl_mark_index(&p, "m1"), "marks differ");
     yjs_arena_free(&a);
+    pl_close(&p);
 }
 
 static void test_seeds(void) {
@@ -213,6 +214,7 @@ static void test_role(void) {
     CHECK(h.role(h.ctx, &role, msg, sizeof msg) != 0 && strstr(msg, "parallel"), "wrong family: %s", msg);
     snprintf(yrig_find(&prof, "trig")->family, 16, "triggerbox");
     CHECK(h.role(h.ctx, &role, msg, sizeof msg) == 0, "a family the role lists");
+    pl_close(&p);
 }
 
 int main(void) {

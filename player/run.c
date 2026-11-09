@@ -1054,6 +1054,32 @@ static double pl_method_input(const pl_method* m, double value) {
     return m->def->log10 ? log10(value) : value;
 }
 
+/* A response's code on its output role (2.6). --sim has no reader thread
+ * for a device rule, so the code goes out when the frame loop sees the
+ * response, as a keyboard role's would: ysp/response.h's rule window and
+ * its mismatch flag are not exercised here (docs/player.md). */
+static int pl_response_trigger(pl_player* p, const yrsp_result* r) {
+    const yexp_response* d = p->tmpl->def->response;
+    int ch;
+    int64_t code = 0;
+    yds_event ev;
+    if (!d->trigger_role || !p->env.responded) return 0;
+    ch = pl_trigger_channel(p, d->trigger_role);
+    if (ch < 0) { pl_fail(p, "response.trigger: '%s' is not an output role", d->trigger_role); return -1; }
+    if (pl_eval_int(p, &p->env, d->trigger_code, &code) < 0) return -1;
+    if (code < 0 || code > 255) { pl_fail(p, "the response's trigger code %lld is not in 0..255", (long long)code); return -1; }
+    p->out_now[ch].n++;
+    yds_event_init(&ev);
+    ev.t_ns = r->t_response;
+    ev.trial_index = p->global_trial - 1;
+    ev.kind = "out";
+    ev.role = p->trigger_roles[ch]->name;
+    ev.code = code;
+    ev.deadline_ns = r->t_response;
+    ev.flags = 1;   /* from the response, not a flip's planned vblank */
+    return pl_event_queue(p, &ev);
+}
+
 /* The MARK fired: the trial is over. */
 int pl_end_trial(pl_player* p, const yscr_frame* f) {
     pl_tmpl* t = p->tmpl;
@@ -1371,6 +1397,7 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
             int64_t bt = 0;
             yrsp_finish(p->tmpl->collector, &live);
             pl_env_response(p, &live);
+            if (pl_response_trigger(p, &live) < 0) return -1;
             ytl_base_time(&p->tl, PL_BASE_TRIAL, f->onset, &bt);
             if (pl_build_after(p, bt > p->events_end ? bt : p->events_end) < 0) return -1;
             p->responding = false;

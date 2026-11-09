@@ -14,6 +14,8 @@
 #include "ysp/quest.h"
 #define YSP_AEP_IMPLEMENTATION
 #include "ysp/aep.h"
+#define YSP_AUDIO_IMPLEMENTATION
+#include "ysp/audio.h"
 #define YSP_RESPONSE_IMPLEMENTATION
 #include "ysp/response.h"
 #define YSP_RDK_IMPLEMENTATION
@@ -26,5 +28,3 @@
 #include "ysp/pack.h"
 #define YSP_EXPERIMENT_IMPLEMENTATION
 #include "ysp/experiment.h"
-#define YSP_AUDIO_IMPLEMENTATION
-#include "ysp/audio.h"

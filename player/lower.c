@@ -1578,6 +1578,11 @@ int pl_load(pl_player* p, const pl_args* a) {
     ypak_id(&p->pack, p->pack_id);
     if (ypak_first_of(&p->pack, YPAK_KIND_EXPERIMENT, &e) != 0) { pl_fail(p, "the pack has no experiment entry"); return -1; }
     if (!(data = ypak_data(&p->pack, &e))) { pl_fail(p, "the experiment entry cannot be read: %s", ypak_error(&p->pack)); return -1; }
+    if (a->def_text) {
+        /* the fuzz target's bytes, against this pack's tables */
+        data = a->def_text;
+        e.size = (int64_t)a->def_len;
+    }
     {
         uint8_t digest[32];
         ypak_sha256(data, (size_t)e.size, digest);
