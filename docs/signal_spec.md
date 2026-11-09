@@ -659,19 +659,29 @@ handle as its input.
 ysig_node nodes[16];
 ysig_builder b = ysig_builder_of(nodes, 16);
 
-int hand = ysig_role(&b, "hand");
-int cur  = YSIG_AFFINE(&b, hand, .pre_x = sx, .post_x = sx, .pre_y = sy, .post_y = sy);
-int hold = YSIG_DETECT(&b, hand, .test = YSIG_TEST_LE, .lane = -1, .level = START_R,
-                       .hold = HOLD_S, .a_x = sx, .a_y = sy);
-YSIG_BIND(&b, cur, .channel = CH_CUR_X);
-YSIG_RECORD(&b, YSIG_JOIN(&b, hand, cur), .name = "trace");
+int hand = ysig_use_role(&b, "hand");
+int cur  = ysig_affine(&b, hand, { .pre_x = sx, .post_x = sx, .pre_y = sy, .post_y = sy });
+int hold = ysig_detect(&b, hand, { .test = YSIG_TEST_LE, .lane = -1, .level = START_R,
+                                   .hold = HOLD_S, .a_x = sx, .a_y = sy });
+ysig_bind(&b, cur, { .channel = CH_CUR_X });
+ysig_record(&b, ysig_join(&b, hand, cur), { .name = "trace" });
 
 if (!ysig_build_finish(&b, &desc)) return fail(ysig_build_error(&b));
 ```
 
-A hand-written detect of this form was compiled against the header with
-`-Wall -Wextra -Werror` (GCC 12.2, C11) and gave the same inputs and
-parameters as the assignments.
+C has no way to pass a bare `{...}` to a function, so in C each call is a
+variadic macro that puts the braces back behind a compound literal:
+
+```c
+#define ysig_detect(b, in, ...) ysig__detect((b), (in), (ysig_detect_args)__VA_ARGS__)
+```
+
+The preprocessor splits the arguments at the commas inside the braces, and
+`__VA_ARGS__` joins them again. In C++ `ysig_detect()` is an inline
+function that takes the struct, so a call has the same spelling. A
+hand-written detect of this form was compiled against the header (GCC
+12.2: C99 with `-pedantic -Wall -Wextra -Werror`, C11, and C++20) and gave
+the same parameters as the assignments.
 
 Rules:
 
@@ -682,7 +692,8 @@ Rules:
 - **One list per op generates the names.** An X-macro gives the struct's
   fields and the `YSIG_<OP>_<ROW>` indices together, so they cannot differ.
   The test still checks each list against the op's table row by row.
-- **A field not named is zero,** as after `ysig_node_of()`.
+- **A field not named is zero,** as after `ysig_node_of()`. A node with
+  no field to set is `{0}`.
 - **Inputs come first by construction.** A handle exists only after its
   node, so a builder cannot make a forward edge or a cycle.
 - **A failed add is sticky.** The struct's capacity can run out, and -1 is
@@ -690,10 +701,13 @@ Rules:
   `ysig_build_finish()` returns false with the first error. A program
   checks once, at the end.
 - **Ops with more than two inputs** (`join`, `sum`, `mean`, up to four)
-  take them positionally: `YSIG_JOIN3(&b, a, c, d)` and `YSIG_JOIN4`.
+  take them positionally: `ysig_join3(&b, a, c, d)` and `ysig_join4`. An
+  op with no fields is a plain function: `ysig_join(&b, a, c)`.
 - **An adapter has its own builder,** because its handles are local to it.
-- **C only.** The macros use designated initializers, which C++17 lacks.
-  C++ callers use `ysig_add()` with `ysig_node_of()`.
+- **Names.** `ysig_role` is already a type, so the call that reads a role
+  is `ysig_use_role()`. No other op's name is taken in `ysp/sig.h`.
+- **C++.** Designated initializers need C++20, in the struct's field
+  order. C++17 callers use `ysig_add()` with `ysig_node_of()`.
 - `p[]` and `ysig_set()` by index keep working for the fuzz target and the
   journal. `YSIG_NODE()` goes away when the examples move to the builder;
   the header is not released yet.
@@ -1070,7 +1084,7 @@ Findings about the test itself:
 
 Before format version 2, decide findings 1 to 3 and 12 with the player's
 sequence model: they change what a step can do, so they are the part of
-D7 that this work reopens. The proposals are D16 to D19 in
+D7 that this work reopens. The decisions are D16 to D19 in
 [experiment_format.md](experiment_format.md); D18 moves the freeze of
 section 15.2 from a step to a key on the control, and D19 replaces
 finding 12's `"keep"`. Findings 4 to 7 and 13 are small additions to
