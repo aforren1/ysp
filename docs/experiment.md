@@ -185,9 +185,9 @@ On 2026-11-09, Linux desktop, gcc 12.2, on the corpus in `tests/experiment/`.
 
 | Check | Result |
 |---|---|
-| `tests/adapt/experiment_test.c` | 1370 checks pass; the same as C and C++17; ASan and UBSan clean under `setarch -R` |
+| `tests/adapt/experiment_test.c` | 1390 checks pass; the same as C and C++17; ASan and UBSan clean under `setarch -R` |
 | Corpus | The four worked examples of 2.14, `examples/pack/stroop/` and a kitchen-sink file: each loads with the test host and with none, equal to its golden dump; canonical bytes load back to the same form and the same bytes and ID |
-| Negative corpus | 137 files, one per refusal, each compared with its message and its line and column |
+| Negative corpus | 139 files, one per refusal, each compared with its message and its line and column |
 | A key at its default | 464 keys of the format's table: written out or left out gives the same ID |
 | Table against headers | 925 checks: `tests/adapt/experiment_tables_test.c` |
 | Fuzzing, mutants, arena | See the status entry |
@@ -202,9 +202,17 @@ made here because another job was using the machine during the run.
 
 - No lowering and no `--sim` run: the next task.
 - The pack tool still writes a definition as ysp/json.h's canonical bytes
-  without dropping defaults (D2's "Not built"). The change is one call to
-  `yexp_canonical()`: it moves the experiment ID and the pack ID of every
-  pack whose definition writes a key at its default.
+  without dropping defaults (D2's "Not built"). To change it: `pack/pack_tool.c`
+  and `ypak rebuild` call `yexp_load()` and `yexp_canonical()` in place of
+  `yjs_write()`, the tool builds with ysp/experiment.h, and a definition
+  that the loader refuses stops the build. It moves the experiment ID and the
+  pack ID of every pack whose definition writes a key at its default.
+  Measured on `examples/pack/stroop/stroop.json`: the entry goes from 3572
+  to 3548 bytes (`"required": true` on the role is left out), and its
+  SHA-256 from `83d61e488bd5316e...` to `2eccb263037b4de6...`.
+  `tests/pack/tool_test.c` computes the expected entry with ysp/json.h, so
+  it must then use the loader too. `tests/pack/corpus.sha256` does not
+  change: its experiment entry is opaque.
 - `rules()` and `check_ops()` are exercised through a test host only; no
   host calls `ytr_rules()` or `ytl_check_ops()` yet.
 - No run on macOS, Windows or emcc. The unit test is not in the emcc CI
