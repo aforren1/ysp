@@ -1082,3 +1082,34 @@ D7 that this work reopens. The decisions are D16 to D19 in
 section 15.2 from a step to a key on the control, and D19 replaces
 finding 12's `"keep"`. Findings 4 to 7 and 13 are small additions to
 `ysp/sig.h`. Findings 8 and 9 belong with F23 in `ysp/trials.h`.
+
+### 15.9 Prior art: Stateflow
+
+The signal graph has the role of a Simulink diagram, and a trial's states
+(D20) have the role of a Stateflow chart. These points come from
+MathWorks' pages on
+[evaluating transitions](https://www.mathworks.com/help/stateflow/ug/evaluate-transitions.html),
+[super step semantics](https://www.mathworks.com/help/stateflow/ug/super-step-semantics.html),
+[`during` actions](https://www.mathworks.com/help/stateflow/ug/chart-during-actions.html)
+and
+[dot notation](https://www.mathworks.com/help/stateflow/ug/identify-data-using-dot-notation.html).
+The pages on temporal logic, data scope and parallel states were not read,
+so nothing here depends on them.
+
+| Stateflow | This format |
+|---|---|
+| A state's `during` action runs "when the chart wakes up, the state is active, and there are no valid outer transitions" | The graph runs for every sample, whatever the state |
+| Outgoing transitions are numbered "in the order in which you create them" and tested in that order | Exits fire at a hit's time, so the earliest time wins, then the list order (D20) |
+| With super step semantics on, a chart "takes valid transitions until" none is valid or a set maximum is passed | At most one state change per frame: no maximum to set (D20) |
+| A qualified name is searched upward from where it appears; "if a unique match exists" it resolves, "otherwise, the resolution process fails", and the search "does not stop after finding the first match" | One flat namespace per template, so there is no search (D20) |
+
+**The boundary between the two halves.** There are only three crossings:
+
+1. A control's hit fires an exit (graph to flow).
+2. A control's state or value feeds a stimulus property (`{"signal": ...}`,
+   `{"when": ...}`, D17).
+3. A state's step sets a selector or a parameter, timed on the timeline
+   (flow to graph).
+
+Roles are the only inputs from outside, and `trace` and `columns` are the
+only outputs.

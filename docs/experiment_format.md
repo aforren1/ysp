@@ -5,7 +5,7 @@ built. This page designs the file that the player interprets (rig_spec
 6): the EXPERIMENT entry of a pack. Each decision gives the options, the
 evidence and the choice. The user decided D1 to D15 on 2026-10-14; D4
 changed from the proposal. The user decided D16 to D19, for continuous
-tasks, on 2026-11-09. Nothing is built for them. Part 1 is
+tasks, on 2026-11-09. Nothing is built for them. D20 is a proposal. Part 1 is
 explanation; part 2 is reference, with four worked examples checked
 against the C examples. Where this page and rig_spec 6 or 14.5 to 14.6
 disagree about the definition, this page is newer.
@@ -329,6 +329,7 @@ that structure; it does not invent a new one.
   `timeout_s` on the step ends the trial with the outcome `"timeout"`.
   A wait with no timeout is valid: the operator can stop a session.
   The designer warns about one. D7 still holds for everything else.
+  D20 proposes to amend this.
 
 **D17. A stimulus property that follows a signal. DECIDED (2026-11-09).**
 - Options: (a) a property is bound to a signal for the whole trial;
@@ -375,8 +376,66 @@ that structure; it does not invent a new one.
   nodes only, and a recenter of one role. It replaces finding 12's
   `"keep"`.
 
-D16 to D19 add keys and change what a step can do, so they are format
-version 2 (D12).
+**D20. A trial as named states with exits. PROPOSED (2026-11-09), not decided. It amends D16.**
+- Options: (a) D16's straight line of segments; (b) named states, each
+  with exits, where `until` is the shorthand for "exit to the next
+  state"; (c) full statecharts, with nested and parallel states, as in
+  Stateflow; (d) a script.
+- Evidence: D16's `timeout_s` is already a branch. The four tasks of
+  signal_spec.md section 15 do not branch, but they were chosen for their
+  signal paths. Common tasks do: a fixation break that aborts or retries,
+  and a trial that ends on an early press (examples_findings F3). A
+  designer draws a trial as a chart. D7 refused a state machine because it
+  needs transitions, conditions and a scheduler; D16 already adds the
+  scheduler, and the conditions here are only hits and elapsed times.
+  Nothing has parsed format version 2 yet, so nothing needs migration.
+- Proposal: (b).
+
+  ```json
+  "states": [
+    { "name": "fixate", "steps": [{ "on": "fix" }],
+      "exits": [{ "on": "held", "to": "cue" },
+                { "after_s": 5, "to": "end", "outcome": "timeout" }] },
+    { "name": "cue", "steps": [{ "on": "cue" }],
+      "exits": [{ "on": "broke", "to": "fixate" },
+                { "after_s": 0.5, "to": "go" }] },
+    { "name": "go", "steps": [{ "on": "target" }, { "until": "arrived" }] }
+  ]
+  ```
+
+  1. A state runs its steps. A state with no `exits` goes to the next
+     listed state when its steps end, and the last one ends the trial.
+     `{"until": C}` inside the steps is D16's form: the shorthand for a
+     split into two states joined by one exit.
+  2. An exit is `on` a control's hit, or `after_s` from the state's first
+     frame's onset. `to` is a state's name or `"end"`. `outcome` sets the
+     trial's outcome.
+  3. A state arms the controls its exits name, at its entry. A hit from
+     before the entry does not count.
+  4. A frame tests the exits. When more than one has fired, the earliest
+     time wins, then the order in the list.
+  5. At most one state change per frame. The next state starts on the
+     first frame whose onset is at or after the exit's time (D16). So
+     every state lasts at least one frame, a cycle cannot hang the frame
+     loop, and there is no limit to set.
+  6. A cycle is valid: a retry needs one. The designer warns about a cycle
+     that has no timeout.
+  7. The response stays at the template's level (2.6): it spans states.
+     An exit can name it: `{"on": "response"}`. An exit on an early press
+     needs F3 in ysp/response.h.
+  8. A run records each state's name, entry onset, the exit taken and that
+     exit's time, as one stream.
+  9. Names: stimuli, controls, states and named clicks share one namespace
+     per template, and a clash is refused at load. Variables stay as D6
+     has them: flat and read-only, known at the trial's start. A state has
+     no local variables. A value that changes during a trial is a script.
+
+  Nested states, parallel states and a limit on retries (`max_visits`)
+  wait for a task that needs them. The response, the graph and the stimuli
+  already run side by side.
+
+D16 to D19, and D20 if it is accepted, add keys and change what a step can
+do, so they are format version 2 (D12).
 
 ### 1.4 Gaps in the C APIs
 
