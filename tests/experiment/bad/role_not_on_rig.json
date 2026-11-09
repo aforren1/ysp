@@ -1,0 +1,2 @@
+{"format":"ysp-experiment","version":1,
+"devices":{"not_on_rig":{"direction":"in","family":["k"]}},"trials":{"t":{}},"timeline":[{"name":"m","trial":"t"}]}

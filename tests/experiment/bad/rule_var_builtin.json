@@ -1,0 +1,2 @@
+{"format":"ysp-experiment","version":1,
+"trials":{"t":{}},"timeline":[{"name":"m","trial":"t","rules":["var block choice a b"]}]}

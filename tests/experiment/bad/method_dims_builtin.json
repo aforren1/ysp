@@ -1,0 +1,2 @@
+{"format":"ysp-experiment","version":1,
+"methods":{"q":{"type":"aep","lo":[0],"hi":[1],"dims":["level"]}},"trials":{"t":{}},"timeline":[{"name":"m","trial":"t"}]}

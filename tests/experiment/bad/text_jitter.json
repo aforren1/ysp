@@ -1,0 +1,2 @@
+{"format":"ysp-experiment","version":1,
+"stimuli":{"s":{"kind":"text","font":"fonts/NotoSans-Regular.ttf","size":10,"text":"$soa_s"}},"trials":{"t":{"events":[{"on":"s"}]}},"timeline":[{"name":"m","trial":"t","rules":["jitter soa_s uniform 0.8 1.2"]}]}

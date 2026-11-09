@@ -1,0 +1,2 @@
+{"format":"ysp-experiment","version":1,
+"devices":{"r":{"direction":"in","family":["keyboard"]},"o":{"direction":"out","family":["parallel"]}},"stimuli":{"a":{"kind":"gabor","contrast":{"michelson":0.5}},"b":{"kind":"gabor","contrast":{"michelson":0.5}},"s":{"kind":"shape"}},"trials":{"t":{"events":[{"on":["a","b"]}],"columns":{"cs":"$contrast_shown"},"response":{"role":"r","from":"s"}}},"timeline":[{"name":"m","trial":"t"}]}

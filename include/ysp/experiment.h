@@ -243,6 +243,7 @@ typedef struct yexp_role {
     int                min_tier;  /* 0: none                                 */
     int64_t            pulse_ns;
     const char*        kind;
+    uint32_t           pos_;      /* in the source, for a host's refusal    */
     const yexp_kv*     buttons;   /* string values                           */
     int                n_buttons;
     const yexp_kv*     map;       /* string values                           */
@@ -298,6 +299,7 @@ struct yexp_step {
     const char*        role;      /* trigger                                 */
     const char*        mark;      /* mark                                    */
     const char*        cond;      /* if, unless: the variable's name         */
+    uint32_t           cond_pos_;
     const yexp_step*   steps;     /* if, unless                              */
     int                n_steps;
 };
@@ -314,7 +316,7 @@ typedef struct yexp_response {
     int                n_choices;
     const yexp_value*  duration;       /* seconds; 0: no deadline            */
     const yexp_value*  min_rt;         /* minimum_valid_rt_s                 */
-    const yexp_value*  key_answer;     /* kind NONE when not given           */
+    const yexp_value*  key_answer;     /* NULL when not given                */
     bool               ends_trial;
     bool               persist;
     int                max_responses;
@@ -334,6 +336,7 @@ typedef struct yexp_template {
     const yexp_kv*       columns;  int n_columns;
     const yexp_value*    outcome;
     const yexp_value*    method_value;
+    uint32_t             pos_;
 } yexp_template;
 
 typedef struct yexp_node yexp_node;
@@ -361,6 +364,7 @@ struct yexp_node {
     int                  loop_max;
     bool                 requeue_no_response;
     bool                 record_data;
+    uint32_t             pos_, if_pos_, unless_pos_;
 };
 
 typedef struct yexp_def {
@@ -1923,8 +1927,16 @@ static yexp__slot* yexp__object(yexp__ctx* c, int sect, unsigned mask, const yjs
         if (slot->v && cv) {
             const yexp_row* r = &yexp__rows[ri];
             const yexp_value* d = r->def ? yexp__default(c, ri) : NULL;
-            if (!(r->flags & YEXP__R_SELF) && !(d && yexp__same(slot->v, d))) yexp__put(c, out, m->key, cv);
-            else if (r->flags & YEXP__R_SELF) slot->src = (const yjs_value*)cv;
+            bool at_default = d && (yexp__same(slot->v, d) || (r->type == YEXP__T_SMAP && slot->v->n == 0));
+            if (at_default && (r->flags & YEXP__R_SELF) == 0) {
+                /* the same form and the same checks as when it is left out */
+                slot->v = d;
+                slot->given = false;
+            } else if (r->flags & YEXP__R_SELF) {
+                slot->src = (const yjs_value*)cv;
+            } else {
+                yexp__put(c, out, m->key, cv);
+            }
         }
     }
     for (i = 0; i < n; i++) {
@@ -2165,6 +2177,7 @@ static void yexp__parse_devices(yexp__ctx* c, const yjs_value* src, yjs_value** 
         if (!s) continue;
         r = &out[i++];
         r->name = m->key;
+        r->pos_ = m->key_pos;
         {
             const char* dir = yexp__v_str(yexp__slotv(c, s, YEXP__S_ROLE, "direction"));
             r->direction = !dir ? 0 : yexp__streq(dir, "out") ? 1 : yexp__streq(dir, "both") ? 2 : 0;
@@ -2542,6 +2555,7 @@ static void yexp__parse_step(yexp__ctx* c, const yjs_value* src, const char* ele
     case YEXP_IF: case YEXP_UNLESS: {
         yexp__slot* st = yexp__slot_at(c, s, YEXP__S_STEP, "steps");
         out->cond = yexp__v_str(yexp__slotv(c, s, YEXP__S_STEP, yexp__verbs[verb]));
+        out->cond_pos_ = yexp__slot_at(c, s, YEXP__S_STEP, yexp__verbs[verb])->pos;
         if (st && st->src) {
             yjs_value* ca = NULL;
             yexp__parse_steps(c, st->src, elem, depth + 1, &out->steps, &out->n_steps, &ca);
@@ -2786,6 +2800,7 @@ static void yexp__parse_template(yexp__ctx* c, const yjs_member* m, yexp_templat
     s = yexp__object(c, YEXP__S_TEMPLATE, 0xffffu, m->value, elem, &ct);
     if (!s) return;
     out->name = m->key;
+    out->pos_ = m->key_pos;
     x = yexp__slot_at(c, s, YEXP__S_TEMPLATE, "events");
     if (x && x->src) {
         yjs_value* ca = NULL;
@@ -2814,7 +2829,6 @@ static void yexp__parse_template(yexp__ctx* c, const yjs_member* m, yexp_templat
         if (rslot && rslot->given && rv) {
             int a, b;
             out->record = yexp__str_array(c, rv, &out->n_record);
-            out->record_given = true;
             for (a = 0; a < out->n_record; a++) {
                 if (!yexp_stim_get(c->d, out->record[a]))
                     yexp__err(c, rv->pos, "%s: 'record': no stimulus named '%s'", elem, out->record[a]);
@@ -2822,8 +2836,11 @@ static void yexp__parse_template(yexp__ctx* c, const yjs_member* m, yexp_templat
                     if (yexp__streq(out->record[a], out->record[b]))
                         yexp__err(c, rv->pos, "%s: 'record': '%s' listed twice", elem, out->record[a]);
             }
-            if (!yexp__str_arrays_equal(out->record, out->n_record, tmp.record, tmp.n_record))
+            /* at its default the key is left out, and the form is the same */
+            if (!yexp__str_arrays_equal(out->record, out->n_record, tmp.record, tmp.n_record)) {
+                out->record_given = true;
                 yexp__put(c, ct, "record", (yjs_value*)rslot->src);
+            }
         } else {
             out->record = tmp.record;
             out->n_record = tmp.n_record;
@@ -2999,6 +3016,7 @@ static void yexp__parse_node(yexp__ctx* c, const yjs_value* src, const yexp_node
     out->name = yexp__v_str(yexp__slotv(c, s, YEXP__S_NODE, "name"));
     out->path = path;
     out->parent = parent;
+    out->pos_ = src->pos;
     out->rules = "";
     out->repetitions = 1;
     out->record_data = true;
@@ -3108,7 +3126,9 @@ static void yexp__parse_node(yexp__ctx* c, const yjs_value* src, const yexp_node
         else if (r) yexp__err(c, r->pos, "%s: 'repetitions' is a literal integer of at least 1", elem);
     }
     out->if_var = yexp__v_str(yexp__slotv(c, s, YEXP__S_NODE, "if"));
+    out->if_pos_ = yexp__slot_at(c, s, YEXP__S_NODE, "if")->pos;
     out->unless_var = yexp__v_str(yexp__slotv(c, s, YEXP__S_NODE, "unless"));
+    out->unless_pos_ = yexp__slot_at(c, s, YEXP__S_NODE, "unless")->pos;
     out->requeue_no_response = yexp__v_str(yexp__slotv(c, s, YEXP__S_NODE, "requeue")) != NULL;
     out->record_data = yexp__v_bool(yexp__slotv(c, s, YEXP__S_NODE, "record_data"), true);
     x = yexp__slot_at(c, s, YEXP__S_NODE, "loop");
@@ -3208,7 +3228,7 @@ static bool yexp__resolve(yexp__ctx* c, const yexp__scope* s, const char* name, 
         if (s->leaf) {
             if (B[i].need == 1 && s->leaf->n_tracks == 0) { *why = "'tracks' on the leaf"; return false; }
             if (B[i].need == 2 && (!s->t || !s->t->response)) { *why = "a 'response' in the template"; return false; }
-            if (B[i].need == 3 && (!s->t || !s->t->response || s->t->response->key_answer->kind == YEXP_V_NONE)) { *why = "'key_answer' in the response"; return false; }
+            if (B[i].need == 3 && (!s->t || !s->t->response || !s->t->response->key_answer)) { *why = "'key_answer' in the response"; return false; }
             if (B[i].need == 4 && s->michelson == 0) { *why = "a stimulus shown by the template with {\"michelson\": ...}"; return false; }
             if (B[i].need == 4 && s->michelson > 1) { *why = "only one stimulus with {\"michelson\": ...} in the template, since $contrast_shown has one value"; return false; }
         }
@@ -3531,7 +3551,7 @@ static void yexp__check_steps(yexp__ctx* c, const yexp__scope* s, const yexp_ste
         yexp__check_value(c, s, st->code, phase, elem, "trigger");
         for (k = 0; k < st->n_props; k++) yexp__check_value(c, s, st->props[k].value, phase, elem, st->props[k].key);
         if (st->op == YEXP_IF || st->op == YEXP_UNLESS) {
-            yexp__check_var(c, s, st->cond, UINT32_MAX, phase, elem, st->op == YEXP_IF ? "if" : "unless");
+            yexp__check_var(c, s, st->cond, st->cond_pos_, phase, elem, st->op == YEXP_IF ? "if" : "unless");
             yexp__check_steps(c, s, st->steps, st->n_steps, phase, elem);
         }
     }
@@ -3649,7 +3669,7 @@ static void yexp__check_leaf(yexp__ctx* c, yexp__scope* s) {
         const yexp_response* r = t->response;
         yexp__check_value(c, s, r->duration, YEXP__PH_TRIAL, elem, "duration_s");
         yexp__check_value(c, s, r->min_rt, YEXP__PH_TRIAL, elem, "minimum_valid_rt_s");
-        if (r->key_answer->kind != YEXP_V_NONE) yexp__check_value(c, s, r->key_answer, YEXP__PH_TRIAL, elem, "key_answer");
+        if (r->key_answer) yexp__check_value(c, s, r->key_answer, YEXP__PH_TRIAL, elem, "key_answer");
         if (r->trigger_code) {
             /* a response rule's code is per choice, so it is known as the
              * response arrives (G8) */
@@ -3690,7 +3710,7 @@ static void yexp__check_leaf(yexp__ctx* c, yexp__scope* s) {
         char msg[256];
         msg[0] = 0;
         if (c->h->rules(c->h->ctx, s->leaf, msg, sizeof msg))
-            yexp__err(c, UINT32_MAX, "node '%s': rules: %s", s->leaf->path, msg);
+            yexp__err(c, s->leaf->pos_, "node '%s': rules: %s", s->leaf->path, msg);
     }
 }
 
@@ -3699,7 +3719,7 @@ static void yexp__check_table(yexp__ctx* c, const yexp_node* n) {
     int i;
     if (!n->table) return;
     if (!yexp__entry(c, YEXP_ENTRY_TABLE, n->table))
-        yexp__err(c, UINT32_MAX, "node '%s': 'timeline_variables' is '%s', which is not a table entry of this pack", n->path, n->table);
+        yexp__err(c, n->pos_, "node '%s': 'timeline_variables' is '%s', which is not a table entry of this pack", n->path, n->table);
     if (!c->h || !c->h->column) return;
     for (i = 0;; i++) {
         yexp_column info;
@@ -3708,11 +3728,11 @@ static void yexp__check_table(yexp__ctx* c, const yexp_node* n) {
         rc = c->h->column(c->h->ctx, n->table, i, &info);
         if (rc <= 0) {
             if (rc < 0 && yexp__entry(c, YEXP_ENTRY_TABLE, n->table))
-                yexp__err(c, UINT32_MAX, "node '%s': 'timeline_variables' is '%s', which the host cannot read", n->path, n->table);
+                yexp__err(c, n->pos_, "node '%s': 'timeline_variables' is '%s', which the host cannot read", n->path, n->table);
             return;
         }
         if (info.name && yexp__is_builtin(info.name))
-            yexp__err(c, UINT32_MAX, "node '%s': table '%s': the column '%s' has a built-in variable's name (2.3)", n->path, n->table, info.name);
+            yexp__err(c, n->pos_, "node '%s': table '%s': the column '%s' has a built-in variable's name (2.3)", n->path, n->table, info.name);
     }
 }
 
@@ -3727,8 +3747,8 @@ static void yexp__check_nodes(yexp__ctx* c, yexp__scope* s, const yexp_node* nod
          * draws are not known yet */
         s->leaf = NULL;
         s->t = NULL;
-        if (nd->if_var) yexp__check_var(c, s, nd->if_var, UINT32_MAX, YEXP__PH_NODE, elem, "if");
-        if (nd->unless_var) yexp__check_var(c, s, nd->unless_var, UINT32_MAX, YEXP__PH_NODE, elem, "unless");
+        if (nd->if_var) yexp__check_var(c, s, nd->if_var, nd->if_pos_, YEXP__PH_NODE, elem, "if");
+        if (nd->unless_var) yexp__check_var(c, s, nd->unless_var, nd->unless_pos_, YEXP__PH_NODE, elem, "unless");
         yexp__check_table(c, nd);
         if (s->n > YEXP__MAX_DEPTH + 1) return;
         s->chain[s->n++] = nd;
@@ -3772,7 +3792,7 @@ static void yexp__check_host_globals(yexp__ctx* c) {
         for (i = 0; i < d->n_roles; i++) {
             msg[0] = 0;
             if (c->h->role(c->h->ctx, &d->roles[i], msg, sizeof msg))
-                yexp__err(c, UINT32_MAX, "role '%s': %s", d->roles[i].name, msg);
+                yexp__err(c, d->roles[i].pos_, "role '%s': %s", d->roles[i].name, msg);
         }
     for (i = 0; i < d->n_stimuli; i++) {
         const yexp_stim* st = &d->stimuli[i];
@@ -3806,7 +3826,7 @@ static void yexp__check_host_globals(yexp__ctx* c) {
         for (i = 0; i < d->n_templates; i++) {
             msg[0] = 0;
             if (c->h->check_ops(c->h->ctx, d, &d->templates[i], msg, sizeof msg))
-                yexp__err(c, UINT32_MAX, "template '%s': %s", d->templates[i].name, msg);
+                yexp__err(c, d->templates[i].pos_, "template '%s': %s", d->templates[i].name, msg);
         }
 }
 

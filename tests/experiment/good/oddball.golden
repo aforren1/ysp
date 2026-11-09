@@ -1,0 +1,124 @@
+definition version=1 name="oddball_eeg"
+units_deg=1 background=0.5,0.5,0.5 calibration_required=0 min_tier=1 web_allowed=0 web_exclusion=0
+field participant integer required=1
+role light dir=0 family=[line] required=0 min_tier=0 pulse_ns=0 kind=sync
+role resp dir=0 family=[xid keyboard] required=1 min_tier=2 pulse_ns=0 kind=
+  button 1 = "left"
+  button 2 = "right"
+role trig dir=1 family=[parallel triggerbox xid] required=1 min_tier=0 pulse_ns=2000000 kind=
+stimulus fix kind=0 layer=1
+  anchor (default) = "center"
+  ax (default) = real:0.5
+  ay (default) = real:0.5
+  blend (default) = "over"
+  cap (default) = "butt"
+  color = [real:0.15, real:0.15, real:0.15]
+  dash (default) = int:0
+  dash_offset (default) = int:0
+  dash_snap (default) = int:0
+  edge (default) = "hard"
+  edge_width (default) = int:0
+  gap (default) = int:0
+  gate (default) = int:1
+  h = real:0.4
+  join (default) = "round"
+  miter_limit (default) = int:4
+  offset (default) = int:0
+  opacity (default) = int:1
+  ori (default) = int:0
+  p0 (default) = int:0
+  p1 (default) = int:0
+  p10 (default) = int:0
+  p11 (default) = int:0
+  p12 (default) = int:0
+  p13 (default) = int:0
+  p14 (default) = int:0
+  p15 (default) = int:0
+  p16 (default) = int:0
+  p17 (default) = int:0
+  p18 (default) = int:0
+  p19 (default) = int:0
+  p2 (default) = int:0
+  p20 (default) = int:0
+  p21 (default) = int:0
+  p22 (default) = int:0
+  p23 (default) = int:0
+  p24 (default) = int:0
+  p25 (default) = int:0
+  p26 (default) = int:0
+  p27 (default) = int:0
+  p28 (default) = int:0
+  p29 (default) = int:0
+  p3 (default) = int:0
+  p30 (default) = int:0
+  p31 (default) = int:0
+  p4 (default) = int:0
+  p5 (default) = int:0
+  p6 (default) = int:0
+  p7 (default) = int:0
+  p8 (default) = int:0
+  p9 (default) = int:0
+  place (default) = "center"
+  shape = "cross"
+  shape_p0 = real:0.06
+  shape_p1 (default) = int:0
+  shape_p2 (default) = int:0
+  shape_p3 (default) = int:0
+  stroke (default) = int:0
+  stroke_align (default) = "center"
+  trim_end (default) = int:0
+  trim_set (default) = int:0
+  trim_start (default) = int:0
+  visible (default) = int:1
+  w = real:0.4
+  x (default) = int:0
+  y (default) = int:0
+stimulus pic kind=4 layer=0
+  add (default) = int:0
+  anchor (default) = "center"
+  ax (default) = real:0.5
+  ay (default) = real:0.5
+  color (default) = [int:0, int:0, int:0]
+  contrast (default) = int:1
+  coverage (default) = int:0
+  dir_b (default) = int:0
+  dir_g (default) = int:0
+  dir_r (default) = int:0
+  gate (default) = int:1
+  h = int:6
+  linear (default) = int:0
+  modulation (default) = int:0
+  opacity (default) = int:1
+  ori (default) = int:0
+  place (default) = "center"
+  premultiplied (default) = int:0
+  src_h (default) = int:0
+  src_w (default) = int:0
+  src_x (default) = int:0
+  src_y (default) = int:0
+  texture = $image
+  tint_a (default) = int:1
+  tint_b (default) = int:1
+  tint_g (default) = int:1
+  tint_r (default) = int:1
+  visible (default) = int:1
+  w = int:6
+  x (default) = int:0
+  y (default) = int:0
+template oddball
+  events
+    step on fix stagger=dur:0ns
+    step wait t=$soa_s
+    step on pic stagger=dur:0ns
+    step trigger code=$code role=trig
+    step wait t=dur:100000000ns
+    step off pic stagger=dur:0ns
+  after
+    step wait t=dur:200000000ns
+  response role=resp from=pic ends=1 persist=0 max=0 held=0 release=0 choices=left:left,right:right
+    duration=dur:1000000000ns min_rt=dur:0ns key_answer=$answer trigger=trig lookup($response){"left": int:101, "right": int:102}
+  record_given=0 record=[pic]
+  outcome="correct" method_value=$level
+node main path=main trial=oddball table=oddball.pstb reps=1 interleave=0 track_rate=0 if=- unless=- loop=0 requeue=0 record_data=1
+  rules="order constrained\x0areps 4\x0amax_run type=target 1\x0ajitter soa_s uniform 0.8 1.2 rate=display"
+  jitters=[soa_s] rule_vars=[] tracks=[]

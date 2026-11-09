@@ -1,0 +1,2 @@
+{"format":"ysp-experiment","version":1,
+"trials":{"t":{"events":[{"wait":0.5}]}},"timeline":[{"name":"m","trial":"t"}]}

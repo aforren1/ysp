@@ -1,0 +1,2 @@
+{"format":"ysp-experiment","version":1,
+"stimuli":{"s":{"kind":"text","font":"fonts/NotoSans-Regular.ttf","size":10,"text":"$participant"}},"trials":{"t":{}},"timeline":[{"name":"m","trial":"t"}]}

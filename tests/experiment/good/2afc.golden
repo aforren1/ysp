@@ -1,0 +1,147 @@
+definition version=1 name="contrast_2afc"
+units_deg=1 background=0.5,0.5,0.5 calibration_required=1 min_tier=2 web_allowed=0 web_exclusion=0
+field participant integer required=1
+role resp dir=0 family=[keyboard] required=1 min_tier=0 pulse_ns=0 kind=
+stimulus fix kind=0 layer=1
+  anchor (default) = "center"
+  ax (default) = real:0.5
+  ay (default) = real:0.5
+  blend (default) = "over"
+  cap (default) = "butt"
+  color = [real:0.15, real:0.15, real:0.15]
+  dash (default) = int:0
+  dash_offset (default) = int:0
+  dash_snap (default) = int:0
+  edge = "cosine"
+  edge_width = int:1
+  gap (default) = int:0
+  gate (default) = int:1
+  h = real:0.4
+  join (default) = "round"
+  miter_limit (default) = int:4
+  offset (default) = int:0
+  opacity (default) = int:1
+  ori (default) = int:0
+  p0 (default) = int:0
+  p1 (default) = int:0
+  p10 (default) = int:0
+  p11 (default) = int:0
+  p12 (default) = int:0
+  p13 (default) = int:0
+  p14 (default) = int:0
+  p15 (default) = int:0
+  p16 (default) = int:0
+  p17 (default) = int:0
+  p18 (default) = int:0
+  p19 (default) = int:0
+  p2 (default) = int:0
+  p20 (default) = int:0
+  p21 (default) = int:0
+  p22 (default) = int:0
+  p23 (default) = int:0
+  p24 (default) = int:0
+  p25 (default) = int:0
+  p26 (default) = int:0
+  p27 (default) = int:0
+  p28 (default) = int:0
+  p29 (default) = int:0
+  p3 (default) = int:0
+  p30 (default) = int:0
+  p31 (default) = int:0
+  p4 (default) = int:0
+  p5 (default) = int:0
+  p6 (default) = int:0
+  p7 (default) = int:0
+  p8 (default) = int:0
+  p9 (default) = int:0
+  place (default) = "center"
+  shape = "cross"
+  shape_p0 = real:0.06
+  shape_p1 (default) = int:0
+  shape_p2 (default) = int:0
+  shape_p3 (default) = int:0
+  stroke (default) = int:0
+  stroke_align (default) = "center"
+  trim_end (default) = int:0
+  trim_set (default) = int:0
+  trim_start (default) = int:0
+  visible (default) = int:1
+  w = real:0.4
+  x (default) = int:0
+  y (default) = int:0
+stimulus gabor kind=2 layer=0
+  anchor (default) = "center"
+  aspect (default) = int:1
+  ax (default) = real:0.5
+  ay (default) = real:0.5
+  contrast = michelson($level)
+  dir_b (default) = int:0
+  dir_g (default) = int:0
+  dir_r (default) = int:0
+  gate (default) = int:1
+  h (default) = int:0
+  ori (default) = int:0
+  phase (default) = int:0
+  place (default) = "center"
+  sf = int:2
+  sigma = real:0.4
+  visible (default) = int:1
+  w (default) = int:0
+  x = lookup($side){"left": int:-5, "right": int:5}
+  y (default) = int:0
+method quest type=1 log10=1 estimate=mean dims=[]
+  joint_prior (default) = []
+  n_outcomes (default) = int:2
+  no_table (default) = false
+  param = [linspace[real:-2.5, gamut(gabor.contrast), int:51], linspace[int:1, int:7, int:13], real:0.5, real:0.02]
+  pf (default) = "gumbel"
+  select (default) = "entropy"
+  select_param (default) = int:0
+  select_quantile (default) = real:0.5
+  stim = [linspace[real:-2.5, gamut(gabor.contrast), int:51]]
+  stop_entropy (default) = int:0
+  stop_sd (default) = int:0
+  stop_sd_param (default) = int:0
+  stop_trials = int:60
+  subset_size (default) = int:0
+  tie_tolerance (default) = real:0.000000001
+  tiebreak (default) = "lowest"
+method stair type=0 log10=0 estimate=reversals dims=[]
+  est_reversals (default) = int:0
+  est_trials (default) = int:0
+  harder_is_up (default) = false
+  initial_rule = true
+  max = gamut(gabor.contrast)
+  min = real:0.002
+  n_down = int:3
+  n_up (default) = int:1
+  rule (default) = "updown"
+  start = real:0.2
+  step_down_scale (default) = int:1
+  step_type = "log"
+  steps = [real:0.2, real:0.1, real:0.05]
+  stop_at_limit (default) = int:0
+  stop_reversals (default) = int:0
+  stop_trials = int:60
+  target_p (default) = int:0
+  use_limits (default) = false
+template detect
+  events
+    step on fix stagger=dur:0ns
+    step wait t=dur:500000000ns
+    step on gabor stagger=dur:0ns
+    step wait t=dur:200000000ns
+    step off gabor stagger=dur:0ns
+  after
+    step off fix stagger=dur:0ns
+    step wait t=dur:500000000ns
+  response role=resp from=gabor ends=1 persist=0 max=0 held=0 release=0 choices=left:left,right:right
+    duration=dur:2500000000ns min_rt=dur:0ns key_answer=$side trigger=- 
+  record_given=0 record=[gabor]
+  outcome="correct" method_value=$contrast_shown
+  column contrast_shown = $contrast_shown
+  column stimulus = $side
+node main path=main trial=detect table=- reps=1 interleave=0 track_rate=0 if=- unless=- loop=0 requeue=0 record_data=1
+  rules=""
+  jitters=[] rule_vars=[] tracks=[stair quest]
+  var side = choice["left", "right"]
