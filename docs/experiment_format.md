@@ -4,7 +4,8 @@ Status: design decided 2026-10-14 (proposed 2026-10-13). Nothing is
 built. This page designs the file that the player interprets (rig_spec
 6): the EXPERIMENT entry of a pack. Each decision gives the options, the
 evidence and the choice. The user decided D1 to D15 on 2026-10-14; D4
-changed from the proposal. Part 1 is
+changed from the proposal. D16 to D19 (2026-11-08) are proposals for
+continuous tasks, not decided. Part 1 is
 explanation; part 2 is reference, with four worked examples checked
 against the C examples. Where this page and rig_spec 6 or 14.5 to 14.6
 disagree about the definition, this page is newer.
@@ -313,6 +314,69 @@ that structure; it does not invent a new one.
   maximum fraction of dropped frames). The player records it and the
   self-test's values; the analysis applies it. `min_tier` does not apply
   to a web run.
+
+**D16. Waiting for a control. PROPOSED (2026-11-08), not decided.**
+- Options: (a) a step `{"until": CONTROL}` that splits a template into
+  segments; (b) a general state machine of routines (D7's option (b));
+  (c) a script.
+- Evidence: each of the four tasks of signal_spec.md section 15 waits
+  for a hit one to three times in a trial, always in a straight line.
+  None branches. D7's `after` already builds a second op table when the
+  response ends. `until` is that mechanism, used more than once.
+- Proposal: (a). The steps split at each `until` into segments. A
+  segment is one op table, built when it starts, at the first frame whose
+  onset is at or after the hit's time, with `ytl_at()`. An optional
+  `timeout_s` on the step ends the trial with the outcome `"timeout"`.
+  No default timeout: the designer warns about a wait without one, and
+  the operator can stop a session. D7 still holds for everything else.
+
+**D17. A stimulus property that follows a signal. PROPOSED (2026-11-08), not decided.**
+- Options: (a) a property is bound to a signal for the whole trial;
+  (b) the signal and the timeline both write the property, and the later
+  write wins; (c) one writer: a `mux` node chooses the property's source.
+- Evidence: in `trial_visuomotor` the dot's `visible` follows a signal
+  during the return and is a constant during the reach, so (a) fails.
+  ysp/timeline.h's rule for a channel is "never both": one driver, so
+  (b) would add the case that header refuses. Two tasks choose a color or
+  a visibility per frame from a boolean.
+- Proposal: (c). Two value forms: `{"signal": NAME}`, and `{"when": TEST,
+  "then": V, "else": V}`, where TEST is a control's name (its state) or
+  `{"signal": NAME, "above": LEVEL}`. A property that any step gives one
+  of these forms gets a selector channel on the timeline, a `mux` node
+  and one bind row, so a `set` takes effect at its time on the timeline,
+  as every step does. Constants stay timeline channels. This needs a new
+  `mux` op in ysp/sig.h.
+
+**D18. Freezing a cursor at a crossing. PROPOSED (2026-11-08), not decided.**
+- Options: (a) a step `{"freeze": CONTROL}`, as signal_spec.md section
+  15.2 wrote it; (b) a key on the control, `"freeze_at": CONTROL`.
+- Evidence: a step runs on the first frame after the hit, so the frozen
+  point would be where the cursor was up to a frame later, at peak speed.
+  `trial_visuomotor` shows the point of the sample that crossed, and its
+  data files record that point. The shown endpoint and the recorded one
+  must be the same.
+- Proposal: (b). A `latch` op in ysp/sig.h captures its input on the
+  sample where the control's test is met and holds it until the next
+  trial starts. A second reach inside one trial is out of scope until a
+  task needs it.
+
+**D19. What keeps its state across trials. PROPOSED (2026-11-08), not decided.**
+- Options: (a) everything resets at a trial's start, and a role can set
+  `"keep": true` (signal_spec.md section 15, finding 12); (b) a role's
+  adapter never resets at a trial boundary, the controls do, and a step
+  recenters a relative role; (c) a setting per control.
+- Evidence: a hand does not jump between trials. A reset of a relative
+  adapter moves the cursor while the hand stays. Neither ported program
+  resets per trial: `trial_visuomotor` calls `ysig_reset()` for the first
+  trial only and `trial_bimanual` when both mice are placed.
+- Proposal: (b). A new step `{"recenter": ROLE, "to": POINT}` places a
+  relative role; the loader refuses it on an absolute role. This needs
+  two calls in ysp/sig.h, both journaled: a reset of the experiment's
+  nodes only, and a recenter of one role. It replaces finding 12's
+  `"keep"`.
+
+D16 to D19 add keys and change what a step can do, so they are format
+version 2 (D12).
 
 ### 1.4 Gaps in the C APIs
 

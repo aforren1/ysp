@@ -1014,5 +1014,8 @@ Findings about the test itself:
 
 Before format version 2, decide findings 1 to 3 and 12 with the player's
 sequence model: they change what a step can do, so they are the part of
-D7 that this work reopens. Findings 4 to 7 and 13 are small additions to
+D7 that this work reopens. The proposals are D16 to D19 in
+[experiment_format.md](experiment_format.md); D18 moves the freeze of
+section 15.2 from a step to a key on the control, and D19 replaces
+finding 12's `"keep"`. Findings 4 to 7 and 13 are small additions to
 `ysp/sig.h`. Findings 8 and 9 belong with F23 in `ysp/trials.h`.
