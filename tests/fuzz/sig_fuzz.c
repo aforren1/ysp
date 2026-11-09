@@ -8,7 +8,8 @@
  *              value from a table (zeros, small integers, fractions, huge,
  *              negative, NaN, infinity), and for sines a data length
  *   the rest   a stream of events (kind, control, device, time steps that
- *              go back too), frames, resets, sets, arms, value reads
+ *              go back too), frames, resets, resets of a trial, recenters,
+ *              sets, arms, value reads
  * Every input must return without a sanitizer report, and a graph that
  * opened must replay its own journal to the same digest. A refusal is a
  * correct answer to a bad graph.
@@ -75,8 +76,8 @@ static const ysig_op_vtable cu_vt = { YSIG_OP_ABI, "acc", { 0, 0, 0, 0 }, 1, siz
                                       cu_sample, NULL };
 
 static void build_node(rd* r, ysig_node* nd, int i, int n, double* data) {
-    int k, op = (int)(rb(r) % 26);
-    *nd = ysig_node_of(op == 25 ? YSIG_OP_CUSTOM : op, -1, -1);
+    int k, op = (int)(rb(r) % 32);   /* 31: the custom op */
+    *nd = ysig_node_of(op == 31 ? YSIG_OP_CUSTOM : op, -1, -1);
     for (k = 0; k < 4; k++) {
         int v = (int)(rb(r) % (unsigned)(n + 2)) - 1;
         nd->in[k] = (int16_t)(k < 2 || v < i ? v : -1);
@@ -259,9 +260,16 @@ static void run_one(const uint8_t* data, size_t size) {
         default: {
             int node = (int)(rb(&r) % (unsigned)(g.n + 1));
             unsigned b = rb(&r);
-            if (b % 3 == 0) { ysig_reset(&g, t); tfed = t; }
-            else if (b % 3 == 1) g_sink += ysig_arm(&g, node, t - (int64_t)(b % 7) * 1000000);
-            else g_sink += ysig_disarm(&g, node);
+            if (b % 5 == 0) { ysig_reset(&g, t); tfed = t; }
+            else if (b % 5 == 1) g_sink += ysig_arm(&g, node, t - (int64_t)(b % 7) * 1000000);
+            else if (b % 5 == 2) g_sink += ysig_disarm(&g, node);
+            else if (b % 5 == 3) ysig_reset_trial(&g, t);
+            else {
+                /* a recenter: refused or not, the journal must replay */
+                double x = g_vals[rb(&r) % 29], y = g_vals[rb(&r) % 29];
+                int role_i = (b & 0x40) ? -1 : (int)(rb(&r) % 3);
+                g_sink += ysig_recenter(&g, role_i, x, y);
+            }
             break;
         }
         }
@@ -330,16 +338,19 @@ static size_t seed(int which, uint8_t* o) {
         /* a random graph in the decoder's form, biased to open: inputs
          * earlier, lanes from the op, parameters mostly small; the event
          * stream from the mice and the pen */
-        int nn = 2 + (int)(gen() % 30), ops[] = { 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25 };
+        int nn = 2 + (int)(gen() % 30), ops[] = { 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31 };
         o[n++] = (uint8_t)((nn - 1) | (gen() % 4 == 0 ? 0x80 : 0));
         for (i = 0; i < nn; i++) {
             int op = i < 3 ? 1 : ops[gen() % (sizeof ops / sizeof ops[0])];
             o[n++] = (uint8_t)op;
             for (k = 0; k < 4; k++) {
                 /* inputs by the op: none for a source or a generator, two
-                 * for diff, one or two for the combiners, one else */
-                int gen_op = op == 1 || op == 18 || op == 19 || op == 20, two = op == 17 || ((op == 14 || op == 15 || op == 16 || op == 9 || op == 10) && gen() % 2);
-                int pick = !gen_op && i && (k == 0 || (k == 1 && two)) ? 1 + (int)(gen() % (unsigned)i) : 0;
+                 * for diff and latch, three for mux, one or two for the
+                 * combiners, one else */
+                int gen_op = op == 1 || op == 18 || op == 19 || op == 20,
+                    two = op == 17 || op == 26 || ((op == 14 || op == 15 || op == 16 || op == 9 || op == 10 || op == 27 || op == 28) && gen() % 2),
+                    many = op == 25 || op == 29;
+                int pick = !gen_op && i && (k == 0 || (k == 1 && (two || many)) || (k == 2 && many)) ? 1 + (int)(gen() % (unsigned)i) : 0;
                 o[n++] = (uint8_t)pick;
             }
             o[n++] = (uint8_t)(op == 1 || op == 18 ? 2 : op == 13 || op == 19 ? 1 + gen() % 2 : 0);
@@ -350,6 +361,7 @@ static size_t seed(int which, uint8_t* o) {
                  * position; device 0 or 1 */
                 o[n++] = (uint8_t)(op == 1 ? (k == 0 ? (gen() % 2 ? 1 : 4) : k == 1 || k == 2 ? gen() % 2 : 0)
                                    : op >= 4 && op <= 7 && k == 0 ? (op == 4 ? 15 : 13)
+                                   : op == 30 && k == 0 ? 13
                                    : op == 18 && k == 0 ? 1
                                    : m < 8 ? 0 : m < 9 ? 1 + gen() % 9 : gen());
             }

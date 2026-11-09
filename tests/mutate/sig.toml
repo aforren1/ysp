@@ -509,7 +509,7 @@ id = "60"
 name = "integrate: counts for any DELTA control"
 test = "sig"
 why = "A box's analog channel 1 would be rounded to counts (review P6)."
-find = '                a->node[a->in[id][0]]->p[0] == YIN_KIND_MOUSE)'
+find = '                (int)a->node[a->in[id][0]]->p[0] == YIN_KIND_MOUSE)'
 replace = '                1)'
 
 [[mutant]]
@@ -792,3 +792,548 @@ test = "sig"
 why = "Input 0 is a real node; an unused input left at 0 would wire every node to the graph's first."
 find = '(int16_t)(in1_), -1, -1 }'
 replace = '(int16_t)(in1_), 0, 0 }'
+
+# ---- v0.2.0: mux, latch, distance, peak, all, silent, reset_trial, recenter
+
+[[mutant]]
+id = "95"
+name = "mux: a when the selector is zero"
+test = "sig"
+why = "The selection is the mux's whole job; inverted, every step shows the other input."
+find = 'const ysig_value* c = ysig__truth(in[2]->v[0]) ? in[0] : in[1];'
+replace = 'const ysig_value* c = ysig__truth(in[2]->v[0]) ? in[1] : in[0];'
+
+[[mutant]]
+id = "96"
+name = "truth: NaN counts as nonzero"
+test = "sig"
+why = "A NaN selector or trigger must not flip a selection or arm a latch."
+find = 'static int ysig__truth(double v) { return v > 0 || v < 0; }'
+replace = 'static int ysig__truth(double v) { return v != 0; }'
+
+[[mutant]]
+id = "97"
+name = "mux: t from the changed input, not the chosen one"
+test = "sig"
+why = "A sample of the input not chosen must not move the output's time."
+find = '''        o->t = c->t;
+        o->t_oldest = c->t_oldest;'''
+replace = '''        o->t_oldest = c->t_oldest;'''
+
+[[mutant]]
+id = "98"
+name = "mux: the tier of the other input"
+test = "sig"
+why = "The output's tier is the chosen input's: a never-sampled unselected input must not make it unknown."
+find = '''        o->src_oldest = c->src_oldest;
+        o->tier = c->tier;'''
+replace = '''        o->src_oldest = c->src_oldest;'''
+
+[[mutant]]
+id = "99"
+name = "value_at: a mux's rc from every input"
+test = "sig"
+why = "An input not chosen that is older than its ring does not make the answer stale."
+find = 'rc = rj[2] < rj[c] ? rj[2] : rj[c];'
+replace = 'rc = rj[2] < rj[c] ? rj[2] : rj[c]; rc = rc < rj[1 - c] ? rc : rj[1 - c];'
+
+[[mutant]]
+id = "100"
+name = "latch: level, not a rise"
+test = "sig"
+why = "A trigger already true at the reset must wait for a fall and a rise."
+find = '            if (r && !s->prev) {'
+replace = '            if (r) {'
+
+[[mutant]]
+id = "101"
+name = "latch: not held"
+test = "sig"
+why = "After the rise the value must hold (D18's endpoint)."
+find = '        if (!s->latched) {'
+replace = '        if (1) {'
+
+[[mutant]]
+id = "102"
+name = "latch: a reset keeps the hold"
+test = "sig"
+why = "A reset lets go: the next trial's cursor follows the hand again."
+find = '''            s->latched = 0;
+            s->prev = r;'''
+replace = '''            s->prev = r;'''
+
+[[mutant]]
+id = "103"
+name = "latch: prev zero at a reset"
+test = "sig"
+why = "A trigger already true at the reset would count as a rise at the next pass."
+find = '''            s->latched = 0;
+            s->prev = r;
+            *o = *x;'''
+replace = '''            s->latched = 0;
+            s->prev = 0;
+            *o = *x;'''
+
+[[mutant]]
+id = "104"
+name = "latch: no hit value from a detect on the same input"
+test = "sig"
+why = "A hold that a frame completes must hold the hit's value and time, the recorded ones."
+find = "if (tr->op == YSIG_OP_DETECT && (int)tr->p[13] == YSIG_OUT_HIT && tr->in[0] == n->in[0] &&"
+replace = "if (0 && tr->op == YSIG_OP_DETECT && (int)tr->p[13] == YSIG_OUT_HIT && tr->in[0] == n->in[0] &&"
+
+[[mutant]]
+id = "105"
+name = "latch: a frame's capture not in the ring"
+test = "sig"
+why = "A past read after a hold completed at a frame must see the held value, not the sample before."
+find = '''                /* a frame's capture has no sample's ring entry */
+                if (mode == 1) ysig__hist_push(g, n, o);'''
+replace = '''                (void)0;'''
+
+[[mutant]]
+id = "106"
+name = "distance: the square, not the root"
+test = "sig"
+why = "A radius test on the output would compare against the squared distance."
+find = '        o->v[0] = sqrt(s2);'
+replace = '        o->v[0] = s2;'
+
+[[mutant]]
+id = "107"
+name = "distance: the point from p always"
+test = "sig"
+why = "A second input giving the point must be used."
+find = 'const double* q = n->n_in > 1 ? in[1]->v : n->p;'
+replace = 'const double* q = n->p;'
+
+[[mutant]]
+id = "108"
+name = "distance: lane 0 only"
+test = "sig"
+why = "The output's lanes (1) are not the input's: the y lane must count."
+find = 'for (k = 0; k < in[0]->lanes; k++) { dd = x[k] - q[k]; s2 += dd * dd; }'
+replace = 'for (k = 0; k < L; k++) { dd = x[k] - q[k]; s2 += dd * dd; }'
+
+[[mutant]]
+id = "109"
+name = "all: any, not every"
+test = "sig"
+why = "Two tests at once: all must require every input."
+find = 'ok &= ysig__truth(in[j]->v[0]);'
+replace = 'ok |= ysig__truth(in[j]->v[0]);'
+
+[[mutant]]
+id = "110"
+name = "peak: a rise keeps the old peak"
+test = "sig"
+why = "A new rise of the gate must forget the old peak, also a larger one."
+find = '        if (rise) s->has = 0;'
+replace = '        if (0) s->has = 0;'
+
+[[mutant]]
+id = "111"
+name = "peak: NaN is a value"
+test = "sig"
+why = "A NaN sample would become the peak (its comparisons are false, so the first one sticks when has is 0)."
+find = '        if (q == q && (!s->has || q > s->best)) {'
+replace = '        if (!s->has || q > s->best) {'
+
+[[mutant]]
+id = "112"
+name = "peak: tracks while the gate is zero"
+test = "sig"
+why = "It must hold while the gate is shut."
+find = '        if (!gate || (!rise && mode != 0)) break;'
+replace = '        if (!rise && mode != 0) break;'
+
+[[mutant]]
+id = "113"
+name = "peak: a frame's restart not in the ring"
+test = "sig"
+why = "A past read after a gate that rose at a frame must see the restart."
+find = '''            /* a gate's rise at a frame restarts the peak: the ring must
+             * show it, though a frame's value does not otherwise enter */
+            if (mode == 1) ysig__hist_push(g, n, o);'''
+replace = '''            (void)0;'''
+
+[[mutant]]
+id = "114"
+name = "peak: a frame's view or held value is a candidate"
+test = "sig"
+why = "Only samples set a peak: a frame's mux switch to a larger held value is no sample."
+find = '        if (!gate || (!rise && mode != 0)) break;'
+replace = '        if (!gate) break;'
+
+[[mutant]]
+id = "115"
+name = "silent: judged at the onset"
+test = "sig"
+why = "A planned onset is in the future: silence is judged at the time input is known (the poll), as a view is."
+find = '        if (ysig__sub(g->t_known, s->last) >= n->kns[0]) {'
+replace = '        if (ysig__sub(t, s->last) >= n->kns[0]) {'
+
+[[mutant]]
+id = "116"
+name = "silent: from time zero, not the reset"
+test = "sig"
+why = "Before any sample the count starts at the reset."
+find = '            s->last = s->t_reset = t;'
+replace = '            s->last = s->t_reset = 0;'
+
+[[mutant]]
+id = "117"
+name = "silent: the last arrival's time, not the newest"
+test = "sig"
+why = "A late report of another device must not move the silence's clock back."
+find = '            if (in[0]->t > s->last) s->last = in[0]->t;'
+replace = '            s->last = in[0]->t;'
+
+[[mutant]]
+id = "118"
+name = "silent: strictly past after"
+test = "sig"
+why = "Silent once no sample has come for `after`: exactly after counts (the boundary)."
+find = '        if (ysig__sub(g->t_known, s->last) >= n->kns[0]) {'
+replace = '        if (ysig__sub(g->t_known, s->last) > n->kns[0]) {'
+
+[[mutant]]
+id = "119"
+name = "silent: a sample does not clear it"
+test = "sig"
+why = "A sample arrived: 0 at once, not at the next frame."
+find = '''            if (in[0]->t > s->last) s->last = in[0]->t;
+            o->v[0] = 0;'''
+replace = '''            if (in[0]->t > s->last) s->last = in[0]->t;'''
+
+[[mutant]]
+id = "120"
+name = "value_at silent: past the poll"
+test = "sig"
+why = "A view judges no later than the time input is known."
+find = 'int64_t at = t_ns < g->t_known ? t_ns : g->t_known, base;'
+replace = 'int64_t at = t_ns, base;'
+
+[[mutant]]
+id = "121"
+name = "value_at silent: from the reset only"
+test = "sig"
+why = "Its past value depends on when its input arrived."
+find = 'base = v.t <= at && v.t > s->t_reset ? v.t : s->t_reset;'
+replace = 'base = s->t_reset;'
+
+[[mutant]]
+id = "122"
+name = "value_at silent: a later oldest sample is the arrival"
+test = "sig"
+why = "A ring's oldest entry may be later than t: it says none had come by t."
+find = 'base = v.t <= at && v.t > s->t_reset ? v.t : s->t_reset;'
+replace = 'base = v.t > s->t_reset ? v.t : s->t_reset;'
+
+[[mutant]]
+id = "123"
+name = "reset_trial: resets the adapters too"
+test = "sig"
+why = "D19: a hand does not jump between trials."
+find = '        if (exp_only && id >= g->n_exp) continue;'
+replace = '        (void)exp_only;'
+
+[[mutant]]
+id = "124"
+name = "reset_trial: not journaled"
+test = "sig"
+why = "The call changes values: without the entry a replay diverges."
+find = '''    e.kind = YSIG_J_RESET_TRIAL;
+    e.t = t_ns;
+    ysig__journal(g, &e);'''
+replace = '''    e.kind = YSIG_J_RESET_TRIAL;
+    e.t = t_ns;'''
+
+[[mutant]]
+id = "125"
+name = "recenter: not journaled"
+test = "sig"
+why = "The call moves the hand: without the entry a replay diverges."
+find = '''    e.y = y;
+    ysig__journal(g, &e);'''
+replace = '''    e.y = y;'''
+
+[[mutant]]
+id = "126"
+name = "recenter: the count sum not restarted"
+test = "sig"
+why = "Position = org + gain x n: an old count sum would add to the new origin."
+find = '        if (n->flags & YSIG__F_COUNTS) { s->n[k] = 0; s->org[k] = xy[k]; }'
+replace = '        if (n->flags & YSIG__F_COUNTS) { s->org[k] = xy[k]; }'
+
+[[mutant]]
+id = "127"
+name = "recenter: a scale not inverted"
+test = "sig"
+why = "x, y are in the role's units; the integrator is before the adapter's scale."
+find = '            for (k = 0; k < 2; k++) xy[k] /= n->p[k] != 0 ? n->p[k] : 1.0;'
+replace = '            (void)k;'
+
+[[mutant]]
+id = "128"
+name = "recenter: an offset not inverted"
+test = "sig"
+why = "The same for an offset after the integrator."
+find = '            for (k = 0; k < 2; k++) xy[k] -= n->p[k];'
+replace = '            (void)k;'
+
+[[mutant]]
+id = "129"
+name = "recenter: no bounds check"
+test = "sig"
+why = "A point outside the integrator's bounds would be clamped silently at the next count."
+find = '        if ((n->p[8 + k] != 0 || n->p[12 + k] != 0) && (!(xy[k] >= n->p[8 + k]) || !(xy[k] <= n->p[12 + k]))) {'
+replace = '        if (0) {'
+
+[[mutant]]
+id = "130"
+name = "recenter: an absolute adapter passes"
+test = "sig"
+why = "Only a relative role can be placed (D19)."
+find = 'if (a < 0 || g->adapter_type[a] != YSIG_TYPE_POSITION2D_RELATIVE) {'
+replace = 'if (a < 0) {'
+
+[[mutant]]
+id = "131"
+name = "recenter: downstream nodes not re-run"
+test = "sig"
+why = "A still hand sends nothing: the cursor must move to the new place at the next frame."
+find = '        ysig__run(g, nid, 2, o->t);'
+replace = '        (void)nid;'
+
+[[mutant]]
+id = "132"
+name = "recenter: a latch restarted"
+test = "sig"
+why = "A latch holds until the next reset; a recenter is not a reset."
+find = '''        if (m->op == YSIG_OP_LATCH) {
+            if (!((ysig__latch_st*)m->st)->latched) { g->val[nid] = g->val[m->in[0]]; ysig__hist_push(g, m, &g->val[nid]); }
+            continue;
+        }'''
+replace = ''
+
+[[mutant]]
+id = "133"
+name = "recenter: a peak restarted"
+test = "sig"
+why = "A peak keeps its peak across a recenter."
+find = '        if (m->op == YSIG_OP_PEAK || m->op == YSIG_OP_SILENT) continue;'
+replace = '        if (m->op == YSIG_OP_SILENT) continue;'
+
+[[mutant]]
+id = "134"
+name = "recenter: a silent restarted"
+test = "sig"
+why = "A long silence must stand across a recenter (a mode-2 run would zero it)."
+find = '        if (m->op == YSIG_OP_PEAK || m->op == YSIG_OP_SILENT) continue;'
+replace = '        if (m->op == YSIG_OP_PEAK) continue;'
+
+[[mutant]]
+id = "135"
+name = "recenter: a rate integrator's sum not set"
+test = "sig"
+why = "acc is the rate integrator's position: the placement must set it."
+find = '        else s->acc[k] = xy[k];'
+replace = '        else (void)xy;'
+
+[[mutant]]
+id = "136"
+name = "detect: the output always the test"
+test = "sig"
+why = "out hit: 1 from a hit, not the test's state."
+find = 'o->v[0] = (hit_out ? s->fired : s->state) ? 1.0 : 0.0;'
+replace = 'o->v[0] = s->state ? 1.0 : 0.0;'
+
+[[mutant]]
+id = "137"
+name = "detect: a crossing's hit output not cleared when ready"
+test = "sig"
+why = "With repeat every the hit output must fall when the detect is ready for the next."
+find = '''        /* ready again once the test fails with the level moved back */
+        s->ready = 1;
+        s->fired = 0;'''
+replace = '''        /* ready again once the test fails with the level moved back */
+        s->ready = 1;'''
+
+[[mutant]]
+id = "138"
+name = "detect: arm leaves a hit output at 1"
+test = "sig"
+why = "ysig_arm() starts a new trial for the detect: the hit output returns to 0 at once."
+find = '    if ((int)n->p[13] == YSIG_OUT_HIT) g->val[i].v[0] = 0.0;'
+replace = '    (void)n;'
+
+[[mutant]]
+id = "139"
+name = "detect: refused as an input"
+test = "sig"
+why = "A detect's state lane is a mux selector and an all input (D17)."
+find = '            if ((a->flags[u] & YSIG__F_SINK) && a->lanes[u] == 0)'
+replace = '            if ((a->flags[u] & YSIG__F_SINK))'
+
+[[mutant]]
+id = "140"
+name = "detect: a frame's output change not scheduled"
+test = "sig"
+why = "A hold completed by a frame must reach the latch in that frame's pass."
+find = "            if ((int)nd->p[5] == 1 || (int)nd->p[13] == YSIG_OUT_HIT) fl |= YSIG__F_FRAME;"
+replace = "            (void)fl;"
+
+[[mutant]]
+id = "141"
+name = "detect: no ring entry"
+test = "sig"
+why = "A mux or all with a detect input reads the detect's ring at a past time."
+find = '''            if (n->hist.cap) ysig__hist_push(g, n, &g->val[i]);
+            break;'''
+replace = '''            break;'''
+
+[[mutant]]
+id = "142"
+name = "detect: tier not carried"
+test = "sig"
+why = "A detect's output now feeds other ops: it carries its input's tier and sources."
+find = '''    o->src_oldest = v->src_oldest;
+    o->tier = v->tier;
+    o->unc_us = v->unc_us;
+}'''
+replace = '''    o->src_oldest = v->src_oldest;
+    o->unc_us = v->unc_us;
+}'''
+
+[[mutant]]
+id = "143"
+name = "detect: a hit output 1 at reset when the test is true"
+test = "sig"
+why = "out hit is about hits: none has happened at a reset."
+find = "o->v[0] = (int)n->p[13] != YSIG_OUT_HIT && ((ysig__det_st*)n->st)->state ? 1.0 : 0.0;"
+replace = "o->v[0] = ((ysig__det_st*)n->st)->state ? 1.0 : 0.0;"
+
+[[mutant]]
+id = "144"
+name = "set: peak's lane unchecked"
+test = "sig"
+why = "ysig_set after open must keep the lane inside the input."
+find = 'case YSIG_OP_PEAK: return (int)v < g->val[n->in[0]].lanes;'
+replace = 'case YSIG_OP_PEAK: return true;'
+
+[[mutant]]
+id = "145"
+name = "set: detect out allowed"
+test = "sig"
+why = "The output mode is in the frame schedule: it may not change after open."
+find = '        if (param == 5 || param == 13) return false;   /* the schedules depend on them */'
+replace = '        if (param == 5) return false;'
+
+[[mutant]]
+id = "146"
+name = "check: a peak on no source"
+test = "sig"
+why = "A peak on a generator alone would never see a sample (it is stateful)."
+find = 'op == YSIG_OP_DELAY || op == YSIG_OP_PEAK || op == YSIG_OP_SILENT))'
+replace = 'op == YSIG_OP_DELAY || op == YSIG_OP_SILENT))'
+
+[[mutant]]
+id = "147"
+name = "check: a silent on no source"
+test = "sig"
+why = "Silence needs an input that can arrive."
+find = 'op == YSIG_OP_DELAY || op == YSIG_OP_PEAK || op == YSIG_OP_SILENT))'
+replace = 'op == YSIG_OP_DELAY || op == YSIG_OP_PEAK))'
+
+[[mutant]]
+id = "148"
+name = "check: distance of any lanes"
+test = "sig"
+why = "Distance needs 2 or 3 lanes."
+find = '            if (in0 != 2 && in0 != 3)'
+replace = '            if (in0 < 1)'
+
+[[mutant]]
+id = "149"
+name = "check: the point's lanes unchecked"
+test = "sig"
+why = "A 1-lane point would read uninitialized lanes of the second input."
+find = '            if (a->n_in[id] > 1 && a->lanes[a->in[id][1]] != in0)'
+replace = '            if (0)'
+
+[[mutant]]
+id = "150"
+name = "check: a peak's lane unchecked"
+test = "sig"
+why = "A lane past the input reads a stale lane."
+find = '''        case YSIG_OP_PEAK:
+            if ((int)nd->p[0] >= in0)'''
+replace = '''        case YSIG_OP_PEAK:
+            if (0)'''
+
+[[mutant]]
+id = "151"
+name = "check: silent keeps its own ring"
+test = "sig"
+why = "A silent's past value comes from its input's arrivals, as the rings hold them."
+find = '            ((ysig__ops[op].kind & YSIG__K_PURE) || op == YSIG_OP_SILENT)) {'
+replace = '            (ysig__ops[op].kind & YSIG__K_PURE)) {'
+
+[[mutant]]
+id = "152"
+name = "check: all with one input"
+test = "sig"
+why = "A one-input all is no test of two: refused at the check."
+find = '{ "all", 2, 4, YSIG__R_ONE, YSIG__K_PURE, NULL, 0 },'
+replace = '{ "all", 1, 4, YSIG__R_ONE, YSIG__K_PURE, NULL, 0 },'
+
+[[mutant]]
+id = "153"
+name = "check: mux a and b of any lanes"
+test = "sig"
+why = "Different lanes would read stale lanes."
+find = '            if (a->lanes[a->in[id][1]] != in0)'
+replace = '            if (0)'
+
+[[mutant]]
+id = "154"
+name = "the op enum's last value"
+test = "sig"
+why = "The op row's upper bound names the last op; off by one refuses silent."
+find = '{ "op", "enum", 0, 30, 0,'
+replace = '{ "op", "enum", 0, 29, 0,'
+
+[[mutant]]
+id = "155"
+name = "reset: the time known not set"
+test = "sig"
+why = "A past silent read before the first frame must be bounded by the reset, not the previous run's poll."
+find = '    g->t_known = t;'
+replace = '    (void)t;'
+
+[[mutant]]
+id = "156"
+name = "detect: hold's hit output not raised"
+test = "sig"
+why = "out hit rises when a hold completes (D18), not only at a crossing."
+find = '''    ysig__hit(g, i, ysig__add(s->t_start, n->kns[0]), t, &s->v_start);
+    s->fired = 1;'''
+replace = '''    ysig__hit(g, i, ysig__add(s->t_start, n->kns[0]), t, &s->v_start);
+    s->fired = 0;'''
+
+[[mutant]]
+id = "157"
+name = "detect: a frame's hold completion not on the output"
+test = "sig"
+why = "A hold that a still hand completes at a frame must raise the output in that frame's pass."
+find = "    if ((int)n->p[13] == YSIG_OUT_HIT && s->fired) ysig__det_out(g, i, v, onset);\n"
+replace = "    (void)v;\n"
+
+[[mutant]]
+id = "158"
+name = "recenter: the role to node search stops at the wrong role"
+test = "sig"
+why = "ysig_recenter names a role by its index in desc.roles; any other role's adapter would be moved."
+find = "if (g->nd[i].op == YSIG_OP_ROLE && (int)g->nd[i].p[0] == role) { cur = g->nd[i].in[0]; break; }"
+replace = "if (g->nd[i].op == YSIG_OP_ROLE) { cur = g->nd[i].in[0]; break; }"
