@@ -5,7 +5,7 @@ built. This page designs the file that the player interprets (rig_spec
 6): the EXPERIMENT entry of a pack. Each decision gives the options, the
 evidence and the choice. The user decided D1 to D15 on 2026-10-14; D4
 changed from the proposal. The user decided D16 to D19, for continuous
-tasks, on 2026-11-09. Nothing is built for them. D20 is a proposal. Part 1 is
+tasks, on 2026-11-09. Nothing is built for them. The user decided D20 on the same day. Part 1 is
 explanation; part 2 is reference, with four worked examples checked
 against the C examples. Where this page and rig_spec 6 or 14.5 to 14.6
 disagree about the definition, this page is newer.
@@ -329,7 +329,7 @@ that structure; it does not invent a new one.
   `timeout_s` on the step ends the trial with the outcome `"timeout"`.
   A wait with no timeout is valid: the operator can stop a session.
   The designer warns about one. D7 still holds for everything else.
-  D20 proposes to amend this.
+  D20 amends this.
 
 **D17. A stimulus property that follows a signal. DECIDED (2026-11-09).**
 - Options: (a) a property is bound to a signal for the whole trial;
@@ -376,7 +376,7 @@ that structure; it does not invent a new one.
   nodes only, and a recenter of one role. It replaces finding 12's
   `"keep"`.
 
-**D20. A trial as named states with exits. PROPOSED (2026-11-09), not decided. It amends D16.**
+**D20. A trial as named states with exits. DECIDED (2026-11-09). It amends D16.**
 - Options: (a) D16's straight line of segments; (b) named states, each
   with exits, where `until` is the shorthand for "exit to the next
   state"; (c) full statecharts, with nested and parallel states, as in
@@ -389,7 +389,7 @@ that structure; it does not invent a new one.
   needs transitions, conditions and a scheduler; D16 already adds the
   scheduler, and the conditions here are only hits and elapsed times.
   Nothing has parsed format version 2 yet, so nothing needs migration.
-- Proposal: (b).
+- Decision: (b).
 
   ```json
   "states": [
@@ -452,11 +452,29 @@ that structure; it does not invent a new one.
     ] }
   ```
 
-  Nested states, parallel states and a limit on retries (`max_visits`)
-  wait for a task that needs them. The response, the graph and the stimuli
+  11. Shared exits. The template's `"exits"` are exits that several states
+     have, so a task does not repeat one. Each has `"in"`, the list of
+     states; it is required. A shared exit is one of each listed state's
+     exits and arms with them. It comes after the state's own exits in the
+     list order of rule 4. It is `on` or `after_s`: an instant shared exit
+     is refused.
+  12. `"max_visits": N` on a state, with `"over": {"to": STATE, "outcome":
+     VALUE}`, limits how many times one trial enters that state. Entry
+     N + 1 runs none of the state's steps and goes to `over` instead, on
+     the same frame. A cycle still needs an exit that waits (rule 6).
+
+  ```json
+  { "exits": [{ "on": "broke", "to": "fixate", "in": ["cue", "delay"] }],
+    "states": [
+      { "name": "fixate", "max_visits": 3, "over": { "to": "end", "outcome": "too_many_breaks" },
+        "steps": [{ "on": "fix" }], "exits": [{ "on": "held", "to": "cue" }] }
+    ] }
+  ```
+
+  Nested states and parallel states wait for a task that needs them. The response, the graph and the stimuli
   already run side by side.
 
-D16 to D19, and D20 if it is accepted, add keys and change what a step can
+D16 to D20 add keys and change what a step can
 do, so they are format version 2 (D12).
 
 ### 1.4 Gaps in the C APIs
