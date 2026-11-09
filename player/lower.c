@@ -562,18 +562,10 @@ static int pl_apply_key(pl_player* p, pl_stim* s, const yexp_prop* pr, int pass)
 
     /* keys that are not fields of ygfx_stim */
     if (strcmp(key, "layer") == 0 || strcmp(key, "kind") == 0) return 0;
-    if (strcmp(key, "visible") == 0) {
-        /* Format gap: `visible` is a table key that on/off also drive. The
-         * loader keeps it; lowering honors it only when no step drives the
-         * channel, since otherwise the channel owns it. */
-        if (s->ch_visible >= 0) return 0;
-        {
-            double d;
-            if (pl_eval_num(p, &p->env, v, &d) < 0) return -1;
-            s->gs.visible = (float)d;
-        }
-        return 0;
-    }
+    /* Format gap: `visible` is a key and also what on/off drive. A stimulus
+     * that no step shows is not drawn at all (the draw skips it), so the key
+     * is ignored; if a step shows it, the channel owns visibility. */
+    if (strcmp(key, "visible") == 0) return 0;
     if (strcmp(key, "color") == 0 && s->def->kind != YEXP_SOUND) {
         pl_val a;
         double r, g, b;
@@ -1182,6 +1174,21 @@ static int pl_method_open(pl_player* p, pl_method* m) {
 
 /* --- templates and responses --------------------------------------------- */
 
+/* The stimuli a template touches: only their keys are evaluated per trial,
+ * because a key can name a variable only the leaves running this template
+ * have (the loader checks it per reaching template). */
+static void pl_mark_stims(pl_player* p, pl_tmpl* t, const yexp_step* st, int n) {
+    int i, k;
+    for (i = 0; i < n; i++) {
+        const yexp_step* s = &st[i];
+        for (k = 0; k < s->n_stims; k++) {
+            const pl_stim* ps = pl_stim_by_name(p, s->stims[k]);
+            if (ps) t->stim_used[ps - p->stims] = true;
+        }
+        if (s->op == YEXP_IF || s->op == YEXP_UNLESS) pl_mark_stims(p, t, s->steps, s->n_steps);
+    }
+}
+
 static int pl_response_kind(const yexp_role* role) {
     /* The first family in the role that this rig can give decides the kind.
      * --sim has no rig devices: a role whose first family is keyboard is a
@@ -1195,6 +1202,14 @@ static int pl_tmpl_open(pl_player* p, pl_tmpl* t) {
     t->ops = (ytl_op*)pl_alloc(p, sizeof(ytl_op) * (size_t)bound);
     if (!t->ops) return -1;
     t->ops_cap = bound;
+    t->stim_used = (bool*)pl_alloc(p, sizeof(bool) * (size_t)(p->n_stims + 1));
+    if (!t->stim_used) return -1;
+    pl_mark_stims(p, t, d->events, d->n_events);
+    pl_mark_stims(p, t, d->after, d->n_after);
+    if (d->response) {
+        const pl_stim* ps = pl_stim_by_name(p, d->response->from);
+        if (ps) t->stim_used[ps - p->stims] = true;
+    }
     t->n_record = d->n_record;
     t->record_stims = (int*)pl_alloc(p, sizeof(int) * (size_t)(d->n_record + 1));
     if (!t->record_stims) return -1;

@@ -385,8 +385,18 @@ def t_sound(ctx):
         check(all(abs(x - 0.3) < 1e-6 for x in rts) and all(row["onset_src"] == "2" for row in r.trials), "RT runs from the audio onset: %s %s" % (rts[:2], r.trials[0]["onset_src"]))
 
 
+def t_unused_stim(ctx):
+    # a stimulus the running template does not touch may name a variable of
+    # another leaf only: its keys must not be evaluated here (2.5)
+    d = base({"a": tmpl(key_answer="left"), "b": {"events": [{"on": "u"}, {"wait_s": 0.05}, {"off": "u"}]}},
+             [{"name": "one", "trial": "a", "rules": ["reps 2"]}, {"name": "two", "trial": "b", "vars": {"z": 5}, "rules": ["reps 2"]}],
+             stimuli={"s": {"kind": "shape", "w": 1, "h": 1}, "u": {"kind": "shape", "w": "$z", "h": 1}})
+    r = Run(ctx, "unused_stim", d, args=["--rt", "0.2"])
+    check(r.rc == 0 and len(r.trials) == 4, "a stimulus's variable exists only for its own template: %s" % r.err)
+
+
 TESTS = [t_nested, t_if_unless, t_empty_and_zero, t_loop, t_requeue, t_track_ends, t_lookup_keys, t_triggers, t_after_timing, t_outcomes,
-         t_method_update, t_seeds, t_refused]
+         t_method_update, t_seeds, t_refused, t_unused_stim]
 
 
 def main():

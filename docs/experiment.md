@@ -236,11 +236,13 @@ another job was using the machine during the run.
 
 ## Not done
 
-- No lowering and no `--sim` run: the next task.
+- The player ([player.md](player.md)) lowers the checked form and runs it
+  on the simulated display. A real window and a real device are not built.
 - The pack tool calls `yexp_load()` and `yexp_canonical()` from v0.8.0
   (pack.md 16). It supplies entries, columns, levels and `ytr_rules()`; the
   rig, the parameter tables and `ytl_check_ops()` are skipped at build.
-- `rules()` and `check_ops()` are exercised through a test host only; no
-  host calls `ytr_rules()` or `ytl_check_ops()` yet.
+- The player is the first host that calls `ytr_rules()`, a dry `ytr_open()`
+  and `ytl_check_ops()` at the variables' extremes; `tests/player/` runs them
+  against real tables and a real rig profile.
 - No run on macOS, Windows or emcc. The unit test is not in the emcc CI
   list because it reads files; the compile check is.

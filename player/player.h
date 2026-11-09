@@ -184,6 +184,7 @@ typedef struct pl_tmpl {
     ytl_op* ops;  int ops_cap;  /* big enough for events + after + the rest  */
     /* record list */
     int*  record_stims; int n_record;
+    bool* stim_used;            /* the stimuli this template shows or changes */
 } pl_tmpl;
 
 typedef struct pl_response_rule {

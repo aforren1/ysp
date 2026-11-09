@@ -62,7 +62,8 @@ forced. The Report section lists them with the evidence.
 | A property that depends on the response | Applied when `after` is built (`pl_value_after()`), per 2.7 |
 | A stimulus key that varies per trial on `rdk`: `count`, `w`, `aperture`, ... | Refused: the field is opened at load |
 | `mark` named `end` | An ordinary mark; the trial's end uses the code `0x7fffffff`, so no name collides |
-| `visible` as a key | Honored only when no step drives the stimulus's channel |
+| `visible` as a key | Ignored: a stimulus that no step shows is never drawn; a shown one's channel owns its visibility |
+| A stimulus's keys at a trial start | Only the stimuli the running template touches, since a key can name a variable of another template's leaf only |
 | `edge` on `rdk` | `yrdk_desc.edge`; gfx's dots keep their default edge |
 | A leaf with tracks and a table, whose template reads a column on a track trial | The run stops at that trial with a named error: a track trial has no row. A finding: the format does not forbid it |
 | `$outcome` with no `key_answer` | `responded`; `correct` empty; `ytr_update()` gets the choice index |
@@ -81,19 +82,20 @@ in `--sim`; its device rule (`ydev_rule`) needs a real role.
 
 ## Results
 
-2026-11-09, the Linux desktop (Debian 12, gcc 12.2, i7-1360P, 20 threads),
-virtual clock. All in `tests/player/`.
+2026-11-09, the Linux desktop (Debian 12, gcc 12.2, 20 threads), `--sim`
+on the virtual clock, unless the row says otherwise.
 
 | Check | Result |
 |---|---|
-| `compare.py`, the four worked examples against their C programs | Below |
-| `player_test.py` | 14 cases, 0 failures |
-| `eval_test.c` | 52 checks, 0 failures, ASan and UBSan clean (`setarch -R`) |
-| The four examples under ASan and UBSan | Clean |
-| Determinism | `trials.csv`, `events.csv`, `frames.csv` and `session.json` byte-identical across two runs (`t_seeds`, `compare.py`) |
-| Frame work (`--measure`, the 2AFC session) | Max frame 44.5 us, max trial start 35.5 us, no allocation in the frame loop (see below) |
-
-Frame work was measured while nothing else ran.
+| The four worked examples against their C programs (`tests/player/compare.py`) | RDK, 2AFC: every shared column exact, the dots' digest and the steps file included (the program's trial seed from `--trial-seeds`, the 2AFC's timing from `--design-timing`, both test-only). Stroop: exact except columns the format derives differently (`block` text, `too_slow`). Oddball (`trigger_flip.c`): not comparable column for column; the shared mechanism checked instead. The report lists each column |
+| `tests/player/player_test.py` | 14 cases of unusual shapes (nesting, `if` on a node and a step, a container with no children, `loop` and `max`, `requeue` of a timeout, a track that ends early, a lookup in every key type, role order, `after` timing, outcomes, `$level` and `$estimate` in stimulus units, a sound's onset, D8 seed stability, refused packs): pass |
+| `tests/player/eval_test.c` | 52 checks of the evaluator and op tables; the host's role check against a real profile: pass |
+| ASan and UBSan (`setarch -R`, the player, the four examples, the unit test) | Clean |
+| Fuzz (`tests/fuzz/player_fuzz.c`, self-driven token mutations of the examples, each run budgeted to 6 trials) | 24,000 inputs under ASan and UBSan, no report; 3,235 loaded and ran to the end |
+| Coverage of the fuzz run (gcov -O0, 6,000 inputs) | `eval.c` 71 % of 268 lines, `host.c` 81 % of 222, `lower.c` 79 % of 1222, `run.c` 80 % of 1035; successful runs reached (810) |
+| Mutants (`tests/mutate/player_lower.toml`, `player_run.toml`) | 17 of 17 killed |
+| Allocations in `pl_frame` (`player_alloc_test`, wrapped malloc, calloc, realloc) | 0 on all four examples |
+| Frame work (`--measure`, the 2AFC session: QUEST+ on the frame path, nothing else running, build RelWithDebInfo, 2026-11-09) | Max frame 44.5 us, max trial start 35.5 us; no frame near the 16 ms budget |
 
 ## What a real-window run needs next
 

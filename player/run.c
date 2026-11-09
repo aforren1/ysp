@@ -412,6 +412,7 @@ static int pl_stim_begin_trial(pl_player* p, const yscr_frame* f) {
     int i;
     for (i = 0; i < p->n_stims; i++) {
         pl_stim* s = &p->stims[i];
+        if (!p->tmpl->stim_used[i]) continue;
         if (pl_apply_writes(p, s, PL_KEY_TRIAL) < 0) return -1;
         if (s->michelson) {
             ycol_shown sh;
@@ -477,6 +478,7 @@ static int pl_build_after(pl_player* p, int64_t start) {
     int r, i;
     for (i = 0; i < p->n_stims; i++) {
         pl_stim* s = &p->stims[i];
+        if (!p->tmpl->stim_used[i]) continue;
         if (pl_apply_writes(p, s, PL_KEY_AFTER) < 0) return -1;
         if (s->def->kind == YEXP_TEXT && pl_value_after(s->text_value) && pl_stim_set_text(p, s) < 0) return -1;
     }
@@ -1295,7 +1297,8 @@ static int pl_draw(pl_player* p, const yscr_frame* f) {
     ygfx_begin(&p->gfx, f);
     for (i = 0; i < p->n_stims; i++) {
         pl_stim* s = &p->stims[p->draw_order[i]];
-        if (s->def->kind == YEXP_SOUND) continue;
+        /* a stimulus no step shows has no channel and is never drawn */
+        if (s->def->kind == YEXP_SOUND || s->ch_visible < 0) continue;
         if (s->def->kind == YEXP_RDK) {
             if (s->gs.visible >= 0.5f) {
                 if (!s->rdk_moving) {
