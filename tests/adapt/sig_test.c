@@ -3752,30 +3752,33 @@ static void test_late_stamp(void) {
         CHECK(ysig_value_of(&g, 0)->v[0] == 4);                       /* the sample flowed; the ring skipped it */
         CHECK(ysig_value_at(&g, 0, 34 * MS, &at) == 0);
     }
-    /* only a clearly bad stamp changes anything: exactly YSIG_FUTURE_NS
-     * past the poll is believed, one ns more is not */
+    /* only a clearly bad stamp changes anything: exactly 1 s past the poll
+     * is believed, 1 ns more is not, also on a frame that lowers another
+     * source's bad stamp (literals: the limit's value is part of the test) */
     {
-        ysig_node m[2];
+        ysig_node m[3];
         m[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2);
-        m[1] = ysig_node_of(YSIG_OP_SILENT, 0, -1); m[1].p[0] = 0.1;
-        d = desc_of(m, 2);
+        m[1] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 2, 2);
+        m[2] = ysig_node_of(YSIG_OP_SILENT, 0, -1); m[2].p[0] = 0.1;
+        d = desc_of(m, 3);
         if (!open_desc(&g, &d)) { g_failures++; return; }
         ysig_reset(&g, 0);
-        e = PEN_E(100 * MS + YSIG_FUTURE_NS, 1, 1, 0, YIN_TIER_SIM); ysig_feed(&g, &e);
+        e = PEN_E(1100 * MS, 1, 1, 0, YIN_TIER_SIM); ysig_feed(&g, &e);
+        e = PEN_E(10100 * MS, 2, 1, 0, YIN_TIER_SIM); ysig_feed(&g, &e);
         f = frame_poll(1, 100 * MS, 100 * MS, NULL, 0); ysig_frame(&g, &f);
         e = PEN_E(200 * MS, 1, 2, 0, YIN_TIER_SIM); ysig_feed(&g, &e);   /* older than the believed stamp */
         ysig_get_stats(&g, &st);
         CHECK(st.dropped_order == 1 && ysig_value_of(&g, 0)->v[0] == 1);
         f = frame_poll(2, 1150 * MS, 1150 * MS, NULL, 0); ysig_frame(&g, &f);
-        CHECK(ysig_value_of(&g, 1)->v[0] == 0);                         /* 50 ms after the believed stamp */
+        CHECK(ysig_value_of(&g, 2)->v[0] == 0);                         /* 50 ms after the believed stamp */
         ysig_reset(&g, 0);
-        e = PEN_E(100 * MS + YSIG_FUTURE_NS + 1, 1, 1, 0, YIN_TIER_SIM); ysig_feed(&g, &e);
+        e = PEN_E(1100 * MS + 1, 1, 1, 0, YIN_TIER_SIM); ysig_feed(&g, &e);
         f = frame_poll(3, 100 * MS, 100 * MS, NULL, 0); ysig_frame(&g, &f);
         e = PEN_E(200 * MS, 1, 2, 0, YIN_TIER_SIM); ysig_feed(&g, &e);
         ysig_get_stats(&g, &st);
         CHECK(st.dropped_order == 1 && ysig_value_of(&g, 0)->v[0] == 2);  /* no new drop */
         f = frame_poll(4, 1150 * MS, 1150 * MS, NULL, 0); ysig_frame(&g, &f);
-        CHECK(ysig_value_of(&g, 1)->v[0] == 1);                         /* the 200 ms sample is the last believed: 950 ms */
+        CHECK(ysig_value_of(&g, 2)->v[0] == 1);                         /* 950 ms after the 200 ms sample */
     }
     /* no poll, no recovery: a graph with no view keeps dropping */
     n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2);

@@ -337,7 +337,8 @@
  *   a planned onset ahead of the poll, past reads, resets, extreme times,
  *   replay), the compile checks (C99, C11, C++17, C++20), the fuzz target
  *   under ASan and UBSan (20 million inputs, the new ops and calls, valid
- *   adapter graphs), 183 of 183 mutants killed, and trial_visuomotor and
+ *   adapter graphs), 183 of 184 mutants killed (one is a cost only: docs/sig.md),
+ *   and trial_visuomotor and
  *   trial_bimanual
  *   byte-identical to v0.1.0's CI data. Four raw mice at 8 kHz into 32
  *   nodes: 144 ns a sample and 0.29 us a ysig_frame() at the median on a

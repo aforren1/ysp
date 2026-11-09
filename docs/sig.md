@@ -648,8 +648,8 @@ counts this program's allocator calls during the 60 s run (glibc).
   `test_detect_out`, `test_reset_trial`, `test_recenter`,
   `test_ops_refusals`, `test_ops_views`, `test_ops_replay`,
   `test_recenter_time`, `test_recenter_chain`, `test_peak_order`,
-  `test_late_stamp`, `test_rearm` and `test_hold_frame_input`, each beyond a
-  closed form: reports out of time order (two sources, two devices), reads
+  `test_late_stamp`, `test_rearm`, `test_hold_frame_input` and `test_u`, each
+  beyond a closed form: reports out of time order (two sources, two devices), reads
   at a planned onset ahead of the poll with no recent sample and a still
   input, `ysig_value_at()` at a past time, inside `on_row` and with a
   frame-updated input (`mux` with a `channel` selector), before any sample,
@@ -700,9 +700,10 @@ earlier seeds set the adapter bit in a byte that also holds the node count,
 so no adapter graph opened. 20,000,000 inputs (seed 783) in 36 min, no
 finding: 14,504,450 refused by `ysig_check()`, 5,494,810 graphs opened and
 ran (640.6 million events taken, 373.3 million rows, 9.97 million hits).
-- `tests/mutate/sig.toml`: 183 mutants and a control; 183 of 183 killed
-  (v0.2.0: mutants 95 to 184 for the new ops, the calls and the review's
-  fixes).
+- `tests/mutate/sig.toml`: 184 mutants and a control; 183 killed. Mutant
+  189 removes the early exit of the late-stamp walk and survives by design:
+  it changes only the cost (v0.2.0: mutants 95 to 191 for the new ops, the
+  calls and the reviews' fixes).
   Mutants 89 to 93 move a name off its row (a swap, a gap, the shared
   tables of `speed` and `mean`).
   Mutants 70 and 71 remove the saturation of time arithmetic; the test
