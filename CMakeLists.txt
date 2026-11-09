@@ -190,7 +190,7 @@ endif()
 # program registered with ctest too, and one with YSP_ASYNC_<name> ON gets
 # the compile check and that test built a second time with
 # Y<X>_ASYNC defined, which is the opt-in layer that pulls in ysp/rt.h.
-set(YSP_LIBS rt parallel serial stair quest aep table json pack trials dataset timeline input response sig box device rigfile net color rdk outline screen audio gfx video)
+set(YSP_LIBS rt parallel serial stair quest aep table json experiment pack trials dataset timeline input response sig box device rigfile net color rdk outline screen audio gfx video)
 
 # Examples that sit in the folder of the header they mainly show but need
 # another header's build: path, program name (the file's own name, kept from
@@ -281,6 +281,13 @@ set(YSP_PREFIX_json        YJS)
 set(YSP_GROUP_json         core)
 set(YSP_PLATFORMS_json     Windows Linux Darwin)
 set(YSP_THREADS_json       OFF)
+
+# The experiment definition loader (docs/experiment.md) reads a definition
+# through ysp/json.h and includes nothing else.
+set(YSP_PREFIX_experiment  YEXP)
+set(YSP_GROUP_experiment   core)
+set(YSP_PLATFORMS_experiment Windows Linux Darwin)
+set(YSP_THREADS_experiment OFF)
 
 # The pack reader includes nothing; it maps files through the OS (kernel32 on
 # Windows, mmap on POSIX), which every program links already.
@@ -697,6 +704,17 @@ if(TARGET SDL3::SDL3 AND YSP_BUILD_TESTS AND APPLE)
     target_compile_options(test_screen_metal PRIVATE -fblocks)
     target_link_libraries(test_screen_metal PRIVATE "-framework ApplicationServices" objc)
 endif()
+# ysp/experiment.h's corpus (the definitions and their golden dumps) stays in
+# the source tree; its C99 floor gets its own check, since every other
+# program builds as C11.
+if(YSP_BUILD_TESTS AND TEST test_experiment)
+    set_tests_properties(test_experiment compile_experiment_test PROPERTIES
+        ENVIRONMENT "YEXP_CORPUS=${CMAKE_CURRENT_SOURCE_DIR}/tests/experiment")
+    ysp_add_program(compile_experiment_c99 tests/compile/experiment.c core)
+    set_target_properties(compile_experiment_c99 PROPERTIES C_STANDARD 99)
+    add_test(NAME compile_experiment_c99 COMMAND compile_experiment_c99)
+endif()
+
 # Every header's parameter table against the one row shape (name, type,
 # min, max, def, unit, doc, values; docs/experiment_format.md, G6): one
 # program that includes them all, as the player's loader will, without

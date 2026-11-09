@@ -542,7 +542,7 @@ static const yexp_row yexp__rows[] = {
     { YEXP__S_ROLE, 0xffff, YEXP__T_STRS, YEXP__R_REQ, "family", NULL, NULL },
     { YEXP__S_ROLE, 0xffff, YEXP__T_STR, 0, "kind", "\"\"", NULL },
     { YEXP__S_ROLE, 0xffff, YEXP__T_SMAP, 0, "map", "{}", NULL },
-    { YEXP__S_ROLE, 0xffff, YEXP__T_INT, 0, "min_tier", "0", NULL },
+    { YEXP__S_ROLE, 0xffff, YEXP__T_INT, YEXP__R_LIT, "min_tier", "0", NULL },
     { YEXP__S_ROLE, 0xffff, YEXP__T_DUR, 0, "pulse_s", "0", NULL },
     { YEXP__S_ROLE, 0xffff, YEXP__T_BOOL, 0, "required", "true", NULL },
     { YEXP__S_STIM, 0x0210, YEXP__T_INT, 0, "add", "0", NULL },
@@ -833,7 +833,7 @@ static const yexp_row yexp__rows[] = {
     { YEXP__S_RESPONSE, 0xffff, YEXP__T_DUR, 0, "duration_s", "0", NULL },
     { YEXP__S_RESPONSE, 0xffff, YEXP__T_NAME, YEXP__R_REQ, "from", NULL, NULL },
     { YEXP__S_RESPONSE, 0xffff, YEXP__T_VAL, YEXP__R_NONE, "key_answer", NULL, NULL },
-    { YEXP__S_RESPONSE, 0xffff, YEXP__T_INT, 0, "max_responses", "0", NULL },
+    { YEXP__S_RESPONSE, 0xffff, YEXP__T_INT, YEXP__R_LIT, "max_responses", "0", NULL },
     { YEXP__S_RESPONSE, 0xffff, YEXP__T_DUR, 0, "minimum_valid_rt_s", "0", NULL },
     { YEXP__S_RESPONSE, 0xffff, YEXP__T_BOOL, 0, "persist", "false", NULL },
     { YEXP__S_RESPONSE, 0xffff, YEXP__T_BOOL, 0, "response_ends_trial", "true", NULL },
@@ -1255,6 +1255,7 @@ static void yexp__number(yexp__ctx* c, const yjs_value* src, unsigned allow, con
         yexp__err(c, src->pos, "%s: '%s': the number '%s' has more than 19 significant digits or is out of range for a double", elem, key, src->u.s);
         return;
     }
+    if (x == 0) x = 0;   /* -0 is 0: one spelling, one value (D2) */
     v->num = x;
     if (src->flags & YJS_NUM_I64) {
         v->flags = YEXP_VF_INT;
@@ -1262,7 +1263,6 @@ static void yexp__number(yexp__ctx* c, const yjs_value* src, unsigned allow, con
     } else if (x == floor(x) && fabs(x) < 9007199254740992.0) {
         v->flags = YEXP_VF_INT;
         v->i = (int64_t)x;
-        v->num = (double)v->i;   /* -0.0 is 0: one spelling */
     } else if (allow & YEXP__AV_INT) {
         yexp__err(c, src->pos, "%s: '%s': '%s' is not an integer", elem, key, src->u.s);
         return;
@@ -2410,10 +2410,11 @@ static const yexp_method* yexp__method_get(const yexp_def* d, const char* name) 
 static const char* const yexp__verbs[] = { "on", "off", "wait_s", "at_s", "set", "to", "then", "trigger", "mark", "if", "unless" };
 #define YEXP__N_VERBS 11
 
-/* The stimulus keys a step may set or tween: only the kind's numeric
- * properties; a resource or a layout key is fixed at load. */
+/* The stimulus keys a step may set or tween: a timeline channel carries a
+ * float, so only the kind's numeric properties; a resource, a layout key
+ * or an enum is fixed at load. */
 static bool yexp__tweenable(const yexp_row* r) {
-    return r->type == YEXP__T_NUM || r->type == YEXP__T_INT || r->type == YEXP__T_VEC3 || r->type == YEXP__T_ENUM;
+    return (r->type == YEXP__T_NUM || r->type == YEXP__T_INT || r->type == YEXP__T_VEC3) && !(r->flags & YEXP__R_LIT);
 }
 
 static void yexp__parse_props(yexp__ctx* c, const yjs_value* props, const yexp_stim* st, const char* elem, yexp_step* out, yjs_value** canon) {
