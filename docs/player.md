@@ -92,14 +92,15 @@ on the virtual clock, unless the row says otherwise.
 | Check | Result |
 |---|---|
 | The four worked examples against their C programs (`tests/player/compare.py`) | RDK, 2AFC: every shared column exact, the dots' digest and the steps file included (the program's trial seed from `--trial-seeds`, the 2AFC's timing from `--design-timing`, both test-only). Stroop: exact except columns the format derives differently (`block` text, `too_slow`). Oddball (`trigger_flip.c`): not comparable column for column; the shared mechanism checked instead. The report lists each column |
-| `tests/player/player_test.py` | 14 cases of unusual shapes (nesting, `if` on a node and a step, a container with no children, `loop` and `max`, `requeue` of a timeout, a track that ends early, a lookup in every key type, role order, `after` timing, outcomes, `$level` and `$estimate` in stimulus units, a sound's onset, D8 seed stability, refused packs): pass |
+| `tests/player/player_test.py` | 16 cases of unusual shapes (nesting, `if` on a node and a step, a container with no children, `loop` and `max`, `requeue` of a timeout, a track that ends early, a lookup in every key type, role order, `after` timing, outcomes, `$level` and `$estimate` in stimulus units, a sound's onset, D8 seed stability, `record_data` false, stimuli of another template, refused packs): pass |
 | `tests/player/eval_test.c` | 52 checks of the evaluator and op tables; the host's role check against a real profile: pass |
-| ASan and UBSan (`setarch -R`, the player, the four examples, the unit test) | Clean |
-| Fuzz (`tests/fuzz/player_fuzz.c`, self-driven token mutations of the examples, each run budgeted to 6 trials) | 24,000 inputs under ASan and UBSan, no report; 3,235 loaded and ran to the end |
-| Coverage of the fuzz run (gcov -O0, 6,000 inputs) | `eval.c` 71 % of 268 lines, `host.c` 81 % of 222, `lower.c` 79 % of 1222, `run.c` 80 % of 1035; successful runs reached (810) |
+| ASan and UBSan (`setarch -R`): the player on the four examples, the unit test, the 16 cases, the comparison | Clean |
+| Fuzz (`tests/fuzz/player_fuzz.c`, self-driven token mutations of the four examples, each run budgeted to 6 trials), ASan and UBSan | Final code: 6,000 inputs, 797 loaded, 796 ran to the end, no report. An earlier revision of the same day: 24,000 inputs, no report |
+| Coverage of the fuzz target (gcov, `-O0`, 6,000 inputs, 817 loaded, 814 ran to the end) | See the report; every source file's run path is reached |
 | Mutants (`tests/mutate/player_lower.toml`, `player_run.toml`) | 17 of 17 killed |
 | Allocations in `pl_frame` (`player_alloc_test`, wrapped malloc, calloc, realloc) | 0 on all four examples |
-| Frame work (`--measure`, the 2AFC session: QUEST+ on the frame path, nothing else running, build RelWithDebInfo, 2026-11-09) | Max frame 44.5 us, max trial start 35.5 us; no frame near the 16 ms budget |
+| Frame work (`--measure`, Release, i5-14500, load average 6.9 from earlier builds, three runs each) | Largest over the four examples: frame 52.7 us, trial start 37.7 us (the 2AFC session, QUEST+ on the frame path). 0 frames over 16 ms. The simulated display has no GPU cost, so this is the CPU part of a frame only |
+| Full ctest, Linux, `DISPLAY` unset | 120 of 120, before the last player fix; the 3 player tests pass after it |
 
 ## What a real-window run needs next
 
