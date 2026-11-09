@@ -241,6 +241,98 @@ the swap path and the input restamping.
   A dropped frame names the phase that ate the budget without any
   tool attached.
 
+#### 4.2.1 The callback form (proposed 2026-11-09, not built)
+
+The program can give the library callbacks in place of its own
+`yscr_begin()` and `yscr_flip()` loop, as SDL's `SDL_MAIN_USE_CALLBACKS`
+does. The loop form stays, and nothing about it changes.
+
+Why:
+
+- **The web.** A browser's main thread cannot block, so `yscr_begin()`
+  suspends the program until `requestAnimationFrame`, which needs ASYNCIFY
+  or JSPI ([web.md](web.md): 1,071,703 and 779,439 bytes of wasm for the
+  self-test). A callback from `requestAnimationFrame` needs no suspension.
+  The size without either is not measured.
+- **The order of a frame.** 56 programs in `examples/` write the loop; 44
+  of them also call `ygfx_begin()`, 32 `ytl_evaluate()` and 22
+  `yrsp_update_frame()`. The order matters (`ysp/response.h`, "The order
+  in a frame"), and the first `--auto` run of `trial_bimanual` failed on
+  it (examples_findings D10).
+- **The player.** The player's loop is this loop. A C task and a
+  definition then run the same frame path, and hot reload (section 6) has
+  one place to act: between frames.
+
+Level 1, in `ysp/screen.h`:
+
+```c
+typedef enum yscr_step { YSCR_CONTINUE, YSCR_DONE, YSCR_FAILED } yscr_step;
+
+typedef struct yscr_app {
+    void* ctx;
+    yscr_step (*open)(void* ctx, yscr_screen* s);     /* once, the screen is open */
+    void      (*input)(void* ctx, const yin_event* e); /* each event, before frame */
+    yscr_step (*frame)(void* ctx, yscr_screen* s, const yscr_frame* f);
+    void      (*close)(void* ctx, yscr_screen* s, int reason); /* once, always */
+} yscr_app;
+
+int yscr_run(const yscr_desc* d, const yscr_app* app);   /* 0, or an error */
+```
+
+Rules:
+
+1. `yscr_run()` is called from the program's `main()`. It does not replace
+   `main()`, so tools and bindings keep their own entry point. On the web
+   it returns to the browser at once and the callbacks continue from
+   `requestAnimationFrame`, so code after the call must not depend on the
+   run being over: use `close`.
+2. A frame is: the begin, every input event in arrival order on the frame
+   thread, then `frame`, then the flip. Unlike SDL's `SDL_AppEvent`, which
+   may run concurrently with `SDL_AppIterate`, `input` never overlaps
+   `frame`. `--sim` and replay need that order.
+3. `frame` draws and returns. It does not call `yscr_begin()` or
+   `yscr_flip()`; those calls fail inside a run. A frame with a target time
+   sets `yscr_frame_target(s, t_ns)`, which the flip passes to
+   `yscr_flip_at()`.
+4. A callback must not block. On the web, the calls that sleep through
+   `emscripten_sleep()` (`yau_wait()`, the video header's waits) still need
+   ASYNCIFY or JSPI, so a program without them must not call those.
+5. An abort (Shift+Esc, the panic key) goes to `close` with the reason from
+   `yscr_frame.abort`. `frame` is not called again.
+
+Level 2, a new header `ysp/app.h` (`yapp_`), is optional glue over
+screen, gfx, timeline, response and signal path, so that `ysp/screen.h`
+stays free of them. The program names the objects it uses, and the header
+runs them in the documented order:
+
+1. the begin; the input to each collector and to the graph;
+2. `yrsp_update_frame()`, then the program's `update` callback, which
+   starts trials and schedules sequences. A check of an early press belongs
+   here, before the evaluate (`ysp/response.h`);
+3. `ytl_evaluate()`, `yrsp_set_landing()`, then the program's `fired`
+   callback with the frame's events;
+4. `ysig_frame()` with the poll's time, `ysig_detected()` and
+   `ysig_derived()` to the program and the collector;
+5. `ygfx_apply()`, `ygfx_begin()`, the program's `draw` callback,
+   `ygfx_end()`, and the flip.
+
+Not changed: the Python and MATLAB bindings keep the loop form, because
+their users own their loops. At least one C example keeps an explicit loop,
+because the call order is part of what the examples teach.
+
+To verify before any claim:
+
+- The same program in both forms has the same flip records (drops,
+  residuals, phase durations) on the Linux desktop and the Windows
+  development machine, one measurement at a time.
+- `--sim` data files are byte-identical in both forms.
+- The size and the frame time of the web self-test with no suspension,
+  against ASYNCIFY and JSPI.
+
+Open: whether `open` runs before the first frame on the web while assets
+still load (a pack read must already be in memory, or `open` becomes a
+state of `frame`), and how a second, untimed screen takes part.
+
 ### 4.3 ysp/gfx.h (`ygfx_`, `YGFX_`)
 
 Includes `ysp/screen.h`. GL ES 3.0 only. No compute stage.
@@ -1222,6 +1314,8 @@ Details, versions and measurements per header are in
    protocol. The format's gaps are closed. First: map each table name to
    its definition key, and give the loader the defaults that a
    canonical definition leaves out (D2).
+   The player's frame loop is the callback form of section 4.2.1 when
+   that form is built.
 4. **Other platforms.** `ysp/screen.h` on Linux X11 (GLX sync control)
    is built: v0.17.0, one X screen per process; it needs a photodiode
    run for its tier. On macOS, METAL is built (tier 2 for a shown flip,

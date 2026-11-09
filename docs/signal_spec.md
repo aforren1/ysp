@@ -648,6 +648,60 @@ const ysig_param* ysig_op_params(int op, int* n);
   Linux desktop: [sig.md](sig.md), "Cost" (no Tracy zones yet; the
   Windows machine not run).
 
+### 9.1 The builder (proposed 2026-11-09, not built)
+
+A graph in C now names each node in an enum, assigns it a slot, and sets
+its parameters by index. The builder gives C the same wiring as the
+Python sketch: an op's call returns a handle, and the next call takes that
+handle as its input.
+
+```c
+ysig_node nodes[16];
+ysig_builder b = ysig_builder_of(nodes, 16);
+
+int hand = ysig_role(&b, "hand");
+int cur  = YSIG_AFFINE(&b, hand, .pre_x = sx, .post_x = sx, .pre_y = sy, .post_y = sy);
+int hold = YSIG_DETECT(&b, hand, .test = YSIG_TEST_LE, .lane = -1, .level = START_R,
+                       .hold = HOLD_S, .a_x = sx, .a_y = sy);
+YSIG_BIND(&b, cur, .channel = CH_CUR_X);
+YSIG_RECORD(&b, YSIG_JOIN(&b, hand, cur), .name = "trace");
+
+if (!ysig_build_finish(&b, &desc)) return fail(ysig_build_error(&b));
+```
+
+A hand-written detect of this form was compiled against the header with
+`-Wall -Wextra -Werror` (GCC 12.2, C11) and gave the same inputs and
+parameters as the assignments.
+
+Rules:
+
+- **One arguments struct per op** (23 ops). Its leading fields are doubles
+  in the order of the op's parameter table, named from the row with `.` as
+  `_` (`gain.x` is `.gain_x`). The fields after them are the node's own:
+  `.lanes`, `.history`, `.name`, and for `sines` `.data` and `.n_data`.
+- **One list per op generates the names.** An X-macro gives the struct's
+  fields and the `YSIG_<OP>_<ROW>` indices together, so they cannot differ.
+  The test still checks each list against the op's table row by row.
+- **A field not named is zero,** as after `ysig_node_of()`.
+- **Inputs come first by construction.** A handle exists only after its
+  node, so a builder cannot make a forward edge or a cycle.
+- **A failed add is sticky.** The struct's capacity can run out, and -1 is
+  also "no input". So after any failure every later add fails, and
+  `ysig_build_finish()` returns false with the first error. A program
+  checks once, at the end.
+- **Ops with more than two inputs** (`join`, `sum`, `mean`, up to four)
+  take them positionally: `YSIG_JOIN3(&b, a, c, d)` and `YSIG_JOIN4`.
+- **An adapter has its own builder,** because its handles are local to it.
+- **C only.** The macros use designated initializers, which C++17 lacks.
+  C++ callers use `ysig_add()` with `ysig_node_of()`.
+- `p[]` and `ysig_set()` by index keep working for the fuzz target and the
+  journal. `YSIG_NODE()` goes away when the examples move to the builder;
+  the header is not released yet.
+
+The Python binding has the same shape and the same names, from the same
+op tables: `g.detect(hand, test="le", lane=-1, level=START_R, hold=HOLD_S,
+a_x=sx, a_y=sy)`. The designer's components (section 15) sit above both.
+
 ## 10. Experiment definition
 
 A template gains a `signals` object: node name to node, in the JSON
@@ -746,6 +800,8 @@ the rig profile's adapter block, with a mouse and a tablet adapter in
 6. The stream sample and a motion-capture adapter with its calibration
    procedure, on a rig with a tracker.
 7. Eye tracker and gamepad sources with a device on a rig.
+8. The C builder (section 9.1), then the Python binding from the same
+   op tables.
 
 ## 14. As built: ysp/sig.h v0.1.0
 
