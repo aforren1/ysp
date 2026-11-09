@@ -357,6 +357,11 @@ def t_refused(ctx):
     d3 = base({"t": {"events": [{"on": "s"}, {"set": "s", "props": {"x": 1}}, {"to": "s", "props": {"x": 2}, "duration_s": 0.1}, {"off": "s"}]}}, [{"name": "l", "trial": "t"}])
     r3 = Run(ctx, "refused_ops", d3, args=["--participant", "silent"])
     check(r3.rc != 0 and "channel" in r3.err.lower(), "a set and a tween on one channel: the real check refuses it: %s" % r3.err)
+    # the same across the events and after tables
+    d3b = base({"t": {"events": [{"on": "s"}, {"set": "s", "props": {"x": 1}}, {"off": "s"}],
+                       "after": [{"to": "s", "props": {"x": 2}, "duration_s": 0.1}]}}, [{"name": "l", "trial": "t"}])
+    r3b = Run(ctx, "refused_ops2", d3b, args=["--participant", "silent"])
+    check(r3b.rc != 0 and "channel" in r3b.err.lower(), "a set and a tween across events and after: %s" % r3b.err)
     # 'from' never shown, an impossible constraint (a dry open)
     d4 = base({"t": tmpl()}, [{"name": "l", "trial": "t", "timeline_variables": "x.pstb", "rules": ["order constrained", "max_run a=x 1", "reps 2"]}])
     r4 = Run(ctx, "refused_rule", d4, tables={"x": "a\nx\nx\nx\ny\n"})

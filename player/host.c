@@ -309,16 +309,23 @@ static int h_check_ops(void* ctx, const yexp_def* d, const yexp_template* t, cha
         ytl_anchor(&tl, PL_BASE_TRIAL, 0, 0);
         nops = pl_build_ops(p, t->events, t->n_events, ops, bound, &cursor);
         if (nops < 0) { snprintf(msg, cap, "%s", p->error); p->failed = 0; rc = 1; break; }
-        if (nops > 0) {
-            int e = ytl_check_ops(&tl, PL_BASE_TRIAL, ops, nops, &bad);
-            if (e != 0) { snprintf(msg, cap, "the events table, op %d: %s", bad, ytl_strerror(e)); rc = 1; break; }
+        /* the events and after tables run on one timeline, so they are
+         * checked as one: a `set` in events and a `to` in after on the same
+         * channel fail at run time otherwise, a trial in */
+        {
+            int n2, c2;
+            memset(&ops[nops], 0, sizeof ops[nops]);
+            ops[nops].op = YTL_OP_AT;
+            ops[nops].t_ns = cursor;
+            c2 = nops + 1;
+            cursor = 0;
+            n2 = pl_build_ops(p, t->after, t->n_after, ops + c2, bound - c2, &cursor);
+            if (n2 < 0) { snprintf(msg, cap, "%s", p->error); p->failed = 0; rc = 1; break; }
+            nops = c2 + n2;
         }
-        cursor = 0;
-        nops = pl_build_ops(p, t->after, t->n_after, ops, bound, &cursor);
-        if (nops < 0) { snprintf(msg, cap, "%s", p->error); p->failed = 0; rc = 1; break; }
         if (nops > 0) {
             int e = ytl_check_ops(&tl, PL_BASE_TRIAL, ops, nops, &bad);
-            if (e != 0) { snprintf(msg, cap, "the after table, op %d: %s", bad, ytl_strerror(e)); rc = 1; break; }
+            if (e != 0) { snprintf(msg, cap, "template '%s', op %d of its steps: %s", t->name, bad, ytl_strerror(e)); rc = 1; break; }
         }
     }
     p->env = saved;
