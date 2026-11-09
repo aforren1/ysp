@@ -158,7 +158,8 @@
  *   integrator's previous time, a silent's last. So one far-future stamp
  *   stops its effects one frame later, but what its own sample's pass
  *   did stands (a rate integral's step over that dt, a hold it ended). A
- *   frame with no poll has no such recovery.
+ *   frame with no poll has no such recovery: the rings and the hold clocks
+ *   keep the stamp until a reset (an adapter's until ysig_reset()).
  *   ysig_frame() refuses only bad arguments, and a frame without a poll
  *   (has_poll false, as in a zeroed ysig_frame_in) in a graph with a view
  *   (velocity, speed, delay, lowpass, rate integrate, silent), on every call:

@@ -430,9 +430,12 @@ definition. A zero field means the row's `def`.
   dropping that source's samples one frame later, later samples enter the
   rings, a hold can complete, and a silent reads 1 after the real silence.
   What that sample's own pass did stands: a rate integrator's step over
-  its dt stays in the sum, and a hold it ended has its hit. A frame with no
-  poll has no such recovery: a graph that never polls stays behind that
-  stamp.
+  its dt stays in the sum, and a hold it ended has its hit.
+- Known limit: a frame with no poll has no such recovery. In a graph that
+  never polls, a far-future stamp stays in the history rings and in a
+  detect's hold clock until a reset (`ysig_reset_trial()` for the
+  experiment's nodes, `ysig_reset()` for an adapter's), and the source
+  drops its later samples until then.
 
 ### Trials and adapters
 
