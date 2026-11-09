@@ -632,6 +632,231 @@ static void run_host(void) {
     }
 }
 
+/* --- the review's list -------------------------------------------------- */
+
+#define XH "{\"format\":\"ysp-experiment\",\"version\":1,"
+#define XT "\"timeline\":[{\"name\":\"m\",\"trial\":\"t\"}]}"
+
+static int load_rc(const char* doc, const yexp_host* h, yexp_report* r) {
+    yjs_arena a;
+    yexp_def* d = NULL;
+    int rc;
+    yjs_arena_init_heap(&a, 0);
+    rc = yexp_load(&a, doc, strlen(doc), h, &d, r);
+    yjs_arena_free(&a);
+    return rc;
+}
+
+/* The ID, and that the canonical bytes give back the same form and ID. */
+static void id_roundtrip(const char* doc, uint8_t id[32]) {
+    static yexp_report r, r2;
+    yjs_arena a, a2;
+    yexp_def* d = NULL;
+    yexp_def* d2 = NULL;
+    const char* b;
+    const char* b2;
+    size_t n, n2;
+    uint8_t id2[32];
+    char* s1;
+    char* s2;
+    memset(id, 0, 32);
+    yjs_arena_init_heap(&a, 0);
+    yjs_arena_init_heap(&a2, 0);
+    if (yexp_load(&a, doc, strlen(doc), NULL, &d, &r) != YEXP_OK) {
+        fail_(__LINE__, "does not load", r.n_diags ? r.diags[0].msg : doc);
+    } else {
+        g_checks++;
+        yexp_canonical(d, &a, &b, &n, id);
+        if (yexp_load(&a2, b, n, NULL, &d2, &r2) != YEXP_OK) {
+            fail_(__LINE__, "the canonical bytes do not load", b);
+        } else {
+            s1 = xd_dump(d);
+            s2 = xd_dump(d2);
+            CHECK2(!strcmp(s1, s2), "the canonical bytes give the same form", doc);
+            yexp_canonical(d2, &a2, &b2, &n2, id2);
+            CHECK2(n == n2 && !memcmp(id, id2, 32), "the canonical bytes are stable", doc);
+            free(s1);
+            free(s2);
+        }
+    }
+    yjs_arena_free(&a);
+    yjs_arena_free(&a2);
+}
+
+static void one_spelling(const char* const* docs, int n, const char* what) {
+    uint8_t a[32], b[32];
+    int i;
+    id_roundtrip(docs[0], a);
+    for (i = 1; i < n; i++) {
+        id_roundtrip(docs[i], b);
+        CHECK2(!memcmp(a, b, 32), what, docs[i]);
+    }
+}
+
+#define W_DOC(x) XH "\"stimuli\":{\"s\":{\"kind\":\"shape\",\"w\":" x "}},\"trials\":{\"t\":{}}," XT
+
+static void run_review(void) {
+    static yexp_report r;
+    /* every value form, every wrong type of note */
+    {
+        static const char* const forms[] = {
+            "{\"michelson\":0.5,\"note\":%s}", "{\"by\":\"$block\",\"map\":{\"1\":0.5},\"note\":%s}",
+            "{\"gamut\":\"s.contrast\",\"note\":%s}"
+        };
+        static const char* const notes[] = { "true", "false", "null", "5", "[1,2,3]", "{\"a\":1}" };
+        size_t f, k;
+        for (f = 0; f < sizeof forms / sizeof forms[0]; f++)
+            for (k = 0; k < sizeof notes / sizeof notes[0]; k++) {
+                char v[160], doc[512];
+                snprintf(v, sizeof v, forms[f], notes[k]);
+                snprintf(doc, sizeof doc, XH "\"stimuli\":{\"s\":{\"kind\":\"gabor\",\"contrast\":%s}},\"trials\":{\"t\":{}}," XT, v);
+                CHECK2(load_rc(doc, NULL, &r) == YEXP_ERR_REFUSED && r.n_diags && strstr(r.diags[0].msg, "'note' is a string"), "a non-string note on a value form", doc);
+            }
+        for (k = 0; k < sizeof notes / sizeof notes[0]; k++) {
+            char doc[512];
+            snprintf(doc, sizeof doc, XH "\"methods\":{\"q\":{\"type\":\"quest\",\"stim\":[{\"linspace\":[0,1,3],\"note\":%s}],\"param\":[1]}},\"trials\":{\"t\":{}}," XT, notes[k]);
+            CHECK2(load_rc(doc, NULL, &r) == YEXP_ERR_REFUSED && r.n_diags && strstr(r.diags[0].msg, "'note' is a string"), "a non-string note on a linspace", doc);
+            snprintf(doc, sizeof doc, XH "\"trials\":{\"t\":{}},\"timeline\":[{\"name\":\"m\",\"trial\":\"t\",\"vars\":{\"a\":{\"choice\":[1],\"note\":%s}}}]}", notes[k]);
+            CHECK2(load_rc(doc, NULL, &r) == YEXP_ERR_REFUSED && r.n_diags && strstr(r.diags[0].msg, "'note' is a string"), "a non-string note on a choice", doc);
+        }
+    }
+    /* one value, one form and ID */
+    {
+        static const char* const a[] = { W_DOC("9007199254740993"), W_DOC("9007199254740993.0"), W_DOC("9.007199254740993e15"), W_DOC("9007199254740993e0") };
+        static const char* const b[] = { W_DOC("9007199254740992"), W_DOC("9007199254740992.0"), W_DOC("9.007199254740992E15") };
+        static const char* const c[] = { W_DOC("9223372036854775807"), W_DOC("9223372036854775807.000") };
+        static const char* const d[] = { W_DOC("-9223372036854775808"), W_DOC("-9223372036854775808.0") };
+        static const char* const e[] = { W_DOC("100"), W_DOC("1e2"), W_DOC("100.0"), W_DOC("1.0E+2") };
+        uint8_t x[32];
+        one_spelling(a, 4, "one integer past 2^53, four spellings");
+        one_spelling(b, 3, "2^53, three spellings");
+        one_spelling(c, 2, "int64's largest");
+        one_spelling(d, 2, "int64's smallest");
+        one_spelling(e, 4, "a small integer");
+        /* a real whose double is whole, and one past int64: stable forms */
+        id_roundtrip(W_DOC("9007199254740993.5"), x);
+        id_roundtrip(W_DOC("-9.22337203685477581e18"), x);
+        id_roundtrip(W_DOC("9223372036854775808"), x);
+        id_roundtrip(W_DOC("1e300"), x);
+    }
+    /* one meaning, one ID */
+    {
+        static const char* const on[] = {
+            XH "\"stimuli\":{\"s\":{\"kind\":\"shape\"}},\"trials\":{\"t\":{\"events\":[{\"on\":\"s\"}]}}," XT,
+            XH "\"stimuli\":{\"s\":{\"kind\":\"shape\"}},\"trials\":{\"t\":{\"events\":[{\"on\":[\"s\"]}]}}," XT
+        };
+#define CH_DOC(x) XH "\"devices\":{\"r\":{\"direction\":\"in\",\"family\":[\"k\"]}},\"stimuli\":{\"s\":{\"kind\":\"shape\"}},\"trials\":{\"t\":{\"events\":[{\"on\":\"s\"}],\"response\":{\"role\":\"r\",\"from\":\"s\",\"choices\":[" x "]}}}," XT
+        static const char* const ch[] = { CH_DOC("\"r\""), CH_DOC("{\"key\":\"r\"}") };
+        static const char* const dl[] = { CH_DOC("\"$$r\""), CH_DOC("{\"key\":\"$$r\"}") };
+        uint8_t x[32], y[32];
+        one_spelling(on, 2, "one target, two spellings");
+        one_spelling(ch, 2, "one choice, two spellings");
+        one_spelling(dl, 2, "$$ in both choice forms");
+        id_roundtrip(CH_DOC("{\"key\":\"r\",\"note\":\"kept\"}"), x);
+        id_roundtrip(CH_DOC("\"r\""), y);
+        CHECK(memcmp(x, y, 32) != 0, "a choice's note stays in the ID");
+    }
+    /* a michelson inside a lookup defines $contrast_shown */
+    {
+        const char* doc = XH "\"devices\":{\"r\":{\"direction\":\"in\",\"family\":[\"k\"]}},\"stimuli\":{\"g\":{\"kind\":\"gabor\",\"contrast\":{\"by\":\"$rep\",\"map\":{\"0\":{\"michelson\":0.5}}}}},"
+            "\"trials\":{\"t\":{\"events\":[{\"on\":\"g\"}],\"columns\":{\"c\":\"$contrast_shown\"},\"response\":{\"role\":\"r\",\"from\":\"g\"}}}," XT;
+        CHECK2(load_rc(doc, NULL, &r) == YEXP_OK, "a michelson in a lookup defines $contrast_shown", r.n_diags ? r.diags[0].msg : "");
+    }
+    /* a chain of vars that ends is no loop */
+    {
+        char doc[4096];
+        int at = 0, i;
+        at += snprintf(doc + at, sizeof doc - (size_t)at, XH "\"stimuli\":{\"s\":{\"kind\":\"shape\",\"w\":\"$a0\"}},\"trials\":{\"t\":{\"events\":[{\"on\":\"s\"}]}},\"timeline\":[{\"name\":\"m\",\"trial\":\"t\",\"vars\":{");
+        for (i = 0; i < 20; i++) at += snprintf(doc + at, sizeof doc - (size_t)at, "\"a%d\":\"$a%d\",", i, i + 1);
+        at += snprintf(doc + at, sizeof doc - (size_t)at, "\"a20\":1}}]}");
+        CHECK2(load_rc(doc, NULL, &r) == YEXP_OK, "a chain of 20 vars loads", r.n_diags ? r.diags[0].msg : "");
+    }
+    /* 65 jitters and rule vars: no silent cap */
+    {
+        char doc[8192];
+        int at = 0, i;
+        at += snprintf(doc + at, sizeof doc - (size_t)at, XH "\"trials\":{\"t\":{\"events\":[{\"wait_s\":\"$j64_s\"}],\"columns\":{\"c\":\"$v64\"}}},\"timeline\":[{\"name\":\"m\",\"trial\":\"t\",\"rules\":[");
+        for (i = 0; i < 65; i++) at += snprintf(doc + at, sizeof doc - (size_t)at, "\"jitter j%d_s uniform 0 1\",\"var v%d choice a b\",", i, i);
+        at += snprintf(doc + at, sizeof doc - (size_t)at, "\"reps 1\"]}]}");
+        CHECK2(load_rc(doc, NULL, &r) == YEXP_OK, "65 jitters and rule vars", r.n_diags ? r.diags[0].msg : "");
+    }
+    /* what no node reaches is named in a warning, and not refused */
+    {
+        const char* doc = XH "\"stimuli\":{\"s\":{\"kind\":\"shape\",\"w\":\"$nosuch\"}},\"trials\":{\"t\":{},\"u\":{\"events\":[{\"wait_s\":\"$nosuch_s\"}]}}," XT;
+        CHECK(load_rc(doc, NULL, &r) == YEXP_OK, "unused parts are not refused");
+        CHECK(r.n_warnings == 2 && r.n_diags == 2, "two warnings");
+        CHECK(strstr(r.diags[0].msg, "template 'u'") && strstr(r.diags[0].msg, "not checked"), "the template by name");
+        CHECK(strstr(r.diags[1].msg, "stimulus 's'") && strstr(r.diags[1].msg, "not checked"), "the stimulus by name");
+    }
+    /* the work limit covers the first pass */
+    {
+        size_t cap = 4u << 20, at = 0;
+        char* doc = (char*)malloc(cap);
+        int i, k;
+        if (!doc) abort();
+        at += (size_t)snprintf(doc + at, cap - at, XH "\"stimuli\":{");
+        for (i = 0; i < 1024; i++) at += (size_t)snprintf(doc + at, cap - at, "%s\"s%d\":{\"kind\":\"shape\"}", i ? "," : "", i);
+        at += (size_t)snprintf(doc + at, cap - at, "},\"trials\":{\"t\":{\"events\":[");
+        for (k = 0; k < 100; k++) {
+            at += (size_t)snprintf(doc + at, cap - at, "%s{\"on\":[", k ? "," : "");
+            for (i = 0; i < 1024; i++) at += (size_t)snprintf(doc + at, cap - at, "%s\"s%d\"", i ? "," : "", i);
+            at += (size_t)snprintf(doc + at, cap - at, "]}");
+        }
+        at += (size_t)snprintf(doc + at, cap - at, "]}}," XT);
+        CHECK(load_rc(doc, NULL, &r) == YEXP_ERR_REFUSED, "long on-lists hit the work limit");
+        CHECK(r.n_diags >= 1 && strstr(r.diags[0].msg, "steps to check"), "and say so");
+        free(doc);
+    }
+    /* many templates in a small arena: the tables are sized on demand */
+    {
+        size_t cap = 1u << 20, at = 0;
+        char* doc = (char*)malloc(cap);
+        static uint64_t mem[(3u << 20) / 8];
+        yjs_arena a;
+        yexp_def* d = NULL;
+        int i;
+        if (!doc) abort();
+        at += (size_t)snprintf(doc + at, cap - at, XH "\"trials\":{");
+        for (i = 0; i < 1024; i++) at += (size_t)snprintf(doc + at, cap - at, "%s\"t%04d\":{\"events\":[]}", i ? "," : "", i);
+        at += (size_t)snprintf(doc + at, cap - at, "},\"timeline\":[{\"name\":\"m\",\"trial\":\"t0000\"}]}");
+        yjs_arena_init(&a, mem, sizeof mem);
+        CHECK(yexp_load(&a, doc, at, NULL, &d, &r) == YEXP_OK, "1024 templates fit 3 MB");
+        free(doc);
+    }
+    /* a host that misbehaves */
+    {
+        const char* doc =
+            XH "\"devices\":{\"r\":{\"direction\":\"in\",\"family\":[\"k\"]}},\"stimuli\":{\"s\":{\"kind\":\"shape\",\"w\":1,\"x\":{\"by\":\"$c\",\"map\":{\"a\":1}}}},"
+            "\"trials\":{\"t\":{\"events\":[{\"on\":\"s\"}]}},\"timeline\":[{\"name\":\"m\",\"trial\":\"t\",\"timeline_variables\":\"tt\"}]}";
+        int m;
+        for (m = 0; m < BH_MODES; m++) {
+            int rc;
+            g_bh_mode = m;
+            g_bh_calls = 0;
+            rc = load_rc(doc, &g_bad_host, &r);
+            CHECK(rc == YEXP_OK || rc == YEXP_ERR_REFUSED, "a bad host: a plain result");
+            if (m == BH_COL_ENDLESS) CHECK(rc == YEXP_ERR_REFUSED && r.n_diags >= 1 && strstr(r.diags[0].msg, "steps to check"), "an endless column() hits the work limit");
+            if (m == BH_LVL_LONG) {
+                /* the 300-byte level is read, so its absence from the map is seen */
+                CHECK(rc == YEXP_ERR_REFUSED && r.n_diags >= 1 && strstr(r.diags[0].msg, "no key for"), "a 300-byte level is checked");
+            }
+            if (m == BH_LVL_LONG_CHANGES || m == BH_LVL_HUGE || m == BH_LVL_MANY)
+                CHECK(rc == YEXP_OK && (r.skipped & YEXP_CHECK_LEVELS) && !(r.run & YEXP_CHECK_LEVELS), "levels not read are recorded as skipped");
+            if (m == BH_MSG_NO_NUL) {
+                CHECK(rc == YEXP_ERR_REFUSED && r.n_diags >= 1, "a message with no NUL");
+                CHECK(strlen(r.diags[0].msg) < YEXP_MSG_BYTES, "and it stays in bounds");
+            }
+        }
+        g_bh_mode = 0;
+    }
+    /* a level written with no NUL and the sane host's rule var levels */
+    {
+        const char* doc = XH "\"stimuli\":{\"s\":{\"kind\":\"shape\",\"w\":{\"by\":\"$x\",\"map\":{\"a\":1,\"b\":2}}}},\"trials\":{\"t\":{\"events\":[{\"on\":\"s\"}]}},"
+                          "\"timeline\":[{\"name\":\"m\",\"trial\":\"t\",\"rules\":[\"var x choice a \\\"b\\\"\"]}]}";
+        CHECK2(load_rc(doc, &g_host, &r) == YEXP_OK && r.n_warnings == 0, "a rule var's levels, one of them quoted", r.n_diags ? r.diags[0].msg : "");
+    }
+}
+
 /* --- arena -------------------------------------------------------------- */
 
 static void run_arena(void) {
@@ -710,6 +935,7 @@ int main(void) {
     CHECK(!strcmp(yexp_version(), YEXP_VERSION_STRING), "version string");
     run_sha();
     run_numbers();
+    run_review();
     run_host();
     run_arena();
     run_defaults();

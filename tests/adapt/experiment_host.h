@@ -114,4 +114,40 @@ static int st_ops(void* ctx, const yexp_def* d, const yexp_template* t, char* ms
 
 static const yexp_host g_host = { NULL, st_entry, st_column, st_level, st_role, st_param, st_rules, st_ops };
 
+/* --- a host that misbehaves, by mode ------------------------------------ */
+
+enum { BH_SANE, BH_COL_ENDLESS, BH_COL_NULL_NAME, BH_COL_ODD_TYPE, BH_LVL_LONG, BH_LVL_LONG_CHANGES, BH_LVL_HUGE, BH_LVL_EMPTY,
+       BH_LVL_NO_NUL, BH_LVL_MANY, BH_MSG_NO_NUL, BH_ENTRY_ODD, BH_MODES };
+static int g_bh_mode;
+static int g_bh_calls;
+
+static int bh_column(void* ctx, const char* table, int i, yexp_column* o) {
+    (void)ctx; (void)table;
+    if (g_bh_mode == BH_COL_ENDLESS) { o->name = "zz"; o->type = 0; return 1; }
+    if (g_bh_mode == BH_COL_NULL_NAME) { if (i == 0) { o->name = NULL; return 1; } return 0; }
+    if (i == 0) { o->name = "c"; o->type = g_bh_mode == BH_COL_ODD_TYPE ? 12345 : YEXP_COL_STRING; o->n_levels = 2; return 1; }
+    return 0;
+}
+
+static int bh_level(void* ctx, const char* table, int col, int l, char* buf, size_t cap) {
+    (void)ctx; (void)table; (void)col;
+    switch (g_bh_mode) {
+    case BH_LVL_LONG: if (l == 0) { memset(buf, 'a', cap); return 300; } return -1;
+    case BH_LVL_LONG_CHANGES: if (l == 0) { memset(buf, 'a', cap); return 300 + (g_bh_calls++ & 1); } return -1;
+    case BH_LVL_HUGE: return 1000000;
+    case BH_LVL_EMPTY: if (l < 2) { memset(buf, 'q', cap); return 0; } return -1;
+    case BH_LVL_NO_NUL: if (l == 0) { memset(buf, 'z', cap); return (int)cap - 1; } return -1;
+    case BH_LVL_MANY: return l < 200000 ? snprintf(buf, cap, "L%d", l) : -1;
+    default: if (l == 0) { snprintf(buf, cap, "a"); return 1; } if (l == 1) { snprintf(buf, cap, "b"); return 1; } return -1;
+    }
+}
+
+static int bh_entry(void* ctx, int kind, const char* name) { (void)ctx; (void)kind; (void)name; return g_bh_mode == BH_ENTRY_ODD ? -5 : 1; }
+static int bh_msg(char* m, size_t cap) { if (g_bh_mode == BH_MSG_NO_NUL) { memset(m, 'x', cap); return 1; } return 0; }
+static int bh_role(void* ctx, const yexp_role* r, char* m, size_t cap) { (void)ctx; (void)r; return bh_msg(m, cap); }
+static int bh_param(void* ctx, int s, const char* k, const yexp_prop* p, char* m, size_t cap) { (void)ctx; (void)s; (void)k; (void)p; return bh_msg(m, cap); }
+static int bh_rules(void* ctx, const yexp_node* l, char* m, size_t cap) { (void)ctx; (void)l; return bh_msg(m, cap); }
+static int bh_ops(void* ctx, const yexp_def* d, const yexp_template* t, char* m, size_t cap) { (void)ctx; (void)d; (void)t; return bh_msg(m, cap); }
+static const yexp_host g_bad_host = { NULL, bh_entry, bh_column, bh_level, bh_role, bh_param, bh_rules, bh_ops };
+
 #endif

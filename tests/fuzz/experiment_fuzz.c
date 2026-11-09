@@ -5,7 +5,9 @@
  * host on the rest, so `$name` reaches levels and the second pass runs. Every input must return without a sanitizer report. A
  * refusal must carry messages, each one line; a load must give a form that
  * dumps, canonical bytes that load again to the same form, the same bytes
- * and the same ID.
+ * and the same ID. Then the input runs again in a small arena with a host
+ * that misbehaves (tests/adapt/experiment_host.h), for the report's bounds
+ * and for no sanitizer report. A NOMEM in the first, large arena is a bug.
  *
  * libFuzzer, clang:
  *     clang -O1 -g -fsanitize=fuzzer,address,undefined -Iinclude tests/fuzz/experiment_fuzz.c -o experiment_fuzz -lm
@@ -33,9 +35,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define ARENA_BYTES (8u << 20)
+#define ARENA_BYTES (32u << 20)
 static uint64_t g_mem[ARENA_BYTES / 8];
 static uint64_t g_mem2[ARENA_BYTES / 8];
+static uint64_t g_mem3[(1u << 20) / 8];
 static yexp_report g_r, g_r2;
 static long long g_loaded, g_refused, g_nomem, g_warned;
 
@@ -62,7 +65,8 @@ static void run_one(const char* text, size_t n) {
     yjs_arena_init(&a, g_mem, sizeof g_mem);
     rc = yexp_load(&a, text, n, host, &d, &g_r);
     check_report(&g_r, text, n);
-    if (rc == YEXP_ERR_NOMEM) { g_nomem++; if (d) bad("a form after NOMEM", text, n); return; }
+    /* an input of at most 64 KB fits this arena: a NOMEM here is a false one */
+    if (rc == YEXP_ERR_NOMEM) bad("out of memory in a large arena", text, n);
     if (rc == YEXP_ERR_REFUSED) {
         g_refused++;
         if (d || g_r.n_errors < 1 || g_r.n_diags < 1) bad("a refusal without an error", text, n);
@@ -81,7 +85,7 @@ static void run_one(const char* text, size_t n) {
         if (yexp_canonical(d, &a, &b1, &n1, id1) != YEXP_OK || !n1 || b1[n1 - 1] != '\n') bad("canonical bytes", text, n);
         yjs_arena_init(&a2, g_mem2, sizeof g_mem2);
         rc = yexp_load(&a2, b1, n1, host, &d2, &g_r2);
-        if (rc == YEXP_ERR_NOMEM) { free(dump1); return; }
+        if (rc == YEXP_ERR_NOMEM) bad("out of memory reloading in a large arena", text, n);
         if (rc != YEXP_OK) {
             fprintf(stderr, "reload failed: %s\ncanonical: %.2000s\n", g_r2.n_diags ? g_r2.diags[0].msg : "", b1);
             bad("the canonical bytes did not load", text, n);
@@ -100,8 +104,40 @@ static void run_one(const char* text, size_t n) {
     }
 }
 
+/* The same input again, in a small arena and with a host that misbehaves:
+ * the size and the mode come from the input, so a failure replays. */
+static void run_hostile(const char* text, size_t n) {
+    uint32_t h = 2166136261u;
+    size_t i, cap;
+    yjs_arena a;
+    yexp_def* d = NULL;
+    int rc;
+    for (i = 0; i < n; i++) h = (h ^ (unsigned char)text[i]) * 16777619u;
+    cap = 8 + (size_t)((h >> 8) % (sizeof g_mem3 - 8));
+    if (h & 1u) cap = 8 + cap % 300000;   /* the sizes where a load runs out */
+    g_bh_mode = (int)(h % BH_MODES);
+    g_bh_calls = 0;
+    yjs_arena_init(&a, g_mem3, cap);
+    rc = yexp_load(&a, text, n, &g_bad_host, &d, &g_r2);
+    check_report(&g_r2, text, n);
+    if (rc != YEXP_OK && rc != YEXP_ERR_REFUSED && rc != YEXP_ERR_NOMEM) bad("a result that is no result", text, n);
+    if (rc != YEXP_OK && d) bad("a form after a refusal", text, n);
+    if (rc == YEXP_ERR_NOMEM) g_nomem++;
+    if (rc == YEXP_OK) {
+        const char* b;
+        size_t bn;
+        uint8_t id[32];
+        char* s = xd_dump(d);
+        rc = yexp_canonical(d, &a, &b, &bn, id);
+        if (rc != YEXP_OK && rc != YEXP_ERR_NOMEM) bad("canonical in a small arena", text, n);
+        free(s);
+    }
+    g_bh_mode = 0;
+}
+
 int LLVMFuzzerTestOneInput(const unsigned char* data, size_t size) {
     run_one((const char*)data, size);
+    run_hostile((const char*)data, size);
     return 0;
 }
 
@@ -166,7 +202,11 @@ static void words_init(void) {
 static const char* const g_numbers[] = {
     "0", "1", "-1", "2", "0.5", "0.25", "0.1", "0.1000000000000000055", "1.5e0", "1e2", "1e400", "1e-400", "-0", "-0.0",
     "9007199254740993", "12345678901234567890", "1.23456789012345678901", "60.5", "99999999999", "1e30", "3", "7", "1024", "4097",
-    "0.000000001", "0.0000000001", "1e-10", "63", "64", "255", "256"
+    "0.000000001", "0.0000000001", "1e-10", "63", "64", "255", "256",
+    /* integer-valued reals at and above 2^53, each spelled more than one way */
+    "9007199254740992.0", "9007199254740993.0", "9.007199254740993e15", "9007199254740993.5", "1.8014398509481984e16",
+    "9223372036854775807.0", "9223372036854775808", "9223372036854775808.0", "-9223372036854775808.0", "-9.22337203685477581e18",
+    "-1", "-0.5", "-60.5", "3000000000", "2147483648"
 };
 
 typedef struct tok { size_t at, len; char kind; } tok;
@@ -356,13 +396,14 @@ int main(int argc, char** argv) {
         if (p && n && g_nseeds < 4096) { g_seeds[g_nseeds].p = p; g_seeds[g_nseeds].n = n; g_nseeds++; }
     }
     if (!g_nseeds) { fprintf(stderr, "no seeds\n"); return 2; }
-    for (i = 0; i < g_nseeds; i++) run_one(g_seeds[i].p, g_seeds[i].n);
+    for (i = 0; i < g_nseeds; i++) { run_one(g_seeds[i].p, g_seeds[i].n); run_hostile(g_seeds[i].p, g_seeds[i].n); }
     for (it = 0; it < iters; it++) {
         const seedf* sf = &g_seeds[gen() % (uint64_t)g_nseeds];
         size_t n = sf->n < CAP ? sf->n : CAP - 1;
         memcpy(buf, sf->p, n);
         n = mutate(buf, n);
         run_one(buf, n);
+        run_hostile(buf, n);
     }
     printf("experiment_fuzz: %ld inputs: %lld loaded, %lld refused, %lld out of memory, %lld warnings\n",
            iters + g_nseeds, g_loaded, g_refused, g_nomem, g_warned);
@@ -390,6 +431,7 @@ int main(int argc, char** argv) {
         char* p = read_all(argv[i], &n);
         if (!p) { fprintf(stderr, "cannot read %s\n", argv[i]); return 1; }
         run_one(p, n);
+        run_hostile(p, n);
         free(p);
     }
     printf("replayed %d files: %lld loaded, %lld refused\n", argc - 1, g_loaded, g_refused);
