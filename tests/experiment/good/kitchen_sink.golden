@@ -447,19 +447,19 @@ template plain
   after
   record_given=0 record=[]
   outcome="correct" method_value=$level
-node blockA path=blockA trial=- table=base.pstb reps=2 interleave=0 track_rate=0 if=participant unless=- loop=1:0.8,3 requeue=0 record_data=1
+node blockA path=blockA trial=- table=base.pstb reps=2 interleave=0 track_rate=0 if=- unless=- loop=1:0.8,3 requeue=0 record_data=1
   rules=""
   jitters=[] rule_vars=[] tracks=[]
   var coh = choice[real:0.1, real:0.5]
   var wordv = choice["hello", "world"]
   data block_kind = "main"
   data p = $participant
-  node adaptive path=blockA/adaptive trial=full table=- reps=1 interleave=1 track_rate=1 if=- unless=cond loop=0 requeue=1 record_data=0
+  node adaptive path=blockA/adaptive trial=full table=- reps=1 interleave=1 track_rate=1 if=- unless=flag loop=0 requeue=1 record_data=0
     rules="order random  # a comment\x0areps 2\x0ajitter soa_s uniform 0.8 1.2\x0avar \"side\" choice left right"
-    jitters=[soa_s] rule_vars=[side] tracks=[st qp ae]
+    jitters=[soa_s] rule_vars=[side(left,right)] tracks=[st qp ae]
     var hold_s = dur:500000000ns
     data seconds_s = dur:2000000000ns
-  node plain_leaf path=blockA/plain_leaf trial=plain table=- reps=1 interleave=0 track_rate=0 if=- unless=- loop=0 requeue=0 record_data=1
+  node plain_leaf path=blockA/plain_leaf trial=plain table=- reps=1 interleave=0 track_rate=0 if=flag unless=- loop=0 requeue=0 record_data=1
     rules="practice 2\x0awarmup 0\x0ablock_size 2\x0agroups cond alternate"
     jitters=[] rule_vars=[] tracks=[]
     var hold_s = dur:1250000000ns

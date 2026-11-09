@@ -1,1 +1,1 @@
-2:23: display: 'min_tier' is 1 to 3
+2:23: display: 'min_tier' is a literal integer from 0 to 3

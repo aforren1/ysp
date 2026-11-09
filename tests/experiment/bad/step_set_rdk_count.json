@@ -1,0 +1,2 @@
+{"format":"ysp-experiment","version":1,
+"stimuli":{"s":{"kind":"rdk"}},"trials":{"t":{"events":[{"to":"s","props":{"count":5}}]}},"timeline":[{"name":"m","trial":"t"}]}

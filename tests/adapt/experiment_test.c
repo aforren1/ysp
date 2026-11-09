@@ -343,7 +343,7 @@ static const char* section_base(int sect, int kind, char* buf, size_t cap) {
     else if (strcmp(yexp_section_name(sect), "template") == 0)
         snprintf(buf, cap, "%s\"trials\":{\"t\":{@K@ \"note\":\"n\"}},\"timeline\":[{\"name\":\"m\",\"trial\":\"t\"}]}", head);
     else if (strcmp(yexp_section_name(sect), "response") == 0)
-        snprintf(buf, cap, "%s\"devices\":{\"r\":{\"direction\":\"in\",\"family\":[\"k\"]}},\"stimuli\":{\"s\":{\"kind\":\"shape\"}},\"trials\":{\"t\":{\"response\":{\"role\":\"r\",\"from\":\"s\",@K@ \"note\":\"n\"}}},\"timeline\":[{\"name\":\"m\",\"trial\":\"t\"}]}", head);
+        snprintf(buf, cap, "%s\"devices\":{\"r\":{\"direction\":\"in\",\"family\":[\"k\"]}},\"stimuli\":{\"s\":{\"kind\":\"shape\"}},\"trials\":{\"t\":{\"events\":[{\"on\":\"s\"}],\"response\":{\"role\":\"r\",\"from\":\"s\",@K@ \"note\":\"n\"}}},\"timeline\":[{\"name\":\"m\",\"trial\":\"t\"}]}", head);
     else if (strcmp(yexp_section_name(sect), "web") == 0)
         snprintf(buf, cap, "%s\"web\":{@K@ \"note\":\"n\"},%s", head, tail_t);
     else if (strcmp(yexp_section_name(sect), "file") == 0)

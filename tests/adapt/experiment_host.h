@@ -28,7 +28,8 @@ static const st_tab g_tabs[] = {
     { "base.pstb", { { "cond", YEXP_COL_STRING, { "a", "b", NULL } },
                      { "n", YEXP_COL_INTEGER, { "1", "2", NULL } },
                      { "tex", YEXP_COL_STRING, { "tex/a.ysptex", "tex/missing.ysptex", NULL } },
-                     { "tex_ok", YEXP_COL_STRING, { "tex/a.ysptex", NULL } }, { NULL, 0, { NULL } } } },
+                     { "tex_ok", YEXP_COL_STRING, { "tex/a.ysptex", NULL } },
+                     { "flag", YEXP_COL_INTEGER, { "0", "1", NULL } }, { NULL, 0, { NULL } } } },
     { "builtin.pstb", { { "level", YEXP_COL_NUMBER, { "1", NULL } }, { NULL, 0, { NULL } } } },
 };
 #define N_TABS ((int)(sizeof g_tabs / sizeof g_tabs[0]))

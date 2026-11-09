@@ -1,0 +1,2 @@
+{"format":"ysp-experiment","version":1,
+"stimuli":{"s":{"kind":"shape"}},"trials":{"t":{"events":[{"to":"s","props":{"x":1},"delay_s":-1}]}},"timeline":[{"name":"m","trial":"t"}]}

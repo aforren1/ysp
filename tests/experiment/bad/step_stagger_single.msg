@@ -1,1 +1,1 @@
-2:69: template 't': events[0]: 'stagger_s' goes with an array of stimuli
+2:69: template 't': events[0]: 'stagger_s' goes with an array of two or more stimuli

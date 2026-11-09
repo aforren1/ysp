@@ -71,15 +71,15 @@
     "plain": { "events": [{ "on": "movie" }, { "wait_s": "$hold_s" }, { "on": "dots" }, { "on": "lit" }, { "on": "n1" }, { "on": "art" }] }
   },
   "timeline": [
-    { "name": "blockA", "note": "a container", "timeline_variables": "base.pstb", "repetitions": 2, "if": "$participant",
+    { "name": "blockA", "note": "a container", "timeline_variables": "base.pstb", "repetitions": 2,
       "loop": { "until_accuracy": 0.8, "max": 3 },
       "vars": { "note": "vars note", "coh": { "choice": [0.1, 0.5] }, "wordv": { "choice": ["hello", "world"] } },
       "data": { "note": "data note", "block_kind": "main", "p": "$participant" },
       "timeline": [
-        { "name": "adaptive", "trial": "full", "unless": "$cond", "tracks": ["st", "qp", "ae"], "interleave": "round_robin", "track_rate": 1,
+        { "name": "adaptive", "trial": "full", "unless": "$flag", "tracks": ["st", "qp", "ae"], "interleave": "round_robin", "track_rate": 1,
           "rules": ["order random  # a comment", "reps 2", "jitter soa_s uniform 0.8 1.2", "var \"side\" choice left right"],
           "vars": { "hold_s": 0.5 }, "data": { "seconds_s": 2 }, "requeue": "no_response", "record_data": false },
-        { "name": "plain_leaf", "trial": "plain", "vars": { "hold_s": 1.25 }, "rules": ["practice 2", "warmup 0", "block_size 2", "groups cond alternate"] }
+        { "name": "plain_leaf", "trial": "plain", "if": "$flag", "vars": { "hold_s": 1.25 }, "rules": ["practice 2", "warmup 0", "block_size 2", "groups cond alternate"] }
       ] }
   ]
 }

@@ -163,7 +163,14 @@ static void xd_node(xd_buf* b, const yexp_node* n, int depth) {
     xd_printf(b, "\n%s  ", ind);
     xd_strs(b, "jitters", n->jitters, n->n_jitters);
     xd_printf(b, " ");
-    xd_strs(b, "rule_vars", n->rule_vars, n->n_rule_vars);
+    xd_printf(b, "rule_vars=[");
+    for (i = 0; i < n->n_rule_vars; i++) {
+        int k;
+        xd_printf(b, "%s%s(", i ? " " : "", n->rule_vars[i].name);
+        for (k = 0; k < n->rule_vars[i].n_values; k++) xd_printf(b, "%s%s", k ? "," : "", n->rule_vars[i].values[k]);
+        xd_printf(b, ")");
+    }
+    xd_printf(b, "]");
     xd_printf(b, " tracks=[");
     for (i = 0; i < n->n_tracks; i++) xd_printf(b, "%s%s", i ? " " : "", n->tracks[i]->name);
     xd_printf(b, "]\n");

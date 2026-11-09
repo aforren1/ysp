@@ -1,0 +1,2 @@
+{"format":"ysp-experiment","version":1,
+"trials":{"t":{"events":[{"wait_s":"$x_s"}]}},"timeline":[{"name":"m","trial":"t","vars":{"x_s":"oops"}}]}

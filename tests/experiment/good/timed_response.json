@@ -1,0 +1,11 @@
+{
+  "format": "ysp-experiment", "version": 1, "name": "timed_response",
+  "note": "a forced response: a press before the onset is data, so the minimum RT is negative (ysp/response.h 0.8.0)",
+  "devices": { "resp": { "direction": "in", "family": ["keyboard"], "required": true } },
+  "stimuli": { "target": { "kind": "shape", "shape": "circle", "w": 40, "color": [1, 1, 1] } },
+  "trials": { "go": { "events": [{ "wait_s": 1 }, { "on": "target" }],
+                      "response": { "role": "resp", "from": "target", "choices": ["space"], "duration_s": 0.5,
+                                    "minimum_valid_rt_s": -0.25 },
+                      "after": [{ "off": "target" }] } },
+  "timeline": [{ "name": "main", "trial": "go", "rules": ["reps 2"] }]
+}
