@@ -2,7 +2,7 @@
  *
  * Usage: ysp_player PACK --out DIR --sim [--seed N] [--field NAME=VALUE]...
  *                   [--rig FILE] [--cal FILE] [--participant SPEC] [--rt S]
- *                   [--max-trials N]
+ *                   [--max-trials N] [--measure]
  *
  * --sim is required in this version: the simulated display, the virtual
  * clock, the null audio device and a scripted participant. SPEC is
@@ -45,6 +45,7 @@ int main(int argc, char** argv) {
         else if (!strcmp(s, "--rt") && v) { a.rt_s = atof(v); i++; }
         else if (!strcmp(s, "--max-trials") && v) { a.max_trials = atoi(v); i++; }
         else if (!strcmp(s, "--max-seconds") && v) { a.max_seconds = atoll(v); i++; }
+        else if (!strcmp(s, "--measure")) a.measure = true;
         else if (!strcmp(s, "--field") && v) {
             const char* eq = strchr(v, '=');
             if (!eq || a.n_fields == PL_MAX_FIELDS) return usage();
@@ -70,6 +71,10 @@ int main(int argc, char** argv) {
     if (pl_load(&g_p, &a) < 0) { fprintf(stderr, "ysp_player: %s\n", g_p.error); pl_close(&g_p); return 1; }
     rc = pl_run(&g_p);
     if (rc < 0) { fprintf(stderr, "ysp_player: %s\n", g_p.error); pl_close(&g_p); return 1; }
+    if (a.measure) {
+        printf("ysp_player: frame work over %lld frames: max %.1f us; trial start max %.1f us; %lld frames over 16 ms\n", (long long)g_p.work_n,
+               (double)g_p.work_max_ns / 1e3, (double)g_p.work_trial_max_ns / 1e3, (long long)g_p.work_over_16ms);
+    }
     printf("ysp_player: %d trials, %s, seed %llu, experiment %s\n", g_p.trials_done, a.out_dir, (unsigned long long)g_p.seed, g_p.experiment_id);
     pl_close(&g_p);
     return 0;

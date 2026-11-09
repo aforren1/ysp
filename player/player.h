@@ -293,6 +293,7 @@ typedef struct pl_args {
     int   max_trials;          /* a budget for the fuzz target; 0: none      */
     int64_t max_seconds;       /* virtual seconds before giving up; default 2 days */
     bool  quiet;
+    bool  measure;             /* real-clock cost of each frame's work      */
 } pl_args;
 
 typedef struct pl_script_row { int trial; char* resp; bool silent; double rt_s, hold_s; } pl_script_row;
@@ -382,6 +383,7 @@ struct pl_player {
     int        n_channels;
     pl_chan*   channels;
     ygfx_bind* binds; int n_binds;
+    ytl_event* peek;
     ytl_event* fired;
     int        fired_cap;
     pl_marks   marks;
@@ -501,6 +503,7 @@ void pl_row_write_oldest(pl_player* p);
 int  pl_event_queue(pl_player* p, const yds_event* ev);
 int  pl_events_flush(pl_player* p, bool all);
 void pl_trigger_sink(void* ctx, const yscr_trigger_info* info);
+extern volatile int pl_loop_active;   /* the frame loop is running: a test counts allocations against it */
 
 #ifdef __cplusplus
 }

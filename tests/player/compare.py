@@ -203,9 +203,14 @@ def do_stroop(a, ex):
     pairs = [("trial_index", "trial_index", "exact", ""), ("word", "stimulus", "exact", "C's stimulus column is the table's word"),
              ("ink", "ink", "exact", ""), ("congruent", "congruent", "exact", ""), ("answer", "answer", "exact", ""),
              ("response", "response", "exact", ""), ("rt_s", "rt_s", "exact", ""), ("correct", "correct", "exact", ""),
-             ("onset_tier", "onset_tier", "exact", ""), ("onset_src", "onset_src", "exact", ""), ("rsp_tier", "rsp_tier", "exact", ""),
+             ("onset_tier", "onset_tier", "exact", ""), ("onset_src", "onset_src", "exact", ""),
              ("rsp_flags", "rsp_flags", "exact", ""), ("n_anticipations", "n_anticipations", "exact", "")]
     report, bad = compare(rows, c_rows, pairs)
+    d = sum(1 for r, c in zip(rows, c_rows) if c["response"] and r["rsp_tier"] != c["rsp_tier"])
+    report.append(("rsp_tier <- rsp_tier", "%d/%d differ where a response exists" % (d, len(rows)), "format",
+                   "YRSP_DATA_COLS writes it empty with no response (2.10 item 8); the program's hand-written CSV writes 0"))
+    if d:
+        bad += 1
     # columns the C program has that the format derives another way
     for pc, cc, why in [("practice", "block", "format 2.10: practice is the trial info's flag (0/1); C's block is the text practice or test"),
                         ("feedback", "feedback", "format 2.3: $outcome is correct/wrong/timeout; C writes too_slow (2.14's table says 'same': a finding)")]:

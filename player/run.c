@@ -335,6 +335,8 @@ int pl_script_load(pl_player* p, const char* path) {
     return 0;
 }
 
+volatile int pl_loop_active;
+
 static double pl_participant_rand(pl_player* p) { return ytr_splitmix(&p->participant_rng); }
 
 /* Decide this trial's press. Called once the response is armed. */
@@ -1161,6 +1163,46 @@ int pl_end_trial(pl_player* p, const yscr_frame* f) {
 
 /* --- the frame --------------------------------------------------------- */
 
+/* Sounds are scheduled ahead on the audio clock (rig_spec 4.5.1): each
+ * frame peeks the next two frames' events for a sound's onset. */
+static int pl_sounds(pl_player* p, const yscr_frame* f) {
+    int i;
+    for (i = 0; i < p->n_stims; i++) {
+        pl_stim* s = &p->stims[i];
+        int k, n;
+        if (s->def->kind != YEXP_SOUND || s->ch_visible < 0 || s->sound_id) continue;
+        n = ytl_peek(&p->tl, PL_BASE_TRIAL, f->onset, f->onset + 2 * f->period + 1, p->peek, p->fired_cap);
+        for (k = 0; k < n && k < p->fired_cap; k++) {
+            if (p->peek[k].kind == YTL_ONSET && p->peek[k].target == s->ch_visible) {
+                s->sound_id = yau_play_at(&p->audio, s->sound, p->peek[k].onset);
+                if (!s->sound_id) { pl_fail(p, "'%s': %s", s->def->name, yau_error(&p->audio)); return -1; }
+                break;
+            }
+        }
+    }
+    return 0;
+}
+
+/* The audio onset of the response's `from`, when `from` is a sound. */
+static int pl_from_sound(pl_player* p) {
+    yau_onset on;
+    const pl_stim* s;
+    if (!p->in_trial || !p->tmpl->collector || p->from_landed) return 0;
+    s = pl_stim_by_name(p, p->tmpl->def->response->from);
+    if (!s || s->def->kind != YEXP_SOUND || !s->sound_id) return 0;
+    if (yau_update(&p->audio) < 0) { pl_fail(p, "audio: %s", yau_error(&p->audio)); return -1; }
+    if (yau_result(&p->audio, s->sound_id, &on) < 0) { pl_fail(p, "audio: %s", yau_error(&p->audio)); return -1; }
+    if (on.onset) {
+        yrsp_onset o = yrsp_onset_audio(&on);
+        yrsp_set_onset(p->tmpl->collector, &o);
+        if (o.final) {
+            p->from_landed = true;
+            if (!p->silent) pl_participant_arm(p, on.onset);
+        }
+    }
+    return 0;
+}
+
 static int pl_on_fired(pl_player* p, const yscr_frame* f, int n) {
     int i;
     for (i = 0; i < n; i++) {
@@ -1180,7 +1222,7 @@ static int pl_on_fired(pl_player* p, const yscr_frame* f, int n) {
                         if (e->kind == YTL_OFFSET) st->offset_frame = e->frame;
                     }
                 if (e->kind == YTL_ONSET && !p->from_landed && p->tmpl->collector &&
-                    strcmp(p->tmpl->def->response->from, c->stim->name) == 0) {
+                    c->stim->kind != YEXP_SOUND && strcmp(p->tmpl->def->response->from, c->stim->name) == 0) {
                     yrsp_onset o = yrsp_onset_landing(e);
                     yrsp_set_onset(p->tmpl->collector, &o);
                     p->from_landed = true;
@@ -1276,8 +1318,13 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
             pl_participant_arm(p, rec->onset ? rec->onset : rec->planned);
     }
     if (!p->in_trial) {
+        int64_t t0 = p->args.measure ? yrt_real_ns() : 0;
         if (p->pending_stop) return 1;
         rc = pl_start_trial(p, f);
+        if (p->args.measure) {
+            int64_t d = yrt_real_ns() - t0;
+            if (d > p->work_trial_max_ns) p->work_trial_max_ns = d;
+        }
         if (rc < 0) return -1;
         if (rc == 0) {
             p->pending_stop = true;
@@ -1328,6 +1375,7 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
             p->responding = false;
         }
     }
+    if (p->in_trial && p->audio_open && (pl_sounds(p, f) < 0 || pl_from_sound(p) < 0)) return -1;
     n = ytl_evaluate(&p->tl, &(ytl_frame){ f->onset, f->period, f->index }, p->fired, p->fired_cap);
     if (n < 0) { pl_fail(p, "ytl_evaluate: %s", ytl_strerror(n)); return -1; }
     if (p->in_trial && pl_on_fired(p, f, n) < 0) return -1;
@@ -1371,6 +1419,8 @@ int pl_run(pl_player* p) {
     p->sp = 1;
     p->row_head = p->row_tail = 0;
     p->events = (yds_event*)pl_alloc(p, sizeof(yds_event) * PL_EVENT_QUEUE);
+    p->peek = (ytl_event*)pl_alloc(p, sizeof(ytl_event) * (size_t)(p->fired_cap + 1));
+    if (!p->peek) return -1;
     if (!p->events) return -1;
     p->pool_stats = 0;
     for (i = 0; i < p->n_tmpls; i++) if (p->tmpls[i].n_record > p->pool_stats) p->pool_stats = p->tmpls[i].n_record;
@@ -1399,7 +1449,20 @@ int pl_run(pl_player* p) {
             memset(p->out_now, 0, sizeof(pl_out_stats) * (size_t)(p->n_triggers + 1));
             p->now_tier = p->now_dropped = p->now_flags = 0;
         }
-        r = pl_frame(p, &f);
+        if (p->args.measure) {
+            int64_t t0 = yrt_real_ns(), t1;
+            pl_loop_active = 1;
+            r = pl_frame(p, &f);
+            pl_loop_active = 0;
+            t1 = yrt_real_ns();
+            p->work_n++;
+            if (t1 - t0 > p->work_max_ns) p->work_max_ns = t1 - t0;
+            if (t1 - t0 > 16000000) p->work_over_16ms++;
+        } else {
+            pl_loop_active = 1;
+            r = pl_frame(p, &f);
+            pl_loop_active = 0;
+        }
         if (r < 0) return -1;
         {
             int src = yscr_flip(&p->scr);
