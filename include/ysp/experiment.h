@@ -3032,8 +3032,7 @@ static void yexp__parse_node(yexp__ctx* c, const yjs_value* src, const yexp_node
         if (container && tl->src) {
             yjs_value* ca = NULL;
             yexp__parse_children(c, tl->src, out, path, depth + 1, &out->children, &out->n_children, &ca);
-            if (ca && ca->n) yexp__put(c, cn, "timeline", ca);
-            else if (ca) yexp__put(c, cn, "timeline", ca);
+            if (ca) yexp__put(c, cn, "timeline", ca);
         }
     }
     if (leaf) {
@@ -3765,6 +3764,19 @@ static void yexp__check_nodes(yexp__ctx* c, yexp__scope* s, const yexp_node* nod
     }
 }
 
+/* A method is opened at session start, before any node: only a session
+ * field can be known then. */
+static void yexp__check_methods(yexp__ctx* c, yexp__scope* s) {
+    int i, k;
+    for (i = 0; i < c->d->n_methods; i++) {
+        const yexp_method* m = &c->d->methods[i];
+        char elem[96];
+        snprintf(elem, sizeof elem, "method '%s'", m->name);
+        for (k = 0; k < m->n_props; k++)
+            if (m->props[k].given) yexp__check_value(c, s, m->props[k].value, YEXP__PH_SESSION, elem, m->props[k].key);
+    }
+}
+
 static void yexp__check_gamuts(yexp__ctx* c) {
     yexp__gamut* g;
     for (g = c->gamuts; g; g = g->next) {
@@ -3864,8 +3876,6 @@ static void yexp__parse_root(yexp__ctx* c, const yjs_value* root) {
     yexp__slot* x;
     yjs_value* croot = NULL;
     yjs_value* cc;
-    static const char* const parts[] = { "display", "web", "devices", "stimuli", "methods", "session" };
-    (void)parts;
     if (root->type != YJS_OBJECT) {
         yexp__err(c, root->pos, "a definition is a JSON object");
         return;
@@ -4042,8 +4052,7 @@ YEXP_API int yexp_canonical(const yexp_def* d, yjs_arena* a, const char** bytes,
 
 /* --- the entry point ---------------------------------------------------- */
 
-static void yexp__check_mark(yexp__ctx* c, yexp_report* r, unsigned bit, bool present) {
-    (void)c;
+static void yexp__check_mark(yexp_report* r, unsigned bit, bool present) {
     if (present) r->run |= bit;
     else r->skipped |= bit;
 }
@@ -4105,15 +4114,16 @@ YEXP_API int yexp_load(yjs_arena* a, const char* text, size_t n, const yexp_host
         yexp__scope* sc = (yexp__scope*)yexp__alloc(c, sizeof *sc);
         c->stim_use = (uint8_t*)yexp__alloc(c, (size_t)d->n_stimuli + 1);
         if (sc && c->stim_use) {
-            yexp__check_mark(c, report, YEXP_CHECK_ENTRIES, host && host->entry);
-            yexp__check_mark(c, report, YEXP_CHECK_COLUMNS, host && host->column);
-            yexp__check_mark(c, report, YEXP_CHECK_LEVELS, host && host->level && host->column);
-            yexp__check_mark(c, report, YEXP_CHECK_ROLES, host && host->role);
-            yexp__check_mark(c, report, YEXP_CHECK_PARAMS, host && host->param);
-            yexp__check_mark(c, report, YEXP_CHECK_RULES, host && host->rules);
-            yexp__check_mark(c, report, YEXP_CHECK_OPS, host && host->check_ops);
+            yexp__check_mark(report, YEXP_CHECK_ENTRIES, host && host->entry);
+            yexp__check_mark(report, YEXP_CHECK_COLUMNS, host && host->column);
+            yexp__check_mark(report, YEXP_CHECK_LEVELS, host && host->level && host->column);
+            yexp__check_mark(report, YEXP_CHECK_ROLES, host && host->role);
+            yexp__check_mark(report, YEXP_CHECK_PARAMS, host && host->param);
+            yexp__check_mark(report, YEXP_CHECK_RULES, host && host->rules);
+            yexp__check_mark(report, YEXP_CHECK_OPS, host && host->check_ops);
             yexp__check_gamuts(c);
             memset(sc, 0, sizeof *sc);
+            yexp__check_methods(c, sc);
             yexp__check_nodes(c, sc, d->timeline, d->n_timeline);
             yexp__check_host_globals(c);
             if (report->n_errors == 0) yexp__warn_unreached(c);
