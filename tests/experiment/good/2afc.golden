@@ -135,7 +135,7 @@ template detect
   after
     step off fix stagger=dur:0ns
     step wait t=dur:500000000ns
-  response role=resp from=gabor ends=1 persist=0 max=0 held=0 release=0 choices=left:left,right:right
+  response role=resp from=gabor ends=1 max=0 held=0 release=0 choices=left:left,right:right
     duration=dur:2500000000ns min_rt=dur:0ns key_answer=$side trigger=- 
   record_given=0 record=[gabor]
   outcome="correct" method_value=$contrast_shown

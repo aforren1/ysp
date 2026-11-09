@@ -334,7 +334,6 @@ typedef struct yexp_response {
     const yexp_value*  min_rt;         /* minimum_valid_rt_s                 */
     const yexp_value*  key_answer;     /* NULL when not given                */
     bool               ends_trial;
-    bool               persist;
     int                max_responses;
     bool               allow_held_key;
     bool               wait_for_key_release;
@@ -858,7 +857,6 @@ static const yexp_row yexp__rows[] = {
     { YEXP__S_RESPONSE, 0xffff, YEXP__T_VAL, YEXP__R_NONE, "key_answer", NULL, NULL },
     { YEXP__S_RESPONSE, 0xffff, YEXP__T_INT, YEXP__R_LIT, "max_responses", "0", NULL },
     { YEXP__S_RESPONSE, 0xffff, YEXP__T_DUR, 0, "minimum_valid_rt_s", "0", NULL },
-    { YEXP__S_RESPONSE, 0xffff, YEXP__T_BOOL, 0, "persist", "false", NULL },
     { YEXP__S_RESPONSE, 0xffff, YEXP__T_BOOL, 0, "response_ends_trial", "true", NULL },
     { YEXP__S_RESPONSE, 0xffff, YEXP__T_NAME, YEXP__R_REQ, "role", NULL, NULL },
     { YEXP__S_RESPONSE, 0xffff, YEXP__T_OBJ, YEXP__R_NONE, "trigger", NULL, NULL },
@@ -1744,6 +1742,10 @@ static void yexp__unknown(yexp__ctx* c, int sect, unsigned mask, const yjs_membe
     }
     if (sect == YEXP__S_STIM && yexp__streq(key, "color_r")) {
         yexp__err(c, m->key_pos, "%s: '%s': write 'color' as [r, g, b]", elem, key);
+        return;
+    }
+    if (sect == YEXP__S_RESPONSE && yexp__streq(key, "persist")) {
+        yexp__err(c, m->key_pos, "%s: unknown key 'persist': 'response_ends_trial' is the one key for this (false: a response does not end the window)", elem);
         return;
     }
     ri = yexp__find(c, sect, 0xffffu, key);
@@ -2809,7 +2811,6 @@ static void yexp__parse_response(yexp__ctx* c, const yjs_value* src, const char*
     r->min_rt = yexp__slotv(c, s, YEXP__S_RESPONSE, "minimum_valid_rt_s");
     r->key_answer = yexp__slotv(c, s, YEXP__S_RESPONSE, "key_answer");
     r->ends_trial = yexp__v_bool(yexp__slotv(c, s, YEXP__S_RESPONSE, "response_ends_trial"), true);
-    r->persist = yexp__v_bool(yexp__slotv(c, s, YEXP__S_RESPONSE, "persist"), false);
     r->max_responses = yexp__int_field(c, yexp__slotv(c, s, YEXP__S_RESPONSE, "max_responses"), elem, "max_responses", 0, INT32_MAX, 0);
     r->allow_held_key = yexp__v_bool(yexp__slotv(c, s, YEXP__S_RESPONSE, "allow_held_key"), false);
     r->wait_for_key_release = yexp__v_bool(yexp__slotv(c, s, YEXP__S_RESPONSE, "wait_for_key_release"), false);

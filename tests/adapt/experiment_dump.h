@@ -218,7 +218,7 @@ static void xd_def(xd_buf* b, const yexp_def* d) {
         xd_steps(b, "    ", t->after, t->n_after);
         if (t->response) {
             const yexp_response* r = t->response;
-            xd_printf(b, "  response role=%s from=%s ends=%d persist=%d max=%d held=%d release=%d choices=", r->role, r->from, (int)r->ends_trial, (int)r->persist, r->max_responses, (int)r->allow_held_key, (int)r->wait_for_key_release);
+            xd_printf(b, "  response role=%s from=%s ends=%d max=%d held=%d release=%d choices=", r->role, r->from, (int)r->ends_trial, r->max_responses, (int)r->allow_held_key, (int)r->wait_for_key_release);
             for (k = 0; k < r->n_choices; k++) xd_printf(b, "%s%s:%s", k ? "," : "", r->choices[k].key, r->choices[k].name);
             xd_printf(b, "\n    duration="); xd_value(b, r->duration);
             xd_printf(b, " min_rt="); xd_value(b, r->min_rt);

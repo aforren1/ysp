@@ -74,7 +74,7 @@ then write the format's value into that desc field.
 | `yst_params()` | the row's name | `n_steps` comes from the length of `steps` |
 | `yqst_params()` | the row's name | `n_stim`, `n_param`: from the lengths; `stim[]`, `param[]` are the keys `stim` and `param`, arrays of axes |
 | `yaep_params()` | the row's name, dots included (`"hyper.lengthscale"`) | `n_dims`: from `lo` and `hi`; `dims` names the dimensions |
-| `yrsp_params()` | `duration_ns` is `duration_s`; `min_rt_ns` is `minimum_valid_rt_s`; `persist`, `max_responses`, `allow_held_key`, `wait_for_key_release` by name | the rest (`mode`, `trace_*`, `choices.*`) are not keys of version 1 |
+| `yrsp_params()` | `duration_ns` is `duration_s`; `min_rt_ns` is `minimum_valid_rt_s`; `max_responses`, `allow_held_key`, `wait_for_key_release` by name | `persist` comes from `response_ends_trial` at lowering; the rest (`mode`, `trace_*`, `choices.*`) are not keys of version 1 |
 | `ytl_op_params()` | `tween.duration_ns` is `duration_s`; `tween.delay_ns` is `delay_s`; `tween.ease` is `ease` | |
 | `ydev_params()` | `pulse_ns` is `pulse_s` | the rest stay in the rig profile (devices_spec 11.1) |
 | `yvid_params()` | the row's name, on the `video` kind | |
@@ -123,7 +123,7 @@ at version 1, listed by the test above.
 | response | `choices`, `key_answer`, `trigger` | none |
 | response | `duration_s`, `minimum_valid_rt_s`, `max_responses` | `0` |
 | response | `response_ends_trial` | `true` |
-| response | `persist`, `allow_held_key`, `wait_for_key_release` | `false` |
+| response | `allow_held_key`, `wait_for_key_release` | `false` |
 | node | `name` | required |
 | node | `timeline`, `trial` | exactly one |
 | node | `timeline_variables`, `if`, `unless`, `loop`, `requeue` | none |
@@ -189,7 +189,6 @@ decide otherwise.
 | 2.5, 2.6 | no default for `interleave`, `track_rate`, `repetitions`, `record_data`, `outcome`, `method_value`, `ease`, `stagger_s`, a step's `duration_s` and `delay_s`, a role's `required`, `min_tier`, `kind`, `estimate` per method | the table above | adopt it |
 | 2.5, 2.3 | `outcome` default with no response; `method_value` default with no tracks | not checked, lowering ignores them | say so |
 | 2.5 | `{"mark": NAME}`: is "end" reserved (2.5 has an implicit `end` MARK)? no name rule | any non-empty string | reserve `end` |
-| 2.6 | `persist` and `response_ends_trial`: one meaning, two keys, two IDs | both kept; independent | define one of them |
 | 2.6 | which response keys are required | `role`, `from` | say so |
 | 2.7 | "Each is a literal, not a variable": but `text` takes a variable in the examples | literal for all but `text` | say "all but `text`" |
 | 2.7 | on an `rdk`, `edge` and `aperture` name both yrdk's and gfx's field | yrdk's `edge`; one `aperture` for both | `dot_edge` for gfx's |

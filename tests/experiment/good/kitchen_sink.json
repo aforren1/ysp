@@ -57,7 +57,7 @@
       ],
       "response": { "role": "resp", "from": "g", "choices": ["left", { "key": "right", "name": "r" }],
                     "duration_s": { "by": "$cond", "map": { "a": 1.5, "b": 2 } }, "minimum_valid_rt_s": 0.1,
-                    "key_answer": "$side", "response_ends_trial": false, "persist": true, "max_responses": 2,
+                    "key_answer": "$side", "response_ends_trial": false, "max_responses": 2,
                     "allow_held_key": true, "wait_for_key_release": true,
                     "trigger": { "role": "trig", "code": { "by": "$response", "map": { "left": 1, "right": 2 } } } },
       "after": [ { "on": "lbl" }, { "off": "g" } ],

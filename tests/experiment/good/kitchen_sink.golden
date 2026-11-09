@@ -425,7 +425,7 @@ template full
   after
     step on lbl stagger=dur:0ns
     step off g stagger=dur:0ns
-  response role=resp from=g ends=0 persist=1 max=2 held=1 release=1 choices=left:left,right:r
+  response role=resp from=g ends=0 max=2 held=1 release=1 choices=left:left,right:r
     duration=lookup($cond){"a": dur:1500000000ns, "b": dur:2000000000ns} min_rt=dur:100000000ns key_answer=$side trigger=trig lookup($response){"left": int:1, "right": int:2}
   record_given=1 record=[g bar]
   outcome=lookup($correct){"false": "wrong", "true": "correct"} method_value=$contrast_shown

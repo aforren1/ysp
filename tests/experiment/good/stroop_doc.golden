@@ -186,7 +186,7 @@ template stroop
       step wait t=dur:600000000ns
       step off feedback stagger=dur:0ns
     step wait t=dur:400000000ns
-  response role=resp from=word ends=1 persist=0 max=0 held=0 release=0 choices=r:red,g:green,b:blue
+  response role=resp from=word ends=1 max=0 held=0 release=0 choices=r:red,g:green,b:blue
     duration=dur:2000000000ns min_rt=dur:100000000ns key_answer=$answer trigger=- 
   record_given=0 record=[word]
   outcome="correct" method_value=$level

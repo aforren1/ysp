@@ -1142,3 +1142,11 @@ test = "experiment"
 why = "2.6."
 find = '''                            !bsearch(&ch[i].key, (const void*)ro->sorted_buttons_, (size_t)ro->n_buttons, sizeof(char*), yexp__str_cmp))'''
 replace = '''                            0)'''
+
+[[mutant]]
+id = "t-01"
+name = "persist reads as a plain unknown key"
+test = "experiment"
+why = "The refusal names the key that replaced it."
+find = '''    if (sect == YEXP__S_RESPONSE && yexp__streq(key, "persist")) {'''
+replace = '''    if (0) {'''

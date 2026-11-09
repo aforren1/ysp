@@ -116,7 +116,7 @@ template rdk
   after
     step off dots fix stagger=dur:0ns
     step wait t=dur:800000000ns
-  response role=resp from=dots ends=1 persist=0 max=0 held=0 release=0 choices=left:left,right:right
+  response role=resp from=dots ends=1 max=0 held=0 release=0 choices=left:left,right:right
     duration=dur:1500000000ns min_rt=dur:100000000ns key_answer=$key_answer trigger=- 
   record_given=0 record=[dots]
   outcome="correct" method_value=$level

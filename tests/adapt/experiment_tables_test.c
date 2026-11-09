@@ -240,7 +240,7 @@ static void check_methods(void) {
 
 static void check_response(void) {
     static const struct { const char* table; const char* key; } m[] = {
-        { "duration_ns", "duration_s" }, { "min_rt_ns", "minimum_valid_rt_s" }, { "persist", "persist" },
+        { "duration_ns", "duration_s" }, { "min_rt_ns", "minimum_valid_rt_s" },
         { "max_responses", "max_responses" }, { "allow_held_key", "allow_held_key" },
         { "wait_for_key_release", "wait_for_key_release" }
     };

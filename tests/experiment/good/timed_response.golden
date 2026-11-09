@@ -75,7 +75,7 @@ template go
     step on target stagger=dur:0ns
   after
     step off target stagger=dur:0ns
-  response role=resp from=target ends=1 persist=0 max=0 held=0 release=0 choices=space:space
+  response role=resp from=target ends=1 max=0 held=0 release=0 choices=space:space
     duration=dur:500000000ns min_rt=dur:-250000000ns key_answer=(null) trigger=- 
   record_given=0 record=[target]
   outcome="correct" method_value=$level

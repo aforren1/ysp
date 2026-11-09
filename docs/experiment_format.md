@@ -630,8 +630,8 @@ session.
 | `duration_s` | `duration_ns`, from the `from` onset; 0 means no deadline |
 | `minimum_valid_rt_s` | `min_rt_ns` |
 | `key_answer` | `$correct`: the response's key equals this value |
-| `response_ends_trial` | true (default): `after` starts at the response; false: at the window's end |
-| `persist`, `max_responses`, `allow_held_key`, `wait_for_key_release` | the `yrsp_desc` fields |
+| `response_ends_trial` | true (default): `after` starts at the response; false: at the window's end. The player sets `yrsp_desc.persist` from it |
+| `max_responses`, `allow_held_key`, `wait_for_key_release` | the `yrsp_desc` fields |
 | `trigger` | `{"role": R, "code": VALUE}`: a response rule on the role's output (`ydev_rule`; G8, closed): `yrsp_rule_choices()` with a code per choice, the rule in the response role's `desc.rule`, `yrsp_rule_arm()` and `yrsp_rule_window()` each trial, `yrsp_rule_sent()` before `yrsp_finish()`: `rsp_flags` has `YRSP_R_SENT_MISMATCH` (0x400) when a code went out that the final response does not match (an anticipation after the final onset, a late press, another choice, a press the collector refused) or a response has no code. A keyboard role has no reader thread of ysp/device.h: `ydev_out_pulse()` when the frame loop sees the response |
 
 ### 2.7 Stimuli
