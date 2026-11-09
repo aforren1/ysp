@@ -91,7 +91,9 @@
  *     diff       2 x n, n  input 0 minus input 1
  *     mux        a, b, s   input a when lane 0 of s is nonzero, else b; a and
  *                          b the same lanes; out = the chosen input, with
- *                          its time, source and tier
+ *                          its time, source and tier (a sample of either
+ *                          input runs its users: repeated rows and events
+ *                          carry the chosen input's value and time)
  *     latch      n, n      passes input 0 until lane 0 of input 1 goes from
  *                          zero to nonzero, then holds until a reset
  *                          (CROSSINGS AND LATCHES)
@@ -149,6 +151,14 @@
  *   up to min(onset, f.poll_ns). An event a source took that is stamped
  *   after the poll is counted (ysig_stats.late_poll, late_poll_max_ns)
  *   and moves nothing; a view whose last sample is past the poll stands.
+ *   A stamp later than the poll is believed only up to the poll: at a
+ *   frame with a poll, every time kept from a stamp and later than it
+ *   comes down to it (counted as a late poll): a source's order slots,
+ *   rings, a detect's hold clock and hold start, a filter's and a rate
+ *   integrator's previous time, a silent's last. So one far-future stamp
+ *   stops its effects one frame later, but what its own sample's pass
+ *   did stands (a rate integral's step over that dt, a hold it ended). A
+ *   frame with no poll has no such recovery.
  *   ysig_frame() refuses only bad arguments, and a frame without a poll
  *   (has_poll false, as in a zeroed ysig_frame_in) in a graph with a view
  *   (velocity, speed, delay, lowpass, rate integrate, silent), on every call:
@@ -170,9 +180,12 @@
  *   sample: with no source upstream they are refused at open. A mux, all or
  *   distance after a frame-updated input (a channel selector) reads its
  *   inputs' rings, as above; a latch, a peak and a silent keep their own
- *   ring of sample-time values (silent: its input's, so a past read judges
- *   at that time, at most at the last poll); a detect's ring holds its
- *   output at each value it tested.
+ *   ring of sample-time values (a latch's does not read a generator part
+ *   of its input back at a past time; a peak's entry time is the later of
+ *   the sample's and the ring's last, so a late larger peak is kept;
+ *   silent: its input's, so a past read judges at that time, at most at
+ *   the last poll); a detect's ring holds its output at each value it
+ *   tested. An emit on a frame-updated node emits at every frame.
  *
  *   ---------------------------------------------------------------------
  *   DETECTORS (detect, latch, emit, ysig_detected, ysig_derived)
@@ -185,22 +198,28 @@
  *   the test when the detect is armed is held: no hit until it re-arms.
  *   With hold > 0 a hit needs the test true for hold s: the hit is at
  *   start + hold, found by the next value (before it is tested) or by a
- *   frame whose onset is at or after it, so a still hand that sends no
- *   samples completes a hold. A hold armed while its test is true counts
+ *   frame that knows the time is past it, so a still hand that sends no
+ *   samples completes a hold (found at the frame's known time). A hold
+ *   armed while its test is true counts
  *   from the arm (p12 entry arm, 0: a hand already on the start), or
  *   waits for the test to fail and come true again (entry fresh, 1).
- *   A sample-rate detect on a view tests it at the view's time, the poll
- *   at most, so its hold completes at a poll: up to a frame after the
- *   onset that would end a hold on samples. A frame-rate one tests at the
- *   onset. p6: armed at reset (0) or by ysig_arm().
+ *   In a frame's pass a hold's clock is the time the frame knows input
+ *   up to, min(poll, onset), while the test is true: a still input (also a
+ *   mux or a latch of it) keeps its old t, and the hold would never end.
+ *   So a hold completes at a poll, up to a frame after the onset that would
+ *   end a hold on samples. A hit is at start + hold on that clock. A
+ *   frame-rate detect without a hold tests at the onset. p6: armed at
+ *   reset (0) or by ysig_arm().
  *   p7: one hit per arm (0) or every crossing. A detect at frame rate
  *   (p5) tests the held value at each onset. Hits queue (64, the rest
  *   counted) until ysig_detected().
  *   A detect's output may feed a mux, an all, a latch or a peak's gate. It
  *   is the test's state by default (p13 out test); with out hit (1) it is
  *   1 from a hit until the detect is ready again, and until the next arm
- *   or reset for a one-hit detect, so it rises at a hold's completion,
- *   which may be in a frame's pass.
+ *   or reset for a one-hit or a disarmed detect, so it rises at a hold's
+ *   completion, which may be in a frame's pass. Its rise is at the hit's
+ *   time, also in its ring. ysig_arm() takes it to 0 for its users at
+ *   once, so the next hit is a new rise.
  *   CROSSINGS AND LATCHES: a latch takes its value when the trigger's lane
  *   0 goes from zero to nonzero (NaN is zero); a trigger already nonzero
  *   at a reset holds no rise. A rise in a sample's pass holds that sample's
@@ -255,17 +274,20 @@
  *   Between trials ysig_reset_trial() resets the experiment's nodes only
  *   (D19): a hand does not jump, so an adapter's nodes keep their state
  *   (the source's order slots, integrators, filters, rings). With no
- *   adapters it is ysig_reset(). ysig_recenter(g, role, x, y) places a
- *   relative role: role x, y (in the role's units) go back through the
- *   adapter's scale and offset nodes to the integrator, whose count grid
- *   then continues from that point. It refuses an absolute adapter, an
- *   adapter with no integrator, another op between the integrator and the
- *   role, and a point outside the integrator's bounds. Nodes after the
- *   integrator restart from the new place (filters, rings; a latch keeps
- *   its hold, a peak its peak, a silent its clock); detects see it at
- *   their next value, so
- *   call it before ysig_reset_trial() or ysig_arm() when a hold must start
- *   from it.
+ *   adapters it is ysig_reset(). ysig_recenter(g, role, x, y, t) places a
+ *   relative role at time t: role x, y (in the role's units) go back
+ *   through the adapter's scale and offset nodes to the integrator, whose
+ *   count grid then continues from that point, with a new ring entry at t
+ *   (values before t stand) and, for a rate integrator, no jump by the
+ *   time since its last sample. It refuses an absolute adapter, an adapter
+ *   with no integrator, another op between the integrator and the role,
+ *   a point not finite after that chain, and a point outside the
+ *   integrator's bounds. After the integrator, velocity, speed, lowpass
+ *   and delay restart (the jump would spike them) and stateless nodes take
+ *   the new value; a rate integrator, peak, latch, silent, detect and
+ *   custom op keep their state (a custom op gets no reset()). Detects see
+ *   the point at their next value, so call it before ysig_reset_trial() or
+ *   ysig_arm() when a hold must start from it.
  *
  *   ---------------------------------------------------------------------
  *   CUSTOM OPS (ysig_op_vtable)
@@ -2830,21 +2852,58 @@ YSIG_API bool ysig_set_data(ysig_graph* g, int node, int index, double v) {
     return true;
 }
 
+static void ysig__ring_lower(ysig__ring* r, int64_t poll) {
+    int k;
+    for (k = r->n - 1; k >= 0; k--) {
+        ysig_value* v = &r->buf[(r->head + k) % r->cap];
+        if (v->t <= poll) break;     /* in time order: the rest are earlier */
+        v->t = poll;
+    }
+}
+
 /* A stamp later than the poll is believed only up to the poll: one bad
- * stamp must not make its source drop every later sample, or hide a
- * silence. The order slots and silents' last times come down to it. */
+ * stamp must not make its source drop every later sample, its rings skip
+ * them, a hold or a filter wait for its time, or hide a silence. Every
+ * time kept from a stamp comes down to it. */
 static void ysig__lower_late(ysig_graph* g, int64_t poll) {
     int i, d;
-    for (i = 0; i < g->n_src; i++) {
-        ysig__src_st* s = (ysig__src_st*)g->nd[g->src_ids[i]].st;
-        for (d = 0; d < s->n; d++)
-            if (s->last_t[d] > poll) s->last_t[d] = poll;
-    }
-    for (i = 0; i < g->n; i++)
-        if (g->nd[i].op == YSIG_OP_SILENT) {
-            ysig__silent_st* s = (ysig__silent_st*)g->nd[i].st;
-            if (s->last > poll) s->last = poll;
+    for (i = 0; i < g->n; i++) {
+        ysig__nd* n = &g->nd[i];
+        ysig__ring_lower(&n->hist, poll);
+        if (n->sink_t > poll) n->sink_t = poll;
+        switch (n->op) {
+        case YSIG_OP_SOURCE: {
+            ysig__src_st* s = (ysig__src_st*)n->st;
+            for (d = 0; d < s->n; d++)
+                if (s->last_t[d] > poll) s->last_t[d] = poll;
+            break;
         }
+        case YSIG_OP_SILENT: {
+            ysig__silent_st* s = (ysig__silent_st*)n->st;
+            if (s->last > poll) s->last = poll;
+            break;
+        }
+        case YSIG_OP_VELOCITY: case YSIG_OP_SPEED: case YSIG_OP_DELAY:
+            ysig__ring_lower((ysig__ring*)n->st, poll);
+            break;
+        case YSIG_OP_LOWPASS: {
+            ysig__lp_st* s = (ysig__lp_st*)n->st;
+            if (s->t_prev > poll) s->t_prev = poll;
+            break;
+        }
+        case YSIG_OP_INTEGRATE: {
+            ysig__int_st* s = (ysig__int_st*)n->st;
+            if (s->t_prev > poll) s->t_prev = poll;
+            break;
+        }
+        case YSIG_OP_DETECT: {
+            ysig__det_st* s = (ysig__det_st*)n->st;
+            if (s->holding && s->t_start > poll) s->t_start = poll;
+            break;
+        }
+        default: break;
+        }
+    }
 }
 
 static int ysig__source_takes(const ysig__nd* n, const yin_event* e) {

@@ -3457,6 +3457,7 @@ static void test_ops_replay(void) {
             ysig_frame_in f = frame_at(1000, 8000 * MS, 0, NULL, 0);
             ysig_frame(&g, &f);
         }
+        CHECK(ysig_recenter(&g, 0, 2, 2, 8100 * MS));                 /* its time replays too */
         CHECK(g_nj < J_CAP);
         ysig_get_stats(&g, &s1);
         dg[run] = s1.digest;
@@ -3647,6 +3648,13 @@ static void test_peak_order(void) {
     f = frame_poll(2, 120 * MS, 120 * MS, &c, 1);
     ysig_frame(&g, &f);
     CHECK(ysig_value_of(&g, 2)->v[0] == 4 && ysig_value_of(&g, 2)->t == 110 * MS);
+    /* a reset forgets that a sample came: its held zero is no value */
+    ysig_reset(&g, 200 * MS);
+    f = frame_poll(3, 210 * MS, 210 * MS, &c, 1);
+    ysig_frame(&g, &f);
+    e = PEN1_E(220 * MS, 1, -5); ysig_feed(&g, &e);
+    e = PEN1_E(221 * MS, 1, -3); ysig_feed(&g, &e);
+    CHECK(ysig_value_of(&g, 2)->v[0] == -3);
 }
 
 /* T5, T14: a stamp later than the poll is believed only up to the poll */
@@ -3704,6 +3712,75 @@ static void test_late_stamp(void) {
     f = frame_poll(5, 2100 * MS, 2100 * MS, NULL, 0);
     ysig_frame(&g, &f);
     CHECK(ysig_value_of(&g, 1)->v[0] == 0);
+    /* every time kept from the stamp comes down: a hold, rings, filters */
+    {
+        ysig_node m[3];
+        ysig_hit h[4];
+        ysig_value at;
+        int nh = 0;
+        /* a hold after the stamp on another device can complete */
+        m[0] = src_node(YIN_KIND_PEN, 0, 0, 1);
+        m[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1);
+        m[1].p[YSIG_DETECT_TEST] = YSIG_TEST_LE; m[1].p[YSIG_DETECT_LEVEL] = 10; m[1].p[YSIG_DETECT_HOLD] = 0.05;
+        m[1].p[YSIG_DETECT_ENTRY] = 1;
+        d = desc_of(m, 2);
+        if (!open_desc(&g, &d)) { g_failures++; return; }
+        ysig_reset(&g, 0);
+        e = PEN1_E(1 * MS, 1, 50); ysig_feed(&g, &e);
+        e = PEN1_E(3600000LL * MS, 2, 50); ysig_feed(&g, &e);
+        f = frame_poll(1, 20 * MS, 20 * MS, NULL, 0); ysig_frame(&g, &f);
+        e = PEN1_E(30 * MS, 1, 1); ysig_feed(&g, &e);
+        for (k = 0; k < 20; k++) {
+            e = PEN1_E((40 + k * 10) * MS, 1, 1); ysig_feed(&g, &e);
+            f = frame_poll(2 + k, (45 + k * 10) * MS, (45 + k * 10) * MS, NULL, 0); ysig_frame(&g, &f);
+            if (ysig_detected(&g, h, 4)) { nh++; CHECK(h[0].t == 80 * MS); }
+        }
+        CHECK(nh == 1);
+        /* a hold that the stamp itself started */
+        ysig_reset(&g, 0);
+        e = PEN1_E(1 * MS, 1, 50); ysig_feed(&g, &e);
+        e = PEN1_E(3600000LL * MS, 2, 1); ysig_feed(&g, &e);
+        f = frame_poll(1, 20 * MS, 20 * MS, NULL, 0); ysig_frame(&g, &f);
+        f = frame_poll(2, 75 * MS, 75 * MS, NULL, 0); ysig_frame(&g, &f);
+        CHECK(ysig_detected(&g, h, 4) == 1 && h[0].t == 70 * MS);
+        /* a history ring takes the real samples after the stamp */
+        m[0].history = 64;
+        d = desc_of(m, 1);
+        if (!open_desc(&g, &d)) { g_failures++; return; }
+        ysig_reset(&g, 0);
+        e = PEN1_E(3600000LL * MS, 2, 9); ysig_feed(&g, &e);
+        f = frame_poll(1, 20 * MS, 20 * MS, NULL, 0); ysig_frame(&g, &f);
+        for (k = 0; k < 5; k++) { e = PEN1_E((30 + k) * MS, 1, k); ysig_feed(&g, &e); }
+        CHECK(ysig_value_at(&g, 0, 34 * MS, &at) == 1 && at.v[0] == 4 && at.t == 34 * MS);
+        ysig_get_stats(&g, &st);
+        CHECK(st.history_skipped == 0);
+        m[0].history = 0;
+        /* a velocity's and a delay's rings */
+        m[1] = ysig_node_of(YSIG_OP_VELOCITY, 0, -1); m[1].p[0] = 0.01;
+        m[2] = ysig_node_of(YSIG_OP_DELAY, 0, -1); m[2].p[0] = 0.005;
+        d = desc_of(m, 3);
+        if (!open_desc(&g, &d)) { g_failures++; return; }
+        ysig_reset(&g, 0);
+        e = PEN1_E(1 * MS, 1, 0); ysig_feed(&g, &e);
+        e = PEN1_E(3600000LL * MS, 2, 0); ysig_feed(&g, &e);
+        f = frame_poll(1, 20 * MS, 20 * MS, NULL, 0); ysig_frame(&g, &f);
+        for (k = 0; k < 40; k++) { e = PEN1_E((30 + k) * MS, 1, k); ysig_feed(&g, &e); }
+        CHECK_NEAR(ysig_value_of(&g, 1)->v[0], 1000, 1e-6);
+        CHECK(ysig_value_of(&g, 2)->v[0] == 34);
+        /* a filter's and a rate integrator's previous time */
+        m[1] = ysig_node_of(YSIG_OP_LOWPASS, 0, -1); m[1].p[0] = 100;
+        m[2] = ysig_node_of(YSIG_OP_INTEGRATE, 0, -1);
+        d = desc_of(m, 3);
+        if (!open_desc(&g, &d)) { g_failures++; return; }
+        ysig_reset(&g, 0);
+        e = PEN1_E(1 * MS, 1, 1); ysig_feed(&g, &e);
+        e = PEN1_E(3600000LL * MS, 2, 1); ysig_feed(&g, &e);
+        f = frame_poll(1, 20 * MS, 20 * MS, NULL, 0); ysig_frame(&g, &f);
+        for (k = 0; k < 100; k++) { e = PEN1_E((30 + k) * MS, 1, 10); ysig_feed(&g, &e); }
+        CHECK_NEAR(ysig_value_of(&g, 1)->v[0], 10, 1e-3);
+        /* 1 x (the stamp's dt: its own step stands) + 1 x 10 ms + 10 x 99 ms */
+        CHECK_NEAR(ysig_value_of(&g, 2)->v[0], 3599.999 + 0.01 + 0.99, 1e-6);
+    }
     /* no poll, no recovery: a graph with no view keeps dropping */
     n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2);
     d = desc_of(n, 1);
@@ -3811,6 +3888,33 @@ static void test_hold_frame_input(void) {
     f = frame_poll(3, 310 * MS, 298 * MS, c, 1); ysig_frame(&g, &f);
     CHECK(ysig_detected(&g, h, 4) == 1 && h[0].t == 298 * MS && h[0].t_found == 298 * MS);
     CHECK(ysig_value_of(&g, 4)->v[0] == 1 && ysig_value_of(&g, 4)->t == 298 * MS);
+    /* a frame-rate detect's hold also ends on the known time */
+    n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1);
+    n[1].p[YSIG_DETECT_TEST] = YSIG_TEST_LE; n[1].p[YSIG_DETECT_LEVEL] = 10; n[1].p[YSIG_DETECT_HOLD] = 0.1;
+    n[1].p[YSIG_DETECT_AT] = 1; n[1].p[YSIG_DETECT_ENTRY] = 1; n[1].p[YSIG_DETECT_START] = 1;
+    d = desc_of(n, 2);
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    ysig_arm(&g, 1, 0);
+    e = PEN1_E(1 * MS, 1, 50); ysig_feed(&g, &e);
+    f = frame_poll(1, 20 * MS, 10 * MS, NULL, 0); ysig_frame(&g, &f);     /* the test false: ready */
+    e = PEN1_E(25 * MS, 1, 1); ysig_feed(&g, &e);
+    f = frame_poll(2, 40 * MS, 30 * MS, NULL, 0); ysig_frame(&g, &f);     /* true: the hold starts at 30 */
+    f = frame_poll(3, 140 * MS, 129 * MS, NULL, 0); ysig_frame(&g, &f);   /* the onset is past, the poll is not */
+    CHECK(ysig_detected(&g, h, 4) == 0);
+    f = frame_poll(4, 150 * MS, 130 * MS, NULL, 0); ysig_frame(&g, &f);
+    CHECK(ysig_detected(&g, h, 4) == 1 && h[0].t == 130 * MS && h[0].t_found == 130 * MS);
+    /* a hit output's rise is at the hit when a later sample finds it */
+    n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1);
+    n[1].p[YSIG_DETECT_TEST] = YSIG_TEST_LE; n[1].p[YSIG_DETECT_LEVEL] = 10; n[1].p[YSIG_DETECT_HOLD] = 0.1;
+    n[1].p[YSIG_DETECT_OUT] = YSIG_OUT_HIT; n[1].history = 32;
+    d = desc_of(n, 2);
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    e = PEN1_E(140 * MS, 1, 1); ysig_feed(&g, &e);
+    CHECK(ysig_detected(&g, h, 4) == 1 && h[0].t == 100 * MS && h[0].t_found == 140 * MS);
+    CHECK(ysig_value_of(&g, 1)->v[0] == 1 && ysig_value_of(&g, 1)->t == 100 * MS);
+    CHECK(ysig_value_at(&g, 1, 120 * MS, &v) == 1 && v.v[0] == 1);
     /* a sample-rate detect on a sample input: the poll bounds it too */
     n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1);
     n[1].p[YSIG_DETECT_TEST] = YSIG_TEST_LE; n[1].p[YSIG_DETECT_LEVEL] = 10; n[1].p[YSIG_DETECT_HOLD] = 0.1;

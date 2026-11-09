@@ -411,7 +411,7 @@ id = "48"
 name = "detect: no hold completed by a frame"
 test = "sig"
 why = "A still hand sends nothing: its hold would never end."
-find = 'if (!s->armed || n->kns[0] <= 0 || onset < s->t_arm) return;'
+find = 'if (!s->armed || n->kns[0] <= 0 || tk < s->t_arm) return;'
 replace = 'return;'
 
 [[mutant]]
@@ -570,8 +570,8 @@ id = "67"
 name = "detect: a view tested at the onset"
 test = "sig"
 why = "A movement end would be stamped at the planned onset, past the input."
-find = '                    if (at_frame) v.t = t;'
-replace = '                    v.t = t;'
+find = '                    if (at_frame) v.t = holding ? g->t_known : t;'
+replace = '                    if (1) v.t = holding ? g->t_known : t;'
 
 [[mutant]]
 id = "68"
@@ -936,34 +936,32 @@ id = "111"
 name = "peak: NaN is a value"
 test = "sig"
 why = "A NaN sample would become the peak (its comparisons are false, so the first one sticks when has is 0)."
-find = '        if (q == q && (!s->has || q > s->best)) {'
-replace = '        if (!s->has || q > s->best) {'
+find = '            if (q == q && (!s->has || q > s->best)) {'
+replace = '            if (!s->has || q > s->best) {'
 
 [[mutant]]
 id = "112"
 name = "peak: tracks while the gate is zero"
 test = "sig"
 why = "It must hold while the gate is shut."
-find = '        if (!gate || (!rise && mode != 0)) break;'
-replace = '        if (!rise && mode != 0) break;'
+find = '        if (gate && (rise || mode == 0) && s->seen) {'
+replace = '        if ((rise || mode == 0) && s->seen) {'
 
 [[mutant]]
 id = "113"
 name = "peak: a frame's restart not in the ring"
 test = "sig"
 why = "A past read after a gate that rose at a frame must see the restart."
-find = '''            /* a gate's rise at a frame restarts the peak: the ring must
-             * show it, though a frame's value does not otherwise enter */
-            if (mode == 1) ysig__hist_push(g, n, o);'''
-replace = '''            (void)0;'''
+find = '        if (mode == 0 || moved) ysig__hist_push_later(g, n, o);'
+replace = '        if (mode == 0) ysig__hist_push_later(g, n, o);'
 
 [[mutant]]
 id = "114"
 name = "peak: a frame's view or held value is a candidate"
 test = "sig"
 why = "Only samples set a peak: a frame's mux switch to a larger held value is no sample."
-find = '        if (!gate || (!rise && mode != 0)) break;'
-replace = '        if (!gate) break;'
+find = '        if (gate && (rise || mode == 0) && s->seen) {'
+replace = '        if (gate && s->seen) {'
 
 [[mutant]]
 id = "115"
@@ -1054,9 +1052,11 @@ id = "125"
 name = "recenter: not journaled"
 test = "sig"
 why = "The call moves the hand: without the entry a replay diverges."
-find = '''    e.y = y;
-    ysig__journal(g, &e);'''
-replace = '''    e.y = y;'''
+find = '''    e.t = t_ns;
+    ysig__journal(g, &e);
+    for (k = 0; k < 2; k++) {'''
+replace = '''    e.t = t_ns;
+    for (k = 0; k < 2; k++) {'''
 
 [[mutant]]
 id = "126"
@@ -1103,35 +1103,32 @@ id = "131"
 name = "recenter: downstream nodes not re-run"
 test = "sig"
 why = "A still hand sends nothing: the cursor must move to the new place at the next frame."
-find = '        ysig__run(g, nid, 2, o->t);'
-replace = '        (void)nid;'
+find = '            ysig__run(g, nid, 2, t_ns);'
+replace = '            (void)nid;'
 
 [[mutant]]
 id = "132"
 name = "recenter: a latch restarted"
 test = "sig"
 why = "A latch holds until the next reset; a recenter is not a reset."
-find = '''        if (m->op == YSIG_OP_LATCH) {
-            if (!((ysig__latch_st*)m->st)->latched) { g->val[nid] = g->val[m->in[0]]; ysig__hist_push(g, m, &g->val[nid]); }
-            continue;
-        }'''
-replace = ''
+find = '            if (((ysig__latch_st*)m->st)->latched) continue;'
+replace = '            (void)0;'
 
 [[mutant]]
 id = "133"
 name = "recenter: a peak restarted"
 test = "sig"
 why = "A peak keeps its peak across a recenter."
-find = '        if (m->op == YSIG_OP_PEAK || m->op == YSIG_OP_SILENT) continue;'
-replace = '        if (m->op == YSIG_OP_SILENT) continue;'
+find = '        } else if (m->op == YSIG_OP_LOWPASS || m->op == YSIG_OP_VELOCITY ||'
+replace = '        } else if (m->op == YSIG_OP_PEAK || m->op == YSIG_OP_LOWPASS || m->op == YSIG_OP_VELOCITY ||'
 
 [[mutant]]
 id = "134"
 name = "recenter: a silent restarted"
 test = "sig"
 why = "A long silence must stand across a recenter (a mode-2 run would zero it)."
-find = '        if (m->op == YSIG_OP_PEAK || m->op == YSIG_OP_SILENT) continue;'
-replace = '        if (m->op == YSIG_OP_PEAK) continue;'
+find = '        } else if (m->op == YSIG_OP_LOWPASS || m->op == YSIG_OP_VELOCITY ||'
+replace = '        } else if (m->op == YSIG_OP_SILENT || m->op == YSIG_OP_LOWPASS || m->op == YSIG_OP_VELOCITY ||'
 
 [[mutant]]
 id = "135"
@@ -1327,8 +1324,8 @@ id = "157"
 name = "detect: a frame's hold completion not on the output"
 test = "sig"
 why = "A hold that a still hand completes at a frame must raise the output in that frame's pass."
-find = "    if ((int)n->p[13] == YSIG_OUT_HIT && s->fired) ysig__det_out(g, i, v, onset);\n"
-replace = "    (void)v;\n"
+find = "    if ((int)n->p[13] == YSIG_OUT_HIT && s->fired && !was) ysig__det_out(g, i, v, s->t_hit);\n"
+replace = "    (void)v; (void)was;\n"
 
 [[mutant]]
 id = "158"
@@ -1337,3 +1334,221 @@ test = "sig"
 why = "ysig_recenter names a role by its index in desc.roles; any other role's adapter would be moved."
 find = "if (g->nd[i].op == YSIG_OP_ROLE && (int)g->nd[i].p[0] == role) { cur = g->nd[i].in[0]; break; }"
 replace = "if (g->nd[i].op == YSIG_OP_ROLE) { cur = g->nd[i].in[0]; break; }"
+
+# ---- v0.2.0, the independent review's fixes
+
+[[mutant]]
+id = "159"
+name = "recenter: no new time on the integrator"
+test = "sig"
+why = "T1: a past read before the recenter must still give the old place: the placement has its own ring entry."
+find = '    o->t = o->t_oldest = t_ns;'
+replace = '    (void)t_ns;'
+
+[[mutant]]
+id = "160"
+name = "recenter: a rate integrator's previous time kept"
+test = "sig"
+why = "T2: the rate integral would jump by the time since the last sample."
+find = '    s->t_prev = t_ns;                /* a rate integrator: no jump by the time since its last sample */'
+replace = '    (void)0;'
+
+[[mutant]]
+id = "161"
+name = "recenter: the time not journaled"
+test = "sig"
+why = "A replay would place the point at time 0, with other ring times and t."
+find = """    e.t = t_ns;
+    ysig__journal(g, &e);
+    for (k = 0; k < 2; k++) {"""
+replace = """    ysig__journal(g, &e);
+    for (k = 0; k < 2; k++) {"""
+
+[[mutant]]
+id = "162"
+name = "peak: a late larger peak skipped by its ring"
+test = "sig"
+why = "T3: the ring's time must not go back, or a value that arrives late is lost."
+find = '        if (c.t < last) c.t = last;'
+replace = '        (void)last;'
+
+[[mutant]]
+id = "163"
+name = "peak: a gate's rise starts from no value"
+test = "sig"
+why = "T4: before any sample a source's zero is no value."
+find = '        if (gate && (rise || mode == 0) && s->seen) {'
+replace = '        if (gate && (rise || mode == 0)) {'
+
+[[mutant]]
+id = "164"
+name = "peak: a sample does not count as seen"
+test = "sig"
+why = "With no sample seen, no peak would ever start."
+find = '        if (changed & 1u) s->seen = 1;'
+replace = '        (void)changed;'
+
+[[mutant]]
+id = "165"
+name = "peak: a gate shut keeps seen at reset"
+test = "sig"
+why = "A reset starts over: a held value of the last trial must not seed the next."
+find = '            s->has = s->seen = 0;'
+replace = '            s->has = 0;'
+
+[[mutant]]
+id = "166"
+name = "late stamp: an order slot not lowered"
+test = "sig"
+why = "T5: one far-future stamp must stop dropping the source's samples one frame later."
+find = '            if (s->last_t[d] > poll) s->last_t[d] = poll;'
+replace = '            (void)d;'
+
+[[mutant]]
+id = "167"
+name = "late stamp: a silent's last not lowered"
+test = "sig"
+why = "T14: a raw mouse's far-future count would hide the silence for ever."
+find = '            if (s->last > poll) s->last = poll;'
+replace = '            (void)poll;'
+
+[[mutant]]
+id = "168"
+name = "late stamp: nothing lowered"
+test = "sig"
+why = "Without the lowering a graph with a poll never recovers."
+find = '            ysig__lower_late(g, f->poll_ns);'
+replace = '            (void)0;'
+
+[[mutant]]
+id = "169"
+name = "recenter: a rate integrate of the role restarted"
+test = "sig"
+why = "T12: only what the jump would spike restarts."
+find = '        } else if (m->op == YSIG_OP_LOWPASS || m->op == YSIG_OP_VELOCITY ||'
+replace = '        } else if (m->op == YSIG_OP_INTEGRATE || m->op == YSIG_OP_LOWPASS || m->op == YSIG_OP_VELOCITY ||'
+
+[[mutant]]
+id = "170"
+name = "recenter: a custom op restarted"
+test = "sig"
+why = "T12: a recenter is not a reset: a custom op gets no reset()."
+find = '        } else if (m->op == YSIG_OP_LOWPASS || m->op == YSIG_OP_VELOCITY ||'
+replace = '        } else if (m->op >= YSIG_OP_COUNT || m->op == YSIG_OP_LOWPASS || m->op == YSIG_OP_VELOCITY ||'
+
+[[mutant]]
+id = "171"
+name = "recenter: a point not finite after the chain"
+test = "sig"
+why = "T11: a tiny scale makes it infinite: refused, or the role reads inf."
+find = '    if (!isfinite(xy[0]) || !isfinite(xy[1])) {'
+replace = '    if (0) {'
+
+[[mutant]]
+id = "172"
+name = "re-arm: the users do not see the fall"
+test = "sig"
+why = "T7: the next hit in the next sample's pass would be no rise for a gate."
+find = '        if (fell) ysig__settle(g, node);'
+replace = '        (void)fell;'
+
+[[mutant]]
+id = "173"
+name = "re-arm: the fall stops at the first user"
+test = "sig"
+why = "A gate through an all must fall too."
+find = '''        ysig__run(g, nid, 1, g->onset);
+        reach[nid] = 1;'''
+replace = '''        ysig__run(g, nid, 1, g->onset);'''
+
+[[mutant]]
+id = "174"
+name = "hold on a frame-updated input: the value's old t"
+test = "sig"
+why = "T16: a hold on a mux or a latch of a still hand would never complete."
+find = '                    else if (holding && g->t_known > v.t) v.t = g->t_known;'
+replace = '                    else (void)holding;'
+
+[[mutant]]
+id = "175"
+name = "frame-rate hold: the onset, not the known time"
+test = "sig"
+why = "One rule for a frame's hold clock; a planned onset is ahead of the poll."
+find = '                    if (at_frame) v.t = holding ? g->t_known : t;'
+replace = '                    if (at_frame) v.t = t;'
+
+[[mutant]]
+id = "176"
+name = "sample-rate hold at a frame: the onset, not the known time"
+test = "sig"
+why = "The same rule for a detect on sample input: the poll bounds it."
+find = '                    ysig__det_frame(g, i, g->t_known, x);'
+replace = '                    ysig__det_frame(g, i, t, x);'
+
+[[mutant]]
+id = "177"
+name = "hit output: the rise at the sample's time"
+test = "sig"
+why = "A past read between the hit and the sample that found it must say 1."
+find = 's->fired && !was && (int)g->nd[i].p[13] == YSIG_OUT_HIT ? s->t_hit : tc);'
+replace = 's->fired && !was && 0 ? s->t_hit : tc);'
+
+[[mutant]]
+id = "178"
+name = "hit output at a frame: the rise at the frame's time"
+test = "sig"
+why = "A hit found by a frame rises at the hit, not at the found time."
+find = 'if ((int)n->p[13] == YSIG_OUT_HIT && s->fired && !was) ysig__det_out(g, i, v, s->t_hit);'
+replace = 'if ((int)n->p[13] == YSIG_OUT_HIT && s->fired && !was) ysig__det_out(g, i, v, tk);'
+
+[[mutant]]
+id = "179"
+name = "late stamp: a history ring not lowered"
+test = "sig"
+why = "Rings skip every real sample after a far-future entry (history_skipped), so a past read is stale."
+find = '        ysig__ring_lower(&n->hist, poll);'
+replace = '        (void)0;'
+
+[[mutant]]
+id = "180"
+name = "late stamp: a hold clock not lowered"
+test = "sig"
+why = "A hold after the stamp would start at the far-future clock and never complete."
+find = '        if (n->sink_t > poll) n->sink_t = poll;'
+replace = '        (void)0;'
+
+[[mutant]]
+id = "181"
+name = "late stamp: a velocity's or delay's ring not lowered"
+test = "sig"
+why = "The ring would refuse every later sample: the velocity and the delay go stale."
+find = '            ysig__ring_lower((ysig__ring*)n->st, poll);'
+replace = '            (void)0;'
+
+[[mutant]]
+id = "182"
+name = "late stamp: a low-pass's previous time not lowered"
+test = "sig"
+why = "dt would stay 0: the filter freezes."
+find = """            ysig__lp_st* s = (ysig__lp_st*)n->st;
+            if (s->t_prev > poll) s->t_prev = poll;"""
+replace = """            ysig__lp_st* s = (ysig__lp_st*)n->st;
+            (void)s;"""
+
+[[mutant]]
+id = "183"
+name = "late stamp: a rate integrator's previous time not lowered"
+test = "sig"
+why = "dt would stay 0: the integral stops for good."
+find = """            ysig__int_st* s = (ysig__int_st*)n->st;
+            if (s->t_prev > poll) s->t_prev = poll;"""
+replace = """            ysig__int_st* s = (ysig__int_st*)n->st;
+            (void)s;"""
+
+[[mutant]]
+id = "184"
+name = "late stamp: a hold start not lowered"
+test = "sig"
+why = "A hold the stamp itself started would end only after the far-future time."
+find = '            if (s->holding && s->t_start > poll) s->t_start = poll;'
+replace = '            (void)s;'

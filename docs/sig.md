@@ -153,8 +153,9 @@ n[HOLD].p[YSIG_DETECT_A_Y] = 384;
 
 The hit's `t` is the hold's start plus 0.5 s. The next sample finds it
 (before it is tested, so a hand that leaves after the hold ended counts as
-movement), or a frame whose onset is at or after it, so a still hand that
-sends nothing completes it. Read hits with `ysig_detected()`. With
+movement), or a frame that knows the time is past it (its poll, at most
+its onset), so a still hand that sends nothing completes it. A frame's
+hold clock is that known time while the test is true, on any input. Read hits with `ysig_detected()`. With
 `p[YSIG_DETECT_START] = 1` (start `arm`) the detect waits for
 `ysig_arm(&g, node, t)`. A crossing detect (no hold) armed while its test
 is true is held until the test fails (the collector's CROSSINGS rule). A
@@ -203,9 +204,11 @@ n[SHOW] = ysig_node_of(YSIG_OP_MUX, CURSOR, HIDDEN);
 n[SHOW].in[2] = SEL;
 ```
 
-The output is the chosen input, with its `t`, device, tier and source. A
-sample of the input not chosen changes nothing on the output. Nonzero
-chooses `a`; zero and NaN choose `b`.
+The output is the chosen input, with its `t`, device, tier and source.
+A sample of the input not chosen does not change the output's value or
+time, but it runs the mux's users again: a `record` or `emit` after the
+mux gets a repeated row or event with the chosen input's value and time.
+Nonzero chooses `a`; zero and NaN choose `b`.
 
 ### Keep the hand across trials
 
@@ -216,20 +219,25 @@ the two calls are the same. To place a relative role, for example to bring
 a cursor back to the start without moving the hand:
 
 ```c
-ysig_recenter(&g, 0, start_x, start_y);     /* role 0, in the role's units */
+ysig_recenter(&g, 0, start_x, start_y, t_trial);     /* role 0, in the role's units */
 ysig_reset_trial(&g, t_trial);
 ```
 
 `ysig_recenter()` goes back through the adapter's `scale` and `offset`
 nodes to its integrator and restarts the count grid at that point, so the
-role reads exactly x, y and later counts land on the same grid. Nodes after
-the integrator restart from the new place (a filter, a velocity, a delay's
-ring). A latch keeps its hold, a peak its peak and a silent its clock. A
-detect sees the new value at its next sample, so a hold that must start
-from the placed point needs the recenter before the arm or the
-`ysig_reset_trial()`. The call returns false and sets `ysig_error()` for an
-absolute adapter, an adapter with no integrator, another op between the
-integrator and the role, or a point outside the integrator's bounds.
+role reads exactly x, y and later counts land on the same grid. The
+placement gets a new ring entry at the call's time: a past read before it
+still gives the old place. A rate integrator takes the point at that time,
+with no jump by the time since its last sample. After the integrator,
+velocity, speed, lowpass and delay restart, because the jump would spike
+them; the stateless nodes take the new value; a rate integrator, peak,
+latch, silent, detect and custom op keep their state and output, and a
+custom op gets no `reset()`. A detect sees the new value at its next
+sample, so a hold that must start from the placed point needs the
+recenter before the arm or the `ysig_reset_trial()`. The call returns
+false and sets `ysig_error()` for an absolute adapter, an adapter with no
+integrator, another op between the integrator and the role, a point not
+finite after that chain, or a point outside the integrator's bounds.
 
 ### Read a value at a flip record's onset
 
@@ -361,13 +369,13 @@ definition. A zero field means the row's `def`.
 | `noise` | none, 1 to 4 | seed, sd, cutoff Hz | Set again at each reset |
 | `channel` | none, 1 | timeline channel | From the frame's values |
 | `bind` | 1, none | first channel | Writes float at each frame |
-| `detect` | 1, 1 (the test, or the hit with `out` hit) | test (ge, le, in_rect, out_rect), lane (-1 norm), level, hysteresis, hold s, at (sample, frame), start (reset, arm), repeat (once, every), a.x a.y b.x b.y, entry (arm, fresh), out (test, hit) | The only sink with an output: another op may read it (a mux selector, an all input, a latch's trigger). With `out` hit, 1 from a hit until the detect is ready again (one hit: until the next arm or reset) |
+| `detect` | 1, 1 (the test, or the hit with `out` hit; holds while disarmed or after a one-hit hit) | test (ge, le, in_rect, out_rect), lane (-1 norm), level, hysteresis, hold s, at (sample, frame), start (reset, arm), repeat (once, every), a.x a.y b.x b.y, entry (arm, fresh), out (test, hit) | The only sink with an output: another op may read it (a mux selector, an all input, a latch's trigger). With `out` hit, 1 from a hit until the detect is ready again (one hit: until the next arm or reset) |
 | `record` | 1, none | per (sample, frame) | `desc.on_row`. A row has its value's true `t`: a sample stream may be out of time order when two sources feed the node, as `ysp/input.h` says of events |
-| `emit` | 1, none | kind (USER + 0..7), control | `ysig_derived()` |
+| `emit` | 1, none | kind (USER + 0..7), control | `ysig_derived()`. On a frame-updated node (a mux of a channel) it emits at every frame |
 | `mux` | 3 (a, b, selector), n | none | a when lane 0 of the selector is nonzero, else b; a and b the same lanes; the output's time, device, tier and source are the chosen input's. NaN counts as zero |
-| `latch` | 2 (value, trigger), n | none | Passes the value until lane 0 of the trigger goes from zero to nonzero, then holds until a reset. Hit value of a detect on the same input, else the held input at the pass of the rise |
+| `latch` | 2 (value, trigger), n | none | Passes the value until lane 0 of the trigger goes from zero to nonzero, then holds until a reset. Hit value of a detect on the same input, else the held input at the pass of the rise. Its ring holds sample-time values: a generator part of its input is not read back by `ysig_value_at()` |
 | `distance` | 1 (2 or 3 lanes) or 2, 1 | point.x, point.y, point.z | The Euclidean distance to the point, or to a second input of the same lanes |
-| `peak` | 1 or 2 (gate), 1 | lane (-1 norm) | The largest value since the reset or since the gate last rose; holds while the gate is zero; `t` is the peak sample's. Needs a source upstream |
+| `peak` | 1 or 2 (gate), 1 | lane (-1 norm) | The largest value since the reset or since the gate last rose; holds while the gate is zero; `t` is the peak sample's, its ring's time the later of that and the ring's last, so a late larger peak is kept. A gate that rises before any sample starts from the first sample. Needs a source upstream |
 | `all` | 2 to 4, 1 | none | 1 when lane 0 of every input is nonzero |
 | `silent` | 1, 1 | after s | A view: 1 once no sample has come for `after`, judged at the poll, before any sample from the reset; the same at a past read of its value, at most at the last poll. Needs a source upstream |
 
@@ -413,6 +421,18 @@ definition. A zero field means the row's `def`.
   source upstream: they keep state per sample, and `ysig_check()` refuses
   them on a generator or a channel alone.
 - Times saturate at the ends of int64 instead of overflowing.
+- A stamp later than the poll is believed only up to the poll. At a frame
+  with a poll, every time kept from a stamp and later than the poll comes
+  down to it, counted in `late_poll`: a source's order slots, history
+  rings and the rings of velocity, speed and delay, a detect's hold clock
+  and hold start, the previous time of a low-pass and of a rate
+  integrator, a `silent`'s last time. One far-future stamp then stops
+  dropping that source's samples one frame later, later samples enter the
+  rings, a hold can complete, and a silent reads 1 after the real silence.
+  What that sample's own pass did stands: a rate integrator's step over
+  its dt stays in the sum, and a hold it ended has its hit. A frame with no
+  poll has no such recovery: a graph that never polls stays behind that
+  stamp.
 
 ### Trials and adapters
 
@@ -422,8 +442,8 @@ definition. A zero field means the row's `def`.
   an adapter starts from its current value. A graph with no adapters
   resets every node.
 - `ysig_recenter()`: see [Keep the hand across trials](#keep-the-hand-across-trials).
-  The point is in the role's units. A rate integrator (no DELTA counts)
-  takes the position at once. Both calls are journaled.
+  The point is in the role's units, at the call's time. Both calls are
+  journaled.
 
 ### Limits
 
