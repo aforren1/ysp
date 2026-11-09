@@ -75,10 +75,14 @@ forced. The Report section lists them with the evidence.
 | A required role unbound in `--sim` | The participant and the sink stand in for the device (the check runs against a real run's rig) |
 | `display.min_tier` on the simulated display | Flags frames (`BELOW_TIER`); the display is not refused |
 
-Not lowered: `aep` methods, `artwork` and `video` stimuli are refused by
-name. No worked example needs them and no comparison with a C program
-exists for them. A `yexp_response.trigger` is a frame-loop `yscr`-free code
-in `--sim`; its device rule (`ydev_rule`) needs a real role.
+The variable `$trial_index` is the leaf's trial number (2.3 reads it from
+`ytr_trial_info`); the column `trial_index` is the session's.
+
+These are not lowered, and the player refuses each by name: `aep` methods,
+`artwork` stimuli and `video` stimuli. No worked example needs them, and no
+C program gives a comparison for them. In `--sim` a response's `trigger` goes
+out from the frame loop, as for a keyboard role. Its device rule (`ydev_rule`)
+needs a real role.
 
 ## Results
 

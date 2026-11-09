@@ -400,8 +400,18 @@ def t_unused_stim(ctx):
     check(r.rc == 0 and len(r.trials) == 4, "a stimulus's variable exists only for its own template: %s" % r.err)
 
 
+def t_record_data(ctx):
+    # record_data false: no row, and nothing of its response leaks into the next
+    d = base({"a": tmpl(key_answer="left"), "b": {"events": [{"on": "s"}, {"wait_s": 0.05}, {"off": "s"}]}},
+             [{"name": "one", "trial": "a", "record_data": False, "rules": ["reps 2"]}, {"name": "two", "trial": "b", "rules": ["reps 2"]}])
+    r = Run(ctx, "record_data", d, args=["--rt", "0.2"])
+    check(r.rc == 0 and len(r.trials) == 2, "record_data false writes no row: %d (%s)" % (len(r.trials), r.err))
+    check(all(row["response"] == "" and row["rt_s"] == "" for row in r.trials), "no value of an unrecorded trial reaches the next row: %s" % r.trials[:1])
+    check([row["trial_index"] for row in r.trials] == ["2", "3"], "trial_index still counts the unrecorded trials")
+
+
 TESTS = [t_nested, t_if_unless, t_empty_and_zero, t_loop, t_requeue, t_track_ends, t_lookup_keys, t_triggers, t_after_timing, t_outcomes,
-         t_method_update, t_seeds, t_refused, t_unused_stim]
+         t_method_update, t_seeds, t_refused, t_unused_stim, t_record_data]
 
 
 def main():

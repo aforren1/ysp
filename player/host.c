@@ -264,8 +264,8 @@ static const yexp_node* h_find_leaf(const yexp_node* n, int count, const yexp_te
 static int h_check_ops(void* ctx, const yexp_def* d, const yexp_template* t, char* msg, size_t cap) {
     pl_player* p = (pl_player*)ctx;
     static ytl_timeline tl;
-    static ytl_event ev[4096];
-    static ytl_key keys[4096];
+    ytl_event* ev;
+    ytl_key* keys;
     ytl_desc td;
     const yexp_node* leaf;
     ytl_op* ops;
@@ -274,8 +274,12 @@ static int h_check_ops(void* ctx, const yexp_def* d, const yexp_template* t, cha
     p->def = (yexp_def*)d;
     if (pl_channels_assign(p) < 0) { snprintf(msg, cap, "%s", p->error); p->failed = 0; p->env = saved; return 1; }
     bound = 16 + pl_ops_bound(t->events, t->n_events) + pl_ops_bound(t->after, t->n_after);
+    /* sized from this template, as the run's are: a fixed table would refuse
+     * a long valid template */
     ops = (ytl_op*)pl_alloc(p, sizeof(ytl_op) * (size_t)bound);
-    if (!ops) { snprintf(msg, cap, "out of memory"); return 1; }
+    ev = (ytl_event*)pl_alloc(p, sizeof(ytl_event) * (size_t)bound);
+    keys = (ytl_key*)pl_alloc(p, sizeof(ytl_key) * (size_t)bound * 4);
+    if (!ops || !ev || !keys) { snprintf(msg, cap, "out of memory"); return 1; }
     leaf = h_find_leaf(d->timeline, d->n_timeline, t);
     if (leaf && leaf->rules[0]) {
         /* a jitter's range is only in the rules text */
@@ -295,9 +299,9 @@ static int h_check_ops(void* ctx, const yexp_def* d, const yexp_template* t, cha
 
     memset(&td, 0, sizeof td);
     td.events = ev;
-    td.event_capacity = 4096;
+    td.event_capacity = bound;
     td.keys = keys;
-    td.key_capacity = 4096;
+    td.key_capacity = bound * 4;
     td.n_channels = p->n_channels;
     for (mode = 1; mode <= 2 && rc == 0; mode++) {
         int bad = -1, nops;

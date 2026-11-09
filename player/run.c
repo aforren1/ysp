@@ -905,6 +905,9 @@ static int pl_row_flush(pl_player* p, pl_row* r) {
     ytr_data* w = yds_trials_writer(&p->ds);
     int i;
     if (!r->used) return 0;
+    /* record_data false: nothing may be set, or the values would stay on the
+     * writer and land in the next row that does not set those columns */
+    if (!r->write_row) { r->used = false; return 0; }
     for (i = 0; i < r->n_cells; i++) {
         int rc = 0;
         switch (r->cells[i].type) {
@@ -948,7 +951,7 @@ static int pl_row_flush(pl_player* p, pl_row* r) {
     if (r->has_res) {
         if (yrsp_data_set(w, &r->res) < 0) { pl_fail(p, "the row of trial %d: %s", r->trial_index, ytr_data_error(w)); return -1; }
     }
-    if (r->write_row && yds_write_trial(&p->ds, NULL) < 0) { pl_fail(p, "the trial row: %s", yds_error(&p->ds)); return -1; }
+    if (yds_write_trial(&p->ds, NULL) < 0) { pl_fail(p, "the trial row: %s", yds_error(&p->ds)); return -1; }
     r->used = false;
     return 0;
 }
@@ -1347,6 +1350,7 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
         if (p->from_landed && !p->press_planned && rec->index == p->from_frame && p->tmpl && p->tmpl->collector && !p->silent)
             pl_participant_arm(p, rec->onset ? rec->onset : rec->planned);
     }
+    p->frame_trial[f->index % PL_FRAME_RING] = YTR_MISSING_INT;   /* until a trial claims it */
     if (!p->in_trial) {
         int64_t t0 = p->args.measure ? yrt_real_ns() : 0;
         if (p->pending_stop) return 1;
@@ -1410,9 +1414,9 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
     n = ytl_evaluate(&p->tl, &(ytl_frame){ f->onset, f->period, f->index }, p->fired, p->fired_cap);
     if (n < 0) { pl_fail(p, "ytl_evaluate: %s", ytl_strerror(n)); return -1; }
     if (p->in_trial && pl_on_fired(p, f, n) < 0) return -1;
-    if (p->in_trial) {
-        ygfx_apply(p->binds, p->n_binds, ytl_values(&p->tl));
-    }
+    /* also on the end's frame: a step that lands with the trial's last event
+     * must reach this frame's draw */
+    if (p->global_trial > 0) ygfx_apply(p->binds, p->n_binds, ytl_values(&p->tl));
     yscr_mark(&p->scr, YSCR_PHASE_EVALUATE);
     if (pl_draw(p, f) < 0) return -1;
     if (p->args.max_seconds && f->onset - (p->t0_session ? p->t0_session : f->onset) > p->args.max_seconds * 1000000000LL) {
@@ -1495,6 +1499,10 @@ int pl_run(pl_player* p) {
             pl_loop_active = 0;
         }
         if (r < 0) return -1;
+        if (r == 1) {   /* the session ended before this frame drew: a blank frame */
+            ygfx_begin(&p->gfx, &f);
+            ygfx_end(&p->gfx);
+        }
         {
             int src = yscr_flip(&p->scr);
             if (src != YSCR_OK) { pl_fail(p, "the flip: %s", yscr_error(&p->scr)); return -1; }
@@ -1508,13 +1516,15 @@ int pl_run(pl_player* p) {
         int k;
         rc = yscr_begin(&p->scr, &f);
         if (rc != YSCR_OK) break;
+        p->frame_trial[f.index % PL_FRAME_RING] = YTR_MISSING_INT;
         for (k = 0; k < f.n_done; k++)
             if (pl_on_record(p, &f.done[k]) < 0) return -1;
         ygfx_begin(&p->gfx, &f);
         ygfx_end(&p->gfx);
         if (yscr_flip(&p->scr) != YSCR_OK) break;
     }
-    while (p->row_tail != p->row_head) {
+    /* by count, not head != tail: a full ring has head == tail */
+    for (i = 0; i < PL_PENDING_ROWS; i++) {
         if (p->rows[p->row_tail].used && pl_row_flush(p, &p->rows[p->row_tail]) < 0) return -1;
         p->row_tail = (p->row_tail + 1) % PL_PENDING_ROWS;
     }
