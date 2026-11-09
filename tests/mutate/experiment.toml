@@ -154,32 +154,32 @@ id = "e-18"
 name = "a dangling stimulus in a step"
 test = "experiment"
 why = "Refused at load, not in a session."
-find = '''                if (!yexp_stim_get(c->d, nm)) yexp__err(c, tg->pos, "%s: '%s': no stimulus named '%s'", elem, yexp__verbs[verb], nm);'''
-replace = '''                (void)0;'''
+find = '''                    if (!(c->bad_sets & YEXP__BAD_STIMULI)) yexp__err(c, tg->pos, "%s: '%s': no stimulus named '%s'", elem, yexp__verbs[verb], nm);'''
+replace = '''                    (void)0;'''
 
 [[mutant]]
 id = "e-19"
 name = "a dangling response 'from'"
 test = "experiment"
 why = "Refused at load."
-find = '''if (name && !yexp_stim_get(c->d, name)) yexp__err(c, src->pos, "%s: 'from': no stimulus named '%s'", elem, name);'''
-replace = '''(void)name;'''
+find = '''    if (name && !yexp_stim_get(c->d, name) && !(c->bad_sets & YEXP__BAD_STIMULI)) yexp__err(c, src->pos, "%s: 'from': no stimulus named '%s'", elem, name);'''
+replace = '''    (void)name;'''
 
 [[mutant]]
 id = "e-20"
 name = "a trigger on an input role"
 test = "experiment"
 why = "A trigger needs an output role."
-find = '''else if (r->direction == 0) yexp__err(c, src->pos, "%s: 'role': '%s' is an input role; a trigger needs an output", elem, role);'''
-replace = '''else (void)0;'''
+find = '''            else if (!r->failed_ && r->direction == 0) yexp__err(c, src->pos, "%s: 'role': '%s' is an input role; a trigger needs an output", elem, role);'''
+replace = '''            else (void)0;'''
 
 [[mutant]]
 id = "e-21"
 name = "a dangling method in tracks"
 test = "experiment"
 why = "Refused at load."
-find = '''if (!ms[i]) yexp__err(c, x->pos, "%s: 'tracks': no method named '%s'", elem, tv->items[i].str);'''
-replace = '''(void)0;'''
+find = '''                    if (!(c->bad_sets & YEXP__BAD_METHODS)) yexp__err(c, x->pos, "%s: 'tracks': no method named '%s'", elem, tv->items[i].str);'''
+replace = '''                    (void)0;'''
 
 [[mutant]]
 id = "e-22"
@@ -210,7 +210,7 @@ id = "e-25"
 name = "the default record drops the response's from"
 test = "experiment"
 why = "D10's default; the golden dumps pin it."
-find = '''    if (t->response && t->response->from) out[n++] = t->response->from;'''
+find = '''    if (t->response && t->response->from) { yexp__stim_stamped(c, t->response->from); out[n++] = t->response->from; }'''
 replace = '''    (void)t;'''
 
 [[mutant]]
@@ -609,7 +609,7 @@ id = "r-13"
 name = "a session field type not checked"
 test = "experiment"
 why = "A string field is no duration."
-find = '''                if ((text && want != YEXP__W_TEXT) || (!text && want != YEXP__W_NUM && want != YEXP__W_NONNEG))'''
+find = '''                if ((text && want != YEXP__W_TEXT) || (!text && want != YEXP__W_NUM && want != YEXP__W_NONNEG && want != YEXP__W_BOOL))'''
 replace = '''                if (0)'''
 
 [[mutant]]
@@ -644,8 +644,8 @@ id = "r-17"
 name = "an integer column of any levels accepted in an if"
 test = "experiment"
 why = "Only 0 and 1."
-find = '''        if (n >= (int)sizeof buf || (!yexp__streq(buf, "0") && !yexp__streq(buf, "1"))) return false;'''
-replace = '''        if (n >= (int)sizeof buf) return false;'''
+find = '''        if (n != 1 || (buf[0] != '0' && buf[0] != '1')) return false;'''
+replace = '''        if (n != 1) return false;'''
 
 [[mutant]]
 id = "r-18"
@@ -848,8 +848,8 @@ id = "r-42"
 name = "a choice outside the role buttons"
 test = "experiment"
 why = "2.6: a button role takes its button names."
-find = '''                        if (!found) yexp__err(c, it->pos, "%s: '%s' is not a button'''
-replace = '''                        if (0) yexp__err(c, it->pos, "%s: '%s' is not a button'''
+find = '''                            yexp__err(c, it->pos, "%s: '%s' is not a button of the role '%s'", ce, ch[i].key, r->role);'''
+replace = '''                            (void)0;'''
 
 [[mutant]]
 id = "r-43"
@@ -902,15 +902,6 @@ why = "D14: the levels are needed at pack build."
 find = '''    if (want == YEXP__W_TEXT && (r.kind == YEXP__VK_BUILTIN || r.kind == YEXP__VK_SESSION || r.kind == YEXP__VK_JITTER || r.kind == YEXP__VK_DIM)) {'''
 replace = '''    if (0) {'''
 
-[[mutant]]
-id = "r-49"
-name = "the first pass has no work limit"
-test = "experiment"
-why = "A hostile on-list."
-find = '''                for (b = 0; b < a && yexp__work(c); b++)
-                    if (yexp__streq(out->stims[b], nm))'''
-replace = '''                for (b = 0; b < a; b++)
-                    if (yexp__streq(out->stims[b], nm))'''
 
 [[mutant]]
 id = "r-50"
@@ -919,3 +910,235 @@ test = "experiment"
 why = "Item 8."
 find = '''        if ((want == YEXP__W_NUM || want == YEXP__W_NONNEG) && !all_num) yexp__type_err'''
 replace = '''        if (0) yexp__type_err'''
+
+[[mutant]]
+id = "s-01"
+name = "a vars hop counted twice"
+test = "experiment"
+why = "A chain of 33 to 63 links must keep its lookup check."
+find = '''    if (r.kind == YEXP__VK_VARS) return yexp__levels(c, s, r.value, depth);'''
+replace = '''    if (r.kind == YEXP__VK_VARS) return yexp__levels(c, s, r.value, depth + 1);'''
+
+[[mutant]]
+id = "s-02"
+name = "a flag column read as a C string"
+test = "experiment"
+why = "The host need not write a NUL; the length is what it returned."
+find = '''        if (n != 1 || (buf[0] != '0' && buf[0] != '1')) return false;'''
+replace = '''        if (!yexp__streq(buf, "0") && !yexp__streq(buf, "1")) return false;'''
+
+[[mutant]]
+id = "s-03"
+name = "an integer session field refused in an if"
+test = "experiment"
+why = "The player checks its value at session start."
+find = '''(!text && want != YEXP__W_NUM && want != YEXP__W_NONNEG && want != YEXP__W_BOOL))'''
+replace = '''(!text && want != YEXP__W_NUM && want != YEXP__W_NONNEG))'''
+
+[[mutant]]
+id = "s-04"
+name = "a member named note refused"
+test = "experiment"
+why = "A non-string note in a named set is a member."
+find = '''        yexp__err(c, src->pos, "%s: wrong type; expected an object of names", elem);
+        return false;
+    }
+    for (k = 0; k < src->n; k++) {'''
+replace = '''        yexp__err(c, src->pos, "%s: wrong type; expected an object of names", elem);
+        return false;
+    }
+    if (!yexp__note_ok(c, src, elem)) return false;
+    for (k = 0; k < src->n; k++) {'''
+
+[[mutant]]
+id = "s-05"
+name = "a name stamped never"
+test = "experiment"
+why = "A repeated name in a list is refused."
+find = '''    if (*u == c->gen) return true;
+    *u = c->gen;
+    return false;'''
+replace = '''    if (*u == c->gen) return true;
+    return false;'''
+
+[[mutant]]
+id = "s-06"
+name = "the on list keeps the last list stamps"
+test = "experiment"
+why = "Each list is checked on its own."
+find = '''            c->gen++;
+            for (a = 0; a < out->n_stims; a++) {'''
+replace = '''            for (a = 0; a < out->n_stims; a++) {'''
+
+[[mutant]]
+id = "s-07"
+name = "a repeated record name"
+test = "experiment"
+why = "Refused."
+find = '''                } else if (yexp__stim_stamped(c, out->record[a])) {'''
+replace = '''                } else if (0) {'''
+
+[[mutant]]
+id = "s-08"
+name = "a repeated track"
+test = "experiment"
+why = "Refused."
+find = '''                    if (*u == c->gen) yexp__err(c, x->pos, "%s: 'tracks': '%s' listed twice", elem, tv->items[i].str);'''
+replace = '''                    (void)0;'''
+
+[[mutant]]
+id = "s-09"
+name = "a repeated choice key"
+test = "experiment"
+why = "Refused."
+find = '''                            if (yexp__streq(ks[a].key, ks[a - 1].key))'''
+replace = '''                            if (0)'''
+
+[[mutant]]
+id = "s-10"
+name = "a stagger kept on one stimulus"
+test = "experiment"
+why = "It has no effect, so one form and one ID."
+find = '''                if (tg->n < 2) out->stagger = d;
+                else if'''
+replace = '''                if'''
+
+[[mutant]]
+id = "s-11"
+name = "a stagger on many stimuli dropped"
+test = "experiment"
+why = "Two or more keep it."
+find = '''                else if (sv && st->src && !(d && yexp__same(sv, d))) yexp__put(c, cs, "stagger_s", (yjs_value*)st->src);'''
+replace = ''''''
+
+[[mutant]]
+id = "s-12"
+name = "a color var with a text item"
+test = "experiment"
+why = "Each item is a number."
+find = '''                if (v->items[k].kind != YEXP_V_NUMBER) { yexp__type_err(c, pos, elem, key, name, "an array with an item that is no number", want); break; }'''
+replace = '''                (void)0;'''
+
+[[mutant]]
+id = "s-13"
+name = "a line break inside a rules element"
+test = "experiment"
+why = "D5: one statement per element; else two spellings, two IDs."
+find = '''            if (strchr(rv->items[i].str, '\n'))
+                yexp__err('''
+replace = '''            if (0)
+                yexp__err('''
+
+[[mutant]]
+id = "s-14"
+name = "a refused stimulus loses its name"
+test = "experiment"
+why = "A reference to it is no second error."
+find = '''        out[i].failed_ = c->r->n_errors != before;
+        i++;'''
+replace = '''        out[i].failed_ = c->r->n_errors != before;
+        if (!out[i].failed_) i++;'''
+
+[[mutant]]
+id = "s-15"
+name = "a refused role reads as an input"
+test = "experiment"
+why = "Its direction is not known."
+find = '''            else if (!r->failed_ && r->direction == 0) yexp__err(c, src->pos, "%s: 'role': '%s' is an input role; a trigger needs an output", elem, role);'''
+replace = '''            else if (r->direction == 0) yexp__err(c, src->pos, "%s: 'role': '%s' is an input role; a trigger needs an output", elem, role);'''
+
+[[mutant]]
+id = "s-16"
+name = "a stimuli set refused whole makes names dangling"
+test = "experiment"
+why = "One cause, one error."
+find = '''{ c->bad_sets |= YEXP__BAD_STIMULI; return; }'''
+replace = '''return;'''
+
+[[mutant]]
+id = "s-17"
+name = "a devices set refused whole makes names dangling"
+test = "experiment"
+why = "One cause, one error."
+find = '''{ c->bad_sets |= YEXP__BAD_ROLES; return; }'''
+replace = '''return;'''
+
+[[mutant]]
+id = "s-18"
+name = "a methods set refused whole makes names dangling"
+test = "experiment"
+why = "One cause, one error."
+find = '''{ c->bad_sets |= YEXP__BAD_METHODS; return; }'''
+replace = '''return;'''
+
+[[mutant]]
+id = "s-19"
+name = "a trials set refused whole makes names dangling"
+test = "experiment"
+why = "One cause, one error."
+find = '''{ c->bad_sets |= YEXP__BAD_TRIALS; return; }'''
+replace = '''return;'''
+
+[[mutant]]
+id = "s-20"
+name = "missing trials make names dangling"
+test = "experiment"
+why = "One cause, one error."
+find = '''    } else {
+        c->bad_sets |= YEXP__BAD_TRIALS;
+    }'''
+replace = '''    }'''
+
+[[mutant]]
+id = "s-21"
+name = "a refused stimulus has its props checked"
+test = "experiment"
+why = "Its kind is not known."
+find = '''        if (st && !st->failed_ && ps && ps->src) {'''
+replace = '''        if (st && ps && ps->src) {'''
+
+[[mutant]]
+id = "s-22"
+name = "a bad event reads as an unshown from"
+test = "experiment"
+why = "One cause, one error."
+find = '''        if (!events_errors && out->response && out->response->from'''
+replace = '''        if (out->response && out->response->from'''
+
+[[mutant]]
+id = "s-23"
+name = "no warning for a branch with no leaf"
+test = "experiment"
+why = "Its variables were not checked; say so."
+find = '''        if (!yexp__has_leaf(&nodes[i]))
+            yexp__warn('''
+replace = '''        if (0)
+            yexp__warn('''
+
+[[mutant]]
+id = "s-24"
+name = "a leaf-less branch named at every level"
+test = "experiment"
+why = "The outermost name is enough."
+find = '''            yexp__warn(c, nodes[i].pos_, "node '%s': no leaf under it, so its variables were not checked", nodes[i].path);
+        else
+            yexp__warn_empty'''
+replace = '''            yexp__warn(c, nodes[i].pos_, "node '%s': no leaf under it, so its variables were not checked", nodes[i].path);
+            yexp__warn_empty'''
+
+[[mutant]]
+id = "s-25"
+name = "the used marks stay for the next leaf"
+test = "experiment"
+why = "Each leaf checks its own stimuli."
+find = '''    for (i = 0; i < c->n_used; i++) c->stim_use[c->used[i]] = 0;
+'''
+replace = ''''''
+
+[[mutant]]
+id = "s-26"
+name = "a button scan always finds"
+test = "experiment"
+why = "2.6."
+find = '''                            !bsearch(&ch[i].key, (const void*)ro->sorted_buttons_, (size_t)ro->n_buttons, sizeof(char*), yexp__str_cmp))'''
+replace = '''                            0)'''

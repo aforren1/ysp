@@ -146,12 +146,16 @@ at version 1, listed by the test above.
 | D2's open point: two texts of one double | One ID. A real goes through its double (`yjs_double()`, then `yjs_new_double()`), so `0.1` and `0.1000000000000000055` are one value, as the player reads them. An integer within int64 stays exact (a seed, a code). A number that `yjs_double()` cannot read (more than 19 significant digits, or out of range) is refused at load, naming the key, because its double is not defined |
 | One value, one form, one ID | A number whose exact decimal value is an integer in int64 range is that integer, whatever its spelling. Other reals go through the double. A real whose double is whole (above 2^53) is that integer too, because the canonical bytes hold it so. `"on": "s"` and `"on": ["s"]` write as `"on": "s"`; a choice of only a key writes as the bare string |
 | Negative values | Refused for every duration key and trigger code, literal or through a known `vars` value, except `minimum_valid_rt_s`: ysp/response.h 0.8.0 makes a negative value valid (docs/response.md) |
-| A variable's type | Checked where it is known: a literal or `choice` in `vars`, a session field, a jitter, a built-in, a rule variable, and a table column through `column()`. A table holds a boolean as an integer column of 0 and 1 only; a string column in an `if` is refused. A rule variable's values are text; numeric text reads as a number |
+| A variable's type | Checked where it is known: a literal or `choice` in `vars`, a session field, a jitter, a built-in, a rule variable, and a table column through `column()`. A table holds a boolean as an integer column of 0 and 1 only; a string column in an `if` is refused. An integer session field is accepted in `if` and `unless` (node and step): the player checks at session start that its value is 0 or 1. A rule variable's values are text; numeric text reads as a number |
 | `vars` that name each other | A real cycle search over the chain; a chain that ends is valid up to 64 |
+| A stagger on one stimulus | Valid, and left out of the canonical bytes, because it has no effect there |
+| Rules text | One statement per array element (D5): a line break inside an element is refused, or `["a", "b"]` and `["a\nb"]` would be two spellings with two IDs |
+| One cause, one error | An element that fails the first pass keeps its name, so a reference to it is not reported as dangling. A set refused whole makes its names unknown, and they are not reported either |
+| Duplicate names in a list | Linear (a stamp per name, or a sort), so a valid definition at the stated limits stays inside the work budget. A leaf costs what its own template names |
 | A response's `from` | Must be shown by a step in `events`. The response is armed at the first frame and timed from that onset, so a stimulus shown only in `after` is refused as well |
 | What a step can set | Float channels only: gfx's float fields and rdk's three update floats. `layer`, integers, `density`, `lead` and `db` are read once |
 | A key at its default in the canonical bytes | Left out, including a set that becomes empty (`display: {}`) and `record` when it equals its computed default. The form is the same whether the key is written or left out, so the round trip holds and a written default gets the same checks as a left-out one |
-| `note` in a named set | A string-valued `note` in `stimuli`, `trials`, `methods`, `devices`, `vars`, `columns`, `data` and `session.fields` is the set's note, as D1 says for any object; such a set has no member named `note` with a string value. In a lookup's `map`, `note` is an ordinary level key |
+| `note` in a named set | A string-valued `note` in `stimuli`, `trials`, `methods`, `devices`, `vars`, `columns`, `data` and `session.fields` is the set's note, as D1 says for any object. A member called `note` whose value is not a string is an ordinary member, so `"stimuli": {"note": {"kind": "shape"}}` is valid. In a lookup's `map`, `note` is an ordinary level key |
 | Roles: `required` by default | `true`. Refuse a session with a required role unbound rather than run without its data. devices_spec 11.1 has one role of each spelling |
 | `name` on a node | Required. A node's path names it in data and seeds (D8) |
 | `session.fields` without `participant` | Refused, because a leaf's rules take the participant from it (2.4) |
@@ -172,6 +176,7 @@ decide otherwise.
 | D1 | `note` on a named set: a member, or a note? | a string `note` is the set's note | say so in D1 |
 | 2.1 | `session.fields` without `participant`; field `type` and `required` have no default | refused; both keys required | list them |
 | 2.2 | a lookup in a duration key | allowed, each map value a duration | say so |
+| 2.4, 2.5 | a container with no leaf, a template or stimulus that no node reaches | a named warning: its variables were not checked | say so |
 | 2.2, 2.3 | `$contrast_shown` with two michelson stimuli, also inside a lookup | refused | a per-stimulus variable if a task needs two |
 | 2.1 | `participant` as a string or `required: false`: `rules` needs an integer | accepted; the lowering must refuse a string for `@participant` | require integer and required |
 | 2.2 | a gamut on itself or in a cycle of gamuts | accepted (a gamut is on the color path, not on the value); a gamut on an enum or a text is refused | say so |
@@ -192,6 +197,15 @@ decide otherwise.
 | 2.7 | `visible` is a table row, but `on` and `off` drive it | key kept with the table's default | drop the key |
 | 2.8 | a quest axis cannot express `param[].prior`, `nuisance` or `stim[].values` as a grid of points | refused | an object axis form |
 | D10 | "a trigger at its onset" with steps in `if` | an `if` body counts as inline; `wait_s`, `at_s` and `then` end the onset | say so |
+
+## Known gaps
+
+| Gap | Behavior |
+|---|---|
+| A `set` or `to` of `visible` | Does not count as showing the response's `from`, so such a template is refused |
+| `"code": "$response"` | A bare `$response` as a response trigger's code is accepted, though the variable is text and a code is a number |
+| `"dims": []` with `lo` of length 2 | Reads as no dims given and is accepted |
+| `"buttons": {"note": "x"}` | `note` is read as a button key there, not as a note |
 
 ## Results
 
