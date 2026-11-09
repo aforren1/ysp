@@ -221,7 +221,7 @@ typedef struct pl_stack {
     int row, n_rows;             /* a container's rows; 1 with no table     */
     const ytb_table* table;
     int iteration;               /* of this node within its parent's run    */
-    int next_iter;               /* the next iteration to assign to a child */
+    int child_iters[256];        /* starts so far of each child, for D8     */
     int loop_pass;
     int n_correct, n_counted;    /* loop's accuracy over this iteration      */
     bool active;                 /* skipped by if/unless                     */

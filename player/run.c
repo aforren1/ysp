@@ -567,7 +567,7 @@ int pl_walk_next_leaf(pl_player* p) {
         }
         {
             const yexp_node* n = &top->children[top->child++];
-            int iter = top->next_iter++;
+            int iter = top->child_iters[top->child - 1]++;
             /* if / unless read when the node starts (2.4) */
             {
                 pl_env env;
@@ -640,7 +640,7 @@ int pl_start_trial(pl_player* p, const yscr_frame* f) {
                     pl_leaf* lf = p->leaf;
                     int pass = p->leaf_loop_pass;
                     pl_leaf_close(p);
-                    p->iter_counter = p->stack[p->sp - 1].next_iter++;
+                    p->iter_counter = p->stack[p->sp - 1].child_iters[p->stack[p->sp - 1].child - 1]++;
                     if (pl_leaf_open(p, lf, p->iter_counter) < 0) return -1;
                     p->leaf_loop_pass = pass;
                     continue;
