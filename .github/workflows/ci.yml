@@ -468,6 +468,9 @@ jobs:
             emcc $W -o "compile_$h.js" "tests/compile/$h.c" && node "compile_$h.js"
             emcc $W -o "test_$h.js" "tests/adapt/${h}_test.c" && node "test_$h.js"
           done
+          # ysp/experiment.h: the compile check only; its unit test reads a
+          # corpus of files, which node's memory file system does not hold.
+          emcc $W -o compile_experiment.js tests/compile/experiment.c && node compile_experiment.js
           # The async layers on the pump, the point of the ysp/rt.h branch.
           emcc $W $T -DYQST_ASYNC  -o test_quest_async.js tests/adapt/quest_test.c && node test_quest_async.js
           emcc $W $T -DYAEP_ASYNC -o test_aep_async.js    tests/adapt/aep_test.c    && node test_aep_async.js

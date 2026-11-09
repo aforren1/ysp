@@ -1,0 +1,2 @@
+{"format":"ysp-experiment","version":1,
+"session":{"fields":{"group":{"type":"string","required":true}}},"trials":{"t":{}},"timeline":[{"name":"m","trial":"t"}]}

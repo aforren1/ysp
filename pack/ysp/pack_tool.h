@@ -1,10 +1,11 @@
-/* ysp/pack_tool.h - v0.7.0 - the pack tool as a library (prefix ypt_)
+/* ysp/pack_tool.h - v0.8.0 - the pack tool as a library (prefix ypt_)
  *
  *   Builds, verifies, lists, extracts, rebuilds and appends ysp packs
  *   (docs/pack.md). The CLI `ypak` (pack/ypak.c) is a thin layer over these
  *   calls, and the designer runs the same code as WebAssembly. Not a single
  *   header: a C11 library in the pack tool's tree that links ysp/pack.h,
- *   ysp/json.h (every description and manifest), ysp/table.h,
+ *   ysp/json.h (every description and manifest), ysp/experiment.h and
+ *   ysp/trials.h (the definition), ysp/table.h,
  *   ysp/outline.h, ysp/gfx.h (CPU parts: the shader wrapper and the curve
  *   set check), ysp/color.h, ysp/audio.h (the WAV probe), ysp/video.h
  *   (video indexes: pl_mpeg for MPEG-1, Media Foundation for MP4 on
@@ -69,6 +70,14 @@
  *   corpus is byte-identical to v0.5.1's; its manifest differs by the
  *   tool version.
  *
+ *   v0.8.0 (2026-11-09): the definition goes through ysp/experiment.h
+ *   (docs/pack.md 16). A definition the loader refuses stops the build with
+ *   its message; the entry is the loader's canonical bytes, keys at their
+ *   defaults left out, so a pack whose definition writes one gets another
+ *   experiment ID and pack ID than v0.7.0 gave. The tool gives the loader
+ *   its entries, its tables' columns and levels and ytr_rules(); the rig,
+ *   the parameter tables and ytl_check_ops() are skipped.
+ *
  *   v0.7.0 (2026-10-22): the definition's canonical bytes and its lookups
  *   (docs/pack.md 16). An experiment entry that is a definition ("format":
  *   "ysp-experiment") is stored as ysp/json.h's canonical form with one
@@ -131,7 +140,7 @@
 extern "C" {
 #endif
 
-#define YPT_VERSION_STRING "0.7.0"
+#define YPT_VERSION_STRING "0.8.0"
 
 typedef struct ypt_options {
     const char* sources;   /* the sources' folder; NULL: the description's folder */

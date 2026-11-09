@@ -1,0 +1,44 @@
+{
+  "format": "ysp-experiment", "version": 1, "name": "stroop",
+  "display": { "background": [0.05, 0.05, 0.05] },
+  "devices": { "resp": { "direction": "in", "family": ["keyboard"], "required": true } },
+  "stimuli": {
+    "fix": { "kind": "shape", "shape": "cross", "w": 24, "h": 24, "shape_p0": 3,
+             "edge": "cosine", "edge_width": 1, "color": [0.6, 0.6, 0.6] },
+    "word": { "kind": "text", "font": "fonts/NotoSans-Regular.ttf", "size": 72, "width": 1000,
+              "text": { "by": "$word", "map": { "red": "RED", "green": "GREEN", "blue": "BLUE" } },
+              "color": { "by": "$ink", "map": { "red": [0.7, 0.04, 0.03], "green": [0.04, 0.42, 0.05],
+                                                "blue": [0.07, 0.15, 0.85] } } },
+    "banner": { "kind": "text", "font": "fonts/NotoSans-Regular.ttf", "size": 30, "width": 1000, "y": -30,
+                "color": [0.75, 0.75, 0.75],
+                "text": { "by": "$practice", "map": { "true": "Practice. Name the ink color, not the word.",
+                                                      "false": "Test. No feedback from here on." } } },
+    "keys": { "kind": "text", "font": "fonts/NotoSans-Regular.ttf", "size": 22, "width": 1000, "y": 30,
+              "color": [0.75, 0.75, 0.75], "text": "R red     G green     B blue" },
+    "feedback": { "kind": "text", "font": "fonts/NotoSans-Regular.ttf", "size": 32, "width": 1000,
+                  "color": [0.75, 0.75, 0.75],
+                  "text": { "by": "$outcome", "map": { "correct": "Correct", "wrong": "Wrong",
+                                                       "timeout": "Too slow" } } }
+  },
+  "trials": {
+    "stroop": {
+      "events": [
+        { "if": "$first_in_block", "steps": [{ "on": ["banner", "keys"] }, { "wait_s": 1.5 },
+                                             { "off": ["banner", "keys"] }] },
+        { "on": "fix" }, { "wait_s": 0.5 }, { "off": "fix" }, { "on": "word" }],
+      "response": { "role": "resp", "from": "word", "duration_s": 2, "minimum_valid_rt_s": 0.1,
+                    "choices": [{ "key": "r", "name": "red" }, { "key": "g", "name": "green" },
+                                { "key": "b", "name": "blue" }],
+                    "key_answer": "$answer" },
+      "after": [
+        { "off": "word" },
+        { "if": "$practice", "steps": [{ "on": "feedback" }, { "wait_s": 0.6 }, { "off": "feedback" }] },
+        { "wait_s": 0.4 }],
+      "columns": { "feedback": { "by": "$practice", "map": { "true": "$outcome", "false": "" } } }
+    }
+  },
+  "timeline": [
+    { "name": "main", "timeline_variables": "stroop.pstb", "trial": "stroop",
+      "rules": ["order constrained", "weight weight", "max_run congruent=1 3", "practice 4"] }
+  ]
+}

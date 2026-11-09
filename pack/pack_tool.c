@@ -16,7 +16,9 @@
 #include "ysp/pack_tool.h"
 #include "ysp/pack.h"
 #include "ysp/json.h"
+#include "ysp/experiment.h"
 #include "ysp/table.h"
+#include "ysp/trials.h"
 #include "ysp/outline.h"
 #include "ysp/gfx.h"
 #include "ysp/color.h"
@@ -433,6 +435,8 @@ typedef struct B {     /* a build */
     E*          exp;        /* the experiment entry, or NULL                 */
     ypt_texts   tx;         /* the texts its text stimuli can show           */
     E*          runs;       /* the glyph runs that hold them, or NULL        */
+    void*       htab;       /* the tables the loader's host has opened       */
+    int         n_htab, c_htab;
 } B;
 
 static E* add_entry(B* b) {
@@ -533,33 +537,149 @@ static int build_copy(B* b, E* e, const char* by) {
     return 0;
 }
 
-/* An experiment definition (docs/experiment_format.md D2) as its
- * canonical bytes: ysp/json.h's canonical form and one LF, as the manifest,
- * the rig profile and session.json end. Its SHA-256 is the experiment ID,
- * so it must depend on the values alone, not on whitespace, key order,
- * number spelling or escapes. The form drops nothing a reader sees: JSON
- * has no comments (a note is a value, D1), object order has no meaning
- * (D3) and a number keeps its exact value. 1 with the bytes in *out (the
- * call's memory), 0 when the bytes are not a definition (opaque, copied;
- * ypt_derive_texts() refuses a definition that does not parse), < 0 on an
- * error. */
-static int exp_canonical(C* c, const uint8_t* d, int64_t n, uint8_t** out, int64_t* on) {
+/* The checks a definition gets at build (ysp/experiment.h, THE HOST), from
+ * what the tool has: its entries, its tables' columns and levels, and
+ * ytr_rules() on a leaf's rules. It has no rig and no parameter tables to
+ * hand; those checks are recorded as skipped. */
+typedef struct H_tab { const char* name; ytb_table* t; } H_tab;
+
+static ytb_table* host_table(B* b, const char* name) {
+    int i;
+    E* e;
+    ytb_table* t;
+    for (i = 0; i < b->n_htab; i++)
+        if (!strcmp(((H_tab*)b->htab)[i].name, name)) return ((H_tab*)b->htab)[i].t;
+    e = find_entry(b, name);
+    if (!e || e->kind != YPAK_KIND_TABLE || !e->data) return NULL;
+    t = (ytb_table*)calloc_c(b->c, sizeof(ytb_table));
+    if (!t || !ytb_open_view(t, e->data, (size_t)e->size)) return NULL;
+    if (b->n_htab == b->c_htab) {
+        int nc = b->c_htab ? 2 * b->c_htab : 8;
+        H_tab* q = (H_tab*)calloc_c(b->c, (size_t)nc * sizeof(H_tab));
+        if (!q) return NULL;
+        if (b->n_htab) memcpy(q, b->htab, (size_t)b->n_htab * sizeof(H_tab));
+        b->htab = q;
+        b->c_htab = nc;
+    }
+    ((H_tab*)b->htab)[b->n_htab].name = name;
+    ((H_tab*)b->htab)[b->n_htab++].t = t;
+    return t;
+}
+
+static int host_entry(void* ctx, int kind, const char* name) {
+    static const uint32_t want[] = { YPAK_KIND_TABLE, YPAK_KIND_TEXTURE, YPAK_KIND_FONT, YPAK_KIND_ARTWORK, YPAK_KIND_AUDIO, YPAK_KIND_VIDEO };
+    E* e = find_entry((B*)ctx, name);
+    return e && kind >= 0 && kind < 6 && e->kind == want[kind];
+}
+
+static int host_column(void* ctx, const char* table, int i, yexp_column* out) {
+    ytb_table* t = host_table((B*)ctx, table);
+    ytb_type ty;
+    if (!t) return -1;
+    if (i >= t->n_cols) return 0;
+    out->name = ytb_col_name(t, i);
+    ty = ytb_col_type(t, i);
+    out->type = ty == YTB_STRING ? YEXP_COL_STRING : ty == YTB_INTEGER ? YEXP_COL_INTEGER : YEXP_COL_NUMBER;
+    out->n_levels = ytb_n_levels(t, i);
+    return 1;
+}
+
+/* A number's level is its canonical text, as a lookup's key is (2.2). */
+static int host_level(void* ctx, const char* table, int col, int l, char* buf, size_t cap) {
+    ytb_table* t = host_table((B*)ctx, table);
+    const char* x;
+    size_t n;
+    if (!t || l >= ytb_n_levels(t, col)) return -1;
+    if (ytb_col_type(t, col) != YTB_STRING) {
+        char num[YJS_DOUBLE_TEXT];
+        double d = ytb_level_num(t, col, l);
+        int k = d == d ? yjs_format_double(d, num, sizeof num) : 0;   /* an empty cell (NaN) is "" */
+        if (k < 0) k = 0;
+        if ((size_t)k < cap) { memcpy(buf, num, (size_t)k); buf[k] = 0; }
+        return k;
+    }
+    x = ytb_level_text(t, col, l);
+    if (!x) return -1;
+    n = strlen(x);
+    if (n < cap) memcpy(buf, x, n + 1);
+    return (int)n;
+}
+
+/* ytr_rules() only, not a dry open: an open needs the track objects and the
+ * display's rate, which the player has. */
+static int host_rules(void* ctx, const yexp_node* leaf, char* msg, size_t cap) {
+    B* b = (B*)ctx;
+    ytr_desc d;
+    ytr_rules_desc r;
+    ytb_table* t = leaf->table ? host_table(b, leaf->table) : NULL;
+    size_t bytes = ((size_t)1 << 20) + (t ? 32u * (size_t)t->n_rows : 0u);
+    void* arena;
+    int rc;
+    if (!leaf->rules[0]) return 0;
+    arena = malloc(bytes);
+    if (!arena) { snprintf(msg, cap, "out of memory for the rules"); return 1; }
+    memset(&d, 0, sizeof d);
+    memset(&r, 0, sizeof r);
+    r.text = leaf->rules;
+    r.len = strlen(leaf->rules);
+    r.table = t;
+    r.arena = arena;
+    r.arena_size = bytes;
+    rc = ytr_rules(&d, &r, msg, cap);
+    free(arena);
+    return rc;
+}
+
+/* An experiment definition (docs/experiment_format.md D2) through the
+ * loader: a definition it refuses stops the build with its message, and the
+ * entry is its canonical bytes, keys at their defaults left out, and one LF.
+ * Its SHA-256 is the experiment ID, so it depends on the values alone. 1
+ * with the bytes in *out (the call's memory), 0 when the bytes are not a
+ * definition (opaque, copied; ypt_derive_texts() refuses bytes that name the
+ * format and do not parse), < 0 on an error. host is NULL for `ypak rebuild`'s
+ * hash of a source, which the build that follows checks in full. */
+static int exp_canonical(C* c, const char* name, const uint8_t* d, int64_t n, const yexp_host* host, uint8_t** out, int64_t* on) {
     yjs_arena a;
     yjs_value* root;
     yjs_error je;
     const yjs_value* fmt;
-    int rc = 0;
+    yexp_report* rep;
+    yexp_def* def = NULL;
+    const char* bytes;
+    size_t bn = 0;
+    int rc = 0, lr, i;
     yjs_arena_init_heap(&a, 0);
-    if (yjs_parse(&a, (const char*)d, (size_t)n, NULL, &root, &je) == YJS_OK && (fmt = yjs_get(root, "format")) != NULL &&
-        fmt->type == YJS_STRING && !strcmp(fmt->u.s, "ysp-experiment")) {
-        size_t k = yjs_write_mem(root, YJS_WRITE_PRETTY, NULL, 0);
-        uint8_t* b = k ? (uint8_t*)calloc_c(c, k + 2) : NULL;
-        if (!b || yjs_write_mem(root, YJS_WRITE_PRETTY, (char*)b, k + 2) != k) {
+    if (yjs_parse(&a, (const char*)d, (size_t)n, NULL, &root, &je) != YJS_OK || (fmt = yjs_get(root, "format")) == NULL ||
+        fmt->type != YJS_STRING || strcmp(fmt->u.s, "ysp-experiment")) {
+        yjs_arena_free(&a);
+        return 0;
+    }
+    yjs_arena_reset(&a);
+    rep = (yexp_report*)calloc_c(c, sizeof *rep);
+    if (!rep) { yjs_arena_free(&a); return cfail(c, YPAK_ERR_NOMEM, "out of memory"); }
+    lr = yexp_load(&a, (const char*)d, (size_t)n, host, &def, rep);
+    if (host && c->warn)
+        for (i = 0; i < rep->n_diags; i++)
+            if (rep->diags[i].severity == YEXP_WARNING)
+                fprintf(c->warn, "warning: experiment '%s': %s (line %u, column %u)\n", name, rep->diags[i].msg, rep->diags[i].line, rep->diags[i].column);
+    if (lr == YEXP_ERR_REFUSED) {
+        const yexp_diag* e = NULL;
+        for (i = 0; i < rep->n_diags && !e; i++)
+            if (rep->diags[i].severity == YEXP_ERROR) e = &rep->diags[i];
+        rc = cfail(c, YPAK_ERR_FORMAT, "experiment '%s': %s (line %u, column %u)%s", name, e ? e->msg : "refused", e ? e->line : 0u, e ? e->column : 0u,
+                   rep->n_errors > 1 ? "; more errors follow it" : "");
+    } else if (lr != YEXP_OK) {
+        rc = cfail(c, YPAK_ERR_NOMEM, "experiment '%s': out of memory in the loader", name);
+    } else if (yexp_canonical(def, &a, &bytes, &bn, NULL) != YEXP_OK) {
+        rc = cfail(c, YPAK_ERR_NOMEM, "out of memory writing the definition's canonical bytes");
+    } else {
+        uint8_t* b = (uint8_t*)calloc_c(c, bn + 1);
+        if (!b) {
             rc = cfail(c, YPAK_ERR_NOMEM, "out of memory writing the definition's canonical bytes");
         } else {
-            b[k] = '\n';
+            memcpy(b, bytes, bn);
             *out = b;
-            *on = (int64_t)k + 1;
+            *on = (int64_t)bn;
             rc = 1;
         }
     }
@@ -572,17 +692,24 @@ static int exp_canonical(C* c, const uint8_t* d, int64_t n, uint8_t** out, int64
  * too, so the pack ID does not depend on the source's layout either;
  * `ypak rebuild` checks the source the same way. */
 static int build_experiment(B* b, E* e) {
+    yexp_host host;
     uint8_t* canon = NULL;
     int64_t cn = 0;
     uint8_t sha[32];
     char hx[65];
     int rc = build_copy(b, e, "ypak " YPT_VERSION_STRING);
     if (rc) return rc;
-    rc = exp_canonical(b->c, e->data, e->size, &canon, &cn);
+    memset(&host, 0, sizeof host);
+    host.ctx = b;
+    host.entry = host_entry;
+    host.column = host_column;
+    host.level = host_level;
+    host.rules = host_rules;
+    rc = exp_canonical(b->c, e->name, e->data, e->size, &host, &canon, &cn);
     if (rc <= 0) return rc;
     e->data = canon;
     e->size = cn;
-    e->deriv = deriv_new(b, "canonical", "ysp/json.h " YJS_VERSION_STRING);
+    e->deriv = deriv_new(b, "canonical", "ysp/experiment.h " YEXP_VERSION_STRING);
     ypak_sha256(canon, (size_t)cn, sha);
     hex(sha, 32, hx);
     jset(b->c, jat(e->sources, jn(e->sources) - 1), "sha256", jstrz(b->c, hx));
@@ -2099,11 +2226,6 @@ static const void* table_bytes(void* ctx, const char* name, size_t* n) {
     return t->data;
 }
 
-static void warn_line(void* ctx, const char* line) {
-    B* b = (B*)ctx;
-    if (b->c->warn) fprintf(b->c->warn, "warning: experiment '%s': %s\n", b->exp->name, line);
-}
-
 static int derive_runs(B* b) {
     char msg[600], name[1100];
     const char* dot;
@@ -2112,9 +2234,6 @@ static int derive_runs(B* b) {
     E* e;
     int i, rc;
     if (!b->exp || !b->exp->data) return 0;
-    /* a lookup without a key for a level stops the session that meets it */
-    rc = ypt_check_lookups(b->exp->data, (size_t)b->exp->size, table_bytes, b, warn_line, b, msg, sizeof msg);
-    if (rc) return cfail(b->c, rc, "experiment '%s': %s", b->exp->name, msg);
     rc = ypt_derive_texts(b->exp->data, (size_t)b->exp->size, table_bytes, b, &b->tx, msg, sizeof msg);
     if (rc) return cfail(b->c, rc, "experiment '%s': %s", b->exp->name, msg);
     if (!b->tx.n_texts) return 0;
@@ -2694,6 +2813,8 @@ static void lib_versions(C* c, jv* tool, int laid_out) {
     jset(c, l, "ysp/pack.h", jstrz(c, YPAK_VERSION_STRING));
     jset(c, l, "ysp/table.h", jstrz(c, YTB_VERSION_STRING));
     jset(c, l, "ysp/json.h", jstrz(c, YJS_VERSION_STRING));
+    jset(c, l, "ysp/experiment.h", jstrz(c, YEXP_VERSION_STRING));
+    jset(c, l, "ysp/trials.h", jstrz(c, YTR_VERSION_STRING));
     jset(c, l, "ysp/outline.h", jstrz(c, YOL_VERSION_STRING));
     jset(c, l, "ysp/gfx.h", jstrz(c, YGFX_VERSION_STRING));
     jset(c, l, "ysp/color.h", jstrz(c, YCOL_VERSION_STRING));
@@ -2882,16 +3003,19 @@ static int build_desc(C* c, jv* desc, const char* base_dir, const bopt* bo, sink
                 goto done;
             }
     }
-    /* build in dependency order: fonts, tables and the experiment before
-     * glyph runs (which the experiment's texts may add) before curve sets */
-    for (pass = 0; pass < 3 && rc == 0; pass++) {
-        if (pass == 1) rc = derive_runs(&b);
+    /* build in dependency order: fonts and tables, then the experiment
+     * (the loader's host reads them), then glyph runs (which the
+     * experiment's texts may add), then curve sets */
+    for (pass = 0; pass < 4 && rc == 0; pass++) {
+        if (pass == 2) rc = derive_runs(&b);
         for (i = 0; i < b.n && rc == 0; i++) {
             E* e = b.e[i];
             uint32_t k = e->kind;
-            if ((pass == 0) != (k != YPAK_KIND_GLYPHRUNS && k != YPAK_KIND_CURVESET)) continue;
-            if (pass == 1 && k != YPAK_KIND_GLYPHRUNS) continue;
-            if (pass == 2 && k != YPAK_KIND_CURVESET) continue;
+            if (pass == 0 && (k == YPAK_KIND_GLYPHRUNS || k == YPAK_KIND_CURVESET)) continue;
+            if (pass == 0 && k == YPAK_KIND_EXPERIMENT) continue;
+            if (pass == 1 && k != YPAK_KIND_EXPERIMENT) continue;
+            if (pass == 2 && k != YPAK_KIND_GLYPHRUNS) continue;
+            if (pass == 3 && k != YPAK_KIND_CURVESET) continue;
             e->sources = jnew(c, J_ARR);
             switch (k) {
             case YPAK_KIND_EXPERIMENT: rc = build_experiment(&b, e); break;
@@ -3406,7 +3530,12 @@ int ypt_rebuild_ex(const char* pack_path, const char* sources_dir, const char* o
                 if (!d) { ypak_close(&p); rc = c.err && c.err[0] ? YPAK_ERR_IO : cfail(&c, YPAK_ERR_IO, "cannot read '%s'", path); cfree_all(&c); return rc; }
                 /* a definition's source is its canonical bytes (build_experiment) */
                 canon = !strcmp(str_of(jget(jat(ents, i), "derivation"), "op", ""), "canonical");
-                if (canon && exp_canonical(&c, d, n, &d, &n) < 0) { ypak_close(&p); cfree_all(&c); return YPAK_ERR_NOMEM; }
+                if (canon && (rc = exp_canonical(&c, str_of(jat(ents, i), "name", ""), d, n, NULL, &d, &n)) < 0) {
+                    ypak_close(&p);
+                    if (report) fprintf(report, "%s\n", err);
+                    cfree_all(&c);
+                    return rc;
+                }
                 ypak_sha256(d, (size_t)n, sha);
                 hex(sha, 32, hx);
                 if (strcmp(hx, str_of(jat(src, k), "sha256", ""))) {

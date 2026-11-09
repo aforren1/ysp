@@ -1,0 +1,2 @@
+{"format":"ysp-experiment","version":1,
+"devices":{"r":{"direction":"in","family":["keyboard"]},"o":{"direction":"out","family":["parallel"]}},"trials":{"t":{"events":[{"trigger":-1,"role":"o"}]}},"timeline":[{"name":"m","trial":"t"}]}

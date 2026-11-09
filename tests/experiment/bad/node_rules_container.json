@@ -1,0 +1,2 @@
+{"format":"ysp-experiment","version":1,
+"trials":{"t":{}},"timeline":[{"name":"c","rules":["reps 2"],"timeline":[{"name":"m","trial":"t"}]}]}

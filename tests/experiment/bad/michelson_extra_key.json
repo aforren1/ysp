@@ -1,0 +1,2 @@
+{"format":"ysp-experiment","version":1,
+"stimuli":{"s":{"kind":"gabor","contrast":{"michelson":0.5,"foo":1}}},"trials":{"t":{}},"timeline":[{"name":"m","trial":"t"}]}

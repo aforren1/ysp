@@ -108,9 +108,9 @@ that structure; it does not invent a new one.
   bytes' too, so two sources that differ only in whitespace, key order,
   number spelling or escapes give one entry, one experiment ID and, at
   one source path, one pack ID. The pack does not keep the source text:
-  JSON has no comments (D1), so the canonical form drops no value. Not
-  built: "a key at its default is left out", which needs the defaults
-  table of the loader.
+  JSON has no comments (D1), so the canonical form drops no value.
+  Built (pack tool v0.8.0, 2026-11-09): "a key at its default is left
+  out", through ysp/experiment.h and its table of defaults.
 
 **D3. Named sets are objects; order is in arrays. DECIDED (2026-10-14).**
 - Evidence: the canonical form sorts keys, so order in an object is
@@ -596,8 +596,8 @@ method, so the track runs it again (as in the 2AFC program).
 | `after` | array of steps, from `max(end, events end)`; `end` is the response's end, the window's end when `response_ends_trial` is false, or 0 with no response | a second op table after `ytl_at(&q, max(bt, events_end))`, `bt` from `ytl_base_time()`; then `YTL_MARK` end |
 | `record` | array of stimulus names | per-stimulus columns (2.10) |
 | `columns` | column to value | `ytr_col` entries |
-| `outcome` | `"correct"` or a value | `ytr_update()`'s outcome; `YTR_INVALID` when no response |
-| `method_value` | value | what the method's update hears; default `$level` |
+| `outcome` | `"correct"` or a value | `ytr_update()`'s outcome; `YTR_INVALID` when no response. Default: `"correct"` when the template has a response; empty when it has none |
+| `method_value` | value | what the method's update hears; default `$level`. Ignored when no leaf with tracks runs the template: a written one is a warning, is not in the checked form, and is left out of the canonical bytes, so it does not change the experiment ID |
 
 Steps:
 
@@ -630,8 +630,8 @@ session.
 | `duration_s` | `duration_ns`, from the `from` onset; 0 means no deadline |
 | `minimum_valid_rt_s` | `min_rt_ns` |
 | `key_answer` | `$correct`: the response's key equals this value |
-| `response_ends_trial` | true (default): `after` starts at the response; false: at the window's end |
-| `persist`, `max_responses`, `allow_held_key`, `wait_for_key_release` | the `yrsp_desc` fields |
+| `response_ends_trial` | true (default): `after` starts at the response; false: at the window's end. The player sets `yrsp_desc.persist` from it |
+| `max_responses`, `allow_held_key`, `wait_for_key_release` | the `yrsp_desc` fields |
 | `trigger` | `{"role": R, "code": VALUE}`: a response rule on the role's output (`ydev_rule`; G8, closed): `yrsp_rule_choices()` with a code per choice, the rule in the response role's `desc.rule`, `yrsp_rule_arm()` and `yrsp_rule_window()` each trial, `yrsp_rule_sent()` before `yrsp_finish()`: `rsp_flags` has `YRSP_R_SENT_MISMATCH` (0x400) when a code went out that the final response does not match (an anticipation after the final onset, a late press, another choice, a press the collector refused) or a response has no code. A keyboard role has no reader thread of ysp/device.h: `ydev_out_pulse()` when the frame loop sees the response |
 
 ### 2.7 Stimuli
@@ -730,6 +730,12 @@ relative to its onset. A trial row has, in order:
 
 Version 1 is this page as decided on 2026-10-14. 1.3 D12 gives the
 rules. The player's describe line names the newest version it reads.
+
+Note (2026-11-09): this page does not list every default of version 1
+that D2 asks for. The defaults table of ysp/experiment.h
+(`yexp_defaults()`, [experiment.md](experiment.md), "the format's
+defaults") lists them, and the gaps found in this page. That table is
+version 1's; a later version may change it.
 
 ### 2.12 What the designer edits
 

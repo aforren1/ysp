@@ -1,0 +1,2 @@
+{"format":"ysp-experiment","version":1,
+"methods":{"q":{"type":"stair","steps":[1],"max":{"gamut":"s"}}},"trials":{"t":{}},"timeline":[{"name":"m","trial":"t"}]}

@@ -59,7 +59,7 @@ result in this page is functional.
 | device | Windows 11, i7-1360P, 2026-10-12: host-timed outputs (the TriggerBox byte path, DTR, RTS) into a Teensy 4.0 echo board over native USB CDC (usbser); width error -65 to -16 us median. M2 Mac mini, macOS 27.0.1, 2026-11-05: the same outputs into the same board on `AppleUSBACMData`; width error -37 to -19 us median, p99 at most +12 us. Linux desktop, i5-14500, 2026-10-12: the same outputs into the same board on `cdc_acm`; width error -1.0 to +0.1 us median, p99 within +39 us | Inputs from a real board; every vendor box, the line board, the parallel port; FTDI bridges | docs/device.md, "Host-timed pulses on a Teensy 4.0" and "Host-timed pulses on Linux (v0.5.2)" |
 | rigfile | none | Binds through a fake transport | docs/device.md |
 | color | not applicable (pure computation) | No number is a measurement of light | color.h; docs/color.md |
-| stair, quest, aep, trials, table, json, pack, timeline, rdk, outline, sig | not applicable (pure computation) | | |
+| stair, quest, aep, trials, table, json, experiment, pack, timeline, rdk, outline, sig | not applicable (pure computation) | | |
 | dataset | not applicable (files only): NTFS on Windows 11, ext4 on WSL2, APFS on macOS 27.0.1, Emscripten's in-memory file system | A power cut | docs/dataset.md |
 
 ## Files to copy
@@ -75,6 +75,7 @@ unless your file already did.
 | rt | | rt.h | Tracy (opt-in) |
 | stair, table, json, pack, timeline, input, color, rdk, outline | | the header | none |
 | quest, aep | rt.h with `YQST_ASYNC`, `YAEP_ASYNC` only | the header (+ rt.h for the async layer) | none |
+| experiment | json.h | experiment.h, json.h | none |
 | trials | table.h | trials.h, table.h | none |
 | dataset | trials.h, json.h | dataset.h, trials.h, table.h, json.h | none |
 | parallel | rt.h | parallel.h, rt.h | InpOut driver on Windows |
@@ -230,6 +231,7 @@ Status:
 
 - v0.4.0 (2026-10-26): `ypak_verify_entry()` hashes and checks one entry whatever the policy; under `YPAK_VERIFY_NONE` no call verified a single entry before. The Python `verify(name)` and the MEX `'verify', h, name` use it, so they now verify under `"none"` (ysp-pack 0.4.0, MEX `ysp_pack` 1.1.0). 4 of 4 new mutants caught. [ypak_verify_entry()](pack.md#ypak_verify_entry-header-040-2026-10-26).
 - Bindings (2026-10-25): `ysp-pack` 0.3.0 (Python) and the MEX `ysp_pack` 1.0.0 open, list, read (a copy), verify, and read the manifest and the definition; every truncation and flipped byte of two test packs refused. Python 16 tests (Windows, WSL2), MEX 60 checks (MATLAB R2023a, Octave 10.1). [Design notes](pack.md#17-bindings-2026-10-25).
+- Tool v0.8.0 (2026-11-09; the header unchanged): a definition goes through ysp/experiment.h: a refusal stops the build with the loader's message, and the entry is the canonical bytes with keys at their defaults left out, so pack IDs move for packs that write a default. The tool supplies entries, table columns and levels, and `ytr_rules()`; the rig, the parameter tables and `ytl_check_ops()` are skipped. The corpus pin is unchanged. [Design notes](pack.md#16-tool-v070-the-definitions-canonical-bytes-and-its-lookups-2026-10-22).
 - Tool v0.7.0 (2026-10-22; the header unchanged): a definition is stored as its canonical bytes (`"op": "canonical"`, experiment_format.md D2), and its source's SHA-256 in the manifest is the canonical bytes', so a definition respelled (whitespace, key order, number spelling, escapes) gives the same pack; `ypak rebuild` checks the source so. A lookup whose map lacks a level its `by` can take in a leaf that reaches it (table levels, vars, the booleans as far as the leaf's rules make them true, outcome, response, method) is refused by stimulus, key and levels; a key no level reaches is a warning. Corpus pin unchanged. Tests: 346 checks (MSVC), 341 (Linux gcc, Release and ASan with UBSan), 277 (MinGW core tool), 284 in the derivation's test; MSVC and Linux gcc give the same packs; 82 of 82 mutants of `pack/derive.c` (47 new) and 10 of 10 hand mutants of the tool killed; 1,095,940 fuzz inputs, no finding. [Design notes](pack.md#16-tool-v070-the-definitions-canonical-bytes-and-its-lookups-2026-10-22).
 - Tool v0.6.0 (2026-10-21; with the header's v0.3.0): the experiment's glyph runs (gap G9). For a version 1 definition the tool lays out every text its text stimuli can show (literals, string-column levels, vars, every lookup value) into `experiment/<name>.ysprun`, keyed by text and style through `ypak_runs_key()` (ysp/pack.h 0.3.0, which the player calls too), so stimuli of one style share a block; a glyph runs resource of that name adds blocks and fallback fonts; a text known only at run time is refused by name. The Stroop example's pack source (`examples/pack/stroop/`) lists no glyph runs. Every corpus entry byte-identical to v0.5.1's. Tests 331 checks (MSVC), 326 (Linux gcc, Release and ASan with UBSan), 168 in the derivation's own test; MSVC and Linux gcc give the same Stroop, union, two-font and shared-style packs; 35 of 35 mutants of `pack/derive.c` and 15 of 15 hand mutants of the tool killed; 362,488 fuzz inputs, no finding. [Design notes](pack.md#15-tool-v060-the-experiments-glyph-runs-gap-g9-2026-10-21).
 - Tool v0.5.1 (2026-10-20; the header unchanged): an ffmpeg step with mpeg2video is refused before the encode, because the video index reads MPEG-1 only and misread its output.
@@ -658,10 +660,23 @@ Status:
 
 ## Formats not built
 
+### ysp/experiment.h
+
+- Header: [ysp/experiment.h](../include/ysp/experiment.h)
+- Prefix: `yexp_`, `YEXP_`
+- Platforms: any
+- Needs: ysp/json.h
+
+Purpose: Reads a version 1 experiment definition into a checked, fully defaulted form in the caller's arena: session, display, roles, stimuli, methods, templates and the tree of nodes, with every default from one table of the format's (D2). Each refusal names the element and the key, with the line and the column. Checks that need something outside the file (pack entries, table columns and levels, the rig's roles, parameter tables, `ytr_rules()`, `ytl_check_ops()`) go through a caller-supplied host; a missing function is recorded as skipped. Writes the canonical bytes with defaults left out and gives the experiment ID. It lowers nothing and runs nothing.
+
+Status:
+
+- v0.1.0 (2026-11-09, Linux desktop, gcc 12.2). 1933 checks in the unit test, as C and C++17, ASan and UBSan clean; 7 corpus files against golden dumps with a round trip through the canonical bytes; 193 refusals, each against its message and place; 462 keys written at their defaults give the ID of the same key left out; 923 checks of the table against the headers' parameter tables. 20.4M fuzz inputs under ASan and UBSan, each in a large arena and in a small one with a misbehaving host, no report; gcov on the target: 97.75% of the header's lines. 142 of 142 mutants as expected. The pack tool stores its canonical bytes from v0.8.0. No player uses it yet; no run on Windows, macOS or emcc. [Design notes](experiment.md).
+
 ### The experiment definition
 
 - Design: [experiment_format.md](experiment_format.md)
-- Read by: the player (rig_spec 6); not built
+- Read by: ysp/experiment.h (below); the player that lowers it is not built
 
 Purpose: The pack's EXPERIMENT entry: a JSON file, read by ysp/json.h, that names stimuli, trial templates, adaptive methods, device roles and a tree of nodes, each lowered to ysp/trials.h, ysp/timeline.h, ysp/response.h, ysp/gfx.h and the method headers; and the data set the player writes.
 

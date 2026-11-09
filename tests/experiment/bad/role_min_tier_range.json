@@ -1,0 +1,2 @@
+{"format":"ysp-experiment","version":1,
+"devices":{"r":{"direction":"in","family":["k"],"min_tier":99}},"trials":{"t":{}},"timeline":[{"name":"m","trial":"t"}]}

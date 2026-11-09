@@ -1,0 +1,85 @@
+{
+  "format": "ysp-experiment", "version": 1, "name": "kitchen_sink", "note": "every form of the format, once",
+  "session": { "note": "both field types",
+               "fields": { "note": "a set's own note", "participant": { "type": "integer", "required": true },
+                           "group": { "type": "string", "required": false } } },
+  "display": { "units": "deg", "background": [0.25, 0.5, 1], "calibration": "required", "min_tier": 3 },
+  "web": { "allowed": true, "exclusion": { "max_dropped": 0.01, "refresh": [59, 61], "label": "strict",
+                                           "nested": { "n": 1.50, "b": true, "x": null } } },
+  "devices": {
+    "note": "the roles",
+    "resp": { "direction": "in", "family": ["xid", "keyboard"], "required": true, "min_tier": 2,
+              "buttons": { "1": "left", "2": "right" }, "map": { "key": "5" } },
+    "trig": { "direction": "out", "family": ["parallel"], "pulse_s": 0.002, "required": false, "kind": "ttl" }
+  },
+  "stimuli": {
+    "note": "one of each kind",
+    "g": { "kind": "gabor", "sf": 2, "sigma": 0.4, "contrast": { "michelson": "$level" },
+           "x": { "by": { "by": "$side", "map": { "left": "a", "right": "b" } }, "map": { "a": -5, "b": 5 } } },
+    "bar": { "kind": "grating", "sf": 1, "contrast": { "by": "$cond", "map": { "a": 0.5, "b": 1 } }, "ori": "$n" },
+    "n1": { "kind": "noise", "dist": "simplex", "octaves": 2, "noise_scale": 0.5 },
+    "img": { "kind": "image", "texture": "$tex_ok", "w": 6, "h": 6 },
+    "art": { "kind": "artwork", "artwork": "art/a.ysp", "layer": 2 },
+    "dots": { "kind": "rdk", "aperture": "rect", "w": 400, "count": 50, "speed": 100, "dot_size": 4, "edge": "replot",
+              "lifetime_s": 0.1, "coherence": "$coh", "direction": 90, "signal": "different", "noise": "walk" },
+    "tone": { "kind": "sound", "audio": "snd/a.wav", "db": -6 },
+    "movie": { "kind": "video", "video": "vid/a.mp4", "w": 640, "h": 360, "loop": true, "light": "codes" },
+    "lbl": { "kind": "text", "font": "fonts/NotoSans-Regular.ttf", "size": 24, "text": "$$5 off", "align": "center",
+             "dir": "ltr", "lang": "en", "line_height": 1.25, "width": 500 },
+    "lit": { "kind": "text", "font": "fonts/NotoSans-Regular.ttf", "size": 24, "text": "$wordv" }
+  },
+  "methods": {
+    "note": "the three types",
+    "st": { "type": "stair", "start": 0.5, "n_down": 2, "step_type": "db", "steps": [2, 1], "min": 0.01,
+            "max": { "gamut": "g.contrast" }, "stop_reversals": 8, "estimate": "trials", "note": "a staircase" },
+    "qp": { "type": "quest", "scale": "log10", "pf": "weibull", "stop_trials": 40, "estimate": "mode",
+            "stim": [[0.1, 0.5, 1], { "linspace": [-1, { "gamut": "g.contrast" }, 11] }],
+            "param": [{ "linspace": [0, 1, 5] }, 2, 0.5, 0.01] },
+    "ae": { "type": "aep", "lo": [0, 0], "hi": [1, 2], "dims": ["speed_v", "size_v"], "hyper.lengthscale": [0.2, 0.3],
+            "acq": "eavc", "dim_kind": ["continuous", "integer"], "stop_trials": 30, "estimate": "mean" }
+  },
+  "trials": {
+    "note": "a note on the set",
+    "full": {
+      "note": "every step",
+      "events": [
+        { "note": "a step's note", "on": ["g", "bar"], "stagger_s": 0.01 },
+        { "if": "$practice", "steps": [{ "on": "img" }, { "off": "img" }] },
+        { "unless": "$first_in_block", "steps": [{ "wait_s": "$soa_s" }] },
+        { "set": "g", "props": { "contrast": 0.5, "x": "$n", "note": "set note" } },
+        { "to": "bar", "props": { "contrast": 0 }, "duration_s": 0.2, "ease": "cosine", "delay_s": 0.01 },
+        { "then": "bar", "props": { "ori": 45 }, "duration_s": 0.1 },
+        { "at_s": 1.5 },
+        { "trigger": { "by": "$cond", "map": { "a": 10, "b": 20 } }, "role": "trig" },
+        { "mark": "stim_on" },
+        { "on": "tone" },
+        { "off": ["bar"] }
+      ],
+      "response": { "role": "resp", "from": "g", "choices": ["left", { "key": "right", "name": "r" }],
+                    "duration_s": { "by": "$cond", "map": { "a": 1.5, "b": 2 } }, "minimum_valid_rt_s": 0.1,
+                    "key_answer": "$side", "response_ends_trial": false, "max_responses": 2,
+                    "allow_held_key": true, "wait_for_key_release": true,
+                    "trigger": { "role": "trig", "code": { "by": "$response", "map": { "left": 1, "right": 2 } } } },
+      "after": [ { "on": "lbl" }, { "off": "g" } ],
+      "record": ["g", "bar"],
+      "columns": { "note": "columns note", "resp_s": "$rt_s", "est": "$estimate", "shown": "$contrast_shown",
+                   "side": "$side", "method_name": { "by": "$method", "map": { "st": "stair", "qp": "quest", "ae": "aep" } },
+                   "group": "$group", "seconds_s": 1.5 },
+      "outcome": { "by": "$correct", "map": { "true": "correct", "false": "wrong" } },
+      "method_value": "$contrast_shown"
+    },
+    "plain": { "events": [{ "on": "movie" }, { "wait_s": "$hold_s" }, { "on": "dots" }, { "on": "lit" }, { "on": "n1" }, { "on": "art" }] }
+  },
+  "timeline": [
+    { "name": "blockA", "note": "a container", "timeline_variables": "base.pstb", "repetitions": 2,
+      "loop": { "until_accuracy": 0.8, "max": 3 },
+      "vars": { "note": "vars note", "coh": { "choice": [0.1, 0.5] }, "wordv": { "choice": ["hello", "world"] } },
+      "data": { "note": "data note", "block_kind": "main", "p": "$participant" },
+      "timeline": [
+        { "name": "adaptive", "trial": "full", "unless": "$flag", "tracks": ["st", "qp", "ae"], "interleave": "round_robin", "track_rate": 1,
+          "rules": ["order random  # a comment", "reps 2", "jitter soa_s uniform 0.8 1.2", "var \"side\" choice left right"],
+          "vars": { "hold_s": 0.5 }, "data": { "seconds_s": 2 }, "requeue": "no_response", "record_data": false },
+        { "name": "plain_leaf", "trial": "plain", "if": "$flag", "vars": { "hold_s": 1.25 }, "rules": ["practice 2", "warmup 0", "block_size 2", "groups cond alternate"] }
+      ] }
+  ]
+}

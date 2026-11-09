@@ -1,0 +1,2 @@
+{"format":"ysp-experiment","version":1,
+"devices":{"r":{"direction":"in","family":["k"]}},"stimuli":{"s":{"kind":"shape"}},"trials":{"t":{"events":[{"on":"s"}],"response":{"role":"r","from":"s","persist":true}}},"timeline":[{"name":"m","trial":"t"}]}

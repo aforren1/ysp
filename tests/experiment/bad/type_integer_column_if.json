@@ -1,0 +1,2 @@
+{"format":"ysp-experiment","version":1,
+"trials":{"t":{}},"timeline":[{"name":"c","timeline_variables":"base.pstb","timeline":[{"name":"m","trial":"t","if":"$n"}]}]}

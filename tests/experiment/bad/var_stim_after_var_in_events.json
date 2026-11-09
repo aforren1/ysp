@@ -1,0 +1,2 @@
+{"format":"ysp-experiment","version":1,
+"devices":{"r":{"direction":"in","family":["keyboard"]},"o":{"direction":"out","family":["parallel"]}},"stimuli":{"s":{"kind":"shape","x":{"by":"$outcome","map":{"correct":1,"wrong":2,"timeout":3}}}},"trials":{"t":{"events":[{"on":"s"}],"response":{"role":"r","from":"s"}}},"timeline":[{"name":"m","trial":"t"}]}
