@@ -26,6 +26,9 @@
 #endif
 #define YSP_JSON_IMPLEMENTATION
 #include "ysp/json.h"
+/* An endless host costs a full work limit per input; 5,000,000 would make it
+ * the whole run. */
+#define YEXP_WORK_STEPS 200000L
 #define YSP_EXPERIMENT_IMPLEMENTATION
 #include "ysp/experiment.h"
 #include "../adapt/experiment_dump.h"

@@ -8,7 +8,7 @@ source = "tests/adapt/experiment_test.c"
 compiler = "gcc"
 flags = ["-std=c11", "-O1", "-w"]
 libs = ["-lm"]
-timeout = 120
+timeout = 60
 env = { YEXP_CORPUS = "{repo}/tests/experiment" }
 
 [[mutant]]
@@ -237,7 +237,7 @@ id = "e-28"
 name = "a real keeps its source text"
 test = "experiment"
 why = "D2's open point: the ID depends on the double."
-find = '''        *canon = (v->flags & YEXP_VF_INT) ? yjs_new_int(c->a, v->i) : yjs_new_double(c->a, x);'''
+find = '''        *canon = (v->flags & YEXP_VF_INT) ? yjs_new_int(c->a, v->i) : yjs_new_double(c->a, v->num);'''
 replace = '''        *canon = yjs_copy(c->a, src);'''
 
 [[mutant]]
@@ -253,18 +253,19 @@ id = "e-30"
 name = "an integer past 2^53 goes through a double"
 test = "experiment"
 why = "Integer text stays exact (a seed, a code)."
-find = '''    if (src->flags & YJS_NUM_I64) {
-        v->flags = YEXP_VF_INT;'''
-replace = '''    if (0) {
-        v->flags = YEXP_VF_INT;'''
+find = '''    if (src->flags & YJS_NUM_I64) { *out = src->i; return true; }
+    n = yjs_write_mem(src, YJS_WRITE_COMPACT, buf, sizeof buf);'''
+replace = '''    if (0) { *out = src->i; return true; }
+    return false;
+    n = yjs_write_mem(src, YJS_WRITE_COMPACT, buf, sizeof buf);'''
 
 [[mutant]]
 id = "e-31"
 name = "-0 stays -0 in the form"
 test = "experiment"
 why = "The fuzz target's first finding: the canonical form holds 0."
-find = '''    if (x == 0) x = 0;   /* -0 is 0: one spelling, one value (D2) */'''
-replace = '''    (void)x;'''
+find = '''        v->num = (double)whole;'''
+replace = '''        v->num = src->u.s[0] == '-' ? -(double)whole : (double)whole;'''
 
 [[mutant]]
 id = "e-32"
@@ -336,8 +337,8 @@ id = "e-39"
 name = "the display's min_tier range"
 test = "experiment"
 why = "2.1: 1 to 3."
-find = '''if (t->i < 0 || t->i > 3) yexp__err(c, t->pos, "display: 'min_tier' is 1 to 3");'''
-replace = '''(void)0;'''
+find = '''    mt = yexp__int_field(c, yexp__slotv(c, s, YEXP__S_DISPLAY, "min_tier"), "display", "min_tier", 0, 3, 0);'''
+replace = '''    mt = yexp__int_field(c, yexp__slotv(c, s, YEXP__S_DISPLAY, "min_tier"), "display", "min_tier", 0, 99, 0);'''
 
 [[mutant]]
 id = "e-40"
@@ -386,7 +387,7 @@ id = "e-45"
 name = "session fields without participant"
 test = "experiment"
 why = "rules take the participant number from this field (2.4)."
-find = '''    if (!has_participant && n)'''
+find = '''    if (!has_participant)'''
 replace = '''    if (0)'''
 
 [[mutant]]
@@ -394,9 +395,10 @@ id = "e-46"
 name = "a non-string note accepted"
 test = "experiment"
 why = "D1: a note is text."
-find = '''            if (m->value->type != YJS_STRING) yexp__err(c, m->value->pos, "%s: 'note' is a string", elem);
-            else yexp__put(c, out, "note", yexp__cstr(c, m->value->u.s));'''
-replace = '''            if (m->value->type == YJS_STRING) yexp__put(c, out, "note", yexp__cstr(c, m->value->u.s));'''
+find = '''    if (m && m->value->type != YJS_STRING) {
+        yexp__err(c, m->value->pos, "%s: 'note' is a string", elem);'''
+replace = '''    if (0) {
+        yexp__err(c, m->value->pos, "%s: 'note' is a string", elem);'''
 
 [[mutant]]
 id = "e-47"
@@ -488,16 +490,432 @@ id = "e-57"
 name = "one line of a rule comment not stripped"
 test = "experiment"
 why = "A '#' starts a comment, as ytr_rules() reads it; a jitter named in a comment is not a jitter."
-find = '''        if (!*p || *p == '\n' || *p == '#') break;'''
-replace = '''        if (!*p || *p == '\n') break;'''
+find = '''        if (!*p || *p == '\n' || *p == '#') break;
+        if (*p == '"') {'''
+replace = '''        if (!*p || *p == '\n') break;
+        if (*p == '"') {'''
 
 [[mutant]]
 id = "e-58"
 name = "the variable-loop limit gone"
 test = "experiment"
 why = "Variables that name each other must be refused, not recursed forever."
-find = '''    if (depth > YEXP__VAR_DEPTH) {
-        yexp__err(c, pos, "%s: '%s': '$%s': variables nest more than %d deep; is there a loop?", elem, key, name, YEXP__VAR_DEPTH);
-        return;
-    }'''
-replace = '''    (void)pos;'''
+find = '''                yexp__err(c, v->pos, "%s: '%s': '$%s': the variables refer to each other in a loop", elem, key, v->str);
+                return;'''
+replace = '''                break;'''
+
+[[mutant]]
+id = "r-01"
+name = "an exact integer not recognized past int64 flags"
+test = "experiment"
+why = "One value, one form: 9007199254740993.0 is that integer."
+find = '''    if (yexp__exact_int(src, &whole)) {'''
+replace = '''    if (src->flags & YJS_NUM_I64 && yexp__exact_int(src, &whole)) {'''
+
+[[mutant]]
+id = "r-02"
+name = "a whole double read as a real"
+test = "experiment"
+why = "The canonical integer must read back as the same form."
+find = '''        if (x == floor(x) && x >= -9223372036854775808.0 && x < 9223372036854775808.0) {'''
+replace = '''        if (0) {'''
+
+[[mutant]]
+id = "r-03"
+name = "the low end of int64 for a whole double"
+test = "experiment"
+why = "-2^63 is an int64 and reloads as one."
+find = '''x >= -9223372036854775808.0 && x < 9223372036854775808.0'''
+replace = '''x > -9223372036854775808.0 && x < 9223372036854775808.0'''
+
+[[mutant]]
+id = "r-04"
+name = "a negative duration accepted"
+test = "experiment"
+why = "No duration but the minimum RT runs backward."
+find = '''        if (ns < 0 && (allow & YEXP__AV_NONNEG)) {'''
+replace = '''        if (0) {'''
+
+[[mutant]]
+id = "r-05"
+name = "a negative minimum RT refused"
+test = "experiment"
+why = "ysp/response.h 0.8.0: it is valid."
+find = '''(yexp__streq(r->key, "minimum_valid_rt_s") ? 0u : YEXP__AV_NONNEG)'''
+replace = '''YEXP__AV_NONNEG'''
+
+[[mutant]]
+id = "r-06"
+name = "a negative trigger code accepted"
+test = "experiment"
+why = "A code is at least 0."
+find = '''    if ((allow & YEXP__AV_NONNEG) && v->num < 0) {'''
+replace = '''    if (0) {'''
+
+[[mutant]]
+id = "r-07"
+name = "a code past 32 bits accepted"
+test = "experiment"
+why = "YTL_TRIGGER_CH takes an int."
+find = '''    if ((allow & YEXP__AV_INT32) && (v->i > INT32_MAX || v->i < INT32_MIN)) {'''
+replace = '''    if (0) {'''
+
+[[mutant]]
+id = "r-08"
+name = "unknown keys on a michelson"
+test = "experiment"
+why = "As the other value forms refuse them."
+find = '''        if (src->n > 1 + (yjs_get(src, "note") ? 1u : 0u)) {
+            yexp__err(c, src->pos, "%s: '%s': a michelson is'''
+replace = '''        if (0) {
+            yexp__err(c, src->pos, "%s: '%s': a michelson is'''
+
+[[mutant]]
+id = "r-09"
+name = "a color inside a lookup has any length"
+test = "experiment"
+why = "[r, g, b] from every level."
+find = '''    if (v->kind == YEXP_V_LOOKUP)
+        for (k = 0; k < v->n; k++)
+            if (!yexp__vec3_ok(c, v->map[k].value, elem, key)) return false;'''
+replace = '''    (void)k;'''
+
+[[mutant]]
+id = "r-10"
+name = "an integer out of range becomes the default"
+test = "experiment"
+why = "A refusal, never a silent default."
+find = '''    if (v->kind != YEXP_V_NUMBER || !(v->flags & YEXP_VF_INT) || v->i < lo || v->i > hi) {'''
+replace = '''    if (v->kind != YEXP_V_NUMBER || !(v->flags & YEXP_VF_INT)) {'''
+
+[[mutant]]
+id = "r-11"
+name = "a role min_tier with no range"
+test = "experiment"
+why = "As display min_tier."
+find = '''elem, "min_tier", 0, 3, 0);'''
+replace = '''elem, "min_tier", 0, 99, 0);'''
+
+[[mutant]]
+id = "r-12"
+name = "a variable type never checked"
+test = "experiment"
+why = "Item 8 of the review."
+find = '''    yexp__type_var(c, s, name, want, pos, elem, key, 0);'''
+replace = '''    (void)want;'''
+
+[[mutant]]
+id = "r-13"
+name = "a session field type not checked"
+test = "experiment"
+why = "A string field is no duration."
+find = '''                if ((text && want != YEXP__W_TEXT) || (!text && want != YEXP__W_NUM && want != YEXP__W_NONNEG))'''
+replace = '''                if (0)'''
+
+[[mutant]]
+id = "r-14"
+name = "a vars value type not checked"
+test = "experiment"
+why = "A string var is no number."
+find = '''        yexp__type_value(c, s, r.value, want, name, pos, elem, key, depth);
+        break;
+    case YEXP__VK_JITTER'''
+replace = '''        break;
+    case YEXP__VK_JITTER'''
+
+[[mutant]]
+id = "r-15"
+name = "a string column used as a number"
+test = "experiment"
+why = "The provider gives the column type."
+find = '''        } else if ((want == YEXP__W_NUM || want == YEXP__W_NONNEG) && r.ctype == YEXP_COL_STRING) {'''
+replace = '''        } else if (0) {'''
+
+[[mutant]]
+id = "r-16"
+name = "a column of any type accepted in an if"
+test = "experiment"
+why = "A table holds booleans as 0 and 1."
+find = '''        } else if (want == YEXP__W_BOOL && (r.ctype != YEXP_COL_INTEGER || !yexp__column_is_flag(c, r.table, r.col))) {'''
+replace = '''        } else if (0) {'''
+
+[[mutant]]
+id = "r-17"
+name = "an integer column of any levels accepted in an if"
+test = "experiment"
+why = "Only 0 and 1."
+find = '''        if (n >= (int)sizeof buf || (!yexp__streq(buf, "0") && !yexp__streq(buf, "1"))) return false;'''
+replace = '''        if (n >= (int)sizeof buf) return false;'''
+
+[[mutant]]
+id = "r-18"
+name = "an if step of any type"
+test = "experiment"
+why = "2.5: a boolean."
+find = '''            yexp__check_var(c, s, st->cond, st->cond_pos_, phase, YEXP__W_BOOL, elem,'''
+replace = '''            yexp__check_var(c, s, st->cond, st->cond_pos_, phase, YEXP__W_ANY, elem,'''
+
+[[mutant]]
+id = "r-19"
+name = "a node if of any type"
+test = "experiment"
+why = "2.4: a boolean."
+find = '''nd->if_pos_, YEXP__PH_NODE, YEXP__W_BOOL, elem, "if");'''
+replace = '''nd->if_pos_, YEXP__PH_NODE, YEXP__W_ANY, elem, "if");'''
+
+[[mutant]]
+id = "r-20"
+name = "a negative var in a duration"
+test = "experiment"
+why = "A literal known at load."
+find = '''        if (want == YEXP__W_NONNEG && v->num < 0) yexp__type_err(c, pos, elem, key, name, "a negative number", want);
+        else if'''
+replace = '''        if'''
+
+[[mutant]]
+id = "r-21"
+name = "no warning for an unused template"
+test = "experiment"
+why = "Said, not silently passed."
+find = '''        if (!c->tmpl_seen[i])'''
+replace = '''        if (0)'''
+
+[[mutant]]
+id = "r-22"
+name = "no warning for an unused stimulus"
+test = "experiment"
+why = "Said, not silently passed."
+find = '''        if (!c->stim_seen[i])'''
+replace = '''        if (0)'''
+
+[[mutant]]
+id = "r-23"
+name = "rule variables have no levels"
+test = "experiment"
+why = "They are in the file, so a lookup on one is checked."
+find = '''    if (r.kind == YEXP__VK_RULEVAR) {
+        if (!r.rv->n_values) return 0;'''
+replace = '''    if (0) {
+        if (!r.rv->n_values) return 0;'''
+
+[[mutant]]
+id = "r-24"
+name = "a rule value list includes the word choice"
+test = "experiment"
+why = "Values start at the fourth token."
+find = '''        if (nw <= 3) continue;'''
+replace = '''        if (nw <= 2) continue;'''
+
+[[mutant]]
+id = "r-25"
+name = "a long level is not read again"
+test = "experiment"
+why = "A level of 256 bytes or more must be checked or recorded."
+find = '''            } else if (c->h->level(c->h->ctx, r.table, r.col, i, p, (size_t)n + 1) != n) {'''
+replace = '''            } else if (1) {'''
+
+[[mutant]]
+id = "r-26"
+name = "a changing level kept"
+test = "experiment"
+why = "The second read must agree."
+find = '''            } else if (c->h->level(c->h->ctx, r.table, r.col, i, p, (size_t)n + 1) != n) {
+                yexp__levels_skipped(c);'''
+replace = '''            } else if (c->h->level(c->h->ctx, r.table, r.col, i, p, (size_t)n + 1) != n) {'''
+
+[[mutant]]
+id = "r-27"
+name = "too many levels not recorded"
+test = "experiment"
+why = "Over 65536: recorded as skipped."
+find = '''    if (c->n_lv >= YEXP__MAX_LEVELS) { yexp__levels_skipped(c); return 0; }'''
+replace = '''    if (c->n_lv >= YEXP__MAX_LEVELS) return 0;'''
+
+[[mutant]]
+id = "r-28"
+name = "skipped levels stay marked as run"
+test = "experiment"
+why = "report.run must be true."
+find = '''    c->r->run &= ~(unsigned)YEXP_CHECK_LEVELS;'''
+replace = '''    (void)0;'''
+
+[[mutant]]
+id = "r-29"
+name = "a michelson inside a lookup not seen"
+test = "experiment"
+why = "$contrast_shown is defined by it."
+find = '''        if (p && yexp__has_michelson(p->value)) s->michelson++;'''
+replace = '''        if (p && p->value->kind == YEXP_V_MICHELSON) s->michelson++;'''
+
+[[mutant]]
+id = "r-30"
+name = "from may be unshown"
+test = "experiment"
+why = "The onset would never come."
+find = '''            !yexp__steps_show(out->events, out->n_events, out->response->from))'''
+replace = '''            0)'''
+
+[[mutant]]
+id = "r-31"
+name = "a from shown only in after"
+test = "experiment"
+why = "The response is armed at the first frame."
+find = '''            !yexp__steps_show(out->events, out->n_events, out->response->from))'''
+replace = '''            !yexp__steps_show(out->events, out->n_events, out->response->from) && !yexp__steps_show(out->after, out->n_after, out->response->from))'''
+
+[[mutant]]
+id = "r-32"
+name = "lo and hi of different lengths"
+test = "experiment"
+why = "One per dimension."
+find = '''        if (lo && hi && (lo->value->n != hi->value->n || lo->value->n == 0))'''
+replace = '''        if (lo && hi && lo->value->n == 0)'''
+
+[[mutant]]
+id = "r-33"
+name = "empty lo and hi"
+test = "experiment"
+why = "At least one dimension."
+find = '''        if (lo && hi && (lo->value->n != hi->value->n || lo->value->n == 0))'''
+replace = '''        if (lo && hi && lo->value->n != hi->value->n)'''
+
+[[mutant]]
+id = "r-34"
+name = "dims of another length"
+test = "experiment"
+why = "One name per dimension."
+find = '''        if (lo && out->dims && (uint32_t)out->n_dims != lo->value->n)'''
+replace = '''        if (0)'''
+
+[[mutant]]
+id = "r-35"
+name = "duplicate dims"
+test = "experiment"
+why = "Each becomes a variable."
+find = '''                if (yexp__streq(out->dims[a], out->dims[b])) yexp__err('''
+replace = '''                if (0) yexp__err('''
+
+[[mutant]]
+id = "r-36"
+name = "an empty mark"
+test = "experiment"
+why = "A mark has a name."
+find = '''        if (out->mark && !out->mark[0]) yexp__err('''
+replace = '''        if (0) yexp__err('''
+
+[[mutant]]
+id = "r-37"
+name = "a stair with no steps"
+test = "experiment"
+why = "The header requires at least one."
+find = '''        if (st && st->value->n == 0) yexp__err('''
+replace = '''        if (0) yexp__err('''
+
+[[mutant]]
+id = "r-38"
+name = "a quest axis with no points"
+test = "experiment"
+why = "An axis has at least one."
+find = '''            if (e->kind == YEXP_V_ARRAY && e->n == 0) {'''
+replace = '''            if (0) {'''
+
+[[mutant]]
+id = "r-39"
+name = "a single target keeps its array"
+test = "experiment"
+why = "One meaning, one ID."
+find = '''            if (one || (r->type == YEXP__T_TARGETS && n == 1)) *canon = ce;'''
+replace = '''            if (one) *canon = ce;'''
+
+[[mutant]]
+id = "r-40"
+name = "a key-only choice stays an object"
+test = "experiment"
+why = "One meaning, one ID."
+find = '''co && co->n == 1 && yjs_get(co, "key") ? yjs_get(co, "key") : co'''
+replace = '''co'''
+
+[[mutant]]
+id = "r-41"
+name = "a $ choice taken raw"
+test = "experiment"
+why = "The two choice forms read $ the same way."
+find = '''                        const yexp_value* kv2 = yexp__literal_string(c, it, ce, "key", &cs2);'''
+replace = '''                        const yexp_value* kv2 = yexp__value(c, it, YEXP__AV_STR | YEXP__AV_VAR, 0, ce, "key", &cs2);'''
+
+[[mutant]]
+id = "r-42"
+name = "a choice outside the role buttons"
+test = "experiment"
+why = "2.6: a button role takes its button names."
+find = '''                        if (!found) yexp__err(c, it->pos, "%s: '%s' is not a button'''
+replace = '''                        if (0) yexp__err(c, it->pos, "%s: '%s' is not a button'''
+
+[[mutant]]
+id = "r-43"
+name = "no NUL forced on a host message"
+test = "experiment"
+why = "A host can fill its buffer."
+find = '''    msg[cap - 1] = 0;
+    return msg[0] ? msg : "refused by the host";'''
+replace = '''    (void)cap;
+    return msg[0] ? msg : "refused by the host";'''
+
+[[mutant]]
+id = "r-44"
+name = "column() in a table walk unbounded"
+test = "experiment"
+why = "A host list has no promised end."
+find = '''        if (!yexp__work(c)) return;
+        memset(&info, 0, sizeof info);'''
+replace = '''        memset(&info, 0, sizeof info);'''
+
+[[mutant]]
+id = "r-45"
+name = "column() in a name lookup unbounded"
+test = "experiment"
+why = "A host list has no promised end."
+find = '''        if (!yexp__work(c)) return 0;   /* a host's list has no promised end */'''
+replace = ''''''
+
+[[mutant]]
+id = "r-46"
+name = "a step may set an integer key"
+test = "experiment"
+why = "A channel carries a float; layer is the draw order."
+find = '''    return (r->type == YEXP__T_NUM || r->type == YEXP__T_VEC3) && !(r->flags & YEXP__R_LIT);'''
+replace = '''    return (r->type == YEXP__T_NUM || r->type == YEXP__T_INT || r->type == YEXP__T_VEC3) && !(r->flags & YEXP__R_LIT);'''
+
+[[mutant]]
+id = "r-47"
+name = "a gamut on an enum"
+test = "experiment"
+why = "The largest value of a number."
+find = '''            if (ri < 0 || yexp__rows[ri].type != YEXP__T_NUM)'''
+replace = '''            if (0)'''
+
+[[mutant]]
+id = "r-48"
+name = "a run-time text or texture accepted"
+test = "experiment"
+why = "D14: the levels are needed at pack build."
+find = '''    if (want == YEXP__W_TEXT && (r.kind == YEXP__VK_BUILTIN || r.kind == YEXP__VK_SESSION || r.kind == YEXP__VK_JITTER || r.kind == YEXP__VK_DIM)) {'''
+replace = '''    if (0) {'''
+
+[[mutant]]
+id = "r-49"
+name = "the first pass has no work limit"
+test = "experiment"
+why = "A hostile on-list."
+find = '''                for (b = 0; b < a && yexp__work(c); b++)
+                    if (yexp__streq(out->stims[b], nm))'''
+replace = '''                for (b = 0; b < a; b++)
+                    if (yexp__streq(out->stims[b], nm))'''
+
+[[mutant]]
+id = "r-50"
+name = "a rule var in a duration when its text is not numeric"
+test = "experiment"
+why = "Item 8."
+find = '''        if ((want == YEXP__W_NUM || want == YEXP__W_NONNEG) && !all_num) yexp__type_err'''
+replace = '''        if (0) yexp__type_err'''

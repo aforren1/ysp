@@ -919,7 +919,9 @@ YEXP_API bool yexp_row_required(const yexp_row* r) { return r && (r->flags & YEX
 #define YEXP__MAX_CHILDREN 256
 #define YEXP__MAX_DEPTH    32
 #define YEXP__SLOT_STACK   2048
-#define YEXP__WORK_STEPS   5000000L
+#ifndef YEXP_WORK_STEPS
+#define YEXP_WORK_STEPS    5000000L   /* a fuzz target lowers it, to stay quick */
+#endif
 #define YEXP__MAX_LEVELS   65536
 #define YEXP__VAR_CHAIN    64      /* one variable naming another, deep */
 #define YEXP__LEVEL_BYTES  65536   /* the longest level asked for again */
@@ -1025,9 +1027,9 @@ static void yexp__warn(yexp__ctx* c, uint32_t pos, const char* fmt, ...) {
 /* Both passes share one limit: a hostile file must not buy quadratic time. */
 static bool yexp__work(yexp__ctx* c) {
     if (c->over) return false;
-    if (++c->steps <= YEXP__WORK_STEPS) return true;
+    if (++c->steps <= YEXP_WORK_STEPS) return true;
     c->over = true;
-    yexp__err(c, UINT32_MAX, "the definition takes more than %ld steps to check; do many leaves share large templates, or do 'vars' choices refer to each other?", (long)YEXP__WORK_STEPS);
+    yexp__err(c, UINT32_MAX, "the definition takes more than %ld steps to check; do many leaves share large templates, or do 'vars' choices refer to each other?", (long)YEXP_WORK_STEPS);
     return false;
 }
 

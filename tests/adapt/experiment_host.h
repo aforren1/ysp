@@ -116,14 +116,14 @@ static const yexp_host g_host = { NULL, st_entry, st_column, st_level, st_role, 
 
 /* --- a host that misbehaves, by mode ------------------------------------ */
 
-enum { BH_SANE, BH_COL_ENDLESS, BH_COL_NULL_NAME, BH_COL_ODD_TYPE, BH_LVL_LONG, BH_LVL_LONG_CHANGES, BH_LVL_HUGE, BH_LVL_EMPTY,
+enum { BH_SANE, BH_COL_ENDLESS, BH_COL_ENDLESS_LATE, BH_COL_NULL_NAME, BH_COL_ODD_TYPE, BH_LVL_LONG, BH_LVL_LONG_CHANGES, BH_LVL_HUGE, BH_LVL_EMPTY,
        BH_LVL_NO_NUL, BH_LVL_MANY, BH_MSG_NO_NUL, BH_ENTRY_ODD, BH_MODES };
 static int g_bh_mode;
 static int g_bh_calls;
 
 static int bh_column(void* ctx, const char* table, int i, yexp_column* o) {
     (void)ctx; (void)table;
-    if (g_bh_mode == BH_COL_ENDLESS) { o->name = "zz"; o->type = 0; return 1; }
+    if (g_bh_mode == BH_COL_ENDLESS || (g_bh_mode == BH_COL_ENDLESS_LATE && g_bh_calls++ >= 2)) { o->name = "zz"; o->type = 0; return 1; }
     if (g_bh_mode == BH_COL_NULL_NAME) { if (i == 0) { o->name = NULL; return 1; } return 0; }
     if (i == 0) { o->name = "c"; o->type = g_bh_mode == BH_COL_ODD_TYPE ? 12345 : YEXP_COL_STRING; o->n_levels = 2; return 1; }
     return 0;

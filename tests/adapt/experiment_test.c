@@ -733,6 +733,11 @@ static void run_review(void) {
         one_spelling(c, 2, "int64's largest");
         one_spelling(d, 2, "int64's smallest");
         one_spelling(e, 4, "a small integer");
+        {
+            /* a value past int64 whose double is int64's smallest is that integer */
+            static const char* const f[] = { W_DOC("-9223372036854775808"), W_DOC("-9.22337203685477581e18") };
+            one_spelling(f, 2, "a whole double at int64's low end");
+        }
         /* a real whose double is whole, and one past int64: stable forms */
         id_roundtrip(W_DOC("9007199254740993.5"), x);
         id_roundtrip(W_DOC("-9.22337203685477581e18"), x);
@@ -835,7 +840,7 @@ static void run_review(void) {
             g_bh_calls = 0;
             rc = load_rc(doc, &g_bad_host, &r);
             CHECK(rc == YEXP_OK || rc == YEXP_ERR_REFUSED, "a bad host: a plain result");
-            if (m == BH_COL_ENDLESS) CHECK(rc == YEXP_ERR_REFUSED && r.n_diags >= 1 && strstr(r.diags[0].msg, "steps to check"), "an endless column() hits the work limit");
+            if (m == BH_COL_ENDLESS || m == BH_COL_ENDLESS_LATE) CHECK(rc == YEXP_ERR_REFUSED && r.n_diags >= 1 && strstr(r.diags[0].msg, "steps to check"), "an endless column() hits the work limit");
             if (m == BH_LVL_LONG) {
                 /* the 300-byte level is read, so its absence from the map is seen */
                 CHECK(rc == YEXP_ERR_REFUSED && r.n_diags >= 1 && strstr(r.diags[0].msg, "no key for"), "a 300-byte level is checked");
@@ -844,10 +849,22 @@ static void run_review(void) {
                 CHECK(rc == YEXP_OK && (r.skipped & YEXP_CHECK_LEVELS) && !(r.run & YEXP_CHECK_LEVELS), "levels not read are recorded as skipped");
             if (m == BH_MSG_NO_NUL) {
                 CHECK(rc == YEXP_ERR_REFUSED && r.n_diags >= 1, "a message with no NUL");
-                CHECK(strlen(r.diags[0].msg) < YEXP_MSG_BYTES, "and it stays in bounds");
+                /* 255 of the host's 256 bytes, after the prefix: the NUL was forced */
+                {
+                    const char* x = NULL;
+                    int q;
+                    for (q = 0; q < r.n_diags && !x; q++) x = strstr(r.diags[q].msg, "xxxxxxxx");
+                    CHECK(x && strlen(x) == 255, "and it stays in bounds");
+                }
             }
         }
         g_bh_mode = 0;
+    }
+    /* a rule var used as a number: numeric text is fine, other text is not */
+    {
+#define RV_DOC(c) XH "\"stimuli\":{\"s\":{\"kind\":\"shape\",\"w\":\"$x\"}},\"trials\":{\"t\":{\"events\":[{\"on\":\"s\"}]}},\"timeline\":[{\"name\":\"m\",\"trial\":\"t\",\"rules\":[\"var x choice " c "\"]}]}"
+        CHECK2(load_rc(RV_DOC("1 2.5"), NULL, &r) == YEXP_OK, "a rule var of numeric text is a number", r.n_diags ? r.diags[0].msg : "");
+        CHECK(load_rc(RV_DOC("1 two"), NULL, &r) == YEXP_ERR_REFUSED, "a rule var of other text is no number");
     }
     /* a level written with no NUL and the sane host's rule var levels */
     {
