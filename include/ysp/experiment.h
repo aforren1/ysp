@@ -98,10 +98,11 @@
  *   ---------------------------------------------------------------------
  *   Everything lands in the caller's arena (yjs_arena_init() for a fixed
  *   buffer, yjs_arena_init_heap() for blocks with a limit): the parsed JSON,
- *   the form, the canonical tree and the work space. About 12 times the
- *   source text for the worked examples (docs/experiment.md). A full arena
- *   is YEXP_ERR_NOMEM, with the bytes wanted in the report. Limits: 1024
- *   stimuli, methods, roles and templates, 4096 steps in one list, 256
+ *   the form, the canonical tree and the work space. About 100 KB of work
+ *   space, plus about 36 bytes per byte of source text for the worked
+ *   examples (docs/experiment.md). A full arena is YEXP_ERR_NOMEM, with the
+ *   bytes wanted in the report. Limits: 1024 stimuli, methods, roles and
+ *   templates, 4096 steps in one list, 256
  *   children of a node and 32 levels of nodes (the JSON depth of 64 stops a
  *   deeper file first), 5,000,000 work steps for the second pass. Not for a
  *   frame loop: a definition is read once per session.
