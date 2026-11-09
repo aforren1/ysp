@@ -59,7 +59,7 @@ result in this page is functional.
 | device | Windows 11, i7-1360P, 2026-10-12: host-timed outputs (the TriggerBox byte path, DTR, RTS) into a Teensy 4.0 echo board over native USB CDC (usbser); width error -65 to -16 us median. M2 Mac mini, macOS 27.0.1, 2026-11-05: the same outputs into the same board on `AppleUSBACMData`; width error -37 to -19 us median, p99 at most +12 us. Linux desktop, i5-14500, 2026-10-12: the same outputs into the same board on `cdc_acm`; width error -1.0 to +0.1 us median, p99 within +39 us | Inputs from a real board; every vendor box, the line board, the parallel port; FTDI bridges | docs/device.md, "Host-timed pulses on a Teensy 4.0" and "Host-timed pulses on Linux (v0.5.2)" |
 | rigfile | none | Binds through a fake transport | docs/device.md |
 | color | not applicable (pure computation) | No number is a measurement of light | color.h; docs/color.md |
-| stair, quest, aep, trials, table, json, pack, timeline, rdk, outline, sig | not applicable (pure computation) | | |
+| stair, quest, aep, trials, table, json, experiment, pack, timeline, rdk, outline, sig | not applicable (pure computation) | | |
 | dataset | not applicable (files only): NTFS on Windows 11, ext4 on WSL2, APFS on macOS 27.0.1, Emscripten's in-memory file system | A power cut | docs/dataset.md |
 
 ## Files to copy
@@ -75,6 +75,7 @@ unless your file already did.
 | rt | | rt.h | Tracy (opt-in) |
 | stair, table, json, pack, timeline, input, color, rdk, outline | | the header | none |
 | quest, aep | rt.h with `YQST_ASYNC`, `YAEP_ASYNC` only | the header (+ rt.h for the async layer) | none |
+| experiment | json.h | experiment.h, json.h | none |
 | trials | table.h | trials.h, table.h | none |
 | dataset | trials.h, json.h | dataset.h, trials.h, table.h, json.h | none |
 | parallel | rt.h | parallel.h, rt.h | InpOut driver on Windows |
@@ -660,7 +661,7 @@ Status:
 ### The experiment definition
 
 - Design: [experiment_format.md](experiment_format.md)
-- Read by: the player (rig_spec 6); not built
+- Read by: ysp/experiment.h (below); the player that lowers it is not built
 
 Purpose: The pack's EXPERIMENT entry: a JSON file, read by ysp/json.h, that names stimuli, trial templates, adaptive methods, device roles and a tree of nodes, each lowered to ysp/trials.h, ysp/timeline.h, ysp/response.h, ysp/gfx.h and the method headers; and the data set the player writes.
 

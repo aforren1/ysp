@@ -731,6 +731,12 @@ relative to its onset. A trial row has, in order:
 Version 1 is this page as decided on 2026-10-14. 1.3 D12 gives the
 rules. The player's describe line names the newest version it reads.
 
+Note (2026-11-09): this page does not list every default of version 1
+that D2 asks for. The defaults table of ysp/experiment.h
+(`yexp_defaults()`, [experiment.md](experiment.md), "the format's
+defaults") lists them, and the gaps found in this page. That table is
+version 1's; a later version may change it.
+
 ### 2.12 What the designer edits
 
 The designer edits the definition and the pack source description; it

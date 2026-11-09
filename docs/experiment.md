@@ -1,0 +1,211 @@
+# ysp/experiment.h
+
+Status: v0.1.0, 2026-11-09. The header's top comment is the reference for
+the calls (USAGE, THE CHECKED FORM, REFUSALS, THE HOST, CANONICAL BYTES,
+BOUNDS AND MEMORY). This page records why the header exists, the format's
+defaults table, the decisions, and the results.
+
+The loader reads a definition of format version 1
+([experiment_format.md](experiment_format.md)) into a checked, fully
+defaulted form. It does not lower the form to ysp/trials.h, ysp/timeline.h,
+ysp/gfx.h or ysp/response.h, and it runs nothing. The lowering is the
+next task.
+
+## How-to: load a definition
+
+1. Make an arena: `yjs_arena_init(&a, buf, cap)` (the caller's memory) or
+   `yjs_arena_init_heap(&a, 0)`.
+2. Fill a `yexp_host` with the functions you have, or give NULL.
+3. Call `yexp_load(&a, text, n, &host, &def, &report)`.
+4. On `YEXP_ERR_REFUSED`, print `report.diags[i]`: its line, column and
+   message. `report.n_errors` and `report.n_warnings` count all
+   diagnostics. `report.run` and `report.skipped` show which host checks
+   ran.
+5. Read `def`. Every key that has a default holds it. Use
+   `yexp_prop_get()` to find a stimulus or method key.
+6. Call `yjs_arena_free(&a)` to free the form.
+
+## How-to: get the canonical bytes and the experiment ID
+
+1. Load the definition.
+2. Call `yexp_canonical(def, &a, &bytes, &n, id)`.
+
+`bytes` is ysp/json.h's canonical form with keys at their defaults left
+out, and one LF after the value. `id` is the SHA-256 of those `n` bytes.
+
+## How-to: supply a host
+
+Fill only the functions that you have. A NULL function skips its check, and
+`report.skipped` records it.
+
+| Function | Check | Who has it |
+|---|---|---|
+| `entry()` | a pack entry exists: `timeline_variables`, `font`, `texture` (and a variable's levels), `artwork`, `audio`, `video` | pack tool, player |
+| `column()` | a table's columns: unknown names, built-in names (2.3), a text from a number column | pack tool, player |
+| `level()` | a column's levels: a lookup's `map` (2.2), the entries a `texture` column names | pack tool, player |
+| `role()` | a role against the rig (`yrig_load()`) | player |
+| `param()` | a stimulus or method value against a header's parameter table (range, enum) | designer, player |
+| `rules()` | `ytr_rules()` and a dry `ytr_open()` of a leaf | player, designer |
+| `check_ops()` | `ytl_check_ops()` of a template at the variables' extremes | player, designer |
+
+The header stays free of ysp/gfx.h and ysp/screen.h, so the loader can
+build in a tool with no SDL. Without `column()`, a name that nothing else
+defines and that has a table in scope is taken to be a column of that
+table: the file may still be valid.
+
+## Reference: from a table name to a definition key
+
+The stimulus, method and step keys come from the headers' parameter tables
+as they stood when version 1 was fixed. `yexp_defaults(1, &n)` lists every
+row: section, kinds, type, key, default and enum values. The test
+`tests/adapt/experiment_tables_test.c` compares every row with the live
+tables. A failure means that a header moved a default: the lowering must
+then write the format's value into that desc field.
+
+| Table | Rule | Exceptions |
+|---|---|---|
+| `ygfx_params()` | the row's name is the key, for the format kinds the row's `kinds` reach | `color_r`, `color_g`, `color_b` are the one key `color`, `[r, g, b]` |
+| `ygfx_enum_params()` | the row's name; a value is a name in the row's `values` | rows without `values` (`square`, `octaves`, `linear`, ...) are integers |
+| `yrdk_params()` and `yrdk_desc` | the row's name; a desc field's name | `aperture` and `edge` are `yrdk_desc`'s; `lifetime_ns` is `lifetime_s` and `frame_ns` is `frame_s`; `seed` (D8), `stream` and `mem` are no keys |
+| `yst_params()` | the row's name | `n_steps` comes from the length of `steps` |
+| `yqst_params()` | the row's name | `n_stim`, `n_param`: from the lengths; `stim[]`, `param[]` are the keys `stim` and `param`, arrays of axes |
+| `yaep_params()` | the row's name, dots included (`"hyper.lengthscale"`) | `n_dims`: from `lo` and `hi`; `dims` names the dimensions |
+| `yrsp_params()` | `duration_ns` is `duration_s`; `min_rt_ns` is `minimum_valid_rt_s`; `persist`, `max_responses`, `allow_held_key`, `wait_for_key_release` by name | the rest (`mode`, `trace_*`, `choices.*`) are not keys of version 1 |
+| `ytl_op_params()` | `tween.duration_ns` is `duration_s`; `tween.delay_ns` is `delay_s`; `tween.ease` is `ease` | |
+| `ydev_params()` | `pulse_ns` is `pulse_s` | the rest stay in the rig profile (devices_spec 11.1) |
+| `yvid_params()` | the row's name, on the `video` kind | |
+
+A stimulus's `size` is the layout key on `text` (required, a literal) and
+the table's `size` on `artwork`.
+
+## Reference: the format's defaults, version 1 (D2)
+
+A key marked "none" has no default and no value when left out; a key marked
+"required" is refused when left out. The stimulus and method rows are in
+`yexp_defaults()`, one row per key; they are the parameter tables' defaults
+at version 1, listed by the test above.
+
+| Object | Key | Default |
+|---|---|---|
+| file | `format`, `version`, `trials`, `timeline` | required |
+| file | `name` | `""` |
+| file | `session` | `{"fields": {"participant": {"type": "integer", "required": true}}}` |
+| file | `display`, `web`, `devices`, `stimuli`, `methods` | `{}` |
+| session field | `type`, `required` | required |
+| display | `units` | `"px"` |
+| display | `background` | `[0.5, 0.5, 0.5]` |
+| display | `calibration` | `"optional"` |
+| display | `min_tier` | `0` (none) |
+| web | `allowed` | `false` |
+| web | `exclusion` | none |
+| role | `direction`, `family` | required |
+| role | `required` | `true` |
+| role | `min_tier` | `0` (none) |
+| role | `pulse_s` | `0` |
+| role | `kind` | `""` |
+| role | `buttons`, `map` | `{}` |
+| stimulus | `kind` | required |
+| stimulus | `layer` | `0` |
+| method | `type` | required |
+| method | `scale` | `"linear"` |
+| method | `estimate` | stair `"reversals"`; quest and aep `"mean"` |
+| template | `events`, `after` | `[]` |
+| template | `columns` | `{}` |
+| template | `outcome` | `"correct"` |
+| template | `method_value` | `"$level"` |
+| template | `record` | the response's `from` and any stimulus with a trigger at its onset (D10) |
+| template | `response` | none |
+| response | `role`, `from` | required |
+| response | `choices`, `key_answer`, `trigger` | none |
+| response | `duration_s`, `minimum_valid_rt_s`, `max_responses` | `0` |
+| response | `response_ends_trial` | `true` |
+| response | `persist`, `allow_held_key`, `wait_for_key_release` | `false` |
+| node | `name` | required |
+| node | `timeline`, `trial` | exactly one |
+| node | `timeline_variables`, `if`, `unless`, `loop`, `requeue` | none |
+| node | `rules`, `tracks` | `[]` |
+| node | `vars`, `data` | `{}` |
+| node | `interleave` | `"random"` |
+| node | `track_rate` | `0` (the rule of ytr_desc: 1 with no conditions, 0 with no tracks, required with both) |
+| node | `repetitions` | `1` |
+| node | `record_data` | `true` |
+| step | `stagger_s`, `duration_s`, `delay_s` | `0` |
+| step | `ease` | `"linear"` |
+
+## Explanation: decisions
+
+| Question | Choice and why |
+|---|---|
+| Errors: first only, or many | Many. The first pass (JSON shape, keys, types, names, the steps of a template) collects all it finds, element by element; a second pass (references, scopes, lookups, the host) runs only when the first found none, so one mistake does not report twice, and it collects too. A fixed report of 32 diagnostics; the counts go on past it |
+| Where the defaults live | One table in the header, `yexp_row`, one row per key and section, with the default as JSON text. The header reads no other header at load (D2). `yexp_defaults()` gives it to a designer |
+| Which keys the loader knows | The table's. A key that no row of the section has is refused. A stimulus key against a header's table goes through `param()`: the loader's table lists names and defaults only, so a designer with no gfx.h still gets the whole check of the file |
+| D2's open point: two texts of one double | One ID. A real goes through its double (`yjs_double()`, then `yjs_new_double()`), so `0.1` and `0.1000000000000000055` are one value, as the player reads them. An integer within int64 stays exact (a seed, a code). A number that `yjs_double()` cannot read (more than 19 significant digits, or out of range) is refused at load, naming the key, because its double is not defined |
+| A key at its default in the canonical bytes | Left out, including a set that becomes empty (`display: {}`) and `record` when it equals its computed default. The form is the same whether the key is written or left out, so the round trip holds and a written default gets the same checks as a left-out one |
+| `note` in a named set | A string-valued `note` in `stimuli`, `trials`, `methods`, `devices`, `vars`, `columns`, `data` and `session.fields` is the set's note, as D1 says for any object; such a set has no member named `note` with a string value. In a lookup's `map`, `note` is an ordinary level key |
+| Roles: `required` by default | `true`. Refuse a session with a required role unbound rather than run without its data. devices_spec 11.1 has one role of each spelling |
+| `name` on a node | Required. A node's path names it in data and seeds (D8) |
+| `session.fields` without `participant` | Refused, because a leaf's rules take the participant from it (2.4) |
+| A container's `rules`, `tracks`, `interleave`, `track_rate`, `requeue` | Refused: only a leaf opens a `ytr_trials` (2.4), and a container's rows run in table order |
+| `$contrast_shown` with two stimuli with `{"michelson": ...}` shown in one trial | Refused: the variable has one value |
+| A variable's `phase` | Session fields at session start; a container's table columns at a child node's start; a leaf's columns, `vars`, jitters and built-ins at trial start; `response`, `rt_s`, `responded`, `correct` and `outcome` in `after`; `estimate` only in `columns` (2.3: after the update, which is after `after`) |
+| Step `set` and `to` | Numeric properties only: a timeline channel carries a float; a resource, a layout key or an enum is fixed at load |
+| `$response` in `response.trigger.code` | Known there: a response rule's code is per choice (G8) |
+
+## Explanation: gaps found in the format
+
+These are the places where the format is silent or ambiguous. The list
+gives the choice the loader made; a later version of the format can
+decide otherwise.
+
+| Section | Gap | Choice here | Proposal |
+|---|---|---|---|
+| D1 | `note` on a named set: a member, or a note? | a string `note` is the set's note | say so in D1 |
+| 2.1 | `session.fields` without `participant`; field `type` and `required` have no default | refused; both keys required | list them |
+| 2.2 | a lookup in a duration key | allowed, each map value a duration | say so |
+| 2.2, 2.3 | `$contrast_shown` with two michelson stimuli | refused | a per-stimulus variable if a task needs two |
+| 2.3 | `$estimate` is "after the update", and `after` runs before the update (1.2) | known only in `columns` | say so |
+| 2.3 | whether a `vars` value is known before trial start | no: trial start, as the table says, so a node's `if` cannot read it | say so |
+| 2.4 | `name` not marked required | required | mark it |
+| 2.4 | `rules`, `tracks`, ... on a container, and a container's row order | refused; table order | say which keys are leaf-only |
+| 2.5, 2.6 | no default for `interleave`, `track_rate`, `repetitions`, `record_data`, `outcome`, `method_value`, `ease`, `stagger_s`, a step's `duration_s` and `delay_s`, a role's `required`, `min_tier`, `kind`, `estimate` per method | the table above | adopt it |
+| 2.5, 2.3 | `outcome` default with no response; `method_value` default with no tracks | not checked, lowering ignores them | say so |
+| 2.5 | `{"mark": NAME}`: is "end" reserved (2.5 has an implicit `end` MARK)? no name rule | any non-empty string | reserve `end` |
+| 2.6 | `persist` and `response_ends_trial`: one meaning, two keys, two IDs | both kept; independent | define one of them |
+| 2.6 | which response keys are required | `role`, `from` | say so |
+| 2.7 | "Each is a literal, not a variable": but `text` takes a variable in the examples | literal for all but `text` | say "all but `text`" |
+| 2.7 | on an `rdk`, `edge` and `aperture` name both yrdk's and gfx's field | yrdk's `edge`; one `aperture` for both | `dot_edge` for gfx's |
+| 2.7 | `sound` and `video`: no parameter table | `audio` plus `db`, `channels`, `offset`, `frames`, `loops`; `video` plus yvid's rows and the image's | list them |
+| 2.7 | `visible` is a table row, but `on` and `off` drive it | key kept with the table's default | drop the key |
+| 2.8 | a quest axis cannot express `param[].prior`, `nuisance` or `stim[].values` as a grid of points | refused | an object axis form |
+| D10 | "a trigger at its onset" with steps in `if` | an `if` body counts as inline; `wait_s`, `at_s` and `then` end the onset | say so |
+
+## Results
+
+On 2026-11-09, Linux desktop, gcc 12.2, on the corpus in `tests/experiment/`.
+
+| Check | Result |
+|---|---|
+| `tests/adapt/experiment_test.c` | 1370 checks pass; the same as C and C++17; ASan and UBSan clean under `setarch -R` |
+| Corpus | The four worked examples of 2.14, `examples/pack/stroop/` and a kitchen-sink file: each loads with the test host and with none, equal to its golden dump; canonical bytes load back to the same form and the same bytes and ID |
+| Negative corpus | 137 files, one per refusal, each compared with its message and its line and column |
+| A key at its default | 464 keys of the format's table: written out or left out gives the same ID |
+| Table against headers | 925 checks: `tests/adapt/experiment_tables_test.c` |
+| Fuzzing, mutants, arena | See the status entry |
+
+Cost: arena use on the worked examples is 136 to 174 KB (135,909 bytes for
+the 1,089-byte RDK file, 173,970 for the 2,739-byte Stroop file): about 97
+KB of work space and about 36 bytes per byte of source. A definition is read
+once per session: a load is not on the frame path, and no timing claim is
+made here because another job was using the machine during the run.
+
+## Not done
+
+- No lowering and no `--sim` run: the next task.
+- The pack tool still writes a definition as ysp/json.h's canonical bytes
+  without dropping defaults (D2's "Not built"). The change is one call to
+  `yexp_canonical()`: it moves the experiment ID and the pack ID of every
+  pack whose definition writes a key at its default.
+- `rules()` and `check_ops()` are exercised through a test host only; no
+  host calls `ytr_rules()` or `ytl_check_ops()` yet.
+- No run on macOS, Windows or emcc. The unit test is not in the emcc CI
+  list because it reads files; the compile check is.
