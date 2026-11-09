@@ -722,6 +722,9 @@ endif()
 if(YSP_BUILD_TESTS)
     ysp_add_program(test_param_tables tests/adapt/param_tables_test.c core methods devices rig)
     add_test(NAME test_param_tables COMMAND test_param_tables)
+    # ysp/experiment.h's table of defaults against the headers it came from.
+    ysp_add_program(test_experiment_tables tests/adapt/experiment_tables_test.c core methods devices rig)
+    add_test(NAME test_experiment_tables COMMAND test_experiment_tables)
 endif()
 if(TARGET SDL3::SDL3 AND YSP_BUILD_EXAMPLES)
     # The jsPsych-style trials of examples/response/ (docs/response.md,

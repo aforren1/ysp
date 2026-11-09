@@ -229,9 +229,11 @@ static size_t mutate(char* buf, size_t n) {
     static tok tk[16384];
     int edits = 1 + (int)(gen() % 3), e;
     for (e = 0; e < edits; e++) {
-        int nt = tokenize(buf, n, tk, 16384);
+        int nt;
         uint64_t m = gen() % 100;
-        if (n < 2 || nt < 4) m = 90;
+        if (n < 1) break;
+        nt = tokenize(buf, n, tk, 16384);
+        if (nt < 4) m = 99;   /* too few tokens to edit: bytes */
         if (m < 30) {
             /* a string becomes a word of the format */
             int t = (int)(gen() % (uint64_t)nt), tries = 0;

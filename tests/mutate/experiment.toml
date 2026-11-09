@@ -1,0 +1,503 @@
+# ysp/experiment.h mutants: refusals, the defaults, the canonical bytes, the
+# scopes and lookups, and the host's skip records. docs/experiment.md lists
+# the results.
+header = "ysp/experiment.h"
+
+[test.experiment]
+source = "tests/adapt/experiment_test.c"
+compiler = "gcc"
+flags = ["-std=c11", "-O1", "-w"]
+libs = ["-lm"]
+timeout = 120
+env = { YEXP_CORPUS = "{repo}/tests/experiment" }
+
+[[mutant]]
+id = "e-01"
+name = "a newer version accepted"
+test = "experiment"
+why = "D12: a player must refuse a version it does not read."
+find = '''if (version > YEXP_FORMAT_VERSION) {'''
+replace = '''if (version > YEXP_FORMAT_VERSION + 1) {'''
+
+[[mutant]]
+id = "e-02"
+name = "the format string not checked"
+test = "experiment"
+why = "Another format's JSON would load as a definition."
+find = '''if (!fmt || fmt->type != YJS_STRING || !yexp__streq(fmt->u.s, "ysp-experiment")) {'''
+replace = '''if (!fmt || fmt->type != YJS_STRING) {'''
+
+[[mutant]]
+id = "e-03"
+name = "an unknown key ignored"
+test = "experiment"
+why = "A misspelled key silently takes its default."
+find = '''if (ri < 0) { yexp__unknown(c, sect, mask, m, elem); continue; }'''
+replace = '''if (ri < 0) { continue; }'''
+
+[[mutant]]
+id = "e-04"
+name = "name rule: one byte too long"
+test = "experiment"
+why = "63 bytes is the data writer's column rule."
+find = '''if (i >= YEXP__MAX_NAME) return false;'''
+replace = '''if (i >= YEXP__MAX_NAME + 1) return false;'''
+
+[[mutant]]
+id = "e-05"
+name = "a name's first character can be a digit"
+test = "experiment"
+why = "A name is [A-Za-z_][A-Za-z0-9_]*."
+find = '''if (!s || !((s[0] >= 'A' && s[0] <= 'Z') || (s[0] >= 'a' && s[0] <= 'z') || s[0] == '_')) return false;'''
+replace = '''if (!s) return false;'''
+
+[[mutant]]
+id = "e-06"
+name = "a named set's names not checked"
+test = "experiment"
+why = "A stimulus named 'a-b' would reach the data writer."
+find = '''        if (!yexp__name_ok(m->key)) {
+            yexp__err(c, m->key_pos, "%s: '%s': a name is'''
+replace = '''        if (0) {
+            yexp__err(c, m->key_pos, "%s: '%s': a name is'''
+
+[[mutant]]
+id = "e-07"
+name = "a duration key without _s not named"
+test = "experiment"
+why = "D4: the loader refuses it and names the suffixed key."
+find = '''if (ri >= 0 && yexp__rows[ri].type == YEXP__T_DUR) {'''
+replace = '''if (0) {'''
+
+[[mutant]]
+id = "e-08"
+name = "a duration variable without _s"
+test = "experiment"
+why = "D4: every variable that holds a duration ends in _s."
+find = '''if ((allow & YEXP__AV_DUR) && !(allow & YEXP__AV_STR) && !yexp__ends_s(s + 1)) {'''
+replace = '''if (0) {'''
+
+[[mutant]]
+id = "e-09"
+name = "a unit string does not say seconds"
+test = "experiment"
+why = "D4: the message says \"seconds\"."
+find = '''yexp__err(c, src->pos, "%s: '%s': a duration is a number of seconds or a \"$variable\" that holds seconds, not the text \"%s\" (D4)", elem, key, s);'''
+replace = '''yexp__err(c, src->pos, "%s: '%s': a bad value \"%s\"", elem, key, s);'''
+
+[[mutant]]
+id = "e-10"
+name = "a lua value accepted"
+test = "experiment"
+why = "D6: version 1 refuses scripts by name."
+find = '''if (yjs_get(src, "lua")) {'''
+replace = '''if (0) {'''
+
+[[mutant]]
+id = "e-11"
+name = "a template script key"
+test = "experiment"
+why = "D6: refused by name."
+find = '''if (yjs_get(m->value, "script")) {'''
+replace = '''if (0) {'''
+
+[[mutant]]
+id = "e-12"
+name = "a version 2 key not named"
+test = "experiment"
+why = "A file from a newer format gets a clear message, not 'unknown key'."
+find = '''if (yexp__is_v2(key)) {'''
+replace = '''if (0) {'''
+
+[[mutant]]
+id = "e-13"
+name = "a vars name reuses a built-in"
+test = "experiment"
+why = "2.3: refused at load."
+find = '''if (is_vars && yexp__is_builtin(m->key)) {'''
+replace = '''if (0) {'''
+
+[[mutant]]
+id = "e-14"
+name = "a jitter reuses a built-in"
+test = "experiment"
+why = "2.3: refused at load."
+find = '''                if (yexp__is_builtin(w[1])) {'''
+replace = '''                if (0) {'''
+
+[[mutant]]
+id = "e-15"
+name = "a jitter without _s"
+test = "experiment"
+why = "D4: a jitter holds seconds."
+find = '''if (is_jit && !yexp__ends_s(w[1])) {'''
+replace = '''if (0) {'''
+
+[[mutant]]
+id = "e-16"
+name = "sibling names may repeat"
+test = "experiment"
+why = "2.4: a node's path names it in data and seeds."
+find = '''                if (out[a].name && yexp__streq(out[a].name, out[i].name))'''
+replace = '''                if (0)'''
+
+[[mutant]]
+id = "e-17"
+name = "two verbs in one step"
+test = "experiment"
+why = "A step does one thing; one verb would be dropped."
+find = '''                if (verb >= 0) {'''
+replace = '''                if (0) {'''
+
+[[mutant]]
+id = "e-18"
+name = "a dangling stimulus in a step"
+test = "experiment"
+why = "Refused at load, not in a session."
+find = '''                if (!yexp_stim_get(c->d, nm)) yexp__err(c, tg->pos, "%s: '%s': no stimulus named '%s'", elem, yexp__verbs[verb], nm);'''
+replace = '''                (void)0;'''
+
+[[mutant]]
+id = "e-19"
+name = "a dangling response 'from'"
+test = "experiment"
+why = "Refused at load."
+find = '''if (name && !yexp_stim_get(c->d, name)) yexp__err(c, src->pos, "%s: 'from': no stimulus named '%s'", elem, name);'''
+replace = '''(void)name;'''
+
+[[mutant]]
+id = "e-20"
+name = "a trigger on an input role"
+test = "experiment"
+why = "A trigger needs an output role."
+find = '''else if (r->direction == 0) yexp__err(c, src->pos, "%s: 'role': '%s' is an input role; a trigger needs an output", elem, role);'''
+replace = '''else (void)0;'''
+
+[[mutant]]
+id = "e-21"
+name = "a dangling method in tracks"
+test = "experiment"
+why = "Refused at load."
+find = '''if (!ms[i]) yexp__err(c, x->pos, "%s: 'tracks': no method named '%s'", elem, tv->items[i].str);'''
+replace = '''(void)0;'''
+
+[[mutant]]
+id = "e-22"
+name = "a variable used before it is known"
+test = "experiment"
+why = "2.3: known-from."
+find = '''    if (r.phase > need)'''
+replace = '''    if (0)'''
+
+[[mutant]]
+id = "e-23"
+name = "after a variable is known one phase early"
+test = "experiment"
+why = "'after' variables must not reach the first sequence."
+find = '''    if (r.phase > need)'''
+replace = '''    if (r.phase > need + 1)'''
+
+[[mutant]]
+id = "e-24"
+name = "leaf-only keys allowed on a container"
+test = "experiment"
+why = "A container opens no sequence."
+find = '''if (y && y->given) yexp__err(c, y->pos, "%s: '%s' is for a leaf (a node with 'trial'); a container opens no sequence", elem, leaf_only[k]);'''
+replace = '''(void)y;'''
+
+[[mutant]]
+id = "e-25"
+name = "the default record drops the response's from"
+test = "experiment"
+why = "D10's default; the golden dumps pin it."
+find = '''    if (t->response && t->response->from) out[n++] = t->response->from;'''
+replace = '''    (void)t;'''
+
+[[mutant]]
+id = "e-26"
+name = "a wait does not end a trigger's onset"
+test = "experiment"
+why = "D10: a trigger at the stimulus's onset, not later in the sequence."
+find = '''        case YEXP_WAIT: case YEXP_AT: case YEXP_THEN:
+            *n_pending = 0;
+            break;'''
+replace = '''        case YEXP_WAIT: case YEXP_AT: case YEXP_THEN:
+            break;'''
+
+[[mutant]]
+id = "e-27"
+name = "a key at its default stays in the canonical bytes"
+test = "experiment"
+why = "D2: a key at its default is left out."
+find = '''            if (at_default && (r->flags & YEXP__R_SELF) == 0) {'''
+replace = '''            if (0) {'''
+
+[[mutant]]
+id = "e-28"
+name = "a real keeps its source text"
+test = "experiment"
+why = "D2's open point: the ID depends on the double."
+find = '''        *canon = (v->flags & YEXP_VF_INT) ? yjs_new_int(c->a, v->i) : yjs_new_double(c->a, x);'''
+replace = '''        *canon = yjs_copy(c->a, src);'''
+
+[[mutant]]
+id = "e-29"
+name = "a duration keeps its source text"
+test = "experiment"
+why = "D2: written as the exact decimal of its nanoseconds."
+find = '''        if (canon) { *canon = yjs_new_fixed(c->a, ns, 9); if (!*canon) c->nomem = true; }'''
+replace = '''        if (canon) { *canon = yjs_copy(c->a, src); if (!*canon) c->nomem = true; }'''
+
+[[mutant]]
+id = "e-30"
+name = "an integer past 2^53 goes through a double"
+test = "experiment"
+why = "Integer text stays exact (a seed, a code)."
+find = '''    if (src->flags & YJS_NUM_I64) {
+        v->flags = YEXP_VF_INT;'''
+replace = '''    if (0) {
+        v->flags = YEXP_VF_INT;'''
+
+[[mutant]]
+id = "e-31"
+name = "-0 stays -0 in the form"
+test = "experiment"
+why = "The fuzz target's first finding: the canonical form holds 0."
+find = '''    if (x == 0) x = 0;   /* -0 is 0: one spelling, one value (D2) */'''
+replace = '''    (void)x;'''
+
+[[mutant]]
+id = "e-32"
+name = "SHA-256: one round constant"
+test = "experiment"
+why = "The ID must be the SHA-256 of the bytes, for any reader to verify."
+find = '''0x428a2f98u'''
+replace = '''0x428a2f99u'''
+
+[[mutant]]
+id = "e-33"
+name = "no LF after the canonical bytes"
+test = "experiment"
+why = "One LF, as the pack stores the definition (pack.md 16)."
+find = '''    out[need] = '\n';
+    out[need + 1] = 0;
+    *bytes = out;
+    *n = need + 1;'''
+replace = '''    out[need] = 0;
+    *bytes = out;
+    *n = need;'''
+
+[[mutant]]
+id = "e-34"
+name = "a level without a key accepted"
+test = "experiment"
+why = "2.2: a missing key would stop a session."
+find = '''        if (k < 0) c->lv[nmiss++] = c->lv[i];'''
+replace = '''        if (k < 0) (void)0;'''
+
+[[mutant]]
+id = "e-35"
+name = "no warning for a key no level reaches"
+test = "experiment"
+why = "2.2: a warning, often a typo."
+find = '''            if (!v->reached_[k]) keys[nx++] = v->map[k].key;'''
+replace = '''            if (0) keys[nx++] = v->map[k].key;'''
+
+[[mutant]]
+id = "e-36"
+name = "practice can be true without its rule"
+test = "experiment"
+why = "pack.md 16: a key is required only for a value some trial can take."
+find = '''            if ((i >= 3 || s->rt[i]) && yexp__lv_push(c, "true")) return -1;'''
+replace = '''            if (yexp__lv_push(c, "true")) return -1;'''
+
+[[mutant]]
+id = "e-37"
+name = "outcome reaches timeout without a deadline"
+test = "experiment"
+why = "A timeout needs a deadline."
+find = '''        if (!(rsp->duration && rsp->duration->kind == YEXP_V_NUMBER && rsp->duration->i == 0) && yexp__lv_push(c, "timeout")) return -1;'''
+replace = '''        if (0 && yexp__lv_push(c, "timeout")) return -1;'''
+
+[[mutant]]
+id = "e-38"
+name = "a required key can be left out"
+test = "experiment"
+why = "A key with no default must be given."
+find = '''            if (r->flags & YEXP__R_REQ) {
+                yexp__err(c, src->pos, "%s: '%s' is required", elem, r->key);
+            } else if'''
+replace = '''            if (0) {
+                yexp__err(c, src->pos, "%s: '%s' is required", elem, r->key);
+            } else if'''
+
+[[mutant]]
+id = "e-39"
+name = "the display's min_tier range"
+test = "experiment"
+why = "2.1: 1 to 3."
+find = '''if (t->i < 0 || t->i > 3) yexp__err(c, t->pos, "display: 'min_tier' is 1 to 3");'''
+replace = '''(void)0;'''
+
+[[mutant]]
+id = "e-40"
+name = "a dangling gamut stimulus"
+test = "experiment"
+why = "Refused at load."
+find = '''        if (!st) { yexp__err(c, g->v->pos, "%s: '%s': no stimulus named '%s'", g->elem, g->key, name); continue; }'''
+replace = '''        if (!st) continue;'''
+
+[[mutant]]
+id = "e-41"
+name = "two michelson stimuli accepted for $contrast_shown"
+test = "experiment"
+why = "$contrast_shown has one value."
+find = '''if (B[i].need == 4 && s->michelson > 1) { *why = "only one stimulus with {\"michelson\": ...} in the template, since $contrast_shown has one value"; return false; }'''
+replace = '''(void)0;'''
+
+[[mutant]]
+id = "e-42"
+name = "$response not known in the response's trigger code"
+test = "experiment"
+why = "G8: the code is per choice."
+find = '''if (s->in_code && yexp__streq(name, "response") && s->t && s->t->response) return;'''
+replace = '''(void)0;'''
+
+[[mutant]]
+id = "e-43"
+name = "a seconds column without _s"
+test = "experiment"
+why = "D4: data columns follow the same rule."
+find = '''    if (v->kind == YEXP_V_VAR && yexp__ends_s(v->str) && !yexp__ends_s(m->key))'''
+replace = '''    if (0)'''
+
+[[mutant]]
+id = "e-44"
+name = "text from a built-in accepted"
+test = "experiment"
+why = "D14: the pack tool lays out the text; a built-in's text is not known then."
+find = '''            if (yexp__is_builtin(tv->str))
+                yexp__err(c, tv->pos, "%s: 'text': '$%s' is a built-in variable, whose text is not known at pack build; give each text with a lookup: {\"by\": \"$%s\", \"map\": {...}}", elem, tv->str, tv->str);
+            else if (session)'''
+replace = '''            if (session)'''
+
+[[mutant]]
+id = "e-45"
+name = "session fields without participant"
+test = "experiment"
+why = "rules take the participant number from this field (2.4)."
+find = '''    if (!has_participant && n)'''
+replace = '''    if (0)'''
+
+[[mutant]]
+id = "e-46"
+name = "a non-string note accepted"
+test = "experiment"
+why = "D1: a note is text."
+find = '''            if (m->value->type != YJS_STRING) yexp__err(c, m->value->pos, "%s: 'note' is a string", elem);
+            else yexp__put(c, out, "note", yexp__cstr(c, m->value->u.s));'''
+replace = '''            if (m->value->type == YJS_STRING) yexp__put(c, out, "note", yexp__cstr(c, m->value->u.s));'''
+
+[[mutant]]
+id = "e-47"
+name = "an ancestor's table not known at a child's start"
+test = "experiment"
+why = "A container's rows are inherited by its children (2.4)."
+find = '''            out->phase = n == s->leaf ? YEXP__PH_TRIAL : YEXP__PH_NODE;'''
+replace = '''            out->phase = YEXP__PH_TRIAL;'''
+
+[[mutant]]
+id = "e-48"
+name = "the report overflows past its capacity"
+test = "experiment"
+why = "The report is a fixed struct: the n_diags check keeps it in bounds."
+find = '''    if (r->n_diags >= YEXP_MAX_DIAGS) return;'''
+replace = '''    if (r->n_diags >= YEXP_MAX_DIAGS + 1) return;'''
+
+[[mutant]]
+id = "e-49"
+name = "a default in the table changed"
+test = "experiment"
+why = "The table is the format's: the golden dumps pin every default a corpus file shows."
+find = '''"miter_limit", "4", NULL }'''
+replace = '''"miter_limit", "5", NULL }'''
+
+[[mutant]]
+id = "e-50"
+name = "default response_ends_trial false"
+test = "experiment"
+why = "2.6's default; golden dumps pin it."
+find = '''YEXP__T_BOOL, 0, "response_ends_trial", "true", NULL }'''
+replace = '''YEXP__T_BOOL, 0, "response_ends_trial", "false", NULL }'''
+
+[[mutant]]
+id = "e-51"
+name = "default display calibration required"
+test = "experiment"
+why = "2.1's default; golden dumps pin it."
+find = '''YEXP__T_ENUM, 0, "calibration", "\"optional\"", "required=0,optional=1" }'''
+replace = '''YEXP__T_ENUM, 0, "calibration", "\"required\"", "required=0,optional=1" }'''
+
+[[mutant]]
+id = "e-52"
+name = "a canonical composite default stays"
+test = "experiment"
+why = "D2: a key at its default is left out; the default session is written."
+find = '''    if (cc && !yexp__at_default(c, (int)(yexp__slot_at(c, s, YEXP__S_ROOT, "session") - s) + c->first[YEXP__S_ROOT], cc)) yexp__put(c, croot, "session", cc);'''
+replace = '''    if (cc) yexp__put(c, croot, "session", cc);'''
+
+[[mutant]]
+id = "e-53"
+name = "a table column named a built-in"
+test = "experiment"
+why = "2.3: refused at load, through the host."
+find = '''        if (info.name && yexp__is_builtin(info.name))
+            yexp__err('''
+replace = '''        if (0)
+            yexp__err('''
+
+[[mutant]]
+id = "e-54"
+name = "the host's skipped checks not recorded"
+test = "experiment"
+why = "A missing provider is recorded as skipped."
+find = '''    if (present) r->run |= bit;
+    else r->skipped |= bit;'''
+replace = '''    if (present) r->run |= bit;'''
+
+[[mutant]]
+id = "e-55"
+name = "an unknown variable with no table in scope accepted"
+test = "experiment"
+why = "A dangling name is refused, not read as a column."
+find = '''    if (!yexp__resolve(c, s, name, &r, &why)) {
+        if (why) yexp__err('''
+replace = '''    if (0) {
+        if (why) yexp__err('''
+
+[[mutant]]
+id = "e-56"
+name = "a bool literal column on a leaf: the record default keeps a given list that equals it"
+test = "experiment"
+why = "A key at its default gives the same form as when left out."
+find = '''                out->record_given = true;'''
+replace = '''                out->record_given = false;'''
+
+[[mutant]]
+id = "e-57"
+name = "one line of a rule comment not stripped"
+test = "experiment"
+why = "A '#' starts a comment, as ytr_rules() reads it; a jitter named in a comment is not a jitter."
+find = '''        if (!*p || *p == '\n' || *p == '#') break;'''
+replace = '''        if (!*p || *p == '\n') break;'''
+
+[[mutant]]
+id = "e-58"
+name = "the variable-loop limit gone"
+test = "experiment"
+why = "Variables that name each other must be refused, not recursed forever."
+find = '''    if (depth > YEXP__VAR_DEPTH) {
+        yexp__err(c, pos, "%s: '%s': '$%s': variables nest more than %d deep; is there a loop?", elem, key, name, YEXP__VAR_DEPTH);
+        return;
+    }'''
+replace = '''    (void)pos;'''

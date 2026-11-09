@@ -479,6 +479,47 @@ static void run_numbers(void) {
         yjs_arena_free(&ar);
     }
     {
+        /* a 63-byte name loads; 64 bytes is the corpus file name_64_bytes */
+        uint8_t x[32];
+        const char* doc = "{\"format\":\"ysp-experiment\",\"version\":1,\"stimuli\":{\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\":{\"kind\":\"shape\"}},\"trials\":{},\"timeline\":[]}";
+        id_of(doc, strlen(doc), x);
+    }
+    {
+        /* -0 is 0: one spelling, one value (D2) */
+        static yexp_report r;
+        yjs_arena ar;
+        yexp_def* d = NULL;
+        const char* doc = "{\"format\":\"ysp-experiment\",\"version\":1,\"display\":{\"background\":[-0,-0.0,0.5]},\"trials\":{},\"timeline\":[]}";
+        yjs_arena_init_heap(&ar, 0);
+        CHECK(yexp_load(&ar, doc, strlen(doc), NULL, &d, &r) == YEXP_OK, "-0 loads");
+        if (d) CHECK(1.0 / d->background[0] > 0 && 1.0 / d->background[1] > 0, "the form holds 0, not -0");
+        yjs_arena_free(&ar);
+    }
+    {
+        /* a boolean's true without rules that make it: no warning, no refusal (pack.md 16) */
+        static yexp_report r;
+        yjs_arena ar;
+        yexp_def* d = NULL;
+        const char* doc =
+            "{\"format\":\"ysp-experiment\",\"version\":1,\"stimuli\":{\"s\":{\"kind\":\"shape\",\"x\":{\"by\":\"$practice\",\"map\":{\"false\":1}}}},"
+            "\"trials\":{\"t\":{\"events\":[{\"on\":\"s\"}]}},\"timeline\":[{\"name\":\"m\",\"trial\":\"t\"}]}";
+        yjs_arena_init_heap(&ar, 0);
+        CHECK(yexp_load(&ar, doc, strlen(doc), &g_host, &d, &r) == YEXP_OK && r.n_warnings == 0, "$practice has only 'false' when the rules cannot make it true");
+        yjs_arena_free(&ar);
+    }
+    {
+        /* a by whose levels are not all known is not checked, and warns about nothing */
+        static yexp_report r;
+        yjs_arena ar;
+        yexp_def* d = NULL;
+        const char* doc =
+            "{\"format\":\"ysp-experiment\",\"version\":1,\"stimuli\":{\"s\":{\"kind\":\"shape\",\"x\":{\"by\":\"$participant\",\"map\":{\"3\":1}}}},"
+            "\"trials\":{\"t\":{\"events\":[{\"on\":\"s\"}]}},\"timeline\":[{\"name\":\"m\",\"trial\":\"t\"}]}";
+        yjs_arena_init_heap(&ar, 0);
+        CHECK(yexp_load(&ar, doc, strlen(doc), &g_host, &d, &r) == YEXP_OK && r.n_warnings == 0, "a session field's levels are not known at load");
+        yjs_arena_free(&ar);
+    }
+    {
         /* a canonical file that holds "note" keeps it: a note is part of the hash (D1) */
         uint8_t x[32], y[32];
         const char* with = "{\"format\":\"ysp-experiment\",\"version\":1,\"note\":\"hello\",\"trials\":{},\"timeline\":[]}";
