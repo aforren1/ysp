@@ -190,7 +190,10 @@ On 2026-11-09, Linux desktop, gcc 12.2, on the corpus in `tests/experiment/`.
 | Negative corpus | 139 files, one per refusal, each compared with its message and its line and column |
 | A key at its default | 464 keys of the format's table: written out or left out gives the same ID |
 | Table against headers | 925 checks: `tests/adapt/experiment_tables_test.c` |
-| Fuzzing, mutants, arena | See the status entry |
+| Fuzzing (`tests/fuzz/experiment_fuzz.c`, self-driven, token-level mutations of the corpus) | 20,801,036 inputs under ASan and UBSan in 4 processes (`setarch -R`, gcc 12.2): 2,266,172 loaded and round-tripped, 18,534,775 refused, 89 out of memory, no report. An earlier run found one bug: `-0` stayed `-0.0` in the form while the canonical bytes held `0`, so the round trip differed; fixed, with a unit check and a mutant |
+| Coverage of the fuzz target (gcov, `-O0`, 500,259 inputs, 54,609 loads) | Header: 97.47% of 2213 lines; 98.64% of 2357 branches executed, 83.79% taken. Not reached: the work limit, the nesting and list limits, a full arena in the JSON parse, `yexp_section_name()` and three other small accessors |
+| Mutants (`tests/mutate/experiment.toml`) | 58 of 58 killed. e-04 survived its first run (no test of a 64-byte name), and got a corpus file |
+| Compile checks | C99, C11 and C++17 with warnings as errors; the unit test also as C++17 under ASan and UBSan |
 
 Cost: arena use on the worked examples is 136 to 174 KB (135,909 bytes for
 the 1,089-byte RDK file, 173,970 for the 2,739-byte Stroop file): about 97

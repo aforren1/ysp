@@ -658,6 +658,19 @@ Status:
 
 ## Formats not built
 
+### ysp/experiment.h
+
+- Header: [ysp/experiment.h](../include/ysp/experiment.h)
+- Prefix: `yexp_`, `YEXP_`
+- Platforms: any
+- Needs: ysp/json.h
+
+Purpose: Reads a version 1 experiment definition into a checked, fully defaulted form in the caller's arena: session, display, roles, stimuli, methods, templates and the tree of nodes, with every default from one table of the format's (D2). Each refusal names the element and the key, with the line and the column. Checks that need something outside the file (pack entries, table columns and levels, the rig's roles, parameter tables, `ytr_rules()`, `ytl_check_ops()`) go through a caller-supplied host; a missing function is recorded as skipped. Writes the canonical bytes with defaults left out and gives the experiment ID. It lowers nothing and runs nothing.
+
+Status:
+
+- v0.1.0 (2026-11-09, Linux desktop, gcc 12.2). 1390 checks in the unit test, as C and C++17, ASan and UBSan clean; 6 corpus files against golden dumps with a round trip through the canonical bytes; 139 refusals, each against its message and place; 464 keys written at their defaults give the ID of the same key left out; 925 checks of the table against the headers' parameter tables. 20,801,036 fuzz inputs under ASan and UBSan, 2,266,172 of them loaded, no report; gcov on the target: 97.47% of the header's lines. 58 of 58 mutants killed. No player uses it yet; no run on Windows, macOS or emcc. [Design notes](experiment.md).
+
 ### The experiment definition
 
 - Design: [experiment_format.md](experiment_format.md)
