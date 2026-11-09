@@ -4,7 +4,7 @@ Status: draft for review, 2026-11-06. Steps 2 to 4 of section 13 (the C
 side) are built as `ysp/sig.h` v0.1.0 (prefix `ysig_`, 2026-11-07;
 [sig.md](sig.md) is its manual). Section 14 lists where the header
 differs from this draft and why; the sections below say so where they
-changed. Read it with
+changed. Section 15 tests the designer-level components on paper. Read it with
 [rig_spec.md](rig_spec.md) section 6 (the player),
 [experiment_format.md](experiment_format.md) D6 and D7 (no expression
 language; anything else is a script) and
@@ -662,6 +662,9 @@ The definition's top level gains `roles`: name to type and unit space
 definition has no device nodes unless a role's units are `device`; the
 rig profile supplies the adapters.
 
+Authors work in components that expand to these nodes (section 15), and
+the graph is the advanced view.
+
 This is a change to D7 (the three-part template), so it is format
 version 2 (D12). It keeps "a data-only experiment has no script": a
 graph is data. The four worked examples of experiment_format.md section
@@ -768,3 +771,248 @@ needed by a ported example or found by a measurement.
 | 8 | Replay from the source rows | A journal of every call; bit for bit on one build | Frames, channel values, arms and sets change values too |
 | 8 | Rows to `yds_stream()` | A callback | No I/O in the header |
 | 9 | `ysig_check(nodes, n)`, `ysig_arena_size(nodes, n)`, `ysig_frame(g, yscr_frame*, base)` | Both take the desc; `ysig_frame(g, ysig_frame_in*)` | Roles, adapters, custom ops and channels are part of the check and the size; ysp/input.h is the only dependency |
+
+## 15. Paper test: four tasks as definitions
+
+Status: a design exercise, 2026-11-08. No code reads these definitions.
+The aim is to find what a designer user must set for a continuous task,
+and what the format cannot express yet. Designer authoring is the
+baseline; the C and Python surfaces come after it.
+
+### 15.1 The proposal under test
+
+A template gains `controls`: name to component. The designer shows
+components. Each one expands to graph nodes at load, as a step expands
+to timeline ops. The graph of section 5 stays as the advanced view.
+
+| Component | The author sets | Expands to |
+|---|---|---|
+| `cursor` | the role or roles, a transform, the stimulus | `role`, `select`, `join` or `mean`, `affine`, `bind` |
+| `region` | what it tests, a shape, `stay_s` | `detect` |
+| `movement` | what moves, the onset distance | `detect`, `emit` |
+| `moving_target` | the sines, the stimulus | `sines`, `scale`, `bind` |
+| `trace` | what to record, at which rate | `join`, `record` |
+
+Steps gain `{"until": CONTROL}`: the sequence waits for that control's
+hit. Components that a task needs and this list lacks are findings
+(section 15.7). The definitions below use them and name them in
+**bold** in section 15.6's table. They show only the keys that change;
+stimuli and tables are as in experiment_format.md.
+
+### 15.2 Visuomotor rotation (`trial_visuomotor`)
+
+```json
+{
+  "roles": { "hand": { "type": "position2d", "units": "workspace_cm", "allow_relative": true } },
+  "trials": { "reach": {
+    "controls": {
+      "cursor":      { "control": "cursor", "role": "hand", "stimulus": "dot",
+                       "rotation_deg": "$rotation_deg", "about": [0, 0] },
+      "near_start":  { "control": "region", "of": "hand", "center": [0, 0], "radius": 2.7 },
+      "at_start":    { "control": "region", "of": "hand", "center": [0, 0], "radius": 0.5, "stay_s": 0.5 },
+      "past_target": { "control": "region", "of": "hand", "center": [0, 0], "outside": 10.8 },
+      "aid":         { "control": "distance", "of": "hand", "from": [0, 0], "stimulus": "ring", "property": "size", "scale": 2 },
+      "moved":       { "control": "movement", "of": "hand", "onset": 1.0, "from": "at_start" },
+      "path":        { "control": "trace", "of": ["hand", "cursor"], "rate": "sample", "from": "at_start", "to": "past_target" }
+    },
+    "events": [
+      { "set": "dot", "props": { "visible": { "signal": "near_start" } } },
+      { "on": "ring" }, { "until": "at_start" }, { "off": "ring" },
+      { "set": "dot", "props": { "visible": { "by": "$feedback", "map": { "online": true, "endpoint": false, "none": false } } } },
+      { "on": "target" }, { "until": "past_target" }
+    ],
+    "response": { "choices": [{ "signal": "moved" }], "from": "target", "response_ends_trial": false },
+    "after": [
+      { "freeze": "cursor" },
+      { "set": "dot", "props": { "visible": { "by": "$feedback", "map": { "online": true, "endpoint": true, "none": false } } } },
+      { "wait_s": 0.5 }, { "off": "target" }
+    ],
+    "columns": { "hand_end_x": { "hit": "past_target", "lane": "x" }, "hand_end_y": { "hit": "past_target", "lane": "y" } }
+  } },
+  "timeline": [
+    { "name": "baseline", "timeline_variables": "targets", "rules": ["order random", "reps 5"], "trial": "reach",
+      "vars": { "rotation_deg": 0, "feedback": "online" } },
+    { "name": "rotation", "timeline_variables": "targets", "rules": ["order random", "reps 10"], "trial": "reach",
+      "vars": { "rotation_deg": 30, "feedback": "online" } },
+    { "name": "washout", "timeline_variables": "targets", "rules": ["order random", "reps 5"], "trial": "reach",
+      "vars": { "rotation_deg": 0, "feedback": "none" } }
+  ]
+}
+```
+
+The hand angles (at a third of the radius, at peak speed) are not
+columns. They are arithmetic on the trace, so they belong to the
+analysis. The hand keeps its place across trials (finding 12).
+
+### 15.3 Two-mouse tracking and reaching (`trial_bimanual`)
+
+```json
+{
+  "roles": { "left": { "type": "position2d", "units": "workspace_cm", "allow_relative": true },
+             "right": { "type": "position2d", "units": "workspace_cm", "allow_relative": true } },
+  "trials": {
+    "track": {
+      "controls": {
+        "cursor": { "control": "cursor", "x": "left.x", "y": "right.y", "stimulus": "dot",
+                    "transform": { "by": "$perturb", "map": { "none": "identity", "rotation": { "rotation_deg": -90 }, "mirror": "swap_xy" } } },
+        "goal":   { "control": "moving_target", "stimulus": "target", "amplitude": 0,
+                    "x": { "amps_cm": [2.31, 2.31, 2.31, 1.76, 1.30, 0.97, 0.73], "freqs_hz": [0.10, 0.25, 0.55, 0.85, 1.15, 1.55, 2.05] },
+                    "y": { "amps_cm": [2.31, 2.31, 2.31, 1.58, 1.03, 0.81, 0.70], "freqs_hz": [0.15, 0.35, 0.65, 0.95, 1.45, 1.85, 2.15] },
+                    "phase": { "random": [-3.14159265, 3.14159265], "per": "block" } },
+        "inside": { "control": "region", "of": "cursor", "center": { "signal": "goal" }, "radius": 0.8 },
+        "ready":  { "control": "region", "of": "cursor", "center": [0, 0], "radius": 0.8, "stay_s": 0.2, "speed_below": 6.5 },
+        "frames": { "control": "trace", "of": ["goal", "cursor", "left", "right"], "rate": "frame" }
+      },
+      "events": [
+        { "on": ["target", "dot"] }, { "until": "ready" },
+        { "set": "target", "props": { "color": { "when": "inside", "then": [1, 1, 0], "else": [0.5, 0.5, 0.5] } } },
+        { "to": "goal", "props": { "amplitude": 1 }, "duration_s": 5 }, { "wait_s": 41 }
+      ]
+    },
+    "reach": {
+      "controls": {
+        "cursor": { "control": "cursor", "x": "left.x", "y": "right.y", "stimulus": "dot",
+                    "transform": { "by": "$perturb", "map": { "none": "identity", "rotation": { "rotation_deg": -90 }, "mirror": "swap_xy" } } },
+        "left_start": { "control": "movement", "of": "cursor", "onset": 1.0, "from": "target" },
+        "top_speed":  { "control": "peak", "of": "cursor", "measure": "speed", "from": "left_start" },
+        "arrived":    { "control": "region", "of": "cursor", "center": ["$goal_x", "$goal_y"], "radius": 1.0, "stay_s": 1, "speed_below": 6.5 },
+        "path":       { "control": "trace", "of": ["cursor", "left", "right"], "rate": "sample" }
+      },
+      "events": [
+        { "wait_s": 0.5 }, { "on": "target" }, { "until": "arrived" },
+        { "set": "target", "props": { "color": { "when": { "signal": "top_speed", "above": 39 }, "then": [1, 1, 0], "else": [0, 0, 1] } } }
+      ],
+      "response": { "choices": [{ "signal": "left_start" }], "from": "target", "response_ends_trial": false },
+      "columns": { "peak_speed_cm_s": { "signal": "top_speed" } }
+    }
+  },
+  "timeline": [
+    { "assign_roles": ["left", "right"], "by": "click" },
+    { "name": "baseline_track", "trial": "track", "rules": ["reps 2"], "vars": { "perturb": "none" } },
+    { "name": "baseline_reach", "trial": "reach", "rules": ["reps 30"],
+      "vars": { "perturb": "none", "goal": { "walk2d": { "step_cm": 12, "box_cm": [20, 20] } } } }
+  ]
+}
+```
+
+The default block list repeats those two nodes with `perturb` set. The
+frequency analysis and the alignment matrix use the `frames` stream, in
+the analysis.
+
+### 15.4 Mouse tracking (`trial_mouse_tracking`)
+
+```json
+{
+  "roles": { "pointer": { "type": "position2d", "units": "display_px" } },
+  "trials": { "choose": {
+    "controls": {
+      "moved": { "control": "movement", "of": "pointer", "onset": 10, "from": "start_click" },
+      "path":  { "control": "trace", "of": ["pointer"], "rate": "sample", "from": "start_click" }
+    },
+    "events": [
+      { "on": ["start_button", "box_left", "box_right"] },
+      { "until": { "click_in": "start_button", "name": "start_click" } },
+      { "off": "start_button" }, { "on": "disc" }
+    ],
+    "response": { "role": "pointer", "from": "disc",
+                  "choices": [{ "click_in": "box_left", "name": "red" }, { "click_in": "box_right", "name": "blue" }],
+                  "key_answer": "$color" },
+    "after": [{ "off": ["disc", "box_left", "box_right"] }, { "wait_s": 1 }],
+    "columns": { "init_time_s": { "signal": "moved", "from": "disc" } }
+  } }
+}
+```
+
+`max_deviation` is arithmetic on the trace: the analysis.
+
+### 15.5 Gaze-contingent window (`gfx/gaze_contingent`)
+
+```json
+{
+  "roles": { "eye": { "type": "gaze", "units": "display_px" } },
+  "trials": { "view": {
+    "controls": {
+      "window": { "control": "cursor", "role": "eye", "stimulus": "sharp", "lowpass_hz": 30, "also": ["source_x", "source_y"] },
+      "lost":   { "control": "signal_lost", "of": "eye", "after_s": 0.1 },
+      "gaze":   { "control": "trace", "of": ["eye"], "rate": "sample" }
+    },
+    "events": [
+      { "on": ["blurred", "sharp"] },
+      { "set": "sharp", "props": { "visible": { "when": "lost", "then": false, "else": true } } },
+      { "wait_s": 10 }
+    ]
+  } }
+}
+```
+
+### 15.6 What an author sets
+
+| Task | Templates | Controls | Values set in controls | Steps | Components not in the list |
+|---|---|---|---|---|---|
+| Visuomotor rotation | 1 | 7 | 27 | 11 | **`distance`** |
+| Two-mouse tracking and reaching | 2 | 10 | 51 | 9 | **`peak`** |
+| Mouse tracking | 1 | 2 | 6 | 6 | none |
+| Gaze-contingent window | 1 | 3 | 9 | 3 | **`signal_lost`** |
+
+A numeric list (a point, a color, the amplitudes) counts as one value.
+
+Bold marks a component or key that is not in section 15.1's list.
+
+### 15.7 Findings
+
+The five components carry the signal path of all four tasks. The missing
+parts are mostly trial state. None of the four tasks needs a script.
+
+| # | Need | Seen in | Proposal | Lands in |
+|---|---|---|---|---|
+| 1 | A boolean signal as a stimulus property, set by a step | visuomotor (`visible`), gaze | `{"signal": NAME}` as a value for a step's `set`, which replaces the property's source until the next `set` | format |
+| 2 | A property chosen per frame from a boolean | tracking (`color`), reach, gaze | `{"when": TEST, "then": V, "else": V}` | format; a `select`-like op |
+| 3 | Freeze a cursor at a detector's value | visuomotor (endpoint feedback) | `{"freeze": CONTROL}` step, and the hit's value in place of the live value | format; an op or a `bind` mode |
+| 4 | Distance from a point as a value | visuomotor (the return ring) | **`distance`** component; a `distance` op (now only inside `detect`, lane -1) | sig.h |
+| 5 | The largest value over a window | bimanual (peak speed) | **`peak`** component and op, with a reset at a control's hit | sig.h |
+| 6 | Two tests at once | bimanual (in the target and slow) | `speed_below` on `region`; an `all` op | sig.h |
+| 7 | A region centered on a moving signal | tracking (`inside`) | `center` takes `{"signal": NAME}`; expands to `diff` and `detect` | component |
+| 8 | Random values drawn per block | tracking (phases; F23) | `{"random": [lo, hi], "per": "block"}` in a control, or vars per block | trials.h, format |
+| 9 | A target chained from the last target | bimanual reach | `{"walk2d": ...}` draw in `vars`. It depends on the last target, not on the hand, so it is known before the trial and is not a script | trials.h, format |
+| 10 | A press inside a stimulus | mouse tracking (start button, boxes) | `{"click_in": STIMULUS}` as a choice and in `until`; the hit test with a press's position | format; response.h or the player |
+| 11 | A setup step that binds devices to roles | bimanual (click each mouse) | `{"assign_roles": [...], "by": "click"}` node; a rig profile may bind by device instead | format, rig profile |
+| 12 | A role that keeps its state across trials | visuomotor, bimanual (the hand stays where it is) | `"keep": true` on a role: no reset of its adapter between trials | format; `ysig_reset` |
+| 13 | Loss of a signal | gaze (track loss) | **`signal_lost`** component: no sample for a time, or the eye's PROXIMITY | sig.h |
+| 14 | Units in cm on the display | visuomotor, bimanual | `display.units` gains `cm`, from the rig's `view` | format |
+| 15 | A column from a control's hit or value | visuomotor, bimanual, mouse tracking | `{"hit": NAME, "lane": L}`, `{"signal": NAME}` as a column value | format |
+
+Findings about the test itself:
+
+- **The count does not fall.** Visuomotor's controls set 27 values, the
+  same as the 27 parameters its C graph sets, and they also cover the
+  return ring and the trace, which the C program does outside the graph.
+  The gain is in the words an author uses, not in how many values.
+- **Repeated controls.** `trial_bimanual`'s two templates repeat the
+  same `cursor` (7 values). A definition needs named controls shared by
+  templates, as `stimuli` are.
+- **Section 3.2 stands.** "A target placed from where the hand stopped"
+  is still a script. `trial_bimanual`'s chain is another case: it depends
+  only on the last target (finding 9).
+- **`from` names three kinds of thing:** a control (`at_start`), a
+  stimulus's onset (`target`) and a named click (`start_click`). The
+  loader must resolve them in one namespace, and the designer must offer
+  them in one list.
+- **A control as a step's target.** `{"to": "goal", ...}` tweens a
+  control's parameter, so a step must address controls as it addresses
+  stimuli.
+- **A response whose choices are signals has no role.** Section 2.6 of
+  the format requires one; it becomes optional for these choices.
+- **Arithmetic stays in the analysis.** Hand angles, the frequency
+  response and `max_deviation` do not need the definition, unless a
+  task gives feedback from them. A task that scores a reach by its angle
+  online needs a `heading` op or a script. None of these four does.
+- **Words a designer user must learn:** role, control, `until`, `from`,
+  and the difference between a control's hit and its value. The op vocabulary (`affine` with `pre_x`,
+  `emit` kind, `detect` lane -1, `join` for a trace) does not appear.
+
+### 15.8 What this changes in the order of work
+
+Before format version 2, decide findings 1 to 3 and 12 with the player's
+sequence model: they change what a step can do, so they are the part of
+D7 that this work reopens. Findings 4 to 7 and 13 are small additions to
+`ysp/sig.h`. Findings 8 and 9 belong with F23 in `ysp/trials.h`.
