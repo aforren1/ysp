@@ -211,16 +211,17 @@ On 2026-11-09, Linux desktop, gcc 12.2, on the corpus in `tests/experiment/`.
 
 | Check | Result |
 |---|---|
-| `tests/adapt/experiment_test.c` | 1840 checks pass; the same as C and C++17; ASan and UBSan clean under `setarch -R` |
+| `tests/adapt/experiment_test.c` | 1933 checks pass; the same as C and C++17; ASan and UBSan clean under `setarch -R` |
 | Corpus | The four worked examples of 2.14, `examples/pack/stroop/`, a kitchen-sink file and a negative minimum RT: each loads with the test host and with none, equal to its golden dump; canonical bytes load back to the same form and the same bytes and ID |
 | Negative corpus | 193 files, one per refusal, each compared with its message and its line and column |
-| A key at its default | 464 keys of the format's table: written out or left out gives the same ID |
-| Table against headers | 925 checks: `tests/adapt/experiment_tables_test.c` |
-| Fuzzing (`tests/fuzz/experiment_fuzz.c`, self-driven, token-level mutations of the corpus) | 22,803,996 inputs under ASan and UBSan (`setarch -R`, gcc 12.2), each loaded twice: once in a 32 MiB arena with the test host, where any NOMEM is a failure, and once in a small arena with a misbehaving host. 2,182,404 inputs loaded and round-tripped, the rest refused, 4,428,848 runs out of memory in the small arena, no report. 2.4M of the inputs ran with the bad host naming the corpus's columns. The first version's run found one bug, `-0` staying `-0.0` in the form; an independent review then found the type confusion on a non-string `note` and the other items that this version fixes |
-| Coverage of the fuzz target (gcov, `-O0`, 400,333 inputs, 38,656 loads) | Header: 97.86% of 2480 lines; 98.42% of 2789 branches executed, 88.24% taken. Not reached: the list and nesting limits, the work limit at its default (the target lowers it), and small accessors |
-| Mutants (`tests/mutate/experiment.toml`) | 108 of 108 as expected: 107 killed, 1 by the time limit (an endless `column()` with its bound removed). e-04 survived its first run (no test of a 64-byte name), and got a corpus file |
+| A key at its default | 462 keys of the format's table: written out or left out gives the same ID |
+| Table against headers | 923 checks: `tests/adapt/experiment_tables_test.c` |
+| Fuzzing (`tests/fuzz/experiment_fuzz.c`, self-driven, token-level mutations of the corpus) | 20,401,998 inputs under ASan and UBSan (`setarch -R`, gcc 12.2) on the final header, each loaded twice: once in a 32 MiB arena with the test host, where any NOMEM is a failure, and once in a small arena with a misbehaving host. 1,947,618 inputs loaded and round-tripped, 18,454,380 refused, 4,143,833 runs out of memory in the small arena, no report. The first version's run found one bug, `-0` staying `-0.0` in the form; an independent review then found the type confusion on a non-string `note` and the other items that this version fixes |
+| Coverage of the fuzz target (gcov, `-O0`, 500,333 inputs, 47,678 loads) | Header: 97.75% of 2574 lines; 97.64% of 2879 branches executed, 88.02% taken. Not reached: the list and nesting limits, the work limit at its default (the target lowers it), and small accessors |
+| Mutants (`tests/mutate/experiment.toml`) | 142 of 142 as expected: 141 killed, 1 by the time limit (an endless `column()` with its bound removed) |
 | Compile checks | C99, C11 and C++17 with warnings as errors; the unit test also as C++17 under ASan and UBSan |
-| Full ctest (Linux preset, `DISPLAY` unset, so no window) | 113 of 113 |
+| Full ctest (Linux, with the pack tool and layout, `DISPLAY` unset, so no window) | 117 of 117 |
+| Pack tool | `test_pack_tool`, `test_pack_import`, `test_pack_derive` and `test_layout` pass on the full tool and on the core tool; CI's `ypak verify`, `list`, `rebuild` and `trial_images --sim` lines pass; the full and the core tool give one `core.ysppak` |
 
 Cost: arena use on the worked examples is 89 to 116 KB (88,762 bytes for
 the 1,089-byte RDK file, 115,906 for the 2,739-byte Stroop file): about 60 KB

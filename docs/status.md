@@ -670,7 +670,7 @@ Purpose: Reads a version 1 experiment definition into a checked, fully defaulted
 
 Status:
 
-- v0.1.0 (2026-11-09, Linux desktop, gcc 12.2). 1840 checks in the unit test, as C and C++17, ASan and UBSan clean; 7 corpus files against golden dumps with a round trip through the canonical bytes; 193 refusals, each against its message and place; 464 keys written at their defaults give the ID of the same key left out; 925 checks of the table against the headers' parameter tables. 22.8M fuzz inputs under ASan and UBSan, each in a large arena and in a small one with a misbehaving host, no report; gcov on the target: 97.86% of the header's lines. 108 of 108 mutants as expected. An independent review's fix list is closed (docs/experiment.md). No player uses it yet; no run on Windows, macOS or emcc. [Design notes](experiment.md).
+- v0.1.0 (2026-11-09, Linux desktop, gcc 12.2). 1933 checks in the unit test, as C and C++17, ASan and UBSan clean; 7 corpus files against golden dumps with a round trip through the canonical bytes; 193 refusals, each against its message and place; 462 keys written at their defaults give the ID of the same key left out; 923 checks of the table against the headers' parameter tables. 20.4M fuzz inputs under ASan and UBSan, each in a large arena and in a small one with a misbehaving host, no report; gcov on the target: 97.75% of the header's lines. 142 of 142 mutants as expected. The pack tool stores its canonical bytes from v0.8.0. No player uses it yet; no run on Windows, macOS or emcc. [Design notes](experiment.md).
 
 ### The experiment definition
 
