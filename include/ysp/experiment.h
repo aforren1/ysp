@@ -350,8 +350,13 @@ typedef struct yexp_template {
     bool                 record_given;
     const yexp_kv*       columns;  int n_columns;
     const yexp_value*    outcome;
-    const yexp_value*    method_value;
+    const yexp_value*    method_value;  /* NULL: no leaf with tracks runs it */
     uint32_t             pos_;
+    bool                 has_tracks_;   /* some leaf with tracks runs it     */
+    bool                 mv_written_;
+    uint32_t             mv_pos_;
+    void*                canon_;        /* its object in the canonical tree  */
+    void*                mv_canon_;     /* a written method_value not at its default */
 } yexp_template;
 
 /* A rules text's `var NAME choice V V ...`. */
@@ -846,8 +851,8 @@ static const yexp_row yexp__rows[] = {
     { YEXP__S_TEMPLATE, 0xffff, YEXP__T_LIST, 0, "after", "[]", NULL },
     { YEXP__S_TEMPLATE, 0xffff, YEXP__T_SET, 0, "columns", "{}", NULL },
     { YEXP__S_TEMPLATE, 0xffff, YEXP__T_LIST, 0, "events", "[]", NULL },
-    { YEXP__S_TEMPLATE, 0xffff, YEXP__T_VAL, 0, "method_value", "\"$level\"", NULL },
-    { YEXP__S_TEMPLATE, 0xffff, YEXP__T_VAL, 0, "outcome", "\"correct\"", NULL },
+    { YEXP__S_TEMPLATE, 0xffff, YEXP__T_VAL, YEXP__R_SELF, "method_value", "\"$level\"", NULL },
+    { YEXP__S_TEMPLATE, 0xffff, YEXP__T_VAL, YEXP__R_SELF, "outcome", "\"correct\"", NULL },
     { YEXP__S_TEMPLATE, 0xffff, YEXP__T_NAMES, YEXP__R_NONE | YEXP__R_SELF, "record", NULL, NULL },
     { YEXP__S_TEMPLATE, 0xffff, YEXP__T_OBJ, YEXP__R_NONE, "response", NULL, NULL },
     { YEXP__S_RESPONSE, 0xffff, YEXP__T_BOOL, 0, "allow_held_key", "false", NULL },
@@ -3095,8 +3100,37 @@ static void yexp__parse_template(yexp__ctx* c, const yjs_member* m, yexp_templat
         yexp__parse_values_set(c, x->src, sub, YEXP__AV_VALUE, false, &out->columns, &out->n_columns, &co);
         if (co && co->n) yexp__put(c, ct, "columns", co);
     }
-    out->outcome = yexp__slotv(c, s, YEXP__S_TEMPLATE, "outcome");
-    out->method_value = yexp__slotv(c, s, YEXP__S_TEMPLATE, "method_value");
+    {
+        /* with no response there is no correctness, so nothing to default to */
+        yexp__slot* oc = yexp__slot_at(c, s, YEXP__S_TEMPLATE, "outcome");
+        const yexp_value* dflt = oc->given || !out->response ? NULL : oc->v;
+        if (!dflt) {
+            if (out->response) {
+                dflt = yexp__default(c, yexp__find(c, YEXP__S_TEMPLATE, 0xffffu, "outcome"));
+            } else {
+                yexp_value* e = yexp__vnew(c, YEXP_V_STRING, UINT32_MAX);
+                if (e) e->str = "";
+                dflt = e;
+            }
+        }
+        if (oc->given && oc->v && !yexp__same(oc->v, dflt)) {
+            out->outcome = oc->v;
+            yexp__put(c, ct, "outcome", (yjs_value*)oc->src);
+        } else {
+            out->outcome = dflt;
+        }
+    }
+    {
+        /* whether a leaf with tracks runs this is known after the timeline:
+         * yexp__finish_method_values() */
+        yexp__slot* mv = yexp__slot_at(c, s, YEXP__S_TEMPLATE, "method_value");
+        out->method_value = mv->v;
+        out->canon_ = ct;
+        out->mv_written_ = mv->given;
+        out->mv_pos_ = mv->pos;
+        if (mv->given && mv->v && !yexp__same(mv->v, yexp__default(c, yexp__find(c, YEXP__S_TEMPLATE, 0xffffu, "method_value"))))
+            out->mv_canon_ = (void*)mv->src;
+    }
     yexp__release(c, YEXP__S_TEMPLATE);
     yexp__put(c, cset, m->key, ct);
 }
@@ -3387,6 +3421,7 @@ static void yexp__parse_node(yexp__ctx* c, const yjs_value* src, const yexp_node
     x = yexp__slot_at(c, s, YEXP__S_NODE, "tracks");
     if (x->v && x->given) {
         const yexp_value* tv = x->v;
+        if (out->trial && tv->n) ((yexp_template*)(void*)out->trial)->has_tracks_ = true;
         const yexp_method** ms;
         uint32_t i;
         ms = (const yexp_method**)yexp__alloc(c, (tv->n ? tv->n : 1) * sizeof(void*));
@@ -4210,7 +4245,7 @@ static void yexp__check_leaf(yexp__ctx* c, yexp__scope* s) {
     }
     snprintf(elem, sizeof elem, "template '%s'", t->name);
     if (t->outcome && t->outcome->pos != UINT32_MAX) yexp__check_value(c, s, t->outcome, YEXP__PH_AFTER, YEXP__W_ANY, elem, "outcome");
-    if (t->method_value && t->method_value->pos != UINT32_MAX) yexp__check_value(c, s, t->method_value, YEXP__PH_AFTER, YEXP__W_NUM, elem, "method_value");
+    if (t->method_value && s->leaf->n_tracks && t->method_value->pos != UINT32_MAX) yexp__check_value(c, s, t->method_value, YEXP__PH_AFTER, YEXP__W_NUM, elem, "method_value");
     snprintf(elem, sizeof elem, "template '%s': columns", t->name);
     for (k = 0; k < t->n_columns; k++) yexp__check_value(c, s, t->columns[k].value, YEXP__PH_ROW, YEXP__W_ANY, elem, t->columns[k].key);
     for (u = 0; u < c->n_used; u++) {
@@ -4415,6 +4450,21 @@ static void yexp__warn_unreached(yexp__ctx* c) {
             yexp__quote_list(list, sizeof list, keys, nx);
             yexp__by_text(v->by, by, sizeof by);
             yexp__warn(c, v->pos, "%s: '%s': no level of '%s' reaches the map's key%s %s; a typo, or a level the trials no longer have?", l->elem, l->key, by, nx > 1 ? "s" : "", list);
+        }
+    }
+}
+
+/* A method_value means nothing without a track to tell. Whether any leaf
+ * with tracks runs a template is known only once the tree is read. */
+static void yexp__finish_method_values(yexp__ctx* c) {
+    int i;
+    for (i = 0; i < c->d->n_templates; i++) {
+        yexp_template* t = (yexp_template*)(void*)&c->d->templates[i];
+        if (t->has_tracks_) {
+            if (t->mv_canon_) yexp__put(c, (yjs_value*)t->canon_, "method_value", (yjs_value*)t->mv_canon_);
+        } else {
+            if (t->mv_written_) yexp__warn(c, t->mv_pos_, "template '%s': 'method_value' is ignored: no leaf with tracks runs this template", t->name);
+            t->method_value = NULL;
         }
     }
 }
@@ -4669,6 +4719,7 @@ YEXP_API int yexp_load(yjs_arena* a, const char* text, size_t n, const yexp_host
         return YEXP_ERR_REFUSED;
     }
     yexp__parse_root(c, root);
+    if (!c->nomem && report->n_errors == 0) yexp__finish_method_values(c);
     if (!c->nomem && report->n_errors == 0) {
         yexp__scope* sc = (yexp__scope*)yexp__alloc(c, sizeof *sc);
         c->stim_use = (uint8_t*)yexp__alloc(c, (size_t)d->n_stimuli + 1);

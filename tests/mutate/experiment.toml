@@ -1150,3 +1150,72 @@ test = "experiment"
 why = "The refusal names the key that replaced it."
 find = '''    if (sect == YEXP__S_RESPONSE && yexp__streq(key, "persist")) {'''
 replace = '''    if (0) {'''
+
+[[mutant]]
+id = "t-02"
+name = "no response: outcome defaults to correct"
+test = "experiment"
+why = "With no response there is no correctness."
+find = '''            if (out->response) {
+                dflt = yexp__default('''
+replace = '''            if (1) {
+                dflt = yexp__default('''
+
+[[mutant]]
+id = "t-03"
+name = "a written outcome at its default stays in the bytes"
+test = "experiment"
+why = "D2."
+find = '''        if (oc->given && oc->v && !yexp__same(oc->v, dflt)) {'''
+replace = '''        if (oc->given && oc->v) {'''
+
+[[mutant]]
+id = "t-04"
+name = "an untracked template keeps method_value in the bytes"
+test = "experiment"
+why = "It must not change the ID."
+find = '''        if (t->has_tracks_) {
+            if (t->mv_canon_) yexp__put('''
+replace = '''        if (1) {
+            if (t->mv_canon_) yexp__put('''
+
+[[mutant]]
+id = "t-05"
+name = "a method_value nobody reads is not warned"
+test = "experiment"
+why = "A written key that does nothing is said."
+find = '''            if (t->mv_written_) yexp__warn('''
+replace = '''            if (0) yexp__warn('''
+
+[[mutant]]
+id = "t-06"
+name = "an untracked template keeps its method_value in the form"
+test = "experiment"
+why = "Decision 2."
+find = '''            t->method_value = NULL;
+'''
+replace = ''''''
+
+[[mutant]]
+id = "t-07"
+name = "a tracked template loses its method_value in the bytes"
+test = "experiment"
+why = "It changes what the method hears."
+find = '''            if (t->mv_canon_) yexp__put(c, (yjs_value*)t->canon_, "method_value", (yjs_value*)t->mv_canon_);'''
+replace = '''            (void)0;'''
+
+[[mutant]]
+id = "t-08"
+name = "method_value checked on a leaf with no tracks"
+test = "experiment"
+why = "A shared template: only a tracked leaf reads it."
+find = '''    if (t->method_value && s->leaf->n_tracks && t->method_value->pos != UINT32_MAX)'''
+replace = '''    if (t->method_value && t->method_value->pos != UINT32_MAX)'''
+
+[[mutant]]
+id = "t-09"
+name = "has_tracks never set"
+test = "experiment"
+why = "A tracked template keeps its method_value."
+find = '''        if (out->trial && tv->n) ((yexp_template*)(void*)out->trial)->has_tracks_ = true;'''
+replace = ''''''

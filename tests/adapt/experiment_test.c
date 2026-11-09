@@ -369,6 +369,8 @@ static void run_defaults(void) {
         if (!r->def) continue;
         /* a node's key for one kind of node, a stimulus key per kind */
         if (!strcmp(yexp_section_name(r->section), "node") && !strcmp(r->key, "repetitions")) continue;
+        /* its default depends on the template: run_review() */
+        if (!strcmp(yexp_section_name(r->section), "template") && !strcmp(r->key, "outcome")) continue;
         if (!strcmp(yexp_section_name(r->section), "stimulus")) last_kind = 9;
         else last_kind = 0;
         for (kind = 0; kind <= last_kind; kind++) {
@@ -956,6 +958,54 @@ static void run_review(void) {
         at += (size_t)snprintf(doc + at, cap - at, "]}}}," XT);
         CHECK2(load_rc(doc, NULL, &r) == YEXP_OK, "4000 choices against 20000 buttons", r.n_diags ? r.diags[0].msg : "");
         free(doc);
+    }
+    /* outcome's default: "correct" with a response, empty without */
+    {
+#define O_RESP(x) XH "\"devices\":{\"r\":{\"direction\":\"in\",\"family\":[\"k\"]}},\"stimuli\":{\"s\":{\"kind\":\"shape\"}},\"trials\":{\"t\":{" x "\"events\":[{\"on\":\"s\"}],\"response\":{\"role\":\"r\",\"from\":\"s\"}}}," XT
+#define O_NONE(x) XH "\"trials\":{\"t\":{" x "\"events\":[]}}," XT
+        static const char* const a[] = { O_RESP(""), O_RESP("\"outcome\":\"correct\",") };
+        static const char* const b[] = { O_NONE(""), O_NONE("\"outcome\":\"\",") };
+        uint8_t x[32], y[32];
+        yjs_arena ar;
+        yexp_def* d = NULL;
+        one_spelling(a, 2, "\"correct\" is the default with a response");
+        one_spelling(b, 2, "empty is the default with no response");
+        id_roundtrip(O_NONE(""), x);
+        id_roundtrip(O_NONE("\"outcome\":\"correct\","), y);
+        CHECK(memcmp(x, y, 32) != 0, "\"correct\" with no response is not the default");
+        id_roundtrip(O_RESP("\"outcome\":\"\","), y);
+        id_roundtrip(O_RESP(""), x);
+        CHECK(memcmp(x, y, 32) != 0, "empty with a response is not the default");
+        yjs_arena_init_heap(&ar, 0);
+        CHECK(yexp_load(&ar, O_NONE(""), strlen(O_NONE("")), NULL, &d, &r) == YEXP_OK && d->templates[0].outcome && d->templates[0].outcome->kind == YEXP_V_STRING && !d->templates[0].outcome->str[0], "the form holds the empty outcome");
+        yjs_arena_free(&ar);
+    }
+    /* a method_value with no leaf with tracks: warned, not in the form, not in the ID */
+    {
+#define MV_DOC(x, tr) XH "\"methods\":{\"q\":{\"type\":\"stair\",\"steps\":[1]}},\"trials\":{\"t\":{" x "\"events\":[]}},\"timeline\":[{\"name\":\"m\",\"trial\":\"t\"" tr "}]}"
+#define TRK ",\"tracks\":[\"q\"]"
+        static const char* const a[] = { MV_DOC("", ""), MV_DOC("\"method_value\":\"$nosuch\",", ""), MV_DOC("\"method_value\":3,", "") };
+        uint8_t x[32], y[32];
+        yjs_arena ar;
+        yexp_def* d = NULL;
+        one_spelling(a, 3, "a method_value no track reads is not in the ID");
+        CHECK(load_rc(MV_DOC("\"method_value\":3,", ""), NULL, &r) == YEXP_OK && r.n_warnings == 1 && strstr(r.diags[0].msg, "ignored"), "and it is warned");
+        CHECK(load_rc(MV_DOC("", ""), NULL, &r) == YEXP_OK && r.n_warnings == 0, "no warning when none is written");
+        yjs_arena_init_heap(&ar, 0);
+        CHECK(yexp_load(&ar, MV_DOC("\"method_value\":3,", ""), strlen(MV_DOC("\"method_value\":3,", "")), NULL, &d, &r) == YEXP_OK && !d->templates[0].method_value, "not in the form");
+        yjs_arena_free(&ar);
+        yjs_arena_init_heap(&ar, 0);
+        CHECK(yexp_load(&ar, MV_DOC("", TRK), strlen(MV_DOC("", TRK)), NULL, &d, &r) == YEXP_OK && d->templates[0].method_value && d->templates[0].method_value->kind == YEXP_V_VAR, "with tracks: the default $level");
+        yjs_arena_free(&ar);
+        id_roundtrip(MV_DOC("\"method_value\":3,", TRK), x);
+        id_roundtrip(MV_DOC("", TRK), y);
+        CHECK(memcmp(x, y, 32) != 0, "with tracks a written method_value is in the ID");
+        CHECK(load_rc(MV_DOC("\"method_value\":\"$nosuch\",", TRK), NULL, &r) == YEXP_ERR_REFUSED, "with tracks it is checked");
+        {
+            /* two leaves, one with tracks: kept, and checked on that leaf only */
+            const char* two = XH "\"methods\":{\"q\":{\"type\":\"stair\",\"steps\":[1]}},\"trials\":{\"t\":{\"method_value\":\"$level\",\"events\":[]}},\"timeline\":[{\"name\":\"a\",\"trial\":\"t\"},{\"name\":\"b\",\"trial\":\"t\",\"tracks\":[\"q\"]}]}";
+            CHECK2(load_rc(two, NULL, &r) == YEXP_OK && r.n_warnings == 0, "a template shared by a tracked and an untracked leaf", r.n_diags ? r.diags[0].msg : "");
+        }
     }
     /* a rule var used as a number: numeric text is fine, other text is not */
     {

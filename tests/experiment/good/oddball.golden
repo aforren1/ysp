@@ -118,7 +118,7 @@ template oddball
   response role=resp from=pic ends=1 max=0 held=0 release=0 choices=left:left,right:right
     duration=dur:1000000000ns min_rt=dur:0ns key_answer=$answer trigger=trig lookup($response){"left": int:101, "right": int:102}
   record_given=0 record=[pic]
-  outcome="correct" method_value=$level
+  outcome="correct" method_value=(null)
 node main path=main trial=oddball table=oddball.pstb reps=1 interleave=0 track_rate=0 if=- unless=- loop=0 requeue=0 record_data=1
   rules="order constrained\x0areps 4\x0amax_run type=target 1\x0ajitter soa_s uniform 0.8 1.2 rate=display"
   jitters=[soa_s] rule_vars=[] tracks=[]

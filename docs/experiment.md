@@ -115,8 +115,8 @@ at version 1, listed by the test above.
 | method | `estimate` | stair `"reversals"`; quest and aep `"mean"` |
 | template | `events`, `after` | `[]` |
 | template | `columns` | `{}` |
-| template | `outcome` | `"correct"` |
-| template | `method_value` | `"$level"` |
+| template | `outcome` | `"correct"` with a response; empty with none |
+| template | `method_value` | `"$level"`; none when no leaf with tracks runs the template |
 | template | `record` | the response's `from` and any stimulus with a trigger at its onset (D10) |
 | template | `response` | none |
 | response | `role`, `from` | required |
@@ -186,8 +186,7 @@ decide otherwise.
 | 2.3 | whether a `vars` value is known before trial start | no: trial start, as the table says, so a node's `if` cannot read it | say so |
 | 2.4 | `name` not marked required | required | mark it |
 | 2.4 | `rules`, `tracks`, ... on a container, and a container's row order | refused; table order | say which keys are leaf-only |
-| 2.5, 2.6 | no default for `interleave`, `track_rate`, `repetitions`, `record_data`, `outcome`, `method_value`, `ease`, `stagger_s`, a step's `duration_s` and `delay_s`, a role's `required`, `min_tier`, `kind`, `estimate` per method | the table above | adopt it |
-| 2.5, 2.3 | `outcome` default with no response; `method_value` default with no tracks | not checked, lowering ignores them | say so |
+| 2.5, 2.6 | no default for `interleave`, `track_rate`, `repetitions`, `record_data`, `ease`, `stagger_s`, a step's `duration_s` and `delay_s`, a role's `required`, `min_tier`, `kind`, `estimate` per method | the table above | adopt it |
 | 2.5 | `{"mark": NAME}`: is "end" reserved (2.5 has an implicit `end` MARK)? no name rule | any non-empty string | reserve `end` |
 | 2.6 | which response keys are required | `role`, `from` | say so |
 | 2.7 | "Each is a literal, not a variable": but `text` takes a variable in the examples | literal for all but `text` | say "all but `text`" |

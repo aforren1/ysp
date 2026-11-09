@@ -596,8 +596,8 @@ method, so the track runs it again (as in the 2AFC program).
 | `after` | array of steps, from `max(end, events end)`; `end` is the response's end, the window's end when `response_ends_trial` is false, or 0 with no response | a second op table after `ytl_at(&q, max(bt, events_end))`, `bt` from `ytl_base_time()`; then `YTL_MARK` end |
 | `record` | array of stimulus names | per-stimulus columns (2.10) |
 | `columns` | column to value | `ytr_col` entries |
-| `outcome` | `"correct"` or a value | `ytr_update()`'s outcome; `YTR_INVALID` when no response |
-| `method_value` | value | what the method's update hears; default `$level` |
+| `outcome` | `"correct"` or a value | `ytr_update()`'s outcome; `YTR_INVALID` when no response. Default: `"correct"` when the template has a response; empty when it has none |
+| `method_value` | value | what the method's update hears; default `$level`. Ignored when no leaf with tracks runs the template: a written one is a warning, is not in the checked form, and is left out of the canonical bytes, so it does not change the experiment ID |
 
 Steps:
 

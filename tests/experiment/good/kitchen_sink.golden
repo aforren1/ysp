@@ -446,7 +446,7 @@ template plain
     step on art stagger=dur:0ns
   after
   record_given=0 record=[]
-  outcome="correct" method_value=$level
+  outcome="" method_value=(null)
 node blockA path=blockA trial=- table=base.pstb reps=2 interleave=0 track_rate=0 if=- unless=- loop=1:0.8,3 requeue=0 record_data=1
   rules=""
   jitters=[] rule_vars=[] tracks=[]

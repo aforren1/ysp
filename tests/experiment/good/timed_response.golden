@@ -78,7 +78,7 @@ template go
   response role=resp from=target ends=1 max=0 held=0 release=0 choices=space:space
     duration=dur:500000000ns min_rt=dur:-250000000ns key_answer=(null) trigger=- 
   record_given=0 record=[target]
-  outcome="correct" method_value=$level
+  outcome="correct" method_value=(null)
 node main path=main trial=go table=- reps=1 interleave=0 track_rate=0 if=- unless=- loop=0 requeue=0 record_data=1
   rules="reps 2"
   jitters=[] rule_vars=[] tracks=[]
