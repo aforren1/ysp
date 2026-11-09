@@ -14,7 +14,8 @@ the texts of the experiment definition's text stimuli itself, so a
 description lists no glyph runs for them (gap G9 of
 experiment_format.md). Tool v0.7.0 (2026-10-22, section 16) stores a
 definition's canonical bytes (D2) and refuses a lookup whose map lacks a
-level of its `by`. Where the build
+level of its `by`. Tool v0.8.0 (2026-11-09, section 16) reads the definition
+through ysp/experiment.h. Where the build
 changed the design, the text says so. When this page and rig_spec 5
 disagree, this page is newer.
 
@@ -935,12 +936,12 @@ A FILE entry holds its source's bytes, unchanged. The experiment comes
 from the description's top-level `"experiment": {"entry", "source",
 "media_type"}`. When the source is a definition (JSON with `"format":
 "ysp-experiment"`, experiment_format.md), the entry holds its canonical
-bytes (tool v0.7.0): ysp/json.h's canonical form (json.md) and one LF
-after it, with the derivation `{"op": "canonical", "by": "ysp/json.h
-VERSION"}`. The entry's SHA-256 is then the experiment ID (D2). Other
-experiment bytes stay as they are (`"op": "copy"`). A definition also
-gives the experiment's glyph runs (4.5), and the tool checks its lookups
-(section 16).
+bytes (tool v0.8.0): the canonical form of ysp/experiment.h, with every
+key at its default left out, and one LF after it, with the derivation
+`{"op": "canonical", "by": "ysp/experiment.h VERSION"}`. The entry's
+SHA-256 is then the experiment ID (D2). Other experiment bytes stay as they
+are (`"op": "copy"`). A definition also gives the experiment's glyph runs
+(4.5), and the loader checks it first (section 16).
 
 ## 5. Reference: the tool
 
@@ -2255,6 +2256,38 @@ on the same machine.
   not checked; the player has their values at run time only.
 - A lookup in a stimulus that no template names is not checked (no leaf
   reaches it).
+
+### Tool v0.8.0: the definition through the loader (2026-11-09)
+
+A definition now goes through `yexp_load()` and `yexp_canonical()`
+(ysp/experiment.h), in `ypak build` and `ypak rebuild`. A definition that the
+loader refuses stops the build with the loader's first message and its line
+and column. The experiment is built after the tables and every other entry
+that the loader asks about, and before the glyph runs.
+
+| The loader's check | At build |
+|---|---|
+| `entry()` | The tool's entries, by kind |
+| `column()`, `level()` | The tool's tables, by `ytb_open_view()`; a number's level is its canonical text |
+| `rules()` | `ytr_rules()` on the leaf's table. Not a dry open: an open needs the track objects and the display's rate, which the player has |
+| `role()`, `param()`, `check_ops()` | Skipped: the tool has no rig, and does not check values against the headers' tables |
+
+The tool links ysp/trials.h for `ytr_rules()` and does not need SDL.
+
+`ypt_check_lookups()` in `pack/derive.c` stays, with its test and mutants, but
+the build no longer calls it: the loader does the same check per leaf, and two
+checks would warn twice. `ypt_derive_texts()` stays, because it lists the texts.
+
+Hashes that moved, on purpose: the experiment entry of a pack whose definition
+writes a key at its default, so its experiment ID and its pack ID. The Stroop
+example's entry goes from 3572 to 3548 bytes (`"required": true` on its role
+is left out), and its SHA-256 from `83d61e488bd5316e...` to
+`2eccb263037b4de6...`. `tests/pack/corpus.sha256` does not change: the corpus's
+experiment is opaque. A pack built by v0.7.0 no longer rebuilds byte for byte
+when its definition writes a default, and the rebuild's note names the tool
+version.
+
+Left: a definition's `ytl_check_ops()` and parameter-table checks at build.
 
 ## 17. Bindings (2026-10-25)
 

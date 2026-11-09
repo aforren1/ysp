@@ -108,9 +108,9 @@ that structure; it does not invent a new one.
   bytes' too, so two sources that differ only in whitespace, key order,
   number spelling or escapes give one entry, one experiment ID and, at
   one source path, one pack ID. The pack does not keep the source text:
-  JSON has no comments (D1), so the canonical form drops no value. Not
-  built: "a key at its default is left out", which needs the defaults
-  table of the loader.
+  JSON has no comments (D1), so the canonical form drops no value.
+  Built (pack tool v0.8.0, 2026-11-09): "a key at its default is left
+  out", through ysp/experiment.h and its table of defaults.
 
 **D3. Named sets are objects; order is in arrays. DECIDED (2026-10-14).**
 - Evidence: the canonical form sorts keys, so order in an object is

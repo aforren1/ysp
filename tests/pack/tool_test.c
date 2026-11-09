@@ -26,6 +26,7 @@
 #include "ysp/pack_tool.h"
 #include "ysp/pack.h"
 #include "ysp/json.h"
+#include "ysp/experiment.h"
 #include "ysp/table.h"
 #include "ysp/gfx.h"
 #include "ysp/color.h"
@@ -57,6 +58,16 @@ static int g_fail, g_checks;
 #define W "pack_tool_work"
 
 #include "../adapt/import_gen.h"
+
+#ifndef YPT_NO_LAYOUT
+/* Whether the n bytes at p hold the k bytes at q. */
+static int memmem_(const uint8_t* p, size_t n, const char* q, size_t k) {
+    size_t i;
+    for (i = 0; i + k <= n; i++)
+        if (!memcmp(p + i, q, k)) return 1;
+    return 0;
+}
+#endif
 static void bpad4(bb* b) { while (b->n & 3) b8(b, 0); }
 
 static int write_file(const char* path, const void* d, size_t n) {
@@ -1431,7 +1442,7 @@ static void test_stroop_pack(void) {
     CHECK(rc < 0 && strstr(err, "'experiment/stroop.ysprun': the experiment's texts need glyph runs, and glyph runs need the layout library"),
           "the core tool refuses the Stroop pack by name: %s", err);
     /* a definition without text stimuli still builds in the core tool */
-    put_text(WS "/defs/notext.json", "{\"format\": \"ysp-experiment\", \"version\": 1, \"stimuli\": {\"dot\": {\"kind\": \"shape\"}}}\n");
+    put_text(WS "/defs/notext.json", "{\"format\": \"ysp-experiment\", \"version\": 1, \"stimuli\": {\"dot\": {\"kind\": \"shape\"}}, \"trials\": {\"t\": {}}, \"timeline\": [{\"name\": \"m\", \"trial\": \"t\"}]}\n");
     rc = build_ws("{\"format\": \"ysp-pack-source\", \"version\": 1, \"experiment\": {\"entry\": \"exp/notext.json\", \"source\": \"defs/notext.json\"},"
                   " \"resources\": []}", WS "/notext.ysppak", err, sizeof err);
     CHECK(rc == 0, "core tool, a definition without texts: %s", err);
@@ -1549,12 +1560,21 @@ static void test_stroop_pack(void) {
         yjs_arena_init_heap(&a, 0);
         if (def) dn = strlen(def);
         if (def && yjs_parse(&a, def, dn, NULL, &root, &je) == YJS_OK) {
-            size_t k = yjs_write_mem(root, YJS_WRITE_PRETTY, NULL, 0), rn = yjs_write_mem(root, YJS_WRITE_COMPACT, NULL, 0);
-            canon = (char*)malloc(k + 2);
+            /* the loader's bytes: keys at their defaults left out (D2) */
+            size_t rn = yjs_write_mem(root, YJS_WRITE_COMPACT, NULL, 0);
+            static yexp_report rp;
+            yjs_arena ca;
+            yexp_def* dd = NULL;
+            const char* cb;
+            size_t cn = 0;
+            yjs_arena_init_heap(&ca, 0);
+            if (yexp_load(&ca, (const char*)def, dn, NULL, &dd, &rp) == YEXP_OK && yexp_canonical(dd, &ca, &cb, &cn, NULL) == YEXP_OK) {
+                canon = (char*)malloc(cn + 1);
+                memcpy(canon, cb, cn);
+                canon[cn] = 0;
+            }
+            yjs_arena_free(&ca);
             re = (char*)malloc(rn + 64);
-            yjs_write_mem(root, YJS_WRITE_PRETTY, canon, k + 1);
-            canon[k] = '\n';
-            canon[k + 1] = 0;
             yjs_write_mem(root, YJS_WRITE_COMPACT, re, rn + 1);
         }
         CHECK(canon && re, "the Stroop definition parses");
@@ -1569,9 +1589,10 @@ static void test_stroop_pack(void) {
             for (k = 0; k < 32; k++) snprintf(hx + 2 * k, 3, "%02x", sha[k]);
             CHECK(x && n1 == strlen(canon) && !memcmp(x, canon, n1) && memcmp(x, def, dn < n1 ? dn : n1),
                   "the experiment entry is the definition's canonical bytes, not its source's");
+            CHECK(x && !memmem_(x, n1, "\"required\"", 10), "a key at its default is left out of the entry");
             for (at = m ? strstr((char*)m, hx) : NULL; at; at = strstr(at + 1, hx)) seen++;
-            CHECK(m && strstr((char*)m, "\"op\": \"canonical\"") && strstr((char*)m, "\"by\": \"ysp/json.h " YJS_VERSION_STRING "\"") && seen == 2,
-                  "the manifest: op canonical by ysp/json.h, and the entry's and the source's SHA-256 are the canonical bytes' (%d of 2)", seen);
+            CHECK(m && strstr((char*)m, "\"op\": \"canonical\"") && strstr((char*)m, "\"by\": \"ysp/experiment.h " YEXP_VERSION_STRING "\"") && seen == 2,
+                  "the manifest: op canonical by ysp/experiment.h, and the entry's and the source's SHA-256 are the canonical bytes' (%d of 2)", seen);
             /* the player's key from the stored definition */
             if (x) {
                 uint32_t nb;
@@ -1803,12 +1824,15 @@ static void test_stroop_pack(void) {
         *strstr(desc, ",\n  {\"kind\": \"font\"") = 0;
         strcat(desc, "]}\n");
         CHECK(build_ws(desc, WS "/x.ysppak", err, sizeof err) < 0 &&
-              strstr(err, "experiment 'experiment/stroop.json': stimulus 'keys': font 'fonts/NotoSans-Regular.ttf' is not a font entry"),
+              strstr(err, "experiment 'experiment/stroop.json': stimulus 'banner': 'font': no pack entry named 'fonts/NotoSans-Regular.ttf' (line"),
               "no font entry for the stimuli's font: %s", err);
     }
     CHECK(build_def("builtin", "\"s\": {\"kind\": \"text\", \"font\": \"fonts/NotoSans-Regular.ttf\", \"size\": 20, \"text\": \"$trial_index\"}", "",
                     WS "/x.ysppak", err, sizeof err) < 0 &&
-          strstr(err, "experiment 'exp/builtin.json': stimulus 's': '$trial_index' is a built-in variable"), "a built-in as text: %s", err);
+          strstr(err, "experiment 'exp/builtin.json': stimulus 's': 'text': '$trial_index' is a built-in variable"), "a built-in as text: %s", err);
+    /* the loader's refusals stop the build, with the place */
+    CHECK(build_def("bad_key", "\"s\": {\"kind\": \"shape\", \"bogus\": 1}", "", WS "/x.ysppak", err, sizeof err) < 0 &&
+          strstr(err, "experiment 'exp/bad_key.json': stimulus 's': unknown key 'bogus' (line "), "the loader refuses an unknown key: %s", err);
     CHECK(build_def("number_column", "\"s\": {\"kind\": \"text\", \"font\": \"fonts/NotoSans-Regular.ttf\", \"size\": 20, \"text\": \"$weight\"}", "",
                     WS "/x.ysppak", err, sizeof err) < 0 && strstr(err, "'$weight' is a column of 'stroop.pstb' of type integer"),
           "a number column as text: %s", err);
@@ -1874,8 +1898,8 @@ static void test_lookup_pack(void) {
     if (wf) fclose(wf);
     w = read_all(WS "/warn.txt", &n);
     if (w) w[n] = 0;
-    CHECK(w && !strcmp((char*)w, "warning: experiment 'experiment/stroop.json': stimulus 'word': 'text': no level of '$word' reaches the "
-                                 "map's key \"purple\"; a typo, or a level the trials no longer have?\n"), "the warning: '%s'", w ? (char*)w : "");
+    CHECK(w && strstr((char*)w, "warning: experiment 'experiment/stroop.json': stimulus 'word': 'text': no level of '$word' reaches the "
+                                "map's key \"purple\"; a typo, or a level the trials no longer have? (line "), "the warning: '%s'", w ? (char*)w : "");
     free(w);
 #ifdef YPT_NO_LAYOUT
     CHECK(rc < 0 && strstr(err, "glyph runs need the layout library"), "the core tool: the lookups first, then the runs: %s", err);
@@ -1891,6 +1915,9 @@ static void test_lookup_pack(void) {
     CHECK(rc == 0 && w && strstr((char*)w, "warning: experiment 'experiment/stroop.json': stimulus 'word': 'text': no level of '$word' reaches"),
           "the rebuild's warning: %s '%s'", err, w ? (char*)w : "");
     free(w);
+    /* the rules through ytr_rules(): a bad statement stops the build */
+    rc = stroop_variant("badrule", "\"order constrained\"", "\"order sideways\"", NULL, err, sizeof err);
+    CHECK(rc < 0 && strstr(err, "node 'main': rules: "), "the host's rules check: %s", err);
     /* quiet without a warn file */
     rc = stroop_variant("purple", "\"blue\": \"BLUE\"", "\"blue\": \"BLUE\", \"purple\": \"PURPLE\"", NULL, err, sizeof err);
     CHECK(rc == 0, "a key no level reaches, no warn file: %s", err);

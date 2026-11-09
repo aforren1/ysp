@@ -30,3 +30,7 @@
 #include "ysp/pack.h"
 #define YSP_JSON_IMPLEMENTATION
 #include "ysp/json.h"
+#define YSP_EXPERIMENT_IMPLEMENTATION
+#include "ysp/experiment.h"
+#define YSP_TRIALS_IMPLEMENTATION
+#include "ysp/trials.h"
