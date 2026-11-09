@@ -1645,6 +1645,24 @@ int pl_load(pl_player* p, const pl_args* a) {
         }
         p->draw_order[j + 1] = v;
     }
+    /* the text program's first draw now, off the frame path (docs/gfx.md),
+     * as trial_stroop does */
+    if (p->runs_open) {
+        ygfx_crun_desc rd;
+        ygfx_citem item;
+        uint32_t f;
+        memset(&item, 0, sizeof item);
+        memset(&rd, 0, sizeof rd);
+        rd.items = &item;
+        rd.n = 1;
+        rd.size = 1.0f;
+        /* ygfx_crun() builds its per-set draw state on first use: do that here */
+        for (f = 0; f < p->runs.n_fonts; f++) {
+            rd.set = p->csets[f];
+            (void)ygfx_crun(&p->gfx, &rd);
+        }
+        ygfx_prime(&p->gfx);
+    }
     /* static properties once, with session-level values */
     memset(&p->env, 0, sizeof p->env);
     for (i = 0; i < p->n_stims; i++) {
