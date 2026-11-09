@@ -151,15 +151,15 @@
  *   up to min(onset, f.poll_ns). An event a source took that is stamped
  *   after the poll is counted (ysig_stats.late_poll, late_poll_max_ns)
  *   and moves nothing; a view whose last sample is past the poll stands.
- *   A stamp later than the poll is believed only up to the poll: at a
- *   frame with a poll, every time kept from a stamp and later than it
- *   comes down to it (counted as a late poll): a source's order slots,
- *   rings, a detect's hold clock and hold start, a filter's and a rate
- *   integrator's previous time, a silent's last. So one far-future stamp
- *   stops its effects one frame later, but what its own sample's pass
- *   did stands (a rate integral's step over that dt, a hold it ended). A
- *   frame with no poll has no such recovery: the rings and the hold clocks
- *   keep the stamp until a reset (an adapter's until ysig_reset()).
+ *   A poll a little behind the newest sample is normal and changes
+ *   nothing. A stamp more than YSIG_FUTURE_NS (1 s) past a frame's poll
+ *   is a bad one: a source's order slots and a silent's last time come
+ *   down to the poll, so later samples flow again one frame later and a
+ *   silent recovers. That stamp's effect on rings, filters, velocity,
+ *   delay and a hold's clock stays until the node's next reset
+ *   (ysig_reset_trial() for the experiment's nodes, ysig_reset() for an
+ *   adapter's); ysig_stats.late_poll is the alarm. A frame with no poll
+ *   has no such recovery.
  *   ysig_frame() refuses only bad arguments, and a frame without a poll
  *   (has_poll false, as in a zeroed ysig_frame_in) in a graph with a view
  *   (velocity, speed, delay, lowpass, rate integrate, silent), on every call:
@@ -199,17 +199,17 @@
  *   the test when the detect is armed is held: no hit until it re-arms.
  *   With hold > 0 a hit needs the test true for hold s: the hit is at
  *   start + hold, found by the next value (before it is tested) or by a
- *   frame that knows the time is past it, so a still hand that sends no
- *   samples completes a hold (found at the frame's known time). A hold
- *   armed while its test is true counts
+ *   frame whose onset is at or after it, so a still hand that sends no
+ *   samples completes a hold. A hold armed while its test is true counts
  *   from the arm (p12 entry arm, 0: a hand already on the start), or
  *   waits for the test to fail and come true again (entry fresh, 1).
- *   In a frame's pass a hold's clock is the time the frame knows input
- *   up to, min(poll, onset), while the test is true: a still input (also a
- *   mux or a latch of it) keeps its old t, and the hold would never end.
- *   So a hold completes at a poll, up to a frame after the onset that would
- *   end a hold on samples. A hit is at start + hold on that clock. A
- *   frame-rate detect without a hold tests at the onset. p6: armed at
+ *   A sample-rate detect on a frame-updated input (a view, a mux or a
+ *   latch of a channel): in a frame's pass its hold's clock is the time
+ *   the frame knows input up to, min(poll, onset), while the test is
+ *   true, because a still input's value keeps its old t and the hold
+ *   would never end. So its hold completes at a poll, up to a frame after
+ *   the onset that would end a hold on samples. A hit is at start + hold
+ *   on that clock. A frame-rate detect tests at the onset. p6: armed at
  *   reset (0) or by ysig_arm().
  *   p7: one hit per arm (0) or every crossing. A detect at frame rate
  *   (p5) tests the held value at each onset. Hits queue (64, the rest
@@ -220,7 +220,7 @@
  *   or reset for a one-hit or a disarmed detect, so it rises at a hold's
  *   completion, which may be in a frame's pass. Its rise is at the hit's
  *   time, also in its ring. ysig_arm() takes it to 0 for its users at
- *   once, so the next hit is a new rise.
+ *   once, at the arm's time, so the next hit is a new rise.
  *   CROSSINGS AND LATCHES: a latch takes its value when the trigger's lane
  *   0 goes from zero to nonzero (NaN is zero); a trigger already nonzero
  *   at a reset holds no rise. A rise in a sample's pass holds that sample's
@@ -280,7 +280,9 @@
  *   through the adapter's scale and offset nodes to the integrator, whose
  *   count grid then continues from that point, with a new ring entry at t
  *   (values before t stand) and, for a rate integrator, no jump by the
- *   time since its last sample. It refuses an absolute adapter, an adapter
+ *   time since its last sample. t must be no later than the input already
+ *   fed, normally the poll's time: a planned onset is ahead of samples
+ *   not yet fed, which a ring would then skip. It refuses an absolute adapter, an adapter
  *   with no integrator, another op between the integrator and the role,
  *   a point not finite after that chain, and a point outside the
  *   integrator's bounds. After the integrator, velocity, speed, lowpass
@@ -375,6 +377,10 @@ extern "C" {
 #define YSIG_MAX_HISTORY (1 << 20)
 #define YSIG_OP_ABI    1
 #define YSIG_NONE      (-1)
+#define YSIG_FUTURE_NS 1000000000LL /* a stamp later than the poll by more
+                                     * than this is a bad one (SCHEDULES AND
+                                     * TIME); a poll a little behind the
+                                     * newest sample is normal               */
 
 typedef enum ysig_op {
     YSIG_OP_NONE = 0,
@@ -688,8 +694,9 @@ YSIG_API void ysig_reset(ysig_graph* g, int64_t t_ns);
 YSIG_API void ysig_reset_trial(ysig_graph* g, int64_t t_ns);
 
 /* Place relative role `role` (its index in desc.roles) at x, y, in the role's
- * units, at time t_ns; its integrator continues from there on the count grid
- * (ROLES AND ADAPTERS). false with the reason in ysig_error(). */
+ * units, at time t_ns, no later than the input already fed (normally the
+ * poll's time); its integrator continues from there on the count grid (ROLES
+ * AND ADAPTERS). false with the reason in ysig_error(). */
 YSIG_API bool ysig_recenter(ysig_graph* g, int role, double x, double y, int64_t t_ns);
 
 /* p[param] of node := v, checked by the op's table; between trials. param
@@ -2018,14 +2025,13 @@ static void ysig__det_value(ysig_graph* g, int i, const ysig_value* v, int64_t t
     ysig__det_out(g, i, v, s->fired && !was && (int)g->nd[i].p[13] == YSIG_OUT_HIT ? s->t_hit : tc);
 }
 
-/* A sample-rate detect at a frame: a still hand completes its hold. tk is
- * the time the frame knows input up to. */
-static void ysig__det_frame(ysig_graph* g, int i, int64_t tk, const ysig_value* v) {
+/* A sample-rate detect at a frame's onset: a still hand completes its hold. */
+static void ysig__det_frame(ysig_graph* g, int i, int64_t onset, const ysig_value* v) {
     ysig__nd* n = &g->nd[i];
     ysig__det_st* s = (ysig__det_st*)n->st;
     int was = s->fired;
-    if (!s->armed || n->kns[0] <= 0 || tk < s->t_arm) return;
-    (void)ysig__det_hold_done(g, i, tk);
+    if (!s->armed || n->kns[0] <= 0 || onset < s->t_arm) return;
+    (void)ysig__det_hold_done(g, i, onset);
     if ((int)n->p[13] == YSIG_OUT_HIT && s->fired && !was) ysig__det_out(g, i, v, s->t_hit);
 }
 
@@ -2189,17 +2195,16 @@ static void ysig__run(ysig_graph* g, int i, int mode, int64_t t) {
                 int at_frame = n->p[5] == 1, view = (g->nd[n->in[0]].flags & YSIG__F_FRAME) != 0;
                 if (at_frame || view) {
                     /* a frame-rate test is at the onset; a sample-rate one
-                     * on a view, at the view's time. A hold's clock in a
-                     * frame's pass is the time the frame knows input up
-                     * to, while the test is true: a still input's value
+                     * on a frame-updated input, at the value's time. A
+                     * hold's clock there is the time the frame knows input
+                     * up to, while the test is true: a still input's value
                      * keeps its old t, and the hold would never end */
                     ysig_value v = *x;
-                    int holding = n->kns[0] > 0 && ysig__test(n, x, 0);
-                    if (at_frame) v.t = holding ? g->t_known : t;
-                    else if (holding && g->t_known > v.t) v.t = g->t_known;
+                    if (at_frame) v.t = t;
+                    else if (n->kns[0] > 0 && g->t_known > v.t && ysig__test(n, x, 0)) v.t = g->t_known;
                     ysig__det_value(g, i, &v, v.t, ysig__sink_t(g, n, v.t));
                 } else {
-                    ysig__det_frame(g, i, g->t_known, x);
+                    ysig__det_frame(g, i, t, x);
                 }
             } else {
                 ysig__det_value(g, i, x, x->t, ysig__sink_t(g, n, x->t));
@@ -2854,56 +2859,21 @@ YSIG_API bool ysig_set_data(ysig_graph* g, int node, int index, double v) {
     return true;
 }
 
-static void ysig__ring_lower(ysig__ring* r, int64_t poll) {
-    int k;
-    for (k = r->n - 1; k >= 0; k--) {
-        ysig_value* v = &r->buf[(r->head + k) % r->cap];
-        if (v->t <= poll) break;     /* in time order: the rest are earlier */
-        v->t = poll;
-    }
-}
-
-/* A stamp later than the poll is believed only up to the poll: one bad
- * stamp must not make its source drop every later sample, its rings skip
- * them, a hold or a filter wait for its time, or hide a silence. Every
- * time kept from a stamp comes down to it. */
+/* A stamp more than YSIG_FUTURE_NS past the poll is a bad one: it must not
+ * make its source drop every later sample or hide a silence. A stamp
+ * within that of the poll changes nothing. */
 static void ysig__lower_late(ysig_graph* g, int64_t poll) {
+    int64_t lim = ysig__add(poll, YSIG_FUTURE_NS);
     int i, d;
     for (i = 0; i < g->n; i++) {
         ysig__nd* n = &g->nd[i];
-        ysig__ring_lower(&n->hist, poll);
-        if (n->sink_t > poll) n->sink_t = poll;
-        switch (n->op) {
-        case YSIG_OP_SOURCE: {
+        if (n->op == YSIG_OP_SOURCE) {
             ysig__src_st* s = (ysig__src_st*)n->st;
             for (d = 0; d < s->n; d++)
-                if (s->last_t[d] > poll) s->last_t[d] = poll;
-            break;
-        }
-        case YSIG_OP_SILENT: {
+                if (s->last_t[d] > lim) s->last_t[d] = poll;
+        } else if (n->op == YSIG_OP_SILENT) {
             ysig__silent_st* s = (ysig__silent_st*)n->st;
-            if (s->last > poll) s->last = poll;
-            break;
-        }
-        case YSIG_OP_VELOCITY: case YSIG_OP_SPEED: case YSIG_OP_DELAY:
-            ysig__ring_lower((ysig__ring*)n->st, poll);
-            break;
-        case YSIG_OP_LOWPASS: {
-            ysig__lp_st* s = (ysig__lp_st*)n->st;
-            if (s->t_prev > poll) s->t_prev = poll;
-            break;
-        }
-        case YSIG_OP_INTEGRATE: {
-            ysig__int_st* s = (ysig__int_st*)n->st;
-            if (s->t_prev > poll) s->t_prev = poll;
-            break;
-        }
-        case YSIG_OP_DETECT: {
-            ysig__det_st* s = (ysig__det_st*)n->st;
-            if (s->holding && s->t_start > poll) s->t_start = poll;
-            break;
-        }
-        default: break;
+            if (s->last > lim) s->last = poll;
         }
     }
 }
@@ -3013,7 +2983,7 @@ YSIG_API int ysig_frame(ysig_graph* g, const ysig_frame_in* f) {
             int64_t ex = ysig__sub(g->t_fed, f->poll_ns);
             g->st.late_poll++;
             if (ex > g->st.late_poll_max_ns) g->st.late_poll_max_ns = ex;
-            ysig__lower_late(g, f->poll_ns);
+            if (ex > YSIG_FUTURE_NS) ysig__lower_late(g, f->poll_ns);
         }
         g->t_known = f->poll_ns < f->onset_ns ? f->poll_ns : f->onset_ns;
     } else {
@@ -3058,7 +3028,12 @@ YSIG_API bool ysig_arm(ysig_graph* g, int node, int64_t t_ns) {
     {
         int fell = (int)g->nd[node].p[13] == YSIG_OUT_HIT && g->val[node].v[0] != 0;
         ysig__det_arm(g, node, t_ns);
-        if (fell) ysig__settle(g, node);
+        if (fell) {
+            /* the fall has a time, so a past read after it agrees */
+            g->val[node].t = t_ns;
+            ysig__hist_push(g, &g->nd[node], &g->val[node]);
+            ysig__settle(g, node);
+        }
     }
     return true;
 }

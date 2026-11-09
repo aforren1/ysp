@@ -411,7 +411,7 @@ id = "48"
 name = "detect: no hold completed by a frame"
 test = "sig"
 why = "A still hand sends nothing: its hold would never end."
-find = 'if (!s->armed || n->kns[0] <= 0 || tk < s->t_arm) return;'
+find = 'if (!s->armed || n->kns[0] <= 0 || onset < s->t_arm) return;'
 replace = 'return;'
 
 [[mutant]]
@@ -570,8 +570,8 @@ id = "67"
 name = "detect: a view tested at the onset"
 test = "sig"
 why = "A movement end would be stamped at the planned onset, past the input."
-find = '                    if (at_frame) v.t = holding ? g->t_known : t;'
-replace = '                    if (1) v.t = holding ? g->t_known : t;'
+find = '                    if (at_frame) v.t = t;'
+replace = '                    if (1) v.t = t;'
 
 [[mutant]]
 id = "68"
@@ -1401,7 +1401,7 @@ id = "166"
 name = "late stamp: an order slot not lowered"
 test = "sig"
 why = "T5: one far-future stamp must stop dropping the source's samples one frame later."
-find = '            if (s->last_t[d] > poll) s->last_t[d] = poll;'
+find = '                if (s->last_t[d] > lim) s->last_t[d] = poll;'
 replace = '            (void)d;'
 
 [[mutant]]
@@ -1409,7 +1409,7 @@ id = "167"
 name = "late stamp: a silent's last not lowered"
 test = "sig"
 why = "T14: a raw mouse's far-future count would hide the silence for ever."
-find = '            if (s->last > poll) s->last = poll;'
+find = '            if (s->last > lim) s->last = poll;'
 replace = '            (void)poll;'
 
 [[mutant]]
@@ -1417,7 +1417,7 @@ id = "168"
 name = "late stamp: nothing lowered"
 test = "sig"
 why = "Without the lowering a graph with a poll never recovers."
-find = '            ysig__lower_late(g, f->poll_ns);'
+find = '            if (ex > YSIG_FUTURE_NS) ysig__lower_late(g, f->poll_ns);'
 replace = '            (void)0;'
 
 [[mutant]]
@@ -1449,8 +1449,8 @@ id = "172"
 name = "re-arm: the users do not see the fall"
 test = "sig"
 why = "T7: the next hit in the next sample's pass would be no rise for a gate."
-find = '        if (fell) ysig__settle(g, node);'
-replace = '        (void)fell;'
+find = '            ysig__settle(g, node);'
+replace = '            (void)0;'
 
 [[mutant]]
 id = "173"
@@ -1466,24 +1466,24 @@ id = "174"
 name = "hold on a frame-updated input: the value's old t"
 test = "sig"
 why = "T16: a hold on a mux or a latch of a still hand would never complete."
-find = '                    else if (holding && g->t_known > v.t) v.t = g->t_known;'
-replace = '                    else (void)holding;'
+find = '                    else if (n->kns[0] > 0 && g->t_known > v.t && ysig__test(n, x, 0)) v.t = g->t_known;'
+replace = '                    else (void)0;'
 
 [[mutant]]
 id = "175"
-name = "frame-rate hold: the onset, not the known time"
+name = "frame-rate hold: the known time, not the onset"
 test = "sig"
-why = "One rule for a frame's hold clock; a planned onset is ahead of the poll."
-find = '                    if (at_frame) v.t = holding ? g->t_known : t;'
-replace = '                    if (at_frame) v.t = t;'
+why = "U2: a frame-rate detect tests at its onset; the poll is up to a frame earlier."
+find = '                    if (at_frame) v.t = t;'
+replace = '                    if (at_frame) v.t = g->t_known;'
 
 [[mutant]]
 id = "176"
-name = "sample-rate hold at a frame: the onset, not the known time"
+name = "sample-rate hold at a frame: the known time, not the onset"
 test = "sig"
-why = "The same rule for a detect on sample input: the poll bounds it."
-find = '                    ysig__det_frame(g, i, g->t_known, x);'
-replace = '                    ysig__det_frame(g, i, t, x);'
+why = "U2: the target would go on a frame later than before."
+find = '                    ysig__det_frame(g, i, t, x);'
+replace = '                    ysig__det_frame(g, i, g->t_known, x);'
 
 [[mutant]]
 id = "177"
@@ -1499,56 +1499,61 @@ name = "hit output at a frame: the rise at the frame's time"
 test = "sig"
 why = "A hit found by a frame rises at the hit, not at the found time."
 find = 'if ((int)n->p[13] == YSIG_OUT_HIT && s->fired && !was) ysig__det_out(g, i, v, s->t_hit);'
-replace = 'if ((int)n->p[13] == YSIG_OUT_HIT && s->fired && !was) ysig__det_out(g, i, v, tk);'
+replace = 'if ((int)n->p[13] == YSIG_OUT_HIT && s->fired && !was) ysig__det_out(g, i, v, onset);'
 
 [[mutant]]
-id = "179"
-name = "late stamp: a history ring not lowered"
+id = "185"
+name = "late stamp: a stamp within the limit lowered"
 test = "sig"
-why = "Rings skip every real sample after a far-future entry (history_skipped), so a past read is stale."
-find = '        ysig__ring_lower(&n->hist, poll);'
-replace = '        (void)0;'
+why = "U5: a poll a little behind the newest sample is normal and must change nothing."
+find = '    int64_t lim = ysig__add(poll, YSIG_FUTURE_NS);'
+replace = '    int64_t lim = poll;'
 
 [[mutant]]
-id = "180"
-name = "late stamp: a hold clock not lowered"
+id = "186"
+name = "late stamp: the order slot's limit inclusive"
 test = "sig"
-why = "A hold after the stamp would start at the far-future clock and never complete."
-find = '        if (n->sink_t > poll) n->sink_t = poll;'
-replace = '        (void)0;'
+why = "Exactly YSIG_FUTURE_NS past the poll is believed."
+find = '                if (s->last_t[d] > lim) s->last_t[d] = poll;'
+replace = '                if (s->last_t[d] >= lim) s->last_t[d] = poll;'
 
 [[mutant]]
-id = "181"
-name = "late stamp: a velocity's or delay's ring not lowered"
+id = "187"
+name = "late stamp: the silent's limit inclusive"
 test = "sig"
-why = "The ring would refuse every later sample: the velocity and the delay go stale."
-find = '            ysig__ring_lower((ysig__ring*)n->st, poll);'
+why = "Exactly YSIG_FUTURE_NS past the poll is believed."
+find = '            if (s->last > lim) s->last = poll;'
+replace = '            if (s->last >= lim) s->last = poll;'
+
+[[mutant]]
+id = "188"
+name = "late stamp: the limit 10 s"
+test = "sig"
+why = "A stamp just past 1 s must count as bad."
+find = '#define YSIG_FUTURE_NS 1000000000LL'
+replace = '#define YSIG_FUTURE_NS 10000000000LL'
+
+[[mutant]]
+id = "189"
+name = "late stamp: the early exit removed"
+test = "sig"
+expect = "survived"
+why = "Only a cost: when no time fed is past the limit the slots and silents are below it too. It keeps the walk off the normal frame."
+find = '            if (ex > YSIG_FUTURE_NS) ysig__lower_late(g, f->poll_ns);'
+replace = '            ysig__lower_late(g, f->poll_ns);'
+
+[[mutant]]
+id = "190"
+name = "arm: the fall not in the ring"
+test = "sig"
+why = "U4: a past read after the arm would disagree with the live value."
+find = '            ysig__hist_push(g, &g->nd[node], &g->val[node]);'
 replace = '            (void)0;'
 
 [[mutant]]
-id = "182"
-name = "late stamp: a low-pass's previous time not lowered"
+id = "191"
+name = "arm: the fall's time not set"
 test = "sig"
-why = "dt would stay 0: the filter freezes."
-find = """            ysig__lp_st* s = (ysig__lp_st*)n->st;
-            if (s->t_prev > poll) s->t_prev = poll;"""
-replace = """            ysig__lp_st* s = (ysig__lp_st*)n->st;
-            (void)s;"""
-
-[[mutant]]
-id = "183"
-name = "late stamp: a rate integrator's previous time not lowered"
-test = "sig"
-why = "dt would stay 0: the integral stops for good."
-find = """            ysig__int_st* s = (ysig__int_st*)n->st;
-            if (s->t_prev > poll) s->t_prev = poll;"""
-replace = """            ysig__int_st* s = (ysig__int_st*)n->st;
-            (void)s;"""
-
-[[mutant]]
-id = "184"
-name = "late stamp: a hold start not lowered"
-test = "sig"
-why = "A hold the stamp itself started would end only after the far-future time."
-find = '            if (s->holding && s->t_start > poll) s->t_start = poll;'
-replace = '            (void)s;'
+why = "U4: the ring entry would replace the hit's, at the hit's time."
+find = '            g->val[node].t = t_ns;'
+replace = '            (void)0;'

@@ -153,9 +153,11 @@ n[HOLD].p[YSIG_DETECT_A_Y] = 384;
 
 The hit's `t` is the hold's start plus 0.5 s. The next sample finds it
 (before it is tested, so a hand that leaves after the hold ended counts as
-movement), or a frame that knows the time is past it (its poll, at most
-its onset), so a still hand that sends nothing completes it. A frame's
-hold clock is that known time while the test is true, on any input. Read hits with `ysig_detected()`. With
+movement), or a frame whose onset is at or after it, so a still hand that
+sends nothing completes it. On a frame-updated input (a view, a mux or a
+latch of a channel) a frame's hold clock is the earlier of its poll and
+its onset, while the test is true: a still input's value keeps its old
+`t`, and the hold would never end. Read hits with `ysig_detected()`. With
 `p[YSIG_DETECT_START] = 1` (start `arm`) the detect waits for
 `ysig_arm(&g, node, t)`. A crossing detect (no hold) armed while its test
 is true is held until the test fails (the collector's CROSSINGS rule). A
@@ -219,9 +221,13 @@ the two calls are the same. To place a relative role, for example to bring
 a cursor back to the start without moving the hand:
 
 ```c
-ysig_recenter(&g, 0, start_x, start_y, t_trial);     /* role 0, in the role's units */
+ysig_recenter(&g, 0, start_x, start_y, poll_ns);     /* role 0, in the role's units */
 ysig_reset_trial(&g, t_trial);
 ```
+
+Give `ysig_recenter()` a time no later than the input already fed,
+normally the poll's time. A planned onset is ahead of samples not yet fed:
+a ring would skip them, and a past read would disagree with the live value.
 
 `ysig_recenter()` goes back through the adapter's `scale` and `offset`
 nodes to its integrator and restarts the count grid at that point, so the
@@ -421,21 +427,17 @@ definition. A zero field means the row's `def`.
   source upstream: they keep state per sample, and `ysig_check()` refuses
   them on a generator or a channel alone.
 - Times saturate at the ends of int64 instead of overflowing.
-- A stamp later than the poll is believed only up to the poll. At a frame
-  with a poll, every time kept from a stamp and later than the poll comes
-  down to it, counted in `late_poll`: a source's order slots, history
-  rings and the rings of velocity, speed and delay, a detect's hold clock
-  and hold start, the previous time of a low-pass and of a rate
-  integrator, a `silent`'s last time. One far-future stamp then stops
-  dropping that source's samples one frame later, later samples enter the
-  rings, a hold can complete, and a silent reads 1 after the real silence.
-  What that sample's own pass did stands: a rate integrator's step over
-  its dt stays in the sum, and a hold it ended has its hit.
-- Known limit: a frame with no poll has no such recovery. In a graph that
-  never polls, a far-future stamp stays in the history rings and in a
-  detect's hold clock until a reset (`ysig_reset_trial()` for the
-  experiment's nodes, `ysig_reset()` for an adapter's), and the source
-  drops its later samples until then.
+- A poll a little behind the newest sample is normal and changes
+  nothing; it is counted in `late_poll`. A stamp later than the poll by
+  more than `YSIG_FUTURE_NS` (1 s) is a bad stamp: at a frame with a poll,
+  an order slot's last time and a `silent`'s last time past that come down
+  to the poll. Later samples then flow again one frame later, and a silent
+  recovers.
+- Known limit: that stamp's effect on rings, filters, velocity, delay and a
+  hold's clock stays until the node's next reset (`ysig_reset_trial()` for
+  the experiment's nodes, `ysig_reset()` for an adapter's). `late_poll` is
+  the alarm. A frame with no poll has no recovery of the order slots
+  either: the source drops its later samples until a reset.
 
 ### Trials and adapters
 
@@ -445,8 +447,8 @@ definition. A zero field means the row's `def`.
   an adapter starts from its current value. A graph with no adapters
   resets every node.
 - `ysig_recenter()`: see [Keep the hand across trials](#keep-the-hand-across-trials).
-  The point is in the role's units, at the call's time. Both calls are
-  journaled.
+  The point is in the role's units, at the call's time, no later than the
+  input already fed. Both calls are journaled.
 
 ### Limits
 
