@@ -593,11 +593,12 @@ hits, over its 533 samples; "a frame" is 533 samples, two
 | E-core, second review | 276.4 ns, 275.6 ns, 309.4 ns | 551 ns, 1.55 us, 3.16 us | 152 ns, 256 ns | 147.6 us |
 | P-core, third review | 143.0 ns, 141.9 ns, 176.2 ns | 281 ns, 508 ns, 2.32 us | 105 ns, 203 ns | 76.0 us |
 | P-core, final review | 142.5 ns, 141.6 ns, 177.0 ns | 284 ns, 593 ns, 2.43 us | 105 ns, 176 ns | 75.9 us |
-| P-core, v0.1.0 again (2026-11-09) | 142.3 ns, 141.3 ns, 176.7 ns | 282 ns, 493 ns, 2.41 us | 105 ns, 189 ns | 75.7 us |
-| P-core, v0.2.0 (2026-11-09) | 146.5 ns, 145.6 ns, 180.2 ns | 301 ns, 491 ns, 2.71 us | 108 ns, 168 ns | 78.0 us |
+| P-core, v0.1.0 again (2026-11-09) | 142.5 ns, 141.4 ns, 177.7 ns | 279 ns, 612 ns, 2.32 us | 105 ns, 178 ns | 75.7 us |
+| P-core, v0.2.0 (2026-11-09) | 145.4 ns, 144.4 ns, 179.0 ns | 287 ns, 492 ns, 2.70 us | 107 ns, 170 ns | 77.4 us |
 
-v0.2.0 costs about 4 ns a sample (3%) and 15 ns a frame over v0.1.0 on the
-same graph, in two runs each (145.4 and 145.6 ns against 141.3 and 141.4 ns).
+v0.2.0 costs about 3 ns a sample (2%) and 8 to 15 ns a frame over v0.1.0 on
+the same graph, in two runs each (144.4 and 144.5 ns against 141.4 and 141.2 ns).
+The bench's digest is the same for both.
 The bench graph has no new op, so the difference is in the existing path. Its
 likely part is a detect now writing its value's time, tier and sources on its
 output, because its output can feed other ops; this was not profiled.
@@ -691,9 +692,12 @@ bind's input after it. After the third review: 20,000,000 inputs (seed
 graphs opened and ran (35.0 million events taken, 14.7 million rows,
 0.97 million hits), no finding. For v0.2.0 the target builds the new ops and
 calls `ysig_reset_trial()` and `ysig_recenter()` (accepted or refused, so
-a replay holds across both); 20,000,000 inputs (seed 782), no finding:
-14,474,726 refused by `ysig_check()`, 5,524,346 graphs opened and ran (36.4
-million events taken, 14.8 million rows, 0.98 million hits).
+a replay holds across both), and has seeds of valid adapter graphs: `gcov`
+shows role resolution, accepted recenters and a latch's hit branch run. The
+earlier seeds set the adapter bit in a byte that also holds the node count,
+so no adapter graph opened. 20,000,000 inputs (seed 783) in 36 min, no
+finding: 14,504,450 refused by `ysig_check()`, 5,494,810 graphs opened and
+ran (640.6 million events taken, 373.3 million rows, 9.97 million hits).
 - `tests/mutate/sig.toml`: 183 mutants and a control; 183 of 183 killed
   (v0.2.0: mutants 95 to 184 for the new ops, the calls and the review's
   fixes).

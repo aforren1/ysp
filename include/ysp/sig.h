@@ -338,7 +338,7 @@
  *   adapter graphs), 183 of 183 mutants killed, and trial_visuomotor and
  *   trial_bimanual
  *   byte-identical to v0.1.0's CI data. Four raw mice at 8 kHz into 32
- *   nodes: 146 ns a sample and 0.30 us a ysig_frame() at the median on a
+ *   nodes: 144 ns a sample and 0.29 us a ysig_frame() at the median on a
  *   performance core of the i5-14500, no allocator call (docs/sig.md,
  *   "Cost"). Not run: MSVC, macOS, a window, a real device.
  *
