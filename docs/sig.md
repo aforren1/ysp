@@ -574,10 +574,10 @@ hits, over its 533 samples; "a frame" is 533 samples, two
 | P-core, v0.2.0 (2026-11-09) | 146.5 ns, 145.6 ns, 180.2 ns | 301 ns, 491 ns, 2.71 us | 108 ns, 168 ns | 78.0 us |
 
 v0.2.0 costs about 4 ns a sample (3%) and 15 ns a frame over v0.1.0 on the
-same graph, in two runs each (145.4 and 145.6 ns against 141.3 and 141.4 ns):
-a detect now writes its value's time, tier and sources on its output, because
-its output can feed other ops. The bench graph has no new op; these are the
-existing ops' cost.
+same graph, in two runs each (145.4 and 145.6 ns against 141.3 and 141.4 ns).
+The bench graph has no new op, so the difference is in the existing path. Its
+likely part is a detect now writing its value's time, tier and sources on its
+output, because its output can feed other ops; this was not profiled.
 
 The second review's cost is the digest's finalizer: built with the plain
 xor-multiply step in its place, the same bench gave 130.6 and 130.8 ns a
