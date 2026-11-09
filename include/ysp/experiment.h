@@ -65,7 +65,9 @@
  *   can, element by element. A second pass (references, scopes, lookups,
  *   the host's checks) runs only when the first found none, so one mistake
  *   does not report twice; it collects too. A warning does not refuse: a
- *   duration above 60 s (D4), a lookup key that no level reaches (2.2).
+ *   duration above 60 s (D4), a lookup key that no level reaches (2.2), a
+ *   template or stimulus that no node reaches, so its variables were not
+ *   checked.
  *
  *   ---------------------------------------------------------------------
  *   THE HOST
@@ -78,7 +80,11 @@
  *   player and the designer each supply what they have. report.run and
  *   report.skipped say which checks ran (YEXP_CHECK_*). When column() is
  *   NULL and a table is in scope, a variable that names no other thing
- *   is taken to be a column of that table.
+ *   is taken to be a column of that table. A column's type (yexp_column)
+ *   decides what a variable may be used for; 0 and 1 are a table's only
+ *   booleans. A level of 256 bytes or more is read again at its own length,
+ *   and a level or level list past the limits is recorded in
+ *   report.skipped, not as run.
  *
  *   ---------------------------------------------------------------------
  *   CANONICAL BYTES
@@ -88,8 +94,10 @@
  *   default left out; the SHA-256 of those bytes is the experiment ID. A
  *   duration is the exact decimal of its nanoseconds. Another real goes
  *   through its double (yjs_double(), then yjs_new_double()), so
- *   0.1 and 0.1000000000000000055 are one ID; an integer within int64 stays
- *   exact. A number that yjs_double() cannot read (more than 19 significant
+ *   0.1 and 0.1000000000000000055 are one ID. A number whose exact value is
+ *   an integer within int64 is that integer, however it is spelled. One
+ *   target of a step and a choice with only its key are written in their
+ *   shorter spelling. A number that yjs_double() cannot read (more than 19 significant
  *   digits, or out of range) is refused at load. docs/experiment.md gives
  *   the reasons.
  *
@@ -98,13 +106,15 @@
  *   ---------------------------------------------------------------------
  *   Everything lands in the caller's arena (yjs_arena_init() for a fixed
  *   buffer, yjs_arena_init_heap() for blocks with a limit): the parsed JSON,
- *   the form, the canonical tree and the work space. About 100 KB of work
- *   space, plus about 36 bytes per byte of source text for the worked
- *   examples (docs/experiment.md). A full arena is YEXP_ERR_NOMEM, with the
- *   bytes wanted in the report. Limits: 1024 stimuli, methods, roles and
+ *   the form, the canonical tree and the work space. About 60 KB of work
+ *   space, plus about 21 bytes per byte of source text for the worked
+ *   examples, and about 530 bytes per template (docs/experiment.md). A full
+ *   arena is YEXP_ERR_NOMEM; report.arena_need is the request that failed,
+ *   not the total. Limits: 1024 stimuli, methods, roles and
  *   templates, 4096 steps in one list, 256
  *   children of a node and 32 levels of nodes (the JSON depth of 64 stops a
- *   deeper file first), 5,000,000 work steps for the second pass. Not for a
+ *   deeper file first), 5,000,000 work steps over both passes
+ *   (YEXP_WORK_STEPS). Not for a
  *   frame loop: a definition is read once per session.
  *
  *   ---------------------------------------------------------------------
@@ -176,7 +186,8 @@ typedef struct yexp_report {
     int       n_errors, n_warnings;   /* counted all, kept or not            */
     int       n_diags;                /* kept in diags[]                     */
     unsigned  run, skipped;           /* YEXP_CHECK_* bits                   */
-    size_t    arena_need;             /* after YEXP_ERR_NOMEM                */
+    size_t    arena_need;             /* after YEXP_ERR_NOMEM: the failed request's
+                                       * bytes, not the total the load wants */
     yexp_diag diags[YEXP_MAX_DIAGS];
 } yexp_report;
 
@@ -3451,6 +3462,7 @@ static bool yexp__resolve(yexp__ctx* c, const yexp__scope* s, const char* name, 
     for (i = s->n - 1; i >= 0; i--) {
         const yexp_node* n = s->chain[i];
         int k;
+        c->steps += (long)n->n_vars + n->n_jitters + n->n_rule_vars;   /* each name read is work */
         for (k = 0; k < n->n_vars; k++)
             if (yexp__streq(n->vars[k].key, name)) {
                 out->kind = YEXP__VK_VARS;
@@ -4047,6 +4059,7 @@ static void yexp__check_leaf(yexp__ctx* c, yexp__scope* s) {
     int i, k;
     yexp__rules_truth(s->leaf, s->rt);
     /* which stimuli this leaf shows, and from when */
+    c->steps += c->d->n_stimuli;   /* the loops below walk every stimulus per leaf */
     c->tmpl_seen[t - c->d->templates] = 1;
     memset(c->stim_use, 0, (size_t)c->d->n_stimuli + 1);
     yexp__mark_stims(c, t->events, t->n_events, YEXP__PH_TRIAL);
