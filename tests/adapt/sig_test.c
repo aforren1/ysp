@@ -418,7 +418,7 @@ static void test_maps(void) {
     e = axis(2 * MS, YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 7, -0.0f, 0, YIN_TIER_SIM);
     ysig_feed(&g, &e);
     v = ysig_value_of(&g, 2);
-    CHECK(v->v[0] == 0 && signbit(v->v[0]) && v->v[1] == 7);
+    CHECK(v->v[0] == 0 && 1.0 / v->v[0] < 0 && v->v[1] == 7);   /* -0; MinGW's signbit converts to float */
     /* inside the deadzone */
     e = axis(3 * MS, YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 3, 4, 0, YIN_TIER_SIM);
     ysig_feed(&g, &e);
