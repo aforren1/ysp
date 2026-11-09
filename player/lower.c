@@ -976,7 +976,7 @@ static int pl_stim_make(pl_player* p, pl_stim* s) {
         w.data = data;
         w.size = (size_t)e.size;
         s->sound = yau_wav_load(&p->audio, &w);
-        if (!s->sound.id) { pl_fail(p, "stimulus '%s': %s", d->name, yau_error(&p->audio)); return -1; }
+        if (!s->sound.frames) { pl_fail(p, "stimulus '%s': %s", d->name, yau_error(&p->audio)); return -1; }
         break;
     }
     case YEXP_VIDEO:
@@ -1374,6 +1374,42 @@ pl_leaf* pl_leaf_of(pl_player* p, const yexp_node* n) {
     return NULL;
 }
 
+/* An integer session field in an `if` or `unless` must be 0 or 1 (the
+ * loader accepts it; experiment.md's table: checked at session start). */
+static int pl_check_cond(pl_player* p, const char* name, const char* where) {
+    int i;
+    for (i = 0; i < p->def->n_fields; i++)
+        if (strcmp(p->def->fields[i].name, name) == 0 && !p->def->fields[i].is_string) {
+            int64_t v = p->field_values[i].i;
+            if (v != 0 && v != 1) {
+                pl_fail(p, "%s: the session field '%s' is %lld, and an 'if' or 'unless' needs 0 or 1", where, name, (long long)v);
+                return -1;
+            }
+        }
+    return 0;
+}
+
+static int pl_check_steps(pl_player* p, const yexp_step* s, int n, const char* where) {
+    int i;
+    for (i = 0; i < n; i++) {
+        if (s[i].op == YEXP_IF || s[i].op == YEXP_UNLESS) {
+            if (pl_check_cond(p, s[i].cond, where) < 0) return -1;
+            if (pl_check_steps(p, s[i].steps, s[i].n_steps, where) < 0) return -1;
+        }
+    }
+    return 0;
+}
+
+static int pl_check_nodes(pl_player* p, const yexp_node* n, int count) {
+    int i;
+    for (i = 0; i < count; i++) {
+        if (n[i].if_var && pl_check_cond(p, n[i].if_var, n[i].path) < 0) return -1;
+        if (n[i].unless_var && pl_check_cond(p, n[i].unless_var, n[i].path) < 0) return -1;
+        if (n[i].n_children && pl_check_nodes(p, n[i].children, n[i].n_children) < 0) return -1;
+    }
+    return 0;
+}
+
 /* --- load --------------------------------------------------------------- */
 
 static void pl_hex(const uint8_t* id, char out[65]) {
@@ -1701,6 +1737,11 @@ int pl_load(pl_player* p, const pl_args* a) {
         if (pl_leaves_collect(p, p->def->timeline, p->def->n_timeline, &idx) < 0) return -1;
     }
 
+    if (pl_check_nodes(p, p->def->timeline, p->def->n_timeline) < 0) return -1;
+    for (i = 0; i < p->def->n_templates; i++)
+        if (pl_check_steps(p, p->def->templates[i].events, p->def->templates[i].n_events, p->def->templates[i].name) < 0 ||
+            pl_check_steps(p, p->def->templates[i].after, p->def->templates[i].n_after, p->def->templates[i].name) < 0)
+            return -1;
     if (pl_columns_build(p) < 0) return -1;
     return p->failed ? -1 : 0;
 }

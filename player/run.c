@@ -1170,12 +1170,13 @@ static int pl_sounds(pl_player* p, const yscr_frame* f) {
     for (i = 0; i < p->n_stims; i++) {
         pl_stim* s = &p->stims[i];
         int k, n;
-        if (s->def->kind != YEXP_SOUND || s->ch_visible < 0 || s->sound_id) continue;
+        if (s->def->kind != YEXP_SOUND || s->ch_visible < 0 || s->sound_scheduled >= 0) continue;
         n = ytl_peek(&p->tl, PL_BASE_TRIAL, f->onset, f->onset + 2 * f->period + 1, p->peek, p->fired_cap);
         for (k = 0; k < n && k < p->fired_cap; k++) {
             if (p->peek[k].kind == YTL_ONSET && p->peek[k].target == s->ch_visible) {
                 s->sound_id = yau_play_at(&p->audio, s->sound, p->peek[k].onset);
-                if (!s->sound_id) { pl_fail(p, "'%s': %s", s->def->name, yau_error(&p->audio)); return -1; }
+                if (s->sound_id < 0) { pl_fail(p, "'%s': %s", s->def->name, yau_error(&p->audio)); return -1; }
+                s->sound_scheduled = p->peek[k].onset;
                 break;
             }
         }
@@ -1189,7 +1190,7 @@ static int pl_from_sound(pl_player* p) {
     const pl_stim* s;
     if (!p->in_trial || !p->tmpl->collector || p->from_landed) return 0;
     s = pl_stim_by_name(p, p->tmpl->def->response->from);
-    if (!s || s->def->kind != YEXP_SOUND || !s->sound_id) return 0;
+    if (!s || s->def->kind != YEXP_SOUND || s->sound_scheduled < 0) return 0;
     if (yau_update(&p->audio) < 0) { pl_fail(p, "audio: %s", yau_error(&p->audio)); return -1; }
     if (yau_result(&p->audio, s->sound_id, &on) < 0) { pl_fail(p, "audio: %s", yau_error(&p->audio)); return -1; }
     if (on.onset) {

@@ -134,7 +134,7 @@ def t_if_unless(ctx):
     r2 = Run(ctx, "if_unless2", d, tables={"x": "a\nleft\nright\n"}, args=["--field", "do_it=0", "--rt", "0.2"])
     check(r2.rc == 0 and all(row["node"] == "skipped" for row in r2.trials) and len(r2.trials) == 2, "if on a node, the other way: %s %d" % (r2.err, len(r2.trials)))
     r3 = Run(ctx, "if_bad", d, tables={"x": "a\nleft\nright\n"}, args=["--field", "do_it=7"])
-    check(r3.rc != 0 and "neither true nor false" in r3.err, "an integer field not 0 or 1 in an if is refused at the node: %s" % r3.err)
+    check(r3.rc != 0 and "0 or 1" in r3.err, "an integer field not 0 or 1 in an if is refused at the session's start: %s" % r3.err)
 
 
 def t_empty_and_zero(ctx):

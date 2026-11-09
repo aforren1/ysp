@@ -13,4 +13,16 @@ target_link_libraries(ysp_player PRIVATE ysp_player_lib)
 if(YSP_BUILD_TESTS)
     ysp_add_program(player_make_rig ${PROJECT_SOURCE_DIR}/tests/player/make_rig.c rig devices)
     target_link_libraries(player_make_rig PRIVATE ysp_player_lib)
+    ysp_add_program(test_player_eval ${PROJECT_SOURCE_DIR}/tests/player/eval_test.c rig methods devices)
+    target_link_libraries(test_player_eval PRIVATE ysp_player_lib)
+    add_test(NAME test_player_eval COMMAND test_player_eval)
+    # The system tests and the comparison with the C programs build packs
+    # and run the program: they need Python, ypak and the examples.
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if(Python3_Interpreter_FOUND AND YSP_BUILD_PACK)
+        add_test(NAME test_player_shapes COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/player/player_test.py --bin ${CMAKE_BINARY_DIR}
+                                                 --out ${CMAKE_BINARY_DIR}/player_test_shapes)
+        add_test(NAME test_player_compare COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/player/compare.py --bin ${CMAKE_BINARY_DIR}
+                                                 --out ${CMAKE_BINARY_DIR}/player_test_compare)
+    endif()
 endif()
