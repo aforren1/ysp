@@ -524,15 +524,41 @@ static int pl_enum_value(const char* values, const char* name) {
     return -1;
 }
 
-/* Apply one key to the stimulus. Static keys run once at load, variable ones
- * from pl_stim_begin_trial(); the classification is the same either way. */
-static int pl_apply_key(pl_player* p, pl_stim* s, const yexp_prop* pr, int static_pass) {
+/* Whether a value depends on the response (known only when `after` is
+ * built): its key waits for that moment (2.7). */
+bool pl_value_after(const yexp_value* v) {
+    uint32_t i;
+    if (!v) return false;
+    switch (v->kind) {
+    case YEXP_V_VAR:
+        return strcmp(v->str, "response") == 0 || strcmp(v->str, "rt_s") == 0 || strcmp(v->str, "responded") == 0 ||
+               strcmp(v->str, "correct") == 0 || strcmp(v->str, "outcome") == 0;
+    case YEXP_V_LOOKUP:
+        if (pl_value_after(v->by)) return true;
+        for (i = 0; i < v->n; i++) if (pl_value_after(v->map[i].value)) return true;
+        return false;
+    case YEXP_V_ARRAY: case YEXP_V_CHOICE: case YEXP_V_LINSPACE:
+        for (i = 0; i < v->n; i++) if (pl_value_after(&v->items[i])) return true;
+        return false;
+    case YEXP_V_MICHELSON:
+        return pl_value_after(v->by);
+    default:
+        return false;
+    }
+}
+
+/* Apply one key to the stimulus: `pass` is PL_KEY_LOAD (static keys), then
+ * PL_KEY_TRIAL or PL_KEY_AFTER for the keys that hold a variable, split by
+ * when that variable is known. */
+static int pl_apply_key(pl_player* p, pl_stim* s, const yexp_prop* pr, int pass) {
     const char* key = pr->key;
     int gkind = pl_kind_gfx(s->def->kind);
     const yexp_value* v = pr->value;
     bool st = pl_value_static(v);
-    if (static_pass && !st) return 0;
-    if (!static_pass && st) return 0;
+    if (pass == PL_KEY_LOAD && !st) return 0;
+    if (pass != PL_KEY_LOAD && st) return 0;
+    if (pass == PL_KEY_TRIAL && pl_value_after(v)) return 0;
+    if (pass == PL_KEY_AFTER && !pl_value_after(v)) return 0;
 
     /* keys that are not fields of ygfx_stim */
     if (strcmp(key, "layer") == 0 || strcmp(key, "kind") == 0) return 0;
@@ -620,10 +646,10 @@ static int pl_apply_key(pl_player* p, pl_stim* s, const yexp_prop* pr, int stati
     return -1;
 }
 
-int pl_apply_writes(pl_player* p, pl_stim* s) {
+int pl_apply_writes(pl_player* p, pl_stim* s, int pass) {
     int i;
     for (i = 0; i < s->def->n_props; i++)
-        if (pl_apply_key(p, s, &s->def->props[i], 0) < 0) return -1;
+        if (pl_apply_key(p, s, &s->def->props[i], pass) < 0) return -1;
     return 0;
 }
 
@@ -1584,7 +1610,7 @@ int pl_load(pl_player* p, const pl_args* a) {
         pl_stim* s = &p->stims[i];
         int k;
         for (k = 0; k < s->def->n_props; k++)
-            if (pl_apply_key(p, s, &s->def->props[k], 1) < 0) return -1;
+            if (pl_apply_key(p, s, &s->def->props[k], PL_KEY_LOAD) < 0) return -1;
     }
     /* textures of image stimuli, by every level a variable can take */
     for (i = 0; i < p->n_stims; i++) {

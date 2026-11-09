@@ -410,7 +410,7 @@ static int pl_stim_begin_trial(pl_player* p, const yscr_frame* f) {
     int i;
     for (i = 0; i < p->n_stims; i++) {
         pl_stim* s = &p->stims[i];
-        if (pl_apply_writes(p, s) < 0) return -1;
+        if (pl_apply_writes(p, s, PL_KEY_TRIAL) < 0) return -1;
         if (s->michelson) {
             ycol_shown sh;
             double m;
@@ -427,8 +427,10 @@ static int pl_stim_begin_trial(pl_player* p, const yscr_frame* f) {
             p->env.contrast_shown = sh.shown;
             p->env.have_shown = true;
         }
-        if (s->def->kind == YEXP_TEXT) {
+        if (s->def->kind == YEXP_TEXT && !pl_value_after(s->text_value)) {
             if (pl_stim_set_text(p, s) < 0) return -1;
+        } else if (s->def->kind == YEXP_TEXT) {
+            s->n_runs = 0;   /* no text until `after` is built */
         }
         if (s->def->kind == YEXP_IMAGE) {
             const yexp_prop* tx = yexp_prop_get(s->def->props, s->def->n_props, "texture");
@@ -470,7 +472,12 @@ static int pl_build_after(pl_player* p, int64_t start) {
     ytl_op* ops = p->tmpl->ops;
     int cap = p->tmpl->ops_cap, n = 0;
     int64_t cursor = start;
-    int r;
+    int r, i;
+    for (i = 0; i < p->n_stims; i++) {
+        pl_stim* s = &p->stims[i];
+        if (pl_apply_writes(p, s, PL_KEY_AFTER) < 0) return -1;
+        if (s->def->kind == YEXP_TEXT && pl_value_after(s->text_value) && pl_stim_set_text(p, s) < 0) return -1;
+    }
     memset(&ops[0], 0, sizeof ops[0]);
     ops[0].op = YTL_OP_AT;
     ops[0].t_ns = start;

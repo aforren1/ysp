@@ -144,6 +144,7 @@ typedef struct pl_stim {
     yrdk_step* steps; int n_steps; int stream;
     /* michelson */
     const yexp_value* michelson;
+    bool  text_after;           /* its text depends on the response         */
     /* sound */
     yau_buf sound;
     yau_id sound_id;
@@ -483,7 +484,9 @@ int  pl_run(pl_player* p);
  * 0 to go on, 1 when the session is over, < 0 on an error. */
 int  pl_frame(pl_player* p, const yscr_frame* f);
 void pl_stim_apply(pl_player* p);
-int  pl_apply_writes(pl_player* p, pl_stim* s);
+enum { PL_KEY_LOAD, PL_KEY_TRIAL, PL_KEY_AFTER };
+bool pl_value_after(const yexp_value* v);
+int  pl_apply_writes(pl_player* p, pl_stim* s, int pass);
 int  pl_stim_set_text(pl_player* p, pl_stim* s);
 int  pl_walk_next_leaf(pl_player* p);
 int  pl_start_trial(pl_player* p, const yscr_frame* f);

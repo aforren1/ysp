@@ -76,6 +76,9 @@
  *          [--trials N] [--seed N] [--cal FILE] [--rig NAME] [--rig-dir DIR]
  *          [--no-rig] [--out FILE]
  *   --trials N  trials per track (default 60; --sim: 40)
+ *   --design-timing  test only (tests/player/compare.py): --sim uses the
+ *               definition's timings (0.5 s fixation and blank) rather than
+ *               its own short ones, so the player's data can be compared
  * Exit code: 0 (also after Shift+Esc), 1 when something did not open or a
  * --sim check failed, 2 for a bad argument.
  */
@@ -208,7 +211,7 @@ int main(int argc, char** argv) {
     const char* rig_dir = NULL;
     const char* method = "both";
     uint64_t seed = 20261009, rng_obs;
-    int i, n, sim = 0, n_trials = 0, fullscreen = 0, no_rig = 0, aborted = 0, failed = 0, rows = 0, sim_bad = 0;
+    int i, n, sim = 0, n_trials = 0, fullscreen = 0, no_rig = 0, aborted = 0, failed = 0, rows = 0, sim_bad = 0, design_timing = 0;
     int in_trial = 0, responding = 0, n_sim_ev = 0, sim_next = 0, side = 0, track = 0;
     int64_t fix_ns, iti_ns, sim_frame = -1;   /* --sim: the gabor's landing frame, until its record */
     double ppd = 0.0, level = 0, level_max;
@@ -223,6 +226,7 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--rig") && i + 1 < argc) rig_name = argv[++i];
         else if (!strcmp(argv[i], "--rig-dir") && i + 1 < argc) rig_dir = argv[++i];
         else if (!strcmp(argv[i], "--no-rig")) no_rig = 1;
+        else if (!strcmp(argv[i], "--design-timing")) design_timing = 1;
         else if (!strcmp(argv[i], "--out") && i + 1 < argc) out_path = argv[++i];
         else {
             fprintf(stderr, "usage: trial_2afc_adaptive [--sim] [--fullscreen] [--method stair|quest|both] "
@@ -239,8 +243,8 @@ int main(int argc, char** argv) {
     }
     if (n_trials == 0) n_trials = sim ? 40 : 60;
     if (n_trials < 5 || n_trials > MAX_TRIALS / 2) { fprintf(stderr, "trial_2afc_adaptive: --trials takes 5..512\n"); return 2; }
-    fix_ns = YRT_S(sim ? 0.1 : 0.5);
-    iti_ns = YRT_S(sim ? 0.05 : 0.5);
+    fix_ns = YRT_S(sim && !design_timing ? 0.1 : 0.5);
+    iti_ns = YRT_S(sim && !design_timing ? 0.05 : 0.5);
     rng_obs = seed ^ 0x0b5u;
 
     /* the calibration: measured, or nominal and flagged */
