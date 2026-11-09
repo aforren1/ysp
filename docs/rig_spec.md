@@ -273,7 +273,7 @@ typedef struct yscr_app {
     yscr_step (*open)(void* ctx, yscr_screen* s);     /* once, the screen is open */
     void      (*input)(void* ctx, const yin_event* e); /* each event, before frame */
     yscr_step (*frame)(void* ctx, yscr_screen* s, const yscr_frame* f);
-    void      (*close)(void* ctx, yscr_screen* s, int reason); /* once, always */
+    void      (*close)(void* ctx, yscr_screen* s, int reason); /* rule 6 */
 } yscr_app;
 
 int yscr_run(const yscr_desc* d, const yscr_app* app);   /* 0, or an error */
@@ -285,11 +285,14 @@ Rules:
    `main()`, so tools and bindings keep their own entry point. On the web
    it returns to the browser at once and the callbacks continue from
    `requestAnimationFrame`, so code after the call must not depend on the
-   run being over: use `close`.
-2. A frame is: the begin, every input event in arrival order on the frame
-   thread, then `frame`, then the flip. Unlike SDL's `SDL_AppEvent`, which
-   may run concurrently with `SDL_AppIterate`, `input` never overlaps
-   `frame`. `--sim` and replay need that order.
+   run being over: use `close`. On a platform whose application loop never
+   returns (iOS, section 9.1) it does not return.
+2. Every callback runs on the thread that called `yscr_run()`. On macOS
+   that is the main thread, as for the loop form. A frame is: the begin,
+   every input event in arrival order, then `frame`, then the flip. Unlike
+   SDL's `SDL_AppEvent`, which may run concurrently with `SDL_AppIterate`,
+   `input` never overlaps `frame`. `--sim` and replay need that order.
+   `input` does not draw.
 3. `frame` draws and returns. It does not call `yscr_begin()` or
    `yscr_flip()`; those calls fail inside a run. A frame with a target time
    sets `yscr_frame_target(s, t_ns)`, which the flip passes to
@@ -298,7 +301,29 @@ Rules:
    `emscripten_sleep()` (`yau_wait()`, the video header's waits) still need
    ASYNCIFY or JSPI, so a program without them must not call those.
 5. An abort (Shift+Esc, the panic key) goes to `close` with the reason from
-   `yscr_frame.abort`. `frame` is not called again.
+   `yscr_frame.abort`. `frame` is not called again. An abort cannot be
+   canceled.
+6. `close` runs once on every way out of a native run. A browser runs no
+   code when a tab closes, so on the web `close` may not run. A program
+   must not depend on `close` to keep its data: it writes each trial's row
+   when the trial ends.
+
+Prior art: [sokol_app.h](https://github.com/floooh/sokol/blob/master/sokol_app.h)
+has the same shape, and `SOKOL_NO_ENTRY` with `sapp_run()` is the entry
+point chosen here. From its documentation:
+
+| | `sokol_app.h` | This proposal |
+|---|---|---|
+| Entry | `sokol_main()` by default; `sapp_run()` with `SOKOL_NO_ENTRY`, which returns at once on Emscripten and never on some platforms | `yscr_run()` only |
+| Thread | One thread for all callbacks, which can differ from the one that ran `sokol_main()` | One thread, the caller's |
+| Events and frames | Not stated; an event carries `frame_count` | Every event before its frame, in arrival order |
+| Who paces the frame | The platform (CADisplayLink on macOS); `swap_interval` is "ignored on some platforms" | `ysp/screen.h`'s begin and flip, with a target time and a flip record per frame |
+| Quit | A soft quit with an event that the program can cancel, and a hard quit | An abort always ends the run |
+| Cleanup | "isn't guaranteed to be called on the web and mobile platforms" | The same on the web (rule 6) |
+| Drawing in the event callback | Not allowed | Not allowed (rule 2) |
+
+The pacing row is the reason not to wrap an existing application layer: a
+frame's timing and its record are what this header exists to give.
 
 Level 2, a new header `ysp/app.h` (`yapp_`), is optional glue over
 screen, gfx, timeline, response and signal path, so that `ysp/screen.h`
