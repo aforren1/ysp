@@ -647,6 +647,20 @@ static int load_rc(const char* doc, const yexp_host* h, yexp_report* r) {
     return rc;
 }
 
+/* A column "f" of 0 and 1 whose buffer never gets a NUL. */
+static int flag_column(void* ctx, const char* table, int i, yexp_column* o) {
+    (void)ctx; (void)table;
+    if (i == 0) { o->name = "f"; o->type = YEXP_COL_INTEGER; return 1; }
+    return 0;
+}
+static int flag_level(void* ctx, const char* table, int col, int l, char* b, size_t cap) {
+    (void)ctx; (void)table; (void)col;
+    if (l > 1) return -1;
+    memset(b, 'z', cap);
+    b[0] = l ? '1' : '0';
+    return 1;
+}
+
 /* The ID, and that the canonical bytes give back the same form and ID. */
 static void id_roundtrip(const char* doc, uint8_t id[32]) {
     static yexp_report r, r2;
@@ -793,7 +807,7 @@ static void run_review(void) {
         CHECK(strstr(r.diags[0].msg, "template 'u'") && strstr(r.diags[0].msg, "not checked"), "the template by name");
         CHECK(strstr(r.diags[1].msg, "stimulus 's'") && strstr(r.diags[1].msg, "not checked"), "the stimulus by name");
     }
-    /* the work limit covers the first pass */
+    /* valid long lists are linear, so the work limit does not refuse them */
     {
         size_t cap = 4u << 20, at = 0;
         char* doc = (char*)malloc(cap);
@@ -808,8 +822,7 @@ static void run_review(void) {
             at += (size_t)snprintf(doc + at, cap - at, "]}");
         }
         at += (size_t)snprintf(doc + at, cap - at, "]}}," XT);
-        CHECK(load_rc(doc, NULL, &r) == YEXP_ERR_REFUSED, "long on-lists hit the work limit");
-        CHECK(r.n_diags >= 1 && strstr(r.diags[0].msg, "steps to check"), "and say so");
+        CHECK2(load_rc(doc, NULL, &r) == YEXP_OK, "lists at the stated limits are in the work budget", r.n_diags ? r.diags[0].msg : "");
         free(doc);
     }
     /* many templates in a small arena: the tables are sized on demand */
@@ -859,6 +872,90 @@ static void run_review(void) {
             }
         }
         g_bh_mode = 0;
+    }
+    /* a member named "note" that is no string is a member, not a note */
+    {
+        const char* doc = XH "\"stimuli\":{\"note\":{\"kind\":\"shape\"}},\"trials\":{\"t\":{\"events\":[{\"on\":\"note\"}]}},\"timeline\":[{\"name\":\"m\",\"trial\":\"t\",\"vars\":{\"note\":5}}]}";
+        CHECK2(load_rc(doc, NULL, &r) == YEXP_OK, "a member named note", r.n_diags ? r.diags[0].msg : "");
+    }
+    /* a long vars chain still has its lookup checked */
+    {
+        char doc[8192];
+        int at = 0, i;
+        at += snprintf(doc + at, sizeof doc - (size_t)at, XH "\"stimuli\":{\"s\":{\"kind\":\"shape\",\"w\":{\"by\":\"$a0\",\"map\":{\"a\":1}}}},\"trials\":{\"t\":{\"events\":[{\"on\":\"s\"}]}},\"timeline\":[{\"name\":\"m\",\"trial\":\"t\",\"vars\":{");
+        for (i = 0; i < 50; i++) at += snprintf(doc + at, sizeof doc - (size_t)at, "\"a%d\":\"$a%d\",", i, i + 1);
+        at += snprintf(doc + at, sizeof doc - (size_t)at, "\"a50\":{\"choice\":[\"a\",\"b\"]}}}]}");
+        CHECK2(load_rc(doc, NULL, &r) == YEXP_ERR_REFUSED && r.n_diags && strstr(r.diags[0].msg, "no key for"), "a lookup at the end of 50 links is checked", r.n_diags ? r.diags[0].msg : "");
+    }
+    /* a column of 0 and 1, read by its length: the host need not write a NUL */
+    {
+        yexp_host h;
+        const char* doc = XH "\"trials\":{\"t\":{}},\"timeline\":[{\"name\":\"c\",\"timeline_variables\":\"t\",\"timeline\":[{\"name\":\"m\",\"trial\":\"t\",\"if\":\"$f\"}]}]}";
+        memset(&h, 0, sizeof h);
+        h.column = flag_column;
+        h.level = flag_level;
+        CHECK2(load_rc(doc, &h, &r) == YEXP_OK, "0 and 1 with no NUL in the buffer", r.n_diags ? r.diags[0].msg : "");
+    }
+    /* an integer session field can stand for a boolean; a string field cannot */
+    {
+        const char* node = XH "\"trials\":{\"t\":{}},\"timeline\":[{\"name\":\"m\",\"trial\":\"t\",\"if\":\"$participant\"}]}";
+        const char* node2 = XH "\"trials\":{\"t\":{}},\"timeline\":[{\"name\":\"m\",\"trial\":\"t\",\"unless\":\"$participant\"}]}";
+        const char* step = XH "\"trials\":{\"t\":{\"events\":[{\"if\":\"$participant\",\"steps\":[]},{\"unless\":\"$participant\",\"steps\":[]}]}}," XT;
+        CHECK(load_rc(node, NULL, &r) == YEXP_OK, "an integer field in a node's if");
+        CHECK(load_rc(node2, NULL, &r) == YEXP_OK, "an integer field in a node's unless");
+        CHECK(load_rc(step, NULL, &r) == YEXP_OK, "an integer field in a step's if and unless");
+    }
+    /* a stagger on one stimulus has no effect, so it is dropped */
+    {
+#define ON_DOC(x) XH "\"stimuli\":{\"s\":{\"kind\":\"shape\"}},\"trials\":{\"t\":{\"events\":[" x "]}}," XT
+        static const char* const a[] = { ON_DOC("{\"on\":\"s\"}"), ON_DOC("{\"on\":[\"s\"],\"stagger_s\":0.1}"), ON_DOC("{\"on\":\"s\",\"stagger_s\":0.1}") };
+        one_spelling(a, 3, "a stagger on one stimulus");
+    }
+    /* one refused element is one error: references to it are not dangling */
+    {
+        static const char* const docs[] = {
+            XH "\"stimuli\":{\"s\":{\"kind\":\"shape\",\"w\":{\"michelson\":1,\"note\":5}}},\"trials\":{\"t\":{\"events\":[{\"on\":\"s\"},{\"set\":\"s\",\"props\":{\"x\":1}}],\"record\":[\"s\"]}}," XT,
+            XH "\"stimuli\":{\"s\":{\"kind\":\"blob\"}},\"trials\":{\"t\":{\"events\":[{\"on\":\"s\"},{\"to\":\"s\",\"props\":{\"bogus\":1}}]}}," XT,
+            XH "\"trials\":{\"t\":{\"bogus\":1}}," XT,
+            XH "\"devices\":{\"o\":{\"direction\":\"sideways\",\"family\":[\"k\"]}},\"trials\":{\"t\":{\"events\":[{\"trigger\":1,\"role\":\"o\"}]}}," XT,
+            XH "\"devices\":{\"o\":1},\"trials\":{\"t\":{\"events\":[{\"trigger\":1,\"role\":\"o\"}]}}," XT,
+            XH "\"methods\":{\"q\":{\"type\":\"nope\"}},\"trials\":{\"t\":{}},\"timeline\":[{\"name\":\"m\",\"trial\":\"t\",\"tracks\":[\"q\"]}]}",
+            XH "\"stimuli\":[1],\"trials\":{\"t\":{\"events\":[{\"on\":\"s\"}],\"record\":[\"s\"]}}," XT,
+            XH "\"devices\":[1],\"trials\":{\"t\":{\"events\":[{\"trigger\":1,\"role\":\"o\"}]}}," XT,
+            XH "\"methods\":[1],\"trials\":{\"t\":{}},\"timeline\":[{\"name\":\"m\",\"trial\":\"t\",\"tracks\":[\"q\"]}]}",
+            XH "\"trials\":[1]," XT,
+            XH "\"timeline\":[{\"name\":\"m\",\"trial\":\"t\"}]}",
+        };
+        size_t k;
+        for (k = 0; k < sizeof docs / sizeof docs[0]; k++) {
+            CHECK2(load_rc(docs[k], NULL, &r) == YEXP_ERR_REFUSED, "refused", docs[k]);
+            CHECK2(r.n_errors == 1, "one cause, one error", r.n_diags > 1 ? r.diags[1].msg : docs[k]);
+        }
+        /* a from whose events failed is not also "never shown" */
+        {
+            const char* d = XH "\"devices\":{\"r\":{\"direction\":\"in\",\"family\":[\"k\"]}},\"stimuli\":{\"s\":{\"kind\":\"shape\"}},\"trials\":{\"t\":{\"events\":[{\"bogus\":1}],\"response\":{\"role\":\"r\",\"from\":\"s\"}}}," XT;
+            CHECK(load_rc(d, NULL, &r) == YEXP_ERR_REFUSED && r.n_errors == 1, "a from after a bad event");
+        }
+    }
+    /* a container with no leaf is named in a warning */
+    {
+        const char* doc = XH "\"trials\":{\"t\":{}},\"timeline\":[{\"name\":\"m\",\"trial\":\"t\"},{\"name\":\"c\",\"vars\":{\"x\":\"$nosuch\"},\"timeline\":[{\"name\":\"d\",\"timeline\":[]}]}]}";
+        CHECK(load_rc(doc, NULL, &r) == YEXP_OK && r.n_warnings == 1, "one warning for a branch with no leaf");
+        CHECK(r.n_diags == 1 && strstr(r.diags[0].msg, "node 'c'") && strstr(r.diags[0].msg, "not checked"), "by the outermost name");
+    }
+    /* a list of buttons and choices at the limits */
+    {
+        size_t cap = 2u << 20, at = 0;
+        char* doc = (char*)malloc(cap);
+        int i;
+        if (!doc) abort();
+        at += (size_t)snprintf(doc + at, cap - at, XH "\"devices\":{\"r\":{\"direction\":\"in\",\"family\":[\"k\"],\"buttons\":{");
+        for (i = 0; i < 20000; i++) at += (size_t)snprintf(doc + at, cap - at, "%s\"%d\":\"b%d\"", i ? "," : "", i, i);
+        at += (size_t)snprintf(doc + at, cap - at, "}}},\"stimuli\":{\"s\":{\"kind\":\"shape\"}},\"trials\":{\"t\":{\"events\":[{\"on\":\"s\"}],\"response\":{\"role\":\"r\",\"from\":\"s\",\"choices\":[");
+        for (i = 0; i < 4000; i++) at += (size_t)snprintf(doc + at, cap - at, "%s\"b%d\"", i ? "," : "", i);
+        at += (size_t)snprintf(doc + at, cap - at, "]}}}," XT);
+        CHECK2(load_rc(doc, NULL, &r) == YEXP_OK, "4000 choices against 20000 buttons", r.n_diags ? r.diags[0].msg : "");
+        free(doc);
     }
     /* a rule var used as a number: numeric text is fine, other text is not */
     {

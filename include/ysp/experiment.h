@@ -260,6 +260,8 @@ typedef struct yexp_role {
     int                n_buttons;
     const yexp_kv*     map;       /* string values                           */
     int                n_map;
+    const char* const* sorted_buttons_;
+    bool               failed_;   /* refused in the first pass               */
 } yexp_role;
 
 typedef enum yexp_stim_kind {
@@ -276,6 +278,7 @@ typedef struct yexp_stim {
     const int*       dyn_;        /* indices of props that hold a variable   */
     int              n_dyn_;
     uint32_t         pos_;
+    bool             failed_;     /* refused in the first pass               */
 } yexp_stim;
 
 typedef enum yexp_method_type { YEXP_STAIR = 0, YEXP_QUEST, YEXP_AEP } yexp_method_type;
@@ -893,7 +896,7 @@ static const yexp_row yexp__rows[] = {
     { YEXP__S_STEP, 0x0070, YEXP__T_OBJ, YEXP__R_REQ, "props", NULL, NULL },
     { YEXP__S_STEP, 0x0080, YEXP__T_NAME, YEXP__R_REQ, "role", NULL, NULL },
     { YEXP__S_STEP, 0x0010, YEXP__T_NAME, YEXP__R_REQ, "set", NULL, NULL },
-    { YEXP__S_STEP, 0x0003, YEXP__T_DUR, 0, "stagger_s", "0", NULL },
+    { YEXP__S_STEP, 0x0003, YEXP__T_DUR, YEXP__R_SELF, "stagger_s", "0", NULL },
     { YEXP__S_STEP, 0x0600, YEXP__T_LIST, YEXP__R_REQ, "steps", NULL, NULL },
     { YEXP__S_STEP, 0x0040, YEXP__T_NAME, YEXP__R_REQ, "then", NULL, NULL },
     { YEXP__S_STEP, 0x0020, YEXP__T_NAME, YEXP__R_REQ, "to", NULL, NULL },
@@ -936,6 +939,11 @@ YEXP_API bool yexp_row_required(const yexp_row* r) { return r && (r->flags & YEX
 #define YEXP__MAX_LEVELS   65536
 #define YEXP__VAR_CHAIN    64      /* one variable naming another, deep */
 #define YEXP__LEVEL_BYTES  65536   /* the longest level asked for again */
+
+#define YEXP__BAD_ROLES   1u
+#define YEXP__BAD_STIMULI 2u
+#define YEXP__BAD_METHODS 4u
+#define YEXP__BAD_TRIALS  8u
 
 /* A key's state while one object is read. */
 typedef struct yexp__slot {
@@ -987,6 +995,12 @@ typedef struct yexp__ctx {
     uint8_t*           stim_seen;     /* shown by some leaf                  */
     uint8_t*           tmpl_seen;     /* run by some leaf                    */
     bool               lv_over;       /* the level list was cut short        */
+    int*               used;          /* the stimuli this leaf marked        */
+    int                n_used;
+    uint32_t*          stim_stamp;    /* seen in the list numbered gen       */
+    uint32_t*          method_stamp;
+    uint32_t           gen;
+    unsigned           bad_sets;      /* a set refused whole: no name of it is dangling */
 } yexp__ctx;
 
 static bool yexp__streq(const char* a, const char* b) { return strcmp(a, b) == 0; }
@@ -2121,7 +2135,6 @@ static bool yexp__set_begin(yexp__ctx* c, const yjs_value* src, const char* elem
         yexp__err(c, src->pos, "%s: wrong type; expected an object of names", elem);
         return false;
     }
-    if (!yexp__note_ok(c, src, elem)) return false;
     for (k = 0; k < src->n; k++) {
         const yjs_member* m = &src->u.members[k];
         if (yexp__is_set_note(m)) continue;
@@ -2257,13 +2270,15 @@ static void yexp__parse_web(yexp__ctx* c, const yjs_value* src, yjs_value** cano
     *canon = cw;
 }
 
+static int yexp__str_cmp(const void* a, const void* b);
+
 static void yexp__parse_devices(yexp__ctx* c, const yjs_value* src, yjs_value** canon) {
     yexp_role* out;
     yjs_value* cset;
     int n = 0, i = 0;
     size_t k;
     if (!src) return;
-    if (!yexp__set_begin(c, src, "devices", YEXP__MAX_SET, &n)) return;
+    if (!yexp__set_begin(c, src, "devices", YEXP__MAX_SET, &n)) { c->bad_sets |= YEXP__BAD_ROLES; return; }
     out = (yexp_role*)yexp__alloc(c, (size_t)(n ? n : 1) * sizeof *out);
     cset = yexp__cnew(c, YJS_OBJECT);
     if (!out || !cset) return;
@@ -2274,13 +2289,17 @@ static void yexp__parse_devices(yexp__ctx* c, const yjs_value* src, yjs_value** 
         yexp__slot* s;
         yexp_role* r;
         const yexp_value* v;
+        int before;
         if (yexp__is_set_note(m)) { yexp__put(c, cset, "note", yexp__cstr(c, m->value->u.s)); continue; }
         snprintf(elem, sizeof elem, "role '%s'", m->key);
+        before = c->r->n_errors;
         s = yexp__object(c, YEXP__S_ROLE, 0xffffu, m->value, elem, &cr);
-        if (!s) continue;
         r = &out[i++];
+        /* a refused role keeps its name, so a reference to it is no second error */
         r->name = m->key;
         r->pos_ = m->key_pos;
+        r->failed_ = !s;
+        if (!s) continue;
         {
             const char* dir = yexp__v_str(yexp__slotv(c, s, YEXP__S_ROLE, "direction"));
             r->direction = !dir ? 0 : yexp__streq(dir, "out") ? 1 : yexp__streq(dir, "both") ? 2 : 0;
@@ -2297,9 +2316,23 @@ static void yexp__parse_devices(yexp__ctx* c, const yjs_value* src, yjs_value** 
         }
         r->kind = yexp__v_str(yexp__slotv(c, s, YEXP__S_ROLE, "kind"));
         v = yexp__slotv(c, s, YEXP__S_ROLE, "buttons");
-        if (v) { r->buttons = v->map; r->n_buttons = (int)v->n; }
+        if (v) {
+            r->buttons = v->map;
+            r->n_buttons = (int)v->n;
+            if (v->n) {
+                /* sorted, so a long choices list against long buttons stays cheap */
+                const char** bs = (const char**)yexp__alloc(c, v->n * sizeof(char*));
+                uint32_t q;
+                if (bs) {
+                    for (q = 0; q < v->n; q++) bs[q] = v->map[q].value->str;
+                    qsort((void*)bs, v->n, sizeof(char*), yexp__str_cmp);
+                    r->sorted_buttons_ = bs;
+                }
+            }
+        }
         v = yexp__slotv(c, s, YEXP__S_ROLE, "map");
         if (v) { r->map = v->map; r->n_map = (int)v->n; }
+        r->failed_ = c->r->n_errors != before;
         yexp__put(c, cset, m->key, cr);
         yexp__release(c, YEXP__S_ROLE);
     }
@@ -2404,7 +2437,7 @@ static void yexp__parse_stimuli(yexp__ctx* c, const yjs_value* src, yjs_value** 
     int n = 0, i = 0;
     size_t k;
     if (!src) return;
-    if (!yexp__set_begin(c, src, "stimuli", YEXP__MAX_SET, &n)) return;
+    if (!yexp__set_begin(c, src, "stimuli", YEXP__MAX_SET, &n)) { c->bad_sets |= YEXP__BAD_STIMULI; return; }
     out = (yexp_stim*)yexp__alloc(c, (size_t)(n ? n : 1) * sizeof *out);
     cset = yexp__cnew(c, YJS_OBJECT);
     if (!out || !cset) return;
@@ -2412,8 +2445,12 @@ static void yexp__parse_stimuli(yexp__ctx* c, const yjs_value* src, yjs_value** 
         const yjs_member* m = &src->u.members[k];
         int before = c->r->n_errors;
         if (yexp__is_set_note(m)) { yexp__put(c, cset, "note", yexp__cstr(c, m->value->u.s)); continue; }
+        /* a refused stimulus keeps its name, so a reference to it is no second error */
+        out[i].name = m->key;
+        out[i].pos_ = m->key_pos;
         yexp__parse_stimulus(c, m, &out[i], cset);
-        if (c->r->n_errors == before && !c->nomem) i++;
+        out[i].failed_ = c->r->n_errors != before;
+        i++;
     }
     c->d->stimuli = out;
     c->d->n_stimuli = i;
@@ -2508,16 +2545,16 @@ static void yexp__parse_methods(yexp__ctx* c, const yjs_value* src, yjs_value** 
     int n = 0, i = 0;
     size_t k;
     if (!src) return;
-    if (!yexp__set_begin(c, src, "methods", YEXP__MAX_SET, &n)) return;
+    if (!yexp__set_begin(c, src, "methods", YEXP__MAX_SET, &n)) { c->bad_sets |= YEXP__BAD_METHODS; return; }
     out = (yexp_method*)yexp__alloc(c, (size_t)(n ? n : 1) * sizeof *out);
     cset = yexp__cnew(c, YJS_OBJECT);
     if (!out || !cset) return;
     for (k = 0; k < src->n; k++) {
         const yjs_member* m = &src->u.members[k];
-        int before = c->r->n_errors;
         if (yexp__is_set_note(m)) { yexp__put(c, cset, "note", yexp__cstr(c, m->value->u.s)); continue; }
+        out[i].name = m->key;
         yexp__parse_method(c, m, &out[i], cset);
-        if (c->r->n_errors == before && !c->nomem) i++;
+        i++;
     }
     c->d->methods = out;
     c->d->n_methods = i;
@@ -2532,6 +2569,17 @@ static const yexp_method* yexp__method_get(const yexp_def* d, const char* name) 
 
 static const char* const yexp__verbs[] = { "on", "off", "wait_s", "at_s", "set", "to", "then", "trigger", "mark", "if", "unless" };
 #define YEXP__N_VERBS 11
+
+/* Whether this name was already seen in the list numbered c->gen. */
+static bool yexp__stim_stamped(yexp__ctx* c, const char* name) {
+    const yexp_stim* st = yexp_stim_get(c->d, name);
+    uint32_t* u;
+    if (!st || !c->stim_stamp) return false;
+    u = &c->stim_stamp[st - c->d->stimuli];
+    if (*u == c->gen) return true;
+    *u = c->gen;
+    return false;
+}
 
 /* The stimulus keys a step may set or tween: a timeline channel carries a
  * float, so only the kind's numeric properties; a resource, a layout key
@@ -2629,16 +2677,26 @@ static void yexp__parse_step(yexp__ctx* c, const yjs_value* src, const char* ele
         out->stagger = yexp__slotv(c, s, YEXP__S_STEP, "stagger_s");
         {
             const yexp__slot* st = yexp__slot_at(c, s, YEXP__S_STEP, "stagger_s");
-            if (st && st->given && tg && tg->n < 2)
-                yexp__err(c, st->pos, "%s: 'stagger_s' goes with an array of two or more stimuli", elem);
+            /* a stagger has no effect on one stimulus: it is dropped, so a
+             * written one and none give one form and one ID */
+            if (st && st->given && tg) {
+                const yexp_value* sv = yexp__slotv(c, s, YEXP__S_STEP, "stagger_s");
+                int ri = yexp__find(c, YEXP__S_STEP, mask, "stagger_s");
+                const yexp_value* d = ri >= 0 ? yexp__default(c, ri) : NULL;
+                if (tg->n < 2) out->stagger = d;
+                else if (sv && st->src && !(d && yexp__same(sv, d))) yexp__put(c, cs, "stagger_s", (yjs_value*)st->src);
+            }
         }
         {
-            int a, b;
+            int a;
+            c->gen++;
             for (a = 0; a < out->n_stims; a++) {
                 const char* nm = out->stims[a];
-                if (!yexp_stim_get(c->d, nm)) yexp__err(c, tg->pos, "%s: '%s': no stimulus named '%s'", elem, yexp__verbs[verb], nm);
-                for (b = 0; b < a && yexp__work(c); b++)
-                    if (yexp__streq(out->stims[b], nm)) yexp__err(c, tg->pos, "%s: '%s': '%s' named twice", elem, yexp__verbs[verb], nm);
+                if (!yexp_stim_get(c->d, nm)) {
+                    if (!(c->bad_sets & YEXP__BAD_STIMULI)) yexp__err(c, tg->pos, "%s: '%s': no stimulus named '%s'", elem, yexp__verbs[verb], nm);
+                } else if (yexp__stim_stamped(c, nm)) {
+                    yexp__err(c, tg->pos, "%s: '%s': '%s' named twice", elem, yexp__verbs[verb], nm);
+                }
             }
         }
         break;
@@ -2652,13 +2710,13 @@ static void yexp__parse_step(yexp__ctx* c, const yjs_value* src, const char* ele
         yexp__slot* ps = yexp__slot_at(c, s, YEXP__S_STEP, "props");
         const char** names = (const char**)yexp__alloc(c, sizeof(char*));
         if (names && name) { names[0] = name; out->stims = names; out->n_stims = 1; }
-        if (!st && name) yexp__err(c, src->pos, "%s: '%s': no stimulus named '%s'", elem, yexp__verbs[verb], name);
+        if (!st && name && !(c->bad_sets & YEXP__BAD_STIMULI)) yexp__err(c, src->pos, "%s: '%s': no stimulus named '%s'", elem, yexp__verbs[verb], name);
         if (verb != YEXP_SET) {
             out->duration = yexp__slotv(c, s, YEXP__S_STEP, "duration_s");
             out->delay = yexp__slotv(c, s, YEXP__S_STEP, "delay_s");
             out->ease = yexp__v_str(yexp__slotv(c, s, YEXP__S_STEP, "ease"));
         }
-        if (st && ps && ps->src) {
+        if (st && !st->failed_ && ps && ps->src) {
             yjs_value* cp = NULL;
             yexp__parse_props(c, ps->src, st, elem, out, &cp);
             yexp__put(c, cs, "props", cp);
@@ -2671,8 +2729,8 @@ static void yexp__parse_step(yexp__ctx* c, const yjs_value* src, const char* ele
         out->role = role;
         if (role) {
             const yexp_role* r = yexp__role_get(c->d, role);
-            if (!r) yexp__err(c, src->pos, "%s: 'role': no role named '%s'", elem, role);
-            else if (r->direction == 0) yexp__err(c, src->pos, "%s: 'role': '%s' is an input role; a trigger needs an output", elem, role);
+            if (!r) { if (!(c->bad_sets & YEXP__BAD_ROLES)) yexp__err(c, src->pos, "%s: 'role': no role named '%s'", elem, role); }
+            else if (!r->failed_ && r->direction == 0) yexp__err(c, src->pos, "%s: 'role': '%s' is an input role; a trigger needs an output", elem, role);
         }
         break;
     }
@@ -2723,6 +2781,15 @@ static int yexp__parse_steps(yexp__ctx* c, const yjs_value* src, const char* pre
 
 /* --- templates ---------------------------------------------------------- */
 
+typedef struct yexp__keyed { const char* key; int index; } yexp__keyed;
+
+static int yexp__keyed_cmp(const void* a, const void* b) {
+    const yexp__keyed* x = (const yexp__keyed*)a;
+    const yexp__keyed* y = (const yexp__keyed*)b;
+    int cmp = strcmp(x->key, y->key);
+    return cmp ? cmp : x->index - y->index;
+}
+
 static void yexp__parse_response(yexp__ctx* c, const yjs_value* src, const char* telem, const yexp_response** out_r, yjs_value** canon) {
     char elem[128];
     yjs_value* cr = NULL;
@@ -2748,11 +2815,11 @@ static void yexp__parse_response(yexp__ctx* c, const yjs_value* src, const char*
     r->wait_for_key_release = yexp__v_bool(yexp__slotv(c, s, YEXP__S_RESPONSE, "wait_for_key_release"), false);
     if (r->role) {
         const yexp_role* ro = yexp__role_get(c->d, r->role);
-        if (!ro) yexp__err(c, src->pos, "%s: 'role': no role named '%s'", elem, r->role);
-        else if (ro->direction == 1) yexp__err(c, src->pos, "%s: 'role': '%s' is an output role; a response needs an input", elem, r->role);
+        if (!ro) { if (!(c->bad_sets & YEXP__BAD_ROLES)) yexp__err(c, src->pos, "%s: 'role': no role named '%s'", elem, r->role); }
+        else if (!ro->failed_ && ro->direction == 1) yexp__err(c, src->pos, "%s: 'role': '%s' is an output role; a response needs an input", elem, r->role);
     }
     name = r->from;
-    if (name && !yexp_stim_get(c->d, name)) yexp__err(c, src->pos, "%s: 'from': no stimulus named '%s'", elem, name);
+    if (name && !yexp_stim_get(c->d, name) && !(c->bad_sets & YEXP__BAD_STIMULI)) yexp__err(c, src->pos, "%s: 'from': no stimulus named '%s'", elem, name);
     chs = yexp__slot_at(c, s, YEXP__S_RESPONSE, "choices");
     if (chs && chs->src) {
         const yjs_value* arr = chs->src;
@@ -2768,7 +2835,6 @@ static void yexp__parse_response(yexp__ctx* c, const yjs_value* src, const char*
                 for (i = 0; i < arr->n; i++) {
                     const yjs_value* it = arr->u.items[i];
                     char ce[200];
-                    size_t a;
                     snprintf(ce, sizeof ce, "%s: 'choices'[%u]", elem, (unsigned)i);
                     if (it->type == YJS_STRING) {
                         yjs_value* cs2 = NULL;
@@ -2790,17 +2856,25 @@ static void yexp__parse_response(yexp__ctx* c, const yjs_value* src, const char*
                     }
                     if (ch[i].key && !ch[i].key[0]) yexp__err(c, it->pos, "%s: an empty key", ce);
                     /* 2.6: a button role's choices are its button names */
-                    if (ch[i].key && r->role && yexp__role_get(c->d, r->role) && yexp__role_get(c->d, r->role)->n_buttons > 0) {
+                    if (ch[i].key && r->role) {
                         const yexp_role* ro = yexp__role_get(c->d, r->role);
-                        int b;
-                        bool found = false;
-                        for (b = 0; b < ro->n_buttons; b++)
-                            if (yexp__streq(ro->buttons[b].value->str, ch[i].key)) found = true;
-                        if (!found) yexp__err(c, it->pos, "%s: '%s' is not a button of the role '%s'", ce, ch[i].key, r->role);
+                        if (ro && !ro->failed_ && ro->sorted_buttons_ &&
+                            !bsearch(&ch[i].key, (const void*)ro->sorted_buttons_, (size_t)ro->n_buttons, sizeof(char*), yexp__str_cmp))
+                            yexp__err(c, it->pos, "%s: '%s' is not a button of the role '%s'", ce, ch[i].key, r->role);
                     }
-                    for (a = 0; a < i && yexp__work(c); a++)
-                        if (ch[i].key && ch[a].key && yexp__streq(ch[i].key, ch[a].key))
-                            yexp__err(c, it->pos, "%s: the key '%s' is listed twice", ce, ch[i].key);
+                }
+                {
+                    /* sorted once, so a list at the stated limit stays linear */
+                    yexp__keyed* ks = (yexp__keyed*)yexp__alloc(c, arr->n * sizeof *ks);
+                    size_t nk = 0, a;
+                    if (ks) {
+                        for (a = 0; a < arr->n; a++)
+                            if (ch[a].key) { ks[nk].key = ch[a].key; ks[nk].index = (int)a; nk++; }
+                        qsort(ks, nk, sizeof *ks, yexp__keyed_cmp);
+                        for (a = 1; a < nk; a++)
+                            if (yexp__streq(ks[a].key, ks[a - 1].key))
+                                yexp__err(c, arr->u.items[ks[a].index]->pos, "%s: 'choices'[%d]: the key '%s' is listed twice", elem, ks[a].index, ks[a].key);
+                    }
                 }
                 r->choices = ch;
                 r->n_choices = (int)arr->n;
@@ -2820,8 +2894,8 @@ static void yexp__parse_response(yexp__ctx* c, const yjs_value* src, const char*
             r->trigger_code = yexp__slotv(c, s2, YEXP__S_RTRIGGER, "code");
             if (r->trigger_role) {
                 const yexp_role* ro = yexp__role_get(c->d, r->trigger_role);
-                if (!ro) yexp__err(c, trg->src->pos, "%s: 'role': no role named '%s'", te, r->trigger_role);
-                else if (ro->direction == 0) yexp__err(c, trg->src->pos, "%s: 'role': '%s' is an input role; a trigger needs an output", te, r->trigger_role);
+                if (!ro) { if (!(c->bad_sets & YEXP__BAD_ROLES)) yexp__err(c, trg->src->pos, "%s: 'role': no role named '%s'", te, r->trigger_role); }
+                else if (!ro->failed_ && ro->direction == 0) yexp__err(c, trg->src->pos, "%s: 'role': '%s' is an input role; a trigger needs an output", te, r->trigger_role);
             }
             yexp__put(c, cr, "trigger", ct);
             yexp__release(c, YEXP__S_RTRIGGER);
@@ -2836,7 +2910,7 @@ static void yexp__parse_response(yexp__ctx* c, const yjs_value* src, const char*
  * trigger at its onset, that is a trigger step with no step that moves the
  * cursor between it and the stimulus's "on". */
 static void yexp__default_record_scan(yexp__ctx* c, const yexp_step* steps, int n, const char** pending, int* n_pending, const char** out, int* n_out, int cap) {
-    int i, j, k;
+    int i, j;
     for (i = 0; i < n; i++) {
         const yexp_step* st = &steps[i];
         switch (st->op) {
@@ -2848,10 +2922,7 @@ static void yexp__default_record_scan(yexp__ctx* c, const yexp_step* steps, int 
             break;
         case YEXP_TRIGGER:
             for (j = 0; j < *n_pending; j++) {
-                bool dup = false;
-                for (k = 0; k < *n_out && yexp__work(c); k++)
-                    if (yexp__streq(out[k], pending[j])) dup = true;
-                if (!dup && *n_out < cap) out[(*n_out)++] = pending[j];
+                if (!yexp__stim_stamped(c, pending[j]) && *n_out < cap) out[(*n_out)++] = pending[j];
             }
             break;
         case YEXP_IF: case YEXP_UNLESS:
@@ -2880,7 +2951,8 @@ static void yexp__default_record(yexp__ctx* c, yexp_template* t) {
     pending = (const char**)yexp__alloc(c, (size_t)cap * sizeof(char*));
     out = (const char**)yexp__alloc(c, (size_t)cap * sizeof(char*));
     if (!pending || !out) return;
-    if (t->response && t->response->from) out[n++] = t->response->from;
+    c->gen++;
+    if (t->response && t->response->from) { yexp__stim_stamped(c, t->response->from); out[n++] = t->response->from; }
     yexp__default_record_scan(c, t->events, t->n_events, pending, &n_pending, out, &n, cap);
     t->record = out;
     t->n_record = n;
@@ -2951,6 +3023,7 @@ static void yexp__parse_template(yexp__ctx* c, const yjs_member* m, yexp_templat
     yexp__slot* s;
     yjs_value* ct = NULL;
     yexp__slot* x;
+    int before_events, events_errors;
     snprintf(elem, sizeof elem, "template '%s'", m->key);
     if (m->value->type != YJS_OBJECT) { yexp__err(c, m->value->pos, "%s: wrong type; expected an object", elem); return; }
     if (yjs_get(m->value, "script")) {
@@ -2963,12 +3036,14 @@ static void yexp__parse_template(yexp__ctx* c, const yjs_member* m, yexp_templat
     out->name = m->key;
     out->pos_ = m->key_pos;
     x = yexp__slot_at(c, s, YEXP__S_TEMPLATE, "events");
+    before_events = c->r->n_errors;
     if (x && x->src) {
         yjs_value* ca = NULL;
         snprintf(sub, sizeof sub, "%s: events", elem);
         yexp__parse_steps(c, x->src, sub, 0, &out->events, &out->n_events, &ca);
         if (ca && ca->n) yexp__put(c, ct, "events", ca);
     }
+    events_errors = c->r->n_errors - before_events;
     x = yexp__slot_at(c, s, YEXP__S_TEMPLATE, "after");
     if (x && x->src) {
         yjs_value* ca = NULL;
@@ -2982,7 +3057,7 @@ static void yexp__parse_template(yexp__ctx* c, const yjs_member* m, yexp_templat
         yexp__parse_response(c, x->src, elem, &out->response, &cr);
         yexp__put(c, ct, "response", cr);
         /* the response is armed at the first frame and timed from this onset */
-        if (out->response && out->response->from && yexp_stim_get(c->d, out->response->from) &&
+        if (!events_errors && out->response && out->response->from && yexp_stim_get(c->d, out->response->from) &&
             !yexp__steps_show(out->events, out->n_events, out->response->from))
             yexp__err(c, x->src->pos, "%s: response: 'from': no step in 'events' shows '%s', so its onset never comes", elem, out->response->from);
     }
@@ -2992,14 +3067,15 @@ static void yexp__parse_template(yexp__ctx* c, const yjs_member* m, yexp_templat
         yexp_template tmp = *out;
         yexp__default_record(c, &tmp);
         if (rslot && rslot->given && rv) {
-            int a, b;
+            int a;
             out->record = yexp__str_array(c, rv, &out->n_record);
+            c->gen++;
             for (a = 0; a < out->n_record; a++) {
-                if (!yexp_stim_get(c->d, out->record[a]))
-                    yexp__err(c, rv->pos, "%s: 'record': no stimulus named '%s'", elem, out->record[a]);
-                for (b = 0; b < a && yexp__work(c); b++)
-                    if (yexp__streq(out->record[a], out->record[b]))
-                        yexp__err(c, rv->pos, "%s: 'record': '%s' listed twice", elem, out->record[a]);
+                if (!yexp_stim_get(c->d, out->record[a])) {
+                    if (!(c->bad_sets & YEXP__BAD_STIMULI)) yexp__err(c, rv->pos, "%s: 'record': no stimulus named '%s'", elem, out->record[a]);
+                } else if (yexp__stim_stamped(c, out->record[a])) {
+                    yexp__err(c, rv->pos, "%s: 'record': '%s' listed twice", elem, out->record[a]);
+                }
             }
             /* at its default the key is left out, and the form is the same */
             if (!yexp__str_arrays_equal(out->record, out->n_record, tmp.record, tmp.n_record)) {
@@ -3029,16 +3105,16 @@ static void yexp__parse_trials(yexp__ctx* c, const yjs_value* src, yjs_value** c
     yjs_value* cset;
     int n = 0, i = 0;
     size_t k;
-    if (!yexp__set_begin(c, src, "trials", YEXP__MAX_SET, &n)) return;
+    if (!yexp__set_begin(c, src, "trials", YEXP__MAX_SET, &n)) { c->bad_sets |= YEXP__BAD_TRIALS; return; }
     out = (yexp_template*)yexp__alloc(c, (size_t)(n ? n : 1) * sizeof *out);
     cset = yexp__cnew(c, YJS_OBJECT);
     if (!out || !cset) return;
     for (k = 0; k < src->n; k++) {
         const yjs_member* m = &src->u.members[k];
-        int before = c->r->n_errors;
         if (yexp__is_set_note(m)) { yexp__put(c, cset, "note", yexp__cstr(c, m->value->u.s)); continue; }
+        out[i].name = m->key;
         yexp__parse_template(c, m, &out[i], cset);
-        if (c->r->n_errors == before && !c->nomem) i++;
+        i++;
     }
     c->d->templates = out;
     c->d->n_templates = i;
@@ -3048,6 +3124,8 @@ static void yexp__parse_trials(yexp__ctx* c, const yjs_value* src, yjs_value** c
 static const yexp_template* yexp__template_get(const yexp_def* d, const char* name) {
     YEXP__FIND(d->templates, d->n_templates, name);
 }
+
+static int yexp__str_cmp(const void* a, const void* b) { return strcmp(*(const char* const*)a, *(const char* const*)b); }
 
 /* --- rules: what the sequencer's text names ----------------------------- */
 
@@ -3262,7 +3340,7 @@ static void yexp__parse_node(yexp__ctx* c, const yjs_value* src, const yexp_node
     if (leaf) {
         const char* tn = yexp__v_str(yexp__slotv(c, s, YEXP__S_NODE, "trial"));
         out->trial = tn ? yexp__template_get(c->d, tn) : NULL;
-        if (tn && !out->trial) yexp__err(c, x->pos, "%s: 'trial': no template named '%s'", elem, tn);
+        if (tn && !out->trial && !(c->bad_sets & YEXP__BAD_TRIALS)) yexp__err(c, x->pos, "%s: 'trial': no template named '%s'", elem, tn);
     }
     x = yexp__slot_at(c, s, YEXP__S_NODE, "timeline_variables");
     if (x->v) {
@@ -3286,6 +3364,9 @@ static void yexp__parse_node(yexp__ctx* c, const yjs_value* src, const yexp_node
         size_t total = 0, off = 0;
         char* joined;
         uint32_t i;
+        for (i = 0; i < rv->n; i++)
+            if (strchr(rv->items[i].str, '\n'))
+                yexp__err(c, rv->items[i].pos, "%s: rules[%u]: one statement per element (D5); this one holds a line break", elem, (unsigned)i);
         for (i = 0; i < rv->n; i++) total += strlen(rv->items[i].str) + 1;
         joined = (char*)yexp__alloc(c, total + 1);
         if (joined) {
@@ -3306,15 +3387,19 @@ static void yexp__parse_node(yexp__ctx* c, const yjs_value* src, const yexp_node
     if (x->v && x->given) {
         const yexp_value* tv = x->v;
         const yexp_method** ms;
-        uint32_t i, a;
+        uint32_t i;
         ms = (const yexp_method**)yexp__alloc(c, (tv->n ? tv->n : 1) * sizeof(void*));
         if (ms) {
+            c->gen++;
             for (i = 0; i < tv->n; i++) {
                 ms[i] = yexp__method_get(c->d, tv->items[i].str);
-                if (!ms[i]) yexp__err(c, x->pos, "%s: 'tracks': no method named '%s'", elem, tv->items[i].str);
-                for (a = 0; a < i && yexp__work(c); a++)
-                    if (yexp__streq(tv->items[i].str, tv->items[a].str))
-                        yexp__err(c, x->pos, "%s: 'tracks': '%s' listed twice", elem, tv->items[i].str);
+                if (!ms[i]) {
+                    if (!(c->bad_sets & YEXP__BAD_METHODS)) yexp__err(c, x->pos, "%s: 'tracks': no method named '%s'", elem, tv->items[i].str);
+                } else if (c->method_stamp) {
+                    uint32_t* u = &c->method_stamp[ms[i] - c->d->methods];
+                    if (*u == c->gen) yexp__err(c, x->pos, "%s: 'tracks': '%s' listed twice", elem, tv->items[i].str);
+                    *u = c->gen;
+                }
             }
             out->tracks = ms;
             out->n_tracks = (int)tv->n;
@@ -3539,9 +3624,8 @@ static bool yexp__column_is_flag(yexp__ctx* c, const char* table, int col) {
         int n;
         if (!yexp__work(c)) return true;
         n = c->h->level(c->h->ctx, table, col, i, buf, sizeof buf);
-        buf[sizeof buf - 1] = 0;
         if (n < 0) return true;
-        if (n >= (int)sizeof buf || (!yexp__streq(buf, "0") && !yexp__streq(buf, "1"))) return false;
+        if (n != 1 || (buf[0] != '0' && buf[0] != '1')) return false;
     }
 }
 
@@ -3563,7 +3647,12 @@ static void yexp__type_value(yexp__ctx* c, const yexp__scope* s, const yexp_valu
         if (want != YEXP__W_TEXT) yexp__type_err(c, pos, elem, key, name, "text", want);
         break;
     case YEXP_V_ARRAY:
-        if (want != YEXP__W_VEC3 || v->n != 3) yexp__type_err(c, pos, elem, key, name, "an array", want);
+        if (want != YEXP__W_VEC3 || v->n != 3) {
+            yexp__type_err(c, pos, elem, key, name, "an array", want);
+        } else {
+            for (k = 0; k < 3; k++)
+                if (v->items[k].kind != YEXP_V_NUMBER) { yexp__type_err(c, pos, elem, key, name, "an array with an item that is no number", want); break; }
+        }
         break;
     case YEXP_V_VAR:
         yexp__type_var(c, s, v->str, want, pos, elem, key, depth + 1);
@@ -3606,7 +3695,9 @@ static void yexp__type_var(yexp__ctx* c, const yexp__scope* s, const char* name,
         for (i = 0; i < c->d->n_fields; i++)
             if (yexp__streq(c->d->fields[i].name, name)) {
                 bool text = c->d->fields[i].is_string;
-                if ((text && want != YEXP__W_TEXT) || (!text && want != YEXP__W_NUM && want != YEXP__W_NONNEG))
+                /* an integer field can stand for a boolean; the player checks
+                 * at session start that its value is 0 or 1 */
+                if ((text && want != YEXP__W_TEXT) || (!text && want != YEXP__W_NUM && want != YEXP__W_NONNEG && want != YEXP__W_BOOL))
                     yexp__type_err(c, pos, elem, key, name, text ? "text" : "an integer", want);
             }
         break;
@@ -3710,7 +3801,7 @@ static int yexp__levels_var(yexp__ctx* c, const yexp__scope* s, const char* name
     yexp__var r;
     const char* why;
     int i;
-    if (depth > YEXP__VAR_CHAIN) return 0;
+    if (depth > YEXP__VAR_CHAIN) { yexp__levels_skipped(c); return 0; }
     for (i = 0; bools[i]; i++)
         if (yexp__streq(name, bools[i])) {
             /* the first three are true only on trials the rules make */
@@ -3741,7 +3832,7 @@ static int yexp__levels_var(yexp__ctx* c, const yexp__scope* s, const char* name
     }
     if (yexp__is_builtin(name)) return 0;
     if (!yexp__resolve(c, s, name, &r, &why)) return 0;
-    if (r.kind == YEXP__VK_VARS) return yexp__levels(c, s, r.value, depth + 1);
+    if (r.kind == YEXP__VK_VARS) return yexp__levels(c, s, r.value, depth);
     if (r.kind == YEXP__VK_RULEVAR) {
         if (!r.rv->n_values) return 0;
         for (i = 0; i < r.rv->n_values; i++)
@@ -3804,7 +3895,6 @@ static int yexp__levels(yexp__ctx* c, const yexp__scope* s, const yexp_value* v,
     }
 }
 
-static int yexp__str_cmp(const void* a, const void* b) { return strcmp(*(const char* const*)a, *(const char* const*)b); }
 
 /* Sorts c->lv and drops repeats. */
 static void yexp__lv_unique(yexp__ctx* c) {
@@ -3924,18 +4014,26 @@ static bool yexp__has_michelson(const yexp_value* v) {
     return false;
 }
 
-/* Marks every stimulus the steps name; byte 1 = used before 'after'. */
+/* 1 = used before 'after', 2 = only in it. */
+static void yexp__mark_use(yexp__ctx* c, int index, int value) {
+    uint8_t* u = &c->stim_use[index];
+    if (!*u) c->used[c->n_used++] = index;
+    if (value == 1 || !*u) *u = (uint8_t)value;
+}
+
+static int yexp__int_cmp(const void* a, const void* b) { return *(const int*)a - *(const int*)b; }
+
+/* Marks every stimulus the steps name. */
 static void yexp__mark_stims(yexp__ctx* c, const yexp_step* steps, int n, int phase) {
     int i, j;
     for (i = 0; i < n; i++) {
         const yexp_step* st = &steps[i];
         if (!yexp__work(c)) return;
+        c->steps += st->n_stims;
         for (j = 0; j < st->n_stims; j++) {
             const yexp_stim* ps = yexp_stim_get(c->d, st->stims[j]);
             if (ps) {
-                uint8_t* u = &c->stim_use[ps - c->d->stimuli];
-                if (phase == YEXP__PH_TRIAL) *u = 1;
-                else if (!*u) *u = 2;
+                yexp__mark_use(c, (int)(ps - c->d->stimuli), phase == YEXP__PH_TRIAL ? 1 : 2);
             }
         }
         if (st->op == YEXP_IF || st->op == YEXP_UNLESS) yexp__mark_stims(c, st->steps, st->n_steps, phase);
@@ -4056,24 +4154,26 @@ static const char* yexp__host_msg(char* msg, size_t cap) {
 static void yexp__check_leaf(yexp__ctx* c, yexp__scope* s) {
     const yexp_template* t = s->t;
     char elem[128];
-    int i, k;
+    int i, k, u;
     yexp__rules_truth(s->leaf, s->rt);
     /* which stimuli this leaf shows, and from when */
-    c->steps += c->d->n_stimuli;   /* the loops below walk every stimulus per leaf */
     c->tmpl_seen[t - c->d->templates] = 1;
-    memset(c->stim_use, 0, (size_t)c->d->n_stimuli + 1);
+    /* only the stimuli this leaf names: a leaf's cost is its own template */
+    for (i = 0; i < c->n_used; i++) c->stim_use[c->used[i]] = 0;
+    c->n_used = 0;
     yexp__mark_stims(c, t->events, t->n_events, YEXP__PH_TRIAL);
     yexp__mark_stims(c, t->after, t->n_after, YEXP__PH_AFTER);
     if (t->response && t->response->from) {
         const yexp_stim* ps = yexp_stim_get(c->d, t->response->from);
-        if (ps) c->stim_use[ps - c->d->stimuli] = 1;
+        if (ps) yexp__mark_use(c, (int)(ps - c->d->stimuli), 1);
     }
+    qsort(c->used, (size_t)c->n_used, sizeof(int), yexp__int_cmp);
     s->michelson = 0;
-    for (i = 0; i < c->d->n_stimuli; i++) {
-        const yexp_stim* st = &c->d->stimuli[i];
+    for (u = 0; u < c->n_used; u++) {
+        int stim_index = c->used[u];
+        const yexp_stim* st = &c->d->stimuli[stim_index];
         const yexp_prop* p;
-        if (!c->stim_use[i]) continue;
-        c->stim_seen[i] = 1;
+        c->stim_seen[stim_index] = 1;
         p = yexp_prop_get(st->props, st->n_props, "contrast");
         if (p && yexp__has_michelson(p->value)) s->michelson++;
     }
@@ -4112,11 +4212,9 @@ static void yexp__check_leaf(yexp__ctx* c, yexp__scope* s) {
     if (t->method_value && t->method_value->pos != UINT32_MAX) yexp__check_value(c, s, t->method_value, YEXP__PH_AFTER, YEXP__W_NUM, elem, "method_value");
     snprintf(elem, sizeof elem, "template '%s': columns", t->name);
     for (k = 0; k < t->n_columns; k++) yexp__check_value(c, s, t->columns[k].value, YEXP__PH_ROW, YEXP__W_ANY, elem, t->columns[k].key);
-    for (i = 0; i < c->d->n_stimuli; i++) {
-        const yexp_stim* st = &c->d->stimuli[i];
-        int need;
-        if (!c->stim_use[i]) continue;
-        need = c->stim_use[i] == 1 ? YEXP__PH_TRIAL : YEXP__PH_AFTER;
+    for (u = 0; u < c->n_used; u++) {
+        const yexp_stim* st = &c->d->stimuli[c->used[u]];
+        int need = c->stim_use[c->used[u]] == 1 ? YEXP__PH_TRIAL : YEXP__PH_AFTER;
         snprintf(elem, sizeof elem, "stimulus '%s'", st->name);
         for (k = 0; k < st->n_dyn_; k++) {
             const yexp_prop* p = &st->props[st->dyn_[k]];
@@ -4280,6 +4378,25 @@ static void yexp__warn_unused(yexp__ctx* c) {
             yexp__warn(c, c->d->stimuli[i].pos_, "stimulus '%s': no step that a node runs shows it, so its variables were not checked", c->d->stimuli[i].name);
 }
 
+static bool yexp__has_leaf(const yexp_node* n) {
+    int i;
+    if (n->trial) return true;
+    for (i = 0; i < n->n_children; i++)
+        if (yexp__has_leaf(&n->children[i])) return true;
+    return false;
+}
+
+static void yexp__warn_empty(yexp__ctx* c, const yexp_node* nodes, int n) {
+    int i;
+    for (i = 0; i < n; i++) {
+        if (nodes[i].trial) continue;
+        if (!yexp__has_leaf(&nodes[i]))
+            yexp__warn(c, nodes[i].pos_, "node '%s': no leaf under it, so its variables were not checked", nodes[i].path);
+        else
+            yexp__warn_empty(c, nodes[i].children, nodes[i].n_children);
+    }
+}
+
 static void yexp__warn_unreached(yexp__ctx* c) {
     yexp__lookup* l;
     for (l = c->lookups; l; l = l->next) {
@@ -4369,11 +4486,16 @@ static void yexp__parse_root(yexp__ctx* c, const yjs_value* root) {
     x = yexp__slot_at(c, s, YEXP__S_ROOT, "methods");
     yexp__parse_methods(c, x->src, &cc);
     if (cc && cc->n) yexp__put(c, croot, "methods", cc);
+    /* the duplicate checks below are linear: one stamp per name */
+    c->stim_stamp = (uint32_t*)yexp__alloc(c, ((size_t)d->n_stimuli + 1) * sizeof(uint32_t));
+    c->method_stamp = (uint32_t*)yexp__alloc(c, ((size_t)d->n_methods + 1) * sizeof(uint32_t));
     x = yexp__slot_at(c, s, YEXP__S_ROOT, "trials");
     if (x->src) {
         cc = NULL;
         yexp__parse_trials(c, x->src, &cc);
         yexp__put(c, croot, "trials", cc);
+    } else {
+        c->bad_sets |= YEXP__BAD_TRIALS;
     }
     x = yexp__slot_at(c, s, YEXP__S_ROOT, "timeline");
     if (x->src) {
@@ -4550,8 +4672,9 @@ YEXP_API int yexp_load(yjs_arena* a, const char* text, size_t n, const yexp_host
         yexp__scope* sc = (yexp__scope*)yexp__alloc(c, sizeof *sc);
         c->stim_use = (uint8_t*)yexp__alloc(c, (size_t)d->n_stimuli + 1);
         c->stim_seen = (uint8_t*)yexp__alloc(c, (size_t)d->n_stimuli + 1);
+        c->used = (int*)yexp__alloc(c, ((size_t)d->n_stimuli + 1) * sizeof(int));
         c->tmpl_seen = (uint8_t*)yexp__alloc(c, (size_t)d->n_templates + 1);
-        if (sc && c->stim_use && c->stim_seen && c->tmpl_seen) {
+        if (sc && c->stim_use && c->stim_seen && c->tmpl_seen && c->used) {
             yexp__check_mark(report, YEXP_CHECK_ENTRIES, host && host->entry);
             yexp__check_mark(report, YEXP_CHECK_COLUMNS, host && host->column);
             yexp__check_mark(report, YEXP_CHECK_LEVELS, host && host->level && host->column);
@@ -4564,7 +4687,7 @@ YEXP_API int yexp_load(yjs_arena* a, const char* text, size_t n, const yexp_host
             yexp__check_methods(c, sc);
             yexp__check_nodes(c, sc, d->timeline, d->n_timeline);
             yexp__check_host_globals(c);
-            if (report->n_errors == 0) { yexp__warn_unreached(c); yexp__warn_unused(c); }
+            if (report->n_errors == 0) { yexp__warn_unreached(c); yexp__warn_unused(c); yexp__warn_empty(c, d->timeline, d->n_timeline); }
         }
     }
     if (c->nomem) {

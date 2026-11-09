@@ -76,7 +76,7 @@ static int st_level(void* ctx, const char* table, int col, int l, char* buf, siz
     if (!t || col >= 6 || l >= 8 || !t->cols[col].levels[l]) return -1;
     s = t->cols[col].levels[l];
     n = strlen(s);
-    if (n + 1 > cap) return (int)n + 1;
+    if (n + 1 > cap) return (int)n;   /* the text's length, as yexp_host says */
     memcpy(buf, s, n + 1);
     return (int)n;
 }
