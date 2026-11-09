@@ -3142,7 +3142,7 @@ static void test_recenter(void) {
     CHECK(ysig_detected(&g, h, 4) == 1);                    /* crossed at 124: latched */
     /* the role placed at (104, 40): through the offset and the scale, the
      * integrator lands on (2, 20) */
-    CHECK(ysig_recenter(&g, 0, 104, 40));
+    CHECK(ysig_recenter(&g, 0, 104, 40, 6 * MS));
     CHECK(hand->v[0] == 104 && hand->v[1] == 40);
     adapter_end = ysig_adapter_node(&g, 0, 1);
     CHECK(ysig_value_of(&g, adapter_end)->v[0] == 2);
@@ -3159,7 +3159,7 @@ static void test_recenter(void) {
         fv = frame_at(99, 5 * MS + 50 * MS, 0, NULL, 0);
         ysig_frame(&g, &fv);
         CHECK(ysig_value_of(&g, 7)->v[0] == 1);
-        CHECK(ysig_recenter(&g, 0, 104, 40));   /* a second place: the silence stands */
+        CHECK(ysig_recenter(&g, 0, 104, 40, 56 * MS));   /* a second place: the silence stands */
         CHECK(ysig_value_of(&g, 7)->v[0] == 1);
     }
     /* still the old value after those frames */
@@ -3181,18 +3181,18 @@ static void test_recenter(void) {
     if (!open_desc(&g, &d)) { g_failures++; return; }
     ysig_reset(&g, 0);
     hand = ysig_value_of(&g, 0);
-    CHECK(ysig_recenter(&g, 0, 100 + 2 * 99.5, 0));        /* integrator at 99.5 */
+    CHECK(ysig_recenter(&g, 0, 100 + 2 * 99.5, 0, 0));        /* integrator at 99.5 */
     e = delta(1 * MS, 1, 4, 0); ysig_feed(&g, &e);
     CHECK(hand->v[0] == 300);                              /* the grid point last inside: 100 */
-    CHECK(!ysig_recenter(&g, 0, 100 + 2 * 120.0, 0));
+    CHECK(!ysig_recenter(&g, 0, 100 + 2 * 120.0, 0, 0));
     CHECK(strstr(ysig_error(&g), "bounds") != NULL);
     ysig_get_stats(&g, &st);
     CHECK(st.fed == 1);
     /* refusals: bad arguments, no reader of the role */
-    CHECK(!ysig_recenter(&g, -1, 0, 0) && strstr(ysig_error(&g), "bad role"));
-    CHECK(!ysig_recenter(&g, 0, NAN, 0) && strstr(ysig_error(&g), "not finite"));
-    CHECK(!ysig_recenter(&g, 1, 0, 0) && strstr(ysig_error(&g), "no node reads role 1"));
-    CHECK(!ysig_recenter(NULL, 0, 0, 0));
+    CHECK(!ysig_recenter(&g, -1, 0, 0, 0) && strstr(ysig_error(&g), "bad role"));
+    CHECK(!ysig_recenter(&g, 0, NAN, 0, 0) && strstr(ysig_error(&g), "not finite"));
+    CHECK(!ysig_recenter(&g, 1, 0, 0, 0) && strstr(ysig_error(&g), "no node reads role 1"));
+    CHECK(!ysig_recenter(NULL, 0, 0, 0, 0));
     /* an absolute adapter */
     {
         ysig_node pn[1], ex[1];
@@ -3205,7 +3205,7 @@ static void test_recenter(void) {
         d.roles = &role; d.n_roles = 1; d.adapters = &pa; d.n_adapters = 1;
         if (!open_desc(&g, &d)) { g_failures++; return; }
         ysig_reset(&g, 0);
-        CHECK(!ysig_recenter(&g, 0, 1, 1) && strstr(ysig_error(&g), "not relative"));
+        CHECK(!ysig_recenter(&g, 0, 1, 1, 0) && strstr(ysig_error(&g), "not relative"));
         role.allow_relative = true;
     }
     /* a relative adapter with no integrator, and one that transforms the
@@ -3222,7 +3222,7 @@ static void test_recenter(void) {
         d.roles = &role; d.n_roles = 1; d.adapters = &ra; d.n_adapters = 1;
         if (!open_desc(&g, &d)) { g_failures++; return; }
         ysig_reset(&g, 0);
-        CHECK(!ysig_recenter(&g, 0, 1, 1) && strstr(ysig_error(&g), "no integrator"));
+        CHECK(!ysig_recenter(&g, 0, 1, 1, 0) && strstr(ysig_error(&g), "no integrator"));
         rn[0] = src_node(YIN_KIND_MOUSE, YIN_AXIS_DELTA, 0, 2);
         rn[1] = ysig_node_of(YSIG_OP_INTEGRATE, 0, -1);
         {
@@ -3232,7 +3232,7 @@ static void test_recenter(void) {
             ra.nodes = r3; ra.n_nodes = 3;
             if (!open_desc(&g, &d)) { g_failures++; return; }
             ysig_reset(&g, 0);
-            CHECK(!ysig_recenter(&g, 0, 1, 1) && strstr(ysig_error(&g), "affine"));
+            CHECK(!ysig_recenter(&g, 0, 1, 1, 0) && strstr(ysig_error(&g), "affine"));
         }
     }
     /* a rate integrator recenters too (the scale is in its chain) */
@@ -3249,7 +3249,7 @@ static void test_recenter(void) {
         if (!open_desc(&g, &d)) { g_failures++; return; }
         ysig_reset(&g, 0);
         hand = ysig_value_of(&g, 0);
-        CHECK(ysig_recenter(&g, 0, 10, 8));
+        CHECK(ysig_recenter(&g, 0, 10, 8, 5 * MS));
         CHECK(hand->v[0] == 10 && hand->v[1] == 8);
         CHECK(ysig_value_of(&g, ysig_adapter_node(&g, 0, 1))->v[0] == 5);
         e = axis(10 * MS, YIN_KIND_GAMEPAD, 0, 1, 1000, 0, 0, YIN_TIER_SIM);
@@ -3446,7 +3446,7 @@ static void test_ops_replay(void) {
             f = frame_at(i, (int64_t)(i + 1) * 16 * MS, 0, tl, 1);
             ysig_frame(&g, &f);
             if (i == 50) ysig_reset_trial(&g, f.onset_ns);
-            if (i == 70) CHECK(ysig_recenter(&g, 0, run == 1 ? 3.0 : 1.5, -1));
+            if (i == 70) CHECK(ysig_recenter(&g, 0, run == 1 ? 3.0 : 1.5, -1, f.onset_ns));
             if (i == 90) ysig_reset(&g, f.onset_ns);
             {
                 ysig_hit hh[8];
@@ -3471,6 +3471,372 @@ static void test_ops_replay(void) {
         for (i = 0; i < g.n; i++) CHECK(!memcmp(ysig_value_of(&g, i), ysig_value_of(&g2, i), sizeof(ysig_value)));
     }
     CHECK(dg[0] != dg[1] && dg[0] != dg[2]);
+}
+
+/* ---------------------------------------------------------------- v0.2 review: T numbers of the probes */
+
+#define PEN1_E(t, dev, v) axis((t), YIN_KIND_PEN, 0, (dev), 0, 0, (float)(v), YIN_TIER_SIM)
+
+static bool open_adapter(ysig_graph* g, ysig_node* n, int nn, ysig_node* an, int ann, int adtype, const ysig_op_vtable* const* cu) {
+    static ysig_role role;
+    static ysig_adapter ad;
+    ysig_desc d;
+    memset(&role, 0, sizeof role);
+    role.name = "hand"; role.type = YSIG_TYPE_POSITION2D; role.units = YSIG_UNITS_DISPLAY_PX; role.allow_relative = true;
+    memset(&ad, 0, sizeof ad);
+    ad.role = "hand"; ad.name = "a"; ad.type = (uint8_t)adtype; ad.units = YSIG_UNITS_DISPLAY_PX; ad.nodes = an; ad.n_nodes = ann;
+    d = desc_of(n, nn);
+    d.roles = &role; d.n_roles = 1; d.adapters = &ad; d.n_adapters = 1;
+    if (cu) { d.custom = cu; d.n_custom = 1; }
+    return open_desc(g, &d);
+}
+
+static ysig_frame_in frame_poll(int64_t index, int64_t onset, int64_t poll, const float* v, int nv) {
+    ysig_frame_in f = frame_at(index, onset, onset, v, nv);
+    f.poll_ns = poll;
+    return f;
+}
+
+/* T1, T2: a recenter has a time */
+static void test_recenter_time(void) {
+    ysig_node a[2], n[3];
+    ysig_graph g;
+    ysig_value v;
+    ysig_frame_in f;
+    yin_event e;
+    int ai;
+    g_where = "recenter time";
+    a[0] = src_node(YIN_KIND_MOUSE, YIN_AXIS_DELTA, 0, 2);
+    a[1] = ysig_node_of(YSIG_OP_INTEGRATE, 0, -1); a[1].history = 256;
+    n[0] = ysig_node_of(YSIG_OP_ROLE, -1, -1);
+    n[1] = ysig_node_of(YSIG_OP_OFFSET, 0, -1); n[1].history = 256;
+    if (!open_adapter(&g, n, 2, a, 2, YSIG_TYPE_POSITION2D_RELATIVE, NULL)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    e = delta(10 * MS, 1, 40, 0); ysig_feed(&g, &e);
+    e = delta(20 * MS, 1, 60, 0); ysig_feed(&g, &e);
+    CHECK(ysig_recenter(&g, 0, 0, 0, 30 * MS));
+    ai = ysig_adapter_node(&g, 0, 1);
+    CHECK(ysig_value_of(&g, ai)->t == 30 * MS && ysig_value_of(&g, 0)->t == 30 * MS);
+    /* the history before it stands */
+    CHECK(ysig_value_at(&g, ai, 20 * MS, &v) == 1 && v.v[0] == 100 && v.t == 20 * MS);
+    CHECK(ysig_value_at(&g, 1, 20 * MS, &v) == 1 && v.v[0] == 100);
+    CHECK(ysig_value_at(&g, 1, 15 * MS, &v) == 1 && v.v[0] == 40);
+    CHECK(ysig_value_at(&g, ai, 30 * MS, &v) == 1 && v.v[0] == 0 && v.t == 30 * MS);
+    CHECK(ysig_value_at(&g, 1, 35 * MS, &v) == 1 && v.v[0] == 0);
+    /* a rate integrator's previous time is the recenter's */
+    a[0] = src_node(YIN_KIND_GAMEPAD, YIN_AXIS_GAMEPAD, 0, 2);
+    a[1] = ysig_node_of(YSIG_OP_INTEGRATE, 0, -1);
+    n[0] = ysig_node_of(YSIG_OP_ROLE, -1, -1);
+    if (!open_adapter(&g, n, 1, a, 2, YSIG_TYPE_POSITION2D_RELATIVE, NULL)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    e = axis(1 * MS, YIN_KIND_GAMEPAD, YIN_AXIS_GAMEPAD, 1, 1, 0, 0, YIN_TIER_SIM); ysig_feed(&g, &e);
+    e = axis(2 * MS, YIN_KIND_GAMEPAD, YIN_AXIS_GAMEPAD, 1, 1, 0, 0, YIN_TIER_SIM); ysig_feed(&g, &e);
+    CHECK(ysig_recenter(&g, 0, 0, 0, 5000 * MS));
+    f = frame_poll(1, 5017 * MS, 5001 * MS, NULL, 0);
+    ysig_frame(&g, &f);
+    CHECK_NEAR(ysig_value_of(&g, 0)->v[0], 0.001, 1e-9);
+}
+
+/* T9, T11, T12: the chain back to the integrator; what a recenter restarts */
+static int g_cu_resets;
+static void cu_reset(void* st, const double* p, int64_t t) { (void)st; (void)p; (void)t; g_cu_resets++; }
+static void cu_sample(void* st, const double* p, const ysig_value* in, int n_in, ysig_value* out) {
+    (void)st; (void)p; (void)n_in; out->v[0] = in[0].v[0];
+}
+static void test_recenter_chain(void) {
+    static const ysig_op_vtable cu = { YSIG_OP_ABI, "pass", { 0, 0, 0, 0 }, 1, 8, NULL, 0, cu_reset, cu_sample, NULL };
+    const ysig_op_vtable* cus[1];
+    ysig_node a[4], n[8];
+    ysig_graph g;
+    ysig_frame_in f;
+    yin_event e;
+    g_where = "recenter chain";
+    a[0] = src_node(YIN_KIND_MOUSE, YIN_AXIS_DELTA, 0, 2);
+    a[1] = ysig_node_of(YSIG_OP_INTEGRATE, 0, -1);
+    a[1].p[0] = a[1].p[1] = 0.25; a[1].p[4] = a[1].p[5] = 100; a[1].p[12] = a[1].p[13] = 1000;
+    a[2] = ysig_node_of(YSIG_OP_OFFSET, 1, -1); a[2].p[0] = 10; a[2].p[1] = 20;
+    a[3] = ysig_node_of(YSIG_OP_SCALE, 2, -1); a[3].p[0] = 2; a[3].p[1] = 4;
+    n[0] = ysig_node_of(YSIG_OP_ROLE, -1, -1);
+    if (!open_adapter(&g, n, 1, a, 4, YSIG_TYPE_POSITION2D_RELATIVE, NULL)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    CHECK(ysig_recenter(&g, 0, 50, 120, 2 * MS));
+    CHECK(ysig_value_of(&g, 0)->v[0] == 50 && ysig_value_of(&g, 0)->v[1] == 120);
+    e = delta(3 * MS, 1, 4, 4); ysig_feed(&g, &e);
+    CHECK(ysig_value_of(&g, 0)->v[0] == 52 && ysig_value_of(&g, 0)->v[1] == 124);
+    /* T11: a point that the scale makes infinite is refused */
+    a[1] = ysig_node_of(YSIG_OP_INTEGRATE, 0, -1);
+    a[2] = ysig_node_of(YSIG_OP_SCALE, 1, -1); a[2].p[0] = a[2].p[1] = 1e-300;
+    if (!open_adapter(&g, n, 1, a, 3, YSIG_TYPE_POSITION2D_RELATIVE, NULL)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    CHECK(!ysig_recenter(&g, 0, 1e300, 0, 1 * MS) && strstr(ysig_error(&g), "not finite after"));
+    e = delta(2 * MS, 1, 1, 0); ysig_feed(&g, &e);
+    CHECK(isfinite(ysig_value_of(&g, 0)->v[0]));
+    /* T12: rate integrator, custom op, latch, peak keep their state; a
+     * velocity, a speed, a lowpass and a delay restart */
+    cus[0] = &cu;
+    a[1] = ysig_node_of(YSIG_OP_INTEGRATE, 0, -1);
+    n[0] = ysig_node_of(YSIG_OP_ROLE, -1, -1);
+    n[1] = ysig_node_of(YSIG_OP_INTEGRATE, 0, -1); n[1].p[4] = 3;   /* the experiment's rate integrate of the hand */
+    n[2] = ysig_node_of(YSIG_OP_CUSTOM, 0, -1);
+    n[3] = ysig_node_of(YSIG_OP_LOWPASS, 0, -1); n[3].p[0] = 10;
+    n[4] = ysig_node_of(YSIG_OP_VELOCITY, 0, -1); n[4].p[0] = 0.01;
+    n[5] = ysig_node_of(YSIG_OP_SPEED, 0, -1); n[5].p[0] = 0.01;
+    n[6] = ysig_node_of(YSIG_OP_DELAY, 0, -1); n[6].p[0] = 0.001;
+    n[7] = ysig_node_of(YSIG_OP_OFFSET, 1, -1);                    /* fed by a node that keeps its state */
+    if (!open_adapter(&g, n, 8, a, 2, YSIG_TYPE_POSITION2D_RELATIVE, cus)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    e = delta(100 * MS, 1, 2, 0); ysig_feed(&g, &e);
+    e = delta(1100 * MS, 1, 0, 0); ysig_feed(&g, &e);
+    f = frame_poll(1, 1110 * MS, 1100 * MS, NULL, 0);
+    ysig_frame(&g, &f);
+    {
+        double kept = ysig_value_of(&g, 1)->v[0];
+        int64_t kept_t = ysig_value_of(&g, 7)->t;
+        double custom = ysig_value_of(&g, 2)->v[0];
+        int resets = g_cu_resets;
+        CHECK_NEAR(kept, 5, 1e-9);                                  /* 3 + 2 x 1 s */
+        CHECK(ysig_recenter(&g, 0, 0, 0, 1200 * MS));
+        CHECK(ysig_value_of(&g, 1)->v[0] == kept);
+        CHECK(ysig_value_of(&g, 7)->v[0] == kept && ysig_value_of(&g, 7)->t == kept_t);
+        CHECK(g_cu_resets == resets && ysig_value_of(&g, 2)->v[0] == custom);
+        CHECK(ysig_value_of(&g, 3)->v[0] == 0);                      /* lowpass from the new point */
+        CHECK(ysig_value_of(&g, 4)->v[0] == 0 && ysig_value_of(&g, 5)->v[0] == 0);
+        CHECK(ysig_value_of(&g, 6)->v[0] == 0);
+    }
+}
+
+/* T3, T4: a peak does not depend on arrival order, and no value is no peak */
+static void test_peak_order(void) {
+    ysig_node n[4];
+    ysig_desc d;
+    ysig_graph g;
+    ysig_value v;
+    ysig_stats st;
+    float c = 1;
+    ysig_frame_in f;
+    yin_event e;
+    g_where = "peak order";
+    n[0] = src_node(YIN_KIND_PEN, 0, 0, 1);
+    n[1] = ysig_node_of(YSIG_OP_PEAK, 0, -1); n[1].history = 64;
+    d = desc_of(n, 2);
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    e = PEN1_E(10 * MS, 1, 5); ysig_feed(&g, &e);
+    e = PEN1_E(9 * MS, 2, 7); ysig_feed(&g, &e);
+    CHECK(ysig_value_of(&g, 1)->v[0] == 7 && ysig_value_of(&g, 1)->t == 9 * MS);   /* its own t: the peak sample's */
+    CHECK(ysig_value_at(&g, 1, 20 * MS, &v) == 1 && v.v[0] == 7);
+    e = PEN1_E(11 * MS, 1, 1); ysig_feed(&g, &e);                                  /* not a peak: no skip counted */
+    ysig_get_stats(&g, &st);
+    CHECK(st.history_skipped == 0);
+    CHECK(ysig_value_at(&g, 1, 20 * MS, &v) == 1 && v.v[0] == 7);
+    /* a gate rising before any sample does not start from "no value" */
+    n[1] = ysig_node_of(YSIG_OP_CHANNEL, -1, -1);
+    n[2] = ysig_node_of(YSIG_OP_PEAK, 0, 1);
+    d = desc_of(n, 3);
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    f = frame_poll(1, 10 * MS, 5 * MS, &c, 1);
+    ysig_frame(&g, &f);
+    CHECK(ysig_value_of(&g, 2)->v[0] == 0);
+    e = PEN1_E(20 * MS, 1, -5); ysig_feed(&g, &e);
+    e = PEN1_E(21 * MS, 1, -3); ysig_feed(&g, &e);
+    CHECK(ysig_value_of(&g, 2)->v[0] == -3 && ysig_value_of(&g, 2)->tier == YIN_TIER_SIM);
+    /* a sample before the rise, while the gate is shut, is a value */
+    ysig_reset(&g, 100 * MS);
+    e = PEN1_E(110 * MS, 1, 4); ysig_feed(&g, &e);
+    f = frame_poll(2, 120 * MS, 120 * MS, &c, 1);
+    ysig_frame(&g, &f);
+    CHECK(ysig_value_of(&g, 2)->v[0] == 4 && ysig_value_of(&g, 2)->t == 110 * MS);
+}
+
+/* T5, T14: a stamp later than the poll is believed only up to the poll */
+static void test_late_stamp(void) {
+    ysig_node a[2], n[2];
+    ysig_desc d;
+    ysig_graph g;
+    ysig_stats st;
+    ysig_frame_in f;
+    yin_event e;
+    int k;
+    g_where = "late stamp";
+    a[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 2);
+    n[0] = ysig_node_of(YSIG_OP_ROLE, -1, -1);
+    n[1] = ysig_node_of(YSIG_OP_SILENT, 0, -1); n[1].p[0] = 0.1;
+    if (!open_adapter(&g, n, 2, a, 1, YSIG_TYPE_POSITION2D, NULL)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    e = PEN_E(10 * MS, 1, 1, 0, YIN_TIER_SIM); ysig_feed(&g, &e);
+    e = PEN_E(3600000LL * MS, 1, 2, 0, YIN_TIER_SIM); ysig_feed(&g, &e);
+    f = frame_poll(1, 20 * MS, 20 * MS, NULL, 0);
+    ysig_frame(&g, &f);
+    ysig_get_stats(&g, &st);
+    CHECK(st.late_poll == 1 && st.late_poll_max_ns == 3600000LL * MS - 20 * MS);
+    ysig_reset_trial(&g, 100 * MS);
+    for (k = 1; k <= 50; k++) { e = PEN_E((100 + k) * MS, 1, 10 + k, 0, YIN_TIER_SIM); ysig_feed(&g, &e); }
+    ysig_get_stats(&g, &st);
+    CHECK(ysig_value_of(&g, 0)->v[0] == 60 && st.dropped_order == 0);
+    f = frame_poll(2, 1000 * MS, 1000 * MS, NULL, 0);
+    ysig_frame(&g, &f);
+    CHECK(ysig_value_of(&g, 1)->v[0] == 1);
+    /* T14: raw mouse counts, never dropped; the silent's own clock comes
+     * down: silent after the real silence */
+    a[0] = src_node(YIN_KIND_MOUSE, YIN_AXIS_DELTA, 0, 2);
+    a[1] = ysig_node_of(YSIG_OP_INTEGRATE, 0, -1);
+    if (!open_adapter(&g, n, 2, a, 2, YSIG_TYPE_POSITION2D_RELATIVE, NULL)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    e = delta(10 * MS, 1, 1, 0); ysig_feed(&g, &e);
+    f = frame_poll(1, 500 * MS, 500 * MS, NULL, 0);
+    ysig_frame(&g, &f);
+    CHECK(ysig_value_of(&g, 1)->v[0] == 1);
+    e = delta(3600000LL * MS, 1, 1, 0); ysig_feed(&g, &e);
+    CHECK(ysig_value_of(&g, 1)->v[0] == 0);
+    f = frame_poll(2, 1500 * MS, 1500 * MS, NULL, 0);           /* believed up to this poll */
+    ysig_frame(&g, &f);
+    CHECK(ysig_value_of(&g, 1)->v[0] == 0);
+    f = frame_poll(3, 1599 * MS, 1599 * MS, NULL, 0);
+    ysig_frame(&g, &f);
+    CHECK(ysig_value_of(&g, 1)->v[0] == 0);
+    f = frame_poll(4, 1600 * MS, 1600 * MS, NULL, 0);
+    ysig_frame(&g, &f);
+    CHECK(ysig_value_of(&g, 1)->v[0] == 1);
+    /* the stamp stands when it is within the poll */
+    ysig_reset(&g, 2000 * MS);
+    e = delta(2050 * MS, 1, 1, 0); ysig_feed(&g, &e);
+    f = frame_poll(5, 2100 * MS, 2100 * MS, NULL, 0);
+    ysig_frame(&g, &f);
+    CHECK(ysig_value_of(&g, 1)->v[0] == 0);
+    /* no poll, no recovery: a graph with no view keeps dropping */
+    n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2);
+    d = desc_of(n, 1);
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    e = PEN_E(3600000LL * MS, 1, 2, 0, YIN_TIER_SIM); ysig_feed(&g, &e);
+    f = frame_poll(1, 20 * MS, 20 * MS, NULL, 0);
+    f.has_poll = false;
+    CHECK(ysig_frame(&g, &f) == 0);
+    e = PEN_E(30 * MS, 1, 5, 0, YIN_TIER_SIM); ysig_feed(&g, &e);
+    ysig_get_stats(&g, &st);
+    CHECK(st.dropped_order == 1 && ysig_value_of(&g, 0)->v[0] == 2);
+}
+
+/* T7: a re-armed hit detect gives a new rise */
+static void test_rearm(void) {
+    ysig_node n[6];
+    ysig_desc d;
+    ysig_graph g;
+    yin_event e;
+    int through;
+    g_where = "re-arm";
+    for (through = 0; through < 2; through++) {
+        int gate;
+        n[0] = src_node(YIN_KIND_PEN, 0, 0, 1);
+        n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1);
+        n[1].p[YSIG_DETECT_LEVEL] = 5; n[1].p[YSIG_DETECT_OUT] = YSIG_OUT_HIT; n[1].p[YSIG_DETECT_START] = 1;
+        n[2] = ysig_node_of(YSIG_OP_ALL, 1, 1);
+        gate = through ? 2 : 1;
+        n[3] = ysig_node_of(YSIG_OP_PEAK, 0, gate);
+        d = desc_of(n, 4);
+        if (!open_desc(&g, &d)) { g_failures++; return; }
+        ysig_reset(&g, 0);
+        e = PEN1_E(1 * MS, 1, 0); ysig_feed(&g, &e);
+        ysig_arm(&g, 1, 2 * MS);
+        e = PEN1_E(3 * MS, 1, 100); ysig_feed(&g, &e);
+        CHECK(ysig_value_of(&g, 3)->v[0] == 100);
+        e = PEN1_E(4 * MS, 1, 0); ysig_feed(&g, &e);
+        ysig_arm(&g, 1, 5 * MS);
+        CHECK(ysig_value_of(&g, 1)->v[0] == 0);
+        e = PEN1_E(6 * MS, 1, 6); ysig_feed(&g, &e);
+        CHECK(ysig_value_of(&g, 3)->v[0] == 6 && ysig_value_of(&g, 3)->t == 6 * MS);
+    }
+}
+
+/* T16: a hold on a frame-updated input completes for a still hand */
+static void test_hold_frame_input(void) {
+    ysig_node n[5];
+    ysig_desc d;
+    ysig_graph g;
+    ysig_hit h[4];
+    ysig_value v;
+    ysig_frame_in f;
+    yin_event e;
+    float c[1];
+    int kind, k, nh;
+    g_where = "hold on a frame-updated input";
+    /* a mux with a channel selector, a mux with a frame-rate detect's
+     * selector, a latch with a channel trigger */
+    for (kind = 0; kind < 3; kind++) {
+        n[0] = src_node(YIN_KIND_PEN, 0, 0, 1);
+        n[1] = ysig_node_of(YSIG_OP_CHANNEL, -1, -1);
+        if (kind == 1) {
+            n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1);
+            n[1].p[YSIG_DETECT_TEST] = YSIG_TEST_LE; n[1].p[YSIG_DETECT_LEVEL] = 100; n[1].p[YSIG_DETECT_AT] = 1;
+        }
+        if (kind == 2) { n[2] = ysig_node_of(YSIG_OP_LATCH, 0, 1); }
+        else { n[2] = ysig_node_of(YSIG_OP_MUX, 0, 0); n[2].in[2] = 1; }
+        n[3] = ysig_node_of(YSIG_OP_DETECT, 2, -1);
+        n[3].p[YSIG_DETECT_TEST] = YSIG_TEST_LE; n[3].p[YSIG_DETECT_LEVEL] = 10; n[3].p[YSIG_DETECT_HOLD] = 0.5;
+        d = desc_of(n, 4);
+        if (!open_desc(&g, &d)) { g_failures++; return; }
+        ysig_reset(&g, 0);
+        c[0] = kind == 2 ? 0.0f : 1.0f;
+        f = frame_at(1, 5 * MS, 0, c, 1); ysig_frame(&g, &f);
+        e = PEN1_E(10 * MS, 1, 1); ysig_feed(&g, &e);
+        nh = 0;
+        for (k = 2; k <= 100; k++) {
+            int got;
+            /* the poll is 2 ms before the onset: the hold ends on the poll */
+            f = frame_poll(k, k * 16 * MS, k * 16 * MS - 2 * MS, c, 1);
+            ysig_frame(&g, &f);
+            got = ysig_detected(&g, h, 4);
+            if (got) { CHECK(h[0].t_found == k * 16 * MS - 2 * MS && h[0].t == 500 * MS); nh += got; }
+        }
+        CHECK(nh == 1);
+    }
+    /* a hold that starts in a frame's pass starts at the known time, not at
+     * the value's old t; a hit output rises at the hit */
+    n[0] = src_node(YIN_KIND_PEN, 0, 0, 1);
+    n[1] = ysig_node_of(YSIG_OP_CHANNEL, -1, -1);
+    n[2] = ysig_node_of(YSIG_OP_OFFSET, 0, -1); n[2].p[0] = 50;
+    n[3] = ysig_node_of(YSIG_OP_MUX, 0, 2); n[3].in[2] = 1;
+    n[4] = ysig_node_of(YSIG_OP_DETECT, 3, -1);
+    n[4].p[YSIG_DETECT_TEST] = YSIG_TEST_LE; n[4].p[YSIG_DETECT_LEVEL] = 10; n[4].p[YSIG_DETECT_HOLD] = 0.1;
+    n[4].p[YSIG_DETECT_OUT] = YSIG_OUT_HIT; n[4].history = 32;
+    d = desc_of(n, 5);
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    e = PEN1_E(10 * MS, 1, 1); ysig_feed(&g, &e);              /* b is 51: the test is false */
+    c[0] = 1;
+    f = frame_poll(1, 200 * MS, 198 * MS, c, 1); ysig_frame(&g, &f);   /* a chosen: true; the hold starts at 198 */
+    f = frame_poll(2, 300 * MS, 297 * MS, c, 1); ysig_frame(&g, &f);
+    CHECK(ysig_detected(&g, h, 4) == 0);
+    f = frame_poll(3, 310 * MS, 298 * MS, c, 1); ysig_frame(&g, &f);
+    CHECK(ysig_detected(&g, h, 4) == 1 && h[0].t == 298 * MS && h[0].t_found == 298 * MS);
+    CHECK(ysig_value_of(&g, 4)->v[0] == 1 && ysig_value_of(&g, 4)->t == 298 * MS);
+    /* a sample-rate detect on a sample input: the poll bounds it too */
+    n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1);
+    n[1].p[YSIG_DETECT_TEST] = YSIG_TEST_LE; n[1].p[YSIG_DETECT_LEVEL] = 10; n[1].p[YSIG_DETECT_HOLD] = 0.1;
+    n[1].p[YSIG_DETECT_REPEAT] = 1; n[1].p[YSIG_DETECT_OUT] = YSIG_OUT_HIT; n[1].history = 32;
+    d = desc_of(n, 2);
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    e = PEN1_E(10 * MS, 1, 1); ysig_feed(&g, &e);             /* armed at the reset with the zero value: true from 0 */
+    f = frame_poll(1, 200 * MS, 99 * MS, NULL, 0); ysig_frame(&g, &f);
+    CHECK(ysig_detected(&g, h, 4) == 0 && ysig_value_of(&g, 1)->v[0] == 0);
+    /* found at the frame's known time, the rise at the hit (100 ms): a
+     * past read between the hit and the frame says 1, and the sample that
+     * follows, older than the planned onset, enters the ring */
+    f = frame_poll(2, 300 * MS, 150 * MS, NULL, 0); ysig_frame(&g, &f);
+    CHECK(ysig_detected(&g, h, 4) == 1 && h[0].t == 100 * MS && h[0].t_found == 150 * MS);
+    CHECK(ysig_value_of(&g, 1)->v[0] == 1 && ysig_value_of(&g, 1)->t == 100 * MS);
+    CHECK(ysig_value_at(&g, 1, 120 * MS, &v) == 1 && v.v[0] == 1);
+    CHECK(ysig_value_at(&g, 1, 90 * MS, &v) == 1 && v.v[0] == 0);
+    e = PEN1_E(170 * MS, 1, 50); ysig_feed(&g, &e);            /* the test fails: ready again, fired 0 */
+    CHECK(ysig_value_of(&g, 1)->v[0] == 0);
+    CHECK(ysig_value_at(&g, 1, 175 * MS, &v) == 1 && v.v[0] == 0);
+    {
+        ysig_stats st;
+        ysig_get_stats(&g, &st);
+        CHECK(st.history_skipped == 0);
+    }
 }
 
 int main(void) {
@@ -3509,6 +3875,12 @@ int main(void) {
     test_ops_refusals();
     test_ops_views();
     test_ops_replay();
+    test_recenter_time();
+    test_recenter_chain();
+    test_peak_order();
+    test_late_stamp();
+    test_rearm();
+    test_hold_frame_input();
     if (g_failures) { fprintf(stderr, "sig_test: %d failures\n", g_failures); return 1; }
     printf("sig_test: all checks passed\n");
     return 0;

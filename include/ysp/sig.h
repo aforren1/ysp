@@ -541,7 +541,7 @@ typedef struct ysig_entry {
     int32_t       reserved_;
     double        value;        /* SET, SET_DATA; RECENTER's x            */
     double        y;            /* RECENTER                               */
-    int64_t       t;            /* RESET, RESET_TRIAL, ARM                */
+    int64_t       t;            /* RESET, RESET_TRIAL, RECENTER, ARM      */
     yin_event     event;        /* FEED                                  */
     ysig_frame_in frame;        /* FRAME                                 */
 } ysig_entry;
@@ -664,9 +664,9 @@ YSIG_API void ysig_reset(ysig_graph* g, int64_t t_ns);
 YSIG_API void ysig_reset_trial(ysig_graph* g, int64_t t_ns);
 
 /* Place relative role `role` (its index in desc.roles) at x, y, in the role's
- * units; its integrator continues from there on the count grid (ROLES AND
- * ADAPTERS). false with the reason in ysig_error(). */
-YSIG_API bool ysig_recenter(ysig_graph* g, int role, double x, double y);
+ * units, at time t_ns; its integrator continues from there on the count grid
+ * (ROLES AND ADAPTERS). false with the reason in ysig_error(). */
+YSIG_API bool ysig_recenter(ysig_graph* g, int role, double x, double y, int64_t t_ns);
 
 /* p[param] of node := v, checked by the op's table; between trials. param
  * is the row's index, by name YSIG_<OP>_<ROW>. A parameter that sizes the
@@ -803,7 +803,7 @@ typedef struct ysig__det_st {
     ysig_value v_start, v_hit;
 } ysig__det_st;
 typedef struct ysig__latch_st { int latched, prev; } ysig__latch_st;
-typedef struct ysig__peak_st { double best; int has, prev; } ysig__peak_st;
+typedef struct ysig__peak_st { double best; int has, prev, seen, reserved_; } ysig__peak_st;
 typedef struct ysig__silent_st { int64_t last, t_reset; } ysig__silent_st;
 typedef struct ysig__noise_st { uint64_t s; double y[4]; int64_t t_prev; int init, reserved_; } ysig__noise_st;
 
@@ -1669,6 +1669,20 @@ static void ysig__hist_push(ysig_graph* g, ysig__nd* n, const ysig_value* v) {
     ysig__ring_push(r, v);
 }
 
+/* A value whose t may go back (a peak's, on a late report): the ring keeps
+ * time order on the later of its t and the ring's last. */
+static void ysig__hist_push_later(ysig_graph* g, ysig__nd* n, const ysig_value* v) {
+    ysig__ring* r = &n->hist;
+    ysig_value c;
+    if (!r->cap) return;
+    c = *v;
+    if (r->n) {
+        int64_t last = r->buf[(r->head + r->n - 1) % r->cap].t;
+        if (c.t < last) c.t = last;
+    }
+    ysig__hist_push(g, n, &c);
+}
+
 /* The generic part of a value from its inputs. t, source, device and
  * unc_us come from the input that changed in this evaluation (bit j of
  * `changed`), the newest of them when several did: the report that made
@@ -1973,16 +1987,22 @@ static void ysig__det_eval(ysig_graph* g, int i, const ysig_value* v, int64_t t,
 }
 
 static void ysig__det_value(ysig_graph* g, int i, const ysig_value* v, int64_t t, int64_t tc) {
+    ysig__det_st* s = (ysig__det_st*)g->nd[i].st;
+    int was = s->fired;
     ysig__det_eval(g, i, v, t, tc);
-    ysig__det_out(g, i, v, tc);
+    /* the rise of a hit output is at the hit: a past read after it says 1 */
+    ysig__det_out(g, i, v, s->fired && !was && (int)g->nd[i].p[13] == YSIG_OUT_HIT ? s->t_hit : tc);
 }
 
-static void ysig__det_frame(ysig_graph* g, int i, int64_t onset, const ysig_value* v) {
+/* A sample-rate detect at a frame: a still hand completes its hold. tk is
+ * the time the frame knows input up to. */
+static void ysig__det_frame(ysig_graph* g, int i, int64_t tk, const ysig_value* v) {
     ysig__nd* n = &g->nd[i];
     ysig__det_st* s = (ysig__det_st*)n->st;
-    if (!s->armed || n->kns[0] <= 0 || onset < s->t_arm) return;
-    (void)ysig__det_hold_done(g, i, onset);
-    if ((int)n->p[13] == YSIG_OUT_HIT && s->fired) ysig__det_out(g, i, v, onset);
+    int was = s->fired;
+    if (!s->armed || n->kns[0] <= 0 || tk < s->t_arm) return;
+    (void)ysig__det_hold_done(g, i, tk);
+    if ((int)n->p[13] == YSIG_OUT_HIT && s->fired && !was) ysig__det_out(g, i, v, s->t_hit);
 }
 
 /* A detect's hold clock never goes back: a value whose t went back (a
@@ -2145,12 +2165,17 @@ static void ysig__run(ysig_graph* g, int i, int mode, int64_t t) {
                 int at_frame = n->p[5] == 1, view = (g->nd[n->in[0]].flags & YSIG__F_FRAME) != 0;
                 if (at_frame || view) {
                     /* a frame-rate test is at the onset; a sample-rate one
-                     * on a view, at the view's time (the poll at most) */
+                     * on a view, at the view's time. A hold's clock in a
+                     * frame's pass is the time the frame knows input up
+                     * to, while the test is true: a still input's value
+                     * keeps its old t, and the hold would never end */
                     ysig_value v = *x;
-                    if (at_frame) v.t = t;
+                    int holding = n->kns[0] > 0 && ysig__test(n, x, 0);
+                    if (at_frame) v.t = holding ? g->t_known : t;
+                    else if (holding && g->t_known > v.t) v.t = g->t_known;
                     ysig__det_value(g, i, &v, v.t, ysig__sink_t(g, n, v.t));
                 } else {
-                    ysig__det_frame(g, i, t, x);
+                    ysig__det_frame(g, i, g->t_known, x);
                 }
             } else {
                 ysig__det_value(g, i, x, x->t, ysig__sink_t(g, n, x->t));
@@ -2350,36 +2375,41 @@ static void ysig__run(ysig_graph* g, int i, int mode, int64_t t) {
     case YSIG_OP_PEAK: {
         ysig__peak_st* s = (ysig__peak_st*)n->st;
         const ysig_value* x = in[0];
-        int gate = n->n_in > 1 ? ysig__truth(in[1]->v[0]) : 1, rise, lane = (int)n->p[0];
+        int gate = n->n_in > 1 ? ysig__truth(in[1]->v[0]) : 1, rise, lane = (int)n->p[0], moved = 0;
         double q = 0;
         if (mode == 2) {
-            s->has = 0;
+            s->has = s->seen = 0;
             s->best = 0;
             s->prev = gate;
             ysig__meta(n, in, 0, o);
             o->v[0] = 0;
             break;
         }
+        if (changed & 1u) s->seen = 1;
         rise = gate && !s->prev;
         s->prev = gate;
-        /* a sample's pass only: a frame's held or view value is no sample */
-        if (!gate || (!rise && mode != 0)) break;
-        if (lane >= 0) q = x->v[lane];
-        else {
-            for (k = 0; k < x->lanes; k++) q += x->v[k] * x->v[k];
-            q = sqrt(q);
-        }
         if (rise) s->has = 0;
-        if (q == q && (!s->has || q > s->best)) {
-            s->best = q;
-            s->has = 1;
-            *o = *x;
-            o->v[0] = q;
-            /* a gate's rise at a frame restarts the peak: the ring must
-             * show it, though a frame's value does not otherwise enter */
-            if (mode == 1) ysig__hist_push(g, n, o);
+        /* a sample's pass only: a frame's held or view value is no sample.
+         * A rise before any sample has nothing to start from */
+        if (gate && (rise || mode == 0) && s->seen) {
+            if (lane >= 0) q = x->v[lane];
+            else {
+                for (k = 0; k < x->lanes; k++) q += x->v[k] * x->v[k];
+                q = sqrt(q);
+            }
+            if (q == q && (!s->has || q > s->best)) {
+                s->best = q;
+                s->has = 1;
+                *o = *x;
+                o->v[0] = q;
+                moved = 1;
+            }
         }
-        break;
+        o->lanes = n->lanes;
+        /* a late larger peak must not be skipped; a gate's rise at a frame
+         * restarts it, though a frame's value does not otherwise enter */
+        if (mode == 0 || moved) ysig__hist_push_later(g, n, o);
+        return;
     }
     case YSIG_OP_SILENT: {
         ysig__silent_st* s = (ysig__silent_st*)n->st;
@@ -2652,11 +2682,15 @@ static int ysig__recenter_at(ysig_graph* g, int role, double xy[2], int* id) {
                  "a scale or an offset", role, ysig_op_name(g->nd[bad].op));
         return 0;
     }
+    if (!isfinite(xy[0]) || !isfinite(xy[1])) {
+        snprintf(g->err, sizeof g->err, "ysig_recenter: the point is not finite after the adapter's scale");
+        return 0;
+    }
     *id = cur;
     return 1;
 }
 
-YSIG_API bool ysig_recenter(ysig_graph* g, int role, double x, double y) {
+YSIG_API bool ysig_recenter(ysig_graph* g, int role, double x, double y, int64_t t_ns) {
     uint8_t reach[YSIG_MAX_NODES];
     ysig_entry e;
     double xy[2];
@@ -2686,6 +2720,7 @@ YSIG_API bool ysig_recenter(ysig_graph* g, int role, double x, double y) {
     e.node = role;
     e.value = x;
     e.y = y;
+    e.t = t_ns;
     ysig__journal(g, &e);
     for (k = 0; k < 2; k++) {
         if (n->flags & YSIG__F_COUNTS) { s->n[k] = 0; s->org[k] = xy[k]; }
@@ -2693,11 +2728,13 @@ YSIG_API bool ysig_recenter(ysig_graph* g, int role, double x, double y) {
         o->v[k] = xy[k];
     }
     s->recentered = 1;
+    s->t_prev = t_ns;                /* a rate integrator: no jump by the time since its last sample */
+    o->t = o->t_oldest = t_ns;
     n->pass = ++g->pass;
-    ysig__hist_push(g, n, o);
-    /* the nodes after the integrator restart from the new place: a filter
-     * and a ring from one point, not a jump; a latch keeps its hold and a
-     * peak its peak and a silent its clock (ysig_recenter() is not a reset) */
+    ysig__hist_push(g, n, o);        /* a new entry: the history before t_ns stands */
+    /* only what the jump would spike restarts (a filter, a difference, a
+     * delay); the stateless nodes take the new value; anything else keeps
+     * its state and output, and what it feeds is not touched */
     memset(reach, 0, (size_t)g->n);
     reach[id] = 1;
     for (k = 0; k < g->n; k++) if (g->order[k] == id) pos = k;
@@ -2706,14 +2743,17 @@ YSIG_API bool ysig_recenter(ysig_graph* g, int role, double x, double y) {
         ysig__nd* m = &g->nd[nid];
         for (j = 0; j < m->n_in; j++) if (reach[m->in[j]]) hit = 1;
         if (!hit) continue;
-        reach[nid] = 1;
-        if (m->flags & YSIG__F_SINK) continue;
         if (m->op == YSIG_OP_LATCH) {
-            if (!((ysig__latch_st*)m->st)->latched) { g->val[nid] = g->val[m->in[0]]; ysig__hist_push(g, m, &g->val[nid]); }
+            if (((ysig__latch_st*)m->st)->latched) continue;
+            g->val[nid] = g->val[m->in[0]];
+            ysig__hist_push(g, m, &g->val[nid]);
+        } else if (m->op == YSIG_OP_LOWPASS || m->op == YSIG_OP_VELOCITY || m->op == YSIG_OP_SPEED || m->op == YSIG_OP_DELAY ||
+                   (m->op < YSIG_OP_COUNT && (ysig__ops[m->op].kind & YSIG__K_PURE))) {
+            ysig__run(g, nid, 2, t_ns);
+        } else {
             continue;
         }
-        if (m->op == YSIG_OP_PEAK || m->op == YSIG_OP_SILENT) continue;
-        ysig__run(g, nid, 2, o->t);
+        reach[nid] = 1;
     }
     return true;
 }
@@ -2788,6 +2828,23 @@ YSIG_API bool ysig_set_data(ysig_graph* g, int node, int index, double v) {
     ysig__journal(g, &e);
     g->nd[node].data[index] = v;
     return true;
+}
+
+/* A stamp later than the poll is believed only up to the poll: one bad
+ * stamp must not make its source drop every later sample, or hide a
+ * silence. The order slots and silents' last times come down to it. */
+static void ysig__lower_late(ysig_graph* g, int64_t poll) {
+    int i, d;
+    for (i = 0; i < g->n_src; i++) {
+        ysig__src_st* s = (ysig__src_st*)g->nd[g->src_ids[i]].st;
+        for (d = 0; d < s->n; d++)
+            if (s->last_t[d] > poll) s->last_t[d] = poll;
+    }
+    for (i = 0; i < g->n; i++)
+        if (g->nd[i].op == YSIG_OP_SILENT) {
+            ysig__silent_st* s = (ysig__silent_st*)g->nd[i].st;
+            if (s->last > poll) s->last = poll;
+        }
 }
 
 static int ysig__source_takes(const ysig__nd* n, const yin_event* e) {
@@ -2895,6 +2952,7 @@ YSIG_API int ysig_frame(ysig_graph* g, const ysig_frame_in* f) {
             int64_t ex = ysig__sub(g->t_fed, f->poll_ns);
             g->st.late_poll++;
             if (ex > g->st.late_poll_max_ns) g->st.late_poll_max_ns = ex;
+            ysig__lower_late(g, f->poll_ns);
         }
         g->t_known = f->poll_ns < f->onset_ns ? f->poll_ns : f->onset_ns;
     } else {
@@ -2909,6 +2967,25 @@ YSIG_API int ysig_frame(ysig_graph* g, const ysig_frame_in* f) {
     return 0;
 }
 
+/* A hit output that fell at an arm: its users see the 0 now, or the next
+ * hit in the next sample's pass would be no rise for a gate or a trigger. */
+static void ysig__settle(ysig_graph* g, int from) {
+    uint8_t reach[YSIG_MAX_NODES];
+    int k, pos = 0;
+    memset(reach, 0, (size_t)g->n);
+    reach[from] = 1;
+    for (k = 0; k < g->n; k++) if (g->order[k] == from) pos = k;
+    for (k = pos + 1; k < g->n; k++) {
+        int nid = g->order[k], j, hit = 0;
+        ysig__nd* m = &g->nd[nid];
+        for (j = 0; j < m->n_in; j++) if (reach[m->in[j]]) hit = 1;
+        if (!hit || m->op >= YSIG_OP_COUNT) continue;
+        if (m->op != YSIG_OP_LATCH && m->op != YSIG_OP_PEAK && !(ysig__ops[m->op].kind & YSIG__K_PURE)) continue;
+        ysig__run(g, nid, 1, g->onset);
+        reach[nid] = 1;
+    }
+}
+
 YSIG_API bool ysig_arm(ysig_graph* g, int node, int64_t t_ns) {
     ysig_entry e;
     if (!g || !g->ok || node < 0 || node >= g->n || g->nd[node].op != YSIG_OP_DETECT) return false;
@@ -2917,7 +2994,11 @@ YSIG_API bool ysig_arm(ysig_graph* g, int node, int64_t t_ns) {
     e.node = node;
     e.t = t_ns;
     ysig__journal(g, &e);
-    ysig__det_arm(g, node, t_ns);
+    {
+        int fell = (int)g->nd[node].p[13] == YSIG_OUT_HIT && g->val[node].v[0] != 0;
+        ysig__det_arm(g, node, t_ns);
+        if (fell) ysig__settle(g, node);
+    }
     return true;
 }
 
@@ -3030,7 +3111,7 @@ YSIG_API int ysig_replay(ysig_graph* g, const ysig_entry* e, int n) {
         switch (e[i].kind) {
         case YSIG_J_RESET: ysig_reset(g, e[i].t); break;
         case YSIG_J_RESET_TRIAL: ysig_reset_trial(g, e[i].t); break;
-        case YSIG_J_RECENTER: ok = ysig_recenter(g, e[i].node, e[i].value, e[i].y); break;
+        case YSIG_J_RECENTER: ok = ysig_recenter(g, e[i].node, e[i].value, e[i].y, e[i].t); break;
         case YSIG_J_SET: ok = ysig_set(g, e[i].node, e[i].param, e[i].value); break;
         case YSIG_J_SET_DATA: ok = ysig_set_data(g, e[i].node, e[i].param, e[i].value); break;
         case YSIG_J_ARM: ok = ysig_arm(g, e[i].node, e[i].t); break;

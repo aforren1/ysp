@@ -17,7 +17,7 @@ typedef struct sig_api {
     const char* (*error)(const ysig_graph*);
     void (*reset)(ysig_graph*, int64_t);
     void (*reset_trial)(ysig_graph*, int64_t);
-    bool (*recenter)(ysig_graph*, int, double, double);
+    bool (*recenter)(ysig_graph*, int, double, double, int64_t);
     bool (*set)(ysig_graph*, int, int, double);
     bool (*set_data)(ysig_graph*, int, int, double);
     int (*feed)(ysig_graph*, const yin_event*);
