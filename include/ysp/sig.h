@@ -156,7 +156,8 @@
  *   is a bad one: a source's order slots and a silent's last time come
  *   down to the poll, so later samples flow again one frame later and a
  *   silent recovers. That stamp's effect on rings, filters, velocity,
- *   delay and a hold's clock stays until the node's next reset
+ *   delay, a rate integrator (it takes one step over the bad time, then
+ *   stays frozen) and a hold's clock stays until the node's next reset
  *   (ysig_reset_trial() for the experiment's nodes, ysig_reset() for an
  *   adapter's); ysig_stats.late_poll is the alarm. A frame with no poll
  *   has no such recovery.

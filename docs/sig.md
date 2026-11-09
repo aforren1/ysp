@@ -433,8 +433,9 @@ definition. A zero field means the row's `def`.
   an order slot's last time and a `silent`'s last time past that come down
   to the poll. Later samples then flow again one frame later, and a silent
   recovers.
-- Known limit: that stamp's effect on rings, filters, velocity, delay and a
-  hold's clock stays until the node's next reset (`ysig_reset_trial()` for
+- Known limit: that stamp's effect on rings, filters, velocity, delay, a
+  rate integrator (it takes one step over the bad time, then stays frozen)
+  and a hold's clock stays until the node's next reset (`ysig_reset_trial()` for
   the experiment's nodes, `ysig_reset()` for an adapter's). `late_poll` is
   the alarm. A frame with no poll has no recovery of the order slots
   either: the source drops its later samples until a reset.
@@ -724,6 +725,9 @@ ran (640.5 million events taken, 373.5 million rows, 10.17 million hits).
 - A dataset glue: a record row goes to `desc.on_row`, and the program
   writes it (to `yds_stream()` or its own file).
 - Bindings: no Python or MEX binding yet.
+- A re-arm stamped before a hit detect's last ring entry cannot push an
+  entry, so `ysig_value_at()` after it reads the old value (live reads
+  are correct). An arm at or after the last entry is correct.
 - The layout's size_t overflow check (`ysig_check()` refuses such a
   graph, so `ysig_arena_size()` is never 0 for a graph the check takes)
   is not tested: it needs a 32-bit build (a 64-bit size_t holds the
