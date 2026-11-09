@@ -123,9 +123,11 @@ static int g_bh_calls;
 
 static int bh_column(void* ctx, const char* table, int i, yexp_column* o) {
     (void)ctx; (void)table;
-    if (g_bh_mode == BH_COL_ENDLESS || (g_bh_mode == BH_COL_ENDLESS_LATE && g_bh_calls++ >= 2)) { o->name = "zz"; o->type = 0; return 1; }
+    /* the corpus's own column names, so the fuzz target's seeds reach level() */
+    static const char* const names[] = { "c", "cond", "word", "ink", "answer", "key_answer", "image", "tex_ok" };
+    if (g_bh_mode == BH_COL_ENDLESS || (g_bh_mode == BH_COL_ENDLESS_LATE && g_bh_calls++ > 8)) { o->name = "zz"; o->type = 0; return 1; }
     if (g_bh_mode == BH_COL_NULL_NAME) { if (i == 0) { o->name = NULL; return 1; } return 0; }
-    if (i == 0) { o->name = "c"; o->type = g_bh_mode == BH_COL_ODD_TYPE ? 12345 : YEXP_COL_STRING; o->n_levels = 2; return 1; }
+    if (i < 8) { o->name = names[i]; o->type = g_bh_mode == BH_COL_ODD_TYPE ? 12345 : YEXP_COL_STRING; o->n_levels = 2; return 1; }
     return 0;
 }
 

@@ -41,8 +41,8 @@ Fill only the functions that you have. A NULL function skips its check, and
 | Function | Check | Who has it |
 |---|---|---|
 | `entry()` | a pack entry exists: `timeline_variables`, `font`, `texture` (and a variable's levels), `artwork`, `audio`, `video` | pack tool, player |
-| `column()` | a table's columns: unknown names, built-in names (2.3), a text from a number column | pack tool, player |
-| `level()` | a column's levels: a lookup's `map` (2.2), the entries a `texture` column names | pack tool, player |
+| `column()` | a table's columns and their types: unknown names, built-in names (2.3), a column used where its type does not fit (a string in a number key or an `if`, a number as a text) | pack tool, player |
+| `level()` | a column's levels: a lookup's `map` (2.2), the entries a `texture` column names, 0 and 1 for an integer column in an `if` | pack tool, player |
 | `role()` | a role against the rig (`yrig_load()`) | player |
 | `param()` | a stimulus or method value against a header's parameter table (range, enum) | designer, player |
 | `rules()` | `ytr_rules()` and a dry `ytr_open()` of a leaf | player, designer |
@@ -51,7 +51,11 @@ Fill only the functions that you have. A NULL function skips its check, and
 The header stays free of ysp/gfx.h and ysp/screen.h, so the loader can
 build in a tool with no SDL. Without `column()`, a name that nothing else
 defines and that has a table in scope is taken to be a column of that
-table: the file may still be valid.
+table: the file may still be valid. A level of 256 bytes or more is read
+again at its length. A level above 65536 bytes, more than 65536 levels, or a
+level that changes between the two reads clears `YEXP_CHECK_LEVELS` from
+`report.run` and sets it in `report.skipped`. The header forces a NUL at the
+end of every message a host fills, and the work limit bounds `column()`.
 
 ## Reference: from a table name to a definition key
 
@@ -140,6 +144,12 @@ at version 1, listed by the test above.
 | Where the defaults live | One table in the header, `yexp_row`, one row per key and section, with the default as JSON text. The header reads no other header at load (D2). `yexp_defaults()` gives it to a designer |
 | Which keys the loader knows | The table's. A key that no row of the section has is refused. A stimulus key against a header's table goes through `param()`: the loader's table lists names and defaults only, so a designer with no gfx.h still gets the whole check of the file |
 | D2's open point: two texts of one double | One ID. A real goes through its double (`yjs_double()`, then `yjs_new_double()`), so `0.1` and `0.1000000000000000055` are one value, as the player reads them. An integer within int64 stays exact (a seed, a code). A number that `yjs_double()` cannot read (more than 19 significant digits, or out of range) is refused at load, naming the key, because its double is not defined |
+| One value, one form, one ID | A number whose exact decimal value is an integer in int64 range is that integer, whatever its spelling. Other reals go through the double. A real whose double is whole (above 2^53) is that integer too, because the canonical bytes hold it so. `"on": "s"` and `"on": ["s"]` write as `"on": "s"`; a choice of only a key writes as the bare string |
+| Negative values | Refused for every duration key and trigger code, literal or through a known `vars` value, except `minimum_valid_rt_s`: ysp/response.h 0.8.0 makes a negative value valid (docs/response.md) |
+| A variable's type | Checked where it is known: a literal or `choice` in `vars`, a session field, a jitter, a built-in, a rule variable, and a table column through `column()`. A table holds a boolean as an integer column of 0 and 1 only; a string column in an `if` is refused. A rule variable's values are text; numeric text reads as a number |
+| `vars` that name each other | A real cycle search over the chain; a chain that ends is valid up to 64 |
+| A response's `from` | Must be shown by a step in `events`. The response is armed at the first frame and timed from that onset, so a stimulus shown only in `after` is refused as well |
+| What a step can set | Float channels only: gfx's float fields and rdk's three update floats. `layer`, integers, `density`, `lead` and `db` are read once |
 | A key at its default in the canonical bytes | Left out, including a set that becomes empty (`display: {}`) and `record` when it equals its computed default. The form is the same whether the key is written or left out, so the round trip holds and a written default gets the same checks as a left-out one |
 | `note` in a named set | A string-valued `note` in `stimuli`, `trials`, `methods`, `devices`, `vars`, `columns`, `data` and `session.fields` is the set's note, as D1 says for any object; such a set has no member named `note` with a string value. In a lookup's `map`, `note` is an ordinary level key |
 | Roles: `required` by default | `true`. Refuse a session with a required role unbound rather than run without its data. devices_spec 11.1 has one role of each spelling |
@@ -162,7 +172,11 @@ decide otherwise.
 | D1 | `note` on a named set: a member, or a note? | a string `note` is the set's note | say so in D1 |
 | 2.1 | `session.fields` without `participant`; field `type` and `required` have no default | refused; both keys required | list them |
 | 2.2 | a lookup in a duration key | allowed, each map value a duration | say so |
-| 2.2, 2.3 | `$contrast_shown` with two michelson stimuli | refused | a per-stimulus variable if a task needs two |
+| 2.2, 2.3 | `$contrast_shown` with two michelson stimuli, also inside a lookup | refused | a per-stimulus variable if a task needs two |
+| 2.1 | `participant` as a string or `required: false`: `rules` needs an integer | accepted; the lowering must refuse a string for `@participant` | require integer and required |
+| 2.2 | a gamut on itself or in a cycle of gamuts | accepted (a gamut is on the color path, not on the value); a gamut on an enum or a text is refused | say so |
+| 2.3 | an outer `vars` shadows a closer table column (the pack tool's order: vars, then tables) | as the pack tool | say which is nearest |
+| 2.4, 2.5 | an empty `timeline`, `{"on": []}` | accepted: they do nothing | say so, or refuse |
 | 2.3 | `$estimate` is "after the update", and `after` runs before the update (1.2) | known only in `columns` | say so |
 | 2.3 | whether a `vars` value is known before trial start | no: trial start, as the table says, so a node's `if` cannot read it | say so |
 | 2.4 | `name` not marked required | required | mark it |
@@ -189,17 +203,22 @@ On 2026-11-09, Linux desktop, gcc 12.2, on the corpus in `tests/experiment/`.
 | Corpus | The four worked examples of 2.14, `examples/pack/stroop/` and a kitchen-sink file: each loads with the test host and with none, equal to its golden dump; canonical bytes load back to the same form and the same bytes and ID |
 | Negative corpus | 139 files, one per refusal, each compared with its message and its line and column |
 | A key at its default | 464 keys of the format's table: written out or left out gives the same ID |
-| Table against headers | 925 checks: `tests/adapt/experiment_tables_test.c` |
+| Table against headers | @TBL@ checks: `tests/adapt/experiment_tables_test.c` |
 | Fuzzing (`tests/fuzz/experiment_fuzz.c`, self-driven, token-level mutations of the corpus) | 20,801,036 inputs under ASan and UBSan in 4 processes (`setarch -R`, gcc 12.2): 2,266,172 loaded and round-tripped, 18,534,775 refused, 89 out of memory, no report. An earlier run found one bug: `-0` stayed `-0.0` in the form while the canonical bytes held `0`, so the round trip differed; fixed, with a unit check and a mutant |
 | Coverage of the fuzz target (gcov, `-O0`, 500,259 inputs, 54,609 loads) | Header: 97.47% of 2213 lines; 98.64% of 2357 branches executed, 83.79% taken. Not reached: the work limit, the nesting and list limits, a full arena in the JSON parse, `yexp_section_name()` and three other small accessors |
 | Mutants (`tests/mutate/experiment.toml`) | 58 of 58 killed. e-04 survived its first run (no test of a 64-byte name), and got a corpus file |
 | Compile checks | C99, C11 and C++17 with warnings as errors; the unit test also as C++17 under ASan and UBSan |
 
-Cost: arena use on the worked examples is 136 to 174 KB (135,909 bytes for
-the 1,089-byte RDK file, 173,970 for the 2,739-byte Stroop file): about 97
-KB of work space and about 36 bytes per byte of source. A definition is read
-once per session: a load is not on the frame path, and no timing claim is
-made here because another job was using the machine during the run.
+Cost: arena use on the worked examples is 89 to 116 KB (88,762 bytes for
+the 1,089-byte RDK file, 115,906 for the 2,739-byte Stroop file): about 60 KB
+of work space and about 21 bytes per byte of source. A template costs about
+530 bytes: 1024 templates in a 22,620-byte file take 587,854 bytes. The first
+version took about 41 KB per template (1024 templates: 42 MB), because each
+one reserved a table for the longest list; the table is now sized from the
+template's own steps. `report.arena_need` is the size of the request that
+failed, not the total a load needs. A definition is read once per session: a
+load is not on the frame path, and no timing claim is made here because
+another job was using the machine during the run.
 
 ## Not done
 
