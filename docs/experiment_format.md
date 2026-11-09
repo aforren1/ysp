@@ -407,28 +407,50 @@ that structure; it does not invent a new one.
      listed state when its steps end, and the last one ends the trial.
      `{"until": C}` inside the steps is D16's form: the shorthand for a
      split into two states joined by one exit.
-  2. An exit is `on` a control's hit, or `after_s` from the state's first
-     frame's onset. `to` is a state's name or `"end"`. `outcome` sets the
+  2. An exit is `on` a control's hit, or `after_s` (above 0) from the
+     state's first frame's onset, or instant: it has neither, and may have
+     `"if": "$flag"`. `to` is a state's name or `"end"`. `outcome` sets the
      trial's outcome.
   3. A state arms the controls its exits name, at its entry. A hit from
      before the entry does not count.
-  4. A frame tests the exits. When more than one has fired, the earliest
-     time wins, then the order in the list.
-  5. At most one state change per frame. The next state starts on the
-     first frame whose onset is at or after the exit's time (D16). So
-     every state lasts at least one frame, a cycle cannot hang the frame
-     loop, and there is no limit to set.
-  6. A cycle is valid: a retry needs one. The designer warns about a cycle
-     that has no timeout.
+  4. A frame tests the exits. When more than one `on` or `after_s` exit
+     has fired, the earliest time wins, then the order in the list.
+     Instant exits are tested when the state starts, in list order, before
+     it waits for anything, and the first that is true is taken.
+  5. A frame can pass through several states. The state after a timed
+     exit starts on the first frame whose onset is at or after the exit's
+     time (D16). If that state has no step that waits (`wait_s`, `until`,
+     `then`, an `at_s` above 0) and an instant exit is true, or it has no
+     exits, the next state starts on the same frame. Their steps land on
+     that frame in order, and a later `set` of a property wins, by the
+     timeline's rule for a channel.
+  6. A cycle is valid: a retry needs one. Every cycle must contain an exit
+     that waits (`on` or `after_s`), and the loader refuses a cycle of only
+     instant exits, also when they have an `if`. So a chain in one frame
+     ends within the number of states, and there is no limit to set. The
+     designer warns about a cycle that has no timeout.
   7. The response stays at the template's level (2.6): it spans states.
      An exit can name it: `{"on": "response"}`. An exit on an early press
      needs F3 in ysp/response.h.
   8. A run records each state's name, entry onset, the exit taken and that
      exit's time, as one stream.
-  9. Names: stimuli, controls, states and named clicks share one namespace
-     per template, and a clash is refused at load. Variables stay as D6
-     has them: flat and read-only, known at the trial's start. A state has
-     no local variables. A value that changes during a trial is a script.
+  9. Names: stimuli, controls, states, named clicks and flags share one
+     namespace per template, and a clash is refused at load. Variables
+     stay as D6 has them: flat and read-only, known at the trial's start.
+  10. Flags are the one thing a trial can change. A template lists them
+     in `"flags"`. Each is a boolean, false at the trial's start. The step
+     `{"flag": NAME, "value": BOOL}` sets one, and `$NAME` reads it in
+     later states. Each flag is a column of the trial's row. A flag has no
+     scope but its trial. Any other value that changes during a trial,
+     a counter among them, is a script.
+
+  ```json
+  { "flags": ["broke_once"],
+    "states": [
+      { "name": "note_break", "steps": [{ "flag": "broke_once", "value": true }],
+        "exits": [{ "if": "$give_warning", "to": "warn" }, { "to": "fixate" }] }
+    ] }
+  ```
 
   Nested states, parallel states and a limit on retries (`max_visits`)
   wait for a task that needs them. The response, the graph and the stimuli

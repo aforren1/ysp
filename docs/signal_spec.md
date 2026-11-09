@@ -1100,7 +1100,7 @@ so nothing here depends on them.
 |---|---|
 | A state's `during` action runs "when the chart wakes up, the state is active, and there are no valid outer transitions" | The graph runs for every sample, whatever the state |
 | Outgoing transitions are numbered "in the order in which you create them" and tested in that order | Exits fire at a hit's time, so the earliest time wins, then the list order (D20) |
-| With super step semantics on, a chart "takes valid transitions until" none is valid or a set maximum is passed | At most one state change per frame: no maximum to set (D20) |
+| With super step semantics on, a chart "takes valid transitions until" none is valid or a set maximum is passed | A frame passes through states until one waits; a cycle of only instant exits is refused at load, so no maximum is set (D20) |
 | A qualified name is searched upward from where it appears; "if a unique match exists" it resolves, "otherwise, the resolution process fails", and the search "does not stop after finding the first match" | One flat namespace per template, so there is no search (D20) |
 
 **The boundary between the two halves.** There are only three crossings:
