@@ -21,12 +21,12 @@
 #include "ysp/stair.h"
 #include "ysp/quest.h"
 #include "ysp/aep.h"
+#include "ysp/audio.h"
 #include "ysp/response.h"
 #include "ysp/rdk.h"
 #include "ysp/rigfile.h"
 #include "ysp/dataset.h"
 #include "ysp/pack.h"
-#include "ysp/audio.h"
 
 #include <stdbool.h>
 #include <stdint.h>
