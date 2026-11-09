@@ -1,0 +1,9 @@
+{
+  "format": "ysp-pack-source",
+  "version": 1,
+  "experiment": { "entry": "experiment/main.json", "source": "experiment.json",
+                  "media_type": "application/vnd.ysp.experiment" },
+  "resources": [
+    { "name": "conditions.pstb", "kind": "table", "source": "conditions.csv" }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "format": "ysp-pack-source",
+  "version": 1,
+  "experiment": { "entry": "experiment/main.json", "source": "experiment.json",
+                  "media_type": "application/vnd.ysp.experiment" },
+  "resources": [
+    { "name": "oddball.pstb", "kind": "table", "source": "oddball.csv" },
+    { "name": "standard.ysptex", "kind": "texture", "source": "standard.png", "primaries": "device" },
+    { "name": "target.ysptex", "kind": "texture", "source": "target.png", "primaries": "device" }
+  ]
+}

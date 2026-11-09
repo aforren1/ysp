@@ -1,0 +1,11 @@
+{
+  "format": "ysp-pack-source",
+  "version": 1,
+  "experiment": { "entry": "experiment/stroop.json", "source": "stroop.json",
+                  "media_type": "application/vnd.ysp.experiment" },
+  "resources": [
+    { "name": "stroop.pstb", "kind": "table", "source": "stroop.csv" },
+    { "kind": "font", "source": "fonts/NotoSans-Regular.ttf", "license": "OFL-1.1" },
+    { "kind": "curveset", "from": "fonts/NotoSans-Regular.ttf", "glyphs": "used" }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "format": "ysp-experiment", "version": 1, "name": "oddball_eeg",
+  "display": { "units": "deg", "background": [0.5, 0.5, 0.5], "min_tier": 1 },
+  "devices": {
+    "resp": { "direction": "in", "family": ["xid", "keyboard"], "buttons": { "1": "left", "2": "right" },
+              "required": true, "min_tier": 2 },
+    "trig": { "direction": "out", "family": ["parallel", "triggerbox", "xid"], "pulse_s": 0.002,
+              "required": true },
+    "light": { "direction": "in", "family": ["line"], "kind": "sync", "required": false }
+  },
+  "stimuli": {
+    "fix": { "kind": "shape", "shape": "cross", "w": 0.4, "h": 0.4, "shape_p0": 0.06,
+             "color": [0.15, 0.15, 0.15], "layer": 1 },
+    "pic": { "kind": "image", "texture": "$image", "w": 6, "h": 6 }
+  },
+  "trials": {
+    "oddball": {
+      "events": [{ "on": "fix" }, { "wait_s": "$soa_s" }, { "on": "pic" },
+                 { "trigger": "$code", "role": "trig" }, { "wait_s": 0.1 }, { "off": "pic" }],
+      "response": { "role": "resp", "choices": ["left", "right"], "from": "pic", "duration_s": 1,
+                    "key_answer": "$answer",
+                    "trigger": { "role": "trig", "code": { "by": "$response", "map": { "left": 101, "right": 102 } } } },
+      "after": [{ "wait_s": 0.2 }],
+      "record": ["pic"]
+    }
+  },
+  "timeline": [
+    { "name": "main", "timeline_variables": "oddball.pstb",
+      "rules": ["order constrained", "reps 4", "max_run type=target 1", "jitter soa_s uniform 0.8 1.2 rate=display"],
+      "trial": "oddball" }
+  ]
+}

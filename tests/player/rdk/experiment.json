@@ -1,0 +1,24 @@
+{
+  "format": "ysp-experiment", "version": 1, "name": "rdk_direction",
+  "devices": { "resp": { "direction": "in", "family": ["keyboard"], "required": true } },
+  "stimuli": {
+    "fix": { "kind": "shape", "shape": "cross", "w": 16, "h": 16, "shape_p0": 3,
+             "edge": "cosine", "edge_width": 1, "color": [0.2, 0.2, 0.2] },
+    "dots": { "kind": "rdk", "aperture": "circle", "w": 400, "count": 200, "speed": 200,
+              "dot_size": 4, "color": [1, 1, 1], "layer": 1,
+              "coherence": "$coherence", "direction": "$coherent_direction" }
+  },
+  "trials": {
+    "rdk": {
+      "events": [{ "on": "fix" }, { "wait_s": 0.5 }, { "on": "dots" }],
+      "response": { "role": "resp", "choices": ["left", "right"], "from": "dots", "duration_s": 1.5,
+                    "minimum_valid_rt_s": 0.1, "key_answer": "$key_answer" },
+      "after": [{ "off": ["dots", "fix"] }, { "wait_s": 0.8 }],
+      "record": ["dots"]
+    }
+  },
+  "timeline": [
+    { "name": "main", "timeline_variables": "conditions.pstb",
+      "rules": ["order random", "reps 5"], "trial": "rdk" }
+  ]
+}
