@@ -697,9 +697,9 @@ calls `ysig_reset_trial()` and `ysig_recenter()` (accepted or refused, so
 a replay holds across both), and has seeds of valid adapter graphs: `gcov`
 shows role resolution, accepted recenters and a latch's hit branch run. The
 earlier seeds set the adapter bit in a byte that also holds the node count,
-so no adapter graph opened. 20,000,000 inputs (seed 783) in 36 min, no
-finding: 14,504,450 refused by `ysig_check()`, 5,494,810 graphs opened and
-ran (640.6 million events taken, 373.3 million rows, 9.97 million hits).
+so no adapter graph opened. 20,000,000 inputs (seed 784) in about 37 min, no
+finding: 14,504,259 refused by `ysig_check()`, 5,494,950 graphs opened and
+ran (640.5 million events taken, 373.5 million rows, 10.17 million hits).
 - `tests/mutate/sig.toml`: 184 mutants and a control; 183 killed. Mutant
   189 removes the early exit of the late-stamp walk and survives by design:
   it changes only the cost (v0.2.0: mutants 95 to 191 for the new ops, the
