@@ -643,7 +643,9 @@ counts this program's allocator calls during the 60 s run (glibc).
 - `tests/adapt/sig_test.c` (ctest `test_sig`): v0.2.0 adds `test_mux`,
   `test_latch`, `test_distance`, `test_peak`, `test_all`, `test_silent`,
   `test_detect_out`, `test_reset_trial`, `test_recenter`,
-  `test_ops_refusals`, `test_ops_views` and `test_ops_replay`, each beyond a
+  `test_ops_refusals`, `test_ops_views`, `test_ops_replay`,
+  `test_recenter_time`, `test_recenter_chain`, `test_peak_order`,
+  `test_late_stamp`, `test_rearm` and `test_hold_frame_input`, each beyond a
   closed form: reports out of time order (two sources, two devices), reads
   at a planned onset ahead of the poll with no recent sample and a still
   input, `ysig_value_at()` at a past time, inside `on_row` and with a
@@ -692,8 +694,9 @@ calls `ysig_reset_trial()` and `ysig_recenter()` (accepted or refused, so
 a replay holds across both); 20,000,000 inputs (seed 782), no finding:
 14,474,726 refused by `ysig_check()`, 5,524,346 graphs opened and ran (36.4
 million events taken, 14.8 million rows, 0.98 million hits).
-- `tests/mutate/sig.toml`: 157 mutants and a control; 157 of 157 killed
-  (v0.2.0: mutants 95 to 158 for the new ops and calls).
+- `tests/mutate/sig.toml`: 183 mutants and a control; 183 of 183 killed
+  (v0.2.0: mutants 95 to 184 for the new ops, the calls and the review's
+  fixes).
   Mutants 89 to 93 move a name off its row (a swap, a gap, the shared
   tables of `speed` and `mean`).
   Mutants 70 and 71 remove the saturation of time arithmetic; the test
