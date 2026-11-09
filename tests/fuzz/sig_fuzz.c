@@ -8,7 +8,8 @@
  *              value from a table (zeros, small integers, fractions, huge,
  *              negative, NaN, infinity), and for sines a data length
  *   the rest   a stream of events (kind, control, device, time steps that
- *              go back too), frames, resets, sets, arms, value reads
+ *              go back too), frames, resets, resets of a trial, recenters,
+ *              sets, arms, value reads
  * Every input must return without a sanitizer report, and a graph that
  * opened must replay its own journal to the same digest. A refusal is a
  * correct answer to a bad graph.
@@ -75,8 +76,8 @@ static const ysig_op_vtable cu_vt = { YSIG_OP_ABI, "acc", { 0, 0, 0, 0 }, 1, siz
                                       cu_sample, NULL };
 
 static void build_node(rd* r, ysig_node* nd, int i, int n, double* data) {
-    int k, op = (int)(rb(r) % 26);
-    *nd = ysig_node_of(op == 25 ? YSIG_OP_CUSTOM : op, -1, -1);
+    int k, op = (int)(rb(r) % 32);   /* 31: the custom op */
+    *nd = ysig_node_of(op == 31 ? YSIG_OP_CUSTOM : op, -1, -1);
     for (k = 0; k < 4; k++) {
         int v = (int)(rb(r) % (unsigned)(n + 2)) - 1;
         nd->in[k] = (int16_t)(k < 2 || v < i ? v : -1);
@@ -259,9 +260,16 @@ static void run_one(const uint8_t* data, size_t size) {
         default: {
             int node = (int)(rb(&r) % (unsigned)(g.n + 1));
             unsigned b = rb(&r);
-            if (b % 3 == 0) { ysig_reset(&g, t); tfed = t; }
-            else if (b % 3 == 1) g_sink += ysig_arm(&g, node, t - (int64_t)(b % 7) * 1000000);
-            else g_sink += ysig_disarm(&g, node);
+            if (b % 5 == 0) { ysig_reset(&g, t); tfed = t; }
+            else if (b % 5 == 1) g_sink += ysig_arm(&g, node, t - (int64_t)(b % 7) * 1000000);
+            else if (b % 5 == 2) g_sink += ysig_disarm(&g, node);
+            else if (b % 5 == 3) ysig_reset_trial(&g, t);
+            else {
+                /* a recenter: refused or not, the journal must replay */
+                double x = g_vals[rb(&r) % 29], y = g_vals[rb(&r) % 29];
+                int role_i = (b & 0x40) ? -1 : (int)(rb(&r) % 3);
+                g_sink += ysig_recenter(&g, role_i, x, y, t);
+            }
             break;
         }
         }
@@ -309,11 +317,145 @@ static uint64_t gen(void) {
     return z ^ (z >> 31);
 }
 static uint64_t mix(void) { return gen(); }
+/* One node in the decoder's form: inputs stored + 1, parameters as indices
+ * into g_vals, and no data. */
+static size_t put_node(uint8_t* o, size_t n, int op, int a, int b, int c, int lanes, int hist, const uint8_t* p) {
+    int k;
+    o[n++] = (uint8_t)op;
+    o[n++] = (uint8_t)(a + 1);
+    o[n++] = (uint8_t)(b + 1);
+    o[n++] = (uint8_t)(c + 1);
+    o[n++] = 0;
+    o[n++] = (uint8_t)lanes;
+    o[n++] = (uint8_t)(hist ? 199 + hist : 0);
+    for (k = 0; k < YSIG_NP; k++) o[n++] = p ? p[k] : 0;
+    o[n++] = 1;
+    return n;
+}
+
+/* A valid graph with a role and a relative adapter (a raw mouse, or a stick
+ * through a rate integrator, then an offset or a scale), the experiment's
+ * nodes on the role with the new ops, and a stream that recenters, resets
+ * trials and arms: without it the adapter paths never open. */
+static size_t seed_adapter(uint8_t* o) {
+    size_t n = 1;
+    int two[16], one[16], nt = 0, no = 0, nn = 8 + (int)(gen() % 18), i, rate = gen() % 3 == 0;
+    int ex = (nn - 1 - 8 + 40) % 40;
+    uint8_t p[YSIG_NP];
+#define A2 (two[gen() % (unsigned)nt])
+#define A1 (one[gen() % (unsigned)no])
+#define PZ memset(p, 0, sizeof p)
+    o[0] = (uint8_t)(128 + ex);       /* node count, and the adapter's bit: 128 % 40 is 8 */
+    PZ;
+    n = put_node(o, n, 2, -1, -1, -1, 0, 0, p);                 /* 0: the role */
+    two[nt++] = 0;
+    n = put_node(o, n, 20, -1, -1, -1, 0, 0, p);                /* 1: a channel */
+    one[no++] = 1;
+    for (i = 2; i < nn - 3; i++) {
+        int op = (int)(gen() % 13), hist = gen() % 3 == 0 ? 8 : 0, lanes1 = 0, a = 0, b = -1, c = -1, fop = 11;
+        PZ;
+        switch (op) {
+        case 0: fop = 11; a = A2; p[0] = (uint8_t)(gen() % 10); break;
+        case 1: fop = 25; a = A2; b = A2; c = A1; break;
+        case 2: fop = 26; a = A2; b = A1; break;
+        case 3: fop = 27; a = A2; b = gen() % 2 ? A2 : -1; p[0] = (uint8_t)(gen() % 10); lanes1 = 1; break;
+        case 4: fop = 28; if (gen() % 2) a = A1; else a = A2; b = gen() % 2 ? A1 : -1; p[0] = gen() % 2 ? 0 : 2; lanes1 = 1; break;
+        case 5: fop = 29; a = A1; b = A1; c = gen() % 2 ? A1 : -1; lanes1 = 1; break;
+        case 6: fop = 30; if (gen() % 2) a = A1; else a = A2; p[0] = 13; lanes1 = 1; break;
+        case 7: case 8:
+            fop = 22; if (gen() % 2) a = A1; else a = A2;
+            p[0] = (uint8_t)(gen() % 2); p[1] = gen() % 2 ? 0 : 2; p[2] = (uint8_t)(1 + gen() % 9); p[3] = gen() % 2 ? 5 : 0;
+            p[4] = gen() % 2 ? 13 : gen() % 2 ? 24 : 0; p[5] = gen() % 4 == 0; p[6] = (uint8_t)(gen() % 2); p[7] = (uint8_t)(gen() % 2);
+            p[12] = (uint8_t)(gen() % 2); p[13] = gen() % 4 != 0;
+            lanes1 = 1;
+            break;
+        case 9: fop = 5; a = A2; p[0] = 13; p[1] = 7; break;
+        case 10: fop = 7; a = A2; p[0] = 24; p[1] = 7; break;
+        case 11: fop = 4; a = A2; p[0] = 9; break;
+        default: fop = 6; a = A2; p[0] = 13; p[1] = 7; lanes1 = 1; break;
+        }
+        n = put_node(o, n, fop, a, b, c, 0, hist, p);
+        if (lanes1) { if (no < 16) one[no++] = i; } else if (nt < 16) two[nt++] = i;
+    }
+    PZ;
+    p[0] = (uint8_t)(gen() % 2);
+    n = put_node(o, n, 23, A2, -1, -1, 0, 0, p);                /* record */
+    n = put_node(o, n, 24, A1, -1, -1, 0, 0, NULL);             /* emit */
+    n = put_node(o, n, 21, A2, -1, -1, 0, 0, NULL);             /* bind */
+    /* n_channels, then the role and the adapter */
+    o[n++] = 16;
+    o[n++] = 1;                                                 /* position2d */
+    o[n++] = 4;                                                 /* display px */
+    o[n++] = 1;                                                 /* allow_relative */
+    o[n++] = 1;                                                 /* "hand" */
+    o[n++] = gen() % 5 ? 2 : 1;                                 /* relative, sometimes absolute */
+    o[n++] = 4;
+    o[n++] = 1;                                                 /* the three-node form */
+    PZ;
+    p[0] = rate ? 7 : 1;                                        /* mouse (1) or gamepad (4), delta (1) or control 0 */
+    p[1] = rate ? 0 : 1;
+    n = put_node(o, n, 1, -1, -1, -1, 2, gen() % 2 ? 16 : 0, p);
+    PZ;
+    p[0] = p[1] = 6;                                            /* gain 0.25 */
+    if (gen() % 2) { p[8] = p[9] = 18; p[12] = p[13] = 17; }    /* bounds +-1e9 */
+    n = put_node(o, n, 3, 0, -1, -1, 0, gen() % 2 ? 16 : 0, p);
+    PZ;
+    p[0] = (uint8_t)(1 + gen() % 9);
+    p[1] = 5;
+    n = put_node(o, n, gen() % 2 ? 11 : 10, 1, -1, -1, 0, gen() % 2 ? 8 : 0, p);
+    o[n++] = (uint8_t)(gen() % 2 ? 2 : 1);                      /* 3 or 2 of them */
+    for (i = 0; i < 400 && n + 16 < 16000; i++) {
+        uint64_t m = gen() % 32;
+        if (m < 22) {
+            o[n++] = 0;
+            o[n++] = (uint8_t)(rate ? 4 : 1);
+            o[n++] = (uint8_t)(gen() % 16);
+            o[n++] = 2;
+            o[n++] = (uint8_t)(rate ? 0 : 1);
+            o[n++] = (uint8_t)(gen() % 3);
+            o[n++] = (uint8_t)(gen() % 29);
+            o[n++] = (uint8_t)(120 + gen() % 17);
+            o[n++] = (uint8_t)(gen() % 29);
+            o[n++] = 4;
+        } else if (m < 26) {
+            int k;
+            o[n++] = 4;
+            for (k = 0; k < 4; k++) o[n++] = (uint8_t)(gen() % 2);
+            o[n++] = (uint8_t)gen();
+            o[n++] = 1;
+            o[n++] = (uint8_t)(gen() % 250);
+        } else if (m < 28) {
+            o[n++] = 5;
+            o[n++] = (uint8_t)gen();
+            o[n++] = 4;
+            o[n++] = 4;
+            o[n++] = (uint8_t)gen();
+        } else {
+            /* 7: reset, arm, disarm, reset of a trial, recenter */
+            o[n++] = 7;
+            o[n++] = (uint8_t)gen();
+            if (m < 29) { o[n++] = 3; }
+            else if (m < 30) { o[n++] = (uint8_t)(1 + 5 * (gen() % 40)); }
+            else {
+                o[n++] = 4;
+                o[n++] = (uint8_t)(gen() % 13);
+                o[n++] = (uint8_t)(gen() % 13);
+                o[n++] = 0;
+            }
+        }
+    }
+#undef A2
+#undef A1
+#undef PZ
+    return n;
+}
+
 /* Seeds: graphs that open (a cursor, two hands, a target with a detect), as
  * byte strings in the decoder's form, so mutations start near valid. */
 static size_t seed(int which, uint8_t* o) {
     size_t n = 0;
     int i, k;
+    if (which >= 6) return seed_adapter(o);
     /* op, in0..in3 (stored + 1 under the modulo), lanes, history, 16 params, a data flag */
     static const uint8_t cursor[][24] = {
         { 1, 0, 0, 0, 0, 2, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 },   /* source mouse delta */
@@ -330,16 +472,19 @@ static size_t seed(int which, uint8_t* o) {
         /* a random graph in the decoder's form, biased to open: inputs
          * earlier, lanes from the op, parameters mostly small; the event
          * stream from the mice and the pen */
-        int nn = 2 + (int)(gen() % 30), ops[] = { 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25 };
+        int nn = 2 + (int)(gen() % 30), ops[] = { 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31 };
         o[n++] = (uint8_t)((nn - 1) | (gen() % 4 == 0 ? 0x80 : 0));
         for (i = 0; i < nn; i++) {
             int op = i < 3 ? 1 : ops[gen() % (sizeof ops / sizeof ops[0])];
             o[n++] = (uint8_t)op;
             for (k = 0; k < 4; k++) {
                 /* inputs by the op: none for a source or a generator, two
-                 * for diff, one or two for the combiners, one else */
-                int gen_op = op == 1 || op == 18 || op == 19 || op == 20, two = op == 17 || ((op == 14 || op == 15 || op == 16 || op == 9 || op == 10) && gen() % 2);
-                int pick = !gen_op && i && (k == 0 || (k == 1 && two)) ? 1 + (int)(gen() % (unsigned)i) : 0;
+                 * for diff and latch, three for mux, one or two for the
+                 * combiners, one else */
+                int gen_op = op == 1 || op == 18 || op == 19 || op == 20,
+                    two = op == 17 || op == 26 || ((op == 14 || op == 15 || op == 16 || op == 9 || op == 10 || op == 27 || op == 28) && gen() % 2),
+                    many = op == 25 || op == 29;
+                int pick = !gen_op && i && (k == 0 || (k == 1 && (two || many)) || (k == 2 && many)) ? 1 + (int)(gen() % (unsigned)i) : 0;
                 o[n++] = (uint8_t)pick;
             }
             o[n++] = (uint8_t)(op == 1 || op == 18 ? 2 : op == 13 || op == 19 ? 1 + gen() % 2 : 0);
@@ -350,6 +495,7 @@ static size_t seed(int which, uint8_t* o) {
                  * position; device 0 or 1 */
                 o[n++] = (uint8_t)(op == 1 ? (k == 0 ? (gen() % 2 ? 1 : 4) : k == 1 || k == 2 ? gen() % 2 : 0)
                                    : op >= 4 && op <= 7 && k == 0 ? (op == 4 ? 15 : 13)
+                                   : op == 30 && k == 0 ? 13
                                    : op == 18 && k == 0 ? 1
                                    : m < 8 ? 0 : m < 9 ? 1 + gen() % 9 : gen());
             }
@@ -407,7 +553,7 @@ int main(int argc, char** argv) {
         } else {
             /* a seed with a few bytes changed, inserted or cut */
             int edits = 1 + (int)(mix() % 8), e;
-            n = seed((int)(m % 6), buf);
+            n = seed((int)(m % 8), buf);
             for (e = 0; e < edits; e++) {
                 size_t at = (size_t)(mix() % n);
                 switch (mix() % 4) {
@@ -434,7 +580,7 @@ int main(int argc, char** argv) {
     for (i = 0; i < 12; i++) {
         char path[1024];
         FILE* f;
-        size_t n = seed(i < 2 ? i : 2, buf);
+        size_t n = seed(i < 2 ? i : i >= 8 ? 6 : 2, buf);
         snprintf(path, sizeof path, "%s/seed%d", argv[1], i);
         f = fopen(path, "wb");
         if (!f) return 1;

@@ -179,7 +179,8 @@ int main(void) {
     g_table = "ydev_params";
     if (found < 8) ptc_fail(__LINE__, "fewer than 8 families");
     { const yrsp_param* p = yrsp_params(&n); CHECK_TABLE("yrsp_params", p, n); }
-    /* the signal path: every op that reads parameters (join and diff read none) */
+    /* the signal path: every op that reads parameters (join, diff, mux, latch
+     * and all read none) */
     for (k = 0, found = 0; k < YSIG_OP_COUNT; k++) {
         const ysig_param* p = ysig_op_params(k, &n);
         if (!p || n == 0) continue;
@@ -188,7 +189,7 @@ int main(void) {
         found++;
     }
     g_table = "ysig_op_params";
-    if (found != YSIG_OP_COUNT - 2) ptc_fail(__LINE__, "an op without rows");
+    if (found != YSIG_OP_COUNT - 5) ptc_fail(__LINE__, "an op without rows");
     /* the rig */
     { const yscr_param* p = yscr_params(&n); CHECK_TABLE("yscr_params", p, n); }
     { const yau_param* p = yau_params(&n); CHECK_TABLE("yau_params", p, n); }

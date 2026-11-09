@@ -16,6 +16,8 @@ typedef struct sig_api {
     bool (*open)(ysig_graph*, const ysig_desc*);
     const char* (*error)(const ysig_graph*);
     void (*reset)(ysig_graph*, int64_t);
+    void (*reset_trial)(ysig_graph*, int64_t);
+    bool (*recenter)(ysig_graph*, int, double, double, int64_t);
     bool (*set)(ysig_graph*, int, int, double);
     bool (*set_data)(ysig_graph*, int, int, double);
     int (*feed)(ysig_graph*, const yin_event*);
@@ -34,7 +36,7 @@ typedef struct sig_api {
 } sig_api;
 
 static const sig_api g_sig_api = {
-    ysig_version, ysig_check, ysig_arena_size, ysig_open, ysig_error, ysig_reset, ysig_set, ysig_set_data,
+    ysig_version, ysig_check, ysig_arena_size, ysig_open, ysig_error, ysig_reset, ysig_reset_trial, ysig_recenter, ysig_set, ysig_set_data,
     ysig_feed, ysig_frame, ysig_arm, ysig_disarm, ysig_detected, ysig_derived, ysig_value_of, ysig_value_at,
     ysig_adapter_node, ysig_get_stats, ysig_replay, ysig_op_params, ysig_op_name
 };

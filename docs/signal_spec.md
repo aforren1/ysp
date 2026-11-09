@@ -291,6 +291,12 @@ Two rates:
 | Combine | `select` | n, m | lane list | "x of the left mouse" |
 | | `join` | 1 to 4 inputs, their lanes (at most 4) | none | two scalars into a vector; built for any lanes (a hand and a cursor into one record) |
 | | `sum`, `mean`, `diff` | k x n, n | weights | the cursor of two hands; a tracking error |
+| | `mux` | a, b, selector, n | none | D17: a timeline channel or a detect chooses a or b; the output is the chosen input with its time, device and tier |
+| | `all` | 2 to 4 inputs, 1 | none | D17, finding 6: two tests at once, for one detect with a hold |
+| | `distance` | 2 or 3 lanes (+ point), 1 | point | finding 4: the distance from a point (the return ring) |
+| Stateful | `latch` | value, trigger, n | none | D18: holds the value of the sample that made the trigger true until a reset |
+| | `peak` | n (+ gate), 1 | lane or norm | finding 5: the largest value since the reset or a gate's rise; the peak sample's `t` |
+| | `silent` | n, 1 | after s | finding 13: 1 once no sample has come for the time, judged at the poll (a view) |
 | Generator | `sines` | 0, 1 to 2 | amplitudes, frequencies, phases, ramp s | a tracking target (Yang, Cowan and Haith 2021) |
 | | `noise` | 0, n | seed, cutoff Hz | seeded per trial (D8) |
 | | `channel` | 0, 1 | timeline channel | a timeline value into the graph (a ramp, a gain set per trial) |
@@ -824,15 +830,18 @@ needed by a ported example or found by a measurement.
 | 5.2 | `scale` per lane | A second input, a factor for every lane | The tracking target's ramp is a timeline tween: sines times a channel |
 | 5.2 | Parameters in 16 doubles | Also a data array per node, copied at open | 7 + 7 sines need 42 numbers |
 | 5.5 | Four unit spaces | `display_px` added | The examples are designed in window pixels |
+| 5.2 | `detect` has no output, a sink | One lane, an input of other ops (v0.2.0); `out` hit (1 from a hit) | D17's selector and D18's freeze need a rise at the hit, also when a frame completes a hold |
+| 6.2 | A hold on samples, a frame finds it | On a frame-updated input a frame's hold clock is min(poll, onset) while the test is true; on samples, and at frame rate, the onset (v0.2.0) | A still hand's value keeps its old t, so a hold on a mux or a latch never ended; a target goes on the first frame at or after the hold's end |
 | 6.1 | The worse tier | SIM, 1, 2, 3, UNKNOWN from best to worst; a source's tier for stamp 0 is a parameter (the source table's) | ysp/input.h orders no tiers; an unmeasured stamp is the worst |
 | 6.1 | A value's `t` is the newer input's | In a sample's pass the changed input's (the arriving sample's) `t`, device and source; in a frame's pass the newest input's; emit and record carry it as is; a detect's hold clock never goes back; `t_oldest` the oldest input's | The derived event must name the report that crossed, at its time; a frame must not move a value's time back; a hold must not end early on a late report |
-| 6.1 | Order per source | Per source and device; raw mouse counts never dropped | Two mice on one any-device source dropped each other's counts |
+| 6.1 | Order per source | Per source and device; raw mouse counts never dropped. A stamp more than 1 s past a frame's poll is a bad one: the order slots and silents' last times come down to the poll; its effect on rings and filters stays until the node's reset (v0.2.0) | Two mice on one any-device source dropped each other's counts; one far-future stamp dropped the source's samples for good; a poll a little behind the newest sample is normal |
 | 6.2 | A sink reads at the onset | Held values at `ysig_frame()`; `ysig_value_at()` from rings of sample-time values for a later onset; views for velocity, speed, delay, low-pass, rate integration up to the poll's time | The flip record comes a frame later (D10); a still mouse sends nothing; a planned onset is in the future |
 | 6.2 | | Stateful sample-rate ops need a source upstream | They would never run; a frame-rate form is not built |
 | 7 | A hold | A hold armed while its test is true counts from the arm (default) or waits for a fresh entry (a parameter) | The reach task's first hold starts with the hand on the start |
 | 6.4 | Parameters apply at the reset | `ysig_set()` applies at once, state kept | A reach task keeps its hand across trials |
 | 8 | Replay from the source rows | A journal of every call; bit for bit on one build | Frames, channel values, arms and sets change values too |
 | 8 | Rows to `yds_stream()` | A callback | No I/O in the header |
+| 6.4 | `ysig_reset()` at a trial's start | `ysig_reset_trial()` resets the experiment's nodes only; `ysig_recenter()` places a relative role at a time through the adapter's scale and offset to its integrator (v0.2.0) | D19: a relative hand does not jump between trials |
 | 9 | `ysig_check(nodes, n)`, `ysig_arena_size(nodes, n)`, `ysig_frame(g, yscr_frame*, base)` | Both take the desc; `ysig_frame(g, ysig_frame_in*)` | Roles, adapters, custom ops and channels are part of the check and the size; ysp/input.h is the only dependency |
 
 ## 15. Paper test: four tasks as definitions
@@ -1028,19 +1037,19 @@ parts are mostly trial state. None of the four tasks needs a script.
 
 | # | Need | Seen in | Proposal | Lands in |
 |---|---|---|---|---|
-| 1 | A boolean signal as a stimulus property, set by a step | visuomotor (`visible`), gaze | `{"signal": NAME}` as a value for a step's `set`, which replaces the property's source until the next `set` | format |
-| 2 | A property chosen per frame from a boolean | tracking (`color`), reach, gaze | `{"when": TEST, "then": V, "else": V}` | format; a `select`-like op |
-| 3 | Freeze a cursor at a detector's value | visuomotor (endpoint feedback) | `{"freeze": CONTROL}` step, and the hit's value in place of the live value | format; an op or a `bind` mode |
-| 4 | Distance from a point as a value | visuomotor (the return ring) | **`distance`** component; a `distance` op (now only inside `detect`, lane -1) | sig.h |
-| 5 | The largest value over a window | bimanual (peak speed) | **`peak`** component and op, with a reset at a control's hit | sig.h |
-| 6 | Two tests at once | bimanual (in the target and slow) | `speed_below` on `region`; an `all` op | sig.h |
+| 1 | A boolean signal as a stimulus property, set by a step | visuomotor (`visible`), gaze | `{"signal": NAME}` as a value for a step's `set`, which replaces the property's source until the next `set` (D17 decided; `mux` in ysp/sig.h v0.2.0) | format |
+| 2 | A property chosen per frame from a boolean | tracking (`color`), reach, gaze | `{"when": TEST, "then": V, "else": V}` (D17 decided; the op is `mux` in ysp/sig.h v0.2.0: **closed for the op**) | format; a `select`-like op |
+| 3 | Freeze a cursor at a detector's value | visuomotor (endpoint feedback) | D18: a control key `"freeze_at": CONTROL`; `latch` in ysp/sig.h v0.2.0 (**closed for the op**) | format; an op or a `bind` mode |
+| 4 | Distance from a point as a value | visuomotor (the return ring) | **`distance`** component; a `distance` op in ysp/sig.h v0.2.0 (**closed**) | sig.h |
+| 5 | The largest value over a window | bimanual (peak speed) | **`peak`** component and op in ysp/sig.h v0.2.0, gated (a gate rise restarts it) (**closed**) | sig.h |
+| 6 | Two tests at once | bimanual (in the target and slow) | `speed_below` on `region`; an `all` op in ysp/sig.h v0.2.0 (**closed**) | sig.h |
 | 7 | A region centered on a moving signal | tracking (`inside`) | `center` takes `{"signal": NAME}`; expands to `diff` and `detect` | component |
 | 8 | Random values drawn per block | tracking (phases; F23) | `{"random": [lo, hi], "per": "block"}` in a control, or vars per block | trials.h, format |
 | 9 | A target chained from the last target | bimanual reach | `{"walk2d": ...}` draw in `vars`. It depends on the last target, not on the hand, so it is known before the trial and is not a script | trials.h, format |
 | 10 | A press inside a stimulus | mouse tracking (start button, boxes) | `{"click_in": STIMULUS}` as a choice and in `until`; the hit test with a press's position | format; response.h or the player |
 | 11 | A setup step that binds devices to roles | bimanual (click each mouse) | `{"assign_roles": [...], "by": "click"}` node; a rig profile may bind by device instead | format, rig profile |
-| 12 | A role that keeps its state across trials | visuomotor, bimanual (the hand stays where it is) | `"keep": true` on a role: no reset of its adapter between trials | format; `ysig_reset` |
-| 13 | Loss of a signal | gaze (track loss) | **`signal_lost`** component: no sample for a time, or the eye's PROXIMITY | sig.h |
+| 12 | A role that keeps its state across trials | visuomotor, bimanual (the hand stays where it is) | D19: an adapter never resets at a trial boundary; `ysig_reset_trial()` and `ysig_recenter()` in ysp/sig.h v0.2.0 (**closed**) | format; `ysig_reset` |
+| 13 | Loss of a signal | gaze (track loss) | **`signal_lost`** component on a `silent` op in ysp/sig.h v0.2.0 (**closed for the time rule**; the eye's PROXIMITY type is still the eye's source) | sig.h |
 | 14 | Units in cm on the display | visuomotor, bimanual | `display.units` gains `cm`, from the rig's `view` | format |
 | 15 | A column from a control's hit or value | visuomotor, bimanual, mouse tracking | `{"hit": NAME, "lane": L}`, `{"signal": NAME}` as a column value | format |
 

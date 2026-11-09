@@ -154,7 +154,10 @@ n[HOLD].p[YSIG_DETECT_A_Y] = 384;
 The hit's `t` is the hold's start plus 0.5 s. The next sample finds it
 (before it is tested, so a hand that leaves after the hold ended counts as
 movement), or a frame whose onset is at or after it, so a still hand that
-sends nothing completes it. Read hits with `ysig_detected()`. With
+sends nothing completes it. On a frame-updated input (a view, a mux or a
+latch of a channel) a frame's hold clock is the earlier of its poll and
+its onset, while the test is true: a still input's value keeps its old
+`t`, and the hold would never end. Read hits with `ysig_detected()`. With
 `p[YSIG_DETECT_START] = 1` (start `arm`) the detect waits for
 `ysig_arm(&g, node, t)`. A crossing detect (no hold) armed while its test
 is true is held until the test fails (the collector's CROSSINGS rule). A
@@ -162,6 +165,85 @@ hold armed while its test is true counts from the arm with
 `p[YSIG_DETECT_ENTRY] = 0` (entry `arm`, the default: a hand already on
 the start at a trial's first frame), or waits for the test to fail and
 come true again with `p[YSIG_DETECT_ENTRY] = 1` (entry `fresh`).
+
+### Freeze a cursor at the sample that crossed
+
+Use a `latch` on a `detect` with `out` set to `hit`. The latch's output is
+the cursor until the detect fires, and the cursor of that sample after,
+until the next reset:
+
+```c
+n[REACH] = ysig_node_of(YSIG_OP_DETECT, HAND, -1);
+n[REACH].p[YSIG_DETECT_TEST] = YSIG_TEST_GE;
+n[REACH].p[YSIG_DETECT_LANE] = -1;              /* the norm of hand - center */
+n[REACH].p[YSIG_DETECT_LEVEL] = 300;            /* px */
+n[REACH].p[YSIG_DETECT_A_X] = sx;
+n[REACH].p[YSIG_DETECT_A_Y] = sy;
+n[REACH].p[YSIG_DETECT_OUT] = YSIG_OUT_HIT;
+n[SHOWN] = ysig_node_of(YSIG_OP_LATCH, CUR, REACH);
+n[BIND] = ysig_node_of(YSIG_OP_BIND, SHOWN, -1);
+```
+
+The latch runs in the sample's pass, after the detect, so the frozen point
+is the value and time of the sample that crossed, as the hit records them.
+When the hit is found by a frame (a still hand completes a hold), the
+output rises in that frame's pass; a latch on the same input as the detect
+then holds the hit's value and time (for a hold, the value at its start and
+start + hold). A latch whose trigger rises in a frame's pass and is not
+such a detect holds the input's held value with that value's `t`. Trigger
+on a detect's `hit` output, not its test, when the detect needs arming: the
+test can rise while the detect is off.
+
+### Choose a stimulus property with a step
+
+Give the property a `mux` on a selector channel (D17). A timeline step
+sets the channel; the frame after it shows the other input:
+
+```c
+n[SEL] = ysig_node_of(YSIG_OP_CHANNEL, -1, -1);
+n[SEL].p[YSIG_CHANNEL_CHANNEL] = CH_SELECT;
+n[SHOW] = ysig_node_of(YSIG_OP_MUX, CURSOR, HIDDEN);
+n[SHOW].in[2] = SEL;
+```
+
+The output is the chosen input, with its `t`, device, tier and source.
+A sample of the input not chosen does not change the output's value or
+time, but it runs the mux's users again: a `record` or `emit` after the
+mux gets a repeated row or event with the chosen input's value and time.
+Nonzero chooses `a`; zero and NaN choose `b`.
+
+### Keep the hand across trials
+
+Call `ysig_reset_trial()` at a trial's start. It resets the experiment's
+nodes only: an adapter's nodes keep their state, so a relative hand does
+not jump (D19). `ysig_reset()` still resets everything. With no adapters
+the two calls are the same. To place a relative role, for example to bring
+a cursor back to the start without moving the hand:
+
+```c
+ysig_recenter(&g, 0, start_x, start_y, poll_ns);     /* role 0, in the role's units */
+ysig_reset_trial(&g, t_trial);
+```
+
+Give `ysig_recenter()` a time no later than the input already fed,
+normally the poll's time. A planned onset is ahead of samples not yet fed:
+a ring would skip them, and a past read would disagree with the live value.
+
+`ysig_recenter()` goes back through the adapter's `scale` and `offset`
+nodes to its integrator and restarts the count grid at that point, so the
+role reads exactly x, y and later counts land on the same grid. The
+placement gets a new ring entry at the call's time: a past read before it
+still gives the old place. A rate integrator takes the point at that time,
+with no jump by the time since its last sample. After the integrator,
+velocity, speed, lowpass and delay restart, because the jump would spike
+them; the stateless nodes take the new value; a rate integrator, peak,
+latch, silent, detect and custom op keep their state and output, and a
+custom op gets no `reset()`. A detect sees the new value at its next
+sample, so a hold that must start from the placed point needs the
+recenter before the arm or the `ysig_reset_trial()`. The call returns
+false and sets `ysig_error()` for an absolute adapter, an adapter with no
+integrator, another op between the integrator and the role, a point not
+finite after that chain, or a point outside the integrator's bounds.
 
 ### Read a value at a flip record's onset
 
@@ -293,9 +375,15 @@ definition. A zero field means the row's `def`.
 | `noise` | none, 1 to 4 | seed, sd, cutoff Hz | Set again at each reset |
 | `channel` | none, 1 | timeline channel | From the frame's values |
 | `bind` | 1, none | first channel | Writes float at each frame |
-| `detect` | 1, 1 (the test) | test (ge, le, in_rect, out_rect), lane (-1 norm), level, hysteresis, hold s, at (sample, frame), start (reset, arm), repeat (once, every), a.x a.y b.x b.y, entry (arm, fresh) | |
+| `detect` | 1, 1 (the test, or the hit with `out` hit; holds while disarmed or after a one-hit hit) | test (ge, le, in_rect, out_rect), lane (-1 norm), level, hysteresis, hold s, at (sample, frame), start (reset, arm), repeat (once, every), a.x a.y b.x b.y, entry (arm, fresh), out (test, hit) | The only sink with an output: another op may read it (a mux selector, an all input, a latch's trigger). With `out` hit, 1 from a hit until the detect is ready again (one hit: until the next arm or reset) |
 | `record` | 1, none | per (sample, frame) | `desc.on_row`. A row has its value's true `t`: a sample stream may be out of time order when two sources feed the node, as `ysp/input.h` says of events |
-| `emit` | 1, none | kind (USER + 0..7), control | `ysig_derived()` |
+| `emit` | 1, none | kind (USER + 0..7), control | `ysig_derived()`. On a frame-updated node (a mux of a channel) it emits at every frame |
+| `mux` | 3 (a, b, selector), n | none | a when lane 0 of the selector is nonzero, else b; a and b the same lanes; the output's time, device, tier and source are the chosen input's. NaN counts as zero |
+| `latch` | 2 (value, trigger), n | none | Passes the value until lane 0 of the trigger goes from zero to nonzero, then holds until a reset. Hit value of a detect on the same input, else the held input at the pass of the rise. Its ring holds sample-time values: a generator part of its input is not read back by `ysig_value_at()` |
+| `distance` | 1 (2 or 3 lanes) or 2, 1 | point.x, point.y, point.z | The Euclidean distance to the point, or to a second input of the same lanes |
+| `peak` | 1 or 2 (gate), 1 | lane (-1 norm) | The largest value since the reset or since the gate last rose; holds while the gate is zero; `t` is the peak sample's, its ring's time the later of that and the ring's last, so a late larger peak is kept. A gate that rises before any sample starts from the first sample. Needs a source upstream |
+| `all` | 2 to 4, 1 | none | 1 when lane 0 of every input is nonzero |
+| `silent` | 1, 1 | after s | A view: 1 once no sample has come for `after`, judged at the poll, before any sample from the reset; the same at a past read of its value, at most at the last poll. Needs a source upstream |
 
 ### Time
 
@@ -330,11 +418,38 @@ definition. A zero field means the row's `def`.
   completes at a poll, up to a frame after the onset that would end a
   hold on samples.
 - History rings hold values at sample times; a frame's view never
-  enters them.
-- Integrate, lowpass, velocity, speed and delay need a source upstream:
-  they keep state per sample, and `ysig_check()` refuses them on a
-  generator or a channel alone.
+  enters them. A latch's capture and a peak's restart in a frame's pass
+  do. A `mux`, `all` or `distance` after a channel or another frame-updated
+  input reads its inputs' rings, also a detect's: its ring holds its
+  output at each value it tested. `silent` reads its input's ring and
+  judges at the time asked, at most the last poll.
+- Integrate, lowpass, velocity, speed, delay, peak and silent need a
+  source upstream: they keep state per sample, and `ysig_check()` refuses
+  them on a generator or a channel alone.
 - Times saturate at the ends of int64 instead of overflowing.
+- A poll a little behind the newest sample is normal and changes
+  nothing; it is counted in `late_poll`. A stamp later than the poll by
+  more than `YSIG_FUTURE_NS` (1 s) is a bad stamp: at a frame with a poll,
+  an order slot's last time and a `silent`'s last time past that come down
+  to the poll. Later samples then flow again one frame later, and a silent
+  recovers.
+- Known limit: that stamp's effect on rings, filters, velocity, delay, a
+  rate integrator (it takes one step over the bad time, then stays frozen)
+  and a hold's clock stays until the node's next reset (`ysig_reset_trial()` for
+  the experiment's nodes, `ysig_reset()` for an adapter's). `late_poll` is
+  the alarm. A frame with no poll has no recovery of the order slots
+  either: the source drops its later samples until a reset.
+
+### Trials and adapters
+
+- `ysig_reset_trial()` skips the nodes of every adapter, so their order
+  slots, integrators, filters and rings keep their state; the hit and
+  derived-event queues empty, as at `ysig_reset()`. Each node that reads
+  an adapter starts from its current value. A graph with no adapters
+  resets every node.
+- `ysig_recenter()`: see [Keep the hand across trials](#keep-the-hand-across-trials).
+  The point is in the role's units, at the call's time, no later than the
+  input already fed. Both calls are journaled.
 
 ### Limits
 
@@ -384,6 +499,29 @@ files came out byte-identical.
   and the emit node's index as the device. The collector needs nothing
   more. A consumer that logs every event cannot tell a derived event from
   a USER device's. `ysp/input.h` has no flag for it: see "Not done".
+- **A detect is a sink with an output.** Its output was the test's state,
+  for a color; it was refused as an input, so `all` and a `mux` selector
+  (D17) had nothing to read. It is now an input of another op. A sink
+  otherwise has no lanes, and `ysig_check()` refuses it as an input. The
+  `out` row makes the output the hit, not the test: a freeze at a control's
+  hit (D18) needs a rise at the hit, also when a frame completes a hold,
+  and before the arm the test must not latch.
+- **A mux passes its chosen input, metadata included.** A selection is not
+  a mix: `t`, device, tier and source are the chosen input's, not the
+  newest of all three, or a mux on a channel selector would carry the
+  frame's planned onset. `ysig_value_at()` returns 1 when the selector and
+  the chosen input have the time, whatever the other input's ring holds.
+- **A value at a past time for `silent`.** A silent's own ring would hold
+  only sample-time zeros, so a past read comes from when its input last
+  arrived, the input's ring, judged at the time asked and never past the
+  last poll, as a view. Before the input's first sample in the ring the
+  count runs from the reset.
+- **Recenter: an inverted chain, not a transform.** The adapter's last
+  node is what the task reads, but the count grid is the integrator's.
+  The spec's mouse adapter ends in a `scale` (cm from counts), so the
+  point goes back through the scale and the offset. An affine or a filter
+  in between is refused: inverting one is a rig calibration, not a
+  step's job.
 - **Parameters by name, not constructors.** A graph set `p[8] = sx`; a
   reader needed the table to see that it is a detect's center
   ([examples_findings.md](examples_findings.md), F25). Each index now has
@@ -458,6 +596,15 @@ hits, over its 533 samples; "a frame" is 533 samples, two
 | E-core, second review | 276.4 ns, 275.6 ns, 309.4 ns | 551 ns, 1.55 us, 3.16 us | 152 ns, 256 ns | 147.6 us |
 | P-core, third review | 143.0 ns, 141.9 ns, 176.2 ns | 281 ns, 508 ns, 2.32 us | 105 ns, 203 ns | 76.0 us |
 | P-core, final review | 142.5 ns, 141.6 ns, 177.0 ns | 284 ns, 593 ns, 2.43 us | 105 ns, 176 ns | 75.9 us |
+| P-core, v0.1.0 again (2026-11-09) | 142.5 ns, 141.4 ns, 177.7 ns | 279 ns, 612 ns, 2.32 us | 105 ns, 178 ns | 75.7 us |
+| P-core, v0.2.0 (2026-11-09) | 145.4 ns, 144.4 ns, 179.0 ns | 287 ns, 492 ns, 2.70 us | 107 ns, 170 ns | 77.4 us |
+
+v0.2.0 costs about 3 ns a sample (2%) and 8 to 15 ns a frame over v0.1.0 on
+the same graph, in two runs each (144.4 and 144.5 ns against 141.4 and 141.2 ns).
+The bench's digest is the same for both.
+The bench graph has no new op, so the difference is in the existing path. Its
+likely part is a detect now writing its value's time, tier and sources on its
+output, because its output can feed other ops; this was not profiled.
 
 The second review's cost is the digest's finalizer: built with the plain
 xor-multiply step in its place, the same bench gave 130.6 and 130.8 ns a
@@ -497,7 +644,19 @@ counts this program's allocator calls during the 60 s run (glibc).
 
 ### Tests, fuzzing and mutations
 
-- `tests/adapt/sig_test.c` (ctest `test_sig`): each op against a closed
+- `tests/adapt/sig_test.c` (ctest `test_sig`): v0.2.0 adds `test_mux`,
+  `test_latch`, `test_distance`, `test_peak`, `test_all`, `test_silent`,
+  `test_detect_out`, `test_reset_trial`, `test_recenter`,
+  `test_ops_refusals`, `test_ops_views`, `test_ops_replay`,
+  `test_recenter_time`, `test_recenter_chain`, `test_peak_order`,
+  `test_late_stamp`, `test_rearm`, `test_hold_frame_input` and `test_u`, each
+  beyond a closed form: reports out of time order (two sources, two devices), reads
+  at a planned onset ahead of the poll with no recent sample and a still
+  input, `ysig_value_at()` at a past time, inside `on_row` and with a
+  frame-updated input (`mux` with a `channel` selector), before any sample,
+  after a reset and across `ysig_reset_trial()`, times at the ends of int64,
+  a far-future stamp on another source, replay bit for bit, the digest
+  moving with the output, and each refusal's message. Each op against a closed
   form, the schedules, the tier and `t_oldest` rule, the out-of-order
   drop, detectors, derived events, records, reset, replay bit for bit,
   values at a time, roles and adapters, a custom op, `ysig_set()`, a
@@ -507,8 +666,9 @@ counts this program's allocator calls during the 60 s run (glibc).
   `YSIG_<OP>_<ROW>` against the row of that name, and one name for each
   row of every op. It passes under ASan and UBSan (`setarch -R` on the
   Linux desktop) and as C++.
-- `tests/compile/sig.c` and `sig.cpp`: C99, C11 and C++17 with warnings
-  as errors.
+- `tests/compile/sig.c` and `sig.cpp`: C99, C11, C++17 and C++20 with
+  warnings as errors (C++20: GCC's `-Wdeprecated-enum-float-conversion`
+  no longer fires).
 - `tests/fuzz/sig_fuzz.c`: arbitrary node arrays (and roles and adapters)
   into `ysig_check()` and `ysig_open()`, then every call on a graph that
   opened, and a replay of its journal to the same digest. It also feeds
@@ -533,8 +693,18 @@ after INT64_MAX and far-future stamps, and every bound channel holds its
 bind's input after it. After the third review: 20,000,000 inputs (seed
 781) in 9 min 33 s; 14,562,777 refused by `ysig_check()`, 5,436,289
 graphs opened and ran (35.0 million events taken, 14.7 million rows,
-0.97 million hits), no finding.
-- `tests/mutate/sig.toml`: 93 mutants and a control; 93 of 93 killed.
+0.97 million hits), no finding. For v0.2.0 the target builds the new ops and
+calls `ysig_reset_trial()` and `ysig_recenter()` (accepted or refused, so
+a replay holds across both), and has seeds of valid adapter graphs: `gcov`
+shows role resolution, accepted recenters and a latch's hit branch run. The
+earlier seeds set the adapter bit in a byte that also holds the node count,
+so no adapter graph opened. 20,000,000 inputs (seed 784) in about 37 min, no
+finding: 14,504,259 refused by `ysig_check()`, 5,494,950 graphs opened and
+ran (640.5 million events taken, 373.5 million rows, 10.17 million hits).
+- `tests/mutate/sig.toml`: 184 mutants and a control; 183 killed. Mutant
+  189 removes the early exit of the late-stamp walk and survives by design:
+  it changes only the cost (v0.2.0: mutants 95 to 191 for the new ops, the
+  calls and the reviews' fixes).
   Mutants 89 to 93 move a name off its row (a swap, a gap, the shared
   tables of `speed` and `mean`).
   Mutants 70 and 71 remove the saturation of time arithmetic; the test
@@ -555,10 +725,17 @@ graphs opened and ran (35.0 million events taken, 14.7 million rows,
 - A dataset glue: a record row goes to `desc.on_row`, and the program
   writes it (to `yds_stream()` or its own file).
 - Bindings: no Python or MEX binding yet.
+- A re-arm stamped before a hit detect's last ring entry cannot push an
+  entry, so `ysig_value_at()` after it reads the old value (live reads
+  are correct). An arm at or after the last entry is correct.
 - The layout's size_t overflow check (`ysig_check()` refuses such a
   graph, so `ysig_arena_size()` is never 0 for a graph the check takes)
   is not tested: it needs a 32-bit build (a 64-bit size_t holds the
   largest graph).
-- A frame-rate form of integrate, lowpass, velocity, speed and delay (on
-  a generator or a channel alone).
+- A frame-rate form of integrate, lowpass, velocity, speed, delay, peak
+  and silent (on a generator or a channel alone).
+- A second latch inside one trial (D18: "until a task needs it"): a
+  `latch` holds until the next reset.
+- `ysig_recenter()` through an `affine` or a filter in the adapter: it
+  refuses them (design notes).
 - Not run: MSVC, macOS, a window, a real device, a photodiode.

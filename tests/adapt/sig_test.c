@@ -191,7 +191,9 @@ static const pname g_pnames[] = {
     PN(DETECT, YSIG_DETECT_START), PN(DETECT, YSIG_DETECT_REPEAT), PN(DETECT, YSIG_DETECT_A_X),
     PN(DETECT, YSIG_DETECT_A_Y), PN(DETECT, YSIG_DETECT_B_X), PN(DETECT, YSIG_DETECT_B_Y),
     PN(DETECT, YSIG_DETECT_ENTRY), PN(RECORD, YSIG_RECORD_PER), PN(EMIT, YSIG_EMIT_KIND),
-    PN(EMIT, YSIG_EMIT_CONTROL)
+    PN(EMIT, YSIG_EMIT_CONTROL), PN(DETECT, YSIG_DETECT_OUT), PN(DISTANCE, YSIG_DISTANCE_POINT_X),
+    PN(DISTANCE, YSIG_DISTANCE_POINT_Y), PN(DISTANCE, YSIG_DISTANCE_POINT_Z), PN(PEAK, YSIG_PEAK_LANE),
+    PN(SILENT, YSIG_SILENT_AFTER)
 };
 #undef PN
 
@@ -2156,6 +2158,1922 @@ static void test_review(void) {
     CHECK(ysig_detected(&g, h, 4) >= 0);
 }
 
+/* ---------------------------------------------------------------- v0.2 ops: mux, latch, distance, peak, all, silent */
+
+#define PEN_E(t, dev, x, y, tier) axis((t), YIN_KIND_PEN, YIN_AXIS_POSITION, (dev), (float)(x), (float)(y), 0, (tier))
+
+/* A row's value read back at its own time, from inside on_row, against the
+ * value the row carries: a past read must work during a pass. */
+static const ysig_graph* g_vat_graph;
+static int g_vat_node, g_vat_checked, g_vat_bad;
+static void on_row_vat(void* user, const ysig_row* r) {
+    ysig_value v;
+    (void)user;
+    if (r->per_frame) return;
+    {
+        int rc = ysig_value_at(g_vat_graph, g_vat_node, r->value.t, &v);
+        if (rc < 0) { g_vat_bad++; return; }
+        if (rc == 0) return;     /* older than the rings: nothing to compare */
+        g_vat_checked++;
+        if (v.v[0] != r->value.v[0]) g_vat_bad++;
+    }
+}
+
+static void test_mux(void) {
+    ysig_node n[7];
+    ysig_desc d;
+    ysig_graph g;
+    const ysig_value* v;
+    ysig_value at;
+    float tl[1];
+    ysig_frame_in f;
+    yin_event e;
+    g_where = "mux";
+    n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2);        /* a */
+    n[1] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 2, 2);        /* b */
+    n[2] = ysig_node_of(YSIG_OP_CHANNEL, -1, -1);                  /* a step sets the selector */
+    n[3] = ysig_node_of(YSIG_OP_MUX, 0, 1); n[3].in[2] = 2; n[3].history = 64;
+    n[4] = ysig_node_of(YSIG_OP_BIND, 3, -1);
+    n[5] = ysig_node_of(YSIG_OP_RECORD, 3, -1);
+    d = desc_of(n, 6);
+    d.on_row = on_row_vat;
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    g_vat_graph = &g; g_vat_node = 3; g_vat_checked = g_vat_bad = 0;
+    ysig_reset(&g, 1000 * MS);
+    v = ysig_value_of(&g, 3);
+    /* before any sample: b chosen (selector 0), no value yet */
+    CHECK(v->t == 1000 * MS && v->tier == YIN_TIER_UNKNOWN && v->v[0] == 0);
+    /* a sample of the input not chosen changes nothing on the output */
+    e = PEN_E(1010 * MS, 1, 1, 2, YIN_TIER_1); ysig_feed(&g, &e);
+    CHECK(v->t == 1000 * MS && v->tier == YIN_TIER_UNKNOWN && v->v[0] == 0);
+    e = PEN_E(1012 * MS, 2, 3, 4, YIN_TIER_2); ysig_feed(&g, &e);
+    CHECK(v->v[0] == 3 && v->v[1] == 4 && v->t == 1012 * MS && v->tier == YIN_TIER_2 && v->src == 1);
+    /* a step's channel chooses a at a frame */
+    tl[0] = 1;
+    f = frame_at(1, 1020 * MS, 0, tl, 1);
+    CHECK(ysig_frame(&g, &f) == 0);
+    CHECK(v->v[0] == 1 && v->v[1] == 2 && v->t == 1010 * MS && v->tier == YIN_TIER_1 && v->src == 0);
+    CHECK(g_ch[0] == 1 && g_ch[1] == 2);
+    /* a value at a past time: the selector's frame ring and each input's
+     * sample ring, so before the frame's onset b (and its time), after it a */
+    CHECK(ysig_value_at(&g, 3, 1015 * MS, &at) == 1 && at.v[0] == 3 && at.t == 1012 * MS);
+    CHECK(ysig_value_at(&g, 3, 1025 * MS, &at) == 1 && at.v[0] == 1 && at.t == 1010 * MS && at.src == 0);
+    /* older than the rings: rc 0, the oldest given */
+    CHECK(ysig_value_at(&g, 3, 1005 * MS, &at) == 0);
+    /* out of order across sources: a's report arrives after b's newer one */
+    tl[0] = 0;
+    f = frame_at(2, 1040 * MS, 0, tl, 1);
+    ysig_frame(&g, &f);                                        /* back to b */
+    e = PEN_E(1041 * MS, 2, 9, 9, YIN_TIER_SIM); ysig_feed(&g, &e);
+    e = PEN_E(1030 * MS, 1, 7, 7, YIN_TIER_SIM); ysig_feed(&g, &e);
+    CHECK(v->v[0] == 9 && v->t == 1041 * MS);          /* a's late report, not chosen, moves nothing */
+    tl[0] = 1;
+    f = frame_at(3, 1050 * MS, 0, tl, 1);
+    ysig_frame(&g, &f);
+    CHECK(v->v[0] == 7 && v->t == 1030 * MS && v->device == 1);
+    CHECK(g_vat_bad == 0 && g_vat_checked > 0);
+    /* selector NaN counts as zero: b */
+    tl[0] = NAN;
+    f = frame_at(4, 1060 * MS, 0, tl, 1);
+    ysig_frame(&g, &f);
+    CHECK(v->v[0] == 9);
+    /* extreme times: a stamp at the ends of int64 */
+    e = PEN_E(INT64_MAX, 2, 11, 11, YIN_TIER_SIM); ysig_feed(&g, &e);
+    CHECK(v->v[0] == 11 && v->t == INT64_MAX);
+    ysig_reset_trial(&g, 2000 * MS);   /* no adapters: every node */
+    CHECK(v->t == 2000 * MS && v->v[0] == 0 && v->tier == YIN_TIER_UNKNOWN);
+    /* a detect's state as the selector, within one sample's pass: the
+     * crossing sample itself is the first chosen */
+    n[2] = ysig_node_of(YSIG_OP_DETECT, 0, -1);                 /* a.x >= 5 */
+    n[2].p[YSIG_DETECT_LEVEL] = 5;
+    n[2].p[YSIG_DETECT_REPEAT] = 1;
+    n[3] = ysig_node_of(YSIG_OP_MUX, 0, 1); n[3].in[2] = 2;
+    d = desc_of(n, 4);
+    d.on_row = NULL;
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    v = ysig_value_of(&g, 3);
+    e = PEN_E(10 * MS, 2, 3, 3, YIN_TIER_SIM); ysig_feed(&g, &e);
+    CHECK(v->v[0] == 3);
+    e = PEN_E(11 * MS, 1, 4, 0, YIN_TIER_SIM); ysig_feed(&g, &e);
+    CHECK(v->v[0] == 3);
+    e = PEN_E(12 * MS, 1, 6, 0, YIN_TIER_SIM); ysig_feed(&g, &e);
+    CHECK(v->v[0] == 6 && v->t == 12 * MS);
+    e = PEN_E(13 * MS, 1, 1, 0, YIN_TIER_SIM); ysig_feed(&g, &e);
+    CHECK(v->v[0] == 3 && v->t == 10 * MS);
+    /* a view chosen at a planned onset ahead of the poll: a mux passes the
+     * view's value as of the poll, the velocity read at the poll */
+    {
+        ysig_node m[5];
+        m[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2);
+        m[1] = ysig_node_of(YSIG_OP_VELOCITY, 0, -1); m[1].p[0] = 0.01;
+        m[2] = ysig_node_of(YSIG_OP_OFFSET, 0, -1);
+        m[3] = ysig_node_of(YSIG_OP_CHANNEL, -1, -1);
+        m[4] = ysig_node_of(YSIG_OP_MUX, 1, 2); m[4].in[2] = 3;
+        d = desc_of(m, 5);
+        if (!open_desc(&g, &d)) { g_failures++; return; }
+        ysig_reset(&g, 0);
+        for (int i = 0; i < 40; i++) {
+            e = PEN_E(i * MS, 1, i, 0, YIN_TIER_SIM);
+            ysig_feed(&g, &e);
+        }
+        tl[0] = 1;
+        f = frame_at(1, 60 * MS, 0, tl, 1);
+        f.poll_ns = 39 * MS;                                    /* still moving at the poll */
+        ysig_frame(&g, &f);
+        CHECK_NEAR(ysig_value_of(&g, 4)->v[0], 1000, 1e-6);
+        f = frame_at(2, 75 * MS, 0, tl, 1);
+        f.poll_ns = 60 * MS;                                    /* silent for the lag up to the poll */
+        ysig_frame(&g, &f);
+        CHECK(ysig_value_of(&g, 4)->v[0] == 0);
+    }
+}
+
+static void test_latch(void) {
+    ysig_node n[8];
+    ysig_desc d;
+    ysig_graph g;
+    const ysig_value* v;
+    ysig_value at;
+    ysig_hit h[4];
+    float tl[1];
+    ysig_frame_in f;
+    yin_event e;
+    g_where = "latch";
+    n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2);
+    n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1);                  /* x >= 5, the sample that crossed */
+    n[1].p[YSIG_DETECT_LEVEL] = 5;
+    n[1].p[YSIG_DETECT_OUT] = YSIG_OUT_HIT;
+    n[2] = ysig_node_of(YSIG_OP_LATCH, 0, 1); n[2].history = 64;
+    n[3] = ysig_node_of(YSIG_OP_RECORD, 2, -1);
+    d = desc_of(n, 4);
+    d.on_row = on_row_vat;
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    g_vat_graph = &g; g_vat_node = 2; g_vat_checked = g_vat_bad = 0;
+    ysig_reset(&g, 5 * MS);
+    v = ysig_value_of(&g, 2);
+    /* before any sample, a pass-through of the held (empty) input */
+    CHECK(v->t == 5 * MS && v->tier == YIN_TIER_UNKNOWN);
+    e = PEN_E(10 * MS, 1, 1, 7, YIN_TIER_2); ysig_feed(&g, &e);
+    CHECK(v->v[0] == 1 && v->v[1] == 7 && v->t == 10 * MS && v->tier == YIN_TIER_2);
+    /* the crossing sample is the value and time held, and is the hit's */
+    e = PEN_E(20 * MS, 1, 6, 8, YIN_TIER_2); ysig_feed(&g, &e);
+    CHECK(v->v[0] == 6 && v->v[1] == 8 && v->t == 20 * MS);
+    CHECK(ysig_detected(&g, h, 4) == 1 && h[0].t == 20 * MS && h[0].value.v[0] == v->v[0] && h[0].value.v[1] == v->v[1]);
+    e = PEN_E(30 * MS, 1, 9, 9, YIN_TIER_2); ysig_feed(&g, &e);
+    CHECK(v->v[0] == 6 && v->t == 20 * MS);
+    f = frame_at(1, 40 * MS, 0, NULL, 0);
+    ysig_frame(&g, &f);
+    CHECK(v->v[0] == 6 && v->t == 20 * MS);
+    /* past values: the ring, read inside on_row too */
+    CHECK(g_vat_bad == 0 && g_vat_checked == 3);
+    CHECK(ysig_value_at(&g, 2, 15 * MS, &at) == 1 && at.v[0] == 1 && at.t == 10 * MS);
+    CHECK(ysig_value_at(&g, 2, 25 * MS, &at) == 1 && at.v[0] == 6 && at.t == 20 * MS);
+    /* a reset lets go */
+    ysig_reset(&g, 50 * MS);
+    CHECK(v->t == 50 * MS && v->v[0] == 0);
+    e = PEN_E(55 * MS, 1, 2, 2, YIN_TIER_2); ysig_feed(&g, &e);
+    CHECK(v->v[0] == 2 && v->t == 55 * MS);
+    /* a value past the level at the reset: the hit is held (no ready), so
+     * no rise, and the input goes on passing */
+    ysig_reset(&g, 60 * MS);
+    {
+        ysig_node m[5];
+        /* a hold that a still hand completes at a frame: the trigger rises
+         * in the frame's pass and the latch takes the hit's value and time */
+        m[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2);
+        m[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1);
+        m[1].p[YSIG_DETECT_LEVEL] = 5; m[1].p[YSIG_DETECT_HOLD] = 0.05;
+        m[1].p[YSIG_DETECT_OUT] = YSIG_OUT_HIT;
+        m[2] = ysig_node_of(YSIG_OP_LATCH, 0, 1); m[2].history = 16;
+        m[3] = ysig_node_of(YSIG_OP_RECORD, 2, -1); m[3].p[0] = 1;
+        d = desc_of(m, 4);
+        if (!open_desc(&g, &d)) { g_failures++; return; }
+        ysig_reset(&g, 0);
+        v = ysig_value_of(&g, 2);
+        e = PEN_E(10 * MS, 1, 6, 1, YIN_TIER_2); ysig_feed(&g, &e);
+        CHECK(v->v[0] == 6 && v->t == 10 * MS);
+        e = PEN_E(30 * MS, 1, 7, 2, YIN_TIER_2); ysig_feed(&g, &e);
+        CHECK(v->v[0] == 7);                                   /* not completed: passes */
+        f = frame_at(1, 70 * MS, 0, NULL, 0);                  /* still hand: 10 + 50 ms passed at the onset */
+        ysig_frame(&g, &f);
+        CHECK(ysig_detected(&g, h, 4) == 1 && h[0].t == 60 * MS && h[0].value.v[0] == 6);
+        CHECK(v->v[0] == 6 && v->v[1] == 1 && v->t == 60 * MS);    /* the recorded hit's value and time */
+        CHECK(ysig_value_at(&g, 2, 65 * MS, &at) == 1 && at.v[0] == 6 && at.t == 60 * MS);   /* the frame's capture is in the ring */
+        e = PEN_E(80 * MS, 1, 1, 1, YIN_TIER_2); ysig_feed(&g, &e);
+        CHECK(v->v[0] == 6 && v->t == 60 * MS);                   /* held */
+        /* the trigger on a different input takes the held value of the latch's input */
+        m[1] = ysig_node_of(YSIG_OP_CHANNEL, -1, -1);
+        m[3] = ysig_node_of(YSIG_OP_RECORD, 2, -1);
+        d = desc_of(m, 4);
+        if (!open_desc(&g, &d)) { g_failures++; return; }
+        ysig_reset(&g, 0);
+        v = ysig_value_of(&g, 2);
+        e = PEN_E(10 * MS, 1, 3, 4, YIN_TIER_1); ysig_feed(&g, &e);
+        tl[0] = 1;
+        f = frame_at(1, 30 * MS, 0, tl, 1);
+        ysig_frame(&g, &f);
+        CHECK(v->v[0] == 3 && v->t == 10 * MS && v->tier == YIN_TIER_1);
+        e = PEN_E(40 * MS, 1, 5, 5, YIN_TIER_1); ysig_feed(&g, &e);
+        CHECK(v->v[0] == 3 && v->t == 10 * MS);
+        /* a channel's rise at a frame holds the reset's value when no
+         * sample came (tier unknown, as the source before its first) */
+        tl[0] = 1;
+        ysig_reset(&g, 100 * MS);
+        v = ysig_value_of(&g, 2);
+        CHECK(v->t == 100 * MS);
+        f = frame_at(2, 120 * MS, 0, tl, 1);
+        ysig_frame(&g, &f);
+        e = PEN_E(121 * MS, 1, 8, 8, YIN_TIER_1); ysig_feed(&g, &e);
+        CHECK(v->t == 100 * MS && v->v[0] == 0 && v->tier == YIN_TIER_UNKNOWN);
+        /* a trigger already true at a reset is no rise: fall and rise again */
+        m[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1);
+        m[1].p[YSIG_DETECT_TEST] = YSIG_TEST_LE; m[1].p[YSIG_DETECT_LEVEL] = 1;
+        d = desc_of(m, 3);
+        if (!open_desc(&g, &d)) { g_failures++; return; }
+        ysig_reset(&g, 0);
+        v = ysig_value_of(&g, 2);
+        e = PEN_E(10 * MS, 1, 0.5, 0, YIN_TIER_SIM); ysig_feed(&g, &e);
+        CHECK(v->v[0] == 0.5);                             /* the test true: passes, no rise yet */
+        e = PEN_E(20 * MS, 1, 3, 0, YIN_TIER_SIM); ysig_feed(&g, &e);
+        e = PEN_E(30 * MS, 1, 0.25, 0, YIN_TIER_SIM); ysig_feed(&g, &e);
+        CHECK(v->v[0] == 0.25 && v->t == 30 * MS);           /* the rise's sample, the crossing */
+        e = PEN_E(40 * MS, 1, 3, 0, YIN_TIER_SIM); ysig_feed(&g, &e);
+        CHECK(v->v[0] == 0.25);
+        m[1] = ysig_node_of(YSIG_OP_CHANNEL, -1, -1);
+        d = desc_of(m, 3);
+        if (!open_desc(&g, &d)) { g_failures++; return; }
+        ysig_reset(&g, 200 * MS);
+        {
+            /* selector zero to NaN is no rise; NaN to 1 is */
+            float tn[1];
+            v = ysig_value_of(&g, 2);
+            tn[0] = NAN;
+            f = frame_at(3, 210 * MS, 0, tn, 1);
+            ysig_frame(&g, &f);
+            e = PEN_E(211 * MS, 1, 2, 2, YIN_TIER_1); ysig_feed(&g, &e);
+            CHECK(v->v[0] == 2 && v->t == 211 * MS);
+            tn[0] = 2.5f;
+            f = frame_at(4, 220 * MS, 0, tn, 1);
+            ysig_frame(&g, &f);
+            CHECK(v->v[0] == 2 && v->t == 211 * MS);
+        }
+    }
+    /* out of order: two devices on an any-device source; a late report that
+     * crosses is the sample that made the trigger true */
+    n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 2);
+    n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1);
+    n[1].p[YSIG_DETECT_LEVEL] = 5;
+    n[2] = ysig_node_of(YSIG_OP_LATCH, 0, 1);
+    d = desc_of(n, 3);
+    d.on_row = NULL;
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    v = ysig_value_of(&g, 2);
+    e = PEN_E(50 * MS, 1, 1, 0, YIN_TIER_SIM); ysig_feed(&g, &e);
+    e = PEN_E(40 * MS, 2, 9, 0, YIN_TIER_SIM); ysig_feed(&g, &e);
+    CHECK(v->v[0] == 9 && v->t == 40 * MS && v->device == 2);
+    /* extreme times */
+    ysig_reset(&g, INT64_MIN + 3);
+    e = PEN_E(INT64_MIN + 5, 1, 9, 0, YIN_TIER_SIM); ysig_feed(&g, &e);
+    CHECK(v->v[0] == 9 && v->t == INT64_MIN + 5);
+}
+
+static void test_distance(void) {
+    ysig_node n[8];
+    ysig_desc d;
+    ysig_graph g;
+    const ysig_value* v;
+    ysig_value at;
+    float tl[3];
+    ysig_frame_in f;
+    yin_event e;
+    g_where = "distance";
+    n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2);
+    n[1] = ysig_node_of(YSIG_OP_DISTANCE, 0, -1);
+    n[1].p[YSIG_DISTANCE_POINT_X] = 3;
+    n[1].p[YSIG_DISTANCE_POINT_Y] = 4;
+    /* the point from a second input: a channel pair, frame-updated, so a
+     * past read needs the selector's and the point's rings */
+    n[2] = ysig_node_of(YSIG_OP_CHANNEL, -1, -1); n[2].p[0] = 0;
+    n[3] = ysig_node_of(YSIG_OP_CHANNEL, -1, -1); n[3].p[0] = 1;
+    n[4] = ysig_node_of(YSIG_OP_JOIN, 2, 3);
+    n[5] = ysig_node_of(YSIG_OP_DISTANCE, 0, 4); n[5].history = 32;
+    n[6] = ysig_node_of(YSIG_OP_RECORD, 5, -1);
+    d = desc_of(n, 7);
+    d.on_row = on_row_vat;
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    g_vat_graph = &g; g_vat_node = 5; g_vat_checked = g_vat_bad = 0;
+    ysig_reset(&g, 0);
+    v = ysig_value_of(&g, 1);
+    /* before any sample: the distance of the zero value, tier unknown */
+    CHECK_NEAR(v->v[0], 5, 0);
+    CHECK(v->tier == YIN_TIER_UNKNOWN && v->t == 0);
+    e = PEN_E(10 * MS, 1, 0, 0, YIN_TIER_1); ysig_feed(&g, &e);
+    CHECK(v->t == 10 * MS && v->tier == YIN_TIER_1 && v->lanes == 1);
+    tl[0] = 3; tl[1] = 4; tl[2] = 0;
+    f = frame_at(1, 20 * MS, 0, tl, 3);
+    ysig_frame(&g, &f);
+    CHECK_NEAR(ysig_value_of(&g, 5)->v[0], 5, 0);
+    e = PEN_E(25 * MS, 1, 3, 0, YIN_TIER_1); ysig_feed(&g, &e);
+    CHECK_NEAR(ysig_value_of(&g, 5)->v[0], 4, 0);
+    /* a past read before the frame moved the point: (0,0) vs (0,0)... */
+    CHECK(ysig_value_at(&g, 5, 15 * MS, &at) == 1 && at.v[0] == 0);
+    CHECK(ysig_value_at(&g, 5, 25 * MS, &at) == 1 && at.v[0] == 4);
+    CHECK(g_vat_bad == 0 && g_vat_checked == 2);
+    /* a 3-lane value */
+    {
+        ysig_node m[2];
+        m[0] = src_node(YIN_KIND_GAMEPAD, 0, 0, 3);
+        m[0].p[YSIG_SOURCE_FIELDS] = 7;
+        m[1] = ysig_node_of(YSIG_OP_DISTANCE, 0, -1);
+        m[1].p[YSIG_DISTANCE_POINT_Z] = -2;
+        d = desc_of(m, 2);
+        if (!open_desc(&g, &d)) { g_failures++; return; }
+        ysig_reset(&g, 0);
+        e = axis(5 * MS, YIN_KIND_GAMEPAD, 0, 1, 1, 2, 2, YIN_TIER_SIM);
+        ysig_feed(&g, &e);
+        CHECK_NEAR(ysig_value_of(&g, 1)->v[0], 4.58257569495584, 1e-12);
+    }
+    /* extreme: a huge coordinate gives a finite or infinite distance, no trap */
+    {
+        ysig_node m[2];
+        m[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2);
+        m[1] = ysig_node_of(YSIG_OP_DISTANCE, 0, -1);
+        d = desc_of(m, 2);
+        if (!open_desc(&g, &d)) { g_failures++; return; }
+        ysig_reset(&g, INT64_MAX);
+        e = PEN_E(INT64_MAX, 1, 1e30f, 1e30f, YIN_TIER_SIM);
+        ysig_feed(&g, &e);
+        CHECK(ysig_value_of(&g, 1)->v[0] > 1e30);
+        CHECK(ysig_value_of(&g, 1)->t == INT64_MAX);
+    }
+}
+
+static void test_peak(void) {
+    ysig_node n[7];
+    ysig_desc d;
+    ysig_graph g;
+    const ysig_value* v;
+    ysig_value at;
+    float tl[1];
+    ysig_frame_in f;
+    yin_event e;
+    g_where = "peak";
+    n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2);
+    n[1] = src_node(YIN_KIND_BOX, 0, 0, 1);                    /* a gate from another device */
+    n[2] = ysig_node_of(YSIG_OP_PEAK, 0, -1);                  /* lane 0, no gate */
+    n[2].history = 32;
+    n[3] = ysig_node_of(YSIG_OP_PEAK, 0, -1);                  /* the norm */
+    n[3].p[YSIG_PEAK_LANE] = -1;
+    n[4] = ysig_node_of(YSIG_OP_PEAK, 0, 1);                   /* gated by the box */
+    n[4].p[YSIG_PEAK_LANE] = 1;
+    n[5] = ysig_node_of(YSIG_OP_RECORD, 2, -1);
+    d = desc_of(n, 6);
+    d.on_row = on_row_vat;
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    g_vat_graph = &g; g_vat_node = 2; g_vat_checked = g_vat_bad = 0;
+    ysig_reset(&g, 3 * MS);
+    v = ysig_value_of(&g, 2);
+    CHECK(v->v[0] == 0 && v->t == 3 * MS && v->lanes == 1 && v->tier == YIN_TIER_UNKNOWN);
+    /* NaN as the first sample is no peak: the output keeps its reset */
+    e = PEN_E(4 * MS, 1, NAN, 0, YIN_TIER_2); ysig_feed(&g, &e);
+    CHECK(v->v[0] == 0 && v->t == 3 * MS);
+    /* a first value that is negative is the peak: the largest so far */
+    e = PEN_E(10 * MS, 1, -2, 3, YIN_TIER_2); ysig_feed(&g, &e);
+    CHECK(v->v[0] == -2 && v->t == 10 * MS && v->tier == YIN_TIER_2);
+    e = PEN_E(20 * MS, 1, 5, 0, YIN_TIER_SIM); ysig_feed(&g, &e);
+    CHECK(v->v[0] == 5 && v->t == 20 * MS);
+    e = PEN_E(30 * MS, 1, 4, 4, YIN_TIER_SIM); ysig_feed(&g, &e);
+    CHECK(v->v[0] == 5 && v->t == 20 * MS);                 /* the peak sample's time, not the newest */
+    CHECK_NEAR(ysig_value_of(&g, 3)->v[0], 5.656854249492381, 1e-12);
+    CHECK(ysig_value_of(&g, 3)->t == 30 * MS);
+    CHECK(ysig_value_at(&g, 2, 25 * MS, &at) == 1 && at.v[0] == 5 && at.t == 20 * MS);
+    CHECK(ysig_value_at(&g, 2, 15 * MS, &at) == 1 && at.v[0] == -2);
+    CHECK(g_vat_bad == 0 && g_vat_checked == 4);
+    /* NaN is no peak */
+    e = PEN_E(31 * MS, 1, NAN, 0, YIN_TIER_SIM); ysig_feed(&g, &e);
+    CHECK(v->v[0] == 5 && v->t == 20 * MS);
+    /* the gate (node 4, lane 1): zero, so it holds and sets nothing */
+    CHECK(ysig_value_of(&g, 4)->v[0] == 0 && ysig_value_of(&g, 4)->t == 3 * MS);
+    /* the gate rises from a report of another source: the peak restarts
+     * from the value held then, at that value's time */
+    e = axis(32 * MS, YIN_KIND_BOX, 0, 2, 0, 0, 1, YIN_TIER_SIM); ysig_feed(&g, &e);
+    v = ysig_value_of(&g, 4);
+    CHECK(v->v[0] == 0 && v->t == 31 * MS);               /* lane 1 of (NaN, 0) */
+    e = PEN_E(40 * MS, 1, 0, 2, YIN_TIER_SIM); ysig_feed(&g, &e);
+    CHECK(v->v[0] == 2 && v->t == 40 * MS);
+    e = PEN_E(50 * MS, 1, 0, 1, YIN_TIER_SIM); ysig_feed(&g, &e);
+    CHECK(v->v[0] == 2 && v->t == 40 * MS);
+    /* an out-of-order report: a later t already kept; two sources */
+    e = axis(45 * MS, YIN_KIND_BOX, 0, 2, 0, 0, 1, YIN_TIER_SIM); ysig_feed(&g, &e);
+    CHECK(v->v[0] == 2);
+    /* the gate falls: hold */
+    e = axis(55 * MS, YIN_KIND_BOX, 0, 2, 0, 0, 0, YIN_TIER_SIM); ysig_feed(&g, &e);
+    e = PEN_E(60 * MS, 1, 0, 9, YIN_TIER_SIM); ysig_feed(&g, &e);
+    CHECK(v->v[0] == 2 && v->t == 40 * MS);
+    /* it rises again: a fresh peak, not the old 2 */
+    e = axis(65 * MS, YIN_KIND_BOX, 0, 2, 0, 0, 1, YIN_TIER_SIM); ysig_feed(&g, &e);
+    CHECK(v->v[0] == 9 && v->t == 60 * MS);
+    e = PEN_E(70 * MS, 1, 0, 3, YIN_TIER_SIM); ysig_feed(&g, &e);
+    CHECK(v->v[0] == 9);
+    /* a new rise forgets the old peak, also a larger one */
+    e = axis(72 * MS, YIN_KIND_BOX, 0, 2, 0, 0, 0, YIN_TIER_SIM); ysig_feed(&g, &e);
+    e = PEN_E(74 * MS, 1, 0, 1, YIN_TIER_SIM); ysig_feed(&g, &e);
+    e = axis(75 * MS, YIN_KIND_BOX, 0, 2, 0, 0, 1, YIN_TIER_SIM); ysig_feed(&g, &e);
+    CHECK(v->v[0] == 1 && v->t == 74 * MS);
+    e = PEN_E(76 * MS, 1, 0, 9, YIN_TIER_SIM); ysig_feed(&g, &e);
+    CHECK(v->v[0] == 9 && v->t == 76 * MS);
+    /* a reset clears the peak; a frame in between changes nothing */
+    f = frame_at(1, 80 * MS, 0, NULL, 0);
+    ysig_frame(&g, &f);
+    CHECK(v->v[0] == 9 && v->t == 76 * MS);
+    ysig_reset(&g, 100 * MS);
+    v = ysig_value_of(&g, 2);
+    CHECK(v->v[0] == 0 && v->t == 100 * MS);
+    e = PEN_E(110 * MS, 1, 1, 1, YIN_TIER_SIM); ysig_feed(&g, &e);
+    CHECK(v->v[0] == 1 && v->t == 110 * MS);
+    /* a gate from a channel: it rises at a frame, restarting at the held
+     * value, and a value at a past time sees the frame's restart */
+    {
+        ysig_node m[4];
+        m[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2);
+        m[1] = ysig_node_of(YSIG_OP_CHANNEL, -1, -1);
+        m[2] = ysig_node_of(YSIG_OP_PEAK, 0, 1); m[2].history = 16;
+        d = desc_of(m, 3);
+        d.on_row = NULL;
+        if (!open_desc(&g, &d)) { g_failures++; return; }
+        ysig_reset(&g, 0);
+        v = ysig_value_of(&g, 2);
+        e = PEN_E(10 * MS, 1, 8, 0, YIN_TIER_SIM); ysig_feed(&g, &e);
+        CHECK(v->v[0] == 0 && v->t == 0);                  /* the gate is shut */
+        tl[0] = 1;
+        f = frame_at(1, 20 * MS, 0, tl, 1);
+        ysig_frame(&g, &f);
+        CHECK(v->v[0] == 8 && v->t == 10 * MS);          /* restart at the held value */
+        CHECK(ysig_value_at(&g, 2, 25 * MS, &at) == 1 && at.v[0] == 8 && at.t == 10 * MS);   /* before any sample after it */
+        e = PEN_E(30 * MS, 1, 3, 0, YIN_TIER_SIM); ysig_feed(&g, &e);
+        CHECK(v->v[0] == 8);
+        e = PEN_E(40 * MS, 1, 12, 0, YIN_TIER_SIM); ysig_feed(&g, &e);
+        CHECK(v->v[0] == 12 && v->t == 40 * MS);
+        CHECK(ysig_value_at(&g, 2, 15 * MS, &at) == 1 && at.v[0] == 8 && at.t == 10 * MS);
+        CHECK(ysig_value_at(&g, 2, 35 * MS, &at) == 1 && at.v[0] == 8);
+        /* a frame's change of a held input is no sample: a mux that
+         * switches to a larger value at a frame leaves the peak alone */
+        {
+            ysig_node q[6];
+            float t2[1];
+            q[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2);
+            q[1] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 2, 2);
+            q[2] = ysig_node_of(YSIG_OP_CHANNEL, -1, -1);
+            q[3] = ysig_node_of(YSIG_OP_MUX, 0, 1); q[3].in[2] = 2;
+            q[4] = ysig_node_of(YSIG_OP_PEAK, 3, -1);
+            d = desc_of(q, 5);
+            if (!open_desc(&g, &d)) { g_failures++; return; }
+            ysig_reset(&g, 0);
+            v = ysig_value_of(&g, 4);
+            e = PEN_E(10 * MS, 1, 20, 0, YIN_TIER_SIM); ysig_feed(&g, &e);   /* a, not chosen */
+            e = PEN_E(11 * MS, 2, 3, 0, YIN_TIER_SIM); ysig_feed(&g, &e);    /* b, chosen */
+            CHECK(v->v[0] == 3);
+            t2[0] = 1;                                                      /* a chosen at a frame: 20, a held value */
+            f = frame_at(1, 20 * MS, 0, t2, 1);
+            ysig_frame(&g, &f);
+            CHECK(v->v[0] == 3 && v->t == 11 * MS);                         /* no sample: no change */
+            e = PEN_E(21 * MS, 1, 25, 0, YIN_TIER_SIM); ysig_feed(&g, &e);    /* a's next sample is one */
+            CHECK(v->v[0] == 25 && v->t == 21 * MS);
+        }
+    }
+    /* extreme times in a peak's data */
+    {
+        ysig_node m[2];
+        m[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2);
+        m[1] = ysig_node_of(YSIG_OP_PEAK, 0, -1);
+        d = desc_of(m, 2);
+        if (!open_desc(&g, &d)) { g_failures++; return; }
+        ysig_reset(&g, INT64_MIN + 1);
+        e = PEN_E(INT64_MAX, 1, 2, 0, YIN_TIER_SIM); ysig_feed(&g, &e);
+        CHECK(ysig_value_of(&g, 1)->v[0] == 2 && ysig_value_of(&g, 1)->t == INT64_MAX);
+    }
+}
+
+static void test_all(void) {
+    ysig_node n[8];
+    ysig_desc d;
+    ysig_graph g;
+    const ysig_value* v;
+    ysig_value at;
+    ysig_hit h[4];
+    float tl[2];
+    ysig_frame_in f;
+    yin_event e;
+    g_where = "all";
+    /* the bimanual reach's "in the target and slow": two detects into an
+     * all, and one hold detect on it */
+    n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2);
+    n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1);                 /* x >= 5 */
+    n[1].p[YSIG_DETECT_LEVEL] = 5;
+    n[2] = ysig_node_of(YSIG_OP_DETECT, 0, -1);                 /* y >= 3 */
+    n[2].p[YSIG_DETECT_LANE] = 1; n[2].p[YSIG_DETECT_LEVEL] = 3;
+    n[3] = ysig_node_of(YSIG_OP_ALL, 1, 2);
+    n[4] = ysig_node_of(YSIG_OP_DETECT, 3, -1);                 /* all for 50 ms */
+    n[4].p[YSIG_DETECT_LEVEL] = 0.5; n[4].p[YSIG_DETECT_HOLD] = 0.05;
+    d = desc_of(n, 5);
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 2 * MS);
+    v = ysig_value_of(&g, 3);
+    CHECK(v->v[0] == 0 && v->t == 2 * MS);
+    /* the state lanes carry their value's time and tier through */
+    e = PEN_E(10 * MS, 1, 5, 2, YIN_TIER_2); ysig_feed(&g, &e);
+    CHECK(v->v[0] == 0 && v->t == 10 * MS && v->tier == YIN_TIER_2);
+    e = PEN_E(20 * MS, 1, 6, 3, YIN_TIER_SIM); ysig_feed(&g, &e);
+    CHECK(v->v[0] == 1 && v->t == 20 * MS);
+    e = PEN_E(30 * MS, 1, 6, 4, YIN_TIER_SIM); ysig_feed(&g, &e);
+    e = PEN_E(40 * MS, 1, 1, 9, YIN_TIER_SIM); ysig_feed(&g, &e);
+    CHECK(v->v[0] == 0);
+    CHECK(ysig_detected(&g, h, 4) == 2);                       /* the two tests' own hits, once each */
+    /* a hold on both tests held: the single detect fires at start + hold */
+    e = PEN_E(50 * MS, 1, 7, 7, YIN_TIER_SIM); ysig_feed(&g, &e);
+    CHECK(ysig_detected(&g, h, 4) == 0);
+    e = PEN_E(90 * MS, 1, 7, 7, YIN_TIER_SIM); ysig_feed(&g, &e);
+    e = PEN_E(101 * MS, 1, 7, 7, YIN_TIER_SIM); ysig_feed(&g, &e);
+    CHECK(ysig_detected(&g, h, 4) == 1 && h[0].t == 100 * MS && h[0].node == 4);
+    /* a frame-updated input: channel into all, past value through rings */
+    n[1] = ysig_node_of(YSIG_OP_CHANNEL, -1, -1); n[1].p[0] = 0;
+    n[2] = ysig_node_of(YSIG_OP_CHANNEL, -1, -1); n[2].p[0] = 1;
+    n[3] = ysig_node_of(YSIG_OP_ALL, 1, 2); n[3].history = 16;
+    d = desc_of(n, 4);
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    v = ysig_value_of(&g, 3);
+    tl[0] = 1; tl[1] = 1;
+    f = frame_at(1, 20 * MS, 0, tl, 2);
+    ysig_frame(&g, &f);
+    CHECK(v->v[0] == 1);
+    tl[1] = 0;
+    f = frame_at(2, 40 * MS, 0, tl, 2);
+    ysig_frame(&g, &f);
+    CHECK(v->v[0] == 0);
+    CHECK(ysig_value_at(&g, 3, 30 * MS, &at) == 1 && at.v[0] == 1);
+    CHECK(ysig_value_at(&g, 3, 50 * MS, &at) == 1 && at.v[0] == 0);
+    /* NaN is not nonzero */
+    tl[0] = NAN; tl[1] = 1;
+    f = frame_at(3, 60 * MS, 0, tl, 2);
+    ysig_frame(&g, &f);
+    CHECK(v->v[0] == 0);
+    /* all's inputs may have any lanes: lane 0 only */
+    {
+        ysig_node m[3];
+        m[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2);
+        m[1] = ysig_node_of(YSIG_OP_ALL, 0, 0);
+        d = desc_of(m, 2);
+        if (!open_desc(&g, &d)) { g_failures++; return; }
+        ysig_reset(&g, 0);
+        e = PEN_E(1 * MS, 1, 0, 5, YIN_TIER_SIM); ysig_feed(&g, &e);
+        CHECK(ysig_value_of(&g, 1)->v[0] == 0);
+        e = PEN_E(2 * MS, 1, 2, 0, YIN_TIER_SIM); ysig_feed(&g, &e);
+        CHECK(ysig_value_of(&g, 1)->v[0] == 1);
+    }
+}
+
+static void test_silent(void) {
+    ysig_node n[5];
+    ysig_desc d;
+    ysig_graph g;
+    const ysig_value* v;
+    ysig_value at;
+    ysig_frame_in f;
+    yin_event e;
+    ysig_stats st;
+    g_where = "silent";
+    n[0] = src_node(YIN_KIND_EYE, 0, 1, 2);
+    n[1] = ysig_node_of(YSIG_OP_SILENT, 0, -1);
+    n[1].p[YSIG_SILENT_AFTER] = 0.05;
+    n[1].history = 64;
+    n[2] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 9, 2);   /* another device */
+    n[3] = ysig_node_of(YSIG_OP_SILENT, 2, -1);
+    n[3].p[YSIG_SILENT_AFTER] = 0.01;
+    d = desc_of(n, 4);
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 100 * MS);
+    v = ysig_value_of(&g, 1);
+    /* before any sample: counted from the reset, at the poll */
+    CHECK(v->v[0] == 0);
+    f = frame_at(1, 200 * MS, 0, NULL, 0);
+    f.poll_ns = 130 * MS;            /* the onset is planned; input known to 130 */
+    ysig_frame(&g, &f);
+    CHECK(v->v[0] == 0);
+    f.poll_ns = 151 * MS;
+    ysig_frame(&g, &f);
+    CHECK(v->v[0] == 1 && v->t == 151 * MS);
+    /* a sample arrives: 0 at once, at its t */
+    e = axis(160 * MS, YIN_KIND_EYE, 0, 1, 3, 4, 0, YIN_TIER_2);
+    ysig_feed(&g, &e);
+    CHECK(v->v[0] == 0 && v->t == 160 * MS && v->tier == YIN_TIER_2);
+    /* the gap to a planned onset is not silence: only the poll's time counts */
+    f = frame_at(2, 400 * MS, 0, NULL, 0);
+    f.poll_ns = 200 * MS;
+    ysig_frame(&g, &f);
+    CHECK(v->v[0] == 0);
+    f.poll_ns = 209 * MS;
+    ysig_frame(&g, &f);
+    CHECK(v->v[0] == 0);
+    f.poll_ns = 210 * MS;
+    ysig_frame(&g, &f);
+    CHECK(v->v[0] == 1);
+    /* a past read judges at that time, at most at the last poll */
+    CHECK(ysig_value_at(&g, 1, 155 * MS, &at) == 0 && at.v[0] == 1);   /* before the first sample: from the reset */
+    CHECK(ysig_value_at(&g, 1, 165 * MS, &at) == 1 && at.v[0] == 0);
+    CHECK(ysig_value_at(&g, 1, 212 * MS, &at) == 1 && at.v[0] == 1);
+    CHECK(ysig_value_at(&g, 1, 999 * MS, &at) == 1 && at.v[0] == 1 && at.t == 210 * MS);    /* the poll bounds it */
+    /* a far-future stamp on another source moves nothing here */
+    e = PEN_E(INT64_MAX - 5, 9, 1, 1, YIN_TIER_SIM);
+    ysig_feed(&g, &e);
+    f = frame_at(3, 500 * MS, 0, NULL, 0);
+    f.poll_ns = 500 * MS;
+    ysig_frame(&g, &f);
+    CHECK(v->v[0] == 1);
+    ysig_get_stats(&g, &st);
+    CHECK(st.late_poll == 1);
+    /* out of order within two devices of one any-device source: the
+     * silence runs from the newest time, not the arrival */
+    {
+        ysig_node q[2];
+        q[0] = src_node(YIN_KIND_EYE, 0, 0, 2);
+        q[1] = ysig_node_of(YSIG_OP_SILENT, 0, -1); q[1].p[0] = 0.05;
+        d = desc_of(q, 2);
+        if (!open_desc(&g, &d)) { g_failures++; return; }
+        ysig_reset(&g, 0);
+        e = axis(100 * MS, YIN_KIND_EYE, 0, 1, 1, 1, 0, YIN_TIER_SIM); ysig_feed(&g, &e);
+        e = axis(40 * MS, YIN_KIND_EYE, 0, 2, 1, 1, 0, YIN_TIER_SIM); ysig_feed(&g, &e);
+        f = frame_at(1, 120 * MS, 0, NULL, 0);
+        ysig_frame(&g, &f);
+        CHECK(ysig_value_of(&g, 1)->v[0] == 0);              /* 120 - 100 < 50 */
+        f = frame_at(2, 149 * MS, 0, NULL, 0);
+        ysig_frame(&g, &f);
+        CHECK(ysig_value_of(&g, 1)->v[0] == 0);
+        f = frame_at(3, 150 * MS, 0, NULL, 0);
+        ysig_frame(&g, &f);
+        CHECK(ysig_value_of(&g, 1)->v[0] == 1);             /* exactly `after` */
+        n[1] = ysig_node_of(YSIG_OP_SILENT, 0, -1);
+        n[1].p[YSIG_SILENT_AFTER] = 0.05; n[1].history = 64;
+        d = desc_of(n, 4);
+        if (!open_desc(&g, &d)) { g_failures++; return; }
+        ysig_reset(&g, 100 * MS);
+        v = ysig_value_of(&g, 1);
+    }
+    /* the same source with a stamp past the poll: not silent while it stands */
+    e = axis(600 * MS, YIN_KIND_EYE, 0, 1, 1, 1, 0, YIN_TIER_SIM);
+    ysig_feed(&g, &e);
+    f = frame_at(4, 590 * MS, 0, NULL, 0);
+    f.poll_ns = 580 * MS;
+    ysig_frame(&g, &f);
+    CHECK(v->v[0] == 0);
+    /* extreme: a poll near the ends saturates */
+    f = frame_at(5, INT64_MAX, 0, NULL, 0);
+    f.poll_ns = INT64_MAX;
+    ysig_frame(&g, &f);
+    CHECK(v->v[0] == 1);
+    ysig_reset(&g, INT64_MIN + 2);
+    v = ysig_value_of(&g, 1);
+    CHECK(v->v[0] == 0);
+    f = frame_at(6, INT64_MIN + 9, 0, NULL, 0);
+    f.poll_ns = INT64_MIN + 9;
+    ysig_frame(&g, &f);
+    CHECK(v->v[0] == 0);
+    /* a past read before the next frame is bounded by the reset's time,
+     * not by the poll before the reset */
+    n[1] = ysig_node_of(YSIG_OP_SILENT, 0, -1);
+    n[1].p[YSIG_SILENT_AFTER] = 0.05; n[1].history = 64;
+    d = desc_of(n, 4);
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    f = frame_at(1, 5000 * MS, 0, NULL, 0);
+    ysig_frame(&g, &f);
+    ysig_reset(&g, 0);
+    CHECK(ysig_value_at(&g, 1, 1000 * MS, &at) == 0 && at.v[0] == 0);
+    /* a graph with silent needs the poll */
+    f = frame_at(7, 0, 0, NULL, 0);
+    f.has_poll = false;
+    CHECK(ysig_frame(&g, &f) == -1 && strstr(ysig_error(&g), "silent"));
+    /* the reset's time, across a trial with an adapter: reset_trial counts
+     * from its own t, a role's silence too */
+    {
+        ysig_node exp_n[2], ad_n[1];
+        ysig_role role;
+        ysig_adapter ad;
+        memset(&role, 0, sizeof role);
+        role.name = "hand"; role.type = YSIG_TYPE_POSITION2D; role.units = YSIG_UNITS_DISPLAY_PX;
+        ad_n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 2);
+        memset(&ad, 0, sizeof ad);
+        ad.role = "hand"; ad.name = "pen"; ad.type = YSIG_TYPE_POSITION2D; ad.units = YSIG_UNITS_DISPLAY_PX;
+        ad.nodes = ad_n; ad.n_nodes = 1;
+        exp_n[0] = ysig_node_of(YSIG_OP_ROLE, -1, -1);
+        exp_n[1] = ysig_node_of(YSIG_OP_SILENT, 0, -1);
+        exp_n[1].p[YSIG_SILENT_AFTER] = 0.05;
+        d = desc_of(exp_n, 2);
+        d.roles = &role; d.n_roles = 1; d.adapters = &ad; d.n_adapters = 1;
+        if (!open_desc(&g, &d)) { g_failures++; return; }
+        ysig_reset(&g, 0);
+        v = ysig_value_of(&g, 1);
+        e = PEN_E(10 * MS, 1, 3, 4, YIN_TIER_SIM);
+        ysig_feed(&g, &e);
+        f = frame_at(1, 80 * MS, 0, NULL, 0);
+        ysig_frame(&g, &f);
+        CHECK(v->v[0] == 1);
+        ysig_reset_trial(&g, 80 * MS);       /* the adapter keeps its sample's time; the silent restarts here */
+        CHECK(v->v[0] == 0);
+        f = frame_at(2, 120 * MS, 0, NULL, 0);
+        ysig_frame(&g, &f);
+        CHECK(v->v[0] == 0);
+        f = frame_at(3, 131 * MS, 0, NULL, 0);
+        ysig_frame(&g, &f);
+        CHECK(v->v[0] == 1);
+    }
+}
+
+/* A detect's output as an input: its state and, with out hit, its hits. */
+static void test_detect_out(void) {
+    ysig_node n[4];
+    ysig_desc d;
+    ysig_graph g;
+    const ysig_value* v;
+    ysig_value at;
+    ysig_hit h[4];
+    ysig_frame_in f;
+    yin_event e;
+    g_where = "detect out";
+    n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2);
+    n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1);
+    n[1].p[YSIG_DETECT_LEVEL] = 5;
+    n[1].p[YSIG_DETECT_REPEAT] = 1;
+    n[1].p[YSIG_DETECT_HYSTERESIS] = 1;
+    n[1].p[YSIG_DETECT_OUT] = YSIG_OUT_HIT;
+    n[1].history = 16;
+    d = desc_of(n, 2);
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    v = ysig_value_of(&g, 1);
+    CHECK(v->v[0] == 0);
+    e = PEN_E(10 * MS, 1, 6, 0, YIN_TIER_2); ysig_feed(&g, &e);
+    CHECK(v->v[0] == 1 && v->t == 10 * MS && v->tier == YIN_TIER_2);
+    CHECK(ysig_detected(&g, h, 4) == 1);
+    /* still past the level: the hit stands until ready again; 4.5 is not
+     * past the hysteresis (5 - 1), so not ready */
+    e = PEN_E(20 * MS, 1, 4.5, 0, YIN_TIER_2); ysig_feed(&g, &e);
+    CHECK(v->v[0] == 1);
+    e = PEN_E(30 * MS, 1, 3.5, 0, YIN_TIER_2); ysig_feed(&g, &e);
+    CHECK(v->v[0] == 0);
+    e = PEN_E(40 * MS, 1, 7, 0, YIN_TIER_2); ysig_feed(&g, &e);
+    CHECK(v->v[0] == 1);
+    CHECK(ysig_detected(&g, h, 4) == 1);
+    /* the ring holds the output at each value tested */
+    CHECK(ysig_value_at(&g, 1, 25 * MS, &at) == 1 && at.v[0] == 1);
+    CHECK(ysig_value_at(&g, 1, 35 * MS, &at) == 1 && at.v[0] == 0);
+    CHECK(ysig_value_at(&g, 1, 5 * MS, &at) == 1 && at.v[0] == 0);   /* the reset's entry */
+    /* the row cannot change after open: the schedules depend on it */
+    CHECK(!ysig_set(&g, 1, YSIG_DETECT_OUT, YSIG_OUT_TEST));
+    /* a re-arm clears the output */
+    CHECK(ysig_arm(&g, 1, 50 * MS) && v->v[0] == 0);
+    /* one-hit detect: the hit stands past the failing value, until the
+     * next arm; a hold completed by the next sample rises in that pass */
+    n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1);
+    n[1].p[YSIG_DETECT_LEVEL] = 5;
+    n[1].p[YSIG_DETECT_HOLD] = 0.02;
+    n[1].p[YSIG_DETECT_OUT] = YSIG_OUT_HIT;
+    d = desc_of(n, 2);
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    v = ysig_value_of(&g, 1);
+    e = PEN_E(10 * MS, 1, 6, 1, YIN_TIER_SIM); ysig_feed(&g, &e);
+    CHECK(v->v[0] == 0);
+    f = frame_at(1, 20 * MS, 0, NULL, 0);
+    ysig_frame(&g, &f);
+    CHECK(v->v[0] == 0);
+    e = PEN_E(31 * MS, 1, 6, 1, YIN_TIER_SIM); ysig_feed(&g, &e);
+    CHECK(v->v[0] == 1);                                   /* found by the next sample */
+    CHECK(ysig_detected(&g, h, 4) == 1 && h[0].t == 30 * MS);
+    e = PEN_E(40 * MS, 1, 0, 0, YIN_TIER_SIM); ysig_feed(&g, &e);
+    CHECK(v->v[0] == 1);                                   /* a one-hit detect: until a new arm */
+    /* a hit output is 0 at a reset, whatever the test says */
+    n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1);
+    n[1].p[YSIG_DETECT_TEST] = YSIG_TEST_LE;
+    n[1].p[YSIG_DETECT_LEVEL] = 5;
+    n[1].p[YSIG_DETECT_OUT] = YSIG_OUT_HIT;
+    d = desc_of(n, 2);
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    CHECK(ysig_value_of(&g, 1)->v[0] == 0);
+    /* a frame-rate detect as a selector input: the users run at frames */
+    {
+        ysig_node m[4];
+        float tl[1];
+        m[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2);
+        m[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1);
+        m[1].p[YSIG_DETECT_LEVEL] = 5; m[1].p[YSIG_DETECT_AT] = 1;
+        m[2] = ysig_node_of(YSIG_OP_OFFSET, 0, -1);
+        m[3] = ysig_node_of(YSIG_OP_MUX, 0, 2); m[3].in[2] = 1;
+        d = desc_of(m, 4);
+        if (!open_desc(&g, &d)) { g_failures++; return; }
+        ysig_reset(&g, 0);
+        v = ysig_value_of(&g, 3);
+        (void)tl;
+        e = PEN_E(10 * MS, 1, 6, 1, YIN_TIER_SIM); ysig_feed(&g, &e);
+        CHECK(ysig_value_of(&g, 1)->v[0] == 0);              /* not tested yet: frame rate */
+        CHECK(v->v[0] == 6);                                  /* b (offset) is the same value here */
+        f = frame_at(1, 20 * MS, 0, NULL, 0);
+        ysig_frame(&g, &f);
+        CHECK(ysig_value_of(&g, 1)->v[0] == 1 && ysig_value_of(&g, 1)->t == 20 * MS);
+        CHECK(v->v[0] == 6);
+    }
+}
+
+static void test_reset_trial(void) {
+    ysig_node exp_n[6], ad_n[2];
+    ysig_role role;
+    ysig_adapter ad;
+    ysig_desc d;
+    ysig_graph g, g2;
+    static uint64_t arena2[(1u << 20) / 8];
+    const ysig_value* hand;
+    yin_event e;
+    int i;
+    ysig_stats st;
+    g_where = "reset_trial";
+    memset(&role, 0, sizeof role);
+    role.name = "hand"; role.type = YSIG_TYPE_POSITION2D_RELATIVE; role.units = YSIG_UNITS_DISPLAY_PX;
+    ad_n[0] = src_node(YIN_KIND_MOUSE, YIN_AXIS_DELTA, 0, 2);
+    ad_n[1] = ysig_node_of(YSIG_OP_INTEGRATE, 0, -1);
+    ad_n[1].p[0] = ad_n[1].p[1] = 1; ad_n[1].p[4] = 500;
+    memset(&ad, 0, sizeof ad);
+    ad.role = "hand"; ad.name = "mouse"; ad.type = YSIG_TYPE_POSITION2D_RELATIVE; ad.units = YSIG_UNITS_DISPLAY_PX;
+    ad.nodes = ad_n; ad.n_nodes = 2;
+    exp_n[0] = ysig_node_of(YSIG_OP_ROLE, -1, -1);
+    exp_n[1] = ysig_node_of(YSIG_OP_LOWPASS, 0, -1); exp_n[1].p[0] = 10;
+    exp_n[2] = ysig_node_of(YSIG_OP_DETECT, 0, -1);
+    exp_n[2].p[YSIG_DETECT_LEVEL] = 10; exp_n[2].p[YSIG_DETECT_A_X] = 500;
+    exp_n[2].p[YSIG_DETECT_LANE] = -1;
+    exp_n[3] = ysig_node_of(YSIG_OP_LATCH, 0, 2);
+    exp_n[4] = ysig_node_of(YSIG_OP_PEAK, 0, -1);
+    d = desc_of(exp_n, 5);
+    d.roles = &role; d.n_roles = 1; d.adapters = &ad; d.n_adapters = 1;
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    hand = ysig_value_of(&g, 0);
+    for (i = 1; i <= 30; i++) { e = delta(i * MS, 1, 1, 0); ysig_feed(&g, &e); }
+    CHECK(hand->v[0] == 530);
+    CHECK(ysig_value_of(&g, 3)->v[0] == 510);              /* latched at the crossing */
+    CHECK(ysig_value_of(&g, 4)->v[0] == 530);
+    /* a trial starts: the hand keeps its place, the experiment's nodes
+     * start over */
+    ysig_reset_trial(&g, 100 * MS);
+    CHECK(hand->v[0] == 530);
+    CHECK(ysig_value_of(&g, ysig_adapter_node(&g, 0, 1))->v[0] == 530);
+    CHECK(ysig_value_of(&g, 3)->v[0] == 530);             /* the latch let go */
+    CHECK(ysig_value_of(&g, 4)->v[0] == 0);
+    /* the count sum goes on from where it was */
+    e = delta(101 * MS, 1, 2, 0); ysig_feed(&g, &e);
+    CHECK(hand->v[0] == 532);
+    /* the detect re-armed from the held hand (past the level at the arm,
+     * so held): no hit from the held 532 */
+    {
+        ysig_hit h[4];
+        CHECK(ysig_detected(&g, h, 4) == 0);
+    }
+    /* an order slot survives: a mouse's counts are never dropped, so use a
+     * pen adapter: its last time is kept across the trial */
+    {
+        ysig_node a_n[1], e_n[1];
+        ysig_adapter pad;
+        role.type = YSIG_TYPE_POSITION2D;
+        role.allow_relative = false;
+        a_n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2);
+        e_n[0] = ysig_node_of(YSIG_OP_ROLE, -1, -1);
+        pad = ad;
+        pad.nodes = a_n; pad.n_nodes = 1; pad.type = YSIG_TYPE_POSITION2D;
+        d = desc_of(e_n, 1);
+        d.roles = &role; d.n_roles = 1; d.adapters = &pad; d.n_adapters = 1;
+        if (!open_desc(&g, &d)) { g_failures++; return; }
+        ysig_reset(&g, 0);
+        e = PEN_E(50 * MS, 1, 1, 1, YIN_TIER_SIM); ysig_feed(&g, &e);
+        ysig_reset_trial(&g, 60 * MS);
+        e = PEN_E(40 * MS, 1, 9, 9, YIN_TIER_SIM); ysig_feed(&g, &e);
+        ysig_get_stats(&g, &st);
+        CHECK(st.dropped_order == 1);
+        CHECK(ysig_value_of(&g, 0)->v[0] == 1);            /* the older report dropped */
+        ysig_reset(&g, 60 * MS);                             /* a full reset forgets the order */
+        e = PEN_E(40 * MS, 1, 9, 9, YIN_TIER_SIM); ysig_feed(&g, &e);
+        ysig_get_stats(&g, &st);
+        CHECK(st.dropped_order == 1 && ysig_value_of(&g, 0)->v[0] == 9);
+        role.type = YSIG_TYPE_POSITION2D_RELATIVE;
+    }
+    /* no adapters: ysig_reset_trial is ysig_reset, node for node */
+    {
+        ysig_node m[4];
+        m[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2);
+        m[1] = ysig_node_of(YSIG_OP_LOWPASS, 0, -1); m[1].p[0] = 10;
+        m[2] = ysig_node_of(YSIG_OP_PEAK, 0, -1);
+        m[3] = ysig_node_of(YSIG_OP_DETECT, 0, -1); m[3].p[YSIG_DETECT_LEVEL] = 100;
+        d = desc_of(m, 4);
+        if (!open_desc(&g, &d)) { g_failures++; return; }
+        d.arena = arena2; d.arena_size = sizeof arena2;
+        CHECK(ysig_open(&g2, &d));
+        for (i = 1; i <= 20; i++) {
+            e = PEN_E(i * MS, 1, 3.5f * i, -i, YIN_TIER_SIM);
+            ysig_feed(&g, &e);
+            ysig_feed(&g2, &e);
+        }
+        ysig_reset(&g, 200 * MS);
+        ysig_reset_trial(&g2, 200 * MS);
+        for (i = 0; i < 4; i++) CHECK(!memcmp(ysig_value_of(&g, i), ysig_value_of(&g2, i), sizeof(ysig_value)));
+        e = PEN_E(210 * MS, 1, 1, 1, YIN_TIER_SIM);
+        ysig_feed(&g, &e);
+        ysig_feed(&g2, &e);
+        for (i = 0; i < 4; i++) CHECK(!memcmp(ysig_value_of(&g, i), ysig_value_of(&g2, i), sizeof(ysig_value)));
+    }
+    /* a reset with times at the ends of int64 */
+    ysig_reset_trial(&g, INT64_MAX);
+    CHECK(ysig_value_of(&g, 0)->t == INT64_MAX);
+    ysig_reset_trial(&g, INT64_MIN);
+    CHECK(ysig_value_of(&g, 0)->t == INT64_MIN);
+}
+
+static void test_recenter(void) {
+    ysig_node exp_n[8], ad_n[4];
+    ysig_role role;
+    ysig_adapter ad;
+    ysig_desc d;
+    ysig_graph g;
+    const ysig_value* hand;
+    ysig_frame_in f;
+    yin_event e;
+    ysig_hit h[4];
+    ysig_stats st;
+    int adapter_end;
+    g_where = "recenter";
+    memset(&role, 0, sizeof role);
+    role.name = "hand"; role.type = YSIG_TYPE_POSITION2D; role.units = YSIG_UNITS_DISPLAY_PX; role.allow_relative = true;
+    ad_n[0] = src_node(YIN_KIND_MOUSE, YIN_AXIS_DELTA, 0, 2);
+    ad_n[1] = ysig_node_of(YSIG_OP_INTEGRATE, 0, -1);
+    ad_n[1].p[0] = ad_n[1].p[1] = 0.5; ad_n[1].p[4] = 10; ad_n[1].p[5] = 20;
+    ad_n[2] = ysig_node_of(YSIG_OP_SCALE, 1, -1);
+    ad_n[2].p[0] = ad_n[2].p[1] = 2;
+    ad_n[3] = ysig_node_of(YSIG_OP_OFFSET, 2, -1);
+    ad_n[3].p[0] = 100;
+    memset(&ad, 0, sizeof ad);
+    ad.role = "hand"; ad.name = "mouse"; ad.type = YSIG_TYPE_POSITION2D_RELATIVE; ad.units = YSIG_UNITS_DISPLAY_PX;
+    ad.nodes = ad_n; ad.n_nodes = 4;
+    exp_n[0] = ysig_node_of(YSIG_OP_ROLE, -1, -1);
+    exp_n[1] = ysig_node_of(YSIG_OP_LOWPASS, 0, -1); exp_n[1].p[0] = 1;
+    exp_n[2] = ysig_node_of(YSIG_OP_VELOCITY, 0, -1); exp_n[2].p[0] = 0.01;
+    exp_n[3] = ysig_node_of(YSIG_OP_DETECT, 0, -1);        /* x >= 122 */
+    exp_n[3].p[YSIG_DETECT_LEVEL] = 122; exp_n[3].p[YSIG_DETECT_OUT] = YSIG_OUT_HIT;
+    exp_n[4] = ysig_node_of(YSIG_OP_LATCH, 0, 3);
+    exp_n[5] = ysig_node_of(YSIG_OP_PEAK, 0, -1);
+    exp_n[6] = ysig_node_of(YSIG_OP_BIND, 1, -1);
+    exp_n[7] = ysig_node_of(YSIG_OP_SILENT, 0, -1); exp_n[7].p[YSIG_SILENT_AFTER] = 0.05;
+    d = desc_of(exp_n, 8);
+    d.roles = &role; d.n_roles = 1; d.adapters = &ad; d.n_adapters = 1;
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    hand = ysig_value_of(&g, 0);
+    CHECK(hand->v[0] == 120 && hand->v[1] == 40);       /* 100 + 2 x 10, 2 x 20 */
+    e = delta(5 * MS, 1, 4, 0); ysig_feed(&g, &e);
+    CHECK(hand->v[0] == 124);
+    CHECK(ysig_detected(&g, h, 4) == 1);                    /* crossed at 124: latched */
+    /* the role placed at (104, 40): through the offset and the scale, the
+     * integrator lands on (2, 20) */
+    CHECK(ysig_recenter(&g, 0, 104, 40, 6 * MS));
+    CHECK(hand->v[0] == 104 && hand->v[1] == 40);
+    adapter_end = ysig_adapter_node(&g, 0, 1);
+    CHECK(ysig_value_of(&g, adapter_end)->v[0] == 2);
+    /* downstream filters restart at the new place, a velocity does not spike */
+    CHECK(ysig_value_of(&g, 1)->v[0] == 104 && ysig_value_of(&g, 1)->v[1] == 40);
+    CHECK(ysig_value_of(&g, 2)->v[0] == 0);
+    CHECK(ysig_detected(&g, h, 4) == 0);
+    /* a latch stays latched at the old value, a peak keeps its peak, and
+     * a silent its clock (5 ms before the recenter, a poll 5 ms later) */
+    {
+        ysig_frame_in fv = frame_at(99, 5 * MS + 49 * MS, 0, NULL, 0);
+        ysig_frame(&g, &fv);
+        CHECK(ysig_value_of(&g, 7)->v[0] == 0);
+        fv = frame_at(99, 5 * MS + 50 * MS, 0, NULL, 0);
+        ysig_frame(&g, &fv);
+        CHECK(ysig_value_of(&g, 7)->v[0] == 1);
+        CHECK(ysig_recenter(&g, 0, 104, 40, 56 * MS));   /* a second place: the silence stands */
+        CHECK(ysig_value_of(&g, 7)->v[0] == 1);
+    }
+    /* still the old value after those frames */
+    CHECK(ysig_value_of(&g, 4)->v[0] == 124 && ysig_value_of(&g, 4)->v[1] == 40);
+    CHECK(ysig_value_of(&g, 5)->v[0] == 124);
+    /* the bind sees it at the next frame, with no sample: a still hand */
+    f = frame_at(1, 8 * MS, 0, NULL, 0);
+    ysig_frame(&g, &f);
+    CHECK(g_ch[0] == 104);
+    /* it continues on the count grid: +4 counts at 0.5 x 2 */
+    e = delta(9 * MS, 1, 4, 2); ysig_feed(&g, &e);
+    CHECK(hand->v[0] == 108 && hand->v[1] == 42);
+    /* a reset to the integrator's own origin clears the placement */
+    ysig_reset(&g, 20 * MS);
+    CHECK(hand->v[0] == 120 && hand->v[1] == 40);
+    /* a bounded integrator: a point inside; a next count at the bound */
+    ad_n[1].p[8] = 0; ad_n[1].p[9] = 0; ad_n[1].p[12] = 100; ad_n[1].p[13] = 100;
+    d.nodes = exp_n; d.n_nodes = 8;
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    hand = ysig_value_of(&g, 0);
+    CHECK(ysig_recenter(&g, 0, 100 + 2 * 99.5, 0, 0));        /* integrator at 99.5 */
+    e = delta(1 * MS, 1, 4, 0); ysig_feed(&g, &e);
+    CHECK(hand->v[0] == 300);                              /* the grid point last inside: 100 */
+    CHECK(!ysig_recenter(&g, 0, 100 + 2 * 120.0, 0, 0));
+    CHECK(strstr(ysig_error(&g), "bounds") != NULL);
+    ysig_get_stats(&g, &st);
+    CHECK(st.fed == 1);
+    /* refusals: bad arguments, no reader of the role */
+    CHECK(!ysig_recenter(&g, -1, 0, 0, 0) && strstr(ysig_error(&g), "bad role"));
+    CHECK(!ysig_recenter(&g, 0, NAN, 0, 0) && strstr(ysig_error(&g), "not finite"));
+    CHECK(!ysig_recenter(&g, 1, 0, 0, 0) && strstr(ysig_error(&g), "no node reads role 1"));
+    CHECK(!ysig_recenter(NULL, 0, 0, 0, 0));
+    /* an absolute adapter */
+    {
+        ysig_node pn[1], ex[1];
+        ysig_adapter pa;
+        role.type = YSIG_TYPE_POSITION2D; role.allow_relative = false;
+        pn[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 2);
+        ex[0] = ysig_node_of(YSIG_OP_ROLE, -1, -1);
+        pa = ad; pa.nodes = pn; pa.n_nodes = 1; pa.type = YSIG_TYPE_POSITION2D;
+        d = desc_of(ex, 1);
+        d.roles = &role; d.n_roles = 1; d.adapters = &pa; d.n_adapters = 1;
+        if (!open_desc(&g, &d)) { g_failures++; return; }
+        ysig_reset(&g, 0);
+        CHECK(!ysig_recenter(&g, 0, 1, 1, 0) && strstr(ysig_error(&g), "not relative"));
+        role.allow_relative = true;
+    }
+    /* a relative adapter with no integrator, and one that transforms the
+     * integrator through an affine */
+    {
+        ysig_node rn[2], ex[1];
+        ysig_adapter ra;
+        rn[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 2);
+        rn[1] = ysig_node_of(YSIG_OP_SCALE, 0, -1);
+        ex[0] = ysig_node_of(YSIG_OP_ROLE, -1, -1);
+        ra = ad; ra.nodes = rn; ra.n_nodes = 2;
+        role.type = YSIG_TYPE_POSITION2D; role.allow_relative = true;
+        d = desc_of(ex, 1);
+        d.roles = &role; d.n_roles = 1; d.adapters = &ra; d.n_adapters = 1;
+        if (!open_desc(&g, &d)) { g_failures++; return; }
+        ysig_reset(&g, 0);
+        CHECK(!ysig_recenter(&g, 0, 1, 1, 0) && strstr(ysig_error(&g), "no integrator"));
+        rn[0] = src_node(YIN_KIND_MOUSE, YIN_AXIS_DELTA, 0, 2);
+        rn[1] = ysig_node_of(YSIG_OP_INTEGRATE, 0, -1);
+        {
+            ysig_node r3[3];
+            memcpy(r3, rn, sizeof rn);
+            r3[2] = ysig_node_of(YSIG_OP_AFFINE, 1, -1);
+            ra.nodes = r3; ra.n_nodes = 3;
+            if (!open_desc(&g, &d)) { g_failures++; return; }
+            ysig_reset(&g, 0);
+            CHECK(!ysig_recenter(&g, 0, 1, 1, 0) && strstr(ysig_error(&g), "affine"));
+        }
+    }
+    /* a rate integrator recenters too (the scale is in its chain) */
+    {
+        ysig_node rn[3], ex[1];
+        ysig_adapter ra;
+        rn[0] = src_node(YIN_KIND_GAMEPAD, 0, 0, 2);
+        rn[1] = ysig_node_of(YSIG_OP_INTEGRATE, 0, -1);
+        rn[2] = ysig_node_of(YSIG_OP_SCALE, 1, -1); rn[2].p[0] = rn[2].p[1] = 2;
+        ex[0] = ysig_node_of(YSIG_OP_ROLE, -1, -1);
+        ra = ad; ra.nodes = rn; ra.n_nodes = 3;
+        d = desc_of(ex, 1);
+        d.roles = &role; d.n_roles = 1; d.adapters = &ra; d.n_adapters = 1;
+        if (!open_desc(&g, &d)) { g_failures++; return; }
+        ysig_reset(&g, 0);
+        hand = ysig_value_of(&g, 0);
+        CHECK(ysig_recenter(&g, 0, 10, 8, 5 * MS));
+        CHECK(hand->v[0] == 10 && hand->v[1] == 8);
+        CHECK(ysig_value_of(&g, ysig_adapter_node(&g, 0, 1))->v[0] == 5);
+        e = axis(10 * MS, YIN_KIND_GAMEPAD, 0, 1, 1000, 0, 0, YIN_TIER_SIM);
+        ysig_feed(&g, &e);                                     /* first: dt 0 */
+        e = axis(20 * MS, YIN_KIND_GAMEPAD, 0, 1, 1000, 0, 0, YIN_TIER_SIM);
+        ysig_feed(&g, &e);                                     /* 1000 x 10 ms = 10, x 2 = 20 more */
+        CHECK(hand->v[0] == 30 && hand->v[1] == 8);
+    }
+}
+
+static void test_ops_refusals(void) {
+    ysig_node n[5];
+    g_where = "ops refusals";
+    n[0] = src_node(YIN_KIND_MOUSE, YIN_AXIS_DELTA, 0, 2);
+    n[1] = ysig_node_of(YSIG_OP_INTEGRATE, 0, -1);
+    n[2] = ysig_node_of(YSIG_OP_SELECT, 1, -1); n[2].lanes = 1;
+    n[3] = ysig_node_of(YSIG_OP_MUX, 1, 2); n[3].in[2] = 2;
+    expect_refused(n, 4, "same lanes");
+    n[3] = ysig_node_of(YSIG_OP_MUX, 1, 1);
+    expect_refused(n, 4, "takes 3 to 3 inputs");
+    n[3] = ysig_node_of(YSIG_OP_LATCH, 1, -1);
+    expect_refused(n, 4, "takes 2 to 2 inputs");
+    n[3] = ysig_node_of(YSIG_OP_DISTANCE, 2, -1);
+    expect_refused(n, 4, "2 or 3 lanes");
+    n[3] = ysig_node_of(YSIG_OP_DISTANCE, 1, 2);
+    expect_refused(n, 4, "the point has 1 lanes");
+    n[3] = ysig_node_of(YSIG_OP_PEAK, 2, -1);
+    n[3].p[YSIG_PEAK_LANE] = 1;
+    expect_refused(n, 4, "lane 1 of 1");
+    n[3] = ysig_node_of(YSIG_OP_ALL, 2, -1);
+    expect_refused(n, 4, "takes 2 to 4 inputs");
+    /* a stateful op with no source: a peak or a silent on a generator */
+    n[0] = ysig_node_of(YSIG_OP_CHANNEL, -1, -1);
+    n[1] = ysig_node_of(YSIG_OP_PEAK, 0, -1);
+    expect_refused(n, 2, "keeps state per sample");
+    n[1] = ysig_node_of(YSIG_OP_SILENT, 0, -1);
+    n[1].p[YSIG_SILENT_AFTER] = 1;
+    expect_refused(n, 2, "keeps state per sample");
+    /* a silent's after must be positive */
+    n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 2);
+    n[1] = ysig_node_of(YSIG_OP_SILENT, 0, -1);
+    expect_refused(n, 2, "out of");
+    n[1].p[YSIG_SILENT_AFTER] = 0.1;
+    n[2] = ysig_node_of(YSIG_OP_RECORD, 0, -1);
+    n[3] = ysig_node_of(YSIG_OP_LATCH, 0, 2);
+    expect_refused(n, 4, "is a sink");
+    /* a peak's lane after open: the table's limits, then the input's */
+    {
+        ysig_desc d;
+        ysig_graph g;
+        n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 2);
+        n[1] = ysig_node_of(YSIG_OP_PEAK, 0, -1);
+        n[2] = ysig_node_of(YSIG_OP_DISTANCE, 0, -1);
+        d = desc_of(n, 3);
+        if (!open_desc(&g, &d)) { g_failures++; return; }
+        CHECK(ysig_set(&g, 1, YSIG_PEAK_LANE, 1));
+        CHECK(!ysig_set(&g, 1, YSIG_PEAK_LANE, 2));
+        CHECK(!ysig_set(&g, 1, YSIG_PEAK_LANE, 5));
+        CHECK(ysig_set(&g, 2, YSIG_DISTANCE_POINT_X, 3));
+        CHECK(!ysig_set(&g, 0, 99, 0));
+    }
+}
+
+/* The new ops at a frame whose onset is ahead of the poll, a past read of
+ * a detect selector and rows read inside on_row. */
+static void test_ops_views(void) {
+    ysig_node n[8];
+    ysig_desc d;
+    ysig_graph g;
+    ysig_value at;
+    float tl[1];
+    ysig_frame_in f;
+    yin_event e;
+    int i;
+    g_where = "ops views";
+    n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2);
+    n[1] = ysig_node_of(YSIG_OP_VELOCITY, 0, -1); n[1].p[0] = 0.01;
+    n[2] = ysig_node_of(YSIG_OP_DISTANCE, 1, -1);             /* the velocity's norm, a view */
+    n[3] = ysig_node_of(YSIG_OP_SPEED, 0, -1); n[3].p[0] = 0.01;
+    n[4] = ysig_node_of(YSIG_OP_PEAK, 3, -1);
+    n[5] = ysig_node_of(YSIG_OP_SILENT, 0, -1); n[5].p[0] = 0.03; n[5].history = 16;
+    n[6] = ysig_node_of(YSIG_OP_CHANNEL, -1, -1);
+    n[7] = ysig_node_of(YSIG_OP_ALL, 5, 6); n[7].history = 16;
+    d = desc_of(n, 8);
+    d.on_row = on_row_vat;
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    g_vat_graph = &g; g_vat_node = 7; g_vat_checked = g_vat_bad = 0;
+    ysig_reset(&g, 0);
+    /* moving: 1000 px/s */
+    for (i = 0; i < 40; i++) {
+        e = PEN_E(i * MS, 1, i, 0, YIN_TIER_SIM);
+        ysig_feed(&g, &e);
+    }
+    /* a frame's planned onset far ahead of the poll: still moving at the
+     * poll, so the views stand, and the peak holds the sampled speed */
+    tl[0] = 1;
+    f = frame_at(1, 200 * MS, 0, tl, 1);
+    f.poll_ns = 40 * MS;
+    ysig_frame(&g, &f);
+    CHECK_NEAR(ysig_value_of(&g, 2)->v[0], 1000, 1e-6);
+    CHECK_NEAR(ysig_value_of(&g, 3)->v[0], 1000, 1e-6);
+    CHECK_NEAR(ysig_value_of(&g, 4)->v[0], 1000, 1e-6);
+    CHECK(ysig_value_of(&g, 5)->v[0] == 0);
+    CHECK(ysig_value_of(&g, 7)->v[0] == 0);
+    /* a still input: no samples for the silence's time up to the poll; the
+     * velocity's view falls to 0, a peak keeps its sampled peak */
+    f = frame_at(2, 300 * MS, 0, tl, 1);
+    f.poll_ns = 80 * MS;
+    ysig_frame(&g, &f);
+    CHECK(ysig_value_of(&g, 2)->v[0] == 0);
+    CHECK_NEAR(ysig_value_of(&g, 4)->v[0], 1000, 1e-6);
+    CHECK(ysig_value_of(&g, 5)->v[0] == 1 && ysig_value_of(&g, 5)->t == 80 * MS);
+    CHECK(ysig_value_of(&g, 7)->v[0] == 1);
+    /* a past read of the all: the silence at that time, bounded by the poll */
+    CHECK(ysig_value_at(&g, 7, 60 * MS, &at) == 1 && at.v[0] == 0);       /* the channel still 0 */
+    CHECK(ysig_value_at(&g, 7, 250 * MS, &at) == 1 && at.v[0] == 1);      /* its frame at 200 ms, silent by the poll */
+    CHECK(ysig_value_at(&g, 7, 999 * MS, &at) == 1 && at.v[0] == 1);
+    /* a detect selector at a past time, from the detect's ring */
+    {
+        ysig_node m[5];
+        m[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2);
+        m[1] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 2, 2);
+        m[2] = ysig_node_of(YSIG_OP_DETECT, 0, -1); m[2].p[YSIG_DETECT_LEVEL] = 5; m[2].p[YSIG_DETECT_REPEAT] = 1;
+        m[3] = ysig_node_of(YSIG_OP_MUX, 0, 1); m[3].in[2] = 2; m[3].history = 16;
+        m[4] = ysig_node_of(YSIG_OP_RECORD, 3, -1);
+        d = desc_of(m, 5);
+        d.on_row = on_row_vat;
+        if (!open_desc(&g, &d)) { g_failures++; return; }
+        g_vat_graph = &g; g_vat_node = 3; g_vat_checked = g_vat_bad = 0;
+        ysig_reset(&g, 0);
+        e = PEN_E(10 * MS, 2, 3, 3, YIN_TIER_SIM); ysig_feed(&g, &e);
+        e = PEN_E(20 * MS, 1, 6, 6, YIN_TIER_SIM); ysig_feed(&g, &e);
+        e = PEN_E(30 * MS, 1, 1, 1, YIN_TIER_SIM); ysig_feed(&g, &e);
+        CHECK(ysig_value_at(&g, 3, 15 * MS, &at) == 1 && at.v[0] == 3);   /* selector false: b */
+        CHECK(ysig_value_at(&g, 3, 25 * MS, &at) == 1 && at.v[0] == 6 && at.t == 20 * MS);    /* after the crossing: a */
+        CHECK(ysig_value_at(&g, 3, 35 * MS, &at) == 1 && at.v[0] == 3 && at.t == 10 * MS);    /* the test false again */
+        CHECK(g_vat_bad == 0 && g_vat_checked == 3);
+    }
+}
+
+/* Every new op together: a journaled run with resets of both kinds and
+ * recenters replays bit for bit, and the digest moves with the output. */
+static void test_ops_replay(void) {
+    static uint64_t arena2[(2u << 20) / 8];
+    ysig_node exp_n[12], ad_n[2];
+    ysig_role role;
+    ysig_adapter ad;
+    ysig_desc d;
+    uint64_t dg[3];
+    int run;
+    g_where = "ops replay";
+    memset(&role, 0, sizeof role);
+    role.name = "hand"; role.type = YSIG_TYPE_POSITION2D_RELATIVE; role.units = YSIG_UNITS_DISPLAY_PX;
+    ad_n[0] = src_node(YIN_KIND_MOUSE, YIN_AXIS_DELTA, 0, 2);
+    ad_n[1] = ysig_node_of(YSIG_OP_INTEGRATE, 0, -1);
+    ad_n[1].p[0] = ad_n[1].p[1] = 0.25;
+    memset(&ad, 0, sizeof ad);
+    ad.role = "hand"; ad.name = "mouse"; ad.type = YSIG_TYPE_POSITION2D_RELATIVE; ad.units = YSIG_UNITS_DISPLAY_PX;
+    ad.nodes = ad_n; ad.n_nodes = 2;
+    exp_n[0] = ysig_node_of(YSIG_OP_ROLE, -1, -1);
+    exp_n[1] = ysig_node_of(YSIG_OP_CHANNEL, -1, -1);
+    exp_n[2] = ysig_node_of(YSIG_OP_DETECT, 0, -1);
+    exp_n[2].p[YSIG_DETECT_LANE] = -1; exp_n[2].p[YSIG_DETECT_LEVEL] = 8; exp_n[2].p[YSIG_DETECT_REPEAT] = 1;
+    exp_n[2].p[YSIG_DETECT_OUT] = YSIG_OUT_HIT;
+    exp_n[3] = ysig_node_of(YSIG_OP_OFFSET, 0, -1);
+    exp_n[4] = ysig_node_of(YSIG_OP_MUX, 0, 3); exp_n[4].in[2] = 1;
+    exp_n[5] = ysig_node_of(YSIG_OP_LATCH, 4, 2);
+    exp_n[6] = ysig_node_of(YSIG_OP_DISTANCE, 4, -1);
+    exp_n[7] = ysig_node_of(YSIG_OP_PEAK, 6, -1);
+    exp_n[8] = ysig_node_of(YSIG_OP_ALL, 2, 1);
+    exp_n[9] = ysig_node_of(YSIG_OP_SILENT, 0, -1); exp_n[9].p[YSIG_SILENT_AFTER] = 0.05;
+    exp_n[10] = ysig_node_of(YSIG_OP_JOIN, 5, 7);
+    exp_n[11] = ysig_node_of(YSIG_OP_RECORD, 10, -1);
+    for (run = 0; run < 3; run++) {
+        ysig_graph g, g2;
+        ysig_stats s1, s2;
+        uint64_t rs = 7;
+        int i, k;
+        d = desc_of(exp_n, 12);
+        d.roles = &role; d.n_roles = 1; d.adapters = &ad; d.n_adapters = 1;
+        d.journal = on_journal;
+        if (!open_desc(&g, &d)) { g_failures++; return; }
+        g_nj = 0;
+        ysig_reset(&g, 0);
+        for (i = 0; i < 200; i++) {
+            float tl[1];
+            ysig_frame_in f;
+            for (k = 0; k < 8; k++) {
+                yin_event e = delta((int64_t)i * 16 * MS + k * MS, 1, (float)((int)(ysig__mix(&rs) % 9) - 4),
+                                    (float)((int)(ysig__mix(&rs) % 9) - 4));
+                ysig_feed(&g, &e);
+            }
+            tl[0] = (float)(i % 5 == 0);
+            f = frame_at(i, (int64_t)(i + 1) * 16 * MS, 0, tl, 1);
+            ysig_frame(&g, &f);
+            if (i == 50) ysig_reset_trial(&g, f.onset_ns);
+            if (i == 70) CHECK(ysig_recenter(&g, 0, run == 1 ? 3.0 : 1.5, -1, f.onset_ns));
+            if (i == 90) ysig_reset(&g, f.onset_ns);
+            {
+                ysig_hit hh[8];
+                while (ysig_detected(&g, hh, 8) > 0) { }
+            }
+        }
+        if (run == 2) {
+            ysig_frame_in f = frame_at(1000, 8000 * MS, 0, NULL, 0);
+            ysig_frame(&g, &f);
+        }
+        CHECK(ysig_recenter(&g, 0, 2, 2, 8100 * MS));                 /* its time replays too */
+        CHECK(g_nj < J_CAP);
+        ysig_get_stats(&g, &s1);
+        dg[run] = s1.digest;
+        d.journal = NULL;
+        d.arena = arena2;
+        d.arena_size = sizeof arena2;
+        CHECK(ysig_arena_size(&d) <= sizeof arena2);
+        CHECK(ysig_open(&g2, &d));
+        CHECK(ysig_replay(&g2, g_j, g_nj) == g_nj);
+        ysig_get_stats(&g2, &s2);
+        CHECK(s1.digest == s2.digest && s1.rows == s2.rows && s1.hits == s2.hits && s1.rows > 0);
+        for (i = 0; i < g.n; i++) CHECK(!memcmp(ysig_value_of(&g, i), ysig_value_of(&g2, i), sizeof(ysig_value)));
+    }
+    CHECK(dg[0] != dg[1] && dg[0] != dg[2]);
+}
+
+/* ---------------------------------------------------------------- v0.2 review: T numbers of the probes */
+
+#define PEN1_E(t, dev, v) axis((t), YIN_KIND_PEN, 0, (dev), 0, 0, (float)(v), YIN_TIER_SIM)
+
+static bool open_adapter(ysig_graph* g, ysig_node* n, int nn, ysig_node* an, int ann, int adtype, const ysig_op_vtable* const* cu) {
+    static ysig_role role;
+    static ysig_adapter ad;
+    ysig_desc d;
+    memset(&role, 0, sizeof role);
+    role.name = "hand"; role.type = YSIG_TYPE_POSITION2D; role.units = YSIG_UNITS_DISPLAY_PX; role.allow_relative = true;
+    memset(&ad, 0, sizeof ad);
+    ad.role = "hand"; ad.name = "a"; ad.type = (uint8_t)adtype; ad.units = YSIG_UNITS_DISPLAY_PX; ad.nodes = an; ad.n_nodes = ann;
+    d = desc_of(n, nn);
+    d.roles = &role; d.n_roles = 1; d.adapters = &ad; d.n_adapters = 1;
+    if (cu) { d.custom = cu; d.n_custom = 1; }
+    return open_desc(g, &d);
+}
+
+static ysig_frame_in frame_poll(int64_t index, int64_t onset, int64_t poll, const float* v, int nv) {
+    ysig_frame_in f = frame_at(index, onset, onset, v, nv);
+    f.poll_ns = poll;
+    return f;
+}
+
+/* T1, T2: a recenter has a time */
+static void test_recenter_time(void) {
+    ysig_node a[2], n[3];
+    ysig_graph g;
+    ysig_value v;
+    ysig_frame_in f;
+    yin_event e;
+    int ai;
+    g_where = "recenter time";
+    a[0] = src_node(YIN_KIND_MOUSE, YIN_AXIS_DELTA, 0, 2);
+    a[1] = ysig_node_of(YSIG_OP_INTEGRATE, 0, -1); a[1].history = 256;
+    n[0] = ysig_node_of(YSIG_OP_ROLE, -1, -1);
+    n[1] = ysig_node_of(YSIG_OP_OFFSET, 0, -1); n[1].history = 256;
+    if (!open_adapter(&g, n, 2, a, 2, YSIG_TYPE_POSITION2D_RELATIVE, NULL)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    e = delta(10 * MS, 1, 40, 0); ysig_feed(&g, &e);
+    e = delta(20 * MS, 1, 60, 0); ysig_feed(&g, &e);
+    CHECK(ysig_recenter(&g, 0, 0, 0, 30 * MS));
+    ai = ysig_adapter_node(&g, 0, 1);
+    CHECK(ysig_value_of(&g, ai)->t == 30 * MS && ysig_value_of(&g, 0)->t == 30 * MS);
+    /* the history before it stands */
+    CHECK(ysig_value_at(&g, ai, 20 * MS, &v) == 1 && v.v[0] == 100 && v.t == 20 * MS);
+    CHECK(ysig_value_at(&g, 1, 20 * MS, &v) == 1 && v.v[0] == 100);
+    CHECK(ysig_value_at(&g, 1, 15 * MS, &v) == 1 && v.v[0] == 40);
+    CHECK(ysig_value_at(&g, ai, 30 * MS, &v) == 1 && v.v[0] == 0 && v.t == 30 * MS);
+    CHECK(ysig_value_at(&g, 1, 35 * MS, &v) == 1 && v.v[0] == 0);
+    /* a rate integrator's previous time is the recenter's */
+    a[0] = src_node(YIN_KIND_GAMEPAD, YIN_AXIS_GAMEPAD, 0, 2);
+    a[1] = ysig_node_of(YSIG_OP_INTEGRATE, 0, -1);
+    n[0] = ysig_node_of(YSIG_OP_ROLE, -1, -1);
+    if (!open_adapter(&g, n, 1, a, 2, YSIG_TYPE_POSITION2D_RELATIVE, NULL)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    e = axis(1 * MS, YIN_KIND_GAMEPAD, YIN_AXIS_GAMEPAD, 1, 1, 0, 0, YIN_TIER_SIM); ysig_feed(&g, &e);
+    e = axis(2 * MS, YIN_KIND_GAMEPAD, YIN_AXIS_GAMEPAD, 1, 1, 0, 0, YIN_TIER_SIM); ysig_feed(&g, &e);
+    CHECK(ysig_recenter(&g, 0, 0, 0, 5000 * MS));
+    f = frame_poll(1, 5017 * MS, 5001 * MS, NULL, 0);
+    ysig_frame(&g, &f);
+    CHECK_NEAR(ysig_value_of(&g, 0)->v[0], 0.001, 1e-9);
+}
+
+/* T9, T11, T12: the chain back to the integrator; what a recenter restarts */
+static int g_cu_resets;
+static void cu_reset(void* st, const double* p, int64_t t) { (void)st; (void)p; (void)t; g_cu_resets++; }
+static void cu_sample(void* st, const double* p, const ysig_value* in, int n_in, ysig_value* out) {
+    (void)st; (void)p; (void)n_in; out->v[0] = in[0].v[0];
+}
+static void test_recenter_chain(void) {
+    static const ysig_op_vtable cu = { YSIG_OP_ABI, "pass", { 0, 0, 0, 0 }, 1, 8, NULL, 0, cu_reset, cu_sample, NULL };
+    const ysig_op_vtable* cus[1];
+    ysig_node a[4], n[8];
+    ysig_graph g;
+    ysig_frame_in f;
+    yin_event e;
+    g_where = "recenter chain";
+    a[0] = src_node(YIN_KIND_MOUSE, YIN_AXIS_DELTA, 0, 2);
+    a[1] = ysig_node_of(YSIG_OP_INTEGRATE, 0, -1);
+    a[1].p[0] = a[1].p[1] = 0.25; a[1].p[4] = a[1].p[5] = 100; a[1].p[12] = a[1].p[13] = 1000;
+    a[2] = ysig_node_of(YSIG_OP_OFFSET, 1, -1); a[2].p[0] = 10; a[2].p[1] = 20;
+    a[3] = ysig_node_of(YSIG_OP_SCALE, 2, -1); a[3].p[0] = 2; a[3].p[1] = 4;
+    n[0] = ysig_node_of(YSIG_OP_ROLE, -1, -1);
+    if (!open_adapter(&g, n, 1, a, 4, YSIG_TYPE_POSITION2D_RELATIVE, NULL)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    CHECK(ysig_recenter(&g, 0, 50, 120, 2 * MS));
+    CHECK(ysig_value_of(&g, 0)->v[0] == 50 && ysig_value_of(&g, 0)->v[1] == 120);
+    e = delta(3 * MS, 1, 4, 4); ysig_feed(&g, &e);
+    CHECK(ysig_value_of(&g, 0)->v[0] == 52 && ysig_value_of(&g, 0)->v[1] == 124);
+    /* T11: a point that the scale makes infinite is refused */
+    a[1] = ysig_node_of(YSIG_OP_INTEGRATE, 0, -1);
+    a[2] = ysig_node_of(YSIG_OP_SCALE, 1, -1); a[2].p[0] = a[2].p[1] = 1e-300;
+    if (!open_adapter(&g, n, 1, a, 3, YSIG_TYPE_POSITION2D_RELATIVE, NULL)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    CHECK(!ysig_recenter(&g, 0, 1e300, 0, 1 * MS) && strstr(ysig_error(&g), "not finite after"));
+    e = delta(2 * MS, 1, 1, 0); ysig_feed(&g, &e);
+    CHECK(isfinite(ysig_value_of(&g, 0)->v[0]));
+    /* T12: rate integrator, custom op, latch, peak keep their state; a
+     * velocity, a speed, a lowpass and a delay restart */
+    cus[0] = &cu;
+    a[1] = ysig_node_of(YSIG_OP_INTEGRATE, 0, -1);
+    n[0] = ysig_node_of(YSIG_OP_ROLE, -1, -1);
+    n[1] = ysig_node_of(YSIG_OP_INTEGRATE, 0, -1); n[1].p[4] = 3;   /* the experiment's rate integrate of the hand */
+    n[2] = ysig_node_of(YSIG_OP_CUSTOM, 0, -1);
+    n[3] = ysig_node_of(YSIG_OP_LOWPASS, 0, -1); n[3].p[0] = 10;
+    n[4] = ysig_node_of(YSIG_OP_VELOCITY, 0, -1); n[4].p[0] = 0.01;
+    n[5] = ysig_node_of(YSIG_OP_SPEED, 0, -1); n[5].p[0] = 0.01;
+    n[6] = ysig_node_of(YSIG_OP_DELAY, 0, -1); n[6].p[0] = 0.001;
+    n[7] = ysig_node_of(YSIG_OP_OFFSET, 1, -1);                    /* fed by a node that keeps its state */
+    if (!open_adapter(&g, n, 8, a, 2, YSIG_TYPE_POSITION2D_RELATIVE, cus)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    e = delta(100 * MS, 1, 2, 0); ysig_feed(&g, &e);
+    e = delta(1100 * MS, 1, 0, 0); ysig_feed(&g, &e);
+    f = frame_poll(1, 1110 * MS, 1100 * MS, NULL, 0);
+    ysig_frame(&g, &f);
+    {
+        double kept = ysig_value_of(&g, 1)->v[0];
+        int64_t kept_t = ysig_value_of(&g, 7)->t;
+        double custom = ysig_value_of(&g, 2)->v[0];
+        int resets = g_cu_resets;
+        CHECK_NEAR(kept, 5, 1e-9);                                  /* 3 + 2 x 1 s */
+        CHECK(ysig_recenter(&g, 0, 0, 0, 1200 * MS));
+        CHECK(ysig_value_of(&g, 1)->v[0] == kept);
+        CHECK(ysig_value_of(&g, 7)->v[0] == kept && ysig_value_of(&g, 7)->t == kept_t);
+        CHECK(g_cu_resets == resets && ysig_value_of(&g, 2)->v[0] == custom);
+        CHECK(ysig_value_of(&g, 3)->v[0] == 0);                      /* lowpass from the new point */
+        CHECK(ysig_value_of(&g, 4)->v[0] == 0 && ysig_value_of(&g, 5)->v[0] == 0);
+        CHECK(ysig_value_of(&g, 6)->v[0] == 0);
+    }
+}
+
+/* T3, T4: a peak does not depend on arrival order, and no value is no peak */
+static void test_peak_order(void) {
+    ysig_node n[4];
+    ysig_desc d;
+    ysig_graph g;
+    ysig_value v;
+    ysig_stats st;
+    float c = 1;
+    ysig_frame_in f;
+    yin_event e;
+    g_where = "peak order";
+    n[0] = src_node(YIN_KIND_PEN, 0, 0, 1);
+    n[1] = ysig_node_of(YSIG_OP_PEAK, 0, -1); n[1].history = 64;
+    d = desc_of(n, 2);
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    e = PEN1_E(10 * MS, 1, 5); ysig_feed(&g, &e);
+    e = PEN1_E(9 * MS, 2, 7); ysig_feed(&g, &e);
+    CHECK(ysig_value_of(&g, 1)->v[0] == 7 && ysig_value_of(&g, 1)->t == 9 * MS);   /* its own t: the peak sample's */
+    CHECK(ysig_value_at(&g, 1, 20 * MS, &v) == 1 && v.v[0] == 7);
+    e = PEN1_E(11 * MS, 1, 1); ysig_feed(&g, &e);                                  /* not a peak: no skip counted */
+    ysig_get_stats(&g, &st);
+    CHECK(st.history_skipped == 0);
+    CHECK(ysig_value_at(&g, 1, 20 * MS, &v) == 1 && v.v[0] == 7);
+    /* a gate rising before any sample does not start from "no value" */
+    n[1] = ysig_node_of(YSIG_OP_CHANNEL, -1, -1);
+    n[2] = ysig_node_of(YSIG_OP_PEAK, 0, 1);
+    d = desc_of(n, 3);
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    f = frame_poll(1, 10 * MS, 5 * MS, &c, 1);
+    ysig_frame(&g, &f);
+    CHECK(ysig_value_of(&g, 2)->v[0] == 0);
+    e = PEN1_E(20 * MS, 1, -5); ysig_feed(&g, &e);
+    e = PEN1_E(21 * MS, 1, -3); ysig_feed(&g, &e);
+    CHECK(ysig_value_of(&g, 2)->v[0] == -3 && ysig_value_of(&g, 2)->tier == YIN_TIER_SIM);
+    /* a sample before the rise, while the gate is shut, is a value */
+    ysig_reset(&g, 100 * MS);
+    e = PEN1_E(110 * MS, 1, 4); ysig_feed(&g, &e);
+    f = frame_poll(2, 120 * MS, 120 * MS, &c, 1);
+    ysig_frame(&g, &f);
+    CHECK(ysig_value_of(&g, 2)->v[0] == 4 && ysig_value_of(&g, 2)->t == 110 * MS);
+    /* a reset forgets that a sample came: its held zero is no value */
+    ysig_reset(&g, 200 * MS);
+    f = frame_poll(3, 210 * MS, 210 * MS, &c, 1);
+    ysig_frame(&g, &f);
+    e = PEN1_E(220 * MS, 1, -5); ysig_feed(&g, &e);
+    e = PEN1_E(221 * MS, 1, -3); ysig_feed(&g, &e);
+    CHECK(ysig_value_of(&g, 2)->v[0] == -3);
+}
+
+/* T5, T14: a stamp later than the poll is believed only up to the poll */
+static void test_late_stamp(void) {
+    ysig_node a[2], n[2];
+    ysig_desc d;
+    ysig_graph g;
+    ysig_stats st;
+    ysig_frame_in f;
+    yin_event e;
+    int k;
+    g_where = "late stamp";
+    a[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 2);
+    n[0] = ysig_node_of(YSIG_OP_ROLE, -1, -1);
+    n[1] = ysig_node_of(YSIG_OP_SILENT, 0, -1); n[1].p[0] = 0.1;
+    if (!open_adapter(&g, n, 2, a, 1, YSIG_TYPE_POSITION2D, NULL)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    e = PEN_E(10 * MS, 1, 1, 0, YIN_TIER_SIM); ysig_feed(&g, &e);
+    e = PEN_E(3600000LL * MS, 1, 2, 0, YIN_TIER_SIM); ysig_feed(&g, &e);
+    f = frame_poll(1, 20 * MS, 20 * MS, NULL, 0);
+    ysig_frame(&g, &f);
+    ysig_get_stats(&g, &st);
+    CHECK(st.late_poll == 1 && st.late_poll_max_ns == 3600000LL * MS - 20 * MS);
+    ysig_reset_trial(&g, 100 * MS);
+    for (k = 1; k <= 50; k++) { e = PEN_E((100 + k) * MS, 1, 10 + k, 0, YIN_TIER_SIM); ysig_feed(&g, &e); }
+    ysig_get_stats(&g, &st);
+    CHECK(ysig_value_of(&g, 0)->v[0] == 60 && st.dropped_order == 0);
+    f = frame_poll(2, 1000 * MS, 1000 * MS, NULL, 0);
+    ysig_frame(&g, &f);
+    CHECK(ysig_value_of(&g, 1)->v[0] == 1);
+    /* T14: raw mouse counts, never dropped; the silent's own clock comes
+     * down: silent after the real silence */
+    a[0] = src_node(YIN_KIND_MOUSE, YIN_AXIS_DELTA, 0, 2);
+    a[1] = ysig_node_of(YSIG_OP_INTEGRATE, 0, -1);
+    if (!open_adapter(&g, n, 2, a, 2, YSIG_TYPE_POSITION2D_RELATIVE, NULL)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    e = delta(10 * MS, 1, 1, 0); ysig_feed(&g, &e);
+    f = frame_poll(1, 500 * MS, 500 * MS, NULL, 0);
+    ysig_frame(&g, &f);
+    CHECK(ysig_value_of(&g, 1)->v[0] == 1);
+    e = delta(3600000LL * MS, 1, 1, 0); ysig_feed(&g, &e);
+    CHECK(ysig_value_of(&g, 1)->v[0] == 0);
+    f = frame_poll(2, 1500 * MS, 1500 * MS, NULL, 0);           /* believed up to this poll */
+    ysig_frame(&g, &f);
+    CHECK(ysig_value_of(&g, 1)->v[0] == 0);
+    f = frame_poll(3, 1599 * MS, 1599 * MS, NULL, 0);
+    ysig_frame(&g, &f);
+    CHECK(ysig_value_of(&g, 1)->v[0] == 0);
+    f = frame_poll(4, 1600 * MS, 1600 * MS, NULL, 0);
+    ysig_frame(&g, &f);
+    CHECK(ysig_value_of(&g, 1)->v[0] == 1);
+    /* the stamp stands when it is within the poll */
+    ysig_reset(&g, 2000 * MS);
+    e = delta(2050 * MS, 1, 1, 0); ysig_feed(&g, &e);
+    f = frame_poll(5, 2100 * MS, 2100 * MS, NULL, 0);
+    ysig_frame(&g, &f);
+    CHECK(ysig_value_of(&g, 1)->v[0] == 0);
+    /* the documented limit: the stamp's effect on rings and hold clocks
+     * stays until the node's reset, and a reset clears it */
+    {
+        ysig_node m[2];
+        ysig_hit h[4];
+        ysig_value at;
+        int nh = 0;
+        m[0] = src_node(YIN_KIND_PEN, 0, 0, 1);
+        m[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1);
+        m[1].p[YSIG_DETECT_TEST] = YSIG_TEST_LE; m[1].p[YSIG_DETECT_LEVEL] = 10; m[1].p[YSIG_DETECT_HOLD] = 0.05;
+        m[1].p[YSIG_DETECT_ENTRY] = 1;
+        d = desc_of(m, 2);
+        if (!open_desc(&g, &d)) { g_failures++; return; }
+        ysig_reset(&g, 0);
+        e = PEN1_E(1 * MS, 1, 50); ysig_feed(&g, &e);
+        e = PEN1_E(3600000LL * MS, 2, 50); ysig_feed(&g, &e);
+        f = frame_poll(1, 20 * MS, 20 * MS, NULL, 0); ysig_frame(&g, &f);
+        for (k = 0; k < 20; k++) {
+            e = PEN1_E((40 + k * 10) * MS, 1, 1); ysig_feed(&g, &e);
+            f = frame_poll(2 + k, (45 + k * 10) * MS, (45 + k * 10) * MS, NULL, 0); ysig_frame(&g, &f);
+            nh += ysig_detected(&g, h, 4);
+        }
+        CHECK(nh == 0);
+        ysig_reset(&g, 1000 * MS);
+        e = PEN1_E(1001 * MS, 1, 50); ysig_feed(&g, &e);
+        e = PEN1_E(1002 * MS, 1, 1); ysig_feed(&g, &e);
+        f = frame_poll(30, 1100 * MS, 1100 * MS, NULL, 0); ysig_frame(&g, &f);
+        CHECK(ysig_detected(&g, h, 4) == 1 && h[0].t == 1052 * MS);
+        m[0].history = 64;
+        d = desc_of(m, 1);
+        if (!open_desc(&g, &d)) { g_failures++; return; }
+        ysig_reset(&g, 0);
+        e = PEN1_E(3600000LL * MS, 2, 9); ysig_feed(&g, &e);
+        f = frame_poll(1, 20 * MS, 20 * MS, NULL, 0); ysig_frame(&g, &f);
+        e = PEN1_E(30 * MS, 1, 4); ysig_feed(&g, &e);
+        ysig_get_stats(&g, &st);
+        CHECK(st.history_skipped == 1 && st.late_poll == 1);
+        CHECK(ysig_value_of(&g, 0)->v[0] == 4);                       /* the sample flowed; the ring skipped it */
+        CHECK(ysig_value_at(&g, 0, 34 * MS, &at) == 0);
+    }
+    /* only a clearly bad stamp changes anything: exactly 1 s past the poll
+     * is believed, 1 ns more is not, also on a frame that lowers another
+     * source's bad stamp (literals: the limit's value is part of the test) */
+    {
+        ysig_node m[3];
+        m[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2);
+        m[1] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 2, 2);
+        m[2] = ysig_node_of(YSIG_OP_SILENT, 0, -1); m[2].p[0] = 0.1;
+        d = desc_of(m, 3);
+        if (!open_desc(&g, &d)) { g_failures++; return; }
+        ysig_reset(&g, 0);
+        e = PEN_E(1100 * MS, 1, 1, 0, YIN_TIER_SIM); ysig_feed(&g, &e);
+        e = PEN_E(10100 * MS, 2, 1, 0, YIN_TIER_SIM); ysig_feed(&g, &e);
+        f = frame_poll(1, 100 * MS, 100 * MS, NULL, 0); ysig_frame(&g, &f);
+        e = PEN_E(200 * MS, 1, 2, 0, YIN_TIER_SIM); ysig_feed(&g, &e);   /* older than the believed stamp */
+        ysig_get_stats(&g, &st);
+        CHECK(st.dropped_order == 1 && ysig_value_of(&g, 0)->v[0] == 1);
+        f = frame_poll(2, 1150 * MS, 1150 * MS, NULL, 0); ysig_frame(&g, &f);
+        CHECK(ysig_value_of(&g, 2)->v[0] == 0);                         /* 50 ms after the believed stamp */
+        ysig_reset(&g, 0);
+        e = PEN_E(1100 * MS + 1, 1, 1, 0, YIN_TIER_SIM); ysig_feed(&g, &e);
+        f = frame_poll(3, 100 * MS, 100 * MS, NULL, 0); ysig_frame(&g, &f);
+        e = PEN_E(200 * MS, 1, 2, 0, YIN_TIER_SIM); ysig_feed(&g, &e);
+        ysig_get_stats(&g, &st);
+        CHECK(st.dropped_order == 1 && ysig_value_of(&g, 0)->v[0] == 2);  /* no new drop */
+        f = frame_poll(4, 1150 * MS, 1150 * MS, NULL, 0); ysig_frame(&g, &f);
+        CHECK(ysig_value_of(&g, 2)->v[0] == 1);                         /* 950 ms after the 200 ms sample */
+    }
+    /* no poll, no recovery: a graph with no view keeps dropping */
+    n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2);
+    d = desc_of(n, 1);
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    e = PEN_E(3600000LL * MS, 1, 2, 0, YIN_TIER_SIM); ysig_feed(&g, &e);
+    f = frame_poll(1, 20 * MS, 20 * MS, NULL, 0);
+    f.has_poll = false;
+    CHECK(ysig_frame(&g, &f) == 0);
+    e = PEN_E(30 * MS, 1, 5, 0, YIN_TIER_SIM); ysig_feed(&g, &e);
+    ysig_get_stats(&g, &st);
+    CHECK(st.dropped_order == 1 && ysig_value_of(&g, 0)->v[0] == 2);
+}
+
+/* T7: a re-armed hit detect gives a new rise */
+static void test_rearm(void) {
+    ysig_node n[6];
+    ysig_desc d;
+    ysig_graph g;
+    yin_event e;
+    int through;
+    g_where = "re-arm";
+    for (through = 0; through < 2; through++) {
+        int gate;
+        n[0] = src_node(YIN_KIND_PEN, 0, 0, 1);
+        n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1);
+        n[1].p[YSIG_DETECT_LEVEL] = 5; n[1].p[YSIG_DETECT_OUT] = YSIG_OUT_HIT; n[1].p[YSIG_DETECT_START] = 1;
+        n[2] = ysig_node_of(YSIG_OP_ALL, 1, 1);
+        gate = through ? 2 : 1;
+        n[3] = ysig_node_of(YSIG_OP_PEAK, 0, gate);
+        d = desc_of(n, 4);
+        if (!open_desc(&g, &d)) { g_failures++; return; }
+        ysig_reset(&g, 0);
+        e = PEN1_E(1 * MS, 1, 0); ysig_feed(&g, &e);
+        ysig_arm(&g, 1, 2 * MS);
+        e = PEN1_E(3 * MS, 1, 100); ysig_feed(&g, &e);
+        CHECK(ysig_value_of(&g, 3)->v[0] == 100);
+        e = PEN1_E(4 * MS, 1, 0); ysig_feed(&g, &e);
+        ysig_arm(&g, 1, 5 * MS);
+        CHECK(ysig_value_of(&g, 1)->v[0] == 0);
+        e = PEN1_E(6 * MS, 1, 6); ysig_feed(&g, &e);
+        CHECK(ysig_value_of(&g, 3)->v[0] == 6 && ysig_value_of(&g, 3)->t == 6 * MS);
+    }
+}
+
+/* T16: a hold on a frame-updated input completes for a still hand */
+static void test_hold_frame_input(void) {
+    ysig_node n[5];
+    ysig_desc d;
+    ysig_graph g;
+    ysig_hit h[4];
+    ysig_value v;
+    ysig_frame_in f;
+    yin_event e;
+    float c[1];
+    int kind, k, nh;
+    g_where = "hold on a frame-updated input";
+    /* a mux with a channel selector, a mux with a frame-rate detect's
+     * selector, a latch with a channel trigger */
+    for (kind = 0; kind < 3; kind++) {
+        n[0] = src_node(YIN_KIND_PEN, 0, 0, 1);
+        n[1] = ysig_node_of(YSIG_OP_CHANNEL, -1, -1);
+        if (kind == 1) {
+            n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1);
+            n[1].p[YSIG_DETECT_TEST] = YSIG_TEST_LE; n[1].p[YSIG_DETECT_LEVEL] = 100; n[1].p[YSIG_DETECT_AT] = 1;
+        }
+        if (kind == 2) { n[2] = ysig_node_of(YSIG_OP_LATCH, 0, 1); }
+        else { n[2] = ysig_node_of(YSIG_OP_MUX, 0, 0); n[2].in[2] = 1; }
+        n[3] = ysig_node_of(YSIG_OP_DETECT, 2, -1);
+        n[3].p[YSIG_DETECT_TEST] = YSIG_TEST_LE; n[3].p[YSIG_DETECT_LEVEL] = 10; n[3].p[YSIG_DETECT_HOLD] = 0.5;
+        d = desc_of(n, 4);
+        if (!open_desc(&g, &d)) { g_failures++; return; }
+        ysig_reset(&g, 0);
+        c[0] = kind == 2 ? 0.0f : 1.0f;
+        f = frame_at(1, 5 * MS, 0, c, 1); ysig_frame(&g, &f);
+        e = PEN1_E(10 * MS, 1, 1); ysig_feed(&g, &e);
+        nh = 0;
+        for (k = 2; k <= 100; k++) {
+            int got;
+            /* the poll is 2 ms before the onset: the hold ends on the poll */
+            f = frame_poll(k, k * 16 * MS, k * 16 * MS - 2 * MS, c, 1);
+            ysig_frame(&g, &f);
+            got = ysig_detected(&g, h, 4);
+            if (got) { CHECK(h[0].t_found == k * 16 * MS - 2 * MS && h[0].t == 500 * MS); nh += got; }
+        }
+        CHECK(nh == 1);
+    }
+    /* a hold that starts in a frame's pass starts at the known time, not at
+     * the value's old t; a hit output rises at the hit */
+    n[0] = src_node(YIN_KIND_PEN, 0, 0, 1);
+    n[1] = ysig_node_of(YSIG_OP_CHANNEL, -1, -1);
+    n[2] = ysig_node_of(YSIG_OP_OFFSET, 0, -1); n[2].p[0] = 50;
+    n[3] = ysig_node_of(YSIG_OP_MUX, 0, 2); n[3].in[2] = 1;
+    n[4] = ysig_node_of(YSIG_OP_DETECT, 3, -1);
+    n[4].p[YSIG_DETECT_TEST] = YSIG_TEST_LE; n[4].p[YSIG_DETECT_LEVEL] = 10; n[4].p[YSIG_DETECT_HOLD] = 0.1;
+    n[4].p[YSIG_DETECT_OUT] = YSIG_OUT_HIT; n[4].history = 32;
+    d = desc_of(n, 5);
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    e = PEN1_E(10 * MS, 1, 1); ysig_feed(&g, &e);              /* b is 51: the test is false */
+    c[0] = 1;
+    f = frame_poll(1, 200 * MS, 198 * MS, c, 1); ysig_frame(&g, &f);   /* a chosen: true; the hold starts at 198 */
+    f = frame_poll(2, 300 * MS, 297 * MS, c, 1); ysig_frame(&g, &f);
+    CHECK(ysig_detected(&g, h, 4) == 0);
+    f = frame_poll(3, 310 * MS, 298 * MS, c, 1); ysig_frame(&g, &f);
+    CHECK(ysig_detected(&g, h, 4) == 1 && h[0].t == 298 * MS && h[0].t_found == 298 * MS);
+    CHECK(ysig_value_of(&g, 4)->v[0] == 1 && ysig_value_of(&g, 4)->t == 298 * MS);
+    /* U2: a frame-rate detect's hold ends on the onset */
+    n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1);
+    n[1].p[YSIG_DETECT_TEST] = YSIG_TEST_LE; n[1].p[YSIG_DETECT_LEVEL] = 10; n[1].p[YSIG_DETECT_HOLD] = 0.1;
+    n[1].p[YSIG_DETECT_AT] = 1; n[1].p[YSIG_DETECT_ENTRY] = 1; n[1].p[YSIG_DETECT_START] = 1;
+    d = desc_of(n, 2);
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    ysig_arm(&g, 1, 0);
+    e = PEN1_E(1 * MS, 1, 50); ysig_feed(&g, &e);
+    f = frame_poll(1, 20 * MS, 10 * MS, NULL, 0); ysig_frame(&g, &f);     /* the test false: ready */
+    e = PEN1_E(25 * MS, 1, 1); ysig_feed(&g, &e);
+    f = frame_poll(2, 40 * MS, 30 * MS, NULL, 0); ysig_frame(&g, &f);     /* true: the hold starts at 30 */
+    f = frame_poll(3, 139 * MS, 129 * MS, NULL, 0); ysig_frame(&g, &f);   /* the hold started at the onset, 40 ms */
+    CHECK(ysig_detected(&g, h, 4) == 0);
+    f = frame_poll(4, 140 * MS, 130 * MS, NULL, 0); ysig_frame(&g, &f);
+    CHECK(ysig_detected(&g, h, 4) == 1 && h[0].t == 140 * MS && h[0].t_found == 140 * MS);
+    /* a hit output's rise is at the hit when a later sample finds it */
+    n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1);
+    n[1].p[YSIG_DETECT_TEST] = YSIG_TEST_LE; n[1].p[YSIG_DETECT_LEVEL] = 10; n[1].p[YSIG_DETECT_HOLD] = 0.1;
+    n[1].p[YSIG_DETECT_OUT] = YSIG_OUT_HIT; n[1].history = 32;
+    d = desc_of(n, 2);
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    e = PEN1_E(140 * MS, 1, 1); ysig_feed(&g, &e);
+    CHECK(ysig_detected(&g, h, 4) == 1 && h[0].t == 100 * MS && h[0].t_found == 140 * MS);
+    CHECK(ysig_value_of(&g, 1)->v[0] == 1 && ysig_value_of(&g, 1)->t == 100 * MS);
+    CHECK(ysig_value_at(&g, 1, 120 * MS, &v) == 1 && v.v[0] == 1);
+    /* U2: a sample-rate detect on a sample input ends on the onset */
+    n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1);
+    n[1].p[YSIG_DETECT_TEST] = YSIG_TEST_LE; n[1].p[YSIG_DETECT_LEVEL] = 10; n[1].p[YSIG_DETECT_HOLD] = 0.1;
+    n[1].p[YSIG_DETECT_REPEAT] = 1; n[1].p[YSIG_DETECT_OUT] = YSIG_OUT_HIT; n[1].history = 32;
+    d = desc_of(n, 2);
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    e = PEN1_E(10 * MS, 1, 1); ysig_feed(&g, &e);             /* armed at the reset with the zero value: true from 0 */
+    f = frame_poll(1, 99 * MS, 50 * MS, NULL, 0); ysig_frame(&g, &f);
+    CHECK(ysig_detected(&g, h, 4) == 0 && ysig_value_of(&g, 1)->v[0] == 0);
+    /* found at the onset, though the poll is before the hold's end; the
+     * rise at the hit (100 ms): a past read between the hit and the frame
+     * says 1, and the sample that follows, older than the onset, enters
+     * the ring */
+    f = frame_poll(2, 300 * MS, 90 * MS, NULL, 0); ysig_frame(&g, &f);
+    CHECK(ysig_detected(&g, h, 4) == 1 && h[0].t == 100 * MS && h[0].t_found == 300 * MS);
+    CHECK(ysig_value_of(&g, 1)->v[0] == 1 && ysig_value_of(&g, 1)->t == 100 * MS);
+    CHECK(ysig_value_at(&g, 1, 120 * MS, &v) == 1 && v.v[0] == 1);
+    CHECK(ysig_value_at(&g, 1, 90 * MS, &v) == 1 && v.v[0] == 0);
+    e = PEN1_E(170 * MS, 1, 50); ysig_feed(&g, &e);            /* the test fails: ready again, fired 0 */
+    CHECK(ysig_value_of(&g, 1)->v[0] == 0);
+    CHECK(ysig_value_at(&g, 1, 175 * MS, &v) == 1 && v.v[0] == 0);
+    {
+        ysig_stats st;
+        ysig_get_stats(&g, &st);
+        CHECK(st.history_skipped == 0);
+    }
+}
+
+/* U1 to U5 of the second review */
+static void test_u(void) {
+    ysig_graph g;
+    ysig_desc d;
+    ysig_frame_in f;
+    yin_event e;
+    ysig_value at;
+    ysig_stats st;
+    const int64_t fp = 16666667LL;
+    int k;
+    g_where = "second review";
+    /* U2: found on the frame f7b5417 found it: the poll a frame before the
+     * onset, a hold to 510 ms on a sample-rate source, a still hand */
+    {
+        ysig_node n[2];
+        ysig_hit h[4];
+        int found = 0;
+        n[0] = src_node(YIN_KIND_PEN, 0, 0, 1);
+        n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1);
+        n[1].p[YSIG_DETECT_TEST] = YSIG_TEST_LE; n[1].p[YSIG_DETECT_LEVEL] = 10; n[1].p[YSIG_DETECT_HOLD] = 0.5;
+        n[1].p[YSIG_DETECT_ENTRY] = 1;
+        d = desc_of(n, 2);
+        if (!open_desc(&g, &d)) { g_failures++; return; }
+        ysig_reset(&g, 0);
+        e = PEN1_E(1 * MS, 1, 50); ysig_feed(&g, &e);
+        e = PEN1_E(10 * MS, 1, 1); ysig_feed(&g, &e);
+        for (k = 1; k <= 60 && !found; k++) {
+            f = frame_poll(k, (k + 1) * fp, k * fp, NULL, 0);
+            ysig_frame(&g, &f);
+            if (ysig_detected(&g, h, 4)) { found = k; CHECK(h[0].t == 510 * MS && h[0].t_found == (k + 1) * fp); }
+        }
+        CHECK(found == 30);                                           /* 31 frames = 516.7 ms, the first onset past 510 */
+    }
+    /* U1: one bad stamp does not re-key a generator's ring: the same past
+     * reads with and without it */
+    {
+        static const double comp[3] = { 1, 1, 0 };
+        ysig_node n[3];
+        double out[2][30];
+        int bad;
+        n[0] = src_node(YIN_KIND_PEN, 0, 0, 1);
+        n[1] = ysig_node_of(YSIG_OP_SINES, -1, -1); n[1].p[0] = 1; n[1].data = comp; n[1].n_data = 3;
+        n[2] = ysig_node_of(YSIG_OP_SUM, 0, 1); n[2].history = 256;
+        d = desc_of(n, 3);
+        for (bad = 0; bad < 2; bad++) {
+            if (!open_desc(&g, &d)) { g_failures++; return; }
+            ysig_reset(&g, 0);
+            e = PEN1_E(1 * MS, 1, 10); ysig_feed(&g, &e);
+            if (bad) { e = PEN1_E(3600000LL * MS, 2, 10); ysig_feed(&g, &e); }
+            for (k = 1; k <= 30; k++) { f = frame_poll(k, (k + 2) * fp, k * fp, NULL, 0); f.base_ns = (k + 2) * fp; ysig_frame(&g, &f); }
+            for (k = 0; k < 30; k++) {
+                CHECK(ysig_value_at(&g, 2, (k + 3) * fp + 1000, &at) == 1);
+                out[bad][k] = at.v[0];
+                CHECK_NEAR(at.v[0], 10 + cos(2 * PI_ * (double)((k + 3) * fp) / 1e9), 1e-9);
+            }
+        }
+        for (k = 0; k < 30; k++) CHECK(out[0][k] == out[1][k]);
+    }
+    /* U5: a poll a little behind the newest sample changes nothing */
+    {
+        static const int64_t gaps[3] = { 0, 2 * MS, 5 * MS };
+        int gi;
+        for (gi = 0; gi < 3; gi++) {
+            ysig_node n[3];
+            int sample = 1, fr_i;
+            n[0] = src_node(YIN_KIND_PEN, 0, 0, 1);
+            n[1] = ysig_node_of(YSIG_OP_SPEED, 0, -1); n[1].p[0] = 0.010;
+            n[2] = ysig_node_of(YSIG_OP_DELAY, 0, -1); n[2].p[0] = 0.002;
+            d = desc_of(n, 3);
+            if (!open_desc(&g, &d)) { g_failures++; return; }
+            ysig_reset(&g, 0);
+            for (fr_i = 1; fr_i <= 120; fr_i++) {
+                int64_t now = fr_i * fp;
+                for (; sample * MS <= now; sample++) {
+                    e = PEN1_E(sample * MS, 1, sample); ysig_feed(&g, &e);
+                    if (fr_i > 3) {
+                        CHECK(fabs(ysig_value_of(&g, 1)->v[0] - 1000) < 1e-6);
+                        CHECK(ysig_value_of(&g, 2)->v[0] == sample - 2);
+                    }
+                }
+                f = frame_poll(fr_i, now + fp, now - gaps[gi], NULL, 0);
+                ysig_frame(&g, &f);
+            }
+            ysig_get_stats(&g, &st);
+            CHECK(st.dropped_order == 0);
+        }
+    }
+    /* U4: value_at after an arm agrees with the live value */
+    {
+        ysig_node n[5];
+        n[0] = src_node(YIN_KIND_PEN, 0, 1, 1);
+        n[1] = src_node(YIN_KIND_PEN, 0, 2, 1);
+        n[2] = ysig_node_of(YSIG_OP_DETECT, 0, -1);
+        n[2].p[YSIG_DETECT_LEVEL] = 5; n[2].p[YSIG_DETECT_OUT] = YSIG_OUT_HIT; n[2].p[YSIG_DETECT_START] = 1;
+        n[3] = ysig_node_of(YSIG_OP_MUX, 0, 1); n[3].in[2] = 2; n[3].history = 32;
+        n[4] = ysig_node_of(YSIG_OP_BIND, 3, -1);
+        d = desc_of(n, 5);
+        if (!open_desc(&g, &d)) { g_failures++; return; }
+        ysig_reset(&g, 0);
+        e = PEN1_E(1 * MS, 2, 100); ysig_feed(&g, &e);
+        e = PEN1_E(2 * MS, 1, 1); ysig_feed(&g, &e);
+        ysig_arm(&g, 2, 3 * MS);
+        e = PEN1_E(4 * MS, 1, 7); ysig_feed(&g, &e);
+        CHECK(ysig_value_of(&g, 3)->v[0] == 7);
+        CHECK(ysig_arm(&g, 2, 5 * MS));
+        CHECK(ysig_value_of(&g, 3)->v[0] == 100);
+        CHECK(ysig_value_at(&g, 3, 6 * MS, &at) == 1 && at.v[0] == 100);
+        CHECK(ysig_value_at(&g, 3, 4500000, &at) == 1 && at.v[0] == 7);       /* before the arm: the hit stood */
+    }
+    /* U3 is documented, not coded: a recenter at the poll's time is in
+     * order with the samples that follow */
+    {
+        ysig_node a[2], n[1];
+        int id;
+        a[0] = src_node(YIN_KIND_MOUSE, YIN_AXIS_DELTA, 0, 2);
+        a[1] = ysig_node_of(YSIG_OP_INTEGRATE, 0, -1); a[1].history = 64;
+        n[0] = ysig_node_of(YSIG_OP_ROLE, -1, -1);
+        if (!open_adapter(&g, n, 1, a, 2, YSIG_TYPE_POSITION2D_RELATIVE, NULL)) { g_failures++; return; }
+        ysig_reset(&g, 0);
+        e = delta(10 * MS, 1, 40, 0); ysig_feed(&g, &e);
+        CHECK(ysig_recenter(&g, 0, 0, 0, 12 * MS));
+        e = delta(15 * MS, 1, 5, 0); ysig_feed(&g, &e);
+        e = delta(20 * MS, 1, 5, 0); ysig_feed(&g, &e);
+        id = ysig_adapter_node(&g, 0, 1);
+        CHECK(ysig_value_of(&g, id)->v[0] == 10);
+        CHECK(ysig_value_at(&g, id, 100 * MS, &at) == 1 && at.v[0] == 10);
+        ysig_get_stats(&g, &st);
+        CHECK(st.history_skipped == 0);
+    }
+}
+
 int main(void) {
     test_conventions();
     test_param_names();
@@ -2180,6 +4098,25 @@ int main(void) {
     test_node_macro();
 #endif
     test_review();
+    test_mux();
+    test_latch();
+    test_distance();
+    test_peak();
+    test_all();
+    test_silent();
+    test_detect_out();
+    test_reset_trial();
+    test_recenter();
+    test_ops_refusals();
+    test_ops_views();
+    test_ops_replay();
+    test_recenter_time();
+    test_recenter_chain();
+    test_peak_order();
+    test_late_stamp();
+    test_rearm();
+    test_hold_frame_input();
+    test_u();
     if (g_failures) { fprintf(stderr, "sig_test: %d failures\n", g_failures); return 1; }
     printf("sig_test: all checks passed\n");
     return 0;
