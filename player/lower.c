@@ -324,6 +324,7 @@ int pl_build_ops(pl_player* p, const yexp_step* st, int n, ytl_op* ops, int cap,
                 o->op = s->op == YEXP_ON ? YTL_OP_ON : YTL_OP_OFF;
                 o->ch = ch;
             }
+            if (t > p->ops_latest) p->ops_latest = t;
             if (t != *cursor) {   /* ytl_on_n() leaves the cursor where it was */
                 ytl_op* o = &ops[c++];
                 memset(o, 0, sizeof *o);
@@ -342,6 +343,7 @@ int pl_build_ops(pl_player* p, const yexp_step* st, int n, ytl_op* ops, int cap,
             o->op = YTL_OP_WAIT;
             o->t_ns = dt;
             *cursor += dt;
+            if (*cursor > p->ops_latest) p->ops_latest = *cursor;
             break;
         }
         case YEXP_AT: {
@@ -354,6 +356,7 @@ int pl_build_ops(pl_player* p, const yexp_step* st, int n, ytl_op* ops, int cap,
             o->op = YTL_OP_AT;
             o->t_ns = t;
             *cursor = t;
+            if (t > p->ops_latest) p->ops_latest = t;
             break;
         }
         case YEXP_SET: {
@@ -401,6 +404,7 @@ int pl_build_ops(pl_player* p, const yexp_step* st, int n, ytl_op* ops, int cap,
                     if (s->op == YEXP_THEN && !(k == s->n_props - 1 && comp == n_comp - 1)) ops[c].op = YTL_OP_TO;
                     dur = ops[c].tween.duration_ns;
                     delay = ops[c].tween.delay_ns;
+                    if (*cursor + delay + dur > p->ops_latest) p->ops_latest = *cursor + delay + dur;
                     c++;
                 }
             }
@@ -638,6 +642,11 @@ static int pl_apply_key(pl_player* p, pl_stim* s, const yexp_prop* pr, int pass)
     return -1;
 }
 
+/* One key now, whatever its phase: a michelson stimulus's direction. */
+int pl_apply_prop(pl_player* p, pl_stim* s, const yexp_prop* pr) {
+    return pl_value_static(pr->value) ? 0 : pl_apply_key(p, s, pr, PL_KEY_TRIAL);
+}
+
 int pl_apply_writes(pl_player* p, pl_stim* s, int pass) {
     int i;
     for (i = 0; i < s->def->n_props; i++)
@@ -720,14 +729,15 @@ static int pl_rdk_open(pl_player* p, pl_stim* s) {
 #undef RD_ENUM
     rd.stream = (uint32_t)stream;
     if (!yrdk_open(&s->field, &rd)) { pl_fail(p, "stimulus '%s': %s", d->name, yrdk_error(&s->field)); return -1; }
-    s->rdk_count = rd.count;
-    s->xy = (float*)pl_alloc(p, sizeof(float) * 2 * (size_t)(rd.count ? rd.count : (int)(density * 1e6)));
+    /* the field's own count: with `density` it is density x area (COUNTS) */
+    s->rdk_count = s->field.n;
+    s->xy = (float*)pl_alloc(p, sizeof(float) * 2 * (size_t)s->rdk_count);
     s->steps = (yrdk_step*)pl_alloc(p, sizeof(yrdk_step) * PL_MAX_STEPS_RDK);
     if (!s->xy || !s->steps) return -1;
-    s->buf = ygfx_buffer(&p->gfx, sizeof(float) * 2 * (size_t)rd.count);
+    s->buf = ygfx_buffer(&p->gfx, sizeof(float) * 2 * (size_t)s->rdk_count);
     memset(&dd, 0, sizeof dd);
     dd.buf = s->buf;
-    dd.count = (uint32_t)rd.count;
+    dd.count = (uint32_t)s->rdk_count;
     dd.aperture = rd.aperture == YRDK_RECT ? YGFX_RECT : YGFX_CIRCLE;
     dd.w = (float)w;
     dd.h = (float)h;
@@ -782,15 +792,17 @@ static void pl_each_text(pl_player* p, const yexp_value* v, const yexp_node* sco
         for (i = 0; i < v->n; i++) pl_each_text(p, v->map[i].value, scope, cb);
         return;
     case YEXP_V_VAR: {
-        int t;
-        for (const yexp_node* n = scope; n; n = n->parent) {
+        const yexp_node* n;
+        for (n = scope; n; n = n->parent) {
             int k;
             for (k = 0; k < n->n_vars; k++)
                 if (strcmp(n->vars[k].key, v->str) == 0) { pl_each_text(p, n->vars[k].value, n, cb); return; }
         }
-        for (t = 0; t < p->n_tables; t++) {
-            const ytb_table* tb = p->tables[t].table;
-            int col = ytb_col(tb, v->str), l, nl;
+        for (n = scope; n; n = n->parent) {
+            const ytb_table* tb = n->table ? pl_table_get(p, n->table) : NULL;
+            int col, l, nl;
+            if (!tb) continue;
+            col = ytb_col(tb, v->str);
             if (col < 0 || ytb_col_type(tb, col) != YTB_STRING) continue;
             nl = ytb_n_levels(tb, col);
             for (l = 0; l < nl; l++) {
@@ -1382,6 +1394,14 @@ static int pl_leaves_collect(pl_player* p, const yexp_node* n, int count, int* i
     return 0;
 }
 
+static void pl_list_leaves(const yexp_node* n, int count, const yexp_node** out, int* idx) {
+    int i;
+    for (i = 0; i < count; i++) {
+        if (n[i].trial) out[(*idx)++] = &n[i];
+        else pl_list_leaves(n[i].children, n[i].n_children, out, idx);
+    }
+}
+
 pl_leaf* pl_leaf_of(pl_player* p, const yexp_node* n) {
     int i;
     for (i = 0; i < p->n_leaves; i++)
@@ -1542,6 +1562,7 @@ static int pl_fields_init(pl_player* p) {
         if (!given) {
             if (f->required) { pl_fail(p, "the session field '%s' is required: give --field %s=VALUE", f->name, f->name); return -1; }
             v->kind = f->is_string ? YEXP_V_STRING : YEXP_V_NUMBER;
+            v->flags = PL_VF_ABSENT;
             v->str = "";
             continue;
         }
@@ -1583,7 +1604,7 @@ int pl_load(pl_player* p, const pl_args* a) {
     ypak_entry e;
     const void* data;
     yexp_host host;
-    int rc, i;
+    int rc, i, count_leaves = 0;
     memset(p, 0, sizeof *p);
     p->args = *a;
     memset(&pd, 0, sizeof pd);
@@ -1687,11 +1708,21 @@ int pl_load(pl_player* p, const pl_args* a) {
             if (pl_apply_key(p, s, &s->def->props[k], PL_KEY_LOAD) < 0) return -1;
     }
     /* textures of image stimuli, by every level a variable can take */
+    {
+        int n_all = pl_count_leaves(p->def->timeline, p->def->n_timeline), got = 0;
+        p->def_leaves = (const yexp_node**)pl_alloc(p, sizeof(yexp_node*) * (size_t)(n_all + 1));
+        if (!p->def_leaves) return -1;
+        pl_list_leaves(p->def->timeline, p->def->n_timeline, p->def_leaves, &got);
+        count_leaves = got;
+    }
     for (i = 0; i < p->n_stims; i++) {
         const yexp_stim* d = p->stims[i].def;
         if (d->kind == YEXP_IMAGE) {
             const yexp_prop* tx = yexp_prop_get(d->props, d->n_props, "texture");
+            int k;
             pl_each_text(p, tx->value, NULL, pl_preload_tex_cb);
+            for (k = 0; k < count_leaves && !p->failed; k++)
+                pl_each_text(p, tx->value, p->def_leaves[k], pl_preload_tex_cb);
             if (p->failed) return -1;
         }
     }
@@ -1720,6 +1751,9 @@ int pl_load(pl_player* p, const pl_args* a) {
     p->tl_initial = (float*)pl_alloc(p, sizeof(float) * (size_t)(p->n_channels + 1));
     p->chan_src = (float**)pl_alloc(p, sizeof(float*) * (size_t)(p->n_channels + 1));
     if (!p->binds || !p->tl_initial || !p->chan_src) return -1;
+    p->chan_base = (float*)pl_alloc(p, sizeof(float) * (size_t)(p->n_channels + 1));
+    p->chan_dyn = (bool*)pl_alloc(p, sizeof(bool) * (size_t)(p->n_channels + 1));
+    if (!p->chan_base || !p->chan_dyn) return -1;
     for (i = 0; i < p->n_channels; i++) {
         pl_chan* c = &p->channels[i];
         pl_stim* s = pl_stim_by_name(p, c->stim->name);
@@ -1744,6 +1778,20 @@ int pl_load(pl_player* p, const pl_args* a) {
             b->stim = &s->gs;
             b->param = (uint16_t)idx;
             p->chan_src[i] = (float*)((char*)&s->gs + r->offset);
+        }
+        if (c->prop) {
+            const char* key = strncmp(c->prop, "color_", 6) == 0 ? "color" : c->prop;
+            const yexp_prop* pr = yexp_prop_get(s->def->props, s->def->n_props, key);
+            /* A tween writes this field every frame, so the channel is its
+             * one writer; a key known only after the response would have no
+             * effect. Which should win is not defined: stop rather than
+             * guess (docs/player.md). */
+            if (pr && pl_value_after(pr->value)) {
+                pl_fail(p, "stimulus '%s': the key '%s' depends on the response and a step drives it", s->def->name, key);
+                return -1;
+            }
+            p->chan_base[i] = p->chan_src[i] ? *p->chan_src[i] : 0.0f;
+            p->chan_dyn[i] = pr && !pl_value_static(pr->value);
         }
     }
     {

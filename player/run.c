@@ -61,12 +61,19 @@ typedef struct pl_csrc { int source; int ref; } pl_csrc;
 static int pl_col_add(pl_player* p, const char* name, int type, int source, int ref, int family) {
     int i;
     pl_col* c;
+    if (strlen(name) > YTB_MAX_NAME) {
+        pl_fail(p, "the data column '%s' is longer than %d bytes: shorten the stimulus, role or column name", name, YTB_MAX_NAME);
+        return -1;
+    }
     for (i = 0; i < p->n_cols; i++)
         if (strcmp(p->cols[i].name, name) == 0) {
             if (p->col_family[i] != family) {
                 pl_fail(p, "the data column '%s' comes from two sources (a table, a template's columns, a built-in column, ...)", name);
                 return -1;
             }
+            /* one name, a jitter in one leaf and a text in another: the
+             * column holds text, and a duration is its exact decimal */
+            if (p->cols[i].type != type) p->cols[i].type = YTR_COL_STRING;
             return i;
         }
     if (p->n_cols >= YTR_DATA_MAX_COLS) {
@@ -86,11 +93,21 @@ enum { CF_TABLE = 1, CF_VAR, CF_BUILTIN, CF_COLUMN, CF_RSP };
 
 /* A column for each table column, var and jitter that a leaf has, in the
  * order of the tree, and the template's columns after the response's. */
-static int pl_columns_tree(pl_player* p) {
+static int pl_columns_tree(pl_player* p, int pass) {
     int i;
     for (i = 0; i < p->n_leaves; i++) {
         const yexp_node* n;
         const pl_leaf* lf = &p->leaves[i];
+        /* 2.10 item 3's order: tables, vars, jitters; trial_seed and the
+         * data come after (pass 1) */
+        if (pass == 1) {
+            for (n = lf->node; n; n = n->parent) {
+                int k;
+                for (k = 0; k < n->n_data; k++)
+                    if (pl_col_add(p, n->data[k].key, YTR_COL_STRING, CS_VAR, 0, CF_VAR) < 0) return -1;
+            }
+            continue;
+        }
         /* a leaf's table, then the containers' tables (2.10 item 3) */
         for (n = lf->node; n; n = n->parent) {
             if (n->table) {
@@ -105,12 +122,13 @@ static int pl_columns_tree(pl_player* p) {
             int k;
             for (k = 0; k < n->n_vars; k++)
                 if (pl_col_add(p, n->vars[k].key, YTR_COL_STRING, CS_VAR, 0, CF_VAR) < 0) return -1;
-            for (k = 0; k < n->n_jitters; k++)
-                if (pl_col_add(p, n->jitters[k], YTR_COL_TIME_NS, CS_VAR, 0, CF_VAR) < 0) return -1;
             for (k = 0; k < n->n_rule_vars; k++)
                 if (pl_col_add(p, n->rule_vars[k].name, YTR_COL_STRING, CS_VAR, 0, CF_VAR) < 0) return -1;
-            for (k = 0; k < n->n_data; k++)
-                if (pl_col_add(p, n->data[k].key, YTR_COL_STRING, CS_DATA, 0, CF_VAR) < 0) return -1;
+        }
+        for (n = lf->node; n; n = n->parent) {
+            int k;
+            for (k = 0; k < n->n_jitters; k++)
+                if (pl_col_add(p, n->jitters[k], YTR_COL_TIME_NS, CS_VAR, 0, CF_VAR) < 0) return -1;
         }
     }
     return 0;
@@ -161,6 +179,17 @@ static yjs_value* pl_header_versions(pl_player* p, yjs_arena* a) {
     yjs_set(a, o, "response", yjs_new_stringz(a, yrsp_version()));
     yjs_set(a, o, "rdk", yjs_new_stringz(a, yrdk_version()));
     yjs_set(a, o, "dataset", yjs_new_stringz(a, yds_version()));
+    yjs_set(a, o, "screen", yjs_new_stringz(a, yscr_version()));
+    yjs_set(a, o, "gfx", yjs_new_stringz(a, ygfx_version()));
+    yjs_set(a, o, "color", yjs_new_stringz(a, ycol_version()));
+    yjs_set(a, o, "table", yjs_new_stringz(a, ytb_version()));
+    yjs_set(a, o, "json", yjs_new_stringz(a, yjs_version()));
+    yjs_set(a, o, "pack", yjs_new_stringz(a, YPAK_VERSION_STRING));
+    yjs_set(a, o, "rigfile", yjs_new_stringz(a, yrig_version()));
+    yjs_set(a, o, "stair", yjs_new_stringz(a, yst_version()));
+    yjs_set(a, o, "quest", yjs_new_stringz(a, yqst_version()));
+    yjs_set(a, o, "aep", yjs_new_stringz(a, yaep_version()));
+    yjs_set(a, o, "audio", yjs_new_stringz(a, yau_version()));
     return o;
 }
 
@@ -194,6 +223,24 @@ static int pl_dataset_open(pl_player* p) {
     if (p->have_cal) {
         ycol_ctx_describe(&p->cx, line, sizeof line);
         yjs_set(&a, s, "color", yjs_new_stringz(&a, line));
+    }
+    if (p->audio_open) {
+        yau_describe(&p->audio, line, sizeof line);
+        yjs_set(&a, s, "audio", yjs_new_stringz(&a, line));
+    }
+    /* 2.10's device rows: in --sim each role is the scripted participant or
+     * the in-process sink; there is no device, port or serial number */
+    {
+        yjs_value* roles = yjs_new(&a, YJS_ARRAY);
+        for (i = 0; i < p->def->n_roles; i++) {
+            yjs_value* o = yjs_new(&a, YJS_OBJECT);
+            const yrig_role* rr = p->have_rig ? yrig_find(p->rig, p->def->roles[i].name) : NULL;
+            yjs_set(&a, o, "role", yjs_new_stringz(&a, p->def->roles[i].name));
+            yjs_set(&a, o, "direction", yjs_new_stringz(&a, p->def->roles[i].direction == 0 ? "in" : p->def->roles[i].direction == 1 ? "out" : "both"));
+            yjs_set(&a, o, "bound", yjs_new_stringz(&a, rr && rr->family[0] ? rr->family : "sim"));
+            yjs_push(&a, roles, o);
+        }
+        yjs_set(&a, s, "devices", roles);
     }
     /* a sim's start date is fixed so that two runs are byte-identical */
     if (p->args.sim) yjs_set(&a, s, "start_utc", yjs_new_stringz(&a, "1970-01-01T00:00:00Z"));
@@ -248,8 +295,9 @@ int pl_columns_build(pl_player* p) {
         for (j = 0; j < sizeof H / sizeof H[0]; j++)
             if (pl_col_add(p, H[j].n, H[j].type, H[j].src, 0, CF_BUILTIN) < 0) return -1;
     }
-    if (pl_columns_tree(p) < 0) return -1;
+    if (pl_columns_tree(p, 0) < 0) return -1;
     if (pl_col_add(p, "trial_seed", YTR_COL_STRING, CS_SEED, 0, CF_BUILTIN) < 0) return -1;
+    if (pl_columns_tree(p, 1) < 0) return -1;
     if (pl_col_add(p, "method", YTR_COL_STRING, CS_METHOD, 0, CF_BUILTIN) < 0) return -1;
     if (pl_col_add(p, "level", YTR_COL_DOUBLE, CS_LEVEL, 0, CF_BUILTIN) < 0) return -1;
     if (pl_col_add(p, "estimate", YTR_COL_DOUBLE, CS_ESTIMATE, 0, CF_BUILTIN) < 0) return -1;
@@ -410,26 +458,35 @@ static double pl_to_stim_units(const pl_method* m, double x) { return m->def->lo
 
 static int pl_stim_begin_trial(pl_player* p, const yscr_frame* f) {
     int i;
+    /* The michelson stimulus first: any other stimulus's key may read
+     * $contrast_shown, and stimuli are sorted by name. Its direction keys
+     * come before the contrast that depends on them. */
+    for (i = 0; i < p->n_stims; i++) {
+        pl_stim* s = &p->stims[i];
+        ycol_shown sh;
+        double m;
+        ycol_rgb dir;
+        int k;
+        if (s->def->kind == YEXP_RDK) s->rdk_moving = false;   /* a template that does not use it must not see the last one's */
+        if (!p->tmpl->stim_used[i] || !s->michelson) continue;
+        for (k = 0; k < s->def->n_props; k++)
+            if (strncmp(s->def->props[k].key, "dir_", 4) == 0 && pl_apply_prop(p, s, &s->def->props[k]) < 0) return -1;
+        dir.r = s->gs.dir[0];
+        dir.g = s->gs.dir[1];
+        dir.b = s->gs.dir[2];
+        if (!p->have_cal) { pl_fail(p, "stimulus '%s': a michelson contrast needs a calibration", s->def->name); return -1; }
+        if (pl_eval_num(p, &p->env, s->michelson, &m) < 0) return -1;
+        if (ycol_michelson(&p->cx, m, dir, 8, &sh) < 0) { pl_fail(p, "stimulus '%s': %s", s->def->name, sh.why ? sh.why : "michelson"); return -1; }
+        s->gs.contrast = (float)sh.scene;
+        /* the loader allows one michelson stimulus shown per template, so
+         * one $contrast_shown per trial */
+        p->env.contrast_shown = sh.shown;
+        p->env.have_shown = true;
+    }
     for (i = 0; i < p->n_stims; i++) {
         pl_stim* s = &p->stims[i];
         if (!p->tmpl->stim_used[i]) continue;
         if (pl_apply_writes(p, s, PL_KEY_TRIAL) < 0) return -1;
-        if (s->michelson) {
-            ycol_shown sh;
-            double m;
-            ycol_rgb dir;
-            dir.r = s->gs.dir[0];
-            dir.g = s->gs.dir[1];
-            dir.b = s->gs.dir[2];
-            if (!p->have_cal) { pl_fail(p, "stimulus '%s': a michelson contrast needs a calibration", s->def->name); return -1; }
-            if (pl_eval_num(p, &p->env, s->michelson, &m) < 0) return -1;
-            if (ycol_michelson(&p->cx, m, dir, 8, &sh) < 0) { pl_fail(p, "stimulus '%s': %s", s->def->name, sh.why ? sh.why : "michelson"); return -1; }
-            s->gs.contrast = (float)sh.scene;
-            /* the loader allows one michelson stimulus shown per template,
-             * so one $contrast_shown per trial */
-            p->env.contrast_shown = sh.shown;
-            p->env.have_shown = true;
-        }
         if (s->def->kind == YEXP_TEXT && !pl_value_after(s->text_value)) {
             if (pl_stim_set_text(p, s) < 0) return -1;
         } else if (s->def->kind == YEXP_TEXT) {
@@ -446,13 +503,13 @@ static int pl_stim_begin_trial(pl_player* p, const yscr_frame* f) {
             if (k == p->n_tex) { pl_fail(p, "stimulus '%s': the texture '%s' was not preloaded", s->def->name, v.str); return -1; }
         }
         if (s->def->kind == YEXP_RDK) {
-            s->rdk_moving = false;
             s->n_steps = 0;
             s->rdk_seed = ytr_trial_seed(&p->trials, p->ti.index);
         }
         if (s->def->kind == YEXP_SOUND) {
             s->sound_scheduled = -1;
             s->sound_id = 0;
+            s->sound_first = -1;
         }
     }
     (void)f;
@@ -464,8 +521,10 @@ static int pl_stim_begin_trial(pl_player* p, const yscr_frame* f) {
  * previous trial's last tween cannot leak (ytl_open() resets the handle). */
 static int pl_timeline_reset(pl_player* p) {
     int i;
+    /* a literal key's value is read from the load's copy: the field itself
+     * holds whatever the last trial's channel wrote */
     for (i = 0; i < p->n_channels; i++)
-        p->tl_initial[i] = p->chan_src[i] ? *p->chan_src[i] : 0.0f;
+        p->tl_initial[i] = !p->chan_src[i] ? 0.0f : p->chan_dyn[i] ? *p->chan_src[i] : p->chan_base[i];
     if (!ytl_open(&p->tl, &p->tl_desc)) { pl_fail(p, "the timeline: %s", ytl_error(&p->tl)); return -1; }
     return 0;
 }
@@ -486,9 +545,16 @@ static int pl_build_after(pl_player* p, int64_t start) {
     ops[0].op = YTL_OP_AT;
     ops[0].t_ns = start;
     n = 1;
-    r = pl_build_ops(p, d->after, d->n_after, ops + n, cap - n - 1, &cursor);
+    p->ops_latest = start;
+    r = pl_build_ops(p, d->after, d->n_after, ops + n, cap - n - 2, &cursor);
     if (r < 0) return -1;
     n += r;
+    /* a backward at_s leaves the cursor before steps already scheduled: the
+     * end goes at the latest of them, so none is dropped */
+    memset(&ops[n], 0, sizeof ops[n]);
+    ops[n].op = YTL_OP_AT;
+    ops[n].t_ns = p->ops_latest;
+    n++;
     memset(&ops[n], 0, sizeof ops[n]);
     ops[n].op = YTL_OP_MARK;
     ops[n].code = PL_MARK_END;
@@ -522,12 +588,14 @@ static int pl_leaf_open(pl_player* p, pl_leaf* lf, int iter) {
     seed = pl_node_seed(p->seed, lf->node->path, iters, n);
     /* compare.py and the operator use these; the session's seed is enough to
      * rederive them, but the seed row shows them without the hash */
-    if (p->n_node_seeds < PL_MAX_NODE_SEEDS) {
-        p->node_seeds[p->n_node_seeds].path = lf->node->path;
-        p->node_seeds[p->n_node_seeds].iteration = iter;
-        p->node_seeds[p->n_node_seeds].seed = seed;
-        p->n_node_seeds++;
+    if (p->n_node_seeds >= PL_MAX_LEAF_RUNS) {
+        pl_fail(p, "node '%s': the session has run %d leaves; the data set cannot record more seeds", lf->node->path, PL_MAX_LEAF_RUNS);
+        return -1;
     }
+    p->node_seeds[p->n_node_seeds].path = lf->node->path;
+    p->node_seeds[p->n_node_seeds].iteration = iter;
+    p->node_seeds[p->n_node_seeds].seed = seed;
+    p->n_node_seeds++;
     p->leaf_rng = seed;
     lf->desc.seed = seed;
     lf->desc.rng = ytr_splitmix;
@@ -546,6 +614,14 @@ int pl_walk_next_leaf(pl_player* p) {
     for (;;) {
         pl_stack* top;
         if (p->sp == 0) { p->walk_done = true; return 0; }
+        /* a tree that loops over nothing: spread over frames, so a frame keeps
+         * its time and the session's budget can stop it; a named error when
+         * no trial ever comes */
+        if (++p->walk_steps > PL_WALK_MAX) {
+            pl_fail(p, "the tree ran %d node steps with no trial: a loop or repetition over nothing", PL_WALK_MAX);
+            return -1;
+        }
+        if (++p->walk_frame_steps > PL_WALK_PER_FRAME) return 2;
         top = &p->stack[p->sp - 1];
         if (top->child >= top->n_children) {
             top->row++;
@@ -590,6 +666,7 @@ int pl_walk_next_leaf(pl_player* p) {
                 pl_leaf* lf = pl_leaf_of(p, n);
                 if (!lf) { pl_fail(p, "node '%s': no leaf", n->path); return -1; }
                 if (pl_leaf_open(p, lf, iter) < 0) return -1;
+                p->walk_frame_steps += 64;   /* a ytr_open() is heavier than a node step */
                 return 1;
             }
             if (p->sp >= PL_MAX_DEPTH_STACK) { pl_fail(p, "nodes nest more than %d levels", PL_MAX_DEPTH_STACK); return -1; }
@@ -623,10 +700,11 @@ int pl_eval_var_bool(pl_player* p, const pl_env* env, const char* name, bool* ou
  * 0 when the session is over, < 0 on an error. */
 int pl_start_trial(pl_player* p, const yscr_frame* f) {
     int rc;
+    p->walk_frame_steps = 0;
     for (;;) {
         if (!p->leaf) {
             rc = pl_walk_next_leaf(p);
-            if (rc <= 0) return rc;
+            if (rc <= 0 || rc == 2) return rc;
         }
         if (p->args.max_trials && p->global_trial >= p->args.max_trials) { p->walk_done = true; pl_leaf_close(p); return 0; }
         rc = ytr_next(&p->trials, &p->ti);
@@ -652,6 +730,7 @@ int pl_start_trial(pl_player* p, const yscr_frame* f) {
         }
     }
 
+    p->walk_steps = 0;
     p->tmpl = p->leaf->tmpl;
     p->track = NULL;
     if (p->ti.track >= 0) {
@@ -670,16 +749,28 @@ int pl_start_trial(pl_player* p, const yscr_frame* f) {
         const yexp_template* d = p->tmpl->def;
         ytl_op* ops = p->tmpl->ops;
         int64_t cursor = 0;
-        int n = pl_build_ops(p, d->events, d->n_events, ops, p->tmpl->ops_cap, &cursor);
-        int r;
+        int n, r;
+        p->ops_latest = 0;
+        n = pl_build_ops(p, d->events, d->n_events, ops, p->tmpl->ops_cap, &cursor);
         if (n < 0) return -1;
+        if (d->response) {
+            /* An `if` can leave `from` unshown, and then the window never
+             * opens and no deadline can end the trial. */
+            int ch = pl_channel(p, d->response->from, NULL), k, found = 0;
+            for (k = 0; k < n; k++) if (ops[k].op == YTL_OP_ON && ops[k].ch == ch) found = 1;
+            if (!found) {
+                pl_fail(p, "template '%s', trial %d: the response's 'from' stimulus '%s' is not shown on this trial (its 'on' is inside an 'if' that is false), so the response can never end",
+                        d->name, p->global_trial, d->response->from);
+                return -1;
+            }
+        }
         p->q = ytl_seq_on(&p->tl, PL_BASE_TRIAL);
         r = n ? ytl_run(&p->q, ops, n) : 0;
         if (r != 0 || p->q.err) {
             pl_fail(p, "template '%s': the events table: %s (op %d)", d->name, ytl_strerror(r ? r : p->q.err), p->q.err_call);
             return -1;
         }
-        p->events_end = p->q.t;
+        p->events_end = p->q.t > p->ops_latest ? p->q.t : p->ops_latest;
         p->from_landed = false;
         p->from_frame = -1;
         p->press_pending = false;
@@ -709,7 +800,6 @@ int pl_start_trial(pl_player* p, const yscr_frame* f) {
     p->trial_first_frame = f->index;
     p->global_trial++;
     p->frame_trial[f->index % PL_FRAME_RING] = p->global_trial - 1;
-    if (p->t0_session == 0) p->t0_session = f->onset;
     return 1;
 }
 
@@ -739,6 +829,18 @@ static char* pl_row_str(pl_row* r, const char* s) {
     memcpy(out, s, n + 1);
     r->text_len += n + 1;
     return out;
+}
+
+/* A value's text as a row cell, in the row's arena. A value too long is a
+ * named refusal: a cut value would be wrong data with nothing to flag it. */
+static int pl_cell_text(pl_player* p, pl_row* r, const char* name, const pl_val* x, const char** out) {
+    char buf[256];
+    int rc = pl_val_text(x, buf, sizeof buf);
+    if (rc == -2) { pl_fail(p, "the column '%s': its value is longer than %zu bytes", name, sizeof buf - 1); return -1; }
+    if (rc < 0) { pl_fail(p, "the column '%s': the value has no text", name); return -1; }
+    *out = pl_row_str(r, buf);
+    if (!*out) { pl_fail(p, "the column '%s': the row's text is over %d bytes", name, PL_ROW_TEXT); return -1; }
+    return 0;
 }
 
 /* Set the cells of the row's own columns, per trial, from the environment. */
@@ -776,6 +878,28 @@ static int pl_row_fill(pl_player* p, pl_row* r) {
         case CS_FIRST_IN_BLOCK: v = p->ti.first_in_block; have = 5; break;
         case CS_VAR: {
             pl_val x;
+            if (p->col_family[i] == CF_VAR) {
+                /* per leaf: this name can be a `vars` here and `data` elsewhere */
+                const yexp_node* n;
+                const yexp_value* dv = NULL;
+                int is_var = 0;
+                for (n = p->leaf->node; n && !is_var && !dv; n = n->parent) {
+                    int k;
+                    for (k = 0; k < n->n_vars; k++) if (strcmp(n->vars[k].key, name) == 0) is_var = 1;
+                    for (k = 0; k < n->n_jitters; k++) if (strcmp(n->jitters[k], name) == 0) is_var = 1;
+                    for (k = 0; k < n->n_rule_vars; k++) if (strcmp(n->rule_vars[k].name, name) == 0) is_var = 1;
+                    if (!is_var) for (k = 0; k < n->n_data; k++) if (strcmp(n->data[k].key, name) == 0) dv = n->data[k].value;
+                }
+                if (!is_var && !dv) break;
+                if (is_var ? pl_var(p, &p->env, name, &x) < 0 : pl_eval(p, &p->env, dv, &x) < 0) return -1;
+                if (p->cols[i].type == YTR_COL_TIME_NS) {
+                    if (x.kind == YEXP_V_NUMBER) { v = x.flags & YEXP_VF_DURATION ? x.i : (int64_t)llround(x.num * 1e9); have = 4; }
+                } else {
+                    if (pl_cell_text(p, r, name, &x, &s) < 0) return -1;
+                    have = 3;
+                }
+                break;
+            }
             if (p->col_family[i] == CF_TABLE) {
                 const yexp_node* n;
                 const ytb_table* tb = NULL;
@@ -799,35 +923,6 @@ static int pl_row_fill(pl_player* p, pl_row* r) {
                 have = s ? 3 : 0;
                 break;
             }
-            {
-                int leaf_has = 0;
-                const yexp_node* n;
-                for (n = p->leaf->node; n && !leaf_has; n = n->parent) {
-                    int k;
-                    for (k = 0; k < n->n_vars; k++) if (strcmp(n->vars[k].key, name) == 0) leaf_has = 1;
-                    for (k = 0; k < n->n_jitters; k++) if (strcmp(n->jitters[k], name) == 0) leaf_has = 1;
-                    for (k = 0; k < n->n_rule_vars; k++) if (strcmp(n->rule_vars[k].name, name) == 0) leaf_has = 1;
-                }
-                if (!leaf_has) break;
-            }
-            if (pl_var(p, &p->env, name, &x) < 0) return -1;
-            if (p->cols[i].type == YTR_COL_TIME_NS) {
-                if (x.kind == YEXP_V_NUMBER) { v = x.flags & YEXP_VF_DURATION ? x.i : (int64_t)llround(x.num * 1e9); have = 4; }
-            } else if (pl_val_text(&x, buf, sizeof buf) == 0) { s = pl_row_str(r, buf); have = 3; }
-            break;
-        }
-        case CS_DATA: {
-            const yexp_node* n;
-            const yexp_value* val = NULL;
-            for (n = p->leaf->node; n && !val; n = n->parent) {
-                int k;
-                for (k = 0; k < n->n_data; k++)
-                    if (strcmp(n->data[k].key, name) == 0) val = n->data[k].value;
-            }
-            if (!val) break;
-            if (pl_eval_text(p, &p->env, val, buf, sizeof buf) < 0) return -1;
-            s = pl_row_str(r, buf);
-            have = 3;
             break;
         }
         case CS_SEED: {
@@ -873,8 +968,11 @@ static int pl_row_fill(pl_player* p, pl_row* r) {
             for (k = 0; k < p->tmpl->def->n_columns; k++)
                 if (strcmp(p->tmpl->def->columns[k].key, name) == 0) val = p->tmpl->def->columns[k].value;
             if (!val) break;
-            if (pl_eval_text(p, &p->env, val, buf, sizeof buf) < 0) return -1;
-            s = pl_row_str(r, buf);
+            {
+                pl_val x;
+                if (pl_eval(p, &p->env, val, &x) < 0) return -1;
+                if (pl_cell_text(p, r, name, &x, &s) < 0) return -1;
+            }
             have = 3;
             break;
         }
@@ -963,16 +1061,20 @@ void pl_row_write_oldest(pl_player* p) {
     p->row_tail = (p->row_tail + 1) % PL_PENDING_ROWS;
 }
 
-static void pl_stats_update(pl_stim_stats* stats, int n, const yscr_record* rec) {
+/* D10 is silent on a stimulus shown twice. Here: the first onset and the
+ * last offset, and frames, tier, drops and flags over every frame it was
+ * shown (frame_vis, written when the frame was drawn). */
+static void pl_stats_update(const pl_player* p, pl_stim_stats* stats, int n, const yscr_record* rec) {
     int k;
+    const uint8_t* vis = p->frame_vis + (size_t)(rec->index % PL_FRAME_RING) * (size_t)p->pool_stats;
     for (k = 0; k < n; k++) {
         pl_stim_stats* st = &stats[k];
-        if (st->onset_frame < 0 || rec->index < st->onset_frame || (st->offset_frame >= 0 && rec->index > st->offset_frame)) continue;
-        if (rec->index == st->offset_frame) { st->offset_ns = rec->onset ? rec->onset : rec->planned; continue; }
         if (rec->index == st->onset_frame) {
             st->onset_ns = rec->onset ? rec->onset : rec->planned;
             st->residual_ns = rec->onset ? rec->residual : YTR_MISSING_NS;
         }
+        if (rec->index == st->offset_frame) st->offset_ns = rec->onset ? rec->onset : rec->planned;
+        if (!vis[k]) continue;
         st->frames++;
         if (st->tier < rec->tier) st->tier = rec->tier;
         st->dropped += (int)rec->dropped;
@@ -994,7 +1096,7 @@ static int pl_on_record(pl_player* p, const yscr_record* rec) {
     if (yds_write_frame(&p->ds, &fr) < 0) { pl_fail(p, "frames.csv: %s", yds_error(&p->ds)); return -1; }
     if (p->in_trial && trial == p->global_trial - 1) {
         /* the running trial: its row does not exist yet */
-        pl_stats_update(p->stats_now, p->tmpl->n_record, rec);
+        pl_stats_update(p, p->stats_now, p->tmpl->n_record, rec);
         if (p->now_tier < rec->tier) p->now_tier = rec->tier;
         p->now_dropped += (int)rec->dropped;
         p->now_flags |= rec->flags;
@@ -1002,7 +1104,7 @@ static int pl_on_record(pl_player* p, const yscr_record* rec) {
         for (i = 0; i < PL_PENDING_ROWS; i++) {
             pl_row* r = &p->rows[(p->row_tail + i) % PL_PENDING_ROWS];
             if (!r->used || r->trial_index != trial) continue;
-            pl_stats_update(r->stats, r->n_stats, rec);
+            pl_stats_update(p, r->stats, r->n_stats, rec);
             if (r->tier_worst < rec->tier) r->tier_worst = rec->tier;
             r->frames_dropped += (int)rec->dropped;
             r->flip_flags |= rec->flags;
@@ -1028,8 +1130,9 @@ static void pl_env_response(pl_player* p, const yrsp_result* r) {
     pl_tmpl* t = p->tmpl;
     const yexp_response* d = t->def->response;
     e->phase = PL_PH_AFTER;
-    e->responded = (r->flags & YRSP_R_RESPONDED) && r->response >= 0;
-    e->response = e->responded ? t->choice_keys[r->response] : NULL;
+    e->responded = (r->flags & YRSP_R_RESPONDED) != 0;   /* 2.3; an any-key response has no choice index */
+    e->response = !e->responded ? NULL : r->response >= 0 ? t->choice_keys[r->response] : yrsp_key_name(r->control);
+    if (e->responded && !e->response) e->response = "";
     e->rt_ns = r->rt_ns;
     e->has_correct = d->key_answer != NULL;
     e->correct = e->has_correct && e->responded && strcmp(e->response, p->key_answer) == 0;
@@ -1120,7 +1223,7 @@ int pl_end_trial(pl_player* p, const yscr_frame* f) {
         if (d->outcome && d->outcome->kind == YEXP_V_STRING && strcmp(d->outcome->str, "correct") == 0) {
             if (p->env.responded) {
                 if (p->env.has_correct) outcome_val = p->env.correct ? 1 : 0;
-                else outcome_val = res.response;   /* a category, the choice */
+                else outcome_val = res.response >= 0 ? res.response : 0;   /* a category, the choice; 0 for any key */
             } else if (p->leaf->node->requeue_no_response && !p->ti.practice && !p->ti.warmup && p->ti.track < 0) {
                 requeue = true;
             }
@@ -1140,8 +1243,16 @@ int pl_end_trial(pl_player* p, const yscr_frame* f) {
         row->first_frame = p->trial_first_frame;
         row->elapsed_ns = f->onset - p->t0_session;
         row->has_res = have_res;
-        if (have_res) row->res = res;
-        row->write_row = n->record_data;
+        if (have_res) {
+            row->res = res;
+            /* an any-key response has no choice name: the key's is the data */
+            if (!row->res.response_name && p->env.responded) row->res.response_name = p->env.response;
+        }
+        row->write_row = true;
+        {
+            const yexp_node* q;
+            for (q = n; q; q = q->parent) if (!q->record_data) row->write_row = false;   /* inherited (2.4) */
+        }
         row->ended = true;
         row->n_stats = t->n_record;
         row->tier_worst = p->now_tier;
@@ -1159,6 +1270,19 @@ int pl_end_trial(pl_player* p, const yscr_frame* f) {
             }
         }
         if (pl_row_fill(p, row) < 0) return -1;
+    }
+    if (have_res && p->env.responded) {
+        yds_event ev;
+        yds_event_init(&ev);
+        ev.t_ns = res.t_response;
+        ev.trial_index = p->global_trial - 1;
+        ev.kind = "response";
+        ev.role = d->response->role;
+        ev.control = res.control;
+        ev.code = res.code;
+        ev.tier = res.stamp_tier;
+        ev.text = p->env.response;
+        if (pl_event_queue(p, &ev) < 0) return -1;
     }
     /* the steps of each moving rdk, to its stream (2.7) */
     {
@@ -1201,14 +1325,15 @@ static int pl_sounds(pl_player* p, const yscr_frame* f) {
     for (i = 0; i < p->n_stims; i++) {
         pl_stim* s = &p->stims[i];
         int k, n;
-        if (s->def->kind != YEXP_SOUND || s->ch_visible < 0 || s->sound_scheduled >= 0) continue;
+        if (s->def->kind != YEXP_SOUND || s->ch_visible < 0) continue;
         n = ytl_peek(&p->tl, PL_BASE_TRIAL, f->onset, f->onset + 2 * f->period + 1, p->peek, p->fired_cap);
         for (k = 0; k < n && k < p->fired_cap; k++) {
-            if (p->peek[k].kind == YTL_ONSET && p->peek[k].target == s->ch_visible) {
-                s->sound_id = yau_play_at(&p->audio, s->sound, p->peek[k].onset);
-                if (s->sound_id < 0) { pl_fail(p, "'%s': %s", s->def->name, yau_error(&p->audio)); return -1; }
+            /* every onset once: a sound can play more than once in a trial */
+            if (p->peek[k].kind == YTL_ONSET && p->peek[k].target == s->ch_visible && p->peek[k].onset > s->sound_scheduled) {
+                yau_id id = yau_play_at(&p->audio, s->sound, p->peek[k].onset);
+                if (id < 0) { pl_fail(p, "'%s': %s", s->def->name, yau_error(&p->audio)); return -1; }
+                if (s->sound_first < 0) { s->sound_first = 1; s->sound_id = id; }
                 s->sound_scheduled = p->peek[k].onset;
-                break;
             }
         }
     }
@@ -1309,10 +1434,12 @@ static int pl_draw(pl_player* p, const yscr_frame* f) {
                     yrdk_start(&s->field, s->rdk_seed, 0);
                     s->rdk_moving = true;
                 }
-                if (s->n_steps < PL_MAX_STEPS_RDK) {
-                    if (yrdk_update(&s->field, f->onset - s->rdk_t0) < 0) { pl_fail(p, "'%s': %s", s->def->name, yrdk_error(&s->field)); return -1; }
-                    s->steps[s->n_steps++] = s->field.last;
+                if (s->n_steps >= PL_MAX_STEPS_RDK) {
+                    pl_fail(p, "stimulus '%s' has moved for %d frames in one trial, the most its stream can record", s->def->name, PL_MAX_STEPS_RDK);
+                    return -1;
                 }
+                if (yrdk_update(&s->field, f->onset - s->rdk_t0) < 0) { pl_fail(p, "'%s': %s", s->def->name, yrdk_error(&s->field)); return -1; }
+                s->steps[s->n_steps++] = s->field.last;
                 yrdk_xy(&s->field, s->xy);
                 ygfx_buffer_update(&p->gfx, s->buf, 0, s->xy, sizeof(float) * 2 * (size_t)s->rdk_count);
             }
@@ -1351,6 +1478,7 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
             pl_participant_arm(p, rec->onset ? rec->onset : rec->planned);
     }
     p->frame_trial[f->index % PL_FRAME_RING] = YTR_MISSING_INT;   /* until a trial claims it */
+    if (p->t0_session == 0) p->t0_session = f->onset;
     if (!p->in_trial) {
         int64_t t0 = p->args.measure ? yrt_real_ns() : 0;
         if (p->pending_stop) return 1;
@@ -1365,13 +1493,16 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
             return 1;
         }
     }
-    p->frame_trial[f->index % PL_FRAME_RING] = p->global_trial - 1;
+    if (p->in_trial) p->frame_trial[f->index % PL_FRAME_RING] = p->global_trial - 1;
     /* the scripted participant's key, on the frames it falls in (as the C
      * programs feed theirs) */
     if (p->in_trial && p->press_pending && p->tmpl->collector) {
         yrsp_input ev;
         pl_tmpl* t = p->tmpl;
         if (p->press_at <= f->onset) {
+            /* the last trial's release first, if it is still due: a key's
+             * events must arrive in time order */
+            if (p->release_due) { yrsp_feed(t->collector, &p->release_ev); p->release_due = false; }
             memset(&ev, 0, sizeof ev);
             ev.t = p->press_at;
             ev.type = YRSP_PRESS;
@@ -1411,9 +1542,24 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
         }
     }
     if (p->in_trial && p->audio_open && (pl_sounds(p, f) < 0 || pl_from_sound(p) < 0)) return -1;
-    n = ytl_evaluate(&p->tl, &(ytl_frame){ f->onset, f->period, f->index }, p->fired, p->fired_cap);
-    if (n < 0) { pl_fail(p, "ytl_evaluate: %s", ytl_strerror(n)); return -1; }
-    if (p->in_trial && pl_on_fired(p, f, n) < 0) return -1;
+    n = 0;
+    if (p->in_trial) {   /* false only on a frame where the walk yielded */
+        n = ytl_evaluate(&p->tl, &(ytl_frame){ f->onset, f->period, f->index }, p->fired, p->fired_cap);
+        if (n < 0) { pl_fail(p, "ytl_evaluate: %s", ytl_strerror(n)); return -1; }
+        if (pl_on_fired(p, f, n) < 0) return -1;
+        {
+            /* who was on screen this frame: the row's counts need it per
+             * frame, and a stimulus can be shown more than once (D10) */
+            uint8_t* vis = p->frame_vis + (size_t)(f->index % PL_FRAME_RING) * (size_t)p->pool_stats;
+            const float* values = ytl_values(&p->tl);
+            int k;
+            for (k = 0; k < p->tmpl->n_record; k++) {
+                int si = p->tmpl->record_stims[k];
+                int ch = si >= 0 ? p->stims[si].ch_visible : -1;
+                vis[k] = (uint8_t)(ch >= 0 && values[ch] >= 0.5f);
+            }
+        }
+    }
     /* also on the end's frame: a step that lands with the trial's last event
      * must reach this frame's draw */
     if (p->global_trial > 0) ygfx_apply(p->binds, p->n_binds, ytl_values(&p->tl));
@@ -1457,8 +1603,12 @@ int pl_run(pl_player* p) {
     p->peek = (ytl_event*)pl_alloc(p, sizeof(ytl_event) * (size_t)(p->fired_cap + 1));
     if (!p->peek) return -1;
     if (!p->events) return -1;
+    p->node_seeds = (pl_node_seed_rec*)pl_alloc(p, sizeof(pl_node_seed_rec) * PL_MAX_LEAF_RUNS);
+    if (!p->node_seeds) return -1;
     p->pool_stats = 0;
     for (i = 0; i < p->n_tmpls; i++) if (p->tmpls[i].n_record > p->pool_stats) p->pool_stats = p->tmpls[i].n_record;
+    p->frame_vis = (uint8_t*)pl_alloc(p, (size_t)PL_FRAME_RING * (size_t)(p->pool_stats + 1));
+    if (!p->frame_vis) return -1;
     p->stats_now = (pl_stim_stats*)pl_alloc(p, sizeof(pl_stim_stats) * (size_t)(p->pool_stats + 1));
     if (!p->stats_now) return -1;
     p->out_now = (pl_out_stats*)pl_alloc(p, sizeof(pl_out_stats) * (size_t)(p->n_triggers + 1));

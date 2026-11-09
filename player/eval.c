@@ -93,14 +93,16 @@ static int pl_builtin(pl_player* p, const pl_env* e, const char* name, pl_val* o
             uint64_t seed = ytr_trial_seed(e->trials, e->ti->index);
             memset(out, 0, sizeof *out);
             out->kind = YEXP_V_NUMBER;
-            out->flags = YEXP_VF_INT;
+            out->flags = YEXP_VF_INT | PL_VF_SEED;
             out->i = (int64_t)seed;
             out->num = (double)seed;
         }
         return 1;
     }
     if (BI("method") || BI("level")) {
-        if (!e->method) { pl_fail(p, "'$%s' on a trial that no track chose", name); return -1; }
+        /* a condition trial of a leaf with tracks: the loader refuses a
+         * numeric use there, so "" reaches only a column or a lookup */
+        if (!e->method) { pl_str(out, ""); return 1; }
         if (BI("method")) pl_str(out, e->method);
         else pl_num(out, e->level);
         return 1;
@@ -226,9 +228,16 @@ int pl_var(pl_player* p, const pl_env* e, const char* name, pl_val* out) {
 int pl_val_text(const pl_val* v, char* buf, size_t cap) {
     if (cap == 0) return -1;
     buf[0] = 0;
+    if (v->flags & PL_VF_ABSENT) return 0;
+    if (v->flags & PL_VF_SEED) {
+        char t[YDS_SEED_TEXT];
+        yds_seed_text((uint64_t)v->i, t);
+        snprintf(buf, cap, "%s", t);
+        return 0;
+    }
     switch (v->kind) {
     case YEXP_V_BOOL:   snprintf(buf, cap, "%s", v->i ? "true" : "false"); return 0;
-    case YEXP_V_STRING: snprintf(buf, cap, "%s", v->str ? v->str : ""); return 0;
+    case YEXP_V_STRING: return (size_t)snprintf(buf, cap, "%s", v->str ? v->str : "") < cap ? 0 : -2;
     case YEXP_V_NUMBER:
         if (v->flags & YEXP_VF_DURATION) {
             char t[YJS_DOUBLE_TEXT];
@@ -294,7 +303,11 @@ int pl_eval(pl_player* p, const pl_env* e, const yexp_value* v, pl_val* out) {
             pl_val by;
             int lo = 0, hi = (int)v->n - 1, found = -1;
             if (pl_eval(p, e, v->by, &by) < 0) return -1;
-            if (pl_val_text(&by, key, sizeof key) < 0) { pl_fail(p, "a lookup's 'by' is not a single value"); return -1; }
+            {
+                int trc = pl_val_text(&by, key, sizeof key);
+                if (trc == -2) { pl_fail(p, "a lookup's 'by' is longer than %zu bytes", sizeof key - 1); return -1; }
+                if (trc < 0) { pl_fail(p, "a lookup's 'by' is not a single value"); return -1; }
+            }
             while (lo <= hi) {
                 int mid = lo + (hi - lo) / 2;
                 int c = strcmp(key, v->map[mid].key);
@@ -384,6 +397,10 @@ int pl_eval_ns(pl_player* p, const pl_env* e, const yexp_value* v, int64_t* ns) 
 int pl_eval_text(pl_player* p, const pl_env* e, const yexp_value* v, char* buf, size_t cap) {
     pl_val x;
     if (pl_eval(p, e, v, &x) < 0) return -1;
-    if (pl_val_text(&x, buf, cap) < 0) { pl_fail(p, "a value that has no text"); return -1; }
+    {
+        int rc = pl_val_text(&x, buf, cap);
+        if (rc == -2) { pl_fail(p, "a value is longer than %zu bytes", cap - 1); return -1; }
+        if (rc < 0) { pl_fail(p, "a value that has no text"); return -1; }
+    }
     return 0;
 }

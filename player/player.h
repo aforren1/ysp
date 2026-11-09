@@ -47,10 +47,18 @@ enum {
     PL_FRAME_RING     = 256, /* frame number to trial index, until its record */
     PL_MAX_DEPTH_STACK = 34,
     PL_MAX_TEXTURES   = 512,
-    PL_MAX_NODE_SEEDS = 1024,
     PL_EVENT_QUEUE    = 4096,
-    PL_MAX_STEPS_RDK  = 4096 /* steps of one RDK in one trial                */
+    PL_MAX_STEPS_RDK  = 65536, /* steps of one RDK in one trial: 18 min at 60 Hz;
+                              * past it the run stops with a named error    */
+    PL_MAX_LEAF_RUNS  = 65536, /* leaf runs in a session, for node_seeds     */
+    PL_WALK_PER_FRAME = 4096,  /* tree-walk steps before the frame goes on    */
+    PL_WALK_MAX       = 1000000 /* consecutive tree-walk steps with no trial  */
 };
+/* pl_val.flags beyond the loader's: a trial seed (text is "x" and 16 hex digits,
+ * the spelling of the trial_seed column); a session field that was not given
+ * (text is empty, a number reads as 0). */
+#define PL_VF_SEED   0x40u
+#define PL_VF_ABSENT 0x80u
 #define PL_MARK_END ((int32_t)0x7fffffff)  /* the internal end of a trial; not
                                             * a mark index, so no definition
                                             * name can collide with it */
@@ -148,7 +156,8 @@ typedef struct pl_stim {
     /* sound */
     yau_buf sound;
     yau_id sound_id;
-    int64_t sound_scheduled;   /* the base time of the onset already played, -1 */
+    int64_t sound_scheduled;   /* the RT time of the onset last played, -1  */
+    int     sound_first;       /* -1 until sound_id holds the first onset's id */
     float last_color[3];
 } pl_stim;
 
@@ -239,6 +248,8 @@ typedef struct pl_col {
     int      idx;        /* in the writer                                    */
 } pl_col;
 
+/* One recorded stimulus over a trial (D10): first onset, last offset, and
+ * frames, tier, drops and flags over every frame it was shown. */
 typedef struct pl_stim_stats {
     int     stim;
     int64_t onset_frame, offset_frame;
@@ -325,12 +336,13 @@ struct pl_player {
     ygfx_tex  tex[PL_MAX_TEXTURES];
     const char* tex_names[PL_MAX_TEXTURES];
     int       n_tex;
+    const yexp_node** def_leaves;
     ypak_runs runs;
     bool      runs_open;
     ygfx_cset* csets;
     int*      col_family;
     pl_csrc*  csrc;
-    pl_node_seed_rec node_seeds[PL_MAX_NODE_SEEDS];
+    pl_node_seed_rec* node_seeds;
     int       n_node_seeds;
     int       leaf_iter, leaf_loop_pass, leaf_n_correct, leaf_n_counted, iter_counter;
     char      key_answer[256];
@@ -339,6 +351,11 @@ struct pl_player {
     pl_stim_stats* stats_now;
     pl_out_stats*  out_now;
     int       pool_stats;
+    uint8_t*  frame_vis;      /* PL_FRAME_RING x pool_stats: was record k shown on that frame */
+    float*    chan_base;      /* a literal key's value: every trial starts from it */
+    bool*     chan_dyn;       /* the key holds a variable: read it per trial      */
+    int64_t   ops_latest;     /* the latest time pl_build_ops() scheduled         */
+    int       walk_steps, walk_frame_steps;
     int       now_tier, now_dropped, now_flags;
     bool      pending_stop;
     bool      release_due;
@@ -493,6 +510,7 @@ void pl_stim_apply(pl_player* p);
 enum { PL_KEY_LOAD, PL_KEY_TRIAL, PL_KEY_AFTER };
 bool pl_value_after(const yexp_value* v);
 int  pl_apply_writes(pl_player* p, pl_stim* s, int pass);
+int  pl_apply_prop(pl_player* p, pl_stim* s, const yexp_prop* pr);
 int  pl_stim_set_text(pl_player* p, pl_stim* s);
 int  pl_walk_next_leaf(pl_player* p);
 int  pl_start_trial(pl_player* p, const yscr_frame* f);

@@ -249,16 +249,12 @@ int pl_extreme_ns(pl_player* p, const yexp_value* v, int64_t* ns) {
     }
 }
 
-static const yexp_node* h_find_leaf(const yexp_node* n, int count, const yexp_template* t) {
+static void h_find_leaves(const yexp_node* n, int count, const yexp_template* t, const yexp_node** out, int* got, int cap) {
     int i;
     for (i = 0; i < count; i++) {
-        if (n[i].trial == t) return &n[i];
-        if (!n[i].trial) {
-            const yexp_node* r = h_find_leaf(n[i].children, n[i].n_children, t);
-            if (r) return r;
-        }
+        if (n[i].trial == t) { if (*got < cap) out[*got] = &n[i]; (*got)++; }
+        else if (!n[i].trial) h_find_leaves(n[i].children, n[i].n_children, t, out, got, cap);
     }
-    return NULL;
 }
 
 static int h_check_ops(void* ctx, const yexp_def* d, const yexp_template* t, char* msg, size_t cap) {
@@ -267,7 +263,9 @@ static int h_check_ops(void* ctx, const yexp_def* d, const yexp_template* t, cha
     ytl_event* ev;
     ytl_key* keys;
     ytl_desc td;
-    const yexp_node* leaf;
+    const yexp_node** leaves;
+    void* rules_arena;
+    int n_leaves = 0, li;
     ytl_op* ops;
     int mode, bound, rc = 0;
     pl_env saved = p->env;
@@ -280,13 +278,23 @@ static int h_check_ops(void* ctx, const yexp_def* d, const yexp_template* t, cha
     ev = (ytl_event*)pl_alloc(p, sizeof(ytl_event) * (size_t)bound);
     keys = (ytl_key*)pl_alloc(p, sizeof(ytl_key) * (size_t)bound * 4);
     if (!ops || !ev || !keys) { snprintf(msg, cap, "out of memory"); return 1; }
-    leaf = h_find_leaf(d->timeline, d->n_timeline, t);
+    h_find_leaves(d->timeline, d->n_timeline, t, NULL, &n_leaves, 0);
+    leaves = (const yexp_node**)pl_alloc(p, sizeof(yexp_node*) * (size_t)(n_leaves + 1));
+    rules_arena = pl_alloc(p, (size_t)1 << 19);
+    if (!leaves || !rules_arena) { snprintf(msg, cap, "out of memory"); return 1; }
+    li = n_leaves;
+    n_leaves = 0;
+    h_find_leaves(d->timeline, d->n_timeline, t, leaves, &n_leaves, li);
+    if (n_leaves == 0) leaves[n_leaves++] = NULL;   /* a template no node runs */
+    /* every leaf that runs it: their jitters and tables give other extremes */
+    for (li = 0; li < n_leaves && rc == 0; li++) {
+    const yexp_node* leaf = leaves[li];
     if (leaf && leaf->rules[0]) {
         /* a jitter's range is only in the rules text */
         ytr_rules_desc rr;
         char err[300];
         size_t bytes = (size_t)1 << 19;
-        void* arena = pl_alloc(p, bytes);
+        void* arena = rules_arena;
         memset(&p->extreme_desc, 0, sizeof p->extreme_desc);
         memset(&rr, 0, sizeof rr);
         rr.text = leaf->rules;
@@ -331,6 +339,7 @@ static int h_check_ops(void* ctx, const yexp_def* d, const yexp_template* t, cha
             int e = ytl_check_ops(&tl, PL_BASE_TRIAL, ops, nops, &bad);
             if (e != 0) { snprintf(msg, cap, "template '%s', op %d of its steps: %s", t->name, bad, ytl_strerror(e)); rc = 1; break; }
         }
+    }
     }
     p->env = saved;
     return rc;
