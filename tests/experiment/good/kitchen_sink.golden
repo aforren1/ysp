@@ -428,7 +428,7 @@ template full
   response role=resp from=g ends=0 max=2 held=1 release=1 choices=left:left,right:r
     duration=lookup($cond){"a": dur:1500000000ns, "b": dur:2000000000ns} min_rt=dur:100000000ns key_answer=$side trigger=trig lookup($response){"left": int:1, "right": int:2}
   record_given=1 record=[g bar]
-  outcome=lookup($correct){"false": "wrong", "true": "correct"} method_value=$contrast_shown
+  outcome=lookup($correct){"false": int:0, "true": int:1} method_value=$contrast_shown
   column est = $estimate
   column group = $group
   column method_name = lookup($method){"ae": "aep", "qp": "quest", "st": "stair"}

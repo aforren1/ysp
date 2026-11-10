@@ -1,0 +1,2 @@
+{"format":"ysp-experiment","version":1,
+"devices":{"r":{"direction":"in","family":["keyboard"]}},"stimuli":{"s":{"kind":"shape"}},"methods":{"m":{"type":"stair","steps":[1],"stop_trials":1}},"trials":{"t":{"events":[{"on":"s"}],"response":{"role":"r","from":"s","choices":["a"],"key_answer":"a","duration_s":1},"columns":{"c":{"by":"$method","map":{"m":1}}}}},"timeline":[{"name":"n","trial":"t","tracks":["m"],"track_rate":0.5,"timeline_variables":"base.pstb"}]}

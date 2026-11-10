@@ -1849,6 +1849,7 @@ void pl_close(pl_player* p) {
     if (p->ds_open) yds_close(&p->ds);
     if (p->gfx_open) ygfx_close(&p->gfx);
     if (p->scr_open) yscr_close(&p->scr);
+    if (p->trace_file) { fclose((FILE*)p->trace_file); p->trace_file = NULL; }
     if (p->arena_open) yjs_arena_free(&p->arena);
     if (p->pack_open) ypak_close(&p->pack);
     {

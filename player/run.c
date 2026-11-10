@@ -1333,6 +1333,15 @@ static int pl_sounds(pl_player* p, const yscr_frame* f) {
                 yau_id id = yau_play_at(&p->audio, s->sound, p->peek[k].onset);
                 if (id < 0) { pl_fail(p, "'%s': %s", s->def->name, yau_error(&p->audio)); return -1; }
                 if (s->sound_first < 0) { s->sound_first = 1; s->sound_id = id; }
+                {
+                    yds_event ev;
+                    yds_event_init(&ev);
+                    ev.t_ns = p->peek[k].onset;
+                    ev.trial_index = p->global_trial - 1;
+                    ev.kind = "sound";
+                    ev.stimulus = s->def->name;
+                    if (pl_event_queue(p, &ev) < 0) return -1;
+                }
                 s->sound_scheduled = p->peek[k].onset;
             }
         }
@@ -1563,6 +1572,13 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
     /* also on the end's frame: a step that lands with the trial's last event
      * must reach this frame's draw */
     if (p->global_trial > 0) ygfx_apply(p->binds, p->n_binds, ytl_values(&p->tl));
+    if (p->trace_file && p->global_trial > 0) {
+        const float* values = ytl_values(&p->tl);
+        int k;
+        for (k = 0; k < p->n_channels; k++)
+            fprintf((FILE*)p->trace_file, "%lld,%d,%s,%s,%.6f\n", (long long)f->index, p->global_trial - 1, p->channels[k].stim->name,
+                    p->channels[k].prop ? p->channels[k].prop : "visible", (double)values[k]);
+    }
     yscr_mark(&p->scr, YSCR_PHASE_EVALUATE);
     if (pl_draw(p, f) < 0) return -1;
     if (p->args.max_seconds && f->onset - (p->t0_session ? p->t0_session : f->onset) > p->args.max_seconds * 1000000000LL) {
@@ -1617,6 +1633,11 @@ int pl_run(pl_player* p) {
         p->stat_pool[i] = (pl_stim_stats*)pl_alloc(p, sizeof(pl_stim_stats) * (size_t)(p->pool_stats + 1));
         p->out_pool[i] = (pl_out_stats*)pl_alloc(p, sizeof(pl_out_stats) * (size_t)(p->n_triggers + 1));
         if (!p->stat_pool[i] || !p->out_pool[i]) return -1;
+    }
+    if (p->args.trace_path) {
+        p->trace_file = fopen(p->args.trace_path, "w");
+        if (!p->trace_file) { pl_fail(p, "cannot write '%s'", p->args.trace_path); return -1; }
+        fputs("frame,trial_index,stimulus,prop,value\n", (FILE*)p->trace_file);
     }
     if (p->args.participant && strncmp(p->args.participant, "script:", 7) == 0 && pl_script_load(p, p->args.participant + 7) < 0) return -1;
     for (i = 0; i < PL_FRAME_RING; i++) p->frame_trial[i] = YTR_MISSING_INT;
@@ -1696,6 +1717,7 @@ int pl_run(pl_player* p) {
         if (yds_session_set(&p->ds, "node_seeds", arr) < 0) pl_fail(p, "session.json: %s", yds_error(&p->ds));
         yjs_arena_free(&a);
     }
+    if (p->trace_file) { fclose((FILE*)p->trace_file); p->trace_file = NULL; }
     if (yds_finish(&p->ds) < 0) { pl_fail(p, "the data set: %s", yds_error(&p->ds)); return -1; }
     return p->failed ? -1 : 0;
 }

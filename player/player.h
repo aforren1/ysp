@@ -306,6 +306,7 @@ typedef struct pl_args {
     int64_t max_seconds;       /* virtual seconds before giving up; default 2 days */
     bool  quiet;
     bool  measure;             /* real-clock cost of each frame's work      */
+    const char* trace_path;    /* a test's view of every channel per frame  */
     const char* def_text;      /* the fuzz target: use these bytes for the
                                 * experiment entry, keeping the pack's tables */
     size_t def_len;
@@ -356,6 +357,7 @@ struct pl_player {
     bool*     chan_dyn;       /* the key holds a variable: read it per trial      */
     int64_t   ops_latest;     /* the latest time pl_build_ops() scheduled         */
     int       walk_steps, walk_frame_steps;
+    void*     trace_file;
     int       now_tier, now_dropped, now_flags;
     bool      pending_stop;
     bool      release_due;

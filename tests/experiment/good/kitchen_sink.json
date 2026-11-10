@@ -65,7 +65,7 @@
       "columns": { "note": "columns note", "resp_s": "$rt_s", "est": "$estimate", "shown": "$contrast_shown",
                    "side": "$side", "method_name": { "by": "$method", "map": { "st": "stair", "qp": "quest", "ae": "aep" } },
                    "group": "$group", "seconds_s": 1.5 },
-      "outcome": { "by": "$correct", "map": { "true": "correct", "false": "wrong" } },
+      "outcome": { "by": "$correct", "map": { "true": 1, "false": 0 } },
       "method_value": "$contrast_shown"
     },
     "plain": { "events": [{ "on": "movie" }, { "wait_s": "$hold_s" }, { "on": "dots" }, { "on": "lit" }, { "on": "n1" }, { "on": "art" }] }

@@ -2,7 +2,7 @@
  *
  * Usage: ysp_player PACK --out DIR --sim [--seed N] [--field NAME=VALUE]...
  *                   [--rig FILE] [--cal FILE] [--participant SPEC] [--rt S]
- *                   [--max-trials N] [--measure]
+ *                   [--max-trials N] [--measure] [--trace-channels FILE]
  *
  * --sim is required in this version: the simulated display, the virtual
  * clock, the null audio device and a scripted participant. SPEC is
@@ -46,6 +46,7 @@ int main(int argc, char** argv) {
         else if (!strcmp(s, "--max-trials") && v) { a.max_trials = atoi(v); i++; }
         else if (!strcmp(s, "--max-seconds") && v) { a.max_seconds = atoll(v); i++; }
         else if (!strcmp(s, "--measure")) a.measure = true;
+        else if (!strcmp(s, "--trace-channels") && v) { a.trace_path = v; i++; }
         else if (!strcmp(s, "--field") && v) {
             const char* eq = strchr(v, '=');
             if (!eq || a.n_fields == PL_MAX_FIELDS) return usage();
