@@ -651,9 +651,10 @@ def case_noafter(ctx):
 
 
 def case_lost(ctx):
-    """The oddball with its 3rd code at a flip never written
-    (--test-lose-code 3), as a canceled trigger: that trial counts it failed,
-    and every later record still goes to its own trial."""
+    """The oddball with one code at a flip never written (--test-lose-code),
+    as a canceled trigger, chosen so that the next trial's code is the same:
+    that trial counts it failed, and every later record still goes to its
+    own trial."""
     print("== lost", flush=True)
     pack, dd = build_pack(ctx, "oddball")
     frm, duration, min_rt = the_response(dd)
@@ -667,21 +668,27 @@ def case_lost(ctx):
             tr["_duration"] = duration
             tr["name"] = tr["key"]
             tr["key"] = keys[tr["key"]]
-        rc, d, sent, out = run_real(ctx, "lost", pack, plan, rig, extra=ctx.odd_extra + ["--test-lose-code", "3"])
+        # lose a code whose next trial has the same code: its record must not
+        # be taken for the lost one's (a flip's record answers the last fire
+        # of its code that is not after its deadline)
+        lose = next((k for k in range(1, len(trials) - 1) if trials[k]["code"] == trials[k + 1]["code"]), 2)
+        rc, d, sent, out = run_real(ctx, "lost", pack, plan, rig, extra=ctx.odd_extra + ["--test-lose-code", str(lose + 1)])
         print("  lost: exit %s" % rc, flush=True)
         if not check(rc == 0, "lost: exit %s: %s" % (rc, out.strip()[-300:])):
             return
         rows = read_csv(os.path.join(d, "trials.csv"))
         events = read_csv(os.path.join(d, "events.csv"))
-        lost = rows[2]
+        lost = rows[lose]
         flips = [e for e in events if e["kind"] == "out" and int(e["flags"]) & 0x20]
-        check(not any(e["trial_index"] == "2" for e in flips), "lost: trial 2 has a code at the flip in events.csv")
-        check(lost["trig_failed"] == "1", "lost: trial 2 trig_failed %s, not 1" % lost["trig_failed"])
+        check(not any(e["trial_index"] == str(lose) for e in flips), "lost: trial %d has a code at the flip in events.csv" % lose)
+        check(lost["trig_failed"] == "1", "lost: trial %d trig_failed %s, not 1" % (lose, lost["trig_failed"]))
+        check(sorted(int(e["trial_index"]) for e in flips) == [k for k in range(len(rows)) if k != lose],
+              "lost: one code at the flip in every other trial: %s" % [e["trial_index"] for e in flips])
         for e in flips:
             check(int(e["code"]) == int(rows[int(e["trial_index"])]["code"]), "lost: a code at the flip in trial %s is %s, its row's %s" %
                   (e["trial_index"], e["code"], rows[int(e["trial_index"])]["code"]))
         for row in rows:
-            if row["trial_index"] != "2":
+            if row["trial_index"] != str(lose):
                 check(row["trig_failed"] == "0", "lost: trial %s trig_failed %s" % (row["trial_index"], row["trig_failed"]))
         print("  lost: %d codes at the flip for %d trials" % (len(flips), len(rows)), flush=True)
     finally:

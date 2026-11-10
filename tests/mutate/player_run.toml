@@ -522,6 +522,8 @@ env = { YPL_REAL_CASES = "noafter" }
 name = "a row does not wait for its codes' records"
 test = "real"
 why = "A row's output counts come from its codes' device records; the frame loop's code of a trial that ends on the response comes after the trial."
+expect = "survived"
+note = "A guard: on this rig every record is drained before the trial's last flip record comes (a code at the flip is written at its vblank, the frame loop's at once), so the row would have them anyway; and a code still owed at the write is counted failed either way. It matters for an output whose write ends more than a frame late."
 find = '''        if (owed <= 0 || rec->index >= r->last_frame + PL_OUT_WAIT_FRAMES) r->final = true;'''
 replace = '''        r->final = true;'''
 
