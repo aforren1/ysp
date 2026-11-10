@@ -1933,10 +1933,10 @@ static int pl_rule_make(pl_player* p, pl_role* in) {
 
 /* A role's min_tier (2.9): a real start is refused, naming each role, when
  * a bound role's tier is worse than its min_tier; UNKNOWN is worse than
- * any (an output has no tier yet: ysp/device.h, OUTPUTS). --allow-below-tier
- * starts anyway, and session.json lists them. --sim only says so. */
-/* --allow-below-tier ROLE[,ROLE...]: the roles that may start below their
- * min_tier; the others keep the check. */
+ * any (an output has no tier yet: ysp/rigfile.h has no rule for one).
+ * --allow-below-tier names the roles that start anyway; every other role
+ * keeps its check, and session.json lists the named ones. --sim only says
+ * so. */
 static bool pl_role_allowed(const pl_player* p, const char* name) {
     const char* a = p->args.allow_below;
     size_t n = strlen(name);

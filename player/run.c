@@ -2181,8 +2181,10 @@ int pl_run(pl_player* p) {
     /* after an abort too: the begin() after the one that reported it starts
      * a frame again, unless the panic released the display */
     if (p->aborted && !(p->abort_reasons & YSCR_ABORT_PANIC)) rc = YSCR_OK;
-    /* 8 frames, and in a real run up to PL_OUT_WAIT_FRAMES while a row still
-     * waits for a code's device record: the end has the rows' bound too */
+    /* 8 frames, and in a real run up to PL_OUT_WAIT_FRAMES + 2 (32) while a
+     * row still waits for a code's device record: the end has the rows'
+     * bound too, and the flip record that passes it comes up to 2 frames
+     * after its flip */
     for (i = 0; rc == YSCR_OK && (i < 8 || (i < PL_OUT_WAIT_FRAMES + 2 && pl_rows_owed(p))); i++) {
         int k;
         rc = yscr_begin(&p->scr, &f);

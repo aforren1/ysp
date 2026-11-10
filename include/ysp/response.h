@@ -547,11 +547,11 @@
  *   CHANGELOG
  *   ---------------------------------------------------------------------
  *   v0.9.0 - yrsp_set_wait_final(): for this window, no end on a press
- *          or a deadline until the final onset (or a bound), so a window
- *          with no deadline cannot end on a press that the record makes
- *          early (the player, docs/player.md). The landing frame's record
- *          settles it, shown or not (yrsp_update_frame()); max_wait_ns is
- *          a safety net. Off unless called; the collector grew 24 bytes.
+ *          or a deadline until the landing frame's flip record is in,
+ *          shown or not (yrsp_update_frame()), with max_wait_ns (the
+ *          player's 1 s) as a safety net, so a window with no deadline
+ *          cannot end on a press that the record makes early (the
+ *          player, docs/player.md). Off unless called; the collector grew 24 bytes.
  *          Fix: yrsp_update()'s deadline (onset + duration_ns) and the
  *          rule's window end saturate instead of overflowing near
  *          INT64_MAX.

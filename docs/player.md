@@ -157,8 +157,8 @@ differ:
 | `<role>_lag_max_s` | The largest write start minus deadline of the trial's codes: exactly the largest of its `out` rows in `events.csv` | 0 |
 | `<role>_n` | The codes the trial asked for, its rule's fires included | The codes asked for |
 | `<role>_failed` | The codes whose write failed, and the codes whose device record never came (a trigger whose flip was not shown, a full ring) | The codes the screen refused |
-| When the row is written | When its last frame's flip record and every one of its codes' device records are in, on every output channel, or 30 frames (0.5 s at 60 Hz) after its last frame, with the codes still owed counted in `_failed`. A record that comes after that has `flags` 0x4000 (`PL_OUT_AFTER_ROW`) in `events.csv`: its row counted it failed. At the session's end the player shows 8 more frames, and up to 30 while a row still waits for a code's record | When its last frame's flip record is in; 8 frames at the end |
-| `session.json` `devices` | `bound` (a family, `keyboard` or `none`), `key`, `port`, `ident`, an input's `tier`, `min_tier` and `below_tier` where they apply, and `rule` (the output a device role's rule writes to) | `bound` only (`sim` or the rig's family) |
+| When the row is written | When its last frame's flip record and every one of its codes' device records are in, on every output channel, or 30 frames (0.5 s at 60 Hz) after its last frame, with the codes still owed counted in `_failed`. A record that comes after that has `flags` 0x4000 (`PL_OUT_AFTER_ROW`) in `events.csv`: its row counted it failed. At the session's end the player shows 8 more frames, and up to 32 (`PL_OUT_WAIT_FRAMES` + 2: the record that passes a row's bound comes up to 2 frames after its flip) while a row still waits for a code's record | When its last frame's flip record is in; 8 frames at the end |
+| `session.json` `devices` | `bound` (a family, `keyboard` or `none`), `key`, `port`, `ident`, `tier` (every bound role; an output's is 0, UNKNOWN), `min_tier` and `below_tier` where they apply, and `rule` (the output a device role's rule writes to) | `bound` only (`sim` or the rig's family) |
 | `session.json` | `rig_profile` (the file, or `null`), `allow_below_tier`, `gfx` (the program cache's hits), `view_distance_mm` and `view_width_mm` (deg units), `start_utc` (the time), `aborted` after Shift+Esc | `start_utc` fixed |
 | `frames.csv` phase columns | The CPU costs | Empty: they would differ between two runs |
 | `panic.json` | After a panic only | Never |
@@ -468,7 +468,7 @@ with only `left`).
 
 - A tier for a keyboard role: the rig profile's family, a rule for a
   host-stamped input, and a loopback (How-to: give a keyboard a tier).
-- A tier for an output role: no output has one in ysp/device.h yet.
+- A tier for an output role: ysp/rigfile.h has no tier rule for an output yet (devices_spec.md section 8 proposes one after a write-to-edge loopback).
 - A real window on Windows (COMPOSITION, DXGI_FLIP) and macOS (METAL): CI
   builds the player there and runs `--sim`; no real run was made.
 - A photodiode run for the display's onsets and a line-in run for a
