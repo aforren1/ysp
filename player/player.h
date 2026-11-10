@@ -73,6 +73,8 @@ enum {
     PL_OUT_WAIT_FRAMES = 30,   /* a row waits this many frames after its last
                               * one for its codes' device records, then is
                               * written with the missing ones as failed     */
+    PL_WAIT_FINAL_FRAMES = 4,  /* a response's end waits this many frames at
+                              * most for the landing frame's flip record     */
     PL_RULE_ARMS      = 8,     /* a channel's last rule arms: a rule's record
                               * goes to the arm its press falls in          */
     PL_DEV_RING       = 4096,  /* device records between two frames          */
@@ -375,6 +377,8 @@ typedef struct pl_args {
     bool  quiet;
     bool  measure;             /* real-clock cost of each frame's work      */
     bool  windowed;            /* a real run in a window (development)      */
+    int64_t plan_early_ns;     /* tests: a response's plan onset this much
+                                * before the timeline's (--sim)             */
     int   lose_code;           /* tests: the screen never writes the Nth code
                                 * at a flip (1 = the first); 0: none        */
     int   hang_trial;          /* tests: the frame loop stops in session
@@ -579,6 +583,8 @@ struct pl_player {
     int64_t   from_frame;
     int64_t   trial_start_onset;
     pl_method* track;
+    yrsp_result live_res;       /* the result `after` was built from        */
+    bool      have_live;
     /* the participant */
     bool      press_planned;
     bool      press_pending;

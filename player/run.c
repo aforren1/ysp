@@ -917,6 +917,13 @@ int pl_start_trial(pl_player* p, const yscr_frame* f) {
             if (pl_eval_ns(p, &p->env, d->response->duration, &dur) < 0 || pl_eval_ns(p, &p->env, d->response->min_rt, &minrt) < 0) return -1;
             yrsp_arm(c, f->onset);
             yrsp_set_window(c, minrt, dur);
+            /* a press or the deadline ends the window only once the flip
+             * record has given the final onset, so `after` and the row hear
+             * one result, and a window with no deadline cannot end on a
+             * press the record makes early (player.md). The bound: a
+             * landing frame never shown has no record. */
+            yrsp_set_wait_final(c, PL_WAIT_FINAL_FRAMES * f->period);
+            p->have_live = false;
             if (pl_rule_of(p, p->tmpl)) {
                 /* a new window for the device's rule, and the trial its
                  * codes belong to from the arm on */
@@ -1552,6 +1559,12 @@ int pl_end_trial(pl_player* p, const yscr_frame* f) {
             p->out_now[ch].owed += nf;
         }
         pl_finish(p, &res);
+        /* the final result can name another response than the one `after`
+         * was built from (a box's press read late with an earlier stamp; a
+         * flip record later than the wait's bound): the row says what the
+         * participant was shown, the live result */
+        if (p->have_live && (res.entry != p->live_res.entry || ((res.flags ^ p->live_res.flags) & YRSP_R_RESPONDED))) res = p->live_res;
+        p->have_live = false;
         pl_env_response(p, &res);
         have_res = true;
     } else {
@@ -1742,6 +1755,9 @@ static int pl_on_fired(pl_player* p, const yscr_frame* f, int n) {
                 if (e->kind == YTL_ONSET && !p->from_landed && p->tmpl->collector &&
                     c->stim->kind != YEXP_SOUND && strcmp(p->tmpl->def->response->from, c->stim->name) == 0) {
                     yrsp_onset o = yrsp_onset_landing(e);
+                    /* tests: a plan earlier than the flip record will say, as
+                     * a landing frame shown late gives (player_test.py) */
+                    o.t_ns -= p->args.plan_early_ns;
                     yrsp_set_onset(p->tmpl->collector, &o);
                     p->from_landed = true;
                     p->from_frame = e->frame;
@@ -1950,6 +1966,8 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
             yrsp_result live;
             int64_t bt = 0;
             yrsp_finish(p->tmpl->collector, &live);
+            p->live_res = live;   /* what `after` shows; the row keeps it (pl_end_trial()) */
+            p->have_live = true;
             pl_env_response(p, &live);
             if (pl_response_trigger(p, &live) < 0) return -1;
             ytl_base_time(&p->tl, PL_BASE_TRIAL, f->onset, &bt);

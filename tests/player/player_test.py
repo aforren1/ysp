@@ -969,12 +969,53 @@ def t_r4_requeue_full(ctx):
           "a requeue past the history stops by name: rc %d, %d rows: %s" % (r.rc, n, r.err[:300]))
 
 
+def t_r5_wait_final(ctx):
+    # a press after the plan's onset and before the flip record's (a landing
+    # frame shown late, --test-plan-early): it is early against the final
+    # onset, so it must not end the window, and `after` must not start on it
+    # (ysp/response.h 0.9.0, yrsp_set_wait_final())
+    late = 1 / 60.0
+    with open(os.path.join(ctx.out, "early.csv"), "w", newline="\n") as f:
+        f.write("trial_index,response,rt_s,hold_s\n0,left,-0.005,0.05\n")
+    d = base({"t": {"events": [{"on": "s"}], "after": [{"mark": "go"}, {"wait_s": 0.1}],
+                    "response": {"role": "r", "choices": ["left"], "from": "s", "duration_s": 1}}},
+             [{"name": "l", "trial": "t"}])
+    r = Run(ctx, "r5_wait_deadline", d, args=["--participant", "script:" + os.path.join(ctx.out, "early.csv"), "--max-trials", "1",
+                                              "--test-plan-early", repr(late)])
+    ok = r.rc == 0 and len(r.trials) == 1
+    check(ok, "wait for the record, with a deadline: %s" % r.err)
+    if ok:
+        t = r.trials[0]
+        onset = float([e for e in r.events if e["kind"] == "onset" and e["stimulus"] == "s"][0]["t_s"])
+        go = float([e for e in r.events if e["kind"] == "mark" and e["text"] == "go"][0]["t_s"])
+        check(t["outcome"] == "timeout" and t["n_early"] == "1" and not int(t["rsp_flags"]) & 0x4,
+              "an early press in the gap is no response and does not end the window: %s" % {k: t[k] for k in ("outcome", "n_early", "rsp_flags")})
+        check(go >= onset + 1.0 - 0.001, "after starts at the deadline from the final onset (%.4f s after it), not at the press" % (go - onset))
+    # no deadline: the window stays open after the early press (the trial
+    # would wait for another press; the budget ends the run)
+    d2 = base({"t": {"events": [{"on": "s"}], "after": [{"mark": "go"}],
+                     "response": {"role": "r", "choices": ["left"], "from": "s", "duration_s": 0}}},
+              [{"name": "l", "trial": "t"}])
+    r2 = Run(ctx, "r5_wait_nodeadline", d2, args=["--participant", "script:" + os.path.join(ctx.out, "early.csv"), "--max-trials", "1",
+                                                  "--test-plan-early", repr(late), "--max-seconds", "3"])
+    check(r2.rc != 0 and "budget" in r2.err and not any(e["kind"] == "mark" for e in r2.events),
+          "no deadline: the early press does not end the window: rc %d %s" % (r2.rc, r2.err[:200]))
+    # the same press after the final onset is a response
+    with open(os.path.join(ctx.out, "late.csv"), "w", newline="\n") as f:
+        f.write("trial_index,response,rt_s,hold_s\n0,left,0.005,0.05\n")
+    r3 = Run(ctx, "r5_wait_valid", d2, args=["--participant", "script:" + os.path.join(ctx.out, "late.csv"), "--max-trials", "1",
+                                             "--test-plan-early", repr(late)])
+    check(r3.rc == 0 and len(r3.trials) == 1 and r3.trials[0]["response"] == "left" and abs(float(r3.trials[0]["rt_s"]) - 0.005) < 1e-6,
+          "a press after the final onset is the response: %s %s" % (r3.trials[:1], r3.err[:200]))
+
+
 TESTS = [t_nested, t_if_unless, t_empty_and_zero, t_loop, t_requeue, t_track_ends, t_lookup_keys, t_triggers, t_after_timing, t_outcomes,
          t_method_update, t_seeds, t_refused, t_unused_stim, t_record_data, t_fix_density, t_fix_key_reapply, t_fix_stale_rdk,
          t_fix_timeout_values, t_fix_any_key, t_fix_from_in_if, t_fix_shown_twice, t_fix_vars_data, t_fix_sound_twice, t_fix_rdk_limit,
          t_fix_record_inherit, t_fix_backward_at, t_fix_refusals, t_fix_michelson_order, t_fix_texture_vars, t_fix_walk_budget,
          t_fix_data_set, t_fix_check_all_leaves, t_fix_release_order, t_fix_key_var_reapply,
-         t_r2_release_other_template, t_r2_yield_draws_nothing, t_r2_low, t_r2_relaxed, t_r4_leaf_loop_done_track, t_r4_requeue_full]
+         t_r2_release_other_template, t_r2_yield_draws_nothing, t_r2_low, t_r2_relaxed, t_r4_leaf_loop_done_track, t_r4_requeue_full,
+         t_r5_wait_final]
 
 
 def main():

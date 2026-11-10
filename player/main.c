@@ -18,7 +18,9 @@
  * --hang-at-trial N stops the frame loop in trial N (tests: the panic
  * watchdog's case, tests/player/real_test.py). --test-lose-code N: the
  * screen never writes the Nth code at a flip, as a canceled trigger
- * (tests: the device records' matching).
+ * (tests: the device records' matching). --test-plan-early S: a response's
+ * plan onset S seconds before the timeline's, as a landing frame shown late
+ * gives (tests: the wait for the flip record).
  *
  * Exit code: 0; 1 when the pack, the definition or the rig is refused or
  * the run failed (the message goes to stderr); 2 for a bad argument; 3
@@ -27,6 +29,7 @@
  */
 #include "player.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -62,6 +65,7 @@ int main(int argc, char** argv) {
         else if (!strcmp(s, "--windowed")) a.windowed = true;
         else if (!strcmp(s, "--hang-at-trial") && v) { a.hang_trial = atoi(v) + 1; i++; }
         else if (!strcmp(s, "--test-lose-code") && v) { a.lose_code = atoi(v); i++; }
+        else if (!strcmp(s, "--test-plan-early") && v) { a.plan_early_ns = (int64_t)llround(atof(v) * 1e9); i++; }
         else if (!strcmp(s, "--trace-channels") && v) { a.trace_path = v; i++; }
         else if (!strcmp(s, "--rdk-buffer") && v) { a.rdk_buffer = atoi(v); i++; }
         else if (!strcmp(s, "--field") && v) {
