@@ -688,6 +688,15 @@ static int pl_rdk_open(pl_player* p, pl_stim* s) {
     double density = 0, w = 0, h = 0, coh = 0, dir = 0, speed = 0;
     const char* v;
     memset(&rd, 0, sizeof rd);
+    /* the field is opened at load, before any trial has a value */
+    {
+        static const char* const lit[] = { "count", "density", "sets", "w", "h", "lifetime_s", "lifetime_frames", "frame_s" };
+        size_t i;
+        for (i = 0; i < sizeof lit / sizeof lit[0]; i++) {
+            const yexp_prop* pr = yexp_prop_get(d->props, d->n_props, lit[i]);
+            if (pr && !pl_value_static(pr->value)) { pl_fail(p, "stimulus '%s': '%s' on an rdk must be a literal: the field is opened at load", d->name, lit[i]); return -1; }
+        }
+    }
     if (pl_prop_int(p, d, "count", &count) < 0 || pl_prop_num(p, d, "density", &density) < 0 ||
         pl_prop_int(p, d, "sets", &sets) < 0 || pl_prop_num(p, d, "w", &w) < 0 || pl_prop_num(p, d, "h", &h) < 0 ||
         pl_prop_int(p, d, "lifetime_frames", &lf) < 0)
