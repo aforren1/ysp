@@ -613,6 +613,12 @@ Steps:
 | `{"mark": NAME}` | `YTL_MARK`, code = NAME's index |
 | `{"if": "$bool", "steps": [...]}`, `{"unless": ...}` | the steps go in the table when the variable is true (false) as the table is built |
 
+Note: `at_s` is trial time in `after` as in `events`, not time from
+`after`'s start. A step in `after` that follows `{"at_s": t}` with `t`
+before `after`'s start goes at `t`. On a template with no response,
+`after` starts at the events' end, so such a step can land while `events`
+still runs (the player, 2026-11-10; the format does not refuse it).
+
 Eases are ysp/timeline.h's names in lower case (`"linear"`,
 `"cosine"`, `"cubic_out"`, ...). The player gives each stimulus
 property that a step drives a channel and an `ygfx_bind` row, and runs

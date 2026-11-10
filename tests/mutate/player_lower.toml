@@ -242,3 +242,19 @@ test = "player"
 why = "Round 2 low item: refused at load (t_r2_low)."
 find = '''                if (strcmp(n[i].vars[a].key, n[i].data[b].key) == 0) {'''
 replace = '''                if (0) {'''
+
+[[mutant]]
+id = "pl-29"
+name = "the container-start limit not checked"
+test = "player"
+why = "Round 3 item 2: 2e12 starts are refused at load (t_fix_walk_budget)."
+find = '''        if (visits > PL_MAX_CONTAINER_VISITS) {'''
+replace = '''        if (0) {'''
+
+[[mutant]]
+id = "pl-30"
+name = "nested container starts not counted"
+test = "player"
+why = "Round 3 item 2: the bound multiplies down the tree."
+find = '''        sum += starts + starts * pl_container_visits(p, n[i].children, n[i].n_children);'''
+replace = '''        sum += starts;'''

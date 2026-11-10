@@ -767,6 +767,15 @@ def t_fix_walk_budget(ctx):
     d4 = base({"t": {"events": []}}, [{"name": "c", "repetitions": 1000, "timeline": [{"name": "d", "repetitions": 1000, "timeline": [{"name": "e", "repetitions": 11, "timeline": [{"name": "l", "trial": "t"}]}]}]}])
     r4 = Run(ctx, "fix_seeds_over", d4)
     check(r4.rc != 0 and "11000000" in r4.err and not os.path.exists(r4.data), "past the leaf-run bound: refused at load: %s" % r4.err)
+    # container starts: bounded at load as leaf runs are
+    d5 = base({"t": {"events": [{"wait_s": 0.02}]}}, [{"name": "c", "repetitions": 1000000, "timeline": [{"name": "c2", "repetitions": 1000000, "timeline": [{"name": "c3", "timeline": []}]}]},
+                                                     {"name": "l", "trial": "t"}])
+    r5 = Run(ctx, "fix_visits_over", d5)
+    check(r5.rc != 0 and "starts its containers" in r5.err and "10000000" in r5.err and not os.path.exists(r5.data), "past the container bound: refused at load: %s" % r5.err)
+    d6 = base({"t": {"events": [{"wait_s": 0.02}]}}, [{"name": "c", "repetitions": 4000, "timeline": [{"name": "c2", "repetitions": 1000, "timeline": []}]},
+                                                     {"name": "l", "trial": "t"}])
+    r6 = Run(ctx, "fix_visits_under", d6)
+    check(r6.rc == 0 and len(r6.trials) == 1 and r6.count("frames.csv") > 900, "4,004,000 container starts, then the trial: %s" % r6.err)
 
 
 def t_fix_data_set(ctx):

@@ -52,6 +52,9 @@ enum {
                               * for at load; a longer one is refused there   */
     PL_MAX_LEAF_RUNS  = 10000000, /* leaf runs a tree can make (skipped ones
                               * too), sized at load: 24 bytes each          */
+    PL_MAX_CONTAINER_VISITS = 10000000, /* container starts a tree can make:
+                              * each costs a walk step, 4096 a frame, so
+                              * this is at most about 41 s of blank frames  */
     PL_MAX_TEXT       = 4096,  /* bytes of one value's text: ysp/table.h's
                               * longest field, so the files read back         */
     PL_WALK_PER_FRAME = 4096   /* tree-walk steps before the frame goes on    */

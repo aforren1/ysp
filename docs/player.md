@@ -90,6 +90,7 @@ forced. The Report section lists them with the evidence.
 | A frame with no trial (before the first trial, between trials, a yield frame) | Draws nothing |
 | A stimulus left on at a trial's end | `<s>_offset_s` is the onset of the trial's last frame |
 | One node with the same name in `vars` and `data` | Refused at load |
+| Container starts in one session | The loader bounds them as it bounds leaf runs (repetitions, table rows, `loop.max`): each start is a walk step, 4096 a frame. A tree that can start its containers more than 10,000,000 times (about 40 s of blank frames at 60 Hz) is refused at load |
 | A table column in one leaf and a `vars` name in another | One column, as for a jitter in one leaf and a text in another: each leaf's row writes its own value, and a column whose leaves give different types holds text (a duration as its exact decimal) |
 | A channel's trace | `--trace-channels FILE` writes every channel per frame: a test's view, off by default |
 | A trial row's timing columns | Written when their frames' flip records arrive (a pending-row ring), so `<s>_offset_s` of a stimulus turned off at the trial's last frame is known |
@@ -141,6 +142,14 @@ a program cache; `display.min_tier` refusing a start; bound roles and
 `yrig_open_device()`; a `ydev_rule` on a response trigger; a `ydev` output
 role behind `ydev_trigger_channel()`; and the frame loop as `yscr_run`
 when 4.2.1 exists.
+
+Before a real run, revisit "can time out". The loader (ysp/experiment.h
+0.1.2) and the player take a response with `duration_s` 0 as one that
+always ends with a press: `$rt_s` reads in a number key, and a lookup by
+`$response` needs no `""` key. On a real display ysp/response.h can end a
+window with `YRSP_R_ENDED_EARLY` and no valid press, so such a trial can reach these
+values with no press. In `--sim` the participant always presses, so no
+test sees it.
 
 ## Not verified
 

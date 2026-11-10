@@ -1492,6 +1492,25 @@ static double pl_leaf_runs(pl_player* p, const yexp_node* n, int count) {
     return sum;
 }
 
+/* Container starts the walk makes, bounded as pl_leaf_runs() bounds leaves:
+ * each iteration of a container (a loop pass, a repetition, a row) is one
+ * start, with or without a leaf under it. */
+static double pl_container_visits(pl_player* p, const yexp_node* n, int count) {
+    double sum = 0;
+    int i;
+    for (i = 0; i < count; i++) {
+        double loops, rows, starts;
+        const ytb_table* t;
+        if (n[i].trial) continue;
+        loops = n[i].has_loop ? (double)(n[i].loop_max > 0 ? n[i].loop_max : 1) : 1.0;
+        t = n[i].table ? pl_table_get(p, n[i].table) : NULL;
+        rows = n[i].table ? (t ? (double)t->n_rows : 0) : 1.0;
+        starts = loops * (double)(n[i].repetitions > 0 ? n[i].repetitions : 1) * rows;
+        sum += starts + starts * pl_container_visits(p, n[i].children, n[i].n_children);
+    }
+    return sum;
+}
+
 /* Whether any leaf can run: a container over a table with no rows, or with
  * no children, runs nothing (`if` is read at run time and does not count). */
 static bool pl_runnable(pl_player* p, const yexp_node* n, int count) {
@@ -2015,6 +2034,14 @@ int pl_load(pl_player* p, const pl_args* a) {
             return -1;
         }
         p->n_leaf_runs_max = (int)runs;
+    }
+    {
+        double visits = pl_container_visits(p, p->def->timeline, p->def->n_timeline);
+        if (visits > PL_MAX_CONTAINER_VISITS) {
+            pl_fail(p, "the tree starts its containers %.0f times (repetitions x rows x loop max); the walk takes at most %d, about %d s of blank frames at 60 Hz",
+                    visits, PL_MAX_CONTAINER_VISITS, PL_MAX_CONTAINER_VISITS / PL_WALK_PER_FRAME / 60);
+            return -1;
+        }
     }
     if (pl_text_bound(p) < 0 || pl_rdk_steps(p) < 0) return -1;
     for (i = 0; i < p->def->n_templates; i++)
