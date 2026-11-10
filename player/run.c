@@ -1759,7 +1759,10 @@ static int pl_on_fired(pl_player* p, const yscr_frame* f, int n) {
         }
         case YTL_TRIGGER: {
             yds_event ev;
-            int ok = yscr_trigger(&p->scr, e->target, (uint32_t)e->code);
+            /* tests: a code that the screen never writes, as a trigger of a
+             * flip that was not shown (CANCELED) gets no device record */
+            bool lose = p->args.lose_code && ++p->n_flip_codes == p->args.lose_code;
+            int ok = lose ? YSCR_OK : yscr_trigger(&p->scr, e->target, (uint32_t)e->code);
             pl_out_stats* o = &p->out_now[e->target];
             o->n++;
             if (ok != YSCR_OK) o->failed++;

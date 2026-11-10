@@ -612,6 +612,44 @@ def case_noafter(ctx):
         pty.close()
 
 
+def case_lost(ctx):
+    """The oddball with its 3rd code at a flip never written
+    (--test-lose-code 3), as a canceled trigger: that trial counts it failed,
+    and every later record still goes to its own trial."""
+    print("== lost", flush=True)
+    pack, dd = build_pack(ctx, "oddball")
+    frm, duration, min_rt = the_response(dd)
+    pty = Pty()
+    try:
+        rig = make_rig(ctx, "lost", pty.a)
+        sim_dir, trials, events, frames = plan_from_sim(ctx, "oddball", pack, rig, ctx.trials)
+        plan = timing_plan(trials, events, frames, frm, duration)
+        keys = key_of(dd)
+        for tr in plan:
+            tr["_duration"] = duration
+            tr["name"] = tr["key"]
+            tr["key"] = keys[tr["key"]]
+        rc, d, sent, out = run_real(ctx, "lost", pack, plan, rig, extra=ctx.odd_extra + ["--test-lose-code", "3"])
+        print("  lost: exit %s" % rc, flush=True)
+        if not check(rc == 0, "lost: exit %s: %s" % (rc, out.strip()[-300:])):
+            return
+        rows = read_csv(os.path.join(d, "trials.csv"))
+        events = read_csv(os.path.join(d, "events.csv"))
+        lost = rows[2]
+        flips = [e for e in events if e["kind"] == "out" and int(e["flags"]) & 0x20]
+        check(not any(e["trial_index"] == "2" for e in flips), "lost: trial 2 has a code at the flip in events.csv")
+        check(lost["trig_failed"] == "1", "lost: trial 2 trig_failed %s, not 1" % lost["trig_failed"])
+        for e in flips:
+            check(int(e["code"]) == int(rows[int(e["trial_index"])]["code"]), "lost: a code at the flip in trial %s is %s, its row's %s" %
+                  (e["trial_index"], e["code"], rows[int(e["trial_index"])]["code"]))
+        for row in rows:
+            if row["trial_index"] != "2":
+                check(row["trig_failed"] == "0", "lost: trial %s trig_failed %s" % (row["trial_index"], row["trig_failed"]))
+        print("  lost: %d codes at the flip for %d trials" % (len(flips), len(rows)), flush=True)
+    finally:
+        pty.close()
+
+
 def line_edit(dd):
     dd["devices"]["resp"]["family"] = ["line", "keyboard"]
 
@@ -903,7 +941,7 @@ def main():
         return 0
     ctx = Ctx(a)
     os.makedirs(ctx.out, exist_ok=True)
-    cases = ["rdk", "afc2", "stroop", "oddball", "noafter", "rule", "rule2", "fewer", "abort", "panic", "refuse", "alloc"]
+    cases = ["rdk", "afc2", "stroop", "oddball", "noafter", "lost", "rule", "rule2", "fewer", "abort", "panic", "refuse", "alloc"]
     for c in cases:
         if a.only and c != a.only:
             continue
@@ -917,6 +955,8 @@ def main():
             case_rule(ctx)
         elif c == "noafter":
             case_noafter(ctx)
+        elif c == "lost":
+            case_lost(ctx)
         elif c == "rule2":
             case_rule2(ctx)
         elif c == "fewer":

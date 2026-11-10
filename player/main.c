@@ -16,7 +16,9 @@
  * trial_index,response,rt_s,hold_s). DIR must not exist.
  * --rdk-buffer sets an RDK's step buffer (tests: a small one flushes often).
  * --hang-at-trial N stops the frame loop in trial N (tests: the panic
- * watchdog's case, tests/player/real_test.py).
+ * watchdog's case, tests/player/real_test.py). --test-lose-code N: the
+ * screen never writes the Nth code at a flip, as a canceled trigger
+ * (tests: the device records' matching).
  *
  * Exit code: 0; 1 when the pack, the definition or the rig is refused or
  * the run failed (the message goes to stderr); 2 for a bad argument; 3
@@ -59,6 +61,7 @@ int main(int argc, char** argv) {
         else if (!strcmp(s, "--measure")) a.measure = true;
         else if (!strcmp(s, "--windowed")) a.windowed = true;
         else if (!strcmp(s, "--hang-at-trial") && v) { a.hang_trial = atoi(v) + 1; i++; }
+        else if (!strcmp(s, "--test-lose-code") && v) { a.lose_code = atoi(v); i++; }
         else if (!strcmp(s, "--trace-channels") && v) { a.trace_path = v; i++; }
         else if (!strcmp(s, "--rdk-buffer") && v) { a.rdk_buffer = atoi(v); i++; }
         else if (!strcmp(s, "--field") && v) {
@@ -83,7 +86,7 @@ int main(int argc, char** argv) {
         fprintf(stderr, "ysp_player: --participant and --rt are for --sim: a real run's participant is real\n");
         return 2;
     }
-    if (a.sim && (a.windowed || a.hang_trial)) { fprintf(stderr, "ysp_player: --windowed and --hang-at-trial are for a real run\n"); return 2; }
+    if (a.sim && (a.windowed || a.hang_trial || a.lose_code)) { fprintf(stderr, "ysp_player: --windowed, --hang-at-trial and --test-lose-code are for a real run\n"); return 2; }
 #if defined(YSCR_NO_SDL)
     if (!a.sim) { fprintf(stderr, "ysp_player: built without SDL (YSCR_NO_SDL): --sim only\n"); return 2; }
 #endif

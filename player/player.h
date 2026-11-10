@@ -371,6 +371,8 @@ typedef struct pl_args {
     bool  quiet;
     bool  measure;             /* real-clock cost of each frame's work      */
     bool  windowed;            /* a real run in a window (development)      */
+    int   lose_code;           /* tests: the screen never writes the Nth code
+                                * at a flip (1 = the first); 0: none        */
     int   hang_trial;          /* tests: the frame loop stops in session
                                 * trial hang_trial - 1 (the panic watchdog's
                                 * case); 0: never                          */
@@ -487,6 +489,7 @@ struct pl_player {
     int*        out_tail;
     pl_rule_arm rule_arms[YSCR_MAX_TRIGGERS][PL_RULE_ARMS];   /* per output channel */
     int         n_rule_arms[YSCR_MAX_TRIGGERS];
+    int         n_flip_codes;      /* codes at a flip so far (--test-lose-code) */
     yrsp_collector* collectors;    /* one per template with a response, in
                                     * one array: every one hears every input */
     int         n_collectors;
