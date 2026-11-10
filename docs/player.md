@@ -114,20 +114,22 @@ on the virtual clock, unless the row says otherwise.
 | Check | Result |
 |---|---|
 | The four worked examples against their C programs (`tests/player/compare.py`) | RDK, 2AFC: every shared column exact, the dots' digest and the steps file included (the program's trial seed from `--trial-seeds`, the 2AFC's timing from `--design-timing`, both test-only). Stroop: exact except columns the format derives differently (`block` text, `too_slow`). Oddball (`trigger_flip.c`): not comparable column for column; the shared mechanism checked instead. The report lists each column |
-| `tests/player/player_test.py` | 36 cases of unusual shapes and of each fix of the review (a lookup in every key type, nesting, `if` on a node and on a step, `loop`, `requeue`, a track that ends early, density, key re-application, stale RDK data, timeouts, any-key responses, a stimulus shown twice, `vars` and `data` of one name, repeated sounds, a backward `at_s`, the walk's budget, the data set): pass |
+| `tests/player/player_test.py` | 40 cases of unusual shapes and of each fix of both reviews (round 2: `to` and `then` and the trial's end, arrays in `vars` and `data`, a key held into another template's trial, yield frames, the load-time bounds, a stimulus left on, the definitions experiment.h 0.1.2 accepts; a lookup in every key type, nesting, `if` on a node and on a step, `loop`, `requeue`, a track that ends early, density, key re-application, stale RDK data, timeouts, any-key responses, a stimulus shown twice, `vars` and `data` of one name, repeated sounds, a backward `at_s`, the walk's budget, the data set): pass |
 | `tests/player/eval_test.c` | 52 checks: pass |
-| ASan and UBSan (`setarch -R`): the four examples, the unit test, the 36 cases, the comparison | Clean |
-| Fuzz, ASan and UBSan: `tests/fuzz/player_fuzz.c` over the corpus of `tests/fuzz/player_corpus.py` (1,017 seeds, every key of ysp/experiment.h's table in a valid definition) and the four examples; token swap, byte flip, key insertion, key deletion; a quarter of the inputs with no trial cap; 16 processes | 200,000 inputs on the code before its last small change, 26,870 loaded, 26,043 ran to the end, no report. 20,000 inputs on the final code, no report |
-| gcov, `-O0`, the seeds and 30,000 mutated inputs | `lower.c` 92.3 %, `run.c` 95.4 %, `host.c` 93.6 %, `eval.c` 84.5 % of lines. Not reached in `eval.c`: the AEP dims branch (AEP is refused), defensive cases of value kinds the loader does not produce (`YEXP_V_NONE`, a linspace or choice as a single value, unknown kinds) and errors for types the loader refuses (`no value where a number goes`, a non-contrast gamut, a gamut with no calibration) |
-| Mutants (`tests/mutate/player_{lower,run,eval,host}.toml`, built with the system tests) | 63 of 63 as expected: 61 killed, 2 kept as survivors with a note (a full row ring, and the weight of a leaf open in the per-frame yield). `experiment.toml`: 152 of 152 |
+| ASan and UBSan (`setarch -R`): the four examples, the unit test, the 40 cases, the comparison, and two review scripts of 31 definitions (the 20-minute RDK trial and 70,000 leaf runs among them) run to their ends | Clean. Each heavy job ran in a 6 GB memory scope; the system tests now stream their data files (peak 18 MB) |
+| Fuzz, ASan and UBSan: `tests/fuzz/player_fuzz.c` over the corpus of `tests/fuzz/player_corpus.py` (1,015 seeds, every key of ysp/experiment.h's table in a valid definition, arrays in `vars` and `data`, the values 0.1.2 accepts) and the four examples; token swap, byte flip, key insertion, key deletion; a quarter of the inputs with no trial cap; 8 processes | 200,000 inputs on the final code, 27,131 loaded, 26,338 ran to the end, no report |
+| gcov, `-O0`, the seeds and 30,000 mutated inputs | `lower.c` 92.1 %, `run.c` 95.5 %, `host.c` 95.4 %, `eval.c` 85.6 % of lines. Not reached in `eval.c`: the AEP dims branch (AEP is refused), defensive cases of value kinds the loader does not produce (`YEXP_V_NONE`, a linspace or choice as a single value, unknown kinds) and errors for types the loader refuses (`no value where a number goes`, a non-contrast gamut, a gamut with no calibration) |
+| Mutants (`tests/mutate/player_{lower,run,eval,host}.toml`, built with the system tests) | 76 of 76 as expected: 71 killed, 5 kept as survivors with a note (a full row ring, the weight of a leaf open in the per-frame yield, and three guards behind a load-time bound: the RDK buffer, the seed log, a value's text). `experiment.toml`: 169 of 169 |
 | Allocations in `pl_frame` (`player_alloc_test`) | 0 on all four examples |
 | The comparison (`tests/player/compare.py`) | No exact column differs; timeouts now in the RDK and 2AFC scripts |
-| Full ctest, Linux, `DISPLAY` unset | 120 of 120 |
+| Full ctest, Linux, `DISPLAY` unset | 120 of 120; the player and experiment tests of the sanitizer build, 9 of 9 |
 
 Frame work (`--measure`, Release, i5-14500, no other job of mine running,
-desktop open, load average about 2, three runs of each of the four examples):
-largest frame 20 to 50 us, largest trial start 14 to 32 us, 0 frames over
-16 ms. The simulated display has no
+desktop open, load average 1.4 to 2.9, three runs of each of the four
+examples, after round 2): largest frame 29 to 67 us, largest trial start 17
+to 58 us, 0 frames over 16 ms. Before round 2 (load average about 2): 20 to
+50 us and 14 to 32 us. The spread between runs of one example (2AFC: 50 to
+67 us) is as large as the change, so this is no measured regression. The simulated display has no
 GPU cost, so this is the CPU part of a frame only.
 
 ## What a real-window run needs next
