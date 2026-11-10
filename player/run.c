@@ -1794,6 +1794,11 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
         ygfx_begin(&p->gfx, f);
         ygfx_end(&p->gfx);
     }
+    if (p->args.hang_trial && p->in_trial && p->global_trial == p->args.hang_trial && f->index - p->trial_first_frame >= 10) {
+        /* tests: a loop that never comes back, as a hung program's, so the
+         * panic watchdog's case can run (ysp/screen.h, PANIC) */
+        for (;;) yrt_sleep_ns(YRT_MS(100));
+    }
     if (p->args.max_seconds && f->onset - (p->t0_session ? p->t0_session : f->onset) > p->args.max_seconds * 1000000000LL) {
         pl_fail(p, "the session passed its budget of %lld virtual seconds (a window with no deadline and no scripted press?)", (long long)p->args.max_seconds);
         return -1;

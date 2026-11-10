@@ -71,7 +71,9 @@ enum {
     PL_OUT_PENDING    = 64,    /* a channel's codes between the fire and its
                               * device record (a real run)                  */
     PL_DEV_RING       = 4096,  /* device records between two frames          */
-    PL_DEV_DRAIN      = 256    /* records read per drain call                */
+    PL_DEV_DRAIN      = 256,   /* records read per drain call                */
+    PL_LEAD_IN        = 30     /* a real run's blank frames before the data
+                              * set opens: about 0.5 s at 60 Hz             */
 };
 /* pl_val.flags beyond the loader's: a trial seed (text is "x" and 16 hex digits,
  * the spelling of the trial_seed column); a session field that was not given
@@ -343,6 +345,9 @@ typedef struct pl_args {
     bool  quiet;
     bool  measure;             /* real-clock cost of each frame's work      */
     bool  windowed;            /* a real run in a window (development)      */
+    int   hang_trial;          /* tests: the frame loop stops in session
+                                * trial hang_trial - 1 (the panic watchdog's
+                                * case); 0: never                          */
     const char* trace_path;    /* a test's view of every channel per frame  */
     int   rdk_buffer;          /* tests: an RDK's step buffer, to make it
                                 * flush often; 0 is PL_RDK_STEPS             */
@@ -466,6 +471,7 @@ struct pl_player {
     int         abort_presses;
     int64_t     abort_ns;
     int         abort_trial;       /* the trial that was running, or -1  */
+    char        panic_path[PL_MAX_PATH];   /* DIR/panic.json             */
 
     /* channels: one per stimulus visibility and per driven property */
     ytl_timeline tl;

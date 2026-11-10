@@ -15,9 +15,14 @@
 #include <string.h>
 #if defined(_WIN32)
 #include <direct.h>
+#include <fcntl.h>
+#include <io.h>
+#include <sys/stat.h>
 #define mkdir(path, mode) _mkdir(path)
 #else
+#include <fcntl.h>
 #include <sys/stat.h>
+#include <unistd.h>
 #endif
 
 void pl_fail(pl_player* p, const char* fmt, ...) {
@@ -1953,6 +1958,29 @@ static const ygfx_cache* pl_program_cache(pl_player* p) {
     return ygfx_file_cache_init(&p->pcache, dir);
 }
 
+/* The panic watchdog's last words (ysp/screen.h, PANIC), on its own thread
+ * while the frame thread hangs: the process ends next, session.json stays
+ * "closed": false, and the rows already written are in the OS. A file of
+ * its own beside them says what ended it. Plain open() and write(): the
+ * hung thread may hold any lock of the C library's streams. */
+static void pl_panic_fn(void* ctx) {
+    pl_player* p = (pl_player*)ctx;
+    char buf[256];
+    int n = snprintf(buf, sizeof buf, "{\n  \"format\": \"ysp-panic\",\n  \"trial_index\": %d,\n  \"trials_ended\": %d\n}\n",
+                     p->in_trial ? p->global_trial - 1 : -1, p->trials_done);
+#if defined(_WIN32)
+    int fd = _open(p->panic_path, _O_WRONLY | _O_CREAT | _O_TRUNC | _O_BINARY, _S_IREAD | _S_IWRITE);
+    if (fd < 0) return;
+    if (n > 0) (void)_write(fd, buf, (unsigned)n);
+    _close(fd);
+#else
+    int fd = open(p->panic_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) return;
+    if (n > 0 && write(fd, buf, (size_t)n) < 0) { /* nothing more to do: the process ends */ }
+    close(fd);
+#endif
+}
+
 typedef struct pl_open_ctx { pl_player* p; ygfx_desc gd; } pl_open_ctx;
 
 /* The screen's context hook (ysp/screen.h, CONTEXT HOOK): the mode is known
@@ -1978,6 +2006,36 @@ static void pl_open_hook(void* ctx, yscr_screen* s) {
     (void)ygfx_open_start(&p->gfx, &c->gd);
 }
 
+/* A real run's first frames, blank, before the data set opens: a frame
+ * after a long setup is often late (ysp/gfx.h, PRIME), and the screen's
+ * open judges its settle frames without counting their tier, so these
+ * frames' records give display.min_tier the tier this display gives. A
+ * display below it refuses the start here, before any file is written. */
+static int pl_lead_in(pl_player* p) {
+    yscr_frame f;
+    int i, rc;
+    for (i = 0; i < PL_LEAD_IN; i++) {
+        rc = yscr_begin(&p->scr, &f);
+        if (rc == YSCR_QUIT) { pl_fail(p, "stopped by the operator before the first trial"); return -1; }
+        if (rc != YSCR_OK) { pl_fail(p, "the screen: %s", yscr_error(&p->scr)); return -1; }
+        ygfx_begin(&p->gfx, &f);
+        ygfx_end(&p->gfx);
+        if (yscr_flip(&p->scr) != YSCR_OK) { pl_fail(p, "the flip: %s", yscr_error(&p->scr)); return -1; }
+    }
+    /* the last records: one or two frames are in flight */
+    if (yscr_wait_flip(&p->scr, NULL) != YSCR_OK) { pl_fail(p, "the flip: %s", yscr_error(&p->scr)); return -1; }
+    yscr_get_caps(&p->scr, &p->caps);
+    if (p->def->min_tier && (p->caps.worst_tier == 0 || (int)p->caps.worst_tier > p->def->min_tier)) {
+        char line[1024];
+        yscr_describe(&p->scr, line, sizeof line);
+        pl_fail(p, "display.min_tier is %d, and this display's flips are tier %d, so the session does not start (a window gives tier 2 at best; "
+                   "tier 1 needs a fullscreen flip the OS observes, ysp/screen.h TIERS): %s",
+                p->def->min_tier, (int)p->caps.worst_tier, line);
+        return -1;
+    }
+    return 0;
+}
+
 /* The screen and the gfx. --sim: the simulated display. A real run: the
  * backend AUTO picks (GLX_OML on X11), fullscreen unless --windowed, the
  * panic watchdog armed, compiled programs cached, and display.min_tier
@@ -1994,7 +2052,13 @@ static int pl_screen_open(pl_player* p) {
     sd.backend = p->args.sim ? YSCR_BACKEND_SIM : YSCR_BACKEND_AUTO;
     sd.windowed = p->args.sim || p->args.windowed;
     sd.min_tier = p->def->min_tier;
-    if (!p->args.sim && !sd.windowed) sd.panic = true;   /* Shift+Esc 3 times when the loop hangs */
+    if (!p->args.sim && !sd.windowed) {
+        /* Shift+Esc 3 times when the loop hangs */
+        sd.panic = true;
+        sd.panic_fn = pl_panic_fn;
+        sd.panic_ctx = p;
+        snprintf(p->panic_path, sizeof p->panic_path, "%s/panic.json", p->args.out_dir);
+    }
     c.gd.background[0] = (float)p->def->background[0];
     c.gd.background[1] = (float)p->def->background[1];
     c.gd.background[2] = (float)p->def->background[2];
@@ -2038,15 +2102,8 @@ static int pl_screen_open(pl_player* p) {
     p->gfx_open = true;
     /* the built-in kinds' first draws now, not on a trial's frames */
     if (ygfx_prime(&p->gfx) < 0) { pl_fail(p, "the gfx: %s", ygfx_error(&p->gfx)); return -1; }
+    if (!p->args.sim && pl_lead_in(p) < 0) return -1;
     yscr_get_caps(&p->scr, &p->caps);
-    if (!p->args.sim && p->def->min_tier && (p->caps.worst_tier == 0 || (int)p->caps.worst_tier > p->def->min_tier)) {
-        char line[512];
-        yscr_describe(&p->scr, line, sizeof line);
-        pl_fail(p, "display.min_tier is %d, and this display's flips are tier %d (%s); a window gives tier 2 at best, so run fullscreen, "
-                   "or on a display that gives the tier",
-                p->def->min_tier, (int)p->caps.worst_tier, line);
-        return -1;
-    }
     return 0;
 }
 
