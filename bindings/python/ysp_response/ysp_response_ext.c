@@ -1273,7 +1273,7 @@ PyMODINIT_FUNC PyInit_response(void) {
     Py_DECREF(base2);
     RspStateError = rsp_add_exc(m, "ysp.response.StateError", "StateError", RspError);
     if (!RspArgumentError || !RspStateError) goto fail;
-    if (PyModule_AddStringConstant(m, "__version__", YRSP_VERSION_STRING) < 0) goto fail;   /* no binding change since v0.8.0 */
+    if (PyModule_AddStringConstant(m, "__version__", YRSP_VERSION_STRING) < 0) goto fail;   /* no binding change since v0.8.0; v0.9.0's yrsp_set_wait_final() is not bound */
     if (PyModule_AddStringConstant(m, "INPUT_VERSION", YIN_VERSION_STRING) < 0) goto fail;
 #define C(name, v) if (PyModule_AddIntConstant(m, name, (long)(v)) < 0) goto fail;
     /* ysp/input.h */

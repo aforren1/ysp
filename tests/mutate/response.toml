@@ -745,3 +745,54 @@ test = "response"
 why = "B3: a column bound to the caller's row with one of the names is the caller's; setting it fails and the row is lost."
 find = ''' && ytr_data_col_settable(w, col)) {'''
 replace = ''') {'''
+
+# --- waiting for the final onset (v0.9.0) ------------------------------------
+
+[[mutant]]
+id = "wf-01"
+name = "a press ends the window on the plan"
+test = "response"
+why = "With yrsp_set_wait_final() the final onset decides: a press in the gap must wait for it."
+find = '''    if (!yrsp__settled(c)) return;'''
+replace = ''''''
+
+[[mutant]]
+id = "wf-02"
+name = "the wait has no bound"
+test = "response"
+why = "A frame never shown has no record: the bound takes the plan, or the window never ends."
+find = '''    return !c->wait_ns || (c->have_onset && (c->onset.final || c->t_now >= c->onset.t_ns + c->wait_ns));'''
+replace = '''    return !c->wait_ns || (c->have_onset && c->onset.final);'''
+
+[[mutant]]
+id = "wf-03"
+name = "the wait outlives its arm"
+test = "response"
+why = "yrsp_set_wait_final() lasts one arm, as yrsp_set_window() does."
+find = '''    c->wait_ns = 0;                    /* yrsp_set_wait_final() lasts one arm */'''
+replace = ''''''
+
+[[mutant]]
+id = "wf-04"
+name = "the plan's deadline ends the window"
+test = "response"
+why = "The deadline counts from the final onset: on a plan it must wait too."
+find = '''        if (!yrsp__settled(c)) return c->status;
+    }'''
+replace = '''    }'''
+
+[[mutant]]
+id = "wf-05"
+name = "the bound does not end a held press"
+test = "response"
+why = "When the wait runs out, yrsp_update() ends the window at the press it held."
+find = '''        yrsp__check_end(c);   /* the wait may have run out: the press it held */'''
+replace = ''''''
+
+[[mutant]]
+id = "wf-06"
+name = "the bound counts from the arm"
+test = "response"
+why = "The bound is from the onset's time; from the arm it ends the wait before the record could come."
+find = '''c->t_now >= c->onset.t_ns + c->wait_ns'''
+replace = '''c->t_now >= c->t_arm + c->wait_ns'''

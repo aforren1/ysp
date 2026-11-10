@@ -1,4 +1,4 @@
-/* ysp/response.h - v0.8.1 - public domain single-header response collector
+/* ysp/response.h - v0.9.0 - public domain single-header response collector
  *
  *   Turns timestamped input events from any device into the response of a
  *   trial: which key or button, when, measured from the stimulus onset that
@@ -197,6 +197,19 @@
  *   final (o.final), while armed: a scripted participant or a gaze check
  *   that acts on the stimulus's onset needs no copy of the flip record.
  *   It returns false before an onset comes.
+ *   WAITING FOR THE FINAL ONSET (v0.9, opt-in). yrsp_set_wait_final(c,
+ *   max_wait_ns), after yrsp_arm(), for this window: a press does not end
+ *   the window, and neither does the deadline, while the onset is a plan.
+ *   When the final onset comes (or max_wait_ns after the plan's onset, as
+ *   yrsp_update() sees the time: a frame never shown has no record), the
+ *   window ends as it would have with that onset from the start: at the
+ *   earliest press that is a response against it, or at its deadline. A
+ *   press that the final onset makes EARLY or an ANTICIPATION leaves the
+ *   window open, so a window with no deadline cannot end on it
+ *   (ENDED_EARLY needs a press that ended the window). The cost: a press
+ *   in the gap ends the window up to the final onset's arrival later
+ *   (about two frames on GLX_OML). 0 turns it off; yrsp_arm() turns it
+ *   off.
  *
  *   ---------------------------------------------------------------------
  *   THE FRAME LOOP (v0.4)
@@ -526,6 +539,11 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.9.0 - yrsp_set_wait_final(): for this window, no end on a press
+ *          or a deadline until the final onset (or a bound), so a window
+ *          with no deadline cannot end on a press that the final onset
+ *          makes early (the player, docs/player.md). Off unless called;
+ *          the collector grew 24 bytes.
  *   v0.8.1 - yrsp_data_set() asks ysp/trials.h v0.7.0's
  *          ytr_data_col_settable() whether to set a column, where it read
  *          the data writer's private column record (docs/
@@ -681,9 +699,9 @@
 #define YSP_RESPONSE_H_INCLUDED
 
 #define YRSP_VERSION_MAJOR 0
-#define YRSP_VERSION_MINOR 8
-#define YRSP_VERSION_PATCH 1
-#define YRSP_VERSION_STRING "0.8.1"
+#define YRSP_VERSION_MINOR 9
+#define YRSP_VERSION_PATCH 0
+#define YRSP_VERSION_STRING "0.9.0"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -1034,6 +1052,9 @@ typedef struct yrsp_collector {
     uint32_t       held_at_open;
     yrsp_sent      sent[YRSP_MAX_SENT];   /* v0.7: CODES SENT             */
     int32_t        n_sent, n_sent_total, have_sent;
+    int64_t        wait_ns;         /* v0.9: yrsp_set_wait_final(); 0 = off  */
+    int64_t        t_now;           /* the last yrsp_update()'s time         */
+    int32_t        reserved2_[2];
     char           error[160];
 } yrsp_collector;
 
@@ -1066,6 +1087,13 @@ YRSP_API int  yrsp_set_onset(yrsp_collector* c, const yrsp_onset* o);
  * Returns the status, YRSP_ERR_ARG for a value yrsp_open() would refuse,
  * or YRSP_ERR_STATE when the collector is not open or not armed. */
 YRSP_API int  yrsp_set_window(yrsp_collector* c, int64_t min_rt_ns, int64_t duration_ns);
+
+/* v0.9: until the next yrsp_arm(), a press or the deadline ends the window
+ * only once the onset is final, or max_wait_ns (0 = off, at most 1e6 s)
+ * after the onset as yrsp_update() sees the time (WAITING FOR THE FINAL
+ * ONSET). Call it after yrsp_arm(). Returns the status, YRSP_ERR_ARG for a
+ * negative or too long wait, or YRSP_ERR_STATE when not armed. */
+YRSP_API int  yrsp_set_wait_final(yrsp_collector* c, int64_t max_wait_ns);
 
 /* v0.8: the onset as it is now (a plan, or final: out->final) into *out.
  * false when not armed or no onset came since the arm. */
@@ -1710,12 +1738,19 @@ static void yrsp__reclassify(yrsp_collector* c) {
     }
 }
 
+/* v0.9: the onset may end the window: final, or waited for long enough,
+ * or no wait asked for (WAITING FOR THE FINAL ONSET). */
+static bool yrsp__settled(const yrsp_collector* c) {
+    return !c->wait_ns || (c->have_onset && (c->onset.final || c->t_now >= c->onset.t_ns + c->wait_ns));
+}
+
 /* Ends the window once enough responses are in (THE WINDOW). */
 static void yrsp__check_end(yrsp_collector* c) {
     int need, i, k, best = -1;
     int64_t prev_t = INT64_MIN;
     int prev_i = -1;
     if (!c->armed || c->finished || c->status != YRSP_OPEN || c->closing) return;
+    if (!yrsp__settled(c)) return;
     need = c->d.persist ? c->d.max_responses : 1;
     if (need <= 0) return;
     /* the need-th earliest response, ties by arrival */
@@ -1904,6 +1939,8 @@ YRSP_API void yrsp_arm(yrsp_collector* c, int64_t t_ns) {
     c->n_log = c->n_trace = c->n_lost = c->n_lost_trace = c->n_held = c->n_stray = 0;
     c->held_at_open = 0;
     c->n_sent = c->n_sent_total = c->have_sent = 0;
+    c->wait_ns = 0;                    /* yrsp_set_wait_final() lasts one arm */
+    c->t_now = t_ns;
     for (i = 0; i < c->d.n_choices; i++) {
         const yrsp_choice* h = &c->ch[i];
         yrsp__chan* ch = &c->chan[i];
@@ -1963,6 +2000,18 @@ YRSP_API int yrsp_set_window(yrsp_collector* c, int64_t min_rt_ns, int64_t durat
     return c->status;
 }
 
+YRSP_API int yrsp_set_wait_final(yrsp_collector* c, int64_t max_wait_ns) {
+    if (!c || !c->ok) return yrsp__err(c, YRSP_ERR_STATE, "yrsp_set_wait_final");
+    if (!c->armed) {
+        snprintf(c->error, sizeof c->error, "ysp_response: yrsp_set_wait_final: not armed (call it after yrsp_arm())");
+        return YRSP_ERR_STATE;
+    }
+    if (max_wait_ns < 0 || max_wait_ns > YRT_S(1e6)) return yrsp__err(c, YRSP_ERR_ARG, "yrsp_set_wait_final");
+    c->wait_ns = max_wait_ns;
+    yrsp__check_end(c);
+    return c->status;
+}
+
 YRSP_API bool yrsp_onset_now(const yrsp_collector* c, yrsp_onset* out) {
     if (!c || !c->ok || !c->armed || !c->have_onset || !out) return false;
     *out = c->onset;
@@ -2009,7 +2058,13 @@ YRSP_API int yrsp_feed(yrsp_collector* c, const yrsp_input* in) {
 
 YRSP_API int yrsp_update(yrsp_collector* c, int64_t now_ns) {
     if (!c || !c->ok) return yrsp__err(c, YRSP_ERR_STATE, "yrsp_update");
+    if (now_ns > c->t_now) c->t_now = now_ns;
     if (c->status != YRSP_OPEN || c->finished) return c->status;
+    if (c->wait_ns) {
+        yrsp__check_end(c);   /* the wait may have run out: the press it held */
+        if (c->status != YRSP_OPEN) return c->status;
+        if (!yrsp__settled(c)) return c->status;
+    }
     if (c->closing) {
         if (now_ns >= c->t_end + c->max_hold_ns) {
             c->closing = 0;

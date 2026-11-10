@@ -28,10 +28,11 @@ typedef struct rsp_api {
     int (*set_window)(yrsp_collector*, int64_t, int64_t);           /* v0.8 */
     bool (*onset_now)(const yrsp_collector*, yrsp_onset*);           /* v0.8 */
     int (*set_origin)(yrsp_collector*, int, float, float);           /* v0.8 */
+    int (*set_wait_final)(yrsp_collector*, int64_t);                 /* v0.9 */
 } rsp_api;
 
 static const rsp_api g_api = { yrsp_open, yrsp_close, yrsp_error, yrsp_arm, yrsp_update, yrsp_params, yrsp_set_sent,
-                               yrsp_set_window, yrsp_onset_now, yrsp_set_origin };
+                               yrsp_set_window, yrsp_onset_now, yrsp_set_origin, yrsp_set_wait_final };
 
 /* The unit macros are constant expressions. */
 static const int64_t g_window[2] = { YRT_MS(100), YRT_S(1.5) };
@@ -91,6 +92,7 @@ int main(void) {
         if (g_api.set_window(&c, -YRT_MS(100), YRT_S(1)) != YRSP_OPEN || g_api.onset_now(&c, &now)) return 1;
         if (yrsp_set_onset(&c, &o) != YRSP_OPEN || !g_api.onset_now(&c, &now) || now.t_ns != 1000) return 1;
         if (g_api.set_origin(&c, -1, 0, 0) != YRSP_ERR_ARG) return 1;   /* no DISTANCE choice */
+        if (g_api.set_wait_final(&c, YRT_MS(67)) != YRSP_OPEN || g_api.set_wait_final(&c, -1) != YRSP_ERR_ARG) return 1;   /* v0.9 */
         cur.gain = 0.1f; cur.w = cur.h = 100; cur.x = cur.y = 50;
         in.kind = YRSP_KIND_MOUSE; in.type = YRSP_SAMPLE; in.control = YRSP_AXIS_DELTA; in.x = 3; in.y = -3;
         if (!yrsp_cursor_feed(&cur, &in) || cur.nx_ != 3 || cur.ny_ != -3) return 1;

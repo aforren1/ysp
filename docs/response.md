@@ -1109,6 +1109,47 @@ adapter needs `ysp/trials.h` v0.7.0 and stops the build with an `#error`
 on an older one. `check_v08()` adds a fixed-text column and the query's
 answers; `v8-13`'s anchor moved and it is caught.
 
+## Waiting for the final onset (v0.9.0)
+
+`yrsp_set_wait_final(c, max_wait_ns)`, after `yrsp_arm()`, turns on one
+rule for this window: a press does not end the window, and neither does
+the deadline, while the onset is a plan. The final onset (the flip
+record) decides. If the press is a response against it, the window ends
+at that press; if it is EARLY or an anticipation, the window stays open,
+as it would have with exact timing. `max_wait_ns` bounds the wait for a
+record that never comes (a frame never shown): from the onset's time on,
+`yrsp_update()` takes the plan as final. 0 turns the rule off, and the
+next `yrsp_arm()` turns it off.
+
+Why. Without the rule, a window ends at the first press that is valid
+against the plan. When the record then puts the onset later (a frame
+shown late, or a residual of some microseconds), that press can become
+EARLY: the result has `YRSP_R_ENDED_EARLY` and no response. With a
+deadline that is a timeout. With no deadline (`duration_ns` 0) nothing
+else ends the window, so the trial has no response although the format
+promised one ([player.md](player.md), "A window with no deadline").
+
+The cost: a press in the gap between the plan and the record ends the
+window when the record arrives, up to about two frames later on GLX_OML.
+A press after the record is unchanged.
+
+Measured, `tests/adapt/response_test.c` and the player's probe (a 60 Hz
+frame loop that feeds a press before the frame's record), duration 0:
+
+| Case | Without the rule | With the rule (4 frames) |
+|---|---|---|
+| `min_rt` 0, the landing a frame late, press 5 ms after the plan | Ends on the press; no response, ENDED_EARLY | The press is EARLY; the window stays open; the next press (300 ms) is the response |
+| `min_rt` 0, onset 40 us after the plan, press 20 us after it | No response, ENDED_EARLY | The same as above |
+| `min_rt` 100 ms, landing 2 frames late, press 110 ms after the plan | The record comes first: an anticipation, the window open | The same |
+| `min_rt` 0, onset at the plan, press 5 ms after it | A response, RT 5 ms | A response, RT 5 ms, ended at the record (16.7 ms) |
+
+The collector grew 24 bytes; nothing else changed for a caller that does
+not call it. Tests: 21,268 checks of `tests/adapt/response_test.c` (the
+rule off and on, a press the record keeps or makes early, the bound, the
+deadline from the final onset, the next arm, the errors); mutants `wf-01`
+to `wf-06`, 6 of 6 killed, the list 89 of 89 as expected; the Python
+binding's 22 tests pass at 0.9.0 (it does not bind the new call).
+
 ## Bindings
 
 `ysp-response` 0.8.0 (Python, `bindings/python/ysp_response`, the module

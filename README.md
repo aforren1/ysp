@@ -23,7 +23,7 @@ C11 or C++17, and its top comment is its manual.
 | [aep](docs/adapt.md) | `yaep_` | Gaussian-process adaptive estimation (AEPsych features) | 0.16.0 | tested |
 | [timeline](docs/timeline.md) | `ytl_` | Events, tracks and keyframes on the clock | 0.8.2 | tested |
 | [input](docs/input.md) | `yin_` | The input event that every device shares | 0.7.0 | 3 machines |
-| [response](docs/response.md) | `yrsp_` | Trial responses and RT from any input device | 0.8.1 | 1 machine |
+| [response](docs/response.md) | `yrsp_` | Trial responses and RT from any input device | 0.9.0 | 1 machine |
 | [sig](docs/sig.md) | `ysig_` | Signal path: continuous input to stimulus channels, detectors and records through a fixed graph | 0.2.0 | tested |
 | [box](docs/box.md) | `ybox_` | Response and trigger box protocols, bytes to events | 0.3.1 | no device |
 | [device](docs/device.md) | `ydev_` | Boxes and boards on the rig clock, with outputs and response rules | 0.5.2 | 3 machines |

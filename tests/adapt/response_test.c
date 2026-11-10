@@ -2235,6 +2235,84 @@ typedef struct v8row { int64_t rt_ns; } v8row;
 
 static float v8_at(float o, float g, int64_t n) { return (float)((double)o + (double)g * (double)n); }
 
+/* v0.9: yrsp_set_wait_final(): no end on a press or a deadline while the
+ * onset is a plan; the final onset (or the wait's bound) decides. */
+static void check_wait_final(void) {
+    yrsp_desc d = fj_desc(0, 0);
+    yrsp_result r;
+    CHECK(yrsp_open(&g_c, &d));
+    CHECK_I(yrsp_set_wait_final(&g_c, MS(67)), YRSP_ERR_STATE);   /* not armed */
+    CHECK_HAS(yrsp_error(&g_c), "yrsp_set_wait_final");
+    /* off: a press between the plan and a frame-late final onset ends the
+     * window, and the record makes it early: ENDED_EARLY, no response */
+    yrsp_arm(&g_c, 0);
+    onset(MS(1000), 0);
+    CHECK_I(key(MS(1005), SC_F, 1), YRSP_ENDED);
+    onset(MS(1017), 1);
+    r = finish();
+    CHECK(!(r.flags & YRSP_R_RESPONDED) && (r.flags & YRSP_R_ENDED_EARLY));
+    key(MS(1100), SC_F, 0);
+    /* on: the same press waits for the record, which makes it EARLY; the
+     * window stays open and the next press is the response */
+    yrsp_arm(&g_c, 0);
+    CHECK_I(yrsp_set_wait_final(&g_c, MS(67)), YRSP_OPEN);
+    onset(MS(1000), 0);
+    CHECK_I(key(MS(1005), SC_F, 1), YRSP_OPEN);
+    CHECK_I(yrsp_update(&g_c, MS(1017)), YRSP_OPEN);
+    CHECK_I(onset(MS(1017), 1), YRSP_OPEN);
+    key(MS(1100), SC_F, 0);
+    CHECK_I(key(MS(1300), SC_J, 1), YRSP_ENDED);
+    r = finish();
+    CHECK((r.flags & YRSP_R_RESPONDED) && !(r.flags & YRSP_R_ENDED_EARLY));
+    CHECK_I(r.rt_ns, MS(283));
+    CHECK_I(r.n_early, 1);
+    key(MS(1400), SC_J, 0);
+    /* on: a press the record keeps valid ends the window at the record */
+    yrsp_arm(&g_c, 0);
+    yrsp_set_wait_final(&g_c, MS(67));
+    onset(MS(1000), 0);
+    CHECK_I(key(MS(1005), SC_F, 1), YRSP_OPEN);
+    CHECK_I(onset(MS(1000) + 40, 1), YRSP_ENDED);
+    r = finish();
+    CHECK((r.flags & YRSP_R_RESPONDED) && !(r.flags & YRSP_R_ENDED_EARLY));
+    key(MS(1100), SC_F, 0);
+    /* on: no record (a frame never shown): the bound settles it, on the
+     * plan, at yrsp_update() */
+    yrsp_arm(&g_c, 0);
+    yrsp_set_wait_final(&g_c, MS(67));
+    onset(MS(1000), 0);
+    CHECK_I(key(MS(1005), SC_F, 1), YRSP_OPEN);
+    CHECK_I(yrsp_update(&g_c, MS(1066)), YRSP_OPEN);
+    CHECK_I(yrsp_update(&g_c, MS(1067)), YRSP_ENDED);
+    r = finish();
+    CHECK((r.flags & YRSP_R_RESPONDED) && (r.flags & YRSP_R_ONSET_PLAN));
+    key(MS(1100), SC_F, 0);
+    /* on, with a deadline: it counts from the final onset, so the plan's
+     * deadline does not end the window */
+    yrsp_arm(&g_c, 0);
+    CHECK_I(yrsp_set_window(&g_c, 0, MS(500)), YRSP_OPEN);
+    yrsp_set_wait_final(&g_c, YRT_S(1));
+    onset(MS(1000), 0);
+    CHECK_I(yrsp_update(&g_c, MS(1500)), YRSP_OPEN);
+    onset(MS(1017), 1);
+    CHECK_I(yrsp_update(&g_c, MS(1516)), YRSP_OPEN);
+    CHECK_I(yrsp_update(&g_c, MS(1517)), YRSP_ENDED);
+    r = finish();
+    CHECK_I(r.flags & YRSP_R_TIMEOUT, YRSP_R_TIMEOUT);
+    /* the next arm turns it off */
+    yrsp_arm(&g_c, 0);
+    onset(MS(1000), 0);
+    CHECK_I(key(MS(1005), SC_F, 1), YRSP_ENDED);
+    finish();
+    key(MS(1100), SC_F, 0);
+    yrsp_arm(&g_c, 0);
+    CHECK_I(yrsp_set_wait_final(&g_c, -1), YRSP_ERR_ARG);
+    CHECK_I(yrsp_set_wait_final(&g_c, YRT_S(1e6) + 1), YRSP_ERR_ARG);
+    CHECK_I(yrsp_set_wait_final(NULL, 0), YRSP_ERR_STATE);
+    yrsp_close(&g_c);
+    CHECK_I(yrsp_set_wait_final(&g_c, 0), YRSP_ERR_STATE);
+}
+
 static void check_v08(void) {
     static const yrsp_choice dist[] = { { NULL, "moved", YRSP_KIND_MOUSE, 0, YRSP_CROSS_DISTANCE, 0, 0,
                                           YRSP_AXIS_POSITION, 0, 10.0f, 0 },
@@ -2539,6 +2617,7 @@ int main(void) {
     check_frame_loop();
     check_sent();
     check_v08();
+    check_wait_final();
 #if defined(YRSP_TEST_SDL)
     check_sdl();
 #endif
