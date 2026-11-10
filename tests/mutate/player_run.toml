@@ -431,8 +431,8 @@ id = "rr-04"
 name = "a flip's code is matched in the frame loop's queue"
 test = "real"
 why = "Two queues per channel: the flips' codes are written at the vblank, the frame loop's at once, so their records come in another order."
-find = '''                if (!pl_out_pop(p, ch, (fl & YDEV_OUT_FLIP) ? 0 : 1, r->u.u32[8], &q)) continue;'''
-replace = '''                if (!pl_out_pop(p, ch, (fl & YDEV_OUT_FLIP) ? 1 : 0, r->u.u32[8], &q)) continue;'''
+find = '''                if (!pl_out_pop(p, ch, (fl & YDEV_OUT_FLIP) ? 0 : 1, r->u.u32[8], fire.deadline, &q)) continue;'''
+replace = '''                if (!pl_out_pop(p, ch, (fl & YDEV_OUT_FLIP) ? 1 : 0, r->u.u32[8], fire.deadline, &q)) continue;'''
 
 [[mutant]]
 id = "rr-05"
@@ -447,7 +447,7 @@ id = "rr-06"
 name = "the rule is not armed at the trial's start"
 test = "real"
 why = "2.6: the rule gets a window each trial (yrsp_rule_arm())."
-find = '''                yrsp_rule_arm(p->roles[p->tmpl->role].rule, c);'''
+find = '''                yrsp_rule_arm(ro->rule, c);'''
 replace = ''''''
 
 [[mutant]]
@@ -455,15 +455,15 @@ id = "rr-07"
 name = "the rule's window does not follow the onset"
 test = "real"
 why = "yrsp_rule_window() each frame: the window opens when the onset is known."
-find = '''        yrsp_rule_window(p->roles[p->tmpl->role].rule, p->tmpl->collector);'''
-replace = '''        (void)0;'''
+find = '''    if (p->in_trial && pl_rule_of(p, p->tmpl)) yrsp_rule_window(p->roles[p->tmpl->role].rule, p->tmpl->collector);'''
+replace = ''''''
 
 [[mutant]]
 id = "rr-08"
 name = "the rule's codes are not told to the collector"
 test = "real"
 why = "CODES SENT: without yrsp_rule_sent() nothing is compared."
-find = '''        if (p->roles[t->role].rule) (void)yrsp_rule_sent(p->roles[t->role].rule, t->collector);'''
+find = '''            (void)yrsp_rule_sent(rule, t->collector);'''
 replace = ''''''
 expect = "survived"
 note = "SENT_MISMATCH needs a code for a press the collector does not count (an anticipation after a late frame, a second device's earlier stamp); the emulated board's presses are all valid, so the flag is 0 either way. The rule case checks that a valid run has no mismatch."
@@ -504,3 +504,71 @@ find = '''    case PL_WJ_EVENT:
 replace = '''    case PL_WJ_EVENT:
         break;
         if'''
+
+[[mutant]]
+id = "rr-12"
+name = "a row does not wait for its codes' records"
+test = "real"
+why = "A row's output counts come from its codes' device records; the frame loop's code of a trial that ends on the response comes after the trial."
+find = '''        if (owed <= 0 || rec->index >= r->last_frame + PL_OUT_WAIT_FRAMES) r->final = true;'''
+replace = '''        r->final = true;'''
+
+[[mutant]]
+id = "rr-13"
+name = "a record does not settle what its row is owed"
+test = "real"
+why = "Each record pays one owed code; a row still owed at the bound counts the rest failed."
+find = '''                o->owed--;   /* a rule's fires are owed from the trial's end (pl_end_trial()) */'''
+replace = ''''''
+
+[[mutant]]
+id = "rr-14"
+name = "a flip's record takes the first queued code"
+test = "real"
+why = "A flip's record answers the last queued fire of its code not after its deadline; the fires before it got no record (a lost code)."
+find = '''            if (q == 1) break;'''
+replace = '''            break;'''
+
+[[mutant]]
+id = "rr-15"
+name = "a template with no response trigger arms the rule"
+test = "real"
+why = "2.6: only a template that declares a response trigger sends codes; another on the same role sends none."
+find = '''    if (!t || !t->collector || !t->def->response->trigger_role) return NULL;'''
+replace = '''    if (!t || !t->collector) return NULL;'''
+
+[[mutant]]
+id = "rr-16"
+name = "the rule stays armed after its trial"
+test = "real"
+why = "The rule is disarmed at each trial's end."
+find = '''            ydev_rule_disarm(rule);'''
+replace = ''''''
+expect = "survived"
+note = "A guard: the rule's window closes at the live finish (yrsp_rule_window() after yrsp_finish()), and the next template with no trigger no longer windows it; no press reaches the rule between the two."
+
+[[mutant]]
+id = "rr-17"
+name = "a rule's record goes to the first arm"
+test = "real"
+why = "A rule's record goes to the last arm before its press."
+find = '''                    if (a->from <= fire.deadline) { fire.trial = a->trial; break; }'''
+replace = '''                    if (a->from <= fire.deadline) fire.trial = a->trial;'''
+
+[[mutant]]
+id = "r-47"
+name = "a response does not wait for the flip record"
+test = "player"
+why = "Decision A: a press or the deadline ends the window only on the final onset (--test-plan-early)."
+find = '''            yrsp_set_wait_final(c, PL_WAIT_FINAL_FRAMES * f->period);'''
+replace = ''''''
+
+[[mutant]]
+id = "rr-18"
+name = "the row takes the final result when the live one differs"
+test = "real"
+why = "The row says what after was built from."
+find = '''        if (p->have_live && (res.entry != p->live_res.entry || ((res.flags ^ p->live_res.flags) & YRSP_R_RESPONDED))) res = p->live_res;'''
+replace = ''''''
+expect = "survived"
+note = "With the wait for the flip record the two differ only for a box press read late with an earlier stamp, or a record past the 4-frame bound; neither happens on this rig. A guard."

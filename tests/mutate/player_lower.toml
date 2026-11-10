@@ -300,3 +300,27 @@ test = "real"
 why = "A response trigger on a device role is a rule with the trigger role's device as its output."
 find = '''        if (!o || !o->dev) return 0;   /* an optional output with no device: no code to send */'''
 replace = '''        return 0;'''
+
+[[mutant]]
+id = "rl-09"
+name = "a role below its min_tier starts"
+test = "real"
+why = "2.9 and decision B: refused by name unless --allow-below-tier."
+find = '''    if (n && !p->args.allow_below_tier) {'''
+replace = '''    if (0) {'''
+
+[[mutant]]
+id = "rl-10"
+name = "UNKNOWN meets any min_tier"
+test = "real"
+why = "No measurement, no tier: UNKNOWN is below every min_tier."
+find = '''        r->below = tier == YIN_TIER_UNKNOWN || tier > r->def->min_tier;'''
+replace = '''        r->below = tier > r->def->min_tier;'''
+
+[[mutant]]
+id = "rl-11"
+name = "two rules with other choices are one"
+test = "real"
+why = "Templates on one device role must give the same choices and codes."
+find = '''                if (!same || r->n_choices != n || out != o->trigger) {'''
+replace = '''                if (!same || out != o->trigger) {'''
