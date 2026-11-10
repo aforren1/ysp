@@ -273,6 +273,70 @@ With the 64-step buffer it was 219 to 373 us. The two runs' streams are
 identical. A 4,096-step buffer would put a 16 ms frame at risk with five
 or six RDKs; 64 steps keep a flush under 50 us an RDK.
 
+### A real window (2026-11-10)
+
+The machine: the Linux desktop (Debian 12, kernel 6.11.5-liquorix, Xorg
+21.1, Mesa 22.3.6 on an AMD RX 6600, one 1920 x 1080 output at 60 Hz,
+Xfwm4 with its compositor off, SDL 3.4.18, gcc 12.2, i5-14500, 20
+threads), Release, GLX_OML full screen, the desktop open, no other job of
+mine running, one run at a time. `tests/player/real_test.py` played the
+participant: a uinput keyboard (or an emulated LINE board), pressing the
+correct key 0.35 to 0.6 s after the expected onset, silent on every
+seventh trial; the oddball's trigger role a TriggerBox on a pty pair.
+
+| Example | Trials, run time | Load average (1 min), before / after | Frames | Dropped | Residual, \|max\| / \|p99\| | Tier | Largest frame work (`--measure`) | Responses checked |
+|---|---|---|---|---|---|---|---|---|
+| RDK | 30, 60.8 s | 1.22 / 1.12 | 3,494 | 0 | 3.2 / 1.8 us | 1 | 222 us; trial start 39 us | 26 of 26 |
+| 2AFC (staircase, QUEST+) | 30, 55.8 s | 1.03 / 1.01 | 3,194 | 0 | 8.2 / 1.8 us | 1 | 242 us; trial start 84 us | 26 of 26 |
+| Stroop | 36, 66.0 s | 0.93 / 1.02 | 3,807 | 0 | 3.2 / 1.8 us | 1 | 368 us; trial start 40 us | 31 of 31 |
+| Oddball (keyboard, TriggerBox) | 16, 31.2 s | 0.93 / 0.96 | 1,713 | 0 | 2.8 / 1.8 us | 1 | 251 us; trial start 49 us | 14 of 14 |
+| Oddball (LINE board, rule) | 16, about 31 s | 0.88 / 0.89 | 1,712 | 0 | 2.2 / 1.8 us | 1 | 113 us; trial start 55 us | 14 of 14 |
+
+- A response checked: the response column is the key sent, `rsp_tier`
+  is 0 (the kernel's evdev time), the response's time lies inside the
+  `write()` to uinput that sent the key (to its 1 us truncation), the RT
+  is inside the window, and `correct` is true. A silent trial is a
+  timeout. The columns of `trials.csv`, `frames.csv` and `events.csv` are
+  those of a `--sim` run of the same definition.
+- The largest frame was an early one of each run (index 93 to 183), and
+  SDL's pump with the collectors took most of it (197 to 279 us of it).
+- Codes at the flip (TriggerBox): 16 of 16 per run on the pty, the
+  write's start 1.8 to 1.9 us (p50) after the planned vblank, at most 2.5
+  us. A response's code from the frame loop (keyboard role): about 6 ms
+  after the press. From the rule (LINE board): write start minus the
+  board's press p50 79.8 us, max 110.4 us; this includes the pty pair's
+  copy in Python. The bytes on the pty were the codes `events.csv` lists,
+  each followed by its pulse's 0, with the box's 0 at open and 0xFF at
+  close: 62 bytes.
+- Before the writer thread: the 2AFC's frame 933 took 17.9 ms in each of
+  three runs (one late frame, `residual_s` 16.7 ms). `strace -T` put it in
+  a `write()` of `frames.csv` (17.8 ms); it repeated every 5 s under
+  strace, the kernel's writeback period (`dirty_writeback_centisecs` 500).
+  The same run with the data set on tmpfs: largest frame 248 us. With the
+  writer thread, on ext4: 242 to 368 us, above.
+- Allocations: `player_alloc_test --real` (full screen, keys and pty codes
+  included) counted 0 heap calls on the frame thread inside `pl_frame()`,
+  on all four examples, 11 keys each. Other threads (SDL's, the GL
+  driver's, the writer, the device readers) are not counted.
+- Shift+Esc in the 2AFC's trial 6: exit 3, rows 0 to 5 complete,
+  `session.json` `"aborted": {"presses": 1, "reasons": ["key"],
+  "trial_index": 6, "trials_written": 6, ...}` and `"closed": true`. The
+  test first set the ramp to `xrandr --gamma 0.9:0.9:0.9`; the full-screen
+  screen set the identity, and after the run the ramp was 0.9 again. The
+  mode does not change (the player uses the desktop mode).
+- The panic: the frame loop stopped in trial 6 (`--hang-at-trial 6`), then
+  Shift+Esc three times 0.3 s apart: exit 99, rows 0 to 5 on disk,
+  `session.json` `"closed": false`, `panic.json` with `trial_index` 6, and
+  the ramp back at 0.9.
+- Refused, each before the data set folder exists: `display.min_tier` 1
+  in a window (its flips are tier 2), a required role the rig profile does
+  not bind (the loader names it), a required role with no rig profile at
+  all (the player names it), a rig file that does not exist, and
+  `--participant` without `--sim` (exit 2).
+- ASan and UBSan (`setarch -R` for the build and the run): the real cases
+  above (12 trials each), the abort, the panic and the refusals: no
+  report. The `--sim` tests too (below).
+
 ## What a real-window run needs next
 
 - A decision on the window with no deadline (the format question above).
