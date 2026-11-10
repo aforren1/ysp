@@ -1,0 +1,14 @@
+{
+  "format": "ysp-experiment", "version": 1, "name": "relax_rt_by_responded",
+  "note": "a lookup reads only the entry its 'by' selects: an entry that only a press selects can read $rt_s (ysp/experiment.h 0.1.2)",
+  "devices": { "resp": { "direction": "in", "family": ["keyboard"] } },
+  "stimuli": { "s": { "kind": "shape", "w": 40 } },
+  "trials": { "t": { "events": [{ "on": "s" }],
+                     "response": { "role": "resp", "from": "s", "choices": ["a", "b"], "key_answer": "a", "duration_s": 1 },
+                     "after": [{ "wait_s": { "by": "$responded", "map": { "true": "$rt_s", "false": 1 } } },
+                               { "wait_s": { "by": "$correct", "map": { "true": "$rt_s", "false": 1 } } },
+                               { "wait_s": { "by": "$outcome", "map": { "correct": "$rt_s", "wrong": "$rt_s", "timeout": 1 } } },
+                               { "wait_s": { "by": "$response", "map": { "a": "$rt_s", "b": "$rt_s", "": 1 } } },
+                               { "off": "s" }] } },
+  "timeline": [{ "name": "n", "trial": "t" }]
+}

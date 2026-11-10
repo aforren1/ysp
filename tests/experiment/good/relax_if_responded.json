@@ -1,0 +1,11 @@
+{
+  "format": "ysp-experiment", "version": 1, "name": "relax_if_responded",
+  "note": "the steps of {\"if\": \"$responded\"} run only with a press: a lookup by $response in them needs no key for a timeout, and $rt_s has a value (ysp/experiment.h 0.1.2)",
+  "devices": { "resp": { "direction": "in", "family": ["keyboard"] } },
+  "stimuli": { "s": { "kind": "shape", "w": 40 } },
+  "trials": { "t": { "events": [{ "on": "s" }],
+                     "response": { "role": "resp", "from": "s", "choices": ["a", "b"], "duration_s": 1 },
+                     "after": [{ "if": "$responded", "steps": [{ "wait_s": { "by": "$response", "map": { "a": 0.1, "b": "$rt_s" } } }] },
+                               { "off": "s" }] } },
+  "timeline": [{ "name": "n", "trial": "t" }]
+}

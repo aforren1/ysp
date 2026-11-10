@@ -1,0 +1,10 @@
+{
+  "format": "ysp-experiment", "version": 1, "name": "relax_rt_no_deadline",
+  "note": "a response with no deadline always has a press, so a number key can read $rt_s (ysp/experiment.h 0.1.2)",
+  "devices": { "resp": { "direction": "in", "family": ["keyboard"] } },
+  "stimuli": { "s": { "kind": "shape", "w": 40 } },
+  "trials": { "t": { "events": [{ "on": "s" }],
+                     "response": { "role": "resp", "from": "s", "choices": ["a"], "duration_s": 0 },
+                     "after": [{ "wait_s": "$rt_s" }, { "off": "s" }] } },
+  "timeline": [{ "name": "n", "trial": "t" }]
+}

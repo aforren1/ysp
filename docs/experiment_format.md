@@ -552,7 +552,7 @@ when its sequence is built (2.5).
 | `practice`, `warmup`, `first_in_block`, `after_break` | trial start | `ytr_trial_info` flags |
 | `trial_seed` | trial start | the trial stream's 64-bit seed (D8): `ytr_trial_seed()` |
 | `method`, `level`, `estimate` | trial start (`estimate`: after the update) | the track's name, its proposal in stimulus units, its estimate |
-| `response`, `rt_s`, `responded` | `after` | `yrsp_result`: the choice's key (with no `choices`, the key's name), `rt_ns` in seconds, `YRSP_R_RESPONDED`. On a timeout `response` is the empty string and `rt_s` is empty: a lookup by `$response` that can time out needs a `""` key, and `$rt_s` is refused in a number key (v0.1.1) |
+| `response`, `rt_s`, `responded` | `after` | `yrsp_result`: the choice's key (with no `choices`, the key's name), `rt_ns` in seconds, `YRSP_R_RESPONDED`. On a timeout `response` is the empty string and `rt_s` is empty: a lookup by `$response` that a timeout can reach needs a `""` key, and `$rt_s` is refused in a number key that a timeout can reach (ysp/experiment.h v0.1.1). Only a press reaches `outcome`, `method_value`, the steps of `{"if": "$responded"}` and a lookup's entry that only a press selects (v0.1.2) |
 | `correct` | `after` | the response's key equals `key_answer` |
 | `outcome` | `after` | `"correct"`, `"wrong"` or `"timeout"` |
 | `contrast_shown` | trial start | with `{"michelson": ...}` only |

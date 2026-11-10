@@ -317,7 +317,7 @@ id = "e-37"
 name = "outcome reaches timeout without a deadline"
 test = "experiment"
 why = "A timeout needs a deadline."
-find = '''        if (!(rsp->duration && rsp->duration->kind == YEXP_V_NUMBER && rsp->duration->i == 0) && yexp__lv_push(c, "timeout")) return -1;'''
+find = '''        if (!s->rsp_only && yexp__can_time_out(s) && yexp__lv_push(c, "timeout")) return -1;'''
 replace = '''        if (0 && yexp__lv_push(c, "timeout")) return -1;'''
 
 [[mutant]]
@@ -1257,7 +1257,7 @@ id = "e011-05"
 name = "$rt_s reads as a number"
 test = "experiment"
 why = "v0.1.1: empty on a timeout."
-find = '''            if (yexp__streq(name, "rt_s")) {'''
+find = '''            if (yexp__streq(name, "rt_s") && !s->rsp_only && yexp__can_time_out(s)) {'''
 replace = '''            if (0) {'''
 
 [[mutant]]
@@ -1265,7 +1265,7 @@ id = "e011-06"
 name = "$level reads as a number on a mixed leaf"
 test = "experiment"
 why = "v0.1.1."
-find = '''            if (yexp__streq(name, "level") && s->leaf && s->leaf->table && s->leaf->n_tracks) {'''
+find = '''            if (yexp__streq(name, "level") && !s->track_only && s->leaf && s->leaf->table && s->leaf->n_tracks) {'''
 replace = '''            if (0) {'''
 
 [[mutant]]
@@ -1273,7 +1273,7 @@ id = "e011-07"
 name = "no empty level of $response"
 test = "experiment"
 why = "v0.1.1: a timeout has no key."
-find = '''        if (!s->in_code && !(rsp->duration && rsp->duration->kind == YEXP_V_NUMBER && rsp->duration->i == 0) && yexp__lv_push(c, "")) return -1;'''
+find = '''        if (!s->in_code && !s->rsp_only && yexp__can_time_out(s) && yexp__lv_push(c, "")) return -1;'''
 replace = ''''''
 
 [[mutant]]
@@ -1281,7 +1281,7 @@ id = "e011-08"
 name = "no empty level of $method on a mixed leaf"
 test = "experiment"
 why = "v0.1.1."
-find = '''        if (s->leaf->table && yexp__lv_push(c, "")) return -1;'''
+find = '''        if (s->leaf->table && !s->track_only && yexp__lv_push(c, "")) return -1;'''
 replace = ''''''
 
 [[mutant]]
@@ -1299,3 +1299,153 @@ test = "experiment"
 why = "v0.1.1: a code is a number."
 find = '''        if (want != YEXP__W_ANY) yexp__err(c, pos, "%s: '%s': '$response' is text'''
 replace = '''        if (0) yexp__err(c, pos, "%s: '%s': '$response' is text'''
+
+[[mutant]]
+id = "e012-01"
+name = "$rt_s refused in an entry only a press selects"
+test = "experiment"
+why = "v0.1.2: relax_rt_by_responded and relax_if_responded are valid."
+find = '''            if (yexp__streq(name, "rt_s") && !s->rsp_only && yexp__can_time_out(s)) {'''
+replace = '''            if (yexp__streq(name, "rt_s") && yexp__can_time_out(s)) {'''
+
+[[mutant]]
+id = "e012-02"
+name = "$rt_s refused with no deadline"
+test = "experiment"
+why = "v0.1.2: relax_rt_no_deadline is valid."
+find = '''            if (yexp__streq(name, "rt_s") && !s->rsp_only && yexp__can_time_out(s)) {'''
+replace = '''            if (yexp__streq(name, "rt_s") && !s->rsp_only) {'''
+
+[[mutant]]
+id = "e012-03"
+name = "$rt_s accepted where a timeout reads it"
+test = "experiment"
+why = "bad/rt_in_lookup_wait and bad/rt_unless_responded: the 'false' entry and an unless run on a timeout."
+find = '''static bool yexp__can_time_out(const yexp__scope* s) {
+    const yexp_response* r = s->t ? s->t->response : NULL;
+    return r && !(r->duration && r->duration->kind == YEXP_V_NUMBER && r->duration->i == 0);'''
+replace = '''static bool yexp__can_time_out(const yexp__scope* s) {
+    const yexp_response* r = s->t ? s->t->response : NULL;
+    return r && (r->duration && r->duration->kind == YEXP_V_NUMBER && r->duration->i == 0);'''
+
+[[mutant]]
+id = "e012-04"
+name = "an entry of $responded or $correct promises nothing"
+test = "experiment"
+why = "v0.1.2: relax_rt_by_responded."
+find = '''    if (yexp__streq(by->str, "responded") || yexp__streq(by->str, "correct")) return yexp__streq(key, "true") ? 1u : 0u;'''
+replace = ''''''
+
+[[mutant]]
+id = "e012-05"
+name = "every entry of $responded promises a press"
+test = "experiment"
+why = "bad/rt_in_lookup_wait: the 'false' entry runs on a timeout."
+find = '''    if (yexp__streq(by->str, "responded") || yexp__streq(by->str, "correct")) return yexp__streq(key, "true") ? 1u : 0u;'''
+replace = '''    if (yexp__streq(by->str, "responded") || yexp__streq(by->str, "correct")) return 1u;'''
+
+[[mutant]]
+id = "e012-06"
+name = "an entry of $outcome promises nothing"
+test = "experiment"
+why = "v0.1.2: relax_rt_by_responded."
+find = '''    if (yexp__streq(by->str, "outcome")) return yexp__streq(key, "correct") || yexp__streq(key, "wrong") ? 1u : 0u;'''
+replace = ''''''
+
+[[mutant]]
+id = "e012-07"
+name = "an entry of $response promises nothing"
+test = "experiment"
+why = "v0.1.2: relax_rt_by_responded."
+find = '''    if (yexp__streq(by->str, "response")) return key[0] ? 1u : 0u;'''
+replace = ''''''
+
+[[mutant]]
+id = "e012-08"
+name = "an entry of $method promises nothing"
+test = "experiment"
+why = "v0.1.2: relax_level_by_method."
+find = '''    if (yexp__streq(by->str, "method")) return key[0] ? 2u : 0u;'''
+replace = ''''''
+
+[[mutant]]
+id = "e012-09"
+name = "the empty entry of $method promises a track trial"
+test = "experiment"
+why = "bad/level_by_method_empty: a condition trial reads it."
+find = '''    if (yexp__streq(by->str, "method")) return key[0] ? 2u : 0u;'''
+replace = '''    if (yexp__streq(by->str, "method")) return 2u;'''
+
+[[mutant]]
+id = "e012-10"
+name = "a vars lookup's entries checked without their promise"
+test = "experiment"
+why = "v0.1.2: relax_level_by_method reads $level through vars."
+find = '''            ms->track_only = t0 || (f & 2u);
+            yexp__type_value(c, s, v->map[k].value, want, name, pos, elem, key, depth);'''
+replace = '''            ms->track_only = t0;
+            yexp__type_value(c, s, v->map[k].value, want, name, pos, elem, key, depth);'''
+
+[[mutant]]
+id = "e012-11"
+name = "the steps of if $responded not read as after a press"
+test = "experiment"
+why = "v0.1.2: relax_if_responded."
+find = '''(yexp__streq(st->cond, "responded") || yexp__streq(st->cond, "correct"))) ms->rsp_only = true;'''
+replace = '''(yexp__streq(st->cond, "responded") || yexp__streq(st->cond, "correct"))) ms->rsp_only = false;'''
+
+[[mutant]]
+id = "e012-12"
+name = "unless $responded read as after a press"
+test = "experiment"
+why = "bad/rt_unless_responded."
+find = '''            if (st->op == YEXP_IF && st->cond && (yexp__streq(st->cond, "responded")'''
+replace = '''            if (st->cond && (yexp__streq(st->cond, "responded")'''
+
+[[mutant]]
+id = "e012-13"
+name = "outcome not read as after a press"
+test = "experiment"
+why = "v0.1.2: relax_response_lookups."
+find = '''     * method_value only on a track trial with one (2.4, 2.5) */
+    s->rsp_only = true;'''
+replace = '''     * method_value only on a track trial with one (2.4, 2.5) */
+    s->rsp_only = false;'''
+
+[[mutant]]
+id = "e012-14"
+name = "method_value not read as on a track trial"
+test = "experiment"
+why = "v0.1.2: relax_level_by_method's method_value reads $level."
+find = '''    s->track_only = true;
+    if (t->method_value'''
+replace = '''    if (t->method_value'''
+
+[[mutant]]
+id = "e012-15"
+name = "the press-only flag leaks out of a lookup"
+test = "experiment"
+why = "bad/response_lookup_in_after_no_empty after a press-only entry: the flag is restored."
+find = '''            ms->rsp_only = r0;
+            ms->track_only = t0;
+        }
+        if (s->leaf) yexp__check_lookup(c, s, v, elem, key);'''
+replace = '''            ms->track_only = t0;
+        }
+        if (s->leaf) yexp__check_lookup(c, s, v, elem, key);'''
+
+[[mutant]]
+id = "e012-16"
+name = "a press-only scope drops 'false' of $responded too"
+test = "experiment"
+why = "Read only with a press, $responded is true; a lookup there with no 'false' key is valid. Killed by relax_response_lookups when the line is gone."
+find = '''            if (!(s->rsp_only && i == 4) && yexp__lv_push(c, "false")) return -1;'''
+replace = '''            if (yexp__lv_push(c, "false")) return -1;'''
+
+[[mutant]]
+id = "e012-17"
+name = "a press-only scope keeps the timeout level of $outcome"
+test = "experiment"
+why = "v0.1.2: relax_response_lookups' lookup by $outcome has no 'timeout' key."
+find = '''        if (!s->rsp_only && yexp__can_time_out(s) && yexp__lv_push(c, "timeout")) return -1;'''
+replace = '''        if (yexp__can_time_out(s) && yexp__lv_push(c, "timeout")) return -1;'''
