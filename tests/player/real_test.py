@@ -195,6 +195,18 @@ def the_response(definition):
     return r["from"], float(r.get("duration_s", 0)), float(r.get("minimum_valid_rt_s", 0))
 
 
+def key_of(definition):
+    """The response column's name of each choice to the key that makes it."""
+    r = list(definition["trials"].values())[0]["response"]
+    out = {}
+    for c in r["choices"]:
+        if isinstance(c, str):
+            out[c] = c
+        else:
+            out[c.get("name", c["key"])] = c["key"]
+    return out
+
+
 def plan_from_sim(ctx, name, pack, rig, n):
     """Each trial's key and its times before `from` and after the response,
     from a --sim run of the same seed with the correct participant."""
@@ -255,6 +267,8 @@ class Pty:
                     pass
 
     def close(self):
+        if self.stop:
+            return
         time.sleep(0.3)
         self.stop = True
         self.t.join()
@@ -329,7 +343,7 @@ def run_real(ctx, name, pack, plan, rig, extra=(), silent_every=7, abort_after=N
             t0, t1 = kb.key(tr["key"], 1)
             time.sleep(0.08)
             kb.key(tr["key"], 0)
-            sent.append({"trial": i, "key": tr["key"], "t0": t0, "t1": t1})
+            sent.append({"trial": i, "key": tr["key"], "name": tr.get("name", tr["key"]), "t0": t0, "t1": t1})
             t_next = t0 / 1e9 + tr["post"]
         try:
             p.wait(timeout=60)
@@ -388,7 +402,7 @@ def check_data(name, sim_dir, d, plan, sent, frm, duration, min_rt):
         # (to its 1 us truncation): docs/screen.md, "Linux key tiers by stamp"
         check(s["t0"] - 1000 <= t <= s["t1"] + 1000,
               "%s trial %d: the response's time is %.1f us from the write() [0, %.1f]" % (name, i, (t - s["t0"]) / 1e3, (s["t1"] - s["t0"]) / 1e3))
-        check(row["response"] == s["key"], "%s trial %d: response '%s', key sent '%s'" % (name, i, row["response"], s["key"]))
+        check(row["response"] == s["name"], "%s trial %d: response '%s', key sent '%s' (%s)" % (name, i, row["response"], s["key"], s["name"]))
         check(row["rsp_tier"] == "0", "%s trial %d: rsp_tier %s, not 0 (the kernel's time, UNKNOWN)" % (name, i, row["rsp_tier"]))
         check(min_rt <= rt and (duration == 0 or rt < duration), "%s trial %d: rt %.3f outside the window" % (name, i, rt))
         check(row["correct"] in ("1", "true", "True"), "%s trial %d: the key sent was the answer, correct is '%s'" % (name, i, row["correct"]))
@@ -407,8 +421,11 @@ def case_example(ctx, name):
         rig = make_rig(ctx, name, pty.a if pty else None) if needs_rig else None
         sim_dir, trials, events, frames = plan_from_sim(ctx, name, pack, rig, ctx.trials)
         plan = timing_plan(trials, events, frames, frm, duration)
+        keys = key_of(definition)
         for tr in plan:
             tr["_duration"] = duration
+            tr["name"] = tr["key"]
+            tr["key"] = keys[tr["key"]]
         t0 = time.monotonic()
         rc, d, sent, out = run_real(ctx, name, pack, plan, rig)
         took = time.monotonic() - t0
@@ -465,6 +482,7 @@ def case_abort(ctx, kind):
     plan = timing_plan(trials, events, frames, frm, duration)
     for tr in plan:
         tr["_duration"] = duration
+        tr["name"] = tr["key"]
     out = output_name()
     before = xrandr_state()
     # a ramp that is not the identity, so that "put back" means something:
@@ -530,6 +548,21 @@ def case_refuse(ctx):
     rc, msg, made = run([odd, "--rig", rig], "role")
     print("  unbound role: exit %d: %s" % (rc, msg[:300]), flush=True)
     check(rc == 1 and "'trig'" in msg and not made, "a required role with no device: exit %d" % rc)
+    # no rig at all: the loader has no rig to check roles against, so the
+    # player's own check names it
+    work = os.path.join(ctx.out, "norig_src")
+    shutil.rmtree(work, ignore_errors=True)
+    shutil.copytree(os.path.join(HERE, "rdk"), work)
+    with open(os.path.join(work, "experiment.json")) as f:
+        dd = json.load(f)
+    dd["devices"]["trig"] = {"direction": "out", "family": ["triggerbox"], "required": True}
+    with open(os.path.join(work, "experiment.json"), "w", newline="\n") as f:
+        json.dump(dd, f)
+    norig_pack = os.path.join(ctx.out, "norig.ysppak")
+    subprocess.check_call([ctx.ypak, "build", "pack.json", "-o", norig_pack], cwd=work, stdout=subprocess.DEVNULL)
+    rc, msg, made = run([norig_pack], "norig")
+    print("  unbound role, no rig: exit %d: %s" % (rc, msg[:300]), flush=True)
+    check(rc == 1 and "'trig'" in msg and not made, "a required role with no rig: exit %d" % rc)
     rc, msg, made = run([pack, "--rig", os.path.join(ctx.out, "no_such_rig", "profile.json")], "rig")
     print("  bad rig: exit %d: %s" % (rc, msg[:300]), flush=True)
     check(rc == 1 and "no rig profile" in msg and not made, "a rig file that does not exist: exit %d" % rc)

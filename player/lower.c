@@ -1764,9 +1764,9 @@ static int pl_roles_bind(pl_player* p) {
         if (p->args.sim) continue;
         r->keyboard = !r->rig && r->def->direction == 0 && pl_role_lists(r->def, "keyboard");
         if (r->def->required && !r->rig && !r->keyboard) {
-            pl_fail(p, "the role '%s' is required, and %s binds no device to it (its families: %s%s%s); bind one in the rig profile (ysp/rigfile.h)",
-                    r->def->name, p->have_rig ? "the rig profile" : "there is no rig profile (--rig), so nothing",
-                    r->def->n_family > 0 ? r->def->family[0] : "", r->def->n_family > 1 ? ", ..." : "", "");
+            pl_fail(p, "the role '%s' is required, and no device is bound to it (%s; its first family: %s): bind one in the rig profile (ysp/rigfile.h)",
+                    r->def->name, p->have_rig ? "the rig profile has no binding for it" : "there is no rig profile, --rig or the user's profile.json",
+                    r->def->n_family > 0 ? r->def->family[0] : "none");
             return -1;
         }
     }
