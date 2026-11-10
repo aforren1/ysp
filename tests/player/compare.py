@@ -68,6 +68,13 @@ def compare(rows_p, rows_c, pairs):
         report.append(("<row count>", "%d vs %d" % (len(rows_p), len(rows_c)), "FAIL", ""))
         return report, 1
     for pc, cc, klass, why in pairs:
+        # a column missing on a side is a failure, even missing on both: two
+        # empty columns would compare equal and show nothing
+        missing = [n for n, row in ((pc, rows_p[0]), (cc, rows_c[0])) if rows_p and n not in row]
+        if missing:
+            report.append(("%s <- %s" % (pc, cc), "column missing: %s" % ", ".join(missing), "FAIL", why))
+            bad += 1
+            continue
         diff = 0
         first = None
         for i, (a, b) in enumerate(zip(rows_p, rows_c)):
@@ -148,7 +155,7 @@ def do_rdk(a, ex):
             f.write("%s\n" % r["dots_seed"])
     c_out, c_steps = os.path.join(a.out, "rdk_c.csv"), os.path.join(a.out, "rdk_c_steps.csv")
     run([tool(a.bin, "trial_rdk"), "--sim", "--reps", "5", "--seed", seed, "--out", c_out, "--steps", c_steps,
-         "--trial-seeds", seeds])
+         "--trial-seeds", seeds, "--silent-trials", "3,17"])
     c_rows = read_csv(c_out)
     script = os.path.join(a.out, "rdk_script.csv")
     write_script(c_rows, script, hold=0.06)
@@ -244,7 +251,7 @@ def do_afc2(a, ex):
     seed = session_seed(p0)
     c_out = os.path.join(a.out, "afc2_c.csv")
     run([tool(a.bin, "trial_2afc_adaptive"), "--sim", "--design-timing", "--trials", "60", "--seed", seed, "--out", c_out,
-         "--rig-dir", rig, "--cal", os.path.join(rig, "display.yspcal")])
+         "--rig-dir", rig, "--cal", os.path.join(rig, "display.yspcal"), "--silent-trials", "5,40"])
     c_rows = read_csv(c_out)
     script = os.path.join(a.out, "afc2_script.csv")
     write_script(c_rows, script, hold=0.08)
@@ -322,7 +329,10 @@ def do_oddball(a, ex):
     report.append(("device_trigger_flip", summary[-1] if summary else "(no summary)", "n/a", "the C program's own count of writes at flips, for the same mechanism"))
     soa = [float(r["soa_s"]) for r in rows]
     frame_grid = all(abs(s * 60 - round(s * 60)) < 1e-6 for s in soa)
-    report.append(("soa_s on the display's frames (rate=display)", "%d values, 0.8 to 1.2 s" % len(soa), "exact" if frame_grid and min(soa) >= 0.8 and max(soa) <= 1.2 else "FAIL", "jitter snapped to 60 Hz"))
+    soa_ok = frame_grid and min(soa) >= 0.8 and max(soa) <= 1.2
+    report.append(("soa_s on the display's frames (rate=display)", "%d values, 0.8 to 1.2 s" % len(soa), "exact" if soa_ok else "FAIL", "jitter snapped to 60 Hz"))
+    if not soa_ok:
+        bad += 1
     print_report("Oddball EEG (trigger_flip.c: not comparable column for column)", report)
     return bad
 
