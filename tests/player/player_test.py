@@ -1039,13 +1039,26 @@ def t_r5_wait_final(ctx):
           "a press after the final onset is the response: %s %s" % (r3.trials[:1], r3.err[:200]))
 
 
+def t_r6_allow_below(ctx):
+    # --allow-below-tier takes role names: a flag where its value goes (it
+    # would swallow that flag), an empty entry, or a name that is no role
+    # of the definition is a bad argument (exit 2), never a silent no-op
+    d = base({"t": tmpl()}, [{"name": "l", "trial": "t"}])
+    for tag, val, word in (("flag", "--measure", "--measure"), ("trail", "r,", "empty"), ("lead", ",r", "empty"),
+                           ("double", "r,,r", "empty"), ("unknown", "nosuch", "'nosuch'"), ("unknown2", "r,nosuch", "'nosuch'")):
+        r = Run(ctx, "r6_allow_" + tag, d, args=["--max-trials", "1", "--allow-below-tier", val])
+        check(r.rc == 2 and "--allow-below-tier" in r.err and word in r.err and not os.path.exists(r.data),
+              "--allow-below-tier %s: exit %d: %s" % (val, r.rc, r.err[:200]))
+    r = Run(ctx, "r6_allow_ok", d, args=["--max-trials", "1", "--allow-below-tier", "r"])
+    check(r.rc == 0, "--allow-below-tier r: exit %d: %s" % (r.rc, r.err[:200]))
+
 TESTS = [t_nested, t_if_unless, t_empty_and_zero, t_loop, t_requeue, t_track_ends, t_lookup_keys, t_triggers, t_after_timing, t_outcomes,
          t_method_update, t_seeds, t_refused, t_unused_stim, t_record_data, t_fix_density, t_fix_key_reapply, t_fix_stale_rdk,
          t_fix_timeout_values, t_fix_any_key, t_fix_from_in_if, t_fix_shown_twice, t_fix_vars_data, t_fix_sound_twice, t_fix_rdk_limit,
          t_fix_record_inherit, t_fix_backward_at, t_fix_refusals, t_fix_michelson_order, t_fix_texture_vars, t_fix_walk_budget,
          t_fix_data_set, t_fix_check_all_leaves, t_fix_release_order, t_fix_key_var_reapply,
          t_r2_release_other_template, t_r2_yield_draws_nothing, t_r2_low, t_r2_relaxed, t_r4_leaf_loop_done_track, t_r4_requeue_full,
-         t_r5_wait_final]
+         t_r5_wait_final, t_r6_allow_below]
 
 
 def main():

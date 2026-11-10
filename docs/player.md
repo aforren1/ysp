@@ -36,7 +36,9 @@ ysp_player PACK.ysppak --out DIR --seed 7 --field participant=1
    name and tiers. `--allow-below-tier ROLE[,ROLE]` starts anyway for the
    roles it names; every other role keeps its check. `session.json` then
    has `"allow_below_tier"` (the list) and each such role `"below_tier":
-   true`.
+   true`. A value that starts with `-`, an empty entry (`trig,`) or a
+   name that is not a role of the definition is a bad argument: exit 2,
+   in `--sim` too.
 4. It opens each bound device and waits up to 3 s for it to run. A device
    that does not answer as its family must stops the start.
 5. It opens the display that `YSCR_BACKEND_AUTO` picks (GLX_OML on X11),

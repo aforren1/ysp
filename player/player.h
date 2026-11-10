@@ -423,6 +423,7 @@ struct pl_player {
     uint64_t  participant_rng;
     char      error[1024];
     int       failed;
+    bool      bad_arg;   /* the failure is a bad argument: exit 2 (main.c) */
     void*     blocks;
     int       c_tables;
     bool      channels_assigned;

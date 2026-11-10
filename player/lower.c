@@ -1949,6 +1949,28 @@ static bool pl_role_allowed(const pl_player* p, const char* name) {
     return false;
 }
 
+/* Each --allow-below-tier name must be a role of this definition: a typo
+ * would otherwise leave the role it meant refused, or, worse, read as an
+ * override that covers nothing. Checked in --sim too, so a script that
+ * passes the flag fails the same way in both. */
+static int pl_allow_check(pl_player* p) {
+    const char* a = p->args.allow_below;
+    while (a && *a) {
+        const char* e = strchr(a, ',');
+        size_t k = e ? (size_t)(e - a) : strlen(a);
+        int i, found = 0;
+        for (i = 0; i < p->def->n_roles; i++)
+            if (strlen(p->def->roles[i].name) == k && strncmp(p->def->roles[i].name, a, k) == 0) found = 1;
+        if (!found) {
+            pl_fail(p, "--allow-below-tier: '%.*s' is not a role of the definition", (int)k, a);
+            p->bad_arg = true;
+            return -1;
+        }
+        a = e ? e + 1 : NULL;
+    }
+    return 0;
+}
+
 static int pl_roles_tier(pl_player* p) {
     char msg[600];
     size_t used = 0;
@@ -2307,7 +2329,7 @@ int pl_load(pl_player* p, const pl_args* a) {
     memset(&p->env, 0, sizeof p->env);
     if (pl_cal_load(p) < 0) return -1;
 
-    if (pl_channels_assign(p) < 0) return -1;
+    if (pl_allow_check(p) < 0 || pl_channels_assign(p) < 0) return -1;
     if (pl_writer_open(p) < 0 || pl_roles_bind(p) < 0 || pl_roles_tier(p) < 0 || pl_outputs_open(p) < 0) return -1;
     if (pl_screen_open(p) < 0) return -1;
     if (pl_inputs_open(p) < 0) return -1;

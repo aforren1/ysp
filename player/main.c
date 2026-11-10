@@ -66,7 +66,17 @@ int main(int argc, char** argv) {
         else if (!strcmp(s, "--max-seconds") && v) { a.max_seconds = atoll(v); i++; }
         else if (!strcmp(s, "--measure")) a.measure = true;
         else if (!strcmp(s, "--windowed")) a.windowed = true;
-        else if (!strcmp(s, "--allow-below-tier") && v) { a.allow_below = v; i++; }
+        else if (!strcmp(s, "--allow-below-tier") && v) {
+            /* a flag here is a forgotten value (it would swallow that flag);
+             * an empty name names no role: both are typos, not overrides */
+            size_t n = strlen(v);
+            if (v[0] == '-' || n == 0 || v[0] == ',' || v[n - 1] == ',' || strstr(v, ",,")) {
+                fprintf(stderr, "ysp_player: --allow-below-tier '%s': give role names, ROLE[,ROLE], with no empty entry\n", v);
+                return 2;
+            }
+            a.allow_below = v;
+            i++;
+        }
         else if (!strcmp(s, "--hang-at-trial") && v) { a.hang_trial = atoi(v) + 1; i++; }
         else if (!strcmp(s, "--test-lose-code") && v) { a.lose_code = atoi(v); i++; }
         else if (!strcmp(s, "--test-plan-early") && v) { a.plan_early_ns = (int64_t)llround(atof(v) * 1e9); i++; }
@@ -101,7 +111,12 @@ int main(int argc, char** argv) {
     /* --sim runs on the virtual clock from before anything reads it, so the
      * records are the same on every host and every run */
     if (a.sim) yrt_virtual_begin(0);
-    if (pl_load(&g_p, &a) < 0) { fprintf(stderr, "ysp_player: %s\n", g_p.error); pl_close(&g_p); return 1; }
+    if (pl_load(&g_p, &a) < 0) {
+        fprintf(stderr, "ysp_player: %s\n", g_p.error);
+        rc = g_p.bad_arg ? 2 : 1;
+        pl_close(&g_p);
+        return rc;
+    }
     rc = pl_run(&g_p);
     if (rc < 0) { fprintf(stderr, "ysp_player: %s\n", g_p.error); pl_close(&g_p); return 1; }
     if (g_p.aborted) {
