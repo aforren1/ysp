@@ -817,6 +817,7 @@ def case_maxfires(ctx):
         rig = make_rig(ctx, "maxfires", trig.a, board.a)
         out = os.path.join(ctx.out, "maxfires_real")
         shutil.rmtree(out, ignore_errors=True)
+        t0 = time.monotonic()
         p = subprocess.Popen([ctx.player, pack, "--out", out, "--field", "participant=1", "--rig", rig, "--max-trials", "1"] + ctx.line_extra,
                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                              env=dict(os.environ, XDG_CONFIG_HOME=os.path.join(ctx.out, "config")))
@@ -826,12 +827,18 @@ def case_maxfires(ctx):
             p.kill()
             msg = p.communicate()[0].strip()
             restore_display()
-        print("  maxfires: exit %d: %s" % (p.returncode, msg[:300]), flush=True)
+        took = time.monotonic() - t0
+        print("  maxfires: exit %d in %.2f s: %s" % (p.returncode, took, msg[:300]), flush=True)
         check(p.returncode == 1 and "'multi'" in msg and "'oddball'" in msg and "fire" in msg and not os.path.exists(out),
               "maxfires: two rules with other fires a trial on one role: exit %d" % p.returncode)
     finally:
         trig.close()
         board.close()
+    # a definition check: it runs before any device or the screen opens, so
+    # the refusal is quick and the trigger box hears nothing (no 0 at open,
+    # no 0xFF at close)
+    check(took < 1.0 and not trig.data,
+          "maxfires: refused before the devices and the screen: %.2f s, trigger bytes %s" % (took, bytes(trig.data).hex()))
 
 
 def case_fewer(ctx):
@@ -857,6 +864,7 @@ def case_fewer(ctx):
         out = os.path.join(ctx.out, "fewer_real")
         shutil.rmtree(out, ignore_errors=True)
         # a player that starts runs one silent trial (about 3 s) and ends
+        t0 = time.monotonic()
         p = subprocess.Popen([ctx.player, pack, "--out", out, "--field", "participant=1", "--rig", rig, "--max-trials", "1"] + ctx.line_extra,
                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         try:
@@ -865,12 +873,18 @@ def case_fewer(ctx):
             p.kill()
             msg = p.communicate()[0].strip()
             restore_display()
-        print("  fewer: exit %d: %s" % (p.returncode, msg[:300]), flush=True)
+        took = time.monotonic() - t0
+        print("  fewer: exit %d in %.2f s: %s" % (p.returncode, took, msg[:300]), flush=True)
         check(p.returncode == 1 and "'one'" in msg and "'oddball'" in msg and not os.path.exists(out),
               "fewer: two rules with other choices on one role: exit %d" % p.returncode)
     finally:
         trig.close()
         board.close()
+    # a definition check: it runs before any device or the screen opens, so
+    # the refusal is quick and the trigger box hears nothing (no 0 at open,
+    # no 0xFF at close)
+    check(took < 1.0 and not trig.data,
+          "fewer: refused before the devices and the screen: %.2f s, trigger bytes %s" % (took, bytes(trig.data).hex()))
 
 
 def case_rule(ctx):

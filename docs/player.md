@@ -38,7 +38,10 @@ ysp_player PACK.ysppak --out DIR --seed 7 --field participant=1
    has `"allow_below_tier"` (the list) and each such role `"below_tier":
    true`. A value that starts with `-`, an empty entry (`trig,`) or a
    name that is not a role of the definition is a bad argument: exit 2,
-   in `--sim` too.
+   in `--sim` too. In the same step it checks the response rules of the
+   bound device roles (the same choices, codes and fires a trial on one
+   role; see "Explanation: what lowering decided"), so that refusal sends
+   no byte to a trigger box either.
 4. It opens each bound device and waits up to 3 s for it to run. A device
    that does not answer as its family must stops the start.
 5. It opens the display that `YSCR_BACKEND_AUTO` picks (GLX_OML on X11),
@@ -220,7 +223,7 @@ forced. The Report section lists them with the evidence.
 | A role's `min_tier` (decided 2026-11-10) | A real start is refused, naming each role, when a bound role's tier is worse than its `min_tier`; UNKNOWN counts as worse. The check runs before any device or the display opens. The tier is the rig profile's rule (`yrig_source_role()`), so a keyboard and every output role are UNKNOWN today (How-to: give a keyboard a tier). `--allow-below-tier ROLE[,ROLE]` starts anyway for those roles only and `session.json` says so. `--sim` writes a line on stderr only |
 | The response kind in a real run | The binding's: a device role's choices are its `buttons` (box events, control = the button's code); a keyboard role's are key names. `--sim` keeps the first family's kind |
 | An any-key response in a real run | Hears its role's kind only (`yrsp_desc.kinds`): a click that brings the window to the front is no response |
-| A response's `trigger` on a device role | A `ydev_rule` on the role's reader thread, its output the trigger role's device. Its codes are fixed when the device opens: the code must be a number or a lookup by `$response` of numbers, and every template that responds on the role with a trigger must give the same choices and codes, in any order; else the start stops, naming both. A template on the role with no `trigger` runs with the rule disarmed, so its presses send nothing; the rule is disarmed at each trial's end. A rule's record goes to the trial whose arm its press follows. Measured on a pty pair: write start minus the press, p50 66.5 us, max 93.9 us (Results) |
+| A response's `trigger` on a device role | A `ydev_rule` on the role's reader thread, its output the trigger role's device. Its codes are fixed when the device opens: the code must be a number or a lookup by `$response` of numbers, and every template that responds on the role with a trigger must give the same choices and codes, in any order, and the same fires a trial (`response_ends_trial`, `max_responses`); else the start stops, naming both, before any device or the screen opens. A template on the role with no `trigger` runs with the rule disarmed, so its presses send nothing; the rule is disarmed at each trial's end. A rule's record goes to the trial whose arm its press follows. Measured on a pty pair: write start minus the press, p50 66.5 us, max 93.9 us (Results) |
 | A response's `trigger` on a keyboard role | `ydev_out_mark()` from the frame loop when it sees the response, up to a frame after the press (2.6). The write runs on the frame thread: 2.7 to 8.9 us on the pty TriggerBox (28 writes); ysp/device.h says an XID output can wait up to 2 ms for a timer query, which a 16.7 ms frame holds. No XID was measured |
 | When a response ends | Only once the landing frame's flip record is in, shown or not (`yrsp_set_wait_final()`, ysp/response.h 0.9.0), for every response; a safety net of 1 s from the onset if no record comes. The row's response columns are the final result's. If the live result `after` was built from named another response (a box's report read late with an earlier stamp, or the safety net), `rsp_flags` has 0x8000 (`PL_RSP_AFTER_LIVE`, the player's bit) |
 | The collectors | One array, one collector per template with a response; `yrsp_feed_screen()` gives every one every input, between trials too, so none misses a release |

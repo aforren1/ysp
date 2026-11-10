@@ -1834,8 +1834,10 @@ static int pl_outputs_open(pl_player* p) {
  * thread (2.6, G8): the code goes out where the press is read. The rule's
  * choices and codes are fixed when the device opens, so the code may
  * depend on $response only, and every template that responds on the role
- * must give the same codes. */
-static int pl_rule_make(pl_player* p, pl_role* in) {
+ * must give the same codes. With open false it only checks the definition:
+ * pl_rules_check() runs it before any device or the screen opens, so a
+ * refusal sends no byte and never sets full screen. */
+static int pl_rule_make(pl_player* p, pl_role* in, bool open) {
     ydev_rule_choice ch[YDEV_RULE_CHOICES];
     ydev_rule_desc rd;
     const yexp_template* first = NULL;
@@ -1913,7 +1915,7 @@ static int pl_rule_make(pl_player* p, pl_role* in) {
             }
         }
     }
-    if (!first) return 0;
+    if (!first || !open) return 0;
     {
         pl_role* o = NULL;
         for (i = 0; i < p->def->n_roles; i++) if (p->roles[i].trigger == out) o = &p->roles[i];
@@ -2014,6 +2016,19 @@ static int pl_roles_tier(pl_player* p) {
     return 0;
 }
 
+/* The rules' definition checks, for the roles pl_inputs_open() gives a
+ * rule (a real run's bound device roles), before the outputs open. */
+static int pl_rules_check(pl_player* p) {
+    int i;
+    if (p->args.sim) return 0;
+    for (i = 0; i < p->def->n_roles; i++) {
+        pl_role* r = &p->roles[i];
+        if (r->def->direction != 0 || !r->rig) continue;
+        if (pl_rule_make(p, r, false) < 0) return -1;
+    }
+    return 0;
+}
+
 /* The input roles, after the screen (its input bridge exists from its open)
  * and before the templates (a collector takes its sources at open). */
 static int pl_inputs_open(pl_player* p) {
@@ -2034,7 +2049,7 @@ static int pl_inputs_open(pl_player* p) {
         }
 #endif
         if (r->def->direction != 0 || !r->rig) continue;
-        if (pl_rule_make(p, r) < 0 || pl_role_open(p, r) < 0) return -1;
+        if (pl_rule_make(p, r, true) < 0 || pl_role_open(p, r) < 0) return -1;
     }
     return 0;
 }
@@ -2330,7 +2345,7 @@ int pl_load(pl_player* p, const pl_args* a) {
     if (pl_cal_load(p) < 0) return -1;
 
     if (pl_allow_check(p) < 0 || pl_channels_assign(p) < 0) return -1;
-    if (pl_writer_open(p) < 0 || pl_roles_bind(p) < 0 || pl_roles_tier(p) < 0 || pl_outputs_open(p) < 0) return -1;
+    if (pl_writer_open(p) < 0 || pl_roles_bind(p) < 0 || pl_roles_tier(p) < 0 || pl_rules_check(p) < 0 || pl_outputs_open(p) < 0) return -1;
     if (pl_screen_open(p) < 0) return -1;
     if (pl_inputs_open(p) < 0) return -1;
 

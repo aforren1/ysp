@@ -362,6 +362,15 @@ env = { YPL_REAL_CASES = "refuse" }
 name = "the role check after the screen"
 test = "real"
 why = "The role check runs before any device or the screen opens, so a refusal never sets full screen."
-find = '''pl_roles_bind(p) < 0 || pl_roles_tier(p) < 0 || pl_outputs_open(p) < 0) return -1;'''
-replace = '''pl_roles_bind(p) < 0 || pl_outputs_open(p) < 0) return -1;
+find = '''pl_roles_bind(p) < 0 || pl_roles_tier(p) < 0 || pl_rules_check(p) < 0 || pl_outputs_open(p) < 0) return -1;'''
+replace = '''pl_roles_bind(p) < 0 || pl_rules_check(p) < 0 || pl_outputs_open(p) < 0) return -1;
     if (pl_screen_open(p) < 0 || pl_roles_tier(p) < 0) return -1;'''
+
+[[mutant]]
+id = "rl-15"
+env = { YPL_REAL_CASES = "fewer,maxfires" }
+name = "the rule checks after the screen"
+test = "real"
+why = "A rule's definition checks (other choices, other fires a trial) run before any device or the screen opens, so the refusal sends no byte to the trigger box and never sets full screen."
+find = '''pl_roles_tier(p) < 0 || pl_rules_check(p) < 0 || pl_outputs_open(p) < 0) return -1;'''
+replace = '''pl_roles_tier(p) < 0 || pl_outputs_open(p) < 0) return -1;'''
