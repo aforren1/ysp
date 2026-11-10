@@ -992,18 +992,20 @@ def main():
     ctx = C()
     ctx.out = os.path.abspath(a.out or tempfile.mkdtemp(prefix="player_test"))
     os.makedirs(ctx.out, exist_ok=True)
-    ctx.make_rig = ""
-    for c in (os.path.join(a.bin, "player_make_rig"), os.path.join(a.bin, "player", "player_make_rig")):
-        if os.path.exists(c):
-            ctx.make_rig = c
-    for name, d in (("player", "player"), ("ypak", "pack")):
-        ok = False
-        for candidate in (os.path.join(a.bin, d, "ysp_" + name if name == "player" else name), os.path.join(a.bin, d, name)):
-            if os.path.exists(candidate):
-                setattr(ctx, name if name != "player" else "player", candidate)
-                ok = True
-                break
-        if not ok:
+    def find(name, dirs):
+        # a multi-config build (MSVC) puts programs in Release/, with .exe
+        for d in dirs:
+            for sub in ("", "Release"):
+                for ext in ("", ".exe"):
+                    c = os.path.join(a.bin, d, sub, name + ext)
+                    if os.path.isfile(c):
+                        return c
+        return ""
+    ctx.make_rig = find("player_make_rig", ("", "player"))
+    ctx.player = find("ysp_player", ("player",))
+    ctx.ypak = find("ypak", ("pack",))
+    for name in ("player", "ypak"):
+        if not getattr(ctx, name):
             print("no %s under %s" % (name, a.bin))
             return 2
     if a.player:

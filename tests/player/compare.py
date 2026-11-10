@@ -32,10 +32,13 @@ class Fail(Exception):
 
 
 def tool(bin_dir, name):
+    # a multi-config build (MSVC) puts programs in Release/, with .exe
     for d in (bin_dir, os.path.join(bin_dir, "pack"), os.path.join(bin_dir, "player")):
-        p = os.path.join(d, name)
-        if os.path.exists(p):
-            return p
+        for sub in ("", "Release"):
+            for ext in ("", ".exe"):
+                p = os.path.join(d, sub, name + ext)
+                if os.path.isfile(p):
+                    return p
     raise Fail("no program %s under %s" % (name, bin_dir))
 
 
@@ -127,11 +130,11 @@ def player(bin_dir, args):
     # a data set never overwrites: the folder is new each run
     out = args[args.index("--out") + 1]
     shutil.rmtree(out, ignore_errors=True)
-    return run([os.path.join(bin_dir, "player", "ysp_player")] + args)
+    return run([tool(bin_dir, "ysp_player")] + args)
 
 
 def build_pack(bin_dir, src, dest):
-    run([os.path.join(bin_dir, "pack", "ypak"), "build", os.path.join(src, "pack.json"), "-o", dest], cwd=src)
+    run([tool(bin_dir, "ypak"), "build", os.path.join(src, "pack.json"), "-o", dest], cwd=src)
 
 
 def write_script(rows, path, resp="response", rt="rt_s", hold=0.08):

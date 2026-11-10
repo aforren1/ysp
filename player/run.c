@@ -47,6 +47,7 @@ void pl_trigger_sink(void* ctx, const yscr_trigger_info* info) {
 /* One int that two threads read and write: the queue's ends and a row's
  * queued flag. */
 #if defined(_MSC_VER)
+#include <intrin.h>
 static int pl_ld(const int* x) { return (int)_InterlockedCompareExchange((volatile long*)(uintptr_t)x, 0, 0); }
 static void pl_st(int* x, int v) { (void)_InterlockedExchange((volatile long*)x, (long)v); }
 #else
