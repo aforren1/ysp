@@ -79,11 +79,18 @@ forced. The Report section lists them with the evidence.
 | Trigger codes | `0..255`, the width of a port byte; another value stops the run |
 | A stimulus shown more than once in a trial | `_onset_s` is the first onset, `_offset_s` the last offset, and `_frames`, `_dropped`, `_tier`, `_flags` cover every shown frame. D10 was silent |
 | A key that depends on the response, on a property a step drives | Stops at load with a named error: the channel writes the field every frame, so the key would have no effect |
-| The end of a trial with a backward `at_s` or a tween | The end MARK goes at the latest scheduled time, so no step is dropped; `after` starts at the later of the response's end and that time |
 | A `from` that an `if` leaves unshown on a trial | A named error at that trial's start, because the response could never end |
-| A loop or repetition over nothing | Tree steps are spread over frames (4096 a frame); after 1,000,000 steps with no trial, a named error |
-| An RDK that moves longer than 65536 frames in one trial (18 min at 60 Hz) | A named error, not a frozen field |
-| A leaf run past 65536 in one session | A named error: `node_seeds` cannot hold more |
+| A tree where no leaf can run (every leaf under an `if` or `unless` that a literal or a session field makes false, or zero repetitions) | Refused at load |
+| A loop or repetition over leaves that a run skips | Tree steps are spread over frames (4096 a frame); the walk has no step limit, and each yield frame draws nothing |
+| Leaf runs in one session | The loader bounds them from the tree (repetitions, table rows, `loop.max`) and sizes `node_seeds` from that bound. A tree that can run more than 10,000,000 leaves is refused at load |
+| An RDK's steps file | The step buffer is sized at load from the longest trial each template that shows the RDK can run (its events, the response's deadline, `after`). A template with an RDK and no reachable end (a response with no deadline) or one longer than 7,200 s is refused at load, so no trial stops with 0 rows |
+| Column text | Each text column holds the longest value known at load (at least 64 bytes); a value longer than 4,096 bytes is refused at load |
+| An array in `vars` or `data` | Written to its column as one JSON array, numbers in canonical form: `[1,0,0.5]`. A stimulus key reads it as its value |
+| A key held past its trial's end | The release goes to the collector that saw the press, in any later trial or template, so the next press counts |
+| A frame with no trial (before the first trial, between trials, a yield frame) | Draws nothing |
+| A stimulus left on at a trial's end | `<s>_offset_s` is the onset of the trial's last frame |
+| One node with the same name in `vars` and `data` | Refused at load |
+| A table column in one leaf and a `vars` name in another | One column, as for a jitter in one leaf and a text in another: each leaf's row writes its own value, and a column whose leaves give different types holds text (a duration as its exact decimal) |
 | A channel's trace | `--trace-channels FILE` writes every channel per frame: a test's view, off by default |
 | A trial row's timing columns | Written when their frames' flip records arrive (a pending-row ring), so `<s>_offset_s` of a stimulus turned off at the trial's last frame is known |
 | `--sim` triggers | The screen's trigger channels are real (`yscr_trigger`, worker thread); the sink counts firings, and the data takes the deadline (the planned vblank) as the write's time, because a real write's start would differ between two runs |

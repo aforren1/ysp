@@ -88,9 +88,9 @@ id = "r-10"
 name = "the participant answers without the key"
 test = "player"
 why = "--participant correct answers key_answer on each trial."
-find = '''                if (pl_eval_text(p, &p->env, d->response->key_answer, p->key_answer, sizeof p->key_answer) < 0) return -1;
+find = '''                if (pl_eval_text(p, &p->env, d->response->key_answer, p->key_answer, p->max_text + 1) < 0) return -1;
                 p->env.key_answer_known = true;'''
-replace = '''                if (pl_eval_text(p, &p->env, d->response->key_answer, p->key_answer, sizeof p->key_answer) < 0) return -1;'''
+replace = '''                if (pl_eval_text(p, &p->env, d->response->key_answer, p->key_answer, p->max_text + 1) < 0) return -1;'''
 
 [[mutant]]
 id = "r-11"
@@ -169,13 +169,13 @@ replace = '''s->sound_scheduled < 0'''
 
 [[mutant]]
 id = "r-20"
-name = "the rdk limit is not checked"
+name = "an rdk's stream past its bound not stopped"
 test = "player"
-why = "Item 10: past the limit a named error."
-find = '''                if (s->n_steps >= PL_MAX_STEPS_RDK) {
-                    pl_fail(p, "stimulus '%s' has moved'''
-replace = '''                if (0) {
-                    pl_fail(p, "stimulus '%s' has moved'''
+expect = "survived"
+note = "A guard against a load bound that is wrong; no valid session reaches it."
+why = "An internal guard: the load sizes the buffer (pl-20), so no test reaches it."
+find = '''                if (s->n_steps >= s->max_steps) {'''
+replace = '''                if (0) {'''
 
 [[mutant]]
 id = "r-21"
@@ -203,11 +203,11 @@ replace = '''        p->events_end = p->q.t;'''
 
 [[mutant]]
 id = "r-24"
-name = "the walk has no limit"
+name = "a yield frame draws the stimuli"
 test = "player"
-why = "Item 19: a loop over nothing stops with a name."
-find = '''        if (++p->walk_steps > PL_WALK_MAX) {'''
-replace = '''        if (0) {'''
+why = "Round 2 item 4: t_r2_yield_draws_nothing."
+find = '''    drawn = p->in_trial;'''
+replace = '''    drawn = true;'''
 
 [[mutant]]
 id = "r-25"
@@ -219,10 +219,12 @@ replace = ''''''
 
 [[mutant]]
 id = "r-26"
-name = "node seeds past their limit"
+name = "node seeds past the load's bound"
 test = "player"
-why = "Item 19: a named error, not a silent cut."
-find = '''    if (p->n_node_seeds >= PL_MAX_LEAF_RUNS) {'''
+expect = "survived"
+note = "A guard against a load bound that is wrong; no valid session reaches it."
+why = "An internal guard: the load sizes the log (pl-25), so no test reaches it."
+find = '''    if (p->n_node_seeds >= p->n_leaf_runs_max) {'''
 replace = '''    if (0) {'''
 
 [[mutant]]
@@ -315,8 +317,24 @@ replace = ''''''
 
 [[mutant]]
 id = "r-37"
-name = "a row value over 255 bytes is cut"
+name = "a stimulus left on has no offset"
 test = "player"
-why = "Item 20: a named refusal."
-find = '''    if (rc == -2) { pl_fail(p, "the column '%s': its value is longer than %zu bytes", name, sizeof buf - 1); return -1; }'''
+why = "Round 2 low item: its offset is the trial's end (t_r2_low)."
+find = '''        if (rec->index == end_frame) st->offset_ns = rec->onset ? rec->onset : rec->planned;'''
+replace = ''''''
+
+[[mutant]]
+id = "r-38"
+name = "a held key's release goes to the running collector"
+test = "player"
+why = "Round 2 item 3: t_r2_release_other_template."
+find = '''            if (p->release_due) { yrsp_feed(p->release_to, &p->release_ev); p->release_due = false; }'''
+replace = '''            if (p->release_due) { yrsp_feed(t->collector, &p->release_ev); p->release_due = false; }'''
+
+[[mutant]]
+id = "r-39"
+name = "a vars name read as another leaf's table column"
+test = "player"
+why = "Round 2 low item: t_r2_low's shared column."
+find = '''                    for (k = 0; k < n->n_vars; k++) if (strcmp(n->vars[k].key, name) == 0) is_var = 1;'''
 replace = ''''''

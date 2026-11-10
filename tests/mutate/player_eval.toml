@@ -47,6 +47,16 @@ replace = '''                if (c > 0) hi = mid - 1;'''
 id = "e-05"
 name = "a long value is cut, not refused"
 test = "player"
+expect = "survived"
+note = "Round 2 item 6: the load sizes the text buffers from the longest value it can know, so the -2 is an internal guard no valid session reaches (pl-27 covers the sizing)."
 why = "Item 20."
 find = '''snprintf(buf, cap, "%s", v->str ? v->str : "") < cap ? 0 : -2;'''
 replace = '''snprintf(buf, cap, "%s", v->str ? v->str : "") < cap ? 0 : 0;'''
+
+[[mutant]]
+id = "e-06"
+name = "an array's items written with another separator"
+test = "player"
+why = "Round 2 item 2: one text form, [1,0,0.5] (t_fix_data_set)."
+find = '''            if (k) buf[used++] = ',';'''
+replace = '''            if (k) buf[used++] = ' ';'''

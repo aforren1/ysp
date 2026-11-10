@@ -86,9 +86,14 @@ class Run:
             return
         self.data = os.path.join(self.dir, "data")
         cmd = [ctx.player, self.pack, "--out", self.data, "--sim", "--seed", "99", "--field", "participant=3"] + (args or [])
-        r = subprocess.run(cmd, cwd=self.dir, capture_output=True, text=True)
-        self.rc = r.returncode
-        self.err = r.stderr + r.stdout
+        try:
+            r = subprocess.run(cmd, cwd=self.dir, capture_output=True, text=True, timeout=240)
+            self.rc = r.returncode
+            self.err = r.stderr + r.stdout
+        except subprocess.TimeoutExpired:
+            # a run that never ends is a failure of its own, not a hung suite
+            self.rc = -9
+            self.err = "the run did not end in 240 s"
         self.trials = self.read("trials.csv")
         self.events = self.read("events.csv")
 
@@ -607,6 +612,18 @@ def t_fix_backward_at(ctx):
     d3c = base({"t": {"events": [{"on": "s"}, {"then": "s", "props": {"x": 1}, "duration_s": 1}, {"off": "s"}]}}, [{"name": "l", "trial": "t"}])
     r3c = Run(ctx, "fix_then", d3c)
     check(r3c.rc == 0 and float(r3c.trials[0]["time_elapsed_s"]) >= 0.99, "a then moves time: %s" % (r3c.trials[:1] and r3c.trials[0]["time_elapsed_s"]))
+    # a then's end holds back `after` past an early end of the response
+    d3d = base({"t": {"events": [{"on": "s"}, {"then": "s", "props": {"x": 1}, "duration_s": 1}], "response": {"role": "r", "choices": ["left"], "from": "s", "duration_s": 0.1},
+                     "after": [{"mark": "go"}]}}, [{"name": "l", "trial": "t"}])
+    r3d = Run(ctx, "fix_then_after", d3d, args=["--participant", "silent"])
+    marks = [float(e["t_s"]) for e in r3d.events if e["text"] == "go"]
+    ons = [float(e["t_s"]) for e in r3d.events if e["stimulus"] == "s" and e["kind"] == "onset"]
+    check(r3d.rc == 0 and marks and ons and marks[0] - ons[0] >= 0.99, "after starts at a then's end: %s %s %s" % (marks, ons, r3d.err))
+    # a then in `after`: the trial ends at its end
+    d3e = base({"t": {"events": [{"on": "s"}], "response": {"role": "r", "choices": ["left"], "from": "s", "duration_s": 0.1},
+                     "after": [{"on": "t"}, {"then": "t", "props": {"x": 1}, "duration_s": 1}]}}, [{"name": "l", "trial": "t"}])
+    r3e = Run(ctx, "fix_then_in_after", d3e, args=["--participant", "silent"])
+    check(r3e.rc == 0 and float(r3e.trials[0]["time_elapsed_s"]) >= 1.09, "a then in after holds the end: %s %s" % (r3e.trials[:1] and r3e.trials[0]["time_elapsed_s"], r3e.err))
     # a forward at_s in `after`, and the end goes at the latest
     d4 = base({"t": {"events": [{"on": "s"}], "response": {"role": "r", "from": "s", "duration_s": 0.1, "choices": ["left"]}, "after": [{"at_s": 1.5}, {"mark": "late"}]}}, [{"name": "l", "trial": "t"}])
     r4 = Run(ctx, "fix_at4", d4, args=["--participant", "silent"])
