@@ -107,15 +107,20 @@ on the virtual clock, unless the row says otherwise.
 | Check | Result |
 |---|---|
 | The four worked examples against their C programs (`tests/player/compare.py`) | RDK, 2AFC: every shared column exact, the dots' digest and the steps file included (the program's trial seed from `--trial-seeds`, the 2AFC's timing from `--design-timing`, both test-only). Stroop: exact except columns the format derives differently (`block` text, `too_slow`). Oddball (`trigger_flip.c`): not comparable column for column; the shared mechanism checked instead. The report lists each column |
-| `tests/player/player_test.py` | 16 cases of unusual shapes (nesting, `if` on a node and a step, a container with no children, `loop` and `max`, `requeue` of a timeout, a track that ends early, a lookup in every key type, role order, `after` timing, outcomes, `$level` and `$estimate` in stimulus units, a sound's onset, D8 seed stability, `record_data` false, stimuli of another template, refused packs): pass |
-| `tests/player/eval_test.c` | 52 checks of the evaluator and op tables; the host's role check against a real profile: pass |
-| ASan and UBSan (`setarch -R`): the player on the four examples, the unit test, the 16 cases, the comparison | Clean |
-| Fuzz (`tests/fuzz/player_fuzz.c`, self-driven token mutations of the four examples, each run budgeted to 6 trials), ASan and UBSan | Final code: 6,000 inputs, 797 loaded, 796 ran to the end, no report. An earlier revision of the same day: 24,000 inputs, no report |
-| Coverage of the fuzz target (gcov, `-O0`, 6,000 inputs, 817 loaded, 814 ran to the end) | See the report; every source file's run path is reached |
-| Mutants (`tests/mutate/player_lower.toml`, `player_run.toml`) | 17 of 17 killed |
-| Allocations in `pl_frame` (`player_alloc_test`, wrapped malloc, calloc, realloc) | 0 on all four examples |
-| Frame work (`--measure`, Release, i5-14500, load average 6.9 from earlier builds, three runs each) | Largest over the four examples: frame 52.7 us, trial start 37.7 us (the 2AFC session, QUEST+ on the frame path). 0 frames over 16 ms. The simulated display has no GPU cost, so this is the CPU part of a frame only |
-| Full ctest, Linux, `DISPLAY` unset | 120 of 120, before the last player fix; the 3 player tests pass after it |
+| `tests/player/player_test.py` | 36 cases of unusual shapes and of each fix of the review (a lookup in every key type, nesting, `if` on a node and on a step, `loop`, `requeue`, a track that ends early, density, key re-application, stale RDK data, timeouts, any-key responses, a stimulus shown twice, `vars` and `data` of one name, repeated sounds, a backward `at_s`, the walk's budget, the data set): pass |
+| `tests/player/eval_test.c` | 52 checks: pass |
+| ASan and UBSan (`setarch -R`): the four examples, the unit test, the 36 cases, the comparison | Clean |
+| Fuzz, ASan and UBSan: `tests/fuzz/player_fuzz.c` over the corpus of `tests/fuzz/player_corpus.py` (1,017 seeds, every key of ysp/experiment.h's table in a valid definition) and the four examples; token swap, byte flip, key insertion, key deletion; a quarter of the inputs with no trial cap; 16 processes | 200,000 inputs on the code before its last small change, 26,870 loaded, 26,043 ran to the end, no report. 20,000 inputs on the final code, no report |
+| gcov, `-O0`, the seeds and 30,000 mutated inputs | `lower.c` 92.3 %, `run.c` 95.4 %, `host.c` 93.6 %, `eval.c` 84.5 % of lines. Not reached in `eval.c`: the AEP dims branch (AEP is refused), defensive cases of value kinds the loader does not produce (`YEXP_V_NONE`, a linspace or choice as a single value, unknown kinds) and errors for types the loader refuses (`no value where a number goes`, a non-contrast gamut, a gamut with no calibration) |
+| Mutants (`tests/mutate/player_{lower,run,eval,host}.toml`, built with the system tests) | 63 of 63 as expected: 61 killed, 2 kept as survivors with a note (a full row ring, and the weight of a leaf open in the per-frame yield). `experiment.toml`: 152 of 152 |
+| Allocations in `pl_frame` (`player_alloc_test`) | 0 on all four examples |
+| The comparison (`tests/player/compare.py`) | No exact column differs; timeouts now in the RDK and 2AFC scripts |
+| Full ctest, Linux, `DISPLAY` unset | 120 of 120 |
+
+Frame work (`--measure`, Release, i5-14500, no other job running, load average
+about 2, three runs of each example): largest frame 41 to 52 us, largest
+trial start 23 to 37 us, 0 frames over 16 ms. The simulated display has no
+GPU cost, so this is the CPU part of a frame only.
 
 ## What a real-window run needs next
 
