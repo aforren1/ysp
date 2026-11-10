@@ -86,7 +86,7 @@ error). An empty field means "none": no response, or no onset.
 | `onset_residual_s` | How late the stimulus's frame appeared: the flip record's onset minus its planned onset |
 | `landing_residual_s` | How far the stimulus's frame is from the time in the sequence |
 | `onset_frame` | The frame the stimulus appeared on |
-| `rsp_tier`, `rsp_flags` | The press's stamp tier, and the `YRSP_R_*` flags of the result (0x400: a response code sent at the press disagrees with the final response, [Codes sent](#codes-sent-v070)) |
+| `rsp_tier`, `rsp_flags` | The press's stamp tier, and the `YRSP_R_*` flags of the result (0x400: a response code sent at the press disagrees with the final response, [Codes sent](#codes-sent-v070)). The header uses bits 0 to 14; bits 15 to 31 are the caller's (the player sets 0x8000) |
 | `n_anticipations`, `n_early` | Presses before 0.1 s, and presses before the stimulus |
 
 A row with `onset_src` 3 has an RT from a prediction, not from a flip
@@ -419,6 +419,12 @@ The header's comment block lists every field and flag. In short:
 | `yrsp_feed_screen(&s, c, n)` | Every input event on the screen's queue to n collectors (inline, with ysp/screen.h and SDL3). |
 | `yrsp_set_landing(&c, fired, n, ch)` | The plan from the ONSET event of channel `ch` (inline, with ysp/timeline.h). |
 | `YRSP_DATA_COLS`, `yrsp_data_set(&w, &r)` | The result's columns for ysp/trials.h's data writer (inline, with ysp/trials.h). |
+
+Result flags (`YRSP_R_*`): the header uses bits 0 to 14 and keeps the
+free ones for later flags. Bits 15 to 31 are the caller's: the header
+never sets them, so a caller can put its own flags in the same
+`rsp_flags` column. The player uses 0x8000 (`PL_RSP_AFTER_LIVE`,
+docs/player.md).
 
 jsPsych option to ysp field:
 

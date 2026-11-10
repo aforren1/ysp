@@ -982,7 +982,10 @@ typedef struct yrsp_entry {
     uint8_t  reserved_[3];
 } yrsp_entry;
 
-/* Result flags */
+/* Result flags. The header uses bits 0 to 14 and keeps them for later
+ * flags; bits 15 to 31 are the caller's, never set here, so a caller that
+ * writes its own flags into the same rsp_flags column (the player's
+ * 0x8000, docs/player.md) cannot meet a future YRSP_R_* bit. */
 #define YRSP_R_RESPONDED    0x0001u
 #define YRSP_R_TIMEOUT      0x0002u /* the deadline ended it, no response */
 #define YRSP_R_ENDED_EARLY  0x0004u /* ended on a press that no longer counts */

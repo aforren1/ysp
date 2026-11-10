@@ -142,6 +142,10 @@ The data set is format 2.10. Columns not fixed by the format:
 `first_in_block`, `index` (the leaf's trial number; `trial_index` is the
 session's, since it joins `frames.csv` and `events.csv`), and `time_elapsed_s`
 (the end frame's onset minus the session's first frame's onset).
+`rsp_flags` is the result's `YRSP_R_*` flags (bits 0 to 14, ysp/response.h)
+and the player's own in the bits the header leaves to its caller (15 to
+31): 0x8000 (`PL_RSP_AFTER_LIVE`), `after` was built from another result
+than the row's.
 
 `session.json` also has `node_seeds` (each leaf run's path, iteration and
 seed, for the first 65,536 leaf runs) and `node_seeds_unlogged` (the leaf
@@ -311,7 +315,8 @@ onset makes early. They can still name another response in two cases: a
 box's press read after the window ended, stamped before the press that
 ended it (the final result takes the earlier stamp; `real_test.py`
 `lateread`), and the safety net. Such a row has `rsp_flags` 0x8000
-(`PL_RSP_AFTER_LIVE`). `--sim`'s files did not change.
+(`PL_RSP_AFTER_LIVE`), a bit ysp/response.h leaves to its caller (bits 15
+to 31). `--sim`'s files did not change.
 
 ## Results
 

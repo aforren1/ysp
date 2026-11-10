@@ -82,9 +82,10 @@ enum {
     PL_WRITE_QUEUE    = 8192   /* writes the writer may lag behind: about a
                               * minute of frames and their events at 60 Hz  */
 };
-/* A row's rsp_flags bit, the player's own (ysp/response.h's YRSP_R_* end at
- * 0x0400): `after` was built from a live result that named another response
- * than the row's final one. */
+/* A row's rsp_flags bit, the player's own, in the bits ysp/response.h
+ * leaves to its caller (15 to 31; YRSP_R_* keep 0 to 14): `after` was
+ * built from a live result that named another response than the row's
+ * final one. */
 #define PL_RSP_AFTER_LIVE 0x8000u
 /* An out row's flags bit, the player's own (ysp/device.h's YDEV_OUT_* end at
  * 0x0200): the record came after its trial's row was written, so that row
