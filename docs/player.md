@@ -117,9 +117,10 @@ on the virtual clock, unless the row says otherwise.
 | The comparison (`tests/player/compare.py`) | No exact column differs; timeouts now in the RDK and 2AFC scripts |
 | Full ctest, Linux, `DISPLAY` unset | 120 of 120 |
 
-Frame work (`--measure`, Release, i5-14500, no other job running, load average
-about 2, three runs of each example): largest frame 41 to 52 us, largest
-trial start 23 to 37 us, 0 frames over 16 ms. The simulated display has no
+Frame work (`--measure`, Release, i5-14500, no other job of mine running,
+desktop open, load average about 2, three runs of each of the four examples):
+largest frame 20 to 50 us, largest trial start 14 to 32 us, 0 frames over
+16 ms. The simulated display has no
 GPU cost, so this is the CPU part of a frame only.
 
 ## What a real-window run needs next
