@@ -70,6 +70,11 @@ enum {
     PL_WALK_PER_FRAME = 4096,  /* tree-walk steps before the frame goes on    */
     PL_OUT_PENDING    = 64,    /* a channel's codes between the fire and its
                               * device record (a real run)                  */
+    PL_OUT_WAIT_FRAMES = 30,   /* a row waits this many frames after its last
+                              * one for its codes' device records, then is
+                              * written with the missing ones as failed     */
+    PL_RULE_ARMS      = 8,     /* a channel's last rule arms: a rule's record
+                              * goes to the arm its press falls in          */
     PL_DEV_RING       = 4096,  /* device records between two frames          */
     PL_DEV_DRAIN      = 256,   /* records read per drain call                */
     PL_LEAD_IN        = 30,    /* a real run's blank frames before the data
@@ -232,13 +237,15 @@ typedef struct pl_role {
     ydev_device* dev;          /* open in a real run when the rig binds it    */
     ydev_rule*  rule;          /* an input device's response rule (2.6)      */
     int         rule_out;      /* the rule's output: a trigger channel        */
-    int         rule_trial;    /* the session trial its arm belongs to        */
     yin_source  source;        /* its events' tier and bounds                 */
 } pl_role;
 
 /* A code a trigger channel fired, until the device's record of the write
  * (a real run): records of one channel come in fire order. */
 typedef struct pl_out_fire { int trial; uint32_t code; int64_t deadline; } pl_out_fire;
+/* A rule's window opened (a real run): its records go to the trial whose
+ * arm their press follows. */
+typedef struct pl_rule_arm { int trial; int64_t from; } pl_rule_arm;
 
 /* --- the tree ---------------------------------------------------------- */
 
@@ -303,10 +310,13 @@ typedef struct pl_stim_stats {
 typedef struct pl_out_stats {
     int      n, failed;
     int64_t  lag_max;
+    int      owed;      /* a real run: codes asked for whose device record
+                         * has not come; a row waits for them (a bound) */
 } pl_out_stats;
 
 typedef struct pl_row {
     bool    used, final;
+    bool    last_in;         /* its last frame's flip record has come     */
     int     trial_index;
     int64_t first_frame, last_frame;
     int     tier_worst, frames_dropped;
@@ -475,6 +485,8 @@ struct pl_player {
                                     * loop's (a response's on a keyboard role) */
     int*        out_head;          /* per queue: the next record's fire   */
     int*        out_tail;
+    pl_rule_arm rule_arms[YSCR_MAX_TRIGGERS][PL_RULE_ARMS];   /* per output channel */
+    int         n_rule_arms[YSCR_MAX_TRIGGERS];
     yrsp_collector* collectors;    /* one per template with a response, in
                                     * one array: every one hears every input */
     int         n_collectors;

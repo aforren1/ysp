@@ -56,6 +56,7 @@ static void pl_st(int* x, int v) { __atomic_store_n(x, v, __ATOMIC_RELEASE); }
 #endif
 
 static int pl_row_flush(pl_player* p, pl_row* r);
+static ydev_rule* pl_rule_of(pl_player* p, const pl_tmpl* t);
 
 /* One write. The writer thread's, or the frame thread's in --sim; the
  * message goes to werror, which only this side writes until wfail is set. */
@@ -917,11 +918,14 @@ int pl_start_trial(pl_player* p, const yscr_frame* f) {
             if (pl_eval_ns(p, &p->env, d->response->duration, &dur) < 0 || pl_eval_ns(p, &p->env, d->response->min_rt, &minrt) < 0) return -1;
             yrsp_arm(c, f->onset);
             yrsp_set_window(c, minrt, dur);
-            if (p->roles[p->tmpl->role].rule) {
+            if (pl_rule_of(p, p->tmpl)) {
                 /* a new window for the device's rule, and the trial its
-                 * codes belong to */
-                yrsp_rule_arm(p->roles[p->tmpl->role].rule, c);
-                p->roles[p->tmpl->role].rule_trial = p->global_trial;
+                 * codes belong to from the arm on */
+                pl_role* ro = &p->roles[p->tmpl->role];
+                pl_rule_arm* a = &p->rule_arms[ro->rule_out][p->n_rule_arms[ro->rule_out]++ % PL_RULE_ARMS];
+                yrsp_rule_arm(ro->rule, c);
+                a->trial = p->global_trial;
+                a->from = f->onset;
             }
             p->responding = true;
             p->env.key_answer_known = false;
@@ -1108,9 +1112,6 @@ static int pl_row_fill(pl_player* p, pl_row* r) {
             }
             break;
         }
-        case CS_ROLE_N: v = r->out[p->csrc[i].ref].n; have = 1; break;
-        case CS_ROLE_FAILED: v = r->out[p->csrc[i].ref].failed; have = 1; break;
-        case CS_ROLE_LAG: v = r->out[p->csrc[i].ref].lag_max; have = 4; break;
         case CS_CORRECT:
             if (p->env.has_correct) { v = p->env.correct; have = 5; }
             break;
@@ -1180,6 +1181,11 @@ static int pl_row_flush(pl_player* p, pl_row* r) {
         int si;
         const pl_stim_stats* st;
         switch (src) {
+        /* the outputs' counts now: their device records came after the
+         * row was filled (pl_devices_drain()) */
+        case CS_ROLE_N: ytr_data_set_int(w, i, r->out[ref].n); break;
+        case CS_ROLE_FAILED: ytr_data_set_int(w, i, r->out[ref].failed + (r->out[ref].owed > 0 ? r->out[ref].owed : 0)); break;
+        case CS_ROLE_LAG: ytr_data_set_time_ns(w, i, r->out[ref].lag_max); break;
         case CS_TIER_WORST: ytr_data_set_int(w, i, r->tier_worst); break;
         case CS_FRAMES_DROPPED: ytr_data_set_int(w, i, r->frames_dropped); break;
         case CS_FLIP_FLAGS: ytr_data_set_int(w, i, r->flip_flags); break;
@@ -1288,9 +1294,19 @@ static int pl_on_record(pl_player* p, const yscr_record* rec) {
             if (r->tier_worst < rec->tier) r->tier_worst = rec->tier;
             r->frames_dropped += (int)rec->dropped;
             r->flip_flags |= rec->flags;
-            if (r->ended && rec->index >= r->last_frame) r->final = true;
+            if (r->ended && rec->index >= r->last_frame) r->last_in = true;
             break;
         }
+    }
+    /* a row is written when its last frame's record is in and every code
+     * it asked for has its device record, or PL_OUT_WAIT_FRAMES frames
+     * later, with the missing ones counted failed */
+    for (i = 0; i < PL_PENDING_ROWS; i++) {
+        pl_row* r = &p->rows[i];
+        int k, owed = 0;
+        if (!r->used || r->final || !r->last_in) continue;
+        for (k = 0; k < p->n_triggers; k++) owed += r->out[k].owed;
+        if (owed <= 0 || rec->index >= r->last_frame + PL_OUT_WAIT_FRAMES) r->final = true;
     }
     while (p->rows[p->row_tail].used && p->rows[p->row_tail].final) {
         if (pl_row_hand(p, &p->rows[p->row_tail]) < 0) return -1;
@@ -1344,12 +1360,22 @@ static double pl_method_input(const pl_method* m, double value) {
 
 /* --- device records (a real run) ----------------------------------------- */
 
+/* The template's response rule: its response role's, when the template
+ * asks for a response trigger. A template on the same role with no
+ * trigger runs with the rule disarmed: it sends no code (2.6). */
+static ydev_rule* pl_rule_of(pl_player* p, const pl_tmpl* t) {
+    if (!t || !t->collector || !t->def->response->trigger_role) return NULL;
+    return p->roles[t->role].rule;
+}
+
 static pl_role* pl_trigger_role(pl_player* p, int ch) {
     int k;
     for (k = 0; k < p->def->n_roles; k++)
         if (p->roles[k].trigger == ch) return &p->roles[k];
     return NULL;
 }
+
+static void pl_out_expire(pl_player* p, int ch, int trial);
 
 /* Queue q of channel ch: 0 the flips' codes, 1 the frame loop's. */
 static void pl_out_push(pl_player* p, int ch, int q, int trial, int64_t deadline, uint32_t code) {
@@ -1361,22 +1387,37 @@ static void pl_out_push(pl_player* p, int ch, int q, int trial, int64_t deadline
     f->deadline = deadline;
     f->code = code;
     p->out_tail[k]++;
+    p->out_now[ch].owed++;
     /* a device that never writes back (unplugged) must not hold the queue:
-     * the oldest is dropped, and its record, if it comes, has no trial */
-    if (p->out_tail[k] - p->out_head[k] > PL_OUT_PENDING) p->out_head[k] = p->out_tail[k] - PL_OUT_PENDING;
+     * the oldest goes, unmatched */
+    if (p->out_tail[k] - p->out_head[k] > PL_OUT_PENDING) pl_out_expire(p, ch, p->out_fires[k * PL_OUT_PENDING + p->out_head[k]++ % PL_OUT_PENDING].trial);
 }
 
-static bool pl_out_pop(pl_player* p, int ch, int q, uint32_t code, pl_out_fire* out) {
-    int k = ch * 2 + q;
-    if (!p->out_fires || p->out_head[k] == p->out_tail[k]) return false;
-    *out = p->out_fires[k * PL_OUT_PENDING + p->out_head[k] % PL_OUT_PENDING];
-    if (out->code != code) return false;
-    p->out_head[k]++;
+/* The fire a record answers. Records of one queue come in fire order, but
+ * a code can get none: a trigger whose flip was not shown (CANCELED), a
+ * full ring, a test's lost code. A flip's record answers the last queued
+ * fire of its code whose deadline is not after the record's (a trigger
+ * MOVED to a later vblank has a later one); a frame loop's write answers
+ * the first of its code. The fires before it got no record: expired. */
+static bool pl_out_pop(pl_player* p, int ch, int q, uint32_t code, int64_t deadline, pl_out_fire* out) {
+    int k = ch * 2 + q, i, hit = -1;
+    if (!p->out_fires) return false;
+    for (i = p->out_head[k]; i != p->out_tail[k]; i++) {
+        const pl_out_fire* f = &p->out_fires[k * PL_OUT_PENDING + i % PL_OUT_PENDING];
+        if (q == 0 && f->deadline > deadline) break;
+        if (f->code == code) {
+            hit = i;
+            if (q == 1) break;
+        }
+    }
+    if (hit < 0) return false;   /* a write the player did not ask for */
+    while (p->out_head[k] != hit) pl_out_expire(p, ch, p->out_fires[k * PL_OUT_PENDING + p->out_head[k]++ % PL_OUT_PENDING].trial);
+    *out = p->out_fires[k * PL_OUT_PENDING + p->out_head[k]++ % PL_OUT_PENDING];
     return true;
 }
 
 /* The output counts of a trial: the running trial's, or a row that waits
- * for its frames' records; NULL once the row is written. */
+ * for its records; NULL once the row is written. */
 static pl_out_stats* pl_out_of(pl_player* p, int trial) {
     int i;
     if (trial < 0) return NULL;
@@ -1384,6 +1425,15 @@ static pl_out_stats* pl_out_of(pl_player* p, int trial) {
     for (i = 0; i < PL_PENDING_ROWS; i++)
         if (p->rows[i].used && p->rows[i].trial_index == trial) return p->rows[i].out;
     return NULL;
+}
+
+/* A fire that will get no record: its trial counts it failed, since the
+ * data cannot show that it went out. */
+static void pl_out_expire(pl_player* p, int ch, int trial) {
+    pl_out_stats* o = pl_out_of(p, trial);
+    if (!o) return;
+    o[ch].owed--;
+    o[ch].failed++;
 }
 
 /* Each output write since the last frame (YDEV_REC_OUT) goes to events.csv
@@ -1412,20 +1462,25 @@ static int pl_devices_drain(pl_player* p) {
             fire.trial = -1;
             fire.deadline = r->u.i64[3];   /* FLIP: the vblank; RULE: the press */
             if (fl & YDEV_OUT_RULE) {
-                for (k = 0; k < p->def->n_roles; k++)
-                    if (p->roles[k].rule && p->roles[k].rule_out == ch) fire.trial = p->roles[k].rule_trial;
+                /* the arm whose window the press falls in: the last one that
+                 * opened before it (two input roles may share the output) */
+                for (k = 0; k < p->n_rule_arms[ch] && k < PL_RULE_ARMS; k++) {
+                    const pl_rule_arm* a = &p->rule_arms[ch][(p->n_rule_arms[ch] - 1 - k) % PL_RULE_ARMS];
+                    if (a->from <= fire.deadline) { fire.trial = a->trial; break; }
+                }
             } else {
                 pl_out_fire q;
                 /* a write the player did not ask for (the 0 a box gets
                  * after it opens) matches no queued code */
-                if (!pl_out_pop(p, ch, (fl & YDEV_OUT_FLIP) ? 0 : 1, r->u.u32[8], &q)) continue;
+                if (!pl_out_pop(p, ch, (fl & YDEV_OUT_FLIP) ? 0 : 1, r->u.u32[8], fire.deadline, &q)) continue;
                 fire.trial = q.trial;
                 if (!(fl & YDEV_OUT_FLIP)) fire.deadline = q.deadline;   /* the frame loop's: the press */
             }
             o = pl_out_of(p, fire.trial);
             if (o) {
                 int64_t lag = r->u.i64[0] - fire.deadline;
-                if (fl & YDEV_OUT_RULE) o->n++;   /* the frame loop counted the others when it asked */
+                o += ch;
+                o->owed--;   /* a rule's fires are owed from the trial's end (pl_end_trial()) */
                 if (fl & YDEV_OUT_FAILED) o->failed++;
                 if (lag > o->lag_max) o->lag_max = lag;
             }
@@ -1463,7 +1518,7 @@ static int pl_response_trigger(pl_player* p, const yrsp_result* r) {
          * comes through pl_devices_drain(). A keyboard role has no reader:
          * the frame loop writes it now, up to a frame after the press. */
         const pl_role* o = pl_trigger_role(p, ch);
-        if (p->roles[p->tmpl->role].rule) return 0;
+        if (pl_rule_of(p, p->tmpl)) return 0;
         if (o && o->dev) {
             p->out_now[ch].n++;
             pl_out_push(p, ch, 1, p->global_trial - 1, r->t_response, (uint32_t)code);
@@ -1495,7 +1550,15 @@ int pl_end_trial(pl_player* p, const yscr_frame* f) {
     if (t->collector) {
         /* the rule's codes, so the result flags a code its final response
          * does not match (SENT_MISMATCH in rsp_flags) */
-        if (p->roles[t->role].rule) (void)yrsp_rule_sent(p->roles[t->role].rule, t->collector);
+        ydev_rule* rule = pl_rule_of(p, t);
+        if (rule) {
+            /* the rule's fires: owed to this row until their records come */
+            int ch = p->roles[t->role].rule_out, nf = ydev_rule_fires(rule, NULL, 0);
+            (void)yrsp_rule_sent(rule, t->collector);
+            ydev_rule_disarm(rule);
+            p->out_now[ch].n += nf;
+            p->out_now[ch].owed += nf;
+        }
         pl_finish(p, &res);
         pl_env_response(p, &res);
         have_res = true;
@@ -1920,8 +1983,7 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
     }
     /* the device's rule follows the onset, which the landing and the flip
      * record move (ysp/response.h, RESPONSE TRIGGERS) */
-    if (p->in_trial && p->tmpl->collector && p->roles[p->tmpl->role].rule)
-        yrsp_rule_window(p->roles[p->tmpl->role].rule, p->tmpl->collector);
+    if (p->in_trial && pl_rule_of(p, p->tmpl)) yrsp_rule_window(p->roles[p->tmpl->role].rule, p->tmpl->collector);
     /* also on the end's frame: a step that lands with the trial's last event
      * must reach this frame's draw */
     if (p->global_trial > 0) ygfx_apply(p->binds, p->n_binds, ytl_values(&p->tl));

@@ -1760,7 +1760,6 @@ static int pl_roles_bind(pl_player* p) {
         r->rig = rr && rr->family[0] ? rr : NULL;
         r->trigger = pl_trigger_channel(p, r->def->name);
         r->rule_out = -1;
-        r->rule_trial = -1;
         if (p->args.sim) continue;
         r->keyboard = !r->rig && r->def->direction == 0 && pl_role_lists(r->def, "keyboard");
         if (r->def->required && !r->rig && !r->keyboard) {
@@ -1868,11 +1867,21 @@ static int pl_rule_make(pl_player* p, pl_role* in) {
             c.kind = (uint8_t)YIN_KIND_BOX;
             c.control = (uint32_t)strtoul(in->def->buttons[found].key, NULL, 10);
             c.code = (uint32_t)code;
-            if (!first) ch[n++] = c;
-            else if (k >= n || ch[k].control != c.control || ch[k].code != c.code || out != o->trigger) {
-                pl_fail(p, "templates '%s' and '%s' give the device role '%s' different response triggers; a rule is set once, when the device opens",
-                        first->name, t->name, in->def->name);
-                return -1;
+            if (!first) {
+                ch[n++] = c;
+            } else {
+                /* the same choices, in any order, with the same codes: a
+                 * press of a choice the running template does not have
+                 * must send nothing */
+                int m, same = 0;
+                for (m = 0; m < n; m++)
+                    if (ch[m].control == c.control && ch[m].code == c.code) same = 1;
+                if (!same || r->n_choices != n || out != o->trigger) {
+                    pl_fail(p, "templates '%s' and '%s' give the device role '%s' different response triggers (choices, codes or output); "
+                               "a rule is set once, when the device opens",
+                            first->name, t->name, in->def->name);
+                    return -1;
+                }
             }
         }
         if (!first) {
@@ -1950,11 +1959,7 @@ static const ygfx_cache* pl_program_cache(pl_player* p) {
         char c = dir[i];
         if (c != '/' && c != '\\' && c != 0) continue;
         dir[i] = 0;
-#if defined(_WIN32)
-        (void)CreateDirectoryA(dir, NULL);
-#else
-        (void)mkdir(dir, 0700);
-#endif
+        (void)mkdir(dir, 0700);   /* _mkdir on Windows (the macro above) */
         dir[i] = c;
     }
     return ygfx_file_cache_init(&p->pcache, dir);
