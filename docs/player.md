@@ -320,10 +320,11 @@ on the virtual clock, unless the row says otherwise.
 | gcov, `-O0`, the seeds and 30,000 mutated inputs | Final code: `lower.c` 92.2 %, `run.c` 95.1 %, `host.c` 94.4 %, `eval.c` 84.6 % of lines. Reached: a leaf loop ended by a pass with no trials (10 times), a mid-trial RDK flush (29 times). Not reached: the yield on a leaf reopen (a guard, see the mutants) and the full requeue history (the system tests reach it). Not reached in `eval.c`: the AEP dims branch (AEP is refused), defensive cases of value kinds the loader does not produce (`YEXP_V_NONE`, a linspace or choice as a single value, unknown kinds) and errors for types the loader refuses (`no value where a number goes`, a non-contrast gamut, a gamut with no calibration) |
 | Mutants (`tests/mutate/player_{lower,run,eval,host}.toml`, built with the system tests) | Round 4, every list in full: 79 of 79 as expected: 75 killed, 4 kept as survivors with a note (a full row ring, the weight of a leaf open in the per-frame yield, a value's text behind the load's text bound, and the yield on a leaf loop's reopen, a second guard behind the empty-pass rule). `experiment.toml` (round 3): 171 of 171. 2026-11-10, the real window: every `--sim` mutant again, 81 of 81 as expected (r-33 and r-34 moved to the writer's hand-off; r-46, the writer's events in `--sim`, killed); 20 new mutants of the real path (test `real`: `tests/player/mut_real.c` runs `real_test.py`'s oddball, rule, abort, panic and refusal cases with the mutated player, one at a time on the display, 1,883 s): 20 of 20 as expected, 18 killed, 2 kept with a note (rr-08, the rule's codes not told to the collector, needs a press the rule fires on and the collector refuses; rr-10, the writer not drained before `session.json`, is a race the writer wins) |
 | Fix round, 2026-11-10 (the review's findings and decisions A and B) | Mutants: every `--sim` mutant, 82 of 82 as expected (r-47, the wait for the flip record, killed by `t_r5_wait_final`); the real path's, 30 of 30 as expected (each runs only its cases, `YPL_REAL_CASES`, 1,361 s and a rerun of three): 25 killed, 5 kept with a note (rr-08, rr-10, rr-12, rr-16, rr-18: guards that this rig cannot reach). rr-05 and rr-14 survived the first run and each got a stronger check (a code's deadline; a lost code whose next trial has the same code). ysp/response.h 0.9.0: 89 of 89. ASan and UBSan: the `--sim` tests (43 cases, the comparison, the four examples with three participants, the unit tests) and the real cases (the four examples, `noafter`, `lost`, `rule`, `rule2`, `fewer`, the abort, the panic, the refusals; 10 trials each): no report. Fuzz (ASan and UBSan, 4 processes, 152 s): 40,000 inputs, 5,475 loaded, 5,308 ran to the end, no report. ctest 119 of 119 |
+| Fix round 2, 2026-11-10 (the second review's items) | Mutants: every `--sim` mutant, 83 of 83 as expected (run 48, lower 25, host 4, eval 6); the real path's, 34 of 34 as expected (1,576 s, and rr-12 again after its anchor moved, 57 s): 30 killed, 4 kept with a note (rr-08, rr-10, rr-12, rr-16). rr-18 (the row's flag when `after` heard another result), rr-19 (the row keeps the live result), rl-12 (rules with other fires a trial), rl-13 (the override names its roles) and rl-14 (the role check after the screen opens) killed. ysp/response.h 0.9.0: 93 of 93; ysp/device.h `rule-12` to `rule-19`: 8 of 8. ASan and UBSan (`setarch -R`): the `--sim` tests (43 cases, the comparison, the four examples with three participants, the unit tests, 21,292 checks of `response_test`) and the real cases (the four examples, `noafter`, `lost`, `rule`, `rule2`, `lateread`, `fewer`, `maxfires`, the abort, the panic, the refusals; 10 trials each, 238 s): no report; the `--sim` files the same bytes as the Release build. Fuzz (ASan and UBSan, 4 processes, 153 s): 40,000 inputs, 5,475 loaded, 5,308 ran to the end, no report. ctest 119 of 119 |
 | Allocations in `pl_frame` (`player_alloc_test`) | 0 on all four examples; 0 on the frame thread in a real run (`--real`, below) |
 | The comparison (`tests/player/compare.py`) | No exact column differs; timeouts now in the RDK and 2AFC scripts |
 | Full ctest, Linux, `DISPLAY` unset | 120 of 120; the player and experiment tests of the sanitizer build, 9 of 9. 2026-11-10 (this build's set, the real window's code included): 119 of 119 |
-| `--sim` byte identity, 2026-11-10 (v0.2.0 against main's v0.1.0): the 42 cases of `player_test.py`, `compare.py`, and the four examples with three participants each | 459 files: 369 identical; 90 `session.json` files differ in `player_version` only (and in `rig_profile_sha256` where the test made its rig profile again, whose `written` date differs). The same on the ASan and UBSan build. After the fix round: the same 369 identical, the 90 differ in `player_version` and `headers.response` (0.9.0) only |
+| `--sim` byte identity, 2026-11-10 (v0.2.0 against main's v0.1.0): the 42 cases of `player_test.py`, `compare.py`, and the four examples with three participants each | 459 files: 369 identical; 90 `session.json` files differ in `player_version` only (and in `rig_profile_sha256` where the test made its rig profile again, whose `written` date differs). The same on the ASan and UBSan build. After the fix round: the same 369 identical, the 90 differ in `player_version` and `headers.response` (0.9.0) only. After fix round 2: the same, on the Release and the ASan and UBSan build |
 
 Frame work (`--measure`, Release, i5-14500, no other job of mine running,
 desktop open, load average 1.4 to 2.9, three runs of each of the four
@@ -372,6 +373,26 @@ row's write, the tier rule):
 | Stroop | 36, 66.1 s | 0.93 / 0.98 | 3,807 | 0 | 8.2 / 1.8 us | 1 | 225 us; trial start 48 us | 31 of 31 |
 | Oddball (keyboard, `--allow-below-tier`) | 16, 31.2 s | 0.90 / 0.94 | 1,712 | 0 | 7.8 / 2.2 us | 1 | 230 us; trial start 34 us | 14 of 14 |
 | Oddball (LINE board, rule, tier 1 from a bounds fixture) | 16, about 31 s | 0.81 / 0.91 | 1,712 | 0 | 16.9 / 1.8 us | 1 | 77 us; trial start 50 us | 14 of 14 |
+
+After fix round 2 (2026-11-10, 10:03 to 10:13, the same machine and
+conditions; the landing frame's record settles the wait, the row from the
+final result, owed per channel, the role check before the screen):
+
+| Example | Trials, run time | Load average (1 min), before / after | Frames | Dropped | Residual, \|max\| / \|p99\| | Tier | Largest frame work | Responses checked |
+|---|---|---|---|---|---|---|---|---|
+| RDK | 30, 60.8 s | 1.17 / 1.02 | 3,494 | 0 | 13.2 / 1.8 us | 1 | 219 us; trial start 36 us | 26 of 26 |
+| 2AFC | 30, 55.8 s | 0.93 / 0.95 | 3,194 | 0 | 14.2 / 1.8 us | 1 | 403 us; trial start 99 us | 26 of 26 |
+| Stroop | 36, 66.0 s | 0.87 / 1.07 | 3,807 | 0 | 7.2 / 1.8 us | 1 | 225 us; trial start 65 us | 31 of 31 |
+| Oddball (keyboard, `--allow-below-tier resp`) | 16, 31.2 s | 0.98 / 0.99 | 1,713 | 0 | 3.2 / 1.8 us | 1 | 240 us; trial start 38 us | 14 of 14 |
+| Oddball (LINE board, rule) | 16, about 31 s | 0.85 / 0.79 | 1,712 | 0 | 2.2 / 1.2 us | 1 | 84 us; trial start 37 us | 14 of 14 |
+
+Codes at the flip: write start minus the vblank p50 1.5 to 1.7 us, at
+most 3.3 us. The rule's codes: write start minus the press p50 37.1 us,
+max 90.1 us. `lateread` (a press stamped before the flip record, read
+after it): 7 trials, each row the final result. `maxfires` (templates
+with 1 and 2 fires a trial): refused at the start naming both. The
+allocation count: 0 on the frame thread, all four examples. The 2AFC's
+403 us frame was frame 93, early in the run, as before.
 
 The review's cases, each 16 trials: `noafter` (the oddball with no
 `after`): every row's `trig_lag_max_s` is its out rows' largest lag to
