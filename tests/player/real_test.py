@@ -25,6 +25,10 @@ Cases (--only takes one name):
                             the finished trials are on disk, the ramp back
   refuse                    display.min_tier in a window, a required role
                             with no device, a rig file that does not exist
+  alloc                     the four examples (oddball with its pty
+                            TriggerBox) through player_alloc_test --real:
+                            no heap call on the frame thread inside
+                            pl_frame(), keys and codes included
 
 The participant: a --sim run of the same seed gives each trial's key (the
 correct one) and how long the trial takes before its `from` stimulus and
@@ -472,6 +476,37 @@ def check_bytes(name, d, pty, rows):
               (name, len(data), len(flips), flips[len(flips) // 2] * 1e6, flips[-1] * 1e6), flush=True)
 
 
+def case_alloc(ctx):
+    print("== alloc", flush=True)
+    keep = ctx.player
+    ctx.player = os.path.join(ctx.bin, "player", "player_alloc_test")
+    try:
+        for name in ("rdk", "afc2", "stroop", "oddball"):
+            pack, definition = build_pack(ctx, name)
+            frm, duration, min_rt = the_response(definition)
+            pty = Pty() if name == "oddball" else None
+            try:
+                needs_rig = definition.get("display", {}).get("units") == "deg" or name == "oddball"
+                rig = make_rig(ctx, "alloc_" + name, pty.a if pty else None) if needs_rig else None
+                ctx.player = keep
+                sim_dir, trials, events, frames = plan_from_sim(ctx, name, pack, rig, 12)
+                ctx.player = os.path.join(ctx.bin, "player", "player_alloc_test")
+                plan = timing_plan(trials, events, frames, frm, duration)
+                keys = key_of(definition)
+                for tr in plan:
+                    tr["_duration"] = duration
+                    tr["name"] = tr["key"]
+                    tr["key"] = keys[tr["key"]]
+                rc, d, sent, out = run_real(ctx, "alloc_" + name, pack, plan, rig, extra=["--real"])
+                print("  %s: exit %s, %d keys; %s" % (name, rc, len(sent), out.strip().splitlines()[-1] if out.strip() else ""), flush=True)
+                check(rc == 0 and "inside pl_frame: 0" in out, "%s: heap calls on the frame thread: %s" % (name, out.strip()[-200:]))
+            finally:
+                if pty:
+                    pty.close()
+    finally:
+        ctx.player = keep
+
+
 def case_abort(ctx, kind):
     print("== %s" % kind, flush=True)
     name = "afc2"
@@ -584,7 +619,7 @@ def main():
         return 0
     ctx = Ctx(a)
     os.makedirs(ctx.out, exist_ok=True)
-    cases = ["rdk", "afc2", "stroop", "oddball", "abort", "panic", "refuse"]
+    cases = ["rdk", "afc2", "stroop", "oddball", "abort", "panic", "refuse", "alloc"]
     for c in cases:
         if a.only and c != a.only:
             continue
@@ -592,6 +627,8 @@ def main():
             case_abort(ctx, c)
         elif c == "refuse":
             case_refuse(ctx)
+        elif c == "alloc":
+            case_alloc(ctx)
         else:
             case_example(ctx, c)
     print("%d failures" % fails)
