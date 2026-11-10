@@ -1860,7 +1860,7 @@ static int pl_rule_make(pl_player* p, pl_role* in) {
                         t->name, in->def->name);
                 return -1;
             }
-            if (code > 255) { pl_fail(p, "template '%s': the response trigger code %lld is not in 0..255", t->name, (long long)code); return -1; }
+            if (code < 0 || 255 < code) { pl_fail(p, "template '%s': the response trigger code %lld is not in 0..255", t->name, (long long)code); return -1; }
             for (b = 0; b < in->def->n_buttons; b++)
                 if (strcmp(in->def->buttons[b].value->str, r->choices[k].key) == 0) found = b;
             if (found < 0) { pl_fail(p, "template '%s': choice '%s' is not one of role '%s''s buttons", t->name, r->choices[k].key, in->def->name); return -1; }
