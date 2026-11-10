@@ -378,3 +378,11 @@ why = "Round 4."
 find = '''                    if (p->walk_frame_steps > PL_WALK_PER_FRAME) return 2;
                     continue;'''
 replace = '''                    continue;'''
+
+[[mutant]]
+id = "r-45"
+name = "a full requeue history stops without its name"
+test = "player"
+why = "Round 4: the stop names the trial and the requeues (t_r4_requeue_full)."
+find = '''        if (r == YTR_ERR_FULL) {'''
+replace = '''        if (0) {'''

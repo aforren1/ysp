@@ -607,6 +607,7 @@ static int pl_leaf_open(pl_player* p, pl_leaf* lf, int iter) {
     p->leaf_loop_pass = 0;
     p->leaf_n_correct = p->leaf_n_counted = 0;
     p->leaf_pass_trials = 0;
+    p->leaf_requeues = 0;
     return 0;
 }
 
@@ -1309,7 +1310,16 @@ int pl_end_trial(pl_player* p, const yscr_frame* f) {
     }
     if (requeue) {
         int r = ytr_requeue(&p->trials);
+        if (r == YTR_ERR_FULL) {
+            /* the leaf's history holds every requeued copy: a trial that
+             * never gets a response fills it; the stop is named, not silent */
+            pl_fail(p, "node '%s': session trial %d (the leaf's trial %d) got no response, and 'requeue: no_response' had requeued %d trials of this leaf "
+                       "until ysp/trials.h's history of %d trials was full; the session stops here", p->leaf->node->path, p->global_trial - 1, p->ti.index,
+                    p->leaf_requeues, YTR_MAX_TRIALS);
+            return -1;
+        }
         if (r < 0) { pl_fail(p, "node '%s': %s", p->leaf->node->path, ytr_error(&p->trials)); return -1; }
+        p->leaf_requeues++;
     } else {
         int r = ytr_update(&p->trials, outcome_val, NULL);
         if (r < 0) { pl_fail(p, "node '%s': %s", p->leaf->node->path, ytr_error(&p->trials)); return -1; }

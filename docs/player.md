@@ -91,6 +91,7 @@ forced. The Report section lists them with the evidence.
 | A frame with no trial (before the first trial, between trials, a yield frame) | Draws nothing |
 | A stimulus left on at a trial's end | `<s>_offset_s` is the onset of the trial's last frame |
 | One node with the same name in `vars` and `data` | Refused at load |
+| `requeue: no_response` on a trial that never gets a response | The trial requeues until ysp/trials.h's history of 4,096 trials is full, then the session stops with a named error that gives the session trial, the leaf's trial and the number of requeues. A real session would need about 4,000 timeouts in a row on one leaf; the operator can stop it sooner. The rows written before the stop stay in the data set |
 | A leaf `loop` pass that gives no trials (its track is done) | Ends the loop: no accuracy can change without trials. Each reopen of a looping leaf also counts as a leaf open in the per-frame walk budget, so a frame yields as the walk does |
 | Container starts in one session | The loader bounds them from repetitions, table rows and `loop.max`: each start is a walk step, 4096 a frame. A tree that can start its containers more than 10,000,000 times (about 40 s of blank frames at 60 Hz) is refused at load |
 | A table column in one leaf and a `vars` name in another | One column, as for a jitter in one leaf and a text in another: each leaf's row writes its own value, and a column whose leaves give different types holds text (a duration as its exact decimal) |

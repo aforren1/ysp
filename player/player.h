@@ -357,6 +357,7 @@ struct pl_player {
     int       n_node_seeds;
     int       leaf_iter, leaf_loop_pass, leaf_n_correct, leaf_n_counted, iter_counter;
     int       leaf_pass_trials;  /* trials this loop pass of the leaf gave    */
+    int       leaf_requeues;     /* requeues since the leaf opened           */
     char*     key_answer;      /* max_text + 1 bytes, sized at load          */
     size_t    max_text;        /* the longest value text the session can make */
     char*     text_buf;        /* max_text + 1: a cell, a lookup's key        */
