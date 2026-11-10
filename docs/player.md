@@ -73,7 +73,7 @@ forced. The Report section lists them with the evidence.
 | A stimulus's keys at a trial start | Only the stimuli the running template touches, since a key can name a variable of another template's leaf only |
 | `edge` on `rdk` | `yrdk_desc.edge`; gfx's dots keep their default edge |
 | A leaf with tracks and a table, whose template reads a column on a track trial | The run stops at that trial with a named error: a track trial has no row. A finding: the format does not forbid it |
-| `$outcome` with no `key_answer` | `responded`; `correct` empty; `ytr_update()` gets the choice index |
+| `$outcome` with no `key_answer` | `responded` (ysp/experiment.h 0.1.3 checks lookups against it); `correct` empty; `ytr_update()` gets the choice index |
 | A `0` to a log10 method | `method_value` is floored at `1e-4` before the log, in a log domain (`scale log10` or stair `step_type` log or db), as the C program does. The format has no key for this |
 | `loop.until_accuracy` | Correct over all trials of the iteration (timeouts count against it), `0` when none ran |
 | Trigger codes | `0..255`, the width of a port byte; another value stops the run |

@@ -1349,7 +1349,7 @@ id = "e012-06"
 name = "an entry of $outcome promises nothing"
 test = "experiment"
 why = "v0.1.2: relax_rt_by_responded."
-find = '''    if (yexp__streq(by->str, "outcome")) return yexp__streq(key, "correct") || yexp__streq(key, "wrong") ? 1u : 0u;'''
+find = '''    if (yexp__streq(by->str, "outcome")) return yexp__streq(key, "correct") || yexp__streq(key, "wrong") || yexp__streq(key, "responded") ? 1u : 0u;'''
 replace = ''''''
 
 [[mutant]]
@@ -1449,3 +1449,19 @@ test = "experiment"
 why = "v0.1.2: relax_response_lookups' lookup by $outcome has no 'timeout' key."
 find = '''        if (!s->rsp_only && yexp__can_time_out(s) && yexp__lv_push(c, "timeout")) return -1;'''
 replace = '''        if (yexp__can_time_out(s) && yexp__lv_push(c, "timeout")) return -1;'''
+
+[[mutant]]
+id = "e013-01"
+name = "$outcome is correct or wrong with no key_answer"
+test = "experiment"
+why = "v0.1.3: good/outcome_responded, bad/lookup_outcome_no_key_answer."
+find = '''        if (rsp->key_answer ? (yexp__lv_push(c, "correct") || yexp__lv_push(c, "wrong")) : yexp__lv_push(c, "responded")) return -1;'''
+replace = '''        if (yexp__lv_push(c, "correct") || yexp__lv_push(c, "wrong")) return -1;'''
+
+[[mutant]]
+id = "e013-02"
+name = "the responded entry of $outcome promises nothing"
+test = "experiment"
+why = "v0.1.3: good/outcome_responded reads $rt_s there."
+find = '''yexp__streq(key, "wrong") || yexp__streq(key, "responded") ? 1u : 0u;'''
+replace = '''yexp__streq(key, "wrong") ? 1u : 0u;'''

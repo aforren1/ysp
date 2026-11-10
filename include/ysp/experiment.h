@@ -1,4 +1,4 @@
-/* ysp/experiment.h - v0.1.2 - public domain single-header loader for experiment definitions
+/* ysp/experiment.h - v0.1.3 - public domain single-header loader for experiment definitions
  *
  *   Reads a version 1 ysp experiment definition (docs/experiment_format.md,
  *   the pack's EXPERIMENT entry) into a checked, fully defaulted form in a
@@ -120,6 +120,11 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.1.3 - the levels of $outcome follow key_answer: "correct" and
+ *          "wrong" with one, "responded" without one, and "timeout" when
+ *          the response can time out. A lookup by $outcome on a template
+ *          with no key_answer needs a "responded" key; that entry is read
+ *          only after a press. No struct changes.
  *   v0.1.2 - valid definitions that v0.1.1 refused: a value read only on a
  *          trial with a response (outcome, method_value, the steps of
  *          {"if": "$responded"} or {"if": "$correct"}, a lookup's entry
@@ -142,7 +147,7 @@
  *   v0.1.0 - first version: the loader for format version 1, its defaults
  *          table, the host interface and the canonical writer.
  *
- *   STATUS: v0.1.2 (2026-11-09). Tested; the first player (docs/player.md)
+ *   STATUS: v0.1.3 (2026-11-10). Tested; the first player (docs/player.md)
  *   uses it.
  *   docs/experiment.md has the decisions and the test results.
  *
@@ -154,8 +159,8 @@
 
 #define YEXP_VERSION_MAJOR 0
 #define YEXP_VERSION_MINOR 1
-#define YEXP_VERSION_PATCH 2
-#define YEXP_VERSION_STRING "0.1.2"
+#define YEXP_VERSION_PATCH 3
+#define YEXP_VERSION_STRING "0.1.3"
 
 /* The newest format version this header reads (D12). */
 #define YEXP_FORMAT_VERSION 1
@@ -3567,7 +3572,7 @@ static bool yexp__can_time_out(const yexp__scope* s) {
 static unsigned yexp__entry_scope(const yexp_value* by, const char* key) {
     if (!by || by->kind != YEXP_V_VAR) return 0;
     if (yexp__streq(by->str, "responded") || yexp__streq(by->str, "correct")) return yexp__streq(key, "true") ? 1u : 0u;
-    if (yexp__streq(by->str, "outcome")) return yexp__streq(key, "correct") || yexp__streq(key, "wrong") ? 1u : 0u;
+    if (yexp__streq(by->str, "outcome")) return yexp__streq(key, "correct") || yexp__streq(key, "wrong") || yexp__streq(key, "responded") ? 1u : 0u;
     if (yexp__streq(by->str, "response")) return key[0] ? 1u : 0u;
     if (yexp__streq(by->str, "method")) return key[0] ? 2u : 0u;
     return 0;
@@ -3922,7 +3927,8 @@ static int yexp__levels_var(yexp__ctx* c, const yexp__scope* s, const char* name
     if (yexp__streq(name, "outcome")) {
         const yexp_response* rsp = s->t ? s->t->response : NULL;
         if (!rsp) return 0;
-        if (yexp__lv_push(c, "correct") || yexp__lv_push(c, "wrong")) return -1;
+        /* with no key_answer a press is neither correct nor wrong */
+        if (rsp->key_answer ? (yexp__lv_push(c, "correct") || yexp__lv_push(c, "wrong")) : yexp__lv_push(c, "responded")) return -1;
         /* a timeout needs a deadline */
         if (!s->rsp_only && yexp__can_time_out(s) && yexp__lv_push(c, "timeout")) return -1;
         return 1;
