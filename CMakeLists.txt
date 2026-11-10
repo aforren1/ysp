@@ -116,6 +116,7 @@ option(YSP_BUILD_LAYOUT "Build the layout library (pack/, third_party/), its tes
 # a pack of tables, sounds and images does not need HarfBuzz. ysp/pack.h
 # itself is a header in the list below and needs neither.
 option(YSP_BUILD_PACK "Build the pack tool library, ypak and its tests (glyph runs need YSP_BUILD_LAYOUT)" OFF)
+option(YSP_BUILD_PLAYER "Build the player (docs/player.md); needs YSP_BUILD_PACK for its test packs" OFF)
 
 # ysp/screen.h needs SDL3 (3.2 or later). Without it only its SDL-free test is
 # built; point SDL3_DIR at an SDL3 CMake package to build the rest. ANGLE is
@@ -884,6 +885,9 @@ if(YSP_BUILD_PACK AND (NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/third_party/lodepn
 endif()
 if(YSP_BUILD_LAYOUT OR YSP_BUILD_PACK)
     add_subdirectory(pack)
+endif()
+if(YSP_BUILD_PLAYER)
+    add_subdirectory(player)
 endif()
 
 if(YSP_TRACY_CHECK AND YSP_BUILD_TESTS)

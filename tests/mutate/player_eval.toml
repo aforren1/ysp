@@ -1,0 +1,62 @@
+# player/eval.c mutants: the evaluator, against the system tests (tests/player/mut_test.c).
+header = "eval.c"
+
+[test.player]
+source = "tests/player/mut_test.c"
+compiler = "gcc"
+flags = ["-std=c11", "-O1", "-w", "-DYSCR_NO_SDL", "-DPIN_A0=\"x3b4a1c5afe219da5\"", "-I$YSP_MINIAUDIO"]
+libs = ["-lm", "-lpthread", "-ldl"]
+timeout = 300
+env = { YPL_REPO = "{repo}", YPL_BIN = "{repo}/build/linux", YPAK = "{repo}/build/linux/pack/ypak" }
+
+[[mutant]]
+id = "e-01"
+name = "the trial seed is a decimal in text"
+test = "player"
+why = "Item 20: the x-hex spelling."
+find = '''            out->flags = YEXP_VF_INT | PL_VF_SEED;'''
+replace = '''            out->flags = YEXP_VF_INT;'''
+
+[[mutant]]
+id = "e-02"
+name = "an absent field is written 0"
+test = "player"
+why = "Item 20: an absent optional integer is empty."
+find = '''    if (v->flags & PL_VF_ABSENT) return 0;'''
+replace = ''''''
+
+[[mutant]]
+id = "e-03"
+name = "$level aborts on a condition trial"
+test = "player"
+why = "Item 16: empty on a condition trial."
+find = '''only a column or a lookup */
+        if (!e->method) { pl_str(out, ""); return 1; }'''
+replace = '''only a column or a lookup */
+        if (!e->method) { pl_fail(p, "no method"); return -1; }'''
+
+[[mutant]]
+id = "e-04"
+name = "a lookup finds the wrong entry"
+test = "player"
+why = "The map is sorted."
+find = '''                if (c < 0) hi = mid - 1;'''
+replace = '''                if (c > 0) hi = mid - 1;'''
+
+[[mutant]]
+id = "e-05"
+name = "a long value is cut, not refused"
+test = "player"
+expect = "survived"
+note = "Round 2 item 6: the load sizes the text buffers from the longest value it can know, so the -2 is an internal guard no valid session reaches (pl-27 covers the sizing)."
+why = "Item 20."
+find = '''snprintf(buf, cap, "%s", v->str ? v->str : "") < cap ? 0 : -2;'''
+replace = '''snprintf(buf, cap, "%s", v->str ? v->str : "") < cap ? 0 : 0;'''
+
+[[mutant]]
+id = "e-06"
+name = "an array's items written with another separator"
+test = "player"
+why = "Round 2 item 2: one text form, [1,0,0.5] (t_fix_data_set)."
+find = '''            if (k) buf[used++] = ',';'''
+replace = '''            if (k) buf[used++] = ' ';'''

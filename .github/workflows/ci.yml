@@ -1332,7 +1332,7 @@ jobs:
       # miniaudio for the two response examples with a sound (null device).
       - name: Configure
         shell: bash
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DSDL3_DIR="$SDL3_DIR" -DYSP_BUILD_LOOPBACK=ON -DYSP_FETCH_MINIAUDIO=ON -DYSP_FETCH_PL_MPEG=ON ${{ runner.os != 'macOS' && '-DYSP_BUILD_LAYOUT=ON -DYSP_BUILD_PACK=ON' || '' }}
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DSDL3_DIR="$SDL3_DIR" -DYSP_BUILD_LOOPBACK=ON -DYSP_FETCH_MINIAUDIO=ON -DYSP_FETCH_PL_MPEG=ON ${{ runner.os != 'macOS' && '-DYSP_BUILD_LAYOUT=ON -DYSP_BUILD_PACK=ON' || '' }} ${{ runner.os == 'Linux' && '-DYSP_BUILD_PLAYER=ON' || '' }}
 
       # The Headers job has no SDL3, so a screen, gfx or video program left
       # out of this list is compiled nowhere on CI. ctest below runs every
@@ -1520,6 +1520,24 @@ jobs:
           # Instruction pages turned by a scripted reader, viewing times from flip records (under a second, virtual clock);
           # without a font (Linux runners) the views run with no text drawn.
           "$bin/trial_instructions" --sim --out "$RUNNER_TEMP/trial_instructions.csv"
+
+      # The player (docs/player.md): the four worked examples on the simulated
+      # display, compared column by column with their C programs where one
+      # realized design can be given to both (tests/player/compare.py).
+      - name: Player (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -eu
+          cmake --build build --config Release --target ysp_player player_make_rig test_player_eval ypak trial_rdk trial_stroop trial_2afc_adaptive device_trigger_flip
+          ctest --test-dir build -C Release -R test_player --output-on-failure
+          bin=build/player
+          work=$RUNNER_TEMP/player; mkdir -p "$work"
+          ( cd tests/player/rdk && "$OLDPWD/build/pack/ypak" build pack.json -o "$work/rdk.ysppak" )
+          "$bin/ysp_player" "$work/rdk.ysppak" --sim --seed 1 --field participant=1 --out "$work/rdk1"
+          "$bin/ysp_player" "$work/rdk.ysppak" --sim --seed 1 --field participant=1 --out "$work/rdk2"
+          cmp "$work/rdk1/trials.csv" "$work/rdk2/trials.csv"
+          if "$bin/ysp_player" 2>/dev/null; then echo "::error::ysp_player with no arguments exited 0"; exit 1; fi
 
       # The pack tool (docs/pack.md): its test builds a pack of every kind,
       # verifies, rebuilds and appends it, and compares every entry with

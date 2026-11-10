@@ -1,4 +1,4 @@
-/* ysp/experiment.h - v0.1.0 - public domain single-header loader for experiment definitions
+/* ysp/experiment.h - v0.1.3 - public domain single-header loader for experiment definitions
  *
  *   Reads a version 1 ysp experiment definition (docs/experiment_format.md,
  *   the pack's EXPERIMENT entry) into a checked, fully defaulted form in a
@@ -120,10 +120,35 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.1.3 - the levels of $outcome follow key_answer: "correct" and
+ *          "wrong" with one, "responded" without one, and "timeout" when
+ *          the response can time out. A lookup by $outcome on a template
+ *          with no key_answer needs a "responded" key; that entry is read
+ *          only after a press. No struct changes.
+ *   v0.1.2 - valid definitions that v0.1.1 refused: a value read only on a
+ *          trial with a response (outcome, method_value, the steps of
+ *          {"if": "$responded"} or {"if": "$correct"}, a lookup's entry
+ *          for a pressed key, "true" of $responded or $correct, "correct"
+ *          or "wrong" of $outcome) can read $rt_s in a number key, and a
+ *          lookup by $response, $responded or $outcome there needs no key
+ *          for a timeout. $rt_s is valid in a number key when the response
+ *          has no deadline. A value read only on a track trial
+ *          (method_value, a lookup by $method's entry for a method's name)
+ *          can read $level in a number key, and a lookup by $method there
+ *          needs no "" key. No struct changes.
+ *   v0.1.1 - refusals the player's lowering needs (docs/experiment.md, gaps):
+ *          a leaf with tracks on a template with no response or no
+ *          key_answer; a non-integer outcome; $rt_s, and $level on a leaf
+ *          with both tracks and a table, in a numeric key; a bare $response
+ *          as a trigger code. Levels: the empty string is a level of
+ *          $response when the response can time out, and of $method on a
+ *          leaf with both tracks and a table; a lookup by $response needs
+ *          choices. No struct changes.
  *   v0.1.0 - first version: the loader for format version 1, its defaults
  *          table, the host interface and the canonical writer.
  *
- *   STATUS: v0.1.0 (2026-11-09). Tested; not used by a player yet.
+ *   STATUS: v0.1.3 (2026-11-10). Tested; the first player (docs/player.md)
+ *   uses it.
  *   docs/experiment.md has the decisions and the test results.
  *
  *   ---------------------------------------------------------------------
@@ -134,8 +159,8 @@
 
 #define YEXP_VERSION_MAJOR 0
 #define YEXP_VERSION_MINOR 1
-#define YEXP_VERSION_PATCH 0
-#define YEXP_VERSION_STRING "0.1.0"
+#define YEXP_VERSION_PATCH 3
+#define YEXP_VERSION_STRING "0.1.3"
 
 /* The newest format version this header reads (D12). */
 #define YEXP_FORMAT_VERSION 1
@@ -3525,7 +3550,33 @@ typedef struct yexp__scope {
     int                  rt[3];      /* the leaf's rules can make practice, warmup, after_break true */
     int                  michelson;
     bool                 in_code;    /* inside response.trigger.code        */
+    bool                 rsp_only;   /* read only on a trial with a response:
+                                      * method_value, outcome, the body of
+                                      * "if": "$responded", a lookup's entry
+                                      * for a pressed key                   */
+    bool                 track_only; /* read only on a track trial:
+                                      * method_value, a lookup's entry for a
+                                      * method's name                       */
 } yexp__scope;
+
+/* Whether a response can end with no key: only a deadline of literal 0 has
+ * none. */
+static bool yexp__can_time_out(const yexp__scope* s) {
+    const yexp_response* r = s->t ? s->t->response : NULL;
+    return r && !(r->duration && r->duration->kind == YEXP_V_NUMBER && r->duration->i == 0);
+}
+
+/* What a lookup's entry `key` promises about the trial that reads it: 1 a
+ * response, 2 a track trial, 0 nothing. A lookup reads only the entry its
+ * 'by' selects, so an entry for a pressed key never runs on a timeout. */
+static unsigned yexp__entry_scope(const yexp_value* by, const char* key) {
+    if (!by || by->kind != YEXP_V_VAR) return 0;
+    if (yexp__streq(by->str, "responded") || yexp__streq(by->str, "correct")) return yexp__streq(key, "true") ? 1u : 0u;
+    if (yexp__streq(by->str, "outcome")) return yexp__streq(key, "correct") || yexp__streq(key, "wrong") || yexp__streq(key, "responded") ? 1u : 0u;
+    if (yexp__streq(by->str, "response")) return key[0] ? 1u : 0u;
+    if (yexp__streq(by->str, "method")) return key[0] ? 2u : 0u;
+    return 0;
+}
 
 /* Column `name` of a table: 1 found, 0 not, -1 no such table or no host. */
 static int yexp__table_col(yexp__ctx* c, const char* table, const char* name, int* col, int* type) {
@@ -3693,9 +3744,21 @@ static void yexp__type_value(yexp__ctx* c, const yexp__scope* s, const yexp_valu
     case YEXP_V_VAR:
         yexp__type_var(c, s, v->str, want, pos, elem, key, depth + 1);
         break;
-    case YEXP_V_LOOKUP:
-        for (k = 0; k < v->n; k++) yexp__type_value(c, s, v->map[k].value, want, name, pos, elem, key, depth);
+    case YEXP_V_LOOKUP: {
+        /* the scope is the walker's own, read-only to the checks but for
+         * these two flags, set while one entry is checked */
+        yexp__scope* ms = (yexp__scope*)s;
+        bool r0 = ms->rsp_only, t0 = ms->track_only;
+        for (k = 0; k < v->n; k++) {
+            unsigned f = yexp__entry_scope(v->by, v->map[k].key);
+            ms->rsp_only = r0 || (f & 1u);
+            ms->track_only = t0 || (f & 2u);
+            yexp__type_value(c, s, v->map[k].value, want, name, pos, elem, key, depth);
+        }
+        ms->rsp_only = r0;
+        ms->track_only = t0;
         break;
+    }
     case YEXP_V_CHOICE:
         for (k = 0; k < v->n; k++) yexp__type_value(c, s, &v->items[k], want, name, pos, elem, key, depth);
         break;
@@ -3723,6 +3786,16 @@ static void yexp__type_var(yexp__ctx* c, const yexp__scope* s, const char* name,
         bool is_bool = false, is_text = false;
         for (i = 0; bools[i]; i++) if (yexp__streq(name, bools[i])) is_bool = true;
         for (i = 0; texts[i]; i++) if (yexp__streq(name, texts[i])) is_text = true;
+        if (want == YEXP__W_NUM || want == YEXP__W_NONNEG) {
+            if (yexp__streq(name, "rt_s") && !s->rsp_only && yexp__can_time_out(s)) {
+                yexp__err(c, pos, "%s: '%s': '$rt_s' has no value on a timeout, so a number key cannot read it; use it in 'columns', or take a value by a lookup on $responded", elem, key);
+                break;
+            }
+            if (yexp__streq(name, "level") && !s->track_only && s->leaf && s->leaf->table && s->leaf->n_tracks) {
+                yexp__err(c, pos, "%s: '%s': '$level' has no value on a condition trial of a leaf with both 'tracks' and a table, so a number key cannot read it", elem, key);
+                break;
+            }
+        }
         if (is_bool ? want != YEXP__W_BOOL : is_text ? true : (want != YEXP__W_NUM && want != YEXP__W_NONNEG))
             yexp__type_err(c, pos, elem, key, name, is_bool ? "a boolean" : is_text ? "text" : "a number", want);
         break;
@@ -3775,7 +3848,12 @@ static void yexp__type_var(yexp__ctx* c, const yexp__scope* s, const char* name,
 static void yexp__check_var(yexp__ctx* c, const yexp__scope* s, const char* name, uint32_t pos, int need, int want, const char* elem, const char* key) {
     yexp__var r;
     const char* why;
-    if (s->in_code && yexp__streq(name, "response") && s->t && s->t->response) return;
+    if (s->in_code && yexp__streq(name, "response") && s->t && s->t->response) {
+        /* a response rule's code is per choice (G8), so the variable is known
+         * here; it is text, so a code reads it through a lookup */
+        if (want != YEXP__W_ANY) yexp__err(c, pos, "%s: '%s': '$response' is text and a code is a number; use a lookup by $response", elem, key);
+        return;
+    }
     if (!yexp__resolve(c, s, name, &r, &why)) {
         if (why) yexp__err(c, pos, "%s: '%s': '$%s' needs %s (2.3)", elem, key, name, why);
         else yexp__err(c, pos, "%s: '%s': '$%s' is not known here: no session field, table column, vars name, jitter or built-in has that name", elem, key, name);
@@ -3840,17 +3918,19 @@ static int yexp__levels_var(yexp__ctx* c, const yexp__scope* s, const char* name
     if (depth > YEXP__VAR_CHAIN) { yexp__levels_skipped(c); return 0; }
     for (i = 0; bools[i]; i++)
         if (yexp__streq(name, bools[i])) {
-            /* the first three are true only on trials the rules make */
-            if (yexp__lv_push(c, "false")) return -1;
+            /* the first three are true only on trials the rules make; read
+             * only with a response, $responded is true */
+            if (!(s->rsp_only && i == 4) && yexp__lv_push(c, "false")) return -1;
             if ((i >= 3 || s->rt[i]) && yexp__lv_push(c, "true")) return -1;
             return 1;
         }
     if (yexp__streq(name, "outcome")) {
         const yexp_response* rsp = s->t ? s->t->response : NULL;
         if (!rsp) return 0;
-        if (yexp__lv_push(c, "correct") || yexp__lv_push(c, "wrong")) return -1;
+        /* with no key_answer a press is neither correct nor wrong */
+        if (rsp->key_answer ? (yexp__lv_push(c, "correct") || yexp__lv_push(c, "wrong")) : yexp__lv_push(c, "responded")) return -1;
         /* a timeout needs a deadline */
-        if (!(rsp->duration && rsp->duration->kind == YEXP_V_NUMBER && rsp->duration->i == 0) && yexp__lv_push(c, "timeout")) return -1;
+        if (!s->rsp_only && yexp__can_time_out(s) && yexp__lv_push(c, "timeout")) return -1;
         return 1;
     }
     if (yexp__streq(name, "response")) {
@@ -3858,12 +3938,16 @@ static int yexp__levels_var(yexp__ctx* c, const yexp__scope* s, const char* name
         if (!rsp || !rsp->n_choices) return 0;
         for (i = 0; i < rsp->n_choices; i++)
             if (yexp__lv_push(c, rsp->choices[i].key)) return -1;
+        /* a timeout has no key. A trigger's code goes out only for a press. */
+        if (!s->in_code && !s->rsp_only && yexp__can_time_out(s) && yexp__lv_push(c, "")) return -1;
         return 1;
     }
     if (yexp__streq(name, "method")) {
         if (!s->leaf || s->leaf->n_tracks == 0) return 0;
         for (i = 0; i < s->leaf->n_tracks; i++)
             if (yexp__lv_push(c, s->leaf->tracks[i]->name)) return -1;
+        /* a condition trial has no method */
+        if (s->leaf->table && !s->track_only && yexp__lv_push(c, "")) return -1;
         return 1;
     }
     if (yexp__is_builtin(name)) return 0;
@@ -4007,7 +4091,20 @@ static void yexp__check_value(yexp__ctx* c, const yexp__scope* s, const yexp_val
         break;
     case YEXP_V_LOOKUP:
         yexp__check_value(c, s, v->by, need, YEXP__W_ANY, elem, key);
-        for (k = 0; k < v->n; k++) yexp__check_value(c, s, v->map[k].value, need, want, elem, key);
+        if (s->t && s->t->response && !s->t->response->n_choices && v->by && v->by->kind == YEXP_V_VAR && yexp__streq(v->by->str, "response"))
+            yexp__err(c, v->pos, "%s: '%s': a lookup by $response needs the response's 'choices': any key can be pressed, so the map cannot name them", elem, key);
+        {
+            yexp__scope* ms = (yexp__scope*)s;   /* see yexp__type_value */
+            bool r0 = ms->rsp_only, t0 = ms->track_only;
+            for (k = 0; k < v->n; k++) {
+                unsigned f = yexp__entry_scope(v->by, v->map[k].key);
+                ms->rsp_only = r0 || (f & 1u);
+                ms->track_only = t0 || (f & 2u);
+                yexp__check_value(c, s, v->map[k].value, need, want, elem, key);
+            }
+            ms->rsp_only = r0;
+            ms->track_only = t0;
+        }
         if (s->leaf) yexp__check_lookup(c, s, v, elem, key);
         break;
     case YEXP_V_ARRAY: case YEXP_V_CHOICE:
@@ -4094,8 +4191,13 @@ static void yexp__check_steps(yexp__ctx* c, const yexp__scope* s, const yexp_ste
                 yexp__check_value(c, s, st->props[k].value, phase, ps ? yexp__stim_want(c, ps, st->props[k].key) : YEXP__W_ANY, elem, st->props[k].key);
         }
         if (st->op == YEXP_IF || st->op == YEXP_UNLESS) {
+            yexp__scope* ms = (yexp__scope*)s;   /* see yexp__type_value */
+            bool r0 = ms->rsp_only;
             yexp__check_var(c, s, st->cond, st->cond_pos_, phase, YEXP__W_BOOL, elem, st->op == YEXP_IF ? "if" : "unless");
+            /* $correct is true only with a press */
+            if (st->op == YEXP_IF && st->cond && (yexp__streq(st->cond, "responded") || yexp__streq(st->cond, "correct"))) ms->rsp_only = true;
             yexp__check_steps(c, s, st->steps, st->n_steps, phase, elem);
+            ms->rsp_only = r0;
         }
     }
 }
@@ -4187,6 +4289,61 @@ static const char* yexp__host_msg(char* msg, size_t cap) {
 }
 
 /* Every use of a variable in one leaf's trial. */
+/* A template's written outcome goes to ytr_update(): an integer or a
+ * boolean, or the word "correct". */
+static void yexp__check_outcome(yexp__ctx* c, const yexp__scope* s, const yexp_value* v, const char* elem, int top, int depth) {
+    uint32_t k;
+    yexp__var r;
+    const char* why;
+    if (!v || depth > YEXP__VAR_CHAIN) return;
+    switch (v->kind) {
+    case YEXP_V_BOOL: return;
+    case YEXP_V_NUMBER:
+        if (!(v->flags & YEXP_VF_INT)) yexp__err(c, v->pos, "%s: 'outcome' is an integer, a boolean or \"correct\"; ytr_update() takes an integer", elem);
+        return;
+    case YEXP_V_STRING:
+        /* "" is the written form of the default with no response */
+        if (!(top && (yexp__streq(v->str, "correct") || !v->str[0]))) yexp__err(c, v->pos, "%s: 'outcome' is an integer, a boolean or \"correct\", not the text '%s'", elem, v->str);
+        return;
+    case YEXP_V_LOOKUP:
+        for (k = 0; k < v->n; k++) yexp__check_outcome(c, s, v->map[k].value, elem, 0, depth);
+        return;
+    case YEXP_V_CHOICE:
+        for (k = 0; k < v->n; k++) yexp__check_outcome(c, s, &v->items[k], elem, 0, depth);
+        return;
+    case YEXP_V_VAR:
+        if (!yexp__resolve(c, s, v->str, &r, &why)) return;   /* reported by the value's check */
+        switch (r.kind) {
+        case YEXP__VK_BUILTIN: {
+            static const char* const ok[] = { "responded", "correct", "practice", "warmup", "first_in_block", "after_break",
+                                              "trial_index", "block", "rep", "condition", NULL };
+            int i;
+            for (i = 0; ok[i]; i++) if (yexp__streq(v->str, ok[i])) return;
+            break;
+        }
+        case YEXP__VK_SESSION: {
+            int i;
+            for (i = 0; i < c->d->n_fields; i++)
+                if (yexp__streq(c->d->fields[i].name, v->str) && !c->d->fields[i].is_string) return;
+            break;
+        }
+        case YEXP__VK_VARS:
+            yexp__check_outcome(c, s, r.value, elem, 0, depth + 1);
+            return;
+        case YEXP__VK_TABLE:
+            if (r.unverified || r.ctype == YEXP_COL_INTEGER) return;
+            break;
+        default:
+            break;
+        }
+        yexp__err(c, v->pos, "%s: 'outcome': '$%s' is not an integer or a boolean; ytr_update() takes an integer", elem, v->str);
+        return;
+    default:
+        yexp__err(c, v->pos, "%s: 'outcome' is an integer, a boolean or \"correct\"", elem);
+        return;
+    }
+}
+
 static void yexp__check_leaf(yexp__ctx* c, yexp__scope* s) {
     const yexp_template* t = s->t;
     char elem[128];
@@ -4244,8 +4401,16 @@ static void yexp__check_leaf(yexp__ctx* c, yexp__scope* s) {
         }
     }
     snprintf(elem, sizeof elem, "template '%s'", t->name);
-    if (t->outcome && t->outcome->pos != UINT32_MAX) yexp__check_value(c, s, t->outcome, YEXP__PH_AFTER, YEXP__W_ANY, elem, "outcome");
+    /* the player evaluates outcome only on a trial with a response, and
+     * method_value only on a track trial with one (2.4, 2.5) */
+    s->rsp_only = true;
+    if (t->outcome && t->outcome->pos != UINT32_MAX) {
+        yexp__check_value(c, s, t->outcome, YEXP__PH_AFTER, YEXP__W_ANY, elem, "outcome");
+        yexp__check_outcome(c, s, t->outcome, elem, 1, 0);
+    }
+    s->track_only = true;
     if (t->method_value && s->leaf->n_tracks && t->method_value->pos != UINT32_MAX) yexp__check_value(c, s, t->method_value, YEXP__PH_AFTER, YEXP__W_NUM, elem, "method_value");
+    s->rsp_only = s->track_only = false;
     snprintf(elem, sizeof elem, "template '%s': columns", t->name);
     for (k = 0; k < t->n_columns; k++) yexp__check_value(c, s, t->columns[k].value, YEXP__PH_ROW, YEXP__W_ANY, elem, t->columns[k].key);
     for (u = 0; u < c->n_used; u++) {
@@ -4259,6 +4424,8 @@ static void yexp__check_leaf(yexp__ctx* c, yexp__scope* s) {
                 yexp__check_entry_levels(c, s, p->value, YEXP_ENTRY_TEXTURE, elem, p->key);
         }
     }
+    if (s->leaf->n_tracks && !t->response) yexp__err(c, s->leaf->pos_, "node '%s': 'tracks' needs a template with a 'response': a method hears a trial only through it", s->leaf->path);
+    else if (s->leaf->n_tracks && !t->response->key_answer) yexp__err(c, s->leaf->pos_, "node '%s': 'tracks' needs 'key_answer' in the response: a method hears whether the trial was correct", s->leaf->path);
     if (c->h && c->h->rules && s->leaf->n_rules >= 0) {
         char msg[256];
         msg[0] = 0;

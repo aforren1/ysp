@@ -17,7 +17,7 @@ C11 or C++17, and its top comment is its manual.
 | [table](docs/table.md) | `ytb_` | Typed tables and a bounded CSV parser | 0.3.1 | tested |
 | [pack](docs/pack.md) | `ypak_` | Read and verify ysp packs (store-only zip) | 0.4.0 | tested |
 | [json](docs/json.md) | `yjs_` | Strict JSON reader and canonical writer | 0.2.1 | tested |
-| [experiment](docs/experiment.md) | `yexp_` | Reads an experiment definition into a checked, fully defaulted form; canonical bytes and experiment ID, which the pack tool stores | 0.1.0 | tested |
+| [experiment](docs/experiment.md) | `yexp_` | Reads an experiment definition into a checked, fully defaulted form; canonical bytes and experiment ID, which the pack tool stores | 0.1.3 | tested |
 | [stair](docs/adapt.md) | `yst_` | Adaptive staircases | 0.3.0 | tested |
 | [quest](docs/adapt.md) | `yqst_` | QUEST+, QUEST, Psi and Psi-marginal on a grid | 0.7.0 | tested |
 | [aep](docs/adapt.md) | `yaep_` | Gaussian-process adaptive estimation (AEPsych features) | 0.16.0 | tested |

@@ -1,0 +1,102 @@
+definition version=1 name="relax_level_by_method"
+units_deg=0 background=0.5,0.5,0.5 calibration_required=0 min_tier=0 web_allowed=0 web_exclusion=0
+field participant integer required=1
+role resp dir=0 family=[keyboard] required=1 min_tier=0 pulse_ns=0 kind=
+stimulus s kind=0 layer=0
+  anchor (default) = "center"
+  ax (default) = real:0.5
+  ay (default) = real:0.5
+  blend (default) = "over"
+  cap (default) = "butt"
+  color (default) = [int:0, int:0, int:0]
+  dash (default) = int:0
+  dash_offset (default) = int:0
+  dash_snap (default) = int:0
+  edge (default) = "hard"
+  edge_width (default) = int:0
+  gap (default) = int:0
+  gate (default) = int:1
+  h = $x
+  join (default) = "round"
+  miter_limit (default) = int:4
+  offset (default) = int:0
+  opacity (default) = int:1
+  ori (default) = int:0
+  p0 (default) = int:0
+  p1 (default) = int:0
+  p10 (default) = int:0
+  p11 (default) = int:0
+  p12 (default) = int:0
+  p13 (default) = int:0
+  p14 (default) = int:0
+  p15 (default) = int:0
+  p16 (default) = int:0
+  p17 (default) = int:0
+  p18 (default) = int:0
+  p19 (default) = int:0
+  p2 (default) = int:0
+  p20 (default) = int:0
+  p21 (default) = int:0
+  p22 (default) = int:0
+  p23 (default) = int:0
+  p24 (default) = int:0
+  p25 (default) = int:0
+  p26 (default) = int:0
+  p27 (default) = int:0
+  p28 (default) = int:0
+  p29 (default) = int:0
+  p3 (default) = int:0
+  p30 (default) = int:0
+  p31 (default) = int:0
+  p4 (default) = int:0
+  p5 (default) = int:0
+  p6 (default) = int:0
+  p7 (default) = int:0
+  p8 (default) = int:0
+  p9 (default) = int:0
+  place (default) = "center"
+  shape (default) = "rect"
+  shape_p0 (default) = int:0
+  shape_p1 (default) = int:0
+  shape_p2 (default) = int:0
+  shape_p3 (default) = int:0
+  stroke (default) = int:0
+  stroke_align (default) = "center"
+  trim_end (default) = int:0
+  trim_set (default) = int:0
+  trim_start (default) = int:0
+  visible (default) = int:1
+  w = lookup($method){"": $n, "st": $level}
+  x (default) = int:0
+  y (default) = int:0
+method st type=0 log10=0 estimate=reversals dims=[]
+  est_reversals (default) = int:0
+  est_trials (default) = int:0
+  harder_is_up (default) = false
+  initial_rule (default) = false
+  max (default) = int:0
+  min (default) = int:0
+  n_down (default) = int:1
+  n_up (default) = int:1
+  rule (default) = "updown"
+  start (default) = int:0
+  step_down_scale (default) = int:1
+  step_type (default) = "lin"
+  steps = [int:1]
+  stop_at_limit (default) = int:0
+  stop_reversals (default) = int:0
+  stop_trials = int:4
+  target_p (default) = int:0
+  use_limits (default) = false
+template t
+  events
+    step on s stagger=dur:0ns
+  after
+  response role=resp from=s ends=1 max=0 held=0 release=0 choices=a:a
+    duration=dur:1000000000ns min_rt=dur:0ns key_answer="a" trigger=- 
+  record_given=0 record=[s]
+  outcome="correct" method_value=lookup($response){"a": $level}
+node n path=n trial=t table=base.pstb reps=1 interleave=0 track_rate=0.5 if=- unless=- loop=0 requeue=0 record_data=1
+  rules=""
+  jitters=[] rule_vars=[] tracks=[st]
+  var x = lookup($method){"": int:2, "st": $level}

@@ -86,7 +86,10 @@ screen 0 and puts them back; if a run dies, `xrandr --output <out> --mode
 rule and the `uinput` module, else it skips. No socat on the Linux
 desktop: `tests/loopback/pty_pair.py` gives the pty pair. GCC 12's
 ThreadSanitizer needs `setarch -R` on this kernel, and so does its
-AddressSanitizer (16 of 40 `trial_posner` runs hung without it). `ysp/audio.h` reads
+AddressSanitizer (16 of 40 `trial_posner` runs hung without it). Build
+the sanitizers tree under `setarch -R` too: its build runs ASan binaries
+(`trial_images_assets`), and one build without it looped and wrote a
+31.7 GB build log. `ysp/audio.h` reads
 PulseAudio's stream timing info as its position (docs/audio.md); the
 `pulse-` mutants and `test_audio_pulse` need a running PulseAudio and
 `YSP_MINIAUDIO` set to the folder holding miniaudio.h; the `alsa-` ones

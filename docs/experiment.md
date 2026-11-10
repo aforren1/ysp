@@ -1,6 +1,6 @@
 # ysp/experiment.h
 
-Status: v0.1.0, 2026-11-09. The header's top comment is the reference for
+Status: v0.1.3, 2026-11-10. The header's top comment is the reference for
 the calls (USAGE, THE CHECKED FORM, REFUSALS, THE HOST, CANONICAL BYTES,
 BOUNDS AND MEMORY). This page records why the header exists, the format's
 defaults table, the decisions, and the results.
@@ -163,7 +163,14 @@ at version 1, listed by the test above.
 | `$contrast_shown` with two stimuli with `{"michelson": ...}` shown in one trial | Refused: the variable has one value |
 | A variable's `phase` | Session fields at session start; a container's table columns at a child node's start; a leaf's columns, `vars`, jitters and built-ins at trial start; `response`, `rt_s`, `responded`, `correct` and `outcome` in `after`; `estimate` only in `columns` (2.3: after the update, which is after `after`) |
 | Step `set` and `to` | Numeric properties only: a timeline channel carries a float; a resource, a layout key or an enum is fixed at load |
-| `$response` in `response.trigger.code` | Known there: a response rule's code is per choice (G8) |
+| `$response` in `response.trigger.code` | Known there, in a lookup: a response rule's code is per choice (G8). A bare `$response` is refused: it is text, and a code is a number (v0.1.1) |
+| A leaf with `tracks` on a template with no `response` or no `key_answer` | Refused (v0.1.1): a method hears only through a response and needs its correctness |
+| A template's `outcome` | `"correct"`, an integer or a boolean, directly or through a variable or lookup (`""` is the written default with no response). Text and a non-integer number are refused (v0.1.1): `ytr_update()` takes an integer |
+| `$rt_s` in a number or duration key | Refused (v0.1.1) where a trial with no press reads it: it has no value on a timeout. Valid (v0.1.2) where only a press reaches it: `outcome`, `method_value`, the steps of `{"if": "$responded"}` or `{"if": "$correct"}`, and a lookup's entry that only a press selects (`"true"` of `$responded` or `$correct`, `"correct"` or `"wrong"` of `$outcome`, a key of `$response`). Valid when the response has no deadline (`duration_s` 0). Valid in `columns`, where the cell is empty |
+| The empty string as a level | A lookup by `$response` needs a `""` key when the response can time out, and a lookup by `$outcome` a `"timeout"` key. A lookup by `$method` needs a `""` key on a leaf with both `tracks` and a table (v0.1.1). Where only a press reaches the lookup (the places in the row above) `$response` has no `""` level, `$outcome` no `"timeout"` and `$responded` no `"false"`; where only a track trial reaches it (`method_value`, an entry of `$method` for a method's name) `$method` has no `""` level (v0.1.2). A response's `trigger` code needs none: it is sent only for a press. The player evaluates a lookup's selected entry only, so an entry that cannot be selected never runs |
+| The levels of `$outcome` | `"correct"` and `"wrong"` with a `key_answer`, `"responded"` without one (the player's value: a press is neither correct nor wrong), and `"timeout"` when the response can time out (v0.1.3). Before v0.1.3 the loader asked for `"correct"` and `"wrong"` keys that a template with no `key_answer` never reaches, and none for `"responded"` |
+| A lookup by `$response` with no `choices` | Refused (v0.1.1): any key can be pressed, so the map cannot name them |
+| `$level` on a leaf with both `tracks` and a table | Refused in a number key (v0.1.1): empty on a condition trial. Valid where only a track trial reaches it (v0.1.2): `method_value`, and an entry of a lookup by `$method` for a method's name, also through `vars` |
 
 ## Explanation: gaps found in the format
 
@@ -201,7 +208,6 @@ decide otherwise.
 | Gap | Behavior |
 |---|---|
 | A `set` or `to` of `visible` | Does not count as showing the response's `from`, so such a template is refused |
-| `"code": "$response"` | A bare `$response` as a response trigger's code is accepted, though the variable is text and a code is a number |
 | `"dims": []` with `lo` of length 2 | Reads as no dims given and is accepted |
 | `"buttons": {"note": "x"}` | `note` is read as a button key there, not as a note |
 
@@ -211,14 +217,14 @@ On 2026-11-09, Linux desktop, gcc 12.2, on the corpus in `tests/experiment/`.
 
 | Check | Result |
 |---|---|
-| `tests/adapt/experiment_test.c` | 1933 checks pass; the same as C and C++17; ASan and UBSan clean under `setarch -R` |
-| Corpus | The four worked examples of 2.14, `examples/pack/stroop/`, a kitchen-sink file and a negative minimum RT: each loads with the test host and with none, equal to its golden dump; canonical bytes load back to the same form and the same bytes and ID |
-| Negative corpus | 193 files, one per refusal, each compared with its message and its line and column |
+| `tests/adapt/experiment_test.c` | v0.1.3: 2115 checks and 13 corpus files pass (v0.1.0: 1933); the same as C and C++17; ASan and UBSan clean under `setarch -R` |
+| Corpus | The four worked examples of 2.14, `examples/pack/stroop/`, a kitchen-sink file, a negative minimum RT, five `relax_*` files that v0.1.1 refused and v0.1.2 accepts, and `outcome_responded` (v0.1.3): each loads with the test host and with none, equal to its golden dump; canonical bytes load back to the same form and the same bytes and ID |
+| Negative corpus | 209 files in v0.1.3 (193 in v0.1.0), one per refusal, each compared with its message and its line and column |
 | A key at its default | 462 keys of the format's table: written out or left out gives the same ID |
 | Table against headers | 923 checks: `tests/adapt/experiment_tables_test.c` |
 | Fuzzing (`tests/fuzz/experiment_fuzz.c`, self-driven, token-level mutations of the corpus) | 20,401,998 inputs under ASan and UBSan (`setarch -R`, gcc 12.2) on the final header, each loaded twice: once in a 32 MiB arena with the test host, where any NOMEM is a failure, and once in a small arena with a misbehaving host. 1,947,618 inputs loaded and round-tripped, 18,454,380 refused, 4,143,833 runs out of memory in the small arena, no report. The first version's run found one bug, `-0` staying `-0.0` in the form; an independent review then found the type confusion on a non-string `note` and the other items that this version fixes |
 | Coverage of the fuzz target (gcov, `-O0`, 500,333 inputs, 47,678 loads) | Header: 97.75% of 2574 lines; 97.64% of 2879 branches executed, 88.02% taken. Not reached: the list and nesting limits, the work limit at its default (the target lowers it), and small accessors |
-| Mutants (`tests/mutate/experiment.toml`) | 142 of 142 as expected: 141 killed, 1 by the time limit (an endless `column()` with its bound removed) |
+| Mutants (`tests/mutate/experiment.toml`) | v0.1.3: 171 of 171 as expected (17 new for v0.1.2 and 2 for v0.1.3, all killed): 170 killed, 1 by the time limit (an endless `column()` with its bound removed) |
 | Compile checks | C99, C11 and C++17 with warnings as errors; the unit test also as C++17 under ASan and UBSan |
 | Full ctest (Linux, with the pack tool and layout, `DISPLAY` unset, so no window) | 117 of 117 |
 | Pack tool | `test_pack_tool`, `test_pack_import`, `test_pack_derive` and `test_layout` pass on the full tool and on the core tool; CI's `ypak verify`, `list`, `rebuild` and `trial_images --sim` lines pass; the full and the core tool give one `core.ysppak` |
@@ -236,11 +242,13 @@ another job was using the machine during the run.
 
 ## Not done
 
-- No lowering and no `--sim` run: the next task.
+- The player ([player.md](player.md)) lowers the checked form and runs it
+  on the simulated display. A real window and a real device are not built.
 - The pack tool calls `yexp_load()` and `yexp_canonical()` from v0.8.0
   (pack.md 16). It supplies entries, columns, levels and `ytr_rules()`; the
   rig, the parameter tables and `ytl_check_ops()` are skipped at build.
-- `rules()` and `check_ops()` are exercised through a test host only; no
-  host calls `ytr_rules()` or `ytl_check_ops()` yet.
+- The player is the first host that calls `ytr_rules()`, a dry `ytr_open()`
+  and `ytl_check_ops()` at the variables' extremes; `tests/player/` runs them
+  against real tables and a real rig profile.
 - No run on macOS, Windows or emcc. The unit test is not in the emcc CI
   list because it reads files; the compile check is.

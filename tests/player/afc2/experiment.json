@@ -1,0 +1,35 @@
+{
+  "format": "ysp-experiment", "version": 1, "name": "contrast_2afc",
+  "display": { "units": "deg", "background": [0.5, 0.5, 0.5], "calibration": "required", "min_tier": 2 },
+  "devices": { "resp": { "direction": "in", "family": ["keyboard"], "required": true } },
+  "stimuli": {
+    "fix": { "kind": "shape", "shape": "cross", "w": 0.4, "h": 0.4, "shape_p0": 0.06,
+             "edge": "cosine", "edge_width": 1, "color": [0.15, 0.15, 0.15], "layer": 1 },
+    "gabor": { "kind": "gabor", "sf": 2, "sigma": 0.4,
+               "x": { "by": "$side", "map": { "left": -5, "right": 5 } },
+               "contrast": { "michelson": "$level" } }
+  },
+  "methods": {
+    "stair": { "type": "stair", "start": 0.2, "n_up": 1, "n_down": 3, "step_type": "log",
+               "steps": [0.2, 0.1, 0.05], "min": 0.002, "max": { "gamut": "gabor.contrast" },
+               "initial_rule": true, "stop_trials": 60, "estimate": "reversals" },
+    "quest": { "type": "quest", "scale": "log10", "pf": "gumbel", "stop_trials": 60, "estimate": "mean",
+               "stim": [{ "linspace": [-2.5, { "gamut": "gabor.contrast" }, 51] }],
+               "param": [{ "linspace": [-2.5, { "gamut": "gabor.contrast" }, 51] },
+                         { "linspace": [1, 7, 13] }, 0.5, 0.02] }
+  },
+  "trials": {
+    "detect": {
+      "events": [{ "on": "fix" }, { "wait_s": 0.5 }, { "on": "gabor" }, { "wait_s": 0.2 }, { "off": "gabor" }],
+      "response": { "role": "resp", "choices": ["left", "right"], "from": "gabor",
+                    "duration_s": 2.5, "key_answer": "$side" },
+      "after": [{ "off": "fix" }, { "wait_s": 0.5 }],
+      "method_value": "$contrast_shown",
+      "columns": { "stimulus": "$side", "contrast_shown": "$contrast_shown" }
+    }
+  },
+  "timeline": [
+    { "name": "main", "tracks": ["stair", "quest"], "interleave": "random",
+      "vars": { "side": { "choice": ["left", "right"] } }, "trial": "detect" }
+  ]
+}

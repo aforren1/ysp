@@ -252,6 +252,9 @@ def repo_file(f):
     """A mutated file's path in the repository: a header under include/
     ("ysp/pack.h"), or a pack tool source under pack/ ("import.c")."""
     p = os.path.join(REPO, "include", f)
+    if os.path.exists(p):
+        return p
+    p = os.path.join(REPO, "player", f)
     return p if os.path.exists(p) else os.path.join(REPO, "pack", f)
 
 
@@ -275,10 +278,18 @@ def snapshot(work):
     for f in os.listdir(os.path.join(REPO, "pack", "ysp")):
         if f.endswith(".h"):
             shutil.copy2(os.path.join(REPO, "pack", "ysp", f), os.path.join(hdr, "ysp"))
-    adapt = os.path.join(REPO, "tests", "adapt")
-    for f in os.listdir(adapt):
-        if f.endswith((".h", ".c")):
-            shutil.copy2(os.path.join(adapt, f), tdir)
+    # the player's sources beside the headers, as the pack tool's: a test
+    # that includes "lower.c" finds the (mutated) copy
+    if os.path.isdir(os.path.join(REPO, "player")):
+        for f in os.listdir(os.path.join(REPO, "player")):
+            if f.endswith((".c", ".h")):
+                shutil.copy2(os.path.join(REPO, "player", f), hdr)
+    for d in (os.path.join(REPO, "tests", "adapt"), os.path.join(REPO, "tests", "player")):
+        if not os.path.isdir(d):
+            continue
+        for f in os.listdir(d):
+            if f.endswith((".h", ".c")):
+                shutil.copy2(os.path.join(d, f), tdir)
     return hdr, tdir
 
 

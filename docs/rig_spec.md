@@ -1316,6 +1316,7 @@ Details, versions and measurements per header are in
 | Also built | `ysp/outline.h` v0.4.1, `ysp/rdk.h` v0.3.1, `ysp/color.h` v0.4.0, `ysp/trials.h` v0.6.1, `ysp/table.h` v0.3.0, `ysp/dataset.h` v0.2.1, `ysp/json.h` v0.2.1, `ysp/pack.h` v0.4.0 and the pack tool v0.7.0 (item 6), the device headers of docs/devices_spec.md (input, response, box, device, rigfile, serial, parallel, net). The experiment format (docs/experiment_format.md) with its gaps G1 to G13 closed. |
 | Host bindings | Python wheels and MATLAB/Octave MEX for the headers above (docs/bindings.md); ysp-vis 0.17.0.1 (screen, gfx, video, text; Windows x64, macOS arm64 and Linux X11) on ysp-audio 0.9.0 and ysp-timeline through function tables (section 12). |
 | 7 and 8 | Not started. |
+| Player (step 3 of "Next") | First version, `player/`, 2026-11-09: loads a pack, lowers format version 1 onto the headers and runs on the simulated display with a scripted participant (`docs/player.md`). The four worked examples compared with their C programs. No real window. |
 | 9 | `ysp/net.h` v0.3.2 (Lab Streaming Layer) is built. Build jobs are not started. |
 
 ### Next, in order

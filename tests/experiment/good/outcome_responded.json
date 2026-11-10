@@ -1,0 +1,11 @@
+{
+  "format": "ysp-experiment", "version": 1, "name": "outcome_responded",
+  "note": "with no key_answer a press is neither correct nor wrong: $outcome is 'responded' or 'timeout' (ysp/experiment.h 0.1.3)",
+  "devices": { "resp": { "direction": "in", "family": ["keyboard"] } },
+  "stimuli": { "s": { "kind": "shape", "w": 40 },
+               "f": { "kind": "shape", "w": { "by": "$outcome", "map": { "responded": 20, "timeout": 10 } } } },
+  "trials": { "t": { "events": [{ "on": "s" }],
+                     "response": { "role": "resp", "from": "s", "choices": ["a"], "duration_s": 1 },
+                     "after": [{ "off": "s" }, { "on": "f" }, { "wait_s": { "by": "$outcome", "map": { "responded": "$rt_s", "timeout": 0.5 } } }, { "off": "f" }] } },
+  "timeline": [{ "name": "n", "trial": "t" }]
+}

@@ -45,7 +45,13 @@
  * Exits 1 on a mismatch. Under a second: the virtual clock does not wait.
  *
  * Usage: trial_rdk [--sim] [--fullscreen] [--reps N] [--seed N] [--out FILE] [--steps FILE]
+ *                  [--trial-seeds FILE] [--silent-trials I,J,...]
  *   --reps N    repetitions of each condition (default 5; --sim: 1)
+ *   --trial-seeds FILE  test only (tests/player/compare.py): one field seed
+ *               per trial, a decimal uint64 per line, instead of seed * 1000003
+ *               + index, so the player's D8 seeds can drive the same dots
+ *   --silent-trials LIST  test only: the participant does not answer on
+ *               these trials, so tests/player/compare.py compares timeouts
  * Exit code: 0 (also after Shift+Esc), 1 when something did not open, a
  * replay differed or a --sim check failed, 2 for a bad argument.
  */
@@ -107,6 +113,19 @@ static ytr_trials trials;
 static ytr_data data;
 static yrsp_collector rsp;
 static uint64_t table_arena[2048];
+static const char* silent_trials;
+/* --silent-trials: is trial t in the comma list? */
+static int is_silent(int t) {
+    const char* s = silent_trials;
+    while (s && *s) {
+        if (atoi(s) == t) return 1;
+        s = strchr(s, ',');
+        if (s) s++;
+    }
+    return 0;
+}
+static uint64_t file_seeds[MAX_ROWS];
+static int n_file_seeds = -1;
 static ytb_table tab;
 static yrdk_field rdk, replay;
 static ygfx_buf buf;
@@ -203,6 +222,14 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--seed") && i + 1 < argc) seed = (uint64_t)strtoull(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "--out") && i + 1 < argc) out_path = argv[++i];
         else if (!strcmp(argv[i], "--steps") && i + 1 < argc) steps_path = argv[++i];
+        else if (!strcmp(argv[i], "--silent-trials") && i + 1 < argc) silent_trials = argv[++i];
+        else if (!strcmp(argv[i], "--trial-seeds") && i + 1 < argc) {
+            FILE* fp = fopen(argv[++i], "r");
+            unsigned long long v;
+            if (!fp) { fprintf(stderr, "trial_rdk: cannot read %s\n", argv[i]); return 2; }
+            for (n_file_seeds = 0; n_file_seeds < MAX_ROWS && fscanf(fp, "%llu", &v) == 1; n_file_seeds++) file_seeds[n_file_seeds] = v;
+            fclose(fp);
+        }
         else {
             fprintf(stderr, "usage: trial_rdk [--sim] [--fullscreen] [--reps N] [--seed N] [--out FILE] [--steps FILE]\n");
             return 2;
@@ -275,7 +302,7 @@ int main(int argc, char** argv) {
             if (ytr_next(&trials, &ti) < 0 || ti.index >= MAX_ROWS) break;
             coherence = ytb_num(&tab, ti.condition, coh_col);
             answer = !strcmp(ytb_text(&tab, ti.condition, key_col), "right");
-            trial_seed = seed * 1000003u + (uint64_t)ti.index;   /* one field per trial, from the session's seed */
+            trial_seed = n_file_seeds > ti.index ? file_seeds[ti.index] : seed * 1000003u + (uint64_t)ti.index;   /* one field per trial, from the session's seed */
             rdk.coherence = (float)coherence;
             rdk.direction = (float)ytb_num(&tab, ti.condition, dir_col);
             ytl_clear(&tl, TRIAL);
@@ -317,7 +344,7 @@ int main(int argc, char** argv) {
             sim_rt[ti.index] = 0.65 - 0.8 * coherence;
             sim_key[ti.index] = coherence < 0.05 && !answer ? !answer : answer;
             sim_plan[ti.index] = fired[landed].onset;
-            sim_press(sim_plan[ti.index] + YRT_S(sim_rt[ti.index]), sim_key[ti.index] ? "right" : "left");
+            if (!is_silent(ti.index)) sim_press(sim_plan[ti.index] + YRT_S(sim_rt[ti.index]), sim_key[ti.index] ? "right" : "left");
         }
         for (i = 0; i < n; i++)
             if (fired[i].kind == YTL_MARK && fired[i].code == END_OF_TRIAL) {
@@ -384,6 +411,7 @@ int main(int argc, char** argv) {
     if (sim && !failed && !aborted) {
         for (i = 0; i < rows; i++) {
             const yrsp_result* q = &sim_res[i];
+            if (is_silent(i)) continue;
             /* on the virtual clock the onset is the plan and the RT the script's, to the ns */
             if (!(q->flags & YRSP_R_RESPONDED) || q->response != sim_key[i] ||
                 q->t_onset != sim_plan[i] || q->rt_ns != YRT_S(sim_rt[i]) ||

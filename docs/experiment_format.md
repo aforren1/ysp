@@ -552,9 +552,9 @@ when its sequence is built (2.5).
 | `practice`, `warmup`, `first_in_block`, `after_break` | trial start | `ytr_trial_info` flags |
 | `trial_seed` | trial start | the trial stream's 64-bit seed (D8): `ytr_trial_seed()` |
 | `method`, `level`, `estimate` | trial start (`estimate`: after the update) | the track's name, its proposal in stimulus units, its estimate |
-| `response`, `rt_s`, `responded` | `after` | `yrsp_result`: the choice's key, `rt_ns` in seconds, `YRSP_R_RESPONDED` |
+| `response`, `rt_s`, `responded` | `after` | `yrsp_result`: the choice's key (with no `choices`, the key's name), `rt_ns` in seconds, `YRSP_R_RESPONDED`. On a timeout `response` is the empty string and `rt_s` is empty: a lookup by `$response` that a timeout can reach needs a `""` key, and `$rt_s` is refused in a number key that a timeout can reach (ysp/experiment.h v0.1.1). Only a press reaches `outcome`, `method_value`, the steps of `{"if": "$responded"}` and a lookup's entry that only a press selects (v0.1.2) |
 | `correct` | `after` | the response's key equals `key_answer` |
-| `outcome` | `after` | `"correct"`, `"wrong"` or `"timeout"` |
+| `outcome` | `after` | `"correct"` or `"wrong"` with a `key_answer`, `"responded"` without one, or `"timeout"` (ysp/experiment.h 0.1.3) |
 | `contrast_shown` | trial start | with `{"michelson": ...}` only |
 
 A table column, a `vars` name or a jitter with a built-in name is
@@ -596,7 +596,7 @@ method, so the track runs it again (as in the 2AFC program).
 | `after` | array of steps, from `max(end, events end)`; `end` is the response's end, the window's end when `response_ends_trial` is false, or 0 with no response | a second op table after `ytl_at(&q, max(bt, events_end))`, `bt` from `ytl_base_time()`; then `YTL_MARK` end |
 | `record` | array of stimulus names | per-stimulus columns (2.10) |
 | `columns` | column to value | `ytr_col` entries |
-| `outcome` | `"correct"` or a value | `ytr_update()`'s outcome; `YTR_INVALID` when no response. Default: `"correct"` when the template has a response; empty when it has none |
+| `outcome` | `"correct"`, or an integer or boolean value (ysp/experiment.h v0.1.1 refuses text and other numbers) | `ytr_update()`'s outcome; `YTR_INVALID` when no response. Default: `"correct"` when the template has a response; empty when it has none |
 | `method_value` | value | what the method's update hears; default `$level`. Ignored when no leaf with tracks runs the template: a written one is a warning, is not in the checked form, and is left out of the canonical bytes, so it does not change the experiment ID |
 
 Steps:
@@ -612,6 +612,12 @@ Steps:
 | `{"trigger": CODE, "role": R}` | `YTL_TRIGGER_CH(channel(R), CODE)`; when it fires, `yscr_trigger(&scr, e.target, e.code)` writes at the flip's planned vblank (G1, closed in ysp/timeline.h v0.8.0) |
 | `{"mark": NAME}` | `YTL_MARK`, code = NAME's index |
 | `{"if": "$bool", "steps": [...]}`, `{"unless": ...}` | the steps go in the table when the variable is true (false) as the table is built |
+
+Note: `at_s` is trial time in `after` as in `events`, not time from
+`after`'s start. A step in `after` that follows `{"at_s": t}` with `t`
+before `after`'s start goes at `t`. On a template with no response,
+`after` starts at the events' end, so such a step can land while `events`
+still runs (the player, 2026-11-10; the format does not refuse it).
 
 Eases are ysp/timeline.h's names in lower case (`"linear"`,
 `"cosine"`, `"cubic_out"`, ...). The player gives each stimulus
@@ -716,7 +722,9 @@ relative to its onset. A trial row has, in order:
 5. For each stimulus in `record`: `<s>_onset_s`, `<s>_offset_s`,
    `<s>_frames` (frames shown), `<s>_residual_s`, `<s>_tier` (worst),
    `<s>_dropped` (summed `yscr_record.dropped`), `<s>_flags` (OR of
-   `YSCR_FLIP_*`).
+   `YSCR_FLIP_*`). A stimulus shown more than once in a trial: the first
+   onset, the last offset, and frames, tier, dropped and flags over every
+   frame it was shown (the player, 2026-11-09; D10 did not say).
 6. Over the trial's frames: `tier_worst`, `frames_dropped`,
    `flip_flags`.
 7. For each output role: `<role>_n`, `<role>_failed`, `<role>_lag_max_s`

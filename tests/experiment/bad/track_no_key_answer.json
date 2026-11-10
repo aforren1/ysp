@@ -1,0 +1,2 @@
+{"format":"ysp-experiment","version":1,
+"devices":{"r":{"direction":"in","family":["keyboard"]}},"stimuli":{"s":{"kind":"shape"}},"methods":{"m":{"type":"stair","steps":[1],"stop_trials":1}},"trials":{"t":{"events":[{"on":"s"}],"response":{"role":"r","from":"s"}}},"timeline":[{"name":"n","trial":"t","tracks":["m"]}]}

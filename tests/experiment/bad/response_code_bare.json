@@ -1,0 +1,2 @@
+{"format":"ysp-experiment","version":1,
+"devices":{"r":{"direction":"in","family":["keyboard"]},"o":{"direction":"out","family":["triggerbox"]}},"stimuli":{"s":{"kind":"shape"}},"trials":{"t":{"events":[{"on":"s"}],"response":{"role":"r","from":"s","choices":["a"],"trigger":{"role":"o","code":"$response"}}}},"timeline":[{"name":"n","trial":"t"}]}

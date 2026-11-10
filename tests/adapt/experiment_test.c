@@ -982,7 +982,7 @@ static void run_review(void) {
     }
     /* a method_value with no leaf with tracks: warned, not in the form, not in the ID */
     {
-#define MV_DOC(x, tr) XH "\"methods\":{\"q\":{\"type\":\"stair\",\"steps\":[1]}},\"trials\":{\"t\":{" x "\"events\":[]}},\"timeline\":[{\"name\":\"m\",\"trial\":\"t\"" tr "}]}"
+#define MV_DOC(x, tr) XH "\"devices\":{\"r\":{\"direction\":\"in\",\"family\":[\"keyboard\"]}},\"stimuli\":{\"s\":{\"kind\":\"shape\"}},\"methods\":{\"q\":{\"type\":\"stair\",\"steps\":[1]}},\"trials\":{\"t\":{" x "\"events\":[{\"on\":\"s\"}],\"response\":{\"role\":\"r\",\"from\":\"s\",\"key_answer\":\"a\"}}},\"timeline\":[{\"name\":\"m\",\"trial\":\"t\"" tr "}]}"
 #define TRK ",\"tracks\":[\"q\"]"
         static const char* const a[] = { MV_DOC("", ""), MV_DOC("\"method_value\":\"$nosuch\",", ""), MV_DOC("\"method_value\":3,", "") };
         uint8_t x[32], y[32];
@@ -1003,7 +1003,7 @@ static void run_review(void) {
         CHECK(load_rc(MV_DOC("\"method_value\":\"$nosuch\",", TRK), NULL, &r) == YEXP_ERR_REFUSED, "with tracks it is checked");
         {
             /* two leaves, one with tracks: kept, and checked on that leaf only */
-            const char* two = XH "\"methods\":{\"q\":{\"type\":\"stair\",\"steps\":[1]}},\"trials\":{\"t\":{\"method_value\":\"$level\",\"events\":[]}},\"timeline\":[{\"name\":\"a\",\"trial\":\"t\"},{\"name\":\"b\",\"trial\":\"t\",\"tracks\":[\"q\"]}]}";
+            const char* two = XH "\"devices\":{\"r\":{\"direction\":\"in\",\"family\":[\"keyboard\"]}},\"stimuli\":{\"s\":{\"kind\":\"shape\"}},\"methods\":{\"q\":{\"type\":\"stair\",\"steps\":[1]}},\"trials\":{\"t\":{\"method_value\":\"$level\",\"events\":[{\"on\":\"s\"}],\"response\":{\"role\":\"r\",\"from\":\"s\",\"key_answer\":\"a\"}}},\"timeline\":[{\"name\":\"a\",\"trial\":\"t\"},{\"name\":\"b\",\"trial\":\"t\",\"tracks\":[\"q\"]}]}";
             CHECK2(load_rc(two, NULL, &r) == YEXP_OK && r.n_warnings == 0, "a template shared by a tracked and an untracked leaf", r.n_diags ? r.diags[0].msg : "");
         }
     }
