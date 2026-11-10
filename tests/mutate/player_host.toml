@@ -7,8 +7,18 @@ compiler = "gcc"
 flags = ["-std=c11", "-O1", "-w", "-DYSCR_NO_SDL", "-DPIN_A0=\"x3b4a1c5afe219da5\"", "-I$YSP_MINIAUDIO"]
 libs = ["-lm", "-lpthread", "-ldl"]
 timeout = 300
-env = { YPL_REPO = "{repo}", YPL_BIN = "{repo}/build/linux", YPAK = "{repo}/build/linux/pack/ypak" }
+env = { YPL_REPO = "{repo}" }
+env_default = { YPL_BIN = "{repo}/build/linux", YPAK = "{repo}/build/linux/pack/ypak" }
 
+
+[test.real]
+source = "tests/player/mut_real.c"
+compiler = "gcc"
+flags = ["-std=c11", "-O1", "-w", "-I$YSP_SDL3/include", "-I$YSP_MINIAUDIO"]
+libs = ["-L$YSP_SDL3/lib", "-Wl,-rpath,$YSP_SDL3/lib", "-lSDL3", "-lm", "-lpthread", "-ldl"]
+timeout = 900
+env = { YPL_REPO = "{repo}" }
+env_default = { YPL_BIN = "{repo}/build/linux" }
 [[mutant]]
 id = "h-01"
 name = "only the first leaf is checked"
@@ -45,3 +55,11 @@ find = '''    if (!ytr_open(&t, &d)) {
         return 1;
     }'''
 replace = ''''''
+
+[[mutant]]
+id = "hr-01"
+name = "a keyboard role unbound in the rig is refused"
+test = "real"
+why = "An input role that lists the keyboard takes it in a real run; it needs no binding."
+find = '''                if (strcmp(role->family[i], "keyboard") == 0) return 0;'''
+replace = '''                if (0) return 0;'''

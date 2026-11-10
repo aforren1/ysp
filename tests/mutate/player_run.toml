@@ -1,5 +1,7 @@
 # player/run.c mutants: the trial's lowering decisions: after's start time,
-# requeue, a loop, the method's update, the outcome, the rows.
+# requeue, a loop, the method's update, the outcome, the rows. The rr-
+# mutants are the real path's (test "real": tests/player/mut_real.c, a
+# window, uinput and a pty pair; run them one at a time, -j 1).
 header = "run.c"
 
 [test.player]
@@ -8,8 +10,18 @@ compiler = "gcc"
 flags = ["-std=c11", "-O1", "-w", "-DYSCR_NO_SDL", "-DPIN_A0=\"x3b4a1c5afe219da5\"", "-I$YSP_MINIAUDIO"]
 libs = ["-lm", "-lpthread", "-ldl"]
 timeout = 300
-env = { YPL_REPO = "{repo}", YPL_BIN = "{repo}/build/linux", YPAK = "{repo}/build/linux/pack/ypak" }
+env = { YPL_REPO = "{repo}" }
+env_default = { YPL_BIN = "{repo}/build/linux", YPAK = "{repo}/build/linux/pack/ypak" }
 
+
+[test.real]
+source = "tests/player/mut_real.c"
+compiler = "gcc"
+flags = ["-std=c11", "-O1", "-w", "-I$YSP_SDL3/include", "-I$YSP_MINIAUDIO"]
+libs = ["-L$YSP_SDL3/lib", "-Wl,-rpath,$YSP_SDL3/lib", "-lSDL3", "-lm", "-lpthread", "-ldl"]
+timeout = 900
+env = { YPL_REPO = "{repo}" }
+env_default = { YPL_BIN = "{repo}/build/linux" }
 [[mutant]]
 id = "r-01"
 name = "after starts at the response's end alone"
@@ -262,8 +274,9 @@ id = "r-33"
 name = "record_data false still writes"
 test = "player"
 why = "record_data false writes no row."
-find = '''    if (!r->write_row) { r->used = false; return 0; }'''
-replace = ''''''
+find = '''    if (!r->write_row) return 0;
+    pl_st(&r->queued, 1);'''
+replace = '''    pl_st(&r->queued, 1);'''
 
 [[mutant]]
 id = "r-34"
@@ -273,9 +286,9 @@ expect = "survived"
 note = "A guard: the ring fills only when flip records lag 16 trials behind, which the simulated display does not do; a real-window test can reach it."
 why = "A full ring has head == tail; the last rows must go out."
 find = '''    for (i = 0; i < PL_PENDING_ROWS; i++) {
-        if (p->rows[p->row_tail].used && pl_row_flush(p, &p->rows[p->row_tail]) < 0) return -1;'''
+        if (p->rows[p->row_tail].used && pl_row_hand(p, &p->rows[p->row_tail]) < 0) return -1;'''
 replace = '''    for (i = 0; i < 0; i++) {
-        if (p->rows[p->row_tail].used && pl_row_flush(p, &p->rows[p->row_tail]) < 0) return -1;'''
+        if (p->rows[p->row_tail].used && pl_row_hand(p, &p->rows[p->row_tail]) < 0) return -1;'''
 
 [[mutant]]
 id = "r-35"
@@ -386,3 +399,109 @@ test = "player"
 why = "Round 4: the stop names the trial and the requeues (t_r4_requeue_full)."
 find = '''        if (r == YTR_ERR_FULL) {'''
 replace = '''        if (0) {'''
+
+[[mutant]]
+id = "rr-01"
+name = "a real run reads no input"
+test = "real"
+why = "ysp/response.h, The order in a frame: the screen's queue goes to every collector each frame."
+find = '''        (void)yrsp_feed_screen(&p->scr, p->collectors, p->n_collectors);'''
+replace = '''        (void)p->n_collectors;'''
+
+[[mutant]]
+id = "rr-02"
+name = "the scripted participant presses in a real run"
+test = "real"
+why = "A real run's participant is real: a scripted press would be a response with a simulated stamp."
+find = '''    if (!t->collector || !p->args.sim) return;   /* a real run's participant is real */'''
+replace = '''    if (!t->collector) return;'''
+
+[[mutant]]
+id = "rr-03"
+name = "the device records are not read"
+test = "real"
+why = "An output's write goes to events.csv from its record, with its times."
+find = '''    if (!p->ring_open) return 0;
+    while'''
+replace = '''    if (p->ring_open) return 0;
+    while'''
+
+[[mutant]]
+id = "rr-04"
+name = "a flip's code is matched in the frame loop's queue"
+test = "real"
+why = "Two queues per channel: the flips' codes are written at the vblank, the frame loop's at once, so their records come in another order."
+find = '''                if (!pl_out_pop(p, ch, (fl & YDEV_OUT_FLIP) ? 0 : 1, r->u.u32[8], &q)) continue;'''
+replace = '''                if (!pl_out_pop(p, ch, (fl & YDEV_OUT_FLIP) ? 1 : 0, r->u.u32[8], &q)) continue;'''
+
+[[mutant]]
+id = "rr-05"
+name = "the frame loop's code takes the record's deadline"
+test = "real"
+why = "A code the frame loop writes has no flip deadline: its deadline is the press, so its lag is the frame loop's delay."
+find = '''                if (!(fl & YDEV_OUT_FLIP)) fire.deadline = q.deadline;   /* the frame loop's: the press */'''
+replace = ''''''
+
+[[mutant]]
+id = "rr-06"
+name = "the rule is not armed at the trial's start"
+test = "real"
+why = "2.6: the rule gets a window each trial (yrsp_rule_arm())."
+find = '''                yrsp_rule_arm(p->roles[p->tmpl->role].rule, c);'''
+replace = ''''''
+
+[[mutant]]
+id = "rr-07"
+name = "the rule's window does not follow the onset"
+test = "real"
+why = "yrsp_rule_window() each frame: the window opens when the onset is known."
+find = '''        yrsp_rule_window(p->roles[p->tmpl->role].rule, p->tmpl->collector);'''
+replace = '''        (void)0;'''
+
+[[mutant]]
+id = "rr-08"
+name = "the rule's codes are not told to the collector"
+test = "real"
+why = "CODES SENT: without yrsp_rule_sent() nothing is compared."
+find = '''        if (p->roles[t->role].rule) (void)yrsp_rule_sent(p->roles[t->role].rule, t->collector);'''
+replace = ''''''
+expect = "survived"
+note = "SENT_MISMATCH needs a code for a press the collector does not count (an anticipation after a late frame, a second device's earlier stamp); the emulated board's presses are all valid, so the flag is 0 either way. The rule case checks that a valid run has no mismatch."
+
+[[mutant]]
+id = "rr-09"
+name = "an abort leaves no record in session.json"
+test = "real"
+why = "The session file records the abort: who, when, and the trial with no row."
+find = '''            if (yds_session_set(&p->ds, "aborted", o) < 0) pl_fail(p, "session.json: %s", yds_error(&p->ds));'''
+replace = '''            (void)o;'''
+
+[[mutant]]
+id = "rr-10"
+name = "the writer is not drained before session.json"
+test = "real"
+why = "Every row on disk before session.json says the session closed."
+find = '''    if (pl_writer_close(p) < 0) return -1;   /* every row on disk before session.json says so */'''
+replace = ''''''
+expect = "survived"
+note = "A race the writer wins: it writes each frame's queue within a frame, so the last rows are on disk before yds_finish() in every run; pl_close() drains it too. A guard against a disk slower than the end of the run."
+
+[[mutant]]
+id = "rr-11"
+name = "the writer does not move on"
+test = "real"
+why = "The writer takes each queued write once, in order."
+find = '''        h++;
+        pl_st(&p->wq_head, h);'''
+replace = '''        pl_st(&p->wq_head, h);'''
+
+[[mutant]]
+id = "r-46"
+name = "the writer's events are lost (--sim writes in place)"
+test = "player"
+why = "--sim runs each queued write at once: events.csv must hold every event."
+find = '''    case PL_WJ_EVENT:
+        if'''
+replace = '''    case PL_WJ_EVENT:
+        break;
+        if'''

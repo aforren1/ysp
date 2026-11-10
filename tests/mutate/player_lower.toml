@@ -9,8 +9,18 @@ compiler = "gcc"
 flags = ["-std=c11", "-O1", "-w", "-DYSCR_NO_SDL", "-DPIN_A0=\"x3b4a1c5afe219da5\"", "-I$YSP_MINIAUDIO"]
 libs = ["-lm", "-lpthread", "-ldl"]
 timeout = 300
-env = { YPL_REPO = "{repo}", YPL_BIN = "{repo}/build/linux", YPAK = "{repo}/build/linux/pack/ypak" }
+env = { YPL_REPO = "{repo}" }
+env_default = { YPL_BIN = "{repo}/build/linux", YPAK = "{repo}/build/linux/pack/ypak" }
 
+
+[test.real]
+source = "tests/player/mut_real.c"
+compiler = "gcc"
+flags = ["-std=c11", "-O1", "-w", "-I$YSP_SDL3/include", "-I$YSP_MINIAUDIO"]
+libs = ["-L$YSP_SDL3/lib", "-Wl,-rpath,$YSP_SDL3/lib", "-lSDL3", "-lm", "-lpthread", "-ldl"]
+timeout = 900
+env = { YPL_REPO = "{repo}" }
+env_default = { YPL_BIN = "{repo}/build/linux" }
 [[mutant]]
 id = "pl-01"
 name = "the node seed ignores the path"
@@ -226,3 +236,67 @@ test = "player"
 why = "Round 3 fuzz finding: the update read past one value (t_method_update)."
 find = '''        if (stim->value->n != 1) {'''
 replace = '''        if (0) {'''
+
+[[mutant]]
+id = "rl-01"
+name = "a real run opens the simulated display"
+test = "real"
+why = "Without --sim the backend is AUTO (GLX_OML on X11)."
+find = '''    sd.backend = p->args.sim ? YSCR_BACKEND_SIM : YSCR_BACKEND_AUTO;'''
+replace = '''    sd.backend = YSCR_BACKEND_SIM;'''
+
+[[mutant]]
+id = "rl-02"
+name = "a real run opens a window"
+test = "real"
+why = "Fullscreen unless --windowed: display.min_tier 1 needs a flip the OS observes."
+find = '''    sd.windowed = p->args.sim || p->args.windowed;'''
+replace = '''    sd.windowed = true;'''
+
+[[mutant]]
+id = "rl-03"
+name = "the panic watchdog is not armed"
+test = "real"
+why = "Fullscreen: Shift+Esc three times ends a hung loop and puts the ramp back."
+find = '''        sd.panic = true;'''
+replace = '''        sd.panic = false;'''
+
+[[mutant]]
+id = "rl-04"
+name = "display.min_tier refuses its own tier"
+test = "real"
+why = "A flip of tier min_tier is good enough: only a worse one refuses."
+find = '''(int)p->caps.worst_tier > p->def->min_tier)) {'''
+replace = '''(int)p->caps.worst_tier >= p->def->min_tier)) {'''
+
+[[mutant]]
+id = "rl-05"
+name = "a required role with no device starts"
+test = "real"
+why = "2.9: a real run refuses a required role that nothing binds, by name."
+find = '''        if (r->def->required && !r->rig && !r->keyboard) {'''
+replace = '''        if (0) {'''
+
+[[mutant]]
+id = "rl-06"
+name = "a bound output is not the trigger channel"
+test = "real"
+why = "AT THE FLIP: the device writes the code at the vblank."
+find = '''            if (r && r->dev) {'''
+replace = '''            if (0) {'''
+
+[[mutant]]
+id = "rl-07"
+name = "the rule's codes ignore $response"
+test = "real"
+why = "The code of each choice: the lookup's entry for its key."
+find = '''                    if (strcmp(v->map[e].key, r->choices[k].key) == 0) v = v->map[e].value;'''
+replace = '''                    if (e == 0) v = v->map[e].value;'''
+
+[[mutant]]
+id = "rl-08"
+name = "the rule has no output"
+test = "real"
+why = "A response trigger on a device role is a rule with the trigger role's device as its output."
+find = '''        if (!o || !o->dev) return 0;   /* an optional output with no device: no code to send */'''
+replace = '''        return 0;'''

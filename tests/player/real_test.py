@@ -6,7 +6,7 @@ tools/linux/70-ysp-input.rules (docs/screen.md, "Kernel key times"). It
 changes the display's gamma ramp for the abort test and puts it back.
 
     python3 tests/player/real_test.py --bin BUILD --out DIR [--only NAME]
-                                      [--trials N] [--windowed]
+                                      [--trials N] [--windowed] [--player EXE]
 
 Cases (--only takes one name):
   rdk afc2 stroop oddball   each worked example for N trials (default 30):
@@ -158,7 +158,7 @@ class Ctx:
     def __init__(self, a):
         self.bin = os.path.abspath(a.bin)
         self.out = os.path.abspath(a.out)
-        self.player = os.path.join(self.bin, "player", "ysp_player")
+        self.player = a.player or os.path.join(self.bin, "player", "ysp_player")
         self.make_rig = os.path.join(self.bin, "player", "player_make_rig")
         self.ypak = os.path.join(self.bin, "pack", "ypak")
         self.trials = a.trials
@@ -742,6 +742,7 @@ def main():
     ap.add_argument("--trials", type=int, default=30)
     ap.add_argument("--windowed", action="store_true")
     ap.add_argument("--font", default="/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf")
+    ap.add_argument("--player", default=None, help="another player binary (the mutation test's)")
     a = ap.parse_args()
     if not os.environ.get("DISPLAY"):
         print("SKIP: no DISPLAY")
