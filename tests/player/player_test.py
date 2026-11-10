@@ -6,6 +6,7 @@ Every case builds a pack with ypak and asserts on trials.csv and events.csv.
 """
 import argparse
 import csv
+import itertools
 import json
 import os
 import shutil
@@ -16,6 +17,10 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 fails = 0
 cases = 0
+# Bounds on what one case holds in memory: a run gone wrong (a mutant, a
+# loop) can write gigabytes, so data files are streamed and output is cut.
+MAX_ROWS = 20000
+MAX_OUTPUT = 65536
 
 
 def check(cond, msg):
@@ -78,31 +83,74 @@ class Run:
                        "experiment": {"entry": "experiment/main.json", "source": "experiment.json", "media_type": "application/vnd.ysp.experiment"},
                        "resources": res, **Run.SOURCE_EXTRA}, f)
         self.pack = os.path.join(self.dir, "p.ysppak")
-        self.build = subprocess.run([ctx.ypak, "build", "pack.json", "-o", self.pack], cwd=self.dir, capture_output=True, text=True)
-        if self.build.returncode != 0:
-            self.rc = -1
-            self.err = self.build.stderr + self.build.stdout
-            self.trials, self.events = [], []
-            return
         self.data = os.path.join(self.dir, "data")
+        self._rows = {}
+        rc, out = self._run("build", [ctx.ypak, "build", "pack.json", "-o", self.pack])
+        if rc != 0:
+            self.rc = -1
+            self.err = out
+            return
         cmd = [ctx.player, self.pack, "--out", self.data, "--sim", "--seed", "99", "--field", "participant=3"] + (args or [])
-        try:
-            r = subprocess.run(cmd, cwd=self.dir, capture_output=True, text=True, timeout=240)
-            self.rc = r.returncode
-            self.err = r.stderr + r.stdout
-        except subprocess.TimeoutExpired:
-            # a run that never ends is a failure of its own, not a hung suite
-            self.rc = -9
-            self.err = "the run did not end in 240 s"
-        self.trials = self.read("trials.csv")
-        self.events = self.read("events.csv")
+        self.rc, self.err = self._run("player", cmd)
 
-    def read(self, name):
+    def _run(self, tag, cmd):
+        # output goes to a file and only its head is kept: a run that prints
+        # without end must not fill this process's memory
+        log = os.path.join(self.dir, tag + ".log")
+        with open(log, "wb") as f:
+            try:
+                rc = subprocess.run(cmd, cwd=self.dir, stdout=f, stderr=subprocess.STDOUT, timeout=240).returncode
+            except subprocess.TimeoutExpired:
+                rc = -9   # a run that never ends fails its case, not the suite
+        with open(log, "rb") as f:
+            out = f.read(MAX_OUTPUT).decode("utf-8", "replace")
+        if rc == -9:
+            out += "\nthe run did not end in 240 s"
+        return rc, out
+
+    @property
+    def trials(self):
+        return self._cached("trials.csv")
+
+    @property
+    def events(self):
+        return self._cached("events.csv")
+
+    def _cached(self, name):
+        if name not in self._rows:
+            self._rows[name] = self.read(name)
+        return self._rows[name]
+
+    def rows(self, name):
+        """The rows of a data file, streamed."""
         p = os.path.join(self.data, name)
         if not os.path.exists(p):
-            return []
+            return
         with open(p, newline="") as f:
-            return list(csv.DictReader(f))
+            for row in csv.DictReader(f):
+                yield row
+
+    def count(self, name):
+        return sum(1 for _ in self.rows(name))
+
+    def read(self, name):
+        """The rows of a small data file as a list; a file past MAX_ROWS fails
+        the case (stream it with rows())."""
+        out = list(itertools.islice(self.rows(name), MAX_ROWS + 1))
+        if len(out) > MAX_ROWS:
+            check(False, "%s/%s has more than %d rows: stream it" % (self.dir, name, MAX_ROWS))
+            del out[MAX_ROWS:]
+        return out
+
+
+def same_file(a, b, chunk=1 << 20):
+    with open(a, "rb") as fa, open(b, "rb") as fb:
+        while True:
+            x, y = fa.read(chunk), fb.read(chunk)
+            if x != y:
+                return False
+            if not x:
+                return True
 
 
 def t_nested(ctx):
@@ -340,9 +388,7 @@ def t_seeds(ctx):
     r2 = Run(ctx, "seed2", d, tables=table, args=["--rt", "0.2"])
     check(r1.rc == 0 and r2.rc == 0, "seeds: %s" % r1.err)
     for name in ("trials.csv", "events.csv", "frames.csv", "session.json"):
-        a = open(os.path.join(r1.data, name), "rb").read()
-        b = open(os.path.join(r2.data, name), "rb").read()
-        check(a == b, "seeds: %s differs between two runs" % name)
+        check(same_file(os.path.join(r1.data, name), os.path.join(r2.data, name)), "seeds: %s differs between two runs" % name)
     # D8: skipping or looping a node shifts no other node's draws
     d2 = json.loads(json.dumps(d))
     d2["timeline"].insert(0, {"name": "zero", "if": "$off", "trial": "t", "timeline_variables": "x.pstb"})
@@ -422,7 +468,8 @@ def t_record_data(ctx):
 
 def trace_rows(ctx, r):
     with open(os.path.join(r.dir, "trace.csv"), newline="") as f:
-        return list(csv.DictReader(f))
+        for row in csv.DictReader(f):
+            yield row
 
 
 def t_fix_density(ctx):
@@ -709,12 +756,14 @@ def t_fix_walk_budget(ctx):
               session={"fields": {"participant": {"type": "integer", "required": True}, "off": {"type": "integer", "required": True}}})
     r2 = Run(ctx, "fix_walk_long", d2, args=["--field", "off=0"])
     check(r2.rc == 0 and len(r2.trials) == 1 and r2.trials[0]["node"] == "z", "1,020,000 skipped leaves, then a trial: %s" % r2.err)
-    fr = r2.read("frames.csv")
-    check(len(fr) > 100 and fr[0]["trial_index"] == "", "the walk spreads over frames, which belong to no trial: %d" % len(fr))
+    n_fr = r2.count("frames.csv")
+    first = next(r2.rows("frames.csv"), {})
+    check(n_fr > 100 and first.get("trial_index") == "", "the walk spreads over frames, which belong to no trial: %d" % n_fr)
     # leaf runs: sized from the tree's bound; past 1,000,000 refused at load
     d3 = base({"t": {"events": []}}, [{"name": "c", "repetitions": 70000, "timeline": [{"name": "l", "trial": "t"}]}])
     r3 = Run(ctx, "fix_seeds", d3, args=["--max-seconds", "100000"])
-    check(r3.rc == 0 and len(r3.trials) == 70000, "70000 leaf runs: %s %d" % (r3.err, len(r3.trials)))
+    n3 = r3.count("trials.csv")
+    check(r3.rc == 0 and n3 == 70000, "70000 leaf runs: %s %d" % (r3.err, n3))
     d4 = base({"t": {"events": []}}, [{"name": "c", "repetitions": 1000, "timeline": [{"name": "d", "repetitions": 1000, "timeline": [{"name": "e", "repetitions": 11, "timeline": [{"name": "l", "trial": "t"}]}]}]}])
     r4 = Run(ctx, "fix_seeds_over", d4)
     check(r4.rc != 0 and "11000000" in r4.err and not os.path.exists(r4.data), "past the leaf-run bound: refused at load: %s" % r4.err)
