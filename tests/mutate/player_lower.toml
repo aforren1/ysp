@@ -239,6 +239,7 @@ replace = '''        if (0) {'''
 
 [[mutant]]
 id = "rl-01"
+env = { YPL_REAL_CASES = "oddball" }
 name = "a real run opens the simulated display"
 test = "real"
 why = "Without --sim the backend is AUTO (GLX_OML on X11)."
@@ -247,6 +248,7 @@ replace = '''    sd.backend = YSCR_BACKEND_SIM;'''
 
 [[mutant]]
 id = "rl-02"
+env = { YPL_REAL_CASES = "oddball" }
 name = "a real run opens a window"
 test = "real"
 why = "Fullscreen unless --windowed: display.min_tier 1 needs a flip the OS observes."
@@ -255,6 +257,7 @@ replace = '''    sd.windowed = true;'''
 
 [[mutant]]
 id = "rl-03"
+env = { YPL_REAL_CASES = "panic" }
 name = "the panic watchdog is not armed"
 test = "real"
 why = "Fullscreen: Shift+Esc three times ends a hung loop and puts the ramp back."
@@ -263,6 +266,7 @@ replace = '''        sd.panic = false;'''
 
 [[mutant]]
 id = "rl-04"
+env = { YPL_REAL_CASES = "oddball" }
 name = "display.min_tier refuses its own tier"
 test = "real"
 why = "A flip of tier min_tier is good enough: only a worse one refuses."
@@ -271,6 +275,7 @@ replace = '''(int)p->caps.worst_tier >= p->def->min_tier)) {'''
 
 [[mutant]]
 id = "rl-05"
+env = { YPL_REAL_CASES = "refuse" }
 name = "a required role with no device starts"
 test = "real"
 why = "2.9: a real run refuses a required role that nothing binds, by name."
@@ -279,6 +284,7 @@ replace = '''        if (0) {'''
 
 [[mutant]]
 id = "rl-06"
+env = { YPL_REAL_CASES = "oddball" }
 name = "a bound output is not the trigger channel"
 test = "real"
 why = "AT THE FLIP: the device writes the code at the vblank."
@@ -287,6 +293,7 @@ replace = '''            if (0) {'''
 
 [[mutant]]
 id = "rl-07"
+env = { YPL_REAL_CASES = "rule" }
 name = "the rule's codes ignore $response"
 test = "real"
 why = "The code of each choice: the lookup's entry for its key."
@@ -295,6 +302,7 @@ replace = '''                    if (e == 0) v = v->map[e].value;'''
 
 [[mutant]]
 id = "rl-08"
+env = { YPL_REAL_CASES = "rule" }
 name = "the rule has no output"
 test = "real"
 why = "A response trigger on a device role is a rule with the trigger role's device as its output."
@@ -303,6 +311,7 @@ replace = '''        return 0;'''
 
 [[mutant]]
 id = "rl-09"
+env = { YPL_REAL_CASES = "refuse" }
 name = "a role below its min_tier starts"
 test = "real"
 why = "2.9 and decision B: refused by name unless --allow-below-tier."
@@ -311,6 +320,7 @@ replace = '''    if (0) {'''
 
 [[mutant]]
 id = "rl-10"
+env = { YPL_REAL_CASES = "refuse" }
 name = "UNKNOWN meets any min_tier"
 test = "real"
 why = "No measurement, no tier: UNKNOWN is below every min_tier."
@@ -319,6 +329,7 @@ replace = '''        r->below = tier > r->def->min_tier;'''
 
 [[mutant]]
 id = "rl-11"
+env = { YPL_REAL_CASES = "fewer" }
 name = "two rules with other choices are one"
 test = "real"
 why = "Templates on one device role must give the same choices and codes."

@@ -402,6 +402,7 @@ replace = '''        if (0) {'''
 
 [[mutant]]
 id = "rr-01"
+env = { YPL_REAL_CASES = "oddball" }
 name = "a real run reads no input"
 test = "real"
 why = "ysp/response.h, The order in a frame: the screen's queue goes to every collector each frame."
@@ -410,6 +411,7 @@ replace = '''        (void)p->n_collectors;'''
 
 [[mutant]]
 id = "rr-02"
+env = { YPL_REAL_CASES = "oddball" }
 name = "the scripted participant presses in a real run"
 test = "real"
 why = "A real run's participant is real: a scripted press would be a response with a simulated stamp."
@@ -418,6 +420,7 @@ replace = '''    if (!t->collector) return;'''
 
 [[mutant]]
 id = "rr-03"
+env = { YPL_REAL_CASES = "oddball" }
 name = "the device records are not read"
 test = "real"
 why = "An output's write goes to events.csv from its record, with its times."
@@ -428,6 +431,7 @@ replace = '''    if (p->ring_open) return 0;
 
 [[mutant]]
 id = "rr-04"
+env = { YPL_REAL_CASES = "oddball" }
 name = "a flip's code is matched in the frame loop's queue"
 test = "real"
 why = "Two queues per channel: the flips' codes are written at the vblank, the frame loop's at once, so their records come in another order."
@@ -436,6 +440,7 @@ replace = '''                if (!pl_out_pop(p, ch, (fl & YDEV_OUT_FLIP) ? 1 : 0
 
 [[mutant]]
 id = "rr-05"
+env = { YPL_REAL_CASES = "oddball" }
 name = "the frame loop's code takes the record's deadline"
 test = "real"
 why = "A code the frame loop writes has no flip deadline: its deadline is the press, so its lag is the frame loop's delay."
@@ -444,6 +449,7 @@ replace = ''''''
 
 [[mutant]]
 id = "rr-06"
+env = { YPL_REAL_CASES = "rule" }
 name = "the rule is not armed at the trial's start"
 test = "real"
 why = "2.6: the rule gets a window each trial (yrsp_rule_arm())."
@@ -452,6 +458,7 @@ replace = ''''''
 
 [[mutant]]
 id = "rr-07"
+env = { YPL_REAL_CASES = "rule" }
 name = "the rule's window does not follow the onset"
 test = "real"
 why = "yrsp_rule_window() each frame: the window opens when the onset is known."
@@ -460,6 +467,7 @@ replace = ''''''
 
 [[mutant]]
 id = "rr-08"
+env = { YPL_REAL_CASES = "rule" }
 name = "the rule's codes are not told to the collector"
 test = "real"
 why = "CODES SENT: without yrsp_rule_sent() nothing is compared."
@@ -470,6 +478,7 @@ note = "SENT_MISMATCH needs a code for a press the collector does not count (an 
 
 [[mutant]]
 id = "rr-09"
+env = { YPL_REAL_CASES = "abort" }
 name = "an abort leaves no record in session.json"
 test = "real"
 why = "The session file records the abort: who, when, and the trial with no row."
@@ -478,6 +487,7 @@ replace = '''            (void)o;'''
 
 [[mutant]]
 id = "rr-10"
+env = { YPL_REAL_CASES = "abort,panic" }
 name = "the writer is not drained before session.json"
 test = "real"
 why = "Every row on disk before session.json says the session closed."
@@ -488,6 +498,7 @@ note = "A race the writer wins: it writes each frame's queue within a frame, so 
 
 [[mutant]]
 id = "rr-11"
+env = { YPL_REAL_CASES = "oddball" }
 name = "the writer drops its writes"
 test = "real"
 why = "A real run's data goes through the writer: each queued write once, in order."
@@ -507,6 +518,7 @@ replace = '''    case PL_WJ_EVENT:
 
 [[mutant]]
 id = "rr-12"
+env = { YPL_REAL_CASES = "noafter" }
 name = "a row does not wait for its codes' records"
 test = "real"
 why = "A row's output counts come from its codes' device records; the frame loop's code of a trial that ends on the response comes after the trial."
@@ -515,6 +527,7 @@ replace = '''        r->final = true;'''
 
 [[mutant]]
 id = "rr-13"
+env = { YPL_REAL_CASES = "oddball" }
 name = "a record does not settle what its row is owed"
 test = "real"
 why = "Each record pays one owed code; a row still owed at the bound counts the rest failed."
@@ -523,6 +536,7 @@ replace = ''''''
 
 [[mutant]]
 id = "rr-14"
+env = { YPL_REAL_CASES = "lost" }
 name = "a flip's record takes the first queued code"
 test = "real"
 why = "A flip's record answers the last queued fire of its code not after its deadline; the fires before it got no record (a lost code)."
@@ -531,6 +545,7 @@ replace = '''            break;'''
 
 [[mutant]]
 id = "rr-15"
+env = { YPL_REAL_CASES = "rule2" }
 name = "a template with no response trigger arms the rule"
 test = "real"
 why = "2.6: only a template that declares a response trigger sends codes; another on the same role sends none."
@@ -539,6 +554,7 @@ replace = '''    if (!t || !t->collector) return NULL;'''
 
 [[mutant]]
 id = "rr-16"
+env = { YPL_REAL_CASES = "rule,rule2" }
 name = "the rule stays armed after its trial"
 test = "real"
 why = "The rule is disarmed at each trial's end."
@@ -549,6 +565,7 @@ note = "A guard: the rule's window closes at the live finish (yrsp_rule_window()
 
 [[mutant]]
 id = "rr-17"
+env = { YPL_REAL_CASES = "rule" }
 name = "a rule's record goes to the first arm"
 test = "real"
 why = "A rule's record goes to the last arm before its press."
@@ -565,6 +582,7 @@ replace = ''''''
 
 [[mutant]]
 id = "rr-18"
+env = { YPL_REAL_CASES = "oddball,rule" }
 name = "the row takes the final result when the live one differs"
 test = "real"
 why = "The row says what after was built from."

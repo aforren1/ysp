@@ -58,6 +58,7 @@ replace = ''''''
 
 [[mutant]]
 id = "hr-01"
+env = { YPL_REAL_CASES = "oddball" }
 name = "a keyboard role unbound in the rig is refused"
 test = "real"
 why = "An input role that lists the keyboard takes it in a real run; it needs no binding."
