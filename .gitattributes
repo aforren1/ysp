@@ -1,0 +1,7 @@
+# LF in every checkout, Windows too. Golden files, pack sources and test
+# corpora are compared byte for byte, and the mutation lists' anchors do
+# not match across CRLF. text=auto leaves binary files (PNG, WAV) alone.
+* text=auto eol=lf
+# cmd.exe needs CRLF in batch files.
+*.bat text eol=crlf
+*.cmd text eol=crlf
