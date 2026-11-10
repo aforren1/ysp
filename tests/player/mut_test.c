@@ -353,6 +353,26 @@ static int run_shapes(void) {
     return WEXITSTATUS(rc);
 }
 
+/* A full output queue drops its oldest fire, charged to that fire's trial
+ * (the same check as eval_test.c's test_out_queue). */
+static void case_out_queue(void) {
+    static pl_player q;
+    static pl_out_fire fires[2 * PL_OUT_PENDING];
+    static int head[2], tail[2];
+    static pl_out_stats now[2];
+    int t;
+    memset(&q, 0, sizeof q);
+    q.out_fires = fires;
+    q.out_head = head;
+    q.out_tail = tail;
+    q.out_now = now;
+    q.n_triggers = 1;
+    q.in_trial = true;
+    q.global_trial = 1;
+    for (t = 0; t <= PL_OUT_PENDING; t++) pl_out_push(&q, 0, 0, t, t, 7);
+    CHECK(now[0].failed == 1, "the oldest fire expired: failed %d", now[0].failed);
+}
+
 int main(int argc, char** argv) {
     const char* ypak = getenv("YPAK");
     char cmd[1024];
@@ -380,6 +400,7 @@ int main(int argc, char** argv) {
     case_rdk();
     case_code_range();
     case_stagger_trigger();
+    case_out_queue();
     if (fails == 0 && run_shapes() != 0) { fails++; printf("FAIL line %d: the system tests\n", __LINE__); }
     snprintf(cmd, sizeof cmd, "rm -r %s", workdir);
     (void)!system(cmd);

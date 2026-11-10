@@ -1380,19 +1380,19 @@ static pl_role* pl_trigger_role(pl_player* p, int ch) {
 static void pl_out_expire(pl_player* p, int ch, int trial);
 
 /* Queue q of channel ch: 0 the flips' codes, 1 the frame loop's. */
-static void pl_out_push(pl_player* p, int ch, int q, int trial, int64_t deadline, uint32_t code) {
+void pl_out_push(pl_player* p, int ch, int q, int trial, int64_t deadline, uint32_t code) {
     int k = ch * 2 + q;
     pl_out_fire* f;
     if (!p->out_fires) return;
+    /* a device that never writes back (unplugged) must not hold the queue:
+     * the oldest goes, unmatched, before its slot takes the new fire */
+    if (p->out_tail[k] - p->out_head[k] >= PL_OUT_PENDING) pl_out_expire(p, ch, p->out_fires[k * PL_OUT_PENDING + p->out_head[k]++ % PL_OUT_PENDING].trial);
     f = &p->out_fires[k * PL_OUT_PENDING + p->out_tail[k] % PL_OUT_PENDING];
     f->trial = trial;
     f->deadline = deadline;
     f->code = code;
     p->out_tail[k]++;
     p->out_now[ch].owed++;
-    /* a device that never writes back (unplugged) must not hold the queue:
-     * the oldest goes, unmatched */
-    if (p->out_tail[k] - p->out_head[k] > PL_OUT_PENDING) pl_out_expire(p, ch, p->out_fires[k * PL_OUT_PENDING + p->out_head[k]++ % PL_OUT_PENDING].trial);
 }
 
 /* The fire a record answers. Records of one queue come in fire order, but

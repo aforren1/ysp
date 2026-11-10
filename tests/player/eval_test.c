@@ -220,8 +220,36 @@ static void test_role(void) {
     pl_close(&p);
 }
 
+/* The output queue of a device that never answers (review 2): a full
+ * queue drops its oldest fire, charged to the oldest's trial, not to the
+ * fire just queued. */
+static void test_out_queue(void) {
+    static pl_player q;
+    static pl_out_fire fires[2 * PL_OUT_PENDING];
+    static int head[2], tail[2];
+    static pl_out_stats now[2];
+    int t;
+    memset(&q, 0, sizeof q);
+    q.out_fires = fires;
+    q.out_head = head;
+    q.out_tail = tail;
+    q.out_now = now;
+    q.n_triggers = 1;
+    q.in_trial = true;
+    q.global_trial = 1;            /* the running trial is 0 */
+    pl_out_push(&q, 0, 0, 0, 0, 7);
+    for (t = 1; t < PL_OUT_PENDING; t++) pl_out_push(&q, 0, 0, t, t, 7);
+    CHECK(now[0].failed == 0 && tail[0] - head[0] == PL_OUT_PENDING, "a full queue: nothing expired yet");
+    pl_out_push(&q, 0, 0, PL_OUT_PENDING, PL_OUT_PENDING, 7);
+    CHECK(now[0].failed == 1, "the oldest fire (the running trial 0's) expired: failed %d", now[0].failed);
+    CHECK(tail[0] - head[0] == PL_OUT_PENDING && fires[head[0] % PL_OUT_PENDING].trial == 1, "the queue keeps the newest %d: oldest trial %d",
+          PL_OUT_PENDING, fires[head[0] % PL_OUT_PENDING].trial);
+    CHECK(fires[(tail[0] - 1) % PL_OUT_PENDING].trial == PL_OUT_PENDING, "the new fire is kept");
+}
+
 int main(void) {
     test_values();
+    test_out_queue();
     test_seeds();
     test_role();
     printf("%d checks, %d failures\n", checks, fails);

@@ -599,3 +599,11 @@ test = "real"
 why = "The row's response columns are the final result's: the data must not claim a response the final onset (or a late-read earlier press) changes."
 find = '''res.flags |= PL_RSP_AFTER_LIVE;'''
 replace = '''res = p->live_res;'''
+
+[[mutant]]
+id = "r-48"
+name = "a full output queue expires the new fire"
+test = "player"
+why = "A full queue drops its oldest fire, charged to the oldest's trial (eval_test's queue check)."
+find = '''    if (p->out_tail[k] - p->out_head[k] >= PL_OUT_PENDING) pl_out_expire'''
+replace = '''    if (p->out_tail[k] - p->out_head[k] > PL_OUT_PENDING) pl_out_expire'''

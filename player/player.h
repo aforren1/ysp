@@ -670,6 +670,9 @@ void pl_row_write_oldest(pl_player* p);
 int  pl_event_queue(pl_player* p, const yds_event* ev);
 int  pl_events_flush(pl_player* p, bool all);
 void pl_trigger_sink(void* ctx, const yscr_trigger_info* info);
+/* A code queued on trigger channel ch (queue q: 0 a flip's, 1 the frame
+ * loop's) until its device record comes (run.c; a test reaches it). */
+void pl_out_push(pl_player* p, int ch, int q, int trial, int64_t deadline, uint32_t code);
 /* The data set's writer thread (a real run). */
 int  pl_writer_open(pl_player* p);
 int  pl_writer_close(pl_player* p);
