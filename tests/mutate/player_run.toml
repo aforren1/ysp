@@ -488,12 +488,11 @@ note = "A race the writer wins: it writes each frame's queue within a frame, so 
 
 [[mutant]]
 id = "rr-11"
-name = "the writer does not move on"
+name = "the writer drops its writes"
 test = "real"
-why = "The writer takes each queued write once, in order."
-find = '''        h++;
-        pl_st(&p->wq_head, h);'''
-replace = '''        pl_st(&p->wq_head, h);'''
+why = "A real run's data goes through the writer: each queued write once, in order."
+find = '''        if (!pl_ld(&p->wfail)) (void)pl_wq_run(p, &p->wq[h % PL_WRITE_QUEUE]);'''
+replace = '''        (void)0;'''
 
 [[mutant]]
 id = "r-46"
