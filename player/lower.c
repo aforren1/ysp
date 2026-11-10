@@ -1475,24 +1475,7 @@ static int pl_check_nodes(pl_player* p, const yexp_node* n, int count) {
 
 /* --- bounds sized at load ----------------------------------------------- */
 
-/* The most leaf runs the tree can make: repetitions, rows and loop max are
- * all known at load. In double, so a deep product does not wrap. */
-static double pl_leaf_runs(pl_player* p, const yexp_node* n, int count) {
-    double sum = 0;
-    int i;
-    for (i = 0; i < count; i++) {
-        double loops = n[i].has_loop ? (double)(n[i].loop_max > 0 ? n[i].loop_max : 1) : 1.0;
-        if (n[i].trial) sum += loops;
-        else {
-            const ytb_table* t = n[i].table ? pl_table_get(p, n[i].table) : NULL;
-            double rows = n[i].table ? (t ? (double)t->n_rows : 0) : 1.0;
-            sum += loops * (double)(n[i].repetitions > 0 ? n[i].repetitions : 1) * rows * pl_leaf_runs(p, n[i].children, n[i].n_children);
-        }
-    }
-    return sum;
-}
-
-/* Container starts the walk makes, bounded as pl_leaf_runs() bounds leaves:
+/* Container starts the walk makes, from repetitions, table rows and loop.max:
  * each iteration of a container (a loop pass, a repetition, a row) is one
  * start, with or without a leaf under it. */
 static double pl_container_visits(pl_player* p, const yexp_node* n, int count) {
@@ -1616,29 +1599,17 @@ static int pl_text_bound(pl_player* p) {
     return p->text_buf && p->key_answer && p->runs_key ? 0 : -1;
 }
 
-/* An RDK records one step a frame. Its buffer holds the longest trial that
- * shows it: the events' latest time, the response's deadline and the
- * after's latest, each at its extreme (pl_template_bound_ns(), host.c). */
+/* An RDK records one step a frame into a fixed buffer; a full one goes to
+ * the stream mid-trial (pl_rdk_flush(), run.c), so its size bounds memory,
+ * not a trial's length. --rdk-buffer (tests) makes it small. */
 static int pl_rdk_steps(pl_player* p) {
-    int i, k;
-    double rate = p->caps.period_ns > 0 ? 1e9 / (double)p->caps.period_ns : 60.0;
+    int i;
+    int n = p->args.rdk_buffer > 0 ? p->args.rdk_buffer : PL_RDK_STEPS;
     for (i = 0; i < p->n_stims; i++) {
         pl_stim* s = &p->stims[i];
-        int64_t longest = 0;
         if (s->def->kind != YEXP_RDK) continue;
-        for (k = 0; k < p->n_tmpls; k++) {
-            int64_t ns;
-            if (!p->tmpls[k].stim_used[i]) continue;
-            if (pl_template_bound_ns(p, p->tmpls[k].def, &ns) < 0) return -1;
-            if (ns < 0 || ns > (int64_t)PL_MAX_RDK_TRIAL_S * 1000000000LL) {
-                if (ns < 0) pl_fail(p, "stimulus '%s': template '%s' has no end it can reach on its own (a response with no deadline), so the rdk's stream cannot be sized; give the response a 'duration_s'", s->def->name, p->tmpls[k].def->name);
-                else pl_fail(p, "stimulus '%s': a trial of template '%s' can last %.0f s, past the %d s an rdk's stream is sized for", s->def->name, p->tmpls[k].def->name, (double)ns / 1e9, PL_MAX_RDK_TRIAL_S);
-                return -1;
-            }
-            if (ns > longest) longest = ns;
-        }
-        s->max_steps = (int)((double)longest / 1e9 * rate) + 16;
-        s->steps = (yrdk_step*)pl_alloc(p, sizeof(yrdk_step) * (size_t)s->max_steps);
+        s->max_steps = n;
+        s->steps = (yrdk_step*)pl_alloc(p, sizeof(yrdk_step) * (size_t)n);
         if (!s->steps) return -1;
     }
     return 0;
@@ -2026,14 +1997,6 @@ int pl_load(pl_player* p, const pl_args* a) {
     if (!pl_runnable(p, p->def->timeline, p->def->n_timeline)) {
         pl_fail(p, "the timeline has no leaf that can run: its containers have no children or tables with no rows");
         return -1;
-    }
-    {
-        double runs = pl_leaf_runs(p, p->def->timeline, p->def->n_timeline);
-        if (runs > PL_MAX_LEAF_RUNS) {
-            pl_fail(p, "the tree can run %.0f leaves (repetitions x rows x loop max); the session's seed log holds %d", runs, PL_MAX_LEAF_RUNS);
-            return -1;
-        }
-        p->n_leaf_runs_max = (int)runs;
     }
     {
         double visits = pl_container_visits(p, p->def->timeline, p->def->n_timeline);

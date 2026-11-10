@@ -3,12 +3,14 @@
  * Usage: ysp_player PACK --out DIR --sim [--seed N] [--field NAME=VALUE]...
  *                   [--rig FILE] [--cal FILE] [--participant SPEC] [--rt S]
  *                   [--max-trials N] [--measure] [--trace-channels FILE]
+ *                   [--rdk-buffer N]
  *
  * --sim is required in this version: the simulated display, the virtual
  * clock, the null audio device and a scripted participant. SPEC is
  * "correct" (the default: each trial's key_answer after --rt seconds),
  * "silent", "p=0.8" (correct with that probability), or "script:FILE" (a
  * CSV of trial_index,response,rt_s,hold_s). DIR must not exist.
+ * --rdk-buffer sets an RDK's step buffer (tests: a small one flushes often).
  *
  * Exit code: 0, 1 when the pack or the definition is refused or the run
  * failed (the message goes to stderr), 2 for a bad argument.
@@ -47,6 +49,7 @@ int main(int argc, char** argv) {
         else if (!strcmp(s, "--max-seconds") && v) { a.max_seconds = atoll(v); i++; }
         else if (!strcmp(s, "--measure")) a.measure = true;
         else if (!strcmp(s, "--trace-channels") && v) { a.trace_path = v; i++; }
+        else if (!strcmp(s, "--rdk-buffer") && v) { a.rdk_buffer = atoi(v); i++; }
         else if (!strcmp(s, "--field") && v) {
             const char* eq = strchr(v, '=');
             if (!eq || a.n_fields == PL_MAX_FIELDS) return usage();

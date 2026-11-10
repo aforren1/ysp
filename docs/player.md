@@ -46,7 +46,8 @@ session's, since it joins `frames.csv` and `events.csv`), and `time_elapsed_s`
 (the end frame's onset minus the session's first frame's onset).
 
 `session.json` also has `node_seeds` (each leaf run's path, iteration and
-seed), `devices` (each role and what it is bound to; `sim` in `--sim`), the
+seed, for the first 65,536 leaf runs) and `node_seeds_unlogged` (the leaf
+runs after those), `devices` (each role and what it is bound to; `sim` in `--sim`), the
 audio describe line and every header's version.
 
 Not done in the data set, and why: `clock.csv` is empty (`--sim` has no device
@@ -82,8 +83,8 @@ forced. The Report section lists them with the evidence.
 | A `from` that an `if` leaves unshown on a trial | A named error at that trial's start, because the response could never end |
 | A tree where no leaf can run (every leaf under an `if` or `unless` that a literal or a session field makes false, or zero repetitions) | Refused at load |
 | A loop or repetition over leaves that a run skips | Tree steps are spread over frames (4096 a frame); the walk has no step limit, and each yield frame draws nothing |
-| Leaf runs in one session | The loader bounds them from the tree (repetitions, table rows, `loop.max`) and sizes `node_seeds` from that bound. A tree that can run more than 10,000,000 leaves is refused at load |
-| An RDK's steps file | The step buffer is sized at load from the longest trial each template that shows the RDK can run (its events, the response's deadline, `after`). A template with an RDK and no reachable end (a response with no deadline) or one longer than 7,200 s is refused at load, so no trial stops with 0 rows |
+| Leaf runs in one session | No limit. `node_seeds` lists the first 65,536 leaf runs and `node_seeds_unlogged` counts the rest, so the log's memory is fixed. A seed the log does not list re-derives from the session seed, the node's path and its iterations (D8) |
+| An RDK's steps file | No limit on a trial's length, a response with no deadline included. Each RDK has a buffer of 4,096 steps (68 s at 60 Hz); a full buffer goes to `streams/<name>.csv` mid-trial and the trial goes on, numbering its steps on. A run whose buffer flushes every 7 steps writes the same stream and `_digest`, `_updates` and `_seed` as one that never flushes (`player_test.py`, two 300 s trials) |
 | Column text | Each text column holds the longest value known at load (at least 64 bytes); a value longer than 4,096 bytes is refused at load |
 | An array in `vars` or `data` | Written to its column as one JSON array, numbers in canonical form: `[1,0,0.5]`. A stimulus key reads it as its value |
 | A key held past its trial's end | The release goes to the collector that saw the press, in any later trial or template, so the next press counts |

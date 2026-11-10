@@ -168,16 +168,6 @@ find = '''p->peek[k].onset > s->sound_scheduled'''
 replace = '''s->sound_scheduled < 0'''
 
 [[mutant]]
-id = "r-20"
-name = "an rdk's stream past its bound not stopped"
-test = "player"
-expect = "survived"
-note = "A guard against a load bound that is wrong; no valid session reaches it."
-why = "An internal guard: the load sizes the buffer (pl-20), so no test reaches it."
-find = '''                if (s->n_steps >= s->max_steps) {'''
-replace = '''                if (0) {'''
-
-[[mutant]]
 id = "r-21"
 name = "record_data is the leaf only"
 test = "player"
@@ -216,16 +206,6 @@ test = "player"
 why = "Item 19: a frame keeps its time."
 find = '''        if (++p->walk_frame_steps > PL_WALK_PER_FRAME) return 2;'''
 replace = ''''''
-
-[[mutant]]
-id = "r-26"
-name = "node seeds past the load's bound"
-test = "player"
-expect = "survived"
-note = "A guard against a load bound that is wrong; no valid session reaches it."
-why = "An internal guard: the load sizes the log (pl-25), so no test reaches it."
-find = '''    if (p->n_node_seeds >= p->n_leaf_runs_max) {'''
-replace = '''    if (0) {'''
 
 [[mutant]]
 id = "r-27"
@@ -338,3 +318,44 @@ test = "player"
 why = "Round 2 low item: t_r2_low's shared column."
 find = '''                    for (k = 0; k < n->n_vars; k++) if (strcmp(n->vars[k].key, name) == 0) is_var = 1;'''
 replace = ''''''
+
+[[mutant]]
+id = "r-20"
+name = "flushed steps renumbered from 0"
+test = "player"
+why = "Round 3: a flushed stream equals an unflushed one (t_fix_rdk_limit)."
+find = '''        sr.update = s->n_flushed + k;'''
+replace = '''        sr.update = k;'''
+
+[[mutant]]
+id = "r-26"
+name = "leaf runs past the seed log not counted"
+test = "player"
+why = "Round 3: node_seeds_unlogged (t_fix_walk_budget)."
+find = '''        p->n_seeds_unlogged++;'''
+replace = ''''''
+
+[[mutant]]
+id = "r-40"
+name = "the updates column misses the flushed steps"
+test = "player"
+why = "Round 3: _updates equal flushed or not."
+find = '''v = p->stims[p->csrc[i].ref].n_flushed + p->stims[p->csrc[i].ref].n_steps;'''
+replace = '''v = p->stims[p->csrc[i].ref].n_steps;'''
+
+[[mutant]]
+id = "r-41"
+name = "a full buffer drops its steps"
+test = "player"
+why = "Round 3: a full buffer goes to the stream."
+find = '''                if (s->n_steps >= s->max_steps && pl_rdk_flush(p, s) < 0) return -1;'''
+replace = '''                if (s->n_steps >= s->max_steps) s->n_steps = 0;'''
+
+[[mutant]]
+id = "r-42"
+name = "the flushed count carries into the next trial"
+test = "player"
+why = "Round 3: every step is in the stream once."
+find = '''            s->n_steps = 0;
+            s->n_flushed = 0;'''
+replace = '''            s->n_steps = 0;'''

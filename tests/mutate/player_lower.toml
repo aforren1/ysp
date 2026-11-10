@@ -172,52 +172,12 @@ find = '''                *cursor += delay + dur;
 replace = '''                if (*cursor > p->ops_latest) p->ops_latest = *cursor;'''
 
 [[mutant]]
-id = "pl-20"
-name = "an rdk's buffer not sized from its trial"
-test = "player"
-why = "Round 2 item 6: a 20-minute trial runs (t_fix_rdk_limit)."
-find = '''        s->max_steps = (int)((double)longest / 1e9 * rate) + 16;'''
-replace = '''        s->max_steps = 16;'''
-
-[[mutant]]
-id = "pl-21"
-name = "an rdk trial past the limit not refused at load"
-test = "player"
-why = "Round 2 item 6: a 7300 s trial is refused at load."
-find = '''            if (ns < 0 || ns > (int64_t)PL_MAX_RDK_TRIAL_S * 1000000000LL) {'''
-replace = '''            if (ns < 0) {'''
-
-[[mutant]]
-id = "pl-22"
-name = "an rdk with no reachable end not refused"
-test = "player"
-why = "Round 2 item 6: a response with no deadline is refused at load."
-find = '''            if (ns < 0 || ns > (int64_t)PL_MAX_RDK_TRIAL_S * 1000000000LL) {'''
-replace = '''            if (ns > (int64_t)PL_MAX_RDK_TRIAL_S * 1000000000LL) {'''
-
-[[mutant]]
 id = "pl-23"
 name = "a tree with no runnable leaf not refused"
 test = "player"
 why = "Round 2 item 6: refused at load, not yielded forever (t_fix_walk_budget)."
 find = '''    if (!pl_runnable(p, p->def->timeline, p->def->n_timeline)) {'''
 replace = '''    if (0) {'''
-
-[[mutant]]
-id = "pl-24"
-name = "the leaf-run limit not checked"
-test = "player"
-why = "Round 2 item 6: 11,000,000 leaf runs are refused at load."
-find = '''        if (runs > PL_MAX_LEAF_RUNS) {'''
-replace = '''        if (0) {'''
-
-[[mutant]]
-id = "pl-25"
-name = "the seed log not sized from the tree"
-test = "player"
-why = "Round 2 item 6: 70,000 leaf runs complete."
-find = '''        p->n_leaf_runs_max = (int)runs;'''
-replace = '''        p->n_leaf_runs_max = 65536;'''
 
 [[mutant]]
 id = "pl-26"

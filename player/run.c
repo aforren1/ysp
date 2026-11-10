@@ -503,6 +503,7 @@ static int pl_stim_begin_trial(pl_player* p, const yscr_frame* f) {
         }
         if (s->def->kind == YEXP_RDK) {
             s->n_steps = 0;
+            s->n_flushed = 0;
             s->rdk_seed = ytr_trial_seed(&p->trials, p->ti.index);
         }
         if (s->def->kind == YEXP_SOUND) {
@@ -586,16 +587,15 @@ static int pl_leaf_open(pl_player* p, pl_leaf* lf, int iter) {
     iters[n++] = iter;
     seed = pl_node_seed(p->seed, lf->node->path, iters, n);
     /* compare.py and the operator use these; the session's seed is enough to
-     * rederive them, but the seed row shows them without the hash */
-    if (p->n_node_seeds >= p->n_leaf_runs_max) {
-        /* sized at load from the tree's bound: cannot happen */
-        pl_fail(p, "internal: node '%s': more leaf runs than the tree's bound of %d", lf->node->path, p->n_leaf_runs_max);
-        return -1;
+     * rederive each (D8), so a full log counts the rest and goes on */
+    if (p->n_node_seeds < PL_SEED_LOG) {
+        p->node_seeds[p->n_node_seeds].path = lf->node->path;
+        p->node_seeds[p->n_node_seeds].iteration = iter;
+        p->node_seeds[p->n_node_seeds].seed = seed;
+        p->n_node_seeds++;
+    } else {
+        p->n_seeds_unlogged++;
     }
-    p->node_seeds[p->n_node_seeds].path = lf->node->path;
-    p->node_seeds[p->n_node_seeds].iteration = iter;
-    p->node_seeds[p->n_node_seeds].seed = seed;
-    p->n_node_seeds++;
     p->leaf_rng = seed;
     lf->desc.seed = seed;
     lf->desc.rng = ytr_splitmix;
@@ -946,7 +946,7 @@ static int pl_row_fill(pl_player* p, pl_row* r) {
             if (p->stims[p->csrc[i].ref].rdk_moving) { s = pl_row_str(r, t); have = 3; }
             break;
         }
-        case CS_RDK_UPDATES: if (p->stims[p->csrc[i].ref].rdk_moving) { v = p->stims[p->csrc[i].ref].n_steps; have = 1; } break;
+        case CS_RDK_UPDATES: if (p->stims[p->csrc[i].ref].rdk_moving) { v = p->stims[p->csrc[i].ref].n_flushed + p->stims[p->csrc[i].ref].n_steps; have = 1; } break;
         case CS_RDK_DIGEST: {
             char t[20];
             if (p->stims[p->csrc[i].ref].rdk_moving) {
@@ -1002,6 +1002,8 @@ static int pl_stat_index(const pl_row* r, int stim_i) {
 }
 
 /* The row's flip-record-dependent columns, then the row. */
+static int pl_rdk_flush(pl_player* p, pl_stim* s);
+
 static int pl_row_flush(pl_player* p, pl_row* r) {
     ytr_data* w = yds_trials_writer(&p->ds);
     int i;
@@ -1294,18 +1296,8 @@ int pl_end_trial(pl_player* p, const yscr_frame* f) {
         int i;
         for (i = 0; i < p->n_stims; i++) {
             pl_stim* s = &p->stims[i];
-            int k;
             if (s->def->kind != YEXP_RDK || !s->rdk_moving) continue;
-            for (k = 0; k < s->n_steps; k++) {
-                pl_rdk_step_row sr;
-                sr.trial_index = p->global_trial - 1;
-                sr.update = k;
-                sr.t_ns = s->steps[k].t;
-                sr.coherence = s->steps[k].coherence;
-                sr.direction = s->steps[k].direction;
-                sr.speed = s->steps[k].speed;
-                if (yds_write_stream(&p->ds, s->stream, &sr) < 0) { pl_fail(p, "the stream of '%s': %s", s->def->name, yds_error(&p->ds)); return -1; }
-            }
+            if (pl_rdk_flush(p, s) < 0) return -1;
         }
     }
     if (requeue) {
@@ -1434,6 +1426,26 @@ static int pl_on_fired(pl_player* p, const yscr_frame* f, int n) {
     return 0;
 }
 
+/* An RDK's buffered steps to its stream, numbered on from the steps this
+ * trial already wrote, so a flushed trial's stream equals an unflushed
+ * one's. */
+static int pl_rdk_flush(pl_player* p, pl_stim* s) {
+    int k;
+    for (k = 0; k < s->n_steps; k++) {
+        pl_rdk_step_row sr;
+        sr.trial_index = p->global_trial - 1;
+        sr.update = s->n_flushed + k;
+        sr.t_ns = s->steps[k].t;
+        sr.coherence = s->steps[k].coherence;
+        sr.direction = s->steps[k].direction;
+        sr.speed = s->steps[k].speed;
+        if (yds_write_stream(&p->ds, s->stream, &sr) < 0) { pl_fail(p, "the stream of '%s': %s", s->def->name, yds_error(&p->ds)); return -1; }
+    }
+    s->n_flushed += s->n_steps;
+    s->n_steps = 0;
+    return 0;
+}
+
 static int pl_draw(pl_player* p, const yscr_frame* f) {
     int i;
     ygfx_begin(&p->gfx, f);
@@ -1448,11 +1460,7 @@ static int pl_draw(pl_player* p, const yscr_frame* f) {
                     yrdk_start(&s->field, s->rdk_seed, 0);
                     s->rdk_moving = true;
                 }
-                if (s->n_steps >= s->max_steps) {
-                    /* sized at load from the longest trial: cannot happen */
-                    pl_fail(p, "internal: stimulus '%s' moved for more frames than its trial's bound of %d", s->def->name, s->max_steps);
-                    return -1;
-                }
+                if (s->n_steps >= s->max_steps && pl_rdk_flush(p, s) < 0) return -1;
                 if (yrdk_update(&s->field, f->onset - s->rdk_t0) < 0) { pl_fail(p, "'%s': %s", s->def->name, yrdk_error(&s->field)); return -1; }
                 s->steps[s->n_steps++] = s->field.last;
                 yrdk_xy(&s->field, s->xy);
@@ -1637,7 +1645,7 @@ int pl_run(pl_player* p) {
     p->peek = (ytl_event*)pl_alloc(p, sizeof(ytl_event) * (size_t)(p->fired_cap + 1));
     if (!p->peek) return -1;
     if (!p->events) return -1;
-    p->node_seeds = (pl_node_seed_rec*)pl_alloc(p, sizeof(pl_node_seed_rec) * (size_t)(p->n_leaf_runs_max + 1));
+    p->node_seeds = (pl_node_seed_rec*)pl_alloc(p, sizeof(pl_node_seed_rec) * (size_t)PL_SEED_LOG);
     if (!p->node_seeds) return -1;
     p->pool_stats = 0;
     for (i = 0; i < p->n_tmpls; i++) if (p->tmpls[i].n_record > p->pool_stats) p->pool_stats = p->tmpls[i].n_record;
@@ -1736,6 +1744,8 @@ int pl_run(pl_player* p) {
             yjs_push(&a, arr, o);
         }
         if (yds_session_set(&p->ds, "node_seeds", arr) < 0) pl_fail(p, "session.json: %s", yds_error(&p->ds));
+        /* leaf runs past the log: their seeds re-derive from the session's */
+        if (yds_session_set(&p->ds, "node_seeds_unlogged", yjs_new_int(&a, p->n_seeds_unlogged)) < 0) pl_fail(p, "session.json: %s", yds_error(&p->ds));
         yjs_arena_free(&a);
     }
     if (p->trace_file) { fclose((FILE*)p->trace_file); p->trace_file = NULL; }

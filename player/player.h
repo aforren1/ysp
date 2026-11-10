@@ -48,10 +48,12 @@ enum {
     PL_MAX_DEPTH_STACK = 34,
     PL_MAX_TEXTURES   = 512,
     PL_EVENT_QUEUE    = 4096,
-    PL_MAX_RDK_TRIAL_S = 7200, /* the longest trial an RDK's stream is sized
-                              * for at load; a longer one is refused there   */
-    PL_MAX_LEAF_RUNS  = 10000000, /* leaf runs a tree can make (skipped ones
-                              * too), sized at load: 24 bytes each          */
+    PL_RDK_STEPS      = 4096,  /* an RDK's step buffer (68 s at 60 Hz); a full
+                              * one goes to its stream mid-trial, so a
+                              * trial has no length limit                    */
+    PL_SEED_LOG       = 65536, /* leaf runs whose seeds session.json lists;
+                              * later ones are counted, and every seed
+                              * re-derives from the session seed (D8)        */
     PL_MAX_CONTAINER_VISITS = 10000000, /* container starts a tree can make:
                               * each costs a walk step, 4096 a frame, so
                               * this is at most about 41 s of blank frames  */
@@ -155,6 +157,7 @@ typedef struct pl_stim {
     int64_t rdk_t0;
     uint64_t rdk_seed;
     yrdk_step* steps; int n_steps; int stream; int max_steps;
+    int n_flushed;              /* this trial's steps already in the stream  */
     /* michelson */
     const yexp_value* michelson;
     bool  text_after;           /* its text depends on the response         */
@@ -312,6 +315,8 @@ typedef struct pl_args {
     bool  quiet;
     bool  measure;             /* real-clock cost of each frame's work      */
     const char* trace_path;    /* a test's view of every channel per frame  */
+    int   rdk_buffer;          /* tests: an RDK's step buffer, to make it
+                                * flush often; 0 is PL_RDK_STEPS             */
     const char* def_text;      /* the fuzz target: use these bytes for the
                                 * experiment entry, keeping the pack's tables */
     size_t def_len;
@@ -356,8 +361,7 @@ struct pl_player {
     char*     text_buf;        /* max_text + 1: a cell, a lookup's key        */
     char*     runs_key;        /* a glyph-run block's key                     */
     size_t    row_text_cap;    /* bytes of a row's text arena                 */
-    int       max_rdk_steps;
-    int       n_leaf_runs_max;
+    long long n_seeds_unlogged; /* leaf runs past PL_SEED_LOG               */
     pl_stim_stats* stat_pool[PL_PENDING_ROWS];
     pl_out_stats*  out_pool[PL_PENDING_ROWS];
     pl_stim_stats* stats_now;
@@ -532,7 +536,6 @@ int  pl_end_trial(pl_player* p, const yscr_frame* f);
 int  pl_extreme_ns(pl_player* p, const yexp_value* v, int64_t* ns);
 /* The longest a trial of t can run, over the leaves that run it at their
  * extremes; -1 in *ns when nothing bounds it (a response with no deadline). */
-int  pl_template_bound_ns(pl_player* p, const yexp_template* t, int64_t* ns);
 int  pl_eval_var_bool(pl_player* p, const pl_env* env, const char* name, bool* out);
 int  pl_channels_assign(pl_player* p);
 int  pl_columns_build(pl_player* p);

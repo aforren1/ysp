@@ -345,66 +345,6 @@ static int h_check_ops(void* ctx, const yexp_def* d, const yexp_template* t, cha
     return rc;
 }
 
-int pl_template_bound_ns(pl_player* p, const yexp_template* t, int64_t* out) {
-    const yexp_node** leaves;
-    int n_leaves = 0, li, bound, cap;
-    ytl_op* ops;
-    void* rules_arena;
-    pl_env saved = p->env;
-    int64_t worst = 0;
-    *out = 0;
-    if (t->response) {
-        const yexp_value* d = t->response->duration;
-        /* no deadline, or a response that does not end the trial and has no
-         * deadline: nothing but a press ends it */
-        if (!d || (d->kind == YEXP_V_NUMBER && d->i == 0)) { *out = -1; return 0; }
-    }
-    bound = 16 + pl_ops_bound(t->events, t->n_events) + pl_ops_bound(t->after, t->n_after);
-    ops = (ytl_op*)pl_alloc(p, sizeof(ytl_op) * (size_t)bound);
-    rules_arena = pl_alloc(p, (size_t)1 << 19);
-    if (!ops || !rules_arena) return -1;
-    h_find_leaves(p->def->timeline, p->def->n_timeline, t, NULL, &n_leaves, 0);
-    cap = n_leaves;
-    leaves = (const yexp_node**)pl_alloc(p, sizeof(yexp_node*) * (size_t)(cap + 1));
-    if (!leaves) return -1;
-    n_leaves = 0;
-    h_find_leaves(p->def->timeline, p->def->n_timeline, t, leaves, &n_leaves, cap);
-    if (n_leaves == 0) leaves[n_leaves++] = NULL;
-    for (li = 0; li < n_leaves; li++) {
-        const yexp_node* leaf = leaves[li];
-        int64_t cursor = 0, ev_end, resp = 0, total;
-        memset(&p->extreme_desc, 0, sizeof p->extreme_desc);
-        if (leaf && leaf->rules[0]) {
-            ytr_rules_desc rr;
-            char err[300];
-            memset(&rr, 0, sizeof rr);
-            rr.text = leaf->rules;
-            rr.len = strlen(leaf->rules);
-            rr.table = leaf->table ? pl_table_get(p, leaf->table) : NULL;
-            rr.arena = rules_arena;
-            rr.arena_size = (size_t)1 << 19;
-            (void)ytr_rules(&p->extreme_desc, &rr, err, sizeof err);
-        }
-        memset(&p->env, 0, sizeof p->env);
-        p->env.extreme = 2;
-        p->env.node = leaf;
-        p->ops_latest = 0;
-        if (pl_build_ops(p, t->events, t->n_events, ops, bound, &cursor) < 0) { p->env = saved; return -1; }
-        ev_end = cursor > p->ops_latest ? cursor : p->ops_latest;
-        if (t->response && pl_extreme_ns(p, t->response->duration, &resp) < 0) { p->env = saved; return -1; }
-        cursor = 0;
-        p->ops_latest = 0;
-        if (pl_build_ops(p, t->after, t->n_after, ops, bound, &cursor) < 0) { p->env = saved; return -1; }
-        /* `from` is shown within the events, so the response ends by their
-         * latest time plus its deadline; `after` follows */
-        total = ev_end + resp + (cursor > p->ops_latest ? cursor : p->ops_latest);
-        if (total > worst) worst = total;
-    }
-    p->env = saved;
-    *out = worst;
-    return 0;
-}
-
 void pl_host_init(pl_player* p, yexp_host* h) {
     memset(h, 0, sizeof *h);
     h->ctx = p;

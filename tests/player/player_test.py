@@ -608,20 +608,28 @@ def t_fix_sound_twice(ctx):
 
 
 def t_fix_rdk_limit(ctx):
-    # the step buffer is sized at load from the longest trial: a 20-minute
-    # trial runs to its end; a trial past 2 hours, or one only a press can
-    # end, is refused at load
+    # the step buffer is fixed and goes to the stream when full: a 20-minute
+    # trial and one only a press ends run to their ends, and a buffer that
+    # flushes every 7 steps writes what one that never flushes writes
     stim = {"s": {"kind": "shape", "w": 1, "h": 1},
             "r": {"kind": "rdk", "aperture": "circle", "w": 50, "count": 3, "speed": 10, "dot_size": 2, "color": [1, 1, 1]}}
     d = base({"t": {"events": [{"on": "r"}, {"wait_s": 1200}, {"off": "r"}]}}, [{"name": "l", "trial": "t"}], stimuli=stim)
     r = Run(ctx, "fix_rdk_long", d, args=["--max-seconds", "1300"])
     check(r.rc == 0 and len(r.trials) == 1 and int(r.trials[0]["r_updates"]) >= 72000, "a 20-minute rdk trial runs to its end: %s %s" % (r.err, r.trials[:1] and r.trials[0]["r_updates"]))
-    d2 = base({"t": {"events": [{"on": "r"}, {"wait_s": 7300}, {"off": "r"}]}}, [{"name": "l", "trial": "t"}], stimuli=stim)
-    r2 = Run(ctx, "fix_rdk_too_long", d2)
-    check(r2.rc != 0 and "7300" in r2.err and not os.path.exists(r2.data), "a trial past the rdk's bound is refused at load: %s" % r2.err)
+    d2 = base({"t": {"events": [{"on": "r"}, {"wait_s": 300}, {"off": "r"}]}}, [{"name": "l", "trial": "t", "rules": ["reps 2"]}], stimuli=stim)
+    ra = Run(ctx, "fix_rdk_flush_7", d2, args=["--max-seconds", "1000", "--rdk-buffer", "7"])
+    rb = Run(ctx, "fix_rdk_flush_none", d2, args=["--max-seconds", "1000", "--rdk-buffer", "100000"])
+    check(ra.rc == 0 and rb.rc == 0 and len(ra.trials) == 2, "300 s rdk trials, flushed and not: %s %s" % (ra.err, rb.err))
+    if ra.rc == 0 and rb.rc == 0:
+        check(same_file(os.path.join(ra.data, "streams", "r.csv"), os.path.join(rb.data, "streams", "r.csv")), "the stream of a flushed run equals an unflushed one's, byte for byte")
+        check([(x["r_digest"], x["r_updates"], x["r_seed"]) for x in ra.trials] == [(x["r_digest"], x["r_updates"], x["r_seed"]) for x in rb.trials] and int(ra.trials[0]["r_updates"]) >= 18000,
+              "digest, updates and seed equal: %s" % [(x["r_digest"], x["r_updates"]) for x in ra.trials])
+        check(ra.count("streams/r.csv") == sum(int(x["r_updates"]) for x in ra.trials), "every step is in the stream once")
+    with open(os.path.join(ctx.out, "late.csv"), "w", newline="\n") as f:
+        f.write("trial_index,response,rt_s,hold_s\n0,left,100,0.05\n")
     d3 = base({"t": {"events": [{"on": "r"}], "response": {"role": "r", "from": "r", "choices": ["left"]}}}, [{"name": "l", "trial": "t"}], stimuli=stim)
-    r3 = Run(ctx, "fix_rdk_unbounded", d3)
-    check(r3.rc != 0 and "duration_s" in r3.err and not os.path.exists(r3.data), "an rdk in a trial only a press can end is refused at load: %s" % r3.err)
+    r3 = Run(ctx, "fix_rdk_unbounded", d3, args=["--participant", "script:" + os.path.join(ctx.out, "late.csv"), "--max-seconds", "1000"])
+    check(r3.rc == 0 and len(r3.trials) == 1 and int(r3.trials[0]["r_updates"]) >= 6000, "an rdk in a trial only a press ends runs to the press: %s %s" % (r3.err, r3.trials[:1] and r3.trials[0]["r_updates"]))
 
 
 def t_fix_record_inherit(ctx):
@@ -759,14 +767,16 @@ def t_fix_walk_budget(ctx):
     n_fr = r2.count("frames.csv")
     first = next(r2.rows("frames.csv"), {})
     check(n_fr > 100 and first.get("trial_index") == "", "the walk spreads over frames, which belong to no trial: %d" % n_fr)
-    # leaf runs: sized from the tree's bound; past 1,000,000 refused at load
+    # leaf runs: the seed log keeps 65,536 and counts the rest; the session
+    # neither stops nor is refused
     d3 = base({"t": {"events": []}}, [{"name": "c", "repetitions": 70000, "timeline": [{"name": "l", "trial": "t"}]}])
     r3 = Run(ctx, "fix_seeds", d3, args=["--max-seconds", "100000"])
     n3 = r3.count("trials.csv")
     check(r3.rc == 0 and n3 == 70000, "70000 leaf runs: %s %d" % (r3.err, n3))
-    d4 = base({"t": {"events": []}}, [{"name": "c", "repetitions": 1000, "timeline": [{"name": "d", "repetitions": 1000, "timeline": [{"name": "e", "repetitions": 11, "timeline": [{"name": "l", "trial": "t"}]}]}]}])
-    r4 = Run(ctx, "fix_seeds_over", d4)
-    check(r4.rc != 0 and "11000000" in r4.err and not os.path.exists(r4.data), "past the leaf-run bound: refused at load: %s" % r4.err)
+    if r3.rc == 0:
+        with open(os.path.join(r3.data, "session.json")) as f:
+            sess = json.load(f)
+        check(len(sess["node_seeds"]) == 65536 and sess["node_seeds_unlogged"] == 70000 - 65536, "the seed log: %d listed, %s counted" % (len(sess["node_seeds"]), sess.get("node_seeds_unlogged")))
     # container starts: bounded at load as leaf runs are
     d5 = base({"t": {"events": [{"wait_s": 0.02}]}}, [{"name": "c", "repetitions": 1000000, "timeline": [{"name": "c2", "repetitions": 1000000, "timeline": [{"name": "c3", "timeline": []}]}]},
                                                      {"name": "l", "trial": "t"}])
