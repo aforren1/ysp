@@ -31,8 +31,8 @@ id = "r-03"
 name = "the loop runs once more at the criterion"
 test = "player"
 why = "2.4: a loop stops when the accuracy reaches the criterion."
-find = '''                if (acc < n->loop_until && p->leaf_loop_pass < n->loop_max) {'''
-replace = '''                if (acc <= n->loop_until && p->leaf_loop_pass < n->loop_max) {'''
+find = '''                if (acc < n->loop_until && p->leaf_loop_pass < n->loop_max && p->leaf_pass_trials > 0) {'''
+replace = '''                if (acc <= n->loop_until && p->leaf_loop_pass < n->loop_max && p->leaf_pass_trials > 0) {'''
 
 [[mutant]]
 id = "r-04"
@@ -284,8 +284,8 @@ test = "player"
 expect = "survived"
 note = "A leaf that opens with no trial is rare: only the weight of the per-frame yield changes, not the outcome of a run; the frame-time cost is what it bounds."
 why = "Item 19."
-find = '''                p->walk_frame_steps += 64;'''
-replace = '''                p->walk_frame_steps += 0;'''
+find = '''                p->walk_frame_steps += 64;   /* a ytr_open() is heavier than a node step */'''
+replace = '''                p->walk_frame_steps += 0;   /* a ytr_open() is heavier than a node step */'''
 
 [[mutant]]
 id = "r-36"
@@ -359,3 +359,22 @@ why = "Round 3: every step is in the stream once."
 find = '''            s->n_steps = 0;
             s->n_flushed = 0;'''
 replace = '''            s->n_steps = 0;'''
+
+[[mutant]]
+id = "r-43"
+name = "a leaf loop pass with no trials loops on"
+test = "player"
+why = "Round 4: a done track spun the loop (t_r4_leaf_loop_done_track)."
+find = ''' && p->leaf_pass_trials > 0) {'''
+replace = ''') {'''
+
+[[mutant]]
+id = "r-44"
+name = "a leaf reopen does not yield"
+test = "player"
+expect = "survived"
+note = "A second guard: with the empty-pass rule (r-43) every reopen follows a pass that gave trials, so a frame never reaches the budget through reopens alone."
+why = "Round 4."
+find = '''                    if (p->walk_frame_steps > PL_WALK_PER_FRAME) return 2;
+                    continue;'''
+replace = '''                    continue;'''

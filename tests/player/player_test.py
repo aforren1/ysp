@@ -938,12 +938,32 @@ def t_r2_relaxed(ctx):
           "$level by $method on a mixed leaf: %s %s" % (r.err, [(x.get("track"), x.get("wv"), x.get("hv")) for x in r.trials]))
 
 
+def t_r4_leaf_loop_done_track(ctx):
+    # a leaf loop whose track is done: a pass with no trials ends the loop,
+    # so the session finishes promptly instead of spinning in one frame
+    import time
+    methods = {"st": {"type": "stair", "start": 0.5, "n_up": 1, "n_down": 1, "step_type": "lin", "steps": [0.1], "stop_trials": 3}}
+    d = base({"t": tmpl(key_answer="left")},
+             [{"name": "c", "repetitions": 1000, "timeline": [{"name": "l", "trial": "t", "tracks": ["st"], "loop": {"until_accuracy": 1, "max": 1000000}}]}], methods=methods)
+    t0 = time.time()
+    r = Run(ctx, "r4_loop_spin", d, args=["--participant", "p=0.0"])
+    took = time.time() - t0
+    check(r.rc == 0 and len(r.trials) == 3 and took < 30, "a done track's leaf loop ends: rc %d, %d trials, %.1f s: %s" % (r.rc, len(r.trials), took, r.err[:200]))
+    if r.rc == 0:
+        with open(os.path.join(r.data, "session.json")) as f:
+            sess = json.load(f)
+        # rep 1: the pass with 3 trials and the empty pass that ends the loop;
+        # reps 2..1000: one empty open each
+        opens = len(sess["node_seeds"]) + sess["node_seeds_unlogged"]
+        check(opens == 1001 and sess["node_seeds_unlogged"] == 0, "leaf opens: %d listed, %s unlogged" % (len(sess["node_seeds"]), sess.get("node_seeds_unlogged")))
+
+
 TESTS = [t_nested, t_if_unless, t_empty_and_zero, t_loop, t_requeue, t_track_ends, t_lookup_keys, t_triggers, t_after_timing, t_outcomes,
          t_method_update, t_seeds, t_refused, t_unused_stim, t_record_data, t_fix_density, t_fix_key_reapply, t_fix_stale_rdk,
          t_fix_timeout_values, t_fix_any_key, t_fix_from_in_if, t_fix_shown_twice, t_fix_vars_data, t_fix_sound_twice, t_fix_rdk_limit,
          t_fix_record_inherit, t_fix_backward_at, t_fix_refusals, t_fix_michelson_order, t_fix_texture_vars, t_fix_walk_budget,
          t_fix_data_set, t_fix_check_all_leaves, t_fix_release_order, t_fix_key_var_reapply,
-         t_r2_release_other_template, t_r2_yield_draws_nothing, t_r2_low, t_r2_relaxed]
+         t_r2_release_other_template, t_r2_yield_draws_nothing, t_r2_low, t_r2_relaxed, t_r4_leaf_loop_done_track]
 
 
 def main():

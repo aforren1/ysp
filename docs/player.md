@@ -84,14 +84,15 @@ forced. The Report section lists them with the evidence.
 | A tree where no leaf can run (every leaf under an `if` or `unless` that a literal or a session field makes false, or zero repetitions) | Refused at load |
 | A loop or repetition over leaves that a run skips | Tree steps are spread over frames (4096 a frame); the walk has no step limit, and each yield frame draws nothing |
 | Leaf runs in one session | No limit. `node_seeds` lists the first 65,536 leaf runs and `node_seeds_unlogged` counts the rest, so the log's memory is fixed. A seed the log does not list re-derives from the session seed, the node's path and its iterations (D8) |
-| An RDK's steps file | No limit on a trial's length, a response with no deadline included. Each RDK has a buffer of 4,096 steps (68 s at 60 Hz); a full buffer goes to `streams/<name>.csv` mid-trial and the trial goes on, numbering its steps on. A run whose buffer flushes every 7 steps writes the same stream and `_digest`, `_updates` and `_seed` as one that never flushes (`player_test.py`, two 300 s trials) |
+| An RDK's steps file | No limit on a trial's length, a response with no deadline included. Each RDK has a buffer of 64 steps (about 1 s at 60 Hz); a full buffer goes to `streams/<name>.csv` in the frame it fills and the trial goes on, numbering its steps on. A run whose buffer flushes every 7 steps writes the same stream and `_digest`, `_updates` and `_seed` as one that never flushes (`player_test.py`, two 300 s trials). A flush costs about 0.70 us per step, so about 45 us per RDK at 64 steps (measured below) |
 | Column text | Each text column holds the longest value known at load (at least 64 bytes); a value longer than 4,096 bytes is refused at load |
 | An array in `vars` or `data` | Written to its column as one JSON array, numbers in canonical form: `[1,0,0.5]`. A stimulus key reads it as its value |
 | A key held past its trial's end | The release goes to the collector that saw the press, in any later trial or template, so the next press counts |
 | A frame with no trial (before the first trial, between trials, a yield frame) | Draws nothing |
 | A stimulus left on at a trial's end | `<s>_offset_s` is the onset of the trial's last frame |
 | One node with the same name in `vars` and `data` | Refused at load |
-| Container starts in one session | The loader bounds them as it bounds leaf runs (repetitions, table rows, `loop.max`): each start is a walk step, 4096 a frame. A tree that can start its containers more than 10,000,000 times (about 40 s of blank frames at 60 Hz) is refused at load |
+| A leaf `loop` pass that gives no trials (its track is done) | Ends the loop: no accuracy can change without trials. Each reopen of a looping leaf also counts as a leaf open in the per-frame walk budget, so a frame yields as the walk does |
+| Container starts in one session | The loader bounds them from repetitions, table rows and `loop.max`: each start is a walk step, 4096 a frame. A tree that can start its containers more than 10,000,000 times (about 40 s of blank frames at 60 Hz) is refused at load |
 | A table column in one leaf and a `vars` name in another | One column, as for a jitter in one leaf and a text in another: each leaf's row writes its own value, and a column whose leaves give different types holds text (a duration as its exact decimal) |
 | A channel's trace | `--trace-channels FILE` writes every channel per frame: a test's view, off by default |
 | A trial row's timing columns | Written when their frames' flip records arrive (a pending-row ring), so `<s>_offset_s` of a stimulus turned off at the trial's last frame is known |
@@ -135,6 +136,15 @@ to 58 us, 0 frames over 16 ms. Before round 2 (load average about 2): 20 to
 50 us and 14 to 32 us. The spread between runs of one example (2AFC: 50 to
 67 us) is as large as the change, so this is no measured regression. The simulated display has no
 GPU cost, so this is the CPU part of a frame only.
+
+RDK flush cost (`--measure`, Release, i5-14500, load average 0.2 to 1.2,
+desktop open, no other job running, 2026-11-10): four RDKs of 200 dots
+shown together for three 120 s trials (21,604 frames), so all four flush
+in the same frame. With a 4,096-step buffer the largest frame's work was
+11.5 ms in each of three runs (4 x 4,096 steps: about 0.70 us a step).
+With the 64-step buffer it was 219 to 373 us. The two runs' streams are
+identical. A 4,096-step buffer would put a 16 ms frame at risk with five
+or six RDKs; 64 steps keep a flush under 50 us an RDK.
 
 ## What a real-window run needs next
 

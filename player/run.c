@@ -606,6 +606,7 @@ static int pl_leaf_open(pl_player* p, pl_leaf* lf, int iter) {
     p->leaf_iter = iter;
     p->leaf_loop_pass = 0;
     p->leaf_n_correct = p->leaf_n_counted = 0;
+    p->leaf_pass_trials = 0;
     return 0;
 }
 
@@ -704,7 +705,7 @@ int pl_start_trial(pl_player* p, const yscr_frame* f) {
         }
         if (p->args.max_trials && p->global_trial >= p->args.max_trials) { p->walk_done = true; pl_leaf_close(p); return 0; }
         rc = ytr_next(&p->trials, &p->ti);
-        if (rc >= 0) break;
+        if (rc >= 0) { p->leaf_pass_trials++; break; }
         if (rc != YTR_DONE) { pl_fail(p, "node '%s': %s", p->leaf->node->path, ytr_error(&p->trials)); return -1; }
         /* the leaf ran its last trial: its loop, else on to the next */
         {
@@ -712,13 +713,19 @@ int pl_start_trial(pl_player* p, const yscr_frame* f) {
             if (n->has_loop) {
                 double acc = p->leaf_n_counted > 0 ? (double)p->leaf_n_correct / p->leaf_n_counted : 0.0;
                 p->leaf_loop_pass++;
-                if (acc < n->loop_until && p->leaf_loop_pass < n->loop_max) {
+                /* a pass with no trials (a done track) changes no accuracy,
+                 * so the next would run none either: the loop ends */
+                if (acc < n->loop_until && p->leaf_loop_pass < n->loop_max && p->leaf_pass_trials > 0) {
                     pl_leaf* lf = p->leaf;
                     int pass = p->leaf_loop_pass;
                     pl_leaf_close(p);
                     p->iter_counter = p->stack[p->sp - 1].child_iters[p->stack[p->sp - 1].child - 1]++;
                     if (pl_leaf_open(p, lf, p->iter_counter) < 0) return -1;
                     p->leaf_loop_pass = pass;
+                    /* a reopen is a walk step as heavy as a leaf open: a
+                     * frame yields past the budget, as the walk does */
+                    p->walk_frame_steps += 64;
+                    if (p->walk_frame_steps > PL_WALK_PER_FRAME) return 2;
                     continue;
                 }
             }

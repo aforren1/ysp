@@ -48,7 +48,7 @@ enum {
     PL_MAX_DEPTH_STACK = 34,
     PL_MAX_TEXTURES   = 512,
     PL_EVENT_QUEUE    = 4096,
-    PL_RDK_STEPS      = 4096,  /* an RDK's step buffer (68 s at 60 Hz); a full
+    PL_RDK_STEPS      = 64,    /* an RDK's step buffer (about 1 s at 60 Hz); a full
                               * one goes to its stream mid-trial, so a
                               * trial has no length limit                    */
     PL_SEED_LOG       = 65536, /* leaf runs whose seeds session.json lists;
@@ -356,6 +356,7 @@ struct pl_player {
     pl_node_seed_rec* node_seeds;
     int       n_node_seeds;
     int       leaf_iter, leaf_loop_pass, leaf_n_correct, leaf_n_counted, iter_counter;
+    int       leaf_pass_trials;  /* trials this loop pass of the leaf gave    */
     char*     key_answer;      /* max_text + 1 bytes, sized at load          */
     size_t    max_text;        /* the longest value text the session can make */
     char*     text_buf;        /* max_text + 1: a cell, a lookup's key        */
