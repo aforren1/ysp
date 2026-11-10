@@ -86,6 +86,10 @@ enum {
  * 0x0400): `after` was built from a live result that named another response
  * than the row's final one. */
 #define PL_RSP_AFTER_LIVE 0x8000u
+/* An out row's flags bit, the player's own (ysp/device.h's YDEV_OUT_* end at
+ * 0x0200): the record came after its trial's row was written, so that row
+ * counted the code failed. */
+#define PL_OUT_AFTER_ROW 0x4000u
 enum {
     PL_WAIT_FINAL_NS = 1000000000, /* the safety net of a response's wait for
                                     * the landing frame's flip record: every

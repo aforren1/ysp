@@ -1264,6 +1264,16 @@ static void pl_stats_update(const pl_player* p, pl_stim_stats* stats, int n, con
     }
 }
 
+/* Whether a row still waits for a code's device record, per channel: one
+ * channel's extra record (a write the player did not count) must not hide
+ * another's missing one. */
+static bool pl_row_owed(const pl_player* p, const pl_row* r) {
+    int k;
+    for (k = 0; k < p->n_triggers; k++)
+        if (r->out[k].owed > 0) return true;
+    return false;
+}
+
 /* A frame's flip record: its trial's counts, its stimuli's onsets. */
 static int pl_on_record(pl_player* p, const yscr_record* rec) {
     int trial = p->frame_trial[rec->index % PL_FRAME_RING];
@@ -1305,10 +1315,8 @@ static int pl_on_record(pl_player* p, const yscr_record* rec) {
      * later, with the missing ones counted failed */
     for (i = 0; i < PL_PENDING_ROWS; i++) {
         pl_row* r = &p->rows[i];
-        int k, owed = 0;
         if (!r->used || r->final || !r->last_in) continue;
-        for (k = 0; k < p->n_triggers; k++) owed += r->out[k].owed;
-        if (owed <= 0 || rec->index >= r->last_frame + PL_OUT_WAIT_FRAMES) r->final = true;
+        if (!pl_row_owed(p, r) || rec->index >= r->last_frame + PL_OUT_WAIT_FRAMES) r->final = true;
     }
     while (p->rows[p->row_tail].used && p->rows[p->row_tail].final) {
         if (pl_row_hand(p, &p->rows[p->row_tail]) < 0) return -1;
@@ -1485,6 +1493,10 @@ static int pl_devices_drain(pl_player* p) {
                 o->owed--;   /* a rule's fires are owed from the trial's end (pl_end_trial()) */
                 if (fl & YDEV_OUT_FAILED) o->failed++;
                 if (lag > o->lag_max) o->lag_max = lag;
+            } else if (fire.trial >= 0) {
+                /* the trial's row was written without it (the 30-frame
+                 * bound): the row counted it failed, and this row says so */
+                fl |= PL_OUT_AFTER_ROW;
             }
             yds_event_init(&ev);
             ev.t_ns = r->u.i64[0];
@@ -1555,9 +1567,12 @@ int pl_end_trial(pl_player* p, const yscr_frame* f) {
         ydev_rule* rule = pl_rule_of(p, t);
         if (rule) {
             /* the rule's fires: owed to this row until their records come */
-            int ch = p->roles[t->role].rule_out, nf = ydev_rule_fires(rule, NULL, 0);
-            (void)yrsp_rule_sent(rule, t->collector);
+            int ch = p->roles[t->role].rule_out, nf;
+            /* disarmed first: a press on the reader thread between the
+             * count and the disarm would be a fire the row does not count */
             ydev_rule_disarm(rule);
+            nf = ydev_rule_fires(rule, NULL, 0);
+            (void)yrsp_rule_sent(rule, t->collector);
             p->out_now[ch].n += nf;
             p->out_now[ch].owed += nf;
         }
@@ -2053,6 +2068,13 @@ int pl_event_queue(pl_player* p, const yds_event* ev) {
     return 0;
 }
 
+static bool pl_rows_owed(const pl_player* p) {
+    int i;
+    for (i = 0; i < PL_PENDING_ROWS; i++)
+        if (p->rows[i].used && pl_row_owed(p, &p->rows[i])) return true;
+    return false;
+}
+
 int pl_run(pl_player* p) {
     yscr_frame f;
     int rc = 0, i, r;
@@ -2159,7 +2181,9 @@ int pl_run(pl_player* p) {
     /* after an abort too: the begin() after the one that reported it starts
      * a frame again, unless the panic released the display */
     if (p->aborted && !(p->abort_reasons & YSCR_ABORT_PANIC)) rc = YSCR_OK;
-    for (i = 0; i < 8 && rc == YSCR_OK; i++) {
+    /* 8 frames, and in a real run up to PL_OUT_WAIT_FRAMES while a row still
+     * waits for a code's device record: the end has the rows' bound too */
+    for (i = 0; rc == YSCR_OK && (i < 8 || (i < PL_OUT_WAIT_FRAMES + 2 && pl_rows_owed(p))); i++) {
         int k;
         rc = yscr_begin(&p->scr, &f);
         if (rc != YSCR_OK) break;
