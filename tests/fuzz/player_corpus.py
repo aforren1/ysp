@@ -199,6 +199,13 @@ def node_seeds(seeds):
     write(seeds, "rdk_density", base(stimuli={"s": {"kind": "rdk", "density": 0.002, "w": 80, "h": 80, "aperture": "rect", "speed": 5, "dot_size": 2, "color": [1, 1, 1]}}))
     write(seeds, "text_var", base(stimuli={"s": {"kind": "text", "font": "fonts/F.ttf", "size": 40, "width": 1000, "text": "$a"}}))
     write(seeds, "image_var", base(stimuli={"s": {"kind": "image", "texture": "$img"}}))
+    # round 4: a leaf loop over a track that finishes (an empty pass ends the
+    # loop), and an RDK trial longer than its 64-step buffer (a mid-trial flush)
+    write(seeds, "track_loop_done", base(methods={"st": {"type": "stair", "steps": [0.1], "stop_trials": 2, "start": 0.5}},
+                                         trials={"x": dict(tr["x"], response=dict(RESP, key_answer="left", duration_s=2))},
+                                         timeline=[{"name": "c", "repetitions": 3, "timeline": [{"name": "a", "trial": "x", "tracks": ["st"], "loop": {"until_accuracy": 1, "max": 5}}]}]))
+    write(seeds, "rdk_long", base(stimuli={"s": {"kind": "rdk", "count": 20, "w": 80, "h": 80, "aperture": "circle", "speed": 5, "dot_size": 2, "color": [1, 1, 1]}},
+                                  trials={"x": {"events": [{"on": "s"}, {"wait_s": 2.5}, {"off": "s"}], "response": dict(RESP)}}))
     # round 2: arrays are values (2.2), written as one text and fed to a stimulus
     write(seeds, "node_arrays", base(stimuli={"s": {"kind": "shape", "w": 1, "h": 1, "color": "$col"}},
                                      timeline=[{"name": "m", "trial": "x", "timeline_variables": "x.pstb", "vars": {"col": [1, 0, 0.5]}, "data": {"arr": [2, 3]}}]))
