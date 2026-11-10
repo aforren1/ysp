@@ -1842,19 +1842,21 @@ static int pl_rule_make(pl_player* p, pl_role* in) {
             return -1;
         }
         for (k = 0; k < r->n_choices; k++) {
-            pl_env env;
-            int64_t code = 0;
+            int64_t code = -1;
             int b, found = -1;
             ydev_rule_choice c;
-            memset(&env, 0, sizeof env);
-            env.t = t;
-            env.phase = PL_PH_AFTER;
-            env.responded = true;
-            env.response = r->choices[k].key;
-            env.rt_ns = YRSP_NO_TIME;
-            if (pl_eval_int(p, &env, r->trigger_code, &code) < 0) {
-                p->failed = 0;
-                pl_fail(p, "template '%s': the response trigger's code on the device role '%s' must depend on $response only: a rule's codes are set when the device opens",
+            const yexp_value* v = r->trigger_code;
+            /* a number, or a lookup by $response whose entries are numbers:
+             * what a rule set at open can send */
+            if (v && v->kind == YEXP_V_LOOKUP && v->by && v->by->kind == YEXP_V_VAR && strcmp(v->by->str, "response") == 0) {
+                uint32_t e;
+                for (e = 0; e < v->n; e++)
+                    if (strcmp(v->map[e].key, r->choices[k].key) == 0) v = v->map[e].value;
+            }
+            if (v && v->kind == YEXP_V_NUMBER && (v->flags & YEXP_VF_INT)) code = v->i;
+            else {
+                pl_fail(p, "template '%s': the response trigger's code on the device role '%s' must be a number, or a lookup by $response of numbers: "
+                           "a rule's codes are set when the device opens",
                         t->name, in->def->name);
                 return -1;
             }

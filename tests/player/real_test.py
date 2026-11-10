@@ -16,6 +16,12 @@ Cases (--only takes one name):
                             residuals are reported. oddball's trigger role
                             is a TriggerBox on a pty pair: the bytes read
                             are the codes events.csv says went out.
+  rule                      oddball with its response role on a LINE board
+                            emulated on a second pty pair: the presses
+                            come over the input bridge, the response's
+                            code goes out from the board's reader thread
+                            (a ydev_rule), and the rows have no
+                            SENT_MISMATCH
   abort                     Shift+Esc in the middle: exit 3, the rows of
                             the finished trials, session.json "aborted",
                             the mode and the gamma ramp back
@@ -177,7 +183,7 @@ def build_pack(ctx, name):
     return pack, definition
 
 
-def make_rig(ctx, name, trig_port=None):
+def make_rig(ctx, name, trig_port=None, resp_port=None):
     rig = os.path.join(ctx.out, "rig_" + name)
     shutil.rmtree(rig, ignore_errors=True)
     os.makedirs(rig)
@@ -187,6 +193,8 @@ def make_rig(ctx, name, trig_port=None):
         with open(path) as f:
             prof = json.load(f)
         prof["roles"]["trig"] = {"family": "triggerbox", "key": "port:" + trig_port}
+        if resp_port:
+            prof["roles"]["resp"] = {"family": "line", "key": "port:" + resp_port}
         with open(path, "w", newline="\n") as f:
             json.dump(prof, f, indent=2, sort_keys=True)
             f.write("\n")
@@ -281,7 +289,57 @@ class Pty:
         self.p.wait(timeout=5)
 
 
-def run_real(ctx, name, pack, plan, rig, extra=(), silent_every=7, abort_after=None, panic_after=None, rt_range=(0.35, 0.6)):
+class LineBoard(Pty):
+    """A board of the ysp line protocol (ysp/box.h, YBOX_LINE) on a pty
+    pair: it answers "i" and "q", sends a sync every 100 ms, and a button's
+    edges on press(). Its counter is CLOCK_MONOTONIC in microseconds, so a
+    press's time is known on the host's clock as well."""
+
+    def __init__(self):
+        self.p = subprocess.Popen([sys.executable, os.path.join(ROOT, "tests", "loopback", "pty_pair.py")], stdout=subprocess.PIPE, text=True)
+        pid, a, b = self.p.stdout.readline().split()
+        self.a, self.b = a, b
+        self.fd = os.open(b, os.O_RDWR | os.O_NONBLOCK | os.O_NOCTTY)
+        self.lock = threading.Lock()
+        self.data = bytearray()
+        self.stop = False
+        self.t = threading.Thread(target=self._run, daemon=True)
+        self.t.start()
+
+    def _send(self, line):
+        with self.lock:
+            os.write(self.fd, (line + "\n").encode())
+
+    def _run(self):
+        buf = b""
+        last_sync = 0.0
+        while not self.stop:
+            r, _, _ = select.select([self.fd], [], [], 0.02)
+            if r:
+                try:
+                    buf += os.read(self.fd, 4096)
+                except BlockingIOError:
+                    pass
+                while b"\n" in buf:
+                    line, buf = buf.split(b"\n", 1)
+                    line = line.strip().decode("ascii", "replace")
+                    if line == "i":
+                        self._send("I ysp-line 1 test resp")
+                    elif line.startswith("q "):
+                        self._send("Q %s %d" % (line[2:], time.monotonic_ns() // 1000))
+            if time.monotonic() - last_sync >= 0.1:
+                last_sync = time.monotonic()
+                self._send("S %d" % (time.monotonic_ns() // 1000))
+
+    def press(self, ch):
+        t = time.monotonic_ns() // 1000
+        self._send("E %d %d 1" % (t, ch))
+        time.sleep(0.08)
+        self._send("E %d %d 0" % (time.monotonic_ns() // 1000, ch))
+        return t * 1000, t * 1000
+
+
+def run_real(ctx, name, pack, plan, rig, extra=(), silent_every=7, abort_after=None, panic_after=None, rt_range=(0.35, 0.6), board=None):
     """Runs the player for real and plays the participant. Returns the exit
     code, the data folder, the presses sent and the player's output."""
     d = os.path.join(ctx.out, name + "_real")
@@ -340,13 +398,18 @@ def run_real(ctx, name, pack, plan, rig, extra=(), silent_every=7, abort_after=N
             time.sleep(max(0.0, t_press - time.monotonic()))
             if p.poll() is not None:
                 break
-            if not focused:
-                focused = focus_pid() == p.pid
-                if not check(focused, "%s: the player's window has no focus; no key sent" % name):
-                    break
-            t0, t1 = kb.key(tr["key"], 1)
-            time.sleep(0.08)
-            kb.key(tr["key"], 0)
+            if board:
+                # a button of the LINE board: no focus needed, the press is
+                # the board's own time
+                t0, t1 = board.press(tr["button"])
+            else:
+                if not focused:
+                    focused = focus_pid() == p.pid
+                    if not check(focused, "%s: the player's window has no focus; no key sent" % name):
+                        break
+                t0, t1 = kb.key(tr["key"], 1)
+                time.sleep(0.08)
+                kb.key(tr["key"], 0)
             sent.append({"trial": i, "key": tr["key"], "name": tr.get("name", tr["key"]), "t0": t0, "t1": t1})
             t_next = t0 / 1e9 + tr["post"]
         try:
@@ -474,6 +537,72 @@ def check_bytes(name, d, pty, rows):
         flips.sort()
         print("  %s: %d bytes on the pty; %d codes at the flip, write start minus deadline p50 %.1f us, max %.1f us" %
               (name, len(data), len(flips), flips[len(flips) // 2] * 1e6, flips[-1] * 1e6), flush=True)
+
+
+def case_rule(ctx):
+    """oddball with its response role on a LINE board: the response's code
+    goes out from the board's reader thread (a ydev_rule, 2.6), and the
+    board's presses come over the screen's input bridge."""
+    print("== rule", flush=True)
+    work = os.path.join(ctx.out, "rule_src")
+    shutil.rmtree(work, ignore_errors=True)
+    shutil.copytree(os.path.join(HERE, "oddball"), work)
+    with open(os.path.join(work, "experiment.json")) as f:
+        dd = json.load(f)
+    dd["devices"]["resp"]["family"] = ["line", "keyboard"]
+    with open(os.path.join(work, "experiment.json"), "w", newline="\n") as f:
+        json.dump(dd, f)
+    pack = os.path.join(ctx.out, "rule.ysppak")
+    subprocess.check_call([ctx.ypak, "build", "pack.json", "-o", pack], cwd=work, stdout=subprocess.DEVNULL)
+    frm, duration, min_rt = the_response(dd)
+    trig, board = Pty(), LineBoard()
+    try:
+        rig = make_rig(ctx, "rule", trig.a, board.a)
+        sim_dir, trials, events, frames = plan_from_sim(ctx, "rule", pack, rig, ctx.trials)
+        plan = timing_plan(trials, events, frames, frm, duration)
+        buttons = {v: int(k) for k, v in dd["devices"]["resp"]["buttons"].items()}
+        for tr in plan:
+            tr["_duration"] = duration
+            tr["name"] = tr["key"]
+            tr["button"] = buttons[tr["key"]]
+        rc, d, sent, out = run_real(ctx, "rule", pack, plan, rig, board=board)
+        print("  rule: exit %s; %s" % (rc, out.strip().replace("\n", " | ")[:4000]), flush=True)
+        if not check(rc == 0, "rule: exit %s" % rc):
+            return
+        frame_report("rule", d)
+        rows = read_csv(os.path.join(d, "trials.csv"))
+        evs = read_csv(os.path.join(d, "events.csv"))
+        resp = {e["trial_index"]: e for e in evs if e["kind"] == "response"}
+        rule_outs = {e["trial_index"]: e for e in evs if e["kind"] == "out" and int(e["flags"]) & 0x200}
+        by_trial = {x["trial"]: x for x in sent}
+        lags = []
+        for row in rows:
+            i = int(row["trial_index"])
+            x = by_trial.get(i)
+            if x is None:
+                check(row["response"] == "", "rule trial %d: no press, response '%s'" % (i, row["response"]))
+                continue
+            e = resp.get(str(i))
+            if not check(e is not None, "rule trial %d: no response event" % i):
+                continue
+            t = round(float(e["t_s"]) * 1e9)
+            # the board's time through the device clock fit: within its
+            # bracket (1.3 ms for LINE, ysp/device.h TIME)
+            check(abs(t - x["t0"]) < 1500000, "rule trial %d: the response is %.1f us from the board's press" % (i, (t - x["t0"]) / 1e3))
+            check(row["response"] == x["name"], "rule trial %d: response '%s', button %s" % (i, row["response"], x["name"]))
+            check(int(row["rsp_flags"]) & 0x400 == 0, "rule trial %d: SENT_MISMATCH (rsp_flags %s)" % (i, row["rsp_flags"]))
+            o = rule_outs.get(str(i))
+            if check(o is not None, "rule trial %d: no code from the rule" % i):
+                check(int(o["code"]) == (101 if x["name"] == "left" else 102), "rule trial %d: code %s" % (i, o["code"]))
+                lags.append(float(o["t_s"]) - float(o["deadline_s"]))
+        check_bytes("rule", d, trig, rows)
+        if lags:
+            lags.sort()
+            print("  rule: %d codes from the rule, write start minus the press p50 %.1f us, max %.1f us" %
+                  (len(lags), lags[len(lags) // 2] * 1e6, lags[-1] * 1e6), flush=True)
+    finally:
+        trig.close()
+        board.close()
 
 
 def case_alloc(ctx):
@@ -619,7 +748,7 @@ def main():
         return 0
     ctx = Ctx(a)
     os.makedirs(ctx.out, exist_ok=True)
-    cases = ["rdk", "afc2", "stroop", "oddball", "abort", "panic", "refuse", "alloc"]
+    cases = ["rdk", "afc2", "stroop", "oddball", "rule", "abort", "panic", "refuse", "alloc"]
     for c in cases:
         if a.only and c != a.only:
             continue
@@ -629,6 +758,8 @@ def main():
             case_refuse(ctx)
         elif c == "alloc":
             case_alloc(ctx)
+        elif c == "rule":
+            case_rule(ctx)
         else:
             case_example(ctx, c)
     print("%d failures" % fails)
