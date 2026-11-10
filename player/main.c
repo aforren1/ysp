@@ -1,14 +1,16 @@
 /* player/main.c - the ysp_player command line.
  *
  * Usage: ysp_player PACK --out DIR [--sim] [--seed N] [--field NAME=VALUE]...
- *                   [--rig FILE|NAME] [--cal FILE] [--windowed]
+ *                   [--rig FILE|NAME] [--cal FILE] [--windowed] [--allow-below-tier]
  *                   [--participant SPEC] [--rt S] [--max-trials N]
  *                   [--measure] [--trace-channels FILE] [--rdk-buffer N]
  *
  * Without --sim the session runs for real: a window on the display (full
  * screen; --windowed for development), the keyboard and the rig profile's
  * devices (--rig, else the user's profile.json when there is one), and the
- * real clock. Shift+Esc stops it.
+ * real clock. Shift+Esc stops it. A role whose tier (from the rig profile's
+ * checked loopbacks) is worse than its min_tier refuses the start, unless
+ * --allow-below-tier, which session.json records.
  * --sim: the simulated display, the virtual clock, the null audio device
  * and a scripted participant. SPEC is "correct" (the default: each
  * trial's key_answer after --rt seconds), "silent", "p=0.8" (correct with
@@ -38,7 +40,7 @@ static pl_player g_p;
 
 static int usage(void) {
     fprintf(stderr, "usage: ysp_player PACK --out DIR [--sim] [--seed N] [--field NAME=VALUE]... [--rig FILE|NAME] [--cal FILE]\n"
-                    "                  [--windowed] [--max-trials N] [--measure]\n"
+                    "                  [--windowed] [--allow-below-tier] [--max-trials N] [--measure]\n"
                     "       --sim only: [--participant SPEC] [--rt S] [--max-seconds N]\n"
                     "  SPEC: correct, silent, p=0.8 or script:FILE\n");
     return 2;
@@ -63,6 +65,7 @@ int main(int argc, char** argv) {
         else if (!strcmp(s, "--max-seconds") && v) { a.max_seconds = atoll(v); i++; }
         else if (!strcmp(s, "--measure")) a.measure = true;
         else if (!strcmp(s, "--windowed")) a.windowed = true;
+        else if (!strcmp(s, "--allow-below-tier")) a.allow_below_tier = true;
         else if (!strcmp(s, "--hang-at-trial") && v) { a.hang_trial = atoi(v) + 1; i++; }
         else if (!strcmp(s, "--test-lose-code") && v) { a.lose_code = atoi(v); i++; }
         else if (!strcmp(s, "--test-plan-early") && v) { a.plan_early_ns = (int64_t)llround(atof(v) * 1e9); i++; }

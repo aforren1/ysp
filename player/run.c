@@ -354,6 +354,8 @@ static int pl_dataset_open(pl_player* p) {
                     yjs_set(&a, o, "ident", yjs_new_stringz(&a, st.ident));
                 }
                 if (r->def->direction == 0 && (r->dev || r->keyboard)) yjs_set(&a, o, "tier", yjs_new_int(&a, (int)r->source.tier));
+                if (r->def->min_tier) yjs_set(&a, o, "min_tier", yjs_new_int(&a, r->def->min_tier));
+                if (r->below) yjs_set(&a, o, "below_tier", yjs_new(&a, YJS_TRUE));
                 if (r->rule) yjs_set(&a, o, "rule", yjs_new_stringz(&a, p->trigger_roles[r->rule_out]->name));
             }
             yjs_push(&a, roles, o);
@@ -364,6 +366,7 @@ static int pl_dataset_open(pl_player* p) {
         /* which profile bound the roles: a real run with no --rig takes the
          * user's own, so the data says which file that was */
         yjs_set(&a, s, "rig_profile", p->rig_path[0] ? yjs_new_stringz(&a, p->rig_path) : yjs_new(&a, YJS_NULL));
+        if (p->args.allow_below_tier) yjs_set(&a, s, "allow_below_tier", yjs_new(&a, YJS_TRUE));
         /* the gfx's programs: from the cache or compiled at open */
         ygfx_describe(&p->gfx, line, sizeof line);
         yjs_set(&a, s, "gfx", yjs_new_stringz(&a, line));

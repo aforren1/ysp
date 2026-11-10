@@ -47,6 +47,7 @@ import argparse
 import csv
 import decimal
 import fcntl
+import hashlib
 import json
 import os
 import random
@@ -175,7 +176,11 @@ class Ctx:
         self.windowed = a.windowed
         self.font = a.font
         # the player's own options that a case's roles need (set by main())
-        self.odd_extra = []
+        # the oddball's resp is a keyboard with min_tier 2: no keyboard has a
+        # tier from a rig profile today (docs/player.md), so its runs start
+        # with --allow-below-tier; a LINE board with a checked bounds file
+        # is tier 1 and needs none
+        self.odd_extra = ["--allow-below-tier"]
         self.line_extra = []
 
 
@@ -207,7 +212,17 @@ def make_rig(ctx, name, trig_port=None, resp_port=None):
             prof = json.load(f)
         prof["roles"]["trig"] = {"family": "triggerbox", "key": "port:" + trig_port}
         if resp_port:
-            prof["roles"]["resp"] = {"family": "line", "key": "port:" + resp_port}
+            # a bounds loopback for the board, so its role is tier 1 (ysp/
+            # rigfile.h, TIER): a fixture in the shape bounds.c writes, not a
+            # measurement of this emulated board
+            text = ("# a test fixture, not a measurement\nformat ysp-in-bounds 1\ndate 2026-11-10T00:00:00Z\nin_family line\n"
+                    "n 200\nmissed 0\nlo_s -0.000100000\nmedian_s 0.000050000\nhi_s 0.000400000\n").encode()
+            sha = hashlib.sha256(text).hexdigest()
+            os.makedirs(os.path.join(rig, "loopback"), exist_ok=True)
+            with open(os.path.join(rig, "loopback", sha + ".txt"), "wb") as f:
+                f.write(text)
+            prof["roles"]["resp"] = {"family": "line", "key": "port:" + resp_port,
+                                     "bounds": {"n": 200, "lo_s": -0.0001, "hi_s": 0.0004, "date": "2026-11-10T00:00:00Z", "sha256": sha}}
         with open(path, "w", newline="\n") as f:
             json.dump(prof, f, indent=2, sort_keys=True)
             f.write("\n")
@@ -508,7 +523,7 @@ def case_example(ctx, name):
             tr["name"] = tr["key"]
             tr["key"] = keys[tr["key"]]
         t0 = time.monotonic()
-        rc, d, sent, out = run_real(ctx, name, pack, plan, rig)
+        rc, d, sent, out = run_real(ctx, name, pack, plan, rig, extra=ctx.odd_extra if name == "oddball" else [])
         took = time.monotonic() - t0
         print("  %s: exit %s after %.1f s; %s" % (name, rc, took, out.strip().replace("\n", " | ")), flush=True)
         if not check(rc == 0, "%s: exit %s" % (name, rc)):
@@ -518,6 +533,12 @@ def case_example(ctx, name):
         with open(os.path.join(d, "session.json")) as f:
             used = json.load(f).get("rig_profile", "missing")
         check(used == rig, "%s: session.json rig_profile %s, the run's %s" % (name, used, rig))
+        if name == "oddball":
+            with open(os.path.join(d, "session.json")) as f:
+                sj = json.load(f)
+            resp = [r for r in sj["devices"] if r["role"] == "resp"][0]
+            check(sj.get("allow_below_tier") is True and resp.get("below_tier") is True and resp.get("tier") == 0 and resp.get("min_tier") == 2,
+                  "oddball: session.json says the keyboard ran below its min_tier: %s" % resp)
         if pty:
             check_bytes(name, d, pty, rows)
     finally:
@@ -764,11 +785,14 @@ def case_rule(ctx):
             tr["_duration"] = duration
             tr["name"] = tr["key"]
             tr["button"] = buttons[tr["key"]]
-        rc, d, sent, out = run_real(ctx, "rule", pack, plan, rig, board=board)
+        rc, d, sent, out = run_real(ctx, "rule", pack, plan, rig, board=board, extra=ctx.line_extra)
         print("  rule: exit %s; %s" % (rc, out.strip().replace("\n", " | ")[:4000]), flush=True)
         if not check(rc == 0, "rule: exit %s" % rc):
             return
         frame_report("rule", d)
+        with open(os.path.join(d, "session.json")) as f:
+            resp = [r for r in json.load(f)["devices"] if r["role"] == "resp"][0]
+        check(resp.get("tier") == 1 and "below_tier" not in resp, "rule: the LINE board with a checked bounds file is tier 1: %s" % resp)
         rows = read_csv(os.path.join(d, "trials.csv"))
         evs = read_csv(os.path.join(d, "events.csv"))
         resp = {e["trial_index"]: e for e in evs if e["kind"] == "response"}
@@ -825,7 +849,7 @@ def case_alloc(ctx):
                     tr["_duration"] = duration
                     tr["name"] = tr["key"]
                     tr["key"] = keys[tr["key"]]
-                rc, d, sent, out = run_real(ctx, "alloc_" + name, pack, plan, rig, extra=["--real"])
+                rc, d, sent, out = run_real(ctx, "alloc_" + name, pack, plan, rig, extra=["--real"] + (ctx.odd_extra if name == "oddball" else []))
                 print("  %s: exit %s, %d keys; %s" % (name, rc, len(sent), out.strip().splitlines()[-1] if out.strip() else ""), flush=True)
                 check(rc == 0 and "inside pl_frame: 0" in out, "%s: heap calls on the frame thread: %s" % (name, out.strip()[-200:]))
             finally:
@@ -933,6 +957,16 @@ def case_refuse(ctx):
     rc, msg, made = run([norig_pack], "norig")
     print("  unbound role, no rig: exit %d: %s" % (rc, msg[:300]), flush=True)
     check(rc == 1 and "'trig'" in msg and not made, "a required role with no rig: exit %d" % rc)
+    # a keyboard role below its min_tier (the oddball's resp, 2): refused by
+    # name without --allow-below-tier
+    pty = Pty()
+    try:
+        rig_t = make_rig(ctx, "refuse_tier", pty.a)
+        rc, msg, made = run([odd, "--rig", rig_t], "below")
+    finally:
+        pty.close()
+    print("  below min_tier: exit %d: %s" % (rc, msg[:300]), flush=True)
+    check(rc == 1 and "'resp'" in msg and "min_tier 2" in msg and not made, "a keyboard below its min_tier: exit %d" % rc)
     rc, msg, made = run([pack, "--rig", os.path.join(ctx.out, "no_such_rig", "profile.json")], "rig")
     print("  bad rig: exit %d: %s" % (rc, msg[:300]), flush=True)
     check(rc == 1 and "no rig profile" in msg and not made, "a rig file that does not exist: exit %d" % rc)

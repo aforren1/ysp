@@ -1920,6 +1920,41 @@ static int pl_rule_make(pl_player* p, pl_role* in) {
     return 0;
 }
 
+/* A role's min_tier (2.9): a real start is refused, naming each role, when
+ * a bound role's tier is worse than its min_tier; UNKNOWN is worse than
+ * any (an output has no tier yet: ysp/device.h, OUTPUTS). --allow-below-tier
+ * starts anyway, and session.json lists them. --sim only says so. */
+static int pl_roles_tier(pl_player* p) {
+    char msg[600];
+    size_t used = 0;
+    int i, n = 0;
+    msg[0] = 0;
+    for (i = 0; i < p->def->n_roles; i++) {
+        pl_role* r = &p->roles[i];
+        int tier;
+        if (!r->def->min_tier) continue;
+        if (p->args.sim) {
+            fprintf(stderr, "ysp_player: --sim: role '%s' has min_tier %d; a real run checks it against the rig\n", r->def->name, r->def->min_tier);
+            continue;
+        }
+        if (!r->rig && !r->keyboard) continue;   /* unbound: nothing to check */
+        tier = r->def->direction == 0 ? (int)r->source.tier : 0;
+        r->below = tier == YIN_TIER_UNKNOWN || tier > r->def->min_tier;
+        if (!r->below) continue;
+        n++;
+        if (used < sizeof msg)
+            used += (size_t)snprintf(msg + used, sizeof msg - used, "%s'%s' (min_tier %d, its tier %s%.0d)", n > 1 ? ", " : "", r->def->name,
+                                     r->def->min_tier, tier ? "" : "UNKNOWN", tier);
+    }
+    if (n && !p->args.allow_below_tier) {
+        pl_fail(p, "a role's tier is worse than its min_tier: %s. A tier comes from a checked loopback in the rig profile "
+                   "(ysp/rigfile.h, TIER); --allow-below-tier starts anyway and says so in session.json",
+                msg);
+        return -1;
+    }
+    return 0;
+}
+
 /* The input roles, after the screen (its input bridge exists from its open)
  * and before the templates (a collector takes its sources at open). */
 static int pl_inputs_open(pl_player* p) {
@@ -1929,19 +1964,20 @@ static int pl_inputs_open(pl_player* p) {
         pl_role* r = &p->roles[i];
 #if !defined(YSCR_NO_SDL)
         if (r->keyboard) {
-            /* the keyboard's tier and bounds: the kernel's evdev time where
-             * the screen reads it (ysp/screen.h, INPUT), else the X server's */
+            /* a keyboard's tier is the rig's, as any role's: tier 1 only
+             * with a checked loopback in the rig profile (yrig_source_role()),
+             * never from the stamp's kind, a polling rate or a product name */
             yin_sdl_ctx sc;
             memset(&sc, 0, sizeof sc);
             sc.raw_keyboard = p->caps.raw_keyboard;
             sc.os_stamps = p->caps.os_input_stamps;
-            r->source = yrsp_sdl_source(&sc, YRSP_KIND_KEYBOARD);
+            r->source = yrig_source_role(p->have_rig ? p->rig : NULL, r->def->name, yrsp_sdl_source(&sc, YRSP_KIND_KEYBOARD));
         }
 #endif
         if (r->def->direction != 0 || !r->rig) continue;
         if (pl_rule_make(p, r) < 0 || pl_role_open(p, r) < 0) return -1;
     }
-    return 0;
+    return pl_roles_tier(p);
 }
 
 static void pl_devices_close(pl_player* p) {

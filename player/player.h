@@ -244,6 +244,7 @@ typedef struct pl_role {
     ydev_rule*  rule;          /* an input device's response rule (2.6)      */
     int         rule_out;      /* the rule's output: a trigger channel        */
     yin_source  source;        /* its events' tier and bounds                 */
+    bool        below;         /* its tier is worse than its min_tier          */
 } pl_role;
 
 /* A code a trigger channel fired, until the device's record of the write
@@ -377,6 +378,7 @@ typedef struct pl_args {
     bool  quiet;
     bool  measure;             /* real-clock cost of each frame's work      */
     bool  windowed;            /* a real run in a window (development)      */
+    bool  allow_below_tier;    /* start with a role below its min_tier      */
     int64_t plan_early_ns;     /* tests: a response's plan onset this much
                                 * before the timeline's (--sim)             */
     int   lose_code;           /* tests: the screen never writes the Nth code
