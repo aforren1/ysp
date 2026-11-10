@@ -1896,10 +1896,21 @@ static int pl_rule_make(pl_player* p, pl_role* in) {
                 }
             }
         }
-        if (!first) {
-            first = t;
-            out = o->trigger;
-            max_fires = !r->ends_trial ? (r->max_responses > 0 ? r->max_responses : -1) : 1;
+        {
+            /* the fires one arm allows: ysp/device.h takes them at the rule's
+             * open (no per-arm setting), so every template on the role must
+             * agree, as on the choices */
+            int mf = !r->ends_trial ? (r->max_responses > 0 ? r->max_responses : -1) : 1;
+            if (!first) {
+                first = t;
+                out = o->trigger;
+                max_fires = mf;
+            } else if (mf != max_fires) {
+                pl_fail(p, "templates '%s' and '%s' give the device role '%s' response triggers that fire at most %d and %d times a trial "
+                           "(-1: no limit; response_ends_trial, max_responses); a rule's fires are set once, when the device opens",
+                        first->name, t->name, in->def->name, max_fires, mf);
+                return -1;
+            }
         }
     }
     if (!first) return 0;

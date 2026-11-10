@@ -335,3 +335,12 @@ test = "real"
 why = "Templates on one device role must give the same choices and codes."
 find = '''                if (!same || r->n_choices != n || out != o->trigger) {'''
 replace = '''                if (!same || out != o->trigger) {'''
+
+[[mutant]]
+id = "rl-12"
+env = { YPL_REAL_CASES = "maxfires" }
+name = "two rules with other fires a trial are one"
+test = "real"
+why = "ysp/device.h sets a rule's max_fires at open: every template on the role must agree."
+find = '''            } else if (mf != max_fires) {'''
+replace = '''            } else if (0) {'''

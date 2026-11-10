@@ -794,6 +794,46 @@ def case_lateread(ctx):
         board.close()
 
 
+def case_maxfires(ctx):
+    """Two templates on a LINE role with the same codes, one that ends on
+    its response and one that keeps the window for 2: the rule's fires a
+    trial differ, and ysp/device.h sets them once, so the start is refused
+    naming both (review 2, 2026-11-10)."""
+    print("== maxfires", flush=True)
+
+    def edit(dd):
+        line_edit(dd)
+        t = json.loads(json.dumps(dd["trials"]["oddball"]))
+        t["response"]["response_ends_trial"] = False
+        t["response"]["max_responses"] = 2
+        dd["trials"]["multi"] = t
+        first = json.loads(json.dumps(dd["timeline"][0]))
+        first["name"] = "first"
+        first["trial"] = "multi"
+        dd["timeline"] = [first, dd["timeline"][0]]
+    pack, dd = oddball_variant(ctx, "maxfires", edit)
+    trig, board = Pty(), LineBoard()
+    try:
+        rig = make_rig(ctx, "maxfires", trig.a, board.a)
+        out = os.path.join(ctx.out, "maxfires_real")
+        shutil.rmtree(out, ignore_errors=True)
+        p = subprocess.Popen([ctx.player, pack, "--out", out, "--field", "participant=1", "--rig", rig, "--max-trials", "1"] + ctx.line_extra,
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                             env=dict(os.environ, XDG_CONFIG_HOME=os.path.join(ctx.out, "config")))
+        try:
+            msg = p.communicate(timeout=60)[0].strip()
+        except subprocess.TimeoutExpired:
+            p.kill()
+            msg = p.communicate()[0].strip()
+            restore_display()
+        print("  maxfires: exit %d: %s" % (p.returncode, msg[:300]), flush=True)
+        check(p.returncode == 1 and "'multi'" in msg and "'oddball'" in msg and "fire" in msg and not os.path.exists(out),
+              "maxfires: two rules with other fires a trial on one role: exit %d" % p.returncode)
+    finally:
+        trig.close()
+        board.close()
+
+
 def case_fewer(ctx):
     """Two templates on a LINE role whose rules differ in their choices:
     refused at the start, naming both (a review's finding, 2026-11-10)."""
@@ -1063,7 +1103,7 @@ def main():
         return 0
     ctx = Ctx(a)
     os.makedirs(ctx.out, exist_ok=True)
-    cases = ["rdk", "afc2", "stroop", "oddball", "noafter", "lost", "rule", "rule2", "lateread", "fewer", "abort", "panic", "refuse", "alloc"]
+    cases = ["rdk", "afc2", "stroop", "oddball", "noafter", "lost", "rule", "rule2", "lateread", "fewer", "maxfires", "abort", "panic", "refuse", "alloc"]
     for c in cases:
         if a.only and c != a.only:
             continue
@@ -1083,6 +1123,8 @@ def main():
             case_rule2(ctx)
         elif c == "lateread":
             case_lateread(ctx)
+        elif c == "maxfires":
+            case_maxfires(ctx)
         elif c == "fewer":
             case_fewer(ctx)
         else:

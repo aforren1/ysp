@@ -4,7 +4,7 @@
  * program as the player. Needs an X display, /dev/uinput and the keyboard
  * rule (real_test.py), YSP_SDL3 for the build, and YPL_REPO and YPL_BIN (a
  * build folder with player_make_rig and ypak). YPL_REAL_CASES names the
- * cases (default "oddball,noafter,lost,rule,rule2,lateread,fewer,abort,panic,refuse").
+ * cases (default "oddball,noafter,lost,rule,rule2,lateread,fewer,maxfires,abort,panic,refuse").
  *
  * Exit 0 when every case holds; a mutant that survives shows a branch of
  * the real path that no case can see. */
@@ -37,7 +37,7 @@ int main(int argc, char** argv) {
     self[n] = 0;
     snprintf(work, sizeof work, "%s/pl_mut_real_XXXXXX", base);
     if (!mkdtemp(work)) { printf("no work folder under %s\n", base); return 2; }
-    snprintf(cases, sizeof cases, "%s", getenv("YPL_REAL_CASES") ? getenv("YPL_REAL_CASES") : "oddball,noafter,lost,rule,rule2,lateread,fewer,abort,panic,refuse");
+    snprintf(cases, sizeof cases, "%s", getenv("YPL_REAL_CASES") ? getenv("YPL_REAL_CASES") : "oddball,noafter,lost,rule,rule2,lateread,fewer,maxfires,abort,panic,refuse");
     /* one case a run: a case that kills its player leaves the next its own */
     for (c = strtok_r(cases, ",", &save); c; c = strtok_r(NULL, ",", &save)) {
         snprintf(cmd, sizeof cmd,
