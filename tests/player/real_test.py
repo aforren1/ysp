@@ -587,6 +587,16 @@ def check_bytes(name, d, pty, rows, resp_code=odd_code):
         failed = sum(1 for e in got if int(e["flags"]) & 0x8)
         check(row["trig_n"] == str(len(got)) and row["trig_failed"] == str(failed),
               "%s trial %s: trig_n %s trig_failed %s, events.csv has %d codes, %d failed" % (name, ti, row["trig_n"], row["trig_failed"], len(got), failed))
+        # a code's deadline: the flip's vblank, or for the frame loop's code
+        # the press (the response's time); its write starts after it, within
+        # a frame and a little
+        resp_t = [ns(e["t_s"]) for e in events if e["kind"] == "response" and e["trial_index"] == ti]
+        for e in got:
+            lag_e = ns(e["t_s"]) - ns(e["deadline_s"])
+            check(0 <= lag_e < 100000000, "%s trial %s: code %s written %.6f s after its deadline" % (name, ti, e["code"], lag_e / 1e9))
+            if not int(e["flags"]) & 0x220:
+                check(resp_t and ns(e["deadline_s"]) == resp_t[0], "%s trial %s: the frame loop's code's deadline %s is not the press %s" %
+                      (name, ti, e["deadline_s"], resp_t))
         lag = max((ns(e["t_s"]) - ns(e["deadline_s"]) for e in got), default=0)
         check(row["trig_lag_max_s"] != "" and ns(row["trig_lag_max_s"]) == lag,
               "%s trial %s: trig_lag_max_s %s, events.csv's largest lag %.9f" % (name, ti, row["trig_lag_max_s"], lag / 1e9))
