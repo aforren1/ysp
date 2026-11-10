@@ -62,8 +62,15 @@ static int h_role(void* ctx, const yexp_role* role, char* msg, size_t cap) {
     int i;
     if (!r || !r->family[0]) {
         /* --sim's scripted participant and in-process trigger sink stand in
-         * for the devices, so an unbound role is not a refusal there */
-        if (role->required && !p->args.sim) { snprintf(msg, cap, "the rig profile has no device bound to the required role"); return 1; }
+         * for the devices, so an unbound role is not a refusal there; in a
+         * real run an input role that lists the keyboard takes it, as it
+         * needs no binding */
+        if (role->required && !p->args.sim) {
+            for (i = 0; role->direction == 0 && i < role->n_family; i++)
+                if (strcmp(role->family[i], "keyboard") == 0) return 0;
+            snprintf(msg, cap, "the rig profile has no device bound to the required role");
+            return 1;
+        }
         return 0;
     }
     for (i = 0; i < role->n_family; i++)

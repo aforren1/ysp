@@ -228,18 +228,43 @@ static int pl_dataset_open(pl_player* p) {
         yjs_set(&a, s, "audio", yjs_new_stringz(&a, line));
     }
     /* 2.10's device rows: in --sim each role is the scripted participant or
-     * the in-process sink; there is no device, port or serial number */
+     * the in-process sink; there is no device, port or serial number. A
+     * real run gives the binding, the port found, what the device said it
+     * is, and its events' tier (devices_spec 11.4). */
     {
         yjs_value* roles = yjs_new(&a, YJS_ARRAY);
         for (i = 0; i < p->def->n_roles; i++) {
             yjs_value* o = yjs_new(&a, YJS_OBJECT);
-            const yrig_role* rr = p->have_rig ? yrig_find(p->rig, p->def->roles[i].name) : NULL;
+            const pl_role* r = &p->roles[i];
             yjs_set(&a, o, "role", yjs_new_stringz(&a, p->def->roles[i].name));
             yjs_set(&a, o, "direction", yjs_new_stringz(&a, p->def->roles[i].direction == 0 ? "in" : p->def->roles[i].direction == 1 ? "out" : "both"));
-            yjs_set(&a, o, "bound", yjs_new_stringz(&a, rr && rr->family[0] ? rr->family : "sim"));
+            if (p->args.sim) {
+                const yrig_role* rr = p->have_rig ? yrig_find(p->rig, p->def->roles[i].name) : NULL;
+                yjs_set(&a, o, "bound", yjs_new_stringz(&a, rr && rr->family[0] ? rr->family : "sim"));
+            } else {
+                yjs_set(&a, o, "bound", yjs_new_stringz(&a, r->rig ? r->rig->family : r->keyboard ? "keyboard" : "none"));
+                if (r->rig) yjs_set(&a, o, "key", yjs_new_stringz(&a, r->rig->key));
+                if (r->dev) {
+                    ydev_stats st;
+                    ydev_get_stats(r->dev, &st);
+                    yjs_set(&a, o, "port", yjs_new_stringz(&a, st.found));
+                    yjs_set(&a, o, "ident", yjs_new_stringz(&a, st.ident));
+                }
+                if (r->def->direction == 0 && (r->dev || r->keyboard)) yjs_set(&a, o, "tier", yjs_new_int(&a, (int)r->source.tier));
+                if (r->rule) yjs_set(&a, o, "rule", yjs_new_stringz(&a, p->trigger_roles[r->rule_out]->name));
+            }
             yjs_push(&a, roles, o);
         }
         yjs_set(&a, s, "devices", roles);
+    }
+    if (!p->args.sim) {
+        /* the gfx's programs: from the cache or compiled at open */
+        ygfx_describe(&p->gfx, line, sizeof line);
+        yjs_set(&a, s, "gfx", yjs_new_stringz(&a, line));
+        if (p->def->units_deg) {
+            yjs_set(&a, s, "view_distance_mm", yjs_new_double(&a, (double)p->view.distance_mm));
+            yjs_set(&a, s, "view_width_mm", yjs_new_double(&a, (double)p->view.width_mm));
+        }
     }
     /* a sim's start date is fixed so that two runs are byte-identical */
     if (p->args.sim) yjs_set(&a, s, "start_utc", yjs_new_stringz(&a, "1970-01-01T00:00:00Z"));
@@ -393,7 +418,7 @@ static void pl_participant_plan(pl_player* p) {
     p->press_planned = false;
     p->press_pending = false;
     p->silent = true;
-    if (!t->collector) return;
+    if (!t->collector || !p->args.sim) return;   /* a real run's participant is real */
     if (p->env.key_answer_known) {
         for (i = 0; i < t->n_choices; i++)
             if (strcmp(t->choice_keys[i], p->key_answer) == 0) answer = i;
@@ -786,6 +811,12 @@ int pl_start_trial(pl_player* p, const yscr_frame* f) {
             if (pl_eval_ns(p, &p->env, d->response->duration, &dur) < 0 || pl_eval_ns(p, &p->env, d->response->min_rt, &minrt) < 0) return -1;
             yrsp_arm(c, f->onset);
             yrsp_set_window(c, minrt, dur);
+            if (p->roles[p->tmpl->role].rule) {
+                /* a new window for the device's rule, and the trial its
+                 * codes belong to */
+                yrsp_rule_arm(p->roles[p->tmpl->role].rule, c);
+                p->roles[p->tmpl->role].rule_trial = p->global_trial;
+            }
             p->responding = true;
             p->env.key_answer_known = false;
             if (d->response->key_answer) {
@@ -1177,6 +1208,108 @@ static double pl_method_input(const pl_method* m, double value) {
     return m->def->log10 ? log10(value) : value;
 }
 
+/* --- device records (a real run) ----------------------------------------- */
+
+static pl_role* pl_trigger_role(pl_player* p, int ch) {
+    int k;
+    for (k = 0; k < p->def->n_roles; k++)
+        if (p->roles[k].trigger == ch) return &p->roles[k];
+    return NULL;
+}
+
+/* Queue q of channel ch: 0 the flips' codes, 1 the frame loop's. */
+static void pl_out_push(pl_player* p, int ch, int q, int trial, int64_t deadline, uint32_t code) {
+    int k = ch * 2 + q;
+    pl_out_fire* f;
+    if (!p->out_fires) return;
+    f = &p->out_fires[k * PL_OUT_PENDING + p->out_tail[k] % PL_OUT_PENDING];
+    f->trial = trial;
+    f->deadline = deadline;
+    f->code = code;
+    p->out_tail[k]++;
+    /* a device that never writes back (unplugged) must not hold the queue:
+     * the oldest is dropped, and its record, if it comes, has no trial */
+    if (p->out_tail[k] - p->out_head[k] > PL_OUT_PENDING) p->out_head[k] = p->out_tail[k] - PL_OUT_PENDING;
+}
+
+static bool pl_out_pop(pl_player* p, int ch, int q, uint32_t code, pl_out_fire* out) {
+    int k = ch * 2 + q;
+    if (!p->out_fires || p->out_head[k] == p->out_tail[k]) return false;
+    *out = p->out_fires[k * PL_OUT_PENDING + p->out_head[k] % PL_OUT_PENDING];
+    if (out->code != code) return false;
+    p->out_head[k]++;
+    return true;
+}
+
+/* The output counts of a trial: the running trial's, or a row that waits
+ * for its frames' records; NULL once the row is written. */
+static pl_out_stats* pl_out_of(pl_player* p, int trial) {
+    int i;
+    if (trial < 0) return NULL;
+    if (p->in_trial && trial == p->global_trial - 1) return p->out_now;
+    for (i = 0; i < PL_PENDING_ROWS; i++)
+        if (p->rows[i].used && p->rows[i].trial_index == trial) return p->rows[i].out;
+    return NULL;
+}
+
+/* Each output write since the last frame (YDEV_REC_OUT) goes to events.csv
+ * with the device's own times, the write's start as t_s, and its lag (start
+ * minus deadline) and failure to its trial's row. The trailing edge of a
+ * pulse is in the device's log, not here: one row per code, as --sim. */
+static int pl_devices_drain(pl_player* p) {
+    int n, i;
+    if (!p->ring_open) return 0;
+    while ((n = yrt_ring_drain(&p->ring, p->dev_recs, PL_DEV_DRAIN)) > 0) {
+        for (i = 0; i < n; i++) {
+            const yrt_event* r = &p->dev_recs[i];
+            const ydev_device* dev;
+            uint32_t fl;
+            int k, ch = -1;
+            pl_out_fire fire;
+            pl_out_stats* o;
+            yds_event ev;
+            if (r->source != YRT_SRC_DEVICE || r->kind != YDEV_REC_OUT) continue;
+            fl = r->u.u16[18];
+            if (fl & (YDEV_OUT_TRAILING | YDEV_OUT_REPORTED | YDEV_OUT_FLUSHED)) continue;
+            dev = ydev_role_device(&p->dev_roles, (int)r->aux);
+            for (k = 0; k < p->def->n_roles; k++)
+                if (dev && p->roles[k].dev == dev) ch = p->roles[k].trigger;
+            if (ch < 0) continue;
+            fire.trial = -1;
+            fire.deadline = r->u.i64[3];   /* FLIP: the vblank; RULE: the press */
+            if (fl & YDEV_OUT_RULE) {
+                for (k = 0; k < p->def->n_roles; k++)
+                    if (p->roles[k].rule && p->roles[k].rule_out == ch) fire.trial = p->roles[k].rule_trial;
+            } else {
+                pl_out_fire q;
+                /* a write the player did not ask for (the 0 a box gets
+                 * after it opens) matches no queued code */
+                if (!pl_out_pop(p, ch, (fl & YDEV_OUT_FLIP) ? 0 : 1, r->u.u32[8], &q)) continue;
+                fire.trial = q.trial;
+                if (!(fl & YDEV_OUT_FLIP)) fire.deadline = q.deadline;   /* the frame loop's: the press */
+            }
+            o = pl_out_of(p, fire.trial);
+            if (o) {
+                int64_t lag = r->u.i64[0] - fire.deadline;
+                if (fl & YDEV_OUT_RULE) o->n++;   /* the frame loop counted the others when it asked */
+                if (fl & YDEV_OUT_FAILED) o->failed++;
+                if (lag > o->lag_max) o->lag_max = lag;
+            }
+            yds_event_init(&ev);
+            ev.t_ns = r->u.i64[0];
+            ev.end_ns = r->u.i64[1];
+            ev.deadline_ns = fire.deadline;
+            ev.trial_index = fire.trial;
+            ev.kind = "out";
+            ev.role = p->trigger_roles[ch]->name;
+            ev.code = (int64_t)r->u.u32[8];
+            ev.flags = (int)fl;
+            if (pl_event_queue(p, &ev) < 0) return -1;
+        }
+    }
+    return 0;
+}
+
 /* A response's code on its output role (2.6). --sim has no reader thread
  * for a device rule, so the code goes out when the frame loop sees the
  * response, as a keyboard role's would: ysp/response.h's rule window and
@@ -1191,6 +1324,19 @@ static int pl_response_trigger(pl_player* p, const yrsp_result* r) {
     if (ch < 0) { pl_fail(p, "response.trigger: '%s' is not an output role", d->trigger_role); return -1; }
     if (pl_eval_int(p, &p->env, d->trigger_code, &code) < 0) return -1;
     if (code < 0 || code > 255) { pl_fail(p, "the response's trigger code %lld is not in 0..255", (long long)code); return -1; }
+    if (!p->args.sim) {
+        /* a device role's rule wrote it on the reader thread: its record
+         * comes through pl_devices_drain(). A keyboard role has no reader:
+         * the frame loop writes it now, up to a frame after the press. */
+        const pl_role* o = pl_trigger_role(p, ch);
+        if (p->roles[p->tmpl->role].rule) return 0;
+        if (o && o->dev) {
+            p->out_now[ch].n++;
+            pl_out_push(p, ch, 1, p->global_trial - 1, r->t_response, (uint32_t)code);
+            (void)ydev_out_mark(o->dev, (uint32_t)code, NULL);   /* as the role's pulse_s says; a failure is in its record */
+            return 0;
+        }
+    }
     p->out_now[ch].n++;
     yds_event_init(&ev);
     ev.t_ns = r->t_response;
@@ -1213,6 +1359,9 @@ int pl_end_trial(pl_player* p, const yscr_frame* f) {
     bool requeue = false;
     bool have_res = false;
     if (t->collector) {
+        /* the rule's codes, so the result flags a code its final response
+         * does not match (SENT_MISMATCH in rsp_flags) */
+        if (p->roles[t->role].rule) (void)yrsp_rule_sent(p->roles[t->role].rule, t->collector);
         pl_finish(p, &res);
         pl_env_response(p, &res);
         have_res = true;
@@ -1417,6 +1566,12 @@ static int pl_on_fired(pl_player* p, const yscr_frame* f, int n) {
             pl_out_stats* o = &p->out_now[e->target];
             o->n++;
             if (ok != YSCR_OK) o->failed++;
+            if (ok == YSCR_OK && p->ring_open && pl_trigger_role(p, e->target)->dev) {
+                /* a device writes it at the vblank: its record gives the
+                 * times (pl_devices_drain()) */
+                pl_out_push(p, e->target, 0, p->global_trial - 1, e->onset, (uint32_t)e->code);
+                break;
+            }
             yds_event_from_timeline(&ev, e, NULL, p->global_trial - 1);
             ev.kind = "out";
             ev.role = p->trigger_roles[e->target]->name;
@@ -1510,6 +1665,10 @@ static int pl_draw(pl_player* p, const yscr_frame* f) {
 int pl_frame(pl_player* p, const yscr_frame* f) {
     int i, rc, n;
     bool drawn;
+    /* a real run's device records before the flip records: a row is
+     * written when its last frame's record comes, and its outputs' lags
+     * must be in it by then */
+    if (pl_devices_drain(p) < 0) return -1;
     /* flip records first: a trial's press is planned from its stimulus's
      * record, and rows wait for their last frame's record */
     for (i = 0; i < f->n_done; i++) {
@@ -1536,8 +1695,15 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
     }
     drawn = p->in_trial;
     if (p->in_trial) p->frame_trial[f->index % PL_FRAME_RING] = p->global_trial - 1;
-    /* the scripted participant's key, on the frames it falls in (as the C
-     * programs feed theirs) */
+    /* the input (ysp/response.h, "The order in a frame"). A real run reads
+     * the screen's queue (keys, and the devices' events over its bridge)
+     * into every collector, between trials too: a collector that misses a
+     * release takes the key's next press for a held one. --sim feeds the
+     * scripted participant's key, on the frames it falls in (as the C
+     * programs feed theirs). */
+#if !defined(YSCR_NO_SDL)
+    if (!p->args.sim) (void)yrsp_feed_screen(&p->scr, p->collectors, p->n_collectors);
+#endif
     if (p->in_trial && p->press_pending && p->tmpl->collector) {
         yrsp_input ev;
         pl_tmpl* t = p->tmpl;
@@ -1605,6 +1771,10 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
             }
         }
     }
+    /* the device's rule follows the onset, which the landing and the flip
+     * record move (ysp/response.h, RESPONSE TRIGGERS) */
+    if (p->in_trial && p->tmpl->collector && p->roles[p->tmpl->role].rule)
+        yrsp_rule_window(p->roles[p->tmpl->role].rule, p->tmpl->collector);
     /* also on the end's frame: a step that lands with the trial's last event
      * must reach this frame's draw */
     if (p->global_trial > 0) ygfx_apply(p->binds, p->n_binds, ytl_values(&p->tl));
@@ -1686,10 +1856,31 @@ int pl_run(pl_player* p) {
         fputs("frame,trial_index,stimulus,prop,value\n", (FILE*)p->trace_file);
     }
     if (p->args.participant && strncmp(p->args.participant, "script:", 7) == 0 && pl_script_load(p, p->args.participant + 7) < 0) return -1;
+    if (p->ring_open && p->n_triggers) {
+        p->out_fires = (pl_out_fire*)pl_alloc(p, sizeof(pl_out_fire) * PL_OUT_PENDING * 2 * (size_t)p->n_triggers);
+        p->out_head = (int*)pl_alloc(p, sizeof(int) * 2 * (size_t)p->n_triggers);
+        p->out_tail = (int*)pl_alloc(p, sizeof(int) * 2 * (size_t)p->n_triggers);
+        if (!p->out_fires || !p->out_head || !p->out_tail) return -1;
+    }
     for (i = 0; i < PL_FRAME_RING; i++) p->frame_trial[i] = YTR_MISSING_INT;
+    p->abort_trial = -1;
+    if (!p->args.sim) {
+        printf("ysp_player: running; Shift+Esc stops the session\n");
+        fflush(stdout);
+    }
     for (;;) {
         rc = yscr_begin(&p->scr, &f);
-        if (rc == YSCR_QUIT) break;
+        if (rc == YSCR_QUIT) {
+            /* the operator stopped it (ysp/screen.h, ABORT): the running
+             * trial has no row; every finished one keeps its row */
+            p->aborted = true;
+            p->abort_reasons = f.abort;
+            p->abort_presses = (int)f.abort_presses;
+            p->abort_ns = f.abort_ns;
+            p->abort_trial = p->in_trial ? p->global_trial - 1 : -1;
+            p->in_trial = false;
+            break;
+        }
         if (rc != YSCR_OK) { pl_fail(p, "the screen: %s", yscr_error(&p->scr)); return -1; }
         if (p->in_trial == 0) {
             int k;
@@ -1729,10 +1920,14 @@ int pl_run(pl_player* p) {
     /* drain: rows wait for their last frames' records; a few more flips show
      * the end of the session and bring those records in (the pipeline is at
      * most a few frames deep) */
+    /* after an abort too: the begin() after the one that reported it starts
+     * a frame again, unless the panic released the display */
+    if (p->aborted && !(p->abort_reasons & YSCR_ABORT_PANIC)) rc = YSCR_OK;
     for (i = 0; i < 8 && rc == YSCR_OK; i++) {
         int k;
         rc = yscr_begin(&p->scr, &f);
         if (rc != YSCR_OK) break;
+        if (pl_devices_drain(p) < 0) return -1;
         p->frame_trial[f.index % PL_FRAME_RING] = YTR_MISSING_INT;
         for (k = 0; k < f.n_done; k++)
             if (pl_on_record(p, &f.done[k]) < 0) return -1;
@@ -1763,6 +1958,24 @@ int pl_run(pl_player* p) {
         if (yds_session_set(&p->ds, "node_seeds", arr) < 0) pl_fail(p, "session.json: %s", yds_error(&p->ds));
         /* leaf runs past the log: their seeds re-derive from the session's */
         if (yds_session_set(&p->ds, "node_seeds_unlogged", yjs_new_int(&a, p->n_seeds_unlogged)) < 0) pl_fail(p, "session.json: %s", yds_error(&p->ds));
+        if (p->aborted) {
+            /* who stopped it, when, and the trial that has no row */
+            static const struct { uint32_t bit; const char* name; } R[] = {
+                { YSCR_ABORT_KEY, "key" }, { YSCR_ABORT_CLOSE, "close" }, { YSCR_ABORT_ALT_F4, "alt_f4" },
+                { YSCR_ABORT_QUIT, "quit" }, { YSCR_ABORT_REQUEST, "request" }, { YSCR_ABORT_PANIC, "panic" },
+            };
+            yjs_value* o = yjs_new(&a, YJS_OBJECT);
+            yjs_value* why = yjs_new(&a, YJS_ARRAY);
+            size_t k;
+            for (k = 0; k < sizeof R / sizeof R[0]; k++)
+                if (p->abort_reasons & R[k].bit) yjs_push(&a, why, yjs_new_stringz(&a, R[k].name));
+            yjs_set(&a, o, "reasons", why);
+            yjs_set(&a, o, "presses", yjs_new_int(&a, p->abort_presses));
+            yjs_set(&a, o, "t_s", yjs_new_fixed(&a, p->abort_ns, 9));
+            yjs_set(&a, o, "trial_index", p->abort_trial >= 0 ? yjs_new_int(&a, p->abort_trial) : yjs_new(&a, YJS_NULL));
+            yjs_set(&a, o, "trials_written", yjs_new_int(&a, p->trials_done));
+            if (yds_session_set(&p->ds, "aborted", o) < 0) pl_fail(p, "session.json: %s", yds_error(&p->ds));
+        }
         yjs_arena_free(&a);
     }
     if (p->trace_file) { fclose((FILE*)p->trace_file); p->trace_file = NULL; }

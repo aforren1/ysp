@@ -13,6 +13,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if defined(_WIN32)
+#include <direct.h>
+#define mkdir(path, mode) _mkdir(path)
+#else
+#include <sys/stat.h>
+#endif
 
 void pl_fail(pl_player* p, const char* fmt, ...) {
     va_list ap;
@@ -987,7 +993,9 @@ static int pl_stim_make(pl_player* p, pl_stim* s) {
         if (!p->audio_open) {
             yau_desc ad;
             memset(&ad, 0, sizeof ad);
-            ad.backend = YAU_BACKEND_NULL;
+            /* --sim: the null device on the virtual clock; a real run: the
+             * one AUTO picks (ysp/audio.h, BACKENDS) */
+            ad.backend = p->args.sim ? YAU_BACKEND_NULL : YAU_BACKEND_AUTO;
             if (!yau_open(&p->audio, &ad)) { pl_fail(p, "audio: %s", yau_error(&p->audio)); return -1; }
             p->audio_open = true;
         }
@@ -1228,11 +1236,12 @@ static void pl_mark_stims(pl_player* p, pl_tmpl* t, const yexp_step* st, int n) 
     }
 }
 
-static int pl_response_kind(const yexp_role* role) {
-    /* The first family in the role that this rig can give decides the kind.
-     * --sim has no rig devices: a role whose first family is keyboard is a
-     * keyboard role, anything else a box role. */
-    return role->n_family > 0 && strcmp(role->family[0], "keyboard") == 0 ? 0 : 1;
+static int pl_response_kind(const pl_player* p, const pl_role* r) {
+    /* A real run: the keyboard, or the device the rig binds. --sim has no
+     * rig devices: a role whose first family is keyboard is a keyboard
+     * role, anything else a box role, which the participant presses. */
+    if (!p->args.sim) return r->keyboard ? 0 : 1;
+    return r->def->n_family > 0 && strcmp(r->def->family[0], "keyboard") == 0 ? 0 : 1;
 }
 
 static int pl_tmpl_open(pl_player* p, pl_tmpl* t) {
@@ -1266,16 +1275,21 @@ static int pl_tmpl_open(pl_player* p, pl_tmpl* t) {
         const yexp_response* r = d->response;
         const yexp_role* role = NULL;
         yrsp_desc rd;
+        yrsp_source src;
         int i, kind;
         for (i = 0; i < p->def->n_roles; i++)
-            if (strcmp(p->def->roles[i].name, r->role) == 0) role = &p->def->roles[i];
+            if (strcmp(p->def->roles[i].name, r->role) == 0) { role = &p->def->roles[i]; t->role = i; }
         if (!role) { pl_fail(p, "template '%s': the response role '%s' does not exist", d->name, r->role); return -1; }
-        kind = pl_response_kind(role);
+        kind = pl_response_kind(p, &p->roles[t->role]);
         t->n_choices = r->n_choices;
         t->choice_keys = (const char**)pl_alloc(p, sizeof(char*) * (size_t)(r->n_choices + 1));
         t->choice_codes = (uint32_t*)pl_alloc(p, sizeof(uint32_t) * (size_t)(r->n_choices + 1));
-        t->collector = (yrsp_collector*)pl_alloc(p, sizeof(yrsp_collector));
-        if (!t->choice_keys || !t->choice_codes || !t->collector) return -1;
+        if (!p->collectors) {
+            p->collectors = (yrsp_collector*)pl_alloc(p, sizeof(yrsp_collector) * (size_t)(p->def->n_templates + 1));
+            if (!p->collectors) return -1;
+        }
+        t->collector = &p->collectors[p->n_collectors++];
+        if (!t->choice_keys || !t->choice_codes) return -1;
         {
             yrsp_choice* ch = (yrsp_choice*)pl_alloc(p, sizeof(yrsp_choice) * (size_t)(r->n_choices + 1));
             if (!ch) return -1;
@@ -1303,6 +1317,16 @@ static int pl_tmpl_open(pl_player* p, pl_tmpl* t) {
             rd.max_responses = r->max_responses;
             rd.allow_held_key = r->allow_held_key;
             rd.wait_for_key_release = r->wait_for_key_release;
+            if (!p->args.sim) {
+                /* the source's tier and bounds go into each result: the
+                 * keyboard's, or the rig's for its device */
+                src = p->roles[t->role].source;
+                rd.sources = &src;   /* copied at open */
+                rd.n_sources = 1;
+                /* an any-key response hears its role's kind only: a click
+                 * that brings the window to the front is no response */
+                if (!r->n_choices) rd.kinds = kind == 0 ? 0 : YRSP_KIND_BIT(YRSP_KIND_BOX);
+            }
             if (!yrsp_open(t->collector, &rd)) { pl_fail(p, "template '%s': %s", d->name, yrsp_error(t->collector)); return -1; }
         }
     }
@@ -1631,15 +1655,29 @@ static void pl_hex(const uint8_t* id, char out[65]) {
     out[64] = 0;
 }
 
+/* --rig FILE (a path) or --rig NAME (a profile in the user's rig folder,
+ * ysp/rigfile.h WHERE IT LIVES). A real run with no --rig takes the
+ * folder's profile.json when there is one: the rig's own file binds its
+ * roles, so an operator need not name it. */
 static int pl_rig_load(pl_player* p) {
     char err[400];
+    const char* a = p->args.rig_path;
+    int rc;
     p->rig = (yrig_profile*)pl_alloc(p, sizeof(yrig_profile));
     if (!p->rig) return -1;
-    if (p->args.rig_path) {
-        if (yrig_load_file(p->rig, p->args.rig_path, err, sizeof err) != YRIG_OK) { pl_fail(p, "the rig profile '%s': %s", p->args.rig_path, err); return -1; }
-        p->have_rig = true;
-        if (yrig_hash(p->rig, p->rig_hash) != YRIG_OK) p->rig_hash[0] = 0;
+    if (a) {
+        bool file = strchr(a, '/') || strchr(a, '\\') || (strlen(a) > 5 && strcmp(a + strlen(a) - 5, ".json") == 0);
+        rc = file ? yrig_load_file(p->rig, a, err, sizeof err) : yrig_load(p->rig, a, err, sizeof err);
+        if (rc != YRIG_OK) { pl_fail(p, "the rig profile '%s': %s", a, err); return -1; }
+    } else if (!p->args.sim) {
+        rc = yrig_load(p->rig, NULL, err, sizeof err);
+        if (rc == YRIG_ERR_MISSING || rc == YRIG_ERR_FOLDER) return 0;   /* no profile: keyboard roles only */
+        if (rc != YRIG_OK) { pl_fail(p, "the rig profile: %s", err); return -1; }
+    } else {
+        return 0;
     }
+    p->have_rig = true;
+    if (yrig_hash(p->rig, p->rig_hash) != YRIG_OK) p->rig_hash[0] = 0;
     return 0;
 }
 
@@ -1679,49 +1717,336 @@ static int pl_cal_load(pl_player* p) {
     return 0;
 }
 
-static int pl_screen_open(pl_player* p) {
-    yscr_desc sd;
-    ygfx_desc gd;
+/* --- roles and devices (2.9) --------------------------------------------- */
+
+pl_role* pl_role_get(pl_player* p, const char* name) {
     int i;
-    memset(&sd, 0, sizeof sd);
-    memset(&gd, 0, sizeof gd);
-    sd.backend = YSCR_BACKEND_SIM;
-    sd.windowed = true;
-    sd.min_tier = p->def->min_tier;
-    gd.background[0] = (float)p->def->background[0];
-    gd.background[1] = (float)p->def->background[1];
-    gd.background[2] = (float)p->def->background[2];
-    if (p->def->units_deg) {
-        double dist, width;
-        if (!p->have_rig || !p->rig->view.set) {
-            pl_fail(p, "display.units is deg: the rig profile needs a view (rigfile_profile --view); give --rig");
+    for (i = 0; i < p->def->n_roles; i++)
+        if (strcmp(p->def->roles[i].name, name) == 0) return &p->roles[i];
+    return NULL;
+}
+
+static bool pl_role_lists(const yexp_role* r, const char* family) {
+    int i;
+    for (i = 0; i < r->n_family; i++)
+        if (strcmp(r->family[i], family) == 0) return true;
+    return false;
+}
+
+/* A box's events go to the screen's input bridge, where yrsp_feed_screen()
+ * reads them with the keys: one loop for every input (ysp/screen.h). */
+static void pl_dev_sink(void* ctx, const yin_event* e) {
+    (void)ctx;
+    yscr_push_input(e);
+}
+
+/* What each role is bound to. A real run refuses a required role that has
+ * neither a device in the rig profile nor the keyboard (an input role that
+ * lists the family "keyboard"), naming it: the session would wait for a
+ * press or write codes nowhere. */
+static int pl_roles_bind(pl_player* p) {
+    int i;
+    p->roles = (pl_role*)pl_alloc(p, sizeof(pl_role) * (size_t)(p->def->n_roles + 1));
+    if (!p->roles) return -1;
+    for (i = 0; i < p->def->n_roles; i++) {
+        pl_role* r = &p->roles[i];
+        const yrig_role* rr = p->have_rig ? yrig_find(p->rig, p->def->roles[i].name) : NULL;
+        r->def = &p->def->roles[i];
+        r->rig = rr && rr->family[0] ? rr : NULL;
+        r->trigger = pl_trigger_channel(p, r->def->name);
+        r->rule_out = -1;
+        r->rule_trial = -1;
+        if (p->args.sim) continue;
+        r->keyboard = !r->rig && r->def->direction == 0 && pl_role_lists(r->def, "keyboard");
+        if (r->def->required && !r->rig && !r->keyboard) {
+            pl_fail(p, "the role '%s' is required, and %s binds no device to it (its families: %s%s%s); bind one in the rig profile (ysp/rigfile.h)",
+                    r->def->name, p->have_rig ? "the rig profile" : "there is no rig profile (--rig), so nothing",
+                    r->def->n_family > 0 ? r->def->family[0] : "", r->def->n_family > 1 ? ", ..." : "", "");
             return -1;
         }
-        gd.units = YGFX_DEG;
-        dist = p->rig->view.distance_mm;
-        /* the simulated display is 800 px wide (the default window) */
-        width = p->rig->view.width_mm * (800.0 / (double)p->rig->view.width_px);
-        gd.view.distance_mm = (float)dist;
-        gd.view.width_mm = (float)width;
     }
-    if (p->have_cal) gd.cal = &p->cal;
-    if (p->n_triggers) {
-        /* the screen's trigger worker is the same path a real run takes, but
-         * --sim has no device behind it; the sink counts the firings so a
-         * lost one is caught at the end */
-        extern void pl_trigger_sink(void* ctx, const yscr_trigger_info* info);
-        sd.triggers = (yscr_trigger_desc*)pl_alloc(p, sizeof(yscr_trigger_desc) * (size_t)p->n_triggers);
-        if (!sd.triggers) return -1;
-        for (i = 0; i < p->n_triggers; i++) {
-            ((yscr_trigger_desc*)sd.triggers)[i].fn = pl_trigger_sink;
-            ((yscr_trigger_desc*)sd.triggers)[i].ctx = p;
-            ((yscr_trigger_desc*)sd.triggers)[i].name = p->trigger_roles[i]->name;
+    return 0;
+}
+
+/* A bound role's device, through the rig profile (yrig_open_device()), and
+ * running before the first frame: an output that is not RUNNING refuses
+ * its first code (ysp/device.h, LIFECYCLE). */
+static int pl_role_open(pl_player* p, pl_role* r) {
+    ydev_desc base;
+    if (!r->rig || r->dev) return 0;
+    r->dev = (ydev_device*)pl_alloc(p, sizeof(ydev_device));
+    if (!r->dev) return -1;
+    memset(&base, 0, sizeof base);
+    base.sink = pl_dev_sink;
+    base.ring = &p->ring;
+    base.roles = &p->dev_roles;
+    base.pulse_ns = r->def->pulse_ns;   /* the rig's pulse_s, when it fixes one, wins (yrig_desc()) */
+    base.rule = r->rule;
+    if (!yrig_open_device(r->dev, p->rig, r->def->name, &base)) {
+        pl_fail(p, "the role '%s' (%s at %s): %s", r->def->name, r->rig->family, r->rig->key, ydev_error(r->dev));
+        ydev_close(r->dev);
+        r->dev = NULL;
+        return -1;
+    }
+    if (ydev_wait_running(r->dev, YRT_S(3)) < 0) {
+        pl_fail(p, "the role '%s' (%s at %s) did not start: %s", r->def->name, r->rig->family, r->rig->key, ydev_error(r->dev));
+        return -1;
+    }
+    r->source = yrig_source(p->rig, r->dev);
+    return 0;
+}
+
+/* The output roles, before the screen: each is a trigger channel. */
+static int pl_outputs_open(pl_player* p) {
+    int i;
+    yrt_ring_desc rd;
+    if (p->args.sim) return 0;
+    p->ring_mem = (unsigned char*)pl_alloc(p, YRT_RING_BYTES(PL_DEV_RING));
+    p->dev_recs = (yrt_event*)pl_alloc(p, sizeof(yrt_event) * PL_DEV_DRAIN);
+    if (!p->ring_mem || !p->dev_recs) return -1;
+    memset(&rd, 0, sizeof rd);
+    rd.memory = p->ring_mem;
+    rd.bytes = YRT_RING_BYTES(PL_DEV_RING);
+    if (!yrt_ring_open(&p->ring, &rd)) { pl_fail(p, "the device ring: %s", yrt_ring_error(&p->ring)); return -1; }
+    p->ring_open = true;
+    for (i = 0; i < p->def->n_roles; i++)
+        if (p->roles[i].def->direction != 0 && pl_role_open(p, &p->roles[i]) < 0) return -1;
+    return 0;
+}
+
+/* A response's trigger on a device role is a rule on the role's reader
+ * thread (2.6, G8): the code goes out where the press is read. The rule's
+ * choices and codes are fixed when the device opens, so the code may
+ * depend on $response only, and every template that responds on the role
+ * must give the same codes. */
+static int pl_rule_make(pl_player* p, pl_role* in) {
+    ydev_rule_choice ch[YDEV_RULE_CHOICES];
+    ydev_rule_desc rd;
+    const yexp_template* first = NULL;
+    int n = 0, i, k, out = -1, max_fires = 1;
+    for (i = 0; i < p->def->n_templates; i++) {
+        const yexp_template* t = &p->def->templates[i];
+        const yexp_response* r = t->response;
+        pl_role* o;
+        if (!r || !r->trigger_role || strcmp(r->role, in->def->name) != 0) continue;
+        o = pl_role_get(p, r->trigger_role);
+        if (!o || o->trigger < 0) { pl_fail(p, "template '%s': response.trigger: '%s' is not an output role", t->name, r->trigger_role); return -1; }
+        if (r->n_choices < 1 || r->n_choices > YDEV_RULE_CHOICES) {
+            pl_fail(p, "template '%s': a response trigger on the device role '%s' needs 1 to %d named choices (a rule fires per choice)", t->name, in->def->name,
+                    YDEV_RULE_CHOICES);
+            return -1;
         }
+        for (k = 0; k < r->n_choices; k++) {
+            pl_env env;
+            int64_t code = 0;
+            int b, found = -1;
+            ydev_rule_choice c;
+            memset(&env, 0, sizeof env);
+            env.t = t;
+            env.phase = PL_PH_AFTER;
+            env.responded = true;
+            env.response = r->choices[k].key;
+            env.rt_ns = YRSP_NO_TIME;
+            if (pl_eval_int(p, &env, r->trigger_code, &code) < 0) {
+                p->failed = 0;
+                pl_fail(p, "template '%s': the response trigger's code on the device role '%s' must depend on $response only: a rule's codes are set when the device opens",
+                        t->name, in->def->name);
+                return -1;
+            }
+            if (code < 0 || code > 255) { pl_fail(p, "template '%s': the response trigger code %lld is not in 0..255", t->name, (long long)code); return -1; }
+            for (b = 0; b < in->def->n_buttons; b++)
+                if (strcmp(in->def->buttons[b].value->str, r->choices[k].key) == 0) found = b;
+            if (found < 0) { pl_fail(p, "template '%s': choice '%s' is not one of role '%s''s buttons", t->name, r->choices[k].key, in->def->name); return -1; }
+            memset(&c, 0, sizeof c);
+            c.kind = (uint8_t)YIN_KIND_BOX;
+            c.control = (uint32_t)strtoul(in->def->buttons[found].key, NULL, 10);
+            c.code = (uint32_t)code;
+            if (!first) ch[n++] = c;
+            else if (k >= n || ch[k].control != c.control || ch[k].code != c.code || out != o->trigger) {
+                pl_fail(p, "templates '%s' and '%s' give the device role '%s' different response triggers; a rule is set once, when the device opens",
+                        first->name, t->name, in->def->name);
+                return -1;
+            }
+        }
+        if (!first) {
+            first = t;
+            out = o->trigger;
+            max_fires = !r->ends_trial ? (r->max_responses > 0 ? r->max_responses : -1) : 1;
+        }
+    }
+    if (!first) return 0;
+    {
+        pl_role* o = NULL;
+        for (i = 0; i < p->def->n_roles; i++) if (p->roles[i].trigger == out) o = &p->roles[i];
+        if (!o || !o->dev) return 0;   /* an optional output with no device: no code to send */
+        in->rule = (ydev_rule*)pl_alloc(p, sizeof(ydev_rule));
+        if (!in->rule) return -1;
+        memset(&rd, 0, sizeof rd);
+        rd.out = o->dev;
+        rd.choices = ch;
+        rd.n_choices = n;
+        rd.max_fires = max_fires;
+        if (!ydev_rule_open(in->rule, &rd)) { pl_fail(p, "the response rule of role '%s': %s", in->def->name, ydev_rule_error(in->rule)); return -1; }
+        in->rule_out = out;
+    }
+    return 0;
+}
+
+/* The input roles, after the screen (its input bridge exists from its open)
+ * and before the templates (a collector takes its sources at open). */
+static int pl_inputs_open(pl_player* p) {
+    int i;
+    if (p->args.sim) return 0;
+    for (i = 0; i < p->def->n_roles; i++) {
+        pl_role* r = &p->roles[i];
+#if !defined(YSCR_NO_SDL)
+        if (r->keyboard) {
+            /* the keyboard's tier and bounds: the kernel's evdev time where
+             * the screen reads it (ysp/screen.h, INPUT), else the X server's */
+            yin_sdl_ctx sc;
+            memset(&sc, 0, sizeof sc);
+            sc.raw_keyboard = p->caps.raw_keyboard;
+            sc.os_stamps = p->caps.os_input_stamps;
+            r->source = yrsp_sdl_source(&sc, YRSP_KIND_KEYBOARD);
+        }
+#endif
+        if (r->def->direction != 0 || !r->rig) continue;
+        if (pl_rule_make(p, r) < 0 || pl_role_open(p, r) < 0) return -1;
+    }
+    return 0;
+}
+
+static void pl_devices_close(pl_player* p) {
+    int i;
+    if (!p->roles) return;
+    /* inputs, then their rules, then the outputs (ysp/device.h, RESPONSE
+     * RULES): a reader may be writing through a rule to an output */
+    for (i = 0; i < p->def->n_roles; i++)
+        if (p->roles[i].dev && p->roles[i].def->direction == 0) { ydev_close(p->roles[i].dev); p->roles[i].dev = NULL; }
+    for (i = 0; i < p->def->n_roles; i++)
+        if (p->roles[i].rule) { ydev_rule_close(p->roles[i].rule); p->roles[i].rule = NULL; }
+    for (i = 0; i < p->def->n_roles; i++)
+        if (p->roles[i].dev) { ydev_close(p->roles[i].dev); p->roles[i].dev = NULL; }
+    if (p->ring_open) { yrt_ring_close(&p->ring); p->ring_open = false; }
+}
+
+/* --- the screen ----------------------------------------------------------- */
+
+/* The program cache's folder, made when it is missing (ygfx_default_cache_dir()
+ * makes none): each part this user's alone, as yrt_user_dir() requires. */
+static const ygfx_cache* pl_program_cache(pl_player* p) {
+    char dir[512];
+    size_t i, n;
+    if (ygfx_default_cache_dir(dir, sizeof dir) != YGFX_OK) return NULL;
+    n = strlen(dir);
+    for (i = 1; i <= n; i++) {
+        char c = dir[i];
+        if (c != '/' && c != '\\' && c != 0) continue;
+        dir[i] = 0;
+#if defined(_WIN32)
+        (void)CreateDirectoryA(dir, NULL);
+#else
+        (void)mkdir(dir, 0700);
+#endif
+        dir[i] = c;
+    }
+    return ygfx_file_cache_init(&p->pcache, dir);
+}
+
+typedef struct pl_open_ctx { pl_player* p; ygfx_desc gd; } pl_open_ctx;
+
+/* The screen's context hook (ysp/screen.h, CONTEXT HOOK): the mode is known
+ * here, so a size in deg comes from the pixels the screen got, and the gfx
+ * compiles while the screen settles (as ygfx_open_screen() does). */
+static void pl_open_hook(void* ctx, yscr_screen* s) {
+    pl_open_ctx* c = (pl_open_ctx*)ctx;
+    pl_player* p = c->p;
+    c->gd.screen = s;
+    if (p->def->units_deg) {
+        yscr_caps caps;
+        double w;
+        yscr_get_caps(s, &caps);
+        /* the simulated display has no mode: the scene is 800 px wide (the
+         * default window); a window keeps the panel's pitch (ysp/rigfile.h,
+         * VIEWING GEOMETRY), so the width in mm follows the pixels */
+        w = caps.mode.w > 0 ? (double)caps.mode.w : 800.0;
+        c->gd.units = YGFX_DEG;
+        c->gd.view.distance_mm = (float)p->rig->view.distance_mm;
+        c->gd.view.width_mm = (float)(p->rig->view.width_mm * (w / (double)p->rig->view.width_px));
+        p->view = c->gd.view;
+    }
+    (void)ygfx_open_start(&p->gfx, &c->gd);
+}
+
+/* The screen and the gfx. --sim: the simulated display. A real run: the
+ * backend AUTO picks (GLX_OML on X11), fullscreen unless --windowed, the
+ * panic watchdog armed, compiled programs cached, and display.min_tier
+ * refusing a start on a display that cannot give it (--sim only flags its
+ * frames, BELOW_TIER: the simulated display has no tier to give). */
+static int pl_screen_open(pl_player* p) {
+    yscr_desc sd;
+    pl_open_ctx c;
+    yscr_trigger_desc* trig = NULL;
+    int i;
+    memset(&sd, 0, sizeof sd);
+    memset(&c, 0, sizeof c);
+    c.p = p;
+    sd.backend = p->args.sim ? YSCR_BACKEND_SIM : YSCR_BACKEND_AUTO;
+    sd.windowed = p->args.sim || p->args.windowed;
+    sd.min_tier = p->def->min_tier;
+    if (!p->args.sim && !sd.windowed) sd.panic = true;   /* Shift+Esc 3 times when the loop hangs */
+    c.gd.background[0] = (float)p->def->background[0];
+    c.gd.background[1] = (float)p->def->background[1];
+    c.gd.background[2] = (float)p->def->background[2];
+    if (p->def->units_deg && (!p->have_rig || !p->rig->view.set)) {
+        pl_fail(p, "display.units is deg: the rig profile needs a view (rigfile_profile --view); give --rig");
+        return -1;
+    }
+    if (p->have_cal) c.gd.cal = &p->cal;
+    if (!p->args.sim) c.gd.cache = pl_program_cache(p);
+    if (p->n_triggers) {
+        /* a bound output role's device writes at the flip's vblank
+         * (ysp/device.h, AT THE FLIP); a role with no device (--sim, an
+         * optional role the rig leaves unbound) has the sink, which counts
+         * the firings so a lost one is caught at the end */
+        extern void pl_trigger_sink(void* ctx, const yscr_trigger_info* info);
+        trig = (yscr_trigger_desc*)pl_alloc(p, sizeof(yscr_trigger_desc) * (size_t)p->n_triggers);
+        if (!trig) return -1;
+        for (i = 0; i < p->n_triggers; i++) {
+            const pl_role* r = pl_role_get(p, p->trigger_roles[i]->name);
+            if (r && r->dev) {
+                trig[i] = ydev_trigger_channel(r->dev, 0);
+            } else {
+                trig[i].fn = pl_trigger_sink;
+                trig[i].ctx = p;
+                trig[i].name = p->trigger_roles[i]->name;
+            }
+        }
+        sd.triggers = trig;
         sd.n_triggers = p->n_triggers;
     }
-    if (!ygfx_open_screen(&p->gfx, &p->scr, &sd, &gd)) { pl_fail(p, "the screen: %s", ygfx_error(&p->gfx)); return -1; }
-    p->gfx_open = p->scr_open = true;
+    sd.on_context = pl_open_hook;
+    sd.on_context_ctx = &c;
+    if (!yscr_open(&p->scr, &sd)) {
+        ygfx_close(&p->gfx);
+        pl_fail(p, "the screen: %s", yscr_error(&p->scr));
+        return -1;
+    }
+    p->scr_open = true;
+    c.gd.screen = &p->scr;
+    if (!ygfx_open(&p->gfx, &c.gd)) { pl_fail(p, "the gfx: %s", ygfx_error(&p->gfx)); return -1; }
+    p->gfx_open = true;
+    /* the built-in kinds' first draws now, not on a trial's frames */
+    if (ygfx_prime(&p->gfx) < 0) { pl_fail(p, "the gfx: %s", ygfx_error(&p->gfx)); return -1; }
     yscr_get_caps(&p->scr, &p->caps);
+    if (!p->args.sim && p->def->min_tier && (p->caps.worst_tier == 0 || (int)p->caps.worst_tier > p->def->min_tier)) {
+        char line[512];
+        yscr_describe(&p->scr, line, sizeof line);
+        pl_fail(p, "display.min_tier is %d, and this display's flips are tier %d (%s); a window gives tier 2 at best, so run fullscreen, "
+                   "or on a display that gives the tier",
+                p->def->min_tier, (int)p->caps.worst_tier, line);
+        return -1;
+    }
     return 0;
 }
 
@@ -1834,7 +2159,9 @@ int pl_load(pl_player* p, const pl_args* a) {
     if (pl_cal_load(p) < 0) return -1;
 
     if (pl_channels_assign(p) < 0) return -1;
+    if (pl_roles_bind(p) < 0 || pl_outputs_open(p) < 0) return -1;
     if (pl_screen_open(p) < 0) return -1;
+    if (pl_inputs_open(p) < 0) return -1;
 
     /* stimuli */
     p->n_stims = p->def->n_stimuli;
@@ -2044,7 +2371,10 @@ void pl_close(pl_player* p) {
     if (p->audio_open) yau_close(&p->audio);
     if (p->ds_open) yds_close(&p->ds);
     if (p->gfx_open) ygfx_close(&p->gfx);
+    /* the screen first: its trigger worker writes through the outputs, and
+     * its close puts the display's mode and ramp back */
     if (p->scr_open) yscr_close(&p->scr);
+    pl_devices_close(p);
     if (p->trace_file) { fclose((FILE*)p->trace_file); p->trace_file = NULL; }
     if (p->arena_open) yjs_arena_free(&p->arena);
     if (p->pack_open) ypak_close(&p->pack);

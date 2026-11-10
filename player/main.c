@@ -1,19 +1,25 @@
 /* player/main.c - the ysp_player command line.
  *
- * Usage: ysp_player PACK --out DIR --sim [--seed N] [--field NAME=VALUE]...
- *                   [--rig FILE] [--cal FILE] [--participant SPEC] [--rt S]
- *                   [--max-trials N] [--measure] [--trace-channels FILE]
- *                   [--rdk-buffer N]
+ * Usage: ysp_player PACK --out DIR [--sim] [--seed N] [--field NAME=VALUE]...
+ *                   [--rig FILE|NAME] [--cal FILE] [--windowed]
+ *                   [--participant SPEC] [--rt S] [--max-trials N]
+ *                   [--measure] [--trace-channels FILE] [--rdk-buffer N]
  *
- * --sim is required in this version: the simulated display, the virtual
- * clock, the null audio device and a scripted participant. SPEC is
- * "correct" (the default: each trial's key_answer after --rt seconds),
- * "silent", "p=0.8" (correct with that probability), or "script:FILE" (a
- * CSV of trial_index,response,rt_s,hold_s). DIR must not exist.
+ * Without --sim the session runs for real: a window on the display (full
+ * screen; --windowed for development), the keyboard and the rig profile's
+ * devices (--rig, else the user's profile.json when there is one), and the
+ * real clock. Shift+Esc stops it.
+ * --sim: the simulated display, the virtual clock, the null audio device
+ * and a scripted participant. SPEC is "correct" (the default: each
+ * trial's key_answer after --rt seconds), "silent", "p=0.8" (correct with
+ * that probability), or "script:FILE" (a CSV of
+ * trial_index,response,rt_s,hold_s). DIR must not exist.
  * --rdk-buffer sets an RDK's step buffer (tests: a small one flushes often).
  *
- * Exit code: 0, 1 when the pack or the definition is refused or the run
- * failed (the message goes to stderr), 2 for a bad argument.
+ * Exit code: 0; 1 when the pack, the definition or the rig is refused or
+ * the run failed (the message goes to stderr); 2 for a bad argument; 3
+ * when the operator stopped the session (Shift+Esc, the window's close):
+ * the data set is closed, and session.json says so ("aborted").
  */
 #include "player.h"
 
@@ -24,8 +30,9 @@
 static pl_player g_p;
 
 static int usage(void) {
-    fprintf(stderr, "usage: ysp_player PACK --out DIR --sim [--seed N] [--field NAME=VALUE]... [--rig FILE] [--cal FILE]\n"
-                    "                  [--participant SPEC] [--rt S] [--max-trials N] [--max-seconds N]\n"
+    fprintf(stderr, "usage: ysp_player PACK --out DIR [--sim] [--seed N] [--field NAME=VALUE]... [--rig FILE|NAME] [--cal FILE]\n"
+                    "                  [--windowed] [--max-trials N] [--measure]\n"
+                    "       --sim only: [--participant SPEC] [--rt S] [--max-seconds N]\n"
                     "  SPEC: correct, silent, p=0.8 or script:FILE\n");
     return 2;
 }
@@ -48,6 +55,7 @@ int main(int argc, char** argv) {
         else if (!strcmp(s, "--max-trials") && v) { a.max_trials = atoi(v); i++; }
         else if (!strcmp(s, "--max-seconds") && v) { a.max_seconds = atoll(v); i++; }
         else if (!strcmp(s, "--measure")) a.measure = true;
+        else if (!strcmp(s, "--windowed")) a.windowed = true;
         else if (!strcmp(s, "--trace-channels") && v) { a.trace_path = v; i++; }
         else if (!strcmp(s, "--rdk-buffer") && v) { a.rdk_buffer = atoi(v); i++; }
         else if (!strcmp(s, "--field") && v) {
@@ -68,13 +76,25 @@ int main(int argc, char** argv) {
         else return usage();
     }
     if (!a.pack_path || !a.out_dir) return usage();
-    if (!a.sim) { fprintf(stderr, "ysp_player: this version runs only with --sim\n"); return 2; }
+    if (!a.sim && (a.participant || a.rt_s != 0.0)) {
+        fprintf(stderr, "ysp_player: --participant and --rt are for --sim: a real run's participant is real\n");
+        return 2;
+    }
+    if (a.sim && a.windowed) { fprintf(stderr, "ysp_player: --windowed is for a real run\n"); return 2; }
+#if defined(YSCR_NO_SDL)
+    if (!a.sim) { fprintf(stderr, "ysp_player: built without SDL (YSCR_NO_SDL): --sim only\n"); return 2; }
+#endif
     /* --sim runs on the virtual clock from before anything reads it, so the
      * records are the same on every host and every run */
-    yrt_virtual_begin(0);
+    if (a.sim) yrt_virtual_begin(0);
     if (pl_load(&g_p, &a) < 0) { fprintf(stderr, "ysp_player: %s\n", g_p.error); pl_close(&g_p); return 1; }
     rc = pl_run(&g_p);
     if (rc < 0) { fprintf(stderr, "ysp_player: %s\n", g_p.error); pl_close(&g_p); return 1; }
+    if (g_p.aborted) {
+        printf("ysp_player: stopped by the operator; %d trials written to %s (trial %d has no row)\n", g_p.trials_done, a.out_dir, g_p.abort_trial);
+        pl_close(&g_p);
+        return 3;
+    }
     if (a.measure) {
         printf("ysp_player: frame work over %lld frames: max %.1f us; trial start max %.1f us; %lld frames over 16 ms\n", (long long)g_p.work_n,
                (double)g_p.work_max_ns / 1e3, (double)g_p.work_trial_max_ns / 1e3, (long long)g_p.work_over_16ms);

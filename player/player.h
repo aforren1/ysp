@@ -1,9 +1,9 @@
 /* player/player.h - the ysp player's internal interface.
  *
  * The player loads a pack, checks its definition (ysp/experiment.h) against
- * the pack and the rig, lowers it onto the ysp headers and runs it. This
- * first version runs only on the simulated display (--sim). docs/player.md
- * describes what is built and the decisions lowering forced.
+ * the pack and the rig, lowers it onto the ysp headers and runs it: in a
+ * real window with the rig's devices, or on the simulated display (--sim).
+ * docs/player.md describes what is built and the decisions lowering forced.
  *
  * The code is split so that one test can reach each part: eval.c (values),
  * host.c (the loader's checks that need the pack and the rig), lower.c (the
@@ -14,6 +14,11 @@
 #ifndef YSP_PLAYER_H_INCLUDED
 #define YSP_PLAYER_H_INCLUDED
 
+/* yrsp_feed_screen() and yrsp_sdl_source() exist only when SDL's event
+ * header comes before ysp/input.h and ysp/response.h */
+#if !defined(YSCR_NO_SDL)
+#include <SDL3/SDL_events.h>
+#endif
 #include "ysp/experiment.h"
 #include "ysp/gfx.h"
 #include "ysp/timeline.h"
@@ -27,6 +32,9 @@
 #include "ysp/rigfile.h"
 #include "ysp/dataset.h"
 #include "ysp/pack.h"
+/* again after ysp/device.h (through ysp/rigfile.h): the response rule's
+ * helpers (ysp/response.h, RESPONSE TRIGGERS) */
+#include "ysp/response.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -35,7 +43,7 @@
 extern "C" {
 #endif
 
-#define PL_VERSION_STRING "0.1.0"
+#define PL_VERSION_STRING "0.2.0"
 
 enum {
     PL_BASE_TRIAL     = 1,   /* the timeline base a trial runs on            */
@@ -59,7 +67,11 @@ enum {
                               * this is at most about 41 s of blank frames  */
     PL_MAX_TEXT       = 4096,  /* bytes of one value's text: ysp/table.h's
                               * longest field, so the files read back         */
-    PL_WALK_PER_FRAME = 4096   /* tree-walk steps before the frame goes on    */
+    PL_WALK_PER_FRAME = 4096,  /* tree-walk steps before the frame goes on    */
+    PL_OUT_PENDING    = 64,    /* a channel's codes between the fire and its
+                              * device record (a real run)                  */
+    PL_DEV_RING       = 4096,  /* device records between two frames          */
+    PL_DEV_DRAIN      = 256    /* records read per drain call                */
 };
 /* pl_val.flags beyond the loader's: a trial seed (text is "x" and 16 hex digits,
  * the spelling of the trial_seed column); a session field that was not given
@@ -197,6 +209,7 @@ typedef struct pl_tmpl {
     const char** choice_keys;
     uint32_t* choice_codes;     /* response.trigger's per-choice code        */
     int   from_ch;              /* the visible channel of `from`, or -1       */
+    int   role;                 /* the response role, into pl_player.roles    */
     int   from_sound;
     ytl_op* ops;  int ops_cap;  /* big enough for events + after + the rest  */
     /* record list */
@@ -204,9 +217,24 @@ typedef struct pl_tmpl {
     bool* stim_used;            /* the stimuli this template shows or changes */
 } pl_tmpl;
 
-typedef struct pl_response_rule {
-    ydev_device* device;   /* unused in --sim */
-} pl_response_rule;
+/* A role of the definition (2.9) and what it is bound to. In --sim no role
+ * has a device: the participant and the sink stand in. */
+typedef struct pl_role {
+    const yexp_role* def;
+    const yrig_role* rig;      /* the rig's binding, or NULL                   */
+    bool        keyboard;      /* an input role that lists "keyboard" and that
+                                * the rig binds to no device (a real run)     */
+    int         trigger;       /* its trigger channel; -1 for an input role   */
+    ydev_device* dev;          /* open in a real run when the rig binds it    */
+    ydev_rule*  rule;          /* an input device's response rule (2.6)      */
+    int         rule_out;      /* the rule's output: a trigger channel        */
+    int         rule_trial;    /* the session trial its arm belongs to        */
+    yin_source  source;        /* its events' tier and bounds                 */
+} pl_role;
+
+/* A code a trigger channel fired, until the device's record of the write
+ * (a real run): records of one channel come in fire order. */
+typedef struct pl_out_fire { int trial; uint32_t code; int64_t deadline; } pl_out_fire;
 
 /* --- the tree ---------------------------------------------------------- */
 
@@ -314,6 +342,7 @@ typedef struct pl_args {
     int64_t max_seconds;       /* virtual seconds before giving up; default 2 days */
     bool  quiet;
     bool  measure;             /* real-clock cost of each frame's work      */
+    bool  windowed;            /* a real run in a window (development)      */
     const char* trace_path;    /* a test's view of every channel per frame  */
     int   rdk_buffer;          /* tests: an RDK's step buffer, to make it
                                 * flush often; 0 is PL_RDK_STEPS             */
@@ -412,8 +441,31 @@ struct pl_player {
     yscr_caps   caps;
     yau_audio   audio;
     bool        audio_open;
-    yrt_ring    ring;   /* flip and device records */
+    yrt_ring    ring;   /* device records (a real run) */
     unsigned char* ring_mem;
+    bool        ring_open;
+    yrt_event*  dev_recs;          /* PL_DEV_DRAIN, for the drain        */
+    ygfx_file_cache pcache;        /* compiled programs (a real run)     */
+    ygfx_view   view;              /* deg: from the mode the screen got  */
+
+    /* roles (2.9), in the definition's order */
+    pl_role*    roles;
+    ydev_roles  dev_roles;         /* ysp/device.h's role table          */
+    pl_out_fire* out_fires;        /* 2 x PL_OUT_PENDING per trigger channel:
+                                    * the flips' codes, then the frame
+                                    * loop's (a response's on a keyboard role) */
+    int*        out_head;          /* per queue: the next record's fire   */
+    int*        out_tail;
+    yrsp_collector* collectors;    /* one per template with a response, in
+                                    * one array: every one hears every input */
+    int         n_collectors;
+
+    /* the abort (ysp/screen.h, ABORT): the operator stopped the session */
+    bool        aborted;
+    uint32_t    abort_reasons;
+    int         abort_presses;
+    int64_t     abort_ns;
+    int         abort_trial;       /* the trial that was running, or -1  */
 
     /* channels: one per stimulus visibility and per driven property */
     ytl_timeline tl;
@@ -505,6 +557,8 @@ pl_stim* pl_stim_by_name(pl_player* p, const char* name);
  * NULL; -1 when no step drives it. */
 int  pl_channel(pl_player* p, const char* stim, const char* prop);
 int  pl_trigger_channel(pl_player* p, const char* role);
+/* The role of the definition by name, or NULL. */
+pl_role* pl_role_get(pl_player* p, const char* name);
 /* The node's seed by D8 for its path and the iterations of the node's chain;
  * iters[k] is node k of the chain's iteration, k = 0 the outermost. */
 uint64_t pl_node_seed(uint64_t session_seed, const char* path, const int* iters, int n);
