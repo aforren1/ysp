@@ -357,8 +357,13 @@ int main(int argc, char** argv) {
     const char* ypak = getenv("YPAK");
     char cmd[1024];
     if (getenv("YPL_AS_PLAYER")) return pl_cli_main(argc, argv);
-    snprintf(workdir, sizeof workdir, "/tmp/pl_mut_%d", (int)getpid());
-    mkdir(workdir, 0755);
+    {
+        /* YPL_WORK (else TMPDIR, else /tmp) holds the run's folder, so a
+         * run that is killed leaves it where the caller looks */
+        const char* base = getenv("YPL_WORK") ? getenv("YPL_WORK") : getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp";
+        snprintf(workdir, sizeof workdir, "%s/pl_mut_XXXXXX", base);
+        if (!mkdtemp(workdir)) { printf("no work folder under %s\n", base); return 2; }
+    }
     snprintf(packpath, sizeof packpath, "%s/rdk.ysppak", workdir);
     if (!ypak) { printf("YPAK not set\n"); return 2; }
     snprintf(cmd, sizeof cmd, "cd %s/tests/player/rdk && '%s' build pack.json -o %s >/dev/null", getenv("YPL_REPO") ? getenv("YPL_REPO") : ".", ypak, packpath);
