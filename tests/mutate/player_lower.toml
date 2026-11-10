@@ -218,3 +218,11 @@ test = "player"
 why = "Round 3 item 2: the bound multiplies down the tree."
 find = '''        sum += starts + starts * pl_container_visits(p, n[i].children, n[i].n_children);'''
 replace = '''        sum += starts;'''
+
+[[mutant]]
+id = "pl-31"
+name = "a quest with more than one stimulus axis lowered"
+test = "player"
+why = "Round 3 fuzz finding: the update read past one value (t_method_update)."
+find = '''        if (stim->value->n != 1) {'''
+replace = '''        if (0) {'''

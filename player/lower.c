@@ -1177,6 +1177,13 @@ static int pl_method_open(pl_player* p, pl_method* m) {
             return -1;
         }
         if (stim->value->n > YQST_MAX_STIM_DIMS || par->value->n > YQST_MAX_PARAMS) { pl_fail(p, "method '%s': too many axes", d->name); return -1; }
+        /* $level and method_value carry one number, and the update reads one
+         * per stimulus axis (found by the fuzz target: a 3-axis quest read
+         * past the value) */
+        if (stim->value->n != 1) {
+            pl_fail(p, "method '%s': 'stim' has %u axes; $level and method_value carry one value, so this version lowers a quest with one stimulus axis", d->name, (unsigned)stim->value->n);
+            return -1;
+        }
         for (i = 0; i < stim->value->n; i++)
             if (pl_get_axis(p, d, &stim->value->items[i], &qd.stim[i]) < 0) return -1;
         qd.n_stim = (int)stim->value->n;

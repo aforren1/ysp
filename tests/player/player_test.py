@@ -356,6 +356,14 @@ def t_method_update(ctx):
              [{"name": "l", "trial": "t", "tracks": ["q"], "vars": {"a": {"choice": ["left", "right"]}}, "track_rate": 1}], methods=methods)
     r = Run(ctx, "method", d, args=["--rt", "0.2"])
     check(r.rc == 0, "method: %s" % r.err)
+    # a quest with three stimulus axes: $level is one value, so it is refused
+    # at load (the fuzz target found its update reading past one value)
+    m3 = json.loads(json.dumps(methods))
+    m3["q"]["stim"] = [{"linspace": [-2, 0, 3]}] * 3
+    d3 = json.loads(json.dumps(d))
+    d3["methods"] = m3
+    r3 = Run(ctx, "method_3axes", d3, args=["--rt", "0.2"])
+    check(r3.rc != 0 and "one stimulus axis" in r3.err and not os.path.exists(r3.data), "a quest with three stimulus axes is refused at load: %s" % r3.err)
     if r.rc == 0:
         check(len(r.trials) == 8, "quest ran to its 8 trials, got %d" % len(r.trials))
         levels = [float(row["level"]) for row in r.trials]

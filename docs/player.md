@@ -103,7 +103,9 @@ The variable `$trial_index` is the leaf's trial number (2.3 reads it from
 `ytr_trial_info`); the column `trial_index` is the session's.
 
 These are not lowered, and the player refuses each by name: `aep` methods,
-`artwork` stimuli and `video` stimuli. No worked example needs them, and no
+`artwork` stimuli, `video` stimuli, and a `quest` with more than one
+stimulus axis (`$level` and `method_value` carry one value; the fuzz target
+found the update reading past it, 2026-11-10). No worked example needs them, and no
 C program gives a comparison for them. In `--sim` a response's `trigger` goes
 out from the frame loop, as for a keyboard role. Its device rule (`ydev_rule`)
 needs a real role.
