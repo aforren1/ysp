@@ -1,4 +1,4 @@
-/* ysp/sig.h - v0.2.0 - public domain single-header signal path
+/* ysp/sig.h - v0.2.1 - public domain single-header signal path
  *
  *   Continuous input to stimuli: a small graph, fixed at open, from input
  *   sources through per-sample transforms and maps to stimulus channels,
@@ -324,6 +324,9 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.2.1 - a ring push returns at once on a ring of no capacity, so
+ *          MSVC /W4 /WX (C4724, "potential mod by 0") builds it; no
+ *          ring has capacity 0, so nothing else changes.
  *   v0.2.0 - the ops mux, latch, distance, peak, all and silent (D17,
  *          D18, the paper test); detect's output as an input, and
  *          detect's `out` row (hit); ysig_reset_trial() and ysig_recenter()
@@ -354,8 +357,8 @@
 
 #define YSIG_VERSION_MAJOR 0
 #define YSIG_VERSION_MINOR 2
-#define YSIG_VERSION_PATCH 0
-#define YSIG_VERSION_STRING "0.2.0"
+#define YSIG_VERSION_PATCH 1
+#define YSIG_VERSION_STRING "0.2.1"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -1673,7 +1676,11 @@ static void ysig__prepare(ysig_graph* g, int i) {
 }
 
 static void ysig__ring_push(ysig__ring* r, const ysig_value* v) {
-    int at = (r->head + r->n) % r->cap;
+    int at;
+    /* never true (ysig__ring_cap gives 256 or 1024 for 0), but MSVC can
+     * prove n == cap == 0 on an inlined path and calls the mod an error */
+    if (r->cap <= 0) return;
+    at = (r->head + r->n) % r->cap;
     if (r->n == r->cap) { r->head = (r->head + 1) % r->cap; at = (r->head + r->n - 1) % r->cap; }
     else r->n++;
     r->buf[at] = *v;

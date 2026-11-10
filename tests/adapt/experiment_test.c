@@ -1054,7 +1054,7 @@ static void run_arena(void) {
 
 static void hex(const uint8_t* b, char* out) {
     int i;
-    for (i = 0; i < 32; i++) sprintf(out + 2 * i, "%02x", b[i]);
+    for (i = 0; i < 32; i++) snprintf(out + 2 * i, 3, "%02x", b[i]);
 }
 
 static void run_sha(void) {

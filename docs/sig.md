@@ -668,7 +668,10 @@ counts this program's allocator calls during the 60 s run (glibc).
   Linux desktop) and as C++.
 - `tests/compile/sig.c` and `sig.cpp`: C99, C11, C++17 and C++20 with
   warnings as errors (C++20: GCC's `-Wdeprecated-enum-float-conversion`
-  no longer fires).
+  no longer fires). v0.2.1: MSVC `/W4 /WX` stopped on C4724 ("potential
+  mod by 0") in the ring push, where an inlined path has `n == cap == 0`.
+  A ring never has capacity 0; the push now returns on one, so MSVC can
+  see that the mod is safe.
 - `tests/fuzz/sig_fuzz.c`: arbitrary node arrays (and roles and adapters)
   into `ysig_check()` and `ysig_open()`, then every call on a graph that
   opened, and a replay of its journal to the same digest. It also feeds
@@ -738,4 +741,5 @@ ran (640.5 million events taken, 373.5 million rows, 10.17 million hits).
   `latch` holds until the next reset.
 - `ysig_recenter()` through an `affine` or a filter in the adapter: it
   refuses them (design notes).
-- Not run: MSVC, macOS, a window, a real device, a photodiode.
+- Not run: macOS, a window, a real device, a photodiode. MSVC: the
+  compile checks and the test in CI only.
