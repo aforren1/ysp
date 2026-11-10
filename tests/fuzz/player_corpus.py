@@ -199,6 +199,14 @@ def node_seeds(seeds):
     write(seeds, "rdk_density", base(stimuli={"s": {"kind": "rdk", "density": 0.002, "w": 80, "h": 80, "aperture": "rect", "speed": 5, "dot_size": 2, "color": [1, 1, 1]}}))
     write(seeds, "text_var", base(stimuli={"s": {"kind": "text", "font": "fonts/F.ttf", "size": 40, "width": 1000, "text": "$a"}}))
     write(seeds, "image_var", base(stimuli={"s": {"kind": "image", "texture": "$img"}}))
+    # round 2: arrays are values (2.2), written as one text and fed to a stimulus
+    write(seeds, "node_arrays", base(stimuli={"s": {"kind": "shape", "w": 1, "h": 1, "color": "$col"}},
+                                     timeline=[{"name": "m", "trial": "x", "timeline_variables": "x.pstb", "vars": {"col": [1, 0, 0.5]}, "data": {"arr": [2, 3]}}]))
+    # experiment.h 0.1.2: values only a press or a track trial reaches
+    write(seeds, "relaxed", base(methods=meths, trials={"x": dict(tr["x"], outcome={"by": "$response", "map": {"left": 1, "right": 0}},
+                                                                 method_value={"by": "$responded", "map": {"true": "$level"}},
+                                                                 after=[{"wait_s": {"by": "$responded", "map": {"true": "$rt_s", "false": 0.01}}}, {"off": "s"}])},
+                                 timeline=[{"name": "a", "trial": "x", "tracks": ["st"]}]))
     write(seeds, "image_choice", base(stimuli={"s": {"kind": "image", "texture": "$pic"}}, timeline=[{"name": "m", "trial": "x", "timeline_variables": "x.pstb", "vars": {"pic": {"choice": ["a.ysptex", "b.ysptex"]}}}]))
 
 
