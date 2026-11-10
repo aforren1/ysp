@@ -83,23 +83,20 @@ static int pl_wq_run(pl_player* p, pl_wjob* j) {
     return rc;
 }
 
-/* The writer's job: every write queued so far, in order. */
+/* The writer's job: every write queued so far, in order; then it runs
+ * again PL_WRITER_PERIOD_NS later. The frame thread only stores the
+ * queue's tail: it never takes the writer's lock, which a SCHED_FIFO frame
+ * thread waiting on a SCHED_OTHER writer would make a priority inversion. */
 static void pl_wq_job(void* ctx, const yrt_job_info* info) {
     pl_player* p = (pl_player*)ctx;
     int h = pl_ld(&p->wq_head);
-    (void)info;
     while (h != pl_ld(&p->wq_tail)) {
         if (!pl_ld(&p->wfail)) (void)pl_wq_run(p, &p->wq[h % PL_WRITE_QUEUE]);
         h++;
         pl_st(&p->wq_head, h);
     }
-}
-
-/* The writer runs what was queued since the last kick. */
-static void pl_wq_kick(pl_player* p) {
-    if (!p->writer_open || p->wq_kicked == p->wq_tail) return;
-    p->wq_kicked = p->wq_tail;
-    (void)yrt_worker_submit(&p->writer, 0, pl_wq_job, p);
+    if (info && !info->flushed && !pl_ld(&p->wq_stop))
+        (void)yrt_worker_submit(&p->writer, info->deadline_ns + PL_WRITER_PERIOD_NS, pl_wq_job, p);
 }
 
 /* Queue a write; --sim (no writer) writes it in place. A full queue (the
@@ -113,8 +110,6 @@ static int pl_wq_push(pl_player* p, const pl_wjob* j) {
     }
     if (pl_ld(&p->wfail)) { pl_fail(p, "%s", p->werror); return -1; }
     while (p->wq_tail - pl_ld(&p->wq_head) >= PL_WRITE_QUEUE) {
-        p->wq_kicked = -1;
-        pl_wq_kick(p);
         yrt_sleep_ns(YRT_MS(1));
         if (pl_ld(&p->wfail)) { pl_fail(p, "%s", p->werror); return -1; }
     }
@@ -132,16 +127,17 @@ int pl_writer_open(pl_player* p) {
     if (!p->wq) return -1;
     memset(&wd, 0, sizeof wd);
     wd.no_elevate = true;   /* it waits on the disk; a frame never waits on it */
+    wd.spin_ns = 1;         /* a write may come a little late: no spinning */
     if (!yrt_worker_open(&p->writer, &wd)) { pl_fail(p, "the data set's writer: %s", yrt_worker_error(&p->writer)); return -1; }
     p->writer_open = true;
+    if (yrt_worker_submit(&p->writer, yrt_now_ns() + PL_WRITER_PERIOD_NS, pl_wq_job, p) < 0) { pl_fail(p, "the data set's writer did not start"); return -1; }
     return 0;
 }
 
 /* Every queued write done, the writer's thread joined. */
 int pl_writer_close(pl_player* p) {
     if (!p->writer_open) return 0;
-    p->wq_kicked = -1;
-    pl_wq_kick(p);
+    pl_st(&p->wq_stop, 1);
     yrt_worker_close(&p->writer);   /* runs a pending job first */
     p->writer_open = false;
     pl_wq_job(p, NULL);             /* anything queued after that job began */
@@ -365,6 +361,9 @@ static int pl_dataset_open(pl_player* p) {
         yjs_set(&a, s, "devices", roles);
     }
     if (!p->args.sim) {
+        /* which profile bound the roles: a real run with no --rig takes the
+         * user's own, so the data says which file that was */
+        yjs_set(&a, s, "rig_profile", p->rig_path[0] ? yjs_new_stringz(&a, p->rig_path) : yjs_new(&a, YJS_NULL));
         /* the gfx's programs: from the cache or compiled at open */
         ygfx_describe(&p->gfx, line, sizeof line);
         yjs_set(&a, s, "gfx", yjs_new_stringz(&a, line));
@@ -960,11 +959,7 @@ static pl_row* pl_row_new(pl_player* p) {
     }
     /* the writer still reads the slot's last row: 16 trials behind, so
      * only a stalled disk gets here */
-    while (pl_ld(&r->queued)) {
-        p->wq_kicked = -1;
-        pl_wq_kick(p);
-        yrt_sleep_ns(YRT_MS(1));
-    }
+    while (pl_ld(&r->queued)) yrt_sleep_ns(YRT_MS(1));
     {
         char* keep = r->text;
         memset(r, 0, offsetof(pl_row, text));
@@ -1226,10 +1221,7 @@ static int pl_row_hand(pl_player* p, pl_row* r) {
     memset(&j, 0, sizeof j);
     j.type = PL_WJ_ROW;
     j.id = (int)(r - p->rows);
-    if (pl_wq_push(p, &j) < 0) return -1;
-    p->wq_kicked = -1;   /* a row goes to the disk this frame: a panic keeps it */
-    pl_wq_kick(p);
-    return 0;
+    return pl_wq_push(p, &j);
 }
 
 void pl_row_write_oldest(pl_player* p) {
@@ -2129,7 +2121,6 @@ int pl_run(pl_player* p) {
             pl_loop_active = 0;
         }
         if (r < 0) return -1;
-        pl_wq_kick(p);   /* this frame's records, after its work */
         if (r == 1) {   /* the session ended before this frame drew: a blank frame */
             ygfx_begin(&p->gfx, &f);
             ygfx_end(&p->gfx);

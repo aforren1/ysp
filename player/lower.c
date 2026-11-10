@@ -1660,6 +1660,16 @@ static void pl_hex(const uint8_t* id, char out[65]) {
     out[64] = 0;
 }
 
+/* The profile's file, for session.json: a path as given, or the user's
+ * rig folder's NAME.json (profile.json without a name). */
+static void pl_rig_path(pl_player* p, const char* a) {
+    char dir[512];
+    bool file = a && (strchr(a, '/') || strchr(a, '\\') || (strlen(a) > 5 && strcmp(a + strlen(a) - 5, ".json") == 0));
+    p->rig_path[0] = 0;
+    if (file) snprintf(p->rig_path, sizeof p->rig_path, "%s", a);
+    else if (yrig_dir(dir, sizeof dir) == YRIG_OK && yrig_path(dir, a, p->rig_path, sizeof p->rig_path) != YRIG_OK) p->rig_path[0] = 0;
+}
+
 /* --rig FILE (a path) or --rig NAME (a profile in the user's rig folder,
  * ysp/rigfile.h WHERE IT LIVES). A real run with no --rig takes the
  * folder's profile.json when there is one: the rig's own file binds its
@@ -1674,10 +1684,12 @@ static int pl_rig_load(pl_player* p) {
         bool file = strchr(a, '/') || strchr(a, '\\') || (strlen(a) > 5 && strcmp(a + strlen(a) - 5, ".json") == 0);
         rc = file ? yrig_load_file(p->rig, a, err, sizeof err) : yrig_load(p->rig, a, err, sizeof err);
         if (rc != YRIG_OK) { pl_fail(p, "the rig profile '%s': %s", a, err); return -1; }
+        pl_rig_path(p, a);
     } else if (!p->args.sim) {
         rc = yrig_load(p->rig, NULL, err, sizeof err);
         if (rc == YRIG_ERR_MISSING || rc == YRIG_ERR_FOLDER) return 0;   /* no profile: keyboard roles only */
         if (rc != YRIG_OK) { pl_fail(p, "the rig profile: %s", err); return -1; }
+        pl_rig_path(p, NULL);
     } else {
         return 0;
     }

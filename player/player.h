@@ -82,6 +82,10 @@ enum {
     PL_WRITE_QUEUE    = 8192   /* writes the writer may lag behind: about a
                               * minute of frames and their events at 60 Hz  */
 };
+enum {
+    PL_WRITER_PERIOD_NS = 2000000   /* the writer looks at its queue this often:
+                                     * a row is on disk 2 ms after it is final */
+};
 /* pl_val.flags beyond the loader's: a trial seed (text is "x" and 16 hex digits,
  * the spelling of the trial_seed column); a session field that was not given
  * (text is empty, a number reads as 0). */
@@ -459,6 +463,7 @@ struct pl_player {
     yrig_profile* rig;
     bool      have_rig;
     char      rig_hash[65];
+    char      rig_path[PL_MAX_PATH];   /* the profile's file ("" without one) */
     ycol_cal  cal;
     bool      have_cal;
     ycol_ctx  cx;
@@ -508,7 +513,7 @@ struct pl_player {
     pl_wjob*    wq;                /* PL_WRITE_QUEUE                     */
     int         wq_head, wq_tail;  /* the writer's, the frame thread's;
                                     * read across threads atomically     */
-    int         wq_kicked;         /* the tail at the last kick          */
+    int         wq_stop;           /* the writer's job runs once more    */
     int         wfail;             /* the writer failed: werror says why */
     char        werror[512];
 

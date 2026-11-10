@@ -368,7 +368,11 @@ def run_real(ctx, name, pack, plan, rig, extra=(), silent_every=7, abort_after=N
     time.sleep(1.5)   # X adds a new keyboard about a second after its node (docs/screen.md)
     sent = []
     out_lines = []
-    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    # an empty user config folder: a run with no --rig would load the
+    # user's own rig profile, and the cases must not depend on it
+    cfg = os.path.join(ctx.out, "config")
+    os.makedirs(cfg, mode=0o700, exist_ok=True)
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=dict(os.environ, XDG_CONFIG_HOME=cfg))
     try:
         line = p.stdout.readline()
         out_lines.append(line)
@@ -511,6 +515,9 @@ def case_example(ctx, name):
             return
         frame_report(name, d)
         rows = check_data(name, sim_dir, d, plan, sent, frm, duration, min_rt)
+        with open(os.path.join(d, "session.json")) as f:
+            used = json.load(f).get("rig_profile", "missing")
+        check(used == rig, "%s: session.json rig_profile %s, the run's %s" % (name, used, rig))
         if pty:
             check_bytes(name, d, pty, rows)
     finally:
@@ -891,10 +898,17 @@ def case_refuse(ctx):
     tier_pack = os.path.join(ctx.out, "tier1.ysppak")
     subprocess.check_call([ctx.ypak, "build", "pack.json", "-o", tier_pack], cwd=work, stdout=subprocess.DEVNULL)
 
+    # the user's rig folder: an empty one of this run's, so "no rig" holds
+    # whatever ~/.config/ysp/rig has (a real run with no --rig loads it)
+    cfg = os.path.join(ctx.out, "refuse_config")
+    shutil.rmtree(cfg, ignore_errors=True)
+    os.makedirs(cfg, mode=0o700)
+    env = dict(os.environ, XDG_CONFIG_HOME=cfg)
+
     def run(args, tag):
         out = os.path.join(ctx.out, "refuse_" + tag)
         shutil.rmtree(out, ignore_errors=True)
-        r = subprocess.run([ctx.player] + args + ["--out", out, "--field", "participant=1"], capture_output=True, text=True, timeout=60)
+        r = subprocess.run([ctx.player] + args + ["--out", out, "--field", "participant=1"], capture_output=True, text=True, timeout=60, env=env)
         return r.returncode, (r.stdout + r.stderr).strip(), os.path.exists(out)
 
     rc, msg, made = run([tier_pack, "--windowed"], "tier")
