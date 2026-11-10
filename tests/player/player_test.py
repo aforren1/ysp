@@ -797,12 +797,60 @@ def t_r2_low(ctx):
     check(r3.rc == 0 and [x["a"] for x in r3.trials] == ["q", "v"], "a table column here and a vars there share the column: %s %s" % (r3.err, [x.get("a") for x in r3.trials]))
 
 
+def t_r2_relaxed(ctx):
+    # ysp/experiment.h 0.1.2: definitions 0.1.1 refused run, on presses and timeouts
+    def script(name, rows):
+        path = os.path.join(ctx.out, name)
+        with open(path, "w", newline="\n") as f:
+            f.write("trial_index,response,rt_s,hold_s\n" + "".join("%d,%s,%s,%s\n" % ((i,) + r) for i, r in enumerate(rows)))
+        return ["--participant", "script:" + path]
+    press = lambda k, rt: (k, str(rt), "0.05")
+    silent = ("", "0", "0")
+    methods = {"st": {"type": "stair", "start": 0.5, "n_up": 1, "n_down": 1, "step_type": "lin", "steps": [0.1], "stop_trials": 3}}
+    # time_elapsed_s counts from the session's start: a trial's length is the
+    # step between rows (plus the one frame between trials)
+    def el(r):
+        t = [float(x["time_elapsed_s"]) for x in r.trials]
+        return [b - a for a, b in zip([0.0] + t, t)]
+    # outcome and method_value: lookups by $response with no "" key
+    d = base({"t": tmpl(key_answer="left", extra={"outcome": {"by": "$response", "map": {"left": 1, "right": 0}},
+                                                  "method_value": {"by": "$responded", "map": {"true": {"by": "$response", "map": {"left": "$level", "right": 0.2}}}}})},
+             [{"name": "l", "trial": "t", "tracks": ["st"]}], methods=methods)
+    r = Run(ctx, "r2_relax_rsp", d, args=script("rx1.csv", [press("left", 0.2), silent, press("right", 0.2), press("left", 0.2)]))
+    check(r.rc == 0 and [x["outcome"] for x in r.trials] == ["correct", "timeout", "wrong", "correct"], "outcome and method_value by $response: %s %s" % (r.err, [x["outcome"] for x in r.trials]))
+    # no deadline: $rt_s in a number key
+    d = base({"t": {"events": [{"on": "s"}], "response": {"role": "r", "choices": ["left"], "from": "s", "duration_s": 0},
+                    "after": [{"wait_s": "$rt_s"}, {"off": "s"}]}}, [{"name": "l", "trial": "t"}])
+    r = Run(ctx, "r2_relax_nodl", d, args=script("rx2.csv", [press("left", 0.3)]))
+    check(r.rc == 0 and abs(el(r)[0] - 0.6) < 0.05, "wait_s $rt_s with no deadline: %s %s" % (r.err, el(r)))
+    # the "true" entry of a lookup by $responded reads $rt_s
+    d = base({"t": tmpl(after=[{"wait_s": {"by": "$responded", "map": {"true": "$rt_s", "false": 0.5}}}])}, [{"name": "l", "trial": "t", "rules": ["reps 2"]}])
+    r = Run(ctx, "r2_relax_byresp", d, args=script("rx3.csv", [press("left", 0.2), silent]))
+    check(r.rc == 0 and len(r.trials) == 2 and abs(el(r)[0] - 0.4) < 0.05 and abs(el(r)[1] - 1.5) < 0.04, "a lookup by $responded reads $rt_s: %s %s" % (r.err, el(r)))
+    # the steps of if $responded: a lookup by $response with no "" key
+    d = base({"t": tmpl(after=[{"if": "$responded", "steps": [{"wait_s": {"by": "$response", "map": {"left": "$rt_s", "right": 0.1}}}]}])},
+             [{"name": "l", "trial": "t", "rules": ["reps 2"]}])
+    r = Run(ctx, "r2_relax_if", d, args=script("rx4.csv", [press("left", 0.3), silent]))
+    check(r.rc == 0 and len(r.trials) == 2 and abs(el(r)[0] - 0.6) < 0.05 and abs(el(r)[1] - 1.0) < 0.04, "if $responded: %s %s" % (r.err, el(r)))
+    # a mixed leaf: $level in a method's entry of a lookup by $method, also through vars
+    d = base({"t": tmpl(key_answer="left", extra={"method_value": {"by": "$response", "map": {"left": "$level", "right": "$level"}},
+                                                  "columns": {"wv": {"by": "$method", "map": {"st": "$level", "": "$n"}}, "hv": "$x"}})},
+             [{"name": "l", "trial": "t", "tracks": ["st"], "track_rate": 0.5, "timeline_variables": "x.pstb",
+               "vars": {"x": {"by": "$method", "map": {"st": "$level", "": 2}}}}], methods=methods,
+             stimuli={"s": {"kind": "shape", "w": {"by": "$method", "map": {"st": "$level", "": "$n"}}, "h": "$x"}, "t": {"kind": "shape"}})
+    r = Run(ctx, "r2_relax_level", d, tables={"x": "n\n7\n"}, args=["--rt", "0.2"])
+    tr = [x for x in r.trials if x["track"] != "-1"]
+    cd = [x for x in r.trials if x["track"] == "-1"]
+    check(r.rc == 0 and tr and cd and all(x["wv"] == x["level"] and x["hv"] == x["level"] for x in tr) and all(x["wv"] == "7" and x["hv"] == "2" for x in cd),
+          "$level by $method on a mixed leaf: %s %s" % (r.err, [(x.get("track"), x.get("wv"), x.get("hv")) for x in r.trials]))
+
+
 TESTS = [t_nested, t_if_unless, t_empty_and_zero, t_loop, t_requeue, t_track_ends, t_lookup_keys, t_triggers, t_after_timing, t_outcomes,
          t_method_update, t_seeds, t_refused, t_unused_stim, t_record_data, t_fix_density, t_fix_key_reapply, t_fix_stale_rdk,
          t_fix_timeout_values, t_fix_any_key, t_fix_from_in_if, t_fix_shown_twice, t_fix_vars_data, t_fix_sound_twice, t_fix_rdk_limit,
          t_fix_record_inherit, t_fix_backward_at, t_fix_refusals, t_fix_michelson_order, t_fix_texture_vars, t_fix_walk_budget,
          t_fix_data_set, t_fix_check_all_leaves, t_fix_release_order, t_fix_key_var_reapply,
-         t_r2_release_other_template, t_r2_yield_draws_nothing, t_r2_low]
+         t_r2_release_other_template, t_r2_yield_draws_nothing, t_r2_low, t_r2_relaxed]
 
 
 def main():
