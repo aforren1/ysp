@@ -1314,16 +1314,15 @@ jobs:
           "$PY" tools/vendor_layout.py --write --cache ~/ysp-layout-tarballs
 
       # lodepng, stb_image and pl_mpeg for the pack tool (docs/pack.md), each at a commit,
-      # each checked by SHA-256 (tools/vendor_pack.py).
-      - name: lodepng cache (Windows, Linux)
-        if: runner.os != 'macOS'
+      # each checked by SHA-256 (tools/vendor_pack.py). macOS builds the core
+      # tool (no glyph runs): the player's packs need it.
+      - name: lodepng cache
         uses: actions/cache@v6
         with:
           path: ~/ysp-pack-files
           key: lodepng-${{ hashFiles('tools/vendor_pack.py') }}
 
-      - name: lodepng (Windows, Linux)
-        if: runner.os != 'macOS'
+      - name: lodepng
         shell: bash
         run: |
           PY=$(command -v python3 || command -v python)
@@ -1332,7 +1331,7 @@ jobs:
       # miniaudio for the two response examples with a sound (null device).
       - name: Configure
         shell: bash
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DSDL3_DIR="$SDL3_DIR" -DYSP_BUILD_LOOPBACK=ON -DYSP_FETCH_MINIAUDIO=ON -DYSP_FETCH_PL_MPEG=ON ${{ runner.os != 'macOS' && '-DYSP_BUILD_LAYOUT=ON -DYSP_BUILD_PACK=ON' || '' }} ${{ runner.os == 'Linux' && '-DYSP_BUILD_PLAYER=ON' || '' }}
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DSDL3_DIR="$SDL3_DIR" -DYSP_BUILD_LOOPBACK=ON -DYSP_FETCH_MINIAUDIO=ON -DYSP_FETCH_PL_MPEG=ON -DYSP_BUILD_PACK=ON -DYSP_BUILD_PLAYER=ON ${{ runner.os != 'macOS' && '-DYSP_BUILD_LAYOUT=ON' || '' }}
 
       # The Headers job has no SDL3, so a screen, gfx or video program left
       # out of this list is compiled nowhere on CI. ctest below runs every
@@ -1523,21 +1522,30 @@ jobs:
 
       # The player (docs/player.md): the four worked examples on the simulated
       # display, compared column by column with their C programs where one
-      # realized design can be given to both (tests/player/compare.py).
-      - name: Player (Linux)
-        if: runner.os == 'Linux'
+      # realized design can be given to both (tests/player/compare.py), and
+      # the system tests (tests/player/player_test.py). --sim only: CI has no
+      # display for a real run (tests/player/real_test.py). macOS has no
+      # glyph runs (the core pack tool), so the Stroop comparison is skipped
+      # there.
+      - name: Player
         shell: bash
         run: |
           set -eu
-          cmake --build build --config Release --target ysp_player player_make_rig test_player_eval ypak trial_rdk trial_stroop trial_2afc_adaptive device_trigger_flip
+          stroop=trial_stroop
+          if [ "$RUNNER_OS" = macOS ]; then stroop=""; fi
+          cmake --build build --config Release --target ysp_player player_make_rig test_player_eval ypak trial_rdk $stroop trial_2afc_adaptive device_trigger_flip
           ctest --test-dir build -C Release -R test_player --output-on-failure
-          bin=build/player
+          if [ "$RUNNER_OS" = Windows ]; then bin=build/player/Release; ypak=build/pack/Release/ypak; else bin=build/player; ypak=build/pack/ypak; fi
           work=$RUNNER_TEMP/player; mkdir -p "$work"
-          ( cd tests/player/rdk && "$OLDPWD/build/pack/ypak" build pack.json -o "$work/rdk.ysppak" )
+          ( cd tests/player/rdk && "$OLDPWD/$ypak" build pack.json -o "$work/rdk.ysppak" )
           "$bin/ysp_player" "$work/rdk.ysppak" --sim --seed 1 --field participant=1 --out "$work/rdk1"
           "$bin/ysp_player" "$work/rdk.ysppak" --sim --seed 1 --field participant=1 --out "$work/rdk2"
           cmp "$work/rdk1/trials.csv" "$work/rdk2/trials.csv"
           if "$bin/ysp_player" 2>/dev/null; then echo "::error::ysp_player with no arguments exited 0"; exit 1; fi
+          # a real run is refused without SDL's display; here only the argument checks
+          if "$bin/ysp_player" "$work/rdk.ysppak" --out "$work/x" --participant correct 2>/dev/null; then
+            echo "::error::--participant without --sim exited 0"; exit 1
+          fi
 
       # The pack tool (docs/pack.md): its test builds a pack of every kind,
       # verifies, rebuilds and appends it, and compares every entry with
@@ -1611,3 +1619,9 @@ jobs:
           gcc -std=c11 $W $MA -DYSP_TEST_SCREEN_FIRST -o mingw_order_sa_c.exe tests/compile/order_audio_screen.c -L"$SDL3_MINGW/lib" -lSDL3
           g++ -std=c++17 $W $MA -DYSP_TEST_SCREEN_FIRST -o mingw_order_sa_cxx.exe tests/compile/order_audio_screen.cpp -L"$SDL3_MINGW/lib" -lSDL3
           ./mingw_order_as_c.exe; ./mingw_order_as_cxx.exe; ./mingw_order_sa_c.exe; ./mingw_order_sa_cxx.exe
+          # the player (docs/player.md), every source with MinGW-w64, and its
+          # system tests on --sim with the MSVC build's ypak and player_make_rig
+          gcc -std=c11 $W $MA -Iplayer -o mingw_player.exe player/impl.c player/eval.c player/host.c player/lower.c player/run.c player/main.c \
+              -L"$SDL3_MINGW/lib" -lSDL3 -lsetupapi -lole32 -lm
+          PY=$(command -v python3 || command -v python)
+          "$PY" tests/player/player_test.py --bin build --player "$PWD/mingw_player.exe" --out "$RUNNER_TEMP/mingw_player"
