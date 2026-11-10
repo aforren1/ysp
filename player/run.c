@@ -849,7 +849,6 @@ static int pl_row_fill(pl_player* p, pl_row* r) {
     for (i = 0; i < p->n_cols; i++) {
         int src = p->csrc[i].source;
         const char* name = p->cols[i].name;
-        char buf[256];
         const char* s = NULL;
         int64_t v = 0;
         double d = 0;
@@ -857,8 +856,7 @@ static int pl_row_fill(pl_player* p, pl_row* r) {
         switch (src) {
         case CS_FIELD: {
             int f = p->csrc[i].ref;
-            pl_val_text(&p->field_values[f], buf, sizeof buf);
-            s = pl_row_str(r, buf);
+            if (pl_cell_text(p, r, name, &p->field_values[f], &s) < 0) return -1;
             have = 3;
             break;
         }
