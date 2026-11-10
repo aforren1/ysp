@@ -2216,7 +2216,7 @@ int pl_load(pl_player* p, const pl_args* a) {
     if (pl_cal_load(p) < 0) return -1;
 
     if (pl_channels_assign(p) < 0) return -1;
-    if (pl_roles_bind(p) < 0 || pl_outputs_open(p) < 0) return -1;
+    if (pl_writer_open(p) < 0 || pl_roles_bind(p) < 0 || pl_outputs_open(p) < 0) return -1;
     if (pl_screen_open(p) < 0) return -1;
     if (pl_inputs_open(p) < 0) return -1;
 
@@ -2414,6 +2414,7 @@ int pl_load(pl_player* p, const pl_args* a) {
 
 void pl_close(pl_player* p) {
     int i;
+    (void)pl_writer_close(p);   /* its last writes go to the data set, still open */
     for (i = 0; i < p->n_stims && p->stims; i++) {
         pl_stim* s = &p->stims[i];
         if (s->def && s->def->kind == YEXP_RDK && s->xy) yrdk_close(&s->field);

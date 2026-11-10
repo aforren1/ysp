@@ -99,8 +99,12 @@ int main(int argc, char** argv) {
         return 3;
     }
     if (a.measure) {
-        printf("ysp_player: frame work over %lld frames: max %.1f us; trial start max %.1f us; %lld frames over 16 ms\n", (long long)g_p.work_n,
-               (double)g_p.work_max_ns / 1e3, (double)g_p.work_trial_max_ns / 1e3, (long long)g_p.work_over_16ms);
+        printf("ysp_player: frame work over %lld frames: max %.1f us (frame %lld); trial start max %.1f us; %lld frames over 16 ms\n",
+               (long long)g_p.work_n, (double)g_p.work_max_ns / 1e3, (long long)g_p.work_max_frame, (double)g_p.work_trial_max_ns / 1e3,
+               (long long)g_p.work_over_16ms);
+        if (!a.sim)
+            printf("ysp_player: the input (SDL's pump and the collectors) max %.1f us (frame %lld)\n", (double)g_p.work_input_max_ns / 1e3,
+                   (long long)g_p.work_input_max_frame);
     }
     printf("ysp_player: %d trials, %s, seed %llu, experiment %s\n", g_p.trials_done, a.out_dir, (unsigned long long)g_p.seed, g_p.experiment_id);
     pl_close(&g_p);

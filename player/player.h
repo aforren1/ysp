@@ -72,8 +72,10 @@ enum {
                               * device record (a real run)                  */
     PL_DEV_RING       = 4096,  /* device records between two frames          */
     PL_DEV_DRAIN      = 256,   /* records read per drain call                */
-    PL_LEAD_IN        = 30     /* a real run's blank frames before the data
+    PL_LEAD_IN        = 30,    /* a real run's blank frames before the data
                               * set opens: about 0.5 s at 60 Hz             */
+    PL_WRITE_QUEUE    = 8192   /* writes the writer may lag behind: about a
+                              * minute of frames and their events at 60 Hz  */
 };
 /* pl_val.flags beyond the loader's: a trial seed (text is "x" and 16 hex digits,
  * the spelling of the trial_seed column); a session field that was not given
@@ -321,7 +323,21 @@ typedef struct pl_row {
     size_t  text_len;
     yrsp_result res;
     bool    has_res;
+    int     queued;          /* handed to the writer and not yet written:
+                              * the slot is not free (read and written
+                              * atomically: the writer thread clears it) */
 } pl_row;
+
+/* A write for the data set's writer (pl_wq_*, run.c): a real run's frame
+ * thread never calls write() itself, because on ext4 one append blocked a
+ * frame for 18 ms while the kernel wrote the file back (docs/player.md). */
+enum { PL_WJ_FRAME = 1, PL_WJ_EVENT, PL_WJ_STREAM, PL_WJ_ROW };
+typedef struct pl_rdk_step_row { int trial_index, update; int64_t t_ns; double coherence, direction, speed; } pl_rdk_step_row;
+typedef struct pl_wjob {
+    int type;
+    int id;                  /* STREAM: the stream; ROW: the row's slot   */
+    union { yds_frame frame; yds_event event; pl_rdk_step_row step; } u;
+} pl_wjob;
 
 /* --- arguments ---------------------------------------------------------- */
 
@@ -359,8 +375,6 @@ typedef struct pl_args {
 typedef struct pl_script_row { int trial; char* resp; bool silent; double rt_s, hold_s; } pl_script_row;
 
 typedef struct pl_node_seed_rec { const char* path; int iteration; uint64_t seed; } pl_node_seed_rec;
-
-typedef struct pl_rdk_step_row { int trial_index, update; int64_t t_ns; double coherence, direction, speed; } pl_rdk_step_row;
 
 typedef struct pl_csrc pl_csrc;
 
@@ -473,6 +487,16 @@ struct pl_player {
     int         abort_trial;       /* the trial that was running, or -1  */
     char        panic_path[PL_MAX_PATH];   /* DIR/panic.json             */
 
+    /* the data set's writer (a real run; --sim writes in place) */
+    yrt_worker  writer;
+    bool        writer_open;
+    pl_wjob*    wq;                /* PL_WRITE_QUEUE                     */
+    int         wq_head, wq_tail;  /* the writer's, the frame thread's;
+                                    * read across threads atomically     */
+    int         wq_kicked;         /* the tail at the last kick          */
+    int         wfail;             /* the writer failed: werror says why */
+    char        werror[512];
+
     /* channels: one per stimulus visibility and per driven property */
     ytl_timeline tl;
     ytl_desc   tl_desc;
@@ -549,6 +573,8 @@ struct pl_player {
      * measure is false */
     bool      measure;
     int64_t   work_max_ns, work_trial_max_ns, work_n, work_over_16ms;
+    int64_t   work_max_frame;
+    int64_t   work_input_max_ns, work_input_max_frame;   /* a real run's input: SDL's pump */
 };
 
 /* --- load (lower.c) ------------------------------------------------------ */
@@ -607,6 +633,9 @@ void pl_row_write_oldest(pl_player* p);
 int  pl_event_queue(pl_player* p, const yds_event* ev);
 int  pl_events_flush(pl_player* p, bool all);
 void pl_trigger_sink(void* ctx, const yscr_trigger_info* info);
+/* The data set's writer thread (a real run). */
+int  pl_writer_open(pl_player* p);
+int  pl_writer_close(pl_player* p);
 extern volatile int pl_loop_active;   /* the frame loop is running: a test counts allocations against it */
 
 #ifdef __cplusplus

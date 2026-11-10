@@ -42,6 +42,111 @@ void pl_trigger_sink(void* ctx, const yscr_trigger_info* info) {
 #endif
 }
 
+/* --- the data set's writer ----------------------------------------------- */
+
+/* One int that two threads read and write: the queue's ends and a row's
+ * queued flag. */
+#if defined(_MSC_VER)
+static int pl_ld(const int* x) { return (int)_InterlockedCompareExchange((volatile long*)(uintptr_t)x, 0, 0); }
+static void pl_st(int* x, int v) { (void)_InterlockedExchange((volatile long*)x, (long)v); }
+#else
+static int pl_ld(const int* x) { return __atomic_load_n(x, __ATOMIC_ACQUIRE); }
+static void pl_st(int* x, int v) { __atomic_store_n(x, v, __ATOMIC_RELEASE); }
+#endif
+
+static int pl_row_flush(pl_player* p, pl_row* r);
+
+/* One write. The writer thread's, or the frame thread's in --sim; the
+ * message goes to werror, which only this side writes until wfail is set. */
+static int pl_wq_run(pl_player* p, pl_wjob* j) {
+    int rc = 0;
+    switch (j->type) {
+    case PL_WJ_FRAME:
+        if (yds_write_frame(&p->ds, &j->u.frame) < 0) { snprintf(p->werror, sizeof p->werror, "frames.csv: %s", yds_error(&p->ds)); rc = -1; }
+        break;
+    case PL_WJ_EVENT:
+        if (yds_write_event(&p->ds, &j->u.event) < 0) { snprintf(p->werror, sizeof p->werror, "events.csv: %s", yds_error(&p->ds)); rc = -1; }
+        break;
+    case PL_WJ_STREAM:
+        if (yds_write_stream(&p->ds, j->id, &j->u.step) < 0) { snprintf(p->werror, sizeof p->werror, "an rdk's stream: %s", yds_error(&p->ds)); rc = -1; }
+        break;
+    case PL_WJ_ROW:
+        rc = pl_row_flush(p, &p->rows[j->id]);
+        pl_st(&p->rows[j->id].queued, 0);
+        break;
+    default:
+        break;
+    }
+    if (rc < 0) pl_st(&p->wfail, 1);
+    return rc;
+}
+
+/* The writer's job: every write queued so far, in order. */
+static void pl_wq_job(void* ctx, const yrt_job_info* info) {
+    pl_player* p = (pl_player*)ctx;
+    int h = pl_ld(&p->wq_head);
+    (void)info;
+    while (h != pl_ld(&p->wq_tail)) {
+        if (!pl_ld(&p->wfail)) (void)pl_wq_run(p, &p->wq[h % PL_WRITE_QUEUE]);
+        h++;
+        pl_st(&p->wq_head, h);
+    }
+}
+
+/* The writer runs what was queued since the last kick. */
+static void pl_wq_kick(pl_player* p) {
+    if (!p->writer_open || p->wq_kicked == p->wq_tail) return;
+    p->wq_kicked = p->wq_tail;
+    (void)yrt_worker_submit(&p->writer, 0, pl_wq_job, p);
+}
+
+/* Queue a write; --sim (no writer) writes it in place. A full queue (the
+ * writer a minute behind) waits for room: the frame is late, and the data
+ * stays whole. */
+static int pl_wq_push(pl_player* p, const pl_wjob* j) {
+    if (!p->writer_open) {
+        pl_wjob c = *j;
+        if (pl_wq_run(p, &c) < 0) { pl_fail(p, "%s", p->werror); return -1; }
+        return 0;
+    }
+    if (pl_ld(&p->wfail)) { pl_fail(p, "%s", p->werror); return -1; }
+    while (p->wq_tail - pl_ld(&p->wq_head) >= PL_WRITE_QUEUE) {
+        p->wq_kicked = -1;
+        pl_wq_kick(p);
+        yrt_sleep_ns(YRT_MS(1));
+        if (pl_ld(&p->wfail)) { pl_fail(p, "%s", p->werror); return -1; }
+    }
+    p->wq[p->wq_tail % PL_WRITE_QUEUE] = *j;
+    pl_st(&p->wq_tail, p->wq_tail + 1);
+    return 0;
+}
+
+/* The writer, before the screen: its thread starts SCHED_OTHER and stays
+ * there (ysp/rt.h), whatever the frame thread gets later. */
+int pl_writer_open(pl_player* p) {
+    yrt_worker_desc wd;
+    if (p->args.sim) return 0;
+    p->wq = (pl_wjob*)pl_alloc(p, sizeof(pl_wjob) * PL_WRITE_QUEUE);
+    if (!p->wq) return -1;
+    memset(&wd, 0, sizeof wd);
+    wd.no_elevate = true;   /* it waits on the disk; a frame never waits on it */
+    if (!yrt_worker_open(&p->writer, &wd)) { pl_fail(p, "the data set's writer: %s", yrt_worker_error(&p->writer)); return -1; }
+    p->writer_open = true;
+    return 0;
+}
+
+/* Every queued write done, the writer's thread joined. */
+int pl_writer_close(pl_player* p) {
+    if (!p->writer_open) return 0;
+    p->wq_kicked = -1;
+    pl_wq_kick(p);
+    yrt_worker_close(&p->writer);   /* runs a pending job first */
+    p->writer_open = false;
+    pl_wq_job(p, NULL);             /* anything queued after that job began */
+    if (p->wfail) { pl_fail(p, "%s", p->werror); return -1; }
+    return 0;
+}
+
 /* --- columns (2.10) ---------------------------------------------------- */
 
 enum {
@@ -848,6 +953,13 @@ static pl_row* pl_row_new(pl_player* p) {
         pl_row_write_oldest(p);
         r = &p->rows[p->row_head];
     }
+    /* the writer still reads the slot's last row: 16 trials behind, so
+     * only a stalled disk gets here */
+    while (pl_ld(&r->queued)) {
+        p->wq_kicked = -1;
+        pl_wq_kick(p);
+        yrt_sleep_ns(YRT_MS(1));
+    }
     {
         char* keep = r->text;
         memset(r, 0, offsetof(pl_row, text));
@@ -1043,13 +1155,10 @@ static int pl_stat_index(const pl_row* r, int stim_i) {
 /* The row's flip-record-dependent columns, then the row. */
 static int pl_rdk_flush(pl_player* p, pl_stim* s);
 
+/* A row to trials.csv: the writer's side (pl_wq_run()). */
 static int pl_row_flush(pl_player* p, pl_row* r) {
     ytr_data* w = yds_trials_writer(&p->ds);
     int i;
-    if (!r->used) return 0;
-    /* record_data false: nothing may be set, or the values would stay on the
-     * writer and land in the next row that does not set those columns */
-    if (!r->write_row) { r->used = false; return 0; }
     for (i = 0; i < r->n_cells; i++) {
         int rc = 0;
         switch (r->cells[i].type) {
@@ -1062,7 +1171,7 @@ static int pl_row_flush(pl_player* p, pl_row* r) {
         case 5: rc = ytr_data_set_bool(w, r->cells[i].col, r->cells[i].i != 0); break;
         default: break;
         }
-        if (rc < 0) { pl_fail(p, "the row of trial %d: %s", r->trial_index, ytr_data_error(w)); return -1; }
+        if (rc < 0) { snprintf(p->werror, sizeof p->werror, "the row of trial %d: %s", r->trial_index, ytr_data_error(w)); return -1; }
     }
     for (i = 0; i < p->n_cols; i++) {
         int src = p->csrc[i].source;
@@ -1091,17 +1200,35 @@ static int pl_row_flush(pl_player* p, pl_row* r) {
         }
     }
     if (r->has_res) {
-        if (yrsp_data_set(w, &r->res) < 0) { pl_fail(p, "the row of trial %d: %s", r->trial_index, ytr_data_error(w)); return -1; }
+        if (yrsp_data_set(w, &r->res) < 0) { snprintf(p->werror, sizeof p->werror, "the row of trial %d: %s", r->trial_index, ytr_data_error(w)); return -1; }
     }
-    if (yds_write_trial(&p->ds, NULL) < 0) { pl_fail(p, "the trial row: %s", yds_error(&p->ds)); return -1; }
+    if (yds_write_trial(&p->ds, NULL) < 0) { snprintf(p->werror, sizeof p->werror, "the trial row: %s", yds_error(&p->ds)); return -1; }
+    return 0;
+}
+
+/* A finished row leaves the pending ring for the writer. The slot is free
+ * again when the writer clears queued. record_data false: nothing is set,
+ * or the values would stay on the writer and land in the next row that
+ * does not set those columns. */
+static int pl_row_hand(pl_player* p, pl_row* r) {
+    pl_wjob j;
+    if (!r->used) return 0;
     r->used = false;
+    if (!r->write_row) return 0;
+    pl_st(&r->queued, 1);
+    memset(&j, 0, sizeof j);
+    j.type = PL_WJ_ROW;
+    j.id = (int)(r - p->rows);
+    if (pl_wq_push(p, &j) < 0) return -1;
+    p->wq_kicked = -1;   /* a row goes to the disk this frame: a panic keeps it */
+    pl_wq_kick(p);
     return 0;
 }
 
 void pl_row_write_oldest(pl_player* p) {
     pl_row* r = &p->rows[p->row_tail];
     if (!r->used) return;
-    (void)pl_row_flush(p, r);
+    (void)pl_row_hand(p, r);
     p->row_tail = (p->row_tail + 1) % PL_PENDING_ROWS;
 }
 
@@ -1139,7 +1266,13 @@ static int pl_on_record(pl_player* p, const yscr_record* rec) {
          * virtual clock's, so two --sim runs would differ only in them */
         fr.evaluate_ns = fr.script_ns = fr.draw_ns = fr.upload_ns = fr.swap_ns = fr.gpu_ns = YTR_MISSING_NS;
     }
-    if (yds_write_frame(&p->ds, &fr) < 0) { pl_fail(p, "frames.csv: %s", yds_error(&p->ds)); return -1; }
+    {
+        pl_wjob j;
+        j.type = PL_WJ_FRAME;
+        j.id = 0;
+        j.u.frame = fr;
+        if (pl_wq_push(p, &j) < 0) return -1;
+    }
     if (p->in_trial && trial == p->global_trial - 1) {
         /* the running trial: its row does not exist yet */
         pl_stats_update(p, p->stats_now, p->tmpl->n_record, rec, -1);
@@ -1159,7 +1292,7 @@ static int pl_on_record(pl_player* p, const yscr_record* rec) {
         }
     }
     while (p->rows[p->row_tail].used && p->rows[p->row_tail].final) {
-        if (pl_row_flush(p, &p->rows[p->row_tail]) < 0) return -1;
+        if (pl_row_hand(p, &p->rows[p->row_tail]) < 0) return -1;
         p->row_tail = (p->row_tail + 1) % PL_PENDING_ROWS;
     }
     (void)pl_events_flush;
@@ -1611,7 +1744,13 @@ static int pl_rdk_flush(pl_player* p, pl_stim* s) {
         sr.coherence = s->steps[k].coherence;
         sr.direction = s->steps[k].direction;
         sr.speed = s->steps[k].speed;
-        if (yds_write_stream(&p->ds, s->stream, &sr) < 0) { pl_fail(p, "the stream of '%s': %s", s->def->name, yds_error(&p->ds)); return -1; }
+        {
+            pl_wjob j;
+            j.type = PL_WJ_STREAM;
+            j.id = s->stream;
+            j.u.step = sr;
+            if (pl_wq_push(p, &j) < 0) return -1;
+        }
     }
     s->n_flushed += s->n_steps;
     s->n_steps = 0;
@@ -1702,7 +1841,14 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
      * scripted participant's key, on the frames it falls in (as the C
      * programs feed theirs). */
 #if !defined(YSCR_NO_SDL)
-    if (!p->args.sim) (void)yrsp_feed_screen(&p->scr, p->collectors, p->n_collectors);
+    if (!p->args.sim) {
+        int64_t t0 = p->args.measure ? yrt_real_ns() : 0;
+        (void)yrsp_feed_screen(&p->scr, p->collectors, p->n_collectors);
+        if (p->args.measure && yrt_real_ns() - t0 > p->work_input_max_ns) {
+            p->work_input_max_ns = yrt_real_ns() - t0;
+            p->work_input_max_frame = f->index;
+        }
+    }
 #endif
     if (p->in_trial && p->press_pending && p->tmpl->collector) {
         yrsp_input ev;
@@ -1810,8 +1956,13 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
 int pl_events_flush(pl_player* p, bool all) {
     int i;
     (void)all;
-    for (i = 0; i < p->n_events; i++)
-        if (yds_write_event(&p->ds, &p->events[i]) < 0) { pl_fail(p, "events.csv: %s", yds_error(&p->ds)); return -1; }
+    for (i = 0; i < p->n_events; i++) {
+        pl_wjob j;
+        j.type = PL_WJ_EVENT;
+        j.id = 0;
+        j.u.event = p->events[i];
+        if (pl_wq_push(p, &j) < 0) return -1;
+    }
     p->n_events = 0;
     return 0;
 }
@@ -1904,7 +2055,7 @@ int pl_run(pl_player* p) {
             pl_loop_active = 0;
             t1 = yrt_real_ns();
             p->work_n++;
-            if (t1 - t0 > p->work_max_ns) p->work_max_ns = t1 - t0;
+            if (t1 - t0 > p->work_max_ns) { p->work_max_ns = t1 - t0; p->work_max_frame = f.index; }
             if (t1 - t0 > 16000000) p->work_over_16ms++;
         } else {
             pl_loop_active = 1;
@@ -1912,6 +2063,7 @@ int pl_run(pl_player* p) {
             pl_loop_active = 0;
         }
         if (r < 0) return -1;
+        pl_wq_kick(p);   /* this frame's records, after its work */
         if (r == 1) {   /* the session ended before this frame drew: a blank frame */
             ygfx_begin(&p->gfx, &f);
             ygfx_end(&p->gfx);
@@ -1942,10 +2094,11 @@ int pl_run(pl_player* p) {
     }
     /* by count, not head != tail: a full ring has head == tail */
     for (i = 0; i < PL_PENDING_ROWS; i++) {
-        if (p->rows[p->row_tail].used && pl_row_flush(p, &p->rows[p->row_tail]) < 0) return -1;
+        if (p->rows[p->row_tail].used && pl_row_hand(p, &p->rows[p->row_tail]) < 0) return -1;
         p->row_tail = (p->row_tail + 1) % PL_PENDING_ROWS;
     }
     if (pl_events_flush(p, true) < 0) return -1;
+    if (pl_writer_close(p) < 0) return -1;   /* every row on disk before session.json says so */
     {
         char buf[32];
         yjs_arena a;
