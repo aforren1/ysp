@@ -270,7 +270,13 @@ it fires only when records stop (a frame loop that does not call
 `yrsp_update_frame()`). If it fires and a record then moves the onset,
 ENDED_EARLY can come back: `player_test.py` `t_r5_wait_final` makes it
 fire with a plan 1.2 s early, and the row is then a timeout with
-ENDED_EARLY. A first version of this bound was 4 frames, from a wrong
+ENDED_EARLY. With no deadline, the response is then empty, and an
+`after` lookup by `$response` with no `""` key stops the session: "a
+lookup has no entry for the value ''" (exit 1; the trial's row is not
+written). A plan 1.2 or 1.5 s early in `--sim` shows it
+(`--test-plan-early`, a scripted press 5 ms before the final onset).
+On a real rig it needs the records to stop for 1 s. Give such a lookup
+a `""` key, or a deadline, where that matters. A first version of this bound was 4 frames, from a wrong
 reading that a never-shown frame has no record; a landing frame 3 or
 more frames late then passed it before its record (review, 2026-11-10).
 
