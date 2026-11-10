@@ -1935,6 +1935,20 @@ static int pl_rule_make(pl_player* p, pl_role* in) {
  * a bound role's tier is worse than its min_tier; UNKNOWN is worse than
  * any (an output has no tier yet: ysp/device.h, OUTPUTS). --allow-below-tier
  * starts anyway, and session.json lists them. --sim only says so. */
+/* --allow-below-tier ROLE[,ROLE...]: the roles that may start below their
+ * min_tier; the others keep the check. */
+static bool pl_role_allowed(const pl_player* p, const char* name) {
+    const char* a = p->args.allow_below;
+    size_t n = strlen(name);
+    while (a && *a) {
+        const char* e = strchr(a, ',');
+        size_t k = e ? (size_t)(e - a) : strlen(a);
+        if (k == n && strncmp(a, name, n) == 0) return true;
+        a = e ? e + 1 : NULL;
+    }
+    return false;
+}
+
 static int pl_roles_tier(pl_player* p) {
     char msg[600];
     size_t used = 0;
@@ -1949,17 +1963,29 @@ static int pl_roles_tier(pl_player* p) {
             continue;
         }
         if (!r->rig && !r->keyboard) continue;   /* unbound: nothing to check */
-        tier = r->def->direction == 0 ? (int)r->source.tier : 0;
+        /* the rig's rule, before any device or the screen opens, so a
+         * refusal never sets full screen: yrig_source_role() gives what
+         * yrig_source() will for the device (tier 1 only for an input
+         * family with a checked bounds file). An output has no tier in
+         * ysp/rigfile.h yet: UNKNOWN */
+        if (r->def->direction == 0) {
+            yin_source none;
+            memset(&none, 0, sizeof none);
+            tier = (int)yrig_source_role(p->have_rig ? p->rig : NULL, r->def->name, none).tier;
+        } else {
+            tier = YIN_TIER_UNKNOWN;
+        }
+        r->tier = tier;
         r->below = tier == YIN_TIER_UNKNOWN || tier > r->def->min_tier;
-        if (!r->below) continue;
+        if (!r->below || pl_role_allowed(p, r->def->name)) continue;
         n++;
         if (used < sizeof msg)
             used += (size_t)snprintf(msg + used, sizeof msg - used, "%s'%s' (min_tier %d, its tier %s%.0d)", n > 1 ? ", " : "", r->def->name,
                                      r->def->min_tier, tier ? "" : "UNKNOWN", tier);
     }
-    if (n && !p->args.allow_below_tier) {
+    if (n) {
         pl_fail(p, "a role's tier is worse than its min_tier: %s. A tier comes from a checked loopback in the rig profile "
-                   "(ysp/rigfile.h, TIER); --allow-below-tier starts anyway and says so in session.json",
+                   "(ysp/rigfile.h, TIER); --allow-below-tier ROLE[,ROLE] starts anyway for those roles and says so in session.json",
                 msg);
         return -1;
     }
@@ -1988,7 +2014,7 @@ static int pl_inputs_open(pl_player* p) {
         if (r->def->direction != 0 || !r->rig) continue;
         if (pl_rule_make(p, r) < 0 || pl_role_open(p, r) < 0) return -1;
     }
-    return pl_roles_tier(p);
+    return 0;
 }
 
 static void pl_devices_close(pl_player* p) {
@@ -2282,7 +2308,7 @@ int pl_load(pl_player* p, const pl_args* a) {
     if (pl_cal_load(p) < 0) return -1;
 
     if (pl_channels_assign(p) < 0) return -1;
-    if (pl_writer_open(p) < 0 || pl_roles_bind(p) < 0 || pl_outputs_open(p) < 0) return -1;
+    if (pl_writer_open(p) < 0 || pl_roles_bind(p) < 0 || pl_roles_tier(p) < 0 || pl_outputs_open(p) < 0) return -1;
     if (pl_screen_open(p) < 0) return -1;
     if (pl_inputs_open(p) < 0) return -1;
 

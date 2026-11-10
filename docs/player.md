@@ -27,14 +27,18 @@ ysp_player PACK.ysppak --out DIR --seed 7 --field participant=1
    does not bind and that lists the family `keyboard` takes the keyboard.
    A required role with no device and no keyboard stops the start, with
    the role's name.
-3. It opens each bound device and waits up to 3 s for it to run. A device
+3. It checks each bound role's `min_tier` (2.9), before any device or the
+   display opens, so a refusal never sets full screen. A role's tier comes
+   from the rig profile: tier 1 for an input with a checked bounds
+   loopback in the profile, else UNKNOWN, which is below every
+   `min_tier`. An output role is UNKNOWN: ysp/rigfile.h gives no output a
+   tier yet. A role below its `min_tier` stops the start, with the role's
+   name and tiers. `--allow-below-tier ROLE[,ROLE]` starts anyway for the
+   roles it names; every other role keeps its check. `session.json` then
+   has `"allow_below_tier"` (the list) and each such role `"below_tier":
+   true`.
+4. It opens each bound device and waits up to 3 s for it to run. A device
    that does not answer as its family must stops the start.
-4. It checks each bound role's `min_tier` (2.9). A role's tier comes from
-   the rig profile: tier 1 when the profile names a checked loopback for
-   it, else UNKNOWN, which is below every `min_tier`. A role below its
-   `min_tier` stops the start, with the role's name and tiers.
-   `--allow-below-tier` starts anyway; `session.json` then has
-   `"allow_below_tier": true` and each such role `"below_tier": true`.
 5. It opens the display that `YSCR_BACKEND_AUTO` picks (GLX_OML on X11),
    full screen, with the panic watchdog armed, and compiles the programs
    into the user's program cache (ysp/gfx.h, PROGRAM CACHE).
@@ -88,6 +92,19 @@ tier is UNKNOWN, and a keyboard role with a `min_tier` needs
 
 With those three, the keyboard role would get its tier from
 `yrig_source_role()`, as the player already asks.
+
+An output role has the same gap. ysp/rigfile.h's rule (`yrig__tier()`,
+TIER) gives tier 1 only to an input family with a device clock and a
+checked `bounds` file; it reads an output role's `latency` file, and
+checks its SHA-256, but gives no output a tier (devices_spec.md 11.2: "No
+output has a tier"). The measurement and the file exist:
+`examples/device/out_latency.c` writes `format ysp-out-latency 1` (n, p5,
+median, p95, max of write start to edge) and the profile stores it in
+`roles.<role>.latency`. What is missing is the rule: devices_spec.md 8
+proposes tier 2 with bounds for a host write after a write-to-edge
+loopback, and 1 for a video-locked output (VPixx) after one. That is a
+decision and a change to ysp/rigfile.h, so an output role stays UNKNOWN
+here, and `--allow-below-tier` names it.
 
 ## How-to: run a pack on the simulated display
 
@@ -194,7 +211,7 @@ forced. The Report section lists them with the evidence.
 | `display.min_tier` on the simulated display | Flags frames (`BELOW_TIER`); the display is not refused |
 | `display.min_tier` in a real run | Refuses the start when the 30 blank frames before the data set opens are of a worse tier (`caps.worst_tier`; open's settle frames are judged but not counted, so the player shows its own). Every flip of the session is flagged `BELOW_TIER` as in `--sim` |
 | An input role that the rig does not bind | The keyboard when it lists the family `keyboard`; else unbound (a required one refuses the start). The rig's families have no keyboard, so a keyboard role needs no binding |
-| A role's `min_tier` (decided 2026-11-10) | A real start is refused, naming each role, when a bound role's tier is worse than its `min_tier`; UNKNOWN counts as worse. The tier is the rig profile's (`yrig_source()`, `yrig_source_role()` for a keyboard), so a keyboard is UNKNOWN today (How-to: give a keyboard a tier). An output role has no tier yet (ysp/device.h, OUTPUTS): UNKNOWN. `--allow-below-tier` starts anyway and `session.json` says so. `--sim` writes a line on stderr only |
+| A role's `min_tier` (decided 2026-11-10) | A real start is refused, naming each role, when a bound role's tier is worse than its `min_tier`; UNKNOWN counts as worse. The check runs before any device or the display opens. The tier is the rig profile's rule (`yrig_source_role()`), so a keyboard and every output role are UNKNOWN today (How-to: give a keyboard a tier). `--allow-below-tier ROLE[,ROLE]` starts anyway for those roles only and `session.json` says so. `--sim` writes a line on stderr only |
 | The response kind in a real run | The binding's: a device role's choices are its `buttons` (box events, control = the button's code); a keyboard role's are key names. `--sim` keeps the first family's kind |
 | An any-key response in a real run | Hears its role's kind only (`yrsp_desc.kinds`): a click that brings the window to the front is no response |
 | A response's `trigger` on a device role | A `ydev_rule` on the role's reader thread, its output the trigger role's device. Its codes are fixed when the device opens: the code must be a number or a lookup by `$response` of numbers, and every template that responds on the role with a trigger must give the same choices and codes, in any order; else the start stops, naming both. A template on the role with no `trigger` runs with the rule disarmed, so its presses send nothing; the rule is disarmed at each trial's end. A rule's record goes to the trial whose arm its press follows. Measured on a pty pair: write start minus the press, p50 66.5 us, max 93.9 us (Results) |

@@ -180,7 +180,7 @@ class Ctx:
         # tier from a rig profile today (docs/player.md), so its runs start
         # with --allow-below-tier; a LINE board with a checked bounds file
         # is tier 1 and needs none
-        self.odd_extra = ["--allow-below-tier"]
+        self.odd_extra = ["--allow-below-tier", "resp"]
         self.line_extra = []
 
 
@@ -549,7 +549,7 @@ def case_example(ctx, name):
             with open(os.path.join(d, "session.json")) as f:
                 sj = json.load(f)
             resp = [r for r in sj["devices"] if r["role"] == "resp"][0]
-            check(sj.get("allow_below_tier") is True and resp.get("below_tier") is True and resp.get("tier") == 0 and resp.get("min_tier") == 2,
+            check(sj.get("allow_below_tier") == "resp" and resp.get("below_tier") is True and resp.get("tier") == 0 and resp.get("min_tier") == 2,
                   "oddball: session.json says the keyboard ran below its min_tier: %s" % resp)
         if pty:
             check_bytes(name, d, pty, rows)
@@ -1081,6 +1081,35 @@ def case_refuse(ctx):
         pty.close()
     print("  below min_tier: exit %d: %s" % (rc, msg[:300]), flush=True)
     check(rc == 1 and "'resp'" in msg and "min_tier 2" in msg and not made, "a keyboard below its min_tier: exit %d" % rc)
+    # an output role with a min_tier: no output has a tier in ysp/rigfile.h
+    # (UNKNOWN); the override names roles, so the keyboard's check stays.
+    # The check runs before the screen opens: a refusal is quick and never
+    # sets full screen
+    def edit_out(dd):
+        dd["devices"]["trig"]["min_tier"] = 3
+    out_pack, _ = oddball_variant(ctx, "outtier", edit_out)
+    pty = Pty()
+    try:
+        rig_o = make_rig(ctx, "outtier", pty.a)
+        t0 = time.monotonic()
+        rc, msg, made = run([out_pack, "--rig", rig_o], "outtier_none")
+        took = time.monotonic() - t0
+        print("  output below min_tier, no override: exit %d in %.2f s: %s" % (rc, took, msg[:300]), flush=True)
+        check(rc == 1 and "'resp'" in msg and "'trig'" in msg and not made and took < 1.0,
+              "an output and a keyboard below their min_tier, refused before the screen: exit %d, %.2f s" % (rc, took))
+        rc, msg, made = run([out_pack, "--rig", rig_o, "--allow-below-tier", "trig"], "outtier_trig")
+        print("  --allow-below-tier trig: exit %d: %s" % (rc, msg[:300]), flush=True)
+        check(rc == 1 and "'resp'" in msg and "'trig'" not in msg, "the override for trig keeps resp's check: exit %d" % rc)
+        rc, msg, made = run([out_pack, "--rig", rig_o, "--allow-below-tier", "resp,trig", "--max-trials", "1"], "outtier_both")
+        print("  --allow-below-tier resp,trig: exit %d" % rc, flush=True)
+        if check(rc == 0 and made, "the override for both starts: exit %d %s" % (rc, msg[-200:])):
+            with open(os.path.join(ctx.out, "refuse_outtier_both", "session.json")) as f:
+                sj = json.load(f)
+            trig = [r for r in sj["devices"] if r["role"] == "trig"][0]
+            check(sj.get("allow_below_tier") == "resp,trig" and trig.get("below_tier") is True and trig.get("tier") == 0,
+                  "session.json: the output ran below its min_tier: %s %s" % (sj.get("allow_below_tier"), trig))
+    finally:
+        pty.close()
     rc, msg, made = run([pack, "--rig", os.path.join(ctx.out, "no_such_rig", "profile.json")], "rig")
     print("  bad rig: exit %d: %s" % (rc, msg[:300]), flush=True)
     check(rc == 1 and "no rig profile" in msg and not made, "a rig file that does not exist: exit %d" % rc)

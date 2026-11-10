@@ -2,7 +2,7 @@
  * frame must not allocate (rig_spec: no allocation in hot loops). Built with
  * -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc; run as:
  *   player_alloc_test PACK OUT [--rig FILE]          (--sim)
- *   player_alloc_test PACK --out OUT --real [--windowed] [--allow-below-tier] [--rig FILE]
+ *   player_alloc_test PACK --out OUT --real [--windowed] [--allow-below-tier ROLE[,ROLE]] [--rig FILE]
  *                     [--max-trials N] [--seed N]     (a real run: needs a display)
  * A real run has other threads (SDL's, the GL driver's, the data set's
  * writer, the devices' readers) that allocate when they like: only the
@@ -49,7 +49,7 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--out") && v) { a.out_dir = v; i++; }
         else if (!strcmp(argv[i], "--real")) a.sim = false;
         else if (!strcmp(argv[i], "--windowed")) a.windowed = true;
-        else if (!strcmp(argv[i], "--allow-below-tier")) a.allow_below_tier = true;
+        else if (!strcmp(argv[i], "--allow-below-tier") && v) { a.allow_below = v; i++; }
         else if (!strcmp(argv[i], "--max-trials") && v) { a.max_trials = atoi(v); i++; }
         else if (!strcmp(argv[i], "--seed") && v) { a.seed = strtoull(v, NULL, 10); i++; }
         else if ((!strcmp(argv[i], "--field")) && v) i++;   /* the player's; participant=1 is set */

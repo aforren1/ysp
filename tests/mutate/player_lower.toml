@@ -315,8 +315,10 @@ env = { YPL_REAL_CASES = "refuse" }
 name = "a role below its min_tier starts"
 test = "real"
 why = "2.9 and decision B: refused by name unless --allow-below-tier."
-find = '''    if (n && !p->args.allow_below_tier) {'''
-replace = '''    if (0) {'''
+find = '''    if (n) {
+        pl_fail(p, "a role's tier is worse'''
+replace = '''    if (0) {
+        pl_fail(p, "a role's tier is worse'''
 
 [[mutant]]
 id = "rl-10"
@@ -344,3 +346,22 @@ test = "real"
 why = "ysp/device.h sets a rule's max_fires at open: every template on the role must agree."
 find = '''            } else if (mf != max_fires) {'''
 replace = '''            } else if (0) {'''
+
+[[mutant]]
+id = "rl-13"
+env = { YPL_REAL_CASES = "refuse" }
+name = "the override covers every role"
+test = "real"
+why = "--allow-below-tier names roles: a role it does not name keeps its check."
+find = '''        if (k == n && strncmp(a, name, n) == 0) return true;'''
+replace = '''        return true;'''
+
+[[mutant]]
+id = "rl-14"
+env = { YPL_REAL_CASES = "refuse" }
+name = "the role check after the screen"
+test = "real"
+why = "The role check runs before any device or the screen opens, so a refusal never sets full screen."
+find = '''pl_roles_bind(p) < 0 || pl_roles_tier(p) < 0 || pl_outputs_open(p) < 0) return -1;'''
+replace = '''pl_roles_bind(p) < 0 || pl_outputs_open(p) < 0) return -1;
+    if (pl_screen_open(p) < 0 || pl_roles_tier(p) < 0) return -1;'''
