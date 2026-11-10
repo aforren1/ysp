@@ -671,12 +671,13 @@ Purpose: Reads a version 1 experiment definition into a checked, fully defaulted
 
 Status:
 
-- v0.1.0 (2026-11-09, Linux desktop, gcc 12.2). 1933 checks in the unit test, as C and C++17, ASan and UBSan clean; 7 corpus files against golden dumps with a round trip through the canonical bytes; 193 refusals, each against its message and place; 462 keys written at their defaults give the ID of the same key left out; 923 checks of the table against the headers' parameter tables. 20.4M fuzz inputs under ASan and UBSan, each in a large arena and in a small one with a misbehaving host, no report; gcov on the target: 97.75% of the header's lines. 142 of 142 mutants as expected. The pack tool stores its canonical bytes from v0.8.0. No player uses it yet; no run on Windows, macOS or emcc. [Design notes](experiment.md).
+- v0.1.1 (2026-11-09): refusals the player's lowering needs: a track on a template with no response or key_answer, a non-integer outcome, `$rt_s` and a mixed leaf's `$level` in a number key, a bare `$response` as a code; the empty string as a level of `$response` and of a mixed leaf's `$method`; a lookup by `$response` needs choices. No struct change. 12 new refusal files; 10 new mutants, all killed. [Design notes](experiment.md).
+- v0.1.0 (2026-11-09, Linux desktop, gcc 12.2). 1933 checks in the unit test, as C and C++17, ASan and UBSan clean; 7 corpus files against golden dumps with a round trip through the canonical bytes; 193 refusals, each against its message and place; 462 keys written at their defaults give the ID of the same key left out; 923 checks of the table against the headers' parameter tables. 20.4M fuzz inputs under ASan and UBSan, each in a large arena and in a small one with a misbehaving host, no report; gcov on the target: 97.75% of the header's lines. 142 of 142 mutants as expected. The pack tool stores its canonical bytes from v0.8.0. No run on Windows, macOS or emcc. [Design notes](experiment.md).
 
 ### The experiment definition
 
 - Design: [experiment_format.md](experiment_format.md)
-- Read by: ysp/experiment.h (below); the player that lowers it is not built
+- Read by: ysp/experiment.h (below) and the player ([player.md](player.md))
 
 Purpose: The pack's EXPERIMENT entry: a JSON file, read by ysp/json.h, that names stimuli, trial templates, adaptive methods, device roles and a tree of nodes, each lowered to ysp/trials.h, ysp/timeline.h, ysp/response.h, ysp/gfx.h and the method headers; and the data set the player writes.
 

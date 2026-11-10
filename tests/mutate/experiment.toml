@@ -361,8 +361,8 @@ id = "e-42"
 name = "$response not known in the response's trigger code"
 test = "experiment"
 why = "G8: the code is per choice."
-find = '''if (s->in_code && yexp__streq(name, "response") && s->t && s->t->response) return;'''
-replace = '''(void)0;'''
+find = '''if (s->in_code && yexp__streq(name, "response") && s->t && s->t->response) {'''
+replace = '''if (0) {'''
 
 [[mutant]]
 id = "e-43"
@@ -1219,3 +1219,83 @@ test = "experiment"
 why = "A tracked template keeps its method_value."
 find = '''        if (out->trial && tv->n) ((yexp_template*)(void*)out->trial)->has_tracks_ = true;'''
 replace = ''''''
+
+[[mutant]]
+id = "e011-01"
+name = "a track needs no response"
+test = "experiment"
+why = "v0.1.1: a method hears a trial only through its response."
+find = '''    if (s->leaf->n_tracks && !t->response) yexp__err'''
+replace = '''    if (0) yexp__err'''
+
+[[mutant]]
+id = "e011-02"
+name = "a track needs no key_answer"
+test = "experiment"
+why = "v0.1.1: the method hears correctness."
+find = '''    else if (s->leaf->n_tracks && !t->response->key_answer) yexp__err'''
+replace = '''    else if (0) yexp__err'''
+
+[[mutant]]
+id = "e011-03"
+name = "a text outcome is accepted"
+test = "experiment"
+why = "v0.1.1: ytr_update() takes an integer."
+find = '''        if (!(top && (yexp__streq(v->str, "correct") || !v->str[0]))) yexp__err'''
+replace = '''        if (0) yexp__err'''
+
+[[mutant]]
+id = "e011-04"
+name = "a real outcome is accepted"
+test = "experiment"
+why = "v0.1.1."
+find = '''        if (!(v->flags & YEXP_VF_INT)) yexp__err(c, v->pos, "%s: 'outcome' is an integer'''
+replace = '''        if (0) yexp__err(c, v->pos, "%s: 'outcome' is an integer'''
+
+[[mutant]]
+id = "e011-05"
+name = "$rt_s reads as a number"
+test = "experiment"
+why = "v0.1.1: empty on a timeout."
+find = '''            if (yexp__streq(name, "rt_s")) {'''
+replace = '''            if (0) {'''
+
+[[mutant]]
+id = "e011-06"
+name = "$level reads as a number on a mixed leaf"
+test = "experiment"
+why = "v0.1.1."
+find = '''            if (yexp__streq(name, "level") && s->leaf && s->leaf->table && s->leaf->n_tracks) {'''
+replace = '''            if (0) {'''
+
+[[mutant]]
+id = "e011-07"
+name = "no empty level of $response"
+test = "experiment"
+why = "v0.1.1: a timeout has no key."
+find = '''        if (!s->in_code && !(rsp->duration && rsp->duration->kind == YEXP_V_NUMBER && rsp->duration->i == 0) && yexp__lv_push(c, "")) return -1;'''
+replace = ''''''
+
+[[mutant]]
+id = "e011-08"
+name = "no empty level of $method on a mixed leaf"
+test = "experiment"
+why = "v0.1.1."
+find = '''        if (s->leaf->table && yexp__lv_push(c, "")) return -1;'''
+replace = ''''''
+
+[[mutant]]
+id = "e011-09"
+name = "a lookup by $response with no choices"
+test = "experiment"
+why = "v0.1.1: any key cannot be named."
+find = '''        if (s->t && s->t->response && !s->t->response->n_choices && v->by && v->by->kind == YEXP_V_VAR && yexp__streq(v->by->str, "response"))'''
+replace = '''        if (0)'''
+
+[[mutant]]
+id = "e011-10"
+name = "a bare $response as a code"
+test = "experiment"
+why = "v0.1.1: a code is a number."
+find = '''        if (want != YEXP__W_ANY) yexp__err(c, pos, "%s: '%s': '$response' is text'''
+replace = '''        if (0) yexp__err(c, pos, "%s: '%s': '$response' is text'''

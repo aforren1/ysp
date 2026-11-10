@@ -9,7 +9,7 @@ compiler = "gcc"
 flags = ["-std=c11", "-O1", "-w", "-DYSCR_NO_SDL", "-DPIN_A0=\"x3b4a1c5afe219da5\"", "-I$YSP_MINIAUDIO"]
 libs = ["-lm", "-lpthread", "-ldl"]
 timeout = 300
-env = { YPL_REPO = "{repo}", YPAK = "{repo}/build/linux/pack/ypak" }
+env = { YPL_REPO = "{repo}", YPL_BIN = "{repo}/build/linux", YPAK = "{repo}/build/linux/pack/ypak" }
 
 [[mutant]]
 id = "pl-01"
@@ -58,3 +58,100 @@ test = "player"
 why = "2.7: a value known only in `after` (the lookup by $outcome) must wait."
 find = '''    if (pass == PL_KEY_TRIAL && pl_value_after(v)) return 0;'''
 replace = '''    if (pass == PL_KEY_TRIAL && 0) return 0;'''
+
+[[mutant]]
+id = "pl-08"
+name = "the dot count ignores density"
+test = "player"
+why = "Item 1: the buffer must hold density x area dots."
+find = '''    s->rdk_count = s->field.n;'''
+replace = '''    s->rdk_count = rd.count;'''
+
+[[mutant]]
+id = "pl-09"
+name = "a literal key is read from the field"
+test = "player"
+why = "Item 2: the field holds the last trial channel value."
+find = '''            p->chan_base[i] = p->chan_src[i] ? *p->chan_src[i] : 0.0f;'''
+replace = '''            p->chan_base[i] = 0.0f;'''
+
+[[mutant]]
+id = "pl-10"
+name = "a variable key is treated as a literal"
+test = "player"
+why = "Item 2: a key with a variable reads per trial."
+find = '''            p->chan_dyn[i] = pr && !pl_value_static(pr->value);'''
+replace = '''            p->chan_dyn[i] = false;'''
+
+[[mutant]]
+id = "pl-11"
+name = "a wait does not move the latest time"
+test = "player"
+why = "Item 12: the end goes at the latest scheduled time."
+find = '''            *cursor += dt;
+            if (*cursor > p->ops_latest) p->ops_latest = *cursor;'''
+replace = '''            *cursor += dt;'''
+
+[[mutant]]
+id = "pl-12"
+name = "a tween end is not scheduled"
+test = "player"
+why = "Item 12: a tween runs to its end."
+find = '''                    if (*cursor + delay + dur > p->ops_latest) p->ops_latest = *cursor + delay + dur;'''
+replace = ''''''
+
+[[mutant]]
+id = "pl-13"
+name = "an at_s does not move the latest time"
+test = "player"
+why = "Item 12: a forward at_s in after is the end."
+find = '''            *cursor = t;
+            if (t > p->ops_latest) p->ops_latest = t;'''
+replace = '''            *cursor = t;'''
+
+[[mutant]]
+id = "pl-14"
+name = "a response key on a driven property allowed"
+test = "player"
+why = "Suspicion: the channel would overwrite the key silently."
+find = '''            if (pr && pl_value_after(pr->value)) {
+                pl_fail(p, "stimulus '%s': the key '%s' depends on the response and a step drives it", s->def->name, key);'''
+replace = '''            if (pr && pl_value_after(pr->value) && 0) {
+                pl_fail(p, "stimulus '%s': the key '%s' depends on the response and a step drives it", s->def->name, key);'''
+
+[[mutant]]
+id = "pl-15"
+name = "textures from vars are not preloaded"
+test = "player"
+why = "Item 17: vars can name textures."
+find = '''            for (k = 0; k < count_leaves && !p->failed; k++)
+                pl_each_text(p, tx->value, p->def_leaves[k], pl_preload_tex_cb);'''
+replace = ''''''
+
+[[mutant]]
+id = "pl-16"
+name = "a table column is looked up in every table"
+test = "player"
+why = "Preloading takes only the scope chain tables."
+find = '''            const ytb_table* tb = n->table ? pl_table_get(p, n->table) : NULL;'''
+replace = '''            const ytb_table* tb = NULL;'''
+
+[[mutant]]
+id = "pl-17"
+name = "the template uses no stimuli"
+test = "player"
+why = "Per-trial keys come only from the template stimuli."
+find = '''            if (ps) t->stim_used[ps - p->stims] = true;
+        }
+        if (s->op'''
+replace = '''            if (ps) t->stim_used[ps - p->stims] = false;
+        }
+        if (s->op'''
+
+[[mutant]]
+id = "pl-18"
+name = "an absent optional field is not flagged"
+test = "player"
+why = "Item 20: an absent optional integer is written empty."
+find = '''            v->flags = PL_VF_ABSENT;'''
+replace = '''            v->flags = 0;'''

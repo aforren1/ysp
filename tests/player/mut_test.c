@@ -10,11 +10,16 @@
 #include "host.c"
 #include "lower.c"
 #include "run.c"
+#define main pl_cli_main
+#include "main.c"
+#undef main
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/wait.h>
+#include <sys/stat.h>
 
 #define MAXR 512
 #define MAXC 96
@@ -224,6 +229,17 @@ static void case_method(void) {
     }
 }
 
+static void hook_density(void) {
+    pl_stim* s = pl_stim_by_name(&P, "d");
+    CHECK(s && s->rdk_count == s->field.n && s->rdk_count == 314, "density x area dots: %d", s ? s->rdk_count : -1);
+}
+
+static void case_density(void) {
+    const char* d = "{\"format\":\"ysp-experiment\",\"version\":1,\"name\":\"m\",\"devices\":{},\"stimuli\":{\"d\":{\"kind\":\"rdk\",\"aperture\":\"circle\",\"w\":200,\"density\":0.01,\"speed\":5,\"dot_size\":2,\"color\":[1,1,1]}},\"trials\":{\"t\":{\"events\":[{\"on\":\"d\"},{\"wait_s\":0.05},{\"off\":\"d\"}]}},\"timeline\":[{\"name\":\"a\",\"trial\":\"t\"}]}";
+    g_hook = hook_density;
+    CHECK(run_def("density", d, "correct", 0.2) == 0, "density: %s", P.error);
+}
+
 static void case_rdk(void) {
     const char* d = HEADER "\"trials\":{\"t\":{\"events\":[{\"on\":\"r\"},{\"wait_s\":0.1},{\"off\":\"r\"}]}},"
                     "\"timeline\":[{\"name\":\"a\",\"trial\":\"t\",\"rules\":[\"reps 2\"]}]}";
@@ -291,9 +307,25 @@ static void case_stagger_trigger(void) {
     }
 }
 
-int main(void) {
+/* the system tests too: tests/player/player_test.py against this binary, as
+ * YPL_AS_PLAYER makes it the command line */
+static int run_shapes(void) {
+    char cmd[4096], self[1024];
+    const char* repo = getenv("YPL_REPO");
+    const char* bin = getenv("YPL_BIN");
+    ssize_t n = readlink("/proc/self/exe", self, sizeof self - 1);
+    int rc;
+    if (n <= 0 || !repo || !bin) { printf("run_shapes needs YPL_REPO and YPL_BIN\n"); return 2; }
+    self[n] = 0;
+    snprintf(cmd, sizeof cmd, "YPL_AS_PLAYER=1 python3 '%s/tests/player/player_test.py' --bin '%s' --player '%s' --out '%s/shapes' 2>&1 | tail -12", repo, bin, self, workdir);
+    rc = system(cmd);
+    return WEXITSTATUS(rc);
+}
+
+int main(int argc, char** argv) {
     const char* ypak = getenv("YPAK");
     char cmd[1024];
+    if (getenv("YPL_AS_PLAYER")) return pl_cli_main(argc, argv);
     snprintf(workdir, sizeof workdir, "/tmp/pl_mut_%d", (int)getpid());
     mkdir(workdir, 0755);
     snprintf(packpath, sizeof packpath, "%s/rdk.ysppak", workdir);
@@ -307,9 +339,11 @@ int main(void) {
     case_if_node();
     case_method();
     case_after_var();
+    case_density();
     case_rdk();
     case_code_range();
     case_stagger_trigger();
+    if (fails == 0 && run_shapes() != 0) { fails++; printf("FAIL line %d: the system tests\n", __LINE__); }
     snprintf(cmd, sizeof cmd, "rm -r %s", workdir);
     (void)!system(cmd);
     printf("mut_test: %d checks, %d failures\n", checks, fails);

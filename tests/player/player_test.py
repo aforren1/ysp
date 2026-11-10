@@ -444,6 +444,19 @@ def t_fix_key_reapply(ctx):
     check(t0 and abs(float(t0[-1]["value"]) - 50.0) < 1e-3, "trial 0 reached the tween's end")
 
 
+def t_fix_key_var_reapply(ctx):
+    # a key that holds a variable is read per trial (the channel's start)
+    d = base({"t": {"events": [{"on": "s"}, {"to": "s", "props": {"x": 50}, "duration_s": 0.1}, {"wait_s": 0.2}, {"off": "s"}]}},
+             [{"name": "l", "trial": "t", "timeline_variables": "x.pstb", "rules": ["order sequential"]}],
+             stimuli={"s": {"kind": "shape", "x": "$p", "w": 1, "h": 1}})
+    r = Run(ctx, "fix_reapply_var", d, tables={"x": "p\n3\n7\n"}, args=["--trace-channels", "trace.csv"])
+    check(r.rc == 0, "reapply var: %s" % r.err)
+    rows = [x for x in trace_rows(ctx, r) if x["prop"] == "x"]
+    for t, want in (("0", 3.0), ("1", 7.0)):
+        t_rows = [x for x in rows if x["trial_index"] == t]
+        check(t_rows and abs(float(t_rows[0]["value"]) - want) < 1e-3, "trial %s starts from its own row value %g: %s" % (t, want, t_rows[0] if t_rows else None))
+
+
 def t_fix_stale_rdk(ctx):
     stim = {"s": {"kind": "shape", "w": 1, "h": 1},
             "r": {"kind": "rdk", "aperture": "circle", "w": 50, "count": 5, "speed": 10, "dot_size": 2, "color": [1, 1, 1]}}
@@ -559,6 +572,19 @@ def t_fix_backward_at(ctx):
     offs = [e for e in r.events if e["stimulus"] == "s" and e["kind"] == "offset"]
     check(len(offs) == 1, "the step before the backward at_s is not dropped")
     check(float(r.trials[0]["time_elapsed_s"]) >= 0.99, "the end is at the latest time: %s" % r.trials[0]["time_elapsed_s"])
+    # `after` starts at the latest scheduled time of events, and a tween's end counts
+    d2 = base({"t": {"events": [{"on": "s"}, {"wait_s": 1}, {"off": "s"}, {"at_s": 0.1}, {"on": "t"}], "after": [{"mark": "go"}]}}, [{"name": "l", "trial": "t"}])
+    r2 = Run(ctx, "fix_at2", d2)
+    marks = [float(e["t_s"]) for e in r2.events if e["text"] == "go"]
+    ons = [float(e["t_s"]) for e in r2.events if e["stimulus"] == "s" and e["kind"] == "onset"]
+    check(r2.rc == 0 and marks and marks[0] - ons[0] >= 0.99, "after begins at the latest of events: %s %s" % (marks, ons))
+    d3 = base({"t": {"events": [{"on": "s"}, {"to": "s", "props": {"x": 1}, "duration_s": 1}, {"off": "t"}, {"on": "t"}]}}, [{"name": "l", "trial": "t"}])
+    r3 = Run(ctx, "fix_at3", d3)
+    check(r3.rc == 0 and float(r3.trials[0]["time_elapsed_s"]) >= 0.99, "a tween's end is scheduled: %s %s" % (r3.trials[:1], r3.err))
+    # a forward at_s in `after`, and the end goes at the latest
+    d4 = base({"t": {"events": [{"on": "s"}], "response": {"role": "r", "from": "s", "duration_s": 0.1, "choices": ["left"]}, "after": [{"at_s": 1.5}, {"mark": "late"}, {"off": "s"}]}}, [{"name": "l", "trial": "t"}])
+    r4 = Run(ctx, "fix_at4", d4, args=["--participant", "silent"])
+    check(r4.rc == 0 and float(r4.trials[0]["time_elapsed_s"]) >= 1.49 and any(e["text"] == "late" for e in r4.events), "a forward at_s in after: %s %s" % (r4.trials[:1], r4.err))
 
 
 def t_fix_refusals(ctx):
@@ -618,12 +644,19 @@ def t_fix_texture_vars(ctx):
     res = [{"name": "a.ysptex", "kind": "texture", "source": "a.png", "primaries": "device"}, {"name": "b.ysptex", "kind": "texture", "source": "b.png", "primaries": "device"}]
     r = Run(ctx, "fix_tex", d, pack_files=res, copy_in=[os.path.join(ctx.out, "a.png"), os.path.join(ctx.out, "b.png")])
     check(r.rc == 0 and {x["pic"] for x in r.trials} == {"a.ysptex", "b.ysptex"}, "texture from vars: %s" % r.err)
+    d2 = base({"t": {"events": [{"on": "p"}, {"wait_s": 0.05}, {"off": "p"}]}},
+              [{"name": "l", "trial": "t", "timeline_variables": "x.pstb"}], stimuli={"p": {"kind": "image", "texture": "$im", "w": 1, "h": 1}})
+    r2 = Run(ctx, "fix_tex2", d2, tables={"x": "im\na.ysptex\nb.ysptex\n"}, pack_files=res, copy_in=[os.path.join(ctx.out, "a.png"), os.path.join(ctx.out, "b.png")])
+    check(r2.rc == 0 and len(r2.trials) == 2, "texture from a table column: %s" % r2.err)
 
 
 def t_fix_walk_budget(ctx):
     d = base({"t": tmpl()}, [{"name": "c", "repetitions": 1000000, "timeline": [{"name": "e", "repetitions": 3, "timeline": []}]}])
     r = Run(ctx, "fix_walk", d, args=["--max-seconds", "100000"])
     check(r.rc != 0 and "node steps with no trial" in r.err, "a loop over nothing stops with its name: %s" % r.err)
+    with open(os.path.join(r.data, "frames.csv")) as f:
+        n_lines = sum(1 for _ in f)
+    check(n_lines > 3, "the walk yields frames, not one long frame: %d lines of frames.csv" % n_lines)
     d2 = base({"t": {"events": [{"on": "s"}, {"off": "s"}]}},
               [{"name": "c", "repetitions": 70000, "timeline": [{"name": "l", "trial": "t"}]}])
     r2 = Run(ctx, "fix_seeds", d2, args=["--max-seconds", "100000"])
@@ -679,7 +712,7 @@ TESTS = [t_nested, t_if_unless, t_empty_and_zero, t_loop, t_requeue, t_track_end
          t_method_update, t_seeds, t_refused, t_unused_stim, t_record_data, t_fix_density, t_fix_key_reapply, t_fix_stale_rdk,
          t_fix_timeout_values, t_fix_any_key, t_fix_from_in_if, t_fix_shown_twice, t_fix_vars_data, t_fix_sound_twice, t_fix_rdk_limit,
          t_fix_record_inherit, t_fix_backward_at, t_fix_refusals, t_fix_michelson_order, t_fix_texture_vars, t_fix_walk_budget,
-         t_fix_data_set, t_fix_check_all_leaves, t_fix_release_order]
+         t_fix_data_set, t_fix_check_all_leaves, t_fix_release_order, t_fix_key_var_reapply]
 
 
 def main():
@@ -688,6 +721,7 @@ def main():
     ap.add_argument("--bin", required=True)
     ap.add_argument("--out", default=None)
     ap.add_argument("--only", default=None)
+    ap.add_argument("--player", default=None, help="another player binary (the mutation test's)")
     a = ap.parse_args()
     a.bin = os.path.abspath(a.bin)
 
@@ -710,6 +744,8 @@ def main():
         if not ok:
             print("no %s under %s" % (name, a.bin))
             return 2
+    if a.player:
+        ctx.player = a.player
     for t in TESTS + [t_sound]:
         if a.only and t.__name__ != a.only:
             continue

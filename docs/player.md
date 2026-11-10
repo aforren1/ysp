@@ -45,7 +45,14 @@ The data set is format 2.10. Columns not fixed by the format:
 session's, since it joins `frames.csv` and `events.csv`), and `time_elapsed_s`
 (the end frame's onset minus the session's first frame's onset).
 
-`session.json` adds `node_seeds`: each leaf run's path, iteration and seed.
+`session.json` also has `node_seeds` (each leaf run's path, iteration and
+seed), `devices` (each role and what it is bound to; `sim` in `--sim`), the
+audio describe line and every header's version.
+
+Not done in the data set, and why: `clock.csv` is empty (`--sim` has no device
+clock fits to log); `events.csv`'s `out` rows take the deadline as the write's
+time (a real write's start needs a real output); device rows have no ports
+or serial numbers (there is no device in `--sim`).
 Under `--sim`, `start_utc` is fixed and `frames.csv`'s phase columns are
 empty (they are real CPU costs, and would differ between two runs).
 
@@ -70,6 +77,14 @@ forced. The Report section lists them with the evidence.
 | A `0` to a log10 method | `method_value` is floored at `1e-4` before the log, in a log domain (`scale log10` or stair `step_type` log or db), as the C program does. The format has no key for this |
 | `loop.until_accuracy` | Correct over all trials of the iteration (timeouts count against it), `0` when none ran |
 | Trigger codes | `0..255`, the width of a port byte; another value stops the run |
+| A stimulus shown more than once in a trial | `_onset_s` is the first onset, `_offset_s` the last offset, and `_frames`, `_dropped`, `_tier`, `_flags` cover every shown frame. D10 was silent |
+| A key that depends on the response, on a property a step drives | Stops at load with a named error: the channel writes the field every frame, so the key would have no effect |
+| The end of a trial with a backward `at_s` or a tween | The end MARK goes at the latest scheduled time, so no step is dropped; `after` starts at the later of the response's end and that time |
+| A `from` that an `if` leaves unshown on a trial | A named error at that trial's start, because the response could never end |
+| A loop or repetition over nothing | Tree steps are spread over frames (4096 a frame); after 1,000,000 steps with no trial, a named error |
+| An RDK that moves longer than 65536 frames in one trial (18 min at 60 Hz) | A named error, not a frozen field |
+| A leaf run past 65536 in one session | A named error: `node_seeds` cannot hold more |
+| A channel's trace | `--trace-channels FILE` writes every channel per frame: a test's view, off by default |
 | A trial row's timing columns | Written when their frames' flip records arrive (a pending-row ring), so `<s>_offset_s` of a stimulus turned off at the trial's last frame is known |
 | `--sim` triggers | The screen's trigger channels are real (`yscr_trigger`, worker thread); the sink counts firings, and the data takes the deadline (the planned vblank) as the write's time, because a real write's start would differ between two runs |
 | A required role unbound in `--sim` | The participant and the sink stand in for the device (the check runs against a real run's rig) |

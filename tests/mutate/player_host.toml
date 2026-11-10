@@ -1,0 +1,47 @@
+# player/host.c mutants: the real host checks (tests/player/mut_test.c).
+header = "host.c"
+
+[test.player]
+source = "tests/player/mut_test.c"
+compiler = "gcc"
+flags = ["-std=c11", "-O1", "-w", "-DYSCR_NO_SDL", "-DPIN_A0=\"x3b4a1c5afe219da5\"", "-I$YSP_MINIAUDIO"]
+libs = ["-lm", "-lpthread", "-ldl"]
+timeout = 300
+env = { YPL_REPO = "{repo}", YPL_BIN = "{repo}/build/linux", YPAK = "{repo}/build/linux/pack/ypak" }
+
+[[mutant]]
+id = "h-01"
+name = "only the first leaf is checked"
+test = "player"
+why = "A template's ops are checked at each leaf's extremes."
+find = '''    for (li = 0; li < n_leaves && rc == 0; li++) {'''
+replace = '''    for (li = 0; li < 1 && rc == 0; li++) {'''
+
+[[mutant]]
+id = "h-02"
+name = "the unbound role passes in a real run"
+test = "player"
+why = "The stand-in applies only to --sim."
+find = '''        if (role->required && !p->args.sim) {'''
+replace = '''        if (0) {'''
+
+[[mutant]]
+id = "h-03"
+name = "the wrong family passes"
+test = "player"
+why = "A role binds only a family it lists."
+find = '''    snprintf(msg, cap, "the rig binds it to family '%s', which the role does not list", r->family);
+    return 1;'''
+replace = '''    return 0;'''
+
+[[mutant]]
+id = "h-04"
+name = "the dry open is skipped"
+test = "player"
+why = "An impossible constraint must fail at load."
+find = '''    if (!ytr_open(&t, &d)) {
+        snprintf(msg, cap, "%s", ytr_error(&t));
+        ytr_close(&t);
+        return 1;
+    }'''
+replace = ''''''

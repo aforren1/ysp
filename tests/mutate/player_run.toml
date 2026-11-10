@@ -8,7 +8,7 @@ compiler = "gcc"
 flags = ["-std=c11", "-O1", "-w", "-DYSCR_NO_SDL", "-DPIN_A0=\"x3b4a1c5afe219da5\"", "-I$YSP_MINIAUDIO"]
 libs = ["-lm", "-lpthread", "-ldl"]
 timeout = 300
-env = { YPL_REPO = "{repo}", YPAK = "{repo}/build/linux/pack/ypak" }
+env = { YPL_REPO = "{repo}", YPL_BIN = "{repo}/build/linux", YPAK = "{repo}/build/linux/pack/ypak" }
 
 [[mutant]]
 id = "r-01"
@@ -100,3 +100,219 @@ why = "2.7: a stimulus key known in `after` is set when after is built."
 find = '''        if (pl_apply_writes(p, s, PL_KEY_AFTER) < 0) return -1;'''
 replace = ''''''
 expect = "killed"
+
+[[mutant]]
+id = "r-12"
+name = "a channel starts from the field"
+test = "player"
+why = "Item 2: every trial starts from the definition."
+find = '''p->chan_dyn[i] ? *p->chan_src[i] : p->chan_base[i];'''
+replace = '''*p->chan_src[i];'''
+
+[[mutant]]
+id = "r-13"
+name = "the rdk flag is not reset"
+test = "player"
+why = "Item 3: a template that does not use it must not see it."
+find = '''        if (s->def->kind == YEXP_RDK) s->rdk_moving = false;   /* a template that does not use it must not see the last one's */'''
+replace = ''''''
+
+[[mutant]]
+id = "r-14"
+name = "any key is not a response"
+test = "player"
+why = "Item 5: responded comes from YRSP_R_RESPONDED."
+find = '''    e->responded = (r->flags & YRSP_R_RESPONDED) != 0;'''
+replace = '''    e->responded = (r->flags & YRSP_R_RESPONDED) != 0 && r->response >= 0;'''
+
+[[mutant]]
+id = "r-15"
+name = "a from not shown runs to the budget"
+test = "player"
+why = "Item 6: a named error at the trial start."
+find = '''            if (!found) {
+                pl_fail(p, "template '%s', trial %d: the response's 'from' stimulus'''
+replace = '''            if (0) {
+                pl_fail(p, "template '%s', trial %d: the response's 'from' stimulus'''
+
+[[mutant]]
+id = "r-16"
+name = "a frame counts without being shown"
+test = "player"
+why = "Item 7: frames cover only shown frames."
+find = '''        if (!vis[k]) continue;'''
+replace = ''''''
+
+[[mutant]]
+id = "r-17"
+name = "offset is the first offset"
+test = "player"
+why = "Item 7: _offset_s is the last offset."
+find = '''                        if (e->kind == YTL_OFFSET) st->offset_frame = e->frame;'''
+replace = '''                        if (e->kind == YTL_OFFSET && st->offset_frame < 0) st->offset_frame = e->frame;'''
+
+[[mutant]]
+id = "r-18"
+name = "a data name is not read per leaf"
+test = "player"
+why = "Item 8: resolve per leaf."
+find = '''                    if (!is_var) for (k = 0; k < n->n_data; k++) if (strcmp(n->data[k].key, name) == 0) dv = n->data[k].value;'''
+replace = ''''''
+
+[[mutant]]
+id = "r-19"
+name = "a sound plays once"
+test = "player"
+why = "Item 9: every onset plays."
+find = '''p->peek[k].onset > s->sound_scheduled'''
+replace = '''s->sound_scheduled < 0'''
+
+[[mutant]]
+id = "r-20"
+name = "the rdk limit is not checked"
+test = "player"
+why = "Item 10: past the limit a named error."
+find = '''                if (s->n_steps >= PL_MAX_STEPS_RDK) {
+                    pl_fail(p, "stimulus '%s' has moved'''
+replace = '''                if (0) {
+                    pl_fail(p, "stimulus '%s' has moved'''
+
+[[mutant]]
+id = "r-21"
+name = "record_data is the leaf only"
+test = "player"
+why = "Item 11: a container passes it to its children."
+find = '''            for (q = n; q; q = q->parent) if (!q->record_data) row->write_row = false;'''
+replace = '''            for (q = n; q; q = NULL) if (!q->record_data) row->write_row = false;'''
+
+[[mutant]]
+id = "r-22"
+name = "the end is at the cursor"
+test = "player"
+why = "Item 12: the end goes at the latest time."
+find = '''    ops[n].t_ns = p->ops_latest;'''
+replace = '''    ops[n].t_ns = cursor;'''
+
+[[mutant]]
+id = "r-23"
+name = "events_end is the cursor"
+test = "player"
+why = "Item 12: after starts at the latest of events."
+find = '''        p->events_end = p->q.t > p->ops_latest ? p->q.t : p->ops_latest;'''
+replace = '''        p->events_end = p->q.t;'''
+
+[[mutant]]
+id = "r-24"
+name = "the walk has no limit"
+test = "player"
+why = "Item 19: a loop over nothing stops with a name."
+find = '''        if (++p->walk_steps > PL_WALK_MAX) {'''
+replace = '''        if (0) {'''
+
+[[mutant]]
+id = "r-25"
+name = "the walk does not yield"
+test = "player"
+why = "Item 19: a frame keeps its time."
+find = '''        if (++p->walk_frame_steps > PL_WALK_PER_FRAME) return 2;'''
+replace = ''''''
+
+[[mutant]]
+id = "r-26"
+name = "node seeds past their limit"
+test = "player"
+why = "Item 19: a named error, not a silent cut."
+find = '''    if (p->n_node_seeds >= PL_MAX_LEAF_RUNS) {'''
+replace = '''    if (0) {'''
+
+[[mutant]]
+id = "r-27"
+name = "michelson is not first"
+test = "player"
+why = "Item 15: a stimulus sorted earlier reads $contrast_shown."
+find = '''        if (!p->tmpl->stim_used[i] || !s->michelson) continue;'''
+replace = '''        if (1) continue;'''
+
+[[mutant]]
+id = "r-28"
+name = "no response row"
+test = "player"
+why = "Item 20: a response has its row in events.csv."
+find = '''    if (have_res && p->env.responded) {
+        yds_event ev;'''
+replace = '''    if (0) {
+        yds_event ev;'''
+
+[[mutant]]
+id = "r-29"
+name = "a track hears no response on any key"
+test = "player"
+why = "Item 5: track updates follow responded."
+find = '''    if (p->track && d->method_value && have_res && p->env.responded) {'''
+replace = '''    if (p->track && d->method_value && have_res && p->env.responded && res.response >= 0) {'''
+
+[[mutant]]
+id = "r-30"
+name = "an any-key response has no name"
+test = "player"
+why = "Item 5: the key name is the response."
+find = '''            if (!row->res.response_name && p->env.responded) row->res.response_name = p->env.response;'''
+replace = ''''''
+
+[[mutant]]
+id = "r-31"
+name = "the frames bitmap is not written"
+test = "player"
+why = "Item 7 frame accounting."
+find = '''                vis[k] = (uint8_t)(ch >= 0 && values[ch] >= 0.5f);'''
+replace = '''                vis[k] = 0;'''
+
+[[mutant]]
+id = "r-32"
+name = "the frame claim is missing"
+test = "player"
+why = "Frames must carry their trial index."
+find = '''    if (p->in_trial) p->frame_trial[f->index % PL_FRAME_RING] = p->global_trial - 1;'''
+replace = ''''''
+
+[[mutant]]
+id = "r-33"
+name = "record_data false still writes"
+test = "player"
+why = "record_data false writes no row."
+find = '''    if (!r->write_row) { r->used = false; return 0; }'''
+replace = ''''''
+
+[[mutant]]
+id = "r-34"
+name = "the pending-row ring drops its last rows"
+test = "player"
+why = "A full ring has head == tail; the last rows must go out."
+find = '''    for (i = 0; i < PL_PENDING_ROWS; i++) {
+        if (p->rows[p->row_tail].used && pl_row_flush(p, &p->rows[p->row_tail]) < 0) return -1;'''
+replace = '''    for (i = 0; i < 0; i++) {
+        if (p->rows[p->row_tail].used && pl_row_flush(p, &p->rows[p->row_tail]) < 0) return -1;'''
+
+[[mutant]]
+id = "r-35"
+name = "the walk ignores its frame count on a leaf open"
+test = "player"
+why = "Item 19."
+find = '''                p->walk_frame_steps += 64;'''
+replace = '''                p->walk_frame_steps += 0;'''
+
+[[mutant]]
+id = "r-36"
+name = "a column of two types keeps the first"
+test = "player"
+why = "Item 8: one name, a jitter here, text there."
+find = '''            if (p->cols[i].type != type) p->cols[i].type = YTR_COL_STRING;'''
+replace = ''''''
+
+[[mutant]]
+id = "r-37"
+name = "a row value over 255 bytes is cut"
+test = "player"
+why = "Item 20: a named refusal."
+find = '''    if (rc == -2) { pl_fail(p, "the column '%s': its value is longer than %zu bytes", name, sizeof buf - 1); return -1; }'''
+replace = ''''''

@@ -552,7 +552,7 @@ when its sequence is built (2.5).
 | `practice`, `warmup`, `first_in_block`, `after_break` | trial start | `ytr_trial_info` flags |
 | `trial_seed` | trial start | the trial stream's 64-bit seed (D8): `ytr_trial_seed()` |
 | `method`, `level`, `estimate` | trial start (`estimate`: after the update) | the track's name, its proposal in stimulus units, its estimate |
-| `response`, `rt_s`, `responded` | `after` | `yrsp_result`: the choice's key, `rt_ns` in seconds, `YRSP_R_RESPONDED` |
+| `response`, `rt_s`, `responded` | `after` | `yrsp_result`: the choice's key (with no `choices`, the key's name), `rt_ns` in seconds, `YRSP_R_RESPONDED`. On a timeout `response` is the empty string and `rt_s` is empty: a lookup by `$response` that can time out needs a `""` key, and `$rt_s` is refused in a number key (v0.1.1) |
 | `correct` | `after` | the response's key equals `key_answer` |
 | `outcome` | `after` | `"correct"`, `"wrong"` or `"timeout"` |
 | `contrast_shown` | trial start | with `{"michelson": ...}` only |
@@ -596,7 +596,7 @@ method, so the track runs it again (as in the 2AFC program).
 | `after` | array of steps, from `max(end, events end)`; `end` is the response's end, the window's end when `response_ends_trial` is false, or 0 with no response | a second op table after `ytl_at(&q, max(bt, events_end))`, `bt` from `ytl_base_time()`; then `YTL_MARK` end |
 | `record` | array of stimulus names | per-stimulus columns (2.10) |
 | `columns` | column to value | `ytr_col` entries |
-| `outcome` | `"correct"` or a value | `ytr_update()`'s outcome; `YTR_INVALID` when no response. Default: `"correct"` when the template has a response; empty when it has none |
+| `outcome` | `"correct"`, or an integer or boolean value (ysp/experiment.h v0.1.1 refuses text and other numbers) | `ytr_update()`'s outcome; `YTR_INVALID` when no response. Default: `"correct"` when the template has a response; empty when it has none |
 | `method_value` | value | what the method's update hears; default `$level`. Ignored when no leaf with tracks runs the template: a written one is a warning, is not in the checked form, and is left out of the canonical bytes, so it does not change the experiment ID |
 
 Steps:
@@ -716,7 +716,9 @@ relative to its onset. A trial row has, in order:
 5. For each stimulus in `record`: `<s>_onset_s`, `<s>_offset_s`,
    `<s>_frames` (frames shown), `<s>_residual_s`, `<s>_tier` (worst),
    `<s>_dropped` (summed `yscr_record.dropped`), `<s>_flags` (OR of
-   `YSCR_FLIP_*`).
+   `YSCR_FLIP_*`). A stimulus shown more than once in a trial: the first
+   onset, the last offset, and frames, tier, dropped and flags over every
+   frame it was shown (the player, 2026-11-09; D10 did not say).
 6. Over the trial's frames: `tier_worst`, `frames_dropped`,
    `flip_flags`.
 7. For each output role: `<role>_n`, `<role>_failed`, `<role>_lag_max_s`

@@ -151,9 +151,10 @@ static void one(const seed_t* s, const char* text, size_t n, const char* out) {
     a.sim = true;
     a.have_seed = true;
     a.seed = rnd();
-    /* no cap on trials on most inputs; only the virtual-time budget ends a run */
-    a.max_trials = rnd() % 4 == 0 ? 64 : 0;
-    a.max_seconds = 300;
+    /* a quarter of the inputs run with no cap on trials, the rest stop after
+     * 64 so that many inputs fit in a fuzz run; the budget ends every run */
+    a.max_trials = rnd() % 4 == 0 ? 0 : 64;
+    a.max_seconds = a.max_trials ? 60 : 300;
     {
         static const char* const parts[] = { "correct", "silent", "p=0.5" };
         a.participant = parts[rnd() % 3];

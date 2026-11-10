@@ -1,6 +1,6 @@
 # ysp/experiment.h
 
-Status: v0.1.0, 2026-11-09. The header's top comment is the reference for
+Status: v0.1.1, 2026-11-09. The header's top comment is the reference for
 the calls (USAGE, THE CHECKED FORM, REFUSALS, THE HOST, CANONICAL BYTES,
 BOUNDS AND MEMORY). This page records why the header exists, the format's
 defaults table, the decisions, and the results.
@@ -163,7 +163,13 @@ at version 1, listed by the test above.
 | `$contrast_shown` with two stimuli with `{"michelson": ...}` shown in one trial | Refused: the variable has one value |
 | A variable's `phase` | Session fields at session start; a container's table columns at a child node's start; a leaf's columns, `vars`, jitters and built-ins at trial start; `response`, `rt_s`, `responded`, `correct` and `outcome` in `after`; `estimate` only in `columns` (2.3: after the update, which is after `after`) |
 | Step `set` and `to` | Numeric properties only: a timeline channel carries a float; a resource, a layout key or an enum is fixed at load |
-| `$response` in `response.trigger.code` | Known there: a response rule's code is per choice (G8) |
+| `$response` in `response.trigger.code` | Known there, in a lookup: a response rule's code is per choice (G8). A bare `$response` is refused: it is text, and a code is a number (v0.1.1) |
+| A leaf with `tracks` on a template with no `response` or no `key_answer` | Refused (v0.1.1): a method hears only through a response and needs its correctness |
+| A template's `outcome` | `"correct"`, an integer or a boolean, directly or through a variable or lookup (`""` is the written default with no response). Text and a non-integer number are refused (v0.1.1): `ytr_update()` takes an integer |
+| `$rt_s` in a number or duration key | Refused (v0.1.1): it has no value on a timeout. It stays valid in `columns`, where the cell is empty, and in `method_value`, which is read only on a trial with a response |
+| The empty string as a level | A lookup by `$response` needs a `""` key when the response can time out. A lookup by `$method` needs one on a leaf with both `tracks` and a table (v0.1.1). A response's `trigger` code needs none: it is sent only for a press |
+| A lookup by `$response` with no `choices` | Refused (v0.1.1): any key can be pressed, so the map cannot name them |
+| `$level` on a leaf with both `tracks` and a table | Refused in a number key (v0.1.1): empty on a condition trial. `method_value` is exempt: read only on a track trial |
 
 ## Explanation: gaps found in the format
 
@@ -201,7 +207,6 @@ decide otherwise.
 | Gap | Behavior |
 |---|---|
 | A `set` or `to` of `visible` | Does not count as showing the response's `from`, so such a template is refused |
-| `"code": "$response"` | A bare `$response` as a response trigger's code is accepted, though the variable is text and a code is a number |
 | `"dims": []` with `lo` of length 2 | Reads as no dims given and is accepted |
 | `"buttons": {"note": "x"}` | `note` is read as a button key there, not as a note |
 
