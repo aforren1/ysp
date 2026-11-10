@@ -410,11 +410,15 @@ int pl_build_ops(pl_player* p, const yexp_step* st, int n, ytl_op* ops, int cap,
                     if (s->op == YEXP_THEN && !(k == s->n_props - 1 && comp == n_comp - 1)) ops[c].op = YTL_OP_TO;
                     dur = ops[c].tween.duration_ns;
                     delay = ops[c].tween.delay_ns;
-                    if (*cursor + delay + dur > p->ops_latest) p->ops_latest = *cursor + delay + dur;
                     c++;
                 }
             }
-            if (s->op == YEXP_THEN) *cursor += delay + dur;
+            /* 2.5: only `then` moves time. A `to` still running at the
+             * trial's end is cut there, so it does not hold back `after` */
+            if (s->op == YEXP_THEN) {
+                *cursor += delay + dur;
+                if (*cursor > p->ops_latest) p->ops_latest = *cursor;
+            }
             break;
         }
         case YEXP_TRIGGER: {
@@ -747,8 +751,7 @@ static int pl_rdk_open(pl_player* p, pl_stim* s) {
     /* the field's own count: with `density` it is density x area (COUNTS) */
     s->rdk_count = s->field.n;
     s->xy = (float*)pl_alloc(p, sizeof(float) * 2 * (size_t)s->rdk_count);
-    s->steps = (yrdk_step*)pl_alloc(p, sizeof(yrdk_step) * PL_MAX_STEPS_RDK);
-    if (!s->xy || !s->steps) return -1;
+    if (!s->xy) return -1;   /* the steps are sized from the templates, later */
     s->buf = ygfx_buffer(&p->gfx, sizeof(float) * 2 * (size_t)s->rdk_count);
     memset(&dd, 0, sizeof dd);
     dd.buf = s->buf;
@@ -893,14 +896,16 @@ static int pl_runs_open(pl_player* p) {
 
 /* Text: the block for this trial's text, one ygfx_crun per run (D14). */
 int pl_stim_set_text(pl_player* p, pl_stim* s) {
-    char key[1024], text[1024];
+    char* text = p->text_buf;
+    char* key = p->runs_key;
+    size_t key_cap = 2 * p->max_text + 1024;
     int64_t klen;
     int b;
     uint32_t r;
     const ypak_runs_block_rec* block;
-    if (pl_eval_text(p, &p->env, s->text_value, text, sizeof text) < 0) return -1;
-    klen = ypak_runs_key(&s->style, text, strlen(text), key, sizeof key);
-    if (klen < 0 || (size_t)klen >= sizeof key) { pl_fail(p, "stimulus '%s': the glyph run key does not fit", s->def->name); return -1; }
+    if (pl_eval_text(p, &p->env, s->text_value, text, p->max_text + 1) < 0) return -1;
+    klen = ypak_runs_key(&s->style, text, strlen(text), key, key_cap);
+    if (klen < 0 || (size_t)klen >= key_cap) { pl_fail(p, "stimulus '%s': the glyph run key does not fit", s->def->name); return -1; }
     b = ypak_runs_find(&p->runs, key);
     if (b < 0) { pl_fail(p, "stimulus '%s': no glyph run block for the text '%s'", s->def->name, text); return -1; }
     block = &p->runs.blocks[b];
@@ -1453,9 +1458,169 @@ static int pl_check_steps(pl_player* p, const yexp_step* s, int n, const char* w
 static int pl_check_nodes(pl_player* p, const yexp_node* n, int count) {
     int i;
     for (i = 0; i < count; i++) {
+        int a, b;
+        /* one node, one name, two values: the row would have to pick one */
+        for (a = 0; a < n[i].n_vars; a++)
+            for (b = 0; b < n[i].n_data; b++)
+                if (strcmp(n[i].vars[a].key, n[i].data[b].key) == 0) {
+                    pl_fail(p, "node '%s': '%s' is both a 'vars' name and a 'data' column", n[i].path, n[i].vars[a].key);
+                    return -1;
+                }
         if (n[i].if_var && pl_check_cond(p, n[i].if_var, n[i].path) < 0) return -1;
         if (n[i].unless_var && pl_check_cond(p, n[i].unless_var, n[i].path) < 0) return -1;
         if (n[i].n_children && pl_check_nodes(p, n[i].children, n[i].n_children) < 0) return -1;
+    }
+    return 0;
+}
+
+/* --- bounds sized at load ----------------------------------------------- */
+
+/* The most leaf runs the tree can make: repetitions, rows and loop max are
+ * all known at load. In double, so a deep product does not wrap. */
+static double pl_leaf_runs(pl_player* p, const yexp_node* n, int count) {
+    double sum = 0;
+    int i;
+    for (i = 0; i < count; i++) {
+        double loops = n[i].has_loop ? (double)(n[i].loop_max > 0 ? n[i].loop_max : 1) : 1.0;
+        if (n[i].trial) sum += loops;
+        else {
+            const ytb_table* t = n[i].table ? pl_table_get(p, n[i].table) : NULL;
+            double rows = n[i].table ? (t ? (double)t->n_rows : 0) : 1.0;
+            sum += loops * (double)(n[i].repetitions > 0 ? n[i].repetitions : 1) * rows * pl_leaf_runs(p, n[i].children, n[i].n_children);
+        }
+    }
+    return sum;
+}
+
+/* Whether any leaf can run: a container over a table with no rows, or with
+ * no children, runs nothing (`if` is read at run time and does not count). */
+static bool pl_runnable(pl_player* p, const yexp_node* n, int count) {
+    int i;
+    for (i = 0; i < count; i++) {
+        if (n[i].trial) return true;
+        if (n[i].table) {
+            const ytb_table* t = pl_table_get(p, n[i].table);
+            if (!t || t->n_rows == 0) continue;
+        }
+        if (pl_runnable(p, n[i].children, n[i].n_children)) return true;
+    }
+    return false;
+}
+
+/* The longest text any value can make, from what the definition and the
+ * pack hold: literals, table cells, session fields. A value only copies
+ * one of these, or is a number, a name, a key name or a seed (64 bytes). */
+static void pl_text_value(pl_player* p, const yexp_value* v, size_t* m) {
+    uint32_t i;
+    if (!v) return;
+    switch (v->kind) {
+    case YEXP_V_STRING: if (strlen(v->str) > *m) *m = strlen(v->str); return;
+    case YEXP_V_ARRAY: if ((size_t)v->n * 26 + 2 > *m) *m = (size_t)v->n * 26 + 2; return;
+    case YEXP_V_LOOKUP:
+        pl_text_value(p, v->by, m);
+        for (i = 0; i < v->n; i++) pl_text_value(p, v->map[i].value, m);
+        return;
+    case YEXP_V_CHOICE:
+        for (i = 0; i < v->n; i++) pl_text_value(p, &v->items[i], m);
+        return;
+    case YEXP_V_MICHELSON: pl_text_value(p, v->by, m); return;
+    default: return;
+    }
+}
+
+static void pl_text_steps(pl_player* p, const yexp_step* s, int n, size_t* m) {
+    int i, k;
+    for (i = 0; i < n; i++) {
+        pl_text_value(p, s[i].t, m);
+        pl_text_value(p, s[i].code, m);
+        for (k = 0; k < s[i].n_props; k++) pl_text_value(p, s[i].props[k].value, m);
+        pl_text_steps(p, s[i].steps, s[i].n_steps, m);
+    }
+}
+
+static void pl_text_nodes(pl_player* p, const yexp_node* n, int count, size_t* m) {
+    int i, k;
+    for (i = 0; i < count; i++) {
+        for (k = 0; k < n[i].n_vars; k++) pl_text_value(p, n[i].vars[k].value, m);
+        for (k = 0; k < n[i].n_data; k++) pl_text_value(p, n[i].data[k].value, m);
+        for (k = 0; k < n[i].n_rule_vars; k++) {
+            int j;
+            for (j = 0; n[i].rule_vars[k].values && j < n[i].rule_vars[k].n_values; j++)
+                if (strlen(n[i].rule_vars[k].values[j]) > *m) *m = strlen(n[i].rule_vars[k].values[j]);
+        }
+        pl_text_nodes(p, n[i].children, n[i].n_children, m);
+    }
+}
+
+static int pl_text_bound(pl_player* p) {
+    size_t m = 64;
+    int i, k;
+    for (i = 0; i < p->def->n_stimuli; i++)
+        for (k = 0; k < p->def->stimuli[i].n_props; k++) pl_text_value(p, p->def->stimuli[i].props[k].value, &m);
+    for (i = 0; i < p->def->n_templates; i++) {
+        const yexp_template* t = &p->def->templates[i];
+        pl_text_steps(p, t->events, t->n_events, &m);
+        pl_text_steps(p, t->after, t->n_after, &m);
+        for (k = 0; k < t->n_columns; k++) pl_text_value(p, t->columns[k].value, &m);
+        pl_text_value(p, t->outcome, &m);
+        if (t->response) {
+            pl_text_value(p, t->response->key_answer, &m);
+            pl_text_value(p, t->response->trigger_code, &m);
+            for (k = 0; k < t->response->n_choices; k++) {
+                if (strlen(t->response->choices[k].key) > m) m = strlen(t->response->choices[k].key);
+                if (t->response->choices[k].name && strlen(t->response->choices[k].name) > m) m = strlen(t->response->choices[k].name);
+            }
+        }
+    }
+    pl_text_nodes(p, p->def->timeline, p->def->n_timeline, &m);
+    for (i = 0; i < p->n_tables; i++) {
+        const ytb_table* t = p->tables[i].table;
+        int c;
+        for (c = 0; c < t->n_cols; c++) {
+            int l;
+            for (l = 0; l < ytb_n_levels(t, c); l++) {
+                const char* x = ytb_level_text(t, c, l);
+                if (x && strlen(x) > m) m = strlen(x);
+            }
+        }
+    }
+    for (i = 0; i < p->def->n_fields; i++)
+        if (p->field_values[i].str && strlen(p->field_values[i].str) > m) m = strlen(p->field_values[i].str);
+    if (m > PL_MAX_TEXT) {
+        pl_fail(p, "a value can be %zu bytes long (a literal, a table cell or a session field); the data set takes at most %d", m, PL_MAX_TEXT);
+        return -1;
+    }
+    p->max_text = m;
+    p->text_buf = (char*)pl_alloc(p, m + 1);
+    p->key_answer = (char*)pl_alloc(p, m + 1);
+    p->runs_key = (char*)pl_alloc(p, 2 * m + 1024);
+    return p->text_buf && p->key_answer && p->runs_key ? 0 : -1;
+}
+
+/* An RDK records one step a frame. Its buffer holds the longest trial that
+ * shows it: the events' latest time, the response's deadline and the
+ * after's latest, each at its extreme (pl_template_bound_ns(), host.c). */
+static int pl_rdk_steps(pl_player* p) {
+    int i, k;
+    double rate = p->caps.period_ns > 0 ? 1e9 / (double)p->caps.period_ns : 60.0;
+    for (i = 0; i < p->n_stims; i++) {
+        pl_stim* s = &p->stims[i];
+        int64_t longest = 0;
+        if (s->def->kind != YEXP_RDK) continue;
+        for (k = 0; k < p->n_tmpls; k++) {
+            int64_t ns;
+            if (!p->tmpls[k].stim_used[i]) continue;
+            if (pl_template_bound_ns(p, p->tmpls[k].def, &ns) < 0) return -1;
+            if (ns < 0 || ns > (int64_t)PL_MAX_RDK_TRIAL_S * 1000000000LL) {
+                if (ns < 0) pl_fail(p, "stimulus '%s': template '%s' has no end it can reach on its own (a response with no deadline), so the rdk's stream cannot be sized; give the response a 'duration_s'", s->def->name, p->tmpls[k].def->name);
+                else pl_fail(p, "stimulus '%s': a trial of template '%s' can last %.0f s, past the %d s an rdk's stream is sized for", s->def->name, p->tmpls[k].def->name, (double)ns / 1e9, PL_MAX_RDK_TRIAL_S);
+                return -1;
+            }
+            if (ns > longest) longest = ns;
+        }
+        s->max_steps = (int)((double)longest / 1e9 * rate) + 16;
+        s->steps = (yrdk_step*)pl_alloc(p, sizeof(yrdk_step) * (size_t)s->max_steps);
+        if (!s->steps) return -1;
     }
     return 0;
 }
@@ -1839,11 +2004,30 @@ int pl_load(pl_player* p, const pl_args* a) {
     }
 
     if (pl_check_nodes(p, p->def->timeline, p->def->n_timeline) < 0) return -1;
+    if (!pl_runnable(p, p->def->timeline, p->def->n_timeline)) {
+        pl_fail(p, "the timeline has no leaf that can run: its containers have no children or tables with no rows");
+        return -1;
+    }
+    {
+        double runs = pl_leaf_runs(p, p->def->timeline, p->def->n_timeline);
+        if (runs > PL_MAX_LEAF_RUNS) {
+            pl_fail(p, "the tree can run %.0f leaves (repetitions x rows x loop max); the session's seed log holds %d", runs, PL_MAX_LEAF_RUNS);
+            return -1;
+        }
+        p->n_leaf_runs_max = (int)runs;
+    }
+    if (pl_text_bound(p) < 0 || pl_rdk_steps(p) < 0) return -1;
     for (i = 0; i < p->def->n_templates; i++)
         if (pl_check_steps(p, p->def->templates[i].events, p->def->templates[i].n_events, p->def->templates[i].name) < 0 ||
             pl_check_steps(p, p->def->templates[i].after, p->def->templates[i].n_after, p->def->templates[i].name) < 0)
             return -1;
     if (pl_columns_build(p) < 0) return -1;
+    {
+        /* a row's text: each text column's longest value */
+        int c, n_text = 0;
+        for (c = 0; c < p->n_cols; c++) if (p->cols[c].type == YTR_COL_STRING) n_text++;
+        p->row_text_cap = (size_t)n_text * (p->max_text + 1) + 64;
+    }
     return p->failed ? -1 : 0;
 }
 

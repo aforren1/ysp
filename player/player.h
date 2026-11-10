@@ -48,11 +48,13 @@ enum {
     PL_MAX_DEPTH_STACK = 34,
     PL_MAX_TEXTURES   = 512,
     PL_EVENT_QUEUE    = 4096,
-    PL_MAX_STEPS_RDK  = 65536, /* steps of one RDK in one trial: 18 min at 60 Hz;
-                              * past it the run stops with a named error    */
-    PL_MAX_LEAF_RUNS  = 65536, /* leaf runs in a session, for node_seeds     */
-    PL_WALK_PER_FRAME = 4096,  /* tree-walk steps before the frame goes on    */
-    PL_WALK_MAX       = 1000000 /* consecutive tree-walk steps with no trial  */
+    PL_MAX_RDK_TRIAL_S = 7200, /* the longest trial an RDK's stream is sized
+                              * for at load; a longer one is refused there   */
+    PL_MAX_LEAF_RUNS  = 10000000, /* leaf runs a tree can make (skipped ones
+                              * too), sized at load: 24 bytes each          */
+    PL_MAX_TEXT       = 4096,  /* bytes of one value's text: ysp/table.h's
+                              * longest field, so the files read back         */
+    PL_WALK_PER_FRAME = 4096   /* tree-walk steps before the frame goes on    */
 };
 /* pl_val.flags beyond the loader's: a trial seed (text is "x" and 16 hex digits,
  * the spelling of the trial_seed column); a session field that was not given
@@ -149,7 +151,7 @@ typedef struct pl_stim {
     bool rdk_moving;
     int64_t rdk_t0;
     uint64_t rdk_seed;
-    yrdk_step* steps; int n_steps; int stream;
+    yrdk_step* steps; int n_steps; int stream; int max_steps;
     /* michelson */
     const yexp_value* michelson;
     bool  text_after;           /* its text depends on the response         */
@@ -279,7 +281,7 @@ typedef struct pl_row {
     /* the row's values; written when its frames' records are in */
     struct { int col; int type; int64_t i; double d; const char* s; } cells[YTR_DATA_MAX_COLS];
     int     n_cells;
-    char    text[PL_ROW_TEXT];
+    char*   text;            /* row_text_cap bytes, sized at load           */
     size_t  text_len;
     yrsp_result res;
     bool    has_res;
@@ -346,7 +348,13 @@ struct pl_player {
     pl_node_seed_rec* node_seeds;
     int       n_node_seeds;
     int       leaf_iter, leaf_loop_pass, leaf_n_correct, leaf_n_counted, iter_counter;
-    char      key_answer[256];
+    char*     key_answer;      /* max_text + 1 bytes, sized at load          */
+    size_t    max_text;        /* the longest value text the session can make */
+    char*     text_buf;        /* max_text + 1: a cell, a lookup's key        */
+    char*     runs_key;        /* a glyph-run block's key                     */
+    size_t    row_text_cap;    /* bytes of a row's text arena                 */
+    int       max_rdk_steps;
+    int       n_leaf_runs_max;
     pl_stim_stats* stat_pool[PL_PENDING_ROWS];
     pl_out_stats*  out_pool[PL_PENDING_ROWS];
     pl_stim_stats* stats_now;
@@ -361,6 +369,7 @@ struct pl_player {
     int       now_tier, now_dropped, now_flags;
     bool      pending_stop;
     bool      release_due;
+    yrsp_collector* release_to;
     yrsp_input release_ev;
     int       n_leaves_tmp;
 
@@ -518,6 +527,9 @@ int  pl_walk_next_leaf(pl_player* p);
 int  pl_start_trial(pl_player* p, const yscr_frame* f);
 int  pl_end_trial(pl_player* p, const yscr_frame* f);
 int  pl_extreme_ns(pl_player* p, const yexp_value* v, int64_t* ns);
+/* The longest a trial of t can run, over the leaves that run it at their
+ * extremes; -1 in *ns when nothing bounds it (a response with no deadline). */
+int  pl_template_bound_ns(pl_player* p, const yexp_template* t, int64_t* ns);
 int  pl_eval_var_bool(pl_player* p, const pl_env* env, const char* name, bool* out);
 int  pl_channels_assign(pl_player* p);
 int  pl_columns_build(pl_player* p);

@@ -115,7 +115,7 @@ static int pl_columns_tree(pl_player* p, int pass) {
                 int c;
                 if (!t) return -1;
                 for (c = 0; c < t->n_cols; c++)
-                    if (pl_col_add(p, ytb_col_name(t, c), YTR_COL_STRING, CS_VAR, c, CF_TABLE) < 0) return -1;
+                    if (pl_col_add(p, ytb_col_name(t, c), YTR_COL_STRING, CS_VAR, c, CF_VAR) < 0) return -1;
             }
         }
         for (n = lf->node; n; n = n->parent) {
@@ -213,9 +213,8 @@ static int pl_dataset_open(pl_player* p) {
     yjs_set(&a, s, "format_version", yjs_new_int(&a, YEXP_FORMAT_VERSION));
     yjs_set(&a, s, "headers", pl_header_versions(p, &a));
     for (i = 0; i < p->def->n_fields; i++) {
-        char v[256];
-        pl_val_text(&p->field_values[i], v, sizeof v);
-        yjs_set(&a, fields, p->def->fields[i].name, yjs_new_stringz(&a, v));
+        pl_val_text(&p->field_values[i], p->text_buf, p->max_text + 1);
+        yjs_set(&a, fields, p->def->fields[i].name, yjs_new_stringz(&a, p->text_buf));
     }
     yjs_set(&a, s, "session_fields", fields);
     yscr_describe(&p->scr, line, sizeof line);
@@ -588,8 +587,9 @@ static int pl_leaf_open(pl_player* p, pl_leaf* lf, int iter) {
     seed = pl_node_seed(p->seed, lf->node->path, iters, n);
     /* compare.py and the operator use these; the session's seed is enough to
      * rederive them, but the seed row shows them without the hash */
-    if (p->n_node_seeds >= PL_MAX_LEAF_RUNS) {
-        pl_fail(p, "node '%s': the session has run %d leaves; the data set cannot record more seeds", lf->node->path, PL_MAX_LEAF_RUNS);
+    if (p->n_node_seeds >= p->n_leaf_runs_max) {
+        /* sized at load from the tree's bound: cannot happen */
+        pl_fail(p, "internal: node '%s': more leaf runs than the tree's bound of %d", lf->node->path, p->n_leaf_runs_max);
         return -1;
     }
     p->node_seeds[p->n_node_seeds].path = lf->node->path;
@@ -614,13 +614,9 @@ int pl_walk_next_leaf(pl_player* p) {
     for (;;) {
         pl_stack* top;
         if (p->sp == 0) { p->walk_done = true; return 0; }
-        /* a tree that loops over nothing: spread over frames, so a frame keeps
-         * its time and the session's budget can stop it; a named error when
-         * no trial ever comes */
-        if (++p->walk_steps > PL_WALK_MAX) {
-            pl_fail(p, "the tree ran %d node steps with no trial: a loop or repetition over nothing", PL_WALK_MAX);
-            return -1;
-        }
+        /* a tree that loops over skipped nodes: spread over frames, so a frame
+         * keeps its time; the walk is finite (repetitions and loop max are
+         * bounded) and a tree in which no leaf can run is refused at load */
         if (++p->walk_frame_steps > PL_WALK_PER_FRAME) return 2;
         top = &p->stack[p->sp - 1];
         if (top->child >= top->n_children) {
@@ -785,7 +781,7 @@ int pl_start_trial(pl_player* p, const yscr_frame* f) {
             p->responding = true;
             p->env.key_answer_known = false;
             if (d->response->key_answer) {
-                if (pl_eval_text(p, &p->env, d->response->key_answer, p->key_answer, sizeof p->key_answer) < 0) return -1;
+                if (pl_eval_text(p, &p->env, d->response->key_answer, p->key_answer, p->max_text + 1) < 0) return -1;
                 p->env.key_answer_known = true;
             }
             pl_participant_plan(p);
@@ -813,7 +809,11 @@ static pl_row* pl_row_new(pl_player* p) {
         pl_row_write_oldest(p);
         r = &p->rows[p->row_head];
     }
-    memset(r, 0, offsetof(pl_row, text));
+    {
+        char* keep = r->text;
+        memset(r, 0, offsetof(pl_row, text));
+        r->text = keep;
+    }
     r->used = true;
     r->tier_worst = 0;
     p->row_head = (p->row_head + 1) % PL_PENDING_ROWS;
@@ -821,10 +821,12 @@ static pl_row* pl_row_new(pl_player* p) {
     return r;
 }
 
+static size_t p_row_cap;   /* pl_run sets it; one session per process */
+
 static char* pl_row_str(pl_row* r, const char* s) {
     size_t n = strlen(s);
     char* out;
-    if (r->text_len + n + 1 > PL_ROW_TEXT) return NULL;
+    if (r->text_len + n + 1 > p_row_cap) return NULL;
     out = r->text + r->text_len;
     memcpy(out, s, n + 1);
     r->text_len += n + 1;
@@ -834,12 +836,12 @@ static char* pl_row_str(pl_row* r, const char* s) {
 /* A value's text as a row cell, in the row's arena. A value too long is a
  * named refusal: a cut value would be wrong data with nothing to flag it. */
 static int pl_cell_text(pl_player* p, pl_row* r, const char* name, const pl_val* x, const char** out) {
-    char buf[256];
-    int rc = pl_val_text(x, buf, sizeof buf);
-    if (rc == -2) { pl_fail(p, "the column '%s': its value is longer than %zu bytes", name, sizeof buf - 1); return -1; }
+    char* buf = p->text_buf;
+    int rc = pl_val_text(x, buf, p->max_text + 1);
+    if (rc == -2) { pl_fail(p, "internal: the column '%s' has a value longer than the load's bound of %zu bytes", name, p->max_text); return -1; }
     if (rc < 0) { pl_fail(p, "the column '%s': the value has no text", name); return -1; }
     *out = pl_row_str(r, buf);
-    if (!*out) { pl_fail(p, "the column '%s': the row's text is over %d bytes", name, PL_ROW_TEXT); return -1; }
+    if (!*out) { pl_fail(p, "internal: the row's text for '%s' is over the load's bound of %zu bytes", name, p->row_text_cap); return -1; }
     return 0;
 }
 
@@ -888,17 +890,20 @@ static int pl_row_fill(pl_player* p, pl_row* r) {
                     for (k = 0; k < n->n_rule_vars; k++) if (strcmp(n->rule_vars[k].name, name) == 0) is_var = 1;
                     if (!is_var) for (k = 0; k < n->n_data; k++) if (strcmp(n->data[k].key, name) == 0) dv = n->data[k].value;
                 }
-                if (!is_var && !dv) break;
-                if (is_var ? pl_var(p, &p->env, name, &x) < 0 : pl_eval(p, &p->env, dv, &x) < 0) return -1;
-                if (p->cols[i].type == YTR_COL_TIME_NS) {
-                    if (x.kind == YEXP_V_NUMBER) { v = x.flags & YEXP_VF_DURATION ? x.i : (int64_t)llround(x.num * 1e9); have = 4; }
-                } else {
-                    if (pl_cell_text(p, r, name, &x, &s) < 0) return -1;
-                    have = 3;
+                if (is_var || dv) {
+                    if (is_var ? pl_var(p, &p->env, name, &x) < 0 : pl_eval(p, &p->env, dv, &x) < 0) return -1;
+                    if (p->cols[i].type == YTR_COL_TIME_NS) {
+                        if (x.kind == YEXP_V_NUMBER) { v = x.flags & YEXP_VF_DURATION ? x.i : (int64_t)llround(x.num * 1e9); have = 4; }
+                    } else {
+                        if (pl_cell_text(p, r, name, &x, &s) < 0) return -1;
+                        have = 3;
+                    }
+                    break;
                 }
-                break;
             }
-            if (p->col_family[i] == CF_TABLE) {
+            {
+                /* a table column, here; in another leaf the same name can be
+                 * a `vars` or `data` (the loader's order: vars, then tables) */
                 const yexp_node* n;
                 const ytb_table* tb = NULL;
                 int col = -1, row = -1;
@@ -1062,7 +1067,7 @@ void pl_row_write_oldest(pl_player* p) {
 /* D10 is silent on a stimulus shown twice. Here: the first onset and the
  * last offset, and frames, tier, drops and flags over every frame it was
  * shown (frame_vis, written when the frame was drawn). */
-static void pl_stats_update(const pl_player* p, pl_stim_stats* stats, int n, const yscr_record* rec) {
+static void pl_stats_update(const pl_player* p, pl_stim_stats* stats, int n, const yscr_record* rec, int64_t end_frame) {
     int k;
     const uint8_t* vis = p->frame_vis + (size_t)(rec->index % PL_FRAME_RING) * (size_t)p->pool_stats;
     for (k = 0; k < n; k++) {
@@ -1073,6 +1078,8 @@ static void pl_stats_update(const pl_player* p, pl_stim_stats* stats, int n, con
         }
         if (rec->index == st->offset_frame) st->offset_ns = rec->onset ? rec->onset : rec->planned;
         if (!vis[k]) continue;
+        /* still shown on the trial's last frame: its offset is the trial's end */
+        if (rec->index == end_frame) st->offset_ns = rec->onset ? rec->onset : rec->planned;
         st->frames++;
         if (st->tier < rec->tier) st->tier = rec->tier;
         st->dropped += (int)rec->dropped;
@@ -1094,7 +1101,7 @@ static int pl_on_record(pl_player* p, const yscr_record* rec) {
     if (yds_write_frame(&p->ds, &fr) < 0) { pl_fail(p, "frames.csv: %s", yds_error(&p->ds)); return -1; }
     if (p->in_trial && trial == p->global_trial - 1) {
         /* the running trial: its row does not exist yet */
-        pl_stats_update(p, p->stats_now, p->tmpl->n_record, rec);
+        pl_stats_update(p, p->stats_now, p->tmpl->n_record, rec, -1);
         if (p->now_tier < rec->tier) p->now_tier = rec->tier;
         p->now_dropped += (int)rec->dropped;
         p->now_flags |= rec->flags;
@@ -1102,7 +1109,7 @@ static int pl_on_record(pl_player* p, const yscr_record* rec) {
         for (i = 0; i < PL_PENDING_ROWS; i++) {
             pl_row* r = &p->rows[(p->row_tail + i) % PL_PENDING_ROWS];
             if (!r->used || r->trial_index != trial) continue;
-            pl_stats_update(p, r->stats, r->n_stats, rec);
+            pl_stats_update(p, r->stats, r->n_stats, rec, r->last_frame);
             if (r->tier_worst < rec->tier) r->tier_worst = rec->tier;
             r->frames_dropped += (int)rec->dropped;
             r->flip_flags |= rec->flags;
@@ -1441,8 +1448,9 @@ static int pl_draw(pl_player* p, const yscr_frame* f) {
                     yrdk_start(&s->field, s->rdk_seed, 0);
                     s->rdk_moving = true;
                 }
-                if (s->n_steps >= PL_MAX_STEPS_RDK) {
-                    pl_fail(p, "stimulus '%s' has moved for %d frames in one trial, the most its stream can record", s->def->name, PL_MAX_STEPS_RDK);
+                if (s->n_steps >= s->max_steps) {
+                    /* sized at load from the longest trial: cannot happen */
+                    pl_fail(p, "internal: stimulus '%s' moved for more frames than its trial's bound of %d", s->def->name, s->max_steps);
                     return -1;
                 }
                 if (yrdk_update(&s->field, f->onset - s->rdk_t0) < 0) { pl_fail(p, "'%s': %s", s->def->name, yrdk_error(&s->field)); return -1; }
@@ -1476,6 +1484,7 @@ static int pl_draw(pl_player* p, const yscr_frame* f) {
 
 int pl_frame(pl_player* p, const yscr_frame* f) {
     int i, rc, n;
+    bool drawn;
     /* flip records first: a trial's press is planned from its stimulus's
      * record, and rows wait for their last frame's record */
     for (i = 0; i < f->n_done; i++) {
@@ -1500,6 +1509,7 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
             return 1;
         }
     }
+    drawn = p->in_trial;
     if (p->in_trial) p->frame_trial[f->index % PL_FRAME_RING] = p->global_trial - 1;
     /* the scripted participant's key, on the frames it falls in (as the C
      * programs feed theirs) */
@@ -1509,7 +1519,7 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
         if (p->press_at <= f->onset) {
             /* the last trial's release first, if it is still due: a key's
              * events must arrive in time order */
-            if (p->release_due) { yrsp_feed(t->collector, &p->release_ev); p->release_due = false; }
+            if (p->release_due) { yrsp_feed(p->release_to, &p->release_ev); p->release_due = false; }
             memset(&ev, 0, sizeof ev);
             ev.t = p->press_at;
             ev.type = YRSP_PRESS;
@@ -1525,14 +1535,17 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
             yrsp_feed(t->collector, &ev);
             p->press_pending = false;
             p->release_due = true;
+            p->release_to = t->collector;   /* the release goes where the press went */
             p->release_ev = ev;
             p->release_ev.t = p->release_at;
             p->release_ev.type = YRSP_RELEASE;
             p->release_ev.value = 0.0f;
         }
     }
-    if (p->in_trial && p->release_due && p->tmpl->collector && p->release_ev.t <= f->onset) {
-        yrsp_feed(p->tmpl->collector, &p->release_ev);
+    /* a key held past its trial's end: its collector still hears the release,
+     * whatever trial (and template) runs now */
+    if (p->release_due && p->release_ev.t <= f->onset) {
+        yrsp_feed(p->release_to, &p->release_ev);
         p->release_due = false;
     }
     if (p->in_trial && p->tmpl->collector) {
@@ -1570,7 +1583,7 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
     /* also on the end's frame: a step that lands with the trial's last event
      * must reach this frame's draw */
     if (p->global_trial > 0) ygfx_apply(p->binds, p->n_binds, ytl_values(&p->tl));
-    if (p->trace_file && p->global_trial > 0) {
+    if (p->trace_file && drawn) {   /* the frames that draw stimuli */
         const float* values = ytl_values(&p->tl);
         int k;
         for (k = 0; k < p->n_channels; k++)
@@ -1578,7 +1591,14 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
                     p->channels[k].prop ? p->channels[k].prop : "visible", (double)values[k]);
     }
     yscr_mark(&p->scr, YSCR_PHASE_EVALUATE);
-    if (pl_draw(p, f) < 0) return -1;
+    if (drawn) {
+        if (pl_draw(p, f) < 0) return -1;
+    } else {
+        /* before the first trial and on a frame where the walk yielded:
+         * nothing is shown, as on any frame between two trials */
+        ygfx_begin(&p->gfx, f);
+        ygfx_end(&p->gfx);
+    }
     if (p->args.max_seconds && f->onset - (p->t0_session ? p->t0_session : f->onset) > p->args.max_seconds * 1000000000LL) {
         pl_fail(p, "the session passed its budget of %lld virtual seconds (a window with no deadline and no scripted press?)", (long long)p->args.max_seconds);
         return -1;
@@ -1617,7 +1637,7 @@ int pl_run(pl_player* p) {
     p->peek = (ytl_event*)pl_alloc(p, sizeof(ytl_event) * (size_t)(p->fired_cap + 1));
     if (!p->peek) return -1;
     if (!p->events) return -1;
-    p->node_seeds = (pl_node_seed_rec*)pl_alloc(p, sizeof(pl_node_seed_rec) * PL_MAX_LEAF_RUNS);
+    p->node_seeds = (pl_node_seed_rec*)pl_alloc(p, sizeof(pl_node_seed_rec) * (size_t)(p->n_leaf_runs_max + 1));
     if (!p->node_seeds) return -1;
     p->pool_stats = 0;
     for (i = 0; i < p->n_tmpls; i++) if (p->tmpls[i].n_record > p->pool_stats) p->pool_stats = p->tmpls[i].n_record;
@@ -1628,6 +1648,9 @@ int pl_run(pl_player* p) {
     p->out_now = (pl_out_stats*)pl_alloc(p, sizeof(pl_out_stats) * (size_t)(p->n_triggers + 1));
     if (!p->out_now) return -1;
     for (i = 0; i < PL_PENDING_ROWS; i++) {
+        p_row_cap = p->row_text_cap;
+        p->rows[i].text = (char*)pl_alloc(p, p->row_text_cap + 1);
+        if (!p->rows[i].text) return -1;
         p->stat_pool[i] = (pl_stim_stats*)pl_alloc(p, sizeof(pl_stim_stats) * (size_t)(p->pool_stats + 1));
         p->out_pool[i] = (pl_out_stats*)pl_alloc(p, sizeof(pl_out_stats) * (size_t)(p->n_triggers + 1));
         if (!p->stat_pool[i] || !p->out_pool[i]) return -1;

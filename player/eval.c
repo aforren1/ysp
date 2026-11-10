@@ -236,6 +236,31 @@ int pl_val_text(const pl_val* v, char* buf, size_t cap) {
         return 0;
     }
     switch (v->kind) {
+    case YEXP_V_ARRAY: {
+        /* an array of numbers (2.2) in one text form: JSON, canonical numbers */
+        size_t used = 0;
+        uint32_t k;
+        if (cap < 3) return -2;
+        buf[used++] = '[';
+        for (k = 0; k < v->n; k++) {
+            char t[YJS_DOUBLE_TEXT + 24];
+            const yexp_value* it = &v->items[k];
+            int n;
+            if (it->kind != YEXP_V_NUMBER) return -1;
+            if (it->flags & (YEXP_VF_INT | YEXP_VF_DURATION)) {
+                if (it->flags & YEXP_VF_DURATION) n = yjs_format_double(it->num, t, sizeof t);
+                else n = snprintf(t, sizeof t, "%lld", (long long)it->i);
+            } else n = yjs_format_double(it->num, t, sizeof t);
+            if (n < 0) return -1;
+            if (used + (size_t)n + 2 >= cap) return -2;
+            if (k) buf[used++] = ',';
+            memcpy(buf + used, t, (size_t)n);
+            used += (size_t)n;
+        }
+        buf[used++] = ']';
+        buf[used] = 0;
+        return 0;
+    }
     case YEXP_V_BOOL:   snprintf(buf, cap, "%s", v->i ? "true" : "false"); return 0;
     case YEXP_V_STRING: return (size_t)snprintf(buf, cap, "%s", v->str ? v->str : "") < cap ? 0 : -2;
     case YEXP_V_NUMBER:
@@ -299,13 +324,14 @@ int pl_eval(pl_player* p, const pl_env* e, const yexp_value* v, pl_val* out) {
         case YEXP_V_VAR:
             return pl_var(p, e, v->str, out);
         case YEXP_V_LOOKUP: {
-            char key[256];
+            char* key = p->text_buf;   /* max_text + 1 bytes: no value is longer */
+            size_t key_cap = p->max_text + 1;
             pl_val by;
             int lo = 0, hi = (int)v->n - 1, found = -1;
             if (pl_eval(p, e, v->by, &by) < 0) return -1;
             {
-                int trc = pl_val_text(&by, key, sizeof key);
-                if (trc == -2) { pl_fail(p, "a lookup's 'by' is longer than %zu bytes", sizeof key - 1); return -1; }
+                int trc = pl_val_text(&by, key, key_cap);
+                if (trc == -2) { pl_fail(p, "internal: a lookup's 'by' is longer than the load's bound of %zu bytes", key_cap - 1); return -1; }
                 if (trc < 0) { pl_fail(p, "a lookup's 'by' is not a single value"); return -1; }
             }
             while (lo <= hi) {

@@ -53,6 +53,9 @@ static void test_values(void) {
     p.field_values[0].kind = YEXP_V_NUMBER; p.field_values[0].flags = YEXP_VF_INT; p.field_values[0].i = 1; p.field_values[0].num = 1;
     p.field_values[2].kind = YEXP_V_NUMBER; p.field_values[2].flags = YEXP_VF_INT; p.field_values[2].i = 5; p.field_values[2].num = 5;
     p.participant = 5;
+    /* the loader sizes these from the definition; this test has no loader */
+    p.max_text = 64;
+    p.text_buf = (char*)pl_alloc(&p, (size_t)p.max_text + 1);
     memset(&e, 0, sizeof e);
 
     /* a session field */

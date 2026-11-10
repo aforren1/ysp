@@ -556,11 +556,20 @@ def t_fix_sound_twice(ctx):
 
 
 def t_fix_rdk_limit(ctx):
+    # the step buffer is sized at load from the longest trial: a 20-minute
+    # trial runs to its end; a trial past 2 hours, or one only a press can
+    # end, is refused at load
     stim = {"s": {"kind": "shape", "w": 1, "h": 1},
             "r": {"kind": "rdk", "aperture": "circle", "w": 50, "count": 3, "speed": 10, "dot_size": 2, "color": [1, 1, 1]}}
     d = base({"t": {"events": [{"on": "r"}, {"wait_s": 1200}, {"off": "r"}]}}, [{"name": "l", "trial": "t"}], stimuli=stim)
-    r = Run(ctx, "fix_rdk_limit", d, args=["--max-seconds", "1300"])
-    check(r.rc != 0 and "65536 frames" in r.err, "an rdk past its stream stops with its name: %s" % r.err)
+    r = Run(ctx, "fix_rdk_long", d, args=["--max-seconds", "1300"])
+    check(r.rc == 0 and len(r.trials) == 1 and int(r.trials[0]["r_updates"]) >= 72000, "a 20-minute rdk trial runs to its end: %s %s" % (r.err, r.trials[:1] and r.trials[0]["r_updates"]))
+    d2 = base({"t": {"events": [{"on": "r"}, {"wait_s": 7300}, {"off": "r"}]}}, [{"name": "l", "trial": "t"}], stimuli=stim)
+    r2 = Run(ctx, "fix_rdk_too_long", d2)
+    check(r2.rc != 0 and "7300" in r2.err and not os.path.exists(r2.data), "a trial past the rdk's bound is refused at load: %s" % r2.err)
+    d3 = base({"t": {"events": [{"on": "r"}], "response": {"role": "r", "from": "r", "choices": ["left"]}}}, [{"name": "l", "trial": "t"}], stimuli=stim)
+    r3 = Run(ctx, "fix_rdk_unbounded", d3)
+    check(r3.rc != 0 and "duration_s" in r3.err and not os.path.exists(r3.data), "an rdk in a trial only a press can end is refused at load: %s" % r3.err)
 
 
 def t_fix_record_inherit(ctx):
@@ -587,9 +596,17 @@ def t_fix_backward_at(ctx):
     marks = [float(e["t_s"]) for e in r2.events if e["text"] == "go"]
     ons = [float(e["t_s"]) for e in r2.events if e["stimulus"] == "s" and e["kind"] == "onset"]
     check(r2.rc == 0 and marks and marks[0] - ons[0] >= 0.99, "after begins at the latest of events: %s %s" % (marks, ons))
+    # 2.5: only `then` moves time; a `to` running at the end is cut there
     d3 = base({"t": {"events": [{"on": "s"}, {"to": "s", "props": {"x": 1}, "duration_s": 1}, {"off": "t"}, {"on": "t"}]}}, [{"name": "l", "trial": "t"}])
     r3 = Run(ctx, "fix_at3", d3)
-    check(r3.rc == 0 and float(r3.trials[0]["time_elapsed_s"]) >= 0.99, "a tween's end is scheduled: %s %s" % (r3.trials[:1], r3.err))
+    check(r3.rc == 0 and float(r3.trials[0]["time_elapsed_s"]) < 0.1, "a to tween does not move the end: %s %s" % (r3.trials[:1] and r3.trials[0]["time_elapsed_s"], r3.err))
+    d3b = base({"t": {"events": [{"on": "s"}, {"to": "s", "props": {"opacity": 0}, "duration_s": 5}], "response": {"role": "r", "choices": ["left"], "from": "s", "duration_s": 2, "key_answer": "left"},
+                     "after": [{"on": "t"}, {"wait_s": 0.05}, {"off": "t"}]}}, [{"name": "l", "trial": "t"}])
+    r3b = Run(ctx, "fix_to_response", d3b, args=["--rt", "0.3"])
+    check(r3b.rc == 0 and float(r3b.trials[0]["time_elapsed_s"]) < 0.5, "a to tween does not hold back after a response: %s" % (r3b.trials[:1] and r3b.trials[0]["time_elapsed_s"]))
+    d3c = base({"t": {"events": [{"on": "s"}, {"then": "s", "props": {"x": 1}, "duration_s": 1}, {"off": "s"}]}}, [{"name": "l", "trial": "t"}])
+    r3c = Run(ctx, "fix_then", d3c)
+    check(r3c.rc == 0 and float(r3c.trials[0]["time_elapsed_s"]) >= 0.99, "a then moves time: %s" % (r3c.trials[:1] and r3c.trials[0]["time_elapsed_s"]))
     # a forward at_s in `after`, and the end goes at the latest
     d4 = base({"t": {"events": [{"on": "s"}], "response": {"role": "r", "from": "s", "duration_s": 0.1, "choices": ["left"]}, "after": [{"at_s": 1.5}, {"mark": "late"}]}}, [{"name": "l", "trial": "t"}])
     r4 = Run(ctx, "fix_at4", d4, args=["--participant", "silent"])
@@ -665,20 +682,30 @@ def t_fix_texture_vars(ctx):
 
 
 def t_fix_walk_budget(ctx):
+    # a tree in which no leaf can run is refused at load
     d = base({"t": tmpl()}, [{"name": "c", "repetitions": 1000000, "timeline": [{"name": "e", "repetitions": 3, "timeline": []}]}])
-    r = Run(ctx, "fix_walk", d, args=["--max-seconds", "100000"])
-    check(r.rc != 0 and "node steps with no trial" in r.err, "a loop over nothing stops with its name: %s" % r.err)
-    with open(os.path.join(r.data, "frames.csv")) as f:
-        n_lines = sum(1 for _ in f)
-    check(n_lines > 3, "the walk yields frames, not one long frame: %d lines of frames.csv" % n_lines)
-    d2 = base({"t": {"events": [{"on": "s"}, {"off": "s"}]}},
-              [{"name": "c", "repetitions": 70000, "timeline": [{"name": "l", "trial": "t"}]}])
-    r2 = Run(ctx, "fix_seeds", d2, args=["--max-seconds", "100000"])
-    check(r2.rc != 0 and "more seeds" in r2.err, "the node_seeds limit is a named error: %s" % r2.err)
+    r = Run(ctx, "fix_walk", d)
+    check(r.rc != 0 and "no leaf that can run" in r.err and not os.path.exists(r.data), "no runnable leaf: refused at load: %s" % r.err)
+    # many skipped leaves, then a trial: the walk yields frames and goes on
+    kids = [{"name": "k%d" % i, "if": "$off", "trial": "t"} for i in range(200)]
+    d2 = base({"t": {"events": [{"on": "s"}, {"wait_s": 0.02}, {"off": "s"}]}}, [{"name": "c", "repetitions": 5100, "timeline": kids}, {"name": "z", "trial": "t"}],
+              session={"fields": {"participant": {"type": "integer", "required": True}, "off": {"type": "integer", "required": True}}})
+    r2 = Run(ctx, "fix_walk_long", d2, args=["--field", "off=0"])
+    check(r2.rc == 0 and len(r2.trials) == 1 and r2.trials[0]["node"] == "z", "1,020,000 skipped leaves, then a trial: %s" % r2.err)
+    fr = r2.read("frames.csv")
+    check(len(fr) > 100 and fr[0]["trial_index"] == "", "the walk spreads over frames, which belong to no trial: %d" % len(fr))
+    # leaf runs: sized from the tree's bound; past 1,000,000 refused at load
+    d3 = base({"t": {"events": []}}, [{"name": "c", "repetitions": 70000, "timeline": [{"name": "l", "trial": "t"}]}])
+    r3 = Run(ctx, "fix_seeds", d3, args=["--max-seconds", "100000"])
+    check(r3.rc == 0 and len(r3.trials) == 70000, "70000 leaf runs: %s %d" % (r3.err, len(r3.trials)))
+    d4 = base({"t": {"events": []}}, [{"name": "c", "repetitions": 1000, "timeline": [{"name": "d", "repetitions": 1000, "timeline": [{"name": "e", "repetitions": 11, "timeline": [{"name": "l", "trial": "t"}]}]}]}])
+    r4 = Run(ctx, "fix_seeds_over", d4)
+    check(r4.rc != 0 and "11000000" in r4.err and not os.path.exists(r4.data), "past the leaf-run bound: refused at load: %s" % r4.err)
 
 
 def t_fix_data_set(ctx):
     long_v = "x" * 300
+    huge_v = "y" * 5000
     d = base({"t": tmpl(key_answer="left", extra={"columns": {"seed": "$trial_seed", "opt": "$maybe"}})},
              [{"name": "l", "trial": "t", "vars": {"v1": "a"}, "data": {"d1": "b"}, "rules": ["reps 2", "jitter j_s uniform 0.1 0.2"]}],
              session={"fields": {"participant": {"type": "integer", "required": True}, "maybe": {"type": "integer", "required": False}}})
@@ -696,7 +723,15 @@ def t_fix_data_set(ctx):
         check(len(sess["headers"]) >= 15 and "devices" in sess and sess["devices"][0]["bound"] == "sim", "session.json: headers and device rows: %d" % len(sess["headers"]))
     dl = base({"t": tmpl(extra={"columns": {"long": "$lt"}})}, [{"name": "l", "trial": "t", "vars": {"lt": long_v}}])
     r2 = Run(ctx, "fix_long", dl, args=["--rt", "0.2"])
-    check(r2.rc != 0 and "longer than 255" in r2.err, "a value over 255 bytes: %s" % r2.err)
+    check(r2.rc == 0 and r2.trials[0]["long"] == long_v and r2.trials[0]["lt"] == long_v, "a 300-byte value is written whole: %s" % r2.err)
+    dh = base({"t": tmpl(extra={"columns": {"long": "$lt"}})}, [{"name": "l", "trial": "t", "vars": {"lt": huge_v}}])
+    r2b = Run(ctx, "fix_huge", dh, args=["--rt", "0.2"])
+    check(r2b.rc != 0 and "5000" in r2b.err and not os.path.exists(r2b.data), "a value past 4096 bytes is refused at load: %s" % r2b.err)
+    # an array in vars and data: a value with one text form, fed to the stimulus (item 2 of round 2)
+    da = base({"t": {"events": [{"on": "s"}, {"wait_s": 0.02}, {"off": "s"}]}}, [{"name": "l", "trial": "t", "vars": {"col": [1, 0, 0.5]}, "data": {"arr": [2, 3]}}],
+              stimuli={"s": {"kind": "shape", "w": 1, "h": 1, "color": "$col"}})
+    ra = Run(ctx, "fix_array", da)
+    check(ra.rc == 0 and ra.trials[0]["col"] == "[1,0,0.5]" and ra.trials[0]["arr"] == "[2,3]", "arrays in vars and data: %s %s" % (ra.err, ra.trials[:1] and (ra.trials[0]["col"], ra.trials[0]["arr"])))
     nm = "n" * 60
     dn = base({"t": {"events": [{"on": nm}, {"wait_s": 0.05}, {"off": nm}], "record": [nm]}}, [{"name": "l", "trial": "t"}], stimuli={nm: {"kind": "shape", "w": 1, "h": 1}})
     r3 = Run(ctx, "fix_longname", dn)
@@ -722,11 +757,52 @@ def t_fix_release_order(ctx):
     check(r.rc == 0 and all(float(x["rt_s"]) == 0.2 for x in r.trials), "held keys across trials: %s" % r.err)
 
 
+def t_r2_release_other_template(ctx):
+    # a key held past its trial's end: the release goes to the collector that
+    # saw the press, so the next template's press counts
+    with open(os.path.join(ctx.out, "hold_x.csv"), "w", newline="\n") as f:
+        f.write("trial_index,response,rt_s,hold_s\n0,left,0.1,1.5\n1,left,0.1,0.05\n2,left,0.2,0.05\n")
+    ta = {"events": [{"on": "s"}], "response": {"role": "r", "choices": ["left", "right"], "from": "s", "duration_s": 0.5, "key_answer": "left"}}
+    tb = {"events": [{"on": "t"}], "response": {"role": "r", "choices": ["left", "right"], "from": "t", "duration_s": 0.5, "key_answer": "left"}}
+    d = base({"a": ta, "b": tb}, [{"name": "one", "trial": "a"}, {"name": "two", "trial": "b"}, {"name": "three", "trial": "a"}])
+    r = Run(ctx, "r2_release", d, args=["--participant", "script:" + os.path.join(ctx.out, "hold_x.csv")])
+    check(r.rc == 0 and [x["outcome"] for x in r.trials] == ["correct", "correct", "correct"], "a held key does not cost the next template's press: %s %s" % (r.err, [x["outcome"] for x in r.trials]))
+
+
+def t_r2_yield_draws_nothing(ctx):
+    kids = [{"name": "k%d" % i, "if": "$off", "trial": "t"} for i in range(100)]
+    d = base({"t": {"events": [{"on": "s"}, {"wait_s": 0.02}, {"off": "s"}]}},
+             [{"name": "a", "trial": "t"}, {"name": "c", "repetitions": 300, "timeline": kids}, {"name": "z", "trial": "t"}],
+             session={"fields": {"participant": {"type": "integer", "required": True}, "off": {"type": "integer", "required": True}}})
+    r = Run(ctx, "r2_yield", d, args=["--field", "off=0", "--trace-channels", "trace.csv"])
+    check(r.rc == 0 and len(r.trials) == 2, "yield: %s" % r.err)
+    traced = {x["frame"] for x in trace_rows(ctx, r)}
+    fr = r.read("frames.csv")
+    no_trial = [x["frame"] for x in fr if x["trial_index"] == ""]
+    check(len(no_trial) > 3 and not (traced & set(no_trial)), "frames of no trial draw nothing: %d such frames, %d of them drew" % (len(no_trial), len(traced & set(no_trial))))
+
+
+def t_r2_low(ctx):
+    d = base({"t": {"events": [{"on": "s"}, {"wait_s": 0.1}, {"off": "s"}, {"wait_s": 0.1}, {"on": "s"}, {"wait_s": 0.1}], "record": ["s"]}}, [{"name": "l", "trial": "t"}])
+    r = Run(ctx, "r2_left_on", d)
+    if r.rc == 0:
+        ons = [float(e["t_s"]) for e in r.events if e["stimulus"] == "s" and e["kind"] == "onset"]
+        check(abs(float(r.trials[0]["s_offset_s"]) - (ons[0] + float(r.trials[0]["time_elapsed_s"]))) < 1e-6, "a stimulus left on: its offset is the trial's end: %s" % r.trials[0]["s_offset_s"])
+    check(r.rc == 0, "left on: %s" % r.err)
+    d2 = base({"t": {"events": [{"wait_s": 0.02}]}}, [{"name": "l", "trial": "t", "vars": {"x": "v"}, "data": {"x": "d"}}])
+    r2 = Run(ctx, "r2_same_node", d2)
+    check(r2.rc != 0 and "both a 'vars' name and a 'data' column" in r2.err, "vars and data of one name on one node are refused: %s" % r2.err)
+    d3 = base({"t": {"events": [{"wait_s": 0.02}]}}, [{"name": "a", "trial": "t", "timeline_variables": "x.pstb"}, {"name": "b", "trial": "t", "vars": {"a": "v"}}])
+    r3 = Run(ctx, "r2_table_vars", d3, tables={"x": "a\nq\n"})
+    check(r3.rc == 0 and [x["a"] for x in r3.trials] == ["q", "v"], "a table column here and a vars there share the column: %s %s" % (r3.err, [x.get("a") for x in r3.trials]))
+
+
 TESTS = [t_nested, t_if_unless, t_empty_and_zero, t_loop, t_requeue, t_track_ends, t_lookup_keys, t_triggers, t_after_timing, t_outcomes,
          t_method_update, t_seeds, t_refused, t_unused_stim, t_record_data, t_fix_density, t_fix_key_reapply, t_fix_stale_rdk,
          t_fix_timeout_values, t_fix_any_key, t_fix_from_in_if, t_fix_shown_twice, t_fix_vars_data, t_fix_sound_twice, t_fix_rdk_limit,
          t_fix_record_inherit, t_fix_backward_at, t_fix_refusals, t_fix_michelson_order, t_fix_texture_vars, t_fix_walk_budget,
-         t_fix_data_set, t_fix_check_all_leaves, t_fix_release_order, t_fix_key_var_reapply]
+         t_fix_data_set, t_fix_check_all_leaves, t_fix_release_order, t_fix_key_var_reapply,
+         t_r2_release_other_template, t_r2_yield_draws_nothing, t_r2_low]
 
 
 def main():
