@@ -685,6 +685,7 @@ Purpose: The pack's EXPERIMENT entry: a JSON file, read by ysp/json.h, that name
 
 Status:
 
+- 2026-11-10: the player ([player.md](player.md)) v0.2.0 runs format version 1 in a real window (Linux X11 measured) and on the simulated display. Open: a window with no deadline can end with no response (player.md).
 - 2026-10-21: the data set's writer is built, ysp/dataset.h v0.1.0 (gap G13).
 - Design decided, 2026-10-14: all 15 decisions accepted; D4 changed (durations are plain numbers in seconds, and every duration key and variable ends in `_s`); D11 records flagged frames only, and a requeue, if ever added, is an explicit rule in the definition. G7 (a canonical form for non-integer numbers, the prerequisite for the experiment hash) is closed by ysp/json.h v0.2.0 (2026-10-21). G9 (glyph runs from the definition's texts) is closed by the pack tool v0.6.0 (2026-10-21; `examples/pack/stroop/` is the Stroop example's pack source, with no listed glyph runs). G3 (variables from a per-trial stream), G4 (weight x reps), G10 (256 columns) and G11 (`rate=display`) are closed by ysp/trials.h v0.6.0 and ysp/table.h v0.3.0 (2026-10-21). No loader, no player.
 - Proposal, 2026-10-13. Four worked examples (2AFC staircase, RDK, Stroop from a CSV, EEG trigger) were mapped to the C examples field by field; 13 gaps in the C APIs are listed.
