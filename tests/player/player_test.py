@@ -1000,6 +1000,36 @@ def t_r5_wait_final(ctx):
                                                   "--test-plan-early", repr(late), "--max-seconds", "3"])
     check(r2.rc != 0 and "budget" in r2.err and not any(e["kind"] == "mark" for e in r2.events),
           "no deadline: the early press does not end the window: rc %d %s" % (r2.rc, r2.err[:200]))
+    # landing frames shown more frames late than the old 4-frame bound: the
+    # record, whenever it comes, decides; a lookup by $response with no ""
+    # key (duration 0's promise) is never read on the early press
+    for plan_early in (0.05, 0.1):
+        for name, aft in (("mark", [{"mark": "go"}]), ("lookup", [{"wait_s": {"by": "$response", "map": {"left": 0.05}}}])):
+            d3 = base({"t": {"events": [{"on": "s"}], "after": aft,
+                             "response": {"role": "r", "choices": ["left"], "from": "s", "duration_s": 0}}},
+                      [{"name": "l", "trial": "t"}])
+            r4 = Run(ctx, "r5_wait_late_%s_%g" % (name, plan_early), d3,
+                     args=["--participant", "script:" + os.path.join(ctx.out, "early.csv"), "--max-trials", "1",
+                           "--test-plan-early", repr(plan_early), "--max-seconds", "3"])
+            check(r4.rc != 0 and "budget" in r4.err and not any(e["kind"] == "mark" for e in r4.events),
+                  "a landing %g s late: the early press does not end the window (%s): rc %d %s" % (plan_early, name, r4.rc, r4.err[:200]))
+    # the safety net (1 s) passed before the record: the press ends the
+    # window on the plan, and the record in the same frame makes it early,
+    # before `after` is built: ENDED_EARLY is back (named in player.md), and
+    # the row and `after` hear the same, final result
+    d4 = base({"t": {"events": [{"on": "s"}], "after": [{"mark": "go"}],
+                     "response": {"role": "r", "choices": ["left"], "from": "s", "duration_s": 0}}},
+              [{"name": "l", "trial": "t"}])
+    r5 = Run(ctx, "r5_wait_net", d4, args=["--participant", "script:" + os.path.join(ctx.out, "early.csv"), "--max-trials", "1",
+                                          "--test-plan-early", "1.2"])
+    ok = r5.rc == 0 and len(r5.trials) == 1
+    check(ok, "the safety net: %s" % r5.err[:200])
+    if ok:
+        t = r5.trials[0]
+        f = int(t["rsp_flags"])
+        check(t["response"] == "" and t["rt_s"] == "" and not f & 0x8000 and f & 0x4 and f & 0x80 and t["n_early"] == "1"
+              and any(e["kind"] == "mark" for e in r5.events),
+              "the safety net: the row is the final result: %s" % {k: t[k] for k in ("response", "rt_s", "rsp_flags", "n_early", "outcome")})
     # the same press after the final onset is a response
     with open(os.path.join(ctx.out, "late.csv"), "w", newline="\n") as f:
         f.write("trial_index,response,rt_s,hold_s\n0,left,0.005,0.05\n")

@@ -199,7 +199,7 @@ forced. The Report section lists them with the evidence.
 | An any-key response in a real run | Hears its role's kind only (`yrsp_desc.kinds`): a click that brings the window to the front is no response |
 | A response's `trigger` on a device role | A `ydev_rule` on the role's reader thread, its output the trigger role's device. Its codes are fixed when the device opens: the code must be a number or a lookup by `$response` of numbers, and every template that responds on the role with a trigger must give the same choices and codes, in any order; else the start stops, naming both. A template on the role with no `trigger` runs with the rule disarmed, so its presses send nothing; the rule is disarmed at each trial's end. A rule's record goes to the trial whose arm its press follows. Measured on a pty pair: write start minus the press, p50 66.5 us, max 93.9 us (Results) |
 | A response's `trigger` on a keyboard role | `ydev_out_mark()` from the frame loop when it sees the response, up to a frame after the press (2.6). The write runs on the frame thread: 2.7 to 8.9 us on the pty TriggerBox (28 writes); ysp/device.h says an XID output can wait up to 2 ms for a timer query, which a 16.7 ms frame holds. No XID was measured |
-| When a response ends | Only once the landing frame's flip record has given the final onset, or 4 frames after the plan's onset when none comes (`yrsp_set_wait_final()`, ysp/response.h 0.9.0), for every response. `after` and the row hear one result; if the final result still names another response than the live one (a box's report read late with an earlier stamp), the row keeps the live one, which `after` showed |
+| When a response ends | Only once the landing frame's flip record is in, shown or not (`yrsp_set_wait_final()`, ysp/response.h 0.9.0), for every response; a safety net of 1 s from the onset if no record comes. The row's response columns are the final result's. If the live result `after` was built from named another response (a box's report read late with an earlier stamp, or the safety net), `rsp_flags` has 0x8000 (`PL_RSP_AFTER_LIVE`, the player's bit) |
 | The collectors | One array, one collector per template with a response; `yrsp_feed_screen()` gives every one every input, between trials too, so none misses a release |
 | Where a real run's data is written | A writer thread (`yrt_worker`, SCHED_OTHER) takes each frame's records, events, stream steps and rows from a queue of 8192 writes, every 2 ms. The frame thread only stores the queue's end: it takes no lock of the writer's, so a SCHED_FIFO frame thread cannot wait on a SCHED_OTHER writer. On ext4 a row's `write()` from the frame thread blocked one frame for 17.8 ms while the kernel wrote the file back (Results); none on tmpfs. `--sim` writes in place, so its files are the same bytes as before. A row reaches the OS within 2 ms of being final |
 | A real run's first frame | The 30 blank frames come first, off the data set: a frame after a long setup is often late (ysp/gfx.h, PRIME) |
@@ -239,10 +239,23 @@ The decision. Every response's window now waits for the record
 (`yrsp_set_wait_final()`, ysp/response.h 0.9.0, opt-in in the header):
 a press or the deadline ends the window only once the final onset is in.
 A press the record makes early leaves the window open, as it would have
-with exact timing. The cost: a press in the gap ends the window when the
-record arrives, up to about two frames later, so `after` starts that
-much later; only for such a press. When no record comes (a landing frame
-never shown), the plan stands after 4 frames.
+with exact timing. The landing frame's record settles the wait, shown or
+not: ysp/screen.h gives every frame a record, a never-shown one (SKIPPED,
+CANCELED) as a plan. The cost: every press fed before that record waits
+for it, so the window ends, and `after` starts, at the record's arrival,
+one or two frames after the onset, not at the press.
+
+The safety net. If no record comes within 1 s of the onset, the onset
+stands as it is. A record on GLX_OML comes 1 to 2 frames after its
+vblank, also for a frame shown frames late (a stall such as a first
+texture upload), so 1 s is 60 frames past any record the screen gives;
+it fires only when records stop (a frame loop that does not call
+`yrsp_update_frame()`). If it fires and a record then moves the onset,
+ENDED_EARLY can come back: `player_test.py` `t_r5_wait_final` makes it
+fire with a plan 1.2 s early, and the row is then a timeout with
+ENDED_EARLY. A first version of this bound was 4 frames, from a wrong
+reading that a never-shown frame has no record; a landing frame 3 or
+more frames late then passed it before its record (review, 2026-11-10).
 
 The evidence. A 60 Hz frame loop in the player's order, duration 0
 (`ended_early.c`, a probe of ysp/response.h; the header's test has the
@@ -257,7 +270,8 @@ same cases):
 
 In the player (`player_test.py` `t_r5_wait_final`, `--sim` with
 `--test-plan-early`, a plan one frame before the record's onset, and a
-scripted press 5 ms before the record's onset): with a deadline of 1 s,
+scripted press 5 ms before the record's onset; also with the plan 50 and
+100 ms early, a landing 3 and 6 frames late): with a deadline of 1 s,
 the press is EARLY, the row is a timeout with no ENDED_EARLY, and the
 `after` table's first mark comes 1.0 s after the final onset, not at the
 press; with no deadline, the window stays open after the press; a press
@@ -266,10 +280,13 @@ runs gave `rsp_flags` 132 (ENDED_EARLY), `after` 16.7 ms after the onset,
 and a no-deadline trial that ended with no response.
 
 The row and `after`. `after` is built from the result when the window
-ends (the live result); the row from the result at the trial's end. With
-the wait they agree; if they still name another response (a box's press
-read late with an earlier stamp), the row keeps the live one, which the
-participant was shown. `--sim`'s files did not change.
+ends (the live result); the row's response columns from the final result
+at the trial's end, so the data never claims a response that the final
+onset makes early. They can still name another response in two cases: a
+box's press read after the window ended, stamped before the press that
+ended it (the final result takes the earlier stamp; `real_test.py`
+`lateread`), and the safety net. Such a row has `rsp_flags` 0x8000
+(`PL_RSP_AFTER_LIVE`). `--sim`'s files did not change.
 
 ## Results
 

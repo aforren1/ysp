@@ -2305,6 +2305,92 @@ static void check_wait_final(void) {
     CHECK_I(key(MS(1005), SC_F, 1), YRSP_ENDED);
     finish();
     key(MS(1100), SC_F, 0);
+    /* the landing frame's record settles it, shown or not
+     * (yrsp_update_frame()); the 1 s safety net is far off */
+    {
+        yscr_record rec;
+        yscr_frame fr;
+        /* a frame 3 frames late: its record comes 2 frames after the actual
+         * onset, after a 4-frame bound would have run out */
+        yrsp_arm(&g_c, MS(983));
+        yrsp_set_wait_final(&g_c, YRT_S(1));
+        onset(MS(1000), 0);                      /* frame 42's plan */
+        CHECK_I(key(MS(1020), SC_F, 1), YRSP_OPEN);
+        memset(&fr, 0, sizeof fr);
+        fr.onset = MS(1067);
+        CHECK_I(yrsp_update_frame(&g_c, &fr), YRSP_OPEN);   /* no record yet: no end */
+        memset(&rec, 0, sizeof rec);
+        rec.index = 42; rec.onset = MS(1050); rec.planned = MS(1000); rec.target = MS(1000); rec.tier = 1;
+        fr.onset = MS(1083); fr.done = &rec; fr.n_done = 1;
+        CHECK_I(yrsp_update_frame(&g_c, &fr), YRSP_OPEN);   /* the record: the press is EARLY */
+        key(MS(1100), SC_F, 0);
+        CHECK_I(key(MS(1300), SC_F, 1), YRSP_ENDED);
+        r = finish();
+        CHECK((r.flags & YRSP_R_RESPONDED) && !(r.flags & YRSP_R_ENDED_EARLY) && r.n_early == 1);
+        CHECK_I(r.rt_ns, MS(250));
+        key(MS(1400), SC_F, 0);
+        /* a frame never shown: its record is a plan, and it settles the wait */
+        yrsp_arm(&g_c, MS(983));
+        yrsp_set_wait_final(&g_c, YRT_S(1));
+        onset(MS(1000), 0);
+        CHECK_I(key(MS(1020), SC_F, 1), YRSP_OPEN);
+        memset(&rec, 0, sizeof rec);
+        rec.index = 42; rec.onset = 0; rec.planned = MS(1000); rec.flags = YSCR_FLIP_SKIPPED;
+        memset(&fr, 0, sizeof fr);
+        fr.onset = MS(1033); fr.done = &rec; fr.n_done = 1;
+        CHECK_I(yrsp_update_frame(&g_c, &fr), YRSP_ENDED);
+        r = finish();
+        CHECK((r.flags & YRSP_R_RESPONDED) && (r.flags & YRSP_R_ONSET_PLAN));
+        key(MS(1100), SC_F, 0);
+        /* a plan for another frame waits for that frame's record */
+        yrsp_arm(&g_c, MS(983));
+        yrsp_set_wait_final(&g_c, YRT_S(1));
+        onset(MS(1000), 0);
+        memset(&rec, 0, sizeof rec);
+        rec.index = 41; rec.onset = MS(983);
+        memset(&fr, 0, sizeof fr);
+        fr.onset = MS(1017); fr.done = &rec; fr.n_done = 1;
+        CHECK_I(key(MS(1005), SC_F, 1), YRSP_OPEN);
+        CHECK_I(yrsp_update_frame(&g_c, &fr), YRSP_OPEN);   /* frame 41's record is not frame 42's */
+        finish();
+        key(MS(1100), SC_F, 0);
+        /* frame 42 never shown, then a plan for frame 43: that frame's
+         * record, not 42's, settles the wait */
+        yrsp_arm(&g_c, MS(983));
+        yrsp_set_wait_final(&g_c, YRT_S(1));
+        onset(MS(1000), 0);
+        memset(&rec, 0, sizeof rec);
+        rec.index = 42; rec.planned = MS(1000); rec.flags = YSCR_FLIP_SKIPPED;
+        memset(&fr, 0, sizeof fr);
+        fr.onset = MS(1033); fr.done = &rec; fr.n_done = 1;
+        CHECK_I(yrsp_update_frame(&g_c, &fr), YRSP_OPEN);
+        {
+            yrsp_onset o43;
+            memset(&o43, 0, sizeof o43);
+            o43.t_ns = MS(1017); o43.frame = 43; o43.src = YRSP_ONSET_PLAN;
+            yrsp_set_onset(&g_c, &o43);
+        }
+        CHECK_I(key(MS(1040), SC_F, 1), YRSP_OPEN);           /* waits for frame 43's record */
+        memset(&rec, 0, sizeof rec);
+        rec.index = 43; rec.onset = MS(1050); rec.planned = MS(1017); rec.tier = 1;
+        fr.onset = MS(1067);
+        CHECK_I(yrsp_update_frame(&g_c, &fr), YRSP_OPEN);     /* shown at 1050: the press is EARLY */
+        finish();
+        key(MS(1100), SC_F, 0);
+    }
+    /* near INT64_MAX: the safety net and the deadline saturate (no overflow) */
+    yrsp_arm(&g_c, INT64_MAX - MS(10));
+    yrsp_set_wait_final(&g_c, YRT_S(1e6));
+    onset(INT64_MAX - MS(5), 0);
+    CHECK_I(key(INT64_MAX - MS(1), SC_F, 1), YRSP_OPEN);
+    CHECK_I(yrsp_update(&g_c, INT64_MAX - 1), YRSP_OPEN);
+    finish();
+    key(INT64_MAX - 10, SC_F, 0);
+    yrsp_arm(&g_c, INT64_MAX - MS(10));
+    CHECK_I(yrsp_set_window(&g_c, 0, YRT_S(1e6)), YRSP_OPEN);
+    onset(INT64_MAX - MS(5), 1);
+    CHECK_I(yrsp_update(&g_c, INT64_MAX - 1), YRSP_OPEN);
+    finish();
     yrsp_arm(&g_c, 0);
     CHECK_I(yrsp_set_wait_final(&g_c, -1), YRSP_ERR_ARG);
     CHECK_I(yrsp_set_wait_final(&g_c, YRT_S(1e6) + 1), YRSP_ERR_ARG);

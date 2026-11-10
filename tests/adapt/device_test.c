@@ -1743,6 +1743,19 @@ static void test_rule_glue(void) {
     }
     yrsp_rule_window(&r, &c);
     CHECK_I(ydev_rule_input(&r, &e), 0);
+    /* response.h 0.9.0: an onset near INT64_MAX: the window's end saturates
+     * (no end), it does not wrap to a time before its start */
+    {
+        yrsp_onset big = on;
+        yrsp_result res;
+        yrsp_arm(&c, INT64_MAX - YRT_S(2));
+        big.t_ns = INT64_MAX - YRT_S(1);
+        CHECK(yrsp_set_onset(&c, &big) >= 0);
+        yrsp_rule_arm(&r, &c);
+        e.t = INT64_MAX - YRT_MS(500);
+        CHECK_I(ydev_rule_input(&r, &e), 1);
+        (void)yrsp_finish(&c, &res);
+    }
     /* CODES SENT: the rule's fires against the final responses */
     {
         ydev_rule_fire fl[YDEV_RULE_FIRES];

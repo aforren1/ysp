@@ -73,8 +73,6 @@ enum {
     PL_OUT_WAIT_FRAMES = 30,   /* a row waits this many frames after its last
                               * one for its codes' device records, then is
                               * written with the missing ones as failed     */
-    PL_WAIT_FINAL_FRAMES = 4,  /* a response's end waits this many frames at
-                              * most for the landing frame's flip record     */
     PL_RULE_ARMS      = 8,     /* a channel's last rule arms: a rule's record
                               * goes to the arm its press falls in          */
     PL_DEV_RING       = 4096,  /* device records between two frames          */
@@ -84,7 +82,18 @@ enum {
     PL_WRITE_QUEUE    = 8192   /* writes the writer may lag behind: about a
                               * minute of frames and their events at 60 Hz  */
 };
+/* A row's rsp_flags bit, the player's own (ysp/response.h's YRSP_R_* end at
+ * 0x0400): `after` was built from a live result that named another response
+ * than the row's final one. */
+#define PL_RSP_AFTER_LIVE 0x8000u
 enum {
+    PL_WAIT_FINAL_NS = 1000000000, /* the safety net of a response's wait for
+                                    * the landing frame's flip record: every
+                                    * record comes 1 to 2 frames after its
+                                    * vblank on GLX_OML, so 1 s is 60 frames
+                                    * past any record the screen delivers; it
+                                    * fires only when records stop (docs/
+                                    * player.md) */
     PL_WRITER_PERIOD_NS = 2000000   /* the writer looks at its queue this often:
                                      * a row is on disk 2 ms after it is final */
 };

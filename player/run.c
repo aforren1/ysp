@@ -920,12 +920,12 @@ int pl_start_trial(pl_player* p, const yscr_frame* f) {
             if (pl_eval_ns(p, &p->env, d->response->duration, &dur) < 0 || pl_eval_ns(p, &p->env, d->response->min_rt, &minrt) < 0) return -1;
             yrsp_arm(c, f->onset);
             yrsp_set_window(c, minrt, dur);
-            /* a press or the deadline ends the window only once the flip
-             * record has given the final onset, so `after` and the row hear
-             * one result, and a window with no deadline cannot end on a
-             * press the record makes early (player.md). The bound: a
-             * landing frame never shown has no record. */
-            yrsp_set_wait_final(c, PL_WAIT_FINAL_FRAMES * f->period);
+            /* a press or the deadline ends the window only once the landing
+             * frame's flip record is in (yrsp_update_frame(), shown or not),
+             * so `after` and the row hear one result, and a window with no
+             * deadline cannot end on a press the record makes early
+             * (player.md). PL_WAIT_FINAL_NS is a safety net only. */
+            yrsp_set_wait_final(c, PL_WAIT_FINAL_NS);
             p->have_live = false;
             if (pl_rule_of(p, p->tmpl)) {
                 /* a new window for the device's rule, and the trial its
@@ -1562,11 +1562,12 @@ int pl_end_trial(pl_player* p, const yscr_frame* f) {
             p->out_now[ch].owed += nf;
         }
         pl_finish(p, &res);
-        /* the final result can name another response than the one `after`
-         * was built from (a box's press read late with an earlier stamp; a
-         * flip record later than the wait's bound): the row says what the
-         * participant was shown, the live result */
-        if (p->have_live && (res.entry != p->live_res.entry || ((res.flags ^ p->live_res.flags) & YRSP_R_RESPONDED))) res = p->live_res;
+        /* the row's response is the final result's: data must not claim a
+         * response the final onset makes early. `after` was built from the
+         * live one; when the two name another response (a box's press read
+         * late with an earlier stamp, or the wait's safety net), the row
+         * says so in rsp_flags (PL_RSP_AFTER_LIVE) */
+        if (p->have_live && (res.entry != p->live_res.entry || ((res.flags ^ p->live_res.flags) & YRSP_R_RESPONDED))) res.flags |= PL_RSP_AFTER_LIVE;
         p->have_live = false;
         pl_env_response(p, &res);
         have_res = true;

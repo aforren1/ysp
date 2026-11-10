@@ -1113,13 +1113,25 @@ answers; `v8-13`'s anchor moved and it is caught.
 
 `yrsp_set_wait_final(c, max_wait_ns)`, after `yrsp_arm()`, turns on one
 rule for this window: a press does not end the window, and neither does
-the deadline, while the onset is a plan. The final onset (the flip
-record) decides. If the press is a response against it, the window ends
-at that press; if it is EARLY or an anticipation, the window stays open,
-as it would have with exact timing. `max_wait_ns` bounds the wait for a
-record that never comes (a frame never shown): from the onset's time on,
-`yrsp_update()` takes the plan as final. 0 turns the rule off, and the
-next `yrsp_arm()` turns it off.
+the deadline, until the landing frame's flip record is in. Then the
+onset it gives decides. If the press is a response against it, the
+window ends at that press; if it is EARLY or an anticipation, the window
+stays open, as it would have with exact timing.
+
+`yrsp_update_frame()` finds that record by the plan's frame index, shown
+or not. ysp/screen.h gives every frame a record: a frame never shown
+(SKIPPED, CANCELED) has one too, and `yrsp_onset_flip()` makes it a plan.
+That record settles the wait as well, because no later record will come
+for the frame. A caller that sets onsets by hand settles it with a final
+onset.
+
+`max_wait_ns` is a safety net, not the rule: from the onset's time on,
+`yrsp_update()` takes the onset as it is when the record has not come (a
+loop that does not call `yrsp_update_frame()`, a presenter that loses
+records). If it fires and a record then moves the onset, a press can be
+reclassified after the window ended, and ENDED_EARLY can come back. The
+player passes 1 s. 0 turns the rule off, and the next `yrsp_arm()` turns
+it off.
 
 Why. Without the rule, a window ends at the first press that is valid
 against the plan. When the record then puts the onset later (a frame
@@ -1129,14 +1141,20 @@ deadline that is a timeout. With no deadline (`duration_ns` 0) nothing
 else ends the window, so the trial has no response although the format
 promised one ([player.md](player.md), "A window with no deadline").
 
-The cost: a press in the gap between the plan and the record ends the
-window when the record arrives, up to about two frames later on GLX_OML.
-A press after the record is unchanged.
+The cost: every press fed before the landing frame's record waits for
+it, whatever its class, so the window ends at the record's arrival, one
+or two frames after the onset on GLX_OML, not at the press. A press fed
+after the record is unchanged.
+
+Fixed in the same version: `yrsp_update()`'s deadline (`onset +
+duration_ns`) and the rule's window (`yrsp_rule_window()`, `onset +
+min_rt_ns` and `onset + duration_ns`) saturate near `INT64_MAX` instead
+of overflowing (a signed overflow, so the window ended at once).
 
 Measured, `tests/adapt/response_test.c` and the player's probe (a 60 Hz
 frame loop that feeds a press before the frame's record), duration 0:
 
-| Case | Without the rule | With the rule (4 frames) |
+| Case | Without the rule | With the rule |
 |---|---|---|
 | `min_rt` 0, the landing a frame late, press 5 ms after the plan | Ends on the press; no response, ENDED_EARLY | The press is EARLY; the window stays open; the next press (300 ms) is the response |
 | `min_rt` 0, onset 40 us after the plan, press 20 us after it | No response, ENDED_EARLY | The same as above |
@@ -1144,11 +1162,15 @@ frame loop that feeds a press before the frame's record), duration 0:
 | `min_rt` 0, onset at the plan, press 5 ms after it | A response, RT 5 ms | A response, RT 5 ms, ended at the record (16.7 ms) |
 
 The collector grew 24 bytes; nothing else changed for a caller that does
-not call it. Tests: 21,268 checks of `tests/adapt/response_test.c` (the
-rule off and on, a press the record keeps or makes early, the bound, the
-deadline from the final onset, the next arm, the errors); mutants `wf-01`
-to `wf-06`, 6 of 6 killed, the list 89 of 89 as expected; the Python
-binding's 22 tests pass at 0.9.0 (it does not bind the new call).
+not call it. Tests: 21,292 checks of `tests/adapt/response_test.c` (the
+rule off and on, a press the record keeps or makes early, a frame 3
+frames late whose record comes after 4 frames, a never-shown frame's
+record, another frame's record, the safety net, the deadline from the
+final onset, the next arm, the errors, the saturated sums) and one in
+`tests/adapt/device_test.c` (the rule's window near `INT64_MAX`); mutants
+`wf-01` to `wf-09` and `ovf-01` in `tests/mutate/response.toml`,
+`rule-19` in `tests/mutate/device.toml`; the Python binding's tests at
+0.9.0: 22 of 23 pass, 1 skipped (it does not bind the new call).
 
 ## Bindings
 

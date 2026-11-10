@@ -359,6 +359,12 @@ class LineBoard(Pty):
                 last_sync = time.monotonic()
                 self._send("S %d" % (time.monotonic_ns() // 1000))
 
+    def press_stamped(self, ch, t_us):
+        """A press stamped t_us on the board's clock, sent now: a report
+        read late with an earlier stamp."""
+        self._send("E %d %d 1" % (t_us, ch))
+        self._send("E %d %d 0" % (t_us + 20000, ch))
+
     def press(self, ch):
         t = time.monotonic_ns() // 1000
         self._send("E %d %d 1" % (t, ch))
@@ -434,6 +440,12 @@ def run_real(ctx, name, pack, plan, rig, extra=(), silent_every=7, abort_after=N
                 # a button of the LINE board: no focus needed, the press is
                 # the board's own time
                 t0, t1 = board.press(tr["button"])
+                if tr.get("late_read"):
+                    # the other button, stamped 50 ms before that press and
+                    # read 100 ms after it
+                    time.sleep(0.02)
+                    board.press_stamped(tr["late_read"], t0 // 1000 - 50000)
+                    sent.append({"trial": i, "key": "late", "name": tr["late_name"], "t0": t0 - 50000000, "t1": t0 - 50000000})
             else:
                 if not focused:
                     focused = focus_pid() == p.pid
@@ -737,6 +749,51 @@ def case_rule2(ctx):
         board.close()
 
 
+def case_lateread(ctx):
+    """A LINE board's press read after the window ended, stamped before the
+    press that ended it: the final result takes the earlier stamp, so the
+    row's response is not what `after` was built from, and rsp_flags says
+    so (0x8000, the player's PL_RSP_AFTER_LIVE)."""
+    print("== lateread", flush=True)
+    pack, dd = oddball_variant(ctx, "lateread", line_edit)
+    frm, duration, min_rt = the_response(dd)
+    trig, board = Pty(), LineBoard()
+    try:
+        rig = make_rig(ctx, "lateread", trig.a, board.a)
+        sim_dir, trials, events, frames = plan_from_sim(ctx, "lateread", pack, rig, ctx.trials)
+        plan = timing_plan(trials, events, frames, frm, duration)
+        buttons = {v: int(k) for k, v in dd["devices"]["resp"]["buttons"].items()}
+        other = {"left": "right", "right": "left"}
+        for i, tr in enumerate(plan):
+            tr["_duration"] = duration
+            tr["name"] = tr["key"]
+            tr["button"] = buttons[tr["key"]]
+            if i % 2 == 1:
+                tr["late_read"] = buttons[other[tr["key"]]]
+                tr["late_name"] = other[tr["key"]]
+        rc, d, sent, out = run_real(ctx, "lateread", pack, plan, rig, board=board, extra=ctx.line_extra, rt_range=(0.4, 0.5))
+        print("  lateread: exit %s" % rc, flush=True)
+        if not check(rc == 0, "lateread: exit %s: %s" % (rc, out.strip()[-300:])):
+            return
+        rows = read_csv(os.path.join(d, "trials.csv"))
+        late = {x["trial"]: x for x in sent if x["key"] == "late"}
+        n = 0
+        for row in rows:
+            i = int(row["trial_index"])
+            f = int(row["rsp_flags"])
+            if i in late:
+                n += 1
+                check(row["response"] == late[i]["name"] and f & 0x8000,
+                      "lateread trial %d: the row's response %s (the earlier stamp's is %s), rsp_flags %#x" % (i, row["response"], late[i]["name"], f))
+            elif row["response"]:
+                check(not f & 0x8000, "lateread trial %d: flagged with no late press: %#x" % (i, f))
+        check(n > 0, "lateread: no trial got a late-read press")
+        print("  lateread: %d trials with a late-read press" % n, flush=True)
+    finally:
+        trig.close()
+        board.close()
+
+
 def case_fewer(ctx):
     """Two templates on a LINE role whose rules differ in their choices:
     refused at the start, naming both (a review's finding, 2026-11-10)."""
@@ -1006,7 +1063,7 @@ def main():
         return 0
     ctx = Ctx(a)
     os.makedirs(ctx.out, exist_ok=True)
-    cases = ["rdk", "afc2", "stroop", "oddball", "noafter", "lost", "rule", "rule2", "fewer", "abort", "panic", "refuse", "alloc"]
+    cases = ["rdk", "afc2", "stroop", "oddball", "noafter", "lost", "rule", "rule2", "lateread", "fewer", "abort", "panic", "refuse", "alloc"]
     for c in cases:
         if a.only and c != a.only:
             continue
@@ -1024,6 +1081,8 @@ def main():
             case_lost(ctx)
         elif c == "rule2":
             case_rule2(ctx)
+        elif c == "lateread":
+            case_lateread(ctx)
         elif c == "fewer":
             case_fewer(ctx)
         else:

@@ -579,16 +579,23 @@ id = "r-47"
 name = "a response does not wait for the flip record"
 test = "player"
 why = "Decision A: a press or the deadline ends the window only on the final onset (--test-plan-early)."
-find = '''            yrsp_set_wait_final(c, PL_WAIT_FINAL_FRAMES * f->period);'''
+find = '''            yrsp_set_wait_final(c, PL_WAIT_FINAL_NS);'''
 replace = ''''''
 
 [[mutant]]
 id = "rr-18"
-env = { YPL_REAL_CASES = "oddball,rule" }
-name = "the row takes the final result when the live one differs"
+env = { YPL_REAL_CASES = "lateread" }
+name = "a row whose after heard another response is not flagged"
 test = "real"
-why = "The row says what after was built from."
-find = '''        if (p->have_live && (res.entry != p->live_res.entry || ((res.flags ^ p->live_res.flags) & YRSP_R_RESPONDED))) res = p->live_res;'''
+why = "rsp_flags 0x8000 marks a row whose response is not the one after was built from (a box's late-read press)."
+find = '''        if (p->have_live && (res.entry != p->live_res.entry || ((res.flags ^ p->live_res.flags) & YRSP_R_RESPONDED))) res.flags |= PL_RSP_AFTER_LIVE;'''
 replace = ''''''
-expect = "survived"
-note = "With the wait for the flip record the two differ only for a box press read late with an earlier stamp, or a record past the 4-frame bound; neither happens on this rig. A guard."
+
+[[mutant]]
+id = "rr-19"
+env = { YPL_REAL_CASES = "lateread" }
+name = "the row keeps the live result"
+test = "real"
+why = "The row's response columns are the final result's: the data must not claim a response the final onset (or a late-read earlier press) changes."
+find = '''res.flags |= PL_RSP_AFTER_LIVE;'''
+replace = '''res = p->live_res;'''

@@ -477,8 +477,8 @@ name = "glue: no minimum RT"
 test = "device"
 file = "ysp/response.h"
 why = "A press before minimum_valid_rt is an anticipation in the collector: no response code."
-find = '''    *from = c->onset.t_ns + c->min_rt_ns;'''
-replace = '''    *from = c->onset.t_ns;'''
+find = ''': c->onset.t_ns + c->min_rt_ns;'''
+replace = ''': c->onset.t_ns;'''
 
 [[mutant]]
 id = "rule-13"
@@ -486,7 +486,7 @@ name = "glue: no deadline"
 test = "device"
 file = "ysp/response.h"
 why = "A press at or after onset + duration is LATE in the collector."
-find = '''    if (c->duration_ns > 0) *until = c->onset.t_ns + c->duration_ns;'''
+find = '''    if (c->duration_ns > 0) *until = c->onset.t_ns > INT64_MAX - c->duration_ns ? YDEV_RULE_NEVER : c->onset.t_ns + c->duration_ns;'''
 replace = '''    (void)0;'''
 
 [[mutant]]
@@ -531,6 +531,15 @@ file = "ysp/response.h"
 why = "A failed write must reach the collector as not written."
 find = '''        s[k].written = (uint8_t)(f[k].result == YDEV_OK || f[k].result == YDEV_RULE_PENDING);'''
 replace = '''        s[k].written = 1;'''
+
+[[mutant]]
+id = "rule-19"
+name = "glue: the window's end wraps near INT64_MAX"
+test = "device"
+file = "ysp/response.h"
+why = "response.h 0.9.0: onset + duration saturates; a wrapped end is before the start and closes the window."
+find = '''    if (c->duration_ns > 0) *until = c->onset.t_ns > INT64_MAX - c->duration_ns ? YDEV_RULE_NEVER : c->onset.t_ns + c->duration_ns;'''
+replace = '''    if (c->duration_ns > 0) *until = (int64_t)((uint64_t)c->onset.t_ns + (uint64_t)c->duration_ns);'''
 
 # test_thread waits on the reader's progress, not on 1.2 s of wall time
 # (2026-10-22). Its checks must still see a reader that never queries.

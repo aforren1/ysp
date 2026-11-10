@@ -199,17 +199,24 @@
  *   It returns false before an onset comes.
  *   WAITING FOR THE FINAL ONSET (v0.9, opt-in). yrsp_set_wait_final(c,
  *   max_wait_ns), after yrsp_arm(), for this window: a press does not end
- *   the window, and neither does the deadline, while the onset is a plan.
- *   When the final onset comes (or max_wait_ns after the plan's onset, as
- *   yrsp_update() sees the time: a frame never shown has no record), the
- *   window ends as it would have with that onset from the start: at the
- *   earliest press that is a response against it, or at its deadline. A
- *   press that the final onset makes EARLY or an ANTICIPATION leaves the
- *   window open, so a window with no deadline cannot end on it
- *   (ENDED_EARLY needs a press that ended the window). The cost: a press
- *   in the gap ends the window up to the final onset's arrival later
- *   (about two frames on GLX_OML). 0 turns it off; yrsp_arm() turns it
- *   off.
+ *   the window, and neither does the deadline, until the landing frame's
+ *   flip record is in. yrsp_update_frame() sees that record by its index,
+ *   shown or not: a shown frame's record is the final onset, and a frame
+ *   never shown (SKIPPED, CANCELED) gives a plan that settles the wait
+ *   too, since no later record will come for it. A caller that sets
+ *   onsets by hand settles it with a final onset. Then the window ends as
+ *   it would have with that onset from the start: at the earliest press
+ *   that is a response against it, or at its deadline. A press that the
+ *   record makes EARLY or an ANTICIPATION leaves the window open, so a
+ *   window with no deadline cannot end on it. max_wait_ns is a safety
+ *   net for a record that never comes (a loop that does not call
+ *   yrsp_update_frame(), a presenter that loses records): from the
+ *   onset's time on, yrsp_update() takes the onset as it is. If it fires
+ *   and a record then moves the onset, a press can be reclassified after
+ *   the window ended, and ENDED_EARLY can come back. The cost: every
+ *   press fed before the record waits for it, up to the record's arrival
+ *   (one or two frames after the onset on GLX_OML). 0 turns it off;
+ *   yrsp_arm() turns it off.
  *
  *   ---------------------------------------------------------------------
  *   THE FRAME LOOP (v0.4)
@@ -541,9 +548,13 @@
  *   ---------------------------------------------------------------------
  *   v0.9.0 - yrsp_set_wait_final(): for this window, no end on a press
  *          or a deadline until the final onset (or a bound), so a window
- *          with no deadline cannot end on a press that the final onset
- *          makes early (the player, docs/player.md). Off unless called;
- *          the collector grew 24 bytes.
+ *          with no deadline cannot end on a press that the record makes
+ *          early (the player, docs/player.md). The landing frame's record
+ *          settles it, shown or not (yrsp_update_frame()); max_wait_ns is
+ *          a safety net. Off unless called; the collector grew 24 bytes.
+ *          Fix: yrsp_update()'s deadline (onset + duration_ns) and the
+ *          rule's window end saturate instead of overflowing near
+ *          INT64_MAX.
  *   v0.8.1 - yrsp_data_set() asks ysp/trials.h v0.7.0's
  *          ytr_data_col_settable() whether to set a column, where it read
  *          the data writer's private column record (docs/
@@ -1054,7 +1065,8 @@ typedef struct yrsp_collector {
     int32_t        n_sent, n_sent_total, have_sent;
     int64_t        wait_ns;         /* v0.9: yrsp_set_wait_final(); 0 = off  */
     int64_t        t_now;           /* the last yrsp_update()'s time         */
-    int32_t        reserved2_[2];
+    int32_t        record_in;       /* v0.9: the plan frame's record came    */
+    int32_t        reserved2_;
     char           error[160];
 } yrsp_collector;
 
@@ -1089,7 +1101,8 @@ YRSP_API int  yrsp_set_onset(yrsp_collector* c, const yrsp_onset* o);
 YRSP_API int  yrsp_set_window(yrsp_collector* c, int64_t min_rt_ns, int64_t duration_ns);
 
 /* v0.9: until the next yrsp_arm(), a press or the deadline ends the window
- * only once the onset is final, or max_wait_ns (0 = off, at most 1e6 s)
+ * only once the landing frame's record is in (yrsp_update_frame()) or the
+ * onset is final, or as a safety net max_wait_ns (0 = off, at most 1e6 s)
  * after the onset as yrsp_update() sees the time (WAITING FOR THE FINAL
  * ONSET). Call it after yrsp_arm(). Returns the status, YRSP_ERR_ARG for a
  * negative or too long wait, or YRSP_ERR_STATE when not armed. */
@@ -1188,6 +1201,9 @@ static inline int yrsp_update_frame(yrsp_collector* c, const yscr_frame* f) {
     for (i = 0; k >= 0 && i < f->n_done; i++)
         if (f->done[i].index == k) {
             yrsp_onset o = yrsp_onset_flip(&f->done[i]);
+            /* v0.9: shown or not, this frame's record settles a wait for
+             * the final onset (a never-shown frame gets no later one) */
+            c->record_in = 1;
             yrsp_set_onset(c, &o);
         }
     return yrsp_update(c, f->onset);
@@ -1340,8 +1356,9 @@ static inline void yrsp__rule_bounds(const yrsp_collector* c, int64_t* from, int
     *from = *until = YDEV_RULE_NEVER;
     if (!c->ok || !c->armed || c->finished || !c->have_onset) return;
     if (c->status == YRSP_ENDED && c->ended_by != 2) return;
-    *from = c->onset.t_ns + c->min_rt_ns;
-    if (c->duration_ns > 0) *until = c->onset.t_ns + c->duration_ns;
+    *from = c->min_rt_ns > 0 && c->onset.t_ns > INT64_MAX - c->min_rt_ns ? YDEV_RULE_NEVER : c->onset.t_ns + c->min_rt_ns;
+    /* v0.9: saturated, as yrsp_update()'s deadline: no overflow near INT64_MAX */
+    if (c->duration_ns > 0) *until = c->onset.t_ns > INT64_MAX - c->duration_ns ? YDEV_RULE_NEVER : c->onset.t_ns + c->duration_ns;
 }
 /* After yrsp_arm(): a new window for the rule, its fire count 0. */
 static inline void yrsp_rule_arm(ydev_rule* r, const yrsp_collector* c) {
@@ -1741,7 +1758,11 @@ static void yrsp__reclassify(yrsp_collector* c) {
 /* v0.9: the onset may end the window: final, or waited for long enough,
  * or no wait asked for (WAITING FOR THE FINAL ONSET). */
 static bool yrsp__settled(const yrsp_collector* c) {
-    return !c->wait_ns || (c->have_onset && (c->onset.final || c->t_now >= c->onset.t_ns + c->wait_ns));
+    if (!c->wait_ns) return true;
+    if (!c->have_onset) return false;
+    if (c->onset.final || c->record_in) return true;
+    /* the safety net, saturated: an onset near INT64_MAX never times out */
+    return c->onset.t_ns <= INT64_MAX - c->wait_ns && c->t_now >= c->onset.t_ns + c->wait_ns;
 }
 
 /* Ends the window once enough responses are in (THE WINDOW). */
@@ -1941,6 +1962,7 @@ YRSP_API void yrsp_arm(yrsp_collector* c, int64_t t_ns) {
     c->n_sent = c->n_sent_total = c->have_sent = 0;
     c->wait_ns = 0;                    /* yrsp_set_wait_final() lasts one arm */
     c->t_now = t_ns;
+    c->record_in = 0;
     for (i = 0; i < c->d.n_choices; i++) {
         const yrsp_choice* h = &c->ch[i];
         yrsp__chan* ch = &c->chan[i];
@@ -1977,6 +1999,8 @@ YRSP_API int yrsp_set_onset(yrsp_collector* c, const yrsp_onset* o) {
         c->have_plan = 1;
     }
     if (c->have_onset && c->onset.final && !o->final) return c->status;
+    /* v0.9: a plan for another frame waits for that frame's record */
+    if (!o->final && (!c->have_onset || o->frame != c->onset.frame)) c->record_in = 0;
     c->onset = *o;
     c->have_onset = 1;
     yrsp__reclassify(c);
@@ -2073,7 +2097,8 @@ YRSP_API int yrsp_update(yrsp_collector* c, int64_t now_ns) {
         }
         return c->status;
     }
-    if (c->have_onset && c->duration_ns > 0 && now_ns >= c->onset.t_ns + c->duration_ns) {
+    if (c->have_onset && c->duration_ns > 0 && c->onset.t_ns <= INT64_MAX - c->duration_ns &&
+        now_ns >= c->onset.t_ns + c->duration_ns) {
         c->status = YRSP_ENDED;
         c->ended_by = 2;
         c->t_end = c->onset.t_ns + c->duration_ns;
