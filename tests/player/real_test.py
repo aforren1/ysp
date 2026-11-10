@@ -45,6 +45,7 @@ player's window has the input focus (_NET_ACTIVE_WINDOW's _NET_WM_PID).
 """
 import argparse
 import csv
+import decimal
 import fcntl
 import json
 import os
@@ -144,6 +145,15 @@ def output_name():
     return None
 
 
+def restore_display():
+    """After a player that had to be killed: X keeps a ramp and a mode
+    after the process ends (docs/screen.md)."""
+    out = output_name()
+    if out:
+        subprocess.run(["xrandr", "--output", out, "--mode", "1920x1080", "--rate", "60", "--gamma", "1:1:1"])
+    print("  the player did not end: killed, and the mode and ramp put back with xrandr", flush=True)
+
+
 def read_csv(path):
     with open(path, newline="") as f:
         return list(csv.DictReader(f))
@@ -164,6 +174,9 @@ class Ctx:
         self.trials = a.trials
         self.windowed = a.windowed
         self.font = a.font
+        # the player's own options that a case's roles need (set by main())
+        self.odd_extra = []
+        self.line_extra = []
 
 
 def build_pack(ctx, name):
@@ -420,10 +433,7 @@ def run_real(ctx, name, pack, plan, rig, extra=(), silent_every=7, abort_after=N
         if p.poll() is None:
             p.kill()
             p.wait()
-            out = output_name()
-            if out:
-                subprocess.run(["xrandr", "--output", out, "--mode", "1920x1080", "--rate", "60", "--gamma", "1:1:1"])
-            print("  the player did not end: killed, and the mode and ramp put back with xrandr", flush=True)
+            restore_display()
         kb.close()
     out_lines += p.stdout.readlines()
     return p.returncode, d, sent, "".join(out_lines)
@@ -508,9 +518,25 @@ def case_example(ctx, name):
             pty.close()
 
 
-def check_bytes(name, d, pty, rows):
+def ns(text):
+    """A seconds column to integer nanoseconds, exactly (9 decimals)."""
+    return int((decimal.Decimal(text) * 1000000000).to_integral_value())
+
+
+def odd_code(row):
+    """The oddball's response code for a row; None when its template sends
+    none (rule2's template) or nothing was pressed."""
+    if not row["response"] or row["trial_type"] != "oddball":
+        return None
+    return 101 if row["response"] == "left" else 102
+
+
+def check_bytes(name, d, pty, rows, resp_code=odd_code):
     """The TriggerBox's bytes: a 0 after it opens, each code and the 0 that
-    ends its pulse, and 0xFF at its close (ysp/box.h)."""
+    ends its pulse, and 0xFF at its close (ysp/box.h). Each row's counts
+    are its out rows': `trig_n` their number, `trig_failed` the failed ones
+    (flag 0x8), `trig_lag_max_s` exactly their largest write start minus
+    deadline."""
     pty.close()
     data = bytes(pty.data)
     events = read_csv(os.path.join(d, "events.csv"))
@@ -523,20 +549,148 @@ def check_bytes(name, d, pty, rows):
     check(data == bytes(want), "%s: the pty got %d bytes %s, events.csv's codes give %d %s" % (name, len(data), data[:24].hex(), len(want), bytes(want[:24]).hex()))
     per = {}
     for e in outs:
-        per.setdefault(e["trial_index"], []).append(int(e["code"]))
+        per.setdefault(e["trial_index"], []).append(e)
     for row in rows:
         ti = row["trial_index"]
         got = per.get(ti, [])
-        want_t = [int(row["code"])] + ([101 if row["response"] == "left" else 102] if row["response"] else [])
-        check(sorted(got) == sorted(want_t), "%s trial %s: codes %s, the definition gives %s" % (name, ti, got, want_t))
-        check(row["trig_n"] == str(len(want_t)) and row["trig_failed"] == "0", "%s trial %s: trig_n %s trig_failed %s" % (name, ti, row["trig_n"], row["trig_failed"]))
-        lag = float(row["trig_lag_max_s"] or 0)
-        check(0 <= lag < 0.0167 + (1.0 if row["response"] else 0), "%s trial %s: trig_lag_max_s %s" % (name, ti, row["trig_lag_max_s"]))
+        rc = resp_code(row)
+        want_t = [int(row["code"])] + ([rc] if rc is not None else [])
+        check(sorted(int(e["code"]) for e in got) == sorted(want_t), "%s trial %s: codes %s, the definition gives %s" % (name, ti, [int(e["code"]) for e in got], want_t))
+        failed = sum(1 for e in got if int(e["flags"]) & 0x8)
+        check(row["trig_n"] == str(len(got)) and row["trig_failed"] == str(failed),
+              "%s trial %s: trig_n %s trig_failed %s, events.csv has %d codes, %d failed" % (name, ti, row["trig_n"], row["trig_failed"], len(got), failed))
+        lag = max((ns(e["t_s"]) - ns(e["deadline_s"]) for e in got), default=0)
+        check(row["trig_lag_max_s"] != "" and ns(row["trig_lag_max_s"]) == lag,
+              "%s trial %s: trig_lag_max_s %s, events.csv's largest lag %.9f" % (name, ti, row["trig_lag_max_s"], lag / 1e9))
     flips = [float(e["t_s"]) - float(e["deadline_s"]) for e in outs if int(e["flags"]) & 0x20]
     if flips:
         flips.sort()
         print("  %s: %d bytes on the pty; %d codes at the flip, write start minus deadline p50 %.1f us, max %.1f us" %
               (name, len(data), len(flips), flips[len(flips) // 2] * 1e6, flips[-1] * 1e6), flush=True)
+
+
+def oddball_variant(ctx, tag, edit):
+    work = os.path.join(ctx.out, tag + "_src")
+    shutil.rmtree(work, ignore_errors=True)
+    shutil.copytree(os.path.join(HERE, "oddball"), work)
+    with open(os.path.join(work, "experiment.json")) as f:
+        dd = json.load(f)
+    edit(dd)
+    with open(os.path.join(work, "experiment.json"), "w", newline="\n") as f:
+        json.dump(dd, f)
+    pack = os.path.join(ctx.out, tag + ".ysppak")
+    subprocess.check_call([ctx.ypak, "build", "pack.json", "-o", pack], cwd=work, stdout=subprocess.DEVNULL)
+    return pack, dd
+
+
+def case_noafter(ctx):
+    """oddball with no `after`: the trial ends on the frame of the response,
+    so the frame loop's code is written in the trial's last frame and its
+    device record comes after the trial ended. The row must still count it
+    (a review's finding, 2026-11-10)."""
+    print("== noafter", flush=True)
+
+    def edit(dd):
+        del dd["trials"]["oddball"]["after"]
+    pack, dd = oddball_variant(ctx, "noafter", edit)
+    frm, duration, min_rt = the_response(dd)
+    pty = Pty()
+    try:
+        rig = make_rig(ctx, "noafter", pty.a)
+        sim_dir, trials, events, frames = plan_from_sim(ctx, "noafter", pack, rig, ctx.trials)
+        plan = timing_plan(trials, events, frames, frm, duration)
+        keys = key_of(dd)
+        for tr in plan:
+            tr["_duration"] = duration
+            tr["name"] = tr["key"]
+            tr["key"] = keys[tr["key"]]
+        rc, d, sent, out = run_real(ctx, "noafter", pack, plan, rig, extra=ctx.odd_extra)
+        print("  noafter: exit %s" % rc, flush=True)
+        if check(rc == 0, "noafter: exit %s: %s" % (rc, out.strip()[-300:])):
+            check_bytes("noafter", d, pty, read_csv(os.path.join(d, "trials.csv")))
+    finally:
+        pty.close()
+
+
+def line_edit(dd):
+    dd["devices"]["resp"]["family"] = ["line", "keyboard"]
+
+
+def case_rule2(ctx):
+    """A LINE board's rule and a template on the same role with no response
+    trigger, whose trials come first: none of its presses may send a code
+    (a review's finding, 2026-11-10)."""
+    print("== rule2", flush=True)
+
+    def edit(dd):
+        line_edit(dd)
+        t = json.loads(json.dumps(dd["trials"]["oddball"]))
+        del t["response"]["trigger"]
+        dd["trials"]["notrig"] = t
+        first = json.loads(json.dumps(dd["timeline"][0]))
+        first["name"] = "first"
+        first["trial"] = "notrig"
+        dd["timeline"] = [first, dd["timeline"][0]]
+    pack, dd = oddball_variant(ctx, "rule2", edit)
+    frm, duration, min_rt = the_response(dd)
+    trig, board = Pty(), LineBoard()
+    try:
+        rig = make_rig(ctx, "rule2", trig.a, board.a)
+        sim_dir, trials, events, frames = plan_from_sim(ctx, "rule2", pack, rig, ctx.trials)
+        plan = timing_plan(trials, events, frames, frm, duration)
+        buttons = {v: int(k) for k, v in dd["devices"]["resp"]["buttons"].items()}
+        for tr in plan:
+            tr["_duration"] = duration
+            tr["name"] = tr["key"]
+            tr["button"] = buttons[tr["key"]]
+        rc, d, sent, out = run_real(ctx, "rule2", pack, plan, rig, board=board, extra=ctx.line_extra)
+        print("  rule2: exit %s" % rc, flush=True)
+        if check(rc == 0, "rule2: exit %s: %s" % (rc, out.strip()[-300:])):
+            rows = read_csv(os.path.join(d, "trials.csv"))
+            check(any(r["trial_type"] == "notrig" and r["response"] for r in rows), "rule2: no pressed trial of the template with no trigger")
+            check_bytes("rule2", d, trig, rows)
+    finally:
+        trig.close()
+        board.close()
+
+
+def case_fewer(ctx):
+    """Two templates on a LINE role whose rules differ in their choices:
+    refused at the start, naming both (a review's finding, 2026-11-10)."""
+    print("== fewer", flush=True)
+
+    def edit(dd):
+        line_edit(dd)
+        t = json.loads(json.dumps(dd["trials"]["oddball"]))
+        t["response"]["choices"] = ["left"]
+        t["response"]["trigger"]["code"] = {"by": "$response", "map": {"left": 101}}
+        del t["response"]["key_answer"]
+        dd["trials"]["one"] = t
+        first = json.loads(json.dumps(dd["timeline"][0]))
+        first["name"] = "first"
+        first["trial"] = "one"
+        dd["timeline"] = [first, dd["timeline"][0]]
+    pack, dd = oddball_variant(ctx, "fewer", edit)
+    trig, board = Pty(), LineBoard()
+    try:
+        rig = make_rig(ctx, "fewer", trig.a, board.a)
+        out = os.path.join(ctx.out, "fewer_real")
+        shutil.rmtree(out, ignore_errors=True)
+        # a player that starts runs one silent trial (about 3 s) and ends
+        p = subprocess.Popen([ctx.player, pack, "--out", out, "--field", "participant=1", "--rig", rig, "--max-trials", "1"] + ctx.line_extra,
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        try:
+            msg = p.communicate(timeout=60)[0].strip()
+        except subprocess.TimeoutExpired:
+            p.kill()
+            msg = p.communicate()[0].strip()
+            restore_display()
+        print("  fewer: exit %d: %s" % (p.returncode, msg[:300]), flush=True)
+        check(p.returncode == 1 and "'one'" in msg and "'oddball'" in msg and not os.path.exists(out),
+              "fewer: two rules with other choices on one role: exit %d" % p.returncode)
+    finally:
+        trig.close()
+        board.close()
 
 
 def case_rule(ctx):
@@ -749,7 +903,7 @@ def main():
         return 0
     ctx = Ctx(a)
     os.makedirs(ctx.out, exist_ok=True)
-    cases = ["rdk", "afc2", "stroop", "oddball", "rule", "abort", "panic", "refuse", "alloc"]
+    cases = ["rdk", "afc2", "stroop", "oddball", "noafter", "rule", "rule2", "fewer", "abort", "panic", "refuse", "alloc"]
     for c in cases:
         if a.only and c != a.only:
             continue
@@ -761,6 +915,12 @@ def main():
             case_alloc(ctx)
         elif c == "rule":
             case_rule(ctx)
+        elif c == "noafter":
+            case_noafter(ctx)
+        elif c == "rule2":
+            case_rule2(ctx)
+        elif c == "fewer":
+            case_fewer(ctx)
         else:
             case_example(ctx, c)
     print("%d failures" % fails)
