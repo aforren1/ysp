@@ -370,7 +370,7 @@ def t_refused(ctx):
     # 'from' never shown, an impossible constraint (a dry open)
     d4 = base({"t": tmpl()}, [{"name": "l", "trial": "t", "timeline_variables": "x.pstb", "rules": ["order constrained", "max_run a=x 1", "reps 2"]}])
     r4 = Run(ctx, "refused_rule", d4, tables={"x": "a\nx\nx\nx\ny\n"})
-    check(r4.rc != 0 and "max_run" in r4.err, "an impossible constraint fails the dry open: %s" % r4.err)
+    check(r4.rc != 0 and "max_run" in r4.err and not os.path.exists(r4.data), "an impossible constraint fails the dry open, before a data set: %s" % r4.err)
 
 
 def t_sound(ctx):
@@ -526,6 +526,11 @@ def t_fix_vars_data(ctx):
              [{"name": "one", "trial": "t", "vars": {"same": "from_vars"}}, {"name": "two", "trial": "t", "data": {"same": "from_data"}}])
     r = Run(ctx, "fix_vars_data", d)
     check(r.rc == 0 and [x["same"] for x in r.trials] == ["from_vars", "from_data"], "a name that is vars in one leaf and data in another: %s %s" % ([x.get("same") for x in r.trials], r.err))
+    # one name, a jitter in one leaf and text in another: the column is text
+    d2 = base({"t": {"events": [{"on": "s"}, {"wait_s": 0.05}, {"off": "s"}]}},
+              [{"name": "one", "trial": "t", "rules": ["jitter same_s uniform 0.1 0.1"]}, {"name": "two", "trial": "t", "vars": {"same_s": "words"}}])
+    r2 = Run(ctx, "fix_vars_jitter", d2)
+    check(r2.rc == 0 and [x["same_s"] for x in r2.trials] == ["0.1", "words"], "a column of two types holds text: %s %s" % ([x.get("same_s") for x in r2.trials], r2.err))
 
 
 def make_wav(ctx):
@@ -572,6 +577,10 @@ def t_fix_backward_at(ctx):
     offs = [e for e in r.events if e["stimulus"] == "s" and e["kind"] == "offset"]
     check(len(offs) == 1, "the step before the backward at_s is not dropped")
     check(float(r.trials[0]["time_elapsed_s"]) >= 0.99, "the end is at the latest time: %s" % r.trials[0]["time_elapsed_s"])
+    # the wait alone schedules the latest time: nothing follows it
+    dw = base({"t": {"events": [{"on": "s"}, {"wait_s": 1}, {"at_s": 0.1}, {"off": "s"}]}}, [{"name": "l", "trial": "t"}])
+    rw = Run(ctx, "fix_at_wait", dw)
+    check(rw.rc == 0 and float(rw.trials[0]["time_elapsed_s"]) >= 0.99, "a wait's end counts: %s" % (rw.trials[:1] or rw.err))
     # `after` starts at the latest scheduled time of events, and a tween's end counts
     d2 = base({"t": {"events": [{"on": "s"}, {"wait_s": 1}, {"off": "s"}, {"at_s": 0.1}, {"on": "t"}], "after": [{"mark": "go"}]}}, [{"name": "l", "trial": "t"}])
     r2 = Run(ctx, "fix_at2", d2)
@@ -582,9 +591,14 @@ def t_fix_backward_at(ctx):
     r3 = Run(ctx, "fix_at3", d3)
     check(r3.rc == 0 and float(r3.trials[0]["time_elapsed_s"]) >= 0.99, "a tween's end is scheduled: %s %s" % (r3.trials[:1], r3.err))
     # a forward at_s in `after`, and the end goes at the latest
-    d4 = base({"t": {"events": [{"on": "s"}], "response": {"role": "r", "from": "s", "duration_s": 0.1, "choices": ["left"]}, "after": [{"at_s": 1.5}, {"mark": "late"}, {"off": "s"}]}}, [{"name": "l", "trial": "t"}])
+    d4 = base({"t": {"events": [{"on": "s"}], "response": {"role": "r", "from": "s", "duration_s": 0.1, "choices": ["left"]}, "after": [{"at_s": 1.5}, {"mark": "late"}]}}, [{"name": "l", "trial": "t"}])
     r4 = Run(ctx, "fix_at4", d4, args=["--participant", "silent"])
     check(r4.rc == 0 and float(r4.trials[0]["time_elapsed_s"]) >= 1.49 and any(e["text"] == "late" for e in r4.events), "a forward at_s in after: %s %s" % (r4.trials[:1], r4.err))
+    # a backward at_s inside `after`: the end stays at the latest time
+    d5 = base({"t": {"events": [{"on": "s"}], "response": {"role": "r", "from": "s", "duration_s": 0.1, "choices": ["left"]},
+                     "after": [{"on": "t"}, {"wait_s": 1}, {"off": "t"}, {"at_s": 0.2}]}}, [{"name": "l", "trial": "t"}])
+    r5 = Run(ctx, "fix_at5", d5, args=["--participant", "silent"])
+    check(r5.rc == 0 and float(r5.trials[0]["time_elapsed_s"]) >= 1.0 and any(e["stimulus"] == "t" and e["kind"] == "offset" for e in r5.events), "a backward at_s in after: %s %s" % (r5.trials[:1], r5.err))
 
 
 def t_fix_refusals(ctx):
@@ -695,7 +709,7 @@ def t_fix_check_all_leaves(ctx):
     d = base({"t": {"events": [{"on": "s"}, {"wait_s": "$soa_s"}, {"off": "s"}]}},
              [{"name": "a", "trial": "t", "timeline_variables": "x.pstb"}, {"name": "b", "trial": "t", "timeline_variables": "y.pstb"}])
     r = Run(ctx, "fix_all_leaves", d, tables={"x": "soa_s\n0.1\n", "y": "soa_s\n-0.5\n"})
-    check(r.rc != 0 and ("op" in r.err or "duration" in r.err), "the second leaf's negative wait is seen: %s" % r.err)
+    check(r.rc != 0 and ("op" in r.err or "duration" in r.err) and not os.path.exists(r.data), "the second leaf's negative wait is seen at load: %s" % r.err)
 
 
 def t_fix_release_order(ctx):

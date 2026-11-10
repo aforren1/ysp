@@ -94,6 +94,7 @@ static void rmdir_recursive(const char* path) {
 static pl_player p;
 
 static const char* rig_path;
+static char script_arg[600];
 static long long n_loaded, n_run, n_ok;
 static int g_print;
 static const char* dict_keys[2048];
@@ -156,8 +157,8 @@ static void one(const seed_t* s, const char* text, size_t n, const char* out) {
     a.max_trials = rnd() % 4 == 0 ? 0 : 64;
     a.max_seconds = a.max_trials ? 60 : 300;
     {
-        static const char* const parts[] = { "correct", "silent", "p=0.5" };
-        a.participant = parts[rnd() % 3];
+        static const char* const parts[] = { "correct", "silent", "p=0.5", script_arg };
+        a.participant = parts[rnd() % 4];
     }
     a.rt_s = 0.1;
     a.def_text = text;
@@ -240,6 +241,17 @@ int main(int argc, char** argv) {
     }
     dict_build();
     yrt_virtual_begin(0);
+    {
+        char path[580];
+        FILE* fp;
+        int t;
+        snprintf(path, sizeof path, "%s/script.csv", argv[3]);
+        snprintf(script_arg, sizeof script_arg, "script:%s", path);
+        if (!(fp = fopen(path, "w"))) return 2;
+        fprintf(fp, "trial_index,response,rt_s,hold_s\n");
+        for (t = 0; t < 512; t++) fprintf(fp, "%d,%s,%.3f,0.05\n", t, t % 7 == 3 ? "" : t % 2 ? "right" : "left", 0.1 + 0.01 * (t % 5));
+        fclose(fp);
+    }
     /* a data set folder inside the caller's scratch folder; its name is fixed
      * so that the delete below cannot reach anything else */
     snprintf(out, sizeof out, "%s/ds", argv[3]);

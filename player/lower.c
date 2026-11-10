@@ -262,7 +262,13 @@ static int pl_step_num(pl_player* p, const yexp_value* v, double* out) {
 }
 
 static int pl_step_ns(pl_player* p, const yexp_value* v, int64_t* ns) {
-    if (p->env.extreme) return pl_extreme_ns(p, v, ns);
+    if (p->env.extreme) {
+        if (pl_extreme_ns(p, v, ns) < 0) return -1;
+        /* ytl_check_ops() takes a negative WAIT, but the run would refuse it
+         * on the trial that draws it */
+        if (*ns < 0) { pl_fail(p, "a step's duration can be %g seconds; a duration is not negative", (double)*ns / 1e9); return -1; }
+        return 0;
+    }
     return pl_eval_ns(p, &p->env, v, ns);
 }
 

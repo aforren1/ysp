@@ -128,6 +128,7 @@ def step_seeds(seeds):
         "if": [{"if": "$flag", "steps": [{"on": "s"}]}, {"unless": "$flag", "steps": [{"on": "t"}, {"off": "t"}]}, {"on": "s"}, {"off": "s"}],
         "ifpractice": [{"if": "$first_in_block", "steps": [{"on": "t"}]}, {"on": "s"}, {"wait_s": 0.02}, {"off": "s"}, {"off": "t"}],
     }
+    S["wait_table"] = [{"on": "s"}, {"wait_s": "$d_s"}, {"at_s": {"by": "$a", "map": {"left": 0.05, "right": 0.1}}}, {"off": "s"}]
     for name, st in S.items():
         d = base()
         d["trials"]["x"]["events"] = st
@@ -177,6 +178,14 @@ def node_seeds(seeds):
         write(seeds, "node_" + name, base(timeline=t))
     write(seeds, "node_rules_all", base(timeline=[{"name": "a", "trial": "x", "timeline_variables": "x.pstb", "rules": [
         "order constrained", "reps 2", "max_run a 2", "practice 1", "warmup 1", "block_size 2", "jitter j_s uniform 0.01 0.02", "var w choice p q"]}]))
+    write(seeds, "node_if_field", base(timeline=[{"name": "a", "if": "$participant", "trial": "x", "timeline_variables": "x.pstb"},
+                                                 {"name": "b", "unless": "$participant", "trial": "x", "timeline_variables": "x.pstb"}]))
+    write(seeds, "node_vars_dur", base(trials={"x": {"events": [{"on": "s"}, {"wait_s": "$wv_s"}], "response": dict(RESP), "after": [{"off": "s"}]}},
+                                       timeline=[{"name": "m", "trial": "x", "timeline_variables": "x.pstb", "vars": {"wv_s": {"choice": [0.05, 0.1]}}}]))
+    write(seeds, "node_shadow", base(timeline=[{"name": "c", "vars": {"ch": {"choice": ["p", "q"]}}, "timeline": [{"name": "a", "trial": "x", "timeline_variables": "x.pstb", "vars": {"ch": {"choice": ["r", "s"]}}}]}]))
+    write(seeds, "image_lookup", base(stimuli={"s": {"kind": "image", "texture": {"by": "$a", "map": {"left": "a.ysptex", "right": "b.ysptex"}}}}))
+    tc = dict(tr["x"], columns={"rt2_s": "$rt_s", "es": "$estimate", "lv": "$level", "cor": "$correct"})
+    write(seeds, "track_columns", base(methods=meths, trials={"x": tc}, timeline=[{"name": "a", "trial": "x", "tracks": ["st"]}]))
     write(seeds, "node_groups", base(timeline=[{"name": "a", "trial": "x", "timeline_variables": "x.pstb", "rules": ["groups a blocked", "order random"]}]))
     write(seeds, "node_rate_display", base(timeline=[{"name": "a", "trial": "x", "timeline_variables": "x.pstb", "rules": ["jitter j_s uniform 0.01 0.05 rate=display"]}]))
     write(seeds, "track_round", base(methods=meths, trials=tr, timeline=[{"name": "a", "trial": "x", "tracks": ["st"], "interleave": "round_robin"}]))

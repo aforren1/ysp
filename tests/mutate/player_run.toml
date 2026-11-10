@@ -287,6 +287,8 @@ replace = ''''''
 id = "r-34"
 name = "the pending-row ring drops its last rows"
 test = "player"
+expect = "survived"
+note = "A guard: the ring fills only when flip records lag 16 trials behind, which the simulated display does not do; a real-window test can reach it."
 why = "A full ring has head == tail; the last rows must go out."
 find = '''    for (i = 0; i < PL_PENDING_ROWS; i++) {
         if (p->rows[p->row_tail].used && pl_row_flush(p, &p->rows[p->row_tail]) < 0) return -1;'''
@@ -297,6 +299,8 @@ replace = '''    for (i = 0; i < 0; i++) {
 id = "r-35"
 name = "the walk ignores its frame count on a leaf open"
 test = "player"
+expect = "survived"
+note = "A leaf that opens with no trial is rare: only the weight of the per-frame yield changes, not the outcome of a run; the frame-time cost is what it bounds."
 why = "Item 19."
 find = '''                p->walk_frame_steps += 64;'''
 replace = '''                p->walk_frame_steps += 0;'''

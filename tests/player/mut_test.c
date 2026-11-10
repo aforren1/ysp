@@ -234,6 +234,37 @@ static void hook_density(void) {
     CHECK(s && s->rdk_count == s->field.n && s->rdk_count == 314, "density x area dots: %d", s ? s->rdk_count : -1);
 }
 
+/* the host's role check against a real rig profile (the shapes run with --sim) */
+static void case_role(void) {
+    static yrig_profile prof;
+    static pl_player q;
+    yexp_host h;
+    char msg[200];
+    yexp_role role;
+    const char* fam[1] = { "triggerbox" };
+    memset(&q, 0, sizeof q);
+    yrig_init(&prof, "rig");
+    q.rig = &prof;
+    q.have_rig = true;
+    pl_host_init(&q, &h);
+    memset(&role, 0, sizeof role);
+    role.name = "trig";
+    role.family = fam;
+    role.n_family = 1;
+    role.required = true;
+    CHECK(h.role(h.ctx, &role, msg, sizeof msg) != 0, "unbound required role refused in a real run");
+    q.args.sim = true;
+    CHECK(h.role(h.ctx, &role, msg, sizeof msg) == 0, "--sim stands in");
+    q.args.sim = false;
+    {
+        yrig_role* r = yrig_add(&prof, "trig");
+        snprintf(r->family, sizeof r->family, "parallel");
+    }
+    CHECK(h.role(h.ctx, &role, msg, sizeof msg) != 0, "wrong family refused");
+    snprintf(yrig_find(&prof, "trig")->family, 16, "triggerbox");
+    CHECK(h.role(h.ctx, &role, msg, sizeof msg) == 0, "a listed family binds");
+}
+
 static void case_density(void) {
     const char* d = "{\"format\":\"ysp-experiment\",\"version\":1,\"name\":\"m\",\"devices\":{},\"stimuli\":{\"d\":{\"kind\":\"rdk\",\"aperture\":\"circle\",\"w\":200,\"density\":0.01,\"speed\":5,\"dot_size\":2,\"color\":[1,1,1]}},\"trials\":{\"t\":{\"events\":[{\"on\":\"d\"},{\"wait_s\":0.05},{\"off\":\"d\"}]}},\"timeline\":[{\"name\":\"a\",\"trial\":\"t\"}]}";
     g_hook = hook_density;
@@ -317,7 +348,7 @@ static int run_shapes(void) {
     int rc;
     if (n <= 0 || !repo || !bin) { printf("run_shapes needs YPL_REPO and YPL_BIN\n"); return 2; }
     self[n] = 0;
-    snprintf(cmd, sizeof cmd, "YPL_AS_PLAYER=1 python3 '%s/tests/player/player_test.py' --bin '%s' --player '%s' --out '%s/shapes' 2>&1 | tail -12", repo, bin, self, workdir);
+    snprintf(cmd, sizeof cmd, "YPL_AS_PLAYER=1 python3 '%s/tests/player/player_test.py' --bin '%s' --player '%s' --out '%s/shapes' > '%s/shapes.txt' 2>&1; st=$?; grep -E 'FAIL|cases' '%s/shapes.txt' | head -12; exit $st", repo, bin, self, workdir, workdir, workdir);
     rc = system(cmd);
     return WEXITSTATUS(rc);
 }
@@ -340,6 +371,7 @@ int main(int argc, char** argv) {
     case_method();
     case_after_var();
     case_density();
+    case_role();
     case_rdk();
     case_code_range();
     case_stagger_trigger();
