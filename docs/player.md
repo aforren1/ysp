@@ -29,14 +29,21 @@ ysp_player PACK.ysppak --out DIR --seed 7 --field participant=1
    the role's name.
 3. It opens each bound device and waits up to 3 s for it to run. A device
    that does not answer as its family must stops the start.
-4. It opens the display that `YSCR_BACKEND_AUTO` picks (GLX_OML on X11),
+4. It checks each bound role's `min_tier` (2.9). A role's tier comes from
+   the rig profile: tier 1 when the profile names a checked loopback for
+   it, else UNKNOWN, which is below every `min_tier`. A role below its
+   `min_tier` stops the start, with the role's name and tiers.
+   `--allow-below-tier` starts anyway; `session.json` then has
+   `"allow_below_tier": true` and each such role `"below_tier": true`.
+5. It opens the display that `YSCR_BACKEND_AUTO` picks (GLX_OML on X11),
    full screen, with the panic watchdog armed, and compiles the programs
    into the user's program cache (ysp/gfx.h, PROGRAM CACHE).
-5. It shows 30 blank frames (about 0.5 s). If the definition sets
+6. It shows 30 blank frames (about 0.5 s). If the definition sets
    `display.min_tier` and these frames are of a worse tier, the start stops
    here, before the data set folder exists.
-6. It prints `ysp_player: running; Shift+Esc stops the session` and runs
-   the session.
+7. It prints `ysp_player: running; Shift+Esc stops the session` and runs
+   the session. `session.json` names the rig profile file it used
+   (`rig_profile`; `null` with none).
 
 To stop the session, press Shift+Esc. The trial that runs has no row; each
 finished trial keeps its row; `session.json` gets `"aborted"`; the exit
@@ -52,6 +59,35 @@ one.
 Linux: key times come from the kernel's evdev time when the user can read
 the keyboard's node (`tools/linux/70-ysp-input.rules`, docs/screen.md
 "Kernel key times"); else from the X server's millisecond clock (tier 3).
+
+## How-to: give a keyboard a tier
+
+You cannot yet. A role's tier comes only from the rig profile (rig_spec
+8; ysp/rigfile.h, TIER), never from the kind of stamp, a polling rate or
+a product name. A keyboard role is unbound in the rig profile, so its
+tier is UNKNOWN, and a keyboard role with a `min_tier` needs
+`--allow-below-tier`. These are missing:
+
+1. The rig profile cannot bind a keyboard: a role's `family` must be a
+   ysp/box.h family or `lsl` (`yrig__family_id()`). It needs a family
+   such as `keyboard`, with a key that names one keyboard (its evdev
+   `by-id` name on Linux, a USB vid:pid and serial number elsewhere).
+2. ysp/rigfile.h gives tier 1 only to a family that maps a device clock
+   (xid, line, photo, lsl). A keyboard has no device clock: its times are
+   the host's (the kernel's evdev time). It needs a rule for a host-stamped
+   input whose bounds a loopback checked.
+3. The loopback. `examples/rigfile/bounds.c` measures an input against a
+   line board's output pin, but only for a ysp/device.h role. For a
+   keyboard it needs: a line board (`firmware/ysp_line/`) whose output
+   drives the key, through a relay or an optocoupler across the key
+   switch or a solenoid on the keycap; and a mode that reads the key's
+   time from the screen's input (`yscr_poll()`, the evdev time) and
+   writes the same `format ysp-in-bounds 1` file (`n`, `lo_s`, `hi_s`,
+   `date`) into the profile's `loopback/` folder, its SHA-256 in
+   `roles.<role>.bounds`.
+
+With those three, the keyboard role would get its tier from
+`yrig_source_role()`, as the player already asks.
 
 ## How-to: run a pack on the simulated display
 
@@ -99,10 +135,12 @@ differ:
 | Item | Real run | `--sim` |
 |---|---|---|
 | `events.csv` `out` rows | From the device's own record of each write (`YDEV_REC_OUT`): `t_s` the write's start, `end_s` its end, `deadline_s` the flip's vblank (a code at a flip), or the press (a response's code), `flags` the `YDEV_OUT_*` bits. One row a code: a pulse's trailing edge is in the device's log only | The deadline as the write's time, flags 1 for a response's code |
-| `<role>_lag_max_s` | The largest write start minus deadline of the trial's codes | 0 |
-| `<role>_n` | The codes asked for, and the rule's codes from their records | The codes asked for |
-| `session.json` `devices` | `bound` (a family, `keyboard` or `none`), `key`, `port`, `ident`, an input's `tier`, and `rule` (the output a device role's rule writes to) | `bound` only (`sim` or the rig's family) |
-| `session.json` | `gfx` (the program cache's hits), `view_distance_mm` and `view_width_mm` (deg units), `start_utc` (the time), `aborted` after Shift+Esc | `start_utc` fixed |
+| `<role>_lag_max_s` | The largest write start minus deadline of the trial's codes: exactly the largest of its `out` rows in `events.csv` | 0 |
+| `<role>_n` | The codes the trial asked for, its rule's fires included | The codes asked for |
+| `<role>_failed` | The codes whose write failed, and the codes whose device record never came (a trigger whose flip was not shown, a full ring) | The codes the screen refused |
+| When the row is written | When its last frame's flip record and every one of its codes' device records are in, or 30 frames (0.5 s at 60 Hz) after its last frame, with the codes still owed counted in `_failed` | When its last frame's flip record is in |
+| `session.json` `devices` | `bound` (a family, `keyboard` or `none`), `key`, `port`, `ident`, an input's `tier`, `min_tier` and `below_tier` where they apply, and `rule` (the output a device role's rule writes to) | `bound` only (`sim` or the rig's family) |
+| `session.json` | `rig_profile` (the file, or `null`), `allow_below_tier`, `gfx` (the program cache's hits), `view_distance_mm` and `view_width_mm` (deg units), `start_utc` (the time), `aborted` after Shift+Esc | `start_utc` fixed |
 | `frames.csv` phase columns | The CPU costs | Empty: they would differ between two runs |
 | `panic.json` | After a panic only | Never |
 
@@ -156,13 +194,14 @@ forced. The Report section lists them with the evidence.
 | `display.min_tier` on the simulated display | Flags frames (`BELOW_TIER`); the display is not refused |
 | `display.min_tier` in a real run | Refuses the start when the 30 blank frames before the data set opens are of a worse tier (`caps.worst_tier`; open's settle frames are judged but not counted, so the player shows its own). Every flip of the session is flagged `BELOW_TIER` as in `--sim` |
 | An input role that the rig does not bind | The keyboard when it lists the family `keyboard`; else unbound (a required one refuses the start). The rig's families have no keyboard, so a keyboard role needs no binding |
-| A role's `min_tier` | Not checked. A keyboard's events are tier 0 (UNKNOWN, the kernel's time) or 3 (the X server's), so the oddball's `resp` (`min_tier` 2) on a keyboard would refuse every start. `session.json` gives each input role's tier. A finding: see "What a real-window run needs next" |
+| A role's `min_tier` (decided 2026-11-10) | A real start is refused, naming each role, when a bound role's tier is worse than its `min_tier`; UNKNOWN counts as worse. The tier is the rig profile's (`yrig_source()`, `yrig_source_role()` for a keyboard), so a keyboard is UNKNOWN today (How-to: give a keyboard a tier). An output role has no tier yet (ysp/device.h, OUTPUTS): UNKNOWN. `--allow-below-tier` starts anyway and `session.json` says so. `--sim` writes a line on stderr only |
 | The response kind in a real run | The binding's: a device role's choices are its `buttons` (box events, control = the button's code); a keyboard role's are key names. `--sim` keeps the first family's kind |
 | An any-key response in a real run | Hears its role's kind only (`yrsp_desc.kinds`): a click that brings the window to the front is no response |
-| A response's `trigger` on a device role | A `ydev_rule` on the role's reader thread, its output the trigger role's device. Its codes are fixed when the device opens: the code must be a number or a lookup by `$response` of numbers, and every template that responds on the role must give the same codes; else the start stops, naming both. Measured on a pty pair: write start minus the press, p50 66.5 us, max 93.9 us (Results) |
-| A response's `trigger` on a keyboard role | `ydev_out_mark()` from the frame loop when it sees the response, up to a frame after the press (2.6) |
+| A response's `trigger` on a device role | A `ydev_rule` on the role's reader thread, its output the trigger role's device. Its codes are fixed when the device opens: the code must be a number or a lookup by `$response` of numbers, and every template that responds on the role with a trigger must give the same choices and codes, in any order; else the start stops, naming both. A template on the role with no `trigger` runs with the rule disarmed, so its presses send nothing; the rule is disarmed at each trial's end. A rule's record goes to the trial whose arm its press follows. Measured on a pty pair: write start minus the press, p50 66.5 us, max 93.9 us (Results) |
+| A response's `trigger` on a keyboard role | `ydev_out_mark()` from the frame loop when it sees the response, up to a frame after the press (2.6). The write runs on the frame thread: 2.7 to 8.9 us on the pty TriggerBox (28 writes); ysp/device.h says an XID output can wait up to 2 ms for a timer query, which a 16.7 ms frame holds. No XID was measured |
+| When a response ends | Only once the landing frame's flip record has given the final onset, or 4 frames after the plan's onset when none comes (`yrsp_set_wait_final()`, ysp/response.h 0.9.0), for every response. `after` and the row hear one result; if the final result still names another response than the live one (a box's report read late with an earlier stamp), the row keeps the live one, which `after` showed |
 | The collectors | One array, one collector per template with a response; `yrsp_feed_screen()` gives every one every input, between trials too, so none misses a release |
-| Where a real run's data is written | A writer thread (`yrt_worker`, SCHED_OTHER) takes each frame's records, events, stream steps and rows from a queue of 8192 writes. On ext4 a row's `write()` from the frame thread blocked one frame for 17.8 ms while the kernel wrote the file back (Results); none on tmpfs. `--sim` writes in place, so its files are the same bytes as before. A row reaches the OS within a frame of its last flip record |
+| Where a real run's data is written | A writer thread (`yrt_worker`, SCHED_OTHER) takes each frame's records, events, stream steps and rows from a queue of 8192 writes, every 2 ms. The frame thread only stores the queue's end: it takes no lock of the writer's, so a SCHED_FIFO frame thread cannot wait on a SCHED_OTHER writer. On ext4 a row's `write()` from the frame thread blocked one frame for 17.8 ms while the kernel wrote the file back (Results); none on tmpfs. `--sim` writes in place, so its files are the same bytes as before. A row reaches the OS within 2 ms of being final |
 | A real run's first frame | The 30 blank frames come first, off the data set: a frame after a long setup is often late (ysp/gfx.h, PRIME) |
 
 The variable `$trial_index` is the leaf's trial number (2.3 reads it from
@@ -176,67 +215,61 @@ C program gives a comparison for them. In `--sim` a response's `trigger` goes
 out from the frame loop, as for a keyboard role; a real run's device role
 has the rule.
 
-## Explanation: a window with no deadline can end with no response
+## Explanation: a window with no deadline, and the wait for the flip record
 
-This is a format question, open. The player does not decide it.
+Decided 2026-11-10 ("wait for the record"). The loader (ysp/experiment.h
+0.1.2) takes a response with `duration_s` 0 as one that always ends with
+a press: `$rt_s` reads in a number key, a lookup by `$response` needs no
+`""` key, and a lookup by `$outcome` no `"timeout"` key. The player keeps
+that guarantee.
 
-The loader (ysp/experiment.h 0.1.2) takes a response with `duration_s` 0
-as one that always ends with a press: `$rt_s` reads in a number key, a
-lookup by `$response` needs no `""` key, and a lookup by `$outcome` needs
-no `"timeout"` key.
+The problem it had. ysp/response.h ends a window at the first press that
+is valid against the onset it has when the press comes. Until the
+stimulus's flip record arrives (one or two frames after the landing),
+that onset is the plan. When the record's onset is later than the plan,
+a press between `plan + min_rt` and `record + min_rt` became EARLY or an
+anticipation after the window had ended: `YRSP_R_ENDED_EARLY`, no
+response, and with no deadline, a trial with no valid press. The frame
+loop feeds a press before it applies that frame's record (ysp/response.h,
+"The order in a frame"), so with `min_rt` 0 the gap is the onset's
+residual (under 20 us here) or a whole frame when the landing frame is
+late.
 
-On a real display that is not true. ysp/response.h ends a window at the
-first press that is valid against the onset it has when the press comes.
-Until the stimulus's flip record arrives (one or two frames after the
-landing), that onset is the plan. When the record's onset is later than
-the plan, a press between `plan + min_rt` and `record + min_rt` is an
-anticipation (EARLY when `min_rt` is 0). The window stays ended, and the
-result has `YRSP_R_ENDED_EARLY` and no `YRSP_R_RESPONDED`. With no
-deadline, nothing else ends the window, so the trial ends with no valid
-press.
+The decision. Every response's window now waits for the record
+(`yrsp_set_wait_final()`, ysp/response.h 0.9.0, opt-in in the header):
+a press or the deadline ends the window only once the final onset is in.
+A press the record makes early leaves the window open, as it would have
+with exact timing. The cost: a press in the gap ends the window when the
+record arrives, up to about two frames later, so `after` starts that
+much later; only for such a press. When no record comes (a landing frame
+never shown), the plan stands after 4 frames.
 
-The evidence. A run of ysp/response.h 0.8.1 with the frame loop's order
-(the plan, the press, then the record; duration 0):
+The evidence. A 60 Hz frame loop in the player's order, duration 0
+(`ended_early.c`, a probe of ysp/response.h; the header's test has the
+same cases):
 
-| min_rt | Record minus plan | Press minus plan | Result |
-|---|---|---|---|
-| 0 | 16.7 ms (one frame late) | 5 ms | ENDED_EARLY, not responded, `rt_ns` none |
-| 0 | 40 us | 20 us | ENDED_EARLY, not responded |
-| 100 ms | 33.3 ms (two frames late) | 110 ms | ENDED_EARLY, not responded |
-| 0 | 0 | 5 ms | responded, RT 5 ms |
+| Case | Without the wait | With the wait |
+|---|---|---|
+| `min_rt` 0, the landing a frame late, press 5 ms after the plan | Ends on the press; no response, ENDED_EARLY | The press is EARLY; the window stays open; a press 300 ms after the onset is the response |
+| `min_rt` 0, onset 40 us after the plan, press 20 us after it | No response, ENDED_EARLY | As above |
+| `min_rt` 100 ms, landing 2 frames late, press 110 ms after the plan | The record comes first: an anticipation; the window open | The same |
+| `min_rt` 0, onset at the plan, press 5 ms after it | A response, RT 5 ms | A response, RT 5 ms |
 
-When it happens in the player: the frame loop feeds a press before it
-applies the frame's flip record (ysp/response.h, "The order in a frame").
-On GLX_OML the landing frame's record comes at the next frame or the one
-after. So a press stamped after the plan and before the actual onset, and
-fed before the record, ends the window and is then reclassified. With
-`min_rt` 0 (the default) and an on-time frame, that gap is the onset's
-residual (under 20 us here); with a late landing frame, a whole frame.
-With `min_rt` of two frames or more, the record is in before a valid press
-can be fed. No real run here showed it: no landing frame was late in
-16,000 frames (Results).
+In the player (`player_test.py` `t_r5_wait_final`, `--sim` with
+`--test-plan-early`, a plan one frame before the record's onset, and a
+scripted press 5 ms before the record's onset): with a deadline of 1 s,
+the press is EARLY, the row is a timeout with no ENDED_EARLY, and the
+`after` table's first mark comes 1.0 s after the final onset, not at the
+press; with no deadline, the window stays open after the press; a press
+5 ms after the final onset is the response. Without the wait, the same
+runs gave `rsp_flags` 132 (ENDED_EARLY), `after` 16.7 ms after the onset,
+and a no-deadline trial that ended with no response.
 
-What the player does now: the row has an empty `response`, empty `rt_s`,
-`rsp_flags` with 0x4 (ENDED_EARLY), and `outcome` `timeout`. A definition
-that reads `$rt_s` in a number key, or looks up `$response` with no `""`
-entry or `$outcome` with no `"timeout"` entry, stops the session with an
-evaluation error at that trial; the rows before it are on disk. Also, the
-`after` table was built from the live result (a press), so it showed what
-a press shows, and the row says there was none. That second part applies
-to any response, with a deadline too.
-
-The options, with their effect:
-
-| Option | `$rt_s` in a number key | Lookups by `$response`, `$outcome` | Existing definitions | Cost |
-|---|---|---|---|---|
-| A. The loader takes every response as one that can time out (drop 0.1.2's exception for `duration_s` 0) | Refused at load, as with a deadline | Need `""` and `"timeout"` entries | Valid 0.1.2 definitions with `duration_s` 0 that use the exception are refused; the worked examples all have deadlines | A format change (the loader's levels); the trial with no valid press is a timeout, as the row already says |
-| B. The player re-opens the window after ENDED_EARLY when there is no deadline, and builds `after` only from a final onset | Always a press | No change | None | `after` starts up to two frames later after an early press; ysp/response.h has no call that re-opens a window and keeps the reclassified press's counts (`yrsp_arm()` clears them): a header change, or the counts are lost |
-| C. With no deadline, the press that ended the window is `$response` and `$rt_s` (an RT below `min_rt`, or negative), and the row keeps ysp/response.h's result | Always a number | No change | None | `$correct` and the method hear an anticipation as a response; the variables and the row disagree on such a trial |
-| D. Keep the loader, and stop the session at such a trial with a named error | Unchanged | Unchanged | None | A rare event (an anticipation within a late frame) ends a session |
-
-`requeue: no_response` does not help on its own: the row's values are
-evaluated before the requeue, so the lookups fail first.
-
+The row and `after`. `after` is built from the result when the window
+ends (the live result); the row from the result at the trial's end. With
+the wait they agree; if they still name another response (a box's press
+read late with an earlier stamp), the row keeps the live one, which the
+participant was shown. `--sim`'s files did not change.
 
 ## Results
 
@@ -252,10 +285,11 @@ on the virtual clock, unless the row says otherwise.
 | Fuzz, ASan and UBSan: `tests/fuzz/player_fuzz.c` over the corpus of `tests/fuzz/player_corpus.py` (1,015 seeds, every key of ysp/experiment.h's table in a valid definition, arrays in `vars` and `data`, the values 0.1.2 accepts) and the four examples; token swap, byte flip, key insertion, key deletion; a quarter of the inputs with no trial cap; 8 processes | Final code (round 4, `setarch -R` for the build and the run, a 6 GB memory scope, 8 processes, 418 s; 1,017 seeds, with a leaf loop over a track that finishes and an RDK trial past its buffer): 200,000 inputs, 27,316 loaded, 26,441 ran to the end, no report. Round 3: 200,000 inputs, 27,076 loaded, 26,222 ran to the end, no report. The run before it, on the code before the last fix, found one: a `quest` with three stimulus axes read past the one value the player passes (now refused at load) |
 | gcov, `-O0`, the seeds and 30,000 mutated inputs | Final code: `lower.c` 92.2 %, `run.c` 95.1 %, `host.c` 94.4 %, `eval.c` 84.6 % of lines. Reached: a leaf loop ended by a pass with no trials (10 times), a mid-trial RDK flush (29 times). Not reached: the yield on a leaf reopen (a guard, see the mutants) and the full requeue history (the system tests reach it). Not reached in `eval.c`: the AEP dims branch (AEP is refused), defensive cases of value kinds the loader does not produce (`YEXP_V_NONE`, a linspace or choice as a single value, unknown kinds) and errors for types the loader refuses (`no value where a number goes`, a non-contrast gamut, a gamut with no calibration) |
 | Mutants (`tests/mutate/player_{lower,run,eval,host}.toml`, built with the system tests) | Round 4, every list in full: 79 of 79 as expected: 75 killed, 4 kept as survivors with a note (a full row ring, the weight of a leaf open in the per-frame yield, a value's text behind the load's text bound, and the yield on a leaf loop's reopen, a second guard behind the empty-pass rule). `experiment.toml` (round 3): 171 of 171. 2026-11-10, the real window: every `--sim` mutant again, 81 of 81 as expected (r-33 and r-34 moved to the writer's hand-off; r-46, the writer's events in `--sim`, killed); 20 new mutants of the real path (test `real`: `tests/player/mut_real.c` runs `real_test.py`'s oddball, rule, abort, panic and refusal cases with the mutated player, one at a time on the display, 1,883 s): 20 of 20 as expected, 18 killed, 2 kept with a note (rr-08, the rule's codes not told to the collector, needs a press the rule fires on and the collector refuses; rr-10, the writer not drained before `session.json`, is a race the writer wins) |
+| Fix round, 2026-11-10 (the review's findings and decisions A and B) | Mutants: every `--sim` mutant, 82 of 82 as expected (r-47, the wait for the flip record, killed by `t_r5_wait_final`); the real path's, 30 of 30 as expected (each runs only its cases, `YPL_REAL_CASES`, 1,361 s and a rerun of three): 25 killed, 5 kept with a note (rr-08, rr-10, rr-12, rr-16, rr-18: guards that this rig cannot reach). rr-05 and rr-14 survived the first run and each got a stronger check (a code's deadline; a lost code whose next trial has the same code). ysp/response.h 0.9.0: 89 of 89. ASan and UBSan: the `--sim` tests (43 cases, the comparison, the four examples with three participants, the unit tests) and the real cases (the four examples, `noafter`, `lost`, `rule`, `rule2`, `fewer`, the abort, the panic, the refusals; 10 trials each): no report. Fuzz (ASan and UBSan, 4 processes, 152 s): 40,000 inputs, 5,475 loaded, 5,308 ran to the end, no report. ctest 119 of 119 |
 | Allocations in `pl_frame` (`player_alloc_test`) | 0 on all four examples; 0 on the frame thread in a real run (`--real`, below) |
 | The comparison (`tests/player/compare.py`) | No exact column differs; timeouts now in the RDK and 2AFC scripts |
 | Full ctest, Linux, `DISPLAY` unset | 120 of 120; the player and experiment tests of the sanitizer build, 9 of 9. 2026-11-10 (this build's set, the real window's code included): 119 of 119 |
-| `--sim` byte identity, 2026-11-10 (v0.2.0 against main's v0.1.0): the 42 cases of `player_test.py`, `compare.py`, and the four examples with three participants each | 459 files: 369 identical; 90 `session.json` files differ in `player_version` only (and in `rig_profile_sha256` where the test made its rig profile again, whose `written` date differs). The same on the ASan and UBSan build |
+| `--sim` byte identity, 2026-11-10 (v0.2.0 against main's v0.1.0): the 42 cases of `player_test.py`, `compare.py`, and the four examples with three participants each | 459 files: 369 identical; 90 `session.json` files differ in `player_version` only (and in `rig_profile_sha256` where the test made its rig profile again, whose `written` date differs). The same on the ASan and UBSan build. After the fix round: the same 369 identical, the 90 differ in `player_version` and `headers.response` (0.9.0) only |
 
 Frame work (`--measure`, Release, i5-14500, no other job of mine running,
 desktop open, load average 1.4 to 2.9, three runs of each of the four
@@ -292,6 +326,29 @@ seventh trial; the oddball's trigger role a TriggerBox on a pty pair.
 | Stroop | 36, 66.0 s | 0.93 / 1.02 | 3,807 | 0 | 3.2 / 1.8 us | 1 | 368 us; trial start 40 us | 31 of 31 |
 | Oddball (keyboard, TriggerBox) | 16, 31.2 s | 0.93 / 0.96 | 1,713 | 0 | 2.8 / 1.8 us | 1 | 251 us; trial start 49 us | 14 of 14 |
 | Oddball (LINE board, rule) | 16, about 31 s | 0.88 / 0.89 | 1,712 | 0 | 2.2 / 1.8 us | 1 | 113 us; trial start 55 us | 14 of 14 |
+
+After the fix round (2026-11-10, 08:36 to 08:45, the same machine and
+conditions; the wait for the flip record, the outputs counted at the
+row's write, the tier rule):
+
+| Example | Trials, run time | Load average (1 min), before / after | Frames | Dropped | Residual, \|max\| / \|p99\| | Tier | Largest frame work | Responses checked |
+|---|---|---|---|---|---|---|---|---|
+| RDK | 30, 60.8 s | 0.65 / 0.84 | 3,494 | 0 | 7.2 / 2.2 us | 1 | 323 us; trial start 32 us | 26 of 26 |
+| 2AFC | 30, 55.9 s | 0.78 / 1.01 | 3,194 | 0 | 7.2 / 1.8 us | 1 | 217 us; trial start 71 us | 26 of 26 |
+| Stroop | 36, 66.1 s | 0.93 / 0.98 | 3,807 | 0 | 8.2 / 1.8 us | 1 | 225 us; trial start 48 us | 31 of 31 |
+| Oddball (keyboard, `--allow-below-tier`) | 16, 31.2 s | 0.90 / 0.94 | 1,712 | 0 | 7.8 / 2.2 us | 1 | 230 us; trial start 34 us | 14 of 14 |
+| Oddball (LINE board, rule, tier 1 from a bounds fixture) | 16, about 31 s | 0.81 / 0.91 | 1,712 | 0 | 16.9 / 1.8 us | 1 | 77 us; trial start 50 us | 14 of 14 |
+
+The review's cases, each 16 trials: `noafter` (the oddball with no
+`after`): every row's `trig_lag_max_s` is its out rows' largest lag to
+the nanosecond (it was the flip's 2 us; the frame loop's code, 0.4 to
+13 ms, was lost); `lost` (one code at a flip never written, the next
+trial's code the same): that trial `trig_failed` 1, every other code in
+its own trial; `rule2` (a template with no response trigger on the LINE
+role): 34 bytes on the pty, no response code in its trials (before: a
+101 or 102 in each); `fewer` (two templates with other choices): refused
+at the start naming both (before: it ran and sent 102 for a template
+with only `left`).
 
 - A response checked: the response column is the key sent, `rsp_tier`
   is 0 (the kernel's evdev time), the response's time lies inside the
@@ -346,10 +403,9 @@ seventh trial; the oddball's trigger role a TriggerBox on a pty pair.
 
 ## What a real-window run needs next
 
-- A decision on the window with no deadline (the format question above).
-- A decision on a role's `min_tier` (2.9): a keyboard is tier 0 (UNKNOWN)
-  or 3, so enforcing it refuses every keyboard role that sets one, the
-  oddball's `resp` included.
+- A tier for a keyboard role: the rig profile's family, a rule for a
+  host-stamped input, and a loopback (How-to: give a keyboard a tier).
+- A tier for an output role: no output has one in ysp/device.h yet.
 - A real window on Windows (COMPOSITION, DXGI_FLIP) and macOS (METAL): CI
   builds the player there and runs `--sim`; no real run was made.
 - A photodiode run for the display's onsets and a line-in run for a
@@ -371,7 +427,13 @@ seventh trial; the oddball's trigger role a TriggerBox on a pty pair.
   `both` (it opens as an output; its events go to the input bridge; no
   rule).
 - A real run with a sound stimulus.
-- A panic keeps the rows already handed to the writer; a trial that ended
-  in the frame before a hang can lose its row (its last flip record never
-  comes). Measured only with the test hang (`--hang-at-trial`).
+- A panic keeps the rows the writer wrote; a trial that ended in the 2 ms
+  before a hang, or whose last flip record or codes' records never came,
+  can lose its row. Measured only with the test hang (`--hang-at-trial`).
+- The wait for the flip record on a real display: no landing frame was
+  late in these runs, so the wait was never longer than the record's
+  usual arrival; the `--sim` test and the header's test show the late
+  case.
+- A rule's codes from two input roles into one output: the arms are kept
+  per output and the press time picks one; no rig here has two boxes.
 - `aep`, `artwork`, `video`: refused.
