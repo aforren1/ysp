@@ -23,8 +23,8 @@ name = "control: no change (must pass)"
 test = "sig"
 expect = "survived"
 why = "Control: a change with no effect. The test must pass, so a failure here means the setup is wrong, not the header."
-find = '#define YSIG_VERSION_PATCH 0'
-replace = '#define YSIG_VERSION_PATCH 0 '
+find = '#define YSIG_VERSION_PATCH 1'
+replace = '#define YSIG_VERSION_PATCH 1 '
 
 [[mutant]]
 id = "01"
@@ -1557,3 +1557,12 @@ test = "sig"
 why = "U4: the ring entry would replace the hit's, at the hit's time."
 find = '            g->val[node].t = t_ns;'
 replace = '            (void)0;'
+
+[[mutant]]
+id = "192"
+name = "ring push: no guard for a ring of no capacity"
+test = "sig"
+expect = "survived"
+why = "v0.2.1: the guard is there for MSVC's C4724 only. ysig__ring_cap() gives 256 or 1024 for 0, so no ring has capacity 0 and no test can tell. CI's MSVC build is the check."
+find = '    if (r->cap <= 0) return;'
+replace = '    (void)0;'
