@@ -1,4 +1,4 @@
-/* ysp/sig.h - v0.2.1 - public domain single-header signal path
+/* ysp/sig.h - v0.3.0 - public domain single-header signal path
  *
  *   Continuous input to stimuli: a small graph, fixed at open, from input
  *   sources through per-sample transforms and maps to stimulus channels,
@@ -204,6 +204,10 @@
  *   samples completes a hold. A hold armed while its test is true counts
  *   from the arm (p12 entry arm, 0: a hand already on the start), or
  *   waits for the test to fail and come true again (entry fresh, 1).
+ *   Entry now (2) with no hold: a test true at the arm is a hit at the
+ *   arm's time with the input's held value, also at a reset that arms
+ *   (a cursor already in a target); a frame-rate detect armed between
+ *   frames tests at the next onset instead. With a hold, now is arm.
  *   A sample-rate detect on a frame-updated input (a view, a mux or a
  *   latch of a channel): in a frame's pass its hold's clock is the time
  *   the frame knows input up to, min(poll, onset), while the test is
@@ -324,6 +328,10 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.3.0 - detect's entry now (2, YSIG_ENTRY_NOW; gap G16 of the
+ *          experiment format, D35 (f)): with no hold, a test true at the
+ *          arm is a hit at the arm's time, its output rising then; at
+ *          frame rate the next onset tests it. Arm and fresh unchanged.
  *   v0.2.1 - a ring push returns at once on a ring of no capacity, so
  *          MSVC /W4 /WX (C4724, "potential mod by 0") builds it; no
  *          ring has capacity 0, so nothing else changes.
@@ -336,6 +344,9 @@
  *          adapters, custom ops, parameter tables, and a name for
  *          each p[] index (YSIG_<OP>_<ROW>).
  *
+ *   STATUS: v0.3.0, 2026-11-11, Linux desktop (GCC 12.2): test_entry_now
+ *   as C and as C++ under ASan and UBSan, the compile checks, 195 of 195
+ *   mutants as expected (193 to 201 new, killed).
  *   STATUS: v0.2.0, 2026-11-09, Linux desktop (Debian 12, GCC 12.2):
  *   tests/adapt/sig_test.c (the new ops beyond closed forms: late reports,
  *   a planned onset ahead of the poll, past reads, resets, extreme times,
@@ -356,9 +367,9 @@
 #define YSP_SIG_H_INCLUDED
 
 #define YSIG_VERSION_MAJOR 0
-#define YSIG_VERSION_MINOR 2
-#define YSIG_VERSION_PATCH 1
-#define YSIG_VERSION_STRING "0.2.1"
+#define YSIG_VERSION_MINOR 3
+#define YSIG_VERSION_PATCH 0
+#define YSIG_VERSION_STRING "0.3.0"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -403,6 +414,13 @@ typedef enum ysig_test { YSIG_TEST_GE = 0, YSIG_TEST_LE = 1, YSIG_TEST_IN_RECT =
 
 /* detect p13: its output */
 typedef enum ysig_detect_out { YSIG_OUT_TEST = 0, YSIG_OUT_HIT = 1 } ysig_detect_out;
+
+/* detect p12: a detect armed while its test is true (DETECTORS) */
+typedef enum ysig_detect_entry {
+    YSIG_ENTRY_ARM = 0,         /* a hold counts from the arm             */
+    YSIG_ENTRY_FRESH = 1,       /* waits for the test to fail first       */
+    YSIG_ENTRY_NOW = 2          /* no hold: a hit at the arm              */
+} ysig_detect_entry;
 
 /* p[] indices by name (THE GRAPH): YSIG_<OP>_<ROW> is the row of
  * ysig_op_params(op) named <row>, in upper case with '.' as '_', so a
@@ -976,8 +994,9 @@ static const ysig_param ysig__p_detect[] = {
     YSIG__F64("a.y", -YSIG__BIG, YSIG__BIG, 0, "", "the center's y, or the rectangle's low y"),
     YSIG__F64("b.x", -YSIG__BIG, YSIG__BIG, 0, "", "the center's z, or the rectangle's high x"),
     YSIG__F64("b.y", -YSIG__BIG, YSIG__BIG, 0, "", "the center's w, or the rectangle's high y"),
-    { "entry", "enum", 0, 1, 0, "", "a hold armed while its test is true: counts from the arm, or waits for the test "
-      "to fail and come true again", "arm=0,fresh=1" },
+    { "entry", "enum", 0, 2, 0, "", "armed while its test is true: a hold counts from the arm, or waits for the test "
+      "to fail and come true again; now: with no hold, a hit at the arm (frame rate: at the next onset)",
+      "arm=0,fresh=1,now=2" },
     { "out", "enum", 0, 1, 0, "", "the output: the test's state, or 1 from a hit until ready again (one-hit: until the "
       "next arm or reset)", "test=0,hit=1" },
 };
@@ -1920,7 +1939,8 @@ static int ysig__test(const ysig__nd* n, const ysig_value* v, double hyst) {
     return test == YSIG_TEST_GE ? q >= n->p[2] + hyst : q <= n->p[2] - hyst;
 }
 
-static void ysig__det_arm(ysig_graph* g, int i, int64_t t) {
+/* Returns 1 when the arm itself is a hit (entry now). */
+static int ysig__det_arm(ysig_graph* g, int i, int64_t t) {
     ysig__nd* n = &g->nd[i];
     ysig__det_st* s = (ysig__det_st*)n->st;
     const ysig_value* v = &g->val[n->in[0]];
@@ -1930,9 +1950,10 @@ static void ysig__det_arm(ysig_graph* g, int i, int64_t t) {
     s->state = r;
     s->fired = 0;
     if ((int)n->p[13] == YSIG_OUT_HIT) g->val[i].v[0] = 0.0;
-    if (n->kns[0] > 0 && n->p[12] == 0) {
+    if (n->kns[0] > 0 && n->p[12] != 1) {
         /* a hold counts from the arm when the test is true then (entry
-         * arm, the default: a hand on the start at a trial's start) */
+         * arm, the default: a hand on the start at a trial's start; entry
+         * now is the same with a hold) */
         s->ready = 1;
         s->holding = r;
         s->t_start = t;
@@ -1941,11 +1962,28 @@ static void ysig__det_arm(ysig_graph* g, int i, int64_t t) {
         /* entry fresh: true at the arm waits for a fresh entry */
         s->ready = !r;
         s->holding = 0;
+    } else if (n->p[12] == 2) {
+        /* entry now (D35 (f)): a test true at the arm is a hit then, as a
+         * cursor already in the target starts tracking. A frame-rate
+         * detect armed between frames tests at the next onset instead,
+         * since its hits are at onsets */
+        s->ready = 1;
+        s->holding = 0;
+        if (r && n->p[5] != 1) {
+            ysig__hit(g, i, t, t, v);
+            s->fired = 1;
+            s->t_hit = t;
+            s->v_hit = *v;
+            s->ready = 0;
+            if (n->p[7] == 0) s->armed = 0;
+            return 1;
+        }
     } else {
         /* past the test at arm: held until it re-arms (CROSSINGS) */
         s->ready = !r;
         s->holding = 0;
     }
+    return 0;
 }
 
 /* A hold met by time `t`: the held value was true from t_start on. */
@@ -2582,7 +2620,9 @@ static void ysig__reset(ysig_graph* g, int64_t t, int exp_only) {
             ysig__gen_meta(o, id, t);
             o->lanes = 1;
             if (n->p[6] == 0) ysig__det_arm(g, id, t);
-            o->v[0] = (int)n->p[13] != YSIG_OUT_HIT && ((ysig__det_st*)n->st)->state ? 1.0 : 0.0;
+            /* a hit output is 0 at a reset unless the arm was a hit (entry now) */
+            o->v[0] = ((int)n->p[13] == YSIG_OUT_HIT ? ((ysig__det_st*)n->st)->fired
+                                                     : ((ysig__det_st*)n->st)->state) ? 1.0 : 0.0;
             ysig__hist_push(g, n, o);
             continue;
         }
@@ -3035,10 +3075,19 @@ YSIG_API bool ysig_arm(ysig_graph* g, int node, int64_t t_ns) {
     e.t = t_ns;
     ysig__journal(g, &e);
     {
-        int fell = (int)g->nd[node].p[13] == YSIG_OUT_HIT && g->val[node].v[0] != 0;
-        ysig__det_arm(g, node, t_ns);
+        int hit_out = (int)g->nd[node].p[13] == YSIG_OUT_HIT;
+        int fell = hit_out && g->val[node].v[0] != 0;
+        int rose = ysig__det_arm(g, node, t_ns) && hit_out;
         if (fell) {
             /* the fall has a time, so a past read after it agrees */
+            g->val[node].t = t_ns;
+            ysig__hist_push(g, &g->nd[node], &g->val[node]);
+            ysig__settle(g, node);
+        }
+        if (rose) {
+            /* entry now: the output rises at the arm, after any fall, so
+             * its users see a rise now (a latch freezes, a gate restarts) */
+            g->val[node].v[0] = 1.0;
             g->val[node].t = t_ns;
             ysig__hist_push(g, &g->nd[node], &g->val[node]);
             ysig__settle(g, node);

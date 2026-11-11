@@ -3825,6 +3825,127 @@ static void test_rearm(void) {
     }
 }
 
+/* G16: entry now. With no hold, a test true at the arm is a hit at the
+ * arm's time; a frame-rate detect tests at the next onset; entry arm keeps
+ * the crossing rule; a hit output rises at the arm, after a fall, so a
+ * latch freezes on it; a reset that arms hits too; replay agrees. */
+static void test_entry_now(void) {
+    ysig_node n[4];
+    ysig_desc d;
+    ysig_graph g, g2;
+    static uint64_t arena2[(1u << 20) / 8];
+    ysig_stats s1, s2;
+    ysig_hit h[8];
+    ysig_value at;
+    ysig_frame_in f;
+    yin_event e;
+    const ysig_param* rows;
+    int nr;
+    g_where = "entry now";
+    rows = ysig_op_params(YSIG_OP_DETECT, &nr);
+    CHECK(nr > YSIG_DETECT_ENTRY && rows[YSIG_DETECT_ENTRY].max == YSIG_ENTRY_NOW &&
+          strstr(rows[YSIG_DETECT_ENTRY].values, ",now=2") != NULL);
+    /* a sample-rate region: inside at the arm */
+    n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2);
+    n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1);
+    n[1].p[YSIG_DETECT_TEST] = YSIG_TEST_LE; n[1].p[YSIG_DETECT_LANE] = -1; n[1].p[YSIG_DETECT_LEVEL] = 5;
+    n[1].p[YSIG_DETECT_START] = 1; n[1].p[YSIG_DETECT_ENTRY] = YSIG_ENTRY_NOW; n[1].p[YSIG_DETECT_OUT] = YSIG_OUT_HIT;
+    n[1].history = 16;
+    n[2] = ysig_node_of(YSIG_OP_LATCH, 0, 1);
+    d = desc_of(n, 3);
+    d.journal = on_journal;
+    g_nj = 0;
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    e = PEN_E(10 * MS, 1, 1, 2, YIN_TIER_2); ysig_feed(&g, &e);
+    CHECK(ysig_detected(&g, h, 8) == 0);                       /* not armed yet */
+    CHECK(ysig_arm(&g, 1, 15 * MS));
+    CHECK(ysig_detected(&g, h, 8) == 1 && h[0].t == 15 * MS && h[0].t_found == 15 * MS && h[0].node == 1);
+    CHECK(h[0].value.v[0] == 1 && h[0].value.v[1] == 2 && h[0].value.t == 10 * MS);
+    CHECK(ysig_value_of(&g, 1)->v[0] == 1 && ysig_value_of(&g, 1)->t == 15 * MS);
+    CHECK(ysig_value_of(&g, 2)->v[0] == 1 && ysig_value_of(&g, 2)->v[1] == 2);   /* the latch froze */
+    CHECK(ysig_value_at(&g, 1, 14 * MS, &at) == 1 && at.v[0] == 0);
+    CHECK(ysig_value_at(&g, 1, 15 * MS, &at) == 1 && at.v[0] == 1);
+    e = PEN_E(20 * MS, 1, 3, 0, YIN_TIER_2); ysig_feed(&g, &e);
+    e = PEN_E(21 * MS, 1, 9, 0, YIN_TIER_2); ysig_feed(&g, &e);
+    e = PEN_E(22 * MS, 1, 3, 0, YIN_TIER_2); ysig_feed(&g, &e);
+    CHECK(ysig_detected(&g, h, 8) == 0);                       /* one hit per arm */
+    CHECK(ysig_value_of(&g, 2)->v[0] == 1);                    /* still frozen */
+    /* a re-arm while the output stands: a fall, then a rise, both at the arm */
+    CHECK(ysig_arm(&g, 1, 25 * MS));
+    CHECK(ysig_detected(&g, h, 8) == 1 && h[0].t == 25 * MS && h[0].value.v[0] == 3);
+    CHECK(ysig_value_of(&g, 1)->v[0] == 1);
+    /* outside at the arm: no hit; the first value inside is one (ready) */
+    e = PEN_E(30 * MS, 1, 9, 0, YIN_TIER_2); ysig_feed(&g, &e);
+    CHECK(ysig_arm(&g, 1, 35 * MS));
+    CHECK(ysig_detected(&g, h, 8) == 0 && ysig_value_of(&g, 1)->v[0] == 0);
+    e = PEN_E(40 * MS, 1, 4, 0, YIN_TIER_2); ysig_feed(&g, &e);
+    CHECK(ysig_detected(&g, h, 8) == 1 && h[0].t == 40 * MS);
+    /* replay of the journal: the same hits and values */
+    ysig_get_stats(&g, &s1);
+    d.journal = NULL;
+    d.arena = arena2;
+    d.arena_size = sizeof arena2;
+    CHECK(ysig_open(&g2, &d));
+    CHECK(ysig_replay(&g2, g_j, g_nj) == g_nj);
+    ysig_get_stats(&g2, &s2);
+    CHECK(s1.digest == s2.digest && s1.hits == s2.hits && s1.hits == 3);
+    CHECK(!memcmp(ysig_value_of(&g, 2), ysig_value_of(&g2, 2), sizeof(ysig_value)));
+    /* entry arm with no hold: the crossing rule, no hit at the arm */
+    n[1].p[YSIG_DETECT_ENTRY] = YSIG_ENTRY_ARM;
+    d = desc_of(n, 3);
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    e = PEN_E(10 * MS, 1, 1, 2, YIN_TIER_2); ysig_feed(&g, &e);
+    CHECK(ysig_arm(&g, 1, 15 * MS) && ysig_detected(&g, h, 8) == 0 && ysig_value_of(&g, 1)->v[0] == 0);
+    e = PEN_E(20 * MS, 1, 3, 0, YIN_TIER_2); ysig_feed(&g, &e);
+    CHECK(ysig_detected(&g, h, 8) == 0);
+    /* a reset that arms (start reset): a hit at the reset's time, output 1 */
+    n[1].p[YSIG_DETECT_ENTRY] = YSIG_ENTRY_NOW; n[1].p[YSIG_DETECT_START] = 0;
+    n[1].p[YSIG_DETECT_TEST] = YSIG_TEST_GE; n[1].p[YSIG_DETECT_LEVEL] = -1;   /* always true */
+    d = desc_of(n, 2);
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 7 * MS);
+    CHECK(ysig_detected(&g, h, 8) == 1 && h[0].t == 7 * MS);
+    CHECK(ysig_value_of(&g, 1)->v[0] == 1 && ysig_value_of(&g, 1)->t == 7 * MS);
+    /* frame rate: armed between frames, a hit at the next onset */
+    n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1);
+    n[1].p[YSIG_DETECT_TEST] = YSIG_TEST_LE; n[1].p[YSIG_DETECT_LANE] = -1; n[1].p[YSIG_DETECT_LEVEL] = 5;
+    n[1].p[YSIG_DETECT_START] = 1; n[1].p[YSIG_DETECT_ENTRY] = YSIG_ENTRY_NOW; n[1].p[YSIG_DETECT_AT] = 1;
+    d = desc_of(n, 2);
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    e = PEN_E(10 * MS, 1, 1, 0, YIN_TIER_2); ysig_feed(&g, &e);
+    CHECK(ysig_arm(&g, 1, 15 * MS) && ysig_detected(&g, h, 8) == 0);
+    f = frame_at(1, 20 * MS, 0, NULL, 0);
+    ysig_frame(&g, &f);
+    CHECK(ysig_detected(&g, h, 8) == 1 && h[0].t == 20 * MS);
+    /* the same with entry arm: held at the arm, no hit at the onset */
+    n[1].p[YSIG_DETECT_ENTRY] = YSIG_ENTRY_ARM;
+    d = desc_of(n, 2);
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    e = PEN_E(10 * MS, 1, 1, 0, YIN_TIER_2); ysig_feed(&g, &e);
+    CHECK(ysig_arm(&g, 1, 15 * MS));
+    ysig_frame(&g, &f);
+    CHECK(ysig_detected(&g, h, 8) == 0);
+    /* with a hold, now is arm: the hold counts from the arm */
+    n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1);
+    n[1].p[YSIG_DETECT_TEST] = YSIG_TEST_LE; n[1].p[YSIG_DETECT_LANE] = -1; n[1].p[YSIG_DETECT_LEVEL] = 5;
+    n[1].p[YSIG_DETECT_START] = 1; n[1].p[YSIG_DETECT_ENTRY] = YSIG_ENTRY_NOW; n[1].p[YSIG_DETECT_HOLD] = 0.1;
+    d = desc_of(n, 2);
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    e = PEN_E(10 * MS, 1, 1, 0, YIN_TIER_2); ysig_feed(&g, &e);
+    CHECK(ysig_arm(&g, 1, 15 * MS) && ysig_detected(&g, h, 8) == 0);
+    f = frame_at(1, 115 * MS, 0, NULL, 0);
+    ysig_frame(&g, &f);
+    CHECK(ysig_detected(&g, h, 8) == 1 && h[0].t == 115 * MS);
+    /* past the table: refused at open */
+    n[1].p[YSIG_DETECT_ENTRY] = 3;
+    expect_refused(n, 2, "entry");
+}
+
 /* T16: a hold on a frame-updated input completes for a still hand */
 static void test_hold_frame_input(void) {
     ysig_node n[5];
@@ -4117,6 +4238,7 @@ int main(void) {
     test_rearm();
     test_hold_frame_input();
     test_u();
+    test_entry_now();
     if (g_failures) { fprintf(stderr, "sig_test: %d failures\n", g_failures); return 1; }
     printf("sig_test: all checks passed\n");
     return 0;

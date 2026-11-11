@@ -165,6 +165,12 @@ hold armed while its test is true counts from the arm with
 `p[YSIG_DETECT_ENTRY] = 0` (entry `arm`, the default: a hand already on
 the start at a trial's first frame), or waits for the test to fail and
 come true again with `p[YSIG_DETECT_ENTRY] = 1` (entry `fresh`).
+A crossing detect with `p[YSIG_DETECT_ENTRY] = YSIG_ENTRY_NOW` (2, from
+v0.3.0) takes a test that is true at the arm as a hit at the arm's time,
+with the input's held value: a cursor already in the target starts
+tracking at once (experiment_format.md D35 (f), gap G16). At frame rate
+the hit is at the next onset. With a hold, `now` counts from the arm, as
+`arm` does.
 
 ### Freeze a cursor at the sample that crossed
 
@@ -375,7 +381,7 @@ definition. A zero field means the row's `def`.
 | `noise` | none, 1 to 4 | seed, sd, cutoff Hz | Set again at each reset |
 | `channel` | none, 1 | timeline channel | From the frame's values |
 | `bind` | 1, none | first channel | Writes float at each frame |
-| `detect` | 1, 1 (the test, or the hit with `out` hit; holds while disarmed or after a one-hit hit) | test (ge, le, in_rect, out_rect), lane (-1 norm), level, hysteresis, hold s, at (sample, frame), start (reset, arm), repeat (once, every), a.x a.y b.x b.y, entry (arm, fresh), out (test, hit) | The only sink with an output: another op may read it (a mux selector, an all input, a latch's trigger). With `out` hit, 1 from a hit until the detect is ready again (one hit: until the next arm or reset) |
+| `detect` | 1, 1 (the test, or the hit with `out` hit; holds while disarmed or after a one-hit hit) | test (ge, le, in_rect, out_rect), lane (-1 norm), level, hysteresis, hold s, at (sample, frame), start (reset, arm), repeat (once, every), a.x a.y b.x b.y, entry (arm, fresh, now), out (test, hit) | The only sink with an output: another op may read it (a mux selector, an all input, a latch's trigger). With `out` hit, 1 from a hit until the detect is ready again (one hit: until the next arm or reset) |
 | `record` | 1, none | per (sample, frame) | `desc.on_row`. A row has its value's true `t`: a sample stream may be out of time order when two sources feed the node, as `ysp/input.h` says of events |
 | `emit` | 1, none | kind (USER + 0..7), control | `ysig_derived()`. On a frame-updated node (a mux of a channel) it emits at every frame |
 | `mux` | 3 (a, b, selector), n | none | a when lane 0 of the selector is nonzero, else b; a and b the same lanes; the output's time, device, tier and source are the chosen input's. NaN counts as zero |
@@ -536,6 +542,19 @@ files came out byte-identical.
   `trial_visuomotor` and `trial_bimanual` set their graphs by name (57
   lines, no line more or fewer); `examples/sig/bench.c` keeps its 31
   numbers.
+- **Entry `now` (v0.3.0, G16).** The crossing rule holds a test that is
+  true at the arm until it fails. That is right for a response (a hand
+  already past the onset is no movement), but a state's exit on "in the
+  target" must fire when the cursor is there when the state starts
+  (experiment_format.md D35 (f): `trial_bimanual` starts tracking on the
+  first frame that has the cursor in the target, also when it was there
+  before the wait). The hit's time is the arm's: nothing happened later,
+  and the arm is the state's entry time. A frame-rate detect gives every
+  hit at an onset, so armed between frames it tests at the next one, as
+  its other hits do. A rise of the output at the arm comes after any
+  fall, so a latch or a peak gate sees a rise. With a hold, `now` is
+  `arm`: a hold already counts from the arm, and a hit at the arm would
+  skip the hold.
 
 ### Byte-identical ports
 
@@ -644,7 +663,13 @@ counts this program's allocator calls during the 60 s run (glibc).
 
 ### Tests, fuzzing and mutations
 
-- `tests/adapt/sig_test.c` (ctest `test_sig`): v0.2.0 adds `test_mux`,
+- `tests/adapt/sig_test.c` (ctest `test_sig`): v0.3.0 adds
+  `test_entry_now` (G16): a hit at the arm with the held value and the
+  arm's time, one per arm, a fall and a rise at a re-arm, a latch frozen
+  by the rise, no hit when the test is false at the arm and a hit at the
+  next value inside, a reset that arms, a frame-rate detect hit at the
+  next onset, `arm` unchanged, a hold under `now`, a replay to the same
+  digest, and the refusal of entry 3. v0.2.0 adds `test_mux`,
   `test_latch`, `test_distance`, `test_peak`, `test_all`, `test_silent`,
   `test_detect_out`, `test_reset_trial`, `test_recenter`,
   `test_ops_refusals`, `test_ops_views`, `test_ops_replay`,

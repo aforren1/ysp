@@ -366,7 +366,7 @@ static size_t seed_adapter(uint8_t* o) {
             fop = 22; if (gen() % 2) a = A1; else a = A2;
             p[0] = (uint8_t)(gen() % 2); p[1] = gen() % 2 ? 0 : 2; p[2] = (uint8_t)(1 + gen() % 9); p[3] = gen() % 2 ? 5 : 0;
             p[4] = gen() % 2 ? 13 : gen() % 2 ? 24 : 0; p[5] = gen() % 4 == 0; p[6] = (uint8_t)(gen() % 2); p[7] = (uint8_t)(gen() % 2);
-            p[12] = (uint8_t)(gen() % 2); p[13] = gen() % 4 != 0;
+            p[12] = (uint8_t)(gen() % 3); p[13] = gen() % 4 != 0;
             lanes1 = 1;
             break;
         case 9: fop = 5; a = A2; p[0] = 13; p[1] = 7; break;
