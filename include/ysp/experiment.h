@@ -85,7 +85,12 @@
  *   does not report twice; it collects too. A warning does not refuse: a
  *   duration above 60 s (D4), a lookup key that no level reaches (2.2), a
  *   template or stimulus that no node reaches, so its variables were not
- *   checked.
+ *   checked, a requeue_outcomes value that nothing gives (3.16).
+ *   Version 2's names (3.9) resolve in the first pass, the template's
+ *   states, flags and controls being collected before its keys are read;
+ *   its variables, flags and a top-level control's values in the second.
+ *   Where part 3 is not exact, the code says "format finding Fn" and
+ *   docs/experiment.md lists the reading taken.
  *
  *   ---------------------------------------------------------------------
  *   THE HOST
@@ -4413,6 +4418,8 @@ static void yexp__parse_step(yexp__ctx* c, const yjs_value* src, const char* ele
             yexp__err(c, src->pos, "%s: 'until' goes in 'events' or in a state's steps, not %s (3.11 rule 9)", elem, depth > 0 ? "inside an 'if' or 'unless'" : "in 'after'");
             break;
         }
+        /* format finding F3: the state's own exits stay armed from its
+         * entry; until splits its steps only, at the lowering */
         c->until_seen = 1;
         if (nm && yexp__ref_text(c, nm, us->pos, false, &out->target, elem, "until"))
             yexp__name_use(c, &out->target, YEXP__N_HITS, elem, "until");
@@ -4503,6 +4510,8 @@ static bool yexp__parse_exit(yexp__ctx* c, const yjs_value* src, bool shared, co
     to = yexp__slot_at_m(c, s, YEXP__S_EXIT, mask, "to");
     iff = yexp__slot_at_m(c, s, YEXP__S_EXIT, mask, "if");
     out->after = yexp__slotv_m(c, s, YEXP__S_EXIT, mask, "after_s");
+    /* format finding F6: text, an integer or a boolean, the outcome column's
+     * value, as D20 and 3.11 rule 9 write it ("timeout") */
     out->outcome = yexp__slotv_m(c, s, YEXP__S_EXIT, mask, "outcome");
     if (on && on->v && yexp__ref_text(c, on->v->str, on->pos, false, &out->on, elem, "on"))
         yexp__name_use(c, &out->on, YEXP__N_HITS | YEXP__N_RESPONSE, elem, "on");
@@ -4612,6 +4621,7 @@ static void yexp__parse_states(yexp__ctx* c, yexp_template* t, const yjs_value* 
                 s2 = yexp__object(c, YEXP__S_OVER, 0xffffu, x->src, sub, &co);
                 if (s2) {
                     const yexp__slot* ot = yexp__slot_at(c, s2, YEXP__S_OVER, "to");
+                    /* format finding F15: 3.17 omits it; 3.11 says none */
                     st->over_outcome = yexp__slotv(c, s2, YEXP__S_OVER, "outcome");
                     if (ot && ot->v && yexp__ref_text(c, ot->v->str, ot->pos, false, &st->over_to, sub, "to"))
                         yexp__name_use(c, &st->over_to, YEXP__N_STATE | YEXP__N_END, sub, "to");
