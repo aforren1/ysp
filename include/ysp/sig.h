@@ -1,4 +1,4 @@
-/* ysp/sig.h - v0.4.0 - public domain single-header signal path
+/* ysp/sig.h - v0.4.1 - public domain single-header signal path
  *
  *   Continuous input to stimuli: a small graph, fixed at open, from input
  *   sources through per-sample transforms and maps to stimulus channels,
@@ -206,8 +206,11 @@
  *   waits for the test to fail and come true again (entry fresh, 1).
  *   Entry now (2) with no hold: a test true at the arm is a hit at the
  *   arm's time with the input's held value, also at a reset that arms
- *   (a cursor already in a target); a frame-rate detect armed between
- *   frames tests at the next onset instead. With a hold, now is arm.
+ *   (a cursor already in a target; the output rises after the reset);
+ *   a frame-rate detect armed between frames tests at the next onset
+ *   instead; an input with no sample since its reset (tier UNKNOWN)
+ *   has nothing held, so its first value is tested. With a hold, now
+ *   is arm.
  *   A sample-rate detect on a frame-updated input (a view, a mux or a
  *   latch of a channel): in a frame's pass its hold's clock is the time
  *   the frame knows input up to, min(poll, onset), while the test is
@@ -328,6 +331,17 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.4.1 - the review of 0.3.0 and 0.4.0: an entry-now hit at a reset
+ *          rises after every node's reset, so a latch freezes and a peak's
+ *          gate restarts, as at ysig_arm(); no entry-now hit at an arm on
+ *          an input with no sample since its reset (tier UNKNOWN): the
+ *          first value is tested, ready; ysig_set()'s recompute changes
+ *          the lanes only (t, sources and tier stay) and gives a node
+ *          with a ring an entry at the set's time, the later of the
+ *          newest event fed and the last frame's onset, so
+ *          ysig_value_at() at or after it gives the new value and before
+ *          it the old (a node computed from its inputs at a past time
+ *          uses the parameters it has now).
  *   v0.4.0 - ysig_set() on a stateless node recomputes its held value
  *          and its stateless users' from their inputs' held values at
  *          once (gap G17 of the experiment format), journaled as before,
@@ -349,6 +363,9 @@
  *          adapters, custom ops, parameter tables, and a name for
  *          each p[] index (YSIG_<OP>_<ROW>).
  *
+ *   STATUS: v0.4.1, 2026-11-11, Linux desktop (GCC 12.2):
+ *   test_review_fixes as C and as C++ under ASan and UBSan; 203 of 203
+ *   mutants as expected (206 to 209 new).
  *   STATUS: v0.4.0, 2026-11-11, Linux desktop (GCC 12.2):
  *   test_set_recompute as C and as C++ under ASan and UBSan; mutants 202
  *   to 205 killed.
@@ -376,8 +393,8 @@
 
 #define YSIG_VERSION_MAJOR 0
 #define YSIG_VERSION_MINOR 4
-#define YSIG_VERSION_PATCH 0
-#define YSIG_VERSION_STRING "0.4.0"
+#define YSIG_VERSION_PATCH 1
+#define YSIG_VERSION_STRING "0.4.1"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -734,9 +751,13 @@ YSIG_API bool ysig_recenter(ysig_graph* g, int role, double x, double y, int64_t
  * is the row's index, by name YSIG_<OP>_<ROW>. A parameter that sizes the
  * arena (a ring's capacity, sines' count) is refused. State is kept. A
  * stateless node (affine, scale, select, join, mux, distance, ...) and its
- * stateless users recompute their held values from their inputs' at once,
- * so a frame test or a bind reads the new parameter before the next
- * sample. The recompute adds no ring entry (G17). */
+ * stateless users recompute their held values' lanes from their inputs'
+ * at once (t and sources stay), so a frame test or a bind reads the new
+ * parameter before the next sample (G17). A node with a ring gets an
+ * entry at the set's time, the later of the newest event fed and the
+ * last frame's onset: ysig_value_at() at or after it gives the new value,
+ * before it the old. A node computed from its inputs at a past time
+ * (SCHEDULES AND TIME) uses the parameters it has now. */
 YSIG_API bool ysig_set(ysig_graph* g, int node, int param, double v);
 YSIG_API bool ysig_set_data(ysig_graph* g, int node, int index, double v);
 
@@ -1981,7 +2002,10 @@ static int ysig__det_arm(ysig_graph* g, int i, int64_t t) {
          * since its hits are at onsets */
         s->ready = 1;
         s->holding = 0;
-        if (r && n->p[5] != 1) {
+        /* an input with no sample since its reset (tier UNKNOWN) has no
+         * held value to test: the first value after the arm is tested,
+         * ready, as a crossing (a hit if it meets the test) */
+        if (r && n->p[5] != 1 && v->tier != YIN_TIER_UNKNOWN) {
             ysig__hit(g, i, t, t, v);
             s->fired = 1;
             s->t_hit = t;
@@ -2604,6 +2628,8 @@ static void ysig__gen_meta(ysig_value* o, int i, int64_t t) {
 /* exp_only: the experiment's nodes only (ysig_reset_trial(): D19). An
  * adapter's nodes keep their state and values, which the experiment's
  * nodes then read. */
+static void ysig__settle(ysig_graph* g, int from);
+
 static void ysig__reset(ysig_graph* g, int64_t t, int exp_only) {
     int k;
     g->n_hit = g->n_der = 0;
@@ -2632,13 +2658,26 @@ static void ysig__reset(ysig_graph* g, int64_t t, int exp_only) {
             ysig__gen_meta(o, id, t);
             o->lanes = 1;
             if (n->p[6] == 0) ysig__det_arm(g, id, t);
-            /* a hit output is 0 at a reset unless the arm was a hit (entry now) */
-            o->v[0] = ((int)n->p[13] == YSIG_OUT_HIT ? ((ysig__det_st*)n->st)->fired
-                                                     : ((ysig__det_st*)n->st)->state) ? 1.0 : 0.0;
+            /* a hit output is 0 at the reset; an arm that was a hit (entry
+             * now) rises after the loop, so its users see the rise */
+            o->v[0] = (int)n->p[13] != YSIG_OUT_HIT && ((ysig__det_st*)n->st)->state ? 1.0 : 0.0;
             ysig__hist_push(g, n, o);
             continue;
         }
         ysig__run(g, id, 2, t);
+    }
+    for (k = 0; k < g->n; k++) {
+        /* an entry-now hit at the reset: the rise as ysig_arm() gives it,
+         * after every node has its reset value, so a latch freezes and a
+         * peak's gate restarts */
+        int id = g->order[k];
+        ysig__nd* n = &g->nd[id];
+        if (exp_only && id >= g->n_exp) continue;
+        if (n->op != YSIG_OP_DETECT || n->p[6] != 0 || (int)n->p[13] != YSIG_OUT_HIT || !((ysig__det_st*)n->st)->fired) continue;
+        g->val[id].v[0] = 1.0;
+        g->val[id].t = t;
+        ysig__hist_push(g, n, &g->val[id]);
+        ysig__settle(g, id);
     }
 }
 
@@ -2894,22 +2933,41 @@ static bool ysig__set_ok(const ysig_graph* g, const ysig__nd* n, int param, doub
 static void ysig__recompute(ysig_graph* g, int from) {
     uint8_t reach[YSIG_MAX_NODES];
     int k, j, pos = -1;
+    /* the set's time: the newest the graph knows (it has no clock), the
+     * later of the newest event fed and the last frame's onset */
+    int64_t ts = g->t_fed > g->onset ? g->t_fed : g->onset;
     for (k = 0; k < g->n; k++) if (g->order[k] == from) pos = k;
     if (pos < 0) return;
     memset(reach, 0, (size_t)g->n);
     for (k = pos; k < g->n; k++) {
-        int nid = g->order[k], hit = nid == from;
+        int nid = g->order[k], hit = nid == from, l;
         ysig__nd* m = &g->nd[nid];
         const ysig_value* in[4] = { NULL, NULL, NULL, NULL };
+        ysig_value nv;
         if (m->op >= YSIG_OP_COUNT || !(ysig__ops[m->op].kind & YSIG__K_PURE) || !m->n_in) continue;
         for (j = 0; j < m->n_in; j++) {
             in[j] = &g->val[m->in[j]];
             if (reach[m->in[j]]) hit = 1;
         }
         if (!hit) continue;
-        ysig__meta(m, in, 0, &g->val[nid]);
-        ysig__pure(m, in, &g->val[nid]);
-        g->val[nid].lanes = m->lanes;
+        /* only the lanes change: no sample came, so t, sources and tier
+         * stay the input's that made the value */
+        nv = g->val[nid];
+        ysig__meta(m, in, 0, &nv);
+        ysig__pure(m, in, &nv);
+        for (l = 0; l < YSIG_LANES; l++) g->val[nid].v[l] = nv.v[l];
+        if (m->hist.cap && !(m->flags & YSIG__F_AT)) {
+            /* a past read at or after the set's time gives the new value,
+             * one before it the old; a node computed from its inputs at a
+             * past time (F_AT) uses the parameters it has now */
+            ysig_value e = g->val[nid];
+            if (m->hist.n) {
+                int64_t last = m->hist.buf[(m->hist.head + m->hist.n - 1) % m->hist.cap].t;
+                if (ts < last) ts = last;
+            }
+            e.t = ts;
+            ysig__hist_push(g, m, &e);
+        }
         reach[nid] = 1;
     }
 }

@@ -1035,8 +1035,10 @@ id = "123"
 name = "reset_trial: resets the adapters too"
 test = "sig"
 why = "D19: a hand does not jump between trials."
-find = '        if (exp_only && id >= g->n_exp) continue;'
-replace = '        (void)exp_only;'
+find = '''        if (exp_only && id >= g->n_exp) continue;
+        n->hist.n = n->hist.head = 0;'''
+replace = '''        (void)exp_only;
+        n->hist.n = n->hist.head = 0;'''
 
 [[mutant]]
 id = "124"
@@ -1210,8 +1212,8 @@ id = "143"
 name = "detect: a hit output 1 at reset when the test is true"
 test = "sig"
 why = "out hit is about hits: none has happened at a reset."
-find = "o->v[0] = ((int)n->p[13] == YSIG_OUT_HIT ? ((ysig__det_st*)n->st)->fired"
-replace = "o->v[0] = ((int)n->p[13] == YSIG_OUT_HIT ? ((ysig__det_st*)n->st)->state"
+find = "o->v[0] = (int)n->p[13] != YSIG_OUT_HIT && ((ysig__det_st*)n->st)->state ? 1.0 : 0.0;"
+replace = "o->v[0] = ((ysig__det_st*)n->st)->state ? 1.0 : 0.0;"
 
 [[mutant]]
 id = "144"
@@ -1596,8 +1598,8 @@ id = "194"
 name = "entry now: a frame-rate detect hits at the arm"
 test = "sig"
 why = "G16: a frame-rate detect's hits are at onsets; a hit between frames would end a state before the frame that tests it."
-find = '        if (r && n->p[5] != 1) {'
-replace = '        if (r) {'
+find = '        if (r && n->p[5] != 1 && v->tier != YIN_TIER_UNKNOWN) {'
+replace = '        if (r && v->tier != YIN_TIER_UNKNOWN) {'
 
 [[mutant]]
 id = "195"
@@ -1634,11 +1636,11 @@ replace = '        if (0) {'
 
 [[mutant]]
 id = "199"
-name = "entry now at a reset: the hit output stays 0"
+name = "entry now at a reset: the hit output does not rise after the reset"
 test = "sig"
-why = "G16: a reset that arms and hits would show no hit to the detect's users."
-find = 'o->v[0] = ((int)n->p[13] == YSIG_OUT_HIT ? ((ysig__det_st*)n->st)->fired'
-replace = 'o->v[0] = ((int)n->p[13] == YSIG_OUT_HIT ? 0'
+why = "G16, v0.4.1 (review 2): a reset that arms and hits would show no rise to a latch or a peak's gate."
+find = '|| !((ysig__det_st*)n->st)->fired) continue;'
+replace = '|| 1) continue;'
 
 [[mutant]]
 id = "200"
@@ -1684,11 +1686,11 @@ replace = '''        }
 
 [[mutant]]
 id = "204"
-name = "set: the recompute enters the ring"
+name = "set: the new value's ring entry at the last sample's time"
 test = "sig"
-why = "G17: a ring holds values at sample times; a past read at the last sample would give the new map."
-find = '        g->val[nid].lanes = m->lanes;'
-replace = '        g->val[nid].lanes = m->lanes; ysig__hist_push(g, m, &g->val[nid]);'
+why = "v0.4.1 (review 1): a read before the set's time would give the new map; the last sample was made with the old one."
+find = '                if (ts < last) ts = last;'
+replace = '                ts = last;'
 
 [[mutant]]
 id = "205"
@@ -1697,3 +1699,37 @@ test = "sig"
 why = "G17 covers stateless nodes: a stateful node's held value comes from its state, which ysig__pure() does not compute."
 find = '        if (m->op >= YSIG_OP_COUNT || !(ysig__ops[m->op].kind & YSIG__K_PURE) || !m->n_in) continue;'
 replace = '        if (m->op >= YSIG_OP_COUNT || !m->n_in) continue;'
+
+# v0.4.1: the phase-1 review's fixes.
+
+[[mutant]]
+id = "206"
+name = "entry now: a hit at the arm on an input with no sample"
+test = "sig"
+why = "Review 3: after a reset with no sample the held value is zeros, not the hand; a hit there is no event."
+find = '        if (r && n->p[5] != 1 && v->tier != YIN_TIER_UNKNOWN) {'
+replace = '        if (r && n->p[5] != 1 && 1) {'
+
+[[mutant]]
+id = "207"
+name = "set: the recompute changes the held value's t and sources"
+test = "sig"
+why = "Review 4: no sample came, so the value's t and sources must stay."
+find = '        for (l = 0; l < YSIG_LANES; l++) g->val[nid].v[l] = nv.v[l];'
+replace = '        g->val[nid] = nv; (void)l;'
+
+[[mutant]]
+id = "208"
+name = "set: no ring entry for the new value"
+test = "sig"
+why = "Review 1: a region hit's value (ysig_value_at(of, t)) after a block change would read the old map."
+find = '            ysig__hist_push(g, m, &e);'
+replace = '            (void)e;'
+
+[[mutant]]
+id = "209"
+name = "set: the set's time is the newest event, not the last onset"
+test = "sig"
+why = "Review 1: with a still hand the newest event is the old sample; its ring entry would take the new value back to before the set."
+find = '    int64_t ts = g->t_fed > g->onset ? g->t_fed : g->onset;'
+replace = '    int64_t ts = g->t_fed;'

@@ -554,8 +554,17 @@ files came out byte-identical.
   recompute from their inputs' held values at the call, in node order.
   A stateful node (integrate, a filter, velocity, peak, latch, a detect)
   keeps its value: its value comes from its state, and its next input
-  updates it. The recompute adds no ring entry, since a ring holds
-  values at sample times; replay runs the journaled set, so it agrees.
+  updates it. Replay runs the journaled set, so it agrees. v0.4.1 (the
+  review): the recompute changes the lanes only, since no sample came (a
+  sum's `t` had moved to its newest input's); and a node with a ring gets
+  an entry at the set's time, so `ysig_value_at()` and `ysig_value_of()`
+  agree after it. The set has no time argument and the graph no clock, so
+  its time is the newest the graph knows: the later of the newest event
+  fed and the last frame's onset. A read at or after it gives the new
+  value, one before it the old: a region hit's value read at the hit
+  (format 3.15) after a block change is the cursor the detect tested. A
+  node computed from its inputs at a past time (two sources, a frame
+  input) has no ring of its own and uses its parameters now at any time.
 - **Entry `now` (v0.3.0, G16).** The crossing rule holds a test that is
   true at the arm until it fails. That is right for a response (a hand
   already past the onset is no movement), but a state's exit on "in the
@@ -568,7 +577,14 @@ files came out byte-identical.
   its other hits do. A rise of the output at the arm comes after any
   fall, so a latch or a peak gate sees a rise. With a hold, `now` is
   `arm`: a hold already counts from the arm, and a hit at the arm would
-  skip the hold.
+  skip the hold. v0.4.1 (the review): a reset that arms and hits raises
+  the output after every node's reset, so a latch freezes and a peak's
+  gate restarts as at `ysig_arm()` (in v0.3.0 the latch reset saw the
+  output already 1, no rise). An input with no sample since its reset
+  (tier UNKNOWN: zeros, no hand) gives no hit at the arm; the detect is
+  ready, and its first value is tested as a crossing, so the hit is at
+  the first sample that meets the test (D35 (f)'s "already true" needs a
+  value to be true of).
 
 ### Byte-identical ports
 
@@ -677,7 +693,12 @@ counts this program's allocator calls during the 60 s run (glibc).
 
 ### Tests, fuzzing and mutations
 
-- `tests/adapt/sig_test.c` (ctest `test_sig`): v0.4.0 adds
+- `tests/adapt/sig_test.c` (ctest `test_sig`): v0.4.1 adds
+  `test_review_fixes`: a latch and a peak gate on a reset-armed hit
+  through an adapter, no hit with no sample and the hit at the first
+  sample, `ysig_value_at()` after a set at, after and before its time,
+  a two-input node's `t` and sources across a set, and replays.
+  v0.4.0 adds
   `test_set_recompute` (G17): a 90-degree turn of a still pen's cursor
   reaches its held value, a stateless user, a frame-rate test and a bind
   with no new sample; the ring keeps the sample's value; a stateful
