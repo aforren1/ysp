@@ -1660,3 +1660,40 @@ find = '''            s->v_hit = *v;
 replace = '''            s->ready = 0;
             if (n->p[7] == 0) s->armed = 0;
             return 1;'''
+
+# v0.4.0: ysig_set() recomputes stateless nodes (G17).
+
+[[mutant]]
+id = "202"
+name = "set: no recompute"
+test = "sig"
+why = "G17: a block's new transform would reach a still hand's cursor only at its next report; ready and inside would read the old map."
+find = '    ysig__recompute(g, node);'
+replace = '    (void)0;'
+
+[[mutant]]
+id = "203"
+name = "set: the node recomputed, not its stateless users"
+test = "sig"
+why = "G17: a scale or a distance after the turned cursor would keep the old value."
+find = '''            if (reach[m->in[j]]) hit = 1;
+        }
+        if (!hit) continue;'''
+replace = '''        }
+        if (!hit) continue;'''
+
+[[mutant]]
+id = "204"
+name = "set: the recompute enters the ring"
+test = "sig"
+why = "G17: a ring holds values at sample times; a past read at the last sample would give the new map."
+find = '        g->val[nid].lanes = m->lanes;'
+replace = '        g->val[nid].lanes = m->lanes; ysig__hist_push(g, m, &g->val[nid]);'
+
+[[mutant]]
+id = "205"
+name = "set: a stateful node recomputed too"
+test = "sig"
+why = "G17 covers stateless nodes: a stateful node's held value comes from its state, which ysig__pure() does not compute."
+find = '        if (m->op >= YSIG_OP_COUNT || !(ysig__ops[m->op].kind & YSIG__K_PURE) || !m->n_in) continue;'
+replace = '        if (m->op >= YSIG_OP_COUNT || !m->n_in) continue;'

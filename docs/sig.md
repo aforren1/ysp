@@ -499,8 +499,11 @@ files came out byte-identical.
   file printed `0.0000` for `-0.0000` (mutants 07 and 08).
 - **The target's color in `trial_bimanual`.** It reads the frame's cursor
   `c`, as before the port, not a detect on the graph's held cursor: after
-  a block change the held cursor keeps the old block's P until the next
-  report, while `c` is computed at the onset with the new P.
+  a block change the held cursor kept the old block's P until the next
+  report, while `c` is computed at the onset with the new P. From v0.4.0
+  `ysig_set()` recomputes a stateless node and its stateless users at
+  once (G17), so the held cursor has the new P too; the program still
+  reads `c`, and its files do not change.
 - **Derived events, no new flag.** The emit node's events use a USER kind
   and the emit node's index as the device. The collector needs nothing
   more. A consumer that logs every event cannot tell a derived event from
@@ -542,6 +545,17 @@ files came out byte-identical.
   `trial_visuomotor` and `trial_bimanual` set their graphs by name (57
   lines, no line more or fewer); `examples/sig/bench.c` keeps its 31
   numbers.
+- **`ysig_set()` recomputes stateless nodes (v0.4.0, G17).** A trial's
+  parameters are set between trials, and a still hand sends nothing, so
+  the held value of an `affine` kept the old block's map until the next
+  report: a frame test (`ready`, `inside`) or a bind read the old map at
+  a block's first frames (experiment_format.md 3.18, the last finding of
+  `trial_bimanual`). The set node and the stateless nodes after it now
+  recompute from their inputs' held values at the call, in node order.
+  A stateful node (integrate, a filter, velocity, peak, latch, a detect)
+  keeps its value: its value comes from its state, and its next input
+  updates it. The recompute adds no ring entry, since a ring holds
+  values at sample times; replay runs the journaled set, so it agrees.
 - **Entry `now` (v0.3.0, G16).** The crossing rule holds a test that is
   true at the arm until it fails. That is right for a response (a hand
   already past the onset is no movement), but a state's exit on "in the
@@ -663,7 +677,13 @@ counts this program's allocator calls during the 60 s run (glibc).
 
 ### Tests, fuzzing and mutations
 
-- `tests/adapt/sig_test.c` (ctest `test_sig`): v0.3.0 adds
+- `tests/adapt/sig_test.c` (ctest `test_sig`): v0.4.0 adds
+  `test_set_recompute` (G17): a 90-degree turn of a still pen's cursor
+  reaches its held value, a stateless user, a frame-rate test and a bind
+  with no new sample; the ring keeps the sample's value; a stateful
+  integrator and a peak keep their values and times; a stateless node
+  after a stateful one recomputes; a replay to the same digest and values.
+  v0.3.0 adds
   `test_entry_now` (G16): a hit at the arm with the held value and the
   arm's time, one per arm, a fall and a rise at a re-arm, a latch frozen
   by the rise, no hit when the test is false at the arm and a hit at the

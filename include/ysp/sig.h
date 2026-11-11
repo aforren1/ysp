@@ -1,4 +1,4 @@
-/* ysp/sig.h - v0.3.0 - public domain single-header signal path
+/* ysp/sig.h - v0.4.0 - public domain single-header signal path
  *
  *   Continuous input to stimuli: a small graph, fixed at open, from input
  *   sources through per-sample transforms and maps to stimulus channels,
@@ -328,6 +328,11 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.4.0 - ysig_set() on a stateless node recomputes its held value
+ *          and its stateless users' from their inputs' held values at
+ *          once (gap G17 of the experiment format), journaled as before,
+ *          so a block's new transform reaches a still hand's cursor
+ *          before its next report. No ring entry is added.
  *   v0.3.0 - detect's entry now (2, YSIG_ENTRY_NOW; gap G16 of the
  *          experiment format, D35 (f)): with no hold, a test true at the
  *          arm is a hit at the arm's time, its output rising then; at
@@ -344,6 +349,9 @@
  *          adapters, custom ops, parameter tables, and a name for
  *          each p[] index (YSIG_<OP>_<ROW>).
  *
+ *   STATUS: v0.4.0, 2026-11-11, Linux desktop (GCC 12.2):
+ *   test_set_recompute as C and as C++ under ASan and UBSan; mutants 202
+ *   to 205 killed.
  *   STATUS: v0.3.0, 2026-11-11, Linux desktop (GCC 12.2): test_entry_now
  *   as C and as C++ under ASan and UBSan, the compile checks, 195 of 195
  *   mutants as expected (193 to 201 new, killed).
@@ -367,9 +375,9 @@
 #define YSP_SIG_H_INCLUDED
 
 #define YSIG_VERSION_MAJOR 0
-#define YSIG_VERSION_MINOR 3
+#define YSIG_VERSION_MINOR 4
 #define YSIG_VERSION_PATCH 0
-#define YSIG_VERSION_STRING "0.3.0"
+#define YSIG_VERSION_STRING "0.4.0"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -724,7 +732,11 @@ YSIG_API bool ysig_recenter(ysig_graph* g, int role, double x, double y, int64_t
 
 /* p[param] of node := v, checked by the op's table; between trials. param
  * is the row's index, by name YSIG_<OP>_<ROW>. A parameter that sizes the
- * arena (a ring's capacity, sines' count) is refused. State is kept. */
+ * arena (a ring's capacity, sines' count) is refused. State is kept. A
+ * stateless node (affine, scale, select, join, mux, distance, ...) and its
+ * stateless users recompute their held values from their inputs' at once,
+ * so a frame test or a bind reads the new parameter before the next
+ * sample. The recompute adds no ring entry (G17). */
 YSIG_API bool ysig_set(ysig_graph* g, int node, int param, double v);
 YSIG_API bool ysig_set_data(ysig_graph* g, int node, int index, double v);
 
@@ -2874,6 +2886,34 @@ static bool ysig__set_ok(const ysig_graph* g, const ysig__nd* n, int param, doub
     }
 }
 
+/* After ysig_set() on a stateless node: it and its stateless users take
+ * the new parameters from their inputs' held values now, not at the next
+ * sample, so a frame-rate test or a bind before then reads the new map
+ * (G17: a block's new transform with a still hand). No ring entry: a ring
+ * holds values at sample times, and no sample came. */
+static void ysig__recompute(ysig_graph* g, int from) {
+    uint8_t reach[YSIG_MAX_NODES];
+    int k, j, pos = -1;
+    for (k = 0; k < g->n; k++) if (g->order[k] == from) pos = k;
+    if (pos < 0) return;
+    memset(reach, 0, (size_t)g->n);
+    for (k = pos; k < g->n; k++) {
+        int nid = g->order[k], hit = nid == from;
+        ysig__nd* m = &g->nd[nid];
+        const ysig_value* in[4] = { NULL, NULL, NULL, NULL };
+        if (m->op >= YSIG_OP_COUNT || !(ysig__ops[m->op].kind & YSIG__K_PURE) || !m->n_in) continue;
+        for (j = 0; j < m->n_in; j++) {
+            in[j] = &g->val[m->in[j]];
+            if (reach[m->in[j]]) hit = 1;
+        }
+        if (!hit) continue;
+        ysig__meta(m, in, 0, &g->val[nid]);
+        ysig__pure(m, in, &g->val[nid]);
+        g->val[nid].lanes = m->lanes;
+        reach[nid] = 1;
+    }
+}
+
 YSIG_API bool ysig_set(ysig_graph* g, int node, int param, double v) {
     const ysig_param* rows;
     ysig__nd* n;
@@ -2892,6 +2932,7 @@ YSIG_API bool ysig_set(ysig_graph* g, int node, int param, double v) {
     ysig__journal(g, &e);
     n->p[param] = v;
     ysig__prepare(g, node);
+    ysig__recompute(g, node);
     return true;
 }
 

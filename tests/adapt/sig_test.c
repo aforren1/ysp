@@ -3946,6 +3946,78 @@ static void test_entry_now(void) {
     expect_refused(n, 2, "entry");
 }
 
+/* G17: ysig_set() on a stateless node recomputes it and its stateless
+ * users from their inputs' held values at once: a frame test and a bind
+ * read the new map with no new sample. No ring entry; a stateful node
+ * keeps its value until its next sample; replay agrees. */
+static void test_set_recompute(void) {
+    ysig_node n[8];
+    ysig_desc d;
+    ysig_graph g, g2;
+    static uint64_t arena2[(1u << 20) / 8];
+    ysig_stats s1, s2;
+    ysig_hit h[8];
+    ysig_value at;
+    ysig_frame_in f;
+    yin_event e;
+    int i;
+    g_where = "set recompute";
+    n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2);
+    n[1] = ysig_node_of(YSIG_OP_AFFINE, 0, -1); n[1].history = 8;          /* the cursor */
+    n[2] = ysig_node_of(YSIG_OP_SCALE, 1, -1);                              /* a stateless user */
+    n[2].p[YSIG_SCALE_K_X] = n[2].p[YSIG_SCALE_K_Y] = 2;
+    n[3] = ysig_node_of(YSIG_OP_DETECT, 1, -1);                             /* a frame test on it */
+    n[3].p[YSIG_DETECT_TEST] = YSIG_TEST_LE; n[3].p[YSIG_DETECT_LANE] = 0; n[3].p[YSIG_DETECT_LEVEL] = 5;
+    n[3].p[YSIG_DETECT_AT] = 1; n[3].p[YSIG_DETECT_ENTRY] = YSIG_ENTRY_NOW;
+    n[4] = ysig_node_of(YSIG_OP_BIND, 1, -1);
+    n[5] = ysig_node_of(YSIG_OP_INTEGRATE, 0, -1); n[5].p[YSIG_INTEGRATE_GAIN_X] = 1;   /* stateful */
+    n[6] = ysig_node_of(YSIG_OP_OFFSET, 5, -1);                             /* after a stateful node */
+    n[7] = ysig_node_of(YSIG_OP_PEAK, 0, -1);                               /* lane 0 */
+    d = desc_of(n, 8);
+    d.journal = on_journal;
+    g_nj = 0;
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    e = PEN_E(1 * MS, 1, 10, 0, YIN_TIER_SIM); ysig_feed(&g, &e);
+    f = frame_at(1, 10 * MS, 0, NULL, 0);
+    ysig_frame(&g, &f);
+    CHECK(ysig_detected(&g, h, 8) == 0 && g_ch[0] == 10.0f);
+    /* turn the cursor 90 deg (y down: x toward y) with the pen still */
+    CHECK(ysig_set(&g, 1, YSIG_AFFINE_ANGLE, 90));
+    CHECK(fabs(ysig_value_of(&g, 1)->v[0]) < 1e-12 && fabs(ysig_value_of(&g, 1)->v[1] - 10) < 1e-12);
+    CHECK(fabs(ysig_value_of(&g, 2)->v[1] - 20) < 1e-12);                   /* its user too */
+    CHECK(ysig_value_of(&g, 1)->t == 1 * MS);                               /* the input's time */
+    CHECK(ysig_value_at(&g, 1, 1 * MS, &at) == 1 && at.v[0] == 10);         /* no ring entry */
+    f = frame_at(2, 20 * MS, 0, NULL, 0);
+    ysig_frame(&g, &f);
+    CHECK(ysig_detected(&g, h, 8) == 1 && h[0].t == 20 * MS);               /* the frame test reads it */
+    CHECK(fabsf(g_ch[0]) < 1e-6f && g_ch[1] == 10.0f);                      /* the bind writes it */
+    /* a stateful node and its user: unchanged until the next sample */
+    {
+        double held = ysig_value_of(&g, 5)->v[0];
+        CHECK(ysig_value_of(&g, 6)->v[0] == held);
+        CHECK(ysig_set(&g, 5, YSIG_INTEGRATE_GAIN_X, 2));
+        CHECK(ysig_value_of(&g, 5)->v[0] == held && ysig_value_of(&g, 6)->v[0] == held);
+        CHECK(ysig_set(&g, 6, YSIG_OFFSET_D_X, 1));
+        CHECK(ysig_value_of(&g, 5)->v[0] == held && ysig_value_of(&g, 6)->v[0] == held + 1);   /* the offset is stateless */
+    }
+    /* a peak keeps its peak sample's time: no recompute of a stateful op */
+    e = PEN_E(30 * MS, 1, 3, 0, YIN_TIER_SIM); ysig_feed(&g, &e);
+    CHECK(ysig_value_of(&g, 7)->v[0] == 10 && ysig_value_of(&g, 7)->t == 1 * MS);
+    CHECK(ysig_set(&g, 7, YSIG_PEAK_LANE, 0));
+    CHECK(ysig_value_of(&g, 7)->v[0] == 10 && ysig_value_of(&g, 7)->t == 1 * MS);
+    /* replay: the same values and digest */
+    ysig_get_stats(&g, &s1);
+    d.journal = NULL;
+    d.arena = arena2;
+    d.arena_size = sizeof arena2;
+    CHECK(ysig_open(&g2, &d));
+    CHECK(ysig_replay(&g2, g_j, g_nj) == g_nj);
+    ysig_get_stats(&g2, &s2);
+    CHECK(s1.digest == s2.digest && s1.hits == s2.hits);
+    for (i = 0; i < 8; i++) CHECK(!memcmp(ysig_value_of(&g, i), ysig_value_of(&g2, i), sizeof(ysig_value)));
+}
+
 /* T16: a hold on a frame-updated input completes for a still hand */
 static void test_hold_frame_input(void) {
     ysig_node n[5];
@@ -4239,6 +4311,7 @@ int main(void) {
     test_hold_frame_input();
     test_u();
     test_entry_now();
+    test_set_recompute();
     if (g_failures) { fprintf(stderr, "sig_test: %d failures\n", g_failures); return 1; }
     printf("sig_test: all checks passed\n");
     return 0;
