@@ -827,6 +827,24 @@ if(YSP_BUILD_TESTS AND TARGET SDL3::SDL3 AND TARGET ysp::miniaudio
         add_test(NAME compile_order_screen_audio_${lang} COMMAND compile_order_screen_audio_${lang})
     endforeach()
 endif()
+# Every header with its implementation after the macros <windows.h>
+# defines on ordinary names (hyper, small, near, min, ERROR and others),
+# set by hand: a user's <windows.h> before a ysp header must not break it
+# (aep.h 0.16.0's desc.hyper did). It checks on Linux and prints "skipped"
+# elsewhere; tests/compile/windows_macros.c says where each definition is
+# from and why.
+if(YSP_BUILD_TESTS AND TARGET SDL3::SDL3 AND TARGET ysp::miniaudio
+   AND CMAKE_SYSTEM_NAME IN_LIST YSP_PLATFORMS_video)
+    foreach(lang c cxx)
+        if(lang STREQUAL "c")
+            set(_src tests/compile/windows_macros.c)
+        else()
+            set(_src tests/compile/windows_macros.cpp)
+        endif()
+        ysp_add_program(compile_windows_macros_${lang} ${_src} rig methods devices)
+        add_test(NAME compile_windows_macros_${lang} COMMAND compile_windows_macros_${lang})
+    endforeach()
+endif()
 # ysp/video.h's and ysp/screen.h's implementations linked against the
 # shims of bindings/share/ instead of audio.h's and timeline.h's, as
 # ysp-vis builds them: a call to a function the tables do not forward, or
