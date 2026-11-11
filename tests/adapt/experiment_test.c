@@ -1521,6 +1521,53 @@ static void run_v2(void) {
     }
 }
 
+/* The review's shapes at size: each loads in the work budget, so the
+ * closure of top-level controls, a shared exit's states and the outcomes
+ * of requeue_outcomes cost what the file holds, not its square. */
+static void run_v2_linear(void) {
+    static yexp_report r;
+    size_t cap = 8u << 20, at = 0;
+    char* doc = (char*)malloc(cap);
+    int i, k;
+    if (!doc) abort();
+    /* 1024 chained top-level peaks; 16 templates name the last */
+    at += (size_t)snprintf(doc + at, cap - at, V2H "\"roles\":{\"h\":{\"type\":\"position2d\",\"units\":\"display_px\"}},\"stimuli\":{\"s\":{\"kind\":\"shape\"}},\"controls\":{");
+    for (i = 0; i < 1024; i++) at += (size_t)snprintf(doc + at, cap - at, "%s\"c%04d\":{\"control\":\"peak\",\"of\":\"%s%04d\"}", i ? "," : "", i, i ? "c" : "h", i ? i - 1 : 0);
+    /* "h0000" is no name: the first reads the role */
+    at = (size_t)(strstr(doc, "\"h0000\"") - doc);
+    memcpy(doc + at, "\"h\"    ", 7);
+    at = strlen(doc);
+    at += (size_t)snprintf(doc + at, cap - at, "},\"trials\":{");
+    for (k = 0; k < 16; k++) at += (size_t)snprintf(doc + at, cap - at, "%s\"t%02d\":{\"states\":[{\"name\":\"a\",\"steps\":[{\"on\":\"s\"},{\"set\":\"s\",\"props\":{\"x\":{\"signal\":\"c1023\"}}}]}]}", k ? "," : "", k);
+    at += (size_t)snprintf(doc + at, cap - at, "},\"timeline\":[");
+    for (k = 0; k < 16; k++) at += (size_t)snprintf(doc + at, cap - at, "%s{\"name\":\"n%02d\",\"trial\":\"t%02d\"}", k ? "," : "", k, k);
+    at += (size_t)snprintf(doc + at, cap - at, "]}");
+    CHECK2(load_rc(doc, NULL, &r) == YEXP_OK, "1024 chained top-level controls, 16 templates", r.n_diags ? r.diags[0].msg : "");
+    /* 4096 states, 64 shared exits each listing half of them */
+    at = 0;
+    at += (size_t)snprintf(doc + at, cap - at, V2H "\"roles\":{\"h\":{\"type\":\"position2d\",\"units\":\"display_px\"}},\"stimuli\":{\"s\":{\"kind\":\"shape\"}},"
+                           "\"trials\":{\"t\":{\"controls\":{\"r\":{\"control\":\"region\",\"of\":\"h\",\"radius\":1}},\"states\":[");
+    for (i = 0; i < 4096; i++) at += (size_t)snprintf(doc + at, cap - at, "%s{\"name\":\"s%04d\"%s}", i ? "," : "", i, i ? "" : ",\"steps\":[{\"on\":\"s\"}]");
+    at += (size_t)snprintf(doc + at, cap - at, "],\"exits\":[");
+    for (k = 0; k < 64; k++) {
+        at += (size_t)snprintf(doc + at, cap - at, "%s{\"on\":\"r\",\"to\":\"end\",\"in\":[", k ? "," : "");
+        for (i = 0; i < 2048; i++) at += (size_t)snprintf(doc + at, cap - at, "%s\"s%04d\"", i ? "," : "", i);
+        at += (size_t)snprintf(doc + at, cap - at, "]}");
+    }
+    at += (size_t)snprintf(doc + at, cap - at, "]}},\"timeline\":[{\"name\":\"m\",\"trial\":\"t\"}]}");
+    CHECK2(load_rc(doc, NULL, &r) == YEXP_OK, "4096 states, 64 shared exits of 2048 states", r.n_diags ? r.diags[0].msg : "");
+    /* 4096 exits with outcomes and 4096 requeue_outcomes, each given */
+    at = 0;
+    at += (size_t)snprintf(doc + at, cap - at, V2H "\"roles\":{\"h\":{\"type\":\"position2d\",\"units\":\"display_px\"}},\"stimuli\":{\"s\":{\"kind\":\"shape\"}},"
+                           "\"trials\":{\"t\":{\"controls\":{\"r\":{\"control\":\"region\",\"of\":\"h\",\"radius\":1}},\"states\":[{\"name\":\"a\",\"steps\":[{\"on\":\"s\"}],\"exits\":[");
+    for (i = 0; i < 4096; i++) at += (size_t)snprintf(doc + at, cap - at, "%s{\"on\":\"r\",\"to\":\"end\",\"outcome\":\"o%04d\"}", i ? "," : "", i);
+    at += (size_t)snprintf(doc + at, cap - at, "]}],\"requeue_outcomes\":[");
+    for (i = 0; i < 4096; i++) at += (size_t)snprintf(doc + at, cap - at, "%s\"o%04d\"", i ? "," : "", 4095 - i);
+    at += (size_t)snprintf(doc + at, cap - at, "]}},\"timeline\":[{\"name\":\"m\",\"trial\":\"t\"}]}");
+    CHECK2(load_rc(doc, NULL, &r) == YEXP_OK && r.n_warnings == 0, "4096 requeue_outcomes against 4096 exits", r.n_diags ? r.diags[0].msg : "");
+    free(doc);
+}
+
 /* --- arena -------------------------------------------------------------- */
 
 static void run_arena(void) {
@@ -1606,6 +1653,7 @@ int main(void) {
     run_review();
     run_host();
     run_v2();
+    run_v2_linear();
     run_arena();
     run_defaults();
     run_defaults_page();

@@ -373,6 +373,32 @@ static void case_out_queue(void) {
     CHECK(now[0].failed == 1, "the oldest fire expired: failed %d", now[0].failed);
 }
 
+/* A version 2 definition with a version 2 step in its events is refused by
+ * name, not by the host's ops check (experiment.h 0.3.0). */
+static void case_v2_refused(void) {
+    const char* d = "{\"format\":\"ysp-experiment\",\"version\":2,\"roles\":{\"hand\":{\"type\":\"position2d\",\"units\":\"display_px\"}},"
+                    "\"stimuli\":{\"s\":{\"kind\":\"shape\",\"w\":2,\"h\":2}},\"trials\":{\"t\":{\"controls\":{\"near\":{\"control\":\"region\",\"of\":\"hand\",\"radius\":5}},"
+                    "\"events\":[{\"on\":\"s\"},{\"until\":\"near\",\"timeout_s\":1}]}},\"timeline\":[{\"name\":\"a\",\"trial\":\"t\"}]}";
+    char out[400];
+    pl_args a;
+    int rc;
+    memset(&a, 0, sizeof a);
+    snprintf(out, sizeof out, "%s/v2", workdir);
+    a.pack_path = packpath;
+    a.out_dir = out;
+    a.sim = true;
+    a.have_seed = true;
+    a.def_text = d;
+    a.def_len = strlen(d);
+    a.n_fields = 1;
+    a.fields[0].name = "participant";
+    a.fields[0].value = "3";
+    a.max_seconds = 600;
+    rc = pl_load(&P, &a);
+    CHECK(rc != 0 && strstr(P.error, "format version 2") != NULL, "a version 2 definition refused by name: %s", P.error);
+    pl_close(&P);
+}
+
 int main(int argc, char** argv) {
     const char* ypak = getenv("YPAK");
     char cmd[1024];
@@ -401,6 +427,7 @@ int main(int argc, char** argv) {
     case_code_range();
     case_stagger_trigger();
     case_out_queue();
+    case_v2_refused();
     if (fails == 0 && run_shapes() != 0) { fails++; printf("FAIL line %d: the system tests\n", __LINE__); }
     snprintf(cmd, sizeof cmd, "rm -r %s", workdir);
     (void)!system(cmd);

@@ -47,10 +47,22 @@ static int usage(void) {
     return 2;
 }
 
+static int run_main(pl_args* ap, int argc, char** argv);
+
+/* The field names are the one allocation of the arguments: freed on every
+ * path out, early returns included, so a sanitizer's leak check stays quiet. */
 int main(int argc, char** argv) {
     pl_args a;
     int i, rc;
     memset(&a, 0, sizeof a);
+    rc = run_main(&a, argc, argv);
+    for (i = 0; i < a.n_fields; i++) free((void*)a.fields[i].name);
+    return rc;
+}
+
+static int run_main(pl_args* ap, int argc, char** argv) {
+#define a (*ap)
+    int i, rc;
     a.max_seconds = 172800;
     for (i = 1; i < argc; i++) {
         const char* s = argv[i];
@@ -135,4 +147,5 @@ int main(int argc, char** argv) {
     printf("ysp_player: %d trials, %s, seed %llu, experiment %s\n", g_p.trials_done, a.out_dir, (unsigned long long)g_p.seed, g_p.experiment_id);
     pl_close(&g_p);
     return 0;
+#undef a
 }

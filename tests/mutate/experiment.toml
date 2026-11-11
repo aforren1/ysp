@@ -613,7 +613,7 @@ id = "r-13"
 name = "a session field type not checked"
 test = "experiment"
 why = "A string field is no duration."
-find = '''                if ((text && want != YEXP__W_TEXT) || (!text && want != YEXP__W_NUM && want != YEXP__W_NONNEG && want != YEXP__W_BOOL))'''
+find = '''                if ((text && want != YEXP__W_TEXT) || (!text && !YEXP__W_IS_NUM(want) && want != YEXP__W_BOOL))'''
 replace = '''                if (0)'''
 
 [[mutant]]
@@ -632,7 +632,7 @@ id = "r-15"
 name = "a string column used as a number"
 test = "experiment"
 why = "The provider gives the column type."
-find = '''        } else if ((want == YEXP__W_NUM || want == YEXP__W_NONNEG) && r.ctype == YEXP_COL_STRING) {'''
+find = '''        } else if (YEXP__W_IS_NUM(want) && r.ctype == YEXP_COL_STRING) {'''
 replace = '''        } else if (0) {'''
 
 [[mutant]]
@@ -912,7 +912,7 @@ id = "r-50"
 name = "a rule var in a duration when its text is not numeric"
 test = "experiment"
 why = "Item 8."
-find = '''        if ((want == YEXP__W_NUM || want == YEXP__W_NONNEG) && !all_num) yexp__type_err'''
+find = '''        if (YEXP__W_IS_NUM(want) && !all_num) yexp__type_err'''
 replace = '''        if (0) yexp__type_err'''
 
 [[mutant]]
@@ -936,8 +936,8 @@ id = "s-03"
 name = "an integer session field refused in an if"
 test = "experiment"
 why = "The player checks its value at session start."
-find = '''(!text && want != YEXP__W_NUM && want != YEXP__W_NONNEG && want != YEXP__W_BOOL))'''
-replace = '''(!text && want != YEXP__W_NUM && want != YEXP__W_NONNEG))'''
+find = '''(!text && !YEXP__W_IS_NUM(want) && want != YEXP__W_BOOL))'''
+replace = '''(!text && !YEXP__W_IS_NUM(want)))'''
 
 [[mutant]]
 id = "s-04"
@@ -1461,8 +1461,10 @@ id = "e013-01"
 name = "$outcome is correct or wrong with no key_answer"
 test = "experiment"
 why = "v0.1.3: good/outcome_responded, bad/lookup_outcome_no_key_answer."
-find = '''        if (rsp->key_answer ? (yexp__lv_push(c, "correct") || yexp__lv_push(c, "wrong")) : yexp__lv_push(c, "responded")) return -1;'''
-replace = '''        if (yexp__lv_push(c, "correct") || yexp__lv_push(c, "wrong")) return -1;'''
+find = '''        /* with no key_answer a press is neither correct nor wrong */
+        if (rsp->key_answer ? (yexp__lv_push(c, "correct") || yexp__lv_push(c, "wrong")) : yexp__lv_push(c, "responded")) return -1;'''
+replace = '''        /* with no key_answer a press is neither correct nor wrong */
+        if (yexp__lv_push(c, "correct") || yexp__lv_push(c, "wrong")) return -1;'''
 
 [[mutant]]
 id = "e013-02"
@@ -2205,7 +2207,7 @@ id = "v-90"
 name = "requeue_outcomes never warned"
 test = "experiment"
 why = "3.16: a warning."
-find = '''                        if (yexp__outcome_given(out, t) == 0)'''
+find = '''                        if (yexp__outcome_given(&given, out, t) == 0)'''
 replace = '''                        if (0)'''
 
 [[mutant]]
@@ -2221,16 +2223,17 @@ id = "v-92"
 name = "a top-level control a template names not marked"
 test = "experiment"
 why = "3.6: its graph has a copy."
-find = '''        c->tp->uses_top[r->control - c->d->controls] = 1;'''
-replace = '''        (void)0;'''
+find = '''    c->tp->uses_top[k] = 1;
+    c->top_stack[c->top_sp++] = k;'''
+replace = '''    (void)0;'''
 
 [[mutant]]
 id = "v-93"
 name = "what a named top-level control names not marked"
 test = "experiment"
 why = "3.6: the copy's inputs."
-find = '''                if (k >= 0 && k < d->n_controls && !t->uses_top[k]) { t->uses_top[k] = 1; more = true; }'''
-replace = '''                (void)k;'''
+find = '''            if (k >= 0 && k < d->n_controls && !t->uses_top[k]) { t->uses_top[k] = 1; c->top_stack[c->top_sp++] = k; }'''
+replace = '''            (void)k;'''
 
 [[mutant]]
 id = "v-94"
@@ -2247,3 +2250,197 @@ test = "experiment"
 why = "D26: say version 3."
 find = '''        if (yexp__streq(key, "signals")) {'''
 replace = '''        if (0) {'''
+
+[[mutant]]
+id = "w-01"
+name = "an exit's after_s through a variable not checked"
+test = "experiment"
+why = "Review item 1: a known duration above 0."
+find = '''    if (e->after) yexp__check_value(c, s, e->after, YEXP__PH_TRIAL, YEXP__W_POS, elem, "after_s");'''
+replace = ''''''
+
+[[mutant]]
+id = "w-02"
+name = "an exit's after_s through a variable may be 0"
+test = "experiment"
+why = "Review item 7: the literal's rule."
+find = '''    if (e->after) yexp__check_value(c, s, e->after, YEXP__PH_TRIAL, YEXP__W_POS, elem, "after_s");'''
+replace = '''    if (e->after) yexp__check_value(c, s, e->after, YEXP__PH_TRIAL, YEXP__W_NONNEG, elem, "after_s");'''
+
+[[mutant]]
+id = "w-03"
+name = "0 through a variable taken as above 0"
+test = "experiment"
+why = "3.16: above 0, literal or variable."
+find = '''        else if (want == YEXP__W_POS && !(v->num > 0)) yexp__type_err(c, pos, elem, key, name, "a number not above 0", want);'''
+replace = ''''''
+
+[[mutant]]
+id = "w-04"
+name = "a control key above 0 checked as any number"
+test = "experiment"
+why = "Review item 7."
+find = '''            if (yexp__key_above0(x->props[k].key)) want = YEXP__W_POS;'''
+replace = ''''''
+
+[[mutant]]
+id = "w-05"
+name = "until's timeout through a variable may be 0"
+test = "experiment"
+why = "Review item 7."
+find = '''        yexp__check_value(c, s, st->timeout, phase, YEXP__W_POS, elem, "timeout_s");'''
+replace = '''        yexp__check_value(c, s, st->timeout, phase, YEXP__W_NONNEG, elem, "timeout_s");'''
+
+[[mutant]]
+id = "w-06"
+name = "a point through a variable read as a number"
+test = "experiment"
+why = "Review item 2: 3.7's point."
+find = '''want = ty == YEXP__T_DUR ? YEXP__W_NONNEG : ty == YEXP__T_NUM ? YEXP__W_NUM : (ty == YEXP__T_POINT || ty == YEXP__T_CENTER) ? YEXP__W_POINT : YEXP__W_ANY;'''
+replace = '''want = ty == YEXP__T_DUR ? YEXP__W_NONNEG : ty == YEXP__T_NUM ? YEXP__W_NUM : (ty == YEXP__T_POINT || ty == YEXP__T_CENTER) ? YEXP__W_NUM : YEXP__W_ANY;'''
+
+[[mutant]]
+id = "w-07"
+name = "a point variable of 3 numbers"
+test = "experiment"
+why = "F8 through a variable."
+find = '''        if (want == YEXP__W_NUMS || (want == YEXP__W_POINT && v->n == 2)) {'''
+replace = '''        if (want == YEXP__W_NUMS || want == YEXP__W_POINT) {'''
+
+[[mutant]]
+id = "w-08"
+name = "recenter's to through a variable read as a number"
+test = "experiment"
+why = "Review item 2."
+find = '''        yexp__check_value(c, s, st->point, phase, YEXP__W_POINT, elem, "to");'''
+replace = '''        yexp__check_value(c, s, st->point, phase, YEXP__W_NUM, elem, "to");'''
+
+[[mutant]]
+id = "w-09"
+name = "$outcome needs a response with states"
+test = "experiment"
+why = "Finding F16."
+find = '''B[i].need == 2 && (!s->t || !s->t->response) && !(yexp__streq(name, "outcome") && s->t && c->version >= 2 && yexp__d36(s->t))'''
+replace = '''B[i].need == 2 && (!s->t || !s->t->response)'''
+
+[[mutant]]
+id = "w-10"
+name = "$outcome's levels without the exits'"
+test = "experiment"
+why = "Finding F16: D36."
+find = '''    if (yexp__streq(name, "outcome") && s->t && c->version >= 2 && yexp__d36(s->t)) {'''
+replace = '''    if (0) {'''
+
+[[mutant]]
+id = "w-11"
+name = "$outcome's response levels when every end sets one"
+test = "experiment"
+why = "Finding F16."
+find = '''        if (!t->end_unset_) {
+            /* every way to the end sets an outcome */
+        } else if (rsp) {'''
+replace = '''        if (0) {
+        } else if (rsp) {'''
+
+[[mutant]]
+id = "w-12"
+name = "a path with no outcome: an exit's to end ignored"
+test = "experiment"
+why = "Finding F16."
+find = '''            if (x->outcome) continue;
+            if (x->to.kind == YEXP_REF_END) return true;'''
+replace = '''            if (x->outcome) continue;'''
+
+[[mutant]]
+id = "w-13"
+name = "an exit's float outcome"
+test = "experiment"
+why = "Finding F6."
+find = '''    if (v->kind == YEXP_V_NUMBER && !(v->flags & YEXP_VF_INT)) {
+        yexp__err(c, v->pos, "%s: '%s': an outcome is'''
+replace = '''    if (0) {
+        yexp__err(c, v->pos, "%s: '%s': an outcome is'''
+
+[[mutant]]
+id = "w-14"
+name = "an exit's array outcome"
+test = "experiment"
+why = "Finding F6."
+find = '''        if (src->type != YJS_STRING && src->type != YJS_NUMBER && src->type != YJS_TRUE && src->type != YJS_FALSE &&'''
+replace = '''        if (0 &&'''
+
+[[mutant]]
+id = "w-15"
+name = "an exit's outcome through a variable not checked"
+test = "experiment"
+why = "Finding F6."
+find = '''        yexp__check_exit_outcome(c, s, e->outcome, elem, "outcome", 0);'''
+replace = ''''''
+
+[[mutant]]
+id = "w-16"
+name = "a jitter as an outcome"
+test = "experiment"
+why = "Finding F6."
+find = '''        case YEXP__VK_JITTER: case YEXP__VK_DIM: case YEXP__VK_WALK: bad = "a number that is not an integer"; break;'''
+replace = ''''''
+
+[[mutant]]
+id = "w-17"
+name = "the closure of top-level controls stops at the first"
+test = "experiment"
+why = "3.6: what they name in turn."
+find = '''            if (k >= 0 && k < d->n_controls && !t->uses_top[k]) { t->uses_top[k] = 1; c->top_stack[c->top_sp++] = k; }'''
+replace = '''            (void)k;'''
+
+[[mutant]]
+id = "w-18"
+name = "a template's cycle walk reads top-level controls"
+test = "experiment"
+why = "Linear: those were walked at the root. Kept as a survivor: without the line, a top-level control's index is taken against the template's array, falls outside it, and the range check after skips it the same way; the line keeps that subtraction between arrays from happening at all."
+expect = "survived"
+find = '''                if (y->shared != (tc == NULL)) continue;'''
+replace = ''''''
+
+[[mutant]]
+id = "w-19"
+name = "in_shared not marked"
+test = "experiment"
+why = "The step end of a state in a shared exit."
+find = '''                in[st] = 1;'''
+replace = ''''''
+
+[[mutant]]
+id = "w-20"
+name = "a state twice in one in"
+test = "experiment"
+why = "Review item 6."
+find = '''                if (stamp[st] == e + 1)'''
+replace = '''                if (0)'''
+
+[[mutant]]
+id = "w-21"
+name = "a uniform of infinite width"
+test = "experiment"
+why = "Review: a number is finite."
+find = '''        } else if (!isfinite(lh->items[1].num - lh->items[0].num)) {'''
+replace = '''        } else if (0) {'''
+
+[[mutant]]
+id = "w-22"
+name = "a state's clash at its list"
+test = "experiment"
+why = "The place names the state."
+find = '''        uint32_t pos = c->states_src ? c->states_src->u.items[c->st_idx[i].index]->pos : t->states_pos_;'''
+replace = '''        uint32_t pos = t->states_pos_;'''
+
+[[mutant]]
+id = "w-23"
+name = "requeue_outcomes against the response's levels where every end sets one"
+test = "experiment"
+why = "Finding F16."
+find = '''    if (!t->end_unset_) {
+        /* every way to the end sets an outcome */
+    } else if (t->response) {'''
+replace = '''    if (0) {
+    } else if (t->response) {'''

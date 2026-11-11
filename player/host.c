@@ -276,6 +276,9 @@ static int h_check_ops(void* ctx, const yexp_def* d, const yexp_template* t, cha
     ytl_op* ops;
     int mode, bound, rc = 0;
     pl_env saved = p->env;
+    /* a version 2 definition is refused by name after the load; its steps
+     * (until, recenter, flag) have no lowering here to check */
+    if (d->format_version > PL_FORMAT_VERSION) return 0;
     p->def = (yexp_def*)d;
     if (pl_channels_assign(p) < 0) { snprintf(msg, cap, "%s", p->error); p->failed = 0; p->env = saved; return 1; }
     bound = 16 + pl_ops_bound(t->events, t->n_events) + pl_ops_bound(t->after, t->n_after);

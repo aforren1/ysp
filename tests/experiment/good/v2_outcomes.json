@@ -1,0 +1,32 @@
+{
+  "note": "Format finding F16 (D36): $outcome takes every outcome an exit or an over can set, through a variable too, and the response's levels or \"done\" only where a trial can end with none set. Points through variables (3.7).",
+  "format": "ysp-experiment", "version": 2,
+  "roles": { "hand": { "type": "position2d", "units": "display_px", "allow_relative": true } },
+  "devices": { "kb": { "direction": "in", "family": ["keyboard"] } },
+  "stimuli": { "s": { "kind": "shape", "shape": "circle", "w": 10, "h": 10 }, "dot": { "kind": "shape", "w": 2, "h": 2 } },
+  "trials": {
+    "exits_only": {
+      "controls": { "r": { "control": "region", "of": "hand", "center": "$aim", "radius": 10 },
+                    "c": { "control": "cursor", "role": "hand", "about": "$pivot", "stimulus": "dot" } },
+      "states": [
+        { "name": "a", "steps": [{ "recenter": "hand", "to": "$home" }, { "on": ["s", "dot"] }],
+          "exits": [{ "on": "r", "to": "end", "outcome": "hit" }, { "after_s": 2, "to": "end", "outcome": "$late" }] }
+      ],
+      "columns": { "score": { "by": "$outcome", "map": { "hit": 1, "miss": 0, "slow": -1 } }, "oc": "$outcome" }
+    },
+    "with_key": {
+      "controls": { "r": { "control": "region", "of": "hand", "radius": 10 } },
+      "states": [
+        { "name": "a", "steps": [{ "on": "s" }], "exits": [{ "on": "r", "to": "end", "outcome": "hit" }, { "on": "response", "to": "end" }] }
+      ],
+      "response": { "role": "kb", "choices": ["f", "j"], "from": "s", "key_answer": "f", "duration_s": 2 },
+      "requeue_outcomes": ["hit", "timeout"],
+      "columns": { "score": { "by": "$outcome", "map": { "correct": 1, "wrong": 0, "timeout": -1, "hit": 5 } } }
+    }
+  },
+  "timeline": [
+    { "name": "m", "vars": { "aim": [10, -20], "pivot": { "by": "$practice", "map": { "false": [0, 0] } },
+                             "home": [0, 0], "late": { "choice": ["miss", "slow"] } },
+      "timeline": [{ "name": "e", "trial": "exits_only" }, { "name": "k", "trial": "with_key" }] }
+  ]
+}

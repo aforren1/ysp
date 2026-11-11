@@ -1,0 +1,18 @@
+{
+  "note": "Format finding F16: every way to the end sets an outcome, so the response's outcomes are not given, and requeue_outcomes' \"correct\" is warned.",
+  "format": "ysp-experiment", "version": 2,
+  "roles": { "hand": { "type": "position2d", "units": "display_px" } },
+  "devices": { "kb": { "direction": "in", "family": ["keyboard"] } },
+  "stimuli": { "s": { "kind": "shape" } },
+  "trials": {
+    "t": {
+      "controls": { "in": { "control": "region", "of": "hand", "radius": 20 } },
+      "states": [
+        { "name": "show", "steps": [{ "on": "s" }], "exits": [{ "on": "in", "to": "end", "outcome": "hit" }, { "after_s": 2, "to": "end", "outcome": "miss" }] }
+      ],
+      "response": { "role": "kb", "choices": ["f"], "from": "s", "key_answer": "f", "response_ends_trial": false },
+      "requeue_outcomes": ["miss", "correct"]
+    }
+  },
+  "timeline": [{ "name": "m", "trial": "t" }]
+}

@@ -64,3 +64,11 @@ test = "real"
 why = "An input role that lists the keyboard takes it in a real run; it needs no binding."
 find = '''                if (strcmp(role->family[i], "keyboard") == 0) return 0;'''
 replace = '''                if (0) return 0;'''
+
+[[mutant]]
+id = "h-v2-01"
+name = "a version 2 template's ops checked"
+test = "player"
+why = "experiment.h 0.3.0 reads version 2; check_ops met until in events and said 'unknown step' before the by-name refusal (player_test.py t_v2_refused)."
+find = '''    if (d->format_version > PL_FORMAT_VERSION) return 0;'''
+replace = ''''''

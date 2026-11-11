@@ -243,6 +243,8 @@ a step's verb, the signal response's keys "as 2.6", `over`'s `outcome`).
 | The value forms | Read where 3.10 and 3.15 allow them, with their names resolved once the template's controls exist. A lookup's entry and a choice's value take none: one form per place, as the lowering builds one node per distinct form |
 | Variables of version 2 | A walk is its five variables `NAME_x` to `NAME_deg`, not `NAME`; a uniform of n 1 is a number, of n above 1 an array, read only by a moving target's `phases` of the same n. Their levels are not known at load, so a lookup by one is not checked |
 | Flags | Booleans that resolve in a state's steps, an exit's `if` and a column (finding F14) |
+| A rule of a literal, through a variable (fix round) | The same rule: a key above 0 (`radius`, `onset`, `speed_below`, `lag_s`, `speed_lag_s`, a signal_lost's `after_s`, `until`'s `timeout_s`, an exit's `after_s`) refuses a variable that can hold 0; a point (`about`, `center`, `origin`, `recenter`'s `to`) takes a variable that holds `[x, y]` (F8's length too); an outcome takes a variable that holds text, an integer or a boolean (F6) |
+| Linear work on large charts (fix round) | A template's top-level closure walks only what it names, a list kept as names resolve; its cycle walk only its own controls; state membership in shared exits is marked once; `requeue_outcomes` meets a sorted set of the exits' outcomes; a state listed twice in one `in` is refused. Each counts in the work limit |
 | The `outcome` default with states | `1` when the template has no `key_answer` (3.11), from the template's second `outcome` row; `"correct"` with one; written at its default it is left out |
 | A written `[]` for `events` or `after` beside `states` | The default, as D2 has it, so not "with events" |
 | The sigrole bit | Set only when the file has signal roles, so the reports of version 1 files and of hosts that predate it do not change |
@@ -301,6 +303,9 @@ reading below and marks it in the code as "finding Fn". The lines are of
 | F13 | 3.14 l.2041 | A walk's variable (`aim_x`) and a vars name of the same node | Refused as a duplicate |
 | F14 | 3.12 l.1997; D20 rule 10, l.456 | Where `$FLAG` reads | A state's steps, an exit's `if`, a column; not `events` |
 | F15 | 3.11 l.1892; 3.17 | 3.17 lists `over`'s `to` and not its `outcome` | Default none, as 3.11 says |
+| F16 | 3.11 "Outcome (D36)", l.1978; 2.3 l.994 | The levels of `$outcome` where exits set the outcome, and whether `$outcome` needs a response there | In a template with states, or with an `until` that has `timeout_s` (D36 templates): every outcome an exit or an `over` can set (a literal's text, a variable's or a lookup's levels), `"timeout"` of an `until` with `timeout_s`, and, only where a trial can reach `end` with no outcome set, the response's levels (`correct` and `wrong`, or `responded`, and `timeout`) or `"done"` with no response. `$outcome` needs no response there. "Can reach `end` with no outcome set" is a search over the exits, `over` and step ends that set none (the latest outcome set wins, so one set stays set); a key response with `response_ends_trial` ends any state with none. The same set decides the `requeue_outcomes` warning |
+| F17 | 3.14 l.2044 | A `walk2d` box of zero width or height with a `step` above 0: 3.14's rule (a step below half the diagonal) holds, but a drawn direction almost never keeps the point in the box | Accepted, as 3.14 reads; the session stops at run time after 10,000 draws with its named error |
+| F18 | 3.7 l.1713; 3.9 l.1828 | A movement's `from: "response"` names the movement's own hit: the window would open at the response it collects | Accepted, as 3.9's table allows `response` in `from`; the lowering meets it |
 
 ## Known gaps
 
@@ -310,7 +315,6 @@ reading below and marks it in the code as "finding Fn". The lines are of
 | `"dims": []` with `lo` of length 2 | Reads as no dims given and is accepted |
 | `"buttons": {"note": "x"}` | `note` is read as a button key there, not as a note |
 | `until` and `response_ends_trial` with states | Kept as written; the lowering splits the steps at `until` and adds the shared exit `{"on": "response", "to": "end"}` (3.11 rule 9, 3.13) |
-| A shared exit's `in` that lists a state twice | Accepted |
 | Two templates' traces of one name | Compared by rate and items (name, lane, lanes); a top-level trace is one control, so it agrees with itself |
 | `display.units` `cm` without the rig's `view`, a `recenter` on an absolute adapter | The player's checks at a start (3.16, D19's note) |
 | A message about a lane | Names the role or control without its lane (`'hand' gives 1 lane` for `hand.x`) |

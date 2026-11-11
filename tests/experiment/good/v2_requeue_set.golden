@@ -1,0 +1,96 @@
+definition version=2 name=""
+units_deg=0 background=0.5,0.5,0.5 calibration_required=0 min_tier=0 web_allowed=0 web_exclusion=0
+units=0
+field participant integer required=1
+signal role hand type=0 units=0 lanes=2 allow_relative=0 required=1
+role kb dir=0 family=[keyboard] required=1 min_tier=0 pulse_ns=0 kind=
+stimulus s kind=0 layer=0
+  anchor (default) = "center"
+  ax (default) = real:0.5
+  ay (default) = real:0.5
+  blend (default) = "over"
+  cap (default) = "butt"
+  color (default) = [int:0, int:0, int:0]
+  dash (default) = int:0
+  dash_offset (default) = int:0
+  dash_snap (default) = int:0
+  edge (default) = "hard"
+  edge_width (default) = int:0
+  gap (default) = int:0
+  gate (default) = int:1
+  h (default) = int:0
+  join (default) = "round"
+  miter_limit (default) = int:4
+  offset (default) = int:0
+  opacity (default) = int:1
+  ori (default) = int:0
+  p0 (default) = int:0
+  p1 (default) = int:0
+  p10 (default) = int:0
+  p11 (default) = int:0
+  p12 (default) = int:0
+  p13 (default) = int:0
+  p14 (default) = int:0
+  p15 (default) = int:0
+  p16 (default) = int:0
+  p17 (default) = int:0
+  p18 (default) = int:0
+  p19 (default) = int:0
+  p2 (default) = int:0
+  p20 (default) = int:0
+  p21 (default) = int:0
+  p22 (default) = int:0
+  p23 (default) = int:0
+  p24 (default) = int:0
+  p25 (default) = int:0
+  p26 (default) = int:0
+  p27 (default) = int:0
+  p28 (default) = int:0
+  p29 (default) = int:0
+  p3 (default) = int:0
+  p30 (default) = int:0
+  p31 (default) = int:0
+  p4 (default) = int:0
+  p5 (default) = int:0
+  p6 (default) = int:0
+  p7 (default) = int:0
+  p8 (default) = int:0
+  p9 (default) = int:0
+  place (default) = "center"
+  shape (default) = "rect"
+  shape_p0 (default) = int:0
+  shape_p1 (default) = int:0
+  shape_p2 (default) = int:0
+  shape_p3 (default) = int:0
+  stroke (default) = int:0
+  stroke_align (default) = "center"
+  trim_end (default) = int:0
+  trim_set (default) = int:0
+  trim_start (default) = int:0
+  w (default) = int:0
+  x (default) = int:0
+  y (default) = int:0
+template t
+  events
+  after
+  response role=kb from=s ends=0 max=0 held=0 release=0 choices=f:f
+    duration=dur:0ns min_rt=dur:0ns key_answer="f" trigger=- 
+  record_given=0 record=[s]
+  outcome="correct" method_value=(null)
+  control in kind=region shared=0 lanes=1 test=1 hits=1 of=hand(role 0 lanes=2)
+    center (default) = [int:0, int:0]
+    of = "hand"
+    outside (default) = false
+    radius = int:20
+    rate (default) = "sample"
+    speed_lag_s (default) = dur:10000000ns
+    stay_s (default) = dur:0ns
+  states 1
+    state show max_visits=0
+      step on s stagger=dur:0ns
+      exit on=in(control) to=end(end) outcome="hit"
+      exit after=dur:2000000000ns to=end(end) outcome="miss"
+  requeue_outcomes=["miss", "correct"]
+node m path=m trial=t table=- reps=1 interleave=0 track_rate=0 if=- unless=- loop=0 requeue=0 record_data=1
+  rules=""
+  jitters=[] rule_vars=[] tracks=[]

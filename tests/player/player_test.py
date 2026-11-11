@@ -1052,13 +1052,28 @@ def t_r6_allow_below(ctx):
     r = Run(ctx, "r6_allow_ok", d, args=["--max-trials", "1", "--allow-below-tier", "r"])
     check(r.rc == 0, "--allow-below-tier r: exit %d: %s" % (r.rc, r.err[:200]))
 
+def t_v2_refused(ctx):
+    # ysp/experiment.h 0.3.0 reads format version 2 and the player does not
+    # lower it yet: a version 2 pack is refused by name (exit 1, no data),
+    # also when its events hold a step of version 2 (until) that the
+    # loader's check_ops host call would otherwise meet first
+    d = base({"t": {"controls": {"near": {"control": "region", "of": "hand", "radius": 5}},
+                    "events": [{"on": "s"}, {"until": "near", "timeout_s": 1}, {"off": "s"}]}},
+             [{"name": "l", "trial": "t"}])
+    d["version"] = 2
+    d["roles"] = {"hand": {"type": "position2d", "units": "display_px"}}
+    r = Run(ctx, "v2_refused", d, args=["--max-trials", "1"])
+    check(r.rc == 1 and "format version 2" in r.err and "lowers version 1" in r.err and "unknown step" not in r.err and not os.path.exists(r.data),
+          "a version 2 pack is refused by name: exit %d: %s" % (r.rc, r.err[:300]))
+
+
 TESTS = [t_nested, t_if_unless, t_empty_and_zero, t_loop, t_requeue, t_track_ends, t_lookup_keys, t_triggers, t_after_timing, t_outcomes,
          t_method_update, t_seeds, t_refused, t_unused_stim, t_record_data, t_fix_density, t_fix_key_reapply, t_fix_stale_rdk,
          t_fix_timeout_values, t_fix_any_key, t_fix_from_in_if, t_fix_shown_twice, t_fix_vars_data, t_fix_sound_twice, t_fix_rdk_limit,
          t_fix_record_inherit, t_fix_backward_at, t_fix_refusals, t_fix_michelson_order, t_fix_texture_vars, t_fix_walk_budget,
          t_fix_data_set, t_fix_check_all_leaves, t_fix_release_order, t_fix_key_var_reapply,
          t_r2_release_other_template, t_r2_yield_draws_nothing, t_r2_low, t_r2_relaxed, t_r4_leaf_loop_done_track, t_r4_requeue_full,
-         t_r5_wait_final, t_r6_allow_below]
+         t_r5_wait_final, t_r6_allow_below, t_v2_refused]
 
 
 def main():
