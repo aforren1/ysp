@@ -7,10 +7,10 @@ evidence and the choice. The user decided D1 to D15 on 2026-10-14; D4
 changed from the proposal. The user decided D16 to D19, for continuous
 tasks, on 2026-11-09. Nothing is built for them. The user decided D20 on the same day. Part 1 is
 explanation; part 2 is reference, with four worked examples checked
-against the C examples. Part 3 (2026-11-11) is the proposed reference for
+against the C examples. Part 3 (2026-11-11) is the reference for
 format version 2, with two worked examples that are the acceptance tests
-of its loader and player; its open points are D21 to D41 (1.5), proposed
-except D22 and D36, which the user decided on 2026-11-11. Where this page and rig_spec 6 or 14.5 to 14.6
+of its loader and player; its decisions are D21 to D41 (1.5), which the
+user decided on 2026-11-11. Nothing is built for version 2. Where this page and rig_spec 6 or 14.5 to 14.6
 disagree about the definition, this page is newer.
 
 ## Part 1: Explanation
@@ -554,16 +554,16 @@ the header.
 ### 1.5 Decisions for version 2 (2026-11-11)
 
 Part 3 is the reference for version 2. Where D16 to D20 do not decide a
-point that the reference needs, an entry below proposes it. Each entry is
-PROPOSED unless it says DECIDED: the user decided D22 and D36 on
-2026-11-11. A "Scope" line records a scope call made on 2026-11-11 for a
-proposal that stays PROPOSED. Each entry says whether the two acceptance tasks
+point that the reference needs, an entry below decides it. The user
+decided D22 and D36 on 2026-11-11, D36 with an amendment, and accepted
+every other entry as proposed on the same day. A "Scope" line records a
+scope call made on 2026-11-11 before that acceptance. Each entry says whether the two acceptance tasks
 (`trial_visuomotor`, `trial_bimanual`) need it, or whether it can wait for
 version 3. "A designer learns" names the words and fields that a designer
 user must learn for it (signal_spec 15.7, "Words a designer user must
 learn").
 
-**D21. Signal roles. PROPOSED (2026-11-11).**
+**D21. Signal roles. DECIDED (2026-11-11).**
 - Options: (a) a top-level `roles` beside `devices`, as signal_spec 10
   says; (b) one `devices` set, where a role with `type` is a signal role;
   (c) signal roles inside each template.
@@ -609,7 +609,7 @@ learn").
   change, and `trial_visuomotor`'s x and y with the center's offset
   (3.18). A designer learns nothing new: the panel shows the direction.
 
-**D23. `cm` as display units (finding 14). PROPOSED (2026-11-11).**
+**D23. `cm` as display units (finding 14). DECIDED (2026-11-11).**
 - Options: (a) `display.units` `"cm"`, from the rig's `view`; (b) cm in
   signal roles only, with stimuli in px; (c) a unit per stimulus.
 - Evidence: `trial_bimanual` gives every size in cm (target radius 0.8,
@@ -624,7 +624,7 @@ learn").
   learns one more value of a field already shown. Needed by
   `trial_bimanual`.
 
-**D24. The components and their keys. PROPOSED (2026-11-11).**
+**D24. The components and their keys. DECIDED (2026-11-11).**
 - Options: (a) the five components of signal_spec 15.1, with `distance`,
   `peak`, `signal_lost` and `speed_below` of 15.7; (b) fewer, broader
   components (one `test` with a list of conditions); (c) the graph only.
@@ -647,7 +647,7 @@ learn").
   gives: a value, a test, hits (3.7). Needed by both acceptance tasks,
   except `signal_lost`.
 
-**D25. Shared controls. PROPOSED (2026-11-11).**
+**D25. Shared controls. DECIDED (2026-11-11).**
 - Options: (a) a top-level `controls`, as `stimuli` are top-level; (b)
   a control repeated in each template; (c) a template that includes
   another's controls.
@@ -659,7 +659,7 @@ learn").
   name. A designer learns that a control, as a stimulus, can sit at the
   top level. Needed by `trial_bimanual` (or it repeats the cursor).
 
-**D26. The graph view, `signals`. PROPOSED (2026-11-11).**
+**D26. The graph view, `signals`. DECIDED (2026-11-11).**
 - Options: (a) `signals` in version 2, restricted to the ops that a
   definition can write; (b) wait for a task that the components cannot
   write; (c) every op, sources included.
@@ -674,7 +674,7 @@ learn").
 - Scope (2026-11-11): (b). `signals` waits for version 3; version 2
   refuses the key, and 3.8 keeps the sketch for version 3.
 
-**D27. Where the value forms go. PROPOSED (2026-11-11).**
+**D27. Where the value forms go. DECIDED (2026-11-11).**
 - Options: for `{"signal": ...}` and `{"when": ...}` beyond a step's
   `set` (D17): (a) also in `columns` and in a region's `center`; (b) in
   every key; (c) only in `set`. For `then` and `else`: (d) a `when`
@@ -693,7 +693,7 @@ learn").
   3.10). A designer learns "follows" (a signal), "when ... then ... else",
   and the word test. Needed by both acceptance tasks.
 
-**D28. A region centered on a signal (finding 7). PROPOSED (2026-11-11).**
+**D28. A region centered on a signal (finding 7). DECIDED (2026-11-11).**
 - Options: (a) `distance` with two inputs, then a `detect` on its lane;
   (b) a `detect` whose center is a second input (a ysp/sig.h change);
   (c) `diff`, then a `detect` on the norm.
@@ -704,7 +704,7 @@ learn").
 - Proposal: (a), with no header change. Needed by `trial_bimanual`
   (`inside`).
 
-**D29. Random values per block (finding 8, F23). PROPOSED (2026-11-11).**
+**D29. Random values per block (finding 8, F23). DECIDED (2026-11-11).**
 - Options: (a) a `vars` draw per run of a node, `{"uniform": [lo, hi],
   "n": N, "per": "node"}`, drawn by the player from the node's seed; (b)
   per-block variables in ysp/trials.h (F23's proposal); (c) a table
@@ -724,7 +724,7 @@ learn").
   designer learns "uniform" and "once per block". Needed by
   `trial_bimanual`.
 
-**D30. A chained target, `walk2d` (finding 9). PROPOSED (2026-11-11).**
+**D30. A chained target, `walk2d` (finding 9). DECIDED (2026-11-11).**
 - Options: (a) a variable kind in ysp/trials.h; (b) a draw of the
   player's own; (c) a script.
 - Evidence: each reach of `trial_bimanual` starts at the last target
@@ -739,7 +739,7 @@ learn").
   "each target a step from the last, inside a box". Needed by
   `trial_bimanual`.
 
-**D31. A press inside a stimulus, `click_in` (finding 10). PROPOSED (2026-11-11).**
+**D31. A press inside a stimulus, `click_in` (finding 10). DECIDED (2026-11-11).**
 - Options: (a) a choice `{"click_in": STIMULUS, "name": N}`, with the hit
   test in ysp/response.h; (b) the hit test in the player.
 - Evidence: only the mouse-tracking task needs it. A press carries its
@@ -752,7 +752,7 @@ learn").
   early press. Not needed by the acceptance tasks.
 - Scope (2026-11-11): deferred to version 3, as proposed.
 
-**D32. Roles bound by a click (finding 11). PROPOSED (2026-11-11).**
+**D32. Roles bound by a click (finding 11). DECIDED (2026-11-11).**
 - Options: (a) a node `{"assign_roles": [...], "by": "click"}`; (b) the
   rig profile binds each mouse by its device path; (c) the operator
   binds in the runner.
@@ -764,7 +764,7 @@ learn").
   (`yscr_device_name()`). Not needed by the acceptance tasks.
 - Scope (2026-11-11): deferred, as proposed.
 
-**D33. Columns from controls (finding 15). PROPOSED (2026-11-11).**
+**D33. Columns from controls (finding 15). DECIDED (2026-11-11).**
 - Options: (a) four column forms: `{"hit": ...}`, `{"time": ..., "from":
   ...}`, `{"signal": ...}`, `{"when": ...}`; (b) traces only, and every
   value in the analysis.
@@ -778,7 +778,7 @@ learn").
   a speed column is `peak_speed`, not the C programs' `peak_speed_px_s`. A designer learns that a column can show a control's
   time, value or test. Needed by both acceptance tasks.
 
-**D34. A response whose choices are signals. PROPOSED (2026-11-11).**
+**D34. A response whose choices are signals. DECIDED (2026-11-11).**
 - Options: for the role: (a) no `role`, as each choice's `movement`
   names its input; (b) `role` required. For when the window opens: (c)
   at the movement's `from`; (d) at the trial's first frame. For
@@ -795,7 +795,7 @@ learn").
   not end it. A designer learns that a movement can
   be a response. Needed by both acceptance tasks.
 
-**D35. When a state arms, and when an exit is taken. PROPOSED (2026-11-11); it specifies D20 rules 1, 3, 4 and 5.**
+**D35. When a state arms, and when an exit is taken. DECIDED (2026-11-11); it specifies D20 rules 1, 3, 4 and 5.**
 - Options: for the arm: (a) at the entry frame's onset; (b) at the time
   of the exit that led to the state. For the exit: (c) at a frame (D20
   rule 4 as written); (d) when the player drains the hit, after each
@@ -849,7 +849,7 @@ learn").
   template's `outcome` (2.5), 1 by default with `states` and no
   `key_answer`. This keeps D20 rules 2 and 12 as written. 3.11.
 
-**D37. The state stream (D20 rule 8). PROPOSED (2026-11-11).**
+**D37. The state stream (D20 rule 8). DECIDED (2026-11-11).**
 - Options: (a) rows of `events.csv` with `kind` `"state"`; (b) a file
   `streams/states.csv`; (c) columns of `trials.csv`, per state.
 - Evidence: ysp/dataset.h's event row already says that its `text` holds
@@ -859,7 +859,7 @@ learn").
 - Proposal: (a), 3.15. Needed by D20 rule 8; both acceptance tasks have
   states.
 
-**D38. Traces. PROPOSED (2026-11-11).**
+**D38. Traces. DECIDED (2026-11-11).**
 - Options: for a frame row: (a) the held value at `ysig_frame()` (a
   `record` per frame); (b) each value at the frame's flip record's onset
   (`ysig_value_at()`). For the rows kept: (c) a window from `from` to
@@ -874,7 +874,7 @@ learn").
   one `record`, at most 4 lanes; a frame trace has no lane limit but the
   data writer's 256 columns. Needed by both acceptance tasks.
 
-**D39. A generator's time, and its ramp. PROPOSED (2026-11-11).**
+**D39. A generator's time, and its ramp. DECIDED (2026-11-11).**
 - Options: for a generator's time 0: (a) the trial's first frame, the
   base time that ysp/sig.h reads; (b) a state's entry, `from`; (c) a step
   that restarts it. For the ramp: (d) steps on a control's `amplitude`
@@ -896,7 +896,7 @@ learn").
   Needed by `trial_bimanual`.
 - Scope (2026-11-11): (e) replaces (d), as written above.
 
-**D40. Signal roles' samples in the data set. PROPOSED (2026-11-11).**
+**D40. Signal roles' samples in the data set. DECIDED (2026-11-11).**
 - Options: (a) input rows in `events.csv` (`kind` the device's kind,
   `role` the role); (b) a stream per role; (c) none (the journal only).
 - Evidence: principle 7: the raw samples replay every value. signal_spec
@@ -908,7 +908,7 @@ learn").
 - Proposal: (a), and per signal role in `session.json` (3.15). No
   acceptance column needs it; replay does. It can wait.
 
-**D41. The version 1 gaps, settled at version 2. PROPOSED (2026-11-11).**
+**D41. The version 1 gaps, settled at version 2. DECIDED (2026-11-11).**
 1. The `end` mark. Options: reserve it; leave it a label. Evidence: the
    player ends a trial with the code `0x7fffffff`, so no mark name
    collides; in version 2 `"to": "end"` is an exit's target, not a mark.
@@ -1447,9 +1447,8 @@ TEXTURE entry name), `type`, `code` and `answer`.
 
 ## Part 3: Reference, version 2
 
-Status: proposed 2026-11-11. Nothing parses version 2. D16 to D20, D22
-and D36 are decided; every other rule in this part comes from a proposed
-decision in 1.5 and names it. A version 2 definition is a version 1
+Status: decided 2026-11-11. Nothing parses version 2. Every rule in this
+part comes from D16 to D41 and names its decision. A version 2 definition is a version 1
 definition (part 2) plus the keys of this part: a key that this part does
 not name keeps its part 2 meaning, type and default.
 
