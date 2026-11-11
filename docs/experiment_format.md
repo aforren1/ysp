@@ -1452,6 +1452,12 @@ part comes from D16 to D41 and names its decision. A version 2 definition is a v
 definition (part 2) plus the keys of this part: a key that this part does
 not name keeps its part 2 meaning, type and default.
 
+Note (2026-11-11): ysp/experiment.h 0.3.0 reads version 2 into its checked
+form and the pack tool (0.9.0) builds it; the player lowers version 1 only
+and refuses version 2 by name. Where this part is silent or not exact, the
+loader's reading is listed in [experiment.md](experiment.md), "Gaps found in
+the format", F1 to F15.
+
 ### 3.1 What version 2 adds
 
 | Addition | Where | Decision |

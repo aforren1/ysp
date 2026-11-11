@@ -1471,3 +1471,779 @@ test = "experiment"
 why = "v0.1.3: good/outcome_responded reads $rt_s there."
 find = '''yexp__streq(key, "wrong") || yexp__streq(key, "responded") ? 1u : 0u;'''
 replace = '''yexp__streq(key, "wrong") ? 1u : 0u;'''
+
+[[mutant]]
+id = "v-01"
+name = "yexp_defaults(2) is NULL"
+test = "experiment"
+why = "D41 item 5: the designer reads version 2's table."
+find = '''if (version == 2) { if (n) *n = YEXP__N_ROWS2; return yexp__rows2; }'''
+replace = ''''''
+
+[[mutant]]
+id = "v-02"
+name = "version 2 read with version 1's table"
+test = "experiment"
+why = "Every key of part 3 would be unknown."
+find = '''c->rows = version >= 2 ? yexp__rows2 : yexp__rows;'''
+replace = '''c->rows = yexp__rows;'''
+
+[[mutant]]
+id = "v-03"
+name = "visible taken as a stimulus key in version 2"
+test = "experiment"
+why = "D41 item 2: refused."
+find = '''if (c->rows[ri].flags & YEXP__R_STEP) {'''
+replace = '''if (0) {'''
+
+[[mutant]]
+id = "v-04"
+name = "allow_relative on any type"
+test = "experiment"
+why = "3.5: only position2d."
+find = '''if (r->allow_relative && r->type != YEXP_SIG_POSITION2D) {'''
+replace = '''if (0) {'''
+
+[[mutant]]
+id = "v-05"
+name = "position3d has two lanes"
+test = "experiment"
+why = "3.5: x, y and z."
+find = '''static const int lanes[] = { 2, 2, 3, 1, 2 };'''
+replace = '''static const int lanes[] = { 2, 2, 2, 1, 2 };'''
+
+[[mutant]]
+id = "v-06"
+name = "a lane the value lacks"
+test = "experiment"
+why = "3.9: refused."
+find = '''        if (r->lane >= r->lanes) {'''
+replace = '''        if (0) {'''
+
+[[mutant]]
+id = "v-07"
+name = "a name alone in a one-lane place"
+test = "experiment"
+why = "3.9: refused when it has more lanes."
+find = '''    if (r->lanes > 1) {
+        yexp__err(c, r->pos_, "%s: '%s': '%s' has %d lanes and this place takes one'''
+replace = '''    if (0) {
+        yexp__err(c, r->pos_, "%s: '%s': '%s' has %d lanes and this place takes one'''
+
+[[mutant]]
+id = "v-08"
+name = "a template's states not found by name"
+test = "experiment"
+why = "3.9: an exit names a state."
+find = '''        if ((k = yexp__kfind(c->st_idx, c->n_st, nm)) >= 0) { r->kind = YEXP_REF_STATE; r->index = k; return true; }'''
+replace = ''''''
+
+[[mutant]]
+id = "v-09"
+name = "response named with no response"
+test = "experiment"
+why = "3.9: response is the template's."
+find = '''if (c->t_response && yexp__streq(nm, "response"))'''
+replace = '''if (yexp__streq(nm, "response"))'''
+
+[[mutant]]
+id = "v-10"
+name = "a region has no test"
+test = "experiment"
+why = "3.7: inside is its test."
+find = '''*test = k == YEXP_REGION || k == YEXP_SIGNAL_LOST;'''
+replace = '''*test = k == YEXP_SIGNAL_LOST;'''
+
+[[mutant]]
+id = "v-11"
+name = "a movement named for its hit gets the generic message"
+test = "experiment"
+why = "3.7: the movement's hit is the response; say so."
+find = '''if (!ok && x->kind == YEXP_MOVEMENT && (want & (YEXP__N_HITS | YEXP__N_TIME))) {'''
+replace = '''if (0) {'''
+
+[[mutant]]
+id = "v-12"
+name = "a cursor with two sources"
+test = "experiment"
+why = "3.7: exactly one of role, x with y, mean."
+find = '''            if (given != 1) yexp__err('''
+replace = '''            if (0) yexp__err('''
+
+[[mutant]]
+id = "v-13"
+name = "x without y"
+test = "experiment"
+why = "3.7: x and y go together."
+find = '''else if ((out->x.name != NULL) != (out->y.name != NULL))'''
+replace = '''else if (0)'''
+
+[[mutant]]
+id = "v-14"
+name = "a mean of one role"
+test = "experiment"
+why = "3.7: 2 to 4 roles."
+find = '''if (mean->n < 2 || mean->n > 4)'''
+replace = '''if (mean->n < 1 || mean->n > 4)'''
+
+[[mutant]]
+id = "v-15"
+name = "65 components"
+test = "experiment"
+why = "3.7, 3.16: at most 64."
+find = '''if (v[0]->n < 1 || v[0]->n > 64) {'''
+replace = '''if (v[0]->n < 1 || v[0]->n > 65) {'''
+
+[[mutant]]
+id = "v-16"
+name = "a lane's arrays of different lengths"
+test = "experiment"
+why = "3.7: one length n."
+find = '''        if (v[k]->kind == YEXP_V_ARRAY && v[k]->n != v[0]->n) {'''
+replace = '''        if (0) {'''
+
+[[mutant]]
+id = "v-17"
+name = "two lanes of different n"
+test = "experiment"
+why = "3.16: refused."
+find = '''if (out->sx.n && out->sy.n && out->sx.n != out->sy.n)'''
+replace = '''if (0)'''
+
+[[mutant]]
+id = "v-18"
+name = "0 taken as above 0"
+test = "experiment"
+why = "3.16: radius, onset, speed_below, lag_s, after_s above 0."
+find = '''if ((v->flags & YEXP_VF_DURATION) ? v->i <= 0 : !(v->num > 0))'''
+replace = '''if ((v->flags & YEXP_VF_DURATION) ? v->i < 0 : !(v->num >= 0))'''
+
+[[mutant]]
+id = "v-19"
+name = "a cursor's role in other units"
+test = "experiment"
+why = "3.4: a cursor gives display positions."
+find = '''if (!sr->failed_ && sr->units != yexp__display_role_units(c->d))'''
+replace = '''if (0)'''
+
+[[mutant]]
+id = "v-20"
+name = "cm read as deg"
+test = "experiment"
+why = "D23: display_cm for cm."
+find = '''return d->units == 2 ? YEXP_UNITS_DISPLAY_CM : d->units == 1 ? YEXP_UNITS_DISPLAY_DEG : YEXP_UNITS_DISPLAY_PX;'''
+replace = '''return d->units == 2 ? YEXP_UNITS_DISPLAY_DEG : d->units == 1 ? YEXP_UNITS_DISPLAY_CM : YEXP_UNITS_DISPLAY_PX;'''
+
+[[mutant]]
+id = "v-21"
+name = "a cursor's role of one lane"
+test = "experiment"
+why = "3.7: a role of 2 lanes."
+find = '''                if (x->of.lanes != 2) yexp__err(c, x->of.pos_, "%s: 'role':'''
+replace = '''                if (0) yexp__err(c, x->of.pos_, "%s: 'role':'''
+
+[[mutant]]
+id = "v-22"
+name = "a region of one lane"
+test = "experiment"
+why = "3.7: a value of 2 or 3 lanes."
+find = '''(x->of.lanes < 2 || x->of.lanes > 3))'''
+replace = '''(x->of.lanes < 1 || x->of.lanes > 3))'''
+
+[[mutant]]
+id = "v-23"
+name = "a center of other lanes"
+test = "experiment"
+why = "D28: the lanes of of."
+find = '''                if (x->of.kind != YEXP_REF_NONE && x->center.lanes != x->of.lanes)'''
+replace = '''                if (0)'''
+
+[[mutant]]
+id = "v-24"
+name = "a movement of one lane"
+test = "experiment"
+why = "3.7: a value of 2 lanes."
+find = '''            if (x->of.name && yexp__name_use(c, &x->of, YEXP__N_VALUE, elem, "of") && x->of.lanes != 2)'''
+replace = '''            if (x->of.name && yexp__name_use(c, &x->of, YEXP__N_VALUE, elem, "of") && 0)'''
+
+[[mutant]]
+id = "v-25"
+name = "signal_lost of a control"
+test = "experiment"
+why = "3.7: of a role."
+find = '''            if (x->of.name) yexp__name_use(c, &x->of, YEXP__N_ROLE, elem, "of");'''
+replace = '''            if (x->of.name) yexp__name_use(c, &x->of, YEXP__N_VALUE, elem, "of");'''
+
+[[mutant]]
+id = "v-26"
+name = "a sample trace of 5 lanes"
+test = "experiment"
+why = "D38: a join takes 4."
+find = '''&& lanes > 4)'''
+replace = '''&& lanes > 5)'''
+
+[[mutant]]
+id = "v-27"
+name = "a moving target from a stimulus"
+test = "experiment"
+why = "3.7: from a state."
+find = '''            if (x->from.name) yexp__name_use(c, &x->from, YEXP__N_STATE, elem, "from");'''
+replace = '''            if (x->from.name) yexp__name_use(c, &x->from, YEXP__N_STATE | YEXP__N_STIM, elem, "from");'''
+
+[[mutant]]
+id = "v-28"
+name = "controls in a loop"
+test = "experiment"
+why = "Finding F9: no graph opens with a cycle."
+find = '''                if (color[v] == 1) {
+                    yexp__err(c, x->pos_,'''
+replace = '''                if (0) {
+                    yexp__err(c, x->pos_,'''
+
+[[mutant]]
+id = "v-29"
+name = "a name in devices and roles"
+test = "experiment"
+why = "D21: not both."
+find = '''        if (yexp__role_get(d, r->name)) yexp__err('''
+replace = '''        if (0) yexp__err('''
+
+[[mutant]]
+id = "v-30"
+name = "a template control with a top-level name, the generic message"
+test = "experiment"
+why = "D25 names this refusal."
+find = '''if (g && yexp__streq(g, "top-level control"))'''
+replace = '''if (0)'''
+
+[[mutant]]
+id = "v-31"
+name = "end and response not reserved"
+test = "experiment"
+why = "3.9: reserved with states."
+find = '''    if (!c->t_states) return;
+    for (k = 0; k < 2; k++) {'''
+replace = '''    return;
+    for (k = 0; k < 2; k++) {'''
+
+[[mutant]]
+id = "v-32"
+name = "a state with a template's name"
+test = "experiment"
+why = "3.9: refused."
+find = '''        if (c->trials_src && yjs_get(c->trials_src, nm)) yexp__err('''
+replace = '''        if (0) yexp__err('''
+
+[[mutant]]
+id = "v-33"
+name = "a state with a variable's name"
+test = "experiment"
+why = "3.9: refused."
+find = '''        if (yexp__resolve(c, s, nm, &r, &why) && !(r.kind == YEXP__VK_TABLE && r.unverified))'''
+replace = '''        if (0)'''
+
+[[mutant]]
+id = "v-34"
+name = "a column taken on faith clashes with a state"
+test = "experiment"
+why = "Without column() any name may be a column; that is no clash."
+find = '''        if (yexp__resolve(c, s, nm, &r, &why) && !(r.kind == YEXP__VK_TABLE && r.unverified))'''
+replace = '''        if (yexp__resolve(c, s, nm, &r, &why))'''
+
+[[mutant]]
+id = "v-35"
+name = "a duplicate state"
+test = "experiment"
+why = "3.16: refused."
+find = '''            if (yexp__streq(k[i].key, k[i - 1].key))
+                yexp__err(c, states_src->u.items[k[i].index]->pos,'''
+replace = '''            if (0)
+                yexp__err(c, states_src->u.items[k[i].index]->pos,'''
+
+[[mutant]]
+id = "v-36"
+name = "a flag listed twice"
+test = "experiment"
+why = "Two columns of one name."
+find = '''            if (yexp__streq(k[i].key, k[i - 1].key)) yexp__err(c, flags_v->pos,'''
+replace = '''            if (0) yexp__err(c, flags_v->pos,'''
+
+[[mutant]]
+id = "v-37"
+name = "states with events"
+test = "experiment"
+why = "3.6: one or the other."
+find = '''    if (c->t_states && ((ev && ev->src'''
+replace = '''    if (0 && ((ev && ev->src'''
+
+[[mutant]]
+id = "v-38"
+name = "exits without states"
+test = "experiment"
+why = "3.6: shared exits need states."
+find = '''    if (!c->t_states && ex && ex->src && ex->src->type == YJS_ARRAY && ex->src->n)'''
+replace = '''    if (0)'''
+
+[[mutant]]
+id = "v-39"
+name = "on and after_s together"
+test = "experiment"
+why = "D20 rule 2: one or the other."
+find = '''    if (on && on->v && out->after)
+        yexp__err('''
+replace = '''    if (0)
+        yexp__err('''
+
+[[mutant]]
+id = "v-40"
+name = "after_s of 0"
+test = "experiment"
+why = "D20 rule 2: above 0."
+find = '''if (out->after && out->after->kind == YEXP_V_NUMBER && out->after->i <= 0)'''
+replace = '''if (out->after && out->after->kind == YEXP_V_NUMBER && out->after->i < 0)'''
+
+[[mutant]]
+id = "v-41"
+name = "if on a waiting exit"
+test = "experiment"
+why = "D20 rule 2: if is for instant exits."
+find = '''        if ((on && on->v) || out->after) yexp__err(c, iff->pos,'''
+replace = '''        if (0) yexp__err(c, iff->pos,'''
+
+[[mutant]]
+id = "v-42"
+name = "an instant shared exit"
+test = "experiment"
+why = "D20 rule 11: on or after_s."
+find = '''        if (!(on && on->v) && !out->after)
+            yexp__err('''
+replace = '''        if (0)
+            yexp__err('''
+
+[[mutant]]
+id = "v-43"
+name = "an empty in"
+test = "experiment"
+why = "D20 rule 11: in names states."
+find = '''            if (!in->v->n) yexp__err('''
+replace = '''            if (0) yexp__err('''
+
+[[mutant]]
+id = "v-44"
+name = "max_visits without over"
+test = "experiment"
+why = "D20 rule 12: together."
+find = '''            if ((mv != NULL) != (x && x->src))'''
+replace = '''            if (0)'''
+
+[[mutant]]
+id = "v-45"
+name = "all instant, the last with if"
+test = "experiment"
+why = "3.11 rule 10: the state may not leave."
+find = '''        if (all_instant && st->exits[st->n_exits - 1].if_var)'''
+replace = '''        if (0)'''
+
+[[mutant]]
+id = "v-46"
+name = "a state in a shared exit counted as all instant"
+test = "experiment"
+why = "Its shared exits wait."
+find = '''        bool all_instant = st->n_exits > 0 && !yexp__in_shared(t, i);'''
+replace = '''        bool all_instant = st->n_exits > 0;'''
+
+[[mutant]]
+id = "v-47"
+name = "an instant exit no edge"
+test = "experiment"
+why = "D20 rule 6: a cycle of instant exits."
+find = '''                    if (e->on.kind == YEXP_REF_NONE && !e->after && e->to.kind == YEXP_REF_STATE) v = e->to.index;'''
+replace = '''                    if (0) v = e->to.index;'''
+
+[[mutant]]
+id = "v-48"
+name = "over no edge"
+test = "experiment"
+why = "D20 rule 12: a cycle still needs a waiting exit."
+find = '''                    if (st->over_to.kind == YEXP_REF_STATE) v = st->over_to.index;'''
+replace = '''                    if (0) v = st->over_to.index;'''
+
+[[mutant]]
+id = "v-49"
+name = "a step end no edge"
+test = "experiment"
+why = "Finding F5: a no-exit state goes on."
+find = '''                } else if (st->n_exits == 0 && !yexp__in_shared(t, u) && !yexp__steps_until(st->steps, st->n_steps) && u + 1 < n) {'''
+replace = '''                } else if (0) {'''
+
+[[mutant]]
+id = "v-50"
+name = "an until does not wait"
+test = "experiment"
+why = "Its exit is on a hit."
+find = '''                } else if (st->n_exits == 0 && !yexp__in_shared(t, u) && !yexp__steps_until(st->steps, st->n_steps) && u + 1 < n) {'''
+replace = '''                } else if (st->n_exits == 0 && !yexp__in_shared(t, u) && u + 1 < n) {'''
+
+[[mutant]]
+id = "v-51"
+name = "until in after"
+test = "experiment"
+why = "3.11 rule 9: events or a state's steps."
+find = '''        if (depth > 0 || c->step_place == 1) {'''
+replace = '''        if (depth > 0) {'''
+
+[[mutant]]
+id = "v-52"
+name = "until in an if"
+test = "experiment"
+why = "Finding F4."
+find = '''        if (depth > 0 || c->step_place == 1) {'''
+replace = '''        if (c->step_place == 1) {'''
+
+[[mutant]]
+id = "v-53"
+name = "at_s after until in events"
+test = "experiment"
+why = "3.11 rule 6: the split time is not known."
+find = '''        if (verb == YEXP_AT && c->step_place == 0 && c->until_seen)'''
+replace = '''        if (0)'''
+
+[[mutant]]
+id = "v-54"
+name = "a timeout of 0"
+test = "experiment"
+why = "3.16: above 0."
+find = '''if (to && to->kind == YEXP_V_NUMBER && to->i <= 0)'''
+replace = '''if (to && to->kind == YEXP_V_NUMBER && to->i < 0)'''
+
+[[mutant]]
+id = "v-55"
+name = "recenter on position2d without allow_relative"
+test = "experiment"
+why = "D19: it cannot be relative."
+find = '''!(sr->type == YEXP_SIG_POSITION2D_RELATIVE || (sr->type == YEXP_SIG_POSITION2D && sr->allow_relative))'''
+replace = '''!(sr->type == YEXP_SIG_POSITION2D_RELATIVE || (sr->type == YEXP_SIG_POSITION2D))'''
+
+[[mutant]]
+id = "v-56"
+name = "a flag step naming no flag"
+test = "experiment"
+why = "3.16: refused."
+find = '''        if (out->flag && yexp__kfind(c->fl_idx, c->n_fl, out->flag) < 0)'''
+replace = '''        if (0)'''
+
+[[mutant]]
+id = "v-57"
+name = "a step naming a control, the generic message"
+test = "experiment"
+why = "3.12 names this refusal."
+find = '''    if (c->version < 2) return false;
+    return (c->tp && yexp__ctl_find('''
+replace = '''    return false;
+    return (c->tp && yexp__ctl_find('''
+
+[[mutant]]
+id = "v-58"
+name = "a set of a cursor's stimulus's x"
+test = "experiment"
+why = "3.7: the bind is one writer."
+find = '''                if (xy->stim == x->stimulus.index)'''
+replace = '''                if (0)'''
+
+[[mutant]]
+id = "v-59"
+name = "moving targets of two froms"
+test = "experiment"
+why = "D39: one base time."
+find = '''            else if ((mt->from.name == NULL) != (x->from.name == NULL) || (mt->from.name && !yexp__streq(mt->from.name, x->from.name)))'''
+replace = '''            else if (0)'''
+
+[[mutant]]
+id = "v-60"
+name = "a movement no response names"
+test = "experiment"
+why = "3.7: a response choice only."
+find = '''        if (x->kind == YEXP_MOVEMENT && !x->shared && !x->named_)'''
+replace = '''        if (0)'''
+
+[[mutant]]
+id = "v-61"
+name = "a top-level movement no response names"
+test = "experiment"
+why = "Finding F11."
+find = '''        if (d->controls[i].kind == YEXP_MOVEMENT && !d->controls[i].failed_ && c->mv_named && !c->mv_named[i])'''
+replace = '''        if (0)'''
+
+[[mutant]]
+id = "v-62"
+name = "traces of one name with other columns"
+test = "experiment"
+why = "3.15: one stream, one set of columns."
+find = '''        if (!yexp__trace_same(a, b))'''
+replace = '''        if (0)'''
+
+[[mutant]]
+id = "v-63"
+name = "signal and key choices mixed"
+test = "experiment"
+why = "3.13: one or the other."
+find = '''if (!sv) { yexp__err(c, it->pos, "%s: signal and key choices in one response; a response has one or the other (3.13)", ce); continue; }'''
+replace = '''if (!sv) continue;'''
+
+[[mutant]]
+id = "v-64"
+name = "movements of two froms"
+test = "experiment"
+why = "D34: the collector arms once."
+find = '''                else if ((first->from.name == NULL) != (ref.control->from.name == NULL) || (first->from.name && !yexp__streq(first->from.name, ref.control->from.name)))'''
+replace = '''                else if (0)'''
+
+[[mutant]]
+id = "v-65"
+name = "role with signal choices, the generic message"
+test = "experiment"
+why = "3.13 names this refusal."
+find = '''if (sect == YEXP__S_SRESPONSE && (yexp__streq(key, "role")'''
+replace = '''if (0 && (yexp__streq(key, "role")'''
+
+[[mutant]]
+id = "v-66"
+name = "signal choices read as keys"
+test = "experiment"
+why = "3.13."
+find = '''    if (c->version >= 2 && yexp__has_signal_choices(src)) {'''
+replace = '''    if (0) {'''
+
+[[mutant]]
+id = "v-67"
+name = "above on two lanes"
+test = "experiment"
+why = "3.16: refused."
+find = '''            if (r.lanes != 1) {
+                yexp__err(c, v->pos, "%s: '%s': 'above' on'''
+replace = '''            if (0) {
+                yexp__err(c, v->pos, "%s: '%s': 'above' on'''
+
+[[mutant]]
+id = "v-68"
+name = "a signal of 2 lanes in color"
+test = "experiment"
+why = "Finding F10."
+find = '''        } else if (r.lanes != place) {'''
+replace = '''        } else if (0) {'''
+
+[[mutant]]
+id = "v-69"
+name = "a hit column with no lane"
+test = "experiment"
+why = "3.15: a column is one value."
+find = '''        if (v->i < 0 && lanes > 1) {'''
+replace = '''        if (0) {'''
+
+[[mutant]]
+id = "v-70"
+name = "a time column without _s"
+test = "experiment"
+why = "3.15."
+find = '''    if (v->kind == YEXP_V_TIME && !yexp__ends_s(m->key))'''
+replace = '''    if (0)'''
+
+[[mutant]]
+id = "v-71"
+name = "a hit column with _s"
+test = "experiment"
+why = "3.15, C12."
+find = '''    if ((v->kind == YEXP_V_HIT || v->kind == YEXP_V_SIGNAL || v->kind == YEXP_V_WHEN) && yexp__ends_s(m->key))'''
+replace = '''    if (0)'''
+
+[[mutant]]
+id = "v-72"
+name = "a form in a lookup's entry"
+test = "experiment"
+why = "One form per place."
+find = '''yexp__value(c, maps->u.members[i].value, allow & ~(unsigned)YEXP__AV_NESTED, iallow, elem, key, &cv);'''
+replace = '''yexp__value(c, maps->u.members[i].value, allow, iallow, elem, key, &cv);'''
+
+[[mutant]]
+id = "v-73"
+name = "a signal in then"
+test = "experiment"
+why = "3.10: then and else take a literal, a variable, a lookup or a when."
+find = '''(allow & ~(unsigned)(YEXP__AV_SIG | YEXP__AV_COL | YEXP__AV_VARFORM | YEXP__AV_TRANSFORM)) | YEXP__AV_WHEN,'''
+replace = '''allow | YEXP__AV_WHEN,'''
+
+[[mutant]]
+id = "v-74"
+name = "a form in a to step"
+test = "experiment"
+why = "3.10: set only."
+find = '''c->version >= 2 && verb == YEXP_SET);'''
+replace = '''c->version >= 2);'''
+
+[[mutant]]
+id = "v-75"
+name = "uniform with lo at hi"
+test = "experiment"
+why = "3.16: refused."
+find = '''        } else if (!(lh->items[0].num < lh->items[1].num)) {'''
+replace = '''        } else if (0) {'''
+
+[[mutant]]
+id = "v-76"
+name = "uniform of n 0"
+test = "experiment"
+why = "3.14: 1 to 64."
+find = '''nv->i < 1 || nv->i > 64))'''
+replace = '''nv->i < 0 || nv->i > 64))'''
+
+[[mutant]]
+id = "v-77"
+name = "a box that does not hold start"
+test = "experiment"
+why = "3.14."
+find = '''        if (!(sx >= x0 && sx <= x1 && sy >= y0 && sy <= y1)) {'''
+replace = '''        if (0) {'''
+
+[[mutant]]
+id = "v-78"
+name = "a step past half the diagonal"
+test = "experiment"
+why = "3.14: every point has a step that stays in."
+find = '''        } else if (!(step->num > 0) || !(4.0 * step->num * step->num < dx * dx + dy * dy)) {'''
+replace = '''        } else if (!(step->num > 0)) {'''
+
+[[mutant]]
+id = "v-79"
+name = "a walk's name twice in a node"
+test = "experiment"
+why = "Finding F13."
+find = '''                else if (yjs_get(src, nm)) yexp__err('''
+replace = '''                else if (0) yexp__err('''
+
+[[mutant]]
+id = "v-80"
+name = "a walk's variables unknown"
+test = "experiment"
+why = "3.14: $NAME_x and the others."
+find = '''                    if (yexp__streq(name + kl, yexp__walk_suffix[q])) {'''
+replace = '''                    if (0) {'''
+
+[[mutant]]
+id = "v-81"
+name = "an array uniform in a number key"
+test = "experiment"
+why = "3.14: n values are an array."
+find = '''        if (v->i > 1) { if (want != YEXP__W_NUMS) yexp__type_err('''
+replace = '''        if (v->i > 1) { if (0) yexp__type_err('''
+
+[[mutant]]
+id = "v-82"
+name = "phases of another n"
+test = "experiment"
+why = "3.7: arrays of one length n."
+find = '''            if (got != (uint32_t)sn->n)'''
+replace = '''            if (0)'''
+
+[[mutant]]
+id = "v-83"
+name = "a flag read in events"
+test = "experiment"
+why = "Finding F14."
+find = '''    if (s->flags_ok && s->t)'''
+replace = '''    if (s->t)'''
+
+[[mutant]]
+id = "v-84"
+name = "sigrole() not called"
+test = "experiment"
+why = "G18: the host's check runs when it exists."
+find = '''    if (c->h && c->h->sigrole)'''
+replace = '''    if (0)'''
+
+[[mutant]]
+id = "v-85"
+name = "the sigrole bit without signal roles"
+test = "experiment"
+why = "A version 1 file's report stays as it was."
+find = '''            if (d->n_sigroles) yexp__check_mark('''
+replace = '''            yexp__check_mark('''
+
+[[mutant]]
+id = "v-86"
+name = "migrated bytes keep version 1"
+test = "experiment"
+why = "3.2: version 2."
+find = '''            v = yjs_new_int(a, 2);'''
+replace = '''            v = yjs_new_int(a, 1);'''
+
+[[mutant]]
+id = "v-87"
+name = "migrated bytes keep visible"
+test = "experiment"
+why = "3.2: D41 item 2."
+find = '''if (!yexp__streq(st->u.members[q].key, "visible") && yjs_set('''
+replace = '''if (yjs_set('''
+
+[[mutant]]
+id = "v-88"
+name = "states with no key_answer: outcome correct"
+test = "experiment"
+why = "3.11, D36: 1."
+find = '''        if (c->version >= 2 && out->states && !(out->response && out->response->key_answer)) {'''
+replace = '''        if (0) {'''
+
+[[mutant]]
+id = "v-89"
+name = "the outcome's default with states is 2"
+test = "experiment"
+why = "3.17: 1."
+find = '''{ YEXP__S_TEMPLATE, 0x0002, YEXP__T_VAL, YEXP__R_SELF, "outcome", "1", NULL },'''
+replace = '''{ YEXP__S_TEMPLATE, 0x0002, YEXP__T_VAL, YEXP__R_SELF, "outcome", "2", NULL },'''
+
+[[mutant]]
+id = "v-90"
+name = "requeue_outcomes never warned"
+test = "experiment"
+why = "3.16: a warning."
+find = '''                        if (yexp__outcome_given(out, t) == 0)'''
+replace = '''                        if (0)'''
+
+[[mutant]]
+id = "v-91"
+name = "a lane on a name, the generic message"
+test = "experiment"
+why = "3.9: say where a lane goes."
+find = '''if (c->version >= 2 && src->type == YJS_STRING && strchr(src->u.s, '.') && r->section >= YEXP__S_STEP) {'''
+replace = '''if (0) {'''
+
+[[mutant]]
+id = "v-92"
+name = "a top-level control a template names not marked"
+test = "experiment"
+why = "3.6: its graph has a copy."
+find = '''        c->tp->uses_top[r->control - c->d->controls] = 1;'''
+replace = '''        (void)0;'''
+
+[[mutant]]
+id = "v-93"
+name = "what a named top-level control names not marked"
+test = "experiment"
+why = "3.6: the copy's inputs."
+find = '''                if (k >= 0 && k < d->n_controls && !t->uses_top[k]) { t->uses_top[k] = 1; more = true; }'''
+replace = '''                (void)k;'''
+
+[[mutant]]
+id = "v-94"
+name = "version 2 keys named version 2 in a version 2 file"
+test = "experiment"
+why = "The v1 message is for v1 only."
+find = '''if (c->version < 2 && yexp__is_v2(key)) {'''
+replace = '''if (yexp__is_v2(key)) {'''
+
+[[mutant]]
+id = "v-95"
+name = "signals refused as unknown"
+test = "experiment"
+why = "D26: say version 3."
+find = '''        if (yexp__streq(key, "signals")) {'''
+replace = '''        if (0) {'''

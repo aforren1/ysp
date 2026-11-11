@@ -5361,8 +5361,6 @@ static void yexp__parse_template(yexp__ctx* c, const yjs_member* m, yexp_templat
         yexp__err(c, mm ? mm->key_pos : m->value->pos, "%s: 'script' needs a later format version; version %d refuses it (D6)", elem, c->version);
         return;
     }
-    /* version 2: the outcome's row for a template with states (3.17) */
-    if (c->version >= 2) mask = yjs_get(m->value, "states") ? 2u : 1u;
     s = yexp__object(c, YEXP__S_TEMPLATE, mask, m->value, elem, &ct);
     if (!s) return;
     out->name = m->key;

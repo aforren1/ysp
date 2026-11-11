@@ -14,7 +14,8 @@
     "pointer": { "control": "cursor", "role": "pen", "stimulus": "dot",
                  "transform": { "by": "$map", "map": { "plain": "identity", "turned": { "rotation_deg": "$angle" }, "flipped": { "mirror_deg": 45 } } },
                  "about": [10, "$cy"] },
-    "squeeze": { "control": "peak", "of": "grip" }
+    "squeeze": { "control": "peak", "of": "grip" },
+    "spread": { "control": "distance", "of": "pointer" }
   },
   "trials": {
     "chase": {
@@ -41,6 +42,7 @@
         "aim_s": { "time": "on_aim", "from": "run" }
       }
     },
+    "idle": { "events": [{ "wait_s": 1 }], "columns": { "spread_end": { "signal": "spread" } } },
     "settle": {
       "controls": { "home": { "control": "region", "of": "pointer", "radius": 10, "stay_s": 0.2, "speed_below": 50 } },
       "events": [{ "on": "dot" }, { "until": "home", "timeout_s": 3 }, { "off": "dot" }],
@@ -50,6 +52,6 @@
   "timeline": [
     { "name": "block", "vars": { "map": { "choice": ["plain", "turned", "flipped"] }, "angle": 30, "cy": -5, "far": 20,
                                  "ph": { "uniform": [0, 6.283185307179586], "n": 2 } },
-      "timeline": [{ "name": "chase", "trial": "chase" }, { "name": "settle", "trial": "settle" }] }
+      "timeline": [{ "name": "chase", "trial": "chase" }, { "name": "settle", "trial": "settle" }, { "name": "idle", "trial": "idle" }] }
   ]
 }

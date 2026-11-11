@@ -1,0 +1,100 @@
+definition version=2 name=""
+units_deg=0 background=0.5,0.5,0.5 calibration_required=0 min_tier=0 web_allowed=0 web_exclusion=0
+units=0
+field participant integer required=1
+signal role pad type=2 units=4 lanes=3 allow_relative=0 required=1
+stimulus s kind=0 layer=0
+  anchor (default) = "center"
+  ax (default) = real:0.5
+  ay (default) = real:0.5
+  blend (default) = "over"
+  cap (default) = "butt"
+  color (default) = [int:0, int:0, int:0]
+  dash (default) = int:0
+  dash_offset (default) = int:0
+  dash_snap (default) = int:0
+  edge (default) = "hard"
+  edge_width (default) = int:0
+  gap (default) = int:0
+  gate (default) = int:1
+  h (default) = int:0
+  join (default) = "round"
+  miter_limit (default) = int:4
+  offset (default) = int:0
+  opacity (default) = int:1
+  ori (default) = int:0
+  p0 (default) = int:0
+  p1 (default) = int:0
+  p10 (default) = int:0
+  p11 (default) = int:0
+  p12 (default) = int:0
+  p13 (default) = int:0
+  p14 (default) = int:0
+  p15 (default) = int:0
+  p16 (default) = int:0
+  p17 (default) = int:0
+  p18 (default) = int:0
+  p19 (default) = int:0
+  p2 (default) = int:0
+  p20 (default) = int:0
+  p21 (default) = int:0
+  p22 (default) = int:0
+  p23 (default) = int:0
+  p24 (default) = int:0
+  p25 (default) = int:0
+  p26 (default) = int:0
+  p27 (default) = int:0
+  p28 (default) = int:0
+  p29 (default) = int:0
+  p3 (default) = int:0
+  p30 (default) = int:0
+  p31 (default) = int:0
+  p4 (default) = int:0
+  p5 (default) = int:0
+  p6 (default) = int:0
+  p7 (default) = int:0
+  p8 (default) = int:0
+  p9 (default) = int:0
+  place (default) = "center"
+  shape (default) = "rect"
+  shape_p0 (default) = int:0
+  shape_p1 (default) = int:0
+  shape_p2 (default) = int:0
+  shape_p3 (default) = int:0
+  stroke (default) = int:0
+  stroke_align (default) = "center"
+  trim_end (default) = int:0
+  trim_set (default) = int:0
+  trim_start (default) = int:0
+  w (default) = int:0
+  x (default) = int:0
+  y (default) = int:0
+template t
+  events
+  after
+  record_given=0 record=[]
+  outcome=int:1 method_value=(null)
+  column depth_max = signal(depth lanes=1)
+  column lift_z = hit(lift.z)
+  control depth kind=peak shared=0 lanes=1 test=0 hits=0 of=pad.z(role 0 lanes=1)
+    lag_s (default) = dur:10000000ns
+    measure (default) = "speed"
+    of = "pad.z"
+  control lift kind=region shared=0 lanes=1 test=1 hits=1 of=pad(role 0 lanes=3)
+    center (default) = [int:0, int:0]
+    of = "pad"
+    outside = true
+    radius = int:5
+    rate (default) = "sample"
+    speed_lag_s (default) = dur:10000000ns
+    stay_s (default) = dur:0ns
+  states 2
+    state show max_visits=0
+      step on s stagger=dur:0ns
+      step until target=lift(control)
+    state choose max_visits=0
+      exit if=practice to=show(state 0)
+  shared exit after=dur:3000000000ns to=end(end) in=[1]
+node m path=m trial=t table=- reps=1 interleave=0 track_rate=0 if=- unless=- loop=0 requeue=0 record_data=1
+  rules="practice 2\x0areps 3"
+  jitters=[] rule_vars=[] tracks=[]

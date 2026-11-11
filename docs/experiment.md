@@ -1,15 +1,15 @@
 # ysp/experiment.h
 
-Status: v0.2.0, 2026-11-11. The header's top comment is the reference for
+Status: v0.3.0, 2026-11-11. The header's top comment is the reference for
 the calls (USAGE, THE CHECKED FORM, REFUSALS, THE HOST, CANONICAL BYTES,
 BOUNDS AND MEMORY). This page records why the header exists, the format's
 defaults table, the decisions, and the results.
 
-The loader reads a definition of format version 1
-([experiment_format.md](experiment_format.md)) into a checked, fully
-defaulted form. It does not lower the form to ysp/trials.h, ysp/timeline.h,
-ysp/gfx.h or ysp/response.h, and it runs nothing. The lowering is the
-next task.
+The loader reads a definition of format version 1 or 2
+([experiment_format.md](experiment_format.md), parts 2 and 3) into a
+checked, fully defaulted form. It does not lower the form to ysp/trials.h,
+ysp/timeline.h, ysp/gfx.h, ysp/response.h or ysp/sig.h, and it runs nothing.
+The player lowers version 1; the lowering of version 2 is the next task.
 
 ## How-to: load a definition
 
@@ -33,6 +33,37 @@ next task.
 `bytes` is ysp/json.h's canonical form with keys at their defaults left
 out, and one LF after the value. `id` is the SHA-256 of those `n` bytes.
 
+## How-to: get a version 1 file's bytes under version 2
+
+1. Load the definition.
+2. Call `yexp_migrated(def, &a, &bytes, &n, id)`.
+
+For a version 1 file, `bytes` are its canonical bytes with `"version": 2`
+and no stimulus `visible` key (format 3.2). They load as version 2 to the
+same form and give themselves back. `yexp_canonical()` still gives the
+version 1 bytes, so the experiment ID of a version 1 file does not change.
+D12 asks the player to record both SHA-256s. For a version 2 file the two
+calls give the same bytes.
+
+## How-to: read the version 2 parts of the form
+
+1. `def->sigroles` are the signal roles, sorted by name: type, units, lanes.
+2. `def->controls` are the top-level controls; `t->controls` a template's.
+   Each control has its keys as a `yexp_prop` list, as a stimulus has, and
+   its names resolved into `yexp_ref`: what the name is
+   (`YEXP_REF_ROLE`, `_CONTROL`, `_STATE`, `_STIMULUS`, `_RESPONSE`,
+   `_END`), its index or control, its lane, and the lanes it reads.
+3. `t->uses_top[i]` is 1 when template `t` names top-level control `i`,
+   directly or through another control. Its graph needs a copy of it (3.6).
+4. `t->states` is NULL for a template with `events`. Each state has its
+   steps and its own exits; `t->exits` are the shared exits, each with
+   the indices of its states in `in`.
+5. A `set` step's property, a column and a region's `center` can hold a
+   value form: `YEXP_V_SIGNAL`, `YEXP_V_WHEN` (with a `YEXP_V_TEST` or a
+   `YEXP_V_SIGNAL` with `by` as its test), `YEXP_V_HIT`, `YEXP_V_TIME`.
+6. A node's `vars` can hold `YEXP_V_UNIFORM` and `YEXP_V_WALK2D`.
+7. Use `yexp_sigrole_get()` and `yexp_control_get()` to find one by name.
+
 ## How-to: supply a host
 
 Fill only the functions that you have. A NULL function skips its check, and
@@ -47,6 +78,17 @@ Fill only the functions that you have. A NULL function skips its check, and
 | `param()` | a stimulus or method value against a header's parameter table (range, enum) | designer, player |
 | `rules()` | `ytr_rules()` and a dry `ytr_open()` of a leaf | player, designer |
 | `check_ops()` | `ytl_check_ops()` of a template at the variables' extremes | player, designer |
+| `sigrole()` | a signal role against the rig (version 2, format 3.5): the profile has an adapter for it, `ysig_open()` takes its type and units, its device opens | none yet: the rig profile has no adapter block (G18) |
+
+`sigrole()` gets a `yexp_sigrole`: name, type, units, lanes,
+`allow_relative` and `required`. A host that has the profile's adapter
+block refuses a required role with no adapter, a relative adapter under
+`position2d` without `allow_relative`, and an adapter of another type or
+units, with a message the loader prefixes with the role's name. The bit
+`YEXP_CHECK_SIGROLES` is set in `report.run` or `report.skipped` only when
+the file has signal roles, so a version 1 file's report is as before. The
+check of a `recenter` on an absolute adapter is the player's, at run time
+(D19's note).
 
 The header stays free of ysp/gfx.h and ysp/screen.h, so the loader can
 build in a tool with no SDL. Without `column()`, a name that nothing else
@@ -136,6 +178,21 @@ at version 1, listed by the test above.
 | step | `stagger_s`, `duration_s`, `delay_s` | `0` |
 | step | `ease` | `"linear"` |
 
+## Reference: the format's defaults, version 2 (D41)
+
+`yexp_defaults(2, &n)` lists version 1's rows with part 3's changes (a
+stimulus's `visible` is a step's property only, `display.units` has `cm`,
+the template's `outcome` has a second row for a template with states,
+default `1`) and the rows of the sections version 2 adds: `signal role`,
+`control` (one `kinds` bit per kind of control, in 3.7's order), `state`,
+`over`, `exit` (bit 0 a state's own, bit 1 a shared exit), `response with
+signal choices`, `uniform`, `walk2d`, and the template's and the steps'
+new keys (steps: bit 11 `until`, 12 `recenter`, 13 `flag`). The table is
+format 3.17's: `tests/adapt/experiment_test.c` reads 3.17 from the format
+page and compares every row, and requires every row that version 2 adds
+to be in 3.17 or in its list of eight with a reason (a form's own key,
+a step's verb, the signal response's keys "as 2.6", `over`'s `outcome`).
+
 ## Explanation: decisions
 
 | Question | Choice and why |
@@ -172,6 +229,24 @@ at version 1, listed by the test above.
 | A lookup by `$response` with no `choices` | Refused (v0.1.1): any key can be pressed, so the map cannot name them |
 | `$level` on a leaf with both `tracks` and a table | Refused in a number key (v0.1.1): empty on a condition trial. Valid where only a track trial reaches it (v0.1.2): `method_value`, and an entry of a lookup by `$method` for a method's name, also through `vars` |
 
+### Version 2 (v0.3.0)
+
+| Question | Choice and why |
+|---|---|
+| One table or two | Two arrays that share their large blocks through macros: `yexp_defaults(1)` returns exactly the rows of v0.2.0, so a version 1 file reads as before; version 2's array is version 1's with part 3's changes and the new sections. The loader picks the array by the file's `version` |
+| A version 1 file's bytes and ID | Unchanged: it loads with the version 1 table and writes `"version": 1`. 3.2's migrated bytes come from `yexp_migrated()`, so the stored ID (D12) stays the version 1 bytes' and the migrated one is new |
+| Where names resolve | In the first pass: a template's names (states, flags, controls) are collected before its keys are read, so a key can name what comes later in the file. A name resolves to what it is (`yexp_ref`); each key then says what it takes (3.9's table), and the message says both |
+| A top-level control's names | Only what every template has: signal roles, stimuli, other top-level controls (finding F1). Resolved once, not per template |
+| What a template's graph holds | Its controls and the top-level controls it names, directly or through another control (`uses_top`). The second pass checks a top-level control's variables in the leaves of those templates only, as only they build its nodes (3.6) |
+| `until` | Kept as a step (`YEXP_UNTIL`); the lowering splits the steps (3.11 rule 9). The loader checks where it may go and that its control has hits |
+| A cycle of the chart | Depth first over the edges that do not wait (finding F5), linear in states and exits; 4096 chained states load in the work budget |
+| The value forms | Read where 3.10 and 3.15 allow them, with their names resolved once the template's controls exist. A lookup's entry and a choice's value take none: one form per place, as the lowering builds one node per distinct form |
+| Variables of version 2 | A walk is its five variables `NAME_x` to `NAME_deg`, not `NAME`; a uniform of n 1 is a number, of n above 1 an array, read only by a moving target's `phases` of the same n. Their levels are not known at load, so a lookup by one is not checked |
+| Flags | Booleans that resolve in a state's steps, an exit's `if` and a column (finding F14) |
+| The `outcome` default with states | `1` when the template has no `key_answer` (3.11), from the template's second `outcome` row; `"correct"` with one; written at its default it is left out |
+| A written `[]` for `events` or `after` beside `states` | The default, as D2 has it, so not "with events" |
+| The sigrole bit | Set only when the file has signal roles, so the reports of version 1 files and of hosts that predate it do not change |
+
 ## Explanation: gaps found in the format
 
 These are the places where the format is silent or ambiguous. The list
@@ -203,6 +278,30 @@ decide otherwise.
 | 2.8 | a quest axis cannot express `param[].prior`, `nuisance` or `stim[].values` as a grid of points | refused | an object axis form |
 | D10 | "a trigger at its onset" with steps in `if` | an `if` body counts as inline; `wait_s`, `at_s` and `then` end the onset | say so |
 
+### Version 2 (v0.3.0, part 3 of the format page)
+
+Where part 3 is not exact enough to write the loader, the loader takes the
+reading below and marks it in the code as "finding Fn". The lines are of
+[experiment_format.md](experiment_format.md) at commit b838bca.
+
+| Id | Section, line | Gap | Reading taken |
+|---|---|---|---|
+| F1 | 3.3 l.1508, 3.9 l.1807 (D25) | What a top-level control's keys may name: a state, a flag, `response` exist only in a template | Only what every template has: signal roles, stimuli, top-level controls |
+| F2 | 3.10 l.1852 | The type of `above`'s level L | A number, a variable or a lookup, as 3.7 has for a control's numbers (it lowers to a detect's level) |
+| F3 | 3.11 rule 9, l.1958 | `until` in a state that has exits: which part of the split takes the exits | The state's exits arm at its entry and stay armed (rule 3); `until` splits the steps only |
+| F4 | 3.11 rule 9, l.1958; 3.12 l.1993 | `until` in an `if` or `unless` body, or in `after` | Refused: rule 9 places it in `events` or a state's steps |
+| F5 | D20 rule 6, l.443 | Whether a no-exit state's end of steps and `over` are edges of a cycle | Every edge that is not an `on` or `after_s` exit counts ("every cycle must contain an exit that waits"); a no-exit state whose steps hold an `until` waits there |
+| F6 | 3.11 l.1902; D20 rule 2, l.426; rule 9, l.1958 | An exit's `outcome` is "as 2.5's", but 2.5 refuses text and D20 and rule 9 use text (`"timeout"`, `"too_many_breaks"`) | Text, an integer or a boolean, literal, variable or lookup: the `outcome` column's value |
+| F7 | 3.4 l.1534; 3.16 l.2117 | 3.4: every value that drives x, y, w or h is in `display.units`; 3.16 refuses only a cursor | A cursor's roles (`role`, `x`, `y`, `mean`) have the display's units, with or without `stimulus`; nothing else is checked |
+| F8 | 3.7 l.1619 | A point's length, also for a 3-lane `of` | `[x, y]`, two elements |
+| F9 | 3.16 l.2117 | No refusal for controls that read each other in a loop (`of`, `center`, `freeze_at`, `from`), which no graph opens | Refused |
+| F10 | 3.10 l.1858 | `{"signal": N}` in `color` (three fields) | N gives as many lanes as the place: 3 in `color`, 1 elsewhere |
+| F11 | 3.7 l.1718 | "A movement that no response names" for a top-level movement | Refused when no template's response names it |
+| F12 | 3.7 l.1660; 3.16 l.2118 | 3.7: no step gives x or y of a cursor's stimulus; 3.16 lists a `set` | Any step (`set`, `to`, `then`) that gives x or y of the stimulus of a cursor or a moving target in the template's graph |
+| F13 | 3.14 l.2041 | A walk's variable (`aim_x`) and a vars name of the same node | Refused as a duplicate |
+| F14 | 3.12 l.1997; D20 rule 10, l.456 | Where `$FLAG` reads | A state's steps, an exit's `if`, a column; not `events` |
+| F15 | 3.11 l.1892; 3.17 | 3.17 lists `over`'s `to` and not its `outcome` | Default none, as 3.11 says |
+
 ## Known gaps
 
 | Gap | Behavior |
@@ -210,6 +309,11 @@ decide otherwise.
 | A `set` or `to` of `visible` | Does not count as showing the response's `from`, so such a template is refused |
 | `"dims": []` with `lo` of length 2 | Reads as no dims given and is accepted |
 | `"buttons": {"note": "x"}` | `note` is read as a button key there, not as a note |
+| `until` and `response_ends_trial` with states | Kept as written; the lowering splits the steps at `until` and adds the shared exit `{"on": "response", "to": "end"}` (3.11 rule 9, 3.13) |
+| A shared exit's `in` that lists a state twice | Accepted |
+| Two templates' traces of one name | Compared by rate and items (name, lane, lanes); a top-level trace is one control, so it agrees with itself |
+| `display.units` `cm` without the rig's `view`, a `recenter` on an absolute adapter | The player's checks at a start (3.16, D19's note) |
+| A message about a lane | Names the role or control without its lane (`'hand' gives 1 lane` for `hand.x`) |
 
 ## Results
 

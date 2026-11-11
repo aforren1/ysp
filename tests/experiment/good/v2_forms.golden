@@ -9,6 +9,10 @@ control pointer kind=cursor shared=1 lanes=2 test=0 hits=0 of=pen(role 1 lanes=2
   role = "pen"
   stimulus = "dot"
   transform = lookup($map){"flipped": mirror_deg(int:45), "plain": "identity", "turned": rotation_deg($angle)}
+control spread kind=distance shared=1 lanes=1 test=0 hits=0 of=pointer(control lanes=2)
+  center (default) = [int:0, int:0]
+  of = "pointer"
+  scale (default) = int:1
 control squeeze kind=peak shared=1 lanes=1 test=0 hits=0 of=grip(role 0 lanes=1)
   lag_s (default) = dur:10000000ns
   measure (default) = "speed"
@@ -254,6 +258,14 @@ template chase
         w = signal(gap lanes=1)
       step wait t=dur:10000000000ns
   uses_top=pointer squeeze
+template idle
+  events
+    step wait t=dur:1000000000ns
+  after
+  record_given=0 record=[]
+  outcome="" method_value=(null)
+  column spread_end = signal(spread lanes=1)
+  uses_top=pointer spread
 template settle
   events
     step on dot stagger=dur:0ns
@@ -285,5 +297,8 @@ node block path=block trial=- table=- reps=1 interleave=0 track_rate=0 if=- unle
     rules=""
     jitters=[] rule_vars=[] tracks=[]
   node settle path=block/settle trial=settle table=- reps=1 interleave=0 track_rate=0 if=- unless=- loop=0 requeue=0 record_data=1
+    rules=""
+    jitters=[] rule_vars=[] tracks=[]
+  node idle path=block/idle trial=idle table=- reps=1 interleave=0 track_rate=0 if=- unless=- loop=0 requeue=0 record_data=1
     rules=""
     jitters=[] rule_vars=[] tracks=[]

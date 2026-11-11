@@ -1,0 +1,21 @@
+{
+  "note": "Valid but unusual (format 3.11): a state whose own exits are all instant, the last with an if, is valid when a shared exit lists it; a cycle through a state whose steps hold an until waits there, so it is valid.",
+  "format": "ysp-experiment", "version": 2,
+  "roles": { "pad": { "type": "position3d", "units": "device" } },
+  "stimuli": { "s": { "kind": "shape" } },
+  "trials": {
+    "t": {
+      "controls": {
+        "lift": { "control": "region", "of": "pad", "radius": 5, "outside": true },
+        "depth": { "control": "peak", "of": "pad.z" }
+      },
+      "exits": [{ "after_s": 3, "to": "end", "in": ["choose"] }],
+      "states": [
+        { "name": "show", "steps": [{ "on": "s" }, { "until": "lift" }] },
+        { "name": "choose", "exits": [{ "if": "$practice", "to": "show" }] }
+      ],
+      "columns": { "depth_max": { "signal": "depth" }, "lift_z": { "hit": "lift.z" } }
+    }
+  },
+  "timeline": [{ "name": "m", "trial": "t", "rules": ["practice 2", "reps 3"] }]
+}

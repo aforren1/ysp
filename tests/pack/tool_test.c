@@ -1926,6 +1926,54 @@ static void test_lookup_pack(void) {
 
 /* The pack both builds make: the core and the full tool must give the same
  * bytes, which needs a manifest that names no layout library. */
+/* A definition of format version 2 (ysp/experiment.h 0.3.0, tool 0.9.0):
+ * format 3.18's visuomotor example with its table builds, and its entry is
+ * the loader's canonical bytes. */
+static void test_v2_pack(void) {
+    char err[512];
+    int rc;
+    static const char def[] =
+        "{\"format\": \"ysp-experiment\", \"version\": 2,\n"
+        " \"roles\": {\"hand\": {\"type\": \"position2d\", \"units\": \"display_px\", \"allow_relative\": true}},\n"
+        " \"stimuli\": {\"start\": {\"kind\": \"shape\"}, \"target\": {\"kind\": \"shape\", \"x\": \"$target_x\", \"y\": \"$target_y\"}, \"dot\": {\"kind\": \"shape\"}},\n"
+        " \"trials\": {\"reach\": {\n"
+        "   \"controls\": {\"at_start\": {\"control\": \"region\", \"of\": \"hand\", \"radius\": 12, \"stay_s\": 0.5},\n"
+        "                \"past\": {\"control\": \"region\", \"of\": \"hand\", \"radius\": 268.8, \"outside\": true, \"rate\": \"sample\"},\n"
+        "                \"moved\": {\"control\": \"movement\", \"of\": \"hand\", \"onset\": 26.88, \"from\": \"at_start\"}},\n"
+        "   \"states\": [{\"name\": \"back\", \"steps\": [{\"on\": \"start\"}, {\"set\": \"dot\", \"props\": {\"x\": {\"signal\": \"hand.x\"}}}],\n"
+        "                \"exits\": [{\"on\": \"at_start\", \"to\": \"go\"}]},\n"
+        "              {\"name\": \"go\", \"steps\": [{\"on\": \"target\"}], \"exits\": [{\"on\": \"past\", \"to\": \"end\"}]}],\n"
+        "   \"response\": {\"choices\": [{\"signal\": \"moved\"}], \"from\": \"target\"},\n"
+        "   \"columns\": {\"cross_s\": {\"time\": \"past\", \"from\": \"target\"}}}},\n"
+        " \"timeline\": [{\"name\": \"b\", \"timeline_variables\": \"targets.pstb\", \"trial\": \"reach\", \"rules\": [\"order random\"]}]}\n";
+    put_text(WS "/targets.csv", "target_deg,target_x,target_y\n0,268.8,0\n90,0,-268.8\n");
+    put_text(WS "/defs/v2.json", def);
+    rc = build_ws("{\"format\": \"ysp-pack-source\", \"version\": 1, \"experiment\": {\"entry\": \"exp/v2.json\", \"source\": \"defs/v2.json\"},"
+                  " \"resources\": [{\"name\": \"targets.pstb\", \"kind\": \"table\", \"source\": \"targets.csv\"}]}", WS "/v2.ysppak", err, sizeof err);
+    CHECK(rc == 0, "a version 2 definition builds: %s", err);
+#ifndef YPT_NO_LAYOUT
+    if (rc == 0) {
+        size_t n = 0;
+        uint8_t* x = entry_bytes(WS "/v2.ysppak", "exp/v2.json", &n);
+        static yexp_report rp;
+        yjs_arena ca;
+        yexp_def* dd = NULL;
+        const char* cb;
+        size_t cn = 0;
+        yjs_arena_init_heap(&ca, 0);
+        CHECK(yexp_load(&ca, def, strlen(def), NULL, &dd, &rp) == YEXP_OK && dd->format_version == 2 && yexp_canonical(dd, &ca, &cb, &cn, NULL) == YEXP_OK &&
+              x && n == cn && !memcmp(x, cb, cn), "the version 2 entry is its canonical bytes");
+        yjs_arena_free(&ca);
+        free(x);
+    }
+#endif
+    /* a version 2 definition the loader refuses stops the build with its message */
+    put_text(WS "/defs/v2bad.json", "{\"format\": \"ysp-experiment\", \"version\": 2, \"signals\": {}, \"trials\": {\"t\": {}}, \"timeline\": []}\n");
+    rc = build_ws("{\"format\": \"ysp-pack-source\", \"version\": 1, \"experiment\": {\"entry\": \"exp/v2bad.json\", \"source\": \"defs/v2bad.json\"}, \"resources\": []}",
+                  WS "/v2bad.ysppak", err, sizeof err);
+    CHECK(rc < 0 && strstr(err, "version 3"), "a version 2 refusal names the loader's reason: %s", err);
+}
+
 static void test_core_pack(void) {
     char err[1024];
     int rc = build_text(g_desc_core, W "/core.ysppak", err, sizeof err);
@@ -2099,6 +2147,7 @@ int main(void) {
     test_core_pack();
     test_stroop_pack();
     test_lookup_pack();
+    test_v2_pack();
     test_resample();
     test_ffmpeg_refusals();
     test_video();

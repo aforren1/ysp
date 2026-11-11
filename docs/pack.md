@@ -2289,6 +2289,22 @@ version.
 
 Left: a definition's `ytl_check_ops()` and parameter-table checks at build.
 
+### Tool v0.9.0: definitions of format version 2 (2026-11-11)
+
+ysp/experiment.h 0.3.0 reads format version 2 (experiment_format.md part
+3), and the tool stores a version 2 definition as it stores a version 1
+one: through `yexp_load()` and `yexp_canonical()`. `ypt_derive_texts()`
+lays out the texts of versions 1 and 2: version 2 adds no key to a `text`
+stimulus, so its texts are found the same way. A version 3 definition is
+refused by its version. The loader's signal-role check (`sigrole()`) is
+skipped at build, as `role()` is: the tool has no rig. `ypt_check_lookups()`
+stays version 1's; the build does not call it (v0.8.0).
+
+Hashes that moved: none but the version strings. A version 1 pack's entries
+are byte-identical to v0.8.0's, and its manifest differs in the tool's
+version and `ysp/experiment.h`'s; with the two strings put back, the
+manifest and so the pack ID are v0.8.0's (Results of experiment.md).
+
 ## 17. Bindings (2026-10-25)
 
 `ysp-pack` (Python, `import ysp.pack`) and the MEX function `ysp_pack`
