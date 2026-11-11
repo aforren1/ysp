@@ -724,7 +724,8 @@ v0.8.1), and `ysp-audio` is 0.7.2, the header's. The adaptive MEX
 functions and `ysp_color` have no number of their own: `'version'`
 returns the header's.
 
-`ysp-vis` is 0.19.0 (2026-11-06: `ysp/screen.h` 0.19.0, Linux key
+`ysp-vis` is 0.19.0.1 (2026-11-11: `ysp/gfx.h` 0.20.0, `YGFX_CM`, which
+the binding's `units` option does not take yet. 0.19.0 was 2026-11-06: `ysp/screen.h` 0.19.0, Linux key
 tiers by stamp, which the binding does not use; `ysp/gfx.h` 0.19.0, the
 shape attribute `trim_set`, with which trim (0, 0) draws nothing; a gfx
 opened on a simulated display takes the screen's open option `size`,

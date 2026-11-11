@@ -156,6 +156,10 @@ int main(void) {
         for (i = 0; dp && i < m; i++) e += (dp[i].values != NULL) == !strcmp(dp[i].type, "enum");
         if (!dp || e != m) return 29;
     }
+    {   /* v0.20: centimeters are a third unit, after deg */
+        ygfx_units u = YGFX_CM;
+        if ((int)u != 2 || (int)YGFX_DEG + 1 != (int)YGFX_CM) return 31;
+    }
     return ygfx_params(&n) && n == YGFX_P_COUNT && ygfx_desc_params(&m) && m > 0 &&
            ygfx_group_params(&k) && k > 0 ? 0 : 8;
 }

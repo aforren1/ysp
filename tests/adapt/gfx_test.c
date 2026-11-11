@@ -783,6 +783,7 @@ static const char* desc_units_name(int v) {
     switch ((ygfx_units)v) {
     case YGFX_PX: return "px";
     case YGFX_DEG: return "deg";
+    case YGFX_CM: return "cm";
     }
     return NULL;
 }
@@ -930,6 +931,24 @@ static void test_coordinates(void) {
     ygfx_resolve(&g, &s, &x, &y);
     CHECK(fabs(x - (400.0 + 2.0 * 573.0 * tan(3.14159265358979 / 180.0))) < 1e-3);
     ygfx_close(&g);
+    /* centimeters (v0.20.0, G14): px per cm = width x 10 / width_mm, the
+     * distance unread; 800 px over 250 mm is 32 px per cm, exactly */
+    gd.units = YGFX_CM;
+    gd.view.distance_mm = 0;
+    gd.view.width_mm = 250.0f;
+    CHECK(ygfx_open(&g, &gd));
+    s = ygfx_shape(NULL);
+    s.x = 1.5f; s.y = -2; s.w = 2; s.h = 1;
+    ygfx_resolve(&g, &s, &x, &y);
+    CHECK(x == 400.0 + 48.0 && y == 300.0 - 64.0);
+    ygfx_bounds(&g, &s, &x0, &y0, &x1, &y1);
+    CHECK(x1 - x0 == 64.0f && y1 - y0 == 32.0f);
+    ygfx_close(&g);
+    gd.view.width_mm = 0;
+    CHECK(!ygfx_open(&g, &gd) && strstr(ygfx_error(&g), "YGFX_CM needs view.width_mm"));
+    gd.units = (ygfx_units)3;
+    gd.view.width_mm = 250.0f;
+    CHECK(!ygfx_open(&g, &gd) && strstr(ygfx_error(&g), "units 3"));
     yscr_close(&scr);
 }
 

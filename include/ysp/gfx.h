@@ -1,4 +1,4 @@
-/* ysp/gfx.h - v0.19.0 - public domain single-header stimulus graphics library
+/* ysp/gfx.h - v0.20.0 - public domain single-header stimulus graphics library
  *   (with MIT-licensed parts: see below)
  *
  *   Stimuli on GL ES 3.0, on top of ysp/screen.h: signed-distance shapes
@@ -201,9 +201,10 @@
  *   ---------------------------------------------------------------------
  *   Screen pixels: the origin is the top-left corner of the screen (or of
  *   the headless target), x right, y down, pixel centers at + 0.5. Units
- *   are pixels, or degrees (desc.units = YGFX_DEG): one scale factor,
- *   the pixels per degree at the screen center from desc.view, with the
- *   same origin and axes.
+ *   are pixels, degrees (desc.units = YGFX_DEG) or centimeters
+ *   (YGFX_CM): one scale factor, the pixels per degree at the screen
+ *   center from desc.view, or the pixels per cm, drawable width x 10 /
+ *   view.width_mm, with the same origin and axes.
  *   ori is in degrees and turns +x toward +y: clockwise on the screen. ori
  *   0 puts a carrier along x (vertical bars).
  *   Two fields place a stimulus:
@@ -1366,6 +1367,11 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.20.0 - Centimeters as units (gap G14 of the experiment format,
+ *          D23): YGFX_CM, one scale factor, px per cm = drawable width x
+ *          10 / view.width_mm, refused without view.width_mm. Units past
+ *          YGFX_CM are refused (they drew as pixels). The desc row units
+ *          gains cm=2. No struct changes.
  *   v0.19.0 - An explicit trim (docs/examples_findings.md, F17): the flag
  *          YGFX_STIM_TRIM (desc.trim_set, the enum row trim_set, appended:
  *          YGFX_E_COUNT grows by 1) makes trim (0, 0) a trim of zero
@@ -1705,6 +1711,9 @@
  *          source rectangle, not the sampler's.
  *   v0.1.0 - first release.
  *
+ *   STATUS: v0.20.0, 2026-11-11, the Linux desktop (GCC 12.2, Mesa
+ *   llvmpipe headless): test_coordinates checks YGFX_CM's scale and its
+ *   refusals; the compile checks; mutants cm-01 to cm-05 killed.
  *   STATUS: v0.19.0, 2026-11-06, the Linux desktop (GCC 12.2, Mesa
  *   llvmpipe headless, no display): tests/adapt/gfx_test.c checks the
  *   explicit trim on the CPU (ygfx_hit(): (0, 0) with the flag nothing
@@ -1938,9 +1947,9 @@
 #define YSP_GFX_H_INCLUDED
 
 #define YGFX_VERSION_MAJOR 0
-#define YGFX_VERSION_MINOR 19
+#define YGFX_VERSION_MINOR 20
 #define YGFX_VERSION_PATCH 0
-#define YGFX_VERSION_STRING "0.19.0"
+#define YGFX_VERSION_STRING "0.20.0"
 
 #include "ysp/screen.h"
 #include "ysp/color.h"
@@ -2109,7 +2118,7 @@ typedef struct ygfx_import_desc {
 
 /* --- open ------------------------------------------------------------------ */
 
-typedef enum ygfx_units  { YGFX_PX = 0, YGFX_DEG = 1 } ygfx_units;
+typedef enum ygfx_units  { YGFX_PX = 0, YGFX_DEG = 1, YGFX_CM = 2 } ygfx_units;
 typedef enum ygfx_dither {
     YGFX_DITHER_NONE = 0,      /* round to nearest                             */
     YGFX_DITHER_ORDERED = 1,   /* Bayer 8 x 8, the same every frame            */
@@ -2140,7 +2149,8 @@ typedef enum ygfx_align {
 } ygfx_align;
 
 /* Viewing geometry for YGFX_DEG: one scale factor, the pixels per degree at
- * the screen center. */
+ * the screen center. YGFX_CM reads width_mm only: px per cm = drawable
+ * width x 10 / width_mm. */
 typedef struct ygfx_view { float distance_mm, width_mm; } ygfx_view;
 
 struct ygfx_backend;
@@ -2173,7 +2183,7 @@ typedef struct ygfx_desc {
                                      * 800 x 600; ignored with a mode          */
     float           background[3];  /* linear device RGB, 0..1; 0 = black       */
     ygfx_units    units;          /* 0 = PX                                   */
-    ygfx_view     view;           /* DEG only                                 */
+    ygfx_view     view;           /* DEG; CM: width_mm only                   */
     const ycol_cal* cal;          /* NULL = identity: scene value = device value */
     ygfx_dither   dither;         /* 0 = NONE                                 */
     uint32_t        seed;           /* NOISE dither                             */
@@ -6445,8 +6455,16 @@ static bool ygfx__open_a(ygfx_gfx* g, const ygfx_desc* d) {
         ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: only MONO in v0.1");
         return false;
     }
+    if ((unsigned)d->units > (unsigned)YGFX_CM) {
+        ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: units %d: not px, deg or cm", (int)d->units);
+        return false;
+    }
     if (d->units == YGFX_DEG && (d->view.distance_mm <= 0 || d->view.width_mm <= 0)) {
         ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: YGFX_DEG needs view.distance_mm and view.width_mm");
+        return false;
+    }
+    if (d->units == YGFX_CM && !(d->view.width_mm > 0)) {
+        ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: YGFX_CM needs view.width_mm");
         return false;
     }
     for (i = 0; i < 3; i++) {
@@ -6538,6 +6556,8 @@ static bool ygfx__open_b(ygfx_gfx* g, const ygfx_desc* d) {
     g->ppu = 1.0f;
     if (d->units == YGFX_DEG)
         g->ppu = (float)((double)g->w / d->view.width_mm * d->view.distance_mm * tan(3.14159265358979323846 / 180.0));
+    else if (d->units == YGFX_CM)
+        g->ppu = (float)((double)g->w * 10.0 / d->view.width_mm);
     g->dither = d->dither;
     g->seed = d->seed;
     g->ring = d->ring;
@@ -11997,10 +12017,10 @@ static const yscr_param ygfx__desc_params[] = {
     { "background.r", "f32", 0, 1, 0, "rgb", "background, linear device red", NULL },
     { "background.g", "f32", 0, 1, 0, "rgb", "background, linear device green", NULL },
     { "background.b", "f32", 0, 1, 0, "rgb", "background, linear device blue", NULL },
-    { "units", "enum", 0, 1, 0, "", "pixels, or degrees (one scale factor at the screen center)",
-      "px=0,deg=1" },
+    { "units", "enum", 0, 2, 0, "", "pixels, degrees (one scale factor at the screen center), or cm (one scale "
+      "factor from view.width_mm)", "px=0,deg=1,cm=2" },
     { "view.distance_mm", "f32", 0, 1e5, 0, "mm", "viewing distance, degrees only", NULL },
-    { "view.width_mm", "f32", 0, 1e5, 0, "mm", "width of the drawable area, degrees only", NULL },
+    { "view.width_mm", "f32", 0, 1e5, 0, "mm", "width of the drawable area, degrees and cm", NULL },
     { "dither", "enum", 0, 2, 0, "", "none (round), ordered 8x8, or noise per frame",
       "none=0,ordered=1,noise=2" },
     { "seed", "u32", 0, 4294967295.0, 0, "", "noise dither seed", NULL },

@@ -4484,6 +4484,31 @@ display was free), MATLAB, Windows and macOS.
 Mutants `tr-01` to `tr-03` (the desc's switch dropped, the flag ignored
 in the trim rule, the enum row on another flag): 3 of 3 killed.
 
+## v0.20.0: centimeters as units
+
+[experiment_format.md](experiment_format.md) gap G14, decision D23. A
+definition in `cm` (the two-mouse task gives every size in cm) needs one
+scale factor, as `YGFX_DEG` has.
+
+| Change | Why |
+|---|---|
+| `YGFX_CM` (2): px per cm = drawable width x 10 / `view.width_mm` | `view.width_mm` is the drawable's width in mm already (ysp/rigfile.h, VIEWING GEOMETRY), so the factor is exact for a window too. The acceptance rig's 1024 px over 320 mm is 32 px per cm |
+| Refused without `view.width_mm` above 0 | D23: a run without the rig's `view` does not start, as for `deg` |
+| Units past `YGFX_CM` refused | Such a value drew as pixels with no message |
+| The desc row `units`: `cm=2`, max 2 | The designer and the bindings read the names from the row |
+
+`view.distance_mm` is not read in `cm`. No struct changes. The origin,
+the axes and `ori` are those of pixels and degrees.
+
+### Tests
+
+`tests/adapt/gfx_test.c`, `test_coordinates()` (the CPU half, a simulated
+800 x 600 screen): 800 px over 250 mm, a shape at (1.5, -2) cm of 2 x 1 cm
+resolves to (448, 236) px with a box of 64 x 32 px, exactly; the refusals
+of `cm` without `view.width_mm` and of units 3. `tests/compile/gfx.c`
+names `YGFX_CM`. Mutants `cm-01` to `cm-05` (the scale left out, mm for
+cm, the two refusals, the row's values): 5 of 5 killed.
+
 ## Bindings
 
 `ysp/gfx.h` is bound in `ysp-vis` with `ysp/screen.h` and `ysp/video.h`

@@ -1630,3 +1630,51 @@ env = { YGFX_TEST_PARTS = "none", YGFX_TEST_DEVICES = "none" }
 why = "Bindings set the flag by the row's name; the row must reach YGFX_STIM_TRIM (v0.19.0, F17)."
 find = "    YGFX_STIM_ALIASED, YGFX_STIM_RAYS, YGFX_STIM_TRIM\n"
 replace = "    YGFX_STIM_ALIASED, YGFX_STIM_RAYS, YGFX_STIM_RAYS\n"
+
+# v0.20.0 (cm-: centimeters as units, gap G14), the CPU half alone on the
+# Linux desktop: test_coordinates opens a gfx in YGFX_CM.
+
+[[mutant]]
+id = "cm-01"
+name = "cm: the scale not set"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "none", YGFX_TEST_DEVICES = "none" }
+why = "G14: a definition in cm would draw in pixels, 32 times too small at 32 px per cm."
+find = "    else if (d->units == YGFX_CM)\n        g->ppu = (float)((double)g->w * 10.0 / d->view.width_mm);\n"
+replace = ""
+
+[[mutant]]
+id = "cm-02"
+name = "cm: mm, not cm"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "none", YGFX_TEST_DEVICES = "none" }
+why = "G14: px per cm is ten times px per mm."
+find = "g->ppu = (float)((double)g->w * 10.0 / d->view.width_mm);"
+replace = "g->ppu = (float)((double)g->w / d->view.width_mm);"
+
+[[mutant]]
+id = "cm-03"
+name = "cm: opens without view.width_mm"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "none", YGFX_TEST_DEVICES = "none" }
+why = "G14, D23: a run without the rig's view must be refused, not drawn at an infinite scale."
+find = "    if (d->units == YGFX_CM && !(d->view.width_mm > 0)) {"
+replace = "    if (0) {"
+
+[[mutant]]
+id = "cm-04"
+name = "units past cm accepted"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "none", YGFX_TEST_DEVICES = "none" }
+why = "An unknown unit drew as pixels with no message."
+find = "    if ((unsigned)d->units > (unsigned)YGFX_CM) {"
+replace = "    if (0) {"
+
+[[mutant]]
+id = "cm-05"
+name = "cm: the desc row's values without cm"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "none", YGFX_TEST_DEVICES = "none" }
+why = "A designer's panel and a binding read the units' names from the row."
+find = '"factor from view.width_mm)", "px=0,deg=1,cm=2" },'
+replace = '"factor from view.width_mm)", "px=0,deg=1" },'
