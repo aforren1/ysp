@@ -140,7 +140,7 @@
 extern "C" {
 #endif
 
-#define YPT_VERSION_STRING "0.8.0"
+#define YPT_VERSION_STRING "0.9.0"
 
 typedef struct ypt_options {
     const char* sources;   /* the sources' folder; NULL: the description's folder */

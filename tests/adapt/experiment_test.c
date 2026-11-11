@@ -453,6 +453,48 @@ static const char* section_base(int sect, int kind, char* buf, size_t cap) {
     return buf;
 }
 
+static void id_roundtrip(const char* doc, uint8_t id[32]);
+static void one_spelling(const char* const* docs, int n, const char* what);
+
+/* Version 2's sections (format 3.17), and version 1's under version 2. */
+static const char* section_base2(int sect, int kind, char* buf, size_t cap) {
+    static const char* const ckinds[] = { "cursor", "region", "distance", "movement", "peak", "moving_target", "trace", "signal_lost" };
+    static const char* const creq[] = {
+        "\"role\":\"h\",", "\"of\":\"h\",\"radius\":1,", "\"of\":\"h\",", "\"of\":\"h\",\"onset\":1,", "\"of\":\"h\",",
+        "\"x\":{\"amplitudes\":[1],\"freqs_hz\":[1],\"phases\":[0]},\"y\":{\"amplitudes\":[1],\"freqs_hz\":[1],\"phases\":[0]},",
+        "\"of\":[\"h\"],", "\"of\":\"h\",\"after_s\":1,"
+    };
+    const char* name = yexp_section_name(sect);
+    const char* head = "{\"format\":\"ysp-experiment\",\"version\":2,\"roles\":{\"h\":{\"type\":\"position2d\",\"units\":\"display_px\"}},\"stimuli\":{\"s\":{\"kind\":\"shape\"}},";
+    const char* tl = "\"timeline\":[{\"name\":\"m\",\"trial\":\"t\"}]}";
+    if (!strcmp(name, "signal role"))
+        snprintf(buf, cap, "{\"format\":\"ysp-experiment\",\"version\":2,\"roles\":{\"h\":{\"type\":\"position2d\",\"units\":\"display_px\",@K@ \"note\":\"n\"}},\"trials\":{\"t\":{}},%s", tl);
+    else if (!strcmp(name, "control"))
+        snprintf(buf, cap, "%s\"trials\":{\"t\":{\"controls\":{\"k\":{\"control\":\"%s\",%s@K@ \"note\":\"n\"}%s},"
+                           "\"states\":[{\"name\":\"a\",\"steps\":[{\"on\":\"s\"}]}]%s}},%s",
+                 head, ckinds[kind], creq[kind], kind == 3 ? "" : "", kind == 3 ? ",\"response\":{\"choices\":[{\"signal\":\"k\"}],\"from\":\"s\"}" : "", tl);
+    else if (!strcmp(name, "state"))
+        snprintf(buf, cap, "%s\"trials\":{\"t\":{\"states\":[{\"name\":\"a\",@K@ \"note\":\"n\"}]}},%s", head, tl);
+    else if (!strcmp(name, "over"))
+        snprintf(buf, cap, "%s\"trials\":{\"t\":{\"states\":[{\"name\":\"a\",\"max_visits\":2,\"over\":{\"to\":\"end\",@K@ \"note\":\"n\"}}]}},%s", head, tl);
+    else if (!strcmp(name, "exit"))
+        snprintf(buf, cap, "%s\"trials\":{\"t\":{\"states\":[{\"name\":\"a\",\"exits\":[{\"after_s\":1,\"to\":\"end\",@K@ \"note\":\"n\"}]}]}},%s", head, tl);
+    else if (!strcmp(name, "response with signal choices"))
+        snprintf(buf, cap, "%s\"trials\":{\"t\":{\"controls\":{\"mv\":{\"control\":\"movement\",\"of\":\"h\",\"onset\":1}},"
+                           "\"states\":[{\"name\":\"a\",\"steps\":[{\"on\":\"s\"}]}],\"response\":{\"choices\":[{\"signal\":\"mv\"}],\"from\":\"s\",@K@ \"note\":\"n\"}}},%s", head, tl);
+    else if (!strcmp(name, "uniform"))
+        snprintf(buf, cap, "%s\"trials\":{\"t\":{}},\"timeline\":[{\"name\":\"m\",\"trial\":\"t\",\"vars\":{\"u\":{\"uniform\":[0,1],@K@ \"note\":\"n\"}}}]}", head);
+    else if (!strcmp(name, "walk2d"))
+        snprintf(buf, cap, "%s\"trials\":{\"t\":{}},\"timeline\":[{\"name\":\"m\",\"trial\":\"t\",\"vars\":{\"w\":{\"walk2d\":{\"step\":1,\"box\":[[-2,-2],[2,2]],@K@ \"note\":\"n\"}}}}]}", head);
+    else if (!strcmp(name, "template"))
+        snprintf(buf, cap, "%s\"trials\":{\"t\":{@K@ \"note\":\"n\"}},%s", head, tl);
+    else if (!strcmp(name, "file"))
+        snprintf(buf, cap, "{\"format\":\"ysp-experiment\",\"version\":2,@K@ \"trials\":{\"t\":{}},%s", tl);
+    else
+        return NULL;
+    return buf;
+}
+
 static void run_defaults(void) {
     int n = 0, i, tested = 0;
     const yexp_row* rows = yexp_defaults(1, &n);
@@ -499,6 +541,274 @@ static void run_defaults(void) {
     }
     CHECK(tested > 400, "defaults exercised");
     printf("  defaults: %d keys written out against left out\n", tested);
+    /* version 2: its own sections, and version 1's rows read under it */
+    rows = yexp_defaults(2, &n);
+    CHECK(rows && n > 400, "the version 2 table");
+    tested = 0;
+    for (i = 0; i < n; i++) {
+        const yexp_row* r = &rows[i];
+        char buf[2048], extra[256];
+        int kind, last_kind;
+        const char* sn = yexp_section_name(r->section);
+        if (!r->def) continue;
+        if (!strcmp(sn, "node") && !strcmp(r->key, "repetitions")) continue;
+        if (!strcmp(sn, "template") && !strcmp(r->key, "outcome")) continue;
+        /* events and after: a template with states refuses them written */
+        last_kind = !strcmp(sn, "stimulus") ? 9 : !strcmp(sn, "control") ? 7 : 0;
+        for (kind = 0; kind <= last_kind; kind++) {
+            const char* base;
+            char* a;
+            char* b;
+            uint8_t ida[32], idb[32];
+            if ((!strcmp(sn, "stimulus") || !strcmp(sn, "control")) && !(r->kinds & (1u << kind))) continue;
+            if (!strcmp(sn, "stimulus") && (r->flags & 0x10u)) continue;   /* visible: a step's property in version 2 */
+            base = section_base2(r->section, kind, buf, sizeof buf);
+            if (!base) {
+                char* q;
+                base = section_base(r->section, kind, buf, sizeof buf);
+                if (!base) break;
+                q = strstr(buf, "\"version\":1");
+                if (q) q[10] = '2';
+            }
+            snprintf(extra, sizeof extra, "\"%s\": %s,", r->key, r->def);
+            a = sub(base, extra);
+            b = sub(base, "");
+            id_of(a, strlen(a), ida);
+            id_of(b, strlen(b), idb);
+            if (memcmp(ida, idb, 32) != 0) {
+                char d2[400];
+                snprintf(d2, sizeof d2, "version 2 section %s key %s kind %d", sn, r->key, kind);
+                fail_(__LINE__, "a key at its default changes the ID", d2);
+            }
+            g_checks++;
+            tested++;
+            free(a);
+            free(b);
+        }
+    }
+    CHECK(tested > 450, "version 2 defaults exercised");
+    printf("  defaults, version 2: %d keys written out against left out\n", tested);
+    {
+        /* the template's outcome: 1 with states and no key_answer (3.17) */
+#define OC2(x) "{\"format\":\"ysp-experiment\",\"version\":2,\"trials\":{\"t\":{" x "\"states\":[{\"name\":\"a\"}]}},\"timeline\":[{\"name\":\"m\",\"trial\":\"t\"}]}"
+        static const char* const a[] = { OC2(""), OC2("\"outcome\":1,"), OC2("\"outcome\":1.0,") };
+        uint8_t x[32], y[32];
+        one_spelling(a, 3, "1 is the outcome's default with states");
+        id_roundtrip(OC2(""), x);
+        id_roundtrip(OC2("\"outcome\":\"correct\","), y);
+        CHECK(memcmp(x, y, 32) != 0, "\"correct\" with states and no key_answer is not the default");
+    }
+}
+
+/* --- the defaults table against the format page (3.17, D41 item 5) ----- */
+
+/* One object name of 3.17 as a section and a kinds mask. */
+static int page_object(const char* obj, const char** sect, unsigned* kinds) {
+    static const struct { const char* obj; const char* sect; unsigned kinds; } M[] = {
+        { "file", "file", 0xffffu }, { "signal role", "signal role", 0xffffu }, { "template", "template", 0xffffu },
+        { "state", "state", 0xffffu }, { "over", "over", 0xffffu }, { "exit", "exit", 0x1u }, { "shared exit", "exit", 0x2u },
+        { "control", "control", 0xffu }, { "cursor", "control", 0x01u }, { "region", "control", 0x02u }, { "distance", "control", 0x04u },
+        { "movement", "control", 0x08u }, { "peak", "control", 0x10u }, { "moving_target", "control", 0x20u }, { "trace", "control", 0x40u },
+        { "signal_lost", "control", 0x80u }, { "response with signal choices", "response with signal choices", 0xffffu },
+        { "step until", "step", 0x0800u }, { "step recenter", "step", 0x1000u }, { "step flag", "step", 0x2000u },
+        { "uniform", "uniform", 0xffffu }, { "walk2d", "walk2d", 0xffffu },
+    };
+    size_t i;
+    for (i = 0; i < sizeof M / sizeof M[0]; i++)
+        if (!strcmp(M[i].obj, obj)) { *sect = M[i].sect; *kinds = M[i].kinds; return 1; }
+    return 0;
+}
+
+static void trim(char* s) {
+    size_t n = strlen(s), a = 0;
+    while (n && (s[n - 1] == ' ' || s[n - 1] == '\t')) s[--n] = 0;
+    while (s[a] == ' ') a++;
+    memmove(s, s + a, n - a + 1);
+}
+
+static void strip_ticks(char* s) {
+    char* o = s;
+    for (; *s; s++) if (*s != '`') *o++ = *s;
+    *o = 0;
+}
+
+/* Splits at ", " outside backticks, brackets and parentheses. */
+static int split_list(char* s, char** out, int cap) {
+    int n = 0, depth = 0, tick = 0;
+    char* start = s;
+    for (; *s; s++) {
+        if (*s == '`') tick = !tick;
+        else if (!tick && (*s == '(' || *s == '[' || *s == '{')) depth++;
+        else if (!tick && (*s == ')' || *s == ']' || *s == '}')) depth--;
+        else if (!tick && !depth && *s == ',' && s[1] == ' ') {
+            *s = 0;
+            if (n < cap) out[n++] = start;
+            start = s + 2;
+            s++;
+        }
+    }
+    if (n < cap) out[n++] = start;
+    return n;
+}
+
+/* A default cell: 1 required, 2 none, 3 a JSON value in json[]. */
+static int page_default(const char* cell, char* json, size_t cap) {
+    const char* t = strchr(cell, '`');
+    if (!strcmp(cell, "required")) return 1;
+    if (!strcmp(cell, "exactly one required")) return 2;
+    if (!t || !strncmp(cell, "none", 4)) return 2;   /* "none", "none (...)", "the trial's first frame", ... */
+    {
+        const char* e = strchr(t + 1, '`');
+        size_t n = e ? (size_t)(e - t - 1) : 0;
+        if (!e || n + 1 > cap) return 0;
+        memcpy(json, t + 1, n);
+        json[n] = 0;
+    }
+    return 3;
+}
+
+static int json_equal_text(const char* a, const char* b) {
+    yjs_arena ar;
+    yjs_value* x;
+    yjs_value* y;
+    yjs_error e;
+    char ba[512], bb[512];
+    int ok = 0;
+    yjs_arena_init_heap(&ar, 0);
+    if (yjs_parse(&ar, a, strlen(a), NULL, &x, &e) == YJS_OK && yjs_parse(&ar, b, strlen(b), NULL, &y, &e) == YJS_OK) {
+        size_t na = yjs_write_mem(x, YJS_WRITE_COMPACT, ba, sizeof ba), nb = yjs_write_mem(y, YJS_WRITE_COMPACT, bb, sizeof bb);
+        ok = na == nb && na < sizeof ba && !memcmp(ba, bb, na);
+    }
+    yjs_arena_free(&ar);
+    return ok;
+}
+
+static const yexp_row* find_row(const yexp_row* rows, int n, const char* sect, unsigned kinds, const char* key) {
+    int i;
+    for (i = 0; i < n; i++)
+        if (!strcmp(yexp_section_name(rows[i].section), sect) && (rows[i].kinds & kinds) && !strcmp(rows[i].key, key)) return &rows[i];
+    return NULL;
+}
+
+static void run_defaults_page(void) {
+    char path[600];
+    char* doc;
+    char* p;
+    char* end;
+    int n2 = 0, n1 = 0, i, checked = 0, k;
+    const yexp_row* rows2 = yexp_defaults(2, &n2);
+    const yexp_row* rows1 = yexp_defaults(1, &n1);
+    uint8_t* seen = (uint8_t*)calloc((size_t)n2 + 1, 1);
+    /* rows of version 2 that 3.17 does not list, each with its reason */
+    static const struct { const char* sect; unsigned kinds; const char* key; } allow[] = {
+        { "uniform", 0xffffu, "uniform" },                                  /* the form's own key, [lo, hi] (3.14) */
+        { "step", 0x0800u, "until" }, { "step", 0x1000u, "recenter" }, { "step", 0x2000u, "flag" },   /* a step's verb */
+        { "response with signal choices", 0xffffu, "duration_s" },          /* "as 2.6" (3.13) */
+        { "response with signal choices", 0xffffu, "minimum_valid_rt_s" },
+        { "response with signal choices", 0xffffu, "max_responses" },
+        { "template", 0x0001u, "outcome" },                                 /* version 1's default, kept (3.17 head) */
+        { "over", 0xffffu, "outcome" },   /* 3.11: "outcome none"; 3.17 lists only over's to (finding F15) */
+    };
+    snprintf(path, sizeof path, "%s/../../docs/experiment_format.md", g_corpus);
+    doc = read_file(path, NULL);
+    CHECK2(doc != NULL, "the format page", path);
+    if (!doc || !seen) { free(doc); free(seen); return; }
+    p = strstr(doc, "### 3.17 Defaults");
+    end = p ? strstr(p, "### 3.18") : NULL;
+    CHECK(p && end, "3.17 in the page");
+    if (!p || !end) { free(doc); free(seen); return; }
+    *end = 0;
+    p = strstr(p, "|---|");
+    while (p && (p = strchr(p, '\n')) != NULL) {
+        char line[512], *cells[4], *keys[8], *defs[8];
+        char* nl;
+        int nc = 0, nk, nd, q;
+        const char* sect;
+        unsigned kinds;
+        p++;
+        if (*p != '|') break;
+        nl = strchr(p, '\n');
+        snprintf(line, sizeof line, "%.*s", (int)(nl ? nl - p : (long)strlen(p)), p);
+        {
+            char* c = line + 1;
+            char* bar;
+            while (nc < 4 && (bar = strchr(c, '|')) != NULL) { *bar = 0; cells[nc++] = c; c = bar + 1; }
+        }
+        if (nc != 3) { CHECK2(0, "a 3.17 row has three cells", line); continue; }
+        for (q = 0; q < 3; q++) trim(cells[q]);
+        strip_ticks(cells[0]);
+        if (!page_object(cells[0], &sect, &kinds)) { CHECK2(0, "a 3.17 object the test knows", cells[0]); continue; }
+        nd = split_list(cells[2], defs, 8);
+        {
+            /* keys: "a", "b", "x with y", "outcome with states and no key_answer" */
+            char* tmp[8];
+            int nt = split_list(cells[1], tmp, 8);
+            nk = 0;
+            for (q = 0; q < nt; q++) {
+                char* w;
+                strip_ticks(tmp[q]);
+                trim(tmp[q]);
+                if (strstr(tmp[q], " with states")) {
+                    *strstr(tmp[q], " with states") = 0;
+                    kinds = 0x2u;   /* the template's second outcome row */
+                    keys[nk++] = tmp[q];
+                } else if ((w = strstr(tmp[q], " with ")) != NULL) {
+                    *w = 0;
+                    keys[nk++] = tmp[q];
+                    keys[nk++] = w + 6;
+                } else {
+                    keys[nk++] = tmp[q];
+                }
+            }
+        }
+        for (q = 0; q < nk; q++) {
+            char json[200];
+            const char* d = defs[nd == 1 ? 0 : q < nd ? q : nd - 1];
+            int want;
+            const yexp_row* r = find_row(rows2, n2, sect, kinds, keys[q]);
+            char what[200];
+            snprintf(what, sizeof what, "%.80s %.80s", cells[0], keys[q]);
+            if (nd != 1 && nd != nk && strcmp(cells[2], "exactly one required")) CHECK2(0, "one default per key, or one for all", what);
+            CHECK2(r != NULL, "3.17's row is in yexp_defaults(2)", what);
+            if (!r) continue;
+            seen[r - rows2] = 1;
+            want = page_default(d, json, sizeof json);
+            if (want == 1) CHECK2(yexp_row_required(r), "required in the page and in the table", what);
+            else if (want == 2) CHECK2(!yexp_row_required(r) && !r->def, "no default in the page and in the table", what);
+            else CHECK2(want == 3 && r->def && json_equal_text(json, r->def), "the page's default is the table's", what);
+            checked++;
+        }
+    }
+    /* every row version 2 adds is in 3.17, or in the list above */
+    for (i = 0; i < n2; i++) {
+        const yexp_row* r = &rows2[i];
+        const yexp_row* r1 = find_row(rows1, n1, yexp_section_name(r->section), r->kinds, r->key);
+        bool listed = seen[i] != 0;
+        if (r1 && r1->kinds == r->kinds) {
+            /* version 1's row: the same in version 2, but for part 3's changes */
+            bool same = r1->type == r->type && ((r1->def == NULL) == (r->def == NULL)) && (!r->def || !strcmp(r1->def, r->def)) &&
+                        r1->flags == r->flags && ((r1->values == NULL) == (r->values == NULL)) && (!r->values || !strcmp(r1->values, r->values));
+            if (!same) {
+                bool known = (!strcmp(r->key, "visible") && r->flags == (r1->flags | 0x10u)) ||
+                             (!strcmp(r->key, "units") && !strcmp(r->values, "px=0,deg=1,cm=2"));
+                CHECK2(known, "a version 1 row changed only as part 3 says", r->key);
+            }
+            continue;
+        }
+        for (k = 0; k < (int)(sizeof allow / sizeof allow[0]) && !listed; k++)
+            if (!strcmp(allow[k].sect, yexp_section_name(r->section)) && allow[k].kinds == r->kinds && !strcmp(allow[k].key, r->key)) listed = true;
+        CHECK2(listed, "a version 2 row is in 3.17", r->key);
+    }
+    /* and the other way: version 1's rows are all in version 2 */
+    for (i = 0; i < n1; i++) {
+        const yexp_row* r1 = &rows1[i];
+        bool found = find_row(rows2, n2, yexp_section_name(r1->section), r1->kinds, r1->key) != NULL;
+        CHECK2(found, "a version 1 row is in version 2", r1->key);
+    }
+    CHECK(checked >= 70, "3.17's rows read");
+    printf("  defaults table: %d keys of 3.17 against yexp_defaults(2)\n", checked);
+    free(seen);
+    free(doc);
 }
 
 /* --- numbers (D2) ------------------------------------------------------- */
@@ -1120,6 +1430,97 @@ static void run_review(void) {
     }
 }
 
+/* --- version 2: the host, the lookups, the spellings --------------------- */
+
+#define V2H "{\"format\":\"ysp-experiment\",\"version\":2,"
+
+static void run_v2(void) {
+    static yexp_report r;
+    yjs_arena a;
+    yexp_def* d = NULL;
+    /* sigrole(): run when the file has signal roles, recorded either way */
+    {
+        const char* doc = V2H "\"roles\":{\"not_on_rig\":{\"type\":\"scalar\",\"units\":\"device\"}},\"trials\":{\"t\":{}},\"timeline\":[{\"name\":\"m\",\"trial\":\"t\"}]}";
+        const char* none = V2H "\"trials\":{\"t\":{}},\"timeline\":[{\"name\":\"m\",\"trial\":\"t\"}]}";
+        yexp_host h;
+        CHECK(load_rc(doc, &g_host, &r) == YEXP_ERR_REFUSED && r.n_diags && strstr(r.diags[0].msg, "no adapter"), "sigrole() refuses a role the rig lacks");
+        CHECK((r.run & YEXP_CHECK_SIGROLES) != 0, "and it is recorded as run");
+        memset(&h, 0, sizeof h);
+        h.entry = st_entry;
+        CHECK(load_rc(doc, &h, &r) == YEXP_OK && (r.skipped & YEXP_CHECK_SIGROLES) && !(r.run & YEXP_CHECK_SIGROLES), "no sigrole(): skipped (G18)");
+        CHECK(load_rc(none, &g_host, &r) == YEXP_OK && !(r.run & YEXP_CHECK_SIGROLES) && !(r.skipped & YEXP_CHECK_SIGROLES), "no signal roles: neither bit");
+    }
+    /* the lookups by name, and a version 2 file's migrated bytes are its own */
+    {
+        char path[512];
+        size_t n = 0;
+        char* text;
+        snprintf(path, sizeof path, "%s/good/v2_bimanual.json", g_corpus);
+        text = read_file(path, &n);
+        CHECK(text != NULL, "the bimanual example");
+        if (text) {
+            yjs_arena_init_heap(&a, 0);
+            if (yexp_load(&a, text, n, &g_host, &d, &r) == YEXP_OK) {
+                const char* b1;
+                const char* b2;
+                size_t n1, n2;
+                uint8_t i1[32], i2[32];
+                const yexp_template* reach = &d->templates[0];
+                CHECK(yexp_sigrole_get(d, "left") && yexp_sigrole_get(d, "left")->lanes == 2, "yexp_sigrole_get()");
+                CHECK(!yexp_sigrole_get(d, "dot") && !yexp_sigrole_get(NULL, "left"), "yexp_sigrole_get() of nothing");
+                CHECK(yexp_control_get(d, NULL, "cursor") && yexp_control_get(d, NULL, "cursor")->shared, "a top-level control");
+                CHECK(yexp_control_get(d, reach, "arrived") && !yexp_control_get(d, NULL, "arrived"), "a template's control, only through it");
+                CHECK(yexp_control_get(d, reach, "cursor") == yexp_control_get(d, NULL, "cursor"), "a template sees the top-level controls");
+                CHECK(reach->uses_top && reach->uses_top[0] == 1, "the reach template names the cursor");
+                CHECK(yexp_canonical(d, &a, &b1, &n1, i1) == YEXP_OK && yexp_migrated(d, &a, &b2, &n2, i2) == YEXP_OK && n1 == n2 && !memcmp(b1, b2, n1) && !memcmp(i1, i2, 32),
+                      "a version 2 file migrates to itself");
+                CHECK(yexp_migrated(NULL, &a, &b2, &n2, i2) == YEXP_ERR_ARG, "yexp_migrated() of nothing");
+            } else {
+                CHECK2(0, "the bimanual example loads", r.n_diags ? r.diags[0].msg : "");
+            }
+            yjs_arena_free(&a);
+            free(text);
+        }
+    }
+    /* one meaning, one ID: a step's single target, a transform at its default, a key's default */
+    {
+#define ST_DOC(x) V2H "\"roles\":{\"h\":{\"type\":\"position2d\",\"units\":\"display_px\"}},\"stimuli\":{\"s\":{\"kind\":\"shape\"}},\"trials\":{\"t\":{\"controls\":{\"c\":{\"control\":\"cursor\",\"role\":\"h\"" x "}},\"states\":[{\"name\":\"a\",\"steps\":[{\"on\":\"s\"}]}]}},\"timeline\":[{\"name\":\"m\",\"trial\":\"t\"}]}"
+        static const char* const tr[] = { ST_DOC(""), ST_DOC(",\"transform\":\"identity\""), ST_DOC(",\"about\":[0,0]"), ST_DOC(",\"about\":[0.0,-0]") };
+        static const char* const rot[] = { ST_DOC(",\"transform\":{\"rotation_deg\":30}"), ST_DOC(",\"transform\":{\"rotation_deg\":30.0}"), ST_DOC(",\"transform\":{\"rotation_deg\":3e1}") };
+        uint8_t x[32], y[32];
+        one_spelling(tr, 4, "a cursor's keys at their defaults");
+        one_spelling(rot, 3, "a rotation's spellings");
+        id_roundtrip(ST_DOC(""), x);
+        id_roundtrip(ST_DOC(",\"transform\":{\"rotation_deg\":0}"), y);
+        CHECK(memcmp(x, y, 32) != 0, "a rotation of 0 is not \"identity\": another node");
+    }
+    /* several errors in one pass: three refused names in one template */
+    {
+        const char* doc = V2H "\"roles\":{\"h\":{\"type\":\"position2d\",\"units\":\"display_px\"}},\"stimuli\":{\"s\":{\"kind\":\"shape\"}},"
+                          "\"trials\":{\"t\":{\"controls\":{\"a\":{\"control\":\"region\",\"of\":\"h\",\"radius\":0},\"b\":{\"control\":\"peak\",\"of\":\"zz\"}},"
+                          "\"states\":[{\"name\":\"x\",\"exits\":[{\"after_s\":0,\"to\":\"y\"}]}]}},\"timeline\":[{\"name\":\"m\",\"trial\":\"t\"}]}";
+        CHECK(load_rc(doc, NULL, &r) == YEXP_ERR_REFUSED && r.n_errors == 4, "four errors collected in one pass");
+    }
+    /* a version 1 file meets version 2's keys as a version message */
+    {
+        const char* doc = XH "\"roles\":{},\"trials\":{\"t\":{}}," XT;
+        CHECK(load_rc(doc, NULL, &r) == YEXP_ERR_REFUSED && r.n_diags && strstr(r.diags[0].msg, "unknown key 'roles'"), "version 1 does not know roles");
+    }
+    /* many states in a chain: the cycle search stays linear */
+    {
+        size_t cap = 1u << 20, at = 0;
+        char* doc = (char*)malloc(cap);
+        int i;
+        if (!doc) abort();
+        at += (size_t)snprintf(doc + at, cap - at, V2H "\"trials\":{\"t\":{\"states\":[");
+        for (i = 0; i < 4096; i++) at += (size_t)snprintf(doc + at, cap - at, "%s{\"name\":\"s%d\",\"exits\":[{\"to\":\"%s%d\"}]}", i ? "," : "", i, i + 1 < 4096 ? "s" : "end", i + 1 < 4096 ? i + 1 : 0);
+        /* the last state's exit goes to "end0", which no state has */
+        at += (size_t)snprintf(doc + at, cap - at, "]}},\"timeline\":[{\"name\":\"m\",\"trial\":\"t\"}]}");
+        CHECK(load_rc(doc, NULL, &r) == YEXP_ERR_REFUSED && r.n_errors == 1 && strstr(r.diags[0].msg, "end0"), "4096 states: one dangling name, in the budget");
+        free(doc);
+    }
+}
+
 /* --- arena -------------------------------------------------------------- */
 
 static void run_arena(void) {
@@ -1127,13 +1528,16 @@ static void run_arena(void) {
     size_t n = 0;
     char path[512];
     char* text;
-    static uint64_t mem[1 << 16];
+    static uint64_t mem[1 << 17];
     static yexp_report r;
     size_t cap;
     int ok = 0, nomem = 0;
-    snprintf(path, sizeof path, "%s/good/2afc.json", g_corpus);
+    int file;
+    for (file = 0; file < 2; file++) {
+    ok = nomem = 0;
+    snprintf(path, sizeof path, "%s/good/%s", g_corpus, file ? "v2_bimanual.json" : "2afc.json");
     text = read_file(path, &n);
-    CHECK(text != NULL, "the 2afc example");
+    CHECK(text != NULL, "the 2afc and bimanual examples");
     if (!text) return;
     for (cap = 8; cap < sizeof mem; cap += cap / 8 + 1) {
         yjs_arena a;
@@ -1147,6 +1551,7 @@ static void run_arena(void) {
     }
     CHECK(ok > 0 && nomem > 0, "both outcomes seen");
     free(text);
+    }
 }
 
 /* --- SHA-256 ------------------------------------------------------------ */
@@ -1200,8 +1605,10 @@ int main(void) {
     run_numbers();
     run_review();
     run_host();
+    run_v2();
     run_arena();
     run_defaults();
+    run_defaults_page();
     run_corpus();
     if (g_failures) {
         fprintf(stderr, "experiment_test: %d failure(s) in %d checks\n", g_failures, g_checks);

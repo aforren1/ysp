@@ -271,8 +271,16 @@ static void test_opaque(void) {
         CHECK(rc == 0 && t.definition == 0 && t.n_texts == 0 && !err[0], "opaque %d: rc %d, def %d", i, rc, t.definition);
         ypt_texts_free(&t);
     }
-    rc = derive("{\"format\": \"ysp-experiment\", \"version\": 2}", &t, err, sizeof err);
-    CHECK(rc == YPAK_ERR_FORMAT && strstr(err, "version is 2; this ypak lays out the texts of version 1"), "version 2: %s", err);
+    rc = derive("{\"format\": \"ysp-experiment\", \"version\": 3}", &t, err, sizeof err);
+    CHECK(rc == YPAK_ERR_FORMAT && strstr(err, "version is 3; this ypak lays out the texts of versions 1 and 2"), "version 3: %s", err);
+    ypt_texts_free(&t);
+    rc = derive("{\"format\": \"ysp-experiment\", \"version\": 0}", &t, err, sizeof err);
+    CHECK(rc == YPAK_ERR_FORMAT && strstr(err, "version is 0;"), "version 0: %s", err);
+    ypt_texts_free(&t);
+    /* version 2 (ysp/experiment.h 0.3.0): its text stimuli are version 1's */
+    rc = derive("{\"format\": \"ysp-experiment\", \"version\": 2, \"stimuli\": {\"w\": {\"kind\": \"text\", \"font\": \"f.ttf\", \"size\": 20, \"text\": \"go\"}}}", &t, err, sizeof err);
+    CHECK(rc == 0 && t.definition == 1 && t.n_texts == 1 && !strcmp(t.texts[0].text, "go"), "version 2: rc %d, %s", rc, err);
+    ypt_texts_free(&t);
     rc = derive("{\"format\": \"ysp-experiment\", \"version\": 1,\n \"stimuli\": {},}", &t, err, sizeof err);
     CHECK(rc == YPAK_ERR_FORMAT && strstr(err, "names \"ysp-experiment\" but is not JSON: line 2, column") && !t.mem_, "a broken definition: %s", err);
     rc = derive("{\"format\": \"ysp-experiment\"}", &t, err, sizeof err);

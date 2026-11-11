@@ -2328,6 +2328,10 @@ int pl_load(pl_player* p, const pl_args* a) {
         pl_fail(p, "the definition is refused (%d errors):\n%s", p->report.n_errors, rc == YEXP_ERR_NOMEM ? "out of memory" : buf);
         return -1;
     }
+    if (p->def->format_version > PL_FORMAT_VERSION) {
+        pl_fail(p, "the definition is format version %d; this player lowers version %d, and the version 2 lowering is not built yet", p->def->format_version, PL_FORMAT_VERSION);
+        return -1;
+    }
     {
         uint8_t id[32];
         if (yexp_canonical(p->def, &p->arena, &p->canon, &p->canon_n, id) != YEXP_OK) { pl_fail(p, "cannot write the canonical form"); return -1; }

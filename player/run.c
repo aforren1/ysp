@@ -313,7 +313,7 @@ static int pl_dataset_open(pl_player* p) {
     snprintf(seedbuf, sizeof seedbuf, "%llu", (unsigned long long)p->seed);
     yjs_set(&a, s, "seed", yjs_new_stringz(&a, seedbuf));
     yjs_set(&a, s, "player_version", yjs_new_stringz(&a, PL_VERSION_STRING));
-    yjs_set(&a, s, "format_version", yjs_new_int(&a, YEXP_FORMAT_VERSION));
+    yjs_set(&a, s, "format_version", yjs_new_int(&a, PL_FORMAT_VERSION));
     yjs_set(&a, s, "headers", pl_header_versions(p, &a));
     for (i = 0; i < p->def->n_fields; i++) {
         pl_val_text(&p->field_values[i], p->text_buf, p->max_text + 1);

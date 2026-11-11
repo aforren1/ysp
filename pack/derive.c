@@ -411,8 +411,9 @@ int ypt_derive_texts(const void* def, size_t n, ypt_table_fn table, void* ctx, y
     fmt = yjs_get(root, "format");
     if (!fmt || fmt->type != YJS_STRING || strcmp(fmt->u.s, "ysp-experiment")) return 0;
     ver = yjs_get(root, "version");
-    if (!ver || !(ver->flags & YJS_NUM_I64) || ver->i != 1) {
-        rc = dfail(&d, YPAK_ERR_FORMAT, "the definition's version is %s; this ypak lays out the texts of version 1",
+    /* version 2 adds no text key: its text stimuli are version 1's (part 3) */
+    if (!ver || !(ver->flags & YJS_NUM_I64) || ver->i < 1 || ver->i > 2) {
+        rc = dfail(&d, YPAK_ERR_FORMAT, "the definition's version is %s; this ypak lays out the texts of versions 1 and 2",
                    ver && ver->type == YJS_NUMBER ? ver->u.s : "missing or not a number");
         ypt_texts_free(out);
         return rc;

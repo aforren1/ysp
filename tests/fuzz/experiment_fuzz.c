@@ -5,7 +5,8 @@
  * host on the rest, so `$name` reaches levels and the second pass runs. Every input must return without a sanitizer report. A
  * refusal must carry messages, each one line; a load must give a form that
  * dumps, canonical bytes that load again to the same form, the same bytes
- * and the same ID. Then the input runs again in a small arena with a host
+ * and the same ID, and for a version 1 file migrated bytes (format 3.2) that
+ * load as version 2 and give themselves back. Then the input runs again in a small arena with a host
  * that misbehaves (tests/adapt/experiment_host.h), for the report's bounds
  * and for no sanitizer report. A NOMEM in the first, large arena is a bug.
  *
@@ -43,7 +44,7 @@ static uint64_t g_mem[ARENA_BYTES / 8];
 static uint64_t g_mem2[ARENA_BYTES / 8];
 static uint64_t g_mem3[(1u << 20) / 8];
 static yexp_report g_r, g_r2;
-static long long g_loaded, g_refused, g_nomem, g_warned;
+static long long g_loaded, g_refused, g_nomem, g_warned, g_migrated, g_loaded2;
 
 static void bad(const char* what, const char* text, size_t n) {
     fprintf(stderr, "experiment_fuzz: %s\ninput (%lu bytes): %.*s\n", what, (unsigned long)n, (int)(n > 4000 ? 4000 : n), text);
@@ -104,6 +105,25 @@ static void run_one(const char* text, size_t n) {
         if (n1 != n2 || memcmp(b1, b2, n1) != 0 || memcmp(id1, id2, 32) != 0) bad("the canonical bytes moved", text, n);
         free(dump1);
         free(dump2);
+        if (d->format_version == 1) {
+            /* format 3.2: a version 1 file's migration loads as version 2 and
+             * gives itself back */
+            const char* bm;
+            const char* bm2;
+            size_t nm, nm2;
+            yexp_def* d3 = NULL;
+            if (yexp_migrated(d, &a, &bm, &nm, NULL) != YEXP_OK) bad("migrated bytes", text, n);
+            yjs_arena_init(&a2, g_mem2, sizeof g_mem2);
+            rc = yexp_load(&a2, bm, nm, host, &d3, &g_r2);
+            if (rc != YEXP_OK) {
+                fprintf(stderr, "migrated reload failed: %s\nmigrated: %.2000s\n", g_r2.n_diags ? g_r2.diags[0].msg : "", bm);
+                bad("the migrated bytes did not load as version 2", text, n);
+            }
+            if (yexp_canonical(d3, &a2, &bm2, &nm2, NULL) != YEXP_OK || nm != nm2 || memcmp(bm, bm2, nm) != 0) bad("the migrated bytes moved", text, n);
+            g_migrated++;
+        } else {
+            g_loaded2++;
+        }
     }
 }
 
@@ -176,11 +196,18 @@ static void words_init(void) {
         "choice", "lua", "script", "until", "states", "exits", "flags", "flag", "recenter", "signal", "when", "note",
         "participant", "true", "false", "correct", "wrong", "timeout", "left", "right", "a", "b", "t.pstb", "stroop.pstb",
         "gabor.contrast", "fix.w", "s.nope", "nope.x", "stair", "in", "out", "both", "keyboard", "no_response", "jitter soa_s uniform 0.1 0.2",
-        "var x choice a b", "practice 2", "reps 2", "order random", NULL
+        "var x choice a b", "practice 2", "reps 2", "order random",
+        /* version 2 */
+        "hand", "hand.x", "hand.y", "hand.z", "cur", "cur.x", "near", "near.x", "cursor", "cursor.x", "goal", "end", "response", "move",
+        "$late", "$aim_x", "$aim_from_y", "$aim_deg", "$aim", "$phase_x", "$perturb", "$rotation_deg", "$feedback", "identity",
+        "rotation_deg", "mirror_deg", "uniform", "walk2d", "hit", "time", "above", "then", "else", "in", "over", "click_in",
+        "assign_roles", "signals", "top_speed", "past_target", "at_start", "moved", "arrived", "a", "b", "go", "back", NULL
     };
-    int n = 0, i;
-    const yexp_row* rows = yexp_defaults(1, &n);
+    int n = 0, i, ver;
+    const yexp_row* rows;
     for (i = 0; extra[i]; i++) word_add(extra[i]);
+    for (ver = 1; ver <= 2; ver++) {
+    rows = yexp_defaults(ver, &n);
     for (i = 0; i < n; i++) {
         word_add(rows[i].key);
         if (rows[i].values) {
@@ -199,6 +226,7 @@ static void words_init(void) {
                 p = end ? end + 1 : NULL;
             }
         }
+    }
     }
 }
 
@@ -408,8 +436,8 @@ int main(int argc, char** argv) {
         run_one(buf, n);
         run_hostile(buf, n);
     }
-    printf("experiment_fuzz: %ld inputs: %lld loaded, %lld refused, %lld out of memory, %lld warnings\n",
-           iters + g_nseeds, g_loaded, g_refused, g_nomem, g_warned);
+    printf("experiment_fuzz: %ld inputs: %lld loaded (%lld version 1, migrated; %lld version 2), %lld refused, %lld out of memory, %lld warnings\n",
+           iters + g_nseeds, g_loaded, g_migrated, g_loaded2, g_refused, g_nomem, g_warned);
     return 0;
 }
 #elif defined(YSP_FUZZ_REPLAY)

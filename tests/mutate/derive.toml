@@ -229,8 +229,8 @@ replace = "if (!fmt || fmt->type != YJS_STRING) return 0;"
 id = "d-28"
 name = "a later version taken"
 test = "derive"
-why = "Version 2 may have texts this tool cannot see."
-find = "ver->i != 1)"
+why = "Version 3 may have texts this tool cannot see."
+find = "ver->i < 1 || ver->i > 2)"
 replace = "ver->i < 1)"
 
 [[mutant]]

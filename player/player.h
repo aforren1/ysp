@@ -44,6 +44,10 @@ extern "C" {
 #endif
 
 #define PL_VERSION_STRING "0.2.0"
+/* The newest format version this player lowers; ysp/experiment.h reads
+ * version 2 (0.3.0), whose lowering is the next task, so a version 2
+ * definition is refused by name. session.json's format_version is this. */
+#define PL_FORMAT_VERSION 1
 
 enum {
     PL_BASE_TRIAL     = 1,   /* the timeline base a trial runs on            */

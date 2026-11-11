@@ -237,7 +237,10 @@ These are not lowered, and the player refuses each by name: `aep` methods,
 `artwork` stimuli, `video` stimuli, and a `quest` with more than one
 stimulus axis (`$level` and `method_value` carry one value; the fuzz target
 found the update reading past it, 2026-11-10). No worked example needs them, and no
-C program gives a comparison for them. In `--sim` a response's `trigger` goes
+C program gives a comparison for them. A definition of format version 2 is
+refused by name too (2026-11-11): ysp/experiment.h 0.3.0 reads it, and its
+lowering is the next task. `session.json`'s `format_version` is the version
+the player lowers (`PL_FORMAT_VERSION`, 1), not the newest the loader reads. In `--sim` a response's `trigger` goes
 out from the frame loop, as for a keyboard role; a real run's device role
 has the rule.
 
