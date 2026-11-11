@@ -190,7 +190,7 @@ signal choices`, `uniform`, `walk2d`, and the template's and the steps'
 new keys (steps: bit 11 `until`, 12 `recenter`, 13 `flag`). The table is
 format 3.17's: `tests/adapt/experiment_test.c` reads 3.17 from the format
 page and compares every row, and requires every row that version 2 adds
-to be in 3.17 or in its list of eight with a reason (a form's own key,
+to be in 3.17 or in its list of nine with a reason (a form's own key,
 a step's verb, the signal response's keys "as 2.6", `over`'s `outcome`).
 
 ## Explanation: decisions
@@ -317,6 +317,37 @@ reading below and marks it in the code as "finding Fn". The lines are of
 
 ## Results
 
+### v0.3.0: format version 2 (2026-11-11)
+
+Linux desktop, gcc 12.2, Release and the `sanitizers` preset (ASan and UBSan,
+built and run under `setarch -R`), on the corpus in `tests/experiment/`.
+
+| Check | Result |
+|---|---|
+| `tests/adapt/experiment_test.c` | 4,380 checks pass, as C and as C++17, Release and ASan with UBSan. 20 corpus files load with the test host and with none, each equal to its golden dump, its canonical bytes loading back to the same form, bytes and ID |
+| Version 1 identity | The 13 version 1 golden dumps of v0.2.0 and 208 of its 209 refusal messages are unchanged; `version_newer` is now version 3 (version 2 is read now). Every version 1 file's ID is the same. 14 version 1 files (the 13 and `visible_key`, new) give migrated bytes (3.2) equal to their bytes with `"version": 2` and no `visible`, which load as version 2 and give themselves back |
+| Version 2 corpus | The two worked examples of 3.18 (`v2_visuomotor` with its table `targets.pstb` in the test host and the two `"endpoint"` warnings that 3.18 expects, in its `.warn` file; `v2_bimanual`), and the valid but unusual shapes: `v2_retry` (a cycle with a waiting exit, `max_visits` and `over`, shared exits in several states, an instant chain through three states, a state with no exits in the middle, `until` and `after_s` in one state, a flag read in a later state, `requeue_outcomes`), `v2_forms` (nested `when`, a `when` in a column, `above`, top-level controls, a region on a signal, `recenter`, a frame trace, rotation and mirror by lookup, `uniform` and an events template with `until`), `v2_instant_shared`, `v2_requeue_warn` (its warning) |
+| Negative corpus | 164 version 2 files, one per refusal of 3.16 and of the loader's rules, each against its message, line and column (373 in all) |
+| Defaults | 484 keys of `yexp_defaults(2)` written at their default give the ID of the key left out (version 1: 462, as before); 75 keys of 3.17 read from the format page against the table; every row version 2 adds is in 3.17 but nine with a reason |
+| Mutants | `tests/mutate/experiment.toml`: 266 of 266 as expected: 265 killed, 1 by the time limit (r-44, as before). 95 are new (v-01 to v-95), one per version 2 branch; 11 of version 1's anchors follow the code. `derive.toml`: 82 of 82 |
+| Compile checks | C99, C11 and C++17, warnings as errors, each loading a version 2 file too; `compile_windows_macros_c` and `_cxx` pass |
+| Full ctest (Linux, pack tool, layout and player, `DISPLAY` unset) | Release: 122 of 122. Sanitizers: 120 of 121; `test_player_shapes` fails 4 `--allow-below-tier` cases with exit 1 for 2: LeakSanitizer reports the `--field` name that `player/main.c:89` allocates and the early return leaks. `player/main.c` and the test are unchanged from b838bca, so the failure is not this change's |
+| Player data (`player_test.py`, 44 cases, and `compare.py`, from scratch folders, against b838bca's build) | 439 CSV files and 717 files in all identical. 94 `session.json` files differ in `headers.experiment` (0.3.0) and `pack_id` only, 4 of them also in `rig_profile_sha256` (the test writes its rig profile again, with its date); every `experiment_id` is the same |
+| Pack IDs | 110 version 1 packs: every entry but the manifest byte-identical (223 entries); each manifest, with `ypak 0.8.0` and `ysp/experiment.h 0.2.0` put back, is byte-identical to b838bca's, so its SHA-256, the pack ID, is too |
+| Pack tool | Both worked examples build into packs (the visuomotor one with its table, warning as 3.18 says); `test_pack_tool` builds a version 2 definition and checks its entry is the canonical bytes |
+| Player | A version 2 pack is refused by name, exit 1, no data: "the definition is format version 2; this player lowers version 1" |
+| Fuzzing (`tests/fuzz/experiment_fuzz.c`, self-driven; seeds: every good file, the version 2 ones weighted, and the 164 version 2 refusals) | 20,002,560 inputs under ASan and UBSan (`setarch -R`, 8 processes, 21 minutes), each in a 32 MiB arena with the test host and again in a small arena with a misbehaving host: 1,806,207 loaded and round-tripped (979,919 version 1, whose migrated bytes loaded as version 2 and gave themselves back; 826,288 version 2), 18,196,353 refused, 4,292,217 runs out of memory in the small arena, no report. The target now also checks `yexp_migrated()` and reads the version 2 table's keys as words |
+| Coverage of the fuzz target (gcov, `-O0`, 500,320 inputs, 45,387 loads of which 20,739 version 2) | Header: 96.99% of 4,224 lines; 97.45% of 5,092 branches executed, 86.41% taken. Every version 2 function runs, on loads that succeed as well (`yexp_migrated()` 24,648 times). Not reached in version 2's code: a few type refusals that the row's own check takes first (a `ref` of another type, a box or a sines lane that is no object of the right shape, `above` outside a test with a `note`), a point inside a lookup, and the NOMEM returns |
+
+Cost: a version 1 file takes about 1.6 KB more arena than in v0.2.0 (RDK
+90,400 bytes, was 88,762; Stroop 116,336, was 115,906): the context holds
+the version 2 table's defaults and the template's names. The visuomotor
+example takes 137,920 bytes for 4,005 bytes of source and the bimanual one
+174,832 for 5,670, measured as the smallest fixed arena that loads, no host.
+No timing claim: a load is not on the frame path.
+
+### v0.1.0 to v0.2.0
+
 On 2026-11-09, Linux desktop, gcc 12.2, on the corpus in `tests/experiment/`.
 
 | Check | Result |
@@ -356,3 +387,8 @@ another job was using the machine during the run.
   against real tables and a real rig profile.
 - No run on macOS, Windows or emcc. The unit test is not in the emcc CI
   list because it reads files; the compile check is.
+- Version 2 is read, not lowered: no ysp/sig.h graph, timeline op tables per
+  state, selector channels, exit tests, traces or state rows exist yet. The
+  player refuses a version 2 definition by name. That is the next task.
+- No host has `sigrole()`: the rig profile has no adapter block (G18).
+- G14 to G20 of the format page are open; none is needed to read the file.
