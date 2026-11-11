@@ -82,7 +82,13 @@
 
 /* The distribution's version tracks screen.h's, with a fourth number for a
  * change of the binding alone (docs/bindings.md, ysp-vis). */
-#define YV_VERSION YSCR_VERSION_STRING ".1"   /* .1: ysp/gfx.h 0.20.0 (YGFX_CM), a change of gfx.h alone */
+/* .1: ysp/gfx.h 0.20.0 (YGFX_CM), a change of gfx.h alone. The fourth
+ * number belongs to this screen.h; a new screen.h drops it, so the build
+ * stops here until someone does (the review of 0.19.0.1). */
+#if YSCR_VERSION_MAJOR != 0 || YSCR_VERSION_MINOR != 19 || YSCR_VERSION_PATCH != 0
+#error "ysp-vis: YV_VERSION's .1 is for ysp/screen.h 0.19.0; screen.h moved: drop it (docs/bindings.md, ysp-vis)"
+#endif
+#define YV_VERSION YSCR_VERSION_STRING ".1"
 
 #define YV_RECORDS 4096   /* flip records kept between records() calls */
 #define YV_EVENTS  1024   /* input events kept between poll() calls    */
