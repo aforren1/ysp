@@ -118,7 +118,102 @@ static void list_dir(const char* dir, const char* suffix, name_list* out) {
     (void)sl;
 }
 
-static int g_tot_loaded;
+static int g_tot_loaded, g_tot_migrated;
+
+/* A good file's warnings: none, or the lines of its .warn file in order
+ * ("line:column: message"), as format 3.18 says for the visuomotor lookups. */
+static void check_warnings(const char* name, const yexp_report* r) {
+    char path[512], got[8192];
+    char* want;
+    size_t at = 0, wn = 0;
+    int i;
+    snprintf(path, sizeof path, "%s/good/%s", g_corpus, name);
+    { char* dot = strrchr(path, '.'); if (dot) strcpy(dot, ".warn"); }
+    got[0] = 0;
+    for (i = 0; i < r->n_diags; i++)
+        if (r->diags[i].severity == YEXP_WARNING)
+            at += (size_t)snprintf(got + at, sizeof got - at, "%u:%u: %s\n", r->diags[i].line, r->diags[i].column, r->diags[i].msg);
+    if (getenv("YEXP_WRITE_GOLDEN") && r->n_warnings) {
+        FILE* f = fopen(path, "wb");
+        if (!f) abort();
+        fwrite(got, 1, strlen(got), f);
+        fclose(f);
+    }
+    want = read_file(path, &wn);
+    if (!want) {
+        CHECK2(r->n_warnings == 0, "no warnings in the corpus", r->n_diags ? r->diags[0].msg : name);
+        return;
+    }
+    CHECK2(!strcmp(want, got), "the warnings are the .warn file's", got);
+    free(want);
+}
+
+/* Two canonical trees: a version 1 file's and its migration (format 3.2):
+ * the same but "version" 2 and no stimulus `visible`. */
+static int migrated_same(const yjs_value* v1, const yjs_value* v2, int depth, int in_stimuli) {
+    size_t i, k;
+    if (v1->type != v2->type) return 0;
+    switch (v1->type) {
+    case YJS_OBJECT:
+        for (i = 0, k = 0; i < v1->n; i++) {
+            const yjs_member* m = &v1->u.members[i];
+            if (depth == 2 && in_stimuli && !strcmp(m->key, "visible")) continue;
+            if (k >= v2->n || strcmp(m->key, v2->u.members[k].key)) return 0;
+            if (depth == 0 && !strcmp(m->key, "version")) {
+                if (!(m->value->flags & YJS_NUM_I64) || m->value->i != 1 || !(v2->u.members[k].value->flags & YJS_NUM_I64) || v2->u.members[k].value->i != 2) return 0;
+            } else if (!migrated_same(m->value, v2->u.members[k].value, depth + 1, depth == 0 ? !strcmp(m->key, "stimuli") : in_stimuli)) {
+                return 0;
+            }
+            k++;
+        }
+        return k == v2->n;
+    case YJS_ARRAY:
+        if (v1->n != v2->n) return 0;
+        for (i = 0; i < v1->n; i++)
+            if (!migrated_same(v1->u.items[i], v2->u.items[i], depth + 1, 0)) return 0;
+        return 1;
+    case YJS_NUMBER: case YJS_STRING:
+        return v1->n == v2->n && !memcmp(v1->u.s, v2->u.s, v1->n);
+    default:
+        return 1;
+    }
+}
+
+/* Format 3.2: a version 1 file's migrated bytes are its bytes with "version"
+ * 2 and no `visible`; they load as version 2, give themselves back, and the
+ * stored ID stays the version 1 bytes' (D12). */
+static void check_migrated(const char* name, const yexp_def* d, yjs_arena* a) {
+    const char* b1;
+    const char* bm;
+    const char* bm2;
+    size_t n1, nm, nm2;
+    uint8_t id1[32], idm[32], idm2[32];
+    yjs_arena a2, a3;
+    yjs_value* j1;
+    yjs_value* jm;
+    yjs_error je;
+    yexp_def* d2 = NULL;
+    static yexp_report r;
+    CHECK2(yexp_canonical(d, a, &b1, &n1, id1) == YEXP_OK, "canonical", name);
+    CHECK2(yexp_migrated(d, a, &bm, &nm, idm) == YEXP_OK, "migrated bytes", name);
+    CHECK2(memcmp(id1, idm, 32) != 0, "the migrated bytes have their own SHA-256", name);
+    yjs_arena_init_heap(&a3, 0);
+    if (yjs_parse(&a3, b1, n1, NULL, &j1, &je) == YJS_OK && yjs_parse(&a3, bm, nm, NULL, &jm, &je) == YJS_OK)
+        CHECK2(migrated_same(j1, jm, 0, 0), "migrated: version 2 and no visible, the rest the same", name);
+    else
+        CHECK2(0, "migrated bytes parse", name);
+    yjs_arena_free(&a3);
+    yjs_arena_init_heap(&a2, 0);
+    if (yexp_load(&a2, bm, nm, &g_host, &d2, &r) != YEXP_OK) {
+        fail_(__LINE__, "the migrated bytes load as version 2", r.n_diags ? r.diags[0].msg : name);
+    } else {
+        CHECK2(d2->format_version == 2, "the migrated file is version 2", name);
+        CHECK2(yexp_canonical(d2, &a2, &bm2, &nm2, idm2) == YEXP_OK && nm2 == nm && !memcmp(bm, bm2, nm), "the migrated bytes are version 2's canonical bytes", name);
+        CHECK2(!memcmp(idm, idm2, 32), "and their ID", name);
+        g_tot_migrated++;
+    }
+    yjs_arena_free(&a2);
+}
 
 /* One good file: golden, host and no host, round trip, canonical twice. */
 static void check_good(const char* name) {
@@ -146,9 +241,10 @@ static void check_good(const char* name) {
     CHECK2(rc == YEXP_OK, "a good file loads with the host", r.n_diags ? r.diags[0].msg : name);
     if (rc != YEXP_OK) { free(text); yjs_arena_free(&a); return; }
     g_tot_loaded++;
-    CHECK2(r.n_warnings == 0, "no warnings in the corpus", r.n_diags ? r.diags[0].msg : name);
+    check_warnings(name, &r);
     CHECK(r.skipped == 0, "the host ran every check");
-    CHECK(r.run == (YEXP_CHECK_ENTRIES | YEXP_CHECK_COLUMNS | YEXP_CHECK_LEVELS | YEXP_CHECK_ROLES | YEXP_CHECK_PARAMS | YEXP_CHECK_RULES | YEXP_CHECK_OPS), "every check recorded as run");
+    CHECK(r.run == (YEXP_CHECK_ENTRIES | YEXP_CHECK_COLUMNS | YEXP_CHECK_LEVELS | YEXP_CHECK_ROLES | YEXP_CHECK_PARAMS | YEXP_CHECK_RULES | YEXP_CHECK_OPS |
+                    (d->n_sigroles ? YEXP_CHECK_SIGROLES : 0u)), "every check recorded as run");
     dump1 = xd_dump(d);
     /* the golden dump */
     snprintf(gold, sizeof gold, "%s/good/%s", g_corpus, name);
@@ -179,7 +275,8 @@ static void check_good(const char* name) {
         rc = yexp_load(&a3, text, n, NULL, &d3, &r3);
         CHECK2(rc == YEXP_OK, "a good file loads with no host", r3.n_diags ? r3.diags[0].msg : name);
         if (rc == YEXP_OK) {
-            CHECK(r3.run == 0 && r3.skipped == (YEXP_CHECK_ENTRIES | YEXP_CHECK_COLUMNS | YEXP_CHECK_LEVELS | YEXP_CHECK_ROLES | YEXP_CHECK_PARAMS | YEXP_CHECK_RULES | YEXP_CHECK_OPS), "skip bits with no host");
+            CHECK(r3.run == 0 && r3.skipped == (YEXP_CHECK_ENTRIES | YEXP_CHECK_COLUMNS | YEXP_CHECK_LEVELS | YEXP_CHECK_ROLES | YEXP_CHECK_PARAMS | YEXP_CHECK_RULES | YEXP_CHECK_OPS |
+                                                (d3->n_sigroles ? YEXP_CHECK_SIGROLES : 0u)), "skip bits with no host");
             dump3 = xd_dump(d3);
             CHECK(!strcmp(dump3, dump1), "the form does not depend on the host");
             free(dump3);
@@ -210,6 +307,7 @@ static void check_good(const char* name) {
         }
         yjs_arena_free(&a2);
     }
+    if (d->format_version == 1) check_migrated(name, d, &a);
     free(dump1);
     free(text);
     yjs_arena_free(&a);
@@ -359,7 +457,8 @@ static void run_defaults(void) {
     int n = 0, i, tested = 0;
     const yexp_row* rows = yexp_defaults(1, &n);
     CHECK(rows && n > 300, "the table");
-    CHECK(yexp_defaults(2, &n) == NULL, "no table for a version this header does not read");
+    CHECK(yexp_defaults(3, &n) == NULL && n == 0, "no table for a version this header does not read");
+    CHECK(yexp_defaults(0, &n) == NULL && n == 0, "no table for version 0");
     n = 0;
     rows = yexp_defaults(1, &n);
     for (i = 0; i < n; i++) {
@@ -1108,6 +1207,6 @@ int main(void) {
         fprintf(stderr, "experiment_test: %d failure(s) in %d checks\n", g_failures, g_checks);
         return 1;
     }
-    printf("experiment_test: %d checks, %d files loaded: all passed\n", g_checks, g_tot_loaded);
+    printf("experiment_test: %d checks, %d files loaded, %d migrated: all passed\n", g_checks, g_tot_loaded, g_tot_migrated);
     return 0;
 }

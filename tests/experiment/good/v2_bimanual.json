@@ -1,0 +1,91 @@
+{
+  "format": "ysp-experiment", "version": 2, "name": "bimanual_tracking",
+  "display": { "units": "cm", "background": [0.05, 0.05, 0.05] },
+  "roles": {
+    "left":  { "type": "position2d_relative", "units": "display_cm" },
+    "right": { "type": "position2d_relative", "units": "display_cm" }
+  },
+  "stimuli": {
+    "track_target": { "kind": "shape", "shape": "circle", "w": 1.6, "h": 1.6, "color": [0.35, 0.35, 0.35] },
+    "start_circle": { "kind": "shape", "shape": "circle", "w": 2, "h": 2, "color": [0.35, 0.35, 0.35],
+                      "x": "$aim_from_x", "y": "$aim_from_y" },
+    "reach_target": { "kind": "shape", "shape": "circle", "w": 2, "h": 2, "color": [0.9, 0.9, 0.9],
+                      "x": "$aim_x", "y": "$aim_y", "layer": 1 },
+    "dot":          { "kind": "shape", "shape": "circle", "w": 0.5, "h": 0.5, "color": [1, 1, 1], "layer": 2 }
+  },
+  "controls": {
+    "cursor": { "control": "cursor", "x": "left.x", "y": "right.y", "stimulus": "dot",
+                "transform": { "by": "$perturb", "map": { "none": "identity", "rotation": { "rotation_deg": -90 } } } }
+  },
+  "trials": {
+    "track": {
+      "controls": {
+        "goal":   { "control": "moving_target", "stimulus": "track_target", "from": "move", "ramp_s": 5,
+                    "x": { "amplitudes": [2.31, 2.31, 2.31, 1.76, 1.3, 0.97, 0.73],
+                           "freqs_hz": [0.1, 0.25, 0.55, 0.85, 1.15, 1.55, 2.05], "phases": "$phase_x" },
+                    "y": { "amplitudes": [-2.31, -2.31, -2.31, -1.58, -1.03, -0.81, -0.7],
+                           "freqs_hz": [0.15, 0.35, 0.65, 0.95, 1.45, 1.85, 2.15], "phases": "$phase_y" } },
+        "inside": { "control": "region", "of": "cursor", "center": { "signal": "goal" }, "radius": 0.8, "rate": "frame" },
+        "ready":  { "control": "region", "of": "cursor", "radius": 0.8, "speed_below": 6.5, "rate": "frame" },
+        "frames": { "control": "trace", "of": ["goal", "cursor", "left", "right", "inside"], "rate": "frame",
+                    "from": "move" }
+      },
+      "states": [
+        { "name": "iti",
+          "steps": [{ "on": ["track_target", "dot"] },
+                    { "set": "track_target", "props": { "color": { "when": "inside", "then": [1, 0.85, 0],
+                                                                   "else": [0.35, 0.35, 0.35] } } },
+                    { "wait_s": 1 }] },
+        { "name": "wait", "exits": [{ "on": "ready", "to": "move" }] },
+        { "name": "move", "steps": [{ "wait_s": 46 }] }
+      ]
+    },
+    "reach": {
+      "controls": {
+        "at_start":  { "control": "region", "of": "cursor", "radius": 1, "stay_s": 0.5, "rate": "frame" },
+        "moved":     { "control": "movement", "of": "cursor", "onset": 1, "from": "reach_target",
+                       "origin": ["$aim_from_x", "$aim_from_y"] },
+        "top_speed": { "control": "peak", "of": "cursor", "from": "reach_target" },
+        "arrived":   { "control": "region", "of": "cursor", "center": ["$aim_x", "$aim_y"], "radius": 1,
+                       "stay_s": 1, "speed_below": 6.5, "rate": "frame" },
+        "path":      { "control": "trace", "of": ["cursor"], "from": "reach_target", "to": "arrived" }
+      },
+      "states": [
+        { "name": "begin", "exits": [{ "if": "$first_in_block", "to": "hold_start" }, { "to": "go" }] },
+        { "name": "hold_start", "steps": [{ "on": ["start_circle", "dot"] }],
+          "exits": [{ "on": "at_start", "to": "go" }] },
+        { "name": "go",
+          "steps": [{ "on": ["start_circle", "reach_target", "dot"] },
+                    { "set": "reach_target", "props": { "color": {
+                        "when": "arrived",
+                        "then": { "when": { "signal": "top_speed", "above": 39 }, "then": [1, 0.85, 0], "else": [0.1, 0.35, 1] },
+                        "else": [0.9, 0.9, 0.9] } } }],
+          "exits": [{ "on": "arrived", "to": "end" }] }
+      ],
+      "response": { "choices": [{ "signal": "moved" }], "from": "reach_target" },
+      "columns": {
+        "peak_speed": { "signal": "top_speed" },
+        "fast": { "when": { "signal": "top_speed", "above": 39 }, "then": 1, "else": 0 },
+        "arrived_s": { "time": "arrived", "from": "response" }
+      }
+    }
+  },
+  "timeline": [
+    { "name": "blocks", "data": { "mapping": "split" },
+      "vars": { "phase_x": { "uniform": [-3.141592653589793, 3.141592653589793], "n": 7 },
+                "phase_y": { "uniform": [-3.141592653589793, 3.141592653589793], "n": 7 },
+                "aim": { "walk2d": { "step": 12, "box": [[-10, -10], [10, 10]] } } },
+      "timeline": [
+        { "name": "b0_track", "trial": "track", "rules": ["reps 2"], "vars": { "perturb": "none" } },
+        { "name": "b1_reach", "trial": "reach", "rules": ["reps 30"], "vars": { "perturb": "none" } },
+        { "name": "b2_track", "trial": "track", "rules": ["reps 2"], "vars": { "perturb": "rotation" } },
+        { "name": "b3_reach", "trial": "reach", "rules": ["reps 30"], "vars": { "perturb": "rotation" } },
+        { "name": "b4_track", "trial": "track", "rules": ["reps 2"], "vars": { "perturb": "rotation" } },
+        { "name": "b5_reach", "trial": "reach", "rules": ["reps 30"], "vars": { "perturb": "rotation" } },
+        { "name": "b6_track", "trial": "track", "rules": ["reps 2"], "vars": { "perturb": "rotation" } },
+        { "name": "b7_reach", "trial": "reach", "rules": ["reps 30"], "vars": { "perturb": "rotation" } },
+        { "name": "b8_track", "trial": "track", "rules": ["reps 2"], "vars": { "perturb": "rotation" } },
+        { "name": "b9_track", "trial": "track", "rules": ["reps 2"], "vars": { "perturb": "none" } }
+      ] }
+  ]
+}

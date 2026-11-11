@@ -89,8 +89,63 @@ static void xd_value(xd_buf* b, const yexp_value* v) {
         }
         xd_printf(b, "}");
         break;
+    /* format version 2 */
+    case YEXP_V_SIGNAL:
+        xd_printf(b, "signal(%s", v->str);
+        if (v->i >= 0) xd_printf(b, ".%c", "xyzw"[v->i]);
+        xd_printf(b, " lanes=%u", (unsigned)v->n);
+        if (v->by) { xd_printf(b, " above "); xd_value(b, v->by); }
+        xd_printf(b, ")");
+        break;
+    case YEXP_V_TEST: xd_printf(b, "test(%s)", v->str); break;
+    case YEXP_V_WHEN:
+        xd_printf(b, "when(");
+        xd_value(b, v->by);
+        xd_printf(b, " then ");
+        xd_value(b, &v->items[0]);
+        xd_printf(b, " else ");
+        xd_value(b, &v->items[1]);
+        xd_printf(b, ")");
+        break;
+    case YEXP_V_HIT:
+        xd_printf(b, "hit(%s", v->str);
+        if (v->i >= 0) xd_printf(b, ".%c", "xyzw"[v->i]);
+        xd_printf(b, ")");
+        break;
+    case YEXP_V_TIME: xd_printf(b, "time(%s from %s)", v->str, v->by->str); break;
+    case YEXP_V_TRANSFORM: xd_printf(b, "%s(", v->str); xd_value(b, v->by); xd_printf(b, ")"); break;
+    case YEXP_V_UNIFORM:
+        xd_printf(b, "uniform[");
+        xd_value(b, &v->items[0]);
+        xd_printf(b, ", ");
+        xd_value(b, &v->items[1]);
+        xd_printf(b, ") n=%lld per=%s", (long long)v->i, v->str);
+        break;
+    case YEXP_V_WALK2D:
+        xd_printf(b, "walk2d(step ");
+        xd_value(b, &v->items[0]);
+        xd_printf(b, " box ");
+        for (i = 1; i < 5; i++) { xd_value(b, &v->items[i]); xd_printf(b, i < 4 ? "," : ""); }
+        xd_printf(b, " start ");
+        xd_value(b, &v->items[5]);
+        xd_printf(b, ",");
+        xd_value(b, &v->items[6]);
+        xd_printf(b, ")");
+        break;
     default: xd_printf(b, "?"); break;
     }
+}
+
+static const char* const xd_ref_kinds[] = { "none", "role", "control", "state", "stimulus", "flag", "response", "end" };
+
+static void xd_ref(xd_buf* b, const char* label, const yexp_ref* r) {
+    if (!r->name) return;
+    xd_printf(b, " %s=%s", label, r->name);
+    if (r->lane >= 0) xd_printf(b, ".%c", "xyzw"[r->lane]);
+    xd_printf(b, "(%s", xd_ref_kinds[r->kind]);
+    if (r->index >= 0) xd_printf(b, " %d", r->index);
+    if (r->lanes) xd_printf(b, " lanes=%d", r->lanes);
+    xd_printf(b, ")");
 }
 
 static void xd_props(xd_buf* b, const char* ind, const yexp_prop* p, int n) {
@@ -113,7 +168,7 @@ static void xd_kvs(xd_buf* b, const char* ind, const char* label, const yexp_kv*
 
 static void xd_steps(xd_buf* b, const char* ind, const yexp_step* steps, int n);
 
-static const char* const xd_ops[] = { "on", "off", "wait", "at", "set", "to", "then", "trigger", "mark", "if", "unless" };
+static const char* const xd_ops[] = { "on", "off", "wait", "at", "set", "to", "then", "trigger", "mark", "if", "unless", "until", "recenter", "flag" };
 
 static void xd_step(xd_buf* b, const char* ind, const yexp_step* s) {
     int i;
@@ -129,6 +184,10 @@ static void xd_step(xd_buf* b, const char* ind, const yexp_step* s) {
     if (s->role) xd_printf(b, " role=%s", s->role);
     if (s->mark) xd_printf(b, " mark=%s", s->mark);
     if (s->cond) xd_printf(b, " cond=%s", s->cond);
+    xd_ref(b, "target", &s->target);
+    if (s->timeout) { xd_printf(b, " timeout="); xd_value(b, s->timeout); }
+    if (s->point) { xd_printf(b, " point="); xd_value(b, s->point); }
+    if (s->flag) xd_printf(b, " flag=%s value=%d", s->flag, (int)s->flag_value);
     xd_printf(b, "\n");
     snprintf(sub, sizeof sub, "%s  ", ind);
     xd_props(b, sub, s->props, s->n_props);
@@ -183,13 +242,91 @@ static void xd_node(xd_buf* b, const yexp_node* n, int depth) {
     for (i = 0; i < n->n_children; i++) xd_node(b, &n->children[i], depth + 1);
 }
 
+static const char* const xd_ctl_kinds[] = { "cursor", "region", "distance", "movement", "peak", "moving_target", "trace", "signal_lost" };
+
+static void xd_sines(xd_buf* b, const char* ind, const char* lane, const yexp_sines* s) {
+    xd_printf(b, "%s%s n=%d amplitudes=", ind, lane, s->n);
+    xd_value(b, s->amplitudes);
+    xd_printf(b, " freqs_hz=");
+    xd_value(b, s->freqs_hz);
+    xd_printf(b, " phases=");
+    xd_value(b, s->phases);
+    xd_printf(b, "\n");
+}
+
+static void xd_control(xd_buf* b, const char* ind, const yexp_control* x) {
+    char sub[80];
+    int i;
+    xd_printf(b, "%scontrol %s kind=%s shared=%d lanes=%d test=%d hits=%d", ind, x->name, xd_ctl_kinds[x->kind], (int)x->shared, x->lanes, (int)x->has_test, (int)x->has_hits);
+    xd_ref(b, "of", &x->of);
+    xd_ref(b, "x", &x->x);
+    xd_ref(b, "y", &x->y);
+    xd_ref(b, "from", &x->from);
+    xd_ref(b, "to", &x->to);
+    xd_ref(b, "freeze_at", &x->freeze_at);
+    xd_ref(b, "stimulus", &x->stimulus);
+    xd_ref(b, "center", &x->center);
+    for (i = 0; i < x->n_items; i++) xd_ref(b, "item", &x->items[i]);
+    xd_printf(b, "\n");
+    snprintf(sub, sizeof sub, "%s  ", ind);
+    xd_props(b, sub, x->props, x->n_props);
+    if (x->kind == YEXP_MOVING_TARGET) { xd_sines(b, sub, "x", &x->sx); xd_sines(b, sub, "y", &x->sy); }
+}
+
+static void xd_exit(xd_buf* b, const char* ind, const yexp_exit* e) {
+    int i;
+    xd_printf(b, "%sexit", ind);
+    xd_ref(b, "on", &e->on);
+    if (e->after) { xd_printf(b, " after="); xd_value(b, e->after); }
+    if (e->if_var) xd_printf(b, " if=%s%s", e->if_var, e->if_flag ? "(flag)" : "");
+    xd_ref(b, "to", &e->to);
+    if (e->outcome) { xd_printf(b, " outcome="); xd_value(b, e->outcome); }
+    if (e->n_in) {
+        xd_printf(b, " in=[");
+        for (i = 0; i < e->n_in; i++) xd_printf(b, "%s%d", i ? " " : "", e->in[i]);
+        xd_printf(b, "]");
+    }
+    xd_printf(b, "\n");
+}
+
+static void xd_template_v2(xd_buf* b, const yexp_def* d, const yexp_template* t) {
+    int i, k;
+    for (i = 0; i < t->n_controls; i++) xd_control(b, "  ", &t->controls[i]);
+    if (t->n_flags) { xd_printf(b, "  "); xd_strs(b, "flags", t->flags, t->n_flags); xd_printf(b, "\n"); }
+    if (t->states) {
+        xd_printf(b, "  states %d\n", t->n_states);
+        for (i = 0; i < t->n_states; i++) {
+            const yexp_state* st = &t->states[i];
+            xd_printf(b, "    state %s max_visits=%d", st->name, st->max_visits);
+            xd_ref(b, "over_to", &st->over_to);
+            if (st->over_outcome) { xd_printf(b, " over_outcome="); xd_value(b, st->over_outcome); }
+            xd_printf(b, "\n");
+            xd_steps(b, "      ", st->steps, st->n_steps);
+            for (k = 0; k < st->n_exits; k++) xd_exit(b, "      ", &st->exits[k]);
+        }
+    }
+    for (i = 0; i < t->n_exits; i++) xd_exit(b, "  shared ", &t->exits[i]);
+    if (t->requeue_outcomes) { xd_printf(b, "  requeue_outcomes="); xd_value(b, t->requeue_outcomes); xd_printf(b, "\n"); }
+    if (t->uses_top) {
+        for (i = 0, k = 0; i < d->n_controls; i++)
+            if (t->uses_top[i]) { xd_printf(b, "%s%s", k ? " " : "  uses_top=", d->controls[i].name); k++; }
+        if (k) xd_printf(b, "\n");
+    }
+}
+
 static void xd_def(xd_buf* b, const yexp_def* d) {
     int i, k;
     xd_printf(b, "definition version=%d name=", d->format_version);
     xd_str(b, d->name);
     xd_printf(b, "\n");
     xd_printf(b, "units_deg=%d background=%g,%g,%g calibration_required=%d min_tier=%d web_allowed=%d web_exclusion=%d\n", d->units_deg, d->background[0], d->background[1], d->background[2], (int)d->calibration_required, d->min_tier, (int)d->web_allowed, d->web_exclusion != NULL);
+    if (d->format_version >= 2) xd_printf(b, "units=%d\n", d->units);
     for (i = 0; i < d->n_fields; i++) xd_printf(b, "field %s %s required=%d\n", d->fields[i].name, d->fields[i].is_string ? "string" : "integer", (int)d->fields[i].required);
+    for (i = 0; i < d->n_sigroles; i++) {
+        const yexp_sigrole* r = &d->sigroles[i];
+        xd_printf(b, "signal role %s type=%d units=%d lanes=%d allow_relative=%d required=%d\n", r->name, r->type, r->units, r->lanes, (int)r->allow_relative, (int)r->required);
+    }
+    for (i = 0; i < d->n_controls; i++) xd_control(b, "", &d->controls[i]);
     for (i = 0; i < d->n_roles; i++) {
         const yexp_role* r = &d->roles[i];
         xd_printf(b, "role %s dir=%d ", r->name, r->direction);
@@ -218,8 +355,8 @@ static void xd_def(xd_buf* b, const yexp_def* d) {
         xd_steps(b, "    ", t->after, t->n_after);
         if (t->response) {
             const yexp_response* r = t->response;
-            xd_printf(b, "  response role=%s from=%s ends=%d max=%d held=%d release=%d choices=", r->role, r->from, (int)r->ends_trial, r->max_responses, (int)r->allow_held_key, (int)r->wait_for_key_release);
-            for (k = 0; k < r->n_choices; k++) xd_printf(b, "%s%s:%s", k ? "," : "", r->choices[k].key, r->choices[k].name);
+            xd_printf(b, "  response role=%s from=%s ends=%d max=%d held=%d release=%d choices=", r->role ? r->role : "-", r->from, (int)r->ends_trial, r->max_responses, (int)r->allow_held_key, (int)r->wait_for_key_release);
+            for (k = 0; k < r->n_choices; k++) xd_printf(b, "%s%s:%s%s", k ? "," : "", r->choices[k].key, r->choices[k].name, r->choices[k].signal ? "(movement)" : "");
             xd_printf(b, "\n    duration="); xd_value(b, r->duration);
             xd_printf(b, " min_rt="); xd_value(b, r->min_rt);
             xd_printf(b, " key_answer="); xd_value(b, r->key_answer);
@@ -233,6 +370,7 @@ static void xd_def(xd_buf* b, const yexp_def* d) {
         xd_printf(b, " method_value="); xd_value(b, t->method_value);
         xd_printf(b, "\n");
         xd_kvs(b, "  ", "column", t->columns, t->n_columns);
+        xd_template_v2(b, d, t);
     }
     for (i = 0; i < d->n_timeline; i++) xd_node(b, &d->timeline[i], 0);
 }

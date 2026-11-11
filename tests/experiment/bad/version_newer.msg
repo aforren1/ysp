@@ -1,1 +1,1 @@
-1:38: this file is format version 2; this player reads up to 1 (D12)
+1:38: this file is format version 3; this player reads up to 2 (D12)

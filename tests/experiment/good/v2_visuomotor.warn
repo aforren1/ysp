@@ -1,0 +1,2 @@
+36:59: template 'reach': state 'go': steps[2]: 'visible': no level of '$feedback' reaches the map's key "endpoint"; a typo, or a level the trials no longer have?
+40:59: template 'reach': state 'show_end': steps[0]: 'visible': no level of '$feedback' reaches the map's key "endpoint"; a typo, or a level the trials no longer have?

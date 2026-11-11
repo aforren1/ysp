@@ -31,6 +31,12 @@ static const st_tab g_tabs[] = {
                      { "tex_ok", YEXP_COL_STRING, { "tex/a.ysptex", NULL } },
                      { "flag", YEXP_COL_INTEGER, { "0", "1", NULL } }, { NULL, 0, { NULL } } } },
     { "builtin.pstb", { { "level", YEXP_COL_NUMBER, { "1", NULL } }, { NULL, 0, { NULL } } } },
+    /* format 3.18's visuomotor targets: 268.8 px from the start, y down */
+    { "targets.pstb", { { "target_deg", YEXP_COL_INTEGER, { "0", "45", "90", "135", "180", "225", "270", "315" } },
+                        { "target_x", YEXP_COL_NUMBER, { "268.8", "190.070302782944", "1.645925298054043e-14", "-190.07030278294397", "-268.8",
+                                                         "-190.07030278294403", "-4.937775894162128e-14", "190.07030278294394" } },
+                        { "target_y", YEXP_COL_NUMBER, { "0", "-190.07030278294397", "-268.8", "-190.070302782944", "-3.291850596108086e-14",
+                                                         "190.07030278294397", "268.8", "190.07030278294403" } }, { NULL, 0, { NULL } } } },
 };
 #define N_TABS ((int)(sizeof g_tabs / sizeof g_tabs[0]))
 
@@ -112,7 +118,15 @@ static int st_ops(void* ctx, const yexp_def* d, const yexp_template* t, char* ms
     return 0;
 }
 
-static const yexp_host g_host = { NULL, st_entry, st_column, st_level, st_role, st_param, st_rules, st_ops };
+/* A rig with an adapter for every signal role but "not_on_rig" (G18: no
+ * profile has the block yet, so this stands in for the host's check). */
+static int st_sigrole(void* ctx, const yexp_sigrole* r, char* msg, size_t cap) {
+    (void)ctx;
+    if (!strcmp(r->name, "not_on_rig")) { snprintf(msg, cap, "the rig profile has no adapter for this role"); return 1; }
+    return 0;
+}
+
+static const yexp_host g_host = { NULL, st_entry, st_column, st_level, st_role, st_param, st_rules, st_ops, st_sigrole };
 
 /* --- a host that misbehaves, by mode ------------------------------------ */
 
@@ -150,6 +164,7 @@ static int bh_role(void* ctx, const yexp_role* r, char* m, size_t cap) { (void)c
 static int bh_param(void* ctx, int s, const char* k, const yexp_prop* p, char* m, size_t cap) { (void)ctx; (void)s; (void)k; (void)p; return bh_msg(m, cap); }
 static int bh_rules(void* ctx, const yexp_node* l, char* m, size_t cap) { (void)ctx; (void)l; return bh_msg(m, cap); }
 static int bh_ops(void* ctx, const yexp_def* d, const yexp_template* t, char* m, size_t cap) { (void)ctx; (void)d; (void)t; return bh_msg(m, cap); }
-static const yexp_host g_bad_host = { NULL, bh_entry, bh_column, bh_level, bh_role, bh_param, bh_rules, bh_ops };
+static int bh_sigrole(void* ctx, const yexp_sigrole* r, char* m, size_t cap) { (void)ctx; (void)r; return bh_msg(m, cap); }
+static const yexp_host g_bad_host = { NULL, bh_entry, bh_column, bh_level, bh_role, bh_param, bh_rules, bh_ops, bh_sigrole };
 
 #endif

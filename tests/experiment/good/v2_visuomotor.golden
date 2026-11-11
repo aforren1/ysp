@@ -1,0 +1,371 @@
+definition version=2 name="visuomotor_rotation"
+units_deg=0 background=0.3,0.3,0.3 calibration_required=0 min_tier=0 web_allowed=0 web_exclusion=0
+units=0
+field participant integer required=1
+signal role hand type=0 units=0 lanes=2 allow_relative=1 required=1
+stimulus dot kind=0 layer=3
+  anchor (default) = "center"
+  ax (default) = real:0.5
+  ay (default) = real:0.5
+  blend (default) = "over"
+  cap (default) = "butt"
+  color = [int:1, int:1, real:0.2]
+  dash (default) = int:0
+  dash_offset (default) = int:0
+  dash_snap (default) = int:0
+  edge (default) = "hard"
+  edge_width (default) = int:0
+  gap (default) = int:0
+  gate (default) = int:1
+  h = int:8
+  join (default) = "round"
+  miter_limit (default) = int:4
+  offset (default) = int:0
+  opacity (default) = int:1
+  ori (default) = int:0
+  p0 (default) = int:0
+  p1 (default) = int:0
+  p10 (default) = int:0
+  p11 (default) = int:0
+  p12 (default) = int:0
+  p13 (default) = int:0
+  p14 (default) = int:0
+  p15 (default) = int:0
+  p16 (default) = int:0
+  p17 (default) = int:0
+  p18 (default) = int:0
+  p19 (default) = int:0
+  p2 (default) = int:0
+  p20 (default) = int:0
+  p21 (default) = int:0
+  p22 (default) = int:0
+  p23 (default) = int:0
+  p24 (default) = int:0
+  p25 (default) = int:0
+  p26 (default) = int:0
+  p27 (default) = int:0
+  p28 (default) = int:0
+  p29 (default) = int:0
+  p3 (default) = int:0
+  p30 (default) = int:0
+  p31 (default) = int:0
+  p4 (default) = int:0
+  p5 (default) = int:0
+  p6 (default) = int:0
+  p7 (default) = int:0
+  p8 (default) = int:0
+  p9 (default) = int:0
+  place (default) = "center"
+  shape = "circle"
+  shape_p0 (default) = int:0
+  shape_p1 (default) = int:0
+  shape_p2 (default) = int:0
+  shape_p3 (default) = int:0
+  stroke (default) = int:0
+  stroke_align (default) = "center"
+  trim_end (default) = int:0
+  trim_set (default) = int:0
+  trim_start (default) = int:0
+  w = int:8
+  x (default) = int:0
+  y (default) = int:0
+stimulus ring kind=0 layer=2
+  anchor (default) = "center"
+  ax (default) = real:0.5
+  ay (default) = real:0.5
+  blend (default) = "over"
+  cap (default) = "butt"
+  color = [int:1, int:1, real:0.2]
+  dash (default) = int:0
+  dash_offset (default) = int:0
+  dash_snap (default) = int:0
+  edge (default) = "hard"
+  edge_width (default) = int:0
+  gap (default) = int:0
+  gate (default) = int:1
+  h = int:10
+  join (default) = "round"
+  miter_limit (default) = int:4
+  offset (default) = int:0
+  opacity (default) = int:1
+  ori (default) = int:0
+  p0 (default) = int:0
+  p1 (default) = int:0
+  p10 (default) = int:0
+  p11 (default) = int:0
+  p12 (default) = int:0
+  p13 (default) = int:0
+  p14 (default) = int:0
+  p15 (default) = int:0
+  p16 (default) = int:0
+  p17 (default) = int:0
+  p18 (default) = int:0
+  p19 (default) = int:0
+  p2 (default) = int:0
+  p20 (default) = int:0
+  p21 (default) = int:0
+  p22 (default) = int:0
+  p23 (default) = int:0
+  p24 (default) = int:0
+  p25 (default) = int:0
+  p26 (default) = int:0
+  p27 (default) = int:0
+  p28 (default) = int:0
+  p29 (default) = int:0
+  p3 (default) = int:0
+  p30 (default) = int:0
+  p31 (default) = int:0
+  p4 (default) = int:0
+  p5 (default) = int:0
+  p6 (default) = int:0
+  p7 (default) = int:0
+  p8 (default) = int:0
+  p9 (default) = int:0
+  place (default) = "center"
+  shape = "circle"
+  shape_p0 (default) = int:0
+  shape_p1 (default) = int:0
+  shape_p2 (default) = int:0
+  shape_p3 (default) = int:0
+  stroke = int:2
+  stroke_align (default) = "center"
+  trim_end (default) = int:0
+  trim_set (default) = int:0
+  trim_start (default) = int:0
+  w = int:10
+  x (default) = int:0
+  y (default) = int:0
+stimulus start kind=0 layer=0
+  anchor (default) = "center"
+  ax (default) = real:0.5
+  ay (default) = real:0.5
+  blend (default) = "over"
+  cap (default) = "butt"
+  color = [real:0.9, real:0.9, real:0.9]
+  dash (default) = int:0
+  dash_offset (default) = int:0
+  dash_snap (default) = int:0
+  edge (default) = "hard"
+  edge_width (default) = int:0
+  gap (default) = int:0
+  gate (default) = int:1
+  h = int:24
+  join (default) = "round"
+  miter_limit (default) = int:4
+  offset (default) = int:0
+  opacity (default) = int:1
+  ori (default) = int:0
+  p0 (default) = int:0
+  p1 (default) = int:0
+  p10 (default) = int:0
+  p11 (default) = int:0
+  p12 (default) = int:0
+  p13 (default) = int:0
+  p14 (default) = int:0
+  p15 (default) = int:0
+  p16 (default) = int:0
+  p17 (default) = int:0
+  p18 (default) = int:0
+  p19 (default) = int:0
+  p2 (default) = int:0
+  p20 (default) = int:0
+  p21 (default) = int:0
+  p22 (default) = int:0
+  p23 (default) = int:0
+  p24 (default) = int:0
+  p25 (default) = int:0
+  p26 (default) = int:0
+  p27 (default) = int:0
+  p28 (default) = int:0
+  p29 (default) = int:0
+  p3 (default) = int:0
+  p30 (default) = int:0
+  p31 (default) = int:0
+  p4 (default) = int:0
+  p5 (default) = int:0
+  p6 (default) = int:0
+  p7 (default) = int:0
+  p8 (default) = int:0
+  p9 (default) = int:0
+  place (default) = "center"
+  shape = "circle"
+  shape_p0 (default) = int:0
+  shape_p1 (default) = int:0
+  shape_p2 (default) = int:0
+  shape_p3 (default) = int:0
+  stroke (default) = int:0
+  stroke_align (default) = "center"
+  trim_end (default) = int:0
+  trim_set (default) = int:0
+  trim_start (default) = int:0
+  w = int:24
+  x (default) = int:0
+  y (default) = int:0
+stimulus target kind=0 layer=1
+  anchor (default) = "center"
+  ax (default) = real:0.5
+  ay (default) = real:0.5
+  blend (default) = "over"
+  cap (default) = "butt"
+  color = [real:0.1, real:0.8, real:0.2]
+  dash (default) = int:0
+  dash_offset (default) = int:0
+  dash_snap (default) = int:0
+  edge (default) = "hard"
+  edge_width (default) = int:0
+  gap (default) = int:0
+  gate (default) = int:1
+  h = int:24
+  join (default) = "round"
+  miter_limit (default) = int:4
+  offset (default) = int:0
+  opacity (default) = int:1
+  ori (default) = int:0
+  p0 (default) = int:0
+  p1 (default) = int:0
+  p10 (default) = int:0
+  p11 (default) = int:0
+  p12 (default) = int:0
+  p13 (default) = int:0
+  p14 (default) = int:0
+  p15 (default) = int:0
+  p16 (default) = int:0
+  p17 (default) = int:0
+  p18 (default) = int:0
+  p19 (default) = int:0
+  p2 (default) = int:0
+  p20 (default) = int:0
+  p21 (default) = int:0
+  p22 (default) = int:0
+  p23 (default) = int:0
+  p24 (default) = int:0
+  p25 (default) = int:0
+  p26 (default) = int:0
+  p27 (default) = int:0
+  p28 (default) = int:0
+  p29 (default) = int:0
+  p3 (default) = int:0
+  p30 (default) = int:0
+  p31 (default) = int:0
+  p4 (default) = int:0
+  p5 (default) = int:0
+  p6 (default) = int:0
+  p7 (default) = int:0
+  p8 (default) = int:0
+  p9 (default) = int:0
+  place (default) = "center"
+  shape = "circle"
+  shape_p0 (default) = int:0
+  shape_p1 (default) = int:0
+  shape_p2 (default) = int:0
+  shape_p3 (default) = int:0
+  stroke (default) = int:0
+  stroke_align (default) = "center"
+  trim_end (default) = int:0
+  trim_set (default) = int:0
+  trim_start (default) = int:0
+  w = int:24
+  x = $target_x
+  y = $target_y
+template reach
+  events
+  after
+  response role=- from=target ends=0 max=0 held=0 release=0 choices=moved:moved(movement)
+    duration=dur:0ns min_rt=dur:0ns key_answer=(null) trigger=- 
+  record_given=0 record=[target]
+  outcome=int:1 method_value=(null)
+  column cross_s = time(past_target from target)
+  column cursor_end_x = signal(cursor.x lanes=1)
+  column cursor_end_y = signal(cursor.y lanes=1)
+  column hand_end_x = hit(past_target.x)
+  column hand_end_y = hit(past_target.y)
+  column mt_s = time(past_target from response)
+  column peak_speed = signal(top_speed lanes=1)
+  control aid kind=distance shared=0 lanes=1 test=0 hits=0 of=hand(role 0 lanes=2)
+    center (default) = [int:0, int:0]
+    of = "hand"
+    scale = int:2
+  control at_start kind=region shared=0 lanes=1 test=1 hits=1 of=hand(role 0 lanes=2)
+    center (default) = [int:0, int:0]
+    of = "hand"
+    outside (default) = false
+    radius = int:12
+    rate (default) = "sample"
+    speed_lag_s (default) = dur:10000000ns
+    stay_s = dur:500000000ns
+  control cursor kind=cursor shared=0 lanes=2 test=0 hits=0 of=hand(role 0 lanes=2) freeze_at=past_target(control)
+    about (default) = [int:0, int:0]
+    freeze_at = "past_target"
+    role = "hand"
+    transform = rotation_deg($rotation_deg)
+  control moved kind=movement shared=0 lanes=0 test=0 hits=0 of=hand(role 0 lanes=2) from=at_start(control)
+    from = "at_start"
+    of = "hand"
+    onset = real:26.88
+  control near_start kind=region shared=0 lanes=1 test=1 hits=1 of=hand(role 0 lanes=2)
+    center (default) = [int:0, int:0]
+    of = "hand"
+    outside (default) = false
+    radius = real:67.2
+    rate = "frame"
+    speed_lag_s (default) = dur:10000000ns
+    stay_s (default) = dur:0ns
+  control past_target kind=region shared=0 lanes=1 test=1 hits=1 of=hand(role 0 lanes=2)
+    center (default) = [int:0, int:0]
+    of = "hand"
+    outside = true
+    radius = real:268.8
+    rate (default) = "sample"
+    speed_lag_s (default) = dur:10000000ns
+    stay_s (default) = dur:0ns
+  control path kind=trace shared=0 lanes=0 test=0 hits=0 from=at_start(control) to=past_target(control) item=hand(role 0 lanes=2) item=cursor(control lanes=2)
+    from = "at_start"
+    of = ["hand", "cursor"]
+    rate (default) = "sample"
+    to = "past_target"
+  control top_speed kind=peak shared=0 lanes=1 test=0 hits=0 of=hand(role 0 lanes=2) from=at_start(control) freeze_at=past_target(control)
+    freeze_at = "past_target"
+    from = "at_start"
+    lag_s (default) = dur:10000000ns
+    measure (default) = "speed"
+    of = "hand"
+  states 3
+    state back max_visits=0
+      step on start stagger=dur:0ns
+      step set dot
+        visible = when(test(near_start) then int:1 else int:0)
+        x = signal(hand.x lanes=1)
+        y = signal(hand.y lanes=1)
+      step set ring
+        h = signal(aid lanes=1)
+        visible = when(test(near_start) then int:0 else int:1)
+        w = signal(aid lanes=1)
+      exit on=at_start(control) to=go(state 1)
+    state go max_visits=0
+      step on target stagger=dur:0ns
+      step off ring stagger=dur:0ns
+      step set dot
+        visible = lookup($feedback){"endpoint": int:0, "none": int:0, "online": int:1}
+        x = signal(cursor.x lanes=1)
+        y = signal(cursor.y lanes=1)
+      exit on=past_target(control) to=show_end(state 2)
+    state show_end max_visits=0
+      step set dot
+        visible = lookup($feedback){"endpoint": int:1, "none": int:0, "online": int:1}
+      step wait t=dur:500000000ns
+      step off target stagger=dur:0ns
+node baseline path=baseline trial=reach table=targets.pstb reps=1 interleave=0 track_rate=0 if=- unless=- loop=0 requeue=0 record_data=1
+  rules="order random\x0areps 5"
+  jitters=[] rule_vars=[] tracks=[]
+  var feedback = "online"
+  var rotation_deg = int:0
+node rotation path=rotation trial=reach table=targets.pstb reps=1 interleave=0 track_rate=0 if=- unless=- loop=0 requeue=0 record_data=1
+  rules="order random\x0areps 10"
+  jitters=[] rule_vars=[] tracks=[]
+  var feedback = "online"
+  var rotation_deg = int:30
+node washout path=washout trial=reach table=targets.pstb reps=1 interleave=0 track_rate=0 if=- unless=- loop=0 requeue=0 record_data=1
+  rules="order random\x0areps 5"
+  jitters=[] rule_vars=[] tracks=[]
+  var feedback = "none"
+  var rotation_deg = int:0

@@ -1,0 +1,10 @@
+{
+  "note": "Format 3.2: a version 1 stimulus with `visible` at another value than its default; the migration to version 2 leaves the key out.",
+  "format": "ysp-experiment", "version": 1,
+  "stimuli": {
+    "fix": { "kind": "shape", "shape": "cross", "w": 20, "h": 20, "visible": 0 },
+    "box": { "kind": "shape", "visible": 1, "color": [1, 1, 1] }
+  },
+  "trials": { "t": { "events": [{ "on": ["fix", "box"] }, { "wait_s": 0.5 }, { "off": "fix" }] } },
+  "timeline": [{ "name": "main", "trial": "t", "rules": ["reps 2"] }]
+}

@@ -1,0 +1,422 @@
+definition version=2 name="bimanual_tracking"
+units_deg=0 background=0.05,0.05,0.05 calibration_required=0 min_tier=0 web_allowed=0 web_exclusion=0
+units=2
+field participant integer required=1
+signal role left type=1 units=1 lanes=2 allow_relative=0 required=1
+signal role right type=1 units=1 lanes=2 allow_relative=0 required=1
+control cursor kind=cursor shared=1 lanes=2 test=0 hits=0 x=left.x(role 0 lanes=1) y=right.y(role 1 lanes=1) stimulus=dot(stimulus 0)
+  about (default) = [int:0, int:0]
+  stimulus = "dot"
+  transform = lookup($perturb){"none": "identity", "rotation": rotation_deg(int:-90)}
+  x = "left.x"
+  y = "right.y"
+stimulus dot kind=0 layer=2
+  anchor (default) = "center"
+  ax (default) = real:0.5
+  ay (default) = real:0.5
+  blend (default) = "over"
+  cap (default) = "butt"
+  color = [int:1, int:1, int:1]
+  dash (default) = int:0
+  dash_offset (default) = int:0
+  dash_snap (default) = int:0
+  edge (default) = "hard"
+  edge_width (default) = int:0
+  gap (default) = int:0
+  gate (default) = int:1
+  h = real:0.5
+  join (default) = "round"
+  miter_limit (default) = int:4
+  offset (default) = int:0
+  opacity (default) = int:1
+  ori (default) = int:0
+  p0 (default) = int:0
+  p1 (default) = int:0
+  p10 (default) = int:0
+  p11 (default) = int:0
+  p12 (default) = int:0
+  p13 (default) = int:0
+  p14 (default) = int:0
+  p15 (default) = int:0
+  p16 (default) = int:0
+  p17 (default) = int:0
+  p18 (default) = int:0
+  p19 (default) = int:0
+  p2 (default) = int:0
+  p20 (default) = int:0
+  p21 (default) = int:0
+  p22 (default) = int:0
+  p23 (default) = int:0
+  p24 (default) = int:0
+  p25 (default) = int:0
+  p26 (default) = int:0
+  p27 (default) = int:0
+  p28 (default) = int:0
+  p29 (default) = int:0
+  p3 (default) = int:0
+  p30 (default) = int:0
+  p31 (default) = int:0
+  p4 (default) = int:0
+  p5 (default) = int:0
+  p6 (default) = int:0
+  p7 (default) = int:0
+  p8 (default) = int:0
+  p9 (default) = int:0
+  place (default) = "center"
+  shape = "circle"
+  shape_p0 (default) = int:0
+  shape_p1 (default) = int:0
+  shape_p2 (default) = int:0
+  shape_p3 (default) = int:0
+  stroke (default) = int:0
+  stroke_align (default) = "center"
+  trim_end (default) = int:0
+  trim_set (default) = int:0
+  trim_start (default) = int:0
+  w = real:0.5
+  x (default) = int:0
+  y (default) = int:0
+stimulus reach_target kind=0 layer=1
+  anchor (default) = "center"
+  ax (default) = real:0.5
+  ay (default) = real:0.5
+  blend (default) = "over"
+  cap (default) = "butt"
+  color = [real:0.9, real:0.9, real:0.9]
+  dash (default) = int:0
+  dash_offset (default) = int:0
+  dash_snap (default) = int:0
+  edge (default) = "hard"
+  edge_width (default) = int:0
+  gap (default) = int:0
+  gate (default) = int:1
+  h = int:2
+  join (default) = "round"
+  miter_limit (default) = int:4
+  offset (default) = int:0
+  opacity (default) = int:1
+  ori (default) = int:0
+  p0 (default) = int:0
+  p1 (default) = int:0
+  p10 (default) = int:0
+  p11 (default) = int:0
+  p12 (default) = int:0
+  p13 (default) = int:0
+  p14 (default) = int:0
+  p15 (default) = int:0
+  p16 (default) = int:0
+  p17 (default) = int:0
+  p18 (default) = int:0
+  p19 (default) = int:0
+  p2 (default) = int:0
+  p20 (default) = int:0
+  p21 (default) = int:0
+  p22 (default) = int:0
+  p23 (default) = int:0
+  p24 (default) = int:0
+  p25 (default) = int:0
+  p26 (default) = int:0
+  p27 (default) = int:0
+  p28 (default) = int:0
+  p29 (default) = int:0
+  p3 (default) = int:0
+  p30 (default) = int:0
+  p31 (default) = int:0
+  p4 (default) = int:0
+  p5 (default) = int:0
+  p6 (default) = int:0
+  p7 (default) = int:0
+  p8 (default) = int:0
+  p9 (default) = int:0
+  place (default) = "center"
+  shape = "circle"
+  shape_p0 (default) = int:0
+  shape_p1 (default) = int:0
+  shape_p2 (default) = int:0
+  shape_p3 (default) = int:0
+  stroke (default) = int:0
+  stroke_align (default) = "center"
+  trim_end (default) = int:0
+  trim_set (default) = int:0
+  trim_start (default) = int:0
+  w = int:2
+  x = $aim_x
+  y = $aim_y
+stimulus start_circle kind=0 layer=0
+  anchor (default) = "center"
+  ax (default) = real:0.5
+  ay (default) = real:0.5
+  blend (default) = "over"
+  cap (default) = "butt"
+  color = [real:0.35, real:0.35, real:0.35]
+  dash (default) = int:0
+  dash_offset (default) = int:0
+  dash_snap (default) = int:0
+  edge (default) = "hard"
+  edge_width (default) = int:0
+  gap (default) = int:0
+  gate (default) = int:1
+  h = int:2
+  join (default) = "round"
+  miter_limit (default) = int:4
+  offset (default) = int:0
+  opacity (default) = int:1
+  ori (default) = int:0
+  p0 (default) = int:0
+  p1 (default) = int:0
+  p10 (default) = int:0
+  p11 (default) = int:0
+  p12 (default) = int:0
+  p13 (default) = int:0
+  p14 (default) = int:0
+  p15 (default) = int:0
+  p16 (default) = int:0
+  p17 (default) = int:0
+  p18 (default) = int:0
+  p19 (default) = int:0
+  p2 (default) = int:0
+  p20 (default) = int:0
+  p21 (default) = int:0
+  p22 (default) = int:0
+  p23 (default) = int:0
+  p24 (default) = int:0
+  p25 (default) = int:0
+  p26 (default) = int:0
+  p27 (default) = int:0
+  p28 (default) = int:0
+  p29 (default) = int:0
+  p3 (default) = int:0
+  p30 (default) = int:0
+  p31 (default) = int:0
+  p4 (default) = int:0
+  p5 (default) = int:0
+  p6 (default) = int:0
+  p7 (default) = int:0
+  p8 (default) = int:0
+  p9 (default) = int:0
+  place (default) = "center"
+  shape = "circle"
+  shape_p0 (default) = int:0
+  shape_p1 (default) = int:0
+  shape_p2 (default) = int:0
+  shape_p3 (default) = int:0
+  stroke (default) = int:0
+  stroke_align (default) = "center"
+  trim_end (default) = int:0
+  trim_set (default) = int:0
+  trim_start (default) = int:0
+  w = int:2
+  x = $aim_from_x
+  y = $aim_from_y
+stimulus track_target kind=0 layer=0
+  anchor (default) = "center"
+  ax (default) = real:0.5
+  ay (default) = real:0.5
+  blend (default) = "over"
+  cap (default) = "butt"
+  color = [real:0.35, real:0.35, real:0.35]
+  dash (default) = int:0
+  dash_offset (default) = int:0
+  dash_snap (default) = int:0
+  edge (default) = "hard"
+  edge_width (default) = int:0
+  gap (default) = int:0
+  gate (default) = int:1
+  h = real:1.6
+  join (default) = "round"
+  miter_limit (default) = int:4
+  offset (default) = int:0
+  opacity (default) = int:1
+  ori (default) = int:0
+  p0 (default) = int:0
+  p1 (default) = int:0
+  p10 (default) = int:0
+  p11 (default) = int:0
+  p12 (default) = int:0
+  p13 (default) = int:0
+  p14 (default) = int:0
+  p15 (default) = int:0
+  p16 (default) = int:0
+  p17 (default) = int:0
+  p18 (default) = int:0
+  p19 (default) = int:0
+  p2 (default) = int:0
+  p20 (default) = int:0
+  p21 (default) = int:0
+  p22 (default) = int:0
+  p23 (default) = int:0
+  p24 (default) = int:0
+  p25 (default) = int:0
+  p26 (default) = int:0
+  p27 (default) = int:0
+  p28 (default) = int:0
+  p29 (default) = int:0
+  p3 (default) = int:0
+  p30 (default) = int:0
+  p31 (default) = int:0
+  p4 (default) = int:0
+  p5 (default) = int:0
+  p6 (default) = int:0
+  p7 (default) = int:0
+  p8 (default) = int:0
+  p9 (default) = int:0
+  place (default) = "center"
+  shape = "circle"
+  shape_p0 (default) = int:0
+  shape_p1 (default) = int:0
+  shape_p2 (default) = int:0
+  shape_p3 (default) = int:0
+  stroke (default) = int:0
+  stroke_align (default) = "center"
+  trim_end (default) = int:0
+  trim_set (default) = int:0
+  trim_start (default) = int:0
+  w = real:1.6
+  x (default) = int:0
+  y (default) = int:0
+template reach
+  events
+  after
+  response role=- from=reach_target ends=0 max=0 held=0 release=0 choices=moved:moved(movement)
+    duration=dur:0ns min_rt=dur:0ns key_answer=(null) trigger=- 
+  record_given=0 record=[reach_target]
+  outcome=int:1 method_value=(null)
+  column arrived_s = time(arrived from response)
+  column fast = when(signal(top_speed lanes=1 above int:39) then int:1 else int:0)
+  column peak_speed = signal(top_speed lanes=1)
+  control arrived kind=region shared=0 lanes=1 test=1 hits=1 of=cursor(control lanes=2)
+    center = [$aim_x, $aim_y]
+    of = "cursor"
+    outside (default) = false
+    radius = int:1
+    rate = "frame"
+    speed_below = real:6.5
+    speed_lag_s (default) = dur:10000000ns
+    stay_s = dur:1000000000ns
+  control at_start kind=region shared=0 lanes=1 test=1 hits=1 of=cursor(control lanes=2)
+    center (default) = [int:0, int:0]
+    of = "cursor"
+    outside (default) = false
+    radius = int:1
+    rate = "frame"
+    speed_lag_s (default) = dur:10000000ns
+    stay_s = dur:500000000ns
+  control moved kind=movement shared=0 lanes=0 test=0 hits=0 of=cursor(control lanes=2) from=reach_target(stimulus 1)
+    from = "reach_target"
+    of = "cursor"
+    onset = int:1
+    origin = [$aim_from_x, $aim_from_y]
+  control path kind=trace shared=0 lanes=0 test=0 hits=0 from=reach_target(stimulus 1) to=arrived(control) item=cursor(control lanes=2)
+    from = "reach_target"
+    of = ["cursor"]
+    rate (default) = "sample"
+    to = "arrived"
+  control top_speed kind=peak shared=0 lanes=1 test=0 hits=0 of=cursor(control lanes=2) from=reach_target(stimulus 1)
+    from = "reach_target"
+    lag_s (default) = dur:10000000ns
+    measure (default) = "speed"
+    of = "cursor"
+  states 3
+    state begin max_visits=0
+      exit if=first_in_block to=hold_start(state 1)
+      exit to=go(state 2)
+    state hold_start max_visits=0
+      step on start_circle dot stagger=dur:0ns
+      exit on=at_start(control) to=go(state 2)
+    state go max_visits=0
+      step on start_circle reach_target dot stagger=dur:0ns
+      step set reach_target
+        color = when(test(arrived) then when(signal(top_speed lanes=1 above int:39) then [int:1, real:0.85, int:0] else [real:0.1, real:0.35, int:1]) else [real:0.9, real:0.9, real:0.9])
+      exit on=arrived(control) to=end(end)
+  uses_top=cursor
+template track
+  events
+  after
+  record_given=0 record=[]
+  outcome=int:1 method_value=(null)
+  control frames kind=trace shared=0 lanes=0 test=0 hits=0 from=move(state 2) to=end(end) item=goal(control lanes=2) item=cursor(control lanes=2) item=left(role 0 lanes=2) item=right(role 1 lanes=2) item=inside(control lanes=1)
+    from = "move"
+    of = ["goal", "cursor", "left", "right", "inside"]
+    rate = "frame"
+    to (default) = "end"
+  control goal kind=moving_target shared=0 lanes=2 test=0 hits=0 from=move(state 2) stimulus=track_target(stimulus 3)
+    from = "move"
+    ramp_s = dur:5000000000ns
+    stimulus = "track_target"
+    x n=7 amplitudes=[real:2.31, real:2.31, real:2.31, real:1.76, real:1.3, real:0.97, real:0.73] freqs_hz=[real:0.1, real:0.25, real:0.55, real:0.85, real:1.15, real:1.55, real:2.05] phases=$phase_x
+    y n=7 amplitudes=[real:-2.31, real:-2.31, real:-2.31, real:-1.58, real:-1.03, real:-0.81, real:-0.7] freqs_hz=[real:0.15, real:0.35, real:0.65, real:0.95, real:1.45, real:1.85, real:2.15] phases=$phase_y
+  control inside kind=region shared=0 lanes=1 test=1 hits=1 of=cursor(control lanes=2) center=goal(control lanes=2)
+    center = signal(goal lanes=2)
+    of = "cursor"
+    outside (default) = false
+    radius = real:0.8
+    rate = "frame"
+    speed_lag_s (default) = dur:10000000ns
+    stay_s (default) = dur:0ns
+  control ready kind=region shared=0 lanes=1 test=1 hits=1 of=cursor(control lanes=2)
+    center (default) = [int:0, int:0]
+    of = "cursor"
+    outside (default) = false
+    radius = real:0.8
+    rate = "frame"
+    speed_below = real:6.5
+    speed_lag_s (default) = dur:10000000ns
+    stay_s (default) = dur:0ns
+  states 3
+    state iti max_visits=0
+      step on track_target dot stagger=dur:0ns
+      step set track_target
+        color = when(test(inside) then [int:1, real:0.85, int:0] else [real:0.35, real:0.35, real:0.35])
+      step wait t=dur:1000000000ns
+    state wait max_visits=0
+      exit on=ready(control) to=move(state 2)
+    state move max_visits=0
+      step wait t=dur:46000000000ns
+  uses_top=cursor
+node blocks path=blocks trial=- table=- reps=1 interleave=0 track_rate=0 if=- unless=- loop=0 requeue=0 record_data=1
+  rules=""
+  jitters=[] rule_vars=[] tracks=[]
+  var aim = walk2d(step int:12 box int:-10,int:-10,int:10,int:10 start int:0,int:0)
+  var phase_x = uniform[real:-3.141592653589793, real:3.141592653589793) n=7 per=node
+  var phase_y = uniform[real:-3.141592653589793, real:3.141592653589793) n=7 per=node
+  data mapping = "split"
+  node b0_track path=blocks/b0_track trial=track table=- reps=1 interleave=0 track_rate=0 if=- unless=- loop=0 requeue=0 record_data=1
+    rules="reps 2"
+    jitters=[] rule_vars=[] tracks=[]
+    var perturb = "none"
+  node b1_reach path=blocks/b1_reach trial=reach table=- reps=1 interleave=0 track_rate=0 if=- unless=- loop=0 requeue=0 record_data=1
+    rules="reps 30"
+    jitters=[] rule_vars=[] tracks=[]
+    var perturb = "none"
+  node b2_track path=blocks/b2_track trial=track table=- reps=1 interleave=0 track_rate=0 if=- unless=- loop=0 requeue=0 record_data=1
+    rules="reps 2"
+    jitters=[] rule_vars=[] tracks=[]
+    var perturb = "rotation"
+  node b3_reach path=blocks/b3_reach trial=reach table=- reps=1 interleave=0 track_rate=0 if=- unless=- loop=0 requeue=0 record_data=1
+    rules="reps 30"
+    jitters=[] rule_vars=[] tracks=[]
+    var perturb = "rotation"
+  node b4_track path=blocks/b4_track trial=track table=- reps=1 interleave=0 track_rate=0 if=- unless=- loop=0 requeue=0 record_data=1
+    rules="reps 2"
+    jitters=[] rule_vars=[] tracks=[]
+    var perturb = "rotation"
+  node b5_reach path=blocks/b5_reach trial=reach table=- reps=1 interleave=0 track_rate=0 if=- unless=- loop=0 requeue=0 record_data=1
+    rules="reps 30"
+    jitters=[] rule_vars=[] tracks=[]
+    var perturb = "rotation"
+  node b6_track path=blocks/b6_track trial=track table=- reps=1 interleave=0 track_rate=0 if=- unless=- loop=0 requeue=0 record_data=1
+    rules="reps 2"
+    jitters=[] rule_vars=[] tracks=[]
+    var perturb = "rotation"
+  node b7_reach path=blocks/b7_reach trial=reach table=- reps=1 interleave=0 track_rate=0 if=- unless=- loop=0 requeue=0 record_data=1
+    rules="reps 30"
+    jitters=[] rule_vars=[] tracks=[]
+    var perturb = "rotation"
+  node b8_track path=blocks/b8_track trial=track table=- reps=1 interleave=0 track_rate=0 if=- unless=- loop=0 requeue=0 record_data=1
+    rules="reps 2"
+    jitters=[] rule_vars=[] tracks=[]
+    var perturb = "rotation"
+  node b9_track path=blocks/b9_track trial=track table=- reps=1 interleave=0 track_rate=0 if=- unless=- loop=0 requeue=0 record_data=1
+    rules="reps 2"
+    jitters=[] rule_vars=[] tracks=[]
+    var perturb = "none"
