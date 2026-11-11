@@ -7,7 +7,10 @@ evidence and the choice. The user decided D1 to D15 on 2026-10-14; D4
 changed from the proposal. The user decided D16 to D19, for continuous
 tasks, on 2026-11-09. Nothing is built for them. The user decided D20 on the same day. Part 1 is
 explanation; part 2 is reference, with four worked examples checked
-against the C examples. Where this page and rig_spec 6 or 14.5 to 14.6
+against the C examples. Part 3 (2026-11-11) is the proposed reference for
+format version 2, with two worked examples that are the acceptance tests
+of its loader and player; its open points are D21 to D41 (1.5), proposed,
+not decided. Where this page and rig_spec 6 or 14.5 to 14.6
 disagree about the definition, this page is newer.
 
 ## Part 1: Explanation
@@ -348,6 +351,13 @@ that structure; it does not invent a new one.
   as every step does. Constants stay timeline channels. This needs a new
   `mux` op in ysp/sig.h.
 
+  Note (2026-11-11): "a control's name (its state)" now has a second
+  meaning, since D20 calls a node of a trial's chart a state; part 3
+  calls a control's boolean its *test* (D27). D17 does not say whether
+  `then` and `else` take a `when`: the bimanual reach target needs three
+  colors from two tests, so D27 proposes nesting. `above` lowers to
+  `detect` `ge`, so a value equal to the level is above.
+
 **D18. Freezing a cursor at a crossing. DECIDED (2026-11-09).**
 - Options: (a) a step `{"freeze": CONTROL}`, as signal_spec.md section
   15.2 wrote it; (b) a key on the control, `"freeze_at": CONTROL`.
@@ -375,6 +385,12 @@ that structure; it does not invent a new one.
   two calls in ysp/sig.h, both journaled: a reset of the experiment's
   nodes only, and a recenter of one role. It replaces finding 12's
   `"keep"`.
+
+  Note (2026-11-11): the loader does not know the adapter. A
+  `position2d` role with `allow_relative` can get an absolute adapter (a
+  tablet). D21 and part 3 (3.5) propose: the loader refuses `recenter` on
+  a role that cannot be relative; the player skips it on an absolute
+  adapter and counts the skip in `session.json`.
 
 **D20. A trial as named states with exits. DECIDED (2026-11-09). It amends D16.**
 - Options: (a) D16's straight line of segments; (b) named states, each
@@ -474,6 +490,26 @@ that structure; it does not invent a new one.
   Nested states and parallel states wait for a task that needs them. The response, the graph and the stimuli
   already run side by side.
 
+  Note (2026-11-11): part 3 found six points that these rules leave
+  open, and proposes each:
+  - Rule 1: as the shorthand of two states joined by one exit, `until`
+    arms its control at the first state's entry, so a hit during the
+    steps before `until` ends them; D16 says the sequence waits at
+    `until`. D35 (h): the wait is a state of its own.
+  - Rule 3, "at its entry": a state has an entry time (the exit's time)
+    and an entry frame. `trial_visuomotor` arms at the hit's time,
+    between frames. D35 (b).
+  - Rule 4, "A frame tests the exits": an arm at a hit's time needs the
+    exit taken when the hit is drained, before the next sample. A hit
+    that a frame finds needs a second `ytl_evaluate()` for the next
+    state's steps to land on that frame (rule 5). D35 (d), 3.11.
+  - Rule 7: `after` and `response_ends_trial` have no meaning among
+    states as written. D34 (e).
+  - Rule 9: the namespace also needs the signal roles and the signal
+    nodes, and the reserved names `end` and `response`; a flag is read as
+    `$NAME`, so it cannot have a variable's name. 3.9.
+  - Rule 2: an exit's `outcome` has no default. D36.
+
 D16 to D20 add keys and change what a step can
 do, so they are format version 2 (D12).
 
@@ -497,6 +533,362 @@ the header.
 | G11 | CLOSED in ysp/trials.h v0.6.0 (2026-10-21): `rate=display` in the rules text (`YTR_RATE_DISPLAY` in C) snaps a jitter to `desc.display_rate_num / display_rate_den`, which the player sets from the screen after `ytr_rules()`; open() refuses the session, naming the jitter, without it. `ytr_format_rules()` writes `rate=display` back; the meta line gives the rate drawn on. Was: `rate=` took a fixed number only. | ysp/trials.h | EEG example (`rate=display`) | Done |
 | G12 | Closed (2026-10-21): ysp/stair.h 0.3.0 has `yst_save()` and `yst_open_saved()`, in the form of quest's, aep's and trials' (versioned, checked, a mismatched desc refused, the error in the handle), so a resume no longer replays the staircase's updates. | ysp/stair.h | Resume | Small; closed |
 | G13 | CLOSED in ysp/dataset.h v0.1.0 (2026-10-21; docs/dataset.md). The folder, `session.json` (canonical, `"closed": false` until the finish, each rewrite atomic), the four tables and `streams/` through the trials writer, adapters from flip records, inputs, timeline events and clock fits, and the zip for the web. Left to the player: what it puts in `session.json` and which rows it drains from the event ring and the device records. Was: the player's data set (D9) was not built; the trials writer's sidecar is key=value lines. | ysp/dataset.h | D9 | Done |
+| G14 | OPEN (2026-11-11): ysp/gfx.h has `YGFX_PX` and `YGFX_DEG` only. Proposed: `YGFX_CM`, one scale factor, px per cm = drawable width x 10 / `view.width_mm`, refused without `view.width_mm` | ysp/gfx.h | D23; `trial_bimanual` | Small |
+| G15 | OPEN (2026-11-11): no variable depends on the last trial's value. Proposed: `ytr_var_walk2d(name, step, lo_x, hi_x, lo_y, hi_y, x0, y0)` and rules text `var NAME walk2d STEP LO_X HI_X LO_Y HI_Y X0 Y0`: trial i draws angles from a sub-stream of its trial stream until the previous point plus `step` (cos a, -sin a) is inside the box; a leaf's first trial starts at (x0, y0); the snapshot (`ytr_save()`) and `ytr_restore()` keep the last point; the data line gets NAME_x, NAME_y, NAME_from_x, NAME_from_y and NAME_deg | ysp/trials.h | D30; `trial_bimanual` | Medium |
+| G16 | OPEN (2026-11-11): a `detect` with `hold` 0 that is armed while its test is true gives no hit until the test fails (the CROSSINGS rule). Proposed: `entry` value `now` (2): a test true at the arm is a hit at the arm's time | ysp/sig.h | D35; `trial_bimanual`'s `ready` | Small |
+| G17 | OPEN (2026-11-11): `ysig_set()` on a stateless node leaves its held value, and its stateless users', at the old parameters until the next sample (docs/sig.md, "The target's color in trial_bimanual"). Proposed: the call recomputes them from their inputs' held values, journaled as now | ysp/sig.h | 3.6; `trial_bimanual`'s block changes | Small |
+| G18 | OPEN (2026-11-11): the rig profile has no adapter block (signal_spec 11). Proposed by devices_spec 11.2: per signal role, the device, the adapter's type and units, and its scale per count or its map | ysp/rigfile.h | D21; both acceptance tasks | Medium |
+| G19 | OPEN, not needed by a task (2026-11-11): `ysig_frame_in` has one base time for every generator. Proposed when a task needs two generators with different `from`: a time origin per generator | ysp/sig.h | D39 | Small |
+| G20 | OPEN, version 3 (2026-11-11): a press choice has no region, and a window cannot end on an early press (F3). Proposed: a rectangle or a circle on `yrsp_choice`; `desc.end_on_early`, `YRSP_R_EARLY_END`, `yrsp_ended_by()` | ysp/response.h | D31; mouse tracking; D20 rule 7 | Small each |
+
+### 1.5 Proposed for version 2 (2026-11-11)
+
+Part 3 is the reference for version 2. Where D16 to D20 do not decide a
+point that the reference needs, an entry below proposes it. Each entry is
+PROPOSED, not DECIDED. Each says whether the two acceptance tasks
+(`trial_visuomotor`, `trial_bimanual`) need it, or whether it can wait for
+version 3. "A designer learns" names the words and fields that a designer
+user must learn for it (signal_spec 15.7, "Words a designer user must
+learn").
+
+**D21. Signal roles. PROPOSED (2026-11-11).**
+- Options: (a) a top-level `roles` beside `devices`, as signal_spec 10
+  says; (b) one `devices` set, where a role with `type` is a signal role;
+  (c) signal roles inside each template.
+- Evidence: the two kinds lower to different structs (a `ydev_desc` and
+  a `ysig_role`), and the rig binds them differently (a device, or an
+  adapter that ends in the role's value). The rig binds a role once per
+  session (devices_spec 11.1), so (c) would bind one hand per template.
+  No task has a role that is both an event role and a signal role. Both
+  acceptance tasks bind mice as signal roles only.
+  `trial_visuomotor` and `trial_bimanual` integrate counts inside bounds
+  (the window, or the window's size from the start); their scripts never
+  reach the bounds. A designer learns one word, role, if the designer
+  shows both sets in one panel.
+- Proposal: (a), with one namespace for the names of `devices` and
+  `roles`. Keys, adapters and checks: 3.5. A relative role reads [0, 0]
+  at the session's start. A role has no bound unless its adapter has
+  one. A value that drives a stimulus must be in `display.units`; a
+  `workspace_cm` role needs a gain to the display, which version 2 does
+  not have. The acceptance tasks use display units, as their C programs
+  do. Needed by both acceptance tasks. The gain waits for a task that
+  needs workspace units.
+
+**D22. One coordinate frame, and angles on the screen. PROPOSED (2026-11-11).**
+- Options: (a) version 1's frame for every unit (the origin at the
+  display's center, x right, y down), with every angle that a designer
+  sets counterclockwise on the screen; (b) y up for `cm` and `deg`, as in
+  PsychoPy; (c) each control states its frame.
+- Evidence: version 1's `px` and `deg` are y down: 2.14's Stroop banner
+  at `"y": -30` is above the center. (b) changes the meaning of every
+  version 1 `y`, and its migration must rewrite values. The C programs
+  differ: `trial_visuomotor` uses window pixels from the top-left, y down;
+  `trial_bimanual` uses cm, y up. An `affine` angle turns
+  counterclockwise on the screen only with y up: `trial_visuomotor`
+  writes `-rot_deg` for a counterclockwise turn (start_trial). A mirror
+  written as "swap x and y" is a different mirror in a y-down frame.
+  Reach studies give a rotation counterclockwise on the screen.
+- Proposal: (a). The loader converts a screen angle into the frame's
+  (3.4). `trial_bimanual`'s y columns then map with a sign change, and
+  `trial_visuomotor`'s x and y with the center's offset (3.18). A
+  designer learns nothing new: the panel shows the direction. Needed by
+  both acceptance tasks.
+
+**D23. `cm` as display units (finding 14). PROPOSED (2026-11-11).**
+- Options: (a) `display.units` `"cm"`, from the rig's `view`; (b) cm in
+  signal roles only, with stimuli in px; (c) a unit per stimulus.
+- Evidence: `trial_bimanual` gives every size in cm (target radius 0.8,
+  reach 12, workspace 20 x 20). The rig profile's `view` gives `width_mm`
+  and `width_px` (G2). ysp/gfx.h has `YGFX_PX` and `YGFX_DEG`, each one
+  scale factor; cm is one more. Without `--px-per-cm` the C program draws
+  at a NOMINAL 32 px per cm and says so in its files; the format has no
+  nominal geometry (D4). (b) puts two unit systems in one task.
+- Proposal: (a), lowered to `YGFX_CM` (G14). A run without `view` is
+  refused, as for `deg`. The acceptance run's rig has `width_px` 1024 and
+  `width_mm` 320: 32 px per cm, the C program's NOMINAL value. A designer
+  learns one more value of a field already shown. Needed by
+  `trial_bimanual`.
+
+**D24. The components and their keys. PROPOSED (2026-11-11).**
+- Options: (a) the five components of signal_spec 15.1, with `distance`,
+  `peak`, `signal_lost` and `speed_below` of 15.7; (b) fewer, broader
+  components (one `test` with a list of conditions); (c) the graph only.
+- Evidence: 15.6 counts what an author sets: the components carry the
+  signal path of all four paper tasks, and the gain is in the words, not
+  in the count. The acceptance tasks need `cursor`, `region` (with
+  `outside`, `speed_below` and `rate`), `movement`, `moving_target`,
+  `trace`, `distance` (the return ring) and `peak` (the peak speed).
+  Neither needs `signal_lost` or the cursor's `lowpass_hz` and `also`
+  (the gaze task). Three details of the C programs force keys:
+  `trial_bimanual` tests its holds once a frame (`rate`) and starts
+  tracking when the cursor is already in the target (a hit at the arm,
+  G16); `trial_visuomotor` measures its movement onset from where the
+  hand was at the hold's end, and `trial_bimanual` from the start's
+  center (`origin`).
+- Proposal: (a), with the keys of 3.7. A `movement` is a response choice
+  only: its hit is the response. `signal_lost` is specified for the gaze
+  task and can wait. `lowpass_hz` and `also` wait for a gaze task. A
+  designer learns eight component names, and for each control what it
+  gives: a value, a test, hits (3.7). Needed by both acceptance tasks,
+  except `signal_lost`.
+
+**D25. Shared controls. PROPOSED (2026-11-11).**
+- Options: (a) a top-level `controls`, as `stimuli` are top-level; (b)
+  a control repeated in each template; (c) a template that includes
+  another's controls.
+- Evidence: `trial_bimanual`'s two templates repeat one `cursor` with 7
+  values (15.7, "Repeated controls"). A control's variables are read per
+  trial, as a stimulus's are, so a shared control costs nothing at run
+  time: each template's graph gets its own copy of the nodes.
+- Proposal: (a). A template's control cannot have a top-level control's
+  name. A designer learns that a control, as a stimulus, can sit at the
+  top level. Needed by `trial_bimanual` (or it repeats the cursor).
+
+**D26. The graph view, `signals`. PROPOSED (2026-11-11).**
+- Options: (a) `signals` in version 2, restricted to the ops that a
+  definition can write; (b) wait for a task that the components cannot
+  write; (c) every op, sources included.
+- Evidence: neither acceptance task needs it. Without it, a need that no
+  component has becomes a script or a new component. signal_spec 10 and
+  15.1 put the graph under the components as the advanced view. Sources,
+  binds, records and emits are what the components and the rig already
+  write; a source in a definition ties it to a device (5.5).
+- Proposal: (a), 3.8. It can wait for version 3: adding it then is one
+  version step and no migration. A designer learns nothing until they
+  open the graph view.
+
+**D27. Where the value forms go. PROPOSED (2026-11-11).**
+- Options: for `{"signal": ...}` and `{"when": ...}` beyond a step's
+  `set` (D17): (a) also in `columns` and in a region's `center`; (b) in
+  every key; (c) only in `set`. For `then` and `else`: (d) a `when`
+  inside them; (e) constants only. For a lane: (f) `NAME.x`; (g) a
+  `lane` key.
+- Evidence: finding 15 needs a value and a test in a column
+  (`peak_speed_cm_s`, `fast`). Finding 7 needs a center that moves. The
+  bimanual reach target is white, then yellow or blue: three values from
+  two tests, so (e) cannot draw it. Section 10 already writes
+  `{"signal": "cur.x"}`. D17 says a control's "state"; D20 uses "state"
+  for a node of a trial's chart, so one word has two meanings for a
+  designer user. (b) puts a per-frame value into keys that are read once
+  (a texture, a method's grid).
+- Proposal: (a), (d), (f), with an element of a point that may be a
+  variable; the reference calls a control's boolean its *test* (3.7,
+  3.10). A designer learns "follows" (a signal), "when ... then ... else",
+  and the word test. Needed by both acceptance tasks.
+
+**D28. A region centered on a signal (finding 7). PROPOSED (2026-11-11).**
+- Options: (a) `distance` with two inputs, then a `detect` on its lane;
+  (b) a `detect` whose center is a second input (a ysp/sig.h change);
+  (c) `diff`, then a `detect` on the norm.
+- Evidence: ysp/sig.h v0.2.0's `distance` takes a second input of the
+  same lanes. (a) and (c) need no header change. (b) makes `a.x` and
+  `a.y` mean two things. A hit's value must be the tested position, not
+  the distance; it comes from the ring of `of` at the hit's time.
+- Proposal: (a), with no header change. Needed by `trial_bimanual`
+  (`inside`).
+
+**D29. Random values per block (finding 8, F23). PROPOSED (2026-11-11).**
+- Options: (a) a `vars` draw per run of a node, `{"uniform": [lo, hi],
+  "n": N, "per": "node"}`, drawn by the player from the node's seed; (b)
+  per-block variables in ysp/trials.h (F23's proposal); (c) a table
+  column with values fixed at pack build.
+- Evidence: `trial_bimanual` draws 14 phases per block, the same for
+  each trial of the block. In the definition each block is one leaf, so
+  a draw per run of the node is a draw per block. D8 seeds each node's
+  generator from S, the node's path and its iteration; a separate stream
+  from that seed moves no trial's draw. (b) is needed only when one leaf
+  holds several blocks (`block_size`). (c) gives every participant the
+  same phases.
+- Proposal: (a), 3.14. (b) waits for a task with blocks inside one leaf;
+  its change is `desc.vars[]` entries with a block scope in ysp/trials.h,
+  drawn at a block's first trial and restored by `ytr_restore()`. A
+  designer learns "uniform" and "once per block". Needed by
+  `trial_bimanual`.
+
+**D30. A chained target, `walk2d` (finding 9). PROPOSED (2026-11-11).**
+- Options: (a) a variable kind in ysp/trials.h; (b) a draw of the
+  player's own; (c) a script.
+- Evidence: each reach of `trial_bimanual` starts at the last target
+  (new_target). The value depends on the previous trial, so a resume
+  must give it again: `ytr_restore()` and a snapshot carry the trial
+  variables (G3), and a draw that the player makes outside them would
+  not resume. A draw repeats until the point is inside the workspace,
+  so it takes a variable number of outputs. It depends on the last
+  target only, not on the hand (15.7), so it is no script.
+- Proposal: (a), G15, with the format's form in 3.14. A designer learns
+  "each target a step from the last, inside a box". Needed by
+  `trial_bimanual`.
+
+**D31. A press inside a stimulus, `click_in` (finding 10). PROPOSED (2026-11-11).**
+- Options: (a) a choice `{"click_in": STIMULUS, "name": N}`, with the hit
+  test in ysp/response.h; (b) the hit test in the player.
+- Evidence: only the mouse-tracking task needs it. A press carries its
+  x and y; the collector already filters a choice by kind, device and
+  control.
+- Proposal: (a), in version 3. The change: `yrsp_choice` gains a
+  rectangle or a circle in window coordinates, and a press outside it is
+  not that choice. F3 goes with it (`desc.end_on_early`,
+  `YRSP_R_EARLY_END`, `yrsp_ended_by()`), for D20 rule 7's exit on an
+  early press. Not needed by the acceptance tasks.
+
+**D32. Roles bound by a click (finding 11). PROPOSED (2026-11-11).**
+- Options: (a) a node `{"assign_roles": [...], "by": "click"}`; (b) the
+  rig profile binds each mouse by its device path; (c) the operator
+  binds in the runner.
+- Evidence: `trial_bimanual` asks for a click of each mouse. Two mice of
+  one model have one vendor and product id, but each has a stable path
+  on Linux (evdev `by-path`). No data column depends on how a role was
+  bound, and `--sim` feeds each role.
+- Proposal: (b) in version 2; (a) waits for version 3 and needs F24
+  (`yscr_device_name()`). Not needed by the acceptance tasks.
+
+**D33. Columns from controls (finding 15). PROPOSED (2026-11-11).**
+- Options: (a) four column forms: `{"hit": ...}`, `{"time": ..., "from":
+  ...}`, `{"signal": ...}`, `{"when": ...}`; (b) traces only, and every
+  value in the analysis.
+- Evidence: the acceptance programs write a crossing's time, the hand at
+  the crossing, a peak speed, a fast flag and the hand whose report
+  crossed. Each is one value that the graph or the collector holds.
+  Angles, the MSE, the alignment matrix and frequency responses are
+  arithmetic over a trace (15.7: arithmetic stays in the analysis).
+- Proposal: (a), 3.15, and the column `rsp_role` for a response with
+  signal choices. A designer learns that a column can show a control's
+  time, value or test. Needed by both acceptance tasks.
+
+**D34. A response whose choices are signals. PROPOSED (2026-11-11).**
+- Options: for the role: (a) no `role`, as each choice's `movement`
+  names its input; (b) `role` required. For when the window opens: (c)
+  at the movement's `from`; (d) at the trial's first frame. For
+  `response_ends_trial` with `states`: (e) a shared exit to `end`; (f)
+  refused.
+- Evidence: 15.7: "A response whose choices are signals has no role".
+  `trial_visuomotor` arms its collector at the hold's end and measures
+  the onset distance from the hand there; `trial_bimanual` arms at the
+  target's onset and measures from the start's center. D20 rule 7 keeps
+  the response at the template's level, and `after` has no place among
+  states. jsPsych users know `response_ends_trial`.
+- Proposal: (a), (c), (e), 3.13. A designer learns that a movement can
+  be a response. Needed by both acceptance tasks.
+
+**D35. When a state arms, and when an exit is taken. PROPOSED (2026-11-11); it specifies D20 rules 1, 3, 4 and 5.**
+- Options: for the arm: (a) at the entry frame's onset; (b) at the time
+  of the exit that led to the state. For the exit: (c) at a frame (D20
+  rule 4 as written); (d) when the player drains the hit, after each
+  event it feeds and after `ysig_frame()`. For a region whose test is
+  already true at the arm: (e) ysp/response.h's CROSSINGS rule (no hit
+  until the test fails); (f) a hit at the arm. For `until`: (g) the
+  steps before it and the wait are one state; (h) the wait is a state of
+  its own.
+- Evidence: `trial_visuomotor` arms its crossing detect and its collector
+  at the hold's hit time, between frames. One frame's poll holds many
+  samples (8 kHz at 60 Hz: 133), and a detect armed at the next frame
+  would not test those between the hit and the frame. `trial_bimanual`
+  starts tracking on the first frame that has the cursor in the target
+  and still, also when it was there before the wait began. ysp/sig.h's
+  detect keeps a crossing that is true at the arm from being a hit (G16).
+  D16 says the sequence "waits" at `until`; with (g) the control is
+  armed at the state's entry, before the steps that precede `until`, and
+  a hit during those steps ends them early.
+- Proposal: (b), (d), (f) for a region named by an exit, and (h); 3.11.
+  A designer learns nothing new: the chart behaves as drawn. Needed by
+  both acceptance tasks.
+
+**D36. A trial's outcome with states. PROPOSED (2026-11-11).**
+- Options: (a) the outcome of the exit that reached `end`, else version
+  1's rule from the response, else `"done"`; (b) an outcome required on
+  every exit to `end`; (c) `"done"` always.
+- Evidence: D16 and D20 give an exit an `outcome` but give no default.
+  A trial of either acceptance task ends through its steps, with no
+  outcome. `trial_visuomotor` passes 1 to `ytr_update()` for every
+  trial; version 1 passes `YTR_INVALID` for a trial with no response,
+  which a leaf with no tracks and no `requeue` does not run again. An
+  `outcome` on an exit to a state other than `end` has no effect unless
+  a later exit keeps it, which the chart does not show.
+- Proposal: (a), 3.11; `ytr_update()` gets the template's `outcome` (2.5),
+  whose default with `states` and no `key_answer` is 1; an `outcome` on
+  an exit whose `to` is not `end` is refused. Needed by both acceptance
+  tasks (a default is forced).
+
+**D37. The state stream (D20 rule 8). PROPOSED (2026-11-11).**
+- Options: (a) rows of `events.csv` with `kind` `"state"`; (b) a file
+  `streams/states.csv`; (c) columns of `trials.csv`, per state.
+- Evidence: ysp/dataset.h's event row already says that its `text` holds
+  "a state", and its `frame` joins `frames.csv`: no header change. (c)
+  cannot hold a cycle (a retry enters a state many times). (b) takes a
+  name that a trace can have.
+- Proposal: (a), 3.15. Needed by D20 rule 8; both acceptance tasks have
+  states.
+
+**D38. Traces. PROPOSED (2026-11-11).**
+- Options: for a frame row: (a) the held value at `ysig_frame()` (a
+  `record` per frame); (b) each value at the frame's flip record's onset
+  (`ysig_value_at()`). For the rows kept: (c) a window from `from` to
+  `to`; (d) the whole trial.
+- Evidence: `trial_bimanual` reads each frame's hands at its flip
+  record's onset, a frame later, from rings (sig.md, "Read a value at a
+  flip record's onset"); its frequency analysis needs the onset that was
+  shown. `trial_visuomotor` writes the samples from the hold's end to the
+  crossing, both included. A `join` takes at most 4 lanes;
+  `trial_bimanual`'s frame rows have 9.
+- Proposal: (b) and (c), 3.7 and 3.15. A sample trace is one `join` and
+  one `record`, at most 4 lanes; a frame trace has no lane limit but the
+  data writer's 256 columns. Needed by both acceptance tasks.
+
+**D39. A generator's time, and steps on a control. PROPOSED (2026-11-11).**
+- Options: for a generator's time 0: (a) the trial's first frame, the
+  base time that ysp/sig.h reads; (b) a state's entry, `from`; (c) a step
+  that restarts it. For the control keys that a step drives: (d) every
+  number key; (e) a listed few.
+- Evidence: `trial_bimanual` anchors its timeline at the first moving
+  frame, so the target's sum starts there; the definition's trial starts
+  at the wait, an unknown time earlier. `ysig_frame_in` has one base time
+  for every generator. Principle 3: a parameter changes at a trial
+  boundary, an input at any time. The tracking ramp is a tween on an
+  input (`scale`'s factor).
+- Proposal: (b): the player anchors a second timeline base at that
+  state's entry frame and gives its base time to `ysig_frame()`; two
+  generators with a different `from` in one template are refused
+  (G19 lifts that). (e): only `moving_target.amplitude` in version 2.
+  Needed by `trial_bimanual`.
+
+**D40. Signal roles' samples in the data set. PROPOSED (2026-11-11).**
+- Options: (a) input rows in `events.csv` (`kind` the device's kind,
+  `role` the role); (b) a stream per role; (c) none (the journal only).
+- Evidence: principle 7: the raw samples replay every value. signal_spec
+  5.5: the data records, per role, the adapter, the device and its
+  identity, the calibration's hash and the raw samples. ysp/dataset.h
+  already writes input rows (`yds_event_from_input()`). Size:
+  `trial_bimanual --sim` feeds about 1.7 million reports in 14 virtual
+  minutes.
+- Proposal: (a), and per signal role in `session.json` (3.15). No
+  acceptance column needs it; replay does. It can wait.
+
+**D41. The version 1 gaps, settled at version 2. PROPOSED (2026-11-11).**
+1. The `end` mark. Options: reserve it; leave it a label. Evidence: the
+   player ends a trial with the code `0x7fffffff`, so no mark name
+   collides; in version 2 `"to": "end"` is an exit's target, not a mark.
+   Proposal: a mark's name is a label in `events.csv`, outside the
+   template's namespace (3.9); `end` stays a valid mark name.
+2. The `visible` stimulus key. Options: keep it at its table default;
+   drop it. Evidence: the player ignores it (player.md, "`visible` as a
+   key"); `on`, `off` and D17's forms drive the property. Proposal:
+   version 2 refuses it on a stimulus, and the migration from version 1
+   leaves it out (3.2).
+3. `dot_edge` on an `rdk`. Options: add `dot_edge` for gfx's dot edge
+   now; settle `edge` and wait. Evidence: the loader and the player give
+   `edge` to `yrdk_desc`; no task sets gfx's dot edge. Proposal: `edge`
+   on an `rdk` is yrdk's; gfx's dot edge keeps its default and has no key
+   until a task needs one, and `dot_edge` is its name then.
+4. `$contrast_shown` per stimulus. Options: one variable per stimulus;
+   keep one. Evidence: no task shows two stimuli with `{"michelson":
+   ...}` in one trial. Proposal: keep one variable and the refusal of two
+   such stimuli in one trial.
+5. The defaults table. Options: in this page; in experiment.md.
+   Evidence: D2 says the defaults are the format's, listed in this page
+   per version; version 1's table is experiment.md's (2.11). Proposal:
+   part 3 gives a default for every version 2 key (3.17), and
+   `yexp_defaults(2)` lists the same rows, checked by the loader's test.
+Needed by the acceptance tasks: item 5 only.
 
 ## Part 2: Reference
 
@@ -753,6 +1145,9 @@ existed outside this repository. Reason: the format uses the names of the
 C fields, and the Windows SDK defines `hyper` as a macro (`__int64`), so a
 C file that included `<windows.h>` before ysp/aep.h did not compile.
 
+Version 2 (proposed 2026-11-11) is part 3. 3.2 gives the migration step
+from version 1.
+
 ### 2.12 What the designer edits
 
 The designer edits the definition and the pack source description; it
@@ -1004,3 +1399,972 @@ TEXTURE entry name), `type`, `code` and `answer`.
 | `light` | `photodiode_check.c`: edges of a line board on the input bridge, recorded in `events.csv` for the analysis to match to flips |
 | `rate=display` | `YTR_RATE_DISPLAY`: the player sets `desc.display_rate_num` and `display_rate_den` from the screen after `ytr_rules()` (G11, closed in ysp/trials.h v0.6.0) |
 | `min_tier` 1 | `yscr_desc.min_tier`; below it, frames carry `YSCR_FLIP_BELOW_TIER` (D11) |
+
+## Part 3: Reference, version 2
+
+Status: proposed 2026-11-11. Nothing parses version 2. D16 to D20 are
+decided; every other rule in this part comes from a proposed decision,
+D21 to D41 (1.5), and names it. A version 2 definition is a version 1
+definition (part 2) plus the keys of this part: a key that this part does
+not name keeps its part 2 meaning, type and default.
+
+### 3.1 What version 2 adds
+
+| Addition | Where | Decision |
+|---|---|---|
+| `version` 2, and version 1 read under it | file | D12; 3.2 |
+| `roles`: signal roles with a type and a unit space | file | D21 |
+| `display.units` `"cm"` | file | D23 |
+| One coordinate frame for every unit; angles on the screen | everywhere | D22 |
+| `controls`: components, per template and shared at the top level | file, template | D24, D25 |
+| `signals`: the graph as nodes | template | D26 |
+| `states`, `exits`, `flags`, `max_visits`, `until`, `after_s` | template | D16, D20; D35, D36 |
+| The value forms `{"signal": ...}` and `{"when": ...}` | steps, columns, a region's center | D17; D27 |
+| `freeze_at` | cursor, peak | D18; D24 |
+| The step `recenter` | steps | D19 |
+| Steps on a control's key | steps | D39 |
+| Response choices that are signals | response | D34 |
+| Columns from controls; `rsp_role` | template, data | D33 |
+| `vars`: `uniform` per node, `walk2d` | node | D29, D30 |
+| State rows and role samples in `events.csv`; trace streams | data | D37, D38, D40 |
+| A defaults table | 3.17 | D41 |
+
+### 3.2 A version 1 definition under version 2
+
+The loader reads version 1 and version 2, and refuses a higher version
+with "this player reads up to 2". It migrates a version 1 definition in
+one step (D12):
+
+1. `version` becomes 2.
+2. Each stimulus's `visible` key is left out (D41, item 2). The player
+   ignores that key in version 1, so the meaning stays the same.
+3. Nothing else changes. Every key of part 2 means in version 2 what it
+   means in version 1. A version 1 template has `events`, `response` and
+   `after`, and no `states`, so it runs as D7 says.
+
+The player records the stored bytes' SHA-256 and the migrated bytes'
+SHA-256 (D12). The step's test pins a corpus to its migrated canonical
+bytes: the four worked examples of 2.14, `examples/pack/stroop/` and the
+loader's corpus (`tests/experiment/`) each give their version 1 bytes
+with `"version": 2` and no `visible`.
+
+### 3.3 The file
+
+Keys that version 2 adds to 2.1, or changes:
+
+| Key | Value | Default |
+|---|---|---|
+| `version` | integer, 1 or 2 | required |
+| `roles` | object, signal role name to signal role (3.5) | `{}` |
+| `controls` | object, control name to control (3.7), in every template's namespace (D25) | `{}` |
+| `display.units` | `"px"`, `"deg"`, `"cm"` | `"px"` |
+
+`devices` keeps its meaning (2.9): its roles are event roles (keys,
+buttons, triggers). A name is a key of `devices` or of `roles`, not of
+both (D21).
+
+### 3.4 Coordinates and units (D22, D23)
+
+- **One frame.** For every unit the origin is the display's center, x is
+  right and y is down: version 1's frame, `ygfx`'s default `place`.
+- **`cm`.** One scale factor from the rig profile's `view`: px per cm is
+  `width_px` / `width_mm` x 10. It lowers to `ygfx_desc.units`
+  `YGFX_CM` (G14). Without a `view` the session does not start, as for
+  `deg`.
+- **Angles that a designer sets** turn counterclockwise on the screen
+  from rightward: `rotation_deg`, `mirror_deg`, and `walk2d`'s `_deg`
+  variable. In the y-down frame the loader writes `affine`'s `angle` as
+  minus `rotation_deg`. A mirror about the line at A degrees is the
+  matrix [[cos 2A, -sin 2A], [-sin 2A, -cos 2A]]; the loader takes the
+  cosine and sine of a multiple of 90 degrees as exact (0, 1, -1), so a
+  mirror gives exact values and keeps the sign of zero (sig.md, "The
+  sign of zero").
+- **Signal roles in display units** (`display_px`, `display_cm`,
+  `display_deg`) give values in this frame. A value that drives a
+  stimulus's `x`, `y`, `w` or `h` is in `display.units`: the loader
+  refuses a cursor or a moving target whose role's units are not the
+  display's (`display_px` for `px`, `display_cm` for `cm`,
+  `display_deg` for `deg`).
+- **A control's numbers** (a radius, an onset distance, a speed) are in
+  the units of what it tests (`of`); a speed is those units per second.
+
+### 3.5 Signal roles (D21)
+
+| Key | Value | Default | Lowers to |
+|---|---|---|---|
+| `type` | `"position2d"`, `"position2d_relative"`, `"position3d"`, `"scalar"`, `"gaze"` | required | `ysig_role.type` |
+| `units` | `"display_px"`, `"display_cm"`, `"display_deg"`, `"workspace_cm"`, `"device"` | required | `ysig_role.units` |
+| `allow_relative` | bool; only with `type` `position2d` | `false` | `ysig_role.allow_relative` |
+| `required` | bool | `true` | the player refuses a start with a required role unbound, naming it |
+| `note` | string | none | |
+
+Lanes: `position2d`, `position2d_relative` and `gaze` have x and y;
+`position3d` has x, y and z; `scalar` has x. `pose` is not a type
+(ysp/sig.h has no 7-lane value).
+
+- **Adapters.** The rig supplies one adapter per signal role (signal_spec
+  5.5): nodes that read a device and end in the role's value, in the
+  role's type and units (`ysig_adapter`). The profile's adapter block is
+  not built (G18): it must give, per signal role, the device and, for a
+  relative device, its scale per count in the role's units, or for an
+  absolute one the map from its coordinates. `--sim` gives each role a
+  scripted source in the role's units (3.19).
+- **Start and bounds.** A relative role reads [0, 0] at the session's
+  start. Its adapter never resets at a trial boundary (D19): the player
+  calls `ysig_reset_trial()`, not `ysig_reset()`. A role has no bound
+  unless its adapter has one.
+- **Checks without a rig** (the loader alone): the names, types and
+  units; the lanes of each control's `of`; the units of a value that
+  drives a stimulus (3.4); `recenter` only on a `position2d_relative`
+  role or a `position2d` role with `allow_relative`.
+- **Checks with a rig** (the host's `role()`, at the player's start):
+  each signal role has an adapter; `ysig_open()` accepts its type and
+  units (it refuses another type or units, and a relative adapter under
+  `position2d` without `allow_relative`); its device opens. A `recenter`
+  on a role whose adapter is absolute (a tablet) is skipped at run time
+  and counted in `session.json` (D19's note).
+
+### 3.6 Templates
+
+| Key | Value | Default | Lowers to |
+|---|---|---|---|
+| `events` | array of steps, with `until` (D16) | `[]` | 2.5; `until` splits it into states (3.11) |
+| `after` | array of steps; only with `events` | `[]` | 2.5 |
+| `states` | array of states (3.11); not with `events` or `after` | none | one op table per entered state |
+| `exits` | array of shared exits (D20 rule 11); only with `states` | `[]` | each listed state's exits |
+| `flags` | array of names | `[]` | the player's booleans; columns (3.15) |
+| `controls` | object, control name to control (3.7) | `{}` | `ysig_node[]` |
+| `signals` | object, node name to node (3.8) | `{}` | `ysig_node[]` |
+| `response` | 2.6 and 3.13 | none | `yrsp_desc` |
+| `columns` | column to value, also the forms of 3.15 | `{}` | `ytr_col` entries |
+| `record`, `method_value` | as 2.5 | as 2.5 | |
+| `outcome` | as 2.5; its default with `states`: 3.11 | as 2.5 | `ytr_update()`'s outcome |
+
+The graph. A template that has controls or signal nodes, or names a
+top-level control, has one `ysig_graph`, opened at load from those nodes,
+the nodes that the forms of 3.10 add, and the signal roles' adapters. At
+a trial's start the player sets each node parameter that a variable gives
+(`ysig_set()`, `ysig_set_data()`), then calls `ysig_reset_trial(g, t)`
+with the first frame's onset (D19). It feeds the graph every input event
+(`ysig_feed()`), drains its hits (`ysig_detected()`) and derived events
+(`ysig_derived()`) after each one, and calls `ysig_frame()` once a frame
+after `ytl_evaluate()`, with the timeline's values, the base time (3.7,
+`moving_target`) and the poll's time (sig.md, "Feed it and read it at
+each frame").
+
+### 3.7 Controls (D24)
+
+A control is an object with `"control": KIND`. It can be in a template's
+`controls` or in the top-level `controls` (D25). A number or a point in a
+control is a literal, a variable or a lookup, set at the trial's start
+with `ysig_set()`; an element of a point can be a variable (D27).
+
+What a control gives. Three things, and the designer shows them by these
+words:
+
+- a **value**: lanes that follow the input, read by `{"signal": NAME}`,
+  a trace and a column;
+- a **test**: true or false, read by `{"when": NAME}` and a trace;
+- **hits**: times at which something happened, read by an exit's `on`,
+  `until`, `from`, `to`, `freeze_at` and a column's `time`.
+
+| Kind | Value | Test | Hits | Acceptance tasks |
+|---|---|---|---|---|
+| `cursor` | 2 lanes | no | no | both |
+| `region` | its test as 1 lane | inside (and slow) | yes | both |
+| `distance` | 1 lane | no | no | visuomotor |
+| `movement` | no | no | the response's | both |
+| `peak` | 1 lane | no | no | both |
+| `moving_target` | 2 lanes | no | no | bimanual |
+| `trace` | no (it writes a stream) | no | no | both |
+| `signal_lost` | its test as 1 lane | no sample for a time | yes | neither (gaze) |
+
+Keys that several kinds share: `of` (a role, a control with a value or a
+test, or a signal node: 3.9), `from` and `to` (a name with a time: 3.9),
+`freeze_at` (a control with hits), `note`.
+
+A control whose hits an exit names arms at its state's entry (3.11).
+Every other control arms at the trial's start.
+
+#### cursor
+
+| Key | Value | Default | Lowers to |
+|---|---|---|---|
+| `role` | a role of 2 lanes | exactly one of `role`, `x` with `y`, `mean` | `role` |
+| `x`, `y` | each `"ROLE.x"` or `"ROLE.y"`: one lane of a role | | `select` per lane, then `join` |
+| `mean` | array of 2 to 4 roles of one type | | `mean` |
+| `transform` | `"identity"`, `{"rotation_deg": A}`, `{"mirror_deg": A}`, or a lookup that gives one of them | `"identity"` | `affine`: `angle` -A, or `m` (3.4), set per trial |
+| `about` | point: the rotation's or the mirror's center | `[0, 0]` | `affine` `pre` and `post` |
+| `stimulus` | a stimulus whose `x` and `y` follow the value for the whole trial | none | `bind` to its `x` and `y` channels |
+| `freeze_at` | a control with hits: from that hit's sample to the trial's end the value holds (D18) | none | `latch` on the hit's `detect` (`out` hit) |
+
+A step cannot give `x` or `y` of a cursor's `stimulus` another value; to
+switch what a stimulus follows, leave out `stimulus` and use `set` steps
+(3.10).
+
+#### region
+
+| Key | Value | Default | Lowers to |
+|---|---|---|---|
+| `of` | a name with a value of 2 or 3 lanes | required | the detect's input |
+| `center` | point, or `{"signal": NAME}` of the lanes of `of` (D28) | `[0, 0]` | `detect` `a.x`, `a.y`; a signal: `distance(of, NAME)` and a `detect` on its lane |
+| `radius` | number above 0 | required | `detect` `level` |
+| `outside` | bool: the test is "outside the circle" | `false` | `detect` `test` `ge`, else `le`; `lane` -1 (the norm) |
+| `stay_s` | seconds, 0 or more: how long the test holds for a hit | `0` | `detect` `hold` |
+| `speed_below` | number above 0: the test also needs the speed of `of` under it | none | `speed(of)`, a `detect` `le`, `all` of the two tests |
+| `speed_lag_s` | seconds above 0 | `0.01` | `speed` `lag` |
+| `rate` | `"sample"` or `"frame"` | `"sample"` | `detect` `at` |
+
+- Test: inside (or outside) the circle, and slow with `speed_below`. The
+  test does not include `stay_s`.
+- Hits: a hit when the test has been true for `stay_s`, counted from the
+  arm or later. A test that is already true at the arm counts from the
+  arm, also with `stay_s` 0 (D35; `entry` `arm` with a stay, `entry`
+  `now` without, G16).
+- A hit's value (a column's `hit`): the value of `of` at the hit's
+  sample.
+- Nodes. For the test: a `detect` with `out` test, `start` reset,
+  `repeat` every. For the hits: a `detect` with `out` hit, `start` arm
+  (or reset: 3.7's arming rule), `repeat` once. With `speed_below`, the
+  two tests feed `all`, and the hit `detect` (`ge` 0.5, `hold`
+  `stay_s`) reads `all`. The loader makes only the nodes that something
+  reads.
+
+#### distance
+
+| Key | Value | Default | Lowers to |
+|---|---|---|---|
+| `of` | a name with a value of 2 or 3 lanes | required | `distance` input |
+| `center` | point | `[0, 0]` | `distance` `point` |
+| `scale` | number | `1` | `scale` |
+
+Value: 1 lane, the distance times `scale` (`trial_visuomotor`'s ring has
+a diameter of twice the distance).
+
+#### movement
+
+| Key | Value | Default | Lowers to |
+|---|---|---|---|
+| `of` | a name with a value of 2 lanes | required | `emit` (kind `YIN_KIND_USER + 7`) |
+| `onset` | number above 0: the distance from `origin` | required | the collector's choice: `cross` DISTANCE, `level` |
+| `from` | a name with a time: the window opens there | the trial's first frame | `yrsp_arm(c, t)` |
+| `origin` | point | the value of `of` at the arm | `yrsp_set_origin(c, i, x, y)` |
+
+A movement is a response choice only (3.13). Its hit is the response:
+an exit and a `from` name it as `response`. The loader refuses a
+movement that no response names.
+
+#### peak
+
+| Key | Value | Default | Lowers to |
+|---|---|---|---|
+| `of` | a name with a value | required | |
+| `measure` | `"speed"` | required | `speed(of, lag_s)` |
+| `lag_s` | seconds above 0 | `0.01` | `speed` `lag` |
+| `from` | a name with a time: the peak starts again at each of its times | the trial's start | `peak`'s gate: the hit `detect` of a control, the `visible` channel of a stimulus (`channel`), or a selector channel that a state's entry sets |
+| `freeze_at` | a control with hits | none | `latch` |
+
+Value: 1 lane, the largest speed since `from` (since the trial's start
+with no `from`).
+
+#### moving_target
+
+| Key | Value | Default | Lowers to |
+|---|---|---|---|
+| `stimulus` | a stimulus whose `x` and `y` follow the value | none | `bind` |
+| `x`, `y` | `{"amplitudes": [...], "freqs_hz": [...], "phases": [...]}`: arrays of one length n, 1 to 64, the same for both lanes; phases in radians, a literal array or an array variable | required | `sines` `n` and `data` (lanes x n x 3) |
+| `amplitude` | a factor on both lanes; a step can set or tween it (D39) | `1` | `scale` by a `channel` |
+| `from` | a state: its entry frame's onset is time 0 | the trial's first frame | the frame's base time on a second base anchored there (D39) |
+
+Value: 2 lanes, `amplitude` x sum of a cos(2 pi f t + phase), at each
+frame's base time t from `from`. Before `from`'s entry, t is 0.
+
+#### trace
+
+| Key | Value | Default | Lowers to |
+|---|---|---|---|
+| `of` | array of names: roles, controls with a value or a test, signal nodes | required | |
+| `rate` | `"sample"` or `"frame"` | `"sample"` | 3.15 |
+| `from` | a name with a time: rows from it | the trial's first frame | |
+| `to` | a name with a time, or `"end"`: rows up to it | `"end"` | |
+
+- Rows kept: from the latest time of `from`; up to `to`. A row at a
+  control's hit is in; a row at a state's entry frame or at the end
+  frame is out (D38).
+- `rate` `"sample"`: one `join` of the items and one `record` `per`
+  sample: a row for each sample that changes the join. At most 4 lanes
+  in all (`join`).
+- `rate` `"frame"`: one row a frame, each item read at the frame's flip
+  record's onset with `ysig_value_at()`, written when the record
+  arrives. The loader gives each item's node a history of 4096 values
+  (`trial_bimanual`'s ring). No lane limit but the data writer's 256
+  columns.
+- The stream is `streams/<trace name>.csv` (3.15).
+
+#### signal_lost (the gaze task; not needed by the acceptance tasks)
+
+| Key | Value | Default | Lowers to |
+|---|---|---|---|
+| `of` | a role | required | `silent` input |
+| `after_s` | seconds above 0 | required | `silent` `after` |
+
+Test: no sample for `after_s`. Hits: when the test becomes true (a
+`detect` `ge` 0.5 on the `silent` node).
+
+### 3.8 The graph: `signals` (D26)
+
+`signals` is the graph of signal_spec 5 as JSON: node name to node.
+
+| Key | Value | Lowers to |
+|---|---|---|
+| `op` | an op of `ysig_op_params(YSIG_OP_NONE)`'s values, except `source`, `role`, `channel`, `bind`, `record`, `emit`, and custom ops | `ysig_node.op` |
+| `in` | array of 1 to 4 names: roles, controls with a value or a test, signal nodes; no lane suffix (use `select`) | `ysig_node.in[]` |
+| a row's name | a row of `ysig_op_params(op)`, with its dot (`"gain.x"`, `"m.xy"`); a row whose unit is `s` is the key `<row>_s` (`"lag_s"`, `"hold_s"`, `"after_s"`, `"delay_s"`, `"ramp_s"`, D4); an `enum` row takes a name of its `values` (`"test": "le"`); a literal, a variable or a lookup | `ysig_node.p[]`; `ysig_set()` per trial |
+| `lanes` | 1 to 4: `select`'s output, a generator's | `ysig_node.lanes` |
+| `data` | `sines` only: an array of lanes x n x 3 numbers (amplitude, Hz, phase in radians) | `ysig_node.data` |
+
+- The loader sets a `detect` node's `start`, `repeat` and `out` by its
+  use, as for a region (3.7); those three keys are refused. It also sets
+  `history` (D38).
+- Order: an object has no order (D3). The loader sorts the nodes so that
+  each input comes before its user, and refuses a cycle, naming its
+  nodes. `ysig_check()` then checks the lanes and the rows.
+- Names: a signal node is in the template's namespace (3.9). A control's
+  `of` and `center`, a value form, an exit's `on` (a `detect` node), a
+  trace's `of` and a column can name a signal node. A signal node's `in`
+  can name a control: its value, or a region's test. The nodes of a
+  control's expansion have no names in the file.
+- What a designer shows: controls as cards in the template's panel. The
+  graph view shows each control's expansion (the nodes of 3.7) under the
+  control's name, read only, and the signal nodes, which the user can
+  edit. "Edit as graph" writes a control's expansion as signal nodes and
+  removes the control. The fields come from `ysig_op_params()` (G6).
+
+### 3.9 Names and references
+
+**One namespace per template** (D20 rule 9, completed by D21 and D26):
+the stimuli, the top-level controls, the template's controls and signal
+nodes, its states, its flags and named clicks, and the signal roles. A
+name that two of these share is refused. `end` and `response` are
+reserved. An event role (`devices`) is named only by a `role` key. A mark
+is a label in `events.csv`, outside the namespace (D41). A flag is read
+as `$NAME`, so a flag cannot have a variable's name.
+
+**Lanes.** `NAME.x`, `NAME.y`, `NAME.z`, `NAME.w` name one lane of a
+value. A name alone is every lane; a name alone in a one-lane place is
+refused when its value has more than one lane.
+
+What each key can name:
+
+| Key | Can name | Means |
+|---|---|---|
+| `of`, a trace's `of`, `in` | a role, a control with a value or a test, a signal node | its value; a region's test as 0 or 1 |
+| `{"signal": N}` | a role, a control with a value, a signal node | its value |
+| `when`'s test | a control with a test, a `detect` signal node, or `{"signal": N, "above": L}` | its test |
+| an exit's `on`, `until`, `freeze_at` | a control with hits, a `detect` signal node; `on` also `response` | its hit |
+| `from`, `to`, a column's `time` and `from` | a stimulus, a control with hits, a state, `response`; `to` also `end` | its time |
+
+The time of a name, in the running trial:
+
+| Name | Time |
+|---|---|
+| a stimulus | its first onset (the flip record's onset; the plan until the record comes) |
+| a control with hits | its latest hit's time |
+| a state | its latest entry frame's onset |
+| `response` | `yrsp_result.t_response` |
+| `end` | the trial's end frame's onset |
+
+A `from` that starts something again (a peak's gate) takes each time of
+its name. A `from` that opens a window (a movement, a trace) takes the
+latest time before the window's use. A column takes the latest time in
+the trial; it is empty when the name has none.
+
+### 3.10 Value forms (D17, D27)
+
+| Form | Value | Allowed in |
+|---|---|---|
+| `{"signal": N}` | N's value (one lane in a one-lane place) | a `set` step's `props`; a column; a region's `center` |
+| `{"when": TEST, "then": V, "else": V}` | V when the test is true, else the other; V is a literal, a variable, a lookup, or a `when` | a `set` step's `props`; a column |
+| TEST | the name of a control with a test or of a `detect` node, or `{"signal": N, "above": L}`: N's one-lane value at or above L | inside `when` |
+
+The loader refuses the forms everywhere else: in a stimulus's keys, in
+`to` and `then` steps, and in methods, `vars`, `devices`, `roles` and
+control keys other than `center`.
+
+Lowering. For each stimulus property P (one float field: `color` is
+three, `color_r`, `color_g`, `color_b`) that any step gives a form:
+
+- Let F1 to Fk be the distinct forms that steps give P, by their
+  canonical JSON. P gets k selector channels S1 to Sk on the timeline
+  and k `mux` nodes: P = mux(S1, F1, mux(S2, F2, ... mux(Sk, Fk,
+  channel(C)))), where C is P's own timeline channel (constants, `on`,
+  `off`, tweens). One `bind` row writes P (D17).
+- A `set` of Fj lands as `YTL_SET_VALUE` ops: Sj to 1, every other S to
+  0. A constant step on P (`set`, `to`, `then`, and `on` and `off` for
+  `visible`) sets every S to 0 and writes C. A later `set` of P at the
+  same time wins, by the timeline's rule for a channel.
+- `{"signal": "N.x"}`: N's node, through `select` for one lane.
+- `{"when": T, "then": A, "else": B}`: mux(T, A, B). A literal, a
+  variable or a lookup in A or B is a timeline channel that the step
+  sets when it lands, read by a `channel` node.
+- `{"signal": N, "above": L}`: a `detect` `ge` L (`out` test, `start`
+  reset, `repeat` every) on N: a value equal to L is above.
+- In a column, a form is read at the trial's end frame, after its
+  `ysig_frame()`.
+
+### 3.11 States and exits (D16, D20, D35, D36)
+
+A state:
+
+| Key | Value | Default | Lowers to |
+|---|---|---|---|
+| `name` | a name (3.9) | required | the state rows' `text` (3.15) |
+| `steps` | array of steps (2.5, 3.12) | `[]` | one op table at the entry frame: `ytl_at(&q, base time of the entry frame)` |
+| `exits` | array of exits | `[]` | the player's exit test |
+| `max_visits` | integer, 1 or more | none | a count per trial (D20 rule 12) |
+| `over` | `{"to": STATE or "end", "outcome": V}`; only with `max_visits` | none | |
+
+An exit:
+
+| Key | Value | Default | Lowers to |
+|---|---|---|---|
+| `on` | a name with hits, or `"response"` (3.9) | one of `on`, `after_s`, or neither (instant) | a hit from `ysig_detected()`; the collector's response |
+| `after_s` | seconds above 0, from the entry frame's onset | | that time |
+| `if` | a boolean variable or `"$flag"`; instant exits only | none | read when the state starts |
+| `to` | a state or `"end"` | required | |
+| `outcome` | as 2.5's `outcome`; only when `to` is `end` (D36) | none | the trial's outcome |
+| `in` | shared exits only: array of states | required in a shared exit | |
+
+D20's rules 1 to 12 hold as written. These rules complete them (D35):
+
+1. **Entry time and entry frame.** The first state's entry time is the
+   trial's first frame's onset. A later state's entry time is the time
+   of the exit that led to it: a hit's time, an `after_s` time, or the
+   time its steps ended. Its entry frame is the first frame whose onset
+   is at or after the entry time (D16). Its steps land from the entry
+   frame; `after_s` counts from the entry frame's onset (D20 rule 2).
+2. **Arms.** A state arms the controls that its exits name at its entry
+   time (`ysig_arm(g, node, t)`). A hit before that time does not count
+   (D20 rule 3).
+3. **When an exit is taken.** The player drains the graph's hits and the
+   collector's response after each event it feeds, and after
+   `ysig_frame()`. Of the state's pending exits, the earliest time wins,
+   then the list order (D20 rule 4). An `after_s` time T is pending once
+   a drained hit is at or after T, or a frame's onset is at or after T.
+   So the next state's controls arm before the next sample is fed.
+4. **A hit that a frame finds** (a `rate` frame test, a hold that a still
+   input completes) starts the next state on the same frame: the player
+   adds its op table and calls `ytl_evaluate()` again for the frame (an
+   equal onset fires only what was added since, ysp/timeline.h
+   EVALUATE). An input of the graph that this second evaluate changes (a
+   selector, a step on a control's key) reaches the graph at the next
+   `ysig_frame()`, a frame later.
+5. **When steps end.** At the end of the state's op table's cursor:
+   `wait_s`, `then` and `at_s` move it; `to` does not.
+6. **`until`.** `{"until": C, "timeout_s": t}` in `events` or in a
+   state's steps splits the steps there: the steps before it are one
+   state with no exits; the wait is a state with no steps and the exits
+   `{"on": C, "to": NEXT}` and, with `timeout_s`, `{"after_s": t, "to":
+   "end", "outcome": "timeout"}`; the steps after it are the next state.
+   So C arms when the steps before `until` end (D35 (h)).
+7. **The end.** A trial ends at an exit or `over` to `end`, or when the
+   last state's steps end with no exit taken. The end lands as version
+   1's end MARK; the next trial starts on the next frame. A shared exit
+   on the response may end it (3.13).
+
+Outcome (D36): the `outcome` column is the `outcome` of the exit or
+`over` that reached `end`; else, with a response, version 1's value
+(`correct`, `wrong`, `responded`, or `timeout` when no response came
+before the trial's end); else `"done"`. `ytr_update()` gets the
+template's `outcome` (2.5), whose default with `states` and no
+`key_answer` is 1.
+
+### 3.12 Steps
+
+Steps that version 2 adds or changes (2.5 holds for the rest):
+
+| Step | Lowers to |
+|---|---|
+| `{"until": C, "timeout_s": t}` | 3.11 rule 6 (D16) |
+| `{"set": S, "props": {P: FORM}}` | 3.10: `YTL_SET_VALUE` on P's selector channels |
+| `{"set": C, "props": {"amplitude": v}}`, `{"to": C, ...}`, `{"then": C, ...}` | the control key's channel: `YTL_SET_VALUE`, `YTL_TO`, `YTL_THEN` (D39; only `moving_target`'s `amplitude`) |
+| `{"recenter": R, "to": [x, y]}` | at its landing frame, before `ysig_frame()`, `ysig_recenter(g, role, x, y, poll)` with the frame's poll time (D19). A state whose first step is `recenter` arms its controls at that call's time |
+| `{"flag": F, "value": B}` | the player sets F when the step lands; `$F` reads it when a later state's table is built |
+| `{"mark": NAME}` | as 2.5; NAME is a label (D41) |
+
+### 3.13 Responses with signal choices (D34)
+
+A response's choices are key or button choices (2.6), or signal choices,
+not both.
+
+| Key | With signal choices | Lowers to |
+|---|---|---|
+| `role` | refused: each movement's `of` gives its input | |
+| `choices` | `[{"signal": MOVEMENT}, ...]` | per movement, a `yrsp_choice`: `name` the control's name, `kind` `YRSP_KIND_USER + 7`, `device` its `emit` node's index, `control` `YRSP_AXIS_POSITION`, `cross` `YRSP_CROSS_DISTANCE`, `level` its `onset` |
+| `from` | required: a stimulus | `yrsp_set_landing()` on its channel (2.6) |
+| the arm | each movement's `from`; movements with different `from` are refused | `yrsp_arm(c, t)` at that time, then `yrsp_set_origin()` for each movement with `origin` |
+| `duration_s`, `minimum_valid_rt_s`, `max_responses` | as 2.6 | |
+| `response_ends_trial` | `true`: with `events`, as 2.6; with `states`, a shared exit `{"on": "response", "to": "end"}` in every state, after their own exits. `false`: no such exit | `yrsp_desc.persist` is its negation |
+| `key_answer`, `trigger`, `allow_held_key`, `wait_for_key_release` | refused | |
+
+The collector's events are the emit nodes' derived events, fed after
+each `ysig_feed()` (sig.md, "Feed a movement onset to the response
+collector"). `$response` is the movement's name; `$rt_s` is from the
+`from` stimulus's onset. The row adds `rsp_role` (3.15). A key response
+in a template with `states` arms at the trial's first frame, as in 2.5.
+An exit on an early press needs F3 in ysp/response.h (D20 rule 7; D31).
+
+### 3.14 Variables
+
+Version 2 adds two `vars` forms. Both are leaf keys.
+
+| Form | Value | Lowers to |
+|---|---|---|
+| `{"uniform": [lo, hi], "n": N, "per": "node"}` | N values, uniform in [lo, hi), drawn once per run of the node: a number when N is 1, else an array. `n` 1 to 64, default 1; `per` required, only `"node"` (D29) | the player: stream splitmix64 from mix64((node seed XOR 0xBB67AE8584CAA73B) + (j + 1) x 0x9E3779B97F4A7C15) for the node's j-th such variable, one output per value, lo + (hi - lo) x (output >> 11) x 2^-53 |
+| `{"walk2d": {"step": s, "box": [[x0, y0], [x1, y1]], "start": [x, y]}}` | per trial, a point `step` from the previous trial's point, inside the box; the leaf's first trial starts at `start` (default [0, 0]) (D30) | `ytr_var_walk2d()` (G15) |
+
+`walk2d` named NAME defines `$NAME_x`, `$NAME_y`, `$NAME_from_x`,
+`$NAME_from_y` and `$NAME_deg` (the direction from the previous point,
+counterclockwise on the screen, in (-180, 180]), each a column. The box
+must hold `start`, and `step` must be above 0 and at most half the box's
+diagonal, so a point inside the box can always take a step.
+
+### 3.15 Data
+
+**Column forms** (D33), in a template's `columns`:
+
+| Form | Value | Lowers to |
+|---|---|---|
+| `{"hit": "C.x"}` | the value of C's `of` at C's latest hit's sample, one lane; empty with no hit | `ysig_hit.value`; with a signal `center`, `ysig_value_at(of, hit t)` |
+| `{"time": N, "from": M}` | N's time minus M's time (3.9), seconds; empty when either has none. The column's name ends in `_s` (D4) | |
+| `{"signal": "N.x"}` | N's value at the trial's end frame | `ysig_value_of()` after that frame's `ysig_frame()` |
+| `{"when": ...}` | 3.10, at the trial's end frame | |
+
+**`trials.csv`.** Version 2 adds to 2.10's row:
+
+- in item 8, after `YRSP_DATA_COLS`, `rsp_role` for a response with
+  signal choices: the signal role whose sample crossed (the derived
+  event's `code`, low 16 bits, is a node of that role's adapter);
+- item 10: each flag, in the order of `flags`, written as `correct` is.
+
+**`events.csv` state rows** (D37). One row per visit of a state, written
+when the visit ends and its entry frame's flip record is in:
+
+| Column | Value |
+|---|---|
+| `kind` | `"state"` |
+| `t_s` | the entry frame's onset (its flip record's) |
+| `planned_s`, `residual_s`, `frame` | the entry frame's plan, residual and index |
+| `text` | the state's name |
+| `end_s` | the exit's time |
+| `code` | the exit's index: the state's own exits, then the shared ones, in order; -1 when the steps ended with no exit; -2 for `over` |
+
+The next row of the trial names the state that the exit entered; the
+last row's exit went to `end`.
+
+**`streams/<trace>.csv`** (D38). Lane columns are `<item>_<lane>`
+(`hand_x`, `cursor_y`), or `<item>` for a one-lane item (`inside`):
+
+| `rate` | Columns |
+|---|---|
+| `"sample"` | `trial_index`, `t_s` (the row's sample time), the lanes, `tier`, `device` |
+| `"frame"` | `trial_index`, `frame`, `planned_s`, `t_s` (the flip record's onset), the lanes |
+
+Two templates' traces of one name must have the same columns.
+
+**Signal roles** (D40). Each source sample that a signal role's adapter
+takes is an input row of `events.csv` (`yds_event_from_input()`, `role`
+the role's name, `x`, `y`, `value` in device units). `session.json` has,
+per signal role, the adapter's name, the device and its identity, the
+type, the units, the calibration's hash, and the count of skipped
+`recenter` steps.
+
+### 3.16 The loader's refusals
+
+Each refusal names the key and its line and column, as in version 1.
+
+| Area | Refused |
+|---|---|
+| File | `version` above 2; a name in both `devices` and `roles`; `display.units` `cm` at a start whose rig has no `view` (the player) |
+| Roles | an unknown `type` or `units`; `allow_relative` on a type other than `position2d` |
+| Templates | `states` with `events` or `after`; `after` or `exits` with `states` missing; a template control with a top-level control's name |
+| Names | a clash in the namespace (3.9); `end` or `response` as a name; a flag with a variable's name; a lane that the value does not have; a name alone with more than one lane in a one-lane place |
+| Controls | an unknown kind; a key that the kind does not have; a missing required key; `of` naming a trace, a movement or nothing; `role` with `x`, `y` or `mean`, or none of them; a `transform` other than the three forms; `freeze_at` naming a control with no hits; a cursor or moving target whose role's units are not the display's; `radius`, `onset`, `speed_below`, `lag_s` or `after_s` not above 0; `stay_s` below 0; a moving target's lanes of different lengths, or more than 64 components; two generators with a different `from` in one template (D39); a sample trace of more than 4 lanes; a movement that no response names |
+| Signals | an unknown or refused op; an unknown row; `start`, `repeat` or `out` on a `detect`; a cycle; whatever `ysig_check()` refuses (lanes, ranges), with its message |
+| Value forms | a form outside the places of 3.10; a test naming a name with no test; `above` on a value of more than one lane; a `set` of `x` or `y` of a control's `stimulus` |
+| States and exits | a duplicate state; `to` naming no state; an exit with both `on` and `after_s`; `if` on an `on` or `after_s` exit; `after_s` not above 0; `outcome` on an exit whose `to` is not `end`; a shared exit with no `in`, an `in` naming no state, or an instant shared exit; `max_visits` below 1, or one of `max_visits` and `over` without the other; a cycle of instant exits only (D20 rule 6) |
+| Steps | `until` naming a name with no hits; `timeout_s` not above 0; `flag` naming no flag, or a `value` that is not a bool; a step on a control's key other than `amplitude`; `recenter` on a role that cannot be relative, or a `to` that is not a point |
+| Responses | signal choices with `role`, `key_answer`, `trigger`, `allow_held_key` or `wait_for_key_release`; signal and key choices in one response; a signal choice naming no movement; movements with different `from` |
+| Columns | a `time` column whose name does not end in `_s`; `hit` of a name with no hits |
+| Variables | `uniform` with `lo` not below `hi`, `n` outside 1 to 64, or `per` other than `"node"`; `walk2d` whose box does not hold `start`, or whose `step` is not above 0 or is above half the box's diagonal |
+| Stimuli | `visible` as a key (D41) |
+
+### 3.17 Defaults (D41)
+
+Version 2's keys at their defaults, which the canonical form leaves out
+(D2). Version 1's keys keep the defaults of experiment.md's table.
+
+| Object | Key | Default |
+|---|---|---|
+| file | `roles`, `controls` | `{}` |
+| signal role | `type`, `units` | required |
+| signal role | `allow_relative` | `false` |
+| signal role | `required` | `true` |
+| template | `states`, `signals`, `controls` | none, `{}`, `{}` |
+| template | `exits`, `flags` | `[]` |
+| template | `outcome` with `states` and no `key_answer` | `1` |
+| state | `steps`, `exits` | `[]` |
+| state | `max_visits`, `over` | none |
+| exit | `on`, `after_s`, `if`, `outcome` | none |
+| control | `control` | required |
+| cursor | `transform`, `about` | `"identity"`, `[0, 0]` |
+| cursor | `stimulus`, `freeze_at` | none |
+| region | `of`, `radius` | required |
+| region | `center`, `outside`, `stay_s` | `[0, 0]`, `false`, `0` |
+| region | `speed_below` | none |
+| region | `speed_lag_s`, `rate` | `0.01`, `"sample"` |
+| distance | `center`, `scale` | `[0, 0]`, `1` |
+| movement | `of`, `onset` | required |
+| movement | `from`, `origin` | the trial's first frame, the value at the arm |
+| peak | `of`, `measure` | required |
+| peak | `lag_s` | `0.01` |
+| peak | `from`, `freeze_at` | none (the trial's start), none |
+| moving_target | `x`, `y` | required |
+| moving_target | `amplitude`, `from`, `stimulus` | `1`, none (the trial's first frame), none |
+| trace | `of` | required |
+| trace | `rate`, `from`, `to` | `"sample"`, none (the trial's first frame), `"end"` |
+| signal_lost | `of`, `after_s` | required |
+| step `until` | `timeout_s` | none |
+| `uniform` | `n` | `1` |
+| `walk2d` | `start` | `[0, 0]` |
+
+### 3.18 Worked examples
+
+Each example names the C program that it is checked against, as 2.14
+does. These are the acceptance tests of the version 2 loader and of the
+player's lowering and `--sim` run. "Same" means that the column has the
+same value. A C column that the definition cannot write is a finding,
+listed under each table.
+
+#### Visuomotor rotation (`examples/response/trial_visuomotor.c`)
+
+The C program's defaults: a 1024 x 768 window, target radius 0.35 x 768
+= 268.8 px, start circle 12 px, the cursor shown within 0.25 x 268.8 =
+67.2 px of the start, movement onset at 0.1 x 268.8 = 26.88 px, 0.25 px
+per count, schedule 40, 80, 40 at 30 degrees. `targets.pstb` has
+`target_deg` and the target's center in this page's frame: `target_x` =
+268.8 cos(deg), `target_y` = -268.8 sin(deg), 8 rows, written by the
+pack's source. The rig's adapter for `hand` integrates a raw mouse at
+0.25 `display_px` per count.
+
+```json
+{
+  "format": "ysp-experiment", "version": 2, "name": "visuomotor_rotation",
+  "display": { "background": [0.3, 0.3, 0.3] },
+  "roles": { "hand": { "type": "position2d", "units": "display_px", "allow_relative": true } },
+  "stimuli": {
+    "start":  { "kind": "shape", "shape": "circle", "w": 24, "h": 24, "color": [0.9, 0.9, 0.9] },
+    "target": { "kind": "shape", "shape": "circle", "w": 24, "h": 24, "color": [0.1, 0.8, 0.2],
+                "x": "$target_x", "y": "$target_y", "layer": 1 },
+    "ring":   { "kind": "shape", "shape": "circle", "w": 10, "h": 10, "stroke": 2, "color": [1, 1, 0.2], "layer": 2 },
+    "dot":    { "kind": "shape", "shape": "circle", "w": 8, "h": 8, "color": [1, 1, 0.2], "layer": 3 }
+  },
+  "trials": {
+    "reach": {
+      "controls": {
+        "cursor":      { "control": "cursor", "role": "hand", "transform": { "rotation_deg": "$rotation_deg" },
+                         "freeze_at": "past_target" },
+        "near_start":  { "control": "region", "of": "hand", "radius": 67.2, "rate": "frame" },
+        "at_start":    { "control": "region", "of": "hand", "radius": 12, "stay_s": 0.5 },
+        "past_target": { "control": "region", "of": "hand", "radius": 268.8, "outside": true },
+        "aid":         { "control": "distance", "of": "hand", "scale": 2 },
+        "moved":       { "control": "movement", "of": "hand", "onset": 26.88, "from": "at_start" },
+        "top_speed":   { "control": "peak", "of": "hand", "measure": "speed", "from": "at_start",
+                         "freeze_at": "past_target" },
+        "path":        { "control": "trace", "of": ["hand", "cursor"], "from": "at_start", "to": "past_target" }
+      },
+      "states": [
+        { "name": "return",
+          "steps": [{ "on": "start" },
+                    { "set": "dot", "props": { "x": { "signal": "hand.x" }, "y": { "signal": "hand.y" },
+                                               "visible": { "when": "near_start", "then": 1, "else": 0 } } },
+                    { "set": "ring", "props": { "w": { "signal": "aid" }, "h": { "signal": "aid" },
+                                                "visible": { "when": "near_start", "then": 0, "else": 1 } } }],
+          "exits": [{ "on": "at_start", "to": "reach" }] },
+        { "name": "reach",
+          "steps": [{ "on": "target" }, { "off": "ring" },
+                    { "set": "dot", "props": { "x": { "signal": "cursor.x" }, "y": { "signal": "cursor.y" },
+                                               "visible": { "by": "$feedback", "map": { "online": 1, "none": 0 } } } }],
+          "exits": [{ "on": "past_target", "to": "feedback" }] },
+        { "name": "feedback", "steps": [{ "wait_s": 0.5 }, { "off": "target" }] }
+      ],
+      "response": { "choices": [{ "signal": "moved" }], "from": "target", "response_ends_trial": false },
+      "columns": {
+        "cross_s": { "time": "past_target", "from": "target" },
+        "mt_s": { "time": "past_target", "from": "response" },
+        "hand_end_x": { "hit": "past_target.x" }, "hand_end_y": { "hit": "past_target.y" },
+        "cursor_end_x": { "signal": "cursor.x" }, "cursor_end_y": { "signal": "cursor.y" },
+        "peak_speed_px_s": { "signal": "top_speed" }
+      }
+    }
+  },
+  "timeline": [
+    { "name": "baseline", "timeline_variables": "targets.pstb", "rules": ["order random", "reps 5"],
+      "vars": { "rotation_deg": 0, "feedback": "online" }, "trial": "reach" },
+    { "name": "rotation", "timeline_variables": "targets.pstb", "rules": ["order random", "reps 10"],
+      "vars": { "rotation_deg": 30, "feedback": "online" }, "trial": "reach" },
+    { "name": "washout", "timeline_variables": "targets.pstb", "rules": ["order random", "reps 5"],
+      "vars": { "rotation_deg": 0, "feedback": "none" }, "trial": "reach" }
+  ]
+}
+```
+
+The C program's `--endpoint-only` is a third `feedback` value: add
+`"endpoint": 0` to the map and a `set` of `dot`'s `visible` to 1 in
+`feedback`. The lookup by `$feedback` has a key that each leaf does not
+reach: the loader warns once per leaf (2.2).
+
+| Field | In the program |
+|---|---|
+| `hand` role, adapter | Same: `ysig_role` "hand", `position2d`, `display_px`, `allow_relative`; the raw-mouse adapter's integrator at 0.25 px per count (G18 for the profile's block). The program's origin is the window's top-left; this frame's is the center (D22) |
+| States `return`, `reach`, `feedback` | The program's phases RETURN (HOLD on the first trial), REACH, FEEDBACK |
+| `at_start` | Same: `N_HOLD`, `le` 12 on the norm, `hold` 0.5, armed at the trial's start (the program: at the last trial's end frame, one frame earlier) |
+| `past_target` | Same: `N_REACH`, `ge` on the norm, armed at the hold's hit time (D35) |
+| `cursor`, `freeze_at` | Same `affine` (`angle` -30 about the start); the program freezes by copying the cursor at the crossing, the definition with `latch` (D18): the same sample |
+| `dot`, `ring` from `near_start` and `aid` | Same as `place_cursor()`: the hand within 67.2 px, else the ring of diameter 2 d; in REACH the cursor, shown with online feedback; in FEEDBACK the frozen point |
+| `moved` and the response | Same: `emit` on the hand, a DISTANCE choice of 26.88 px from the hand at the hold's hit, `persist`, the target's landing |
+| `top_speed` | Speed over 10 ms, as `measure_reach()`, and its peak from the hold's end to the crossing |
+| `path` | The `--traj` rows: every hand sample from the hold's hit to the crossing, both included |
+| Timeline | Same blocks and rotations; the order differs (3.19, item 2) |
+
+The data columns (`--out`, then `--traj`):
+
+| C column | Definition | Note |
+|---|---|---|
+| `trial_index` | `trial_index` | Same |
+| `block` | `node` | The node's name |
+| `cycle` | none | Analysis: `rep` plus 0, 5 or 15 by `node` |
+| `target_deg`, `rotation_deg`, `feedback` | table column, `vars` | Same |
+| `rt_s` | `rt_s` | Same when `n_early` is 0; the program leaves it empty after any early crossing, the collector gives a later valid crossing |
+| `mt_s`, `cross_s` | `mt_s`, `cross_s` | Same |
+| `hand_third_deg`, `hand_pv_deg` | none | Analysis on `streams/path.csv` |
+| `hand_end_deg`, `cursor_end_deg` | `hand_end_x`, `hand_end_y`, `cursor_end_x`, `cursor_end_y` | Analysis: atan2(-y, x) minus `target_deg` |
+| `peak_speed_px_s` | `peak_speed_px_s` | Same rule; the program's lag sample is one of its trace rows, the graph's can be before the hold's end, so they differ only when the peak is in the first 10 ms |
+| `n_samples` | none | Analysis: the rows of `streams/path.csv` per trial |
+| `input` | none | `session.json`, the role's adapter (D40) |
+| `onset_tier`, `onset_src`, `rsp_flags` | same names | Same (`rsp_flags` bits 0 to 14) |
+| `move_tier` | `rsp_tier` | Same |
+| `early_move` | none | Analysis: `n_early` above 0 |
+| `--traj` `trial_index`, `t_s` | `streams/path.csv` `trial_index`, `t_s` | `t_s` minus the row's `target_onset_s` |
+| `--traj` `hand_x`, `hand_y`, `cursor_x`, `cursor_y` | `hand_x`, `hand_y`, `cursor_x`, `cursor_y` | Plus 512 and 384 (the window's center) |
+
+Findings. No C column lacks a source: `cycle`, `n_samples`, the angles
+and `early_move` are arithmetic on columns and streams, and `input` is
+in `session.json`. The program's levels are floats (268.8f, 26.88f), the
+definition's doubles, so a norm between the two decides differently.
+When a frame finds the hold's hit (a still hand), the `reach` state's
+`set` of `dot` reaches the graph a frame later (3.11 rule 4): for one
+frame the dot shows the hand, not the cursor; the data do not change.
+
+#### Two-mouse tracking and reaching (`examples/response/trial_bimanual.c`)
+
+The C program's defaults: `--mapping split`, `--perturb rotation` at -90
+degrees, blocks `T,R,T*,R*,T*,R*,T*,R*,T*,T`, 2 tracking trials and 30
+reaches a block, 46 s of tracking, 0.25 px per count at 32 px per cm.
+The rig's adapters for `left` and `right` integrate one raw mouse each at
+0.25 / 32 = 0.0078125 `display_cm` per count, an exact binary fraction,
+as the program's `affine` gives; its `view` is 1024 px over 320 mm.
+
+```json
+{
+  "format": "ysp-experiment", "version": 2, "name": "bimanual_tracking",
+  "display": { "units": "cm", "background": [0.05, 0.05, 0.05] },
+  "roles": {
+    "left":  { "type": "position2d_relative", "units": "display_cm" },
+    "right": { "type": "position2d_relative", "units": "display_cm" }
+  },
+  "stimuli": {
+    "track_target": { "kind": "shape", "shape": "circle", "w": 1.6, "h": 1.6, "color": [0.35, 0.35, 0.35] },
+    "start_circle": { "kind": "shape", "shape": "circle", "w": 2, "h": 2, "color": [0.35, 0.35, 0.35],
+                      "x": "$goal_from_x", "y": "$goal_from_y" },
+    "reach_target": { "kind": "shape", "shape": "circle", "w": 2, "h": 2, "x": "$goal_x", "y": "$goal_y", "layer": 1 },
+    "dot":          { "kind": "shape", "shape": "circle", "w": 0.5, "h": 0.5, "color": [1, 1, 1], "layer": 2 }
+  },
+  "controls": {
+    "cursor": { "control": "cursor", "x": "left.x", "y": "right.y", "stimulus": "dot",
+                "transform": { "by": "$perturb", "map": { "none": "identity", "rotation": { "rotation_deg": -90 } } } }
+  },
+  "trials": {
+    "track": {
+      "controls": {
+        "goal":   { "control": "moving_target", "stimulus": "track_target", "from": "move", "amplitude": 0,
+                    "x": { "amplitudes": [2.31, 2.31, 2.31, 1.76, 1.3, 0.97, 0.73],
+                           "freqs_hz": [0.1, 0.25, 0.55, 0.85, 1.15, 1.55, 2.05], "phases": "$phase_x" },
+                    "y": { "amplitudes": [2.31, 2.31, 2.31, 1.58, 1.03, 0.81, 0.7],
+                           "freqs_hz": [0.15, 0.35, 0.65, 0.95, 1.45, 1.85, 2.15], "phases": "$phase_y" } },
+        "inside": { "control": "region", "of": "cursor", "center": { "signal": "goal" }, "radius": 0.8, "rate": "frame" },
+        "ready":  { "control": "region", "of": "cursor", "radius": 0.8, "speed_below": 6.5, "rate": "frame" },
+        "frames": { "control": "trace", "of": ["goal", "cursor", "left", "right", "inside"], "rate": "frame",
+                    "from": "move" }
+      },
+      "states": [
+        { "name": "iti",
+          "steps": [{ "on": ["track_target", "dot"] },
+                    { "set": "track_target", "props": { "color": { "when": "inside", "then": [1, 0.85, 0],
+                                                                   "else": [0.35, 0.35, 0.35] } } },
+                    { "wait_s": 1 }] },
+        { "name": "wait", "exits": [{ "on": "ready", "to": "move" }] },
+        { "name": "move",
+          "steps": [{ "to": "goal", "props": { "amplitude": 1 }, "duration_s": 5 }, { "wait_s": 46 },
+                    { "set": "goal", "props": { "amplitude": 0 } }] }
+      ]
+    },
+    "reach": {
+      "controls": {
+        "at_start":  { "control": "region", "of": "cursor", "radius": 1, "stay_s": 0.5, "rate": "frame" },
+        "moved":     { "control": "movement", "of": "cursor", "onset": 1, "from": "reach_target",
+                       "origin": ["$goal_from_x", "$goal_from_y"] },
+        "top_speed": { "control": "peak", "of": "cursor", "measure": "speed", "from": "reach_target" },
+        "arrived":   { "control": "region", "of": "cursor", "center": ["$goal_x", "$goal_y"], "radius": 1,
+                       "stay_s": 1, "speed_below": 6.5, "rate": "frame" },
+        "path":      { "control": "trace", "of": ["cursor"], "from": "reach_target", "to": "arrived" }
+      },
+      "states": [
+        { "name": "begin", "exits": [{ "if": "$first_in_block", "to": "hold_start" }, { "to": "reach" }] },
+        { "name": "hold_start", "steps": [{ "on": ["start_circle", "dot"] }],
+          "exits": [{ "on": "at_start", "to": "reach" }] },
+        { "name": "reach",
+          "steps": [{ "on": ["start_circle", "reach_target", "dot"] },
+                    { "set": "reach_target", "props": { "color": {
+                        "when": "arrived",
+                        "then": { "when": { "signal": "top_speed", "above": 39 }, "then": [1, 0.85, 0], "else": [0.1, 0.35, 1] },
+                        "else": [0.9, 0.9, 0.9] } } }],
+          "exits": [{ "on": "arrived", "to": "end" }] }
+      ],
+      "response": { "choices": [{ "signal": "moved" }], "from": "reach_target", "response_ends_trial": false },
+      "columns": {
+        "peak_speed_cm_s": { "signal": "top_speed" },
+        "fast": { "when": { "signal": "top_speed", "above": 39 }, "then": 1, "else": 0 },
+        "arrived_s": { "time": "arrived", "from": "response" }
+      }
+    }
+  },
+  "timeline": [
+    { "name": "blocks", "data": { "mapping": "split" }, "timeline": [
+      { "name": "b0_track", "trial": "track", "rules": ["reps 2"], "vars": { "perturb": "none",
+        "phase_x": { "uniform": [-3.141592653589793, 3.141592653589793], "n": 7, "per": "node" },
+        "phase_y": { "uniform": [-3.141592653589793, 3.141592653589793], "n": 7, "per": "node" } } },
+      { "name": "b1_reach", "trial": "reach", "rules": ["reps 30"], "vars": { "perturb": "none",
+        "goal": { "walk2d": { "step": 12, "box": [[-10, -10], [10, 10]] } } } },
+      { "name": "b2_track", "trial": "track", "rules": ["reps 2"], "vars": { "perturb": "rotation",
+        "phase_x": { "uniform": [-3.141592653589793, 3.141592653589793], "n": 7, "per": "node" },
+        "phase_y": { "uniform": [-3.141592653589793, 3.141592653589793], "n": 7, "per": "node" } } },
+      { "name": "b3_reach", "trial": "reach", "rules": ["reps 30"], "vars": { "perturb": "rotation",
+        "goal": { "walk2d": { "step": 12, "box": [[-10, -10], [10, 10]] } } } },
+      { "name": "b4_track", "trial": "track", "rules": ["reps 2"], "vars": { "perturb": "rotation",
+        "phase_x": { "uniform": [-3.141592653589793, 3.141592653589793], "n": 7, "per": "node" },
+        "phase_y": { "uniform": [-3.141592653589793, 3.141592653589793], "n": 7, "per": "node" } } },
+      { "name": "b5_reach", "trial": "reach", "rules": ["reps 30"], "vars": { "perturb": "rotation",
+        "goal": { "walk2d": { "step": 12, "box": [[-10, -10], [10, 10]] } } } },
+      { "name": "b6_track", "trial": "track", "rules": ["reps 2"], "vars": { "perturb": "rotation",
+        "phase_x": { "uniform": [-3.141592653589793, 3.141592653589793], "n": 7, "per": "node" },
+        "phase_y": { "uniform": [-3.141592653589793, 3.141592653589793], "n": 7, "per": "node" } } },
+      { "name": "b7_reach", "trial": "reach", "rules": ["reps 30"], "vars": { "perturb": "rotation",
+        "goal": { "walk2d": { "step": 12, "box": [[-10, -10], [10, 10]] } } } },
+      { "name": "b8_track", "trial": "track", "rules": ["reps 2"], "vars": { "perturb": "rotation",
+        "phase_x": { "uniform": [-3.141592653589793, 3.141592653589793], "n": 7, "per": "node" },
+        "phase_y": { "uniform": [-3.141592653589793, 3.141592653589793], "n": 7, "per": "node" } } },
+      { "name": "b9_track", "trial": "track", "rules": ["reps 2"], "vars": { "perturb": "none",
+        "phase_x": { "uniform": [-3.141592653589793, 3.141592653589793], "n": 7, "per": "node" },
+        "phase_y": { "uniform": [-3.141592653589793, 3.141592653589793], "n": 7, "per": "node" } } }
+    ] }
+  ]
+}
+```
+
+`--perturb mirror` is `"mirror": { "mirror_deg": 45 }` in the cursor's
+map: the program's swap of x and y in its y-up frame. `--mapping mean`
+is `"mean": ["left", "right"]` in place of `x` and `y`.
+
+| Field | In the program |
+|---|---|
+| `left`, `right`, adapters | Same counts: `B_SRC_L`, `B_SRC_R` and the integrators; the program's `affine` to cm (1 / 32, y up) is the adapter's scale (y down, D22) |
+| `cursor` | Same: `select` x of L and y of R, `join`, then `affine` by block (`set_graph_block()`); `rotation_deg` -90 is the program's `angle` -90 in y up (D22) |
+| `goal` | Same: `sines` of 7 components per lane times the channel `AMP`, tweened 0 to 1 over 5 s from the first moving frame; the program draws the phases per block from its own generator, the definition per node (D29) |
+| `iti`, `wait`, `ready` | `S_T_WAIT`: the cursor within 0.8 cm of the center and slower than 6.5 cm/s, tested once a frame, at least 1 s after the last tracking trial's end |
+| `inside` and the target's color | Same test, once a frame: the cursor within 0.8 cm of the target |
+| `move` | `S_T_MOVE`: the ramp, then 46 s, then `END_OF_TRACK` |
+| `frames` | The `--track` rows, the values at each moving frame's flip record's onset (`finalize()`) |
+| `begin`, `hold_start`, `at_start` | `S_R_START`: the first reach of a block waits 0.5 s in the start circle, tested once a frame |
+| `goal` (`walk2d`) | `new_target()`: 12 cm from the last target, inside 20 x 20 cm |
+| `moved` and the response | Same: `emit` on the cursor, a DISTANCE choice of 1 cm from the start's center (`yrsp_set_origin()`), armed at the target's frame |
+| `top_speed` | `peak_run`: the largest `B_SPEED` (10 ms) since the target appeared |
+| `arrived` and the color | `S_R_REACH`: within 1 cm of the target and slower than 6.5 cm/s for 1 s, once a frame; white until the hold starts, then yellow above 39 cm/s, else blue |
+
+The data columns (`--reaches-out`, `--out`, `--track`; y columns of the
+definition are y down, D22):
+
+| C column | Definition | Note |
+|---|---|---|
+| `reach_index` | none | Analysis: the rank of the row among `trial_type` `reach` |
+| `block` | `node` | `blocks/b1_reach` for block 1 |
+| `block_reach`, `block_trial` | `index` | Same |
+| `perturbation` | `perturb` | Same |
+| `mapping` | `mapping` | Same (`data`) |
+| `start_x_cm`, `start_y_cm` | `goal_from_x`, `goal_from_y` | y with a sign change |
+| `target_x_cm`, `target_y_cm`, `target_deg` | `goal_x`, `goal_y`, `goal_deg` | y with a sign change; the draws differ (3.19, item 2) |
+| `rt_s`, `onset_tier`, `onset_src`, `rsp_flags` | same names | Same |
+| `move_tier` | `rsp_tier` | Same |
+| `move_hand` | `rsp_role` | `left` and `right` for L and R |
+| `init_err_deg` | none | Analysis on `streams/path.csv`: the program reads the collector's trace, the same cursor samples |
+| `peak_speed_cm_s` | `peak_speed_cm_s` | The program reads it at the last hold's start, the definition at the trial's end; they agree while the hold's speed stays under the peak |
+| `fast` | `fast` | `above` is at or above 39; the program's is above |
+| `mt_s` | `arrived_s` | Analysis: `arrived_s` minus 1 (`stay_s`): the program measures to the hold's start |
+| tracking `trial_index` | none | Analysis: the rank of the row among `trial_type` `track` (the definition's `trial_index` is the session's) |
+| `mse_cm2` to `r_theta_deg` | none | Analysis on `streams/frames.csv` |
+| `n_frames`, `n_missed` | none | Analysis: the rows of `streams/frames.csv`, joined to `frames.csv` for `dropped` |
+| `n_norecord` | none | Cannot be written: the player waits for every flip record (player.md) |
+| `n_other` | none | Cannot be written: an adapter takes only its own device, and nothing counts the others |
+| tracking `onset_tier`, `onset_src` | none | Analysis: the `move` state row's `frame` (3.15), joined to `frames.csv` |
+| `--track` `t_s` | `t_s` | Minus the first row's `t_s` of the trial |
+| `--track` `target_x`, `target_y`, `cursor_x`, `cursor_y`, `l_x`, `l_y`, `r_x`, `r_y`, `inside` | `goal_x`, `goal_y`, `cursor_x`, `cursor_y`, `left_x`, `left_y`, `right_x`, `right_y`, `inside` | y with a sign change |
+| `--freq` | none | Analysis on `streams/frames.csv` |
+
+Findings:
+
+- Two C columns cannot be written: `n_norecord` and `n_other`. The rest
+  that have no column are arithmetic on columns and streams.
+- The program tests "still" with the cursor's change from one frame's
+  onset to the next; the definition's `speed_below` uses ysp/sig.h's
+  `speed` over 10 ms. Frames near 6.5 cm/s can decide differently, and
+  then the tracking start, the reach's end and `mt_s` differ. Proposal:
+  the program moves to the graph's `speed`, as `trial_visuomotor` moved
+  its hold to a `detect`; no header changes.
+- The program waits 1 s from the last tracking trial's end, and not after
+  a reach block; the definition waits 1 s from each tracking trial's
+  start, one frame after the last one's end.
+- The next reach target comes one frame later than in the program: a
+  trial starts on the frame after the last trial's end frame (3.11 rule
+  7).
+- At a block's first trial the cursor's new `transform` reaches the held
+  cursor at the hand's next report (G17); the program reads its frame
+  cursor with `ysig_value_at()`, which applies the new block's map. With
+  a hand that does not move, `ready` and `inside` can read the old map.
+
+### 3.19 What the acceptance runs need besides the format
+
+1. **A scripted participant for signal roles.** `--participant` takes key
+   presses only (player.md). The runs need each role's samples: a file
+   of `t_s, role, x, y` in device units, which the C program writes from
+   its own model with a test-only option, so both read the same samples.
+2. **The same order and draws.** The definition draws its target order,
+   its phases and its walk from D8's streams; the C programs draw from
+   their own generators. As for the RDK (player.md, Results:
+   `--trial-seeds`), each C program needs a test-only option that takes
+   the player's order and draws, or the comparison sorts rows by block
+   and target.
+3. **A test rig profile with adapters**: `view` 1024 px over 320 mm,
+   and the scales of 3.18 (G18, or a `--sim`-only adapter).
+4. **The header changes**: G14 (`YGFX_CM`), G15 (`walk2d`) and G16
+   (`entry` `now`) for `trial_bimanual`; G17 removes a difference at
+   block changes. `trial_visuomotor` needs none of them.
