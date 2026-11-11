@@ -29,12 +29,14 @@ typedef struct trials_api {
     int (*var)(const ytr_trials*, int, int);
     const char* (*var_text)(const ytr_trials*, int, int);
     uint64_t (*trial_seed)(const ytr_trials*, int);
+    ytr_var_desc (*var_walk2d)(const char*, double, double, double, double, double, double, double);   /* v0.8 */
+    int (*var_walk)(const ytr_trials*, int, int, double*);
 } trials_api;
 
 static const trials_api g_trials_api = {
     ytr_open, ytr_open_saved, ytr_close, ytr_uniform, ytr_choice, ytr_exponential,
     ytr_jitter_check, ytr_data_open, ytr_data_write, ytr_data_set_time_ns, ytr_data_finish,
-    ytr_data_close, ytr_var_choice, ytr_var, ytr_var_text, ytr_trial_seed
+    ytr_data_close, ytr_var_choice, ytr_var, ytr_var_text, ytr_trial_seed, ytr_var_walk2d, ytr_var_walk
 };
 
 typedef struct check_row {

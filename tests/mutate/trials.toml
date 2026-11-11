@@ -369,8 +369,8 @@ id = "j-12"
 name = "jitter snapshot of a v0.1 desc saved as format 1"
 test = "trials"
 why = "Format 4 marks the jitter sections; a v0.1 desc with jitters must not claim format 1."
-find = 'return t->v6 ? YTR__SNAP_FORMAT5 : t->n_jit > 0 ? YTR__SNAP_FORMAT4'
-replace = 'return t->v6 ? YTR__SNAP_FORMAT5 : (t->n_jit > 0 && t->v2) ? YTR__SNAP_FORMAT4'
+find = 't->v6 ? YTR__SNAP_FORMAT5 : t->n_jit > 0 ? YTR__SNAP_FORMAT4'
+replace = 't->v6 ? YTR__SNAP_FORMAT5 : (t->n_jit > 0 && t->v2) ? YTR__SNAP_FORMAT4'
 
 [[mutant]]
 id = "j-13"
@@ -435,8 +435,8 @@ id = "conv-02"
 name = "YTR_DONE written as a failure"
 test = "trials"
 why = "ytr_next() returns YTR_DONE (-1) at the end of every session; a message there would bury the real last failure."
-find = 'return ytr__note(t, ytr__next(t, info), YTR_DONE, "ytr_next");'
-replace = 'return ytr__note(t, ytr__next(t, info), 0, "ytr_next");'
+find = 'return ytr__note(t, rc, YTR_DONE, "ytr_next");'
+replace = 'return ytr__note(t, rc, 0, "ytr_next");'
 
 [[mutant]]
 id = "conv-03"
@@ -994,3 +994,143 @@ find = '''        ytr__dfail(w, "ytr_data_meta_kv: the writer is not open");
         return YTR_ERR_CLOSED;'''
 replace = '''        ytr__dfail(w, "ytr_data_meta_kv: the writer is not open");
         return YTR_ERR_ARG;'''
+
+# --- v0.8.0: a walk (G15) -------------------------------------------------
+
+[[mutant]]
+id = "v08-01"
+name = "walk: the direction's y not negated"
+test = "trials"
+why = "G15, D22: the walk turns counterclockwise on the screen with y down; +sin would mirror every direction and its _deg column."
+find = 'double nx = fx + w[0] * cos(a), ny = fy - w[0] * sin(a);'
+replace = 'double nx = fx + w[0] * cos(a), ny = fy + w[0] * sin(a);'
+
+[[mutant]]
+id = "v08-02"
+name = "walk: the box open, not closed"
+test = "trials"
+why = "3.14: the closed box; a point on its edge is inside."
+find = 'if (nx >= w[1] && nx <= w[2] && ny >= w[3] && ny <= w[4]) { *x = nx; *y = ny; return r + 1; }'
+replace = 'if (nx > w[1] && nx <= w[2] && ny >= w[3] && ny <= w[4]) { *x = nx; *y = ny; return r + 1; }'
+
+[[mutant]]
+id = "v08-03"
+name = "walk: the sub-stream of another variable's output"
+test = "trials"
+why = "G15: variable j's own output, so a choice variable beside it keeps its draws and the walk its own."
+find = '    uint64_t base = ytr__stream(t->desc.seed, i, 1 + j);'
+replace = '    uint64_t base = ytr__stream(t->desc.seed, i, j);'
+
+[[mutant]]
+id = "v08-04"
+name = "walk: from the start every trial"
+test = "trials"
+why = "D30: each point moves from the last trial's; from the start it would be a fixed ring."
+find = '            fx = t->walk_at[j] < 0 ? t->var[j].walk[5] : t->walk_pt[j][0];'
+replace = '            fx = t->var[j].walk[5];'
+
+[[mutant]]
+id = "v08-06"
+name = "walk: the snapshot drops the last point"
+test = "trials"
+why = "G15: a resumed session must move on from the stored point, not from the start."
+find = '            t->walk_at[j] = ytr__get_i32(&r);'
+replace = '            t->walk_at[j] = ytr__get_i32(&r) * 0 - 1;'
+
+[[mutant]]
+id = "v08-07"
+name = "walk: a point outside the box in a snapshot accepted"
+test = "trials"
+why = "A corrupt snapshot must fail the load, not continue a walk off the box."
+find = '                (t->walk_at[j] >= 0 && !(t->walk_pt[j][0] >= bx[1] && t->walk_pt[j][0] <= bx[2] &&'
+replace = '                (0 && !(t->walk_pt[j][0] >= bx[1] && t->walk_pt[j][0] <= bx[2] &&'
+
+[[mutant]]
+id = "v08-08"
+name = "walk: the start outside the box accepted"
+test = "trials"
+why = "3.14: the box must hold the start."
+find = '    if (!(s->x0 >= s->lo_x && s->x0 <= s->hi_x && s->y0 >= s->lo_y && s->y0 <= s->hi_y))'
+replace = '    if (0)'
+
+[[mutant]]
+id = "v08-09"
+name = "walk: a step of half the diagonal accepted"
+test = "trials"
+why = "3.14: below half the diagonal, so every point has a step that stays in."
+find = '    if (!(s->step > 0) || !(2.0 * s->step < sqrt(dx * dx + dy * dy)))'
+replace = '    if (!(s->step > 0) || !(1.0 * s->step < sqrt(dx * dx + dy * dy)))'
+
+[[mutant]]
+id = "v08-10"
+name = "walk: deg from y up"
+test = "trials"
+why = "D22: NAME_deg is counterclockwise on the screen in the y-down frame."
+find = '    out[4] = atan2(-(p[1] - p[3]), p[0] - p[2]) * (180.0 / 3.14159265358979323846);'
+replace = '    out[4] = atan2(p[1] - p[3], p[0] - p[2]) * (180.0 / 3.14159265358979323846);'
+
+[[mutant]]
+id = "v08-11"
+name = "walk: columns named without the suffix"
+test = "trials"
+why = "The data line's header would repeat the walk's name five times."
+find = '                snprintf(tmp, 48, "%s%s", t->var[j].name, ytr__walk_sfx[k]);'
+replace = '                snprintf(tmp, 48, "%s", t->var[j].name);'
+
+[[mutant]]
+id = "v08-12"
+name = "walk: a walk's column name not checked against the table"
+test = "trials"
+why = "Two columns of one name in the data line."
+find = '        if (ytr__var_name_taken(t, j, b) || (d->table && ytb_col(d->table, b) >= 0))'
+replace = '        if (ytr__var_name_taken(t, j, b))'
+
+[[mutant]]
+id = "v08-13"
+name = "walk: no limit on the draws"
+test = "trials"
+why = "F17: a box of no height would loop for good; the session must stop with the walk's name."
+find = '    for (r = 0; r < YTR_WALK_MAX_DRAWS; r++) {'
+replace = '    for (r = 0; r < YTR_WALK_MAX_DRAWS * 1000; r++) {'
+
+[[mutant]]
+id = "v08-14"
+name = "walk: the failure's message replaced by next()'s"
+test = "trials"
+why = "The session's error must name the walk."
+find = '                t->walk_failed = true;'
+replace = '                (void)0;'
+
+[[mutant]]
+id = "v08-15"
+name = "walk: format 5 for a walk"
+test = "trials"
+why = "Format 5 has no kind byte: a walk would load as a choice."
+find = '    return t->v8 ? YTR__SNAP_FORMAT6 : t->v6 ? YTR__SNAP_FORMAT5'
+replace = '    return t->v6 ? YTR__SNAP_FORMAT5'
+
+[[mutant]]
+id = "v08-16"
+name = "walk: the rules text's step read as lo_x"
+test = "trials"
+why = "The pasted rules must give the same walk."
+find = '            *vd = ytr_var_walk2d(nm, w[0], w[1], w[2], w[3], w[4], w[5], w[6]);'
+replace = '            *vd = ytr_var_walk2d(nm, w[1], w[0], w[2], w[3], w[4], w[5], w[6]);'
+
+[[mutant]]
+id = "v08-17"
+name = "walk: ytr_var() gives a walk a value index"
+test = "trials"
+why = "A walk has no choice index; a caller would read the draw as one."
+find = '    if (t->var[j].kind != YTR_VAR_CHOICE) return YTR_ERR_ARG;'
+replace = '    (void)0;'
+
+[[mutant]]
+id = "v08-18"
+name = "walk: an earlier trial read from the last point"
+test = "trials"
+why = "ytr_var_walk() of an earlier trial must walk again from trial 0."
+find = '''    if (t->walk_at[j] == i) {
+        memcpy(p, t->walk_pt[j], sizeof(p));'''
+replace = '''    if (t->walk_at[j] >= 0) {
+        memcpy(p, t->walk_pt[j], sizeof(p));'''

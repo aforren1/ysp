@@ -539,6 +539,276 @@ static void test_vars_data(void) {
     ytr_close(&g_t);
 }
 
+/* G15: a walk (A WALK). Each point is `step` from the last, inside the
+ * box, from the trial's sub-stream as the manual states it (written apart
+ * from the header and compared bit for bit); the data line's five
+ * columns read back as the doubles; restore, save and load continue the
+ * walk; rules text parses and writes back; refusals by message. */
+static int wt_step(uint64_t seed, int i, int j, const double* w, double fx, double fy, double* x, double* y) {
+    const uint64_t g = 0x9E3779B97F4A7C15ULL;
+    int r;
+    for (r = 0; r < 10000; r++) {
+        double u = (double)(vt_mix(vt_out(seed, i, 1 + j) + (uint64_t)(r + 1) * g) >> 11) / 9007199254740992.0;
+        double a = 2.0 * 3.14159265358979323846 * u;
+        double nx = fx + w[0] * cos(a), ny = fy - w[0] * sin(a);
+        if (nx >= w[1] && nx <= w[2] && ny >= w[3] && ny <= w[4]) { *x = nx; *y = ny; return r + 1; }
+    }
+    return 0;
+}
+
+static void wt_desc(ytr_desc* d, uint64_t* state) {
+    zero_desc(d);
+    d->n_conditions = 1;
+    d->reps = 40;
+    d->rng = ytr_splitmix;
+    d->rng_ctx = state;
+    d->seed = 20261111u;
+    d->vars[0] = ytr_var_choice("side", vt_sides, 2);
+    d->vars[1] = ytr_var_walk2d("aim", 12, -10, 10, -10, 10, 0, 0);
+    d->n_vars = 2;
+}
+
+static void test_walk(void) {
+    static int outc[64];
+    static unsigned char snap[1 << 16];
+    static char a[1024], b[1024], err[256];
+    static const double w[7] = { 12, -10, 10, -10, 10, 0, 0 };
+    ytr_desc d, r;
+    uint64_t s = 5, s2;
+    double v[5], fx = 0, fy = 0, x = 0, y = 0, lastx = 0, lasty = 0;
+    int i, n, len, cut, many = 0;
+
+    wt_desc(&d, &s);
+    CHECK(ytr_open(&g_t, &d));
+    for (i = 0; i < 40 && ytr_next(&g_t, NULL) >= 0; i++) {
+        int k = wt_step(d.seed, i, 1, w, fx, fy, &x, &y);
+        CHECK(k > 0);
+        if (k > 1) many++;
+        CHECK_I(ytr_var_walk(&g_t, i, 1, v), 0);
+        CHECK(v[0] == x && v[1] == y && v[2] == fx && v[3] == fy);   /* bit for bit */
+        CHECK(v[4] == atan2(-(y - fy), x - fx) * (180.0 / 3.14159265358979323846));
+        CHECK(fabs(hypot(x - fx, y - fy) - 12) < 1e-12);
+        CHECK(x >= -10 && x <= 10 && y >= -10 && y <= 10);
+        CHECK(v[4] > -180 && v[4] <= 180);
+        CHECK_I(ytr_var(&g_t, i, 1), YTR_ERR_ARG);                 /* a walk is no choice */
+        CHECK(ytr_var_text(&g_t, i, 1) == NULL);
+        CHECK_I(ytr_var(&g_t, i, 0), vt_index(d.seed, i, 0, 2));    /* the choice keeps its draw */
+        CHECK_I(ytr_var_walk(&g_t, i, 0, v), YTR_ERR_ARG);
+        ytr_update(&g_t, 1, NULL);
+        fx = x;
+        fy = y;
+    }
+    CHECK_I(i, 40);
+    CHECK(many > 0);                                     /* some trials redrew */
+    /* an earlier trial: walked again from trial 0, the same doubles */
+    CHECK_I(ytr_var_walk(&g_t, 7, 1, v), 0);
+    {
+        double px = 0, py = 0, qx = 0, qy = 0;
+        int k;
+        for (k = 0; k <= 7; k++) { px = qx; py = qy; wt_step(d.seed, k, 1, w, px, py, &qx, &qy); }
+        CHECK(v[0] == qx && v[1] == qy && v[2] == px && v[3] == py);
+    }
+    CHECK_I(ytr_var_walk(&g_t, 40, 1, v), YTR_ERR_ARG);
+    /* the data line: five columns in the walk's place, read back exactly */
+    ytr_format_header(&g_t, a, sizeof(a));
+    CHECK_HAS(a, ",outcome,side,aim_x,aim_y,aim_from_x,aim_from_y,aim_deg,trial_seed\n");
+    for (i = 0; i < 40; i++) {
+        char* p;
+        int c;
+        ytr_format_row(&g_t, i, a, sizeof(a));
+        ytr_var_walk(&g_t, i, 1, v);
+        p = strstr(a, ytr_var_text(&g_t, i, 0));
+        CHECK(p != NULL);
+        if (!p) break;
+        p += strlen(ytr_var_text(&g_t, i, 0));
+        for (c = 0; c < 5; c++) {
+            char* e;
+            double got;
+            CHECK(*p == ',');
+            e = strchr(p + 1, ',');
+            if (!e) { CHECK(0); break; }
+            CHECK(ytb_parse_number(p + 1, (size_t)(e - p - 1), &got) == YTB_NUM_OK && got == v[c]);
+            CHECK(e - p - 1 <= 25);
+            p = e;
+        }
+    }
+    lastx = x;
+    lasty = y;
+    (void)lastx; (void)lasty;
+    ytr_format_meta(&g_t, a, sizeof(a));
+    CHECK_HAS(a, " vars=side:choice:left:right;aim:walk2d:12:-10:10:-10:10:0:0\n");
+    ytr_format_rules(&g_t, a, sizeof(a));
+    CHECK_HAS(a, "\nvar aim walk2d 12 -10 10 -10 10 0 0\n");
+
+    /* restore after a fresh open: the same walk */
+    n = 0;
+    s = 5;
+    wt_desc(&d, &s);
+    CHECK(ytr_open(&g_t, &d));
+    while (n < 40 && ytr_next(&g_t, NULL) >= 0) {
+        if (n % 9 == 4 && ytr_requeue(&g_t) == 0) { outc[n++] = YTR_REQUEUE; continue; }
+        ytr_update(&g_t, 1, NULL);
+        outc[n++] = 1;
+    }
+    s = 5;
+    CHECK(ytr_open(&g_u, &d));
+    CHECK_I(ytr_restore(&g_u, outc, NULL, n), 0);
+    for (i = 0; i < n; i++) {
+        ytr_format_row(&g_t, i, a, sizeof(a));
+        ytr_format_row(&g_u, i, b, sizeof(b));
+        CHECK_S(b, a);
+    }
+    /* save at cut points (format 6), load, finish: the same rows */
+    for (cut = 0; cut < n; cut += 6) {
+        s = 5;
+        CHECK(ytr_open(&g_u, &d));
+        for (i = 0; i < cut; i++) {
+            CHECK(ytr_next(&g_u, NULL) >= 0);
+            if (outc[i] == YTR_REQUEUE) ytr_requeue(&g_u);
+            else ytr_update(&g_u, outc[i], NULL);
+        }
+        len = ytr_save(&g_u, snap, sizeof(snap));
+        CHECK(len > 8);
+        CHECK_I(snap[4], 6);
+        s2 = s;
+        d.rng_ctx = &s2;
+        CHECK(ytr_open_saved(&g_u, &d, snap, (size_t)len));
+        CHECK(cut == 0 || g_u.walk_at[1] == cut - 1);   /* the last point, kept */
+        for (i = cut; i < n; i++) {
+            CHECK(ytr_next(&g_u, NULL) >= 0);
+            if (outc[i] == YTR_REQUEUE) ytr_requeue(&g_u);
+            else ytr_update(&g_u, outc[i], NULL);
+        }
+        for (i = 0; i < n; i++) {
+            ytr_format_row(&g_t, i, a, sizeof(a));
+            ytr_format_row(&g_u, i, b, sizeof(b));
+            CHECK_S(b, a);
+        }
+        d.rng_ctx = &s;
+    }
+    /* a snapshot whose last point is outside the box, or not the last
+     * trial's, is corrupt; a desc with another step is refused by name */
+    s = 5;
+    CHECK(ytr_open(&g_u, &d));
+    for (i = 0; i < 3; i++) { ytr_next(&g_u, NULL); ytr_update(&g_u, 1, NULL); }
+    len = ytr_save(&g_u, snap, sizeof(snap));
+    {
+        double big = 11;
+        unsigned char keep[8];
+        memcpy(keep, snap + len - 32, 8);
+        memcpy(snap + len - 32, &big, 8);         /* x of the last point */
+        CHECK(!ytr_open_saved(&g_u, &d, snap, (size_t)len));
+        CHECK_HAS(ytr_error(&g_u), "corrupt or truncated");
+        memcpy(snap + len - 32, keep, 8);
+        snap[len - 36]++;                          /* walk_at */
+        CHECK(!ytr_open_saved(&g_u, &d, snap, (size_t)len));
+        snap[len - 36]--;
+        CHECK(ytr_open_saved(&g_u, &d, snap, (size_t)len));
+    }
+    d.vars[1] = ytr_var_walk2d("aim", 11, -10, 10, -10, 10, 0, 0);
+    CHECK(!ytr_open_saved(&g_u, &d, snap, (size_t)len));
+    CHECK_HAS(ytr_error(&g_u), "desc.vars[].walk does not match");
+
+    /* rules text */
+    zero_desc(&r);
+    CHECK_I(apply_rules(&r, "reps 3\nvar aim walk2d 12 -10 10 -10.5 10 0 0.25\n", 0, err, sizeof(err)), 0);
+    CHECK_I(r.n_vars, 1);
+    CHECK(r.vars[0].kind == YTR_VAR_WALK2D && r.vars[0].step == 12 && r.vars[0].lo_y == -10.5 && r.vars[0].y0 == 0.25);
+    {
+        static const struct { const char* text; const char* sub; } bad[] = {
+            { "var aim walk2d 12 -10 10 -10 10 0\n", "expected: var NAME walk2d STEP" },
+            { "var aim walk2d 12 -10 10 -10 10 0 0 1\n", "expected: var NAME walk2d STEP" },
+            { "var aim walk2d 12 -10 ten -10 10 0 0\n", "'ten' is not a number" },
+            { "var aim walk2d 12 -10 x=1 -10 10 0 0\n", "expected a number" },
+            { "var abcdefghijklmnopqrstuvwxy walk2d 12 -10 10 -10 10 0 0\n", "a walk's name is a word of 1 to 24" },
+        };
+        for (i = 0; i < (int)(sizeof(bad) / sizeof(bad[0])); i++) {
+            zero_desc(&r);
+            CHECK(apply_rules(&r, bad[i].text, 0, err, sizeof(err)) > 0);
+            CHECK_HAS(err, bad[i].sub);
+        }
+    }
+
+    /* refusals at open */
+#define WREJ(sub) do { CHECK(!ytr_open(&g_t, &d)); CHECK_HAS(ytr_error(&g_t), sub); } while (0)
+    wt_desc(&d, &s);
+    d.vars[1] = ytr_var_walk2d("aim", 12, -10, 10, -10, 10, 11, 0);   WREJ("the box does not hold the start");
+    d.vars[1] = ytr_var_walk2d("aim", 0, -10, 10, -10, 10, 0, 0);     WREJ("step must be above 0");
+    d.vars[1] = ytr_var_walk2d("aim", 14.2, -10, 10, -10, 10, 0, 0);  WREJ("below half the box's diagonal");
+    d.vars[1] = ytr_var_walk2d("aim", 12, 10, -10, -10, 10, 0, 0);    WREJ("low corner is above");
+    d.vars[1] = ytr_var_walk2d("aim", NAN, -10, 10, -10, 10, 0, 0);   WREJ("must be finite");
+    d.vars[1] = ytr_var_walk2d("abcdefghijklmnopqrstuvwxy", 12, -10, 10, -10, 10, 0, 0); WREJ("at most 24 bytes");
+    d.vars[1] = ytr_var_walk2d("aim", 12, -10, 10, -10, 10, 0, 0);
+    d.vars[0] = ytr_var_choice("aim_x", vt_sides, 2);                 WREJ("its column aim_x is taken");
+    d.vars[0] = ytr_var_walk2d("aim", 12, -10, 10, -10, 10, 0, 0);
+    d.vars[1] = ytr_var_choice("aim_deg", vt_sides, 2);               WREJ("a column of walk desc.vars[0]");
+    d.vars[1] = ytr_var_walk2d("trial", 12, -10, 10, -10, 10, 0, 0);
+    d.vars[0] = ytr_var_choice("side", vt_sides, 2);
+    d.jitters[0] = ytr_uniform("trial_x", YRT_MS(500), YRT_MS(900));
+    d.n_jitters = 1;                                                  WREJ("its column trial_x is taken");
+    d.n_jitters = 0;
+    d.vars[1].kind = 7;                                               WREJ("kind 7 is not a choice or a walk");
+    wt_desc(&d, &s);
+    d.n_conditions = 0;
+    CHECK(csv_table(&g_tab, "n,aim_y\n1,2\n"));
+    d.table = &g_tab;                                                 WREJ("its column aim_y is taken");
+#undef WREJ
+    /* the box is closed: a point on its edge is in. lo_x is set to the
+     * first draw's x, so that draw is taken */
+    {
+        double w2[7] = { 12, -10, 10, -10, 10, 0, 0 }, ex, ey;
+        uint64_t sd;
+        for (sd = 1; sd < 1000; sd++) {
+            /* the first draw's point, taken or not */
+            double u = (double)(vt_mix(vt_out(sd, 0, 2) + 0x9E3779B97F4A7C15ULL) >> 11) / 9007199254740992.0;
+            ex = 12 * cos(2.0 * 3.14159265358979323846 * u);
+            ey = -12 * sin(2.0 * 3.14159265358979323846 * u);
+            if (ex < -2 && ex > -10 && ey > -10 && ey < 10) break;
+        }
+        CHECK(sd < 1000);
+        w2[1] = ex;
+        CHECK_I(wt_step(sd, 0, 1, w2, 0, 0, &ex, &ey), 1);
+        wt_desc(&d, &s);
+        d.seed = sd;
+        d.vars[1] = ytr_var_walk2d("aim", 12, w2[1], 10, -10, 10, 0, 0);
+        CHECK(ytr_open(&g_t, &d));
+        CHECK(ytr_next(&g_t, NULL) >= 0);
+        CHECK_I(ytr_var_walk(&g_t, 0, 1, v), 0);
+        CHECK(v[0] == w2[1] && v[1] == ey);
+    }
+    /* the draws' limit: a box 2e-5 high takes about 80,000 draws, so the
+     * walk fails at 10,000 where a longer limit would find a point */
+    {
+        const uint64_t g = 0x9E3779B97F4A7C15ULL;
+        long k = 0;
+        wt_desc(&d, &s);
+        for (k = 0; k < 100000000L; k++) {
+            double u = (double)(vt_mix(vt_out(d.seed, 0, 2) + (uint64_t)(k + 1) * g) >> 11) / 9007199254740992.0;
+            double yy = -sin(2.0 * 3.14159265358979323846 * u);
+            if (yy >= -1e-5 && yy <= 1e-5) break;
+        }
+        CHECK(k >= 10000 && k < 10000000L);
+        d.vars[1] = ytr_var_walk2d("aim", 1, -10, 10, -1e-5, 1e-5, 0, 0);
+        CHECK(ytr_open(&g_t, &d));
+        CHECK_I(ytr_next(&g_t, NULL), YTR_ERR_ARG);
+    }
+    /* F17: a box of no height almost never keeps the point: next() fails
+     * after 10,000 draws, naming the walk, and hands out nothing */
+    wt_desc(&d, &s);
+    d.vars[1] = ytr_var_walk2d("aim", 1, -10, 10, 0, 0, 0, 0);
+    CHECK(ytr_open(&g_t, &d));
+    CHECK_I(ytr_next(&g_t, NULL), YTR_ERR_ARG);
+    CHECK_HAS(ytr_error(&g_t), "walk 'aim': no point inside the box after 10000 draws at trial 0");
+    CHECK_I(g_t.n_run, 0);
+    /* no walk: format 5, as before */
+    vt_desc(&d, &s, true);
+    CHECK(ytr_open(&g_u, &d));
+    len = ytr_save(&g_u, snap, sizeof(snap));
+    CHECK_I(snap[4], 5);
+    ytr_close(&g_t);
+    ytr_close(&g_u);
+}
+
 static void test_vars(void) {
     test_vars_stream();
     test_vars_replay();
@@ -547,4 +817,5 @@ static void test_vars(void) {
     test_weight_reps();
     test_display_rate();
     test_vars_data();
+    test_walk();
 }

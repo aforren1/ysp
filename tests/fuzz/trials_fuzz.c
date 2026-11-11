@@ -4,7 +4,7 @@
  * rules parse, ytr_open() runs with a small repair budget, then up to 300
  * trials with re-queues, every jitter's draw (v0.2.1), every variable and
  * the trial seed (v0.6; the seed is the first byte, the display's rate
- * 60000/1001 for rate=display), ytr_format_rules()
+ * 60000/1001 for rate=display), every walk's point (v0.8), ytr_format_rules()
  * and ytr_format_meta(), and a save and load of the session. Every input must return without a
  * sanitizer report; a refusal is a correct answer.
  *
@@ -15,6 +15,11 @@
  *     clang -O1 -g -fsanitize=fuzzer,address,undefined -Iinclude tests/fuzz/trials_fuzz.c -o trials_fuzz -lm
  * Seeds (no corpus is committed; the target writes its own):
  *     cc -DYSP_FUZZ_SEEDS -Iinclude tests/fuzz/trials_fuzz.c -o seeds -lm && ./seeds corpus_trials
+ * Self-driven (no libFuzzer: gcc; mutations of the seeds and random
+ * bytes, N iterations, seed S; on the Linux desktop ASan needs setarch -R):
+ *     gcc -std=c11 -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all
+ *         -DYSP_FUZZ_SELF -Iinclude tests/fuzz/trials_fuzz.c -o trials_self -lm
+ *     setarch -R ./trials_self N S
  * Replay of a corpus without libFuzzer (gcc or clang under UBSan), every
  * file of the directory as an argument:
  *     gcc -std=c11 -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all
@@ -38,6 +43,7 @@ static char g_buf[8192];
 static ytr_trials g_t, g_u;
 static ytb_table g_fixed;
 static volatile unsigned g_sink;
+static long g_opened, g_walks;   /* self-driven counts: sessions opened, walk points read */
 
 static const char g_csv[] =
     "target,contrast,word,list,n,pair\n"
@@ -78,6 +84,7 @@ int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     d.display_rate_den = 1001;
     if (d.max_swaps == 0 || d.max_swaps > 2000) d.max_swaps = 2000;   /* keep an input fast */
     if (!ytr_open(&g_t, &d)) return 0;
+    g_opened++;
     g_sink += (unsigned)ytr_format_rules(&g_t, g_buf, sizeof(g_buf));
     g_sink += (unsigned)ytr_format_meta(&g_t, g_buf, sizeof(g_buf));
     for (i = 0; i < 300 && ytr_next(&g_t, &ti) >= 0; i++) {
@@ -88,6 +95,18 @@ int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
             g_sink += (unsigned)ytr_var(&g_t, ti.index, j) + (v ? (unsigned)v[0] : 0u);
         }
         g_sink += (unsigned)ytr_trial_seed(&g_t, ti.index);
+        for (j = 0; j < 4; j++) {
+            double w[5];
+            if (ytr_var_walk(&g_t, ti.index, j, w) == 0) {
+                g_sink += (unsigned)(w[0] > w[2]) + (unsigned)(w[4] > 0);
+                g_walks++;
+            }
+        }
+        if (i == 60 && ti.index > 2) {
+            /* an earlier trial's point: walked again from trial 0 */
+            double w[5];
+            for (j = 0; j < 4; j++) if (ytr_var_walk(&g_t, ti.index - 2, j, w) == 0) g_sink += (unsigned)(w[1] > 0);
+        }
         if (i == 40) {
             /* A save and a load mid-run, then the loaded copy continues. */
             len = ytr_save(&g_t, g_snap, sizeof(g_snap));
@@ -105,8 +124,73 @@ int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     return 0;
 }
 
+#if defined(YSP_FUZZ_SELF)
+static const char* const* fz_rules(size_t* n);
+#endif
+#if defined(YSP_FUZZ_SELF)
+static uint64_t g_rng = 20261111u;
+static uint64_t fz_mix(void) {
+    uint64_t z = (g_rng += 0x9E3779B97F4A7C15ULL);
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+    return z ^ (z >> 31);
+}
+int main(int argc, char** argv) {
+    static uint8_t buf[1 << 12];
+    static const char* const words[] = { "walk2d", "choice", "var", "-0", "1e308", "nan", "0", "-10", "10", "\n",
+                                         " ", "\"", "=", "reps", "order", "jitter", "1e-300", "2" };
+    long iters = argc > 1 ? atol(argv[1]) : 100000, it;
+    size_t nr, n, k;
+    const char* const* rules = fz_rules(&nr);
+    if (argc > 2) g_rng = (uint64_t)strtoull(argv[2], NULL, 10);
+    g_walks = 0;
+    for (it = 0; it < iters; it++) {
+        uint64_t m = fz_mix();
+        buf[0] = (uint8_t)fz_mix();
+        if (m % 8 == 0) {
+            n = 1 + (size_t)(fz_mix() % 512);
+            for (k = 1; k < n; k++) buf[k] = (uint8_t)fz_mix();
+        } else {
+            /* a seed with words and bytes changed, inserted or cut */
+            /* the three walk seeds (the last) half the time: v0.8's code */
+            const char* r0 = (m >> 8) % 2 ? rules[nr - 1 - (m >> 16) % 3] : rules[(m >> 16) % nr];
+            int edits = 1 + (int)(fz_mix() % 6), e;
+            n = 1 + strlen(r0);
+            memcpy(buf + 1, r0, n - 1);
+            for (e = 0; e < edits; e++) {
+                size_t at = 1 + (size_t)(fz_mix() % (n > 1 ? n - 1 : 1));
+                switch (fz_mix() % 5) {
+                case 0: buf[at] = (uint8_t)fz_mix(); break;
+                case 1: {
+                    const char* w = words[fz_mix() % (sizeof(words) / sizeof(words[0]))];
+                    size_t wl = strlen(w);
+                    if (n + wl < sizeof(buf)) { memmove(buf + at + wl, buf + at, n - at); memcpy(buf + at, w, wl); n += wl; }
+                    break;
+                }
+                case 2: if (n + 1 < sizeof(buf)) { memmove(buf + at + 1, buf + at, n - at); buf[at] = (uint8_t)(32 + fz_mix() % 95); n++; } break;
+                case 3: {
+                    /* a digit changed: numbers near the box's limits */
+                    size_t q;
+                    for (q = at; q < n && !(buf[q] >= '0' && buf[q] <= '9'); q++) {}
+                    if (q < n) buf[q] = (uint8_t)('0' + fz_mix() % 10);
+                    break;
+                }
+                default: if (n > 2 && at < n) { memmove(buf + at, buf + at + 1, n - at - 1); n--; } break;
+                }
+            }
+        }
+        LLVMFuzzerTestOneInput(buf, n);
+    }
+    printf("trials_fuzz: %ld inputs, %ld opened, %ld walk points read\n", iters, g_opened, g_walks);
+    return 0;
+}
+static const char* const* fz_rules(size_t* n) {
+#else
 #if defined(YSP_FUZZ_SEEDS)
 int main(int argc, char** argv) {
+#endif
+#endif
+#if defined(YSP_FUZZ_SEEDS) || defined(YSP_FUZZ_SELF)
     static const char* const rules[] = {
         "order constrained\nreps 4\nmax_run target 1\n",
         "order constrained\nreps 2\nfollowed_by target a b\nmax_run target 2\n",
@@ -128,7 +212,15 @@ int main(int argc, char** argv) {
         "order sequential\nreps 1\npractice 2\njitter a uniform contrast n\nrequeue_gap 1\n",
         "order random\nweight n\nreps 3\nvar side choice left right\njitter soa uniform 0.8 1.2 rate=display\n",
         "order full_random\nreps 2\nvar a choice \"x y\" \"c,d\" \"q\"\"t\" e\nvar b choice 1 2 3 1\n",
+        "order random\nreps 3\nvar aim walk2d 12 -10 10 -10 10 0 0\n",
+        "order random\nreps 2\nvar side choice l r\nvar aim walk2d 1.5 -2 2 -1 1 0.5 0\nvar b walk2d 3 0 10 0 0 5 0\n",
+        "order sequential\nreps 4\nvar w walk2d 0.1 0 1 0 1 1 1\njitter iti uniform 0.5 1\n",
     };
+#if defined(YSP_FUZZ_SELF)
+    *n = sizeof(rules) / sizeof(rules[0]);
+    return rules;
+}
+#else
     size_t i;
     char path[1024];
     if (argc < 2) { fprintf(stderr, "usage: seeds DIR\n"); return 1; }
@@ -145,6 +237,7 @@ int main(int argc, char** argv) {
     printf("trials_fuzz: wrote %u seeds to %s\n", (unsigned)i, argv[1]);
     return 0;
 }
+#endif
 #elif defined(YSP_FUZZ_REPLAY)
 int main(int argc, char** argv) {
     static uint8_t buf[1 << 20];

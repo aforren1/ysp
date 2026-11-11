@@ -1,4 +1,4 @@
-/* ysp/trials.h - v0.7.1 - public domain single-header trial sequencing library
+/* ysp/trials.h - v0.8.0 - public domain single-header trial sequencing library
  *
  *   The layer above the adaptive methods: which trial comes next, and what
  *   happened on it. Conditions and repetitions (the method of constant
@@ -664,6 +664,28 @@
  *     caller's to log, as the generator's seed is (ytr_format_meta()
  *     writes it); the player gives each node its own (the experiment
  *     definition's D8).
+ *     A WALK (v0.8; ytr_var_walk2d(name, step, lo_x, hi_x, lo_y, hi_y, x0,
+ *     y0); rules `var NAME walk2d STEP LO_X HI_X LO_Y HI_Y X0 Y0`) is a
+ *     point that moves `step` from the previous trial's point, inside the
+ *     closed box [lo_x, hi_x] x [lo_y, hi_y]; trial 0 moves from (x0, y0).
+ *     Trial i draws directions from a sub-stream of variable j's output:
+ *       u(r)  = (mix64(output(i, 1 + j) + (r + 1) G) >> 11) / 2^53
+ *       a     = 2 pi u(r),  r = 0, 1, ...
+ *       point = from + step (cos a, -sin a)
+ *     and takes the first point inside the box: y down, so a turns
+ *     counterclockwise on the screen. Past YTR_WALK_MAX_DRAWS (10,000)
+ *     draws next() fails with YTR_ERR_ARG and names the walk. The point is
+ *     a function of the seed and the trial indices 0 to i only, so a
+ *     re-queue or an outcome moves nothing; next() keeps the last point,
+ *     and a snapshot (format 6) stores it, so open_saved() continues from
+ *     it. cos, sin and atan2 are the C library's: the last bit can differ
+ *     between libraries. The box must hold (x0, y0) and step must be
+ *     above 0 and below half the box's diagonal. The data line has five
+ *     columns in its place, NAME_x, NAME_y, NAME_from_x, NAME_from_y and
+ *     NAME_deg (atan2(-(y - from_y), x - from_x) in degrees, in
+ *     (-180, 180]), in the fewest digits that read back as the double;
+ *     ytr_var_walk() gives them. A walk counts among YTR_MAX_VARS; its
+ *     name is at most 24 bytes, so NAME_from_x is a column name.
  *
  *   TRACKS (desc.tracks[], desc.n_tracks, desc.interleave, desc.track_rate)
  *     A track is {ctx, is_done(ctx), weight}. While a track is not done and
@@ -829,6 +851,12 @@
  *     name length and the name's bytes, i32 n_values, and per value u8
  *     length and its bytes. No draw is stored: each is a function of the
  *     seed and the trial index (VARIABLES).
+ *     SNAPSHOT LAYOUT, format 6 (v0.8), for a desc with a walk: format 5
+ *     with, per variable after its name, u8 kind (0 choice, 1 walk2d); a
+ *     walk then has f64 step, lo_x, hi_x, lo_y, hi_y, x0, y0 in place of
+ *     n_values and its values; and after the jitter draws, per walk in
+ *     variable order, i32 the trial of its last point (-1 for none) and
+ *     f64 x, y, from_x, from_y.
  *     SNAPSHOT LAYOUT, format 4 (v0.3.0), for a desc with jitters: format
  *     2 (its desc and state sections whether or not a v0.2 field is used)
  *     with, at the end of the desc section, i32 n_jitters and per jitter u8
@@ -1169,6 +1197,14 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.8.0 - a walk (gap G15 of the experiment format, D30): desc.vars[]
+ *          of ytr_var_walk2d(), a point `step` from the last trial's
+ *          inside a box, from a sub-stream of the trial's stream;
+ *          ytr_var_walk(); rules `var NAME walk2d ...`; five data-line
+ *          columns per walk; snapshot format 6 keeps the last point.
+ *          ytr_var_desc gains kind and the walk's numbers (a layout
+ *          change); ytr_var_choice() zeroes them. Sessions without a
+ *          walk write and read as before.
  *   v0.7.1 - ytr_data_meta_kv(w, key, value) appends one key=value line
  *          to the sidecar (docs/examples_findings.md, F29): a value known
  *          only at the end, such as ysp/screen.h's describe line, with no
@@ -1378,6 +1414,10 @@
  *          - ytr_condition_at() indexes the practice slots too.
  *   v0.0 - specification. Declarations and the manual, no implementation.
  *
+ *   STATUS: v0.8.0, 2026-11-11, the Linux desktop (Debian 12, GCC 12.2):
+ *   test_walk against a second implementation, as C and C++ under ASan
+ *   and UBSan; 5,000,000 fuzz inputs (the self-driven mode); mutants
+ *   v08-01 to v08-18 killed (17 of 17).
  *   STATUS: v0.7.1, 2026-11-07, the Linux desktop (Debian 12, GCC 12.2):
  *   ytr_data_meta_kv() in tests/adapt/trials_test_data.h (the lines and
  *   their order in the sidecar, each refusal with its code and message)
@@ -1601,9 +1641,9 @@
 /* The version of this header, for a log line or a compile-time check. The
  * string is the three numbers, and the test asserts that it stays so. */
 #define YTR_VERSION_MAJOR 0
-#define YTR_VERSION_MINOR 7
-#define YTR_VERSION_PATCH 1
-#define YTR_VERSION_STRING "0.7.1"
+#define YTR_VERSION_MINOR 8
+#define YTR_VERSION_PATCH 0
+#define YTR_VERSION_STRING "0.8.0"
 
 /* fsync() and fileno() for YTR_FLUSH_SYNC under -std=c11: the feature-test
  * macro of ysp/rt.h and ysp/pack.h, set before the first system header
@@ -1667,6 +1707,8 @@ extern "C" {
 #define YTR_MAX_VARS          4
 #define YTR_MAX_VAR_VALUES   32    /* values of one variable              */
 #define YTR_MAX_VAR_TEXT     63    /* bytes of one value's text           */
+#define YTR_MAX_WALK_NAME    24    /* a walk's name: NAME_from_x fits 31   */
+#define YTR_WALK_MAX_DRAWS   10000 /* directions a walk tries per trial    */
 
 /* The history and the schedule store trial and condition numbers in 16
  * bits to keep the handle small. */
@@ -1859,14 +1901,24 @@ YTR_API ytr_jitter_value ytr_jitter_draw(const ytr_jitter_desc* j, ytr_rng_fn rn
 /* A categorical value drawn per trial from the trial's own stream
  * (VARIABLES): one of n_values texts, each equally likely; repeat a value to
  * weight it. Zero-initialize, or use ytr_var_choice(). */
+typedef enum ytr_var_kind { YTR_VAR_CHOICE = 0, YTR_VAR_WALK2D = 1 } ytr_var_kind;
 typedef struct ytr_var_desc {
     const char*        name;      /* data-line column; [A-Za-z_][A-Za-z0-9_]* */
     const char* const* values;    /* 1 to YTR_MAX_VAR_VALUES UTF-8 texts      */
     int                n_values;
+    /* v0.8: a walk (VARIABLES, A WALK); 0 = a choice */
+    int                kind;      /* ytr_var_kind                             */
+    double             step;      /* above 0, below half the box's diagonal   */
+    double             lo_x, hi_x, lo_y, hi_y;   /* the closed box             */
+    double             x0, y0;    /* trial 0 moves from here; in the box       */
 } ytr_var_desc;
 
 /* ytr_var_choice("side", sides, 2) with sides = { "left", "right" }. */
 YTR_API ytr_var_desc ytr_var_choice(const char* name, const char* const* values, int n);
+/* ytr_var_walk2d("aim", 12, -10, 10, -10, 10, 0, 0): each trial's point 12
+ * from the last one's, inside [-10, 10] x [-10, 10]; the first from (0, 0). */
+YTR_API ytr_var_desc ytr_var_walk2d(const char* name, double step, double lo_x, double hi_x, double lo_y,
+                                    double hi_y, double x0, double y0);
 
 /* Is the track finished? Called on the caller's handle; TRACKS says when. */
 typedef bool (*ytr_done_fn)(void* ctx);
@@ -1996,6 +2048,8 @@ typedef struct ytr__var {
     char    name[YTR_MAX_JITTER_NAME + 1];
     int     n_values;
     char    text[YTR_MAX_VAR_VALUES][YTR_MAX_VAR_TEXT + 1];
+    int     kind;                       /* v0.8: ytr_var_kind               */
+    double  walk[7];                    /* step, lo_x, hi_x, lo_y, hi_y, x0, y0 */
 } ytr__var;
 
 /* Handle. The caller allocates it and treats every field as opaque.
@@ -2060,6 +2114,11 @@ typedef struct ytr_trials {
     bool        v6;                           /* vars or a seed: format 5   */
     int         n_var;
     ytr__var    var[YTR_MAX_VARS];
+    /* v0.8: each walk's last point (A WALK) */
+    bool        v8;                           /* a walk: format 6           */
+    bool        walk_failed;                  /* next()'s error is the walk's */
+    int         walk_at[YTR_MAX_VARS];        /* the trial of walk_pt, or -1 */
+    double      walk_pt[YTR_MAX_VARS][4];     /* x, y, from_x, from_y       */
 } ytr_trials;
 
 /* --- lifecycle --------------------------------------------------------- */
@@ -2221,8 +2280,13 @@ YTR_API int ytr_jitter_index(const ytr_trials* t, const char* name);
  * desc.vars[j].values, or YTR_ERR_ARG / YTR_ERR_CLOSED. Defined once next()
  * has handed trial i out. */
 YTR_API int ytr_var(const ytr_trials* t, int i, int j);
-/* The same value's text, or NULL. The pointer is into the handle. */
+/* The same value's text, or NULL. The pointer is into the handle. A walk
+ * has neither: ytr_var() gives YTR_ERR_ARG for it, ytr_var_text() NULL. */
 YTR_API const char* ytr_var_text(const ytr_trials* t, int i, int j);
+/* Walk j of trial i: out[0..4] = x, y, from_x, from_y, deg (A WALK). 0, or
+ * YTR_ERR_ARG (not a walk, a trial not handed out) or YTR_ERR_CLOSED. The
+ * last trial's is kept; an earlier one is walked again from trial 0. */
+YTR_API int ytr_var_walk(const ytr_trials* t, int i, int j, double out[5]);
 /* The index of the variable named `name`, or -1. */
 YTR_API int ytr_var_index(const ytr_trials* t, const char* name);
 /* Trial i's 64-bit seed, for a stimulus generator of the trial's own (an
@@ -2462,6 +2526,9 @@ extern int fileno(FILE* f);
 #define YTR__SNAP_FORMAT4  4u   /* a desc with jitters (v0.3.0): format 2
                                    * plus the jitters (ns) and their draws.
                                    * Format 3 was v0.2.1's, in f64 seconds. */
+#define YTR__SNAP_FORMAT6  6u   /* a desc with a walk (v0.8): format 5
+                                    * with each variable's kind and the
+                                    * walks' last points */
 #define YTR__SNAP_FORMAT5  5u   /* a desc with variables or a seed (v0.6):
                                    * format 4 plus the seed and the variables */
 
@@ -2616,9 +2683,26 @@ YTR_API ytr_jitter_desc ytr_frames(ytr_jitter_desc j, int rate_num, int rate_den
 
 YTR_API ytr_var_desc ytr_var_choice(const char* name, const char* const* values, int n) {
     ytr_var_desc v;
+    memset(&v, 0, sizeof(v));
     v.name = name;
     v.values = values;
     v.n_values = n;
+    return v;
+}
+
+YTR_API ytr_var_desc ytr_var_walk2d(const char* name, double step, double lo_x, double hi_x, double lo_y,
+                                    double hi_y, double x0, double y0) {
+    ytr_var_desc v;
+    memset(&v, 0, sizeof(v));
+    v.name = name;
+    v.kind = YTR_VAR_WALK2D;
+    v.step = step;
+    v.lo_x = lo_x;
+    v.hi_x = hi_x;
+    v.lo_y = lo_y;
+    v.hi_y = hi_y;
+    v.x0 = x0;
+    v.y0 = y0;
     return v;
 }
 
@@ -4388,6 +4472,85 @@ static bool ytr__jit_setup(ytr_trials* t, const ytr_desc* d, int j, int n_cond) 
 
 static size_t ytr__u8(const unsigned char* p, size_t n);
 
+/* The data-line names of walk q: NAME_x, NAME_y, NAME_from_x, NAME_from_y,
+ * NAME_deg. */
+static const char* const ytr__walk_sfx[5] = { "_x", "_y", "_from_x", "_from_y", "_deg" };
+
+/* Whether `nm` is a data-line name that variables 0..j-1 (their names, or a
+ * walk's five) or the jitters already have; the name must be checked
+ * against the table by the caller. */
+static bool ytr__var_name_taken(const ytr_trials* t, int j, const char* nm) {
+    int k, c;
+    char b[YTR_MAX_JITTER_NAME + 16];
+    for (k = 0; k < j; k++) {
+        if (t->var[k].kind != YTR_VAR_WALK2D) {
+            if (strcmp(t->var[k].name, nm) == 0) return true;
+            continue;
+        }
+        for (c = 0; c < 5; c++) {
+            snprintf(b, sizeof(b), "%s%s", t->var[k].name, ytr__walk_sfx[c]);
+            if (strcmp(b, nm) == 0) return true;
+        }
+    }
+    for (k = 0; k < t->n_jit && k < YTR_MAX_JITTERS; k++)
+        if (strcmp(t->jit[k].name, nm) == 0) return true;
+    return strcmp(nm, "trial_seed") == 0;
+}
+
+/* A walk's numbers (A WALK): finite, a box that holds the start, a step
+ * that every point of the box can take without leaving it. */
+static bool ytr__walk_setup(ytr_trials* t, const ytr_desc* d, int j) {
+    const ytr_var_desc* s = &d->vars[j];
+    ytr__var* q = &t->var[j];
+    double w[7], dx, dy;
+    char b[YTR_MAX_JITTER_NAME + 16];
+    int k;
+    if (strlen(s->name) > YTR_MAX_WALK_NAME)
+        return ytr__fail(t, "desc.vars[%d] (%s): a walk's name is at most %d bytes (its columns add _from_x)", j,
+                         s->name, YTR_MAX_WALK_NAME);
+    for (k = 0; k < 5; k++) {
+        snprintf(b, sizeof(b), "%s%s", s->name, ytr__walk_sfx[k]);
+        if (ytr__var_name_taken(t, j, b) || (d->table && ytb_col(d->table, b) >= 0))
+            return ytr__fail(t, "desc.vars[%d] (%s): its column %s is taken", j, s->name, b);
+    }
+    w[0] = s->step; w[1] = s->lo_x; w[2] = s->hi_x; w[3] = s->lo_y; w[4] = s->hi_y; w[5] = s->x0; w[6] = s->y0;
+    for (k = 0; k < 7; k++)
+        if (!ytr__finite(w[k])) return ytr__fail(t, "desc.vars[%d] (%s): a walk's numbers must be finite", j, s->name);
+    if (!(s->lo_x <= s->hi_x && s->lo_y <= s->hi_y))
+        return ytr__fail(t, "desc.vars[%d] (%s): the box's low corner is above its high corner", j, s->name);
+    if (!(s->x0 >= s->lo_x && s->x0 <= s->hi_x && s->y0 >= s->lo_y && s->y0 <= s->hi_y))
+        return ytr__fail(t, "desc.vars[%d] (%s): the box does not hold the start (%.17g, %.17g)", j, s->name,
+                         s->x0, s->y0);
+    dx = s->hi_x - s->lo_x;
+    dy = s->hi_y - s->lo_y;
+    if (!(s->step > 0) || !(2.0 * s->step < sqrt(dx * dx + dy * dy)))
+        return ytr__fail(t, "desc.vars[%d] (%s): step must be above 0 and below half the box's diagonal", j,
+                         s->name);
+    memcpy(q->name, s->name, strlen(s->name) + 1);
+    q->kind = YTR_VAR_WALK2D;
+    q->n_values = 0;
+    memcpy(q->walk, w, sizeof(w));
+    t->walk_at[j] = -1;
+    return true;
+}
+
+/* Walk j's point for trial i from (fx, fy): the first direction of the
+ * trial's sub-stream that stays in the box (A WALK). The number of draws,
+ * or 0 when none of YTR_WALK_MAX_DRAWS did. */
+static int ytr__walk_step(const ytr_trials* t, int i, int j, double fx, double fy, double* x, double* y) {
+    const double* w = t->var[j].walk;
+    uint64_t base = ytr__stream(t->desc.seed, i, 1 + j);
+    int r;
+    for (r = 0; r < YTR_WALK_MAX_DRAWS; r++) {
+        double u = (double)(ytr__mix64(base + ((uint64_t)(unsigned)r + 1u) * YTR__GOLDEN) >> 11) *
+                   (1.0 / 9007199254740992.0);
+        double a = 2.0 * 3.14159265358979323846 * u;
+        double nx = fx + w[0] * cos(a), ny = fy - w[0] * sin(a);
+        if (nx >= w[1] && nx <= w[2] && ny >= w[3] && ny <= w[4]) { *x = nx; *y = ny; return r + 1; }
+    }
+    return 0;
+}
+
 /* Copy desc.vars[j] into the handle. A value's text goes into the data line,
  * so it must be valid UTF-8 (ysp/table.h reads it back) and not empty (an
  * empty field is a missing value). */
@@ -4401,6 +4564,17 @@ static bool ytr__var_setup(ytr_trials* t, const ytr_desc* d, int j) {
     for (k = 0; k < j; k++)
         if (strcmp(t->var[k].name, s->name) == 0)
             return ytr__fail(t, "desc.vars[%d] and [%d] are both named '%s'", k, j, s->name);
+    for (k = 0; k < j; k++) {
+        /* an earlier walk's five columns */
+        char b[YTR_MAX_JITTER_NAME + 16];
+        int c;
+        if (t->var[k].kind != YTR_VAR_WALK2D) continue;
+        for (c = 0; c < 5; c++) {
+            snprintf(b, sizeof(b), "%s%s", t->var[k].name, ytr__walk_sfx[c]);
+            if (strcmp(b, s->name) == 0)
+                return ytr__fail(t, "desc.vars[%d] is named '%s', a column of walk desc.vars[%d]", j, s->name, k);
+        }
+    }
     for (k = 0; k < t->n_jit && k < YTR_MAX_JITTERS; k++)
         if (strcmp(t->jit[k].name, s->name) == 0)
             return ytr__fail(t, "desc.vars[%d] and desc.jitters[%d] are both named '%s'", j, k, s->name);
@@ -4408,6 +4582,9 @@ static bool ytr__var_setup(ytr_trials* t, const ytr_desc* d, int j) {
         return ytr__fail(t, "desc.vars[%d] is named '%s', as a table column is", j, s->name);
     if (strcmp(s->name, "trial_seed") == 0)
         return ytr__fail(t, "desc.vars[%d] is named 'trial_seed', the data line's column of trial seeds", j);
+    if (s->kind == YTR_VAR_WALK2D) return ytr__walk_setup(t, d, j);
+    if (s->kind != YTR_VAR_CHOICE)
+        return ytr__fail(t, "desc.vars[%d] (%s): kind %d is not a choice or a walk", j, s->name, s->kind);
     if (!s->values || s->n_values < 1 || s->n_values > YTR_MAX_VAR_VALUES)
         return ytr__fail(t, "desc.vars[%d] (%s) needs 1 to %d values", j, s->name, YTR_MAX_VAR_VALUES);
     memcpy(q->name, s->name, strlen(s->name) + 1);
@@ -4794,6 +4971,9 @@ static bool ytr__setup(ytr_trials* t, const ytr_desc* d) {
     t->n_jit = d->n_jitters;
     t->n_var = d->n_vars;
     t->v6 = d->n_vars > 0 || d->seed != 0;
+    t->v8 = false;
+    for (i = 0; i < d->n_vars && i < YTR_MAX_VARS; i++)
+        if (t->var[i].kind == YTR_VAR_WALK2D) t->v8 = true;
     t->aux_hash = h;
     t->had_weights = d->weights != NULL;
     t->v2 = ytr__is_v2(d);
@@ -4958,6 +5138,28 @@ static int ytr__push(ytr_trials* t, int cond, int track, int rep, int block, int
     int i = t->n_run;
     ytr_trial* h;
     if (i < 0 || i >= YTR_MAX_TRIALS) return YTR_ERR_FULL;   /* callers checked */
+    if (t->v8) {
+        /* each walk moves from its last point before the trial exists, so
+         * a walk that cannot move hands out nothing */
+        int j;
+        for (j = 0; j < t->n_var && j < YTR_MAX_VARS; j++) {
+            double fx, fy, x, y;
+            if (t->var[j].kind != YTR_VAR_WALK2D) continue;
+            fx = t->walk_at[j] < 0 ? t->var[j].walk[5] : t->walk_pt[j][0];
+            fy = t->walk_at[j] < 0 ? t->var[j].walk[6] : t->walk_pt[j][1];
+            if (!ytr__walk_step(t, i, j, fx, fy, &x, &y)) {
+                ytr__fail(t, "walk '%s': no point inside the box after %d draws at trial %d", t->var[j].name,
+                          YTR_WALK_MAX_DRAWS, i);
+                t->walk_failed = true;
+                return YTR_ERR_ARG;
+            }
+            t->walk_at[j] = i;
+            t->walk_pt[j][0] = x;
+            t->walk_pt[j][1] = y;
+            t->walk_pt[j][2] = fx;
+            t->walk_pt[j][3] = fy;
+        }
+    }
     h = &t->history[i];
     if (t->break_pending & YTR__BREAK_FLAG) {
         flags |= YTR_FLAG_AFTER_BREAK;
@@ -5533,7 +5735,37 @@ YTR_API int ytr_var(const ytr_trials* t, int i, int j) {
     if (!t) return YTR_ERR_ARG;
     if (!t->open) return YTR_ERR_CLOSED;
     if (i < 0 || i >= t->n_run || j < 0 || j >= t->n_var || j >= YTR_MAX_VARS) return YTR_ERR_ARG;
+    if (t->var[j].kind != YTR_VAR_CHOICE) return YTR_ERR_ARG;
     return ytr__var_draw(t, i, j);
+}
+
+YTR_API int ytr_var_walk(const ytr_trials* t, int i, int j, double out[5]) {
+    double p[4];
+    if (!t || !out) return YTR_ERR_ARG;
+    if (!t->open) return YTR_ERR_CLOSED;
+    if (i < 0 || i >= t->n_run || j < 0 || j >= t->n_var || j >= YTR_MAX_VARS) return YTR_ERR_ARG;
+    if (t->var[j].kind != YTR_VAR_WALK2D) return YTR_ERR_ARG;
+    if (t->walk_at[j] == i) {
+        memcpy(p, t->walk_pt[j], sizeof(p));
+    } else {
+        /* an earlier trial: the walk again from trial 0, which a resumed
+         * session's snapshot does not need (it keeps the last point) */
+        int k;
+        double fx = t->var[j].walk[5], fy = t->var[j].walk[6], x = fx, y = fy;
+        if (t->walk_at[j] >= 0 && i > t->walk_at[j]) return YTR_ERR_ARG;
+        for (k = 0; k <= i; k++) {
+            fx = x;
+            fy = y;
+            if (!ytr__walk_step(t, k, j, fx, fy, &x, &y)) return YTR_ERR_ARG;
+        }
+        p[0] = x; p[1] = y; p[2] = fx; p[3] = fy;
+    }
+    out[0] = p[0];
+    out[1] = p[1];
+    out[2] = p[2];
+    out[3] = p[3];
+    out[4] = atan2(-(p[1] - p[3]), p[0] - p[2]) * (180.0 / 3.14159265358979323846);
+    return 0;
 }
 
 YTR_API const char* ytr_var_text(const ytr_trials* t, int i, int j) {
@@ -5581,7 +5813,7 @@ static void ytr__csv_name(ytr__str* s, const char* name, int f) {
  * factors (factor<f> for one without a name, written into tmp), the
  * jitters, the variables; NULL past the last. One list for
  * ytr_format_header() and the data writer, so the two cannot differ. */
-static const char* ytr__sess_col(const ytr_trials* t, int k, char tmp[24]) {
+static const char* ytr__sess_col(const ytr_trials* t, int k, char tmp[48]) {
     static const char* const fixed[] = { "index", "block", "rep", "condition", "track", "practice",
                                          "warmup", "requeued", "after_break", "leadin", "outcome" };
     int nfx = t->has_leadin ? 11 : 10;
@@ -5592,14 +5824,25 @@ static const char* ytr__sess_col(const ytr_trials* t, int k, char tmp[24]) {
         const char* nm = t->desc.table ? ytb_col_name(t->desc.table, k)
                          : k < YTR_MAX_FACTORS ? t->desc.factors[k].name : NULL;
         if (nm) return nm;
-        snprintf(tmp, 24, "factor%d", k);
+        snprintf(tmp, 48, "factor%d", k);
         return tmp;
     }
     k -= ytr__nfe(t);
     if (k < t->n_jit && k < YTR_MAX_JITTERS) return t->jit[k].name;
     k -= t->n_jit;
-    if (k < t->n_var && k < YTR_MAX_VARS) return t->var[k].name;
-    k -= t->n_var;
+    {
+        /* a walk has five columns in its place */
+        int j;
+        for (j = 0; j < t->n_var && j < YTR_MAX_VARS; j++) {
+            int w = t->var[j].kind == YTR_VAR_WALK2D ? 5 : 1;
+            if (k < w) {
+                if (w == 1) return t->var[j].name;
+                snprintf(tmp, 48, "%s%s", t->var[j].name, ytr__walk_sfx[k]);
+                return tmp;
+            }
+            k -= w;
+        }
+    }
     if (k == 0 && t->v6) return "trial_seed";
     return NULL;
 }
@@ -5607,7 +5850,7 @@ static const char* ytr__sess_col(const ytr_trials* t, int k, char tmp[24]) {
 YTR_API int ytr_format_header(const ytr_trials* t, char* buf, size_t cap) {
     ytr__str s;
     const char* nm;
-    char tmp[24];
+    char tmp[48];
     int k;
     if (!t) return YTR_ERR_ARG;
     if (!t->open) return YTR_ERR_CLOSED;
@@ -5618,6 +5861,23 @@ YTR_API int ytr_format_header(const ytr_trials* t, char* buf, size_t cap) {
     }
     ytr__cat(&s, "\n");
     return ytr__str_done(&s);
+}
+
+/* A double in the fewest of 15 to 17 significant digits that read back as
+ * it (ysp/table.h's parser, as the data writer's DOUBLE columns). */
+static void ytr__cat_double(ytr__str* s, double x) {
+    char b[40];
+    double y;
+    int prec, n = 0, i;
+    if (x != x || x - x != 0.0) return;
+    for (prec = 15; prec <= 17; prec++) {
+        n = snprintf(b, sizeof(b), "%.*g", prec, x);
+        for (i = 0; i < n; i++)
+            if (!((b[i] >= '0' && b[i] <= '9') || b[i] == 'e' || b[i] == '-' || b[i] == '+')) b[i] = '.';
+        if (n > 0 && n < (int)sizeof(b) && ytb_parse_number(b, (size_t)n, &y) == YTB_NUM_OK && y == x) break;
+    }
+    if (n <= 0 || n >= (int)sizeof(b)) return;
+    ytr__cat(s, "%s", b);
 }
 
 YTR_API int ytr_format_row(const ytr_trials* t, int i, char* buf, size_t cap) {
@@ -5655,6 +5915,16 @@ YTR_API int ytr_format_row(const ytr_trials* t, int i, char* buf, size_t cap) {
         ytr__cat(&s, ",%lld.%09lld", (long long)(v.ns / 1000000000), (long long)(v.ns % 1000000000));
     }
     for (f = 0; f < t->n_var && f < YTR_MAX_VARS; f++) {
+        if (t->var[f].kind == YTR_VAR_WALK2D) {
+            double w[5];
+            int c;
+            if (ytr_var_walk(t, i, f, w) < 0) { ytr__cat(&s, ",,,,,"); continue; }
+            for (c = 0; c < 5; c++) {
+                ytr__cat(&s, ",");
+                ytr__cat_double(&s, w[c]);
+            }
+            continue;
+        }
         ytr__cat(&s, ",");
         ytr__csv_name(&s, ytr_var_text(t, i, f), f);
     }
@@ -5776,6 +6046,14 @@ YTR_API int ytr_format_meta(const ytr_trials* t, char* buf, size_t cap) {
         if (t->n_var > 0) ytr__cat(&s, " vars=");
         for (i = 0; i < t->n_var && i < YTR_MAX_VARS; i++) {
             if (i) ytr__cat(&s, ";");
+            if (t->var[i].kind == YTR_VAR_WALK2D) {
+                ytr__cat(&s, "%s:walk2d", t->var[i].name);
+                for (k = 0; k < 7; k++) {
+                    ytr__cat(&s, ":");
+                    ytr__cat_double(&s, t->var[i].walk[k]);
+                }
+                continue;
+            }
             ytr__cat(&s, "%s:choice", t->var[i].name);
             for (k = 0; k < t->var[i].n_values && k < YTR_MAX_VAR_VALUES; k++) {
                 ytr__cat(&s, ":");
@@ -5952,6 +6230,15 @@ YTR_API int ytr_format_rules(const ytr_trials* t, char* buf, size_t cap) {
     }
     for (i = 0; i < t->n_var && i < YTR_MAX_VARS; i++) {
         int k;
+        if (t->var[i].kind == YTR_VAR_WALK2D) {
+            ytr__cat(&s, "var %s walk2d", t->var[i].name);
+            for (k = 0; k < 7; k++) {
+                ytr__cat(&s, " ");
+                ytr__cat_double(&s, t->var[i].walk[k]);
+            }
+            ytr__cat(&s, "\n");
+            continue;
+        }
         ytr__cat(&s, "var %s choice", t->var[i].name);
         for (k = 0; k < t->var[i].n_values && k < YTR_MAX_VAR_VALUES; k++) {
             ytr__cat(&s, " ");
@@ -6723,9 +7010,38 @@ static bool ytr__rl_stmt(ytr__rl* rl, ytr__arg* a, int na) {
         const char** vals;
         char* nm;
         int np = na - 3;
+        if (na >= 3 && ytr__rl_word(&a[2], "walk2d")) {
+            /* var NAME walk2d STEP LO_X HI_X LO_Y HI_Y X0 Y0 (A WALK) */
+            double w[7];
+            if (na != 10)
+                return ytr__rl_fail(rl, 0, "expected: var NAME walk2d STEP LO_X HI_X LO_Y HI_Y X0 Y0"), false;
+            if (d->n_vars < 0 || d->n_vars >= YTR_MAX_VARS)
+                return ytr__rl_fail(rl, 0, "more than %d variables (YTR_MAX_VARS)", YTR_MAX_VARS), false;
+            if (a[1].v || a[1].kq || a[1].kn < 1 || a[1].kn > YTR_MAX_WALK_NAME)
+                return ytr__rl_fail(rl, a[1].col, "a walk's name is a word of 1 to %d characters", YTR_MAX_WALK_NAME),
+                       false;
+            for (k = 0; k < 7; k++) {
+                const ytr__arg* g = &a[3 + k];
+                char tk[64];
+                if (g->v || g->kq || g->kn < 1 || g->kn >= sizeof(tk))
+                    return ytr__rl_fail(rl, g->col, "expected a number"), false;
+                memcpy(tk, g->k, g->kn);
+                tk[g->kn] = '\0';
+                if (ytb_parse_number(tk, g->kn, &w[k]) != YTB_NUM_OK)
+                    return ytr__rl_fail(rl, g->col, "'%.*s' is not a number", (int)(g->kn > 40 ? 40 : g->kn), g->k),
+                           false;
+            }
+            nm = (char*)ytr__rl_alloc(rl, a[1].kn + 1);
+            if (!nm) return false;
+            memcpy(nm, a[1].k, a[1].kn);
+            nm[a[1].kn] = '\0';
+            vd = &d->vars[d->n_vars++];
+            *vd = ytr_var_walk2d(nm, w[0], w[1], w[2], w[3], w[4], w[5], w[6]);
+            return true;
+        }
         if (na < 4 || !ytr__rl_word(&a[2], "choice"))
-            return ytr__rl_fail(rl, na >= 3 ? a[2].col : 0, "expected: var NAME choice V V ... (1 to %d values)",
-                                YTR_MAX_VAR_VALUES), false;
+            return ytr__rl_fail(rl, na >= 3 ? a[2].col : 0, "expected: var NAME choice V V ... (1 to %d values), "
+                                "or var NAME walk2d STEP LO_X HI_X LO_Y HI_Y X0 Y0", YTR_MAX_VAR_VALUES), false;
         if (d->n_vars < 0 || d->n_vars >= YTR_MAX_VARS)
             return ytr__rl_fail(rl, 0, "more than %d variables (YTR_MAX_VARS)", YTR_MAX_VARS), false;
         if (a[1].v || a[1].kq || a[1].kn < 1 || a[1].kn > YTR_MAX_JITTER_NAME)
@@ -6903,7 +7219,7 @@ static void ytr__put_f64(ytr__w* w, double v, const char* name) {
 
 /* The snapshot format a session saves and loads. */
 static uint32_t ytr__snap_format(const ytr_trials* t) {
-    return t->v6 ? YTR__SNAP_FORMAT5 : t->n_jit > 0 ? YTR__SNAP_FORMAT4
+    return t->v8 ? YTR__SNAP_FORMAT6 : t->v6 ? YTR__SNAP_FORMAT5 : t->n_jit > 0 ? YTR__SNAP_FORMAT4
          : t->v2 ? YTR__SNAP_FORMAT2 : YTR__SNAP_FORMAT;
 }
 
@@ -6992,6 +7308,13 @@ static void ytr__put_desc(ytr__w* w, const ytr_trials* t) {
             n = strlen(q->name);
             ytr__put(w, (uint64_t)n, 1, "vars[].name");
             for (k = 0; k < n; k++) ytr__put(w, (unsigned char)q->name[k], 1, "vars[].name");
+            if (t->v8) {
+                ytr__put(w, (uint64_t)(unsigned)q->kind, 1, "vars[].kind");
+                if (q->kind == YTR_VAR_WALK2D) {
+                    for (v = 0; v < 7; v++) ytr__put_f64(w, q->walk[v], "vars[].walk");
+                    continue;
+                }
+            }
             ytr__put_i32(w, q->n_values, "vars[].n_values");
             for (v = 0; v < q->n_values && v < YTR_MAX_VAR_VALUES; v++) {
                 n = strlen(q->text[v]);
@@ -7063,6 +7386,16 @@ static void ytr__put_all(ytr__w* w, const ytr_trials* t) {
         int j;
         for (j = 0; j < t->n_jit && j < YTR_MAX_JITTERS; j++)
             ytr__put(w, (uint64_t)t->jit_raw[i][j], 8, "jitter");
+    }
+    if (t->v8) {
+        /* format 6: each walk's last point, so a resumed session moves on
+         * from it */
+        int j, c;
+        for (j = 0; j < t->n_var && j < YTR_MAX_VARS; j++) {
+            if (t->var[j].kind != YTR_VAR_WALK2D) continue;
+            ytr__put_i32(w, t->walk_at[j], "walk_at");
+            for (c = 0; c < 4; c++) ytr__put_f64(w, t->walk_pt[j][c], "walk_pt");
+        }
     }
 }
 
@@ -7232,6 +7565,25 @@ YTR_API bool ytr_open_saved(ytr_trials* t, const ytr_desc* desc, const void* buf
             else t->jit_raw[i][j] = x;
         }
     }
+    if (t->v8) {
+        int j, c;
+        for (j = 0; j < t->n_var && j < YTR_MAX_VARS; j++) {
+            const double* bx = t->var[j].walk;
+            uint64_t u;
+            if (t->var[j].kind != YTR_VAR_WALK2D) continue;
+            t->walk_at[j] = ytr__get_i32(&r);
+            for (c = 0; c < 4; c++) {
+                u = ytr__get(&r, 8);
+                memcpy(&t->walk_pt[j][c], &u, sizeof(u));
+                if (!ytr__finite(t->walk_pt[j][c])) r.bad = true;
+            }
+            /* the last trial's point, inside the box; or none before a trial */
+            if (t->walk_at[j] != (t->n_run > 0 ? t->n_run - 1 : -1) ||
+                (t->walk_at[j] >= 0 && !(t->walk_pt[j][0] >= bx[1] && t->walk_pt[j][0] <= bx[2] &&
+                                          t->walk_pt[j][1] >= bx[3] && t->walk_pt[j][1] <= bx[4])))
+                r.bad = true;
+        }
+    }
     if (r.bad)
         return ytr__fail(t, "ytr_open_saved: the snapshot is corrupt or truncated");
     if (r.pos != r.len)
@@ -7280,7 +7632,13 @@ static int ytr__note(ytr_trials* t, int rc, int floor, const char* what) {
 }
 
 YTR_API int ytr_next(ytr_trials* t, ytr_trial_info* info) {
-    return ytr__note(t, ytr__next(t, info), YTR_DONE, "ytr_next");
+    int rc = ytr__next(t, info);
+    if (t && t->walk_failed) {
+        /* the walk's own message names it; keep it */
+        t->walk_failed = false;
+        return rc;
+    }
+    return ytr__note(t, rc, YTR_DONE, "ytr_next");
 }
 YTR_API int ytr_update(ytr_trials* t, int outcome, const void* rec) {
     return ytr__note(t, ytr__update(t, outcome, rec), 0, "ytr_update");
@@ -7512,6 +7870,9 @@ static size_t ytr__row_bound(const ytr_trials* t) {
     }
     /* a variable's text quoted, every byte a quote at worst; the seed */
     n += (2u * YTR_MAX_VAR_TEXT + 3u) * (size_t)(t->n_var > 0 ? t->n_var : 0) + (t->v6 ? 18u : 0u);
+    /* a walk's five doubles, 25 characters each at most (%.17g) */
+    for (f = 0; f < t->n_var && f < YTR_MAX_VARS; f++)
+        if (t->var[f].kind == YTR_VAR_WALK2D) n += 5u * 26u;
     return n + 24u * (size_t)(t->n_jit > 0 ? t->n_jit : 0) + 2u;
 }
 
@@ -7604,7 +7965,7 @@ YTR_API bool ytr_data_open(ytr_data* w, const ytr_data_desc* desc) {
      * not bounded by the row buffer. */
     if (desc->trials) {
         const char* nm;
-        char tmp[24];
+        char tmp[48];
         if (!ytr_is_open(desc->trials)) return ytr__dfail(w, "ytr_data_open: the session is not open");
         if (ytr__row_bound(desc->trials) >= sizeof(w->buf))
             return ytr__dfail(w, "ytr_data_open: a trial's columns can take %lu bytes, more than "

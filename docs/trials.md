@@ -206,6 +206,35 @@ target) that the data file logs and a resume gives back.
    has a `side` column and a `trial_seed` column, and `ytr_restore()` or `ytr_open_saved()` gives
    every value again.
 
+## Draw a target a step from the last one
+
+This procedure gives each trial a point at a fixed distance from the last
+trial's point, inside a box (the reach targets of `trial_bimanual`). It
+needs v0.8.
+
+1. Give the session a walk and a seed:
+
+   ```c
+   d.vars[0] = ytr_var_walk2d("aim", 12, -10, 10, -10, 10, 0, 0);
+   d.n_vars = 1;
+   d.seed = seed;
+   ```
+
+   The rules text gives the same with `var aim walk2d 12 -10 10 -10 10 0 0`:
+   the step, the box's low x, high x, low y, high y, and the start.
+
+2. Read the point after `ytr_next()`:
+
+   ```c
+   double w[5];   /* x, y, from_x, from_y, deg */
+   ytr_var_walk(&t, ti.index, 0, w);
+   ```
+
+3. The data line has `aim_x`, `aim_y`, `aim_from_x`, `aim_from_y` and
+   `aim_deg`. `ytr_restore()` and `ytr_open_saved()` continue the walk.
+
+Y is down, so `deg` turns counterclockwise on the screen.
+
 To snap a jitter to the display's frames, write `rate=display` in the
 rules text and set `d.display_rate_num` and `d.display_rate_den` from the
 screen's refresh after `ytr_rules()` and before `ytr_open()`.
@@ -1113,6 +1142,55 @@ lines (one value with `=` in it, one empty value) and finds them before
 writer with no sidecar and one after `finish()`, each with its code and
 message. The compile check (C99, C11, C++17) calls it on a writer with no
 sidecar. Mutants `v071-01` to `v071-06` killed (6 of 6).
+
+## v0.8: a walk
+
+Gap G15 of the [experiment definition](experiment_format.md), decision
+D30: each reach of `trial_bimanual` starts at the last target, 12 cm from
+it, inside a 20 x 20 cm box. A choice variable is a function of the seed
+and the trial index; a walk also depends on the last trial's point.
+
+| Change | Why |
+|---|---|
+| `ytr_var_walk2d(name, step, lo_x, hi_x, lo_y, hi_y, x0, y0)` in `desc.vars[]`, `ytr_var_desc.kind` and its numbers | A variable kind, so a resume gives it again (D30 rejected a draw of the player's own) |
+| Directions from a sub-stream of variable j's output, `u(r) = (mix64(output(i, 1 + j) + (r + 1) G) >> 11) / 2^53`, `a = 2 pi u(r)`, the first point inside the closed box | The trial's stream, as D8 says; a choice variable beside it keeps its draws |
+| The point is `from + step (cos a, -sin a)` | Y is down (D22), so `a` turns counterclockwise on the screen, as reach studies give it |
+| Trial 0 moves from (x0, y0); trial i from trial i - 1's point | The point is a function of the seed and the trial indices only: a re-queue or an outcome moves nothing, and a restore rebuilds it |
+| `next()` keeps the last point; snapshot format 6 stores it per walk; `open_saved()` checks it is the last trial's and inside the box | G15: a resumed session moves on from it with no walk from trial 0 |
+| `ytr_var_walk(t, i, j, out)`: x, y, from_x, from_y, deg | The last trial's from the handle; an earlier one walked again from trial 0 (a const call) |
+| Five data-line columns in the walk's place: `NAME_x`, `NAME_y`, `NAME_from_x`, `NAME_from_y`, `NAME_deg`, in the fewest digits that read back | 3.14's variables; `deg` is `atan2(-(y - from_y), x - from_x)`, in (-180, 180] |
+| At most `YTR_WALK_MAX_DRAWS` (10,000) directions a trial, then `next()` gives `YTR_ERR_ARG` and names the walk | `trial_bimanual`'s bound; F17's box of no height fails there |
+| A walk's name is at most 24 bytes; its five names may not be a table column, a jitter, another variable or `trial_seed` | `NAME_from_x` must be a column name |
+| Refused at open: a box that does not hold the start, a step not above 0 or not below half the box's diagonal, numbers that are not finite, a low corner above the high one | 3.14 |
+
+`cos`, `sin` and `atan2` are the C library's, so a point's last bit can
+differ between C libraries; a choice variable's draw is integer-only and
+does not. The snapshot stores the point, so a resume on another library
+continues from the same point. A session without a walk writes the same
+data lines and snapshot (format 5 or below) as v0.7.1.
+
+`ytr_var_desc` gains `kind` and seven doubles: a layout change, hence the
+minor version. `ytr_var_choice()` zeroes them; a zeroed desc is a choice.
+The Python binding `ysp-trials` 0.8.0 embeds the header with no binding
+change (it does not take a walk yet).
+
+### Tests
+
+`tests/adapt/trials_test_vars.h`, `test_walk()` (gcc 12.2, Linux desktop):
+40 trials against a second implementation written from the manual, bit for
+bit (x, y, from, deg); each point 12 from the last within 1e-12 and inside
+the box; an earlier trial walked again; the data line's header and five
+columns read back as the same doubles; the describe line and the rules
+text; restore after re-queues and save and load at 7 cut points (format 6)
+give the same rows; a corrupt last point and a wrong trial index refused;
+a desc with another step refused by name; the rules text's numbers and 5
+refusals; 10 refusals at open; a point on the box's edge taken (the box is
+closed); a box 2e-5 high that takes about 80,000 draws fails at 10,000 with
+the walk's name, and a box of no height (F17) hands out nothing. A desc
+without a walk keeps format 5.
+
+`tests/fuzz/trials_fuzz.c` reads every walk's point and an earlier trial's,
+and gains walk seeds and a self-driven mode for gcc (`-DYSP_FUZZ_SELF`).
 
 ## Verification (v0.2)
 
