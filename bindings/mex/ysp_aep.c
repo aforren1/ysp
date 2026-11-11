@@ -80,8 +80,8 @@ static void g_check(int rc) {
 
 static const char* const g_fields[] = {
     "n_dims", "lo", "hi", "intensity_dim", "lik", "n_outcomes", "kernel", "link",
-    "guess", "lapse", "hyper", "fit", "fit_every", "no_hyper_prior", "refit_every",
-    "hyper_min", "hyper_max", "jitter", "acq", "target_p", "target_value",
+    "guess", "lapse", "hyperparams", "fit", "fit_every", "no_hyper_prior", "refit_every",
+    "hyperparams_min", "hyperparams_max", "jitter", "acq", "target_p", "target_value",
     "target_outcome", "acq_beta", "n_init", "rng", "candidates", "n_candidates",
     "grid", "stop_trials", "stop_threshold_sd", "stop_context", "max_trials",
     "refine_steps", "model", "priors", "minimize", "dim_kind", "dim_levels",
@@ -98,7 +98,7 @@ static const char* const g_prior_fields[] = {
     "mean_g", "noise_sd"
 };
 
-static void g_read_hyper(const mxArray* s, const char* what, yaep_hyper* h) {
+static void g_read_hyper(const mxArray* s, const char* what, yaep_hyperparams* h) {
     const mxArray* f;
     pm_check_fields(s, g_hyper_fields, 10, what);
     if ((f = pm_field(s, "lengthscale")))   pm_vector(f, "lengthscale", h->lengthscale, YAEP_MAX_DIMS);
@@ -167,9 +167,9 @@ static const mxArray* g_read_desc(const mxArray* s, yaep_desc* d) {
     if ((f = pm_field(s, "model")))          d->model = (yaep_model)pm_enum(f, "model", g_model_names, 2);
     if ((f = pm_field(s, "guess")))          d->guess = pm_scalar(f, "guess");
     if ((f = pm_field(s, "lapse")))          d->lapse = pm_scalar(f, "lapse");
-    if ((f = pm_field(s, "hyper")))          g_read_hyper(f, "hyper", &d->hyper);
-    if ((f = pm_field(s, "hyper_min")))      g_read_hyper(f, "hyper_min", &d->hyper_min);
-    if ((f = pm_field(s, "hyper_max")))      g_read_hyper(f, "hyper_max", &d->hyper_max);
+    if ((f = pm_field(s, "hyperparams"))) g_read_hyper(f, "hyperparams", &d->hyperparams);
+    if ((f = pm_field(s, "hyperparams_min"))) g_read_hyper(f, "hyperparams_min", &d->hyperparams_min);
+    if ((f = pm_field(s, "hyperparams_max"))) g_read_hyper(f, "hyperparams_max", &d->hyperparams_max);
     if ((f = pm_field(s, "priors")))         g_read_priors(f, &d->priors);
     if ((f = pm_field(s, "fit")))            d->fit = pm_bool(f, "fit") != 0;
     if ((f = pm_field(s, "fit_every")))      d->fit_every = pm_int(f, "fit_every");
@@ -275,7 +275,7 @@ static gn* g_make(const mxArray* s, const uint8_t* bytes, size_t len) {
 
 /* ---- outputs ------------------------------------------------------------ */
 
-static mxArray* g_hyper_out(const yaep_hyper* h, int nd, int n_cut) {
+static mxArray* g_hyper_out(const yaep_hyperparams* h, int nd, int n_cut) {
     mxArray* s = mxCreateStructMatrix(1, 1, 10, (const char**)g_hyper_fields);
     mxSetField(s, 0, "lengthscale",   pm_row(h->lengthscale, nd));
     mxSetField(s, 0, "outputscale",   mxCreateDoubleScalar(h->outputscale));
@@ -357,7 +357,7 @@ static mxArray* g_policy_string(yrt_policy pol) {
 static mxArray* g_snapshot(const yaep_snapshot* s, const yaep_gp* g, int nd) {
     static const char* fields[] = { "seq", "x", "proposed", "update_rc", "n_trials", "done",
                                     "stop", "threshold", "threshold_lo", "threshold_hi",
-                                    "threshold_rc", "multi_cross", "hyper", "log_marginal",
+                                    "threshold_rc", "multi_cross", "hyperparams", "log_marginal",
                                     "numeric", "fitting" };
     mxArray* out = mxCreateStructMatrix(1, 1, 16, fields);
     int st = (int)s->stop;
@@ -375,7 +375,7 @@ static mxArray* g_snapshot(const yaep_snapshot* s, const yaep_gp* g, int nd) {
     mxSetField(out, 0, "threshold_hi", mxCreateDoubleScalar(s->threshold_hi));
     mxSetField(out, 0, "threshold_rc", mxCreateDoubleScalar((double)s->threshold_rc));
     mxSetField(out, 0, "multi_cross", mxCreateLogicalScalar(s->multi_cross));
-    mxSetField(out, 0, "hyper", g_hyper_out(&s->hyper, nd, g_n_cut(g)));
+    mxSetField(out, 0, "hyperparams", g_hyper_out(&s->hyperparams, nd, g_n_cut(g)));
     mxSetField(out, 0, "log_marginal", mxCreateDoubleScalar(s->log_marginal));
     mxSetField(out, 0, "numeric", mxCreateDoubleScalar((double)s->numeric));
     mxSetField(out, 0, "fitting", mxCreateLogicalScalar(s->fitting));
@@ -680,7 +680,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     } else if (strcmp(cmd, "fit_delta") == 0) {
         plhs[0] = mxCreateDoubleScalar(yaep_fit_delta(g));
     } else if (strcmp(cmd, "get_hyper") == 0) {
-        yaep_hyper h;
+        yaep_hyperparams h;
         g_check(yaep_get_hyper(g, &h));
         plhs[0] = g_hyper_out(&h, n->nd, g_n_cut(g));
     } else if (strcmp(cmd, "get_priors") == 0) {

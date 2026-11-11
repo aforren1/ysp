@@ -1,4 +1,4 @@
-/* ysp/experiment.h - v0.1.3 - public domain single-header loader for experiment definitions
+/* ysp/experiment.h - v0.2.0 - public domain single-header loader for experiment definitions
  *
  *   Reads a version 1 ysp experiment definition (docs/experiment_format.md,
  *   the pack's EXPERIMENT entry) into a checked, fully defaulted form in a
@@ -120,6 +120,11 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.2.0 - the AEP method's keys hyper.*, hyper_min.* and hyper_max.* are
+ *          hyperparams.*, hyperparams_min.* and hyperparams_max.*, as the
+ *          fields of ysp/aep.h 0.17.0. The loader refuses the old keys
+ *          (unknown key). The format stays version 1
+ *          (docs/experiment_format.md, 2.11). No struct changes.
  *   v0.1.3 - the levels of $outcome follow key_answer: "correct" and
  *          "wrong" with one, "responded" without one, and "timeout" when
  *          the response can time out. A lookup by $outcome on a template
@@ -147,7 +152,7 @@
  *   v0.1.0 - first version: the loader for format version 1, its defaults
  *          table, the host interface and the canonical writer.
  *
- *   STATUS: v0.1.3 (2026-11-10). Tested; the first player (docs/player.md)
+ *   STATUS: v0.2.0 (2026-11-11). Tested; the first player (docs/player.md)
  *   uses it.
  *   docs/experiment.md has the decisions and the test results.
  *
@@ -158,9 +163,9 @@
 #define YSP_EXPERIMENT_H_INCLUDED
 
 #define YEXP_VERSION_MAJOR 0
-#define YEXP_VERSION_MINOR 1
-#define YEXP_VERSION_PATCH 3
-#define YEXP_VERSION_STRING "0.1.3"
+#define YEXP_VERSION_MINOR 2
+#define YEXP_VERSION_PATCH 0
+#define YEXP_VERSION_STRING "0.2.0"
 
 /* The newest format version this header reads (D12). */
 #define YEXP_FORMAT_VERSION 1
@@ -802,36 +807,36 @@ static const yexp_row yexp__rows[] = {
     { YEXP__S_AEP, 0xffff, YEXP__T_NUMS, 0, "grid", "[]", NULL },
     { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "guess", "0", NULL },
     { YEXP__S_AEP, 0xffff, YEXP__T_NUMS, YEXP__R_REQ, "hi", NULL, NULL },
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUMS, 0, "hyper.cutpoint", "[]", NULL },
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUMS, 0, "hyper.lengthscale", "[]", NULL },
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUMS, 0, "hyper.lengthscale_b", "[]", NULL },
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUMS, 0, "hyper.lengthscale_g", "[]", NULL },
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyper.mean", "0", NULL },
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyper.mean_g", "0", NULL },
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyper.noise_sd", "0.1", NULL },
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyper.outputscale", "1", NULL },
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyper.outputscale_b", "1", NULL },
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyper.outputscale_g", "0.3", NULL },
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUMS, 0, "hyper_max.cutpoint", "[]", NULL },
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUMS, 0, "hyper_max.lengthscale", "[]", NULL },
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUMS, 0, "hyper_max.lengthscale_b", "[]", NULL },
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUMS, 0, "hyper_max.lengthscale_g", "[]", NULL },
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyper_max.mean", "5", NULL },
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyper_max.mean_g", "0", NULL },
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyper_max.noise_sd", "10", NULL },
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyper_max.outputscale", "10", NULL },
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyper_max.outputscale_b", "10", NULL },
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyper_max.outputscale_g", "10", NULL },
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUMS, 0, "hyper_min.cutpoint", "[]", NULL },
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUMS, 0, "hyper_min.lengthscale", "[]", NULL },
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUMS, 0, "hyper_min.lengthscale_b", "[]", NULL },
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUMS, 0, "hyper_min.lengthscale_g", "[]", NULL },
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyper_min.mean", "-5", NULL },
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyper_min.mean_g", "0", NULL },
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyper_min.noise_sd", "0.001", NULL },
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyper_min.outputscale", "0.1", NULL },
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyper_min.outputscale_b", "0.1", NULL },
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyper_min.outputscale_g", "0.01", NULL },
+    { YEXP__S_AEP, 0xffff, YEXP__T_NUMS, 0, "hyperparams.cutpoint", "[]", NULL },
+    { YEXP__S_AEP, 0xffff, YEXP__T_NUMS, 0, "hyperparams.lengthscale", "[]", NULL },
+    { YEXP__S_AEP, 0xffff, YEXP__T_NUMS, 0, "hyperparams.lengthscale_b", "[]", NULL },
+    { YEXP__S_AEP, 0xffff, YEXP__T_NUMS, 0, "hyperparams.lengthscale_g", "[]", NULL },
+    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyperparams.mean", "0", NULL },
+    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyperparams.mean_g", "0", NULL },
+    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyperparams.noise_sd", "0.1", NULL },
+    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyperparams.outputscale", "1", NULL },
+    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyperparams.outputscale_b", "1", NULL },
+    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyperparams.outputscale_g", "0.3", NULL },
+    { YEXP__S_AEP, 0xffff, YEXP__T_NUMS, 0, "hyperparams_max.cutpoint", "[]", NULL },
+    { YEXP__S_AEP, 0xffff, YEXP__T_NUMS, 0, "hyperparams_max.lengthscale", "[]", NULL },
+    { YEXP__S_AEP, 0xffff, YEXP__T_NUMS, 0, "hyperparams_max.lengthscale_b", "[]", NULL },
+    { YEXP__S_AEP, 0xffff, YEXP__T_NUMS, 0, "hyperparams_max.lengthscale_g", "[]", NULL },
+    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyperparams_max.mean", "5", NULL },
+    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyperparams_max.mean_g", "0", NULL },
+    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyperparams_max.noise_sd", "10", NULL },
+    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyperparams_max.outputscale", "10", NULL },
+    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyperparams_max.outputscale_b", "10", NULL },
+    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyperparams_max.outputscale_g", "10", NULL },
+    { YEXP__S_AEP, 0xffff, YEXP__T_NUMS, 0, "hyperparams_min.cutpoint", "[]", NULL },
+    { YEXP__S_AEP, 0xffff, YEXP__T_NUMS, 0, "hyperparams_min.lengthscale", "[]", NULL },
+    { YEXP__S_AEP, 0xffff, YEXP__T_NUMS, 0, "hyperparams_min.lengthscale_b", "[]", NULL },
+    { YEXP__S_AEP, 0xffff, YEXP__T_NUMS, 0, "hyperparams_min.lengthscale_g", "[]", NULL },
+    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyperparams_min.mean", "-5", NULL },
+    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyperparams_min.mean_g", "0", NULL },
+    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyperparams_min.noise_sd", "0.001", NULL },
+    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyperparams_min.outputscale", "0.1", NULL },
+    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyperparams_min.outputscale_b", "0.1", NULL },
+    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyperparams_min.outputscale_g", "0.01", NULL },
     { YEXP__S_AEP, 0xffff, YEXP__T_INT, 0, "intensity_dim", "0", NULL },
     { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "jitter", "1e-06", NULL },
     { YEXP__S_AEP, 0xffff, YEXP__T_ENUM, 0, "kernel", "\"rbf\"", "rbf=0,semip=1" },

@@ -31,11 +31,11 @@ replace = '    YAEP__HP("acq_beta", 0, 1.64, "the straddle width of lse and the 
 
 [[mutant]]
 id = "02"
-name = "params: hyper_max.outputscale's default 5"
+name = "params: hyperparams_max.outputscale's default 5"
 test = "aep"
 why = "The fit's bound a designer shows would not be the one the fit uses."
-find = '''    YAEP__HP("hyper_max.outputscale", 0, 10,'''
-replace = '''    YAEP__HP("hyper_max.outputscale", 0, 5,'''
+find = '''    YAEP__HP("hyperparams_max.outputscale", 0, 10,'''
+replace = '''    YAEP__HP("hyperparams_max.outputscale", 0, 5,'''
 
 [[mutant]]
 id = "03"

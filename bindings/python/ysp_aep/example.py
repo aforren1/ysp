@@ -67,7 +67,7 @@ def plain_loop():
     print(f"plain loop: {g.n_trials} trials in {time.perf_counter() - t0:.2f} s")
     for ctx in (0.2, 0.5, 0.8):
         log_threshold(g, ctx)
-    h = g.hyper()
+    h = g.hyperparams()
     print(f"  lengthscales {h['lengthscale']}, outputscale {h['outputscale']:.3f}, "
           f"log marginal {g.log_marginal:.1f}")
 

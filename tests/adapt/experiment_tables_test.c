@@ -37,9 +37,6 @@
 #include "ysp/stair.h"
 #define YSP_QUEST_IMPLEMENTATION
 #include "ysp/quest.h"
-#ifdef hyper
-#undef hyper
-#endif
 #define YSP_AEP_IMPLEMENTATION
 #include "ysp/aep.h"
 #define YSP_RDK_IMPLEMENTATION

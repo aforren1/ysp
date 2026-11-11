@@ -54,11 +54,6 @@
 #include "ysp/stair.h"
 #define YSP_QUEST_IMPLEMENTATION
 #include "ysp/quest.h"
-/* rpcndr.h (through Media Foundation's and D3D's headers) defines hyper as
- * __int64; ysp/aep.h has a field of that name and no Windows header. */
-#ifdef hyper
-#undef hyper
-#endif
 #define YSP_AEP_IMPLEMENTATION
 #include "ysp/aep.h"
 #define YSP_RDK_IMPLEMENTATION

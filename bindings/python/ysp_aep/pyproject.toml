@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ysp-aep"
-version = "0.16.0.1"  # ysp/aep.h v0.16.0, binding change 1 (the CPython 3.10 floor); tests/test_aep.py checks it against __version__
+version = "0.17.0"  # ysp/aep.h v0.17.0 (hyper is hyperparams); tests/test_aep.py checks it against __version__
 description = "Gaussian-process adaptive psychophysics (AEPsych-style) with no dependencies"
 readme = "README.md"
 requires-python = ">=3.10"

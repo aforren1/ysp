@@ -168,7 +168,7 @@ int main(void) {
 
     yaep_async_close(&a);        /* drains; the handle is ours again */
     {
-        yaep_hyper h;
+        yaep_hyperparams h;
         memset(&h, 0, sizeof(h));
         yaep_get_hyper(&g, &h);
         printf("final: %d trials, log marginal %.2f, lengthscales %.3f / %.3f, "

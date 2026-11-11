@@ -593,15 +593,15 @@ static void csv_row(FILE* csv, const field* fd, const char* name, int rep,
  * works in. A value pinned at a bound is a fit that ran out of room, and the
  * manual says to look for it, so every run is checked and the counts are
  * printed under the summary. */
-static void check_bounds(const yaep_hyper* h, const yaep_desc* d, int* out) {
+static void check_bounds(const yaep_hyperparams* h, const yaep_desc* d, int* out) {
     double ls_lo[2], ls_hi[2], os_lo, os_hi;
     int k;
     for (k = 0; k < 2; k++) {
         double span = d->hi[k] - d->lo[k];
-        ls_lo[k] = d->hyper_min.lengthscale[k] > 0.0
-                   ? d->hyper_min.lengthscale[k] : 0.05 * span;
-        ls_hi[k] = d->hyper_max.lengthscale[k] > 0.0
-                   ? d->hyper_max.lengthscale[k] : 2.0 * span;
+        ls_lo[k] = d->hyperparams_min.lengthscale[k] > 0.0
+                   ? d->hyperparams_min.lengthscale[k] : 0.05 * span;
+        ls_hi[k] = d->hyperparams_max.lengthscale[k] > 0.0
+                   ? d->hyperparams_max.lengthscale[k] : 2.0 * span;
         if (h->lengthscale[k] <= ls_lo[k] * 1.001 ||
             h->lengthscale[k] >= ls_hi[k] * 0.999) out[k]++;
     }
@@ -618,17 +618,17 @@ static void check_bounds(const yaep_hyper* h, const yaep_desc* d, int* out) {
             out[5]++;
         return;
     }
-    os_lo = d->hyper_min.outputscale > 0.0 ? d->hyper_min.outputscale : 0.1;
-    os_hi = d->hyper_max.outputscale > 0.0 ? d->hyper_max.outputscale : 10.0;
+    os_lo = d->hyperparams_min.outputscale > 0.0 ? d->hyperparams_min.outputscale : 0.1;
+    os_hi = d->hyperparams_max.outputscale > 0.0 ? d->hyperparams_max.outputscale : 10.0;
     if (h->outputscale <= os_lo * 1.001 || h->outputscale >= os_hi * 0.999) out[2]++;
     {
-        double m_lo = d->hyper_min.mean != 0.0 ? d->hyper_min.mean : -5.0;
-        double m_hi = d->hyper_max.mean != 0.0 ? d->hyper_max.mean : 5.0;
+        double m_lo = d->hyperparams_min.mean != 0.0 ? d->hyperparams_min.mean : -5.0;
+        double m_hi = d->hyperparams_max.mean != 0.0 ? d->hyperparams_max.mean : 5.0;
         if (h->mean <= m_lo * 0.999 || h->mean >= m_hi * 0.999) out[3]++;
     }
     if (d->kernel == YAEP_KERNEL_SEMIP) {
-        os_lo = d->hyper_min.outputscale_b > 0.0 ? d->hyper_min.outputscale_b : 0.1;
-        os_hi = d->hyper_max.outputscale_b > 0.0 ? d->hyper_max.outputscale_b : 10.0;
+        os_lo = d->hyperparams_min.outputscale_b > 0.0 ? d->hyperparams_min.outputscale_b : 0.1;
+        os_hi = d->hyperparams_max.outputscale_b > 0.0 ? d->hyperparams_max.outputscale_b : 10.0;
         if (h->outputscale_b <= os_lo * 1.001 ||
             h->outputscale_b >= os_hi * 0.999) out[4]++;
     }
@@ -659,12 +659,12 @@ static int run_gp(const field* fd, const method* m, int rep, const config* cfg,
     d.fit_every = cfg->fit_every;
     d.stop_trials = cfg->n_trials;
     d.max_trials = cfg->n_trials;
-    d.hyper_min.lengthscale[1] = LS_INT_MIN;
+    d.hyperparams_min.lengthscale[1] = LS_INT_MIN;
     if (m->kernel == YAEP_KERNEL_SEMIP) {
-        d.hyper_max.outputscale = OS_MAX_SEMIP;
-        d.hyper_max.outputscale_b = OS_B_MAX_SEMIP;
+        d.hyperparams_max.outputscale = OS_MAX_SEMIP;
+        d.hyperparams_max.outputscale_b = OS_B_MAX_SEMIP;
     } else {
-        d.hyper_max.outputscale = OS_MAX_RBF;
+        d.hyperparams_max.outputscale = OS_MAX_RBF;
     }
     if (m->acq == YAEP_ACQ_RANDOM) {
         /* The quasi-random baseline is the same Halton set every replication
@@ -726,7 +726,7 @@ static int run_gp(const field* fd, const method* m, int rep, const config* cfg,
         }
     }
     if (n > 0) {
-        yaep_hyper h;
+        yaep_hyperparams h;
         double spent = (double)(clock() - t_all - t_score) / (double)CLOCKS_PER_SEC;
         memset(&h, 0, sizeof(h));
         yaep_get_hyper(&g, &h);

@@ -195,7 +195,7 @@ with yaep.Async(gp, context=[0.5], fit_in_idle=True, below_normal=True) as a:
             if got >= seq:
                 break                     # snap.x is the next stimulus
 # stop() has run: every queued response is applied, and gp is yours again
-print(gp.threshold([0.5]), gp.hyper(), gp.log_marginal)
+print(gp.threshold([0.5]), gp.hyperparams(), gp.log_marginal)
 ```
 
 This is the way to run a 30 ms EAVC selection under a PsychoPy frame loop.
@@ -219,7 +219,7 @@ See [example.py](example.py) for both loops on a simulated observer.
 |---|---|
 | `GP(**desc)` | open a run; the keywords are the `yaep_desc` fields below |
 | `Async(gp, context=None, target=0, fit_in_idle=False, below_normal=False, pin_cpu=0)` | the inference thread for `gp` |
-| `Hyper(**fields)` | a namespace of hyperparameter fields for `hyper=`, `hyper_min=`, `hyper_max=`; a dict works too |
+| `Hyper(**fields)` | a namespace of hyperparameter fields for `hyperparams=`, `hyperparams_min=`, `hyperparams_max=`; a dict works too |
 | `Priors(**fields)` | a namespace of the weak priors for `priors=`; a dict works too |
 | `Snapshot` | the type of what `Async.poll()` and `Async.wait()` return |
 | `simulate_outcome(p, u) -> int` | the smallest k with cumulative `p` > `u` (`u` in [0, 1) from your generator) |
@@ -241,7 +241,7 @@ default. `n_dims` comes from `len(lo)` unless you give it.
 | `kernel` | `KERNEL_*` or name | `"rbf"` (default) or `"semip"` |
 | `link` | `LINK_*` or name | `"probit"` (default) or `"logit"` |
 | `guess`, `lapse` | float | floor and ceiling of p; fixed, never fitted |
-| `hyper`, `hyper_min`, `hyper_max` | dict or `Hyper` | fixed values and fit bounds; zero means default or fit |
+| `hyperparams`, `hyperparams_min`, `hyperparams_max` | dict or `Hyper` | fixed values and fit bounds; zero means default or fit |
 | `fit`, `fit_every` | bool, int | fit the free hyperparameters every `fit_every` trials after the init phase |
 | `no_hyper_prior` | bool | fit type-II maximum likelihood instead of the weak priors |
 | `priors` | dict or `Priors` | the weak priors, by name: `lengthscale`, `outputscale`, `outputscale_b`, `outputscale_g`, `mean`, `mean_g`, `noise_sd`. Each is `{center, sd, ceiling}` or a `(center, sd[, ceiling])` tuple. 0 or missing is the measured default; a negative `sd` turns that prior off. `get_priors()` shows what is in force |
@@ -293,7 +293,7 @@ A caller-owned memory buffer (`desc.memory`) is not exposed.
 | `GP.load(data, **desc) -> GP` | resume from `save()`, bit for bit, without replay. The desc must agree with the snapshot on every number and re-supplies `rng` and `candidates` |
 | `fit_step() -> bool` | one step of that fit; `True` while another step helps |
 | `refit()` | the exact refit that `refit_every` skips |
-| `hyper() -> dict` | `lengthscale`, `outputscale`, `mean`, `lengthscale_b`, `outputscale_b`, `cutpoint`, `noise_sd`, `lengthscale_g`, `outputscale_g`, `mean_g`; under `model="psychometric"` the first three belong to the threshold GP and the `_g` fields to the log-slope GP |
+| `hyperparams() -> dict` | `lengthscale`, `outputscale`, `mean`, `lengthscale_b`, `outputscale_b`, `cutpoint`, `noise_sd`, `lengthscale_g`, `outputscale_g`, `mean_g`; under `model="psychometric"` the first three belong to the threshold GP and the `_g` fields to the log-slope GP |
 | `candidate(i) -> list` | candidate `i` |
 | `history() -> list[dict]` | every trial as `{'x', 'y', 'proposed', 'init'}`, plus `'x2'` under `"pairwise"` |
 | `close()` | free the handle; `GP` is also a context manager |
@@ -318,7 +318,7 @@ once per trial.
 
 A `Snapshot` has `seq`, `x`, `proposed`, `update_rc`, `n_trials`, `done`,
 `stop`, `threshold`, `threshold_lo`, `threshold_hi`, `threshold_rc`,
-`multi_cross`, `hyper` (a dict), `log_marginal`, `numeric` and `fitting`.
+`multi_cross`, `hyperparams` (a dict), `log_marginal`, `numeric` and `fitting`.
 `threshold_rc` is 0, `ERR_NOCROSS` or another `ERR_*` code; `update_rc` is 0 or the code that
 `update` returned on the thread for that response.
 
@@ -380,7 +380,7 @@ with it:
   of the box.
 - `threshold_multi_cross`. When the posterior mean crosses the target more
   than once along the intensity axis, the value is the lowest crossing.
-- `hyper()`. A lengthscale or an output scale at its bound is a warning. A
+- `hyperparams()`. A lengthscale or an output scale at its bound is a warning. A
   lengthscale at its upper bound on a dimension that does not matter is
   normal.
 - `log_marginal`. A value much closer to 0 than the responses allow means the

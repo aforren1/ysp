@@ -91,8 +91,8 @@ static int run(yaep_acq acq, const char* name) {
      * prior variance of about 9. The default output-scale ceiling of 10 is
      * right at that, and a hyperparameter pinned to its bound is a fit that
      * has run out of room, so both ceilings are lifted here. */
-    d.hyper_max.outputscale = 25.0;
-    d.hyper_max.outputscale_b = 25.0;
+    d.hyperparams_max.outputscale = 25.0;
+    d.hyperparams_max.outputscale_b = 25.0;
     d.acq = acq;
     d.target_p = TARGET_P;
     d.grid[0] = 21;
@@ -122,7 +122,7 @@ static int run(yaep_acq acq, const char* name) {
         if (yaep_n_trials(&g) % 10 == 0) report(&g, yaep_n_trials(&g));
     }
     {
-        yaep_hyper h;
+        yaep_hyperparams h;
         memset(&h, 0, sizeof(h));
         yaep_get_hyper(&g, &h);
         printf("  fitted: context lengthscale %.3f, output scale %.3f, "

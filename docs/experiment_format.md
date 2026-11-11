@@ -745,6 +745,14 @@ that D2 asks for. The defaults table of ysp/experiment.h
 defaults") lists them, and the gaps found in this page. That table is
 version 1's; a later version may change it.
 
+Note (2026-11-11): the AEP method's keys `hyper.*`, `hyper_min.*` and
+`hyper_max.*` are now `hyperparams.*`, `hyperparams_min.*` and
+`hyperparams_max.*` (ysp/experiment.h 0.2.0, ysp/aep.h 0.17.0). This
+change is inside version 1, and there is no migration: no AEP definition
+existed outside this repository. Reason: the format uses the names of the
+C fields, and the Windows SDK defines `hyper` as a macro (`__int64`), so a
+C file that included `<windows.h>` before ysp/aep.h did not compile.
+
 ### 2.12 What the designer edits
 
 The designer edits the definition and the pack source description; it

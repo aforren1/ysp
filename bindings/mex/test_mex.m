@@ -287,12 +287,25 @@ function test_aep()
     ysp_aep('close', h);
     ysp_aep('close', h2);
 
+    % The fixed values are desc.hyperparams (ysp/aep.h 0.17.0); the old name
+    % hyper is an unknown field.
+    hd = struct('lo', 0, 'hi', 1, 'stop_trials', 5, ...
+                'hyperparams', struct('lengthscale', 0.2, 'outputscale', 2), ...
+                'hyperparams_max', struct('mean', 3));
+    hh = ysp_aep('open', hd);
+    hy = ysp_aep('get_hyper', hh);
+    check(hy.lengthscale == 0.2 && hy.outputscale == 2, 'desc.hyperparams in force');
+    ysp_aep('close', hh);
+    expect_error('ysp_aep:arg', @() ysp_aep('open', struct('lo', 0, 'hi', 1, 'stop_trials', 5, ...
+                 'hyper', struct('lengthscale', 0.2))));
+
     % Async with fit_in_idle off equals the plain loop.
     d.fit = false; d.stop_trials = 12;
     ha = ysp_aep('open', d);
     hs = ysp_aep('open', d);
     ysp_aep('async_start', ha);
     snap = ysp_aep('async_poll', ha);
+    check(isfield(snap, 'hyperparams') && ~isfield(snap, 'hyper'), 'the snapshot names hyperparams');
     for t = 1:10
         xs = ysp_aep('next', hs);
         check(isequal(xs, snap.x), 'GP async proposal differs at trial %d', t);

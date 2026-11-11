@@ -178,7 +178,7 @@ becomes an option. See [Open items](#open-items).
 
 Ordinal cutpoints are hyperparameters. With a free mean they are not
 identifiable, so the first cutpoint is pinned to zero when fitting. That
-keeps `hyper.mean` meaningful across likelihoods.
+keeps `hyperparams.mean` meaningful across likelihoods.
 
 ### Ties are a desc field
 
@@ -472,7 +472,7 @@ scaled by `x` has the kernel `k_a(c, c') + x x' k_b(c, c')`. That is a
 plain GP with a composite kernel, so the Laplace machinery is unchanged
 and the model costs one enum value. What is lost is the positivity of the
 slope: `b(c)` is a GP and can go negative where data are thin. The manual
-says how to detect that (`yaep_threshold_multi_cross`, a slope hyper at
+says how to detect that (`yaep_threshold_multi_cross`, a slope hyperparameter at
 its bound). The positive-slope form is `YAEP_MODEL_PSYCHOMETRIC` (v0.3.0),
 Laplace on the joint of a threshold GP and a log-slope GP; see
 [The transition band needs Keeley's model](#the-transition-band-needs-keeleys-model-not-a-kernel-trick).
@@ -611,7 +611,7 @@ between them.
 |---|---|---|---|---|
 | ysp/stair.h | 28 KB (28168 bytes; 1024 trials inline) | none | O(1) | O(1) |
 | ysp/quest.h | 97 KB (99624 bytes; 2048-trial history inline) | S P K floats, plus S P floats of per-cell outcome entropy on the joint path, plus a few P doubles; Psi-marginal 4.5 MB, qCSF 173 MB or `no_table` | S P (K+1) multiply-adds and S K logs (joint), S P K and S K n_marg logs (marginal); memory-bound at 0.6 to 0.8 ns per cell measured | P K |
-| ysp/aep.h | 2.9 KB (2904 bytes); the history is in the heap block, 144 bytes a trial | (1 + K) N^2 doubles, M^2 for a look-ahead acquisition, vectors, the history; N = M = 512 Bernoulli is 6.5 MB with LSE and 10.5 MB with EAVC | M N^2, plus M^2 N and M^2 for a look-ahead | 2 to 4 Cholesky (N^3 / 3 each), K times that under categorical, O(N^2) under Gaussian or past `pcg_threshold`; a hyper fit is up to 40 refits |
+| ysp/aep.h | 2.9 KB (2904 bytes); the history is in the heap block, 144 bytes a trial | (1 + K) N^2 doubles, M^2 for a look-ahead acquisition, vectors, the history; N = M = 512 Bernoulli is 6.5 MB with LSE and 10.5 MB with EAVC | M N^2, plus M^2 N and M^2 for a look-ahead | 2 to 4 Cholesky (N^3 / 3 each), K times that under categorical, O(N^2) under Gaussian or past `pcg_threshold`; a hyperparameter fit is up to 40 refits |
 
 The handle sizes are `sizeof` on x86-64 at the default ceilings, and the
 heap sizes are what `yqst_memory_size` and `yaep_memory_size` return. The
@@ -860,7 +860,7 @@ Decisions:
   per-dimension bound and a candidate list do not fit one scalar. Their type
   ends in `[]` (`"f64[]"`, `"i32[]"`, `"enum[]"`) and the doc names the
   length (n, n_dims, n_outcomes - 1, P). Array-of-struct members are named
-  with `[]` (`stim[].lo`), struct members with a dot (`hyper_min.mean`,
+  with `[]` (`stim[].lo`), struct members with a dot (`hyperparams_min.mean`,
   `priors.mean_g.ceiling`). `dim_kind` is an `"enum[]"` with `values`; the
   shared shape says `values` is for `"enum"`, and an array of enums needs
   the same names.
@@ -932,6 +932,47 @@ After the fix, 747,740 inputs over 27 minutes (libFuzzer with ASan, MSVC
 of seven descs cut at four points) found nothing more. The 1,304-input
 corpus replays clean under gcc 11.4 with `-fsanitize=address,undefined`
 (WSL2).
+
+## Renamed: hyper is hyperparams (aep v0.17.0)
+
+The Windows SDK's rpcndr.h, which `<windows.h>` includes, has `#define
+hyper __int64`. ysp/aep.h 0.16.0 had fields of that name (`desc.hyper`, the
+handle's and the snapshot's `hyper`), so a file that included `<windows.h>`
+before ysp/aep.h did not compile. The player's `player/impl.c` failed this
+way on MSVC: ysp/gfx.h's implementation brings the SDK headers in before
+ysp/aep.h. Two tests had worked around it with `#undef hyper`; a user's
+file had no such fix.
+
+The user's decision (2026-11-11): rename everywhere, so that C, the
+experiment format, the bindings and the documents use one name. Old AEP
+definitions and scripts that use `hyper` break.
+
+| Was | Is |
+|---|---|
+| `yaep_hyper` | `yaep_hyperparams` |
+| `hyper`, `hyper_min`, `hyper_max` (fields, Python keywords, MEX fields) | `hyperparams`, `hyperparams_min`, `hyperparams_max` |
+| `"hyper.outputscale"` (parameter table, definition key) | `"hyperparams.outputscale"` |
+| `GP.hyper()` (Python), `Snapshot.hyper` | `GP.hyperparams()`, `Snapshot.hyperparams` |
+
+Names that do not collide with a macro stay: `yaep_get_hyper()`,
+`no_hyper_prior`, the MEX command `get_hyper`, Python's `Hyper`.
+
+What did not change: the layout of every struct, the snapshot format, and
+every number. Measured on the Linux desktop (gcc 12.2, Release), 0.16.0
+against 0.17.0: the output of `test_aep`, `test_aep_async`, `aep_sim`,
+`aep_audiometric`, `aep_optimize` and `aep_pairwise` is the same except
+the version line and the timing columns; `aep_async` differs in its
+thresholds, and so do two runs of the same 0.16.0 binary, because its fit
+runs in the gaps between frames. `tests/compare/compare_gp_aepsych.py
+--libs ysp --reps 3` gives the same 271 CSV rows except `ms_per_trial`.
+The parameter-table check still makes 363 comparisons over 83 rows. A
+rename by text alone would have made it 307: the test picked the fixed
+fields by `strncmp(name, "hyper.", 6)`, and with the new name 6 bytes
+also match the bound rows.
+
+`tests/compile/windows_macros.c` now compiles every header after the
+macros of `<windows.h>`, so a name of this kind fails CI on Linux (see
+that file for the list and its source).
 
 ## Bindings
 

@@ -1,6 +1,6 @@
 # ysp/experiment.h
 
-Status: v0.1.3, 2026-11-10. The header's top comment is the reference for
+Status: v0.2.0, 2026-11-11. The header's top comment is the reference for
 the calls (USAGE, THE CHECKED FORM, REFUSALS, THE HOST, CANONICAL BYTES,
 BOUNDS AND MEMORY). This page records why the header exists, the format's
 defaults table, the decisions, and the results.
@@ -73,7 +73,7 @@ then write the format's value into that desc field.
 | `yrdk_params()` and `yrdk_desc` | the row's name; a desc field's name | `aperture` and `edge` are `yrdk_desc`'s; `lifetime_ns` is `lifetime_s` and `frame_ns` is `frame_s`; `seed` (D8), `stream` and `mem` are no keys |
 | `yst_params()` | the row's name | `n_steps` comes from the length of `steps` |
 | `yqst_params()` | the row's name | `n_stim`, `n_param`: from the lengths; `stim[]`, `param[]` are the keys `stim` and `param`, arrays of axes |
-| `yaep_params()` | the row's name, dots included (`"hyper.lengthscale"`) | `n_dims`: from `lo` and `hi`; `dims` names the dimensions |
+| `yaep_params()` | the row's name, dots included (`"hyperparams.lengthscale"`) | `n_dims`: from `lo` and `hi`; `dims` names the dimensions |
 | `yrsp_params()` | `duration_ns` is `duration_s`; `min_rt_ns` is `minimum_valid_rt_s`; `max_responses`, `allow_held_key`, `wait_for_key_release` by name | `persist` comes from `response_ends_trial` at lowering; the rest (`mode`, `trace_*`, `choices.*`) are not keys of version 1 |
 | `ytl_op_params()` | `tween.duration_ns` is `duration_s`; `tween.delay_ns` is `delay_s`; `tween.ease` is `ease` | |
 | `ydev_params()` | `pulse_ns` is `pulse_s` | the rest stay in the rig profile (devices_spec 11.1) |
@@ -217,7 +217,7 @@ On 2026-11-09, Linux desktop, gcc 12.2, on the corpus in `tests/experiment/`.
 
 | Check | Result |
 |---|---|
-| `tests/adapt/experiment_test.c` | v0.1.3: 2115 checks and 13 corpus files pass (v0.1.0: 1933); the same as C and C++17; ASan and UBSan clean under `setarch -R` |
+| `tests/adapt/experiment_test.c` | v0.1.3: 2115 checks and 13 corpus files pass (v0.1.0: 1933); the same as C and C++17; ASan and UBSan clean under `setarch -R`. v0.2.0 (2026-11-11, the AEP keys `hyperparams.*`, `hyperparams_min.*` and `hyperparams_max.*`; [experiment_format.md](experiment_format.md), 2.11): the same 2115 checks pass with the renamed corpus file and its golden dump |
 | Corpus | The four worked examples of 2.14, `examples/pack/stroop/`, a kitchen-sink file, a negative minimum RT, five `relax_*` files that v0.1.1 refused and v0.1.2 accepts, and `outcome_responded` (v0.1.3): each loads with the test host and with none, equal to its golden dump; canonical bytes load back to the same form and the same bytes and ID |
 | Negative corpus | 209 files in v0.1.3 (193 in v0.1.0), one per refusal, each compared with its message and its line and column |
 | A key at its default | 462 keys of the format's table: written out or left out gives the same ID |

@@ -142,7 +142,7 @@ def fit_ysp(Xtr, ytr, Xte, variant):
         prev = g.log_marginal
     secs = time.perf_counter() - t0
     p = np.frombuffer(g.predict_p_many(np.ascontiguousarray(Xte))).copy()
-    h = g.hyper()
+    h = g.hyperparams()
     if variant == "psychometric":
         ls = {"threshold": h["lengthscale"], "log_slope": h["lengthscale_g"],
               "outputscale": h["outputscale"], "outputscale_g": h["outputscale_g"],

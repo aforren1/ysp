@@ -72,7 +72,7 @@ def test_ordinal_40_trials():
     cut = [0.0, 1.0, 2.0]
     g = yaep.GP(lo=[0.0], hi=[1.0], lik=yaep.LIK_ORDINAL, n_outcomes=4,
               target_outcome=2, target_p=0.5, acq=yaep.ACQ_BALD, grid=[33],
-              n_init=8, fit=True, fit_every=20, hyper={"cutpoint": cut},
+              n_init=8, fit=True, fit_every=20, hyperparams={"cutpoint": cut},
               stop_trials=40)
     while not g.done:
         _, x = g.next()
@@ -86,7 +86,7 @@ def test_ordinal_40_trials():
     probs = g.predict_outcomes(0.5)
     assert len(probs) == 4 and abs(sum(probs) - 1.0) < 1e-9
     # cutpoint[0] = 0 reads as "fit", so the vector moves; it stays ordered.
-    c = g.hyper()["cutpoint"]
+    c = g.hyperparams()["cutpoint"]
     assert len(c) == 3 and c[0] < c[1] < c[2]
 
 
@@ -221,7 +221,7 @@ def test_async_reproduces_sync():
     assert async_x == sync_x
     assert g2.history() == g1.history()
     assert g2.log_marginal == g1.log_marginal
-    assert g2.hyper() == g1.hyper()
+    assert g2.hyperparams() == g1.hyperparams()
     thr = g2.threshold([0.5])
     assert thr == g1.threshold([0.5])
     assert (last.threshold, last.threshold_lo, last.threshold_hi) == thr
@@ -304,7 +304,7 @@ def test_numeric_keeps_the_trial():
     # A noiseless Gaussian model with duplicate stimuli: the kernel matrix is
     # singular, which is the one reliable way to make a Cholesky fail.
     g = yaep.GP(lo=[0.0], hi=[1.0], lik="gaussian", acq="balv", stop_trials=10,
-              hyper={"noise_sd": 1e-200, "outputscale": 1.0,
+              hyperparams={"noise_sd": 1e-200, "outputscale": 1.0,
                      "lengthscale": [0.5], "mean": 1e-12}, jitter=1e-300)
     g.update_real([0.5], 0.0)
     with pytest.raises(yaep.Numeric) as ei:
@@ -342,13 +342,29 @@ def test_memory_size_is_the_layout():
         yaep.GP.memory_size(lo=[0], hi=[1])
 
 
+def test_hyperparams_keywords():
+    # ysp/aep.h 0.17.0 renamed hyper to hyperparams (a Windows SDK macro)
+    g = yaep.GP(lo=[0.0], hi=[1.0], target_p=0.75, stop_trials=5,
+                hyperparams={"lengthscale": [0.3]}, hyperparams_min={"outputscale": 0.5},
+                hyperparams_max={"outputscale": 4.0})
+    assert g.hyperparams()["lengthscale"] == [0.3]
+    a = yaep.Async(g)
+    a.start()
+    seq, snap = a.poll()
+    a.stop()
+    assert snap.hyperparams["lengthscale"] == [0.3] and not hasattr(snap, "hyper")
+    for old in ("hyper", "hyper_min", "hyper_max"):
+        with pytest.raises(TypeError):
+            yaep.GP(lo=[0.0], hi=[1.0], target_p=0.75, stop_trials=5, **{old: {"outputscale": 1.0}})
+
+
 def test_hyper_object_and_candidates():
     h = yaep.Hyper(lengthscale=[0.2], outputscale=2.0, mean=0.5)
     cand = [[i / 20] for i in range(21)]
-    g = yaep.GP(lo=[0.0], hi=[1.0], hyper=h, candidates=cand, target_p=0.75,
+    g = yaep.GP(lo=[0.0], hi=[1.0], hyperparams=h, candidates=cand, target_p=0.75,
               n_init=2, stop_trials=10)
-    assert g.hyper()["lengthscale"] == [0.2]
-    assert g.hyper()["outputscale"] == 2.0
+    assert g.hyperparams()["lengthscale"] == [0.2]
+    assert g.hyperparams()["outputscale"] == 2.0
     assert g.n_candidates == 21
     assert g.candidate(20) == [1.0]
     del cand                  # the binding keeps its own copy
@@ -471,7 +487,7 @@ def test_psychometric_model():
         _, x = g.next()
         p = phi(8.0 * (x[1] - (0.3 + 0.3 * x[0])))
         g.update(x, yaep.simulate_outcome([1 - p, p], u.random()))
-    h = g.hyper()
+    h = g.hyperparams()
     assert {"lengthscale_g", "outputscale_g", "mean_g"} <= set(h)
     assert len(h["lengthscale_g"]) == 2 and h["outputscale_g"] > 0.0
 

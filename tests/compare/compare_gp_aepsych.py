@@ -219,7 +219,7 @@ def run_ysp(method, rep, args):
             mp = np.frombuffer(g.predict_p_many(field.xs))
             rows.append((n,) + field.score(mp) + (1000.0 * spent / n, field.band_mae(mp)))
     extra = {"log_marginal": g.log_marginal, "numeric": numeric,
-             "hyper": g.hyper()}
+             "hyperparams": g.hyperparams()}
     return rows, extra
 
 
@@ -352,7 +352,7 @@ def fit_ysp(xs, ys, args):
     g.fit()
     field = Field(args.pheno, args.beta)
     p = np.frombuffer(g.predict_p_many(field.xs)).copy()
-    h = g.hyper()
+    h = g.hyperparams()
     return p, {"ls_freq": h["lengthscale"][0], "ls_int": h["lengthscale"][1],
                "outputscale": h["outputscale"], "mean": h["mean"]}
 
@@ -666,7 +666,7 @@ def main():
         # units (dB for intensity, log2 kHz for frequency), so they can be put
         # beside another model's without guessing the scaling.
         for m in methods:
-            hs = [results[k][1]["hyper"] for k in sorted(results)
+            hs = [results[k][1]["hyperparams"] for k in sorted(results)
                   if k[0] == "ysp" and k[1] == m and results[k][1]]
             if not hs:
                 continue

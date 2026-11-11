@@ -140,8 +140,8 @@ static void test_version(void) {
     char buf[32];
     snprintf(buf, sizeof(buf), "%d.%d.%d", YAEP_VERSION_MAJOR,
              YAEP_VERSION_MINOR, YAEP_VERSION_PATCH);
-    CHECK(strcmp(yaep_version(), "0.16.0") == 0,
-          "yaep_version() is %s, expected 0.16.0", yaep_version());
+    CHECK(strcmp(yaep_version(), "0.17.0") == 0,
+          "yaep_version() is %s, expected 0.17.0", yaep_version());
     CHECK(strcmp(yaep_version(), YAEP_VERSION_STRING) == 0,
           "yaep_version() %s disagrees with YAEP_VERSION_STRING %s",
           yaep_version(), YAEP_VERSION_STRING);
@@ -182,7 +182,7 @@ static void test_chol(void) {
         yaep_real B[4] = { 1.0, 2.0, 2.0, 1.0 };
         CHECK(!yaep__chol(B, 2, 2), "chol accepted an indefinite matrix");
     }
-    /* The triangular inverse and its square, used by the hyper gradient. */
+    /* The triangular inverse and its square, used by the hyperparameter gradient. */
     {
         yaep_real C[9];
         double P[9] = { 0.0 };
@@ -265,11 +265,11 @@ static void test_gaussian_exact(void) {
     d.lo[0] = -1.0; d.hi[0] = 1.0;
     d.lo[1] = -1.0; d.hi[1] = 1.0;
     d.lik = YAEP_LIK_GAUSSIAN;
-    d.hyper.lengthscale[0] = 0.7;
-    d.hyper.lengthscale[1] = 0.4;
-    d.hyper.outputscale = 1.3;
-    d.hyper.mean = 0.25;
-    d.hyper.noise_sd = 0.3;
+    d.hyperparams.lengthscale[0] = 0.7;
+    d.hyperparams.lengthscale[1] = 0.4;
+    d.hyperparams.outputscale = 1.3;
+    d.hyperparams.mean = 0.25;
+    d.hyperparams.noise_sd = 0.3;
     d.stop_trials = n;
     CHECK(yaep_open(&g, &d), "open GAUSSIAN: %s", yaep_error(&g));
     for (int i = 0; i < n; i++) {
@@ -330,9 +330,9 @@ static void test_laplace_probit(void) {
     memset(&d, 0, sizeof(d));
     d.n_dims = 1;
     d.lo[0] = -1.0; d.hi[0] = 1.0;
-    d.hyper.lengthscale[0] = 0.5;
-    d.hyper.outputscale = 2.0;
-    d.hyper.mean = -0.3;
+    d.hyperparams.lengthscale[0] = 0.5;
+    d.hyperparams.outputscale = 2.0;
+    d.hyperparams.mean = -0.3;
     d.target_p = 0.75;
     d.stop_trials = n;
     CHECK(yaep_open(&g, &d), "open BERNOULLI: %s", yaep_error(&g));
@@ -505,8 +505,8 @@ static void test_lookahead(void) {
     d.acq = YAEP_ACQ_EAVC;
     d.target_p = 0.75;
     d.n_candidates = 9;
-    d.hyper.lengthscale[0] = 0.45;
-    d.hyper.outputscale = 1.5;
+    d.hyperparams.lengthscale[0] = 0.45;
+    d.hyperparams.outputscale = 1.5;
     d.stop_trials = n;
     CHECK(yaep_open(&g, &d), "open look-ahead: %s", yaep_error(&g));
     for (int i = 0; i < n; i++)
@@ -664,7 +664,7 @@ static void test_open_reject(void) {
     REJECT((d.acq = YAEP_ACQ_EAVC, d.target_p = 0.0),
            "a level-set acquisition without target_p");
     REJECT(d.target_p = 1.5, "target_p above 1");
-    REJECT(d.hyper.outputscale = -1.0, "a negative output scale");
+    REJECT(d.hyperparams.outputscale = -1.0, "a negative output scale");
     REJECT(d.grid[1] = 3, "a product grid with a zero dimension");
     REJECT((d.candidates = ok.lo, d.n_candidates = 0),
            "an explicit candidate set with no count");
@@ -826,9 +826,9 @@ static void test_ordinal_field(void) {
     d.n_init = 8;
     d.fit = true;
     d.fit_every = 20;
-    d.hyper.cutpoint[0] = cut[0];
-    d.hyper.cutpoint[1] = cut[1];
-    d.hyper.cutpoint[2] = cut[2];
+    d.hyperparams.cutpoint[0] = cut[0];
+    d.hyperparams.cutpoint[1] = cut[1];
+    d.hyperparams.cutpoint[2] = cut[2];
     d.stop_trials = 150;
     CHECK(yaep_open(&g, &d), "open ORDINAL: %s", yaep_error(&g));
     while (!yaep_done(&g)) {
@@ -924,7 +924,7 @@ static void test_categorical_field(void) {
                                  (i == j ? 1e-6 : 0.0);
         for (int c = 0; c < 3; c++)
             for (int i = 0; i < nt; i++) {
-                double acc = g.hyper.mean;
+                double acc = g.hyperparams.mean;
                 for (int j = 0; j < nt; j++) {
                     double fs[3], m2, sum = 0.0, pic;
                     for (int cc = 0; cc < 3; cc++) fs[cc] = g.f[cc * ld + j];
@@ -977,7 +977,7 @@ static void test_fit(void) {
           before - after);
     CHECK(fabs(after - before) > 1e-6, "the fit did not move the log marginal");
     {
-        yaep_hyper h;
+        yaep_hyperparams h;
         memset(&h, 0, sizeof(h));
         memset(&h, 0, sizeof(h));
         CHECK(yaep_get_hyper(&g, &h) == YAEP_OK, "get_hyper");
@@ -1312,7 +1312,7 @@ static void test_fit_step(void) {
     CLOSE(yaep_log_marginal(&gb), yaep_log_marginal(&ga), 1e-9,
           "stepped and whole fits disagree");
     {
-        yaep_hyper ha, hb;
+        yaep_hyperparams ha, hb;
         memset(&ha, 0, sizeof(ha));
         memset(&hb, 0, sizeof(hb));
         memset(&ha, 0, sizeof(ha));
@@ -1457,7 +1457,7 @@ static void test_numeric_failure(void) {
     d.lo[0] = 0.0; d.hi[0] = 1.0;
     d.lik = YAEP_LIK_GAUSSIAN;
     d.acq = YAEP_ACQ_BALV;
-    d.hyper.noise_sd = 1e-300;
+    d.hyperparams.noise_sd = 1e-300;
     d.jitter = 1e-300;
     d.stop_trials = 8;
     CHECK(yaep_open(&g, &d), "open numeric: %s", yaep_error(&g));
@@ -1673,7 +1673,7 @@ static void ps_dense_point(const yaep_gp* g, int n, const double* A, const doubl
         }
         am[i] = sa; ag[i] = sb;
     }
-    mean[0] = g->hyper.mean; mean[1] = g->hyper.mean_g;
+    mean[0] = g->hyperparams.mean; mean[1] = g->hyperparams.mean_g;
     for (int i = 0; i < n2; i++) {
         double zi = i < n ? hm[i] : hg[i - n];
         mean[0] += am[i] * zi;
@@ -1712,8 +1712,8 @@ static void test_psychometric_math(yaep_link link, const char* name) {
      * block prior outright, and at the default jitter the threshold GP's
      * matrix (variance 625) has a condition number the reference cannot
      * invert to better than 1e-5. The header never inverts it. */
-    d.hyper.lengthscale[0] = 0.15;
-    d.hyper.lengthscale_g[0] = 0.15;
+    d.hyperparams.lengthscale[0] = 0.15;
+    d.hyperparams.lengthscale_g[0] = 0.15;
     d.jitter = 1e-3;
     if (!yaep_open(&g, &d)) { CHECK(0, "open %s: %s", name, yaep_error(&g)); return; }
     /* Trials spread over the box, the responses from the observer. */
@@ -1734,8 +1734,8 @@ static void test_psychometric_math(yaep_link link, const char* name) {
     {
         double gm[NT], gg[NT], hmax = 0.0;
         for (int i = 0; i < n; i++) {
-            double xi = g.X[(size_t)i * 2 + id], b = exp(g.hyper.mean_g + hg[i]);
-            double fv = b * (xi - g.hyper.mean - hm[i]), lp, d1, d2, d3;
+            double xi = g.X[(size_t)i * 2 + id], b = exp(g.hyperparams.mean_g + hg[i]);
+            double fv = b * (xi - g.hyperparams.mean - hm[i]), lp, d1, d2, d3;
             yaep__ll(&g, fv, g.y[i], &lp, &d1, &d2, &d3);
             gm[i] = -d1 * b;
             gg[i] = d1 * fv;
@@ -1781,9 +1781,9 @@ static void test_psychometric_math(yaep_link link, const char* name) {
             quad += zi * acc;
         }
         for (int i = 0; i < n; i++) {
-            double xi = g.X[(size_t)i * 2 + id], b = exp(g.hyper.mean_g + hg[i]);
+            double xi = g.X[(size_t)i * 2 + id], b = exp(g.hyperparams.mean_g + hg[i]);
             double lp = 0.0, d1 = 0.0, d2 = 0.0, d3 = 0.0;
-            yaep__ll(&g, b * (xi - g.hyper.mean - hm[i]), g.y[i], &lp, &d1, &d2, &d3);
+            yaep__ll(&g, b * (xi - g.hyperparams.mean - hm[i]), g.y[i], &lp, &d1, &d2, &d3);
             ll += lp;
         }
         memcpy(T, K2, sizeof(double) * (size_t)n2 * n2);
@@ -1815,7 +1815,7 @@ static void test_psychometric_math(yaep_link link, const char* name) {
             }
             am[i] = sa; ag[i] = sb;
         }
-        mm = g.hyper.mean; mg = g.hyper.mean_g;
+        mm = g.hyperparams.mean; mg = g.hyperparams.mean_g;
         for (int i = 0; i < n2; i++) {
             double zi = i < n ? hm[i] : hg[i - n];
             mm += am[i] * zi;
@@ -2703,7 +2703,7 @@ static void test_regress_collapse(void) {
 static void test_regress_lengthscale(void) {
     yaep_desc d;
     yaep_gp g;
-    yaep_hyper h;
+    yaep_hyperparams h;
     memset(&h, 0, sizeof(h));
     audiogram_desc(&d, YAEP_MODEL_GP, YAEP_ACQ_LSE);
     CHECK(yaep_open(&g, &d), "open: %s", yaep_error(&g));
@@ -2732,7 +2732,7 @@ static void test_regress_novel(void) {
     for (int r = 0; r < reps; r++) {
         yaep_desc d;
         yaep_gp g;
-        yaep_hyper h;
+        yaep_hyperparams h;
         memset(&h, 0, sizeof(h));
         rng_state = 0x243F6A8885A308D3ull + 0xD15Cull + (uint64_t)r * 0x1000193ull;
         memset(&d, 0, sizeof(d));
@@ -2779,7 +2779,7 @@ static void test_regressions(void) {
  * one prior off and matches desc.no_hyper_prior for the model that has only
  * that one moving; and a changed center changes the fit the way the objective
  * says it should. */
-static double priors_run(const yaep_priors* pr, bool no_prior, yaep_hyper* h) {
+static double priors_run(const yaep_priors* pr, bool no_prior, yaep_hyperparams* h) {
     yaep_desc d;
     yaep_gp g;
     double lm = 0.0;
@@ -2809,7 +2809,7 @@ static void test_priors(void) {
     yaep_priors pr, pr2;
     memset(&pr, 0, sizeof(pr));
     memset(&pr2, 0, sizeof(pr2));
-    yaep_hyper h0, h1, h2;
+    yaep_hyperparams h0, h1, h2;
     memset(&h0, 0, sizeof(h0));
     memset(&h1, 0, sizeof(h1));
     memset(&h2, 0, sizeof(h2));
@@ -3006,8 +3006,8 @@ static void test_pairwise_math(void) {
     rng_state = 0x243F6A8885A308D3ull + 0xFA17ull;
     pair_desc(&d, YAEP_ACQ_BALD);
     d.stop_trials = 100;
-    d.hyper.lengthscale[0] = 0.3; d.hyper.lengthscale[1] = 0.3;
-    d.hyper.outputscale = 1.5;
+    d.hyperparams.lengthscale[0] = 0.3; d.hyperparams.lengthscale[1] = 0.3;
+    d.hyperparams.outputscale = 1.5;
     d.jitter = 1e-8;
     CHECK(yaep_open(&g, &d), "open pairwise: %s", yaep_error(&g));
     for (int i = 0; i < NT; i++) {
@@ -3504,10 +3504,10 @@ static void test_mixed(void) {
     /* 1. The kernel: a categorical pair is os exp(-(1 - delta) / l), an
      * integer coordinate counts as its nearest integer. */
     mixed_desc(&d, true, YAEP_MODEL_GP);
-    d.hyper.lengthscale[0] = 0.2;
-    d.hyper.lengthscale[1] = 0.7;
-    d.hyper.lengthscale[2] = 1.5;
-    d.hyper.outputscale = 1.3;
+    d.hyperparams.lengthscale[0] = 0.2;
+    d.hyperparams.lengthscale[1] = 0.7;
+    d.hyperparams.lengthscale[2] = 1.5;
+    d.hyperparams.outputscale = 1.3;
     CHECK(yaep_open(&g, &d), "mixed open: %s", yaep_error(&g));
     {
         double a[3] = { 0.3, 0.0, 1.0 }, b[3] = { 0.5, 2.0, 3.0 }, b2[3] = { 0.5, 1.8, 3.4 };
@@ -3653,8 +3653,8 @@ static void mono_desc(yaep_desc* d, yaep_acq acq, bool grid) {
     else d->n_candidates = 200;
     d->acq = acq;
     d->target_p = 0.6;
-    d->hyper.lengthscale[0] = 0.4;
-    d->hyper.lengthscale[1] = 0.06;
+    d->hyperparams.lengthscale[0] = 0.4;
+    d->hyperparams.lengthscale[1] = 0.06;
     d->monotone_dims = 1u << 1;
     d->stop_trials = 80;
 }
@@ -3802,7 +3802,7 @@ static void test_monotone(void) {
             d.fit = true;
             d.fit_every = 20;
             d.refine_steps = 2;
-            memset(&d.hyper, 0, sizeof(d.hyper));
+            memset(&d.hyperparams, 0, sizeof(d.hyperparams));
             rng_state = 0x243F6A8885A308D3ull + 0x77ull * (uint64_t)(a + 1);
             CHECK(yaep_open(&g, &d), "mono session open: %s", yaep_error(&g));
             while (!yaep_done(&g)) {
@@ -4277,7 +4277,7 @@ static void test_regression_csf6(void) {
         for (int n = 0; n < 30; n++) {
             yaep_update(&g, csf6_rep4[n], (int)csf6_rep4[n][6]);
             if (n + 1 == 10 || n + 1 == 30) {
-                yaep_hyper h;
+                yaep_hyperparams h;
                 memset(&h, 0, sizeof(h));
                 double pmin = 1.0, pmax = 0.0, flat = (n + 1) * log(0.5);
                 yaep_get_hyper(&g, &h);
@@ -4329,7 +4329,7 @@ static void test_fit_pcg(void) {
     for (int c = 0; c < 4; c++) {
         yaep_desc d;
         yaep_gp ga, gb;
-        yaep_hyper ha, hb;
+        yaep_hyperparams ha, hb;
         memset(&ha, 0, sizeof(ha));
         memset(&hb, 0, sizeof(hb));
         double dh = 0.0, dp = 0.0, dl;
@@ -4515,10 +4515,10 @@ static const ptc_field g_afields[] = {
 #define PHYP(h) PH(h, lengthscale, 'D'), PH(h, outputscale, 'd'), PH(h, mean, 'd'),           \
     PH(h, lengthscale_b, 'D'), PH(h, outputscale_b, 'd'), PH(h, cutpoint, 'D'),                \
     PH(h, noise_sd, 'd'), PH(h, lengthscale_g, 'D'), PH(h, outputscale_g, 'd'), PH(h, mean_g, 'd')
-    PHYP(hyper),
+    PHYP(hyperparams),
     PF("fit", fit, 'b', 0), PF("fit_every", fit_every, 'i', 0),
     PF("no_hyper_prior", no_hyper_prior, 'b', 0), PF("refit_every", refit_every, 'i', 0),
-    PHYP(hyper_min), PHYP(hyper_max),
+    PHYP(hyperparams_min), PHYP(hyperparams_max),
 #undef PHYP
     PF("jitter", jitter, 'd', 0),
     PE("acq", acq, 'e', YAEP_ACQ_THOMPSON + 1,
@@ -4653,7 +4653,7 @@ static void test_params(void) {
      * same session, state byte for byte, the same resolved priors and the
      * same fit bounds, in every context the row's doc does not name as an
      * exception ("(psychometric: ...)") and every context it is about (a doc
-     * that starts "psychometric:", "gaussian:" or "ordinal:"). A hyper row is
+     * that starts "psychometric:", "gaussian:" or "ordinal:"). A hyperparams row is
      * a fixed value only with the fit off, and its zero is a fit's free
      * parameter, so its bounds list differs by design. */
     for (cx = 0; cx < PCX_N; cx++) {
@@ -4667,7 +4667,7 @@ static void test_params(void) {
                 const char* doc = rows[i].doc;
                 if (k < 0 || !ptc_scalar(&g_afields[k]) || rows[i].def == 0.0) continue;
                 f = &g_afields[k];
-                hyp = strncmp(f->name, "hyper.", 6) == 0;
+                hyp = strncmp(f->name, "hyperparams.", 12) == 0;
                 if (fit && hyp) continue;
                 if (cx == PCX_PSY && strstr(doc, "(psychometric:")) continue;
                 if ((strncmp(doc, "psychometric:", 13) == 0 && cx != PCX_PSY) ||
@@ -4706,8 +4706,8 @@ static void test_params(void) {
      * against the handle. */
     pcx_desc(&base, PCX_GP, false);
     CHECK(yaep_open(&ga, &base), "open: %s", yaep_error(&ga));
-    CLOSE(ga.hyper.lengthscale[0], 0.25, 0.0, "hyper.lengthscale 0 = a quarter of the range");
-    CLOSE(ga.hyper.lengthscale[1], 0.5, 0.0, "hyper.lengthscale 0 = a quarter of the range");
+    CLOSE(ga.hyperparams.lengthscale[0], 0.25, 0.0, "hyperparams.lengthscale 0 = a quarter of the range");
+    CLOSE(ga.hyperparams.lengthscale[1], 0.5, 0.0, "hyperparams.lengthscale 0 = a quarter of the range");
     CHECK(yaep__n_init(&ga) == 2 * 2 + 2, "n_init 0 = 2 n_dims + 2");
     yaep_close(&ga);
     pcx_desc(&base, PCX_GP, true);
@@ -4716,9 +4716,9 @@ static void test_params(void) {
         double lohi[2 * YAEP__NTHETA];
         int np = pcx_bounds(&ga, lohi);
         CHECK(np >= 2, "two lengthscales fitted");
-        CLOSE(lohi[0], log(0.05 * 1.0), 1e-15, "hyper_min.lengthscale 0 = 0.05 range");
-        CLOSE(lohi[1], log(2.0 * 1.0), 1e-15, "hyper_max.lengthscale 0 = 2 ranges");
-        CLOSE(lohi[3], log(2.0 * 2.0), 1e-15, "hyper_max.lengthscale 0 = 2 ranges, dim 1");
+        CLOSE(lohi[0], log(0.05 * 1.0), 1e-15, "hyperparams_min.lengthscale 0 = 0.05 range");
+        CLOSE(lohi[1], log(2.0 * 1.0), 1e-15, "hyperparams_max.lengthscale 0 = 2 ranges");
+        CLOSE(lohi[3], log(2.0 * 2.0), 1e-15, "hyperparams_max.lengthscale 0 = 2 ranges, dim 1");
     }
     yaep_close(&ga);
     pcx_desc(&base, PCX_ORD, false);

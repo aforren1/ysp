@@ -907,7 +907,7 @@ The desc fields are those of `yaep_desc`. `n_dims` is `numel(lo)`.
 | `model`, `kernel`, `link` | `'gp'` or `'psychometric'`; `'rbf'` or `'semip'`; `'probit'` or `'logit'` |
 | `n_outcomes`, `target_outcome` | K; the outcome value that the level set is about |
 | `guess`, `lapse`, `target_p`, `target_value`, `acq_beta` | doubles |
-| `hyper`, `hyper_min`, `hyper_max` | structs with `lengthscale` (vector), `outputscale`, `mean`, `lengthscale_b`, `outputscale_b`, `cutpoint` (vector), `noise_sd`, `lengthscale_g`, `outputscale_g`, `mean_g`; a missing field is 0 |
+| `hyperparams`, `hyperparams_min`, `hyperparams_max` | structs with `lengthscale` (vector), `outputscale`, `mean`, `lengthscale_b`, `outputscale_b`, `cutpoint` (vector), `noise_sd`, `lengthscale_g`, `outputscale_g`, `mean_g`; a missing field is 0 |
 | `priors` | a struct with `lengthscale`, `outputscale`, `outputscale_b`, `outputscale_g`, `mean`, `mean_g`, `noise_sd`; each is `[center sd]`, `[center sd ceiling]` or a struct with those fields |
 | `fit`, `fit_every`, `fit_max_evals`, `fit_tol`, `fit_pcg`, `no_hyper_prior`, `refit_every`, `jitter`, `pcg_threshold` | fit and solver settings |
 | `acq` | `'lse'` (default), `'eavc'`, `'localmi'`, `'balv'`, `'bald'`, `'random'`, `'ucb'`, `'ei'`, `'thompson'` |
@@ -965,7 +965,7 @@ The async commands are those of `ysp_quest`, with these differences.
 `async_submit(h, x, outcome)` and `async_submit_real(h, x, y)`. The
 snapshot has `seq`, `x`, `proposed`, `update_rc`, `n_trials`, `done`,
 `stop`, `threshold`, `threshold_lo`, `threshold_hi`, `threshold_rc`,
-`multi_cross`, `hyper`, `log_marginal`, `numeric` and `fitting`.
+`multi_cross`, `hyperparams`, `log_marginal`, `numeric` and `fitting`.
 `async_start` refuses a `'pairwise'` GP.
 
 ## ysp_trials

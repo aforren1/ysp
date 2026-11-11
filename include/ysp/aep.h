@@ -1,4 +1,4 @@
-/* ysp/aep.h - v0.16.0 - public domain single-header Gaussian-process adaptive library
+/* ysp/aep.h - v0.17.0 - public domain single-header Gaussian-process adaptive library
  *
  *   Nonparametric and semiparametric Bayesian adaptive psychophysics: a
  *   Gaussian-process model over a multidimensional stimulus space with
@@ -85,7 +85,7 @@
  *                           with K - 1 increasing cutpoints c_1..c_{K-1},
  *                           c_0 = -inf, c_K = +inf. One latent. The
  *                           cutpoints are hyperparameters, fixed in
- *                           desc.hyper.cutpoint or fit; c_1 is pinned to
+ *                           desc.hyperparams.cutpoint or fit; c_1 is pinned to
  *                           0 when fitting, else the mean and the
  *                           cutpoints trade off. AEPsych's
  *                           OrdinalLikelihood.
@@ -176,12 +176,12 @@
  *     grows. Second, a two-interval trial carries less information than a
  *     yes/no trial, and an unregularized hyperparameter fit on a handful of
  *     them can settle on "the whole field is at chance", which is
- *     self-confirming: hyper.mean walks to its lower bound, the output scale
- *     to its lower, the log marginal likelihood sits at N log(guess), and a
- *     level-set acquisition has no gradient left to follow. The remedies are
+ *     self-confirming: hyperparams.mean walks to its lower bound, the output
+ *     scale to its lower, the log marginal likelihood sits at N log(guess), and
+ *     a level-set acquisition has no gradient left to follow. The remedies are
  *     a longer init phase and a later first fit (n_init 16 and fit_every 20
- *     rather than 8 and 10 for a hundred-trial run), or fixing hyper.mean so
- *     the fit cannot go there.
+ *     rather than 8 and 10 for a hundred-trial run), or fixing hyperparams.mean
+ *     so the fit cannot go there.
  *
  *   THE PSYCHOMETRIC MODEL (desc.model = YAEP_MODEL_PSYCHOMETRIC)
  *     Keeley et al. 2023's semiparametric model in its own form, rather than
@@ -201,15 +201,15 @@
  *     wide, and on the audiometric observer the field error inside the
  *     transition band (true p between 0.05 and 0.95) is 0.22 for the RBF GP
  *     and for AEPsych alike. The numbers this model gets are under STATUS.
- *     Priors: m has an RBF-ARD kernel over c with mean hyper.mean (default
- *     the middle of the intensity axis) and output scale hyper.outputscale
- *     (default (span / 4)^2, span the intensity axis's length, i.e. a prior
- *     sd of a quarter of the axis); g has an RBF-ARD kernel with
- *     hyper.lengthscale_g, output scale hyper.outputscale_g (default 0.3) and
- *     mean hyper.mean_g (default log(4 / span): a rise whose probit sd is a
- *     quarter of the axis). With n_dims = 1 there is no context and each GP
- *     is one Gaussian variable, which makes the model a Bayesian parametric
- *     psychometric function.
+ *     Priors: m has an RBF-ARD kernel over c with mean hyperparams.mean
+ *     (default the middle of the intensity axis) and output scale
+ *     hyperparams.outputscale (default (span / 4)^2, span the intensity axis's
+ *     length, i.e. a prior sd of a quarter of the axis); g has an RBF-ARD
+ *     kernel with hyperparams.lengthscale_g, output scale
+ *     hyperparams.outputscale_g (default 0.3) and mean hyperparams.mean_g
+ *     (default log(4 / span): a rise whose probit sd is a quarter of the axis).
+ *     With n_dims = 1 there is no context and each GP is one Gaussian variable,
+ *     which makes the model a Bayesian parametric psychometric function.
  *     Inference is Laplace over the 2N latents (m_i, g_i), one pair per
  *     trial, with the prior block-diagonal in (K_m, K_g). The exact Hessian
  *     of log p(y | m, g) is indefinite at every trial with a nonzero residual
@@ -358,7 +358,7 @@
  *                         fitted one, and the way to use it on a steep
  *                         observer is to scale the intensity axis so the
  *                         psychometric rise is of order 1 (which puts the
- *                         intercept in range), or to set hyper_max and
+ *                         intercept in range), or to set hyperparams_max and
  *                         desc.no_hyper_prior for the scale the problem needs.
  *                         Keeley's slope is constrained positive; this
  *                         kernel's is not, and a run with too few trials at
@@ -471,7 +471,7 @@
  *     output-scale ceiling (2 and 5 runs of 80 for lse-mono and eavc-mono
  *     against 0 and 1) and, under EAVC, about 8% more time a trial.
  *
- *   HYPERPARAMETERS (desc.hyper, desc.fit)
+ *   HYPERPARAMETERS (desc.hyperparams, desc.fit)
  *     lengthscale[d], outputscale and mean for RBF; a second lengthscale
  *     set and outputscale for the slope GP under SEMIP; cutpoint[k] under
  *     ORDINAL; noise_sd under GAUSSIAN. Under YAEP_MODEL_PSYCHOMETRIC,
@@ -495,11 +495,11 @@
  *     the exact one (R&W eq. 2.30) for GAUSSIAN. The GRADIENT is analytic
  *     (R&W eqs. 5.22 to 5.24 for Laplace, including the implicit term
  *     through the mode; eq. 5.9 for Gaussian), so a fit is gradient ascent
- *     with a backtracking line search, bounded by [hyper_min, hyper_max],
- *     from the values in force. Lengthscales, output scales, cutpoint gaps
- *     and the noise are fitted as logarithms, the mean as itself. Bounds
- *     default to 0.05 (hi - lo) to 2 (hi - lo) for a lengthscale, 0.1 to 10
- *     for an output scale, -5 to +5 for the mean, 0.01 to 10 for a cutpoint
+ *     with a backtracking line search, bounded by [hyperparams_min,
+ *     hyperparams_max], from the values in force. Lengthscales, output scales,
+ *     cutpoint gaps and the noise are fitted as logarithms, the mean as itself.
+ *     Bounds default to 0.05 (hi - lo) to 2 (hi - lo) for a lengthscale, 0.1 to
+ *     10 for an output scale, -5 to +5 for the mean, 0.01 to 10 for a cutpoint
  *     gap and 1e-3 to 10 for the noise sd; a zero bound field means the
  *     default, so a bound of exactly zero cannot be asked for.
  *     One objective-plus-gradient evaluation is one Laplace refit plus
@@ -721,9 +721,8 @@
  *     error tracks the threshold error (correlation 0.46 to 0.93). The band is
  *     a threshold-location metric at these widths, and the way to lower it is
  *     a better threshold. desc.priors.mean_g sets the center, the sd and the
- *     ceiling for that kind of measurement, and a desc.hyper.mean_g fixed at
- *     the true slope's logarithm is the way to use a slope known in
- *     advance.
+ *     ceiling for that kind of measurement, and a desc.hyperparams.mean_g fixed
+ *     at the true slope's logarithm is the way to use a slope known in advance.
  *     They are what stops the fit from interpolating its own trials. Type-II
  *     maximum likelihood on a run whose responses nearly separate keeps
  *     improving as the output scale grows and the lengthscale shrinks, so it
@@ -785,22 +784,22 @@
  *     runaway the prior exists to stop. The box is not really a prior on
  *     these data: every fit on both observers ends at 4.00 to 4.06, its upper
  *     edge, so it acts as an output scale fixed at 4. Fixing it at 4 outright
- *     (desc.hyper.outputscale = 4) reproduces the box's field errors to within
- *     0.01 at every trial count on the audiometric observer, but not its late
- *     LSE threshold (2.00 against the box's 1.66 dB, both intervals about
- *     +- 0.3), which says that one number is seed noise. What the box
- *     reliably does is trade a better early field (and a better late field on
- *     the steep 1-D observer) for a worse late field on the audiometric one
- *     (0.088 against 0.077 for LSE, 0.069 against 0.058 for EAVC), where the
- *     data want an output scale of 6 to 7 by trial 150 and the box will not
- *     let them. Late accuracy is the tie-breaker, and it splits between the
- *     two observers, so it does not justify a change: the default stays
- *     centered at 1, where the rest of the manual's numbers were measured.
- *     A session that cares more about its early
- *     estimate can have the box's behavior by fixing desc.hyper.outputscale
- *     at 4. Bounds of [1, 4] on the fitted scale do not do it: the log-normal
- *     keeps the fit on the lower edge early (1.3 at trial 25, measured) and
- *     only the ceiling is ever reached.
+ *     (desc.hyperparams.outputscale = 4) reproduces the box's field errors to
+ *     within 0.01 at every trial count on the audiometric observer, but not its
+ *     late LSE threshold (2.00 against the box's 1.66 dB, both intervals about
+ *     +- 0.3), which says that one number is seed noise. What the box reliably
+ *     does is trade a better early field (and a better late field on the steep
+ *     1-D observer) for a worse late field on the audiometric one (0.088
+ *     against 0.077 for LSE, 0.069 against 0.058 for EAVC), where the data want
+ *     an output scale of 6 to 7 by trial 150 and the box will not let them.
+ *     Late accuracy is the tie-breaker, and it splits between the two
+ *     observers, so it does not justify a change: the default stays centered at
+ *     1, where the rest of the manual's numbers were measured.
+ *     A session that cares more about its early estimate can have the box's
+ *     behavior by fixing desc.hyperparams.outputscale at 4. Bounds of [1, 4] on
+ *     the fitted scale do not do it: the log-normal keeps the fit on the lower
+ *     edge early (1.3 at trial 25, measured) and only the ceiling is ever
+ *     reached.
  *     The fit therefore maximizes a posterior, not a likelihood.
  *     yaep_log_marginal() still reports the likelihood alone, and the
  *     symptom of a fit that ran away anyway is a log marginal much closer
@@ -808,8 +807,8 @@
  *     level cannot be explained better than about -56 nats, so a fit
  *     reporting -5 has interpolated, and its threshold band will be wide and
  *     its threshold estimate unreliable. What is left to do about that is to
- *     raise hyper_min.lengthscale, lower hyper_max.outputscale, or fix the
- *     mean.
+ *     raise hyperparams_min.lengthscale, lower hyperparams_max.outputscale, or
+ *     fix the mean.
  *     A lengthscale at its UPPER bound, on the other hand, is usually not a
  *     complaint: a field that really is flat along a dimension wants an
  *     infinite lengthscale there, and the bound is the only thing stopping
@@ -1515,12 +1514,12 @@
  *     or 4 in a float build).
  *       magic     4 bytes "YAEP", then u32 format (1), u8 sizeof(yaep_real)
  *       desc      every number of yaep_desc in field order, arrays to
- *                 n_dims (hyper, hyper_min and hyper_max each as
- *                 lengthscale, outputscale, mean, lengthscale_b,
+ *                 n_dims (hyperparams, hyperparams_min and hyperparams_max each
+ *                 as lengthscale, outputscale, mean, lengthscale_b,
  *                 outputscale_b, YAEP_MAX_OUTCOMES - 1 cutpoints, noise_sd,
- *                 lengthscale_g, outputscale_g, mean_g; bools as u8; each
- *                 prior as center, sd, ceiling); rng and candidates as u8
- *                 set-or-not, and a caller's candidate set value by value
+ *                 lengthscale_g, outputscale_g, mean_g; bools as u8; each prior
+ *                 as center, sd, ceiling); rng and candidates as u8 set-or-not,
+ *                 and a caller's candidate set value by value
  *       state     i32 N, N_fit, halton_index, proposed, last_index, repeats,
  *                 fit_state, fit_evals, fit_back, stop; u8 fit_valid,
  *                 multi_cross, fit_blocked; f64 fit_step, fit_best,
@@ -1559,11 +1558,11 @@
  *     definition or a designer sets (rig_spec principle 8), in the shape
  *     ysp/stair.h and ysp/quest.h use: name, type, inclusive range, the
  *     value a zero field means, unit, a line of text, and an enum's values.
- *       name    the desc field; "a.b" is member b of a ("hyper.outputscale",
- *               "priors.mean_g.ceiling")
+ *       name    the desc field; "a.b" is member b of a
+ *               ("hyperparams.outputscale", "priors.mean_g.ceiling")
  *       type    "i32", "u32", "f64", "bool", "enum", or an array of one of
  *               them: "f64[]", "i32[]" and "enum[]" have one entry per
- *               dimension (n_dims), except hyper.cutpoint and its bounds
+ *               dimension (n_dims), except hyperparams.cutpoint and its bounds
  *               (n_outcomes - 1) and candidates (n_candidates x n_dims, row
  *               by row). An "enum[]" row has values too.
  *       def     what a zero field means when every other field is at its
@@ -1576,12 +1575,12 @@
  *               build's: 1e-6, or 1e-4 under a float YAEP_REAL.
  *       values  for an enum, "name=value" pairs joined by ',' in value
  *               order, the C enum's suffix in lower case; NULL otherwise
- *     The rows of a hyperparameter say what a zero means with desc.fit
- *     off; with it on, a zero hyper field is fitted between its hyper_min
- *     and hyper_max rows. The pointers a definition cannot hold are not
- *     rows: rng and rng_ctx (the player's generator; YAEP_ACQ_THOMPSON
- *     needs one, and its row says so) and memory and memory_size. The table
- *     is static and the same for every handle.
+ *     The rows of a hyperparameter say what a zero means with desc.fit off;
+ *     with it on, a zero hyperparams field is fitted between its
+ *     hyperparams_min and hyperparams_max rows. The pointers a definition
+ *     cannot hold are not rows: rng and rng_ctx (the player's generator;
+ *     YAEP_ACQ_THOMPSON needs one, and its row says so) and memory and
+ *     memory_size. The table is static and the same for every handle.
  *
  *   ---------------------------------------------------------------------
  *   SIMULATION
@@ -1799,6 +1798,15 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.17.0 - renamed: the fields hyper, hyper_min and hyper_max of
+ *          yaep_desc, and hyper of yaep_gp and yaep_snapshot, are
+ *          hyperparams, hyperparams_min and hyperparams_max. The type
+ *          yaep_hyper is yaep_hyperparams. The parameter table's rows
+ *          follow ("hyperparams.outputscale"). Reason: the Windows SDK's
+ *          rpcndr.h, which <windows.h> includes, defines hyper as __int64,
+ *          so a file that included <windows.h> before this header did not
+ *          compile. Breaks the API. The snapshot format, the layout and
+ *          every number are the same.
  *   v0.16.0 - yaep_params(), the table of the desc's fields for a loader's
  *          key check and a designer's panel (gap G6 of
  *          docs/experiment_format.md); see PARAMETERS under SNAPSHOTS. Adds
@@ -1931,7 +1939,7 @@
  *          log-slope GP over the context feeding a probit or logit in the
  *          intensity, for the observer whose psychometric rise is narrow
  *          against the box (see MODEL, and STATUS for what it measured).
- *          yaep_hyper gains lengthscale_g, outputscale_g and mean_g, and
+ *          yaep_hyperparams gains lengthscale_g, outputscale_g and mean_g, and
  *          yaep_desc gains model; both at the end of their structs, so every
  *          earlier field keeps its offset, but both structs are larger and a
  *          binding that mirrors them must add the fields. The default model
@@ -1980,7 +1988,7 @@
  *          gradient under CATEGORICAL is central differences, not analytic.
  *   v0.0 - specification. Declarations and the manual, no implementation.
  *
- *   STATUS: v0.16.0 (its check is at the end of this section). Implemented
+ *   STATUS: v0.17.0 (its check is at the end of this section). Implemented
  *   and checked by tests/adapt/aep_test.c,
  *   which builds and passes as C11, C99 and C++17 under gcc with -Wall
  *   -Wextra -Wpedantic -Wshadow -Werror, with and without YAEP_ASYNC, as
@@ -2265,6 +2273,14 @@
  *   YAEP_TEST_ONLY=params). tests/fuzz/adapt_fuzz.c found the outcome read
  *   in its first 60 s; docs/adapt.md has its run.
  *
+ *   v0.17.0 on 2026-11-11 (Linux desktop, gcc 12.2, Release): the rename
+ *   only. The test passes and prints what 0.16.0 printed but the version,
+ *   363 parameter-table comparisons included; the examples print the same
+ *   numbers but their times (aep_async's fit in the gaps varies from run
+ *   to run on 0.16.0 too); 10 of 10 mutants as expected. The compile
+ *   check tests/compile/windows_macros.c (every header after the macros of
+ *   <windows.h>) passed as C11 and C++17. MSVC has not built this version.
+ *
  *   NOT verified: the Laplace band's 95% coverage is unmeasured, and the
  *   categorical one-against-the-rest acquisitions have no Monte Carlo check.
  *   The timings vary by tens of percent between runs of the same binary, so
@@ -2289,9 +2305,9 @@
 /* The version of this header, for a log line or a compile-time check. The
  * string is the three numbers, and the test asserts that it stays so. */
 #define YAEP_VERSION_MAJOR  0
-#define YAEP_VERSION_MINOR  16
+#define YAEP_VERSION_MINOR  17
 #define YAEP_VERSION_PATCH  0
-#define YAEP_VERSION_STRING "0.16.0"
+#define YAEP_VERSION_STRING "0.17.0"
 
 /* The one optional dependency, and it comes FIRST: ysp/rt.h sets a
  * feature-test macro for the Linux clock calls and can only do that before the
@@ -2429,7 +2445,7 @@ typedef double (*yaep_rng_fn)(void* ctx);
  * GP under YAEP_KERNEL_SEMIP only, and lengthscale[intensity_dim] is
  * ignored there. cutpoint[] is ORDINAL only (K - 1 entries, increasing);
  * noise_sd is GAUSSIAN only. */
-typedef struct yaep_hyper {
+typedef struct yaep_hyperparams {
     double lengthscale[YAEP_MAX_DIMS];
     double outputscale;
     double mean;
@@ -2441,7 +2457,7 @@ typedef struct yaep_hyper {
     double outputscale_g;          /* the log-slope GP g(c). The threshold  */
     double mean_g;                 /* GP m(c) uses lengthscale, outputscale,
                                     * mean                                  */
-} yaep_hyper;
+} yaep_hyperparams;
 
 /* One weak hyperparameter prior. Zero in any field means the measured
  * default (HYPERPARAMETERS has each one and where it was measured); a
@@ -2482,7 +2498,7 @@ typedef struct yaep_priors {
                                 * default) is a rise a quarter of the axis
                                 * wide. sd 1. ceiling: the fit's upper
                                 * bound, the same way, 1 / 256; it is also
-                                * the default of hyper_max.mean_g           */
+                                * the default of hyperparams_max.mean_g      */
     yaep_prior noise_sd;      /* GAUSSIAN's noise sd. Off by default (no
                                 * prior was ever measured to be needed);
                                 * set center and sd to turn it on          */
@@ -2507,7 +2523,7 @@ typedef struct yaep_desc {
                                    * two-interval task. BERNOULLI and
                                    * ORDINAL only; fixed, never fit         */
     double       lapse;           /* lambda: the gap below 1                */
-    yaep_hyper  hyper;           /* fixed values, or 0 = default / fit     */
+    yaep_hyperparams hyperparams; /* fixed values, or 0 = default / fit     */
     bool         fit;             /* fit the zero hyperparameters           */
     int          fit_every;       /* refit every this many trials after
                                    * n_init; 0 = only on yaep_fit()        */
@@ -2518,11 +2534,11 @@ typedef struct yaep_desc {
                                    * update per trial and an exact refit
                                    * every k trials. BERNOULLI and ORDINAL
                                    * only; see MEMORY, COST AND THREADS     */
-    yaep_hyper  hyper_min;       /* fit bounds; 0 = 0.05 (hi - lo) for
-                                   * lengthscales, 0.1 for output scales,
-                                   * -5 for the mean, 0.01 for a cutpoint
-                                   * gap, 1e-3 for noise_sd                 */
-    yaep_hyper  hyper_max;       /* 0 = 2 (hi - lo), 10, +5, 10, 10        */
+    yaep_hyperparams hyperparams_min; /* fit bounds; 0 = 0.05 (hi - lo)
+                                       * for lengthscales, 0.1 for output
+                                       * scales, -5 for the mean, 0.01 for
+                                       * a cutpoint gap, 1e-3 for noise_sd */
+    yaep_hyperparams hyperparams_max; /* 0 = 2 (hi - lo), 10, +5, 10, 10  */
     double       jitter;          /* added to the kernel diagonal for the
                                    * Cholesky; 0 = 1e-6                     */
     yaep_acq    acq;
@@ -2593,7 +2609,7 @@ typedef struct yaep_trial {
  * be zeroed or closed before yaep_open(). */
 typedef struct yaep_gp {
     yaep_desc  desc;
-    yaep_hyper hyper;         /* the values in force (fit or default)     */
+    yaep_hyperparams hyperparams; /* the values in force (fit or default) */
     int         N;             /* trials so far                            */
     int         N_fit;         /* trials the factor in L covers: N, or less
                                 * after YAEP_ERR_NUMERIC                  */
@@ -2639,7 +2655,7 @@ typedef struct yaep_gp {
     int         fit_back;      /* consecutive line-search backtracks       */
     double      fit_step;      /* the line search's current step           */
     double      fit_best;      /* the best log marginal it has reached     */
-    bool        fit_valid;     /* the Laplace state matches X, y, hyper    */
+    bool        fit_valid;     /* the Laplace state matches X, y, hyperparams */
     bool        cand_valid;    /* cand_mu / cand_cov match the fit         */
     bool        multi_cross;   /* last threshold search crossed > once     */
     yaep_stop  stop;
@@ -2657,7 +2673,7 @@ typedef struct yaep_gp {
                                 * at the fit's current point              */
     double      stash_val;     /* its objective                            */
     double      stash_lm;      /* its log marginal likelihood              */
-    yaep_hyper stash_hyper;   /* its hyperparameters                      */
+    yaep_hyperparams stash_hyper; /* its hyperparameters                     */
     int         pcg_iters;     /* conjugate-gradient iterations the last
                                 * update's Newton steps took; 0 when they
                                 * factored                                 */
@@ -2786,14 +2802,14 @@ YAEP_API int yaep_fit_step(yaep_gp* g);
  * YAEP_ERR_*. */
 YAEP_API int yaep_refit(yaep_gp* g);
 
-/* Fit the hyperparameters left zero in desc.hyper, from the values in force;
- * see HYPERPARAMETERS. Works whether or not desc.fit is on. Returns 1 when
- * the fit converged (no gradient component above desc.fit_tol, a step that
+/* Fit the hyperparameters left zero in desc.hyperparams, from the values in
+ * force; see HYPERPARAMETERS. Works whether or not desc.fit is on. Returns 1
+ * when the fit converged (no gradient component above desc.fit_tol, a step that
  * can no longer move, or nothing to fit: fewer than two trials or no free
- * field), 0 when it spent desc.fit_max_evals evaluations first or a guard
- * undid it (call it again to continue from where it stopped), or
- * YAEP_ERR_*. yaep_fit_delta() is the objective's change. Expensive; see
- * MEMORY, COST AND THREADS. */
+ * field), 0 when it spent desc.fit_max_evals evaluations first or a guard undid
+ * it (call it again to continue from where it stopped), or YAEP_ERR_*.
+ * yaep_fit_delta() is the objective's change. Expensive; see MEMORY, COST AND
+ * THREADS. */
 YAEP_API int yaep_fit(yaep_gp* g);
 
 /* The change in the fit objective (log marginal plus log prior) over the last
@@ -2804,7 +2820,7 @@ YAEP_API double yaep_fit_delta(const yaep_gp* g);
 
 /* The hyperparameters in force, and the log marginal likelihood of the
  * current fit (Laplace-approximate, or exact under GAUSSIAN). */
-YAEP_API int    yaep_get_hyper(const yaep_gp* g, yaep_hyper* out);
+YAEP_API int    yaep_get_hyper(const yaep_gp* g, yaep_hyperparams* out);
 /* The stimulus the posterior mean of the target quantity is highest at
  * (lowest under desc.minimize): the best candidate, refined by
  * desc.refine_steps as yaep_next() refines. Fills x[n_dims] and, if value is
@@ -2911,7 +2927,7 @@ typedef struct yaep_snapshot {
     double      threshold_hi;
     int         threshold_rc;  /* 0, YAEP_ERR_NOCROSS, or another code     */
     bool        multi_cross;   /* that search crossed more than once        */
-    yaep_hyper hyper;         /* the values in force                       */
+    yaep_hyperparams hyperparams; /* the values in force                    */
     double      log_marginal;
     int         numeric;       /* updates that returned YAEP_ERR_NUMERIC so
                                 * far in this session                       */
@@ -3554,7 +3570,7 @@ typedef struct yaep__scr {
     double* cand_dv;  /* M: the look-ahead covariance diagonal                */
     double* cand_p0;  /* M: P(f > f*) now, the look-ahead's baseline          */
     double* cand_isd; /* M: 1 / sd at a candidate, for the look-ahead's skip   */
-    yaep_real* Rm;       /* Nmax x Nmax: (K + W^-1)^-1 for the hyper gradient,
+    yaep_real* Rm;       /* Nmax x Nmax: (K + W^-1)^-1 for the hyperparameter gradient,
                        *    and the per-class workspace of the categorical
                        *    Newton step                                       */
     yaep_real* Echol;    /* Nmax x Nmax: chol(sum_c E_c), CATEGORICAL only       */
@@ -3961,10 +3977,10 @@ static bool yaep__validate(const yaep_desc* d, char* err, size_t cap,
             return false;
         }
         /* Fixed cutpoints must be usable as they stand. */
-        if (d->hyper.cutpoint[0] != 0.0) {
+        if (d->hyperparams.cutpoint[0] != 0.0) {
             for (int i = 1; i < nout - 1; i++) {
-                if (!(d->hyper.cutpoint[i] > d->hyper.cutpoint[i - 1])) {
-                    yaep__err(err, cap, "hyper.cutpoint is not increasing at %d", i);
+                if (!(d->hyperparams.cutpoint[i] > d->hyperparams.cutpoint[i - 1])) {
+                    yaep__err(err, cap, "hyperparams.cutpoint is not increasing at %d", i);
                     return false;
                 }
             }
@@ -4007,15 +4023,15 @@ static bool yaep__validate(const yaep_desc* d, char* err, size_t cap,
         }
     }
     for (int i = 0; i < nd; i++) {
-        if (d->hyper.lengthscale[i] < 0.0 || d->hyper.lengthscale_b[i] < 0.0 ||
-            d->hyper.lengthscale_g[i] < 0.0) {
-            yaep__err(err, cap, "hyper.lengthscale[%d] is negative", i);
+        if (d->hyperparams.lengthscale[i] < 0.0 || d->hyperparams.lengthscale_b[i] < 0.0 ||
+            d->hyperparams.lengthscale_g[i] < 0.0) {
+            yaep__err(err, cap, "hyperparams.lengthscale[%d] is negative", i);
             return false;
         }
     }
-    if (d->hyper.outputscale < 0.0 || d->hyper.outputscale_b < 0.0 ||
-        d->hyper.outputscale_g < 0.0 ||
-        d->hyper.noise_sd < 0.0 || d->jitter < 0.0) {
+    if (d->hyperparams.outputscale < 0.0 || d->hyperparams.outputscale_b < 0.0 ||
+        d->hyperparams.outputscale_g < 0.0 ||
+        d->hyperparams.noise_sd < 0.0 || d->jitter < 0.0) {
         yaep__err(err, cap, "an output scale, the noise sd or the jitter is negative");
         return false;
     }
@@ -4115,7 +4131,7 @@ static double yaep__xt(const yaep_gp* g, const double* x) {
  * gradient needs the two parts, and the kernel value is their sum. */
 static void yaep__kparts(const yaep_gp* g, const double* xa, const double* xb,
                           double* ka, double* kb, double* xx) {
-    const yaep_hyper* h = &g->hyper;
+    const yaep_hyperparams* h = &g->hyperparams;
     int nd = g->desc.n_dims, id = g->desc.intensity_dim;
     double qa = 0.0;
     if (g->desc.kernel == YAEP_KERNEL_RBF) {
@@ -4197,7 +4213,7 @@ static double yaep__kt(const yaep_gp* g, int i, int j) {
  * single Gaussian variable with the output scale as its variance. */
 static double yaep__kctx(const yaep_gp* g, int which, const double* xa,
                           const double* xb) {
-    const yaep_hyper* h = &g->hyper;
+    const yaep_hyperparams* h = &g->hyperparams;
     const double* ls = which ? h->lengthscale_g : h->lengthscale;
     int nd = g->desc.n_dims, id = g->desc.intensity_dim;
     double q = 0.0;
@@ -4276,17 +4292,17 @@ static double yaep__pick(double v, double dflt) { return v != 0.0 ? v : dflt; }
 
 /* The free hyperparameters, in a fixed order, with their bounds. A field the
  * caller set to something nonzero is fixed there; a zero field is fitted (and
- * carries a default until it is). That is why desc.hyper, not the values in
- * force, decides. */
+ * carries a default until it is). That is why desc.hyperparams, not the values
+ * in force, decides. */
 static int yaep__params_ps(const yaep_gp* g, yaep__param* p) {
     const yaep_desc* d = &g->desc;
-    const yaep_hyper* h0 = &d->hyper;
+    const yaep_hyperparams* h0 = &d->hyperparams;
     int nd = d->n_dims, id = d->intensity_dim, np = 0;
     double os_m = yaep__ps_os_m(d), span = yaep__ispan(d);
     for (int which = 0; which < 2; which++) {
         const double* ls0 = which ? h0->lengthscale_g : h0->lengthscale;
-        const double* lsmin = which ? d->hyper_min.lengthscale_g : d->hyper_min.lengthscale;
-        const double* lsmax = which ? d->hyper_max.lengthscale_g : d->hyper_max.lengthscale;
+        const double* lsmin = which ? d->hyperparams_min.lengthscale_g : d->hyperparams_min.lengthscale;
+        const double* lsmax = which ? d->hyperparams_max.lengthscale_g : d->hyperparams_max.lengthscale;
         for (int i = 0; i < nd; i++) {
             double range = yaep__ls_range(d, i);
             if (i == id || ls0[i] != 0.0) continue;
@@ -4299,35 +4315,35 @@ static int yaep__params_ps(const yaep_gp* g, yaep__param* p) {
     }
     if (h0->outputscale == 0.0) {
         p[np].kind = YAEP__P_OS; p[np].dim = 0; p[np].logsp = true;
-        p[np].lo = log(yaep__pick(d->hyper_min.outputscale, 0.1 * os_m));
-        p[np].hi = log(yaep__pick(d->hyper_max.outputscale, 10.0 * os_m));
+        p[np].lo = log(yaep__pick(d->hyperparams_min.outputscale, 0.1 * os_m));
+        p[np].hi = log(yaep__pick(d->hyperparams_max.outputscale, 10.0 * os_m));
         np++;
     }
     if (h0->mean == 0.0) {
         p[np].kind = YAEP__P_MEAN; p[np].dim = 0; p[np].logsp = false;
-        p[np].lo = yaep__pick(d->hyper_min.mean, d->lo[id]);
-        p[np].hi = yaep__pick(d->hyper_max.mean, d->hi[id]);
+        p[np].lo = yaep__pick(d->hyperparams_min.mean, d->lo[id]);
+        p[np].hi = yaep__pick(d->hyperparams_max.mean, d->hi[id]);
         np++;
     }
     if (h0->outputscale_g == 0.0) {
         p[np].kind = YAEP__P_OSG; p[np].dim = 0; p[np].logsp = true;
-        p[np].lo = log(yaep__pick(d->hyper_min.outputscale_g, 0.01));
-        p[np].hi = log(yaep__pick(d->hyper_max.outputscale_g, 10.0));
+        p[np].lo = log(yaep__pick(d->hyperparams_min.outputscale_g, 0.01));
+        p[np].hi = log(yaep__pick(d->hyperparams_max.outputscale_g, 10.0));
         np++;
     }
     if (h0->mean_g == 0.0) {
         /* A rise from 16 times the axis down to a sixty-fourth of it. */
         p[np].kind = YAEP__P_MEANG; p[np].dim = 0; p[np].logsp = false;
-        p[np].lo = yaep__pick(d->hyper_min.mean_g, log(0.25 / span));
-        p[np].hi = yaep__pick(d->hyper_max.mean_g,
+        p[np].lo = yaep__pick(d->hyperparams_min.mean_g, log(0.25 / span));
+        p[np].hi = yaep__pick(d->hyperparams_max.mean_g,
                                log(1.0 / (g->priors.mean_g.ceiling * span)));
         np++;
     }
     if (d->lik == YAEP_LIK_ORDINAL && h0->cutpoint[0] == 0.0) {
         for (int m = 1; m < d->n_outcomes - 1; m++) {
             p[np].kind = YAEP__P_CUT; p[np].dim = m; p[np].logsp = true;
-            p[np].lo = log(yaep__pick(d->hyper_min.cutpoint[m], 0.01));
-            p[np].hi = log(yaep__pick(d->hyper_max.cutpoint[m], 10.0));
+            p[np].lo = log(yaep__pick(d->hyperparams_min.cutpoint[m], 0.01));
+            p[np].hi = log(yaep__pick(d->hyperparams_max.cutpoint[m], 10.0));
             np++;
         }
     }
@@ -4336,7 +4352,7 @@ static int yaep__params_ps(const yaep_gp* g, yaep__param* p) {
 
 static int yaep__params(const yaep_gp* g, yaep__param* p) {
     const yaep_desc* d = &g->desc;
-    const yaep_hyper* h0 = &d->hyper;
+    const yaep_hyperparams* h0 = &d->hyperparams;
     int nd = d->n_dims, id = d->intensity_dim, np = 0;
     bool semip = (d->kernel == YAEP_KERNEL_SEMIP);
     if (yaep__is_ps(g)) return yaep__params_ps(g, p);
@@ -4345,22 +4361,22 @@ static int yaep__params(const yaep_gp* g, yaep__param* p) {
         if (semip && i == id) continue;   /* no lengthscale along x */
         if (h0->lengthscale[i] != 0.0) continue;
         p[np].kind = YAEP__P_LS; p[np].dim = i; p[np].logsp = true;
-        p[np].lo = log(yaep__pick(d->hyper_min.lengthscale[i], 0.05 * range));
-        p[np].hi = log(yaep__pick(d->hyper_max.lengthscale[i], 2.0 * range));
+        p[np].lo = log(yaep__pick(d->hyperparams_min.lengthscale[i], 0.05 * range));
+        p[np].hi = log(yaep__pick(d->hyperparams_max.lengthscale[i], 2.0 * range));
         np++;
     }
     if (h0->outputscale == 0.0) {
         p[np].kind = YAEP__P_OS; p[np].dim = 0; p[np].logsp = true;
-        p[np].lo = log(yaep__pick(d->hyper_min.outputscale, 0.1));
-        p[np].hi = log(yaep__pick(d->hyper_max.outputscale, 10.0));
+        p[np].lo = log(yaep__pick(d->hyperparams_min.outputscale, 0.1));
+        p[np].hi = log(yaep__pick(d->hyperparams_max.outputscale, 10.0));
         np++;
     }
     /* A comparison sees only differences, which the mean cancels out of:
-     * under PAIRWISE it stays at hyper.mean (0) and is not fitted. */
+     * under PAIRWISE it stays at hyperparams.mean (0) and is not fitted. */
     if (h0->mean == 0.0 && d->lik != YAEP_LIK_PAIRWISE) {
         p[np].kind = YAEP__P_MEAN; p[np].dim = 0; p[np].logsp = false;
-        p[np].lo = yaep__pick(d->hyper_min.mean, -5.0);
-        p[np].hi = yaep__pick(d->hyper_max.mean, 5.0);
+        p[np].lo = yaep__pick(d->hyperparams_min.mean, -5.0);
+        p[np].hi = yaep__pick(d->hyperparams_max.mean, 5.0);
         np++;
     }
     if (semip) {
@@ -4369,38 +4385,38 @@ static int yaep__params(const yaep_gp* g, yaep__param* p) {
             if (i == id) continue;
             if (h0->lengthscale_b[i] != 0.0) continue;
             p[np].kind = YAEP__P_LSB; p[np].dim = i; p[np].logsp = true;
-            p[np].lo = log(yaep__pick(d->hyper_min.lengthscale_b[i], 0.05 * range));
-            p[np].hi = log(yaep__pick(d->hyper_max.lengthscale_b[i], 2.0 * range));
+            p[np].lo = log(yaep__pick(d->hyperparams_min.lengthscale_b[i], 0.05 * range));
+            p[np].hi = log(yaep__pick(d->hyperparams_max.lengthscale_b[i], 2.0 * range));
             np++;
         }
         if (h0->outputscale_b == 0.0) {
             p[np].kind = YAEP__P_OSB; p[np].dim = 0; p[np].logsp = true;
-            p[np].lo = log(yaep__pick(d->hyper_min.outputscale_b, 0.1));
-            p[np].hi = log(yaep__pick(d->hyper_max.outputscale_b, 10.0));
+            p[np].lo = log(yaep__pick(d->hyperparams_min.outputscale_b, 0.1));
+            p[np].hi = log(yaep__pick(d->hyperparams_max.outputscale_b, 10.0));
             np++;
         }
     }
     if (d->lik == YAEP_LIK_ORDINAL && h0->cutpoint[0] == 0.0) {
         /* c_1 is pinned to 0 and the rest are fitted as log gaps, which keeps
-         * them increasing and keeps hyper.mean identifiable. */
+         * them increasing and keeps hyperparams.mean identifiable. */
         for (int m = 1; m < d->n_outcomes - 1; m++) {
             p[np].kind = YAEP__P_CUT; p[np].dim = m; p[np].logsp = true;
-            p[np].lo = log(yaep__pick(d->hyper_min.cutpoint[m], 0.01));
-            p[np].hi = log(yaep__pick(d->hyper_max.cutpoint[m], 10.0));
+            p[np].lo = log(yaep__pick(d->hyperparams_min.cutpoint[m], 0.01));
+            p[np].hi = log(yaep__pick(d->hyperparams_max.cutpoint[m], 10.0));
             np++;
         }
     }
     if (d->lik == YAEP_LIK_GAUSSIAN && h0->noise_sd == 0.0) {
         p[np].kind = YAEP__P_NOISE; p[np].dim = 0; p[np].logsp = true;
-        p[np].lo = log(yaep__pick(d->hyper_min.noise_sd, 1e-3));
-        p[np].hi = log(yaep__pick(d->hyper_max.noise_sd, 10.0));
+        p[np].lo = log(yaep__pick(d->hyperparams_min.noise_sd, 1e-3));
+        p[np].hi = log(yaep__pick(d->hyperparams_max.noise_sd, 10.0));
         np++;
     }
     return np;
 }
 
 static double yaep__param_value(const yaep_gp* g, const yaep__param* p) {
-    const yaep_hyper* h = &g->hyper;
+    const yaep_hyperparams* h = &g->hyperparams;
     switch (p->kind) {
         case YAEP__P_LS:   return h->lengthscale[p->dim];
         case YAEP__P_OS:   return h->outputscale;
@@ -4425,7 +4441,7 @@ static void yaep__theta_get(const yaep_gp* g, const yaep__param* p, int np,
 
 static void yaep__theta_set(yaep_gp* g, const yaep__param* p, int np,
                              const double* th) {
-    yaep_hyper* h = &g->hyper;
+    yaep_hyperparams* h = &g->hyperparams;
     for (int i = 0; i < np; i++) {
         double v = yaep__clamp(th[i], p[i].lo, p[i].hi);
         if (p[i].logsp) v = exp(v);
@@ -4451,7 +4467,7 @@ static void yaep__theta_set(yaep_gp* g, const yaep__param* p, int np,
  * exponential. */
 static void yaep__kernel_grad(const yaep_gp* g, const yaep__param* p, int np,
                                const double* xa, const double* xb, double* dk) {
-    const yaep_hyper* h = &g->hyper;
+    const yaep_hyperparams* h = &g->hyperparams;
     double ka, kb, xx;
     yaep__kparts(g, xa, xb, &ka, &kb, &xx);
     for (int i = 0; i < np; i++) {
@@ -4523,11 +4539,11 @@ static void yaep__ord_G(const yaep_gp* g, double fv, int j, double* G) {
     double span = yaep__span(g), off = 0.0;
     double P, iP, iP2, iP3;
     if (j > 0) {
-        double u0 = yaep__clamp(g->hyper.cutpoint[j - 1] - fv, -clamp, clamp);
+        double u0 = yaep__clamp(g->hyperparams.cutpoint[j - 1] - fv, -clamp, clamp);
         yaep__link_all(link, u0, &A0, &l0, &m0, &n0);
     }
     if (j < nout - 1) {
-        double u1 = yaep__clamp(g->hyper.cutpoint[j] - fv, -clamp, clamp);
+        double u1 = yaep__clamp(g->hyperparams.cutpoint[j] - fv, -clamp, clamp);
         yaep__link_all(link, u1, &A1, &l1, &m1, &n1);
     }
     /* desc.guess and desc.lapse move mass to the top and bottom categories:
@@ -4645,7 +4661,7 @@ static void yaep__probs_of_f(const yaep_gp* g, double fv, double* p) {
         int nout = g->desc.n_outcomes;
         double prev = 0.0;
         for (int j = 0; j < nout - 1; j++) {
-            double c = yaep__link(link, g->hyper.cutpoint[j] - fv);
+            double c = yaep__link(link, g->hyperparams.cutpoint[j] - fv);
             p[j] = span * (c - prev) + (j == 0 ? g->desc.lapse : 0.0);
             if (p[j] < 0.0) p[j] = 0.0;
             prev = c;
@@ -4667,7 +4683,7 @@ static double yaep__q_of_f(const yaep_gp* g, double fv, double other) {
             return g->desc.guess + yaep__span(g) * yaep__link(link, fv);
         case YAEP_LIK_ORDINAL:
             return g->desc.guess + yaep__span(g) *
-                   (1.0 - yaep__link(link, g->hyper.cutpoint[k - 1] - fv));
+                   (1.0 - yaep__link(link, g->hyperparams.cutpoint[k - 1] - fv));
         case YAEP_LIK_CATEGORICAL: return yaep__sigmoid(fv - other);
         default:                    return fv;
     }
@@ -4812,7 +4828,7 @@ static bool yaep__b_factor(yaep_gp* g, int n, const double* sW, double* logdet) 
 static int yaep__laplace(yaep_gp* g, int mode) {
     yaep__scr s;
     int n = g->N, ld = g->N_max;
-    double mean = yaep__is_pair(g) ? 0.0 : g->hyper.mean;
+    double mean = yaep__is_pair(g) ? 0.0 : g->hyperparams.mean;
     double *fv, *W, *d1, *sW, *a, *h, *b, *cv, *an, *hn;
     double psi = 0.0, logdet = 0.0, ll = 0.0;
     bool pcg, border;
@@ -4973,7 +4989,7 @@ static int yaep__laplace_cat(yaep_gp* g, int mode) {
     yaep__scr s;
     int n = g->N, ld = g->N_max, K = g->K;
     size_t bs = (size_t)ld * ld, kn = (size_t)K * ld;
-    double mean = g->hyper.mean;
+    double mean = g->hyperparams.mean;
     double *pi, *d1, *sW, *a, *h, *b, *cv, *an, *hn, *r, *z;
     double psi = 0.0, logdet = 0.0, ll = 0.0;
     yaep__scr_of(g, &s);
@@ -5148,7 +5164,7 @@ static int yaep__laplace_cat(yaep_gp* g, int mode) {
 static int yaep__gauss_fit(yaep_gp* g, int from) {
     yaep__scr s;
     int n = g->N, ld = g->N_max;
-    double nv = g->hyper.noise_sd * g->hyper.noise_sd;
+    double nv = g->hyperparams.noise_sd * g->hyperparams.noise_sd;
     double logdet = 0.0, quad = 0.0;
     yaep__scr_of(g, &s);
     for (int i = from; i < n; i++) {
@@ -5164,7 +5180,7 @@ static int yaep__gauss_fit(yaep_gp* g, int from) {
         Lr[i] = (yaep_real)sqrt(d);
     }
     for (int i = 0; i < n; i++) {
-        s.alpha[i] = g->y[i] - g->hyper.mean;
+        s.alpha[i] = g->y[i] - g->hyperparams.mean;
         s.sW[i] = 1.0;
         g->W[i] = nv > 0.0 ? 1.0 / nv : 1e8;   /* the look-ahead's precision */
     }
@@ -5172,9 +5188,9 @@ static int yaep__gauss_fit(yaep_gp* g, int from) {
     yaep__tri_bwd(g->L, n, ld, s.alpha);
     for (int i = 0; i < n; i++) {
         logdet += log(g->L[(size_t)i * ld + i]);
-        quad += (g->y[i] - g->hyper.mean) * s.alpha[i];
-        g->f[i] = g->hyper.mean;   /* unused, but keeps the field defined */
-        g->grad[i] = (g->y[i] - g->hyper.mean) / (nv > 0.0 ? nv : 1e-8);
+        quad += (g->y[i] - g->hyperparams.mean) * s.alpha[i];
+        g->f[i] = g->hyperparams.mean;   /* unused, but keeps the field defined */
+        g->grad[i] = (g->y[i] - g->hyperparams.mean) / (nv > 0.0 ? nv : 1e-8);
     }
     g->log_marginal = -0.5 * quad - logdet - 0.5 * (double)n * YAEP__LOG2PI;
     g->N_fit = n;
@@ -5200,7 +5216,7 @@ static int yaep__gauss_fit(yaep_gp* g, int from) {
 static int yaep__laplace_grow(yaep_gp* g) {
     yaep__scr s;
     int n = g->N, ld = g->N_max, m = n - 1;
-    double mean = g->hyper.mean;
+    double mean = g->hyperparams.mean;
     double *fv, *W, *d1, *sW, *a, *h, *b, *cv;
     double mu_new, w_new, dd, ll = 0.0, ah = 0.0, logdet = 0.0;
     if (n < 2 || g->N_fit != m) return yaep__laplace(g, YAEP__START_ROW);
@@ -5285,7 +5301,7 @@ static double* yaep__psv(const yaep__scr* s, int ld, int k) {
 static double yaep__ps_sites(yaep_gp* g, const yaep__scr* s, const double* hm,
                               const double* hg, bool fill) {
     int n = g->N, ld = g->N_max, nd = g->desc.n_dims, id = g->desc.intensity_dim;
-    double mum = g->hyper.mean, mug = g->hyper.mean_g, ll = 0.0;
+    double mum = g->hyperparams.mean, mug = g->hyperparams.mean_g, ll = 0.0;
     double *um = yaep__psv(s, ld, YAEP__PS_UM), *ug = yaep__psv(s, ld, YAEP__PS_UG);
     double *gm = yaep__psv(s, ld, YAEP__PS_GM), *gg = yaep__psv(s, ld, YAEP__PS_GG);
     for (int i = 0; i < n; i++) {
@@ -5640,7 +5656,7 @@ static void yaep__predict_k(const yaep_gp* g, const yaep__scr* s,
     const double* al = s->alpha + (size_t)k * ld;
     const double* sw = s->sW + (size_t)k * ld;
     const yaep_real* Lk = g->L + (size_t)k * ld * ld;
-    if (n == 0) { *mu = g->hyper.mean; *var = kxx; return; }
+    if (n == 0) { *mu = g->hyperparams.mean; *var = kxx; return; }
     (void)nd;
     for (int i = 0; i < n; i++) w1[i] = yaep__kx(g, i, x);
     m = yaep__dot(al, w1, n);
@@ -5653,7 +5669,7 @@ static void yaep__predict_k(const yaep_gp* g, const yaep__scr* s,
         yaep__tri_fwd(s->Echol, n, ld, w2);
         for (int i = 0; i < n; i++) v += w2[i] * w2[i];
     }
-    *mu = g->hyper.mean + m;
+    *mu = g->hyperparams.mean + m;
     *var = v > 0.0 ? v : 0.0;
 }
 
@@ -5686,7 +5702,7 @@ static void yaep__predict_many(const yaep_gp* g, const yaep__scr* s,
             const double* row = s->blk + (size_t)(j - b0) * ld;
             double* wv = s->blk + (size_t)(YAEP__BLK + j - b0) * ld;
             double v = kxx[j - b0];
-            mu[j] = g->hyper.mean + yaep__dot(al, row, nf);
+            mu[j] = g->hyperparams.mean + yaep__dot(al, row, nf);
             if (nf == 0) { sd[j] = sqrt(v); continue; }
             for (int i = 0; i < nf; i++) wv[i] = sw[i] * row[i];
             yaep__tri_fwd(Lk, nf, ld, wv);
@@ -5730,9 +5746,9 @@ static int yaep__line_n(const yaep_gp* g, int d) {
 static double yaep__mean0(const yaep_gp* g, const yaep__scr* s, const double* x,
                            double* w) {
     int n = g->N_fit;
-    if (n == 0) return g->hyper.mean;
+    if (n == 0) return g->hyperparams.mean;
     for (int i = 0; i < n; i++) w[i] = yaep__kx(g, i, x);
-    return g->hyper.mean + yaep__dot(s->alpha, w, n);
+    return g->hyperparams.mean + yaep__dot(s->alpha, w, n);
 }
 
 /* AEPsych's MonotonicProjectionGP: the posterior mean at x replaced by its
@@ -5834,7 +5850,7 @@ static void yaep__cand_fill(yaep_gp* g, int kv) {
                 const double* row = s.blk + (size_t)(j - b0) * ld;
                 double* wv = s.blk + (size_t)(YAEP__BLK + j - b0) * ld;
                 double v = kxx[j - b0];
-                g->cand_mu[(size_t)k * M + j] = g->hyper.mean +
+                g->cand_mu[(size_t)k * M + j] = g->hyperparams.mean +
                                                 yaep__dot(al, row, n);
                 if (n == 0) { s.cand_sd[(size_t)k * M + j] = sqrt(v); continue; }
                 for (int i = 0; i < n; i++) wv[i] = sw[i] * row[i];
@@ -6012,7 +6028,7 @@ static bool yaep__fit_grad_ps(yaep_gp* g, const yaep__param* p, int np,
     double *bb, *E1, *E2, *E3, *sp, *cm, *cg, *gzm, *gzg;
     double *xm, *xg, *nm, *ng, *rm, *rg, *zm, *zg, *pm, *pg, *qm, *qg;
     double *km, *kg, *kim, *kig, *kzm, *kzg, *tt, *um2, *ug2;
-    double mug = g->hyper.mean_g, rz, rr0, gs[YAEP__NTHETA] = { 0 };
+    double mug = g->hyperparams.mean_g, rz, rr0, gs[YAEP__NTHETA] = { 0 };
     bool ord = g->desc.lik == YAEP_LIK_ORDINAL;
     yaep__scr_of(g, &s);
     am = yaep__psv(&s, ld, YAEP__PS_AM); ag = yaep__psv(&s, ld, YAEP__PS_AG);
@@ -6141,7 +6157,7 @@ static bool yaep__fit_grad_ps(yaep_gp* g, const yaep__param* p, int np,
         const double* a = blk ? ag : am;
         const double* u = blk ? ug : um;
         const double* nu = blk ? ng : nm;
-        const double* ls = blk ? g->hyper.lengthscale_g : g->hyper.lengthscale;
+        const double* ls = blk ? g->hyperparams.lengthscale_g : g->hyperparams.lengthscale;
         int kls = blk ? YAEP__P_LSG : YAEP__P_LS;
         int kos = blk ? YAEP__P_OSG : YAEP__P_OS;
         for (int i = 0; i < n; i++) {
@@ -6197,7 +6213,7 @@ static bool yaep__fit_grad_ps(yaep_gp* g, const yaep__param* p, int np,
         for (int q = 0; q < np; q++) {
             double gap, sum = 0.0;
             if (p[q].kind != YAEP__P_CUT) continue;
-            gap = g->hyper.cutpoint[p[q].dim] - g->hyper.cutpoint[p[q].dim - 1];
+            gap = g->hyperparams.cutpoint[p[q].dim] - g->hyperparams.cutpoint[p[q].dim - 1];
             for (int m = p[q].dim; m < nout - 1; m++) sum += gc[m];
             gs[q] = gap * sum;
         }
@@ -6350,7 +6366,7 @@ static int yaep__fit_eval(yaep_gp* g, const yaep__param* p, int np,
                 for (int i = 0; i < n; i++) { gv += s.alpha[i]; bv[i] = 1.0; }
                 break;
             case YAEP__P_NOISE: {
-                double nv = g->hyper.noise_sd * g->hyper.noise_sd, trc = 0.0, aa2 = 0.0;
+                double nv = g->hyperparams.noise_sd * g->hyperparams.noise_sd, trc = 0.0, aa2 = 0.0;
                 for (int i = 0; i < n; i++) {
                     trc += s.Rm[(size_t)i * ld + i];
                     aa2 += s.alpha[i] * s.alpha[i];
@@ -6416,8 +6432,8 @@ static int yaep__fit_eval(yaep_gp* g, const yaep__param* p, int np,
             for (int t = 0; t < np; t++) {
                 if (p[t].kind != YAEP__P_CUT) continue;   /* the gaps below */
                 {
-                    double gap = g->hyper.cutpoint[p[t].dim] -
-                                 g->hyper.cutpoint[p[t].dim - 1];
+                    double gap = g->hyperparams.cutpoint[p[t].dim] -
+                                 g->hyperparams.cutpoint[p[t].dim - 1];
                     double sum = 0.0;
                     for (int m = p[t].dim; m < nout - 1; m++) sum += gc[m];
                     grad[t] = gap * sum;
@@ -6482,10 +6498,10 @@ static int yaep__fit_value_grad(yaep_gp* g, const yaep__param* p, int np,
     return yaep__fit_eval(g, p, np, th, val, grad);
 }
 
-/* Gradient ascent with a backtracking line search, bounded by hyper_min and
- * hyper_max in the fitted coordinates. Bounded and monotone: a step is taken
- * only when it raises the marginal likelihood, so a fit never makes the model
- * worse than the values it started from.
+/* Gradient ascent with a backtracking line search, bounded by hyperparams_min
+ * and hyperparams_max in the fitted coordinates. Bounded and monotone: a step
+ * is taken only when it raises the marginal likelihood, so a fit never makes
+ * the model worse than the values it started from.
  *
  * The ascent is a state machine rather than a loop, because a whole fit is
  * tens of refits and an experiment between two trials may only have room for
@@ -6521,7 +6537,7 @@ static void yaep__stash(yaep_gp* g, double val) {
             yaep__copy(s.stv + (size_t)(5 + v) * ld, s.ps + (size_t)v * ld, n);
     g->stash_val = val;
     g->stash_lm = g->log_marginal;
-    g->stash_hyper = g->hyper;
+    g->stash_hyper = g->hyperparams;
     g->stash_ok = true;
 }
 
@@ -6529,7 +6545,7 @@ static void yaep__unstash(yaep_gp* g, const double* th, int np) {
     yaep__scr s;
     int n = g->N, ld = g->N_max;
     yaep__scr_of(g, &s);
-    g->hyper = g->stash_hyper;
+    g->hyperparams = g->stash_hyper;
     yaep__kmat_build(g);
     for (int i = 0; i < n; i++)
         yaep__copyr(g->L + (size_t)i * ld, s.stL + (size_t)i * ld, i + 1);
@@ -6772,7 +6788,7 @@ static double yaep__f_star(const yaep_gp* g) {
     if (!(p > 0.0 && p < 1.0)) return 0.0;
     if (d->lik == YAEP_LIK_ORDINAL) {
         int k = d->target_outcome == 0 ? 1 : d->target_outcome;
-        return g->hyper.cutpoint[k - 1] - yaep__link_inv(link, 1.0 - p);
+        return g->hyperparams.cutpoint[k - 1] - yaep__link_inv(link, 1.0 - p);
     }
     return yaep__link_inv(link, p);
 }
@@ -6837,7 +6853,7 @@ static double yaep__bald(const yaep_gp* g, const yaep__scr* s,
     double eh = 0.0;
     int nout = 0;
     if (g->desc.lik == YAEP_LIK_GAUSSIAN) {
-        double nv = g->hyper.noise_sd * g->hyper.noise_sd;
+        double nv = g->hyperparams.noise_sd * g->hyperparams.noise_sd;
         return nv > 0.0 ? 0.5 * log1p(sd * sd / nv) : 0.0;
     }
     if (!(sd > 0.0)) return 0.0;
@@ -6858,7 +6874,7 @@ static int yaep__scenarios(const yaep_gp* g, const yaep__scr* s,
                             double mu, double sd, double other,
                             double* oy, double* op) {
     if (g->desc.lik == YAEP_LIK_GAUSSIAN) {
-        double nv = g->hyper.noise_sd * g->hyper.noise_sd;
+        double nv = g->hyperparams.noise_sd * g->hyperparams.noise_sd;
         double t = sqrt(2.0 * (sd * sd + nv));
         for (int i = 0; i < YAEP_QUAD_N; i++) {
             oy[i] = mu + t * s->gh_x[i];
@@ -6893,7 +6909,7 @@ static void yaep__site(const yaep_gp* g, double mu, double yv, double other,
         *d1 = (yv > 0.5 ? 1.0 : 0.0) - pr;
         *w = pr * (1.0 - pr);
     } else if (g->desc.lik == YAEP_LIK_GAUSSIAN) {
-        double nv = g->hyper.noise_sd * g->hyper.noise_sd;
+        double nv = g->hyperparams.noise_sd * g->hyperparams.noise_sd;
         if (!(nv > 0.0)) nv = 1e-8;
         *d1 = (yv - mu) / nv;
         *w = 1.0 / nv;
@@ -6954,8 +6970,8 @@ static void yaep__ps_post(const yaep_gp* g, const yaep__scr* s,
     double *km = yaep__psv(s, ld, YAEP__PS_KM), *kg = yaep__psv(s, ld, YAEP__PS_KG);
     double *v1 = yaep__psv(s, ld, YAEP__PS_V1), *v2 = yaep__psv(s, ld, YAEP__PS_V2);
     double lim;
-    o->mm = g->hyper.mean;
-    o->mg = g->hyper.mean_g;
+    o->mm = g->hyperparams.mean;
+    o->mg = g->hyperparams.mean_g;
     o->vm = yaep__kctx(g, 0, x, x);
     o->vg = yaep__kctx(g, 1, x, x);
     o->cmg = 0.0;
@@ -7063,7 +7079,7 @@ static double yaep__f_level(const yaep_gp* g, double target) {
     double pp = (target - d->guess) / yaep__span(g);
     if (d->lik == YAEP_LIK_ORDINAL) {
         int k = d->target_outcome == 0 ? 1 : d->target_outcome;
-        return g->hyper.cutpoint[k - 1] - yaep__link_inv(link, 1.0 - pp);
+        return g->hyperparams.cutpoint[k - 1] - yaep__link_inv(link, 1.0 - pp);
     }
     return yaep__link_inv(link, pp);
 }
@@ -7655,7 +7671,7 @@ static void yaep__opt_incumbent(yaep_gp* g) {
         double v = yaep__mean_score(g, &s, g->X + (size_t)i * nd);
         if (v > best) best = v;
     }
-    if (g->N == 0) best = yaep__opt_sign(g) * yaep__q_smooth(g, &s, g->hyper.mean, 0.0, 0.0);
+    if (g->N == 0) best = yaep__opt_sign(g) * yaep__q_smooth(g, &s, g->hyperparams.mean, 0.0, 0.0);
     g->opt_best = best;
 }
 
@@ -7920,9 +7936,9 @@ YAEP_API size_t yaep_memory_size(const yaep_desc* desc) {
 }
 
 static void yaep__hyper_defaults(yaep_gp* g) {
-    yaep_hyper* h = &g->hyper;
+    yaep_hyperparams* h = &g->hyperparams;
     const yaep_desc* d = &g->desc;
-    *h = d->hyper;
+    *h = d->hyperparams;
     for (int i = 0; i < d->n_dims; i++) {
         double q = 0.25 * yaep__ls_range(d, i);
         if (h->lengthscale[i] == 0.0) h->lengthscale[i] = q;
@@ -7936,7 +7952,7 @@ static void yaep__hyper_defaults(yaep_gp* g) {
         for (int i = 0; i < d->n_dims; i++)
             if (h->lengthscale_g[i] == 0.0)
                 h->lengthscale_g[i] = 0.25 * yaep__ls_range(d, i);
-        if (d->hyper.outputscale == 0.0) h->outputscale = yaep__ps_os_m(d);
+        if (d->hyperparams.outputscale == 0.0) h->outputscale = yaep__ps_os_m(d);
         if (h->mean == 0.0) h->mean = 0.5 * (d->lo[id] + d->hi[id]);
         if (h->outputscale_g == 0.0) h->outputscale_g = g->priors.outputscale_g.center;
         if (h->mean_g == 0.0)
@@ -8755,10 +8771,10 @@ YAEP_API int yaep_get_priors(const yaep_gp* g, yaep_priors* out) {
     return YAEP_OK;
 }
 
-YAEP_API int yaep_get_hyper(const yaep_gp* g, yaep_hyper* out) {
+YAEP_API int yaep_get_hyper(const yaep_gp* g, yaep_hyperparams* out) {
     if (!g || !g->open) return YAEP_ERR_CLOSED;
     if (!out) return YAEP_ERR_ARG;
-    *out = g->hyper;
+    *out = g->hyperparams;
     return YAEP_OK;
 }
 
@@ -8863,7 +8879,7 @@ static void yaep__put_tril(yaep__w* w, const yaep_real* A, int n, int ld,
         for (int j = 0; j <= i; j++) yaep__put_real(w, A[(size_t)i * ld + j], name);
 }
 
-static void yaep__put_hyper(yaep__w* w, const yaep_hyper* h, int nd, const char* name) {
+static void yaep__put_hyper(yaep__w* w, const yaep_hyperparams* h, int nd, const char* name) {
     yaep__put_f64s(w, h->lengthscale, nd, name);
     yaep__put_f64(w, h->outputscale, name);
     yaep__put_f64(w, h->mean, name);
@@ -8897,13 +8913,13 @@ static void yaep__put_desc(yaep__w* w, const yaep_desc* d) {
     yaep__put_i32(w, (int)d->link, "link");
     yaep__put_f64(w, d->guess, "guess");
     yaep__put_f64(w, d->lapse, "lapse");
-    yaep__put_hyper(w, &d->hyper, nd, "hyper");
+    yaep__put_hyper(w, &d->hyperparams, nd, "hyperparams");
     yaep__put(w, d->fit ? 1u : 0u, 1, "fit");
     yaep__put_i32(w, d->fit_every, "fit_every");
     yaep__put(w, d->no_hyper_prior ? 1u : 0u, 1, "no_hyper_prior");
     yaep__put_i32(w, d->refit_every, "refit_every");
-    yaep__put_hyper(w, &d->hyper_min, nd, "hyper_min");
-    yaep__put_hyper(w, &d->hyper_max, nd, "hyper_max");
+    yaep__put_hyper(w, &d->hyperparams_min, nd, "hyperparams_min");
+    yaep__put_hyper(w, &d->hyperparams_max, nd, "hyperparams_max");
     yaep__put_f64(w, d->jitter, "jitter");
     yaep__put_i32(w, (int)d->acq, "acq");
     yaep__put_f64(w, d->target_p, "target_p");
@@ -8973,7 +8989,7 @@ static void yaep__put_state(yaep__w* w, const yaep_gp* g) {
     yaep__put_f64(w, g->ps_tol, "ps_tol");
     yaep__put_f64(w, g->fit_delta, "fit_delta");
     yaep__put_i32(w, g->fit_conv, "fit_conv");
-    yaep__put_hyper(w, &g->hyper, nd, "hyper in force");
+    yaep__put_hyper(w, &g->hyperparams, nd, "hyperparams in force");
     /* The history, and the pending proposal at index N when there is one. */
     for (int i = 0; i <= n && i < ld; i++) {
         const yaep_trial* t = &g->history[i];
@@ -9110,7 +9126,7 @@ static void yaep__get_tril(yaep__r* r, yaep_real* A, int n, int ld, bool sym) {
         }
 }
 
-static void yaep__get_hyper(yaep__r* r, yaep_hyper* h, int nd) {
+static void yaep__get_hyper(yaep__r* r, yaep_hyperparams* h, int nd) {
     yaep__get_f64s(r, h->lengthscale, nd);
     h->outputscale = yaep__get_f64(r);
     h->mean = yaep__get_f64(r);
@@ -9204,7 +9220,7 @@ YAEP_API bool yaep_open_saved(yaep_gp* g, const yaep_desc* desc, const void* buf
     g->ps_tol = yaep__get_f64(&r);
     g->fit_delta = yaep__get_f64(&r);
     g->fit_conv = yaep__get_i32(&r);
-    yaep__get_hyper(&r, &g->hyper, nd);
+    yaep__get_hyper(&r, &g->hyperparams, nd);
     for (int i = 0; i <= n && i < ld; i++) {
         yaep_trial* t = &g->history[i];
         yaep__get_f64s(&r, t->x, nd);
@@ -9294,34 +9310,34 @@ static const yaep_param yaep__params_table[] = {
       "guess + lapse below 1", NULL },
     { "lapse", "f64", 0, 1, 0, "", "the gap below 1 at the top of p", NULL },
 
-    YAEP__HA("hyper.lengthscale", 0, 0,
+    YAEP__HA("hyperparams.lengthscale", 0, 0,
              "per dimension, fixed; 0 = a quarter of the dimension's range (4 levels for a "
              "categorical one), or fitted"),
-    YAEP__HP("hyper.outputscale", 0, 1,
+    YAEP__HP("hyperparams.outputscale", 0, 1,
              "the GP's variance, fixed; 0 = 1 (psychometric: (span / 4)^2 of the intensity "
              "axis), or fitted"),
-    { "hyper.mean", "f64", -YAEP__BIG, YAEP__BIG, 0, "",
+    { "hyperparams.mean", "f64", -YAEP__BIG, YAEP__BIG, 0, "",
       "the GP's constant mean, fixed; 0 = 0 (psychometric: the intensity axis's middle), "
       "or fitted", NULL },
-    YAEP__HA("hyper.lengthscale_b", 0, 0,
+    YAEP__HA("hyperparams.lengthscale_b", 0, 0,
              "the semiparametric slope GP's, per dimension; 0 = a quarter of the range, or fitted"),
-    YAEP__HP("hyper.outputscale_b", 0, 1,
+    YAEP__HP("hyperparams.outputscale_b", 0, 1,
              "the semiparametric slope GP's variance; 0 = 1, or fitted"),
-    { "hyper.cutpoint", "f64[]", -YAEP__BIG, YAEP__BIG, 0, "",
+    { "hyperparams.cutpoint", "f64[]", -YAEP__BIG, YAEP__BIG, 0, "",
       "ordinal: n_outcomes - 1 increasing cutpoints; 0 = 0, 1, 2, ..., or fitted with the "
       "first at 0", NULL },
-    YAEP__HP("hyper.noise_sd", 0, 0.1,
+    YAEP__HP("hyperparams.noise_sd", 0, 0.1,
              "gaussian: the noise sd, in the outcome's units; 0 = 0.1, or fitted"),
-    YAEP__HA("hyper.lengthscale_g", 0, 0,
+    YAEP__HA("hyperparams.lengthscale_g", 0, 0,
              "psychometric: the log-slope GP's, per dimension; 0 = a quarter of the range, or "
              "fitted"),
-    YAEP__HP("hyper.outputscale_g", 0, 0.3,
+    YAEP__HP("hyperparams.outputscale_g", 0, 0.3,
              "psychometric: the log-slope GP's variance; 0 = priors.outputscale_g.center, or "
              "fitted"),
-    { "hyper.mean_g", "f64", -YAEP__BIG, YAEP__BIG, 0, "",
+    { "hyperparams.mean_g", "f64", -YAEP__BIG, YAEP__BIG, 0, "",
       "psychometric: the mean log-slope; 0 = log(1 / (priors.mean_g.center x span)), or "
       "fitted", NULL },
-    { "fit", "bool", 0, 1, 0, "", "fit the hyper fields that are 0 (maximum a posteriori)", NULL },
+    { "fit", "bool", 0, 1, 0, "", "fit the hyperparams fields that are 0 (maximum a posteriori)", NULL },
     { "fit_every", "i32", 0, YAEP__INT, 0, "",
       "trials between fits after n_init; 0 = only when the program calls yaep_fit()", NULL },
     { "no_hyper_prior", "bool", 0, 1, 0, "",
@@ -9330,33 +9346,33 @@ static const yaep_param yaep__params_table[] = {
       "1 = an exact refit at every update; k > 1 = a rank-one update a trial and an exact "
       "refit every k (bernoulli and ordinal)", NULL },
 
-    YAEP__HA("hyper_min.lengthscale", 0, 0, "the fit's lower bound; 0 = 0.05 of the range"),
-    YAEP__HP("hyper_min.outputscale", 0, 0.1,
+    YAEP__HA("hyperparams_min.lengthscale", 0, 0, "the fit's lower bound; 0 = 0.05 of the range"),
+    YAEP__HP("hyperparams_min.outputscale", 0, 0.1,
              "the fit's lower bound; 0 = 0.1 (psychometric: 0.1 (span / 4)^2)"),
-    { "hyper_min.mean", "f64", -YAEP__BIG, YAEP__BIG, -5, "",
+    { "hyperparams_min.mean", "f64", -YAEP__BIG, YAEP__BIG, -5, "",
       "the fit's lower bound; 0 = -5 (psychometric: the intensity axis's lo)", NULL },
-    YAEP__HA("hyper_min.lengthscale_b", 0, 0, "the fit's lower bound; 0 = 0.05 of the range"),
-    YAEP__HP("hyper_min.outputscale_b", 0, 0.1, "the fit's lower bound"),
-    YAEP__HA("hyper_min.cutpoint", 0, 0.01,
+    YAEP__HA("hyperparams_min.lengthscale_b", 0, 0, "the fit's lower bound; 0 = 0.05 of the range"),
+    YAEP__HP("hyperparams_min.outputscale_b", 0, 0.1, "the fit's lower bound"),
+    YAEP__HA("hyperparams_min.cutpoint", 0, 0.01,
              "the fit's lower bound on the gap below cutpoint m (entry 0 unused)"),
-    YAEP__HP("hyper_min.noise_sd", 0, 1e-3, "the fit's lower bound"),
-    YAEP__HA("hyper_min.lengthscale_g", 0, 0, "the fit's lower bound; 0 = 0.05 of the range"),
-    YAEP__HP("hyper_min.outputscale_g", 0, 0.01, "the fit's lower bound"),
-    { "hyper_min.mean_g", "f64", -YAEP__BIG, YAEP__BIG, 0, "",
+    YAEP__HP("hyperparams_min.noise_sd", 0, 1e-3, "the fit's lower bound"),
+    YAEP__HA("hyperparams_min.lengthscale_g", 0, 0, "the fit's lower bound; 0 = 0.05 of the range"),
+    YAEP__HP("hyperparams_min.outputscale_g", 0, 0.01, "the fit's lower bound"),
+    { "hyperparams_min.mean_g", "f64", -YAEP__BIG, YAEP__BIG, 0, "",
       "the fit's lower bound; 0 = log(0.25 / span)", NULL },
-    YAEP__HA("hyper_max.lengthscale", 0, 0, "the fit's upper bound; 0 = 2 ranges"),
-    YAEP__HP("hyper_max.outputscale", 0, 10,
+    YAEP__HA("hyperparams_max.lengthscale", 0, 0, "the fit's upper bound; 0 = 2 ranges"),
+    YAEP__HP("hyperparams_max.outputscale", 0, 10,
              "the fit's upper bound; 0 = 10 (psychometric: 10 (span / 4)^2)"),
-    { "hyper_max.mean", "f64", -YAEP__BIG, YAEP__BIG, 5, "",
+    { "hyperparams_max.mean", "f64", -YAEP__BIG, YAEP__BIG, 5, "",
       "the fit's upper bound; 0 = 5 (psychometric: the intensity axis's hi)", NULL },
-    YAEP__HA("hyper_max.lengthscale_b", 0, 0, "the fit's upper bound; 0 = 2 ranges"),
-    YAEP__HP("hyper_max.outputscale_b", 0, 10, "the fit's upper bound"),
-    YAEP__HA("hyper_max.cutpoint", 0, 10,
+    YAEP__HA("hyperparams_max.lengthscale_b", 0, 0, "the fit's upper bound; 0 = 2 ranges"),
+    YAEP__HP("hyperparams_max.outputscale_b", 0, 10, "the fit's upper bound"),
+    YAEP__HA("hyperparams_max.cutpoint", 0, 10,
              "the fit's upper bound on the gap below cutpoint m (entry 0 unused)"),
-    YAEP__HP("hyper_max.noise_sd", 0, 10, "the fit's upper bound"),
-    YAEP__HA("hyper_max.lengthscale_g", 0, 0, "the fit's upper bound; 0 = 2 ranges"),
-    YAEP__HP("hyper_max.outputscale_g", 0, 10, "the fit's upper bound"),
-    { "hyper_max.mean_g", "f64", -YAEP__BIG, YAEP__BIG, 0, "",
+    YAEP__HP("hyperparams_max.noise_sd", 0, 10, "the fit's upper bound"),
+    YAEP__HA("hyperparams_max.lengthscale_g", 0, 0, "the fit's upper bound; 0 = 2 ranges"),
+    YAEP__HP("hyperparams_max.outputscale_g", 0, 10, "the fit's upper bound"),
+    { "hyperparams_max.mean_g", "f64", -YAEP__BIG, YAEP__BIG, 0, "",
       "the fit's upper bound; 0 = log(1 / (priors.mean_g.ceiling x span))", NULL },
 
     YAEP__HP("jitter", 0, (sizeof(yaep_real) == sizeof(double) ? 1e-6 : 1e-4),
@@ -9411,7 +9427,7 @@ static const yaep_param yaep__params_table[] = {
     { "priors.outputscale_b.sd", "f64", -YAEP__BIG, YAEP__BIG, 0.7, "",
       "the sd of its logarithm; negative = off", NULL },
     YAEP__HP("priors.outputscale_g.center", 0, 0.3,
-             "the log-slope GP's output scale prior's median, and hyper.outputscale_g's default"),
+             "the log-slope GP's output scale prior's median, and hyperparams.outputscale_g's default"),
     { "priors.outputscale_g.sd", "f64", -YAEP__BIG, YAEP__BIG, 0.7, "",
       "the sd of its logarithm; negative = off", NULL },
     { "priors.mean.center", "f64", -YAEP__BIG, YAEP__BIG, 0, "",
@@ -9502,7 +9518,7 @@ static void yaep__async_publish(yaep_async* a, uint32_t seq, int update_rc) {
     s.threshold_rc = yaep_threshold(g, ctx, a->target, &s.threshold,
                                      &s.threshold_lo, &s.threshold_hi);
     s.multi_cross = yaep_threshold_multi_cross(g);
-    (void)yaep_get_hyper(g, &s.hyper);
+    (void)yaep_get_hyper(g, &s.hyperparams);
     s.log_marginal = yaep_log_marginal(g);
     s.numeric = a->numeric;
     s.fitting = a->fit_in_idle && a->fit_active;
@@ -9537,7 +9553,7 @@ static bool yaep__async_on_idle(void* ctx) {
     rc = yaep_fit_step(a->gp);
     if (rc <= 0) a->fit_active = false;
     yrt_pump_lock(&a->pump);
-    (void)yaep_get_hyper(a->gp, &a->snap.hyper);
+    (void)yaep_get_hyper(a->gp, &a->snap.hyperparams);
     a->snap.log_marginal = yaep_log_marginal(a->gp);
     a->snap.fitting = a->fit_active;
     yrt_pump_unlock(&a->pump);

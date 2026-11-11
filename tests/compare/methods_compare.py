@@ -277,7 +277,7 @@ def run_gp2d(fd, rep, model, acq, n_trials=N2D, every=5, grid=(11, 21), refine=2
             band = (fd.band_mae(np.frombuffer(g.predict_p_many(fd.xs_f)))
                     if n in fd.marks else float("nan"))
             rows.append((n,) + fd.score(mp) + (1000.0 * spent / n, band))
-    return rows, {"numeric": numeric, "hyper": g.hyper(), "log_marginal": g.log_marginal}
+    return rows, {"numeric": numeric, "hyperparams": g.hyperparams(), "log_marginal": g.log_marginal}
 
 
 # --- 1-D problems: Watson 2017 ------------------------------------------------
@@ -1099,7 +1099,7 @@ def build_truth_yaep(x, y, max_n=None):
         g.fit()
         if abs(g.log_marginal - before) < 1e-4:
             break
-    h = g.hyper()
+    h = g.hyperparams()
     X = np.asarray([r["x"] for r in g.history()], float)
     mu_x = np.frombuffer(g.predict_f_many(X)[0]).copy()
     t = _expansion(X, mu_x, h["mean"], h["outputscale"], h["lengthscale"][:6], jitter=1e-6)
@@ -1241,7 +1241,7 @@ def run_csf6(rep, model, acq, n_trials, cache, truth_kind, n_cand=1000, fit_ever
         n = t + 1
         if n % CSF6_EVERY == 0:
             rows.append((n,) + csf.score(_predict_chunked(g, csf.all_x)) + (1000.0 * spent / n,))
-    return rows, {"numeric": numeric, "hyper": g.hyper()}
+    return rows, {"numeric": numeric, "hyperparams": g.hyperparams()}
 
 
 # --- the job table ------------------------------------------------------------

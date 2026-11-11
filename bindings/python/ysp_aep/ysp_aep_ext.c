@@ -417,16 +417,16 @@ static const char* const hyper_keys[] = {
     "cutpoint", "noise_sd", "lengthscale_g", "outputscale_g", "mean_g", NULL
 };
 
-static int gp_hyper_field(yaep_hyper* h, const char* key, PyObject* v) {
+static int gp_hyper_field(yaep_hyperparams* h, const char* key, PyObject* v) {
     if (v == Py_None) return 0;
     if (!strcmp(key, "lengthscale"))
-        return gp_small_doubles(v, h->lengthscale, YAEP_MAX_DIMS, "hyper.lengthscale") < 0 ? -1 : 0;
+        return gp_small_doubles(v, h->lengthscale, YAEP_MAX_DIMS, "hyperparams.lengthscale") < 0 ? -1 : 0;
     if (!strcmp(key, "lengthscale_b"))
-        return gp_small_doubles(v, h->lengthscale_b, YAEP_MAX_DIMS, "hyper.lengthscale_b") < 0 ? -1 : 0;
+        return gp_small_doubles(v, h->lengthscale_b, YAEP_MAX_DIMS, "hyperparams.lengthscale_b") < 0 ? -1 : 0;
     if (!strcmp(key, "lengthscale_g"))
-        return gp_small_doubles(v, h->lengthscale_g, YAEP_MAX_DIMS, "hyper.lengthscale_g") < 0 ? -1 : 0;
+        return gp_small_doubles(v, h->lengthscale_g, YAEP_MAX_DIMS, "hyperparams.lengthscale_g") < 0 ? -1 : 0;
     if (!strcmp(key, "cutpoint"))
-        return gp_small_doubles(v, h->cutpoint, YAEP_MAX_OUTCOMES - 1, "hyper.cutpoint") < 0 ? -1 : 0;
+        return gp_small_doubles(v, h->cutpoint, YAEP_MAX_OUTCOMES - 1, "hyperparams.cutpoint") < 0 ? -1 : 0;
     if (!strcmp(key, "outputscale"))   return gp_as_double(v, &h->outputscale);
     if (!strcmp(key, "mean"))          return gp_as_double(v, &h->mean);
     if (!strcmp(key, "outputscale_b")) return gp_as_double(v, &h->outputscale_b);
@@ -436,10 +436,10 @@ static int gp_hyper_field(yaep_hyper* h, const char* key, PyObject* v) {
     return -1;
 }
 
-/* A dict with the yaep_hyper field names, or any object carrying them as
+/* A dict with the yaep_hyperparams field names, or any object carrying them as
  * attributes (ysp.aep.Hyper, a dataclass, a SimpleNamespace). A missing or
  * None field stays 0, which the header reads as "default, or fit". */
-static int gp_parse_hyper(PyObject* obj, yaep_hyper* h, const char* name) {
+static int gp_parse_hyper(PyObject* obj, yaep_hyperparams* h, const char* name) {
     memset(h, 0, sizeof(*h));
     if (obj == Py_None) return 0;
     if (PyDict_Check(obj)) {
@@ -475,7 +475,7 @@ static int gp_parse_hyper(PyObject* obj, yaep_hyper* h, const char* name) {
     return 0;
 }
 
-static PyObject* gp_hyper_dict(const yaep_hyper* h, const yaep_desc* d) {
+static PyObject* gp_hyper_dict(const yaep_hyperparams* h, const yaep_desc* d) {
     int ncut = d->lik == YAEP_LIK_ORDINAL ? d->n_outcomes - 1 : 0;
     PyObject* ls = gp_list(h->lengthscale, d->n_dims);
     PyObject* lsb = gp_list(h->lengthscale_b, d->n_dims);
@@ -772,13 +772,13 @@ static int gp_parse_desc(PyObject* kw, yaep_desc* d, double** cand, PyObject** r
         else if (KEY("link"))           { rc = gp_enum(v, link_names, "link", &tmp); d->link = (yaep_link)tmp; }
         else if (KEY("guess"))          rc = gp_as_double(v, &d->guess);
         else if (KEY("lapse"))          rc = gp_as_double(v, &d->lapse);
-        else if (KEY("hyper"))          rc = gp_parse_hyper(v, &d->hyper, "hyper");
+        else if (KEY("hyperparams")) rc = gp_parse_hyper(v, &d->hyperparams, "hyperparams");
         else if (KEY("fit"))            rc = gp_bool(v, &d->fit);
         else if (KEY("fit_every"))      rc = gp_int(v, &d->fit_every);
         else if (KEY("no_hyper_prior")) rc = gp_bool(v, &d->no_hyper_prior);
         else if (KEY("refit_every"))    rc = gp_int(v, &d->refit_every);
-        else if (KEY("hyper_min"))      rc = gp_parse_hyper(v, &d->hyper_min, "hyper_min");
-        else if (KEY("hyper_max"))      rc = gp_parse_hyper(v, &d->hyper_max, "hyper_max");
+        else if (KEY("hyperparams_min")) rc = gp_parse_hyper(v, &d->hyperparams_min, "hyperparams_min");
+        else if (KEY("hyperparams_max")) rc = gp_parse_hyper(v, &d->hyperparams_max, "hyperparams_max");
         else if (KEY("jitter"))         rc = gp_as_double(v, &d->jitter);
         else if (KEY("acq"))            { rc = gp_enum(v, acq_names, "acq", &tmp); d->acq = (yaep_acq)tmp; }
         else if (KEY("target_p"))       rc = gp_as_double(v, &d->target_p);
@@ -1355,12 +1355,12 @@ static PyObject* GP_refit(PyObject* self, PyObject* Py_UNUSED(ignored)) {
 
 static PyObject* GP_hyper(PyObject* self, PyObject* Py_UNUSED(ignored)) {
     GPObject* o = AS_GP(self);
-    yaep_hyper h;
+    yaep_hyperparams h;
     int rc;
     if (gp_ready(o) < 0) return NULL;
     memset(&h, 0, sizeof(h));
     rc = yaep_get_hyper(&o->g, &h);
-    if (rc < 0) return gp_fail(rc, "hyper");
+    if (rc < 0) return gp_fail(rc, "hyperparams");
     return gp_hyper_dict(&h, &o->g.desc);
 }
 
@@ -1563,8 +1563,8 @@ static PyMethodDef GP_methods[] = {
       "help. Releases the GIL." },
     { "refit", GP_refit, METH_NOARGS,
       "refit(): the exact Newton refit refit_every skips. Releases the GIL." },
-    { "hyper", GP_hyper, METH_NOARGS,
-      "hyper() -> dict: the hyperparameters in force." },
+    { "hyperparams", GP_hyper, METH_NOARGS,
+      "hyperparams() -> dict: the hyperparameters in force." },
     { "candidate", GP_candidate, METH_O, "candidate(i) -> list: candidate i." },
     { "history", GP_history, METH_NOARGS,
       "history() -> list[dict]: every trial as {'x', 'y', 'proposed', 'init'}." },
@@ -1611,8 +1611,8 @@ static PyMethodDef GP_methods[] = {
 static PyType_Slot GP_slots[] = {
     { Py_tp_doc, (void*)"GP(**desc): a Gaussian-process adaptive run. The keywords "
                         "mirror yaep_desc: lo, hi, intensity_dim, lik, n_outcomes, "
-                        "kernel, link, guess, lapse, hyper, fit, fit_every, "
-                        "no_hyper_prior, refit_every, hyper_min, hyper_max, jitter, "
+                        "kernel, link, guess, lapse, hyperparams, fit, fit_every, "
+                        "no_hyper_prior, refit_every, hyperparams_min, hyperparams_max, jitter, "
                         "acq, target_p, target_value, target_outcome, acq_beta, "
                         "n_init, rng, candidates, n_candidates, grid, stop_trials, "
                         "stop_threshold_sd, stop_context, max_trials, refine_steps, model, priors, "
@@ -1641,7 +1641,7 @@ static PyType_Spec GP_spec = {
 static PyObject* gp_snapshot(const yaep_snapshot* s, const yaep_desc* d) {
     PyObject *kw, *x, *h, *out;
     x = gp_list(s->x, d->n_dims);
-    h = gp_hyper_dict(&s->hyper, d);
+    h = gp_hyper_dict(&s->hyperparams, d);
     if (!x || !h) { Py_XDECREF(x); Py_XDECREF(h); return NULL; }
     kw = Py_BuildValue("{s:k,s:N,s:i,s:i,s:i,s:O,s:i,s:d,s:d,s:d,s:i,s:O,s:N,s:d,s:i,s:O}",
                        "seq", (unsigned long)s->seq, "x", x, "proposed", s->proposed,
@@ -1650,7 +1650,7 @@ static PyObject* gp_snapshot(const yaep_snapshot* s, const yaep_desc* d) {
                        "threshold", s->threshold, "threshold_lo", s->threshold_lo,
                        "threshold_hi", s->threshold_hi, "threshold_rc", s->threshold_rc,
                        "multi_cross", s->multi_cross ? Py_True : Py_False,
-                       "hyper", h, "log_marginal", s->log_marginal,
+                       "hyperparams", h, "log_marginal", s->log_marginal,
                        "numeric", s->numeric,
                        "fitting", s->fitting ? Py_True : Py_False);
     if (!kw) return NULL;
@@ -2046,19 +2046,19 @@ PyMODINIT_FUNC PyInit_aep(void) {
         "Hyper(lengthscale=[...], outputscale=0, mean=0, lengthscale_b=[...], "
         "outputscale_b=0, cutpoint=[...], noise_sd=0, lengthscale_g=[...], "
         "outputscale_g=0, mean_g=0): hyperparameters for "
-        "GP(hyper=...). A zero or missing field is a default, or fitted when "
+        "GP(hyperparams=...). A zero or missing field is a default, or fitted when "
         "fit=True. A dict with the same keys works too.");
     if (!HyperType) goto fail;
     SnapshotType = gp_namespace_type(m, "Snapshot",
         "What Async publishes after every response: seq, x, proposed, "
         "update_rc, n_trials, done, stop, threshold, threshold_lo, "
-        "threshold_hi, threshold_rc, multi_cross, hyper, log_marginal, "
+        "threshold_hi, threshold_rc, multi_cross, hyperparams, log_marginal, "
         "numeric, fitting.");
     if (!SnapshotType) goto fail;
 
     /* From the compiled header, not a copy: the drift test compares it with
      * pyproject.toml. */
-    if (PyModule_AddStringConstant(m, "__version__", YAEP_VERSION_STRING ".1") < 0) goto fail;   /* .1: the CPython 3.10 floor (2026-10-27) */
+    if (PyModule_AddStringConstant(m, "__version__", YAEP_VERSION_STRING) < 0) goto fail;
 
 #define C(name, v) if (PyModule_AddIntConstant(m, name, (long)(v)) < 0) goto fail
     C("LIK_BERNOULLI", YAEP_LIK_BERNOULLI);
