@@ -1,4 +1,4 @@
-/* ysp/trials.h - v0.8.0 - public domain single-header trial sequencing library
+/* ysp/trials.h - v0.8.1 - public domain single-header trial sequencing library
  *
  *   The layer above the adaptive methods: which trial comes next, and what
  *   happened on it. Conditions and repetitions (the method of constant
@@ -678,7 +678,9 @@
  *     a function of the seed and the trial indices 0 to i only, so a
  *     re-queue or an outcome moves nothing; next() keeps the last point,
  *     and a snapshot (format 6) stores it, so open_saved() continues from
- *     it. cos, sin and atan2 are the C library's: the last bit can differ
+ *     it, after it checks the from point (the start at trial 0, else in
+ *     the box) and that the point is a step from it within 8 epsilons of
+ *     the magnitudes (v0.8.1). cos, sin and atan2 are the C library's: the last bit can differ
  *     between libraries. The box must hold (x0, y0) and step must be
  *     above 0 and below half the box's diagonal. The data line has five
  *     columns in its place, NAME_x, NAME_y, NAME_from_x, NAME_from_y and
@@ -1197,6 +1199,12 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.8.1 - the review of v0.8.0: the box's diagonal by hypot() (a box of
+ *          1e200 took any step, one of 1e-200 none); open_saved() checks
+ *          a walk's from point (the start at trial 0, else in the box)
+ *          and that the point is a step from it; next() and restore()
+ *          keep a failed walk's message; NAME_deg is in (-180, 180] with
+ *          no -0. No struct changes.
  *   v0.8.0 - a walk (gap G15 of the experiment format, D30): desc.vars[]
  *          of ytr_var_walk2d(), a point `step` from the last trial's
  *          inside a box, from a sub-stream of the trial's stream;
@@ -1414,6 +1422,9 @@
  *          - ytr_condition_at() indexes the practice slots too.
  *   v0.0 - specification. Declarations and the manual, no implementation.
  *
+ *   STATUS: v0.8.1, 2026-11-11, the Linux desktop (Debian 12, GCC 12.2):
+ *   test_walk_review as C and C++ under ASan and UBSan; mutants v081-01
+ *   to v081-07 killed.
  *   STATUS: v0.8.0, 2026-11-11, the Linux desktop (Debian 12, GCC 12.2):
  *   test_walk against a second implementation, as C and C++ under ASan
  *   and UBSan; 5,000,000 fuzz inputs (the self-driven mode); mutants
@@ -1642,8 +1653,8 @@
  * string is the three numbers, and the test asserts that it stays so. */
 #define YTR_VERSION_MAJOR 0
 #define YTR_VERSION_MINOR 8
-#define YTR_VERSION_PATCH 0
-#define YTR_VERSION_STRING "0.8.0"
+#define YTR_VERSION_PATCH 1
+#define YTR_VERSION_STRING "0.8.1"
 
 /* fsync() and fileno() for YTR_FLUSH_SYNC under -std=c11: the feature-test
  * macro of ysp/rt.h and ysp/pack.h, set before the first system header
@@ -4523,7 +4534,9 @@ static bool ytr__walk_setup(ytr_trials* t, const ytr_desc* d, int j) {
                          s->x0, s->y0);
     dx = s->hi_x - s->lo_x;
     dy = s->hi_y - s->lo_y;
-    if (!(s->step > 0) || !(2.0 * s->step < sqrt(dx * dx + dy * dy)))
+    /* hypot(): the diagonal of a box of 1e200 or of 1e-200 neither
+     * overflows nor underflows */
+    if (!(s->step > 0) || !(2.0 * s->step < hypot(dx, dy)))
         return ytr__fail(t, "desc.vars[%d] (%s): step must be above 0 and below half the box's diagonal", j,
                          s->name);
     memcpy(q->name, s->name, strlen(s->name) + 1);
@@ -5765,6 +5778,10 @@ YTR_API int ytr_var_walk(const ytr_trials* t, int i, int j, double out[5]) {
     out[2] = p[2];
     out[3] = p[3];
     out[4] = atan2(-(p[1] - p[3]), p[0] - p[2]) * (180.0 / 3.14159265358979323846);
+    /* the documented (-180, 180]: atan2 gives -180 for a point straight
+     * left with -0 in y, and -0 for one straight right */
+    if (out[4] <= -180.0) out[4] += 360.0;
+    if (out[4] == 0.0) out[4] = 0.0;
     return 0;
 }
 
@@ -7582,6 +7599,22 @@ YTR_API bool ytr_open_saved(ytr_trials* t, const ytr_desc* desc, const void* buf
                 (t->walk_at[j] >= 0 && !(t->walk_pt[j][0] >= bx[1] && t->walk_pt[j][0] <= bx[2] &&
                                           t->walk_pt[j][1] >= bx[3] && t->walk_pt[j][1] <= bx[4])))
                 r.bad = true;
+            if (t->walk_at[j] >= 0 && !r.bad) {
+                /* its from point: the start at trial 0, else inside the box;
+                 * and the point a step from it. The point came from from +
+                 * step (cos a, -sin a) in double with the C library's cos and
+                 * sin (1 ulp), so the distance is step within a few ulps of
+                 * the largest magnitude; 8 epsilons of it leaves room and
+                 * refuses any other point. A walk is not recomputed: on
+                 * another C library its last bit can differ (A WALK). */
+                const double* q = t->walk_pt[j];
+                double mag = bx[0] + fabs(q[0]) + fabs(q[1]) + fabs(q[2]) + fabs(q[3]);
+                if (t->walk_at[j] == 0 ? !(q[2] == bx[5] && q[3] == bx[6])
+                                       : !(q[2] >= bx[1] && q[2] <= bx[2] && q[3] >= bx[3] && q[3] <= bx[4]))
+                    r.bad = true;
+                else if (!(fabs(hypot(q[0] - q[2], q[1] - q[3]) - bx[0]) <= 8.0 * 2.220446049250313e-16 * mag))
+                    r.bad = true;
+            }
         }
     }
     if (r.bad)
@@ -7631,14 +7664,17 @@ static int ytr__note(ytr_trials* t, int rc, int floor, const char* what) {
     return rc;
 }
 
-YTR_API int ytr_next(ytr_trials* t, ytr_trial_info* info) {
-    int rc = ytr__next(t, info);
+/* A failed walk's message names the walk: next() and restore() keep it. */
+static int ytr__note_walk(ytr_trials* t, int rc, int floor, const char* what) {
     if (t && t->walk_failed) {
-        /* the walk's own message names it; keep it */
         t->walk_failed = false;
         return rc;
     }
-    return ytr__note(t, rc, YTR_DONE, "ytr_next");
+    return ytr__note(t, rc, floor, what);
+}
+
+YTR_API int ytr_next(ytr_trials* t, ytr_trial_info* info) {
+    return ytr__note_walk(t, ytr__next(t, info), YTR_DONE, "ytr_next");
 }
 YTR_API int ytr_update(ytr_trials* t, int outcome, const void* rec) {
     return ytr__note(t, ytr__update(t, outcome, rec), 0, "ytr_update");
@@ -7650,7 +7686,7 @@ YTR_API int ytr_requeue(ytr_trials* t) {
     return ytr__note(t, ytr__requeue(t), 0, "ytr_requeue");
 }
 YTR_API int ytr_restore(ytr_trials* t, const int* outcomes, const void* records, int n) {
-    return ytr__note(t, ytr__restore(t, outcomes, records, n), 0, "ytr_restore");
+    return ytr__note_walk(t, ytr__restore(t, outcomes, records, n), 0, "ytr_restore");
 }
 
 /* --- data file (v0.4.0) ------------------------------------------------ */

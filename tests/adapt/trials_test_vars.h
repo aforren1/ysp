@@ -693,13 +693,17 @@ static void test_walk(void) {
     for (i = 0; i < 3; i++) { ytr_next(&g_u, NULL); ytr_update(&g_u, 1, NULL); }
     len = ytr_save(&g_u, snap, sizeof(snap));
     {
-        double big = 11;
-        unsigned char keep[8];
-        memcpy(keep, snap + len - 32, 8);
+        double big = 17, five = 5, zero = 0;
+        unsigned char keep[32];
+        memcpy(keep, snap + len - 32, 32);
+        /* a step from an in-box (5, 0), but outside the box */
         memcpy(snap + len - 32, &big, 8);         /* x of the last point */
+        memcpy(snap + len - 24, &zero, 8);
+        memcpy(snap + len - 16, &five, 8);
+        memcpy(snap + len - 8, &zero, 8);
         CHECK(!ytr_open_saved(&g_u, &d, snap, (size_t)len));
         CHECK_HAS(ytr_error(&g_u), "corrupt or truncated");
-        memcpy(snap + len - 32, keep, 8);
+        memcpy(snap + len - 32, keep, 32);
         snap[len - 36]++;                          /* walk_at */
         CHECK(!ytr_open_saved(&g_u, &d, snap, (size_t)len));
         snap[len - 36]--;
@@ -809,6 +813,99 @@ static void test_walk(void) {
     ytr_close(&g_u);
 }
 
+/* v0.8.1, the review of v0.8.0: the box's diagonal by hypot(); a
+ * snapshot's from point checked; restore() keeps a walk's message; deg in
+ * (-180, 180] with no -0. */
+static void wt_put(unsigned char* p, double v) { memcpy(p, &v, 8); }
+
+static void test_walk_review(void) {
+    static unsigned char snap[1 << 16];
+    static char err[256];
+    ytr_desc d;
+    uint64_t s = 5, s2;
+    double v[5];
+    int i, len;
+    (void)err;
+    /* 5: a box of 1e200 with a step of 1e250 is refused at open; a box of
+     * 1e-200 with a step of 1e-201 runs */
+    wt_desc(&d, &s);
+    d.vars[1] = ytr_var_walk2d("aim", 1e250, 0, 1e200, 0, 1e200, 0, 0);
+    CHECK(!ytr_open(&g_t, &d));
+    CHECK_HAS(ytr_error(&g_t), "below half the box's diagonal");
+    d.vars[1] = ytr_var_walk2d("aim", 1e-201, 0, 1e-200, 0, 1e-200, 0, 0);
+    CHECK(ytr_open(&g_t, &d));
+    for (i = 0; i < 5; i++) {
+        CHECK(ytr_next(&g_t, NULL) >= 0);
+        CHECK_I(ytr_var_walk(&g_t, i, 1, v), 0);
+        CHECK(v[0] >= 0 && v[0] <= 1e-200 && v[1] >= 0 && v[1] <= 1e-200);
+        ytr_update(&g_t, 1, NULL);
+    }
+    /* 6: a snapshot's from point outside the box, or a point not a step
+     * from it, is corrupt; a hand-made pair a step apart loads */
+    wt_desc(&d, &s);
+    d.vars[1] = ytr_var_walk2d("aim", 12, -20, 20, -20, 20, 0, 0);
+    s = 5;
+    CHECK(ytr_open(&g_u, &d));
+    for (i = 0; i < 4; i++) { ytr_next(&g_u, NULL); ytr_update(&g_u, 1, NULL); }
+    len = ytr_save(&g_u, snap, sizeof(snap));
+    s2 = s;
+    d.rng_ctx = &s2;
+    CHECK(ytr_open_saved(&g_t, &d, snap, (size_t)len));
+    {
+        unsigned char keep[32];
+        memcpy(keep, snap + len - 32, 32);
+        wt_put(snap + len - 16, 1e300);                          /* from_x */
+        CHECK(!ytr_open_saved(&g_t, &d, snap, (size_t)len));
+        CHECK_HAS(ytr_error(&g_t), "corrupt or truncated");
+        memcpy(snap + len - 32, keep, 32);
+        /* a point in the box a step from a from point outside it */
+        wt_put(snap + len - 32, 13.0); wt_put(snap + len - 24, 0.0);
+        wt_put(snap + len - 16, 25.0); wt_put(snap + len - 8, 0.0);
+        CHECK(!ytr_open_saved(&g_t, &d, snap, (size_t)len));
+        memcpy(snap + len - 32, keep, 32);
+        wt_put(snap + len - 32, 3.0);                            /* x: in the box, not a step away */
+        CHECK(!ytr_open_saved(&g_t, &d, snap, (size_t)len));
+        /* straight left of (5, 0): 180, not -180 */
+        wt_put(snap + len - 32, -7.0); wt_put(snap + len - 24, 0.0);
+        wt_put(snap + len - 16, 5.0); wt_put(snap + len - 8, 0.0);
+        CHECK(ytr_open_saved(&g_t, &d, snap, (size_t)len));
+        CHECK_I(ytr_var_walk(&g_t, 3, 1, v), 0);
+        CHECK(v[4] == 180.0);
+        /* straight right: 0, not -0 */
+        wt_put(snap + len - 32, 7.0); wt_put(snap + len - 16, -5.0);
+        CHECK(ytr_open_saved(&g_t, &d, snap, (size_t)len));
+        CHECK_I(ytr_var_walk(&g_t, 3, 1, v), 0);
+        CHECK(v[4] == 0.0 && !signbit(v[4]));
+        d.rng_ctx = &s;
+    }
+    /* trial 0's from point is the start, exactly */
+    s = 5;
+    CHECK(ytr_open(&g_u, &d));
+    ytr_next(&g_u, NULL);
+    ytr_update(&g_u, 1, NULL);
+    len = ytr_save(&g_u, snap, sizeof(snap));
+    s2 = s;
+    d.rng_ctx = &s2;
+    CHECK(ytr_open_saved(&g_t, &d, snap, (size_t)len));
+    wt_put(snap + len - 32, 13.0); wt_put(snap + len - 24, 0.0);
+    wt_put(snap + len - 16, 1.0); wt_put(snap + len - 8, 0.0);
+    CHECK(!ytr_open_saved(&g_t, &d, snap, (size_t)len));
+    d.rng_ctx = &s;
+    /* 7: restore() through a walk that fails keeps the walk's message, and
+     * the next call's own message is written again */
+    wt_desc(&d, &s);
+    d.vars[1] = ytr_var_walk2d("aim", 1, -10, 10, 0, 0, 0, 0);
+    CHECK(ytr_open(&g_t, &d));
+    {
+        int outc[3] = { 1, 1, 1 };
+        CHECK_I(ytr_restore(&g_t, outc, NULL, 3), YTR_ERR_ARG);
+        CHECK_HAS(ytr_error(&g_t), "walk 'aim': no point inside the box");
+        CHECK(!g_t.walk_failed);
+    }
+    ytr_close(&g_t);
+    ytr_close(&g_u);
+}
+
 static void test_vars(void) {
     test_vars_stream();
     test_vars_replay();
@@ -818,4 +915,5 @@ static void test_vars(void) {
     test_display_rate();
     test_vars_data();
     test_walk();
+    test_walk_review();
 }

@@ -1169,6 +1169,17 @@ does not. The snapshot stores the point, so a resume on another library
 continues from the same point. A session without a walk writes the same
 data lines and snapshot (format 5 or below) as v0.7.1.
 
+v0.8.1, the review: the box's diagonal is `hypot()` (squares overflowed
+at a box of 1e200 and underflowed at 1e-200); `ytr_open_saved()` checks
+the stored from point (the start at trial 0, else in the box) and that the
+point is a step from it, within 8 epsilons of the sum of the magnitudes (a
+point is from + step (cos a, -sin a) with the C library's cos and sin,
+within an ulp each), and does not walk again from trial 0, which on
+another C library could differ in the last bit; `ytr_restore()` keeps a
+failed walk's message as `ytr_next()` does; `deg` is folded into
+(-180, 180] and -0 written as 0 (atan2 gives -180 and -0 on the
+horizontal). Tests: `test_walk_review()`; mutants v081-01 to v081-07.
+
 `ytr_var_desc` gains `kind` and seven doubles: a layout change, hence the
 minor version. `ytr_var_choice()` zeroes them; a zeroed desc is a choice.
 The Python binding `ysp-trials` 0.8.0 embeds the header with no binding

@@ -435,8 +435,8 @@ id = "conv-02"
 name = "YTR_DONE written as a failure"
 test = "trials"
 why = "ytr_next() returns YTR_DONE (-1) at the end of every session; a message there would bury the real last failure."
-find = 'return ytr__note(t, rc, YTR_DONE, "ytr_next");'
-replace = 'return ytr__note(t, rc, 0, "ytr_next");'
+find = 'return ytr__note_walk(t, ytr__next(t, info), YTR_DONE, "ytr_next");'
+replace = 'return ytr__note_walk(t, ytr__next(t, info), 0, "ytr_next");'
 
 [[mutant]]
 id = "conv-03"
@@ -1058,8 +1058,8 @@ id = "v08-09"
 name = "walk: a step of half the diagonal accepted"
 test = "trials"
 why = "3.14: below half the diagonal, so every point has a step that stays in."
-find = '    if (!(s->step > 0) || !(2.0 * s->step < sqrt(dx * dx + dy * dy)))'
-replace = '    if (!(s->step > 0) || !(1.0 * s->step < sqrt(dx * dx + dy * dy)))'
+find = '    if (!(s->step > 0) || !(2.0 * s->step < hypot(dx, dy)))'
+replace = '    if (!(s->step > 0) || !(1.0 * s->step < hypot(dx, dy)))'
 
 [[mutant]]
 id = "v08-10"
@@ -1134,3 +1134,61 @@ find = '''    if (t->walk_at[j] == i) {
         memcpy(p, t->walk_pt[j], sizeof(p));'''
 replace = '''    if (t->walk_at[j] >= 0) {
         memcpy(p, t->walk_pt[j], sizeof(p));'''
+
+# --- v0.8.1: the review of v0.8.0 -----------------------------------------
+
+[[mutant]]
+id = "v081-01"
+name = "walk: the diagonal by sqrt of squares"
+test = "trials"
+why = "Review 5: a box of 1e200 overflows to an infinite diagonal and takes any step; a box of 1e-200 underflows to 0."
+find = '    if (!(s->step > 0) || !(2.0 * s->step < hypot(dx, dy)))'
+replace = '    if (!(s->step > 0) || !(2.0 * s->step < sqrt(dx * dx + dy * dy)))'
+
+[[mutant]]
+id = "v081-02"
+name = "walk: a snapshot's from point outside the box loads"
+test = "trials"
+why = "Review 6: a corrupt from point (1e300) would give a wrong from and deg."
+find = '                                       : !(q[2] >= bx[1] && q[2] <= bx[2] && q[3] >= bx[3] && q[3] <= bx[4]))'
+replace = '                                       : 0)'
+
+[[mutant]]
+id = "v081-03"
+name = "walk: a snapshot's point not a step from its from point loads"
+test = "trials"
+why = "Review 6: a point in the box but off the walk would continue another walk."
+find = '                else if (!(fabs(hypot(q[0] - q[2], q[1] - q[3]) - bx[0]) <= 8.0 * 2.220446049250313e-16 * mag))'
+replace = '                else if (0)'
+
+[[mutant]]
+id = "v081-04"
+name = "walk: trial 0's from point not checked against the start"
+test = "trials"
+why = "Review 6: trial 0 moves from the start, exactly."
+find = '                if (t->walk_at[j] == 0 ? !(q[2] == bx[5] && q[3] == bx[6])'
+replace = '                if (t->walk_at[j] == 0 ? 0'
+
+[[mutant]]
+id = "v081-05"
+name = "walk: deg -180 kept"
+test = "trials"
+why = "Review 8: the documented range is (-180, 180]."
+find = '    if (out[4] <= -180.0) out[4] += 360.0;'
+replace = '    (void)0;'
+
+[[mutant]]
+id = "v081-06"
+name = "walk: deg -0 kept"
+test = "trials"
+why = "Review 8: -0 writes as -0 in the data line."
+find = '    if (out[4] == 0.0) out[4] = 0.0;'
+replace = '    (void)0;'
+
+[[mutant]]
+id = "v081-07"
+name = "walk: restore() writes over the walk's message"
+test = "trials"
+why = "Review 7: the session's error must name the walk."
+find = '    return ytr__note_walk(t, ytr__restore(t, outcomes, records, n), 0, "ytr_restore");'
+replace = '    return ytr__note(t, ytr__restore(t, outcomes, records, n), 0, "ytr_restore");'
