@@ -2287,7 +2287,7 @@ static yexp_value* yexp__v2_form(yexp__ctx* c, const yjs_value* src, unsigned al
         return NULL;
     }
     if (col) { yexp__err(c, src->pos, "%s: '%s': {\"hit\": ...} and {\"time\": ...} go only in a template's columns (3.15)", elem, key); return NULL; }
-    if (uni || walk) { yexp__err(c, src->pos, "%s: '%s': {\"%s\": ...} goes only in a node's vars (3.14)", elem, key, uni ? "uniform" : "walk2d"); return NULL; }
+    if (uni || walk) { yexp__err(c, src->pos, "%s: '%s': {\"%s\": ...} goes only as a node's vars value, not inside another value (3.14)", elem, key, uni ? "uniform" : "walk2d"); return NULL; }
     if (tr) { yexp__err(c, src->pos, "%s: '%s': a transform goes only in a cursor's 'transform' (3.7)", elem, key); return NULL; }
     *handled = false;
     return NULL;
@@ -2565,6 +2565,10 @@ static yexp_value* yexp__object_form(yexp__ctx* c, const yjs_value* src, unsigne
             if (yjs_get(src, "note")) yexp__put(c, *canon, "note", yexp__cstr(c, yjs_get(src, "note")->u.s));
         }
         return v;
+    }
+    if (allow & YEXP__AV_TRANSFORM) {
+        yexp__err(c, src->pos, "%s: '%s': a transform is \"identity\", {\"rotation_deg\": A}, {\"mirror_deg\": A} or a lookup that gives one (3.7)", elem, key);
+        return NULL;
     }
     yexp__err(c, src->pos, "%s: '%s': this object is not a value form (format 2.2); this key takes %s", elem, key, yexp__wants(allow));
     return NULL;
@@ -2971,6 +2975,10 @@ static bool yexp__row_value(yexp__ctx* c, int ri, const yjs_member* m, const cha
         break;
     case YEXP__T_NAME:
     case YEXP__T_NAMEZ:
+        if (c->version >= 2 && src->type == YJS_STRING && strchr(src->u.s, '.') && r->section >= YEXP__S_STEP) {
+            yexp__err(c, src->pos, "%s: '%s': '%s': a lane goes only where a value is read (3.9); this key takes a name", elem, r->key, src->u.s);
+            return false;
+        }
         if (src->type != YJS_STRING || !(yexp__name_ok(src->u.s) || (r->type == YEXP__T_NAMEZ && !src->u.s[0]))) {
             yexp__err(c, src->pos, "%s: '%s': a name is [A-Za-z_][A-Za-z0-9_]*, at most 63 bytes", elem, r->key);
             return false;
@@ -6244,6 +6252,14 @@ static void yexp__check_var(yexp__ctx* c, const yexp__scope* s, const char* name
         return;
     }
     if (!yexp__resolve(c, s, name, &r, &why)) {
+        int i;
+        /* finding F14: a flag is read in a state's steps, an exit's if and a
+         * column, where 3.12 and 3.15 read it */
+        for (i = 0; s->t && i < s->t->n_flags; i++)
+            if (yexp__streq(s->t->flags[i], name)) {
+                yexp__err(c, pos, "%s: '%s': '$%s' is a flag; a flag is read in a state's steps, an exit's 'if' and a column (3.12)", elem, key, name);
+                return;
+            }
         if (why) yexp__err(c, pos, "%s: '%s': '$%s' needs %s (2.3)", elem, key, name, why);
         else yexp__err(c, pos, "%s: '%s': '$%s' is not known here: no session field, table column, vars name, jitter or built-in has that name", elem, key, name);
         return;

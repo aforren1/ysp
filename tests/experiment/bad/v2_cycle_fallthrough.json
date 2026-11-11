@@ -1,0 +1,58 @@
+{
+  "format": "ysp-experiment",
+  "version": 2,
+  "roles": {
+    "hand": {
+      "type": "position2d",
+      "units": "display_px",
+      "allow_relative": true
+    }
+  },
+  "stimuli": {
+    "s": {
+      "kind": "shape"
+    },
+    "dot": {
+      "kind": "shape"
+    }
+  },
+  "trials": {
+    "t": {
+      "controls": {
+        "cur": {
+          "control": "cursor",
+          "role": "hand"
+        },
+        "near": {
+          "control": "region",
+          "of": "hand",
+          "radius": 10
+        }
+      },
+      "states": [
+        {
+          "name": "a",
+          "steps": [
+            {
+              "on": "s"
+            }
+          ]
+        },
+        {
+          "name": "b",
+          "exits": [
+            {
+              "to": "a"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "timeline": [
+    {
+      "name": "m",
+      "trial": "t"
+    }
+  ]
+}

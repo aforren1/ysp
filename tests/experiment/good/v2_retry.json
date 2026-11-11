@@ -1,0 +1,49 @@
+{
+  "note": "Valid but unusual (format 3.11): a cycle with a waiting exit, max_visits and over, a shared exit in several states, an instant exit chain through several states, a state with no exits in the middle, until and after_s together, flags read in a later state, requeue_outcomes.",
+  "format": "ysp-experiment", "version": 2, "name": "fixation_retry",
+  "display": { "units": "deg" },
+  "roles": { "eye": { "type": "gaze", "units": "display_deg" } },
+  "devices": { "keys": { "direction": "in", "family": ["keyboard"] } },
+  "stimuli": {
+    "fix": { "kind": "shape", "shape": "circle", "w": 0.3, "h": 0.3, "color": [1, 1, 1] },
+    "cue_box": { "kind": "shape", "shape": "rect", "w": 1, "h": 1, "x": 3 },
+    "target": { "kind": "shape", "shape": "circle", "w": 0.5, "h": 0.5, "x": "$side" },
+    "warning": { "kind": "shape", "shape": "cross", "w": 2, "h": 2, "color": [1, 0, 0] }
+  },
+  "trials": {
+    "trial": {
+      "flags": ["broke_once"],
+      "controls": {
+        "held": { "control": "region", "of": "eye", "radius": 1.5, "stay_s": 0.3 },
+        "broke": { "control": "region", "of": "eye", "radius": 2, "outside": true },
+        "lost": { "control": "signal_lost", "of": "eye", "after_s": 0.2 }
+      },
+      "exits": [
+        { "on": "broke", "to": "note_break", "in": ["cue", "delay"] },
+        { "on": "lost", "to": "end", "outcome": "lost", "in": ["fixate", "cue", "delay", "go"] }
+      ],
+      "states": [
+        { "name": "fixate", "max_visits": 3, "over": { "to": "end", "outcome": "too_many_breaks" },
+          "steps": [{ "on": "fix" }],
+          "exits": [{ "on": "held", "to": "cue" }, { "after_s": 5, "to": "end", "outcome": "timeout" }] },
+        { "name": "cue", "steps": [{ "on": "cue_box" }, { "until": "held", "timeout_s": 2 }, { "off": "cue_box" }],
+          "exits": [{ "after_s": 0.5, "to": "delay" }] },
+        { "name": "delay", "exits": [{ "after_s": 0.25, "to": "pause" }] },
+        { "name": "pause", "steps": [{ "wait_s": 0.1 }] },
+        { "name": "go", "steps": [{ "on": "target" }, { "if": "$broke_once", "steps": [{ "on": "warning" }] }],
+          "exits": [{ "on": "response", "to": "end" }] },
+        { "name": "note_break", "steps": [{ "flag": "broke_once", "value": true }, { "off": ["cue_box", "fix"] }],
+          "exits": [{ "if": "$warn_on_break", "to": "warn" }, { "to": "fixate" }] },
+        { "name": "warn", "exits": [{ "if": "$practice", "to": "fixate" }, { "to": "relay" }] },
+        { "name": "relay", "exits": [{ "to": "fixate" }] }
+      ],
+      "response": { "role": "keys", "choices": ["f", "j"], "from": "target", "key_answer": "$answer", "duration_s": 2 },
+      "requeue_outcomes": ["too_many_breaks", "lost"],
+      "columns": { "broke_any": { "when": "broke", "then": 1, "else": 0 }, "first_hold_s": { "time": "held", "from": "fixate" } }
+    }
+  },
+  "timeline": [
+    { "name": "main", "trial": "trial", "requeue": "no_response", "rules": ["reps 4", "practice 2"],
+      "vars": { "side": { "choice": [-4, 4] }, "warn_on_break": true, "answer": { "by": "$side", "map": { "-4": "f", "4": "j" } } } }
+  ]
+}

@@ -1,0 +1,116 @@
+{
+  "format": "ysp-experiment",
+  "version": 2,
+  "roles": {
+    "hand": {
+      "type": "position2d",
+      "units": "display_px",
+      "allow_relative": true
+    }
+  },
+  "stimuli": {
+    "s": {
+      "kind": "shape"
+    },
+    "dot": {
+      "kind": "shape"
+    }
+  },
+  "trials": {
+    "t": {
+      "controls": {
+        "cur": {
+          "control": "cursor",
+          "role": "hand"
+        },
+        "near": {
+          "control": "region",
+          "of": "hand",
+          "radius": 10
+        },
+        "g1": {
+          "control": "moving_target",
+          "from": "a",
+          "x": {
+            "amplitudes": [
+              1
+            ],
+            "freqs_hz": [
+              1
+            ],
+            "phases": [
+              0
+            ]
+          },
+          "y": {
+            "amplitudes": [
+              1
+            ],
+            "freqs_hz": [
+              1
+            ],
+            "phases": [
+              0
+            ]
+          }
+        },
+        "g2": {
+          "control": "moving_target",
+          "from": "b",
+          "x": {
+            "amplitudes": [
+              1
+            ],
+            "freqs_hz": [
+              1
+            ],
+            "phases": [
+              0
+            ]
+          },
+          "y": {
+            "amplitudes": [
+              1
+            ],
+            "freqs_hz": [
+              1
+            ],
+            "phases": [
+              0
+            ]
+          }
+        }
+      },
+      "states": [
+        {
+          "name": "a",
+          "steps": [
+            {
+              "on": "s"
+            }
+          ],
+          "exits": [
+            {
+              "on": "near",
+              "to": "b"
+            }
+          ]
+        },
+        {
+          "name": "b",
+          "steps": [
+            {
+              "wait_s": 0.5
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "timeline": [
+    {
+      "name": "m",
+      "trial": "t"
+    }
+  ]
+}

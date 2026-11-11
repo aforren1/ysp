@@ -1,0 +1,1 @@
+63:14: node 'm': vars: 'v': a {"signal": ...} value form is not allowed here; it goes in a set step's props or a column, a signal also in a region's center, and then and else take a literal, a variable, a lookup or a when (3.10)

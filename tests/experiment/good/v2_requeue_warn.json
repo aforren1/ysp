@@ -1,0 +1,16 @@
+{
+  "note": "Format 3.16: a requeue_outcomes value that no exit, over or response gives is a warning, not a refusal.",
+  "format": "ysp-experiment", "version": 2,
+  "roles": { "hand": { "type": "position2d", "units": "display_px" } },
+  "stimuli": { "s": { "kind": "shape" } },
+  "trials": {
+    "t": {
+      "controls": { "in": { "control": "region", "of": "hand", "radius": 20 } },
+      "states": [
+        { "name": "show", "steps": [{ "on": "s" }], "exits": [{ "on": "in", "to": "end", "outcome": "hit" }, { "after_s": 2, "to": "end", "outcome": "miss" }] }
+      ],
+      "requeue_outcomes": ["miss", "mis"]
+    }
+  },
+  "timeline": [{ "name": "m", "trial": "t" }]
+}

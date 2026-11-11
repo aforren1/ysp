@@ -1,0 +1,55 @@
+{
+  "note": "Valid but unusual (format 3.7, 3.10, 3.15): nested when, a when in a column, a test by above, a top-level cursor and controls, a region centred on a signal, recenter, a distance, a frame trace, mirror and rotation transforms by lookup, an events template with until.",
+  "format": "ysp-experiment", "version": 2, "name": "forms",
+  "roles": {
+    "pen": { "type": "position2d_relative", "units": "display_px" },
+    "grip": { "type": "scalar", "units": "device", "required": false, "note": "an optional force sensor" }
+  },
+  "stimuli": {
+    "dot": { "kind": "shape", "shape": "circle", "w": 6, "h": 6, "layer": 2 },
+    "aim": { "kind": "shape", "shape": "circle", "w": 20, "h": 20, "color": [0.5, 0.5, 0.5] },
+    "ring": { "kind": "shape", "shape": "circle", "w": 30, "h": 30, "stroke": 2 }
+  },
+  "controls": {
+    "pointer": { "control": "cursor", "role": "pen", "stimulus": "dot",
+                 "transform": { "by": "$map", "map": { "plain": "identity", "turned": { "rotation_deg": "$angle" }, "flipped": { "mirror_deg": 45 } } },
+                 "about": [10, "$cy"] },
+    "squeeze": { "control": "peak", "of": "grip" }
+  },
+  "trials": {
+    "chase": {
+      "controls": {
+        "wander": { "control": "moving_target", "stimulus": "aim", "from": "run", "ramp_s": 1,
+                    "x": { "amplitudes": [100, 40], "freqs_hz": [0.2, 0.7], "phases": "$ph" },
+                    "y": { "amplitudes": [-80, 30], "freqs_hz": [0.3, 0.9], "phases": [0, 1.5] } },
+        "on_aim": { "control": "region", "of": "pointer", "center": { "signal": "wander" }, "radius": 15, "rate": "frame" },
+        "gap": { "control": "distance", "of": "pointer", "center": [0, 0], "scale": 2 },
+        "frames": { "control": "trace", "of": ["pointer.x", "wander", "on_aim", "gap"], "rate": "frame", "from": "run", "to": "end" }
+      },
+      "states": [
+        { "name": "place", "steps": [{ "recenter": "pen", "to": [0, 0] }, { "on": ["dot", "aim", "ring"] }] },
+        { "name": "run", "steps": [
+            { "set": "aim", "props": { "color": { "when": "on_aim",
+                "then": { "when": { "signal": "gap", "above": "$far" }, "then": [1, 1, 0], "else": [0, 1, 0] },
+                "else": [0.5, 0.5, 0.5] } } },
+            { "set": "ring", "props": { "w": { "signal": "gap" }, "h": { "signal": "gap" } } },
+            { "wait_s": 10 }] }
+      ],
+      "columns": {
+        "on_at_end": { "when": "on_aim", "then": { "when": { "signal": "squeeze", "above": 2 }, "then": "hard", "else": "soft" }, "else": "off" },
+        "x_end": { "signal": "pointer.x" },
+        "aim_s": { "time": "on_aim", "from": "run" }
+      }
+    },
+    "settle": {
+      "controls": { "home": { "control": "region", "of": "pointer", "radius": 10, "stay_s": 0.2, "speed_below": 50 } },
+      "events": [{ "on": "dot" }, { "until": "home", "timeout_s": 3 }, { "off": "dot" }],
+      "columns": { "home_x": { "hit": "home.x" } }
+    }
+  },
+  "timeline": [
+    { "name": "block", "vars": { "map": { "choice": ["plain", "turned", "flipped"] }, "angle": 30, "cy": -5, "far": 20,
+                                 "ph": { "uniform": [0, 6.283185307179586], "n": 2 } },
+      "timeline": [{ "name": "chase", "trial": "chase" }, { "name": "settle", "trial": "settle" }] }
+  ]
+}
