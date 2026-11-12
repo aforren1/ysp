@@ -1,0 +1,63 @@
+{
+  "format": "ysp-experiment", "version": 2, "name": "visuomotor_rotation",
+  "display": { "background": [0.3, 0.3, 0.3] },
+  "roles": { "hand": { "type": "position2d", "units": "display_px", "allow_relative": true } },
+  "stimuli": {
+    "start":  { "kind": "shape", "shape": "circle", "w": 24, "h": 24, "color": [0.9, 0.9, 0.9] },
+    "target": { "kind": "shape", "shape": "circle", "w": 24, "h": 24, "color": [0.1, 0.8, 0.2],
+                "x": "$target_x", "y": "$target_y", "layer": 1 },
+    "ring":   { "kind": "shape", "shape": "circle", "w": 10, "h": 10, "stroke": 2, "color": [1, 1, 0.2], "layer": 2 },
+    "dot":    { "kind": "shape", "shape": "circle", "w": 8, "h": 8, "color": [1, 1, 0.2], "layer": 3 }
+  },
+  "trials": {
+    "reach": {
+      "controls": {
+        "cursor":      { "control": "cursor", "role": "hand", "transform": { "rotation_deg": "$rotation_deg" },
+                         "freeze_at": "past_target" },
+        "near_start":  { "control": "region", "of": "hand", "radius": 67.2, "rate": "frame" },
+        "at_start":    { "control": "region", "of": "hand", "radius": 12, "stay_s": 0.5 },
+        "past_target": { "control": "region", "of": "hand", "radius": 268.8, "outside": true },
+        "aid":         { "control": "distance", "of": "hand", "scale": 2 },
+        "moved":       { "control": "movement", "of": "hand", "onset": 26.88, "from": "at_start" },
+        "top_speed":   { "control": "peak", "of": "hand", "from": "at_start", "freeze_at": "past_target" },
+        "path":        { "control": "trace", "of": ["hand", "cursor"], "from": "at_start", "to": "past_target" }
+      },
+      "states": [
+        { "name": "back",
+          "steps": [{ "on": "start" },
+                    { "set": "dot", "props": { "x": { "signal": "hand.x" }, "y": { "signal": "hand.y" },
+                                               "visible": { "when": "near_start", "then": 1, "else": 0 } } },
+                    { "set": "ring", "props": { "w": { "signal": "aid" }, "h": { "signal": "aid" },
+                                                "visible": { "when": "near_start", "then": 0, "else": 1 } } }],
+          "exits": [{ "on": "at_start", "to": "go" }] },
+        { "name": "go",
+          "steps": [{ "on": "target" }, { "off": "ring" },
+                    { "set": "dot", "props": { "x": { "signal": "cursor.x" }, "y": { "signal": "cursor.y" },
+                                               "visible": { "by": "$feedback",
+                                                            "map": { "online": 1, "endpoint": 0, "none": 0 } } } }],
+          "exits": [{ "on": "past_target", "to": "show_end" }] },
+        { "name": "show_end",
+          "steps": [{ "set": "dot", "props": { "visible": { "by": "$feedback",
+                                                            "map": { "online": 1, "endpoint": 1, "none": 0 } } } },
+                    { "wait_s": 0.5 }, { "off": "target" }] }
+      ],
+      "response": { "choices": [{ "signal": "moved" }], "from": "target" },
+      "record": ["target"],
+      "columns": {
+        "cross_s": { "time": "past_target", "from": "target" },
+        "mt_s": { "time": "past_target", "from": "response" },
+        "hand_end_x": { "hit": "past_target.x" }, "hand_end_y": { "hit": "past_target.y" },
+        "cursor_end_x": { "signal": "cursor.x" }, "cursor_end_y": { "signal": "cursor.y" },
+        "peak_speed": { "signal": "top_speed" }
+      }
+    }
+  },
+  "timeline": [
+    { "name": "baseline", "timeline_variables": "targets.pstb", "rules": ["order random", "reps 5"],
+      "vars": { "rotation_deg": 0, "feedback": "online" }, "trial": "reach" },
+    { "name": "rotation", "timeline_variables": "targets.pstb", "rules": ["order random", "reps 10"],
+      "vars": { "rotation_deg": 30, "feedback": "online" }, "trial": "reach" },
+    { "name": "washout", "timeline_variables": "targets.pstb", "rules": ["order random", "reps 5"],
+      "vars": { "rotation_deg": 0, "feedback": "none" }, "trial": "reach" }
+  ]
+}

@@ -56,6 +56,11 @@
  *                    (default 0.1)
  *   --trace-cap N    trajectory rows kept per reach, 64..16384 (default 16384;
  *                    rows past it are counted, and --sim fails)
+ *   --test-order FILE  tests: each trial's target_deg from ysp_player's
+ *                    --test-draws file, so both run one order
+ *   --test-samples-out FILE  tests: the scripted hand's counts as
+ *                    t_s,role,x,y (t_s from the first frame's onset), the
+ *                    file ysp_player --samples reads (format 3.19)
  * Exit code: 0 (also after Shift+Esc), 1 when something did not open or a
  * check failed, 2 for a bad argument.
  */
@@ -144,6 +149,7 @@ static struct {
     float gain;                       /* px per count */
     uint64_t seed;
     const char *out_path, *traj_path;
+    const char *order_path, *samples_path;   /* tests: the player's draws in; the hand's samples out */
 } opt = { .raw = true, .input = IN_RAW, .sched = { BASELINE_N, ROTATION_N, WASHOUT_N }, .trace_cap = TRACE_CAP,
           .rotation = ROTATION_DEG, .cpi = CPI, .onset_frac = ONSET_FRAC, .gain = GAIN, .seed = 20261106,
           .out_path = "trial_visuomotor.csv", .traj_path = "trial_visuomotor_trajectory.csv" };
@@ -182,6 +188,13 @@ static float cross_hx, cross_hy, cross_cx, cross_cy;
 static trace_row trace[TRACE_CAP];
 static int n_trace, n_trace_lost, trial_lost;
 static double hand_end[MAX_TRIALS], rot_of[MAX_TRIALS];
+/* tests (the player's comparison, experiment_format.md 3.19): the target
+ * of each trial from the player's --test-draws file, and the scripted
+ * hand's counts to a file the player's --samples reads */
+static double test_deg[MAX_TRIALS];
+static int n_test_deg;
+static FILE* samples_out;
+static int64_t samples_t0 = -1;
 static int fb_of[MAX_TRIALS];
 
 static int parse_options(int argc, char** argv) {
@@ -204,10 +217,12 @@ static int parse_options(int argc, char** argv) {
         else if (!strcmp(argv[i], "--out") && i + 1 < argc) opt.out_path = argv[++i];
         else if (!strcmp(argv[i], "--traj") && i + 1 < argc) opt.traj_path = argv[++i];
         else if (!strcmp(argv[i], "--trace-cap") && i + 1 < argc) opt.trace_cap = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--test-order") && i + 1 < argc) opt.order_path = argv[++i];
+        else if (!strcmp(argv[i], "--test-samples-out") && i + 1 < argc) opt.samples_path = argv[++i];
         else {
             fprintf(stderr, "usage: trial_visuomotor [--sim | --auto] [--sdl-mouse | --pen] [--schedule B,R,W] [--rotation DEG] "
                             "[--gradual] [--endpoint-only] [--gain PX] [--cpi N] [--radius PX] [--onset-frac F] [--seed N] "
-                            "[--out FILE] [--traj FILE]\n");
+                            "[--out FILE] [--traj FILE] [--test-order FILE] [--test-samples-out FILE]\n");
             return 2;
         }
     }
@@ -295,6 +310,8 @@ static void pointer(const yrsp_input* ev) {
     yin_event der[8];
     ysig_hit h[8];
     int n, i, nh;
+    if (samples_out && ev->control == YRSP_AXIS_DELTA && samples_t0 >= 0)
+        fprintf(samples_out, "%.9f,hand,%.0f,%.0f\n", (double)(ev->t - samples_t0) / 1e9, (double)ev->x, (double)ev->y);
     if (ysig_feed(&sg, ev) <= 0) return;
     /* the hold first, then the collector, then the crossing: the order the
      * window needs */
@@ -481,7 +498,7 @@ static bool start_trial(const yscr_frame* f) {
     rot_of[ti.index] = rot_deg;
     /* the cursor's turn, counterclockwise on the screen: y is down */
     if (!ysig_set(&sg, N_CUR, YSIG_AFFINE_ANGLE, -rot_deg)) { fprintf(stderr, "trial_visuomotor: rotation %g\n", rot_deg); return false; }
-    target_deg = ytb_num(&tab, ti.condition, deg_col);
+    target_deg = ti.index < n_test_deg ? test_deg[ti.index] : ytb_num(&tab, ti.condition, deg_col);
     target.x = (float)(sx + radius * cos(target_deg * VMA_PI / 180));
     target.y = (float)(sy - radius * sin(target_deg * VMA_PI / 180));
     ytl_clear(&tl, TRIAL);
@@ -630,6 +647,26 @@ int main(int argc, char** argv) {
     seed0 = opt.seed;   /* for the data file: the trials advance opt.seed */
     if (!open_task() || !open_data(seed0)) return 1;
     phase = HOLD;   /* the hand starts on the start */
+    if (opt.order_path) {
+        /* the player's draws: one row per trial, target_deg its column */
+        FILE* fo = fopen(opt.order_path, "r");
+        char l2[4096];
+        int col = -1, k;
+        if (!fo) { fprintf(stderr, "trial_visuomotor: --test-order %s: cannot read it\n", opt.order_path); return 2; }
+        if (fgets(l2, sizeof l2, fo)) {
+            char* t = strtok(l2, ",\n");
+            for (k = 0; t; k++, t = strtok(NULL, ",\n")) if (!strcmp(t, "target_deg")) col = k;
+        }
+        while (col >= 0 && n_test_deg < MAX_TRIALS && fgets(l2, sizeof l2, fo)) {
+            char* t = strtok(l2, ",\n");
+            for (k = 0; t && k < col; k++) t = strtok(NULL, ",\n");
+            if (t) test_deg[n_test_deg++] = atof(t);
+        }
+        fclose(fo);
+        if (n_test_deg != total) { fprintf(stderr, "trial_visuomotor: --test-order %s: %d trials, the schedule has %d\n", opt.order_path, n_test_deg, total); return 2; }
+    }
+    if (opt.samples_path && !(samples_out = fopen(opt.samples_path, "w"))) { fprintf(stderr, "trial_visuomotor: cannot write %s\n", opt.samples_path); return 2; }
+    if (samples_out) fputs("t_s,role,x,y\n", samples_out);
 
     for (;;) {
         SDL_Event ev;
@@ -640,6 +677,7 @@ int main(int argc, char** argv) {
         rc = yscr_begin(&scr, &f);
         if (rc == YSCR_QUIT) { aborted = 1; break; }
         if (rc != YSCR_OK) { fail(yscr_error(&scr)); failed = 1; break; }
+        if (samples_t0 < 0) samples_t0 = f.onset;   /* the samples' time 0: the first frame's onset */
         yrsp_update_frame(&rsp, &f);   /* the target's flip record, when it arrives */
         if (!in_trial) {
             if (ytr_next(&trials, &ti) < 0) break;
@@ -703,6 +741,7 @@ int main(int argc, char** argv) {
     fprintf(out, "# at the end: %s\n", line);
     fclose(out);
     fclose(traj);
+    if (samples_out) fclose(samples_out);
     ygfx_close(&gfx);
     yscr_close(&scr);
     printf("%d trials written to %s, samples to %s%s\n", rows, opt.out_path, opt.traj_path,

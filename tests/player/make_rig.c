@@ -4,10 +4,12 @@
  * 100 cd/m2), so a run of the program with --rig and one of the player
  * have one geometry and one light.
  *
- * Usage: make_rig DIR [required_role family key]...
- * Writes DIR/profile.json and DIR/display.yspcal. */
+ * Usage: make_rig DIR [--view WIDTH_PX WIDTH_MM] [required_role family key]...
+ * Writes DIR/profile.json and DIR/display.yspcal. --view gives another
+ * view: the version 2 examples' 1024 px over 320 mm (format 3.19 item 3). */
 #include "player.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 int main(int argc, char** argv) {
@@ -31,6 +33,10 @@ int main(int argc, char** argv) {
     prof.view.distance_mm = 570.0;
     prof.view.width_mm = 0.27 * 1920.0;
     prof.view.width_px = 1920;
+    if (argc >= 5 && strcmp(argv[2], "--view") == 0) {
+        prof.view.width_px = atoi(argv[3]);
+        prof.view.width_mm = atof(argv[4]);
+    }
     prof.display.set = true;
     snprintf(prof.display.calibration, sizeof prof.display.calibration, "display.yspcal");
     {

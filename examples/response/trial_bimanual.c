@@ -123,6 +123,16 @@
  * the signal path: the graph's 1.7 million hand reports cost about 50 ns
  * each more than the hand-written arithmetic.
  * --auto: the same script in a window, checks (1) and (3) and the reaches.
+ * Tests (ysp_player's comparison, experiment_format.md 3.19): --test-order
+ * FILE takes each reach's target and start and each tracking block's
+ * phases from ysp_player --test-draws (y changes sign: the player's y is
+ * down); --test-samples-out FILE writes both hands' counts as
+ * t_s,role,x,y, t_s from the first trial's onset, the file ysp_player
+ * --samples reads; --design-timing runs the definition's timing (3.18):
+ * 1 s from each tracking trial's start, the next reach on the frame after
+ * the last one's end, and "still" from the graph's speed over 10 ms.
+ * The start circle of a block's first reach is drawn at the center, where
+ * its hold is tested (it was at the last block's final target, 3.18).
  *
  * Usage: trial_bimanual [--sim | --auto] [--mapping split|mean] [--perturb rotation|mirror] [--rotation DEG]
  *          [--blocks LIST] [--track-trials N] [--reaches N] [--track-s S] [--gain PX] [--cpi N]
@@ -304,6 +314,8 @@ static double ramp_of(double t) { return t <= 0 ? 0 : t < RAMP_S ? t / RAMP_S : 
 /* --- input -------------------------------------------------------------- */
 
 static int setup = 0, refused = 0;     /* 0: waiting for L, 1: for R, 2: done */
+static FILE* samples_out;              /* tests: --test-samples-out          */
+static int64_t samples_t0 = -1;
 static int is_script;
 static void script_placed(int64_t t);
 /* The cursor's speed over VEL_LAG_S, the graph's speed node at each hand
@@ -354,6 +366,9 @@ static void on_input(const yrsp_input* in, int from_bridge) {
         return;
     }
     if (in->type == YRSP_PRESS || in->type == YRSP_RELEASE) n_clicks_raw[in->type == YRSP_RELEASE]++;
+    if (samples_out && in->type == YRSP_SAMPLE && in->control == YRSP_AXIS_DELTA)
+        fprintf(samples_out, "%.9f,%s,%.0f,%.0f\n", samples_t0 < 0 || in->t < samples_t0 ? 0.0 : (double)(in->t - samples_t0) / 1e9,
+                h ? "right" : "left", (double)in->x, (double)in->y);
     if (ysig_feed(&sg, in) > 0) {
         /* the cursor (cm) to the collector, stamped and tagged with this
          * report's time and the worse tier of the two hands */
@@ -675,6 +690,13 @@ static int64_t t_ready, last_end, finish_frame;
 
 /* Reaching */
 static double start_c[2], tgt_c[2], peak_hold;
+/* tests (the player's comparison, experiment_format.md 3.19): the reach
+ * targets and the tracking phases from ysp_player's --test-draws file; the
+ * hands' counts out to the file the player's --samples reads, from the
+ * first trial's onset */
+static const char *test_order_path, *test_samples_path;
+static double test_aim[MAX_REACHES][4];   /* target x, y, start x, y: cm, y up */
+static int n_test_aim, design_timing;
 static int64_t t_in, t_hold;
 static int holding, fast_now, reach_planned, blk_fast;
 static double blk_err;
@@ -951,7 +973,13 @@ static int new_target(const yscr_frame* f, int first) {
     ytl_seq q;
     if (first) start_c[0] = start_c[1] = 0;
     else { start_c[0] = tgt_c[0]; start_c[1] = tgt_c[1]; }
-    for (tries = 0; tries < 10000; tries++) {
+    if (reach_index < n_test_aim) {
+        /* the player's walk (y down there): this reach's target and start */
+        tgt_c[0] = test_aim[reach_index][0];
+        tgt_c[1] = test_aim[reach_index][1];
+        start_c[0] = test_aim[reach_index][2];
+        start_c[1] = test_aim[reach_index][3];
+    } else for (tries = 0; tries < 10000; tries++) {
         double a = 2 * BM_PI * unit01();
         tgt_c[0] = start_c[0] + REACH_CM * cos(a);
         tgt_c[1] = start_c[1] + REACH_CM * sin(a);
@@ -1079,6 +1107,7 @@ static bool open_graph(void) {
 static int next_trial(const yscr_frame* f) {
     ytr_trial_info ti;
     int b;
+    if (samples_t0 < 0) samples_t0 = f->onset;   /* the samples' time 0: the first trial's onset */
     if (ytr_next(&trials, &ti) < 0) { state = S_DONE; return 1; }
     b = ti.condition;
     if (b != cur_block) {
@@ -1096,9 +1125,83 @@ static int next_trial(const yscr_frame* f) {
         }
         holding = 0;
         state = btype[b] ? S_R_START : S_T_WAIT;
+        /* the first reach of a block holds at the center: the start circle
+         * is drawn there too (it was at the last block's final target,
+         * experiment_format.md 3.18) */
+        if (btype[b]) start_c[0] = start_c[1] = 0;
     } else if (btype[b]) return new_target(f, 0);
     else state = S_T_WAIT;
     if (state == S_T_WAIT) t_ready = last_end ? last_end + YRT_S(ITI_S) : f->onset;
+    /* --design-timing: 1 s from each tracking trial's start, as the
+     * definition's iti state (3.18) */
+    if (state == S_T_WAIT && design_timing) t_ready = f->onset + YRT_S(ITI_S);
+    return 1;
+}
+
+/* A CSV line's fields, quotes kept out; at most 32. */
+static int csv_fields(char* l, char** f) {
+    int n = 0;
+    while (*l && *l != '\n' && *l != '\r' && n < 32) {
+        if (*l == '"') {
+            f[n++] = ++l;
+            while (*l && *l != '"') l++;
+            if (*l) *l++ = 0;
+        } else {
+            f[n++] = l;
+            while (*l && *l != ',' && *l != '\n' && *l != '\r') l++;
+        }
+        if (*l == ',') *l++ = 0;
+        else if (*l) *l = 0;
+    }
+    return n;
+}
+
+/* --test-order: the player's draws (ysp_player --test-draws): the phases
+ * of each tracking block from its first row, each reach's target and
+ * start in order; the player's y is down, so y changes sign. */
+static int read_test_order(const char* path) {
+    static char line[8192];
+    char* f[32];
+    int n, k, c_node = -1, c_px = -1, c_py = -1, c_ax = -1, c_ay = -1, c_fx = -1, c_fy = -1, seen[MAX_BLOCKS] = { 0 };
+    FILE* fo = fopen(path, "r");
+    if (!fo || !fgets(line, sizeof line, fo)) { fprintf(stderr, "trial_bimanual: --test-order %s: cannot read it\n", path); if (fo) fclose(fo); return 0; }
+    n = csv_fields(line, f);
+    for (k = 0; k < n; k++) {
+        if (!strcmp(f[k], "node")) c_node = k;
+        if (!strcmp(f[k], "phase_x")) c_px = k;
+        if (!strcmp(f[k], "phase_y")) c_py = k;
+        if (!strcmp(f[k], "aim_x")) c_ax = k;
+        if (!strcmp(f[k], "aim_y")) c_ay = k;
+        if (!strcmp(f[k], "aim_from_x")) c_fx = k;
+        if (!strcmp(f[k], "aim_from_y")) c_fy = k;
+    }
+    while (fgets(line, sizeof line, fo)) {
+        const char* nd;
+        int b;
+        n = csv_fields(line, f);
+        if (c_node < 0 || c_node >= n) continue;
+        nd = strrchr(f[c_node], '/');
+        nd = nd ? nd + 1 : f[c_node];
+        if (sscanf(nd, "b%d", &b) != 1 || b < 0 || b >= MAX_BLOCKS) continue;
+        if (strstr(nd, "_track") && !seen[b] && c_px >= 0 && c_px < n && c_py < n && f[c_px][0]) {
+            int a;
+            for (a = 0; a < 2; a++) {
+                char* q = f[a ? c_py : c_px];
+                for (k = 0; k < N_SINES && q; k++) {
+                    while (*q == '[' || *q == ',' || *q == ' ') q++;
+                    phase[b][a][k] = strtod(q, &q);
+                }
+            }
+            seen[b] = 1;
+        } else if (strstr(nd, "_reach") && c_ax >= 0 && c_fy < n && n_test_aim < MAX_REACHES) {
+            test_aim[n_test_aim][0] = atof(f[c_ax]);
+            test_aim[n_test_aim][1] = -atof(f[c_ay]);
+            test_aim[n_test_aim][2] = atof(f[c_fx]);
+            test_aim[n_test_aim][3] = -atof(f[c_fy]);
+            n_test_aim++;
+        }
+    }
+    fclose(fo);
     return 1;
 }
 
@@ -1145,6 +1248,9 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--cpi") && i + 1 < argc) cpi = atof(argv[++i]);
         else if (!strcmp(argv[i], "--px-per-cm") && i + 1 < argc) ppc_arg = atof(argv[++i]);
         else if (!strcmp(argv[i], "--seed") && i + 1 < argc) seed = (uint64_t)strtoull(argv[++i], NULL, 10);
+        else if (!strcmp(argv[i], "--test-order") && i + 1 < argc) test_order_path = argv[++i];
+        else if (!strcmp(argv[i], "--test-samples-out") && i + 1 < argc) test_samples_path = argv[++i];
+        else if (!strcmp(argv[i], "--design-timing")) design_timing = 1;
         else if (!strcmp(argv[i], "--out") && i + 1 < argc) out_path = argv[++i];
         else if (!strcmp(argv[i], "--reaches-out") && i + 1 < argc) reach_path = argv[++i];
         else if (!strcmp(argv[i], "--track") && i + 1 < argc) track_path = argv[++i];
@@ -1198,6 +1304,11 @@ int main(int argc, char** argv) {
         int a, k;
         for (a = 0; a < 2; a++)
             for (k = 0; k < N_SINES; k++) phase[i][a][k] = -BM_PI + 2 * BM_PI * unit01();
+    }
+    if (test_order_path && !read_test_order(test_order_path)) return 2;
+    if (test_samples_path) {
+        if (!(samples_out = fopen(test_samples_path, "w"))) { fprintf(stderr, "trial_bimanual: cannot write %s\n", test_samples_path); return 2; }
+        fputs("t_s,role,x,y\n", samples_out);
     }
     {
         /* the script's compensation per block: half, 3/4, 7/8 ... of the
@@ -1414,7 +1525,13 @@ int main(int argc, char** argv) {
          * once a frame (the graph's value at t, with this block's P) */
         if (setup == 2) {
             value_at(B_C, f.onset, c);
-            if (have_prev && f.onset > prev_onset)
+            if (design_timing) {
+                /* the definition's speed_below (3.18): the graph's speed over
+                 * 10 ms, as its view at the onset gives it: 0 once the
+                 * cursor was silent for the lag */
+                const ysig_value* cv = ysig_value_of(&sg, B_C);
+                speed = f.onset - cv->t >= YRT_S(VEL_LAG_S) ? 0 : ysig_value_of(&sg, B_SPEED)->v[0];
+            } else if (have_prev && f.onset > prev_onset)
                 speed = cabs2(c[0] - c_prev[0], c[1] - c_prev[1]) / YRT_TO_S(f.onset - prev_onset);
             have_prev = 1;
         }
@@ -1478,6 +1595,7 @@ int main(int argc, char** argv) {
                     } else if (f.onset - t_hold >= YRT_S(TARGET_HOLD_S)) {
                         end_reach();
                         state = S_NEXT;   /* the next target, or the next block, on this frame */
+                        if (design_timing) break;   /* the definition's: on the next frame (3.11 rule 10) */
                         continue;
                     }
                 } else holding = 0;
@@ -1575,6 +1693,7 @@ int main(int argc, char** argv) {
     fclose(rout);
     fclose(tout);
     fclose(qout);
+    if (samples_out) fclose(samples_out);
     ygfx_close(&gfx);
     yscr_close(&scr);
     printf("%d tracking trials to %s (frames %s, frequencies %s), %d reaches to %s%s\n", track_index, out_path, track_path,
