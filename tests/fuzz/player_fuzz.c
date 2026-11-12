@@ -95,7 +95,8 @@ static pl_player p;
 
 static const char* rig_path;
 static char script_arg[600];
-static long long n_loaded, n_run, n_ok;
+static char samples_path[600];
+static long long n_loaded, n_run, n_ok, n_roles_in, n_v2_loaded, n_v2_ok;
 static int g_print;
 static const char* dict_keys[2048];
 static int n_dict;
@@ -144,9 +145,57 @@ static size_t mutate_delete(char* dst, const char* src, size_t n) {
     return n - (e - i);
 }
 
+/* Version 2: each signal role of the text (a "roles" member with a "type")
+ * gets a --sim-gain and rows in a samples file, so a mutated definition
+ * reaches its graph; the player refuses a relative role with no gain, and
+ * a samples row of a role the definition lacks. The names stay in the
+ * arena until the run ends. 0 when the text has no signal role. */
+static int sim_roles(yjs_arena* ar, const char* text, size_t n, pl_args* a) {
+    yjs_value* root = NULL, *roles;
+    yjs_error err;
+    FILE* fp;
+    uint32_t i;
+    int k, t, nr = 0;
+    const char* names[16];
+    bool rel[16];
+    double x[16], y[16];
+    if (yjs_parse(ar, text, n, NULL, &root, &err) != 0 || !root || root->type != YJS_OBJECT) return 0;
+    roles = yjs_get(root, "roles");
+    if (!roles || roles->type != YJS_OBJECT) return 0;
+    for (i = 0; i < roles->n && nr < 16; i++) {
+        yjs_value* v = roles->u.members[i].value, *ty;
+        const char* ts;
+        if (!v || v->type != YJS_OBJECT || !(ty = yjs_get(v, "type")) || !(ts = yjs_string(ty, NULL))) continue;
+        names[nr] = roles->u.members[i].key;
+        rel[nr] = strstr(ts, "relative") != NULL || yjs_get(v, "allow_relative") != NULL;
+        a->gains[nr].name = names[nr];
+        a->gains[nr].value = rnd() % 2 ? "0.5" : "0.01";
+        x[nr] = y[nr] = 0;
+        nr++;
+    }
+    if (nr == 0) return 0;
+    a->n_gains = nr;
+    if (!(fp = fopen(samples_path, "w"))) return 0;
+    fprintf(fp, "t_s,role,x,y\n");
+    /* 20 s at 200 Hz a role: a walk with a jump now and then */
+    for (t = 0; t < 4000; t++)
+        for (k = 0; k < nr; k++) {
+            double dx = (double)(rnd() % 7) - 3, dy = (double)(rnd() % 7) - 3;
+            if (rnd() % 400 == 0) { dx *= 100; dy *= 100; }
+            if (rel[k]) fprintf(fp, "%.3f,%s,%g,%g\n", 0.005 * t, names[k], dx, dy);
+            else { x[k] += dx; y[k] += dy; fprintf(fp, "%.3f,%s,%g,%g\n", 0.005 * t, names[k], x[k], y[k]); }
+        }
+    fclose(fp);
+    a->samples_path = samples_path;
+    return nr;
+}
+
 static void one(const seed_t* s, const char* text, size_t n, const char* out) {
     pl_args a;
+    yjs_arena ar;
     memset(&a, 0, sizeof a);
+    yjs_arena_init_heap(&ar, (size_t)64 << 20);
+    n_roles_in += sim_roles(&ar, text, n, &a) > 0;
     a.pack_path = s->pack;
     a.out_dir = out;
     a.sim = true;
@@ -169,14 +218,17 @@ static void one(const seed_t* s, const char* text, size_t n, const char* out) {
     a.fields[0].value = "1";
     rmdir_recursive(out);
     if (pl_load(&p, &a) == 0) {
+        bool v2 = p.def && p.def->format_version >= 2;
         n_loaded++;
         n_run++;
-        if (pl_run(&p) == 0) n_ok++;
+        n_v2_loaded += v2;
+        if (pl_run(&p) == 0) { n_ok++; n_v2_ok += v2; }
         else if (g_print) printf("  RUN FAILED: %.200s\n", p.error);
     } else if (g_print) {
         printf("  refused: %.200s\n", p.error);
     }
     pl_close(&p);
+    yjs_arena_free(&ar);
     rmdir_recursive(out);
 }
 
@@ -247,6 +299,7 @@ int main(int argc, char** argv) {
         int t;
         snprintf(path, sizeof path, "%s/script.csv", argv[3]);
         snprintf(script_arg, sizeof script_arg, "script:%s", path);
+        snprintf(samples_path, sizeof samples_path, "%s/samples.csv", argv[3]);
         if (!(fp = fopen(path, "w"))) return 2;
         fprintf(fp, "trial_index,response,rt_s,hold_s\n");
         for (t = 0; t < 512; t++) fprintf(fp, "%d,%s,%.3f,0.05\n", t, t % 7 == 3 ? "" : t % 2 ? "right" : "left", 0.1 + 0.01 * (t % 5));
@@ -261,7 +314,7 @@ int main(int argc, char** argv) {
             printf("%s\n", seeds[i].name);
             one(&seeds[i], seeds[i].text, seeds[i].n, out);
         }
-        printf("player_fuzz: %d seeds, %lld loaded, %lld ran to the end\n", n_seeds, n_loaded, n_ok);
+        printf("player_fuzz: %d seeds, %lld loaded, %lld ran to the end; version 2: %lld loaded, %lld ran to the end, %lld with signal roles\n", n_seeds, n_loaded, n_ok, n_v2_loaded, n_v2_ok, n_roles_in);
         return 0;
     }
     for (i = 0; i < iters; i++) {
@@ -289,7 +342,7 @@ int main(int argc, char** argv) {
         }
         if (i && i % 2000 == 0) fprintf(stderr, "player_fuzz: %lld iterations, %lld loaded, %lld ran to the end\n", i, n_loaded, n_ok);
     }
-    printf("player_fuzz: %lld iterations, %lld loaded, %lld ran to the end\n", iters, n_loaded, n_ok);
+    printf("player_fuzz: %lld iterations, %lld loaded, %lld ran to the end; version 2: %lld loaded, %lld ran to the end, %lld with signal roles\n", iters, n_loaded, n_ok, n_v2_loaded, n_v2_ok, n_roles_in);
     for (k = 0; k < n_seeds; k++) free(seeds[k].text);
     return 0;
 }
