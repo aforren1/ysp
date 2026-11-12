@@ -126,6 +126,8 @@ class Gen:
                 r["max_responses"] = rng.choice([1, 2])
         if rng.random() < 0.3:
             r["key_answer"] = "f"
+        if rng.random() < 0.2 and "release" not in AVOID:
+            r["wait_for_key_release"] = True
         return r
 
     def exit(self, names, regions, has_resp, instant_ok=True):
@@ -271,7 +273,11 @@ class Gen:
             else:
                 rt = rng.randint(50, 900) * 1_000_000
             rt = max(rt, 0)
-            rows[i] = (rng.choice(["f", "j"]), sec(rt), 0.02)
+            hold = 0.02
+            if r.get("wait_for_key_release"):
+                hold = sec(rng.choice([rng.randint(1, 12) * P + rng.choice([0, 0, -1, 1]),
+                                       rng.randint(5, 300) * 1_000_000]))
+            rows[i] = (rng.choice(["f", "j"]), sec(rt), hold)
         return rows
 
 
@@ -295,8 +301,6 @@ def make_case(seed):
         # (Run.flag_window); a few rounds, then keep the GAP.
         for _ in range(12):
             run = M.Run(defn, script, samples)
-            run.amb = set()
-            M._patch_seen(run)
             run.run()
             if "arm-order" not in run.gaps or not run.amb:
                 break
@@ -320,7 +324,7 @@ def write_case(seed, d):
                        "media_type": "application/vnd.ysp.experiment"},
         "resources": []}, indent=1) + "\n")
     w("part.csv", "trial_index,response,rt_s,hold_s\n" + "".join(
-        "%d,%s,%.9f,%.3f\n" % (i, r[0], r[1], r[2]) for i, r in sorted(script.items())))
+        "%d,%s,%.9f,%.9f\n" % (i, r[0], r[1], r[2]) for i, r in sorted(script.items())))
     if samples:
         w("samples.csv", "t_s,role,x,y\n" + "".join(
             "%s,hand,%g,%g\n" % (M.fmt(t - M.FRAME0), x, y) for (t, x, y) in samples))

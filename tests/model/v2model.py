@@ -44,6 +44,16 @@ LEAD = PERIOD // 2
 # L + 1, before that frame's evaluate.
 RECORD_DELAY = 1
 
+# Alternative readings at a GAP, to look past a known difference
+# (V2MODEL_READ, comma-separated): f28_next (an until's timeout code is one
+# more than the count of the state's exits), clamp_entry (a response exit
+# taken in a state entered after the response's time has the entry time),
+# shared_detect (an until re-arms its control's one detect, also for the
+# state's exits), drain_late (a hit that an arm makes at a frame is drained
+# at that frame's ysig_frame(), after its evaluate).
+import os as _os
+READ = set(filter(None, _os.environ.get("V2MODEL_READ", "").split(",")))
+
 
 def onset(k):
     return FRAME0 + k * PERIOD
@@ -140,6 +150,7 @@ class Response:
         self.max_responses = int(d.get("max_responses", 0))
         # 2.6: the player sets yrsp_desc.persist from response_ends_trial.
         self.persist = not self.ends_trial
+        self.wait_release = bool(d.get("wait_for_key_release", False))
 
 
 def _steps(lst):
@@ -279,6 +290,22 @@ def predict_refusal(defn):
     # F37 (2.6, DECIDED 2026-11-12): a key response that nothing ends.
     if r is not None and not r.ends_trial and r.duration == 0 and r.max_responses == 0:
         return "F37"
+    # experiment.md, "A response's from": a step must show it (in `events`
+    # for an events template; any state's steps with states).
+    if r is not None:
+        def shows(steps):
+            for s in steps:
+                if s[0] == "on" and r.frm in s[1]:
+                    return True
+                if s[0] == "if" and shows(s[3]):
+                    return True
+            return False
+        if tpl.kind == "events":
+            ok = any(shows(p) for p in tpl.parts)
+        else:
+            ok = any(shows(p) for st in tpl.states for p in st.parts)
+        if not ok:
+            return "from-not-shown"
     if tpl.kind == "events":
         seen_until = False
         for s in _steps(td.get("events", [])):
@@ -433,6 +460,7 @@ class Trial:
         self.L = None             # the `from` landing frame
         self.press = None         # (t, name, rt) scheduled
         self.press_fed = False
+        self.release = None
         self.resp_valid = None    # (name, rt)
         self.resp_end = None      # (t, kind) kind 'press' or 'deadline'
         self.resp_pending = None  # a press that waits for the record
@@ -554,11 +582,12 @@ class Run:
         self.fed_until = onset(k - 1) if k > 0 else e0 - 1
         self.trigger = None
         self.carry = []
+        self.late = []
         if tpl.kind == "states":
             # 3.11 rule 1: the first state's entry time is the first frame's
             # onset. GAP (arm order): whether the trial starts before or
             # after its first frame's poll; samples in that poll are flagged.
-            self.enter(tpl.states[0], e0, k, self.carry)
+            self.enter(tpl.states[0], e0, k, self.carry, "S")
         else:
             self.enter_events(e0, k)
         while tr.end_frame is None:
@@ -582,8 +611,10 @@ class Run:
             if kind == "sample":
                 self.hand = payload
                 cands = self.drain_sample(t)
-            else:
+            elif kind == "press":
                 cands = self.feed_press(t, k)
+            else:
+                cands = self.feed_release(t, k)
             if self.carry:
                 cands = self.carry + cands
                 self.carry = []
@@ -603,14 +634,17 @@ class Run:
         # evaluate for the tables they add.
         rounds = 0
         while True:
-            cands = []
+            cands = self.late
+            self.late = []
             if self.cur is not None:
                 for name, d in self.cur.dets.items():
                     h = d.frame(o)
                     if h is not None:
                         cands.append(("hit", h, name, self.cur.vid))
-                if self.cur.until_det is not None:
-                    h = self.cur.until_det.frame(o)
+                ud = self.cur.until_det
+                if ud is not None:
+                    shared = [n for n, d in self.cur.dets.items() if d is ud]
+                    h = ud.hit if shared and ud.hit is not None and any(c[2] == shared[0] for c in cands) else ud.frame(o)
                     if h is not None:
                         cands.append(("until", h, None, self.cur.vid))
             if not cands:
@@ -643,6 +677,10 @@ class Run:
         if tp is not None and tp <= o:
             tr.press_fed = True
             return ("press", tp, None)
+        if tr.release is not None and tr.release <= o:
+            t = tr.release
+            tr.release = None
+            return ("release", t, None)
         return None
 
     def drain_sample(self, t):
@@ -654,8 +692,13 @@ class Run:
             h = d.sample(t, self.hand)
             if h is not None:
                 cands.append(("hit", h, name, v.vid))
-        if v.until_det is not None:
-            h = v.until_det.sample(t, self.hand)
+        ud = v.until_det
+        if ud is not None:
+            shared = [n for n, d in v.dets.items() if d is ud]
+            if shared:
+                h = next((c[1] for c in cands if c[2] == shared[0]), None)
+            else:
+                h = ud.sample(t, self.hand)
             if h is not None:
                 cands.append(("until", h, None, v.vid))
         return cands
@@ -675,10 +718,32 @@ class Run:
         ends = (not r.persist) or r.max_responses == 1
         if not ends:
             return []
+        if r.wait_release:
+            # response.h: with wait_for_key_release the window ends at that
+            # response's release, or max_hold_ns (2 s) after the press.
+            tr.release = t + min(tr.press[3], 2 * NS)
+            tr.await_release = True
+            return []
+        return self.end_by(t, k)
+
+    def feed_release(self, t, k):
+        tr = self.tr
+        if not getattr(tr, "await_release", False) or tr.resp_end is not None:
+            return []
+        tr.await_release = False
+        # GAP (2.6, F34 rule 2, 3.11 rule 11): the time of a response that
+        # ends at its release. Read: the window's end (the release), as a
+        # persistent window's exit takes its deadline's time.
+        self.gap("release-time")
+        return self.end_by(t, k)
+
+    def end_by(self, t, k):
+        tr = self.tr
         # 3.11 rule 11: the player waits for the landing frame's flip record
         # before a response counts (yrsp_set_wait_final()).
         if k >= tr.L + RECORD_DELAY:
             tr.resp_end = (t, "press")
+            tr.resp_seen = k
             return [("resp", t, None, None)]
         tr.resp_pending = t
         return []
@@ -693,20 +758,36 @@ class Run:
             t = tr.resp_pending
             tr.resp_pending = None
             tr.resp_end = (t, "press")
+            tr.resp_seen = k
             if hit_frame(t) < k:
                 self.gap("response-final-late")
             return [("resp", t, None, None)]
         if r.duration > 0:
             d = onset(tr.L) + r.duration
+            if getattr(tr, "await_release", False):
+                # GAP: a response that waits for its release when the
+                # deadline comes. Read: the response is in; the release ends
+                # the window (jsPsych).
+                if onset(k) >= d:
+                    self.gap("release-after-deadline")
+                return []
             if onset(k) >= d:
                 tr.resp_end = (d, "deadline")
+                tr.resp_seen = k
                 return [("resp", d, None, None)]
         return []
 
     def window_open(self):
-        """F34 rule 3: the `from` was shown and the response has not ended."""
-        tr = self.tr
-        return self.tpl.response is not None and tr.L is not None and tr.resp_end is None
+        """F34 rule 3 and F35: the window is open when its `from` was shown,
+        or a table that the trial ran shows it and nothing removed that
+        step, and the response has not ended."""
+        tr, r = self.tr, self.tpl.response
+        if r is None or tr.resp_end is not None:
+            return False
+        if tr.L is not None:
+            return True
+        return any(ev.kind == "on" and ev.name == r.frm and not ev.removed and not ev.landed
+                   for ev in self.pend)
 
     # ------------------------------------------------------------ evaluate
     def evaluate(self, k):
@@ -733,7 +814,7 @@ class Run:
                 if row is not None:
                     name, rt_s = row[0], row[1]
                     rt = ns_of(rt_s)
-                    tr.press = (onset(k) + rt, name, rt)
+                    tr.press = (onset(k) + rt, name, rt, ns_of(row[2]))
         self.pend = [e for e in self.pend if not (e.landed or e.removed)]
 
     # ------------------------------------------------------------ states
@@ -791,8 +872,13 @@ class Run:
         if kind == "timeout":
             return (n_list + 0.5, None)
         if kind == "partend":
-            # GAP: a part's end at the time of an exit: the exit first, so
-            # it removes the part's events at that time (F38).
+            # GAP (tie-steps-end): a part's end at the time of an exit: the
+            # exit first, so it removes the part's events at that time
+            # (F38); but the last part's end of a state with no authored
+            # exits comes before the added response exit.
+            parts, _ = self.parts_untils(v)
+            if st is not None and not st.authored and v.part == len(parts) - 1:
+                return (-1, None)
             return (n_list + 0.75, None)
         return None
 
@@ -814,6 +900,21 @@ class Run:
                 if not pool:
                     return
                 limit = max(p[0] for p in pool)
+                # A response's deadline is a time known in advance: like an
+                # after_s time it is pending once a drained hit is at or
+                # after it (3.11 rule 4: the earliest pending time wins).
+                tr, r = self.tr, self.tpl.response
+                if (r is not None and r.duration > 0 and tr.L is not None and tr.resp_end is None
+                        and k >= tr.L + RECORD_DELAY and not getattr(tr, "await_release", False)
+                        and onset(tr.L) + r.duration <= limit):
+                    d = onset(tr.L) + r.duration
+                    tr.resp_end = (d, "deadline")
+                    tr.resp_seen = k
+                    c = ("resp", d, None, None)
+                    cands.append(c)
+                    oe = self.order_of(c, v)
+                    if oe is not None:
+                        pool.append((d, oe[0], c, oe[1]))
             else:
                 limit = onset(k) + LEAD
             for c in self.visit_timed(v):
@@ -825,6 +926,13 @@ class Run:
                 return
             pool.sort(key=lambda p: (p[0], p[1]))
             t, _, c, ex = pool[0]
+            if len(pool) > 1 and pool[1][0] == t and "partend" in (c[0], pool[1][2][0]):
+                # GAP (D20 rule 4): a steps' end and an exit at one time; the
+                # steps' end is in no list. Read: a state with no authored
+                # exits goes on when its steps end (F34 rule 1) before the
+                # added response exit; an authored exit comes before a part's
+                # end (order_of).
+                self.gap("tie-steps-end")
             # A candidate that this state does not take and that is earlier
             # than the one taken happened in this state: it is gone (D20
             # rule 3: a hit from before the next state's entry does not
@@ -853,6 +961,8 @@ class Run:
                 # came late). Read: rule 11, the exit's time is the
                 # response's, taken when final.
                 self.gap("response-before-entry")
+                if "clamp_entry" in READ:
+                    t = v.entry_t
         if kind in ("partend", "until"):
             self.part_step(v, kind, t, k, phase, cands)
             return
@@ -870,7 +980,7 @@ class Run:
             # count of those exits (the next index); the until's `on` has no
             # code, since it ends no visit.
             self.gap("F28-timeout-code")
-            self.leave(v, t, len(st.exits), "exit", k)
+            self.leave(v, t, len(st.exits) + (1 if "f28_next" in READ else 0), "exit", k)
             self.finish_states(t, k)
             return
         if kind in ("hit", "resp", "exit"):
@@ -906,12 +1016,19 @@ class Run:
                     self.gap("until-rearms-exit-control")
                 self.flag_window(t)
                 v.until_det = Det(self.tpl.regions[ctl], t, self.hand)
+                if ctl in v.dets and "shared_detect" in READ:
+                    v.dets[ctl] = v.until_det
+                    if v.until_det.hit is not None:
+                        cands.append(("hit", v.until_det.hit, ctl, v.vid))
                 if v.until_det.hit is not None:
                     if t > onset(k):
                         self.gap("future-arm-hit")
                     if phase != "P":
                         self.gap("arm-hit-drain")
-                    cands.append(("until", t, None, v.vid))
+                    if phase in ("T", "F") and "drain_late" in READ:
+                        self.late.append(("until", t, None, v.vid))
+                    else:
+                        cands.append(("until", t, None, v.vid))
                 return
             # The last part's end.
             if v.state is None:
@@ -1024,6 +1141,9 @@ class Run:
                     # makes at a frame is taken here, before the evaluate,
                     # so F38 removes the state's events at its time.
                     self.gap("arm-hit-drain")
+                    if "drain_late" in READ and phase in ("T", "F"):
+                        self.late.append(("hit", d.hit, nm, v.vid))
+                        continue
                 cands.append(("hit", d.hit, nm, v.vid))
         evs, end = self.build(tr, st.parts[0], t, f, v.vid)
         v.events.extend(evs)
@@ -1105,30 +1225,9 @@ def k_of_onset(o):
     return (o - FRAME0) // PERIOD
 
 
-def _patch_seen(run):
-    """Records the frame each response end was taken (for `after`)."""
-    orig = run.response_frame
-    orig_press = run.feed_press
-
-    def rf(k):
-        out = orig(k)
-        if out:
-            run.tr.resp_seen = k
-        return out
-
-    def fp(t, k):
-        out = orig_press(t, k)
-        if out:
-            run.tr.resp_seen = k
-        return out
-    run.response_frame = rf
-    run.feed_press = fp
-
-
 def simulate(defn, script=None, samples=None):
     """Returns (trials, gaps). trials: list of dicts with the expected rows."""
     run = Run(defn, script, samples)
-    _patch_seen(run)
     trials = run.run()
     out = []
     for tr in trials:

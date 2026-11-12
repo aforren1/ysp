@@ -14,6 +14,8 @@ steps dropped while it still fails) and printed with its seed.
 Programs run in folders made under --work (mkdtemp); nothing is deleted.
 """
 import argparse
+import ast
+import re
 import copy
 import csv
 import json
@@ -43,7 +45,7 @@ def run_player(bin_dir, d, defn, script, samples):
     with open(os.path.join(d, "part.csv"), "w", newline="\n") as f:
         f.write("trial_index,response,rt_s,hold_s\n")
         for i, r in sorted(script.items()):
-            f.write("%d,%s,%.9f,%.3f\n" % (i, r[0], r[1], r[2]))
+            f.write("%d,%s,%.9f,%.9f\n" % (i, r[0], r[1], r[2]))
     if samples:
         with open(os.path.join(d, "samples.csv"), "w", newline="\n") as f:
             f.write("t_s,role,x,y\n")
@@ -137,6 +139,22 @@ def compare(exp, got):
     return None
 
 
+def signature(diff):
+    """The kind of a difference: what differs, not where."""
+    m = re.match(r"trial \d+ (state row \d+|landings|\w+)", diff)
+    if not m:
+        return diff.split(":")[0]
+    kind = re.sub(r"\d+", "N", m.group(1))
+    if kind.startswith("state row"):
+        mm = re.search(r"model (\{.*?\}|None), player (\{.*?\}|None)", diff)
+        a, b = (ast.literal_eval(mm.group(1)), ast.literal_eval(mm.group(2))) if mm else (None, None)
+        if a and b:
+            kind += " " + ",".join(k for k in ("text", "frame", "end_s", "code") if a.get(k) != b.get(k))
+        else:
+            kind += " count"
+    return kind
+
+
 def model_expect(defn, script, samples):
     ref = M.predict_refusal(defn)
     if ref:
@@ -219,7 +237,10 @@ def shrinks(defn):
                 yield d
 
 
-def shrink(bin_dir, work, defn, script, samples, first_diff, budget=150):
+def shrink(bin_dir, work, defn, script, samples, first_diff, gaps, budget=200):
+    """Keeps a smaller definition while its first difference has the same
+    kind and its trial reaches no GAP the original did not."""
+    sig = signature(first_diff)
     kind = first_diff.split(":")[0]
     cur = defn
     tries = 0
@@ -239,7 +260,7 @@ def shrink(bin_dir, work, defn, script, samples, first_diff, budget=150):
             d = tempfile.mkdtemp(prefix="shr", dir=work)
             got = run_player(bin_dir, d, cand, script, samples)
             diff = compare(exp, got)
-            if diff and (diff.split(":")[0] == "refusal") == (kind == "refusal"):
+            if diff and signature(diff) == sig and set(trial_gaps(exp, diff)) <= set(gaps):
                 cur = cand
                 first_diff = diff
                 progress = True
@@ -263,7 +284,7 @@ def one(args):
     res = {"seed": seed, "dir": d, "refused": exp["refused"], "player_refused": got["refused"],
            "gaps": trial_gaps(exp, diff), "diff": diff}
     if diff and do_shrink:
-        small, sdiff = shrink(bin_dir, work, defn, script, samples, diff)
+        small, sdiff = shrink(bin_dir, work, defn, script, samples, diff, res["gaps"])
         sd = os.path.join(d, "min")
         os.makedirs(sd, exist_ok=True)
         run_player(bin_dir, sd, small, script, samples)
