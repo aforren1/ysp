@@ -40,6 +40,12 @@ To see one generated case: `uv run --no-project python tests/model/gen.py SEED`.
 Options:
 
 - `--no-shrink` does not shrink failing cases.
+- `--fixed` runs only the fixed set of 50 seeds (`SEEDS` and
+  `SEEDS_MULTI` in `diff.py`). `tests/player/player_test.py` runs the same
+  set as `t_v2_model`, so it is part of ctest's `test_player_shapes`.
+- `GEN_MULTI=1` makes responses that take several presses
+  (`max_responses` 2 and 3, presses before and after the window,
+  `wait_for_key_release`) and scripts of up to 4 presses a trial.
 - `GEN_AVOID=state_at,until_timeout,release` leaves those features out
   of the generated cases, so that a known difference does not hide others.
 
@@ -55,7 +61,8 @@ Options:
   a state or to `end`, and exit outcomes.
 - The key response: `choices`, `from`, `duration_s`,
   `minimum_valid_rt_s`, `response_ends_trial`, `max_responses`,
-  `key_answer`, `wait_for_key_release`, and the three rules of F34.
+  `key_answer`, `wait_for_key_release`, the three rules of F34, and
+  several presses a trial (player.md, `script:`).
 - Frames: the lead rule for timed exits and step ends, F40 (a timed exit
   is never taken on its state's entry frame), "the first frame at
   or after" for hits, the list order of D20 rule 4 at equal times, F38,
@@ -80,7 +87,7 @@ frame, `t_s`, `end_s`, code), the landing rows (`onset`, `offset`, `mark`,
 Variables and tables, requeue, `to` and `then` tweens, triggers, the
 stagger, `recenter`, controls other than a region, `rate` frame, relative
 roles, signal-choice responses, columns, traces, `allow_held_key`, more
-than one press a trial, and real (not `--sim`) runs.
+and real (not `--sim`) runs.
 
 ## Decided points
 
@@ -111,4 +118,5 @@ difference at a GAP is a question for the format, not a player bug.
 | F40 for an until's timeout: "the state's entry frame" | The wait's entry frame (the wait is a state of its own, 3.11 rule 9) |
 | The outcome column with no response in an events template | `done` |
 | A sample and a press at one time | The sample first |
+| `min-rt-over-duration`: `minimum_valid_rt_s` at or above `duration_s` (response.h refuses that desc; the loader does not) | The deadline ends the window; the generator does not make it |
 | The deadline of F34 rule 2 | A deadline with no response sets `timeout` |

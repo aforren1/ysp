@@ -31,6 +31,19 @@ import gen  # noqa: E402
 import v2model as M  # noqa: E402
 
 LAND = ("onset", "offset", "mark", "set")
+# Paths that override BIN/pack/ypak and BIN/player/ysp_player (player_test.py
+# passes its own, a mutation test another player).
+YPAK = None
+PLAYER = None
+
+# The fixed set that tests/player/player_test.py runs (t_v2_model): seeds
+# whose cases passed on player 0.8.0 (v2-lower 9b82be2) and reach no GAP, so
+# none needs refound-in-frame or future-arm-hit. SEEDS_MULTI run with
+# GEN_MULTI (several presses a trial).
+SEEDS = [27, 113, 690, 733, 1001, 1855, 2631, 4011, 4275, 4328, 4486, 4573, 5233, 7303, 8425, 8822, 9175,
+         9583, 9609, 10300, 10572, 10691, 11790, 12002, 12109, 12293, 13099, 13106, 13442, 13700, 13858,
+         14230, 14376, 14595, 14598, 14782, 15915, 16003, 16433, 16442]
+SEEDS_MULTI = [187, 504, 523, 814, 1242, 1445, 2737, 3665, 4018, 4762]
 
 
 def run_player(bin_dir, d, defn, script, samples):
@@ -44,15 +57,16 @@ def run_player(bin_dir, d, defn, script, samples):
                    "resources": []}, f)
     with open(os.path.join(d, "part.csv"), "w", newline="\n") as f:
         f.write("trial_index,response,rt_s,hold_s\n")
-        for i, r in sorted(script.items()):
-            f.write("%d,%s,%.9f,%.9f\n" % (i, r[0], r[1], r[2]))
+        for i, rows in sorted(script.items()):
+            for r in rows:
+                f.write("%d,%s,%.9f,%.9f\n" % (i, r[0], r[1], r[2]))
     if samples:
         with open(os.path.join(d, "samples.csv"), "w", newline="\n") as f:
             f.write("t_s,role,x,y\n")
             for (t, x, y) in samples:
                 f.write("%s,hand,%g,%g\n" % (M.fmt(t - M.FRAME0), x, y))
     pk = os.path.join(d, "p.ysppak")
-    b = subprocess.run([os.path.join(bin_dir, "pack", "ypak"), "build", "pack.json", "-o", pk],
+    b = subprocess.run([YPAK or os.path.join(bin_dir, "pack", "ypak"), "build", "pack.json", "-o", pk],
                        cwd=d, capture_output=True, text=True, timeout=60)
     if b.returncode != 0:
         return {"refused": (b.stdout + b.stderr).strip().splitlines()[-1:]}
@@ -61,7 +75,7 @@ def run_player(bin_dir, d, defn, script, samples):
     while os.path.exists(out):
         n += 1
         out = os.path.join(d, "out%d" % n)
-    cmd = [os.path.join(bin_dir, "player", "ysp_player"), pk, "--out", out, "--sim", "--seed", "1",
+    cmd = [PLAYER or os.path.join(bin_dir, "player", "ysp_player"), pk, "--out", out, "--sim", "--seed", "1",
            "--field", "participant=1", "--max-seconds", "120",
            # A script with no rows makes the player 0.6.0 use `correct`
            # (player.md: a trial with no row is silent), so give `silent`.
@@ -276,6 +290,29 @@ def shrink(bin_dir, work, defn, script, samples, first_diff, gaps, budget=200):
 
 # ---------------------------------------------------------------- driver
 
+def check_set(work, seeds=None, seeds_multi=None):
+    """Runs the fixed set in one process; returns a list of (seed, why) for
+    each case that fails, or that reaches a GAP (the set must reach none)."""
+    bad = []
+    for multi, lst in ((False, SEEDS if seeds is None else seeds), (True, SEEDS_MULTI if seeds_multi is None else seeds_multi)):
+        gen.MULTI = multi
+        try:
+            for seed in lst:
+                defn, script, samples, exp = gen.make_case(seed)
+                d = tempfile.mkdtemp(prefix="s%d_" % seed, dir=work)
+                gaps = sorted({g for t in exp.get("trials", []) for g in t["gaps"]})
+                if gaps:
+                    bad.append((seed, "the case reaches GAPs %s" % gaps))
+                    continue
+                got = run_player(None, d, defn, script, samples)
+                diff = compare(exp, got)
+                if diff:
+                    bad.append((seed, "%s (case %s)" % (diff, d)))
+        finally:
+            gen.MULTI = gen.MULTI_ENV
+    return bad
+
+
 def one(args):
     seed, bin_dir, work, do_shrink = args
     defn, script, samples, exp = gen.make_case(seed)
@@ -312,9 +349,19 @@ def main(argv):
     ap.add_argument("--jobs", type=int, default=8)
     ap.add_argument("--no-shrink", action="store_true")
     ap.add_argument("--log", default=None, help="a JSON lines file of every case")
+    ap.add_argument("--fixed", action="store_true", help="run the fixed set (SEEDS, SEEDS_MULTI) only")
     a = ap.parse_args(argv)
     lo, hi = (int(x) for x in a.seeds.split(":"))
     os.makedirs(a.work, exist_ok=True)
+    if a.fixed:
+        global YPAK, PLAYER
+        YPAK = os.path.join(os.path.abspath(a.bin), "pack", "ypak")
+        PLAYER = os.path.join(os.path.abspath(a.bin), "player", "ysp_player")
+        bad = check_set(tempfile.mkdtemp(prefix="fixed", dir=a.work))
+        for seed, why in bad:
+            print("FAIL seed %d: %s" % (seed, why))
+        print("fixed set: %d cases, %d failures" % (len(SEEDS) + len(SEEDS_MULTI), len(bad)))
+        return 1 if bad else 0
     work = tempfile.mkdtemp(prefix="run", dir=a.work)
     jobs = [(s, os.path.abspath(a.bin), work, not a.no_shrink) for s in range(lo, hi)]
     n = refused = agreed_ref = bad = gap_bad = hangs = 0

@@ -21,6 +21,11 @@ P = M.PERIOD
 # GEN_AVOID: comma-separated features to leave out, so a known difference
 # does not hide others: state_at (at_s in a state's steps), until_timeout.
 AVOID = set(filter(None, os.environ.get("GEN_AVOID", "").split(",")))
+# GEN_MULTI=1: responses that take several presses (max_responses 2 and 3,
+# presses before and after the window, wait_for_key_release) and scripts
+# with up to 4 presses a trial (player.md, script:FILE).
+MULTI_ENV = os.environ.get("GEN_MULTI", "") not in ("", "0")
+MULTI = MULTI_ENV
 STIMS = ["st0", "st1", "st2", "st3"]
 FLAGS = ["f0", "f1"]
 MARKS = ["m0", "m1", "m2"]
@@ -112,7 +117,7 @@ class Gen:
 
     def response(self):
         rng = self.rng
-        if rng.random() < 0.4:
+        if rng.random() < (0.1 if MULTI else 0.4):
             return None
         r = {"role": "keys", "choices": ["f", "j"], "from": rng.choice(STIMS)}
         # Most windows have a deadline, so that most trials end (a window
@@ -133,6 +138,23 @@ class Gen:
             r["key_answer"] = "f"
         if rng.random() < 0.2 and "release" not in AVOID:
             r["wait_for_key_release"] = True
+        if MULTI:
+            if "duration_s" not in r:
+                r["duration_s"] = dur(rng, 12, 60)
+                if r.get("minimum_valid_rt_s", 0) >= r["duration_s"]:
+                    r.pop("minimum_valid_rt_s", None)
+            if rng.random() < 0.7:
+                r["response_ends_trial"] = False
+                r["max_responses"] = rng.choice([0, 2, 2, 3, 3])
+                if r["max_responses"] == 0:
+                    del r["max_responses"]
+            if rng.random() < 0.5 and "minimum_valid_rt_s" not in r:
+                r["minimum_valid_rt_s"] = dur(rng, 1, 6)
+                if r["minimum_valid_rt_s"] >= r["duration_s"]:
+                    del r["minimum_valid_rt_s"]
+            r["wait_for_key_release"] = rng.random() < 0.4
+            if not r["wait_for_key_release"]:
+                del r["wait_for_key_release"]
         return r
 
     def exit(self, names, regions, has_resp, instant_ok=True):
@@ -254,6 +276,29 @@ class Gen:
             out.append((t, *rng.choice(pts)))
         return out
 
+    def presses(self, r, dur_ns, mrt, rt0, hold0):
+        """1 to 4 presses in time order, each after the last release
+        (player.md): before the minimum RT, in the window, at and after
+        its deadline."""
+        rng = self.rng
+        out = []
+        c = rng.random()
+        rt = mrt - rng.choice([1, 1_000_000, 20_000_000]) if (mrt and c < 0.3) else rt0
+        rt = max(rt, 0)
+        for _ in range(rng.randint(1, 4)):
+            hold = rng.choice([20_000_000, rng.randint(1, 6) * P + rng.choice([0, -1, 1]),
+                               rng.randint(5, 200) * 1_000_000])
+            out.append((rng.choice(["f", "j"]), sec(rt), sec(hold)))
+            # Not 0: the player 0.8.0 checks rt_s + hold_s against the next
+            # rt_s in double seconds, so an exact tie can read as an
+            # overlap and the script is refused (a finding, not a rule).
+            gap = rng.choice([1, 1, P, rng.randint(1, 300) * 1_000_000])
+            nxt = rt + hold + gap
+            if dur_ns and rng.random() < 0.15:
+                nxt = max(nxt, dur_ns + rng.choice([-1, 0, 1]))
+            rt = nxt
+        return out
+
     def script(self, defn, trials_expect, n):
         rng = self.rng
         r = defn["trials"]["t"].get("response")
@@ -295,7 +340,9 @@ class Gen:
             if r.get("wait_for_key_release"):
                 hold = sec(rng.choice([rng.randint(1, 12) * P + rng.choice([0, 0, -1, 1]),
                                        rng.randint(5, 300) * 1_000_000]))
-            rows[i] = (rng.choice(["f", "j"]), sec(rt), hold)
+            rows[i] = [(rng.choice(["f", "j"]), sec(rt), hold)]
+            if MULTI:
+                rows[i] = self.presses(r, dur_ns, mrt, rt, hold)
         return rows
 
 
@@ -342,7 +389,7 @@ def write_case(seed, d):
                        "media_type": "application/vnd.ysp.experiment"},
         "resources": []}, indent=1) + "\n")
     w("part.csv", "trial_index,response,rt_s,hold_s\n" + "".join(
-        "%d,%s,%.9f,%.9f\n" % (i, r[0], r[1], r[2]) for i, r in sorted(script.items())))
+        "%d,%s,%.9f,%.9f\n" % (i, r[0], r[1], r[2]) for i, rows in sorted(script.items()) for r in rows))
     if samples:
         w("samples.csv", "t_s,role,x,y\n" + "".join(
             "%s,hand,%g,%g\n" % (M.fmt(t - M.FRAME0), x, y) for (t, x, y) in samples))

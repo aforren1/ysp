@@ -454,7 +454,8 @@ class Trial:
         # response
         self.L = None             # the `from` landing frame
         self.press = None         # (t, name, rt) scheduled
-        self.press_fed = False
+        self.pi = 0               # the next scripted press
+        self.n_valid = 0          # responses so far
         self.release = None
         self.resp_valid = None    # (name, rt)
         self.resp_end = None      # (t, kind) kind 'press' or 'deadline'
@@ -618,7 +619,7 @@ class Run:
                 self.hand = payload
                 cands = self.drain_sample(t)
             elif kind == "press":
-                cands = self.feed_press(t, k)
+                cands = self.feed_press(t, k, payload)
             else:
                 cands = self.feed_release(t, k)
             if self.carry:
@@ -670,19 +671,22 @@ class Run:
         tr = self.tr
         ts = self.samples[self.si][0] if self.si < len(self.samples) else None
         tp = None
-        if tr.press is not None and not tr.press_fed:
+        if tr.press is not None and tr.pi < len(tr.press):
             # The participant presses rt after the flip (player.md); the
-            # press exists from the landing frame's evaluate on, so a press
+            # presses exist from the landing frame's evaluate on, so a press
             # at the landing frame's onset is fed in the next frame's poll.
-            tp = tr.press[0]
-        if ts is not None and ts <= o and (tp is None or ts <= tp):
+            tp = tr.press[tr.pi][0]
+        tr_ = tr.release
+        if tr_ is not None and (tp is None or tr_ <= tp):
+            tp = None       # a key's release comes before the next press
+        if ts is not None and ts <= o and (tp is None or ts <= tp) and (tr_ is None or ts <= tr_):
             # GAP: a sample and a press at one time; the sample first.
             self.si += 1
             s = self.samples[self.si - 1]
             return ("sample", s[0], (s[1], s[2]))
         if tp is not None and tp <= o:
-            tr.press_fed = True
-            return ("press", tp, None)
+            tr.pi += 1
+            return ("press", tp, tr.pi - 1)
         if tr.release is not None and tr.release <= o:
             t = tr.release
             tr.release = None
@@ -710,24 +714,31 @@ class Run:
         return cands
 
     # ------------------------------------------------------------ response
-    def feed_press(self, t, k):
-        """2.6, response.h THE WINDOW AND RT."""
+    def feed_press(self, t, k, i):
+        """2.6, response.h THE WINDOW AND RT: each press is EARLY, an
+        anticipation (rt < min_rt), on time, or LATE (rt >= duration); an
+        on-time press of a choice is a response. The window ends at the
+        first response, or with persist after max_responses responses (0:
+        never), or at that response's release with wait_for_key_release.
+        The result's response is the earliest response."""
         tr, r = self.tr, self.tpl.response
-        if tr.resp_end is not None:
+        if tr.resp_end is not None or tr.resp_pending is not None or getattr(tr, "await_release", False):
             return []           # AFTER_END: logged, never a response
-        name, rt = tr.press[1], tr.press[2]
+        _, name, rt, hold = tr.press[i]
         if rt < r.min_rt or (r.duration > 0 and rt >= r.duration):
             return []           # an anticipation or a late press
         if name not in [c[0] for c in r.choices]:
             return []
-        tr.resp_valid = (name, rt)
-        ends = (not r.persist) or r.max_responses == 1
+        if tr.resp_valid is None:
+            tr.resp_valid = (name, rt)
+        tr.n_valid += 1
+        ends = (not r.persist) or (r.max_responses > 0 and tr.n_valid >= r.max_responses)
         if not ends:
             return []
         if r.wait_release:
             # response.h: with wait_for_key_release the window ends at that
             # response's release, or max_hold_ns (2 s) after the press.
-            tr.release = t + min(tr.press[3], 2 * NS)
+            tr.release = t + min(hold, 2 * NS)
             tr.await_release = True
             return []
         return self.end_by(t, k)
@@ -768,6 +779,11 @@ class Run:
             if hit_frame(t) < k:
                 self.gap("response-final-late")
             return [("resp", t, None, None)]
+        if r.duration > 0 and r.min_rt >= r.duration:
+            # GAP (2.6): a minimum RT at or above the deadline. response.h
+            # refuses that desc ("min_rt_ns leaves no time"); the format and
+            # the loader do not. Read: the deadline ends the window.
+            self.gap("min-rt-over-duration")
         if r.duration > 0:
             d = onset(tr.L) + r.duration
             if getattr(tr, "await_release", False):
@@ -816,11 +832,12 @@ class Run:
             r = self.tpl.response
             if ev.kind == "on" and r is not None and ev.name == r.frm and tr.L is None:
                 tr.L = k
-                row = self.script.get(tr.index)
-                if row is not None:
-                    name, rt_s = row[0], row[1]
-                    rt = ns_of(rt_s)
-                    tr.press = (onset(k) + rt, name, rt, ns_of(row[2]))
+                rows = self.script.get(tr.index)
+                if rows:
+                    # player.md: several rows of one trial are several
+                    # presses in time order, each rt from the same onset.
+                    tr.press = [(onset(k) + ns_of(rt_s), name, ns_of(rt_s), ns_of(hold_s))
+                                for (name, rt_s, hold_s) in rows]
         self.pend = [e for e in self.pend if not (e.landed or e.removed)]
 
     # ------------------------------------------------------------ states
@@ -1279,7 +1296,7 @@ def read_script(path):
         w = ln.split(",")
         if w[1] == "":
             continue
-        out[int(w[0])] = (w[1], float(w[2]), float(w[3]) if len(w) > 3 and w[3] else 0.0)
+        out.setdefault(int(w[0]), []).append((w[1], float(w[2]), float(w[3]) if len(w) > 3 and w[3] else 0.0))
     return out
 
 
