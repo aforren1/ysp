@@ -35,6 +35,10 @@ def dur(rng, lo_frames=1, hi_frames=24):
     edge (timeline.h QUANTIZATION)."""
     n = rng.randint(lo_frames, hi_frames)
     c = rng.random()
+    if c < 0.06:
+        # Within half a frame: F40 (a timed exit is not taken on its
+        # state's entry frame) and steps that end on the frame they start.
+        return sec(rng.choice([1_000_000, 3_000_000, 5_000_000, M.LEAD - 1, M.LEAD, M.LEAD + 1, P - 1]))
     if c < 0.25:
         ns = n * P                       # on a boundary
     elif c < 0.35:
