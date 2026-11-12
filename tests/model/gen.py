@@ -77,7 +77,7 @@ class Gen:
                 out.append({"set": rng.choice(STIMS), "props": {"x": rng.choice([-20, 0, 20])}})
             elif c < 0.94 and allow_until and regions and depth == 0:
                 u = {"until": rng.choice(list(regions))}
-                if rng.random() < 0.5 and "until_timeout" not in AVOID:
+                if rng.random() < 0.7 and "until_timeout" not in AVOID:
                     u["timeout_s"] = dur(rng, 3, 30)
                 out.append(u)
             elif allow_flag and depth == 0:
@@ -111,8 +111,9 @@ class Gen:
         if rng.random() < 0.4:
             return None
         r = {"role": "keys", "choices": ["f", "j"], "from": rng.choice(STIMS)}
-        c = rng.random()
-        if c < 0.08:
+        # Most windows have a deadline, so that most trials end (a window
+        # with no deadline that no press ends waits for ever, F34 rule 3).
+        if rng.random() < 0.03:
             pass                                      # no deadline
         else:
             r["duration_s"] = dur(rng, 6, 60)
@@ -188,12 +189,25 @@ class Gen:
                 states.append(st)
             t["states"] = states
             t["flags"] = list(FLAGS)
+            shared = []
             if rng.random() < 0.25:
-                shared = []
                 for _ in range(rng.randint(1, 2)):
                     e = self.exit(names, regions, resp is not None, instant_ok=False)
                     e["in"] = sorted(rng.sample(names, rng.randint(1, n)), key=names.index)
                     shared.append(e)
+            # Most templates end: a shared exit to end after 2 to 4 s in the
+            # states that already have exits (so no state loses its steps'
+            # end), and a waiting until with a timeout.
+            # Cycles end too: a visit limit with `over` to end (D20 rule 12)
+            # on most states that have none.
+            for st in states:
+                if "max_visits" not in st and rng.random() < 0.7:
+                    st["max_visits"] = rng.randint(3, 6)
+                    st["over"] = {"to": "end"}
+            with_exits = [st["name"] for st in states if st.get("exits")]
+            if with_exits and rng.random() < 0.9:
+                shared.append({"after_s": rng.choice([2.5, 3, 3.5, 4]), "to": "end", "in": with_exits})
+            if shared:
                 t["exits"] = shared
         # The response's `from` must be shown by a step (experiment.md, "A
         # response's from"): add one in the first state or the events.

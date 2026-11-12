@@ -288,7 +288,9 @@ def one(args):
         got = {"refused": ["timeout"]}
     diff = compare(exp, got)
     res = {"seed": seed, "dir": d, "refused": exp["refused"], "player_refused": got["refused"],
-           "gaps": trial_gaps(exp, diff), "diff": diff}
+           "gaps": trial_gaps(exp, diff), "diff": diff,
+           "hang": diff is None and exp["refused"] is None and bool(exp["trials"])
+                   and bool(exp["trials"][-1].get("hang") or exp["trials"][-1].get("loop"))}
     if diff and do_shrink:
         small, sdiff = shrink(bin_dir, work, defn, script, samples, diff, res["gaps"])
         sd = os.path.join(d, "min")
@@ -315,7 +317,7 @@ def main(argv):
     os.makedirs(a.work, exist_ok=True)
     work = tempfile.mkdtemp(prefix="run", dir=a.work)
     jobs = [(s, os.path.abspath(a.bin), work, not a.no_shrink) for s in range(lo, hi)]
-    n = refused = agreed_ref = bad = gap_bad = 0
+    n = refused = agreed_ref = bad = gap_bad = hangs = 0
     log = open(a.log, "w", newline="\n") if a.log else None
     with multiprocessing.Pool(min(a.jobs, 8)) as pool:
         for r in pool.imap_unordered(one, jobs):
@@ -323,6 +325,8 @@ def main(argv):
             if log:
                 log.write(json.dumps(r) + "\n")
                 log.flush()
+            if r.get("hang"):
+                hangs += 1
             if r["refused"] is not None:
                 refused += 1
                 if r["diff"] is None:
@@ -336,8 +340,8 @@ def main(argv):
                                                   r.get("min_diff", r["diff"])))
                 print("  case %s" % r.get("min_dir", r["dir"]))
                 sys.stdout.flush()
-    print("cases %d, refused by the model %d (agreed %d), mismatches %d (%d at a GAP)" %
-          (n, refused, agreed_ref, bad, gap_bad))
+    print("cases %d, refused by the model %d (agreed %d), hangs both agree on %d (rows not compared), "
+          "mismatches %d (%d at a GAP)" % (n, refused, agreed_ref, hangs, bad, gap_bad))
     return 1 if bad else 0
 
 

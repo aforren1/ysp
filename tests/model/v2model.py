@@ -44,15 +44,6 @@ LEAD = PERIOD // 2
 # L + 1, before that frame's evaluate.
 RECORD_DELAY = 1
 
-# Alternative readings at a GAP, to look past a known difference
-# (V2MODEL_READ, comma-separated): f28_next (an until's timeout code is one
-# more than the count of the state's exits), clamp_entry (a response exit
-# taken in a state entered after the response's time has the entry time),
-# shared_detect (an until re-arms its control's one detect, also for the
-# state's exits), drain_late (a hit that an arm makes at a frame is drained
-# at that frame's ysig_frame(), after its evaluate).
-import os as _os
-READ = set(filter(None, _os.environ.get("V2MODEL_READ", "").split(",")))
 
 
 def onset(k):
@@ -837,18 +828,26 @@ class Run:
         """The visit's timed candidates: after_s from the entry frame's onset
         (D20 rule 2), an until's timeout from the wait's entry frame, the
         steps' end of a part (3.11 rule 7)."""
+        # F40 (the user's decision, 2026-11-12; closes the GAP
+        # zero-time-cycle): a timed exit (after_s, and an until's timeout_s)
+        # is never taken on the state's entry frame: it lands on the later
+        # of its lead-rule frame and the frame after the entry frame. Only
+        # instant exits leave a state within its entry frame. The fourth
+        # field is the first frame that may take it. GAP (F40, "the state's
+        # entry frame" for an until's timeout): the wait's entry frame, as
+        # the wait is a state of its own (3.11 rule 9).
         out = []
         st = v.state
         if st is not None:
             for e in st.exits:
                 if e.kind == "after":
-                    out.append(("exit", onset(v.entry_f) + e.after, e, v.vid))
+                    out.append(("exit", onset(v.entry_f) + e.after, e, v.vid, v.entry_f + 1))
         if v.waiting:
             to = self.parts_untils(v)[1][v.part][1]
             if to is not None:
-                out.append(("timeout", onset(v.wait_f) + to, None, v.vid))
+                out.append(("timeout", onset(v.wait_f) + to, None, v.vid, v.wait_f + 1))
         elif v.part_end is not None:
-            out.append(("partend", v.part_end, None, v.vid))
+            out.append(("partend", v.part_end, None, v.vid, 0))
         return out
 
     def parts_untils(self, v):
@@ -932,8 +931,9 @@ class Run:
                         pool.append((d, oe[0], c, oe[1]))
             else:
                 limit = onset(k) + LEAD
-            for c in self.visit_timed(v):
-                if c[1] <= limit:
+            for c5 in self.visit_timed(v):
+                c = c5[:4]
+                if c[1] <= limit and k >= c5[4]:
                     oe = self.order_of(c, v)
                     if oe is not None:
                         pool.append((c[1], oe[0], c, oe[1]))
@@ -972,12 +972,12 @@ class Run:
             if t < v.entry_t:
                 # GAP (3.11 rule 11 against D20 rule 3): a response that
                 # becomes final in a state entered after the response's time
-                # (a timed exit taken early by the lead rule, or a record that
-                # came late). Read: rule 11, the exit's time is the
-                # response's, taken when final.
+                # (a record that came late). Reading (the coordinator,
+                # 2026-11-12; the player's): the exit is taken at the later
+                # of the response's time and the state's entry. A reading,
+                # not a decision, so the mark stays.
                 self.gap("response-before-entry")
-                if "clamp_entry" in READ:
-                    t = v.entry_t
+                t = v.entry_t
         if kind in ("partend", "until"):
             self.part_step(v, kind, t, k, phase, cands)
             return
@@ -991,11 +991,13 @@ class Run:
                 return
             # 3.11 rule 9: the timeout is an exit to end with outcome
             # "timeout"; F28: "its timeout has the code after the state's
-            # own and shared exits (and the response's)". GAP: read as the
-            # count of those exits (the next index); the until's `on` has no
-            # code, since it ends no visit.
-            self.gap("F28-timeout-code")
-            self.leave(v, t, len(st.exits) + (1 if "f28_next" in READ else 0), "exit", k)
+            # own and shared exits (and the response's)": the count of those
+            # exits, the next index; the until's `on` has no code, since it
+            # ends no visit. Was a GAP; decided for this reading (the
+            # coordinator, 2026-11-12: the player changes).
+            if v.wait_f != v.entry_f and lead_frame(t) <= v.wait_f:
+                self.gap("F40-until-entry")   # F40 moved it (visit_timed)
+            self.leave(v, t, len(st.exits), "exit", k)
             self.finish_states(t, k)
             return
         if kind in ("hit", "resp", "exit"):
@@ -1023,27 +1025,20 @@ class Run:
                 v.wait_t = t
                 v.wait_f = k
                 ctl = untils[v.part][0]
-                if ctl in v.dets:
-                    # GAP (F3 against 3.7's one hit detect per region): the
-                    # state's exits stay armed (F3) while the until arms the
-                    # same control. Read: two detects, so the exit's hold
-                    # goes on; one node re-armed would restart it.
-                    self.gap("until-rearms-exit-control")
+                # An until on a control that the state's exits also name: the
+                # exits stay armed (F3), so the until gets a detect of its
+                # own and the exits' hold goes on. Was a GAP; decided for
+                # this reading (the coordinator, 2026-11-12: the player
+                # changes).
                 self.flag_window(t)
                 v.until_det = Det(self.tpl.regions[ctl], t, self.hand)
-                if ctl in v.dets and "shared_detect" in READ:
-                    v.dets[ctl] = v.until_det
-                    if v.until_det.hit is not None:
-                        cands.append(("hit", v.until_det.hit, ctl, v.vid))
                 if v.until_det.hit is not None:
                     if t > onset(k):
                         self.gap("future-arm-hit")
-                    if phase != "P":
-                        self.gap("arm-hit-drain")
-                    if phase in ("T", "F") and "drain_late" in READ:
-                        self.late.append(("until", t, None, v.vid))
-                    else:
-                        cands.append(("until", t, None, v.vid))
+                    # A hit that an arm makes is taken before the frame's
+                    # evaluate (F38: the exit wins at its time). Was the GAP
+                    # arm-hit-drain; decided (the coordinator, 2026-11-12).
+                    cands.append(("until", t, None, v.vid))
                 return
             # The last part's end.
             if v.state is None:
@@ -1118,12 +1113,9 @@ class Run:
         f = k
         self.entries = getattr(self, "entries", 0) + 1
         if self.entries > 4096:
-            # GAP (D20 rule 6): an after_s exit counts as one that waits, but
-            # an after_s of at most half a frame counts from the entry
-            # frame's onset and lands, by the lead rule, on that same frame:
-            # a cycle through it changes state at one time without end. The
-            # loader does not refuse it; the player stops on a guard.
-            self.gap("zero-time-cycle")
+            # A guard, not a rule: F40 (below, visit_timed) makes every cycle
+            # that the loader accepts advance. Was the GAP zero-time-cycle.
+            self.gap("model-loop")
             raise Loop()
         n = tr.visits.get(st.name, 0) + 1
         tr.visits[st.name] = n
@@ -1165,15 +1157,10 @@ class Run:
             if d.hit is not None:
                 if t > onset(k):
                     self.gap("future-arm-hit")
-                if phase != "P":
-                    # GAP (when an arm's own hit is drained): 3.11 rule 4
-                    # drains hits after each feed; a hit that the arm itself
-                    # makes at a frame is taken here, before the evaluate,
-                    # so F38 removes the state's events at its time.
-                    self.gap("arm-hit-drain")
-                    if "drain_late" in READ and phase in ("T", "F"):
-                        self.late.append(("hit", d.hit, nm, v.vid))
-                        continue
+                # A hit that the arm itself makes is taken before the frame's
+                # evaluate, so F38 removes the state's steps at its time. Was
+                # the GAP arm-hit-drain; decided (the coordinator,
+                # 2026-11-12: the player resolves it before the evaluate).
                 cands.append(("hit", d.hit, nm, v.vid))
         evs, end = self.build(tr, st.parts[0], t, f, v.vid)
         v.events.extend(evs)

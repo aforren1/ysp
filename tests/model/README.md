@@ -42,8 +42,6 @@ Options:
 - `--no-shrink` does not shrink failing cases.
 - `GEN_AVOID=state_at,until_timeout,release` leaves those features out
   of the generated cases, so that a known difference does not hide others.
-- `V2MODEL_READ=f28_next,clamp_entry,shared_detect,drain_late` makes the
-  model take another reading at four GAPs (see below).
 
 ## What the model covers
 
@@ -58,7 +56,8 @@ Options:
 - The key response: `choices`, `from`, `duration_s`,
   `minimum_valid_rt_s`, `response_ends_trial`, `max_responses`,
   `key_answer`, `wait_for_key_release`, and the three rules of F34.
-- Frames: the lead rule for timed exits and step ends, "the first frame at
+- Frames: the lead rule for timed exits and step ends, F40 (a timed exit
+  is never taken on its state's entry frame), "the first frame at
   or after" for hits, the list order of D20 rule 4 at equal times, F38,
   and the wait for the landing frame's flip record (3.11 rule 11).
 - An events template with `until`, `after` and the response (2.5, 2.6,
@@ -83,6 +82,16 @@ stagger, `recenter`, controls other than a region, `rate` frame, relative
 roles, signal-choice responses, columns, traces, `allow_held_key`, more
 than one press a trial, and real (not `--sim`) runs.
 
+## Decided points
+
+These were GAPs; the user or the coordinator decided them on 2026-11-12,
+and the model follows the decision: F40 (a timed exit, `after_s` or an
+until's `timeout_s`, lands on the later of its lead-rule frame and the
+frame after the entry frame); an until's timeout code is the count of the
+state's own, shared and added exits (F28); an until on a control that the
+state's exits name has a detect of its own (F3); a hit that an arm makes is
+taken before the frame's evaluate (F38).
+
 ## GAPs
 
 A GAP is a point that the format does not decide. The model marks each in
@@ -94,15 +103,12 @@ difference at a GAP is a question for the format, not a player bug.
 | The simulated display's onsets; when a flip record arrives | Measured: the grid above; frame L's record is in at frame L + 1 |
 | `arm-order`: an arm made at a frame has a time that is not the input's place (a timed exit, a response that became final, a hold that a later sample found) | Not decided; the generator moves samples out of these windows |
 | `future-arm-hit`: an arm after the frame's onset whose test is true at once | The hit is taken in that frame |
-| `arm-hit-drain`: when a hit that an arm makes is drained | At once, before the evaluate, so F38 removes the state's steps at that time |
 | `refound-in-frame`: a hold armed by a state that a frame's hit started, which ends before that frame's onset | The frame finds it, and its next state starts on the same frame |
-| `F28-timeout-code`: the code of an until's timeout | The count of the state's own, shared and added exits |
-| `response-before-entry`: a response that becomes final in a state entered after the response's time | Taken, with the response's time (3.11 rule 11) |
-| `until-rearms-exit-control`: an until on a control that the state's exits also name | Two detects: the exits' hold goes on (F3) |
+| `response-before-entry`: a response that becomes final in a state entered after the response's time | The exit's time is the later of the response's time and the state's entry (a reading of 2026-11-12) |
 | `at-after-until`: `at_s` after an `until` in a state | From the until's hit (rule 9: the steps after it are the next state), not the state's entry (rule 6) |
-| `zero-time-cycle`: a cycle whose only waiting exit is an `after_s` of at most half a frame (it counts from the entry frame's onset and lands on that frame) | The model stops the trial; the loader does not refuse it (D20 rule 6 counts `after_s` as waiting) |
 | `tie-steps-end`: a steps' end and an exit at one time | The last steps' end of a state with no authored exits first; else the exit first |
 | `release-time`, `release-after-deadline`: a response that ends at its key's release | The release is the exit's time; the deadline waits for it |
+| F40 for an until's timeout: "the state's entry frame" | The wait's entry frame (the wait is a state of its own, 3.11 rule 9) |
 | The outcome column with no response in an events template | `done` |
 | A sample and a press at one time | The sample first |
 | The deadline of F34 rule 2 | A deadline with no response sets `timeout` |
