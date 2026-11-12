@@ -23,6 +23,9 @@
 #define V2_FRAME_PENDING 64      /* frames whose flip record has not come   */
 #define V2_STATE_ROWS 64         /* state rows waiting for their record     */
 #define V2_HISTORY 4096          /* D38's ring for a value read at a time   */
+#define V2_SAMPLE_MAX_S 1e7      /* a samples file's latest time: 115 days  */
+#define V2_VISIT_TWEENS 64       /* tweens of one state visit rule 8 stops  */
+#define V2_SAMPLE_MAX_V 1e9      /* a sample's largest coordinate           */
 
 enum { X_HIT = 1, X_RESPONSE, X_AFTER, X_INSTANT };
 enum { P_NUM = 0, P_NEG, P_SEC };
@@ -83,6 +86,8 @@ typedef struct v2_exit {
     const yexp_value* outcome;
     const char* outcome_text;  /* an until's "timeout"                      */
     int code;                  /* the state row's code                      */
+    bool part;                 /* an until's timeout: from the wait's start,
+                                * not the state's (F3)                     */
 } v2_exit;
 
 typedef struct v2_rs {         /* a runtime state: a segment or a wait (rule 9) */
@@ -109,7 +114,10 @@ typedef struct v2_trace {
     int64_t* rt; double* rv; uint8_t* rtier; uint32_t* rdev; int nrows; long lost;
 } v2_trace;
 
-typedef struct v2_frow { int64_t frame, planned; int trial; int tmpl; } v2_frow;
+/* A frame trace's row waiting for its frame's flip record (3.7). One the
+ * next trial's reset overtakes keeps its values read at planned_s. */
+typedef struct v2_frow { int64_t frame, planned; int trial; int tmpl; bool snap; int flags; double vals[32]; } v2_frow;
+enum { V2_FR_NO_RECORD = 1, V2_FR_AT_PLANNED = 2 };   /* a frame trace's flags column */
 
 typedef struct v2_srow {       /* a state row waiting for its entry frame's record */
     int64_t frame, end_ns, onset, planned, residual;
@@ -157,6 +165,8 @@ struct pl_v2 {
     int cur;                   /* runtime state, V2_END                     */
     int def_cur;               /* its state                                */
     int64_t entry_t, steps_end, entry_onset;
+    int64_t visit_onset;       /* the state visit's entry frame onset: its
+                                * after_s exits count from it in every part (F3) */
     int64_t def_entry_frame, def_entry_t;
     bool steps_pending, entry_onset_known;
     int ev0, ev1;              /* the runtime state's events               */
@@ -173,6 +183,26 @@ struct pl_v2 {
     int64_t resp_t;            /* the response's time, known at the end      */
     char outcome_buf[256];
     int64_t take_t; int n_take;
+    bool frozen;               /* ysig_open() done: no node is added after */
+    /* an events template (2.5 kept by part 3): `after` follows the events
+     * and the response, as in version 1 */
+    bool events_done, resp_done, after_built;
+    bool trial_entry;          /* the first state's visit at the trial's start:
+                                * its head recenters ran before the reset (3.6) */
+    int arm_rs;                /* a visit whose first step is a recenter: its
+                                * exits arm at that call (3.12), -1 none      */
+    const yexp_step* arm_after;/* the visit's last head recenter             */
+    int visit_ev0;             /* the visit's first event: rule 8 takes all its parts' */
+    /* the visit's tweens, every part's: rule 8 stops one still running at
+     * the value it last wrote (a track is no event ytl_remove() takes) */
+    struct { int ch; int64_t end; } tw[V2_VISIT_TWEENS]; int n_tw;
+    /* the flip records' onsets of the trial's frame times (a time column
+     * takes the record's, as the rows do): per stimulus, per state, the end */
+    int64_t* state_frame;      /* the latest entry frame, -1                  */
+    int64_t* stim_recf; int64_t* stim_rec;
+    int64_t* state_recf; int64_t* state_rec;
+    int64_t end_frame, end_recf, end_rec;
+    int64_t events_end_rel, resp_bt;   /* from the trial's base            */
 };
 
 typedef struct pl_v2_session {
@@ -198,9 +228,10 @@ typedef struct pl_v2_session {
     bool* reads;               /* pl_v2_reads()'s scratch, one per stimulus */
 } pl_v2_session;
 
+typedef struct v2_tcell { int col; int64_t a, b; int sa, sb; bool has_a, has_b; int64_t fa, fb; } v2_tcell;
 struct pl_v2_row {
-    int n;
-    struct { int col; int64_t a, b; int sa, sb; bool has_a, has_b; } t[16];
+    int n, cap;                /* cap: the most `time` columns of a template */
+    v2_tcell* t;
 };
 
 /* --- helpers ----------------------------------------------------------- */
@@ -393,6 +424,7 @@ static int v2_exits_build(pl_player* p, pl_v2* v) {
                 x->after = u->timeout;
                 x->to = V2_END;
                 x->outcome_text = "timeout";
+                x->part = true;
                 x->code = n_own + n_sh + (resp_end ? 2 : 1);
             }
         }
@@ -402,7 +434,10 @@ static int v2_exits_build(pl_player* p, pl_v2* v) {
          * listed state, or the end */
         if (!r->wait && i < last_of_def) r->next = i + 1;
         else if (r->wait) r->next = -2;
-        else if (st && (st->n_exits > 0 || n_sh > 0 || resp_end)) r->next = -2;
+        /* reading F34: the response exit that response_ends_trial adds
+         * does not make a state one with exits; only the author's own and
+         * shared exits do (3.11 rule 10, as the loader's rules count) */
+        else if (st && (st->n_exits > 0 || n_sh > 0)) r->next = -2;
         else if (s >= 0 && s + 1 < t->n_states) r->next = v->first_rs[s + 1];
         else r->next = V2_END;
     }
@@ -561,6 +596,11 @@ int pl_v2_channels(pl_player* p) {
 /* --- the graph (3.6, 3.7) --------------------------------------------- */
 
 static int v2_node(pl_player* p, pl_v2* v, int op, int in0, int in1) {
+    if (v->frozen) {
+        /* a node made after ysig_open() would alias another's index */
+        pl_fail(p, "template '%s': internal: a graph node made after the graph opened", v->def->name);
+        return -1;
+    }
     if (v->nn >= v->ncap) {
         int nc = v->ncap ? v->ncap * 2 : 64;
         ysig_node* q = (ysig_node*)pl_alloc(p, sizeof(ysig_node) * (size_t)nc);
@@ -1070,6 +1110,19 @@ static int v2_forms_graph(pl_player* p, pl_v2* v) {
     return 0;
 }
 
+/* The nodes a column's form reads at the row's fill (3.15): made at load,
+ * so the fill only reads them. */
+static int v2_column_nodes(pl_player* p, pl_v2* v, const yexp_value* f) {
+    if (!f) return 0;
+    if (f->kind == YEXP_V_SIGNAL) return v2_name_node(p, v, f->str, NULL) < 0 ? -1 : 0;
+    if (f->kind == YEXP_V_WHEN) {
+        if (f->by && f->by->kind == YEXP_V_SIGNAL && v2_name_node(p, v, f->by->str, NULL) < 0) return -1;
+        if (v2_column_nodes(p, v, &f->items[0]) < 0) return -1;
+        return v2_column_nodes(p, v, &f->items[1]);
+    }
+    return 0;
+}
+
 /* --- traces (3.7, 3.15) --------------------------------------------------- */
 
 static int v2_traces_build(pl_player* p, pl_v2* v) {
@@ -1165,6 +1218,14 @@ static int v2_samples_load(pl_player* p) {
         if (sscanf(line, "%lf,%127[^,],%lf,%lf", &t, role, &x, &y) != 4 || !(t >= 0)) {
             fclose(f);
             pl_fail(p, "--samples '%s', line %d: expected t_s,role,x,y", p->args.samples_path, ln);
+            p->bad_arg = true;
+            return -1;
+        }
+        /* a time past int64 ns, or a value past a float, would wrap or
+         * turn infinite: refused, with the bounds */
+        if (!(t <= V2_SAMPLE_MAX_S) || !isfinite(x) || !isfinite(y) || fabs(x) > V2_SAMPLE_MAX_V || fabs(y) > V2_SAMPLE_MAX_V) {
+            fclose(f);
+            pl_fail(p, "--samples line %d: t_s must be 0 to %g s, and x and y finite and within %g", ln, V2_SAMPLE_MAX_S, V2_SAMPLE_MAX_V);
             p->bad_arg = true;
             return -1;
         }
@@ -1354,6 +1415,19 @@ static int v2_binds(pl_player* p, pl_v2* v) {
 int pl_v2_load(pl_player* p) {
     pl_v2_session* S = p->v2s;
     int ti, i, max_slots = 0;
+    /* a --sim-gain for no signal role, or samples nothing reads, would be
+     * a silent no-op: refused by name */
+    for (i = 0; i < p->args.n_gains; i++)
+        if (!yexp_sigrole_get(p->def, p->args.gains[i].name)) {
+            pl_fail(p, "--sim-gain %s: the definition has no signal role '%s'", p->args.gains[i].name, p->args.gains[i].name);
+            p->bad_arg = true;
+            return -1;
+        }
+    if (p->args.samples_path && p->def->n_sigroles == 0) {
+        pl_fail(p, "--samples: the definition has no signal role to feed");
+        p->bad_arg = true;
+        return -1;
+    }
     if (!S) return 0;
     S->gain = (double*)pl_alloc(p, sizeof(double) * (size_t)(p->def->n_sigroles + 1));
     S->reads = (bool*)pl_alloc(p, (size_t)p->def->n_stimuli + 1);
@@ -1399,6 +1473,12 @@ int pl_v2_load(pl_player* p) {
         v->stim_onset = (int64_t*)pl_alloc(p, sizeof(int64_t) * (size_t)(p->n_stims + 1));
         v->stim_frame = (int64_t*)pl_alloc(p, sizeof(int64_t) * (size_t)(p->n_stims + 1));
         v->flags = (bool*)pl_alloc(p, sizeof(bool) * (size_t)(t->n_flags + 1));
+        v->state_frame = (int64_t*)pl_alloc(p, sizeof(int64_t) * (size_t)(v->n_states + 1));
+        v->state_recf = (int64_t*)pl_alloc(p, sizeof(int64_t) * (size_t)(v->n_states + 1));
+        v->state_rec = (int64_t*)pl_alloc(p, sizeof(int64_t) * (size_t)(v->n_states + 1));
+        v->stim_recf = (int64_t*)pl_alloc(p, sizeof(int64_t) * (size_t)(p->n_stims + 1));
+        v->stim_rec = (int64_t*)pl_alloc(p, sizeof(int64_t) * (size_t)(p->n_stims + 1));
+        if (!v->state_frame || !v->state_recf || !v->state_rec || !v->stim_recf || !v->stim_rec) return -1;
         v->dcap = 2 * 64 * 3 * 8;
         v->data = (double*)pl_alloc(p, sizeof(double) * (size_t)v->dcap);
         if (!v->ctl || !v->role_node || !v->visits || !v->state_onset || !v->stim_onset || !v->stim_frame || !v->flags || !v->data) return -1;
@@ -1411,6 +1491,8 @@ int pl_v2_load(pl_player* p) {
         /* nodes: a template with no control and no form has no graph */
         for (k = 0; k < v->n_ctl; k++) if (v2_ctl_build(p, v, k) < 0) return -1;
         if (v2_forms_graph(p, v) < 0 || v2_traces_build(p, v) < 0 || v2_exits_build(p, v) < 0) return -1;
+        /* the nodes the columns read, before the graph opens */
+        for (k = 0; k < t->n_columns; k++) if (v2_column_nodes(p, v, t->columns[k].value) < 0) return -1;
         if (v2_collector(p, v, &p->tmpls[ti]) < 0) return -1;
         if (v->nn > 0) {
             ysig_desc* d = &v->gd;
@@ -1450,6 +1532,7 @@ int pl_v2_load(pl_player* p) {
         if (!v || !v->has_graph) continue;
         v->gd.channels = S->vals + p->n_channels;
         if (!ysig_open(&v->g, &v->gd)) { pl_fail(p, "template '%s': the graph: %s", v->def->name, ysig_error(&v->g)); return -1; }
+        v->frozen = true;
         ysig_reset(&v->g, 0);
         v->cur = V2_END;
         v->ended = true;
@@ -1774,6 +1857,35 @@ static void v2_resp_arm(pl_player* p, pl_v2* v, int64_t t) {
     }
 }
 
+/* Whether s is one of a state's head recenter steps (3.6, 3.12). */
+static bool v2_head_recenter(const yexp_state* st, const yexp_step* s) {
+    int k;
+    for (k = 0; k < st->n_steps && st->steps[k].op == YEXP_RECENTER; k++)
+        if (&st->steps[k] == s) return true;
+    return false;
+}
+
+/* An events template's `after`, once its events are done and its response
+ * has ended (version 1's rule, 2.5): from the later of the two. A response
+ * whose `from` never landed (an until's timeout before it) is not waited
+ * for (reading F35). */
+static int v2_after(pl_player* p, pl_v2* v) {
+    int64_t start = v->events_end_rel;
+    if (v->after_built || !v->events_done) return 0;
+    if (v->def->response && p->responding && !v->resp_done && p->from_landed) return 0;
+    if (v->resp_done && v->resp_bt > start) start = v->resp_bt;
+    v->after_built = true;
+    return pl_after_build(p, start);
+}
+
+int pl_v2_events_response(pl_player* p, int64_t bt) {
+    pl_v2* v = p->tmpl ? p->tmpl->v2 : NULL;
+    if (!v || v->def->states) return 0;
+    v->resp_done = true;
+    v->resp_bt = bt;
+    return v2_after(p, v);
+}
+
 /* Enter runtime state rs at time t; f is the frame being made (the entry
  * frame, D35 and rule 2). */
 static int v2_enter(pl_player* p, pl_v2* v, int rs, int64_t t, const yscr_frame* f, bool hit) {
@@ -1781,6 +1893,15 @@ static int v2_enter(pl_player* p, pl_v2* v, int rs, int64_t t, const yscr_frame*
     int i, guard = 0;
     for (;;) {
         if (++guard > 4096) { pl_fail(p, "template '%s': more than 4096 instant exits at one time", v->def->name); return -1; }
+        if (rs == V2_END && !v->def->states) {
+            /* an events template: its events are done; `after` follows
+             * them and the response (2.5), and its end MARK ends the trial */
+            v->cur = V2_END;
+            v->hit_entry = hit;
+            v->events_done = true;
+            v->events_end_rel = t - v2_anchor(p);
+            return v2_after(p, v);
+        }
         if (rs == V2_END) {
             /* the end lands as version 1's end MARK (rule 10) */
             ytl_op o[2];
@@ -1815,11 +1936,23 @@ static int v2_enter(pl_player* p, pl_v2* v, int rs, int64_t t, const yscr_frame*
             v->def_cur = r->def;
             v->def_entry_frame = f->index;
             v->def_entry_t = t;
+            v->visit_onset = f->onset;
             v->state_onset[r->def] = f->onset;
+            v->state_frame[r->def] = f->index;
             if (r->def == v->base_state) v->base_onset = f->onset;
-            /* rule 3: the state's exits' controls arm at its entry time */
-            for (i = 0; i < r->n_exits; i++)
-                if (r->exits[i].kind == X_HIT && v2_arm_ctl(p, v, r->exits[i].ctl, t) < 0) return -1;
+            /* rule 3: the state's exits' controls arm at its entry time; a
+             * state whose first step is a recenter arms them at that call's
+             * time (3.12), when its mark lands (pl_v2_on_mark) */
+            v->arm_rs = -1;
+            v->visit_ev0 = -1;
+            if (st->n_steps > 0 && st->steps[0].op == YEXP_RECENTER && !(v->trial_entry && r->def == 0)) {
+                int h = 0;
+                while (h < st->n_steps && st->steps[h].op == YEXP_RECENTER) h++;
+                v->arm_rs = rs;
+                v->arm_after = &st->steps[h - 1];
+            } else
+                for (i = 0; i < r->n_exits; i++)
+                    if (r->exits[i].kind == X_HIT && v2_arm_ctl(p, v, r->exits[i].ctl, t) < 0) return -1;
             if (v->resp_from_kind == YEXP_REF_STATE && v->resp_from_index == r->def) v2_resp_arm(p, v, t);
             /* an instant exit is taken when the state starts, before its
              * steps run (reading F21) */
@@ -1844,6 +1977,7 @@ static int v2_enter(pl_player* p, pl_v2* v, int rs, int64_t t, const yscr_frame*
     v->cur = rs;
     v->entry_t = t;
     v->entry_onset = f->onset;
+    if (r->def < 0) v->visit_onset = f->onset;   /* an events template's part */
     v->entry_onset_known = true;
     v->hit_entry = hit;
     /* the state's steps: one op table from its entry time */
@@ -1863,6 +1997,26 @@ static int v2_enter(pl_player* p, pl_v2* v, int rs, int64_t t, const yscr_frame*
         if (m < 0) return -1;
         n += m;
         v->ev0 = ytl_add_n(&p->tl, &dummy, 0);
+        if (r->first || v->visit_ev0 < 0) { v->visit_ev0 = v->ev0; v->n_tw = 0; }
+        {
+            /* the table's tweens and their ends, on the trial's base */
+            int64_t cur = 0;
+            int k;
+            for (k = 0; k < n; k++) {
+                const ytl_op* o = &ops[k];
+                if (o->op == YTL_OP_AT) cur = o->t_ns;
+                else if (o->op == YTL_OP_WAIT) cur += o->t_ns;
+                else if (o->op == YTL_OP_TO || o->op == YTL_OP_THEN) {
+                    int64_t legs = (int64_t)(o->tween.cycles > 1 ? o->tween.cycles : 1) * (o->tween.yoyo ? 2 : 1);
+                    int64_t end = o->tween.cycles == YTL_FOREVER ? INT64_MAX : cur + o->tween.delay_ns + o->tween.duration_ns * legs;
+                    if (v->n_tw >= V2_VISIT_TWEENS) { pl_fail(p, "template '%s': a state visit has more than %d tweens", v->def->name, V2_VISIT_TWEENS); return -1; }
+                    v->tw[v->n_tw].ch = o->ch;
+                    v->tw[v->n_tw].end = end;
+                    v->n_tw++;
+                    if (o->op == YTL_OP_THEN) cur += o->tween.delay_ns + o->tween.duration_ns;
+                }
+            }
+        }
         p->q = ytl_seq_on(&p->tl, PL_BASE_TRIAL);
         rc = ytl_run(&p->q, ops, n);
         if (rc != 0 || p->q.err) { pl_fail(p, "template '%s': a state's table: %s (op %d)", v->def->name, ytl_strerror(rc ? rc : p->q.err), p->q.err_call); return -1; }
@@ -1871,6 +2025,31 @@ static int v2_enter(pl_player* p, pl_v2* v, int rs, int64_t t, const yscr_frame*
         v->steps_end = v2_anchor(p) + cursor;
         v->steps_pending = r->next != -2;
     }
+    return 0;
+}
+
+/* Rule 8: a tween of the visit still running at t keeps the value it last
+ * wrote: a jump to that value takes its channel over at t. */
+static int v2_tweens_stop(pl_player* p, pl_v2* v, int64_t t) {
+    int64_t rel = t - v2_anchor(p);
+    const float* vals = ytl_values(&p->tl);
+    int k;
+    for (k = 0; k < v->n_tw; k++) {
+        ytl_op o[2];
+        int rc;
+        if (v->tw[k].end <= rel) continue;
+        memset(o, 0, sizeof o);
+        o[0].op = YTL_OP_AT;
+        o[0].t_ns = rel;
+        o[1].op = YTL_OP_TO;
+        o[1].ch = v->tw[k].ch;
+        o[1].tween.to = vals[v->tw[k].ch];
+        o[1].tween.duration_ns = 0;
+        p->q = ytl_seq_on(&p->tl, PL_BASE_TRIAL);
+        rc = ytl_run(&p->q, o, 2);
+        if (rc != 0 || p->q.err) { pl_fail(p, "template '%s': a tween's stop: %s", v->def->name, ytl_strerror(rc ? rc : p->q.err)); return -1; }
+    }
+    v->n_tw = 0;
     return 0;
 }
 
@@ -1891,15 +2070,21 @@ static int v2_take(pl_player* p, pl_v2* v, const v2_exit* x, int64_t t, const ys
         v->take_t = t;
         v->n_take = 0;
     }
-    for (id = v->ev0; id < v->ev1; id++) {
-        const ytl_event* e = ytl_find(&p->tl, id);
-        if (e && !(e->flags & (YTL_EV_FIRED | YTL_EV_SKIPPED))) (void)ytl_remove(&p->tl, id);
-    }
-    v2_outcome(v, x->outcome, x->outcome_text);
-    if (r && r->def >= 0) {
-        /* the visit ends unless the exit stays in the state (an until's next part) */
-        bool stays = x->to >= 0 && v->rs[x->to].def == r->def && !v->rs[x->to].first;
-        if (!stays) v2_srow_close(p, v, x->code, t);
+    {
+        /* rule 8: the state's events not yet fired go, every part's (a
+         * tween of an earlier part too), unless the exit stays in the state */
+        bool stays = r && r->def >= 0 && x->to >= 0 && v->rs[x->to].def == r->def && !v->rs[x->to].first;
+        int from = !stays && v->visit_ev0 >= 0 ? v->visit_ev0 : v->ev0;
+        for (id = from; id < v->ev1; id++) {
+            const ytl_event* e = ytl_find(&p->tl, id);
+            if (e && !(e->flags & (YTL_EV_FIRED | YTL_EV_SKIPPED))) (void)ytl_remove(&p->tl, id);
+        }
+        if (!stays) {
+            v->arm_rs = -1;
+            if (v2_tweens_stop(p, v, t) < 0) return -1;
+        }
+        v2_outcome(v, x->outcome, x->outcome_text);
+        if (r && r->def >= 0 && !stays) v2_srow_close(p, v, x->code, t);
     }
     return v2_enter(p, v, x->to, t, f, hit);
 }
@@ -1909,7 +2094,16 @@ static int v2_steps_end(pl_player* p, pl_v2* v, const yscr_frame* f) {
     const v2_rs* r = &v->rs[v->cur];
     int64_t t = v->steps_end;
     int to = r->next;
+    int id;
     v->steps_pending = false;
+    /* 3.12: a flag the steps set by their end holds when the next state's
+     * exits and table read it, though its mark lands later in the frame */
+    for (id = v->ev0; id < v->ev1; id++) {
+        const ytl_event* e = ytl_find(&p->tl, id);
+        if (!e || e->kind != YTL_MARK || (e->flags & (YTL_EV_FIRED | YTL_EV_SKIPPED))) continue;
+        if (e->code < PL_MARK_FLAG || e->code >= PL_MARK_FLAG + 2 * 4096 || v2_anchor(p) + e->time_ns > t) continue;
+        if ((e->code - PL_MARK_FLAG) / 2 < v->def->n_flags) v->flags[(e->code - PL_MARK_FLAG) / 2] = ((e->code - PL_MARK_FLAG) & 1) != 0;
+    }
     if (r->def >= 0 && (to < 0 || v->rs[to].def != r->def || v->rs[to].first)) v2_srow_close(p, v, -1, t);
     return v2_enter(p, v, to, t, f, false);
 }
@@ -1952,7 +2146,8 @@ static int v2_hits(pl_player* p, pl_v2* v, const yscr_frame* f) {
                 } else if (x->kind == X_AFTER && v->entry_onset_known) {
                     int64_t a = 0;
                     if (pl_eval_ns(p, &p->env, x->after, &a) < 0) return -1;
-                    if (v->entry_onset + a <= tmax) tx = v->entry_onset + a;
+                    int64_t base = x->part ? v->entry_onset : v->visit_onset;
+                    if (base + a <= tmax) tx = base + a;
                 }
                 if (tx < bt) { bt = tx; best = x; }
             }
@@ -1989,7 +2184,10 @@ static int v2_timed(pl_player* p, pl_v2* v, const yscr_frame* f) {
             int64_t a = 0;
             if (x->kind != X_AFTER || !v->entry_onset_known) continue;
             if (pl_eval_ns(p, &p->env, x->after, &a) < 0) return -1;
-            if (v->entry_onset + a < bt) { bt = v->entry_onset + a; best = x; }
+            {
+                int64_t base = x->part ? v->entry_onset : v->visit_onset;
+                if (base + a < bt) { bt = base + a; best = x; }
+            }
         }
         if (v->steps_pending && v->steps_end <= wend && v->steps_end <= bt) {
             if (v2_steps_end(p, v, f) < 0) return -1;
@@ -2023,8 +2221,14 @@ int pl_v2_trial_start(pl_player* p, const yscr_frame* f) {
     v->steps_pending = false;
     v->entry_onset_known = false;
     v->resp_t = YRSP_NO_TIME;
-    for (i = 0; i < v->n_states; i++) { v->visits[i] = 0; v->state_onset[i] = -1; }
-    for (i = 0; i < p->n_stims; i++) { v->stim_onset[i] = -1; v->stim_frame[i] = -1; }
+    v->events_done = v->resp_done = v->after_built = false;
+    v->arm_rs = -1;
+    v->visit_ev0 = -1;
+    v->n_tw = 0;
+    v->events_end_rel = v->resp_bt = 0;
+    for (i = 0; i < v->n_states; i++) { v->visits[i] = 0; v->state_onset[i] = -1; v->state_frame[i] = v->state_recf[i] = -1; }
+    for (i = 0; i < p->n_stims; i++) { v->stim_onset[i] = -1; v->stim_frame[i] = v->stim_recf[i] = -1; }
+    v->end_frame = v->end_recf = -1;
     for (i = 0; i < v->def->n_flags; i++) v->flags[i] = false;
     for (i = 0; i < v->n_ctl; i++) v->ctl[i].has_hit = false;
     for (i = 0; i < v->n_traces; i++) { v->traces[i].nrows = 0; }
@@ -2083,7 +2287,9 @@ int pl_v2_trial_start(pl_player* p, const yscr_frame* f) {
         /* the first state's lowering: its steps to timeline ops */
         int rc;
         YRT_ZONE(ze, "pl.v2_enter");
+        v->trial_entry = true;
         rc = v2_enter(p, v, 0, f->onset, f, false);
+        v->trial_entry = false;
         YRT_ZONE_END(ze);
         if (rc < 0) return -1;
     }
@@ -2200,6 +2406,8 @@ static int v2_frame_rows_queue(pl_player* p, pl_v2* v, const yscr_frame* f) {
         S->fpend[S->n_fpend].planned = f->onset;
         S->fpend[S->n_fpend].trial = p->global_trial - 1;
         S->fpend[S->n_fpend].tmpl = v->index * 64 + i;
+        S->fpend[S->n_fpend].snap = false;
+        S->fpend[S->n_fpend].flags = 0;
         S->n_fpend++;
     }
     return 0;
@@ -2207,7 +2415,7 @@ static int v2_frame_rows_queue(pl_player* p, pl_v2* v, const yscr_frame* f) {
 
 static int v2_trace_stream(pl_player* p, pl_v2* v, v2_trace* tr);
 
-typedef struct v2_srow_data { int32_t trial; int32_t tier; int32_t device; int32_t pad; int64_t frame, planned, t; double v[32]; } v2_srow_data;
+typedef struct v2_srow_data { int32_t trial; int32_t tier; int32_t device; int32_t flags; int64_t frame, planned, t; double v[32]; } v2_srow_data;
 /* the writer's side buffer holds one in each slot (pl_wq_push_row) */
 typedef char v2_srow_fits[sizeof(v2_srow_data) <= PL_WQ_ROW_BYTES ? 1 : -1];
 
@@ -2223,10 +2431,19 @@ static int v2_frame_row_write(pl_player* p, const v2_frow* fr, int64_t onset, bo
     row.frame = fr->frame;
     row.planned = fr->planned;
     row.t = have ? onset : YTR_MISSING_NS;
+    row.flags = fr->flags | (have ? 0 : V2_FR_NO_RECORD);
+    if (fr->snap) {
+        memcpy(row.v, fr->vals, sizeof row.v);
+        return pl_wq_push_row(p, tr->stream, &row, sizeof row);
+    }
     for (k = 0; k < tr->n_items; k++) {
         ysig_value val;
         int l;
-        if (ysig_value_at(&v->g, tr->item_node[k], have ? onset : fr->planned, &val) < 0) val = *ysig_value_of(&v->g, tr->item_node[k]);
+        if (ysig_value_at(&v->g, tr->item_node[k], have ? onset : fr->planned, &val) < 0) {
+            const ysig_value* y = ysig_value_of(&v->g, tr->item_node[k]);
+            if (!y) { pl_fail(p, "the trace '%s': an item has no value in the graph", tr->def->name); return -1; }
+            val = *y;
+        }
         for (l = 0; l < tr->item_lanes[k] && c < 32; l++) row.v[c++] = val.v[l];
     }
     /* the writer's: a real run's frame thread never calls write() */
@@ -2238,6 +2455,36 @@ static int v2_frame_rows_flush(pl_player* p, bool all) {
     pl_v2_session* S = p->v2s;
     int i;
     if (!S || !all) return 0;
+    /* the next trial's reset empties the rings: the waiting rows keep their
+     * values at planned_s and wait on for their record's t_s (reading F29) */
+    for (i = 0; i < S->n_fpend; i++) {
+        v2_frow* fr = &S->fpend[i];
+        pl_v2* v = S->t[fr->tmpl / 64];
+        v2_trace* tr = &v->traces[fr->tmpl % 64];
+        int k, c = 0;
+        if (fr->snap) continue;
+        memset(fr->vals, 0, sizeof fr->vals);
+        for (k = 0; k < tr->n_items; k++) {
+            ysig_value val;
+            int l;
+            if (ysig_value_at(&v->g, tr->item_node[k], fr->planned, &val) < 0) {
+                const ysig_value* y = ysig_value_of(&v->g, tr->item_node[k]);
+                if (!y) { pl_fail(p, "the trace '%s': an item has no value in the graph", tr->def->name); return -1; }
+                val = *y;
+            }
+            for (l = 0; l < tr->item_lanes[k] && c < 32; l++) fr->vals[c++] = val.v[l];
+        }
+        fr->snap = true;
+        fr->flags |= V2_FR_AT_PLANNED;
+    }
+    return 0;
+}
+
+/* The session's end: frame trace rows whose record never came, flagged. */
+int pl_v2_finish(pl_player* p) {
+    pl_v2_session* S = p->v2s;
+    int i;
+    if (!S) return 0;
     for (i = 0; i < S->n_fpend; i++) if (v2_frame_row_write(p, &S->fpend[i], 0, false) < 0) return -1;
     S->n_fpend = 0;
     return 0;
@@ -2250,6 +2497,11 @@ int pl_v2_on_record(pl_player* p, const yscr_record* rec) {
     for (i = 0; i < S->n_fpend; i++) {
         if (S->fpend[i].frame == rec->index) {
             if (v2_frame_row_write(p, &S->fpend[i], rec->onset ? rec->onset : rec->planned, rec->onset != 0) < 0) return -1;
+            continue;
+        }
+        if (rec->index >= S->fpend[i].frame + PL_OUT_WAIT_FRAMES) {
+            /* its record did not come in the rows' bound: t_s empty, flagged */
+            if (v2_frame_row_write(p, &S->fpend[i], 0, false) < 0) return -1;
             continue;
         }
         S->fpend[m++] = S->fpend[i];
@@ -2332,6 +2584,7 @@ int pl_v2_on_mark(pl_player* p, const ytl_event* e) {
     if (e->code == PL_MARK_END) {
         v->end_pending = true;
         v->end_onset = e->onset;
+        v->end_frame = e->frame;
         return 1;
     }
     if (e->code >= PL_MARK_FLAG && e->code < PL_MARK_FLAG + 2 * 4096) {
@@ -2350,6 +2603,14 @@ int pl_v2_on_mark(pl_player* p, const ytl_event* e) {
         } else if (v2_item(p, s->point, 0, &x, P_NUM) < 0 || v2_item(p, s->point, 1, &y, P_NUM) < 0) return -1;
         for (ti = 0; ti < S->n_t; ti++)
             if (S->t[ti] && S->t[ti]->has_graph && !ysig_recenter(&S->t[ti]->g, s->target.index, x, y, e->onset)) S->recenter_skipped++;
+        if (v->arm_rs >= 0 && s == v->arm_after && v->rs[v->arm_rs].def == v->def_cur) {
+            /* 3.12: the visit's exits arm at the recenter's call */
+            const v2_rs* r = &v->rs[v->arm_rs];
+            int k;
+            v->arm_rs = -1;
+            for (k = 0; k < r->n_exits; k++)
+                if (r->exits[k].kind == X_HIT && v2_arm_ctl(p, v, r->exits[k].ctl, e->onset) < 0) return -1;
+        }
         return 1;
     }
     return 0;
@@ -2435,8 +2696,8 @@ int pl_v2_step_ops(pl_player* p, const yexp_step* s, ytl_op* ops, int c, int cap
     case YEXP_RECENTER: {
         int idx = -1;
         if (v) for (k = 0; k < v->n_recenter; k++) if (v->recenter[k] == s) idx = k;
-        if (idx == -2) return c;
-        if (idx < 0) return c;   /* at the head of the first state: run at the trial's start (3.6) */
+        if (idx < 0) return c;
+        if (v->trial_entry && v->def->states && v2_head_recenter(&v->def->states[0], s)) return c;   /* ran at the trial's start (3.6) */
         if (v2_op(ops, &c, cap, YTL_OP_MARK, 0, 0, PL_MARK_RECENTER + idx) < 0) { pl_fail(p, "the op table is full"); return -1; }
         return c;
     }
@@ -2517,15 +2778,14 @@ static int v2_recenter_scan(pl_player* p, pl_v2* v) {
     if (!n) return 0;
     v->recenter = (const yexp_step**)pl_alloc(p, sizeof(yexp_step*) * (size_t)n);
     if (!v->recenter) return -1;
+    /* every recenter, the first state's head ones too: they run again on
+     * a later visit (a state's steps run on every visit); the trial's
+     * first visit skips them (pl_v2_step_ops) */
     for (r = 0; r < v->n_rs; r++) {
         const v2_rs* x = &v->rs[r];
-        bool head = r == 0 && x->def >= 0;
         if (x->wait) continue;
-        for (k = 0; k < x->n_steps; k++) {
-            if (x->steps[k].op != YEXP_RECENTER) { head = false; continue; }
-            if (head) continue;
-            v->recenter[v->n_recenter++] = &x->steps[k];
-        }
+        for (k = 0; k < x->n_steps; k++)
+            if (x->steps[k].op == YEXP_RECENTER) v->recenter[v->n_recenter++] = &x->steps[k];
     }
     return 0;
 }
@@ -2545,7 +2805,7 @@ static bool v2_text_in(pl_player* p, const yexp_value* arr, const char* text) {
 
 /* D36: the latest outcome set in the trial wins, else version 1's from the
  * response, else "done". requeue_outcomes makes the trial invalid. */
-int pl_v2_trial_end(pl_player* p, const yscr_frame* f, int* outcome_val, bool* requeue) {
+int pl_v2_trial_end(pl_player* p, const yscr_frame* f, int choice, int* outcome_val, bool* requeue) {
     pl_v2* v = p->tmpl->v2;
     const yexp_template* d = v->def;
     (void)f;
@@ -2565,7 +2825,9 @@ int pl_v2_trial_end(pl_player* p, const yscr_frame* f, int* outcome_val, bool* r
     if (d->outcome && d->outcome->kind == YEXP_V_STRING) {
         /* "correct" as version 1; "" (an events template with no response,
          * 2.5's written default) gives no value, as version 1 */
-        if (strcmp(d->outcome->str, "correct") == 0 && p->env.responded) *outcome_val = p->env.has_correct ? (p->env.correct ? 1 : 0) : 0;
+        /* as version 1 (2.5): with no key_answer, the choice's index */
+        if (strcmp(d->outcome->str, "correct") == 0 && p->env.responded)
+            *outcome_val = p->env.has_correct ? (p->env.correct ? 1 : 0) : choice >= 0 ? choice : 0;
     } else if (d->outcome) {
         int64_t x;
         if (pl_eval_int(p, &p->env, d->outcome, &x) < 0) return -1;
@@ -2598,7 +2860,8 @@ static int v2_value_form(pl_player* p, pl_v2* v, const yexp_value* f, pl_val* ou
         int lanes = 1, n = v2_name_node(p, v, f->str, &lanes);
         const ysig_value* x;
         if (n < 0) return -1;
-        x = ysig_value_of(&v->g, n);
+        x = v->has_graph ? ysig_value_of(&v->g, n) : NULL;
+        if (!x) { pl_fail(p, "template '%s': '%s' has no value in the graph", v->def->name, f->str); return -1; }
         out->kind = YEXP_V_NUMBER;
         out->num = x->v[f->i >= 0 ? f->i : 0];
         return 0;
@@ -2609,14 +2872,17 @@ static int v2_value_form(pl_player* p, pl_v2* v, const yexp_value* f, pl_val* ou
         if (t->kind == YEXP_V_TEST) {
             const yexp_control* c = yexp_control_get(p->def, v->def, t->str);
             int ci = c ? v2_ctl_index_of(v, c) : -1;
-            if (ci < 0 || v->ctl[ci].test < 0) { pl_fail(p, "a when's test '%s' has no node", t->str); return -1; }
-            test = ysig_value_of(&v->g, v->ctl[ci].test)->v[0] != 0;
+            const ysig_value* x;
+            if (ci < 0 || v->ctl[ci].test < 0 || !(x = ysig_value_of(&v->g, v->ctl[ci].test))) { pl_fail(p, "a when's test '%s' has no node", t->str); return -1; }
+            test = x->v[0] != 0;
         } else {
             /* above: the signal's lane at or above the level */
             int lanes = 1, n = v2_name_node(p, v, t->str, &lanes);
             double lv;
+            const ysig_value* x;
             if (n < 0 || pl_eval_num(p, &p->env, t->by, &lv) < 0) return -1;
-            test = ysig_value_of(&v->g, n)->v[t->i >= 0 ? t->i : 0] >= lv;
+            if (!(x = ysig_value_of(&v->g, n))) { pl_fail(p, "template '%s': '%s' has no value in the graph", v->def->name, t->str); return -1; }
+            test = x->v[t->i >= 0 ? t->i : 0] >= lv;
         }
         f = &f->items[test ? 0 : 1];
         if (v2_is_form(f)) return v2_value_form(p, v, f, out);
@@ -2628,12 +2894,54 @@ static int v2_value_form(pl_player* p, pl_v2* v, const yexp_value* f, pl_val* ou
         ysig_value x;
         if (ci < 0) { pl_fail(p, "a hit column names '%s', no control here", f->str); return -1; }
         if (!v->ctl[ci].has_hit) return 0;   /* empty with no hit */
-        if (ysig_value_at(&v->g, v->ctl[ci].of, v->ctl[ci].hit_t, &x) < 0) x = *ysig_value_of(&v->g, v->ctl[ci].of);
+        if (ysig_value_at(&v->g, v->ctl[ci].of, v->ctl[ci].hit_t, &x) < 0) {
+            const ysig_value* y = ysig_value_of(&v->g, v->ctl[ci].of);
+            if (!y) { pl_fail(p, "a hit column's '%s' has no value in the graph", f->str); return -1; }
+            x = *y;
+        }
         out->kind = YEXP_V_NUMBER;
         out->num = x.v[f->i >= 0 ? f->i : 0];
         return 0;
     }
     return pl_eval(p, &p->env, f, out);
+}
+
+/* A frame time's flip record onset: into *t when its record is in, and -1
+ * back; else the frame whose record the row still waits for (-1: no frame
+ * time, a hit's or the response's). */
+static int64_t v2_rec_time(const pl_v2* v, const yexp_ref* r, int64_t* t) {
+    int64_t fr = -1, rf = -1, ro = 0;
+    switch (r->kind) {
+    case YEXP_REF_STIMULUS: fr = v->stim_frame[r->index]; rf = v->stim_recf[r->index]; ro = v->stim_rec[r->index]; break;
+    case YEXP_REF_STATE: fr = v->state_frame[r->index]; rf = v->state_recf[r->index]; ro = v->state_rec[r->index]; break;
+    case YEXP_REF_END: fr = v->end_frame; rf = v->end_recf; ro = v->end_rec; break;
+    default: return -1;
+    }
+    if (fr < 0) return -1;
+    if (rf == fr) { *t = ro; return -1; }
+    return fr;
+}
+
+/* A flip record: the running trial's frame times, or a row's cells that
+ * still wait for it (pl_on_record(), before the row's flush). */
+void pl_v2_record_times(pl_player* p, pl_row* r, const yscr_record* rec) {
+    int64_t on = rec->onset ? rec->onset : rec->planned;
+    int i;
+    if (r) {
+        if (!r->v2) return;
+        for (i = 0; i < r->v2->n; i++) {
+            if (r->v2->t[i].fa == rec->index) { r->v2->t[i].a = on; r->v2->t[i].fa = -1; }
+            if (r->v2->t[i].fb == rec->index) { r->v2->t[i].b = on; r->v2->t[i].fb = -1; }
+        }
+        return;
+    }
+    {
+        pl_v2* v = p->tmpl ? p->tmpl->v2 : NULL;
+        if (!v) return;
+        for (i = 0; i < p->n_stims; i++) if (v->stim_frame[i] == rec->index) { v->stim_recf[i] = rec->index; v->stim_rec[i] = on; }
+        for (i = 0; i < v->n_states; i++) if (v->state_frame[i] == rec->index) { v->state_recf[i] = rec->index; v->state_rec[i] = on; }
+        if (v->end_frame == rec->index) { v->end_recf = rec->index; v->end_rec = on; }
+    }
 }
 
 int pl_v2_column(pl_player* p, pl_row* r, int col, const yexp_value* f, pl_val* out, bool* deferred);
@@ -2650,7 +2958,7 @@ int pl_v2_column(pl_player* p, pl_row* r, int col, const yexp_value* f, pl_val* 
         ta = v2_name_time(p, v, &a, &ka);
         tb = v2_name_time(p, v, &b, &kb);
         *deferred = true;
-        if (!x || x->n >= 16) return 0;
+        if (!x || x->n >= x->cap) { pl_fail(p, "template '%s': internal: more time columns than the row holds", v->def->name); return -1; }
         x->t[x->n].col = col;
         x->t[x->n].a = ta;
         x->t[x->n].b = tb;
@@ -2658,6 +2966,8 @@ int pl_v2_column(pl_player* p, pl_row* r, int col, const yexp_value* f, pl_val* 
         x->t[x->n].has_b = kb;
         x->t[x->n].sa = a.kind == YEXP_REF_STIMULUS ? a.index : -1;
         x->t[x->n].sb = b.kind == YEXP_REF_STIMULUS ? b.index : -1;
+        x->t[x->n].fa = v2_rec_time(v, &a, &x->t[x->n].a);
+        x->t[x->n].fb = v2_rec_time(v, &b, &x->t[x->n].b);
         x->n++;
         return 0;
     }
@@ -2665,17 +2975,38 @@ int pl_v2_column(pl_player* p, pl_row* r, int col, const yexp_value* f, pl_val* 
     return pl_eval(p, &p->env, f, out);
 }
 
+static struct pl_v2_row* v2_row_new(pl_player* p);
+
 int pl_v2_row_fill(pl_player* p, pl_row* r) {
     pl_v2_session* S = p->v2s;
     if (!S) return 0;
     if (!r->v2) {
         /* pl_v2_rows() gave every pending row its cells at the run's start;
          * a row made elsewhere (--test-draws) gets them here */
-        r->v2 = (struct pl_v2_row*)pl_alloc(p, sizeof(struct pl_v2_row));
+        r->v2 = v2_row_new(p);
         if (!r->v2) return -1;
     }
     r->v2->n = 0;
     return 0;
+}
+
+/* A row's cells for the most `time` columns any template has (the
+ * loader bounds the columns), sized at load. */
+static struct pl_v2_row* v2_row_new(pl_player* p) {
+    int ti, k, most = 1;
+    struct pl_v2_row* x;
+    for (ti = 0; ti < p->def->n_templates; ti++) {
+        const yexp_template* t = &p->def->templates[ti];
+        int n = 0;
+        for (k = 0; k < t->n_columns; k++) if (t->columns[k].value && t->columns[k].value->kind == YEXP_V_TIME) n++;
+        if (n > most) most = n;
+    }
+    x = (struct pl_v2_row*)pl_alloc(p, sizeof(struct pl_v2_row));
+    if (!x) return NULL;
+    x->t = (v2_tcell*)pl_alloc(p, sizeof(v2_tcell) * (size_t)most);
+    if (!x->t) return NULL;
+    x->cap = most;
+    return x;
 }
 
 int pl_v2_rows(pl_player* p);
@@ -2683,7 +3014,7 @@ int pl_v2_rows(pl_player* p) {
     int i;
     if (!p->v2s) return 0;
     for (i = 0; i < PL_PENDING_ROWS; i++) {
-        p->rows[i].v2 = (struct pl_v2_row*)pl_alloc(p, sizeof(struct pl_v2_row));
+        p->rows[i].v2 = v2_row_new(p);
         if (!p->rows[i].v2) return -1;
     }
     return 0;
@@ -2764,7 +3095,7 @@ static int v2_trace_stream(pl_player* p, pl_v2* v, v2_trace* tr) {
         if (!tr->frame) {
             COL("tier", YTR_COL_INT, offsetof(v2_srow_data, tier));
             COL("device", YTR_COL_INT, offsetof(v2_srow_data, device));
-        }
+        } else COL("flags", YTR_COL_INT, offsetof(v2_srow_data, flags));
 #undef COL
     }
     tr->stream = yds_stream(&p->ds, tr->def->name, tr->cols, tr->n_cols);

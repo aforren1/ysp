@@ -1,0 +1,77 @@
+{
+ "format": "ysp-experiment",
+ "version": 2,
+ "name": "f",
+ "stimuli": {
+  "s": {
+   "kind": "shape",
+   "w": 10,
+   "h": 10
+  },
+  "t": {
+   "kind": "shape",
+   "w": 4,
+   "h": 4,
+   "layer": 1
+  }
+ },
+ "trials": {
+  "t": {
+   "states": [
+    {
+     "name": "fix",
+     "steps": [
+      {
+       "on": "t"
+      },
+      {
+       "wait_s": 0.5
+      },
+      {
+       "off": "t"
+      }
+     ]
+    },
+    {
+     "name": "stim",
+     "steps": [
+      {
+       "on": "s"
+      },
+      {
+       "wait_s": 1
+      }
+     ]
+    }
+   ],
+   "response": {
+    "role": "r",
+    "choices": [
+     "left",
+     "right"
+    ],
+    "from": "s",
+    "duration_s": 1
+   },
+   "outcome": "correct"
+  }
+ },
+ "timeline": [
+  {
+   "name": "l",
+   "trial": "t",
+   "rules": [
+    "reps 2"
+   ]
+  }
+ ],
+ "devices": {
+  "r": {
+   "direction": "in",
+   "family": [
+    "keyboard"
+   ],
+   "required": true
+  }
+ }
+}

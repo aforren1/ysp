@@ -341,6 +341,28 @@ static void case_stagger_trigger(void) {
 
 /* the system tests too: tests/player/player_test.py against this binary, as
  * YPL_AS_PLAYER makes it the command line */
+/* Version 2's outcome "correct" with no key_answer: the choice's index to
+ * ytr_update(), as version 1 (2.5). */
+static int g_outcome_val;
+static void hook_outcome(void) { g_outcome_val = P.last_outcome_val; }
+static void case_v2_outcome(void) {
+    const char* d = "{\"format\":\"ysp-experiment\",\"version\":2,\"devices\":{\"r\":{\"direction\":\"in\",\"family\":[\"keyboard\"],\"required\":true}},"
+                    "\"stimuli\":{\"s\":{\"kind\":\"shape\",\"w\":2,\"h\":2}},\"trials\":{\"t\":{\"outcome\":\"correct\","
+                    "\"states\":[{\"name\":\"a\",\"steps\":[{\"on\":\"s\"},{\"wait_s\":1}]}],"
+                    "\"response\":{\"role\":\"r\",\"choices\":[\"left\",\"right\"],\"from\":\"s\",\"duration_s\":1}}},"
+                    "\"timeline\":[{\"name\":\"a\",\"trial\":\"t\",\"rules\":[\"reps 2\"]}]}";
+    FILE* fp;
+    char path[300], part[320];
+    snprintf(path, sizeof path, "%s/s2.csv", workdir);
+    fp = fopen(path, "w");
+    fprintf(fp, "trial_index,response,rt_s,hold_s\n0,left,0.2,0.05\n1,right,0.2,0.05\n");
+    fclose(fp);
+    snprintf(part, sizeof part, "script:%s", path);
+    g_outcome_val = -99;
+    g_hook = hook_outcome;
+    CHECK(run_def("v2_outcome", d, part, 0) == 0 && g_outcome_val == 1, "v2 outcome correct, no key_answer: the choice's index 1, got %d", g_outcome_val);
+}
+
 static int run_shapes(void) {
     char cmd[4096], self[1024];
     const char* repo = getenv("YPL_REPO");
@@ -436,6 +458,7 @@ int main(int argc, char** argv) {
     case_stagger_trigger();
     case_out_queue();
     case_v2();
+    case_v2_outcome();
     if (fails == 0 && run_shapes() != 0) { fails++; printf("FAIL line %d: the system tests\n", __LINE__); }
     snprintf(cmd, sizeof cmd, "rm -r %s", workdir);
     (void)!system(cmd);

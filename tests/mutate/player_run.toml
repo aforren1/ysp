@@ -258,8 +258,8 @@ id = "r-31"
 name = "the frames bitmap is not written"
 test = "player"
 why = "Item 7 frame accounting."
-find = '''                vis[k] = (uint8_t)(ch >= 0 && values[ch] >= 0.5f);'''
-replace = '''                vis[k] = 0;'''
+find = '''        vis[k] = (uint8_t)(ch >= 0 && values[ch] >= 0.5f);'''
+replace = '''        vis[k] = 0;'''
 
 [[mutant]]
 id = "r-32"
@@ -608,3 +608,39 @@ test = "player"
 why = "A full queue drops its oldest fire, charged to the oldest's trial (eval_test's queue check)."
 find = '''    if (p->out_tail[k] - p->out_head[k] >= PL_OUT_PENDING) pl_out_expire'''
 replace = '''    if (p->out_tail[k] - p->out_head[k] > PL_OUT_PENDING) pl_out_expire'''
+
+[[mutant]]
+id = "r-v2-01"
+name = "version 2's scripted participant reads the next trial's row"
+test = "player"
+why = "Found in the second review's round: version 2 counts the trial before its plan (mut_test.c case_v2_outcome)."
+find = '''            pl_participant_plan(p, p->global_trial - 1);'''
+replace = '''            pl_participant_plan(p, p->global_trial);'''
+
+[[mutant]]
+id = "r-v2-02"
+name = "a hit's state's frame not in the stimulus's counts"
+test = "player"
+why = "Review item 7 (rv7): the frame's visibility read before the second evaluate."
+find = '''        if (p->tmpl->v2) {
+            YRT_ZONE(zg, "pl.v2_frame");
+            rc = pl_v2_frame_eval(p, f);
+            YRT_ZONE_END(zg);
+            if (rc < 0) return -1;
+        }
+        pl_frame_vis(p, f);'''
+replace = '''        pl_frame_vis(p, f);
+        if (p->tmpl->v2) {
+            YRT_ZONE(zg, "pl.v2_frame");
+            rc = pl_v2_frame_eval(p, f);
+            YRT_ZONE_END(zg);
+            if (rc < 0) return -1;
+        }'''
+
+[[mutant]]
+id = "r-v2-03"
+name = "an events template's response does not build after"
+test = "player"
+why = "Review item 3 (rv3)."
+find = '''                if (pl_v2_events_response(p, bt) < 0) return -1;'''
+replace = ''''''

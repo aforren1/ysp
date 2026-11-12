@@ -338,6 +338,9 @@ int pl_build_ops(pl_player* p, const yexp_step* st, int n, ytl_op* ops, int cap,
                 int ch = pl_channel(p, s->stims[k], NULL);
                 ytl_op* o;
                 if (ch < 0) { pl_fail(p, "'%s' has no channel", s->stims[k]); return -1; }
+                /* version 2's selector ops grow the table between stimuli:
+                 * the room is checked again for each */
+                if (c + 2 > cap) { pl_fail(p, "the op table is full"); return -1; }
                 if (k > 0 && stagger > 0) {
                     o = &ops[c++];
                     memset(o, 0, sizeof *o);
@@ -353,7 +356,9 @@ int pl_build_ops(pl_player* p, const yexp_step* st, int n, ytl_op* ops, int cap,
             }
             if (t > p->ops_latest) p->ops_latest = t;
             if (t != *cursor) {   /* ytl_on_n() leaves the cursor where it was */
-                ytl_op* o = &ops[c++];
+                ytl_op* o;
+                if (c + 1 > cap) { pl_fail(p, "the op table is full"); return -1; }
+                o = &ops[c++];
                 memset(o, 0, sizeof *o);
                 o->op = YTL_OP_AT;
                 o->t_ns = *cursor;

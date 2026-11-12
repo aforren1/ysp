@@ -100,3 +100,119 @@ test = "player"
 why = "3.7: a region with no stay_s is true at its arm (entry now, G16); with a hold it waits."
 find = '''fixed0 ? YSIG_ENTRY_NOW : YSIG_ENTRY_ARM'''
 replace = '''YSIG_ENTRY_ARM'''
+
+[[mutant]]
+id = "v2-12"
+name = "the response's implicit exit makes a state one with exits"
+test = "player"
+why = "Reading F34 (rv1 in t_v2_review2): a fix state then stim, a key response, no author exits."
+find = '''        else if (st && (st->n_exits > 0 || n_sh > 0)) r->next = -2;'''
+replace = '''        else if (st && (st->n_exits > 0 || n_sh > 0 || resp_end)) r->next = -2;'''
+
+[[mutant]]
+id = "v2-13"
+name = "a column's role node made after the graph opens"
+test = "player"
+why = "Review item 2 (rv2): the node aliased an adapter's, or the graph had none."
+find = '''        for (k = 0; k < t->n_columns; k++) if (v2_column_nodes(p, v, t->columns[k].value) < 0) return -1;'''
+replace = ''''''
+
+[[mutant]]
+id = "v2-14"
+name = "an events template's after not built"
+test = "player"
+why = "Review item 3 (rv3): 2.5's after, kept by part 3."
+find = '''    v->after_built = true;
+    return pl_after_build(p, start);'''
+replace = '''    v->after_built = true;
+    return 0;'''
+
+[[mutant]]
+id = "v2-15"
+name = "after_s counts from the until part"
+test = "player"
+why = "Review item 4 (F3, rv4)."
+find = '''            {
+                int64_t base = x->part ? v->entry_onset : v->visit_onset;
+                if (base + a < bt) { bt = base + a; best = x; }
+            }'''
+replace = '''            {
+                int64_t base = v->entry_onset;
+                if (base + a < bt) { bt = base + a; best = x; }
+            }'''
+
+[[mutant]]
+id = "v2-16"
+name = "a recenter first step does not defer the arm"
+test = "player"
+why = "Review item 5 (3.12, rv5)."
+find = '''            if (st->n_steps > 0 && st->steps[0].op == YEXP_RECENTER && !(v->trial_entry && r->def == 0)) {'''
+replace = '''            if (0) {'''
+
+[[mutant]]
+id = "v2-17"
+name = "the steps' last flag is not applied at their end"
+test = "player"
+why = "Review item 6 (3.12, rv6)."
+find = '''        if ((e->code - PL_MARK_FLAG) / 2 < v->def->n_flags) v->flags[(e->code - PL_MARK_FLAG) / 2] = ((e->code - PL_MARK_FLAG) & 1) != 0;'''
+replace = ''''''
+
+[[mutant]]
+id = "v2-18"
+name = "a head recenter of the first state is skipped on every visit"
+test = "player"
+why = "Review item 9 (rv9): only the trial's first visit skips it."
+find = '''        if (v->trial_entry && v->def->states && v2_head_recenter(&v->def->states[0], s)) return c;'''
+replace = '''        if (v->def->states && v2_head_recenter(&v->def->states[0], s)) return c;'''
+
+[[mutant]]
+id = "v2-19"
+name = "outcome correct with no key_answer gives 0"
+test = "player"
+why = "Review item 10 (mut_test.c case_v2_outcome): the choice's index, as 2.5."
+find = '''            *outcome_val = p->env.has_correct ? (p->env.correct ? 1 : 0) : choice >= 0 ? choice : 0;'''
+replace = '''            *outcome_val = p->env.has_correct ? (p->env.correct ? 1 : 0) : 0;'''
+
+[[mutant]]
+id = "v2-20"
+name = "rule 8 takes only the current part's events and no tween"
+test = "player"
+why = "Review item 11 (rv11): a tween of an earlier part runs on."
+find = '''            if (v2_tweens_stop(p, v, t) < 0) return -1;'''
+replace = ''''''
+
+[[mutant]]
+id = "v2-21"
+name = "a row's time cells keep the planned onsets"
+test = "player"
+why = "Review item 12 (rv12, --test-record-late)."
+find = '''        for (i = 0; i < p->n_stims; i++) if (v->stim_frame[i] == rec->index) { v->stim_recf[i] = rec->index; v->stim_rec[i] = on; }'''
+replace = ''''''
+
+[[mutant]]
+id = "v2-22"
+name = "frame rows past the next trial's start written with t_s empty"
+test = "player"
+why = "Review item 13 (rv13, --test-record-delay)."
+find = '''        fr->snap = true;
+        fr->flags |= V2_FR_AT_PLANNED;'''
+replace = '''        fr->snap = true;
+        fr->flags |= V2_FR_AT_PLANNED;
+        if (v2_frame_row_write(p, fr, 0, false) < 0) return -1;
+        fr->frame = -1000;'''
+
+[[mutant]]
+id = "v2-23"
+name = "a sample time past int64 ns accepted"
+test = "player"
+why = "Review item 14 (rv14)."
+find = '''        if (!(t <= V2_SAMPLE_MAX_S) || !isfinite(x) || !isfinite(y) || fabs(x) > V2_SAMPLE_MAX_V || fabs(y) > V2_SAMPLE_MAX_V) {'''
+replace = '''        if (!isfinite(x) || !isfinite(y) || fabs(x) > V2_SAMPLE_MAX_V || fabs(y) > V2_SAMPLE_MAX_V) {'''
+
+[[mutant]]
+id = "v2-24"
+name = "a --sim-gain for no signal role ignored"
+test = "player"
+why = "Review item 14 (rv14)."
+find = '''        if (!yexp_sigrole_get(p->def, p->args.gains[i].name)) {'''
+replace = '''        if (0) {'''

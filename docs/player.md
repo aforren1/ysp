@@ -1,6 +1,6 @@
 # The player
 
-Status: v0.3.0, 2026-11-11. It loads a pack, checks its experiment
+Status: v0.4.0, 2026-11-11. It loads a pack, checks its experiment
 definition, lowers the definition onto the ysp headers and runs it: in a
 real window with the participant's keyboard and the rig's devices, or on
 the simulated display (`--sim`). It is a program (`player/`, target
@@ -169,6 +169,12 @@ the same samples:
 `tests/player/compare.py` does these steps for `visuomotor` and
 `bimanual`. The options are for tests only.
 
+Two more test options, `--sim` only, make the simulated display's flip
+records late: `--test-record-late S` adds S seconds to every record's
+onset, and `--test-record-delay N` (0 to 8) hands each record to the player
+N frames later. `player_test.py` uses them to check the time columns and
+the frame traces against records that are not the plan.
+
 ## How-to: profile a run
 
 Use a build with the trace ring. The build adds zones to the player and
@@ -282,18 +288,19 @@ A version 2 definition adds these to the data set (3.15):
 | Item | Content |
 |---|---|
 | `events.csv` rows with `kind` `state` | One row a state visit: `text` the state, `frame` and `t_s` its entry frame and that frame's onset (the flip record's), `planned_s`, `residual_s`, `end_s` the visit's end, `code` the exit's index (-1 the steps ended, -2 `over` after `max_visits`; reading F20). An events template has none (F27) |
-| `streams/<trace>.csv` | A sample trace: `trial_index`, `t_s`, a column a lane (`<item>_x`, `<item>_y`), `tier`, `device`; the rows of the trace's window only. A frame trace (`rate: frame`): `trial_index`, `frame`, `planned_s`, `t_s` (empty when the flip record did not come, F29), a column a lane |
+| `streams/<trace>.csv` | A sample trace: `trial_index`, `t_s`, a column a lane (`<item>_x`, `<item>_y`), `tier`, `device`; the rows of the trace's window only. A frame trace (`rate: frame`): `trial_index`, `frame`, `planned_s`, `t_s` (the flip record's onset), a column a lane, and `flags` (0.4.0): 0, or 2 when the next trial's start came before the record (the values are read at `planned_s`), or 1 when the record did not come within 30 frames (`t_s` empty). F29 |
 | `trials.csv` | The template's `columns` (`signal`, `hit`, `time`, `when` forms), a flag a column (0 or 1), `rsp_role` for a signal response, the five columns of a walk (`W_x`, `W_y`, `W_from_x`, `W_from_y`, `W_deg`) and a uniform's column |
 | `session.json` | See below |
 
-Changes to `session.json` in the player 0.3.0, for each version:
+Changes to `session.json` from the player 0.2.0 (0.3.0, and 0.4.0 where
+it says), for each version:
 
 | Field | Version 1 | Version 2 |
 |---|---|---|
-| `player_version` | `0.3.0` | `0.3.0` |
+| `player_version` | `0.4.0` | `0.4.0` |
 | `format_version` | 1, the definition's (it was the player's constant 1) | 2 |
 | `headers.sig` | Not written | ysp/sig.h's version |
-| `headers.trials`, `headers.gfx` | The new versions (0.8.1, 0.20.0) | The same |
+| `headers.trials`, `headers.gfx`, `headers.experiment` | The new versions (0.8.1, 0.20.0; experiment 0.3.1 from 0.4.0) | The same |
 | `signal_roles` | Not written | One object a signal role: `name`, `adapter` (`sim raw mouse` or `sim positions`), `device` (`--samples` or `none`), `type`, `units`, `per_count` (the `--sim-gain`), `calibration_sha256` (empty) |
 | `recenter_skipped` | Not written | The `recenter` steps that a graph did not apply (D40) |
 
@@ -363,10 +370,9 @@ These are not lowered, and the player refuses each by name: `aep` methods,
 `artwork` stimuli, `video` stimuli, and a `quest` with more than one
 stimulus axis (`$level` and `method_value` carry one value; the fuzz target
 found the update reading past it, 2026-11-10). No worked example needs them, and no
-C program gives a comparison for them. A definition of format version 2 is
-refused by name too (2026-11-11): ysp/experiment.h 0.3.0 reads it, and its
-lowering is the next task. `session.json`'s `format_version` is the version
-the player lowers (`PL_FORMAT_VERSION`, 1), not the newest the loader reads. In `--sim` a response's `trigger` goes
+C program gives a comparison for them. A version 2 definition with a
+signal role is refused in a real run (G18); on `--sim` it runs.
+`session.json`'s `format_version` is the definition's (1 or 2). In `--sim` a response's `trigger` goes
 out from the frame loop, as for a keyboard role; a real run's device role
 has the rule.
 
@@ -379,8 +385,10 @@ A version 2 template lowers to these parts (`player/v2.c`):
 | Signal roles (3.4) | One ysp/sig.h graph a template. Every sample goes to every graph, so an adapter's state (an integrated mouse) stays continuous across templates. `--sim` adapters: a relative role is a raw mouse's counts through an integrate node at `--sim-gain`; an absolute role is a pen's positions through a scale node (F32) |
 | Controls (3.7): `cursor`, `region`, `distance`, `movement`, `peak`, `moving_target`, `trace`, `signal_lost` | Nodes of the graph (`v2_ctl_build()`). A region with no `stay_s` arms with entry `now` (ysp/sig.h 0.3.0, G16); a held one waits. `freeze_at` latches the cursor at the hit. A cursor's `transform` is an affine node whose angle and matrix `ysig_set()` changes per trial (G17) |
 | Stimulus keys that take a signal (`{"signal": ...}`, `when`, `test`, `hit`) | A selector channel per key: the graph's value goes to a bind slot after the timeline's values, and the stimulus's bind reads that slot (`v2_forms_graph()`) |
-| `states`, `exits`, `until` (3.11, D20, D35) | Runtime states with exits of four kinds: a hit, the response, `after_s`, and an instant `if`. An events template with `until` splits into one runtime state a part (F3). Each state's steps are one timeline op table from its entry time (`v2_enter()`). Exits are taken in rule 4's order (`v2_hits()`, `v2_timed()`) |
-| The trial's end, flags, `recenter` | Timeline marks with reserved codes; the end is handled after the frame's `ysig_frame()` |
+| `states`, `exits`, `until` (3.11, D20, D35) | Runtime states with exits of four kinds: a hit, the response, `after_s`, and an instant `if`. A state's steps split at each `until` into one runtime state a part (F3); its `after_s` exits count from the visit's entry frame in every part, an `until`'s timeout from the wait's start. Each part's steps are one timeline op table from its entry time (`v2_enter()`). Exits are taken in rule 4's order (`v2_hits()`, `v2_timed()`). The response exit that `response_ends_trial` adds does not keep a state with no written exits from going on at its steps' end (F34). Rule 8: an exit removes the events of every part of the visit that have not fired, and stops a tween still running at the value it last wrote |
+| An events template (no `states`) | Its parts run as above; when they are done, `after` follows them and the response's end, as version 1 (2.5); an `until`'s timeout before the response's `from` is shown does not wait for the response (F35) |
+| Time columns (`{"time": A, "from": B}`) | A stimulus's, a state's and the end's times are their frames' flip record onsets, as the state rows' are; the row waits for them as it waits for its last frame's record |
+| The trial's end, flags, `recenter` | Timeline marks with reserved codes; the end is handled after the frame's `ysig_frame()`. A flag a state's steps set by their end holds for the next state's `if` and table (3.12). A state whose first step is `recenter` arms its exits at the recenter's call (3.12); a recenter at a state's head runs on every visit but the trial's first (3.6 runs that one before the reset) |
 | `max_visits`, `over` | A visit of no time past the limit, code -2, then `over`'s `to` and `outcome` (F20) |
 | Outcomes (D36, F16), `requeue_outcomes` | The latest outcome set wins; with none set, the response's levels. An outcome in `requeue_outcomes` requeues the trial |
 | `uniform`, `walk2d` (3.14) | ysp/trials.h variables. A leaf draws only what its template reads |

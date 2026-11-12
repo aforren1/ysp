@@ -1,0 +1,130 @@
+{
+ "format": "ysp-experiment",
+ "version": 2,
+ "name": "f",
+ "stimuli": {
+  "s": {
+   "kind": "shape",
+   "w": 10,
+   "h": 10
+  },
+  "t": {
+   "kind": "shape",
+   "w": 4,
+   "h": 4,
+   "layer": 1
+  }
+ },
+ "trials": {
+  "t": {
+   "flags": [
+    "f"
+   ],
+   "controls": {
+    "far": {
+     "control": "region",
+     "of": "hand",
+     "radius": 5,
+     "outside": true
+    },
+    "hx": {
+     "control": "distance",
+     "of": "hand"
+    }
+   },
+   "states": [
+    {
+     "name": "a",
+     "steps": [
+      {
+       "recenter": "hand",
+       "to": [
+        0,
+        0
+       ]
+      },
+      {
+       "on": "s"
+      },
+      {
+       "to": "s",
+       "props": {
+        "x": 50
+       },
+       "duration_s": 1
+      },
+      {
+       "until": "far",
+       "timeout_s": 2
+      },
+      {
+       "flag": "f",
+       "value": true
+      }
+     ],
+     "exits": [
+      {
+       "after_s": 1.5,
+       "to": "b"
+      }
+     ],
+     "max_visits": 2,
+     "over": {
+      "to": "end",
+      "outcome": "over"
+     }
+    },
+    {
+     "name": "b",
+     "steps": [
+      {
+       "recenter": "hand",
+       "to": [
+        0,
+        0
+       ]
+      }
+     ],
+     "exits": [
+      {
+       "if": "$f",
+       "to": "a"
+      },
+      {
+       "to": "end"
+      }
+     ]
+    }
+   ],
+   "columns": {
+    "hx_end": {
+     "signal": "hx"
+    },
+    "tb_s": {
+     "time": "b",
+     "from": "a"
+    },
+    "te_s": {
+     "time": "far",
+     "from": "a"
+    }
+   }
+  }
+ },
+ "timeline": [
+  {
+   "name": "l",
+   "trial": "t",
+   "rules": [
+    "reps 2"
+   ]
+  }
+ ],
+ "devices": {},
+ "roles": {
+  "hand": {
+   "type": "position2d_relative",
+   "units": "display_px"
+  }
+ }
+}

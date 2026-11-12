@@ -1,0 +1,93 @@
+{
+ "format": "ysp-experiment",
+ "version": 2,
+ "name": "f",
+ "stimuli": {
+  "s": {
+   "kind": "shape",
+   "w": 10,
+   "h": 10
+  },
+  "t": {
+   "kind": "shape",
+   "w": 4,
+   "h": 4,
+   "layer": 1
+  }
+ },
+ "trials": {
+  "t": {
+   "controls": {
+    "far": {
+     "control": "region",
+     "of": "hand",
+     "radius": 5,
+     "outside": true
+    }
+   },
+   "events": [
+    {
+     "on": "t"
+    },
+    {
+     "until": "far",
+     "timeout_s": 3
+    },
+    {
+     "off": "t"
+    },
+    {
+     "on": "s"
+    },
+    {
+     "wait_s": 1
+    }
+   ],
+   "after": [
+    {
+     "mark": "fb"
+    },
+    {
+     "on": "t"
+    },
+    {
+     "wait_s": 0.25
+    }
+   ],
+   "response": {
+    "role": "r",
+    "choices": [
+     "left",
+     "right"
+    ],
+    "from": "s",
+    "duration_s": 1,
+    "key_answer": "left"
+   }
+  }
+ },
+ "timeline": [
+  {
+   "name": "l",
+   "trial": "t",
+   "rules": [
+    "reps 2"
+   ]
+  }
+ ],
+ "devices": {
+  "r": {
+   "direction": "in",
+   "family": [
+    "keyboard"
+   ],
+   "required": true
+  }
+ },
+ "roles": {
+  "hand": {
+   "type": "position2d_relative",
+   "units": "display_px"
+  }
+ }
+}

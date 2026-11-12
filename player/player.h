@@ -44,7 +44,7 @@
 extern "C" {
 #endif
 
-#define PL_VERSION_STRING "0.3.0"
+#define PL_VERSION_STRING "0.4.0"
 /* The newest format version this player lowers (2: format part 3, in
  * v2.c). session.json's format_version is the definition's. */
 #define PL_FORMAT_VERSION 2
@@ -57,6 +57,7 @@ enum {
     PL_PENDING_ROWS   = 16,  /* trials can end faster than flips complete    */
     PL_MAX_FIELDS     = 64,
     PL_FRAME_RING     = 256, /* frame number to trial index, until its record */
+    PL_REC_DELAY_CAP  = 64,  /* tests: flip records held back             */
     PL_MAX_DEPTH_STACK = 34,
     PL_MAX_TEXTURES   = 512,
     PL_EVENT_QUEUE    = 4096,
@@ -414,6 +415,8 @@ typedef struct pl_args {
     bool  windowed;            /* a real run in a window (development)      */
     const char* allow_below;   /* ROLE[,ROLE...]: these roles start below
                                 * their min_tier; NULL: none                */
+    int64_t record_late_ns;    /* tests (--sim): every flip record's onset this much late */
+    int record_delay;          /* tests (--sim): records handed on this many frames late */
     int64_t plan_early_ns;     /* tests: a response's plan onset this much
                                 * before the timeline's (--sim)             */
     int   lose_code;           /* tests: the screen never writes the Nth code
@@ -614,6 +617,9 @@ struct pl_player {
     pl_row    rows[PL_PENDING_ROWS];
     int       row_head, row_tail;
     int       frame_trial[PL_FRAME_RING];
+    int       last_outcome_val; /* tests: the last trial's ytr_update() value */
+    yscr_record rec_q[PL_REC_DELAY_CAP];   /* tests: held records (--test-record-*) */
+    int       rec_head, rec_n;
     yds_event* events; int n_events;
     int64_t   t0_session;   /* the first frame's onset, for time_elapsed_s */
 
@@ -707,7 +713,7 @@ int  pl_v2_trial_start(pl_player* p, const yscr_frame* f);
 int  pl_v2_frame_input(pl_player* p, const yscr_frame* f);
 int  pl_v2_frame_eval(pl_player* p, const yscr_frame* f);
 int  pl_v2_on_mark(pl_player* p, const ytl_event* e);
-int  pl_v2_trial_end(pl_player* p, const yscr_frame* f, int* outcome_val, bool* requeue);
+int  pl_v2_trial_end(pl_player* p, const yscr_frame* f, int choice, int* outcome_val, bool* requeue);
 int  pl_v2_row_fill(pl_player* p, pl_row* r);
 int  pl_v2_column(pl_player* p, pl_row* r, int col, const yexp_value* f, pl_val* out, bool* deferred);
 const char* pl_v2_rsp_role(pl_player* p, const yrsp_result* res);
@@ -764,6 +770,10 @@ void pl_out_push(pl_player* p, int ch, int q, int trial, int64_t deadline, uint3
 /* The data set's writer thread (a real run). */
 int  pl_writer_open(pl_player* p);
 int  pl_wq_push_row(pl_player* p, int stream, const void* row, size_t n);
+int  pl_after_build(pl_player* p, int64_t start);
+int  pl_v2_events_response(pl_player* p, int64_t bt);
+void pl_v2_record_times(pl_player* p, pl_row* r, const yscr_record* rec);
+int  pl_v2_finish(pl_player* p);
 int  pl_writer_close(pl_player* p);
 extern volatile int pl_loop_active;   /* the frame loop is running: a test counts allocations against it */
 

@@ -177,14 +177,25 @@ static int sim_roles(yjs_arena* ar, const char* text, size_t n, pl_args* a) {
     a->n_gains = nr;
     if (!(fp = fopen(samples_path, "w"))) return 0;
     fprintf(fp, "t_s,role,x,y\n");
-    /* 20 s at 200 Hz a role: a walk with a jump now and then */
-    for (t = 0; t < 4000; t++)
-        for (k = 0; k < nr; k++) {
+    /* 20 s at 200 Hz a role: a walk with a jump now and then; one input in
+     * 16 gets a bad line somewhere, for the samples file's parser */
+    {
+        static const char* const bad[] = { "inf,%s,0,0", "0.5,%s,nan,0", "1e300,%s,1,1", "9300000000,%s,1,1", "0.5,%s,1e39,0",
+                                           "-1,%s,0,0", "0.5,nosuch,1,1", "0.5,%s", "x,%s,1,1", "0.5,%s,1,1,1", "" };
+        int at = rnd() % 16 == 0 ? (int)(rnd() % 4000) : -1;
+        for (t = 0; t < 4000; t++) {
+            if (t == at) {
+                fprintf(fp, bad[rnd() % (sizeof bad / sizeof bad[0])], names[rnd() % (unsigned)nr]);
+                fputc('\n', fp);
+            }
+            for (k = 0; k < nr; k++) {
             double dx = (double)(rnd() % 7) - 3, dy = (double)(rnd() % 7) - 3;
             if (rnd() % 400 == 0) { dx *= 100; dy *= 100; }
             if (rel[k]) fprintf(fp, "%.3f,%s,%g,%g\n", 0.005 * t, names[k], dx, dy);
             else { x[k] += dx; y[k] += dy; fprintf(fp, "%.3f,%s,%g,%g\n", 0.005 * t, names[k], x[k], y[k]); }
+            }
         }
+    }
     fclose(fp);
     a->samples_path = samples_path;
     return nr;

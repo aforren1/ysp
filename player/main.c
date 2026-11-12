@@ -103,6 +103,8 @@ static int run_main(pl_args* ap, int argc, char** argv) {
         else if (!strcmp(s, "--hang-at-trial") && v) { a.hang_trial = atoi(v) + 1; i++; }
         else if (!strcmp(s, "--test-lose-code") && v) { a.lose_code = atoi(v); i++; }
         else if (!strcmp(s, "--test-plan-early") && v) { a.plan_early_ns = (int64_t)llround(atof(v) * 1e9); i++; }
+        else if (!strcmp(s, "--test-record-late") && v) { a.record_late_ns = (int64_t)llround(atof(v) * 1e9); i++; }
+        else if (!strcmp(s, "--test-record-delay") && v) { a.record_delay = atoi(v); i++; }
         else if (!strcmp(s, "--trace-channels") && v) { a.trace_path = v; i++; }
         else if (!strcmp(s, "--rdk-buffer") && v) { a.rdk_buffer = atoi(v); i++; }
         else if (!strcmp(s, "--samples") && v) { a.samples_path = v; i++; }
@@ -147,6 +149,14 @@ static int run_main(pl_args* ap, int argc, char** argv) {
     if (!a.pack_path || !a.out_dir) return usage();
     if (!a.sim && (a.participant || a.rt_s != 0.0)) {
         fprintf(stderr, "ysp_player: --participant and --rt are for --sim: a real run's participant is real\n");
+        return 2;
+    }
+    if (!a.sim && (a.record_late_ns || a.record_delay)) {
+        fprintf(stderr, "ysp_player: --test-record-late and --test-record-delay are for --sim\n");
+        return 2;
+    }
+    if (a.record_delay < 0 || a.record_delay > 8 || a.record_late_ns < 0) {
+        fprintf(stderr, "ysp_player: --test-record-delay takes 0 to 8 frames, --test-record-late a time of 0 or more\n");
         return 2;
     }
     if (!a.sim && (a.samples_path || a.n_gains || a.draws_path)) {

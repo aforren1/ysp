@@ -1459,7 +1459,8 @@ TEXTURE entry name), `type`, `code` and `answer`.
 
 ## Part 3: Reference, version 2
 
-Status: decided 2026-11-11. Nothing parses version 2. Every rule in this
+Status: decided 2026-11-11. ysp/experiment.h 0.3.0 reads version 2, and the
+player 0.3.0 lowers it (the note at this part's end). Every rule in this
 part comes from D16 to D41 and names its decision. A version 2 definition is a version 1
 definition (part 2) plus the keys of this part: a key that this part does
 not name keeps its part 2 meaning, type and default.

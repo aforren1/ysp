@@ -1,0 +1,77 @@
+{
+ "format": "ysp-experiment",
+ "version": 2,
+ "name": "f",
+ "stimuli": {
+  "s": {
+   "kind": "shape",
+   "w": 10,
+   "h": 10
+  },
+  "t": {
+   "kind": "shape",
+   "w": 4,
+   "h": 4,
+   "layer": 1
+  }
+ },
+ "trials": {
+  "t": {
+   "controls": {
+    "pd": {
+     "control": "distance",
+     "of": "pen"
+    }
+   },
+   "states": [
+    {
+     "name": "a",
+     "steps": [
+      {
+       "on": "s"
+      },
+      {
+       "wait_s": 0.1
+      }
+     ]
+    }
+   ],
+   "columns": {
+    "hx": {
+     "signal": "hand.x"
+    },
+    "pdv": {
+     "signal": "pd"
+    },
+    "w": {
+     "when": {
+      "signal": "hand.x",
+      "above": 2
+     },
+     "then": 1,
+     "else": 0
+    }
+   }
+  }
+ },
+ "timeline": [
+  {
+   "name": "l",
+   "trial": "t",
+   "rules": [
+    "reps 2"
+   ]
+  }
+ ],
+ "devices": {},
+ "roles": {
+  "hand": {
+   "type": "position2d_relative",
+   "units": "display_px"
+  },
+  "pen": {
+   "type": "position2d",
+   "units": "display_px"
+  }
+ }
+}

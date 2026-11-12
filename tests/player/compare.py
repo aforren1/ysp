@@ -20,6 +20,7 @@ import csv
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -376,14 +377,27 @@ def v2_rig(a, name):
     return os.path.join(rig, "profile.json")
 
 
+# The most rows a "format" class may differ in: the counts the format's
+# findings give (docs/experiment.md, F25 and F33). More is a failure.
+FORMAT_BOUND = {"move_tier": 1, "cursor_end_deg": 1, "--traj cursor_x": 765, "--traj cursor_y": 726}
+
+
 def v2_columns(rows_p, rows_c, pairs):
-    """pairs: (player col, C col, class, why, scale, shift)."""
+    """pairs: (player col, C col, class, why, scale, shift). A column
+    missing on a side fails, as compare() does; a "format" class fails past
+    its FORMAT_BOUND."""
     report, bad = [], 0
     if len(rows_p) != len(rows_c):
         return [("<row count>", "%d vs %d" % (len(rows_p), len(rows_c)), "FAIL", "")], 1
     for pc, cc, klass, why, scale, shift in pairs:
+        missing = [n for n, row in ((pc, rows_p[0] if rows_p else {}), (cc, rows_c[0] if rows_c else {})) if n not in row]
+        if missing:
+            report.append(("%s <- %s" % (pc, cc), "column missing: %s" % ", ".join(missing), "FAIL", why))
+            bad += 1
+            continue
         if klass == "map":
-            diff = sum(1 for a2, b2 in zip(rows_p, rows_c) if scale.get(a2[pc], a2[pc]) != b2[cc])
+            m = scale if isinstance(scale, dict) else None
+            diff = sum(1 for a2, b2 in zip(rows_p, rows_c) if (m.get(a2[pc], a2[pc]) if m else scale(a2[pc])) != b2[cc])
             report.append(("%s <- %s" % (pc, cc), "%d/%d differ after the mapping" % (diff, len(rows_p)), "format" if not diff else "FAIL", why))
             bad += 1 if diff else 0
             continue
@@ -392,8 +406,9 @@ def v2_columns(rows_p, rows_c, pairs):
             if not same_at(a2.get(pc, ""), b2.get(cc, ""), scale, shift):
                 diff += 1
                 first = first or (i, a2.get(pc, ""), b2.get(cc, ""))
-        status = klass if not diff else ("FAIL" if klass == "exact" else klass)
-        if klass == "exact" and diff:
+        over = klass == "format" and diff > FORMAT_BOUND.get(cc, 0)
+        status = klass if not diff else ("FAIL" if klass == "exact" or over else klass)
+        if (klass == "exact" and diff) or over:
             bad += 1
         note = why or ("equal on %d rows" % len(rows_p) if not diff else "first: row %d, player %r, C %r" % first)
         report.append(("%s <- %s" % (pc, cc), "%d/%d differ" % (diff, len(rows_p)), status, note))
@@ -416,7 +431,8 @@ def do_visuomotor(a, ex):
     one = (1.0, 0.0)
     pairs = [(c, c, "exact", "", 1.0, 0.0) for c in ("trial_index", "target_deg", "rotation_deg", "rt_s", "mt_s", "cross_s", "onset_tier",
                                                      "onset_src", "rsp_flags")]
-    pairs += [("feedback", "feedback", "exact", "", 1.0, 0.0),
+    pairs += [("node", "block", "exact", "the node's name", 1.0, 0.0),
+              ("feedback", "feedback", "exact", "", 1.0, 0.0),
               ("peak_speed", "peak_speed_px_s", "exact", "px per s; the C file has 1 decimal", 1.0, 0.0),
               ("rsp_tier", "move_tier", "format", "the C file writes the result's stamp tier also with no response (trial 2, early): 0; the player leaves it empty", 1.0, 0.0)]
     report, bad = v2_columns(rows, c_rows, pairs)
@@ -435,8 +451,9 @@ def do_visuomotor(a, ex):
         why = "analysis: atan2(-y, x) minus target_deg (-0.0000 and 0.0000 are one)"
         if klass == "format":
             why += "; the program's cursor is a float in window px, the player's a double (F25): a trial can round the other way at 4 decimals"
-        report.append(("%s, %s <- %s" % (xy[0], xy[1], cc), "%d/%d differ" % (d, len(rows)), klass if (not d or klass == "format") else "FAIL", why))
-        bad += 1 if (d and klass == "exact") else 0
+        over = klass == "format" and d > FORMAT_BOUND.get(cc, 0)
+        report.append(("%s, %s <- %s" % (xy[0], xy[1], cc), "%d/%d differ" % (d, len(rows)), "FAIL" if (d and (klass == "exact" or over)) else klass, why))
+        bad += 1 if (d and (klass == "exact" or over)) else 0
     # the trajectory (--traj) against streams/path.csv: t_s from target_onset_s, + the window's center
     path, traj = read_csv(os.path.join(p1, "streams", "path.csv")), read_c(c_traj)
     onset = {r["trial_index"]: float(r["target_onset_s"]) for r in rows}
@@ -453,11 +470,23 @@ def do_visuomotor(a, ex):
             v = float(r[pc]) - onset[r["trial_index"]] if shift is None else (float(r[pc]) + shift)
             if not same_at(v, c[cc]):
                 d += 1
-        status = "exact" if not d else ("FAIL" if klass == "exact" else klass)
-        bad += 1 if (d and klass == "exact") else 0
+        over = klass == "format" and d > FORMAT_BOUND.get("--traj " + cc, 0)
+        status = "exact" if not d else ("FAIL" if klass == "exact" or over else klass)
+        bad += 1 if (d and (klass == "exact" or over)) else 0
         report.append(("path.csv %s <- --traj %s" % (pc, cc), "%d/%d differ" % (d, len(path)), status, why or "equal"))
+    # every other column of the program's files, and why it is not compared
+    for cc, why in (("cycle", "analysis: rep plus 0, 5 or 15 by node (3.18)"), ("hand_third_deg", "analysis on streams/path.csv"),
+                    ("hand_pv_deg", "analysis on streams/path.csv"), ("n_samples", "analysis: the rows of streams/path.csv a trial"),
+                    ("input", "session.json's signal_roles (D40)"), ("early_move", "analysis: n_early above 0")):
+        report.append(("(none) <- %s" % cc, "not compared", "n/a", why))
     print_report("Visuomotor rotation (trial_visuomotor.c; the player's order, the program's hand)", report)
     return bad
+
+
+def block_of(node):
+    """blocks/b3_reach -> "3": the program's block number."""
+    m = re.match(r"blocks/b(\d+)_", node)
+    return m.group(1) if m else node
 
 
 def do_bimanual(a, ex):
@@ -483,8 +512,25 @@ def do_bimanual(a, ex):
     pairs += [(c, c, "exact", "", 1.0, 0.0) for c in ("rt_s", "onset_tier", "onset_src", "rsp_flags")]
     pairs += [("rsp_tier", "move_tier", "exact", "", 1.0, 0.0), ("peak_speed", "peak_speed_cm_s", "exact", "", 1.0, 0.0),
               ("fast", "fast", "exact", "", 1.0, 0.0), ("arrived_s", "mt_s", "exact", "arrived_s minus 1 (stay_s)", 1.0, -1.0),
-              ("rsp_role", "move_hand", "map", "left and right for L and R", {"left": "L", "right": "R"}, 0.0)]
+              ("rsp_role", "move_hand", "map", "left and right for L and R", {"left": "L", "right": "R"}, 0.0),
+              ("node", "block", "map", "the block's number in the node's name (blocks/b1_reach)", block_of, 0.0)]
     report, bad = v2_columns(rows, c_rows, pairs)
+    # the tracking trials' rows (the program's --out) by the columns 3.18 calls Same
+    trows = [r for r in read_csv(os.path.join(p1, "trials.csv")) if r["trial_type"] == "track"]
+    rep2, bad2 = v2_columns(trows, read_c(names[".csv"]), [
+        ("node", "block", "map", "tracking: the block's number in the node's name", block_of, 0.0),
+        ("index", "block_trial", "exact", "tracking", 1.0, 0.0), ("perturb", "perturbation", "exact", "tracking", 1.0, 0.0),
+        ("mapping", "mapping", "exact", "tracking (data)", 1.0, 0.0)])
+    report += rep2
+    bad += bad2
+    for cc, why in (("reach_index", "analysis: the row's rank among trial_type reach"),
+                    ("init_err_deg", "analysis on streams/path.csv"), ("--out trial_index", "analysis: the rank among trial_type track"),
+                    ("--out mse_cm2 .. r_theta_deg", "analysis on streams/frames.csv"), ("--out n_frames, n_missed", "analysis on streams/frames.csv and frames.csv"),
+                    ("--out n_norecord", "cannot be written: the player waits for every flip record"),
+                    ("--out n_other", "cannot be written: an adapter takes only its own device"),
+                    ("--out onset_tier, onset_src", "analysis: the move state row's frame joined to frames.csv"),
+                    ("--freq (every column)", "analysis on streams/frames.csv")):
+        report.append(("(none) <- %s" % cc, "not compared", "n/a", why))
     # --track against streams/frames.csv, per tracking trial
     fr, tr = read_csv(os.path.join(p1, "streams", "frames.csv")), read_c(names["_track.csv"])
     if len(fr) != len(tr):

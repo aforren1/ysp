@@ -589,7 +589,9 @@ volatile int pl_loop_active;
 static double pl_participant_rand(pl_player* p) { return ytr_splitmix(&p->participant_rng); }
 
 /* Decide this trial's press. Called once the response is armed. */
-static void pl_participant_plan(pl_player* p) {
+/* trial: the session trial being planned (version 2 counts it before the
+ * plan, version 1 after) */
+static void pl_participant_plan(pl_player* p, int trial) {
     pl_tmpl* t = p->tmpl;
     int answer = -1, i;
     p->press_planned = false;
@@ -604,8 +606,8 @@ static void pl_participant_plan(pl_player* p) {
     p->press_hold = 0.08;
     if (p->script) {
         int k = -1;
-        if (p->global_trial < p->n_script && p->script[p->global_trial].trial == p->global_trial) k = p->global_trial;
-        else for (i = 0; i < p->n_script; i++) if (p->script[i].trial == p->global_trial) k = i;
+        if (trial >= 0 && trial < p->n_script && p->script[trial].trial == trial) k = trial;
+        else for (i = 0; i < p->n_script; i++) if (p->script[i].trial == trial) k = i;
         if (k < 0) return;   /* not in the script: silent */
         if (p->script[k].silent) return;
         p->press_choice = -1;
@@ -613,7 +615,7 @@ static void pl_participant_plan(pl_player* p) {
             if (strcmp(t->choice_keys[i], p->script[k].resp) == 0 ||
                 strcmp(t->collector->ch[i].name ? t->collector->ch[i].name : "", p->script[k].resp) == 0)
                 p->press_choice = i;
-        if (p->press_choice < 0) { pl_fail(p, "trial %d: the script's response '%s' is not a choice", p->global_trial, p->script[k].resp); return; }
+        if (p->press_choice < 0) { pl_fail(p, "trial %d: the script's response '%s' is not a choice", trial, p->script[k].resp); return; }
         p->press_rt = p->script[k].rt_s;
         p->press_hold = p->script[k].hold_s;
         p->silent = false;
@@ -766,6 +768,9 @@ static int pl_build_after(pl_player* p, int64_t start) {
     if (r != 0 || p->q.err) { pl_fail(p, "template '%s': the 'after' table: %s (op %d)", d->name, ytl_strerror(r ? r : p->q.err), p->q.err_call); return -1; }
     return 0;
 }
+
+/* Version 2's events templates build `after` when their events are done. */
+int pl_after_build(pl_player* p, int64_t start) { return pl_build_after(p, start); }
 
 /* One leaf finished or could not start: push its iteration's loop rule. */
 static void pl_leaf_close(pl_player* p) {
@@ -992,7 +997,7 @@ int pl_start_trial(pl_player* p, const yscr_frame* f) {
             if (rc2 < 0) return -1;
         }
         if (p->tmpl->collector && !p->tmpl->def->response->signal_choices) {
-            pl_participant_plan(p);
+            pl_participant_plan(p, p->global_trial - 1);
             if (p->failed) return -1;
         }
         return 1;
@@ -1061,7 +1066,7 @@ int pl_start_trial(pl_player* p, const yscr_frame* f) {
                 if (pl_eval_text(p, &p->env, d->response->key_answer, p->key_answer, p->max_text + 1) < 0) return -1;
                 p->env.key_answer_known = true;
             }
-            pl_participant_plan(p);
+            pl_participant_plan(p, p->global_trial);
             if (p->failed) return -1;
         } else {
             /* with no response, `after` follows the events at once (2.5) */
@@ -1446,6 +1451,7 @@ static int pl_on_record(pl_player* p, const yscr_record* rec) {
     if (p->in_trial && trial == p->global_trial - 1) {
         /* the running trial: its row does not exist yet */
         pl_stats_update(p, p->stats_now, p->tmpl->n_record, rec, -1);
+        if (p->tmpl->v2) pl_v2_record_times(p, NULL, rec);
         if (p->now_tier < rec->tier) p->now_tier = rec->tier;
         p->now_dropped += (int)rec->dropped;
         p->now_flags |= rec->flags;
@@ -1454,6 +1460,7 @@ static int pl_on_record(pl_player* p, const yscr_record* rec) {
             pl_row* r = &p->rows[(p->row_tail + i) % PL_PENDING_ROWS];
             if (!r->used || r->trial_index != trial) continue;
             pl_stats_update(p, r->stats, r->n_stats, rec, r->last_frame);
+            if (r->v2) pl_v2_record_times(p, r, rec);
             if (r->tier_worst < rec->tier) r->tier_worst = rec->tier;
             r->frames_dropped += (int)rec->dropped;
             r->flip_flags |= rec->flags;
@@ -1476,6 +1483,14 @@ static int pl_on_record(pl_player* p, const yscr_record* rec) {
     if (pl_v2_on_record(p, rec) < 0) return -1;
     (void)pl_events_flush;
     return pl_events_flush(p, false);
+}
+
+/* One flip record, and the scripted press planned from its onset. */
+static int pl_record_in(pl_player* p, const yscr_record* rec) {
+    if (pl_on_record(p, rec) < 0) return -1;
+    if (p->from_landed && !p->press_planned && rec->index == p->from_frame && p->tmpl && p->tmpl->collector && !p->silent)
+        pl_participant_arm(p, rec->onset ? rec->onset : rec->planned);
+    return 0;
 }
 
 static const yrsp_result* pl_finish(pl_player* p, yrsp_result* r) {
@@ -1770,7 +1785,7 @@ static int pl_end_trial_(pl_player* p, const yscr_frame* f) {
     if (t->v2) {
         int rc;
         YRT_ZONE(zo, "pl.v2_trial_end");
-        rc = pl_v2_trial_end(p, f, &outcome_val, &requeue);
+        rc = pl_v2_trial_end(p, f, have_res ? res.response : -1, &outcome_val, &requeue);
         YRT_ZONE_END(zo);
         if (rc < 0) return -1;
     } else if (d->response) {
@@ -1876,6 +1891,7 @@ static int pl_end_trial_(pl_player* p, const yscr_frame* f) {
     } else {
         int r;
         YRT_ZONE(zu, "pl.trial_update");
+        p->last_outcome_val = outcome_val;
         r = ytr_update(&p->trials, outcome_val, NULL);
         YRT_ZONE_END(zu);
         if (r < 0) { pl_fail(p, "node '%s': %s", p->leaf->node->path, ytr_error(&p->trials)); return -1; }
@@ -1950,7 +1966,9 @@ int pl_on_fired(pl_player* p, const yscr_frame* f, int n) {
             if (c->prop && c->prop[0] == '\x01') break;   /* version 2's selector or value channel: no landing row */
             yds_event_from_timeline(&ev, e, c->stim->name, p->global_trial - 1);
             if (pl_event_queue(p, &ev) < 0) return -1;
-            if (e->kind == YTL_ONSET && !c->prop) pl_v2_on_onset(p, e, (int)(pl_stim_by_name(p, c->stim->name) - p->stims));
+            /* version 2 only: the stimulus's index is its place in the
+             * definition (p->stims follows it), no search on version 1's path */
+            if (p->v2s && e->kind == YTL_ONSET && !c->prop) pl_v2_on_onset(p, e, (int)(c->stim - p->def->stimuli));
             if (e->kind != YTL_SET && !c->prop) {
                 int k;
                 for (k = 0; k < p->tmpl->n_record; k++)
@@ -2044,6 +2062,19 @@ static int pl_rdk_flush(pl_player* p, pl_stim* s) {
     return 0;
 }
 
+/* Who was on screen this frame: the row's counts need it per frame, and a
+ * stimulus can be shown more than once (D10). */
+static void pl_frame_vis(pl_player* p, const yscr_frame* f) {
+    uint8_t* vis = p->frame_vis + (size_t)(f->index % PL_FRAME_RING) * (size_t)p->pool_stats;
+    const float* values = ytl_values(&p->tl);
+    int k;
+    for (k = 0; k < p->tmpl->n_record; k++) {
+        int si = p->tmpl->record_stims[k];
+        int ch = si >= 0 ? p->stims[si].ch_visible : -1;
+        vis[k] = (uint8_t)(ch >= 0 && values[ch] >= 0.5f);
+    }
+}
+
 static int pl_draw(pl_player* p, const yscr_frame* f) {
     int i;
     ygfx_begin(&p->gfx, f);
@@ -2110,9 +2141,22 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
         rc = 0;
         for (i = 0; i < f->n_done && rc == 0; i++) {
             const yscr_record* rec = &f->done[i];
-            if (pl_on_record(p, rec) < 0) { rc = -1; break; }
-            if (p->from_landed && !p->press_planned && rec->index == p->from_frame && p->tmpl && p->tmpl->collector && !p->silent)
-                pl_participant_arm(p, rec->onset ? rec->onset : rec->planned);
+            if (p->args.record_late_ns || p->args.record_delay) {
+                /* tests: records later than planned, or coming frames later */
+                yscr_record* q;
+                if (p->rec_n >= PL_REC_DELAY_CAP) { pl_fail(p, "--test-record-delay: more than %d records held", PL_REC_DELAY_CAP); return -1; }
+                q = &p->rec_q[(p->rec_head + p->rec_n++) % PL_REC_DELAY_CAP];
+                *q = *rec;
+                if (q->onset) q->onset += p->args.record_late_ns;
+                continue;
+            }
+            if (pl_record_in(p, rec) < 0) { rc = -1; break; }
+        }
+        while (rc == 0 && p->rec_n > 0 && p->rec_q[p->rec_head].index + p->args.record_delay < f->index) {
+            yscr_record rec = p->rec_q[p->rec_head];
+            p->rec_head = (p->rec_head + 1) % PL_REC_DELAY_CAP;
+            p->rec_n--;
+            if (pl_record_in(p, &rec) < 0) rc = -1;
         }
         YRT_ZONE_END(zr);
         if (rc < 0) return -1;
@@ -2216,8 +2260,11 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
             pl_env_response(p, &live);
             if (pl_response_trigger(p, &live) < 0) return -1;
             if (p->tmpl->v2) {
-                /* version 2: an exit on the response (3.11 rule 11), no `after` */
+                /* version 2: an exit on the response (3.11 rule 11); an
+                 * events template's `after` once its events are done too */
                 if (pl_v2_response(p, &live, f) < 0) return -1;
+                ytl_base_time(&p->tl, PL_BASE_TRIAL, f->onset, &bt);
+                if (pl_v2_events_response(p, bt) < 0) return -1;
             } else {
                 ytl_base_time(&p->tl, PL_BASE_TRIAL, f->onset, &bt);
                 if (pl_build_after(p, bt > p->events_end ? bt : p->events_end) < 0) return -1;
@@ -2241,25 +2288,16 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
             YRT_ZONE_END(zl);
             if (rc < 0) return -1;
         }
-        {
-            /* who was on screen this frame: the row's counts need it per
-             * frame, and a stimulus can be shown more than once (D10) */
-            uint8_t* vis = p->frame_vis + (size_t)(f->index % PL_FRAME_RING) * (size_t)p->pool_stats;
-            const float* values = ytl_values(&p->tl);
-            int k;
-            for (k = 0; k < p->tmpl->n_record; k++) {
-                int si = p->tmpl->record_stims[k];
-                int ch = si >= 0 ? p->stims[si].ch_visible : -1;
-                vis[k] = (uint8_t)(ch >= 0 && values[ch] >= 0.5f);
-            }
-        }
-        /* version 2: the graph's frame, its hits, the end after it (v2.c) */
+        /* version 2: the graph's frame, its hits, the end after it (v2.c);
+         * a state its hits start lands on this frame (rule 5), so the
+         * frame's visibility is read after it */
         if (p->tmpl->v2) {
             YRT_ZONE(zg, "pl.v2_frame");
             rc = pl_v2_frame_eval(p, f);
             YRT_ZONE_END(zg);
             if (rc < 0) return -1;
         }
+        pl_frame_vis(p, f);
     }
     /* the device's rule follows the onset, which the landing and the flip
      * record move (ysp/response.h, RESPONSE TRIGGERS) */
@@ -2530,12 +2568,29 @@ int pl_run(pl_player* p) {
         if (rc != YSCR_OK) break;
         if (pl_devices_drain(p) < 0) return -1;
         p->frame_trial[f.index % PL_FRAME_RING] = YTR_MISSING_INT;
-        for (k = 0; k < f.n_done; k++)
+        for (k = 0; k < f.n_done; k++) {
+            if (p->args.record_late_ns || p->args.record_delay) {
+                yscr_record* q;
+                if (p->rec_n >= PL_REC_DELAY_CAP) break;
+                q = &p->rec_q[(p->rec_head + p->rec_n++) % PL_REC_DELAY_CAP];
+                *q = f.done[k];
+                if (q->onset) q->onset += p->args.record_late_ns;
+                continue;
+            }
             if (pl_on_record(p, &f.done[k]) < 0) return -1;
+        }
+        /* tests: the held records, the session's last ones too */
+        while (p->rec_n > 0 && (p->rec_q[p->rec_head].index + p->args.record_delay < f.index || i == 7)) {
+            yscr_record rec = p->rec_q[p->rec_head];
+            p->rec_head = (p->rec_head + 1) % PL_REC_DELAY_CAP;
+            p->rec_n--;
+            if (pl_on_record(p, &rec) < 0) return -1;
+        }
         ygfx_begin(&p->gfx, &f);
         ygfx_end(&p->gfx);
         if (yscr_flip(&p->scr) != YSCR_OK) break;
     }
+    if (pl_v2_finish(p) < 0) return -1;
     /* by count, not head != tail: a full ring has head == tail */
     for (i = 0; i < PL_PENDING_ROWS; i++) {
         if (p->rows[p->row_tail].used && pl_row_hand(p, &p->rows[p->row_tail]) < 0) return -1;
