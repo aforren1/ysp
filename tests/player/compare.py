@@ -18,6 +18,7 @@ Exit code 1 when a column marked exact differs.
 import argparse
 import csv
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -340,7 +341,179 @@ def do_oddball(a, ex):
     return bad
 
 
-EXAMPLES = {"rdk": do_rdk, "stroop": do_stroop, "afc2": do_afc2, "oddball": do_oddball}
+# --- format version 2 (3.18): the player draws first, the C program runs on
+# the player's order and draws and writes its scripted hands' samples, the
+# player runs on those samples (3.19 items 1 and 2) ----------------------
+
+def read_c(path):
+    with open(path, newline="") as f:
+        return list(csv.DictReader(l for l in f if not l.startswith("#")))
+
+
+def dec_of(text):
+    return len(text.split(".")[1]) if "." in text else 0
+
+
+def same_at(va, vb, scale=1.0, shift=0.0):
+    """The player's value against the C file's text, at the C file's
+    decimals (C rounds on write); empty against empty."""
+    if va in ("", None) or vb in ("", None):
+        return (va or "") == (vb or "")
+    try:
+        x = float(va) * scale + shift
+        float(vb)
+    except ValueError:
+        return str(va) == str(vb)   # text compares as text
+    return ("%%.%df" % dec_of(vb)) % x == ("%%.%df" % dec_of(vb)) % float(vb) or \
+        (abs(x) < 0.5 * 10 ** -dec_of(vb) and abs(float(vb)) < 0.5 * 10 ** -dec_of(vb))
+
+
+def v2_rig(a, name):
+    rig = os.path.join(a.out, name + "_rig")
+    shutil.rmtree(rig, ignore_errors=True)
+    os.makedirs(rig)
+    run([tool(a.bin, "player_make_rig"), rig, "--view", "1024", "320"])
+    return os.path.join(rig, "profile.json")
+
+
+def v2_columns(rows_p, rows_c, pairs):
+    """pairs: (player col, C col, class, why, scale, shift)."""
+    report, bad = [], 0
+    if len(rows_p) != len(rows_c):
+        return [("<row count>", "%d vs %d" % (len(rows_p), len(rows_c)), "FAIL", "")], 1
+    for pc, cc, klass, why, scale, shift in pairs:
+        if klass == "map":
+            diff = sum(1 for a2, b2 in zip(rows_p, rows_c) if scale.get(a2[pc], a2[pc]) != b2[cc])
+            report.append(("%s <- %s" % (pc, cc), "%d/%d differ after the mapping" % (diff, len(rows_p)), "format" if not diff else "FAIL", why))
+            bad += 1 if diff else 0
+            continue
+        diff, first = 0, None
+        for i, (a2, b2) in enumerate(zip(rows_p, rows_c)):
+            if not same_at(a2.get(pc, ""), b2.get(cc, ""), scale, shift):
+                diff += 1
+                first = first or (i, a2.get(pc, ""), b2.get(cc, ""))
+        status = klass if not diff else ("FAIL" if klass == "exact" else klass)
+        if klass == "exact" and diff:
+            bad += 1
+        note = why or ("equal on %d rows" % len(rows_p) if not diff else "first: row %d, player %r, C %r" % first)
+        report.append(("%s <- %s" % (pc, cc), "%d/%d differ" % (diff, len(rows_p)), status, note))
+    return report, bad
+
+
+def do_visuomotor(a, ex):
+    src = os.path.join(HERE, "visuomotor")
+    pack = os.path.join(a.out, "visuomotor.ysppak")
+    build_pack(a.bin, src, pack)
+    profile = v2_rig(a, "visuomotor")
+    common = ["--sim", "--seed", "3", "--field", "participant=1", "--rig", profile, "--sim-gain", "hand=0.25"]
+    draws = os.path.join(a.out, "visuomotor_draws.csv")
+    player(a.bin, [pack, "--out", os.path.join(a.out, "visuomotor_draws"), "--test-draws", draws] + common)
+    c_out, c_traj, smp = (os.path.join(a.out, "visuomotor_c" + x) for x in (".csv", "_traj.csv", "_samples.csv"))
+    run([tool(a.bin, "trial_visuomotor"), "--sim", "--test-order", draws, "--test-samples-out", smp, "--out", c_out, "--traj", c_traj])
+    p1 = os.path.join(a.out, "visuomotor_p")
+    player(a.bin, [pack, "--out", p1, "--samples", smp] + common)
+    rows, c_rows = read_csv(os.path.join(p1, "trials.csv")), read_c(c_out)
+    one = (1.0, 0.0)
+    pairs = [(c, c, "exact", "", 1.0, 0.0) for c in ("trial_index", "target_deg", "rotation_deg", "rt_s", "mt_s", "cross_s", "onset_tier",
+                                                     "onset_src", "rsp_flags")]
+    pairs += [("feedback", "feedback", "exact", "", 1.0, 0.0),
+              ("peak_speed", "peak_speed_px_s", "exact", "px per s; the C file has 1 decimal", 1.0, 0.0),
+              ("rsp_tier", "move_tier", "format", "the C file writes the result's stamp tier also with no response (trial 2, early): 0; the player leaves it empty", 1.0, 0.0)]
+    report, bad = v2_columns(rows, c_rows, pairs)
+    # the angles: atan2(-y, x) minus target_deg, at the C file's 4 decimals
+    for xy, cc in ((("hand_end_x", "hand_end_y"), "hand_end_deg"), (("cursor_end_x", "cursor_end_y"), "cursor_end_deg")):
+        d = 0
+        for r, c in zip(rows, c_rows):
+            ang = math.degrees(math.atan2(-float(r[xy[1]]), float(r[xy[0]]))) - float(r["target_deg"])
+            while ang > 180:
+                ang -= 360
+            while ang <= -180:
+                ang += 360
+            if not same_at(ang, c[cc]):
+                d += 1
+        klass = "exact" if cc == "hand_end_deg" else "format"
+        why = "analysis: atan2(-y, x) minus target_deg (-0.0000 and 0.0000 are one)"
+        if klass == "format":
+            why += "; the program's cursor is a float in window px, the player's a double (F25): a trial can round the other way at 4 decimals"
+        report.append(("%s, %s <- %s" % (xy[0], xy[1], cc), "%d/%d differ" % (d, len(rows)), klass if (not d or klass == "format") else "FAIL", why))
+        bad += 1 if (d and klass == "exact") else 0
+    # the trajectory (--traj) against streams/path.csv: t_s from target_onset_s, + the window's center
+    path, traj = read_csv(os.path.join(p1, "streams", "path.csv")), read_c(c_traj)
+    onset = {r["trial_index"]: float(r["target_onset_s"]) for r in rows}
+    for pc, cc, shift, klass, why in (("trial_index", "trial_index", 0, "exact", ""), ("t_s", "t_s", None, "exact", "minus the trial's target_onset_s"),
+                                      ("hand_x", "hand_x", 512, "exact", "plus 512"), ("hand_y", "hand_y", 384, "exact", "plus 384"),
+                                      ("cursor_x", "cursor_x", 512, "format", "the program turns about (512, 384) in window px, in float; the player about (0, 0), in double: the last bits differ, and at the C file's 3 decimals some rows round the other way (F25)"),
+                                      ("cursor_y", "cursor_y", 384, "format", "as cursor_x (F25)")):
+        if len(path) != len(traj):
+            report.append(("path.csv rows", "%d vs %d" % (len(path), len(traj)), "FAIL", ""))
+            bad += 1
+            break
+        d = 0
+        for r, c in zip(path, traj):
+            v = float(r[pc]) - onset[r["trial_index"]] if shift is None else (float(r[pc]) + shift)
+            if not same_at(v, c[cc]):
+                d += 1
+        status = "exact" if not d else ("FAIL" if klass == "exact" else klass)
+        bad += 1 if (d and klass == "exact") else 0
+        report.append(("path.csv %s <- --traj %s" % (pc, cc), "%d/%d differ" % (d, len(path)), status, why or "equal"))
+    print_report("Visuomotor rotation (trial_visuomotor.c; the player's order, the program's hand)", report)
+    return bad
+
+
+def do_bimanual(a, ex):
+    src = os.path.join(HERE, "bimanual")
+    pack = os.path.join(a.out, "bimanual.ysppak")
+    build_pack(a.bin, src, pack)
+    profile = v2_rig(a, "bimanual")
+    common = ["--sim", "--seed", "3", "--field", "participant=1", "--rig", profile, "--sim-gain", "left=0.0078125", "--sim-gain", "right=0.0078125"]
+    draws = os.path.join(a.out, "bimanual_draws.csv")
+    player(a.bin, [pack, "--out", os.path.join(a.out, "bimanual_draws"), "--test-draws", draws] + common)
+    names = {x: os.path.join(a.out, "bimanual_c" + x) for x in (".csv", "_reaches.csv", "_track.csv", "_freq.csv", "_samples.csv")}
+    run([tool(a.bin, "trial_bimanual"), "--sim", "--mapping", "split", "--perturb", "rotation", "--design-timing", "--test-order", draws,
+         "--test-samples-out", names["_samples.csv"], "--out", names[".csv"], "--reaches-out", names["_reaches.csv"],
+         "--track", names["_track.csv"], "--freq", names["_freq.csv"]])
+    p1 = os.path.join(a.out, "bimanual_p")
+    player(a.bin, [pack, "--out", p1, "--samples", names["_samples.csv"]] + common)
+    rows = [r for r in read_csv(os.path.join(p1, "trials.csv")) if r["trial_type"] == "reach"]
+    c_rows = read_c(names["_reaches.csv"])
+    pairs = [("aim_from_x", "start_x_cm", "exact", "", 1.0, 0.0), ("aim_from_y", "start_y_cm", "exact", "y with a sign change", -1.0, 0.0),
+             ("aim_x", "target_x_cm", "exact", "", 1.0, 0.0), ("aim_y", "target_y_cm", "exact", "y with a sign change", -1.0, 0.0),
+             ("aim_deg", "target_deg", "exact", "", 1.0, 0.0), ("index", "block_reach", "exact", "", 1.0, 0.0),
+             ("perturb", "perturbation", "exact", "", 1.0, 0.0)]
+    pairs += [(c, c, "exact", "", 1.0, 0.0) for c in ("rt_s", "onset_tier", "onset_src", "rsp_flags")]
+    pairs += [("rsp_tier", "move_tier", "exact", "", 1.0, 0.0), ("peak_speed", "peak_speed_cm_s", "exact", "", 1.0, 0.0),
+              ("fast", "fast", "exact", "", 1.0, 0.0), ("arrived_s", "mt_s", "exact", "arrived_s minus 1 (stay_s)", 1.0, -1.0),
+              ("rsp_role", "move_hand", "map", "left and right for L and R", {"left": "L", "right": "R"}, 0.0)]
+    report, bad = v2_columns(rows, c_rows, pairs)
+    # --track against streams/frames.csv, per tracking trial
+    fr, tr = read_csv(os.path.join(p1, "streams", "frames.csv")), read_c(names["_track.csv"])
+    if len(fr) != len(tr):
+        report.append(("frames.csv rows", "%d vs %d" % (len(fr), len(tr)), "FAIL", ""))
+        bad += 1
+    else:
+        t0 = {}
+        for r in fr:
+            t0.setdefault(r["trial_index"], float(r["t_s"]))
+        for pc, cc, sc in (("t_s", "t_s", None), ("goal_x", "target_x", 1.0), ("goal_y", "target_y", -1.0), ("cursor_x", "cursor_x", 1.0),
+                           ("cursor_y", "cursor_y", -1.0), ("left_x", "l_x", 1.0), ("left_y", "l_y", -1.0), ("right_x", "r_x", 1.0),
+                           ("right_y", "r_y", -1.0), ("inside", "inside", 1.0)):
+            d = 0
+            for r, c in zip(fr, tr):
+                v = float(r[pc]) - t0[r["trial_index"]] if sc is None else float(r[pc]) * sc
+                if sc is None:
+                    ok = abs(v - float(c[cc])) <= 0.5e-6 + 1e-9   # the C file's 6 decimals, rounded either way at a half
+                else:
+                    ok = same_at(v, c[cc])
+                d += 0 if ok else 1
+            why = {"t_s": "minus the trial's first row; the C file's 6 decimals", "goal_x": "the program's target at the planned onset, the player's at the record's: one time on the simulated display (3.18 lists them as different on a real one)"}.get(pc, "y with a sign change" if sc == -1.0 else "")
+            report.append(("frames.csv %s <- --track %s" % (pc, cc), "%d/%d differ" % (d, len(fr)), "exact" if not d else "FAIL", why or "equal"))
+            bad += 1 if d else 0
+    print_report("Two-mouse tracking and reaching (trial_bimanual.c --design-timing; the player's draws, the program's hands)", report)
+    return bad
+
+
+EXAMPLES = {"rdk": do_rdk, "stroop": do_stroop, "afc2": do_afc2, "oddball": do_oddball, "visuomotor": do_visuomotor,
+            "bimanual": do_bimanual}
 
 
 def main():

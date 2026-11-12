@@ -172,6 +172,7 @@ struct pl_v2 {
     bool hit_entry;            /* the runtime state's ops land by D16: no late flag */
     int64_t resp_t;            /* the response's time, known at the end      */
     char outcome_buf[256];
+    int64_t take_t; int n_take;
 };
 
 typedef struct pl_v2_session {
@@ -1877,6 +1878,19 @@ static int v2_enter(pl_player* p, pl_v2* v, int rs, int64_t t, const yscr_frame*
 static int v2_take(pl_player* p, pl_v2* v, const v2_exit* x, int64_t t, const yscr_frame* f, bool hit) {
     const v2_rs* r = v->cur >= 0 ? &v->rs[v->cur] : NULL;
     int id;
+    /* reading F26: a cycle whose waiting exit is a region already true at
+     * its arm (entry now, G16) moves at one time without end; stop it by
+     * name rather than fill the timeline */
+    if (t == v->take_t) {
+        if (++v->n_take > 64) {
+            pl_fail(p, "template '%s', trial %d: more than 64 state changes at one time: a cycle whose waiting exit is already met when it arms (a region with stay_s 0 whose test still holds)",
+                    v->def->name, p->global_trial - 1);
+            return -1;
+        }
+    } else {
+        v->take_t = t;
+        v->n_take = 0;
+    }
     for (id = v->ev0; id < v->ev1; id++) {
         const ytl_event* e = ytl_find(&p->tl, id);
         if (e && !(e->flags & (YTL_EV_FIRED | YTL_EV_SKIPPED))) (void)ytl_remove(&p->tl, id);
