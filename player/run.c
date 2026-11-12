@@ -2216,6 +2216,10 @@ int pl_run(pl_player* p) {
         p->out_pool[i] = (pl_out_stats*)pl_alloc(p, sizeof(pl_out_stats) * (size_t)(p->n_triggers + 1));
         if (!p->stat_pool[i] || !p->out_pool[i]) return -1;
     }
+    {
+        extern int pl_v2_rows(pl_player* p);
+        if (pl_v2_rows(p) < 0) return -1;   /* version 2's row cells, before the frame path */
+    }
     if (p->args.trace_path) {
         p->trace_file = fopen(p->args.trace_path, "w");
         if (!p->trace_file) { pl_fail(p, "cannot write '%s'", p->args.trace_path); return -1; }

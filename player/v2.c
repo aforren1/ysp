@@ -195,6 +195,7 @@ typedef struct pl_v2_session {
     bool t0_set;
     long recenter_skipped;
     int n_sample_rows;
+    bool* reads;               /* pl_v2_reads()'s scratch, one per stimulus */
 } pl_v2_session;
 
 struct pl_v2_row {
@@ -1355,7 +1356,10 @@ int pl_v2_load(pl_player* p) {
     int ti, i, max_slots = 0;
     if (!S) return 0;
     S->gain = (double*)pl_alloc(p, sizeof(double) * (size_t)(p->def->n_sigroles + 1));
-    if (!S->gain) return -1;
+    S->reads = (bool*)pl_alloc(p, (size_t)p->def->n_stimuli + 1);
+    S->uni = (struct v2_uni*)pl_alloc(p, sizeof(struct v2_uni) * 64);   /* at load: a leaf opens on the frame path */
+    S->cap_uni = 64;
+    if (!S->gain || !S->reads || !S->uni) return -1;
     for (i = 0; i < p->def->n_sigroles; i++) {
         int k;
         S->gain[i] = 0;
@@ -1502,11 +1506,7 @@ int pl_v2_leaf_open(pl_player* p, uint64_t leaf_seed) {
             nn++;
         }
     if (!nn) return 0;
-    if (S->cap_uni < nn) {
-        S->uni = (struct v2_uni*)pl_alloc(p, sizeof(struct v2_uni) * 64);
-        if (!S->uni) return -1;
-        S->cap_uni = 64;
-    }
+    if (!S->uni) { pl_fail(p, "internal: the uniform draws have no storage"); return -1; }
     {
         /* rank by byte order: sort the names, carry the values */
         const char* sorted[64];
@@ -2635,10 +2635,23 @@ int pl_v2_row_fill(pl_player* p, pl_row* r) {
     pl_v2_session* S = p->v2s;
     if (!S) return 0;
     if (!r->v2) {
+        /* pl_v2_rows() gave every pending row its cells at the run's start;
+         * a row made elsewhere (--test-draws) gets them here */
         r->v2 = (struct pl_v2_row*)pl_alloc(p, sizeof(struct pl_v2_row));
         if (!r->v2) return -1;
     }
     r->v2->n = 0;
+    return 0;
+}
+
+int pl_v2_rows(pl_player* p);
+int pl_v2_rows(pl_player* p) {
+    int i;
+    if (!p->v2s) return 0;
+    for (i = 0; i < PL_PENDING_ROWS; i++) {
+        p->rows[i].v2 = (struct pl_v2_row*)pl_alloc(p, sizeof(struct pl_v2_row));
+        if (!p->rows[i].v2) return -1;
+    }
     return 0;
 }
 
@@ -2818,10 +2831,13 @@ static bool v2_ctl_reads(const yexp_control* c, const char* name) {
 }
 
 bool pl_v2_reads(pl_player* p, const yexp_template* t, const char* name) {
-    bool* stims = (bool*)calloc((size_t)p->def->n_stimuli + 1, 1);
+    /* the scratch is the session's, sized at load: a leaf opens on the
+     * frame path, which allocates nothing */
+    bool* stims = p->v2s && p->v2s->reads ? p->v2s->reads : NULL;
     bool r = false;
     int i, k;
     if (!stims) return true;
+    memset(stims, 0, (size_t)p->def->n_stimuli + 1);
     if (v2_steps_read(p, t->events, t->n_events, name, stims) || v2_steps_read(p, t->after, t->n_after, name, stims)) r = true;
     for (i = 0; !r && t->states && i < t->n_states; i++) {
         const yexp_state* st = &t->states[i];
@@ -2851,7 +2867,6 @@ bool pl_v2_reads(pl_player* p, const yexp_template* t, const char* name) {
         if (!stims[i]) continue;
         for (k = 0; k < p->def->stimuli[i].n_props; k++) if (v2_val_reads(p->def->stimuli[i].props[k].value, name, 0)) { r = true; break; }
     }
-    free(stims);
     return r;
 }
 

@@ -1,7 +1,7 @@
 /* alloc_test.c - counts heap calls made while pl_frame() runs. A trial's
  * frame must not allocate (rig_spec: no allocation in hot loops). Built with
  * -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc; run as:
- *   player_alloc_test PACK OUT [--rig FILE]          (--sim)
+ *   player_alloc_test PACK OUT [--rig FILE] [--samples FILE] [--sim-gain ROLE=UNITS]...   (--sim)
  *   player_alloc_test PACK --out OUT --real [--windowed] [--allow-below-tier ROLE[,ROLE]] [--rig FILE]
  *                     [--max-trials N] [--seed N]     (a real run: needs a display)
  * A real run has other threads (SDL's, the GL driver's, the data set's
@@ -54,6 +54,18 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--seed") && v) { a.seed = strtoull(v, NULL, 10); i++; }
         else if ((!strcmp(argv[i], "--field")) && v) i++;   /* the player's; participant=1 is set */
         else if (!strcmp(argv[i], "--measure")) { }
+        else if (!strcmp(argv[i], "--samples") && v) { a.samples_path = v; i++; }   /* version 2 */
+        else if (!strcmp(argv[i], "--sim-gain") && v && a.n_gains < 16) {
+            const char* eq = strchr(v, '=');
+            static char names[16][64];
+            if (!eq || eq - v >= 64) return 2;
+            memcpy(names[a.n_gains], v, (size_t)(eq - v));
+            names[a.n_gains][eq - v] = 0;
+            a.gains[a.n_gains].name = names[a.n_gains];
+            a.gains[a.n_gains].value = eq + 1;
+            a.n_gains++;
+            i++;
+        }
         else if (!a.out_dir && argv[i][0] != '-') a.out_dir = argv[i];
         else return 2;
     }
