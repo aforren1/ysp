@@ -1,4 +1,4 @@
-/* ysp/experiment.h - v0.3.2 - public domain single-header loader for experiment definitions
+/* ysp/experiment.h - v0.3.3 - public domain single-header loader for experiment definitions
  *
  *   Reads a ysp experiment definition of format version 1 or 2
  *   (docs/experiment_format.md, the pack's EXPERIMENT entry) into a checked,
@@ -153,6 +153,12 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.3.3 - format finding F26, decided 2026-11-12 (D20 rule 6): an `on`
+ *          exit, own or shared, or an until, on a region with stay_s 0
+ *          does not wait; a cycle with no other waiting exit is refused by
+ *          name, telling the author to give the region stay_s above 0. The
+ *          cycle walk runs first without those edges, so a cycle that
+ *          never waits keeps its message. No struct change.
  *   v0.3.2 - comment only: STATUS says that a version 2 file with no signal
  *          role runs in a real window too. No code change.
  *   v0.3.1 - a walk2d's step against half the box's diagonal by hypot(), as
@@ -208,7 +214,7 @@
  *   v0.1.0 - first version: the loader for format version 1, its defaults
  *          table, the host interface and the canonical writer.
  *
- *   STATUS: v0.3.2 (2026-11-12). Tested; the player (docs/player.md) uses
+ *   STATUS: v0.3.3 (2026-11-12). Tested; the player (docs/player.md) uses
  *   it for both versions. A version 2 file with a signal role runs on --sim
  *   only (the rig profile has no adapter block, G18); one with none runs in
  *   a real window too.
@@ -222,8 +228,8 @@
 
 #define YEXP_VERSION_MAJOR 0
 #define YEXP_VERSION_MINOR 3
-#define YEXP_VERSION_PATCH 2
-#define YEXP_VERSION_STRING "0.3.2"
+#define YEXP_VERSION_PATCH 3
+#define YEXP_VERSION_STRING "0.3.3"
 
 /* The newest format version this header reads (D12). */
 #define YEXP_FORMAT_VERSION 2
@@ -4767,21 +4773,48 @@ static bool yexp__in_shared(const yexp_template* t, int i) {
     return t->in_shared_ && i >= 0 && i < t->n_states && t->in_shared_[i];
 }
 
+/* Format finding F26 (decided 2026-11-12): a region with stay_s 0 (absent,
+ * or a literal 0) is met at its arm while the test holds (entry now, G16),
+ * so an exit or until on it does not wait. A variable's stay_s waits. */
+static bool yexp__now_region(const yexp_ref* on) {
+    const yexp_prop* st;
+    if (on->kind != YEXP_REF_CONTROL || !on->control || on->control->kind != YEXP_REGION) return false;
+    st = yexp_prop_get(on->control->props, on->control->n_props, "stay_s");
+    if (!st || !st->value || st->value->kind == YEXP_V_NONE) return true;
+    if (st->value->kind != YEXP_V_NUMBER) return false;
+    return (st->value->flags & YEXP_VF_DURATION) ? st->value->i == 0 : st->value->num == 0;
+}
+
+/* Whether a state's steps wait at an until: one on a control that is not a
+ * region with stay_s 0. */
+static bool yexp__steps_wait(const yexp_step* steps, int n) {
+    int i;
+    for (i = 0; i < n; i++)
+        if (steps[i].op == YEXP_UNTIL && !yexp__now_region(&steps[i].target)) return true;
+    return false;
+}
+
 /* D20 rule 6 (format finding F5): every cycle of the chart holds an exit
  * that waits (`on` or `after_s`). The edges that do not wait: an instant
- * exit, `over`, and a state with no exits that goes on when its steps end
- * (none when its steps hold an `until`, whose exit waits). */
-static void yexp__state_cycles(yexp__ctx* c, const yexp_template* t, const char* telem) {
+ * exit, `over`, a state with no exits that goes on when its steps end
+ * (none when its steps wait at an `until`), and, F26, an `on` exit, own or
+ * shared, on a region with stay_s 0. The walk runs first without the F26
+ * edges, so a cycle that never waits keeps its message; then with them, and
+ * such a cycle says to give the region stay_s above 0. */
+static void yexp__state_cycles_(yexp__ctx* c, const yexp_template* t, const char* telem, bool f26e) {
     int n = t->n_states, i;
     uint8_t* color;
+    uint8_t* via_now;          /* the edge that pushed the state was an F26 one */
     int* stack;
     int* next;
     if (n == 0) return;
     color = (uint8_t*)yexp__alloc(c, (size_t)n);
+    via_now = (uint8_t*)yexp__alloc(c, (size_t)n);
     stack = (int*)yexp__alloc(c, (size_t)n * sizeof(int));
     next = (int*)yexp__alloc(c, (size_t)n * sizeof(int));
-    if (!color || !stack || !next) return;
+    if (!color || !via_now || !stack || !next) return;
     memset(color, 0, (size_t)n);
+    memset(via_now, 0, (size_t)n);
     for (i = 0; i < n; i++) {
         int sp = 0;
         if (color[i]) continue;
@@ -4790,33 +4823,59 @@ static void yexp__state_cycles(yexp__ctx* c, const yexp_template* t, const char*
         color[i] = 1;
         while (sp) {
             int u = stack[sp - 1], v = -1;
+            bool now = false;
             const yexp_state* st = &t->states[u];
-            /* edge k: own exits 0..n_exits-1, then over, then the step end */
-            while (v < 0 && next[u] < st->n_exits + 2) {
+            /* edge k: own exits 0..n_exits-1, then over, then the step end,
+             * then the shared exits (the ones that list u) */
+            while (v < 0 && next[u] < st->n_exits + 2 + t->n_exits) {
                 int k = next[u]++;
                 if (!yexp__work(c)) return;
                 if (k < st->n_exits) {
                     const yexp_exit* e = &st->exits[k];
                     if (e->on.kind == YEXP_REF_NONE && !e->after && e->to.kind == YEXP_REF_STATE) v = e->to.index;
+                    else if (f26e && !e->after && yexp__now_region(&e->on) && e->to.kind == YEXP_REF_STATE) { v = e->to.index; now = true; }
                 } else if (k == st->n_exits) {
                     if (st->over_to.kind == YEXP_REF_STATE) v = st->over_to.index;
-                } else if (st->n_exits == 0 && !yexp__in_shared(t, u) && !yexp__steps_until(st->steps, st->n_steps) && u + 1 < n) {
-                    v = u + 1;
+                } else if (k == st->n_exits + 1) {
+                    if (st->n_exits == 0 && !yexp__in_shared(t, u) && !(f26e ? yexp__steps_wait(st->steps, st->n_steps) : yexp__steps_until(st->steps, st->n_steps)) && u + 1 < n) {
+                        v = u + 1;
+                        now = yexp__steps_until(st->steps, st->n_steps);
+                    }
+                } else {
+                    const yexp_exit* e = &t->exits[k - st->n_exits - 2];
+                    int m;
+                    if (!f26e || e->after || !yexp__now_region(&e->on) || e->to.kind != YEXP_REF_STATE) continue;
+                    for (m = 0; m < e->n_in; m++)
+                        if (e->in[m] == u) { v = e->to.index; now = true; break; }
                 }
             }
             if (v >= 0) {
                 if (color[v] == 1) {
-                    yexp__err(c, st->pos_, "%s: states '%s' and '%s' are on a cycle of exits that do not wait; every cycle needs an 'on' or 'after_s' exit (D20 rule 6)",
-                              telem, t->states[v].name ? t->states[v].name : "?", st->name ? st->name : "?");
+                    /* F26 when an edge of the cycle is one: the stack from v */
+                    int j = sp - 1;
+                    bool f26 = now;
+                    while (j > 0 && stack[j] != v) { f26 = f26 || via_now[stack[j]]; j--; }
+                    if (f26)
+                        yexp__err(c, st->pos_, "%s: states '%s' and '%s' are on a cycle whose only waiting exits are regions with stay_s 0, which are met at their arm while the test holds; give such a region stay_s above 0 (D20 rule 6, F26)",
+                                  telem, t->states[v].name ? t->states[v].name : "?", st->name ? st->name : "?");
+                    else
+                        yexp__err(c, st->pos_, "%s: states '%s' and '%s' are on a cycle of exits that do not wait; every cycle needs an 'on' or 'after_s' exit (D20 rule 6)",
+                                  telem, t->states[v].name ? t->states[v].name : "?", st->name ? st->name : "?");
                     return;
                 }
-                if (color[v] == 0) { color[v] = 1; next[v] = 0; stack[sp++] = v; }
+                if (color[v] == 0) { color[v] = 1; via_now[v] = now; next[v] = 0; stack[sp++] = v; }
             } else {
                 color[u] = 2;
                 sp--;
             }
         }
     }
+}
+
+static void yexp__state_cycles(yexp__ctx* c, const yexp_template* t, const char* telem) {
+    int before = c->r->n_errors;
+    yexp__state_cycles_(c, t, telem, false);
+    if (c->r->n_errors == before) yexp__state_cycles_(c, t, telem, true);
 }
 
 static const char* yexp__num_text(yexp__ctx* c, const yexp_value* v);

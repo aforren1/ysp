@@ -1,0 +1,60 @@
+{
+  "note": "F26 (decided 2026-11-12): a shared exit on a region with stay_s 0 does not wait either.",
+  "format": "ysp-experiment",
+  "version": 2,
+  "roles": {
+    "hand": {
+      "type": "position2d_relative",
+      "units": "display_px"
+    }
+  },
+  "stimuli": {
+    "s": {
+      "kind": "shape"
+    }
+  },
+  "trials": {
+    "t": {
+      "controls": {
+        "near": {
+          "control": "region",
+          "of": "hand",
+          "radius": 10
+        }
+      },
+      "states": [
+        {
+          "name": "a",
+          "steps": [
+            {
+              "on": "s"
+            }
+          ]
+        },
+        {
+          "name": "b",
+          "exits": [
+            {
+              "to": "a"
+            }
+          ]
+        }
+      ],
+      "exits": [
+        {
+          "on": "near",
+          "to": "b",
+          "in": [
+            "a"
+          ]
+        }
+      ]
+    }
+  },
+  "timeline": [
+    {
+      "name": "m",
+      "trial": "t"
+    }
+  ]
+}

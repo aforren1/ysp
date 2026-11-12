@@ -87,7 +87,7 @@ template t
     radius = int:5
     rate (default) = "sample"
     speed_lag_s (default) = dur:10000000ns
-    stay_s (default) = dur:0ns
+    stay_s = dur:50000000ns
   states 2
     state show max_visits=0
       step on s stagger=dur:0ns

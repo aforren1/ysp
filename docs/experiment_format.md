@@ -520,6 +520,38 @@ that structure; it does not invent a new one.
   QUANTIZATION; docs/timeline.md). This amends rule 5 as D20 amends D16;
   the text above is unchanged. 3.11 applies it.
 
+  DECIDED (2026-11-12, the user; format finding F26 of experiment.md), to
+  rule 6: an `on` exit, own or shared, and an `until`, on a region whose
+  `stay_s` is 0 (left out, or a literal 0) is met at its arm while the
+  region's test holds (`entry` `now`, G16), so it does not count as an
+  exit that waits. A cycle whose only waiting exits are such region exits
+  is refused at load by name, and the message says to give the region
+  `stay_s` above 0. A `stay_s` from a variable counts as one that waits.
+  The player keeps its stop after 64 state changes at one time as a
+  safety net that a loaded file does not reach.
+
+  DECIDED (2026-11-12, the user; format finding F34 of experiment.md),
+  "wait like version 1", qualifying 3.11 rule 10 and rule 7 above:
+  1. The exit to `end` that `response_ends_trial` adds to every state
+     does not make a state "a state with exits": rule 10 counts the exits
+     the author wrote, own and shared. A state with none goes on when its
+     steps end.
+  2. A response's end, a press or its deadline, takes the `on:
+     "response"` exits: own, shared and the one `response_ends_trial`
+     adds. On the deadline the exit's outcome is `"timeout"` unless the
+     exit gives its own (D36: the latest outcome set wins).
+  3. A trial whose states reach `end` while the response's window is open
+     waits for the response's end, as version 1's `after` starts at the
+     later of the events' end and the response's end (2.5); then the trial
+     ends. The window is open when its `from` was shown, or a state's
+     table that the trial ran shows it and an exit has not removed it, and
+     the response has not ended. A `from` that the trial never shows (its
+     state was not visited) opened no window: nothing waits, and the
+     outcome is as with no press (`"timeout"`, or an exit's). A window
+     that a press does not end (`response_ends_trial` false) and that has
+     no deadline cannot end on its own; the trial's end closes it, as
+     before (the player's reading, as the decision does not say).
+
 D16 to D20 add keys and change what a step can
 do, so they are format version 2 (D12).
 

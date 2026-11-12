@@ -1,12 +1,12 @@
 {
-  "note": "Valid but unusual (format 3.11): a state whose own exits are all instant, the last with an if, is valid when a shared exit lists it; a cycle through a state whose steps hold an until waits there, so it is valid.",
+  "note": "Valid but unusual (format 3.11): a state whose own exits are all instant, the last with an if, is valid when a shared exit lists it; a cycle through a state whose steps hold an until waits there, so it is valid. The until's region holds 0.05 s (stay_s): with stay_s 0 it is met at its arm while the pad stays out, and the cycle is refused (F26, decided 2026-11-12).",
   "format": "ysp-experiment", "version": 2,
   "roles": { "pad": { "type": "position3d", "units": "device" } },
   "stimuli": { "s": { "kind": "shape" } },
   "trials": {
     "t": {
       "controls": {
-        "lift": { "control": "region", "of": "pad", "radius": 5, "outside": true },
+        "lift": { "control": "region", "of": "pad", "radius": 5, "outside": true, "stay_s": 0.05 },
         "depth": { "control": "peak", "of": "pad.z" }
       },
       "exits": [{ "after_s": 3, "to": "end", "in": ["choose"] }],

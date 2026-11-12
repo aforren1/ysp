@@ -1875,16 +1875,16 @@ id = "v-49"
 name = "a step end no edge"
 test = "experiment"
 why = "Finding F5: a no-exit state goes on."
-find = '''                } else if (st->n_exits == 0 && !yexp__in_shared(t, u) && !yexp__steps_until(st->steps, st->n_steps) && u + 1 < n) {'''
-replace = '''                } else if (0) {'''
+find = '''                    if (st->n_exits == 0 && !yexp__in_shared(t, u) && !(f26e ? yexp__steps_wait(st->steps, st->n_steps) : yexp__steps_until(st->steps, st->n_steps)) && u + 1 < n) {'''
+replace = '''                    if (0) {'''
 
 [[mutant]]
 id = "v-50"
 name = "an until does not wait"
 test = "experiment"
 why = "Its exit is on a hit."
-find = '''                } else if (st->n_exits == 0 && !yexp__in_shared(t, u) && !yexp__steps_until(st->steps, st->n_steps) && u + 1 < n) {'''
-replace = '''                } else if (st->n_exits == 0 && !yexp__in_shared(t, u) && u + 1 < n) {'''
+find = '''                    if (st->n_exits == 0 && !yexp__in_shared(t, u) && !(f26e ? yexp__steps_wait(st->steps, st->n_steps) : yexp__steps_until(st->steps, st->n_steps)) && u + 1 < n) {'''
+replace = '''                    if (st->n_exits == 0 && !yexp__in_shared(t, u) && u + 1 < n) {'''
 
 [[mutant]]
 id = "v-51"
@@ -2460,3 +2460,37 @@ test = "experiment"
 why = "3.14: below half the diagonal (run_walk_box's 1.42 in a box of 2)."
 find = '''!(2.0 * step->num < hypot(dx, dy))'''
 replace = '''!(step->num < hypot(dx, dy))'''
+
+[[mutant]]
+id = "f26-01"
+name = "a region with stay_s 0 waits"
+test = "experiment"
+why = "F26 (decided 2026-11-12): bad/v2_cycle_now*.json."
+find = '''    if (on->kind != YEXP_REF_CONTROL || !on->control || on->control->kind != YEXP_REGION) return false;'''
+replace = '''    return false;'''
+
+[[mutant]]
+id = "f26-02"
+name = "the shared exits not walked"
+test = "experiment"
+why = "F26: bad/v2_cycle_now_shared.json."
+find = '''                    if (!f26e || e->after || !yexp__now_region(&e->on) || e->to.kind != YEXP_REF_STATE) continue;'''
+replace = '''                    continue;'''
+
+[[mutant]]
+id = "f26-03"
+name = "an until on a region with stay_s 0 waits"
+test = "experiment"
+why = "F26: bad/v2_cycle_until_now.json (the old v2_instant_shared)."
+find = '''        if (steps[i].op == YEXP_UNTIL && !yexp__now_region(&steps[i].target)) return true;'''
+replace = '''        if (steps[i].op == YEXP_UNTIL) return true;'''
+
+[[mutant]]
+id = "f26-04"
+name = "one walk with the F26 edges"
+test = "experiment"
+why = "F26: bad/v2_cycle_over.json keeps the message of a cycle that never waits."
+find = '''    yexp__state_cycles_(c, t, telem, false);
+    if (c->r->n_errors == before) yexp__state_cycles_(c, t, telem, true);'''
+replace = '''    (void)before;
+    yexp__state_cycles_(c, t, telem, true);'''
