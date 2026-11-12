@@ -780,6 +780,21 @@ ran (640.5 million events taken, 373.5 million rows, 10.17 million hits).
   built with `-fsanitize=undefined` (the list's `sig_ubsan` test) catches
   them.
 
+### Zones
+
+The header has no profiling zones: it does not include ysp/rt.h, and a
+zone in it would make ysp/rt.h a dependency. A program times its own
+calls. The player (0.3.0) puts `sig.samples` around its feeds and
+`sig.frame` around `ysig_frame()` (docs/player.md, "How-to: profile a
+run"). On the Linux desktop (i5-14500, GCC 12.2, Release, pinned to CPU
+2, the trace ring attached, 2026-11-11), `--sim` on the 3.18 examples:
+`sig.frame` median 0.51 us (visuomotor, 57 nodes) and 0.56 us (bimanual,
+53 nodes); `sig.samples` median 0.02 us and 15.10 us a frame (bimanual
+feeds two mice into two graphs). A zone per op stays not done: it needs
+the dependency, and a zone pair with the trace ring attached costs 51 ns
+on this machine (`rt_ring_bench` B5, the same day), against 9 ns a node
+in that `ysig_frame()` (0.51 us over 57 nodes).
+
 ## Not done
 
 - **A derived-event flag.** `ysp/input.h` would need

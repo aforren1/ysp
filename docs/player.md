@@ -1,14 +1,16 @@
 # The player
 
-Status: v0.2.0, 2026-11-10. It loads a pack, checks its experiment
+Status: v0.3.0, 2026-11-11. It loads a pack, checks its experiment
 definition, lowers the definition onto the ysp headers and runs it: in a
 real window with the participant's keyboard and the rig's devices, or on
 the simulated display (`--sim`). It is a program (`player/`, target
 `ysp_player`, option `YSP_BUILD_PLAYER`), not a single header. It reads
-format version 1 ([experiment_format.md](experiment_format.md), D1 to D15).
-Real runs are measured on the Linux X11 desktop only (Results). The runner
-protocol, `ysp/app.h`'s loop (rig_spec 4.2.1) and format version 2 are not
-built.
+format versions 1 and 2 ([experiment_format.md](experiment_format.md), D1
+to D15 and part 3). Version 2 runs on `--sim` only when it has a signal
+role: the rig profile has no adapter block yet (G18), so a real run refuses
+the role by name. Real runs are measured on the Linux X11 desktop only
+(Results). The runner protocol and `ysp/app.h`'s loop (rig_spec 4.2.1) are
+not built.
 
 ## How-to: run a session
 
@@ -126,6 +128,105 @@ rig profile with a `view` and a calibration: `--rig FILE` (and `--cal FILE`,
 or a calibration named in the profile). Test profiles come from
 `player_make_rig DIR`.
 
+## How-to: run a version 2 definition on the simulated display
+
+A definition with signal roles (3.4) needs a scripted participant for each
+role. Give the player a samples file and a scale per role:
+
+```sh
+ysp_player PACK.ysppak --out DIR --sim --seed 3 --field participant=1 \
+    --rig RIG/profile.json --samples samples.csv --sim-gain hand=0.25
+```
+
+1. Write the samples file as CSV with the header `t_s,role,x,y`. Each row
+   is one report of a raw mouse (`x` and `y` are counts) or of a pen (`x`
+   and `y` are positions). `t_s` is seconds from the first frame's onset.
+   Rows are in time order.
+2. Give `--sim-gain ROLE=UNITS` for each relative role
+   (`position2d_relative`). The `--sim` adapter integrates the counts at
+   that many role units a count. An absolute role multiplies the position
+   by its gain (1 by default). A relative role with no gain is a bad
+   argument (exit code 2). Reading F32 of experiment.md.
+3. For `display_cm` or `cm` units, give a rig profile with a `view` (its
+   width in mm). `player_make_rig DIR --view 1024 320` writes one: 1024 px
+   over 320 mm.
+
+With no samples file, each role stays at its origin. A definition with no
+signal role (states and exits only) needs no samples.
+
+To compare with a C program, the C program must see the same draws and
+the same samples:
+
+1. `ysp_player PACK --out DIR --sim ... --test-draws draws.csv` writes every
+   leaf's trials and variables, and runs no frame.
+2. The C program reads them (`--test-order draws.csv`) and writes the
+   samples it fed its own graph (`--test-samples-out samples.csv`).
+   `trial_bimanual` also takes `--design-timing`: the definition's 1 s
+   inter-trial interval and graph speed.
+3. `ysp_player PACK --out DIR2 --sim ... --samples samples.csv` runs the
+   definition on those samples.
+
+`tests/player/compare.py` does these steps for `visuomotor` and
+`bimanual`. The options are for tests only.
+
+## How-to: profile a run
+
+Use a build with the trace ring. The build adds zones to the player and
+the examples; the default build has none.
+
+1. Configure and build:
+
+   ```sh
+   cmake --preset linux-trace-ring -DYSP_BUILD_PLAYER=ON -DYSP_BUILD_PACK=ON
+   cmake --build build/linux-trace-ring --target ysp_player
+   ```
+
+   The preset sets `YSP_TRACE_RING=ON`. `YSP_TRACY=ON` (preset
+   `linux-tracy`) builds Tracy's client instead, on demand: it sends
+   nothing until the Tracy profiler connects. One build has one mode;
+   CMake refuses both options together.
+2. Run with `--profile` (and `--measure` for the largest frame):
+
+   ```sh
+   ysp_player PACK --out DIR --sim ... --profile --measure
+   ```
+
+   The player writes `DIR/profile.csv`: `frame,zone,t_ns,dur_ns,value`, one
+   row a zone. A build with no trace ring refuses `--profile` (exit code 2).
+3. Summarize it:
+
+   ```sh
+   uv run --no-project python tools/profile_summary.py DIR/profile.csv
+   ```
+
+   The tool prints, per zone, the count, median, p99 and largest time in
+   us. Then it prints the zones in the largest frame (`pl.frame`) and in
+   the largest trial start (`pl.trial_start`), with their totals and
+   shares. A zone's time includes the zones in it.
+
+The zones:
+
+| Zone | What it times |
+|---|---|
+| `pl.frame` | `pl_frame()`, all the frame's work |
+| `pl.devices_drain`, `pl.flip_records` | The device records; the flip records (`value`: the records) |
+| `pl.trial_start` | The trial's start. In it: `pl.leaf_open` (a leaf opens), `pl.trial_next` (the trial's draws), `pl.stim_begin`, `pl.timeline_reset`, `pl.build_ops` (version 1's lowering) or `pl.v2_trial_start` (with `pl.v2_params` and `pl.v2_enter`, the first state's lowering) |
+| `pl.feed_screen` | `yrsp_feed_screen()` (a real run) |
+| `pl.v2_input`, `sig.samples` | Version 2: the samples to the graphs |
+| `pl.update_frame`, `pl.evaluate`, `pl.landing` | `yrsp_update_frame()`, `ytl_evaluate()` (`value`: the events), what landed |
+| `pl.v2_frame`, `sig.frame`, `pl.v2_frame_rows` | Version 2: hits and exits; `ysig_frame()` (`value`: the nodes); the frame traces |
+| `pl.trial_end` | The trial's end. In it: `pl.v2_trial_end`, `pl.row_fill`, `pl.v2_trial_rows` (the sample traces), `pl.trial_update` |
+| `pl.rule_window`, `pl.apply`, `pl.draw` | The rule's window; the channels to the stimuli; the draw |
+| `pl.write_inplace` | `--sim` only: one write to the data set (a real run gives it to the writer) |
+
+ysp/screen.h and ysp/gfx.h add their own zones (`yscr.*`, `ygfx.*`).
+ysp/sig.h has none: it does not include ysp/rt.h. The player's `sig.*`
+zones time its calls.
+
+`--profile` writes the file on the frame thread after each frame, outside
+`pl.frame`. On a real rig, the write can make the next frame late. It is
+a debug option: do not use it for a timing run.
+
 ## How-to: choose the participant
 
 `--participant SPEC` gives the scripted participant of `--sim`. It is
@@ -173,6 +274,31 @@ differ:
 Not done in the data set, and why: `clock.csv` is empty (no device clock
 fit is logged yet, in either mode); a device's input events other than the
 response are not in `events.csv` (as in `--sim`).
+
+### Version 2 data
+
+A version 2 definition adds these to the data set (3.15):
+
+| Item | Content |
+|---|---|
+| `events.csv` rows with `kind` `state` | One row a state visit: `text` the state, `frame` and `t_s` its entry frame and that frame's onset (the flip record's), `planned_s`, `residual_s`, `end_s` the visit's end, `code` the exit's index (-1 the steps ended, -2 `over` after `max_visits`; reading F20). An events template has none (F27) |
+| `streams/<trace>.csv` | A sample trace: `trial_index`, `t_s`, a column a lane (`<item>_x`, `<item>_y`), `tier`, `device`; the rows of the trace's window only. A frame trace (`rate: frame`): `trial_index`, `frame`, `planned_s`, `t_s` (empty when the flip record did not come, F29), a column a lane |
+| `trials.csv` | The template's `columns` (`signal`, `hit`, `time`, `when` forms), a flag a column (0 or 1), `rsp_role` for a signal response, the five columns of a walk (`W_x`, `W_y`, `W_from_x`, `W_from_y`, `W_deg`) and a uniform's column |
+| `session.json` | See below |
+
+Changes to `session.json` in the player 0.3.0, for each version:
+
+| Field | Version 1 | Version 2 |
+|---|---|---|
+| `player_version` | `0.3.0` | `0.3.0` |
+| `format_version` | 1, the definition's (it was the player's constant 1) | 2 |
+| `headers.sig` | Not written | ysp/sig.h's version |
+| `headers.trials`, `headers.gfx` | The new versions (0.8.1, 0.20.0) | The same |
+| `signal_roles` | Not written | One object a signal role: `name`, `adapter` (`sim raw mouse` or `sim positions`), `device` (`--samples` or `none`), `type`, `units`, `per_count` (the `--sim-gain`), `calibration_sha256` (empty) |
+| `recenter_skipped` | Not written | The `recenter` steps that a graph did not apply (D40) |
+
+No other field changes. A version 1 data set keeps every other byte
+(Results).
 
 
 ## Explanation: what lowering decided
@@ -243,6 +369,35 @@ lowering is the next task. `session.json`'s `format_version` is the version
 the player lowers (`PL_FORMAT_VERSION`, 1), not the newest the loader reads. In `--sim` a response's `trigger` goes
 out from the frame loop, as for a keyboard role; a real run's device role
 has the rule.
+
+## Explanation: how version 2 lowers
+
+A version 2 template lowers to these parts (`player/v2.c`):
+
+| Format | Lowering |
+|---|---|
+| Signal roles (3.4) | One ysp/sig.h graph a template. Every sample goes to every graph, so an adapter's state (an integrated mouse) stays continuous across templates. `--sim` adapters: a relative role is a raw mouse's counts through an integrate node at `--sim-gain`; an absolute role is a pen's positions through a scale node (F32) |
+| Controls (3.7): `cursor`, `region`, `distance`, `movement`, `peak`, `moving_target`, `trace`, `signal_lost` | Nodes of the graph (`v2_ctl_build()`). A region with no `stay_s` arms with entry `now` (ysp/sig.h 0.3.0, G16); a held one waits. `freeze_at` latches the cursor at the hit. A cursor's `transform` is an affine node whose angle and matrix `ysig_set()` changes per trial (G17) |
+| Stimulus keys that take a signal (`{"signal": ...}`, `when`, `test`, `hit`) | A selector channel per key: the graph's value goes to a bind slot after the timeline's values, and the stimulus's bind reads that slot (`v2_forms_graph()`) |
+| `states`, `exits`, `until` (3.11, D20, D35) | Runtime states with exits of four kinds: a hit, the response, `after_s`, and an instant `if`. An events template with `until` splits into one runtime state a part (F3). Each state's steps are one timeline op table from its entry time (`v2_enter()`). Exits are taken in rule 4's order (`v2_hits()`, `v2_timed()`) |
+| The trial's end, flags, `recenter` | Timeline marks with reserved codes; the end is handled after the frame's `ysig_frame()` |
+| `max_visits`, `over` | A visit of no time past the limit, code -2, then `over`'s `to` and `outcome` (F20) |
+| Outcomes (D36, F16), `requeue_outcomes` | The latest outcome set wins; with none set, the response's levels. An outcome in `requeue_outcomes` requeues the trial |
+| `uniform`, `walk2d` (3.14) | ysp/trials.h variables. A leaf draws only what its template reads |
+| `cm` units | ysp/gfx.h's `YGFX_CM` (0.20.0, G14), from the rig profile's `view` |
+| `columns` | Each form read at the row's fill; a `time` column waits for its flip record |
+
+The frame's order (3.10): the samples up to the frame's onset go to the
+graphs and their hits are taken; then the timeline; then `ysig_frame()`
+and its hits; then a second `ytl_evaluate()` for the states that hits
+started on this frame (rule 5); then the draw. A cycle of states that
+moves without end at one time stops the session by name after 64 changes
+(F26).
+
+A trace's rows go through the data set's writer, as the other rows do: a
+real run's frame thread does not call `write()`. A trace row is wider than
+the writer's job, so it waits in a side buffer of the queue (2.4 MB, only
+for a definition with traces).
 
 ## Explanation: a window with no deadline, and the wait for the flip record
 
@@ -361,6 +516,107 @@ in the same frame. With a 4,096-step buffer the largest frame's work was
 With the 64-step buffer it was 219 to 373 us. The two runs' streams are
 identical. A 4,096-step buffer would put a 16 ms frame at risk with five
 or six RDKs; 64 steps keep a flush under 50 us an RDK.
+
+### Format version 2 (2026-11-11)
+
+The Linux desktop (i5-14500, Debian 12, liquorix 6.11, gcc 12.2, Release),
+`--sim` on the virtual clock.
+
+The comparison with the C programs (`tests/player/compare.py`; the C
+program takes the player's draws and writes its samples, and the player
+runs on those samples):
+
+| Example | Result |
+|---|---|
+| Visuomotor rotation (`trial_visuomotor`, 160 trials) | Every `trials.csv` column exact but two: `rsp_tier` against `move_tier`, 1 of 160 (the program writes the stamp tier 0 with no response, F33), and the cursor's end angle, 1 of 160 at 4 decimals (F25). `streams/path.csv` against `--traj`, 42,958 rows: `trial_index`, `t_s`, `hand_x`, `hand_y` exact; `cursor_x` 765 rows and `cursor_y` 726 rows round the other way at the C file's 3 decimals (the program turns the cursor in float about the window's center, the player in double about the origin, F25) |
+| Two-mouse tracking and reaching (`trial_bimanual --design-timing`, 120 reaches, 12 tracking trials) | Every reach column exact (`rsp_role` after mapping `L` and `R` to the role names). `streams/frames.csv` against `--track`, 33,120 rows: every column exact |
+| The four version 1 examples | As before (the table above): no exact column differs |
+
+Version 1 identity (this branch against main, 7078e4d): of the 439 CSV
+files of the version 1 runs of `player_test.py` and `compare.py`, 438 are
+byte-identical. The other is the Stroop C program's file (`stroop_c.csv`),
+whose comment lines name ysp/trials.h's version (0.8.1). `session.json` differs in
+`player_version`, `headers.trials` (0.8.1), `headers.gfx` (0.20.0),
+`pack_id` (the pack records the headers' versions, so its bytes change
+with them) and `rig_profile_sha256` where a test wrote its rig profile on
+another day (4 files). `format_version` is 1 in both (94 files).
+
+Allocations: 0 heap calls in `pl_frame()` on both version 2 examples
+(`player_alloc_test --samples`).
+
+Frame work (`--measure`, the default build, no zones; pinned to CPU 2, a
+performance core, with `taskset`; nothing else running; three runs):
+
+| Example | Frames | Largest frame | Largest trial start | Frames over 16 ms |
+|---|---|---|---|---|
+| Visuomotor | 19,370 | 638 to 642 us | 36 to 37 us | 0 |
+| Bimanual | 48,422 | 1,889 to 1,954 us | 38 to 42 us | 0 |
+
+Without pinning, a run on an efficiency core measured up to 3,041 us
+(bimanual), so a timing run states its core.
+
+The largest frame is the trial's end. With the trace ring
+(`--profile`, three runs, the same core), 95 to 97 % of it is the sample
+trace's rows written in place: 271 rows in 644 us (visuomotor) and 1,878
+rows in 1,893 us (bimanual), about 1 to 2.4 us a row. On `--sim` the frame
+thread writes them; a real run copies each row (296 bytes) to the writer's
+queue instead, which is not measured. The knob is a trace's rows a trial:
+at 1 us a row, 16 ms holds about 16,000 rows on `--sim`.
+
+Per zone (`tools/profile_summary.py`, run 3, us):
+
+| Zone | Visuomotor median, p99, max | Bimanual median, p99, max |
+|---|---|---|
+| `pl.frame` | 2.16, 17.12, 661.70 | 20.51, 26.36, 1,983.95 |
+| `pl.trial_end` | 601.77, 647.24, 659.22 | 852.46, 1,953.78, 1,981.07 |
+| `pl.v2_trial_rows` | 598.84, 644.29, 656.33 | 849.38, 1,950.26, 1,977.49 |
+| `pl.trial_start` | 7.29, 20.39, 40.34 | 13.22, 41.71, 48.72 |
+| `pl.v2_input` (`sig.samples` in it) | 0.07, 7.83, 10.61 | 15.15, 20.30, 30.12 |
+| `sig.frame` | 0.51, 0.70, 3.19 | 0.56, 0.71, 8.12 |
+| `pl.flip_records` | 0.54, 2.94, 8.99 | 3.77, 5.62, 24.16 |
+| `pl.draw` | 0.50, 0.59, 6.84 | 0.51, 0.59, 5.09 |
+
+The largest trial start (the session's first, frame 0): visuomotor 40.3
+us, of which `pl.leaf_open` 14.8, `pl.timeline_reset` 4.7, `pl.v2_enter`
+6.0, `pl.v2_params` 4.1, `pl.trial_next` 3.7, `pl.stim_begin` 2.6;
+bimanual 48.7 us, of which `pl.leaf_open` 21.7, `pl.v2_enter` 8.6,
+`pl.v2_params` 5.9, `pl.timeline_reset` 4.9, `pl.trial_next` 3.2.
+
+The cost of the zones (pinned, eight runs of each build, mean user time
+of the whole run):
+
+| Build | Visuomotor | Bimanual |
+|---|---|---|
+| Default (no zones) | 0.211 s (sd 0.002) | 1.142 s (sd 0.007) |
+| `YSP_TRACE_RING`, no `--profile` (no ring attached) | 0.209 s (sd 0.003) | 1.148 s (sd 0.007) |
+| `YSP_TRACE_RING`, `--profile` | 0.291 s (sd 0.003) | 1.351 s (sd 0.008) |
+
+With no ring attached the difference is within the spread. With
+`--profile`, the run costs 4.1 us (visuomotor) and 4.3 us (bimanual) more
+a frame, most of it the file's write after the frame. In the frame's work
+it is about 1.4 us: 27.2 and 26.3 zones a frame at 51 ns a zone pair with
+the ring attached (`rt_ring_bench` B5, the same machine and day). The
+largest frame with `--profile`: 646 to 729 us and 1,975 to 2,005 us.
+
+`YSP_TRACY` (on demand, no profiler connected), three runs on CPUs 2, 4
+and 6: largest frame 648 to 654 us and 1,980 to 2,003 us, against 638 to
+642 us and 1,877 to 1,900 us for the default build on the same CPUs.
+Pinned to one CPU, Tracy's own threads took it: 2,378 to 2,456 us
+(visuomotor), and once a 2,111 us trial start.
+
+The data of every build and option above (`--measure`, `--profile`, both
+instrumentation modes) is byte-identical to the default build's, apart
+from `profile.csv`.
+
+Tests:
+
+| Check | Result |
+|---|---|
+| `tests/player/player_test.py` | 49 cases, 0 failures. Version 2: `t_v2_states` (states, exits, flags, instant and shared exits, `max_visits` and `over`, outcomes, `requeue_outcomes`), `t_v2_until` (an events template's `until` and timeout, the G18 refusal), `t_v2_hand` (hits with a hold, a movement response and `rsp_role`, the column forms, `freeze_at`, a sample and a frame trace and the trace's window, a walk and a uniform, value forms, cm units), `t_v2_rule5` (five states on one frame; `--profile`), `t_v2_corpus` (the loader's `v2_*.json` files: `v2_instant_shared` stops by name, F26) |
+| ctest, Release (`build/linux`, `DISPLAY` unset) | 122 of 122, `compile_windows_macros_c` and `_cxx` among them |
+| ctest, ASan and UBSan (`sanitizers` preset, built and run under `setarch -R`) | 121 of 121 |
+| Fuzz, `tests/fuzz/player_fuzz.c` over the version 2 seeds (the loader's 8 `v2_*.json` files against the visuomotor pack's table, and the two 3.18 packs); each signal role gets a gain and 20 s of scripted samples; 8 processes | Release: 5,000,000 inputs (about 2 h), 767,844 loaded, 294,751 ran to the end, 1,886,114 with signal roles; no crash. ASan and UBSan (`setarch -R`): 40,000 inputs, 6,130 loaded, 2,395 ran to the end, no report. The version 1 corpus was not run again |
+| Mutants, `tests/mutate/player_{v2,run,lower,host,eval}.toml` (`--sim` test) | `player_v2.toml` 11 of 11 killed. Every other `--sim` mutant as expected: run 45 killed and 3 kept survivors, lower 25 killed, host 4 killed and `h-v2-01` now kept (a guard: the loader refuses a version above 2 first), eval 5 killed and 1 kept. The 35 real-path mutants (test `real`) need a display and were not run |
 
 ### A real window (2026-11-10)
 
@@ -491,6 +747,12 @@ with only `left`).
 - `clock.csv`: the devices' clock fits are not logged.
 - The loop as ysp/app.h's `yscr_run` when rig_spec 4.2.1 exists: `pl_run`
   and `pl_frame` are its two parts.
+- Version 2 with a signal role: the rig profile's adapter block (G18), so
+  a role binds a real device (a raw mouse, a pen, an eye tracker) with its
+  units and calibration; `yexp_host.sigrole()` against it; the real run's
+  input path (the screen's queue and the devices' events into the graphs,
+  in place of `--samples`); a photodiode run for the cursor's latency.
+- The role samples as input rows of `events.csv` (F30).
 
 ## Not verified
 
@@ -511,3 +773,10 @@ with only `left`).
 - A rule's codes from two input roles into one output: the arms are kept
   per output and the press time picks one; no rig here has two boxes.
 - `aep`, `artwork`, `video`: refused.
+- Version 2 in a real run: refused with a signal role (G18). The trace
+  rows' path through the writer's side buffer (`pl_wq_push_row()`) runs
+  only in a real run, so no test reaches it; `--sim` writes the rows in
+  place.
+- A real run's trial-end cost with traces: the copy to the writer is not
+  measured (Results, "Format version 2").
+- Format version 2 on Windows, macOS and emcc.

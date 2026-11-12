@@ -697,6 +697,7 @@ Purpose: The pack's EXPERIMENT entry: a JSON file, read by ysp/json.h, that name
 
 Status:
 
+- 2026-11-11: the player ([player.md](player.md)) v0.3.0 lowers format version 2 and runs it on the simulated display, with a scripted participant for the signal roles (`--samples`, `--sim-gain`). Against their C programs, the two 3.18 examples agree column for column but where the format or a float decides (F25, F33). A real run with a signal role is refused by name until the rig profile has its adapter block (G18). Profiling builds: `YSP_TRACE_RING` (`--profile`, `tools/profile_summary.py`) and `YSP_TRACY`. The player's readings of part 3 are F19 to F33 of [experiment.md](experiment.md).
 - 2026-11-11: format version 2 (part 3) is decided, and ysp/experiment.h 0.3.0 reads it; the player refuses it by name until its lowering is built.
 - 2026-11-10: the player ([player.md](player.md)) v0.2.0 runs format version 1 in a real window (Linux X11 measured) and on the simulated display. A response waits for the flip record (ysp/response.h 0.9.0), and a role below its `min_tier` refuses a real start unless `--allow-below-tier` (2026-11-10).
 - 2026-10-21: the data set's writer is built, ysp/dataset.h v0.1.0 (gap G13).
