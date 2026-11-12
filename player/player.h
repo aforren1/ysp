@@ -32,6 +32,7 @@
 #include "ysp/rigfile.h"
 #include "ysp/dataset.h"
 #include "ysp/pack.h"
+#include "ysp/sig.h"
 /* again after ysp/device.h (through ysp/rigfile.h): the response rule's
  * helpers (ysp/response.h, RESPONSE TRIGGERS) */
 #include "ysp/response.h"
@@ -43,11 +44,10 @@
 extern "C" {
 #endif
 
-#define PL_VERSION_STRING "0.2.0"
-/* The newest format version this player lowers; ysp/experiment.h reads
- * version 2 (0.3.0), whose lowering is the next task, so a version 2
- * definition is refused by name. session.json's format_version is this. */
-#define PL_FORMAT_VERSION 1
+#define PL_VERSION_STRING "0.3.0"
+/* The newest format version this player lowers (2: format part 3, in
+ * v2.c). session.json's format_version is the definition's. */
+#define PL_FORMAT_VERSION 2
 
 enum {
     PL_BASE_TRIAL     = 1,   /* the timeline base a trial runs on            */
@@ -114,6 +114,14 @@ enum {
 #define PL_MARK_END ((int32_t)0x7fffffff)  /* the internal end of a trial; not
                                             * a mark index, so no definition
                                             * name can collide with it */
+/* Version 2's own marks (v2.c), above every mark index too: a flag step
+ * (+ flag x 2 + value) and a recenter step (+ its index in the template's
+ * list) act when they land. */
+#define PL_MARK_FLAG     ((int32_t)0x7f000000)
+#define PL_MARK_RECENTER ((int32_t)0x7e000000)
+
+typedef struct pl_v2 pl_v2;          /* a template's version 2 runtime (v2.c) */
+typedef struct pl_v2_row pl_v2_row;  /* a row's version 2 cells (v2.c)        */
 
 typedef struct pl_player pl_player;
 
@@ -248,6 +256,8 @@ typedef struct pl_tmpl {
     /* record list */
     int*  record_stims; int n_record;
     bool* stim_used;            /* the stimuli this template shows or changes */
+    pl_v2* v2;                  /* format 2's states, graph and forms; NULL:
+                                 * the version 1 path                        */
 } pl_tmpl;
 
 /* A role of the definition (2.9) and what it is bound to. In --sim no role
@@ -359,6 +369,7 @@ typedef struct pl_row {
     size_t  text_len;
     yrsp_result res;
     bool    has_res;
+    pl_v2_row* v2;           /* version 2's cells known at the flush        */
     int     queued;          /* handed to the writer and not yet written:
                               * the slot is not free (read and written
                               * atomically: the writer thread clears it) */
@@ -412,6 +423,13 @@ typedef struct pl_args {
     const char* def_text;      /* the fuzz target: use these bytes for the
                                 * experiment entry, keeping the pack's tables */
     size_t def_len;
+    /* version 2, --sim: the scripted participant of signal roles */
+    const char* samples_path;  /* t_s,role,x,y: device counts per sample    */
+    int   n_gains;
+    pl_field_arg gains[16];    /* --sim-gain ROLE=UNITS: the --sim adapter's
+                                * scale per count (G18 has no rig block)     */
+    const char* draws_path;    /* tests: every leaf's trials and variables,
+                                * written without running (--test-draws)    */
 } pl_args;
 
 typedef struct pl_script_row { int trial; char* resp; bool silent; double rt_s, hold_s; } pl_script_row;
@@ -624,6 +642,8 @@ struct pl_player {
     int64_t   work_max_ns, work_trial_max_ns, work_n, work_over_16ms;
     int64_t   work_max_frame;
     int64_t   work_input_max_ns, work_input_max_frame;   /* a real run's input: SDL's pump */
+    /* version 2 (v2.c) */
+    struct pl_v2_session* v2s;
 };
 
 /* --- load (lower.c) ------------------------------------------------------ */
@@ -637,6 +657,8 @@ pl_stim* pl_stim_by_name(pl_player* p, const char* name);
 /* The channel of a stimulus's property, or of its visibility when prop is
  * NULL; -1 when no step drives it. */
 int  pl_channel(pl_player* p, const char* stim, const char* prop);
+int  pl_chan_add(pl_player* p, const char* stim, const char* prop);
+void pl_chan_steps(pl_player* p, const yexp_step* st, int n);
 int  pl_trigger_channel(pl_player* p, const char* role);
 /* The role of the definition by name, or NULL. */
 pl_role* pl_role_get(pl_player* p, const char* name);
@@ -653,6 +675,48 @@ int  pl_mark_index(pl_player* p, const char* name);
 
 /* The host for yexp_load() (host.c). */
 void pl_host_init(pl_player* p, yexp_host* h);
+
+/* --- format version 2 (v2.c) --------------------------------------------- */
+
+/* Load: the steps' channels (from pl_channels_assign()), then the graphs,
+ * the forms' binds and the samples after the stimuli and the timeline. */
+int  pl_v2_channels(pl_player* p);
+int  pl_v2_load(pl_player* p);
+void pl_v2_close(pl_player* p);
+int  pl_v2_ops_bound(const yexp_template* t);
+/* A leaf's run: its `uniform` draws (D29). */
+int  pl_v2_leaf_open(pl_player* p, uint64_t leaf_seed);
+/* A walk2d or uniform variable's value, or 0 when name is none of them. */
+int  pl_v2_var(pl_player* p, const pl_env* e, const char* name, pl_val* out);
+/* A template's flag by name: 1 and *out, or 0. */
+int  pl_v2_flag(pl_player* p, const char* name, bool* out);
+/* The trial: its start, each frame's parts, its end and its row. */
+int  pl_v2_trial_start(pl_player* p, const yscr_frame* f);
+int  pl_v2_frame_input(pl_player* p, const yscr_frame* f);
+int  pl_v2_frame_eval(pl_player* p, const yscr_frame* f);
+int  pl_v2_on_mark(pl_player* p, const ytl_event* e);
+int  pl_v2_trial_end(pl_player* p, const yscr_frame* f, int* outcome_val, bool* requeue);
+int  pl_v2_row_fill(pl_player* p, pl_row* r);
+int  pl_v2_column(pl_player* p, pl_row* r, int col, const yexp_value* f, pl_val* out, bool* deferred);
+const char* pl_v2_rsp_role(pl_player* p, const yrsp_result* res);
+int  pl_v2_trial_rows(pl_player* p);
+int  pl_v2_response(pl_player* p, const yrsp_result* r, const yscr_frame* f);
+void pl_v2_on_onset(pl_player* p, const ytl_event* e, int stim);
+int  pl_v2_step_ops(pl_player* p, const yexp_step* s, ytl_op* ops, int c, int cap);
+int  pl_v2_clear_ops(pl_player* p, const char* stim, const char* prop, ytl_op* ops, int c, int cap);
+bool pl_v2_reads(pl_player* p, const yexp_template* t, const char* name);
+int  pl_on_fired(pl_player* p, const yscr_frame* f, int n);
+int  pl_v2_row_flush(pl_player* p, pl_row* r, ytr_data* w);
+int  pl_v2_on_record(pl_player* p, const yscr_record* rec);
+int  pl_v2_columns(pl_player* p);
+/* --test-draws: every leaf's trials and variables, no frames. */
+int  pl_v2_draws(pl_player* p);
+const float* pl_v2_values(pl_player* p, const float* tl_values);
+const ygfx_bind* pl_v2_binds(pl_player* p, int* n);
+int  pl_v2_session_json(pl_player* p, yjs_arena* a, yjs_value* s);
+int  pl_v2_streams(pl_player* p);
+/* The running template's version 2 runtime, or none (a version 1 template). */
+void pl_v2_select(pl_player* p);
 
 /* --- run (run.c) --------------------------------------------------------- */
 

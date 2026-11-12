@@ -1,7 +1,7 @@
 # The player (docs/player.md): a library so its tests and fuzz target reach
 # the same code, and the ysp_player program. Added by the top-level
 # CMakeLists.txt when YSP_BUILD_PLAYER is ON.
-add_library(ysp_player_lib STATIC impl.c eval.c host.c lower.c run.c)
+add_library(ysp_player_lib STATIC impl.c eval.c host.c lower.c run.c v2.c)
 target_include_directories(ysp_player_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(ysp_player_lib PUBLIC ysp::rig ysp::methods ysp::devices)
 target_compile_options(ysp_player_lib PRIVATE ${YSP_WARNINGS})

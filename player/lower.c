@@ -132,7 +132,7 @@ int pl_mark_index(pl_player* p, const char* name) {
 
 /* --- channels ----------------------------------------------------------- */
 
-static int pl_chan_add(pl_player* p, const char* stim, const char* prop) {
+int pl_chan_add(pl_player* p, const char* stim, const char* prop) {
     int i;
     const yexp_stim* s = yexp_stim_get(p->def, stim);
     if (!s) { pl_fail(p, "a step names the stimulus '%s', which does not exist", stim); return -1; }
@@ -169,7 +169,7 @@ int pl_trigger_channel(pl_player* p, const char* role) {
     return -1;
 }
 
-static void pl_chan_steps(pl_player* p, const yexp_step* st, int n) {
+void pl_chan_steps(pl_player* p, const yexp_step* st, int n) {
     int i, k;
     for (i = 0; i < n; i++) {
         const yexp_step* s = &st[i];
@@ -214,7 +214,8 @@ int pl_channels_assign(pl_player* p) {
     if (p->n_triggers > YSCR_MAX_TRIGGERS) { pl_fail(p, "more than %d output roles", YSCR_MAX_TRIGGERS); return -1; }
     for (i = 0; i < p->def->n_templates; i++)
         bound += pl_ops_bound(p->def->templates[i].events, p->def->templates[i].n_events) +
-                 pl_ops_bound(p->def->templates[i].after, p->def->templates[i].n_after);
+                 pl_ops_bound(p->def->templates[i].after, p->def->templates[i].n_after) +
+                 (p->def->format_version >= 2 ? pl_v2_ops_bound(&p->def->templates[i]) : 0);
     p->channels = (pl_chan*)pl_alloc(p, sizeof(pl_chan) * (size_t)(bound + p->def->n_stimuli + 8));
     if (!p->channels) return -1;
     p->channels_assigned = true;
@@ -226,6 +227,8 @@ int pl_channels_assign(pl_player* p) {
         pl_chan_steps(p, t->after, t->n_after);
         if (t->response) pl_chan_add(p, t->response->from, NULL);
     }
+    /* version 2: the states' steps, the forms' selectors and values */
+    if (!p->failed && pl_v2_channels(p) < 0) return -1;
     return p->failed ? -1 : 0;
 }
 
@@ -318,6 +321,12 @@ int pl_build_ops(pl_player* p, const yexp_step* st, int n, ytl_op* ops, int cap,
     int i, c = 0;
     for (i = 0; i < n; i++) {
         const yexp_step* s = &st[i];
+        if (p->v2s) {
+            /* version 2's steps, and a set with a value form (3.10, 3.12) */
+            int r2 = pl_v2_step_ops(p, s, ops, c, cap);
+            if (r2 == -1) return -1;
+            if (r2 >= 0) { c = r2; continue; }
+        }
         switch (s->op) {
         case YEXP_ON: case YEXP_OFF: {
             int64_t stagger = 0;
@@ -340,6 +349,7 @@ int pl_build_ops(pl_player* p, const yexp_step* st, int n, ytl_op* ops, int cap,
                 memset(o, 0, sizeof *o);
                 o->op = s->op == YEXP_ON ? YTL_OP_ON : YTL_OP_OFF;
                 o->ch = ch;
+                if (p->v2s && (c = pl_v2_clear_ops(p, s->stims[k], NULL, ops, c, cap)) < 0) return -1;
             }
             if (t > p->ops_latest) p->ops_latest = t;
             if (t != *cursor) {   /* ytl_on_n() leaves the cursor where it was */
@@ -402,6 +412,7 @@ int pl_build_ops(pl_player* p, const yexp_step* st, int n, ytl_op* ops, int cap,
                     o->ch = ch;
                     o->value = (float)val;
                 }
+                if (p->v2s && (c = pl_v2_clear_ops(p, s->stims[0], s->props[k].key, ops, c, cap)) < 0) return -1;
             }
             break;
         }
@@ -423,6 +434,7 @@ int pl_build_ops(pl_player* p, const yexp_step* st, int n, ytl_op* ops, int cap,
                     delay = ops[c].tween.delay_ns;
                     c++;
                 }
+                if (p->v2s && (c = pl_v2_clear_ops(p, s->stims[0], s->props[k].key, ops, c, cap)) < 0) return -1;
             }
             /* 2.5: only `then` moves time. A `to` still running at the
              * trial's end is cut there, so it does not hold back `after` */
@@ -1251,7 +1263,8 @@ static int pl_response_kind(const pl_player* p, const pl_role* r) {
 
 static int pl_tmpl_open(pl_player* p, pl_tmpl* t) {
     const yexp_template* d = t->def;
-    int bound = 8 + pl_ops_bound(d->events, d->n_events) + pl_ops_bound(d->after, d->n_after);
+    int bound = 8 + pl_ops_bound(d->events, d->n_events) + pl_ops_bound(d->after, d->n_after) +
+                (p->def->format_version >= 2 ? pl_v2_ops_bound(d) : 0);
     t->ops = (ytl_op*)pl_alloc(p, sizeof(ytl_op) * (size_t)bound);
     if (!t->ops) return -1;
     t->ops_cap = bound;
@@ -1275,7 +1288,7 @@ static int pl_tmpl_open(pl_player* p, pl_tmpl* t) {
                 if (strcmp(p->stims[k].def->name, d->record[i]) == 0) t->record_stims[i] = k;
         }
     }
-    if (!d->response) return 0;
+    if (!d->response || d->response->signal_choices) return 0;   /* signal choices: v2.c, from the graph */
     {
         const yexp_response* r = d->response;
         const yexp_role* role = NULL;
@@ -1402,13 +1415,24 @@ static int pl_leaf_prepare(pl_player* p, const yexp_node* n, pl_leaf* lf) {
             for (k = 0; k < s->n_vars; k++) {
                 const yexp_value* v = s->vars[k].value;
                 int dup = 0, j;
-                if (v->kind != YEXP_V_CHOICE) continue;
+                if (v->kind != YEXP_V_CHOICE && v->kind != YEXP_V_WALK2D) continue;
+                if (v->kind == YEXP_V_WALK2D && (!lf->tmpl || !pl_v2_reads(p, lf->tmpl->def, s->vars[k].key))) continue;
                 for (j = 0; j < nv; j++)
                     if (strcmp(lf->desc.vars[j].name, s->vars[k].key) == 0) dup = 1;
                 if (dup) continue;   /* nearer one shadows (the loader's order) */
                 if (nv >= YTR_MAX_VARS) {
-                    pl_fail(p, "node '%s': more than %d choice variables", n->path, YTR_MAX_VARS);
+                    pl_fail(p, "node '%s': more than %d choice and walk2d variables", n->path, YTR_MAX_VARS);
                     return -1;
+                }
+                if (v->kind == YEXP_V_WALK2D) {
+                    /* 3.14: items step, box x0, y0, x1, y1, start x, y (G15);
+                     * a leaf whose template reads none of its five does not draw it */
+                    double w[7];
+                    int q;
+                    for (q = 0; q < 7; q++) if (pl_eval_num(p, &p->env, &v->items[q], &w[q]) < 0) return -1;
+                    lf->desc.vars[nv] = ytr_var_walk2d(s->vars[k].key, w[0], w[1], w[3], w[2], w[4], w[5], w[6]);
+                    nv++;
+                    continue;
                 }
                 {
                     const char** vals = (const char**)pl_alloc(p, sizeof(char*) * (v->n + 1));
@@ -1579,7 +1603,14 @@ static void pl_text_steps(pl_player* p, const yexp_step* s, int n, size_t* m) {
 static void pl_text_nodes(pl_player* p, const yexp_node* n, int count, size_t* m) {
     int i, k;
     for (i = 0; i < count; i++) {
-        for (k = 0; k < n[i].n_vars; k++) pl_text_value(p, n[i].vars[k].value, m);
+        for (k = 0; k < n[i].n_vars; k++) {
+            const yexp_value* v = n[i].vars[k].value;
+            /* a uniform array is one JSON cell (3.14): n doubles of at most
+             * 24 bytes, commas and brackets */
+            if (v->kind == YEXP_V_UNIFORM) { size_t u = (size_t)(v->i > 0 ? v->i : 1) * 25u + 2u; if (u > *m) *m = u; continue; }
+            if (v->kind == YEXP_V_WALK2D) continue;
+            pl_text_value(p, v, m);
+        }
         for (k = 0; k < n[i].n_data; k++) pl_text_value(p, n[i].data[k].value, m);
         for (k = 0; k < n[i].n_rule_vars; k++) {
             int j;
@@ -2131,6 +2162,15 @@ static void pl_open_hook(void* ctx, yscr_screen* s) {
         c->gd.view.distance_mm = (float)p->rig->view.distance_mm;
         c->gd.view.width_mm = (float)(p->rig->view.width_mm * (w / (double)p->rig->view.width_px));
         p->view = c->gd.view;
+    } else if (p->def->units == 2) {
+        /* cm (D23, G14): one scale factor from the view's width */
+        yscr_caps caps;
+        double w;
+        yscr_get_caps(s, &caps);
+        w = caps.mode.w > 0 ? (double)caps.mode.w : 800.0;
+        c->gd.units = YGFX_CM;
+        c->gd.view.width_mm = (float)(p->rig->view.width_mm * (w / (double)p->rig->view.width_px));
+        p->view = c->gd.view;
     }
     (void)ygfx_open_start(&p->gfx, &c->gd);
 }
@@ -2191,8 +2231,8 @@ static int pl_screen_open(pl_player* p) {
     c.gd.background[0] = (float)p->def->background[0];
     c.gd.background[1] = (float)p->def->background[1];
     c.gd.background[2] = (float)p->def->background[2];
-    if (p->def->units_deg && (!p->have_rig || !p->rig->view.set)) {
-        pl_fail(p, "display.units is deg: the rig profile needs a view (rigfile_profile --view); give --rig");
+    if ((p->def->units_deg || p->def->units == 2) && (!p->have_rig || !p->rig->view.set)) {
+        pl_fail(p, "display.units is %s: the rig profile needs a view (rigfile_profile --view); give --rig", p->def->units == 2 ? "cm" : "deg");
         return -1;
     }
     if (p->have_cal) c.gd.cal = &p->cal;
@@ -2329,7 +2369,7 @@ int pl_load(pl_player* p, const pl_args* a) {
         return -1;
     }
     if (p->def->format_version > PL_FORMAT_VERSION) {
-        pl_fail(p, "the definition is format version %d; this player lowers version %d, and the version 2 lowering is not built yet", p->def->format_version, PL_FORMAT_VERSION);
+        pl_fail(p, "the definition is format version %d; this player lowers up to version %d", p->def->format_version, PL_FORMAT_VERSION);
         return -1;
     }
     {
@@ -2348,6 +2388,13 @@ int pl_load(pl_player* p, const pl_args* a) {
     memset(&p->env, 0, sizeof p->env);
     if (pl_cal_load(p) < 0) return -1;
 
+    if (!a->sim && p->def->n_sigroles > 0) {
+        /* G18: the rig profile has no adapter block, so a real run cannot
+         * bind a signal role; refused before any device or window opens */
+        pl_fail(p, "signal role '%s': a real run needs the rig profile's adapter block (gap G18, not built); --sim gives each role a scripted source",
+                p->def->sigroles[0].name);
+        return -1;
+    }
     if (pl_allow_check(p) < 0 || pl_channels_assign(p) < 0) return -1;
     if (pl_writer_open(p) < 0 || pl_roles_bind(p) < 0 || pl_roles_tier(p) < 0 || pl_rules_check(p) < 0 || pl_outputs_open(p) < 0) return -1;
     if (pl_screen_open(p) < 0) return -1;
@@ -2455,7 +2502,14 @@ int pl_load(pl_player* p, const pl_args* a) {
         int gkind = pl_kind_gfx(s->def->kind), idx;
         memset(b, 0, sizeof *b);
         b->channel = (uint16_t)i;
-        if (!c->prop) {
+        if (c->prop && c->prop[0] == '\x01') {
+            /* version 2's selector or value channel: the graph reads it, no
+             * stimulus field does (v2.c); it starts each trial at 0 */
+            static float pl_v2_sink;
+            b->field = &pl_v2_sink;
+            p->chan_src[i] = NULL;
+            continue;
+        } else if (!c->prop) {
             b->stim = &s->gs;
             b->param = YGFX_P_VISIBLE;
             p->chan_src[i] = NULL;     /* visibility starts each trial at 0 */
@@ -2505,6 +2559,9 @@ int pl_load(pl_player* p, const pl_args* a) {
         p->tl_desc.key_capacity = cap * 4;
     }
 
+    /* version 2: the graphs, the forms' binds, the samples (v2.c) */
+    if (pl_v2_load(p) < 0) return -1;
+
     /* the leaves */
     {
         int count = pl_count_leaves(p->def->timeline, p->def->n_timeline), idx = 0;
@@ -2548,6 +2605,7 @@ int pl_load(pl_player* p, const pl_args* a) {
 void pl_close(pl_player* p) {
     int i;
     (void)pl_writer_close(p);   /* its last writes go to the data set, still open */
+    pl_v2_close(p);
     for (i = 0; i < p->n_stims && p->stims; i++) {
         pl_stim* s = &p->stims[i];
         if (s->def && s->def->kind == YEXP_RDK && s->xy) yrdk_close(&s->field);

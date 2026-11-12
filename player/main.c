@@ -18,6 +18,12 @@
  * that probability), or "script:FILE" (a CSV of
  * trial_index,response,rt_s,hold_s). DIR must not exist.
  * --rdk-buffer sets an RDK's step buffer (tests: a small one flushes often).
+ * Format version 2 (--sim): --samples FILE is the scripted participant of
+ * the signal roles, a CSV of t_s,role,x,y (each a raw mouse's counts, t_s
+ * from the first frame's onset); --sim-gain ROLE=UNITS is each role's
+ * adapter scale per count (the rig profile has no adapter block, G18);
+ * --test-draws FILE writes every leaf's trials and variables without
+ * running a frame (tests: the C programs take the player's draws).
  * --hang-at-trial N stops the frame loop in trial N (tests: the panic
  * watchdog's case, tests/player/real_test.py). --test-lose-code N: the
  * screen never writes the Nth code at a flip, as a canceled trigger
@@ -43,6 +49,7 @@ static int usage(void) {
     fprintf(stderr, "usage: ysp_player PACK --out DIR [--sim] [--seed N] [--field NAME=VALUE]... [--rig FILE|NAME] [--cal FILE]\n"
                     "                  [--windowed] [--allow-below-tier ROLE[,ROLE]] [--max-trials N] [--measure]\n"
                     "       --sim only: [--participant SPEC] [--rt S] [--max-seconds N]\n"
+                    "                   [--samples FILE] [--sim-gain ROLE=UNITS]... [--test-draws FILE]\n"
                     "  SPEC: correct, silent, p=0.8 or script:FILE\n");
     return 2;
 }
@@ -57,6 +64,7 @@ int main(int argc, char** argv) {
     memset(&a, 0, sizeof a);
     rc = run_main(&a, argc, argv);
     for (i = 0; i < a.n_fields; i++) free((void*)a.fields[i].name);
+    for (i = 0; i < a.n_gains; i++) free((void*)a.gains[i].name);
     return rc;
 }
 
@@ -94,6 +102,27 @@ static int run_main(pl_args* ap, int argc, char** argv) {
         else if (!strcmp(s, "--test-plan-early") && v) { a.plan_early_ns = (int64_t)llround(atof(v) * 1e9); i++; }
         else if (!strcmp(s, "--trace-channels") && v) { a.trace_path = v; i++; }
         else if (!strcmp(s, "--rdk-buffer") && v) { a.rdk_buffer = atoi(v); i++; }
+        else if (!strcmp(s, "--samples") && v) { a.samples_path = v; i++; }
+        else if (!strcmp(s, "--test-draws") && v) { a.draws_path = v; i++; }
+        else if (!strcmp(s, "--sim-gain") && v) {
+            /* ROLE=UNITS: the --sim adapter's scale per count (G18 has no
+             * rig block for it, 3.19 item 3) */
+            const char* eq = strchr(v, '=');
+            if (!eq || eq == v || !(atof(eq + 1) > 0) || a.n_gains == 16) {
+                fprintf(stderr, "ysp_player: --sim-gain '%s': give ROLE=UNITS, units per count above 0\n", v);
+                return 2;
+            }
+            {
+                char* name = (char*)malloc((size_t)(eq - v) + 1);
+                if (!name) return 1;
+                memcpy(name, v, (size_t)(eq - v));
+                name[eq - v] = 0;
+                a.gains[a.n_gains].name = name;
+                a.gains[a.n_gains].value = eq + 1;
+                a.n_gains++;
+            }
+            i++;
+        }
         else if (!strcmp(s, "--field") && v) {
             const char* eq = strchr(v, '=');
             if (!eq || a.n_fields == PL_MAX_FIELDS) return usage();
@@ -116,6 +145,10 @@ static int run_main(pl_args* ap, int argc, char** argv) {
         fprintf(stderr, "ysp_player: --participant and --rt are for --sim: a real run's participant is real\n");
         return 2;
     }
+    if (!a.sim && (a.samples_path || a.n_gains || a.draws_path)) {
+        fprintf(stderr, "ysp_player: --samples, --sim-gain and --test-draws are for --sim\n");
+        return 2;
+    }
     if (a.sim && (a.windowed || a.hang_trial || a.lose_code)) { fprintf(stderr, "ysp_player: --windowed, --hang-at-trial and --test-lose-code are for a real run\n"); return 2; }
 #if defined(YSCR_NO_SDL)
     if (!a.sim) { fprintf(stderr, "ysp_player: built without SDL (YSCR_NO_SDL): --sim only\n"); return 2; }
@@ -129,7 +162,7 @@ static int run_main(pl_args* ap, int argc, char** argv) {
         pl_close(&g_p);
         return rc;
     }
-    rc = pl_run(&g_p);
+    rc = a.draws_path ? pl_v2_draws(&g_p) : pl_run(&g_p);
     if (rc < 0) { fprintf(stderr, "ysp_player: %s\n", g_p.error); pl_close(&g_p); return 1; }
     if (g_p.aborted) {
         printf("ysp_player: stopped by the operator; %d trials written to %s (trial %d has no row)\n", g_p.trials_done, a.out_dir, g_p.abort_trial);

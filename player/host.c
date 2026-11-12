@@ -276,12 +276,15 @@ static int h_check_ops(void* ctx, const yexp_def* d, const yexp_template* t, cha
     ytl_op* ops;
     int mode, bound, rc = 0;
     pl_env saved = p->env;
-    /* a version 2 definition is refused by name after the load; its steps
-     * (until, recenter, flag) have no lowering here to check */
+    int ti = (int)(t - d->templates), n_rs;
+    extern int pl_v2_rs_steps(pl_player* p, int ti, int k, const yexp_step** st, int* n);
     if (d->format_version > PL_FORMAT_VERSION) return 0;
     p->def = (yexp_def*)d;
     if (pl_channels_assign(p) < 0) { snprintf(msg, cap, "%s", p->error); p->failed = 0; p->env = saved; return 1; }
-    bound = 16 + pl_ops_bound(t->events, t->n_events) + pl_ops_bound(t->after, t->n_after);
+    bound = 16 + pl_ops_bound(t->events, t->n_events) + pl_ops_bound(t->after, t->n_after) +
+            (d->format_version >= 2 ? pl_v2_ops_bound(t) : 0);
+    /* version 2: each runtime state's steps are a table of their own */
+    n_rs = d->format_version >= 2 ? pl_v2_rs_steps(p, ti, -1, NULL, NULL) : 0;
     /* sized from this template, as the run's are: a fixed table would refuse
      * a long valid template */
     ops = (ytl_op*)pl_alloc(p, sizeof(ytl_op) * (size_t)bound);
@@ -329,6 +332,26 @@ static int h_check_ops(void* ctx, const yexp_def* d, const yexp_template* t, cha
         p->env.node = leaf;
         if (!ytl_open(&tl, &td)) { snprintf(msg, cap, "timeline: %s", ytl_error(&tl)); rc = 1; break; }
         ytl_anchor(&tl, PL_BASE_TRIAL, 0, 0);
+        if (n_rs > 0) {
+            int k;
+            for (k = 0; k < n_rs && rc == 0; k++) {
+                const yexp_step* st = NULL;
+                int n = 0, e;
+                (void)pl_v2_rs_steps(p, ti, k, &st, &n);
+                if (!st || !n) continue;
+                cursor = 0;
+                if (!ytl_open(&tl, &td)) { snprintf(msg, cap, "timeline: %s", ytl_error(&tl)); rc = 1; break; }
+                ytl_anchor(&tl, PL_BASE_TRIAL, 0, 0);
+                nops = pl_build_ops(p, st, n, ops, bound, &cursor);
+                if (nops < 0) { snprintf(msg, cap, "%s", p->error); p->failed = 0; rc = 1; break; }
+                if (nops > 0 && (e = ytl_check_ops(&tl, PL_BASE_TRIAL, ops, nops, &bad)) != 0) {
+                    snprintf(msg, cap, "template '%s', a state's op %d: %s", t->name, bad, ytl_strerror(e));
+                    rc = 1;
+                }
+            }
+            pl_v2_select(p);
+            continue;
+        }
         nops = pl_build_ops(p, t->events, t->n_events, ops, bound, &cursor);
         if (nops < 0) { snprintf(msg, cap, "%s", p->error); p->failed = 0; rc = 1; break; }
         /* the events and after tables run on one timeline, so they are

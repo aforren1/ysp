@@ -156,7 +156,8 @@ enum {
     CS_RDK_SEED, CS_RDK_UPDATES, CS_RDK_DIGEST,
     CS_TIER_WORST, CS_FRAMES_DROPPED, CS_FLIP_FLAGS,
     CS_ROLE_N, CS_ROLE_FAILED, CS_ROLE_LAG,
-    CS_RSP_RESPONSE, CS_CORRECT, CS_OUTCOME, CS_RSP_OTHER, CS_COLUMN
+    CS_RSP_RESPONSE, CS_CORRECT, CS_OUTCOME, CS_RSP_OTHER, CS_COLUMN,
+    CS_V2_FLAG, CS_V2_RSP_ROLE
 };
 
 typedef struct pl_csrc { int source; int ref; } pl_csrc;
@@ -223,8 +224,22 @@ static int pl_columns_tree(pl_player* p, int pass) {
         }
         for (n = lf->node; n; n = n->parent) {
             int k;
-            for (k = 0; k < n->n_vars; k++)
+            for (k = 0; k < n->n_vars; k++) {
+                int kind = n->vars[k].value->kind;
+                if ((kind == YEXP_V_WALK2D || kind == YEXP_V_UNIFORM) && !pl_v2_reads(p, lf->node->trial, n->vars[k].key)) continue;
+                if (kind == YEXP_V_WALK2D) {
+                    /* 3.14: a walk's five columns */
+                    static const char* const sfx[5] = { "_x", "_y", "_from_x", "_from_y", "_deg" };
+                    int c5;
+                    for (c5 = 0; c5 < 5; c5++) {
+                        char nm[YTB_MAX_NAME + 8];
+                        snprintf(nm, sizeof nm, "%s%s", n->vars[k].key, sfx[c5]);
+                        if (pl_col_add(p, nm, YTR_COL_STRING, CS_VAR, 0, CF_VAR) < 0) return -1;
+                    }
+                    continue;
+                }
                 if (pl_col_add(p, n->vars[k].key, YTR_COL_STRING, CS_VAR, 0, CF_VAR) < 0) return -1;
+            }
             for (k = 0; k < n->n_rule_vars; k++)
                 if (pl_col_add(p, n->rule_vars[k].name, YTR_COL_STRING, CS_VAR, 0, CF_VAR) < 0) return -1;
         }
@@ -275,7 +290,6 @@ static int pl_columns_stim(pl_player* p) {
 
 static yjs_value* pl_header_versions(pl_player* p, yjs_arena* a) {
     yjs_value* o = yjs_new(a, YJS_OBJECT);
-    (void)p;
     yjs_set(a, o, "experiment", yjs_new_stringz(a, yexp_version()));
     yjs_set(a, o, "trials", yjs_new_stringz(a, ytr_version()));
     yjs_set(a, o, "timeline", yjs_new_stringz(a, ytl_version()));
@@ -293,6 +307,7 @@ static yjs_value* pl_header_versions(pl_player* p, yjs_arena* a) {
     yjs_set(a, o, "quest", yjs_new_stringz(a, yqst_version()));
     yjs_set(a, o, "aep", yjs_new_stringz(a, yaep_version()));
     yjs_set(a, o, "audio", yjs_new_stringz(a, yau_version()));
+    if (p->def->format_version >= 2) yjs_set(a, o, "sig", yjs_new_stringz(a, ysig_version()));
     return o;
 }
 
@@ -313,7 +328,8 @@ static int pl_dataset_open(pl_player* p) {
     snprintf(seedbuf, sizeof seedbuf, "%llu", (unsigned long long)p->seed);
     yjs_set(&a, s, "seed", yjs_new_stringz(&a, seedbuf));
     yjs_set(&a, s, "player_version", yjs_new_stringz(&a, PL_VERSION_STRING));
-    yjs_set(&a, s, "format_version", yjs_new_int(&a, PL_FORMAT_VERSION));
+    yjs_set(&a, s, "format_version", yjs_new_int(&a, p->def->format_version));
+    if (pl_v2_session_json(p, &a, s) < 0) { yjs_arena_free(&a); return -1; }
     yjs_set(&a, s, "headers", pl_header_versions(p, &a));
     for (i = 0; i < p->def->n_fields; i++) {
         pl_val_text(&p->field_values[i], p->text_buf, p->max_text + 1);
@@ -399,7 +415,7 @@ static int pl_dataset_open(pl_player* p) {
                 p->stims[i].stream = sid;
             }
     }
-    return 0;
+    return pl_v2_streams(p);
 }
 
 /* 2.10's order; a column every leaf has is one column, and a leaf that lacks
@@ -450,13 +466,27 @@ int pl_columns_build(pl_player* p) {
     }
     for (i = 0; i < (int)(sizeof rsp / sizeof rsp[0]); i++)
         if (pl_col_add(p, rsp[i].name, rsp[i].type, CS_RSP_OTHER, i, CF_RSP) < 0) return -1;
+    for (i = 0; i < p->n_tmpls; i++)
+        if (p->tmpls[i].def->response && p->tmpls[i].def->response->signal_choices) {
+            /* 3.15 item 8: the signal role whose sample crossed */
+            if (pl_col_add(p, "rsp_role", YTR_COL_STRING, CS_V2_RSP_ROLE, 0, CF_RSP) < 0) return -1;
+            break;
+        }
     if (pl_col_add(p, "correct", YTR_COL_BOOL, CS_CORRECT, 0, CF_RSP) < 0) return -1;
     if (pl_col_add(p, "outcome", YTR_COL_STRING, CS_OUTCOME, 0, CF_RSP) < 0) return -1;
     for (i = 0; i < p->n_tmpls; i++) {
         int k;
         const yexp_template* t = p->tmpls[i].def;
         for (k = 0; k < t->n_columns; k++)
-            if (pl_col_add(p, t->columns[k].key, YTR_COL_STRING, CS_COLUMN, 0, CF_COLUMN) < 0) return -1;
+            if (pl_col_add(p, t->columns[k].key, t->columns[k].value->kind == YEXP_V_TIME ? YTR_COL_TIME_NS : YTR_COL_STRING,
+                           CS_COLUMN, 0, CF_COLUMN) < 0) return -1;
+    }
+    for (i = 0; i < p->n_tmpls; i++) {
+        /* 3.15 item 10: each flag, in the order of flags */
+        int k;
+        const yexp_template* t = p->tmpls[i].def;
+        for (k = 0; k < t->n_flags; k++)
+            if (pl_col_add(p, t->flags[k], YTR_COL_BOOL, CS_V2_FLAG, k, CF_COLUMN) < 0) return -1;
     }
     for (i = 0; i < p->n_cols; i++) {
         memset(&p->ytr_cols[i], 0, sizeof p->ytr_cols[i]);
@@ -737,6 +767,7 @@ static int pl_leaf_open(pl_player* p, pl_leaf* lf, int iter) {
     if (!ytr_open(&p->trials, &lf->desc)) { pl_fail(p, "node '%s': %s", lf->node->path, ytr_error(&p->trials)); return -1; }
     p->trials_open = true;
     p->leaf = lf;
+    if (pl_v2_leaf_open(p, seed) < 0) return -1;
     p->leaf_iter = iter;
     p->leaf_loop_pass = 0;
     p->leaf_n_correct = p->leaf_n_counted = 0;
@@ -883,6 +914,20 @@ int pl_start_trial(pl_player* p, const yscr_frame* f) {
     if (pl_stim_begin_trial(p, f) < 0) return -1;
     if (pl_timeline_reset(p) < 0) return -1;
     if (ytl_anchor(&p->tl, PL_BASE_TRIAL, f->onset, 0) != 0) { pl_fail(p, "ytl_anchor: %s", ytl_error(&p->tl)); return -1; }
+    p->trial_start_onset = f->onset;
+    pl_v2_select(p);
+    if (p->tmpl->v2) {
+        /* version 2: states, the graph, the forms (v2.c) */
+        p->trial_first_frame = f->index;
+        p->global_trial++;
+        p->frame_trial[f->index % PL_FRAME_RING] = p->global_trial - 1;
+        if (pl_v2_trial_start(p, f) < 0) return -1;
+        if (p->tmpl->collector && !p->tmpl->def->response->signal_choices) {
+            pl_participant_plan(p);
+            if (p->failed) return -1;
+        }
+        return 1;
+    }
     {
         const yexp_template* d = p->tmpl->def;
         ytl_op* ops = p->tmpl->ops;
@@ -1009,6 +1054,7 @@ static int pl_cell_text(pl_player* p, pl_row* r, const char* name, const pl_val*
 /* Set the cells of the row's own columns, per trial, from the environment. */
 static int pl_row_fill(pl_player* p, pl_row* r) {
     int i;
+    if (pl_v2_row_fill(p, r) < 0) return -1;
     for (i = 0; i < p->n_cols; i++) {
         int src = p->csrc[i].source;
         const char* name = p->cols[i].name;
@@ -1040,13 +1086,29 @@ static int pl_row_fill(pl_player* p, pl_row* r) {
         case CS_VAR: {
             pl_val x;
             if (p->col_family[i] == CF_VAR) {
+                int rc2 = pl_v2_var(p, &p->env, name, &x);
+                if (rc2 < 0) return -1;
+                if (rc2 > 0) {
+                    /* a uniform (an array is one JSON cell) or a walk's column (3.14) */
+                    if (pl_cell_text(p, r, name, &x, &s) < 0) return -1;
+                    have = 3;
+                    break;
+                }
+            }
+            if (p->col_family[i] == CF_VAR) {
                 /* per leaf: this name can be a `vars` here and `data` elsewhere */
                 const yexp_node* n;
                 const yexp_value* dv = NULL;
                 int is_var = 0;
                 for (n = p->leaf->node; n && !is_var && !dv; n = n->parent) {
                     int k;
-                    for (k = 0; k < n->n_vars; k++) if (strcmp(n->vars[k].key, name) == 0) is_var = 1;
+                    for (k = 0; k < n->n_vars; k++)
+                        if (strcmp(n->vars[k].key, name) == 0) {
+                            /* a uniform or walk this leaf does not draw (3.14): empty */
+                            int kd = n->vars[k].value->kind;
+                            if (kd == YEXP_V_UNIFORM || kd == YEXP_V_WALK2D) { dv = NULL; is_var = 0; goto pl_var_none; }
+                            is_var = 1;
+                        }
                     for (k = 0; k < n->n_jitters; k++) if (strcmp(n->jitters[k], name) == 0) is_var = 1;
                     for (k = 0; k < n->n_rule_vars; k++) if (strcmp(n->rule_vars[k].name, name) == 0) is_var = 1;
                     if (!is_var) for (k = 0; k < n->n_data; k++) if (strcmp(n->data[k].key, name) == 0) dv = n->data[k].value;
@@ -1087,6 +1149,7 @@ static int pl_row_fill(pl_player* p, pl_row* r) {
                 have = s ? 3 : 0;
                 break;
             }
+        pl_var_none:
             break;
         }
         case CS_SEED: {
@@ -1131,12 +1194,25 @@ static int pl_row_fill(pl_player* p, pl_row* r) {
             if (!val) break;
             {
                 pl_val x;
-                if (pl_eval(p, &p->env, val, &x) < 0) return -1;
+                bool deferred = false;
+                if (p->tmpl->v2) {
+                    /* the forms of 3.15; a time waits for the flush */
+                    if (pl_v2_column(p, r, i, val, &x, &deferred) < 0) return -1;
+                    if (deferred || x.kind == YEXP_V_NONE) break;
+                } else if (pl_eval(p, &p->env, val, &x) < 0) return -1;
                 if (pl_cell_text(p, r, name, &x, &s) < 0) return -1;
             }
             have = 3;
             break;
         }
+        case CS_V2_FLAG: {
+            bool b;
+            if (pl_v2_flag(p, name, &b) == 1) { v = b; have = 5; }
+            break;
+        }
+        case CS_V2_RSP_ROLE:
+            if (r->has_res && (s = pl_v2_rsp_role(p, &r->res)) != NULL) have = 3;
+            break;
         default: break;
         }
         if (have) {
@@ -1211,6 +1287,7 @@ static int pl_row_flush(pl_player* p, pl_row* r) {
             break;
         }
     }
+    if (pl_v2_row_flush(p, r, w) < 0) return -1;
     if (r->has_res) {
         if (yrsp_data_set(w, &r->res) < 0) { snprintf(p->werror, sizeof p->werror, "the row of trial %d: %s", r->trial_index, ytr_data_error(w)); return -1; }
     }
@@ -1322,6 +1399,7 @@ static int pl_on_record(pl_player* p, const yscr_record* rec) {
         if (pl_row_hand(p, &p->rows[p->row_tail]) < 0) return -1;
         p->row_tail = (p->row_tail + 1) % PL_PENDING_ROWS;
     }
+    if (pl_v2_on_record(p, rec) < 0) return -1;
     (void)pl_events_flush;
     return pl_events_flush(p, false);
 }
@@ -1585,6 +1663,7 @@ int pl_end_trial(pl_player* p, const yscr_frame* f) {
         if (p->have_live && (res.entry != p->live_res.entry || ((res.flags ^ p->live_res.flags) & YRSP_R_RESPONDED))) res.flags |= PL_RSP_AFTER_LIVE;
         p->have_live = false;
         pl_env_response(p, &res);
+        if (t->v2 && pl_v2_response(p, &res, f) < 0) return -1;   /* the response's time for the columns */
         have_res = true;
     } else {
         /* no response: outcome is empty; no value to tally */
@@ -1603,8 +1682,10 @@ int pl_end_trial(pl_player* p, const yscr_frame* f) {
         double x = p->track->estimate(p->track);
         p->env.estimate = pl_to_stim_units(p->track, x);
     }
-    /* ytr_update(): the template's outcome (2.5) */
-    if (d->response) {
+    /* ytr_update(): the template's outcome (2.5); version 2's (D36) */
+    if (t->v2) {
+        if (pl_v2_trial_end(p, f, &outcome_val, &requeue) < 0) return -1;
+    } else if (d->response) {
         if (d->outcome && d->outcome->kind == YEXP_V_STRING && strcmp(d->outcome->str, "correct") == 0) {
             if (p->env.responded) {
                 if (p->env.has_correct) outcome_val = p->env.correct ? 1 : 0;
@@ -1662,13 +1743,15 @@ int pl_end_trial(pl_player* p, const yscr_frame* f) {
         ev.t_ns = res.t_response;
         ev.trial_index = p->global_trial - 1;
         ev.kind = "response";
-        ev.role = d->response->role;
+        ev.role = d->response->role ? d->response->role : pl_v2_rsp_role(p, &res);
         ev.control = res.control;
         ev.code = res.code;
         ev.tier = res.stamp_tier;
         ev.text = p->env.response;
         if (pl_event_queue(p, &ev) < 0) return -1;
     }
+    /* version 2: the traces' rows of the trial, the state rows (3.15) */
+    if (t->v2 && pl_v2_trial_rows(p) < 0) return -1;
     /* the steps of each moving rdk, to its stream (2.7) */
     {
         int i;
@@ -1753,7 +1836,7 @@ static int pl_from_sound(pl_player* p) {
     return 0;
 }
 
-static int pl_on_fired(pl_player* p, const yscr_frame* f, int n) {
+int pl_on_fired(pl_player* p, const yscr_frame* f, int n) {
     int i;
     for (i = 0; i < n; i++) {
         const ytl_event* e = &p->fired[i];
@@ -1761,8 +1844,10 @@ static int pl_on_fired(pl_player* p, const yscr_frame* f, int n) {
         case YTL_ONSET: case YTL_OFFSET: case YTL_SET: {
             const pl_chan* c = &p->channels[e->target];
             yds_event ev;
+            if (c->prop && c->prop[0] == '\x01') break;   /* version 2's selector or value channel: no landing row */
             yds_event_from_timeline(&ev, e, c->stim->name, p->global_trial - 1);
             if (pl_event_queue(p, &ev) < 0) return -1;
+            if (e->kind == YTL_ONSET && !c->prop) pl_v2_on_onset(p, e, (int)(pl_stim_by_name(p, c->stim->name) - p->stims));
             if (e->kind != YTL_SET && !c->prop) {
                 int k;
                 for (k = 0; k < p->tmpl->n_record; k++)
@@ -1809,6 +1894,11 @@ static int pl_on_fired(pl_player* p, const yscr_frame* f, int n) {
         }
         case YTL_MARK: {
             yds_event ev;
+            {
+                int r2 = p->tmpl && p->tmpl->v2 ? pl_v2_on_mark(p, e) : 0;
+                if (r2 < 0) return -1;
+                if (r2 > 0) break;   /* version 2's end (after its ysig_frame), a flag, a recenter */
+            }
             if (e->code == PL_MARK_END) {
                 if (pl_end_trial(p, f) < 0) return -1;
                 break;
@@ -1944,6 +2034,9 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
         }
     }
 #endif
+    /* version 2: the scripted samples to the graphs, the hits, the exits,
+     * the timed exits the window reaches (3.11 rules 2 and 4) */
+    if (p->v2s && pl_v2_frame_input(p, f) < 0) return -1;
     if (p->in_trial && p->press_pending && p->tmpl->collector) {
         yrsp_input ev;
         pl_tmpl* t = p->tmpl;
@@ -1989,8 +2082,13 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
             p->have_live = true;
             pl_env_response(p, &live);
             if (pl_response_trigger(p, &live) < 0) return -1;
-            ytl_base_time(&p->tl, PL_BASE_TRIAL, f->onset, &bt);
-            if (pl_build_after(p, bt > p->events_end ? bt : p->events_end) < 0) return -1;
+            if (p->tmpl->v2) {
+                /* version 2: an exit on the response (3.11 rule 11), no `after` */
+                if (pl_v2_response(p, &live, f) < 0) return -1;
+            } else {
+                ytl_base_time(&p->tl, PL_BASE_TRIAL, f->onset, &bt);
+                if (pl_build_after(p, bt > p->events_end ? bt : p->events_end) < 0) return -1;
+            }
             p->responding = false;
         }
     }
@@ -2012,13 +2110,23 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
                 vis[k] = (uint8_t)(ch >= 0 && values[ch] >= 0.5f);
             }
         }
+        /* version 2: the graph's frame, its hits, the end after it (v2.c) */
+        if (p->tmpl->v2 && pl_v2_frame_eval(p, f) < 0) return -1;
     }
     /* the device's rule follows the onset, which the landing and the flip
      * record move (ysp/response.h, RESPONSE TRIGGERS) */
     if (p->in_trial && pl_rule_of(p, p->tmpl)) yrsp_rule_window(p->roles[p->tmpl->role].rule, p->tmpl->collector);
     /* also on the end's frame: a step that lands with the trial's last event
      * must reach this frame's draw */
-    if (p->global_trial > 0) ygfx_apply(p->binds, p->n_binds, ytl_values(&p->tl));
+    if (p->global_trial > 0) {
+        if (p->tmpl && p->tmpl->v2) {
+            /* the forms' properties come from the graph's channels */
+            int nb;
+            const ygfx_bind* b = pl_v2_binds(p, &nb);
+            const float* vals = pl_v2_values(p, ytl_values(&p->tl));
+            ygfx_apply(b, nb, vals);
+        } else ygfx_apply(p->binds, p->n_binds, ytl_values(&p->tl));
+    }
     if (p->trace_file && drawn) {   /* the frames that draw stimuli */
         const float* values = ytl_values(&p->tl);
         int k;
@@ -2244,4 +2352,73 @@ int pl_run(pl_player* p) {
     if (p->trace_file) { fclose((FILE*)p->trace_file); p->trace_file = NULL; }
     if (yds_finish(&p->ds) < 0) { pl_fail(p, "the data set: %s", yds_error(&p->ds)); return -1; }
     return p->failed ? -1 : 0;
+}
+
+/* --test-draws: every leaf's trials and variables, written without a frame
+ * (3.19 item 2): the tree walk, ytr_next() and ytr_update(1) for each
+ * trial, and the row's variable cells. The C programs take the order, the
+ * walk and the phases from this file, so both run one design. */
+int pl_v2_draws(pl_player* p) {
+    FILE* out;
+    pl_row* r;
+    int i, rc, n = 0;
+    p->sp = 0;
+    memset(&p->stack[0], 0, sizeof p->stack[0]);
+    p->stack[0].children = p->def->timeline;
+    p->stack[0].n_children = p->def->n_timeline;
+    p->stack[0].n_rows = 1;
+    p->stack[0].n_reps = 1;
+    p->sp = 1;
+    p->node_seeds = (pl_node_seed_rec*)pl_alloc(p, sizeof(pl_node_seed_rec) * (size_t)PL_SEED_LOG);
+    r = (pl_row*)pl_alloc(p, sizeof(pl_row));
+    if (!p->node_seeds || !r) return -1;
+    p_row_cap = p->row_text_cap;
+    r->text = (char*)pl_alloc(p, p->row_text_cap + 1);
+    if (!r->text) return -1;
+    out = fopen(p->args.draws_path, "w");
+    if (!out) { pl_fail(p, "--test-draws '%s': cannot write it", p->args.draws_path); return -1; }
+    fputs("node,index,trial_index", out);
+    for (i = 0; i < p->n_cols; i++) if (p->csrc[i].source == CS_VAR) fprintf(out, ",%s", p->cols[i].name);
+    fputs("\n", out);
+    for (;;) {
+        if (!p->leaf) {
+            rc = pl_walk_next_leaf(p);
+            if (rc < 0) { fclose(out); return -1; }
+            if (rc == 0) break;
+            if (rc == 2) { p->walk_frame_steps = 0; continue; }
+        }
+        rc = ytr_next(&p->trials, &p->ti);
+        if (rc == YTR_DONE) { pl_leaf_close(p); continue; }
+        if (rc < 0) { fclose(out); pl_fail(p, "node '%s': %s", p->leaf->node->path, ytr_error(&p->trials)); return -1; }
+        p->tmpl = p->leaf->tmpl;
+        p->track = p->ti.track >= 0 ? p->leaf->tracks[p->ti.track] : NULL;
+        pl_env_trial(p);
+        memset(r->cells, 0, sizeof r->cells);
+        r->n_cells = 0;
+        r->text_len = 0;
+        r->trial_index = n;
+        if (pl_row_fill(p, r) < 0) { fclose(out); return -1; }
+        fprintf(out, "%s,%d,%d", p->leaf->node->path, p->ti.index, n);
+        for (i = 0; i < p->n_cols; i++) {
+            int c;
+            if (p->csrc[i].source != CS_VAR) continue;
+            fputc(',', out);
+            for (c = 0; c < r->n_cells; c++)
+                if (r->cells[c].col == i) {
+                    if (r->cells[c].type == 3 && r->cells[c].s) {
+                        /* an array cell has commas: quoted as CSV */
+                        if (strchr(r->cells[c].s, ',')) fprintf(out, "\"%s\"", r->cells[c].s);
+                        else fputs(r->cells[c].s, out);
+                    } else if (r->cells[c].type == 4) fprintf(out, "%.9f", (double)r->cells[c].i / 1e9);
+                    else if (r->cells[c].type == 1 || r->cells[c].type == 5) fprintf(out, "%lld", (long long)r->cells[c].i);
+                    else if (r->cells[c].type == 2) fprintf(out, "%.17g", r->cells[c].d);
+                }
+        }
+        fputc('\n', out);
+        n++;
+        if (ytr_update(&p->trials, 1, NULL) < 0) { fclose(out); pl_fail(p, "node '%s': %s", p->leaf->node->path, ytr_error(&p->trials)); return -1; }
+    }
+    fclose(out);
+    printf("ysp_player: %d trials' draws written to %s\n", n, p->args.draws_path);
+    return 0;
 }

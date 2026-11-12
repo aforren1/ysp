@@ -155,6 +155,8 @@ int pl_var(pl_player* p, const pl_env* e, const char* name, pl_val* out) {
     if (rc != 0) return rc < 0 ? -1 : 0;
     for (i = 0; i < p->def->n_fields; i++)
         if (strcmp(p->def->fields[i].name, name) == 0) { *out = p->field_values[i]; return 0; }
+    rc = pl_v2_var(p, e, name, out);   /* version 2's uniform, walk2d and flags */
+    if (rc != 0) return rc < 0 ? -1 : 0;
     for (n = e->node; n; n = n->parent) {
         int k;
         for (k = 0; k < n->n_vars; k++)
@@ -354,6 +356,16 @@ int pl_eval(pl_player* p, const pl_env* e, const yexp_value* v, pl_val* out) {
         case YEXP_V_CHOICE:
             pl_fail(p, "a %s has no single value", v->kind == YEXP_V_LINSPACE ? "linspace" : "choice");
             return -1;
+        case YEXP_V_TRANSFORM: {
+            /* a cursor's rotation_deg or mirror_deg (3.7): its key and angle */
+            double a;
+            if (pl_eval_num(p, e, v->by, &a) < 0) return -1;
+            memset(out, 0, sizeof *out);
+            out->kind = YEXP_V_TRANSFORM;
+            out->str = v->str;
+            out->num = a;
+            return 0;
+        }
         case YEXP_V_GAMUT: {
             double d = pl_gamut(p, v->str);
             if (d != d) return -1;

@@ -26,5 +26,7 @@
 #include "ysp/dataset.h"
 #define YSP_PACK_IMPLEMENTATION
 #include "ysp/pack.h"
+#define YSP_SIG_IMPLEMENTATION
+#include "ysp/sig.h"
 #define YSP_EXPERIMENT_IMPLEMENTATION
 #include "ysp/experiment.h"
