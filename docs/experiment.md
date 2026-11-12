@@ -1,6 +1,6 @@
 # ysp/experiment.h
 
-Status: v0.3.1, 2026-11-11. The header's top comment is the reference for
+Status: v0.3.2, 2026-11-12. The header's top comment is the reference for
 the calls (USAGE, THE CHECKED FORM, REFUSALS, THE HOST, CANONICAL BYTES,
 BOUNDS AND MEMORY). This page records why the header exists, the format's
 defaults table, the decisions, and the results.
@@ -317,13 +317,14 @@ reading below and marks it in the code as "finding Fn". The lines are of
 | F26 | D35 (f) l.822; 3.11 rule 9 l.1964; D20 rule 6 | A cycle whose waiting exit is a region that is already true at its arm (`entry` `now`, `stay_s` 0) moves at one time without end (`v2_instant_shared`'s practice trials while the pad stays outside) | The player stops the session by name after 64 state changes at one time. Proposal: the loader's cycle rule does not count such an exit as one that waits, or the arm in a cycle is `fresh` |
 | F27 | 3.15 state rows, l.2079 | An events template's `until` parts have no state name | No state rows for an events template; a state's parts and waits are one visit, one row |
 | F28 | 3.15 `code`, l.2089 | The code of an `until`'s exits, which are in no list | Its `on` stays in the state (no row); its timeout has the code after the state's own and shared exits (and the response's) |
-| F29 | 3.7 trace, l.1776 | A frame row whose record comes after the next trial reset the graph's rings | Revised by the player 0.4.0: the row keeps its values read at `planned_s` (the rings empty at the reset) and waits for its record's `t_s`, `flags` 2. A record that does not come within 30 frames (`PL_OUT_WAIT_FRAMES`, the trial rows' bound) leaves `t_s` empty, `flags` 1. On `--sim` every record comes before the reset (0 of 33,120 rows) |
+| F29 | 3.7 trace, l.1776 | A frame row whose record comes after the next trial reset the graph's rings | Revised by the player 0.4.0: the row keeps its values read at `planned_s` (the rings empty at the reset) and waits for its record's `t_s`. The `flags` column's bits: 2, the values were read at `planned_s`; 1, `t_s` is empty (the record did not come within 30 frames, `PL_OUT_WAIT_FRAMES`, the trial rows' bound; or it came with no onset; or the session ended first). So 0 to 3. On `--sim` every record comes before the reset (0 of 33,120 rows) |
 | F30 | 3.15 signal roles, l.2106 (D40) | The role samples as input rows of `events.csv` | Not written yet (D40: "It can wait"); `session.json` has `signal_roles` |
 | F31 | 3.19 item 1 | The samples file's time 0 | The first trial's first frame's onset in both programs (`trial_bimanual`'s mouse setup comes before it) |
 | F32 | 3.19 item 3; G18 | The `--sim` adapter | A relative role integrates raw mouse counts at `--sim-gain` units per count; an absolute role takes positions (pen events) times `--sim-gain` (1 by default) |
 | F33 | 3.18 visuomotor `move_tier`, l.2306 | Not "Same" with no response | The program writes the result's stamp tier also with no response (trial 2, the early move): 0; `rsp_tier` is empty there |
 | F34 | 3.11 rule 10, l.1966; 3.13 `response_ends_trial` | Whether the response exit that `response_ends_trial` adds to every state makes the state "a state with exits", which waits at its steps' end | AWAITS THE USER'S DECISION. The player's reading (0.4.0): no. Rule 10 counts only the exits the author wrote, a state's own and the shared ones, as the loader's rules do (the cycle rule and the F16 search count a state with no written exits as one that goes on at its steps' end). So a `fix` state then a `stim` state with a key response runs `fix`, then `stim`, and the response still ends any state. The other reading made every state of such a template wait for the response forever. To flip it: `v2_exits_build()` in `player/v2.c`, one condition (mutant v2-12) |
-| F35 | 3.11 rule 9, l.1981; 2.5 `after` | An events template whose `until` times out before the response's `from` is shown | The events end there with outcome `timeout`; `after` follows at once, since the response can no longer end. A response whose `from` was shown is waited for, as 2.5 says: `after` starts at the later of the events' end and the response's end |
+| F35 | 3.11 rule 9, l.1981; 2.5 `after` | An events template whose `until` times out before the response's `from` is shown | The events end there with outcome `timeout`; `after` follows at once, since the response can no longer end. A response whose `from` has landed, or that a part's table shows (it can land in the frame the events end), is waited for, as 2.5 says: `after` starts at the later of the events' end and the response's end. A part's change is no exit: earlier parts' events and tweens go on, as version 1's `to` runs into `after` |
+| F36 | 3.12 steps `set`, `to`, `then`; ysp/timeline.h TRACKS | A property that one state tweens and another sets by a constant | Refused at load, naming the property: a channel is driven by a track or by events, never both; version 1 refuses it within its one table, and across states it stopped the session at the second state's entry. Rule 8's stop keeps the tween's track, so the channel is never free for a set |
 
 ## Known gaps
 
@@ -338,6 +339,12 @@ reading below and marks it in the code as "finding Fn". The lines are of
 | A message about a lane | Names the role or control without its lane (`'hand' gives 1 lane` for `hand.x`) |
 
 ## Results
+
+### v0.3.2: a comment (2026-11-12)
+
+The header's STATUS comment: a version 2 file with no signal role runs in a
+real window too. No code change; the version moves because every change to
+a header does (the pack tool records the version, so pack IDs move).
 
 ### v0.3.1: a walk's box by hypot() (2026-11-11)
 

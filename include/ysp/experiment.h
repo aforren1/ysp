@@ -1,4 +1,4 @@
-/* ysp/experiment.h - v0.3.1 - public domain single-header loader for experiment definitions
+/* ysp/experiment.h - v0.3.2 - public domain single-header loader for experiment definitions
  *
  *   Reads a ysp experiment definition of format version 1 or 2
  *   (docs/experiment_format.md, the pack's EXPERIMENT entry) into a checked,
@@ -153,6 +153,8 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.3.2 - comment only: STATUS says that a version 2 file with no signal
+ *          role runs in a real window too. No code change.
  *   v0.3.1 - a walk2d's step against half the box's diagonal by hypot(), as
  *          ysp/trials.h 0.8.1: a box of 1e-200 refused every step, and one
  *          of 1e200 overflowed to accept any. No struct change.
@@ -206,8 +208,10 @@
  *   v0.1.0 - first version: the loader for format version 1, its defaults
  *          table, the host interface and the canonical writer.
  *
- *   STATUS: v0.3.1 (2026-11-11). Tested; the player (docs/player.md) uses
- *   it for both versions, version 2 on --sim only.
+ *   STATUS: v0.3.2 (2026-11-12). Tested; the player (docs/player.md) uses
+ *   it for both versions. A version 2 file with a signal role runs on --sim
+ *   only (the rig profile has no adapter block, G18); one with none runs in
+ *   a real window too.
  *   docs/experiment.md has the decisions and the test results.
  *
  *   ---------------------------------------------------------------------
@@ -218,8 +222,8 @@
 
 #define YEXP_VERSION_MAJOR 0
 #define YEXP_VERSION_MINOR 3
-#define YEXP_VERSION_PATCH 1
-#define YEXP_VERSION_STRING "0.3.1"
+#define YEXP_VERSION_PATCH 2
+#define YEXP_VERSION_STRING "0.3.2"
 
 /* The newest format version this header reads (D12). */
 #define YEXP_FORMAT_VERSION 2
