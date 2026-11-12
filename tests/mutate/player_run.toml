@@ -652,3 +652,35 @@ test = "player"
 why = "Third re-review 10: the timed exits moved after the response's collector."
 find = '''    if (p->in_trial && p->tmpl->v2 && pl_v2_frame_timed(p, f) < 0) return -1;'''
 replace = ''''''
+
+[[mutant]]
+id = "r-v2-05"
+name = "the key response's collector after the hits"
+test = "player"
+why = "Final review 8 (rv5_n10_0.29): a press 5 ms before a hit wins."
+find = '''    key_first = p->v2s && p->in_trial && p->tmpl && p->tmpl->v2 && p->tmpl->collector && p->tmpl->def->response &&'''
+replace = '''    key_first = 0 && p->v2s && p->in_trial && p->tmpl && p->tmpl->v2 && p->tmpl->collector && p->tmpl->def->response &&'''
+
+[[mutant]]
+id = "r-v2-06"
+name = "F37's run-time check removed"
+test = "player"
+why = "Final review 7 (rv5_f37_sess_v1, _v2): a session's duration_s of 0 refused by name."
+find = '''    if (!r || r->signal_choices || r->ends_trial || r->max_responses > 0 || dur > 0) return 0;'''
+replace = '''    return 0;'''
+
+[[mutant]]
+id = "r-v2-07"
+name = "version 1 skips F37's run-time check"
+test = "player"
+why = "Final review 7 (rv5_f37_sess_v1)."
+find = '''            if (pl_f37_check(p, d, dur) < 0) return -1;'''
+replace = ''''''
+
+[[mutant]]
+id = "r-v2-08"
+name = "F37's run-time check refuses a count"
+test = "player"
+why = "F37: max_responses ends the window (rv4_2_maxr_v1, _v2: duration_s 0 and max_responses 1)."
+find = '''    if (!r || r->signal_choices || r->ends_trial || r->max_responses > 0 || dur > 0) return 0;'''
+replace = '''    if (!r || r->signal_choices || r->ends_trial || dur > 0) return 0;'''

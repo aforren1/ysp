@@ -1,0 +1,1 @@
+37:9: template 't': states 'choose' and 'show' are on a cycle with no exit that surely waits: region 'far': stay_s '$hold_s' is not known at load in node 'm' (a session field, a jitter or another value known only at run time), so it can be 0; give a region stay_s above 0, or the cycle an exit that waits (D20 rule 6, F26)

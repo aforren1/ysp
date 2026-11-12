@@ -1,0 +1,4 @@
+{"format":"ysp-experiment","version":1,
+"devices":{"r":{"direction":"in","family":["keyboard"],"required":true}},"stimuli":{"s":{"kind":"shape"}},
+"trials":{"t":{"events":[{"on":"s"}],"response":{"role":"r","choices":["f"],"from":"s","response_ends_trial":false,"duration_s":"$d_s"}}},
+"timeline":[{"name":"m","trial":"t","vars":{"d_s":{"choice":[0,1]}}}]}

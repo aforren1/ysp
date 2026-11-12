@@ -1042,6 +1042,7 @@ int pl_start_trial(pl_player* p, const yscr_frame* f) {
             yrsp_collector* c = p->tmpl->collector;
             int64_t dur = 0, minrt = 0;
             if (pl_eval_ns(p, &p->env, d->response->duration, &dur) < 0 || pl_eval_ns(p, &p->env, d->response->min_rt, &minrt) < 0) return -1;
+            if (pl_f37_check(p, d, dur) < 0) return -1;
             yrsp_arm(c, f->onset);
             yrsp_set_window(c, minrt, dur);
             /* a press or the deadline ends the window only once the landing
@@ -1079,6 +1080,17 @@ int pl_start_trial(pl_player* p, const yscr_frame* f) {
     p->global_trial++;
     p->frame_trial[f->index % PL_FRAME_RING] = p->global_trial - 1;
     return 1;
+}
+
+/* F37: a key response that a press does not end, with no count, needs a
+ * deadline; a duration known only at run time (a session field: the
+ * loader refuses a known level of 0) is refused here, before the trial
+ * runs, by name. */
+int pl_f37_check(pl_player* p, const yexp_template* d, int64_t dur) {
+    const yexp_response* r = d->response;
+    if (!r || r->signal_choices || r->ends_trial || r->max_responses > 0 || dur > 0) return 0;
+    pl_fail(p, "template '%s': response: duration_s is 0 on this trial, with response_ends_trial false and max_responses 0: nothing would end it; give duration_s above 0, max_responses, or response_ends_trial true (F37)", d->name);
+    return -1;
 }
 
 /* --- rows ------------------------------------------------------------- */
@@ -2121,7 +2133,7 @@ static int pl_draw(pl_player* p, const yscr_frame* f) {
 
 int pl_frame(pl_player* p, const yscr_frame* f) {
     int i, rc, n;
-    bool drawn;
+    bool drawn, key_first;
     /* a real run's device records before the flip records: a row is
      * written when its last frame's record comes, and its outputs' lags
      * must be in it by then */
@@ -2203,7 +2215,12 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
 #endif
     /* version 2: the scripted samples to the graphs, the hits, the exits,
      * the timed exits the window reaches (3.11 rules 2 and 4) */
-    if (p->v2s) {
+    /* a key response's end and the hits order by time (rule 4): its
+     * collector goes first and feeds the samples up to its end itself
+     * (pl_v2_response()); a signal response's collector needs the samples */
+    key_first = p->v2s && p->in_trial && p->tmpl && p->tmpl->v2 && p->tmpl->collector && p->tmpl->def->response &&
+                !p->tmpl->def->response->signal_choices;
+    if (p->v2s && !key_first) {
         YRT_ZONE(zi, "pl.v2_input");
         rc = pl_v2_frame_input(p, f);
         YRT_ZONE_END(zi);
@@ -2274,6 +2291,12 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
     }
     /* version 2: the timed exits after the response's collector, so a
      * response's end and an after_s exit at one time go by list order */
+    if (key_first) {
+        YRT_ZONE(zi, "pl.v2_input");
+        rc = pl_v2_frame_input(p, f);
+        YRT_ZONE_END(zi);
+        if (rc < 0) return -1;
+    }
     if (p->in_trial && p->tmpl->v2 && pl_v2_frame_timed(p, f) < 0) return -1;
     if (p->in_trial && p->audio_open && (pl_sounds(p, f) < 0 || pl_from_sound(p) < 0)) return -1;
     n = 0;

@@ -1697,6 +1697,106 @@ static void run_f37(void) {
             if (c[k].ok) CHECK2(rc == YEXP_OK, "F37: a response that something ends loads", doc);
             else CHECK2(rc == YEXP_ERR_REFUSED && r.n_diags && strstr(r.diags[0].msg, "nothing ends this response"), "F37: a response that nothing ends refused", doc);
         }
+    /* 0.5.0: a variable duration_s whose known levels hold 0 is refused in
+     * the leaf; a session field loads (the player refuses its 0 by name) */
+    {
+        static const struct { const char* rsp; const char* vars; const char* sess; int ok; } v[] = {
+            { "\"response_ends_trial\":false,\"duration_s\":\"$d_s\"", "{\"d_s\":{\"choice\":[0,1]}}", "", 0 },
+            { "\"response_ends_trial\":false,\"duration_s\":\"$d_s\"", "{\"d_s\":{\"choice\":[1e-10,1]}}", "", 0 },
+            { "\"response_ends_trial\":false,\"duration_s\":\"$d_s\"", "{\"d_s\":{\"choice\":[0.5,1]}}", "", 1 },
+            { "\"response_ends_trial\":false,\"duration_s\":\"$d_s\",\"max_responses\":1", "{\"d_s\":{\"choice\":[0,1]}}", "", 1 },
+            { "\"response_ends_trial\":true,\"duration_s\":\"$d_s\"", "{\"d_s\":{\"choice\":[0,1]}}", "", 1 },
+            { "\"response_ends_trial\":false,\"duration_s\":\"$d_s\"", "{}", ",\"session\":{\"fields\":{\"participant\":{\"type\":\"integer\",\"required\":true},\"d_s\":{\"type\":\"integer\",\"required\":true}}}", 1 },
+        };
+        for (ver = 1; ver <= 2; ver++)
+            for (k = 0; k < sizeof v / sizeof v[0]; k++) {
+                char doc[900];
+                int rc;
+                snprintf(doc, sizeof doc,
+                         "{\"format\":\"ysp-experiment\",\"version\":%d%s,\"devices\":{\"r\":{\"direction\":\"in\",\"family\":[\"keyboard\"],\"required\":true}},"
+                         "\"stimuli\":{\"s\":{\"kind\":\"shape\"}},\"trials\":{\"t\":{\"events\":[{\"on\":\"s\"}],"
+                         "\"response\":{\"role\":\"r\",\"choices\":[\"f\"],\"from\":\"s\",%s}}},\"timeline\":[{\"name\":\"m\",\"trial\":\"t\",\"vars\":%s}]}",
+                         ver, v[k].sess, v[k].rsp, v[k].vars);
+                rc = load_rc(doc, NULL, &r);
+                if (v[k].ok) CHECK2(rc == YEXP_OK, "F37: a variable duration_s that cannot be 0, or that something else ends, loads", doc);
+                else CHECK2(rc == YEXP_ERR_REFUSED && r.n_diags && strstr(r.diags[0].msg, "duration_s can be 0 here") && strstr(r.diags[0].msg, "F37"), "F37: a variable duration_s that can be 0 refused", doc);
+            }
+    }
+}
+
+/* 0.5.0, F26 by SURE and MAYBE: a cycle whose only waits are MAYBE is
+ * refused with the reason; one SURE wait (after_s, or a region with stay_s
+ * known above 0 in every leaf) lets it load. */
+static void run_f26(void) {
+    static yexp_report r;
+    static const struct { const char* stay; const char* vars; const char* sess; const char* exits; const char* want; } c[] = {
+        { "\"$h_s\"", "{}", ",\"session\":{\"fields\":{\"participant\":{\"type\":\"integer\",\"required\":true},\"h_s\":{\"type\":\"integer\",\"required\":true}}}", "{\"on\":\"far\",\"to\":\"show\"}", "is not known at load in node 'm'" },
+        { "\"$h_s\"", "{}", ",\"session\":{\"fields\":{\"participant\":{\"type\":\"integer\",\"required\":true},\"h_s\":{\"type\":\"integer\",\"required\":true}}}", "{\"after_s\":0.5,\"to\":\"show\"}", NULL },
+        { "\"$h_s\"", "{\"h_s\":{\"choice\":[0.05,0.1]}}", "", "{\"on\":\"far\",\"to\":\"show\"}", NULL },
+        { "\"$h_s\"", "{\"h_s\":{\"choice\":[0,0.1]}}", "", "{\"on\":\"far\",\"to\":\"show\"}", "can be 0 in node 'm'" },
+        { "\"$h_s\"", "{\"k\":{\"choice\":[\"a\",\"b\"]},\"h_s\":{\"by\":\"$k\",\"map\":{\"a\":0.05,\"b\":0}}}", "", "{\"on\":\"far\",\"to\":\"show\"}", "can be 0 in node 'm'" },
+        { "\"$h_s\"", "{\"h_s\":{\"uniform\":[0,0.1]}}", "", "{\"on\":\"far\",\"to\":\"show\"}", "" },
+        { "0", "{}", "", "{\"on\":\"far\",\"to\":\"show\"}", "has stay_s 0" },
+        { "1e-10", "{}", "", "{\"on\":\"far\",\"to\":\"show\"}", "has stay_s 0" },
+        { "0.001", "{}", "", "{\"on\":\"far\",\"to\":\"show\"}", NULL },
+        { "\"$h_s\"", "{\"h_s\":{\"choice\":[1e-10,0.1]}}", "", "{\"on\":\"far\",\"to\":\"show\"}", "can be 0 in node 'm'" },
+    };
+    size_t k;
+    for (k = 0; k < sizeof c / sizeof c[0]; k++) {
+        char doc[1400];
+        int rc;
+        snprintf(doc, sizeof doc,
+                 "{\"format\":\"ysp-experiment\",\"version\":2%s,\"roles\":{\"hand\":{\"type\":\"position2d_relative\",\"units\":\"display_px\"}},"
+                 "\"stimuli\":{\"s\":{\"kind\":\"shape\"}},\"trials\":{\"t\":{\"controls\":{\"far\":{\"control\":\"region\",\"of\":\"hand\",\"radius\":5,\"outside\":true,\"stay_s\":%s}},"
+                 "\"states\":[{\"name\":\"show\",\"steps\":[{\"on\":\"s\"}],\"exits\":[{\"on\":\"far\",\"to\":\"choose\"}]},"
+                 "{\"name\":\"choose\",\"exits\":[%s]}]}},"
+                 "\"timeline\":[{\"name\":\"m\",\"trial\":\"t\",\"vars\":%s}]}",
+                 c[k].sess, c[k].stay, c[k].exits, c[k].vars);
+        rc = load_rc(doc, NULL, &r);
+        if (!c[k].want) CHECK2(rc == YEXP_OK, "F26: a cycle with a SURE wait loads", r.n_diags ? r.diags[0].msg : doc);
+        else CHECK2(rc == YEXP_ERR_REFUSED && r.n_diags && strstr(r.diags[0].msg, "no exit that surely waits") && strstr(r.diags[0].msg, c[k].want), "F26: a cycle with only MAYBE waits refused by its reason", r.n_diags ? r.diags[0].msg : doc);
+        if (c[k].want && rc == YEXP_OK) fprintf(stderr, "  %s\n", doc);
+    }
+}
+
+/* F26's SCC pass: over is an edge, one SURE until makes a step end wait,
+ * a self-loop is a cycle, and a chain with no cycle loads. */
+static void run_f26b(void) {
+    static yexp_report r;
+    static const struct { const char* states; const char* want; } c[] = {
+        { "{\"name\":\"a\",\"steps\":[{\"on\":\"s\"}],\"exits\":[{\"on\":\"now\",\"to\":\"b\"}]},"
+          "{\"name\":\"b\",\"exits\":[{\"after_s\":1,\"to\":\"a\"}],\"max_visits\":1,\"over\":{\"to\":\"a\"}}", "region 'now' has stay_s 0" },
+        { "{\"name\":\"show\",\"steps\":[{\"on\":\"s\"},{\"until\":\"now\"},{\"until\":\"held\"}]},"
+          "{\"name\":\"choose\",\"exits\":[{\"if\":\"$practice\",\"to\":\"show\"},{\"to\":\"end\"}]}", NULL },
+        { "{\"name\":\"show\",\"steps\":[{\"on\":\"s\"},{\"until\":\"now\"}]},"
+          "{\"name\":\"choose\",\"exits\":[{\"if\":\"$practice\",\"to\":\"show\"},{\"to\":\"end\"}]}", "region 'now' has stay_s 0" },
+        { "{\"name\":\"a\",\"steps\":[{\"on\":\"s\"}],\"exits\":[{\"on\":\"now\",\"to\":\"a\"},{\"after_s\":1,\"to\":\"end\"}]}", "states 'a' and 'a'" },
+        /* the SCC's first edge is the instant one: the reason is the MAYBE wait's */
+        { "{\"name\":\"a\",\"steps\":[{\"on\":\"s\"}],\"exits\":[{\"if\":\"$practice\",\"to\":\"b\"},{\"to\":\"end\"}]},"
+          "{\"name\":\"b\",\"exits\":[{\"on\":\"now\",\"to\":\"a\"}]}", "region 'now' has stay_s 0" },
+        /* a cycle that never waits: one error, the walk's, not F26's too */
+        { "{\"name\":\"a\",\"steps\":[{\"on\":\"s\"}],\"exits\":[{\"on\":\"held\",\"to\":\"b\"}],\"max_visits\":1,\"over\":{\"to\":\"b\"}},"
+          "{\"name\":\"b\",\"exits\":[{\"to\":\"a\"}]}", "!" },
+        { "{\"name\":\"a\",\"steps\":[{\"on\":\"s\"}],\"exits\":[{\"on\":\"now\",\"to\":\"b\"}]},"
+          "{\"name\":\"b\",\"exits\":[{\"on\":\"now\",\"to\":\"c\"}]},{\"name\":\"c\",\"exits\":[{\"on\":\"now\",\"to\":\"end\"}]}", NULL },
+    };
+    size_t k;
+    for (k = 0; k < sizeof c / sizeof c[0]; k++) {
+        char doc[1600];
+        int rc;
+        snprintf(doc, sizeof doc,
+                 "{\"format\":\"ysp-experiment\",\"version\":2,\"roles\":{\"hand\":{\"type\":\"position2d_relative\",\"units\":\"display_px\"}},"
+                 "\"stimuli\":{\"s\":{\"kind\":\"shape\"}},\"trials\":{\"t\":{\"controls\":{"
+                 "\"now\":{\"control\":\"region\",\"of\":\"hand\",\"radius\":5,\"outside\":true},"
+                 "\"held\":{\"control\":\"region\",\"of\":\"hand\",\"radius\":5,\"outside\":true,\"stay_s\":0.1}},"
+                 "\"states\":[%s]}},\"timeline\":[{\"name\":\"m\",\"trial\":\"t\",\"rules\":[\"practice 1\",\"reps 1\"]}]}",
+                 c[k].states);
+        rc = load_rc(doc, NULL, &r);
+        if (!c[k].want) CHECK2(rc == YEXP_OK, "F26: no cycle without a SURE wait: loads", r.n_diags ? r.diags[0].msg : doc);
+        else if (!strcmp(c[k].want, "!"))
+            CHECK2(rc == YEXP_ERR_REFUSED && r.n_errors == 1 && strstr(r.diags[0].msg, "cycle of exits that do not wait"), "F26: a cycle that never waits keeps the walk's one error", r.n_diags ? r.diags[r.n_diags - 1].msg : doc);
+        else CHECK2(rc == YEXP_ERR_REFUSED && r.n_diags && strstr(r.diags[0].msg, "no exit that surely waits") && strstr(r.diags[0].msg, c[k].want), "F26: an SCC with no SURE wait refused", r.n_diags ? r.diags[0].msg : doc);
+    }
 }
 
 int main(void) {
@@ -1708,6 +1808,8 @@ int main(void) {
     run_review();
     run_walk_box();
     run_f37();
+    run_f26();
+    run_f26b();
     run_host();
     run_v2();
     run_v2_linear();

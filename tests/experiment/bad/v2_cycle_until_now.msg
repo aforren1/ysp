@@ -1,1 +1,1 @@
-15:9: template 't': states 'show' and 'choose' are on a cycle whose only waiting exits are met at their arm while their test holds (a region with stay_s 0, or a signal_lost); give such a region stay_s above 0 (D20 rule 6, F26)
+14:9: template 't': states 'choose' and 'show' are on a cycle with no exit that surely waits: region 'lift' has stay_s 0, met at its arm while its test holds; give a region stay_s above 0, or the cycle an exit that waits (D20 rule 6, F26)

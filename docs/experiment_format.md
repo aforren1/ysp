@@ -539,6 +539,27 @@ that structure; it does not invent a new one.
   known levels of the variable hold 0; a value only a session gives (a
   session field) is refused by the player at the trial's start, by name.
 
+  Implementation note (2026-11-12, ysp/experiment.h 0.5.0): one rule
+  replaces the walk of 0.4.0 and the player's trial-start check. Each
+  waiting edge (an `on` exit, own or shared, or an `until`, on a
+  control) is SURE or MAYBE:
+  - MAYBE: a `signal_lost`; a region whose `stay_s` is left out or
+    rounds to 0 ns; a region whose `stay_s` is not a literal, unless
+    every value it takes in every leaf of the template is known at load
+    and rounds above 0 ns. A session field, a `uniform`, a jitter, or
+    any other value known only at run time is MAYBE.
+  - SURE: every other waiting edge, and every `after_s` exit.
+
+  A no-exit state's end of steps is a waiting edge only when one of its
+  `until` steps is SURE (finding F5). The loader finds the strongly
+  connected parts of each template's graph of instant exits, `over`,
+  steps' ends and MAYBE edges, and refuses each cycle among them by name
+  with the MAYBE edge's reason. The rule is conservative: a session
+  field's `stay_s` on a cycle with no other SURE wait is refused at load,
+  whatever the operator gives. Since no loaded cycle can move at one
+  time, the player's stop is an internal guard sized from the template
+  (its runtime states, its `over` rows and a margin), not 64.
+
   DECIDED (2026-11-12, the user; format finding F34 of experiment.md),
   "wait like version 1", qualifying 3.11 rule 10 and rule 7 above:
   1. The exit to `end` that `response_ends_trial` adds to every state
@@ -1138,6 +1159,15 @@ end. The loader refuses it by name, in both format versions: "give
 version 1: a file that loaded before can be refused (ysp/experiment.h
 0.4.0). A `duration_s` from a variable is taken as a deadline. Files that
 still load keep their bytes and experiment ID.
+
+Implementation note (2026-11-12, ysp/experiment.h 0.5.0, player 0.7.0):
+a `duration_s` that is not a literal is a deadline only when it cannot be
+0. The loader refuses a key response whose leaf's known values of
+`duration_s` include one that rounds to 0 ns, by name and level. A value
+known only at run time (a session field) is the player's to refuse: at the
+trial's start, before the trial runs, by the template's name, in both
+format versions. A response with `max_responses` above 0 or
+`response_ends_trial` true is not refused.
 
 ### 2.7 Stimuli
 

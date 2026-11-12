@@ -1,1 +1,1 @@
-48:9: node 'm': template 't' (a region's stay_s variable can be 0 here): states 'show' and 'choose' are on a cycle whose only waiting exits are met at their arm while their test holds (a region with stay_s 0, or a signal_lost); give such a region stay_s above 0 (D20 rule 6, F26)
+37:9: template 't': states 'choose' and 'show' are on a cycle with no exit that surely waits: region 'far': stay_s '$hold_s' can be 0 in node 'm'; give a region stay_s above 0, or the cycle an exit that waits (D20 rule 6, F26)

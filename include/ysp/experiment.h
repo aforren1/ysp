@@ -1,4 +1,4 @@
-/* ysp/experiment.h - v0.4.0 - public domain single-header loader for experiment definitions
+/* ysp/experiment.h - v0.5.0 - public domain single-header loader for experiment definitions
  *
  *   Reads a ysp experiment definition of format version 1 or 2
  *   (docs/experiment_format.md, the pack's EXPERIMENT entry) into a checked,
@@ -153,6 +153,19 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.5.0 - F26 by one rule (2026-11-12): a wait, an `on` exit or an
+ *          until on a control, is SURE or MAYBE. MAYBE: a signal_lost; a
+ *          region whose stay_s is left out or rounds to 0 ns; a region whose
+ *          stay_s is not a literal, unless every leaf of the template knows
+ *          every value of it at load and each rounds above 0 ns (a session
+ *          field, a jitter or another run-time value is MAYBE). Every cycle
+ *          of states with no SURE wait is refused by name with the MAYBE
+ *          wait's reason (an SCC pass), so the player needs no trial-start
+ *          check. F37: a variable duration_s with a known level that rounds
+ *          to 0 ns is refused in the leaf that has it. Files that loaded can
+ *          be refused (a session-field stay_s on such a cycle); the private
+ *          f26_ arrays replace stay_cycle_ (a struct change). Files that
+ *          load keep their bytes and IDs.
  *   v0.4.0 - F37, decided 2026-11-12, in both format versions: a key
  *          response with response_ends_trial false, no duration_s and
  *          max_responses 0 is refused by name (nothing ends it); a file
@@ -223,7 +236,7 @@
  *   v0.1.0 - first version: the loader for format version 1, its defaults
  *          table, the host interface and the canonical writer.
  *
- *   STATUS: v0.4.0 (2026-11-12). Tested; the player (docs/player.md) uses
+ *   STATUS: v0.5.0 (2026-11-12). Tested; the player (docs/player.md) uses
  *   it for both versions. A version 2 file with a signal role runs on --sim
  *   only (the rig profile has no adapter block, G18); one with none runs in
  *   a real window too.
@@ -236,9 +249,9 @@
 #define YSP_EXPERIMENT_H_INCLUDED
 
 #define YEXP_VERSION_MAJOR 0
-#define YEXP_VERSION_MINOR 4
+#define YEXP_VERSION_MINOR 5
 #define YEXP_VERSION_PATCH 0
-#define YEXP_VERSION_STRING "0.4.0"
+#define YEXP_VERSION_STRING "0.5.0"
 
 /* The newest format version this header reads (D12). */
 #define YEXP_FORMAT_VERSION 2
@@ -606,10 +619,12 @@ typedef struct yexp_template {
     uint8_t*             in_shared_;     /* per state: in a shared exit's in */
     int*                 top_list_;      /* the top-level controls of uses_top */
     bool                 end_unset_;     /* D36: a trial can end with no outcome set */
-    const yexp_control** stay_cycle_;    /* F26: regions whose variable stay_s a
-                                          * cycle needs above 0 (the player
-                                          * checks a session's value)       */
-    int                  n_stay_cycle_;
+    uint8_t*             f26_;           /* F26, per control of the graph
+                                          * (yexp__graph_control order): 0 a
+                                          * sure wait, else why it may be
+                                          * met at its arm (YEXP__F26_*)   */
+    const char**         f26_leaf_;      /* the leaf that showed it         */
+    int                  n_f26_;
     int                  n_top_list_;
 } yexp_template;
 
@@ -4786,86 +4801,28 @@ static bool yexp__in_shared(const yexp_template* t, int i) {
     return t->in_shared_ && i >= 0 && i < t->n_states && t->in_shared_[i];
 }
 
-/* Format finding F26 (decided 2026-11-12, completed 2026-11-12): an exit or
- * an until on a control that can hit at its arm does not wait. That is a
- * region whose stay_s is 0 (left out, or a literal that rounds to 0 ns: the
- * player's rule too), and a signal_lost (lowered with entry now). 1: such a
- * control; 2: a region whose stay_s is a variable, which may be 0 (a leaf's
- * check, and the player at a trial's start, decide); 0: it waits. A control
- * in `extra` counts as 1. */
 static bool yexp__ns0(const yexp_value* v) {
     if (v->flags & YEXP_VF_DURATION) return v->i == 0;
     return v->num < 0.5e-9 && v->num > -0.5e-9;
 }
 
-static int yexp__now_kind(const yexp_ref* on, const yexp_control* const* extra, int n_extra) {
-    const yexp_prop* st;
-    int k;
-    if (on->kind != YEXP_REF_CONTROL || !on->control) return 0;
-    if (on->control->kind == YEXP_SIGNAL_LOST) return 1;
-    if (on->control->kind != YEXP_REGION) return 0;
-    st = yexp_prop_get(on->control->props, on->control->n_props, "stay_s");
-    if (!st || !st->value || st->value->kind == YEXP_V_NONE) return 1;
-    if (st->value->kind == YEXP_V_NUMBER) return yexp__ns0(st->value) ? 1 : 0;
-    for (k = 0; k < n_extra; k++) if (extra[k] == on->control) return 1;
-    return st->value->kind == YEXP_V_VAR ? 2 : 0;
-}
-
 /* D20 rule 6 (format finding F5): every cycle of the chart holds an exit
  * that waits (`on` or `after_s`). The edges that do not wait: an instant
- * exit, `over`, a state with no exits that goes on when its steps end
- * (none when its steps wait at an `until`), and, F26, an `on` exit, own or
- * shared, or an until, on a control that can hit at its arm. `level`: 0
- * no F26 edges, 1 the controls of kind 1, 2 those of kind 2 too. A cycle
- * found is refused (levels 0 and 1) or, at level 2, returned: *found and
- * the kind-2 controls on its edges in `out` (at most `cap`). */
-typedef struct yexp__walk {
-    int level;
-    const yexp_control* const* extra; int n_extra;
-    const yexp_control** out; int n_out, cap;
-    bool found;
-} yexp__walk;
-
-static int yexp__edge_now(const yexp_ref* on, yexp__walk* w, const yexp_control** ctl) {
-    int k = yexp__now_kind(on, w->extra, w->n_extra);
-    if (k == 0 || k > w->level) return 0;
-    if (k == 2) *ctl = on->control;
-    return 1;
-}
-
-/* Whether a state's steps wait at an until: one on a control that waits at
- * this level. The first until that does not wait gives its control. */
-static bool yexp__steps_wait_(const yexp_step* steps, int n, yexp__walk* w, const yexp_control** ctl) {
-    int i;
-    bool any = false;
-    for (i = 0; i < n; i++) {
-        const yexp_control* x = NULL;
-        if (steps[i].op != YEXP_UNTIL) continue;
-        if (!yexp__edge_now(&steps[i].target, w, &x)) return true;
-        if (x && !*ctl) *ctl = x;
-        any = true;
-    }
-    (void)any;
-    return false;
-}
-
-static void yexp__state_cycles_(yexp__ctx* c, const yexp_template* t, const char* telem, yexp__walk* w) {
+ * exit, `over`, and a state with no exits that goes on when its steps end
+ * (none when its steps hold an `until`). A cycle of these is refused here;
+ * F26's waits that may not wait are the walk after the leaves'
+ * (yexp__f26_cycles()). */
+static void yexp__state_cycles(yexp__ctx* c, const yexp_template* t, const char* telem) {
     int n = t->n_states, i;
     uint8_t* color;
-    uint8_t* via_now;          /* the edge that pushed the state was an F26 one */
-    const yexp_control** via_ctl;   /* and its kind-2 control, or NULL */
     int* stack;
     int* next;
     if (n == 0) return;
     color = (uint8_t*)yexp__alloc(c, (size_t)n);
-    via_now = (uint8_t*)yexp__alloc(c, (size_t)n);
-    via_ctl = (const yexp_control**)yexp__alloc(c, (size_t)n * sizeof(void*));
     stack = (int*)yexp__alloc(c, (size_t)n * sizeof(int));
     next = (int*)yexp__alloc(c, (size_t)n * sizeof(int));
-    if (!color || !via_now || !via_ctl || !stack || !next) return;
+    if (!color || !stack || !next) return;
     memset(color, 0, (size_t)n);
-    memset(via_now, 0, (size_t)n);
-    memset((void*)via_ctl, 0, (size_t)n * sizeof(void*));
     for (i = 0; i < n; i++) {
         int sp = 0;
         if (color[i]) continue;
@@ -4874,86 +4831,32 @@ static void yexp__state_cycles_(yexp__ctx* c, const yexp_template* t, const char
         color[i] = 1;
         while (sp) {
             int u = stack[sp - 1], v = -1;
-            bool now = false;
-            const yexp_control* nc = NULL;
             const yexp_state* st = &t->states[u];
-            /* edge k: own exits 0..n_exits-1, then over, then the step end,
-             * then the shared exits (the ones that list u) */
-            while (v < 0 && next[u] < st->n_exits + 2 + t->n_exits) {
+            /* edge k: own exits 0..n_exits-1, then over, then the step end */
+            while (v < 0 && next[u] < st->n_exits + 2) {
                 int k = next[u]++;
-                nc = NULL;
                 if (!yexp__work(c)) return;
                 if (k < st->n_exits) {
                     const yexp_exit* e = &st->exits[k];
                     if (e->on.kind == YEXP_REF_NONE && !e->after && e->to.kind == YEXP_REF_STATE) v = e->to.index;
-                    else if (w->level && !e->after && e->to.kind == YEXP_REF_STATE && yexp__edge_now(&e->on, w, &nc)) { v = e->to.index; now = true; }
                 } else if (k == st->n_exits) {
                     if (st->over_to.kind == YEXP_REF_STATE) v = st->over_to.index;
-                } else if (k == st->n_exits + 1) {
-                    if (st->n_exits == 0 && !yexp__in_shared(t, u) && u + 1 < n &&
-                        !(w->level ? yexp__steps_wait_(st->steps, st->n_steps, w, &nc) : yexp__steps_until(st->steps, st->n_steps))) {
-                        v = u + 1;
-                        now = yexp__steps_until(st->steps, st->n_steps);
-                    }
-                } else {
-                    const yexp_exit* e = &t->exits[k - st->n_exits - 2];
-                    int m;
-                    if (!w->level || e->after || e->to.kind != YEXP_REF_STATE || !yexp__edge_now(&e->on, w, &nc)) continue;
-                    for (m = 0; m < e->n_in; m++)
-                        if (e->in[m] == u) { v = e->to.index; now = true; break; }
+                } else if (st->n_exits == 0 && !yexp__in_shared(t, u) && !yexp__steps_until(st->steps, st->n_steps) && u + 1 < n) {
+                    v = u + 1;
                 }
             }
             if (v >= 0) {
                 if (color[v] == 1) {
-                    /* F26 when an edge of the cycle is one: the stack from v */
-                    int j = sp - 1;
-                    bool f26 = now;
-                    if (w->level == 2) {
-                        /* the kind-2 controls on the cycle's edges */
-                        if (nc && w->n_out < w->cap) w->out[w->n_out++] = nc;
-                        while (j > 0 && stack[j] != v) { if (via_ctl[stack[j]] && w->n_out < w->cap) w->out[w->n_out++] = via_ctl[stack[j]]; j--; }
-                        w->found = true;
-                        return;
-                    }
-                    while (j > 0 && stack[j] != v) { f26 = f26 || via_now[stack[j]]; j--; }
-                    if (f26)
-                        yexp__err(c, st->pos_, "%s: states '%s' and '%s' are on a cycle whose only waiting exits are met at their arm while their test holds (a region with stay_s 0, or a signal_lost); give such a region stay_s above 0 (D20 rule 6, F26)",
-                                  telem, t->states[v].name ? t->states[v].name : "?", st->name ? st->name : "?");
-                    else
-                        yexp__err(c, st->pos_, "%s: states '%s' and '%s' are on a cycle of exits that do not wait; every cycle needs an 'on' or 'after_s' exit (D20 rule 6)",
-                                  telem, t->states[v].name ? t->states[v].name : "?", st->name ? st->name : "?");
+                    yexp__err(c, st->pos_, "%s: states '%s' and '%s' are on a cycle of exits that do not wait; every cycle needs an 'on' or 'after_s' exit (D20 rule 6)",
+                              telem, t->states[v].name ? t->states[v].name : "?", st->name ? st->name : "?");
                     return;
                 }
-                if (color[v] == 0) { color[v] = 1; via_now[v] = now; via_ctl[v] = nc; next[v] = 0; stack[sp++] = v; }
+                if (color[v] == 0) { color[v] = 1; next[v] = 0; stack[sp++] = v; }
             } else {
                 color[u] = 2;
                 sp--;
             }
         }
-    }
-}
-
-/* The template's cycle check. A cycle that needs a variable stay_s to wait
- * keeps the regions in t->stay_cycle_: a leaf whose levels for one hold 0
- * is refused (yexp__check_leaf_v2), and the player refuses a value of 0 that
- * only a session gives, at the trial's start. */
-static void yexp__state_cycles(yexp__ctx* c, const yexp_template* t, const char* telem) {
-    int before = c->r->n_errors;
-    yexp__walk w;
-    memset(&w, 0, sizeof w);
-    yexp__state_cycles_(c, t, telem, &w);
-    if (c->r->n_errors != before) return;
-    w.level = 1;
-    yexp__state_cycles_(c, t, telem, &w);
-    if (c->r->n_errors != before) return;
-    w.level = 2;
-    w.cap = t->n_states + 1;
-    w.out = (const yexp_control**)yexp__alloc(c, (size_t)w.cap * sizeof(void*));
-    if (!w.out) return;
-    yexp__state_cycles_(c, t, telem, &w);
-    if (w.found && w.n_out > 0) {
-        ((yexp_template*)t)->stay_cycle_ = w.out;
-        ((yexp_template*)t)->n_stay_cycle_ = w.n_out;
     }
 }
 
@@ -7238,40 +7141,227 @@ static void yexp__check_exit_vars(yexp__ctx* c, yexp__scope* s, const yexp_exit*
     }
 }
 
-/* The version 2 parts of one leaf's trial (3.9, 3.11, 3.14). */
-/* A leaf's levels for the variable stay_s of the regions its template's
- * cycles need (F26): any level of 0 is refused with the leaf's name. */
-static void yexp__stay_levels(yexp__ctx* c, yexp__scope* s) {
-    const yexp_template* t = s->t;
-    const yexp_control* zero[8];
-    int nz = 0, i, k;
-    if (!t || !t->n_stay_cycle_) return;
-    for (i = 0; i < t->n_stay_cycle_ && nz < 8; i++) {
-        const yexp_prop* st = yexp_prop_get(t->stay_cycle_[i]->props, t->stay_cycle_[i]->n_props, "stay_s");
-        int rc;
-        if (!st || !st->value || st->value->kind != YEXP_V_VAR) continue;
+/* Format finding F26 (decided 2026-11-12; the rule of 2026-11-12): a
+ * waiting edge, an `on` exit or an until on a control, is SURE when it
+ * cannot be met at its arm on any trial, else MAYBE: a signal_lost; a
+ * region whose stay_s is left out or rounds to 0 ns; a region whose stay_s
+ * is not a literal, unless every value it takes in every leaf of the
+ * template is known at load and rounds above 0 ns. A leaf marks its
+ * template's MAYBE regions; yexp__f26_cycles() refuses every cycle of
+ * states with no SURE wait. */
+enum { YEXP__F26_SURE = 0, YEXP__F26_LIT0, YEXP__F26_LEVEL0, YEXP__F26_UNKNOWN, YEXP__F26_LOST };
+
+static void yexp__f26_leaf(yexp__ctx* c, yexp__scope* s) {
+    yexp_template* t = (yexp_template*)s->t;
+    const yexp_control* x;
+    int i, n = 0;
+    if (!t || !t->states) return;
+    i = 0;
+    while (yexp__graph_control(c, t, &i) != NULL) n++;
+    if (!t->f26_) {
+        t->f26_ = (uint8_t*)yexp__alloc(c, (size_t)n + 1);
+        t->f26_leaf_ = (const char**)yexp__alloc(c, ((size_t)n + 1) * sizeof(char*));
+        if (!t->f26_ || !t->f26_leaf_) return;
+        memset(t->f26_, 0, (size_t)n + 1);
+        memset((void*)t->f26_leaf_, 0, ((size_t)n + 1) * sizeof(char*));
+        t->n_f26_ = n;
+        i = 0;
+        while ((x = yexp__graph_control(c, t, &i)) != NULL) {
+            const yexp_prop* st = yexp_prop_get(x->props, x->n_props, "stay_s");
+            if (x->kind == YEXP_SIGNAL_LOST) t->f26_[i - 1] = YEXP__F26_LOST;
+            else if (x->kind == YEXP_REGION && (!st || !st->value || st->value->kind == YEXP_V_NONE || (st->value->kind == YEXP_V_NUMBER && yexp__ns0(st->value))))
+                t->f26_[i - 1] = YEXP__F26_LIT0;
+        }
+    }
+    i = 0;
+    while ((x = yexp__graph_control(c, t, &i)) != NULL) {
+        const yexp_prop* st = yexp_prop_get(x->props, x->n_props, "stay_s");
+        int rc, k;
+        if (x->kind != YEXP_REGION || t->f26_[i - 1] || !st || !st->value || st->value->kind == YEXP_V_NONE || st->value->kind == YEXP_V_NUMBER) continue;
         c->n_lv = 0;
         c->lv_over = false;
         rc = yexp__levels(c, s, st->value, 0);
         if (rc < 0) return;
-        if (rc == 0 || c->lv_over) continue;   /* not known here: the player checks */
-        for (k = 0; k < c->n_lv; k++) {
-            double x = strtod(c->lv[k], NULL);
-            if (x < 0.5e-9 && x > -0.5e-9) { zero[nz++] = t->stay_cycle_[i]; break; }
+        if (rc == 0 || c->lv_over) {
+            t->f26_[i - 1] = YEXP__F26_UNKNOWN;
+            t->f26_leaf_[i - 1] = s->leaf ? s->leaf->path : "";
+            continue;
         }
-    }
-    if (nz) {
-        char elem[200];
-        yexp__walk w;
-        memset(&w, 0, sizeof w);
-        w.level = 1;
-        w.extra = zero;
-        w.n_extra = nz;
-        snprintf(elem, sizeof elem, "node '%s': template '%s' (a region's stay_s variable can be 0 here)", s->leaf ? s->leaf->path : "", t->name);
-        yexp__state_cycles_(c, t, elem, &w);
+        for (k = 0; k < c->n_lv; k++) {
+            double v = strtod(c->lv[k], NULL);
+            if (v < 0.5e-9) {
+                t->f26_[i - 1] = YEXP__F26_LEVEL0;
+                t->f26_leaf_[i - 1] = s->leaf ? s->leaf->path : "";
+                break;
+            }
+        }
     }
 }
 
+/* The index of a control in the template's graph order, -1 none. */
+static int yexp__graph_index(const yexp__ctx* c, const yexp_template* t, const yexp_control* x) {
+    int i = 0;
+    const yexp_control* y;
+    while ((y = yexp__graph_control(c, t, &i)) != NULL) if (y == x) return i - 1;
+    return -1;
+}
+
+/* The F26 class of a wait on `on`, its graph index in *ix. */
+static int yexp__f26_of(const yexp__ctx* c, const yexp_template* t, const yexp_ref* on, int* ix) {
+    int k;
+    *ix = -1;
+    if (on->kind != YEXP_REF_CONTROL || !on->control || !t->f26_) return YEXP__F26_SURE;
+    k = yexp__graph_index(c, t, on->control);
+    if (k < 0 || k >= t->n_f26_) return YEXP__F26_SURE;
+    *ix = k;
+    return t->f26_[k];
+}
+
+/* After every leaf: the cycles of each template's states with no SURE wait
+ * (an SCC pass, every cycle), refused by name with the MAYBE wait's why. */
+static void yexp__f26_cycles(yexp__ctx* c) {
+    int ti;
+    for (ti = 0; ti < c->d->n_templates; ti++) {
+        const yexp_template* t = &c->d->templates[ti];
+        int n = t->n_states, ne = 0, cap, u, idx = 0, sp = 0, cs = 0;
+        int* head, *nxt, *to, *why, *index, *low, *stk, *cst, *cit;
+        uint8_t* on;
+        if (!t->states || n == 0 || !t->f26_) continue;
+        cap = t->n_exits * n + 3 * n + 1;
+        for (u = 0; u < n; u++) cap += t->states[u].n_exits;
+        head = (int*)yexp__alloc(c, (size_t)n * sizeof(int));
+        nxt = (int*)yexp__alloc(c, (size_t)cap * sizeof(int));
+        to = (int*)yexp__alloc(c, (size_t)cap * sizeof(int));
+        why = (int*)yexp__alloc(c, (size_t)cap * sizeof(int));
+        index = (int*)yexp__alloc(c, (size_t)n * sizeof(int));
+        low = (int*)yexp__alloc(c, (size_t)n * sizeof(int));
+        stk = (int*)yexp__alloc(c, (size_t)n * sizeof(int));
+        cst = (int*)yexp__alloc(c, (size_t)n * sizeof(int));
+        cit = (int*)yexp__alloc(c, (size_t)n * sizeof(int));
+        on = (uint8_t*)yexp__alloc(c, (size_t)n);
+        if (!head || !nxt || !to || !why || !index || !low || !stk || !cst || !cit || !on) return;
+#define YEXP__EDGE(a, b, w)      \
+    do {                         \
+        if (ne < cap) {          \
+            to[ne] = (b);        \
+            why[ne] = (w);       \
+            nxt[ne] = head[a];   \
+            head[a] = ne++;      \
+        }                        \
+    } while (0)
+        for (u = 0; u < n; u++) head[u] = -1;
+        for (u = 0; u < n; u++) {
+            const yexp_state* st = &t->states[u];
+            int e, m, ix;
+            if (!yexp__work(c)) return;
+            for (e = 0; e < st->n_exits; e++) {
+                const yexp_exit* x = &st->exits[e];
+                if (x->to.kind != YEXP_REF_STATE || x->after) continue;
+                if (x->on.kind == YEXP_REF_NONE) YEXP__EDGE(u, x->to.index, -1);
+                else if (yexp__f26_of(c, t, &x->on, &ix) != YEXP__F26_SURE) YEXP__EDGE(u, x->to.index, ix);
+            }
+            if (st->over_to.kind == YEXP_REF_STATE) YEXP__EDGE(u, st->over_to.index, -1);
+            if (st->n_exits == 0 && !yexp__in_shared(t, u) && u + 1 < n) {
+                /* the step end: every until may be met at its arm */
+                int w = -1, all = 1;
+                for (m = 0; m < st->n_steps; m++)
+                    if (st->steps[m].op == YEXP_UNTIL) {
+                        if (yexp__f26_of(c, t, &st->steps[m].target, &ix) == YEXP__F26_SURE) all = 0;
+                        else if (w < 0) w = ix;
+                    }
+                if (all) YEXP__EDGE(u, u + 1, w);
+            }
+            for (e = 0; e < t->n_exits; e++) {
+                const yexp_exit* x = &t->exits[e];
+                if (x->to.kind != YEXP_REF_STATE || x->after || yexp__f26_of(c, t, &x->on, &ix) == YEXP__F26_SURE) continue;
+                for (m = 0; m < x->n_in; m++)
+                    if (x->in[m] == u) {
+                        YEXP__EDGE(u, x->to.index, ix);
+                        break;
+                    }
+            }
+        }
+#undef YEXP__EDGE
+        /* Tarjan, iterative */
+        for (u = 0; u < n; u++) {
+            index[u] = -1;
+            on[u] = 0;
+        }
+        for (u = 0; u < n; u++) {
+            if (index[u] >= 0) continue;
+            cst[cs] = u;
+            cit[cs] = head[u];
+            cs++;
+            index[u] = low[u] = idx++;
+            stk[sp++] = u;
+            on[u] = 1;
+            while (cs) {
+                int a = cst[cs - 1], eix = cit[cs - 1];
+                if (eix >= 0) {
+                    int b = to[eix];
+                    cit[cs - 1] = nxt[eix];
+                    if (index[b] < 0) {
+                        index[b] = low[b] = idx++;
+                        stk[sp++] = b;
+                        on[b] = 1;
+                        cst[cs] = b;
+                        cit[cs] = head[b];
+                        cs++;
+                    } else if (on[b] && index[b] < low[a]) low[a] = index[b];
+                    continue;
+                }
+                cs--;
+                if (cs && low[a] < low[cst[cs - 1]]) low[cst[cs - 1]] = low[a];
+                if (low[a] == index[a]) {
+                    /* an SCC: a, and what is above it on the stack */
+                    int bottom = sp, size = 0, ea = -1, eb = -1, ew = -1, q;
+                    do {
+                        bottom--;
+                        size++;
+                    } while (stk[bottom] != a);
+                    for (q = bottom; q < sp; q++) {
+                        int x2 = stk[q], ei;
+                        for (ei = head[x2]; ei >= 0; ei = nxt[ei]) {
+                            int b = to[ei], r2;
+                            bool in = false;
+                            for (r2 = bottom; r2 < sp; r2++) if (stk[r2] == b) in = true;
+                            if (!in) continue;
+                            if (ea < 0 || (ew < 0 && why[ei] >= 0)) {
+                                ea = x2;
+                                eb = b;
+                                ew = why[ei];
+                            }
+                        }
+                    }
+                    if (ea >= 0) {
+                        char rs[300], vt[80];
+                        const yexp_control* x = NULL;
+                        int cls = YEXP__F26_LIT0, j = 0;
+                        const yexp_control* y;
+                        while ((y = yexp__graph_control(c, t, &j)) != NULL) if (j - 1 == ew) x = y;
+                        if (x) cls = t->f26_[ew];
+                        vt[0] = 0;
+                        if (x) {
+                            const yexp_prop* st = yexp_prop_get(x->props, x->n_props, "stay_s");
+                            if (st && st->value && st->value->kind == YEXP_V_VAR) snprintf(vt, sizeof vt, "'$%s'", st->value->str);
+                            else snprintf(vt, sizeof vt, "(a value that is not a literal)");
+                        }
+                        if (!x) snprintf(rs, sizeof rs, "a wait on a region met at its arm");
+                        else if (cls == YEXP__F26_LOST) snprintf(rs, sizeof rs, "'%s' is a signal_lost, met at its arm while the signal is lost", x->name);
+                        else if (cls == YEXP__F26_LIT0) snprintf(rs, sizeof rs, "region '%s' has stay_s 0, met at its arm while its test holds", x->name);
+                        else if (cls == YEXP__F26_LEVEL0) snprintf(rs, sizeof rs, "region '%s': stay_s %s can be 0 in node '%s'", x->name, vt, t->f26_leaf_[ew] ? t->f26_leaf_[ew] : "");
+                        else snprintf(rs, sizeof rs, "region '%s': stay_s %s is not known at load in node '%s' (a session field, a jitter or another value known only at run time), so it can be 0", x->name, vt, t->f26_leaf_[ew] ? t->f26_leaf_[ew] : "");
+                        yexp__err(c, t->states[ea].pos_, "template '%s': states '%s' and '%s' are on a cycle with no exit that surely waits: %s; give a region stay_s above 0, or the cycle an exit that waits (D20 rule 6, F26)",
+                                  t->name, t->states[eb].name ? t->states[eb].name : "?", t->states[ea].name ? t->states[ea].name : "?", rs);
+                    }
+                    while (sp > bottom) on[stk[--sp]] = 0;
+                }
+            }
+        }
+    }
+}
+
+/* The version 2 parts of one leaf's trial (3.9, 3.11, 3.14). */
 static void yexp__check_leaf_v2(yexp__ctx* c, yexp__scope* s) {
     const yexp_template* t = s->t;
     char elem[200];
@@ -7308,7 +7398,8 @@ static void yexp__check_leaf_v2(yexp__ctx* c, yexp__scope* s) {
         if (yexp__resolve(c, s, nm, &r, &why) && !(r.kind == YEXP__VK_TABLE && r.unverified))
             yexp__err(c, k < t->n_states ? t->states[k].pos_ : t->pos_, "template '%s': %s '%s' has the name of a variable that node '%s' knows; $%s would mean both (3.9)",
                       t->name, k < t->n_states ? "state" : "flag", nm, s->leaf->path, nm);
-    }    yexp__stay_levels(c, s);
+    }
+    yexp__f26_leaf(c, s);
 }
 
 static void yexp__check_leaf(yexp__ctx* c, yexp__scope* s) {
@@ -7358,6 +7449,23 @@ static void yexp__check_leaf(yexp__ctx* c, yexp__scope* s) {
     if (t->response) {
         const yexp_response* r = t->response;
         yexp__check_value(c, s, r->duration, YEXP__PH_TRIAL, YEXP__W_NONNEG, elem, "duration_s");
+        if (!r->signal_choices && !r->ends_trial && r->max_responses == 0 && r->duration && r->duration->kind != YEXP_V_NUMBER) {
+            /* F37 (its rule of 2026-11-12): a duration_s that is not a
+             * literal ends the window only when no value it takes in this
+             * leaf rounds to 0 ns; a value known only at run time (a
+             * session field) is the player's to refuse before the trial */
+            int rc, q;
+            c->n_lv = 0;
+            c->lv_over = false;
+            rc = yexp__levels(c, s, r->duration, 0);
+            if (rc == 1 && !c->lv_over)
+                for (q = 0; q < c->n_lv; q++)
+                    if (strtod(c->lv[q], NULL) < 0.5e-9) {
+                        yexp__err(c, t->pos_, "node '%s': %s: duration_s can be 0 here (level '%s'), with response_ends_trial false and max_responses 0: nothing would end it; give duration_s above 0, max_responses, or response_ends_trial true (F37)",
+                                  s->leaf ? s->leaf->path : "", elem, c->lv[q]);
+                        break;
+                    }
+        }
         yexp__check_value(c, s, r->min_rt, YEXP__PH_TRIAL, YEXP__W_NUM, elem, "minimum_valid_rt_s");
         if (r->key_answer) yexp__check_value(c, s, r->key_answer, YEXP__PH_TRIAL, YEXP__W_ANY, elem, "key_answer");
         if (r->trigger_code) {
@@ -7990,6 +8098,7 @@ YEXP_API int yexp_load(yjs_arena* a, const char* text, size_t n, const yexp_host
             memset(sc, 0, sizeof *sc);
             yexp__check_methods(c, sc);
             yexp__check_nodes(c, sc, d->timeline, d->n_timeline);
+            if (report->n_errors == 0) yexp__f26_cycles(c);
             yexp__check_host_globals(c);
             if (report->n_errors == 0) { yexp__warn_unreached(c); yexp__warn_unused(c); yexp__warn_empty(c, d->timeline, d->n_timeline); }
         }

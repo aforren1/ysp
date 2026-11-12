@@ -1654,11 +1654,13 @@ def t_v2_review4(ctx):
                         "states": [{"name": "show", "steps": [{"on": "s"}, {"until": "far"}]}, {"name": "choose", "exits": [{"if": "$practice", "to": "show"}]}]}
     d = v2base({"t": cyc("$hold_s")}, [{"name": "l", "trial": "t", "rules": ["practice 2", "reps 2"], "vars": {"hold_s": {"choice": [0, 0.05]}}}], roles=hand)
     r = Run(ctx, "rv4_7_var", d, args=["--sim-gain", "hand=1"])
-    check(r.rc != 0 and "stay_s variable can be 0" in r.err, "7: a cycle on a stay_s that can be 0 refused at load: %s" % r.err[:200])
+    check(r.rc != 0 and "stay_s '$hold_s' can be 0 in node 'l'" in r.err, "7: a cycle on a stay_s that can be 0 refused at load: %s" % r.err[:200])
+    # experiment.h 0.5.0: a session field is not known at load, so the
+    # cycle is refused at load whatever the operator gives
     sess = {"fields": {"participant": {"type": "integer", "required": True}, "hold_s": {"type": "integer", "required": True}}}
     d = v2base({"t": cyc("$hold_s")}, [{"name": "l", "trial": "t", "rules": ["practice 1", "reps 1"]}], roles=hand, extra={"session": sess})
     r = Run(ctx, "rv4_7_session0", d, args=["--sim-gain", "hand=1", "--field", "hold_s=0"])
-    check(r.rc == 1 and "stay_s '$hold_s' is 0 on this trial" in r.err, "7: a session's stay_s of 0 in a cycle refused by name: %s" % r.err[:200])
+    check(r.rc != 0 and "is not known at load" in r.err and "F26" in r.err, "7: a session's stay_s in a cycle refused at load by name: %s" % r.err[:200])
     d2 = v2base({"t": {"controls": {"lost": {"control": "signal_lost", "of": "hand", "after_s": 0.1}}, "exits": [{"after_s": 2, "to": "end", "in": ["b"]}],
                        "states": [{"name": "a", "exits": [{"on": "lost", "to": "b"}]}, {"name": "b", "exits": [{"if": "$practice", "to": "a"}]}]}},
                  [{"name": "l", "trial": "t", "rules": ["practice 1", "reps 1"]}], roles=hand)
@@ -1682,6 +1684,196 @@ def t_v2_review4(ctx):
         d["version"] = ver
         r = Run(ctx, "rv4_f37_v%d" % ver, d)
         check(r.rc != 0 and "nothing ends this response" in r.err and "F37" in r.err, "F37 v%d: refused at load: %s" % (ver, r.err[:200]))
+
+
+def t_v2_review5(ctx):
+    # the final review (p5rev/tools/n*.py): F26 by SURE and MAYBE, the
+    # response's end in rule 4's order (1, 6, 8), F37's run-time value (7)
+    dev = {"devices": {"r": {"direction": "in", "family": ["keyboard"], "required": True}}}
+    hand = {"hand": {"type": "position2d_relative", "units": "display_px"}}
+    far = {"control": "region", "of": "hand", "radius": 5, "outside": True}
+    resp = {"role": "r", "choices": ["left", "right"], "from": "s", "duration_s": 1, "key_answer": "left"}
+    P1 = dict(resp, response_ends_trial=False)
+    sess = lambda name: {"session": {"fields": {"participant": {"type": "integer", "required": True}, name: {"type": "integer", "required": True}}}}
+    out = os.path.join(ctx.out, "rv5_out.csv")
+    write_samples(out, [(0.001 * k, "hand", 9, 0) for k in range(3000)])
+    silent, pressed = ["--participant", "silent"], ["--participant", "correct", "--rt", "0.3"]
+
+    def one(nm, d, args, want_rows=None, rc=0, key=None):
+        r = Run(ctx, nm, d, args=args + ["--max-seconds", "20"])
+        got = [key(x) if key else (x["outcome"], round(float(x["time_elapsed_s"]), 3)) for x in r.trials] if r.rc == 0 else r.err[:300]
+        if want_rows is not None:
+            check(r.rc == rc and got == want_rows, "%s: want %s, got exit %d %s" % (nm, want_rows, r.rc, got))
+        return r
+
+    def visits(r):
+        if r.rc != 0:
+            return []
+        t0 = float(r.events[0]["t_s"])
+        return [(e["text"], round(float(e["end_s"]) - t0, 3)) for e in r.events if e["kind"] == "state" and e["trial_index"] == "0"]
+
+    def refused(nm, d, want, args=()):
+        r = Run(ctx, nm, d, args=list(args) + ["--max-seconds", "10"])
+        check(r.rc != 0 and all(w in r.err for w in want), "%s: refused with %s: %s" % (nm, want, r.err[:300]))
+    # F26 (n1): two cycles, each on its own variable stay_s; the one whose
+    # level is 0 is refused by name
+    for xv, yv, bad in ((0.05, 0, "far2"), (0, 0.05, "far1")):
+        c = {"far1": dict(far, stay_s="$x_s"), "far2": dict(far, stay_s="$y_s")}
+        st = [{"name": "show1", "steps": [{"on": "s"}, {"until": "far1"}]}, {"name": "choose1", "exits": [{"if": "$loop1", "to": "show1"}, {"to": "show2"}]},
+              {"name": "show2", "steps": [{"until": "far2"}]}, {"name": "choose2", "exits": [{"if": "$loop2", "to": "show2"}, {"to": "end"}]}]
+        vs = {"x_s": {"choice": [xv]}, "y_s": {"choice": [yv]}, "loop1": {"choice": [False]}, "loop2": {"choice": [True]}}
+        refused("rv5_n1_%s" % bad, v2base({"t": {"controls": c, "states": st}}, [{"name": "l", "trial": "t", "vars": vs}], roles=hand),
+                ["region '%s'" % bad, "can be 0 in node 'l'", "F26"])
+    # F26 (n8): a lookup that maps to 0, and a variable whose value is one
+    cyc = lambda stay: {"controls": {"far": dict(far, stay_s=stay)}, "exits": [{"after_s": 3, "to": "end", "in": ["choose"]}],
+                        "states": [{"name": "show", "steps": [{"on": "s"}, {"until": "far"}]}, {"name": "choose", "exits": [{"if": "$practice", "to": "show"}]}]}
+    lk = {"by": "$cond", "map": {"a": 0, "b": 0.05}}
+    for nm, stay, vs in (("lookup", lk, {"cond": {"choice": ["a", "b"]}}), ("var_lookup", "$h_s", {"cond": {"choice": ["b", "a"]}, "h_s": lk})):
+        refused("rv5_n8_" + nm, v2base({"t": cyc(stay)}, [{"name": "l", "trial": "t", "rules": ["practice 1", "reps 1"], "vars": vs}], roles=hand),
+                ["can be 0 in node 'l'", "F26"])
+    # F26: a session field's stay_s on a cycle with no other SURE wait is
+    # refused at load; with an after_s exit on the cycle's way back it loads
+    # and runs, the field's 0 included
+    refused("rv5_sess_maybe", v2base({"t": cyc("$hold_s")}, [{"name": "l", "trial": "t", "rules": ["practice 1", "reps 1"]}], roles=hand, extra=sess("hold_s")),
+            ["is not known at load in node 'l'", "F26"], ["--sim-gain", "hand=1", "--field", "hold_s=0"])
+    t = {"controls": {"far": dict(far, stay_s="$hold_s")},
+         "states": [{"name": "show", "steps": [{"on": "s"}], "exits": [{"on": "far", "to": "choose"}]},
+                    {"name": "choose", "exits": [{"after_s": 0.1, "to": "show"}], "max_visits": 3, "over": {"to": "end", "outcome": "over"}}]}
+    one("rv5_sess_sure", v2base({"t": t}, [{"name": "l", "trial": "t"}], roles=hand, extra=sess("hold_s")),
+        ["--sim-gain", "hand=1", "--samples", out, "--field", "hold_s=0"], [("over", 0.3)])
+    # F26 (n9): one SURE until in the state makes its step end wait; a
+    # session's 0 on the other is no longer refused at the trial's start
+    t = {"controls": {"farA": dict(far, stay_s="$a_s"), "farB": dict(far, stay_s="$b_s")},
+         "states": [{"name": "show", "steps": [{"on": "s"}, {"until": "farA"}, {"until": "farB"}], "max_visits": 3, "over": {"to": "end", "outcome": "over"}},
+                    {"name": "choose", "exits": [{"if": "$practice", "to": "show"}, {"to": "end"}]}]}
+    d = v2base({"t": t}, [{"name": "l", "trial": "t", "rules": ["practice 1", "reps 1"], "vars": {"b_s": {"choice": [0.1]}}}], roles=hand, extra=sess("a_s"))
+    one("rv5_n9", d, ["--sim-gain", "hand=1", "--samples", out, "--field", "a_s=0"], [("over", 0.3), ("done", 0.417)])
+    # F26 (n6): a 70-state chain at one time runs; the guard comes from the
+    # template, not a fixed 64
+    for kind in ("hit", "until"):
+        c = {"far": dict(far)}
+        if kind == "hit":
+            st = [{"name": "c%d" % k, "exits": [{"on": "far", "to": "c%d" % (k + 1) if k < 70 else "end", "outcome": "chain"}]} for k in range(1, 71)]
+        else:
+            st = [{"name": "c%d" % k, "steps": [{"until": "far"}]} for k in range(1, 71)]
+        st = [{"name": "c0", "steps": [{"on": "s"}, {"wait_s": 0.1}]}] + st
+        want = [("chain", 0.1)] if kind == "hit" else [("done", 0.1)]
+        one("rv5_n6_" + kind, v2base({"t": {"controls": c, "states": st}}, [{"name": "l", "trial": "t"}], roles=hand), ["--sim-gain", "hand=1", "--samples", out], want)
+    # fix 1 (n2): the response's end reaches the state current at its time,
+    # after step ends and timed exits at or before it, through empty states
+    B = {"name": "b", "steps": [{"wait_s": 0.5}], "exits": [{"on": "response", "to": "end", "outcome": "rsp_b"}]}
+    for nm, st in (("stepend_tie", [{"name": "a", "steps": [{"on": "s"}, {"wait_s": 1.0}]}, B]),
+                   ("after_tie", [{"name": "a", "steps": [{"on": "s"}], "exits": [{"after_s": 1.0, "to": "b"}]}, B]),
+                   ("stepend_1ms_before", [{"name": "a", "steps": [{"on": "s"}, {"wait_s": 0.999}]}, B]),
+                   ("after_tie_via_empty", [{"name": "a", "steps": [{"on": "s"}], "exits": [{"after_s": 1.0, "to": "m"}]}, {"name": "m"}, B])):
+        one("rv5_n2_" + nm, v2base({"t": {"states": st, "response": P1}}, [{"name": "l", "trial": "t"}], extra=dev), silent, [("rsp_b", 1.0)])
+    t = {"controls": {"far": dict(far)},
+         "states": [{"name": "a", "steps": [{"on": "s"}, {"until": "far", "timeout_s": 1.0}, {"wait_s": 0.5}], "exits": [{"on": "response", "to": "end", "outcome": "rsp"}]}], "response": resp}
+    still = os.path.join(ctx.out, "rv5_still.csv")
+    write_samples(still, [(0.001 * k, "hand", 0, 0) for k in range(3000)])
+    one("rv5_n2_until", v2base({"t": t}, [{"name": "l", "trial": "t"}], roles=hand, extra=dev), silent + ["--sim-gain", "hand=1", "--samples", still], [("rsp", 1.0)])
+    E = lambda ex: {"states": [{"name": "a", "steps": [{"on": "s"}], "exits": ex}], "response": P1}
+    RS, TM = {"on": "response", "to": "end", "outcome": "rsp"}, {"after_s": 1.0, "to": "end", "outcome": "timed"}
+    for nm, t, ws, wp in (("endwait_persist", {"states": [{"name": "a", "steps": [{"on": "s"}, {"wait_s": 0.5}]}], "response": P1}, ("timeout", 1.0), ("correct", 1.0)),
+                          ("endwait_tie", E([TM]), ("timed", 1.0), ("timed", 1.0)),
+                          ("endwait_tie_rsp_first", E([RS, TM]), ("rsp", 1.0), ("rsp", 1.0)),
+                          ("endwait_tie_after_first", E([TM, RS]), ("timed", 1.0), ("timed", 1.0)),
+                          ("tie_implicit", {"states": [{"name": "a", "steps": [{"on": "s"}], "exits": [TM]}], "response": resp}, ("timed", 1.0), ("correct", 0.3)),
+                          ("stepend_implicit", {"states": [{"name": "a", "steps": [{"on": "s"}, {"wait_s": 1.0}]}], "response": resp}, ("timeout", 1.0), ("correct", 0.3))):
+        d = v2base({"t": t}, [{"name": "l", "trial": "t"}], extra=dev)
+        one("rv5_n2_%s_silent" % nm, d, silent, [ws])
+        one("rv5_n2_%s_pressed" % nm, d, pressed, [wp])
+    # fix 7: a pressed response is not scored timeout (endwait_tie above:
+    # the after_s exit gives "timed"; with no outcome the press's own)
+    t = {"states": [{"name": "a", "steps": [{"on": "s"}], "exits": [{"on": "response", "to": "end"}]}], "response": P1}
+    one("rv5_scored_pressed", v2base({"t": t}, [{"name": "l", "trial": "t"}], extra=dev), pressed, [("correct", 1.0)])
+    one("rv5_scored_silent", v2base({"t": t}, [{"name": "l", "trial": "t"}], extra=dev), silent, [("timeout", 1.0)])
+    # n2 ew995: the window's end at a frame's edge and inside it
+    for ew in (0.99, 0.995, 1.0):
+        for nm, st in (("plain", [{"name": "a", "steps": [{"on": "s"}, {"wait_s": 1.0}]}]),
+                       ("exit", [{"name": "a", "steps": [{"on": "s"}], "exits": [{"after_s": 1.0, "to": "end", "outcome": "timed"}]}])):
+            r = one("rv5_ew_%s_%s" % (ew, nm), v2base({"t": {"states": st, "response": dict(P1, duration_s=ew)}}, [{"name": "l", "trial": "t"}], extra=dev), silent)
+            want = [("timed", 1.0)] if nm == "exit" else [("timeout", 1.0)]
+            got = [(x["outcome"], round(float(x["time_elapsed_s"]), 3)) for x in r.trials] if r.rc == 0 else r.err[:200]
+            check(r.rc == 0 and got == want, "ew %s %s: want %s, got %s" % (ew, nm, want, got))
+    # fixes 1 and 6 (n2 release): the release ends the response; b's exit is
+    # taken at the release (0.8), not at the press (0.3)
+    sc = os.path.join(ctx.out, "rv5_script.csv")
+    with open(sc, "w", newline="\n") as f:
+        f.write("trial_index,response,rt_s,hold_s\n0,left,0.3,0.5\n")
+    W = dict(resp, wait_for_key_release=True, duration_s=3)
+    t = {"states": [{"name": "a", "steps": [{"on": "s"}], "exits": [{"on": "response", "to": "end", "outcome": "rsp_a"}, {"after_s": 0.5, "to": "b"}]},
+                    {"name": "b", "steps": [{"on": "t"}, {"wait_s": 2}], "exits": [{"on": "response", "to": "c", "outcome": "rsp_b"}]},
+                    {"name": "c", "steps": [{"wait_s": 0.4}]}], "response": W}
+    r = one("rv5_release", v2base({"t": t}, [{"name": "l", "trial": "t"}], extra=dev), ["--participant", "script:" + sc], [("rsp_b", 1.2)])
+    check(visits(r) == [("a", 0.5), ("b", 0.8), ("c", 1.2)], "6: b ends at the release: %s" % visits(r))
+    # fix 6 (n2 maxr, n4): the max_responses-th press ends the response there
+    M = dict(P1, duration_s=0, max_responses=2)
+    one("rv5_maxr2_nodl", v2base({"t": {"states": [{"name": "a", "steps": [{"on": "s"}], "exits": [{"on": "response", "to": "end", "outcome": "rsp"}]}], "response": M}},
+                                 [{"name": "l", "trial": "t"}], extra=dev), silent, rc=1)
+    ctl = {"home": {"control": "region", "of": "hand", "radius": 1, "stay_s": 0.2}, "go": {"control": "movement", "of": "hand", "onset": 50, "from": "home"}}
+    smp = [(0.001 * k, "hand", 0, 0) for k in range(400)] + [(0.4 + 0.001 * k, "hand", 1, 0) for k in range(1, 101)]
+    smp += [(0.55, "hand", -100, 0)] + [(0.55 + 0.001 * k, "hand", 0, 0) for k in range(1, 150)] + [(0.7 + 0.001 * k, "hand", 1, 0) for k in range(1, 101)]
+    smp += [(0.85, "hand", -100, 0)] + [(0.85 + 0.001 * k, "hand", 0, 0) for k in range(1, 3000)]
+    two = os.path.join(ctx.out, "rv5_two.csv")
+    write_samples(two, smp)
+    for mr, want in ((0, 3.5), (1, 0.75), (2, 1.05)):
+        t = {"controls": ctl, "states": [{"name": "hold", "steps": [{"on": "s"}], "exits": [{"on": "home", "to": "reach"}]},
+                                         {"name": "reach", "steps": [{"on": "t"}], "exits": [{"on": "response", "to": "after", "outcome": "rsp"}]},
+                                         {"name": "after", "steps": [{"wait_s": 0.3}]}],
+             "response": {"choices": [{"signal": "go"}], "from": "t", "duration_s": 3, "max_responses": mr}}
+        one("rv5_n4_%d" % mr, v2base({"t": t}, [{"name": "l", "trial": "t"}], roles=hand), ["--sim-gain", "hand=1", "--samples", two], [("rsp", want)])
+    # fix 8 (n10): a press 5 ms before a hit in one frame wins; one 5 ms
+    # after loses
+    hit = os.path.join(ctx.out, "rv5_hit.csv")
+    write_samples(hit, [(0.001 * k, "hand", 0, 0) for k in range(295)] + [(0.295, "hand", 9, 0)] + [(0.295 + 0.001 * k, "hand", 0, 0) for k in range(1, 2000)])
+    t = {"controls": {"far": dict(far, radius=5)},
+         "states": [{"name": "a", "steps": [{"on": "s"}], "exits": [{"on": "response", "to": "end", "outcome": "rsp_a"}, {"on": "far", "to": "b"}]},
+                    {"name": "b", "steps": [{"wait_s": 1}], "exits": [{"on": "response", "to": "end", "outcome": "rsp_b"}]}],
+         "response": dict(resp, duration_s=2)}
+    for rt, want in (("0.29", "rsp_a"), ("0.3", "rsp_b")):
+        one("rv5_n10_" + rt, v2base({"t": t}, [{"name": "l", "trial": "t"}], roles=hand, extra=dev),
+            ["--sim-gain", "hand=1", "--samples", hit, "--rt", rt], [want], key=lambda x: x["outcome"])
+    # fix 8 at one time: a press and a hit both at 0.295 go by list order
+    for nm, ex, want in (("rsp_first", [{"on": "response", "to": "end", "outcome": "rsp_a"}, {"on": "far", "to": "b"}], "rsp_a"),
+                         ("hit_first", [{"on": "far", "to": "b"}, {"on": "response", "to": "end", "outcome": "rsp_a"}], "rsp_b")):
+        t2 = dict(t, states=[dict(t["states"][0], exits=ex), t["states"][1]])
+        one("rv5_n10_tie_" + nm, v2base({"t": t2}, [{"name": "l", "trial": "t"}], roles=hand, extra=dev),
+            ["--sim-gain", "hand=1", "--samples", hit, "--rt", "0.295"], [want], key=lambda x: x["outcome"])
+    # the response's end goes to one state: a's response exit to b, whose
+    # own response exit does not take it again (at 0.295 with the hit, so
+    # the end goes in the hits' order)
+    t2 = {"controls": {"far": dict(far, radius=5)},
+          "states": [{"name": "a", "steps": [{"on": "s"}], "exits": [{"on": "response", "to": "b"}, {"on": "far", "to": "end", "outcome": "hit"}]},
+                     {"name": "b", "exits": [{"on": "response", "to": "end", "outcome": "again"}, {"after_s": 0.5, "to": "end", "outcome": "once"}]}],
+          "response": dict(resp, duration_s=2)}
+    one("rv5_once", v2base({"t": t2}, [{"name": "l", "trial": "t"}], roles=hand, extra=dev), ["--sim-gain", "hand=1", "--samples", hit, "--rt", "0.295"], [("once", 0.8)])
+    # a timed exit before the response's end, after the last frame's
+    # window (half a frame ahead), goes first: b takes the end at 1.0
+    t2 = {"states": [{"name": "a", "steps": [{"on": "s"}], "exits": [{"after_s": 0.995, "to": "b"}]},
+                     {"name": "b", "exits": [{"on": "response", "to": "end", "outcome": "rsp_b"}, {"after_s": 0.5, "to": "end", "outcome": "timed"}]}], "response": P1}
+    one("rv5_after_before_end", v2base({"t": t2}, [{"name": "l", "trial": "t"}], extra=dev), silent, [("rsp_b", 1.0)])
+    # the end goes to the state current at its time only: a has no
+    # response exit at 0.29, b (entered by the hit at 0.295, one frame) does
+    t2 = {"controls": {"far": dict(far, radius=5)},
+          "states": [{"name": "a", "steps": [{"on": "s"}], "exits": [{"on": "far", "to": "b"}]},
+                     {"name": "b", "exits": [{"on": "response", "to": "end", "outcome": "rsp_b"}, {"after_s": 0.5, "to": "end", "outcome": "timed"}]}],
+          "response": dict(P1, duration_s=2, max_responses=1)}
+    one("rv5_end_before_entry", v2base({"t": t2}, [{"name": "l", "trial": "t"}], roles=hand, extra=dev), ["--sim-gain", "hand=1", "--samples", hit, "--rt", "0.29"],
+        [("timed", 0.8)])
+    # fix 7 (n3): F37 for a session field: the player refuses its 0 by name
+    # before the first trial, both versions; a leaf's 0 is refused at load
+    for ver in (1, 2):
+        body = {"events": [{"on": "s"}, {"wait_s": 0.2}]} if ver == 1 else {"states": [{"name": "a", "steps": [{"on": "s"}, {"wait_s": 0.2}]}]}
+        d = v2base({"t": dict(body, response=dict(P1, duration_s="$d_s"))}, [{"name": "l", "trial": "t"}], extra=dict(dev, **sess("d_s")))
+        d["version"] = ver
+        r = Run(ctx, "rv5_f37_sess_v%d" % ver, d, args=["--field", "d_s=0", "--max-seconds", "10"])
+        check(r.rc == 1 and "duration_s is 0 on this trial" in r.err and "template 't'" in r.err and "F37" in r.err and not r.trials,
+              "F37 v%d: a session's 0 refused by name before the first trial: %s" % (ver, r.err[:300]))
+        one("rv5_f37_sess1_v%d" % ver, d, ["--field", "d_s=1", "--participant", "silent"], [("timeout", 1.0)])
+        d = v2base({"t": dict(body, response=dict(P1, duration_s="$d_s"))}, [{"name": "l", "trial": "t", "vars": {"d_s": {"choice": [0, 1]}}}], extra=dev)
+        d["version"] = ver
+        refused("rv5_f37_var_v%d" % ver, d, ["duration_s can be 0 here (level '0')", "F37"])
 
 
 def t_v2_corpus(ctx):
@@ -1722,7 +1914,7 @@ TESTS = [t_nested, t_if_unless, t_empty_and_zero, t_loop, t_requeue, t_track_end
          t_fix_record_inherit, t_fix_backward_at, t_fix_refusals, t_fix_michelson_order, t_fix_texture_vars, t_fix_walk_budget,
          t_fix_data_set, t_fix_check_all_leaves, t_fix_release_order, t_fix_key_var_reapply,
          t_r2_release_other_template, t_r2_yield_draws_nothing, t_r2_low, t_r2_relaxed, t_r4_leaf_loop_done_track, t_r4_requeue_full,
-         t_r5_wait_final, t_r6_allow_below, t_v2_states, t_v2_until, t_v2_hand, t_v2_rule5, t_v2_review2, t_v2_review3, t_v2_f34, t_v2_review4, t_v2_corpus]
+         t_r5_wait_final, t_r6_allow_below, t_v2_states, t_v2_until, t_v2_hand, t_v2_rule5, t_v2_review2, t_v2_review3, t_v2_f34, t_v2_review4, t_v2_review5, t_v2_corpus]
 
 
 def main():

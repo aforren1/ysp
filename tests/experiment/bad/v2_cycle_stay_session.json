@@ -1,0 +1,82 @@
+{
+  "format": "ysp-experiment",
+  "version": 2,
+  "roles": {
+    "hand": {
+      "type": "position2d_relative",
+      "units": "display_px"
+    }
+  },
+  "stimuli": {
+    "s": {
+      "kind": "shape"
+    }
+  },
+  "note": "F26 (2026-11-12): a session field's value is not known at load, so the until on it may not wait and the cycle is refused.",
+  "trials": {
+    "t": {
+      "controls": {
+        "far": {
+          "control": "region",
+          "of": "hand",
+          "radius": 5,
+          "outside": true,
+          "stay_s": "$hold_s"
+        }
+      },
+      "exits": [
+        {
+          "after_s": 3,
+          "to": "end",
+          "in": [
+            "choose"
+          ]
+        }
+      ],
+      "states": [
+        {
+          "name": "show",
+          "steps": [
+            {
+              "on": "s"
+            },
+            {
+              "until": "far"
+            }
+          ]
+        },
+        {
+          "name": "choose",
+          "exits": [
+            {
+              "if": "$practice",
+              "to": "show"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "timeline": [
+    {
+      "name": "m",
+      "trial": "t",
+      "rules": [
+        "practice 2",
+        "reps 2"
+      ]
+    }
+  ],
+  "session": {
+    "fields": {
+      "participant": {
+        "type": "integer",
+        "required": true
+      },
+      "hold_s": {
+        "type": "integer",
+        "required": true
+      }
+    }
+  }
+}

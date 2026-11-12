@@ -326,7 +326,7 @@ id = "v2-37"
 name = "a deadline exit with no outcome sets none"
 test = "player"
 why = "F34 (2): timeout unless the exit gives one."
-find = '''            if (!responded && !x.outcome && !x.outcome_text) x.outcome_text = "timeout";'''
+find = '''    if (!responded && !x.outcome && !x.outcome_text) x.outcome_text = "timeout";'''
 replace = ''''''
 
 [[mutant]]
@@ -357,12 +357,12 @@ replace = '''                1) {'''
 
 [[mutant]]
 id = "v2-41"
-name = "the 64-change stop removed"
+name = "the internal guard on changes at one time removed"
 test = "player"
 expect = "survived"
-note = "A guard: F26 (decided and completed 2026-11-12) refuses at load every cycle whose waits can hit at their arm (a region with stay_s rounding to 0 ns or a variable that can be 0, a signal_lost), and the player refuses a session's 0 at the trial's start (experiment.h 0.4.0), so no loaded file reaches it."
+note = "A guard: experiment.h 0.5.0 refuses at load every cycle of states with no SURE wait (F26, an SCC pass), and a hit is taken once, so one time's changes are bounded by the template and no loaded file reaches the guard."
 why = "F26."
-find = '''        if (++v->n_take > 64) {'''
+find = '''        if (++v->n_take > v->take_cap) {'''
 replace = '''        if (0) {'''
 
 [[mutant]]
@@ -384,11 +384,11 @@ replace = '''                (v->def->response->ends_trial || v->resp_dur > 0)) 
 
 [[mutant]]
 id = "v2-44"
-name = "a persisting window's exit at the press"
+name = "the response ends at the window's end, not at the entry that ended it"
 test = "player"
-why = "Third re-review 3 (rv4_3_persist_exit): the window's end."
-find = '''        t = by_press ? r->t_response : r->t_onset && v->resp_dur > 0 ? r->t_onset + v->resp_dur : f->onset;'''
-replace = '''        t = responded ? r->t_response : r->t_onset && v->resp_dur > 0 ? r->t_onset + v->resp_dur : f->onset;'''
+why = "Final review 6 (rv5_n4_1, rv5_release): the press or the release."
+find = '''        if (e[i].flags & YRSP_E_ENDED) {'''
+replace = '''        if (0) {'''
 
 [[mutant]]
 id = "v2-45"
@@ -408,13 +408,11 @@ replace = '''    if (how == P_ENTRY) *out = YSIG_ENTRY_ARM;'''
 
 [[mutant]]
 id = "v2-47"
-name = "a session's stay_s of 0 in a cycle runs"
+name = "version 2 skips F37's run-time check"
 test = "player"
-why = "F26 completed (rv4_7_session0)."
-find = '''            if (h < 0.5e-9 && h > -0.5e-9) {
-                pl_fail(p, "template '%s': region '%s': stay_s'''
-replace = '''            if (0) {
-                pl_fail(p, "template '%s': region '%s': stay_s'''
+why = "Final review 7 (rv5_f37_sess_v2): a session's duration_s of 0."
+find = '''        if (pl_f37_check(p, v->def, dur) < 0) return -1;'''
+replace = ''''''
 
 [[mutant]]
 id = "v2-48"
@@ -431,3 +429,88 @@ test = "player"
 why = "Third re-review 11 (rvG_too_many, 17 trace names)."
 find = '''        if (names > YDS_MAX_STREAMS) {'''
 replace = '''        if (0) {'''
+
+[[mutant]]
+id = "v2-50"
+name = "the internal guard a fixed 64"
+test = "player"
+why = "Final review F26 (rv5_n6_hit, rv5_n6_until): 70 states at one time run."
+find = '''            v->take_cap = v->n_rs + 8;'''
+replace = '''            v->take_cap = 56;'''
+
+[[mutant]]
+id = "v2-51"
+name = "the N-th press's end at the first press"
+test = "player"
+why = "Final review 6 (rv5_n4_2): max_responses 2 ends at the second crossing."
+find = '''            return e[i].t;
+        }'''
+replace = '''            return r->t_response;
+        }'''
+
+[[mutant]]
+id = "v2-52"
+name = "the release not the end"
+test = "player"
+why = "Final review 6 (rv5_release): wait_for_key_release ends the response at the release."
+find = '''            if (rd->wait_for_key_release && (e[i].flags & YRSP_E_RELEASED) && !(e[i].flags & YRSP_E_CROSSING)) return e[i].t_release;'''
+replace = ''''''
+
+[[mutant]]
+id = "v2-53"
+name = "the window's end at the frame"
+test = "player"
+why = "F34 (2): the deadline at the window's end (rv5_n2_*)."
+find = '''    return r->t_onset && v->resp_dur > 0 ? r->t_onset + v->resp_dur : f->onset;'''
+replace = '''    return f->onset;'''
+
+[[mutant]]
+id = "v2-54"
+name = "the response's end not in the hits' order"
+test = "player"
+why = "Final review 8 (rv5_n10_tie_rsp_first): at one time the list order."
+find = '''                } else if (x->kind == X_RESPONSE && v->resp_tie_t != INT64_MIN && !v->resp_taken && v->resp_tie_t <= tmax) {'''
+replace = '''                } else if (0) {'''
+
+[[mutant]]
+id = "v2-55"
+name = "the samples after the response's end fed first"
+test = "player"
+why = "Final review 8: the hits after the end wait (rv5_n10_*)."
+find = '''        rc = v2_feed(p, f, t);'''
+replace = '''        rc = v2_feed(p, f, INT64_MAX);'''
+
+[[mutant]]
+id = "v2-56"
+name = "the response's end taken twice"
+test = "player"
+why = "Final review 1 (rv5_once): one state takes it."
+find = '''                v->resp_taken = true;'''
+replace = ''''''
+
+[[mutant]]
+id = "v2-57"
+name = "a step end at the response's time after it"
+test = "player"
+why = "Final review 1 (rv5_n2_stepend_tie): the next state hears the end."
+find = '''            if (v->steps_pending && v->steps_end <= t) {'''
+replace = '''            if (0) {'''
+
+[[mutant]]
+id = "v2-58"
+name = "the timed exits not run up to the response's end"
+test = "player"
+why = "Final review 1 (rv5_n2_after_tie_via_empty)."
+find = '''            if (v2_timed_to(p, v, f, t) < 0) return -1;
+            if (v->cur < 0) return 0;
+            if (v->steps_pending'''
+replace = '''            if (v->cur < 0) return 0;
+            if (v->steps_pending'''
+
+[[mutant]]
+id = "v2-59"
+name = "a pressed response's exit scored timeout"
+test = "player"
+why = "Final review 7: a press is never timeout."
+find = '''    if (!responded && !x.outcome && !x.outcome_text) x.outcome_text = "timeout";'''
+replace = '''    if (!x.outcome && !x.outcome_text) x.outcome_text = "timeout";'''

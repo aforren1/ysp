@@ -1,0 +1,1 @@
+3:11: node 'm': template 't': response: duration_s can be 0 here (level '0'), with response_ends_trial false and max_responses 0: nothing would end it; give duration_s above 0, max_responses, or response_ends_trial true (F37)
