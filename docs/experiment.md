@@ -303,9 +303,24 @@ reading below and marks it in the code as "finding Fn". The lines are of
 | F13 | 3.14 l.2041 | A walk's variable (`aim_x`) and a vars name of the same node | Refused as a duplicate |
 | F14 | 3.12 l.1997; D20 rule 10, l.456 | Where `$FLAG` reads | A state's steps, an exit's `if`, a column; not `events` |
 | F15 | 3.11 l.1892; 3.17 | 3.17 lists `over`'s `to` and not its `outcome` | Default none, as 3.11 says |
-| F16 | 3.11 "Outcome (D36)", l.1978; 2.3 l.994 | The levels of `$outcome` where exits set the outcome, and whether `$outcome` needs a response there | In a template with states, or with an `until` that has `timeout_s` (D36 templates): every outcome an exit or an `over` can set (a literal's text, a variable's or a lookup's levels), `"timeout"` of an `until` with `timeout_s`, and, only where a trial can reach `end` with no outcome set, the response's levels (`correct` and `wrong`, or `responded`, and `timeout`) or `"done"` with no response. `$outcome` needs no response there. "Can reach `end` with no outcome set" is a search over the exits, `over` and step ends that set none (the latest outcome set wins, so one set stays set); a key response with `response_ends_trial` ends any state with none. The same set decides the `requeue_outcomes` warning |
+| F16 | 3.11 "Outcome (D36)", l.1978; 2.3 l.994 | The levels of `$outcome` where exits set the outcome, and whether `$outcome` needs a response there | DECIDED (2026-11-11): the user accepted this reading; experiment_format.md has it under D36. In a template with states, or with an `until` that has `timeout_s` (D36 templates): every outcome an exit or an `over` can set (a literal's text, a variable's or a lookup's levels), `"timeout"` of an `until` with `timeout_s`, and, only where a trial can reach `end` with no outcome set, the response's levels (`correct` and `wrong`, or `responded`, and `timeout`) or `"done"` with no response. `$outcome` needs no response there. "Can reach `end` with no outcome set" is a search over the exits, `over` and step ends that set none (the latest outcome set wins, so one set stays set); a key response with `response_ends_trial` ends any state with none. The same set decides the `requeue_outcomes` warning |
 | F17 | 3.14 l.2044 | A `walk2d` box of zero width or height with a `step` above 0: 3.14's rule (a step below half the diagonal) holds, but a drawn direction almost never keeps the point in the box | Accepted, as 3.14 reads; the session stops at run time after 10,000 draws with its named error |
 | F18 | 3.7 l.1713; 3.9 l.1828 | A movement's `from: "response"` names the movement's own hit: the window would open at the response it collects | Accepted, as 3.9's table allows `response` in `from`; the lowering meets it |
+| F19 | 3.7 movement, l.1717 (`onset`) | The collector's DISTANCE level is fixed when it opens, and `onset` takes a variable | The player (0.3.0): `onset` must be a number; a variable is refused at load, naming the movement |
+| F20 | 3.11 `max_visits`, l.1897; D20 rule 12 | What the state row of the visit past `max_visits` is | A visit of no time, `code` -2, then `over`'s `to` and `outcome` |
+| F21 | 3.11 exit `if`, l.1906 | Whether a state whose instant exit is taken runs its steps | No: an instant exit is taken when the state starts, before its steps |
+| F22 | 3.13 the arm, l.2018 | The collector before the movements' `from` | Armed at the trial's first frame (which clears the last trial's result), again at `from`; the DISTANCE origin is the last derived event before the second arm |
+| F23 | 3.11 "Outcome", l.1989 (D36) | "a node with `requeue`": version 1 has only `requeue: no_response` | That key is the node's requeue for `requeue_outcomes` too |
+| F24 | 3.14 `uniform`, l.2040 | Among which variables `j` ranks | The uniforms the leaf draws (its template reads them), a name's nearest node first |
+| F25 | 3.18 visuomotor `--traj` cursor, l.2309 | "Plus 512 and 384" is not exact for the cursor | The program turns the hand about (512, 384) in window px and stores a float; the definition about (0, 0) in double. At the C file's 3 decimals 765 and 726 of 42,958 rows round the other way; `cursor_end_deg` 1 of 160 at 4 decimals |
+| F26 | D35 (f) l.822; 3.11 rule 9 l.1964; D20 rule 6 | A cycle whose waiting exit is a region that is already true at its arm (`entry` `now`, `stay_s` 0) moves at one time without end (`v2_instant_shared`'s practice trials while the pad stays outside) | The player stops the session by name after 64 state changes at one time. Proposal: the loader's cycle rule does not count such an exit as one that waits, or the arm in a cycle is `fresh` |
+| F27 | 3.15 state rows, l.2079 | An events template's `until` parts have no state name | No state rows for an events template; a state's parts and waits are one visit, one row |
+| F28 | 3.15 `code`, l.2089 | The code of an `until`'s exits, which are in no list | Its `on` stays in the state (no row); its timeout has the code after the state's own and shared exits (and the response's) |
+| F29 | 3.7 trace, l.1776 | A frame row whose record comes after the next trial reset the graph's rings | Written at that reset with `t_s` empty and the values at `planned_s`; on `--sim` every record comes before it (0 of 33,120 rows) |
+| F30 | 3.15 signal roles, l.2106 (D40) | The role samples as input rows of `events.csv` | Not written yet (D40: "It can wait"); `session.json` has `signal_roles` |
+| F31 | 3.19 item 1 | The samples file's time 0 | The first trial's first frame's onset in both programs (`trial_bimanual`'s mouse setup comes before it) |
+| F32 | 3.19 item 3; G18 | The `--sim` adapter | A relative role integrates raw mouse counts at `--sim-gain` units per count; an absolute role takes positions (pen events) times `--sim-gain` (1 by default) |
+| F33 | 3.18 visuomotor `move_tier`, l.2306 | Not "Same" with no response | The program writes the result's stamp tier also with no response (trial 2, the early move): 0; `rsp_tier` is empty there |
 
 ## Known gaps
 
@@ -402,8 +417,9 @@ another job was using the machine during the run.
   against real tables and a real rig profile.
 - No run on macOS, Windows or emcc. The unit test is not in the emcc CI
   list because it reads files; the compile check is.
-- Version 2 is read, not lowered: no ysp/sig.h graph, timeline op tables per
-  state, selector channels, exit tests, traces or state rows exist yet. The
-  player refuses a version 2 definition by name. That is the next task.
+- Version 2 is lowered and run on `--sim` by the player 0.3.0
+  ([player.md](player.md), "Format version 2"); its readings are F19 to
+  F33 above. A real run with a signal role waits for G18.
 - No host has `sigrole()`: the rig profile has no adapter block (G18).
-- G14 to G20 of the format page are open; none is needed to read the file.
+- G14 to G17 are closed (ysp/gfx.h 0.20.0, ysp/trials.h 0.8.1, ysp/sig.h
+  0.4.1); G18 to G20 are open.

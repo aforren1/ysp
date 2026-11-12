@@ -848,6 +848,18 @@ learn").
   runs it again (`ytr_requeue()`). Else `ytr_update()` gets the
   template's `outcome` (2.5), 1 by default with `states` and no
   `key_answer`. This keeps D20 rules 2 and 12 as written. 3.11.
+- DECIDED (2026-11-11, the user accepted the loader's reading F16 of
+  experiment.md): the levels of `$outcome` in a template with states, or
+  with an `until` that has `timeout_s`, are every outcome an exit or an
+  `over` can set (a literal's text, a variable's or a lookup's levels),
+  `"timeout"` of an `until` with `timeout_s`, and, only where a trial can
+  reach `end` with no outcome set, the response's levels (`correct` and
+  `wrong`, or `responded`, and `timeout`) or `"done"` with no response.
+  `$outcome` needs no response there. "Can reach `end` with no outcome
+  set" is a search over the exits, `over` and step ends that set none
+  (the latest outcome set wins, so one set stays set); a key response
+  with `response_ends_trial` ends any state with none. The same set
+  decides the `requeue_outcomes` warning.
 
 **D37. The state stream (D20 rule 8). DECIDED (2026-11-11).**
 - Options: (a) rows of `events.csv` with `kind` `"state"`; (b) a file
@@ -1453,10 +1465,12 @@ definition (part 2) plus the keys of this part: a key that this part does
 not name keeps its part 2 meaning, type and default.
 
 Note (2026-11-11): ysp/experiment.h 0.3.0 reads version 2 into its checked
-form and the pack tool (0.9.0) builds it; the player lowers version 1 only
-and refuses version 2 by name. Where this part is silent or not exact, the
-loader's reading is listed in [experiment.md](experiment.md), "Gaps found in
-the format", F1 to F15.
+form and the pack tool (0.9.0) builds it. The player (0.3.0) lowers version
+2 and runs it on `--sim`, with a scripted participant for the signal roles
+(3.19); a real run with a signal role is refused by name until the rig
+profile has its adapter block (G18). Where this part is silent or not
+exact, the loader's reading is listed in [experiment.md](experiment.md),
+"Gaps found in the format", F1 to F15, and the player's is F19 to F33 there.
 
 ### 3.1 What version 2 adds
 
