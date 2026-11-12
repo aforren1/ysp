@@ -421,6 +421,7 @@ class Trial:
     def __init__(self, index, k0):
         self.index = index
         self.k0 = k0
+        self.gaps = set()         # the GAPs this trial reached
         self.rows = []            # state rows
         self.lands = []           # (kind, name, frame)
         self.outcome = None       # D36: the latest set
@@ -454,6 +455,7 @@ class Run:
         self.hand = None
         self.fed_until = None
         self.gaps = set()
+        self.amb = set()          # sample times in an arm-order window
         self.max_trial_ns = max_trial_s * NS
         self.seq = 0
         self.vid = 0
@@ -461,6 +463,9 @@ class Run:
     # ------------------------------------------------------------ helpers
     def gap(self, name):
         self.gaps.add(name)
+        tr = getattr(self, "tr", None)
+        if tr is not None:
+            tr.gaps.add(name)
 
     def flag_at(self, tr, name):
         best = None
@@ -524,7 +529,7 @@ class Run:
                 hit = upto < t <= x
             if hit:
                 self.gap("arm-order")
-                return
+                self.amb.add(t)
 
     # ------------------------------------------------------------ session
     def run(self):
@@ -845,7 +850,11 @@ class Run:
                 self.events_end(t, k)
                 return
             # 3.11 rule 9: the timeout is an exit to end with outcome
-            # "timeout"; F28: its code follows the state's exits.
+            # "timeout"; F28: "its timeout has the code after the state's
+            # own and shared exits (and the response's)". GAP: read as the
+            # count of those exits (the next index); the until's `on` has no
+            # code, since it ends no visit.
+            self.gap("F28-timeout-code")
             self.leave(v, t, len(st.exits), "exit", k)
             self.finish_states(t, k)
             return
@@ -879,6 +888,8 @@ class Run:
                 if v.until_det.hit is not None:
                     if t > onset(k):
                         self.gap("future-arm-hit")
+                    if phase != "P":
+                        self.gap("arm-hit-drain")
                     cands.append(("until", t, None, v.vid))
                 return
             # The last part's end.
@@ -986,6 +997,12 @@ class Run:
             if d.hit is not None:
                 if t > onset(k):
                     self.gap("future-arm-hit")
+                if phase != "P":
+                    # GAP (when an arm's own hit is drained): 3.11 rule 4
+                    # drains hits after each feed; a hit that the arm itself
+                    # makes at a frame is taken here, before the evaluate,
+                    # so F38 removes the state's events at its time.
+                    self.gap("arm-hit-drain")
                 cands.append(("hit", d.hit, nm, v.vid))
         evs, end = self.build(tr, st.parts[0], t, f, v.vid)
         v.events.extend(evs)
@@ -1051,8 +1068,10 @@ class Run:
             return tr.outcome
         r = self.tpl.response
         if r is None:
-            if self.tpl.kind == "events":
-                return ""      # 2.5: version 1's outcome with no response is empty
+            # 3.11 "Outcome": else "done". GAP: an events template with no
+            # response and no until timeout is no D36 template (F16), and
+            # 2.5's `outcome` default (empty) is ytr_update()'s, not the
+            # column's; the column takes "done" there too.
             return "done"
         if tr.resp_valid is None:
             return "timeout"
@@ -1095,6 +1114,8 @@ def simulate(defn, script=None, samples=None):
         d = {
             "trial_index": tr.index,
             "first_frame": tr.k0,
+            "hang": tr.end_frame is None,
+            "gaps": sorted(tr.gaps),
             "end_frame": tr.end_frame,
             "time_elapsed_s": fmt(onset(tr.end_frame) - onset(0)) if tr.end_frame is not None else None,
             "states": [{"text": n, "frame": f, "t_s": fmt(onset(f)), "end_s": fmt(e), "code": c}
