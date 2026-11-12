@@ -72,6 +72,12 @@ static int pl_wq_run(pl_player* p, pl_wjob* j) {
     case PL_WJ_STREAM:
         if (yds_write_stream(&p->ds, j->id, &j->u.step) < 0) { snprintf(p->werror, sizeof p->werror, "an rdk's stream: %s", yds_error(&p->ds)); rc = -1; }
         break;
+    case PL_WJ_ROWBUF:   /* the row waits in its slot of the side buffer */
+        if (yds_write_stream(&p->ds, j->id, p->wq_rows + (size_t)(j - p->wq) * PL_WQ_ROW_BYTES) < 0) {
+            snprintf(p->werror, sizeof p->werror, "a trace's stream: %s", yds_error(&p->ds));
+            rc = -1;
+        }
+        break;
     case PL_WJ_ROW:
         rc = pl_row_flush(p, &p->rows[j->id]);
         pl_st(&p->rows[j->id].queued, 0);
@@ -105,7 +111,12 @@ static void pl_wq_job(void* ctx, const yrt_job_info* info) {
 static int pl_wq_push(pl_player* p, const pl_wjob* j) {
     if (!p->writer_open) {
         pl_wjob c = *j;
-        if (pl_wq_run(p, &c) < 0) { pl_fail(p, "%s", p->werror); return -1; }
+        int rc;
+        YRT_ZONE(zw, "pl.write_inplace");   /* --sim: the write itself */
+        YRT_ZONE_VALUE(zw, j->type);
+        rc = pl_wq_run(p, &c);
+        YRT_ZONE_END(zw);
+        if (rc < 0) { pl_fail(p, "%s", p->werror); return -1; }
         return 0;
     }
     if (pl_ld(&p->wfail)) { pl_fail(p, "%s", p->werror); return -1; }
@@ -114,6 +125,33 @@ static int pl_wq_push(pl_player* p, const pl_wjob* j) {
         if (pl_ld(&p->wfail)) { pl_fail(p, "%s", p->werror); return -1; }
     }
     p->wq[p->wq_tail % PL_WRITE_QUEUE] = *j;
+    pl_st(&p->wq_tail, p->wq_tail + 1);
+    return 0;
+}
+
+/* A stream row wider than a job (a version 2 trace's): copied into its
+ * job's slot of the side buffer; --sim writes it in place. */
+int pl_wq_push_row(pl_player* p, int stream, const void* row, size_t n) {
+    int slot;
+    if (!p->writer_open) {
+        int rc;
+        YRT_ZONE(zw, "pl.write_inplace");
+        YRT_ZONE_VALUE(zw, PL_WJ_ROWBUF);
+        rc = yds_write_stream(&p->ds, stream, row);
+        YRT_ZONE_END(zw);
+        if (rc < 0) { pl_fail(p, "a trace's stream: %s", yds_error(&p->ds)); return -1; }
+        return 0;
+    }
+    if (!p->wq_rows || n > PL_WQ_ROW_BYTES) { pl_fail(p, "a trace's stream: no room in the writer's side buffer"); return -1; }
+    if (pl_ld(&p->wfail)) { pl_fail(p, "%s", p->werror); return -1; }
+    while (p->wq_tail - pl_ld(&p->wq_head) >= PL_WRITE_QUEUE) {
+        yrt_sleep_ns(YRT_MS(1));
+        if (pl_ld(&p->wfail)) { pl_fail(p, "%s", p->werror); return -1; }
+    }
+    slot = p->wq_tail % PL_WRITE_QUEUE;
+    memcpy(p->wq_rows + (size_t)slot * PL_WQ_ROW_BYTES, row, n);
+    p->wq[slot].type = PL_WJ_ROWBUF;
+    p->wq[slot].id = stream;
     pl_st(&p->wq_tail, p->wq_tail + 1);
     return 0;
 }
@@ -744,7 +782,17 @@ static int pl_stack_iters(pl_player* p, int* iters, int cap) {
     return n;
 }
 
+static int pl_leaf_open_body(pl_player* p, pl_leaf* lf, int iter);
+/* A leaf's run: its seed, its ytr_open(), its variables' draws. */
 static int pl_leaf_open(pl_player* p, pl_leaf* lf, int iter) {
+    int rc;
+    YRT_ZONE(z, "pl.leaf_open");
+    rc = pl_leaf_open_body(p, lf, iter);
+    YRT_ZONE_END(z);
+    return rc;
+}
+
+static int pl_leaf_open_body(pl_player* p, pl_leaf* lf, int iter) {
     int iters[PL_MAX_DEPTH_STACK];
     int n = pl_stack_iters(p, iters, PL_MAX_DEPTH_STACK - 1);
     uint64_t seed;
@@ -870,7 +918,12 @@ int pl_start_trial(pl_player* p, const yscr_frame* f) {
             if (rc <= 0 || rc == 2) return rc;
         }
         if (p->args.max_trials && p->global_trial >= p->args.max_trials) { p->walk_done = true; pl_leaf_close(p); return 0; }
-        rc = ytr_next(&p->trials, &p->ti);
+        {
+            /* the trial's draws: its variables, jitters and walks */
+            YRT_ZONE(zn, "pl.trial_next");
+            rc = ytr_next(&p->trials, &p->ti);
+            YRT_ZONE_END(zn);
+        }
         if (rc >= 0) { p->leaf_pass_trials++; break; }
         if (rc != YTR_DONE) { pl_fail(p, "node '%s': %s", p->leaf->node->path, ytr_error(&p->trials)); return -1; }
         /* the leaf ran its last trial: its loop, else on to the next */
@@ -911,8 +964,18 @@ int pl_start_trial(pl_player* p, const yscr_frame* f) {
         if (x != x) { pl_fail(p, "method '%s': no proposal", p->track->def->name); return -1; }
         p->env.level = pl_to_stim_units(p->track, x);
     }
-    if (pl_stim_begin_trial(p, f) < 0) return -1;
-    if (pl_timeline_reset(p) < 0) return -1;
+    {
+        YRT_ZONE(zb, "pl.stim_begin");
+        rc = pl_stim_begin_trial(p, f);
+        YRT_ZONE_END(zb);
+        if (rc < 0) return -1;
+    }
+    {
+        YRT_ZONE(zr, "pl.timeline_reset");
+        rc = pl_timeline_reset(p);
+        YRT_ZONE_END(zr);
+        if (rc < 0) return -1;
+    }
     if (ytl_anchor(&p->tl, PL_BASE_TRIAL, f->onset, 0) != 0) { pl_fail(p, "ytl_anchor: %s", ytl_error(&p->tl)); return -1; }
     p->trial_start_onset = f->onset;
     pl_v2_select(p);
@@ -921,7 +984,13 @@ int pl_start_trial(pl_player* p, const yscr_frame* f) {
         p->trial_first_frame = f->index;
         p->global_trial++;
         p->frame_trial[f->index % PL_FRAME_RING] = p->global_trial - 1;
-        if (pl_v2_trial_start(p, f) < 0) return -1;
+        {
+            int rc2;
+            YRT_ZONE(zv, "pl.v2_trial_start");
+            rc2 = pl_v2_trial_start(p, f);
+            YRT_ZONE_END(zv);
+            if (rc2 < 0) return -1;
+        }
         if (p->tmpl->collector && !p->tmpl->def->response->signal_choices) {
             pl_participant_plan(p);
             if (p->failed) return -1;
@@ -934,7 +1003,12 @@ int pl_start_trial(pl_player* p, const yscr_frame* f) {
         int64_t cursor = 0;
         int n, r;
         p->ops_latest = 0;
-        n = pl_build_ops(p, d->events, d->n_events, ops, p->tmpl->ops_cap, &cursor);
+        {
+            /* the lowering of the trial's events (version 1) */
+            YRT_ZONE(zo, "pl.build_ops");
+            n = pl_build_ops(p, d->events, d->n_events, ops, p->tmpl->ops_cap, &cursor);
+            YRT_ZONE_END(zo);
+        }
         if (n < 0) return -1;
         if (d->response) {
             /* An `if` can leave `from` unshown, and then the window never
@@ -1631,7 +1705,17 @@ static int pl_response_trigger(pl_player* p, const yrsp_result* r) {
 }
 
 /* The MARK fired: the trial is over. */
+static int pl_end_trial_(pl_player* p, const yscr_frame* f);
+/* the zone outside the body: the body returns at every failure */
 int pl_end_trial(pl_player* p, const yscr_frame* f) {
+    int rc;
+    YRT_ZONE(z, "pl.trial_end");
+    rc = pl_end_trial_(p, f);
+    YRT_ZONE_END(z);
+    return rc;
+}
+
+static int pl_end_trial_(pl_player* p, const yscr_frame* f) {
     pl_tmpl* t = p->tmpl;
     const yexp_template* d = t->def;
     yrsp_result res;
@@ -1684,7 +1768,11 @@ int pl_end_trial(pl_player* p, const yscr_frame* f) {
     }
     /* ytr_update(): the template's outcome (2.5); version 2's (D36) */
     if (t->v2) {
-        if (pl_v2_trial_end(p, f, &outcome_val, &requeue) < 0) return -1;
+        int rc;
+        YRT_ZONE(zo, "pl.v2_trial_end");
+        rc = pl_v2_trial_end(p, f, &outcome_val, &requeue);
+        YRT_ZONE_END(zo);
+        if (rc < 0) return -1;
     } else if (d->response) {
         if (d->outcome && d->outcome->kind == YEXP_V_STRING && strcmp(d->outcome->str, "correct") == 0) {
             if (p->env.responded) {
@@ -1735,7 +1823,13 @@ int pl_end_trial(pl_player* p, const yscr_frame* f) {
                 row->stats[k].stim = t->record_stims[k];
             }
         }
-        if (pl_row_fill(p, row) < 0) return -1;
+        {
+            int rc;
+            YRT_ZONE(zr, "pl.row_fill");
+            rc = pl_row_fill(p, row);
+            YRT_ZONE_END(zr);
+            if (rc < 0) return -1;
+        }
     }
     if (have_res && p->env.responded) {
         yds_event ev;
@@ -1751,7 +1845,13 @@ int pl_end_trial(pl_player* p, const yscr_frame* f) {
         if (pl_event_queue(p, &ev) < 0) return -1;
     }
     /* version 2: the traces' rows of the trial, the state rows (3.15) */
-    if (t->v2 && pl_v2_trial_rows(p) < 0) return -1;
+    if (t->v2) {
+        int rc;
+        YRT_ZONE(zv, "pl.v2_trial_rows");
+        rc = pl_v2_trial_rows(p);
+        YRT_ZONE_END(zv);
+        if (rc < 0) return -1;
+    }
     /* the steps of each moving rdk, to its stream (2.7) */
     {
         int i;
@@ -1774,7 +1874,10 @@ int pl_end_trial(pl_player* p, const yscr_frame* f) {
         if (r < 0) { pl_fail(p, "node '%s': %s", p->leaf->node->path, ytr_error(&p->trials)); return -1; }
         p->leaf_requeues++;
     } else {
-        int r = ytr_update(&p->trials, outcome_val, NULL);
+        int r;
+        YRT_ZONE(zu, "pl.trial_update");
+        r = ytr_update(&p->trials, outcome_val, NULL);
+        YRT_ZONE_END(zu);
         if (r < 0) { pl_fail(p, "node '%s': %s", p->leaf->node->path, ytr_error(&p->trials)); return -1; }
     }
     pl_loop_count(p, have_res, have_res && p->env.responded && p->env.correct);
@@ -1991,21 +2094,39 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
     /* a real run's device records before the flip records: a row is
      * written when its last frame's record comes, and its outputs' lags
      * must be in it by then */
-    if (pl_devices_drain(p) < 0) return -1;
+    {
+        /* profiling (docs/player.md): one zone per phase; nothing with the
+         * instrumentation off (ysp/rt.h, THE MODE) */
+        YRT_ZONE(zd, "pl.devices_drain");
+        rc = pl_devices_drain(p);
+        YRT_ZONE_END(zd);
+        if (rc < 0) return -1;
+    }
     /* flip records first: a trial's press is planned from its stimulus's
      * record, and rows wait for their last frame's record */
-    for (i = 0; i < f->n_done; i++) {
-        const yscr_record* rec = &f->done[i];
-        if (pl_on_record(p, rec) < 0) return -1;
-        if (p->from_landed && !p->press_planned && rec->index == p->from_frame && p->tmpl && p->tmpl->collector && !p->silent)
-            pl_participant_arm(p, rec->onset ? rec->onset : rec->planned);
+    {
+        YRT_ZONE(zr, "pl.flip_records");
+        YRT_ZONE_VALUE(zr, f->n_done);
+        rc = 0;
+        for (i = 0; i < f->n_done && rc == 0; i++) {
+            const yscr_record* rec = &f->done[i];
+            if (pl_on_record(p, rec) < 0) { rc = -1; break; }
+            if (p->from_landed && !p->press_planned && rec->index == p->from_frame && p->tmpl && p->tmpl->collector && !p->silent)
+                pl_participant_arm(p, rec->onset ? rec->onset : rec->planned);
+        }
+        YRT_ZONE_END(zr);
+        if (rc < 0) return -1;
     }
     p->frame_trial[f->index % PL_FRAME_RING] = YTR_MISSING_INT;   /* until a trial claims it */
     if (p->t0_session == 0) p->t0_session = f->onset;
     if (!p->in_trial) {
         int64_t t0 = p->args.measure ? yrt_real_ns() : 0;
         if (p->pending_stop) return 1;
-        rc = pl_start_trial(p, f);
+        {
+            YRT_ZONE(zt, "pl.trial_start");
+            rc = pl_start_trial(p, f);
+            YRT_ZONE_END(zt);
+        }
         if (p->args.measure) {
             int64_t d = yrt_real_ns() - t0;
             if (d > p->work_trial_max_ns) p->work_trial_max_ns = d;
@@ -2027,7 +2148,9 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
 #if !defined(YSCR_NO_SDL)
     if (!p->args.sim) {
         int64_t t0 = p->args.measure ? yrt_real_ns() : 0;
+        YRT_ZONE(zf, "pl.feed_screen");
         (void)yrsp_feed_screen(&p->scr, p->collectors, p->n_collectors);
+        YRT_ZONE_END(zf);
         if (p->args.measure && yrt_real_ns() - t0 > p->work_input_max_ns) {
             p->work_input_max_ns = yrt_real_ns() - t0;
             p->work_input_max_frame = f->index;
@@ -2036,7 +2159,12 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
 #endif
     /* version 2: the scripted samples to the graphs, the hits, the exits,
      * the timed exits the window reaches (3.11 rules 2 and 4) */
-    if (p->v2s && pl_v2_frame_input(p, f) < 0) return -1;
+    if (p->v2s) {
+        YRT_ZONE(zi, "pl.v2_input");
+        rc = pl_v2_frame_input(p, f);
+        YRT_ZONE_END(zi);
+        if (rc < 0) return -1;
+    }
     if (p->in_trial && p->press_pending && p->tmpl->collector) {
         yrsp_input ev;
         pl_tmpl* t = p->tmpl;
@@ -2073,7 +2201,12 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
         p->release_due = false;
     }
     if (p->in_trial && p->tmpl->collector) {
-        int st = yrsp_update_frame(p->tmpl->collector, f);
+        int st;
+        {
+            YRT_ZONE(zu, "pl.update_frame");
+            st = yrsp_update_frame(p->tmpl->collector, f);
+            YRT_ZONE_END(zu);
+        }
         if (p->responding && st == YRSP_ENDED) {
             yrsp_result live;
             int64_t bt = 0;
@@ -2095,9 +2228,19 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
     if (p->in_trial && p->audio_open && (pl_sounds(p, f) < 0 || pl_from_sound(p) < 0)) return -1;
     n = 0;
     if (p->in_trial) {   /* false only on a frame where the walk yielded */
-        n = ytl_evaluate(&p->tl, &(ytl_frame){ f->onset, f->period, f->index }, p->fired, p->fired_cap);
+        {
+            YRT_ZONE(ze, "pl.evaluate");
+            n = ytl_evaluate(&p->tl, &(ytl_frame){ f->onset, f->period, f->index }, p->fired, p->fired_cap);
+            YRT_ZONE_VALUE(ze, n);
+            YRT_ZONE_END(ze);
+        }
         if (n < 0) { pl_fail(p, "ytl_evaluate: %s", ytl_strerror(n)); return -1; }
-        if (pl_on_fired(p, f, n) < 0) return -1;
+        {
+            YRT_ZONE(zl, "pl.landing");
+            rc = pl_on_fired(p, f, n);
+            YRT_ZONE_END(zl);
+            if (rc < 0) return -1;
+        }
         {
             /* who was on screen this frame: the row's counts need it per
              * frame, and a stimulus can be shown more than once (D10) */
@@ -2111,14 +2254,24 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
             }
         }
         /* version 2: the graph's frame, its hits, the end after it (v2.c) */
-        if (p->tmpl->v2 && pl_v2_frame_eval(p, f) < 0) return -1;
+        if (p->tmpl->v2) {
+            YRT_ZONE(zg, "pl.v2_frame");
+            rc = pl_v2_frame_eval(p, f);
+            YRT_ZONE_END(zg);
+            if (rc < 0) return -1;
+        }
     }
     /* the device's rule follows the onset, which the landing and the flip
      * record move (ysp/response.h, RESPONSE TRIGGERS) */
-    if (p->in_trial && pl_rule_of(p, p->tmpl)) yrsp_rule_window(p->roles[p->tmpl->role].rule, p->tmpl->collector);
+    if (p->in_trial && pl_rule_of(p, p->tmpl)) {
+        YRT_ZONE(zw, "pl.rule_window");
+        yrsp_rule_window(p->roles[p->tmpl->role].rule, p->tmpl->collector);
+        YRT_ZONE_END(zw);
+    }
     /* also on the end's frame: a step that lands with the trial's last event
      * must reach this frame's draw */
     if (p->global_trial > 0) {
+        YRT_ZONE(za, "pl.apply");
         if (p->tmpl && p->tmpl->v2) {
             /* the forms' properties come from the graph's channels */
             int nb;
@@ -2126,6 +2279,7 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
             const float* vals = pl_v2_values(p, ytl_values(&p->tl));
             ygfx_apply(b, nb, vals);
         } else ygfx_apply(p->binds, p->n_binds, ytl_values(&p->tl));
+        YRT_ZONE_END(za);
     }
     if (p->trace_file && drawn) {   /* the frames that draw stimuli */
         const float* values = ytl_values(&p->tl);
@@ -2136,7 +2290,10 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
     }
     yscr_mark(&p->scr, YSCR_PHASE_EVALUATE);
     if (drawn) {
-        if (pl_draw(p, f) < 0) return -1;
+        YRT_ZONE(zdr, "pl.draw");
+        rc = pl_draw(p, f);
+        YRT_ZONE_END(zdr);
+        if (rc < 0) return -1;
     } else {
         /* before the first trial and on a frame where the walk yielded:
          * nothing is shown, as on any frame between two trials */
@@ -2183,6 +2340,69 @@ static bool pl_rows_owed(const pl_player* p) {
     return false;
 }
 
+/* --profile (docs/player.md, "How-to: profile a run"): the YRT_TRACE_RING
+ * build's zones to DIR/profile.csv, drained after each flip, outside every
+ * zone, so the file's write is in no measured phase. */
+static int pl_profile_open(pl_player* p) {
+#if defined(YRT_TRACE_RING)
+    yrt_ring_desc rd;
+    char path[PL_MAX_PATH];
+    size_t bytes = (size_t)16 << 20;
+    p->profile_mem = pl_alloc(p, bytes);
+    p->profile_buf = (yrt_event*)pl_alloc(p, sizeof(yrt_event) * 1024);
+    if (!p->profile_mem || !p->profile_buf) return -1;
+    memset(&rd, 0, sizeof rd);
+    rd.memory = p->profile_mem;
+    rd.bytes = bytes;
+    if (!yrt_ring_open(&p->profile_ring, &rd)) { pl_fail(p, "--profile: %s", yrt_ring_error(&p->profile_ring)); return -1; }
+    snprintf(path, sizeof path, "%s/profile.csv", p->args.out_dir);
+    p->profile_file = fopen(path, "w");
+    if (!p->profile_file) { pl_fail(p, "--profile: cannot write %s", path); return -1; }
+    fputs("frame,zone,t_ns,dur_ns,value\n", (FILE*)p->profile_file);
+    yrt_trace_set_ring(&p->profile_ring);
+    YRT_THREAD_INIT("frame loop");
+    return 0;
+#else
+    pl_fail(p, "--profile needs a build with YSP_TRACE_RING (ysp/rt.h's trace ring); this one has no zones");
+    p->bad_arg = true;
+    return -1;
+#endif
+}
+
+static int pl_profile_drain(pl_player* p, int64_t frame) {
+#if defined(YRT_TRACE_RING)
+    int n, k;
+    while ((n = yrt_ring_drain(&p->profile_ring, p->profile_buf, 1024)) > 0)
+        for (k = 0; k < n; k++) {
+            const yrt_event* e = &p->profile_buf[k];
+            if (e->source != YRT_SRC_RT) continue;
+            if (e->kind == YRT_KIND_ZONE)
+                fprintf((FILE*)p->profile_file, "%lld,%s,%lld,%llu,%llu\n", (long long)frame, e->u.zone.loc->name, (long long)e->t_ns,
+                        (unsigned long long)e->u.zone.dur_ns, (unsigned long long)e->u.zone.value);
+            else if (e->kind == YRT_KIND_LOSS)
+                fprintf((FILE*)p->profile_file, "%lld,loss,%lld,%llu,%llu\n", (long long)frame, (long long)e->t_ns,
+                        (unsigned long long)e->u.u64[0], (unsigned long long)e->u.u64[1]);
+        }
+    return 0;
+#else
+    (void)p;
+    (void)frame;
+    return 0;
+#endif
+}
+
+static void pl_profile_close(pl_player* p) {
+#if defined(YRT_TRACE_RING)
+    if (!p->profile_file) return;
+    (void)pl_profile_drain(p, -1);
+    yrt_trace_set_ring(NULL);
+    fclose((FILE*)p->profile_file);
+    p->profile_file = NULL;
+#else
+    (void)p;
+#endif
+}
+
 int pl_run(pl_player* p) {
     yscr_frame f;
     int rc = 0, i, r;
@@ -2220,6 +2440,7 @@ int pl_run(pl_player* p) {
         extern int pl_v2_rows(pl_player* p);
         if (pl_v2_rows(p) < 0) return -1;   /* version 2's row cells, before the frame path */
     }
+    if (p->args.profile && pl_profile_open(p) < 0) return -1;
     if (p->args.trace_path) {
         p->trace_file = fopen(p->args.trace_path, "w");
         if (!p->trace_file) { pl_fail(p, "cannot write '%s'", p->args.trace_path); return -1; }
@@ -2264,18 +2485,24 @@ int pl_run(pl_player* p) {
         }
         if (p->args.measure) {
             int64_t t0 = yrt_real_ns(), t1;
+            YRT_ZONE(zfr, "pl.frame");
             pl_loop_active = 1;
             r = pl_frame(p, &f);
             pl_loop_active = 0;
+            YRT_ZONE_END(zfr);
             t1 = yrt_real_ns();
             p->work_n++;
             if (t1 - t0 > p->work_max_ns) { p->work_max_ns = t1 - t0; p->work_max_frame = f.index; }
             if (t1 - t0 > 16000000) p->work_over_16ms++;
         } else {
+            YRT_ZONE(zfr, "pl.frame");
             pl_loop_active = 1;
             r = pl_frame(p, &f);
             pl_loop_active = 0;
+            YRT_ZONE_END(zfr);
         }
+        YRT_FRAME_MARK();
+        if (p->profile_file && pl_profile_drain(p, f.index) < 0) return -1;
         if (r < 0) return -1;
         if (r == 1) {   /* the session ended before this frame drew: a blank frame */
             ygfx_begin(&p->gfx, &f);
@@ -2315,6 +2542,7 @@ int pl_run(pl_player* p) {
         p->row_tail = (p->row_tail + 1) % PL_PENDING_ROWS;
     }
     if (pl_events_flush(p, true) < 0) return -1;
+    pl_profile_close(p);
     if (pl_writer_close(p) < 0) return -1;   /* every row on disk before session.json says so */
     {
         char buf[32];

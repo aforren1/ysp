@@ -378,7 +378,11 @@ typedef struct pl_row {
 /* A write for the data set's writer (pl_wq_*, run.c): a real run's frame
  * thread never calls write() itself, because on ext4 one append blocked a
  * frame for 18 ms while the kernel wrote the file back (docs/player.md). */
-enum { PL_WJ_FRAME = 1, PL_WJ_EVENT, PL_WJ_STREAM, PL_WJ_ROW };
+enum { PL_WJ_FRAME = 1, PL_WJ_EVENT, PL_WJ_STREAM, PL_WJ_ROW, PL_WJ_ROWBUF };
+/* A version 2 trace row (v2.c) is too wide for the job: it waits in the
+ * queue's side buffer (pl_player.wq_rows), in its job's slot, so the job
+ * stays 160 bytes and the side buffer exists only for a session with traces. */
+enum { PL_WQ_ROW_BYTES = 296 };
 typedef struct pl_rdk_step_row { int trial_index, update; int64_t t_ns; double coherence, direction, speed; } pl_rdk_step_row;
 typedef struct pl_wjob {
     int type;
@@ -430,6 +434,8 @@ typedef struct pl_args {
                                 * scale per count (G18 has no rig block)     */
     const char* draws_path;    /* tests: every leaf's trials and variables,
                                 * written without running (--test-draws)    */
+    bool  profile;             /* --profile: the trace ring's zones to
+                                * DIR/profile.csv (a YSP_TRACE_RING build)  */
 } pl_args;
 
 typedef struct pl_script_row { int trial; char* resp; bool silent; double rt_s, hold_s; } pl_script_row;
@@ -556,6 +562,7 @@ struct pl_player {
     yrt_worker  writer;
     bool        writer_open;
     pl_wjob*    wq;                /* PL_WRITE_QUEUE                     */
+    unsigned char* wq_rows;        /* PL_WRITE_QUEUE x PL_WQ_ROW_BYTES, or NULL */
     int         wq_head, wq_tail;  /* the writer's, the frame thread's;
                                     * read across threads atomically     */
     int         wq_stop;           /* the writer's job runs once more    */
@@ -644,6 +651,11 @@ struct pl_player {
     int64_t   work_input_max_ns, work_input_max_frame;   /* a real run's input: SDL's pump */
     /* version 2 (v2.c) */
     struct pl_v2_session* v2s;
+    /* --profile */
+    yrt_ring  profile_ring;
+    void*     profile_mem;
+    yrt_event* profile_buf;
+    void*     profile_file;
 };
 
 /* --- load (lower.c) ------------------------------------------------------ */
@@ -751,6 +763,7 @@ void pl_trigger_sink(void* ctx, const yscr_trigger_info* info);
 void pl_out_push(pl_player* p, int ch, int q, int trial, int64_t deadline, uint32_t code);
 /* The data set's writer thread (a real run). */
 int  pl_writer_open(pl_player* p);
+int  pl_wq_push_row(pl_player* p, int stream, const void* row, size_t n);
 int  pl_writer_close(pl_player* p);
 extern volatile int pl_loop_active;   /* the frame loop is running: a test counts allocations against it */
 

@@ -105,6 +105,27 @@ option(YSP_BUILD_LOOPBACK "Build the loopback tests in tests/loopback/ (needs ha
 # with YRT_TRACY against the real TracyC.h, so the macro mapping is checked
 # against Tracy itself and not against a copy of it.
 option(YSP_TRACY_CHECK "Fetch Tracy and build the YRT_TRACY compile check" OFF)
+# Off by default: profiling (docs/player.md, "How-to: profile a run"). The
+# player and the examples get ysp/rt.h's instrumentation macros: YSP_TRACY
+# fetches Tracy v0.14.1 (as YSP_TRACY_CHECK does, one fetch) and links
+# TracyClient, on demand; YSP_TRACE_RING puts the zones in a trace ring that
+# the player's --profile writes out. One mode a program (ysp/rt.h, THE MODE).
+option(YSP_TRACY "Build the player and the examples with YRT_TRACY (fetches Tracy)" OFF)
+option(YSP_TRACE_RING "Build the player and the examples with YRT_TRACE_RING" OFF)
+if(YSP_TRACY AND YSP_TRACE_RING)
+    message(FATAL_ERROR "YSP_TRACY and YSP_TRACE_RING: one instrumentation mode a program (ysp/rt.h)")
+endif()
+set_property(GLOBAL PROPERTY YSP_PROFILED_TARGETS "")
+# A target of the player or the examples: the mode's defines now, Tracy's
+# library once it is fetched (the end of this file).
+function(ysp_profiled target)
+    if(YSP_TRACE_RING)
+        target_compile_definitions(${target} PRIVATE YRT_TRACE_RING)
+    elseif(YSP_TRACY)
+        target_compile_definitions(${target} PRIVATE YRT_TRACY TRACY_ENABLE TRACY_ON_DEMAND)
+        set_property(GLOBAL APPEND PROPERTY YSP_PROFILED_TARGETS ${target})
+    endif()
+endfunction()
 # Off by default: text layout for the pack tool and the player (pack/, the
 # vendored Skribidi and HarfBuzz in third_party/, examples/layout/gfx_layout.c and
 # tests/layout/). About 8 MB of sources that no header needs.
@@ -447,6 +468,9 @@ function(ysp_add_program target src)
     set_target_properties(${target} PROPERTIES
         C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF
         CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+    if(src MATCHES "examples/|player")
+        ysp_profiled(${target})
+    endif()
     # The rig's programs may open a window, so they get the run-time DLLs
     # beside them. The tests among them use neither, which costs a copy.
     if("rig" IN_LIST ARGN)
@@ -908,7 +932,7 @@ if(YSP_BUILD_PLAYER)
     add_subdirectory(player)
 endif()
 
-if(YSP_TRACY_CHECK AND YSP_BUILD_TESTS)
+if((YSP_TRACY_CHECK AND YSP_BUILD_TESTS) OR YSP_TRACY)
     include(FetchContent)
     # The tag ysp/rt.h's STATUS names. On demand and silent: the check runs
     # on CI, where nothing connects and nothing should broadcast.
@@ -920,8 +944,16 @@ if(YSP_TRACY_CHECK AND YSP_BUILD_TESTS)
         GIT_TAG        v0.14.1
         GIT_SHALLOW    TRUE)
     FetchContent_MakeAvailable(tracy)
-    ysp_add_program(compile_rt_tracy tests/compile/rt.c core)
-    target_compile_definitions(compile_rt_tracy PRIVATE YRT_TRACY)
-    target_link_libraries(compile_rt_tracy PRIVATE Tracy::TracyClient)
-    add_test(NAME compile_rt_tracy COMMAND compile_rt_tracy)
+    if(YSP_TRACY_CHECK AND YSP_BUILD_TESTS)
+        ysp_add_program(compile_rt_tracy tests/compile/rt.c core)
+        target_compile_definitions(compile_rt_tracy PRIVATE YRT_TRACY)
+        target_link_libraries(compile_rt_tracy PRIVATE Tracy::TracyClient)
+        add_test(NAME compile_rt_tracy COMMAND compile_rt_tracy)
+    endif()
+    if(YSP_TRACY)
+        get_property(profiled GLOBAL PROPERTY YSP_PROFILED_TARGETS)
+        foreach(t IN LISTS profiled)
+            target_link_libraries(${t} PRIVATE Tracy::TracyClient)
+        endforeach()
+    endif()
 endif()

@@ -80,6 +80,22 @@
       }
     },
     {
+      "name": "linux-trace-ring",
+      "displayName": "As linux, the player and the examples with YRT_TRACE_RING (ysp_player --profile)",
+      "inherits": "linux",
+      "cacheVariables": {
+        "YSP_TRACE_RING": "ON"
+      }
+    },
+    {
+      "name": "linux-tracy",
+      "displayName": "As linux, the player and the examples with YRT_TRACY, on demand (fetches Tracy)",
+      "inherits": "linux",
+      "cacheVariables": {
+        "YSP_TRACY": "ON"
+      }
+    },
+    {
       "name": "clang",
       "displayName": "Linux, clang, Debug",
       "inherits": "linux-base",
@@ -152,6 +168,8 @@
     { "name": "mingw",         "inherits": "build-windows", "configurePreset": "mingw" },
     { "name": "linux",         "inherits": "build-linux",   "configurePreset": "linux" },
     { "name": "linux-ffmpeg",  "inherits": "build-linux",   "configurePreset": "linux-ffmpeg" },
+    { "name": "linux-trace-ring", "inherits": "build-linux", "configurePreset": "linux-trace-ring" },
+    { "name": "linux-tracy",   "inherits": "build-linux",   "configurePreset": "linux-tracy" },
     { "name": "clang",         "inherits": "build-linux",   "configurePreset": "clang" },
     { "name": "sanitizers",    "inherits": "build-linux",   "configurePreset": "sanitizers" },
     { "name": "nothreads-cxx", "inherits": "build-linux",   "configurePreset": "nothreads-cxx" },

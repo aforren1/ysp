@@ -24,6 +24,8 @@
  * adapter scale per count (the rig profile has no adapter block, G18);
  * --test-draws FILE writes every leaf's trials and variables without
  * running a frame (tests: the C programs take the player's draws).
+ * --profile (debug; a build with YSP_TRACE_RING): every zone of the frame
+ * loop to DIR/profile.csv; tools/profile_summary.py summarizes it.
  * --hang-at-trial N stops the frame loop in trial N (tests: the panic
  * watchdog's case, tests/player/real_test.py). --test-lose-code N: the
  * screen never writes the Nth code at a flip, as a canceled trigger
@@ -50,6 +52,7 @@ static int usage(void) {
                     "                  [--windowed] [--allow-below-tier ROLE[,ROLE]] [--max-trials N] [--measure]\n"
                     "       --sim only: [--participant SPEC] [--rt S] [--max-seconds N]\n"
                     "                   [--samples FILE] [--sim-gain ROLE=UNITS]... [--test-draws FILE]\n"
+                    "       debug: [--profile] (a YSP_TRACE_RING build)\n"
                     "  SPEC: correct, silent, p=0.8 or script:FILE\n");
     return 2;
 }
@@ -104,6 +107,7 @@ static int run_main(pl_args* ap, int argc, char** argv) {
         else if (!strcmp(s, "--rdk-buffer") && v) { a.rdk_buffer = atoi(v); i++; }
         else if (!strcmp(s, "--samples") && v) { a.samples_path = v; i++; }
         else if (!strcmp(s, "--test-draws") && v) { a.draws_path = v; i++; }
+        else if (!strcmp(s, "--profile")) a.profile = true;
         else if (!strcmp(s, "--sim-gain") && v) {
             /* ROLE=UNITS: the --sim adapter's scale per count (G18 has no
              * rig block for it, 3.19 item 3) */

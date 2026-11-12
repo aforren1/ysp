@@ -9,6 +9,7 @@ target_compile_options(ysp_player_lib PRIVATE ${YSP_WARNINGS})
 # unsafe and asks for its own (C4996)
 target_compile_definitions(ysp_player_lib PUBLIC $<$<C_COMPILER_ID:MSVC>:_CRT_SECURE_NO_WARNINGS _CRT_NONSTDC_NO_DEPRECATE>)
 set_target_properties(ysp_player_lib PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+ysp_profiled(ysp_player_lib)
 
 ysp_add_program(ysp_player ${CMAKE_CURRENT_SOURCE_DIR}/main.c rig methods devices)
 target_link_libraries(ysp_player PRIVATE ysp_player_lib)

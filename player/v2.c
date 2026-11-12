@@ -2030,7 +2030,11 @@ int pl_v2_trial_start(pl_player* p, const yscr_frame* f) {
     for (i = 0; i < v->n_traces; i++) { v->traces[i].nrows = 0; }
     if (v->has_graph) {
         /* 3.6: parameters, the recenter steps at the head, the reset */
-        if (v2_params_apply(p, v) < 0) return -1;
+        int rc;
+        YRT_ZONE(zp, "pl.v2_params");
+        rc = v2_params_apply(p, v);
+        YRT_ZONE_END(zp);
+        if (rc < 0) return -1;
         if (v->def->states && v->def->n_states > 0) {
             const yexp_state* st = &v->def->states[0];
             int k;
@@ -2076,7 +2080,12 @@ int pl_v2_trial_start(pl_player* p, const yscr_frame* f) {
     p->press_pending = false;
     p->in_trial = true;
     if (v->def->states || v->n_rs > 0) {
-        if (v2_enter(p, v, 0, f->onset, f, false) < 0) return -1;
+        /* the first state's lowering: its steps to timeline ops */
+        int rc;
+        YRT_ZONE(ze, "pl.v2_enter");
+        rc = v2_enter(p, v, 0, f->onset, f, false);
+        YRT_ZONE_END(ze);
+        if (rc < 0) return -1;
     }
     if (v->has_graph && v2_hits(p, v, f) < 0) return -1;
     return 0;
@@ -2091,7 +2100,10 @@ int pl_v2_frame_input(pl_player* p, const yscr_frame* f) {
     int ti;
     if (!S) return 0;
     if (!S->t0_set) { S->t0 = f->onset; S->t0_set = true; }
-    while (S->next_smp < S->n_smp && S->t0 + S->smp[S->next_smp].t <= f->onset) {
+    {
+    int fed = 0, rc = 0;
+    YRT_ZONE(zs, "sig.samples");
+    while (rc == 0 && S->next_smp < S->n_smp && S->t0 + S->smp[S->next_smp].t <= f->onset) {
         const struct v2_sample* sm = &S->smp[S->next_smp++];
         yin_event e;
         memset(&e, 0, sizeof e);
@@ -2115,7 +2127,7 @@ int pl_v2_frame_input(pl_player* p, const yscr_frame* f) {
             if (w == v && v->has_graph) {
                 yin_event der[YSIG_QUEUE_CAP];
                 int n, k;
-                if (v2_hits(p, v, f) < 0) return -1;
+                if (v2_hits(p, v, f) < 0) { rc = -1; break; }
                 n = ysig_derived(&w->g, der, YSIG_QUEUE_CAP);
                 for (k = 0; k < n; k++) if (p->tmpl->collector) yrsp_feed(p->tmpl->collector, &der[k]);
             } else {
@@ -2125,6 +2137,11 @@ int pl_v2_frame_input(pl_player* p, const yscr_frame* f) {
                 while (ysig_derived(&w->g, der, YSIG_QUEUE_CAP) > 0) { }
             }
         }
+        fed++;
+    }
+    YRT_ZONE_VALUE(zs, fed);
+    YRT_ZONE_END(zs);
+    if (rc < 0) return -1;
     }
     if (v && v2_timed(p, v, f) < 0) return -1;
     return 0;
@@ -2191,6 +2208,8 @@ static int v2_frame_rows_queue(pl_player* p, pl_v2* v, const yscr_frame* f) {
 static int v2_trace_stream(pl_player* p, pl_v2* v, v2_trace* tr);
 
 typedef struct v2_srow_data { int32_t trial; int32_t tier; int32_t device; int32_t pad; int64_t frame, planned, t; double v[32]; } v2_srow_data;
+/* the writer's side buffer holds one in each slot (pl_wq_push_row) */
+typedef char v2_srow_fits[sizeof(v2_srow_data) <= PL_WQ_ROW_BYTES ? 1 : -1];
 
 static int v2_frame_row_write(pl_player* p, const v2_frow* fr, int64_t onset, bool have) {
     pl_v2_session* S = p->v2s;
@@ -2210,8 +2229,8 @@ static int v2_frame_row_write(pl_player* p, const v2_frow* fr, int64_t onset, bo
         if (ysig_value_at(&v->g, tr->item_node[k], have ? onset : fr->planned, &val) < 0) val = *ysig_value_of(&v->g, tr->item_node[k]);
         for (l = 0; l < tr->item_lanes[k] && c < 32; l++) row.v[c++] = val.v[l];
     }
-    if (yds_write_stream(&p->ds, tr->stream, &row) < 0) { pl_fail(p, "the stream '%s': %s", tr->def->name, yds_error(&p->ds)); return -1; }
-    return 0;
+    /* the writer's: a real run's frame thread never calls write() */
+    return pl_wq_push_row(p, tr->stream, &row, sizeof row);
 }
 
 /* Frame rows whose record came; with all, every one left (planned_s only). */
@@ -2262,7 +2281,16 @@ int pl_v2_frame_eval(pl_player* p, const yscr_frame* f) {
         fi.poll_ns = f->onset;
         fi.has_poll = true;
         pl_v2_values(p, ytl_values(&p->tl));
-        if (ysig_frame(&v->g, &fi) < 0) { pl_fail(p, "template '%s': ysig_frame", v->def->name); return -1; }
+        {
+            /* the graph's frame, its node count the zone's value (sig.h has
+             * no zones of its own: it does not include ysp/rt.h) */
+            int rf;
+            YRT_ZONE(zs, "sig.frame");
+            YRT_ZONE_VALUE(zs, v->g.n);
+            rf = ysig_frame(&v->g, &fi);
+            YRT_ZONE_END(zs);
+            if (rf < 0) { pl_fail(p, "template '%s': ysig_frame", v->def->name); return -1; }
+        }
         for (;;) {
             int ev0 = v->ev0, ev1 = v->ev1, cur = v->cur;
             bool endp = v->cur == V2_END;
@@ -2282,7 +2310,13 @@ int pl_v2_frame_eval(pl_player* p, const yscr_frame* f) {
             }
         }
     }
-    if (v2_frame_rows_queue(p, v, f) < 0) return -1;
+    {
+        int rc;
+        YRT_ZONE(zq, "pl.v2_frame_rows");
+        rc = v2_frame_rows_queue(p, v, f);
+        YRT_ZONE_END(zq);
+        if (rc < 0) return -1;
+    }
     if (v->end_pending) {
         v->end_pending = false;
         v->ended = true;
@@ -2765,7 +2799,7 @@ static int v2_traces_end(pl_player* p, pl_v2* v) {
                 for (l = 0; l < tr->item_lanes[m]; l++, c++) row.v[c] = tr->rv[k * 4 + c];
             row.tier = tr->rtier[k];
             row.device = (int32_t)tr->rdev[k];
-            if (yds_write_stream(&p->ds, tr->stream, &row) < 0) { pl_fail(p, "the stream '%s': %s", tr->def->name, yds_error(&p->ds)); return -1; }
+            if (pl_wq_push_row(p, tr->stream, &row, sizeof row) < 0) return -1;
         }
         tr->nrows = 0;
     }
@@ -2874,12 +2908,17 @@ bool pl_v2_reads(pl_player* p, const yexp_template* t, const char* name) {
 
 int pl_v2_streams(pl_player* p) {
     pl_v2_session* S = p->v2s;
-    int ti, i;
+    int ti, i, n = 0;
     if (!S) return 0;
     for (ti = 0; ti < S->n_t; ti++) {
         pl_v2* v = S->t[ti];
         if (!v) continue;
-        for (i = 0; i < v->n_traces; i++) if (v2_trace_stream(p, v, &v->traces[i]) < 0) return -1;
+        for (i = 0; i < v->n_traces; i++, n++) if (v2_trace_stream(p, v, &v->traces[i]) < 0) return -1;
+    }
+    /* a trace's rows are wider than the writer's job (pl_wq_push_row) */
+    if (n > 0 && p->wq && !p->wq_rows) {
+        p->wq_rows = (unsigned char*)pl_alloc(p, (size_t)PL_WRITE_QUEUE * PL_WQ_ROW_BYTES);
+        if (!p->wq_rows) return -1;
     }
     return 0;
 }
