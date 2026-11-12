@@ -1,6 +1,6 @@
 # ysp/experiment.h
 
-Status: v0.3.3, 2026-11-12. The header's top comment is the reference for
+Status: v0.4.0, 2026-11-12. The header's top comment is the reference for
 the calls (USAGE, THE CHECKED FORM, REFUSALS, THE HOST, CANONICAL BYTES,
 BOUNDS AND MEMORY). This page records why the header exists, the format's
 defaults table, the decisions, and the results.
@@ -325,6 +325,8 @@ reading below and marks it in the code as "finding Fn". The lines are of
 | F34 | 3.11 rule 10, l.1966; 3.13 `response_ends_trial` | Whether the response exit that `response_ends_trial` adds makes a state "a state with exits"; what a response's deadline does to `on: "response"` exits; what happens when the states reach `end` while the response's window is open | DECIDED (2026-11-12, the user, "wait like version 1"; experiment_format.md D20): (1) the added exit does not make a state one with exits; (2) a press or the deadline takes the `on: "response"` exits, own, shared and the added one, the deadline with outcome `timeout` unless the exit gives one; (3) a trial whose states reach `end` while the window is open (its `from` shown, or shown by a table the trial ran and not removed, and the response not ended) waits for the response's end, then ends; a `from` never shown opens no window. The player's reading where the decision is silent: a window with no deadline that a press does not end is closed by the trial's end. The loader's rules agree with no change: the cycle rule and the F16 search count only the author's exits, and `timeout` was a level wherever a response exit with no outcome can reach `end` |
 | F35 | 3.11 rule 9, l.1981; 2.5 `after` | An events template whose `until` times out before the response's `from` is shown | The events end there with outcome `timeout`; `after` follows at once, since the response can no longer end. A response whose `from` has landed, or that a part's table shows (it can land in the frame the events end), is waited for, as 2.5 says: `after` starts at the later of the events' end and the response's end. A part's change is no exit: earlier parts' events and tweens go on, as version 1's `to` runs into `after` |
 | F36 | 3.12 steps `set`, `to`, `then`; ysp/timeline.h TRACKS | A property that one state tweens and another sets by a constant | Refused at load, naming the property: a channel is driven by a track or by events, never both; version 1 refuses it within its one table, and across states it stopped the session at the second state's entry. Rule 8's stop keeps the tween's track, so the channel is never free for a set |
+| F37 | 2.6 `response_ends_trial`, `duration_s`, `max_responses`; 3.13 | A response that a press does not end, with no deadline and no count, has nothing that ends it | DECIDED (2026-11-12, the user; experiment_format.md 2.6): refused at load by name in both versions (ysp/experiment.h 0.4.0). Applied to key responses. Not applied to signal choices, whose defaults are exactly that and which the 3.18 examples use; the user to decide (experiment_format.md 3.13 note). One good corpus file was such a key response: `v2_requeue_set.json` now gives `duration_s` 2 |
+| F38 | 3.11 rule 8, l.1972 | An event of the state's steps due at the exact time of the exit taken | The player's reading: at the exit's time the exit wins. Events strictly before it happened and land in the frame's evaluate (a flag among them holds for the next state at once); events at or after it are removed. A hit enters a state between frames: its steps count from the hit's time and its after_s from the entry frame's onset (item 4, F3), so a step 0.31 s in and an after_s 0.3 can land 2 ms before the exit, and the step stays |
 
 ## Known gaps
 
@@ -339,6 +341,19 @@ reading below and marks it in the code as "finding Fn". The lines are of
 | A message about a lane | Names the role or control without its lane (`'hand' gives 1 lane` for `hand.x`) |
 
 ## Results
+
+### v0.4.0: F37, F26 completed (2026-11-12)
+
+F37 (decided): a key response that nothing ends is refused, in both
+versions; bad corpus files `f37_persist_forever` (version 1) and
+`v2_f37_persist_forever`. Of the repository's definitions only the good
+corpus file `v2_requeue_set.json` was such a response; it now gives
+`duration_s` 2 (its golden dump with it). No v1 file, example or player
+pack is refused. F26 completed: a `signal_lost` and a region whose
+`stay_s` rounds to 0 ns do not wait; a leaf whose levels for a variable
+`stay_s` that a cycle needs hold 0 is refused (`stay_cycle_`, a struct
+change). Linux desktop, gcc 12.2: the unit test passes; mutants f37-01,
+f26-05 to f26-07.
 
 ### v0.3.3: F26, a cycle on regions with stay_s 0 (2026-11-12)
 

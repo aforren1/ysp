@@ -1,0 +1,66 @@
+{
+  "format": "ysp-experiment",
+  "version": 2,
+  "roles": {
+    "hand": {
+      "type": "position2d_relative",
+      "units": "display_px"
+    }
+  },
+  "stimuli": {
+    "s": {
+      "kind": "shape"
+    }
+  },
+  "note": "F26 completed (2026-11-12): a signal_lost is met at its arm when the signal is already lost, so it does not wait.",
+  "trials": {
+    "t": {
+      "controls": {
+        "lost": {
+          "control": "signal_lost",
+          "of": "hand",
+          "after_s": 0.1
+        }
+      },
+      "exits": [
+        {
+          "after_s": 2,
+          "to": "end",
+          "in": [
+            "b"
+          ]
+        }
+      ],
+      "states": [
+        {
+          "name": "a",
+          "exits": [
+            {
+              "on": "lost",
+              "to": "b"
+            }
+          ]
+        },
+        {
+          "name": "b",
+          "exits": [
+            {
+              "if": "$practice",
+              "to": "a"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "timeline": [
+    {
+      "name": "m",
+      "trial": "t",
+      "rules": [
+        "practice 1",
+        "reps 1"
+      ]
+    }
+  ]
+}

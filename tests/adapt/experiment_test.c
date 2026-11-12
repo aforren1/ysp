@@ -1669,6 +1669,36 @@ static void run_walk_box(void) {
     }
 }
 
+/* F37 (decided 2026-11-12): a response that a press does not end, with no
+ * deadline and no count, is refused; a deadline, a count, or a press that
+ * ends it loads; in both versions. */
+static void run_f37(void) {
+    static yexp_report r;
+    static const struct { const char* rsp; int ok; } c[] = {
+        { "\"response_ends_trial\":false", 0 },
+        { "\"response_ends_trial\":false,\"duration_s\":0", 0 },
+        { "\"response_ends_trial\":false,\"max_responses\":1", 1 },
+        { "\"response_ends_trial\":false,\"duration_s\":1", 1 },
+        { "\"response_ends_trial\":true", 1 },
+        { "\"duration_s\":0", 1 },
+    };
+    size_t k;
+    int ver;
+    for (ver = 1; ver <= 2; ver++)
+        for (k = 0; k < sizeof c / sizeof c[0]; k++) {
+            char doc[700];
+            int rc;
+            snprintf(doc, sizeof doc,
+                     "{\"format\":\"ysp-experiment\",\"version\":%d,\"devices\":{\"r\":{\"direction\":\"in\",\"family\":[\"keyboard\"],\"required\":true}},"
+                     "\"stimuli\":{\"s\":{\"kind\":\"shape\"}},\"trials\":{\"t\":{\"events\":[{\"on\":\"s\"}],"
+                     "\"response\":{\"role\":\"r\",\"choices\":[\"f\"],\"from\":\"s\",%s}}},\"timeline\":[{\"name\":\"m\",\"trial\":\"t\"}]}",
+                     ver, c[k].rsp);
+            rc = load_rc(doc, NULL, &r);
+            if (c[k].ok) CHECK2(rc == YEXP_OK, "F37: a response that something ends loads", doc);
+            else CHECK2(rc == YEXP_ERR_REFUSED && r.n_diags && strstr(r.diags[0].msg, "nothing ends this response"), "F37: a response that nothing ends refused", doc);
+        }
+}
+
 int main(void) {
     const char* env = getenv("YEXP_CORPUS");
     if (env) g_corpus = env;
@@ -1677,6 +1707,7 @@ int main(void) {
     run_numbers();
     run_review();
     run_walk_box();
+    run_f37();
     run_host();
     run_v2();
     run_v2_linear();

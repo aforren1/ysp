@@ -1875,16 +1875,16 @@ id = "v-49"
 name = "a step end no edge"
 test = "experiment"
 why = "Finding F5: a no-exit state goes on."
-find = '''                    if (st->n_exits == 0 && !yexp__in_shared(t, u) && !(f26e ? yexp__steps_wait(st->steps, st->n_steps) : yexp__steps_until(st->steps, st->n_steps)) && u + 1 < n) {'''
-replace = '''                    if (0) {'''
+find = '''                    if (st->n_exits == 0 && !yexp__in_shared(t, u) && u + 1 < n &&'''
+replace = '''                    if (0 &&'''
 
 [[mutant]]
 id = "v-50"
 name = "an until does not wait"
 test = "experiment"
 why = "Its exit is on a hit."
-find = '''                    if (st->n_exits == 0 && !yexp__in_shared(t, u) && !(f26e ? yexp__steps_wait(st->steps, st->n_steps) : yexp__steps_until(st->steps, st->n_steps)) && u + 1 < n) {'''
-replace = '''                    if (st->n_exits == 0 && !yexp__in_shared(t, u) && u + 1 < n) {'''
+find = '''                        !(w->level ? yexp__steps_wait_(st->steps, st->n_steps, w, &nc) : yexp__steps_until(st->steps, st->n_steps))) {'''
+replace = '''                        1) {'''
 
 [[mutant]]
 id = "v-51"
@@ -2466,15 +2466,15 @@ id = "f26-01"
 name = "a region with stay_s 0 waits"
 test = "experiment"
 why = "F26 (decided 2026-11-12): bad/v2_cycle_now*.json."
-find = '''    if (on->kind != YEXP_REF_CONTROL || !on->control || on->control->kind != YEXP_REGION) return false;'''
-replace = '''    return false;'''
+find = '''    if (on->control->kind != YEXP_REGION) return 0;'''
+replace = '''    return 0;'''
 
 [[mutant]]
 id = "f26-02"
 name = "the shared exits not walked"
 test = "experiment"
 why = "F26: bad/v2_cycle_now_shared.json."
-find = '''                    if (!f26e || e->after || !yexp__now_region(&e->on) || e->to.kind != YEXP_REF_STATE) continue;'''
+find = '''                    if (!w->level || e->after || e->to.kind != YEXP_REF_STATE || !yexp__edge_now(&e->on, w, &nc)) continue;'''
 replace = '''                    continue;'''
 
 [[mutant]]
@@ -2482,15 +2482,55 @@ id = "f26-03"
 name = "an until on a region with stay_s 0 waits"
 test = "experiment"
 why = "F26: bad/v2_cycle_until_now.json (the old v2_instant_shared)."
-find = '''        if (steps[i].op == YEXP_UNTIL && !yexp__now_region(&steps[i].target)) return true;'''
-replace = '''        if (steps[i].op == YEXP_UNTIL) return true;'''
+find = '''        if (!yexp__edge_now(&steps[i].target, w, &x)) return true;'''
+replace = '''        return true;'''
 
 [[mutant]]
 id = "f26-04"
 name = "one walk with the F26 edges"
 test = "experiment"
 why = "F26: bad/v2_cycle_over.json keeps the message of a cycle that never waits."
-find = '''    yexp__state_cycles_(c, t, telem, false);
-    if (c->r->n_errors == before) yexp__state_cycles_(c, t, telem, true);'''
-replace = '''    (void)before;
-    yexp__state_cycles_(c, t, telem, true);'''
+find = '''    yexp__state_cycles_(c, t, telem, &w);
+    if (c->r->n_errors != before) return;
+    w.level = 1;'''
+replace = '''    w.level = 1;'''
+
+[[mutant]]
+id = "f37-01"
+name = "a response that nothing ends loads"
+test = "experiment"
+why = "F37 (decided 2026-11-12): bad/f37_persist_forever.json, bad/v2_f37_persist_forever.json."
+find = '''    if (!r->ends_trial && r->max_responses == 0 && (!r->duration || (r->duration->kind == YEXP_V_NUMBER && yexp__ns0(r->duration))))'''
+replace = '''    if (0)'''
+
+[[mutant]]
+id = "f37-02"
+name = "F37 counts max_responses as nothing"
+test = "experiment"
+why = "F37: a count ends the window (the corpus' max_responses files load)."
+find = '''    if (!r->ends_trial && r->max_responses == 0 && (!r->duration'''
+replace = '''    if (!r->ends_trial && (!r->duration'''
+
+[[mutant]]
+id = "f26-05"
+name = "a signal_lost waits"
+test = "experiment"
+why = "F26 completed: bad/v2_cycle_signal_lost.json."
+find = '''    if (on->control->kind == YEXP_SIGNAL_LOST) return 1;'''
+replace = ''''''
+
+[[mutant]]
+id = "f26-06"
+name = "a leaf's zero level of a variable stay_s not refused"
+test = "experiment"
+why = "F26 completed: bad/v2_cycle_stay_var.json."
+find = '''            if (x < 0.5e-9 && x > -0.5e-9) { zero[nz++] = t->stay_cycle_[i]; break; }'''
+replace = ''''''
+
+[[mutant]]
+id = "f26-07"
+name = "the template keeps no cycle's variable stay_s"
+test = "experiment"
+why = "F26 completed: the leaf's check reads t->stay_cycle_ (bad/v2_cycle_stay_var.json)."
+find = '''        ((yexp_template*)t)->n_stay_cycle_ = w.n_out;'''
+replace = ''''''

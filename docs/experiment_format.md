@@ -530,6 +530,15 @@ that structure; it does not invent a new one.
   The player keeps its stop after 64 state changes at one time as a
   safety net that a loaded file does not reach.
 
+  Completed (2026-11-12): what counts as met at its arm is every control
+  the player lowers with entry `now`: a region whose `stay_s` rounds to 0
+  ns (one rule in the loader and the player), and a `signal_lost` (3.7's
+  "hits when the test becomes true" is read as: the test is true from its
+  arm when the signal is already lost, so the hit is at the arm, entry
+  `now`). A region whose `stay_s` is a variable is refused when a leaf's
+  known levels of the variable hold 0; a value only a session gives (a
+  session field) is refused by the player at the trial's start, by name.
+
   DECIDED (2026-11-12, the user; format finding F34 of experiment.md),
   "wait like version 1", qualifying 3.11 rule 10 and rule 7 above:
   1. The exit to `end` that `response_ends_trial` adds to every state
@@ -1121,6 +1130,15 @@ session.
 | `max_responses`, `allow_held_key`, `wait_for_key_release` | the `yrsp_desc` fields |
 | `trigger` | `{"role": R, "code": VALUE}`: a response rule on the role's output (`ydev_rule`; G8, closed): `yrsp_rule_choices()` with a code per choice, the rule in the response role's `desc.rule`, `yrsp_rule_arm()` and `yrsp_rule_window()` each trial, `yrsp_rule_sent()` before `yrsp_finish()`: `rsp_flags` has `YRSP_R_SENT_MISMATCH` (0x400) when a code went out that the final response does not match (an anticipation after the final onset, a late press, another choice, a press the collector refused) or a response has no code. A keyboard role has no reader thread of ysp/device.h: `ydev_out_pulse()` when the frame loop sees the response |
 
+DECIDED (2026-11-12, the user; format finding F37 of experiment.md): a
+response with `response_ends_trial` false, no `duration_s` (left out, or 0)
+and `max_responses` 0 has nothing that ends it, so the trial would never
+end. The loader refuses it by name, in both format versions: "give
+`duration_s`, `max_responses`, or `response_ends_trial` true". This changes
+version 1: a file that loaded before can be refused (ysp/experiment.h
+0.4.0). A `duration_s` from a variable is taken as a deadline. Files that
+still load keep their bytes and experiment ID.
+
 ### 2.7 Stimuli
 
 | `kind` | Lowers to | Resource keys |
@@ -1499,13 +1517,13 @@ not name keeps its part 2 meaning, type and default.
 
 Note (2026-11-11, updated 2026-11-12): ysp/experiment.h (0.3.0 on) reads
 version 2 into its checked form and the pack tool (0.9.0) builds it. The
-player (0.3.0 on, 0.4.0 now) lowers version 2. A definition with a signal
+player (from 0.3.0; docs/player.md has the current version) lowers version 2. A definition with a signal
 role runs on `--sim` only, with a scripted participant for the roles
 (3.19): a real run refuses the role by name until the rig profile has its
 adapter block (G18). A version 2 definition with no signal role runs for
 real as well. Where this part is silent or not exact, the loader's reading
 is listed in [experiment.md](experiment.md), "Gaps found in the format",
-F1 to F15, and the player's is F19 to F36 there.
+F1 to F15, and the player's is F19 to F38 there.
 
 ### 3.1 What version 2 adds
 
@@ -2074,7 +2092,15 @@ stimulus's onset. A crossing before that onset is EARLY, and the
 collector needs a return within `onset` before the next crossing counts
 (response.h, CROSSINGS), so a trial with an early crossing usually has
 no response. The row adds `rsp_role` (3.15). A key response in a
-template with `states` arms at the trial's first frame, as in 2.5. An
+template with `states` arms at the trial's first frame, as in 2.5.
+
+Note (2026-11-12): F37 (decided, 2.6) refuses a key response that nothing
+ends, in version 2 too. The loader does not apply it to signal choices: by
+the defaults above a signal response is `response_ends_trial` false with
+no `duration_s`, which F37 would refuse, and the two 3.18 worked examples
+and the player's packs are such responses (the trial's states end them).
+The player's reading for those stands: the trial's end closes the window.
+Whether F37 covers signal choices is for the user to decide. An
 exit on an early press needs F3 in ysp/response.h (D20 rule 7; D31).
 
 ### 3.14 Variables

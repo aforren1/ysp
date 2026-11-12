@@ -681,6 +681,7 @@ Purpose: Reads an experiment definition of format version 1 or 2 into a checked,
 
 Status:
 
+- v0.4.0 (2026-11-12): F37 decided: a key response that nothing ends (response_ends_trial false, no duration_s, max_responses 0) is refused in both versions; F26 completed (signal_lost, stay_s rounding to 0 ns, a variable stay_s whose levels hold 0). Struct change (stay_cycle_). [Design notes](experiment.md).
 - v0.3.3 (2026-11-12): format finding F26 decided (D20 rule 6): an exit or an until on a region with stay_s 0 does not wait, and a cycle with no other waiting exit is refused by name. Three new refusal files; mutants f26-01 to f26-04. No struct change. [Design notes](experiment.md).
 - v0.3.2 (2026-11-12): comment only: STATUS says a version 2 file with no signal role runs in a real window too. No code change.
 - v0.3.1 (2026-11-11): a walk2d's step against half the box's diagonal by hypot(), as ysp/trials.h 0.8.1 (a box of 1e-200 refused every step; one of 1e200 overflowed). No struct change. 6 boxes in the unit test; mutants v031-01 and v031-02 killed. [Design notes](experiment.md).

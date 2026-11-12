@@ -10,7 +10,7 @@
       "states": [
         { "name": "show", "steps": [{ "on": "s" }], "exits": [{ "on": "in", "to": "end", "outcome": "hit" }, { "after_s": 2, "to": "end", "outcome": "miss" }] }
       ],
-      "response": { "role": "kb", "choices": ["f"], "from": "s", "key_answer": "f", "response_ends_trial": false },
+      "response": { "role": "kb", "choices": ["f"], "from": "s", "key_answer": "f", "response_ends_trial": false, "duration_s": 2 },
       "requeue_outcomes": ["miss", "correct"]
     }
   },

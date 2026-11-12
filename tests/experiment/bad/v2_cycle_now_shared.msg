@@ -1,1 +1,1 @@
-34:9: template 't': states 'a' and 'b' are on a cycle whose only waiting exits are regions with stay_s 0, which are met at their arm while the test holds; give such a region stay_s above 0 (D20 rule 6, F26)
+34:9: template 't': states 'a' and 'b' are on a cycle whose only waiting exits are met at their arm while their test holds (a region with stay_s 0, or a signal_lost); give such a region stay_s above 0 (D20 rule 6, F26)
