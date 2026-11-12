@@ -204,6 +204,10 @@ struct pl_v2 {
     int arm_wait_id;           /* that mark's event id                       */
     int from_ch;               /* the response's from: its visible channel, -1 */
     bool from_pending;         /* a table of this trial shows `from`         */
+    bool resp_ended;           /* the key response's window ended            */
+    bool end_wait;             /* F34: the states reached `end`; the trial
+                                * waits for the response's end              */
+    int64_t end_wait_t, resp_dur;
     int64_t last_eval_rel;     /* the last evaluated frame's base time: a
                                 * stopped tween holds what it wrote there    */
     /* the flip records' onsets of the trial's frame times (a time column
@@ -1965,6 +1969,21 @@ static void v2_resp_arm(pl_player* p, pl_v2* v, int64_t t) {
     }
 }
 
+/* The trial's end at t, as version 1's end MARK (rule 10). */
+static int v2_end_mark(pl_player* p, pl_v2* v, int64_t t) {
+    ytl_op o[2];
+    int rc;
+    memset(o, 0, sizeof o);
+    o[0].op = YTL_OP_AT;
+    o[0].t_ns = t - v2_anchor(p);
+    o[1].op = YTL_OP_MARK;
+    o[1].code = PL_MARK_END;
+    p->q = ytl_seq_on(&p->tl, PL_BASE_TRIAL);
+    rc = ytl_run(&p->q, o, 2);
+    if (rc != 0 || p->q.err) { pl_fail(p, "template '%s': the end: %s", v->def->name, ytl_strerror(rc ? rc : p->q.err)); return -1; }
+    return 0;
+}
+
 /* Whether s is one of a state's head recenter steps (3.6, 3.12). */
 static bool v2_head_recenter(const yexp_state* st, const yexp_step* s) {
     int k;
@@ -2013,20 +2032,21 @@ static int v2_enter(pl_player* p, pl_v2* v, int rs, int64_t t, const yscr_frame*
             return v2_after(p, v);
         }
         if (rs == V2_END) {
-            /* the end lands as version 1's end MARK (rule 10) */
-            ytl_op o[2];
-            int rc;
             v->cur = V2_END;
-            memset(o, 0, sizeof o);
-            o[0].op = YTL_OP_AT;
-            o[0].t_ns = t - v2_anchor(p);
-            o[1].op = YTL_OP_MARK;
-            o[1].code = PL_MARK_END;
-            p->q = ytl_seq_on(&p->tl, PL_BASE_TRIAL);
-            rc = ytl_run(&p->q, o, 2);
-            if (rc != 0 || p->q.err) { pl_fail(p, "template '%s': the end: %s", v->def->name, ytl_strerror(rc ? rc : p->q.err)); return -1; }
             v->hit_entry = hit;
-            return 0;
+            /* F34 (3): an open response window (its from landed or a table
+             * shows it, and it has not ended) holds the end; a from never
+             * shown opened no window, so nothing waits */
+            /* a window that can end on its own: a press ends it, or it has a
+             * deadline; a persisting one with no deadline is closed by the
+             * trial's end, as before (else nothing would end the trial) */
+            if (v->def->response && p->responding && !v->resp_ended && (p->from_landed || v->from_pending) &&
+                (v->def->response->ends_trial || v->resp_dur > 0)) {
+                v->end_wait = true;
+                v->end_wait_t = t;
+                return 0;
+            }
+            return v2_end_mark(p, v, t);
         }
         r = &v->rs[rs];
         if (r->first && r->def >= 0) {
@@ -2232,6 +2252,8 @@ static int v2_take(pl_player* p, pl_v2* v, const v2_exit* x, int64_t t, const ys
                         v->flags[(e->code - PL_MARK_FLAG) / 2] = ((e->code - PL_MARK_FLAG) & 1) != 0;
                     continue;
                 }
+                /* a removed onset of `from` no longer opens the window */
+                if (e->kind == YTL_ONSET && e->target == v->from_ch && !p->from_landed) v->from_pending = false;
                 (void)ytl_remove(&p->tl, id);
             }
         if (!stays && v->def->states) {
@@ -2384,6 +2406,7 @@ int pl_v2_trial_start(pl_player* p, const yscr_frame* f) {
     v->n_tw = 0;
     v->n_frz = 0;
     v->from_pending = false;
+    v->resp_ended = v->end_wait = false;
     v->last_eval_rel = 0;
     v->events_end_rel = v->resp_bt = 0;
     for (i = 0; i < v->n_states; i++) { v->visits[i] = 0; v->state_onset[i] = -1; v->state_frame[i] = v->state_recf[i] = -1; }
@@ -2425,6 +2448,7 @@ int pl_v2_trial_start(pl_player* p, const yscr_frame* f) {
         int64_t dur = 0, minrt = 0;
         yrsp_collector* c = p->tmpl->collector;
         if (pl_eval_ns(p, &p->env, r->duration, &dur) < 0 || pl_eval_ns(p, &p->env, r->min_rt, &minrt) < 0) return -1;
+        v->resp_dur = dur;
         /* signal choices with a from: armed again there (D34 (c)); this
          * arm only clears the last trial's result */
         yrsp_arm(c, f->onset);
@@ -2797,13 +2821,31 @@ void pl_v2_on_onset(pl_player* p, const ytl_event* e, int stim) {
 int pl_v2_response(pl_player* p, const yrsp_result* r, const yscr_frame* f);
 int pl_v2_response(pl_player* p, const yrsp_result* r, const yscr_frame* f) {
     pl_v2* v = p->tmpl ? p->tmpl->v2 : NULL;
+    bool responded = (r->flags & YRSP_R_RESPONDED) != 0;
+    int64_t t;
     int k;
-    if (!v || !(r->flags & YRSP_R_RESPONDED)) return 0;
-    v->resp_t = r->t_response;
+    if (!v) return 0;
+    if (responded) v->resp_t = r->t_response;
+    if (v->resp_ended) return 0;   /* the trial's end asks again */
+    v->resp_ended = true;
+    if (v->end_wait) {
+        /* F34 (3): the states reached `end` while the window was open; the
+         * trial ends with the response, as version 1's `after` starts at the
+         * later of the events' end and the response's (2.5) */
+        v->end_wait = false;
+        return v2_end_mark(p, v, f->onset > v->end_wait_t ? f->onset : v->end_wait_t);
+    }
     if (v->cur < 0) return 0;
+    /* F34 (2): a press or the deadline takes the `on: "response"` exits; the
+     * deadline's outcome is "timeout" unless the exit gives one */
+    t = responded ? r->t_response : r->t_onset ? r->t_onset + v->resp_dur : f->onset;
+    if (t < v->entry_t) t = v->entry_t;
     for (k = 0; k < v->rs[v->cur].n_exits; k++)
-        if (v->rs[v->cur].exits[k].kind == X_RESPONSE)
-            return v2_take(p, v, &v->rs[v->cur].exits[k], r->t_response > v->entry_t ? r->t_response : v->entry_t, f, true);
+        if (v->rs[v->cur].exits[k].kind == X_RESPONSE) {
+            v2_exit x = v->rs[v->cur].exits[k];
+            if (!responded && !x.outcome && !x.outcome_text) x.outcome_text = "timeout";
+            return v2_take(p, v, &x, t, f, true);
+        }
     return 0;
 }
 

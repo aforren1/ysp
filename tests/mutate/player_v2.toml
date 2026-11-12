@@ -241,10 +241,10 @@ why = "Re-review E: the off and the flag due by a timed exit in the same frame."
 find = '''                        v->flags[(e->code - PL_MARK_FLAG) / 2] = ((e->code - PL_MARK_FLAG) & 1) != 0;
                     continue;
                 }
-                (void)ytl_remove(&p->tl, id);'''
+                /* a removed onset'''
 replace = '''                        v->flags[(e->code - PL_MARK_FLAG) / 2] = ((e->code - PL_MARK_FLAG) & 1) != 0;
                 }
-                (void)ytl_remove(&p->tl, id);'''
+                /* a removed onset'''
 
 [[mutant]]
 id = "v2-28"
@@ -311,4 +311,56 @@ expect = "survived"
 note = "A guard: on --sim every frame's record comes (--test-record-delay only delays it); a real run's dropped record reaches it. The session's end writes such a row too (pl_v2_finish)."
 why = "F29: the trial rows' bound of 30 frames."
 find = '''        if (rec->index >= S->fpend[i].frame + PL_OUT_WAIT_FRAMES) {'''
+replace = '''        if (0) {'''
+
+[[mutant]]
+id = "v2-36"
+name = "the deadline takes no response exit"
+test = "player"
+why = "F34 (2), decided 2026-11-12 (t_v2_f34 own_resp_exit silent)."
+find = '''    if (v->resp_ended) return 0;   /* the trial's end asks again */'''
+replace = '''    if (v->resp_ended || !responded) return 0;'''
+
+[[mutant]]
+id = "v2-37"
+name = "a deadline exit with no outcome sets none"
+test = "player"
+why = "F34 (2): timeout unless the exit gives one."
+find = '''            if (!responded && !x.outcome && !x.outcome_text) x.outcome_text = "timeout";'''
+replace = ''''''
+
+[[mutant]]
+id = "v2-38"
+name = "states that reach end do not wait for an open window"
+test = "player"
+why = "F34 (3) (window_open_at_end, states_outlast)."
+find = '''                v->end_wait = true;
+                v->end_wait_t = t;
+                return 0;'''
+replace = '''                v->end_wait_t = t;'''
+
+[[mutant]]
+id = "v2-39"
+name = "a from never shown holds the end"
+test = "player"
+why = "F34 (3): a from never shown opens no window (from_never_shown)."
+find = '''            if (v->def->response && p->responding && !v->resp_ended && (p->from_landed || v->from_pending) &&'''
+replace = '''            if (v->def->response && p->responding && !v->resp_ended &&'''
+
+[[mutant]]
+id = "v2-40"
+name = "a persisting window with no deadline holds the end"
+test = "player"
+why = "F34 (3), the player's reading: nothing would end it (t_v2_hand's movement)."
+find = '''                (v->def->response->ends_trial || v->resp_dur > 0)) {'''
+replace = '''                1) {'''
+
+[[mutant]]
+id = "v2-41"
+name = "the 64-change stop removed"
+test = "player"
+expect = "survived"
+note = "A guard since F26 was decided (2026-11-12): the loader refuses a cycle whose only waits are regions with stay_s 0 (experiment.h 0.3.3), so no loaded file reaches it; it stays for a definition the loader's rule misses."
+why = "F26."
+find = '''        if (++v->n_take > 64) {'''
 replace = '''        if (0) {'''

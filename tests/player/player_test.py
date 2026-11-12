@@ -1555,13 +1555,48 @@ def t_v2_review3(ctx):
                   "I: the next tween starts from the frozen value: %s %s" % (r.err[:200], [xs.get(k) for k in (29, 30, 31)]))
 
 
+def t_v2_f34(ctx):
+    # F34, decided 2026-11-12 ("wait like version 1"): a press or the
+    # deadline takes the response exits; states that reach end wait for an
+    # open window; a from never shown opens none (p3rev/tools/v1r.py)
+    dev = {"devices": {"r": {"direction": "in", "family": ["keyboard"], "required": True}}}
+    resp = {"role": "r", "choices": ["left", "right"], "from": "s", "duration_s": 1, "key_answer": "left"}
+    cases = (
+        ("own_resp_exit", {"states": [{"name": "a", "steps": [{"on": "s"}], "exits": [{"on": "response", "to": "end"}]}], "response": resp},
+         ("timeout", 1.0), ("correct", 0.5)),
+        ("shared_resp_exit", {"states": [{"name": "a", "steps": [{"on": "s"}, {"wait_s": 0.2}]}, {"name": "b", "steps": [{"wait_s": 0.2}]}],
+                              "exits": [{"on": "response", "to": "end", "in": ["a", "b"]}], "response": dict(resp, response_ends_trial=False)},
+         ("timeout", 1.0), ("correct", 1.0)),
+        ("window_open_at_end", {"states": [{"name": "a", "steps": [{"on": "s"}, {"wait_s": 0.2}]}], "response": dict(resp, duration_s=2)},
+         ("timeout", 2.0), ("correct", 0.5)),
+        ("states_outlast", {"states": [{"name": "a", "steps": [{"on": "s"}, {"wait_s": 1.5}]}], "response": dict(resp, duration_s=0.8, response_ends_trial=False)},
+         ("timeout", 1.5), ("correct", 1.5)),
+        ("deadline_exit_outcome", {"states": [{"name": "a", "steps": [{"on": "s"}], "exits": [{"on": "response", "to": "b", "outcome": "late_or_not"}]},
+                                              {"name": "b", "steps": [{"wait_s": 0.1}]}], "response": resp},
+         ("late_or_not", 1.1), ("late_or_not", 0.6)),
+        ("deadline_latest_wins", {"states": [{"name": "a", "steps": [{"on": "s"}], "exits": [{"after_s": 0.1, "to": "b", "outcome": "early"}]},
+                                             {"name": "b", "exits": [{"on": "response", "to": "end"}]}], "response": resp},
+         ("timeout", 1.0), ("early", 0.5)),   # a press sets none: the earlier outcome stays (D36)
+        ("from_never_shown", {"states": [{"name": "a", "steps": [{"on": "t"}], "exits": [{"after_s": 0.3, "to": "end"}, {"after_s": 5, "to": "b"}]},
+                                         {"name": "b", "steps": [{"on": "s"}, {"wait_s": 1}]}], "response": dict(resp, duration_s=2)},
+         ("timeout", 0.3), ("timeout", 0.3)),
+    )
+    for nm, t, silent, pressed in cases:
+        d = v2base({"t": t}, [{"name": "l", "trial": "t", "rules": ["reps 2"]}], extra=dev)
+        for part, want in ((["--participant", "silent"], silent), (["--rt", "0.5"], pressed)):
+            r = Run(ctx, "f34_%s_%s" % (nm, part[-1]), d, args=part + ["--max-seconds", "20"])
+            got = [(x["outcome"], float(x["time_elapsed_s"])) for x in r.trials[:1]] if r.rc == 0 else r.err[:200]
+            check(r.rc == 0 and len(r.trials) == 2 and r.trials[0]["outcome"] == want[0] and abs(float(r.trials[0]["time_elapsed_s"]) - want[1]) < 0.002,
+                  "F34 %s (%s): want %s, got %s" % (nm, part[-1], want, got))
+
+
 def t_v2_corpus(ctx):
     # the loader's valid but unusual version 2 files (tests/experiment/good)
     good = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "experiment", "good")
     rig = v2_rig(ctx, None)
     for name, extra, want in (("v2_retry", ["--max-seconds", "20"], "budget"), ("v2_forms", [], "ok"),
                               ("v2_outcomes", [], "ok"), ("v2_requeue_set", [], "ok"), ("v2_requeue_warn", [], "ok"),
-                              ("v2_instant_shared", ["--samples", "pad"], "loop")):
+                              ("v2_instant_shared", ["--samples", "pad", "--max-seconds", "20"], "budget")):
         with open(os.path.join(good, name + ".json")) as f:
             d = json.load(f)
         args = ["--rig", rig]
@@ -1579,12 +1614,12 @@ def t_v2_corpus(ctx):
         r = Run(ctx, name, d, args=args + extra)
         if want == "ok":
             check(r.rc == 0 and len(r.trials) > 0, "%s: exit %d, %d rows: %s" % (name, r.rc, len(r.trials), r.err[:300]))
-        elif want == "loop":
-            # reading F26: a practice trial's cycle meets its until at the arm
-            # (entry now) and moves at one time without end: a named stop
-            check(r.rc == 1 and "state changes at one time" in r.err, "%s: the named stop: exit %d %s" % (name, r.rc, r.err[:300]))
         else:
-            check(r.rc == 1 and "budget" in r.err and len(r.trials) > 0, "%s: runs until the budget: exit %d %s" % (name, r.rc, r.err[:300]))
+            # v2_instant_shared: F26 (decided) gave its until stay_s 0.05; a
+            # practice trial then cycles show and choose at each lift, and
+            # the session runs to its budget rather than stopping at once
+            states = [e for e in r.events if e["kind"] == "state"]
+            check(r.rc == 1 and "budget" in r.err and len(states) > 4, "%s: runs until the budget: exit %d %s" % (name, r.rc, r.err[:300]))
 
 
 TESTS = [t_nested, t_if_unless, t_empty_and_zero, t_loop, t_requeue, t_track_ends, t_lookup_keys, t_triggers, t_after_timing, t_outcomes,
@@ -1593,7 +1628,7 @@ TESTS = [t_nested, t_if_unless, t_empty_and_zero, t_loop, t_requeue, t_track_end
          t_fix_record_inherit, t_fix_backward_at, t_fix_refusals, t_fix_michelson_order, t_fix_texture_vars, t_fix_walk_budget,
          t_fix_data_set, t_fix_check_all_leaves, t_fix_release_order, t_fix_key_var_reapply,
          t_r2_release_other_template, t_r2_yield_draws_nothing, t_r2_low, t_r2_relaxed, t_r4_leaf_loop_done_track, t_r4_requeue_full,
-         t_r5_wait_final, t_r6_allow_below, t_v2_states, t_v2_until, t_v2_hand, t_v2_rule5, t_v2_review2, t_v2_review3, t_v2_corpus]
+         t_r5_wait_final, t_r6_allow_below, t_v2_states, t_v2_until, t_v2_hand, t_v2_rule5, t_v2_review2, t_v2_review3, t_v2_f34, t_v2_corpus]
 
 
 def main():
