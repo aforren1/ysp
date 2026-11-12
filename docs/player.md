@@ -1,6 +1,6 @@
 # The player
 
-Status: v0.7.0, 2026-11-12. It loads a pack, checks its experiment
+Status: v0.8.0, 2026-11-12. It loads a pack, checks its experiment
 definition, lowers the definition onto the ysp headers and runs it: in a
 real window with the participant's keyboard and the rig's devices, or on
 the simulated display (`--sim`). It is a program (`player/`, target
@@ -244,7 +244,7 @@ A real run refuses `--participant` and `--rt` (exit code 2).
 | `correct` (default) | Presses `key_answer` on every trial, `--rt` seconds (default 0.3) after the `from` stimulus's flip |
 | `silent` | Never presses |
 | `p=0.8` | Presses `key_answer` with that probability, else the next choice (drawn from a stream of the session seed) |
-| `script:FILE` | A CSV of `trial_index,response,rt_s,hold_s`, one row per session trial (a response name or an empty field); a trial with no row is silent |
+| `script:FILE` | A CSV of `trial_index,response,rt_s,hold_s` (a response name or an empty field). A trial with no row is silent; a file with only the header makes every trial silent. Several presses a trial (to test `max_responses` above 1): consecutive rows with one trial index, in time order, each `rt_s` from the same `from` onset and at least the row before's `rt_s` + `hold_s` (a key's press follows its release); the player refuses an overlap by name. An empty `response` is a silent trial and that trial's only row |
 
 ## Reference: data
 
@@ -297,7 +297,7 @@ it says), for each version:
 
 | Field | Version 1 | Version 2 |
 |---|---|---|
-| `player_version` | `0.7.0` | `0.7.0` |
+| `player_version` | `0.8.0` | `0.8.0` |
 | `format_version` | 1, the definition's (it was the player's constant 1) | 2 |
 | `headers.sig` | Not written | ysp/sig.h's version |
 | `headers.trials`, `headers.gfx`, `headers.experiment` | The new versions (0.8.1, 0.20.0; experiment 0.5.0 from 0.7.0) | The same |
@@ -385,7 +385,7 @@ A version 2 template lowers to these parts (`player/v2.c`):
 | Signal roles (3.4) | One ysp/sig.h graph a template. Every sample goes to every graph, so an adapter's state (an integrated mouse) stays continuous across templates. `--sim` adapters: a relative role is a raw mouse's counts through an integrate node at `--sim-gain`; an absolute role is a pen's positions through a scale node (F32) |
 | Controls (3.7): `cursor`, `region`, `distance`, `movement`, `peak`, `moving_target`, `trace`, `signal_lost` | Nodes of the graph (`v2_ctl_build()`). A region with no `stay_s` arms with entry `now` (ysp/sig.h 0.3.0, G16); a held one waits. `freeze_at` latches the cursor at the hit. A cursor's `transform` is an affine node whose angle and matrix `ysig_set()` changes per trial (G17) |
 | Stimulus keys that take a signal (`{"signal": ...}`, `when`, `test`, `hit`) | A selector channel per key: the graph's value goes to a bind slot after the timeline's values, and the stimulus's bind reads that slot (`v2_forms_graph()`) |
-| `states`, `exits`, `until` (3.11, D20, D35) | Runtime states with exits of four kinds: a hit, the response, `after_s`, and an instant `if`. A state's steps split at each `until` into one runtime state a part (F3); its `after_s` exits count from the visit's entry frame in every part, an `until`'s timeout from the wait's start. Each part's steps are one timeline op table from its entry time (`v2_enter()`). Exits are taken in rule 4's order (`v2_hits()`, `v2_timed()`). The response (F34, decided 2026-11-12, "wait like version 1"): the exit that `response_ends_trial` adds does not keep a state with no written exits from going on at its steps' end; a press or the deadline takes the `on: "response"` exits (own, shared, the added one), the deadline with outcome `timeout` unless the exit gives one; states that reach `end` while the window is open (its `from` shown, or shown by a table the trial ran, and the response not ended) wait for the response's end, then the trial ends. A `from` never shown opens no window. The response's end is the entry that ended the window (the press with `response_ends_trial`, the `max_responses`-th press or crossing; its release with `wait_for_key_release`), else the window's end, and the exit is taken at that time (`v2_resp_end_time()`). That end goes to whichever state is current at its time: a key response's collector runs before the frame's samples, and `pl_v2_response()` feeds the samples up to the end itself, so its hits, step ends, timed exits and chains through empty or instant states at or before that time go first, in time order, and at one time in rule 4's list order (`v2_hits()`, `v2_feed()`). One state takes the end, once; a pressed response is never scored `timeout`. A key response that nothing ends (no deadline, no count, a press does not end it) is refused at load (F37, decided); a variable `duration_s` that can be 0 is refused at load, and a session field's 0 at the trial's start, before the trial runs, by name, in both versions (`pl_f37_check()`). F37 applies to key responses only (decided): a signal-choice response's window with no deadline closes when the trial ends, since the trial's own steps end it. A signal choice's window takes the trial's `duration_s` and `minimum_valid_rt_s` at every arm. A response's end and an `after_s` exit at one time go by the list order of rule 4: the timed exits run after the response's collector in the frame. A cycle with no SURE wait (every wait a region with `stay_s` rounding to 0 ns, a `stay_s` not known above 0 at load such as a session field, or a `signal_lost`) is refused at load (F26, decided; experiment.h 0.5.0). The player checks nothing at the trial's start for F26; its stop on state changes at one time is an internal guard sized from the template (runtime states, `over` rows and 8), which no loaded file reaches, so a chain of 70 states at one time runs. A `stay_s` from a variable chooses the detect's entry at each trial's start: 0 is `now`, as 3.7 says. Rule 8 (reading F38): an exit at time t removes the events of every part of the visit that have not fired and are due at or after t; the ones due before t land in the frame's evaluate, and a flag among them holds for the next state at once. A tween still running stops at the value it last wrote (the last evaluated frame's), and a tween of the next table on that channel starts from that value. The waiting rows of frame traces are sized at load (64 a frame trace), and so are a visit's tweens and the state lists (no limit on states); more stream names (traces and rdk stimuli) than the data set's 16 are refused at load by name: a legal definition does not stop mid-session on these bounds |
+| `states`, `exits`, `until` (3.11, D20, D35) | Runtime states with exits of four kinds: a hit, the response, `after_s`, and an instant `if`. A state's steps split at each `until` into one runtime state a part (F3); its `after_s` exits count from the visit's entry frame in every part, an `until`'s timeout from the wait's start. Each part's steps are one timeline op table from its entry time (`v2_enter()`); an `at_s` there counts from that entry (3.11 rule 6; after an `until`, from the until's hit, since rule 9 makes the steps after it the next state), an events template's from the trial's start. The steps end at the cursor (rule 7): a step that a backward `at_s` put after it never lands. Exits are taken in rule 4's order (`v2_hits()`, `v2_timed()`). A timed exit (`after_s`, an until's `timeout_s`) is never taken on its state's entry frame, the wait's own for a timeout (F40, decided): it keeps its time and lands on the later of its lead-rule frame and the next frame. A hit that an arm makes at once is taken before the frame's evaluate, whatever started the state (a timed exit, a steps' end, the response's end, a hit), so at the hit's time the exit wins (F38). A state's exits count hits from the visit's entry, in every part; an arm drops the hits of the node's earlier arm that a drain still holds. An `until` on a control that the state's exits also name arms a detect of its own, so the exits' hold is not restarted (F3). An until's timeout has the code after the state's own, shared and added exits (F28). The response (F34, decided 2026-11-12, "wait like version 1"): the exit that `response_ends_trial` adds does not keep a state with no written exits from going on at its steps' end; a press or the deadline takes the `on: "response"` exits (own, shared, the added one), the deadline with outcome `timeout` unless the exit gives one; states that reach `end` while the window is open (its `from` shown in this trial, or still due by any visit's step, and the response not ended) wait for the response's end, then the trial ends. A `from` never shown opens no window. The response's end is the entry that ended the window (the press with `response_ends_trial`, the `max_responses`-th press or crossing; its release with `wait_for_key_release`), else the window's end, and the exit is taken at that time (`v2_resp_end_time()`). That end goes to whichever state is current at its time: a key response's collector runs before the frame's samples, and `pl_v2_response()` feeds the samples up to the end itself, so its hits, step ends, timed exits and chains through empty or instant states at or before that time go first, in time order, and at one time in rule 4's list order (`v2_hits()`, `v2_feed()`). One state takes the end, once; a pressed response is never scored `timeout`. A key response that nothing ends (no deadline, no count, a press does not end it) is refused at load (F37, decided); a variable `duration_s` that can be 0 is refused at load, and a session field's 0 at the trial's start, before the trial runs, by name, in both versions (`pl_f37_check()`). F37 applies to key responses only (decided): a signal-choice response's window with no deadline closes when the trial ends, since the trial's own steps end it. A signal choice's window takes the trial's `duration_s` and `minimum_valid_rt_s` at every arm. A response's end and an `after_s` exit at one time go by the list order of rule 4: the timed exits run after the response's collector in the frame. A cycle with no SURE wait (every wait a region with `stay_s` rounding to 0 ns, a `stay_s` not known above 0 at load such as a session field, or a `signal_lost`) is refused at load (F26, decided; experiment.h 0.5.0). The player checks nothing at the trial's start for F26; its stop on state changes at one time is an internal guard sized from the template (runtime states, `over` rows and 8), which no loaded file reaches, so a chain of 70 states at one time runs. A `stay_s` from a variable chooses the detect's entry at each trial's start: 0 is `now`, as 3.7 says. Rule 8 (reading F38): an exit at time t removes the events of every part of the visit that have not fired and are due at or after t; the ones due before t land in the frame's evaluate, and a flag among them holds for the next state at once. A tween still running stops at the value it last wrote (the last evaluated frame's), and a tween of the next table on that channel starts from that value. The waiting rows of frame traces are sized at load (64 a frame trace), and so are a visit's tweens and the state lists (no limit on states); more stream names (traces and rdk stimuli) than the data set's 16 are refused at load by name: a legal definition does not stop mid-session on these bounds |
 | An events template (no `states`) | Its steps split at each `until` into parts, as a state's do, but a part's change is no exit: the events of earlier parts that have not fired and their running tweens go on, as version 1's `to` runs on into `after`. An `until`'s timeout ends the parts with outcome `timeout`, and removes nothing either. When the parts are done, `after` follows them and the response's end, as version 1 (2.5). The response is waited for when its `from` has landed or a part's table shows it (it can land in the frame the parts end); an `until`'s timeout before any table shows `from` does not wait (F35) |
 | A property both tweened and set by a constant in a template's step lists | Refused at load, naming it: a timeline channel is driven by a track or by events, never both, so version 1 refuses it in one table; across states it would stop the session at the second state's entry (reading F36) |
 | Time columns (`{"time": A, "from": B}`) | A stimulus's, a state's and the end's times are their frames' flip record onsets, as the state rows' are; the row waits for them as it waits for its last frame's record |
@@ -396,12 +396,27 @@ A version 2 template lowers to these parts (`player/v2.c`):
 | `cm` units | ysp/gfx.h's `YGFX_CM` (0.20.0, G14), from the rig profile's `view` |
 | `columns` | Each form read at the row's fill; a `time` column waits for its flip record |
 
-The frame's order (3.10): the samples up to the frame's onset go to the
-graphs and their hits are taken; then the timeline; then `ysig_frame()`
-and its hits; then a second `ytl_evaluate()` for the states that hits
-started on this frame (rule 5); then the draw. A cycle of states that
-moves without end at one time stops the session by name after 64 changes
-(F26).
+The frame's order (3.10): a key response's collector (its end feeds the
+samples up to it, `pl_v2_response()`); the samples up to the frame's
+onset go to the graphs and their hits are taken; the timed exits, then
+the hits their states' arms made at once; the timeline; `ysig_frame()`
+and its hits; a second `ytl_evaluate()` for the states that hits started
+on this frame (rule 5); the draw. The stop on state changes at one time
+is an internal guard sized from the template (F26 refuses the cycles
+that could move without end).
+
+Where the player does not follow 3.11 rule 2's text (the reference
+model's GAP `refound-in-frame`): a hold armed by a state that a frame's
+hit started, which ends before that frame's onset, is found at the next
+frame's `ysig_frame()`, so the next state starts one frame after "the
+first frame whose onset is at or after the hit's time". The arm comes
+after the frame's pass tested its detects, and ysp/sig.h tests a detect
+again only at the next feed or frame; a second `ysig_frame()` on one
+frame would record the frame traces twice. Following the rule needs a
+sig.h change: an arm at a time the graph already knows input up to
+completes the hold against the input's history between the arm and that
+time, the way a sample's feed would. Not done (2026-11-12): it is a
+header change with its own tests and mutants, left for a decision.
 
 A trace's rows go through the data set's writer, as the other rows do: a
 real run's frame thread does not call `write()`. A trace row is wider than
@@ -662,6 +677,23 @@ corpus.
 | Version 1 identity against main (7078e4d) | 438 of 439 CSV files byte-identical (the other the Stroop C program's trials.h version line); `session.json`: versions, `pack_id` (94) and `rig_profile_sha256` (4) |
 | Version 2 data against 0.3.0, the two 3.18 examples | `target_frames` (159 of 160) and `reach_target_frames` (4 of 132) only, as in 0.4.0 |
 | Frame work, CPU 2, six runs each, mean user time | Visuomotor 0.209 s (sd 0.003) against 0.3.0's 0.211 s; bimanual 1.128 s (sd 0.010) against 1.146 s. Largest frame 637 to 641 us against 636 to 646 us, and 1,900 to 1,924 us (one run 2,069 us) against 1,880 to 1,906 us (one run 2,045 us) |
+
+### The reference model's findings and F40 (0.8.0, 2026-11-12)
+
+The same machine. An independent model of version 2 timing (branch
+`v2-model`, `tests/model/`) generated the cases; `t_v2_model` has one
+test a finding.
+
+| Check | Result |
+|---|---|
+| The model's harness (`diff.py`), the v2-model branch at c6a2a38 | Seeds 0 to 1999: 2,000 cases, 268 refusals agreed, 91 hangs agreed, 5 mismatches, all at a GAP (4 `refound-in-frame`, 1 `future-arm-hit`); none outside the GAP list. Seeds 0 to 19,999: 26 mismatches, all at a GAP (21 `refound-in-frame`). The first run of the round, with only items 1 and 3 in: 70 of 2,000, 36 outside the GAP list |
+| `player_test.py` | 55 cases, 0 failures (`t_v2_model` new; `t_v2_rule5` follows F40) |
+| `compare.py`, the six examples | No exact column differs |
+| ctest | Release 122 of 122; ASan and UBSan (`setarch -R`) 121 of 121 |
+| Mutants (`--sim` test) | `player_v2.toml` 69 of 69 as expected (v2-60 to v2-72 new, less two found equivalent and removed with their code; v2-10 now an equivalent guard); `player_run.toml` 60 of 60 (r-v2-09 to r-v2-12 new) |
+| Fuzz, Release, 8 processes | 5,000,000 inputs, 725,751 loaded, 439,487 ran to the end; no input with every deadline given, no states and no open until stopped at the budget. ASan and UBSan: 40,000 inputs, no report |
+| Version 1 identity against main (7078e4d) | 438 of 439 CSV files byte-identical (the other the Stroop C program's version line) |
+| Frame work, CPU 2, six runs each, load average 0.49 at the start and 0.71 at the end (5-minute 4.32) | Visuomotor 0.210 s (sd 0.003) against 0.3.0's 0.211 s; bimanual 1.137 s (sd 0.011) against 1.149 s (sd 0.007). Largest frame 632 to 639 us against 638 to 645 us, and 1,893 to 1,930 us against 1,883 to 1,952 us |
 
 ### The final review (0.7.0, 2026-11-12)
 
