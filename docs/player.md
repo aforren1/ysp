@@ -663,6 +663,21 @@ corpus.
 | Version 2 data against 0.3.0, the two 3.18 examples | `target_frames` (159 of 160) and `reach_target_frames` (4 of 132) only, as in 0.4.0 |
 | Frame work, CPU 2, six runs each, mean user time | Visuomotor 0.209 s (sd 0.003) against 0.3.0's 0.211 s; bimanual 1.128 s (sd 0.010) against 1.146 s. Largest frame 637 to 641 us against 636 to 646 us, and 1,900 to 1,924 us (one run 2,069 us) against 1,880 to 1,906 us (one run 2,045 us) |
 
+### The third re-review and F37 (0.6.0, 2026-11-12)
+
+The same machine. Cases in `t_v2_review4` (the reviewer's `r*.py`,
+pressed and silent where a response is in them).
+
+| Check | Result |
+|---|---|
+| `player_test.py` | 53 cases, 0 failures |
+| `compare.py`, the six examples | No exact column differs; the format classes within their bounds |
+| ctest | Release 122 of 122; ASan and UBSan (`setarch -R`) 121 of 121 |
+| Mutants (`--sim` test) | `player_v2.toml` 49: 47 killed, 2 kept guards; `player_run.toml` r-v2-04 killed; `experiment.toml` 300 of 300 as expected (f37-01, f37-02, f26-05 to f26-07 new, killed) |
+| Fuzz, Release, 8 processes | 5,000,000 inputs, 723,839 loaded, 438,162 ran to the end; 248,039 budget stops, 1 of them with every deadline given, no states and no open until: a trial of 61 s against the 60 s budget, not a hang. ASan and UBSan: 40,000 inputs, no report |
+| Version 1 identity against main (7078e4d) | 438 of 439 CSV files byte-identical (the other the Stroop C program's version line); `session.json`: versions, `pack_id` (94), `rig_profile_sha256` (4). F37 refuses no version 1 file in the repository |
+| Frame work, CPU 2, six runs each, load average 0.33 at the start and 0.48 at the end | Visuomotor 0.210 s (sd 0.003) against 0.3.0's 0.213 s; bimanual 1.151 s (sd 0.010) against 1.143 s (sd 0.009): within the spread. Largest frame 629 to 661 us (one run 1,658 us) against 640 to 649 us, and 1,881 to 1,895 us (one run 2,195 us) against 1,894 to 1,968 us |
+
 ### A real window (2026-11-10)
 
 The machine: the Linux desktop (Debian 12, kernel 6.11.5-liquorix, Xorg
