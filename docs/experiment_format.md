@@ -1459,19 +1459,21 @@ TEXTURE entry name), `type`, `code` and `answer`.
 
 ## Part 3: Reference, version 2
 
-Status: decided 2026-11-11. ysp/experiment.h 0.3.0 reads version 2, and the
-player 0.3.0 lowers it (the note at this part's end). Every rule in this
+Status: decided 2026-11-11. ysp/experiment.h reads version 2, and the
+player lowers it (the note below). Every rule in this
 part comes from D16 to D41 and names its decision. A version 2 definition is a version 1
 definition (part 2) plus the keys of this part: a key that this part does
 not name keeps its part 2 meaning, type and default.
 
-Note (2026-11-11): ysp/experiment.h 0.3.0 reads version 2 into its checked
-form and the pack tool (0.9.0) builds it. The player (0.3.0) lowers version
-2 and runs it on `--sim`, with a scripted participant for the signal roles
-(3.19); a real run with a signal role is refused by name until the rig
-profile has its adapter block (G18). Where this part is silent or not
-exact, the loader's reading is listed in [experiment.md](experiment.md),
-"Gaps found in the format", F1 to F15, and the player's is F19 to F33 there.
+Note (2026-11-11, updated 2026-11-12): ysp/experiment.h (0.3.0 on) reads
+version 2 into its checked form and the pack tool (0.9.0) builds it. The
+player (0.3.0 on, 0.4.0 now) lowers version 2. A definition with a signal
+role runs on `--sim` only, with a scripted participant for the roles
+(3.19): a real run refuses the role by name until the rig profile has its
+adapter block (G18). A version 2 definition with no signal role runs for
+real as well. Where this part is silent or not exact, the loader's reading
+is listed in [experiment.md](experiment.md), "Gaps found in the format",
+F1 to F15, and the player's is F19 to F36 there.
 
 ### 3.1 What version 2 adds
 
@@ -2117,6 +2119,12 @@ flag (3.11 rule 5).
 | `"frame"` | `trial_index`, `frame`, `planned_s`, `t_s` (the flip record's onset), the lanes |
 
 Two templates' traces of one name must have the same columns.
+
+Note (2026-11-12, not part of the decision above): the player 0.4.0 adds a
+`flags` column, the last, to a frame trace: bit 1 when `t_s` is empty (the
+record did not come within 30 frames, or came with no onset), bit 2 when
+the values were read at `planned_s` (the next trial's start came before the
+record). So 0, 1, 2 or 3; reading F29 of experiment.md.
 
 **Signal roles** (D40). Each source sample that a signal role's adapter
 takes is an input row of `events.csv` (`yds_event_from_input()`, `role`

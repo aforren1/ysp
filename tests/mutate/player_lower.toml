@@ -374,3 +374,13 @@ test = "real"
 why = "A rule's definition checks (other choices, other fires a trial) run before any device or the screen opens, so the refusal sends no byte to the trigger box and never sets full screen."
 find = '''pl_roles_tier(p) < 0 || pl_rules_check(p) < 0 || pl_outputs_open(p) < 0) return -1;'''
 replace = '''pl_roles_tier(p) < 0 || pl_outputs_open(p) < 0) return -1;'''
+
+[[mutant]]
+id = "l-v2-01"
+name = "ON and OFF ops not checked for room after the selector ops"
+test = "player"
+expect = "survived"
+note = "A guard: the table is sized at load from pl_ops_bound() x 4 for version 2 (pl_v2_ops_bound()), which no definition here fills; the loader bounds the steps."
+why = "Review item 16."
+find = '''                if (c + 2 > cap) { pl_fail(p, "the op table is full"); return -1; }'''
+replace = ''''''

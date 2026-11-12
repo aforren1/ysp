@@ -216,3 +216,99 @@ test = "player"
 why = "Review item 14 (rv14)."
 find = '''        if (!yexp_sigrole_get(p->def, p->args.gains[i].name)) {'''
 replace = '''        if (0) {'''
+
+[[mutant]]
+id = "v2-25"
+name = "an events template's after waits only for a landed from"
+test = "player"
+why = "Re-review B (t_v2_review3): from as the events' last step lands after their end."
+find = '''    if (v->def->response && p->responding && !v->resp_done && (p->from_landed || v->from_pending)) return 0;'''
+replace = '''    if (v->def->response && p->responding && !v->resp_done && p->from_landed) return 0;'''
+
+[[mutant]]
+id = "v2-26"
+name = "an until after a recenter arms before the recenter lands"
+test = "player"
+why = "Re-review D (3.12)."
+find = '''            if (rid >= 0) { v->arm_wait = rs; v->arm_wait_id = rid; }'''
+replace = '''            if (0) { v->arm_wait = rs; v->arm_wait_id = rid; }'''
+
+[[mutant]]
+id = "v2-27"
+name = "an exit removes events due by its time"
+test = "player"
+why = "Re-review E: the off and the flag due by a timed exit in the same frame."
+find = '''                        v->flags[(e->code - PL_MARK_FLAG) / 2] = ((e->code - PL_MARK_FLAG) & 1) != 0;
+                    continue;
+                }
+                (void)ytl_remove(&p->tl, id);'''
+replace = '''                        v->flags[(e->code - PL_MARK_FLAG) / 2] = ((e->code - PL_MARK_FLAG) & 1) != 0;
+                }
+                (void)ytl_remove(&p->tl, id);'''
+
+[[mutant]]
+id = "v2-28"
+name = "a flag due by an exit's time is not applied before the next state"
+test = "player"
+why = "Re-review E (flag_same_frame, flag_at_entry)."
+find = '''                    if (e->kind == YTL_MARK && e->code >= PL_MARK_FLAG && e->code < PL_MARK_FLAG + 2 * 4096 && (e->code - PL_MARK_FLAG) / 2 < v->def->n_flags)
+                        v->flags[(e->code - PL_MARK_FLAG) / 2] = ((e->code - PL_MARK_FLAG) & 1) != 0;'''
+replace = ''''''
+
+[[mutant]]
+id = "v2-29"
+name = "an events template's part change removes and stops"
+test = "player"
+why = "Re-review F: version 1's to runs on into after."
+find = '''        if (!stays && v->def->states) {'''
+replace = '''        if (!stays) {'''
+
+[[mutant]]
+id = "v2-30"
+name = "the waiting frame rows sized for 2 frames a trace"
+test = "player"
+why = "Re-review G (9 traces, --test-record-delay 8)."
+find = '''    S->cap_fpend = (S->cap_fpend > 0 ? S->cap_fpend : 1) * V2_FRAME_WAIT;'''
+replace = '''    S->cap_fpend = (S->cap_fpend > 0 ? S->cap_fpend : 1) * 2;'''
+
+[[mutant]]
+id = "v2-31"
+name = "a set after a tween of one property not refused"
+test = "player"
+why = "Re-review I (reading F36): it aborted at the state's entry."
+find = '''        if (v2_mix_find(all[i], n_all[i], all, n_all, lists, &stim, &prop)) {'''
+replace = '''        if (0) {'''
+
+[[mutant]]
+id = "v2-32"
+name = "a tween after a stopped one starts from the old track"
+test = "player"
+why = "Re-review I: from the frozen value."
+find = '''                        if (!ops[k].tween.from_set) { ops[k].tween.from = v->frz[j].v; ops[k].tween.from_set = true; }'''
+replace = ''''''
+
+[[mutant]]
+id = "v2-33"
+name = "a sample's x and y not bounded"
+test = "player"
+why = "Review item 14 (rv14 hugeval, inf)."
+find = '''        if (!(t <= V2_SAMPLE_MAX_S) || !isfinite(x) || !isfinite(y) || fabs(x) > V2_SAMPLE_MAX_V || fabs(y) > V2_SAMPLE_MAX_V) {'''
+replace = '''        if (!(t <= V2_SAMPLE_MAX_S)) {'''
+
+[[mutant]]
+id = "v2-34"
+name = "--samples with no signal role ignored"
+test = "player"
+why = "Review item 14 (rv14_v1_samples)."
+find = '''    if (p->args.samples_path && p->def->n_sigroles == 0) {'''
+replace = '''    if (0) {'''
+
+[[mutant]]
+id = "v2-35"
+name = "a frame row whose record never comes waits on"
+test = "player"
+expect = "survived"
+note = "A guard: on --sim every frame's record comes (--test-record-delay only delays it); a real run's dropped record reaches it. The session's end writes such a row too (pl_v2_finish)."
+why = "F29: the trial rows' bound of 30 frames."
+find = '''        if (rec->index >= S->fpend[i].frame + PL_OUT_WAIT_FRAMES) {'''
+replace = '''        if (0) {'''

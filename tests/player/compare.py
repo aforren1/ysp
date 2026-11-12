@@ -75,7 +75,7 @@ def compare(rows_p, rows_c, pairs):
     for pc, cc, klass, why in pairs:
         # a column missing on a side is a failure, even missing on both: two
         # empty columns would compare equal and show nothing
-        missing = [n for n, row in ((pc, rows_p[0]), (cc, rows_c[0])) if rows_p and n not in row]
+        missing = [n for n, row in ((pc, rows_p[0] if rows_p else {}), (cc, rows_c[0] if rows_c else {})) if n not in row]
         if missing:
             report.append(("%s <- %s" % (pc, cc), "column missing: %s" % ", ".join(missing), "FAIL", why))
             bad += 1
