@@ -1,0 +1,102 @@
+# player/v2.c mutants: version 2's lowering and run (tests/player/mut_test.c,
+# whose system tests run tests/player/player_test.py's t_v2_ cases with the
+# mutated player). The comparison with the C programs (compare.py) is not in
+# this test: a mutant that only it sees survives here.
+header = "v2.c"
+
+[test.player]
+source = "tests/player/mut_test.c"
+compiler = "gcc"
+flags = ["-std=c11", "-O1", "-w", "-DYSCR_NO_SDL", "-DPIN_A0=\"x3b4a1c5afe219da5\"", "-I$YSP_MINIAUDIO"]
+libs = ["-lm", "-lpthread", "-ldl"]
+timeout = 300
+env = { YPL_REPO = "{repo}" }
+env_default = { YPL_BIN = "{repo}/build/linux", YPAK = "{repo}/build/linux/pack/ypak" }
+
+[[mutant]]
+id = "v2-01"
+name = "max_visits counts one visit more"
+test = "player"
+why = "D20 rule 12: t_v2_states sees c, c and over."
+find = '''if (st->max_visits > 0 && v->visits[r->def] > st->max_visits) {'''
+replace = '''if (st->max_visits > 0 && v->visits[r->def] > st->max_visits + 1) {'''
+
+[[mutant]]
+id = "v2-02"
+name = "over's state row has the code of a timed exit"
+test = "player"
+why = "Reading F20: over's row has code -2."
+find = '''v2_srow_close(p, v, -2, t);'''
+replace = '''v2_srow_close(p, v, 0, t);'''
+
+[[mutant]]
+id = "v2-03"
+name = "over sets no outcome"
+test = "player"
+why = "D36: over's outcome; t_v2_states wants too_many."
+find = '''v2_outcome(v, st->over_outcome, NULL);'''
+replace = ''''''
+
+[[mutant]]
+id = "v2-04"
+name = "rotation_deg turns clockwise on the screen"
+test = "player"
+why = "y down: ccw on the screen is a negative angle; t_v2_hand's cursor ends at y -5."
+find = '''angle = -x.num;'''
+replace = '''angle = x.num;'''
+
+[[mutant]]
+id = "v2-05"
+name = "an until's timeout sets no outcome"
+test = "player"
+why = "3.11: an until with timeout_s ends with outcome timeout (t_v2_until)."
+find = '''x->outcome_text = "timeout";'''
+replace = '''x->outcome_text = NULL;'''
+
+[[mutant]]
+id = "v2-06"
+name = "outside reads as inside"
+test = "player"
+why = "A region with outside: true hits past its radius (t_v2_hand's out)."
+find = '''YSIG_TEST_GE : YSIG_TEST_LE'''
+replace = '''YSIG_TEST_LE : YSIG_TEST_LE'''
+
+[[mutant]]
+id = "v2-07"
+name = "a flag mark clears where it sets"
+test = "player"
+why = "The flag's mark carries its value in the low bit (t_v2_states' seen)."
+find = '''v->flags[k] = ((e->code - PL_MARK_FLAG) & 1) != 0;'''
+replace = '''v->flags[k] = ((e->code - PL_MARK_FLAG) & 1) == 0;'''
+
+[[mutant]]
+id = "v2-08"
+name = "a sample trace keeps rows before its from"
+test = "player"
+why = "3.7: a trace's rows are its window's (t_v2_hand's path from home)."
+find = '''if (tr->rt[k] < from || tr->rt[k] > to'''
+replace = '''if (tr->rt[k] < INT64_MIN + 1 || tr->rt[k] > to'''
+
+[[mutant]]
+id = "v2-09"
+name = "the sim adapter ignores --sim-gain"
+test = "player"
+why = "F32: a relative role integrates counts at --sim-gain units a count."
+find = '''an[1].p[YSIG_INTEGRATE_GAIN_X] = an[1].p[YSIG_INTEGRATE_GAIN_Y] = S->gain[i];'''
+replace = '''an[1].p[YSIG_INTEGRATE_GAIN_X] = an[1].p[YSIG_INTEGRATE_GAIN_Y] = 1;'''
+
+[[mutant]]
+id = "v2-10"
+name = "a frame's hits run once"
+test = "player"
+why = "Rule 5: a hit that starts a state lands on its frame; the loop runs again (F26's named stop)."
+find = '''            if (++guard > 64) { pl_fail(p, "template '%s': a frame's hits never settle", v->def->name); return -1; }'''
+replace = '''            if (++guard > 1) break;'''
+
+[[mutant]]
+id = "v2-11"
+name = "a region held for stay_s arms with entry now"
+test = "player"
+why = "3.7: a region with no stay_s is true at its arm (entry now, G16); with a hold it waits."
+find = '''fixed0 ? YSIG_ENTRY_NOW : YSIG_ENTRY_ARM'''
+replace = '''YSIG_ENTRY_ARM'''

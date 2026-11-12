@@ -153,6 +153,13 @@ static int run_main(pl_args* ap, int argc, char** argv) {
         fprintf(stderr, "ysp_player: --samples, --sim-gain and --test-draws are for --sim\n");
         return 2;
     }
+#if !defined(YRT_TRACE_RING)
+    /* before the data set exists: a run that cannot profile writes nothing */
+    if (a.profile) {
+        fprintf(stderr, "ysp_player: --profile needs a build with YSP_TRACE_RING (ysp/rt.h's trace ring); this one has no zones\n");
+        return 2;
+    }
+#endif
     if (a.sim && (a.windowed || a.hang_trial || a.lose_code)) { fprintf(stderr, "ysp_player: --windowed, --hang-at-trial and --test-lose-code are for a real run\n"); return 2; }
 #if defined(YSCR_NO_SDL)
     if (!a.sim) { fprintf(stderr, "ysp_player: built without SDL (YSCR_NO_SDL): --sim only\n"); return 2; }

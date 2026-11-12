@@ -1129,8 +1129,11 @@ def t_v2_until(ctx):
     r = Run(ctx, "v2_real", d)
     cmd = [ctx.player, r.pack, "--out", os.path.join(r.dir, "real"), "--field", "participant=3"]
     p2 = subprocess.run(cmd, cwd=r.dir, capture_output=True, text=True, timeout=60)
-    check(p2.returncode == 1 and "G18" in p2.stderr and "signal role 'hand'" in p2.stderr and not os.path.exists(os.path.join(r.dir, "real")),
-          "v2: a real run with a signal role is refused by name: exit %d %s" % (p2.returncode, p2.stderr[:300]))
+    # a player built without SDL (the mutation test's) has no real run; its
+    # in-process check (mut_test.c, case_v2) sees the refusal instead
+    if "built without SDL" not in p2.stderr:
+        check(p2.returncode == 1 and "G18" in p2.stderr and "signal role 'hand'" in p2.stderr and not os.path.exists(os.path.join(r.dir, "real")),
+              "v2: a real run with a signal role is refused by name: exit %d %s" % (p2.returncode, p2.stderr[:300]))
     # an event role below its min_tier in a version 2 definition: refused as
     # version 1 is, before the screen opens
     d2 = v2base({"t": tmpl()}, [{"name": "l", "trial": "t"}])
@@ -1138,8 +1141,9 @@ def t_v2_until(ctx):
     r = Run(ctx, "v2_min_tier", d2, args=["--max-trials", "1"])
     cmd = [ctx.player, r.pack, "--out", os.path.join(r.dir, "real"), "--field", "participant=3"]
     p2 = subprocess.run(cmd, cwd=r.dir, capture_output=True, text=True, timeout=60)
-    check(p2.returncode != 0 and "tier" in p2.stderr and not os.path.exists(os.path.join(r.dir, "real")),
-          "v2: a role below its min_tier is refused: exit %d %s" % (p2.returncode, p2.stderr[:300]))
+    if "built without SDL" not in p2.stderr:
+        check(p2.returncode != 0 and "tier" in p2.stderr and not os.path.exists(os.path.join(r.dir, "real")),
+              "v2: a role below its min_tier is refused: exit %d %s" % (p2.returncode, p2.stderr[:300]))
 
 
 def t_v2_hand(ctx):
@@ -1209,6 +1213,69 @@ def t_v2_hand(ctx):
           "v2 hand: the frame trace's rows and columns: %d %s" % (len(fr), list(fr[0]) if fr else None))
     states = [e["text"] for e in r.events if e["kind"] == "state"]
     check(states[:2] == ["hold", "reach"], "v2 hand: the state rows: %s" % states[:4])
+    # the trace's window opens at home's hit, 0.2 s held from the trial's
+    # start: no row of trial 0 before it (3.7)
+    hold = [e for e in r.events if e["kind"] == "state" and e["text"] == "hold" and e["trial_index"] == "0"]
+    p0 = [float(x["t_s"]) for x in path if x["trial_index"] == "0"]
+    check(hold and p0 and min(p0) >= float(hold[0]["t_s"]) + 0.199,
+          "v2 hand: the trace starts at home's hit: first %s, hold %s" % (min(p0) if p0 else None, hold[0]["t_s"] if hold else None))
+
+
+def t_v2_rule5(ctx):
+    # rule 5: a hit starts a state whose timed exit is already due at the
+    # frame's onset; the frame takes that exit too, so the trial ends on the
+    # hit's frame, not one frame later. Also --profile: a build with no
+    # trace ring refuses it before the data set exists (exit 2); a trace
+    # ring build writes profile.csv
+    t = {"controls": {"away": {"control": "region", "of": "hand", "radius": 1, "outside": True}},
+         "states": [{"name": "a", "steps": [{"on": "s"}], "exits": [{"on": "away", "to": "b"}]},
+                    {"name": "b", "exits": [{"after_s": 0.001, "to": "end", "outcome": "done_b"}]}]}
+    roles = {"hand": {"type": "position2d_relative", "units": "display_px"}}
+    d = v2base({"t": t}, [{"name": "l", "trial": "t"}], roles=roles)
+    sp = os.path.join(ctx.out, "v2_rule5_samples.csv")
+    # the jump at 0.505 s: inside the frame from 0.5 to 0.5167 s at 60 Hz
+    write_samples(sp, [(0.0, "hand", 0, 0), (0.505, "hand", 9, 0)])
+    r = Run(ctx, "v2_rule5", d, args=["--sim-gain", "hand=1", "--samples", sp])
+    check(r.rc == 0 and len(r.trials) == 1 and r.trials[0]["outcome"] == "done_b", "v2 rule 5: exit %d %s %s" % (r.rc, r.err[:200], r.trials[:1]))
+    if r.rc == 0 and r.trials:
+        st = [e for e in r.events if e["kind"] == "state"]
+        fa = [int(e["frame"]) for e in st if e["text"] == "b"]
+        el = float(r.trials[0]["time_elapsed_s"])
+        # the hit's frame is frame 31 (onset 0.5167 s); the trial ends there
+        check(abs(el - 31 / 60.0) < 0.002, "v2 rule 5: the trial ends on the hit's frame: %.6f s, b's frames %s" % (el, fa))
+    # a chain on one frame: a's hit starts b, b's timed exit c, c's control
+    # (already true at its arm, entry now) d, d's timed exit e, e's control
+    # the end. d's after_s ends past c's arm hit, so the frame's timed exits
+    # (not its hits) take it; e's arm hit then needs the frame's second
+    # round of hits (rule 5), else the trial ends a frame late
+    ctl = {"away": t["controls"]["away"],
+           "far": {"control": "region", "of": "hand", "radius": 0.5, "outside": True},
+           "far2": {"control": "region", "of": "hand", "radius": 0.25, "outside": True}}
+    t2 = {"controls": ctl,
+          "states": [{"name": "a", "steps": [{"on": "s"}], "exits": [{"on": "away", "to": "b"}]},
+                     {"name": "b", "exits": [{"after_s": 0.001, "to": "c"}]},
+                     {"name": "c", "exits": [{"on": "far", "to": "d"}]},
+                     {"name": "d", "exits": [{"after_s": 0.002, "to": "e"}]},
+                     {"name": "e", "exits": [{"on": "far2", "to": "end", "outcome": "done_e"}]}]}
+    d2 = v2base({"t": t2}, [{"name": "l", "trial": "t"}], roles=roles)
+    r2 = Run(ctx, "v2_rule5b", d2, args=["--sim-gain", "hand=1", "--samples", sp])
+    check(r2.rc == 0 and len(r2.trials) == 1 and r2.trials[0]["outcome"] == "done_e", "v2 rule 5b: exit %d %s %s" % (r2.rc, r2.err[:200], r2.trials[:1]))
+    if r2.rc == 0 and r2.trials:
+        el = float(r2.trials[0]["time_elapsed_s"])
+        names = [e["text"] for e in r2.events if e["kind"] == "state"]
+        check(abs(el - 31 / 60.0) < 0.002 and names == ["a", "b", "c", "d", "e"], "v2 rule 5b: the chain ends on the hit's frame: %.6f s %s" % (el, names))
+    r = Run(ctx, "v2_profile", d, args=["--sim-gain", "hand=1", "--samples", sp, "--profile"])
+    prof = os.path.join(r.data, "profile.csv")
+    if r.rc == 2:
+        check("YSP_TRACE_RING" in r.err and not os.path.exists(r.data), "--profile without a trace ring: %s" % r.err[:200])
+    else:
+        ok = r.rc == 0 and os.path.exists(prof)
+        if ok:
+            with open(prof) as f:
+                head = f.readline().strip()
+                body = f.read()
+            ok = head == "frame,zone,t_ns,dur_ns,value" and ",pl.frame," in body and ",sig.frame," in body
+        check(ok, "--profile in a trace ring build: exit %d %s" % (r.rc, r.err[:200]))
 
 
 def t_v2_corpus(ctx):
@@ -1247,7 +1314,7 @@ TESTS = [t_nested, t_if_unless, t_empty_and_zero, t_loop, t_requeue, t_track_end
          t_fix_record_inherit, t_fix_backward_at, t_fix_refusals, t_fix_michelson_order, t_fix_texture_vars, t_fix_walk_budget,
          t_fix_data_set, t_fix_check_all_leaves, t_fix_release_order, t_fix_key_var_reapply,
          t_r2_release_other_template, t_r2_yield_draws_nothing, t_r2_low, t_r2_relaxed, t_r4_leaf_loop_done_track, t_r4_requeue_full,
-         t_r5_wait_final, t_r6_allow_below, t_v2_states, t_v2_until, t_v2_hand, t_v2_corpus]
+         t_r5_wait_final, t_r6_allow_below, t_v2_states, t_v2_until, t_v2_hand, t_v2_rule5, t_v2_corpus]
 
 
 def main():
