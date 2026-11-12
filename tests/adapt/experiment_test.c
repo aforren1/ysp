@@ -1644,6 +1644,31 @@ static void run_sha(void) {
 
 /* --- the first bytes of the ID are stable: pin them ---------------------- */
 
+/* 0.3.1: a walk2d's step against half the box's diagonal by hypot(), as
+ * ysp/trials.h does: neither a tiny box (the squares underflowed) nor a
+ * huge one (they overflowed) refuses a step that fits. */
+static void run_walk_box(void) {
+    static yexp_report r;
+    static const struct { const char* lo; const char* hi; const char* step; int ok; } c[] = {
+        { "-1e-200", "1e-200", "1e-201", 1 }, { "-1e-200", "1e-200", "2e-200", 0 },
+        { "-1e200", "1e200", "1e199", 1 },    { "-1e200", "1e200", "1.5e200", 0 },
+        { "-1", "1", "1.4", 1 },              { "-1", "1", "1.42", 0 },
+    };
+    size_t k;
+    for (k = 0; k < sizeof c / sizeof c[0]; k++) {
+        char doc[700];
+        int rc;
+        snprintf(doc, sizeof doc,
+                 "{\"format\":\"ysp-experiment\",\"version\":2,\"stimuli\":{\"s\":{\"kind\":\"shape\"}},"
+                 "\"trials\":{\"t\":{\"states\":[{\"name\":\"a\",\"steps\":[{\"on\":\"s\"},{\"wait_s\":0.1}]}]}},"
+                 "\"timeline\":[{\"name\":\"m\",\"trial\":\"t\",\"vars\":{\"w\":{\"walk2d\":{\"step\":%s,\"box\":[[%s,%s],[%s,%s]],\"start\":[0,0]}}}}]}",
+                 c[k].step, c[k].lo, c[k].lo, c[k].hi, c[k].hi);
+        rc = load_rc(doc, NULL, &r);
+        if (c[k].ok) CHECK2(rc == YEXP_OK, "a walk2d step that fits its box", doc);
+        else CHECK2(rc == YEXP_ERR_REFUSED && r.n_diags && strstr(r.diags[0].msg, "half the box's diagonal"), "a walk2d step past half the diagonal", doc);
+    }
+}
+
 int main(void) {
     const char* env = getenv("YEXP_CORPUS");
     if (env) g_corpus = env;
@@ -1651,6 +1676,7 @@ int main(void) {
     run_sha();
     run_numbers();
     run_review();
+    run_walk_box();
     run_host();
     run_v2();
     run_v2_linear();

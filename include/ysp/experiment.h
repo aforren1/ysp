@@ -1,4 +1,4 @@
-/* ysp/experiment.h - v0.3.0 - public domain single-header loader for experiment definitions
+/* ysp/experiment.h - v0.3.1 - public domain single-header loader for experiment definitions
  *
  *   Reads a ysp experiment definition of format version 1 or 2
  *   (docs/experiment_format.md, the pack's EXPERIMENT entry) into a checked,
@@ -153,6 +153,9 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.3.1 - a walk2d's step against half the box's diagonal by hypot(), as
+ *          ysp/trials.h 0.8.1: a box of 1e-200 refused every step, and one
+ *          of 1e200 overflowed to accept any. No struct change.
  *   v0.3.0 - format version 2 (docs/experiment_format.md part 3, D16 to D41):
  *          YEXP_FORMAT_VERSION is 2. Signal roles, top-level and template
  *          controls (the eight kinds of 3.7), states, exits, shared exits,
@@ -203,9 +206,8 @@
  *   v0.1.0 - first version: the loader for format version 1, its defaults
  *          table, the host interface and the canonical writer.
  *
- *   STATUS: v0.3.0 (2026-11-11). Tested; the first player (docs/player.md)
- *   uses it for version 1 and refuses version 2 by name until its lowering
- *   exists.
+ *   STATUS: v0.3.1 (2026-11-11). Tested; the player (docs/player.md) uses
+ *   it for both versions, version 2 on --sim only.
  *   docs/experiment.md has the decisions and the test results.
  *
  *   ---------------------------------------------------------------------
@@ -216,8 +218,8 @@
 
 #define YEXP_VERSION_MAJOR 0
 #define YEXP_VERSION_MINOR 3
-#define YEXP_VERSION_PATCH 0
-#define YEXP_VERSION_STRING "0.3.0"
+#define YEXP_VERSION_PATCH 1
+#define YEXP_VERSION_STRING "0.3.1"
 
 /* The newest format version this header reads (D12). */
 #define YEXP_FORMAT_VERSION 2
@@ -2276,7 +2278,7 @@ static yexp_value* yexp__walk2d_form(yexp__ctx* c, const yjs_value* src, const c
         double dx = x1 - x0, dy = y1 - y0;
         if (!(sx >= x0 && sx <= x1 && sy >= y0 && sy <= y1)) {
             yexp__err(c, start->pos == UINT32_MAX ? w->pos : start->pos, "%s: the box does not hold 'start' (3.14)", sub);
-        } else if (!(step->num > 0) || !(4.0 * step->num * step->num < dx * dx + dy * dy)) {
+        } else if (!(step->num > 0) || !(2.0 * step->num < hypot(dx, dy))) {
             /* every point of the box has a step that stays in it; a box of
              * zero width passes and stops at run time (finding F17) */
             yexp__err(c, step->pos, "%s: 'step' is above 0 and below half the box's diagonal (3.14)", sub);

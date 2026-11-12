@@ -2111,7 +2111,7 @@ id = "v-78"
 name = "a step past half the diagonal"
 test = "experiment"
 why = "3.14: every point has a step that stays in."
-find = '''        } else if (!(step->num > 0) || !(4.0 * step->num * step->num < dx * dx + dy * dy)) {'''
+find = '''        } else if (!(step->num > 0) || !(2.0 * step->num < hypot(dx, dy))) {'''
 replace = '''        } else if (!(step->num > 0)) {'''
 
 [[mutant]]
@@ -2444,3 +2444,19 @@ find = '''    if (!t->end_unset_) {
     } else if (t->response) {'''
 replace = '''    if (0) {
     } else if (t->response) {'''
+
+[[mutant]]
+id = "v031-01"
+name = "a walk2d step against the squares of the box (0.3.0's test)"
+test = "experiment"
+why = "0.3.1: hypot(), as ysp/trials.h; the squares underflow for a tiny box and overflow for a huge one (run_walk_box)."
+find = '''!(2.0 * step->num < hypot(dx, dy))'''
+replace = '''!(4.0 * step->num * step->num < dx * dx + dy * dy)'''
+
+[[mutant]]
+id = "v031-02"
+name = "a walk2d step up to the whole diagonal"
+test = "experiment"
+why = "3.14: below half the diagonal (run_walk_box's 1.42 in a box of 2)."
+find = '''!(2.0 * step->num < hypot(dx, dy))'''
+replace = '''!(step->num < hypot(dx, dy))'''
