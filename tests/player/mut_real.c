@@ -13,6 +13,7 @@
 #include "host.c"
 #include "lower.c"
 #include "run.c"
+#include "v2.c"
 #define main pl_cli_main
 #include "main.c"
 #undef main

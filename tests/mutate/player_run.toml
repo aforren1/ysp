@@ -329,8 +329,9 @@ id = "r-39"
 name = "a vars name read as another leaf's table column"
 test = "player"
 why = "Round 2 low item: t_r2_low's shared column."
-find = '''                    for (k = 0; k < n->n_vars; k++) if (strcmp(n->vars[k].key, name) == 0) is_var = 1;'''
-replace = ''''''
+find = '''                            is_var = 1;
+                        }'''
+replace = '''                        }'''
 
 [[mutant]]
 id = "r-20"
@@ -462,7 +463,7 @@ env = { YPL_REAL_CASES = "rule" }
 name = "the rule's window does not follow the onset"
 test = "real"
 why = "yrsp_rule_window() each frame: the window opens when the onset is known."
-find = '''    if (p->in_trial && pl_rule_of(p, p->tmpl)) yrsp_rule_window(p->roles[p->tmpl->role].rule, p->tmpl->collector);'''
+find = '''        yrsp_rule_window(p->roles[p->tmpl->role].rule, p->tmpl->collector);'''
 replace = ''''''
 
 [[mutant]]
