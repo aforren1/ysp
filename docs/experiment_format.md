@@ -2094,13 +2094,11 @@ collector needs a return within `onset` before the next crossing counts
 no response. The row adds `rsp_role` (3.15). A key response in a
 template with `states` arms at the trial's first frame, as in 2.5.
 
-Note (2026-11-12): F37 (decided, 2.6) refuses a key response that nothing
-ends, in version 2 too. The loader does not apply it to signal choices: by
-the defaults above a signal response is `response_ends_trial` false with
-no `duration_s`, which F37 would refuse, and the two 3.18 worked examples
-and the player's packs are such responses (the trial's states end them).
-The player's reading for those stands: the trial's end closes the window.
-Whether F37 covers signal choices is for the user to decide. An
+DECIDED (2026-11-12, the user; part of format finding F37, 2.6): F37
+applies to key responses only. A signal-choice response's window with no
+deadline closes when the trial ends: the states or the events end it. It
+cannot hang the trial, since the trial's own steps end it. So the loader
+refuses no signal-choice response under F37. An
 exit on an early press needs F3 in ysp/response.h (D20 rule 7; D31).
 
 ### 3.14 Variables
