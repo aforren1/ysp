@@ -107,6 +107,12 @@ def trial_gaps(exp, diff):
 
 def compare(exp, got):
     """Returns the first difference as text, or None."""
+    loop = exp["refused"] is None and exp["trials"] and exp["trials"][-1].get("loop")
+    guard = got["refused"] is not None and "at one time" in " ".join(got["refused"])
+    if loop or guard:
+        if loop and guard:
+            return None
+        return "loop: model %s, player %r" % (bool(loop), got["refused"])
     hang = exp["refused"] is None and exp["trials"] and exp["trials"][-1].get("hang")
     budget = got["refused"] is not None and "budget" in " ".join(got["refused"])
     if hang or budget:

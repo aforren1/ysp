@@ -99,6 +99,8 @@ difference at a GAP is a question for the format, not a player bug.
 | `F28-timeout-code`: the code of an until's timeout | The count of the state's own, shared and added exits |
 | `response-before-entry`: a response that becomes final in a state entered after the response's time | Taken, with the response's time (3.11 rule 11) |
 | `until-rearms-exit-control`: an until on a control that the state's exits also name | Two detects: the exits' hold goes on (F3) |
+| `at-after-until`: `at_s` after an `until` in a state | From the until's hit (rule 9: the steps after it are the next state), not the state's entry (rule 6) |
+| `zero-time-cycle`: a cycle whose only waiting exit is an `after_s` of at most half a frame (it counts from the entry frame's onset and lands on that frame) | The model stops the trial; the loader does not refuse it (D20 rule 6 counts `after_s` as waiting) |
 | `tie-steps-end`: a steps' end and an exit at one time | The last steps' end of a state with no authored exits first; else the exit first |
 | `release-time`, `release-after-deadline`: a response that ends at its key's release | The release is the exit's time; the deadline waits for it |
 | The outcome column with no response in an events template | `done` |

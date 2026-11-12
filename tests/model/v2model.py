@@ -88,6 +88,10 @@ class Refused(Exception):
     pass
 
 
+class Loop(Exception):
+    """State changes at one time without end (see `zero-time-cycle`)."""
+
+
 # ---------------------------------------------------------------- definition
 
 class Exit:
@@ -590,11 +594,15 @@ class Run:
             self.enter(tpl.states[0], e0, k, self.carry, "S")
         else:
             self.enter_events(e0, k)
-        while tr.end_frame is None:
-            if onset(k) - onset(tr.k0) > self.max_trial_ns:
-                return
-            self.frame(k)
-            k += 1
+        try:
+            while tr.end_frame is None:
+                if onset(k) - onset(tr.k0) > self.max_trial_ns:
+                    return
+                self.entries = 0
+                self.frame(k)
+                k += 1
+        except Loop:
+            tr.loop = True
 
     # ------------------------------------------------------------ frames
     def frame(self, k):
@@ -1051,6 +1059,12 @@ class Run:
         v.part += 1
         f = max(k, hit_frame(t)) if phase == "P" else k
         v.part_t, v.part_f = t, f
+        if v.state is not None and any(st[0] == "at" for st in parts[v.part]):
+            # GAP (3.11 rules 6 and 9): `at_s` after an `until` in a state.
+            # Rule 6 counts from the state's entry; rule 9 makes the steps
+            # after the until "the next state". Read: rule 9, from the
+            # until's hit.
+            self.gap("at-after-until")
         evs, end = self.build(self.tr, parts[v.part], t, f, v.vid)
         v.events.extend(evs)
         self.pend.extend(evs)
@@ -1095,6 +1109,15 @@ class Run:
         # after the hit's time; a timed exit's on the frame its window
         # reaches; every exit taken in a frame is in that frame here.
         f = k
+        self.entries = getattr(self, "entries", 0) + 1
+        if self.entries > 4096:
+            # GAP (D20 rule 6): an after_s exit counts as one that waits, but
+            # an after_s of at most half a frame counts from the entry
+            # frame's onset and lands, by the lead rule, on that same frame:
+            # a cycle through it changes state at one time without end. The
+            # loader does not refuse it; the player stops on a guard.
+            self.gap("zero-time-cycle")
+            raise Loop()
         n = tr.visits.get(st.name, 0) + 1
         tr.visits[st.name] = n
         if st.max_visits is not None and n > st.max_visits:
@@ -1235,6 +1258,7 @@ def simulate(defn, script=None, samples=None):
             "trial_index": tr.index,
             "first_frame": tr.k0,
             "hang": tr.end_frame is None,
+            "loop": getattr(tr, "loop", False),
             "gaps": sorted(tr.gaps),
             "end_frame": tr.end_frame,
             "time_elapsed_s": fmt(onset(tr.end_frame) - onset(0)) if tr.end_frame is not None else None,
