@@ -554,8 +554,15 @@ class Run:
         upto = self.fed_until
         if self.hand is None:
             return      # no held value yet: both orders give the same test
+        k0 = self.tr.k0
+        start = x == onset(k0) and k0 > 0
         for (t, _, _) in self.samples:
-            if x <= upto:
+            if start and onset(k0 - 1) < t <= x:
+                # An arm at the trial's first onset: the trial's start and
+                # the steps that end at once may come before or after the
+                # first frame's poll.
+                hit = True
+            elif x <= upto:
                 hit = x <= t <= upto and not (t == upto == x and self.trigger == t)
             else:
                 hit = upto < t <= x
