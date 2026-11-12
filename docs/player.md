@@ -626,6 +626,23 @@ Tests:
 | Fuzz, `tests/fuzz/player_fuzz.c` over the version 2 seeds (the loader's 8 `v2_*.json` files against the visuomotor pack's table, and the two 3.18 packs); each signal role gets a gain and 20 s of scripted samples; 8 processes | Release: 5,000,000 inputs (about 2 h), 767,844 loaded, 294,751 ran to the end, 1,886,114 with signal roles; no crash. ASan and UBSan (`setarch -R`): 40,000 inputs, 6,130 loaded, 2,395 ran to the end, no report. The version 1 corpus was not run again |
 | Mutants, `tests/mutate/player_{v2,run,lower,host,eval}.toml` (`--sim` test) | `player_v2.toml` 11 of 11 killed. Every other `--sim` mutant as expected: run 45 killed and 3 kept survivors, lower 25 killed, host 4 killed and `h-v2-01` now kept (a guard: the loader refuses a version above 2 first), eval 5 killed and 1 kept. The 35 real-path mutants (test `real`) need a display and were not run |
 
+### The phase 2 review's fix round (0.4.0, 2026-11-11)
+
+The same machine. Each of the review's 19 items has a case in
+`t_v2_review2` (the reviewer's reproducers) or in `mut_test.c`
+(`case_v2_outcome`), and a mutant where the branch is new.
+
+| Check | Result |
+|---|---|
+| `player_test.py` | 50 cases, 0 failures |
+| `compare.py`, the six examples | No exact column differs; the format classes within their bounds (F25: 765 and 726 path rows, 1 angle; F33: 1 row); the blocks and the tracking rows' `block`, `block_trial`, `perturbation` and `mapping` now compared, exact; every other C column listed as not comparable, with its reason |
+| ctest | Release 122 of 122; ASan and UBSan (`setarch -R`) 121 of 121 |
+| Mutants (`--sim` test) | `player_v2.toml` 24 of 24 killed (v2-12 to v2-24 new; v2-18 survived the first run and `t_v2_review2` got a check); `player_run.toml` r-v2-01 to r-v2-03 killed (r-v2-02 and r-v2-03 survived the first run, then the hold and the late response cases); the other `--sim` mutants as before. `experiment.toml` v031-01 and v031-02 killed |
+| Fuzz, Release, 8 processes, the version 2 seeds and `tests/fuzz/player_v2_seeds` (role-only columns, when tests), one input in 16 with a bad samples line | 5,000,000 inputs, 722,464 loaded, 435,355 ran to the end, 1,761,306 with signal roles; no crash. ASan and UBSan: 40,000 inputs, 5,750 loaded, 3,465 ran to the end, no report |
+| Version 1 identity against main (7078e4d) | 438 of 439 CSV files byte-identical (the other the Stroop C program's, its trials.h version line); `session.json`: `player_version`, `headers.trials`, `headers.gfx`, `headers.experiment`, `pack_id` (94 files) and `rig_profile_sha256` (4) |
+| Version 2 data against 0.3.0 | `target_frames` differs on 159 of 160 visuomotor rows and `reach_target_frames` on 4 bimanual rows (the landing frame now counted, item 7); `streams/frames.csv` has the `flags` column, all 0; every other cell equal |
+| Frame work, pinned to CPU 2, six runs each, mean user time | Visuomotor 0.207 s (sd 0.003) against 0.3.0's 0.212 s; bimanual 1.133 s (sd 0.010) against 1.139 s: no growth. `--measure`, four runs: largest frame 628 to 633 us against 638 to 642 us, and 1,907 to 1,920 us against 1,891 to 1,907 us, one run 2,853 us at frame 24,487 (0.3.0 showed 2,803 us at that frame once) |
+
 ### A real window (2026-11-10)
 
 The machine: the Linux desktop (Debian 12, kernel 6.11.5-liquorix, Xorg
