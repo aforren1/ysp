@@ -644,6 +644,25 @@ The same machine. Each of the review's 19 items has a case in
 | Version 2 data against 0.3.0 | `target_frames` differs on 159 of 160 visuomotor rows and `reach_target_frames` on 4 bimanual rows (the landing frame now counted, item 7); `streams/frames.csv` has the `flags` column, all 0; every other cell equal |
 | Frame work, pinned to CPU 2, six runs each, mean user time | Visuomotor 0.207 s (sd 0.003) against 0.3.0's 0.212 s; bimanual 1.133 s (sd 0.010) against 1.139 s: no growth. `--measure`, four runs: largest frame 628 to 633 us against 638 to 642 us, and 1,907 to 1,920 us against 1,891 to 1,907 us, one run 2,853 us at frame 24,487 (0.3.0 showed 2,803 us at that frame once) |
 
+### The re-review, F34 and F26 (0.4.1 and 0.5.0, 2026-11-12)
+
+The same machine. The re-review's items B, D to I have cases in
+`t_v2_review3`, F34's in `t_v2_f34` (the reviewer's `v1r.py` cases, the
+window open at the states' end, states that outlast it, the deadline's
+outcome and the latest set, a `from` never shown); F26's in the loader's
+corpus.
+
+| Check | Result |
+|---|---|
+| `player_test.py` | 52 cases, 0 failures |
+| `compare.py`, the six examples | No exact column differs; the format classes within their bounds |
+| ctest | Release 122 of 122; ASan and UBSan (`setarch -R`) 121 of 121 |
+| Mutants (`--sim` test) | `player_v2.toml` 41: 39 killed, 2 kept as guards (v2-35, a frame row whose record never comes; v2-41, the 64-change stop F26 leaves unreachable). v2-37 survived its first run; `deadline_latest_wins` then killed it. `player_lower.toml` l-v2-01 kept (a guard). `experiment.toml` f26-01 to f26-04 killed. The other lists as before |
+| Fuzz, Release, 8 processes, the version 2 seeds | 5,000,000 inputs, 723,855 loaded, 437,963 ran to the end, 1,764,089 with signal roles; no crash. ASan and UBSan: 40,000 inputs, 5,725 loaded, 3,473 ran to the end, no report |
+| Version 1 identity against main (7078e4d) | 438 of 439 CSV files byte-identical (the other the Stroop C program's trials.h version line); `session.json`: versions, `pack_id` (94) and `rig_profile_sha256` (4) |
+| Version 2 data against 0.3.0, the two 3.18 examples | `target_frames` (159 of 160) and `reach_target_frames` (4 of 132) only, as in 0.4.0 |
+| Frame work, CPU 2, six runs each, mean user time | Visuomotor 0.209 s (sd 0.003) against 0.3.0's 0.211 s; bimanual 1.128 s (sd 0.010) against 1.146 s. Largest frame 637 to 641 us against 636 to 646 us, and 1,900 to 1,924 us (one run 2,069 us) against 1,880 to 1,906 us (one run 2,045 us) |
+
 ### A real window (2026-11-10)
 
 The machine: the Linux desktop (Debian 12, kernel 6.11.5-liquorix, Xorg
