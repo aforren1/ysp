@@ -60,7 +60,10 @@ def run_player(bin_dir, d, defn, script, samples):
         n += 1
         out = os.path.join(d, "out%d" % n)
     cmd = [os.path.join(bin_dir, "player", "ysp_player"), pk, "--out", out, "--sim", "--seed", "1",
-           "--field", "participant=1", "--participant", "script:part.csv", "--max-seconds", "120"]
+           "--field", "participant=1", "--max-seconds", "120",
+           # A script with no rows makes the player 0.6.0 use `correct`
+           # (player.md: a trial with no row is silent), so give `silent`.
+           "--participant", "script:part.csv" if script else "silent"]
     if samples:
         cmd += ["--samples", "samples.csv"]
     p = subprocess.run(cmd, cwd=d, capture_output=True, text=True, timeout=300)
@@ -250,6 +253,8 @@ def one(args):
     seed, bin_dir, work, do_shrink = args
     defn, script, samples, exp = gen.make_case(seed)
     d = tempfile.mkdtemp(prefix="s%d_" % seed, dir=work)
+    with open(os.path.join(d, "expect.json"), "w", newline="\n") as f:
+        json.dump(exp, f, indent=1)
     try:
         got = run_player(bin_dir, d, defn, script, samples)
     except subprocess.TimeoutExpired:

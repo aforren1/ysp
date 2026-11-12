@@ -601,6 +601,7 @@ class Run:
         self.evaluate(k)
         # Phase F: hits that ysig_frame() finds (3.11 rule 5), then a second
         # evaluate for the tables they add.
+        rounds = 0
         while True:
             cands = []
             if self.cur is not None:
@@ -614,6 +615,13 @@ class Run:
                         cands.append(("until", h, None, self.cur.vid))
             if not cands:
                 break
+            rounds += 1
+            if rounds > 1:
+                # GAP (3.11 rule 5): a hold armed by a state that a frame's
+                # hit started, and that ends before the same frame's onset.
+                # Read: rule 2, its next state starts on the first frame at
+                # or after the hit, this frame; the frame tests it again.
+                self.gap("refound-in-frame")
             self.resolve(cands, k, "F", o)
             self.evaluate(k)
         self.end_check(k)
@@ -838,6 +846,13 @@ class Run:
         kind = c[0]
         if kind == "resp":
             tr.resp_used = True
+            if t < v.entry_t:
+                # GAP (3.11 rule 11 against D20 rule 3): a response that
+                # becomes final in a state entered after the response's time
+                # (a timed exit taken early by the lead rule, or a record that
+                # came late). Read: rule 11, the exit's time is the
+                # response's, taken when final.
+                self.gap("response-before-entry")
         if kind in ("partend", "until"):
             self.part_step(v, kind, t, k, phase, cands)
             return
@@ -883,6 +898,12 @@ class Run:
                 v.wait_t = t
                 v.wait_f = k
                 ctl = untils[v.part][0]
+                if ctl in v.dets:
+                    # GAP (F3 against 3.7's one hit detect per region): the
+                    # state's exits stay armed (F3) while the until arms the
+                    # same control. Read: two detects, so the exit's hold
+                    # goes on; one node re-armed would restart it.
+                    self.gap("until-rearms-exit-control")
                 self.flag_window(t)
                 v.until_det = Det(self.tpl.regions[ctl], t, self.hand)
                 if v.until_det.hit is not None:
