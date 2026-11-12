@@ -385,6 +385,7 @@ int pl_build_ops(pl_player* p, const yexp_step* st, int n, ytl_op* ops, int cap,
             if (c + 1 > cap) { pl_fail(p, "the op table is full"); return -1; }
             o = &ops[c++];
             memset(o, 0, sizeof *o);
+            t += p->ops_origin;
             o->op = YTL_OP_AT;
             o->t_ns = t;
             *cursor = t;

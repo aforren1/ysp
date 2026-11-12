@@ -684,3 +684,37 @@ test = "player"
 why = "F37: max_responses ends the window (rv4_2_maxr_v1, _v2: duration_s 0 and max_responses 1)."
 find = '''    if (!r || r->signal_choices || r->ends_trial || r->max_responses > 0 || dur > 0) return 0;'''
 replace = '''    if (!r || r->signal_choices || r->ends_trial || dur > 0) return 0;'''
+
+[[mutant]]
+id = "r-v2-09"
+name = "a script with no rows plays correct"
+test = "player"
+why = "Model item 3 (vm_empty_script): a trial with no row is silent."
+find = '''    if (p->args.participant && strncmp(p->args.participant, "script:", 7) == 0) {
+        int k = -1;'''
+replace = '''    if (p->script) {
+        int k = -1;'''
+
+[[mutant]]
+id = "r-v2-10"
+name = "one press a trial"
+test = "player"
+why = "Model c (vm_two_presses): the next row of the trial."
+find = '''            if (p->script_k >= 0 && p->script_k + 1 < p->n_script && p->script[p->script_k + 1].trial == p->script[p->script_k].trial) {'''
+replace = '''            if (0) {'''
+
+[[mutant]]
+id = "r-v2-11"
+name = "the trial's rows start where the index points"
+test = "player"
+why = "Model c (vm_two_trial1): its first row."
+find = '''        while (k > 0 && p->script[k - 1].trial == trial) k--;   /* its first row */'''
+replace = ''''''
+
+[[mutant]]
+id = "r-v2-12"
+name = "an overlapping press accepted"
+test = "player"
+why = "Model c (vm_two_overlap): a key's events in time order."
+find = '''            (p->script[p->n_script - 1].silent || rt < p->script[p->n_script - 1].rt_s + p->script[p->n_script - 1].hold_s)) {'''
+replace = '''            0) {'''

@@ -520,6 +520,19 @@ that structure; it does not invent a new one.
   QUANTIZATION; docs/timeline.md). This amends rule 5 as D20 amends D16;
   the text above is unchanged. 3.11 applies it.
 
+  DECIDED (2026-11-12, the user; format finding F40 of experiment.md),
+  "min one frame", qualifying the amendment's lead rule for timed exits:
+  a timed exit (`after_s`, and an until's `timeout_s`) is never taken on
+  its state's entry frame. It lands on the later of its lead-rule frame
+  and the frame after the entry frame. For an until's timeout, the entry
+  frame is the wait's own entry frame (rule 9 makes the wait a state of
+  its own). Only instant exits leave a state within its entry frame. The
+  exit keeps its time: the state row's `end_s` is the exit's time, and
+  the next state's entry frame is the frame the exit lands on. So every
+  cycle advances the clock, and an `after_s` of half a frame or less
+  takes one frame. The cycle rule (rule 6, F26) needs no change: an
+  `after_s` exit already counts as one that waits.
+
   DECIDED (2026-11-12, the user; format finding F26 of experiment.md), to
   rule 6: an `on` exit, own or shared, and an `until`, on a region whose
   `stay_s` is 0 (left out, or a literal 0) is met at its arm while the

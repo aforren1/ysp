@@ -44,7 +44,7 @@
 extern "C" {
 #endif
 
-#define PL_VERSION_STRING "0.7.0"
+#define PL_VERSION_STRING "0.8.0"
 /* The newest format version this player lowers (2: format part 3, in
  * v2.c). session.json's format_version is the definition's. */
 #define PL_FORMAT_VERSION 2
@@ -491,6 +491,8 @@ struct pl_player {
     float*    chan_base;      /* a literal key's value: every trial starts from it */
     bool*     chan_dyn;       /* the key holds a variable: read it per trial      */
     int64_t   ops_latest;     /* the latest time pl_build_ops() scheduled         */
+    int64_t   ops_origin;     /* what at_s counts from: a version 2 state's entry
+                               * (3.11 rule 6), else the trial's start (0)      */
     int       walk_steps, walk_frame_steps;
     void*     trace_file;
     int       now_tier, now_dropped, now_flags;
@@ -648,6 +650,8 @@ struct pl_player {
     double    press_hold;
     bool      silent;
     pl_script_row* script; int n_script;
+    int       script_k;       /* the script row of the planned press, -1 none */
+    int64_t   press_onset;    /* the onset the trial's presses count from     */
     int       trials_done;
     /* measured frame work: real ns, no clock read on the frame path when
      * measure is false */

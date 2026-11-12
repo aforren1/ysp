@@ -46,6 +46,8 @@ typedef struct v2_ctl {
     int val;                   /* value node, -1 none                       */
     int test;                  /* test node (1 lane), -1 none               */
     int hit;                   /* hit detect, -1 none                       */
+    int hit_u;                 /* an until's own detect, when exits name the
+                                * control too (F3: theirs stays armed), -1  */
     int of;                    /* the node of `of`                          */
     int emit;                  /* a movement's emit                         */
     int choice;                /* a movement's choice in the collector      */
@@ -81,6 +83,8 @@ typedef struct v2_vch {        /* a literal branch of a when: a channel     */
 typedef struct v2_exit {
     int kind;                  /* X_*                                      */
     int ctl;                   /* X_HIT                                    */
+    int node;                  /* X_HIT: the detect it reads and arms       */
+    bool until;                /* an until's own hit: counts from its wait  */
     const yexp_value* after;   /* X_AFTER                                  */
     const char* if_var;
     bool if_flag;
@@ -195,6 +199,9 @@ struct pl_v2 {
                                 * exits arm at that call (3.12), -1 none      */
     const yexp_step* arm_after;/* the visit's last head recenter             */
     int visit_ev0;             /* the visit's first event: rule 8 takes all its parts' */
+    int trial_ev0;             /* the trial's first event                   */
+    uint32_t* arm_gen;         /* per node: arms so far, so a drained hit of
+                                * an arm since made is the old arm's        */
     /* the visit's tweens, every part's: rule 8 stops one still running at
      * the value it last wrote (a track is no event ytl_remove() takes) */
     struct v2_tw { int ch; int64_t end; }* tw; int n_tw, cap_tw;   /* sized at load */
@@ -323,6 +330,8 @@ static void v2_form_text(const yexp_value* v, char* buf, size_t cap, size_t* use
 /* --- states (3.11) ------------------------------------------------------ */
 
 static int v2_ctl_index_of(pl_v2* v, const yexp_control* c);
+static int v2_hit_clone(pl_player* p, pl_v2* v, int k);
+static bool v2_entry_frame(const pl_v2* v, const v2_exit* x, const yscr_frame* f);
 static int v2_recenter_scan(pl_player* p, pl_v2* v);
 
 /* The runtime states of a template: each state's steps split at `until`
@@ -403,6 +412,7 @@ static int v2_exits_build(pl_player* p, pl_v2* v) {
             if (e_->on.kind == YEXP_REF_RESPONSE) x->kind = X_RESPONSE; \
             else if (e_->on.kind == YEXP_REF_CONTROL) { x->kind = X_HIT; x->ctl = v2_ctl_index_of(v, e_->on.control); \
                 if (x->ctl < 0) { pl_fail(p, "template '%s': an exit names a control with no hits", t->name); return -1; } \
+                x->node = v->ctl[x->ctl].hit; \
                 v->ctl[x->ctl].armed_by_exit = true; } \
             else if (e_->after) { x->kind = X_AFTER; x->after = e_->after; } \
             else x->kind = X_INSTANT; \
@@ -432,9 +442,23 @@ static int v2_exits_build(pl_player* p, pl_v2* v) {
             v2_exit* x = &r->exits[ne++];
             memset(x, 0, sizeof *x);
             x->kind = X_HIT;
+            x->until = true;
             x->ctl = u->target.kind == YEXP_REF_CONTROL ? v2_ctl_index_of(v, u->target.control) : -1;
             if (x->ctl < 0) { pl_fail(p, "template '%s': an until names no control with hits", t->name); return -1; }
             v->ctl[x->ctl].armed_by_exit = true;
+            x->node = v->ctl[x->ctl].hit;
+            {
+                /* F3: the state's exits arm at its entry and stay armed; an
+                 * until on a control they name arms a detect of its own, so
+                 * its arm does not restart their hold */
+                int m;
+                for (m = 0; m < ne - 1; m++)
+                    if (r->exits[m].kind == X_HIT && r->exits[m].ctl == x->ctl) {
+                        if (v->ctl[x->ctl].hit_u < 0 && (v->ctl[x->ctl].hit_u = v2_hit_clone(p, v, v->ctl[x->ctl].hit)) < 0) return -1;
+                        x->node = v->ctl[x->ctl].hit_u;
+                        break;
+                    }
+            }
             x->to = i + 1;
             x->code = n_own + n_sh + (resp_end ? 1 : 0);
             if (u->timeout) {
@@ -445,7 +469,10 @@ static int v2_exits_build(pl_player* p, pl_v2* v) {
                 x->to = V2_END;
                 x->outcome_text = "timeout";
                 x->part = true;
-                x->code = n_own + n_sh + (resp_end ? 2 : 1);
+                /* reading F28: the code after the state's own, shared and
+                 * added exits; the until's own hit writes no row (it stays
+                 * in the state), so it takes no code of its own */
+                x->code = n_own + n_sh + (resp_end ? 1 : 0);
             }
         }
         r->n_exits = ne;
@@ -759,6 +786,18 @@ static int v2_hit_detect(pl_player* p, pl_v2* v, int in, const yexp_value* stay,
         if (!lit && v2_param_add(p, v, k, YSIG_DETECT_ENTRY, stay, -1, P_ENTRY) < 0) return -1;
     }
     return k;
+}
+
+/* A second detect with k's input, parameters and per-trial values. */
+static int v2_hit_clone(pl_player* p, pl_v2* v, int k) {
+    int k2, i, n = v->n_params;
+    if (k < 0) return -1;
+    k2 = v2_node(p, v, YSIG_OP_DETECT, -1, -1);
+    if (k2 < 0) return -1;
+    v->nodes[k2] = v->nodes[k];
+    for (i = 0; i < n; i++)
+        if (v->params[i].node == k && v2_param_add(p, v, k2, v->params[i].param, v->params[i].v, v->params[i].elem, v->params[i].how) < 0) return -1;
+    return k2;
 }
 
 static int v2_test_detect(pl_player* p, pl_v2* v, int in, int test, int lane, int rate) {
@@ -1600,7 +1639,7 @@ int pl_v2_load(pl_player* p) {
         for (k = 0; k < t->n_controls; k++) v->ctl[v->n_ctl++].def = &t->controls[k];
         for (k = 0; k < p->def->n_controls; k++) if (t->uses_top && t->uses_top[k]) v->ctl[v->n_ctl++].def = &p->def->controls[k];
         for (k = 0; k < v->n_ctl; k++) {
-            v->ctl[k].val = v->ctl[k].test = v->ctl[k].hit = v->ctl[k].of = v->ctl[k].emit = v->ctl[k].choice = v->ctl[k].slot = -1;
+            v->ctl[k].val = v->ctl[k].test = v->ctl[k].hit = v->ctl[k].hit_u = v->ctl[k].of = v->ctl[k].emit = v->ctl[k].choice = v->ctl[k].slot = -1;
         }
         /* nodes: a template with no control and no form has no graph */
         for (k = 0; k < v->n_ctl; k++) if (v2_ctl_build(p, v, k) < 0) return -1;
@@ -1688,6 +1727,9 @@ int pl_v2_load(pl_player* p) {
         v->gd.channels = S->vals + p->n_channels;
         if (!ysig_open(&v->g, &v->gd)) { pl_fail(p, "template '%s': the graph: %s", v->def->name, ysig_error(&v->g)); return -1; }
         v->frozen = true;
+        v->arm_gen = (uint32_t*)pl_alloc(p, sizeof(uint32_t) * (size_t)v->nn);
+        if (!v->arm_gen) return -1;
+        memset(v->arm_gen, 0, sizeof(uint32_t) * (size_t)v->nn);
         ysig_reset(&v->g, 0);
         v->cur = V2_END;
         v->ended = true;
@@ -1989,7 +2031,15 @@ static int v2_take(pl_player* p, pl_v2* v, const v2_exit* x, int64_t t, const ys
 static int v2_arm_ctl(pl_player* p, pl_v2* v, int ci, int64_t t) {
     v2_ctl* c = &v->ctl[ci];
     if (c->hit < 0) return 0;
+    v->arm_gen[c->hit]++;
     if (!ysig_arm(&v->g, c->hit, t)) { pl_fail(p, "template '%s': cannot arm '%s'", v->def->name, c->def->name); return -1; }
+    return 0;
+}
+
+static int v2_arm_exit(pl_player* p, pl_v2* v, const v2_exit* x, int64_t t) {
+    if (x->node < 0) return 0;
+    v->arm_gen[x->node]++;
+    if (!ysig_arm(&v->g, x->node, t)) { pl_fail(p, "template '%s': cannot arm '%s'", v->def->name, v->ctl[x->ctl].def->name); return -1; }
     return 0;
 }
 
@@ -2131,7 +2181,7 @@ static int v2_enter(pl_player* p, pl_v2* v, int rs, int64_t t, const yscr_frame*
                 v->arm_after = &st->steps[h - 1];
             } else
                 for (i = 0; i < r->n_exits; i++)
-                    if (r->exits[i].kind == X_HIT && v2_arm_ctl(p, v, r->exits[i].ctl, t) < 0) return -1;
+                    if (r->exits[i].kind == X_HIT && v2_arm_exit(p, v, &r->exits[i], t) < 0) return -1;
             if (v->resp_from_kind == YEXP_REF_STATE && v->resp_from_index == r->def) v2_resp_arm(p, v, t);
             /* an instant exit is taken when the state starts, before its
              * steps run (reading F21) */
@@ -2160,7 +2210,7 @@ static int v2_enter(pl_player* p, pl_v2* v, int rs, int64_t t, const yscr_frame*
             if (rid >= 0) { v->arm_wait = rs; v->arm_wait_id = rid; }
             else
                 for (i = 0; i < r->n_exits; i++)
-                    if (r->exits[i].kind == X_HIT && r->exits[i].to == rs + 1 && v2_arm_ctl(p, v, r->exits[i].ctl, t) < 0) return -1;
+                    if (r->exits[i].kind == X_HIT && r->exits[i].to == rs + 1 && v2_arm_exit(p, v, &r->exits[i], t) < 0) return -1;
         }
         break;
     }
@@ -2183,7 +2233,10 @@ static int v2_enter(pl_player* p, pl_v2* v, int rs, int64_t t, const yscr_frame*
         ops[0].t_ns = cursor;
         n = 1;
         p->ops_latest = cursor;
+        /* an events template's at_s counts from the trial's start (2.5) */
+        p->ops_origin = r->def >= 0 ? cursor : 0;
         m = r->wait ? 0 : pl_build_ops(p, r->steps, r->n_steps, ops + n, p->tmpl->ops_cap - n, &cursor);
+        p->ops_origin = 0;
         if (m < 0) return -1;
         n += m;
         {
@@ -2266,6 +2319,19 @@ static int v2_tweens_stop(pl_player* p, pl_v2* v, int64_t t) {
 }
 
 /* Take exit x at time t (rule 8: the state's events not yet fired go). */
+/* An onset of `from` this trial that has landed or is still due. */
+static bool v2_from_due(pl_player* p, const pl_v2* v) {
+    ytl_event dummy;
+    int id, end;
+    memset(&dummy, 0, sizeof dummy);
+    end = ytl_add_n(&p->tl, &dummy, 0);
+    for (id = v->trial_ev0; id < end; id++) {
+        const ytl_event* e = ytl_find(&p->tl, id);
+        if (e && e->kind == YTL_ONSET && e->target == v->from_ch && !(e->flags & YTL_EV_SKIPPED)) return true;
+    }
+    return false;
+}
+
 static int v2_take(pl_player* p, pl_v2* v, const v2_exit* x, int64_t t, const yscr_frame* f, bool hit) {
     const v2_rs* r = v->cur >= 0 ? &v->rs[v->cur] : NULL;
     int id;
@@ -2286,7 +2352,7 @@ static int v2_take(pl_player* p, pl_v2* v, const v2_exit* x, int64_t t, const ys
     {
         /* rule 8: the state's events not yet fired go, every part's (a
          * tween of an earlier part too), unless the exit stays in the state */
-        bool stays = r && r->def >= 0 && x->to >= 0 && v->rs[x->to].def == r->def && !v->rs[x->to].first;
+        bool stays = r && r->def >= 0 && x->to >= 0 && v->rs[x->to].def == r->def && !v->rs[x->to].first, recount = false;
         int from = !stays && v->visit_ev0 >= 0 ? v->visit_ev0 : v->ev0;
         /* an events template has no exits: a part's change, or an until's
          * timeout to the events' end, removes nothing and stops no tween,
@@ -2303,10 +2369,12 @@ static int v2_take(pl_player* p, pl_v2* v, const v2_exit* x, int64_t t, const ys
                         v->flags[(e->code - PL_MARK_FLAG) / 2] = ((e->code - PL_MARK_FLAG) & 1) != 0;
                     continue;
                 }
-                /* a removed onset of `from` no longer opens the window */
-                if (e->kind == YTL_ONSET && e->target == v->from_ch && !p->from_landed) v->from_pending = false;
+                if (e->kind == YTL_ONSET && e->target == v->from_ch) recount = true;
                 (void)ytl_remove(&p->tl, id);
             }
+        /* F34 rule 3: the window is open while `from` has shown or is
+         * still due in this trial, whichever visit's step shows it */
+        if (recount && !p->from_landed) v->from_pending = v2_from_due(p, v);
         if (!stays && v->def->states) {
             v->arm_rs = -1;
             v->arm_wait = -1;
@@ -2333,7 +2401,20 @@ static int v2_steps_end(pl_player* p, pl_v2* v, const yscr_frame* f) {
         if (e->code < PL_MARK_FLAG || e->code >= PL_MARK_FLAG + 2 * 4096 || v2_anchor(p) + e->time_ns > t) continue;
         if ((e->code - PL_MARK_FLAG) / 2 < v->def->n_flags) v->flags[(e->code - PL_MARK_FLAG) / 2] = ((e->code - PL_MARK_FLAG) & 1) != 0;
     }
-    if (r->def >= 0 && (to < 0 || v->rs[to].def != r->def || v->rs[to].first)) v2_srow_close(p, v, -1, t);
+    if (r->def >= 0) {
+        bool recount = false;
+        /* rule 7: the steps end at the cursor; a step a backward at_s put
+         * after it belongs to a part that has ended (rule 9 makes an
+         * until's wait a state of its own), so it never lands */
+        for (id = v->ev0; id < v->ev1; id++) {
+            const ytl_event* e = ytl_find(&p->tl, id);
+            if (!e || (e->flags & (YTL_EV_FIRED | YTL_EV_SKIPPED)) || v2_anchor(p) + e->time_ns <= t) continue;
+            if (e->kind == YTL_ONSET && e->target == v->from_ch) recount = true;
+            (void)ytl_remove(&p->tl, id);
+        }
+        if (recount && !p->from_landed) v->from_pending = v2_from_due(p, v);
+        if (to < 0 || v->rs[to].def != r->def || v->rs[to].first) v2_srow_close(p, v, -1, t);
+    }
     return v2_enter(p, v, to, t, f, false);
 }
 
@@ -2347,7 +2428,7 @@ static int v2_take_resp(pl_player* p, pl_v2* v, const v2_exit* e, int64_t t, con
 
 static int v2_ctl_of_hit(pl_v2* v, int node) {
     int i;
-    for (i = 0; i < v->n_ctl; i++) if (v->ctl[i].hit == node) return i;
+    for (i = 0; i < v->n_ctl; i++) if (v->ctl[i].hit == node || v->ctl[i].hit_u == node) return i;
     return -1;
 }
 
@@ -2356,12 +2437,14 @@ static int v2_ctl_of_hit(pl_v2* v, int node) {
  * pending once a hit is at or after it). */
 static int v2_hits(pl_player* p, pl_v2* v, const yscr_frame* f) {
     ysig_hit h[V2_HITQ];
+    uint32_t hg[V2_HITQ];
     int n, i, k, guard = 0;
     while ((n = ysig_detected(&v->g, h, V2_HITQ)) > 0) {
         int64_t tmax = INT64_MIN;
         if (++guard > 256) { pl_fail(p, "template '%s': hits that never stop", v->def->name); return -1; }
         for (i = 0; i < n; i++) {
             int ci = v2_ctl_of_hit(v, h[i].node);
+            hg[i] = v->arm_gen[h[i].node];
             if (ci < 0) continue;
             v->ctl[ci].hit_t = h[i].t;
             v->ctl[ci].has_hit = true;
@@ -2378,8 +2461,11 @@ static int v2_hits(pl_player* p, pl_v2* v, const yscr_frame* f) {
                 const v2_exit* x = &r->exits[k];
                 int64_t tx = INT64_MAX;
                 if (x->kind == X_HIT) {
+                    /* the state's exits are armed from its entry on, in
+                     * every part (F3); an until's from its wait */
+                    int64_t since = x->until || r->def < 0 ? v->entry_t : v->def_entry_t;
                     for (i = 0; i < n; i++)
-                        if (h[i].node == v->ctl[x->ctl].hit && h[i].t >= v->entry_t && h[i].t < tx) tx = h[i].t;
+                        if (h[i].node == x->node && hg[i] == v->arm_gen[x->node] && h[i].t >= since && h[i].t < tx) tx = h[i].t;
                 } else if (x->kind == X_AFTER && v->entry_onset_known) {
                     int64_t a = 0;
                     if (pl_eval_ns(p, &p->env, x->after, &a) < 0) return -1;
@@ -2411,6 +2497,14 @@ static int v2_hits(pl_player* p, pl_v2* v, const yscr_frame* f) {
 static int v2_feed(pl_player* p, const yscr_frame* f, int64_t limit);
 /* The timed exits and step ends due before `limit` (strictly), within the
  * frame's window; v2_timed() takes every one the window reaches. */
+/* F40 (decided 2026-11-12): a timed exit is never taken on its state's
+ * entry frame, so every cycle advances the clock; an until's timeout
+ * counts the wait's own entry frame (rule 9 makes it a state). The exit
+ * keeps its time and lands on the next frame. */
+static bool v2_entry_frame(const pl_v2* v, const v2_exit* x, const yscr_frame* f) {
+    return (x->part ? v->entry_onset : v->visit_onset) == f->onset;
+}
+
 static int v2_timed_to(pl_player* p, pl_v2* v, const yscr_frame* f, int64_t limit) {
     int64_t wend = 0, guard = 0;
     ytl_frame tf;
@@ -2441,6 +2535,9 @@ static int v2_timed_to(pl_player* p, pl_v2* v, const yscr_frame* f, int64_t limi
             continue;
         }
         if (!best || bt > wend) break;
+        /* F40: due on the entry frame, it waits for the next; what is
+         * after it waits too */
+        if (v2_entry_frame(v, best, f)) break;
         if (v2_take(p, v, best, bt, f, false) < 0) return -1;
     }
     return 0;
@@ -2454,7 +2551,12 @@ static int v2_timed(pl_player* p, pl_v2* v, const yscr_frame* f) { return v2_tim
 int pl_v2_frame_timed(pl_player* p, const yscr_frame* f) {
     pl_v2* v = p->in_trial && p->tmpl ? p->tmpl->v2 : NULL;
     if (!v) return 0;
-    return v2_timed(p, v, f);
+    if (v2_timed(p, v, f) < 0) return -1;
+    /* F38, one rule for every way a state starts (a timed exit, a steps'
+     * end, the response's end, a hit): a hit its arm makes at once is
+     * taken before this frame's evaluate, so the exit wins at its time
+     * and the state's steps at that time do not land */
+    return v->has_graph ? v2_hits(p, v, f) : 0;
 }
 
 /* --- the trial: start, frames ------------------------------------------- */
@@ -2483,6 +2585,11 @@ int pl_v2_trial_start(pl_player* p, const yscr_frame* f) {
     v->arm_rs = -1;
     v->arm_wait = -1;
     v->visit_ev0 = -1;
+    {
+        ytl_event dummy;
+        memset(&dummy, 0, sizeof dummy);
+        v->trial_ev0 = ytl_add_n(&p->tl, &dummy, 0);
+    }
     v->n_tw = 0;
     v->n_frz = 0;
     v->from_pending = false;
@@ -2884,7 +2991,7 @@ int pl_v2_on_mark(pl_player* p, const ytl_event* e) {
             const v2_rs* r = &v->rs[v->arm_wait];
             int k;
             for (k = 0; k < r->n_exits; k++)
-                if (r->exits[k].kind == X_HIT && r->exits[k].to == v->arm_wait + 1 && v2_arm_ctl(p, v, r->exits[k].ctl, e->onset) < 0) return -1;
+                if (r->exits[k].kind == X_HIT && r->exits[k].to == v->arm_wait + 1 && v2_arm_exit(p, v, &r->exits[k], e->onset) < 0) return -1;
             v->arm_wait = -1;
         }
         if (v->arm_rs >= 0 && s == v->arm_after && v->rs[v->arm_rs].def == v->def_cur) {
@@ -2893,7 +3000,7 @@ int pl_v2_on_mark(pl_player* p, const ytl_event* e) {
             int k;
             v->arm_rs = -1;
             for (k = 0; k < r->n_exits; k++)
-                if (r->exits[k].kind == X_HIT && v2_arm_ctl(p, v, r->exits[k].ctl, e->onset) < 0) return -1;
+                if (r->exits[k].kind == X_HIT && v2_arm_exit(p, v, &r->exits[k], e->onset) < 0) return -1;
         }
         return 1;
     }

@@ -572,6 +572,15 @@ int pl_script_load(pl_player* p, const char* path) {
             p->script = q;
             cap = nc;
         }
+        /* several presses a trial: rows of one trial index together, each
+         * pressed after the previous one's release (a key's events go in
+         * time order) */
+        if (p->n_script > 0 && p->script[p->n_script - 1].trial == trial && resp[0] &&
+            (p->script[p->n_script - 1].silent || rt < p->script[p->n_script - 1].rt_s + p->script[p->n_script - 1].hold_s)) {
+            fclose(fp);
+            pl_fail(p, "the script '%s': trial %d: a second press must follow the first's release (rt_s at least the last row's rt_s + hold_s) and a silent row is the trial's only row", path, trial);
+            return -1;
+        }
         p->script[p->n_script].trial = trial;
         p->script[p->n_script].silent = !resp[0];
         p->script[p->n_script].rt_s = rt;
@@ -597,6 +606,7 @@ static void pl_participant_plan(pl_player* p, int trial) {
     p->press_planned = false;
     p->press_pending = false;
     p->silent = true;
+    p->script_k = -1;
     if (!t->collector || !p->args.sim) return;   /* a real run's participant is real */
     if (p->env.key_answer_known) {
         for (i = 0; i < t->n_choices; i++)
@@ -604,11 +614,13 @@ static void pl_participant_plan(pl_player* p, int trial) {
     }
     p->press_rt = p->args.rt_s > 0 ? p->args.rt_s : 0.3;
     p->press_hold = 0.08;
-    if (p->script) {
+    /* a script with no rows is a script: every trial silent, not `correct` */
+    if (p->args.participant && strncmp(p->args.participant, "script:", 7) == 0) {
         int k = -1;
         if (trial >= 0 && trial < p->n_script && p->script[trial].trial == trial) k = trial;
         else for (i = 0; i < p->n_script; i++) if (p->script[i].trial == trial) k = i;
         if (k < 0) return;   /* not in the script: silent */
+        while (k > 0 && p->script[k - 1].trial == trial) k--;   /* its first row */
         if (p->script[k].silent) return;
         p->press_choice = -1;
         for (i = 0; i < t->n_choices; i++)
@@ -619,6 +631,7 @@ static void pl_participant_plan(pl_player* p, int trial) {
         p->press_rt = p->script[k].rt_s;
         p->press_hold = p->script[k].hold_s;
         p->silent = false;
+        p->script_k = k;
         return;
     }
     {
@@ -637,6 +650,7 @@ static void pl_participant_plan(pl_player* p, int trial) {
 
 static void pl_participant_arm(pl_player* p, int64_t onset) {
     if (p->silent || p->press_planned) return;
+    p->press_onset = onset;
     p->press_at = onset + (int64_t)llround(p->press_rt * 1e9);
     p->release_at = p->press_at + (int64_t)llround(p->press_hold * 1e9);
     p->press_planned = true;
@@ -2230,7 +2244,7 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
         yrsp_input ev;
         pl_tmpl* t = p->tmpl;
         if (p->press_at <= f->onset) {
-            /* the last trial's release first, if it is still due: a key's
+            /* the last press's release first, if it is still due: a key's
              * events must arrive in time order */
             if (p->release_due) { yrsp_feed(p->release_to, &p->release_ev); p->release_due = false; }
             memset(&ev, 0, sizeof ev);
@@ -2253,6 +2267,19 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
             p->release_ev.t = p->release_at;
             p->release_ev.type = YRSP_RELEASE;
             p->release_ev.value = 0.0f;
+            /* the script's next row for this trial: another press, from the
+             * same onset (max_responses above 1) */
+            if (p->script_k >= 0 && p->script_k + 1 < p->n_script && p->script[p->script_k + 1].trial == p->script[p->script_k].trial) {
+                const pl_script_row* q = &p->script[++p->script_k];
+                int ci;
+                p->press_choice = -1;
+                for (ci = 0; ci < t->n_choices; ci++)
+                    if (strcmp(t->choice_keys[ci], q->resp) == 0 || strcmp(t->collector->ch[ci].name ? t->collector->ch[ci].name : "", q->resp) == 0) p->press_choice = ci;
+                if (p->press_choice < 0) { pl_fail(p, "trial %d: the script's response '%s' is not a choice", q->trial, q->resp); return -1; }
+                p->press_at = p->press_onset + (int64_t)llround(q->rt_s * 1e9);
+                p->release_at = p->press_at + (int64_t)llround(q->hold_s * 1e9);
+                p->press_pending = true;
+            }
         }
     }
     /* a key held past its trial's end: its collector still hears the release,

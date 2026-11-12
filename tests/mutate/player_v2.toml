@@ -89,6 +89,8 @@ replace = '''an[1].p[YSIG_INTEGRATE_GAIN_X] = an[1].p[YSIG_INTEGRATE_GAIN_Y] = 1
 id = "v2-10"
 name = "a frame's hits run once"
 test = "player"
+expect = "survived"
+note = "Equivalent since player 0.8.0: v2_timed_to() and pl_v2_frame_timed() take an arm's hit at once, so one round of hits and timed exits settles a frame; the later rounds stay as a guard. Killed by t_v2_rule5b before."
 why = "Rule 5: a hit that starts a state lands on its frame; the loop runs again (F26's named stop)."
 find = '''            if (++guard > 64) { pl_fail(p, "template '%s': a frame's hits never settle", v->def->name); return -1; }'''
 replace = '''            if (++guard > 1) break;'''
@@ -241,10 +243,10 @@ why = "Re-review E: the off and the flag due by a timed exit in the same frame."
 find = '''                        v->flags[(e->code - PL_MARK_FLAG) / 2] = ((e->code - PL_MARK_FLAG) & 1) != 0;
                     continue;
                 }
-                /* a removed onset'''
+                if (e->kind == YTL_ONSET && e->target == v->from_ch) recount = true;'''
 replace = '''                        v->flags[(e->code - PL_MARK_FLAG) / 2] = ((e->code - PL_MARK_FLAG) & 1) != 0;
                 }
-                /* a removed onset'''
+                if (e->kind == YTL_ONSET && e->target == v->from_ch) recount = true;'''
 
 [[mutant]]
 id = "v2-28"
@@ -514,3 +516,87 @@ test = "player"
 why = "Final review 7: a press is never timeout."
 find = '''    if (!responded && !x.outcome && !x.outcome_text) x.outcome_text = "timeout";'''
 replace = '''    if (!x.outcome && !x.outcome_text) x.outcome_text = "timeout";'''
+
+[[mutant]]
+id = "v2-60"
+name = "at_s counts from the trial, not the state"
+test = "player"
+why = "Model item 1 (vm_at_s): 3.11 rule 6."
+find = '''        p->ops_origin = r->def >= 0 ? cursor : 0;'''
+replace = '''        p->ops_origin = 0;'''
+
+[[mutant]]
+id = "v2-61"
+name = "an arm's hit not drained before the evaluate"
+test = "player"
+why = "Model item 2 (vm_arm_after, vm_arm_response): F38."
+find = '''    return v->has_graph ? v2_hits(p, v, f) : 0;'''
+replace = '''    return 0;'''
+
+[[mutant]]
+id = "v2-63"
+name = "the until's timeout code counts its hit"
+test = "player"
+why = "Model item 4 (vm_f28): reading F28."
+find = '''                x->code = n_own + n_sh + (resp_end ? 1 : 0);'''
+replace = '''                x->code = n_own + n_sh + (resp_end ? 2 : 1);'''
+
+[[mutant]]
+id = "v2-64"
+name = "an until shares the exit's detect"
+test = "player"
+why = "Model item 5 (vm_until_own): F3."
+find = '''                        x->node = v->ctl[x->ctl].hit_u;'''
+replace = ''''''
+
+[[mutant]]
+id = "v2-65"
+name = "a state's exit counts hits from its part"
+test = "player"
+why = "Model run 2 (seed 2465): the exits stay armed from the visit's entry."
+find = '''                    int64_t since = x->until || r->def < 0 ? v->entry_t : v->def_entry_t;'''
+replace = '''                    int64_t since = v->entry_t;'''
+
+[[mutant]]
+id = "v2-66"
+name = "F40 off in the timed pass"
+test = "player"
+why = "F40 (vm_f40, t_v2_rule5)."
+find = '''        if (v2_entry_frame(v, best, f)) break;'''
+replace = ''''''
+
+[[mutant]]
+id = "v2-69"
+name = "F40 for an until's timeout counts the state's entry frame"
+test = "player"
+why = "F40 (vm_f40_until): the wait's own entry frame."
+find = '''    return (x->part ? v->entry_onset : v->visit_onset) == f->onset;'''
+replace = '''    return v->visit_onset == f->onset;'''
+
+[[mutant]]
+id = "v2-70"
+name = "a stale hit of an earlier arm taken"
+test = "player"
+why = "Model run 2 (seed 8597, vm_stale_hit)."
+find = '''h[i].node == x->node && hg[i] == v->arm_gen[x->node] && h[i].t >= since'''
+replace = '''h[i].node == x->node && h[i].t >= since'''
+
+[[mutant]]
+id = "v2-71"
+name = "a step after the steps' end lands"
+test = "player"
+why = "Model run 2 (seed 510, vm_backward_at): rule 7."
+find = '''            if (!e || (e->flags & (YTL_EV_FIRED | YTL_EV_SKIPPED)) || v2_anchor(p) + e->time_ns <= t) continue;
+            if (e->kind == YTL_ONSET && e->target == v->from_ch) recount = true;
+            (void)ytl_remove(&p->tl, id);'''
+replace = '''            continue;'''
+
+[[mutant]]
+id = "v2-72"
+name = "a removed copy of from closes the window"
+test = "player"
+why = "Model b (vm_from_kept): F34 rule 3."
+find = '''        if (recount && !p->from_landed) v->from_pending = v2_from_due(p, v);
+        if (!stays && v->def->states) {'''
+replace = '''        if (recount && !p->from_landed) v->from_pending = false;
+        if (!stays && v->def->states) {'''

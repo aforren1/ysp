@@ -1222,9 +1222,10 @@ def t_v2_hand(ctx):
 
 
 def t_v2_rule5(ctx):
-    # rule 5: a hit starts a state whose timed exit is already due at the
-    # frame's onset; the frame takes that exit too, so the trial ends on the
-    # hit's frame, not one frame later. Also --profile: a build with no
+    # rule 5 and F40: a hit starts a state whose timed exit is already due
+    # at the frame's onset; F40 (decided 2026-11-12) keeps a timed exit off
+    # its state's entry frame, so the trial ends one frame after the hit's
+    # frame. Also --profile: a build with no
     # trace ring refuses it before the data set exists (exit 2); a trace
     # ring build writes profile.csv
     t = {"controls": {"away": {"control": "region", "of": "hand", "radius": 1, "outside": True}},
@@ -1241,13 +1242,13 @@ def t_v2_rule5(ctx):
         st = [e for e in r.events if e["kind"] == "state"]
         fa = [int(e["frame"]) for e in st if e["text"] == "b"]
         el = float(r.trials[0]["time_elapsed_s"])
-        # the hit's frame is frame 31 (onset 0.5167 s); the trial ends there
-        check(abs(el - 31 / 60.0) < 0.002, "v2 rule 5: the trial ends on the hit's frame: %.6f s, b's frames %s" % (el, fa))
-    # a chain on one frame: a's hit starts b, b's timed exit c, c's control
-    # (already true at its arm, entry now) d, d's timed exit e, e's control
-    # the end. d's after_s ends past c's arm hit, so the frame's timed exits
-    # (not its hits) take it; e's arm hit then needs the frame's second
-    # round of hits (rule 5), else the trial ends a frame late
+        # the hit's frame is frame 31 (onset 0.5167 s), b's entry frame; the
+        # trial ends on frame 32 (F40)
+        check(abs(el - 32 / 60.0) < 0.002 and fa == [31], "v2 rule 5, F40: the trial ends a frame after the hit's: %.6f s, b's frames %s" % (el, fa))
+    # a chain: a's hit starts b (frame 31), b's timed exit c on the next
+    # frame (F40), c's control (already true at its arm, entry now) d on
+    # that frame, d's timed exit e a frame later (F40), e's arm hit the end
+    # on e's frame (the hits an arm makes go before the evaluate)
     ctl = {"away": t["controls"]["away"],
            "far": {"control": "region", "of": "hand", "radius": 0.5, "outside": True},
            "far2": {"control": "region", "of": "hand", "radius": 0.25, "outside": True}}
@@ -1263,7 +1264,9 @@ def t_v2_rule5(ctx):
     if r2.rc == 0 and r2.trials:
         el = float(r2.trials[0]["time_elapsed_s"])
         names = [e["text"] for e in r2.events if e["kind"] == "state"]
-        check(abs(el - 31 / 60.0) < 0.002 and names == ["a", "b", "c", "d", "e"], "v2 rule 5b: the chain ends on the hit's frame: %.6f s %s" % (el, names))
+        fr = [int(e["frame"]) for e in r2.events if e["kind"] == "state"]
+        check(abs(el - 33 / 60.0) < 0.002 and names == ["a", "b", "c", "d", "e"] and fr[1:] == [31, 32, 32, 33],
+              "v2 rule 5b, F40: the chain ends two frames after the hit's: %.6f s %s %s" % (el, names, fr))
     r = Run(ctx, "v2_profile", d, args=["--sim-gain", "hand=1", "--samples", sp, "--profile"])
     prof = os.path.join(r.data, "profile.csv")
     if r.rc == 2:
@@ -1876,6 +1879,164 @@ def t_v2_review5(ctx):
         refused("rv5_f37_var_v%d" % ver, d, ["duration_s can be 0 here (level '0')", "F37"])
 
 
+def t_v2_model(ctx):
+    # the reference model's findings (tests/model on branch v2-model, its
+    # runs against player 0.6.0 and 0.7.0), one case each
+    dev = {"devices": {"r": {"direction": "in", "family": ["keyboard"], "required": True}}}
+    hand = {"hand": {"type": "position2d_relative", "units": "display_px"}}
+    resp = {"role": "r", "choices": ["left", "right"], "from": "s", "duration_s": 1, "key_answer": "left"}
+    P1 = dict(resp, response_ends_trial=False)
+    inside = os.path.join(ctx.out, "vm_in.csv")
+    write_samples(inside, [(0.001 * k, "hand", 0, 0) for k in range(3000)])
+
+    def one(nm, d, args, want_rows=None, rc=0):
+        r = Run(ctx, nm, d, args=args + ["--max-seconds", "20"])
+        got = [(x["outcome"], round(float(x["time_elapsed_s"]), 3)) for x in r.trials] if r.rc == 0 else r.err[:300]
+        if want_rows is not None:
+            check(r.rc == rc and got == want_rows, "%s: want %s, got exit %d %s" % (nm, want_rows, r.rc, got))
+        return r
+
+    def rows(r, trial="0"):
+        if r.rc != 0:
+            return []
+        t0 = float(r.events[0]["t_s"])
+        return [(e["text"], int(e["frame"]), round(float(e["end_s"]) - t0, 4), int(e["code"])) for e in r.events if e["kind"] == "state" and e["trial_index"] == trial]
+
+    def lands(r, kind):
+        return [(e["text"] or e.get("stimulus", ""), int(e["frame"])) for e in r.events if e["kind"] == kind] if r.rc == 0 else None
+    # 1: at_s in a state counts from the state's entry (3.11 rule 6)
+    t = {"states": [{"name": "s0", "steps": [{"wait_s": 0.144}]}, {"name": "s1", "steps": [{"at_s": 0.193}]}]}
+    r = one("vm_at_s", v2base({"t": t}, [{"name": "l", "trial": "t"}]), [])
+    check([x[2] for x in rows(r)] == [0.144, 0.337], "1: at_s from s1's entry: %s" % rows(r))
+    # 3: a script with only a header is silent, not `correct`
+    sc = os.path.join(ctx.out, "vm_empty.csv")
+    with open(sc, "w", newline="\n") as f:
+        f.write("trial_index,response,rt_s,hold_s\n")
+    t = {"states": [{"name": "a", "steps": [{"on": "s"}, {"wait_s": 0.5}]}], "response": resp}
+    one("vm_empty_script", v2base({"t": t}, [{"name": "l", "trial": "t"}], extra=dev), ["--participant", "script:" + sc], [("timeout", 1.0)])
+    # 4 (F28): an until's timeout code is the count of the state's own,
+    # shared and added exits
+    far = {"control": "region", "of": "hand", "radius": 5, "outside": True}
+    t = {"controls": {"far": far}, "exits": [{"after_s": 5, "to": "end", "in": ["a"]}],
+         "states": [{"name": "a", "steps": [{"on": "s"}, {"until": "far", "timeout_s": 0.2}], "exits": [{"after_s": 4, "to": "end"}]}]}
+    r = one("vm_f28", v2base({"t": t}, [{"name": "l", "trial": "t"}], roles=hand), ["--sim-gain", "hand=1", "--samples", inside], [("timeout", 0.2)])
+    check([x[3] for x in rows(r)] == [2], "4: the timeout's code 2 (one own, one shared exit): %s" % rows(r))
+    t["response"] = resp
+    r = one("vm_f28_rsp", v2base({"t": t}, [{"name": "l", "trial": "t"}], roles=hand, extra=dev), ["--sim-gain", "hand=1", "--samples", inside, "--participant", "silent"])
+    check([x[3] for x in rows(r)] == [3], "4: with response_ends_trial's exit, code 3: %s" % rows(r))
+    # 5 (F3): an until on the control an exit names has its own detect: the
+    # exit's hold runs from the state's entry, the until's arm does not
+    # restart it. The hand goes out at 0; the hold is 0.1; the until arms
+    # at 0.067; the exit hits at 0.1, not 0.167
+    out = os.path.join(ctx.out, "vm_out.csv")
+    write_samples(out, [(0.001 * k, "hand", 9, 0) for k in range(3000)])
+    t = {"controls": {"r0": dict(far, stay_s=0.1)},
+         "states": [{"name": "s0", "steps": [{"on": "s"}, {"wait_s": 0.067}, {"until": "r0"}, {"wait_s": 5}], "exits": [{"on": "r0", "to": "end", "outcome": "exit"}]}]}
+    r = one("vm_until_own", v2base({"t": t}, [{"name": "l", "trial": "t"}], roles=hand), ["--sim-gain", "hand=1", "--samples", out])
+    check(r.rc == 0 and [x[2] for x in rows(r)] == [0.1] and r.trials[0]["outcome"] == "exit", "5: the exit's hold from the entry: %s" % rows(r))
+    # 2 (F38): a hit that an arm makes is taken before the frame's evaluate,
+    # whatever started the state: a timed exit, a steps' end, the response's
+    # end. s1's steps at that time do not land
+    for nm, s0 in (("after", {"name": "s0", "steps": [{"on": "s"}], "exits": [{"after_s": 0.099, "to": "s1"}]}),
+                   ("steps", {"name": "s0", "steps": [{"on": "s"}, {"wait_s": 0.099}]}),
+                   ("response", {"name": "s0", "steps": [{"on": "s"}], "exits": [{"on": "response", "to": "s1"}]})):
+        t = {"controls": {"r0": {"control": "region", "of": "hand", "radius": 10}},
+             "states": [s0, {"name": "s1", "steps": [{"on": "t"}, {"at_s": 0.15}], "exits": [{"on": "r0", "to": "end", "outcome": "o2"}]}]}
+        args = ["--sim-gain", "hand=1", "--samples", inside]
+        extra = None
+        if nm == "response":
+            t["response"] = P1
+            extra = dev
+            args += ["--rt", "0.099"]
+        r = one("vm_arm_" + nm, v2base({"t": t}, [{"name": "l", "trial": "t"}], roles=hand, extra=extra), args)
+        check(r.rc == 0 and r.trials[0]["outcome"] == "o2" and lands(r, "onset") == [("s", 0)], "2 (%s): t never lands: %s %s" % (nm, lands(r, "onset"), rows(r)))
+    # 7 (reading F39): a response that becomes final in a state entered
+    # after its time: the exit at the state's entry, so no row ends before
+    # it starts
+    # (a's exit at 0.291 lands on frame 17, the press at 0.29 is fed on
+    # frame 18: b is current when the response ends)
+    t = {"states": [{"name": "a", "steps": [{"on": "s"}], "exits": [{"after_s": 0.291, "to": "b"}]},
+                    {"name": "b", "exits": [{"on": "response", "to": "end", "outcome": "rsp_b"}, {"after_s": 0.5, "to": "end", "outcome": "timed"}]}],
+         "response": dict(P1, max_responses=1)}
+    r = one("vm_f39", v2base({"t": t}, [{"name": "l", "trial": "t"}], extra=dev), ["--rt", "0.29"])
+    check(r.rc == 0 and r.trials[0]["outcome"] == "rsp_b" and [x[2] for x in rows(r)] == [0.291, 0.291], "7 (F39): b takes the response at its entry: %s %s" % (r.trials[:1], rows(r)))
+    # F40: a shared after_s of half a frame or less from s1 back to s1 with
+    # max_visits: each visit one frame
+    t = {"exits": [{"after_s": 0.008, "to": "s1", "in": ["s1"]}],
+         "states": [{"name": "s1", "steps": [{"on": "s"}], "max_visits": 5, "over": {"to": "end", "outcome": "over"}}]}
+    r = one("vm_f40", v2base({"t": t}, [{"name": "l", "trial": "t"}]), [], [("over", 0.083)])
+    check([x[1] for x in rows(r)] == [0, 1, 2, 3, 4, 5], "F40: one frame a visit: %s" % rows(r))
+    # F40 for an until's timeout: from the wait's own entry frame (0.02 s
+    # lands on frame 1, so the timeout of 1 ms on frame 2)
+    t = {"controls": {"far": far}, "states": [{"name": "a", "steps": [{"on": "s"}, {"wait_s": 0.02}, {"until": "far", "timeout_s": 0.001}]}]}
+    r = one("vm_f40_until", v2base({"t": t}, [{"name": "l", "trial": "t"}], roles=hand), ["--sim-gain", "hand=1", "--samples", inside], [("timeout", 0.033)])
+    # b (F34 rule 3): a `from` shown by an earlier visit opens the window,
+    # though a later visit's copy of the step is removed
+    t = {"states": [{"name": "s0", "steps": [{"on": "s"}], "exits": [{"after_s": 0.005, "to": "s0"}], "max_visits": 3, "over": {"to": "end"}}],
+         "response": dict(resp, duration_s=0.396)}
+    one("vm_from_kept", v2base({"t": t}, [{"name": "l", "trial": "t"}], extra=dev), ["--participant", "silent"], [("timeout", 0.4)])
+    # c: a script's rows of one trial are several presses; max_responses 2
+    # ends the response at the second
+    sc2 = os.path.join(ctx.out, "vm_two.csv")
+    with open(sc2, "w", newline="\n") as f:
+        f.write("trial_index,response,rt_s,hold_s\n0,right,0.2,0.05\n0,left,0.4,0.05\n")
+    t = {"states": [{"name": "a", "steps": [{"on": "s"}], "exits": [{"on": "response", "to": "end", "outcome": "rsp"}]}],
+         "response": dict(P1, duration_s=2, max_responses=2)}
+    r = one("vm_two_presses", v2base({"t": t}, [{"name": "l", "trial": "t"}], extra=dev), ["--participant", "script:" + sc2], [("rsp", 0.4)])
+    check(r.rc == 0 and r.trials[0].get("n_responses", "2") == "2", "c: two presses: %s" % r.trials[:1])
+    with open(sc2, "w", newline="\n") as f:
+        f.write("trial_index,response,rt_s,hold_s\n0,right,0.2,0.3\n0,left,0.4,0.05\n")
+    r = Run(ctx, "vm_two_overlap", v2base({"t": t}, [{"name": "l", "trial": "t"}], extra=dev), args=["--participant", "script:" + sc2])
+    check(r.rc != 0 and "follow the first's release" in r.err, "c: a press before the last release refused: %s" % r.err[:200])
+    # c: a trial's presses start at its first row (rows of trial 1 at
+    # script rows 0 and 1)
+    with open(sc2, "w", newline="\n") as f:
+        f.write("trial_index,response,rt_s,hold_s\n1,right,0.2,0.05\n1,left,0.4,0.05\n")
+    r = one("vm_two_trial1", v2base({"t": t}, [{"name": "l", "trial": "t", "rules": ["reps 2"]}], extra=dev), ["--participant", "script:" + sc2])
+    check(r.rc == 0 and [x["outcome"] for x in r.trials] == ["rsp", "rsp"] and r.trials[1]["response"] == "right" and r.trials[1]["rt_s"] == "0.200000000",
+          "c: trial 1's two presses from its first row: %s" % [(x["outcome"], x["response"], x["rt_s"]) for x in r.trials])
+    # an arm drops the hits of the node's earlier arm that a drain holds:
+    # r0 (0.04) and r1 (0.045) complete in one frame's pass; r0 re-enters
+    # s2, whose new arm of r1 makes the batch's r1 hit stale
+    t = {"controls": {"r0": {"control": "region", "of": "hand", "radius": 10, "stay_s": 0.04}, "r1": {"control": "region", "of": "hand", "radius": 10, "stay_s": 0.045}},
+         "states": [{"name": "s0"}, {"name": "s1"}, {"name": "s2", "steps": [{"on": "s"}], "exits": [{"on": "r1", "to": "s2", "outcome": "o2"}, {"on": "r0", "to": "s0"}],
+                     "max_visits": 3, "over": {"to": "end", "outcome": "over"}}]}
+    still = os.path.join(ctx.out, "vm_still.csv")
+    write_samples(still, [(0.0, "hand", 0, 0)])   # one sample: holds end in frame passes
+    r = one("vm_stale_hit", v2base({"t": t}, [{"name": "l", "trial": "t"}], roles=hand), ["--sim-gain", "hand=1", "--samples", still])
+    codes = [x[3] for x in rows(r) if x[0] == "s2"]
+    check(r.rc == 0 and r.trials[0]["outcome"] == "over" and codes == [1, 1, 1, -2], "an earlier arm's hit is stale: s2's codes %s" % codes)
+    # b with no F40 between: A shows `from` and its steps end at once, B's
+    # copy of the step goes with B's exit at that time; A's onset still
+    # lands, so the trial waits for the deadline
+    t = {"controls": {"r0": {"control": "region", "of": "hand", "radius": 10}},
+         "states": [{"name": "A", "steps": [{"on": "s"}]}, {"name": "B", "steps": [{"on": "s"}], "exits": [{"on": "r0", "to": "end"}]}],
+         "response": dict(resp, duration_s=0.396)}
+    one("vm_from_kept2", v2base({"t": t}, [{"name": "l", "trial": "t"}], roles=hand, extra=dev), ["--sim-gain", "hand=1", "--samples", still, "--participant", "silent"], [("timeout", 0.4)])
+    # a state's exit counts hits from the visit's entry: the steps end at
+    # 0.02 (taken in frame 1's pass, whose input ends at 0.0167), the hand
+    # leaves at 0.018 (fed in frame 2): the exit at 0.018, not lost to the
+    # until's part
+    jump = os.path.join(ctx.out, "vm_jump.csv")
+    write_samples(jump, [(0.0, "hand", 0, 0), (0.018, "hand", 9, 0)])
+    t = {"controls": {"rB": dict(far), "rA": dict(far, radius=50)},
+         "states": [{"name": "a", "steps": [{"on": "s"}, {"wait_s": 0.02}, {"until": "rA"}], "exits": [{"on": "rB", "to": "end", "outcome": "rB"}]}]}
+    r = one("vm_hit_across_part", v2base({"t": t}, [{"name": "l", "trial": "t"}], roles=hand), ["--sim-gain", "hand=1", "--samples", jump])
+    check(r.rc == 0 and r.trials[0]["outcome"] == "rB" and [x[2] for x in rows(r)] == [0.018], "the exit's hit at 0.018 across the part's change: %s %s" % (r.err[:200], rows(r)))
+    # c: two presses in one frame before the deadline both count
+    with open(sc2, "w", newline="\n") as f:
+        f.write("trial_index,response,rt_s,hold_s\n0,right,0.2,0.002\n0,left,0.205,0.002\n")
+    t = {"states": [{"name": "a", "steps": [{"on": "s"}], "exits": [{"on": "response", "to": "end"}]}],
+         "response": dict(P1, duration_s=0.21, max_responses=2)}
+    r = one("vm_two_one_frame", v2base({"t": t}, [{"name": "l", "trial": "t"}], extra=dev), ["--participant", "script:" + sc2])
+    check(r.rc == 0 and [x[2] for x in rows(r)] == [0.205], "c: the second press in the same frame ends the response at 0.205: %s" % rows(r))
+    # rule 7: a backward at_s ends the steps at the cursor; a step it put
+    # after that never lands
+    t = {"states": [{"name": "s0", "steps": [{"on": "s"}, {"at_s": 0.137}, {"mark": "m1"}, {"at_s": 0.083}]}, {"name": "s1", "steps": [{"wait_s": 0.2}]}]}
+    r = one("vm_backward_at", v2base({"t": t}, [{"name": "l", "trial": "t"}]), [])
+    check(r.rc == 0 and lands(r, "mark") == [] and [x[2] for x in rows(r)] == [0.083, 0.283], "rule 7: m1 never lands: %s %s" % (lands(r, "mark"), rows(r)))
+
+
 def t_v2_corpus(ctx):
     # the loader's valid but unusual version 2 files (tests/experiment/good)
     good = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "experiment", "good")
@@ -1914,7 +2075,7 @@ TESTS = [t_nested, t_if_unless, t_empty_and_zero, t_loop, t_requeue, t_track_end
          t_fix_record_inherit, t_fix_backward_at, t_fix_refusals, t_fix_michelson_order, t_fix_texture_vars, t_fix_walk_budget,
          t_fix_data_set, t_fix_check_all_leaves, t_fix_release_order, t_fix_key_var_reapply,
          t_r2_release_other_template, t_r2_yield_draws_nothing, t_r2_low, t_r2_relaxed, t_r4_leaf_loop_done_track, t_r4_requeue_full,
-         t_r5_wait_final, t_r6_allow_below, t_v2_states, t_v2_until, t_v2_hand, t_v2_rule5, t_v2_review2, t_v2_review3, t_v2_f34, t_v2_review4, t_v2_review5, t_v2_corpus]
+         t_r5_wait_final, t_r6_allow_below, t_v2_states, t_v2_until, t_v2_hand, t_v2_rule5, t_v2_review2, t_v2_review3, t_v2_f34, t_v2_review4, t_v2_review5, t_v2_model, t_v2_corpus]
 
 
 def main():
