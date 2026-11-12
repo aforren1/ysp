@@ -67,8 +67,10 @@ replace = '''                if (0) return 0;'''
 
 [[mutant]]
 id = "h-v2-01"
-name = "a version 2 template's ops checked"
+name = "a version 3 template's ops checked"
 test = "player"
-why = "experiment.h 0.3.0 reads version 2; check_ops met until in events and said 'unknown step' before the by-name refusal (player_test.py t_v2_refused)."
+expect = "survived"
+note = "A guard since the player 0.3.0 (PL_FORMAT_VERSION 2): the loader refuses a version above 2 (version_newer) before the host's check runs, so no definition reaches it."
+why = "A version the player does not lower is not checked op by op: check_ops would name a step the version adds as unknown."
 find = '''    if (d->format_version > PL_FORMAT_VERSION) return 0;'''
 replace = ''''''
