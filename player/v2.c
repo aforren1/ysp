@@ -20,8 +20,9 @@
 #define V2_MAX_FORMS 8           /* distinct forms of one property         */
 #define V2_HITQ 64
 #define V2_TRACE_ROWS 65536      /* a sample trace's rows in one trial      */
-#define V2_FRAME_WAIT (PL_OUT_WAIT_FRAMES + 12)   /* a frame trace's rows that wait: the
-                                  * rows' bound, the test delay of 8 frames, 4 more */
+/* a frame trace's rows that wait for records: the rows' bound, the test
+ * delay of 8 frames and margin, and never fewer than 0.3.0's 64 */
+#define V2_FRAME_WAIT ((PL_OUT_WAIT_FRAMES + 12) * 2 > 64 ? (PL_OUT_WAIT_FRAMES + 12) * 2 : 64)
 #define V2_STATE_ROWS 64         /* state rows waiting for their record     */
 #define V2_HISTORY 4096          /* D38's ring for a value read at a time   */
 #define V2_SAMPLE_MAX_S 1e7      /* a samples file's latest time: 115 days  */
@@ -29,7 +30,7 @@
 #define V2_SAMPLE_MAX_V 1e9      /* a sample's largest coordinate           */
 
 enum { X_HIT = 1, X_RESPONSE, X_AFTER, X_INSTANT };
-enum { P_NUM = 0, P_NEG, P_SEC };
+enum { P_NUM = 0, P_NEG, P_SEC, P_ENTRY };   /* P_ENTRY: a hold in seconds to a detect's entry */
 
 /* --- structures ------------------------------------------------------- */
 
@@ -207,7 +208,7 @@ struct pl_v2 {
     bool resp_ended;           /* the key response's window ended            */
     bool end_wait;             /* F34: the states reached `end`; the trial
                                 * waits for the response's end              */
-    int64_t end_wait_t, resp_dur;
+    int64_t end_wait_t, resp_dur, resp_minrt;
     int64_t last_eval_rel;     /* the last evaluated frame's base time: a
                                 * stopped tween holds what it wrote there    */
     /* the flip records' onsets of the trial's frame times (a time column
@@ -744,9 +745,13 @@ static int v2_hit_detect(pl_player* p, pl_v2* v, int in, const yexp_value* stay,
     v->nodes[k].history = V2_HISTORY;
     if (stay && v2_set(p, v, k, YSIG_DETECT_HOLD, stay, -1, P_SEC) < 0) return -1;
     {
-        /* entry: now for a hit with no hold, arm with one, set with the hold */
-        bool fixed0 = !stay || (stay->kind == YEXP_V_NUMBER && stay->num == 0 && (stay->flags & YEXP_VF_DURATION ? stay->i == 0 : 1));
-        v->nodes[k].p[YSIG_DETECT_ENTRY] = fixed0 ? YSIG_ENTRY_NOW : YSIG_ENTRY_ARM;
+        /* entry: now for a hit with no hold, arm with one (3.7); a hold of 0
+         * ns after rounding is none (the loader's F26 rule too); a variable
+         * hold chooses at each trial's start */
+        bool lit = !stay || stay->kind == YEXP_V_NUMBER;
+        double h = !stay ? 0 : (stay->flags & YEXP_VF_DURATION) ? (double)stay->i / 1e9 : stay->num;
+        v->nodes[k].p[YSIG_DETECT_ENTRY] = lit && h < 0.5e-9 && h > -0.5e-9 ? YSIG_ENTRY_NOW : YSIG_ENTRY_ARM;
+        if (!lit && v2_param_add(p, v, k, YSIG_DETECT_ENTRY, stay, -1, P_ENTRY) < 0) return -1;
     }
     return k;
 }
@@ -1178,11 +1183,16 @@ static int v2_mix_find(const yexp_step* st, int n, const yexp_step* const* all, 
 
 static int v2_template_checks(pl_player* p, pl_v2* v) {
     const yexp_template* t = v->def;
-    const yexp_step* all[66];
-    int n_all[66], lists = 0, i, most = 0;
+    /* a list per state, the events, the after: sized from the template, so
+     * every state count the loader takes is taken here too */
+    int cap = (t->states ? t->n_states : 1) + 1;
+    const yexp_step** all = (const yexp_step**)pl_alloc(p, sizeof(yexp_step*) * (size_t)cap);
+    int* n_all = (int*)pl_alloc(p, sizeof(int) * (size_t)cap);
+    int lists = 0, i, most = 0;
     const char* stim = NULL, *prop = NULL;
+    if (!all || !n_all) return -1;
     if (t->states)
-        for (i = 0; i < t->n_states && lists < 64; i++) {
+        for (i = 0; i < t->n_states; i++) {
             int c = v2_tween_ops(t->states[i].steps, t->states[i].n_steps);
             if (c > most) most = c;
             all[lists] = t->states[i].steps;
@@ -1195,10 +1205,6 @@ static int v2_template_checks(pl_player* p, pl_v2* v) {
     }
     all[lists] = t->after;
     n_all[lists++] = t->n_after;
-    if (t->states && t->n_states > 64) {
-        pl_fail(p, "template '%s': more than 64 states", t->name);
-        return -1;
-    }
     for (i = 0; i < lists; i++)
         if (v2_mix_find(all[i], n_all[i], all, n_all, lists, &stim, &prop)) {
             pl_fail(p, "template '%s': '%s.%s' is tweened (to, then) in one step list and set in another; a property is driven by a tween or by sets, not both (as in one version 1 table)",
@@ -1238,6 +1244,8 @@ static int v2_traces_build(pl_player* p, pl_v2* v) {
         const yexp_value* rate;
         int k, lanes = 0;
         if (d->kind != YEXP_TRACE) continue;
+        /* a waiting frame row names its trace as template x 64 + trace */
+        if (v->n_traces >= 64) { pl_fail(p, "template '%s': more than 63 traces", v->def->name); return -1; }
         tr = &v->traces[v->n_traces++];
         memset(tr, 0, sizeof *tr);
         tr->def = d;
@@ -1628,6 +1636,30 @@ int pl_v2_load(pl_player* p) {
         }
         if (v2_binds(p, v) < 0 || v2_recenter_scan(p, v) < 0) return -1;
     }
+    /* a stream a trace name, and one an rdk: the data set holds
+     * YDS_MAX_STREAMS; refused here by name, not at the session's start */
+    {
+        int names = 0, k2, j2;
+        for (ti = 0; ti < S->n_t; ti++) {
+            pl_v2* v = S->t[ti];
+            if (!v) continue;
+            for (k2 = 0; k2 < v->n_traces; k2++) {
+                int seen = 0, tj;
+                for (tj = 0; tj <= ti && !seen; tj++) {
+                    pl_v2* w = S->t[tj];
+                    if (!w) continue;
+                    for (j2 = 0; j2 < (tj == ti ? k2 : w->n_traces); j2++)
+                        if (strcmp(w->traces[j2].def->name, v->traces[k2].def->name) == 0) { seen = 1; break; }
+                }
+                names += !seen;
+            }
+        }
+        for (k2 = 0; k2 < p->def->n_stimuli; k2++) if (p->def->stimuli[k2].kind == YEXP_RDK) names++;
+        if (names > YDS_MAX_STREAMS) {
+            pl_fail(p, "the definition has %d streams (trace names and rdk stimuli); the data set holds %d", names, YDS_MAX_STREAMS);
+            return -1;
+        }
+    }
     /* every frame trace's rows can wait V2_FRAME_WAIT frames for records */
     if (S->cap_fpend > V2_MAX_FRAME_TRACES) {
         pl_fail(p, "the definition has %d frame traces; the player takes at most %d", S->cap_fpend, V2_MAX_FRAME_TRACES);
@@ -1800,8 +1832,10 @@ static int v2_item(pl_player* p, const yexp_value* v, int elem, double* out, int
         x = y;
     }
     if (x.kind != YEXP_V_NUMBER && x.kind != YEXP_V_BOOL) { pl_fail(p, "a control's number is not a number"); return -1; }
-    *out = how == P_SEC && (x.flags & YEXP_VF_DURATION) ? (double)x.i / 1e9 : x.num;
+    *out = (how == P_SEC || how == P_ENTRY) && (x.flags & YEXP_VF_DURATION) ? (double)x.i / 1e9 : x.num;
     if (how == P_NEG) *out = -*out;
+    /* 3.7: a hold of 0 (in ns, as the loader rounds) is entry now, else arm */
+    if (how == P_ENTRY) *out = (*out < 0.5e-9 && *out > -0.5e-9) ? YSIG_ENTRY_NOW : YSIG_ENTRY_ARM;
     return 0;
 }
 
@@ -1953,7 +1987,11 @@ static void v2_resp_arm(pl_player* p, pl_v2* v, int64_t t) {
     int i;
     yrsp_collector* c = p->tmpl->collector;
     if (!c || !r || !r->signal_choices) return;
+    /* yrsp_arm() sets the desc's window again: the trial's deadline and
+     * minimum rt go back on at every arm */
     yrsp_arm(c, t);
+    yrsp_set_window(c, v->resp_minrt, v->resp_dur);
+    yrsp_set_wait_final(c, PL_WAIT_FINAL_NS);
     /* each movement's origin, else the last position fed before the arm */
     for (i = 0; i < v->n_ctl; i++) {
         const yexp_control* m = v->ctl[i].def;
@@ -2041,7 +2079,7 @@ static int v2_enter(pl_player* p, pl_v2* v, int rs, int64_t t, const yscr_frame*
              * deadline; a persisting one with no deadline is closed by the
              * trial's end, as before (else nothing would end the trial) */
             if (v->def->response && p->responding && !v->resp_ended && (p->from_landed || v->from_pending) &&
-                (v->def->response->ends_trial || v->resp_dur > 0)) {
+                (v->def->response->ends_trial || v->resp_dur > 0 || v->def->response->max_responses > 0)) {
                 v->end_wait = true;
                 v->end_wait_t = t;
                 return 0;
@@ -2245,9 +2283,10 @@ static int v2_take(pl_player* p, pl_v2* v, const v2_exit* x, int64_t t, const ys
             for (id = from; id < v->ev1; id++) {
                 const ytl_event* e = ytl_find(&p->tl, id);
                 if (!e || (e->flags & (YTL_EV_FIRED | YTL_EV_SKIPPED))) continue;
-                if (v2_anchor(p) + e->time_ns <= t) {
-                    /* due by the exit's time: it happened, and lands in this
-                     * frame's evaluate; a flag holds for the next state now */
+                if (v2_anchor(p) + e->time_ns < t) {
+                    /* reading F38: due before the exit's time, it happened
+                     * and lands in this frame's evaluate (a flag holds for
+                     * the next state now); at the exit's time the exit wins */
                     if (e->kind == YTL_MARK && e->code >= PL_MARK_FLAG && e->code < PL_MARK_FLAG + 2 * 4096 && (e->code - PL_MARK_FLAG) / 2 < v->def->n_flags)
                         v->flags[(e->code - PL_MARK_FLAG) / 2] = ((e->code - PL_MARK_FLAG) & 1) != 0;
                     continue;
@@ -2343,7 +2382,9 @@ static int v2_hits(pl_player* p, pl_v2* v, const yscr_frame* f) {
 }
 
 /* Timed exits whose time the frame's window reaches (rule 2: the lead rule). */
-static int v2_timed(pl_player* p, pl_v2* v, const yscr_frame* f) {
+/* The timed exits and step ends due before `limit` (strictly), within the
+ * frame's window; v2_timed() takes every one the window reaches. */
+static int v2_timed_to(pl_player* p, pl_v2* v, const yscr_frame* f, int64_t limit) {
     int64_t wend = 0, guard = 0;
     ytl_frame tf;
     tf.onset = f->onset;
@@ -2351,6 +2392,7 @@ static int v2_timed(pl_player* p, pl_v2* v, const yscr_frame* f) {
     tf.index = f->index;
     if (!ytl_window(&p->tl, PL_BASE_TRIAL, &tf, &wend)) return 0;
     wend += v2_anchor(p);
+    if (limit - 1 < wend) wend = limit - 1;
     while (v->cur >= 0) {
         const v2_rs* r = &v->rs[v->cur];
         const v2_exit* best = NULL;
@@ -2375,6 +2417,17 @@ static int v2_timed(pl_player* p, pl_v2* v, const yscr_frame* f) {
         if (v2_take(p, v, best, bt, f, false) < 0) return -1;
     }
     return 0;
+}
+
+static int v2_timed(pl_player* p, pl_v2* v, const yscr_frame* f) { return v2_timed_to(p, v, f, INT64_MAX); }
+
+/* After the response's collector this frame (run.c): the timed exits, so a
+ * response's end and an after_s exit at one time go by rule 4's list order
+ * (pl_v2_response()) rather than by which the frame met first. */
+int pl_v2_frame_timed(pl_player* p, const yscr_frame* f) {
+    pl_v2* v = p->in_trial && p->tmpl ? p->tmpl->v2 : NULL;
+    if (!v) return 0;
+    return v2_timed(p, v, f);
 }
 
 /* --- the trial: start, frames ------------------------------------------- */
@@ -2422,6 +2475,20 @@ int pl_v2_trial_start(pl_player* p, const yscr_frame* f) {
         rc = v2_params_apply(p, v);
         YRT_ZONE_END(zp);
         if (rc < 0) return -1;
+        /* F26: a region whose variable stay_s a cycle needs above 0, from a
+         * value the loader could not know (a session field) */
+        for (i = 0; i < v->def->n_stay_cycle_; i++) {
+            const yexp_control* x = v->def->stay_cycle_[i];
+            const yexp_value* sv = v2_key(x, "stay_s");
+            double h = 1;
+            if (!sv || sv->kind != YEXP_V_VAR) continue;
+            if (v2_item(p, sv, -1, &h, P_SEC) < 0) return -1;
+            if (h < 0.5e-9 && h > -0.5e-9) {
+                pl_fail(p, "template '%s': region '%s': stay_s '$%s' is 0 on this trial, and a cycle of the template's states waits only on it; give it stay_s above 0 (D20 rule 6, F26)",
+                        v->def->name, x->name, sv->str);
+                return -1;
+            }
+        }
         if (v->def->states && v->def->n_states > 0) {
             const yexp_state* st = &v->def->states[0];
             int k;
@@ -2449,6 +2516,7 @@ int pl_v2_trial_start(pl_player* p, const yscr_frame* f) {
         yrsp_collector* c = p->tmpl->collector;
         if (pl_eval_ns(p, &p->env, r->duration, &dur) < 0 || pl_eval_ns(p, &p->env, r->min_rt, &minrt) < 0) return -1;
         v->resp_dur = dur;
+        v->resp_minrt = minrt;
         /* signal choices with a from: armed again there (D34 (c)); this
          * arm only clears the last trial's result */
         yrsp_arm(c, f->onset);
@@ -2533,7 +2601,6 @@ int pl_v2_frame_input(pl_player* p, const yscr_frame* f) {
     YRT_ZONE_END(zs);
     if (rc < 0) return -1;
     }
-    if (v && v2_timed(p, v, f) < 0) return -1;
     return 0;
 }
 
@@ -2838,15 +2905,43 @@ int pl_v2_response(pl_player* p, const yrsp_result* r, const yscr_frame* f) {
     if (v->cur < 0) return 0;
     /* F34 (2): a press or the deadline takes the `on: "response"` exits; the
      * deadline's outcome is "timeout" unless the exit gives one */
-    t = responded ? r->t_response : r->t_onset ? r->t_onset + v->resp_dur : f->onset;
+    {
+        /* the response's end: the press when a press ends the window (or
+         * the max_responses-th press), else the window's end (2.6) */
+        const yexp_response* rd = v->def->response;
+        bool by_press = responded && (rd->ends_trial || (rd->max_responses > 0 && r->n_responses >= rd->max_responses));
+        t = by_press ? r->t_response : r->t_onset && v->resp_dur > 0 ? r->t_onset + v->resp_dur : f->onset;
+    }
     if (t < v->entry_t) t = v->entry_t;
-    for (k = 0; k < v->rs[v->cur].n_exits; k++)
-        if (v->rs[v->cur].exits[k].kind == X_RESPONSE) {
-            v2_exit x = v->rs[v->cur].exits[k];
-            if (!responded && !x.outcome && !x.outcome_text) x.outcome_text = "timeout";
-            return v2_take(p, v, &x, t, f, true);
+    /* rule 4: what is due before the response's end goes first; at its
+     * time the list order decides against an after_s exit */
+    {
+        int guard = 0;
+        for (;;) {
+            bool moved = false;
+            if (++guard > 64) { pl_fail(p, "template '%s': a response's end never settles", v->def->name); return -1; }
+            if (v2_timed_to(p, v, f, t) < 0) return -1;
+            if (v->cur < 0) return 0;
+            for (k = 0; k < v->rs[v->cur].n_exits && !moved; k++) {
+                const v2_exit* e = &v->rs[v->cur].exits[k];
+                if (e->kind == X_AFTER && v->entry_onset_known) {
+                    int64_t a = 0;
+                    if (pl_eval_ns(p, &p->env, e->after, &a) < 0) return -1;
+                    /* an after_s exit listed first at the same time: it goes,
+                     * and the next state's response exit still hears the end */
+                    if ((e->part ? v->entry_onset : v->visit_onset) + a == t) {
+                        if (v2_take(p, v, e, t, f, false) < 0) return -1;
+                        moved = true;
+                    }
+                } else if (e->kind == X_RESPONSE) {
+                    v2_exit x = *e;
+                    if (!responded && !x.outcome && !x.outcome_text) x.outcome_text = "timeout";
+                    return v2_take(p, v, &x, t, f, true);
+                }
+            }
+            if (!moved) return 0;
         }
-    return 0;
+    }
 }
 
 /* --- steps (3.12) and forms' ops (3.10) ---------------------------------- */

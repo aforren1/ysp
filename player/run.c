@@ -2272,6 +2272,9 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
             p->responding = false;
         }
     }
+    /* version 2: the timed exits after the response's collector, so a
+     * response's end and an after_s exit at one time go by list order */
+    if (p->in_trial && p->tmpl->v2 && pl_v2_frame_timed(p, f) < 0) return -1;
     if (p->in_trial && p->audio_open && (pl_sounds(p, f) < 0 || pl_from_sound(p) < 0)) return -1;
     n = 0;
     if (p->in_trial) {   /* false only on a frame where the walk yielded */

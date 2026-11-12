@@ -1534,11 +1534,11 @@ def t_v2_review3(ctx):
             args=["--sim-gain", "hand=1", "--samples", smp, "--test-record-delay", "8"])
     check(r.rc == 0 and len(r.trials) == 2, "G: 9 frame traces, records 8 frames late: exit %d %s" % (r.rc, r.err[:200]))
     many = {"d": {"control": "distance", "of": "hand"}}
-    for k in range(257):
+    for k in range(17):
         many["tr%d" % k] = {"control": "trace", "of": ["d"], "rate": "frame"}
     t = {"controls": many, "states": [{"name": "a", "steps": [{"on": "s"}, {"wait_s": 0.2}]}]}
     r = Run(ctx, "rvG_too_many", v2base({"t": t}, [{"name": "l", "trial": "t"}], roles=hand), args=["--sim-gain", "hand=1"])
-    check(r.rc != 0 and "frame traces" in r.err and "at most 256" in r.err, "G: 257 frame traces refused at load: exit %d %s" % (r.rc, r.err[:200]))
+    check(r.rc != 0 and "17 streams" in r.err and not os.path.exists(r.data), "G: 17 trace names refused at load, before the data set: exit %d %s" % (r.rc, r.err[:200]))
     # I: a set after a tween of one property refused at load; a tween after a
     # stopped one starts from the frozen value
     smp = os.path.join(ctx.out, "rvI_samples.csv")
@@ -1590,6 +1590,100 @@ def t_v2_f34(ctx):
                   "F34 %s (%s): want %s, got %s" % (nm, part[-1], want, got))
 
 
+def t_v2_review4(ctx):
+    # the third re-review (p4rev/tools/r*.py), item in each message
+    dev = {"devices": {"r": {"direction": "in", "family": ["keyboard"], "required": True}}}
+    hand = {"hand": {"type": "position2d_relative", "units": "display_px"}}
+    far = {"control": "region", "of": "hand", "radius": 5, "outside": True}
+    resp = {"role": "r", "choices": ["left", "right"], "from": "s", "duration_s": 1, "key_answer": "left"}
+
+    def one(nm, d, args, want_rows=None, rc=0):
+        r = Run(ctx, nm, d, args=args + ["--max-seconds", "20"])
+        got = [(x["outcome"], round(float(x["time_elapsed_s"]), 3)) for x in r.trials] if r.rc == 0 else r.err[:200]
+        if want_rows is not None:
+            check(r.rc == rc and got == want_rows, "%s: want %s, got exit %d %s" % (nm, want_rows, r.rc, got))
+        return r
+    # 1: a signal choice's window: duration_s and minimum_valid_rt_s apply,
+    # and the trial ends with the window
+    smp = os.path.join(ctx.out, "rv4_1.csv")
+    rows = [(0.001 * k, "hand", 0, 0) for k in range(400)] + [(0.4 + 0.001 * k, "hand", 2, 0) for k in range(1, 400)]
+    rows += [(1.0, "hand", -798, 0)] + [(1.0 + 0.001 * k, "hand", 0, 0) for k in range(1, 3000)]
+    write_samples(smp, rows)
+    still = os.path.join(ctx.out, "rv4_1still.csv")
+    write_samples(still, [(0.001 * k, "hand", 0, 0) for k in range(3000)])
+    for dur, ends, src, want in ((0.1, None, smp, [("timeout", 0.433)]), (1, None, smp, [("responded", 1.2)]), (1, True, smp, [("responded", 0.433)]),
+                                 (1, False, still, [("slow", 1.2)]), (1, True, still, [("slow", 1.2)])):
+        ctl = {"home": {"control": "region", "of": "hand", "radius": 1, "stay_s": 0.2}, "out": {"control": "region", "of": "hand", "radius": 50, "outside": True},
+               "go": {"control": "movement", "of": "hand", "onset": 50, "from": "home"}}
+        rsp = {"choices": [{"signal": "go"}], "from": "t", "duration_s": dur}
+        if ends is not None:
+            rsp["response_ends_trial"] = ends
+        reach_exits = [{"on": "out", "to": "end"}] if src == smp else [{"after_s": 0.5, "to": "end", "outcome": "slow"}]
+        t = {"controls": ctl, "states": [{"name": "hold", "steps": [{"on": "s"}], "exits": [{"on": "home", "to": "reach"}]},
+                                         {"name": "reach", "steps": [{"on": "t"}], "exits": reach_exits}], "response": rsp}
+        one("rv4_1_%s_%s_%s" % (dur, ends, "still" if src == still else "moves"), v2base({"t": t}, [{"name": "l", "trial": "t"}], roles=hand),
+            ["--sim-gain", "hand=1", "--samples", src], want)
+    # 2: persist with max_responses and no deadline waits for the press, as v1
+    M = dict(resp, response_ends_trial=False, duration_s=0, max_responses=1)
+    for ver, t in ((2, {"states": [{"name": "a", "steps": [{"on": "s"}, {"wait_s": 0.1}]}], "response": M}), (1, {"events": [{"on": "s"}, {"wait_s": 0.1}], "response": M})):
+        d = v2base({"t": t}, [{"name": "l", "trial": "t", "rules": ["reps 2"]}], extra=dev)
+        d["version"] = ver
+        one("rv4_2_maxr_v%d" % ver, d, ["--rt", "0.3"], [("correct", 0.3), ("correct", 0.617)])
+    # 3: persist, deadline, a press: the response exit at the window's end
+    P1 = dict(resp, response_ends_trial=False)
+    t = {"states": [{"name": "a", "steps": [{"on": "s"}, {"wait_s": 3}], "exits": [{"on": "response", "to": "b"}]}, {"name": "b", "steps": [{"wait_s": 0.5}]}], "response": P1}
+    r = one("rv4_3_persist_exit", v2base({"t": t}, [{"name": "l", "trial": "t", "rules": ["reps 2"]}], extra=dev), ["--rt", "0.3"], [("correct", 1.5), ("correct", 3.017)])
+    st = [(e["text"], round(float(e["t_s"]) - float(r.events[0]["t_s"]), 3)) for e in r.events if e["kind"] == "state" and e["trial_index"] == "0"] if r.rc == 0 else []
+    check(st == [("a", 0.0), ("b", 1.0)], "3: b starts at the window's end: %s" % st)
+    # 5 (F38): at the exit's time the exit wins; events before it land
+    for nm, wait, want in (("tie", 0.3, 0.0), ("after", 0.301, 0.0), ("before", 0.299, 1.0)):
+        t = {"states": [{"name": "a", "steps": [{"wait_s": wait}, {"on": "t"}, {"wait_s": 1}], "exits": [{"after_s": 0.3, "to": "b"}]}, {"name": "b", "steps": [{"wait_s": 0.5}]}]}
+        r = Run(ctx, "rv4_5_" + nm, v2base({"t": t}, [{"name": "l", "trial": "t"}]), args=["--trace-channels", "tr.csv"])
+        vis = trace_values(r, "t.visible")
+        check(r.rc == 0 and vis.get(30) == want, "5: an on at %.3f against an exit at 0.3 (F38): frame 30 t.visible %s, want %s" % (wait, vis.get(30), want))
+    # 6: a variable stay_s of 0 is entry now
+    smp6 = os.path.join(ctx.out, "rv4_6.csv")
+    write_samples(smp6, [(0.0, "hand", 9, 0)])
+    for hold, want in (("$z_s", 0.2), ("$h_s", 0.25)):
+        t = {"controls": {"far": dict(far, stay_s=hold)}, "states": [{"name": "a", "steps": [{"on": "s"}, {"wait_s": 0.2}, {"until": "far", "timeout_s": 1}]}]}
+        d = v2base({"t": t}, [{"name": "l", "trial": "t", "vars": {"z_s": 0, "h_s": 0.05}}], roles=hand)
+        one("rv4_6_" + hold[1:], d, ["--sim-gain", "hand=1", "--samples", smp6], [("done", want)])
+    # 7 (F26): a variable stay_s that can be 0 in a cycle refused at load; a
+    # session's 0 refused by the player; a signal_lost cycle refused at load
+    cyc = lambda hold: {"controls": {"far": dict(far, stay_s=hold)}, "exits": [{"after_s": 3, "to": "end", "in": ["choose"]}],
+                        "states": [{"name": "show", "steps": [{"on": "s"}, {"until": "far"}]}, {"name": "choose", "exits": [{"if": "$practice", "to": "show"}]}]}
+    d = v2base({"t": cyc("$hold_s")}, [{"name": "l", "trial": "t", "rules": ["practice 2", "reps 2"], "vars": {"hold_s": {"choice": [0, 0.05]}}}], roles=hand)
+    r = Run(ctx, "rv4_7_var", d, args=["--sim-gain", "hand=1"])
+    check(r.rc != 0 and "stay_s variable can be 0" in r.err, "7: a cycle on a stay_s that can be 0 refused at load: %s" % r.err[:200])
+    sess = {"fields": {"participant": {"type": "integer", "required": True}, "hold_s": {"type": "integer", "required": True}}}
+    d = v2base({"t": cyc("$hold_s")}, [{"name": "l", "trial": "t", "rules": ["practice 1", "reps 1"]}], roles=hand, extra={"session": sess})
+    r = Run(ctx, "rv4_7_session0", d, args=["--sim-gain", "hand=1", "--field", "hold_s=0"])
+    check(r.rc == 1 and "stay_s '$hold_s' is 0 on this trial" in r.err, "7: a session's stay_s of 0 in a cycle refused by name: %s" % r.err[:200])
+    d2 = v2base({"t": {"controls": {"lost": {"control": "signal_lost", "of": "hand", "after_s": 0.1}}, "exits": [{"after_s": 2, "to": "end", "in": ["b"]}],
+                       "states": [{"name": "a", "exits": [{"on": "lost", "to": "b"}]}, {"name": "b", "exits": [{"if": "$practice", "to": "a"}]}]}},
+                 [{"name": "l", "trial": "t", "rules": ["practice 1", "reps 1"]}], roles=hand)
+    r = Run(ctx, "rv4_7_lost", d2, args=["--sim-gain", "hand=1"])
+    check(r.rc != 0 and "signal_lost" in r.err and "F26" in r.err, "7: a signal_lost cycle refused at load: %s" % r.err[:200])
+    # 8: more than 64 states run
+    st = [{"name": "s%d" % k, "steps": [{"wait_s": 0.01}]} for k in range(65)]
+    one("rv4_8_states65", v2base({"t": {"states": st}}, [{"name": "l", "trial": "t"}]), [], [("done", 0.65)])
+    # 10: a response's end and an after_s exit at one time: list order
+    t = {"states": [{"name": "a", "steps": [{"on": "s"}], "exits": [{"on": "response", "to": "end", "outcome": "rsp"}, {"after_s": 1.0, "to": "end", "outcome": "timed"}]}], "response": resp}
+    one("rv4_10_tie_silent", v2base({"t": t}, [{"name": "l", "trial": "t"}], extra=dev), ["--participant", "silent"], [("rsp", 1.0)])
+    t = {"states": [{"name": "a", "steps": [{"on": "s"}], "exits": [{"on": "response", "to": "end", "outcome": "rsp"}, {"after_s": 0.3, "to": "end", "outcome": "timed"}]}], "response": resp}
+    one("rv4_10_tie_pressed", v2base({"t": t}, [{"name": "l", "trial": "t"}], extra=dev), ["--rt", "0.3"], [("rsp", 0.3)])
+    t = {"states": [{"name": "a", "steps": [{"on": "s"}], "exits": [{"after_s": 1.0, "to": "b", "outcome": "timed"}]},
+                    {"name": "b", "steps": [{"wait_s": 0.5}], "exits": [{"on": "response", "to": "end", "outcome": "rsp_b"}]}], "response": P1}
+    one("rv4_10_after_then_rsp", v2base({"t": t}, [{"name": "l", "trial": "t"}], extra=dev), ["--participant", "silent"], [("rsp_b", 1.0)])
+    # F37: a response that nothing ends refused at load, both versions
+    for ver in (1, 2):
+        t = {"events": [{"on": "s"}], "response": dict(resp, response_ends_trial=False, duration_s=0)}
+        d = v2base({"t": t}, [{"name": "l", "trial": "t"}], extra=dev)
+        d["version"] = ver
+        r = Run(ctx, "rv4_f37_v%d" % ver, d)
+        check(r.rc != 0 and "nothing ends this response" in r.err and "F37" in r.err, "F37 v%d: refused at load: %s" % (ver, r.err[:200]))
+
+
 def t_v2_corpus(ctx):
     # the loader's valid but unusual version 2 files (tests/experiment/good)
     good = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "experiment", "good")
@@ -1628,7 +1722,7 @@ TESTS = [t_nested, t_if_unless, t_empty_and_zero, t_loop, t_requeue, t_track_end
          t_fix_record_inherit, t_fix_backward_at, t_fix_refusals, t_fix_michelson_order, t_fix_texture_vars, t_fix_walk_budget,
          t_fix_data_set, t_fix_check_all_leaves, t_fix_release_order, t_fix_key_var_reapply,
          t_r2_release_other_template, t_r2_yield_draws_nothing, t_r2_low, t_r2_relaxed, t_r4_leaf_loop_done_track, t_r4_requeue_full,
-         t_r5_wait_final, t_r6_allow_below, t_v2_states, t_v2_until, t_v2_hand, t_v2_rule5, t_v2_review2, t_v2_review3, t_v2_f34, t_v2_corpus]
+         t_r5_wait_final, t_r6_allow_below, t_v2_states, t_v2_until, t_v2_hand, t_v2_rule5, t_v2_review2, t_v2_review3, t_v2_f34, t_v2_review4, t_v2_corpus]
 
 
 def main():

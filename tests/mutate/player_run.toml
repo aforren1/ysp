@@ -644,3 +644,11 @@ test = "player"
 why = "Review item 3 (rv3)."
 find = '''                if (pl_v2_events_response(p, bt) < 0) return -1;'''
 replace = ''''''
+
+[[mutant]]
+id = "r-v2-04"
+name = "the timed exits not taken after the collector"
+test = "player"
+why = "Third re-review 10: the timed exits moved after the response's collector."
+find = '''    if (p->in_trial && p->tmpl->v2 && pl_v2_frame_timed(p, f) < 0) return -1;'''
+replace = ''''''

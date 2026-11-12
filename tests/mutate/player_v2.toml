@@ -98,7 +98,7 @@ id = "v2-11"
 name = "a region held for stay_s arms with entry now"
 test = "player"
 why = "3.7: a region with no stay_s is true at its arm (entry now, G16); with a hold it waits."
-find = '''fixed0 ? YSIG_ENTRY_NOW : YSIG_ENTRY_ARM'''
+find = '''lit && h < 0.5e-9 && h > -0.5e-9 ? YSIG_ENTRY_NOW : YSIG_ENTRY_ARM'''
 replace = '''YSIG_ENTRY_ARM'''
 
 [[mutant]]
@@ -352,7 +352,7 @@ id = "v2-40"
 name = "a persisting window with no deadline holds the end"
 test = "player"
 why = "F34 (3), the player's reading: nothing would end it (t_v2_hand's movement)."
-find = '''                (v->def->response->ends_trial || v->resp_dur > 0)) {'''
+find = '''                (v->def->response->ends_trial || v->resp_dur > 0 || v->def->response->max_responses > 0)) {'''
 replace = '''                1) {'''
 
 [[mutant]]
@@ -360,7 +360,74 @@ id = "v2-41"
 name = "the 64-change stop removed"
 test = "player"
 expect = "survived"
-note = "A guard since F26 was decided (2026-11-12): the loader refuses a cycle whose only waits are regions with stay_s 0 (experiment.h 0.3.3), so no loaded file reaches it; it stays for a definition the loader's rule misses."
+note = "A guard: F26 (decided and completed 2026-11-12) refuses at load every cycle whose waits can hit at their arm (a region with stay_s rounding to 0 ns or a variable that can be 0, a signal_lost), and the player refuses a session's 0 at the trial's start (experiment.h 0.4.0), so no loaded file reaches it."
 why = "F26."
 find = '''        if (++v->n_take > 64) {'''
+replace = '''        if (0) {'''
+
+[[mutant]]
+id = "v2-42"
+name = "a signal choice's arm drops the trial's window"
+test = "player"
+why = "Third re-review 1 (t_v2_review4 rv4_1): yrsp_arm() sets the desc's window again."
+find = '''    yrsp_arm(c, t);
+    yrsp_set_window(c, v->resp_minrt, v->resp_dur);'''
+replace = '''    yrsp_arm(c, t);'''
+
+[[mutant]]
+id = "v2-43"
+name = "a count does not hold the end"
+test = "player"
+why = "Third re-review 2 (rv4_2_maxr_v2)."
+find = '''                (v->def->response->ends_trial || v->resp_dur > 0 || v->def->response->max_responses > 0)) {'''
+replace = '''                (v->def->response->ends_trial || v->resp_dur > 0)) {'''
+
+[[mutant]]
+id = "v2-44"
+name = "a persisting window's exit at the press"
+test = "player"
+why = "Third re-review 3 (rv4_3_persist_exit): the window's end."
+find = '''        t = by_press ? r->t_response : r->t_onset && v->resp_dur > 0 ? r->t_onset + v->resp_dur : f->onset;'''
+replace = '''        t = responded ? r->t_response : r->t_onset && v->resp_dur > 0 ? r->t_onset + v->resp_dur : f->onset;'''
+
+[[mutant]]
+id = "v2-45"
+name = "an event at the exit's time kept"
+test = "player"
+why = "Reading F38 (rv4_5 tie)."
+find = '''                if (v2_anchor(p) + e->time_ns < t) {'''
+replace = '''                if (v2_anchor(p) + e->time_ns <= t) {'''
+
+[[mutant]]
+id = "v2-46"
+name = "a variable stay_s of 0 arms"
+test = "player"
+why = "Third re-review 6 (rv4_6 z_s): 3.7 entry now for a hold of 0."
+find = '''    if (how == P_ENTRY) *out = (*out < 0.5e-9 && *out > -0.5e-9) ? YSIG_ENTRY_NOW : YSIG_ENTRY_ARM;'''
+replace = '''    if (how == P_ENTRY) *out = YSIG_ENTRY_ARM;'''
+
+[[mutant]]
+id = "v2-47"
+name = "a session's stay_s of 0 in a cycle runs"
+test = "player"
+why = "F26 completed (rv4_7_session0)."
+find = '''            if (h < 0.5e-9 && h > -0.5e-9) {
+                pl_fail(p, "template '%s': region '%s': stay_s'''
+replace = '''            if (0) {
+                pl_fail(p, "template '%s': region '%s': stay_s'''
+
+[[mutant]]
+id = "v2-48"
+name = "a response's end before an after_s exit listed first at its time"
+test = "player"
+why = "Third re-review 10 (rv4_10_after_then_rsp; rule 4's list order)."
+find = '''                    if ((e->part ? v->entry_onset : v->visit_onset) + a == t) {'''
+replace = '''                    if (0) {'''
+
+[[mutant]]
+id = "v2-49"
+name = "more stream names than the data set holds"
+test = "player"
+why = "Third re-review 11 (rvG_too_many, 17 trace names)."
+find = '''        if (names > YDS_MAX_STREAMS) {'''
 replace = '''        if (0) {'''

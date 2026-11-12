@@ -96,7 +96,8 @@ static pl_player p;
 static const char* rig_path;
 static char script_arg[600];
 static char samples_path[600];
-static long long n_loaded, n_run, n_ok, n_roles_in, n_v2_loaded, n_v2_ok;
+static long long n_loaded, n_run, n_ok, n_roles_in, n_v2_loaded, n_v2_ok, n_budget, n_hang;
+static char hang_dir[600];
 static int g_print;
 static const char* dict_keys[2048];
 static int n_dict;
@@ -234,7 +235,33 @@ static void one(const seed_t* s, const char* text, size_t n, const char* out) {
         n_run++;
         n_v2_loaded += v2;
         if (pl_run(&p) == 0) { n_ok++; n_v2_ok += v2; }
-        else if (g_print) printf("  RUN FAILED: %.200s\n", p.error);
+        else {
+            if (strstr(p.error, "budget")) {
+                /* a session that passed its budget: a hang to look at when
+                 * every template's response has a deadline or there is none
+                 * (nothing should wait forever then); kept, the first 20 */
+                int k, j, bounded = 1;
+                for (k = 0; k < p.def->n_templates && bounded; k++) {
+                    const yexp_template* tt = &p.def->templates[k];
+                    const yexp_response* r = tt->response;
+                    if (r && !(r->duration && r->duration->kind == YEXP_V_NUMBER && r->duration->num > 0)) bounded = 0;
+                    /* states can cycle, and an until with no timeout can
+                     * wait, as the definition says: not a hang */
+                    if (tt->states) bounded = 0;
+                    for (j = 0; j < tt->n_events; j++) if (tt->events[j].op == YEXP_UNTIL && !tt->events[j].timeout) bounded = 0;
+                }
+                if (bounded) {
+                    if (n_hang < 20) {
+                        char path[700];
+                        FILE* hf;
+                        snprintf(path, sizeof path, "%s/hang_%lld.json", hang_dir, n_hang);
+                        if ((hf = fopen(path, "wb")) != NULL) { fwrite(text, 1, n, hf); fclose(hf); }
+                    }
+                    n_hang++;
+                } else n_budget++;
+            }
+            if (g_print) printf("  RUN FAILED: %.200s\n", p.error);
+        }
     } else if (g_print) {
         printf("  refused: %.200s\n", p.error);
     }
@@ -311,6 +338,7 @@ int main(int argc, char** argv) {
         snprintf(path, sizeof path, "%s/script.csv", argv[3]);
         snprintf(script_arg, sizeof script_arg, "script:%s", path);
         snprintf(samples_path, sizeof samples_path, "%s/samples.csv", argv[3]);
+        snprintf(hang_dir, sizeof hang_dir, "%s", argv[3]);
         if (!(fp = fopen(path, "w"))) return 2;
         fprintf(fp, "trial_index,response,rt_s,hold_s\n");
         for (t = 0; t < 512; t++) fprintf(fp, "%d,%s,%.3f,0.05\n", t, t % 7 == 3 ? "" : t % 2 ? "right" : "left", 0.1 + 0.01 * (t % 5));
@@ -325,7 +353,7 @@ int main(int argc, char** argv) {
             printf("%s\n", seeds[i].name);
             one(&seeds[i], seeds[i].text, seeds[i].n, out);
         }
-        printf("player_fuzz: %d seeds, %lld loaded, %lld ran to the end; version 2: %lld loaded, %lld ran to the end, %lld with signal roles\n", n_seeds, n_loaded, n_ok, n_v2_loaded, n_v2_ok, n_roles_in);
+        printf("player_fuzz: %d seeds, %lld loaded, %lld ran to the end; version 2: %lld loaded, %lld ran to the end, %lld with signal roles; budget stops %lld, of them with every response's deadline given, no states and no open until (a hang to look at, kept as hang_N.json) %lld\n", n_seeds, n_loaded, n_ok, n_v2_loaded, n_v2_ok, n_roles_in, n_budget + n_hang, n_hang);
         return 0;
     }
     for (i = 0; i < iters; i++) {
@@ -353,7 +381,7 @@ int main(int argc, char** argv) {
         }
         if (i && i % 2000 == 0) fprintf(stderr, "player_fuzz: %lld iterations, %lld loaded, %lld ran to the end\n", i, n_loaded, n_ok);
     }
-    printf("player_fuzz: %lld iterations, %lld loaded, %lld ran to the end; version 2: %lld loaded, %lld ran to the end, %lld with signal roles\n", iters, n_loaded, n_ok, n_v2_loaded, n_v2_ok, n_roles_in);
+    printf("player_fuzz: %lld iterations, %lld loaded, %lld ran to the end; version 2: %lld loaded, %lld ran to the end, %lld with signal roles; budget stops %lld, of them with every response's deadline given, no states and no open until (a hang to look at, kept as hang_N.json) %lld\n", iters, n_loaded, n_ok, n_v2_loaded, n_v2_ok, n_roles_in, n_budget + n_hang, n_hang);
     for (k = 0; k < n_seeds; k++) free(seeds[k].text);
     return 0;
 }
