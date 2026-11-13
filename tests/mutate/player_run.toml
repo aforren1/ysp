@@ -621,6 +621,8 @@ replace = '''            pl_participant_plan(p, p->global_trial);'''
 id = "r-v2-02"
 name = "a hit's state's frame not in the stimulus's counts"
 test = "player"
+expect = "survived"
+note = "Not reached since player 0.10.0: rv7's hold (sample rate) is found by the settle at the frame's onset, before the first evaluate, so b's table lands there. The second evaluate now follows only hits that ysig_frame() finds (frame-rate tests, views); no test has one that starts a state with a stimulus. Killed by rv7_frames before."
 why = "Review item 7 (rv7): the frame's visibility read before the second evaluate."
 find = '''        if (p->tmpl->v2) {
             YRT_ZONE(zg, "pl.v2_frame");

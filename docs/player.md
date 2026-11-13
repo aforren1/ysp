@@ -700,6 +700,26 @@ corpus.
 | Version 2 data against 0.3.0, the two 3.18 examples | `target_frames` (159 of 160) and `reach_target_frames` (4 of 132) only, as in 0.4.0 |
 | Frame work, CPU 2, six runs each, mean user time | Visuomotor 0.209 s (sd 0.003) against 0.3.0's 0.211 s; bimanual 1.128 s (sd 0.010) against 1.146 s. Largest frame 637 to 641 us against 636 to 646 us, and 1,900 to 1,924 us (one run 2,069 us) against 1,880 to 1,906 us (one run 2,045 us) |
 
+### sig.h 0.6.0's window and the settle at the onset (0.10.0, 2026-11-13)
+
+The same machine. ysp/sig.h 0.6.0 (an arm in the past runs the graph
+again; an arm completes its detect's hold met by its time), the settle at
+the frame's onset and at a response's end, `sig_arms` in `session.json`,
+and the guard on a changed past.
+
+| Check | Result |
+|---|---|
+| The model's harness, the tree's model (v2-model at 43e1172) | Seeds 0 to 19,999: 131 mismatches (30 at a GAP); `GEN_MULTI=1`, seeds 0 to 4,999: 33 (10 at a GAP). The model takes a timed exit (phase T) before a hold that ended by the frame's onset, which it finds only after the evaluate (phase F); the player takes the hold first (rule 4). With the window and no settle: 3 mismatches, all at a GAP |
+| The same, with the settle reading in the model (in `resolve()`: phases T and F add holds met by the onset as candidates, phase P holds met by a response's time) | 20,000 cases: 5 mismatches, all at a GAP (`arm-order`, `tie-steps-end`, `future-arm-hit`, `future-arm-hold`); 5,000 multi-press cases: 0. The fixed set: 50 cases, 0 failures |
+| `sig_arms` over the harness (25,000 cases, the settle reading) | 18,325 arms run again, 66 superseded hits, 0 retracted, 0 rows or derived events stale, 0 fallbacks, no guard stop. Before the arm completed its hold (sig.h 2ca1cf6), 13 of the 20,000 cases had a retracted hit: an `until`'s re-arm at a state's entry went before the onset that had found the hit which ended the state before |
+| `player_test.py` | 56 cases, 0 failures (`vm_settle_tie` new); its v2 sessions: 197 arms run again, 1 superseded, all else 0 |
+| `compare.py`, the six examples | No exact column differs. Against 0.9.0's run, the visuomotor example's `landing_residual_s` is 10 ns in 159 of 160 trials (was 0): the target is due at the hold's hit, 10 ns before the onset that shows it, and the settle finds that hit before the frame's first evaluate. Its v2 sessions: 176 arms run again, all else 0 |
+| ctest | Release 123 of 123; ASan and UBSan (`setarch -R`) 122 of 122 |
+| Mutants (`--sim` test) | `player_v2.toml` 74 of 74 as expected (v2-73 to v2-77 new; v2-61 now equivalent: the settle's drain does its work); `player_run.toml` 62 of 62 of the `--sim` ones (r-v2-02 not reached now, kept with a note; the 19 real-path ones need a display and did not run) |
+| Fuzz, Release, 8 processes (2 h 22 min) | 5,000,000 inputs, 725,751 loaded, 439,487 ran to the end (as 0.9.0); 88,776,145 arms run again, 0 fallbacks, 0 superseded, retracted or stale, no guard stop. ASan and UBSan: 40,000 inputs, 687,745 arms run again, all else 0, no report |
+| Version 1 identity against main (7078e4d) | 438 of 439 CSV files byte-identical (the other the Stroop C program's version line) |
+| Frame work, CPU 2, six runs each, load average 2.20 at the start and 1.94 at the end (5-minute 3.67) | Visuomotor 0.233 s (sd 0.003) against 0.3.0's 0.212 s; bimanual 1.255 s (sd 0.006) against 1.145 s (sd 0.008): about 10 % more than 0.9.0 (0.205 s and 1.133 s), the window's checkpoint at each frame and the settle. Largest frame 642 to 653 us against 636 to 646 us, and 1,915 to 1,997 us against 1,884 to 1,938 us (one 0.3.0 run at 2,791 us) |
+
 ### Rule 2 through sig.h 0.5.0, the model's later findings (0.9.0, 2026-11-12)
 
 The same machine. ysp/sig.h 0.5.0's arm in the past (the user's decision

@@ -529,6 +529,8 @@ replace = '''        p->ops_origin = 0;'''
 id = "v2-61"
 name = "an arm's hit not drained before the evaluate"
 test = "player"
+expect = "survived"
+note = "Equivalent since player 0.10.0: v2_timed_to() ends each pass with ysig_settle() at the onset and v2_hits(), which drains an arm's hit too. Killed by vm_arm_after and vm_arm_response before."
 why = "Model item 2 (vm_arm_after, vm_arm_response): F38."
 find = '''     * and the state's steps at that time do not land */
     return v->has_graph ? v2_hits(p, v, f) : 0;'''

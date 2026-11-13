@@ -1387,8 +1387,9 @@ def t_v2_review2(ctx):
     # 7: a stimulus a hit's state shows: its frames from its landing frame
     smp = os.path.join(ctx.out, "rv7_samples.csv")
     write_samples(smp, [(0.0, "hand", 0, 0), (0.105, "hand", 9, 0)])
-    # the hold ends between samples: the frame's ysig_frame() finds the hit,
-    # and b's table lands at the frame's second evaluate (rule 5)
+    # the hold ends between samples: the settle at the frame's onset finds
+    # the hit before the evaluate (player 0.10.0; before, ysig_frame() found
+    # it and b's table landed at the frame's second evaluate, rule 5)
     held = dict(far, stay_s=0.05)
     t = {"controls": {"far": held}, "states": [{"name": "a", "steps": [{"on": "s"}], "exits": [{"on": "far", "to": "b"}]},
                                               {"name": "b", "steps": [{"on": "t"}, {"wait_s": 0.2}, {"off": "t"}, {"wait_s": 0.05}]}], "record": ["t"]}
