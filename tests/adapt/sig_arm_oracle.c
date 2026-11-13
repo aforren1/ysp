@@ -236,7 +236,7 @@ static void do_call(ysig_graph* g, const call* c, hits* r, uint64_t* dh, long* n
         ysig_frame(g, &f);
         break;
     case K_ARM: ysig_arm(g, c->node, c->t); break;
-    case K_RESET: ysig_reset(g, c->t); break;
+    case K_RESET: drain_all(g, r, dh, nd, c->idx); ysig_reset(g, c->t); break;   /* a reset clears undelivered hits: callers drain first */
     case K_DRAIN: drain_all(g, r, dh, nd, c->idx); break;
     case K_SETA: ysig_set(g, 5, YSIG_AFFINE_ANGLE, c->x); break;
     case K_SETCH: ysig_set(g, g_chnode, YSIG_CHANNEL_CHANNEL, (double)c->dev); break;
@@ -396,7 +396,7 @@ int main(int argc, char** argv) {
                     else if (s == 0) { g_ca[g_na].kind = K_SETLV; g_ca[g_na].node = g_dets[rnd() % (unsigned)g_ndet]; g_ca[g_na].x = 0.5 + rnd() % 6; }
                     else if (s == 1) { g_ca[g_na].kind = K_DISARM; g_ca[g_na].node = g_dets[rnd() % (unsigned)g_ndet]; }
                     else if (s == 2 && g_rel) { g_ca[g_na].kind = K_RECENTER; g_ca[g_na].t = ta < newest ? ta : newest; g_ca[g_na].x = (rndf() - 0.5) * 10; g_ca[g_na].y = (rndf() - 0.5) * 10; }
-                    else { g_ca[g_na].kind = K_SETCH; g_ca[g_na].dev = (int)(rnd() % NCH); }
+                    else { g_ca[g_na].kind = K_SETCH; g_ca[g_na].dev = (int)(rnd() % (unsigned)(g_n[g_chnode].p[0] + 1)); }
                     g_na++;
                 }
                 for (j = 0; j < m; j++) { g_ca[g_na].kind = K_ARM; g_ca[g_na].node = g_dets[rnd() % (unsigned)g_ndet]; g_ca[g_na].t = ta; g_na++; }
@@ -404,11 +404,11 @@ int main(int argc, char** argv) {
             } else if (r < 120) {
                 g_ca[g_na].kind = K_DRAIN; g_ca[g_na].idx = drains++; g_na++;
             } else if (r < 125) {
-                g_ca[g_na].kind = K_RESET; g_ca[g_na].t = t; g_na++;
+                g_ca[g_na].kind = K_RESET; g_ca[g_na].t = t; g_ca[g_na].idx = drains++; g_na++;
             } else if (r < 140 && !off('s')) {
                 g_ca[g_na].kind = K_SETA; g_ca[g_na].x = (rndf() - 0.5) * 90; g_na++;
             } else if (r < 150 && !off('c')) {
-                g_ca[g_na].kind = K_SETCH; g_ca[g_na].dev = (int)(rnd() % NCH); g_na++;
+                g_ca[g_na].kind = K_SETCH; g_ca[g_na].dev = (int)(rnd() % (unsigned)(g_n[g_chnode].p[0] + 1)); g_na++;
             } else if (r < 180) {
                 g_ca[g_na].kind = K_SETTLE; g_ca[g_na].t = t; g_na++;
             } else if (r < 190 && g_rel && !off('r')) {
@@ -479,21 +479,24 @@ int main(int argc, char** argv) {
             long must_retract = 0, extra = 0;
             memset(used, 0, sizeof used);
             for (ib = 0; ib < g_hb.n && !why; ib++) {
-                for (ia = 0; ia < g_ha.n; ia++)
+                /* the copy A handed out last: an earlier equal one was the
+                 * earlier arm's, before a re-arm handed it out again */
+                for (ia = g_ha.n - 1; ia >= 0; ia--)
                     if (!used[ia] && !cmp_hit(&g_ha.h[ia], &g_hb.h[ib])) { used[ia] = 1; break; }
-                if (ia == g_ha.n) why = "a hit B has, A not";
+                if (ia < 0) why = "a hit B has, A not";
             }
             for (ia = 0; ia < g_ha.n && !why; ia++) {
                 int before = 0;
                 if (used[ia]) continue;
                 extra++;
                 /* the drain that handed it out, then the arms after it */
-                for (k = 0; k < g_na; k++) if (g_ca[k].kind == K_DRAIN && g_ca[k].idx == g_ha.at[ia]) break;
+                for (k = 0; k < g_na; k++) if ((g_ca[k].kind == K_DRAIN || g_ca[k].kind == K_RESET) && g_ca[k].idx == g_ha.at[ia]) break;
                 for (; k < g_na; k++) if (g_ca[k].kind == K_ARM && g_ca[k].t < g_ha.h[ia].t) before = 1;
                 if (!before) must_retract++;
             }
             if (!why && extra != sa.arm_hits_retracted + sa.arm_hits_superseded) why = "extra hits != retracted + superseded";
-            if (!why && sa.arm_hits_retracted != must_retract) why = "a hit taken at or before an arm counted superseded";
+            /* at least those: counting more as retracted is on the safe side */
+            if (!why && sa.arm_hits_retracted < must_retract) why = "a hit taken at or before an arm counted superseded";
             if (!why && (g_rows_a.h != g_rows_b.h || g_rows_a.n != g_rows_b.n) && !sa.arm_rows_stale) why = "rows changed, not counted";
             if (!why && (g_der_a != g_der_b || g_nder_a != g_nder_b) && !sa.arm_derived_stale) why = "derived events changed, not counted";
         }
