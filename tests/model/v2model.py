@@ -400,6 +400,14 @@ class Det:
         if self.hit is not None:
             return None
         r = self.r
+        if t < self.arm:
+            # Before the arm (an arm at a future time): no hit counts (D20
+            # rule 3); the value only sets the test as the arm will see it.
+            inside = r.test(xy)
+            self.prev = inside
+            if r.stay > 0:
+                self.hold = self.arm if inside else None
+            return None
         if r.stay > 0 and self.hold is not None and self.hold + r.stay <= t:
             self.hit = self.hold + r.stay
             return self.hit
@@ -543,13 +551,13 @@ class Run:
         return Ev(t, kind, name, val, frame, visit, self.seq)
 
     def flag_window(self, x):
-        """GAP (arm order): an arm made at a frame (a timed exit, a response
-        that became final, a hold that a later sample found) has a time x
-        that is not the input's position: samples between x and the last fed
-        input are fed before an arm at a past time, or after an arm at a
-        future time. 3.11 rules 2 to 4 do not say which the arm sees; sig.md
-        says an arm tests "the input's held value". The generator keeps
-        samples out of these windows."""
+        """GAP (arm order), now for a future arm only: an arm at a time x
+        after the input fed so far (a timed exit that the lead rule takes
+        before its time, or the trial's first arm before the first frame's
+        poll) tests the value held at the call, and the samples up to x come
+        later. An arm at a past time is decided (arm_det: the value at x,
+        then the later samples in time order). The generator keeps samples
+        out of these windows."""
         upto = self.fed_until
         if self.hand is None:
             return      # no held value yet: both orders give the same test
@@ -562,7 +570,7 @@ class Run:
                 # first frame's poll.
                 hit = True
             elif x <= upto:
-                hit = x <= t <= upto and not (t == upto == x and self.trigger == t)
+                hit = False
             else:
                 hit = upto < t <= x
             if hit:
@@ -881,16 +889,25 @@ class Run:
         # field is the first frame that may take it. GAP (F40, "the state's
         # entry frame" for an until's timeout): the wait's entry frame, as
         # the wait is a state of its own (3.11 rule 9).
+        # D20, DECIDED 2026-11-13 (after-before-entry), "Clamp to entry": a
+        # timed exit's time is the later of the entry frame's onset plus
+        # after_s and the state's entry time. The lead rule can put the
+        # entry frame's onset before the entry time (by up to half a frame),
+        # so a short after_s would otherwise end a state before it began.
+        # An until's timeout_s meets the same case (it counts from the
+        # wait's entry frame, whose onset the lead rule can put before the
+        # wait's entry time, the steps' end), so it is clamped to that
+        # entry time the same way.
         out = []
         st = v.state
         if st is not None:
             for e in st.exits:
                 if e.kind == "after":
-                    out.append(("exit", onset(v.entry_f) + e.after, e, v.vid, v.entry_f + 1))
+                    out.append(("exit", max(onset(v.entry_f) + e.after, v.entry_t), e, v.vid, v.entry_f + 1))
         if v.waiting:
             to = self.parts_untils(v)[1][v.part][1]
             if to is not None:
-                out.append(("timeout", onset(v.wait_f) + to, None, v.vid, v.wait_f + 1))
+                out.append(("timeout", max(onset(v.wait_f) + to, v.wait_t), None, v.vid, v.wait_f + 1))
         elif v.part_end is not None:
             out.append(("partend", v.part_end, None, v.vid, 0))
         return out
@@ -1106,17 +1123,12 @@ class Run:
                 # this reading (the coordinator, 2026-11-12: the player
                 # changes).
                 self.flag_window(t)
-                v.until_det = Det(self.tpl.regions[ctl], t, self.hand)
-                v.until_det.made = k
-                if v.until_det.hold is not None and t > onset(k):
-                    self.gap("future-arm-hold")
-                if v.until_det.hit is not None:
-                    if t > onset(k):
-                        self.gap("future-arm-hit")
+                v.until_det, h = self.arm_det(self.tpl.regions[ctl], t, k)
+                if h is not None:
                     # A hit that an arm makes is taken before the frame's
                     # evaluate (F38: the exit wins at its time). Was the GAP
                     # arm-hit-drain; decided (the coordinator, 2026-11-12).
-                    cands.append(("until", t, None, v.vid))
+                    cands.append(("until", h, None, v.vid))
                 return
             # The last part's end.
             if v.state is None:
@@ -1230,26 +1242,57 @@ class Run:
         for nm in names:
             if nm in v.dets:
                 continue
-            d = Det(self.tpl.regions[nm], t, self.hand)
-            d.made = k
-            if d.hold is not None and t > onset(k):
-                # GAP (future-arm-hold): a hold whose test is true at an arm
-                # after the frame's onset (a timed exit that the lead rule
-                # takes early). Read: sig.md, the hold counts from the arm.
-                self.gap("future-arm-hold")
+            d, h = self.arm_det(self.tpl.regions[nm], t, k)
             v.dets[nm] = d
-            if d.hit is not None:
-                if t > onset(k):
-                    self.gap("future-arm-hit")
+            if h is not None:
                 # A hit that the arm itself makes is taken before the frame's
                 # evaluate, so F38 removes the state's steps at its time. Was
                 # the GAP arm-hit-drain; decided (the coordinator,
                 # 2026-11-12: the player resolves it before the evaluate).
-                cands.append(("hit", d.hit, nm, v.vid))
+                cands.append(("hit", h, nm, v.vid))
         evs, end = self.build(tr, st.parts[0], t, f, v.vid)
         v.events.extend(evs)
         self.pend.extend(evs)
         v.part_end = end
+
+    def arm_det(self, region, t, k):
+        """Arms a region's hit detect at time t (3.11 rule 3). Returns the
+        detect and its hit time, or None.
+
+        An arm at a frame (a timed exit, an F40 one taken a frame later, a
+        response that became final) can have a time t before input that is
+        already fed. Model bug fixed 2026-11-13 (seed 21418): the test at the
+        arm read the latest fed value, so a hit could take the arm's time
+        although the input that met the test came later. The text: a hit
+        from before the entry does not count (D20 rule 3); a crossing's hit
+        has the time of the value that met the test (sig.md, "Time"); and
+        events are taken in time order (3.11 rule 4). So the arm tests the
+        value held at t (the last sample at or before t) and the samples
+        after t that are already fed are replayed in order: a hit is never
+        before the value that met it, nor before the arm."""
+        held = self.hand
+        replay = []
+        if self.hand is not None and t < self.fed_until:
+            held = None
+            for (st, x, y) in self.samples[:self.si]:
+                if st <= t:
+                    held = (x, y)
+                else:
+                    replay.append((st, (x, y)))
+        d = Det(region, t, held)
+        d.made = k
+        if d.hold is not None and t > onset(k):
+            # GAP (future-arm-hold): a hold whose test is true at an arm
+            # after the frame's onset (a timed exit that the lead rule takes
+            # early). Read: sig.md, the hold counts from the arm.
+            self.gap("future-arm-hold")
+        if d.hit is not None and t > onset(k):
+            self.gap("future-arm-hit")
+        for (st, xy) in replay:
+            if d.hit is not None:
+                break
+            d.sample(st, xy)
+        return d, d.hit
 
     def enter_events(self, t, k):
         """An events template (2.5; 3.11 rule 9 for until; F27: no state

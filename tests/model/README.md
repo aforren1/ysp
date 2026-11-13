@@ -40,6 +40,11 @@ To see one generated case: `uv run --no-project python tests/model/gen.py SEED`.
 Options:
 
 - `--no-shrink` does not shrink failing cases.
+- Every case also checks an invariant on both sides' state rows: entry
+  frames never go back, a row ends at or after its entry time (the trial's
+  first onset for the first row, the row before's end for the others). A
+  failure prints `INVARIANT model` or `INVARIANT player`, also on cases
+  that reach a GAP.
 - `--fixed` runs only the fixed set of 50 seeds (`SEEDS` and
   `SEEDS_MULTI` in `diff.py`). `tests/player/player_test.py` runs the same
   set as `t_v2_model`, so it is part of ctest's `test_player_shapes`.
@@ -98,7 +103,10 @@ until's `timeout_s`, lands on the later of its lead-rule frame and the
 frame after the entry frame); an until's timeout code is the count of the
 state's own, shared and added exits (F28); an until on a control that the
 state's exits name has a detect of its own (F3); a hit that an arm makes is
-taken before the frame's evaluate (F38).
+taken before the frame's evaluate (F38). On 2026-11-13 the user decided
+after-before-entry ("Clamp to entry"): a timed exit's time is the later of
+the entry frame's onset plus `after_s` and the state's entry time; the model
+clamps an until's `timeout_s` to the wait's entry time the same way.
 
 Reading (2026-11-13; 3.11 rules 2, 4 and 5, D20 rule 4, sig.md "End a
 step on a hold"): a hold whose end is at or before the time up to which all
@@ -116,7 +124,7 @@ difference at a GAP is a question for the format, not a player bug.
 | GAP | Reading in the model |
 |---|---|
 | The simulated display's onsets; when a flip record arrives | Measured: the grid above; frame L's record is in at frame L + 1 |
-| `arm-order`: an arm made at a frame has a time that is not the input's place (a timed exit, a response that became final, a hold that a later sample found) | Not decided; the generator moves samples out of these windows |
+| `arm-order`: an arm at a time after the input fed so far (a timed exit that the lead rule takes early, the trial's first arm before the first poll) | Not decided; the generator moves samples out of these windows. An arm at a past time is decided: it tests the value held at its time and replays the later samples (D20 rule 3; sig.md "Time"; 3.11 rule 4) |
 | `future-arm-hit`: an arm after the frame's onset whose test is true at once | The hit is taken in that frame |
 | `future-arm-hold`: an arm after the frame's onset that starts a hold (its test true) | The hold counts from the arm's time (sig.md) |
 | `refound-in-frame`: a hold armed by a state that a frame's hit started, which ends before that frame's onset | The frame finds it, and its next state starts on the same frame |
