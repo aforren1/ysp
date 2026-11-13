@@ -368,11 +368,12 @@ static long g_n_case[NF], g_n_wrong[NF], g_n_back[NF];
 
 int main(int argc, char** argv) {
     long cases = argc > 1 ? atol(argv[1]) : getenv("SIG_ORACLE_CASES") ? atol(getenv("SIG_ORACLE_CASES")) : 3000, it, wrong = 0, back = 0;
+    const char* env_seed = getenv("SIG_ORACLE_SEED");
     int show = argc > 3 ? atoi(argv[3]) : 0, w;
     const char* whyname[32];
     long whys[32];
     int nwhy = 0;
-    g_rs = argc > 2 ? strtoull(argv[2], NULL, 10) : g_rs;
+    g_rs = argc > 2 ? strtoull(argv[2], NULL, 10) : env_seed ? strtoull(env_seed, NULL, 10) : g_rs;
     if (!g_rs) g_rs = 1;
     for (it = 0; it < cases; it++) {
         static ysig_graph ga, gb;
