@@ -413,7 +413,7 @@ id = "v2-47"
 name = "version 2 skips F37's run-time check"
 test = "player"
 why = "Final review 7 (rv5_f37_sess_v2): a session's duration_s of 0."
-find = '''        if (pl_f37_check(p, v->def, dur) < 0) return -1;'''
+find = '''        if (pl_window_check(p, v->def, dur, minrt) < 0) return -1;'''
 replace = ''''''
 
 [[mutant]]
@@ -530,8 +530,10 @@ id = "v2-61"
 name = "an arm's hit not drained before the evaluate"
 test = "player"
 why = "Model item 2 (vm_arm_after, vm_arm_response): F38."
-find = '''    return v->has_graph ? v2_hits(p, v, f) : 0;'''
-replace = '''    return 0;'''
+find = '''     * and the state's steps at that time do not land */
+    return v->has_graph ? v2_hits(p, v, f) : 0;'''
+replace = '''     * and the state's steps at that time do not land */
+    return 0;'''
 
 [[mutant]]
 id = "v2-63"

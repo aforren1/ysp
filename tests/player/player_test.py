@@ -1879,7 +1879,7 @@ def t_v2_review5(ctx):
         refused("rv5_f37_var_v%d" % ver, d, ["duration_s can be 0 here (level '0')", "F37"])
 
 
-def t_v2_model(ctx):
+def t_v2_findings(ctx):
     # the reference model's findings (tests/model on branch v2-model, its
     # runs against player 0.6.0 and 0.7.0), one case each
     dev = {"devices": {"r": {"direction": "in", "family": ["keyboard"], "required": True}}}
@@ -1988,6 +1988,12 @@ def t_v2_model(ctx):
         f.write("trial_index,response,rt_s,hold_s\n0,right,0.2,0.3\n0,left,0.4,0.05\n")
     r = Run(ctx, "vm_two_overlap", v2base({"t": t}, [{"name": "l", "trial": "t"}], extra=dev), args=["--participant", "script:" + sc2])
     check(r.rc != 0 and "follow the first's release" in r.err, "c: a press before the last release refused: %s" % r.err[:200])
+    # c: a press at exactly the last row's rt_s + hold_s is allowed (the
+    # check is in ns; in doubles 0.603333344 + 0.02 rounds past it)
+    with open(sc2, "w", newline="\n") as f:
+        f.write("trial_index,response,rt_s,hold_s\n0,right,0.603333344,0.02\n0,left,0.623333344,0.02\n")
+    r = one("vm_two_exact", v2base({"t": t}, [{"name": "l", "trial": "t"}], extra=dev), ["--participant", "script:" + sc2])
+    check(r.rc == 0 and [x[2] for x in rows(r)] == [0.6233], "c: a press at the last release: %s %s" % (r.err[:200], rows(r)))
     # c: a trial's presses start at its first row (rows of trial 1 at
     # script rows 0 and 1)
     with open(sc2, "w", newline="\n") as f:
@@ -2030,6 +2036,36 @@ def t_v2_model(ctx):
          "response": dict(P1, duration_s=0.21, max_responses=2)}
     r = one("vm_two_one_frame", v2base({"t": t}, [{"name": "l", "trial": "t"}], extra=dev), ["--participant", "script:" + sc2])
     check(r.rc == 0 and [x[2] for x in rows(r)] == [0.205], "c: the second press in the same frame ends the response at 0.205: %s" % rows(r))
+    # rule 4 (the model's s4548): a press ends a's window at X; b and c arm
+    # r0 at X, where the hand is inside; the next sample, at X + 1 ns, is
+    # outside. The chain completes at X, before that sample counts
+    xs = os.path.join(ctx.out, "vm_x1.csv")
+    with open(xs, "w", newline="\n") as f:   # 9 decimals: X + 1 ns
+        f.write("t_s,role,x,y\n0.000000000,hand,50,0\n0.100000000,hand,50,0\n0.300000001,hand,100,0\n")
+    t = {"controls": {"r0": {"control": "region", "of": "hand", "radius": 20, "center": [50, 0]}},
+         "states": [{"name": "a", "steps": [{"on": "s"}], "exits": [{"on": "response", "to": "b"}, {"after_s": 0.300000001, "to": "end", "outcome": "timed"}]},
+                    {"name": "b", "exits": [{"on": "r0", "to": "c"}]},
+                    {"name": "c", "exits": [{"on": "r0", "to": "end", "outcome": "c"}, {"after_s": 1, "to": "end", "outcome": "late"}]}],
+         "response": dict(resp, duration_s=2)}
+    pen = {"hand": {"type": "position2d", "units": "display_px"}}
+    r = one("vm_chain_x", v2base({"t": t}, [{"name": "l", "trial": "t"}], roles=pen, extra=dev), ["--sim-gain", "hand=1", "--samples", xs, "--rt", "0.3"])
+    check(r.rc == 0 and r.trials[0]["outcome"] == "c" and [x[2] for x in rows(r)] == [0.3, 0.3, 0.3], "rule 4: the chain at X before the sample at X + 1 ns: %s %s" % (r.trials[0]["outcome"] if r.rc == 0 else r.err[:200], rows(r)))
+    # 2.6 (a reading that follows ysp/response.h): a minimum rt at or past
+    # the deadline leaves no time; values known only at run time (a
+    # session field, two variables) are refused by name before the trial
+    # runs, both versions
+    for ver in (1, 2):
+        body = {"events": [{"on": "s"}, {"wait_s": 0.2}]} if ver == 1 else {"states": [{"name": "a", "steps": [{"on": "s"}, {"wait_s": 0.2}]}]}
+        d = v2base({"t": dict(body, response=dict(resp, duration_s="$d_s", minimum_valid_rt_s=0.2))}, [{"name": "l", "trial": "t"}], extra=dict(dev, **{"session": {"fields": {"participant": {"type": "integer", "required": True}, "d_s": {"type": "integer", "required": True}}}}))
+        d["version"] = ver
+        r = Run(ctx, "vm_window_sess_v%d" % ver, d, args=["--field", "d_s=0", "--rt", "0.3", "--max-seconds", "10"])
+        check(r.rc == 0 and len(r.trials) == 1, "2.6 v%d: duration_s 0 has no deadline, so no window to refuse: %s" % (ver, r.err[:200]))
+        r = Run(ctx, "vm_window_sess1_v%d" % ver, dict(d, trials={"t": dict(body, response=dict(resp, duration_s="$d_s", minimum_valid_rt_s=1.5))}), args=["--field", "d_s=1", "--max-seconds", "10"])
+        check(r.rc == 1 and "leaves no time" in r.err and "template 't'" in r.err and not r.trials, "2.6 v%d: a session's duration below the minimum rt refused by name: %s" % (ver, r.err[:300]))
+        d = v2base({"t": dict(body, response=dict(resp, duration_s="$d_s", minimum_valid_rt_s="$m_s"))}, [{"name": "l", "trial": "t", "vars": {"d_s": {"choice": [0.5]}, "m_s": {"choice": [0.6]}}}], extra=dev)
+        d["version"] = ver
+        r = Run(ctx, "vm_window_vars_v%d" % ver, d, args=["--max-seconds", "10"])
+        check(r.rc == 1 and "leaves no time" in r.err and not r.trials, "2.6 v%d: two variables refused before the trial: %s" % (ver, r.err[:300]))
     # rule 7: a backward at_s ends the steps at the cursor; a step it put
     # after that never lands
     t = {"states": [{"name": "s0", "steps": [{"on": "s"}, {"at_s": 0.137}, {"mark": "m1"}, {"at_s": 0.083}]}, {"name": "s1", "steps": [{"wait_s": 0.2}]}]}
@@ -2075,7 +2111,7 @@ TESTS = [t_nested, t_if_unless, t_empty_and_zero, t_loop, t_requeue, t_track_end
          t_fix_record_inherit, t_fix_backward_at, t_fix_refusals, t_fix_michelson_order, t_fix_texture_vars, t_fix_walk_budget,
          t_fix_data_set, t_fix_check_all_leaves, t_fix_release_order, t_fix_key_var_reapply,
          t_r2_release_other_template, t_r2_yield_draws_nothing, t_r2_low, t_r2_relaxed, t_r4_leaf_loop_done_track, t_r4_requeue_full,
-         t_r5_wait_final, t_r6_allow_below, t_v2_states, t_v2_until, t_v2_hand, t_v2_rule5, t_v2_review2, t_v2_review3, t_v2_f34, t_v2_review4, t_v2_review5, t_v2_model, t_v2_corpus]
+         t_r5_wait_final, t_r6_allow_below, t_v2_states, t_v2_until, t_v2_hand, t_v2_rule5, t_v2_review2, t_v2_review3, t_v2_f34, t_v2_review4, t_v2_review5, t_v2_findings, t_v2_corpus]
 
 
 def main():

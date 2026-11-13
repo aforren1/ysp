@@ -2614,3 +2614,47 @@ test = "experiment"
 why = "F37: response_ends_trial ends the window (run_f37)."
 find = '''        if (!r->signal_choices && !r->ends_trial && r->max_responses == 0 && r->duration && r->duration->kind != YEXP_V_NUMBER) {'''
 replace = '''        if (!r->signal_choices && r->max_responses == 0 && r->duration && r->duration->kind != YEXP_V_NUMBER) {'''
+
+[[mutant]]
+id = "win-01"
+name = "a minimum rt equal to the deadline accepted"
+test = "experiment"
+why = "2.6 reading (run_window: 0.5 and 0.5)."
+find = '''    if (d > 0 && m >= d)
+        yexp__err(c, pos,'''
+replace = '''    if (d > 0 && m > d)
+        yexp__err(c, pos,'''
+
+[[mutant]]
+id = "win-02"
+name = "a key response's window not checked"
+test = "experiment"
+why = "2.6 reading: bad/window_no_time.json, bad/v2_window_no_time.json."
+find = '''        yexp__err(c, src->pos, "%s: nothing ends this response: response_ends_trial is false, with no duration_s and max_responses 0; give duration_s, max_responses, or response_ends_trial true (F37)", elem);
+    yexp__window_lit(c, src->pos, elem, r);'''
+replace = '''        yexp__err(c, src->pos, "%s: nothing ends this response: response_ends_trial is false, with no duration_s and max_responses 0; give duration_s, max_responses, or response_ends_trial true (F37)", elem);'''
+
+[[mutant]]
+id = "win-03"
+name = "a signal choice's window not checked"
+test = "experiment"
+why = "2.6 reading: bad/v2_window_no_time_signal.json."
+find = '''    r->max_responses = yexp__int_field(c, yexp__slotv(c, s, YEXP__S_SRESPONSE, "max_responses"), elem, "max_responses", 0, INT32_MAX, 0);
+    yexp__window_lit(c, src->pos, elem, r);'''
+replace = '''    r->max_responses = yexp__int_field(c, yexp__slotv(c, s, YEXP__S_SRESPONSE, "max_responses"), elem, "max_responses", 0, INT32_MAX, 0);'''
+
+[[mutant]]
+id = "win-04"
+name = "a variable's levels not checked"
+test = "experiment"
+why = "2.6 reading (run_window: a duration's level 0.2, a minimum's 0.6)."
+find = '''    if (dv == mv) return;'''
+replace = '''    return;'''
+
+[[mutant]]
+id = "win-06"
+name = "a level checked as the other side"
+test = "experiment"
+why = "2.6 reading (run_window: the minimum's level against the duration)."
+find = '''        int64_t d = dv ? x : yexp__lit_ns(r->duration), m = dv ? yexp__lit_ns(r->min_rt) : x;'''
+replace = '''        int64_t d = x, m = yexp__lit_ns(r->min_rt);'''

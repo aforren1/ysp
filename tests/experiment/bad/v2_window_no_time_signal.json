@@ -1,0 +1,73 @@
+{
+ "format": "ysp-experiment",
+ "version": 2,
+ "roles": {
+  "hand": {
+   "type": "position2d_relative",
+   "units": "display_px"
+  }
+ },
+ "stimuli": {
+  "t": {
+   "kind": "shape"
+  }
+ },
+ "trials": {
+  "t": {
+   "controls": {
+    "home": {
+     "control": "region",
+     "of": "hand",
+     "radius": 1,
+     "stay_s": 0.2
+    },
+    "go": {
+     "control": "movement",
+     "of": "hand",
+     "onset": 50,
+     "from": "home"
+    }
+   },
+   "states": [
+    {
+     "name": "hold",
+     "steps": [
+      {
+       "on": "t"
+      }
+     ],
+     "exits": [
+      {
+       "on": "home",
+       "to": "reach"
+      }
+     ]
+    },
+    {
+     "name": "reach",
+     "steps": [
+      {
+       "wait_s": 1
+      }
+     ]
+    }
+   ],
+   "response": {
+    "choices": [
+     {
+      "signal": "go"
+     }
+    ],
+    "from": "t",
+    "duration_s": 0.003,
+    "minimum_valid_rt_s": 0.063
+   }
+  }
+ },
+ "timeline": [
+  {
+   "name": "m",
+   "trial": "t"
+  }
+ ]
+}

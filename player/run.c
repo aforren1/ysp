@@ -575,8 +575,11 @@ int pl_script_load(pl_player* p, const char* path) {
         /* several presses a trial: rows of one trial index together, each
          * pressed after the previous one's release (a key's events go in
          * time order) */
+        /* in ns, each value rounded as the presses are: a double sum can
+         * round past a press that player.md's "at least" allows */
         if (p->n_script > 0 && p->script[p->n_script - 1].trial == trial && resp[0] &&
-            (p->script[p->n_script - 1].silent || rt < p->script[p->n_script - 1].rt_s + p->script[p->n_script - 1].hold_s)) {
+            (p->script[p->n_script - 1].silent ||
+             llround(rt * 1e9) < llround(p->script[p->n_script - 1].rt_s * 1e9) + llround(p->script[p->n_script - 1].hold_s * 1e9))) {
             fclose(fp);
             pl_fail(p, "the script '%s': trial %d: a second press must follow the first's release (rt_s at least the last row's rt_s + hold_s) and a silent row is the trial's only row", path, trial);
             return -1;
@@ -1056,7 +1059,7 @@ int pl_start_trial(pl_player* p, const yscr_frame* f) {
             yrsp_collector* c = p->tmpl->collector;
             int64_t dur = 0, minrt = 0;
             if (pl_eval_ns(p, &p->env, d->response->duration, &dur) < 0 || pl_eval_ns(p, &p->env, d->response->min_rt, &minrt) < 0) return -1;
-            if (pl_f37_check(p, d, dur) < 0) return -1;
+            if (pl_window_check(p, d, dur, minrt) < 0) return -1;
             yrsp_arm(c, f->onset);
             yrsp_set_window(c, minrt, dur);
             /* a press or the deadline ends the window only once the landing
@@ -1096,12 +1099,19 @@ int pl_start_trial(pl_player* p, const yscr_frame* f) {
     return 1;
 }
 
-/* F37: a key response that a press does not end, with no count, needs a
- * deadline; a duration known only at run time (a session field: the
- * loader refuses a known level of 0) is refused here, before the trial
- * runs, by name. */
-int pl_f37_check(pl_player* p, const yexp_template* d, int64_t dur) {
+/* The trial's window, before the trial runs, by name, for values known
+ * only at run time (the loader refuses the ones it knows). 2.6, a reading
+ * that follows ysp/response.h: a minimum rt at or past a deadline leaves
+ * no time (the collector refuses it, and the trial would wait without
+ * end). F37: a key response that a press does not end, with no count,
+ * needs a deadline. */
+int pl_window_check(pl_player* p, const yexp_template* d, int64_t dur, int64_t minrt) {
     const yexp_response* r = d->response;
+    if (r && dur > 0 && minrt >= dur) {
+        pl_fail(p, "template '%s': response: minimum_valid_rt_s %.9g s leaves no time in a duration_s of %.9g s on this trial; give minimum_valid_rt_s below duration_s (ysp/response.h refuses the window; 2.6)",
+                d->name, (double)minrt / 1e9, (double)dur / 1e9);
+        return -1;
+    }
     if (!r || r->signal_choices || r->ends_trial || r->max_responses > 0 || dur > 0) return 0;
     pl_fail(p, "template '%s': response: duration_s is 0 on this trial, with response_ends_trial false and max_responses 0: nothing would end it; give duration_s above 0, max_responses, or response_ends_trial true (F37)", d->name);
     return -1;

@@ -44,7 +44,7 @@
 extern "C" {
 #endif
 
-#define PL_VERSION_STRING "0.8.0"
+#define PL_VERSION_STRING "0.9.0"
 /* The newest format version this player lowers (2: format part 3, in
  * v2.c). session.json's format_version is the definition's. */
 #define PL_FORMAT_VERSION 2
@@ -779,7 +779,7 @@ int  pl_v2_events_response(pl_player* p, int64_t bt);
 void pl_v2_record_times(pl_player* p, pl_row* r, const yscr_record* rec);
 int  pl_v2_finish(pl_player* p);
 int  pl_v2_frame_timed(pl_player* p, const yscr_frame* f);
-int  pl_f37_check(pl_player* p, const yexp_template* d, int64_t dur);
+int  pl_window_check(pl_player* p, const yexp_template* d, int64_t dur, int64_t minrt);
 int  pl_writer_close(pl_player* p);
 extern volatile int pl_loop_active;   /* the frame loop is running: a test counts allocations against it */
 

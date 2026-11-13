@@ -2638,7 +2638,7 @@ int pl_v2_trial_start(pl_player* p, const yscr_frame* f) {
         int64_t dur = 0, minrt = 0;
         yrsp_collector* c = p->tmpl->collector;
         if (pl_eval_ns(p, &p->env, r->duration, &dur) < 0 || pl_eval_ns(p, &p->env, r->min_rt, &minrt) < 0) return -1;
-        if (pl_f37_check(p, v->def, dur) < 0) return -1;
+        if (pl_window_check(p, v->def, dur, minrt) < 0) return -1;
         v->resp_dur = dur;
         v->resp_minrt = minrt;
         /* signal choices with a from: armed again there (D34 (c)); this

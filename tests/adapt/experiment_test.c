@@ -1724,6 +1724,40 @@ static void run_f37(void) {
     }
 }
 
+/* 0.5.1: a window whose minimum rt is at or past its deadline leaves no
+ * time (ysp/response.h refuses it): literals at load, a variable by its
+ * leaf's known levels against the other's literal; two variables or a
+ * session field load (the player refuses them at the trial's start). */
+static void run_window(void) {
+    static yexp_report r;
+    static const struct { const char* rsp; const char* vars; const char* sess; int ok; } c[] = {
+        { "\"duration_s\":0.003,\"minimum_valid_rt_s\":0.063", "{}", "", 0 },
+        { "\"duration_s\":0.5,\"minimum_valid_rt_s\":0.5", "{}", "", 0 },
+        { "\"duration_s\":0.5,\"minimum_valid_rt_s\":0.499999999", "{}", "", 1 },
+        { "\"duration_s\":0,\"minimum_valid_rt_s\":0.2", "{}", "", 1 },
+        { "\"duration_s\":\"$d_s\",\"minimum_valid_rt_s\":0.2", "{\"d_s\":{\"choice\":[0.5,0.2]}}", "", 0 },
+        { "\"duration_s\":\"$d_s\",\"minimum_valid_rt_s\":0.2", "{\"d_s\":{\"choice\":[0.5,0.3]}}", "", 1 },
+        { "\"duration_s\":0.5,\"minimum_valid_rt_s\":\"$m_s\"", "{\"m_s\":{\"choice\":[0.1,0.6]}}", "", 0 },
+        { "\"duration_s\":\"$d_s\",\"minimum_valid_rt_s\":\"$m_s\"", "{\"d_s\":{\"choice\":[0.5]},\"m_s\":{\"choice\":[0.6]}}", "", 1 },
+        { "\"duration_s\":\"$d_s\",\"minimum_valid_rt_s\":0.2", "{}", ",\"session\":{\"fields\":{\"participant\":{\"type\":\"integer\",\"required\":true},\"d_s\":{\"type\":\"integer\",\"required\":true}}}", 1 },
+    };
+    size_t k;
+    int ver;
+    for (ver = 1; ver <= 2; ver++)
+        for (k = 0; k < sizeof c / sizeof c[0]; k++) {
+            char doc[900];
+            int rc;
+            snprintf(doc, sizeof doc,
+                     "{\"format\":\"ysp-experiment\",\"version\":%d%s,\"devices\":{\"r\":{\"direction\":\"in\",\"family\":[\"keyboard\"],\"required\":true}},"
+                     "\"stimuli\":{\"s\":{\"kind\":\"shape\"}},\"trials\":{\"t\":{\"events\":[{\"on\":\"s\"}],"
+                     "\"response\":{\"role\":\"r\",\"choices\":[\"f\"],\"from\":\"s\",%s}}},\"timeline\":[{\"name\":\"m\",\"trial\":\"t\",\"vars\":%s}]}",
+                     ver, c[k].sess, c[k].rsp, c[k].vars);
+            rc = load_rc(doc, NULL, &r);
+            if (c[k].ok) CHECK2(rc == YEXP_OK, "2.6: a window with time loads", r.n_diags ? r.diags[0].msg : doc);
+            else CHECK2(rc == YEXP_ERR_REFUSED && r.n_diags && strstr(r.diags[0].msg, "leaves no time"), "2.6: a window with no time refused", r.n_diags ? r.diags[0].msg : doc);
+        }
+}
+
 /* 0.5.0, F26 by SURE and MAYBE: a cycle whose only waits are MAYBE is
  * refused with the reason; one SURE wait (after_s, or a region with stay_s
  * known above 0 in every leaf) lets it load. */
@@ -1809,6 +1843,7 @@ int main(void) {
     run_walk_box();
     run_f37();
     run_f26();
+    run_window();
     run_f26b();
     run_host();
     run_v2();

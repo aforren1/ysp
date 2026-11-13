@@ -1173,6 +1173,19 @@ version 1: a file that loaded before can be refused (ysp/experiment.h
 0.4.0). A `duration_s` from a variable is taken as a deadline. Files that
 still load keep their bytes and experiment ID.
 
+Reading (2026-11-12, ysp/experiment.h 0.5.1, player 0.9.0), not a new
+rule: it follows ysp/response.h, which refuses a window whose
+`minimum_valid_rt_s` is at or past its `duration_s` ("min_rt_ns leaves no
+time"); a player built on it stops, or a silent trial waits without end.
+The loader refuses such a response by name when `duration_s` is above 0
+and `minimum_valid_rt_s` is at or past it, both in ns after rounding, in
+both format versions, for key and signal-choice responses. With both
+values literal it refuses at load; with one a variable, a leaf whose
+known values of it leave no time against the other's literal. Two
+variables, or a value known only at run time (a session field), are
+refused by the player at the trial's start, before the trial runs, by
+the template's name. A `duration_s` of 0 (no deadline) is not refused.
+
 Implementation note (2026-11-12, ysp/experiment.h 0.5.0, player 0.7.0):
 a `duration_s` that is not a literal is a deadline only when it cannot be
 0. The loader refuses a key response whose leaf's known values of

@@ -344,6 +344,23 @@ reading below and marks it in the code as "finding Fn". The lines are of
 
 ## Results
 
+### v0.5.1: a window with no time (2026-11-12)
+
+A reading of 2.6 that follows ysp/response.h, from the reference model
+(its probe10: `duration_s` 0.003, `minimum_valid_rt_s` 0.063). Both
+players loaded and packed such a file; a silent participant then ran to
+the session's budget in version 1 and version 2, since the collector
+refused the window and kept the one it had (measured on the Linux
+desktop before this change). The loader now refuses it by name
+(experiment_format.md 2.6). Linux desktop, gcc 12.2:
+
+| Check | Result |
+|---|---|
+| Unit test | 4,677 checks pass; `run_window` (9 documents in each version: literals below, at and past the deadline, no deadline, a variable on either side, two variables and a session field, which load) |
+| Corpus | 3 new refusal files: `window_no_time` (version 1), `v2_window_no_time`, `v2_window_no_time_signal` (a signal choice) |
+| What it refuses | 2,530 definitions (the repository's, the fuzz seeds, every `player_test.py` definition) loaded with 0.5.0 and 0.5.1: none newly refused; no version 1 file in the repository |
+| Mutants | win-01 to win-04 and win-06 killed (win-05 removed: with two variables the literal side reads as 0, so it refuses nothing); `experiment.toml` 315 of 315 as expected |
+
 ### v0.5.0: F26 by SURE and MAYBE, F37's variable duration (2026-11-12)
 
 The final review's round. F26 is one rule (experiment_format.md D20, the

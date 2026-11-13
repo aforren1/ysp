@@ -674,7 +674,7 @@ id = "r-v2-07"
 name = "version 1 skips F37's run-time check"
 test = "player"
 why = "Final review 7 (rv5_f37_sess_v1)."
-find = '''            if (pl_f37_check(p, d, dur) < 0) return -1;'''
+find = '''            if (pl_window_check(p, d, dur, minrt) < 0) return -1;'''
 replace = ''''''
 
 [[mutant]]
@@ -716,5 +716,21 @@ id = "r-v2-12"
 name = "an overlapping press accepted"
 test = "player"
 why = "Model c (vm_two_overlap): a key's events in time order."
-find = '''            (p->script[p->n_script - 1].silent || rt < p->script[p->n_script - 1].rt_s + p->script[p->n_script - 1].hold_s)) {'''
-replace = '''            0) {'''
+find = '''             llround(rt * 1e9) < llround(p->script[p->n_script - 1].rt_s * 1e9) + llround(p->script[p->n_script - 1].hold_s * 1e9))) {'''
+replace = '''             0)) {'''
+
+[[mutant]]
+id = "r-v2-13"
+name = "the script's overlap check in double seconds"
+test = "player"
+why = "The model's finding 2 (vm_two_exact): 0.603333344 + 0.02 rounds past 0.623333344 in doubles."
+find = '''             llround(rt * 1e9) < llround(p->script[p->n_script - 1].rt_s * 1e9) + llround(p->script[p->n_script - 1].hold_s * 1e9))) {'''
+replace = '''             rt < p->script[p->n_script - 1].rt_s + p->script[p->n_script - 1].hold_s)) {'''
+
+[[mutant]]
+id = "r-v2-14"
+name = "the trial's window not checked"
+test = "player"
+why = "2.6 reading (vm_window_sess1_v1, _v2, vm_window_vars_v1, _v2)."
+find = '''    if (r && dur > 0 && minrt >= dur) {'''
+replace = '''    if (0) {'''

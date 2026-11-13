@@ -1,4 +1,4 @@
-/* ysp/experiment.h - v0.5.0 - public domain single-header loader for experiment definitions
+/* ysp/experiment.h - v0.5.1 - public domain single-header loader for experiment definitions
  *
  *   Reads a ysp experiment definition of format version 1 or 2
  *   (docs/experiment_format.md, the pack's EXPERIMENT entry) into a checked,
@@ -153,6 +153,14 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.5.1 - a reading of 2.6 that follows ysp/response.h (2026-11-12): a
+ *          response whose minimum_valid_rt_s is at or past its duration_s
+ *          (above 0, in ns after rounding) leaves no time, and the
+ *          collector refuses that window; refused by name, both versions,
+ *          key and signal responses, literals at load, one variable by its
+ *          leaf's known levels (two variables or a session field: the
+ *          player, before the trial). No struct change; no file in the
+ *          repository is refused.
  *   v0.5.0 - F26 by one rule (2026-11-12): a wait, an `on` exit or an
  *          until on a control, is SURE or MAYBE. MAYBE: a signal_lost; a
  *          region whose stay_s is left out or rounds to 0 ns; a region whose
@@ -236,7 +244,7 @@
  *   v0.1.0 - first version: the loader for format version 1, its defaults
  *          table, the host interface and the canonical writer.
  *
- *   STATUS: v0.5.0 (2026-11-12). Tested; the player (docs/player.md) uses
+ *   STATUS: v0.5.1 (2026-11-12). Tested; the player (docs/player.md) uses
  *   it for both versions. A version 2 file with a signal role runs on --sim
  *   only (the rig profile has no adapter block, G18); one with none runs in
  *   a real window too.
@@ -250,8 +258,8 @@
 
 #define YEXP_VERSION_MAJOR 0
 #define YEXP_VERSION_MINOR 5
-#define YEXP_VERSION_PATCH 0
-#define YEXP_VERSION_STRING "0.5.0"
+#define YEXP_VERSION_PATCH 1
+#define YEXP_VERSION_STRING "0.5.1"
 
 /* The newest format version this header reads (D12). */
 #define YEXP_FORMAT_VERSION 2
@@ -5194,6 +5202,27 @@ static void yexp__template_end(yexp__ctx* c, yexp_template* t, const char* elem)
 }
 
 /* A response whose choices are movements (3.13, D34). */
+/* A literal duration or minimum rt in ns, as the player rounds it. */
+static int64_t yexp__lit_ns(const yexp_value* v) {
+    if (!v || v->kind != YEXP_V_NUMBER) return 0;
+    if (v->flags & YEXP_VF_DURATION) return v->i;
+    return (int64_t)llround(v->num * 1e9);
+}
+
+/* A reading of 2.6 that follows ysp/response.h (2026-11-12): a window
+ * whose minimum rt is at or past its deadline leaves no time, and the
+ * collector refuses it ("min_rt_ns leaves no time"); a run would stop
+ * or wait without end. Both literal: refused here. */
+static void yexp__window_lit(yexp__ctx* c, uint32_t pos, const char* elem, const yexp_response* r) {
+    int64_t d, m;
+    if ((r->duration && r->duration->kind != YEXP_V_NUMBER) || (r->min_rt && r->min_rt->kind != YEXP_V_NUMBER)) return;
+    d = yexp__lit_ns(r->duration);
+    m = yexp__lit_ns(r->min_rt);
+    if (d > 0 && m >= d)
+        yexp__err(c, pos, "%s: minimum_valid_rt_s %.9g s leaves no time in a duration_s of %.9g s; give minimum_valid_rt_s below duration_s (ysp/response.h refuses the window; 2.6)",
+                  elem, (double)m / 1e9, (double)d / 1e9);
+}
+
 static void yexp__parse_sresponse(yexp__ctx* c, const yjs_value* src, const char* telem, const yexp_response** out_r, yjs_value** canon) {
     char elem[128];
     yjs_value* cr = NULL;
@@ -5212,6 +5241,7 @@ static void yexp__parse_sresponse(yexp__ctx* c, const yjs_value* src, const char
     r->min_rt = yexp__slotv(c, s, YEXP__S_SRESPONSE, "minimum_valid_rt_s");
     r->ends_trial = yexp__v_bool(yexp__slotv(c, s, YEXP__S_SRESPONSE, "response_ends_trial"), false);
     r->max_responses = yexp__int_field(c, yexp__slotv(c, s, YEXP__S_SRESPONSE, "max_responses"), elem, "max_responses", 0, INT32_MAX, 0);
+    yexp__window_lit(c, src->pos, elem, r);
     if (r->from && !yexp_stim_get(c->d, r->from) && !(c->bad_sets & YEXP__BAD_STIMULI)) yexp__err(c, src->pos, "%s: 'from': no stimulus named '%s'", elem, r->from);
     chs = yexp__slot_at(c, s, YEXP__S_SRESPONSE, "choices");
     if (chs && chs->src) {
@@ -5312,6 +5342,7 @@ static void yexp__parse_response(yexp__ctx* c, const yjs_value* src, const char*
      * not end, with no deadline and no count, has nothing that ends it */
     if (!r->ends_trial && r->max_responses == 0 && (!r->duration || (r->duration->kind == YEXP_V_NUMBER && yexp__ns0(r->duration))))
         yexp__err(c, src->pos, "%s: nothing ends this response: response_ends_trial is false, with no duration_s and max_responses 0; give duration_s, max_responses, or response_ends_trial true (F37)", elem);
+    yexp__window_lit(c, src->pos, elem, r);
     if (r->role) {
         const yexp_role* ro = yexp__role_get(c->d, r->role);
         if (!ro) { if (!(c->bad_sets & YEXP__BAD_ROLES)) yexp__err(c, src->pos, "%s: 'role': no role named '%s'", elem, r->role); }
@@ -7402,6 +7433,30 @@ static void yexp__check_leaf_v2(yexp__ctx* c, yexp__scope* s) {
     yexp__f26_leaf(c, s);
 }
 
+/* The same reading when one of the two is a variable: refused in a leaf
+ * whose known values of it leave no time against the other's literal.
+ * Two variables, or a value known only at run time (a session field),
+ * are the player's to refuse at the trial's start (a cross product of
+ * two variables' levels could refuse rows a table never pairs). */
+static void yexp__window_leaf(yexp__ctx* c, yexp__scope* s, const yexp_template* t, const yexp_response* r, const char* elem) {
+    bool dv = r->duration && r->duration->kind != YEXP_V_NUMBER, mv = r->min_rt && r->min_rt->kind != YEXP_V_NUMBER;
+    int rc, q;
+    if (dv == mv) return;
+    c->n_lv = 0;
+    c->lv_over = false;
+    rc = yexp__levels(c, s, dv ? r->duration : r->min_rt, 0);
+    if (rc != 1 || c->lv_over) return;
+    for (q = 0; q < c->n_lv; q++) {
+        int64_t x = (int64_t)llround(strtod(c->lv[q], NULL) * 1e9);
+        int64_t d = dv ? x : yexp__lit_ns(r->duration), m = dv ? yexp__lit_ns(r->min_rt) : x;
+        if (d > 0 && m >= d) {
+            yexp__err(c, t->pos_, "node '%s': %s: minimum_valid_rt_s %.9g s leaves no time in a duration_s of %.9g s here (level '%s'); give minimum_valid_rt_s below duration_s (ysp/response.h refuses the window; 2.6)",
+                      s->leaf ? s->leaf->path : "", elem, (double)m / 1e9, (double)d / 1e9, c->lv[q]);
+            return;
+        }
+    }
+}
+
 static void yexp__check_leaf(yexp__ctx* c, yexp__scope* s) {
     const yexp_template* t = s->t;
     char elem[128];
@@ -7467,6 +7522,7 @@ static void yexp__check_leaf(yexp__ctx* c, yexp__scope* s) {
                     }
         }
         yexp__check_value(c, s, r->min_rt, YEXP__PH_TRIAL, YEXP__W_NUM, elem, "minimum_valid_rt_s");
+        yexp__window_leaf(c, s, t, r, elem);
         if (r->key_answer) yexp__check_value(c, s, r->key_answer, YEXP__PH_TRIAL, YEXP__W_ANY, elem, "key_answer");
         if (r->trigger_code) {
             /* a response rule's code is per choice, so it is known as the
