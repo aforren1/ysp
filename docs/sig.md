@@ -716,21 +716,21 @@ of the third review), and two randomized differentials:
 - `tests/adapt/sig_arm_diff.c`, the first differential (one detect, the
   arm moved by the rule), kept.
 
-Results (2026-11-13, the Linux desktop, GCC 12.2 with ASan and UBSan,
-`setarch -R`, 8 processes, nothing else running):
+Results after the decision on fix 1 (2026-11-13, the Linux desktop,
+GCC 12.2 with ASan and UBSan, `setarch -R`, 8 processes, nothing else
+running):
 
 | Run | Cases | Compared | Fell back | Wrong |
 |---|---|---|---|---|
-| Oracle, seeds 95001 to 95008, 7 min 2 s | 1,040,000 | 854,589 | 185,411 | 134 |
-| First differential, seeds 96001 to 96008, 28 min 3 s | 1,200,000 | 1,196,953 | 3,047 | 137 |
+| Oracle, seeds 97001 to 97008, 7 min 38 s | 1,040,000 | 854,359 | 185,641 | 0 |
+| First differential, seeds 98001 to 98008, 19 min 20 s | 1,200,000 | 1,197,037 | 2,963 | 3,038 |
 
-No sanitizer report in either. The 134 and 137 are open: equal-time
-calls that the window and B order differently, which leave the same
-values with other sources in a value (a hit of a detect on `all()` of
-detects, whose value carries the last input's device and source) or a
-hit one copy short. `sig_fuzz` (10,000,000 inputs, seeds 8401 to 8408,
-41 s): 1,500,431 graphs, 969,990 hits, 6,671 arms run again, 126 fell
-back; no report, every replay equal.
+No sanitizer report in either. The first differential's 3,038 are open:
+it compares A and B after every call from A's arm on (not only at the
+end), and most are a ring one entry longer or shorter, 252 of them on a
+detect on a view; the oracle, which compares the end, finds none. Not yet
+traced to a cause. `sig_fuzz` (10,000,000 inputs, seeds 8501 to 8508,
+39 s): no report, every replay equal.
 
 ### Byte-identical ports
 
