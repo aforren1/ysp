@@ -340,6 +340,10 @@ static const char* same_state(const ysig_graph* a, const ysig_graph* b) {
 #ifdef YSIG_ARM_REENTRY_COUNTED
     sa.arm_reentry = sb.arm_reentry = 0;
 #endif
+    /* the digest hashes the order things ran in: equal-time calls in
+     * another, equivalent order leave the same state (compared above and
+     * after) with another digest */
+    sa.digest = sb.digest = 0;
     if (sa.hits_lost != sb.hits_lost) return "stats.hits_lost";
     if (sa.derived_lost != sb.derived_lost) return "stats.derived_lost";
     if (sa.hits != sb.hits) return "stats.hits";
