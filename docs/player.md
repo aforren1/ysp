@@ -437,7 +437,7 @@ arm (sig.h's `arm_hits_superseded`). A hit of another detect, a row or a
 derived event that a run again changes (`arm_hits_retracted`,
 `arm_rows_stale`, `arm_derived_stale`) would be one the player acted on or
 wrote: the player stops by name ("internal guard: a past arm of ...
-changed what was already taken or written"). `session.json` has the
+changed a hit already taken, or a row or event already written"). `session.json` has the
 session's sums in `sig_arms` (version 2 only).
 
 A trace's rows go through the data set's writer, as the other rows do: a

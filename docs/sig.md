@@ -602,9 +602,52 @@ view input or a `ysig_set()` never showed the live detect, and collapsed
 the detect's output to one rise at the call, so a latch, a peak's gate or
 a mux saw the wrong values. 0.6.0 replaces it.
 
-**The rule.** An arm at time t gives what the same arm gives when it is
-made in call order before the first input later than t since the last
-reset (a sample, a frame's onset, a `ysig_settle()`).
+**The guarantee.** An arm at time t gives what the same calls give with
+the arm made at its place in time order; input stays in call order (a
+source defines out-of-order input by call order: drops, per-device order,
+ring skips). The place is after every earlier call that must come first:
+
+- input at or before t: a sample (a late report from another device
+  too), a frame's onset, a `ysig_settle()`;
+- `ysig_set()`, `ysig_set_data()`, `ysig_disarm()` and a reset, made
+  before it (they have no time: call order);
+- a `ysig_recenter()` or a `ysig_arm()` at or before t.
+
+Input, recenters and arms later than t go after it. For time-ordered
+input that is the calls sorted by (time, call order). Two named
+exceptions:
+
+1. The place is never before the call that found a hit at or before t
+   that the caller already had: the caller may have acted on it (the
+   player's next state is entered at that hit). Input later than t can
+   then come before the arm. A hit that an earlier run again took back
+   still counts.
+2. An arm ahead of the newest input (t later than it) is made at once on
+   the input known: the earlier arm's hold is met only up to that input,
+   not on unfed time. Input fed later with a time before t comes after
+   it.
+
+At its place an arm first meets its detect's hold up to t (any detect:
+one on a view or at frame rate too): that hold ended under the earlier
+arm, so it is that arm's hit.
+
+What the guarantee does not cover, counted by name:
+
+- a hit handed out that the new order does not give: at or before the
+  arm's time in `arm_hits_retracted` (a caller acting in time order may
+  have taken it; the player stops on it), later in `arm_hits_superseded`
+  (such a caller took none; the player drops the earlier arm's hits by an
+  arm count). What the armed detect finds from the new arm on is handed
+  out again, also when its earlier arm handed out an equal hit: a caller
+  that keeps arms apart needs it (the reference model's s21418);
+- rows and derived events that `on_row` and `ysig_derived()` already had:
+  a change in any column is counted (`arm_rows_stale`,
+  `arm_derived_stale`); the run again's lost derived events are not;
+- an arm whose place is before the window, or after its logs ran full
+  (below), and a graph with no window;
+- `ysig_arm()` from a callback (`on_row`, the journal) during another
+  call: refused, counted in `arm_reentry`;
+- a custom op with effects outside its state runs them again.
 
 **How.** With `desc.catchup_frames` above 0 the graph keeps a window:
 
@@ -612,41 +655,17 @@ reset (a sample, a frame's onset, a `ysig_settle()`).
   `catchup_frames` of them (the handle, the nodes and their parameters,
   values, states, data, and both queues; a ring's slots are not copied);
 - every call since the oldest checkpoint (`catchup_calls`), with a
-  frame's channel values copied, as the caller may change them;
+  frame's channel values copied, as the caller may change them (so
+  `ysig_set()` of a channel node to a channel above those its channel
+  nodes read at the open is refused, with or without a window);
 - the old value of every ring slot those calls wrote (`catchup_writes`).
 
 An arm in the past goes into the call log at its place. The graph goes
-back to the newest checkpoint before t, puts back the ring slots written
-since, and runs the logged calls again. Everything is then what live
-calls would have left: values, rings, states, stats and the digest. It is
-the same code on the same calls, so no op needs a rule of its own. Hits
-the caller already took are not queued again (a hit is the same when its
-node, time and whole value are), with one exception: what the armed
-detect finds from the new arm on is the new arm's, and is handed out
-again even when the earlier arm handed out an equal hit. A caller that
-keeps arms apart (the player's arm count) needs it: it dropped the
-earlier arm's copy, and without the new one it lost a crossing that the
-new arm met (the reference model's s21418 and seven other seeds). One
-the new history no longer gives cannot be taken back: it is counted. A
-hit of the armed detect itself at or after the arm's time is its earlier
-arm's, which the re-arm ends: it goes in `arm_hits_superseded`. A caller that acts on hits in time order
-took none after the arm's time (the player drops the earlier arm's hits
-by an arm count); one at the arm's time is the hit that ended the earlier
-arm, and the re-arm at that time follows it.
-Any other goes in `arm_hits_retracted`: a hit the caller may have acted
-on, for example a hit of another detect on the armed one's output, or the
-armed detect's hold that ended before the arm's time but that only input
-after it found. `on_row` and
-`ysig_derived()` do not get the window's rows and events again; a change
-in them is counted (`arm_rows_stale`, `arm_derived_stale`). A reset is a
-barrier: an arm after it is never placed before it.
-
-An arm at t first completes its detect's sample-rate hold met by t, as
-`ysig_settle()` at t would: the hold ended under the earlier arm, so it is
-that arm's hit, also when only input after t found it. Without this, a run
-again that puts the arm before that input loses a hit the caller already
-took at or before t (the player's re-arm of an `until` at the hit that
-ended the state before it).
+back to the newest checkpoint at or before it, puts back the ring slots
+written since, and runs the logged calls again: the same code on the same
+calls, so no op needs a rule of its own. A run again can queue up to
+`catchup_calls` hits beyond the queue's 64 (the caller drains after the
+arm). A reset is a barrier: an arm after it is never placed before it.
 
 **Where it falls back.** An arm before the oldest checkpoint, or after the
 logs ran full, tests the newest value as 0.4.1 did, counted in

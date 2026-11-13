@@ -2064,7 +2064,7 @@ static int v2_arm_check(pl_player* p, pl_v2* v, const char* name, int64_t t) {
     bad = st.arm_hits_retracted + st.arm_rows_stale + st.arm_derived_stale;
     if (bad == v->arm_bad) return 0;
     v->arm_bad = bad;
-    pl_fail(p, "template '%s': internal guard: a past arm of '%s' at %.9f s changed what was already taken or written (sig.h: %lld hits retracted, %lld row runs, %lld derived runs changed)",
+    pl_fail(p, "template '%s': internal guard: a past arm of '%s' at %.9f s changed a hit already taken, or a row or event already written (sig.h: %lld hits retracted, %lld row runs, %lld derived runs changed)",
             v->def->name, name, (double)(t - v2_anchor(p)) / 1e9, (long long)st.arm_hits_retracted, (long long)st.arm_rows_stale, (long long)st.arm_derived_stale);
     return -1;
 }

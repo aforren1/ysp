@@ -753,7 +753,9 @@ if(YSP_BUILD_TESTS)
     # ysp/sig.h 0.6.0: the randomized differential of an arm in the past
     # (3,000 cases here; docs/sig.md has the run at scale)
     ysp_add_program(test_sig_arm_diff tests/adapt/sig_arm_diff.c core)
+    ysp_add_program(test_sig_arm_oracle tests/adapt/sig_arm_oracle.c core)
     add_test(NAME test_sig_arm_diff COMMAND test_sig_arm_diff 3000)
+    add_test(NAME test_sig_arm_oracle COMMAND test_sig_arm_oracle 3000 2)
 endif()
 if(TARGET SDL3::SDL3 AND YSP_BUILD_EXAMPLES)
     # The jsPsych-style trials of examples/response/ (docs/response.md,
