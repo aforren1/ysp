@@ -11,6 +11,15 @@
  *     after every set, disarm and reset made before it, after every
  *     recenter made before it at or before t, and after every arm made
  *     before it at or before t; among arms in one gap, by (t, call order);
+ *   - an arm A made after input later than t knows that input up to t is
+ *     in, so it meets its detect's old hold up to t (the guarantee's own
+ *     hold completion). B's graph cannot know that: no public call says
+ *     "input is in up to t" for one detect without more (ysig_settle()
+ *     completes every detect's hold and raises the graph's input time,
+ *     which moves ring pushes and the skip and clamp counts for later
+ *     late reports). So B makes that one completion itself, with the
+ *     header's internal ysig__settle_det(g, node, t, 1), just before
+ *     the arm.
  * In time-ordered input that is the calls sorted by (time, call order).
  * Both drain after the same calls. At the end A and B must hold the same
  * values, rings, op state, stats (but the window's own counts), and bound
@@ -235,7 +244,14 @@ static void do_call(ysig_graph* g, const call* c, hits* r, uint64_t* dh, long* n
         f.values = v; f.n_values = NCH;
         ysig_frame(g, &f);
         break;
-    case K_ARM: ysig_arm(g, c->node, c->t); break;
+    case K_ARM:
+#ifdef YSIG_ARM_REENTRY_COUNTED
+        if (c->dev == 99) ysig__settle_det(g, c->node, c->t, 1);   /* B: input up to t is in */
+#else
+        if (c->dev == 99) ysig__settle_det(g, c->node, c->t);      /* v0.6.0 as reviewed */
+#endif
+        ysig_arm(g, c->node, c->t);
+        break;
     case K_RESET: drain_all(g, r, dh, nd, c->idx); ysig_reset(g, c->t); break;   /* a reset clears undelivered hits: callers drain first */
     case K_DRAIN: drain_all(g, r, dh, nd, c->idx); break;
     case K_SETA: ysig_set(g, 5, YSIG_AFFINE_ANGLE, c->x); break;
@@ -266,6 +282,14 @@ static void build_b(void) {
         }
         memmove(&g_cb[p + 1], &g_cb[p], sizeof(call) * (size_t)(g_nb - p));
         g_cb[p] = *c;
+        {
+            /* made after input later than t (since the last reset)? */
+            int q2;
+            int64_t ti;
+            g_cb[p].dev = 0;
+            for (q2 = k - 1; q2 >= 0 && g_ca[q2].kind != K_RESET; q2--)
+                if (is_input(&g_ca[q2], &ti) && ti > c->t) { g_cb[p].dev = 99; break; }
+        }
         g_nb++;
     }
 }
