@@ -755,7 +755,7 @@ if(YSP_BUILD_TESTS)
     ysp_add_program(test_sig_arm_diff tests/adapt/sig_arm_diff.c core)
     ysp_add_program(test_sig_arm_oracle tests/adapt/sig_arm_oracle.c core)
     add_test(NAME test_sig_arm_diff COMMAND test_sig_arm_diff 3000)
-    add_test(NAME test_sig_arm_oracle COMMAND test_sig_arm_oracle 3000 2)
+    add_test(NAME test_sig_arm_oracle COMMAND test_sig_arm_oracle 3000)
 endif()
 if(TARGET SDL3::SDL3 AND YSP_BUILD_EXAMPLES)
     # The jsPsych-style trials of examples/response/ (docs/response.md,

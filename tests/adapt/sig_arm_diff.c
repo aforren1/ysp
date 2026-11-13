@@ -359,24 +359,6 @@ int main(int argc, char** argv) {
             if (q->kind == K_SET || q->kind == K_DISARM || q->kind == K_RESET || q->kind == K_RESET_TRIAL) break;
             if ((q->kind == K_RECENTER || q->kind == K_ARM) && q->t <= t_arm) break;
         }
-        /* and after the call that found a hit at or before t that A has
-         * handed out by its arm (the latest call before A's arm whose time
-         * is the hit's t_found): A run to its arm on gb, draining as A */
-        {
-            static hits hp;
-            int m;
-            hp.n = 0;
-            if (!open_graph(&gb, &gd, g_arena_b, g_ch_b)) return 2;
-            ysig_reset(&gb, 0);
-            for (k = 0; k < a_pos; k++) { do_call(&gb, &cs[k], gd.adapter); drain(&gb, &hp); }
-            for (m = 0; m < hp.n; m++) {
-                int64_t tc;
-                if (hp.h[m].t > t_arm) continue;
-                for (k = a_pos - 1; k >= b_pos; k--)
-                    if ((is_input(&cs[k], &tc) || (cs[k].kind == K_ARM && (tc = cs[k].t, 1))) && tc == hp.h[m].t_found) break;
-                if (k >= b_pos) b_pos = k + 1;
-            }
-        }
         /* another arm of the detect between B's place and A's call (one
          * later than t, or made in the past and placed by the rule itself)
          * B would not place as A did: no call here, as before */
@@ -404,6 +386,15 @@ int main(int argc, char** argv) {
                 {
                     int m;
                     for (m = 0; m < hb.n; m++) hb.h[m].reserved_ = 1;   /* before B's arm */
+                }
+                {
+                    /* A's arm was made after input later than t: input up to
+                     * t is in, so it meets the old hold up to t; B's graph
+                     * cannot know that, so B makes that completion itself */
+                    int64_t ti;
+                    int q;
+                    for (q = a_pos - 1; q > last_reset; q--)
+                        if (is_input(&cs[q], &ti) && ti > t_arm) { ysig__settle_det(&gb, gd.det, t_arm, 1); break; }
                 }
                 ysig_arm(&gb, gd.det, t_arm);
                 if (g_dbg > 1 && it == g_dbg - 2) {

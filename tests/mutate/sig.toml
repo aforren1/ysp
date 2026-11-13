@@ -1589,9 +1589,9 @@ id = "191"
 name = "arm: the fall's time not set"
 test = "sig"
 why = "U4: the ring entry would replace the hit's, at the hit's time."
-find = '''        /* the fall has a time, so a past read after it agrees */
+find = '''         * sources are the input's held value's */
         g->val[node].t = t_ns;'''
-replace = '''        /* the fall has a time, so a past read after it agrees */
+replace = '''         * sources are the input's held value's */
         (void)0;'''
 
 [[mutant]]
@@ -2005,16 +2005,6 @@ find = '''        cu->arm_live = at == cu->arm_pos;'''
 replace = '''        if (at == cu->arm_pos) cu->arm_live = 1;'''
 
 [[mutant]]
-id = "238"
-name = "an arm placed before the call that found a hit the caller took"
-test = "sig"
-why = "Review of 0.6.0, finding 1 (test_arm_review 1, sig_arm_oracle)."
-find = '''        pos = q;
-    }'''
-replace = '''        (void)q;
-    }'''
-
-[[mutant]]
 id = "239"
 name = "the arm's hold met only for sample-rate detects"
 test = "sig"
@@ -2053,7 +2043,7 @@ id = "243"
 name = "an arm ahead of the input meets the old hold on unfed time"
 test = "sig"
 why = "Review of 0.6.0, finding 4 (test_arm_review 4)."
-find = '''    ysig__arm_made(g, node, t, t <= g->t_cover ? t : g->t_cover, at);'''
+find = '''    ysig__arm_made(g, node, t, past || t <= g->t_cover ? t : g->t_cover, at);'''
 replace = '''    ysig__arm_made(g, node, t, t, at);'''
 
 [[mutant]]
@@ -2107,9 +2097,17 @@ find = '''    uint64_t    slot_next;      /* frames with values logged (a slot i
 replace = '''    int         slot_next;      /* frames with values logged (a slot is it'''
 
 [[mutant]]
-id = "250"
-name = "a hit the run again did not give again no longer bounds a later arm"
-test = "sig_oracle"
-why = "Review of 0.6.0, finding 1 with several arms (sig_arm_oracle)."
-find = '''            cu->gone[cu->g_head++ % (uint64_t)cu->C] = cu->tmp[i];'''
-replace = '''            (void)0;'''
+id = "251"
+name = "an arm made in the past meets the old hold only up to the input known at its place"
+test = "sig"
+why = "Review of 0.6.0, finding 1 with the decision of 2026-11-13: a re-arm at its own hit's time that later input found keeps the hit (test_arm_window, the arm at 9.5 ms)."
+find = '''    ysig__arm_made(g, node, t, past || t <= g->t_cover ? t : g->t_cover, at);'''
+replace = '''    ysig__arm_made(g, node, t, t <= g->t_cover ? t : g->t_cover, at);'''
+
+[[mutant]]
+id = "252"
+name = "a standing hit's output at the clock's time, with the latest input's sources"
+test = "sig"
+why = "The rule the header states: a hit's rise at its time, with the sources of the input that met the test (test_arm_review)."
+find = '''    o->t = hit_out && s->fired ? s->t_hit : tc;'''
+replace = '''    o->t = tc;'''

@@ -4332,9 +4332,12 @@ static void test_arm_window(void) {
          * acting in time order took neither) */
         CHECK(st.arm_hits_superseded == 2 && st.arm_hits_retracted == 0);
         /* a re-arm at its own hit's time, which input after that time
-         * found: the arm goes after the call that found a hit at or before
-         * its time that the caller has (finding 1), so both hits stand and
-         * nothing runs again */
+         * found: the arm goes before that input and meets the earlier
+         * arm's hold up to its time, so its own hit stands. A named
+         * exception: the other detect, on this one's hit output, does not
+         * see a rise and a fall that the arm makes at one time (an arm's
+         * change reaches latches, peaks and pure nodes, not detects), so
+         * its hit is retracted, counted */
         e = PEN_E(9 * MS, 1, 1, 0, YIN_TIER_2); ysig_feed(&g, &e);
         CHECK(ysig_detected(&g, h, 8) == 0);
         CHECK(ysig_arm(&g, 1, 6500000) && ysig_detected(&g, h, 8) == 0);
@@ -4342,7 +4345,7 @@ static void test_arm_window(void) {
         CHECK(ysig_detected(&g, h, 8) == 2 && h[0].t == 9500000 && h[1].t == 9500000);
         CHECK(ysig_arm(&g, 1, 9500000) && ysig_detected(&g, h, 8) == 0);
         ysig_get_stats(&g, &st);
-        CHECK(st.arm_hits_superseded == 2 && st.arm_hits_retracted == 0 && st.arm_caught_up == 2);
+        CHECK(st.arm_hits_superseded == 2 && st.arm_hits_retracted == 1 && st.arm_caught_up == 3);
         /* an arm at the time the old hold would end, ahead of the input
          * (finding 4): no hit on unfed time; the new arm's hold starts at
          * the arm, so its hit is a whole hold later, none before */
