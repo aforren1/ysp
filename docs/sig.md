@@ -586,6 +586,40 @@ files came out byte-identical.
   the first sample that meets the test (D35 (f)'s "already true" needs a
   value to be true of).
 
+### An arm in the past (v0.5.0)
+
+The player arms a state's controls at the state's entry time, which is
+often before the input the graph already holds: a hit found by a frame's
+pass is before that frame's onset, and the next state arms at the hit's
+time after the pass has tested its detects. Until 0.4.1 the arm tested
+only the newest held value, and a hold the frame already covered ended
+at the next feed or frame, one frame late against the experiment
+format's 3.11 rule 2 ("the first frame whose onset is at or after the
+hit's time"). A second `ysig_frame()` on the same frame would record
+frame rows and sinks twice.
+
+0.5.0 makes the arm catch up. When the arm's time is before the time a
+sample-rate detect knows input up to (its input's newest value, or the
+onset of a frame that tested it, the poll for a frame-updated input):
+
+1. The detect tests the input's value at the arm's time: the newest
+   entry of the input's ring at or before it.
+2. It runs each later entry of that ring in time order, as the feeds
+   did, so a value that breaks a hold, or a crossing, counts at its time.
+3. A hold still true is completed at the known time, as the frame's pass
+   would have: a hit at start + hold.
+
+Only the input's own ring is read (`node.history` on the input). An input
+with no ring, or a ring whose oldest entry is after the arm, falls back
+to the old rule (the newest value), counted in
+`ysig_stats.arm_no_history`; `arm_caught_up` counts the others. A
+frame-rate detect tests at onsets only, so an arm in the past is tested
+at its next onset, as before. The journal holds the arm with its time,
+and a replay runs it on the same rings: the same hits and digest
+(`test_arm_catch_up`, the fuzz target's replay). trial_visuomotor and
+trial_bimanual do not arm in the past: their `--sim` output is
+byte-identical to 0.4.1's.
+
 ### Byte-identical ports
 
 Both examples run on the header. Their CI `--sim` runs give the same data
@@ -693,7 +727,13 @@ counts this program's allocator calls during the 60 s run (glibc).
 
 ### Tests, fuzzing and mutations
 
-- `tests/adapt/sig_test.c` (ctest `test_sig`): v0.4.1 adds
+- `tests/adapt/sig_test.c` (ctest `test_sig`): v0.5.0 adds
+  `test_arm_catch_up`: a hold a frame covers is a hit at the arm, the
+  history breaks a hold and restarts it, a hold not yet over waits for
+  the next frame, an arm past everything known is unchanged, a replay to
+  the same digest, entry now with a crossing after the arm, no ring and a
+  short ring (counted), a frame-rate detect, and no onset before the
+  first frame. v0.4.1 adds
   `test_review_fixes`: a latch and a peak gate on a reset-armed hit
   through an adapter, no hit with no sample and the hit at the first
   sample, `ysig_value_at()` after a set at, after and before its time,
@@ -755,7 +795,11 @@ open refused, no replay that differed. One finding during the fixes: the
 default poll first came from every event fed, also those no source
 took; a journal holds only the taken ones, so a replay saw another poll
 and another view (fixed; mutant 68). After the second review: 20,000,000
-inputs (seed 780) in 9 min 6 s, no finding. The third review's rules
+inputs (seed 780) in 9 min 6 s, no finding. v0.5.0 (the target arms up
+to 6 ms in the past, so the catch-up runs): 10,000,000 inputs (seeds
+8101 to 8108, 8 processes) in 1 min 34 s, 2,226,585 graphs opened and
+ran, 1,994,616 hits, no sanitizer report and no replay that differed.
+The third review's rules
 (frames never refused for data) added two checks to the target: every
 frame with a poll (or without one in a graph with no view) returns 0, also
 after INT64_MAX and far-future stamps, and every bound channel holds its
@@ -779,6 +823,12 @@ ran (640.5 million events taken, 373.5 million rows, 10.17 million hits).
   Mutants 70 and 71 remove the saturation of time arithmetic; the test
   built with `-fsanitize=undefined` (the list's `sig_ubsan` test) catches
   them.
+  v0.5.0: mutants 210 to 219 for the arm's catch-up (the walk, the value
+  at the arm, the completion at the known time, the onset, the
+  frame-rate rule, the short ring, the output's rise, the counts, the
+  `framed` flag); 31 and 190 follow the new arm. The list, 2026-11-12,
+  Linux desktop, GCC 12.2: 213 of 213 as expected (219 survived its first
+  run; test_arm_catch_up's case 9 kills it).
 
 ### Zones
 

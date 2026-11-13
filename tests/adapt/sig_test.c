@@ -3950,6 +3950,133 @@ static void test_entry_now(void) {
     expect_refused(n, 2, "entry");
 }
 
+/* v0.5.0: an arm at a time the graph already has input past runs the
+ * detect on its input's history from the arm on: a hold a frame already
+ * covers completes at once (the experiment format's 3.11 rule 2), a
+ * value after the arm that breaks it counts, a crossing after it is a hit
+ * at its time; no ring, or one that does not reach back, is today's rule,
+ * counted; a frame-rate detect waits for its next onset; replay agrees. */
+static void test_arm_catch_up(void) {
+    ysig_node n[3];
+    ysig_desc d;
+    ysig_graph g, g2;
+    static uint64_t arena2[(1u << 20) / 8];
+    ysig_stats st, st2;
+    ysig_hit h[8];
+    ysig_frame_in f;
+    yin_event e;
+    g_where = "arm catch-up";
+    n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2);
+    n[0].history = 64;
+    n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1);
+    n[1].p[YSIG_DETECT_TEST] = YSIG_TEST_LE; n[1].p[YSIG_DETECT_LANE] = -1; n[1].p[YSIG_DETECT_LEVEL] = 5;
+    n[1].p[YSIG_DETECT_START] = 1; n[1].p[YSIG_DETECT_HOLD] = 0.003; n[1].p[YSIG_DETECT_OUT] = YSIG_OUT_HIT;
+    n[1].history = 16;
+    n[2] = ysig_node_of(YSIG_OP_LATCH, 0, 1);
+    d = desc_of(n, 3);
+    d.journal = on_journal;
+    g_nj = 0;
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    /* 1: a still hand, a frame at 13.3 ms; an arm at 2.967 ms: the hold
+     * the frame covers ends at 5.967 ms, a hit at the arm's call */
+    e = PEN_E(0, 1, 1, 2, YIN_TIER_2); ysig_feed(&g, &e);
+    f = frame_at(1, 13333333, 0, NULL, 0);
+    ysig_frame(&g, &f);
+    CHECK(ysig_detected(&g, h, 8) == 0);
+    CHECK(ysig_arm(&g, 1, 2966667));
+    CHECK(ysig_detected(&g, h, 8) == 1 && h[0].t == 5966667 && h[0].value.v[0] == 1);
+    CHECK(ysig_value_of(&g, 1)->v[0] == 1 && ysig_value_of(&g, 1)->t == 5966667);
+    CHECK(ysig_value_of(&g, 2)->v[0] == 1 && ysig_value_of(&g, 2)->v[1] == 2);   /* the latch froze at the hit */
+    /* 2: the history breaks the hold: in at 20, out at 24, in at 26 ms, a
+     * frame at 40 ms; an arm at 22 ms holds from 26 ms: a hit at 29 ms */
+    e = PEN_E(20 * MS, 1, 1, 0, YIN_TIER_2); ysig_feed(&g, &e);
+    e = PEN_E(24 * MS, 1, 9, 0, YIN_TIER_2); ysig_feed(&g, &e);
+    e = PEN_E(26 * MS, 1, 2, 0, YIN_TIER_2); ysig_feed(&g, &e);
+    f = frame_at(2, 40 * MS, 0, NULL, 0);
+    ysig_frame(&g, &f);
+    CHECK(ysig_arm(&g, 1, 22 * MS));
+    CHECK(ysig_detected(&g, h, 8) == 1 && h[0].t == 29 * MS && h[0].value.v[0] == 2);
+    /* 3: a hold not yet over at the known time: no hit until a frame ends it */
+    CHECK(ysig_arm(&g, 1, 38 * MS));
+    CHECK(ysig_detected(&g, h, 8) == 0);
+    f = frame_at(3, 41 * MS, 0, NULL, 0);
+    ysig_frame(&g, &f);
+    CHECK(ysig_detected(&g, h, 8) == 1 && h[0].t == 41 * MS);
+    /* 4: an arm past everything known: as before, no catch-up */
+    ysig_get_stats(&g, &st);
+    CHECK(st.arm_caught_up == 3 && st.arm_no_history == 0);
+    CHECK(ysig_arm(&g, 1, 50 * MS) && ysig_detected(&g, h, 8) == 0);
+    ysig_get_stats(&g, &st);
+    CHECK(st.arm_caught_up == 3);
+    /* replay of the journal: the same hits and digest */
+    d.journal = NULL;
+    d.arena = arena2;
+    d.arena_size = sizeof arena2;
+    CHECK(ysig_open(&g2, &d));
+    CHECK(ysig_replay(&g2, g_j, g_nj) == g_nj);
+    ysig_get_stats(&g2, &st2);
+    CHECK(st.digest == st2.digest && st.hits == st2.hits && st.hits == 3 && st2.arm_caught_up == 3);
+    CHECK(!memcmp(ysig_value_of(&g, 2), ysig_value_of(&g2, 2), sizeof(ysig_value)));
+    /* 5: entry now with no hold, outside at the arm, inside at a sample
+     * after it: a hit at that sample's time, at the arm's call */
+    n[1].p[YSIG_DETECT_HOLD] = 0; n[1].p[YSIG_DETECT_ENTRY] = YSIG_ENTRY_NOW;
+    d = desc_of(n, 3);
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    e = PEN_E(1 * MS, 1, 9, 0, YIN_TIER_2); ysig_feed(&g, &e);
+    e = PEN_E(4 * MS, 1, 3, 0, YIN_TIER_2); ysig_feed(&g, &e);
+    CHECK(ysig_arm(&g, 1, 2 * MS));
+    CHECK(ysig_detected(&g, h, 8) == 1 && h[0].t == 4 * MS && h[0].value.v[0] == 3);
+    /* 6: no ring on the input: the newest value, counted (4 ms inside:
+     * entry now, a hit at the arm) */
+    n[0].history = 0;
+    d = desc_of(n, 3);
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    e = PEN_E(1 * MS, 1, 9, 0, YIN_TIER_2); ysig_feed(&g, &e);
+    e = PEN_E(4 * MS, 1, 3, 0, YIN_TIER_2); ysig_feed(&g, &e);
+    CHECK(ysig_arm(&g, 1, 2 * MS));
+    CHECK(ysig_detected(&g, h, 8) == 1 && h[0].t == 2 * MS);
+    ysig_get_stats(&g, &st);
+    CHECK(st.arm_no_history == 1 && st.arm_caught_up == 0);
+    /* 7: a ring that does not reach back to the arm: the same, counted */
+    n[0].history = 2;
+    d = desc_of(n, 3);
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    e = PEN_E(1 * MS, 1, 9, 0, YIN_TIER_2); ysig_feed(&g, &e);
+    e = PEN_E(3 * MS, 1, 9, 0, YIN_TIER_2); ysig_feed(&g, &e);
+    e = PEN_E(4 * MS, 1, 3, 0, YIN_TIER_2); ysig_feed(&g, &e);
+    CHECK(ysig_arm(&g, 1, 2 * MS));
+    CHECK(ysig_detected(&g, h, 8) == 1 && h[0].t == 2 * MS);
+    ysig_get_stats(&g, &st);
+    CHECK(st.arm_no_history == 1 && st.arm_caught_up == 0);
+    /* 8: a frame-rate detect: no catch-up, its next onset tests it */
+    n[0].history = 64;
+    n[1].p[YSIG_DETECT_AT] = 1; n[1].p[YSIG_DETECT_HOLD] = 0.003; n[1].p[YSIG_DETECT_ENTRY] = YSIG_ENTRY_ARM;
+    d = desc_of(n, 3);
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    e = PEN_E(0, 1, 1, 0, YIN_TIER_2); ysig_feed(&g, &e);
+    f = frame_at(1, 13333333, 0, NULL, 0);
+    ysig_frame(&g, &f);
+    CHECK(ysig_arm(&g, 1, 2966667) && ysig_detected(&g, h, 8) == 0);
+    ysig_get_stats(&g, &st);
+    CHECK(st.arm_caught_up == 0 && st.arm_no_history == 0);
+    /* 9: before any frame no onset is known (a negative time: the zeroed
+     * onset would cover the hold) */
+    n[1].p[YSIG_DETECT_AT] = 0;
+    d = desc_of(n, 3);
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, -10 * MS);
+    e = PEN_E(-9 * MS, 1, 1, 0, YIN_TIER_2); ysig_feed(&g, &e);
+    CHECK(ysig_arm(&g, 1, -5 * MS) && ysig_detected(&g, h, 8) == 0);
+    f = frame_at(1, -1 * MS, 0, NULL, 0);
+    ysig_frame(&g, &f);
+    CHECK(ysig_detected(&g, h, 8) == 1 && h[0].t == -2 * MS);
+}
+
 /* G17: ysig_set() on a stateless node recomputes it and its stateless
  * users from their inputs' held values at once: a frame test and a bind
  * read the new map with no new sample. No ring entry; a stateful node
@@ -4439,6 +4566,7 @@ int main(void) {
     test_entry_now();
     test_set_recompute();
     test_review_fixes();
+    test_arm_catch_up();
     if (g_failures) { fprintf(stderr, "sig_test: %d failures\n", g_failures); return 1; }
     printf("sig_test: all checks passed\n");
     return 0;

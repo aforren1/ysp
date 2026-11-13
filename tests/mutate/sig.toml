@@ -275,8 +275,8 @@ id = "31"
 name = "reset: detects not armed"
 test = "sig"
 why = "A detect armed at reset would wait for ysig_arm()."
-find = 'if (n->p[6] == 0) ysig__det_arm(g, id, t);'
-replace = 'if (0) ysig__det_arm(g, id, t);'
+find = 'if (n->p[6] == 0) ysig__det_arm(g, id, t, &g->val[n->in[0]]);'
+replace = 'if (0) ysig__det_arm(g, id, t, &g->val[n->in[0]]);'
 
 [[mutant]]
 id = "32"
@@ -1555,7 +1555,7 @@ id = "190"
 name = "arm: the fall not in the ring"
 test = "sig"
 why = "U4: a past read after the arm would disagree with the live value."
-find = '''            ysig__hist_push(g, &g->nd[node], &g->val[node]);
+find = '''            ysig__hist_push(g, n, &g->val[node]);
             ysig__settle(g, node);
         }
         if (rose) {'''
@@ -1733,3 +1733,83 @@ test = "sig"
 why = "Review 1: with a still hand the newest event is the old sample; its ring entry would take the new value back to before the set."
 find = '    int64_t ts = g->t_fed > g->onset ? g->t_fed : g->onset;'
 replace = '    int64_t ts = g->t_fed;'
+
+[[mutant]]
+id = "210"
+name = "no catch-up at an arm in the past"
+test = "sig"
+why = "v0.5.0 (test_arm_catch_up 1): a hold a frame covers is a hit at the arm."
+find = '''        if (n->p[5] != 1 && t_ns < known) {'''
+replace = '''        if (0) {'''
+
+[[mutant]]
+id = "211"
+name = "the arm tests the newest value, not its time's"
+test = "sig"
+why = "v0.5.0 (test_arm_catch_up 2, 5): the value at the arm."
+find = '''                v = ysig__ring_at(&in->hist, f);'''
+replace = ''''''
+
+[[mutant]]
+id = "212"
+name = "the ring after the arm not walked"
+test = "sig"
+why = "v0.5.0 (test_arm_catch_up 2): a value that breaks the hold counts."
+find = '''                    ysig__det_eval(g, node, x, x->t, x->t);'''
+replace = ''''''
+
+[[mutant]]
+id = "213"
+name = "a hold still true not completed at the known time"
+test = "sig"
+why = "v0.5.0 (test_arm_catch_up 1): the frame covers the hold."
+find = '''            if (s->armed && n->kns[0] > 0) (void)ysig__det_hold_done(g, node, known);'''
+replace = ''''''
+
+[[mutant]]
+id = "214"
+name = "the frame's onset not known"
+test = "sig"
+why = "v0.5.0 (test_arm_catch_up 1): the onset a frame tested at."
+find = '''        if (f > k) k = f;'''
+replace = ''''''
+
+[[mutant]]
+id = "215"
+name = "a frame-rate detect catches up"
+test = "sig"
+why = "v0.5.0 (test_arm_catch_up 8): its next onset tests it."
+find = '''        if (n->p[5] != 1 && t_ns < known) {'''
+replace = '''        if (t_ns < known) {'''
+
+[[mutant]]
+id = "216"
+name = "a ring that does not reach back used"
+test = "sig"
+why = "v0.5.0 (test_arm_catch_up 7): counted, the newest value."
+find = '''in->hist.cap && in->hist.n && (f = ysig__ring_find(&in->hist, t_ns)) >= 0) {'''
+replace = '''in->hist.cap && in->hist.n && ((f = ysig__ring_find(&in->hist, t_ns)) >= 0 || (f = 0) == 0)) {'''
+
+[[mutant]]
+id = "217"
+name = "the hit output does not rise at a caught-up hit"
+test = "sig"
+why = "v0.5.0 (test_arm_catch_up 1): the latch freezes at the hit."
+find = '''            if (hit_out && s->fired && !was) {'''
+replace = '''            if (0) {'''
+
+[[mutant]]
+id = "218"
+name = "no counts"
+test = "sig"
+why = "v0.5.0 (test_arm_catch_up 4, 6): arm_caught_up."
+find = '''            g->st.arm_caught_up++;'''
+replace = ''''''
+
+[[mutant]]
+id = "219"
+name = "an arm before any frame takes the last onset"
+test = "sig"
+why = "v0.5.0: framed is false until ysig_frame()."
+find = '''    if (g->framed) {'''
+replace = '''    if (1) {'''

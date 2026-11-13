@@ -91,6 +91,7 @@ int main(void) {
     if (g_sig_api.frame(&g, &f) != 0 || ch[0] != 3.0f) return 4;
     g_sig_api.get_stats(&g, &st);
     if (st.taken != 1 || !g_sig_api.op_params(YSIG_OP_INTEGRATE, &np) || np != 16) return 5;
+    if (st.arm_caught_up != 0 || st.arm_no_history != 0) return 10;   /* v0.5.0: the arm's catch-up counts */
     if (strcmp(g_sig_api.version(), YSIG_VERSION_STRING) || strcmp(g_sig_api.op_name(YSIG_OP_BIND), "bind")) return 6;
     if ((int)YSIG_ENTRY_NOW != 2 || (int)YSIG_ENTRY_FRESH != 1 || (int)YSIG_ENTRY_ARM != 0) return 9;   /* p12's values */
     if (g_sig_api.value_of(&g, 1)->v[0] != 3 || g_sig_api.value_at(&g, 1, 0, NULL) != -1) return 7;

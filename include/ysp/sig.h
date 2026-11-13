@@ -1,4 +1,4 @@
-/* ysp/sig.h - v0.4.1 - public domain single-header signal path
+/* ysp/sig.h - v0.5.0 - public domain single-header signal path
  *
  *   Continuous input to stimuli: a small graph, fixed at open, from input
  *   sources through per-sample transforms and maps to stimulus channels,
@@ -204,6 +204,24 @@
  *   samples completes a hold. A hold armed while its test is true counts
  *   from the arm (p12 entry arm, 0: a hand already on the start), or
  *   waits for the test to fail and come true again (entry fresh, 1).
+ *   AN ARM IN THE PAST (v0.5.0): ysig_arm() at a time before the newest
+ *   value of a sample-rate detect's input, or before a frame's onset that
+ *   already tested it (the poll for a frame-updated input), runs the
+ *   detect as the feeds and frames would have had it been armed then. It
+ *   tests the input's value at the arm's time (its ring's newest entry at
+ *   or before it), then each of the ring's later entries in time order,
+ *   then completes a hold still true at the time the graph knows input
+ *   up to (the later of the newest value and that onset or poll). So a
+ *   hold that a frame already covers is a hit at start + hold, found by
+ *   the arm itself; a value after the arm that breaks the hold, or a
+ *   crossing after it, counts at its own time. Only the input's ring is
+ *   read (node.history on the input): an input with no ring, or a ring
+ *   whose oldest entry is after the arm, tests the newest value as
+ *   before, counted in ysig_stats.arm_no_history. A frame-rate detect
+ *   tests at onsets only: an arm in the past is tested at the next onset,
+ *   as before. No frame is run again, so records and frame rows are
+ *   not written twice; the journal holds the arm, and a replay runs it
+ *   on the same rings, so it gives the same hits.
  *   Entry now (2) with no hold: a test true at the arm is a hit at the
  *   arm's time with the input's held value, also at a reset that arms
  *   (a cursor already in a target; the output rises after the reset);
@@ -331,6 +349,13 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.5.0 - an arm in the past (AN ARM IN THE PAST, under DETECTORS): a
+ *          sample-rate detect armed before its input's newest value or a
+ *          frame's onset that tested it catches up on the input's ring;
+ *          a hold a frame already covers is a hit at start + hold at the
+ *          arm's call (the experiment format's 3.11 rule 2 in the
+ *          player). ysig_stats.arm_caught_up and arm_no_history, and the
+ *          graph's framed flag (struct changes).
  *   v0.4.1 - the review of 0.3.0 and 0.4.0: an entry-now hit at a reset
  *          rises after every node's reset, so a latch freezes and a peak's
  *          gate restarts, as at ysig_arm(); no entry-now hit at an arm on
@@ -363,6 +388,10 @@
  *          adapters, custom ops, parameter tables, and a name for
  *          each p[] index (YSIG_<OP>_<ROW>).
  *
+ *   STATUS: v0.5.0, 2026-11-12, Linux desktop (GCC 12.2):
+ *   test_arm_catch_up as C and as C++ under ASan and UBSan, the compile
+ *   checks, the fuzz target, the mutants (docs/sig.md, "Tests, fuzzing
+ *   and mutations").
  *   STATUS: v0.4.1, 2026-11-11, Linux desktop (GCC 12.2):
  *   test_review_fixes as C and as C++ under ASan and UBSan; 203 of 203
  *   mutants as expected (206 to 209 new).
@@ -392,9 +421,9 @@
 #define YSP_SIG_H_INCLUDED
 
 #define YSIG_VERSION_MAJOR 0
-#define YSIG_VERSION_MINOR 4
-#define YSIG_VERSION_PATCH 1
-#define YSIG_VERSION_STRING "0.4.1"
+#define YSIG_VERSION_MINOR 5
+#define YSIG_VERSION_PATCH 0
+#define YSIG_VERSION_STRING "0.5.0"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -639,6 +668,11 @@ typedef struct ysig_stats {
     int64_t  late_poll_max_ns;  /* the largest such excess                */
     int64_t  time_clamped;      /* a detect held its hold clock where a
                                  * value's t went back                    */
+    int64_t  arm_caught_up;     /* v0.5.0: arms before the newest input or
+                                 * a frame's onset, run on its history    */
+    int64_t  arm_no_history;    /* such an arm whose input keeps no ring,
+                                 * or whose ring does not reach back to
+                                 * it: tested on the newest value instead */
     uint64_t digest;            /* FNV-1a: rows, hits, events, binds,
                                  * frames                                */
 } ysig_stats;
@@ -683,6 +717,7 @@ typedef struct ysig_graph {
     int               n_adapters;
     int64_t           frame_index, onset, base;  /* the frame being run  */
     int64_t           t_known;    /* min(onset, poll): views stop here    */
+    int               framed;     /* a ysig_frame() has run: onset is one */
     int               has_view;   /* a view op: poll_ns 0 is refused      */
     int64_t           t_fed;      /* the newest event time fed            */
     const float*      fvals;
@@ -768,7 +803,8 @@ YSIG_API int ysig_feed(ysig_graph* g, const yin_event* e);
 /* Once per frame, after the frame's input was fed. 0, or -1. */
 YSIG_API int ysig_frame(ysig_graph* g, const ysig_frame_in* f);
 
-/* Detects: arm from t (DETECTORS), or stop. */
+/* Detects: arm from t (DETECTORS; a t in the past catches up on the
+ * input's ring, AN ARM IN THE PAST), or stop. */
 YSIG_API bool ysig_arm(ysig_graph* g, int node, int64_t t_ns);
 YSIG_API bool ysig_disarm(ysig_graph* g, int node);
 
@@ -1972,11 +2008,11 @@ static int ysig__test(const ysig__nd* n, const ysig_value* v, double hyst) {
     return test == YSIG_TEST_GE ? q >= n->p[2] + hyst : q <= n->p[2] - hyst;
 }
 
-/* Returns 1 when the arm itself is a hit (entry now). */
-static int ysig__det_arm(ysig_graph* g, int i, int64_t t) {
+/* Returns 1 when the arm itself is a hit (entry now). v: the input's
+ * value at the arm's time. */
+static int ysig__det_arm(ysig_graph* g, int i, int64_t t, const ysig_value* v) {
     ysig__nd* n = &g->nd[i];
     ysig__det_st* s = (ysig__det_st*)n->st;
-    const ysig_value* v = &g->val[n->in[0]];
     int r = ysig__test(n, v, 0);
     s->armed = 1;
     s->t_arm = t;
@@ -2657,7 +2693,7 @@ static void ysig__reset(ysig_graph* g, int64_t t, int exp_only) {
             memset(o, 0, sizeof *o);
             ysig__gen_meta(o, id, t);
             o->lanes = 1;
-            if (n->p[6] == 0) ysig__det_arm(g, id, t);
+            if (n->p[6] == 0) ysig__det_arm(g, id, t, &g->val[n->in[0]]);
             /* a hit output is 0 at the reset; an arm that was a hit (entry
              * now) rises after the loop, so its users see the rise */
             o->v[0] = (int)n->p[13] != YSIG_OUT_HIT && ((ysig__det_st*)n->st)->state ? 1.0 : 0.0;
@@ -3119,6 +3155,7 @@ YSIG_API int ysig_frame(ysig_graph* g, const ysig_frame_in* f) {
     ysig__journal(g, &e);
     g->frame_index = f->index;
     g->onset = f->onset_ns;
+    g->framed = 1;
     g->base = f->base_ns;
     g->fvals = f->values;
     g->n_fvals = f->n_values;
@@ -3165,6 +3202,18 @@ static void ysig__settle(ysig_graph* g, int from) {
     }
 }
 
+/* The time a sample-rate detect knows input up to: its input's newest
+ * value, or a frame's pass that tested it later (the onset; the poll for
+ * a frame-updated input, the views' clock). */
+static int64_t ysig__det_known(const ysig_graph* g, const ysig__nd* n) {
+    int64_t k = g->val[n->in[0]].t;
+    if (g->framed) {
+        int64_t f = (g->nd[n->in[0]].flags & YSIG__F_FRAME) ? g->t_known : g->onset;
+        if (f > k) k = f;
+    }
+    return k;
+}
+
 YSIG_API bool ysig_arm(ysig_graph* g, int node, int64_t t_ns) {
     ysig_entry e;
     if (!g || !g->ok || node < 0 || node >= g->n || g->nd[node].op != YSIG_OP_DETECT) return false;
@@ -3174,13 +3223,35 @@ YSIG_API bool ysig_arm(ysig_graph* g, int node, int64_t t_ns) {
     e.t = t_ns;
     ysig__journal(g, &e);
     {
-        int hit_out = (int)g->nd[node].p[13] == YSIG_OUT_HIT;
+        ysig__nd* n = &g->nd[node];
+        ysig__det_st* s = (ysig__det_st*)n->st;
+        const ysig__nd* in = &g->nd[n->in[0]];
+        const ysig_value* v = &g->val[n->in[0]];
+        int hit_out = (int)n->p[13] == YSIG_OUT_HIT;
         int fell = hit_out && g->val[node].v[0] != 0;
-        int rose = ysig__det_arm(g, node, t_ns) && hit_out;
+        int rose, catch_up = 0, f = -1, k;
+        int64_t known = ysig__det_known(g, n);
+        /* v0.5.0: an arm at a time the graph already has input past runs
+         * the detect on that input's history from the arm on, as the feeds
+         * and frames would have had it been armed then (3.11 rule 2 of the
+         * experiment format: a hit before a frame's onset starts the next
+         * state on that frame). A frame-rate detect tests at onsets only:
+         * its next onset tests it, as before */
+        if (n->p[5] != 1 && t_ns < known) {
+            if (t_ns >= v->t) {
+                catch_up = 1;   /* no input after the arm: the held value is the arm's */
+            } else if (in->hist.cap && in->hist.n && (f = ysig__ring_find(&in->hist, t_ns)) >= 0) {
+                catch_up = 1;
+                v = ysig__ring_at(&in->hist, f);
+            } else {
+                g->st.arm_no_history++;
+            }
+        }
+        rose = ysig__det_arm(g, node, t_ns, v) && hit_out;
         if (fell) {
             /* the fall has a time, so a past read after it agrees */
             g->val[node].t = t_ns;
-            ysig__hist_push(g, &g->nd[node], &g->val[node]);
+            ysig__hist_push(g, n, &g->val[node]);
             ysig__settle(g, node);
         }
         if (rose) {
@@ -3188,8 +3259,26 @@ YSIG_API bool ysig_arm(ysig_graph* g, int node, int64_t t_ns) {
              * its users see a rise now (a latch freezes, a gate restarts) */
             g->val[node].v[0] = 1.0;
             g->val[node].t = t_ns;
-            ysig__hist_push(g, &g->nd[node], &g->val[node]);
+            ysig__hist_push(g, n, &g->val[node]);
             ysig__settle(g, node);
+        }
+        if (catch_up) {
+            int was = s->fired;
+            g->st.arm_caught_up++;
+            /* the input's values after the arm, in time order, then a hold
+             * still true completed at the time the graph knows */
+            if (f >= 0)
+                for (k = f + 1; k < in->hist.n && s->armed; k++) {
+                    const ysig_value* x = ysig__ring_at(&in->hist, k);
+                    ysig__det_eval(g, node, x, x->t, x->t);
+                }
+            if (s->armed && n->kns[0] > 0) (void)ysig__det_hold_done(g, node, known);
+            if (hit_out && s->fired && !was) {
+                g->val[node].v[0] = 1.0;
+                g->val[node].t = s->t_hit;
+                ysig__hist_push(g, n, &g->val[node]);
+                ysig__settle(g, node);
+            }
         }
     }
     return true;
