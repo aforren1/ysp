@@ -35,7 +35,7 @@
 #define MAXC 400
 #define NCAT 19
 
-static uint64_t g_arena_a[(8u << 20) / 8], g_arena_b[(8u << 20) / 8];
+static uint64_t g_arena_a[(32u << 20) / 8], g_arena_b[(32u << 20) / 8];
 static float g_ch_a[4], g_ch_b[4];
 static uint64_t g_rs;
 static uint32_t rnd(void) { g_rs ^= g_rs << 13; g_rs ^= g_rs >> 7; g_rs ^= g_rs << 17; return (uint32_t)(g_rs >> 11); }
@@ -349,13 +349,37 @@ int main(int argc, char** argv) {
                 else if (ds->fired && dn->kns[0] > 0 && ds->t_hit >= t_reset) { t_arm = ds->t_hit; cats[18] = 1; }
             }
         }
-        for (b_pos = last_reset + 1; b_pos < a_pos; b_pos++) {
+        /* B: after the last call before A's that must come first (input at
+         * or before t, a set, a disarm, a recenter or an arm at or before
+         * t), the rule of v0.6.0 (AN ARM IN THE PAST) */
+        for (b_pos = a_pos; b_pos > last_reset + 1; b_pos--) {
+            const call* q = &cs[b_pos - 1];
             int64_t ti;
-            if (is_input(&cs[b_pos], &ti) && ti > t_arm) break;
+            if (is_input(q, &ti)) { if (ti <= t_arm) break; continue; }
+            if (q->kind == K_SET || q->kind == K_DISARM || q->kind == K_RESET || q->kind == K_RESET_TRIAL) break;
+            if ((q->kind == K_RECENTER || q->kind == K_ARM) && q->t <= t_arm) break;
         }
-        /* B moves the arm before calls it commutes with; another arm of the
-         * detect between does not commute (two arms at one place go in call
-         * order), so it is no call here */
+        /* and after the call that found a hit at or before t that A has
+         * handed out by its arm (the latest call before A's arm whose time
+         * is the hit's t_found): A run to its arm on gb, draining as A */
+        {
+            static hits hp;
+            int m;
+            hp.n = 0;
+            if (!open_graph(&gb, &gd, g_arena_b, g_ch_b)) return 2;
+            ysig_reset(&gb, 0);
+            for (k = 0; k < a_pos; k++) { do_call(&gb, &cs[k], gd.adapter); drain(&gb, &hp); }
+            for (m = 0; m < hp.n; m++) {
+                int64_t tc;
+                if (hp.h[m].t > t_arm) continue;
+                for (k = a_pos - 1; k >= b_pos; k--)
+                    if ((is_input(&cs[k], &tc) || (cs[k].kind == K_ARM && (tc = cs[k].t, 1))) && tc == hp.h[m].t_found) break;
+                if (k >= b_pos) b_pos = k + 1;
+            }
+        }
+        /* another arm of the detect between B's place and A's call (one
+         * later than t, or made in the past and placed by the rule itself)
+         * B would not place as A did: no call here, as before */
         for (k = b_pos; k < a_pos; k++) if (cs[k].kind == K_ARM) cs[k].kind = K_NOP;
         if (last_reset >= 0) cats[8] = 1;
         /* the categories that the window between B's place and A's call reaches */
@@ -444,10 +468,10 @@ int main(int argc, char** argv) {
             /* every hit handed out, as a set */
             qsort(ha.h, (size_t)ha.n, sizeof(ysig_hit), cmp_hit);
             qsort(hb.h, (size_t)hb.n, sizeof(ysig_hit), cmp_hit);
-            /* A hands out what B does, and, before its arm, the detect's
-             * earlier arm's hits at or after t (superseded: sup of them,
-             * the new arm hands out again what it finds); B never had
-             * those. A hit in both: node, time and value, and where the
+            /* A hands out what B does, and, before its arm, hits later than
+             * t that the new history does not give as they were
+             * (superseded: sup of them; the new arm hands out again what
+             * it finds); B never had those. A hit in both: node, time and value, and where the
              * time is after the arm the value that found it */
             static char used[sizeof ha.h / sizeof ha.h[0]];
             int ia, ib, pass;
@@ -455,13 +479,12 @@ int main(int argc, char** argv) {
             memset(used, 0, sizeof used);
             for (ib = 0; ib < hb.n && !why; ib++) {
                 int got = -1;
-                /* B's hit of the detect after t, handed out after B's arm,
-                 * is the new arm's: A hands it out after its arm, not as
-                 * the earlier arm's */
-                int passes = hb.h[ib].node == gd.det && hb.h[ib].t > t_arm && !hb.h[ib].reserved_ ? 1 : 2;
+                /* A's copies handed out after its arm first (a hit after t
+                 * that a later logged arm made can be one A had before) */
+                int passes = 2;
                 for (pass = 0; pass < passes && got < 0; pass++)
                     for (ia = 0; ia < ha.n && got < 0; ia++) {
-                        int p0 = ha.h[ia].reserved_ && ha.h[ia].node == gd.det && ha.h[ia].t >= t_arm;
+                        int p0 = ha.h[ia].reserved_ && ha.h[ia].t > t_arm;
                         if (used[ia] || p0 != pass) continue;
                         if (ha.h[ia].node == hb.h[ib].node && ha.h[ia].t == hb.h[ib].t && !memcmp(&ha.h[ia].value, &hb.h[ib].value, sizeof(ysig_value)) &&
                             (ha.h[ia].t_found == hb.h[ib].t_found || ha.h[ia].t <= t_arm))
@@ -474,13 +497,15 @@ int main(int argc, char** argv) {
             }
             for (ia = 0; ia < ha.n && !why; ia++) {
                 if (used[ia]) continue;
-                if (ha.h[ia].reserved_ && ha.h[ia].node == gd.det && ha.h[ia].t >= t_arm) extra++;
+                if (ha.h[ia].reserved_ && ha.h[ia].t > t_arm) extra++;
                 else {
                     why = "the hits handed out";
                     if (g_dbg) printf("  A's hit %d@%lld/%lld not in B\n", ha.h[ia].node, (long long)ha.h[ia].t, (long long)ha.h[ia].t_found);
                 }
             }
-            if (!why && extra != sup) why = "the superseded hits";
+            /* superseded counts at least the extra hits (more when equal-time
+             * copies of one hit pair up differently: on the safe side) */
+            if (!why && extra > sup) { why = "the superseded hits"; if (g_dbg) printf("  extra %ld superseded %ld\n", extra, sup); }
             if (!why && sup > 0) why = "superseded";
         }
         for (c = 0; c < NCAT; c++) {

@@ -17,6 +17,14 @@ flags = ["-std=c99", "-O1", "-w", "-fsanitize=undefined", "-fno-sanitize-recover
 libs = ["-lm"]
 timeout = 60
 
+[test.sig_oracle]
+source = "tests/adapt/sig_arm_oracle.c"
+compiler = "gcc"
+flags = ["-std=c99", "-O2", "-w", "-DYSIG_ARM_REENTRY_COUNTED"]
+libs = ["-lm"]
+timeout = 300
+env = { SIG_ORACLE_CASES = "20000" }
+
 [test.sig_diff]
 source = "tests/adapt/sig_arm_diff.c"
 compiler = "gcc"
@@ -1750,27 +1758,27 @@ replace = '    int64_t ts = g->t_fed;'
 id = "210"
 name = "no run again: an arm in the past tests the newest value"
 test = "sig"
-why = "v0.6.0 (test_arm_window 2, sig_arm_diff)."
+why = "v0.6.0 (test_arm_window 2, sig_arm_oracle)."
 find = '''    ysig__rerun(g, kslot, node, t_ns);
     cu->arm_live = 0;'''
-replace = '''    ysig__arm_plain(g, node, t_ns);
+replace = '''    ysig__arm_plain(g, node, t_ns, t_ns);
     cu->arm_live = 0;'''
 
 [[mutant]]
 id = "211"
-name = "the arm placed at the call, not before the first later input"
+name = "the arm placed at the call, not after the last call that must come first"
 test = "sig"
 why = "v0.6.0 (test_arm_window 2)."
-find = '''        if (ysig__input_t(&cu->calls[pos % (uint64_t)cu->C].e, &ti) && ti > t_ns) break;'''
-replace = '''        if (ysig__input_t(&cu->calls[pos % (uint64_t)cu->C].e, &ti) && ti > INT64_MAX - 1) break;'''
+find = '''        if (ysig__before_arm(&cu->calls[(pos - 1) % (uint64_t)cu->C].e, t_ns)) break;'''
+replace = '''        if (1) break;'''
 
 [[mutant]]
 id = "212"
 name = "an input at the arm's time counted as later"
-test = "sig_diff"
-why = "v0.6.0: equal times come first (sig_arm_diff, equal-time samples)."
-find = '''        if (ysig__input_t(&cu->calls[pos % (uint64_t)cu->C].e, &ti) && ti > t_ns) break;'''
-replace = '''        if (ysig__input_t(&cu->calls[pos % (uint64_t)cu->C].e, &ti) && ti >= t_ns) break;'''
+test = "sig_oracle"
+why = "v0.6.0: equal times come first (sig_arm_oracle)."
+find = '''    if (ysig__input_t(e, &ti)) return ti <= t;'''
+replace = '''    if (ysig__input_t(e, &ti)) return ti < t;'''
 
 [[mutant]]
 id = "213"
@@ -1802,19 +1810,19 @@ replace = '''    for (i = 0; i < cu->n_ck && kslot < 0; i++)'''
 
 [[mutant]]
 id = "216"
-name = "a checkpoint past the arm's time used"
+name = "a checkpoint after the arm's place used"
 test = "sig"
-why = "v0.6.0 (test_arm_window 5, sig_arm_diff)."
-find = '''        if (cu->ck[(cu->ck0 + i) % cu->K].cover <= t_ns) kslot = (cu->ck0 + i) % cu->K;'''
+why = "v0.6.0 (test_arm_window 5, sig_arm_oracle)."
+find = '''        if (k->call <= pos && (pos > cu->c_tail || k->cover <= t_ns)) kslot = (cu->ck0 + i) % cu->K;'''
 replace = '''        kslot = (cu->ck0 + i) % cu->K;'''
 
 [[mutant]]
 id = "217"
 name = "a hit handed out queued again"
 test = "sig"
-why = "v0.6.0 (R11: another node's hit, or the earlier arm's at the arm's time, not queued twice; test_arm_window, sig_arm_diff)."
-find = '''        if (!(g->cu->arm_live && node == g->cu->arm_node) && ysig__hit_seen(g->cu, &x)) { ysig__hl_add(g->cu, 0, &x); return; }'''
-replace = ''''''
+why = "v0.6.0 (R11: another node's hit, or the earlier arm's at the arm's time, not queued twice; test_arm_window, sig_arm_oracle)."
+find = '''            if (seen) { ysig__hl_add(g->cu, 0, &seen->h); return; }'''
+replace = '''            (void)seen;'''
 
 [[mutant]]
 id = "218"
@@ -1846,8 +1854,8 @@ name = "no journal guard in a run again"
 test = "sig"
 why = "v0.6.0: the journal holds the arm at its call (test_arm_window replay)."
 find = '''    if (g->cu && g->cu->replaying) return;
-    if (g->journal) g->journal(g->user, e);'''
-replace = '''    if (g->journal) g->journal(g->user, e);'''
+    if (g->journal) { g->busy++; g->journal(g->user, e); g->busy--; }'''
+replace = '''    if (g->journal) { g->busy++; g->journal(g->user, e); g->busy--; }'''
 
 [[mutant]]
 id = "222"
@@ -1917,8 +1925,8 @@ id = "229"
 name = "settle on a frame-rate detect"
 test = "sig"
 why = "v0.6.0: a frame-rate detect tests at onsets (test_arm_window)."
-find = '''    if (n->op != YSIG_OP_DETECT || n->p[5] == 1 || n->kns[0] <= 0 || (g->nd[n->in[0]].flags & YSIG__F_FRAME)) return;'''
-replace = '''    if (n->op != YSIG_OP_DETECT || n->kns[0] <= 0 || (g->nd[n->in[0]].flags & YSIG__F_FRAME)) return;'''
+find = '''    if (!any && (n->p[5] == 1 || (g->nd[n->in[0]].flags & YSIG__F_FRAME))) return;'''
+replace = '''    if (!any && (g->nd[n->in[0]].flags & YSIG__F_FRAME)) return;'''
 
 [[mutant]]
 id = "230"
@@ -1948,41 +1956,148 @@ replace = '''!memcmp(l->h.value.v, h->value.v, sizeof h->value.v)) {'''
 
 [[mutant]]
 id = "233"
-name = "every hit the run again does not find counted as superseded"
+name = "every hit the run again does not give counted as superseded"
 test = "sig"
-why = "v0.6.0 (test_arm_window): only the armed detect's own at or after the arm's time are its earlier arm's."
-find = '''            if (cu->tmp[i].h.node == node && cu->tmp[i].h.t >= t) keep.arm_hits_superseded++;'''
+why = "v0.6.0 (test_arm_window, sig_arm_oracle): one at or before the arm's time is retracted."
+find = '''            if (cu->tmp[i].h.t > t) keep.arm_hits_superseded++;'''
 replace = '''            if (1) keep.arm_hits_superseded++;'''
 
 [[mutant]]
 id = "234"
 name = "a superseded hit counted as retracted"
 test = "sig"
-why = "v0.6.0 (test_arm_window 5): the re-armed detect's own hit after the arm's time."
-find = '''            if (cu->tmp[i].h.node == node && cu->tmp[i].h.t >= t) keep.arm_hits_superseded++;'''
+why = "v0.6.0 (test_arm_window 5): hits later than the arm's time."
+find = '''            if (cu->tmp[i].h.t > t) keep.arm_hits_superseded++;'''
 replace = '''            if (0) keep.arm_hits_superseded++;'''
 
 [[mutant]]
 id = "235"
 name = "an arm does not complete the hold met by its time"
 test = "sig"
-why = "v0.6.0 (test_arm_window): a re-arm at its own hit's time that later input found keeps the hit."
-find = '''    ysig__settle_det(g, node, t_ns);
-    fell = hit_out && g->val[node].v[0] != 0;'''
-replace = '''    fell = hit_out && g->val[node].v[0] != 0;'''
+why = "v0.6.0 (test_arm_window, test_arm_review 2)."
+find = '''    ysig__settle_det(g, node, ts < t_ns ? ts : t_ns, 1);'''
+replace = '''    (void)ts;'''
 
 [[mutant]]
 id = "236"
 name = "a past arm's own hits not handed out again"
 test = "sig"
-why = "v0.6.0 (test_arm_window 3, sig_arm_diff): what the new arm finds is its own, though the earlier arm's equal hit was handed out (the player's s21418)."
-find = '''        if (!(g->cu->arm_live && node == g->cu->arm_node) && ysig__hit_seen(g->cu, &x)) { ysig__hl_add(g->cu, 0, &x); return; }'''
-replace = '''        if (ysig__hit_seen(g->cu, &x)) { ysig__hl_add(g->cu, 0, &x); return; }'''
+why = "v0.6.0 (test_arm_window 3, sig_arm_oracle): what the new arm finds is its own, though the earlier arm's equal hit was handed out (the player's s21418)."
+find = '''        if (!(g->cu->arm_live && node == g->cu->arm_node)) {'''
+replace = '''        if (1) {'''
 
 [[mutant]]
 id = "237"
 name = "a later logged arm of the detect keeps the new arm's hits live"
-test = "sig_diff"
+test = "sig_oracle"
 why = "v0.6.0: a later logged arm's hits are its own, which the caller had."
-find = '''            g->cu->arm_live = g->cu->c_pos - 1 == g->cu->arm_pos;'''
-replace = '''            if (g->cu->c_pos - 1 == g->cu->arm_pos) g->cu->arm_live = 1;'''
+find = '''        cu->arm_live = at == cu->arm_pos;'''
+replace = '''        if (at == cu->arm_pos) cu->arm_live = 1;'''
+
+[[mutant]]
+id = "238"
+name = "an arm placed before the call that found a hit the caller took"
+test = "sig"
+why = "Review of 0.6.0, finding 1 (test_arm_review 1, sig_arm_oracle)."
+find = '''        pos = q;
+    }'''
+replace = '''        (void)q;
+    }'''
+
+[[mutant]]
+id = "239"
+name = "the arm's hold met only for sample-rate detects"
+test = "sig"
+why = "Review of 0.6.0, finding 2 (test_arm_review 2: a view's hold)."
+find = '''    if (!any && (n->p[5] == 1 || (g->nd[n->in[0]].flags & YSIG__F_FRAME))) return;'''
+replace = '''    if (n->p[5] == 1 || (g->nd[n->in[0]].flags & YSIG__F_FRAME)) return;'''
+
+[[mutant]]
+id = "240"
+name = "an arm in the past moves before a set or a disarm made before it"
+test = "sig"
+why = "Review of 0.6.0, finding 3 (test_arm_review 3)."
+find = '''    case YSIG_J_SET: case YSIG_J_SET_DATA: case YSIG_J_DISARM: case YSIG_J_RESET: case YSIG_J_RESET_TRIAL: return 1;'''
+replace = '''    case YSIG_J_SET: case YSIG_J_SET_DATA: case YSIG_J_DISARM: case YSIG_J_RESET: case YSIG_J_RESET_TRIAL: return 0;'''
+
+[[mutant]]
+id = "241"
+name = "an arm in the past moves before a recenter at or before its time"
+test = "sig_oracle"
+why = "Review of 0.6.0, finding 3: the player's 3.12 path (sig_arm_oracle, relative role)."
+find = '''    case YSIG_J_RECENTER: case YSIG_J_ARM: return e->t <= t;'''
+replace = '''    case YSIG_J_RECENTER: return 0;
+    case YSIG_J_ARM: return e->t <= t;'''
+
+[[mutant]]
+id = "242"
+name = "an arm placed after a logged arm with a later time"
+test = "sig"
+why = "Review of 0.6.0, the arm order (test_arm_review: the later time is in effect)."
+find = '''    case YSIG_J_RECENTER: case YSIG_J_ARM: return e->t <= t;'''
+replace = '''    case YSIG_J_RECENTER: return e->t <= t;
+    case YSIG_J_ARM: return 1;'''
+
+[[mutant]]
+id = "243"
+name = "an arm ahead of the input meets the old hold on unfed time"
+test = "sig"
+why = "Review of 0.6.0, finding 4 (test_arm_review 4)."
+find = '''    ysig__arm_made(g, node, t, t <= g->t_cover ? t : g->t_cover, at);'''
+replace = '''    ysig__arm_made(g, node, t, t, at);'''
+
+[[mutant]]
+id = "244"
+name = "a channel node set above the channels read at the open"
+test = "sig"
+why = "Review of 0.6.0, finding 5 (test_arm_review 5)."
+find = '''        return (int)v < g->ch_hi;'''
+replace = '''        return true;'''
+
+[[mutant]]
+id = "245"
+name = "a run again's hits capped at the live queue"
+test = "sig"
+why = "Review of 0.6.0, finding 6 (test_arm_review 6: 88 hits handed out, none lost)."
+find = '''    if (g->n_hit >= YSIG_QUEUE_CAP + (g->cu && g->cu->replaying ? g->cu->C : 0)) { g->st.hits_lost++; return; }'''
+replace = '''    if (g->n_hit >= YSIG_QUEUE_CAP) { g->st.hits_lost++; return; }'''
+
+[[mutant]]
+id = "246"
+name = "a run again's derived losses counted"
+test = "sig"
+why = "Review of 0.6.0, finding 6 (test_arm_review 6)."
+find = '''    g->st.derived_lost = keep.derived_lost;'''
+replace = '''    (void)0;'''
+
+[[mutant]]
+id = "247"
+name = "the rows' hash without the metadata"
+test = "sig_oracle"
+why = "Review of 0.6.0, finding 7 (sig_arm_oracle: rows compared in every column)."
+find = '''    h = ysig__hmix(h, (uint64_t)v->tier | ((uint64_t)v->lanes << 8) | ((uint64_t)v->unc_us << 16));'''
+replace = '''    (void)0;'''
+
+[[mutant]]
+id = "248"
+name = "ysig_arm() from a callback not refused"
+test = "sig"
+why = "Review of 0.6.0, finding 8 (test_arm_review 8)."
+find = '''    if (g->busy) {'''
+replace = '''    if (0) {'''
+
+[[mutant]]
+id = "249"
+name = "the frames-with-values count an int"
+test = "sig"
+why = "Review of 0.6.0, finding 9 (test_arm_review 9: its size)."
+find = '''    uint64_t    slot_next;      /* frames with values logged (a slot is it'''
+replace = '''    int         slot_next;      /* frames with values logged (a slot is it'''
+
+[[mutant]]
+id = "250"
+name = "a hit the run again did not give again no longer bounds a later arm"
+test = "sig_oracle"
+why = "Review of 0.6.0, finding 1 with several arms (sig_arm_oracle)."
+find = '''            cu->gone[cu->g_head++ % (uint64_t)cu->C] = cu->tmp[i];'''
+replace = '''            (void)0;'''

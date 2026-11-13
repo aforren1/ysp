@@ -3964,6 +3964,150 @@ static void sig_window(ysig_desc* d, int frames, int calls) {
     d->catchup_calls = calls;
     d->catchup_writes = 4096;
 }
+/* The third review of 0.6.0 (2026-11-13): one case per finding, from the
+ * reviewer's reproducers (scratchpad/sigrev), with the window of 4. */
+static ysig_graph* g_reent_g;
+static int g_reent_ok = -1;
+static void on_row_reenter(void* u, const ysig_row* r) {
+    (void)u; (void)r;
+    if (g_reent_ok < 0) g_reent_ok = ysig_arm(g_reent_g, 1, 1 * MS) ? 1 : 0;
+}
+static void test_arm_review(void) {
+    static uint64_t ar[(4u << 20) / 8];
+    ysig_node n[5];
+    ysig_desc d;
+    ysig_graph g;
+    ysig_stats st;
+    ysig_hit h[64];
+    ysig_frame_in f;
+    yin_event e;
+    int64_t t;
+    int k, m;
+    g_where = "review 3";
+#define R3_OPEN(nn) do { d = desc_of(n, (nn)); sig_window(&d, 4, 1024); d.arena = ar; d.arena_size = sizeof ar; \
+        if (!ysig_open(&g, &d)) { printf("open: %s\n", ysig_error(&g)); g_failures++; return; } ysig_reset(&g, 0); } while (0)
+    /* 1: a late report (dev 2 at 20 ms, after dev 1 at 25 ms) gives the hit
+     * the caller takes; a re-arm at 20 ms goes after that report: the test
+     * true at the arm is held, no hit again, nothing counted */
+    n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2); n[0].history = 64;
+    n[1] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 2, 2); n[1].history = 64;
+    n[2] = ysig_node_of(YSIG_OP_SUM, 0, 1); n[2].history = 64;
+    n[3] = ysig_node_of(YSIG_OP_DETECT, 2, -1);
+    n[3].p[YSIG_DETECT_LANE] = 0; n[3].p[YSIG_DETECT_LEVEL] = 5;
+    R3_OPEN(4);
+    e = PEN_E(1 * MS, 1, 0, 0, YIN_TIER_2); ysig_feed(&g, &e);
+    e = PEN_E(1 * MS, 2, 0, 0, YIN_TIER_2); ysig_feed(&g, &e);
+    f = frame_at(1, 16 * MS, 0, NULL, 0); ysig_frame(&g, &f);
+    e = PEN_E(25 * MS, 1, 0, 0, YIN_TIER_2); ysig_feed(&g, &e);
+    e = PEN_E(20 * MS, 2, 10, 0, YIN_TIER_2); ysig_feed(&g, &e);
+    CHECK(ysig_detected(&g, h, 64) == 1 && h[0].t == 20 * MS);
+    CHECK(ysig_arm(&g, 3, 20 * MS));
+    e = PEN_E(30 * MS, 1, 0, 0, YIN_TIER_2); ysig_feed(&g, &e);
+    CHECK(ysig_detected(&g, h, 64) == 0);
+    ysig_get_stats(&g, &st);
+    CHECK(st.arm_hits_superseded == 0 && st.arm_hits_retracted == 0);
+    /* 2: a hold on a view (speed), met at 51 ms, found by the 55 ms sample
+     * and taken; a re-arm at 51 ms keeps it: the latch stays frozen */
+    n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 2); n[0].history = 256;
+    n[1] = ysig_node_of(YSIG_OP_SPEED, 0, -1); n[1].p[YSIG_SPEED_LAG] = 0.004;
+    n[2] = ysig_node_of(YSIG_OP_DETECT, 1, -1);
+    n[2].p[YSIG_DETECT_TEST] = YSIG_TEST_LE; n[2].p[YSIG_DETECT_LANE] = 0; n[2].p[YSIG_DETECT_LEVEL] = 1;
+    n[2].p[YSIG_DETECT_START] = 1; n[2].p[YSIG_DETECT_HOLD] = 0.05; n[2].p[YSIG_DETECT_OUT] = YSIG_OUT_HIT;
+    n[3] = ysig_node_of(YSIG_OP_LATCH, 0, 2);
+    R3_OPEN(4);
+    for (t = 1 * MS; t <= 45 * MS; t += MS) {
+        e = PEN_E(t, 1, 0, 0, YIN_TIER_2); ysig_feed(&g, &e);
+        if (t == 1 * MS) ysig_arm(&g, 2, 1 * MS);
+        if (t == 15 * MS) { f = frame_at(1, 16 * MS, 0, NULL, 0); f.poll_ns = 15 * MS; ysig_frame(&g, &f); }
+        if (t == 32 * MS) { f = frame_at(2, 33 * MS, 0, NULL, 0); f.poll_ns = 32 * MS; ysig_frame(&g, &f); }
+    }
+    f = frame_at(3, 50 * MS, 0, NULL, 0); f.poll_ns = 45 * MS; ysig_frame(&g, &f);
+    e = PEN_E(55 * MS, 1, 0, 0, YIN_TIER_2); ysig_feed(&g, &e);
+    m = ysig_detected(&g, h, 64);
+    ysig_get_stats(&g, &st);
+    k = (int)st.hits;
+    CHECK(ysig_arm(&g, 2, m == 1 ? h[0].t : 51 * MS));
+    e = PEN_E(70 * MS, 1, 20, 0, YIN_TIER_2); ysig_feed(&g, &e);
+    ysig_get_stats(&g, &st);
+    CHECK(m == 1 && (int)st.hits >= k && st.arm_hits_retracted == 0 && ysig_value_of(&g, 3)->v[0] == 0);
+    /* 3: a disarm, then an arm in the past: the arm goes after the disarm
+     * (it was made after it), so the detect is armed */
+    n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 2); n[0].history = 64;
+    n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1);
+    n[1].p[YSIG_DETECT_LANE] = 0; n[1].p[YSIG_DETECT_LEVEL] = 5; n[1].p[YSIG_DETECT_START] = 1;
+    R3_OPEN(2);
+    for (t = 1 * MS; t <= 40 * MS; t += MS) { e = PEN_E(t, 1, t >= 30 * MS ? 9 : 0, 0, YIN_TIER_2); ysig_feed(&g, &e); }
+    ysig_disarm(&g, 1);
+    CHECK(ysig_arm(&g, 1, 20 * MS));
+    CHECK(((ysig__det_st*)g.nd[1].st)->armed == 1 || ysig_detected(&g, h, 64) == 1);
+    /* the same with ysig_set of the level before the arm: the new level
+     * from the arm on (9 >= 8: a hit at 41 ms, none at 30 ms) */
+    R3_OPEN(2);
+    for (t = 1 * MS; t <= 40 * MS; t += MS) { e = PEN_E(t, 1, t >= 30 * MS ? 6 : 0, 0, YIN_TIER_2); ysig_feed(&g, &e); }
+    CHECK(ysig_set(&g, 1, YSIG_DETECT_LEVEL, 8));
+    CHECK(ysig_arm(&g, 1, 20 * MS) && ysig_detected(&g, h, 64) == 0);
+    e = PEN_E(41 * MS, 1, 9, 0, YIN_TIER_2); ysig_feed(&g, &e);
+    CHECK(ysig_detected(&g, h, 64) == 1 && h[0].t == 41 * MS);
+    /* 4: an arm ahead of the input (150 ms, input to 50 ms) does not meet
+     * the earlier arm's hold on unfed time */
+    n[1].p[YSIG_DETECT_HOLD] = 0.1; n[1].p[YSIG_DETECT_OUT] = YSIG_OUT_HIT; n[1].p[YSIG_DETECT_LEVEL] = 5;
+    R3_OPEN(2);
+    e = PEN_E(1 * MS, 1, 10, 0, YIN_TIER_2); ysig_feed(&g, &e);
+    ysig_arm(&g, 1, 1 * MS);
+    e = PEN_E(50 * MS, 1, 10, 0, YIN_TIER_2); ysig_feed(&g, &e);
+    CHECK(ysig_arm(&g, 1, 150 * MS) && ysig_detected(&g, h, 64) == 0);
+    e = PEN_E(60 * MS, 1, 0, 0, YIN_TIER_2); ysig_feed(&g, &e);
+    CHECK(ysig_detected(&g, h, 64) == 0);
+    /* 5: ysig_set of a channel node's channel above the ones read at the
+     * open is refused (the window keeps a frame's values up to those) */
+    n[0] = ysig_node_of(YSIG_OP_CHANNEL, -1, -1); n[0].p[YSIG_CHANNEL_CHANNEL] = 1;
+    n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1); n[1].p[YSIG_DETECT_LEVEL] = 0.5; n[1].p[YSIG_DETECT_AT] = 1;
+    R3_OPEN(2);
+    CHECK(!ysig_set(&g, 0, YSIG_CHANNEL_CHANNEL, 3) && ysig_set(&g, 0, YSIG_CHANNEL_CHANNEL, 0));
+    /* 6: a run again of 120 emitted events does not count them lost (they
+     * are not handed out again); nor 111 new hits (the caller drains) */
+    n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 2); n[0].history = 256;
+    n[1] = ysig_node_of(YSIG_OP_EMIT, 0, -1);
+    n[2] = ysig_node_of(YSIG_OP_DETECT, 0, -1);
+    n[2].p[YSIG_DETECT_LANE] = 0; n[2].p[YSIG_DETECT_LEVEL] = 0.5; n[2].p[YSIG_DETECT_START] = 1; n[2].p[YSIG_DETECT_REPEAT] = 1;
+    R3_OPEN(3);
+    for (t = 0, k = 0; k < 240; k++) {
+        yin_event ev[64];
+        t += MS / 4;
+        e = PEN_E(t, 1, k & 1, 0, YIN_TIER_2); ysig_feed(&g, &e);
+        if ((k + 1) % 60 == 0) { f = frame_at(k, t, 0, NULL, 0); ysig_frame(&g, &f); while (ysig_derived(&g, ev, 64) > 0) { } }
+    }
+    CHECK(ysig_arm(&g, 2, 16 * MS));
+    m = 0;
+    while ((k = ysig_detected(&g, h, 64)) > 0) m += k;
+    ysig_get_stats(&g, &st);
+    CHECK(st.derived_lost == 0 && st.hits_lost == 0 && m > 64 && st.arm_caught_up == 1);
+    /* 8: ysig_arm() from on_row is refused and counted */
+    n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 2);
+    n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1); n[1].p[YSIG_DETECT_START] = 1;
+    n[2] = ysig_node_of(YSIG_OP_RECORD, 0, -1);
+    d = desc_of(n, 3); sig_window(&d, 4, 1024); d.arena = ar; d.arena_size = sizeof ar; d.on_row = on_row_reenter;
+    if (!ysig_open(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    g_reent_g = &g;
+    g_reent_ok = -1;
+    e = PEN_E(2 * MS, 1, 1, 0, YIN_TIER_2); ysig_feed(&g, &e);
+    ysig_get_stats(&g, &st);
+    CHECK(g_reent_ok == 0 && st.arm_reentry == 1 && ysig_arm(&g, 1, 1 * MS));
+    /* 9: the frames-with-values count is 64 bits */
+    CHECK(sizeof(((ysig__cu*)0)->slot_next) == 8);
+    /* an arm made later with an earlier time than a logged arm (no input
+     * between their times): the later time is the one in effect */
+    n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 2); n[0].history = 64;
+    n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1); n[1].p[YSIG_DETECT_START] = 1;
+    R3_OPEN(2);
+    for (t = 1 * MS; t <= 30 * MS; t += 2 * MS) { e = PEN_E(t, 1, 0, 0, YIN_TIER_2); ysig_feed(&g, &e); }
+    ysig_arm(&g, 1, 22 * MS);
+    ysig_arm(&g, 1, 21 * MS + MS / 2);
+    CHECK(((ysig__det_st*)g.nd[1].st)->t_arm == 22 * MS);
+#undef R3_OPEN
+}
+
 static void test_arm_window(void) {
     ysig_node n[4];
     ysig_desc d;
@@ -4167,12 +4311,13 @@ static void test_arm_window(void) {
         CHECK(ysig_detected(&g, h, 8) == 2 && h[0].t == 3 * MS && h[1].t == 3 * MS);
         CHECK(ysig_arm(&g, 1, 2 * MS) && ysig_detected(&g, h, 8) == 2 && h[0].t == 5 * MS && h[1].t == 5 * MS);
         ysig_get_stats(&g, &st);
-        CHECK(st.arm_hits_superseded == 1 && st.arm_hits_retracted == 1);
+        /* both hits are later than the arm's time: superseded (a caller
+         * acting in time order took neither) */
+        CHECK(st.arm_hits_superseded == 2 && st.arm_hits_retracted == 0);
         /* a re-arm at its own hit's time, which input after that time
-         * found: the arm completes the hold met by its time first, so the
-         * run again keeps the hit (not counted). The other detect's hit
-         * on it is retracted: its input's value comes from the arm, not
-         * from the sample that found it live */
+         * found: the arm goes after the call that found a hit at or before
+         * its time that the caller has (finding 1), so both hits stand and
+         * nothing runs again */
         e = PEN_E(9 * MS, 1, 1, 0, YIN_TIER_2); ysig_feed(&g, &e);
         CHECK(ysig_detected(&g, h, 8) == 0);
         CHECK(ysig_arm(&g, 1, 6500000) && ysig_detected(&g, h, 8) == 0);
@@ -4180,22 +4325,22 @@ static void test_arm_window(void) {
         CHECK(ysig_detected(&g, h, 8) == 2 && h[0].t == 9500000 && h[1].t == 9500000);
         CHECK(ysig_arm(&g, 1, 9500000) && ysig_detected(&g, h, 8) == 0);
         ysig_get_stats(&g, &st);
-        CHECK(st.arm_hits_superseded == 1 && st.arm_hits_retracted == 2 && st.arm_caught_up == 3);
-        /* a re-arm at the time the old hold ends (no input has found it):
-         * the old arm's hit, at the arm's time; the new arm's hold starts
-         * at the arm, so its hit is a whole hold later, none before */
+        CHECK(st.arm_hits_superseded == 2 && st.arm_hits_retracted == 0 && st.arm_caught_up == 2);
+        /* an arm at the time the old hold would end, ahead of the input
+         * (finding 4): no hit on unfed time; the new arm's hold starts at
+         * the arm, so its hit is a whole hold later, none before */
         d = desc_of(m, 2);
         sig_window(&d, 2, 256);
         if (!open_desc(&g, &d)) { g_failures++; return; }
         ysig_reset(&g, 0);
         e = PEN_E(1 * MS, 1, 1, 0, YIN_TIER_2); ysig_feed(&g, &e);
-        CHECK(ysig_arm(&g, 1, 3 * MS) && ysig_detected(&g, h, 8) == 1 && h[0].t == 3 * MS && h[0].t_found == 3 * MS);
+        CHECK(ysig_arm(&g, 1, 3 * MS) && ysig_detected(&g, h, 8) == 0);
         e = PEN_E(5 * MS, 1, 1, 0, YIN_TIER_2); ysig_feed(&g, &e);
         CHECK(ysig_detected(&g, h, 8) == 0);
         e = PEN_E(6 * MS, 1, 1, 0, YIN_TIER_2); ysig_feed(&g, &e);
         CHECK(ysig_detected(&g, h, 8) == 1 && h[0].t == 6 * MS);
         ysig_get_stats(&g, &st);
-        CHECK(st.arm_caught_up == 0 && st.hits == 2);
+        CHECK(st.arm_caught_up == 0 && st.hits == 1);
     }
     /* the desc's limits */
     d = desc_of(n, 3);
@@ -4695,6 +4840,7 @@ int main(void) {
     test_set_recompute();
     test_review_fixes();
     test_arm_window();
+    test_arm_review();
     if (g_failures) { fprintf(stderr, "sig_test: %d failures\n", g_failures); return 1; }
     printf("sig_test: all checks passed\n");
     return 0;
