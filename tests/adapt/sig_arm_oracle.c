@@ -10,7 +10,10 @@
  *     is at or before t (a late report from another device included),
  *     after every set, disarm and reset made before it, after every
  *     recenter made before it at or before t, and after every arm made
- *     before it at or before t; among arms in one gap, by (t, call order).
+ *     before it at or before t; among arms in one gap, by (t, call order);
+ *   - and, for any hit at or before t that A handed out before the arm
+ *     (the caller may have acted on it), after the latest call before
+ *     the arm whose time is that hit's t_found (the call that found it).
  * In time-ordered input that is the calls sorted by (time, call order).
  * Both drain after the same calls. At the end A and B must hold the same
  * values, rings, op state, stats (but the window's own counts), and bound
@@ -60,7 +63,7 @@
 #define NCH 8
 
 enum { K_FEED, K_MOUSE, K_FRAME, K_ARM, K_RESET, K_DRAIN, K_SETA, K_SETCH, K_SETLV, K_DISARM, K_SETTLE, K_RECENTER };
-typedef struct { int kind, dev, node; int64_t t; double x, y; int idx; } call;
+typedef struct { int kind, dev, node; int64_t t; double x, y; int idx, ai; } call;   /* ai: A's index */
 typedef struct { ysig_hit h[4096]; int n; int at[4096]; } hits;
 typedef struct { uint64_t h; long n; } stream;
 
@@ -248,16 +251,44 @@ static void do_call(ysig_graph* g, const call* c, hits* r, uint64_t* dh, long* n
 }
 
 /* B's order (the guarantee), from the calls alone */
+static int call_time(const call* c, int64_t* t) {
+    if (is_input(c, t)) return 1;
+    if (c->kind == K_ARM) { *t = c->t; return 1; }
+    return 0;
+}
+
+/* marks in g_found the calls before A's call index `before` that found a
+ * hit at or before t that A handed out before it */
+static char g_found[MAXC];
+static void found_before(int before, int64_t t) {
+    int ia, k;
+    memset(g_found, 0, sizeof g_found);
+    for (ia = 0; ia < g_ha.n; ia++) {
+        int dk;
+        if (g_ha.h[ia].t > t) continue;
+        for (dk = 0; dk < before; dk++) if ((g_ca[dk].kind == K_DRAIN || g_ca[dk].kind == K_RESET) && g_ca[dk].idx == g_ha.at[ia]) break;
+        if (dk >= before) continue;   /* handed out after the arm */
+        for (k = before - 1; k >= 0; k--) {
+            int64_t tc;
+            if (call_time(&g_ca[k], &tc) && tc == g_ha.h[ia].t_found) break;
+        }
+        if (k >= 0) g_found[k] = 1;
+    }
+}
+
 static void build_b(void) {
     int k, p;
     g_nb = 0;
     for (k = 0; k < g_na; k++) {
         const call* c = &g_ca[k];
+        g_ca[k].ai = k;
         if (c->kind != K_ARM) { g_cb[g_nb++] = *c; continue; }
+        found_before(k, c->t);
         /* after the last call that must come first */
         for (p = g_nb; p > 0; p--) {
             const call* q = &g_cb[p - 1];
             int64_t ti;
+            if (g_found[q->ai]) break;
             if (is_input(q, &ti) && ti <= c->t) break;
             if (q->kind == K_RESET || q->kind == K_SETA || q->kind == K_SETCH || q->kind == K_SETLV || q->kind == K_DISARM) break;
             if (q->kind == K_RECENTER && q->t <= c->t) break;
@@ -419,7 +450,7 @@ int main(int argc, char** argv) {
         }
         g_ca[g_na].kind = K_FRAME; g_ca[g_na].t = onset; g_ca[g_na].idx = 0; g_na++;
         g_ca[g_na].kind = K_DRAIN; g_ca[g_na].idx = drains++; g_na++;
-        build_b();
+        for (k = 0; k < g_na; k++) g_ca[k].ai = k;
         /* the shapes this case has */
         {
             int64_t mx = INT64_MIN, ti;
@@ -459,6 +490,7 @@ int main(int argc, char** argv) {
             do_call(&ga, &g_ca[k], &g_ha, &g_der_a, &g_nder_a);
             (void)cu;
         }
+        build_b();   /* after A: B needs the hits A handed out */
         g_rows = &g_rows_b;
         ysig_reset(&gb, 0);
         for (k = 0; k < g_nb; k++) do_call(&gb, &g_cb[k], &g_hb, &g_der_b, &g_nder_b);
