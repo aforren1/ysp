@@ -2478,6 +2478,18 @@ static int v2_ctl_of_hit(pl_v2* v, int node) {
 /* The hits drained: their times, the collector's arm, and an exit (rule 4:
  * the earliest pending time, then the list order; an after_s time is
  * pending once a hit is at or after it). */
+/* A timed exit's time (D20 rule 2; F41, decided 2026-11-13, "clamp to
+ * entry"): the later of the entry frame's onset plus the duration and the
+ * entry time. The lead rule can put a between-frames entry's frame before
+ * the entry, so the onset plus a short duration can fall before it. The
+ * visit's entry for its own exits, the part's (an until's wait) for a
+ * part's, and an events template's part is the visit. */
+static int64_t v2_after_t(const pl_v2* v, const v2_exit* x, int64_t a) {
+    int64_t t = (x->part ? v->entry_onset : v->visit_onset) + a;
+    int64_t e = x->part || v->cur < 0 || v->rs[v->cur].def < 0 ? v->entry_t : v->def_entry_t;
+    return t > e ? t : e;
+}
+
 static int v2_hits(pl_player* p, pl_v2* v, const yscr_frame* f) {
     ysig_hit h[V2_HITQ];
     uint32_t hg[V2_HITQ];
@@ -2517,8 +2529,8 @@ static int v2_hits(pl_player* p, pl_v2* v, const yscr_frame* f) {
                 } else if (x->kind == X_AFTER && v->entry_onset_known) {
                     int64_t a = 0;
                     if (pl_eval_ns(p, &p->env, x->after, &a) < 0) return -1;
-                    int64_t base = x->part ? v->entry_onset : v->visit_onset;
-                    if (base + a <= tmax) tx = base + a;
+                    int64_t ta = v2_after_t(v, x, a);
+                    if (ta <= tmax) tx = ta;
                 } else if (x->kind == X_RESPONSE && v->resp_tie_t != INT64_MIN && !v->resp_taken && v->resp_tie_t <= tmax) {
                     /* rule 4: a response that ends by this batch's hits */
                     tx = v->resp_tie_t > v->entry_t ? v->resp_tie_t : v->entry_t;
@@ -2574,8 +2586,8 @@ static int v2_timed_to(pl_player* p, pl_v2* v, const yscr_frame* f, int64_t limi
             if (x->kind != X_AFTER || !v->entry_onset_known) continue;
             if (pl_eval_ns(p, &p->env, x->after, &a) < 0) return -1;
             {
-                int64_t base = x->part ? v->entry_onset : v->visit_onset;
-                if (base + a < bt) { bt = base + a; best = x; }
+                int64_t ta = v2_after_t(v, x, a);
+                if (ta < bt) { bt = ta; best = x; }
             }
         }
         if (v->has_graph) {
@@ -3153,7 +3165,7 @@ int pl_v2_response(pl_player* p, const yrsp_result* r, const yscr_frame* f) {
                     if (pl_eval_ns(p, &p->env, e->after, &a) < 0) return -1;
                     /* an after_s exit listed first at the same time: it goes,
                      * and the next state's response exit still hears the end */
-                    if ((e->part ? v->entry_onset : v->visit_onset) + a == t) {
+                    if (v2_after_t(v, e, a) == t) {
                         if (v2_take(p, v, e, t, f, false) < 0) return -1;
                         moved = true;
                     }

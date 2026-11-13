@@ -2174,6 +2174,25 @@ def t_v2_findings(ctx):
     rr = rows(r)
     check(r.rc == 0 and r.trials and r.trials[0]["outcome"] == "out" and rr and rr[-1][3] == 1 and rr[-1][2] == 0.35 and all(x[3] == 0 for x in rr[:-1]),
           "the arm in the past finds the crossing at its sample's time: %s %s" % (r.trials[:1] and r.trials[0]["outcome"] if r.rc == 0 else r.err[:200], rr[-3:]))
+    # F41 (decided 2026-11-13, "clamp to entry"): a's after_s 0.105 lands
+    # by the lead rule on frame 6 (0.1), so b is entered at 0.105 on a
+    # frame whose onset is before it; b's after_s 0.001 from that onset
+    # (0.101) is clamped to b's entry (0.105), and lands on frame 7 (F40)
+    t = {"states": [{"name": "a", "steps": [{"on": "s"}], "exits": [{"after_s": 0.105, "to": "b"}]},
+                    {"name": "b", "exits": [{"after_s": 0.001, "to": "end", "outcome": "b"}]}]}
+    r = one("vm_after_clamp", v2base({"t": t}, [{"name": "l", "trial": "t"}]), [])
+    check(r.rc == 0 and rows(r) == [("a", 0, 0.105, 0), ("b", 6, 0.105, 0)] and r.trials[0]["outcome"] == "b",
+          "F41: an after_s that ends before its state's entry is taken at the entry: %s" % (rows(r) if r.rc == 0 else r.err[:200]))
+    # F41 for an until's timeout_s: the steps end at 0.105, so the wait is
+    # entered then, on frame 6 (0.1, the lead rule); its timeout 0.001
+    # from that onset is clamped to the wait's entry (0.105)
+    far100 = os.path.join(ctx.out, "vm_far100.csv")
+    write_samples(far100, [(0.0, "hand", 100, 0), (0.001, "hand", 100, 0)])
+    t = {"controls": {"r0": {"control": "region", "of": "hand", "radius": 10, "stay_s": 0.05}},
+         "states": [{"name": "a", "steps": [{"on": "s"}, {"wait_s": 0.105}, {"until": "r0", "timeout_s": 0.001}]}]}
+    r = one("vm_timeout_clamp", v2base({"t": t}, [{"name": "l", "trial": "t"}], roles=pen), ["--sim-gain", "hand=1", "--samples", far100])
+    check(r.rc == 0 and rows(r) == [("a", 0, 0.105, 0)] and r.trials[0]["outcome"] == "timeout",
+          "F41: an until's timeout that ends before its wait's entry is taken at the entry: %s %s" % (rows(r) if r.rc == 0 else r.err[:200], r.trials[:1] and r.trials[0].get("outcome")))
     # rule 7: a backward at_s ends the steps at the cursor; a step it put
     # after that never lands
     t = {"states": [{"name": "s0", "steps": [{"on": "s"}, {"at_s": 0.137}, {"mark": "m1"}, {"at_s": 0.083}]}, {"name": "s1", "steps": [{"wait_s": 0.2}]}]}

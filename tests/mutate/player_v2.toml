@@ -134,14 +134,8 @@ id = "v2-15"
 name = "after_s counts from the until part"
 test = "player"
 why = "Review item 4 (F3, rv4)."
-find = '''            {
-                int64_t base = x->part ? v->entry_onset : v->visit_onset;
-                if (base + a < bt) { bt = base + a; best = x; }
-            }'''
-replace = '''            {
-                int64_t base = v->entry_onset;
-                if (base + a < bt) { bt = base + a; best = x; }
-            }'''
+find = '''    int64_t t = (x->part ? v->entry_onset : v->visit_onset) + a;'''
+replace = '''    int64_t t = v->entry_onset + a;'''
 
 [[mutant]]
 id = "v2-16"
@@ -421,7 +415,7 @@ id = "v2-48"
 name = "a response's end before an after_s exit listed first at its time"
 test = "player"
 why = "Third re-review 10 (rv4_10_after_then_rsp; rule 4's list order)."
-find = '''                    if ((e->part ? v->entry_onset : v->visit_onset) + a == t) {'''
+find = '''                    if (v2_after_t(v, e, a) == t) {'''
 replace = '''                    if (0) {'''
 
 [[mutant]]
@@ -670,3 +664,20 @@ test = "player"
 why = "Entry now (D35 (f), G16): a hit at the arm with the held value (vm_entry_now tests)."
 find = '''            if (h[i].t < v->arm_t[h[i].node] || (h[i].t == v->arm_t[h[i].node] && !v->det_now[h[i].node])) hg[i]--;'''
 replace = '''            if (h[i].t <= v->arm_t[h[i].node]) hg[i]--;'''
+
+[[mutant]]
+id = "v2-81"
+name = "a timed exit before its state's entry not clamped"
+test = "player"
+why = "F41, decided 2026-11-13 (vm_after_clamp, vm_timeout_clamp)."
+find = '''    return t > e ? t : e;'''
+replace = '''    (void)e;
+    return t;'''
+
+[[mutant]]
+id = "v2-82"
+name = "an until's timeout clamped to the visit's entry"
+test = "player"
+why = "F41: for a timeout, the wait's entry (vm_timeout_clamp)."
+find = '''    int64_t e = x->part || v->cur < 0 || v->rs[v->cur].def < 0 ? v->entry_t : v->def_entry_t;'''
+replace = '''    int64_t e = v->cur < 0 || v->rs[v->cur].def < 0 ? v->entry_t : v->def_entry_t;'''

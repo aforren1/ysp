@@ -595,6 +595,20 @@ that structure; it does not invent a new one.
      no deadline cannot end on its own; the trial's end closes it, as
      before (the player's reading, as the decision does not say).
 
+  DECIDED (2026-11-13, the user; format finding F41 of experiment.md),
+  "clamp to entry", qualifying rule 2 and the F40 note above: a timed
+  exit's time is the later of its entry frame's onset plus its duration
+  and the state's entry time. This holds for an `after_s` exit (the
+  state's entry: the time of the exit that led to it, 3.11 rule 1) and
+  for an until's `timeout_s` (the wait's entry: the end of the steps
+  before the `until`). A state entered between frames can have an entry
+  frame whose onset is before its entry (the lead rule puts a timed
+  change on the nearest frame), and the onset plus a short duration can
+  then fall before the entry; such an exit is taken at the entry, so no
+  state row ends before it starts. The frame the exit lands on is
+  unchanged (the lead rule and F40). The loader needs nothing: it knows
+  no display rate, and F26 already counts every `after_s` as a wait.
+
 D16 to D20 add keys and change what a step can
 do, so they are format version 2 (D12).
 
