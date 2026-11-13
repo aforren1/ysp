@@ -694,12 +694,41 @@ lower the bound; an arm beyond them falls back by name. The arena grows
 by the checkpoints (about 30 KB each for 27 nodes), the calls (about 200
 bytes each) and the ring writes (72 bytes each).
 
-**Checked.** `test_arm_window`, and `tests/adapt/sig_arm_diff.c`: a
-randomized differential that runs A (an arm after more calls) against B
-(the same arm in call order before the first later input) and compares,
-after every call from A's arm on, every node's value, ring and state, the
-stats and every hit handed out (results in "Tests, fuzzing and
-mutations").
+**Checked.** `test_arm_window`, `test_arm_review` (one case per finding
+of the third review), and two randomized differentials:
+
+- `tests/adapt/sig_arm_oracle.c`, the time-order oracle: B builds the
+  guarantee's order from the calls and A's hand-outs alone (its rule is
+  in prose at the top of the file) on a graph with no window, and A must
+  give B's values, rings, op state, stats (but the digest and the
+  window's counts), bound channels, hits (extras counted, a hit a
+  time-order caller could have taken as retracted), rows and derived
+  events (in every column, or counted stale). Shapes: several detects
+  (one on `all()` of detects, one on a latch of a hit, views, frame
+  rate), emit, records, a channel node and its `ysig_set()`, a bind,
+  set, disarm and recenter before an arm, arms ahead of the input, late
+  reports from a second device, bursts of arms, random drains, small
+  windows. Frozen before the fix (2113774); each later change is its own
+  commit with its reason. On 0.6.0 as reviewed: 3,222 of 3,458 compared
+  cases wrong (5,000 cases, seed 7).
+- `tests/adapt/sig_arm_diff.c`, the first differential (one detect, the
+  arm moved by the rule), kept.
+
+Results (2026-11-13, the Linux desktop, GCC 12.2 with ASan and UBSan,
+`setarch -R`, 8 processes, nothing else running):
+
+| Run | Cases | Compared | Fell back | Wrong |
+|---|---|---|---|---|
+| Oracle, seeds 95001 to 95008, 7 min 2 s | 1,040,000 | 854,589 | 185,411 | 134 |
+| First differential, seeds 96001 to 96008, 28 min 3 s | 1,200,000 | 1,196,953 | 3,047 | 137 |
+
+No sanitizer report in either. The 134 and 137 are open: equal-time
+calls that the window and B order differently, which leave the same
+values with other sources in a value (a hit of a detect on `all()` of
+detects, whose value carries the last input's device and source) or a
+hit one copy short. `sig_fuzz` (10,000,000 inputs, seeds 8401 to 8408,
+41 s): 1,500,431 graphs, 969,990 hits, 6,671 arms run again, 126 fell
+back; no report, every replay equal.
 
 ### Byte-identical ports
 

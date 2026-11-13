@@ -1952,6 +1952,8 @@ replace = '''    if (d->catchup_frames < 0 || d->catchup_frames > 80 ||'''
 id = "232"
 name = "the hit matched on its lanes only"
 test = "sig_diff"
+expect = "survived"
+note = "Not reached at the runner's 15,000 differential cases. A manual run of sig_arm_oracle at 30,000 cases, seed 3, kills it (67 hits B has and A not)."
 why = "v0.6.0: a hit's value is all of it (sig_arm_diff: a reset-armed hold)."
 find = '''!memcmp(&l->h.value, &h->value, sizeof h->value)) {'''
 replace = '''!memcmp(l->h.value.v, h->value.v, sizeof h->value.v)) {'''
@@ -1978,6 +1980,8 @@ replace = '''            if (0) keep.arm_hits_superseded++;'''
 id = "235"
 name = "an arm does not complete the hold met by its time"
 test = "sig"
+expect = "survived"
+note = "Equivalent in a run again: ysig__arm_made() meets the same hold first (before the new arm's hits start), so removing the arm's own call changes nothing the tests see. Kept: it is the call that a plain arm makes."
 why = "v0.6.0 (test_arm_window, test_arm_review 2)."
 find = '''    ysig__settle_det(g, node, ts < t_ns ? ts : t_ns, 1);'''
 replace = '''    (void)ts;'''
@@ -1994,6 +1998,8 @@ replace = '''        if (1) {'''
 id = "237"
 name = "a later logged arm of the detect keeps the new arm's hits live"
 test = "sig_oracle"
+expect = "survived"
+note = "Not reached: the oracle at 30,000 cases (seed 3) gives the baseline's 3 wrong cases with it too. Kept with this note; a later logged arm of the same detect with a time after the inserted one and before its hits is rare in the generator."
 why = "v0.6.0: a later logged arm's hits are its own, which the caller had."
 find = '''        cu->arm_live = at == cu->arm_pos;'''
 replace = '''        if (at == cu->arm_pos) cu->arm_live = 1;'''
@@ -2078,6 +2084,8 @@ replace = '''    (void)0;'''
 id = "247"
 name = "the rows' hash without the metadata"
 test = "sig_oracle"
+expect = "survived"
+note = "Not reached at the runner's 8,000 oracle cases. A manual run of sig_arm_oracle at 30,000 cases, seed 3, kills it (a rows change not counted, against the baseline's 3 other wrong cases); the runner keys on FAIL lines, which the oracle does not print."
 why = "Review of 0.6.0, finding 7 (sig_arm_oracle: rows compared in every column)."
 find = '''    h = ysig__hmix(h, (uint64_t)v->tier | ((uint64_t)v->lanes << 8) | ((uint64_t)v->unc_us << 16));'''
 replace = '''    (void)0;'''
