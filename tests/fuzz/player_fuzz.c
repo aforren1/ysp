@@ -97,6 +97,9 @@ static const char* rig_path;
 static char script_arg[600];
 static char samples_path[600];
 static long long n_loaded, n_run, n_ok, n_roles_in, n_v2_loaded, n_v2_ok, n_budget, n_hang;
+/* sig.h's arm counts over every run (PL_ARM_COUNTS), and the runs that the
+ * player's guard on a changed past stopped */
+static long long n_arm[PL_ARM_COUNTS], n_arm_guard;
 static char hang_dir[600];
 static int g_print;
 static const char* dict_keys[2048];
@@ -234,8 +237,19 @@ static void one(const seed_t* s, const char* text, size_t n, const char* out) {
         n_loaded++;
         n_run++;
         n_v2_loaded += v2;
-        if (pl_run(&p) == 0) { n_ok++; n_v2_ok += v2; }
+        int rc = pl_run(&p);
+        if (v2) {
+            int64_t c[PL_ARM_COUNTS];
+            int i;
+            pl_v2_arm_counts(&p, c);
+            for (i = 0; i < PL_ARM_COUNTS; i++) n_arm[i] += c[i];
+        }
+        if (rc == 0) { n_ok++; n_v2_ok += v2; }
         else {
+            if (strstr(p.error, "a past arm")) {
+                n_arm_guard++;
+                printf("  GUARD: %.300s\n", p.error);
+            }
             if (strstr(p.error, "budget")) {
                 /* a session that passed its budget: a hang to look at when
                  * every template's response has a deadline or there is none
@@ -381,7 +395,8 @@ int main(int argc, char** argv) {
         }
         if (i && i % 2000 == 0) fprintf(stderr, "player_fuzz: %lld iterations, %lld loaded, %lld ran to the end\n", i, n_loaded, n_ok);
     }
-    printf("player_fuzz: %lld iterations, %lld loaded, %lld ran to the end; version 2: %lld loaded, %lld ran to the end, %lld with signal roles; budget stops %lld, of them with every response's deadline given, no states and no open until (a hang to look at, kept as hang_N.json) %lld\n", iters, n_loaded, n_ok, n_v2_loaded, n_v2_ok, n_roles_in, n_budget + n_hang, n_hang);
+    printf("player_fuzz: %lld iterations, %lld loaded, %lld ran to the end; version 2: %lld loaded, %lld ran to the end, %lld with signal roles; budget stops %lld, of them with every response's deadline given, no states and no open until (a hang to look at, kept as hang_N.json) %lld; sig arms: caught up %lld, fell back %lld/%lld/%lld (off/far/full), hits superseded %lld, retracted %lld, rows stale %lld, derived stale %lld, guard stops %lld\n", iters, n_loaded, n_ok, n_v2_loaded, n_v2_ok, n_roles_in, n_budget + n_hang, n_hang,
+           n_arm[0], n_arm[1], n_arm[2], n_arm[3], n_arm[4], n_arm[5], n_arm[6], n_arm[7], n_arm_guard);
     for (k = 0; k < n_seeds; k++) free(seeds[k].text);
     return 0;
 }

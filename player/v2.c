@@ -3791,39 +3791,38 @@ int pl_v2_session_json(pl_player* p, yjs_arena* a, yjs_value* s) {
  * a reset): the arms run again, the arms that fell back to the newest
  * value (inexact), and what a run again changed after the player had it.
  * Version 2 only, so version 1's session.json keeps its bytes. */
-int pl_v2_session_end(pl_player* p, yjs_arena* a) {
+int pl_v2_arm_counts(pl_player* p, int64_t c[PL_ARM_COUNTS]) {
     pl_v2_session* S = p->v2s;
-    ysig_stats st, sum;
-    yjs_value* o;
+    ysig_stats st;
     int i, n = 0;
+    memset(c, 0, sizeof(int64_t) * PL_ARM_COUNTS);
     if (!S) return 0;
-    memset(&sum, 0, sizeof sum);
     for (i = 0; i < S->n_t; i++) {
         if (!S->t[i] || !S->t[i]->has_graph) continue;
         ysig_get_stats(&S->t[i]->g, &st);
-        sum.arm_caught_up += st.arm_caught_up;
-        sum.arm_past_off += st.arm_past_off;
-        sum.arm_past_far += st.arm_past_far;
-        sum.arm_past_full += st.arm_past_full;
-        sum.arm_hits_retracted += st.arm_hits_retracted;
-        sum.arm_hits_superseded += st.arm_hits_superseded;
-        sum.arm_rows_stale += st.arm_rows_stale;
-        sum.arm_derived_stale += st.arm_derived_stale;
+        c[0] += st.arm_caught_up;
+        c[1] += st.arm_past_off;
+        c[2] += st.arm_past_far;
+        c[3] += st.arm_past_full;
+        c[4] += st.arm_hits_superseded;
+        c[5] += st.arm_hits_retracted;
+        c[6] += st.arm_rows_stale;
+        c[7] += st.arm_derived_stale;
         n++;
     }
-    if (!n) return 0;
+    return n;
+}
+
+int pl_v2_session_end(pl_player* p, yjs_arena* a) {
+    static const char* const name[PL_ARM_COUNTS] = { "caught_up", "past_off", "past_far", "past_full", "hits_superseded", "hits_retracted", "rows_stale", "derived_stale" };
+    int64_t c[PL_ARM_COUNTS];
+    yjs_value* o;
+    int i;
+    if (!pl_v2_arm_counts(p, c)) return 0;
     o = yjs_new(a, YJS_OBJECT);
-    yjs_set(a, o, "caught_up", yjs_new_int(a, sum.arm_caught_up));
-    yjs_set(a, o, "past_off", yjs_new_int(a, sum.arm_past_off));
-    yjs_set(a, o, "past_far", yjs_new_int(a, sum.arm_past_far));
-    yjs_set(a, o, "past_full", yjs_new_int(a, sum.arm_past_full));
-    yjs_set(a, o, "hits_superseded", yjs_new_int(a, sum.arm_hits_superseded));
-    yjs_set(a, o, "hits_retracted", yjs_new_int(a, sum.arm_hits_retracted));
-    yjs_set(a, o, "rows_stale", yjs_new_int(a, sum.arm_rows_stale));
-    yjs_set(a, o, "derived_stale", yjs_new_int(a, sum.arm_derived_stale));
-    if (sum.arm_past_off + sum.arm_past_far + sum.arm_past_full > 0)
-        fprintf(stderr, "ysp_player: %lld arms in the past fell back to the input's newest value (inexact; session.json sig_arms)\n",
-                (long long)(sum.arm_past_off + sum.arm_past_far + sum.arm_past_full));
+    for (i = 0; i < PL_ARM_COUNTS; i++) yjs_set(a, o, name[i], yjs_new_int(a, c[i]));
+    if (c[1] + c[2] + c[3] > 0)
+        fprintf(stderr, "ysp_player: %lld arms in the past fell back to the input's newest value (inexact; session.json sig_arms)\n", (long long)(c[1] + c[2] + c[3]));
     return yds_session_set(&p->ds, "sig_arms", o);
 }
 
