@@ -3389,13 +3389,20 @@ static void ysig__log(ysig_graph* g, const ysig_entry* e);
 
 YSIG_API int ysig_feed(ysig_graph* g, const yin_event* e) {
     ysig_entry j;
+    int i;
     if (!g || !g->ok || !e) return -1;
-    if (g->cu) {
-        memset(&j, 0, sizeof j);
-        j.kind = YSIG_J_FEED;
-        j.event = *e;
-        ysig__log(g, &j);
-    }
+    if (g->cu)
+        for (i = 0; i < g->n_src; i++)
+            if (ysig__source_takes(&g->nd[g->src_ids[i]], e)) {
+                /* as the journal: only an event a source takes changes
+                 * anything (but the count of calls), so a replay of the
+                 * journal fills the window as the live calls did */
+                memset(&j, 0, sizeof j);
+                j.kind = YSIG_J_FEED;
+                j.event = *e;
+                ysig__log(g, &j);
+                break;
+            }
     return ysig__do_feed(g, e);
 }
 
@@ -3693,7 +3700,9 @@ static void ysig__rerun(ysig_graph* g, int kslot) {
     }
     cu->replaying = 0;
     for (i = 0; i < cu->n_tmp; i++) if (cu->tmp[i].seq != UINT64_MAX) keep.arm_hits_retracted++;
-    /* the arms' own counts stand; the rest is the run again's */
+    /* the arms' own counts stand, and the calls made (the window keeps
+     * only the events a source took); the rest is the run again's */
+    g->st.fed = keep.fed;
     g->st.arm_caught_up = keep.arm_caught_up;
     g->st.arm_past_off = keep.arm_past_off;
     g->st.arm_past_far = keep.arm_past_far;

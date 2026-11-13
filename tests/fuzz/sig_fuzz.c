@@ -45,7 +45,7 @@ static uint64_t g_arena[(4u << 20) / 8];
 static uint64_t g_arena2[(4u << 20) / 8];
 static float g_ch[16];
 static volatile double g_sink;
-static long long g_taken, g_rows_all, g_hits_all, g_refused;
+static long long g_taken, g_rows_all, g_hits_all, g_refused, g_caught, g_back;
 
 #define J_CAP 2048
 static ysig_entry g_j[J_CAP];
@@ -127,6 +127,15 @@ static void run_one(const uint8_t* data, size_t size) {
     d.n_custom = 1;
     d.on_row = on_row;
     d.journal = on_journal;
+    {
+        /* v0.6.0: a window of 0 to 4 frames; logs from small (they run
+         * full) to large */
+        unsigned w = rb(&r);
+        /* the first byte varies most in the inputs: off for one in five */
+        d.catchup_frames = b0 % 5 == 0 ? 0 : 1 + (int)((b0 + w) % 4);
+        d.catchup_calls = 16 + (int)(rb(&r) % 64) * 16;
+        d.catchup_writes = 64 + (int)(rb(&r) % 64) * 256;
+    }
     if (b0 & 0x80) {
         /* a role and its adapter: a mouse, or a pen, from the bytes */
         memset(&role, 0, sizeof role);
@@ -261,7 +270,18 @@ static void run_one(const uint8_t* data, size_t size) {
             int node = (int)(rb(&r) % (unsigned)(g.n + 1));
             unsigned b = rb(&r);
             if (b % 5 == 0) { ysig_reset(&g, t); tfed = t; }
-            else if (b % 5 == 1) g_sink += ysig_arm(&g, node, t - (int64_t)(b % 7) * 1000000);
+            else if (b % 5 == 1) {
+                /* most arms on a detect: arms in the past run the window */
+                if (!(b & 0x40)) {
+                    int i2, nd2 = 0, pick = (int)rb(&r), seen = 0;
+                    for (i2 = 0; i2 < g.n; i2++) nd2 += g.nd[i2].op == YSIG_OP_DETECT;
+                    for (i2 = 0; nd2 && i2 < g.n; i2++)
+                        if (g.nd[i2].op == YSIG_OP_DETECT && seen++ == pick % nd2) node = i2;
+                }
+                g_sink += ysig_arm(&g, node, t - (int64_t)(b % 7) * 1000000);
+                /* v0.6.0: a settle at a time input is fed up to */
+                if (b & 0x20) g_sink += ysig_settle(&g, t - (int64_t)(b % 3) * 500000);
+            }
             else if (b % 5 == 2) g_sink += ysig_disarm(&g, node);
             else if (b % 5 == 3) ysig_reset_trial(&g, t);
             else {
@@ -282,6 +302,8 @@ static void run_one(const uint8_t* data, size_t size) {
         g_taken += a.taken;
         g_rows_all += a.rows;
         g_hits_all += a.hits;
+        g_caught += a.arm_caught_up;
+        g_back += a.arm_past_far + a.arm_past_full + a.arm_past_off;
         d.journal = NULL;
         d.arena = g_arena2;
         if (!ysig_open(&g2, &d)) abort();
@@ -569,7 +591,8 @@ int main(int argc, char** argv) {
         opened += g_nj > 0;   /* a graph opened and ran: not only refusals */
     }
     printf("sig_fuzz: %ld inputs, %lld refused by ysig_check(), %ld graphs opened and ran: %lld events taken, %lld rows, "
-           "%lld hits\n", iters, g_refused, opened, g_taken, g_rows_all, g_hits_all);
+           "%lld hits; arms in the past run again %lld, fell back %lld\n", iters, g_refused, opened, g_taken, g_rows_all, g_hits_all,
+           g_caught, g_back);
     return 0;
 }
 #elif defined(YSP_FUZZ_SEEDS)
