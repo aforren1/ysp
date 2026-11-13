@@ -363,7 +363,7 @@ static long g_n_case[NF], g_n_wrong[NF], g_n_back[NF];
 
 
 int main(int argc, char** argv) {
-    long cases = argc > 1 ? atol(argv[1]) : 3000, it, wrong = 0, back = 0;
+    long cases = argc > 1 ? atol(argv[1]) : getenv("SIG_ORACLE_CASES") ? atol(getenv("SIG_ORACLE_CASES")) : 3000, it, wrong = 0, back = 0;
     int show = argc > 3 ? atoi(argv[3]) : 0, w;
     const char* whyname[32];
     long whys[32];
