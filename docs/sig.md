@@ -731,6 +731,7 @@ running):
 | Run | Cases | Compared | Fell back | Wrong |
 |---|---|---|---|---|
 | Oracle, seeds 97001 to 97008, 7 min 38 s | 1,040,000 | 854,359 | 185,641 | 0 |
+| Oracle compared after every call, with `ysig_reset_trial()` (550dd2b), seeds 99001 to 99008, 9 min 22 s | 1,040,000 | 854,938 | 185,062 | 0 |
 | First differential, seeds 98001 to 98008, 19 min 20 s | 1,200,000 | 1,197,037 | 2,963 | 3,038 |
 
 No sanitizer report in either. The first differential's 3,038 come from
