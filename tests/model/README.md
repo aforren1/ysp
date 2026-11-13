@@ -100,6 +100,13 @@ state's own, shared and added exits (F28); an until on a control that the
 state's exits name has a detect of its own (F3); a hit that an arm makes is
 taken before the frame's evaluate (F38).
 
+Reading (2026-11-13; 3.11 rules 2, 4 and 5, D20 rule 4, sig.md "End a
+step on a hold"): a hold whose end is at or before the time up to which all
+input is fed (the drained input's time in the poll, the frame's onset at
+the frame) has fired at its end, and competes with the timed exits by time.
+A hold that ends after the frame's onset has not fired at that frame, so a
+timed exit that the frame's window reaches is taken first.
+
 ## GAPs
 
 A GAP is a point that the format does not decide. The model marks each in
