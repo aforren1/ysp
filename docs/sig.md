@@ -780,28 +780,28 @@ counts this program's allocator calls during the 60 s run (glibc).
   `tests/adapt/sig_arm_diff.c` (ctest `test_sig_arm_diff`, 3,000 cases):
   the randomized differential of an arm in the past. At scale
   (2026-11-12, Linux desktop, GCC 12.2 with ASan and UBSan, `setarch -R`,
-  8 processes, seeds 90001 to 90008, 13 min 12 s): 1,200,000 cases,
-  1,145,452 exact, 10,532 fell back by name (an arm past the window of 8
-  frames), 44,016 with a retracted hit (counted), 0 wrong, no sanitizer
+  8 processes, seeds 91001 to 91008, 15 min 19 s): 1,200,000 cases,
+  1,144,798 exact, 10,539 fell back by name (an arm past the window of 8
+  frames), 44,663 with a retracted hit (counted), 0 wrong, no sanitizer
   report. Each category the review named:
 
   | Category | Cases | Exact | Fell back | Retracted | Wrong |
   |---|---|---|---|---|---|
-  | Detect on a two-source sum (late reports) | 159,799 | 153,438 | 540 | 5,821 | 0 |
-  | One source, two devices out of order | 158,935 | 152,628 | 604 | 5,703 | 0 |
-  | Equal-time samples | 262,917 | 249,772 | 915 | 12,230 | 0 |
-  | Out-of-order samples dropped | 408,864 | 386,792 | 3,657 | 18,415 | 0 |
-  | Detect on a view (speed) | 160,117 | 155,494 | 606 | 4,017 | 0 |
-  | `ysig_set()` in the window | 212,646 | 199,786 | 3,332 | 9,528 | 0 |
-  | `ysig_recenter()` in the window | 110,413 | 99,184 | 6,790 | 4,439 | 0 |
-  | A reset or `ysig_reset_trial()` before B's place | 784,145 | 752,000 | 4,230 | 27,915 | 0 |
-  | A re-arm earlier than a found hit | 142,286 | 105,613 | 3,401 | 33,272 | 0 |
-  | Entry arm / fresh / now | 400,320 / 400,209 / 399,471 | 379,534 / 387,511 / 378,407 | 3,467 / 3,559 / 3,506 | 17,319 / 9,139 / 17,558 | 0 |
-  | Hold above 0 | 700,381 | 651,183 | 6,222 | 42,976 | 0 |
-  | Repeat every | 600,105 | 571,778 | 5,310 | 23,017 | 0 |
-  | Hysteresis | 600,622 | 573,599 | 5,321 | 21,702 | 0 |
-  | Norm or rectangle test | 800,465 | 763,727 | 7,023 | 29,715 | 0 |
-  | `ysig_settle()` in the window | 366,280 | 339,993 | 10,193 | 16,094 | 0 |
+  | Detect on a two-source sum (late reports) | 160,235 | 153,668 | 643 | 5,924 | 0 |
+  | One source, two devices out of order | 159,568 | 153,001 | 565 | 6,002 | 0 |
+  | Equal-time samples | 262,144 | 248,727 | 905 | 12,512 | 0 |
+  | Out-of-order samples dropped | 409,785 | 387,274 | 3,739 | 18,772 | 0 |
+  | Detect on a view (speed) | 159,718 | 154,930 | 613 | 4,175 | 0 |
+  | `ysig_set()` in the window | 213,308 | 200,217 | 3,406 | 9,685 | 0 |
+  | `ysig_recenter()` in the window | 110,949 | 99,657 | 6,729 | 4,563 | 0 |
+  | A reset or `ysig_reset_trial()` before B's place | 783,727 | 750,774 | 4,287 | 28,666 | 0 |
+  | A re-arm earlier than a found hit | 142,877 | 105,579 | 3,435 | 33,863 | 0 |
+  | Entry arm / fresh / now | 400,519 / 399,492 / 399,989 | 379,225 / 386,724 / 378,849 | 3,503 / 3,494 / 3,542 | 17,791 / 9,274 / 17,598 | 0 / 0 / 0 |
+  | Hold above 0 | 699,496 | 649,802 | 6,112 | 43,582 | 0 |
+  | Repeat every | 600,415 | 571,811 | 5,254 | 23,350 | 0 |
+  | Hysteresis | 598,943 | 571,727 | 5,223 | 21,993 | 0 |
+  | Norm or rectangle test | 799,191 | 762,235 | 7,042 | 29,914 | 0 |
+  | `ysig_settle()` in the window | 367,852 | 341,150 | 10,210 | 16,492 | 0 |
 
   Users of the detect's output in every case: a latch, a peak gated by
   it, a mux it selects, an all and a delay of it. B is defined only when
@@ -873,6 +873,15 @@ inputs (seed 780) in 9 min 6 s, no finding. v0.5.0 (the target arms up
 to 6 ms in the past, so the catch-up runs): 10,000,000 inputs (seeds
 8101 to 8108, 8 processes) in 1 min 34 s, 2,226,585 graphs opened and
 ran, 1,994,616 hits, no sanitizer report and no replay that differed.
+v0.6.0 (the input's bytes size the window, 0 to 4 frames, and its logs;
+an arm picks a detect in most inputs and a settle can follow it):
+10,000,000 inputs (seeds 8201 to 8208, 8 processes); 8,500,493 refused,
+1,499,197 graphs opened and ran (16.4 million events taken, 968,577
+hits), 6,654 arms in the past ran again and 129 fell back by name. No
+sanitizer report, no replay that differed. One finding before that run:
+the window logged feeds that no source took, the journal does not, so a
+replay's run again saw other calls (fixed: the window logs the taken
+feeds only).
 The third review's rules
 (frames never refused for data) added two checks to the target: every
 frame with a poll (or without one in a graph with no view) returns 0, also
