@@ -1517,6 +1517,8 @@ replace = '                    ysig__det_frame(g, i, g->t_known, x);'
 id = "177"
 name = "hit output: the rise at the sample's time"
 test = "sig"
+expect = "survived"
+note = "Equivalent since the decision on fix 1: ysig__det_out() puts a standing hit at the hit's time too."
 why = "A past read between the hit and the sample that found it must say 1."
 find = 's->fired && !was && (int)g->nd[i].p[13] == YSIG_OUT_HIT ? s->t_hit : tc);'
 replace = 's->fired && !was && 0 ? s->t_hit : tc);'
@@ -1525,6 +1527,8 @@ replace = 's->fired && !was && 0 ? s->t_hit : tc);'
 id = "178"
 name = "hit output at a frame: the rise at the frame's time"
 test = "sig"
+expect = "survived"
+note = "Equivalent, as 177."
 why = "A hit found by a frame rises at the hit, not at the found time."
 find = 'if ((int)n->p[13] == YSIG_OUT_HIT && s->fired && !was) ysig__det_out(g, i, v, s->t_hit);'
 replace = 'if ((int)n->p[13] == YSIG_OUT_HIT && s->fired && !was) ysig__det_out(g, i, v, onset);'
@@ -1836,8 +1840,6 @@ replace = '''        { g->hitq[j] = g->hitq[q]; cu->qseq[j] = cu->qseq[q]; j++; 
 id = "219"
 name = "a retracted hit not counted"
 test = "sig"
-expect = "survived"
-note = "Not reached since the third review's fixes: an arm goes after the call that found any hit at or before its time that the caller had, so a run again gives every such hit again. Kept as a guard (the player stops on it)."
 why = "v0.6.0 (test_arm_window: another detect's hit on the re-armed one's output)."
 find = '''            else keep.arm_hits_retracted++;'''
 replace = '''            else (void)0;'''
@@ -1962,8 +1964,6 @@ replace = '''!memcmp(l->h.value.v, h->value.v, sizeof h->value.v)) {'''
 id = "233"
 name = "every hit the run again does not give counted as superseded"
 test = "sig"
-expect = "survived"
-note = "Not reached, as 219: no hit at or before the arm's time is left to count either way."
 why = "v0.6.0 (test_arm_window, sig_arm_oracle): one at or before the arm's time is retracted."
 find = '''            if (cu->tmp[i].h.t > t) keep.arm_hits_superseded++;'''
 replace = '''            if (1) keep.arm_hits_superseded++;'''
@@ -2108,6 +2108,8 @@ replace = '''    ysig__arm_made(g, node, t, t <= g->t_cover ? t : g->t_cover, at
 id = "252"
 name = "a standing hit's output at the clock's time, with the latest input's sources"
 test = "sig"
+expect = "survived"
+note = "Equivalent, as 177 the other way: the pass that finds the hit already puts its rise at the hit's time; det_out() keeps it for a standing hit, which no test reads apart."
 why = "The rule the header states: a hit's rise at its time, with the sources of the input that met the test (test_arm_review)."
 find = '''    o->t = hit_out && s->fired ? s->t_hit : tc;'''
 replace = '''    o->t = tc;'''

@@ -508,6 +508,7 @@ int main(int argc, char** argv) {
             else if (!strcmp(why, "superseded")) g_sup[c]++;
             else g_wrong[c]++;
         }
+        if (why && strcmp(why, "fell back") && strcmp(why, "retracted") && strcmp(why, "superseded")) printf("FAIL case %ld: %s\n", it, why);
         if (why && strcmp(why, "fell back") && strcmp(why, "retracted") && strcmp(why, "superseded") && shown++ < 5) {
             printf("case %ld wrong: %s (a_pos %d b_pos %d of %d, t_arm %lld)\n", it, why, a_pos, b_pos, nc, (long long)t_arm);
             if (g_dbg) {
