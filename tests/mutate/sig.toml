@@ -17,6 +17,14 @@ flags = ["-std=c99", "-O1", "-w", "-fsanitize=undefined", "-fno-sanitize-recover
 libs = ["-lm"]
 timeout = 60
 
+[test.sig_diff]
+source = "tests/adapt/sig_arm_diff.c"
+compiler = "gcc"
+flags = ["-std=c99", "-O2", "-w"]
+libs = ["-lm"]
+timeout = 300
+env = { SIG_ARM_CASES = "50000" }
+
 [[mutant]]
 id = "00"
 name = "control: no change (must pass)"
@@ -211,7 +219,7 @@ id = "23"
 name = "history: a second value at one time is a new entry"
 test = "sig"
 why = "Two reports at one time would take two places in the ring, so it holds less time than its size says."
-find = 'if (v->t == last->t) { *last = *v; return; }'
+find = 'if (v->t == last->t) { ysig__undo_note(g, last); *last = *v; return; }'
 replace = '(void)0;'
 
 [[mutant]]
@@ -554,8 +562,8 @@ test = "sig"
 why = "Two runs whose derived events differ would give one digest."
 find = '''    ysig__digest_word(g, (uint64_t)(uint32_t)i);
     ysig__digest_value(g, v);
-    if (g->n_der >= YSIG_QUEUE_CAP)'''
-replace = '    if (g->n_der >= YSIG_QUEUE_CAP)'
+    if (g->cu) g->cu->der_h'''
+replace = '    if (g->cu) g->cu->der_h'
 
 [[mutant]]
 id = "66"
@@ -1058,9 +1066,11 @@ test = "sig"
 why = "The call moves the hand: without the entry a replay diverges."
 find = '''    e.t = t_ns;
     ysig__journal(g, &e);
-    for (k = 0; k < 2; k++) {'''
+    ysig__log(g, &e);
+    ysig__do_recenter(g, role, x, y, t_ns);'''
 replace = '''    e.t = t_ns;
-    for (k = 0; k < 2; k++) {'''
+    ysig__log(g, &e);
+    ysig__do_recenter(g, role, x, y, t_ns);'''
 
 [[mutant]]
 id = "126"
@@ -1364,9 +1374,11 @@ test = "sig"
 why = "A replay would place the point at time 0, with other ring times and t."
 find = """    e.t = t_ns;
     ysig__journal(g, &e);
-    for (k = 0; k < 2; k++) {"""
+    ysig__log(g, &e);
+    ysig__do_recenter(g, role, x, y, t_ns);"""
 replace = """    ysig__journal(g, &e);
-    for (k = 0; k < 2; k++) {"""
+    ysig__log(g, &e);
+    ysig__do_recenter(g, role, x, y, t_ns);"""
 
 [[mutant]]
 id = "162"
@@ -1453,12 +1465,12 @@ id = "172"
 name = "re-arm: the users do not see the fall"
 test = "sig"
 why = "T7: the next hit in the next sample's pass would be no rise for a gate."
-find = '''            ysig__settle(g, node);
-        }
-        if (rose) {'''
-replace = '''            (void)0;
-        }
-        if (rose) {'''
+find = '''        ysig__settle(g, node);
+    }
+    if (rose) {'''
+replace = '''        (void)0;
+    }
+    if (rose) {'''
 
 [[mutant]]
 id = "173"
@@ -1555,24 +1567,24 @@ id = "190"
 name = "arm: the fall not in the ring"
 test = "sig"
 why = "U4: a past read after the arm would disagree with the live value."
-find = '''            ysig__hist_push(g, n, &g->val[node]);
-            ysig__settle(g, node);
-        }
-        if (rose) {'''
-replace = '''            (void)0;
-            ysig__settle(g, node);
-        }
-        if (rose) {'''
+find = '''        ysig__hist_push(g, n, &g->val[node]);
+        ysig__settle(g, node);
+    }
+    if (rose) {'''
+replace = '''        (void)0;
+        ysig__settle(g, node);
+    }
+    if (rose) {'''
 
 [[mutant]]
 id = "191"
 name = "arm: the fall's time not set"
 test = "sig"
 why = "U4: the ring entry would replace the hit's, at the hit's time."
-find = '''            /* the fall has a time, so a past read after it agrees */
-            g->val[node].t = t_ns;'''
-replace = '''            /* the fall has a time, so a past read after it agrees */
-            (void)0;'''
+find = '''        /* the fall has a time, so a past read after it agrees */
+        g->val[node].t = t_ns;'''
+replace = '''        /* the fall has a time, so a past read after it agrees */
+        (void)0;'''
 
 [[mutant]]
 id = "192"
@@ -1631,8 +1643,8 @@ id = "198"
 name = "entry now at ysig_arm(): the output does not rise"
 test = "sig"
 why = "G16: a latch on the hit (freeze_at) would not freeze at a hit at the arm."
-find = '        if (rose) {'
-replace = '        if (0) {'
+find = '    if (rose) {'
+replace = '    if (0) {'
 
 [[mutant]]
 id = "199"
@@ -1736,80 +1748,200 @@ replace = '    int64_t ts = g->t_fed;'
 
 [[mutant]]
 id = "210"
-name = "no catch-up at an arm in the past"
+name = "no run again: an arm in the past tests the newest value"
 test = "sig"
-why = "v0.5.0 (test_arm_catch_up 1): a hold a frame covers is a hit at the arm."
-find = '''        if (n->p[5] != 1 && t_ns < known) {'''
-replace = '''        if (0) {'''
+why = "v0.6.0 (test_arm_window 2, sig_arm_diff)."
+find = '''    ysig__rerun(g, kslot);
+    g->st.arm_caught_up++;'''
+replace = '''    ysig__arm_plain(g, node, t_ns);
+    g->st.arm_caught_up++;'''
 
 [[mutant]]
 id = "211"
-name = "the arm tests the newest value, not its time's"
+name = "the arm placed at the call, not before the first later input"
 test = "sig"
-why = "v0.5.0 (test_arm_catch_up 2, 5): the value at the arm."
-find = '''                v = ysig__ring_at(&in->hist, f);'''
-replace = ''''''
+why = "v0.6.0 (test_arm_window 2)."
+find = '''        if (ysig__input_t(&cu->calls[pos % (uint64_t)cu->C].e, &ti) && ti > t_ns) break;'''
+replace = '''        if (ysig__input_t(&cu->calls[pos % (uint64_t)cu->C].e, &ti) && ti > INT64_MAX - 1) break;'''
 
 [[mutant]]
 id = "212"
-name = "the ring after the arm not walked"
-test = "sig"
-why = "v0.5.0 (test_arm_catch_up 2): a value that breaks the hold counts."
-find = '''                    ysig__det_eval(g, node, x, x->t, x->t);'''
-replace = ''''''
+name = "an input at the arm's time counted as later"
+test = "sig_diff"
+why = "v0.6.0: equal times come first (sig_arm_diff, equal-time samples)."
+find = '''        if (ysig__input_t(&cu->calls[pos % (uint64_t)cu->C].e, &ti) && ti > t_ns) break;'''
+replace = '''        if (ysig__input_t(&cu->calls[pos % (uint64_t)cu->C].e, &ti) && ti >= t_ns) break;'''
 
 [[mutant]]
 id = "213"
-name = "a hold still true not completed at the known time"
-test = "sig"
-why = "v0.5.0 (test_arm_catch_up 1): the frame covers the hold."
-find = '''            if (s->armed && n->kns[0] > 0) (void)ysig__det_hold_done(g, node, known);'''
-replace = ''''''
+name = "the ring slots not put back"
+test = "sig_diff"
+why = "v0.6.0: the undo log (sig_arm_diff: a ring's entry)."
+find = '''        *u->at = u->old;'''
+replace = '''        (void)u;'''
 
 [[mutant]]
 id = "214"
-name = "the frame's onset not known"
-test = "sig"
-why = "v0.5.0 (test_arm_catch_up 1): the onset a frame tested at."
-find = '''        if (f > k) k = f;'''
-replace = ''''''
+name = "an equal-time overwrite not in the undo log"
+test = "sig_diff"
+expect = "survived"
+note = "Not reached by 50,000 random cases: an equal-time overwrite targets a ring's newest entry, and the run again writes that time again in each of them. Kept: a run again that writes nothing at that time would leave the live value in the ring."
+why = "v0.6.0: the ring's equal-time replace (sig_arm_diff, equal-time samples)."
+find = '''        if (v->t == last->t) { ysig__undo_note(g, last); *last = *v; return; }'''
+replace = '''        if (v->t == last->t) { *last = *v; return; }'''
 
 [[mutant]]
 id = "215"
-name = "a frame-rate detect catches up"
+name = "the oldest checkpoint, not the newest before t"
 test = "sig"
-why = "v0.5.0 (test_arm_catch_up 8): its next onset tests it."
-find = '''        if (n->p[5] != 1 && t_ns < known) {'''
-replace = '''        if (t_ns < known) {'''
+expect = "survived"
+note = "Equivalent in results: the newest checkpoint before t and an older one give the same state; the newest runs fewer calls again (cost only, docs/sig.md)."
+why = "v0.6.0: the least to run again; the same state (cost only)."
+find = '''    for (i = cu->n_ck - 1; i >= 0 && kslot < 0; i--)'''
+replace = '''    for (i = 0; i < cu->n_ck && kslot < 0; i++)'''
 
 [[mutant]]
 id = "216"
-name = "a ring that does not reach back used"
+name = "a checkpoint past the arm's time used"
 test = "sig"
-why = "v0.5.0 (test_arm_catch_up 7): counted, the newest value."
-find = '''in->hist.cap && in->hist.n && (f = ysig__ring_find(&in->hist, t_ns)) >= 0) {'''
-replace = '''in->hist.cap && in->hist.n && ((f = ysig__ring_find(&in->hist, t_ns)) >= 0 || (f = 0) == 0)) {'''
+why = "v0.6.0 (test_arm_window 5, sig_arm_diff)."
+find = '''        if (cu->ck[(cu->ck0 + i) % cu->K].cover <= t_ns) kslot = (cu->ck0 + i) % cu->K;'''
+replace = '''        kslot = (cu->ck0 + i) % cu->K;'''
 
 [[mutant]]
 id = "217"
-name = "the hit output does not rise at a caught-up hit"
+name = "a hit handed out queued again"
 test = "sig"
-why = "v0.5.0 (test_arm_catch_up 1): the latch freezes at the hit."
-find = '''            if (hit_out && s->fired && !was) {'''
-replace = '''            if (0) {'''
-
-[[mutant]]
-id = "218"
-name = "no counts"
-test = "sig"
-why = "v0.5.0 (test_arm_catch_up 4, 6): arm_caught_up."
-find = '''            g->st.arm_caught_up++;'''
+why = "v0.6.0 (test_arm_window 3, R11)."
+find = '''        if (ysig__hit_seen(g->cu, &x)) { ysig__hl_add(g->cu, 0, &x); return; }'''
 replace = ''''''
 
 [[mutant]]
-id = "219"
-name = "an arm before any frame takes the last onset"
+id = "218"
+name = "a hit queued before the checkpoint and handed out since queued again"
 test = "sig"
-why = "v0.5.0: framed is false until ysig_frame()."
-find = '''    if (g->framed) {'''
-replace = '''    if (1) {'''
+why = "v0.6.0 (sig_arm_diff)."
+find = '''        if (cu->qseq[q] > delivered) { g->hitq[j] = g->hitq[q]; cu->qseq[j] = cu->qseq[q]; j++; }'''
+replace = '''        { g->hitq[j] = g->hitq[q]; cu->qseq[j] = cu->qseq[q]; j++; }'''
+
+[[mutant]]
+id = "219"
+name = "a retracted hit not counted"
+test = "sig"
+why = "v0.6.0 (test_arm_window 5)."
+find = '''    for (i = 0; i < cu->n_tmp; i++) if (cu->tmp[i].seq != UINT64_MAX) keep.arm_hits_retracted++;'''
+replace = ''''''
+
+[[mutant]]
+id = "220"
+name = "rows passed to on_row again in a run again"
+test = "sig"
+why = "v0.6.0 (test_arm_window 8)."
+find = '''        if (g->cu->replaying) return;   /* a run again: on_row had it */'''
+replace = ''''''
+
+[[mutant]]
+id = "221"
+name = "no journal guard in a run again"
+test = "sig"
+why = "v0.6.0: the journal holds the arm at its call (test_arm_window replay)."
+find = '''    if (g->cu && g->cu->replaying) return;
+    if (g->journal) g->journal(g->user, e);'''
+replace = '''    if (g->journal) g->journal(g->user, e);'''
+
+[[mutant]]
+id = "222"
+name = "a reset no barrier"
+test = "sig"
+expect = "survived"
+note = "Equivalent in results: after a reset its own checkpoint (cover INT64_MIN) is always the newest at or before an arm, so no older one is used; the barrier frees the logs and guards the search."
+why = "v0.6.0 (test_arm_window 7, sig_arm_diff after a reset)."
+find = '''    if (g->cu) ysig__cu_clear(g->cu, g->cu->replaying ? g->cu->c_pos : g->cu->c_head);
+    ysig__ck_take(g);
+}'''
+replace = '''    ysig__ck_take(g);
+}'''
+
+[[mutant]]
+id = "223"
+name = "t_cover kept across a reset"
+test = "sig"
+why = "v0.6.0 (test_arm_window 7)."
+find = '''    ysig__reset(g, t, exp_only);
+    g->t_cover = INT64_MIN;'''
+replace = '''    ysig__reset(g, t, exp_only);'''
+
+[[mutant]]
+id = "224"
+name = "a frame's values not kept"
+test = "sig"
+why = "v0.6.0: the caller's values may change (sig_arm_diff has no channel: the test is test_arm_window's)."
+find = '''            memcpy(q, e->frame.values, sizeof(float) * (size_t)m);'''
+replace = ''''''
+
+[[mutant]]
+id = "225"
+name = "the logs' capacity not checked"
+test = "sig"
+why = "v0.6.0 (test_arm_window 6: arm_past_full)."
+find = '''    if (cu->c_head - cu->c_tail >= (uint64_t)cu->C) { ysig__cu_full(cu); return; }
+    c = &cu->calls['''
+replace = '''    c = &cu->calls['''
+
+[[mutant]]
+id = "226"
+name = "an arm past the window: no count"
+test = "sig"
+why = "v0.6.0 (test_arm_window 6)."
+find = '''        else g->st.arm_past_far++;'''
+replace = '''        else (void)0;'''
+
+[[mutant]]
+id = "227"
+name = "no window counted as a window"
+test = "sig"
+why = "v0.6.0 (test_arm_window 1)."
+find = '''        g->st.arm_past_off++;'''
+replace = ''''''
+
+[[mutant]]
+id = "228"
+name = "settle completes a hold not yet met"
+test = "sig"
+why = "v0.6.0 (test_arm_window 5: settle at 16 ms)."
+find = '''    if (!s->holding || t < ysig__add(s->t_start, n->kns[0])) return 0;'''
+replace = '''    if (!s->holding) return 0;'''
+
+[[mutant]]
+id = "229"
+name = "settle on a frame-rate detect"
+test = "sig"
+why = "v0.6.0: a frame-rate detect tests at onsets (test_arm_window)."
+find = '''        if (n->op != YSIG_OP_DETECT || n->p[5] == 1 || n->kns[0] <= 0 || (g->nd[n->in[0]].flags & YSIG__F_FRAME)) continue;'''
+replace = '''        if (n->op != YSIG_OP_DETECT || n->kns[0] <= 0 || (g->nd[n->in[0]].flags & YSIG__F_FRAME)) continue;'''
+
+[[mutant]]
+id = "230"
+name = "settle's hit no rise"
+test = "sig"
+why = "v0.6.0: a latch on the hit (test_arm_window)."
+find = '''        if ((int)n->p[13] == YSIG_OUT_HIT && s->fired && !was) {
+            g->val[i].v[0] = 1.0;'''
+replace = '''        if (0) {
+            g->val[i].v[0] = 1.0;'''
+
+[[mutant]]
+id = "231"
+name = "the window's limits not checked"
+test = "sig"
+why = "v0.6.0 (test_arm_window: catchup_frames 9 refused)."
+find = '''    if (d->catchup_frames < 0 || d->catchup_frames > 8 ||'''
+replace = '''    if (d->catchup_frames < 0 || d->catchup_frames > 80 ||'''
+
+[[mutant]]
+id = "232"
+name = "the hit matched on its lanes only"
+test = "sig_diff"
+why = "v0.6.0: a hit's value is all of it (sig_arm_diff: a reset-armed hold)."
+find = '''!memcmp(&l->h.value, &h->value, sizeof h->value)) {'''
+replace = '''!memcmp(l->h.value.v, h->value.v, sizeof h->value.v)) {'''

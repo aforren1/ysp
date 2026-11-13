@@ -750,6 +750,10 @@ if(YSP_BUILD_TESTS)
     # ysp/experiment.h's table of defaults against the headers it came from.
     ysp_add_program(test_experiment_tables tests/adapt/experiment_tables_test.c core methods devices rig)
     add_test(NAME test_experiment_tables COMMAND test_experiment_tables)
+    # ysp/sig.h 0.6.0: the randomized differential of an arm in the past
+    # (3,000 cases here; docs/sig.md has the run at scale)
+    ysp_add_program(test_sig_arm_diff tests/adapt/sig_arm_diff.c core)
+    add_test(NAME test_sig_arm_diff COMMAND test_sig_arm_diff 3000)
 endif()
 if(TARGET SDL3::SDL3 AND YSP_BUILD_EXAMPLES)
     # The jsPsych-style trials of examples/response/ (docs/response.md,
