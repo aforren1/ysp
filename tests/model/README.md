@@ -103,7 +103,10 @@ until's `timeout_s`, lands on the later of its lead-rule frame and the
 frame after the entry frame); an until's timeout code is the count of the
 state's own, shared and added exits (F28); an until on a control that the
 state's exits name has a detect of its own (F3); a hit that an arm makes is
-taken before the frame's evaluate (F38).
+taken before the frame's evaluate (F38). On 2026-11-13 the user decided
+after-before-entry ("Clamp to entry"): a timed exit's time is the later of
+the entry frame's onset plus `after_s` and the state's entry time; the model
+clamps an until's `timeout_s` to the wait's entry time the same way.
 
 Reading (2026-11-13; 3.11 rules 2, 4 and 5, D20 rule 4, sig.md "End a
 step on a hold"): a hold whose end is at or before the time up to which all
@@ -127,7 +130,6 @@ difference at a GAP is a question for the format, not a player bug.
 | `refound-in-frame`: a hold armed by a state that a frame's hit started, which ends before that frame's onset | The frame finds it, and its next state starts on the same frame |
 | `response-before-entry`: a response that becomes final in a state entered after the response's time | The exit's time is the later of the response's time and the state's entry (a reading of 2026-11-12) |
 | `at-after-until`: `at_s` after an `until` in a state | From the until's hit (rule 9: the steps after it are the next state), not the state's entry (rule 6) |
-| `after-before-entry`: an `after_s` exit whose time (the entry frame's onset plus `after_s`) is before the state's entry time, when the lead rule put the entry frame's onset before the entry | The time as D20 rule 2 gives it; the row ends before its entry, and `diff.py`'s invariant reports it on both sides |
 | `tie-steps-end`: a steps' end and an exit at one time | The last steps' end of a state with no authored exits first; else the exit first |
 | `release-time`, `release-after-deadline`: a response that ends at its key's release | The release is the exit's time; the deadline waits for it |
 | F40 for an until's timeout: "the state's entry frame" | The wait's entry frame (the wait is a state of its own, 3.11 rule 9) |

@@ -889,16 +889,25 @@ class Run:
         # field is the first frame that may take it. GAP (F40, "the state's
         # entry frame" for an until's timeout): the wait's entry frame, as
         # the wait is a state of its own (3.11 rule 9).
+        # D20, DECIDED 2026-11-13 (after-before-entry), "Clamp to entry": a
+        # timed exit's time is the later of the entry frame's onset plus
+        # after_s and the state's entry time. The lead rule can put the
+        # entry frame's onset before the entry time (by up to half a frame),
+        # so a short after_s would otherwise end a state before it began.
+        # An until's timeout_s meets the same case (it counts from the
+        # wait's entry frame, whose onset the lead rule can put before the
+        # wait's entry time, the steps' end), so it is clamped to that
+        # entry time the same way.
         out = []
         st = v.state
         if st is not None:
             for e in st.exits:
                 if e.kind == "after":
-                    out.append(("exit", onset(v.entry_f) + e.after, e, v.vid, v.entry_f + 1))
+                    out.append(("exit", max(onset(v.entry_f) + e.after, v.entry_t), e, v.vid, v.entry_f + 1))
         if v.waiting:
             to = self.parts_untils(v)[1][v.part][1]
             if to is not None:
-                out.append(("timeout", onset(v.wait_f) + to, None, v.vid, v.wait_f + 1))
+                out.append(("timeout", max(onset(v.wait_f) + to, v.wait_t), None, v.vid, v.wait_f + 1))
         elif v.part_end is not None:
             out.append(("partend", v.part_end, None, v.vid, 0))
         return out
@@ -1083,15 +1092,6 @@ class Run:
             self.leave(v, t, len(st.exits), "exit", k)
             self.finish_states(t, k)
             return
-        if kind == "exit" and t < v.entry_t:
-            # GAP (after-before-entry; D20 rule 2, 3.11 rules 1 and 2, F40):
-            # after_s counts from the entry frame's onset, which the lead
-            # rule can put before the entry time, so an after_s shorter than
-            # that gap has its time before the state's entry. F40 moves its
-            # frame, not its time. Read: the exit's time as the text gives
-            # it (the player agrees); the row then ends before its entry,
-            # which diff.py's invariant reports.
-            self.gap("after-before-entry")
         if kind in ("hit", "resp", "exit"):
             self.leave(v, t, ex.code, "exit", k)
             if ex.outcome is not None:
