@@ -4,7 +4,8 @@
  * A makes the calls as generated, on a graph with a window. B makes the
  * same calls on a graph with no window, in the order the guarantee
  * states, built here from the calls alone (not from the header's log):
- *   - inputs (ysig_feed, ysig_frame, ysig_settle), resets, ysig_set,
+ *   - inputs (ysig_feed, ysig_frame, ysig_settle), resets (ysig_reset,
+ *     ysig_reset_trial), ysig_set,
  *     ysig_disarm and ysig_recenter stay where they were made;
  *   - each ysig_arm(t) goes after every input made before it whose time
  *     is at or before t (a late report from another device included),
@@ -38,7 +39,8 @@
  * of a hit, one on a view, frame-rate ones), emit and records, a channel
  * node and ysig_set of its index, arms later than the newest input,
  * set, disarm and recenter before an arm, late out-of-order reports from
- * a second device, bursts of arms at one time, drains at random points.
+ * a second device, equal-time samples, ysig_reset_trial() (a relative
+ * role's adapter kept), bursts of arms at one time, drains at random points.
  *
  *     gcc -std=c99 -O1 -Iinclude -o sig_arm_oracle tests/adapt/sig_arm_oracle.c -lm
  *     ./sig_arm_oracle [cases] [seed] [show]
@@ -73,7 +75,7 @@
 #define MAXC 1200
 #define NCH 8
 
-enum { K_FEED, K_MOUSE, K_FRAME, K_ARM, K_RESET, K_DRAIN, K_SETA, K_SETCH, K_SETLV, K_DISARM, K_SETTLE, K_RECENTER };
+enum { K_FEED, K_MOUSE, K_FRAME, K_ARM, K_RESET, K_DRAIN, K_SETA, K_SETCH, K_SETLV, K_DISARM, K_SETTLE, K_RECENTER, K_RESET_TRIAL };
 typedef struct { int kind, dev, node; int64_t t; double x, y; int idx, ai; } call;   /* ai: A's index */
 typedef struct { ysig_hit h[4096]; int n; int at[4096]; } hits;
 typedef struct { uint64_t h; long n; } stream;
@@ -258,6 +260,7 @@ static void do_call(ysig_graph* g, const call* c, hits* r, uint64_t* dh, long* n
         ysig_arm(g, c->node, c->t);
         break;
     case K_RESET: drain_all(g, r, dh, nd, c->idx); ysig_reset(g, c->t); break;   /* a reset clears undelivered hits: callers drain first */
+    case K_RESET_TRIAL: drain_all(g, r, dh, nd, c->idx); ysig_reset_trial(g, c->t); break;
     case K_DRAIN: drain_all(g, r, dh, nd, c->idx); break;
     case K_SETA: ysig_set(g, 5, YSIG_AFFINE_ANGLE, c->x); break;
     case K_SETCH: ysig_set(g, g_chnode, YSIG_CHANNEL_CHANNEL, (double)c->dev); break;
@@ -281,7 +284,7 @@ static void build_b(void) {
             const call* q = &g_cb[p - 1];
             int64_t ti;
             if (is_input(q, &ti) && ti <= c->t) break;
-            if (q->kind == K_RESET || q->kind == K_SETA || q->kind == K_SETCH || q->kind == K_SETLV || q->kind == K_DISARM) break;
+            if (q->kind == K_RESET || q->kind == K_RESET_TRIAL || q->kind == K_SETA || q->kind == K_SETCH || q->kind == K_SETLV || q->kind == K_DISARM) break;
             if (q->kind == K_RECENTER && q->t <= c->t) break;
             if (q->kind == K_ARM && q->t <= c->t) break;
         }
@@ -292,7 +295,7 @@ static void build_b(void) {
             int q2;
             int64_t ti;
             g_cb[p].dev = 0;
-            for (q2 = k - 1; q2 >= 0 && g_ca[q2].kind != K_RESET; q2--)
+            for (q2 = k - 1; q2 >= 0 && g_ca[q2].kind != K_RESET && g_ca[q2].kind != K_RESET_TRIAL; q2--)
                 if (is_input(&g_ca[q2], &ti) && ti > c->t) { g_cb[p].dev = 99; break; }
         }
         g_nb++;
@@ -439,7 +442,8 @@ int main(int argc, char** argv) {
             } else if (r < 120) {
                 g_ca[g_na].kind = K_DRAIN; g_ca[g_na].idx = drains++; g_na++;
             } else if (r < 125) {
-                g_ca[g_na].kind = K_RESET; g_ca[g_na].t = t; g_ca[g_na].idx = drains++; g_na++;
+                /* ysig_reset_trial() keeps the adapter's nodes (a relative role's) */
+                g_ca[g_na].kind = (rnd() & 1) ? K_RESET : K_RESET_TRIAL; g_ca[g_na].t = t; g_ca[g_na].idx = drains++; g_na++;
             } else if (r < 140 && !off('s')) {
                 g_ca[g_na].kind = K_SETA; g_ca[g_na].x = (rndf() - 0.5) * 90; g_na++;
             } else if (r < 150 && !off('c')) {
@@ -544,7 +548,7 @@ int main(int argc, char** argv) {
                 if (used[ia]) continue;
                 extra++;
                 /* the drain that handed it out, then the arms after it */
-                for (k = 0; k < g_na; k++) if ((g_ca[k].kind == K_DRAIN || g_ca[k].kind == K_RESET) && g_ca[k].idx == g_ha.at[ia]) break;
+                for (k = 0; k < g_na; k++) if ((g_ca[k].kind == K_DRAIN || g_ca[k].kind == K_RESET || g_ca[k].kind == K_RESET_TRIAL) && g_ca[k].idx == g_ha.at[ia]) break;
                 for (; k < g_na; k++) if (g_ca[k].kind == K_ARM && g_ca[k].t < g_ha.h[ia].t) before = 1;
                 if (!before) must_retract++;
             }
