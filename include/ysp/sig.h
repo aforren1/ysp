@@ -218,8 +218,10 @@
  *   digest), whatever the inputs (several sources, devices out of order,
  *   equal times, dropped samples, views, ysig_set(), ysig_recenter()):
  *   it is the same code on the same calls. Hits the caller already took
- *   are not queued again; one the history no longer finds is counted:
- *   the armed detect's own at or after the arm's time in
+ *   are not queued again, but for the armed detect's from the new arm
+ *   on: those are the new arm's, also when its earlier arm handed out an
+ *   equal one. A hit handed out that the history does not give again is
+ *   counted: the armed detect's own at or after the arm's time in
  *   ysig_stats.arm_hits_superseded (its earlier arm's, which the re-arm
  *   ends; a caller that acts on hits in time order took none after the
  *   arm's time), any other in arm_hits_retracted (a hit the caller
@@ -3701,8 +3703,9 @@ static void ysig__apply(ysig_graph* g, const ysig_entry* e) {
 
 /* From checkpoint k: its state, the ring slots written since put back,
  * then every call since, the new arm among them. Hits the caller already
- * had are not queued again; one the history no longer finds is counted
- * (retracted). Rows and derived events are not handed out again; a change
+ * had are not queued again, but for the armed detect's from the new arm
+ * on (arm_live); one the history no longer gives is counted (superseded
+ * or retracted). Rows and derived events are not handed out again; a change
  * in them is counted. */
 static void ysig__rerun(ysig_graph* g, int kslot, int node, int64_t t) {
     ysig__cu* cu = g->cu;

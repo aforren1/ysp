@@ -621,10 +621,15 @@ since, and runs the logged calls again. Everything is then what live
 calls would have left: values, rings, states, stats and the digest. It is
 the same code on the same calls, so no op needs a rule of its own. Hits
 the caller already took are not queued again (a hit is the same when its
-node, time and whole value are). One the new history no longer finds
-cannot be taken back: it is counted. A hit of the armed detect itself at
-or after the arm's time is its earlier arm's, which the re-arm ends: it
-goes in `arm_hits_superseded`. A caller that acts on hits in time order
+node, time and whole value are), with one exception: what the armed
+detect finds from the new arm on is the new arm's, and is handed out
+again even when the earlier arm handed out an equal hit. A caller that
+keeps arms apart (the player's arm count) needs it: it dropped the
+earlier arm's copy, and without the new one it lost a crossing that the
+new arm met (the reference model's s21418 and seven other seeds). One
+the new history no longer gives cannot be taken back: it is counted. A
+hit of the armed detect itself at or after the arm's time is its earlier
+arm's, which the re-arm ends: it goes in `arm_hits_superseded`. A caller that acts on hits in time order
 took none after the arm's time (the player drops the earlier arm's hits
 by an arm count); one at the arm's time is the hit that ended the earlier
 arm, and the re-arm at that time follows it.
@@ -827,6 +832,14 @@ counts this program's allocator calls during the 60 s run (glibc).
   under ASan and UBSan (seeds 93001 to 93008, 5 min 1 s), 17,608 of them
   in it, 0 wrong overall (386,812 exact, 3,343 fell back, 9,507
   superseded, 338 retracted).
+
+  After the past arm hands out its own hits again (0b20b3c), the
+  differential compares the cases with a superseded hit too: A hands out
+  B's hits, and before its arm the earlier arm's; B's hits of the detect
+  after t and after B's arm come from A's after A's arm. 400,000 cases
+  under ASan and UBSan (seeds 94001 to 94008, 4 min 56 s): 353,528 exact,
+  42,895 with a superseded hit (compared), 3,262 fell back, 315 retracted,
+  0 wrong.
 
   Users of the detect's output in every case: a latch, a peak gated by
   it, a mux it selects, an all and a delay of it. B is defined only when
