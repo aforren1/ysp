@@ -681,3 +681,11 @@ test = "player"
 why = "F41: for a timeout, the wait's entry (vm_timeout_clamp)."
 find = '''    int64_t e = x->part || v->cur < 0 || v->rs[v->cur].def < 0 ? v->entry_t : v->def_entry_t;'''
 replace = '''    int64_t e = v->cur < 0 || v->rs[v->cur].def < 0 ? v->entry_t : v->def_entry_t;'''
+
+[[mutant]]
+id = "v2-83"
+name = "a late response's exit clamped to the visit's entry"
+test = "player"
+why = "F39 made precise 2026-11-13: the entry of the part that runs when the response is final (vm_resp_part_entry)."
+find = '''                    return v2_take_resp(p, v, e, t > v->entry_t ? t : v->entry_t, f, responded);'''
+replace = '''                    return v2_take_resp(p, v, e, t > v->def_entry_t ? t : v->def_entry_t, f, responded);'''

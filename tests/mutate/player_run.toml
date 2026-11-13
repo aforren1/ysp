@@ -321,8 +321,8 @@ id = "r-38"
 name = "a held key's release goes to the running collector"
 test = "player"
 why = "Round 2 item 3: t_r2_release_other_template."
-find = '''            if (p->release_due) { yrsp_feed(p->release_to, &p->release_ev); p->release_due = false; }'''
-replace = '''            if (p->release_due) { yrsp_feed(t->collector, &p->release_ev); p->release_due = false; }'''
+find = '''        if (p->release_due) { yrsp_feed(p->release_to, &p->release_ev); p->release_due = false; }'''
+replace = '''        if (p->release_due) { yrsp_feed(t->collector, &p->release_ev); p->release_due = false; }'''
 
 [[mutant]]
 id = "r-39"
@@ -702,7 +702,7 @@ id = "r-v2-10"
 name = "one press a trial"
 test = "player"
 why = "Model c (vm_two_presses): the next row of the trial."
-find = '''            if (p->script_k >= 0 && p->script_k + 1 < p->n_script && p->script[p->script_k + 1].trial == p->script[p->script_k].trial) {'''
+find = '''        if (p->script_k >= 0 && p->script_k + 1 < p->n_script && p->script[p->script_k + 1].trial == p->script[p->script_k].trial) {'''
 replace = '''            if (0) {'''
 
 [[mutant]]
@@ -736,3 +736,11 @@ test = "player"
 why = "2.6 reading (vm_window_sess1_v1, _v2, vm_window_vars_v1, _v2)."
 find = '''    if (r && dur > 0 && minrt >= dur) {'''
 replace = '''    if (0) {'''
+
+[[mutant]]
+id = "r-v2-15"
+name = "one scripted press a frame"
+test = "player"
+why = "Two presses in one frame's interval reach its poll (vm_presses_one_frame; the model's s6683)."
+find = '''    while (p->in_trial && p->press_pending && p->tmpl->collector && p->press_at <= f->onset) {'''
+replace = '''    if (p->in_trial && p->press_pending && p->tmpl->collector && p->press_at <= f->onset) {'''

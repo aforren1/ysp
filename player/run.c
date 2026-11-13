@@ -2250,46 +2250,47 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
         YRT_ZONE_END(zi);
         if (rc < 0) return -1;
     }
-    if (p->in_trial && p->press_pending && p->tmpl->collector) {
+    /* every press due by this onset, each after the release before it, so
+     * two presses in one frame's interval both reach this frame's poll in
+     * time order (one a frame put the second a frame late) */
+    while (p->in_trial && p->press_pending && p->tmpl->collector && p->press_at <= f->onset) {
         yrsp_input ev;
         pl_tmpl* t = p->tmpl;
-        if (p->press_at <= f->onset) {
-            /* the last press's release first, if it is still due: a key's
-             * events must arrive in time order */
-            if (p->release_due) { yrsp_feed(p->release_to, &p->release_ev); p->release_due = false; }
-            memset(&ev, 0, sizeof ev);
-            ev.t = p->press_at;
-            ev.type = YRSP_PRESS;
-            ev.stamp = YRSP_TIER_SIM;
-            ev.value = 1.0f;
-            if (p->press_choice >= 0) {
-                ev.kind = t->collector->ch[p->press_choice].kind;
-                ev.control = t->collector->ch[p->press_choice].control;
-            } else {
-                ev.kind = YRSP_KIND_KEYBOARD;
-                ev.control = (uint32_t)yrsp_scancode("space");
-            }
-            yrsp_feed(t->collector, &ev);
-            p->press_pending = false;
-            p->release_due = true;
-            p->release_to = t->collector;   /* the release goes where the press went */
-            p->release_ev = ev;
-            p->release_ev.t = p->release_at;
-            p->release_ev.type = YRSP_RELEASE;
-            p->release_ev.value = 0.0f;
-            /* the script's next row for this trial: another press, from the
-             * same onset (max_responses above 1) */
-            if (p->script_k >= 0 && p->script_k + 1 < p->n_script && p->script[p->script_k + 1].trial == p->script[p->script_k].trial) {
-                const pl_script_row* q = &p->script[++p->script_k];
-                int ci;
-                p->press_choice = -1;
-                for (ci = 0; ci < t->n_choices; ci++)
-                    if (strcmp(t->choice_keys[ci], q->resp) == 0 || strcmp(t->collector->ch[ci].name ? t->collector->ch[ci].name : "", q->resp) == 0) p->press_choice = ci;
-                if (p->press_choice < 0) { pl_fail(p, "trial %d: the script's response '%s' is not a choice", q->trial, q->resp); return -1; }
-                p->press_at = p->press_onset + (int64_t)llround(q->rt_s * 1e9);
-                p->release_at = p->press_at + (int64_t)llround(q->hold_s * 1e9);
-                p->press_pending = true;
-            }
+        /* the last press's release first, if it is still due: a key's
+         * events must arrive in time order */
+        if (p->release_due) { yrsp_feed(p->release_to, &p->release_ev); p->release_due = false; }
+        memset(&ev, 0, sizeof ev);
+        ev.t = p->press_at;
+        ev.type = YRSP_PRESS;
+        ev.stamp = YRSP_TIER_SIM;
+        ev.value = 1.0f;
+        if (p->press_choice >= 0) {
+            ev.kind = t->collector->ch[p->press_choice].kind;
+            ev.control = t->collector->ch[p->press_choice].control;
+        } else {
+            ev.kind = YRSP_KIND_KEYBOARD;
+            ev.control = (uint32_t)yrsp_scancode("space");
+        }
+        yrsp_feed(t->collector, &ev);
+        p->press_pending = false;
+        p->release_due = true;
+        p->release_to = t->collector;   /* the release goes where the press went */
+        p->release_ev = ev;
+        p->release_ev.t = p->release_at;
+        p->release_ev.type = YRSP_RELEASE;
+        p->release_ev.value = 0.0f;
+        /* the script's next row for this trial: another press, from the
+         * same onset (max_responses above 1) */
+        if (p->script_k >= 0 && p->script_k + 1 < p->n_script && p->script[p->script_k + 1].trial == p->script[p->script_k].trial) {
+            const pl_script_row* q = &p->script[++p->script_k];
+            int ci;
+            p->press_choice = -1;
+            for (ci = 0; ci < t->n_choices; ci++)
+                if (strcmp(t->choice_keys[ci], q->resp) == 0 || strcmp(t->collector->ch[ci].name ? t->collector->ch[ci].name : "", q->resp) == 0) p->press_choice = ci;
+            if (p->press_choice < 0) { pl_fail(p, "trial %d: the script's response '%s' is not a choice", q->trial, q->resp); return -1; }
+            p->press_at = p->press_onset + (int64_t)llround(q->rt_s * 1e9);
+            p->release_at = p->press_at + (int64_t)llround(q->hold_s * 1e9);
+            p->press_pending = true;
         }
     }
     /* a key held past its trial's end: its collector still hears the release,

@@ -2193,6 +2193,27 @@ def t_v2_findings(ctx):
     r = one("vm_timeout_clamp", v2base({"t": t}, [{"name": "l", "trial": "t"}], roles=pen), ["--sim-gain", "hand=1", "--samples", far100])
     check(r.rc == 0 and rows(r) == [("a", 0, 0.105, 0)] and r.trials[0]["outcome"] == "timeout",
           "F41: an until's timeout that ends before its wait's entry is taken at the entry: %s %s" % (rows(r) if r.rc == 0 else r.err[:200], r.trials[:1] and r.trials[0].get("outcome")))
+    # F39 made precise (the model's s23572): the press at s1's entry (rt 0)
+    # is final at frame 1, after frame 0's lead rule ended s1's steps
+    # (0.005) and started the until's wait; the response exit is taken at
+    # the wait's entry, the part that runs when the response becomes final
+    rt0 = os.path.join(ctx.out, "vm_rt0.csv")
+    with open(rt0, "w", newline="\n") as f:
+        f.write("trial_index,response,rt_s,hold_s\n0,left,0.000000000,0.020000000\n")
+    t = {"controls": {"r0": {"control": "region", "of": "hand", "radius": 10}},
+         "states": [{"name": "s0", "steps": [{"on": "s"}]}, {"name": "s1", "steps": [{"wait_s": 0.005}, {"until": "r0"}]}],
+         "response": dict(resp, duration_s=0.472)}
+    r = one("vm_resp_part_entry", v2base({"t": t}, [{"name": "l", "trial": "t"}], roles=pen, extra=dev), ["--sim-gain", "hand=1", "--samples", far100, "--participant", "script:" + rt0])
+    check(r.rc == 0 and rows(r) == [("s0", 0, 0.0, -1), ("s1", 0, 0.005, 0)] and r.trials[0]["outcome"] == "correct",
+          "F39: the response exit at the entry of the part that runs when it is final: %s %s" % (rows(r) if r.rc == 0 else r.err[:200], r.trials[:1] and r.trials[0].get("outcome")))
+    # two presses in one frame's interval (the model's s6683): the third
+    # press at 0.163, as the second is released, is in frame 10's poll, so
+    # max_responses 3 ends the window and the trial on frame 10
+    three = os.path.join(ctx.out, "vm_three.csv")
+    with open(three, "w", newline="\n") as f:
+        f.write("trial_index,response,rt_s,hold_s\n0,right,0.104000001,0.050000000\n0,right,0.154000002,0.009000000\n0,right,0.163000003,0.034000000\n")
+    t = {"events": [{"on": "s"}], "response": dict(resp, duration_s=0.798, response_ends_trial=False, max_responses=3)}
+    one("vm_presses_one_frame", v2base({"t": t}, [{"name": "l", "trial": "t"}], extra=dev), ["--participant", "script:" + three], want_rows=[("wrong", 0.167)])
     # rule 7: a backward at_s ends the steps at the cursor; a step it put
     # after that never lands
     t = {"states": [{"name": "s0", "steps": [{"on": "s"}, {"at_s": 0.137}, {"mark": "m1"}, {"at_s": 0.083}]}, {"name": "s1", "steps": [{"wait_s": 0.2}]}]}
