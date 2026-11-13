@@ -11,9 +11,6 @@
  *     after every set, disarm and reset made before it, after every
  *     recenter made before it at or before t, and after every arm made
  *     before it at or before t; among arms in one gap, by (t, call order);
- *   - and, for any hit at or before t that A handed out before the arm
- *     (the caller may have acted on it), after the latest call before
- *     the arm whose time is that hit's t_found (the call that found it).
  * In time-ordered input that is the calls sorted by (time, call order).
  * Both drain after the same calls. At the end A and B must hold the same
  * values, rings, op state, stats (but the window's own counts), and bound
@@ -251,31 +248,6 @@ static void do_call(ysig_graph* g, const call* c, hits* r, uint64_t* dh, long* n
 }
 
 /* B's order (the guarantee), from the calls alone */
-static int call_time(const call* c, int64_t* t) {
-    if (is_input(c, t)) return 1;
-    if (c->kind == K_ARM) { *t = c->t; return 1; }
-    return 0;
-}
-
-/* marks in g_found the calls before A's call index `before` that found a
- * hit at or before t that A handed out before it */
-static char g_found[MAXC];
-static void found_before(int before, int64_t t) {
-    int ia, k;
-    memset(g_found, 0, sizeof g_found);
-    for (ia = 0; ia < g_ha.n; ia++) {
-        int dk;
-        if (g_ha.h[ia].t > t) continue;
-        for (dk = 0; dk < before; dk++) if ((g_ca[dk].kind == K_DRAIN || g_ca[dk].kind == K_RESET) && g_ca[dk].idx == g_ha.at[ia]) break;
-        if (dk >= before) continue;   /* handed out after the arm */
-        for (k = before - 1; k >= 0; k--) {
-            int64_t tc;
-            if (call_time(&g_ca[k], &tc) && tc == g_ha.h[ia].t_found) break;
-        }
-        if (k >= 0) g_found[k] = 1;
-    }
-}
-
 static void build_b(void) {
     int k, p;
     g_nb = 0;
@@ -283,12 +255,10 @@ static void build_b(void) {
         const call* c = &g_ca[k];
         g_ca[k].ai = k;
         if (c->kind != K_ARM) { g_cb[g_nb++] = *c; continue; }
-        found_before(k, c->t);
         /* after the last call that must come first */
         for (p = g_nb; p > 0; p--) {
             const call* q = &g_cb[p - 1];
             int64_t ti;
-            if (g_found[q->ai]) break;
             if (is_input(q, &ti) && ti <= c->t) break;
             if (q->kind == K_RESET || q->kind == K_SETA || q->kind == K_SETCH || q->kind == K_SETLV || q->kind == K_DISARM) break;
             if (q->kind == K_RECENTER && q->t <= c->t) break;
