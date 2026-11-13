@@ -2066,6 +2066,34 @@ def t_v2_findings(ctx):
         d["version"] = ver
         r = Run(ctx, "vm_window_vars_v%d" % ver, d, args=["--max-seconds", "10"])
         check(r.rc == 1 and "leaves no time" in r.err and not r.trials, "2.6 v%d: two variables refused before the trial: %s" % (ver, r.err[:300]))
+    # sig.h 0.6.0's window (3.11 rule 2, the model's refound-in-frame): s2
+    # exits on r0 (outside, stay 3 ms) back to itself; each re-entry's hold
+    # ends before the next frame's onset, so the visits start on frame 1
+    # until the frame's time runs out, as the model has it
+    outside = os.path.join(ctx.out, "vm_outside.csv")
+    write_samples(outside, [(0.0, "hand", 0, 100), (0.001, "hand", 0, 100)])
+    pen = {"hand": {"type": "position2d", "units": "display_px"}}
+    t = {"controls": {"r0": {"control": "region", "of": "hand", "radius": 10, "outside": True, "stay_s": 0.003}},
+         "states": [{"name": "s2", "exits": [{"on": "r0", "to": "s2"}], "max_visits": 6, "over": {"to": "end"}}]}
+    r = one("vm_refound", v2base({"t": t}, [{"name": "l", "trial": "t"}], roles=pen), ["--sim-gain", "hand=1", "--samples", outside])
+    check([x[1] for x in rows(r)] == [0, 1, 1, 1, 1, 1, 2], "rule 2: the re-entries found in frame 1: %s" % rows(r))
+    # ysig_settle() before a response's end (rule 4, the model's
+    # future-arm-hold): the hold ends at 0.102, the deadline at 0.105, one
+    # frame, no new sample: the hit first
+    t = {"controls": {"r0": {"control": "region", "of": "hand", "radius": 10, "stay_s": 0.102}},
+         "states": [{"name": "a", "steps": [{"on": "s"}], "exits": [{"on": "response", "to": "end", "outcome": "rsp"}, {"on": "r0", "to": "end", "outcome": "hit"}]}],
+         "response": dict(resp, duration_s=0.105)}
+    inside0 = os.path.join(ctx.out, "vm_inside0.csv")
+    write_samples(inside0, [(0.0, "hand", 0, 0), (0.001, "hand", 0, 0)])
+    r = one("vm_settle", v2base({"t": t}, [{"name": "l", "trial": "t"}], roles=pen, extra=dev), ["--sim-gain", "hand=1", "--samples", inside0, "--participant", "silent"])
+    check(r.rc == 0 and r.trials[0]["outcome"] == "hit" and [x[2] for x in rows(r)] == [0.102], "rule 4: the hold before the deadline: %s %s" % (r.trials[:1] and r.trials[0]["outcome"], rows(r)))
+    # ysig_settle() before a timed change: the hold ends at 0.095, the
+    # after_s exit at 0.098 lands on frame 6 (0.1), whose timed exits run
+    # before its ysig_frame(): the hit first
+    t = {"controls": {"r0": {"control": "region", "of": "hand", "radius": 10, "stay_s": 0.095}},
+         "states": [{"name": "a", "steps": [{"on": "s"}], "exits": [{"on": "r0", "to": "end", "outcome": "hit"}, {"after_s": 0.098, "to": "end", "outcome": "timed"}]}]}
+    r = one("vm_settle_timed", v2base({"t": t}, [{"name": "l", "trial": "t"}], roles=pen), ["--sim-gain", "hand=1", "--samples", inside0])
+    check(r.rc == 0 and r.trials[0]["outcome"] == "hit" and [x[2] for x in rows(r)] == [0.095], "rule 4: the hold before the timed exit: %s %s" % (r.trials[:1] and r.trials[0]["outcome"], rows(r)))
     # rule 7: a backward at_s ends the steps at the cursor; a step it put
     # after that never lands
     t = {"states": [{"name": "s0", "steps": [{"on": "s"}, {"at_s": 0.137}, {"mark": "m1"}, {"at_s": 0.083}]}, {"name": "s1", "steps": [{"wait_s": 0.2}]}]}

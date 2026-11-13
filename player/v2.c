@@ -1671,6 +1671,14 @@ int pl_v2_load(pl_player* p) {
             d->channels = &S->dummy;   /* the real ones after every template's count */
             d->on_row = v2_on_row;
             d->user = v;
+            /* ysig/sig.h 0.6.0: an arm at a state's entry time, after the
+             * input the frame fed, runs the graph again from a checkpoint
+             * (3.11 rules 2 and 4). Four frames: a response's end can be
+             * final two frames after it; 1,024 calls and 16,384 ring
+             * writes hold four frames of 1 kHz samples with room */
+            d->catchup_frames = 4;
+            d->catchup_calls = 1024;
+            d->catchup_writes = 16384;
             v->has_graph = true;
             if (v->n_slots > max_slots) max_slots = v->n_slots;
             need = ysig_arena_size(d);
@@ -2530,6 +2538,19 @@ static int v2_timed_to(pl_player* p, pl_v2* v, const yscr_frame* f, int64_t limi
                 if (base + a < bt) { bt = base + a; best = x; }
             }
         }
+        if (v->has_graph) {
+            /* rule 4: a hold the hand meets before a timed change, with input
+             * fed up to its time (the frame's onset, or a response's end):
+             * the hit first */
+            int64_t due = v->steps_pending && v->steps_end <= wend && v->steps_end <= bt ? v->steps_end : best && bt <= wend ? bt : INT64_MAX;
+            int64_t fed = limit < f->onset ? limit : f->onset;
+            if (due != INT64_MAX) {
+                int cur = v->cur;
+                int64_t ent = v->entry_t;
+                if (ysig_settle(&v->g, due < fed ? due : fed) < 0 || v2_hits(p, v, f) < 0) return -1;
+                if (v->cur != cur || v->entry_t != ent) continue;
+            }
+        }
         if (v->steps_pending && v->steps_end <= wend && v->steps_end <= bt) {
             if (v2_steps_end(p, v, f) < 0) return -1;
             continue;
@@ -3062,6 +3083,10 @@ int pl_v2_response(pl_player* p, const yrsp_result* r, const yscr_frame* f) {
         v->resp_tie_responded = responded;
         v->resp_taken = false;
         rc = v2_feed(p, f, t);
+        /* input up to t is fed: a hold the hand met by then is a hit
+         * before the response's end at t (rule 4, the model's
+         * future-arm-hold) */
+        if (rc == 0 && v->has_graph && !v->resp_taken && v->cur >= 0 && ysig_settle(&v->g, t) == 0) rc = v2_hits(p, v, f);
         v->resp_tie_t = INT64_MIN;
         if (rc < 0) return -1;
         if (v->resp_taken || v->cur < 0) return 0;

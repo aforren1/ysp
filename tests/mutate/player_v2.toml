@@ -602,3 +602,27 @@ find = '''        if (recount && !p->from_landed) v->from_pending = v2_from_due(
         if (!stays && v->def->states) {'''
 replace = '''        if (recount && !p->from_landed) v->from_pending = false;
         if (!stays && v->def->states) {'''
+
+[[mutant]]
+id = "v2-73"
+name = "no window: an arm in the past tests the newest value"
+test = "player"
+why = "sig.h 0.6.0 (vm_refound): 3.11 rule 2."
+find = '''            d->catchup_frames = 4;'''
+replace = '''            d->catchup_frames = 0;'''
+
+[[mutant]]
+id = "v2-74"
+name = "no settle before a response's end"
+test = "player"
+why = "Rule 4 (vm_settle): the model's future-arm-hold."
+find = '''        if (rc == 0 && v->has_graph && !v->resp_taken && v->cur >= 0 && ysig_settle(&v->g, t) == 0) rc = v2_hits(p, v, f);'''
+replace = ''''''
+
+[[mutant]]
+id = "v2-75"
+name = "no settle before a timed change"
+test = "player"
+why = "Rule 4: a hold met before a timed exit or a steps' end."
+find = '''                if (ysig_settle(&v->g, due < fed ? due : fed) < 0 || v2_hits(p, v, f) < 0) return -1;'''
+replace = ''''''
