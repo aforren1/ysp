@@ -822,6 +822,12 @@ counts this program's allocator calls during the 60 s run (glibc).
   | Norm or rectangle test | 799,351 | 769,384 | 7,152 | 22,125 | 690 | 0 |
   | `ysig_settle()` in the window | 366,739 | 343,643 | 10,382 | 12,420 | 294 | 0 |
 
+  A 19th category, an arm at exactly the end of the detect's old hold (or
+  of the hit it found), came with the player's s19383: 400,000 cases
+  under ASan and UBSan (seeds 93001 to 93008, 5 min 1 s), 17,608 of them
+  in it, 0 wrong overall (386,812 exact, 3,343 fell back, 9,507
+  superseded, 338 retracted).
+
   Users of the detect's output in every case: a latch, a peak gated by
   it, a mux it selects, an all and a delay of it. B is defined only when
   the arm commutes with the calls it moves past: another arm of the same
