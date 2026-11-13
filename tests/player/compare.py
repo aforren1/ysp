@@ -369,6 +369,38 @@ def same_at(va, vb, scale=1.0, shift=0.0):
         (abs(x) < 0.5 * 10 ** -dec_of(vb) and abs(float(vb)) < 0.5 * 10 ** -dec_of(vb))
 
 
+def state_invariant(events_path):
+    """The state rows that no reading of the format allows, or None (the
+    reference model's INVARIANT, tests/model/diff.py). A row's entry time
+    is the trial's first onset for its first row and the end of the row
+    before for the others (3.11 rule 1): exit times never go back, the
+    first row ends at or after its planned onset, and entry frames never go back
+    (rule 2). A row may end before its own t_s: a state entered between
+    frames has an entry before its frame's onset."""
+    def ns(x):
+        a, b = x.split(".")
+        return int(a) * 1000000000 + int(b.ljust(9, "0")[:9])
+    if not os.path.exists(events_path):
+        return None
+    rows = {}
+    with open(events_path, newline="") as f:
+        for e in csv.DictReader(f):
+            if e["kind"] == "state":
+                rows.setdefault(e["trial_index"], []).append(e)
+    for ti, rr in rows.items():
+        for j, r in enumerate(rr):
+            if j == 0:
+                # the first onset as planned: a late flip record's t_s is later
+                if ns(r["end_s"]) < ns(r["planned_s"] or r["t_s"]):
+                    return "trial %s state row 0 ends before the trial's first onset: %s" % (ti, r["end_s"])
+                continue
+            p = rr[j - 1]
+            if ns(r["end_s"]) < ns(p["end_s"]):
+                return "trial %s state row %d (%s) ends at %s, before its entry (row %d's end %s)" % (ti, j, r["text"], r["end_s"], j - 1, p["end_s"])
+            if int(r["frame"]) < int(p["frame"]):
+                return "trial %s state row %d is on frame %s, before row %d's %s" % (ti, j, r["frame"], j - 1, p["frame"])
+    return None
+
 def v2_rig(a, name):
     rig = os.path.join(a.out, name + "_rig")
     shutil.rmtree(rig, ignore_errors=True)
@@ -427,6 +459,7 @@ def do_visuomotor(a, ex):
     run([tool(a.bin, "trial_visuomotor"), "--sim", "--test-order", draws, "--test-samples-out", smp, "--out", c_out, "--traj", c_traj])
     p1 = os.path.join(a.out, "visuomotor_p")
     player(a.bin, [pack, "--out", p1, "--samples", smp] + common)
+    inv_bad = state_invariant(os.path.join(p1, "events.csv"))
     rows, c_rows = read_csv(os.path.join(p1, "trials.csv")), read_c(c_out)
     one = (1.0, 0.0)
     pairs = [(c, c, "exact", "", 1.0, 0.0) for c in ("trial_index", "target_deg", "rotation_deg", "rt_s", "mt_s", "cross_s", "onset_tier",
@@ -436,6 +469,8 @@ def do_visuomotor(a, ex):
               ("peak_speed", "peak_speed_px_s", "exact", "px per s; the C file has 1 decimal", 1.0, 0.0),
               ("rsp_tier", "move_tier", "format", "the C file writes the result's stamp tier also with no response (trial 2, early): 0; the player leaves it empty", 1.0, 0.0)]
     report, bad = v2_columns(rows, c_rows, pairs)
+    report.append(("state rows: entry times and frames never go back", inv_bad or "hold", "FAIL" if inv_bad else "exact", "3.11 rules 1 and 2 (tests/model's INVARIANT)"))
+    bad += 1 if inv_bad else 0
     # the angles: atan2(-y, x) minus target_deg, at the C file's 4 decimals
     for xy, cc in ((("hand_end_x", "hand_end_y"), "hand_end_deg"), (("cursor_end_x", "cursor_end_y"), "cursor_end_deg")):
         d = 0
@@ -523,6 +558,9 @@ def do_bimanual(a, ex):
         ("mapping", "mapping", "exact", "tracking (data)", 1.0, 0.0)])
     report += rep2
     bad += bad2
+    inv_bad = state_invariant(os.path.join(p1, "events.csv"))
+    report.append(("state rows: entry times and frames never go back", inv_bad or "hold", "FAIL" if inv_bad else "exact", "3.11 rules 1 and 2 (tests/model's INVARIANT)"))
+    bad += 1 if inv_bad else 0
     for cc, why in (("reach_index", "analysis: the row's rank among trial_type reach"),
                     ("init_err_deg", "analysis on streams/path.csv"), ("--out trial_index", "analysis: the rank among trial_type track"),
                     ("--out mse_cm2 .. r_theta_deg", "analysis on streams/frames.csv"), ("--out n_frames, n_missed", "analysis on streams/frames.csv and frames.csv"),

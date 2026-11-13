@@ -4015,11 +4015,12 @@ static void test_arm_window(void) {
     CHECK(ysig_value_of(&g, 1)->v[0] == 1 && ysig_value_of(&g, 1)->t == 5 * MS);
     ysig_get_stats(&g, &st);
     CHECK(st.arm_caught_up == 1 && st.hits == 2);
-    /* 3: a re-arm at 2 ms, before the hits already handed out: found again,
-     * not queued twice */
-    CHECK(ysig_arm(&g, 1, 2 * MS) && ysig_detected(&g, h, 8) == 0);
+    /* 3: a re-arm at 2 ms, before the hits already handed out: found again
+     * and handed out again, as the new arm's (the earlier arm's are
+     * superseded) */
+    CHECK(ysig_arm(&g, 1, 2 * MS) && ysig_detected(&g, h, 8) == 2 && h[0].t == 3 * MS && h[1].t == 5 * MS);
     ysig_get_stats(&g, &st);
-    CHECK(st.arm_caught_up == 2 && st.arm_hits_retracted == 0);
+    CHECK(st.arm_caught_up == 2 && st.arm_hits_retracted == 0 && st.arm_hits_superseded == 2);
     /* the journal holds each call once, the arms at their calls: reset,
      * five samples, two arms (a run again journals nothing) */
     CHECK(g_nj == 8);

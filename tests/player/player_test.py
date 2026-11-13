@@ -60,6 +60,39 @@ def tmpl(events=None, after=None, key_answer=None, extra=None, response=True):
     return t
 
 
+def state_invariant(events_path):
+    """The state rows that no reading of the format allows, or None (the
+    reference model's INVARIANT, tests/model/diff.py). A row's entry time
+    is the trial's first onset for its first row and the end of the row
+    before for the others (3.11 rule 1): exit times never go back, the
+    first row ends at or after its planned onset, and entry frames never go back
+    (rule 2). A row may end before its own t_s: a state entered between
+    frames has an entry before its frame's onset."""
+    def ns(x):
+        a, b = x.split(".")
+        return int(a) * 1000000000 + int(b.ljust(9, "0")[:9])
+    if not os.path.exists(events_path):
+        return None
+    rows = {}
+    with open(events_path, newline="") as f:
+        for e in csv.DictReader(f):
+            if e["kind"] == "state":
+                rows.setdefault(e["trial_index"], []).append(e)
+    for ti, rr in rows.items():
+        for j, r in enumerate(rr):
+            if j == 0:
+                # the first onset as planned: a late flip record's t_s is later
+                if ns(r["end_s"]) < ns(r["planned_s"] or r["t_s"]):
+                    return "trial %s state row 0 ends before the trial's first onset: %s" % (ti, r["end_s"])
+                continue
+            p = rr[j - 1]
+            if ns(r["end_s"]) < ns(p["end_s"]):
+                return "trial %s state row %d (%s) ends at %s, before its entry (row %d's end %s)" % (ti, j, r["text"], r["end_s"], j - 1, p["end_s"])
+            if int(r["frame"]) < int(p["frame"]):
+                return "trial %s state row %d is on frame %s, before row %d's %s" % (ti, j, r["frame"], j - 1, p["frame"])
+    return None
+
+
 class Run:
     SOURCE_EXTRA = {}
 
@@ -93,6 +126,9 @@ class Run:
             return
         cmd = [ctx.player, self.pack, "--out", self.data, "--sim", "--seed", "99", "--field", "participant=3"] + (args or [])
         self.rc, self.err = self._run("player", cmd)
+        if definition.get("version") == 2:
+            bad = state_invariant(os.path.join(self.data, "events.csv"))
+            check(bad is None, "%s: the state rows' invariant: %s" % (name, bad))
 
     def _run(self, tag, cmd):
         # output goes to a file and only its head is kept: a run that prints
@@ -2123,6 +2159,21 @@ def t_v2_findings(ctx):
     rr = rows(r)
     s1 = [x[3] for x in rr if x[0] == "s1"]
     check(r.rc == 0 and r.trials and r.trials[0]["outcome"] == "over" and s1[1:] == [0, 0, 0, 0, 0, -2], "the re-arm's own completion of the old hold is not the new arm's hit: %s %s" % (r.trials[:1] and r.trials[0]["outcome"] if r.rc == 0 else r.err[:200], rr))
+    # the model's s21418: s1 goes back to itself by after_s 0.001, so each
+    # visit is entered 1 ms after a frame's onset and armed in the past at
+    # the next frame (F40). The hand leaves r0 (entry now, outside) at
+    # frame 21's onset: the visit armed at 1 ms after frame 20 ends at that
+    # sample's time with the shared exit (sig.h 0.6.0 hands the new arm's
+    # hit out again, though the earlier arm's equal hit was handed out)
+    out21 = os.path.join(ctx.out, "vm_out21.csv")
+    write_samples(out21, [(0.0, "hand", 5, 0), (0.350000007, "hand", 20, 0)])
+    t = {"controls": {"r0": {"control": "region", "of": "hand", "radius": 10, "outside": True}},
+         "states": [{"name": "s1", "exits": [{"after_s": 0.001, "to": "s1"}]}],
+         "exits": [{"on": "r0", "to": "end", "in": ["s1"], "outcome": "out"}]}
+    r = one("vm_rearm_found", v2base({"t": t}, [{"name": "l", "trial": "t"}], roles=pen), ["--sim-gain", "hand=1", "--samples", out21])
+    rr = rows(r)
+    check(r.rc == 0 and r.trials and r.trials[0]["outcome"] == "out" and rr and rr[-1][3] == 1 and rr[-1][2] == 0.35 and all(x[3] == 0 for x in rr[:-1]),
+          "the arm in the past finds the crossing at its sample's time: %s %s" % (r.trials[:1] and r.trials[0]["outcome"] if r.rc == 0 else r.err[:200], rr[-3:]))
     # rule 7: a backward at_s ends the steps at the cursor; a step it put
     # after that never lands
     t = {"states": [{"name": "s0", "steps": [{"on": "s"}, {"at_s": 0.137}, {"mark": "m1"}, {"at_s": 0.083}]}, {"name": "s1", "steps": [{"wait_s": 0.2}]}]}

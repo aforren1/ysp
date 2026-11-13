@@ -269,6 +269,7 @@ int main(int argc, char** argv) {
         int64_t t = 0, onset = 16 * MS, last[3] = { 0, 0, 0 }, t_arm, t_reset = 0;
         double x = 0, y = 0;
         const char* why = NULL;
+        long sup = 0;
         ysig_stats s0, s1;
         memset(&s0, 0, sizeof s0);
         memset(&s1, 0, sizeof s1);
@@ -376,6 +377,10 @@ int main(int argc, char** argv) {
         ysig_reset(&gb, 0);
         for (k = 0; k <= nc && !why; k++) {
             if (k == b_pos) {
+                {
+                    int m;
+                    for (m = 0; m < hb.n; m++) hb.h[m].reserved_ = 1;   /* before B's arm */
+                }
                 ysig_arm(&gb, gd.det, t_arm);
                 if (g_dbg > 1 && it == g_dbg - 2) {
                     const ysig__det_st* db = (const ysig__det_st*)gb.nd[gd.det].st;
@@ -403,6 +408,8 @@ int main(int argc, char** argv) {
                         printf("  log %llu: kind %d t %lld ev.t %lld dev %u\n", (unsigned long long)q, e2->kind, (long long)e2->t, (long long)e2->event.t, e2->event.device);
                     }
                 }
+                /* handed out before A's arm: the earlier arm's */
+                for (m = 0; m < ha.n; m++) ha.h[m].reserved_ = 1;
                 ysig_arm(&ga, gd.det, t_arm);
                 ysig_get_stats(&ga, &s1);
                 if (g_dbg > 1 && it == g_dbg - 2) {
@@ -415,7 +422,7 @@ int main(int argc, char** argv) {
                 drain(&ga, &ha);
                 if (s1.arm_past_far > s0.arm_past_far || s1.arm_past_full > s0.arm_past_full) { why = "fell back"; break; }
                 if (s1.arm_hits_retracted > s0.arm_hits_retracted) { why = "retracted"; break; }
-                if (s1.arm_hits_superseded > s0.arm_hits_superseded) { why = "superseded"; break; }
+                sup = (long)(s1.arm_hits_superseded - s0.arm_hits_superseded);
                 why = same_state(&ga, &gb);
                 if (why) break;
             }
@@ -437,22 +444,44 @@ int main(int argc, char** argv) {
             /* every hit handed out, as a set */
             qsort(ha.h, (size_t)ha.n, sizeof(ysig_hit), cmp_hit);
             qsort(hb.h, (size_t)hb.n, sizeof(ysig_hit), cmp_hit);
-            if (ha.n != hb.n) why = "the hits handed out";
-            for (k = 0; !why && k < ha.n; k++)
-                /* a hold met by the arm's time is the earlier arm's hit:
-                 * B's arm finds it, A had it from later input */
-                if (ha.h[k].node != hb.h[k].node || ha.h[k].t != hb.h[k].t || memcmp(&ha.h[k].value, &hb.h[k].value, sizeof(ysig_value)) ||
-                    (ha.h[k].t_found != hb.h[k].t_found && ha.h[k].t > t_arm)) {
-                    why = "the hits handed out";
-                    if (g_dbg) {
-                        const ysig_value* xa = &ha.h[k].value;
-                        const ysig_value* z = &hb.h[k].value;
-                        printf("  hit %d: A v (%.17g,%.17g) t %lld old %lld dev %u src %u/%u tier %u lanes %u unc %u found %lld\n", k, xa->v[0], xa->v[1], (long long)xa->t,
-                               (long long)xa->t_oldest, xa->device, xa->src, xa->src_oldest, xa->tier, xa->lanes, xa->unc_us, (long long)ha.h[k].t_found);
-                        printf("  hit %d: B v (%.17g,%.17g) t %lld old %lld dev %u src %u/%u tier %u lanes %u unc %u found %lld\n", k, z->v[0], z->v[1], (long long)z->t,
-                               (long long)z->t_oldest, z->device, z->src, z->src_oldest, z->tier, z->lanes, z->unc_us, (long long)hb.h[k].t_found);
+            /* A hands out what B does, and, before its arm, the detect's
+             * earlier arm's hits at or after t (superseded: sup of them,
+             * the new arm hands out again what it finds); B never had
+             * those. A hit in both: node, time and value, and where the
+             * time is after the arm the value that found it */
+            static char used[sizeof ha.h / sizeof ha.h[0]];
+            int ia, ib, pass;
+            long extra = 0;
+            memset(used, 0, sizeof used);
+            for (ib = 0; ib < hb.n && !why; ib++) {
+                int got = -1;
+                /* B's hit of the detect after t, handed out after B's arm,
+                 * is the new arm's: A hands it out after its arm, not as
+                 * the earlier arm's */
+                int passes = hb.h[ib].node == gd.det && hb.h[ib].t > t_arm && !hb.h[ib].reserved_ ? 1 : 2;
+                for (pass = 0; pass < passes && got < 0; pass++)
+                    for (ia = 0; ia < ha.n && got < 0; ia++) {
+                        int p0 = ha.h[ia].reserved_ && ha.h[ia].node == gd.det && ha.h[ia].t >= t_arm;
+                        if (used[ia] || p0 != pass) continue;
+                        if (ha.h[ia].node == hb.h[ib].node && ha.h[ia].t == hb.h[ib].t && !memcmp(&ha.h[ia].value, &hb.h[ib].value, sizeof(ysig_value)) &&
+                            (ha.h[ia].t_found == hb.h[ib].t_found || ha.h[ia].t <= t_arm))
+                            got = ia;
                     }
+                if (got < 0) {
+                    why = "the hits handed out";
+                    if (g_dbg) printf("  B's hit %d@%lld/%lld not in A\n", hb.h[ib].node, (long long)hb.h[ib].t, (long long)hb.h[ib].t_found);
+                } else used[got] = 1;
+            }
+            for (ia = 0; ia < ha.n && !why; ia++) {
+                if (used[ia]) continue;
+                if (ha.h[ia].reserved_ && ha.h[ia].node == gd.det && ha.h[ia].t >= t_arm) extra++;
+                else {
+                    why = "the hits handed out";
+                    if (g_dbg) printf("  A's hit %d@%lld/%lld not in B\n", ha.h[ia].node, (long long)ha.h[ia].t, (long long)ha.h[ia].t_found);
                 }
+            }
+            if (!why && extra != sup) why = "the superseded hits";
+            if (!why && sup > 0) why = "superseded";
         }
         for (c = 0; c < NCAT; c++) {
             if (!cats[c]) continue;

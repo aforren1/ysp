@@ -1752,9 +1752,9 @@ name = "no run again: an arm in the past tests the newest value"
 test = "sig"
 why = "v0.6.0 (test_arm_window 2, sig_arm_diff)."
 find = '''    ysig__rerun(g, kslot, node, t_ns);
-    g->st.arm_caught_up++;'''
+    cu->arm_live = 0;'''
 replace = '''    ysig__arm_plain(g, node, t_ns);
-    g->st.arm_caught_up++;'''
+    cu->arm_live = 0;'''
 
 [[mutant]]
 id = "211"
@@ -1812,8 +1812,8 @@ replace = '''        kslot = (cu->ck0 + i) % cu->K;'''
 id = "217"
 name = "a hit handed out queued again"
 test = "sig"
-why = "v0.6.0 (test_arm_window 3, R11)."
-find = '''        if (ysig__hit_seen(g->cu, &x)) { ysig__hl_add(g->cu, 0, &x); return; }'''
+why = "v0.6.0 (R11: another node's hit, or the earlier arm's at the arm's time, not queued twice; test_arm_window, sig_arm_diff)."
+find = '''        if (!(g->cu->arm_live && node == g->cu->arm_node) && ysig__hit_seen(g->cu, &x)) { ysig__hl_add(g->cu, 0, &x); return; }'''
 replace = ''''''
 
 [[mutant]]
@@ -1970,3 +1970,19 @@ why = "v0.6.0 (test_arm_window): a re-arm at its own hit's time that later input
 find = '''    ysig__settle_det(g, node, t_ns);
     fell = hit_out && g->val[node].v[0] != 0;'''
 replace = '''    fell = hit_out && g->val[node].v[0] != 0;'''
+
+[[mutant]]
+id = "236"
+name = "a past arm's own hits not handed out again"
+test = "sig"
+why = "v0.6.0 (test_arm_window 3, sig_arm_diff): what the new arm finds is its own, though the earlier arm's equal hit was handed out (the player's s21418)."
+find = '''        if (!(g->cu->arm_live && node == g->cu->arm_node) && ysig__hit_seen(g->cu, &x)) { ysig__hl_add(g->cu, 0, &x); return; }'''
+replace = '''        if (ysig__hit_seen(g->cu, &x)) { ysig__hl_add(g->cu, 0, &x); return; }'''
+
+[[mutant]]
+id = "237"
+name = "a later logged arm of the detect keeps the new arm's hits live"
+test = "sig_diff"
+why = "v0.6.0: a later logged arm's hits are its own, which the caller had."
+find = '''            g->cu->arm_live = g->cu->c_pos - 1 == g->cu->arm_pos;'''
+replace = '''            if (g->cu->c_pos - 1 == g->cu->arm_pos) g->cu->arm_live = 1;'''

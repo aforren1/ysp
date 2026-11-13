@@ -1017,6 +1017,8 @@ typedef struct ysig__cu {
     uint64_t    row_h, der_h;
     uint64_t    c_pos;          /* a run again: the next call's index    */
     int         n_tmp;          /* a run again: hits handed out to match */
+    uint64_t    arm_pos;        /* a run again: the new arm's index      */
+    int         arm_node, arm_live;   /* its detect; its hits now        */
 } ysig__cu;
 
 /* The logs ran full (or a reset): no checkpoint to run again from. */
@@ -2178,7 +2180,7 @@ static void ysig__hit(ysig_graph* g, int node, int64_t t, int64_t t_found, const
         x.t_found = t_found;
         x.value = *v;
         /* handed out before the arm: logged as handed out (seq 0) */
-        if (ysig__hit_seen(g->cu, &x)) { ysig__hl_add(g->cu, 0, &x); return; }
+        if (!(g->cu->arm_live && node == g->cu->arm_node) && ysig__hit_seen(g->cu, &x)) { ysig__hl_add(g->cu, 0, &x); return; }
     }
     if (g->n_hit >= YSIG_QUEUE_CAP) { g->st.hits_lost++; return; }
     h = &g->hitq[g->n_hit++];
@@ -3677,7 +3679,18 @@ static void ysig__apply(ysig_graph* g, const ysig_entry* e) {
     case YSIG_J_RECENTER: ysig__do_recenter(g, e->node, e->value, e->y, e->t); break;
     case YSIG_J_SET: ysig__do_set(g, e->node, e->param, e->value); break;
     case YSIG_J_SET_DATA: g->nd[e->node].data[e->param] = e->value; break;
-    case YSIG_J_ARM: ysig__arm_plain(g, e->node, e->t); break;
+    case YSIG_J_ARM:
+        if (g->cu && g->cu->replaying && e->node == g->cu->arm_node) {
+            /* the hold met by the arm's time is the earlier arm's; what the
+             * detect finds from the new arm on is the new arm's, handed out
+             * again even when its earlier arm's equal hit was (that one
+             * was the earlier arm's: superseded). A later logged arm of
+             * the detect starts its own hits, which the caller had */
+            ysig__settle_det(g, e->node, e->t);
+            g->cu->arm_live = g->cu->c_pos - 1 == g->cu->arm_pos;
+        }
+        ysig__arm_plain(g, e->node, e->t);
+        break;
     case YSIG_J_DISARM: ((ysig__det_st*)g->nd[e->node].st)->armed = ((ysig__det_st*)g->nd[e->node].st)->holding = 0; break;
     case YSIG_J_FEED: (void)ysig__do_feed(g, &e->event); break;
     case YSIG_J_FRAME: ysig__do_frame(g, &e->frame); break;
@@ -3788,7 +3801,12 @@ YSIG_API bool ysig_arm(ysig_graph* g, int node, int64_t t_ns) {
     for (s = cu->c_head; s > pos; s--) cu->calls[s % (uint64_t)cu->C] = cu->calls[(s - 1) % (uint64_t)cu->C];
     cu->calls[pos % (uint64_t)cu->C].e = e;
     cu->c_head++;
+    cu->arm_pos = pos;
+    cu->arm_node = node;
+    cu->arm_live = 0;
     ysig__rerun(g, kslot, node, t_ns);
+    cu->arm_live = 0;
+    cu->arm_node = -1;
     g->st.arm_caught_up++;
     return true;
 }
