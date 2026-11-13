@@ -109,6 +109,33 @@ def run_player(bin_dir, d, defn, script, samples):
     return {"refused": None, "trials": [trials[i] for i in sorted(trials)], "out": out}
 
 
+def invariant(trials):
+    """State rows that no reading of the format allows, or None. A row's
+    entry time is the first frame's onset for a trial's first row and the
+    end of the row before for the others (3.11 rule 1); so exit times never
+    go back, the first row ends at or after its t_s, and entry frames never
+    go back (3.11 rule 2). A row's end_s can be before its own t_s: a state
+    entered by a hit, or by an F40 timed exit, between frames has an entry
+    time before its entry frame's onset, and an exit at that time (an
+    instant exit, a hit at the arm) ends it there."""
+    def ns(x):
+        a, b = x.split(".")
+        return int(a) * M.NS + int(b.ljust(9, "0")[:9])
+    for i, tr in enumerate(trials):
+        rows = tr["states"]
+        for j, r in enumerate(rows):
+            if j == 0:
+                if ns(r["end_s"]) < ns(r["t_s"]):
+                    return "trial %d state row 0 ends before the trial's first onset: %s" % (i, r)
+                continue
+            p = rows[j - 1]
+            if ns(r["end_s"]) < ns(p["end_s"]):
+                return "trial %d state row %d ends before its entry (row %d's end %s): %s" % (i, j, j - 1, p["end_s"], r)
+            if r["frame"] < p["frame"]:
+                return "trial %d state row %d is on a frame before row %d's: %s" % (i, j, j - 1, r)
+    return None
+
+
 def trial_gaps(exp, diff):
     """The GAPs of the trial where the first difference is (the trials
     before it agree, so an earlier GAP did not change rows)."""
@@ -305,7 +332,11 @@ def check_set(work, seeds=None, seeds_multi=None):
                     bad.append((seed, "the case reaches GAPs %s" % gaps))
                     continue
                 got = run_player(None, d, defn, script, samples)
-                diff = compare(exp, got)
+                diff = None
+                for side, tr in (("model", exp.get("trials")), ("player", got.get("trials"))):
+                    if tr and invariant(tr):
+                        diff = "invariant %s: %s" % (side, invariant(tr))
+                diff = diff or compare(exp, got)
                 if diff:
                     bad.append((seed, "%s (case %s)" % (diff, d)))
         finally:
@@ -324,7 +355,9 @@ def one(args):
     except subprocess.TimeoutExpired:
         got = {"refused": ["timeout"]}
     diff = compare(exp, got)
-    res = {"seed": seed, "dir": d, "refused": exp["refused"], "player_refused": got["refused"],
+    inv_m = invariant(exp["trials"]) if exp.get("refused") is None and exp.get("trials") else None
+    inv_p = invariant(got["trials"]) if got.get("refused") is None and got.get("trials") else None
+    res = {"seed": seed, "dir": d, "inv_model": inv_m, "inv_player": inv_p, "refused": exp["refused"], "player_refused": got["refused"],
            "gaps": trial_gaps(exp, diff), "diff": diff,
            "hang": diff is None and exp["refused"] is None and bool(exp["trials"])
                    and bool(exp["trials"][-1].get("hang") or exp["trials"][-1].get("loop"))}
@@ -364,7 +397,7 @@ def main(argv):
         return 1 if bad else 0
     work = tempfile.mkdtemp(prefix="run", dir=a.work)
     jobs = [(s, os.path.abspath(a.bin), work, not a.no_shrink) for s in range(lo, hi)]
-    n = refused = agreed_ref = bad = gap_bad = hangs = 0
+    n = refused = agreed_ref = bad = gap_bad = hangs = inv_m = inv_p = 0
     log = open(a.log, "w", newline="\n") if a.log else None
     with multiprocessing.Pool(min(a.jobs, 8)) as pool:
         for r in pool.imap_unordered(one, jobs):
@@ -374,6 +407,16 @@ def main(argv):
                 log.flush()
             if r.get("hang"):
                 hangs += 1
+            for side, key in (("model", "inv_model"), ("player", "inv_player")):
+                if r.get(key):
+                    if side == "model":
+                        inv_m += 1
+                    else:
+                        inv_p += 1
+                    # A model row that breaks the invariant is a model bug,
+                    # never a GAP; reported also where the case reaches one.
+                    print("INVARIANT %s seed %d: %s" % (side, r["seed"], r[key]))
+                    print("  case %s" % r["dir"])
             if r["refused"] is not None:
                 refused += 1
                 if r["diff"] is None:
@@ -388,8 +431,9 @@ def main(argv):
                 print("  case %s" % r.get("min_dir", r["dir"]))
                 sys.stdout.flush()
     print("cases %d, refused by the model %d (agreed %d), hangs both agree on %d (rows not compared), "
-          "mismatches %d (%d at a GAP)" % (n, refused, agreed_ref, hangs, bad, gap_bad))
-    return 1 if bad else 0
+          "mismatches %d (%d at a GAP); invariant failures: model %d, player %d" %
+          (n, refused, agreed_ref, hangs, bad, gap_bad, inv_m, inv_p))
+    return 1 if (bad or inv_m or inv_p) else 0
 
 
 if __name__ == "__main__":
