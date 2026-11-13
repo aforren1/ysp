@@ -138,6 +138,12 @@ class Gen:
             r["key_answer"] = "f"
         if rng.random() < 0.2 and "release" not in AVOID:
             r["wait_for_key_release"] = True
+        # A stream of its own, so that this draw moves no other seed's case.
+        if "duration_s" in r and random.Random(self.seed * 7919 + 1).random() < 0.03:
+            # The loader's refusal (experiment.h 0.5.1): a minimum RT at or
+            # above the deadline, also equal in ns.
+            r["minimum_valid_rt_s"] = rng.choice([r["duration_s"], r["duration_s"] + 0.01])
+            return r
         if MULTI:
             if "duration_s" not in r:
                 r["duration_s"] = dur(rng, 12, 60)

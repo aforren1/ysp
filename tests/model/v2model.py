@@ -285,6 +285,12 @@ def predict_refusal(defn):
     # F37 (2.6, DECIDED 2026-11-12): a key response that nothing ends.
     if r is not None and not r.ends_trial and r.duration == 0 and r.max_responses == 0:
         return "F37"
+    # experiment.h 0.5.1 (the coordinator, 2026-11-12; was the GAP
+    # min-rt-over-duration): a response whose minimum_valid_rt_s is at or
+    # above its duration_s, in ns, is refused at load (response.h refuses
+    # that desc). Literals only here: the generator gives no variables.
+    if r is not None and r.duration > 0 and r.min_rt >= r.duration:
+        return "min-rt-over-duration"
     # experiment.md, "A response's from": a step must show it (in `events`
     # for an events template; any state's steps with states).
     if r is not None:
@@ -373,6 +379,7 @@ class Det:
     def __init__(self, region, arm_t, held):
         self.r = region
         self.arm = arm_t
+        self.made = None          # the frame of the arm
         self.hold = None          # the hold's start
         self.hit = None
         self.prev = False
@@ -635,6 +642,7 @@ class Run:
         self.carry = []
         # Phase T: timed exits whose window this frame reaches (3.11 rule 2).
         self.resolve(cands, k, "T", o)
+        self.arm_holds(k)
         # Phase E: the evaluate.
         self.evaluate(k)
         # Phase F: hits that ysig_frame() finds (3.11 rule 5), then a second
@@ -664,8 +672,33 @@ class Run:
                 # or after the hit, this frame; the frame tests it again.
                 self.gap("refound-in-frame")
             self.resolve(cands, k, "F", o)
+            self.arm_holds(k)
             self.evaluate(k)
         self.end_check(k)
+
+    def arm_holds(self, k):
+        """A hold that an arm of this frame starts (its test true at the
+        arm) and that ends at or before this frame's onset is an arm-made
+        hit: it is resolved before the frame's evaluate (the coordinator's
+        item 2, 2026-11-12; F38: the exit wins at its time, so the state's
+        steps at or after it never land)."""
+        o = onset(k)
+        while self.cur is not None:
+            v = self.cur
+            cands = []
+            for name, d in v.dets.items():
+                if d.made == k:
+                    h = d.frame(o)
+                    if h is not None:
+                        cands.append(("hit", h, name, v.vid))
+            ud = v.until_det
+            if ud is not None and ud.made == k:
+                h = ud.frame(o)
+                if h is not None:
+                    cands.append(("until", h, None, v.vid))
+            if not cands:
+                return
+            self.resolve(cands, k, "F", o)
 
     def next_input(self, o):
         tr = self.tr
@@ -779,11 +812,6 @@ class Run:
             if hit_frame(t) < k:
                 self.gap("response-final-late")
             return [("resp", t, None, None)]
-        if r.duration > 0 and r.min_rt >= r.duration:
-            # GAP (2.6): a minimum RT at or above the deadline. response.h
-            # refuses that desc ("min_rt_ns leaves no time"); the format and
-            # the loader do not. Read: the deadline ends the window.
-            self.gap("min-rt-over-duration")
         if r.duration > 0:
             d = onset(tr.L) + r.duration
             if getattr(tr, "await_release", False):
@@ -928,9 +956,12 @@ class Run:
                 if oe is not None:
                     pool.append((c[1], oe[0], c, oe[1]))
             if phase == "P":
-                if not pool:
+                if not cands:
                     return
-                limit = max(p[0] for p in pool)
+                # A drained hit or response that this state does not take
+                # still makes the timed candidates at or before it pending:
+                # a steps' end at its time may lead to a state that takes it.
+                limit = max(c[1] for c in cands)
                 # A response's deadline is a time known in advance: like an
                 # after_s time it is pending once a drained hit is at or
                 # after it (3.11 rule 4: the earliest pending time wins).
@@ -1049,6 +1080,9 @@ class Run:
                 # changes).
                 self.flag_window(t)
                 v.until_det = Det(self.tpl.regions[ctl], t, self.hand)
+                v.until_det.made = k
+                if v.until_det.hold is not None and t > onset(k):
+                    self.gap("future-arm-hold")
                 if v.until_det.hit is not None:
                     if t > onset(k):
                         self.gap("future-arm-hit")
@@ -1170,6 +1204,12 @@ class Run:
             if nm in v.dets:
                 continue
             d = Det(self.tpl.regions[nm], t, self.hand)
+            d.made = k
+            if d.hold is not None and t > onset(k):
+                # GAP (future-arm-hold): a hold whose test is true at an arm
+                # after the frame's onset (a timed exit that the lead rule
+                # takes early). Read: sig.md, the hold counts from the arm.
+                self.gap("future-arm-hold")
             v.dets[nm] = d
             if d.hit is not None:
                 if t > onset(k):

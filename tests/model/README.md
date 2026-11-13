@@ -74,8 +74,9 @@ Options:
   `stay_s` literal, `rate` sample.
 - The loader's refusals that the generator can make: D20 rule 6 with F5
   and F26, the rule for a state whose exits are all instant, F37, a
-  response whose `from` no step shows, and `at_s` after an `until` in
-  `events`.
+  response whose `from` no step shows, `at_s` after an `until` in
+  `events`, and `minimum_valid_rt_s` at or above `duration_s` (experiment.h
+  0.5.1).
 
 The harness compares, per trial: the state rows of `events.csv` (text,
 frame, `t_s`, `end_s`, code), the landing rows (`onset`, `offset`, `mark`,
@@ -110,6 +111,7 @@ difference at a GAP is a question for the format, not a player bug.
 | The simulated display's onsets; when a flip record arrives | Measured: the grid above; frame L's record is in at frame L + 1 |
 | `arm-order`: an arm made at a frame has a time that is not the input's place (a timed exit, a response that became final, a hold that a later sample found) | Not decided; the generator moves samples out of these windows |
 | `future-arm-hit`: an arm after the frame's onset whose test is true at once | The hit is taken in that frame |
+| `future-arm-hold`: an arm after the frame's onset that starts a hold (its test true) | The hold counts from the arm's time (sig.md) |
 | `refound-in-frame`: a hold armed by a state that a frame's hit started, which ends before that frame's onset | The frame finds it, and its next state starts on the same frame |
 | `response-before-entry`: a response that becomes final in a state entered after the response's time | The exit's time is the later of the response's time and the state's entry (a reading of 2026-11-12) |
 | `at-after-until`: `at_s` after an `until` in a state | From the until's hit (rule 9: the steps after it are the next state), not the state's entry (rule 6) |
@@ -118,5 +120,4 @@ difference at a GAP is a question for the format, not a player bug.
 | F40 for an until's timeout: "the state's entry frame" | The wait's entry frame (the wait is a state of its own, 3.11 rule 9) |
 | The outcome column with no response in an events template | `done` |
 | A sample and a press at one time | The sample first |
-| `min-rt-over-duration`: `minimum_valid_rt_s` at or above `duration_s` (response.h refuses that desc; the loader does not) | The deadline ends the window; the generator does not make it |
 | The deadline of F34 rule 2 | A deadline with no response sets `timeout` |

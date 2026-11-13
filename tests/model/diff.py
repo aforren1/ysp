@@ -37,12 +37,12 @@ YPAK = None
 PLAYER = None
 
 # The fixed set that tests/player/player_test.py runs (t_v2_model): seeds
-# whose cases passed on player 0.8.0 (v2-lower 9b82be2) and reach no GAP, so
-# none needs refound-in-frame or future-arm-hit. SEEDS_MULTI run with
+# whose cases passed on player 0.9.0 (v2-lower aa6df27) and reach no GAP, so
+# none needs refound-in-frame or a future arm. SEEDS_MULTI run with
 # GEN_MULTI (several presses a trial).
-SEEDS = [27, 113, 690, 733, 1001, 1855, 2631, 4011, 4275, 4328, 4486, 4573, 5233, 7303, 8425, 8822, 9175,
-         9583, 9609, 10300, 10572, 10691, 11790, 12002, 12109, 12293, 13099, 13106, 13442, 13700, 13858,
-         14230, 14376, 14595, 14598, 14782, 15915, 16003, 16433, 16442]
+SEEDS = [27, 113, 690, 733, 1001, 1855, 2631, 3474, 3707, 4011, 4275, 4486, 4573, 4588, 5380, 7303,
+         8425, 8822, 9175, 9583, 9609, 10572, 10691, 11790, 12002, 12109, 12293, 13099, 13106,
+         13442, 13858, 14230, 14376, 14595, 14598, 14782, 15915, 16003, 16433, 16442]
 SEEDS_MULTI = [187, 504, 523, 814, 1242, 1445, 2737, 3665, 4018, 4762]
 
 
