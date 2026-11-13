@@ -19,9 +19,14 @@
  *     which moves ring pushes and the skip and clamp counts for later
  *     late reports). So B makes that one completion itself, with the
  *     header's internal ysig__settle_det(g, node, t, 1), just before
- *     the arm.
+ *     the arm. That one internal call is the only code B and A share
+ *     beyond the public calls: it is the completion itself, with nothing
+ *     else, which no public call gives alone.
  * In time-ordered input that is the calls sorted by (time, call order).
- * Both drain after the same calls. At the end A and B must hold the same
+ * Both drain after the same calls. After every call of A from its first
+ * arm in the past on at which B has run the same set of calls (B's first
+ * calls are A's first calls, in another order), and at the end, A and B
+ * must hold the same
  * values, rings, op state, stats (but the window's own counts), and bound
  * channels; B's hits must all be in A's; each hit A handed out that B
  * does not have must be counted: retracted when the caller could have
@@ -482,17 +487,35 @@ int main(int argc, char** argv) {
         g_der_a = g_der_b = 0;
         g_nder_a = g_nder_b = 0;
         g_rows = &g_rows_a;
+        build_b();
         ysig_reset(&ga, 0);
-        for (k = 0; k < g_na; k++) {
-            int64_t cu = ga.st.arm_caught_up;
-            if (g_ca[k].kind == K_ARM && ga.n_hit > 0 && ga.st.arm_caught_up >= 0) f[F6] = 1;
-            do_call(&ga, &g_ca[k], &g_ha, &g_der_a, &g_nder_a);
-            (void)cu;
-        }
-        build_b();   /* after A: B needs the hits A handed out */
-        g_rows = &g_rows_b;
         ysig_reset(&gb, 0);
-        for (k = 0; k < g_nb; k++) do_call(&gb, &g_cb[k], &g_hb, &g_der_b, &g_nder_b);
+        {
+            /* in step: after A's call k, when B's first k + 1 calls are A's
+             * first k + 1 (the same set), both have run the same calls:
+             * from A's first arm in the past on, the state must agree there
+             * too, not only at the end */
+            static int pm[MAXC];
+            int bi = 0, past = 0, j2;
+            for (k = 0; k < g_na; k++) pm[k] = -1;
+            for (j2 = 0; j2 < g_nb; j2++) if (j2 > pm[g_cb[j2].ai]) pm[g_cb[j2].ai] = j2;
+            for (k = 1; k < g_na; k++) if (pm[k - 1] > pm[k]) pm[k] = pm[k - 1];
+            for (k = 0; k < g_na; k++) {
+                if (g_ca[k].kind == K_ARM && ga.n_hit > 0) f[F6] = 1;
+                g_rows = &g_rows_a;
+                do_call(&ga, &g_ca[k], &g_ha, &g_der_a, &g_nder_a);
+                if (ga.st.arm_caught_up) past = 1;
+                if (pm[k] != k) continue;
+                g_rows = &g_rows_b;
+                for (; bi <= k; bi++) do_call(&gb, &g_cb[bi], &g_hb, &g_der_b, &g_nder_b);
+                if (past && !why && !ga.st.arm_past_far && !ga.st.arm_past_full) {
+                    const char* w2 = same_state(&ga, &gb);
+                    if (w2) { static char buf[96]; snprintf(buf, sizeof buf, "after a call: %s", w2); why = buf; }
+                }
+            }
+            g_rows = &g_rows_b;
+            for (; bi < g_nb; bi++) do_call(&gb, &g_cb[bi], &g_hb, &g_der_b, &g_nder_b);
+        }
         ysig_get_stats(&ga, &sa);
         if (sa.arm_rows_stale || sa.arm_derived_stale || g_rows_a.h != g_rows_b.h || g_der_a != g_der_b) f[F7] = 1;
         if (sa.arm_past_far || sa.arm_past_full) {
@@ -501,7 +524,7 @@ int main(int argc, char** argv) {
             for (w = 0; w < NF; w++) if (f[w]) { g_n_case[w]++; g_n_back[w]++; }
             continue;
         }
-        why = same_state(&ga, &gb);
+        if (!why) why = same_state(&ga, &gb);
         if (!why) {
             /* B's hits are all in A's; A's others are counted: retracted
              * when no later past arm is before it, else superseded */
