@@ -645,6 +645,8 @@ replace = '''    return 0;'''
 id = "v2-78"
 name = "a hit the re-arm completed counted for the new arm"
 test = "player"
+expect = "survived"
+note = "Not reached with sig.h 0.6.0's third-review rule: a past arm goes after the call that found a hit the caller had at or before its time, so a re-arm at its own hit's time queues no copy of that hit. Kept as a guard (vm_rearm_tie passes either way)."
 why = "3.7 region hits count from the arm or later, D20 rule 3 (vm_rearm_tie; the model's s19383)."
 find = '''            if (h[i].t < v->arm_t[h[i].node] || (h[i].t == v->arm_t[h[i].node] && !v->det_now[h[i].node])) hg[i]--;'''
 replace = ''''''
@@ -653,6 +655,8 @@ replace = ''''''
 id = "v2-79"
 name = "a hold detect's hit at its arm's time counted for the arm"
 test = "player"
+expect = "survived"
+note = "Not reached, as v2-78."
 why = "An arm's hits are after its time for a hold (vm_rearm_tie)."
 find = '''            if (h[i].t < v->arm_t[h[i].node] || (h[i].t == v->arm_t[h[i].node] && !v->det_now[h[i].node])) hg[i]--;'''
 replace = '''            if (h[i].t < v->arm_t[h[i].node]) hg[i]--;'''
