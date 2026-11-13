@@ -218,8 +218,12 @@
  *   digest), whatever the inputs (several sources, devices out of order,
  *   equal times, dropped samples, views, ysig_set(), ysig_recenter()):
  *   it is the same code on the same calls. Hits the caller already took
- *   are not queued again; one the history no longer finds is counted
- *   (ysig_stats.arm_hits_retracted). on_row and ysig_derived() do not get
+ *   are not queued again; one the history no longer finds is counted:
+ *   the armed detect's own at or after the arm's time in
+ *   ysig_stats.arm_hits_superseded (its earlier arm's, which the re-arm
+ *   ends; a caller that acts on hits in time order took none after the
+ *   arm's time), any other in arm_hits_retracted (a hit the caller
+ *   may have acted on: the caller decides). on_row and ysig_derived() do not get
  *   the window's rows and events again; a change in them is counted
  *   (arm_rows_stale, arm_derived_stale). A reset is a barrier: an arm
  *   after it is never placed before it. An arm before the window's oldest
@@ -255,7 +259,10 @@
  *   or reset for a one-hit or a disarmed detect, so it rises at a hold's
  *   completion, which may be in a frame's pass. Its rise is at the hit's
  *   time, also in its ring. ysig_arm() takes it to 0 for its users at
- *   once, at the arm's time, so the next hit is a new rise.
+ *   once, at the arm's time, so the next hit is a new rise. Before that,
+ *   an arm at t completes a sample-rate hold met by t (v0.6.0, as
+ *   ysig_settle() at t would): the hold ended under the earlier arm, so it
+ *   is that arm's hit, also when no input after it has found it yet.
  *   CROSSINGS AND LATCHES: a latch takes its value when the trigger's lane
  *   0 goes from zero to nonzero (NaN is zero); a trigger already nonzero
  *   at a reset holds no rise. A rise in a sample's pass holds that sample's
@@ -364,11 +371,13 @@
  *          calls and ring writes, and an arm in the past runs the graph
  *          again from a checkpoint with the arm placed where it would have
  *          been made. ysig_settle(): holds that input fed up to a time
- *          completes, journaled (YSIG_J_SETTLE). A reset is a barrier.
+ *          completes, journaled (YSIG_J_SETTLE); an arm at t does the
+ *          same for its detect first. A reset is a barrier.
  *          Stats arm_caught_up, arm_past_off, _far, _full,
- *          arm_hits_retracted, arm_rows_stale, arm_derived_stale replace
- *          0.5.0's two; the graph's framed goes, t_cover and cu come
- *          (struct changes).
+ *          arm_hits_retracted, arm_hits_superseded (the armed detect's own
+ *          hits at or after the arm's time: its earlier arm's),
+ *          arm_rows_stale, arm_derived_stale replace 0.5.0's two; the
+ *          graph's framed goes, t_cover and cu come (struct changes).
  *   v0.5.0 - an arm in the past (AN ARM IN THE PAST, under DETECTORS): a
  *          sample-rate detect armed before its input's newest value or a
  *          frame's onset that tested it catches up on the input's ring;
@@ -706,6 +715,10 @@ typedef struct ysig_stats {
                                  * on_row already had                     */
     int64_t  arm_derived_stale; /* such arms whose run again changed
                                  * derived events                         */
+    int64_t  arm_hits_superseded;/* hits handed out before such an arm,
+                                 * of the armed node at or after the
+                                 * arm's time: its earlier arm's, which
+                                 * the re-arm ends (not retracted)        */
     uint64_t digest;            /* FNV-1a: rows, hits, events, binds,
                                  * frames                                */
 } ysig_stats;
@@ -3599,11 +3612,18 @@ static void ysig__do_reset(ysig_graph* g, int64_t t, int exp_only) {
 
 /* An arm with the newest held value: 0.4.1's arm, and the arm placed
  * where no input later than t has come. */
+static void ysig__settle_det(ysig_graph* g, int i, int64_t t);
 static void ysig__arm_plain(ysig_graph* g, int node, int64_t t_ns) {
     ysig__nd* n = &g->nd[node];
     int hit_out = (int)n->p[13] == YSIG_OUT_HIT;
-    int fell = hit_out && g->val[node].v[0] != 0;
-    int rose = ysig__det_arm(g, node, t_ns, &g->val[n->in[0]]) && hit_out;
+    int fell, rose;
+    /* a hold met at or before the arm's time is the earlier arm's hit,
+     * also when no input has found it yet: the re-arm ends that arm after
+     * it, and a run again (arm in the past) that places the arm before
+     * the input that found it keeps it */
+    ysig__settle_det(g, node, t_ns);
+    fell = hit_out && g->val[node].v[0] != 0;
+    rose = ysig__det_arm(g, node, t_ns, &g->val[n->in[0]]) && hit_out;
     if (fell) {
         /* the fall has a time, so a past read after it agrees */
         g->val[node].t = t_ns;
@@ -3620,26 +3640,29 @@ static void ysig__arm_plain(ysig_graph* g, int node, int64_t t_ns) {
     }
 }
 
+/* A sample-rate detect's hold met by t, input fed up to t: its hit. A
+ * frame-rate detect tests at onsets, one on a frame-updated input at its
+ * frames. */
+static void ysig__settle_det(ysig_graph* g, int i, int64_t t) {
+    ysig__nd* n = &g->nd[i];
+    ysig__det_st* s;
+    int was;
+    if (n->op != YSIG_OP_DETECT || n->p[5] == 1 || n->kns[0] <= 0 || (g->nd[n->in[0]].flags & YSIG__F_FRAME)) return;
+    s = (ysig__det_st*)n->st;
+    if (!s->armed || !s->holding) return;
+    was = s->fired;
+    (void)ysig__det_hold_done(g, i, t);
+    if ((int)n->p[13] == YSIG_OUT_HIT && s->fired && !was) {
+        g->val[i].v[0] = 1.0;
+        g->val[i].t = s->t_hit;
+        ysig__hist_push(g, n, &g->val[i]);
+        ysig__settle(g, i);
+    }
+}
+
 static void ysig__do_settle(ysig_graph* g, int64_t t) {
     int k;
-    for (k = 0; k < g->n; k++) {
-        int i = g->order[k], was;
-        ysig__nd* n = &g->nd[i];
-        ysig__det_st* s;
-        /* a sample-rate detect on samples: a frame-rate one tests at
-         * onsets, one on a frame-updated input at its frames */
-        if (n->op != YSIG_OP_DETECT || n->p[5] == 1 || n->kns[0] <= 0 || (g->nd[n->in[0]].flags & YSIG__F_FRAME)) continue;
-        s = (ysig__det_st*)n->st;
-        if (!s->armed || !s->holding) continue;
-        was = s->fired;
-        (void)ysig__det_hold_done(g, i, t);
-        if ((int)n->p[13] == YSIG_OUT_HIT && s->fired && !was) {
-            g->val[i].v[0] = 1.0;
-            g->val[i].t = s->t_hit;
-            ysig__hist_push(g, n, &g->val[i]);
-            ysig__settle(g, i);
-        }
-    }
+    for (k = 0; k < g->n; k++) ysig__settle_det(g, g->order[k], t);
     if (t > g->t_cover) g->t_cover = t;
 }
 
@@ -3668,7 +3691,7 @@ static void ysig__apply(ysig_graph* g, const ysig_entry* e) {
  * had are not queued again; one the history no longer finds is counted
  * (retracted). Rows and derived events are not handed out again; a change
  * in them is counted. */
-static void ysig__rerun(ysig_graph* g, int kslot) {
+static void ysig__rerun(ysig_graph* g, int kslot, int node, int64_t t) {
     ysig__cu* cu = g->cu;
     ysig__ck* k = &cu->ck[kslot];
     ysig_stats keep = g->st;
@@ -3699,7 +3722,15 @@ static void ysig__rerun(ysig_graph* g, int kslot) {
         ysig__apply(g, &cu->calls[s % (uint64_t)cu->C].e);
     }
     cu->replaying = 0;
-    for (i = 0; i < cu->n_tmp; i++) if (cu->tmp[i].seq != UINT64_MAX) keep.arm_hits_retracted++;
+    /* a hit of the armed node at or after the arm's time is its earlier
+     * arm's: the caller that re-arms it ends that arm (a caller that
+     * acts on hits in time order never took one); any other is a hit
+     * the caller may have acted on */
+    for (i = 0; i < cu->n_tmp; i++)
+        if (cu->tmp[i].seq != UINT64_MAX) {
+            if (cu->tmp[i].h.node == node && cu->tmp[i].h.t >= t) keep.arm_hits_superseded++;
+            else keep.arm_hits_retracted++;
+        }
     /* the arms' own counts stand, and the calls made (the window keeps
      * only the events a source took); the rest is the run again's */
     g->st.fed = keep.fed;
@@ -3708,6 +3739,7 @@ static void ysig__rerun(ysig_graph* g, int kslot) {
     g->st.arm_past_far = keep.arm_past_far;
     g->st.arm_past_full = keep.arm_past_full;
     g->st.arm_hits_retracted = keep.arm_hits_retracted;
+    g->st.arm_hits_superseded = keep.arm_hits_superseded;
     g->st.arm_rows_stale = keep.arm_rows_stale + (cu->row_h != rh);
     g->st.arm_derived_stale = keep.arm_derived_stale + (cu->der_h != dh);
     g->n_der = n_der;
@@ -3756,7 +3788,7 @@ YSIG_API bool ysig_arm(ysig_graph* g, int node, int64_t t_ns) {
     for (s = cu->c_head; s > pos; s--) cu->calls[s % (uint64_t)cu->C] = cu->calls[(s - 1) % (uint64_t)cu->C];
     cu->calls[pos % (uint64_t)cu->C].e = e;
     cu->c_head++;
-    ysig__rerun(g, kslot);
+    ysig__rerun(g, kslot, node, t_ns);
     g->st.arm_caught_up++;
     return true;
 }

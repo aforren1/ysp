@@ -8,7 +8,9 @@
  * window's own counts), and every hit handed out. An arm that the window
  * cannot run again falls back by name (ysig_stats.arm_past_far, _full);
  * a hit the caller already had that the run again no longer finds is
- * counted (arm_hits_retracted). Those cases are counted, not compared.
+ * counted: the armed detect's own at or after the arm's time as
+ * superseded (arm_hits_superseded: its earlier arm's), any other as
+ * retracted (arm_hits_retracted). Those cases are counted, not compared.
  *
  * The cases cover the review's list: two-source nodes (a sum of L and R
  * with late reports), one source with two devices out of order, equal
@@ -47,7 +49,7 @@ static const char* g_cat[NCAT] = {
     "out-of-order samples dropped", "detect on a view (speed)", "ysig_set in the window", "ysig_recenter in the window",
     "a reset before B's place", "a re-arm earlier than a found hit", "entry arm", "entry fresh", "entry now",
     "hold above 0", "repeat every", "hysteresis", "norm or rectangle test", "ysig_settle in the window" };
-static long g_n[NCAT], g_exact[NCAT], g_back[NCAT], g_retr[NCAT], g_wrong[NCAT];
+static long g_n[NCAT], g_exact[NCAT], g_back[NCAT], g_sup[NCAT], g_retr[NCAT], g_wrong[NCAT];
 
 /* the graph: 13 experiment nodes, or a role and an adapter for recenter */
 typedef struct { ysig_node n[16]; int nn, det, adapter; ysig_node ad[4]; ysig_role role; ysig_adapter adp; } graph_def;
@@ -203,7 +205,7 @@ static int cmp_hit(const void* a, const void* b) {
     const ysig_hit* y = (const ysig_hit*)b;
     if (x->t != y->t) return x->t < y->t ? -1 : 1;
     if (x->node != y->node) return x->node < y->node ? -1 : 1;
-    return memcmp(x, y, sizeof *x);
+    return memcmp(&x->value, &y->value, sizeof x->value);
 }
 
 /* A and B's whole state: values, rings, state blocks, stats */
@@ -241,6 +243,7 @@ static const char* same_state(const ysig_graph* a, const ysig_graph* b) {
     sa.arm_past_far = sb.arm_past_far = 0;
     sa.arm_past_full = sb.arm_past_full = 0;
     sa.arm_hits_retracted = sb.arm_hits_retracted = 0;
+    sa.arm_hits_superseded = sb.arm_hits_superseded = 0;
     sa.arm_rows_stale = sb.arm_rows_stale = 0;
     sa.arm_derived_stale = sb.arm_derived_stale = 0;
     if (memcmp(&sa, &sb, sizeof sa)) return "the stats";
@@ -397,6 +400,7 @@ int main(int argc, char** argv) {
                 drain(&ga, &ha);
                 if (s1.arm_past_far > s0.arm_past_far || s1.arm_past_full > s0.arm_past_full) { why = "fell back"; break; }
                 if (s1.arm_hits_retracted > s0.arm_hits_retracted) { why = "retracted"; break; }
+                if (s1.arm_hits_superseded > s0.arm_hits_superseded) { why = "superseded"; break; }
                 why = same_state(&ga, &gb);
                 if (why) break;
             }
@@ -420,7 +424,10 @@ int main(int argc, char** argv) {
             qsort(hb.h, (size_t)hb.n, sizeof(ysig_hit), cmp_hit);
             if (ha.n != hb.n) why = "the hits handed out";
             for (k = 0; !why && k < ha.n; k++)
-                if (memcmp(&ha.h[k], &hb.h[k], sizeof(ysig_hit))) {
+                /* a hold met by the arm's time is the earlier arm's hit:
+                 * B's arm finds it, A had it from later input */
+                if (ha.h[k].node != hb.h[k].node || ha.h[k].t != hb.h[k].t || memcmp(&ha.h[k].value, &hb.h[k].value, sizeof(ysig_value)) ||
+                    (ha.h[k].t_found != hb.h[k].t_found && ha.h[k].t > t_arm)) {
                     why = "the hits handed out";
                     if (g_dbg) {
                         const ysig_value* xa = &ha.h[k].value;
@@ -438,9 +445,10 @@ int main(int argc, char** argv) {
             if (!why) g_exact[c]++;
             else if (!strcmp(why, "fell back")) g_back[c]++;
             else if (!strcmp(why, "retracted")) g_retr[c]++;
+            else if (!strcmp(why, "superseded")) g_sup[c]++;
             else g_wrong[c]++;
         }
-        if (why && strcmp(why, "fell back") && strcmp(why, "retracted") && shown++ < 5) {
+        if (why && strcmp(why, "fell back") && strcmp(why, "retracted") && strcmp(why, "superseded") && shown++ < 5) {
             printf("case %ld wrong: %s (a_pos %d b_pos %d of %d, t_arm %lld)\n", it, why, a_pos, b_pos, nc, (long long)t_arm);
             if (g_dbg) {
                 printf("  detect: test %g lane %g hold %g start %g rep %g entry %g out %g in %d; caught up %lld\n", gd.n[gd.det].p[0], gd.n[gd.det].p[1],
@@ -456,7 +464,7 @@ int main(int argc, char** argv) {
             }
         }
     }
-    printf("%-40s %9s %9s %9s %9s %6s\n", "category", "cases", "exact", "fell back", "retracted", "wrong");
-    for (c = 0; c < NCAT; c++) printf("%-40s %9ld %9ld %9ld %9ld %6ld\n", g_cat[c], g_n[c], g_exact[c], g_back[c], g_retr[c], g_wrong[c]);
+    printf("%-40s %9s %9s %9s %10s %9s %6s\n", "category", "cases", "exact", "fell back", "superseded", "retracted", "wrong");
+    for (c = 0; c < NCAT; c++) printf("%-40s %9ld %9ld %9ld %10ld %9ld %6ld\n", g_cat[c], g_n[c], g_exact[c], g_back[c], g_sup[c], g_retr[c], g_wrong[c]);
     return g_wrong[0] ? 1 : 0;
 }

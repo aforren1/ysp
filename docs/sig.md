@@ -622,10 +622,26 @@ calls would have left: values, rings, states, stats and the digest. It is
 the same code on the same calls, so no op needs a rule of its own. Hits
 the caller already took are not queued again (a hit is the same when its
 node, time and whole value are). One the new history no longer finds
-cannot be taken back: it is counted in `arm_hits_retracted`. `on_row` and
+cannot be taken back: it is counted. A hit of the armed detect itself at
+or after the arm's time is its earlier arm's, which the re-arm ends: it
+goes in `arm_hits_superseded`. A caller that acts on hits in time order
+took none after the arm's time (the player drops the earlier arm's hits
+by an arm count); one at the arm's time is the hit that ended the earlier
+arm, and the re-arm at that time follows it.
+Any other goes in `arm_hits_retracted`: a hit the caller may have acted
+on, for example a hit of another detect on the armed one's output, or the
+armed detect's hold that ended before the arm's time but that only input
+after it found. `on_row` and
 `ysig_derived()` do not get the window's rows and events again; a change
 in them is counted (`arm_rows_stale`, `arm_derived_stale`). A reset is a
 barrier: an arm after it is never placed before it.
+
+An arm at t first completes its detect's sample-rate hold met by t, as
+`ysig_settle()` at t would: the hold ended under the earlier arm, so it is
+that arm's hit, also when only input after t found it. Without this, a run
+again that puts the arm before that input loses a hit the caller already
+took at or before t (the player's re-arm of an `until` at the hit that
+ended the state before it).
 
 **Where it falls back.** An arm before the oldest checkpoint, or after the
 logs ran full, tests the newest value as 0.4.1 did, counted in

@@ -1751,7 +1751,7 @@ id = "210"
 name = "no run again: an arm in the past tests the newest value"
 test = "sig"
 why = "v0.6.0 (test_arm_window 2, sig_arm_diff)."
-find = '''    ysig__rerun(g, kslot);
+find = '''    ysig__rerun(g, kslot, node, t_ns);
     g->st.arm_caught_up++;'''
 replace = '''    ysig__arm_plain(g, node, t_ns);
     g->st.arm_caught_up++;'''
@@ -1828,9 +1828,9 @@ replace = '''        { g->hitq[j] = g->hitq[q]; cu->qseq[j] = cu->qseq[q]; j++; 
 id = "219"
 name = "a retracted hit not counted"
 test = "sig"
-why = "v0.6.0 (test_arm_window 5)."
-find = '''    for (i = 0; i < cu->n_tmp; i++) if (cu->tmp[i].seq != UINT64_MAX) keep.arm_hits_retracted++;'''
-replace = ''''''
+why = "v0.6.0 (test_arm_window: another detect's hit on the re-armed one's output)."
+find = '''            else keep.arm_hits_retracted++;'''
+replace = '''            else (void)0;'''
 
 [[mutant]]
 id = "220"
@@ -1917,18 +1917,18 @@ id = "229"
 name = "settle on a frame-rate detect"
 test = "sig"
 why = "v0.6.0: a frame-rate detect tests at onsets (test_arm_window)."
-find = '''        if (n->op != YSIG_OP_DETECT || n->p[5] == 1 || n->kns[0] <= 0 || (g->nd[n->in[0]].flags & YSIG__F_FRAME)) continue;'''
-replace = '''        if (n->op != YSIG_OP_DETECT || n->kns[0] <= 0 || (g->nd[n->in[0]].flags & YSIG__F_FRAME)) continue;'''
+find = '''    if (n->op != YSIG_OP_DETECT || n->p[5] == 1 || n->kns[0] <= 0 || (g->nd[n->in[0]].flags & YSIG__F_FRAME)) return;'''
+replace = '''    if (n->op != YSIG_OP_DETECT || n->kns[0] <= 0 || (g->nd[n->in[0]].flags & YSIG__F_FRAME)) return;'''
 
 [[mutant]]
 id = "230"
 name = "settle's hit no rise"
 test = "sig"
 why = "v0.6.0: a latch on the hit (test_arm_window)."
-find = '''        if ((int)n->p[13] == YSIG_OUT_HIT && s->fired && !was) {
-            g->val[i].v[0] = 1.0;'''
-replace = '''        if (0) {
-            g->val[i].v[0] = 1.0;'''
+find = '''    if ((int)n->p[13] == YSIG_OUT_HIT && s->fired && !was) {
+        g->val[i].v[0] = 1.0;'''
+replace = '''    if (0) {
+        g->val[i].v[0] = 1.0;'''
 
 [[mutant]]
 id = "231"
@@ -1945,3 +1945,28 @@ test = "sig_diff"
 why = "v0.6.0: a hit's value is all of it (sig_arm_diff: a reset-armed hold)."
 find = '''!memcmp(&l->h.value, &h->value, sizeof h->value)) {'''
 replace = '''!memcmp(l->h.value.v, h->value.v, sizeof h->value.v)) {'''
+
+[[mutant]]
+id = "233"
+name = "every hit the run again does not find counted as superseded"
+test = "sig"
+why = "v0.6.0 (test_arm_window): only the armed detect's own at or after the arm's time are its earlier arm's."
+find = '''            if (cu->tmp[i].h.node == node && cu->tmp[i].h.t >= t) keep.arm_hits_superseded++;'''
+replace = '''            if (1) keep.arm_hits_superseded++;'''
+
+[[mutant]]
+id = "234"
+name = "a superseded hit counted as retracted"
+test = "sig"
+why = "v0.6.0 (test_arm_window 5): the re-armed detect's own hit after the arm's time."
+find = '''            if (cu->tmp[i].h.node == node && cu->tmp[i].h.t >= t) keep.arm_hits_superseded++;'''
+replace = '''            if (0) keep.arm_hits_superseded++;'''
+
+[[mutant]]
+id = "235"
+name = "an arm does not complete the hold met by its time"
+test = "sig"
+why = "v0.6.0 (test_arm_window): a re-arm at its own hit's time that later input found keeps the hit."
+find = '''    ysig__settle_det(g, node, t_ns);
+    fell = hit_out && g->val[node].v[0] != 0;'''
+replace = '''    fell = hit_out && g->val[node].v[0] != 0;'''
