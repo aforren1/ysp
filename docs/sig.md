@@ -1023,8 +1023,8 @@ ran (640.5 million events taken, 373.5 million rows, 10.17 million hits).
   its default seed). 215 and 222 are kept with notes (a cost only, or not
   reached); 247 (the rows' metadata) is reached about once in 23,500
   cases and survives the runner's 20,000. 23, 31, 65, 125, 161, 172, 190, 191 and
-  198 follow the code. The list: 229 of 229 as expected (2026-11-13,
-  279 s at 4 jobs).
+  198 follow the code. The list: 244 of 244 as expected, 233 killed and
+  11 survived as noted (2026-11-13, 907e962, 220 s at 4 jobs).
 
 ### Zones
 
