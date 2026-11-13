@@ -1061,7 +1061,18 @@ class Run:
         kind = c[0]
         if kind == "resp":
             tr.resp_used = True
-            if t < v.entry_t:
+            # The current state's entry: an until splits a state's steps
+            # into states (3.11 rule 9: the wait is a state of its own; the
+            # steps after it are the next state), so in a wait or a later
+            # part it is that part's entry (fixed 2026-11-13, seed 23572;
+            # the until's timeout is clamped to the wait's entry the same
+            # way). F27 and F28 keep the parts one visit and one row.
+            ref = v.entry_t
+            if v.waiting:
+                ref = max(ref, v.wait_t)
+            elif v.part > 0:
+                ref = max(ref, v.part_t)
+            if t < ref:
                 # GAP (3.11 rule 11 against D20 rule 3): a response that
                 # becomes final in a state entered after the response's time
                 # (a record that came late). Reading (the coordinator,
@@ -1069,7 +1080,7 @@ class Run:
                 # of the response's time and the state's entry. A reading,
                 # not a decision, so the mark stays.
                 self.gap("response-before-entry")
-                t = v.entry_t
+                t = ref
         if kind in ("partend", "until"):
             self.part_step(v, kind, t, k, phase, cands)
             return
