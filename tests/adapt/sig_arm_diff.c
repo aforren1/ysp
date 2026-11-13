@@ -252,6 +252,79 @@ static const char* same_state(const ysig_graph* a, const ysig_graph* b) {
     return NULL;
 }
 
+/* SIG_ARM_CLASSIFY: a wrong case run again against B2, the time order of
+ * sig_arm_oracle.c (every arm placed by it, the earlier ones too, and the
+ * input-known completion for an arm made in the past), compared after
+ * every call at which both have run the same set of calls and at the
+ * end. 0: A agrees with B2 (this file's B, which moves A's arm only, is
+ * the cause); 1: A differs from B2. */
+static int classify(const graph_def* gd, const call* cs, int nc, int a_pos, int64_t t_arm, const char** where) {
+    static call la[MAXC + 1], lb[MAXC + 1];
+    static int ai_b[MAXC + 1], pm[MAXC + 1], pastb[MAXC + 1];
+    static ysig_graph g1, g2;
+    static hits h1, h2;
+    int n = 0, nb = 0, k, p, bi = 0, armed = 0;
+    for (k = 0; k < nc; k++) {
+        if (k == a_pos) { la[n] = cs[k]; la[n].kind = K_ARM; la[n].node = gd->det; la[n].t = t_arm; n++; }
+        la[n++] = cs[k];
+    }
+    if (a_pos >= nc) { la[n].kind = K_ARM; la[n].node = gd->det; la[n].t = t_arm; n++; }
+    for (k = 0; k < n; k++) {
+        const call* c = &la[k];
+        int j;
+        if (c->kind != K_ARM) { lb[nb] = *c; ai_b[nb] = k; pastb[nb] = 0; nb++; continue; }
+        for (p = nb; p > 0; p--) {
+            const call* q = &lb[p - 1];
+            int64_t ti;
+            if (is_input(q, &ti)) { if (ti <= c->t) break; continue; }
+            if (q->kind == K_SET || q->kind == K_DISARM || q->kind == K_RESET || q->kind == K_RESET_TRIAL) break;
+            if ((q->kind == K_RECENTER || q->kind == K_ARM) && q->t <= c->t) break;
+        }
+        memmove(&lb[p + 1], &lb[p], sizeof(call) * (size_t)(nb - p));
+        memmove(&ai_b[p + 1], &ai_b[p], sizeof(int) * (size_t)(nb - p));
+        memmove(&pastb[p + 1], &pastb[p], sizeof(int) * (size_t)(nb - p));
+        lb[p] = *c;
+        ai_b[p] = k;
+        pastb[p] = 0;
+        for (j = k - 1; j >= 0 && la[j].kind != K_RESET && la[j].kind != K_RESET_TRIAL; j--) {
+            int64_t ti;
+            if (is_input(&la[j], &ti) && ti > c->t) { pastb[p] = 1; break; }
+        }
+        nb++;
+    }
+    for (k = 0; k < n; k++) pm[k] = -1;
+    for (k = 0; k < nb; k++) if (k > pm[ai_b[k]]) pm[ai_b[k]] = k;
+    for (k = 1; k < n; k++) if (pm[k - 1] > pm[k]) pm[k] = pm[k - 1];
+    if (!open_graph(&g1, gd, g_arena_a, g_ch_a)) return 1;
+    {
+        /* B2: no window */
+        static graph_def g0;
+        g0 = *gd;
+        if (!open_graph(&g2, &g0, g_arena_b, g_ch_b)) return 1;
+        g2.cu = NULL;
+    }
+    h1.n = h2.n = 0;
+    ysig_reset(&g1, 0);
+    ysig_reset(&g2, 0);
+    *where = NULL;
+    for (k = 0; k < n; k++) {
+        do_call(&g1, &la[k], gd->adapter);
+        drain(&g1, &h1);
+        if (g1.st.arm_caught_up) armed = 1;
+        if (pm[k] != k) continue;
+        for (; bi <= k; bi++) {
+            if (lb[bi].kind == K_ARM && pastb[bi]) ysig__settle_det(&g2, lb[bi].node, lb[bi].t, 1);
+            do_call(&g2, &lb[bi], gd->adapter);
+            drain(&g2, &h2);
+        }
+        if (armed && !g1.st.arm_past_far && !g1.st.arm_past_full) {
+            *where = same_state(&g1, &g2);
+            if (*where) return 1;
+        }
+    }
+    return 0;
+}
+
 int main(int argc, char** argv) {
     long cases = argc > 1 ? atol(argv[1]) : getenv("SIG_ARM_CASES") ? atol(getenv("SIG_ARM_CASES")) : 3000, it;
     long shown = 0;
@@ -508,7 +581,14 @@ int main(int argc, char** argv) {
             else if (!strcmp(why, "superseded")) g_sup[c]++;
             else g_wrong[c]++;
         }
-        if (why && strcmp(why, "fell back") && strcmp(why, "retracted") && strcmp(why, "superseded")) printf("FAIL case %ld: %s\n", it, why);
+        if (why && strcmp(why, "fell back") && strcmp(why, "retracted") && strcmp(why, "superseded")) {
+            printf("FAIL case %ld: %s\n", it, why);
+            if (getenv("SIG_ARM_CLASSIFY")) {
+                const char* w2 = NULL;
+                int cl = classify(&gd, cs, nc, a_pos, t_arm, &w2);
+                printf("CLASS case %ld: %s (%s; detect on a view %d)\n", it, cl ? "A differs from time order" : "A agrees with time order: this B is the cause", w2 ? w2 : "-", cats[5]);
+            }
+        }
         if (why && strcmp(why, "fell back") && strcmp(why, "retracted") && strcmp(why, "superseded") && shown++ < 5) {
             printf("case %ld wrong: %s (a_pos %d b_pos %d of %d, t_arm %lld)\n", it, why, a_pos, b_pos, nc, (long long)t_arm);
             if (g_dbg) {

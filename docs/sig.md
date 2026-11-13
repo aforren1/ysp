@@ -645,8 +645,9 @@ What the guarantee does not cover, counted by name:
   (below), and a graph with no window;
 - a detect on another detect's hit output does not see a rise and a fall
   that an arm makes at one time (an arm's change reaches latches, peaks
-  and pure nodes, not detects): its hit comes out retracted, counted (the
-  player builds no such graph);
+  and pure nodes, not detects). Accepted for now: the player builds no
+  such graph, and the hit comes out retracted (counted in
+  `arm_hits_retracted`), so the player's guard stops;
 - `ysig_arm()` from a callback (`on_row`, the journal) during another
   call: refused, counted in `arm_reentry`;
 - a custom op with effects outside its state runs them again.
@@ -701,20 +702,27 @@ of the third review), and two randomized differentials:
 
 - `tests/adapt/sig_arm_oracle.c`, the time-order oracle: B builds the
   guarantee's order from the calls and A's hand-outs alone (its rule is
-  in prose at the top of the file) on a graph with no window, and A must
-  give B's values, rings, op state, stats (but the digest and the
-  window's counts), bound channels, hits (extras counted, a hit a
+  in prose at the top of the file) on a graph with no window. B makes
+  one internal call, `ysig__settle_det()`, for an arm A made in the past:
+  the arm's own hold completion, which no public call gives alone. After
+  every call from A's first arm in the past on at which both have run
+  the same calls, and at the end, A must give B's values, rings, op
+  state, stats (but the digest and the window's counts) and bound
+  channels. At the end, also B's hits (extras counted, a hit a
   time-order caller could have taken as retracted), rows and derived
   events (in every column, or counted stale). Shapes: several detects
   (one on `all()` of detects, one on a latch of a hit, views, frame
   rate), emit, records, a channel node and its `ysig_set()`, a bind,
   set, disarm and recenter before an arm, arms ahead of the input, late
-  reports from a second device, bursts of arms, random drains, small
-  windows. Frozen before the fix (2113774); each later change is its own
-  commit with its reason. On 0.6.0 as reviewed: 3,222 of 3,458 compared
-  cases wrong (5,000 cases, seed 7).
+  reports from a second device, equal-time samples, `ysig_reset()` and
+  `ysig_reset_trial()`, bursts of arms, random drains, small windows.
+  Frozen before the fix (2113774); each later change is its own commit
+  with its reason. The oracle as of 550dd2b on 0.6.0 as reviewed
+  (c7dc717): 3,408 of 3,592 compared cases wrong (5,000 cases, seed 7,
+  GCC 12.2 `-O2`).
 - `tests/adapt/sig_arm_diff.c`, the first differential (one detect, the
-  arm moved by the rule), kept.
+  arm moved by the rule), retired from ctest (below); the file stays as a
+  diagnostic.
 
 Results after the decision on fix 1 (2026-11-13, the Linux desktop,
 GCC 12.2 with ASan and UBSan, `setarch -R`, 8 processes, nothing else
@@ -725,11 +733,20 @@ running):
 | Oracle, seeds 97001 to 97008, 7 min 38 s | 1,040,000 | 854,359 | 185,641 | 0 |
 | First differential, seeds 98001 to 98008, 19 min 20 s | 1,200,000 | 1,197,037 | 2,963 | 3,038 |
 
-No sanitizer report in either. The first differential's 3,038 are open:
-it compares A and B after every call from A's arm on (not only at the
-end), and most are a ring one entry longer or shorter, 252 of them on a
-detect on a view; the oracle, which compares the end, finds none. Not yet
-traced to a cause. `sig_fuzz` (10,000,000 inputs, seeds 8501 to 8508,
+No sanitizer report in either. The first differential's 3,038 come from
+its B, not from the window. That B moves only the case's last arm to its
+place; an earlier arm that the window placed in the past stays at its
+call position in B, so B is not in time order. The diagnostic
+`SIG_ARM_CLASSIFY=1` runs each wrong case again against the oracle's
+order (every arm placed by the rule, the hold met up to t for an arm
+made in the past), and compares values, rings, op state and stats after
+every call at which both have run the same calls, and at the end. Seeds
+98001 to 98003, 40,000 cases each: 102, 107 and 111 wrong (62 of the
+first seed's 102 a ring's length, 21 op state, 17 stats, 1 a value, 1 a
+ring entry), 25 of the 320 on a detect on a view. A agrees with the
+oracle's order in all 320. `test_sig_arm_diff` is therefore retired from
+ctest; the oracle covers its shapes and compares after every call too.
+`sig_fuzz` (10,000,000 inputs, seeds 8501 to 8508,
 39 s): no report, every replay equal.
 
 ### Byte-identical ports
@@ -848,8 +865,9 @@ counts this program's allocator calls during the 60 s run (glibc).
   window, logs that ran full and the window working again after a frame,
   a reset as a barrier, rows changed (counted), a frame's channel values
   kept with the call, and the desc's limits.
-  `tests/adapt/sig_arm_diff.c` (ctest `test_sig_arm_diff`, 3,000 cases):
-  the randomized differential of an arm in the past. At scale
+  `tests/adapt/sig_arm_diff.c` (ctest `test_sig_arm_diff`, 3,000 cases,
+  until 0.6.0's fix round retired it; see "Results after the decision on
+  fix 1"): the randomized differential of an arm in the past. At scale
   (2026-11-12, Linux desktop, GCC 12.2 with ASan and UBSan, `setarch -R`,
   8 processes, seeds 92001 to 92008, 16 min 7 s, after the arm completes
   its hold met by its time): 1,200,000 cases, 1,155,408 exact, 10,726 fell
@@ -1000,9 +1018,10 @@ ran (640.5 million events taken, 373.5 million rows, 10.17 million hits).
   queued twice, retracted hits, rows, the journal, resets, frame values,
   the logs' capacity, the counts, `ysig_settle()`, the desc's limits, the
   hit's whole value, superseded against retracted hits, the arm's hold
-  met by its time); the `sig_diff` test runs the differential (50,000
-  cases) for those only it reaches. 214, 215 and 222 are kept with notes
-  (a cost only, or not reached). 23, 31, 65, 125, 161, 172, 190, 191 and
+  met by its time); the `sig_oracle` test runs the oracle (20,000 cases,
+  its default seed). 215 and 222 are kept with notes (a cost only, or not
+  reached); 247 (the rows' metadata) is reached about once in 23,500
+  cases and survives the runner's 20,000. 23, 31, 65, 125, 161, 172, 190, 191 and
   198 follow the code. The list: 229 of 229 as expected (2026-11-13,
   279 s at 4 jobs).
 
