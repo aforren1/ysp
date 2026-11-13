@@ -256,7 +256,7 @@ int main(int argc, char** argv) {
     long cases = argc > 1 ? atol(argv[1]) : getenv("SIG_ARM_CASES") ? atol(getenv("SIG_ARM_CASES")) : 3000, it;
     long shown = 0;
     int c;
-    g_rs = argc > 2 ? strtoull(argv[2], NULL, 10) : 88172645463325252ull;
+    g_rs = argc > 2 ? strtoull(argv[2], NULL, 10) : getenv("SIG_ARM_SEED") ? strtoull(getenv("SIG_ARM_SEED"), NULL, 10) : 88172645463325252ull;
     g_dbg = argc > 3 ? atoi(argv[3]) : 0;
     if (!g_rs) g_rs = 1;
     for (it = 0; it < cases; it++) {

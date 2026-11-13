@@ -4030,6 +4030,23 @@ static void test_arm_review(void) {
     e = PEN_E(70 * MS, 1, 20, 0, YIN_TIER_2); ysig_feed(&g, &e);
     ysig_get_stats(&g, &st);
     CHECK(m == 1 && (int)st.hits >= k && st.arm_hits_retracted == 0 && ysig_value_of(&g, 3)->v[0] == 0);
+    /* 2b: a frame-rate detect's hold met at 51 ms, which only the next
+     * onset (66 ms) would find; input fed to 60 ms. An arm at 55 ms meets
+     * it first: the hit at 51 ms is the earlier arm's */
+    n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 2); n[0].history = 256;
+    n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1);
+    n[1].p[YSIG_DETECT_TEST] = YSIG_TEST_LE; n[1].p[YSIG_DETECT_LANE] = 0; n[1].p[YSIG_DETECT_LEVEL] = 1;
+    n[1].p[YSIG_DETECT_START] = 1; n[1].p[YSIG_DETECT_HOLD] = 0.05; n[1].p[YSIG_DETECT_AT] = 1;
+    R3_OPEN(2);
+    for (t = 1 * MS; t <= 60 * MS; t += MS) {
+        e = PEN_E(t, 1, 0, 0, YIN_TIER_2); ysig_feed(&g, &e);
+        if (t == 1 * MS) ysig_arm(&g, 1, 1 * MS);
+        if (t == 15 * MS) { f = frame_at(1, 16 * MS, 0, NULL, 0); f.poll_ns = 15 * MS; ysig_frame(&g, &f); }
+        if (t == 32 * MS) { f = frame_at(2, 33 * MS, 0, NULL, 0); f.poll_ns = 32 * MS; ysig_frame(&g, &f); }
+        if (t == 49 * MS) { f = frame_at(3, 50 * MS, 0, NULL, 0); f.poll_ns = 49 * MS; ysig_frame(&g, &f); }
+    }
+    CHECK(ysig_detected(&g, h, 64) == 0);
+    CHECK(ysig_arm(&g, 1, 55 * MS) && ysig_detected(&g, h, 64) == 1 && h[0].t == 51 * MS);
     /* 3: a disarm, then an arm in the past: the arm goes after the disarm
      * (it was made after it), so the detect is armed */
     n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 2); n[0].history = 64;
