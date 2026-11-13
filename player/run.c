@@ -2677,6 +2677,7 @@ int pl_run(pl_player* p) {
             yjs_push(&a, arr, o);
         }
         if (yds_session_set(&p->ds, "node_seeds", arr) < 0) pl_fail(p, "session.json: %s", yds_error(&p->ds));
+        if (pl_v2_session_end(p, &a) < 0) pl_fail(p, "session.json: %s", yds_error(&p->ds));
         /* leaf runs past the log: their seeds re-derive from the session's */
         if (yds_session_set(&p->ds, "node_seeds_unlogged", yjs_new_int(&a, p->n_seeds_unlogged)) < 0) pl_fail(p, "session.json: %s", yds_error(&p->ds));
         if (p->aborted) {

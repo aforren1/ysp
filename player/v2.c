@@ -202,6 +202,7 @@ struct pl_v2 {
     int trial_ev0;             /* the trial's first event                   */
     uint32_t* arm_gen;         /* per node: arms so far, so a drained hit of
                                 * an arm since made is the old arm's        */
+    int64_t arm_bad;           /* sig.h's retracted + stale counts seen     */
     /* the visit's tweens, every part's: rule 8 stops one still running at
      * the value it last wrote (a track is no event ytl_remove() takes) */
     struct v2_tw { int ch; int64_t end; }* tw; int n_tw, cap_tw;   /* sized at load */
@@ -2036,19 +2037,38 @@ static bool v2_if_true(pl_player* p, pl_v2* v, const v2_exit* x) {
 
 static int v2_take(pl_player* p, pl_v2* v, const v2_exit* x, int64_t t, const yscr_frame* f, bool hit);
 
+/* sig.h 0.6.0: an arm before input the graph had runs it again from a
+ * checkpoint. The player takes changes in time order and arms at a take's
+ * time t, so a run again changes only what is after t: the re-armed
+ * detect's earlier arm's hits (superseded, and dropped here by arm_gen)
+ * and the hit at t that ended that arm. A hit of another detect, a row
+ * or a derived event that it changes is one the player may have acted on
+ * or written: an internal guard (docs/player.md, "An arm in the past"). */
+static int v2_arm_check(pl_player* p, pl_v2* v, const char* name, int64_t t) {
+    ysig_stats st;
+    int64_t bad;
+    ysig_get_stats(&v->g, &st);
+    bad = st.arm_hits_retracted + st.arm_rows_stale + st.arm_derived_stale;
+    if (bad == v->arm_bad) return 0;
+    v->arm_bad = bad;
+    pl_fail(p, "template '%s': internal guard: a past arm of '%s' at %.9f s changed what was already taken or written (sig.h: %lld hits retracted, %lld row runs, %lld derived runs changed)",
+            v->def->name, name, (double)(t - v2_anchor(p)) / 1e9, (long long)st.arm_hits_retracted, (long long)st.arm_rows_stale, (long long)st.arm_derived_stale);
+    return -1;
+}
+
 static int v2_arm_ctl(pl_player* p, pl_v2* v, int ci, int64_t t) {
     v2_ctl* c = &v->ctl[ci];
     if (c->hit < 0) return 0;
     v->arm_gen[c->hit]++;
     if (!ysig_arm(&v->g, c->hit, t)) { pl_fail(p, "template '%s': cannot arm '%s'", v->def->name, c->def->name); return -1; }
-    return 0;
+    return v2_arm_check(p, v, c->def->name, t);
 }
 
 static int v2_arm_exit(pl_player* p, pl_v2* v, const v2_exit* x, int64_t t) {
     if (x->node < 0) return 0;
     v->arm_gen[x->node]++;
     if (!ysig_arm(&v->g, x->node, t)) { pl_fail(p, "template '%s': cannot arm '%s'", v->def->name, v->ctl[x->ctl].def->name); return -1; }
-    return 0;
+    return v2_arm_check(p, v, v->ctl[x->ctl].def->name, t);
 }
 
 static void v2_resp_arm(pl_player* p, pl_v2* v, int64_t t) {
@@ -2539,15 +2559,17 @@ static int v2_timed_to(pl_player* p, pl_v2* v, const yscr_frame* f, int64_t limi
             }
         }
         if (v->has_graph) {
-            /* rule 4: a hold the hand meets before a timed change, with input
-             * fed up to its time (the frame's onset, or a response's end):
-             * the hit first */
-            int64_t due = v->steps_pending && v->steps_end <= wend && v->steps_end <= bt ? v->steps_end : best && bt <= wend ? bt : INT64_MAX;
+            /* rule 4: input is fed up to the frame's onset (or a response's
+             * end), so a hold the hand meets by then is a hit before the
+             * timed changes and the evaluate; v2_hits() takes a timed exit
+             * or a steps' end before it first, and rule 8 drops the steps
+             * at or after the hit. ysig_frame() would find it only after
+             * the evaluate had landed those steps */
             int64_t fed = limit < f->onset ? limit : f->onset;
-            if (due != INT64_MAX) {
+            {
                 int cur = v->cur;
                 int64_t ent = v->entry_t;
-                if (ysig_settle(&v->g, due < fed ? due : fed) < 0 || v2_hits(p, v, f) < 0) return -1;
+                if (ysig_settle(&v->g, fed) < 0 || v2_hits(p, v, f) < 0) return -1;
                 if (v->cur != cur || v->entry_t != ent) continue;
             }
         }
@@ -3763,6 +3785,46 @@ int pl_v2_session_json(pl_player* p, yjs_arena* a, yjs_value* s) {
     yjs_set(a, s, "signal_roles", arr);
     yjs_set(a, s, "recenter_skipped", yjs_new_int(a, S->recenter_skipped));
     return 0;
+}
+
+/* sig.h 0.6.0's window, summed over the templates' graphs (stats outlive
+ * a reset): the arms run again, the arms that fell back to the newest
+ * value (inexact), and what a run again changed after the player had it.
+ * Version 2 only, so version 1's session.json keeps its bytes. */
+int pl_v2_session_end(pl_player* p, yjs_arena* a) {
+    pl_v2_session* S = p->v2s;
+    ysig_stats st, sum;
+    yjs_value* o;
+    int i, n = 0;
+    if (!S) return 0;
+    memset(&sum, 0, sizeof sum);
+    for (i = 0; i < S->n_t; i++) {
+        if (!S->t[i] || !S->t[i]->has_graph) continue;
+        ysig_get_stats(&S->t[i]->g, &st);
+        sum.arm_caught_up += st.arm_caught_up;
+        sum.arm_past_off += st.arm_past_off;
+        sum.arm_past_far += st.arm_past_far;
+        sum.arm_past_full += st.arm_past_full;
+        sum.arm_hits_retracted += st.arm_hits_retracted;
+        sum.arm_hits_superseded += st.arm_hits_superseded;
+        sum.arm_rows_stale += st.arm_rows_stale;
+        sum.arm_derived_stale += st.arm_derived_stale;
+        n++;
+    }
+    if (!n) return 0;
+    o = yjs_new(a, YJS_OBJECT);
+    yjs_set(a, o, "caught_up", yjs_new_int(a, sum.arm_caught_up));
+    yjs_set(a, o, "past_off", yjs_new_int(a, sum.arm_past_off));
+    yjs_set(a, o, "past_far", yjs_new_int(a, sum.arm_past_far));
+    yjs_set(a, o, "past_full", yjs_new_int(a, sum.arm_past_full));
+    yjs_set(a, o, "hits_superseded", yjs_new_int(a, sum.arm_hits_superseded));
+    yjs_set(a, o, "hits_retracted", yjs_new_int(a, sum.arm_hits_retracted));
+    yjs_set(a, o, "rows_stale", yjs_new_int(a, sum.arm_rows_stale));
+    yjs_set(a, o, "derived_stale", yjs_new_int(a, sum.arm_derived_stale));
+    if (sum.arm_past_off + sum.arm_past_far + sum.arm_past_full > 0)
+        fprintf(stderr, "ysp_player: %lld arms in the past fell back to the input's newest value (inexact; session.json sig_arms)\n",
+                (long long)(sum.arm_past_off + sum.arm_past_far + sum.arm_past_full));
+    return yds_session_set(&p->ds, "sig_arms", o);
 }
 
 /* The host's op check (host.c): template ti's runtime states' steps, each

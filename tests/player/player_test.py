@@ -2094,6 +2094,20 @@ def t_v2_findings(ctx):
          "states": [{"name": "a", "steps": [{"on": "s"}], "exits": [{"on": "r0", "to": "end", "outcome": "hit"}, {"after_s": 0.098, "to": "end", "outcome": "timed"}]}]}
     r = one("vm_settle_timed", v2base({"t": t}, [{"name": "l", "trial": "t"}], roles=pen), ["--sim-gain", "hand=1", "--samples", inside0])
     check(r.rc == 0 and r.trials[0]["outcome"] == "hit" and [x[2] for x in rows(r)] == [0.095], "rule 4: the hold before the timed exit: %s %s" % (r.trials[:1] and r.trials[0]["outcome"], rows(r)))
+    # a hold that ends at the deadline's time: rule 4's list order, the
+    # response's exit first (the settle before the response's end sees
+    # the end)
+    t = {"controls": {"r0": {"control": "region", "of": "hand", "radius": 10, "stay_s": 0.105}},
+         "states": [{"name": "a", "steps": [{"on": "s"}], "exits": [{"on": "response", "to": "end", "outcome": "rsp"}, {"on": "r0", "to": "end", "outcome": "hit"}]}],
+         "response": dict(resp, duration_s=0.105)}
+    r = one("vm_settle_tie", v2base({"t": t}, [{"name": "l", "trial": "t"}], roles=pen, extra=dev), ["--sim-gain", "hand=1", "--samples", inside0, "--participant", "silent"])
+    check(r.rc == 0 and r.trials[0]["outcome"] == "rsp" and [x[2] for x in rows(r)] == [0.105], "rule 4: a hold at the deadline's time, the response listed first: %s %s" % (r.trials[:1] and r.trials[0]["outcome"], rows(r)))
+    # session.json: the window's counts (version 2 only)
+    sj = json.load(open(os.path.join(r.data, "session.json"))) if r.rc == 0 else {}
+    arms = sj.get("sig_arms", {})
+    check(sorted(arms) == ["caught_up", "derived_stale", "hits_retracted", "hits_superseded", "past_far", "past_full", "past_off", "rows_stale"] and
+          arms["hits_retracted"] == arms["rows_stale"] == arms["derived_stale"] == arms["past_far"] == arms["past_full"] == arms["past_off"] == 0,
+          "session.json sig_arms: %s" % arms)
     # rule 7: a backward at_s ends the steps at the cursor; a step it put
     # after that never lands
     t = {"states": [{"name": "s0", "steps": [{"on": "s"}, {"at_s": 0.137}, {"mark": "m1"}, {"at_s": 0.083}]}, {"name": "s1", "steps": [{"wait_s": 0.2}]}]}

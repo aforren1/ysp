@@ -303,6 +303,7 @@ it says), for each version:
 | `headers.trials`, `headers.gfx`, `headers.experiment` | The new versions (0.8.1, 0.20.0; experiment 0.5.0 from 0.7.0) | The same |
 | `signal_roles` | Not written | One object a signal role: `name`, `adapter` (`sim raw mouse` or `sim positions`), `device` (`--samples` or `none`), `type`, `units`, `per_count` (the `--sim-gain`), `calibration_sha256` (empty) |
 | `recenter_skipped` | Not written | The `recenter` steps that a graph did not apply (D40) |
+| `sig_arms` | Not written | ysp/sig.h's counts of arms in the past, summed over the session's graphs: `caught_up` (run again, exact), `past_off`, `past_far`, `past_full` (fell back to the newest value: inexact), `hits_superseded`, `hits_retracted`, `rows_stale`, `derived_stale` (docs/sig.md, "An arm in the past"). A run stops at a retracted hit or a stale row or event, so those three are 0 in a finished session |
 
 No other field changes. A version 1 data set keeps every other byte
 (Results).
@@ -417,10 +418,27 @@ that frame (the model's `refound-in-frame`), and a response's chain whose
 next sample came 1 ns later arms on the hand at the response's time (the
 model's s4548). Rows of a frame trace that the window had passed to the
 writer are not written again (counted by sig.h). An arm past the window
-falls back to the newest value, counted by sig.h. Before a response's
-end and before each timed change, the player calls `ysig_settle()` at
-that time (at most the time input is fed up to), so a hold the hand
-meets before it is a hit first (rule 4; the model's `future-arm-hold`).
+(a response's end that only the 1 s safety net made final) falls back to
+the newest value: inexact, so the session counts it (`sig_arms` in
+`session.json`) and says so on stderr at its end. Before the frame's
+timed changes and evaluate, the player calls `ysig_settle()` at the
+frame's onset, and before a response's end at that time: input is fed up
+to it, so a hold the hand met by then is a hit in rule 4's time order with
+the timed exits and the steps' ends (`v2_hits()` takes an earlier one
+first), and rule 8 drops the steps at or after it. `ysig_frame()` found
+such a hold only after the evaluate had landed those steps. At a hold
+that ends at a response's end, rule 4's list order decides.
+
+An arm in the past changes only what comes after its time: the player
+takes changes in time order and arms at a take's time. What a run again
+can change is the re-armed detect's earlier arm's hits after that time,
+which `arm_gen` drops, and the hit at that time that ended the earlier
+arm (sig.h's `arm_hits_superseded`). A hit of another detect, a row or a
+derived event that a run again changes (`arm_hits_retracted`,
+`arm_rows_stale`, `arm_derived_stale`) would be one the player acted on or
+wrote: the player stops by name ("internal guard: a past arm of ...
+changed what was already taken or written"). `session.json` has the
+session's sums in `sig_arms` (version 2 only).
 
 A trace's rows go through the data set's writer, as the other rows do: a
 real run's frame thread does not call `write()`. A trace row is wider than

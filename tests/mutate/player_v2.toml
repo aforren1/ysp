@@ -615,14 +615,32 @@ replace = '''            d->catchup_frames = 0;'''
 id = "v2-74"
 name = "no settle before a response's end"
 test = "player"
-why = "Rule 4 (vm_settle): the model's future-arm-hold."
+why = "Rule 4 (vm_settle): a hold met before a response's end."
 find = '''        if (rc == 0 && v->has_graph && !v->resp_taken && v->cur >= 0 && ysig_settle(&v->g, t) == 0) rc = v2_hits(p, v, f);'''
 replace = ''''''
 
 [[mutant]]
 id = "v2-75"
-name = "no settle before a timed change"
+name = "no settle at the frame's onset before its timed changes"
 test = "player"
-why = "Rule 4: a hold met before a timed exit or a steps' end."
-find = '''                if (ysig_settle(&v->g, due < fed ? due : fed) < 0 || v2_hits(p, v, f) < 0) return -1;'''
+why = "Rule 4 (vm_settle_timed): a hold met before a timed exit, a steps' end or a step."
+find = '''                if (ysig_settle(&v->g, fed) < 0 || v2_hits(p, v, f) < 0) return -1;'''
 replace = ''''''
+
+[[mutant]]
+id = "v2-76"
+name = "no stop when a past arm changes what was taken or written"
+test = "player"
+expect = "survived"
+note = "An internal guard: the player takes changes in time order and arms at a take's time, and sig.h's arm completes the hold met by its time, so no definition reaches it (0 of 25,000 model cases, the fuzz, player_test.py and compare.py; docs/player.md)."
+why = "sig.h 0.6.0's arm_hits_retracted, arm_rows_stale, arm_derived_stale: never silent."
+find = '''    if (bad == v->arm_bad) return 0;'''
+replace = '''    if (bad == v->arm_bad || 1) return 0;'''
+
+[[mutant]]
+id = "v2-77"
+name = "no sig_arms in session.json"
+test = "player"
+why = "The window's counts per session (vm_settle_tie checks sig_arms)."
+find = '''    return yds_session_set(&p->ds, "sig_arms", o);'''
+replace = '''    return 0;'''

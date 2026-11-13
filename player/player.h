@@ -736,6 +736,7 @@ int  pl_v2_draws(pl_player* p);
 const float* pl_v2_values(pl_player* p, const float* tl_values);
 const ygfx_bind* pl_v2_binds(pl_player* p, int* n);
 int  pl_v2_session_json(pl_player* p, yjs_arena* a, yjs_value* s);
+int  pl_v2_session_end(pl_player* p, yjs_arena* a);
 int  pl_v2_streams(pl_player* p);
 /* The running template's version 2 runtime, or none (a version 1 template). */
 void pl_v2_select(pl_player* p);
