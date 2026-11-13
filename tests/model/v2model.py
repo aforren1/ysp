@@ -979,6 +979,33 @@ class Run:
                         pool.append((d, oe[0], c, oe[1]))
             else:
                 limit = onset(k) + LEAD
+            # Reading (the coordinator's question of 2026-11-13; 3.11 rule
+            # 4, D20 rule 4, rule 5, sig.md "End a step on a hold"): a hold
+            # whose end H is at or before the time up to which all input is
+            # fed (the drained input's time in the poll, the frame's onset
+            # at the frame) has fired at H: no later sample can undo it, and
+            # sig.md's frame "whose onset is at or after it" completes it. So
+            # it is a candidate at H beside the timed exits, and the earliest
+            # time wins. A hold that ends after that time has not fired, and
+            # a timed exit this frame's window reaches is taken first (rule
+            # 2), even if the hold would end before the exit's time.
+            settle = now if phase == "P" else onset(k)
+            for name, d in v.dets.items():
+                h = d.frame(settle)
+                if h is not None:
+                    c = ("hit", h, name, v.vid)
+                    cands.append(c)
+                    oe = self.order_of(c, v)
+                    if oe is not None:
+                        pool.append((h, oe[0], c, oe[1]))
+            if v.until_det is not None:
+                h = v.until_det.frame(settle)
+                if h is not None:
+                    c = ("until", h, None, v.vid)
+                    cands.append(c)
+                    pool.append((h, self.order_of(c, v)[0], c, None))
+            if phase == "P" and pool:
+                limit = max(limit, max(p[0] for p in pool))
             for c5 in self.visit_timed(v):
                 c = c5[:4]
                 if c[1] <= limit and k >= c5[4]:
