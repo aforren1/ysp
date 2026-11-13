@@ -2061,10 +2061,8 @@ replace = '''    (void)0;'''
 [[mutant]]
 id = "247"
 name = "the rows' hash without the metadata"
-test = "sig_oracle"
-expect = "survived"
-note = "Rare in random cases: a run again that changes a row's tier, lanes or unc_us only. Measured 2026-11-13 (sig_arm_oracle 550dd2b, GCC 12.2 -O2): 17 failing cases in 400,000 (seeds 1 to 8, 50,000 each), none in the runner's 20,000 at the default seed. Not tuned to a seed that kills it."
-why = "Review of 0.6.0, finding 7 (sig_arm_oracle: rows compared in every column)."
+test = "sig"
+why = "Review of 0.6.0, finding 7 (sig_test, test_arm_window: rows that a run again changes in tier and unc_us only)."
 find = '''    h = ysig__hmix(h, (uint64_t)v->tier | ((uint64_t)v->lanes << 8) | ((uint64_t)v->unc_us << 16));'''
 replace = '''    (void)0;'''
 
@@ -2096,8 +2094,6 @@ replace = '''    ysig__arm_made(g, node, t, t <= g->t_cover ? t : g->t_cover, at
 id = "252"
 name = "a standing hit's output at the clock's time, with the latest input's sources"
 test = "sig"
-expect = "survived"
-note = "Equivalent, as 177 the other way: the pass that finds the hit already puts its rise at the hit's time; det_out() keeps it for a standing hit, which no test reads apart."
-why = "The rule the header states: a hit's rise at its time, with the sources of the input that met the test (test_arm_review)."
+why = "The rule the header states: a hit's rise at its time, with the sources of the input that met the test (test_arm_review; test_arm_window reads it apart: a later sample at the hit's time with another tier and unc_us)."
 find = '''    o->t = hit_out && s->fired ? s->t_hit : tc;'''
 replace = '''    o->t = tc;'''

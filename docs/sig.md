@@ -864,7 +864,8 @@ counts this program's allocator calls during the 60 s run (glibc).
   digest, a hold a frame covers, `ysig_settle()` (a hold met, one not yet
   met, a frame-rate detect it leaves), a retracted hit, an arm past the
   window, logs that ran full and the window working again after a frame,
-  a reset as a barrier, rows changed (counted), a frame's channel values
+  a reset as a barrier, rows changed (counted), rows changed in their
+  tier and `unc_us` only (counted), a frame's channel values
   kept with the call, and the desc's limits.
   `tests/adapt/sig_arm_diff.c` (ctest `test_sig_arm_diff`, 3,000 cases,
   until 0.6.0's fix round retired it; see "Results after the decision on
@@ -1021,10 +1022,14 @@ ran (640.5 million events taken, 373.5 million rows, 10.17 million hits).
   hit's whole value, superseded against retracted hits, the arm's hold
   met by its time); the `sig_oracle` test runs the oracle (20,000 cases,
   its default seed). 215 and 222 are kept with notes (a cost only, or not
-  reached); 247 (the rows' metadata) is reached about once in 23,500
-  cases and survives the runner's 20,000. 23, 31, 65, 125, 161, 172, 190, 191 and
-  198 follow the code. The list: 244 of 244 as expected, 233 killed and
-  11 survived as noted (2026-11-13, 907e962, 220 s at 4 jobs).
+  reached). The oracle reaches 247 (the rows' metadata) about once in
+  23,500 cases; `test_arm_window` kills it with two samples at one time
+  on one device that differ only in tier and `unc_us`. 23, 31, 65, 125, 161, 172, 190, 191 and
+  198 follow the code. 252 (a standing hit's output with the latest
+  input's sources) was noted as equivalent; the same `test_arm_window`
+  case kills it, by the row at the second sample. The list: 244 of 244
+  as expected, 235 killed and 9 survived as noted (2026-11-13, 245 s at
+  4 jobs).
 
 ### Zones
 

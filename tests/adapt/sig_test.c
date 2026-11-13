@@ -4284,6 +4284,29 @@ static void test_arm_window(void) {
     CHECK(ysig_arm(&g, 1, 1 * MS) && g_rows == k);   /* not passed again */
     ysig_get_stats(&g, &st);
     CHECK(st.arm_rows_stale == 1);
+    /* rows that the run again changes in their metadata only: two samples
+     * at one time on one device, equal but for tier and unc_us. The detect
+     * (armed at the reset) hits at the first; the arm at that time comes
+     * after both, so the run again's hit carries the second one's tier and
+     * unc_us at the same t and value (mutant 247) */
+    n[1].p[YSIG_DETECT_START] = 0; n[1].p[YSIG_DETECT_REPEAT] = 0;
+    n[1].p[YSIG_DETECT_ENTRY] = YSIG_ENTRY_NOW; n[1].p[YSIG_DETECT_OUT] = YSIG_OUT_HIT;
+    d = desc_of(n, 3);
+    sig_window(&d, 2, 256);
+    d.on_row = on_row;
+    if (!open_desc(&g, &d)) { g_failures++; return; }
+    ysig_reset(&g, 0);
+    g_rows = 0;
+    e = PEN_E(1 * MS, 1, 6, 0, YIN_TIER_2); e.unc_us = 5; ysig_feed(&g, &e);
+    e = PEN_E(1 * MS, 1, 6, 0, YIN_TIER_1); e.unc_us = 0; ysig_feed(&g, &e);
+    e = PEN_E(2 * MS, 1, 6, 0, YIN_TIER_1); e.unc_us = 10; ysig_feed(&g, &e);
+    CHECK(g_rows == 3 && g_row[2].value.t == 1 * MS && g_row[2].value.v[0] == 1 && g_row[2].value.tier == YIN_TIER_2 &&
+          g_row[2].value.unc_us == 5);
+    CHECK(ysig_arm(&g, 1, 1 * MS));
+    ysig_get_stats(&g, &st);
+    CHECK(st.arm_caught_up == 1 && st.arm_rows_stale == 1);
+    CHECK(ysig_value_of(&g, 1)->t == 1 * MS && ysig_value_of(&g, 1)->v[0] == 1 && ysig_value_of(&g, 1)->tier == YIN_TIER_1 &&
+          ysig_value_of(&g, 1)->unc_us == 0);
     /* a frame's channel values are kept with the call: the caller's array
      * changes after the frame, the run again reads what the frame had */
     {
