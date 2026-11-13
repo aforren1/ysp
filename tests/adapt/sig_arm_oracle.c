@@ -549,6 +549,7 @@ int main(int argc, char** argv) {
                     printf("  det params: test %g lane %g hold %g at %g start %g rep %g entry %g out %g in %d\n", g_n[g_bad].p[0], g_n[g_bad].p[1], g_n[g_bad].p[4], g_n[g_bad].p[5], g_n[g_bad].p[6], g_n[g_bad].p[7], g_n[g_bad].p[12], g_n[g_bad].p[13], g_n[g_bad].in[0]);
                 }
             }
+            printf("FAIL case %ld: %s\n", it, why);   /* the mutation runner keys on FAIL */
             if (show && wrong <= show) {
                 printf("case %ld wrong: %s node %d op %d (A %d calls, B %d; rel %d; shapes", it, why, g_bad, g_bad >= 0 ? g_n[g_bad].op : -1, g_na, g_nb, g_rel);
                 for (w = 1; w < NF; w++) if (f[w]) printf(" %d", w);
