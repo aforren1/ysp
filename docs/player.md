@@ -1,6 +1,6 @@
 # The player
 
-Status: v0.9.0, 2026-11-12. It loads a pack, checks its experiment
+Status: v0.10.0, 2026-11-13. It loads a pack, checks its experiment
 definition, lowers the definition onto the ysp headers and runs it: in a
 real window with the participant's keyboard and the rig's devices, or on
 the simulated display (`--sim`). It is a program (`player/`, target
@@ -297,7 +297,7 @@ it says), for each version:
 
 | Field | Version 1 | Version 2 |
 |---|---|---|
-| `player_version` | `0.9.0` | `0.9.0` |
+| `player_version` | `0.10.0` | `0.10.0` |
 | `format_version` | 1, the definition's (it was the player's constant 1) | 2 |
 | `headers.sig` | Not written | ysp/sig.h's version |
 | `headers.trials`, `headers.gfx`, `headers.experiment` | The new versions (0.8.1, 0.20.0; experiment 0.5.0 from 0.7.0) | The same |
@@ -405,18 +405,22 @@ on this frame (rule 5); the draw. The stop on state changes at one time
 is an internal guard sized from the template (F26 refuses the cycles
 that could move without end).
 
-3.11 rule 2 for a hold that a state a frame's hit started arms, and that
-ends before that frame's onset (the reference model's
-`refound-in-frame`; the user's decision of 2026-11-12): ysp/sig.h 0.5.0
-catches an arm in the past up on its input's ring (sig.md, "An arm in the
-past"), so the hold is a hit at the arm's call, the next state starts on
-that frame, and no frame runs twice. Before 0.9.0 it was found at the
-next frame's `ysig_frame()`, one frame late. The same catch-up gives
-rule 4 for a response's chain whose next sample comes 1 ns later (the
-model's s4548): the arm at the response's time tests the hand there, not
-the later sample the frame had already fed. A drain of the arm's hits
-before each later sample measured no different (the ring holds 4,096
-values, more than a frame's samples) and is not in the code.
+3.11 rules 2 and 4 for an arm made after input the graph already has
+(the user's decisions of 2026-11-12): each template's graph keeps
+ysp/sig.h 0.6.0's window (4 frames, 1,024 calls, 16,384 ring writes; a
+response's end can be final two frames after its time). An arm at a
+state's entry time before input already fed runs the graph again from a
+checkpoint with the arm where it would have been made (sig.md, "An arm in
+the past"), so a hold that a frame's hit started and that ends before the
+frame's onset is a hit at the arm's call and the next state starts on
+that frame (the model's `refound-in-frame`), and a response's chain whose
+next sample came 1 ns later arms on the hand at the response's time (the
+model's s4548). Rows of a frame trace that the window had passed to the
+writer are not written again (counted by sig.h). An arm past the window
+falls back to the newest value, counted by sig.h. Before a response's
+end and before each timed change, the player calls `ysig_settle()` at
+that time (at most the time input is fed up to), so a hold the hand
+meets before it is a hit first (rule 4; the model's `future-arm-hold`).
 
 A trace's rows go through the data set's writer, as the other rows do: a
 real run's frame thread does not call `write()`. A trace row is wider than

@@ -586,39 +586,80 @@ files came out byte-identical.
   the first sample that meets the test (D35 (f)'s "already true" needs a
   value to be true of).
 
-### An arm in the past (v0.5.0)
+### An arm in the past (v0.6.0)
 
-The player arms a state's controls at the state's entry time, which is
-often before the input the graph already holds: a hit found by a frame's
-pass is before that frame's onset, and the next state arms at the hit's
-time after the pass has tested its detects. Until 0.4.1 the arm tested
-only the newest held value, and a hold the frame already covered ended
-at the next feed or frame, one frame late against the experiment
-format's 3.11 rule 2 ("the first frame whose onset is at or after the
-hit's time"). A second `ysig_frame()` on the same frame would record
-frame rows and sinks twice.
+The player arms a state's controls at the state's entry time. That time
+is often before input the graph already holds: a hit that a frame's pass
+found is before the frame's onset, and a response's end is before the
+samples of its frame. The experiment format's 3.11 rules 2 and 4 then
+need the result of an arm made at its time, in order with the input.
 
-0.5.0 makes the arm catch up. When the arm's time is before the time a
-sample-rate detect knows input up to (its input's newest value, or the
-onset of a frame that tested it, the poll for a frame-updated input):
+0.5.0 caught up on the detect's input ring. A review found it right only
+for one source with rising times and a ring that reaches back: it read a
+two-source node's held value as if no input came after the arm, lost
+equal-time samples (the ring keeps the last), tested ring values that a
+view input or a `ysig_set()` never showed the live detect, and collapsed
+the detect's output to one rise at the call, so a latch, a peak's gate or
+a mux saw the wrong values. 0.6.0 replaces it.
 
-1. The detect tests the input's value at the arm's time: the newest
-   entry of the input's ring at or before it.
-2. It runs each later entry of that ring in time order, as the feeds
-   did, so a value that breaks a hold, or a crossing, counts at its time.
-3. A hold still true is completed at the known time, as the frame's pass
-   would have: a hit at start + hold.
+**The rule.** An arm at time t gives what the same arm gives when it is
+made in call order before the first input later than t since the last
+reset (a sample, a frame's onset, a `ysig_settle()`).
 
-Only the input's own ring is read (`node.history` on the input). An input
-with no ring, or a ring whose oldest entry is after the arm, falls back
-to the old rule (the newest value), counted in
-`ysig_stats.arm_no_history`; `arm_caught_up` counts the others. A
-frame-rate detect tests at onsets only, so an arm in the past is tested
-at its next onset, as before. The journal holds the arm with its time,
-and a replay runs it on the same rings: the same hits and digest
-(`test_arm_catch_up`, the fuzz target's replay). trial_visuomotor and
-trial_bimanual do not arm in the past: their `--sim` output is
-byte-identical to 0.4.1's.
+**How.** With `desc.catchup_frames` above 0 the graph keeps a window:
+
+- a checkpoint of its state after each frame and each reset, the last
+  `catchup_frames` of them (the handle, the nodes and their parameters,
+  values, states, data, and both queues; a ring's slots are not copied);
+- every call since the oldest checkpoint (`catchup_calls`), with a
+  frame's channel values copied, as the caller may change them;
+- the old value of every ring slot those calls wrote (`catchup_writes`).
+
+An arm in the past goes into the call log at its place. The graph goes
+back to the newest checkpoint before t, puts back the ring slots written
+since, and runs the logged calls again. Everything is then what live
+calls would have left: values, rings, states, stats and the digest. It is
+the same code on the same calls, so no op needs a rule of its own. Hits
+the caller already took are not queued again (a hit is the same when its
+node, time and whole value are). One the new history no longer finds
+cannot be taken back: it is counted in `arm_hits_retracted`. `on_row` and
+`ysig_derived()` do not get the window's rows and events again; a change
+in them is counted (`arm_rows_stale`, `arm_derived_stale`). A reset is a
+barrier: an arm after it is never placed before it.
+
+**Where it falls back.** An arm before the oldest checkpoint, or after the
+logs ran full, tests the newest value as 0.4.1 did, counted in
+`arm_past_far` and `arm_past_full`. A zeroed desc has no window (the
+examples' fixed arenas stay as they were): such arms are counted in
+`arm_past_off`.
+
+**Cost, and the knob.** An arm in the past costs the calls since the
+checkpoint it goes back to, run again: at most `catchup_calls` calls. A
+frame adds a copy of the state. Measured on the Linux desktop (i5-14500,
+GCC 12.2, `-O2`, pinned to CPU 2, 1-minute load 0.45, 2026-11-12), a
+graph of 27 nodes (a pen with a 4,096 ring, an affine cursor, a speed,
+8 detects each with a latch and a peak, every node with a 4,096 ring),
+window of 4 frames:
+
+| Input | `ysig_frame()` median, no window / window | One arm half a frame back | One arm 2.5 frames back | 8 arms half a frame back |
+|---|---|---|---|---|
+| 1 device, 17 samples a frame (1 kHz) | 0.2 / 0.6 us | 8.7 us | 25.1 us | 69.6 us |
+| 4 devices, 133 samples a frame each (8 kHz) | 0.2 / 1.0 us | 202.7 us | 612.3 us | 1,621 us |
+
+The bound per frame is the arms in the past a frame makes times the calls
+in their windows. The player arms a few controls a frame at 1 kHz
+(about 10 us each); with four 8 kHz mice, 8 arms half a frame back take
+1.6 ms of a 16.7 ms frame. Fewer `catchup_frames` or `catchup_calls`
+lower the bound; an arm beyond them falls back by name. The arena grows
+by the checkpoints (about 30 KB each for 27 nodes), the calls (about 200
+bytes each) and the ring writes (72 bytes each).
+
+**Checked.** `test_arm_window`, and `tests/adapt/sig_arm_diff.c`: a
+randomized differential that runs A (an arm after more calls) against B
+(the same arm in call order before the first later input) and compares,
+after every call from A's arm on, every node's value, ring and state, the
+stats and every hit handed out (results in "Tests, fuzzing and
+mutations").
 
 ### Byte-identical ports
 
@@ -727,13 +768,46 @@ counts this program's allocator calls during the 60 s run (glibc).
 
 ### Tests, fuzzing and mutations
 
-- `tests/adapt/sig_test.c` (ctest `test_sig`): v0.5.0 adds
-  `test_arm_catch_up`: a hold a frame covers is a hit at the arm, the
-  history breaks a hold and restarts it, a hold not yet over waits for
-  the next frame, an arm past everything known is unchanged, a replay to
-  the same digest, entry now with a crossing after the arm, no ring and a
-  short ring (counted), a frame-rate detect, and no onset before the
-  first frame. v0.4.1 adds
+- `tests/adapt/sig_test.c` (ctest `test_sig`): v0.6.0 adds
+  `test_arm_window`: no window (counted), two crossings after the arm as
+  two hits with a latch frozen at the first and the ring's rise and fall,
+  a re-arm before handed-out hits (not queued twice), a replay to the same
+  digest, a hold a frame covers, `ysig_settle()` (a hold met, one not yet
+  met, a frame-rate detect it leaves), a retracted hit, an arm past the
+  window, logs that ran full and the window working again after a frame,
+  a reset as a barrier, rows changed (counted), a frame's channel values
+  kept with the call, and the desc's limits.
+  `tests/adapt/sig_arm_diff.c` (ctest `test_sig_arm_diff`, 3,000 cases):
+  the randomized differential of an arm in the past. At scale
+  (2026-11-12, Linux desktop, GCC 12.2 with ASan and UBSan, `setarch -R`,
+  8 processes, seeds 90001 to 90008, 13 min 12 s): 1,200,000 cases,
+  1,145,452 exact, 10,532 fell back by name (an arm past the window of 8
+  frames), 44,016 with a retracted hit (counted), 0 wrong, no sanitizer
+  report. Each category the review named:
+
+  | Category | Cases | Exact | Fell back | Retracted | Wrong |
+  |---|---|---|---|---|---|
+  | Detect on a two-source sum (late reports) | 159,799 | 153,438 | 540 | 5,821 | 0 |
+  | One source, two devices out of order | 158,935 | 152,628 | 604 | 5,703 | 0 |
+  | Equal-time samples | 262,917 | 249,772 | 915 | 12,230 | 0 |
+  | Out-of-order samples dropped | 408,864 | 386,792 | 3,657 | 18,415 | 0 |
+  | Detect on a view (speed) | 160,117 | 155,494 | 606 | 4,017 | 0 |
+  | `ysig_set()` in the window | 212,646 | 199,786 | 3,332 | 9,528 | 0 |
+  | `ysig_recenter()` in the window | 110,413 | 99,184 | 6,790 | 4,439 | 0 |
+  | A reset or `ysig_reset_trial()` before B's place | 784,145 | 752,000 | 4,230 | 27,915 | 0 |
+  | A re-arm earlier than a found hit | 142,286 | 105,613 | 3,401 | 33,272 | 0 |
+  | Entry arm / fresh / now | 400,320 / 400,209 / 399,471 | 379,534 / 387,511 / 378,407 | 3,467 / 3,559 / 3,506 | 17,319 / 9,139 / 17,558 | 0 |
+  | Hold above 0 | 700,381 | 651,183 | 6,222 | 42,976 | 0 |
+  | Repeat every | 600,105 | 571,778 | 5,310 | 23,017 | 0 |
+  | Hysteresis | 600,622 | 573,599 | 5,321 | 21,702 | 0 |
+  | Norm or rectangle test | 800,465 | 763,727 | 7,023 | 29,715 | 0 |
+  | `ysig_settle()` in the window | 366,280 | 339,993 | 10,193 | 16,094 | 0 |
+
+  Users of the detect's output in every case: a latch, a peak gated by
+  it, a mux it selects, an all and a delay of it. B is defined only when
+  the arm commutes with the calls it moves past: another arm of the same
+  detect between B's place and A's call is no call there (two arms at one
+  place go in call order). v0.4.1 adds
   `test_review_fixes`: a latch and a peak gate on a reset-armed hit
   through an adapter, no hit with no sample and the hit at the first
   sample, `ysig_value_at()` after a set at, after and before its time,
@@ -823,12 +897,14 @@ ran (640.5 million events taken, 373.5 million rows, 10.17 million hits).
   Mutants 70 and 71 remove the saturation of time arithmetic; the test
   built with `-fsanitize=undefined` (the list's `sig_ubsan` test) catches
   them.
-  v0.5.0: mutants 210 to 219 for the arm's catch-up (the walk, the value
-  at the arm, the completion at the known time, the onset, the
-  frame-rate rule, the short ring, the output's rise, the counts, the
-  `framed` flag); 31 and 190 follow the new arm. The list, 2026-11-12,
-  Linux desktop, GCC 12.2: 213 of 213 as expected (219 survived its first
-  run; test_arm_catch_up's case 9 kills it).
+  v0.6.0: mutants 210 to 232 for the window (the run again, the arm's
+  place, equal times, the undo log, the checkpoint chosen, hits not
+  queued twice, retracted hits, rows, the journal, resets, frame values,
+  the logs' capacity, the counts, `ysig_settle()`, the desc's limits, the
+  hit's whole value); the `sig_diff` test runs the differential (50,000
+  cases) for those only it reaches. 214, 215 and 222 are kept with notes
+  (a cost only, or not reached). 23, 31, 65, 125, 161, 172, 190, 191 and
+  198 follow the code.
 
 ### Zones
 
