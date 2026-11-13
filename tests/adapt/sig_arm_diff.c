@@ -33,7 +33,7 @@
 
 #define MS 1000000LL
 #define MAXC 400
-#define NCAT 18
+#define NCAT 19
 
 static uint64_t g_arena_a[(8u << 20) / 8], g_arena_b[(8u << 20) / 8];
 static float g_ch_a[4], g_ch_b[4];
@@ -48,7 +48,8 @@ static const char* g_cat[NCAT] = {
     "all cases", "detect on a two-source sum", "one source, two devices out of order", "equal-time samples",
     "out-of-order samples dropped", "detect on a view (speed)", "ysig_set in the window", "ysig_recenter in the window",
     "a reset before B's place", "a re-arm earlier than a found hit", "entry arm", "entry fresh", "entry now",
-    "hold above 0", "repeat every", "hysteresis", "norm or rectangle test", "ysig_settle in the window" };
+    "hold above 0", "repeat every", "hysteresis", "norm or rectangle test", "ysig_settle in the window",
+    "an arm at the old hold's end" };
 static long g_n[NCAT], g_exact[NCAT], g_back[NCAT], g_sup[NCAT], g_retr[NCAT], g_wrong[NCAT];
 
 /* the graph: 13 experiment nodes, or a role and an adapter for recenter */
@@ -331,6 +332,20 @@ int main(int argc, char** argv) {
             if (rnd() % 4 == 0 && a_pos > last_reset + 1) {
                 int j = last_reset + 1 + (int)(rnd() % (unsigned)(a_pos - last_reset - 1));
                 if (is_input(&cs[j], &ti)) t_arm = ti;   /* exactly an input's time */
+            } else if (rnd() % 3 == 0) {
+                /* exactly the end of the hold the detect has at A's call
+                 * (met or not yet found), or of the hit it found: the arm
+                 * completes the old hold first (the player's re-arm at the
+                 * time of an exit tied with that hold) */
+                const ysig__det_st* ds;
+                const ysig__nd* dn;
+                if (!open_graph(&gb, &gd, g_arena_b, g_ch_b)) return 2;
+                ysig_reset(&gb, 0);
+                for (k = 0; k < a_pos; k++) do_call(&gb, &cs[k], gd.adapter);
+                dn = &gb.nd[gd.det];
+                ds = (const ysig__det_st*)dn->st;
+                if (ds->armed && ds->holding && dn->kns[0] > 0 && ds->t_start + dn->kns[0] >= t_reset) { t_arm = ds->t_start + dn->kns[0]; cats[18] = 1; }
+                else if (ds->fired && dn->kns[0] > 0 && ds->t_hit >= t_reset) { t_arm = ds->t_hit; cats[18] = 1; }
             }
         }
         for (b_pos = last_reset + 1; b_pos < a_pos; b_pos++) {

@@ -4180,6 +4180,21 @@ static void test_arm_window(void) {
         CHECK(ysig_arm(&g, 1, 9500000) && ysig_detected(&g, h, 8) == 0);
         ysig_get_stats(&g, &st);
         CHECK(st.arm_hits_superseded == 1 && st.arm_hits_retracted == 2 && st.arm_caught_up == 3);
+        /* a re-arm at the time the old hold ends (no input has found it):
+         * the old arm's hit, at the arm's time; the new arm's hold starts
+         * at the arm, so its hit is a whole hold later, none before */
+        d = desc_of(m, 2);
+        sig_window(&d, 2, 256);
+        if (!open_desc(&g, &d)) { g_failures++; return; }
+        ysig_reset(&g, 0);
+        e = PEN_E(1 * MS, 1, 1, 0, YIN_TIER_2); ysig_feed(&g, &e);
+        CHECK(ysig_arm(&g, 1, 3 * MS) && ysig_detected(&g, h, 8) == 1 && h[0].t == 3 * MS && h[0].t_found == 3 * MS);
+        e = PEN_E(5 * MS, 1, 1, 0, YIN_TIER_2); ysig_feed(&g, &e);
+        CHECK(ysig_detected(&g, h, 8) == 0);
+        e = PEN_E(6 * MS, 1, 1, 0, YIN_TIER_2); ysig_feed(&g, &e);
+        CHECK(ysig_detected(&g, h, 8) == 1 && h[0].t == 6 * MS);
+        ysig_get_stats(&g, &st);
+        CHECK(st.arm_caught_up == 0 && st.hits == 2);
     }
     /* the desc's limits */
     d = desc_of(n, 3);

@@ -2109,6 +2109,20 @@ def t_v2_findings(ctx):
     check(sorted(arms) == ["caught_up", "derived_stale", "hits_retracted", "hits_superseded", "past_far", "past_full", "past_off", "rows_stale"] and
           arms["hits_retracted"] == arms["rows_stale"] == arms["derived_stale"] == arms["past_far"] == arms["past_full"] == arms["past_off"] == 0,
           "session.json sig_arms: %s" % arms)
+    # the model's s19383: s1 goes back to itself by after_s at the time its
+    # r0 hold ends (list order: the after_s exit). The re-arm at that time
+    # completes the old arm's hold (sig.h 0.6.0); that hit is the old
+    # arm's, so the new visit's hold starts again and every visit ties the
+    # same way
+    inside50 = os.path.join(ctx.out, "vm_inside50.csv")
+    write_samples(inside50, [(0.0, "hand", 50, 0), (0.001, "hand", 50, 0)])
+    t = {"controls": {"r0": {"control": "region", "of": "hand", "radius": 10, "center": [50, 0], "stay_s": 0.033333334}},
+         "states": [{"name": "s0", "steps": [{"wait_s": 0.008333334}], "max_visits": 5, "over": {"to": "end"}},
+                    {"name": "s1", "exits": [{"after_s": 0.04, "to": "s1"}, {"on": "r0", "to": "s0"}], "max_visits": 6, "over": {"to": "end", "outcome": "over"}}]}
+    r = one("vm_rearm_tie", v2base({"t": t}, [{"name": "l", "trial": "t"}], roles=pen), ["--sim-gain", "hand=1", "--samples", inside50])
+    rr = rows(r)
+    s1 = [x[3] for x in rr if x[0] == "s1"]
+    check(r.rc == 0 and r.trials and r.trials[0]["outcome"] == "over" and s1[1:] == [0, 0, 0, 0, 0, -2], "the re-arm's own completion of the old hold is not the new arm's hit: %s %s" % (r.trials[:1] and r.trials[0]["outcome"] if r.rc == 0 else r.err[:200], rr))
     # rule 7: a backward at_s ends the steps at the cursor; a step it put
     # after that never lands
     t = {"states": [{"name": "s0", "steps": [{"on": "s"}, {"at_s": 0.137}, {"mark": "m1"}, {"at_s": 0.083}]}, {"name": "s1", "steps": [{"wait_s": 0.2}]}]}

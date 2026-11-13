@@ -203,6 +203,8 @@ struct pl_v2 {
     uint32_t* arm_gen;         /* per node: arms so far, so a drained hit of
                                 * an arm since made is the old arm's        */
     int64_t arm_bad;           /* sig.h's retracted + stale counts seen     */
+    int64_t* arm_t;            /* per node: its latest arm's time           */
+    bool* det_now;             /* per node: entry now this trial (no hold)  */
     /* the visit's tweens, every part's: rule 8 stops one still running at
      * the value it last wrote (a track is no event ytl_remove() takes) */
     struct v2_tw { int ch; int64_t end; }* tw; int n_tw, cap_tw;   /* sized at load */
@@ -1739,6 +1741,16 @@ int pl_v2_load(pl_player* p) {
         v->arm_gen = (uint32_t*)pl_alloc(p, sizeof(uint32_t) * (size_t)v->nn);
         if (!v->arm_gen) return -1;
         memset(v->arm_gen, 0, sizeof(uint32_t) * (size_t)v->nn);
+        v->arm_t = (int64_t*)pl_alloc(p, sizeof(int64_t) * (size_t)v->nn);
+        v->det_now = (bool*)pl_alloc(p, sizeof(bool) * (size_t)v->nn);
+        if (!v->arm_t || !v->det_now) return -1;
+        {
+            int k;
+            for (k = 0; k < v->nn; k++) {
+                v->arm_t[k] = INT64_MIN;
+                v->det_now[k] = v->nodes[k].op == YSIG_OP_DETECT && v->nodes[k].p[YSIG_DETECT_ENTRY] == YSIG_ENTRY_NOW;
+            }
+        }
         ysig_reset(&v->g, 0);
         v->cur = V2_END;
         v->ended = true;
@@ -1924,6 +1936,7 @@ static int v2_params_apply(pl_player* p, pl_v2* v) {
         bool ok;
         if (v2_item(p, q->v, q->elem, &x, q->how) < 0) return -1;
         ok = q->param >= 0 ? ysig_set(&v->g, q->node, q->param, x) : ysig_set_data(&v->g, q->node, -1 - q->param, x);
+        if (q->param == YSIG_DETECT_ENTRY && v->det_now) v->det_now[q->node] = x == YSIG_ENTRY_NOW;
         if (!ok) {
             pl_fail(p, "template '%s': the graph refused %g for node %d's parameter %d", v->def->name, x, q->node, q->param);
             return -1;
@@ -2060,6 +2073,7 @@ static int v2_arm_ctl(pl_player* p, pl_v2* v, int ci, int64_t t) {
     v2_ctl* c = &v->ctl[ci];
     if (c->hit < 0) return 0;
     v->arm_gen[c->hit]++;
+    v->arm_t[c->hit] = t;
     if (!ysig_arm(&v->g, c->hit, t)) { pl_fail(p, "template '%s': cannot arm '%s'", v->def->name, c->def->name); return -1; }
     return v2_arm_check(p, v, c->def->name, t);
 }
@@ -2067,6 +2081,7 @@ static int v2_arm_ctl(pl_player* p, pl_v2* v, int ci, int64_t t) {
 static int v2_arm_exit(pl_player* p, pl_v2* v, const v2_exit* x, int64_t t) {
     if (x->node < 0) return 0;
     v->arm_gen[x->node]++;
+    v->arm_t[x->node] = t;
     if (!ysig_arm(&v->g, x->node, t)) { pl_fail(p, "template '%s': cannot arm '%s'", v->def->name, v->ctl[x->ctl].def->name); return -1; }
     return v2_arm_check(p, v, v->ctl[x->ctl].def->name, t);
 }
@@ -2473,6 +2488,11 @@ static int v2_hits(pl_player* p, pl_v2* v, const yscr_frame* f) {
         for (i = 0; i < n; i++) {
             int ci = v2_ctl_of_hit(v, h[i].node);
             hg[i] = v->arm_gen[h[i].node];
+            /* an arm's hits are at or after its time, after it for a hold
+             * (entry arm): one before is the earlier arm's, also when the
+             * re-arm itself found it (sig.h completes the hold met by the
+             * arm's time), so it is that arm's generation */
+            if (h[i].t < v->arm_t[h[i].node] || (h[i].t == v->arm_t[h[i].node] && !v->det_now[h[i].node])) hg[i]--;
             if (ci < 0) continue;
             v->ctl[ci].hit_t = h[i].t;
             v->ctl[ci].has_hit = true;

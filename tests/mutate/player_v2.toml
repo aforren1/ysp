@@ -646,3 +646,27 @@ test = "player"
 why = "The window's counts per session (vm_settle_tie checks sig_arms)."
 find = '''    return yds_session_set(&p->ds, "sig_arms", o);'''
 replace = '''    return 0;'''
+
+[[mutant]]
+id = "v2-78"
+name = "a hit the re-arm completed counted for the new arm"
+test = "player"
+why = "3.7 region hits count from the arm or later, D20 rule 3 (vm_rearm_tie; the model's s19383)."
+find = '''            if (h[i].t < v->arm_t[h[i].node] || (h[i].t == v->arm_t[h[i].node] && !v->det_now[h[i].node])) hg[i]--;'''
+replace = ''''''
+
+[[mutant]]
+id = "v2-79"
+name = "a hold detect's hit at its arm's time counted for the arm"
+test = "player"
+why = "An arm's hits are after its time for a hold (vm_rearm_tie)."
+find = '''            if (h[i].t < v->arm_t[h[i].node] || (h[i].t == v->arm_t[h[i].node] && !v->det_now[h[i].node])) hg[i]--;'''
+replace = '''            if (h[i].t < v->arm_t[h[i].node]) hg[i]--;'''
+
+[[mutant]]
+id = "v2-80"
+name = "an entry-now hit at its arm's time dropped"
+test = "player"
+why = "Entry now (D35 (f), G16): a hit at the arm with the held value (vm_entry_now tests)."
+find = '''            if (h[i].t < v->arm_t[h[i].node] || (h[i].t == v->arm_t[h[i].node] && !v->det_now[h[i].node])) hg[i]--;'''
+replace = '''            if (h[i].t <= v->arm_t[h[i].node]) hg[i]--;'''
