@@ -2157,5 +2157,23 @@ def main():
     return 1 if fails else 0
 
 
+def t_v2_model(ctx):
+    """The reference model's fixed set (tests/model): 50 generated version 2
+    definitions whose rows the model computes from the format alone, run
+    through ypak and the player and compared row by row."""
+    sys.path.insert(0, os.path.join(HERE, "..", "model"))
+    import diff as model_diff
+    model_diff.YPAK = ctx.ypak
+    model_diff.PLAYER = ctx.player
+    work = os.path.join(ctx.out, "v2_model")
+    os.makedirs(work, exist_ok=True)
+    bad = model_diff.check_set(tempfile.mkdtemp(prefix="set", dir=work))
+    for seed, why in bad:
+        check(False, "v2_model seed %d: %s" % (seed, why))
+
+
+TESTS.append(t_v2_model)
+
+
 if __name__ == "__main__":
     sys.exit(main())
