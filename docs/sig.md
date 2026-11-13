@@ -614,22 +614,20 @@ ring skips). The place is after every earlier call that must come first:
 - a `ysig_recenter()` or a `ysig_arm()` at or before t.
 
 Input, recenters and arms later than t go after it. For time-ordered
-input that is the calls sorted by (time, call order). Two named
-exceptions:
-
-1. The place is never before the call that found a hit at or before t
-   that the caller already had: the caller may have acted on it (the
-   player's next state is entered at that hit). Input later than t can
-   then come before the arm. A hit that an earlier run again took back
-   still counts.
-2. An arm ahead of the newest input (t later than it) is made at once on
-   the input known: the earlier arm's hold is met only up to that input,
-   not on unfed time. Input fed later with a time before t comes after
-   it.
+input that is the calls sorted by (time, call order).
 
 At its place an arm first meets its detect's hold up to t (any detect:
 one on a view or at frame rate too): that hold ended under the earlier
-arm, so it is that arm's hit.
+arm, so it is that arm's hit. An arm made after input later than t
+knows input up to t is in, so it meets the hold up to t wherever the run
+again puts it; that keeps a hit the caller took at or before t (found by
+a later call) and starts the new hold at t. An arm ahead of the newest
+input (t later than it) meets the hold only up to that input, not on
+unfed time; input fed later with a time before t comes after it.
+
+A detect's standing hit output is at the hit's time, with the sources of
+the input that met the test (the hit's value), however the hit was found
+(a sample, a frame, a settle, an arm).
 
 What the guarantee does not cover, counted by name:
 
@@ -645,6 +643,10 @@ What the guarantee does not cover, counted by name:
   `arm_derived_stale`); the run again's lost derived events are not;
 - an arm whose place is before the window, or after its logs ran full
   (below), and a graph with no window;
+- a detect on another detect's hit output does not see a rise and a fall
+  that an arm makes at one time (an arm's change reaches latches, peaks
+  and pure nodes, not detects): its hit comes out retracted, counted (the
+  player builds no such graph);
 - `ysig_arm()` from a callback (`on_row`, the journal) during another
   call: refused, counted in `arm_reentry`;
 - a custom op with effects outside its state runs them again.
