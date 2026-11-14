@@ -211,12 +211,14 @@ int main(int argc, char** argv) {
     const char *out_path = "trial_rdk.csv", *steps_path = "trial_rdk_steps.csv";
     uint64_t seed = 20261009, trial_seed = 0;
     int i, n, landed, sim = 0, reps = 0, fullscreen = 0, aborted = 0, failed = 0, rows = 0, sim_bad = 0;
+    double sim_hz = 0;   /* tests: --sim's rate; 0 is 60 Hz */
     int in_trial = 0, responding = 0, moving = 0, n_steps = 0, dropped = 0, coh_col, dir_col, key_col, answer = 0;
     int64_t motion_t0 = 0, first_motion_frame = -1, last_motion_frame = -1;
     double coherence = 0;
 
     for (i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--sim")) sim = 1;
+        else if (!strcmp(argv[i], "--sim-hz") && i + 1 < argc) sim_hz = atof(argv[++i]);   /* tests */
         else if (!strcmp(argv[i], "--fullscreen")) fullscreen = 1;
         else if (!strcmp(argv[i], "--reps") && i + 1 < argc) reps = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--seed") && i + 1 < argc) seed = (uint64_t)strtoull(argv[++i], NULL, 10);
@@ -241,7 +243,8 @@ int main(int argc, char** argv) {
     if (reps < 1 || reps > 50) { fprintf(stderr, "trial_rdk: --reps takes 1..50\n"); return 2; }
 
     /* the display and the graphics, opened together and primed */
-    if (!ygfx_open_screen(&gfx, &scr, &(yscr_desc){ .backend = sim ? YSCR_BACKEND_SIM : 0, .windowed = !fullscreen },
+    if (!ygfx_open_screen(&gfx, &scr, &(yscr_desc){ .backend = sim ? YSCR_BACKEND_SIM : 0, .windowed = !fullscreen,
+                                                     .sim_period_ns = sim && sim_hz > 0 ? (int64_t)llround(1e9 / sim_hz) : 0 },
                           &(ygfx_desc){ .background = { 0.5f, 0.5f, 0.5f } }))
         return fail(ygfx_error(&gfx));
     yscr_get_caps(&scr, &caps);

@@ -226,12 +226,14 @@ int main(int argc, char** argv) {
     const char* method = "both";
     uint64_t seed = 20261009, rng_obs;
     int i, n, sim = 0, n_trials = 0, fullscreen = 0, no_rig = 0, aborted = 0, failed = 0, rows = 0, sim_bad = 0, design_timing = 0;
+    double sim_hz = 0;   /* tests: --sim's rate; 0 is 60 Hz */
     int in_trial = 0, responding = 0, n_sim_ev = 0, sim_next = 0, side = 0, track = 0;
     int64_t fix_ns, iti_ns, sim_frame = -1;   /* --sim: the gabor's landing frame, until its record */
     double ppd = 0.0, level = 0, level_max;
 
     for (i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--sim")) sim = 1;
+        else if (!strcmp(argv[i], "--sim-hz") && i + 1 < argc) sim_hz = atof(argv[++i]);   /* tests */
         else if (!strcmp(argv[i], "--fullscreen")) fullscreen = 1;
         else if (!strcmp(argv[i], "--method") && i + 1 < argc) method = argv[++i];
         else if (!strcmp(argv[i], "--trials") && i + 1 < argc) n_trials = atoi(argv[++i]);
@@ -339,7 +341,8 @@ int main(int argc, char** argv) {
     if (!ytr_open(&trials, &rd)) { fprintf(stderr, "trial_2afc_adaptive: %s\n", ytr_error(&trials)); return 1; }
 
     /* the display and the graphics, opened together and primed; then the stimuli in deg */
-    if (!ygfx_open_screen(&gfx, &scr, &(yscr_desc){ .backend = sim ? YSCR_BACKEND_SIM : 0, .windowed = !fullscreen },
+    if (!ygfx_open_screen(&gfx, &scr, &(yscr_desc){ .backend = sim ? YSCR_BACKEND_SIM : 0, .windowed = !fullscreen,
+                                                     .sim_period_ns = sim && sim_hz > 0 ? (int64_t)llround(1e9 / sim_hz) : 0 },
                           &(ygfx_desc){ .background = { 0.5f, 0.5f, 0.5f }, .cal = &cal })) {
         fprintf(stderr, "trial_2afc_adaptive: %s\n", ygfx_error(&gfx));
         return 1;

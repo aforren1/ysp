@@ -2226,6 +2226,7 @@ static int pl_screen_open(pl_player* p) {
     c.p = p;
     sd.backend = p->args.sim ? YSCR_BACKEND_SIM : YSCR_BACKEND_AUTO;
     sd.windowed = p->args.sim || p->args.windowed;
+    sd.sim_period_ns = p->args.sim ? p->args.sim_period_ns : 0;
     sd.min_tier = p->def->min_tier;
     if (!p->args.sim && !sd.windowed) {
         /* Shift+Esc 3 times when the loop hangs */

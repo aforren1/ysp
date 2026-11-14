@@ -104,6 +104,8 @@ enum {
                                     * past any record the screen delivers; it
                                     * fires only when records stop (docs/
                                     * player.md) */
+    PL_WORK_BIN_NS = 100,           /* --measure's histogram: 100 ns bins */
+    PL_WORK_BINS = 200000,          /* up to 20 ms; more goes in the last */
     PL_WRITER_PERIOD_NS = 2000000   /* the writer looks at its queue this often:
                                      * a row is on disk 2 ms after it is final */
 };
@@ -439,6 +441,12 @@ typedef struct pl_args {
                                 * written without running (--test-draws)    */
     bool  profile;             /* --profile: the trace ring's zones to
                                 * DIR/profile.csv (a YSP_TRACE_RING build)  */
+    int64_t sim_period_ns;     /* --sim-hz: the simulated display's period;
+                                * 0 is screen.h's default (60 Hz)           */
+    int   n_lates;
+    pl_field_arg lates[16];    /* tests (--sim): --test-sample-late ROLE=S,
+                                * a role's samples reach the player S
+                                * seconds after their time                  */
 } pl_args;
 
 typedef struct pl_script_row { int trial; char* resp; bool silent; double rt_s, hold_s; } pl_script_row;
@@ -658,6 +666,8 @@ struct pl_player {
     bool      measure;
     int64_t   work_max_ns, work_trial_max_ns, work_n, work_over_16ms;
     int64_t   work_max_frame;
+    int64_t   work_over_period;   /* frames whose work took more than a period */
+    uint32_t* work_hist;          /* per-frame work in PL_WORK_BIN_NS bins     */
     int64_t   work_input_max_ns, work_input_max_frame;   /* a real run's input: SDL's pump */
     /* version 2 (v2.c) */
     struct pl_v2_session* v2s;

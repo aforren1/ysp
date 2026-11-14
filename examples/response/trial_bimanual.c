@@ -1223,7 +1223,7 @@ int main(int argc, char** argv) {
     const char* blocks_arg = "T,R,T*,R*,T*,R*,T*,R*,T*,T";
     uint64_t seed = 20261106;
     int i, n, autorun = 0, fullscreen = 0, aborted = 0, total = 0, want_t = 0, want_r = 0, have_prev = 0;
-    double rotation = ROTATION_DEG, cpi = CPI, ppc_arg = 0, peak[2] = { 0, 0 }, c_prev[2] = { 0, 0 };
+    double rotation = ROTATION_DEG, cpi = CPI, ppc_arg = 0, peak[2] = { 0, 0 }, c_prev[2] = { 0, 0 }, sim_hz = 0;
     gain = GAIN;
     int64_t prev_onset = 0;
     ygfx_stim tgt, cur, start, box[2];
@@ -1251,6 +1251,7 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--test-order") && i + 1 < argc) test_order_path = argv[++i];
         else if (!strcmp(argv[i], "--test-samples-out") && i + 1 < argc) test_samples_path = argv[++i];
         else if (!strcmp(argv[i], "--design-timing")) design_timing = 1;
+        else if (!strcmp(argv[i], "--sim-hz") && i + 1 < argc) sim_hz = atof(argv[++i]);
         else if (!strcmp(argv[i], "--out") && i + 1 < argc) out_path = argv[++i];
         else if (!strcmp(argv[i], "--reaches-out") && i + 1 < argc) reach_path = argv[++i];
         else if (!strcmp(argv[i], "--track") && i + 1 < argc) track_path = argv[++i];
@@ -1274,11 +1275,12 @@ int main(int argc, char** argv) {
     }
     if (i < argc || mapping < 0 || perturb < 0 || n_blocks == 0 || track_trials < 1 || n_reaches < 1 ||
         !(track_s >= 26 && track_s <= TRACK_S) || !(gain > 0) || !(cpi > 0) || !(fabs(rotation) <= 180) ||
-        (ppc_arg != 0 && !(ppc_arg >= 1 && ppc_arg <= 1000)) || (sim && autorun)) {
+        (ppc_arg != 0 && !(ppc_arg >= 1 && ppc_arg <= 1000)) || (sim && autorun) ||
+        (sim_hz != 0 && !(sim && sim_hz >= 1 && sim_hz <= 10000))) {
         fprintf(stderr, "usage: trial_bimanual [--sim | --auto] [--mapping split|mean] [--perturb rotation|mirror] "
                         "[--rotation DEG]\n                      [--blocks LIST] [--track-trials N] [--reaches N] "
                         "[--track-s S] [--gain PX] [--cpi N]\n                      [--px-per-cm PX] [--fullscreen] "
-                        "[--seed N] [--out FILE] [--reaches-out FILE] [--track FILE] [--freq FILE]\n"
+                        "[--seed N] [--out FILE] [--reaches-out FILE] [--track FILE] [--freq FILE] [--sim-hz HZ]\n"
                         "  LIST: T and R, \"*\" perturbed, by commas; --track-s 26..46\n");
         return 2;
     }
@@ -1328,6 +1330,8 @@ int main(int argc, char** argv) {
     /* --sim runs on ysp/rt.h's virtual clock: the same records on any host */
     if (sim) yrt_virtual_begin(0);
     if (sim) sd.backend = YSCR_BACKEND_SIM;
+    /* tests: whole ns, as ysp_player --sim-hz rounds it */
+    if (sim && sim_hz > 0) sd.sim_period_ns = (int64_t)llround(1e9 / sim_hz);
     sd.windowed = !fullscreen;
     sd.window_w = 1024;
     sd.window_h = 768;

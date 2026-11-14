@@ -4,6 +4,7 @@
  *                   [--rig FILE|NAME] [--cal FILE] [--windowed] [--allow-below-tier ROLE[,ROLE]]
  *                   [--participant SPEC] [--rt S] [--max-trials N]
  *                   [--measure] [--trace-channels FILE] [--rdk-buffer N]
+ *                   [--sim-hz HZ] [--test-sample-late ROLE=S]...
  *
  * Without --sim the session runs for real: a window on the display (full
  * screen; --windowed for development), the keyboard and the rig profile's
@@ -24,6 +25,9 @@
  * adapter scale per count (the rig profile has no adapter block, G18);
  * --test-draws FILE writes every leaf's trials and variables without
  * running a frame (tests: the C programs take the player's draws).
+ * --sim-hz HZ: the simulated display's rate (default 60), its period
+ * rounded to whole ns. --test-sample-late ROLE=S: that role's samples reach
+ * the player S seconds after their t_s (tests: a late device report).
  * --profile (debug; a build with YSP_TRACE_RING): every zone of the frame
  * loop to DIR/profile.csv; tools/profile_summary.py summarizes it.
  * --hang-at-trial N stops the frame loop in trial N (tests: the panic
@@ -51,7 +55,7 @@ static int usage(void) {
     fprintf(stderr, "usage: ysp_player PACK --out DIR [--sim] [--seed N] [--field NAME=VALUE]... [--rig FILE|NAME] [--cal FILE]\n"
                     "                  [--windowed] [--allow-below-tier ROLE[,ROLE]] [--max-trials N] [--measure]\n"
                     "       --sim only: [--participant SPEC] [--rt S] [--max-seconds N]\n"
-                    "                   [--samples FILE] [--sim-gain ROLE=UNITS]... [--test-draws FILE]\n"
+                    "                   [--samples FILE] [--sim-gain ROLE=UNITS]... [--test-draws FILE] [--sim-hz HZ]\n"
                     "       debug: [--profile] (a YSP_TRACE_RING build)\n"
                     "  SPEC: correct, silent, p=0.8 or script:FILE\n");
     return 2;
@@ -68,6 +72,7 @@ int main(int argc, char** argv) {
     rc = run_main(&a, argc, argv);
     for (i = 0; i < a.n_fields; i++) free((void*)a.fields[i].name);
     for (i = 0; i < a.n_gains; i++) free((void*)a.gains[i].name);
+    for (i = 0; i < a.n_lates; i++) free((void*)a.lates[i].name);
     return rc;
 }
 
@@ -110,6 +115,37 @@ static int run_main(pl_args* ap, int argc, char** argv) {
         else if (!strcmp(s, "--samples") && v) { a.samples_path = v; i++; }
         else if (!strcmp(s, "--test-draws") && v) { a.draws_path = v; i++; }
         else if (!strcmp(s, "--profile")) a.profile = true;
+        else if (!strcmp(s, "--sim-hz") && v) {
+            /* whole ns, as the default 1/60 s is: 60 gives screen.h's own
+             * 16,666,667, so a 60 Hz run keeps its bytes */
+            double hz = atof(v);
+            if (!(hz >= 1.0 && hz <= 10000.0)) {
+                fprintf(stderr, "ysp_player: --sim-hz '%s': give 1 to 10000 frames a second\n", v);
+                return 2;
+            }
+            a.sim_period_ns = (int64_t)llround(1e9 / hz);
+            i++;
+        }
+        else if (!strcmp(s, "--test-sample-late") && v) {
+            /* ROLE=S: a device whose reports come S seconds after their
+             * stamp (transport, a tablet's driver); the stamp stays */
+            const char* eq = strchr(v, '=');
+            double late = eq ? atof(eq + 1) : -1.0;
+            if (!eq || eq == v || !(late >= 0.0 && late <= 10.0) || a.n_lates == 16) {
+                fprintf(stderr, "ysp_player: --test-sample-late '%s': give ROLE=S, 0 to 10 s\n", v);
+                return 2;
+            }
+            {
+                char* name = (char*)malloc((size_t)(eq - v) + 1);
+                if (!name) return 1;
+                memcpy(name, v, (size_t)(eq - v));
+                name[eq - v] = 0;
+                a.lates[a.n_lates].name = name;
+                a.lates[a.n_lates].value = eq + 1;
+                a.n_lates++;
+            }
+            i++;
+        }
         else if (!strcmp(s, "--sim-gain") && v) {
             /* ROLE=UNITS: the --sim adapter's scale per count (G18 has no
              * rig block for it, 3.19 item 3) */
@@ -163,6 +199,10 @@ static int run_main(pl_args* ap, int argc, char** argv) {
         fprintf(stderr, "ysp_player: --samples, --sim-gain and --test-draws are for --sim\n");
         return 2;
     }
+    if (!a.sim && (a.sim_period_ns || a.n_lates)) {
+        fprintf(stderr, "ysp_player: --sim-hz and --test-sample-late are for --sim\n");
+        return 2;
+    }
 #if !defined(YRT_TRACE_RING)
     /* before the data set exists: a run that cannot profile writes nothing */
     if (a.profile) {
@@ -194,6 +234,20 @@ static int run_main(pl_args* ap, int argc, char** argv) {
         printf("ysp_player: frame work over %lld frames: max %.1f us (frame %lld); trial start max %.1f us; %lld frames over 16 ms\n",
                (long long)g_p.work_n, (double)g_p.work_max_ns / 1e3, (long long)g_p.work_max_frame, (double)g_p.work_trial_max_ns / 1e3,
                (long long)g_p.work_over_16ms);
+        if (g_p.work_hist && g_p.work_n > 0) {
+            /* a bin's upper edge: a percentile is never under-stated */
+            static const double q[3] = { 0.5, 0.99, 0.999 };
+            double us[3];
+            int64_t acc = 0, need;
+            int b = 0, k;
+            for (k = 0; k < 3; k++) {
+                need = (int64_t)ceil(q[k] * (double)g_p.work_n);
+                while (b < PL_WORK_BINS - 1 && acc + g_p.work_hist[b] < need) acc += g_p.work_hist[b++];
+                us[k] = (double)(b + 1) * PL_WORK_BIN_NS / 1e3;
+            }
+            printf("ysp_player: frame work p50 %.1f us, p99 %.1f us, p99.9 %.1f us; %lld frames over the period (%.3f ms)\n", us[0], us[1], us[2],
+                   (long long)g_p.work_over_period, (double)g_p.caps.period_ns / 1e6);
+        }
         if (!a.sim)
             printf("ysp_player: the input (SDL's pump and the collectors) max %.1f us (frame %lld)\n", (double)g_p.work_input_max_ns / 1e3,
                    (long long)g_p.work_input_max_frame);

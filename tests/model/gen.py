@@ -18,6 +18,14 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import v2model as M  # noqa: E402
 
 P = M.PERIOD
+
+
+def set_hz(hz):
+    """The frame grid of the cases: durations and sample times are made in
+    frames of this rate (ysp_player --sim-hz)."""
+    global P
+    M.set_period(M.period_of_hz(hz))
+    P = M.PERIOD
 # GEN_AVOID: comma-separated features to leave out, so a known difference
 # does not hide others: state_at (at_s in a state's steps), until_timeout.
 AVOID = set(filter(None, os.environ.get("GEN_AVOID", "").split(",")))
@@ -276,7 +284,10 @@ class Gen:
             if c < 0.4:
                 t = M.onset(M.hit_frame(t + rng.randint(1, 20) * P))
             elif c < 0.6:
-                t = M.onset(M.hit_frame(t + rng.randint(1, 20) * P)) + rng.choice([-1, 1, -3_000_000, 3_000_000])
+                # a few ms off an onset, under half a frame so that the
+                # times never go back (3 ms at 60 Hz, 0.75 ms at 500 Hz)
+                off = min(3_000_000, P * 3 // 8)
+                t = M.onset(M.hit_frame(t + rng.randint(1, 20) * P)) + rng.choice([-1, 1, -off, off])
             else:
                 t += rng.randint(1, 400) * 1_000_000
             out.append((t, *rng.choice(pts)))
@@ -408,7 +419,9 @@ def main(argv):
     ap = argparse.ArgumentParser()
     ap.add_argument("seed", type=int)
     ap.add_argument("--out", default=None)
+    ap.add_argument("--hz", type=float, default=60.0, help="the simulated display's rate (ysp_player --sim-hz)")
     a = ap.parse_args(argv)
+    set_hz(a.hz)
     if a.out:
         write_case(a.seed, a.out)
     else:

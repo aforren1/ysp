@@ -45,6 +45,20 @@ LEAD = PERIOD // 2
 RECORD_DELAY = 1
 
 
+def set_period(ns):
+    """The simulated display's period in whole ns (ysp_player --sim-hz HZ
+    rounds 1e9 / HZ). The grid keeps its measured shape at any rate: frame 0
+    is 7 periods after 1000 s, the lead half a period."""
+    global PERIOD, FRAME0, LEAD
+    PERIOD = int(ns)
+    FRAME0 = 1000 * NS + 7 * PERIOD
+    LEAD = PERIOD // 2
+
+
+def period_of_hz(hz):
+    return int(round(1e9 / float(hz)))
+
+
 
 def onset(k):
     return FRAME0 + k * PERIOD
@@ -1464,7 +1478,9 @@ def main(argv):
     ap.add_argument("definition")
     ap.add_argument("--participant")
     ap.add_argument("--samples")
+    ap.add_argument("--hz", type=float, default=60.0, help="the simulated display's rate (ysp_player --sim-hz)")
     a = ap.parse_args(argv)
+    set_period(period_of_hz(a.hz))
     with open(a.definition) as f:
         defn = json.load(f)
     ref = predict_refusal(defn)

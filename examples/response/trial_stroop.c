@@ -213,12 +213,14 @@ int main(int argc, char** argv) {
     size_t font_n = 0;
     uint64_t seed = 20261009;
     int i, n, landed, sim = 0, reps = 0, fullscreen = 0, aborted = 0, failed = 0, rows = 0, have_font = 0;
+    double sim_hz = 0;   /* tests: --sim's rate; 0 is 60 Hz */
     int in_trial = 0, responding = 0, n_sim_ev = 0, sim_next = 0, word_col, ink_col, cong_col, answer_col, weight_col;
     int ink = 0, word = 0, congruent = 0, feedback = -1;
     char answer[8] = "";
 
     for (i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--sim")) sim = 1;
+        else if (!strcmp(argv[i], "--sim-hz") && i + 1 < argc) sim_hz = atof(argv[++i]);   /* tests */
         else if (!strcmp(argv[i], "--fullscreen")) fullscreen = 1;
         else if (!strcmp(argv[i], "--reps") && i + 1 < argc) reps = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--seed") && i + 1 < argc) seed = (uint64_t)strtoull(argv[++i], NULL, 10);
@@ -263,7 +265,8 @@ int main(int argc, char** argv) {
     if (!ytr_open(&trials, &rd)) { fprintf(stderr, "trial_stroop: %s\n", ytr_error(&trials)); return 1; }
 
     /* the display and the graphics, opened together and primed */
-    if (!ygfx_open_screen(&gfx, &scr, &(yscr_desc){ .backend = sim ? YSCR_BACKEND_SIM : 0, .windowed = !fullscreen },
+    if (!ygfx_open_screen(&gfx, &scr, &(yscr_desc){ .backend = sim ? YSCR_BACKEND_SIM : 0, .windowed = !fullscreen,
+                                                     .sim_period_ns = sim && sim_hz > 0 ? (int64_t)llround(1e9 / sim_hz) : 0 },
                           &(ygfx_desc){ .background = { 0.05f, 0.05f, 0.05f } })) {
         fprintf(stderr, "trial_stroop: %s\n", ygfx_error(&gfx));
         return 1;

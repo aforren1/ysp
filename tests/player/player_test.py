@@ -125,6 +125,8 @@ class Run:
             self.err = out
             return
         cmd = [ctx.player, self.pack, "--out", self.data, "--sim", "--seed", "99", "--field", "participant=3"] + (args or [])
+        if ctx.hz is not None:
+            cmd += ["--sim-hz", ctx.hz]
         self.rc, self.err = self._run("player", cmd)
         if definition.get("version") == 2:
             bad = state_invariant(os.path.join(self.data, "events.csv"))
@@ -2365,12 +2367,14 @@ def main():
     ap.add_argument("--out", default=None)
     ap.add_argument("--only", default=None)
     ap.add_argument("--player", default=None, help="another player binary (the mutation test's)")
+    ap.add_argument("--hz", default=None, help="the simulated display's rate (default: the player's 60 Hz, no option)")
     a = ap.parse_args()
     a.bin = os.path.abspath(a.bin)
 
     class C:
         pass
     ctx = C()
+    ctx.hz = a.hz
     ctx.out = os.path.abspath(a.out or tempfile.mkdtemp(prefix="player_test"))
     os.makedirs(ctx.out, exist_ok=True)
     def find(name, dirs):
@@ -2409,6 +2413,7 @@ def t_v2_model(ctx):
     import diff as model_diff
     model_diff.YPAK = ctx.ypak
     model_diff.PLAYER = ctx.player
+    model_diff.setup(ctx.hz, None)
     work = os.path.join(ctx.out, "v2_model")
     os.makedirs(work, exist_ok=True)
     bad = model_diff.check_set(tempfile.mkdtemp(prefix="set", dir=work))

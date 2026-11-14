@@ -44,7 +44,15 @@ def tool(bin_dir, name):
     raise Fail("no program %s under %s" % (name, bin_dir))
 
 
+# --hz: the simulated display's rate for the player and every C program that
+# runs on --sim, so both sides see one frame grid. None keeps their default
+# (60 Hz) and passes no option, so a 60 Hz run's commands stay as they were.
+HZ = None
+
+
 def run(args, cwd=None):
+    if HZ is not None and "--sim" in args:
+        args = args + ["--sim-hz", HZ]
     r = subprocess.run(args, cwd=cwd, capture_output=True, text=True)
     if r.returncode != 0:
         raise Fail("%s: exit %d\n%s\n%s" % (" ".join(args), r.returncode, r.stdout, r.stderr))
@@ -606,7 +614,10 @@ def main():
     ap.add_argument("--out", default=None)
     ap.add_argument("--font", default=None)
     ap.add_argument("--only", default=None)
+    ap.add_argument("--hz", default=None, help="the simulated display's rate (default: the programs' 60 Hz)")
     a = ap.parse_args()
+    global HZ
+    HZ = a.hz
     a.bin = os.path.abspath(a.bin)
     a.out = os.path.abspath(a.out or os.path.join(a.bin, "player_compare"))
     if not os.path.isdir(a.out):

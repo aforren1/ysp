@@ -253,7 +253,7 @@ typedef struct pl_v2_session {
     int n_t;
     int cur_t;                 /* the template being lowered or run         */
     /* the samples (3.19 item 1) */
-    struct v2_sample { int64_t t; float x, y; int role; }* smp;
+    struct v2_sample { int64_t t, arr; float x, y; int role; }* smp;   /* arr: when it reaches the player */
     int n_smp, next_smp;
     double* gain;              /* per signal role                           */
     /* the graphs' channels after the timeline's */
@@ -1371,6 +1371,35 @@ static void v2_on_row(void* user, const ysig_row* row) {
 
 /* --- load -------------------------------------------------------------- */
 
+/* --test-sample-late: each role's reports reach the player that much after
+ * their stamp. The player takes them in the order they arrive, as a real
+ * run's queue gives them; a role's own order is its stamps'. */
+static int v2_smp_cmp(const void* a, const void* b) {
+    const struct v2_sample* x = (const struct v2_sample*)a;
+    const struct v2_sample* y = (const struct v2_sample*)b;
+    if (x->arr != y->arr) return x->arr < y->arr ? -1 : 1;
+    if (x->t != y->t) return x->t < y->t ? -1 : 1;   /* the file's order: stamps never go back */
+    return x->role - y->role;
+}
+static int v2_samples_late(pl_player* p) {
+    pl_v2_session* S = p->v2s;
+    int i, k;
+    if (p->args.n_lates == 0) return 0;
+    for (k = 0; k < p->args.n_lates; k++) {
+        const yexp_sigrole* sr = yexp_sigrole_get(p->def, p->args.lates[k].name);
+        int64_t late = (int64_t)llround(atof(p->args.lates[k].value) * 1e9);
+        if (!sr) {
+            pl_fail(p, "--test-sample-late %s: the definition has no signal role '%s'", p->args.lates[k].name, p->args.lates[k].name);
+            p->bad_arg = true;
+            return -1;
+        }
+        for (i = 0; i < S->n_smp; i++)
+            if (S->smp[i].role == (int)(sr - p->def->sigroles)) S->smp[i].arr = S->smp[i].t + late;
+    }
+    if (S->n_smp > 1) qsort(S->smp, (size_t)S->n_smp, sizeof *S->smp, v2_smp_cmp);
+    return 0;
+}
+
 static int v2_samples_load(pl_player* p) {
     pl_v2_session* S = p->v2s;
     FILE* f;
@@ -1421,10 +1450,11 @@ static int v2_samples_load(pl_player* p) {
             p->bad_arg = true;
             return -1;
         }
+        S->smp[S->n_smp].arr = S->smp[S->n_smp].t;
         S->n_smp++;
     }
     fclose(f);
-    return 0;
+    return v2_samples_late(p);
 }
 
 /* The --sim adapter of each signal role: a raw mouse's counts integrated
@@ -2860,7 +2890,7 @@ static int v2_feed(pl_player* p, const yscr_frame* f, int64_t limit) {
     {
     int fed = 0, rc = 0;
     YRT_ZONE(zs, "sig.samples");
-    while (rc == 0 && S->next_smp < S->n_smp && S->t0 + S->smp[S->next_smp].t <= f->onset && S->t0 + S->smp[S->next_smp].t <= limit) {
+    while (rc == 0 && S->next_smp < S->n_smp && S->t0 + S->smp[S->next_smp].arr <= f->onset && S->t0 + S->smp[S->next_smp].t <= limit) {
         const struct v2_sample* sm = &S->smp[S->next_smp++];
         yin_event e;
         memset(&e, 0, sizeof e);

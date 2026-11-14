@@ -146,6 +146,7 @@ static struct {
     bool sim, autorun, gradual, endpoint_only, raw;
     int input, sched[3], trace_cap;
     double rotation, cpi, onset_frac, radius;
+    double sim_hz;                    /* tests: --sim's rate; 0 is 60 Hz */
     float gain;                       /* px per count */
     uint64_t seed;
     const char *out_path, *traj_path;
@@ -219,14 +220,19 @@ static int parse_options(int argc, char** argv) {
         else if (!strcmp(argv[i], "--trace-cap") && i + 1 < argc) opt.trace_cap = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--test-order") && i + 1 < argc) opt.order_path = argv[++i];
         else if (!strcmp(argv[i], "--test-samples-out") && i + 1 < argc) opt.samples_path = argv[++i];
+        else if (!strcmp(argv[i], "--sim-hz") && i + 1 < argc) opt.sim_hz = atof(argv[++i]);
         else {
             fprintf(stderr, "usage: trial_visuomotor [--sim | --auto] [--sdl-mouse | --pen] [--schedule B,R,W] [--rotation DEG] "
                             "[--gradual] [--endpoint-only] [--gain PX] [--cpi N] [--radius PX] [--onset-frac F] [--seed N] "
-                            "[--out FILE] [--traj FILE] [--test-order FILE] [--test-samples-out FILE]\n");
+                            "[--out FILE] [--traj FILE] [--test-order FILE] [--test-samples-out FILE] [--sim-hz HZ]\n");
             return 2;
         }
     }
     opt.raw = opt.input == IN_RAW;
+    if (opt.sim_hz != 0 && !(opt.sim && opt.sim_hz >= 1 && opt.sim_hz <= 10000)) {
+        fprintf(stderr, "trial_visuomotor: --sim-hz takes 1..10000, with --sim\n");
+        return 2;
+    }
     if (opt.trace_cap < 64 || opt.trace_cap > TRACE_CAP) {
         fprintf(stderr, "trial_visuomotor: --trace-cap takes 64..%d\n", TRACE_CAP);
         return 2;
@@ -414,7 +420,9 @@ static bool open_task(void) {
     static float xy[2];
     /* the simulated display has no window: the script feeds counts itself */
     yscr_desc sd = { .backend = opt.sim ? YSCR_BACKEND_SIM : 0, .windowed = true, .window_w = 1024, .window_h = 768,
-                     .raw_mice = opt.raw && !opt.sim };
+                     .raw_mice = opt.raw && !opt.sim,
+                     /* whole ns, as ysp_player --sim-hz rounds it */
+                     .sim_period_ns = opt.sim_hz > 0 ? (int64_t)llround(1e9 / opt.sim_hz) : 0 };
     /* ysp/gfx.h 0.18.0 gives the simulated display the window's size, so
      * --sim has the geometry of a window run */
     if (!ygfx_open_screen(&gfx, &scr, &sd, &(ygfx_desc){ .background = { 0.3f, 0.3f, 0.3f } })) return fail(ygfx_error(&gfx));

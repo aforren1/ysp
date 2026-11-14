@@ -35,6 +35,19 @@ LAND = ("onset", "offset", "mark", "set")
 # passes its own, a mutation test another player).
 YPAK = None
 PLAYER = None
+# --hz: the player's --sim-hz and the model's grid; None is 60 Hz with no
+# option, so a 60 Hz run's commands stay as they were. --late: the hand's
+# samples reach the player this many seconds after their time
+# (--test-sample-late); the model has no arrival time, so it predicts the
+# rows of samples fed at their time.
+HZ = None
+LATE = None
+
+
+def setup(hz, late):
+    global HZ, LATE
+    HZ, LATE = hz, late
+    gen.set_hz(float(hz) if hz is not None else 60.0)
 
 # The fixed set that tests/player/player_test.py runs (t_v2_model): seeds
 # whose cases passed on player 0.9.0 (v2-lower aa6df27) and reach no GAP, so
@@ -85,6 +98,10 @@ def run_player(bin_dir, d, defn, script, samples):
            "--participant", "script:part.csv" if script else "silent"]
     if samples:
         cmd += ["--samples", "samples.csv"]
+        if LATE is not None:
+            cmd += ["--test-sample-late", "hand=%s" % LATE]
+    if HZ is not None:
+        cmd += ["--sim-hz", str(HZ)]
     p = subprocess.run(cmd, cwd=d, capture_output=True, text=True, timeout=300)
     if p.returncode != 0:
         return {"refused": ["player exit %d: %s" % (p.returncode, (p.stdout + p.stderr).strip()[-300:])]}
@@ -109,7 +126,13 @@ def run_player(bin_dir, d, defn, script, samples):
                 trials[ti]["lands"].append({"kind": row["kind"],
                                             "name": row["text"] if row["kind"] == "mark" else row["stimulus"],
                                             "frame": int(row["frame"]), "t_s": row["t_s"]})
-    return {"refused": None, "trials": [trials[i] for i in sorted(trials)], "out": out}
+    arms = None
+    try:
+        with open(os.path.join(out, "session.json")) as f:
+            arms = json.load(f).get("sig_arms")
+    except (OSError, ValueError):
+        pass
+    return {"refused": None, "trials": [trials[i] for i in sorted(trials)], "out": out, "sig_arms": arms}
 
 
 def invariant(trials):
@@ -203,6 +226,24 @@ def signature(diff):
         else:
             kind += " count"
     return kind
+
+
+GUARD_RE = re.compile(r"sig\.h: (-?\d+) hits retracted, (-?\d+) row runs, (-?\d+) derived runs changed; (-?\d+) pinned, "
+                      r"(-?\d+) before the window, (-?\d+) logs full, (-?\d+) no window; (-?\d+) unverified")
+GUARD_KEYS = ("retracted", "rows_stale", "derived_stale", "pinned", "far", "full", "off", "unverified")
+
+
+def guard_counts(got):
+    """The counts of the player's guard stop (v2.c v2_arm_check(), and the
+    frame's arm_unverified check), or None when it did not stop."""
+    txt = " ".join(got.get("refused") or [])
+    if "internal guard" not in txt:
+        return None
+    m = GUARD_RE.search(txt)
+    if m:
+        return dict(zip(GUARD_KEYS, (int(x) for x in m.groups())))
+    m = re.search(r"\((\d+) arm_unverified", txt)
+    return {"unverified": int(m.group(1)) if m else -1}
 
 
 def model_expect(defn, script, samples):
@@ -361,6 +402,7 @@ def one(args):
     inv_m = invariant(exp["trials"]) if exp.get("refused") is None and exp.get("trials") else None
     inv_p = invariant(got["trials"]) if got.get("refused") is None and got.get("trials") else None
     res = {"seed": seed, "dir": d, "inv_model": inv_m, "inv_player": inv_p, "refused": exp["refused"], "player_refused": got["refused"],
+           "sig_arms": got.get("sig_arms"), "guard": guard_counts(got),
            "gaps": trial_gaps(exp, diff), "diff": diff,
            "hang": diff is None and exp["refused"] is None and bool(exp["trials"])
                    and bool(exp["trials"][-1].get("hang") or exp["trials"][-1].get("loop"))}
@@ -386,7 +428,10 @@ def main(argv):
     ap.add_argument("--no-shrink", action="store_true")
     ap.add_argument("--log", default=None, help="a JSON lines file of every case")
     ap.add_argument("--fixed", action="store_true", help="run the fixed set (SEEDS, SEEDS_MULTI) only")
+    ap.add_argument("--hz", default=None, help="the simulated display's rate (default 60 Hz, no option)")
+    ap.add_argument("--late", default=None, help="the hand's samples reach the player S seconds late")
     a = ap.parse_args(argv)
+    setup(a.hz, a.late)
     lo, hi = (int(x) for x in a.seeds.split(":"))
     os.makedirs(a.work, exist_ok=True)
     if a.fixed:
@@ -402,7 +447,11 @@ def main(argv):
     jobs = [(s, os.path.abspath(a.bin), work, not a.no_shrink) for s in range(lo, hi)]
     n = refused = agreed_ref = bad = gap_bad = hangs = inv_m = inv_p = 0
     log = open(a.log, "w", newline="\n") if a.log else None
-    with multiprocessing.Pool(min(a.jobs, 8)) as pool:
+    guards = Counter()
+    n_guard = 0
+    arms = Counter()
+    n_arms = 0
+    with multiprocessing.Pool(min(a.jobs, 8), initializer=setup, initargs=(a.hz, a.late)) as pool:
         for r in pool.imap_unordered(one, jobs):
             n += 1
             if log:
@@ -410,6 +459,15 @@ def main(argv):
                 log.flush()
             if r.get("hang"):
                 hangs += 1
+            if r.get("guard"):
+                n_guard += 1
+                for k, v in r["guard"].items():
+                    if v:
+                        guards[k] += 1
+            if r.get("sig_arms"):
+                n_arms += 1
+                for k, v in r["sig_arms"].items():
+                    arms[k] += v
             for side, key in (("model", "inv_model"), ("player", "inv_player")):
                 if r.get(key):
                     if side == "model":
@@ -436,6 +494,8 @@ def main(argv):
     print("cases %d, refused by the model %d (agreed %d), hangs both agree on %d (rows not compared), "
           "mismatches %d (%d at a GAP); invariant failures: model %d, player %d" %
           (n, refused, agreed_ref, hangs, bad, gap_bad, inv_m, inv_p))
+    print("guard stops %d (cases with a count above 0: %s); sessions with sig_arms %d, summed: %s" %
+          (n_guard, dict(guards), n_arms, dict(arms)))
     return 1 if (bad or inv_m or inv_p) else 0
 
 

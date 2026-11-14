@@ -2567,6 +2567,12 @@ int pl_run(pl_player* p) {
     }
     for (i = 0; i < PL_FRAME_RING; i++) p->frame_trial[i] = YTR_MISSING_INT;
     p->abort_trial = -1;
+    if (p->args.measure) {
+        /* percentiles of the frame work, not only its largest frame */
+        p->work_hist = (uint32_t*)pl_alloc(p, sizeof(uint32_t) * PL_WORK_BINS);
+        if (!p->work_hist) return -1;
+        memset(p->work_hist, 0, sizeof(uint32_t) * PL_WORK_BINS);
+    }
     if (!p->args.sim) {
         printf("ysp_player: running; Shift+Esc stops the session\n");
         fflush(stdout);
@@ -2606,6 +2612,11 @@ int pl_run(pl_player* p) {
             p->work_n++;
             if (t1 - t0 > p->work_max_ns) { p->work_max_ns = t1 - t0; p->work_max_frame = f.index; }
             if (t1 - t0 > 16000000) p->work_over_16ms++;
+            if (t1 - t0 > f.period) p->work_over_period++;
+            if (p->work_hist) {
+                int64_t b = (t1 - t0) / PL_WORK_BIN_NS;
+                p->work_hist[b < PL_WORK_BINS ? b : PL_WORK_BINS - 1]++;
+            }
         } else {
             YRT_ZONE(zfr, "pl.frame");
             pl_loop_active = 1;
