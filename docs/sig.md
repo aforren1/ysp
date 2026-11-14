@@ -515,7 +515,7 @@ The footprint `F(c)` of a call is the set of nodes it can change:
 
 | Call | Footprint |
 |---|---|
-| Feed | the union of `D(s)` over the sources s that take the event |
+| Feed | the union of `D(s)` over the sources s that take the event and do not drop it |
 | Frame, settle | every node |
 | `ysig_arm(d)`, `ysig_disarm(d)` | `D(d)` |
 | `ysig_set(n)`, `ysig_set_data(n)` | `D(n)` |
@@ -539,21 +539,31 @@ R is built call by call, in call order:
      or before `τ` and whose footprint meets `F(G)`.
 
    Every call of R after that place has a time later than `τ` or a
-   footprint disjoint from `F(G)`.
+   footprint disjoint from `F(G)`. The test is per call, so G can go
+   between the calls of an earlier group's block. That is allowed and
+   harmless: every call G passes shares no node with it or is later
+   than `τ`, and calls that share no node commute.
 3. An ahead group waits, with or without a window. It is added at the
-   end of R right before the first later input call whose time is later
-   than `τ` and whose footprint meets `F(G)`. Waiting groups go in by
-   `τ`, then call order. A group that never meets such a call is never
-   made. A state call in no group made while a group waits has the time
-   `N < τ`, so it goes before the group: a `ysig_set()` of its detect
-   applies to the waiting arm. Two exceptions cancel a waiting arm:
-   - a `ysig_disarm(d)`, in a group or in no group, cancels every waiting
-     arm of d whose `τ` is later than the disarm's time;
+   end of R right before the first later call, an input call or a state
+   call, whose time is later than `τ` and whose footprint meets `F(G)`,
+   or right before a barrier. For this test a state call's time is `N`
+   at its call (input that does not meet `F(G)` can move `N` past `τ`).
+   Waiting groups go in by `τ`, then call order. A group that never
+   meets such a call is never made. A state call with a time at or
+   before `τ` goes before the group: a `ysig_set()` of its detect then
+   applies to the waiting arm. A disarm cancels a waiting arm:
+   - a `ysig_disarm(d)`, in a group or in no group, whose time is at or
+     before `τ` cancels the waiting arms of d made before it. One whose
+     time is later than `τ` goes after the arm, in time order (the arm
+     goes in first, by the test above). The cancel is decided when the
+     disarm's time is known: at its group's arm, or at the end of its
+     gap (the next input call or barrier);
    - a barrier cancels every waiting arm. The other calls of a waiting
      group go into R right before the barrier, without the arm.
 
    A cancelled arm is not made and is counted in `arm_ahead_cancelled`.
-   The other calls of its group still go in by this rule. Reason: a
+   The other calls of its group still go in by this rule, and their
+   footprint for the test is the union of theirs alone. Reason: a
    disarm ends what the caller armed d for. A caller that leaves a state
    before the input reaches the time it armed that state's control at
    (the player arms at a mark's onset, which can be ahead of the poll)
@@ -562,6 +572,12 @@ R is built call by call, in call order:
    trial the arm was for. Two arms with no disarm between them (E) stay
    as above: both are made, by `τ`.
 4. Input calls keep their call order in R. A barrier is never crossed.
+
+Without a window an ahead group's state calls cannot be taken back once
+made: they stay where made, and only the arm waits (counted in
+`arm_past_off`; with a window whose log did not keep one of them, in
+`arm_past_full`). At most 32 arms and 64 group calls wait; an arm with
+no room is made at once on the input known, counted in `arm_past_full`.
 
 Equal times: a call at `τ` that must come before G (rule 2) does. So an
 input at `τ`, a frame with onset `τ`, a settle at `τ`, and a group at
@@ -620,6 +636,12 @@ At its place, `ysig_arm(d, τ)`:
 
 A present arm does the same (`τ = N`).
 
+A disarm at its time (its group's, else `N` at its call) first meets
+its detect's hold up to that time, as rule 1 of the arm, then ends the
+arm. Reason: the exit that a hit causes disarms the control at the
+hit's time; a hold that ended then is the hit that caused the exit, and
+must stand.
+
 #### A change at an arm reaches every node (D)
 
 A fall or a rise that an arm makes is a new value of the detect at `τ`.
@@ -661,7 +683,8 @@ get them depends on the desc:
   They are not handed out again.
 - **Final only** (`desc.rows_final`, `desc.derived_final`, each with a
   window): a row or a derived event is held until it is final, then
-  handed out, in R's order. It is final when the call that made it is
+  handed out, in R's order per node; the order across nodes of calls
+  with disjoint footprints is unspecified. It is final when the call that made it is
   older than the oldest call the window can still run again: the
   oldest checkpoint's, or the log's oldest after the logs ran full. A
   later past group can then not change it: its place would be before
