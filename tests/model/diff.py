@@ -42,11 +42,13 @@ PLAYER = None
 # rows of samples fed at their time.
 HZ = None
 LATE = None
+EXTRA = []   # --extra: more player options (experiments: --test-record-delay N)
 
 
-def setup(hz, late):
-    global HZ, LATE
+def setup(hz, late, extra=None):
+    global HZ, LATE, EXTRA
     HZ, LATE = hz, late
+    EXTRA = list(extra or [])
     gen.set_hz(float(hz) if hz is not None else 60.0)
 
 # The fixed set that tests/player/player_test.py runs (t_v2_model): seeds
@@ -102,6 +104,7 @@ def run_player(bin_dir, d, defn, script, samples):
             cmd += ["--test-sample-late", "hand=%s" % LATE]
     if HZ is not None:
         cmd += ["--sim-hz", str(HZ)]
+    cmd += EXTRA
     p = subprocess.run(cmd, cwd=d, capture_output=True, text=True, timeout=300)
     if p.returncode != 0:
         return {"refused": ["player exit %d: %s" % (p.returncode, (p.stdout + p.stderr).strip()[-300:])]}
@@ -430,8 +433,10 @@ def main(argv):
     ap.add_argument("--fixed", action="store_true", help="run the fixed set (SEEDS, SEEDS_MULTI) only")
     ap.add_argument("--hz", default=None, help="the simulated display's rate (default 60 Hz, no option)")
     ap.add_argument("--late", default=None, help="the hand's samples reach the player S seconds late")
+    ap.add_argument("--extra", default="", help="more player options, one string (the model does not see them)")
     a = ap.parse_args(argv)
-    setup(a.hz, a.late)
+    extra = a.extra.split()
+    setup(a.hz, a.late, extra)
     lo, hi = (int(x) for x in a.seeds.split(":"))
     os.makedirs(a.work, exist_ok=True)
     if a.fixed:
@@ -451,7 +456,7 @@ def main(argv):
     n_guard = 0
     arms = Counter()
     n_arms = 0
-    with multiprocessing.Pool(min(a.jobs, 8), initializer=setup, initargs=(a.hz, a.late)) as pool:
+    with multiprocessing.Pool(min(a.jobs, 8), initializer=setup, initargs=(a.hz, a.late, extra)) as pool:
         for r in pool.imap_unordered(one, jobs):
             n += 1
             if log:
