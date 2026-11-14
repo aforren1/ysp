@@ -17,13 +17,13 @@ flags = ["-std=c99", "-O1", "-w", "-fsanitize=undefined", "-fno-sanitize-recover
 libs = ["-lm"]
 timeout = 60
 
-[test.sig_oracle]
-source = "tests/adapt/sig_arm_oracle.c"
+[test.sig_ref]
+source = "tests/adapt/sig_arm_ref_targets.c"
 compiler = "gcc"
-flags = ["-std=c99", "-O2", "-w", "-DYSIG_ARM_REENTRY_COUNTED"]
+flags = ["-std=c99", "-O2", "-w", "-DSIG_ARM_REF_SPEC=1", "-DSIG_HAS_UNV"]
 libs = ["-lm"]
 timeout = 300
-env = { SIG_ORACLE_CASES = "20000" }
+env = { SIG_ORACLE_CASES = "3000", SIG_ORACLE_SEED = "20261114" }
 
 [[mutant]]
 id = "00"
@@ -1791,9 +1791,8 @@ replace = '''    return c->tr < t && ysig__fp_meets(g, f, F);'''
 [[mutant]]
 id = "213"
 name = "the ring slots not put back"
-test = "sig"
-expect = "survived"
-note = "Killed by sig_arm_oracle until its retirement from ctest (it encodes 0.6.0's rule before the semantics); no unit test reaches it. For the reviewer's oracle, written from docs/sig.md, once it is in the tree."
+test = "sig_ref"
+note = "Killed by the reviewer's oracle (sig_ref: a wrong case with no count at 3,000 cases, seed 20261114). No unit test reaches it."
 why = "v0.6.0: the undo log (sig_arm_oracle: a ring entry after a call)."
 find = '''        *u->at = u->old;'''
 replace = '''        (void)u;'''
@@ -1801,8 +1800,8 @@ replace = '''        (void)u;'''
 [[mutant]]
 id = "214"
 name = "an equal-time overwrite not in the undo log"
-test = "sig"
-note = "Killed only through a count: test_arm_repro's residual 1414 case needs the undo log to run full at a given call, and the missing note moves that call (no stale window found). No test checks the ring's value after a run again; the reviewer's oracle does."
+test = "sig_ref"
+note = "Killed by the reviewer's oracle (sig_ref: a wrong case with no count). sig_test reaches it only through a count (the residual 1414 case's undo log)."
 why = "v0.6.0: the ring's equal-time replace (sig_arm_oracle: a ring entry after a call)."
 find = '''        if (v->t == last->t) { ysig__undo_note(g, last); *last = *v; return; }'''
 replace = '''        if (v->t == last->t) { *last = *v; return; }'''
@@ -1961,9 +1960,8 @@ replace = '''    if (d->catchup_frames < 0 || d->catchup_frames > 80 ||'''
 [[mutant]]
 id = "232"
 name = "the hit matched on its lanes only"
-test = "sig"
-expect = "survived"
-note = "Killed by sig_arm_oracle until its retirement from ctest (it encodes 0.6.0's rule before the semantics); no unit test reaches it. For the reviewer's oracle, written from docs/sig.md, once it is in the tree."
+test = "sig_ref"
+note = "Killed by the reviewer's oracle (sig_ref: a wrong case with no count). No unit test reaches it."
 why = "v0.6.0: a hit's value is all of it (sig_arm_oracle: a hit B has, A not)."
 find = '''!memcmp(&l->h.value, &h->value, sizeof h->value)) {'''
 replace = '''!memcmp(l->h.value.v, h->value.v, sizeof h->value.v)) {'''
@@ -2655,10 +2653,10 @@ replace = ''''''
 [[mutant]]
 id = "316"
 name = "exactness: 2 (c) at any N(G) not tested in the log"
-test = "sig"
-why = "2 (c) for a cancelled waiting group let in at a past group's place."
+test = "sig_ref"
 expect = "survived"
-note = "No test places a cancelled waiting group with a disarm inside a past group's block with N(G) past its time: the shape needs a past group's state call to let it in. The trigger path (313) has the test."
+note = "Neither a test nor the reviewer's oracle (3,000 cases here; 20,000 at seed 20261114 by hand, 2026-11-14) places a cancelled waiting group with a disarm inside a past group's block with N(G) past its time: the shape needs a past group's state call to let it in. The trigger path (313) has the test."
+why = "2 (c) for a cancelled waiting group let in at a past group's place."
 find = '''        if (!bad && armed < 0 && ysig__fp_any(g, Fa) && N != t) bad = 1;'''
 replace = ''''''
 

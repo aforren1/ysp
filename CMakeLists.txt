@@ -750,16 +750,18 @@ if(YSP_BUILD_TESTS)
     # ysp/experiment.h's table of defaults against the headers it came from.
     ysp_add_program(test_experiment_tables tests/adapt/experiment_tables_test.c core methods devices rig)
     add_test(NAME test_experiment_tables COMMAND test_experiment_tables)
-    # ysp/sig.h 0.6.0: the randomized differential of an arm in the past
-    # (3,000 cases here; docs/sig.md has the run at scale)
-    ysp_add_program(test_sig_arm_diff tests/adapt/sig_arm_diff.c core)
-    ysp_add_program(test_sig_arm_oracle tests/adapt/sig_arm_oracle.c core)
-    target_compile_definitions(test_sig_arm_oracle PRIVATE YSIG_ARM_REENTRY_COUNTED)
-    # test_sig_arm_diff is retired from ctest: its B moves only the last arm; the
-    # oracle (time order for every arm) replaces it (docs/sig.md)
-    # test_sig_arm_oracle is retired from ctest: its B encodes 0.6.0's rule
-    # before the semantics of docs/sig.md; the reviewer's oracle, written
-    # from that text, takes its place
+    # ysp/sig.h 0.6.0's arm in the past: the reviewer's oracle and spec
+    # cases, written from docs/sig.md ("An arm in the past: the
+    # semantics"). The oracle at 3,000 cases and a fixed seed; it passes on
+    # the two targets of "Exactness" (sig_arm_ref_check.cmake). The run at
+    # scale is in docs/sig.md.
+    ysp_add_program(test_sig_arm_spec tests/adapt/sig_arm_spec_cases.c core)
+    target_compile_definitions(test_sig_arm_spec PRIVATE SIG_ARM_REF_SPEC=1)
+    add_test(NAME test_sig_arm_spec COMMAND test_sig_arm_spec)
+    ysp_add_program(test_sig_arm_ref tests/adapt/sig_arm_ref.c core)
+    target_compile_definitions(test_sig_arm_ref PRIVATE SIG_ARM_REF_SPEC=1 SIG_HAS_UNV)
+    add_test(NAME test_sig_arm_ref COMMAND ${CMAKE_COMMAND} -DPROG=$<TARGET_FILE:test_sig_arm_ref>
+             -DCASES=3000 -DSEED=20261114 -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/adapt/sig_arm_ref_check.cmake)
 endif()
 if(TARGET SDL3::SDL3 AND YSP_BUILD_EXAMPLES)
     # The jsPsych-style trials of examples/response/ (docs/response.md,
