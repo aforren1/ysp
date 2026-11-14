@@ -34,12 +34,13 @@ typedef struct sig_api {
     const ysig_param* (*op_params)(int, int*);
     const char* (*op_name)(int);
     int (*settle)(ysig_graph*, int64_t);
+    bool (*flush)(ysig_graph*);
 } sig_api;
 
 static const sig_api g_sig_api = {
     ysig_version, ysig_check, ysig_arena_size, ysig_open, ysig_error, ysig_reset, ysig_reset_trial, ysig_recenter, ysig_set, ysig_set_data,
     ysig_feed, ysig_frame, ysig_arm, ysig_disarm, ysig_detected, ysig_derived, ysig_value_of, ysig_value_at,
-    ysig_adapter_node, ysig_get_stats, ysig_replay, ysig_op_params, ysig_op_name, ysig_settle
+    ysig_adapter_node, ysig_get_stats, ysig_replay, ysig_op_params, ysig_op_name, ysig_settle, ysig_flush
 };
 
 static double g_arena[4096];
@@ -95,7 +96,8 @@ int main(void) {
     /* v0.6.0: the window's counts, and a settle (no window: a zeroed desc) */
     if (st.arm_caught_up != 0 || st.arm_past_off != 0 || st.arm_past_far != 0 || st.arm_past_full != 0 ||
         st.arm_hits_retracted != 0 || st.arm_rows_stale != 0 || st.arm_derived_stale != 0 || st.arm_hits_superseded != 0 || st.arm_reentry != 0 || st.call_reentry != 0 ||
-        g_sig_api.settle(&g, 3000) != 0) return 10;
+        st.arm_past_pinned != 0 || st.arm_ahead_cancelled != 0 || g_sig_api.settle(&g, 3000) != 0 || !g_sig_api.flush(&g)) return 10;
+    if (d.rows_final || d.derived_final || d.catchup_rows != 0 || (int)YSIG_J_FLUSH != 11) return 12;
     if (d.catchup_frames != 0 || d.catchup_calls != 0 || d.catchup_writes != 0 || (int)YSIG_J_SETTLE != 10) return 11;
     if (strcmp(g_sig_api.version(), YSIG_VERSION_STRING) || strcmp(g_sig_api.op_name(YSIG_OP_BIND), "bind")) return 6;
     if ((int)YSIG_ENTRY_NOW != 2 || (int)YSIG_ENTRY_FRESH != 1 || (int)YSIG_ENTRY_ARM != 0) return 9;   /* p12's values */

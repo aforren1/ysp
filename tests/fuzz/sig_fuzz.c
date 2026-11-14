@@ -135,6 +135,11 @@ static void run_one(const uint8_t* data, size_t size) {
         d.catchup_frames = b0 % 5 == 0 ? 0 : 1 + (int)((b0 + w) % 4);
         d.catchup_calls = 16 + (int)(rb(&r) % 64) * 16;
         d.catchup_writes = 64 + (int)(rb(&r) % 64) * 256;
+        /* v0.6.0: final-only rows and derived events, a small buffer too */
+        w = rb(&r);
+        d.rows_final = (w & 1) != 0;
+        d.derived_final = (w & 2) != 0;
+        d.catchup_rows = (w & 4) ? 2 + (int)(w >> 3) % 16 : 0;
     }
     if (b0 & 0x80) {
         /* a role and its adapter: a mouse, or a pen, from the bytes */
@@ -282,7 +287,11 @@ static void run_one(const uint8_t* data, size_t size) {
                 /* v0.6.0: a settle at a time input is fed up to */
                 if (b & 0x20) g_sink += ysig_settle(&g, t - (int64_t)(b % 3) * 500000);
             }
-            else if (b % 5 == 2) g_sink += ysig_disarm(&g, node);
+            else if (b % 5 == 2) {
+                g_sink += ysig_disarm(&g, node);
+                /* v0.6.0: a flush, a barrier that resets nothing */
+                if (b & 0x20) g_sink += ysig_flush(&g);
+            }
             else if (b % 5 == 3) ysig_reset_trial(&g, t);
             else {
                 /* a recenter: refused or not, the journal must replay */
