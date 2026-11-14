@@ -4154,6 +4154,8 @@ static void test_arm_spec(void) {
         if (what == 0) CHECK(ysig_disarm(&g, 1));
         else CHECK(ysig_set(&g, 1, YSIG_DETECT_LEVEL, 100));
         CHECK(g.wt->n == 0 && ((ysig__det_st*)g.nd[1].st)->t_arm == 60 * MS);
+        /* a disarm takes effect at the end of its gap (S1): the next input */
+        e = PEN_E(75 * MS, 2, 0, 0, YIN_TIER_2); ysig_feed(&g, &e);
         ysig_get_stats(&g, &st);
         CHECK(st.arm_ahead_cancelled == 0);
         CHECK(((ysig__det_st*)g.nd[1].st)->armed == (what == 1));
@@ -4363,6 +4365,162 @@ static void test_arm_spec2(void) {
     CHECK(ysig_settle(&g, 12 * MS) == 0 && ysig_arm(&g, 1, 12 * MS));
     CHECK(g_sp_rows == 1 && g_sp_row_v[0] == 0 && g_sp_row_t[0] == 12 * MS);
 #undef SP_OPEN
+}
+
+/* The independent oracle's reproducers (2026-11-13, the reviewer, from
+ * the text): H1, H2, H4 to H8 and S1, one case each. */
+static uint64_t g_rp_ar[(8u << 20) / 8];
+static ysig_graph g_rp;
+static int g_rp_rows, g_rp_ooo;
+static int64_t g_rp_last;
+static void rp_on_row(void* u, const ysig_row* r) { (void)u; if (r->frame <= g_rp_last) g_rp_ooo++; g_rp_last = r->frame; g_rp_rows++; }
+static void rp_feed(int64_t t, double x, int ctl, int dev) {
+    yin_event e;
+    memset(&e, 0, sizeof e);
+    e.t = t; e.type = YIN_SAMPLE; e.kind = YIN_KIND_PEN; e.control = (uint32_t)ctl; e.device = (uint32_t)dev;
+    e.x = (float)x; e.value = (float)x; e.stamp = YIN_TIER_2;
+    ysig_feed(&g_rp, &e);
+}
+static void rp_frame(int64_t o) {
+    float v[1] = { 0 };
+    ysig_frame_in f;
+    memset(&f, 0, sizeof f);
+    f.index = o / MS; f.onset_ns = o; f.poll_ns = o; f.has_poll = true; f.values = v; f.n_values = 1;
+    ysig_frame(&g_rp, &f);
+}
+static int rp_open(ysig_node* n, int nn, int K, int calls, bool rows_final, bool derived_final) {
+    ysig_desc d;
+    memset(&d, 0, sizeof d);
+    d.nodes = n; d.n_nodes = nn; d.arena = g_rp_ar; d.catchup_frames = K; d.catchup_calls = calls;
+    d.rows_final = rows_final; d.derived_final = derived_final; d.on_row = rp_on_row;
+    d.channels = g_ch; d.n_channels = 64;
+    d.arena_size = ysig_arena_size(&d);
+    if (!d.arena_size || d.arena_size > sizeof g_rp_ar || !ysig_open(&g_rp, &d)) { g_failures++; return 0; }
+    ysig_reset(&g_rp, 0);
+    g_rp_rows = g_rp_ooo = 0;
+    g_rp_last = -1;
+    return 1;
+}
+static void test_arm_repro(void) {
+    ysig_node n[4];
+    ysig_stats s0, s1;
+    ysig_hit h[64];
+    yin_event ev[64];
+    int K, m, k, got, f, barrier;
+    g_where = "oracle reproducers";
+    /* H1: inputs older than the window's log that pin a group: the frames
+     * a detect on a channel node reads */
+    n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 2);
+    n[1] = ysig_node_of(YSIG_OP_CHANNEL, -1, -1);
+    n[2] = ysig_node_of(YSIG_OP_DETECT, 1, -1); n[2].p[YSIG_DETECT_LEVEL] = 0.5; n[2].p[YSIG_DETECT_START] = 1; n[2].p[YSIG_DETECT_AT] = 1;
+    if (!rp_open(n, 3, 1, 0, false, false)) return;
+    rp_feed(1 * MS, 0, YIN_AXIS_POSITION, 1); rp_frame(16 * MS); rp_frame(33 * MS); rp_frame(50 * MS);
+    ysig_arm(&g_rp, 2, 5 * MS);
+    rp_feed(52 * MS, 0, YIN_AXIS_POSITION, 1);
+    ysig_get_stats(&g_rp, &s0);
+    ysig_arm(&g_rp, 2, 5 * MS);
+    ysig_get_stats(&g_rp, &s1);
+    CHECK(s1.arm_past_pinned - s0.arm_past_pinned == 1);
+    /* H2: a disarm in a waiting group cancels when that group goes in */
+    n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 2);
+    n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1); n[1].p[YSIG_DETECT_LANE] = 0; n[1].p[YSIG_DETECT_LEVEL] = 5; n[1].p[YSIG_DETECT_START] = 1;
+    n[2] = n[1];
+    if (!rp_open(n, 3, 4, 0, false, false)) return;
+    rp_feed(1 * MS, 0, YIN_AXIS_POSITION, 1);
+    ysig_arm(&g_rp, 1, 50 * MS);
+    rp_feed(2 * MS, 0, YIN_AXIS_POSITION, 1);
+    ysig_disarm(&g_rp, 1);
+    ysig_arm(&g_rp, 2, 20 * MS);
+    rp_feed(30 * MS, 0, YIN_AXIS_POSITION, 1);
+    ysig_get_stats(&g_rp, &s1);
+    CHECK(s1.arm_ahead_cancelled == 1);
+    rp_feed(60 * MS, 10, YIN_AXIS_POSITION, 1);
+    m = ysig_detected(&g_rp, h, 64);
+    for (k = 0; k < m; k++) CHECK(h[k].node != 1);
+    /* H4: a feed every source drops is no input call: set, the dropped
+     * feed and the arm are one group, the hit at 20 ms */
+    n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 2);
+    n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1); n[1].p[YSIG_DETECT_LANE] = 0; n[1].p[YSIG_DETECT_LEVEL] = 5; n[1].p[YSIG_DETECT_START] = 1;
+    if (!rp_open(n, 2, 4, 0, false, false)) return;
+    rp_feed(10 * MS, 3, YIN_AXIS_POSITION, 1); rp_frame(16 * MS); rp_feed(20 * MS, 4.5, YIN_AXIS_POSITION, 1);
+    ysig_set(&g_rp, 1, YSIG_DETECT_LEVEL, 4);
+    rp_feed(15 * MS, 0, YIN_AXIS_POSITION, 1);   /* older than device 1's last: dropped */
+    ysig_arm(&g_rp, 1, 12 * MS);
+    CHECK(ysig_detected(&g_rp, h, 64) == 1 && h[0].t == 20 * MS);
+    /* H5 (S1): a disarm in a past group meets the hold up to the group's
+     * time, also with no window; H6 (S2): a present arm lets in an earlier
+     * waiting arm it meets; S1: a disarm in an ahead group waits with it */
+    for (K = 0; K <= 4; K += 4) {
+        n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2);
+        n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1); n[1].p[YSIG_DETECT_LANE] = 0; n[1].p[YSIG_DETECT_LEVEL] = 5;
+        n[1].p[YSIG_DETECT_HOLD] = 0.004; n[1].p[YSIG_DETECT_START] = 1;
+        n[2] = src_node(YIN_KIND_PEN, YIN_AXIS_PEN_PRESSURE, 3, 1);
+        n[3] = ysig_node_of(YSIG_OP_DETECT, 2, -1); n[3].p[YSIG_DETECT_LANE] = 0; n[3].p[YSIG_DETECT_LEVEL] = 5; n[3].p[YSIG_DETECT_START] = 1;
+        if (!rp_open(n, 4, K, 0, false, false)) return;
+        rp_feed(1 * MS, 10, YIN_AXIS_POSITION, 1);
+        ysig_arm(&g_rp, 1, 1 * MS);
+        rp_feed(10 * MS, 0, YIN_AXIS_PEN_PRESSURE, 3);
+        ysig_disarm(&g_rp, 1);
+        ysig_arm(&g_rp, 3, 3 * MS);
+        CHECK(ysig_detected(&g_rp, h, 64) == 0);
+        n[1].p[YSIG_DETECT_HOLD] = 0.008;
+        if (!rp_open(n, 3, K, 0, false, false)) return;
+        rp_feed(10 * MS, 10, YIN_AXIS_POSITION, 1);
+        ysig_arm(&g_rp, 1, 15 * MS);
+        rp_feed(20 * MS, 1, YIN_AXIS_PEN_PRESSURE, 3);
+        ysig_arm(&g_rp, 1, 20 * MS);
+        rp_feed(25 * MS, 10, YIN_AXIS_POSITION, 1);
+        rp_feed(30 * MS, 10, YIN_AXIS_POSITION, 1);
+        CHECK(ysig_detected(&g_rp, h, 64) == 1 && h[0].t == 28 * MS);
+        n[1].p[YSIG_DETECT_HOLD] = 0.01;
+        if (!rp_open(n, 2, K, 0, false, false)) return;
+        rp_feed(1 * MS, 10, YIN_AXIS_POSITION, 1);
+        ysig_arm(&g_rp, 1, 1 * MS);
+        rp_feed(2 * MS, 10, YIN_AXIS_POSITION, 1);
+        ysig_disarm(&g_rp, 1);
+        ysig_arm(&g_rp, 1, 15 * MS);
+        CHECK(ysig_detected(&g_rp, h, 64) == 0);
+        rp_feed(20 * MS, 10, YIN_AXIS_POSITION, 1);
+        CHECK(ysig_detected(&g_rp, h, 64) == 1 && h[0].t == 11 * MS);
+    }
+    /* H7: final-only rows with small logs and a fallback: every frame row
+     * once, in order, by the flush */
+    n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 2);
+    n[1] = ysig_node_of(YSIG_OP_RECORD, 0, -1); n[1].p[0] = 1;
+    n[2] = ysig_node_of(YSIG_OP_DETECT, 0, -1); n[2].p[YSIG_DETECT_LANE] = 0; n[2].p[YSIG_DETECT_LEVEL] = 5; n[2].p[YSIG_DETECT_START] = 1;
+    if (!rp_open(n, 3, 3, 32, true, false)) return;
+    for (f = 1; f <= 20; f++) {
+        int ns = f % 5 == 0 ? 40 : 3;
+        for (k = 0; k < ns; k++) rp_feed((f - 1) * 16 * MS + (k + 1) * 300000, 0, YIN_AXIS_POSITION, 1);
+        if (f % 3 == 0) ysig_arm(&g_rp, 2, (f - 1) * 16 * MS);
+        rp_frame(f * 16 * MS);
+    }
+    ysig_flush(&g_rp);
+    ysig_get_stats(&g_rp, &s1);
+    CHECK(g_rp_rows == 20 && g_rp_ooo == 0 && s1.arm_past_full >= 1);
+    /* H8: a barrier makes 240 derived events final at once: none lost to
+     * the 64-event queue, a caller that drains until 0 gets them all */
+    for (barrier = 0; barrier < 3; barrier++) {
+        n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 2);
+        n[1] = ysig_node_of(YSIG_OP_EMIT, 0, -1);
+        n[2] = ysig_node_of(YSIG_OP_RECORD, 0, -1);
+        if (!rp_open(n, 3, 8, 0, true, true)) return;
+        got = 0;
+        for (f = 1; f <= 6; f++) {
+            for (k = 0; k < 40; k++) {
+                rp_feed((f - 1) * 16 * MS + (k + 1) * 400000, 0, YIN_AXIS_POSITION, 1);
+                while ((m = ysig_derived(&g_rp, ev, 64)) > 0) got += m;
+            }
+            rp_frame(f * 16 * MS);
+            while ((m = ysig_derived(&g_rp, ev, 64)) > 0) got += m;
+        }
+        if (barrier == 0) ysig_flush(&g_rp);
+        else if (barrier == 1) ysig_reset(&g_rp, 100 * MS);
+        else ysig_reset_trial(&g_rp, 100 * MS);
+        while ((m = ysig_derived(&g_rp, ev, 64)) > 0) got += m;
+        ysig_get_stats(&g_rp, &s1);
+        CHECK(got == 240 && g_rp_rows == 240 && s1.derived_lost == 0);
+    }
 }
 
 /* The second review of 0.6.0's fix round (2026-11-13). */
@@ -5459,6 +5617,7 @@ int main(void) {
     test_arm_review2();
     test_arm_spec();
     test_arm_spec2();
+    test_arm_repro();
     if (g_failures) { fprintf(stderr, "sig_test: %d failures\n", g_failures); return 1; }
     printf("sig_test: all checks passed\n");
     return 0;

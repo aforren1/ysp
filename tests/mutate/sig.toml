@@ -2311,3 +2311,64 @@ test = "sig"
 why = "A group that disarms a detect ends its arm at the group's time: its later hits were the ended arm's (test_arm_spec2; the model's 65072 and 68113 stopped on them)."
 find = '''    for (k = 0; k < cu->n_grp_dis; k++) if (cu->grp_dis[k] == hit_node) return 1;'''
 replace = '''    (void)k;'''
+
+[[mutant]]
+id = "275"
+name = "input before the window never pins"
+test = "sig"
+why = "The reviewer's H1: frames older than the log that pin a group (test_arm_repro)."
+find = '''    if (cu->n_ck && !cu->ck[cu->ck0].bar && cu->ck[cu->ck0].cover > t) pinned = 1;'''
+replace = '''    (void)0;'''
+
+[[mutant]]
+id = "276"
+name = "a feed every source drops ends a gap"
+test = "sig"
+why = "The reviewer's H4: such a feed is no input call (test_arm_repro)."
+find = '''        if (!ysig__feed_fp(g, e, f, &mask, &all)) takers = 0;'''
+replace = '''        (void)ysig__feed_fp(g, e, f, &mask, &all);'''
+
+[[mutant]]
+id = "277"
+name = "a disarm takes effect at its call"
+test = "sig"
+why = "S1: at the end of its gap (the reviewer's H5, test_arm_repro)."
+find = '''    if (w->n_dis < YSIG__GAP_DIS) {
+        /* it takes effect at the end of its gap (S1) */'''
+replace = '''    if (0) {
+        /* it takes effect at the end of its gap (S1) */'''
+
+[[mutant]]
+id = "278"
+name = "an arm call lets no waiting arm in"
+test = "sig"
+why = "S2: an arm call is at the smaller of its time and N (the reviewer's H6, test_arm_repro)."
+find = '''    if (g->wt->n) {
+        /* rule 3 (S2): an arm call is at the smaller of t and N; a waiting'''
+replace = '''    if (0) {
+        /* rule 3 (S2): an arm call is at the smaller of t and N; a waiting'''
+
+[[mutant]]
+id = "279"
+name = "the rows of a call the log did not keep held at its index"
+test = "sig"
+why = "The reviewer's H7: such a row was never handed out (test_arm_repro)."
+find = '''    return cu->cur != UINT64_MAX ? cu->cur : 0;'''
+replace = '''    return cu->cur != UINT64_MAX ? cu->cur : cu->c_head;'''
+
+[[mutant]]
+id = "280"
+name = "ysig_derived() does not refill the queue"
+test = "sig"
+why = "The reviewer's H8: final events that waited for room (test_arm_repro: a barrier makes 240 final)."
+find = '''    if (g->cu && g->cu->derived_final && !g->busy) ysig__out_final(g);'''
+replace = '''    (void)0;'''
+
+[[mutant]]
+id = "281"
+name = "a disarm in an ahead group with no window made at once"
+test = "sig"
+why = "S1: it waits with the arm (test_arm_repro, window 0)."
+find = '''        for (d = 0; d < w->n_dis && w->nc < YSIG__WAIT_CALLS; d++) {'''
+replace = '''        ysig__gap_disarms(g, g->t_cover, 1);
+        for (d = 0; d < w->n_dis && w->nc < YSIG__WAIT_CALLS; d++) {'''
