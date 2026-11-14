@@ -731,7 +731,8 @@ late report or a group that an input lets in is counted at an input).
 |---|---|
 | `player_test.py`, before the guard | 56 cases; `unverified` 0 in every session (342 arms run again) |
 | `compare.py`, the six examples, before the guard | `unverified` 0 (visuomotor and bimanual: 176 arms run again) |
-| The model's harness, before the guard (seeds 72001 to 82000; `GEN_MULTI=1`, 29001 to 34000) | 57 and 22 mismatches, all at a GAP, as at 085bbb6. `unverified` above 0 in 4 of 4,878 sessions (41 arms) and 3 of 2,394 (16): one shape, condition 2 (b). A waiting arm at `τ`, then at the same `τ` a later waiting group whose disarm meets it (the state exits at the time its control was armed for), and one input lets both in. With the guard these 7 cases stop by name |
+| The model's harness, before the guard (seeds 72001 to 82000; `GEN_MULTI=1`, 29001 to 34000) | 57 and 22 mismatches, all at a GAP, as at 085bbb6. `unverified` above 0 in 4 of 4,878 sessions (41 arms) and 3 of 2,394 (16): one shape, condition 2 (b). A waiting arm at `τ`, then at the same `τ` a later waiting group whose disarm meets it (the state exits at the time its control was armed for), and one input lets both in |
+| The same, with the guard, after the reviewer's next round (2 (b)'s exception takes a group of an arm and disarms; condition 3 for groups that wait only) | 57 and 22 mismatches, all at a GAP; `unverified` 0 in all 7,272 sessions; no guard stop. `player_test.py` and the six examples: 0 |
 
 ### The samples before a trial's start (2026-11-14)
 
