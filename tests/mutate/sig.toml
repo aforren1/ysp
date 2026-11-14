@@ -1338,7 +1338,7 @@ id = "157"
 name = "detect: a frame's hold completion not on the output"
 test = "sig"
 why = "A hold that a still hand completes at a frame must raise the output in that frame's pass."
-find = "    if ((int)n->p[13] == YSIG_OUT_HIT && s->fired && !was) ysig__det_out(g, i, v, s->t_hit);\n"
+find = "    if ((int)n->p[13] == YSIG_OUT_HIT && s->fired && !was) ysig__det_out(g, i, v, onset, 1);\n"
 replace = "    (void)v; (void)was;\n"
 
 [[mutant]]
@@ -1509,21 +1509,17 @@ replace = '                    ysig__det_frame(g, i, g->t_known, x);'
 id = "177"
 name = "hit output: the rise at the sample's time"
 test = "sig"
-expect = "survived"
-note = "Equivalent since the decision on fix 1: ysig__det_out() puts a standing hit at the hit's time too."
 why = "A past read between the hit and the sample that found it must say 1."
-find = 's->fired && !was && (int)g->nd[i].p[13] == YSIG_OUT_HIT ? s->t_hit : tc);'
-replace = 's->fired && !was && 0 ? s->t_hit : tc);'
+find = 'ysig__det_out(g, i, v, tc, s->fired && !was && (int)g->nd[i].p[13] == YSIG_OUT_HIT);'
+replace = 'ysig__det_out(g, i, v, tc, 0);'
 
 [[mutant]]
 id = "178"
 name = "hit output at a frame: the rise at the frame's time"
 test = "sig"
-expect = "survived"
-note = "Equivalent, as 177."
 why = "A hit found by a frame rises at the hit, not at the found time."
-find = 'if ((int)n->p[13] == YSIG_OUT_HIT && s->fired && !was) ysig__det_out(g, i, v, s->t_hit);'
-replace = 'if ((int)n->p[13] == YSIG_OUT_HIT && s->fired && !was) ysig__det_out(g, i, v, onset);'
+find = 'if ((int)n->p[13] == YSIG_OUT_HIT && s->fired && !was) ysig__det_out(g, i, v, onset, 1);'
+replace = 'if ((int)n->p[13] == YSIG_OUT_HIT && s->fired && !was) ysig__det_out(g, i, v, onset, 0);'
 
 [[mutant]]
 id = "185"
@@ -2092,8 +2088,18 @@ replace = '''    ysig__arm_made(g, node, t, t <= g->t_cover ? t : g->t_cover, at
 
 [[mutant]]
 id = "252"
-name = "a standing hit's output at the clock's time, with the latest input's sources"
+name = "a standing hit's output kept at the hit's time and sources"
 test = "sig"
-why = "The rule the header states: a hit's rise at its time, with the sources of the input that met the test (test_arm_review; test_arm_window reads it apart: a later sample at the hit's time with another tier and unc_us)."
-find = '''    o->t = hit_out && s->fired ? s->t_hit : tc;'''
-replace = '''    o->t = tc;'''
+why = "The second review of the fix round, B: a later evaluation carries its own time, so a hold on the output completes from samples and the ring takes every entry (test_hit_out_time)."
+find = '''    o->t = rise ? s->t_hit : tc;
+    ysig__det_prov(o, rise ? &s->v_hit : v);'''
+replace = '''    o->t = hit_out && s->fired ? s->t_hit : tc;
+    ysig__det_prov(o, hit_out && s->fired ? &s->v_hit : v);'''
+
+[[mutant]]
+id = "253"
+name = "a hit output's rise with the sources of the input that found it"
+test = "sig"
+why = "The rise carries the sources of the input that met the test, however the hit was found (test_hit_out_time: a hold's rise found by a later sample)."
+find = '''    ysig__det_prov(o, rise ? &s->v_hit : v);'''
+replace = '''    ysig__det_prov(o, v);'''

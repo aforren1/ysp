@@ -4125,6 +4125,66 @@ static void test_arm_review(void) {
 #undef R3_OPEN
 }
 
+/* A standing hit output: its rise is at the hit, a later evaluation at
+ * its own time, so a hold downstream completes from samples and the ring
+ * takes every entry (the second review's r13b and r13: an output that
+ * kept the hit's time held a hold on all(hit, hit) until a frame, and
+ * skipped every ring entry after a late report's hit). No window. */
+static void test_hit_out_time(void) {
+    ysig_node n[5];
+    ysig_desc d;
+    ysig_graph g;
+    ysig_value v;
+    ysig_stats st;
+    ysig_hit h[8];
+    yin_event e;
+    int64_t t;
+    int late, k;
+    g_where = "hit output time";
+    for (late = 0; late < 2; late++) {
+        n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 2);
+        n[0].history = 1024;
+        n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1);
+        n[1].p[YSIG_DETECT_LANE] = 0; n[1].p[YSIG_DETECT_LEVEL] = 5; n[1].p[YSIG_DETECT_OUT] = YSIG_OUT_HIT;
+        n[1].history = 64;
+        n[2] = ysig_node_of(YSIG_OP_OFFSET, 0, -1);
+        n[3] = ysig_node_of(YSIG_OP_ALL, 1, 1);
+        n[4] = ysig_node_of(YSIG_OP_DETECT, 3, -1);   /* a 10 ms hold on all(hit, hit) */
+        n[4].p[YSIG_DETECT_LANE] = 0; n[4].p[YSIG_DETECT_LEVEL] = 0.5; n[4].p[YSIG_DETECT_HOLD] = 0.01;
+        n[4].p[YSIG_DETECT_OUT] = YSIG_OUT_HIT; n[4].history = 64;
+        d = desc_of(n, 5);
+        if (!open_desc(&g, &d)) { g_failures++; return; }
+        ysig_reset(&g, 0);
+        if (!late) {
+            e = PEN_E(19 * MS, 1, 0, 0, YIN_TIER_2); ysig_feed(&g, &e);
+            e = PEN_E(20 * MS, 1, 10, 0, YIN_TIER_2); ysig_feed(&g, &e);   /* the hit at 20 ms */
+            for (t = 21 * MS; t <= 60 * MS; t += MS) { e = PEN_E(t, 1, 10, 0, YIN_TIER_2); ysig_feed(&g, &e); }
+        } else {
+            e = PEN_E(30 * MS, 1, 0, 0, YIN_TIER_2); ysig_feed(&g, &e);
+            e = PEN_E(20 * MS, 2, 10, 0, YIN_TIER_2); ysig_feed(&g, &e);   /* a late report: the hit at 20 ms */
+            for (t = 31 * MS; t <= 60 * MS; t += MS) { e = PEN_E(t, 1, 10, 0, YIN_TIER_2); ysig_feed(&g, &e); }
+        }
+        CHECK(ysig_value_of(&g, 1)->v[0] == 1 && ysig_value_of(&g, 1)->t == 60 * MS);
+        /* (after a late report the rise is older than the ring's newest
+         * entry: skipped and counted, as any late entry) */
+        if (!late) CHECK(ysig_value_at(&g, 1, 20 * MS, &v) == 1 && v.v[0] == 1 && v.t == 20 * MS);
+        CHECK(ysig_value_at(&g, 1, 50 * MS, &v) == 1 && v.v[0] == 1 && v.t == 50 * MS);
+        CHECK(ysig_value_of(&g, 3)->t == 60 * MS);
+        k = ysig_detected(&g, h, 8);
+        /* in order the hold runs from the hit (20 ms); after the late
+         * report from the hold detect's clock, which does not go back
+         * (30 ms, counted in time_clamped) */
+        CHECK(k == 2 && h[0].node == 1 && h[0].t == 20 * MS && h[1].node == 4 && h[1].t == (late ? 40 : 30) * MS);
+        /* the hold's rise is at the hit, found by a later sample, with the
+         * sources of the value that started the hold (the hit at 20 ms;
+         * after the late report, its device) */
+        CHECK(ysig_value_at(&g, 4, h[1].t, &v) == 1 && v.v[0] == 1 && v.t == h[1].t && v.t_oldest == 20 * MS &&
+              v.device == (late ? 2u : 1u));
+        ysig_get_stats(&g, &st);
+        CHECK(st.history_skipped == (late ? 2 : 0));
+    }
+}
+
 static void test_arm_window(void) {
     ysig_node n[4];
     ysig_desc d;
@@ -4285,28 +4345,32 @@ static void test_arm_window(void) {
     ysig_get_stats(&g, &st);
     CHECK(st.arm_rows_stale == 1);
     /* rows that the run again changes in their metadata only: two samples
-     * at one time on one device, equal but for tier and unc_us. The detect
-     * (armed at the reset) hits at the first; the arm at that time comes
-     * after both, so the run again's hit carries the second one's tier and
-     * unc_us at the same t and value (mutant 247) */
-    n[1].p[YSIG_DETECT_START] = 0; n[1].p[YSIG_DETECT_REPEAT] = 0;
-    n[1].p[YSIG_DETECT_ENTRY] = YSIG_ENTRY_NOW; n[1].p[YSIG_DETECT_OUT] = YSIG_OUT_HIT;
-    d = desc_of(n, 3);
+     * at one time on one device, equal but for tier and unc_us, and a
+     * record of a latch of the hand on the detect's hit. Before the arm
+     * the latch follows the hand (the second row has the second sample's
+     * tier and unc_us); the arm at 1 ms goes before both, the detect hits
+     * at the first and the latch holds it, so the run again's second row
+     * has the first sample's: the same t and value (mutant 247) */
+    n[1].p[YSIG_DETECT_START] = 1; n[1].p[YSIG_DETECT_REPEAT] = 0;
+    n[1].p[YSIG_DETECT_ENTRY] = YSIG_ENTRY_ARM; n[1].p[YSIG_DETECT_OUT] = YSIG_OUT_HIT;
+    n[2] = ysig_node_of(YSIG_OP_LATCH, 0, 1);
+    n[3] = ysig_node_of(YSIG_OP_RECORD, 2, -1);
+    d = desc_of(n, 4);
     sig_window(&d, 2, 256);
     d.on_row = on_row;
     if (!open_desc(&g, &d)) { g_failures++; return; }
     ysig_reset(&g, 0);
     g_rows = 0;
-    e = PEN_E(1 * MS, 1, 6, 0, YIN_TIER_2); e.unc_us = 5; ysig_feed(&g, &e);
-    e = PEN_E(1 * MS, 1, 6, 0, YIN_TIER_1); e.unc_us = 0; ysig_feed(&g, &e);
-    e = PEN_E(2 * MS, 1, 6, 0, YIN_TIER_1); e.unc_us = 10; ysig_feed(&g, &e);
-    CHECK(g_rows == 3 && g_row[2].value.t == 1 * MS && g_row[2].value.v[0] == 1 && g_row[2].value.tier == YIN_TIER_2 &&
-          g_row[2].value.unc_us == 5);
+    e = PEN_E(2 * MS, 1, 6, 0, YIN_TIER_2); e.unc_us = 5; ysig_feed(&g, &e);
+    e = PEN_E(2 * MS, 1, 6, 0, YIN_TIER_1); e.unc_us = 0; ysig_feed(&g, &e);
+    CHECK(g_rows == 2 && g_row[1].value.t == 2 * MS && g_row[1].value.v[0] == 6 && g_row[1].value.tier == YIN_TIER_1 &&
+          g_row[1].value.unc_us == 0);
     CHECK(ysig_arm(&g, 1, 1 * MS));
+    CHECK(ysig_detected(&g, h, 8) == 1 && h[0].t == 2 * MS);
     ysig_get_stats(&g, &st);
     CHECK(st.arm_caught_up == 1 && st.arm_rows_stale == 1);
-    CHECK(ysig_value_of(&g, 1)->t == 1 * MS && ysig_value_of(&g, 1)->v[0] == 1 && ysig_value_of(&g, 1)->tier == YIN_TIER_1 &&
-          ysig_value_of(&g, 1)->unc_us == 0);
+    CHECK(ysig_value_of(&g, 2)->t == 2 * MS && ysig_value_of(&g, 2)->v[0] == 6 && ysig_value_of(&g, 2)->tier == YIN_TIER_2 &&
+          ysig_value_of(&g, 2)->unc_us == 5);
     /* a frame's channel values are kept with the call: the caller's array
      * changes after the frame, the run again reads what the frame had */
     {
@@ -4882,6 +4946,7 @@ int main(void) {
     test_entry_now();
     test_set_recompute();
     test_review_fixes();
+    test_hit_out_time();
     test_arm_window();
     test_arm_review();
     if (g_failures) { fprintf(stderr, "sig_test: %d failures\n", g_failures); return 1; }

@@ -625,9 +625,13 @@ a later call) and starts the new hold at t. An arm ahead of the newest
 input (t later than it) meets the hold only up to that input, not on
 unfed time; input fed later with a time before t comes after it.
 
-A detect's standing hit output is at the hit's time, with the sources of
-the input that met the test (the hit's value), however the hit was found
-(a sample, a frame, a settle, an arm).
+A hit output's rise is at the hit's time, with the sources of the input
+that met the test (the hit's value), however the hit was found (a
+sample, a frame, a settle, an arm). A later evaluation of a standing hit
+is at its own time, with its input's sources, as any value: a hold on
+the output then completes from samples, and the ring takes each entry
+(the fix round had kept the hit's time on every evaluation; the second
+review's r13b and r13, now `test_hit_out_time`).
 
 What the guarantee does not cover, counted by name:
 

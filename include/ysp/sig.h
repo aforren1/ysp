@@ -275,7 +275,9 @@
  *   1 from a hit until the detect is ready again, and until the next arm
  *   or reset for a one-hit or a disarmed detect, so it rises at a hold's
  *   completion, which may be in a frame's pass. Its rise is at the hit's
- *   time, also in its ring. ysig_arm() takes it to 0 for its users at
+ *   time, also in its ring, with the sources of the value that met the
+ *   test; a later evaluation of a standing hit is at its own time, with
+ *   its input's sources, as any value. ysig_arm() takes it to 0 for its users at
  *   once, at the arm's time, so the next hit is a new rise. Before that,
  *   an arm at t completes a sample-rate hold met by t (v0.6.0, as
  *   ysig_settle() at t would): the hold ended under the earlier arm, so it
@@ -397,6 +399,11 @@
  *          every column hashed for the stale counts, ysig_set() of a
  *          channel node above the open's channels refused,
  *          ysig_stats.arm_reentry (a callback's ysig_arm() refused).
+ *          The second review of that round: a standing hit output's later
+ *          evaluations are at their own time again (the round had kept
+ *          the hit's time, so a hold on the output did not complete from
+ *          samples and a late report's hit skipped every later ring
+ *          entry).
  *          Stats arm_caught_up, arm_past_off, _far, _full,
  *          arm_hits_retracted, arm_hits_superseded (the armed detect's own
  *          hits at or after the arm's time: its earlier arm's),
@@ -2346,8 +2353,6 @@ static int ysig__det_hold_done(ysig_graph* g, int i, int64_t t) {
     return 0;
 }
 
-/* A detect's output after a value or a frame: its test, or whether a hit
- * stands, with the time and sources of the value it tested. */
 /* A detect output's sources: those of the input value given. */
 static void ysig__det_prov(ysig_value* o, const ysig_value* v) {
     o->t_oldest = v->t_oldest;
@@ -2358,22 +2363,22 @@ static void ysig__det_prov(ysig_value* o, const ysig_value* v) {
     o->unc_us = v->unc_us;
 }
 
-static void ysig__det_out(ysig_graph* g, int i, const ysig_value* v, int64_t tc) {
+/* A detect's output after a value or a frame: its test, or whether a hit
+ * stands. rise: a hit output's rise in this evaluation. */
+static void ysig__det_out(ysig_graph* g, int i, const ysig_value* v, int64_t tc, int rise) {
     ysig__nd* n = &g->nd[i];
     ysig__det_st* s = (ysig__det_st*)n->st;
     ysig_value* o = &g->val[i];
     int hit_out = (int)n->p[13] == YSIG_OUT_HIT;
     o->v[0] = (hit_out ? s->fired : s->state) ? 1.0 : 0.0;
-    /* a standing hit is at the hit's time (its rise), with the sources of
-     * the input that met the test (the hit's value), whatever later input
-     * found it or came since: the same however the hit was found (a
-     * sample, a frame, a settle, an arm) */
-    o->t = hit_out && s->fired ? s->t_hit : tc;
-    /* (sources:) a standing hit carries the sources of the input that met the test
-     * (the hit's value), whatever later input found it or came since:
-     * the same however the hit was found (a sample, a frame, a settle, an
-     * arm) */
-    ysig__det_prov(o, hit_out && s->fired ? &s->v_hit : v);
+    /* the rise is at the hit's time, with the sources of the input that
+     * met the test, however the hit was found (a sample, a frame, a
+     * settle, an arm): a past read after the hit says 1. A later
+     * evaluation of a standing hit carries its own time and input, as
+     * any value does, so a hold downstream completes from samples and
+     * the ring takes the entry */
+    o->t = rise ? s->t_hit : tc;
+    ysig__det_prov(o, rise ? &s->v_hit : v);
 }
 
 /* One value for a detect: t is its time (a hit's time), tc the detect's
@@ -2426,8 +2431,7 @@ static void ysig__det_value(ysig_graph* g, int i, const ysig_value* v, int64_t t
     ysig__det_st* s = (ysig__det_st*)g->nd[i].st;
     int was = s->fired;
     ysig__det_eval(g, i, v, t, tc);
-    /* the rise of a hit output is at the hit: a past read after it says 1 */
-    ysig__det_out(g, i, v, s->fired && !was && (int)g->nd[i].p[13] == YSIG_OUT_HIT ? s->t_hit : tc);
+    ysig__det_out(g, i, v, tc, s->fired && !was && (int)g->nd[i].p[13] == YSIG_OUT_HIT);
 }
 
 /* A sample-rate detect at a frame's onset: a still hand completes its hold. */
@@ -2437,7 +2441,7 @@ static void ysig__det_frame(ysig_graph* g, int i, int64_t onset, const ysig_valu
     int was = s->fired;
     if (!s->armed || n->kns[0] <= 0 || onset < s->t_arm) return;
     (void)ysig__det_hold_done(g, i, onset);
-    if ((int)n->p[13] == YSIG_OUT_HIT && s->fired && !was) ysig__det_out(g, i, v, s->t_hit);
+    if ((int)n->p[13] == YSIG_OUT_HIT && s->fired && !was) ysig__det_out(g, i, v, onset, 1);
 }
 
 /* A detect's hold clock never goes back: a value whose t went back (a
