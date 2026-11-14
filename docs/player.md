@@ -303,7 +303,7 @@ it says), for each version:
 | `headers.trials`, `headers.gfx`, `headers.experiment` | The new versions (0.8.1, 0.20.0; experiment 0.5.0 from 0.7.0) | The same |
 | `signal_roles` | Not written | One object a signal role: `name`, `adapter` (`sim raw mouse` or `sim positions`), `device` (`--samples` or `none`), `type`, `units`, `per_count` (the `--sim-gain`), `calibration_sha256` (empty) |
 | `recenter_skipped` | Not written | The `recenter` steps that a graph did not apply (D40) |
-| `sig_arms` | Not written | ysp/sig.h's counts of arms in the past, summed over the session's graphs: `caught_up` (run again, exact), `past_off`, `past_far`, `past_full` (fell back to the newest value: inexact), `hits_superseded`, `hits_retracted`, `rows_stale`, `derived_stale`, `past_pinned` (a fallback), `ahead_cancelled` (waiting arms a disarm or a barrier cancelled), `late_input` (input calls with a time before an arm that the player made with the graph's input at or past its time, any footprint: sig.h's reference order puts them after that arm) (docs/sig.md, "An arm in the past: the semantics"). A run stops at a retracted hit, a stale row or event, or any fallback (`past_off`, `past_far`, `past_full`, `past_pinned`), so those are 0 in a finished session |
+| `sig_arms` | Not written | ysp/sig.h's counts of arms in the past, summed over the session's graphs: `caught_up` (run again, exact), `past_off`, `past_far`, `past_full` (fell back to the newest value: inexact), `hits_superseded`, `hits_retracted`, `rows_stale`, `derived_stale`, `past_pinned` (a fallback), `ahead_cancelled` (waiting arms a disarm or a barrier cancelled), `late_input` (input calls with a time before an arm that the player made with the graph's input at or past its time, any footprint: sig.h's reference order puts them after that arm), `unverified` (arms outside the shapes whose result sig.h verifies: docs/sig.md, "Exactness") (docs/sig.md, "An arm in the past: the semantics"). A run stops at a retracted hit, a stale row or event, any fallback (`past_off`, `past_far`, `past_full`, `past_pinned`), or an unverified arm, so those are 0 in a finished session |
 
 No other field changes. A version 1 data set keeps every other byte
 (Results).
@@ -719,6 +719,19 @@ corpus.
 | Version 1 identity against main (7078e4d) | 438 of 439 CSV files byte-identical (the other the Stroop C program's trials.h version line); `session.json`: versions, `pack_id` (94) and `rig_profile_sha256` (4) |
 | Version 2 data against 0.3.0, the two 3.18 examples | `target_frames` (159 of 160) and `reach_target_frames` (4 of 132) only, as in 0.4.0 |
 | Frame work, CPU 2, six runs each, mean user time | Visuomotor 0.209 s (sd 0.003) against 0.3.0's 0.211 s; bimanual 1.128 s (sd 0.010) against 1.146 s. Largest frame 637 to 641 us against 636 to 646 us, and 1,900 to 1,924 us (one run 2,069 us) against 1,880 to 1,906 us (one run 2,045 us) |
+
+### sig.h's `arm_unverified` and the guard (2026-11-14)
+
+The same machine. sig.h counts an arm outside the shapes whose result is
+verified (docs/sig.md, "Exactness"); `sig_arms.unverified` sums it, and
+the guard stops on it, after each arm and at the end of each frame (a
+late report or a group that an input lets in is counted at an input).
+
+| Check | Result |
+|---|---|
+| `player_test.py`, before the guard | 56 cases; `unverified` 0 in every session (342 arms run again) |
+| `compare.py`, the six examples, before the guard | `unverified` 0 (visuomotor and bimanual: 176 arms run again) |
+| The model's harness, before the guard (seeds 72001 to 82000; `GEN_MULTI=1`, 29001 to 34000) | 57 and 22 mismatches, all at a GAP, as at 085bbb6. `unverified` above 0 in 4 of 4,878 sessions (41 arms) and 3 of 2,394 (16): one shape, condition 2 (b). A waiting arm at `τ`, then at the same `τ` a later waiting group whose disarm meets it (the state exits at the time its control was armed for), and one input lets both in. With the guard these 7 cases stop by name |
 
 ### The samples before a trial's start (2026-11-14)
 

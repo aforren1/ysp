@@ -2195,7 +2195,7 @@ def t_v2_findings(ctx):
     check(sorted(arms) == ["ahead_cancelled", "caught_up", "derived_stale", "hits_retracted", "hits_superseded", "late_input", "past_far",
                            "past_full", "past_off", "past_pinned", "rows_stale", "unverified"] and
           arms["hits_retracted"] == arms["rows_stale"] == arms["derived_stale"] == arms["past_far"] == arms["past_full"] ==
-          arms["past_off"] == arms["past_pinned"] == arms["late_input"] == 0,
+          arms["past_off"] == arms["past_pinned"] == arms["late_input"] == arms["unverified"] == 0,
           "session.json sig_arms: %s" % arms)
     # the model's s19383: s1 goes back to itself by after_s at the time its
     # r0 hold ends (list order: the after_s exit). The re-arm at that time

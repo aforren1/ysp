@@ -267,6 +267,7 @@ typedef struct pl_v2_session {
     int64_t t0;                /* the samples' time 0: the first frame's onset */
     bool t0_set;
     long recenter_skipped;
+    int64_t unv_seen;          /* sig.h's arm_unverified, summed: the guard */
     int n_sample_rows;
     bool* reads;               /* pl_v2_reads()'s scratch, one per stimulus */
 } pl_v2_session;
@@ -2089,15 +2090,15 @@ static int v2_arm_check(pl_player* p, pl_v2* v, const char* name, int64_t t) {
      * row or event, and every fallback (pinned, before the window, logs
      * full, no window) are not the reference order's result */
     bad = st.arm_hits_retracted + st.arm_rows_stale + st.arm_derived_stale + st.arm_past_pinned + st.arm_past_far +
-          st.arm_past_full + st.arm_past_off;
+          st.arm_past_full + st.arm_past_off + st.arm_unverified;
     if (bad == v->arm_bad) return 0;
     v->arm_bad = bad;
     pl_fail(p, "template '%s': internal guard: a past arm of '%s' at %.9f s changed a hit already taken, or a row or event already written, "
-            "or fell back (sig.h: %lld hits retracted, %lld row runs, %lld derived runs changed; %lld pinned, %lld before the window, "
-            "%lld logs full, %lld no window)",
+            "or fell back, or is outside the verified shapes (sig.h: %lld hits retracted, %lld row runs, %lld derived runs changed; "
+            "%lld pinned, %lld before the window, %lld logs full, %lld no window; %lld unverified)",
             v->def->name, name, (double)(t - v2_anchor(p)) / 1e9, (long long)st.arm_hits_retracted, (long long)st.arm_rows_stale,
             (long long)st.arm_derived_stale, (long long)st.arm_past_pinned, (long long)st.arm_past_far, (long long)st.arm_past_full,
-            (long long)st.arm_past_off);
+            (long long)st.arm_past_off, (long long)st.arm_unverified);
     return -1;
 }
 
@@ -3103,6 +3104,26 @@ int pl_v2_frame_eval(pl_player* p, const yscr_frame* f) {
         rc = v2_frame_rows_queue(p, v, f);
         YRT_ZONE_END(zq);
         if (rc < 0) return -1;
+    }
+    {
+        /* sig.h counts an arm outside the verified shapes at an input too
+         * (a late report, a group an input lets in): every graph, each
+         * frame */
+        pl_v2_session* S = p->v2s;
+        int64_t u = 0;
+        int ti;
+        for (ti = 0; S && ti < S->n_t; ti++) {
+            ysig_stats st;
+            if (!S->t[ti] || !S->t[ti]->has_graph) continue;
+            ysig_get_stats(&S->t[ti]->g, &st);
+            u += st.arm_unverified;
+        }
+        if (S && u != S->unv_seen) {
+            S->unv_seen = u;
+            pl_fail(p, "template '%s': internal guard: an arm outside sig.h's verified shapes (%lld arm_unverified, docs/sig.md "
+                    "\"Exactness\")", v->def->name, (long long)u);
+            return -1;
+        }
     }
     if (v->end_pending) {
         v->end_pending = false;
