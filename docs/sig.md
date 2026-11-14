@@ -779,11 +779,63 @@ get them depends on the desc:
 | `arm_hits_superseded`, `arm_hits_retracted` | above |
 | `arm_rows_stale`, `arm_derived_stale` | above; never in final-only mode |
 | `arm_reentry`, `call_reentry` | a call from a callback during another call: refused, not in R |
+| `arm_unverified` | an arm whose group is outside the exact shapes (below); R is made as usual |
 
 A fallback is not R's result. The player's guard must stop on
 `arm_past_pinned`, `arm_past_far`, `arm_past_full`, `arm_hits_retracted`,
 `arm_rows_stale` and `arm_derived_stale` (with a window, `arm_past_off`
 does not occur).
+
+#### Exactness: `arm_unverified`
+
+R's result is defined for every call sequence. The header gives R's
+result for an arm exactly when the arm's group G meets the conditions
+below (the shapes the independent oracle covers). When G does not meet
+them, the header counts the arm once in `arm_unverified` and makes R as
+usual. A count means "not verified", not "wrong".
+
+Terms:
+
+- `τ` is G's time and `F(G)` its footprint.
+- `F_a(G)` is the footprint of G's arm and its disarms. For a cancelled
+  arm, it is the footprint of the disarms only.
+- `N(G)` is the latest input time in R before G's place, after the last
+  barrier. A reset and a trial reset set it to their `t`; a flush keeps
+  it.
+- `L(G)` is the first input after G in R whose time is later than `τ` and
+  whose footprint meets `F(G)`.
+
+G is exact when all of these are true:
+
+1. G is not inside another group's block: no other group has calls both
+   before and after G in R.
+2. `N(G) ≥ τ`. Or, when G waits at its place (`N(G) < τ`), all of these:
+   - (a) `L(G)` is in R, it meets `F_a(G)`, and no barrier is between G
+     and `L(G)`.
+   - (b) Between G and `L(G)`, no state call of another group, or of no
+     group, meets `F(G)`. The exception is an arm whose group has no
+     other call, whose `τ` is later than G's (or equal, with a later
+     call), which also waits at its place, and which `L(G)` also lets in.
+   - (c) When a disarm or a barrier cancelled G's arm, G has no disarm.
+3. While G's arm is its detect's newest arm in R, no input whose footprint
+   meets `F(G)` and whose time is at or before `τ` goes into R after G (a
+   late report: the reviewer's o1, a sample later than the arm call and
+   earlier than `τ`).
+
+When the header tests:
+
+- At G's going-in: conditions 1 and 2. When `L(G)` is not in R yet, the
+  header counts G then. This covers reads made while G waits.
+- At each later call that goes into R between G and `L(G)` (a later past
+  group's place): condition 2 (b).
+- At each input call: condition 3.
+
+Condition 2 (c) counts the reviewer's reason 8. A barrier (a flush) lets
+in a cancelled group whose disarm completes a hold at a `τ` later than
+any input. The hit is handed out at a time that no input has reached.
+That cannot be exact: the disarm meets the hold up to `τ` as if input up
+to `τ` were in, and none is. An input earlier than `τ` that fails the
+test, made after the barrier, would have broken the hold in time order.
 
 #### What the caller can rely on
 
