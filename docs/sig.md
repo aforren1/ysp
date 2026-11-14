@@ -838,12 +838,19 @@ G is exact when all of these are true:
    arm at a frame's onset). An input at `τ` is not a late report: R puts
    it after G, as the header does.
 
-4. No disarm in no group comes right before G in R, with no input or
-   barrier between. Reason: with no window that disarm joins G's gap and
-   takes G's time (the reviewer's 883 and 404: R has the disarm, then
-   G's calls). The condition covers disarms only: the reviewer tested
-   every state call there, which flagged 270 cases instead of 155 and
-   found no other wrong one.
+4. No disarm of another group, or of no group, lies in the gap that G's
+   arm closes with no window: between G's arm and the last input,
+   barrier or arm before it in R. Reason: with no window that disarm
+   joins G's gap and takes G's time (the reviewer's 883 and 404: a
+   disarm in no group, then G's calls; 1137: a present group's disarm,
+   then the group its arm lets in right before itself). The condition
+   covers disarms only: the reviewer tested every state call there,
+   which flagged more cases and found no other wrong one.
+
+Condition 1 includes a group let in inside an open gap that an arm then
+closes: what a state call of the gap, or the arm itself, lets in goes
+after the gap's earlier calls and before the arm, inside that group's
+block (the reviewer's 1137).
 
 When the header tests:
 
@@ -852,8 +859,8 @@ When the header tests:
 - At each later call that goes into R between G and `L(G)` (a later past
   group's place): condition 2 (b).
 - At each input call: condition 3.
-- Condition 4: at G's place (a past group), or at the input or barrier
-  that ends the disarm's gap (a waiting group let in after it).
+- Condition 4: at G's place (a past group), at the trigger that lets G
+  in, or at G's arm at the end of R.
 
 Condition 2 (c) counts the reviewer's reason 8. A barrier (a flush) lets
 in a cancelled group whose disarm completes a hold at a `τ` later than
@@ -876,7 +883,12 @@ window), every node's value agrees, and so does every entry's time in
 every node's ring at the end (all entries of all rings printed and
 compared, 2026-11-14), but the graph with no window evaluates node 9
 with its stale value twice more: 18 skipped pushes against the run
-again's 16. The count is a diagnostic; nothing reads it.
+again's 16. The count is a diagnostic; nothing reads it. The same holds
+for `time_clamped` (a detect's value whose time went back, kept at the
+detect's last time): in `residual_530_a.c` against `residual_530_r.c`
+every value agrees, and the count is 1 against 2 after call 19, where
+ahead groups with a recenter of role 0 at 0.377 ms go in at the input
+at 8.953 ms.
 Every hit of R's result is handed out once; a hit handed out that R does
 not have is counted, as above. Rows and derived events: as above. With
 no fallback count, no retracted hit and no stale row or event, the
