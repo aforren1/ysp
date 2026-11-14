@@ -813,19 +813,25 @@ G is exact when all of these are true:
    - (a) `L(G)` is in R, it meets `F_a(G)`, and no barrier is between G
      and `L(G)`.
    - (b) Between G and `L(G)`, no state call of another group, or of no
-     group, meets `F(G)`. The exception is an arm whose group has no
-     other call, whose `τ` is later than G's (or equal, with a later
-     call), which also waits at its place, and which `L(G)` also lets in.
+     group, meets `F(G)`. The exception is the arm or a disarm of a group
+     H that holds its arm and disarms only (no set, set_data or
+     recenter), that is later than G by (`τ`, call order), that waits at
+     its place too, and whose own L is `L(G)`: `L(G)` lets H in, and no
+     input between H and `L(G)` does. Reason: R makes H's disarms and arm
+     at `L(G)`, after G, as a graph with no window does in call order. An
+     input between them that let H in would make H before G there (the
+     reviewer's 489). The player makes this shape when a state exits at
+     the time its control was armed for (the arm, then the exit's
+     disarm, at one time).
    - (c) When a disarm or a barrier cancelled G's arm, G has no disarm.
-3. While G's arm is its detect's newest arm in R, no input whose footprint
-   meets `F(G)` and whose time is earlier than `τ` goes into R after G (a
-   late report: the reviewer's o1, a sample later than the arm call and
-   earlier than `τ`). An input at `τ` is not a late report: a present arm
-   at a frame's onset comes before that frame's `ysig_frame()` in the
-   player (the arms at an onset, then the frame), and R puts that frame
-   after the arm, as the header does. Counted at `τ` too, the sessions of
-   `player_test.py` had 171 such arms and the two 3.18 examples 452
-   (visuomotor 320, bimanual 132), all of this one shape.
+3. When G waits at its place (`N(G) < τ`): while G's arm is its detect's
+   newest arm in R, no input whose footprint meets `F(G)` and whose time
+   is earlier than `τ` goes into R after G (a late report). A group with
+   `N(G) ≥ τ` is exact by condition 2 whatever comes after it: input up
+   to `τ` was in before it, so a later report earlier than `τ` is late
+   for every node, as for any call (a slow device's late sample after an
+   arm at a frame's onset). An input at `τ` is not a late report: R puts
+   it after G, as the header does.
 
 When the header tests:
 
