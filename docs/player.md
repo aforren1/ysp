@@ -1,6 +1,6 @@
 # The player
 
-Status: v0.10.0, 2026-11-14. It loads a pack, checks its experiment
+Status: v0.11.0, 2026-11-14. It loads a pack, checks its experiment
 definition, lowers the definition onto the ysp headers and runs it: in a
 real window with the participant's keyboard and the rig's devices, or on
 the simulated display (`--sim`). It is a program (`player/`, target
@@ -175,6 +175,17 @@ onset, and `--test-record-delay N` (0 to 8) hands each record to the player
 N frames later. `player_test.py` uses them to check the time columns and
 the frame traces against records that are not the plan.
 
+Two more test options, `--sim` only:
+
+- `--sim-hz HZ` sets the simulated display's rate (default 60). The
+  period is `1e9 / HZ` ns, rounded to whole ns; 60 gives ysp/screen.h's
+  own 16,666,667 ns, so a 60 Hz run is byte-identical to one without the
+  option. The five C programs that `compare.py` runs take the same option,
+  and `compare.py`, `player_test.py` and the model's harness take `--hz`.
+- `--test-sample-late ROLE=S` gives that role's samples to the player S
+  seconds after their `t_s`, the time they keep. It is a device whose
+  reports come late (a USB transport, an FTDI latency timer).
+
 ## How-to: profile a run
 
 Use a build with the trace ring. The build adds zones to the player and
@@ -271,7 +282,7 @@ differ:
 | `<role>_lag_max_s` | The largest write start minus deadline of the trial's codes: exactly the largest of its `out` rows in `events.csv` | 0 |
 | `<role>_n` | The codes the trial asked for, its rule's fires included | The codes asked for |
 | `<role>_failed` | The codes whose write failed, and the codes whose device record never came (a trigger whose flip was not shown, a full ring) | The codes the screen refused |
-| When the row is written | When its last frame's flip record and every one of its codes' device records are in, on every output channel, or 30 frames (0.5 s at 60 Hz) after its last frame, with the codes still owed counted in `_failed`. A record that comes after that has `flags` 0x4000 (`PL_OUT_AFTER_ROW`) in `events.csv`: its row counted it failed. At the session's end the player shows 8 more frames, and up to 32 (`PL_OUT_WAIT_FRAMES` + 2: the record that passes a row's bound comes up to 2 frames after its flip) while a row still waits for a code's record | When its last frame's flip record is in; 8 frames at the end |
+| When the row is written | When its last frame's flip record and every one of its codes' device records are in, on every output channel, or 0.5 s (`PL_OUT_WAIT_NS`, 30 frames at 60 Hz) after its last frame, with the codes still owed counted in `_failed`. A record that comes after that has `flags` 0x4000 (`PL_OUT_AFTER_ROW`) in `events.csv`: its row counted it failed. At the session's end the player shows 133 ms more frames (`PL_END_DRAIN_NS`, 8 at 60 Hz), and up to 0.5 s plus 33 ms (`PL_RECORD_LAG_NS`: the record that passes a row's bound comes up to 2 frames at 60 Hz after its flip; 32 frames at 60 Hz) while a row still waits for a code's record. Each time is a whole number of frames of the display, rounded up | When its last frame's flip record is in; 133 ms of frames at the end |
 | `session.json` `devices` | `bound` (a family, `keyboard` or `none`), `key`, `port`, `ident`, `tier` (every bound role; an output's is 0, UNKNOWN), `min_tier` and `below_tier` where they apply, and `rule` (the output a device role's rule writes to) | `bound` only (`sim` or the rig's family) |
 | `session.json` | `rig_profile` (the file, or `null`), `allow_below_tier`, `gfx` (the program cache's hits), `view_distance_mm` and `view_width_mm` (deg units), `start_utc` (the time), `aborted` after Shift+Esc | `start_utc` fixed |
 | `frames.csv` phase columns | The CPU costs | Empty: they would differ between two runs |
@@ -582,6 +593,165 @@ in the same frame. With a 4,096-step buffer the largest frame's work was
 With the 64-step buffer it was 219 to 373 us. The two runs' streams are
 identical. A 4,096-step buffer would put a 16 ms frame at risk with five
 or six RDKs; 64 steps keep a flush under 50 us an RDK.
+
+### A 500 Hz display on `--sim` (0.11.0, 2026-11-14)
+
+The Linux desktop (i5-14500, Debian 12, liquorix 6.11, GCC 12.2, Release),
+`--sim --sim-hz 500` (2 ms frames) against `--sim` at 60 Hz. A `--sim` run
+gives no timing tier: a 500 Hz display's tier needs a photodiode run on it.
+
+#### Limits counted in frames
+
+At 500 Hz a frame is 8.3 times shorter. A limit counted in frames that
+covers a span of time covers 8.3 times less.
+
+| Limit | 60 Hz | 500 Hz in 0.10.0 | What runs short | 0.11.0 |
+|---|---|---|---|---|
+| The sound's scheduling lead (`run.c`, `pl_sounds()`, 2 frames) | 33 ms | 4 ms | A sound starts late, with no error: ysp/audio.h's record says LATE. The shortest safe lead measured at the defaults is 40 ms (docs/audio.md, "Shortest safe lead"; ALSA exclusive, 480-frame periods: 39.86 ms) | Two frames or `PL_SOUND_LEAD_NS` (40 ms) past the next frame, whichever is further: 56.7 ms at 60 Hz, 42 ms at 500 Hz |
+| A row's wait for its codes' device records (`PL_OUT_WAIT_FRAMES`, 30) | 500 ms | 60 ms | The row is written, the codes still owed counted failed; a frame trace's row is written with no `t_s` | `PL_OUT_WAIT_NS`, 0.5 s: 30 frames at 60 Hz, 250 at 500 Hz. The frame traces' waiting rows are sized from it |
+| The session's last flips (8 frames; 32 while a code is owed) | 133 ms, 533 ms | 16 ms, 64 ms | Owed codes counted failed; later device records lost | `PL_END_DRAIN_NS` 133 ms and `PL_OUT_WAIT_NS` plus `PL_RECORD_LAG_NS` (33 ms): 8 and 32 frames at 60 Hz, 67 and 267 at 500 Hz |
+| A real run's lead-in (`PL_LEAD_IN`, 30 frames) | 500 ms | 60 ms | Less settle time before the first trial; `display.min_tier` judged on fewer records | `PL_LEAD_IN_NS`, 0.5 s |
+| sig.h's catch-up window (4 frames) | 67 ms | 8 ms | An arm before the oldest checkpoint falls back (`arm_past_far`) and the guard stops | Not changed: no arm ran past it (below) |
+| The window's logs (1,024 calls, 16,384 ring writes) | | | Two raw mice at 8 kHz put 1,067 calls in four 60 Hz frames: the log runs full, the window is cleared, and a past arm right after falls back (`arm_past_full`). At 60 Hz too | Every role, and at least two, at 8 kHz over five frames, plus 16 calls a frame; each report's ring writes in its role's downstream set. 1,414 calls at 60 Hz, the floor of 1,024 at 500 Hz |
+
+Counted in frames on both sides (a flip record's lag), so not changed:
+`V2_STATE_ROWS`, `PL_PENDING_ROWS`, `PL_FRAME_RING` (256 frames, 512 ms at
+500 Hz), `PL_RDK_STEPS` (a flush every 128 ms). A per-frame capacity gets
+easier: `PL_DEV_RING`, `PL_EVENT_QUEUE`, `PL_WALK_PER_FRAME`.
+
+In ysp/screen.h (not changed in this round; a real run only):
+
+- GLX_OML gives up on a swap's event 4 periods past its target
+  (`yscr__glx_acquire()`): 67 ms at 60 Hz, 8 ms at 500 Hz. A later event's
+  frame completes as OCCLUDED with an estimated time.
+- `YSCR_MAX_DONE` (16 records a `begin()`): a stall of 267 ms at 60 Hz, 32
+  ms at 500 Hz, drops the oldest records. ysp/screen.h counts them
+  (`f.done_lost`, since the open); the player does not read the count.
+- `YSCR_MAX_JOBS` (16 trigger jobs in flight): 32 ms of codes on every frame
+  at 500 Hz. A job with no room is dropped and counted in the screen's
+  `trig_lost`, which no call returns; `yscr_trigger()` had returned OK. A
+  bound device then sends no record, so the row counts the code failed after
+  `PL_OUT_WAIT_NS`; an unbound role's sink counts the firings.
+- The sync guard's window of 64 flips: 1.07 s at 60 Hz, 128 ms at 500 Hz.
+
+#### Measured
+
+The model's harness (`tests/model/diff.py`; mismatches after shrinking).
+"Guard" is a stop on sig.h's counts; every stop below lists its counter.
+
+| Run | Cases | Refused (agreed) | Hangs agreed | Mismatches (at a GAP) | Guard stops |
+|---|---|---|---|---|---|
+| 0.10.0 at 500 Hz, seeds 100001 to 102000 | 2,000 | 254 (254) | 83 | 7 (7) | 0 |
+| 0.10.0 at 500 Hz, `GEN_MULTI=1`, 41001 to 42000 | 1,000 | 130 (130) | 30 | 7 (7) | 0 |
+| 0.10.0 at 60 Hz, 102001 to 103000 | 1,000 | 132 (132) | 53 | 7 (7) | 1 (`unverified`, seed 102590) |
+| 0.10.0 at 500 Hz, `--test-record-delay` 2, 4, 8; 100001 to 100500 | 500 each | 72 | 24 | context only | 1, 1, 2 (`unverified`) |
+| 0.11.0 at 500 Hz, 103001 to 105000 | 2,000 | 300 (300) | 63 | 16 (16) | 0 |
+| 0.11.0 at 500 Hz, `GEN_MULTI=1`, 42001 to 43000 | 1,000 | 125 (125) | 46 | 4 (4) | 0 |
+| 0.11.0 at 60 Hz, 105001 to 106000 | 1,000 | 161 (161) | 33 | 8 (8) | 0 |
+| 0.11.0 at 60 Hz, `GEN_MULTI=1`, 43001 to 43500 | 500 | 61 (61) | 22 | 2 (2) | 0 |
+
+No arm ran past the 4-frame window at 500 Hz (`past_far` and `past_full`
+0 in every session). Fewer arms are in the past at 500 Hz: the examples
+run 1 (visuomotor) and 0 (bimanual) arms again, against 160 and 16 at
+60 Hz.
+
+Late samples (`--late`, 0.10.0, seeds 100001 to 101000 at 500 Hz and
+102001 to 102500 at 60 Hz; the model has no arrival time, so its
+mismatches are not counted):
+
+| Lateness | 500 Hz guard stops (pinned, unverified) | 60 Hz guard stops (pinned, unverified) |
+|---|---|---|
+| 5 ms | 24 of 1,000 (6, 18) | 3 of 500 (2, 1) |
+| 10 ms | 41 of 1,000 (14, 27) | 5 of 500 (3, 2) |
+| 20 ms | 58 of 1,000 (27, 31) | 21 of 500 (8, 13) |
+
+`past_far` and `past_full` were 0 in every run. The same 20 ms run with a
+window of 8 frames (16 ms) and of 34 frames (68 ms; a scratch build with
+sig.h's limit of 8 raised) stopped on the same 58 cases with the same
+counts. So the window's length does not decide these stops. A late
+report comes after the frame calls whose onsets are later than its time.
+A frame's footprint is every node, so a past arm at the hit's time (the
+report's) goes after the report, and after those frames: it is pinned
+(sig.md, "Pinned"). The `unverified` stops are "Exactness" condition 3: a
+late report after a waiting group. Any lateness that spans a frame call
+does this, at any rate; at 500 Hz any lateness over 2 ms spans one. A
+longer window helps only if sig.h places a late report at its time, as it
+places a past arm. That change is not made (it changes sig.h's reference
+order).
+
+The window's logs with two raw mice at 8 kHz (60 Hz; `t_v2_window_8k`,
+the hold's end at 0.199 s just after the 1,024-call log ran full in that
+frame's reports): 0.10.0 stops on the guard (1 `logs full`); 0.11.0 runs
+the 20 trials with 19 arms run again and no fallback. Window use, measured
+in a scratch sig.h: 1,081 calls and 5,364 ring writes at most (that case),
+1,080 and 10,776 (the bimanual example's samples split to 8 kHz), 546 and
+7,572 (visuomotor's).
+
+Arena of a template's graph (0.10.0 at 60 and 500 Hz, then 0.11.0):
+
+| Graph | 0.10.0 (1,024 calls, 16,384 writes) | 0.11.0 at 60 Hz | 0.11.0 at 500 Hz |
+|---|---|---|---|
+| Visuomotor `reach`, 55 nodes | 11,049,136 bytes | 13,090,624 (1,414 calls, 39,538 writes) | 11,049,136 (the floor) |
+| Bimanual `reach`, 49 nodes | 10,799,344 | 12,535,408 (1,414, 35,296) | 10,799,344 |
+| Bimanual `track`, 38 nodes | 8,926,576 | 10,034,512 (1,414, 26,572) | 8,926,576 |
+
+Frame work (`--measure`, the default build, `taskset -c 2`, six runs each,
+interleaved; 0.10.0 at ca1ec57; load average 0.52 at the start and 0.71 at
+the end):
+
+| Example | Largest frame | p99 | p99.9 | Frames over the period |
+|---|---|---|---|---|
+| Visuomotor, 60 Hz | 640 to 764 us | 17.7 to 18.2 us | 620 to 626 us | 0 |
+| Visuomotor, 500 Hz | 632 to 835 us | 4.2 us | 100 to 200 us | 0 |
+| Bimanual, 60 Hz | 1,916 to 1,972 us | 29.0 to 30.0 us | 1,035 to 1,043 us | 0 |
+| Bimanual, 500 Hz | 1,920 to 2,769 us | 9.5 to 9.6 us | 11.3 to 12.4 us | 1 in 3 of 6 runs |
+
+The same after the changes (0.11.0; load average 0.19 at the start and
+0.55 at the end):
+
+| Example | Largest frame | p99 | p99.9 | Frames over the period |
+|---|---|---|---|---|
+| Visuomotor, 60 Hz | 644 to 658 us | 17.7 to 17.9 us | 619 to 624 us | 0 |
+| Visuomotor, 500 Hz | 632 to 875 us | 4.2 to 4.4 us | 55 to 253 us | 0 |
+| Bimanual, 60 Hz | 1,893 to 1,915 us | 29.3 to 29.9 us | 1,021 to 1,035 us | 0 |
+| Bimanual, 500 Hz | 1,901 to 1,916 us | 9.5 to 9.7 us | 11.5 to 25.9 us | 0 |
+
+The largest frame at both rates is a trial's end. Tracy (v0.14.1,
+`tracy-capture` and `tracy-csvexport -u`; a scratch build with zones on 16
+of sig.h's functions, about 1.5 us a frame; player on CPUs 2 and 4),
+bimanual at 500 Hz, self time:
+
+| Frames | `pl.write_inplace` | `pl.v2_trial_rows` | sig.h's graph work (feed, frame, settle) | Checkpoints | Exactness and waiting arms | Call log |
+|---|---|---|---|---|---|---|
+| The 5 largest (1,953 to 2,070 us) | 1,928 us (96 %) | 67 us | 0.85 us | 0.88 us | under 0.1 us | under 0.1 us |
+| p99 to p99.9 (15.1 us a frame) | 6.18 us | | 4.51 us | 0.43 us | 0.45 us | 0.17 us |
+| Every frame (8.3 us) | 3.15 us (38 %) | | 2.51 us (30 %) | 0.35 us (4.2 %) | 0.25 us (3.0 %) | 0.06 us (0.8 %) |
+
+The largest frame writes the trial's 1,878 sample-trace rows in place,
+about 1.03 us a row: `--sim` has no writer thread. A real run copies each
+row into the writer's queue (`pl_wq_push_row()`): 1,878 rows of 296 bytes
+in 20.4 to 20.6 us (best of 200, three runs, CPU 2), 10.9 ns a row, 102.5
+us for 8,000 rows; the worst of each 200 was 142 to 178 us. So the
+real trial end is the row loop (`pl.v2_trial_rows`, 67 us with the zones)
+and the copy, about 0.1 ms, which fits a 2 ms frame. sig.h's catch-up
+bookkeeping is about 0.66 us of a typical frame's 8.3 us; the ring writes'
+undo notes are in the feed and not split out.
+
+Cuts, not made (the `--sim` frame only): write the rows through the queue
+on `--sim` too, and drain it after the frame (about 0.1 ms in the frame); or
+write a trial's rows over its next frames, at 256 rows a frame (about 0.26
+ms a frame at 1 us a row).
+
+Checks of 0.11.0 (the same machine):
+
+| Check | Result |
+|---|---|
+| ctest | Release 124 of 124 (`test_sig_arm_ref`, the C and C++ compile checks among them); the sanitizers tree (ASan and UBSan, built and run under `setarch -R`) 123 of 123 |
+| `player_test.py` | 58 cases, 0 failures at 60 Hz and at `--hz 500` (`t_v2_window_8k` and `vm_guard_pinned` new) |
+| `compare.py`, the six examples | No exact column differs at 60 Hz or at `--hz 500`. At 500 Hz the bimanual `frames.csv` has 276,000 rows (33,120 at 60 Hz); `goal_x` 10 and `goal_y` 12 of them round the other way at the C file's 4th decimal, each a value at a half (the program's float, the player's double, F25): the format class. `unverified` 0 |
+| 60 Hz identity against 0.10.0 (ca1ec57) | Every data CSV file of `player_test.py` (1,455) and `compare.py` (70) byte-identical; `session.json` differs in `player_version` and `rig_profile_sha256` only. The one other difference is `vm_dense.csv`, the case's own input |
+| Mutants (`--sim` test, 4 jobs) | `player_v2.toml` 93 of 93 as expected (v2-95 killed; v2-96 kept, a guard), `player_run.toml` 64 of 64 of the `--sim` ones, `player_lower.toml` 26 of 26; the real-path ones (19 and 15) need a display and did not run |
+
 
 ### Format version 2 (2026-11-11)
 
@@ -1058,6 +1228,15 @@ with only `left`).
 - The role samples as input rows of `events.csv` (F30).
 
 ## Not verified
+
+- A display faster than 60 Hz: the 500 Hz numbers are `--sim`'s. No 500 Hz
+  display, photodiode run, GLX_OML swap events at 2 ms or flip-record lag in
+  frames was measured. `PL_RECORD_LAG_NS` keeps 60 Hz's 2 frames as a time.
+- Late reports from a signal role: a lateness that spans a frame pins or
+  leaves unverified the arms it reaches (Results, "A 500 Hz display"), at
+  any window. The player's guard stops; no other path is built.
+- The sound lead on a real device at 500 Hz: `--sim` has the null device,
+  and no test sees when a sound is scheduled.
 
 - A real run on Windows or macOS, and the MSVC, MinGW and macOS builds
   themselves until CI runs them (the CI lines are new).

@@ -53,11 +53,26 @@ Options:
   `wait_for_key_release`) and scripts of up to 4 presses a trial.
 - `GEN_AVOID=state_at,until_timeout,release` leaves those features out
   of the generated cases, so that a known difference does not hide others.
+- `--hz HZ` runs the player at that display rate (`--sim-hz`) and the
+  model and the generator on its frames (`v2model.set_period()`; `gen.py
+  SEED --hz HZ`, `v2model.py ... --hz HZ`). The generator makes its
+  durations and sample times in frames, so a seed gives another case at
+  another rate.
+- `--late S` gives the hand's samples to the player S seconds after their
+  time (`--test-sample-late`). The model has no arrival time: it predicts
+  the rows of samples fed at their time, so its mismatches count only as
+  context; the guard's stops are the measure.
+- `--extra "OPTIONS"` passes more options to the player (the model does
+  not see them).
+- The log (`--log`) has each run's `sig_arms` from `session.json` and the
+  guard's counts when the player stopped on it; the last line sums them.
 
 ## What the model covers
 
 - One leaf with `reps N`, one template, no variables. The simulated
-  display: 60 Hz, frame k at 1000 s + (k + 7) x 16,666,667 ns (measured).
+  display: 60 Hz, frame k at 1000 s + (k + 7) x 16,666,667 ns (measured);
+  at `--hz`, the same grid with that period (measured at 500 Hz: 2,000
+  cases line up).
 - States: the steps `on`, `off`, `wait_s`, `at_s`, `mark`, `flag`, `set`
   (a constant), `if` and `unless` on a flag, and `until` with and without
   `timeout_s`.
