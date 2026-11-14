@@ -554,7 +554,16 @@ R is built call by call, in call order:
    and an arm call's is the smaller of its `t` and `N`: a present or
    ahead arm lets in an earlier waiting group it meets (it is at `N`), a
    past arm only one earlier than its own time (E's example: the arm at
-   40 ms does not let in the one waiting at 60 ms).
+   40 ms does not let in the one waiting at 60 ms). An arm call lets in
+   a waiting group it meets whose `τ` is at or before that time: at
+   equal times rule 2 puts the earlier call first (S3). A state call's
+   letting in takes effect only when the call itself goes into R: a
+   state call in an ahead group lets in nothing until that group goes
+   in, so nothing in the group, its triggers included, is made before
+   (H9; sets, set_data, disarms, recenters and channel index sets
+   alike). A waiting group let in this way by a state call of a past or
+   present group stays where it went in; that group's own calls move to
+   their place (rule 2).
    Waiting groups go in by `τ`, then call order. A group that never
    meets such a call is never made. A state call with a time at or
    before `τ` goes before the group: a `ysig_set()` of its detect then
