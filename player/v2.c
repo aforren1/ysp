@@ -22,7 +22,7 @@
 #define V2_TRACE_ROWS 65536      /* a sample trace's rows in one trial      */
 /* a frame trace's rows that wait for records: the rows' bound, the test
  * delay of 8 frames and margin, and never fewer than 0.3.0's 64 */
-#define V2_FRAME_WAIT ((PL_OUT_WAIT_FRAMES + 12) * 2 > 64 ? (PL_OUT_WAIT_FRAMES + 12) * 2 : 64)
+#define V2_FRAME_WAIT(p) (((p)->out_wait_frames + 12) * 2 > 64 ? ((p)->out_wait_frames + 12) * 2 : 64)
 #define V2_STATE_ROWS 64         /* state rows waiting for their record     */
 #define V2_HISTORY 4096          /* D38's ring for a value read at a time   */
 #define V2_WINDOW_FRAMES 4       /* sig.h's catch-up window, in frames       */
@@ -265,7 +265,7 @@ typedef struct pl_v2_session {
     /* uniform draws of the open leaf (D29) */
     struct v2_uni { const char* name; int n; double v[64]; yexp_value items[64]; }* uni; int n_uni, cap_uni;
     /* frames whose trace rows and state rows wait for a record */
-    v2_frow* fpend; int n_fpend, cap_fpend;   /* sized at load, V2_FRAME_WAIT a frame trace */
+    v2_frow* fpend; int n_fpend, cap_fpend;   /* sized at load, V2_FRAME_WAIT(p) a frame trace */
     v2_srow srow[V2_STATE_ROWS]; int n_srow;
     int64_t t0;                /* the samples' time 0: the first frame's onset */
     bool t0_set;
@@ -1818,12 +1818,12 @@ int pl_v2_load(pl_player* p) {
             return -1;
         }
     }
-    /* every frame trace's rows can wait V2_FRAME_WAIT frames for records */
+    /* every frame trace's rows can wait V2_FRAME_WAIT(p) frames for records */
     if (S->cap_fpend > V2_MAX_FRAME_TRACES) {
         pl_fail(p, "the definition has %d frame traces; the player takes at most %d", S->cap_fpend, V2_MAX_FRAME_TRACES);
         return -1;
     }
-    S->cap_fpend = (S->cap_fpend > 0 ? S->cap_fpend : 1) * V2_FRAME_WAIT;
+    S->cap_fpend = (S->cap_fpend > 0 ? S->cap_fpend : 1) * V2_FRAME_WAIT(p);
     S->fpend = (v2_frow*)pl_alloc(p, sizeof(v2_frow) * (size_t)S->cap_fpend);
     if (!S->fpend) return -1;
     S->n_vals = p->n_channels + (max_slots > 0 ? max_slots : 1);
@@ -3125,7 +3125,7 @@ int pl_v2_on_record(pl_player* p, const yscr_record* rec) {
             if (v2_frame_row_write(p, &S->fpend[i], rec->onset ? rec->onset : rec->planned, rec->onset != 0) < 0) return -1;
             continue;
         }
-        if (rec->index >= S->fpend[i].frame + PL_OUT_WAIT_FRAMES) {
+        if (rec->index >= S->fpend[i].frame + p->out_wait_frames) {
             /* its record did not come in the rows' bound: t_s empty, flagged */
             if (v2_frame_row_write(p, &S->fpend[i], 0, false) < 0) return -1;
             continue;

@@ -36,6 +36,11 @@ void pl_fail(pl_player* p, const char* fmt, ...) {
 
 typedef struct pl_block { struct pl_block* next; } pl_block;
 
+int pl_frames_of(const pl_player* p, int64_t ns) {
+    int64_t per = p->caps.period_ns > 0 ? p->caps.period_ns : 16666667;
+    return (int)((ns + per - 1) / per);
+}
+
 void* pl_alloc(pl_player* p, size_t n) {
     pl_block* b = (pl_block*)calloc(1, sizeof(pl_block) + n);
     if (!b) { pl_fail(p, "out of memory (%zu bytes)", n); return NULL; }
@@ -2188,9 +2193,12 @@ static void pl_open_hook(void* ctx, yscr_screen* s) {
  * display below it refuses the start here, before any file is written. */
 static int pl_lead_in(pl_player* p) {
     yscr_frame f;
-    int i, rc;
-    for (i = 0; i < PL_LEAD_IN; i++) {
+    int i, rc, n = 1;
+    /* PL_LEAD_IN_NS at the rate the first frame gives (the caps come
+     * after the lead-in) */
+    for (i = 0; i < n; i++) {
         rc = yscr_begin(&p->scr, &f);
+        if (i == 0 && rc == YSCR_OK) n = (int)((PL_LEAD_IN_NS + (f.period > 0 ? f.period : 16666667) - 1) / (f.period > 0 ? f.period : 16666667));
         if (rc == YSCR_QUIT) { pl_fail(p, "stopped by the operator before the first trial"); return -1; }
         if (rc != YSCR_OK) { pl_fail(p, "the screen: %s", yscr_error(&p->scr)); return -1; }
         ygfx_begin(&p->gfx, &f);
@@ -2280,6 +2288,9 @@ static int pl_screen_open(pl_player* p) {
     if (ygfx_prime(&p->gfx) < 0) { pl_fail(p, "the gfx: %s", ygfx_error(&p->gfx)); return -1; }
     if (!p->args.sim && pl_lead_in(p) < 0) return -1;
     yscr_get_caps(&p->scr, &p->caps);
+    p->out_wait_frames = pl_frames_of(p, PL_OUT_WAIT_NS);
+    p->end_frames = pl_frames_of(p, PL_END_DRAIN_NS);
+    p->rec_lag_frames = pl_frames_of(p, PL_RECORD_LAG_NS);
     return 0;
 }
 

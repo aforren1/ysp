@@ -1505,12 +1505,12 @@ static int pl_on_record(pl_player* p, const yscr_record* rec) {
         }
     }
     /* a row is written when its last frame's record is in and every code
-     * it asked for has its device record, or PL_OUT_WAIT_FRAMES frames
-     * later, with the missing ones counted failed */
+     * it asked for has its device record, or PL_OUT_WAIT_NS later (in
+     * frames), with the missing ones counted failed */
     for (i = 0; i < PL_PENDING_ROWS; i++) {
         pl_row* r = &p->rows[i];
         if (!r->used || r->final || !r->last_in) continue;
-        if (!pl_row_owed(p, r) || rec->index >= r->last_frame + PL_OUT_WAIT_FRAMES) r->final = true;
+        if (!pl_row_owed(p, r) || rec->index >= r->last_frame + p->out_wait_frames) r->final = true;
     }
     while (p->rows[p->row_tail].used && p->rows[p->row_tail].final) {
         if (pl_row_hand(p, &p->rows[p->row_tail]) < 0) return -1;
@@ -1941,14 +1941,20 @@ static int pl_end_trial_(pl_player* p, const yscr_frame* f) {
 /* --- the frame --------------------------------------------------------- */
 
 /* Sounds are scheduled ahead on the audio clock (rig_spec 4.5.1): each
- * frame peeks the next two frames' events for a sound's onset. */
+ * frame peeks the next two frames' events for a sound's onset, and on a
+ * display fast enough that two frames are less than PL_SOUND_LEAD_NS
+ * past the next frame, that far: a sound first seen one frame before its
+ * onset would start late. */
+static int64_t pl_sound_ahead(int64_t period) {
+    return 2 * period > PL_SOUND_LEAD_NS + period ? 2 * period : PL_SOUND_LEAD_NS + period;
+}
 static int pl_sounds(pl_player* p, const yscr_frame* f) {
     int i;
     for (i = 0; i < p->n_stims; i++) {
         pl_stim* s = &p->stims[i];
         int k, n;
         if (s->def->kind != YEXP_SOUND || s->ch_visible < 0) continue;
-        n = ytl_peek(&p->tl, PL_BASE_TRIAL, f->onset, f->onset + 2 * f->period + 1, p->peek, p->fired_cap);
+        n = ytl_peek(&p->tl, PL_BASE_TRIAL, f->onset, f->onset + pl_sound_ahead(f->period) + 1, p->peek, p->fired_cap);
         for (k = 0; k < n && k < p->fired_cap; k++) {
             /* every onset once: a sound can play more than once in a trial */
             if (p->peek[k].kind == YTL_ONSET && p->peek[k].target == s->ch_visible && p->peek[k].onset > s->sound_scheduled) {
@@ -2643,11 +2649,12 @@ int pl_run(pl_player* p) {
     /* after an abort too: the begin() after the one that reported it starts
      * a frame again, unless the panic released the display */
     if (p->aborted && !(p->abort_reasons & YSCR_ABORT_PANIC)) rc = YSCR_OK;
-    /* 8 frames, and in a real run up to PL_OUT_WAIT_FRAMES + 2 (32) while a
-     * row still waits for a code's device record: the end has the rows'
-     * bound too, and the flip record that passes it comes up to 2 frames
-     * after its flip */
-    for (i = 0; rc == YSCR_OK && (i < 8 || (i < PL_OUT_WAIT_FRAMES + 2 && pl_rows_owed(p))); i++) {
+    /* PL_END_DRAIN_NS (8 frames at 60 Hz), and in a real run up to
+     * PL_OUT_WAIT_NS + PL_RECORD_LAG_NS (32 frames) while a row still waits
+     * for a code's device record: the end has the rows' bound too, and the
+     * flip record that passes it comes up to PL_RECORD_LAG_NS after its
+     * flip */
+    for (i = 0; rc == YSCR_OK && (i < p->end_frames || (i < p->out_wait_frames + p->rec_lag_frames && pl_rows_owed(p))); i++) {
         int k;
         rc = yscr_begin(&p->scr, &f);
         if (rc != YSCR_OK) break;
@@ -2665,7 +2672,7 @@ int pl_run(pl_player* p) {
             if (pl_on_record(p, &f.done[k]) < 0) return -1;
         }
         /* tests: the held records, the session's last ones too */
-        while (p->rec_n > 0 && (p->rec_q[p->rec_head].index + p->args.record_delay < f.index || i == 7)) {
+        while (p->rec_n > 0 && (p->rec_q[p->rec_head].index + p->args.record_delay < f.index || i == p->end_frames - 1)) {
             yscr_record rec = p->rec_q[p->rec_head];
             p->rec_head = (p->rec_head + 1) % PL_REC_DELAY_CAP;
             p->rec_n--;

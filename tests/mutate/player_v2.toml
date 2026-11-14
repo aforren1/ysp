@@ -264,7 +264,7 @@ id = "v2-30"
 name = "the waiting frame rows sized for 2 frames a trace"
 test = "player"
 why = "Re-review G (9 traces, --test-record-delay 8)."
-find = '''    S->cap_fpend = (S->cap_fpend > 0 ? S->cap_fpend : 1) * V2_FRAME_WAIT;'''
+find = '''    S->cap_fpend = (S->cap_fpend > 0 ? S->cap_fpend : 1) * V2_FRAME_WAIT(p);'''
 replace = '''    S->cap_fpend = (S->cap_fpend > 0 ? S->cap_fpend : 1) * 2;'''
 
 [[mutant]]
@@ -305,8 +305,8 @@ name = "a frame row whose record never comes waits on"
 test = "player"
 expect = "survived"
 note = "A guard: on --sim every frame's record comes (--test-record-delay only delays it); a real run's dropped record reaches it. The session's end writes such a row too (pl_v2_finish)."
-why = "F29: the trial rows' bound of 30 frames."
-find = '''        if (rec->index >= S->fpend[i].frame + PL_OUT_WAIT_FRAMES) {'''
+why = "F29: the trial rows' bound, PL_OUT_WAIT_NS (30 frames at 60 Hz)."
+find = '''        if (rec->index >= S->fpend[i].frame + p->out_wait_frames) {'''
 replace = '''        if (0) {'''
 
 [[mutant]]
@@ -605,7 +605,7 @@ id = "v2-73"
 name = "no window: an arm in the past tests the newest value"
 test = "player"
 why = "sig.h 0.6.0 (vm_refound): 3.11 rule 2."
-find = '''            d->catchup_frames = 4;'''
+find = '''            d->catchup_frames = V2_WINDOW_FRAMES;'''
 replace = '''            d->catchup_frames = 0;'''
 
 [[mutant]]
@@ -789,3 +789,21 @@ replace = '''        rc = v2_feed(p, f, t);
         if (rc < 0) return -1;
         if (v->resp_taken || v->cur < 0) return 0;
         return v2_resp_states(p, v, f, t, responded);'''
+
+[[mutant]]
+id = "v2-95"
+name = "the window's logs at 0.10.0's 1,024 calls"
+test = "player"
+why = "Two 8 kHz mice put 1,067 calls in four 60 Hz frames; a full log clears the window, and a past arm right after falls back (t_v2_window_8k)."
+find = '''    c = reps * roles + (int64_t)(V2_WINDOW_FRAMES + 1) * V2_WINDOW_FRAME_CALLS;'''
+replace = '''    c = 0;'''
+
+[[mutant]]
+id = "v2-96"
+name = "the window's ring writes at 0.10.0's 16,384"
+test = "player"
+expect = "survived"
+note = "A guard: the measured writes stay under 16,384 on every case here (t_v2_window_8k: 5,088 at the full 1,024-call log; the bimanual example at 8 kHz: 10,776). The bound is for a graph with more rings downstream of a role."
+why = "Each report writes up to one value to each ring in its role's downstream set."
+find = '''    c = reps * roles * (w > 0 ? w : 1) + (int64_t)(V2_WINDOW_FRAMES + 1) * V2_WINDOW_FRAME_CALLS * (rings > 0 ? rings : 1);'''
+replace = '''    c = 0;'''

@@ -75,15 +75,11 @@ enum {
     PL_WALK_PER_FRAME = 4096,  /* tree-walk steps before the frame goes on    */
     PL_OUT_PENDING    = 64,    /* a channel's codes between the fire and its
                               * device record (a real run)                  */
-    PL_OUT_WAIT_FRAMES = 30,   /* a row waits this many frames after its last
-                              * one for its codes' device records, then is
-                              * written with the missing ones as failed     */
     PL_RULE_ARMS      = 8,     /* a channel's last rule arms: a rule's record
                               * goes to the arm its press falls in          */
     PL_DEV_RING       = 4096,  /* device records between two frames          */
     PL_DEV_DRAIN      = 256,   /* records read per drain call                */
-    PL_LEAD_IN        = 30,    /* a real run's blank frames before the data
-                              * set opens: about 0.5 s at 60 Hz             */
+
     PL_WRITE_QUEUE    = 8192   /* writes the writer may lag behind: about a
                               * minute of frames and their events at 60 Hz  */
 };
@@ -104,6 +100,25 @@ enum {
                                     * past any record the screen delivers; it
                                     * fires only when records stop (docs/
                                     * player.md) */
+    /* Spans of time, counted in frames at the display's rate
+     * (pl_frames_of()); each is its 0.10.0 frame count at 60 Hz, so a 60 Hz
+     * run is unchanged */
+    PL_OUT_WAIT_NS = 500000000,     /* a row waits this long after its last
+                                     * frame for its codes' device records,
+                                     * then is written with the missing ones
+                                     * as failed (30 frames at 60 Hz)        */
+    PL_LEAD_IN_NS = 500000000,      /* a real run's blank frames before the
+                                     * data set opens (30 at 60 Hz)          */
+    PL_END_DRAIN_NS = 133333336,    /* the session's last flips that bring in
+                                     * the last records (8 at 60 Hz)          */
+    PL_RECORD_LAG_NS = 33333334,    /* a flip record comes this long after its
+                                     * flip at most (2 frames at 60 Hz on
+                                     * GLX_OML, docs/player.md)               */
+    PL_SOUND_LEAD_NS = 40000000,    /* a sound's yau_play_at() this long ahead
+                                     * of its onset at least: the shortest safe
+                                     * lead docs/audio.md measured at the
+                                     * defaults (WASAPI shared queue 2, ALSA
+                                     * exclusive 480-frame periods)          */
     PL_WORK_BIN_NS = 100,           /* --measure's histogram: 100 ns bins */
     PL_WORK_BINS = 200000,          /* up to 20 ms; more goes in the last */
     PL_WRITER_PERIOD_NS = 2000000   /* the writer looks at its queue this often:
@@ -667,6 +682,9 @@ struct pl_player {
     int64_t   work_max_ns, work_trial_max_ns, work_n, work_over_16ms;
     int64_t   work_max_frame;
     int64_t   work_over_period;   /* frames whose work took more than a period */
+    int       out_wait_frames;    /* PL_OUT_WAIT_NS, PL_END_DRAIN_NS and   */
+    int       end_frames;         /* PL_RECORD_LAG_NS in frames of the     */
+    int       rec_lag_frames;     /* display's period (pl_frames_of())     */
     uint32_t* work_hist;          /* per-frame work in PL_WORK_BIN_NS bins     */
     int64_t   work_input_max_ns, work_input_max_frame;   /* a real run's input: SDL's pump */
     /* version 2 (v2.c) */
@@ -684,6 +702,8 @@ int  pl_load(pl_player* p, const pl_args* a);
 void pl_close(pl_player* p);
 void pl_fail(pl_player* p, const char* fmt, ...);
 void* pl_alloc(pl_player* p, size_t n);
+/* A span of time in whole frames of the display's period, rounded up. */
+int pl_frames_of(const pl_player* p, int64_t ns);
 const ytb_table* pl_table_get(pl_player* p, const char* name);
 pl_stim* pl_stim_by_name(pl_player* p, const char* name);
 /* The channel of a stimulus's property, or of its visibility when prop is
