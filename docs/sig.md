@@ -823,7 +823,15 @@ G is exact when all of these are true:
      input between them that let H in would make H before G there (the
      reviewer's 489). The player makes this shape when a state exits at
      the time its control was armed for (the arm, then the exit's
-     disarm, at one time).
+     disarm, at one time). The exception also needs this: no group K
+     that waits for `L(G)` too (at its place, or as an ahead group) and
+     is earlier than G by (`τ`, call order) is linked to H. K is linked
+     to H when K's footprint meets `F(H)`, or meets the footprint of
+     another group (not G) that waits for `L(G)` and is linked to H.
+     Reason: K goes into R at `L(G)` before G, and its calls let in
+     what they meet when they go in, so R can make H before G. When H
+     disarms G's detect, R then cancels G's arm (the oracle's case 1061
+     of seed 777016: K arms the detect that H disarms, at G's `τ`).
    - (c) When a disarm or a barrier cancelled G's arm, G has no disarm.
      This one holds for any `N(G)` too: when a disarm or a barrier
      cancelled G's arm and G has a disarm, G is not exact unless
