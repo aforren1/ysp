@@ -1217,6 +1217,10 @@ typedef struct ysig__wt {
     ysig__ux*  op;          /* with a window: catchup_calls of them      */
     int        n_op, cap_op;
     int        cas_kind, cas_depth, n_cg, n_cc, cas_stack[YSIG__UCG], cas_top;
+    int        cas_p4;      /* condition 4: the gap's disarms in no group
+                             * come right before the cascade's first group */
+    uint64_t   p4_gid;      /* a group let in after a disarm of the open
+                             * gap: condition 4 if no arm closes the gap  */
     int64_t    cas_t;
     uint64_t   cas_f[YSIG__FPW];
     int        cas_all;
@@ -4522,6 +4526,8 @@ static void ysig__cas_end(ysig_graph* g, uint64_t l_seq) {
         ysig__ucg* c = &w->cg[i];
         int bad = c->inside;
         if (c->cancelled && !c->ncalls) continue;   /* nothing of it goes into R */
+        /* 2 (c): a cancelled group with a disarm, unless N(G) is its time */
+        if (c->cancelled && ysig__fp_any(g, c->Fa) && c->n_at != c->t) bad = 1;
         if (!bad && c->n_at < c->t) {
             if (w->cas_kind != YSIG__CAS_INPUT || w->cas_t <= c->t || c->cancelled ||
                 (!w->cas_all && (!ysig__fp_meets(g, w->cas_f, c->F) || !ysig__fp_meets(g, w->cas_f, c->Fa))) || !ysig__fp_any(g, c->Fa)) bad = 1;
@@ -4544,6 +4550,11 @@ static void ysig__cas_end(ysig_graph* g, uint64_t l_seq) {
         }
         if (bad) ysig__unv(g, c->gid);
     }
+    /* condition 4: a disarm in no group right before the first group the
+     * trigger let in (a graph with no window joins it to that group) */
+    if (w->n_cc && w->cas_p4) ysig__unv(g, w->cc[0].gid);
+    if (w->n_cc && w->cas_kind == YSIG__CAS_STATE && w->n_dis > 0 && !w->p4_gid) w->p4_gid = w->cc[0].gid;
+    w->cas_p4 = 0;
     w->cas_kind = YSIG__CAS_NONE;
     w->n_cg = w->n_cc = w->cas_top = 0;
 }
@@ -4752,10 +4763,16 @@ static void ysig__wait_fire(ysig_graph* g, int64_t t, const uint64_t* f, uint64_
     }
 }
 static void ysig__before_input(ysig_graph* g, int64_t t, const uint64_t* f) {
+    ysig__wt* w = g->wt;
+    /* the gap ends with no arm: its disarms are in no group (condition 4) */
+    int p4 = w->n_dis > 0 && !w->p4_gid;
+    if (w->p4_gid) ysig__unv(g, w->p4_gid);
+    w->p4_gid = 0;
     ysig__gap_disarms(g, g->t_cover, 1);
     ysig__ux_input(g, t, f);   /* condition 3: a late report of an arm in R */
-    if (!g->wt->n) return;
+    if (!w->n) return;
     ysig__cas_begin(g, YSIG__CAS_INPUT, t, f);
+    w->cas_p4 = p4;
     ysig__wait_fire(g, t, f, 0);
     ysig__cas_end(g, g->wt->seq);   /* L: this input, logged next */
 }
@@ -4782,8 +4799,11 @@ static void ysig__before_state(ysig_graph* g, int node) {
  * calls go in first. */
 static void ysig__before_barrier(ysig_graph* g) {
     ysig__wt* w = g->wt;
+    int p4 = w->n_dis > 0 && !w->p4_gid;
+    if (w->p4_gid) ysig__unv(g, w->p4_gid);
+    w->p4_gid = 0;
     ysig__gap_disarms(g, g->t_cover, 1);
-    if (w->n) ysig__cas_begin(g, YSIG__CAS_BARRIER, g->t_cover, NULL);
+    if (w->n) { ysig__cas_begin(g, YSIG__CAS_BARRIER, g->t_cover, NULL); w->cas_p4 = p4; }
     while (w->n) {
         int k, best = 0;
         for (k = 1; k < w->n; k++)
@@ -5106,6 +5126,17 @@ static void ysig__unv_place(ysig_graph* g, int kslot, uint64_t pos, int nb) {
             if (c->e.kind == YSIG_J_DISARM) ysig__fp_or(g, Fa, c->e.node);
         }
         bad = ysig__unv_spans(g, first, last, gid);
+        /* 2 (c) at any N(G): a cancelled group's disarm, unless N(G) is t */
+        if (!bad && armed < 0 && ysig__fp_any(g, Fa) && N != t) bad = 1;
+        if (!bad && first == pos) {
+            /* condition 4: a disarm in no group right before G (no input,
+             * barrier or arm between) */
+            for (u = pos; u > cu->c_tail; u--) {
+                const ysig__call* c = &cu->calls[(u - 1) % (uint64_t)cu->C];
+                if (ysig__input_t(&c->e, &ti) || ysig__fp_entry(g, c, f) == 2 || c->e.kind == YSIG_J_ARM) break;
+                if (c->e.kind == YSIG_J_DISARM && !c->gid) { bad = 1; break; }
+            }
+        }
         if (!bad && N < t) {
             /* waits at its place: L in R, meeting the arm, no barrier and
              * no other state call meeting G before it but the exception */
@@ -5312,6 +5343,7 @@ YSIG_API bool ysig_arm(ysig_graph* g, int node, int64_t t_ns) {
     }
     if (cu) cu->grp_open = cu->grp_bad = 0;
     g->wt->gap_n = 0;
+    g->wt->p4_gid = 0;   /* the gap's disarms are this arm's group's */
     g->busy--;
     ysig__out_final(g);
     return true;

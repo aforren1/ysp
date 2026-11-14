@@ -4556,6 +4556,71 @@ static void test_arm_exact(void) {
         ysig_arm(&g_rp, 1, 20 * MS);
         CHECK(ex_unv() == !v);
     }
+    /* 2 (c) at any N(G): a disarm of d1 cancels d1's waiting arm, whose
+     * group has a disarm of d2; device 3 moves N to 30 ms, device 1 at 35
+     * lets the group's disarm in with N(G) past its time (the reviewer's
+     * 490 and 1821). The control: N(G) at its time (device 3 at 20) */
+    for (v = 0; v < 2; v++) {
+        if (!ex_open(n, 4)) return;
+        ysig_disarm(&g_rp, 2);
+        ysig_arm(&g_rp, 1, 20 * MS);
+        rp_feed(12 * MS, 0, YIN_AXIS_POSITION, 1);
+        ysig_disarm(&g_rp, 1);
+        rp_feed((v ? 30 : 20) * MS, 0, YIN_AXIS_PEN_PRESSURE, 3);
+        CHECK(g_rp.wt->n == 1 && ex_unv() == 0);
+        rp_feed(35 * MS, 0, YIN_AXIS_POSITION, 1);
+        CHECK(g_rp.wt->n == 0 && ex_unv() == v);
+    }
+    /* 4: a disarm in no group right before G. (a) d1 waits at 20 ms; a
+     * disarm of d2 in no group; device 1 at 25 ends its gap and lets d1
+     * in right after it (the reviewer's 883). The control: device 3's
+     * input ends the gap first. (b) d1 armed at 20 ms in the past goes
+     * right after a disarm of d2 in no group (the reviewer's 404). The
+     * control: the disarm before device 1's 10 ms input */
+    for (v = 0; v < 2; v++) {
+        if (!ex_open(n, 4)) return;
+        ysig_arm(&g_rp, 1, 20 * MS);
+        ysig_disarm(&g_rp, 2);
+        if (!v) rp_feed(12 * MS, 0, YIN_AXIS_PEN_PRESSURE, 3);
+        rp_feed(25 * MS, 0, YIN_AXIS_POSITION, 1);
+        CHECK(g_rp.wt->n == 0 && ex_unv() == v);
+    }
+    /* (c) a state call later in the disarm's gap lets d1 in (after the
+     * disarm): the gap ends with an input, so the disarm is in no group.
+     * d3 (on device 3) is the one disarmed: it does not meet d1, so the
+     * disarm lets nothing in itself. The control: an arm (of d3, at N)
+     * closes the gap */
+    for (v = 0; v < 2; v++) {
+        ysig_node cn6[6];
+        if (!ex_open(cn6, 4)) return;
+        cn6[5] = ysig_node_of(YSIG_OP_DETECT, 3, -1); cn6[5].p[YSIG_DETECT_LEVEL] = 5; cn6[5].p[YSIG_DETECT_START] = 1; cn6[5].history = 64;
+        if (!rp_open(cn6, 6, 4, 0, false, false)) return;
+        rp_feed(10 * MS, 0, YIN_AXIS_POSITION, 1);
+        rp_feed(10 * MS, 0, YIN_AXIS_PEN_PRESSURE, 3);
+        ysig_arm(&g_rp, 1, 20 * MS);
+        rp_feed(30 * MS, 0, YIN_AXIS_PEN_PRESSURE, 3);   /* N 30: d1 still waits */
+        ysig_disarm(&g_rp, 5);
+        CHECK(g_rp.wt->n == 1);
+        ysig_set(&g_rp, 1, YSIG_DETECT_LEVEL, 4);       /* lets d1 in */
+        CHECK(g_rp.wt->n == 0);
+        if (!v) ysig_arm(&g_rp, 5, 30 * MS);
+        rp_feed(31 * MS, 0, YIN_AXIS_PEN_PRESSURE, 3);
+        CHECK(ex_unv() == v);
+    }
+    for (v = 0; v < 2; v++) {
+        n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 2); n[0].history = 64;
+        n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1); n[1].p[YSIG_DETECT_LANE] = 0; n[1].p[YSIG_DETECT_LEVEL] = 5; n[1].p[YSIG_DETECT_START] = 1; n[1].history = 64;
+        n[2] = ysig_node_of(YSIG_OP_DETECT, 1, -1); n[2].p[YSIG_DETECT_LANE] = 0; n[2].p[YSIG_DETECT_LEVEL] = 0.5; n[2].p[YSIG_DETECT_START] = 1; n[2].history = 64;
+        n[3] = src_node(YIN_KIND_PEN, YIN_AXIS_PEN_PRESSURE, 3, 1);
+        n[4] = ysig_node_of(YSIG_OP_OFFSET, 3, -1);
+        if (!rp_open(n, 5, 4, 0, false, false)) return;
+        if (!v) ysig_disarm(&g_rp, 2);
+        rp_feed(10 * MS, 0, YIN_AXIS_POSITION, 1);
+        if (v) ysig_disarm(&g_rp, 2);
+        rp_feed(30 * MS, 0, YIN_AXIS_POSITION, 1);
+        ysig_arm(&g_rp, 1, 20 * MS);
+        CHECK(ex_unv() == v);
+    }
     /* 3 is for a group that waits at its place only: a present arm, then
      * a late report of another device that meets it: 0 */
     if (!ex_open(n, 4)) return;

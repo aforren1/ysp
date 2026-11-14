@@ -2643,3 +2643,45 @@ test = "sig"
 why = "Condition 3 is for a group that waits at its place (test_arm_exact: device 3 at 30 ms before the place)."
 find = '''        if (armed >= 0 && N < t) ysig__ux_arm(g, armed, t, gid, F);   /* condition 3: while it waits */'''
 replace = '''        if (armed >= 0) ysig__ux_arm(g, armed, t, gid, F);   /* condition 3: while it waits */'''
+
+[[mutant]]
+id = "313"
+name = "exactness: 2 (c) only while the group waits"
+test = "sig"
+why = "2 (c) at any N(G) but its time (the reviewer's 490 and 1821; test_arm_exact)."
+find = '''        if (c->cancelled && ysig__fp_any(g, c->Fa) && c->n_at != c->t) bad = 1;'''
+replace = ''''''
+
+[[mutant]]
+id = "314"
+name = "exactness: condition 4 not tested at a trigger"
+test = "sig"
+why = "Condition 4: a disarm in no group right before the first group an input lets in (the reviewer's 883; test_arm_exact 4 (a))."
+find = '''    if (w->n_cc && w->cas_p4) ysig__unv(g, w->cc[0].gid);'''
+replace = ''''''
+
+[[mutant]]
+id = "315"
+name = "exactness: condition 4 not tested at a past group's place"
+test = "sig"
+why = "Condition 4 in the log (the reviewer's 404; test_arm_exact 4 (b))."
+find = '''                if (c->e.kind == YSIG_J_DISARM && !c->gid) { bad = 1; break; }'''
+replace = ''''''
+
+[[mutant]]
+id = "316"
+name = "exactness: 2 (c) at any N(G) not tested in the log"
+test = "sig"
+why = "2 (c) for a cancelled waiting group let in at a past group's place."
+expect = "survived"
+note = "No test places a cancelled waiting group with a disarm inside a past group's block with N(G) past its time: the shape needs a past group's state call to let it in. The trigger path (313) has the test."
+find = '''        if (!bad && armed < 0 && ysig__fp_any(g, Fa) && N != t) bad = 1;'''
+replace = ''''''
+
+[[mutant]]
+id = "317"
+name = "exactness: condition 4 not kept for a group a state call let in"
+test = "sig"
+why = "Condition 4 when the gap ends with an input after a state call let a group in after its disarm (test_arm_exact 4 (c))."
+find = '''    if (w->n_cc && w->cas_kind == YSIG__CAS_STATE && w->n_dis > 0 && !w->p4_gid) w->p4_gid = w->cc[0].gid;'''
+replace = ''''''
