@@ -752,5 +752,15 @@ id = "v2-91"
 name = "every control of the state left disarmed"
 test = "player"
 why = "A disarm with no arm in its group takes the input time: the next state's arm of the control after a settle, at an earlier time, would be ended by it (the model's 68666, 66120)."
-find = '''        if (v->arm_t[v->st_armed[k]] > v->g.t_cover) (void)ysig_disarm(&v->g, v->st_armed[k]);'''
-replace = '''        (void)ysig_disarm(&v->g, v->st_armed[k]);'''
+find = '''        if (v->wait_t[node] > v->g.t_cover) (void)ysig_disarm(&v->g, node);'''
+replace = '''        (void)ysig_disarm(&v->g, node);'''
+
+[[mutant]]
+id = "v2-92"
+name = "only the latest arm of a control checked for waiting"
+test = "player"
+expect = "survived"
+note = "Not reached through --sim: within a visit the player arms a control once (an until's control has a detect of its own), so the latest arm is the only one; and every settle and frame lets a waiting arm in, so an arm still ahead at an exit is the visit's latest. vm_exit_cancels_wait covers the shape the latest arm does. Kept as the coordinator's guard against a format change that arms a control twice in a visit."
+why = "Any arm of a state's control still ahead of the input waits in sig.h; the exit disarms it, before the next state's arms."
+find = '''        if (v->wait_t[node] > v->g.t_cover) (void)ysig_disarm(&v->g, node);'''
+replace = '''        if (v->arm_t[node] > v->g.t_cover) (void)ysig_disarm(&v->g, node);'''

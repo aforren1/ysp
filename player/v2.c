@@ -206,6 +206,9 @@ struct pl_v2 {
                                 * counts seen                               */
     int64_t* arm_t;            /* per node: its latest arm's time           */
     int16_t* st_armed;         /* the nodes the current state's exits armed */
+    int64_t* wait_t;           /* per node: the latest time of an arm made
+                                * ahead of the input this visit (it may still
+                                * wait in sig.h), INT64_MIN: none            */
     int n_st_armed;
     bool rows_open;            /* the trial's rows go to its traces: from its
                                 * reset to the flush at its end             */
@@ -1755,13 +1758,15 @@ int pl_v2_load(pl_player* p) {
         memset(v->arm_gen, 0, sizeof(uint32_t) * (size_t)v->nn);
         v->arm_t = (int64_t*)pl_alloc(p, sizeof(int64_t) * (size_t)v->nn);
         v->st_armed = (int16_t*)pl_alloc(p, sizeof(int16_t) * (size_t)v->nn);
-        if (!v->st_armed) return -1;
+        v->wait_t = (int64_t*)pl_alloc(p, sizeof(int64_t) * (size_t)v->nn);
+        if (!v->st_armed || !v->wait_t) return -1;
         v->det_now = (bool*)pl_alloc(p, sizeof(bool) * (size_t)v->nn);
         if (!v->arm_t || !v->det_now) return -1;
         {
             int k;
             for (k = 0; k < v->nn; k++) {
                 v->arm_t[k] = INT64_MIN;
+                v->wait_t[k] = INT64_MIN;
                 v->det_now[k] = v->nodes[k].op == YSIG_OP_DETECT && v->nodes[k].p[YSIG_DETECT_ENTRY] == YSIG_ENTRY_NOW;
             }
         }
@@ -2106,6 +2111,7 @@ static int v2_arm_exit(pl_player* p, pl_v2* v, const v2_exit* x, int64_t t) {
     /* the state's own: disarmed when it exits (v2_disarm_state) */
     for (k = 0; k < v->n_st_armed && v->st_armed[k] != x->node; k++) { }
     if (k == v->n_st_armed && v->n_st_armed < v->nn) v->st_armed[v->n_st_armed++] = (int16_t)x->node;
+    if (t > v->g.t_cover && t > v->wait_t[x->node]) v->wait_t[x->node] = t;   /* it waits in sig.h */
     v->arm_gen[x->node]++;
     v->arm_t[x->node] = t;
     if (!ysig_arm(&v->g, x->node, t)) { pl_fail(p, "template '%s': cannot arm '%s'", v->def->name, v->ctl[x->ctl].def->name); return -1; }
@@ -2193,8 +2199,12 @@ int pl_v2_events_response(pl_player* p, int64_t bt) {
  * output stands (a freeze_at latch keeps its value). */
 static void v2_disarm_state(pl_v2* v) {
     int k;
-    for (k = 0; k < v->n_st_armed; k++)
-        if (v->arm_t[v->st_armed[k]] > v->g.t_cover) (void)ysig_disarm(&v->g, v->st_armed[k]);
+    for (k = 0; k < v->n_st_armed; k++) {
+        int node = v->st_armed[k];
+        /* any arm of it still ahead of the input, not only the latest */
+        if (v->wait_t[node] > v->g.t_cover) (void)ysig_disarm(&v->g, node);
+        v->wait_t[node] = INT64_MIN;
+    }
     v->n_st_armed = 0;
 }
 
@@ -2723,6 +2733,7 @@ int pl_v2_trial_start(pl_player* p, const yscr_frame* f) {
     for (i = 0; i < v->def->n_flags; i++) v->flags[i] = false;
     for (i = 0; i < v->n_ctl; i++) v->ctl[i].has_hit = false;
     for (i = 0; i < v->n_traces; i++) { v->traces[i].nrows = 0; }
+    for (i = 0; i < v->n_st_armed; i++) v->wait_t[v->st_armed[i]] = INT64_MIN;
     v->n_st_armed = 0;
     v->rows_open = false;
     if (v->has_graph) {
