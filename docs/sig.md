@@ -446,6 +446,299 @@ definition. A zero field means the row's `def`.
   the alarm. A frame with no poll has no recovery of the order slots
   either: the source drops its later samples until a reset.
 
+### An arm in the past: the semantics
+
+Status: specification for the next change (the second review of the
+0.6.0 fix round, 2026-11-13). The header does not follow it yet; the
+last subsection lists where 0.6.0 as built differs. An oracle can be
+written from this section and the graph's other rules alone: it runs a
+reference sequence of the same calls on a graph with no window.
+
+#### Terms
+
+- **Reads.** Node m reads node n when n is one of m's inputs (`in[0]` to
+  `in[3]`, a mux's selector too). A role node reads the last node of its
+  adapter.
+- **Downstream set** `D(n)`: n, and every node that reads a node in
+  `D(n)`.
+- **Input call**: `ysig_feed()` of an event that a source takes and does
+  not drop (sig.h SOURCES; a sample older than the last of its device is
+  dropped), `ysig_frame()`, `ysig_settle()`. A feed that no source takes,
+  or that every source taking it drops, changes no node: it is not an
+  input call (its counts are kept, as in any order).
+- **State call**: `ysig_set()`, `ysig_set_data()`, `ysig_disarm()`,
+  `ysig_recenter()`, `ysig_arm()`.
+- **Barrier**: `ysig_reset()`, `ysig_reset_trial()`.
+- **Read**: `ysig_value_of()`, `ysig_value_at()`, `ysig_detected()`,
+  `ysig_derived()`, `ysig_get_stats()`. A read is not a call of the
+  sequence. It sees the state after the calls made before it.
+- **Input time** `N`: after a barrier, the barrier's time; after an
+  input call, the larger of `N` and that call's time.
+
+#### The time of each call
+
+| Call | Time |
+|---|---|
+| `ysig_feed(e)` | `e.t` |
+| `ysig_frame(f)` | `f.onset_ns` |
+| `ysig_settle(t)` | `t` |
+| `ysig_arm(d, t)` | `t` |
+| `ysig_reset(t)`, `ysig_reset_trial(t)` | `t` |
+| A state call in a group (below) | the group's time |
+| Any other state call (`ysig_recenter()` too) | `N` at its call |
+
+A `ysig_recenter()` outside a group acts at its call: its `t` stamps
+the new value and the integrator's grid. It does not run input again.
+
+#### Groups
+
+A **gap** is a run of state calls with no input call or barrier between
+them. Each gap is cut after each `ysig_arm()`: a **group** is the state
+calls from the gap's start, or from the call after the gap's previous
+arm, up to and including an arm. The group's time `τ` is its arm's `t`.
+State calls after a gap's last arm are in no group.
+
+Reason: a caller makes the calls of one moment with no input between
+them, and the arm states that moment's time. The player makes a take's
+sets, disarms and recenters, then the take's arm, all at the take's
+time (format 3.12).
+
+A group is **past** when `τ < N` at its arm's call, **present** when
+`τ = N`, and **ahead** when `τ > N`.
+
+#### Footprint
+
+The footprint `F(c)` of a call is the set of nodes it can change:
+
+| Call | Footprint |
+|---|---|
+| Feed | the union of `D(s)` over the sources s that take the event |
+| Frame, settle | every node |
+| `ysig_arm(d)`, `ysig_disarm(d)` | `D(d)` |
+| `ysig_set(n)`, `ysig_set_data(n)` | `D(n)` |
+| `ysig_recenter(r)` | `D(i)`, i the integrator of role r's adapter |
+| A group | the union of its calls' footprints |
+
+Two calls with disjoint footprints commute: in either order every node
+ends with the same value, ring and state. Only the order of rows, hits
+and derived events of different nodes, and the digest, change.
+
+#### The reference sequence R
+
+R is built call by call, in call order:
+
+1. An input call, a barrier, a state call in no group, and a present
+   group are added at the end of R.
+2. A past group G is put into R as one block, its calls in call order,
+   right after the last call c of R that must come before it:
+   - c is a barrier; or
+   - c is an input call, a state call or a group call whose time is at
+     or before `τ` and whose footprint meets `F(G)`.
+
+   Every call of R after that place has a time later than `τ` or a
+   footprint disjoint from `F(G)`.
+3. An ahead group waits, with or without a window. It is added at the
+   end of R right before the first later input call whose time is later
+   than `τ` and whose footprint meets `F(G)`, or right before the next
+   barrier, whichever comes first. Waiting groups go in by `τ`, then
+   call order. A group that never meets such a call is never made. A
+   state call in no group made while a group waits has the time `N < τ`,
+   so it goes before the group: a `ysig_disarm()` does not cancel a
+   waiting arm, and a `ysig_set()` of its detect applies to it.
+4. Input calls keep their call order in R. A barrier is never crossed.
+
+Equal times: a call at `τ` that must come before G (rule 2) does. So an
+input at `τ`, a frame with onset `τ`, a settle at `τ`, and a group at
+`τ` made before G come before G; a group at `τ` made after G comes
+after it.
+
+Which input restricts a group's place (A): only input whose footprint
+meets the group's. Reason: other input commutes with the group, so
+every node sees time order whichever side of the group it goes.
+
+A late report (A, the second case): a report at or before `τ` from a
+device that does not feed the group's nodes has a disjoint footprint.
+The group passes it, so the input later than `τ` before it does not pin
+the group.
+
+**Pinned.** One case stays out of time order: an input with time at or
+before `τ` whose footprint meets `F(G)`, made after an input later than
+`τ` whose footprint meets `F(G)` (a late report from a second device on
+a source or sum the group reads). Rule 2 puts G after the late report,
+so after the later input too: G's nodes see that later input before G.
+Input keeps call order, since a late report is late for every node, so
+R cannot put the late report first. G is **pinned** when an input call
+after the last barrier and before G's place in R has a time later than
+`τ` and a footprint that meets `F(G)`. A state call cannot pin a group:
+outside a group its time is `N` at its call, so after an input later
+than `τ` it is later than `τ` too. A pinned group is counted in
+`arm_past_pinned`, a fallback: the player's guard must see it.
+
+Arms ahead and an earlier arm (E): an ahead arm waits for input past its
+time, so a later arm with an earlier time goes before it in R. For
+`ysig_arm(d, 60 ms)`, frames at 16 and 33 ms, a crossing at 41 ms, then
+`ysig_arm(d, 40 ms)`: R is the two frames, the arm at 40 ms, the
+crossing (a hit at 41 ms), and the arm at 60 ms before the first input
+later than 60 ms. Reason: this is time order for the detect and every
+node after it. An arm made at once ahead of its input ended the earlier
+arm early (its hits between `N` and `τ` were lost) and showed users the
+output's fall before the input up to `τ`.
+
+#### What an arm does at its place in R
+
+At its place, `ysig_arm(d, τ)`:
+
+1. Meets d's hold up to `τ`: when d holds under its earlier arm and the
+   hold's start plus its length is at or before `τ`, that is the earlier
+   arm's hit, at start plus length. Any detect: on a view and at frame
+   rate too. Reason: at its place in R, input later than `τ` that d reads
+   exists (past: already; ahead: the call that places it), so input up
+   to `τ` is in.
+2. Arms d at `τ`: its test on its input's held value at that place, then
+   the entry rule (`YSIG_DETECT_ENTRY`): arm, fresh or now, as
+   documented. A sample earlier than `τ` that d takes after this is
+   before the arm (no hit, no hold start; a failing value breaks a
+   hold).
+3. Changes d's output (a hit output): a fall to 0 at `τ` when a hit
+   stood, then a rise to 1 at `τ` for an entry-now hit.
+
+A present arm does the same (`τ = N`).
+
+#### A change at an arm reaches every node (D)
+
+A fall or a rise that an arm makes is a new value of the detect at `τ`.
+Each goes through the graph as a sample's value does: every node in
+`D(d)` other than d, in the graph's order, takes it as a new value of its
+input at `τ`, as in a sample's pass. A delay, velocity, speed or lowpass
+takes it as a sample at `τ` (two values at one time as for samples); a
+custom op's `sample()` runs; a record writes a row; an emit emits; a
+latch or peak gates on it; a detect tests it. A fall and a rise at one
+arm are two passes, the fall first. A node that runs only at frames
+takes the change at its next frame, as any sample's change. An
+entry-now hit at a reset is the same.
+
+Reason: an arm's change is input to the detect's users like any other.
+Their rules for a value at a time then apply unchanged, and no node kind
+needs a rule of its own. This removes the named exception (a detect on
+another detect's hit output) and the second review's D (a latch after a
+`delay(hit, 0)`, velocity, speed, lowpass, custom ops).
+
+#### Hits, rows and derived events
+
+The queue holds R's hits in R's order. A hit the caller already had is
+not queued again, except the hits of a past group's detect from `τ` on in
+R: those are the new arm's, also when equal to one handed out. A hit
+handed out that R's result does not have (matched by node, `t` and the
+whole value) is counted:
+
+- `arm_hits_superseded`: a hit of the group's own detect later than `τ`
+  (its earlier arm's: a caller that re-arms at `τ` took none);
+- `arm_hits_retracted`: any other, another detect's at any time too (the
+  caller may have taken it with the hit it acted on).
+
+`on_row` and `ysig_derived()` get R's rows and events once, at the
+call that makes them. When a past group changes ones already handed
+out, in any column, the arm is counted in `arm_rows_stale` or
+`arm_derived_stale`. They are not handed out again.
+
+#### Counts and fallbacks
+
+| Count | When |
+|---|---|
+| `arm_caught_up` | a past group placed before calls already made (the window runs them again) |
+| `arm_past_pinned` | a past group pinned (above); placed by rule 2 |
+| `arm_past_far` | a past group whose place is before the window's oldest checkpoint: its calls are made at their call positions, the arm as described above (input later than `τ` already seen) |
+| `arm_past_full` | the same after the window's logs ran full |
+| `arm_past_off` | the same with no window (an oracle's graph counts this; it is not compared) |
+| `arm_hits_superseded`, `arm_hits_retracted` | above |
+| `arm_rows_stale`, `arm_derived_stale` | above |
+| `arm_reentry`, `call_reentry` | a call from a callback during another call: refused, not in R |
+
+A fallback is not R's result. The player's guard must stop on
+`arm_past_pinned`, `arm_past_far`, `arm_past_full`, `arm_hits_retracted`,
+`arm_rows_stale` and `arm_derived_stale` (with a window, `arm_past_off`
+does not occur).
+
+#### What the caller can rely on
+
+After each call returns, every node's value, ring and state, the bound
+channels, and every count but the window's own (the `arm_*` counts,
+`call_reentry`, `derived_lost`) and the digest are those of R's calls so
+far on a graph with no window. A waiting ahead group is not yet in R.
+Every hit of R's result is handed out once; a hit handed out that R does
+not have is counted, as above. Rows and derived events: as above. With
+no fallback count, no retracted hit and no stale row or event, the
+caller's view is exact time order with input in call order.
+
+The journal holds the calls in call order, not R. `ysig_replay()` makes
+the same calls, so it builds the same R.
+
+#### Memory (F)
+
+A window's arena is the graph's plus:
+
+- `catchup_frames` checkpoint images, each the graph's handle, nodes,
+  values, op states, data, and both queues;
+- `catchup_calls` logged calls (144 bytes each) and a hit log of as
+  many hits;
+- `catchup_writes` ring writes (72 bytes each);
+- room in the live hit queue for `catchup_calls` hits beyond 64 (88 bytes
+  each).
+
+0.6.0 as built gives each image the same queue room (64 plus
+`catchup_calls` hits and their sequence numbers, 96 bytes each). The
+second review measured (GCC 12.2, a 3-node graph):
+
+| Window (frames, calls) | 0.5.0 (c7dc717) | 0.6.0 as built |
+|---|---|---|
+| 4, 1024 | 1.06 MB | 1.55 MB |
+| 4, 16384 | 6.2 MB | 14.1 MB |
+| 8, 2^20 | 353 MB | 1.26 GB |
+
+The live queue's room stays: a run again may queue up to
+`catchup_calls` hits beyond 64 (more count in `hits_lost`), and the hit
+log holds `catchup_calls` hits, so more room could not be matched
+anyway. The images' room is cut. An image keeps 64 hits, as the queue holds
+outside a run again. A checkpoint that a run again takes with more than
+64 hits queued is not kept: a later arm uses an older checkpoint
+(exact, a longer run again) or counts `arm_past_far`. That saves
+`catchup_frames` × `catchup_calls` × 96 bytes: 0.39 MB at the player's
+window (4 frames, 1024 calls; 1.55 MB for the 3-node graph, 9.21 MB for
+a 27-node graph with 4,096-value rings), 6.3 MB at 4 and 16384.
+
+#### What this changes for the player
+
+- A take's recenter and its until's arm (format 3.12) form one past
+  group, so the recenter moves to the take's time: input between that
+  time and the call is integrated from the new point. Sample traces of
+  the role written in that time change, `arm_rows_stale` counts, and the
+  guard stops. The player must take the run again's rows for its traces
+  (a sig.h change: rows handed out again on request) or stop. To measure
+  on the harness before the change.
+- An ahead arm waits for input past its time: an entry-now hit at an
+  arm after the frame's onset comes with the next input past that time.
+  The model's GAPs `future-arm-hit` and `future-arm-hold` take that
+  reading.
+- `arm_past_pinned` is new; the guard stops on it. To measure how often
+  the harness's multi-device cases pin.
+
+#### Where 0.6.0 as built differs
+
+1. No groups: a set, set_data, disarm or recenter made before an arm
+   always comes before it, so an arm after one of them made after input
+   later than `t` stays after that input, with nothing counted (A, r11).
+2. Every input at or before `t` restricts the place, whatever its
+   footprint (A, the late report from another device).
+3. A state call in no group restricts the place whatever its time.
+4. No `arm_past_pinned`.
+5. An ahead arm is made at its call, and meets the earlier arm's hold
+   only up to `N` (E, r15).
+6. An arm's fall and rise reach latches, peaks and stateless nodes only
+   (D, r14; the named exception).
+7. Each image reserves the queue's full room (F, r16).
+8. `N` after a barrier is the lowest time, not the barrier's time, so an
+   arm at the reset's time with no input yet is ahead, made at once.
+
 ### Trials and adapters
 
 - `ysig_reset_trial()` skips the nodes of every adapter, so their order
