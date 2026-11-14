@@ -2183,14 +2183,18 @@ int pl_v2_events_response(pl_player* p, int64_t bt) {
     return v2_after(p, v);
 }
 
-/* The state left: its exits' controls are disarmed, before the next
- * state's arm (one group of calls, at the entry's time). A control's arm
- * that waits for input past its time (sig.h: an arm ahead of the input,
- * a mark's onset) is then cancelled, not made for a state that ended. A
- * one-hit control's output stands (a freeze_at latch keeps its value). */
+/* The state left: a control of it whose latest arm is still ahead of the
+ * input (sig.h: an arm ahead of the input waits, as at a mark's onset
+ * ahead of the poll) is disarmed, so that waiting arm is cancelled, not
+ * made later for a state that ended. Only those: a disarm with no arm in
+ * its group of calls takes the input time, and the next state's arm of
+ * the same control made after a settle at an earlier time would go
+ * before it in sig.h's order and be ended by it. A one-hit control's
+ * output stands (a freeze_at latch keeps its value). */
 static void v2_disarm_state(pl_v2* v) {
     int k;
-    for (k = 0; k < v->n_st_armed; k++) (void)ysig_disarm(&v->g, v->st_armed[k]);
+    for (k = 0; k < v->n_st_armed; k++)
+        if (v->arm_t[v->st_armed[k]] > v->g.t_cover) (void)ysig_disarm(&v->g, v->st_armed[k]);
     v->n_st_armed = 0;
 }
 

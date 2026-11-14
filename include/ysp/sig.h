@@ -1120,6 +1120,7 @@ typedef struct ysig__cu {
     int         n_tmp;          /* a run again: hits handed out to match */
     uint64_t    arm_pos;        /* a run again: the new arm's index      */
     int         arm_node, arm_live;   /* its detect; its hits now        */
+    int         grp_dis[16], n_grp_dis;   /* the detects its group disarms */
     /* the state calls since the last input, barrier or arm (the group an
      * arm would close): from grp_from; grp_bad: one was not logged */
     int         grp_open, grp_bad;
@@ -4093,6 +4094,16 @@ static void ysig__apply(ysig_graph* g, const ysig_entry* e) {
     }
 }
 
+/* The detects whose arm a past group ends at its time: its arm's, and
+ * those it disarms. Their hits later than that time were the ended arms':
+ * a caller acting in time order took none (superseded, not retracted). */
+static int ysig__grp_ends(const ysig__cu* cu, int node, int hit_node) {
+    int k;
+    if (hit_node == node) return 1;
+    for (k = 0; k < cu->n_grp_dis; k++) if (cu->grp_dis[k] == hit_node) return 1;
+    return 0;
+}
+
 /* From checkpoint k: its state, the ring slots written since put back,
  * then every call since, the new arm among them. Hits the caller already
  * had are not queued again, but for the armed detect's from the new arm
@@ -4142,7 +4153,7 @@ static void ysig__rerun(ysig_graph* g, int kslot, int node, int64_t t) {
      * from one that stands (retracted, which the caller must watch) */
     for (i = 0; i < cu->n_tmp; i++)
         if (cu->tmp[i].seq != UINT64_MAX) {
-            if (cu->tmp[i].h.node == node && cu->tmp[i].h.t > t) keep.arm_hits_superseded++;
+            if (cu->tmp[i].h.t > t && ysig__grp_ends(cu, node, cu->tmp[i].h.node)) keep.arm_hits_superseded++;
             else keep.arm_hits_retracted++;
         }
     /* the arms' own counts stand, and the calls made (the window keeps
@@ -4521,7 +4532,11 @@ static void ysig__arm_past(ysig_graph* g, ysig_entry* e) {
     cu->arm_pos = pos + (end - from) - 1;
     cu->arm_node = node;
     cu->arm_live = 0;
+    cu->n_grp_dis = 0;
+    for (s = pos; s < pos + (end - from) && cu->n_grp_dis < 16; s++)
+        if (cu->calls[s % (uint64_t)cu->C].e.kind == YSIG_J_DISARM) cu->grp_dis[cu->n_grp_dis++] = cu->calls[s % (uint64_t)cu->C].e.node;
     ysig__rerun(g, kslot, node, t);
+    cu->n_grp_dis = 0;
     cu->arm_live = 0;
     cu->arm_node = -1;
     g->st.arm_caught_up++;

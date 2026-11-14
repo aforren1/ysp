@@ -672,8 +672,9 @@ R: those are the new arm's, also when equal to one handed out. A hit
 handed out that R's result does not have (matched by node, `t` and the
 whole value) is counted:
 
-- `arm_hits_superseded`: a hit of the group's own detect later than `τ`
-  (its earlier arm's: a caller that re-arms at `τ` took none);
+- `arm_hits_superseded`: a hit later than `τ` of a detect that the
+  group arms or disarms (its earlier arm's: a caller that ends that arm
+  at `τ` took none of its later hits);
 - `arm_hits_retracted`: any other, another detect's at any time too (the
   caller may have taken it with the hit it acted on).
 
@@ -792,10 +793,14 @@ a 27-node graph with 4,096-value rings), 6.3 MB at 4 and 16384.
   a value: frame traces and drawing use `ysig_value_of()` and
   `ysig_value_at()`, which read R's state and are exact; latches and
   peaks (`freeze_at`, the peak gate) are graph nodes, so in R.
-- The player calls no `ysig_disarm()`: it drops an ended state's hits
-  by `arm_gen`. With waiting arms it must disarm a state's controls in
-  its exit's group, before it arms the next state's controls, so a
-  waiting arm of an ended state is cancelled (rule 3).
+- The player drops an ended state's hits by `arm_gen`. With waiting arms
+  it disarms, when a state ends, each of the state's controls whose
+  latest arm is still ahead of the input, so that waiting arm is
+  cancelled (rule 3). It disarms no other control: a disarm in no group
+  takes the input time, and the next state's arm of the same control,
+  made after a settle at an earlier time, would go before it in R and be
+  ended by it (the model's seeds 62160, 63378, 65482, 68666, and with
+  `GEN_MULTI` 24301, 25201, 26962, 27583 showed it).
 - An ahead arm waits for input past its time: an entry-now hit at an
   arm after the frame's onset comes with the next input past that time.
   The model's GAPs `future-arm-hit` and `future-arm-hold` take that

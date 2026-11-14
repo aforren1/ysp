@@ -4321,6 +4321,19 @@ static void test_arm_spec2(void) {
     CHECK(ysig_disarm(&g, 1) && ysig_arm(&g, 2, 22 * MS));
     ysig_get_stats(&g, &st);
     CHECK(st.arm_caught_up == 1 && st.arm_hits_retracted == 0);
+    /* a group that disarms a detect ends its arm at the group's time: that
+     * detect's hits later than it were the ended arm's, superseded (a
+     * caller that ends the arm took none), not retracted. The hold of
+     * 20 ms from 1 ms, found at 30 ms; a group (disarm it, arm another) at
+     * 18 ms voids the 21 ms hit */
+    SP_OPEN(3, 4);
+    for (t = 1 * MS; t <= 15 * MS; t += MS) { e = PEN_E(t, 1, 9, 0, YIN_TIER_2); ysig_feed(&g, &e); }
+    f = frame_at(1, 16 * MS, 0, NULL, 0); ysig_frame(&g, &f);
+    e = PEN_E(30 * MS, 1, 9, 0, YIN_TIER_2); ysig_feed(&g, &e);
+    CHECK(sp_hits(&g, h, 1, 21 * MS));
+    CHECK(ysig_disarm(&g, 1) && ysig_arm(&g, 2, 18 * MS));
+    ysig_get_stats(&g, &st);
+    CHECK(st.arm_caught_up == 1 && st.arm_hits_retracted == 0 && st.arm_hits_superseded == 1);
     /* an image keeps 64 hits: a run again that queues more, then a frame,
      * does not keep that frame's checkpoint */
     n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2); n[0].history = 256;

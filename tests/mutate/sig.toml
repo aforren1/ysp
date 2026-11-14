@@ -1766,9 +1766,9 @@ name = "no run again: an arm in the past tests the newest value"
 test = "sig"
 why = "v0.6.0 (test_arm_window 2, sig_arm_oracle)."
 find = '''    ysig__rerun(g, kslot, node, t);
-    cu->arm_live = 0;'''
+    cu->n_grp_dis = 0;'''
 replace = '''    ysig__arm_plain(g, node, t, t);
-    cu->arm_live = 0;'''
+    cu->n_grp_dis = 0;'''
 
 [[mutant]]
 id = "211"
@@ -1974,7 +1974,7 @@ id = "233"
 name = "every hit the run again does not give counted as superseded"
 test = "sig"
 why = "v0.6.0 (test_arm_window, sig_arm_oracle): one at or before the arm's time is retracted."
-find = '''            if (cu->tmp[i].h.node == node && cu->tmp[i].h.t > t) keep.arm_hits_superseded++;'''
+find = '''            if (cu->tmp[i].h.t > t && ysig__grp_ends(cu, node, cu->tmp[i].h.node)) keep.arm_hits_superseded++;'''
 replace = '''            if (1) keep.arm_hits_superseded++;'''
 
 [[mutant]]
@@ -1982,7 +1982,7 @@ id = "234"
 name = "a superseded hit counted as retracted"
 test = "sig"
 why = "v0.6.0 (test_arm_window 5): hits later than the arm's time."
-find = '''            if (cu->tmp[i].h.node == node && cu->tmp[i].h.t > t) keep.arm_hits_superseded++;'''
+find = '''            if (cu->tmp[i].h.t > t && ysig__grp_ends(cu, node, cu->tmp[i].h.node)) keep.arm_hits_superseded++;'''
 replace = '''            if (0) keep.arm_hits_superseded++;'''
 
 [[mutant]]
@@ -2137,7 +2137,7 @@ id = "254"
 name = "another detect's voided later hit counted superseded"
 test = "sig"
 why = "The second review of the fix round, C: only the re-armed detect's own later hits are superseded; another's the caller may have taken (test_arm_review2, r12)."
-find = '''            if (cu->tmp[i].h.node == node && cu->tmp[i].h.t > t) keep.arm_hits_superseded++;'''
+find = '''            if (cu->tmp[i].h.t > t && ysig__grp_ends(cu, node, cu->tmp[i].h.node)) keep.arm_hits_superseded++;'''
 replace = '''            if (cu->tmp[i].h.t > t) keep.arm_hits_superseded++;'''
 
 [[mutant]]
@@ -2303,3 +2303,11 @@ test = "sig"
 why = "desc.derived_final (test_arm_spec: held, then handed out once final)."
 find = '''    if (g->cu && g->cu->derived_final) e = &held;'''
 replace = '''    if (0) e = &held;'''
+
+[[mutant]]
+id = "274"
+name = "a disarmed detect's later hits counted retracted"
+test = "sig"
+why = "A group that disarms a detect ends its arm at the group's time: its later hits were the ended arm's (test_arm_spec2; the model's 65072 and 68113 stopped on them)."
+find = '''    for (k = 0; k < cu->n_grp_dis; k++) if (cu->grp_dis[k] == hit_node) return 1;'''
+replace = '''    (void)k;'''

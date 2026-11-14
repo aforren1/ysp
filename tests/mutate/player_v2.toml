@@ -750,3 +750,11 @@ test = "player"
 why = "The reset makes the last trial's held rows final: they are not this trial's."
 find = '''        v->rows_open = true;   /* the rows the reset made final were the last trial's */'''
 replace = '''        (void)0;'''
+
+[[mutant]]
+id = "v2-91"
+name = "every control of the state left disarmed"
+test = "player"
+why = "A disarm with no arm in its group takes the input time: the next state's arm of the control after a settle, at an earlier time, would be ended by it (the model's 68666, 66120)."
+find = '''        if (v->arm_t[v->st_armed[k]] > v->g.t_cover) (void)ysig_disarm(&v->g, v->st_armed[k]);'''
+replace = '''        (void)ysig_disarm(&v->g, v->st_armed[k]);'''
