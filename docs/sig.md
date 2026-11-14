@@ -635,11 +635,13 @@ review's r13b and r13, now `test_hit_out_time`).
 
 What the guarantee does not cover, counted by name:
 
-- a hit handed out that the new order does not give: at or before the
-  arm's time in `arm_hits_retracted` (a caller acting in time order may
-  have taken it; the player stops on it), later in `arm_hits_superseded`
-  (such a caller took none; the player drops the earlier arm's hits by an
-  arm count). What the armed detect finds from the new arm on is handed
+- a hit handed out that the new order does not give: the armed detect's
+  own later than the arm's time in `arm_hits_superseded` (its earlier
+  arm's: a caller re-arming at t took none; the player drops them by an
+  arm count); any other in `arm_hits_retracted`, another detect's at any
+  time too (the caller may have drained it with the hit it acted on and
+  cannot tell a voided one from one that stands; the player stops on
+  it; the second review's r12, now `test_arm_review2`). What the armed detect finds from the new arm on is handed
   out again, also when its earlier arm handed out an equal hit: a caller
   that keeps arms apart needs it (the reference model's s21418);
 - rows and derived events that `on_row` and `ysig_derived()` already had:
@@ -652,8 +654,16 @@ What the guarantee does not cover, counted by name:
   and pure nodes, not detects). Accepted for now: the player builds no
   such graph, and the hit comes out retracted (counted in
   `arm_hits_retracted`), so the player's guard stops;
-- `ysig_arm()` from a callback (`on_row`, the journal) during another
-  call: refused, counted in `arm_reentry`;
+- `ysig_arm()` from a callback (`on_row`, the journal, a custom op)
+  during another call: refused, counted in `arm_reentry`. Every other
+  call that changes the graph (`ysig_feed()`, `ysig_frame()`,
+  `ysig_set()`, `ysig_set_data()`, `ysig_recenter()`, `ysig_reset()`,
+  `ysig_reset_trial()`, `ysig_settle()`, `ysig_disarm()`,
+  `ysig_replay()`): the same, in `call_reentry`. Such a call would run
+  inside the other call but be logged and journaled after it, so a run
+  again and a replay would run it in another order. Reads
+  (`ysig_value_of()`, `ysig_value_at()`) and the queues
+  (`ysig_detected()`, `ysig_derived()`) stay allowed;
 - a custom op with effects outside its state runs them again.
 
 **How.** With `desc.catchup_frames` above 0 the graph keeps a window:

@@ -3972,6 +3972,116 @@ static void on_row_reenter(void* u, const ysig_row* r) {
     (void)u; (void)r;
     if (g_reent_ok < 0) g_reent_ok = ysig_arm(g_reent_g, 1, 1 * MS) ? 1 : 0;
 }
+/* The second review of 0.6.0's fix round (2026-11-13). */
+static ysig_graph* g_r2_g;
+static int g_r2_ok[12];
+static int g_r2_n;
+/* every call that changes the graph, from inside another call: each must
+ * be refused (false or -1, nothing done) */
+static void r2_reenter_all(void) {
+    yin_event e = PEN_E(50 * MS, 1, 99, 99, YIN_TIER_2);
+    ysig_frame_in f = frame_at(9, 60 * MS, 0, NULL, 0);
+    ysig_entry j;
+    int k = 0;
+    memset(&j, 0, sizeof j);
+    j.kind = YSIG_J_SETTLE;
+    g_r2_ok[k++] = ysig_feed(g_r2_g, &e) >= 0;
+    g_r2_ok[k++] = ysig_frame(g_r2_g, &f) == 0;
+    g_r2_ok[k++] = ysig_set(g_r2_g, 1, YSIG_DETECT_LEVEL, 3);
+    g_r2_ok[k++] = ysig_settle(g_r2_g, 40 * MS) >= 0;
+    g_r2_ok[k++] = ysig_disarm(g_r2_g, 1);
+    g_r2_ok[k++] = ysig_replay(g_r2_g, &j, 1) >= 0;
+    g_r2_ok[k++] = ysig_arm(g_r2_g, 1, 1 * MS);
+    ysig_reset(g_r2_g, 0);
+    ysig_reset_trial(g_r2_g, 0);
+    g_r2_n = k;
+}
+static int g_r2_in;
+static void on_row_r2(void* u, const ysig_row* r) {
+    (void)u; (void)r;
+    if (!g_r2_in) { g_r2_in = 1; r2_reenter_all(); }
+}
+static void on_journal_r2(void* u, const ysig_entry* e) {
+    (void)u;
+    if (!g_r2_in && e->kind == YSIG_J_FEED) { g_r2_in = 1; r2_reenter_all(); }
+}
+static void r2_custom_sample(void* st, const double* p, const ysig_value* in, int n_in, ysig_value* out) {
+    (void)st; (void)p; (void)n_in;
+    out->v[0] = in[0].v[0];
+    if (!g_r2_in) { g_r2_in = 1; r2_reenter_all(); }
+}
+static void test_arm_review2(void) {
+    static uint64_t ar[(4u << 20) / 8];
+    static const ysig_op_vtable pass_vt = { YSIG_OP_ABI, "pass", { 2, 0, 0, 0 }, 1, 0, NULL, 0, NULL, r2_custom_sample, NULL };
+    const ysig_op_vtable* cv[1];
+    ysig_node n[6];
+    ysig_desc d;
+    ysig_graph g;
+    ysig_stats st;
+    ysig_hit h[64];
+    ysig_frame_in f;
+    yin_event e;
+    int k, m, way;
+    g_where = "review 4";
+    /* C (r12): D2 on a mux of pens 2 and 3 that D1's hit selects. D1's hit
+     * (20 ms) and D2's (25 ms) are drained together; the caller takes D1's
+     * and re-arms D1 at 20 ms. The run again voids D2's hit: the caller
+     * may have taken it with D1's, so it is retracted (the player's guard
+     * stops), not superseded, which only the re-armed detect's own later
+     * hits are */
+    n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2); n[0].history = 64;
+    n[1] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 2, 2); n[1].history = 64;
+    n[2] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 3, 2); n[2].history = 64;
+    n[3] = ysig_node_of(YSIG_OP_DETECT, 0, -1);
+    n[3].p[YSIG_DETECT_LANE] = 0; n[3].p[YSIG_DETECT_LEVEL] = 5; n[3].p[YSIG_DETECT_OUT] = YSIG_OUT_HIT; n[3].history = 64;
+    n[4] = ysig_node_of(YSIG_OP_MUX, 1, 2); n[4].in[2] = 3; n[4].history = 64;
+    n[5] = ysig_node_of(YSIG_OP_DETECT, 4, -1);
+    n[5].p[YSIG_DETECT_LANE] = 0; n[5].p[YSIG_DETECT_LEVEL] = 5; n[5].p[YSIG_DETECT_REPEAT] = 1; n[5].history = 64;
+    d = desc_of(n, 6); sig_window(&d, 4, 1024); d.arena = ar; d.arena_size = sizeof ar;
+    if (!ysig_open(&g, &d)) { printf("open: %s\n", ysig_error(&g)); g_failures++; return; }
+    ysig_reset(&g, 0);
+    for (k = 1; k <= 3; k++) { e = PEN_E(1 * MS, k, 0, 0, YIN_TIER_2); ysig_feed(&g, &e); }
+    f = frame_at(1, 16 * MS, 0, NULL, 0); ysig_frame(&g, &f);
+    e = PEN_E(20 * MS, 1, 10, 0, YIN_TIER_2); ysig_feed(&g, &e);
+    e = PEN_E(25 * MS, 2, 10, 0, YIN_TIER_2); ysig_feed(&g, &e);
+    m = ysig_detected(&g, h, 64);
+    CHECK(m == 2 && h[0].node == 3 && h[0].t == 20 * MS && h[1].node == 5 && h[1].t == 25 * MS);
+    CHECK(ysig_arm(&g, 3, 20 * MS) && ysig_detected(&g, h, 64) == 0);
+    ysig_get_stats(&g, &st);
+    CHECK(st.arm_caught_up == 1 && st.arm_hits_retracted == 1 && st.arm_hits_superseded == 0);
+    /* G and the suspicion: a call that changes the graph, from on_row,
+     * the journal or a custom op during another call, is refused and
+     * counted (call_reentry; ysig_arm() in arm_reentry); the outer call
+     * runs as with no callback */
+    for (way = 0; way < 3; way++) {
+        n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2); n[0].history = 64;
+        n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1);
+        n[1].p[YSIG_DETECT_LANE] = 0; n[1].p[YSIG_DETECT_LEVEL] = 5; n[1].history = 64;
+        n[2] = way == 2 ? ysig_node_of(YSIG_OP_CUSTOM, 0, -1) : ysig_node_of(YSIG_OP_RECORD, 0, -1);
+        d = desc_of(n, 3); sig_window(&d, 4, 1024); d.arena = ar; d.arena_size = sizeof ar;
+        if (way == 0) d.on_row = on_row_r2;
+        if (way == 1) d.journal = on_journal_r2;
+        if (way == 2) { cv[0] = &pass_vt; d.custom = cv; d.n_custom = 1; }
+        if (!ysig_open(&g, &d)) { printf("open: %s\n", ysig_error(&g)); g_failures++; return; }
+        ysig_reset(&g, 0);
+        g_r2_g = &g;
+        g_r2_in = 0;
+        g_r2_n = 0;
+        memset(g_r2_ok, 0xff, sizeof g_r2_ok);
+        e = PEN_E(2 * MS, 1, 10, 0, YIN_TIER_2); ysig_feed(&g, &e);
+        CHECK(g_r2_n == 7);
+        for (k = 0; k < g_r2_n; k++) CHECK(g_r2_ok[k] == 0);
+        ysig_get_stats(&g, &st);
+        CHECK(st.call_reentry == 8 && st.arm_reentry == 1);
+        /* nothing the refused calls asked for happened: the hand at 10,
+         * the hit at 2 ms (level 5, armed, not reset) */
+        CHECK(ysig_value_of(&g, 0)->v[0] == 10 && ysig_value_of(&g, 0)->t == 2 * MS);
+        CHECK(ysig_detected(&g, h, 64) == 1 && h[0].t == 2 * MS && g.nd[1].p[YSIG_DETECT_LEVEL] == 5);
+        /* and from outside a callback the same calls work */
+        CHECK(ysig_set(&g, 1, YSIG_DETECT_LEVEL, 3) && ysig_disarm(&g, 1));
+    }
+}
+
 static void test_arm_review(void) {
     static uint64_t ar[(4u << 20) / 8];
     ysig_node n[5];
@@ -4415,9 +4525,10 @@ static void test_arm_window(void) {
         CHECK(ysig_detected(&g, h, 8) == 2 && h[0].t == 3 * MS && h[1].t == 3 * MS);
         CHECK(ysig_arm(&g, 1, 2 * MS) && ysig_detected(&g, h, 8) == 2 && h[0].t == 5 * MS && h[1].t == 5 * MS);
         ysig_get_stats(&g, &st);
-        /* both hits are later than the arm's time: superseded (a caller
-         * acting in time order took neither) */
-        CHECK(st.arm_hits_superseded == 2 && st.arm_hits_retracted == 0);
+        /* both hits are later than the arm's time. The re-armed detect's
+         * own was its earlier arm's: superseded. The other detect's the
+         * caller may have taken with it: retracted (the second review, C) */
+        CHECK(st.arm_hits_superseded == 1 && st.arm_hits_retracted == 1);
         /* a re-arm at its own hit's time, which input after that time
          * found: the arm goes before that input and meets the earlier
          * arm's hold up to its time, so its own hit stands. A named
@@ -4432,7 +4543,7 @@ static void test_arm_window(void) {
         CHECK(ysig_detected(&g, h, 8) == 2 && h[0].t == 9500000 && h[1].t == 9500000);
         CHECK(ysig_arm(&g, 1, 9500000) && ysig_detected(&g, h, 8) == 0);
         ysig_get_stats(&g, &st);
-        CHECK(st.arm_hits_superseded == 2 && st.arm_hits_retracted == 1 && st.arm_caught_up == 3);
+        CHECK(st.arm_hits_superseded == 1 && st.arm_hits_retracted == 2 && st.arm_caught_up == 3);
         /* an arm at the time the old hold would end, ahead of the input
          * (finding 4): no hit on unfed time; the new arm's hold starts at
          * the arm, so its hit is a whole hold later, none before */
@@ -4949,6 +5060,7 @@ int main(void) {
     test_hit_out_time();
     test_arm_window();
     test_arm_review();
+    test_arm_review2();
     if (g_failures) { fprintf(stderr, "sig_test: %d failures\n", g_failures); return 1; }
     printf("sig_test: all checks passed\n");
     return 0;

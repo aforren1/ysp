@@ -232,10 +232,11 @@
  *   detect's from the new arm on: those are the new arm's, also when its
  *   earlier arm handed out an equal one; a run again can queue up to
  *   catchup_calls of them beyond the queue's 64. A hit handed out that
- *   the new history does not give is counted: at or before the arm's
- *   time in ysig_stats.arm_hits_retracted (a caller acting in time order
- *   may have taken it: the caller must watch this), later than it in
- *   arm_hits_superseded (such a caller took none of them). on_row and
+ *   the new history does not give is counted: the armed detect's own
+ *   later than the arm's time in arm_hits_superseded (its earlier arm's:
+ *   a caller re-arming at t took none of them); any other, another
+ *   detect's at any time too, in ysig_stats.arm_hits_retracted (a caller
+ *   may have taken it: the caller must watch this). on_row and
  *   ysig_derived() do not get the window's rows and events again; a
  *   change in any of their columns is counted (arm_rows_stale,
  *   arm_derived_stale), and the run again's lost derived events are not.
@@ -245,8 +246,11 @@
  *   tests the newest value as 0.4.1 did, counted (arm_past_far,
  *   arm_past_full); with no window (catchup_frames 0, a zeroed desc) the
  *   same, counted in arm_past_off. ysig_arm() from a callback (on_row,
- *   the journal) during another call is refused and counted
- *   (arm_reentry). A custom op runs again in a run again: one with
+ *   the journal, a custom op) during another call is refused and counted
+ *   (arm_reentry); so is any other call that changes the graph
+ *   (call_reentry): it would run inside that call but be logged after
+ *   it, so a run again and a replay would run it in another order. A
+ *   custom op runs again in a run again: one with
  *   effects outside its state repeats them. The cost of such an arm is
  *   the calls since that checkpoint, run again; the window adds a copy of
  *   the state at each frame (docs/sig.md, "An arm in the past"). No frame
@@ -403,7 +407,11 @@
  *          evaluations are at their own time again (the round had kept
  *          the hit's time, so a hold on the output did not complete from
  *          samples and a late report's hit skipped every later ring
- *          entry).
+ *          entry); another detect's hit that a run again voids is
+ *          retracted, not superseded; ysig_feed(), ysig_frame(),
+ *          ysig_set() and every other call that changes the graph are
+ *          refused from a callback, custom ops included
+ *          (ysig_stats.call_reentry, a struct change).
  *          Stats arm_caught_up, arm_past_off, _far, _full,
  *          arm_hits_retracted, arm_hits_superseded (the armed detect's own
  *          hits at or after the arm's time: its earlier arm's),
@@ -741,18 +749,26 @@ typedef struct ysig_stats {
     int64_t  arm_past_full;     /* such arms after the window's logs ran
                                  * full: the newest value                 */
     int64_t  arm_hits_retracted;/* hits handed out before such an arm
-                                 * that the run again does not find       */
+                                 * that the run again does not find and
+                                 * the caller may have taken: any
+                                 * detect's, but the armed detect's own
+                                 * later than the arm's time              */
     int64_t  arm_rows_stale;    /* such arms whose run again changed rows
                                  * on_row already had                     */
     int64_t  arm_derived_stale; /* such arms whose run again changed
                                  * derived events                         */
-    int64_t  arm_hits_superseded;/* hits handed out before such an arm,
-                                 * later than the arm's time, that the
-                                 * new history does not give as they
-                                 * were (a caller acting in time order
-                                 * took none of them)                     */
+    int64_t  arm_hits_superseded;/* the armed detect's own hits handed
+                                 * out before such an arm, later than the
+                                 * arm's time, that the new history does
+                                 * not give as they were (its earlier
+                                 * arm's: a caller re-arming at t took
+                                 * none of them)                          */
     int64_t  arm_reentry;       /* ysig_arm() refused: called from a
                                  * callback during another call           */
+    int64_t  call_reentry;      /* any other call that changes the graph
+                                 * (feed, frame, set, set_data, recenter,
+                                 * reset, reset_trial, settle, disarm,
+                                 * replay) refused: the same              */
     uint64_t digest;            /* FNV-1a: rows, hits, events, binds,
                                  * frames                                */
 } ysig_stats;
@@ -2634,18 +2650,20 @@ static void ysig__run(ysig_graph* g, int i, int mode, int64_t t) {
         if (n->n_in) {
             ysig__meta(n, in, changed, o);
             if (mode == 2) {
-                if (n->vt->reset) n->vt->reset(n->st, n->p, t);
+                if (n->vt->reset) { g->busy++; n->vt->reset(n->st, n->p, t); g->busy--; }
                 for (k = 0; k < n->lanes; k++) o->v[k] = 0;
             } else {
                 /* the op takes its inputs as one array: gathered, since
                  * the nodes need not be neighbors in val[] */
                 ysig_value iv[4];
                 for (j = 0; j < n->n_in; j++) iv[j] = *in[j];
+                g->busy++;
                 n->vt->sample(n->st, n->p, iv, n->n_in, o);
+                g->busy--;
             }
         } else {
             if (mode == 2) {
-                if (n->vt->reset) n->vt->reset(n->st, n->p, t);
+                if (n->vt->reset) { g->busy++; n->vt->reset(n->st, n->p, t); g->busy--; }
                 for (k = 0; k < n->lanes; k++) o->v[k] = 0;
                 o->t = o->t_oldest = t;
             }
@@ -2653,7 +2671,9 @@ static void ysig__run(ysig_graph* g, int i, int mode, int64_t t) {
                 o->t = o->t_oldest = t;
                 o->tier = YIN_TIER_SIM;
                 o->src = o->src_oldest = (uint16_t)i;
+                g->busy++;
                 n->vt->frame(n->st, n->p, t, o);
+                g->busy--;
             }
         }
         o->lanes = n->lanes;
@@ -3018,6 +3038,17 @@ static void ysig__do_reset(ysig_graph* g, int64_t t, int exp_only);
 static void ysig__ck_take(ysig_graph* g);
 static void ysig__log(ysig_graph* g, const ysig_entry* e);
 
+/* A call that changes the graph, made from a callback (on_row, the
+ * journal, a custom op) during another call: it would run inside that
+ * call but be logged and journaled after it, so a run again and a replay
+ * would run it in another order. Refused, counted. */
+static int ysig__reentered(ysig_graph* g, const char* fn) {
+    if (!g->busy) return 0;
+    g->st.call_reentry++;
+    snprintf(g->err, sizeof g->err, "%s: called from a callback during another call", fn);
+    return 1;
+}
+
 YSIG_API bool ysig_open(ysig_graph* g, const ysig_desc* d) {
     ysig__an a;
     size_t need;
@@ -3095,7 +3126,7 @@ YSIG_API bool ysig_open(ysig_graph* g, const ysig_desc* d) {
 
 YSIG_API void ysig_reset(ysig_graph* g, int64_t t_ns) {
     ysig_entry e;
-    if (!g || !g->ok) return;
+    if (!g || !g->ok || ysig__reentered(g, "ysig_reset")) return;
     memset(&e, 0, sizeof e);
     e.kind = YSIG_J_RESET;
     e.t = t_ns;
@@ -3106,7 +3137,7 @@ YSIG_API void ysig_reset(ysig_graph* g, int64_t t_ns) {
 
 YSIG_API void ysig_reset_trial(ysig_graph* g, int64_t t_ns) {
     ysig_entry e;
-    if (!g || !g->ok) return;
+    if (!g || !g->ok || ysig__reentered(g, "ysig_reset_trial")) return;
     memset(&e, 0, sizeof e);
     e.kind = YSIG_J_RESET_TRIAL;
     e.t = t_ns;
@@ -3170,7 +3201,7 @@ YSIG_API bool ysig_recenter(ysig_graph* g, int role, double x, double y, int64_t
     double xy[2];
     int id = -1, k;
     ysig__nd* n;
-    if (!g || !g->ok) return false;
+    if (!g || !g->ok || ysig__reentered(g, "ysig_recenter")) return false;
     if (role < 0 || !isfinite(x) || !isfinite(y)) {
         snprintf(g->err, sizeof g->err, "ysig_recenter: a bad role or a point that is not finite");
         return false;
@@ -3348,6 +3379,7 @@ YSIG_API bool ysig_set(ysig_graph* g, int node, int param, double v) {
     ysig_entry e;
     int nr;
     if (!g || !g->ok || node < 0 || node >= g->n || param < 0 || param >= YSIG_NP || !isfinite(v)) return false;
+    if (ysig__reentered(g, "ysig_set")) return false;
     n = &g->nd[node];
     if (n->vt) { rows = n->vt->params; nr = n->vt->n_params; }
     else rows = ysig_op_params(n->op, &nr);
@@ -3366,6 +3398,7 @@ YSIG_API bool ysig_set(ysig_graph* g, int node, int param, double v) {
 YSIG_API bool ysig_set_data(ysig_graph* g, int node, int index, double v) {
     ysig_entry e;
     if (!g || !g->ok || node < 0 || node >= g->n || index < 0 || index >= g->nd[node].n_data || !isfinite(v)) return false;
+    if (ysig__reentered(g, "ysig_set_data")) return false;
     memset(&e, 0, sizeof e);
     e.kind = YSIG_J_SET_DATA;
     e.node = node;
@@ -3477,7 +3510,7 @@ static void ysig__log(ysig_graph* g, const ysig_entry* e);
 YSIG_API int ysig_feed(ysig_graph* g, const yin_event* e) {
     ysig_entry j;
     int i;
-    if (!g || !g->ok || !e) return -1;
+    if (!g || !g->ok || !e || ysig__reentered(g, "ysig_feed")) return -1;
     if (g->cu)
         for (i = 0; i < g->n_src; i++)
             if (ysig__source_takes(&g->nd[g->src_ids[i]], e)) {
@@ -3529,7 +3562,7 @@ static void ysig__do_frame(ysig_graph* g, const ysig_frame_in* f) {
 
 YSIG_API int ysig_frame(ysig_graph* g, const ysig_frame_in* f) {
     ysig_entry e;
-    if (!g || !g->ok || !f || f->n_values < 0 || (f->n_values && !f->values)) return -1;
+    if (!g || !g->ok || !f || f->n_values < 0 || (f->n_values && !f->values) || ysig__reentered(g, "ysig_frame")) return -1;
     /* a graph with a view needs the poll's time: none is a configuration
      * error, refused on every call whatever the data */
     if (g->has_view && !f->has_poll) {
@@ -3837,17 +3870,18 @@ static void ysig__rerun(ysig_graph* g, int kslot, int node, int64_t t) {
         ysig__apply(g, &cu->calls[s % (uint64_t)cu->C].e);
     }
     cu->replaying = 0;
-    /* a hit handed out that the new history does not give: at or before
-     * the arm's time a caller acting in time order may have taken it
-     * (retracted, which the caller must watch); after it, it took none
-     * (superseded: the earlier arm's, or an equal one handed out again
-     * as the new arm's) */
+    /* a hit handed out that the new history does not give. The armed
+     * detect's own after the arm's time were its earlier arm's, which a
+     * caller re-arming at t took none of (superseded; or an equal one
+     * handed out again as the new arm's). Any other the caller may have
+     * taken: its own at or before t, and another detect's at any time,
+     * since the caller drains them together and cannot tell a voided one
+     * from one that stands (retracted, which the caller must watch) */
     for (i = 0; i < cu->n_tmp; i++)
         if (cu->tmp[i].seq != UINT64_MAX) {
-            if (cu->tmp[i].h.t > t) keep.arm_hits_superseded++;
+            if (cu->tmp[i].h.node == node && cu->tmp[i].h.t > t) keep.arm_hits_superseded++;
             else keep.arm_hits_retracted++;
         }
-    (void)node;
     /* the arms' own counts stand, and the calls made (the window keeps
      * only the events a source took); the rest is the run again's */
     g->st.fed = keep.fed;
@@ -3858,6 +3892,7 @@ static void ysig__rerun(ysig_graph* g, int kslot, int node, int64_t t) {
     g->st.arm_hits_retracted = keep.arm_hits_retracted;
     g->st.arm_hits_superseded = keep.arm_hits_superseded;
     g->st.arm_reentry = keep.arm_reentry;
+    g->st.call_reentry = keep.call_reentry;
     g->st.arm_rows_stale = keep.arm_rows_stale + (cu->row_h != rh);
     g->st.arm_derived_stale = keep.arm_derived_stale + (cu->der_h != dh);
     /* the run again's derived events are not handed out (counted stale
@@ -3957,7 +3992,7 @@ YSIG_API bool ysig_arm(ysig_graph* g, int node, int64_t t_ns) {
 
 YSIG_API int ysig_settle(ysig_graph* g, int64_t t_ns) {
     ysig_entry e;
-    if (!g || !g->ok) return -1;
+    if (!g || !g->ok || ysig__reentered(g, "ysig_settle")) return -1;
     memset(&e, 0, sizeof e);
     e.kind = YSIG_J_SETTLE;
     e.t = t_ns;
@@ -3971,6 +4006,7 @@ YSIG_API bool ysig_disarm(ysig_graph* g, int node) {
     ysig_entry e;
     ysig__det_st* s;
     if (!g || !g->ok || node < 0 || node >= g->n || g->nd[node].op != YSIG_OP_DETECT) return false;
+    if (ysig__reentered(g, "ysig_disarm")) return false;
     memset(&e, 0, sizeof e);
     e.kind = YSIG_J_DISARM;
     e.node = node;
@@ -4076,7 +4112,7 @@ YSIG_API void ysig_get_stats(const ysig_graph* g, ysig_stats* out) {
 
 YSIG_API int ysig_replay(ysig_graph* g, const ysig_entry* e, int n) {
     int i;
-    if (!g || !g->ok || n < 0 || (n && !e)) return -1;
+    if (!g || !g->ok || n < 0 || (n && !e) || ysig__reentered(g, "ysig_replay")) return -1;
     for (i = 0; i < n; i++) {
         bool ok = true;
         switch (e[i].kind) {

@@ -1949,7 +1949,7 @@ id = "233"
 name = "every hit the run again does not give counted as superseded"
 test = "sig"
 why = "v0.6.0 (test_arm_window, sig_arm_oracle): one at or before the arm's time is retracted."
-find = '''            if (cu->tmp[i].h.t > t) keep.arm_hits_superseded++;'''
+find = '''            if (cu->tmp[i].h.node == node && cu->tmp[i].h.t > t) keep.arm_hits_superseded++;'''
 replace = '''            if (1) keep.arm_hits_superseded++;'''
 
 [[mutant]]
@@ -1957,7 +1957,7 @@ id = "234"
 name = "a superseded hit counted as retracted"
 test = "sig"
 why = "v0.6.0 (test_arm_window 5): hits later than the arm's time."
-find = '''            if (cu->tmp[i].h.t > t) keep.arm_hits_superseded++;'''
+find = '''            if (cu->tmp[i].h.node == node && cu->tmp[i].h.t > t) keep.arm_hits_superseded++;'''
 replace = '''            if (0) keep.arm_hits_superseded++;'''
 
 [[mutant]]
@@ -2103,3 +2103,55 @@ test = "sig"
 why = "The rise carries the sources of the input that met the test, however the hit was found (test_hit_out_time: a hold's rise found by a later sample)."
 find = '''    ysig__det_prov(o, rise ? &s->v_hit : v);'''
 replace = '''    ysig__det_prov(o, v);'''
+
+[[mutant]]
+id = "254"
+name = "another detect's voided later hit counted superseded"
+test = "sig"
+why = "The second review of the fix round, C: only the re-armed detect's own later hits are superseded; another's the caller may have taken (test_arm_review2, r12)."
+find = '''            if (cu->tmp[i].h.node == node && cu->tmp[i].h.t > t) keep.arm_hits_superseded++;'''
+replace = '''            if (cu->tmp[i].h.t > t) keep.arm_hits_superseded++;'''
+
+[[mutant]]
+id = "255"
+name = "a custom op's sample() not marked as a callback"
+test = "sig"
+why = "The second review, G: a call from a custom op during another call is refused (test_arm_review2)."
+find = '''                g->busy++;
+                n->vt->sample(n->st, n->p, iv, n->n_in, o);
+                g->busy--;'''
+replace = '''                n->vt->sample(n->st, n->p, iv, n->n_in, o);'''
+
+[[mutant]]
+id = "256"
+name = "no call refused from a callback but the arm"
+test = "sig"
+why = "The second review's suspicion: a feed from on_row would run inside the outer call but be logged after it (test_arm_review2)."
+find = '''    if (!g->busy) return 0;
+    g->st.call_reentry++;'''
+replace = '''    if (g->busy || !g->busy) return 0;
+    g->st.call_reentry++;'''
+
+[[mutant]]
+id = "257"
+name = "ysig_feed() from a callback not refused"
+test = "sig"
+why = "As 256, for the feed alone."
+find = '''    if (!g || !g->ok || !e || ysig__reentered(g, "ysig_feed")) return -1;'''
+replace = '''    if (!g || !g->ok || !e) return -1;'''
+
+[[mutant]]
+id = "258"
+name = "ysig_frame() from a callback not refused"
+test = "sig"
+why = "As 256, for the frame alone."
+find = ''' || ysig__reentered(g, "ysig_frame")) return -1;'''
+replace = ''') return -1;'''
+
+[[mutant]]
+id = "259"
+name = "ysig_set() from a callback not refused"
+test = "sig"
+why = "As 256, for the set alone."
+find = '''    if (ysig__reentered(g, "ysig_set")) return false;'''
+replace = '''    (void)0;'''
