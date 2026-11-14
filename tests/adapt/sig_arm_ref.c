@@ -3,6 +3,13 @@
  * 09ecfb2, amended in b6676f4) and the graph's other rules in sig.md. It
  * does not read the header's internals.
  *
+ * Change after db38205 (the coordinator's check of case 2201, seed 777001):
+ *   - The "other count" of a wrong case that arm_unverified does not count
+ *     includes arm_past_pinned. sig.md's "Counts and fallbacks" lists
+ *     pinned with far, full, off, retracted and the stale counts as the
+ *     fallbacks the guard stops on; the tally left it out, so a pinned
+ *     wrong case printed as one with none.
+ *
  * Changes for the text at 085bbb6 (b22dccb, f903891, 617971a, 816d958),
  * and why:
  *   - H12: an ahead arm lets in at its tau when its group goes in (it used
@@ -1572,7 +1579,7 @@ static double g_x, g_y;
 static int g_drains;
 
 static int g_fail_ci = -1;   /* the call at which the case first failed */
-static long long g_unv_fail, g_other_fail;   /* A's arm_unverified, and its fallback, retracted and stale counts, then */
+static long long g_unv_fail, g_other_fail;   /* A's arm_unverified, and its fallback (pinned included), retracted and stale counts, then */
 static void push(const call* c) {
     if (g_nc >= MAXC - 4) return;
     g_c[g_nc] = *c;
@@ -1581,7 +1588,7 @@ static void push(const call* c) {
         g_fail_ci = g_nc;
 #ifdef SIG_HAS_UNV
         { ysig_stats st; ysig_get_stats(&g_a, &st); g_unv_fail = st.arm_unverified;
-          g_other_fail = st.arm_past_far + st.arm_past_full + st.arm_past_off + st.arm_hits_retracted + st.arm_rows_stale + st.arm_derived_stale; }
+          g_other_fail = st.arm_past_pinned + st.arm_past_far + st.arm_past_full + st.arm_past_off + st.arm_hits_retracted + st.arm_rows_stale + st.arm_derived_stale; }
 #endif
     }
     g_nc++;
@@ -2022,7 +2029,7 @@ int main(int argc, char** argv) {
            cases, wrong, fellback, cannot, noroom, disarm_ahead, SIG_ARM_REF_SPEC);
     if (h9) printf("  set aside as H9-shaped (SIG_ORACLE_H9): %ld\n", h9);
 #ifdef SIG_HAS_UNV
-    printf("  header arm_unverified: B-cannot %ld of %ld, wrong %ld of %ld at the failing call (%ld more only later), right %ld of %ld cases; %ld counts over %ld made groups in right cases; wrong unflagged: %ld with a fallback, retracted or stale count, %ld with none\n",
+    printf("  header arm_unverified: B-cannot %ld of %ld, wrong %ld of %ld at the failing call (%ld more only later), right %ld of %ld cases; %ld counts over %ld made groups in right cases; wrong unflagged: %ld with a fallback (pinned included), retracted or stale count, %ld with none\n",
            hu_f[0], hu_n[0], hu_f[1], hu_n[1], hu_late, hu_f[2], hu_n[2], hu_cnt, hu_arms, hu_other, hu_bare);
 #else
     (void)hu_n; (void)hu_f; (void)hu_show; (void)hu_late; (void)hu_other; (void)hu_bare; (void)hu_arms; (void)hu_cnt;
