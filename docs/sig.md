@@ -800,8 +800,9 @@ recenter shapes too) and the two 3.18 examples cover them.
 
 So, on these runs: no take moves a recenter back, no group carries a
 set, no exit comes before a waiting arm's time, and nothing pins. The
-change the player meets is the waiting itself: 33,277 ahead arms, every
-one at most 17 ms ahead, and 118 that a barrier would cancel.
+change the player meets is the waiting itself: 33,277 ahead arms in the
+harness and 13 in `player_test.py`, every one at most 17 ms ahead, and
+118 in the harness that a barrier would cancel.
 
 #### Where 0.6.0 as built differs
 
