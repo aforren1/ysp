@@ -2202,6 +2202,16 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
     if (!p->in_trial) {
         int64_t t0 = p->args.measure ? yrt_real_ns() : 0;
         if (p->pending_stop) return 1;
+        if (p->v2s) {
+            /* version 2: the samples up to this onset before the trial's
+             * reset and its arms at the onset, so none of them is input
+             * later than an arm or a barrier that it precedes (sig.h's
+             * reference order keeps input in call order) */
+            YRT_ZONE(zi, "pl.v2_input");
+            rc = pl_v2_frame_input(p, f);
+            YRT_ZONE_END(zi);
+            if (rc < 0) return -1;
+        }
         {
             YRT_ZONE(zt, "pl.trial_start");
             rc = pl_start_trial(p, f);

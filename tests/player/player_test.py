@@ -1249,6 +1249,12 @@ def t_v2_hand(ctx):
           "v2 hand: the frame trace's rows and columns: %d %s" % (len(fr), list(fr[0]) if fr else None))
     states = [e["text"] for e in r.events if e["kind"] == "state"]
     check(states[:2] == ["hold", "reach"], "v2 hand: the state rows: %s" % states[:4])
+    # samples up to a trial's onset go into the graphs before its reset and
+    # the arms at that onset: none is later input than an arm it precedes
+    # (16 were, with trial 1's controls armed first)
+    sjp = os.path.join(r.data, "session.json")
+    arms = json.load(open(sjp)).get("sig_arms", {}) if os.path.exists(sjp) else {}
+    check(arms.get("late_input") == 0, "v2 hand: input later than an arm it precedes: %s" % arms)
     # the trace's window opens at home's hit, 0.2 s held from the trial's
     # start: no row of trial 0 before it (3.7)
     hold = [e for e in r.events if e["kind"] == "state" and e["text"] == "hold" and e["trial_index"] == "0"]
@@ -2186,10 +2192,10 @@ def t_v2_findings(ctx):
     # session.json: the window's counts (version 2 only)
     sj = json.load(open(os.path.join(r.data, "session.json"))) if r.rc == 0 else {}
     arms = sj.get("sig_arms", {})
-    check(sorted(arms) == ["ahead_cancelled", "caught_up", "derived_stale", "hits_retracted", "hits_superseded", "past_far", "past_full",
-                           "past_off", "past_pinned", "rows_stale"] and
+    check(sorted(arms) == ["ahead_cancelled", "caught_up", "derived_stale", "hits_retracted", "hits_superseded", "late_input", "past_far",
+                           "past_full", "past_off", "past_pinned", "rows_stale"] and
           arms["hits_retracted"] == arms["rows_stale"] == arms["derived_stale"] == arms["past_far"] == arms["past_full"] ==
-          arms["past_off"] == arms["past_pinned"] == 0,
+          arms["past_off"] == arms["past_pinned"] == arms["late_input"] == 0,
           "session.json sig_arms: %s" % arms)
     # the model's s19383: s1 goes back to itself by after_s at the time its
     # r0 hold ends (list order: the after_s exit). The re-arm at that time

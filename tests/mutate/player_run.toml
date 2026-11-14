@@ -744,3 +744,13 @@ test = "player"
 why = "Two presses in one frame's interval reach its poll (vm_presses_one_frame; the model's s6683)."
 find = '''    while (p->in_trial && p->press_pending && p->tmpl->collector && p->press_at <= f->onset) {'''
 replace = '''    if (p->in_trial && p->press_pending && p->tmpl->collector && p->press_at <= f->onset) {'''
+
+[[mutant]]
+id = "r-v2-16"
+name = "a trial's first samples fed after its reset and arms"
+test = "player"
+why = "The samples up to a trial's onset go into the graphs before its reset and its arms at that onset: else they are input later than an arm they precede (v2_hand: sig_arms.late_input 0)."
+find = '''        if (p->v2s) {
+            /* version 2: the samples up to this onset before the trial's'''
+replace = '''        if (0) {
+            /* version 2: the samples up to this onset before the trial's'''

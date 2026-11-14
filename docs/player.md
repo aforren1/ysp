@@ -303,7 +303,7 @@ it says), for each version:
 | `headers.trials`, `headers.gfx`, `headers.experiment` | The new versions (0.8.1, 0.20.0; experiment 0.5.0 from 0.7.0) | The same |
 | `signal_roles` | Not written | One object a signal role: `name`, `adapter` (`sim raw mouse` or `sim positions`), `device` (`--samples` or `none`), `type`, `units`, `per_count` (the `--sim-gain`), `calibration_sha256` (empty) |
 | `recenter_skipped` | Not written | The `recenter` steps that a graph did not apply (D40) |
-| `sig_arms` | Not written | ysp/sig.h's counts of arms in the past, summed over the session's graphs: `caught_up` (run again, exact), `past_off`, `past_far`, `past_full` (fell back to the newest value: inexact), `hits_superseded`, `hits_retracted`, `rows_stale`, `derived_stale`, `past_pinned` (a fallback), `ahead_cancelled` (waiting arms a disarm or a barrier cancelled) (docs/sig.md, "An arm in the past: the semantics"). A run stops at a retracted hit, a stale row or event, or any fallback (`past_off`, `past_far`, `past_full`, `past_pinned`), so those are 0 in a finished session |
+| `sig_arms` | Not written | ysp/sig.h's counts of arms in the past, summed over the session's graphs: `caught_up` (run again, exact), `past_off`, `past_far`, `past_full` (fell back to the newest value: inexact), `hits_superseded`, `hits_retracted`, `rows_stale`, `derived_stale`, `past_pinned` (a fallback), `ahead_cancelled` (waiting arms a disarm or a barrier cancelled), `late_input` (input calls with a time before an arm that the player made with the graph's input at or past its time, any footprint: sig.h's reference order puts them after that arm) (docs/sig.md, "An arm in the past: the semantics"). A run stops at a retracted hit, a stale row or event, or any fallback (`past_off`, `past_far`, `past_full`, `past_pinned`), so those are 0 in a finished session |
 
 No other field changes. A version 1 data set keeps every other byte
 (Results).
@@ -441,6 +441,14 @@ sig.h's reference order. The player stops on any of them by name
 ("internal guard: a past arm of ... changed a hit already taken, or a
 row or event already written, or fell back"). `session.json` has the
 session's sums in `sig_arms` (version 2 only).
+
+A trial's start resets its graph (`ysig_reset_trial()` at the onset) and
+arms the controls that no exit names at that onset. The scripted samples
+up to that onset go into every graph before it, with the frame's other
+input: fed after, they were input later than the arms they precede
+(`late_input`; sig.h keeps input in call order, so an arm at the onset
+did not see them). `--sim` has every sample in hand; in a real run a
+sample that arrives after the onset's arms is real late input.
 
 Three more parts follow sig.h's semantics (docs/sig.md): the graphs take
 `rows_final`, so a sample trace's rows come once no arm can change them
@@ -711,6 +719,28 @@ corpus.
 | Version 1 identity against main (7078e4d) | 438 of 439 CSV files byte-identical (the other the Stroop C program's trials.h version line); `session.json`: versions, `pack_id` (94) and `rig_profile_sha256` (4) |
 | Version 2 data against 0.3.0, the two 3.18 examples | `target_frames` (159 of 160) and `reach_target_frames` (4 of 132) only, as in 0.4.0 |
 | Frame work, CPU 2, six runs each, mean user time | Visuomotor 0.209 s (sd 0.003) against 0.3.0's 0.211 s; bimanual 1.128 s (sd 0.010) against 1.146 s. Largest frame 637 to 641 us against 636 to 646 us, and 1,900 to 1,924 us (one run 2,069 us) against 1,880 to 1,906 us (one run 2,045 us) |
+
+### The samples before a trial's start (2026-11-14)
+
+The same machine. The player fed a frame's samples after the trial
+start's reset and arms at the onset (`run.c`, `pl_start_trial()` before
+`pl_v2_frame_input()`). A count of late input in a scratch ysp/sig.h
+(an input call with a time before an arm already in the reference order
+whose footprint meets the arm's, made after it) found 16 in the
+bimanual example (both hands' samples, timed 16.5 to 16.7 ms before a
+trial's first onset: d13, a frame-rate hold on the start position, and
+d11, a frame-rate entry-now distance test), 17 in `player_test.py`
+(`v2_hand` 16; a model case, seed 4588, 1, a sample 1 ns before the onset
+from the frame grid's rounding) and 0 in the visuomotor example. With the
+samples first:
+
+| Check | Result |
+|---|---|
+| The count, scratch build | `player_test.py` 0 of 64,776 input calls; visuomotor 0 of 300,144; bimanual 0 of 3,241,997 |
+| `sig_arms.late_input` (the player's count, any footprint) | `v2_hand` 0, 16 with the old order (its new check fails on it; mutant r-v2-16 killed); `vm_settle_tie` 0 |
+| `compare.py`, the six examples | Every CSV byte-identical to the old order's run |
+| `player_test.py` | 56 cases, 0 failures. Of 1,508 CSV files one differs: `vm_rows_final`'s `streams/path.csv`: its rows at the trial's onset are 6 with the hand's tier and device (were 7 with tier 0 and device 0, the peak's value after the reset); the other 57 rows are unchanged |
+| Version 1 identity | Every version 1 CSV file byte-identical (`session.json` differs in `rig_profile_sha256` only, a rig profile written again) |
 
 ### sig.h 0.6.0's window and the settle at the onset (0.10.0, 2026-11-13)
 

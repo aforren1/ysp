@@ -612,7 +612,7 @@ id = "v2-74"
 name = "no settle before a response's end"
 test = "player"
 why = "Rule 4 (vm_settle): a hold met before a response's end."
-find = '''        if (rc == 0 && v->has_graph && !v->resp_taken && v->cur >= 0 && ysig_settle(&v->g, t) == 0) rc = v2_hits(p, v, f);'''
+find = '''            if (ysig_settle(&v->g, t) == 0) rc = v2_hits(p, v, f);'''
 replace = ''''''
 
 [[mutant]]

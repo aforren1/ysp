@@ -209,6 +209,11 @@ struct pl_v2 {
     int64_t* wait_t;           /* per node: the latest time of an arm made
                                 * ahead of the input this visit (it may still
                                 * wait in sig.h), INT64_MIN: none            */
+    int64_t late_bound;        /* the latest time of an arm made at or
+                                * before the graph's input time (in sig.h's
+                                * reference order at its call)              */
+    int64_t n_late;            /* input calls with a time before late_bound:
+                                * late input after an arm (any footprint)   */
     int n_st_armed;
     bool rows_open;            /* the trial's rows go to its traces: from its
                                 * reset to the flush at its end             */
@@ -2096,9 +2101,19 @@ static int v2_arm_check(pl_player* p, pl_v2* v, const char* name, int64_t t) {
     return -1;
 }
 
+/* An arm at t: in the reference order at once when the graph has input up
+ * to t; input with an earlier time after it is late (sig_arms.late_input) */
+static void v2_late_arm(pl_v2* v, int64_t t) {
+    if (t <= v->g.t_cover && t > v->late_bound) v->late_bound = t;
+}
+static void v2_late_in(pl_v2* v, int64_t t) {
+    if (t < v->late_bound) v->n_late++;
+}
+
 static int v2_arm_ctl(pl_player* p, pl_v2* v, int ci, int64_t t) {
     v2_ctl* c = &v->ctl[ci];
     if (c->hit < 0) return 0;
+    v2_late_arm(v, t);
     v->arm_gen[c->hit]++;
     v->arm_t[c->hit] = t;
     if (!ysig_arm(&v->g, c->hit, t)) { pl_fail(p, "template '%s': cannot arm '%s'", v->def->name, c->def->name); return -1; }
@@ -2114,6 +2129,7 @@ static int v2_arm_exit(pl_player* p, pl_v2* v, const v2_exit* x, int64_t t) {
     if (t > v->g.t_cover && t > v->wait_t[x->node]) v->wait_t[x->node] = t;   /* it waits in sig.h */
     v->arm_gen[x->node]++;
     v->arm_t[x->node] = t;
+    v2_late_arm(v, t);
     if (!ysig_arm(&v->g, x->node, t)) { pl_fail(p, "template '%s': cannot arm '%s'", v->def->name, v->ctl[x->ctl].def->name); return -1; }
     return v2_arm_check(p, v, v->ctl[x->ctl].def->name, t);
 }
@@ -2655,6 +2671,7 @@ static int v2_timed_to(pl_player* p, pl_v2* v, const yscr_frame* f, int64_t limi
             {
                 int cur = v->cur;
                 int64_t ent = v->entry_t;
+                v2_late_in(v, fed);
                 if (ysig_settle(&v->g, fed) < 0 || v2_hits(p, v, f) < 0) return -1;
                 if (v->cur != cur || v->entry_t != ent) continue;
             }
@@ -2846,6 +2863,7 @@ static int v2_feed(pl_player* p, const yscr_frame* f, int64_t limit) {
         for (ti = 0; ti < S->n_t; ti++) {
             pl_v2* w = S->t[ti];
             if (!w || !w->has_graph) continue;
+            v2_late_in(w, e.t);
             (void)ysig_feed(&w->g, &e);
             if (w == v && v->has_graph) {
                 yin_event der[YSIG_QUEUE_CAP];
@@ -3055,6 +3073,7 @@ int pl_v2_frame_eval(pl_player* p, const yscr_frame* f) {
             int rf;
             YRT_ZONE(zs, "sig.frame");
             YRT_ZONE_VALUE(zs, v->g.n);
+            v2_late_in(v, fi.onset_ns);
             rf = ysig_frame(&v->g, &fi);
             YRT_ZONE_END(zs);
             if (rf < 0) { pl_fail(p, "template '%s': ysig_frame", v->def->name); return -1; }
@@ -3198,7 +3217,10 @@ int pl_v2_response(pl_player* p, const yrsp_result* r, const yscr_frame* f) {
         /* input up to t is fed: a hold the hand met by then is a hit
          * before the response's end at t (rule 4, the model's
          * future-arm-hold) */
-        if (rc == 0 && v->has_graph && !v->resp_taken && v->cur >= 0 && ysig_settle(&v->g, t) == 0) rc = v2_hits(p, v, f);
+        if (rc == 0 && v->has_graph && !v->resp_taken && v->cur >= 0) {
+            v2_late_in(v, t);
+            if (ysig_settle(&v->g, t) == 0) rc = v2_hits(p, v, f);
+        }
         v->resp_tie_t = INT64_MIN;
         if (rc < 0) return -1;
         if (v->resp_taken || v->cur < 0) return 0;
@@ -3907,6 +3929,7 @@ int pl_v2_arm_counts(pl_player* p, int64_t c[PL_ARM_COUNTS]) {
         c[7] += st.arm_derived_stale;
         c[8] += st.arm_past_pinned;
         c[9] += st.arm_ahead_cancelled;
+        c[10] += S->t[i]->n_late;
         n++;
     }
     return n;
@@ -3914,7 +3937,7 @@ int pl_v2_arm_counts(pl_player* p, int64_t c[PL_ARM_COUNTS]) {
 
 int pl_v2_session_end(pl_player* p, yjs_arena* a) {
     static const char* const name[PL_ARM_COUNTS] = { "caught_up", "past_off", "past_far", "past_full", "hits_superseded", "hits_retracted",
-                                                     "rows_stale", "derived_stale", "past_pinned", "ahead_cancelled" };
+                                                     "rows_stale", "derived_stale", "past_pinned", "ahead_cancelled", "late_input" };
     int64_t c[PL_ARM_COUNTS];
     yjs_value* o;
     int i;
