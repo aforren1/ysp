@@ -614,7 +614,11 @@ after the last barrier and before G's place in R has a time later than
 `τ` and a footprint that meets `F(G)`. A state call cannot pin a group:
 outside a group its time is `N` at its call, so after an input later
 than `τ` it is later than `τ` too. A pinned group is counted in
-`arm_past_pinned`, a fallback: the player's guard must see it.
+`arm_past_pinned`, a fallback: the player's guard must see it. Before
+the window's oldest checkpoint the graph keeps no input's footprint:
+when an input there is later than `τ` (and no barrier is between), the
+group counts as pinned whatever that input's footprint (the reviewer's
+H1: frames older than the log).
 
 Arms ahead and an earlier arm (E): an ahead arm waits for input past its
 time, so a later arm with an earlier time goes before it in R. For
