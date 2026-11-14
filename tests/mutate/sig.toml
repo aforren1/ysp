@@ -1802,8 +1802,7 @@ replace = '''        (void)u;'''
 id = "214"
 name = "an equal-time overwrite not in the undo log"
 test = "sig"
-expect = "survived"
-note = "Killed by sig_arm_oracle until its retirement from ctest (it encodes 0.6.0's rule before the semantics); no unit test reaches it. For the reviewer's oracle, written from docs/sig.md, once it is in the tree."
+note = "Killed only through a count: test_arm_repro's residual 1414 case needs the undo log to run full at a given call, and the missing note moves that call (no stale window found). No test checks the ring's value after a run again; the reviewer's oracle does."
 why = "v0.6.0: the ring's equal-time replace (sig_arm_oracle: a ring entry after a call)."
 find = '''        if (v->t == last->t) { ysig__undo_note(g, last); *last = *v; return; }'''
 replace = '''        if (v->t == last->t) { *last = *v; return; }'''

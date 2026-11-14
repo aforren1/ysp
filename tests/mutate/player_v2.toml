@@ -736,8 +736,8 @@ name = "the guard does not stop on a fallback"
 test = "player"
 why = "sig.h's semantics: a pinned group, a place before the window, full logs and no window are not the reference order's result."
 find = '''    bad = st.arm_hits_retracted + st.arm_rows_stale + st.arm_derived_stale + st.arm_past_pinned + st.arm_past_far +
-          st.arm_past_full + st.arm_past_off;'''
-replace = '''    bad = st.arm_hits_retracted + st.arm_rows_stale + st.arm_derived_stale;'''
+          st.arm_past_full + st.arm_past_off + st.arm_unverified;'''
+replace = '''    bad = st.arm_hits_retracted + st.arm_rows_stale + st.arm_derived_stale + st.arm_unverified;'''
 
 [[mutant]]
 id = "v2-90"
