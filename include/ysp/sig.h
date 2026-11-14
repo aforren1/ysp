@@ -1181,22 +1181,25 @@ typedef struct ysig__wa { int node; int64_t t; uint64_t seq; int c0, nc; } ysig_
  * late reports (condition 3) and for later groups placed between it and
  * its L (condition 2 (b)) */
 typedef struct ysig__ux {
-    int      node;
-    int64_t  t;
-    uint64_t gid, l_seq;   /* l_seq: L's call number (0: none)          */
-    uint64_t F[YSIG__FPW];
+    int       node;
+    int64_t   t;
+    uint64_t  gid, l_seq;  /* l_seq: L's call number (0: none)          */
+    uint64_t* F;           /* dw words of the pool, fixed per slot       */
 } ysig__ux;
 #define YSIG__UX 32
+#define YSIG__UOP 16
 /* A group placed while a trigger lets waiting groups in (a cascade) */
 typedef struct ysig__ucg {
-    uint64_t gid;
-    int64_t  t, n_at;
-    uint64_t F[YSIG__FPW], Fa[YSIG__FPW];
-    int      cancelled, inside, ncalls, placed, first, last;
+    uint64_t  gid;
+    int64_t   t, n_at;
+    uint64_t *F, *Fa;      /* dw words of the pool each                  */
+    int       cancelled, inside, ncalls, placed, first, last;
 } ysig__ucg;
 typedef struct ysig__ucc { uint64_t gid; int64_t t; int kind, node; } ysig__ucc;
-#define YSIG__UCG 40
-#define YSIG__UCC 160
+#define YSIG__UCG 33       /* the waiting arms, and the one going in      */
+#define YSIG__UCC 96
+/* the footprints' pool: dw words each (the graph's nodes, not 512) */
+#define YSIG__UFP (YSIG__UX + YSIG__UOP + 2 * YSIG__UCG)
 typedef struct ysig__wt {
     int        n, nc, n_dis, gap_n, fired;   /* fired: one went in this gap */
     uint64_t   seq;                         /* calls made, numbered      */
@@ -1212,7 +1215,7 @@ typedef struct ysig__wt {
     int        n_unv, unv_at;
     ysig__ux   lr[YSIG__UX];
     int        n_lr;
-    ysig__ux   op[16];
+    ysig__ux   op[YSIG__UOP];
     int        n_op;
     int        cas_kind, cas_depth, n_cg, n_cc, cas_stack[YSIG__UCG], cas_top;
     int64_t    cas_t;
@@ -2010,6 +2013,14 @@ static size_t ysig__layout(const ysig_desc* d, const ysig__an* a, ysig_graph* g,
     if (g) { g->down = (uint64_t*)(void*)(base + at); g->dw = (n + 63) / 64; }
     at = ysig__al(&off, sizeof(ysig__wt));
     if (g) g->wt = (ysig__wt*)(void*)(base + at);
+    at = ysig__al(&off, sizeof(uint64_t) * (size_t)YSIG__UFP * (size_t)((n + 63) / 64));
+    if (g) {
+        uint64_t* q = (uint64_t*)(void*)(base + at);
+        int dw = (n + 63) / 64, j;
+        for (j = 0; j < YSIG__UX; j++, q += dw) g->wt->lr[j].F = q;
+        for (j = 0; j < YSIG__UOP; j++, q += dw) g->wt->op[j].F = q;
+        for (j = 0; j < YSIG__UCG; j++, q += 2 * dw) { g->wt->cg[j].F = q; g->wt->cg[j].Fa = q + dw; }
+    }
     for (i = 0; i < n; i++) {
         const ysig_node* nd = a->node[i];
         size_t s = ysig__state_size(d, nd);
@@ -4387,12 +4398,13 @@ static void ysig__ux_arm(ysig_graph* g, int node, int64_t t, uint64_t gid, const
     for (i = 0; i < w->n_lr && w->lr[i].node != node; i++) { }
     if (i == w->n_lr) {
         if (w->n_lr == YSIG__UX) {
-            /* the oldest goes: its late reports are not seen (counted) */
+            /* no room: one goes, its late reports not seen (counted). Slots
+             * keep their footprint storage: entries move by swapping */
             ysig__unv(g, w->lr[0].gid);
-            memmove(&w->lr[0], &w->lr[1], sizeof(ysig__ux) * (YSIG__UX - 1));
-            w->n_lr--;
+            i = 0;
+        } else {
+            i = w->n_lr++;
         }
-        i = w->n_lr++;
     }
     w->lr[i].node = node;
     w->lr[i].t = t;
@@ -4405,8 +4417,9 @@ static void ysig__ux_disarm(ysig_graph* g, int node) {
     int i;
     for (i = 0; i < w->n_lr; i++)
         if (w->lr[i].node == node) {
-            memmove(&w->lr[i], &w->lr[i + 1], sizeof(ysig__ux) * (size_t)(w->n_lr - i - 1));
-            w->n_lr--;
+            ysig__ux x = w->lr[i];
+            w->lr[i] = w->lr[w->n_lr - 1];
+            w->lr[--w->n_lr] = x;
             return;
         }
 }
@@ -4525,16 +4538,19 @@ static void ysig__cas_end(ysig_graph* g, uint64_t l_seq) {
  * it makes it unverified (2 (b)) */
 static void ysig__op_add(ysig_graph* g, uint64_t gid, int64_t t, const uint64_t* F, uint64_t l_seq) {
     ysig__wt* w = g->wt;
-    if (w->n_op == 16) {
-        memmove(&w->op[0], &w->op[1], sizeof(ysig__ux) * 15);
-        w->n_op--;
+    int i;
+    if (w->n_op == YSIG__UOP) {
+        /* no room: one is no longer watched (counted) */
+        ysig__unv(g, w->op[0].gid);
+        i = 0;
+    } else {
+        i = w->n_op++;
     }
-    w->op[w->n_op].node = -1;
-    w->op[w->n_op].t = t;
-    w->op[w->n_op].gid = gid;
-    w->op[w->n_op].l_seq = l_seq;
-    memcpy(w->op[w->n_op].F, F, sizeof(uint64_t) * (size_t)g->dw);
-    w->n_op++;
+    w->op[i].node = -1;
+    w->op[i].t = t;
+    w->op[i].gid = gid;
+    w->op[i].l_seq = l_seq;
+    memcpy(w->op[i].F, F, sizeof(uint64_t) * (size_t)g->dw);
 }
 
 /* Waiting arms (rule 3). */
@@ -5014,8 +5030,9 @@ static void ysig__unv_place(ysig_graph* g, int kslot, uint64_t pos, int nb) {
             }
         }
         if (drop) {
-            memmove(&w->op[i], &w->op[i + 1], sizeof(ysig__ux) * (size_t)(w->n_op - i - 1));
-            w->n_op--;
+            ysig__ux x = w->op[i];
+            w->op[i] = w->op[w->n_op - 1];
+            w->op[--w->n_op] = x;
         } else {
             i++;
         }
