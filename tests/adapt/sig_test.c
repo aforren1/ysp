@@ -4409,6 +4409,47 @@ static int rp_open(ysig_node* n, int nn, int K, int calls, bool rows_final, bool
     g_rp_last = -1;
     return 1;
 }
+/* The reviewer's 2192: a group's disarm takes effect at the group's end
+ * (S1), after its other calls, in a run again too. The disarm meets d's
+ * hold (a hit at 20 ms through latch(offset X, d)); the set of X in the
+ * same group comes first, so the row has X's new value. A past arm then
+ * runs the group again (final-only rows): the row is the same */
+static double g_d2192_last;
+static int g_d2192_n;
+static void d2192_row(void* u, const ysig_row* r) { (void)u; if (r->node == 4) { g_d2192_last = r->value.v[0]; g_d2192_n++; } }
+static void test_disarm_at_gap_end(void) {
+    int K;
+    g_where = "a group's disarm at its end";
+    for (K = 0; K <= 4; K += 4) {
+        ysig_node n[7];
+        ysig_desc d;
+        n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2); n[0].history = 64;
+        n[1] = ysig_node_of(YSIG_OP_OFFSET, 0, -1);
+        n[2] = ysig_node_of(YSIG_OP_DETECT, 0, -1); n[2].p[YSIG_DETECT_LANE] = 0; n[2].p[YSIG_DETECT_LEVEL] = 5; n[2].p[YSIG_DETECT_HOLD] = 0.01;
+        n[2].p[YSIG_DETECT_START] = 1; n[2].p[YSIG_DETECT_OUT] = YSIG_OUT_HIT; n[2].history = 64;
+        n[3] = ysig_node_of(YSIG_OP_LATCH, 1, 2); n[3].history = 64;
+        n[4] = ysig_node_of(YSIG_OP_RECORD, 3, -1);
+        n[5] = ysig_node_of(YSIG_OP_DETECT, 0, -1); n[5].p[YSIG_DETECT_LANE] = 0; n[5].p[YSIG_DETECT_LEVEL] = 5; n[5].p[YSIG_DETECT_START] = 1; n[5].history = 64;
+        n[6] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 2, 2);
+        memset(&d, 0, sizeof d);
+        d.nodes = n; d.n_nodes = 7; d.arena = g_rp_ar; d.catchup_frames = K; d.rows_final = K > 0; d.on_row = d2192_row;
+        d.arena_size = ysig_arena_size(&d);
+        if (!d.arena_size || d.arena_size > sizeof g_rp_ar || !ysig_open(&g_rp, &d)) { g_failures++; return; }
+        ysig_reset(&g_rp, 0);
+        g_d2192_n = 0;
+        rp_feed(10 * MS, 10, YIN_AXIS_POSITION, 1);
+        ysig_arm(&g_rp, 2, 10 * MS);
+        rp_feed(15 * MS, 10, YIN_AXIS_POSITION, 1);
+        rp_feed(22 * MS, 0, YIN_AXIS_POSITION, 2);   /* N 22: the hold met by then */
+        ysig_disarm(&g_rp, 2);
+        ysig_set(&g_rp, 1, YSIG_OFFSET_D_X, 100);
+        ysig_arm(&g_rp, 5, 22 * MS);
+        ysig_arm(&g_rp, 5, 12 * MS);   /* past: a run again over the group */
+        ysig_flush(&g_rp);
+        CHECK(g_d2192_n == 3 && g_d2192_last == 110);
+    }
+}
+
 /* Exactness (docs/sig.md): arm_unverified, one shape per condition, each
  * with a control that stays 0. Nodes: s1 (any device), d1 on it, d2 on
  * d1 (so d2's arm meets d1's group);
@@ -4585,12 +4626,14 @@ static void test_arm_exact(void) {
         rp_feed(25 * MS, 0, YIN_AXIS_POSITION, 1);
         CHECK(g_rp.wt->n == 0 && ex_unv() == v);
     }
-    /* (c) a state call later in the disarm's gap lets d1 in (after the
-     * disarm): the gap ends with an input, so the disarm is in no group.
-     * d3 (on device 3) is the one disarmed: it does not meet d1, so the
-     * disarm lets nothing in itself. The control: an arm (of d3, at N)
-     * closes the gap */
-    for (v = 0; v < 2; v++) {
+    /* (c) a state call later in an open gap lets d1 in, after the gap's
+     * earlier call: a disarm of d3 (it does not meet d1, so it lets
+     * nothing in itself), or a set of X. v 0: a set, then an input ends
+     * the gap: 0. v 1: a disarm, then an input: the disarm (in no group)
+     * lies in the gap d1's arm closes, 4. v 2: a disarm, then an arm of
+     * d3 at N closes the gap: 4 (a disarm of another group), and 1. v 3:
+     * a set, then the arm: d1 is inside that group's block, 1 */
+    for (v = 0; v < 4; v++) {
         ysig_node cn6[6];
         if (!ex_open(cn6, 4)) return;
         cn6[5] = ysig_node_of(YSIG_OP_DETECT, 3, -1); cn6[5].p[YSIG_DETECT_LEVEL] = 5; cn6[5].p[YSIG_DETECT_START] = 1; cn6[5].history = 64;
@@ -4599,13 +4642,34 @@ static void test_arm_exact(void) {
         rp_feed(10 * MS, 0, YIN_AXIS_PEN_PRESSURE, 3);
         ysig_arm(&g_rp, 1, 20 * MS);
         rp_feed(30 * MS, 0, YIN_AXIS_PEN_PRESSURE, 3);   /* N 30: d1 still waits */
-        ysig_disarm(&g_rp, 5);
+        if (v == 1 || v == 2) ysig_disarm(&g_rp, 5);
+        else ysig_set(&g_rp, 4, YSIG_OFFSET_D_X, 1);
         CHECK(g_rp.wt->n == 1);
         ysig_set(&g_rp, 1, YSIG_DETECT_LEVEL, 4);       /* lets d1 in */
         CHECK(g_rp.wt->n == 0);
-        if (!v) ysig_arm(&g_rp, 5, 30 * MS);
+        if (v >= 2) ysig_arm(&g_rp, 5, 30 * MS);
         rp_feed(31 * MS, 0, YIN_AXIS_PEN_PRESSURE, 3);
-        CHECK(ex_unv() == v);
+        CHECK(ex_unv() == (v > 0));
+    }
+    /* (d) the reviewer's 1137: a present arm (of d2, at N) lets d1 in
+     * right before itself, after its own group's disarm of d3: d1 is in
+     * that group's block (1) and the disarm in the gap d1's arm closes
+     * (4); v 2: a set of X instead of the disarm, 1 alone. The control
+     * (v 0): the arm alone */
+    for (v = 0; v < 3; v++) {
+        ysig_node cn6[6];
+        if (!ex_open(cn6, 4)) return;
+        cn6[5] = ysig_node_of(YSIG_OP_DETECT, 3, -1); cn6[5].p[YSIG_DETECT_LEVEL] = 5; cn6[5].p[YSIG_DETECT_START] = 1; cn6[5].history = 64;
+        if (!rp_open(cn6, 6, 4, 0, false, false)) return;
+        rp_feed(10 * MS, 0, YIN_AXIS_POSITION, 1);
+        rp_feed(10 * MS, 0, YIN_AXIS_PEN_PRESSURE, 3);
+        ysig_arm(&g_rp, 1, 20 * MS);
+        rp_feed(30 * MS, 0, YIN_AXIS_PEN_PRESSURE, 3);
+        if (v == 1) ysig_disarm(&g_rp, 5);
+        if (v == 2) ysig_set(&g_rp, 4, YSIG_OFFSET_D_X, 1);
+        CHECK(g_rp.wt->n == 1);
+        ysig_arm(&g_rp, 2, 30 * MS);   /* present: lets d1 in (20 <= 30) */
+        CHECK(g_rp.wt->n == 0 && ex_unv() == (v > 0));
     }
     for (v = 0; v < 2; v++) {
         n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 2); n[0].history = 64;
@@ -6268,6 +6332,7 @@ int main(void) {
     test_arm_spec2();
     test_arm_repro();
     test_arm_exact();
+    test_disarm_at_gap_end();
     if (g_failures) { fprintf(stderr, "sig_test: %d failures\n", g_failures); return 1; }
     printf("sig_test: all checks passed\n");
     return 0;

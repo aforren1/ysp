@@ -2539,9 +2539,9 @@ id = "300"
 name = "exactness: a group let in inside another's block not counted"
 test = "sig"
 why = "Condition 1 (test_arm_exact: x inside y's block)."
-find = '''        int bad = c->inside;
+find = '''        int bad = c->inside || w->cas_in;
         if (c->cancelled && !c->ncalls) continue;'''
-replace = '''        int bad = 0;
+replace = '''        int bad = w->cas_in;
         if (c->cancelled && !c->ncalls) continue;'''
 
 [[mutant]]
@@ -2653,22 +2653,6 @@ find = '''        if (c->cancelled && ysig__fp_any(g, c->Fa) && c->n_at != c->t)
 replace = ''''''
 
 [[mutant]]
-id = "314"
-name = "exactness: condition 4 not tested at a trigger"
-test = "sig"
-why = "Condition 4: a disarm in no group right before the first group an input lets in (the reviewer's 883; test_arm_exact 4 (a))."
-find = '''    if (w->n_cc && w->cas_p4) ysig__unv(g, w->cc[0].gid);'''
-replace = ''''''
-
-[[mutant]]
-id = "315"
-name = "exactness: condition 4 not tested at a past group's place"
-test = "sig"
-why = "Condition 4 in the log (the reviewer's 404; test_arm_exact 4 (b))."
-find = '''                if (c->e.kind == YSIG_J_DISARM && !c->gid) { bad = 1; break; }'''
-replace = ''''''
-
-[[mutant]]
 id = "316"
 name = "exactness: 2 (c) at any N(G) not tested in the log"
 test = "sig"
@@ -2679,9 +2663,49 @@ find = '''        if (!bad && armed < 0 && ysig__fp_any(g, Fa) && N != t) bad = 
 replace = ''''''
 
 [[mutant]]
-id = "317"
-name = "exactness: condition 4 not kept for a group a state call let in"
+id = "314"
+name = "exactness: condition 4 not tested in a cascade"
 test = "sig"
-why = "Condition 4 when the gap ends with an input after a state call let a group in after its disarm (test_arm_exact 4 (c))."
-find = '''    if (w->n_cc && w->cas_kind == YSIG__CAS_STATE && w->n_dis > 0 && !w->p4_gid) w->p4_gid = w->cc[0].gid;'''
+why = "Condition 4: a disarm in the gap a let-in group's arm closes (the reviewer's 883; test_arm_exact 4 (a), (c))."
+find = '''                if (w->cc[j].kind == YSIG_J_DISARM) { bad = 1; break; }
+            }
+            if (j < 0 && w->cas_dis) bad = 1;'''
+replace = '''                if (w->cc[j].kind == YSIG_J_DISARM) { bad = 1; break; }
+            }'''
+
+[[mutant]]
+id = "315"
+name = "exactness: condition 4 not tested at a past group's place"
+test = "sig"
+why = "Condition 4 in the log (the reviewer's 404; test_arm_exact 4 (b))."
+find = '''                if (c->e.kind == YSIG_J_DISARM) { bad = 1; break; }
+            }
+        }
+        if (!bad && N < t) {'''
+replace = '''            }
+        }
+        if (!bad && N < t) {'''
+
+[[mutant]]
+id = "317"
+name = "exactness: a state call's let-ins not inside the group an arm makes of the gap"
+test = "sig"
+why = "Condition 1 for a group let in after the open gap's own calls (test_arm_exact 4 (c), v 3)."
+find = '''            if (!(w->cg[i].cancelled && !w->cg[i].ncalls) && w->n_pin < 8) w->pin[w->n_pin++] = w->cg[i].gid;'''
 replace = ''''''
+
+[[mutant]]
+id = "318"
+name = "exactness: an arm's let-ins not inside its group's block"
+test = "sig"
+why = "Condition 1 (the reviewer's 1137; test_arm_exact 4 (d))."
+find = '''        g->wt->cas_in = g->wt->gap_n > 0;'''
+replace = ''''''
+
+[[mutant]]
+id = "319"
+name = "a group's disarm made at its call in a run again"
+test = "sig"
+why = "S1: a disarm takes effect at its gap's end; in the log it goes after the gap's other calls (the reviewer's 2192; test_disarm_at_gap_end)."
+find = '''    if (!cu || cu->replaying || !cu->grp_open || cu->grp_bad || !g->wt->n_dis) return;'''
+replace = '''    if (1) return;'''
