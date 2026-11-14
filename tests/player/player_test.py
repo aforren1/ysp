@@ -1091,6 +1091,17 @@ def t_r6_allow_below(ctx):
     r = Run(ctx, "r6_allow_ok", d, args=["--max-trials", "1", "--allow-below-tier", "r"])
     check(r.rc == 0, "--allow-below-tier r: exit %d: %s" % (r.rc, r.err[:200]))
 
+def rate(ctx):
+    """The simulated display's rate of this run (--hz; the player's 60 by
+    default)."""
+    return float(ctx.hz) if getattr(ctx, "hz", None) is not None else 60.0
+
+
+def period_ns(ctx):
+    """The frame period in whole ns, as ysp_player --sim-hz rounds it."""
+    return int(round(1e9 / rate(ctx)))
+
+
 def v2base(trials, timeline, stimuli=None, roles=None, extra=None):
     d = base(trials, timeline, stimuli=stimuli, devices={})
     d["version"] = 2
@@ -2351,13 +2362,44 @@ def t_v2_corpus(ctx):
             check(r.rc == 1 and "budget" in r.err and len(states) > 4, "%s: runs until the budget: exit %d %s" % (name, r.rc, r.err[:300]))
 
 
+def t_v2_window_8k(ctx):
+    """Two raw mice at 8 kHz each: the catch-up window's call log holds the
+    window's 4 frames of their reports (sig.h: a full log makes a past arm
+    fall back, arm_past_full, and the guard stops). A hold's hit is found
+    by the report after its end, so the next state's arms are past arms.
+    At 60 Hz the 1,024-call log of 0.10.0 ran full in frame 12's reports
+    (1,067 calls in 4 frames) and cleared the window; the hold's end at
+    0.199 s comes after that, before frame 12's checkpoint, so that arm
+    fell back (arm_past_full). The right hand's region keeps its reports
+    in the graph."""
+    roles = {"lh": {"type": "position2d_relative", "units": "display_px"}, "rh": {"type": "position2d_relative", "units": "display_px"}}
+    t = {"controls": {"home": {"control": "region", "of": "lh", "radius": 5, "stay_s": 0.199},
+                      "far": {"control": "region", "of": "lh", "radius": 5, "outside": True},
+                      "farr": {"control": "region", "of": "rh", "radius": 5, "outside": True}},
+         "states": [{"name": "a", "steps": [{"on": "s"}], "exits": [{"on": "home", "to": "b"}, {"on": "farr", "to": "end", "outcome": "far"}]},
+                    {"name": "b", "exits": [{"on": "far", "to": "end", "outcome": "far"}, {"after_s": 0.2, "to": "end", "outcome": "done"}]}]}
+    smp = os.path.join(ctx.out, "v2_window_8k.csv")
+    write_samples(smp, [(k / 8000.0, role, 0, 0) for k in range(8000 * 8) for role in ("lh", "rh")])
+    r = Run(ctx, "v2_window_8k", v2base({"t": t}, [{"name": "l", "trial": "t", "rules": ["reps 20"]}], roles=roles),
+            args=["--sim-gain", "lh=1", "--sim-gain", "rh=1", "--samples", smp])
+    arms = {}
+    if r.rc == 0:
+        with open(os.path.join(r.data, "session.json")) as f:
+            arms = json.load(f).get("sig_arms", {})
+    check(r.rc == 0 and [x["outcome"] for x in r.trials] == ["done"] * 20 and arms.get("past_full") == 0 and
+          # the arms are past ones on the 60 Hz grid (on 2 ms frames the
+          # report after the hold's end comes in the same frame's poll)
+          (arms.get("caught_up", 0) >= 10 or rate(ctx) != 60),
+          "two 8 kHz mice: the window's log holds them: exit %d %s %s" % (r.rc, r.err[-400:] if r.rc else "", arms))
+
+
 TESTS = [t_nested, t_if_unless, t_empty_and_zero, t_loop, t_requeue, t_track_ends, t_lookup_keys, t_triggers, t_after_timing, t_outcomes,
          t_method_update, t_seeds, t_refused, t_unused_stim, t_record_data, t_fix_density, t_fix_key_reapply, t_fix_stale_rdk,
          t_fix_timeout_values, t_fix_any_key, t_fix_from_in_if, t_fix_shown_twice, t_fix_vars_data, t_fix_sound_twice, t_fix_rdk_limit,
          t_fix_record_inherit, t_fix_backward_at, t_fix_refusals, t_fix_michelson_order, t_fix_texture_vars, t_fix_walk_budget,
          t_fix_data_set, t_fix_check_all_leaves, t_fix_release_order, t_fix_key_var_reapply,
          t_r2_release_other_template, t_r2_yield_draws_nothing, t_r2_low, t_r2_relaxed, t_r4_leaf_loop_done_track, t_r4_requeue_full,
-         t_r5_wait_final, t_r6_allow_below, t_v2_states, t_v2_until, t_v2_hand, t_v2_rule5, t_v2_review2, t_v2_review3, t_v2_f34, t_v2_ties, t_v2_review4, t_v2_review5, t_v2_findings, t_v2_corpus]
+         t_r5_wait_final, t_r6_allow_below, t_v2_states, t_v2_until, t_v2_hand, t_v2_rule5, t_v2_review2, t_v2_review3, t_v2_f34, t_v2_ties, t_v2_review4, t_v2_review5, t_v2_findings, t_v2_corpus, t_v2_window_8k]
 
 
 def main():

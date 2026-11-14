@@ -25,6 +25,9 @@
 #define V2_FRAME_WAIT ((PL_OUT_WAIT_FRAMES + 12) * 2 > 64 ? (PL_OUT_WAIT_FRAMES + 12) * 2 : 64)
 #define V2_STATE_ROWS 64         /* state rows waiting for their record     */
 #define V2_HISTORY 4096          /* D38's ring for a value read at a time   */
+#define V2_WINDOW_FRAMES 4       /* sig.h's catch-up window, in frames       */
+#define V2_WINDOW_HZ 8000        /* the fastest raw mouse a role may have   */
+#define V2_WINDOW_FRAME_CALLS 16 /* a frame's own calls into the log        */
 #define V2_SAMPLE_MAX_S 1e7      /* a samples file's latest time: 115 days  */
 #define V2_MAX_FRAME_TRACES 256  /* frame traces of a definition: their rows wait */
 #define V2_SAMPLE_MAX_V 1e9      /* a sample's largest coordinate           */
@@ -1459,6 +1462,47 @@ static int v2_samples_load(pl_player* p) {
 
 /* The --sim adapter of each signal role: a raw mouse's counts integrated
  * at --sim-gain units per count (3.19 item 3; G18 has no rig block). */
+/* The window's logs (sig.h catchup_calls, catchup_writes): every role at
+ * V2_WINDOW_HZ over the window's frames and one more (the log holds the
+ * calls since the oldest checkpoint, up to the next frame's), and a frame's
+ * own calls (the frame, settles, arms, sets). A report writes at most one
+ * value to each ring in its role's downstream set (sig.md, Footprint);
+ * a frame's calls at most one to each ring. */
+static void v2_window_size(pl_player* p, const pl_v2* v, int* calls, int* writes) {
+    int64_t per = p->caps.period_ns > 0 ? p->caps.period_ns : 16666667;
+    int64_t span = (int64_t)(V2_WINDOW_FRAMES + 1) * per;
+    int64_t reps = (V2_WINDOW_HZ * span + 999999999) / 1000000000, c, w = 0, rings = 0;
+    int r, i, roles = p->def->n_sigroles > 2 ? p->def->n_sigroles : 2;
+    unsigned char* in_d = (unsigned char*)calloc((size_t)v->nn + 1, 1);
+    for (i = 0; i < v->nn; i++) rings += v->nodes[i].history > 0;
+    for (r = 0; r < p->def->n_sigroles; r++) {
+        int64_t wr = 0, more = 1;
+        int k;
+        for (k = 0; k < v->adapters[r].n_nodes; k++) wr += v->adapters[r].nodes[k].history > 0;
+        if (in_d) {
+            memset(in_d, 0, (size_t)v->nn);
+            for (i = 0; i < v->nn; i++) in_d[i] = v->nodes[i].op == YSIG_OP_ROLE && (int)v->nodes[i].p[0] == r;
+            while (more) {
+                more = 0;
+                for (i = 0; i < v->nn; i++) {
+                    if (in_d[i]) continue;
+                    for (k = 0; k < 4; k++)
+                        if (v->nodes[i].in[k] >= 0 && v->nodes[i].in[k] < v->nn && in_d[v->nodes[i].in[k]]) { in_d[i] = 1; more = 1; break; }
+                }
+            }
+            for (i = 0; i < v->nn; i++) wr += in_d[i] && v->nodes[i].history > 0;
+        } else wr += rings;
+        if (wr > w) w = wr;
+    }
+    free(in_d);
+    c = reps * roles + (int64_t)(V2_WINDOW_FRAMES + 1) * V2_WINDOW_FRAME_CALLS;
+    if (c < 1024) c = 1024;   /* 0.10.0's, the floor */
+    *calls = (int)c;
+    c = reps * roles * (w > 0 ? w : 1) + (int64_t)(V2_WINDOW_FRAMES + 1) * V2_WINDOW_FRAME_CALLS * (rings > 0 ? rings : 1);
+    if (c < 16384) c = 16384;
+    *writes = (int)c;
+}
+
 static int v2_adapters(pl_player* p, pl_v2* v) {
     int i, n = p->def->n_sigroles;
     pl_v2_session* S = p->v2s;
@@ -1723,11 +1767,13 @@ int pl_v2_load(pl_player* p) {
             /* ysig/sig.h 0.6.0: an arm at a state's entry time, after the
              * input the frame fed, runs the graph again from a checkpoint
              * (3.11 rules 2 and 4). Four frames: a response's end can be
-             * final two frames after it; 1,024 calls and 16,384 ring
-             * writes hold four frames of 1 kHz samples with room */
-            d->catchup_frames = 4;
-            d->catchup_calls = 1024;
-            d->catchup_writes = 16384;
+             * final two frames after it. The logs hold the window's
+             * input at the fastest raw mouse (docs/signal_spec.md: 125 to
+             * 8000 Hz) on every role, and at least two: a full log clears
+             * the window, and the next past arm falls back
+             * (arm_past_full; t_v2_window_8k) */
+            d->catchup_frames = V2_WINDOW_FRAMES;
+            v2_window_size(p, v, &d->catchup_calls, &d->catchup_writes);
             /* the sample traces are written at the trial's end: their rows
              * come once no arm can change them, so they are always the
              * reference order's (sig.h, final-only). Derived events feed
