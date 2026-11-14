@@ -1470,12 +1470,14 @@ ran (640.5 million events taken, 373.5 million rows, 10.17 million hits).
   23,500 cases; `test_arm_window` kills it with two samples at one time
   on one device that differ only in tier and `unc_us`. 23, 31, 65, 125, 161, 172, 190, 191 and
   198 follow the code. The second review of the fix round: 177 and 178
-  (a hit output's rise at the found time) are killed again; 252 is now
-  that round's regression B (a standing hit kept at the hit's time) and
-  253 the rise's sources, both killed by `test_hit_out_time`; 254 to 259
-  (C, and calls from callbacks) by `test_arm_review2`. The list: 251 of
-  251 as expected, 244 killed and 7 survived as noted (2026-11-13,
-  4a0584d, 237 s at 4 jobs).
+  (a hit output's rise at the found time) are killed again; 252 is that
+  round's regression B and 253 the rise's sources (`test_hit_out_time`);
+  254 to 259 (C, calls from callbacks, `test_arm_review2`). The
+  semantics of an arm in the past: 260 to 281 (`test_arm_spec`,
+  `test_arm_spec2`, `test_arm_repro`). 213, 214 and 232 are noted for the
+  reviewer's oracle (no unit test reaches them since
+  `test_sig_arm_oracle` left ctest). The list: 273 of 273 as expected
+  (2026-11-13, f2f0e0d, 217 s at 4 jobs).
 
 ### Zones
 

@@ -303,7 +303,7 @@ it says), for each version:
 | `headers.trials`, `headers.gfx`, `headers.experiment` | The new versions (0.8.1, 0.20.0; experiment 0.5.0 from 0.7.0) | The same |
 | `signal_roles` | Not written | One object a signal role: `name`, `adapter` (`sim raw mouse` or `sim positions`), `device` (`--samples` or `none`), `type`, `units`, `per_count` (the `--sim-gain`), `calibration_sha256` (empty) |
 | `recenter_skipped` | Not written | The `recenter` steps that a graph did not apply (D40) |
-| `sig_arms` | Not written | ysp/sig.h's counts of arms in the past, summed over the session's graphs: `caught_up` (run again, exact), `past_off`, `past_far`, `past_full` (fell back to the newest value: inexact), `hits_superseded`, `hits_retracted`, `rows_stale`, `derived_stale` (docs/sig.md, "An arm in the past"). A run stops at a retracted hit or a stale row or event, so those three are 0 in a finished session |
+| `sig_arms` | Not written | ysp/sig.h's counts of arms in the past, summed over the session's graphs: `caught_up` (run again, exact), `past_off`, `past_far`, `past_full` (fell back to the newest value: inexact), `hits_superseded`, `hits_retracted`, `rows_stale`, `derived_stale`, `past_pinned` (a fallback), `ahead_cancelled` (waiting arms a disarm or a barrier cancelled) (docs/sig.md, "An arm in the past: the semantics"). A run stops at a retracted hit, a stale row or event, or any fallback (`past_off`, `past_far`, `past_full`, `past_pinned`), so those are 0 in a finished session |
 
 No other field changes. A version 1 data set keeps every other byte
 (Results).
@@ -436,9 +436,21 @@ which `arm_gen` drops, and the hit at that time that ended the earlier
 arm (sig.h's `arm_hits_superseded`). A hit of another detect, a row or a
 derived event that a run again changes (`arm_hits_retracted`,
 `arm_rows_stale`, `arm_derived_stale`) would be one the player acted on or
-wrote: the player stops by name ("internal guard: a past arm of ...
-changed a hit already taken, or a row or event already written"). `session.json` has the
+wrote; a fallback (`arm_past_pinned`, `_far`, `_full`, `_off`) is not
+sig.h's reference order. The player stops on any of them by name
+("internal guard: a past arm of ... changed a hit already taken, or a
+row or event already written, or fell back"). `session.json` has the
 session's sums in `sig_arms` (version 2 only).
+
+Three more parts follow sig.h's semantics (docs/sig.md): the graphs take
+`rows_final`, so a sample trace's rows come once no arm can change them
+(up to four frames late); `v2_on_row()` takes a trial's rows from its
+reset to the `ysig_flush()` at its end, and the traces are written after
+that flush. When a state ends, each of its controls whose latest arm is
+still ahead of the input (it waits in sig.h) is disarmed, so that arm is
+cancelled, not made for a state that ended; no other control is
+disarmed (a disarm with no arm in its group takes the input time and
+would end the next state's arm of the control made at an earlier time).
 
 A trace's rows go through the data set's writer, as the other rows do: a
 real run's frame thread does not call `write()`. A trace row is wider than

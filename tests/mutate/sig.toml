@@ -1869,9 +1869,7 @@ replace = '''    if (g->journal) { g->busy++; g->journal(g->user, e); g->busy--;
 id = "222"
 name = "a reset no barrier"
 test = "sig"
-expect = "survived"
-note = "Equivalent in results: after a reset its own checkpoint (cover INT64_MIN) is always the newest at or before an arm, so no older one is used; the barrier frees the logs and guards the search."
-why = "v0.6.0 (test_arm_window 7, sig_arm_diff after a reset)."
+why = "v0.6.0 (test_arm_window 7; test_arm_repro H8: a reset makes the held events final)."
 find = '''    if (g->cu) {
         ysig__cu_clear(g->cu, g->cu->replaying ? g->cu->c_pos : g->cu->c_head);
         g->cu->at_bar = 1;

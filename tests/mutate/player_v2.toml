@@ -627,8 +627,6 @@ replace = ''''''
 id = "v2-76"
 name = "no stop when a past arm changes what was taken or written"
 test = "player"
-expect = "survived"
-note = "An internal guard: the player takes changes in time order and arms at a take's time, and sig.h's arm completes the hold met by its time, so no definition reaches it (0 of 25,000 model cases, the fuzz, player_test.py and compare.py; docs/player.md)."
 why = "sig.h 0.6.0's arm_hits_retracted, arm_rows_stale, arm_derived_stale: never silent."
 find = '''    if (bad == v->arm_bad) return 0;'''
 replace = '''    if (bad == v->arm_bad || 1) return 0;'''
@@ -645,8 +643,6 @@ replace = '''    return 0;'''
 id = "v2-78"
 name = "a hit the re-arm completed counted for the new arm"
 test = "player"
-expect = "survived"
-note = "Not reached with sig.h 0.6.0's third-review rule: a past arm goes after the call that found a hit the caller had at or before its time, so a re-arm at its own hit's time queues no copy of that hit. Kept as a guard (vm_rearm_tie passes either way)."
 why = "3.7 region hits count from the arm or later, D20 rule 3 (vm_rearm_tie; the model's s19383)."
 find = '''            if (h[i].t < v->arm_t[h[i].node] || (h[i].t == v->arm_t[h[i].node] && !v->det_now[h[i].node])) hg[i]--;'''
 replace = ''''''
@@ -655,8 +651,6 @@ replace = ''''''
 id = "v2-79"
 name = "a hold detect's hit at its arm's time counted for the arm"
 test = "player"
-expect = "survived"
-note = "Not reached, as v2-78."
 why = "An arm's hits are after its time for a hold (vm_rearm_tie)."
 find = '''            if (h[i].t < v->arm_t[h[i].node] || (h[i].t == v->arm_t[h[i].node] && !v->det_now[h[i].node])) hg[i]--;'''
 replace = '''            if (h[i].t < v->arm_t[h[i].node]) hg[i]--;'''
@@ -706,6 +700,8 @@ replace = ''''''
 id = "v2-85"
 name = "an until's next part disarms the state's exits"
 test = "player"
+expect = "survived"
+note = "Not reached since the player disarms only arms still ahead of the input (ca9bc48): the exits a state arms at its entry are not ahead when an until's next part starts. Kept as a guard."
 why = "A part of a state is not its exit: the state's exits stay armed (the model's s814: the hit ends the until and takes the exit)."
 find = '''        if (v->has_graph && (rs == V2_END || v->rs[rs].first)) v2_disarm_state(v);'''
 replace = '''        if (v->has_graph) v2_disarm_state(v);'''
