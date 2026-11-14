@@ -1781,7 +1781,7 @@ replace = '''        if (1) break;'''
 [[mutant]]
 id = "212"
 name = "a call at the group's time counted as later"
-test = "sig_oracle"
+test = "sig"
 why = "v0.6.0: equal times come first (sig_arm_oracle)."
 find = '''    return c->tr <= t && ysig__fp_meets(g, f, F);'''
 replace = '''    return c->tr < t && ysig__fp_meets(g, f, F);'''
@@ -1789,7 +1789,9 @@ replace = '''    return c->tr < t && ysig__fp_meets(g, f, F);'''
 [[mutant]]
 id = "213"
 name = "the ring slots not put back"
-test = "sig_oracle"
+test = "sig"
+expect = "survived"
+note = "Killed by sig_arm_oracle until its retirement from ctest (it encodes 0.6.0's rule before the semantics); no unit test reaches it. For the reviewer's oracle, written from docs/sig.md, once it is in the tree."
 why = "v0.6.0: the undo log (sig_arm_oracle: a ring entry after a call)."
 find = '''        *u->at = u->old;'''
 replace = '''        (void)u;'''
@@ -1797,7 +1799,9 @@ replace = '''        (void)u;'''
 [[mutant]]
 id = "214"
 name = "an equal-time overwrite not in the undo log"
-test = "sig_oracle"
+test = "sig"
+expect = "survived"
+note = "Killed by sig_arm_oracle until its retirement from ctest (it encodes 0.6.0's rule before the semantics); no unit test reaches it. For the reviewer's oracle, written from docs/sig.md, once it is in the tree."
 why = "v0.6.0: the ring's equal-time replace (sig_arm_oracle: a ring entry after a call)."
 find = '''        if (v->t == last->t) { ysig__undo_note(g, last); *last = *v; return; }'''
 replace = '''        if (v->t == last->t) { *last = *v; return; }'''
@@ -1958,7 +1962,9 @@ replace = '''    if (d->catchup_frames < 0 || d->catchup_frames > 80 ||'''
 [[mutant]]
 id = "232"
 name = "the hit matched on its lanes only"
-test = "sig_oracle"
+test = "sig"
+expect = "survived"
+note = "Killed by sig_arm_oracle until its retirement from ctest (it encodes 0.6.0's rule before the semantics); no unit test reaches it. For the reviewer's oracle, written from docs/sig.md, once it is in the tree."
 why = "v0.6.0: a hit's value is all of it (sig_arm_oracle: a hit B has, A not)."
 find = '''!memcmp(&l->h.value, &h->value, sizeof h->value)) {'''
 replace = '''!memcmp(l->h.value.v, h->value.v, sizeof h->value.v)) {'''
@@ -1983,8 +1989,6 @@ replace = '''            if (0) keep.arm_hits_superseded++;'''
 id = "235"
 name = "an arm does not complete the hold met by its time"
 test = "sig"
-expect = "survived"
-note = "Equivalent in a run again: ysig__arm_made() meets the same hold first (before the new arm's hits start), so removing the arm's own call changes nothing the tests see. Kept: it is the call that a plain arm makes."
 why = "v0.6.0 (test_arm_window, test_arm_review 2)."
 find = '''    ysig__settle_det(g, node, ts < t_ns ? ts : t_ns, 1);'''
 replace = '''    (void)ts;'''
@@ -2000,7 +2004,7 @@ replace = '''        if (1) {'''
 [[mutant]]
 id = "237"
 name = "a later logged arm of the detect keeps the new arm's hits live"
-test = "sig_oracle"
+test = "sig"
 expect = "survived"
 note = "Not reached: the oracle at 30,000 cases (seed 3) gives the baseline's 3 wrong cases with it too. Kept with this note; a later logged arm of the same detect with a time after the inserted one and before its hits is rare in the generator."
 why = "v0.6.0: a later logged arm's hits are its own, which the caller had."
@@ -2026,7 +2030,7 @@ replace = '''    return ysig__fp_meets(g, f, F) && c->tr <= t && !ysig__is_state
 [[mutant]]
 id = "241"
 name = "a group's footprint without its state calls"
-test = "sig_oracle"
+test = "sig"
 why = "Rule 2: an input that meets a set of the group comes before it (r11's unrelated set, a feed of its node)."
 find = '''    for (s = from; s < cu->c_head; s++) {
         (void)ysig__fp_entry(g, &cu->calls[s % (uint64_t)cu->C], f);

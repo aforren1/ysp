@@ -205,19 +205,24 @@
  *   from the arm (p12 entry arm, 0: a hand already on the start), or
  *   waits for the test to fail and come true again (entry fresh, 1).
  *   AN ARM IN THE PAST (v0.6.0): ysig_arm() at a time t before input the
- *   graph already has since its last reset (a sample, a frame's onset or
- *   a ysig_settle() later than t). The guarantee, with a window: the
- *   result is that of the same calls with the arm made at its place in
- *   time order, input kept in call order. The place is after every
- *   earlier call that must come first: input at or before t (a late
- *   report from another device too), ysig_set(), ysig_set_data(),
- *   ysig_disarm(), a reset, and a ysig_recenter() or ysig_arm() at or
- *   before t; input, recenters and arms later than t go after it. At its
- *   place the arm first meets its detect's hold up to t (input up to t is
- *   known: later input exists), so a hit the earlier arm met by t stays.
- *   An arm ahead of the newest input (t later than it) is made at once on
- *   the input known: the earlier arm's hold is met only up to that input,
- *   not on unfed time.
+ *   graph already has (N: the newest input's time since the last reset,
+ *   or the reset's time). The result is that of a reference order R of
+ *   the same calls (docs/sig.md, "An arm in the past: the semantics"):
+ *   input keeps call order; the state calls made with no input between
+ *   them and an arm (set, set_data, disarm, recenter) are its group and
+ *   move with it; a past group goes as one block after the last call that
+ *   must come before it: a barrier (reset, ysig_flush()), or a call at or
+ *   before t whose footprint (the nodes it can change) meets the
+ *   group's. Input that shares no node with the group passes it. A group
+ *   placed after a later input it shares a node with (a late report of
+ *   its own input) is pinned, counted (arm_past_pinned). An arm ahead of
+ *   the input (t later than N) waits, its group with it, until a call
+ *   later than t that meets it (input, or a state call at N); a disarm
+ *   of its detect at or before t cancels it, a barrier cancels every
+ *   waiting arm (arm_ahead_cancelled). At its place an arm first meets
+ *   its detect's hold up to t, then arms; so does a disarm at its time.
+ *   A change an arm makes to a detect's output (a fall, a rise) goes
+ *   through every user as a sample's value.
  *   With desc.catchup_frames above 0 the graph keeps a window: a
  *   checkpoint of its state after each frame and each reset (the last
  *   catchup_frames of them), every call since the oldest, and the old
@@ -240,12 +245,14 @@
  *   ysig_derived() do not get the window's rows and events again; a
  *   change in any of their columns is counted (arm_rows_stale,
  *   arm_derived_stale), and the run again's lost derived events are not.
- *   A reset is a barrier: an arm after it is never placed before it. An
- *   arm whose place is before the window's oldest checkpoint, or after
- *   its logs ran full (catchup_calls calls, catchup_writes ring writes),
- *   tests the newest value as 0.4.1 did, counted (arm_past_far,
- *   arm_past_full); with no window (catchup_frames 0, a zeroed desc) the
- *   same, counted in arm_past_off. ysig_arm() from a callback (on_row,
+ *   With desc.rows_final (derived_final) they come only once no arm can
+ *   change them, up to catchup_frames frames late, and are R's. A reset
+ *   and ysig_flush() are barriers: no arm goes before one. An arm whose
+ *   place is before the window's oldest checkpoint, or after its logs ran
+ *   full (catchup_calls calls, catchup_writes ring writes), is made at its
+ *   call on the input seen, counted (arm_past_far, arm_past_full); with no
+ *   window (catchup_frames 0, a zeroed desc) the same, counted in
+ *   arm_past_off. ysig_arm() from a callback (on_row,
  *   the journal, a custom op) during another call is refused and counted
  *   (arm_reentry); so is any other call that changes the graph
  *   (call_reentry): it would run inside that call but be logged after
@@ -412,6 +419,14 @@
  *          ysig_set() and every other call that changes the graph are
  *          refused from a callback, custom ops included
  *          (ysig_stats.call_reentry, a struct change).
+ *          The semantics written for an independent oracle
+ *          (docs/sig.md): groups, footprints, the reference order's
+ *          placement, pinned groups (arm_past_pinned), arms ahead of the
+ *          input that wait and their cancels (arm_ahead_cancelled), an
+ *          arm's change through every user, the input time after a reset
+ *          its time, a disarm's hold, final-only rows and derived events
+ *          (desc.rows_final, derived_final, catchup_rows), ysig_flush()
+ *          (YSIG_J_FLUSH), images that keep 64 hits (struct changes).
  *          Stats arm_caught_up, arm_past_off, _far, _full,
  *          arm_hits_retracted, arm_hits_superseded (the armed detect's own
  *          hits at or after the arm's time: its earlier arm's),

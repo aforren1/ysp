@@ -448,11 +448,14 @@ definition. A zero field means the row's `def`.
 
 ### An arm in the past: the semantics
 
-Status: specification for the next change (the second review of the
-0.6.0 fix round, 2026-11-13). The header does not follow it yet; the
-last subsection lists where 0.6.0 as built differs. An oracle can be
+Status: written for the second review of the 0.6.0 fix round
+(2026-11-13), amended at the reviewer's gaps (b6676f4), and built in
+the header (384eeef, a068278) and the player (f9fad11). The last
+subsection lists where 0.6.0 before it differed. An oracle can be
 written from this section and the graph's other rules alone: it runs a
-reference sequence of the same calls on a graph with no window.
+reference sequence of the same calls on a graph with no window. Where
+the design note "An arm in the past (v0.6.0)" below disagrees, this
+section is the rule.
 
 #### Terms
 
@@ -827,7 +830,7 @@ change the player meets is the waiting itself: 33,277 ahead arms in the
 harness and 13 in `player_test.py`, every one at most 17 ms ahead, and
 118 in the harness that a barrier would cancel.
 
-#### Where 0.6.0 as built differs
+#### Where 0.6.0 before this section differed
 
 1. No groups: a set, set_data, disarm or recenter made before an arm
    always comes before it, so an arm after one of them made after input

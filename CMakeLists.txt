@@ -757,7 +757,9 @@ if(YSP_BUILD_TESTS)
     target_compile_definitions(test_sig_arm_oracle PRIVATE YSIG_ARM_REENTRY_COUNTED)
     # test_sig_arm_diff is retired from ctest: its B moves only the last arm; the
     # oracle (time order for every arm) replaces it (docs/sig.md)
-    add_test(NAME test_sig_arm_oracle COMMAND test_sig_arm_oracle 3000)
+    # test_sig_arm_oracle is retired from ctest: its B encodes 0.6.0's rule
+    # before the semantics of docs/sig.md; the reviewer's oracle, written
+    # from that text, takes its place
 endif()
 if(TARGET SDL3::SDL3 AND YSP_BUILD_EXAMPLES)
     # The jsPsych-style trials of examples/response/ (docs/response.md,
