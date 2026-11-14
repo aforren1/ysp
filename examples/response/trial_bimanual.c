@@ -185,7 +185,7 @@
 #define N_SINES       7
 #define MAX_BLOCKS    64
 #define MAX_REACHES   4096
-#define FRAME_CAP     (46 * 240 + 256)   /* 46 s at 240 Hz                    */
+#define FRAME_CAP     (46 * 1000 + 256)  /* 46 s at 1 kHz (fast displays: --sim-hz) */
 #define TRACE_CAP     32768              /* 16 s of two 1 kHz mice; 1.5 MB    */
 #define RING_CAP      4096               /* per hand: 4 s at 1 kHz            */
 /* The signal path: the hands, the mapping, the cursor, the target */

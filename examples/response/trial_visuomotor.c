@@ -781,6 +781,7 @@ static bool sim_on, sim_virtual;
 static int sim_reached, sim_failed;
 static yrsp_input sim_ev[SIM_N];
 static int n_sim, sim_next;
+static int64_t sim_half_frame;   /* the early flick's room before the target */
 static long sim_kx, sim_ky;
 static double sim_x[MAX_TRIALS + 1], sim_rot[MAX_TRIALS], hand_dev, model_xm, model_max;
 static int sim_fb[MAX_TRIALS];
@@ -838,15 +839,26 @@ static void sim_return(int64_t t_end) {
  * px, 1/3 of the radius and the radius, from the lattice in double: the
  * samples the program must find. */
 static void sim_reach(int64_t t_go, double deg, int early, double level, int64_t* t) {
-    double a = deg * VMA_PI / 180, D = 1.25 * radius, g = opt.gain;
-    int j, n = early ? (int)ceil(D / 10) : (int)(SIM_MT_S * 1000);
+    double a = deg * VMA_PI / 180, D = 1.25 * radius, g = opt.gain, p0 = 0;
+    int64_t t0 = t_go;
+    int j, j0 = 1, n = early ? (int)ceil(D / 10) : (int)(SIM_MT_S * 1000);
     n_sim = sim_next = 0;
     t[0] = t[1] = t[2] = 0;
-    for (j = 1; j <= n; j++) {
-        double u = (double)j / n, s = early ? u : u * u * u * (10 - 15 * u + 6 * u * u), p = D * s;
+    if (early && sim_half_frame > 0 && sim_half_frame < YRT_MS(4)) {
+        /* a fast display (tests: --sim-hz): the target is up half a frame
+         * after the hold, too soon for 10 px per ms to cross the onset
+         * distance, so the flick's first report is past it at a quarter
+         * frame; the rest goes on at 10 px per ms */
+        p0 = 1.5 * onset_px;
+        t0 = t_go + sim_half_frame / 2;
+        n = (int)ceil((D - p0) / 10);
+        j0 = 0;
+    }
+    for (j = j0; j <= n; j++) {
+        double u = (double)j / n, s = early ? u : u * u * u * (10 - 15 * u + 6 * u * u), p = p0 + (D - p0) * s;
         long kx = lround(p * cos(a) / g), ky = lround(-p * sin(a) / g);
         double r = g * sqrt((double)kx * kx + (double)ky * ky);
-        int64_t tj = t_go + YRT_MS(j);
+        int64_t tj = t0 + YRT_MS(j);
         if (!t[0] && r >= level) t[0] = tj;
         if (!t[1] && r >= radius / 3.0) t[1] = tj;
         if (!t[2] && r >= radius) t[2] = tj;
@@ -881,6 +893,7 @@ static void sim_trial_start(const yscr_frame* f, int trial, bool first) {
         return;
     }
     t_end = f->onset + YRT_MS(400);
+    sim_half_frame = f->period / 2;
     if (trial == SIM_EARLY && f->period > 0) {
         /* the hold ends half a frame before a vblank, so the flick has
          * that long to cross the onset distance before the target */

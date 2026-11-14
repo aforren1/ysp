@@ -341,9 +341,10 @@ def do_oddball(a, ex):
     summary = [ln for ln in c.splitlines() if "triggers" in ln]
     report.append(("device_trigger_flip", summary[-1] if summary else "(no summary)", "n/a", "the C program's own count of writes at flips, for the same mechanism"))
     soa = [float(r["soa_s"]) for r in rows]
-    frame_grid = all(abs(s * 60 - round(s * 60)) < 1e-6 for s in soa)
+    hz = float(HZ) if HZ is not None else 60.0
+    frame_grid = all(abs(s * hz - round(s * hz)) < 1e-6 for s in soa)
     soa_ok = frame_grid and min(soa) >= 0.8 and max(soa) <= 1.2
-    report.append(("soa_s on the display's frames (rate=display)", "%d values, 0.8 to 1.2 s" % len(soa), "exact" if soa_ok else "FAIL", "jitter snapped to 60 Hz"))
+    report.append(("soa_s on the display's frames (rate=display)", "%d values, 0.8 to 1.2 s" % len(soa), "exact" if soa_ok else "FAIL", "jitter snapped to %g Hz" % hz))
     if not soa_ok:
         bad += 1
     print_report("Oddball EEG (trigger_flip.c: not comparable column for column)", report)
@@ -589,15 +590,27 @@ def do_bimanual(a, ex):
         for pc, cc, sc in (("t_s", "t_s", None), ("goal_x", "target_x", 1.0), ("goal_y", "target_y", -1.0), ("cursor_x", "cursor_x", 1.0),
                            ("cursor_y", "cursor_y", -1.0), ("left_x", "l_x", 1.0), ("left_y", "l_y", -1.0), ("right_x", "r_x", 1.0),
                            ("right_y", "r_y", -1.0), ("inside", "inside", 1.0)):
-            d = 0
+            d = half = 0
             for r, c in zip(fr, tr):
                 v = float(r[pc]) - t0[r["trial_index"]] if sc is None else float(r[pc]) * sc
                 if sc is None:
                     ok = abs(v - float(c[cc])) <= 0.5e-6 + 1e-9   # the C file's 6 decimals, rounded either way at a half
                 else:
                     ok = same_at(v, c[cc])
+                    # the program's float against the player's double, a
+                    # value at a half of the C file's last decimal: it
+                    # rounds the other way (F25)
+                    if not ok and abs(v - float(c[cc])) <= 0.5 * 10 ** -dec_of(c[cc]) + 1e-6 and \
+                            abs(abs(v * 10 ** dec_of(c[cc])) % 1 - 0.5) * 10 ** -dec_of(c[cc]) < 2e-6:   # a float's step near 10
+                        half += 1
                 d += 0 if ok else 1
             why = {"t_s": "minus the trial's first row; the C file's 6 decimals", "goal_x": "the program's target at the planned onset, the player's at the record's: one time on the simulated display (3.18 lists them as different on a real one)"}.get(pc, "y with a sign change" if sc == -1.0 else "")
+            if d and half == d:
+                # 0 rows at 60 Hz (33,120 rows); a faster display has more
+                # rows, so more values land at a half
+                report.append(("frames.csv %s <- --track %s" % (pc, cc), "%d/%d differ" % (d, len(fr)), "format",
+                               "%s; every one a value at a half of the C file's last decimal that rounds the other way (the program's float, the player's double, F25)" % (why or "equal")))
+                continue
             report.append(("frames.csv %s <- --track %s" % (pc, cc), "%d/%d differ" % (d, len(fr)), "exact" if not d else "FAIL", why or "equal"))
             bad += 1 if d else 0
     print_report("Two-mouse tracking and reaching (trial_bimanual.c --design-timing; the player's draws, the program's hands)", report)
