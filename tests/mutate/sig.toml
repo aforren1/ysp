@@ -1775,7 +1775,7 @@ id = "211"
 name = "the arm placed at the call, not after the last call that must come first"
 test = "sig"
 why = "v0.6.0 (test_arm_window 2)."
-find = '''        if (ysig__must_before(g, &cu->calls[(pos - 1) % (uint64_t)cu->C], t, F)) break;'''
+find = '''        if (ysig__must_before(g, c, t, F)) break;'''
 replace = '''        if (1) break;'''
 
 [[mutant]]
@@ -2030,22 +2030,17 @@ id = "241"
 name = "a group's footprint without its state calls"
 test = "sig"
 why = "Rule 2: an input that meets a set of the group comes before it (r11's unrelated set, a feed of its node)."
-find = '''    for (s = from; s < cu->c_head; s++) {
-        (void)ysig__fp_entry(g, &cu->calls[s % (uint64_t)cu->C], f);
-        for (w = 0; w < g->dw; w++) F[w] |= f[w];
-    }'''
-replace = '''    for (s = from; s < from; s++) {
-        (void)ysig__fp_entry(g, &cu->calls[s % (uint64_t)cu->C], f);
-        for (w = 0; w < g->dw; w++) F[w] |= f[w];
-    }'''
+find = '''        for (w = 0; w < g->dw; w++) F[w] |= f[w];
+        ng++;'''
+replace = '''        ng++;'''
 
 [[mutant]]
 id = "242"
 name = "a waiting arm made before an input at its own time"
 test = "sig"
 why = "Rule 3: an input at the arm's time comes before it (it waits for one later)."
-find = '''            if (w->a[k].t >= t) continue;'''
-replace = '''            if (w->a[k].t > t) continue;'''
+find = '''            if (incl ? w->a[k].t > t : w->a[k].t >= t) continue;'''
+replace = '''            if (incl ? w->a[k].t > t : w->a[k].t > t) continue;'''
 
 [[mutant]]
 id = "243"
@@ -2231,8 +2226,8 @@ id = "265"
 name = "a waiting group's state calls stay where made"
 test = "sig"
 why = "Rule 3: an ahead group's calls wait with its arm (test_arm_spec: the set waits, then goes in before the barrier)."
-find = '''    int stays = w->gap_n > 0 && (!cu || cu->grp_bad || nc == 0);'''
-replace = '''    int stays = w->gap_n > 0;'''
+find = '''    stays = w->gap_n > 0 && (!cu || cu->grp_bad || nc == 0);'''
+replace = '''    stays = w->gap_n > 0;'''
 
 [[mutant]]
 id = "266"
@@ -2283,8 +2278,11 @@ id = "271"
 name = "a past group not moved to its place"
 test = "sig"
 why = "Rule 2: the group and its arm go as one block to their place (test_arm_spec r11 and r11b)."
-find = '''    ysig__calls_rev(cu, pos, end);'''
-replace = '''    (void)0;'''
+find = '''        for (q = wr; q > pos; q--) cu->calls[(q - 1 + (uint64_t)nb) % (uint64_t)cu->C] = cu->calls[(q - 1) % (uint64_t)cu->C];
+        for (w = 0; w < nb; w++) cu->calls[(pos + (uint64_t)w) % (uint64_t)cu->C] = blk[w];
+        cu->arm_pos = pos + (uint64_t)nb - 1;'''
+replace = '''        for (w = 0; w < nb; w++) cu->calls[(wr + (uint64_t)w) % (uint64_t)cu->C] = blk[w];
+        cu->arm_pos = wr + (uint64_t)nb - 1;'''
 
 [[mutant]]
 id = "272"
@@ -2370,3 +2368,27 @@ why = "S1: it waits with the arm (test_arm_repro, window 0)."
 find = '''        for (d = 0; d < w->n_dis && w->nc < YSIG__WAIT_CALLS; d++) {'''
 replace = '''        ysig__gap_disarms(g, g->t_cover, 1);
         for (d = 0; d < w->n_dis && w->nc < YSIG__WAIT_CALLS; d++) {'''
+
+[[mutant]]
+id = "282"
+name = "the waiting groups an ahead group let in not put back"
+test = "sig"
+why = "H9: the group waits whole, its triggers too (test_arm_repro)."
+find = '''            if (i < w->n) continue;   /* this one is back already */'''
+replace = '''            continue;'''
+
+[[mutant]]
+id = "283"
+name = "a waiting group placed in a gap ends the gap"
+test = "sig"
+why = "H9: a waiting group let in by a state call is not that gap's group; the gap stays open (test_arm_repro: the offset's set waits with the group)."
+find = '''    if (!st && !cu->placing) cu->grp_open = cu->grp_bad = 0;'''
+replace = '''    if (!st) cu->grp_open = cu->grp_bad = 0;'''
+
+[[mutant]]
+id = "284"
+name = "an arm call lets in only earlier waiting groups"
+test = "sig"
+why = "S3: at or before its time (test_arm_repro)."
+find = '''        ysig__wait_fire(g, t_ns < g->t_cover ? t_ns : g->t_cover, f, 1);   /* S3: at or before */'''
+replace = '''        ysig__wait_fire(g, t_ns < g->t_cover ? t_ns : g->t_cover, f, 0);   /* S3: at or before */'''
