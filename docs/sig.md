@@ -551,10 +551,16 @@ R is built call by call, in call order:
    call, whose time is later than `τ` and whose footprint meets `F(G)`,
    or right before a barrier. For this test a state call's time is `N`
    at its call (input that does not meet `F(G)` can move `N` past `τ`),
-   and an arm call's is the smaller of its `t` and `N`: a present or
-   ahead arm lets in an earlier waiting group it meets (it is at `N`), a
-   past arm only one earlier than its own time (E's example: the arm at
-   40 ms does not let in the one waiting at 60 ms). An arm call lets in
+   and an arm call's is the smaller of its `t` and `N`: a present arm
+   lets in an earlier waiting group it meets (it is at `N`), a past arm
+   only one earlier than its own time (E's example: the arm at 40 ms
+   does not let in the one waiting at 60 ms). An ahead arm lets in
+   nothing at its call. It goes into R when its group goes in, and lets
+   in then, at its `τ`. Reason: the ahead arm is not in R at its call.
+   Letting a group in there put that group's calls into R before input
+   that must come before them (the reviewer's H12: a waiting arm's set
+   made at a later ahead arm's call, before input reached the waiting
+   arm's time). An arm call lets in
    a waiting group it meets whose `τ` is at or before that time: at
    equal times rule 2 puts the earlier call first (S3). A state call's
    letting in takes effect only when the call itself goes into R: a
