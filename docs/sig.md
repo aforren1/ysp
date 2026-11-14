@@ -550,7 +550,11 @@ R is built call by call, in call order:
    end of R right before the first later call, an input call or a state
    call, whose time is later than `τ` and whose footprint meets `F(G)`,
    or right before a barrier. For this test a state call's time is `N`
-   at its call (input that does not meet `F(G)` can move `N` past `τ`).
+   at its call (input that does not meet `F(G)` can move `N` past `τ`),
+   and an arm call's is the smaller of its `t` and `N`: a present or
+   ahead arm lets in an earlier waiting group it meets (it is at `N`), a
+   past arm only one earlier than its own time (E's example: the arm at
+   40 ms does not let in the one waiting at 60 ms).
    Waiting groups go in by `τ`, then call order. A group that never
    meets such a call is never made. A state call with a time at or
    before `τ` goes before the group: a `ysig_set()` of its detect then
@@ -559,8 +563,9 @@ R is built call by call, in call order:
      before `τ` cancels the waiting arms of d made before it. One whose
      time is later than `τ` goes after the arm, in time order (the arm
      goes in first, by the test above). The cancel is decided when the
-     disarm's time is known: at its group's arm, or at the end of its
-     gap (the next input call or barrier);
+     disarm goes into R: at its group's arm, at the end of its gap (the
+     next input call or barrier), or, in a waiting group, when that group
+     goes in. The final hits are the same either way;
    - a barrier cancels every waiting arm. The other calls of a waiting
      group go into R right before the barrier, without the arm.
 
@@ -576,10 +581,12 @@ R is built call by call, in call order:
    as above: both are made, by `τ`.
 4. Input calls keep their call order in R. A barrier is never crossed.
 
-Without a window an ahead group's state calls cannot be taken back once
-made: they stay where made, and only the arm waits (counted in
-`arm_past_off`; with a window whose log did not keep one of them, in
-`arm_past_full`). At most 32 arms and 64 group calls wait; an arm with
+Without a window an ahead group's set, set_data and recenter calls
+cannot be taken back once made: they stay where made, and the arm waits
+(counted in `arm_past_off`; with a window whose log did not keep one of
+them, in `arm_past_full`). A disarm can wait: it takes effect at the end
+of its gap (below), so in an ahead group it waits with the arm, with or
+without a window. At most 32 arms and 64 group calls wait; an arm with
 no room is made at once on the input known, counted in `arm_past_full`.
 
 Equal times: a call at `τ` that must come before G (rule 2) does. So an
@@ -643,7 +650,12 @@ A disarm at its time (its group's, else `N` at its call) first meets
 its detect's hold up to that time, as rule 1 of the arm, then ends the
 arm. Reason: the exit that a hit causes disarms the control at the
 hit's time; a hold that ended then is the hit that caused the exit, and
-must stand.
+must stand. A disarm takes effect at the end of its gap: at its group's
+arm, at the next input call, or at a barrier (in a waiting group, when
+the group goes in). Until then the detect stays armed. Reason: its time
+is known only then, and a graph with no window and one with a window
+must agree (a disarm made at its call with `N` would meet a hold that
+its group's earlier time does not).
 
 #### A change at an arm reaches every node (D)
 
@@ -695,7 +707,12 @@ get them depends on the desc:
   the window, so it falls back (`arm_past_far`, `arm_past_full`). A
   barrier makes everything before it final, and `ysig_flush()` (new: a
   barrier that resets nothing) does the same between trials or at the
-  end of a session. In this mode `arm_rows_stale` (or
+  end of a session. Final derived events go to the 64-event queue as it
+  has room; the rest wait in the held buffer, final, and each
+  `ysig_derived()` call refills the queue, so a caller that drains until
+  0 loses none (a barrier can make hundreds final at once). Reason: no
+  more arena than the held buffer; the queue's 64 stay the limit between
+  drains, as for events made at once. In this mode `arm_rows_stale` (or
   `arm_derived_stale`) cannot occur, and every row (or event) handed
   out is R's. Latency: up to `catchup_frames` frames, as the oldest
   checkpoint is that many frames old (with the logs full, less). The
