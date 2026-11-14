@@ -613,7 +613,7 @@ id = "v2-74"
 name = "no settle before a response's end"
 test = "player"
 expect = "survived"
-note = "Equivalent since the check round (2026-11-14): v2_resp_states() runs v2_timed_to() up to the response's time with the response offered, and it settles at that time and drains the hits too. Kept as a guard: the settle before the loop is the one a change to v2_timed_to() would leave."
+note = "Equivalent since the check round (2026-11-14): v2_resp_states() next runs v2_timed_to() with the response offered, which with the trial running settles at the response's time (not after the onset) and drains the hits before it takes anything, and its early return on a false ytl_window() is unreachable there, since the player never stops or pauses PL_BASE_TRIAL (anchored at each trial's start, before any response) and base times saturate only past 2^62 ns. Kept as a guard against a change to v2_timed_to()."
 why = "Rule 4 (vm_settle): a hold met before a response's end."
 find = '''            if (ysig_settle(&v->g, t) == 0) rc = v2_hits(p, v, f);'''
 replace = ''''''
