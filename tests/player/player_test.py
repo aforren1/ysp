@@ -2193,7 +2193,7 @@ def t_v2_findings(ctx):
     sj = json.load(open(os.path.join(r.data, "session.json"))) if r.rc == 0 else {}
     arms = sj.get("sig_arms", {})
     check(sorted(arms) == ["ahead_cancelled", "caught_up", "derived_stale", "hits_retracted", "hits_superseded", "late_input", "past_far",
-                           "past_full", "past_off", "past_pinned", "rows_stale"] and
+                           "past_full", "past_off", "past_pinned", "rows_stale", "unverified"] and
           arms["hits_retracted"] == arms["rows_stale"] == arms["derived_stale"] == arms["past_far"] == arms["past_full"] ==
           arms["past_off"] == arms["past_pinned"] == arms["late_input"] == 0,
           "session.json sig_arms: %s" % arms)

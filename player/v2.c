@@ -3930,6 +3930,7 @@ int pl_v2_arm_counts(pl_player* p, int64_t c[PL_ARM_COUNTS]) {
         c[8] += st.arm_past_pinned;
         c[9] += st.arm_ahead_cancelled;
         c[10] += S->t[i]->n_late;
+        c[11] += st.arm_unverified;
         n++;
     }
     return n;
@@ -3937,7 +3938,8 @@ int pl_v2_arm_counts(pl_player* p, int64_t c[PL_ARM_COUNTS]) {
 
 int pl_v2_session_end(pl_player* p, yjs_arena* a) {
     static const char* const name[PL_ARM_COUNTS] = { "caught_up", "past_off", "past_far", "past_full", "hits_superseded", "hits_retracted",
-                                                     "rows_stale", "derived_stale", "past_pinned", "ahead_cancelled", "late_input" };
+                                                     "rows_stale", "derived_stale", "past_pinned", "ahead_cancelled", "late_input",
+                                                     "unverified" };
     int64_t c[PL_ARM_COUNTS];
     yjs_value* o;
     int i;

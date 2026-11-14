@@ -740,7 +740,7 @@ int  pl_v2_session_end(pl_player* p, yjs_arena* a);
 /* ysp/sig.h's arm counts summed over the session's graphs: caught up, past
  * off, far, full, hits superseded, retracted, rows stale, derived stale.
  * Returns the number of graphs. */
-#define PL_ARM_COUNTS 11
+#define PL_ARM_COUNTS 12
 int  pl_v2_arm_counts(pl_player* p, int64_t c[PL_ARM_COUNTS]);
 int  pl_v2_streams(pl_player* p);
 /* The running template's version 2 runtime, or none (a version 1 template). */

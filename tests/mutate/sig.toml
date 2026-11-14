@@ -2497,9 +2497,11 @@ id = "295"
 name = "the equal-time later group not let in after the arm"
 test = "sig"
 why = "H16, S3: the arm still lets it in, right after itself (test_arm_repro H16, no window: D2 hits)."
-find = '''        ysig__arm_made(g, a.node, a.t, a.t, logged ? g->cu->c_head - 1 : UINT64_MAX);
+find = '''        ysig__cas_pop(g, ci);
+        ci = -1;
         ysig__wait_fire(g, a.t, f, UINT64_MAX);'''
-replace = '''        ysig__arm_made(g, a.node, a.t, a.t, logged ? g->cu->c_head - 1 : UINT64_MAX);'''
+replace = '''        ysig__cas_pop(g, ci);
+        ci = -1;'''
 
 [[mutant]]
 id = "296"
@@ -2516,3 +2518,97 @@ test = "sig"
 why = "Residual 1650: it goes in at the arm's place; at the end it pinned the group after later input (test_arm_repro)."
 find = '''        if (cu && t_ns < g->t_cover && !cu->grp_open && !cu->replaying && cu->n_ck) {'''
 replace = '''        if (0) {'''
+
+[[mutant]]
+id = "298"
+name = "exactness: no late report counted (condition 3)"
+test = "sig"
+why = "Condition 3: an input earlier than an arm in R that meets it, made after it (test_arm_exact 3)."
+find = '''        if (t < w->lr[i].t && (!f || ysig__fp_meets(g, f, w->lr[i].F))) ysig__unv(g, w->lr[i].gid);'''
+replace = '''        if (0) ysig__unv(g, w->lr[i].gid);'''
+
+[[mutant]]
+id = "299"
+name = "exactness: a late report at the arm's time counted"
+test = "sig"
+why = "Condition 3 as decided: an input at the arm's time is not a late report (test_arm_exact 3, the 25 ms control)."
+find = '''        if (t < w->lr[i].t && (!f || ysig__fp_meets(g, f, w->lr[i].F))) ysig__unv(g, w->lr[i].gid);'''
+replace = '''        if (t <= w->lr[i].t && (!f || ysig__fp_meets(g, f, w->lr[i].F))) ysig__unv(g, w->lr[i].gid);'''
+
+[[mutant]]
+id = "300"
+name = "exactness: a group let in inside another's block not counted"
+test = "sig"
+why = "Condition 1 (test_arm_exact: x inside y's block)."
+find = '''        int bad = c->inside;
+        if (c->cancelled && !c->ncalls) continue;'''
+replace = '''        int bad = 0;
+        if (c->cancelled && !c->ncalls) continue;'''
+
+[[mutant]]
+id = "301"
+name = "exactness: L need not meet the arm"
+test = "sig"
+why = "Condition 2 (a): L meets F_a(G) (test_arm_exact 2 (a): device 3 lets in d1's group by its set)."
+find = '''                (!w->cas_all && (!ysig__fp_meets(g, w->cas_f, c->F) || !ysig__fp_meets(g, w->cas_f, c->Fa))) || !ysig__fp_any(g, c->Fa)) bad = 1;'''
+replace = '''                (!w->cas_all && !ysig__fp_meets(g, w->cas_f, c->F)) || !ysig__fp_any(g, c->Fa)) bad = 1;'''
+
+[[mutant]]
+id = "302"
+name = "exactness: a later group's state call between G and its L not counted"
+test = "sig"
+why = "Condition 2 (b) in a cascade (test_arm_exact: d2's group's set of d1)."
+find = '''            for (j = c->last + 1; !bad && j < w->n_cc; j++) {'''
+replace = '''            for (j = w->n_cc; !bad && j < w->n_cc; j++) {'''
+
+[[mutant]]
+id = "303"
+name = "exactness: an arm alone between G and L counted"
+test = "sig"
+why = "Condition 2 (b)'s exception in a cascade (test_arm_exact: d2's arm alone)."
+find = '''                    (w->cas_all || ysig__fp_meets(g, w->cas_f, fx)) && w->cas_t > x->t) continue;'''
+replace = '''                    (w->cas_all || ysig__fp_meets(g, w->cas_f, fx)) && w->cas_t > x->t && 0) continue;'''
+
+[[mutant]]
+id = "304"
+name = "exactness: a cancelled arm with no other call counted"
+test = "sig"
+why = "Nothing of it goes into R (test_arm_exact: the flush's control)."
+find = '''        if (c->cancelled && !c->ncalls) continue;   /* nothing of it goes into R */'''
+replace = ''''''
+
+[[mutant]]
+id = "305"
+name = "exactness: a past group that waits at its place not tested"
+test = "sig"
+why = "Condition 2 for a past group: N(G) below its time (test_arm_exact: the window's 2 (b), and 3's exact arm)."
+find = '''        if (!bad && N < t) {
+            /* waits at its place: L in R, meeting the arm, no barrier and'''
+replace = '''        if (0) {
+            /* waits at its place: L in R, meeting the arm, no barrier and'''
+
+[[mutant]]
+id = "306"
+name = "exactness: a later past group between an open group and its L not counted"
+test = "sig"
+why = "Condition 2 (b) with a window (test_arm_exact: d2's group with a set of d1 placed between)."
+find = '''                if (ysig__unv_x_ok(g, x, o->gid, o->t, N, l)) continue;
+                ysig__unv(g, o->gid);'''
+replace = '''                if (1) continue;
+                ysig__unv(g, o->gid);'''
+
+[[mutant]]
+id = "307"
+name = "exactness: the exception never holds in the log"
+test = "sig"
+why = "Condition 2 (b)'s exception with a window (test_arm_exact: d2's arm alone placed between)."
+find = '''    if (x->e.kind != YSIG_J_ARM || !x->gid) return 0;'''
+replace = '''    if (1) return 0;'''
+
+[[mutant]]
+id = "308"
+name = "exactness: the count lost to a run again"
+test = "sig"
+why = "arm_unverified is the arms' own count: a run again keeps it (test_arm_exact: the window's 2 (b))."
+find = '''    g->st.arm_unverified = keep.arm_unverified;'''
+replace = ''''''

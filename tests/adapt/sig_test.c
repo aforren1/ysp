@@ -4409,6 +4409,127 @@ static int rp_open(ysig_node* n, int nn, int K, int calls, bool rows_final, bool
     g_rp_last = -1;
     return 1;
 }
+/* Exactness (docs/sig.md): arm_unverified, one shape per condition, each
+ * with a control that stays 0. Nodes: s1 (any device), d1 on it, d2 on
+ * d1 (so d2's arm meets d1's group);
+ * s2 (device 3, pressure) and an offset X on it. */
+static int64_t ex_unv(void) {
+    ysig_stats st;
+    ysig_get_stats(&g_rp, &st);
+    return st.arm_unverified;
+}
+static int ex_open(ysig_node* n, int K) {
+    n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 2); n[0].history = 64;   /* any device */
+    n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1); n[1].p[YSIG_DETECT_LANE] = 0; n[1].p[YSIG_DETECT_LEVEL] = 5; n[1].p[YSIG_DETECT_START] = 1; n[1].history = 64;
+    n[2] = ysig_node_of(YSIG_OP_DETECT, 1, -1); n[2].p[YSIG_DETECT_LANE] = 0; n[2].p[YSIG_DETECT_LEVEL] = 0.5; n[2].p[YSIG_DETECT_START] = 1; n[2].history = 64;
+    n[3] = src_node(YIN_KIND_PEN, YIN_AXIS_PEN_PRESSURE, 3, 1);
+    n[4] = ysig_node_of(YSIG_OP_OFFSET, 3, -1);
+    if (!rp_open(n, 5, K, 0, false, false)) return 0;
+    rp_feed(10 * MS, 0, YIN_AXIS_POSITION, 1);
+    rp_feed(10 * MS, 0, YIN_AXIS_PEN_PRESSURE, 3);
+    return 1;
+}
+static void test_arm_exact(void) {
+    ysig_node n[5];
+    int v;
+    g_where = "exactness";
+    {
+        /* condition 1: a waiting group let in between another's calls. y
+         * (on x's hit output) waits at 30 ms with a set of X, x at 20 ms;
+         * device 3's input lets y's group in (it meets X), y's arm lets x
+         * in after the set: x is inside y's block (1), and y's L meets
+         * only the set (2 (a)) */
+        ysig_node m[7];
+        m[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2); m[0].history = 64;
+        m[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1); m[1].p[YSIG_DETECT_LANE] = 0; m[1].p[YSIG_DETECT_LEVEL] = 5; m[1].p[YSIG_DETECT_START] = 1;
+        m[1].p[YSIG_DETECT_OUT] = YSIG_OUT_HIT; m[1].history = 64;
+        m[2] = ysig_node_of(YSIG_OP_DETECT, 1, -1); m[2].p[YSIG_DETECT_LANE] = 0; m[2].p[YSIG_DETECT_LEVEL] = 0.5; m[2].p[YSIG_DETECT_START] = 1; m[2].history = 64;
+        m[3] = src_node(YIN_KIND_PEN, YIN_AXIS_PEN_PRESSURE, 3, 1);
+        m[4] = ysig_node_of(YSIG_OP_OFFSET, 3, -1);
+        m[5] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 2, 2);   /* moves N only */
+        if (!rp_open(m, 6, 4, 0, false, false)) return;
+        rp_feed(10 * MS, 0, YIN_AXIS_POSITION, 1);
+        rp_feed(10 * MS, 0, YIN_AXIS_PEN_PRESSURE, 3);
+        ysig_arm(&g_rp, 1, 20 * MS);
+        ysig_set(&g_rp, 4, YSIG_OFFSET_D_X, 3);
+        ysig_arm(&g_rp, 2, 30 * MS);
+        rp_feed(25 * MS, 0, YIN_AXIS_POSITION, 2);   /* N(x) 25: x fails 1 alone */
+        rp_feed(35 * MS, 0, YIN_AXIS_PEN_PRESSURE, 3);
+        CHECK(g_rp.wt->n == 0 && ex_unv() == 2);
+    }
+    /* 2 (a): L meets the group's set, not its arm (device 3 lets in d1's
+     * group with a set of X); the control: device 1's input, which meets
+     * the arm */
+    for (v = 0; v < 2; v++) {
+        if (!ex_open(n, 4)) return;
+        ysig_set(&g_rp, 4, YSIG_OFFSET_D_X, 3);
+        ysig_arm(&g_rp, 1, 20 * MS);
+        if (v) rp_feed(25 * MS, 0, YIN_AXIS_PEN_PRESSURE, 3);
+        else rp_feed(25 * MS, 0, YIN_AXIS_POSITION, 1);
+        CHECK(g_rp.wt->n == 0 && ex_unv() == v);
+    }
+    /* 2 (a), a barrier between G and L: a flush lets in d1's waiting group
+     * (its set), the arm cancelled; the control: an arm alone (nothing of
+     * it goes in) */
+    for (v = 0; v < 2; v++) {
+        if (!ex_open(n, 4)) return;
+        if (v) ysig_set(&g_rp, 4, YSIG_OFFSET_D_X, 3);
+        ysig_arm(&g_rp, 1, 20 * MS);
+        ysig_flush(&g_rp);
+        CHECK(g_rp.wt->n == 0 && ex_unv() == v);
+    }
+    /* 2 (b): between G (d1 at 20 ms) and L (device 1 at 30), d2's group
+     * (at 22 ms) has a set of d1 (it meets G); the control: d2's arm
+     * alone (the exception) */
+    for (v = 0; v < 2; v++) {
+        if (!ex_open(n, 4)) return;
+        ysig_arm(&g_rp, 1, 20 * MS);
+        if (v) ysig_set(&g_rp, 1, YSIG_DETECT_LEVEL, 4);
+        ysig_arm(&g_rp, 2, 22 * MS);
+        rp_feed(30 * MS, 0, YIN_AXIS_POSITION, 1);
+        CHECK(g_rp.wt->n == 0 && ex_unv() == v);
+    }
+    /* 2 (b) with a window, a later group placed between: d1 armed at 20
+     * ms in the past (N(G) 10, L the 30 ms input); then d2's group with a
+     * set of d1, at 22 ms, goes between them */
+    for (v = 0; v < 2; v++) {
+        if (!ex_open(n, 4)) return;
+        rp_feed(30 * MS, 0, YIN_AXIS_POSITION, 1);
+        ysig_arm(&g_rp, 1, 20 * MS);
+        CHECK(ex_unv() == 0);
+        if (v) ysig_set(&g_rp, 1, YSIG_DETECT_LEVEL, 4);
+        ysig_arm(&g_rp, 2, 22 * MS);
+        CHECK(ex_unv() == v);
+    }
+    /* 2 (c): a disarm cancelled d1's waiting arm, whose group has a disarm
+     * of d2: input past 20 ms lets that disarm in (the reviewer's reason
+     * 8 is the same at a flush); the control: the group has a set */
+    for (v = 0; v < 2; v++) {
+        if (!ex_open(n, 4)) return;
+        if (v) ysig_disarm(&g_rp, 2);
+        else ysig_set(&g_rp, 1, YSIG_DETECT_LEVEL, 4);
+        ysig_arm(&g_rp, 1, 20 * MS);
+        rp_feed(12 * MS, 0, YIN_AXIS_POSITION, 1);
+        ysig_disarm(&g_rp, 1);
+        rp_feed(25 * MS, 0, YIN_AXIS_POSITION, 1);
+        CHECK(g_rp.wt->n == 0 && ex_unv() == 1);   /* cancelled: (c), or (a) with no disarm */
+    }
+    /* 3: a late report: d1 armed at 25 ms in the past (L: device 2's
+     * input at 30, which s1 takes too), then device 1's sample at 20 ms
+     * (newer than device 1's last); the controls: one at 25 ms (not
+     * late), and one of device 3 at 20 (another footprint) */
+    for (v = 0; v < 3; v++) {
+        if (!ex_open(n, 4)) return;
+        rp_feed(30 * MS, 0, YIN_AXIS_POSITION, 2);
+        ysig_arm(&g_rp, 1, 25 * MS);
+        CHECK(ex_unv() == 0);
+        if (v == 0) rp_feed(20 * MS, 0, YIN_AXIS_POSITION, 1);
+        else if (v == 1) rp_feed(25 * MS, 0, YIN_AXIS_POSITION, 1);
+        else rp_feed(20 * MS, 0, YIN_AXIS_PEN_PRESSURE, 3);
+        CHECK(ex_unv() == (v == 0));
+    }
+}
+
 static void test_arm_repro(void) {
     ysig_node n[4];
     ysig_stats s0, s1;
@@ -6023,6 +6144,7 @@ int main(void) {
     test_arm_spec();
     test_arm_spec2();
     test_arm_repro();
+    test_arm_exact();
     if (g_failures) { fprintf(stderr, "sig_test: %d failures\n", g_failures); return 1; }
     printf("sig_test: all checks passed\n");
     return 0;

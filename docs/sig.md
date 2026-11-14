@@ -818,9 +818,14 @@ G is exact when all of these are true:
      call), which also waits at its place, and which `L(G)` also lets in.
    - (c) When a disarm or a barrier cancelled G's arm, G has no disarm.
 3. While G's arm is its detect's newest arm in R, no input whose footprint
-   meets `F(G)` and whose time is at or before `τ` goes into R after G (a
+   meets `F(G)` and whose time is earlier than `τ` goes into R after G (a
    late report: the reviewer's o1, a sample later than the arm call and
-   earlier than `τ`).
+   earlier than `τ`). An input at `τ` is not a late report: a present arm
+   at a frame's onset comes before that frame's `ysig_frame()` in the
+   player (the arms at an onset, then the frame), and R puts that frame
+   after the arm, as the header does. Counted at `τ` too, the sessions of
+   `player_test.py` had 171 such arms and the two 3.18 examples 452
+   (visuomotor 320, bimanual 132), all of this one shape.
 
 When the header tests:
 
