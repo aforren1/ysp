@@ -824,6 +824,11 @@ G is exact when all of these are true:
      the time its control was armed for (the arm, then the exit's
      disarm, at one time).
    - (c) When a disarm or a barrier cancelled G's arm, G has no disarm.
+     This one holds for any `N(G)` too: when a disarm or a barrier
+     cancelled G's arm and G has a disarm, G is not exact unless
+     `N(G) = τ`. Reason: a graph with no window makes the remaining
+     disarm when the group goes in, where `N` is past `τ` (the reviewer's
+     490 and 1821; the header acts at `τ`, as S1 says).
 3. When G waits at its place (`N(G) < τ`): while G's arm is its detect's
    newest arm in R, no input whose footprint meets `F(G)` and whose time
    is earlier than `τ` goes into R after G (a late report). A group with
@@ -833,6 +838,13 @@ G is exact when all of these are true:
    arm at a frame's onset). An input at `τ` is not a late report: R puts
    it after G, as the header does.
 
+4. No disarm in no group comes right before G in R, with no input or
+   barrier between. Reason: with no window that disarm joins G's gap and
+   takes G's time (the reviewer's 883 and 404: R has the disarm, then
+   G's calls). The condition covers disarms only: the reviewer tested
+   every state call there, which flagged 270 cases instead of 155 and
+   found no other wrong one.
+
 When the header tests:
 
 - At G's going-in: conditions 1 and 2. When `L(G)` is not in R yet, the
@@ -840,6 +852,8 @@ When the header tests:
 - At each later call that goes into R between G and `L(G)` (a later past
   group's place): condition 2 (b).
 - At each input call: condition 3.
+- Condition 4: at G's place (a past group), or at the input or barrier
+  that ends the disarm's gap (a waiting group let in after it).
 
 Condition 2 (c) counts the reviewer's reason 8. A barrier (a flush) lets
 in a cancelled group whose disarm completes a hold at a `τ` later than
@@ -853,13 +867,16 @@ test, made after the barrier, would have broken the hold in time order.
 After each call returns, every node's value, ring and state, the bound
 channels, and every count but the window's own (the `arm_*` counts,
 `call_reentry`, `derived_lost`) and the digest are those of R's calls so
-far on a graph with no window. One known exception, not fixed:
-`history_skipped` (a value older than its ring's newest, not kept) can
-differ by a few. In the reviewer's case 1336 the rings agree entry for
-entry and every value agrees, but a graph with no window given R's calls
-evaluated node 9 with its stale value twice more (18 skipped pushes
-against the run again's 16). The count is a diagnostic; nothing reads
-it. A waiting ahead group is not yet in R.
+far on a graph with no window. A waiting ahead group is not yet in R.
+One known exception, not fixed: `history_skipped` (a value older than
+its ring's newest, not kept) can differ by a few. In the reviewer's
+`residual_history_skipped_1336.c` (the header's calls) against
+`residual_history_skipped_1336_r.c` (R's calls on a graph with no
+window), every node's value agrees, and so does every entry's time in
+every node's ring at the end (all entries of all rings printed and
+compared, 2026-11-14), but the graph with no window evaluates node 9
+with its stale value twice more: 18 skipped pushes against the run
+again's 16. The count is a diagnostic; nothing reads it.
 Every hit of R's result is handed out once; a hit handed out that R does
 not have is counted, as above. Rows and derived events: as above. With
 no fallback count, no retracted hit and no stale row or event, the
