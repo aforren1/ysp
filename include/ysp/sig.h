@@ -4439,6 +4439,12 @@ static void ysig__before_state(ysig_graph* g, int node) {
     uint64_t f[YSIG__FPW];
     int w;
     if (!g->wt->n || node < 0) return;
+    /* the gap opens at this call: what it lets in goes into the gap (an
+     * ahead group takes it back with the call, H9) */
+    if (g->cu && !g->cu->grp_open && !g->cu->replaying && g->cu->n_ck) {
+        g->cu->grp_open = 1;
+        g->cu->grp_from = g->cu->c_head;
+    }
     for (w = 0; w < g->dw; w++) f[w] = 0;
     ysig__fp_or(g, f, node);
     ysig__wait_fire(g, g->t_cover, f, 0);

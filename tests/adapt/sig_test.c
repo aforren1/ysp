@@ -4512,6 +4512,54 @@ static void test_arm_repro(void) {
         ysig_get_stats(&g_rp, &s1);
         CHECK(s1.arm_past_full == 0 && s1.arm_past_off == 0);
     }
+    /* H9 with a recenter: a relative mouse role; a detect on the role's
+     * x waits ahead (15 ms); input of another source moves N to 20 ms; a
+     * recenter (it meets the detect: the role reads the integrator) in a
+     * gap that an ahead arm (30 ms) closes. The recenter waits with its
+     * group: the integrator does not move, the detect's arm stays waiting,
+     * until input past both lets them in, in order */
+    {
+        ysig_node en[4], mo[2];
+        ysig_role role;
+        ysig_adapter ad;
+        ysig_desc d2;
+        memset(&role, 0, sizeof role);
+        role.name = "hand"; role.type = YSIG_TYPE_POSITION2D; role.units = YSIG_UNITS_DISPLAY_PX; role.allow_relative = true;
+        mo[0] = src_node(YIN_KIND_MOUSE, YIN_AXIS_DELTA, 0, 2);
+        mo[1] = ysig_node_of(YSIG_OP_INTEGRATE, 0, -1);
+        mo[1].p[0] = mo[1].p[1] = 1;
+        memset(&ad, 0, sizeof ad);
+        ad.role = "hand"; ad.name = "mouse"; ad.type = YSIG_TYPE_POSITION2D_RELATIVE; ad.units = YSIG_UNITS_DISPLAY_PX;
+        ad.nodes = mo; ad.n_nodes = 2;
+        en[0] = ysig_node_of(YSIG_OP_ROLE, -1, -1); en[0].p[0] = 0;
+        en[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1); en[1].p[YSIG_DETECT_LANE] = 0; en[1].p[YSIG_DETECT_LEVEL] = 50; en[1].p[YSIG_DETECT_START] = 1;
+        en[2] = src_node(YIN_KIND_PEN, YIN_AXIS_PEN_PRESSURE, 3, 1);
+        en[3] = ysig_node_of(YSIG_OP_DETECT, 0, -1); en[3].p[YSIG_DETECT_LANE] = 0; en[3].p[YSIG_DETECT_LEVEL] = 50; en[3].p[YSIG_DETECT_START] = 1;
+        memset(&d2, 0, sizeof d2);
+        d2.nodes = en; d2.n_nodes = 4; d2.roles = &role; d2.n_roles = 1; d2.adapters = &ad; d2.n_adapters = 1;
+        d2.channels = g_ch; d2.n_channels = 64; d2.catchup_frames = 4;
+        d2.arena = g_rp_ar; d2.arena_size = ysig_arena_size(&d2);
+        if (!d2.arena_size || d2.arena_size > sizeof g_rp_ar || !ysig_open(&g_rp, &d2)) { g_failures++; return; }
+        ysig_reset(&g_rp, 0);
+        {
+            yin_event e2 = delta(10 * MS, 1, 5, 0);
+            ysig_feed(&g_rp, &e2);
+        }
+        CHECK(ysig_value_of(&g_rp, 0)->v[0] == 5);
+        CHECK(ysig_arm(&g_rp, 1, 15 * MS) && g_rp.wt->n == 1);
+        rp_feed(20 * MS, 1, YIN_AXIS_PEN_PRESSURE, 3);
+        CHECK(ysig_recenter(&g_rp, 0, 100, 0, 20 * MS));
+        CHECK(ysig_arm(&g_rp, 3, 30 * MS));
+        CHECK(g_rp.wt->n == 2 && ysig_value_of(&g_rp, 0)->v[0] == 5);   /* the recenter waits, the integrator stays */
+        {
+            yin_event e2 = delta(40 * MS, 1, 1, 0);
+            ysig_feed(&g_rp, &e2);
+        }
+        CHECK(g_rp.wt->n == 0 && ysig_value_of(&g_rp, 0)->v[0] == 101);
+        CHECK(((ysig__det_st*)g_rp.nd[1].st)->t_arm == 15 * MS && ((ysig__det_st*)g_rp.nd[3].st)->t_arm == 30 * MS);
+        ysig_get_stats(&g_rp, &s1);
+        CHECK(s1.arm_past_full == 0 && s1.arm_past_off == 0);
+    }
     /* S3: an arm call lets in a waiting group it meets at or before its
      * time: a past arm at 15 ms of the same detect (input of another
      * source moved N to 20) lets in the arm waiting at 15 ms, which R

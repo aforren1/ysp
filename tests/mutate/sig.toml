@@ -2392,3 +2392,13 @@ test = "sig"
 why = "S3: at or before its time (test_arm_repro)."
 find = '''        ysig__wait_fire(g, t_ns < g->t_cover ? t_ns : g->t_cover, f, 1);   /* S3: at or before */'''
 replace = '''        ysig__wait_fire(g, t_ns < g->t_cover ? t_ns : g->t_cover, f, 0);   /* S3: at or before */'''
+
+[[mutant]]
+id = "285"
+name = "a gap opens after its first state call's triggers"
+test = "sig"
+why = "H9 with a recenter: what the gap's first call lets in is in the gap, so an ahead group takes it back (test_arm_repro)."
+find = '''    if (g->cu && !g->cu->grp_open && !g->cu->replaying && g->cu->n_ck) {
+        g->cu->grp_open = 1;'''
+replace = '''    if (0) {
+        g->cu->grp_open = 1;'''
