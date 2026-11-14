@@ -488,6 +488,12 @@
  *          adapters, custom ops, parameter tables, and a name for
  *          each p[] index (YSIG_<OP>_<ROW>).
  *
+ *   STATUS: v0.6.0, the check round, 2026-11-14, the same machine: the
+ *   oracle at 3,000 cases on 17 seeds and at 20,000 on seed 31415
+ *   (Release): every case its B cannot run counted (23,218), every wrong
+ *   case with a count (98; case 2201 by arm_past_pinned, which the
+ *   oracle's own tally leaves out); ctest Release and the sanitizers
+ *   tree pass; 315 of 315 mutants as expected.
  *   STATUS: v0.6.0, 2026-11-14, Linux desktop (i5-14500, GCC 12.2):
  *   sig_test as C, and as C and C++17 under ASan and UBSan; the
  *   reviewer's oracle (tests/adapt/sig_arm_ref.c, written from

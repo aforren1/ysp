@@ -1,6 +1,6 @@
 # The player
 
-Status: v0.10.0, 2026-11-13. It loads a pack, checks its experiment
+Status: v0.10.0, 2026-11-14. It loads a pack, checks its experiment
 definition, lowers the definition onto the ysp headers and runs it: in a
 real window with the participant's keyboard and the rig's devices, or on
 the simulated display (`--sim`). It is a program (`player/`, target
@@ -743,9 +743,48 @@ key response's end and a region entry from a sample at that time. Seed
 84233: the response exit is listed first and the player takes it (code
 0), the model the region (1). Seed 89320: the region exit is listed
 first, the response exit is the one the player adds, and the player
-takes the response (2), the model the region (0). By rule 4's list
-order the second looks like the player's, the first like the model's.
-Not decided in this round.
+takes the response (2), the model the region (0). The check round below
+fixes both by rule 4's list order.
+
+### The check round: ties of a response's end and a hit (0.10.0, 2026-11-14)
+
+The times in both cases are equal to the nanosecond: the press is the
+trial's first onset plus a whole number of frames (`rt_s` 0.400000008
+and 0.500000010), and so are the sample and, in 89320, the state's entry.
+So D20 rule 4 decides: the earliest time, then the list order.
+
+- 89320 was the player's. Its response's end fed the sample at its time,
+  which entered the region; s4's `after_s` exit, 1 ns earlier, came first,
+  and s4's next visit armed the region at that exit's time. sig.h runs the
+  arm again over the sample, so the hit, at the response's time, came
+  after the batch in which the player took the response. The player now
+  drains the hits that an exit of the batch queued before it takes the
+  response. Writing the case found a second path: a state entered on the
+  way to the response's time (a timed exit at that time) drained its
+  entry hits with no response offered, so a region won over an own
+  response exit listed first. The response now stays offered until it is
+  taken (`v2_resp_states()`).
+- 84233 was the model's. It resolved the sample's hit before it fed the
+  press at the same time. It now feeds every input at one time (not two
+  samples) and resolves their exits together (D20 rule 4, cited in
+  `v2model.py`).
+
+`player_test.py`'s `t_v2_ties` has three list orders at one exit's time
+and 89320's path; the player built at 1f61b9f fails two of the four (the own
+response first, and 89320's path). Mutants v2-93 and v2-94.
+
+The same machine, sig.h 0.6.0 after its check round:
+
+| Check | Result |
+|---|---|
+| ctest | Release 124 of 124; the sanitizers tree (`setarch -R`) 123 of 123 |
+| `player_test.py` | 57 cases, 0 failures; `sig_arms.unverified` 0 in every session |
+| The model's harness, seeds 84233 and 89320 | 0 mismatches |
+| New seeds 92001 to 94000 (2,000 cases) | 284 refused (agreed), 83 hangs agreed, 9 mismatches, all at a GAP; no guard stop; `unverified` 0 in all 1,382 sessions (the shrinker's included) |
+| `GEN_MULTI=1`, 39001 to 40000 (1,000 cases) | 139 refused (agreed), 48 hangs agreed, 7 mismatches, all at a GAP; `unverified` 0 in all 967 sessions |
+| `compare.py`, the six examples | No exact column differs; `unverified` 0 (visuomotor and bimanual: 176 arms run again) |
+| Mutants (`--sim` test) | `player_v2.toml` 90 of 91 as expected (796 s, 4 jobs); v2-93 and v2-94 killed. v2-74 (no settle before a response's end) survived: `v2_resp_states()` now runs `v2_timed_to()` to the response's time with the response offered, which settles at that time and drains the hits too, so the mutant is equivalent. It is kept as a guard, expected to survive, with a note: 91 of 91. The other player lists were not run (their files did not change) |
+| Frame work, CPU 2, six runs each, load average 1.82 at the start (falling from the mutant run; nothing else ran) and 1.54 at the end | Visuomotor 0.239 s (sd 0.003) against 1f61b9f's 0.235 s (sd 0.003) and 0.9.0's 0.211 s; bimanual 1.308 s (sd 0.006) against 1.291 s (sd 0.007) and 1.133 s: 1 % to 2 % above 1f61b9f, 13 % and 15 % above 0.9.0. Largest frame 639 to 693 us (1f61b9f 627 to 749 us), and 1,884 to 1,895 us (1,858 to 1,883 us); no frame over 16 ms |
 
 ### sig.h's `arm_unverified` and the guard (2026-11-14)
 

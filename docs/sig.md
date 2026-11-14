@@ -1491,6 +1491,51 @@ places a cancelled waiting group with a disarm inside a past group's
 block, also at 20,000 cases). The retired `sig_arm_oracle.c` and
 `sig_arm_diff.c` are removed; the paragraphs below keep their history.
 
+The check round (2026-11-14, the same machine, Release, 8 processes).
+The oracle at 3,000 cases on seeds 777001 to 777016 and 20261114, and at
+20,000 cases on seed 31415, before and after the round's two fixes:
+
+| Seeds | Cases | B cannot run (counted) | Wrong (by `arm_unverified`; by another count; none) | Right cases with a count, before | After |
+|---|---|---|---|---|---|
+| 20261114 and 777001 to 777016 | 17 × 3,000 | 16,815 (16,815) | 67 (58; 8; 1) | 26,324 of 34,118 (75,050 of 1,238,987 arms, 6.06 %) | 26,612 of 34,118 (77,067 arms, 6.22 %) |
+| 31415 | 20,000 | 6,403 (6,403) | 31 (25; 6; 0) | 10,486 of 13,567 (30,302 of 494,120 arms, 6.13 %) | 10,605 of 13,566 (31,125 of 493,870 arms, 6.30 %) |
+
+The first target holds on every seed. The second missed three cases
+before the round:
+
+- Case 1061 of seed 777016: a hole in 2 (b)'s exception (fixed in the
+  text first, then in the header). K arms e, G arms d, H disarms e and d
+  and arms d, all at one `τ`, all waiting for one L. R lets K in first,
+  K's arm lets H in, and H's disarm cancels G's arm; the header made G
+  at its place and handed out a hit that R does not have, with no count.
+  The header now orders the groups at G's `τ` that wait for L as R does.
+- Case 3578 of seed 31415: a header defect, with the text right (S1). A
+  waiting group made its disarm before its recenters, so a latch on the
+  disarmed detect froze before the recenters reached it. The log had the
+  fix since 2192; the waiting group's copy of the gap did not.
+- Case 2201 of seed 777001, wrong at call 176 with `arm_past_pinned`
+  counted at that call. "Counts and fallbacks" lists `arm_past_pinned`
+  as a fallback that the guard stops on, so the case has a count. The
+  oracle's tally of other counts (`sig_arm_ref.c`, line 1584) leaves
+  `arm_past_pinned` out and prints the case as one with none. Not
+  changed: the oracle is the reviewer's.
+
+The round's 2 (b) counts 2.7 % more arms in right cases (6.06 % to
+6.22 % of the made groups over the 17 seeds). Two first forms linked K
+to H by footprints (at any time: 21 % more on seed 20261114; through
+arms at G's `τ`: 15 % more); R's order at L counts 2.7 % more there.
+
+Gates after the round: ctest Release 124 of 124, the sanitizers tree
+(`setarch -R`) 123 of 123. `sig_test` adds 2 (b)'s exception with K and
+the chain K, J, H (each with a control), the ahead group of
+`test_disarm_at_gap_end`, and `test_hit_whole_value`. Mutants 320 to
+323 are new and killed. In the full run, sig.toml gave 314 of 315 as
+expected (336 s, 4 jobs): 232 (a hit matched on its lanes only)
+survived the oracle, because the round's 2 (b) counts all 15 wrong cases
+it makes at seed 20261114, where case 1382 had none before.
+`test_hit_whole_value` (the oracle's case 286, reduced to a mux that a
+past arm switches to another device) now kills it: 315 of 315.
+
 - `tests/adapt/sig_test.c` (ctest `test_sig`): v0.6.0 adds
   `test_arm_window`: no window (counted), two crossings after the arm as
   two hits with a latch frozen at the first and the ring's rise and fall,
