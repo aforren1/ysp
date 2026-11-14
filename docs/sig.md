@@ -612,6 +612,18 @@ of its gap (below), so in an ahead group it waits with the arm, with or
 without a window. At most 32 arms and 64 group calls wait; an arm with
 no room is made at once on the input known, counted in `arm_past_full`.
 
+A read in an open gap (`ysig_value_of()`, `ysig_value_at()`,
+`ysig_detected()`, `ysig_derived()`, `ysig_get_stats()`) returns the
+state after the gap's calls, made at `N` as a present group's are: its
+sets applied, and the waiting groups they let in at `N` made. A disarm
+takes effect at the gap's end (below), so its detect still reads as
+armed. Reason: until an arm closes the gap, the gap is a present group
+or no group, and R puts both at `N`. A read cannot know that an arm
+follows, and to hold every state call back until its gap ends would
+delay the sets that no arm follows. When an arm then makes the group
+past or ahead, the run again changes the state, and a hit handed out
+that R does not have is counted (`arm_hits_retracted`).
+
 Equal times: a call at `τ` that must come before G (rule 2) does. So an
 input at `τ`, a frame with onset `τ`, a settle at `τ`, and a group at
 `τ` made before G come before G; a group at `τ` made after G comes
