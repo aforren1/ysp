@@ -4488,14 +4488,14 @@ static void test_arm_repro(void) {
      * it goes in (a set of an unrelated offset, or of a channel node's
      * index) */
     for (K = 0; K < 2; K++) {
-        ysig_node m[6];
-        m[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2);
-        m[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1); m[1].p[YSIG_DETECT_LANE] = 0; m[1].p[YSIG_DETECT_LEVEL] = 5; m[1].p[YSIG_DETECT_START] = 1;
-        m[2] = src_node(YIN_KIND_PEN, YIN_AXIS_PEN_PRESSURE, 3, 1);
-        m[3] = K ? ysig_node_of(YSIG_OP_CHANNEL, -1, -1) : ysig_node_of(YSIG_OP_OFFSET, 2, -1);
-        if (K) m[3].p[0] = 0;
-        m[4] = ysig_node_of(YSIG_OP_DETECT, 0, -1); m[4].p[YSIG_DETECT_LANE] = 0; m[4].p[YSIG_DETECT_LEVEL] = 5; m[4].p[YSIG_DETECT_START] = 1;
-        if (!rp_open(m, 5, 4, 0, false, false)) return;
+        ysig_node mm[6];
+        mm[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2);
+        mm[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1); mm[1].p[YSIG_DETECT_LANE] = 0; mm[1].p[YSIG_DETECT_LEVEL] = 5; mm[1].p[YSIG_DETECT_START] = 1;
+        mm[2] = src_node(YIN_KIND_PEN, YIN_AXIS_PEN_PRESSURE, 3, 1);
+        mm[3] = K ? ysig_node_of(YSIG_OP_CHANNEL, -1, -1) : ysig_node_of(YSIG_OP_OFFSET, 2, -1);
+        if (K) mm[3].p[0] = 0;
+        mm[4] = ysig_node_of(YSIG_OP_DETECT, 0, -1); mm[4].p[YSIG_DETECT_LANE] = 0; mm[4].p[YSIG_DETECT_LEVEL] = 5; mm[4].p[YSIG_DETECT_START] = 1;
+        if (!rp_open(mm, 5, 4, 0, false, false)) return;
         rp_feed(10 * MS, 0, YIN_AXIS_POSITION, 1);
         rp_feed(10 * MS, 1, YIN_AXIS_PEN_PRESSURE, 3);
         CHECK(ysig_arm(&g_rp, 1, 15 * MS) && g_rp.wt->n == 1);
