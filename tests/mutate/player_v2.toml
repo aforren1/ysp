@@ -693,3 +693,60 @@ test = "player"
 why = "F39 made precise 2026-11-13: the entry of the part that runs when the response is final (vm_resp_part_entry)."
 find = '''                    return v2_take_resp(p, v, e, t > v->entry_t ? t : v->entry_t, f, responded);'''
 replace = '''                    return v2_take_resp(p, v, e, t > v->def_entry_t ? t : v->def_entry_t, f, responded);'''
+
+[[mutant]]
+id = "v2-84"
+name = "a state's exit does not disarm its controls"
+test = "player"
+why = "sig.h's semantics, rule 3: a waiting arm of a state that ended is cancelled by the exit's disarm."
+find = '''        if (v->has_graph && (rs == V2_END || v->rs[rs].first)) v2_disarm_state(v);'''
+replace = ''''''
+
+[[mutant]]
+id = "v2-85"
+name = "an until's next part disarms the state's exits"
+test = "player"
+why = "A part of a state is not its exit: the state's exits stay armed (the model's s814: the hit ends the until and takes the exit)."
+find = '''        if (v->has_graph && (rs == V2_END || v->rs[rs].first)) v2_disarm_state(v);'''
+replace = '''        if (v->has_graph) v2_disarm_state(v);'''
+
+[[mutant]]
+id = "v2-86"
+name = "rows handed out at once"
+test = "player"
+why = "The sample traces take final rows only (sig.h rows_final), so a past arm never makes them stale."
+find = '''            d->rows_final = true;'''
+replace = '''            d->rows_final = false;'''
+
+[[mutant]]
+id = "v2-87"
+name = "rows dropped once the trial ended, before the flush"
+test = "player"
+why = "Final rows come up to four frames late: the trial's rows until the flush at its end."
+find = '''        if (!v->rows_open) return;'''
+replace = '''        if (v->cur == V2_END && v->ended) return;'''
+
+[[mutant]]
+id = "v2-88"
+name = "the traces written before the flush"
+test = "player"
+why = "The flush makes the trial's last held rows final; the traces need them."
+find = '''    if (v->has_graph && v->rows_open && !ysig_flush(&v->g)) {'''
+replace = '''    if (0) {'''
+
+[[mutant]]
+id = "v2-89"
+name = "the guard does not stop on a fallback"
+test = "player"
+why = "sig.h's semantics: a pinned group, a place before the window, full logs and no window are not the reference order's result."
+find = '''    bad = st.arm_hits_retracted + st.arm_rows_stale + st.arm_derived_stale + st.arm_past_pinned + st.arm_past_far +
+          st.arm_past_full + st.arm_past_off;'''
+replace = '''    bad = st.arm_hits_retracted + st.arm_rows_stale + st.arm_derived_stale;'''
+
+[[mutant]]
+id = "v2-90"
+name = "the trial's rows never taken"
+test = "player"
+why = "The reset makes the last trial's held rows final: they are not this trial's."
+find = '''        v->rows_open = true;   /* the rows the reset made final were the last trial's */'''
+replace = '''        (void)0;'''

@@ -1255,6 +1255,11 @@ def t_v2_hand(ctx):
     p0 = [float(x["t_s"]) for x in path if x["trial_index"] == "0"]
     check(hold and p0 and min(p0) >= float(hold[0]["t_s"]) + 0.199,
           "v2 hand: the trace starts at home's hit: first %s, hold %s" % (min(p0) if p0 else None, hold[0]["t_s"] if hold else None))
+    # and ends at out's hit, the trial's end: its last rows come final at
+    # the end's flush (sig.h rows_final), not lost between trials
+    reach = [e for e in r.events if e["kind"] == "state" and e["text"] == "reach" and e["trial_index"] == "0"]
+    check(reach and p0 and max(p0) >= float(reach[0]["end_s"]) - 0.0011,
+          "v2 hand: the trace runs to out's hit: last %s, out %s" % (max(p0) if p0 else None, reach[0]["end_s"] if reach else None))
 
 
 def t_v2_rule5(ctx):
@@ -2066,6 +2071,45 @@ def t_v2_findings(ctx):
          "states": [{"name": "a", "steps": [{"on": "s"}, {"wait_s": 0.02}, {"until": "rA"}], "exits": [{"on": "rB", "to": "end", "outcome": "rB"}]}]}
     r = one("vm_hit_across_part", v2base({"t": t}, [{"name": "l", "trial": "t"}], roles=hand), ["--sim-gain", "hand=1", "--samples", jump])
     check(r.rc == 0 and r.trials[0]["outcome"] == "rB" and [x[2] for x in rows(r)] == [0.018], "the exit's hit at 0.018 across the part's change: %s %s" % (r.err[:200], rows(r)))
+    # sig.h's rule 3: a's until arms rA at 0.02, when its steps end (taken
+    # in frame 1, whose input ends at 0.0167), so the arm waits for input
+    # past 0.02. rB's hit at 0.018 leaves a first: the exit disarms a's
+    # controls, which cancels the waiting arm, and b arms rA at 0.018. Its
+    # 0.05 s hold from 0.018 ends at 0.068 (the waiting arm, made at 0.02,
+    # would restart it: 0.07)
+    t = {"controls": {"rB": dict(far), "rA": dict(far, stay_s=0.05)},
+         "states": [{"name": "a", "steps": [{"on": "s"}, {"wait_s": 0.02}, {"until": "rA"}], "exits": [{"on": "rB", "to": "b"}]},
+                    {"name": "b", "exits": [{"on": "rA", "to": "end", "outcome": "rA"}]}]}
+    r = one("vm_exit_cancels_wait", v2base({"t": t}, [{"name": "l", "trial": "t"}], roles=hand), ["--sim-gain", "hand=1", "--samples", jump])
+    check(r.rc == 0 and r.trials[0]["outcome"] == "rA" and [x[2] for x in rows(r)] == [0.018, 0.068],
+          "the exit cancels its state's waiting arm: %s %s" % (r.err[:200], rows(r)))
+    # final-only rows: home's 0.04 s hold ends at 0.04, found by the 0.043
+    # sample; s1 arms home at 0.04, a past arm whose fall at 0.04 reaches
+    # the peak that home's hit gates, and its sample trace: a row the
+    # first pass did not write. The trace takes the run again's rows (sig.h
+    # rows_final): no stale row, no guard stop (rows at once: stale, and
+    # the guard stops)
+    mv = os.path.join(ctx.out, "vm_rows_final.csv")
+    write_samples(mv, [(0.006 * k, "hand", 0, 0) for k in range(8)] + [(0.043 + 0.002 * k, "hand", 1, 0) for k in range(60)])
+    t = {"controls": {"home": {"control": "region", "of": "hand", "radius": 3, "stay_s": 0.04},
+                      "top": {"control": "peak", "of": "hand", "from": "home"},
+                      "path": {"control": "trace", "of": ["top"]}},
+         "states": [{"name": "s0", "exits": [{"on": "home", "to": "s1"}]},
+                    {"name": "s1", "exits": [{"on": "home", "to": "end", "outcome": "again"}, {"after_s": 0.1, "to": "end", "outcome": "done"}]}]}
+    r = one("vm_rows_final", v2base({"t": t}, [{"name": "l", "trial": "t"}], roles=hand), ["--sim-gain", "hand=1", "--samples", mv])
+    path = r.read(os.path.join("streams", "path.csv")) if r.rc == 0 else []
+    check(r.rc == 0 and r.trials[0]["outcome"] == "done" and len(path) > 10,
+          "final-only rows: the trace takes the run again's rows: exit %d %s, %d rows" % (r.rc, r.err[:300], len(path)))
+    # the guard stops on a fallback: samples at 50 kHz to 0.025 s fill the
+    # window's 1,024-call log, so the arm s1 makes in the past (home's
+    # 0.0301 s hold, found by the frame at 0.0333 s) cannot run again
+    dense = os.path.join(ctx.out, "vm_dense.csv")
+    write_samples(dense, [(0.00002 * k, "hand", 0, 0) for k in range(1250)] + [(0.04 + 0.001 * k, "hand", 0, 0) for k in range(100)])
+    t = {"controls": {"home": {"control": "region", "of": "hand", "radius": 3, "stay_s": 0.0301}},
+         "states": [{"name": "s0", "exits": [{"on": "home", "to": "s1"}]},
+                    {"name": "s1", "exits": [{"on": "home", "to": "end", "outcome": "again"}, {"after_s": 0.05, "to": "end"}]}]}
+    r = one("vm_guard_fallback", v2base({"t": t}, [{"name": "l", "trial": "t"}], roles=hand), ["--sim-gain", "hand=1", "--samples", dense])
+    check(r.rc != 0 and "internal guard" in r.err and "logs full" in r.err, "the guard stops on a fallback: exit %d %s" % (r.rc, r.err[:300]))
     # c: two presses in one frame before the deadline both count
     with open(sc2, "w", newline="\n") as f:
         f.write("trial_index,response,rt_s,hold_s\n0,right,0.2,0.002\n0,left,0.205,0.002\n")
@@ -2142,8 +2186,10 @@ def t_v2_findings(ctx):
     # session.json: the window's counts (version 2 only)
     sj = json.load(open(os.path.join(r.data, "session.json"))) if r.rc == 0 else {}
     arms = sj.get("sig_arms", {})
-    check(sorted(arms) == ["caught_up", "derived_stale", "hits_retracted", "hits_superseded", "past_far", "past_full", "past_off", "rows_stale"] and
-          arms["hits_retracted"] == arms["rows_stale"] == arms["derived_stale"] == arms["past_far"] == arms["past_full"] == arms["past_off"] == 0,
+    check(sorted(arms) == ["ahead_cancelled", "caught_up", "derived_stale", "hits_retracted", "hits_superseded", "past_far", "past_full",
+                           "past_off", "past_pinned", "rows_stale"] and
+          arms["hits_retracted"] == arms["rows_stale"] == arms["derived_stale"] == arms["past_far"] == arms["past_full"] ==
+          arms["past_off"] == arms["past_pinned"] == 0,
           "session.json sig_arms: %s" % arms)
     # the model's s19383: s1 goes back to itself by after_s at the time its
     # r0 hold ends (list order: the after_s exit). The re-arm at that time

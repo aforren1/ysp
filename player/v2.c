@@ -202,8 +202,13 @@ struct pl_v2 {
     int trial_ev0;             /* the trial's first event                   */
     uint32_t* arm_gen;         /* per node: arms so far, so a drained hit of
                                 * an arm since made is the old arm's        */
-    int64_t arm_bad;           /* sig.h's retracted + stale counts seen     */
+    int64_t arm_bad;           /* sig.h's retracted, stale and fallback
+                                * counts seen                               */
     int64_t* arm_t;            /* per node: its latest arm's time           */
+    int16_t* st_armed;         /* the nodes the current state's exits armed */
+    int n_st_armed;
+    bool rows_open;            /* the trial's rows go to its traces: from its
+                                * reset to the flush at its end             */
     bool* det_now;             /* per node: entry now this trial (no hold)  */
     /* the visit's tweens, every part's: rule 8 stops one still running at
      * the value it last wrote (a track is no event ytl_remove() takes) */
@@ -1342,7 +1347,9 @@ static void v2_on_row(void* user, const ysig_row* row) {
         v2_trace* tr = &v->traces[i];
         int k;
         if (tr->frame || tr->rec != row->node) continue;
-        if (v->cur == V2_END && v->ended) return;   /* between trials */
+        /* the trial's rows: from its reset to the flush at its end (a row
+         * comes when final, up to four frames late; between trials none) */
+        if (!v->rows_open) return;
         if (tr->nrows >= V2_TRACE_ROWS) { tr->lost++; return; }
         tr->rt[tr->nrows] = row->value.t;
         for (k = 0; k < 4; k++) tr->rv[tr->nrows * 4 + k] = row->value.v[k];
@@ -1682,6 +1689,11 @@ int pl_v2_load(pl_player* p) {
             d->catchup_frames = 4;
             d->catchup_calls = 1024;
             d->catchup_writes = 16384;
+            /* the sample traces are written at the trial's end: their rows
+             * come once no arm can change them, so they are always the
+             * reference order's (sig.h, final-only). Derived events feed
+             * the response collector in their frame: at once */
+            d->rows_final = true;
             v->has_graph = true;
             if (v->n_slots > max_slots) max_slots = v->n_slots;
             need = ysig_arena_size(d);
@@ -1742,6 +1754,8 @@ int pl_v2_load(pl_player* p) {
         if (!v->arm_gen) return -1;
         memset(v->arm_gen, 0, sizeof(uint32_t) * (size_t)v->nn);
         v->arm_t = (int64_t*)pl_alloc(p, sizeof(int64_t) * (size_t)v->nn);
+        v->st_armed = (int16_t*)pl_alloc(p, sizeof(int16_t) * (size_t)v->nn);
+        if (!v->st_armed) return -1;
         v->det_now = (bool*)pl_alloc(p, sizeof(bool) * (size_t)v->nn);
         if (!v->arm_t || !v->det_now) return -1;
         {
@@ -2061,11 +2075,19 @@ static int v2_arm_check(pl_player* p, pl_v2* v, const char* name, int64_t t) {
     ysig_stats st;
     int64_t bad;
     ysig_get_stats(&v->g, &st);
-    bad = st.arm_hits_retracted + st.arm_rows_stale + st.arm_derived_stale;
+    /* sig.h's semantics of an arm in the past: a retracted hit, a stale
+     * row or event, and every fallback (pinned, before the window, logs
+     * full, no window) are not the reference order's result */
+    bad = st.arm_hits_retracted + st.arm_rows_stale + st.arm_derived_stale + st.arm_past_pinned + st.arm_past_far +
+          st.arm_past_full + st.arm_past_off;
     if (bad == v->arm_bad) return 0;
     v->arm_bad = bad;
-    pl_fail(p, "template '%s': internal guard: a past arm of '%s' at %.9f s changed a hit already taken, or a row or event already written (sig.h: %lld hits retracted, %lld row runs, %lld derived runs changed)",
-            v->def->name, name, (double)(t - v2_anchor(p)) / 1e9, (long long)st.arm_hits_retracted, (long long)st.arm_rows_stale, (long long)st.arm_derived_stale);
+    pl_fail(p, "template '%s': internal guard: a past arm of '%s' at %.9f s changed a hit already taken, or a row or event already written, "
+            "or fell back (sig.h: %lld hits retracted, %lld row runs, %lld derived runs changed; %lld pinned, %lld before the window, "
+            "%lld logs full, %lld no window)",
+            v->def->name, name, (double)(t - v2_anchor(p)) / 1e9, (long long)st.arm_hits_retracted, (long long)st.arm_rows_stale,
+            (long long)st.arm_derived_stale, (long long)st.arm_past_pinned, (long long)st.arm_past_far, (long long)st.arm_past_full,
+            (long long)st.arm_past_off);
     return -1;
 }
 
@@ -2079,7 +2101,11 @@ static int v2_arm_ctl(pl_player* p, pl_v2* v, int ci, int64_t t) {
 }
 
 static int v2_arm_exit(pl_player* p, pl_v2* v, const v2_exit* x, int64_t t) {
+    int k;
     if (x->node < 0) return 0;
+    /* the state's own: disarmed when it exits (v2_disarm_state) */
+    for (k = 0; k < v->n_st_armed && v->st_armed[k] != x->node; k++) { }
+    if (k == v->n_st_armed && v->n_st_armed < v->nn) v->st_armed[v->n_st_armed++] = (int16_t)x->node;
     v->arm_gen[x->node]++;
     v->arm_t[x->node] = t;
     if (!ysig_arm(&v->g, x->node, t)) { pl_fail(p, "template '%s': cannot arm '%s'", v->def->name, v->ctl[x->ctl].def->name); return -1; }
@@ -2157,6 +2183,17 @@ int pl_v2_events_response(pl_player* p, int64_t bt) {
     return v2_after(p, v);
 }
 
+/* The state left: its exits' controls are disarmed, before the next
+ * state's arm (one group of calls, at the entry's time). A control's arm
+ * that waits for input past its time (sig.h: an arm ahead of the input,
+ * a mark's onset) is then cancelled, not made for a state that ended. A
+ * one-hit control's output stands (a freeze_at latch keeps its value). */
+static void v2_disarm_state(pl_v2* v) {
+    int k;
+    for (k = 0; k < v->n_st_armed; k++) (void)ysig_disarm(&v->g, v->st_armed[k]);
+    v->n_st_armed = 0;
+}
+
 /* Enter runtime state rs at time t; f is the frame being made (the entry
  * frame, D35 and rule 2). */
 static int v2_enter(pl_player* p, pl_v2* v, int rs, int64_t t, const yscr_frame* f, bool hit) {
@@ -2164,6 +2201,9 @@ static int v2_enter(pl_player* p, pl_v2* v, int rs, int64_t t, const yscr_frame*
     int i, guard = 0;
     for (;;) {
         if (++guard > 4096) { pl_fail(p, "template '%s': more than 4096 instant exits at one time", v->def->name); return -1; }
+        /* a state left (not a part of it: an until's next part keeps the
+         * state's exits armed) */
+        if (v->has_graph && (rs == V2_END || v->rs[rs].first)) v2_disarm_state(v);
         if (rs == V2_END && !v->def->states) {
             /* an events template: its events are done; `after` follows
              * them and the response (2.5), and its end MARK ends the trial */
@@ -2679,6 +2719,8 @@ int pl_v2_trial_start(pl_player* p, const yscr_frame* f) {
     for (i = 0; i < v->def->n_flags; i++) v->flags[i] = false;
     for (i = 0; i < v->n_ctl; i++) v->ctl[i].has_hit = false;
     for (i = 0; i < v->n_traces; i++) { v->traces[i].nrows = 0; }
+    v->n_st_armed = 0;
+    v->rows_open = false;
     if (v->has_graph) {
         /* 3.6: parameters, the recenter steps at the head, the reset */
         int rc;
@@ -2704,6 +2746,7 @@ int pl_v2_trial_start(pl_player* p, const yscr_frame* f) {
             }
         }
         ysig_reset_trial(&v->g, f->onset);
+        v->rows_open = true;   /* the rows the reset made final were the last trial's */
         /* every control whose hits no exit names arms at the trial's start */
         for (i = 0; i < v->n_ctl; i++)
             if (!v->ctl[i].armed_by_exit && v2_arm_ctl(p, v, i, f->onset) < 0) return -1;
@@ -3679,6 +3722,13 @@ int pl_v2_trial_rows(pl_player* p);
 int pl_v2_trial_rows(pl_player* p) {
     pl_v2* v = p->tmpl ? p->tmpl->v2 : NULL;
     if (!v) return 0;
+    /* the trial's held rows come now: a flush is a barrier, so every row
+     * so far is final; then the traces */
+    if (v->has_graph && v->rows_open && !ysig_flush(&v->g)) {
+        pl_fail(p, "template '%s': the graph: %s", v->def->name, ysig_error(&v->g));
+        return -1;
+    }
+    v->rows_open = false;
     if (v2_traces_end(p, v) < 0) return -1;
     return v2_srow_flush(p, false);
 }
@@ -3840,21 +3890,24 @@ int pl_v2_arm_counts(pl_player* p, int64_t c[PL_ARM_COUNTS]) {
         c[5] += st.arm_hits_retracted;
         c[6] += st.arm_rows_stale;
         c[7] += st.arm_derived_stale;
+        c[8] += st.arm_past_pinned;
+        c[9] += st.arm_ahead_cancelled;
         n++;
     }
     return n;
 }
 
 int pl_v2_session_end(pl_player* p, yjs_arena* a) {
-    static const char* const name[PL_ARM_COUNTS] = { "caught_up", "past_off", "past_far", "past_full", "hits_superseded", "hits_retracted", "rows_stale", "derived_stale" };
+    static const char* const name[PL_ARM_COUNTS] = { "caught_up", "past_off", "past_far", "past_full", "hits_superseded", "hits_retracted",
+                                                     "rows_stale", "derived_stale", "past_pinned", "ahead_cancelled" };
     int64_t c[PL_ARM_COUNTS];
     yjs_value* o;
     int i;
     if (!pl_v2_arm_counts(p, c)) return 0;
     o = yjs_new(a, YJS_OBJECT);
     for (i = 0; i < PL_ARM_COUNTS; i++) yjs_set(a, o, name[i], yjs_new_int(a, c[i]));
-    if (c[1] + c[2] + c[3] > 0)
-        fprintf(stderr, "ysp_player: %lld arms in the past fell back to the input's newest value (inexact; session.json sig_arms)\n", (long long)(c[1] + c[2] + c[3]));
+    if (c[1] + c[2] + c[3] + c[8] > 0)
+        fprintf(stderr, "ysp_player: %lld arms in the past fell back (inexact; session.json sig_arms)\n", (long long)(c[1] + c[2] + c[3] + c[8]));
     return yds_session_set(&p->ds, "sig_arms", o);
 }
 
