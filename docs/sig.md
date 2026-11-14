@@ -823,15 +823,19 @@ G is exact when all of these are true:
      input between them that let H in would make H before G there (the
      reviewer's 489). The player makes this shape when a state exits at
      the time its control was armed for (the arm, then the exit's
-     disarm, at one time). The exception also needs this: no group K
-     that waits for `L(G)` too (at its place, or as an ahead group) and
-     is earlier than G by (`τ`, call order) is linked to H. K is linked
-     to H when K's footprint meets `F(H)`, or meets the footprint of
-     another group (not G) that waits for `L(G)` and is linked to H.
-     Reason: K goes into R at `L(G)` before G, and its calls let in
-     what they meet when they go in, so R can make H before G. When H
-     disarms G's detect, R then cancels G's arm (the oracle's case 1061
-     of seed 777016: K arms the detect that H disarms, at G's `τ`).
+     disarm, at one time). The exception also needs G's arm to go into
+     R before H's calls. At `L(G)`, the groups at G's `τ` that wait for
+     `L(G)` go in by call order. Each arm lets in, right before itself,
+     the waiting groups at its time that are earlier by call order and
+     meet it, and right after itself, every waiting group at its time
+     that meets it (rule 3, H16). So a group K at `τ`, made before G,
+     whose arm meets H, directly or through a chain of such arms, lets
+     H in before G. When H disarms G's detect, R then cancels G's arm
+     (the oracle's case 1061 of seed 777016: K arms the detect that H
+     disarms). The header orders up to 32 groups at one `τ` for one
+     `L(G)`; with more, it counts G. Groups at an earlier time go in
+     before G whatever they let in, and their arms let in no group at
+     G's `τ`.
    - (c) When a disarm or a barrier cancelled G's arm, G has no disarm.
      This one holds for any `N(G)` too: when a disarm or a barrier
      cancelled G's arm and G has a disarm, G is not exact unless
@@ -865,8 +869,9 @@ When the header tests:
 
 - At G's going-in: conditions 1 and 2. When `L(G)` is not in R yet, the
   header counts G then. This covers reads made while G waits.
-- At each later call that goes into R between G and `L(G)` (a later past
-  group's place): condition 2 (b).
+- At each later past group's place between G and `L(G)`: condition 2 (b)
+  again, over every call between them, since a later group can be the
+  link of a chain that lets an earlier H in before G.
 - At each input call: condition 3.
 - Condition 4: at G's place (a past group), at the trigger that lets G
   in, or at G's arm at the end of R.
