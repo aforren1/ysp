@@ -4514,6 +4514,64 @@ static void test_arm_exact(void) {
         rp_feed(25 * MS, 0, YIN_AXIS_POSITION, 1);
         CHECK(g_rp.wt->n == 0 && ex_unv() == 1);   /* cancelled: (c), or (a) with no disarm */
     }
+    /* 2 (b)'s exception, a group of an arm and a disarm (the player's
+     * exit at the time its control was armed for): G arms d2 (on d1) at
+     * 20 ms, H disarms d1 and arms it at 20 ms, later; one input lets
+     * both in. The disarm meets G: the exception holds. The control: H
+     * with a set too (of X: only the disarm meets G, but H is no longer
+     * an arm and disarms). Ahead (both wait, the input lets them in) and
+     * past
+     * (the input first) */
+    for (v = 0; v < 4; v++) {
+        if (!ex_open(n, 4)) return;
+        if (v & 2) rp_feed(30 * MS, 0, YIN_AXIS_POSITION, 1);
+        ysig_arm(&g_rp, 2, 20 * MS);
+        if (v & 1) ysig_set(&g_rp, 4, YSIG_OFFSET_D_X, 3);   /* it meets only H's own */
+        ysig_disarm(&g_rp, 1);
+        ysig_arm(&g_rp, 1, 20 * MS);
+        if (!(v & 2)) rp_feed(30 * MS, 0, YIN_AXIS_POSITION, 1);
+        CHECK(g_rp.wt->n == 0 && ex_unv() == (v & 1));
+    }
+    /* 2 (b)'s exception needs H's own L to be G's (the reviewer's 489):
+     * G arms d9 (on latch(s1, d6)) at 20 ms, H arms d6 at 20 ms, both in
+     * the past; device 2's input at 25 meets H through all(d6, d7), not
+     * G, so it lets H in before G's L (device 1 at 30). The control: no
+     * device 2 input between */
+    for (v = 0; v < 2; v++) {
+        ysig_node an[7];
+        an[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2); an[0].history = 64;
+        an[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1); an[1].p[YSIG_DETECT_LANE] = 0; an[1].p[YSIG_DETECT_LEVEL] = 5; an[1].p[YSIG_DETECT_START] = 1; an[1].history = 64;
+        an[2] = ysig_node_of(YSIG_OP_LATCH, 0, 1); an[2].history = 64;
+        an[3] = ysig_node_of(YSIG_OP_DETECT, 2, -1); an[3].p[YSIG_DETECT_LANE] = 0; an[3].p[YSIG_DETECT_LEVEL] = 5; an[3].p[YSIG_DETECT_START] = 1; an[3].history = 64;
+        an[4] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 2, 2); an[4].history = 64;
+        an[5] = ysig_node_of(YSIG_OP_DETECT, 4, -1); an[5].p[YSIG_DETECT_LANE] = 0; an[5].p[YSIG_DETECT_LEVEL] = 5; an[5].history = 64;
+        an[6] = ysig_node_of(YSIG_OP_ALL, 1, 5); an[6].history = 64;
+        if (!rp_open(an, 7, 4, 0, false, false)) return;
+        rp_feed(10 * MS, 0, YIN_AXIS_POSITION, 1);
+        rp_feed(10 * MS, 0, YIN_AXIS_POSITION, 2);
+        if (!v) rp_feed(25 * MS, 0, YIN_AXIS_POSITION, 2);
+        rp_feed(30 * MS, 0, YIN_AXIS_POSITION, 1);
+        ysig_arm(&g_rp, 3, 20 * MS);
+        CHECK(ex_unv() == 0);
+        ysig_arm(&g_rp, 1, 20 * MS);
+        CHECK(ex_unv() == !v);
+    }
+    /* 3 is for a group that waits at its place only: a present arm, then
+     * a late report of another device that meets it: 0 */
+    if (!ex_open(n, 4)) return;
+    rp_feed(20 * MS, 0, YIN_AXIS_POSITION, 1);
+    ysig_arm(&g_rp, 1, 20 * MS);
+    rp_feed(15 * MS, 0, YIN_AXIS_POSITION, 2);
+    CHECK(ex_unv() == 0);
+    /* and a past group with N(G) at or past its time (device 3's input at
+     * 30 ms before its place, device 1's at 12 the call it follows) */
+    if (!ex_open(n, 4)) return;
+    rp_feed(30 * MS, 0, YIN_AXIS_PEN_PRESSURE, 3);
+    rp_feed(12 * MS, 0, YIN_AXIS_POSITION, 1);
+    rp_feed(31 * MS, 0, YIN_AXIS_PEN_PRESSURE, 3);   /* after the place: a run again */
+    ysig_arm(&g_rp, 1, 20 * MS);
+    rp_feed(15 * MS, 0, YIN_AXIS_POSITION, 2);
+    CHECK(ex_unv() == 0);
     /* 3: a late report: d1 armed at 25 ms in the past (L: device 2's
      * input at 30, which s1 takes too), then device 1's sample at 20 ms
      * (newer than device 1's last); the controls: one at 25 ms (not

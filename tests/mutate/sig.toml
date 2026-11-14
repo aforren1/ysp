@@ -2565,8 +2565,8 @@ id = "303"
 name = "exactness: an arm alone between G and L counted"
 test = "sig"
 why = "Condition 2 (b)'s exception in a cascade (test_arm_exact: d2's arm alone)."
-find = '''                    (w->cas_all || ysig__fp_meets(g, w->cas_f, fx)) && w->cas_t > x->t) continue;'''
-replace = '''                    (w->cas_all || ysig__fp_meets(g, w->cas_f, fx)) && w->cas_t > x->t && 0) continue;'''
+find = '''                    (w->cas_all || ysig__fp_meets(g, w->cas_f, w->cg[k].F)) && w->cas_t > w->cg[k].t) continue;'''
+replace = '''                    (w->cas_all || ysig__fp_meets(g, w->cas_f, w->cg[k].F)) && w->cas_t > w->cg[k].t && 0) continue;'''
 
 [[mutant]]
 id = "304"
@@ -2591,7 +2591,7 @@ id = "306"
 name = "exactness: a later past group between an open group and its L not counted"
 test = "sig"
 why = "Condition 2 (b) with a window (test_arm_exact: d2's group with a set of d1 placed between)."
-find = '''                if (ysig__unv_x_ok(g, x, o->gid, o->t, N, l)) continue;
+find = '''                if (ysig__unv_x_ok(g, s, o->gid, o->t, N, li)) continue;
                 ysig__unv(g, o->gid);'''
 replace = '''                if (1) continue;
                 ysig__unv(g, o->gid);'''
@@ -2601,7 +2601,7 @@ id = "307"
 name = "exactness: the exception never holds in the log"
 test = "sig"
 why = "Condition 2 (b)'s exception with a window (test_arm_exact: d2's arm alone placed between)."
-find = '''    if (x->e.kind != YSIG_J_ARM || !x->gid) return 0;'''
+find = '''    if (!x->gid || (x->e.kind != YSIG_J_ARM && x->e.kind != YSIG_J_DISARM)) return 0;'''
 replace = '''    if (1) return 0;'''
 
 [[mutant]]
@@ -2611,3 +2611,35 @@ test = "sig"
 why = "arm_unverified is the arms' own count: a run again keeps it (test_arm_exact: the window's 2 (b))."
 find = '''    g->st.arm_unverified = keep.arm_unverified;'''
 replace = ''''''
+
+[[mutant]]
+id = "309"
+name = "exactness: the exception's group may hold a set"
+test = "sig"
+why = "Condition 2 (b): the other group holds its arm and disarms only (test_arm_exact: H with a set, ahead)."
+find = '''                if ((x->kind == YSIG_J_ARM || x->kind == YSIG_J_DISARM) && k < w->n_cg && !w->cg[k].cancelled && w->cg[k].dis_only &&'''
+replace = '''                if ((x->kind == YSIG_J_ARM || x->kind == YSIG_J_DISARM) && k < w->n_cg && !w->cg[k].cancelled &&'''
+
+[[mutant]]
+id = "310"
+name = "exactness: the exception's group need not have L(G) as its L"
+test = "sig"
+why = "Condition 2 (b): no input between H and L(G) lets H in (the reviewer's 489; test_arm_exact)."
+find = '''        if (ysig__input_t(&c->e, &ti) && ti > th && ysig__fp_entry(g, c, f) == 1 && ysig__fp_meets(g, f, fh)) return 0;'''
+replace = '''        if (0) return 0;'''
+
+[[mutant]]
+id = "311"
+name = "exactness: the log's exception takes a group with a set"
+test = "sig"
+why = "Condition 2 (b) with a window (test_arm_exact: H with a set, past)."
+find = '''        if (c->e.kind != YSIG_J_ARM && c->e.kind != YSIG_J_DISARM) return 0;'''
+replace = '''        if (0) return 0;'''
+
+[[mutant]]
+id = "312"
+name = "exactness: a late report after a past group with N(G) at its time counted"
+test = "sig"
+why = "Condition 3 is for a group that waits at its place (test_arm_exact: device 3 at 30 ms before the place)."
+find = '''        if (armed >= 0 && N < t) ysig__ux_arm(g, armed, t, gid, F);   /* condition 3: while it waits */'''
+replace = '''        if (armed >= 0) ysig__ux_arm(g, armed, t, gid, F);   /* condition 3: while it waits */'''
