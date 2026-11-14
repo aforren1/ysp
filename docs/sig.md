@@ -550,7 +550,8 @@ R is built call by call, in call order:
    end of R right before the first later call, an input call or a state
    call, whose time is later than `τ` and whose footprint meets `F(G)`,
    or right before a barrier. For this test a state call's time is `N`
-   at its call (input that does not meet `F(G)` can move `N` past `τ`),
+   at its call (input that does not meet `F(G)` can move `N` past `τ`;
+   in a past group, the group's `τ`, below),
    and an arm call's is the smaller of its `t` and `N`: a present arm
    lets in an earlier waiting group it meets (it is at `N`), a past arm
    only one earlier than its own time (E's example: the arm at 40 ms
@@ -567,9 +568,16 @@ R is built call by call, in call order:
    state call in an ahead group lets in nothing until that group goes
    in, so nothing in the group, its triggers included, is made before
    (H9; sets, set_data, disarms, recenters and channel index sets
-   alike). A waiting group let in this way by a state call of a past or
-   present group stays where it went in; that group's own calls move to
-   their place (rule 2).
+   alike). The calls of a past group go into R at the group's place
+   (rule 2), at the group's `τ`. A waiting group that one of them lets
+   in goes in right before that call, at the group's place, in its
+   block; the group's own calls alone set that place. A waiting group
+   that such a call let in at its call, at `N`, and that `τ` does not
+   let in, goes back to waiting. Reason: this is H9's principle (a call
+   lets in where it goes into R), and it keeps the waiting group in time
+   order. At the call's position in call order the waiting group could
+   follow input later than the past group's `τ`, and so pin that group
+   (the reviewer's H13).
    Waiting groups go in by `τ`, then call order. A group that never
    meets such a call is never made. A state call with a time at or
    before `τ` goes before the group: a `ysig_set()` of its detect then
