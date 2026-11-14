@@ -4137,8 +4137,27 @@ static void test_arm_spec(void) {
         ysig_get_stats(&g, &st);
         CHECK(st.arm_ahead_cancelled == 1 && !((ysig__det_st*)g.nd[1].st)->armed);
     }
-    /* a disarm with an earlier time does not cancel an arm made after it,
-     * and two arms with no disarm (E) both stand */
+    /* a waiting arm goes in before a later state call that meets it,
+     * also when input another detect reads moved the input time past its
+     * time: a disarm then goes after the arm (made, then disarmed: no
+     * cancel), and a set applies after the arm */
+    for (what = 0; what < 2; what++) {
+        n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2); n[0].history = 64;
+        n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1);
+        n[1].p[YSIG_DETECT_LANE] = 0; n[1].p[YSIG_DETECT_LEVEL] = 5; n[1].p[YSIG_DETECT_START] = 1;
+        n[2] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 2, 2); n[2].history = 64;
+        SP_OPEN(3, 4);
+        e = PEN_E(40 * MS, 1, 0, 0, YIN_TIER_2); ysig_feed(&g, &e);
+        CHECK(ysig_arm(&g, 1, 60 * MS) && g.wt->n == 1);
+        e = PEN_E(70 * MS, 2, 0, 0, YIN_TIER_2); ysig_feed(&g, &e);
+        CHECK(g.wt->n == 1);   /* that input shares no node with it */
+        if (what == 0) CHECK(ysig_disarm(&g, 1));
+        else CHECK(ysig_set(&g, 1, YSIG_DETECT_LEVEL, 100));
+        CHECK(g.wt->n == 0 && ((ysig__det_st*)g.nd[1].st)->t_arm == 60 * MS);
+        ysig_get_stats(&g, &st);
+        CHECK(st.arm_ahead_cancelled == 0);
+        CHECK(((ysig__det_st*)g.nd[1].st)->armed == (what == 1));
+    }
     /* a barrier cancels every waiting arm; its group's set goes in first */
     n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 2); n[0].history = 64;
     n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1);

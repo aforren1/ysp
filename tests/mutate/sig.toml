@@ -443,8 +443,10 @@ id = "51"
 name = "order: one slot for every device"
 test = "sig"
 why = "Order per source again: two pens interleaving would drop each other."
-find = 'for (d = 0; d < s->n && s->dev[d] != e->device; d++) { }'
-replace = 'for (d = 0; d < s->n && 0; d++) { }'
+find = '''            for (d = 0; d < s->n && s->dev[d] != e->device; d++) { }
+            if (d == s->n) {'''
+replace = '''            for (d = 0; d < s->n && 0; d++) { }
+            if (d == s->n) {'''
 
 [[mutant]]
 id = "52"
@@ -1066,9 +1068,15 @@ test = "sig"
 why = "The call moves the hand: without the entry a replay diverges."
 find = '''    e.t = t_ns;
     ysig__journal(g, &e);
+    ysig__before_state(g, id);
+    g->wt->seq++;
+    g->wt->gap_n++;
     ysig__log(g, &e);
     ysig__do_recenter(g, role, x, y, t_ns);'''
 replace = '''    e.t = t_ns;
+    ysig__before_state(g, id);
+    g->wt->seq++;
+    g->wt->gap_n++;
     ysig__log(g, &e);
     ysig__do_recenter(g, role, x, y, t_ns);'''
 
@@ -1372,13 +1380,20 @@ id = "161"
 name = "recenter: the time not journaled"
 test = "sig"
 why = "A replay would place the point at time 0, with other ring times and t."
-find = """    e.t = t_ns;
+find = '''    e.t = t_ns;
     ysig__journal(g, &e);
+    ysig__before_state(g, id);
+    g->wt->seq++;
+    g->wt->gap_n++;
     ysig__log(g, &e);
-    ysig__do_recenter(g, role, x, y, t_ns);"""
-replace = """    ysig__journal(g, &e);
+    ysig__do_recenter(g, role, x, y, t_ns);'''
+replace = '''    ysig__journal(g, &e);
+    ysig__before_state(g, id);
+    g->wt->seq++;
+    g->wt->gap_n++;
+    e.t = t_ns;
     ysig__log(g, &e);
-    ysig__do_recenter(g, role, x, y, t_ns);"""
+    ysig__do_recenter(g, role, x, y, t_ns);'''
 
 [[mutant]]
 id = "162"
@@ -1465,7 +1480,7 @@ id = "172"
 name = "re-arm: the users do not see the fall"
 test = "sig"
 why = "T7: the next hit in the next sample's pass would be no rise for a gate."
-find = '''        ysig__settle(g, node);
+find = '''        ysig__settle(g, node, t_ns);
     }
     if (rose) {'''
 replace = '''        (void)0;
@@ -1474,12 +1489,11 @@ replace = '''        (void)0;
 
 [[mutant]]
 id = "173"
-name = "re-arm: the fall stops at the first user"
+name = "an arm's change reaches latches only"
 test = "sig"
-why = "A gate through an all must fall too."
-find = '''        ysig__run(g, nid, 1, g->onset);
-        reach[nid] = 1;'''
-replace = '''        ysig__run(g, nid, 1, g->onset);'''
+why = "The semantics, D: every user takes it as a sample's value (test_arm_spec r14: a latch behind a delay; test_arm_window: a detect on a hit output)."
+find = '''        if (hit) ysig__run(g, nid, 0, t);'''
+replace = '''        if (hit && m->op == YSIG_OP_LATCH) ysig__run(g, nid, 0, t);'''
 
 [[mutant]]
 id = "174"
@@ -1568,11 +1582,11 @@ name = "arm: the fall not in the ring"
 test = "sig"
 why = "U4: a past read after the arm would disagree with the live value."
 find = '''        ysig__hist_push(g, n, &g->val[node]);
-        ysig__settle(g, node);
+        ysig__settle(g, node, t_ns);
     }
     if (rose) {'''
 replace = '''        (void)0;
-        ysig__settle(g, node);
+        ysig__settle(g, node, t_ns);
     }
     if (rose) {'''
 
@@ -1751,9 +1765,9 @@ id = "210"
 name = "no run again: an arm in the past tests the newest value"
 test = "sig"
 why = "v0.6.0 (test_arm_window 2, sig_arm_oracle)."
-find = '''    ysig__rerun(g, kslot, node, t_ns);
+find = '''    ysig__rerun(g, kslot, node, t);
     cu->arm_live = 0;'''
-replace = '''    ysig__arm_plain(g, node, t_ns, t_ns);
+replace = '''    ysig__arm_plain(g, node, t, t);
     cu->arm_live = 0;'''
 
 [[mutant]]
@@ -1761,16 +1775,16 @@ id = "211"
 name = "the arm placed at the call, not after the last call that must come first"
 test = "sig"
 why = "v0.6.0 (test_arm_window 2)."
-find = '''        if (ysig__before_arm(&cu->calls[(pos - 1) % (uint64_t)cu->C].e, t_ns)) break;'''
+find = '''        if (ysig__must_before(g, &cu->calls[(pos - 1) % (uint64_t)cu->C], t, F)) break;'''
 replace = '''        if (1) break;'''
 
 [[mutant]]
 id = "212"
-name = "an input at the arm's time counted as later"
+name = "a call at the group's time counted as later"
 test = "sig_oracle"
 why = "v0.6.0: equal times come first (sig_arm_oracle)."
-find = '''    if (ysig__input_t(e, &ti)) return ti <= t;'''
-replace = '''    if (ysig__input_t(e, &ti)) return ti < t;'''
+find = '''    return c->tr <= t && ysig__fp_meets(g, f, F);'''
+replace = '''    return c->tr < t && ysig__fp_meets(g, f, F);'''
 
 [[mutant]]
 id = "213"
@@ -1795,16 +1809,16 @@ test = "sig"
 expect = "survived"
 note = "Equivalent in results: the newest checkpoint before t and an older one give the same state; the newest runs fewer calls again (cost only, docs/sig.md)."
 why = "v0.6.0: the least to run again; the same state (cost only)."
-find = '''    for (i = cu->n_ck - 1; i >= 0 && kslot < 0; i--)'''
-replace = '''    for (i = 0; i < cu->n_ck && kslot < 0; i++)'''
+find = '''    for (i = cu->n_ck - 1; i >= 0; i--) {'''
+replace = '''    for (i = 0; i < cu->n_ck; i++) {'''
 
 [[mutant]]
 id = "216"
 name = "a checkpoint after the arm's place used"
 test = "sig"
 why = "v0.6.0 (test_arm_window 5, sig_arm_oracle)."
-find = '''        if (k->call <= pos && (pos > cu->c_tail || k->cover <= t_ns)) kslot = (cu->ck0 + i) % cu->K;'''
-replace = '''        kslot = (cu->ck0 + i) % cu->K;'''
+find = '''        if (k->call <= pos && (pos > cu->c_tail || k->cover <= t || k->bar)) return (cu->ck0 + i) % cu->K;'''
+replace = '''        return (cu->ck0 + i) % cu->K;'''
 
 [[mutant]]
 id = "217"
@@ -1854,20 +1868,26 @@ test = "sig"
 expect = "survived"
 note = "Equivalent in results: after a reset its own checkpoint (cover INT64_MIN) is always the newest at or before an arm, so no older one is used; the barrier frees the logs and guards the search."
 why = "v0.6.0 (test_arm_window 7, sig_arm_diff after a reset)."
-find = '''    if (g->cu) ysig__cu_clear(g->cu, g->cu->replaying ? g->cu->c_pos : g->cu->c_head);
+find = '''    if (g->cu) {
+        ysig__cu_clear(g->cu, g->cu->replaying ? g->cu->c_pos : g->cu->c_head);
+        g->cu->at_bar = 1;
+    }
     ysig__ck_take(g);
-}'''
+}
+
+/* An arm with'''
 replace = '''    ysig__ck_take(g);
-}'''
+}
+
+/* An arm with'''
 
 [[mutant]]
 id = "223"
-name = "t_cover kept across a reset"
+name = "the input time after a reset the lowest, not the reset's time"
 test = "sig"
-why = "v0.6.0 (test_arm_window 7)."
-find = '''    ysig__reset(g, t, exp_only);
-    g->t_cover = INT64_MIN;'''
-replace = '''    ysig__reset(g, t, exp_only);'''
+why = "The semantics, N: an arm at the reset's time is made at once (test_arm_spec)."
+find = '''    g->t_cover = t;   /* the input time after a reset is its time */'''
+replace = '''    g->t_cover = INT64_MIN;'''
 
 [[mutant]]
 id = "224"
@@ -1882,9 +1902,8 @@ id = "225"
 name = "the logs' capacity not checked"
 test = "sig"
 why = "v0.6.0 (test_arm_window 6: arm_past_full)."
-find = '''    if (cu->c_head - cu->c_tail >= (uint64_t)cu->C) { ysig__cu_full(cu); return; }
-    c = &cu->calls['''
-replace = '''    c = &cu->calls['''
+find = '''    if (!cu->n_ck || cu->c_head - cu->c_tail >= (uint64_t)cu->C) {'''
+replace = '''    if (!cu->n_ck) {'''
 
 [[mutant]]
 id = "226"
@@ -1899,8 +1918,8 @@ id = "227"
 name = "no window counted as a window"
 test = "sig"
 why = "v0.6.0 (test_arm_window 1)."
-find = '''        g->st.arm_past_off++;'''
-replace = ''''''
+find = '''        if (t_ns < g->t_cover) g->st.arm_past_off++;'''
+replace = '''        (void)0;'''
 
 [[mutant]]
 id = "228"
@@ -1998,36 +2017,40 @@ replace = '''    if (n->p[5] == 1 || (g->nd[n->in[0]].flags & YSIG__F_FRAME)) re
 
 [[mutant]]
 id = "240"
-name = "an arm in the past moves before a set or a disarm made before it"
+name = "a state call at or before the group's time does not restrict its place"
 test = "sig"
-why = "Review of 0.6.0, finding 3 (test_arm_review 3)."
-find = '''    case YSIG_J_SET: case YSIG_J_SET_DATA: case YSIG_J_DISARM: case YSIG_J_RESET: case YSIG_J_RESET_TRIAL: return 1;'''
-replace = '''    case YSIG_J_SET: case YSIG_J_SET_DATA: case YSIG_J_DISARM: case YSIG_J_RESET: case YSIG_J_RESET_TRIAL: return 0;'''
+why = "Rule 2: a set made at an input time at or before the arm's, sharing a node, comes before it."
+find = '''    return c->tr <= t && ysig__fp_meets(g, f, F);'''
+replace = '''    return ysig__fp_meets(g, f, F) && c->tr <= t && !ysig__is_state(c->e.kind);'''
 
 [[mutant]]
 id = "241"
-name = "an arm in the past moves before a recenter at or before its time"
+name = "a group's footprint without its state calls"
 test = "sig_oracle"
-why = "Review of 0.6.0, finding 3: the player's 3.12 path (sig_arm_oracle, relative role)."
-find = '''    case YSIG_J_RECENTER: case YSIG_J_ARM: return e->t <= t;'''
-replace = '''    case YSIG_J_RECENTER: return 0;
-    case YSIG_J_ARM: return e->t <= t;'''
+why = "Rule 2: an input that meets a set of the group comes before it (r11's unrelated set, a feed of its node)."
+find = '''    for (s = from; s < cu->c_head; s++) {
+        (void)ysig__fp_entry(g, &cu->calls[s % (uint64_t)cu->C], f);
+        for (w = 0; w < g->dw; w++) F[w] |= f[w];
+    }'''
+replace = '''    for (s = from; s < from; s++) {
+        (void)ysig__fp_entry(g, &cu->calls[s % (uint64_t)cu->C], f);
+        for (w = 0; w < g->dw; w++) F[w] |= f[w];
+    }'''
 
 [[mutant]]
 id = "242"
-name = "an arm placed after a logged arm with a later time"
+name = "a waiting arm made before an input at its own time"
 test = "sig"
-why = "Review of 0.6.0, the arm order (test_arm_review: the later time is in effect)."
-find = '''    case YSIG_J_RECENTER: case YSIG_J_ARM: return e->t <= t;'''
-replace = '''    case YSIG_J_RECENTER: return e->t <= t;
-    case YSIG_J_ARM: return 1;'''
+why = "Rule 3: an input at the arm's time comes before it (it waits for one later)."
+find = '''            if (w->a[k].t >= t) continue;'''
+replace = '''            if (w->a[k].t > t) continue;'''
 
 [[mutant]]
 id = "243"
-name = "an arm ahead of the input meets the old hold on unfed time"
+name = "an arm with no room to wait meets the old hold on unfed time"
 test = "sig"
 why = "Review of 0.6.0, finding 4 (test_arm_review 4)."
-find = '''    ysig__arm_made(g, node, t, past || t <= g->t_cover ? t : g->t_cover, at);'''
+find = '''    ysig__arm_made(g, node, t, param == 2 && t > g->t_cover ? g->t_cover : t, at);'''
 replace = '''    ysig__arm_made(g, node, t, t, at);'''
 
 [[mutant]]
@@ -2080,11 +2103,12 @@ replace = '''    int         slot_next;      /* frames with values logged (a slo
 
 [[mutant]]
 id = "251"
-name = "an arm made in the past meets the old hold only up to the input known at its place"
+name = "a disarm ends a hold met by its time without its hit"
 test = "sig"
-why = "Review of 0.6.0, finding 1 with the decision of 2026-11-13: a re-arm at its own hit's time that later input found keeps the hit (test_arm_window, the arm at 9.5 ms)."
-find = '''    ysig__arm_made(g, node, t, past || t <= g->t_cover ? t : g->t_cover, at);'''
-replace = '''    ysig__arm_made(g, node, t, t <= g->t_cover ? t : g->t_cover, at);'''
+why = "The exit a hit makes disarms the control at the hit's time: the hit stands (the model's s523 and s9175, player_test)."
+find = '''    ysig__settle_det(g, node, t, 1);
+    s->armed = s->holding = 0;'''
+replace = '''    s->armed = s->holding = 0;'''
 
 [[mutant]]
 id = "252"
@@ -2155,3 +2179,123 @@ test = "sig"
 why = "As 256, for the set alone."
 find = '''    if (ysig__reentered(g, "ysig_set")) return false;'''
 replace = '''    (void)0;'''
+
+[[mutant]]
+id = "260"
+name = "every footprint meets every other"
+test = "sig"
+why = "The semantics, A: input that shares no node with a group does not restrict its place (test_arm_spec r11: a late report of another device)."
+find = '''    for (w = 0; w < g->dw; w++) if (a[w] & b[w]) return 1;
+    return 0;'''
+replace = '''    (void)a; (void)b; (void)w;
+    return 1;'''
+
+[[mutant]]
+id = "261"
+name = "a pinned group not counted"
+test = "sig"
+why = "The semantics: a pinned group is a fallback the guard sees (test_arm_spec)."
+find = '''ysig__fp_entry(g, c, f) == 1 && ysig__fp_meets(g, f, F)) pinned = 1;'''
+replace = '''ysig__fp_entry(g, c, f) == 1 && ysig__fp_meets(g, f, F)) (void)0;'''
+
+[[mutant]]
+id = "262"
+name = "an arm ahead of the input made at once"
+test = "sig"
+why = "Rule 3 (E): it waits for input past its time (test_arm_spec r15, test_arm_window finding 4)."
+find = '''    if (t_ns > g->t_cover) {
+        ysig__arm_wait(g, node, t_ns, seq);'''
+replace = '''    if (0) {
+        ysig__arm_wait(g, node, t_ns, seq);'''
+
+[[mutant]]
+id = "263"
+name = "a disarm does not cancel a waiting arm"
+test = "sig"
+why = "Rule 3: a disarm cancels the waiting arms of its detect with a later time (test_arm_spec, alone and in an exit's group)."
+find = '''        if (w->a[k].node == node && w->a[k].t >= t && w->a[k].seq < seq) {'''
+replace = '''        if (0) {'''
+
+[[mutant]]
+id = "264"
+name = "a barrier makes the waiting arms"
+test = "sig"
+why = "Rule 3: a barrier cancels every waiting arm (test_arm_spec)."
+find = '''        ysig__wait_place(g, best, 0);'''
+replace = '''        ysig__wait_place(g, best, 1);'''
+
+[[mutant]]
+id = "265"
+name = "a waiting group's state calls stay where made"
+test = "sig"
+why = "Rule 3: an ahead group's calls wait with its arm (test_arm_spec: the set waits, then goes in before the barrier)."
+find = '''    int stays = w->gap_n > 0 && (!cu || cu->grp_bad || nc == 0);'''
+replace = '''    int stays = w->gap_n > 0;'''
+
+[[mutant]]
+id = "266"
+name = "final-only rows handed out at once"
+test = "sig"
+why = "desc.rows_final: a row comes once no arm can change it (test_arm_spec)."
+find = '''        if (g->cu->rows_final) { ysig__rb_push(g, &r); return; }'''
+replace = '''        (void)0;'''
+
+[[mutant]]
+id = "267"
+name = "every held row final at once"
+test = "sig"
+why = "Final: made by a call older than the oldest the window can run again (test_arm_spec: held until the second frame)."
+find = '''    return cu->n_ck ? cu->ck[cu->ck0].call : UINT64_MAX;'''
+replace = '''    (void)cu;
+    return UINT64_MAX;'''
+
+[[mutant]]
+id = "268"
+name = "held rows kept through a run again"
+test = "sig"
+why = "A run again makes the rows from its checkpoint on again: the held ones go (test_arm_spec: three rows, the run again's)."
+find = '''    while (cu->rb && cu->rb_head > cu->rb_tail && cu->rb[(cu->rb_head - 1) % (uint64_t)cu->R].idx >= k->call) cu->rb_head--;'''
+replace = '''    (void)0;'''
+
+[[mutant]]
+id = "269"
+name = "a flush not a barrier"
+test = "sig"
+why = "ysig_flush(): every row so far is final, no arm goes before it (test_arm_spec)."
+find = '''static void ysig__do_flush(ysig_graph* g) {
+    if (g->cu) {'''
+replace = '''static void ysig__do_flush(ysig_graph* g) {
+    if (0) {'''
+
+[[mutant]]
+id = "270"
+name = "a run again's checkpoint kept with more than 64 hits queued"
+test = "sig_ubsan"
+why = "An image keeps 64 hits (F): more would write past it (test_arm_review finding 6, then frames)."
+find = '''    if (g->n_hit > YSIG_QUEUE_CAP) return;
+    if (cu->n_ck == cu->K) {'''
+replace = '''    if (cu->n_ck == cu->K) {'''
+
+[[mutant]]
+id = "271"
+name = "a past group not moved to its place"
+test = "sig"
+why = "Rule 2: the group and its arm go as one block to their place (test_arm_spec r11 and r11b)."
+find = '''    ysig__calls_rev(cu, pos, end);'''
+replace = '''    (void)0;'''
+
+[[mutant]]
+id = "272"
+name = "an arm's change reaches no record"
+test = "sig"
+why = "The semantics, D: a record of a detect's user takes the change as a sample's value (test_arm_spec: final-only rows after a run again)."
+find = '''        if ((m->flags & YSIG__F_NOSRC) || m->op == YSIG_OP_BIND || (m->op == YSIG_OP_RECORD && m->p[0] == 1) ||'''
+replace = '''        if ((m->flags & YSIG__F_NOSRC) || m->op == YSIG_OP_BIND || m->op == YSIG_OP_RECORD ||'''
+
+[[mutant]]
+id = "273"
+name = "final-only derived events handed out at once"
+test = "sig"
+why = "desc.derived_final (test_arm_spec: held, then handed out once final)."
+find = '''    if (g->cu && g->cu->derived_final) e = &held;'''
+replace = '''    if (0) e = &held;'''

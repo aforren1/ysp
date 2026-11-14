@@ -1138,6 +1138,7 @@ typedef struct ysig__wt {
 #define YSIG__FPW 8   /* a footprint's words: 512 nodes */
 struct ysig_graph;
 static void ysig__before_input(struct ysig_graph* g, int64_t t, const uint64_t* f);
+static void ysig__before_state(struct ysig_graph* g, int node);
 static void ysig__before_barrier(struct ysig_graph* g);
 static int ysig__feed_fp(const struct ysig_graph* g, const yin_event* e, uint64_t* f, uint64_t* mask, int* all);
 
@@ -2630,10 +2631,10 @@ static void ysig__db_push(ysig_graph* g, const yin_event* e) {
 static void ysig__emit(ysig_graph* g, int i, const ysig_value* v) {
     ysig__nd* n = &g->nd[i];
     yin_event* e;
+    yin_event held;
     int k;
     ysig__digest_word(g, (uint64_t)(uint32_t)i);
     ysig__digest_value(g, v);
-    yin_event held;
     if (g->cu) g->cu->der_h = ysig__mix_value(ysig__hmix(ysig__hmix(g->cu->der_h, (uint64_t)(uint32_t)i), (uint64_t)n->p[0] + ((uint64_t)n->p[1] << 32)), v);
     if (g->cu && g->cu->derived_final) e = &held;
     else if (g->n_der >= YSIG_QUEUE_CAP) { g->st.derived_lost++; return; }
@@ -3401,6 +3402,7 @@ YSIG_API bool ysig_recenter(ysig_graph* g, int role, double x, double y, int64_t
     e.y = y;
     e.t = t_ns;
     ysig__journal(g, &e);
+    ysig__before_state(g, id);
     g->wt->seq++;
     g->wt->gap_n++;
     ysig__log(g, &e);
@@ -3571,6 +3573,7 @@ YSIG_API bool ysig_set(ysig_graph* g, int node, int param, double v) {
     e.param = param;
     e.value = v;
     ysig__journal(g, &e);
+    ysig__before_state(g, node);
     g->wt->seq++;
     g->wt->gap_n++;
     ysig__log(g, &e);
@@ -3589,6 +3592,7 @@ YSIG_API bool ysig_set_data(ysig_graph* g, int node, int index, double v) {
     e.param = index;
     e.value = v;
     ysig__journal(g, &e);
+    ysig__before_state(g, node);
     g->wt->seq++;
     g->wt->gap_n++;
     ysig__log(g, &e);
@@ -3916,6 +3920,7 @@ static int ysig__log(ysig_graph* g, const ysig_entry* e) {
     /* its time in the reference order: an input's own, an arm's t, a
      * state call's input time now (its group's, if an arm closes one) */
     if (!ysig__input_t(e, &c->tr)) c->tr = e->kind == YSIG_J_ARM ? e->t : g->t_cover;
+    if (e->kind == YSIG_J_DISARM) c->e.t = c->tr;   /* a disarm acts at its time */
     c->srcm = cu->srcm;
     c->srcm_all = cu->srcm_all;
     if (e->kind == YSIG_J_FRAME) {
@@ -4013,8 +4018,12 @@ static void ysig__arm_do(ysig_graph* g, int node, int64_t t, uint64_t at, int pa
     ysig__arm_made(g, node, t, param == 2 && t > g->t_cover ? g->t_cover : t, at);
 }
 
-static void ysig__do_disarm(ysig_graph* g, int node) {
+/* A disarm at t ends its detect's arm at t: a hold met by then is that
+ * arm's hit first, as at an arm (the exit a hit makes disarms the control
+ * at the hit's time) */
+static void ysig__do_disarm(ysig_graph* g, int node, int64_t t) {
     ysig__det_st* s = (ysig__det_st*)g->nd[node].st;
+    ysig__settle_det(g, node, t, 1);
     s->armed = s->holding = 0;
 }
 
@@ -4060,7 +4069,7 @@ static void ysig__apply(ysig_graph* g, const ysig_entry* e) {
     case YSIG_J_SET: ysig__do_set(g, e->node, e->param, e->value); break;
     case YSIG_J_SET_DATA: g->nd[e->node].data[e->param] = e->value; break;
     case YSIG_J_ARM: ysig__arm_do(g, e->node, e->t, g->cu ? g->cu->c_pos - 1 : UINT64_MAX, e->param); break;
-    case YSIG_J_DISARM: ysig__do_disarm(g, e->node); break;
+    case YSIG_J_DISARM: ysig__do_disarm(g, e->node, e->t); break;
     case YSIG_J_FEED: (void)ysig__do_feed(g, &e->event); break;
     case YSIG_J_FRAME: ysig__do_frame(g, &e->frame); break;
     case YSIG_J_SETTLE: ysig__do_settle(g, e->t); break;
@@ -4218,6 +4227,12 @@ static int ysig__must_before(ysig_graph* g, const ysig__call* c, int64_t t, cons
     return c->tr <= t && ysig__fp_meets(g, f, F);
 }
 
+/* A logged state call's time: its group's (a disarm acts at it) */
+static void ysig__set_tr(ysig__call* c, int64_t t) {
+    c->tr = t;
+    if (c->e.kind == YSIG_J_DISARM) c->e.t = t;
+}
+
 static void ysig__calls_rev(ysig__cu* cu, uint64_t a, uint64_t b) {
     while (b > a + 1) {
         ysig__call x;
@@ -4242,12 +4257,13 @@ static void ysig__wait_drop(ysig__wt* w, int k) {
     w->n--;
 }
 /* A disarm of `node` at time t, call `seq`: it cancels the waiting arms
- * of node with a later time, made before it. */
+ * of node at or after its time, made before it (one with a later time
+ * goes after the arm: the arm went in before it, rule 3). */
 static void ysig__wait_cancel(ysig_graph* g, int node, int64_t t, uint64_t seq) {
     ysig__wt* w = g->wt;
     int k;
     for (k = 0; k < w->n; k++)
-        if (w->a[k].node == node && w->a[k].t > t && w->a[k].seq < seq) {
+        if (w->a[k].node == node && w->a[k].t >= t && w->a[k].seq < seq) {
             w->a[k].node = -1 - node;   /* its group's other calls still go in */
             g->st.arm_ahead_cancelled++;
         }
@@ -4268,14 +4284,15 @@ static void ysig__wait_place(ysig_graph* g, int k, int with_arm) {
     ysig__wa a = w->a[k];
     int i;
     for (i = 0; i < a.nc; i++) {
-        const ysig_entry* e = &w->calls[a.c0 + i];
+        ysig_entry e = w->calls[a.c0 + i];
+        if (e.kind == YSIG_J_DISARM) e.t = a.t;
         if (g->cu) {
             g->cu->srcm = 0;
             g->cu->srcm_all = 0;
-            if (ysig__log(g, e)) g->cu->calls[(g->cu->c_head - 1) % (uint64_t)g->cu->C].tr = a.t;
+            if (ysig__log(g, &e)) ysig__set_tr(&g->cu->calls[(g->cu->c_head - 1) % (uint64_t)g->cu->C], a.t);
         }
-        ysig__apply(g, e);
-        if (e->kind == YSIG_J_DISARM) ysig__wait_cancel(g, e->node, a.t, w->call_seq[a.c0 + i]);
+        ysig__apply(g, &e);
+        if (e.kind == YSIG_J_DISARM) ysig__wait_cancel(g, e.node, a.t, w->call_seq[a.c0 + i]);
     }
     a = w->a[k];   /* a disarm in it may have cancelled another */
     ysig__wait_drop(w, k);
@@ -4296,7 +4313,8 @@ static void ysig__wait_place(ysig_graph* g, int k, int with_arm) {
 static void ysig__wait_fp(ysig_graph* g, const ysig__wa* a, uint64_t* f) {
     int i, w;
     for (w = 0; w < g->dw; w++) f[w] = 0;
-    ysig__fp_or(g, f, a->node >= 0 ? a->node : -1 - a->node);
+    /* a cancelled arm's group: its other calls' footprints only */
+    if (a->node >= 0) ysig__fp_or(g, f, a->node);
     for (i = 0; i < a->nc; i++) {
         const ysig_entry* e = &g->wt->calls[a->c0 + i];
         ysig__fp_or(g, f, e->kind == YSIG_J_RECENTER ? ysig__recenter_node(g, e->node) : e->node);
@@ -4306,9 +4324,8 @@ static void ysig__wait_fp(ysig_graph* g, const ysig__wa* a, uint64_t* f) {
  * open gap's disarms are made at the input time now, and every waiting
  * arm at an earlier time whose footprint it meets goes in first, by
  * (time, call order). */
-static void ysig__before_input(ysig_graph* g, int64_t t, const uint64_t* f) {
+static void ysig__wait_fire(ysig_graph* g, int64_t t, const uint64_t* f) {
     ysig__wt* w = g->wt;
-    ysig__gap_disarms(g, g->t_cover);
     for (;;) {
         int k, best = -1;
         for (k = 0; k < w->n; k++) {
@@ -4323,6 +4340,21 @@ static void ysig__before_input(ysig_graph* g, int64_t t, const uint64_t* f) {
         if (best < 0) break;
         ysig__wait_place(g, best, 1);
     }
+}
+static void ysig__before_input(ysig_graph* g, int64_t t, const uint64_t* f) {
+    ysig__gap_disarms(g, g->t_cover);
+    ysig__wait_fire(g, t, f);
+}
+/* Before a state call (set, set_data, disarm, recenter): it is at the input
+ * time now, so a waiting group at an earlier time whose footprint its own
+ * meets goes in first (rule 3: a disarm later than the arm goes after it) */
+static void ysig__before_state(ysig_graph* g, int node) {
+    uint64_t f[YSIG__FPW];
+    int w;
+    if (!g->wt->n || node < 0) return;
+    for (w = 0; w < g->dw; w++) f[w] = 0;
+    ysig__fp_or(g, f, node);
+    ysig__wait_fire(g, g->t_cover, f);
 }
 /* Before a barrier: every waiting arm is cancelled; its group's other
  * calls go in first. */
@@ -4450,7 +4482,7 @@ static void ysig__arm_past(ysig_graph* g, ysig_entry* e) {
         /* nothing logged after its place: made where it is */
         if (pinned) g->st.arm_past_pinned++;
         logged = ysig__log(g, e);
-        for (s = from; s < cu->c_head; s++) cu->calls[s % (uint64_t)cu->C].tr = t;
+        for (s = from; s < cu->c_head; s++) ysig__set_tr(&cu->calls[s % (uint64_t)cu->C], t);
         ysig__arm_made(g, node, t, t, logged ? cu->c_head - 1 : UINT64_MAX);
         return;
     }
@@ -4459,14 +4491,14 @@ static void ysig__arm_past(ysig_graph* g, ysig_entry* e) {
         if (cu->full || kslot >= 0 || cu->grp_bad) g->st.arm_past_full++;
         else g->st.arm_past_far++;
         logged = ysig__log(g, e);
-        for (s = from; s < cu->c_head; s++) cu->calls[s % (uint64_t)cu->C].tr = t;
+        for (s = from; s < cu->c_head; s++) ysig__set_tr(&cu->calls[s % (uint64_t)cu->C], t);
         ysig__arm_made(g, node, t, t, logged ? cu->c_head - 1 : UINT64_MAX);
         return;
     }
     if (pinned) g->st.arm_past_pinned++;
     logged = ysig__log(g, e);
     end = cu->c_head;
-    for (s = from; s < end; s++) cu->calls[s % (uint64_t)cu->C].tr = t;
+    for (s = from; s < end; s++) ysig__set_tr(&cu->calls[s % (uint64_t)cu->C], t);
     /* the group and its arm, [from, end), go to pos */
     ysig__calls_rev(cu, pos, from);
     ysig__calls_rev(cu, from, end);
@@ -4510,7 +4542,7 @@ YSIG_API bool ysig_arm(ysig_graph* g, int node, int64_t t_ns) {
         if (cu) {
             uint64_t s, from = cu->grp_open && !cu->grp_bad ? cu->grp_from : cu->c_head;
             logged = ysig__log(g, &e);
-            for (s = from; s < cu->c_head; s++) cu->calls[s % (uint64_t)cu->C].tr = t_ns;
+            for (s = from; s < cu->c_head; s++) ysig__set_tr(&cu->calls[s % (uint64_t)cu->C], t_ns);
         }
         ysig__gap_disarms(g, t_ns);
         ysig__arm_made(g, node, t_ns, t_ns, logged ? cu->c_head - 1 : UINT64_MAX);
@@ -4549,6 +4581,7 @@ YSIG_API bool ysig_disarm(ysig_graph* g, int node) {
     e.kind = YSIG_J_DISARM;
     e.node = node;
     ysig__journal(g, &e);
+    ysig__before_state(g, node);
     w = g->wt;
     w->seq++;
     w->gap_n++;
@@ -4561,8 +4594,9 @@ YSIG_API bool ysig_disarm(ysig_graph* g, int node) {
     } else {
         ysig__wait_cancel(g, node, g->t_cover, w->seq);
     }
+    e.t = g->t_cover;
     ysig__log(g, &e);
-    ysig__do_disarm(g, node);
+    ysig__do_disarm(g, node, g->t_cover);
     ysig__out_final(g);
     return true;
 }
