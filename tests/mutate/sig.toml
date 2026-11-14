@@ -1960,9 +1960,9 @@ replace = '''    if (d->catchup_frames < 0 || d->catchup_frames > 80 ||'''
 [[mutant]]
 id = "232"
 name = "the hit matched on its lanes only"
-test = "sig_ref"
-note = "Killed by the reviewer's oracle (sig_ref: a wrong case with no count). No unit test reaches it."
-why = "v0.6.0: a hit's value is all of it (sig_arm_oracle: a hit B has, A not)."
+test = "sig"
+note = "Was killed by the reviewer's oracle alone (sig_ref, seed 20261114: case 1382, a wrong case with no count). After the check round's 2 (b) the oracle counts every wrong case it makes (15 of 15) and the mutant survives it; test_hit_whole_value (from the oracle's case 286, reduced) kills it."
+why = "v0.6.0: a hit's value is all of it (test_hit_whole_value: equal lanes and time, another device)."
 find = '''!memcmp(&l->h.value, &h->value, sizeof h->value)) {'''
 replace = '''!memcmp(l->h.value.v, h->value.v, sizeof h->value.v)) {'''
 

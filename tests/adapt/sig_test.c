@@ -4489,6 +4489,43 @@ static void test_disarm_at_gap_end(void) {
     }
 }
 
+/* A hit is the same as one handed out only when its whole value is
+ * (docs/sig.md, "Hits, rows and derived events"). B (hold 5 ms) reads a
+ * mux that detect A switches from device 2 to device 1. A's arm in the
+ * past (15 ms, before B's at 20) makes B's hit at 25 ms again with
+ * device 1's sources: equal lanes and time, another value. The handed-out
+ * hit is retracted and the new one queued (mutant 232 matched on the lanes
+ * alone; the oracle's case 286 of seed 20261114, reduced) */
+static void test_hit_whole_value(void) {
+    ysig_node n[5];
+    ysig_hit h[8];
+    ysig_stats st;
+    int m, k, found = 0;
+    g_where = "a hit matched by its whole value";
+    n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2); n[0].history = 64;
+    n[1] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 2, 2); n[1].history = 64;
+    n[2] = ysig_node_of(YSIG_OP_DETECT, 0, -1); n[2].p[YSIG_DETECT_LANE] = 0; n[2].p[YSIG_DETECT_LEVEL] = 5; n[2].p[YSIG_DETECT_START] = 1;
+    n[2].p[YSIG_DETECT_ENTRY] = YSIG_ENTRY_NOW; n[2].p[YSIG_DETECT_OUT] = YSIG_OUT_HIT; n[2].history = 64;   /* 0 until its hit: the mux reads device 2 */
+    n[3] = ysig_node_of(YSIG_OP_MUX, 0, 1); n[3].in[2] = 2; n[3].history = 64;
+    n[4] = ysig_node_of(YSIG_OP_DETECT, 3, -1); n[4].p[YSIG_DETECT_LANE] = 0; n[4].p[YSIG_DETECT_LEVEL] = 5; n[4].p[YSIG_DETECT_HOLD] = 0.005;
+    n[4].p[YSIG_DETECT_START] = 1; n[4].p[YSIG_DETECT_OUT] = YSIG_OUT_HIT; n[4].history = 64;
+    if (!rp_open(n, 5, 4, 0, false, false)) return;
+    rp_feed(10 * MS, 10, YIN_AXIS_POSITION, 1);
+    rp_feed(10 * MS, 10, YIN_AXIS_POSITION, 2);
+    rp_feed(20 * MS, 10, YIN_AXIS_POSITION, 1);
+    rp_feed(20 * MS, 10, YIN_AXIS_POSITION, 2);
+    ysig_arm(&g_rp, 4, 20 * MS);
+    rp_feed(30 * MS, 10, YIN_AXIS_POSITION, 1);
+    rp_feed(30 * MS, 10, YIN_AXIS_POSITION, 2);
+    m = ysig_detected(&g_rp, h, 8);
+    CHECK(m == 1 && h[0].node == 4 && h[0].t == 25 * MS && h[0].value.device == 2);
+    ysig_arm(&g_rp, 2, 15 * MS);
+    m = ysig_detected(&g_rp, h, 8);
+    for (k = 0; k < m; k++) if (h[k].node == 4 && h[k].t == 25 * MS && h[k].value.device == 1) found++;
+    ysig_get_stats(&g_rp, &st);
+    CHECK(found == 1 && st.arm_hits_retracted == 1 && st.arm_hits_superseded == 0);
+}
+
 /* Exactness (docs/sig.md): arm_unverified, one shape per condition, each
  * with a control that stays 0. Nodes: s1 (any device), d1 on it, d2 on
  * d1 (so d2's arm meets d1's group);
@@ -6424,6 +6461,7 @@ int main(void) {
     test_arm_repro();
     test_arm_exact();
     test_disarm_at_gap_end();
+    test_hit_whole_value();
     if (g_failures) { fprintf(stderr, "sig_test: %d failures\n", g_failures); return 1; }
     printf("sig_test: all checks passed\n");
     return 0;
