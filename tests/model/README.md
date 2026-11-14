@@ -134,5 +134,5 @@ difference at a GAP is a question for the format, not a player bug.
 | `release-time`, `release-after-deadline`: a response that ends at its key's release | The release is the exit's time; the deadline waits for it |
 | F40 for an until's timeout: "the state's entry frame" | The wait's entry frame (the wait is a state of its own, 3.11 rule 9) |
 | The outcome column with no response in an events template | `done` |
-| A sample and a press at one time | The sample first |
+| A sample and a press at one time | Not a GAP since 2026-11-14: their exits fire at one time, so D20 rule 4's list order decides (the sample is fed first) |
 | The deadline of F34 rule 2 | A deadline with no response sets `timeout` |

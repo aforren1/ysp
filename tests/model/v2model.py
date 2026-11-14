@@ -628,15 +628,20 @@ class Run:
             if nxt is None:
                 break
             kind, t, payload = nxt
-            self.fed_until = t
-            self.trigger = t
-            if kind == "sample":
-                self.hand = payload
-                cands = self.drain_sample(t)
-            elif kind == "press":
-                cands = self.feed_press(t, k, payload)
-            else:
-                cands = self.feed_release(t, k)
+            cands = self.feed_input(kind, t, payload, k)
+            # experiment_format.md D20 rule 4 (l.432-433): when more than one
+            # exit has fired, the earliest time wins, then the order in the
+            # list. A press and a sample at one time fire their exits at that
+            # time (3.11 rule 11, l.2117-2121: the response exit's time is the
+            # response's), so the list order decides between them, not the
+            # order of the two events in the poll (3.11 rule 4, l.2067-2069,
+            # sorts by time only). Seeds 84233 and 89320.
+            while True:
+                pk = self.peek_input(o)
+                if pk is None or pk[1] != t or (kind == "sample" and pk[0] == "sample"):
+                    break
+                kind2, _, payload2 = self.next_input(o)
+                cands = cands + self.feed_input(kind2, t, payload2, k)
             if self.carry:
                 cands = self.carry + cands
                 self.carry = []
@@ -708,6 +713,24 @@ class Run:
                 return
             self.resolve(cands, k, "F", o)
 
+    def feed_input(self, kind, t, payload, k):
+        self.fed_until = t
+        self.trigger = t
+        if kind == "sample":
+            self.hand = payload
+            return self.drain_sample(t)
+        if kind == "press":
+            return self.feed_press(t, k, payload)
+        return self.feed_release(t, k)
+
+    def peek_input(self, o):
+        """The next input, not taken."""
+        tr = self.tr
+        saved = (self.si, tr.pi, tr.release)
+        nxt = self.next_input(o)
+        self.si, tr.pi, tr.release = saved
+        return nxt
+
     def next_input(self, o):
         tr = self.tr
         ts = self.samples[self.si][0] if self.si < len(self.samples) else None
@@ -721,7 +744,8 @@ class Run:
         if tr_ is not None and (tp is None or tr_ <= tp):
             tp = None       # a key's release comes before the next press
         if ts is not None and ts <= o and (tp is None or ts <= tp) and (tr_ is None or ts <= tr_):
-            # GAP: a sample and a press at one time; the sample first.
+            # A sample and a press at one time: the sample is fed first;
+            # frame() resolves their exits together (D20 rule 4).
             self.si += 1
             s = self.samples[self.si - 1]
             return ("sample", s[0], (s[1], s[2]))
