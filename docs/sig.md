@@ -679,7 +679,9 @@ At its place, `ysig_arm(d, τ)`:
    the entry rule (`YSIG_DETECT_ENTRY`): arm, fresh or now, as
    documented. A sample earlier than `τ` that d takes after this is
    before the arm (no hit, no hold start; a failing value breaks a
-   hold).
+   hold and makes d ready again, as any failing value does: for a
+   fresh entry, it is the failure the arm waits for, the reviewer's
+   O3).
 3. Changes d's output (a hit output): a fall to 0 at `τ` when a hit
    stood, then a rise to 1 at `τ` for an entry-now hit.
 
