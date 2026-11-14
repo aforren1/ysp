@@ -670,8 +670,10 @@ id = "88"
 name = "detect: a late failing report ignored"
 test = "sig"
 why = "A hand that left before the arm, reported late, would not break the hold (final review S2)."
-find = '        if (n->kns[0] > 0 && !r) {'
-replace = '        if (0) {'
+find = '''        if (!r) {
+            s->holding = 0;'''
+replace = '''        if (0) {
+            s->holding = 0;'''
 
 [[mutant]]
 id = "82"
