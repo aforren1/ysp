@@ -1332,11 +1332,13 @@ ran (640.5 million events taken, 373.5 million rows, 10.17 million hits).
   reached). The oracle reaches 247 (the rows' metadata) about once in
   23,500 cases; `test_arm_window` kills it with two samples at one time
   on one device that differ only in tier and `unc_us`. 23, 31, 65, 125, 161, 172, 190, 191 and
-  198 follow the code. 252 (a standing hit's output with the latest
-  input's sources) was noted as equivalent; the same `test_arm_window`
-  case kills it, by the row at the second sample. The list: 244 of 244
-  as expected, 235 killed and 9 survived as noted (2026-11-13, 245 s at
-  4 jobs).
+  198 follow the code. The second review of the fix round: 177 and 178
+  (a hit output's rise at the found time) are killed again; 252 is now
+  that round's regression B (a standing hit kept at the hit's time) and
+  253 the rise's sources, both killed by `test_hit_out_time`; 254 to 259
+  (C, and calls from callbacks) by `test_arm_review2`. The list: 251 of
+  251 as expected, 244 killed and 7 survived as noted (2026-11-13,
+  4a0584d, 237 s at 4 jobs).
 
 ### Zones
 
