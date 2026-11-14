@@ -758,7 +758,11 @@ get them depends on the desc:
   held rows take arena room: `catchup_rows` rows (new desc field;
   default 4 × `catchup_calls`). When it is full, the oldest held row is
   handed out at once and the window drops the checkpoints older than
-  its call, so the row is final (a shorter window, still exact).
+  its call, so the row is final (a shorter window, still exact). An arm
+  whose place a dropped checkpoint held falls back as after any log
+  that ran full (`arm_past_full`, not `arm_past_far`: the reviewer's
+  H10). Reason: the cause is the buffer's size, a knob, not the
+  window's length.
 
 #### Counts and fallbacks
 
