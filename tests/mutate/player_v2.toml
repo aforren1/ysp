@@ -415,7 +415,7 @@ id = "v2-48"
 name = "a response's end before an after_s exit listed first at its time"
 test = "player"
 why = "Third re-review 10 (rv4_10_after_then_rsp; rule 4's list order)."
-find = '''                    if (v2_after_t(v, e, a) == t) {'''
+find = '''                if (v2_after_t(v, e, a) == t) {'''
 replace = '''                    if (0) {'''
 
 [[mutant]]
@@ -473,35 +473,36 @@ id = "v2-55"
 name = "the samples after the response's end fed first"
 test = "player"
 why = "Final review 8: the hits after the end wait (rv5_n10_*)."
-find = '''        rc = v2_feed(p, f, t);'''
-replace = '''        rc = v2_feed(p, f, INT64_MAX);'''
+find = '''        int rc = v2_feed(p, f, t);'''
+replace = '''        int rc = v2_feed(p, f, INT64_MAX);'''
 
 [[mutant]]
 id = "v2-56"
 name = "the response's end taken twice"
 test = "player"
 why = "Final review 1 (rv5_once): one state takes it."
-find = '''                v->resp_taken = true;'''
-replace = ''''''
+find = '''                v->resp_taken = true;
+                if (v2_take_resp(p, v, best, bt, f, v->resp_tie_responded) < 0) return -1;'''
+replace = '''                if (v2_take_resp(p, v, best, bt, f, v->resp_tie_responded) < 0) return -1;'''
 
 [[mutant]]
 id = "v2-57"
 name = "a step end at the response's time after it"
 test = "player"
 why = "Final review 1 (rv5_n2_stepend_tie): the next state hears the end."
-find = '''            if (v->steps_pending && v->steps_end <= t) {'''
-replace = '''            if (0) {'''
+find = '''        if (v->steps_pending && v->steps_end <= t) {'''
+replace = '''        if (0) {'''
 
 [[mutant]]
 id = "v2-58"
 name = "the timed exits not run up to the response's end"
 test = "player"
 why = "Final review 1 (rv5_n2_after_tie_via_empty)."
-find = '''            if (v2_timed_to(p, v, f, t) < 0) return -1;
-            if (v->cur < 0) return 0;
-            if (v->steps_pending'''
-replace = '''            if (v->cur < 0) return 0;
-            if (v->steps_pending'''
+find = '''        if (v2_timed_to(p, v, f, t) < 0) return -1;
+        if (v->resp_taken || v->cur < 0) return 0;
+        if (v->steps_pending'''
+replace = '''        if (v->resp_taken || v->cur < 0) return 0;
+        if (v->steps_pending'''
 
 [[mutant]]
 id = "v2-59"
@@ -685,8 +686,8 @@ id = "v2-83"
 name = "a late response's exit clamped to the visit's entry"
 test = "player"
 why = "F39 made precise 2026-11-13: the entry of the part that runs when the response is final (vm_resp_part_entry)."
-find = '''                    return v2_take_resp(p, v, e, t > v->entry_t ? t : v->entry_t, f, responded);'''
-replace = '''                    return v2_take_resp(p, v, e, t > v->def_entry_t ? t : v->def_entry_t, f, responded);'''
+find = '''                return v2_take_resp(p, v, e, t > v->entry_t ? t : v->entry_t, f, responded);'''
+replace = '''                return v2_take_resp(p, v, e, t > v->def_entry_t ? t : v->def_entry_t, f, responded);'''
 
 [[mutant]]
 id = "v2-84"
@@ -764,3 +765,25 @@ note = "Not reached through --sim: within a visit the player arms a control once
 why = "Any arm of a state's control still ahead of the input waits in sig.h; the exit disarms it, before the next state's arms."
 find = '''        if (v->wait_t[node] > v->g.t_cover) (void)ysig_disarm(&v->g, node);'''
 replace = '''        if (v->arm_t[node] > v->g.t_cover) (void)ysig_disarm(&v->g, node);'''
+
+[[mutant]]
+id = "v2-93"
+name = "a response taken before the hits an exit in its batch queued"
+test = "player"
+why = "D20 rule 4 at the response's time: the next visit's arm met by a sample at that time has a hit after the batch; it competes with the response (t_v2_ties, reentry; the model's seed 89320)."
+find = '''            if (best->kind == X_RESPONSE && n < V2_HITQ) {'''
+replace = '''            if (best->kind == X_RESPONSE && n < 0) {'''
+
+[[mutant]]
+id = "v2-94"
+name = "the response offered only to the hits fed before its time"
+test = "player"
+why = "D20 rule 4: a state entered on the way to the response's time arms a control met at once; its hit at that time competes with the response by list order (t_v2_ties, own_resp_first)."
+find = '''        rc = v2_resp_states(p, v, f, t, responded);
+        v->resp_tie_t = INT64_MIN;
+        return rc;'''
+replace = '''        rc = v2_feed(p, f, t);
+        v->resp_tie_t = INT64_MIN;
+        if (rc < 0) return -1;
+        if (v->resp_taken || v->cur < 0) return 0;
+        return v2_resp_states(p, v, f, t, responded);'''

@@ -1641,6 +1641,50 @@ def t_v2_f34(ctx):
                   "F34 %s (%s): want %s, got %s" % (nm, part[-1], want, got))
 
 
+def t_v2_ties(ctx):
+    # A key response's end and a region hit at one time: rule 4 (3.11):
+    # the earliest time wins, then the list order. b's region is met at
+    # its arm (the hand is in it), so its hit is at b's entry, which is a's
+    # exit time; the press is at that time too. The model's seeds 89320 (the
+    # region listed first, the response exit that response_ends_trial adds
+    # after it; the player took the response) and 84233 (the own response
+    # exit listed first).
+    dev = {"devices": {"r": {"direction": "in", "family": ["keyboard"], "required": True}}}
+    roles = {"hand": {"type": "position2d", "units": "display_px"}}
+    resp = {"role": "r", "choices": ["left", "right"], "from": "s", "duration_s": 1}
+    smp = os.path.join(ctx.out, "ties_samples.csv")
+    write_samples(smp, [(0.0, "hand", 5, 0)])
+    cases = (("added_after_region", [{"on": "in", "to": "end", "outcome": "region"}], "region"),
+             ("own_resp_first", [{"on": "response", "to": "end", "outcome": "resp"}, {"on": "in", "to": "end", "outcome": "region"}], "resp"),
+             ("own_region_first", [{"on": "in", "to": "end", "outcome": "region"}, {"on": "response", "to": "end", "outcome": "resp"}], "region"))
+    for nm, exits, want in cases:
+        t = {"controls": {"in": {"control": "region", "of": "hand", "radius": 20}}, "response": resp,
+             "states": [{"name": "a", "steps": [{"on": "s"}], "exits": [{"after_s": 0.2, "to": "b"}]},
+                        {"name": "b", "exits": exits}]}
+        d = v2base({"t": t}, [{"name": "l", "trial": "t"}], roles=roles, extra=dev)
+        r = Run(ctx, "ties_" + nm, d, args=["--rt", "0.2", "--samples", smp, "--max-seconds", "20"])
+        st = [e for e in r.events if e["kind"] == "state" and e["trial_index"] == "0"] if r.rc == 0 else []
+        got = (r.trials[0]["outcome"], [(e["text"], e["code"], e["t_s"], e["end_s"]) for e in st]) if r.rc == 0 and r.trials else r.err[:200]
+        ok = r.rc == 0 and len(st) == 2 and r.trials[0]["outcome"] == want and st[1]["code"] == "0" and st[1]["end_s"] == st[0]["end_s"]
+        ok = ok and abs(float(r.trials[0]["rt_s"]) - 0.2) < 1e-6
+        check(ok, "ties %s: want %s by code 0 at a's exit time, got %s" % (nm, want, got))
+    # Seed 89320's path: the response's end feeds a sample at its time that
+    # enters the region; a's after_s exit, earlier, is taken first, and a's
+    # next visit arms the region at that exit's time. The arm's hit, at the
+    # sample's time, comes after the batch it was taken in, and still
+    # competes with the response: the region, listed first, wins
+    smp = os.path.join(ctx.out, "ties_reentry_samples.csv")
+    write_samples(smp, [(0.0, "hand", 100, 0), (0.199999, "hand", 5, 0)])
+    t = {"controls": {"in": {"control": "region", "of": "hand", "radius": 20}}, "response": resp,
+         "states": [{"name": "a", "steps": [{"on": "s"}], "exits": [{"on": "in", "to": "end", "outcome": "region"}, {"after_s": 0.199997, "to": "a"}]}]}
+    d = v2base({"t": t}, [{"name": "l", "trial": "t"}], roles=roles, extra=dev)
+    r = Run(ctx, "ties_reentry", d, args=["--rt", "0.199999", "--samples", smp, "--max-seconds", "20"])
+    st = [e for e in r.events if e["kind"] == "state" and e["trial_index"] == "0"] if r.rc == 0 else []
+    got = (r.trials[0]["outcome"], [(e["text"], e["code"], e["t_s"], e["end_s"]) for e in st]) if r.rc == 0 and r.trials else r.err[:200]
+    check(r.rc == 0 and len(st) == 2 and r.trials[0]["outcome"] == "region" and st[0]["code"] == "1" and st[1]["code"] == "0",
+          "ties reentry: want a's after_s, then the region by code 0, got %s" % (got,))
+
+
 def t_v2_review4(ctx):
     # the third re-review (p4rev/tools/r*.py), item in each message
     dev = {"devices": {"r": {"direction": "in", "family": ["keyboard"], "required": True}}}
@@ -2311,7 +2355,7 @@ TESTS = [t_nested, t_if_unless, t_empty_and_zero, t_loop, t_requeue, t_track_end
          t_fix_record_inherit, t_fix_backward_at, t_fix_refusals, t_fix_michelson_order, t_fix_texture_vars, t_fix_walk_budget,
          t_fix_data_set, t_fix_check_all_leaves, t_fix_release_order, t_fix_key_var_reapply,
          t_r2_release_other_template, t_r2_yield_draws_nothing, t_r2_low, t_r2_relaxed, t_r4_leaf_loop_done_track, t_r4_requeue_full,
-         t_r5_wait_final, t_r6_allow_below, t_v2_states, t_v2_until, t_v2_hand, t_v2_rule5, t_v2_review2, t_v2_review3, t_v2_f34, t_v2_review4, t_v2_review5, t_v2_findings, t_v2_corpus]
+         t_r5_wait_final, t_r6_allow_below, t_v2_states, t_v2_until, t_v2_hand, t_v2_rule5, t_v2_review2, t_v2_review3, t_v2_f34, t_v2_ties, t_v2_review4, t_v2_review5, t_v2_findings, t_v2_corpus]
 
 
 def main():

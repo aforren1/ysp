@@ -2564,11 +2564,13 @@ static int64_t v2_after_t(const pl_v2* v, const v2_exit* x, int64_t a) {
 static int v2_hits(pl_player* p, pl_v2* v, const yscr_frame* f) {
     ysig_hit h[V2_HITQ];
     uint32_t hg[V2_HITQ];
-    int n, i, k, guard = 0;
+    int n, i, k, guard = 0, from;
     while ((n = ysig_detected(&v->g, h, V2_HITQ)) > 0) {
         int64_t tmax = INT64_MIN;
         if (++guard > 256) { pl_fail(p, "template '%s': hits that never stop", v->def->name); return -1; }
-        for (i = 0; i < n; i++) {
+        from = 0;
+    more:
+        for (i = from; i < n; i++) {
             int ci = v2_ctl_of_hit(v, h[i].node);
             hg[i] = v->arm_gen[h[i].node];
             /* an arm's hits are at or after its time, after it for a hold
@@ -2613,6 +2615,20 @@ static int v2_hits(pl_player* p, pl_v2* v, const yscr_frame* f) {
                 continue;
             }
             if (!best) break;
+            if (best->kind == X_RESPONSE && n < V2_HITQ) {
+                /* rule 4 at the response's time: an exit taken in this
+                 * batch armed the new state's controls at its entry, and
+                 * one met at its arm (a region the hand is in) has a hit
+                 * at the entry, queued after this batch. It competes with
+                 * the response: at one time the list order decides
+                 * (format 3.11 rule 4; seed 89320 of the model's harness) */
+                int m = ysig_detected(&v->g, h + n, V2_HITQ - n);
+                if (m > 0) {
+                    from = n;
+                    n += m;
+                    goto more;
+                }
+            }
             if (best->kind == X_RESPONSE) {
                 v->resp_taken = true;
                 if (v2_take_resp(p, v, best, bt, f, v->resp_tie_responded) < 0) return -1;
@@ -3204,13 +3220,70 @@ static int64_t v2_resp_end_time(pl_player* p, pl_v2* v, const yrsp_result* r, co
     return r->t_onset && v->resp_dur > 0 ? r->t_onset + v->resp_dur : f->onset;
 }
 
+/* The response's end at t takes the current state's response exit, after
+ * what is due by t (pl_v2_response()). With v->resp_tie_t set, every
+ * v2_hits() on the way offers the response too (rule 4). */
+static int v2_resp_states(pl_player* p, pl_v2* v, const yscr_frame* f, int64_t t, bool responded) {
+    int k, guard = 0;
+    if (v->resp_tie_t != INT64_MIN) {
+        int rc = v2_feed(p, f, t);
+        /* input up to t is fed: a hold the hand met by then is a hit
+         * before the response's end at t (rule 4, the model's
+         * future-arm-hold) */
+        if (rc == 0 && v->has_graph && !v->resp_taken && v->cur >= 0) {
+            v2_late_in(v, t);
+            if (ysig_settle(&v->g, t) == 0) rc = v2_hits(p, v, f);
+        }
+        if (rc < 0) return -1;
+    }
+    for (;;) {
+        bool moved = false;
+        if (v->resp_taken || v->cur < 0) return 0;
+        if (++guard > v->take_cap) { pl_fail(p, "template '%s': internal guard: a response's end passed %d state changes at one time", v->def->name, v->take_cap); return -1; }
+        if (v2_timed_to(p, v, f, t) < 0) return -1;
+        if (v->resp_taken || v->cur < 0) return 0;
+        if (v->steps_pending && v->steps_end <= t) {
+            /* steps that end at the response's time end first (as in
+             * v2_timed()): the next state hears the end */
+            if (v2_steps_end(p, v, f) < 0) return -1;
+            continue;
+        }
+        if (v->resp_tie_t != INT64_MIN && v->has_graph) {
+            /* hits still queued (an arm at the entry of a state that a
+             * timed exit or a step end led to): at t the list order
+             * decides */
+            int cur = v->cur;
+            int64_t et = v->entry_t;
+            if (v2_hits(p, v, f) < 0) return -1;
+            if (v->resp_taken || v->cur < 0) return 0;
+            if (v->cur != cur || v->entry_t != et) continue;   /* a hit's exit moved it */
+        }
+        for (k = 0; k < v->rs[v->cur].n_exits && !moved; k++) {
+            const v2_exit* e = &v->rs[v->cur].exits[k];
+            if (e->kind == X_AFTER && v->entry_onset_known) {
+                int64_t a = 0;
+                if (pl_eval_ns(p, &p->env, e->after, &a) < 0) return -1;
+                /* an after_s exit listed first at the same time: it goes,
+                 * and the next state's response exit still hears the end */
+                if (v2_after_t(v, e, a) == t) {
+                    if (v2_take(p, v, e, t, f, false) < 0) return -1;
+                    moved = true;
+                }
+            } else if (e->kind == X_RESPONSE) {
+                v->resp_taken = true;
+                return v2_take_resp(p, v, e, t > v->entry_t ? t : v->entry_t, f, responded);
+            }
+        }
+        if (!moved) return 0;
+    }
+}
+
 /* A key response that ended (3.11 rule 11): an exit on it. */
 int pl_v2_response(pl_player* p, const yrsp_result* r, const yscr_frame* f);
 int pl_v2_response(pl_player* p, const yrsp_result* r, const yscr_frame* f) {
     pl_v2* v = p->tmpl ? p->tmpl->v2 : NULL;
     bool responded = (r->flags & YRSP_R_RESPONDED) != 0;
     int64_t t;
-    int k;
     if (!v) return 0;
     if (responded) v->resp_t = r->t_response;
     if (v->resp_ended) return 0;   /* the trial's end asks again */
@@ -3230,52 +3303,19 @@ int pl_v2_response(pl_player* p, const yrsp_result* r, const yscr_frame* f) {
      * up to its end), timed exits, step ends, chains through empty or
      * instant states; at its time the list order decides */
     if (!v->def->response->signal_choices) {
+        /* the response competes with every hit drained until it is taken,
+         * the hits of a state entered on the way included (an arm met at
+         * once has a hit at the entry; seed 89320 of the model's harness) */
         int rc;
         v->resp_tie_t = t;
         v->resp_tie_responded = responded;
         v->resp_taken = false;
-        rc = v2_feed(p, f, t);
-        /* input up to t is fed: a hold the hand met by then is a hit
-         * before the response's end at t (rule 4, the model's
-         * future-arm-hold) */
-        if (rc == 0 && v->has_graph && !v->resp_taken && v->cur >= 0) {
-            v2_late_in(v, t);
-            if (ysig_settle(&v->g, t) == 0) rc = v2_hits(p, v, f);
-        }
+        rc = v2_resp_states(p, v, f, t, responded);
         v->resp_tie_t = INT64_MIN;
-        if (rc < 0) return -1;
-        if (v->resp_taken || v->cur < 0) return 0;
+        return rc;
     }
-    {
-        int guard = 0;
-        for (;;) {
-            bool moved = false;
-            if (++guard > v->take_cap) { pl_fail(p, "template '%s': internal guard: a response's end passed %d state changes at one time", v->def->name, v->take_cap); return -1; }
-            if (v2_timed_to(p, v, f, t) < 0) return -1;
-            if (v->cur < 0) return 0;
-            if (v->steps_pending && v->steps_end <= t) {
-                /* steps that end at the response's time end first (as in
-                 * v2_timed()): the next state hears the end */
-                if (v2_steps_end(p, v, f) < 0) return -1;
-                continue;
-            }
-            for (k = 0; k < v->rs[v->cur].n_exits && !moved; k++) {
-                const v2_exit* e = &v->rs[v->cur].exits[k];
-                if (e->kind == X_AFTER && v->entry_onset_known) {
-                    int64_t a = 0;
-                    if (pl_eval_ns(p, &p->env, e->after, &a) < 0) return -1;
-                    /* an after_s exit listed first at the same time: it goes,
-                     * and the next state's response exit still hears the end */
-                    if (v2_after_t(v, e, a) == t) {
-                        if (v2_take(p, v, e, t, f, false) < 0) return -1;
-                        moved = true;
-                    }
-                } else if (e->kind == X_RESPONSE)
-                    return v2_take_resp(p, v, e, t > v->entry_t ? t : v->entry_t, f, responded);
-            }
-            if (!moved) return 0;
-        }
-    }
+    v->resp_taken = false;
+    return v2_resp_states(p, v, f, t, responded);
 }
 
 /* --- steps (3.12) and forms' ops (3.10) ---------------------------------- */
