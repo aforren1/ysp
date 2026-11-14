@@ -4751,6 +4751,25 @@ static void test_arm_repro(void) {
             want = got;
         }
     }
+    /* O3: a value earlier than the arm, taken after it, that fails the
+     * test makes a detect ready again, as before the arm (no hit, no hold
+     * start; a fresh entry's failure). A fresh detect (le 5) armed at 25
+     * ms on a held 3 waits for a failure; a late 6 at 20 ms is one; 4 at
+     * 35 ms is then a hit */
+    for (K = 0; K <= 4; K += 4) {
+        n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_PEN_PRESSURE, 3, 1);
+        n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1); n[1].p[YSIG_DETECT_TEST] = 1; n[1].p[YSIG_DETECT_LEVEL] = 5;
+        n[1].p[YSIG_DETECT_START] = 1; n[1].p[YSIG_DETECT_ENTRY] = YSIG_ENTRY_FRESH;
+        n[2] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2);
+        if (!rp_open(n, 3, K, 0, false, false)) return;
+        rp_feed(10 * MS, 3, YIN_AXIS_PEN_PRESSURE, 3);
+        rp_feed(30 * MS, 0, YIN_AXIS_POSITION, 1);
+        ysig_arm(&g_rp, 1, 25 * MS);
+        rp_feed(20 * MS, 6, YIN_AXIS_PEN_PRESSURE, 3);
+        CHECK(ysig_detected(&g_rp, h, 64) == 0);
+        rp_feed(35 * MS, 4, YIN_AXIS_PEN_PRESSURE, 3);
+        CHECK(ysig_detected(&g_rp, h, 64) == 1 && h[0].node == 1 && h[0].t == 35 * MS);
+    }
     /* H10: the held rows ran full and the window dropped its checkpoint:
      * an arm whose place it held falls back as arm_past_full, not far */
     n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 2);

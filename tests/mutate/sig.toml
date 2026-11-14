@@ -2465,3 +2465,19 @@ why = "H10: an arm whose place the dropped checkpoint held is arm_past_full, not
 find = '''        cu->full = 1;
         cu->ck0 = (cu->ck0 + 1) % cu->K;'''
 replace = '''        cu->ck0 = (cu->ck0 + 1) % cu->K;'''
+
+[[mutant]]
+id = "293"
+name = "a failing value before the arm readies only a detect with a hold"
+test = "sig"
+why = "O3: a value earlier than the arm is before it: no hit and no hold start, but its failure makes any detect ready again (test_arm_repro O3: a fresh detect hits at 35 ms)."
+find = '''        if (!r) {
+            s->holding = 0;
+            if (!ysig__test(n, v, -n->p[3])) { s->ready = 1; s->fired = 0; }
+        }
+        return;'''
+replace = '''        if (n->kns[0] > 0 && !r) {
+            s->holding = 0;
+            if (!ysig__test(n, v, -n->p[3])) { s->ready = 1; s->fired = 0; }
+        }
+        return;'''

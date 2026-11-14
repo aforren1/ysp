@@ -2535,9 +2535,11 @@ static void ysig__det_eval(ysig_graph* g, int i, const ysig_value* v, int64_t t,
     s->state = r;
     if (!s->armed) return;
     if (t < s->t_arm) {
-        /* before the arm: no hit and no start, but a hold's failing value
-         * breaks it whatever its t (a late report of a hand that left) */
-        if (n->kns[0] > 0 && !r) {
+        /* before the arm: no hit and no start, but a failing value breaks
+         * a hold whatever its t (a late report of a hand that left), and
+         * makes any detect ready again, as it would before the arm (O3: a
+         * fresh entry's failure) */
+        if (!r) {
             s->holding = 0;
             if (!ysig__test(n, v, -n->p[3])) { s->ready = 1; s->fired = 0; }
         }
