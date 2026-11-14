@@ -1187,7 +1187,6 @@ typedef struct ysig__ux {
     uint64_t* F;           /* dw words of the pool, fixed per slot       */
 } ysig__ux;
 #define YSIG__UX 32
-#define YSIG__UOP 16
 /* A group placed while a trigger lets waiting groups in (a cascade) */
 typedef struct ysig__ucg {
     uint64_t  gid;
@@ -1199,7 +1198,7 @@ typedef struct ysig__ucc { uint64_t gid; int64_t t; int kind, node; } ysig__ucc;
 #define YSIG__UCG 33       /* the waiting arms, and the one going in      */
 #define YSIG__UCC 96
 /* the footprints' pool: dw words each (the graph's nodes, not 512) */
-#define YSIG__UFP (YSIG__UX + YSIG__UOP + 2 * YSIG__UCG)
+#define YSIG__UFP (YSIG__UX + 2 * YSIG__UCG)
 typedef struct ysig__wt {
     int        n, nc, n_dis, gap_n, fired;   /* fired: one went in this gap */
     uint64_t   seq;                         /* calls made, numbered      */
@@ -1215,8 +1214,8 @@ typedef struct ysig__wt {
     int        n_unv, unv_at;
     ysig__ux   lr[YSIG__UX];
     int        n_lr;
-    ysig__ux   op[YSIG__UOP];
-    int        n_op;
+    ysig__ux*  op;          /* with a window: catchup_calls of them      */
+    int        n_op, cap_op;
     int        cas_kind, cas_depth, n_cg, n_cc, cas_stack[YSIG__UCG], cas_top;
     int64_t    cas_t;
     uint64_t   cas_f[YSIG__FPW];
@@ -2018,7 +2017,6 @@ static size_t ysig__layout(const ysig_desc* d, const ysig__an* a, ysig_graph* g,
         uint64_t* q = (uint64_t*)(void*)(base + at);
         int dw = (n + 63) / 64, j;
         for (j = 0; j < YSIG__UX; j++, q += dw) g->wt->lr[j].F = q;
-        for (j = 0; j < YSIG__UOP; j++, q += dw) g->wt->op[j].F = q;
         for (j = 0; j < YSIG__UCG; j++, q += 2 * dw) { g->wt->cg[j].F = q; g->wt->cg[j].Fa = q + dw; }
     }
     for (i = 0; i < n; i++) {
@@ -2094,6 +2092,18 @@ static size_t ysig__layout(const ysig_desc* d, const ysig__an* a, ysig_graph* g,
         if (cu) cu->qseq = (uint64_t*)(void*)(base + at);
         at = ysig__al(&off, sizeof(ysig__call) * YSIG__BLK);
         if (cu) cu->blk = (ysig__call*)(void*)(base + at);
+        {
+            /* the open groups of exactness (2 (b)): each has its L in the
+             * log, so a group per logged call at most */
+            int dw = (n + 63) / 64, j;
+            size_t at2 = ysig__al(&off, sizeof(ysig__ux) * (size_t)C);
+            at = ysig__al(&off, sizeof(uint64_t) * (size_t)C * (size_t)dw);
+            if (cu) {
+                g->wt->op = (ysig__ux*)(void*)(base + at2);
+                g->wt->cap_op = C;
+                for (j = 0; j < C; j++) g->wt->op[j].F = (uint64_t*)(void*)(base + at) + (size_t)j * (size_t)dw;
+            }
+        }
         if (d->rows_final || d->derived_final) {
             int R = d->catchup_rows ? d->catchup_rows : 4 * C;
             if (cu) { cu->R = R; cu->rows_final = d->rows_final; cu->derived_final = d->derived_final; }
@@ -4544,8 +4554,25 @@ static void ysig__cas_end(ysig_graph* g, uint64_t l_seq) {
 static void ysig__op_add(ysig_graph* g, uint64_t gid, int64_t t, const uint64_t* F, uint64_t l_seq) {
     ysig__wt* w = g->wt;
     int i;
-    if (w->n_op == YSIG__UOP) {
-        /* no room: one is no longer watched (counted) */
+    if (!w->cap_op) return;
+    if (w->n_op == w->cap_op && g->cu) {
+        /* full: those whose L the log no longer holds go (no group can be
+         * placed before L any more) */
+        ysig__cu* cu = g->cu;
+        for (i = 0; i < w->n_op; ) {
+            uint64_t q;
+            for (q = cu->c_tail; q < cu->c_head && cu->calls[q % (uint64_t)cu->C].cseq != w->op[i].l_seq; q++) { }
+            if (q == cu->c_head) {
+                ysig__ux x = w->op[i];
+                w->op[i] = w->op[w->n_op - 1];
+                w->op[--w->n_op] = x;
+            } else {
+                i++;
+            }
+        }
+    }
+    if (w->n_op == w->cap_op) {
+        /* still no room: one is no longer watched (counted) */
         ysig__unv(g, w->op[0].gid);
         i = 0;
     } else {

@@ -853,7 +853,13 @@ test, made after the barrier, would have broken the hold in time order.
 After each call returns, every node's value, ring and state, the bound
 channels, and every count but the window's own (the `arm_*` counts,
 `call_reentry`, `derived_lost`) and the digest are those of R's calls so
-far on a graph with no window. A waiting ahead group is not yet in R.
+far on a graph with no window. One known exception, not fixed:
+`history_skipped` (a value older than its ring's newest, not kept) can
+differ by a few. In the reviewer's case 1336 the rings agree entry for
+entry and every value agrees, but a graph with no window given R's calls
+evaluated node 9 with its stale value twice more (18 skipped pushes
+against the run again's 16). The count is a diagnostic; nothing reads
+it. A waiting ahead group is not yet in R.
 Every hit of R's result is handed out once; a hit handed out that R does
 not have is counted, as above. Rows and derived events: as above. With
 no fallback count, no retracted hit and no stale row or event, the
