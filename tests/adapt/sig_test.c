@@ -4381,6 +4381,13 @@ static void rp_feed(int64_t t, double x, int ctl, int dev) {
     e.x = (float)x; e.value = (float)x; e.stamp = YIN_TIER_2;
     ysig_feed(&g_rp, &e);
 }
+static void rp_feed2(int64_t t, double x, double y, int dev) {
+    yin_event e;
+    memset(&e, 0, sizeof e);
+    e.t = t; e.type = YIN_SAMPLE; e.kind = YIN_KIND_PEN; e.control = YIN_AXIS_POSITION; e.device = (uint32_t)dev;
+    e.x = (float)x; e.y = (float)y; e.stamp = YIN_TIER_2;
+    ysig_feed(&g_rp, &e);
+}
 static void rp_frame(int64_t o) {
     float v[1] = { 0 };
     ysig_frame_in f;
@@ -4769,6 +4776,142 @@ static void test_arm_repro(void) {
         CHECK(ysig_detected(&g_rp, h, 64) == 0);
         rp_feed(35 * MS, 4, YIN_AXIS_PEN_PRESSURE, 3);
         CHECK(ysig_detected(&g_rp, h, 64) == 1 && h[0].node == 1 && h[0].t == 35 * MS);
+    }
+    /* H16: an arm that goes into R lets in a waiting group with its own
+     * time and a later arm call after itself (rule 2: the earlier call
+     * first). D1 (entry now) on S, latch L(S, D1), D2 (entry now) on L,
+     * both armed at 20 ms: D2's hit carries L after D1's hit (value.t 20
+     * ms), with no window (both wait, the 30 ms input lets them in) and
+     * with one (both past) */
+    for (K = 0; K <= 4; K += 4) {
+        int k2, found = 0;
+        n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2); n[0].history = 256;
+        n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1);
+        n[2] = ysig_node_of(YSIG_OP_LATCH, 0, 1);
+        n[3] = ysig_node_of(YSIG_OP_DETECT, 2, -1);
+        for (k2 = 1; k2 <= 3; k2 += 2) {
+            n[k2].p[YSIG_DETECT_TEST] = YSIG_TEST_IN_RECT;
+            n[k2].p[YSIG_DETECT_A_X] = n[k2].p[YSIG_DETECT_A_Y] = -3;
+            n[k2].p[YSIG_DETECT_B_X] = n[k2].p[YSIG_DETECT_B_Y] = 3;
+            n[k2].p[YSIG_DETECT_ENTRY] = YSIG_ENTRY_NOW;
+            n[k2].p[YSIG_DETECT_OUT] = YSIG_OUT_HIT;
+            n[k2].p[YSIG_DETECT_START] = 1;
+        }
+        if (!rp_open(n, 4, K, 0, false, false)) return;
+        rp_feed2(10 * MS, 1, 1, 1);
+        rp_feed2(15 * MS, 2, 2, 1);
+        if (K) rp_feed2(30 * MS, 2.5, 2.5, 1);
+        ysig_arm(&g_rp, 1, 20 * MS);
+        ysig_arm(&g_rp, 3, 20 * MS);
+        if (!K) rp_feed2(30 * MS, 2.5, 2.5, 1);
+        m = ysig_detected(&g_rp, h, 64);
+        for (k = 0; k < m; k++) if (h[k].node == 3) { found = 1; CHECK(h[k].t == 20 * MS && h[k].value.t == 20 * MS); }
+        CHECK(found);
+    }
+    /* H12 and H16 with values: a waiting arm's going-in lets in, at its
+     * time, an earlier group before itself and an equal time's later one
+     * after itself. (a) y (entry now, on x's hit output) waits at 30 ms
+     * with a set of an offset on device 2; x (entry now, on device 1, in
+     * range) waits at 20 ms. Device 2's input past 30 lets y's group in
+     * (not x: it does not meet x), y's arm lets x in first: x hits at 20,
+     * so y's held value at 30 is 1 and y hits at 30. (b) x and z (entry
+     * now, on a latch of x's hit) wait at 20 ms, x's group with the set:
+     * device 2's input lets x's group in, x's arm lets z in after itself */
+    {
+        ysig_node qn[6];
+        int sub;
+        for (sub = 0; sub < 2; sub++) {
+            int found = 0;
+            qn[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2); qn[0].history = 64;
+            qn[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1); qn[1].p[YSIG_DETECT_LANE] = 0; qn[1].p[YSIG_DETECT_LEVEL] = 5; qn[1].p[YSIG_DETECT_START] = 1;
+            qn[1].p[YSIG_DETECT_ENTRY] = YSIG_ENTRY_NOW; qn[1].p[YSIG_DETECT_OUT] = YSIG_OUT_HIT; qn[1].history = 64;
+            qn[2] = ysig_node_of(YSIG_OP_LATCH, 0, 1); qn[2].history = 64;
+            qn[3] = ysig_node_of(YSIG_OP_DETECT, sub ? 2 : 1, -1); qn[3].p[YSIG_DETECT_LANE] = 0; qn[3].p[YSIG_DETECT_LEVEL] = sub ? 5 : 0.5; qn[3].p[YSIG_DETECT_START] = 1;
+            qn[3].p[YSIG_DETECT_ENTRY] = YSIG_ENTRY_NOW; qn[3].p[YSIG_DETECT_OUT] = YSIG_OUT_HIT; qn[3].history = 64;
+            qn[4] = src_node(YIN_KIND_PEN, YIN_AXIS_PEN_PRESSURE, 3, 1);
+            qn[5] = ysig_node_of(YSIG_OP_OFFSET, 4, -1);
+            if (!rp_open(qn, 6, 4, 0, false, false)) return;
+            rp_feed(10 * MS, 10, YIN_AXIS_POSITION, 1);
+            rp_feed(10 * MS, 0, YIN_AXIS_PEN_PRESSURE, 3);
+            if (!sub) {
+                ysig_arm(&g_rp, 1, 20 * MS);
+                ysig_set(&g_rp, 5, YSIG_OFFSET_D_X, 3);
+                ysig_arm(&g_rp, 3, 30 * MS);
+            } else {
+                ysig_set(&g_rp, 5, YSIG_OFFSET_D_X, 3);
+                ysig_arm(&g_rp, 1, 20 * MS);
+                ysig_arm(&g_rp, 3, 20 * MS);
+            }
+            CHECK(g_rp.wt->n == 2);
+            rp_feed(35 * MS, 0, YIN_AXIS_PEN_PRESSURE, 3);
+            CHECK(g_rp.wt->n == 0);
+            m = ysig_detected(&g_rp, h, 64);
+            for (k = 0; k < m; k++) if (h[k].node == 3) { found = 1; CHECK(h[k].t == (sub ? 20 : 30) * MS); }
+            CHECK(found);
+        }
+    }
+    /* Residual 1414: a run again whose undo log runs full at its last but
+     * one call clears the window with the last call still logged (a late
+     * report of device 2 at 0.5 ms).
+     * With no checkpoint the log is not kept: a later past arm falls back,
+     * counted, and is not made where the stale log puts it */
+    {
+        int W, kk, stale = 0;
+        for (W = 8; W <= 24; W++)
+            for (kk = 2; kk <= 4; kk++) {
+                ysig_node sn[5];
+                ysig_desc d3;
+                int j;
+                sn[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 2); sn[0].history = 64;
+                sn[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1); sn[1].p[YSIG_DETECT_LANE] = 0; sn[1].p[YSIG_DETECT_LEVEL] = 5; sn[1].p[YSIG_DETECT_START] = 1;
+                sn[1].p[YSIG_DETECT_OUT] = YSIG_OUT_HIT; sn[1].p[YSIG_DETECT_ENTRY] = YSIG_ENTRY_NOW; sn[1].p[YSIG_DETECT_REPEAT] = 1; sn[1].history = 64;
+                sn[2] = ysig_node_of(YSIG_OP_DELAY, 1, -1); sn[2].history = 64;
+                sn[3] = src_node(YIN_KIND_PEN, YIN_AXIS_PEN_PRESSURE, 2, 1);
+                sn[4] = ysig_node_of(YSIG_OP_DETECT, 3, -1); sn[4].p[YSIG_DETECT_LANE] = 0; sn[4].p[YSIG_DETECT_LEVEL] = 5; sn[4].p[YSIG_DETECT_START] = 1; sn[4].history = 64;
+                memset(&d3, 0, sizeof d3);
+                d3.nodes = sn; d3.n_nodes = 5; d3.arena = g_rp_ar; d3.catchup_frames = 4; d3.catchup_calls = 256; d3.catchup_writes = W;
+                d3.channels = g_ch; d3.n_channels = 64;
+                d3.arena_size = ysig_arena_size(&d3);
+                if (!d3.arena_size || d3.arena_size > sizeof g_rp_ar || !ysig_open(&g_rp, &d3)) { g_failures++; return; }
+                ysig_reset(&g_rp, 0);
+                for (j = 0; j < kk; j++) rp_feed((1 + j) * MS, (j & 1) ? 0 : 10, YIN_AXIS_POSITION, 1);
+                rp_feed(500000, 1, YIN_AXIS_PEN_PRESSURE, 2);   /* the call left logged: writes little */
+                ysig_arm(&g_rp, 1, 1 * MS);
+                if (g_rp.cu->n_ck == 0 && g_rp.cu->c_head > g_rp.cu->c_tail) {
+                    stale++;
+                    ysig_get_stats(&g_rp, &s0);
+                    ysig_arm(&g_rp, 4, 750000);   /* after the stale call by time and footprint */
+                    ysig_get_stats(&g_rp, &s1);
+                    CHECK(s1.arm_past_full - s0.arm_past_full + s1.arm_past_far - s0.arm_past_far == 1);
+                }
+            }
+        CHECK(stale > 0);
+    }
+    /* Residual 1650: a past arm lets a waiting group in at its place, not
+     * at the end of the log. x (on y's hit output) waits at 20 ms; input
+     * of device 2 (it meets y's users through a latch, not x) moves N to
+     * 30; y armed at 25 ms lets x in. Its place is before the 30 ms input:
+     * not pinned */
+    {
+        ysig_node pn[5];
+        pn[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2); pn[0].history = 64;
+        pn[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1); pn[1].p[YSIG_DETECT_LANE] = 0; pn[1].p[YSIG_DETECT_LEVEL] = 5; pn[1].p[YSIG_DETECT_START] = 1;
+        pn[1].p[YSIG_DETECT_OUT] = YSIG_OUT_HIT; pn[1].history = 64;
+        pn[2] = ysig_node_of(YSIG_OP_DETECT, 1, -1); pn[2].p[YSIG_DETECT_LANE] = 0; pn[2].p[YSIG_DETECT_LEVEL] = 0.5; pn[2].p[YSIG_DETECT_START] = 1; pn[2].history = 64;
+        pn[3] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 2, 2); pn[3].history = 64;
+        pn[4] = ysig_node_of(YSIG_OP_LATCH, 3, 1); pn[4].history = 64;
+        if (!rp_open(pn, 5, 4, 0, false, false)) return;
+        rp_frame(10 * MS);
+        rp_feed(12 * MS, 0, YIN_AXIS_POSITION, 1);
+        rp_feed(12 * MS, 0, YIN_AXIS_POSITION, 2);
+        ysig_arm(&g_rp, 2, 20 * MS);
+        rp_feed(30 * MS, 0, YIN_AXIS_POSITION, 2);
+        CHECK(g_rp.wt->n == 1);
+        ysig_get_stats(&g_rp, &s0);
+        ysig_arm(&g_rp, 1, 25 * MS);
+        ysig_get_stats(&g_rp, &s1);
+        CHECK(s1.arm_past_pinned == s0.arm_past_pinned && s1.arm_caught_up == s0.arm_caught_up + 1);
+        CHECK(g_rp.wt->n == 0 && ((ysig__det_st*)g_rp.nd[2].st)->t_arm == 20 * MS);
     }
     /* H10: the held rows ran full and the window dropped its checkpoint:
      * an arm whose place it held falls back as arm_past_full, not far */

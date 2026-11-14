@@ -2041,9 +2041,9 @@ id = "242"
 name = "a waiting arm made before an input at its own time"
 test = "sig"
 why = "Rule 3: an input at the arm's time comes before it (it waits for one later)."
-find = '''            if (incl ? w->a[k].t > t : w->a[k].t >= t) continue;
+find = '''            if (incl ? w->a[k].t > t || (w->a[k].t == t && w->a[k].seq > incl) : w->a[k].t >= t) continue;
             if (f) {'''
-replace = '''            if (incl ? w->a[k].t > t : w->a[k].t > t) continue;
+replace = '''            if (incl ? w->a[k].t > t || (w->a[k].t == t && w->a[k].seq > incl) : w->a[k].t > t) continue;
             if (f) {'''
 
 [[mutant]]
@@ -2394,7 +2394,7 @@ id = "284"
 name = "an arm call lets in only earlier waiting groups"
 test = "sig"
 why = "S3: at or before its time (test_arm_repro)."
-find = '''        ysig__wait_fire(g, t_ns, f, 1);'''
+find = '''        ysig__wait_fire(g, t_ns, f, UINT64_MAX);'''
 replace = '''        ysig__wait_fire(g, t_ns, f, 0);'''
 
 [[mutant]]
@@ -2420,7 +2420,7 @@ id = "287"
 name = "a waiting arm lets in nothing when its group goes in"
 test = "sig"
 why = "H12: the ahead arm lets in at its time when its group goes in."
-find = '''        ysig__wait_fire(g, a.t, f, 1);'''
+find = '''        ysig__wait_fire(g, a.t, f, a.seq);'''
 replace = '''        (void)f;'''
 
 [[mutant]]
@@ -2428,7 +2428,7 @@ id = "288"
 name = "a past group's calls let nothing in at its place"
 test = "sig"
 why = "H13: a waiting group that a past group's call lets in goes in at the group's place (test_arm_repro H13: detect a armed at 20 ms)."
-find = '''            ysig__wait_fire_blk(g, t, fs, c->e.kind == YSIG_J_ARM, &nb);'''
+find = '''            ysig__wait_fire_blk(g, t, fs, c->e.kind == YSIG_J_ARM ? UINT64_MAX : 0, &nb);'''
 replace = '''            (void)fs;'''
 
 [[mutant]]
@@ -2436,8 +2436,8 @@ id = "289"
 name = "a past group lets in at N, not at its time"
 test = "sig"
 why = "H13: at the group's place its calls are at its time; a waiting group later than it goes back to waiting (test_arm_repro H13, the arm at 15 ms)."
-find = '''            ysig__wait_fire_blk(g, t, fs, c->e.kind == YSIG_J_ARM, &nb);'''
-replace = '''            ysig__wait_fire_blk(g, g->t_cover, fs, c->e.kind == YSIG_J_ARM, &nb);'''
+find = '''            ysig__wait_fire_blk(g, t, fs, c->e.kind == YSIG_J_ARM ? UINT64_MAX : 0, &nb);'''
+replace = '''            ysig__wait_fire_blk(g, g->t_cover, fs, c->e.kind == YSIG_J_ARM ? UINT64_MAX : 0, &nb);'''
 
 [[mutant]]
 id = "290"
@@ -2483,3 +2483,36 @@ replace = '''        if (n->kns[0] > 0 && !r) {
             if (!ysig__test(n, v, -n->p[3])) { s->ready = 1; s->fired = 0; }
         }
         return;'''
+
+[[mutant]]
+id = "294"
+name = "an arm going in lets a later equal-time group in before itself"
+test = "sig"
+why = "H16: rule 2 puts an equal time's later arm call after the arm (test_arm_repro H16, no window: D2's hit value.t 20 ms)."
+find = '''        ysig__wait_fire(g, a.t, f, a.seq);'''
+replace = '''        ysig__wait_fire(g, a.t, f, UINT64_MAX);'''
+
+[[mutant]]
+id = "295"
+name = "the equal-time later group not let in after the arm"
+test = "sig"
+why = "H16, S3: the arm still lets it in, right after itself (test_arm_repro H16, no window: D2 hits)."
+find = '''        ysig__arm_made(g, a.node, a.t, a.t, logged ? g->cu->c_head - 1 : UINT64_MAX);
+        ysig__wait_fire(g, a.t, f, UINT64_MAX);'''
+replace = '''        ysig__arm_made(g, a.node, a.t, a.t, logged ? g->cu->c_head - 1 : UINT64_MAX);'''
+
+[[mutant]]
+id = "296"
+name = "a past arm placed by a log no checkpoint keeps"
+test = "sig"
+why = "Residual 1414: with no checkpoint the log is stale; the arm falls back, counted (test_arm_repro, the late report at 0.5 ms)."
+find = '''    if (cu->n_ck && !cu->grp_bad && cu->c_head - cu->c_tail < (uint64_t)cu->C &&'''
+replace = '''    if (!cu->grp_bad && cu->c_head - cu->c_tail < (uint64_t)cu->C &&'''
+
+[[mutant]]
+id = "297"
+name = "what a past arm lets in placed at the end of the log"
+test = "sig"
+why = "Residual 1650: it goes in at the arm's place; at the end it pinned the group after later input (test_arm_repro)."
+find = '''        if (cu && t_ns < g->t_cover && !cu->grp_open && !cu->replaying && cu->n_ck) {'''
+replace = '''        if (0) {'''
