@@ -448,14 +448,15 @@ definition. A zero field means the row's `def`.
 
 ### An arm in the past: the semantics
 
-Status: written for the second review of the 0.6.0 fix round
-(2026-11-13), amended at the reviewer's gaps (b6676f4), and built in
-the header (384eeef, a068278) and the player (f9fad11). The last
-subsection lists where 0.6.0 before it differed. An oracle can be
-written from this section and the graph's other rules alone: it runs a
-reference sequence of the same calls on a graph with no window. Where
-the design note "An arm in the past (v0.6.0)" below disagrees, this
-section is the rule.
+Status: the semantics of 0.6.0 as built in the header and the player
+(0.10.0). An independent reviewer wrote an oracle from this section and
+the graph's other rules alone (`tests/adapt/sig_arm_ref.c`, with
+`sig_arm_spec_cases.c`; both in ctest): it runs the reference sequence
+of the same calls on a graph with no window. The header gives that
+sequence's result exactly within the bound of "Exactness" below, and
+counts every arm outside it. The last subsection lists where 0.6.0
+before it differed. Where the design note "An arm in the past (v0.6.0)"
+below disagrees, this section is the rule.
 
 #### Terms
 
@@ -1439,6 +1440,43 @@ and `free` before the implementation, so a call fails the link; the bench
 counts this program's allocator calls during the 60 s run (glibc).
 
 ### Tests, fuzzing and mutations
+
+The reviewer's oracle (2026-11-14, final round). `tests/adapt/sig_arm_ref.c`
+and `sig_arm_spec_cases.c` are by an independent reviewer, written from
+"An arm in the past: the semantics" and the graph's other rules, without
+the header's internals; their headers keep the change notes. A is the
+graph with a window, called as a caller calls it; B is the same graph with
+no window, given R through the public API. ctest runs the spec cases in
+full (`test_sig_arm_spec`) and the oracle at 3,000 cases, seed 20261114
+(`test_sig_arm_ref`), passing on the two targets of "Exactness": every
+case B cannot run is counted in `arm_unverified`, and every wrong case has
+a count. Results (Linux desktop, i5-14500, GCC 12.2; the 20,000 under ASan
+and UBSan, `setarch -R`, 7 min 39 s, load average 2.9 at the start and 1.3 at the end):
+
+| Run | Cases | B cannot run (counted) | Wrong (by `arm_unverified`; by another count; none) | Right cases with a count |
+|---|---|---|---|---|
+| ctest, seed 20261114 | 3,000 | 972 (972) | 3 (3; 0; 0) | 1,549 of 2,025 (4,563 of 74,361 arms) |
+| ASan and UBSan, seed 20261114 | 20,000 | 6,406 (6,406) | 16 (14; 2; 0) | 10,504 of 13,578 (30,212 of 495,147 arms) |
+
+No sanitizer report. The count is a bound, not a verdict: about one arm in
+16 of the right cases is outside the shapes the oracle verifies and is
+counted. B cannot run R in 6,406 cases, by its reasons: a barrier while an
+arm waits in B 782; a meeting call not past `τ` while it waits (an arm 384,
+a past group's call 285, a present or ahead group's call 314); two waiting
+arms let in out of R's order 1,194; a late input at or before a waiting
+arm's `τ` 437; a cancelled group's disarm at a `τ` not B's `N` 1,104; a
+disarm of another group or none in the gap an arm closes 1,906.
+
+The final verification (2026-11-14, head after the oracle's commit): ctest
+Release 124 of 124, the sanitizers tree (`setarch -R`) 123 of 123, with the
+C and C++ compile checks and the Windows-macros ones; `sig_fuzz` under ASan
+and UBSan, 10,000,000 inputs, seeds 8501 to 8508, 8 processes, 35 s: no
+report, 1,500,470 graphs opened, 2,745 arms run again, 94 fell back.
+Mutants: sig.toml 311 of 311 as expected (325 s, 4 jobs); 213, 214 and 232
+are killed by the oracle (test `sig_ref`); 316 survives it (no case
+places a cancelled waiting group with a disarm inside a past group's
+block, also at 20,000 cases). The retired `sig_arm_oracle.c` and
+`sig_arm_diff.c` are removed; the paragraphs below keep their history.
 
 - `tests/adapt/sig_test.c` (ctest `test_sig`): v0.6.0 adds
   `test_arm_window`: no window (counted), two crossings after the arm as

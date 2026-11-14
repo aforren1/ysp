@@ -436,8 +436,10 @@
  *          checkpoint dropped for held rows is a full log; an arm going
  *          in lets an equal time's later group in after itself; a past
  *          arm lets in at its place; with no checkpoint the log is not
- *          read. The bound of what is verified: ysig_stats.arm_unverified
- *          (a struct change).
+ *          read; a gap's disarms at its end in the log too. The bound of
+ *          what is verified: ysig_stats.arm_unverified (a struct change),
+ *          the conditions of docs/sig.md, "Exactness". The reviewer's
+ *          oracle and spec cases are in ctest.
  *          Stats arm_caught_up, arm_past_off, _far, _full,
  *          arm_hits_retracted, arm_hits_superseded (the armed detect's own
  *          hits at or after the arm's time: its earlier arm's),
@@ -482,9 +484,13 @@
  *          adapters, custom ops, parameter tables, and a name for
  *          each p[] index (YSIG_<OP>_<ROW>).
  *
- *   STATUS: v0.6.0, 2026-11-12, Linux desktop (GCC 12.2):
- *   test_arm_window and the randomized differential (sig_arm_diff.c) as C
- *   and as C++ under ASan and UBSan; docs/sig.md has the numbers.
+ *   STATUS: v0.6.0, 2026-11-14, Linux desktop (i5-14500, GCC 12.2):
+ *   sig_test as C, and as C and C++17 under ASan and UBSan; the
+ *   reviewer's oracle (tests/adapt/sig_arm_ref.c, written from
+ *   docs/sig.md) at 20,000 cases under ASan and UBSan: every case its B
+ *   cannot run counted in arm_unverified (6,406), every wrong case
+ *   counted (16), no sanitizer report; its spec cases; sig_fuzz 10,000,000
+ *   inputs; 311 of 311 mutants as expected; docs/sig.md has the numbers.
  *   STATUS: v0.5.0, 2026-11-12, Linux desktop (GCC 12.2):
  *   test_arm_catch_up as C and as C++ under ASan and UBSan, the compile
  *   checks, the fuzz target, the mutants (docs/sig.md, "Tests, fuzzing

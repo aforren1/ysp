@@ -720,6 +720,33 @@ corpus.
 | Version 2 data against 0.3.0, the two 3.18 examples | `target_frames` (159 of 160) and `reach_target_frames` (4 of 132) only, as in 0.4.0 |
 | Frame work, CPU 2, six runs each, mean user time | Visuomotor 0.209 s (sd 0.003) against 0.3.0's 0.211 s; bimanual 1.128 s (sd 0.010) against 1.146 s. Largest frame 637 to 641 us against 636 to 646 us, and 1,900 to 1,924 us (one run 2,069 us) against 1,880 to 1,906 us (one run 2,045 us) |
 
+### The final verification (0.10.0, 2026-11-14)
+
+The Linux desktop (i5-14500, GCC 12.2, Release), sig.h 0.6.0 with the
+reviewer's oracle in ctest.
+
+| Check | Result |
+|---|---|
+| ctest | Release 124 of 124; the sanitizers tree (ASan and UBSan, `setarch -R`) 123 of 123 |
+| `player_test.py` | 56 cases, 0 failures; `sig_arms.unverified` 0 in every session |
+| `compare.py`, the six examples | No exact column differs; `unverified` 0 |
+| Version 1 identity against main (7078e4d) | 438 of 439 CSV files byte-identical (the other the Stroop C program's version line); `session.json`: versions and `pack_id` (94 files) and `rig_profile_sha256` (4) |
+| The model's harness, new seeds 82001 to 92000 (9,999 cases) | 1,446 refused (agreed), 429 hangs agreed, 53 mismatches: 51 at a GAP, 2 not (below); no guard stop; `unverified` 0 in all 7,405 sessions run (the shrinker's included) |
+| `GEN_MULTI=1`, 34001 to 39000 (4,999 cases) | 654 refused (agreed), 221 hangs agreed, 25 mismatches, all at a GAP; `unverified` 0 in all 3,682 sessions |
+| Mutants (`--sim` test) | `player_v2.toml` 89 of 89, `player_run.toml` 64 of 64, `player_lower.toml` 26 of 26, `player_eval.toml` 6 of 6, `player_host.toml` 5 of 5 as expected; the 35 real-path ones need a display and did not run |
+| Frame work, CPU 2, six runs each, load average 0.84 at the start and 1.02 at the end | Visuomotor 0.237 s (sd 0.002) against 0.9.0's 0.212 s (sd 0.002); bimanual 1.291 s (sd 0.008) against 1.135 s (sd 0.006): 12 % and 14 % more (0.10.0 on 2026-11-13: 10 %). Largest frame 626 to 645 us against 629 to 632 us, and 1,857 to 1,886 us against 1,891 to 1,909 us; no frame over 16 ms |
+| Arena of a template's graph (4 frames, 1,024 calls, 16,384 writes) | Visuomotor `reach`, 55 nodes: 11,049,136 bytes (8,718,192 with no window); bimanual `reach`, 49 nodes: 10,799,344 (8,471,632); `track`, 38 nodes: 8,926,576 (6,615,760) |
+
+The two mismatches outside a GAP were there before this round (the same
+on the players built 2026-11-13). Both are a tie at one time between a
+key response's end and a region entry from a sample at that time. Seed
+84233: the response exit is listed first and the player takes it (code
+0), the model the region (1). Seed 89320: the region exit is listed
+first, the response exit is the one the player adds, and the player
+takes the response (2), the model the region (0). By rule 4's list
+order the second looks like the player's, the first like the model's.
+Not decided in this round.
+
 ### sig.h's `arm_unverified` and the guard (2026-11-14)
 
 The same machine. sig.h counts an arm outside the shapes whose result is
