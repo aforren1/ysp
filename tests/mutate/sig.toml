@@ -2589,10 +2589,8 @@ id = "306"
 name = "exactness: a later past group between an open group and its L not counted"
 test = "sig"
 why = "Condition 2 (b) with a window (test_arm_exact: d2's group with a set of d1 placed between)."
-find = '''                if (ysig__unv_x_ok(g, s, o->gid, o->t, N, li)) continue;
-                ysig__unv(g, o->gid);'''
-replace = '''                if (1) continue;
-                ysig__unv(g, o->gid);'''
+find = '''                    !ysig__unv_x_ok(g, s, o->gid, o->t, s >= pos && s < end ? N : nx, li)) {'''
+replace = '''                    0) {'''
 
 [[mutant]]
 id = "307"
@@ -2707,3 +2705,38 @@ test = "sig"
 why = "S1: a disarm takes effect at its gap's end; in the log it goes after the gap's other calls (the reviewer's 2192; test_disarm_at_gap_end)."
 find = '''    if (!cu || cu->replaying || !cu->grp_open || cu->grp_bad || !g->wt->n_dis) return;'''
 replace = '''    if (1) return;'''
+
+[[mutant]]
+id = "320"
+name = "exactness: 2 (b)'s exception without R's order at L"
+test = "sig"
+why = "2 (b): G's arm must go into R before H's calls at L; a group K made before G whose arm meets H lets H in first (the oracle's case 1061 of seed 777016; test_arm_exact, 2 (b)'s exception with K)."
+find = '''        if (m.seq[i] != gid || m.pos[i] > m.st[m.n - 1]) return 0;   /* H's disarm would go in first */'''
+replace = '''        if (m.seq[i] != gid) return 0;   /* H's disarm would go in first */'''
+
+[[mutant]]
+id = "321"
+name = "exactness: 2 (b) tested over the new block only"
+test = "sig"
+why = "2 (b) again over every call between G and L: a later block can be the link that lets an earlier H in before G (test_arm_exact, the chain K, J, H)."
+find = '''                if (s > zl && !in && ysig__fp_entry(g, x, fx) == 1 && ysig__fp_meets(g, fx, o->F) &&'''
+replace = '''                if (s >= pos && s < end && !in && ysig__fp_entry(g, x, fx) == 1 && ysig__fp_meets(g, fx, o->F) &&'''
+
+[[mutant]]
+id = "322"
+name = "exactness: R's order at L compares H's arm, not its calls"
+test = "sig"
+why = "H's disarms go into R before the waiting groups its arm lets in; G let in by H's arm is cancelled by them (1061: G goes in in H's arm's let-in; test_arm_exact, 2 (b)'s exception with K)."
+find = '''        if (m.seq[i] != gid || m.pos[i] > m.st[m.n - 1]) return 0;   /* H's disarm would go in first */'''
+replace = '''        if (m.seq[i] != gid || m.pos[i] > m.pos[m.n - 1]) return 0;   /* H's disarm would go in first */'''
+
+[[mutant]]
+id = "323"
+name = "a waiting group's disarm before its other calls"
+test = "sig"
+why = "S1: in a waiting (ahead) group the disarms go after the group's other calls, as the gap's end (the oracle's case 3578 of seed 31415; test_disarm_at_gap_end, the ahead group)."
+find = '''     * group) */
+    ysig__dis_last(g);
+    if (cu)'''
+replace = '''     * group) */
+    if (cu)'''

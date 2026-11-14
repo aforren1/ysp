@@ -4448,6 +4448,45 @@ static void test_disarm_at_gap_end(void) {
         ysig_flush(&g_rp);
         CHECK(g_d2192_n == 3 && g_d2192_last == 110);
     }
+    /* The same group ahead (its arm at 30 ms): it waits whole and goes in
+     * at the 35 ms input, its disarm after its set there too (the oracle's
+     * case 3578 of seed 31415: a waiting group's disarm made before its
+     * recenters). With no window the set stays where made and the disarm
+     * waits: R is the same here, as nothing lies between them */
+    {
+        int got_n[2] = { 0, 0 };
+        double got_last[2] = { 0, 0 };
+        for (K = 0; K <= 4; K += 4) {
+            ysig_node n[7];
+            ysig_desc d;
+            n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2); n[0].history = 64;
+            n[1] = ysig_node_of(YSIG_OP_OFFSET, 0, -1);
+            n[2] = ysig_node_of(YSIG_OP_DETECT, 0, -1); n[2].p[YSIG_DETECT_LANE] = 0; n[2].p[YSIG_DETECT_LEVEL] = 5; n[2].p[YSIG_DETECT_HOLD] = 0.01;
+            n[2].p[YSIG_DETECT_START] = 1; n[2].p[YSIG_DETECT_OUT] = YSIG_OUT_HIT; n[2].history = 64;
+            n[3] = ysig_node_of(YSIG_OP_LATCH, 1, 2); n[3].history = 64;
+            n[4] = ysig_node_of(YSIG_OP_RECORD, 3, -1);
+            n[5] = ysig_node_of(YSIG_OP_DETECT, 0, -1); n[5].p[YSIG_DETECT_LANE] = 0; n[5].p[YSIG_DETECT_LEVEL] = 5; n[5].p[YSIG_DETECT_START] = 1; n[5].history = 64;
+            n[6] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 2, 2);
+            memset(&d, 0, sizeof d);
+            d.nodes = n; d.n_nodes = 7; d.arena = g_rp_ar; d.catchup_frames = K; d.rows_final = K > 0; d.on_row = d2192_row;
+            d.arena_size = ysig_arena_size(&d);
+            if (!d.arena_size || d.arena_size > sizeof g_rp_ar || !ysig_open(&g_rp, &d)) { g_failures++; return; }
+            ysig_reset(&g_rp, 0);
+            g_d2192_n = 0;
+            g_d2192_last = 0;
+            rp_feed(10 * MS, 10, YIN_AXIS_POSITION, 1);
+            ysig_arm(&g_rp, 2, 10 * MS);
+            rp_feed(15 * MS, 10, YIN_AXIS_POSITION, 1);
+            ysig_disarm(&g_rp, 2);
+            ysig_set(&g_rp, 1, YSIG_OFFSET_D_X, 100);
+            ysig_arm(&g_rp, 5, 30 * MS);   /* ahead: the group waits */
+            rp_feed(35 * MS, 10, YIN_AXIS_POSITION, 1);
+            ysig_flush(&g_rp);
+            got_n[K / 4] = g_d2192_n;
+            got_last[K / 4] = g_d2192_last;
+        }
+        CHECK(got_n[0] == got_n[1] && got_last[0] == got_last[1]);
+    }
 }
 
 /* Exactness (docs/sig.md): arm_unverified, one shape per condition, each
@@ -4596,6 +4635,58 @@ static void test_arm_exact(void) {
         CHECK(ex_unv() == 0);
         ysig_arm(&g_rp, 1, 20 * MS);
         CHECK(ex_unv() == !v);
+    }
+    /* 2 (b)'s exception needs no group K that waits for L too, earlier
+     * than G, linked to H (case 1061 of the oracle's seed 777016): K arms
+     * e (on device 2) at 20 ms, G arms d (on any device) at 20 ms, H
+     * disarms e and d and arms d at 20 ms, all in the past; device 2's
+     * input at 30 ms is the L of all three. In R, L lets K in first; K's
+     * arm lets H in, whose disarm of d cancels G's waiting arm. The
+     * control: K at 25 ms (later than G, so L lets G in first) */
+    for (v = 0; v < 2; v++) {
+        ysig_node kn[4];
+        kn[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 2); kn[0].history = 64;   /* any device */
+        kn[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1); kn[1].p[YSIG_DETECT_LANE] = 0; kn[1].p[YSIG_DETECT_LEVEL] = 5; kn[1].p[YSIG_DETECT_START] = 1; kn[1].history = 64;
+        kn[2] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 2, 2); kn[2].history = 64;
+        kn[3] = ysig_node_of(YSIG_OP_DETECT, 2, -1); kn[3].p[YSIG_DETECT_LANE] = 0; kn[3].p[YSIG_DETECT_LEVEL] = 5; kn[3].p[YSIG_DETECT_START] = 1; kn[3].history = 64;
+        if (!rp_open(kn, 4, 4, 0, false, false)) return;
+        rp_feed(10 * MS, 0, YIN_AXIS_POSITION, 2);
+        rp_feed(30 * MS, 0, YIN_AXIS_POSITION, 2);
+        ysig_arm(&g_rp, 3, (v ? 20 : 25) * MS);   /* K */
+        ysig_arm(&g_rp, 1, 20 * MS);              /* G */
+        CHECK(ex_unv() == 0);
+        ysig_disarm(&g_rp, 3);                    /* H */
+        ysig_disarm(&g_rp, 1);
+        ysig_arm(&g_rp, 1, 20 * MS);
+        CHECK(ex_unv() == v);
+    }
+    /* The same through a chain placed after H: K arms e, G arms d, H
+     * disarms d and arms f, then J disarms e and arms f, all at 20 ms. In
+     * R, K's arm lets J in, J's arm lets H in, H's disarm cancels G. J
+     * meets K and H, not G: 2 (b) is tested again over every call between
+     * G and L, so G counts at J's going-in (and H, which J's link to K
+     * makes unverified too). d, e and f are on devices 1, 2 and 3; L is a
+     * settle at 30 ms (it meets every node). The control: J without the
+     * disarm of e (no link) */
+    for (v = 0; v < 2; v++) {
+        ysig_node kn[6];
+        kn[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2); kn[0].history = 64;
+        kn[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1); kn[1].p[YSIG_DETECT_LANE] = 0; kn[1].p[YSIG_DETECT_LEVEL] = 5; kn[1].p[YSIG_DETECT_START] = 1; kn[1].history = 64;
+        kn[2] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 2, 2); kn[2].history = 64;
+        kn[3] = ysig_node_of(YSIG_OP_DETECT, 2, -1); kn[3].p[YSIG_DETECT_LANE] = 0; kn[3].p[YSIG_DETECT_LEVEL] = 5; kn[3].p[YSIG_DETECT_START] = 1; kn[3].history = 64;
+        kn[4] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 3, 2); kn[4].history = 64;
+        kn[5] = ysig_node_of(YSIG_OP_DETECT, 4, -1); kn[5].p[YSIG_DETECT_LANE] = 0; kn[5].p[YSIG_DETECT_LEVEL] = 5; kn[5].p[YSIG_DETECT_START] = 1; kn[5].history = 64;
+        if (!rp_open(kn, 6, 4, 0, false, false)) return;
+        rp_feed(10 * MS, 0, YIN_AXIS_POSITION, 1);
+        ysig_settle(&g_rp, 30 * MS);
+        ysig_arm(&g_rp, 3, 20 * MS);   /* K */
+        ysig_arm(&g_rp, 1, 20 * MS);   /* G */
+        ysig_disarm(&g_rp, 1);         /* H */
+        ysig_arm(&g_rp, 5, 20 * MS);
+        CHECK(ex_unv() == 0);
+        if (v) ysig_disarm(&g_rp, 3);  /* J */
+        ysig_arm(&g_rp, 5, 20 * MS);
+        CHECK(ex_unv() == 2 * v);
     }
     /* 2 (c) at any N(G): a disarm of d1 cancels d1's waiting arm, whose
      * group has a disarm of d2; device 3 moves N to 30 ms, device 1 at 35
