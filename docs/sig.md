@@ -468,12 +468,14 @@ reference sequence of the same calls on a graph with no window.
   input call (its counts are kept, as in any order).
 - **State call**: `ysig_set()`, `ysig_set_data()`, `ysig_disarm()`,
   `ysig_recenter()`, `ysig_arm()`.
-- **Barrier**: `ysig_reset()`, `ysig_reset_trial()`.
+- **Barrier**: `ysig_reset()`, `ysig_reset_trial()`, `ysig_flush()`
+  (new, below; it resets nothing).
 - **Read**: `ysig_value_of()`, `ysig_value_at()`, `ysig_detected()`,
   `ysig_derived()`, `ysig_get_stats()`. A read is not a call of the
   sequence. It sees the state after the calls made before it.
-- **Input time** `N`: after a barrier, the barrier's time; after an
-  input call, the larger of `N` and that call's time.
+- **Input time** `N`: after a reset, the reset's time (`ysig_flush()`
+  leaves `N`); after an input call, the larger of `N` and that call's
+  time.
 
 #### The time of each call
 
@@ -484,6 +486,7 @@ reference sequence of the same calls on a graph with no window.
 | `ysig_settle(t)` | `t` |
 | `ysig_arm(d, t)` | `t` |
 | `ysig_reset(t)`, `ysig_reset_trial(t)` | `t` |
+| `ysig_flush()` | `N` at its call |
 | A state call in a group (below) | the group's time |
 | Any other state call (`ysig_recenter()` too) | `N` at its call |
 
@@ -539,12 +542,25 @@ R is built call by call, in call order:
    footprint disjoint from `F(G)`.
 3. An ahead group waits, with or without a window. It is added at the
    end of R right before the first later input call whose time is later
-   than `τ` and whose footprint meets `F(G)`, or right before the next
-   barrier, whichever comes first. Waiting groups go in by `τ`, then
-   call order. A group that never meets such a call is never made. A
-   state call in no group made while a group waits has the time `N < τ`,
-   so it goes before the group: a `ysig_disarm()` does not cancel a
-   waiting arm, and a `ysig_set()` of its detect applies to it.
+   than `τ` and whose footprint meets `F(G)`. Waiting groups go in by
+   `τ`, then call order. A group that never meets such a call is never
+   made. A state call in no group made while a group waits has the time
+   `N < τ`, so it goes before the group: a `ysig_set()` of its detect
+   applies to the waiting arm. Two exceptions cancel a waiting arm:
+   - a `ysig_disarm(d)`, in a group or in no group, cancels every waiting
+     arm of d whose `τ` is later than the disarm's time;
+   - a barrier cancels every waiting arm. The other calls of a waiting
+     group go into R right before the barrier, without the arm.
+
+   A cancelled arm is not made and is counted in `arm_ahead_cancelled`.
+   The other calls of its group still go in by this rule. Reason: a
+   disarm ends what the caller armed d for. A caller that leaves a state
+   before the input reaches the time it armed that state's control at
+   (the player arms at a mark's onset, which can be ahead of the poll)
+   disarms the control on exit; without the cancel, the waiting arm
+   would arm d later for a state that has ended. A barrier ends the
+   trial the arm was for. Two arms with no disarm between them (E) stay
+   as above: both are made, by `τ`.
 4. Input calls keep their call order in R. A barrier is never crossed.
 
 Equal times: a call at `τ` that must come before G (rule 2) does. So an
@@ -636,10 +652,30 @@ whole value) is counted:
 - `arm_hits_retracted`: any other, another detect's at any time too (the
   caller may have taken it with the hit it acted on).
 
-`on_row` and `ysig_derived()` get R's rows and events once, at the
-call that makes them. When a past group changes ones already handed
-out, in any column, the arm is counted in `arm_rows_stale` or
-`arm_derived_stale`. They are not handed out again.
+`on_row` and `ysig_derived()` get R's rows and events once. When they
+get them depends on the desc:
+
+- **At once** (the default; always with no window): at the call that
+  makes them. When a past group changes ones already handed out, in any
+  column, the arm is counted in `arm_rows_stale` or `arm_derived_stale`.
+  They are not handed out again.
+- **Final only** (`desc.rows_final`, `desc.derived_final`, each with a
+  window): a row or a derived event is held until it is final, then
+  handed out, in R's order. It is final when the call that made it is
+  older than the oldest call the window can still run again: the
+  oldest checkpoint's, or the log's oldest after the logs ran full. A
+  later past group can then not change it: its place would be before
+  the window, so it falls back (`arm_past_far`, `arm_past_full`). A
+  barrier makes everything before it final, and `ysig_flush()` (new: a
+  barrier that resets nothing) does the same between trials or at the
+  end of a session. In this mode `arm_rows_stale` (or
+  `arm_derived_stale`) cannot occur, and every row (or event) handed
+  out is R's. Latency: up to `catchup_frames` frames, as the oldest
+  checkpoint is that many frames old (with the logs full, less). The
+  held rows take arena room: `catchup_rows` rows (new desc field;
+  default 4 × `catchup_calls`). When it is full, the oldest held row is
+  handed out at once and the window drops the checkpoints older than
+  its call, so the row is final (a shorter window, still exact).
 
 #### Counts and fallbacks
 
@@ -650,8 +686,9 @@ out, in any column, the arm is counted in `arm_rows_stale` or
 | `arm_past_far` | a past group whose place is before the window's oldest checkpoint: its calls are made at their call positions, the arm as described above (input later than `τ` already seen) |
 | `arm_past_full` | the same after the window's logs ran full |
 | `arm_past_off` | the same with no window (an oracle's graph counts this; it is not compared) |
+| `arm_ahead_cancelled` | a waiting arm cancelled by a disarm or a barrier (rule 3); not a fallback |
 | `arm_hits_superseded`, `arm_hits_retracted` | above |
-| `arm_rows_stale`, `arm_derived_stale` | above |
+| `arm_rows_stale`, `arm_derived_stale` | above; never in final-only mode |
 | `arm_reentry`, `call_reentry` | a call from a callback during another call: refused, not in R |
 
 A fallback is not R's result. The player's guard must stop on
@@ -708,19 +745,63 @@ a 27-node graph with 4,096-value rings), 6.3 MB at 4 and 16384.
 
 #### What this changes for the player
 
-- A take's recenter and its until's arm (format 3.12) form one past
-  group, so the recenter moves to the take's time: input between that
-  time and the call is integrated from the new point. Sample traces of
-  the role written in that time change, `arm_rows_stale` counts, and the
-  guard stops. The player must take the run again's rows for its traces
-  (a sig.h change: rows handed out again on request) or stop. To measure
-  on the harness before the change.
+- Rows: the player opens its graphs with `rows_final`. Its only row
+  consumer is the sample traces (`v2_on_row`), which it keeps for the
+  trial and writes at the trial's end, so a latency of `catchup_frames`
+  frames costs nothing; its traces are then always R's, and a take's
+  recenter that a past group moves back (format 3.12: recenter, then
+  the until's arm) cannot make a stale row. Two player changes come
+  with it: `v2_on_row` takes a trial's rows until the barrier that
+  follows the trial (it now drops rows that arrive between trials), and
+  the player writes a trial's traces after `ysig_flush()` at the trial's
+  end.
+- Derived events: the player feeds them (a movement's emit) to the
+  response collector at each sample, and the collector's responses
+  drive the states in that frame. A latency of four frames (67 ms at
+  60 Hz) would move responses and the frames shown, so the player keeps
+  them at once. A past group changes one only through a node it moves
+  (a recenter or a set upstream of the movement's emit) or through an
+  arm's change that reaches an emit. That is counted in
+  `arm_derived_stale` and the guard stops. Nothing reads them early as
+  a value: frame traces and drawing use `ysig_value_of()` and
+  `ysig_value_at()`, which read R's state and are exact; latches and
+  peaks (`freeze_at`, the peak gate) are graph nodes, so in R.
+- The player calls no `ysig_disarm()`: it drops an ended state's hits
+  by `arm_gen`. With waiting arms it must disarm a state's controls in
+  its exit's group, before it arms the next state's controls, so a
+  waiting arm of an ended state is cancelled (rule 3).
 - An ahead arm waits for input past its time: an entry-now hit at an
   arm after the frame's onset comes with the next input past that time.
   The model's GAPs `future-arm-hit` and `future-arm-hold` take that
   reading.
 - `arm_past_pinned` is new; the guard stops on it. To measure how often
   the harness's multi-device cases pin.
+
+Measured on the player at 4a0584d (2026-11-13, the Linux desktop,
+Release, a scratch build with counters in sig.h's public calls, not
+committed; `N` counted as above). The harness: seeds 42001 to 62000
+(19,999 cases) and `GEN_MULTI=1` 19001 to 24000 (4,999); a line per
+player run that opened a graph and exited (10,791 and 2,500). Its
+generator makes no recenter and one pointing role, so the recenter and
+pin rows are 0 by construction there; `player_test.py` (56 cases, its
+recenter shapes too) and the two 3.18 examples cover them.
+
+| Count | Harness single | Harness multi | `player_test.py` | Visuomotor, bimanual |
+|---|---|---|---|---|
+| Arms | 309,893 | 141,938 | 598 | 800, 148 |
+| Past / present / ahead | 230,877 / 64,506 / 14,510 | 86,638 / 36,533 / 18,767 | 229 / 356 / 13 | 320 / 480 / 0, 16 / 132 / 0 |
+| Ahead by: up to 1 ms / 5 ms / 17 ms / more | 2,325 / 4,334 / 7,851 / 0 | 4,507 / 1,643 / 12,617 / 0 | 2 / 7 / 4 / 0 | 0 |
+| Arms at a mark's onset (recenter, then the until) / of them ahead | 0 / 0 | 0 / 0 | 3 / 0 | 0 / 0 |
+| A recenter in a past group (it would move back) | 0 | 0 | 0 | 0 |
+| A set or disarm in a past group | 0 | 0 | 0 | 0 |
+| An arm made with an earlier time while an ahead arm waits (an exit before `τ`; same detect) | 0 (0) | 0 (0) | 0 (0) | 0 |
+| Arms still waiting at the next barrier (cancelled by rule 3) | 108 in 61 runs | 10 in 8 runs | 0 | 0 |
+| Past arms that would pin | 0 | 0 | 0 | 0 |
+
+So, on these runs: no take moves a recenter back, no group carries a
+set, no exit comes before a waiting arm's time, and nothing pins. The
+change the player meets is the waiting itself: 33,277 ahead arms, every
+one at most 17 ms ahead, and 118 that a barrier would cancel.
 
 #### Where 0.6.0 as built differs
 
@@ -738,6 +819,9 @@ a 27-node graph with 4,096-value rings), 6.3 MB at 4 and 16384.
 7. Each image reserves the queue's full room (F, r16).
 8. `N` after a barrier is the lowest time, not the barrier's time, so an
    arm at the reset's time with no input yet is ahead, made at once.
+9. No waiting arms, so nothing to cancel (`arm_ahead_cancelled` is new).
+10. Rows and derived events are handed out at once only; no
+    `rows_final`, `derived_final`, `catchup_rows` or `ysig_flush()`.
 
 ### Trials and adapters
 
