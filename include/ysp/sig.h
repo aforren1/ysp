@@ -5353,13 +5353,18 @@ static int ysig__late_place(ysig_graph* g, uint64_t a, uint64_t b, uint64_t lo, 
     at = ysig__late_move_k(g, a, p0, F, t, cls, ord);
     ysig__late_unv(g, at, n, F, t, cls);
     if (cls < 2) {
-        /* a late input before a disarm in no group: in R that disarm's gap
-         * is open again after the input (it takes effect at its gap's end,
-         * S1), where the header made it at the input's call. Not verified */
+        /* a late input before a disarm in no group with no input after it:
+         * in R that disarm's gap is open again (it takes effect at its
+         * gap's end, S1), where the header made it at the input's call.
+         * Not verified */
+        uint64_t dis = UINT64_MAX;
+        int64_t ti;
         for (s = at + n; s < cu->c_head; s++) {
             const ysig__call* c = &cu->calls[s % C];
-            if (c->e.kind == YSIG_J_DISARM && !c->gid) { g->st.late_unverified++; break; }
+            if (c->e.kind == YSIG_J_DISARM && !c->gid) dis = s;
+            else if (dis != UINT64_MAX && ysig__input_t(&c->e, &ti)) dis = UINT64_MAX;   /* its gap ends there */
         }
+        if (dis != UINT64_MAX) g->st.late_unverified++;
     }
     if (cu->def_k < 0) { cu->n_grp_dis = 0; cu->late_in = 0; }
     for (s = at; s < at + n; s++) {
