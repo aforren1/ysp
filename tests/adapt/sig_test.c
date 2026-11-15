@@ -6759,6 +6759,135 @@ static void test_late_present_group(void) {
     }
 }
 
+/* Hits handed out so far, by node d */
+static int v2_hits(int d, int64_t* last) {
+    ysig_hit h[16];
+    int m, k, n = 0;
+    while ((m = ysig_detected(&g_rp, h, 16)) > 0)
+        for (k = 0; k < m; k++) if (h[k].node == d) { n++; if (last) *last = h[k].t; }
+    return n;
+}
+/* The reviewer's 438 family at 5feeb5b (cases 379, 477, 557, 438, 462,
+ * 690), reduced: ysig_disarm_at(d, 20) with N at 10 meets d's hold (a hit
+ * at 15 of the arm at 10, handed out), then a plain ysig_disarm(d) at N. By key the plain
+ * disarm (10) goes before the disarm_at (20): d ends at 10 and the hit at
+ * 15 is not R's. A disarm takes effect at its gap's end, a gap is in call
+ * order ("Groups"), and a read in an open gap sees the detect still armed:
+ * the hit stands until an input ends the gap. Then the disarm goes to its
+ * place, and the voided hit counts in arm_hits_superseded (a late state
+ * call keeps the 0.6.x split; later than the disarm's time, of the detect
+ * it disarms). The control: no plain disarm, nothing voided */
+static void test_v2_plain_disarm(void) {
+    ysig_stats st;
+    int v;
+    g_where = "a plain disarm before a disarm_at by key (the 438 family)";
+    for (v = 0; v < 2; v++) {
+        ysig_node n[3];
+        int64_t t = 0;
+        n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2); n[0].history = 64;
+        n[1] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 2, 2); n[1].history = 64;
+        n[2] = ysig_node_of(YSIG_OP_DETECT, 0, -1); n[2].p[YSIG_DETECT_LEVEL] = 5; n[2].p[YSIG_DETECT_HOLD] = 0.005;
+        n[2].p[YSIG_DETECT_START] = 1; n[2].history = 64;
+        if (!rp_open(n, 3, 4, 0, false, false)) return;
+        rp_feed(10 * MS, 9, YIN_AXIS_POSITION, 1);
+        CHECK(ysig_arm(&g_rp, 2, 10 * MS));
+        CHECK(ysig_disarm_at(&g_rp, 2, 20 * MS));
+        CHECK(v2_hits(2, &t) == 1 && t == 15 * MS);
+        if (v) CHECK(ysig_disarm(&g_rp, 2));
+        ysig_get_stats(&g_rp, &st);
+        CHECK(st.arm_hits_superseded == 0);
+        rp_feed(30 * MS, 0, YIN_AXIS_POSITION, 2);   /* ends the gap */
+        ysig_get_stats(&g_rp, &st);
+        CHECK(st.arm_hits_superseded == v && st.arm_hits_retracted == 0 && st.late_hits_voided == 0);
+    }
+}
+/* Three shapes that predate X1 and R1, each with a control (v 0):
+ * (a) a disarm_at with t later than N already in R, then a present group
+ *     [set d's level, arm d at N]: by key the group goes first, so d is
+ *     armed at 10 with level 1 and the disarm_at meets its hold (a hit at
+ *     15). The control has no disarm_at: the hold waits for input.
+ * (b) the W2 shape: a plain disarm keyed at N (30) above N(F(G)) (20, the
+ *     second device's last report), then an arm of d at 25 made after it:
+ *     by key the arm comes first, made (an entry-now hit at 25) and then
+ *     ended at 30, so a later crossing does not hit. The control has no
+ *     disarm: the crossing at 40 hits again.
+ * (c) a state call outside a group keyed at N(F(c)) (30, a third device
+ *     that reaches only F(c)) above a present group's tau (10), the two
+ *     meeting at a sum: by key the group goes first, so the sum reads d's
+ *     entry-now rise at 10 with the old offset. The control: the set in
+ *     the group's gap. */
+static void test_v2_old_shapes(void) {
+    ysig_stats st;
+    ysig_value r;
+    int v, K;
+    for (K = 4; K >= 0; K -= 4) {
+        g_where = K ? "old shapes, (a) a disarm_at already in R" : "old shapes, (a) with no window";
+        for (v = 0; v < 2; v++) {
+            ysig_node n[2];
+            int64_t t = 0;
+            n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2); n[0].history = 64;
+            n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1); n[1].p[YSIG_DETECT_LEVEL] = 5; n[1].p[YSIG_DETECT_HOLD] = 0.005;
+            n[1].p[YSIG_DETECT_START] = 1; n[1].history = 64;
+            if (!rp_open(n, 2, K, 0, false, false)) return;
+            rp_feed(10 * MS, 3, YIN_AXIS_POSITION, 1);
+            if (v) CHECK(ysig_disarm_at(&g_rp, 1, 30 * MS));
+            CHECK(ysig_set(&g_rp, 1, YSIG_DETECT_LEVEL, 1));
+            CHECK(ysig_arm(&g_rp, 1, 10 * MS));
+            ysig_get_stats(&g_rp, &st);
+            if (!K) CHECK(st.late_off == v && v2_hits(1, NULL) == 0);
+            else CHECK(st.late_off == 0 && v2_hits(1, &t) == v && (!v || t == 15 * MS));
+        }
+    }
+    g_where = "old shapes, (b) the W2 shape";
+    for (v = 0; v < 2; v++) {
+        ysig_node n[3];
+        int64_t t = 0;
+        n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2); n[0].history = 64;
+        n[1] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 2, 2); n[1].history = 64;
+        n[2] = ysig_node_of(YSIG_OP_DETECT, 1, -1); n[2].p[YSIG_DETECT_LEVEL] = 5; n[2].p[YSIG_DETECT_REPEAT] = 1;
+        n[2].p[YSIG_DETECT_ENTRY] = YSIG_ENTRY_NOW; n[2].p[YSIG_DETECT_OUT] = YSIG_OUT_HIT; n[2].history = 64;
+        if (!rp_open(n, 3, 4, 0, false, false)) return;
+        rp_feed(10 * MS, 0, YIN_AXIS_POSITION, 1);
+        rp_feed(10 * MS, 0, YIN_AXIS_POSITION, 2);
+        rp_feed(20 * MS, 9, YIN_AXIS_POSITION, 2);
+        rp_feed(30 * MS, 0, YIN_AXIS_POSITION, 1);
+        if (v) CHECK(ysig_disarm(&g_rp, 2));
+        rp_feed(31 * MS, 0, YIN_AXIS_POSITION, 1);   /* ends the disarm's gap */
+        (void)v2_hits(2, NULL);   /* the reset's arm: a hit at 20 */
+        CHECK(ysig_arm(&g_rp, 2, 25 * MS) && g_rp.wt->n == 1);
+        rp_feed(32 * MS, 0, YIN_AXIS_POSITION, 2);
+        CHECK(g_rp.wt->n == 0 && v2_hits(2, &t) == 1 && t == 25 * MS);
+        rp_feed(40 * MS, 9, YIN_AXIS_POSITION, 2);
+        CHECK(v2_hits(2, &t) == (v ? 0 : 1));
+        ysig_get_stats(&g_rp, &st);
+        CHECK(st.late_far == 0 && st.late_full == 0 && st.late_off == 0);
+    }
+    g_where = "old shapes, (c) a state call at N(F(c)) above tau";
+    for (v = 0; v < 2; v++) {
+        ysig_node n[7];
+        n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 1); n[0].history = 64;
+        n[1] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 2, 1); n[1].history = 64;
+        n[2] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 3, 1); n[2].history = 64;
+        n[3] = ysig_node_of(YSIG_OP_OFFSET, 0, -1); n[3].history = 64;
+        n[4] = ysig_node_of(YSIG_OP_DETECT, 1, -1); n[4].p[YSIG_DETECT_LEVEL] = 5;
+        n[4].p[YSIG_DETECT_ENTRY] = YSIG_ENTRY_NOW; n[4].p[YSIG_DETECT_OUT] = YSIG_OUT_HIT; n[4].history = 64;
+        n[5] = ysig_node_of(YSIG_OP_SUM, 3, 4); n[5].history = 64;
+        n[6] = ysig_node_of(YSIG_OP_SUM, 3, 2); n[6].history = 64;
+        if (!rp_open(n, 7, 4, 0, false, false)) return;
+        rp_feed(10 * MS, 1, YIN_AXIS_POSITION, 1);
+        rp_feed(10 * MS, 9, YIN_AXIS_POSITION, 2);
+        rp_feed(30 * MS, 0, YIN_AXIS_POSITION, 3);
+        if (!v) CHECK(ysig_set(&g_rp, 3, 0, 100));
+        rp_feed(31 * MS, 0, YIN_AXIS_POSITION, 3);   /* ends the set's gap: in no group */
+        if (v) CHECK(ysig_set(&g_rp, 3, 0, 100));
+        CHECK(ysig_arm(&g_rp, 4, 10 * MS));
+        CHECK(ysig_value_at(&g_rp, 5, 15 * MS, &r) && r.v[0] == (v ? 102 : 2));
+        CHECK(ysig_value_of(&g_rp, 5)->v[0] == 102);
+        ysig_get_stats(&g_rp, &st);
+        CHECK(st.late_far == 0 && st.late_full == 0 && st.late_off == 0);
+    }
+}
+
 static void test_late(void) {
     ysig_stats st;
     int v, k;
@@ -7131,6 +7260,8 @@ int main(void) {
     test_late();
     test_frame_ties();
     test_late_present_group();
+    test_v2_plain_disarm();
+    test_v2_old_shapes();
     test_hold();
     if (g_failures) { fprintf(stderr, "sig_test: %d failures\n", g_failures); return 1; }
     printf("sig_test: all checks passed\n");
