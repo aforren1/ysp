@@ -605,6 +605,12 @@ R is built call by call, in call order:
    as above: both are made, by `τ`.
 4. Input calls keep their call order in R. A barrier is never crossed.
 
+With a window, the header also makes the past group of "When the header
+tests" (below) wait. `ysig_arm_waiting(g, d)` (0.7.0) tells a caller
+whether an arm of d waits, ahead or past: a caller that ends d's state
+disarms d when it does, so that a waiting arm is cancelled or, when the
+disarm's time is later than its `τ`, made and then ended (rule 3).
+
 Without a window an ahead group's set, set_data and recenter calls
 cannot be taken back once made: they stay where made, and the arm waits
 (counted in `arm_past_off`; with a window whose log did not keep one of
@@ -868,7 +874,21 @@ block (the reviewer's 1137).
 When the header tests:
 
 - At G's going-in: conditions 1 and 2. When `L(G)` is not in R yet, the
-  header counts G then. This covers reads made while G waits.
+  header counts G then. This covers reads made while G waits. One
+  exception (0.7.0): a past group that holds its arm and disarms only,
+  with `N(G)` earlier than `τ`, and with no call of R after its place
+  whose footprint meets `F(G)` (so `L(G)` is not in R yet). The header
+  does not make it at its place: it waits, as R has it, and goes in when
+  rule 3 lets it in (`L(G)`, a later state call that meets it, or a
+  barrier). Reads made while it waits see it not made, as in R, and the
+  waiting groups' tests apply to it when it goes in. A group with a set,
+  set_data or recenter is placed and counted as before: R makes those
+  calls at its place and only its arm and disarms wait, and the header's
+  waiting group waits whole (H9). Reason: two hands, each a device. The
+  player arms both hands' controls at one hit's time, which a sample of
+  the first hand found; the second hand's sample at the same time is not
+  fed yet, so its control's group has no `L` (the bimanual definition of
+  2026-11-14: one `arm_unverified` at each such entry).
 - At each later past group's place between G and `L(G)`: condition 2 (b)
   again, over every call between them, since a later group can be the
   link of a chain that lets an earlier H in before G.
@@ -968,9 +988,10 @@ a 27-node graph with 4,096-value rings), 6.3 MB at 4 and 16384.
   `ysig_value_at()`, which read R's state and are exact; latches and
   peaks (`freeze_at`, the peak gate) are graph nodes, so in R.
 - The player drops an ended state's hits by `arm_gen`. With waiting arms
-  it disarms, when a state ends, each of the state's controls whose
-  latest arm is still ahead of the input, so that waiting arm is
-  cancelled (rule 3). It disarms no other control: a disarm in no group
+  it disarms, when a state ends, each of the state's controls with an arm
+  that still waits (`ysig_arm_waiting()`, 0.7.0; before, an arm whose
+  time was ahead of the input), so that waiting arm is cancelled or made
+  and ended (rule 3). It disarms no other control: a disarm in no group
   takes the input time, and the next state's arm of the same control,
   made after a settle at an earlier time, would go before it in R and be
   ended by it (the model's seeds 62160, 63378, 65482, 68666, and with
