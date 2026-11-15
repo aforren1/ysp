@@ -1321,7 +1321,6 @@ typedef struct ysig__wt {
     int        n_lr;
     ysig__ux*  op;          /* with a window: catchup_calls of them      */
     int        n_op, cap_op;
-    int        pend_new;    /* a group placed now went pending (no L yet) */
     int        cas_kind, cas_depth, n_cg, n_cc, cas_stack[YSIG__UCG], cas_top;
     int        cas_dis;     /* condition 4: a disarm (the open gap's, or of
                              * a group let in) since the last arm or input
@@ -4870,120 +4869,6 @@ static void ysig__cas_end(ysig_graph* g, uint64_t l_seq) {
     w->n_cg = w->n_cc = w->cas_top = 0;
 }
 
-/* Pending groups (docs/sig.md, "When the header tests"): a past group of
- * an arm and disarms only, with N(G) before its time and no L in R yet,
- * is made at its place as R has it; a graph with no window keeps it
- * waiting until a later call that meets it lets it in. The two agree
- * while nothing reads the difference, so the header decides it at that
- * call: an input later than its time (L) or a state call at the input
- * time (no group, a present group) lets it in, exact; a call of a group
- * that waits too, or a barrier (which cancels it there), is counted; an
- * input at or before its time is counted. Op entries with l_seq 0.
- * count 0: those f meets are decided exact, and stay open with the call
- * that let them in (lseq) as their L: a later past group placed between
- * them is tested as for any open group (2 (b)); count 1: counted. */
-static void ysig__pend_hit(ysig_graph* g, const uint64_t* f, int count, uint64_t lseq) {
-    ysig__wt* w = g->wt;
-    int i;
-    for (i = 0; i < w->n_op; ) {
-        ysig__ux* o = &w->op[i];
-        if (!o->l_seq && (!f || ysig__fp_meets(g, f, o->F))) {
-            ysig__ux x;
-            if (!count && lseq) { o->l_seq = lseq; i++; continue; }
-            if (count) ysig__unv(g, o->gid);
-            x = w->op[i];
-            w->op[i] = w->op[w->n_op - 1];
-            w->op[--w->n_op] = x;
-        } else {
-            i++;
-        }
-    }
-}
-/* An input at t that meets a pending group: L when t is later than the
- * group's time (exact); at or before it, an input R puts after the arm and
- * a graph with no window before it (counted; earlier than its time,
- * condition 3's late report too) */
-static void ysig__pend_in(ysig_graph* g, int64_t t, const uint64_t* f) {
-    ysig__wt* w = g->wt;
-    uint64_t gone[YSIG__FPW], fa[YSIG__FPW];
-    int i, k;
-    /* what this input lets in: the pending groups it decides, and the
-     * waiting ones it lets in. A pending group that it does not let in and
-     * that shares a node with one of them stays waiting in the graph with
-     * no window while that one goes in: R's order reversed there
-     * (counted) */
-    for (k = 0; k < g->dw; k++) gone[k] = 0;
-    for (i = 0; i < w->n_op; i++) {
-        const ysig__ux* o = &w->op[i];
-        if (!o->l_seq && t > o->t && (!f || ysig__fp_meets(g, f, o->F)))
-            for (k = 0; k < g->dw; k++) gone[k] |= o->F[k];
-    }
-    for (i = 0; i < w->n; i++) {
-        if (w->a[i].t >= t) continue;
-        ysig__wait_fp(g, &w->a[i], fa);
-        if (!f || ysig__fp_meets(g, f, fa)) for (k = 0; k < g->dw; k++) gone[k] |= fa[k];
-    }
-    for (i = 0; i < w->n_op; ) {
-        ysig__ux* o = &w->op[i];
-        int meets = !f || ysig__fp_meets(g, f, o->F);
-        if (!o->l_seq && (meets || ysig__fp_meets(g, gone, o->F))) {
-            ysig__ux x;
-            if (meets && t > o->t) { o->l_seq = w->seq; i++; continue; }   /* L: this input, logged next */
-            ysig__unv(g, o->gid);
-            x = w->op[i];
-            w->op[i] = w->op[w->n_op - 1];
-            w->op[--w->n_op] = x;
-        } else {
-            i++;
-        }
-    }
-}
-/* The open gap's calls' footprint (with node, an arm's), into f; 0 when
- * the log did not keep them (then every node) */
-static int ysig__pend_gap_fp(ysig_graph* g, int node, uint64_t* f) {
-    ysig__cu* cu = g->cu;
-    uint64_t s, fx[YSIG__FPW];
-    int w;
-    for (w = 0; w < g->dw; w++) f[w] = 0;
-    ysig__fp_or(g, f, node);
-    if (!cu || !cu->grp_open) return 1;
-    if (cu->grp_bad) return 0;
-    for (s = cu->grp_from; s < cu->c_head; s++) {
-        const ysig__call* c = &cu->calls[s % (uint64_t)cu->C];
-        if (c->wp) continue;
-        (void)ysig__fp_entry(g, c, fx);
-        for (w = 0; w < g->dw; w++) f[w] |= fx[w];
-    }
-    return 1;
-}
-/* The open gap's first logged call: the call a pending group goes in
- * before when the gap lets it in */
-static uint64_t ysig__pend_gap_seq(const ysig_graph* g) {
-    const ysig__cu* cu = g->cu;
-    uint64_t s;
-    if (!cu || !cu->grp_open || cu->grp_bad) return 0;
-    for (s = cu->grp_from; s < cu->c_head; s++) if (!cu->calls[s % (uint64_t)cu->C].wp) return cu->calls[s % (uint64_t)cu->C].cseq;
-    return 0;
-}
-static int ysig__pend_any(const ysig_graph* g) {
-    int i;
-    for (i = 0; i < g->wt->n_op; i++) if (!g->wt->op[i].l_seq) return 1;
-    return 0;
-}
-/* A hash of the values and ring tops of the nodes in F: what a read sees */
-static uint64_t ysig__pend_hash(const ysig_graph* g, const uint64_t* F) {
-    uint64_t h = 0;
-    int i;
-    for (i = 0; i < g->n; i++) {
-        const ysig__ring* r;
-        if (!((F[i >> 6] >> (i & 63)) & 1u)) continue;
-        h = ysig__mix_value(h, &g->val[i]);
-        r = &g->nd[i].hist;
-        h = ysig__hmix(h, (uint64_t)(uint32_t)r->n | ((uint64_t)(uint32_t)r->head << 32));
-    }
-    return h;
-}
-
 /* Condition 2 in the log (a window): a group placed with N(G) < t is open
  * until its L; a later group placed between them whose state call meets
  * it makes it unverified (2 (b)) */
@@ -5271,15 +5156,6 @@ static void ysig__before_input(ysig_graph* g, int64_t t, const uint64_t* f) {
      * in no group's block (condition 4 below; condition 1 not) */
     int dis = w->n_dis > 0 || w->gap4_wp;
     w->n_pin = 0;
-    if (ysig__pend_any(g)) {
-        /* the gap ends in no group: its calls are at the input time,
-         * after a pending group's, and let it in; then the input, L when
-         * it is later than its time (a late report is condition 3's) */
-        uint64_t fg[YSIG__FPW];
-        if (ysig__pend_gap_fp(g, -1, fg)) ysig__pend_hit(g, fg, 0, ysig__pend_gap_seq(g));
-        else ysig__pend_hit(g, NULL, 1, 0);
-        ysig__pend_in(g, t, f);
-    }
     ysig__dis_last(g);
     ysig__gap_disarms(g, g->t_cover, 1);
     ysig__gap_late(g);
@@ -5320,13 +5196,6 @@ static void ysig__before_barrier(ysig_graph* g) {
     ysig__wt* w = g->wt;
     int dis = w->n_dis > 0 || w->gap4_wp;
     w->n_pin = 0;
-    if (ysig__pend_any(g)) {
-        /* a barrier before L: a graph with no window cancels the waiting
-         * arm there, R keeps it made (counted); the gap's own calls first */
-        uint64_t fg[YSIG__FPW];
-        if (ysig__pend_gap_fp(g, -1, fg)) ysig__pend_hit(g, fg, 0, ysig__pend_gap_seq(g));
-        ysig__pend_hit(g, NULL, 1, 0);
-    }
     ysig__dis_last(g);
     ysig__gap_disarms(g, g->t_cover, 1);
     ysig__gap_late(g);
@@ -6034,23 +5903,9 @@ static void ysig__unv_place(ysig_graph* g, int kslot, uint64_t pos, int nb) {
                     if (ti > nx) nx = ti;
                 }
             }
-            if (!bad && li == UINT64_MAX) {
-                /* L not in R yet: an arm and disarms only is decided when
-                 * L or another call that meets it comes (pending); with a
-                 * set, set_data or recenter, counted now */
-                for (u = first; u <= last && !bad; u++) {
-                    const ysig__call* c = &cu->calls[u % (uint64_t)cu->C];
-                    if (c->gid == gid && c->e.kind != YSIG_J_ARM && c->e.kind != YSIG_J_DISARM) bad = 1;
-                }
-                for (u = last + 1; u < cu->c_head && !bad; u++) {
-                    const ysig__call* c = &cu->calls[u % (uint64_t)cu->C];
-                    if (!ysig__input_t(&c->e, &ti) && ysig__fp_entry(g, c, f) == 1 && ysig__fp_meets(g, f, F)) bad = 1;
-                }
-                if (!bad) {
-                    ysig__op_add(g, gid, t, F, 0, armed);
-                    w->pend_new = 1;
-                }
-            }
+            /* v0.7.0: a past group by its footprint has its L in R (the
+             * input that made it past); pending groups no longer arise */
+            if (!bad && li == UINT64_MAX) bad = 1;
             if (!bad && li != UINT64_MAX) {
                 const ysig__call* l = &cu->calls[li % (uint64_t)cu->C];
                 (void)ysig__fp_entry(g, l, f);
@@ -6134,9 +5989,9 @@ static void ysig__unv_place(ysig_graph* g, int kslot, uint64_t pos, int nb) {
  * calls let in at their calls stay where they went in (wp). */
 static void ysig__arm_past(ysig_graph* g, ysig_entry* e, uint64_t seq) {
     ysig__cu* cu = g->cu;
-    int node = e->node, kslot, pinned = 0, logged, ng = 0, pnb = 0;
-    int64_t t = e->t, phits = 0;
-    uint64_t F[YSIG__FPW], f[YSIG__FPW], pf[YSIG__FPW], ph = 0;
+    int node = e->node, kslot, pinned = 0, logged, ng = 0;
+    int64_t t = e->t;
+    uint64_t F[YSIG__FPW], f[YSIG__FPW], pf[YSIG__FPW];
     uint64_t from = cu->grp_open && !cu->grp_bad ? cu->grp_from : cu->c_head, pos, s, end, q;
     int w;
     for (w = 0; w < g->dw; w++) F[w] = 0;
@@ -6240,44 +6095,11 @@ static void ysig__arm_past(ysig_graph* g, ysig_entry* e, uint64_t seq) {
         cu->n_grp_dis = 0;
         for (w = 0; w < nb && cu->n_grp_dis < 16; w++)
             if (blk[w].e.kind == YSIG_J_DISARM && !blk[w].wp) cu->grp_dis[cu->n_grp_dis++] = blk[w].e.node;
-        g->wt->pend_new = 0;
         ysig__unv_place(g, kslot, pos, nb);
-        if (g->wt->pend_new) {
-            /* a pending group: what reads see now, before and after the
-             * run again (ysig__pend_hit) */
-            for (w = 0; w < g->dw; w++) pf[w] = 0;
-            for (q = pos; q < pos + (uint64_t)nb; q++) {
-                (void)ysig__fp_entry(g, &cu->calls[q % (uint64_t)cu->C], f);
-                for (w = 0; w < g->dw; w++) pf[w] |= f[w];
-            }
-            ph = ysig__pend_hash(g, pf);
-            phits = g->st.hits;
-            pnb = nb;
-        }
     }
     cu->arm_node = node;
     cu->arm_live = 0;
     ysig__rerun(g, kslot, node, t);
-    if (pnb) {
-        /* its arm or disarms changed a value, a ring or the hits at the
-         * call: a read differs from the graph with no window, where it
-         * waits (counted now, not at L) */
-        if (ysig__pend_hash(g, pf) != ph || g->st.hits != phits) {
-            int i;
-            for (i = 0; i < g->wt->n_op; ) {
-                ysig__ux* o = &g->wt->op[i];
-                for (q = pos; q < pos + (uint64_t)pnb && cu->calls[q % (uint64_t)cu->C].gid != o->gid; q++) { }
-                if (!o->l_seq && q < pos + (uint64_t)pnb) {
-                    ysig__ux x = *o;
-                    ysig__unv(g, o->gid);
-                    g->wt->op[i] = g->wt->op[g->wt->n_op - 1];
-                    g->wt->op[--g->wt->n_op] = x;
-                } else {
-                    i++;
-                }
-            }
-        }
-    }
     cu->n_grp_dis = 0;
     cu->arm_live = 0;
     cu->arm_node = -1;
@@ -6288,9 +6110,8 @@ static void ysig__arm_now(ysig_graph* g, ysig_entry* ep, uint64_t seq);
 YSIG_API bool ysig_arm(ysig_graph* g, int node, int64_t t_ns) {
     ysig_entry e;
     ysig__cu* cu;
-    uint64_t seq, fpend[YSIG__FPW];
+    uint64_t seq;
     int64_t nfg;
-    int pend;
     if (!g || !g->ok || node < 0 || node >= g->n || g->nd[node].op != YSIG_OP_DETECT) return false;
     if (g->busy) {
         /* from a callback (on_row, a custom op, the journal) inside a call
@@ -6343,23 +6164,12 @@ YSIG_API bool ysig_arm(ysig_graph* g, int node, int64_t t_ns) {
     }
     seq = ++g->wt->seq;
     g->ko = seq;
-    pend = ysig__pend_any(g);
-    if (pend) {
-        /* a pending group (L not in R yet) that this group meets: a
-         * present one is at the input time and lets it in (exact); an
-         * ahead one waits too (counted); a past one placed after it, at
-         * its place (ysig__unv_place) or not run again (below) */
-        if (!ysig__pend_gap_fp(g, node, fpend)) ysig__pend_hit(g, NULL, 1, 0);
-        else if (t_ns == nfg || !cu) ysig__pend_hit(g, fpend, 0, cu && cu->grp_open && !cu->grp_bad ? ysig__pend_gap_seq(g) : seq);
-        else if (t_ns > nfg) ysig__pend_hit(g, fpend, 1, 0);
-    }
     if (t_ns > nfg) {
         ysig__arm_wait(g, node, t_ns, seq);
     } else {
         int64_t cu0 = g->st.arm_caught_up;
         if (t_ns == nfg || !cu) ysig__arm_now(g, &e, seq);
         else ysig__arm_past(g, &e, seq);
-        if (pend && t_ns < nfg && cu && g->st.arm_caught_up == cu0) ysig__pend_hit(g, fpend, 1, 0);
         ysig__c4(g, seq, t_ns);
         if (g->st.arm_caught_up == cu0) {
             /* at the end of R: the gap's let-ins are inside its block (1),
@@ -6492,11 +6302,6 @@ YSIG_API bool ysig_disarm_at(ysig_graph* g, int node, int64_t t_ns) {
     ysig__fp_or(g, f, node);
     /* the gap ends in no group (its disarms at the input time) */
     w->n_pin = 0;
-    if (ysig__pend_any(g)) {
-        uint64_t fg[YSIG__FPW];
-        if (ysig__pend_gap_fp(g, -1, fg)) ysig__pend_hit(g, fg, 0, ysig__pend_gap_seq(g));
-        else ysig__pend_hit(g, NULL, 1, 0);
-    }
     ysig__dis_last(g);
     ysig__gap_disarms(g, g->t_cover, 1);
     ysig__gap_late(g);
