@@ -750,18 +750,28 @@ if(YSP_BUILD_TESTS)
     # ysp/experiment.h's table of defaults against the headers it came from.
     ysp_add_program(test_experiment_tables tests/adapt/experiment_tables_test.c core methods devices rig)
     add_test(NAME test_experiment_tables COMMAND test_experiment_tables)
-    # ysp/sig.h 0.6.0's arm in the past: the reviewer's oracle and spec
-    # cases, written from docs/sig.md ("An arm in the past: the
-    # semantics"). The oracle at 3,000 cases and a fixed seed; it passes on
-    # the two targets of "Exactness" (sig_arm_ref_check.cmake). The run at
-    # scale is in docs/sig.md.
+    # ysp/sig.h's arm in the past and late input: the reviewer's oracle and
+    # spec cases, written from docs/sig.md ("An arm in the past: the
+    # semantics", "Late input"). The oracle in late mode 4 with A's checks,
+    # at 3,000 cases and a fixed seed, with the late generator on and off;
+    # it passes on the two targets of "Exactness"
+    # (sig_arm_ref_check.cmake). The run at scale is in docs/sig.md.
+    # ysig_disarm_at(): the reviewer's hand-derived cases, and the 0.7.0
+    # header with a zeroed window as the second B (in the same file).
     ysp_add_program(test_sig_arm_spec tests/adapt/sig_arm_spec_cases.c core)
     target_compile_definitions(test_sig_arm_spec PRIVATE SIG_ARM_REF_SPEC=1)
     add_test(NAME test_sig_arm_spec COMMAND test_sig_arm_spec)
+    ysp_add_program(test_sig_disarm_at tests/adapt/sig_disarm_at_cases.c core)
+    target_compile_definitions(test_sig_disarm_at PRIVATE SIG_HAS_LATE_VOIDED=1)
+    add_test(NAME test_sig_disarm_at COMMAND test_sig_disarm_at)
     ysp_add_program(test_sig_arm_ref tests/adapt/sig_arm_ref.c core)
-    target_compile_definitions(test_sig_arm_ref PRIVATE SIG_ARM_REF_SPEC=1 SIG_HAS_UNV)
-    add_test(NAME test_sig_arm_ref COMMAND ${CMAKE_COMMAND} -DPROG=$<TARGET_FILE:test_sig_arm_ref>
-             -DCASES=3000 -DSEED=20261114 -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/adapt/sig_arm_ref_check.cmake)
+    target_compile_definitions(test_sig_arm_ref PRIVATE SIG_ARM_REF_SPEC=1 SIG_HAS_UNV=1 SIG_HAS_LATE=1 SIG_HAS_LATE_VOIDED=1)
+    add_test(NAME test_sig_arm_ref_late COMMAND ${CMAKE_COMMAND} -DPROG=$<TARGET_FILE:test_sig_arm_ref>
+             -DCASES=3000 -DSEED=20261115 "-DENV=SIG_ORACLE_LATE=4;SIG_ORACLE_PRED=1;SIG_ORACLE_P2STRICT=1;SIG_ORACLE_LATE_A=1"
+             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/adapt/sig_arm_ref_check.cmake)
+    add_test(NAME test_sig_arm_ref_late_off COMMAND ${CMAKE_COMMAND} -DPROG=$<TARGET_FILE:test_sig_arm_ref>
+             -DCASES=3000 -DSEED=20261115 "-DENV=SIG_ORACLE_LATE=4;SIG_ORACLE_PRED=1;SIG_ORACLE_P2STRICT=1;SIG_ORACLE_LATE_A=1;SIG_ORACLE_OFF=l"
+             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/adapt/sig_arm_ref_check.cmake)
 endif()
 if(TARGET SDL3::SDL3 AND YSP_BUILD_EXAMPLES)
     # The jsPsych-style trials of examples/response/ (docs/response.md,
