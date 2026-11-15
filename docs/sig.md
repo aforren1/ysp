@@ -1770,7 +1770,14 @@ at once): B-cannot counted 778 of 784 before and 784 of 784 after with
 the late generator on, 789 of 792 and 792 of 792 with it off (`OFF=l`);
 wrong cases with no count 0 before and after. `arm_unverified` in right
 cases: 2,471 to 2,675 counts over 30,783 made groups (8.0% to 8.7%), and
-3,383 to 3,706 over 40,691 (8.3% to 9.1%) with `OFF=l`.
+3,383 to 3,706 over 40,691 (8.3% to 9.1%) with `OFF=l` (0b4410e). With
+2 (b)'s exception in the L5 retest and 2 (c) at a cancel by key too
+(40e34a9; ctest, `-j 6`, load about 2): 2,693 and 3,728. Seeds 20261121
+and 20261122, 1,000 cases each, late generator on and `OFF=l`: B-cannot
+counted 246 of 246, 258 of 258, 250 of 251 and 263 of 266 at de9a98a,
+and all of them (246, 258, 251, 266) at 40e34a9; 0 wrong with no count;
+right-case counts 810, 1,290, 951, 1,120 before, 886, 1,401, 1,039,
+1,195 after (made groups 10,467, 14,692, 11,146, 13,942).
 
 **Open questions for this text.**
 
