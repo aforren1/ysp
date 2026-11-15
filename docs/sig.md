@@ -1119,9 +1119,10 @@ change that.
   ahead and waits (rule 3); pending groups no longer arise.
 - **The time of a call**, for the order below: an input's time (a feed's
   `e.t`, a frame's onset, a settle's `t`); a group's `τ` for each of its
-  calls; `ysig_disarm_at()`'s `t` (new, below); and for any other state
-  call outside a group, `N(F(c))` at its call. A barrier's: as in "The
-  time of each call".
+  calls; `ysig_disarm_at()`'s `t` (new, below); a plain `ysig_disarm()`
+  outside a group, `N` at its call, as in 0.6.x (the ruling below); and
+  for any other state call outside a group, `N(F(c))` at its call. A
+  barrier's: as in "The time of each call".
 - **The key of a call**: (its time, its class, its call order). Classes,
   first to last at one time: a feed; a frame or a settle; a state call or
   a group. A group's calls share one key, its arm's call order (T6: as
@@ -1186,11 +1187,17 @@ before `t` goes into R before it, made, and is then ended (its hold met
 by `t` is that arm's hit, as for any disarm); a waiting arm of d with a
 `τ` later than `t` is cancelled. So a disarm at a state's exit time
 never cancels what R gives at or before that time (the coordinator's
-requirement, T4). `ysig_disarm()` keeps its time `N(F(c))` and the cancel
-of rule 3 for callers with no time; with per-footprint classes that time
-can be earlier than an arm's `τ` that 0.6.1 made at once (T4's two-hand
-case: C2 armed at 100, the second hand's last report at 95, then the
-state ends and a plain disarm at 95 cancels C2's entry-now hit at 100).
+requirement, T4).
+
+Ruling (the coordinator, 2026-11-15): a plain `ysig_disarm()` keeps
+0.6.x's time, `N` at its call (the input time of every node), not
+`N(F(c))`. So a caller that passes no time never cancels an arm that R
+makes by `N`. With `N(F(c))` it could: T4's two-hand case, C2 armed at
+100, the second hand's last report at 95 and the first hand's at 100 or
+later, then the state ends; a disarm at 95 would cancel C2's entry-now
+hit at 100, and one at `N` (100 or later) makes C2 and ends it.
+`ysig_disarm_at()` is for callers that know the time. How a disarm keyed
+at `N` fits the order by key is with the reviewer.
 
 The player ends a state with `ysig_disarm_at(exit time)` for each of the
 state's controls, made or waiting. That replaces 0.6.x's rule (disarm
@@ -1378,7 +1385,7 @@ declares (T5).
 | T1 (high): rule 3's let-in is not an instance of the time order (W7, W8; 47 of 1,500) | A call that lets a group in lets in, right before it, every waiting group that meets it with a smaller key, transitively; groups go in by key |
 | T2 (high): "late" by time, the order's ties by "input first" (459 + 412) | Late is defined by the key (time, class, call order): R holds a meeting call with a greater key |
 | T3 (medium): a state call at `N(F(c))` before a group already made | A state call goes by the same order; one that must precede a call in R is a late call, with a run again (`late_off` with no window) |
-| T4 (medium): a plain disarm at `N(F) ≤ τ` cancels what 0.6.1 made and ended (the two-hand entry-now hit) | `ysig_disarm_at(g, d, t)`: an arm at or before `t` is made, then ended; only an arm later than `t` is cancelled. The player disarms each ended state's controls at the exit time, made or waiting; the 0.6.x rule (only arms ahead of the input) goes, since a disarm at the exit time comes before the next state's arms by call order |
+| T4 (medium): a plain disarm at `N(F) ≤ τ` cancels what 0.6.1 made and ended (the two-hand entry-now hit) | `ysig_disarm_at(g, d, t)`: an arm at or before `t` is made, then ended; only an arm later than `t` is cancelled. The player disarms each ended state's controls at the exit time, made or waiting; the 0.6.x rule (only arms ahead of the input) goes, since a disarm at the exit time comes before the next state's arms by call order. A plain `ysig_disarm()` keeps `N` at its call (the coordinator's ruling, 2026-11-15) |
 | T5: the declared changes, measured (equal-time input first 459, a state call at `N(F)` 412, pins resolved by moving 9 and 267, a frame or a settle at its onset 1,255 and 845, late feeds 754) | No change: each is declared above. The frame and settle numbers are large because the oracle's generator feeds past a frame's onset before the frame call; the player feeds up to the onset first (`v2_feed()`) |
 | T6 (low): which call orders a group's block; one device's reports reordered by stamp | A group's key uses its arm's call order (S3, H16); "Per device": only a raw mouse's counts are placed by stamp against their own device, every other source drops a sample that goes back |
 | T7 (low): an input at the onset, fed after the frame call | Class order at equal times: a feed comes before a frame or a settle; such a feed is late and the frame runs again |
@@ -1404,9 +1411,6 @@ declares (T5).
 1. The proposed note for format 3.11 rule 4 (above), and its two checks.
 2. The default `catchup_ns` until a rig's devices have a measured input
    lateness.
-3. `ysig_disarm_at()` is new API (sig.h's minor version): whether
-   `ysig_disarm()` should then take the input time `N(F(c))` or stay as
-   in 0.6.x (`N` at its call) for callers that keep it.
 
 #### Where 0.6.0 before this section differed
 
@@ -1964,7 +1968,12 @@ ahead and a later past group, a flush, a trial reset, and a log that
 drops G's calls before L. sig.toml 323 of 323 as expected (352 s, 4
 jobs): 324 to 329 killed by `test_pending`, 331 by the oracle at seed
 778001 (a second `sig_ref` test, `sig_ref_778001`), 330 kept as a guard
-(not reached; its note says why); 210's anchor follows the code.
+(not reached; its note says why); 210's anchor follows the code. After
+the reviewer's tally fix (the B-cannot tally accepts a fallback), 778001's
+two cases for 331 count by their fallback, so `test_pending` has a case
+of its own for it (`pg_reason6`: a pending group, an ahead group that
+meets it, and an input that lets in the ahead one only; no fallback in
+the case), which kills 331.
 
 - `tests/adapt/sig_test.c` (ctest `test_sig`): v0.6.0 adds
   `test_arm_window`: no window (counted), two crossings after the arm as
