@@ -1212,6 +1212,30 @@ plain `ysig_disarm(C2)` at `N` = 100: the entry-now hit at 100 stands).
 For a plain disarm at `N` this reads: it cancels an arm with `τ` later
 than `N`, and makes and ends one at or before `N`.
 
+A disarm also ends an arm of d made after it (in call order) whose key
+is smaller than the disarm's (W2): in R that arm comes before the
+disarm, so it is made and then ended there, as an arm made before it
+would be. For example `ysig_disarm_at(d, 100)`, then `ysig_arm(d, 95)`:
+R makes the arm at 95 and ends it at 100. The general rule: in R a
+disarm of d ends every arm of d with a smaller key and cancels every arm
+of d with a greater key that was made before it; an arm made after it
+with a greater key is untouched. So a caller must not arm a state's
+control at a time earlier than the time it disarmed the ended state's
+control at: the player asserts that (`v2_arm_exit()`), since its next
+state's arms are at the exit time or later.
+
+A disarm at exactly a waiting arm's `τ` (W1): with a window, the arm
+goes in later (when its group is let in), and the disarm, by key, moves
+after it, with a run again. With no window the header cannot move a
+made disarm: it counts `late_off`, so the no-window B is not the
+reference for that shape (the oracle's spec cases are). The same holds
+for U1's plain disarm at `N` when the arm at `N` still waits.
+
+A declared change from 0.6.x (W3): a past group's disarm now cancels a
+later arm of the same detect that is already in R, when the disarm's
+key is smaller (its group's `τ` before the arm's). In 0.6.x the cancel
+looked only at arms that still waited.
+
 Ruling (the coordinator, 2026-11-15): a plain `ysig_disarm()` keeps
 0.6.x's time, `N` at its call (the input time of every node), not
 `N(F(c))`. So a caller that passes no time never cancels an arm that R
