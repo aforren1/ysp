@@ -5067,6 +5067,7 @@ static void ysig__state_fp(ysig_graph* g, const ysig_entry* e, uint64_t* f);
 static int ysig__wait_closure(ysig_graph* g, uint64_t seq, int blk, int* nb);
 static int ysig__late_place(ysig_graph* g, uint64_t a, uint64_t b, uint64_t lo, int64_t t, int cls, uint64_t ord);
 static void ysig__late_nolog(ysig_graph* g);
+static void ysig__c4(ysig_graph* g, uint64_t gid, int64_t t);
 static void ysig__wait_place(ysig_graph* g, int k, int with_arm) {
     ysig__wt* w;
     ysig__wa a;
@@ -5138,6 +5139,7 @@ static void ysig__wait_place(ysig_graph* g, int k, int with_arm) {
         ysig__cas_call(g, ci, a.seq, a.t, YSIG_J_ARM, a.node);
         g->ko = a.seq;
         ysig__arm_made(g, a.node, a.t, a.t, logged ? g->cu->c_head - 1 : UINT64_MAX);
+        if (g->cu && !g->cu->replaying) ysig__c4(g, a.seq, a.t);
         if (g->t_cover < a.t) {
             /* waits at its place: a late report counts (condition 3) */
             uint64_t F[YSIG__FPW];
@@ -5490,6 +5492,32 @@ static int ysig__late_fix(ysig_graph* g, uint64_t a) {
     const ysig__call* c0 = &cu->calls[a % (uint64_t)cu->C];
     return ysig__late_place(g, a, cu->c_head, cu->c_tail, c0->tr, ysig__kcls(c0->e.kind), ysig__call_ko(c0));
 }
+/* v0.7.0, condition 4 in R's order by key: R is defined up to the order
+ * of calls that do not meet, and a graph with no window joins a disarm
+ * to the gap an arm closes whatever their footprints. So the gap of the
+ * group with key (t, a group, gid) is read in the order by key over every
+ * logged call: the call with the greatest key below the group's among the
+ * inputs, arms, disarms and disarm_at (no gap holds one); when it is a
+ * disarm of another group or of none, at another time, G is counted. */
+static void ysig__unv(ysig_graph* g, uint64_t gid);
+static void ysig__c4(ysig_graph* g, uint64_t gid, int64_t t) {
+    ysig__cu* cu = g->cu;
+    const ysig__call* best = NULL;
+    uint64_t s;
+    if (!cu) return;
+    for (s = cu->c_tail; s < cu->c_head; s++) {
+        const ysig__call* c = &cu->calls[s % (uint64_t)cu->C];
+        int64_t ti;
+        int k = c->e.kind;
+        if (c->gid == gid || ysig__call_gt(c, t, 2, gid)) continue;
+        if (!ysig__input_t(&c->e, &ti) && k != YSIG_J_ARM && k != YSIG_J_DISARM && k != YSIG_J_DISARM_AT) continue;
+        if (!best || ysig__call_gt(c, best->tr, ysig__kcls(best->e.kind), ysig__call_ko(best)) ||
+            (c->tr == best->tr && ysig__kcls(k) == ysig__kcls(best->e.kind) && ysig__call_ko(c) == ysig__call_ko(best) && c->cseq > best->cseq))
+            best = c;
+    }
+    if (best && best->e.kind == YSIG_J_DISARM && best->tr != t) ysig__unv(g, gid);
+}
+
 /* A late call that the window could not log */
 static void ysig__late_nolog(ysig_graph* g) {
     if (!g->cu) g->st.late_off++;
@@ -6215,6 +6243,7 @@ YSIG_API bool ysig_arm(ysig_graph* g, int node, int64_t t_ns) {
         if (t_ns == nfg || !cu) ysig__arm_now(g, &e, seq);
         else ysig__arm_past(g, &e, seq);
         if (pend && t_ns < nfg && cu && g->st.arm_caught_up == cu0) ysig__pend_hit(g, fpend, 1, 0);
+        ysig__c4(g, seq, t_ns);
         if (g->st.arm_caught_up == cu0) {
             /* at the end of R: the gap's let-ins are inside its block (1),
              * and a let-in group's disarm after the last let-in arm lies

@@ -156,6 +156,9 @@ int main(void) {
     ysig_disarm_at(&g, 1, 15 * MS);
     expect_none("after the disarm");
     if (voided() != 1) bad("superseded + retracted %g, expected %g", (double)voided(), 1);
+#ifdef SIG_HAS_LATE_VOIDED
+    { ysig_stats s; ysig_get_stats(&g, &s); if (s.late_hits_voided != 0) bad("late_hits_voided %g, expected %g (a late state call keeps the 0.6.x split)", (double)s.late_hits_voided, 0); }
+#endif
     feed(1, 40, 0);
     feed(1, 45, 5);
     expect_none("after 45");
@@ -209,7 +212,10 @@ int main(void) {
      * second device on the same detect would be cleaner; device 1's own
      * order allows 9 after 8): it must precede the disarm (key 9 < 12,
      * meets D), so it goes before it, breaks the hold at 9, and R has no
-     * hit: the one handed out is counted (1). */
+     * hit: the one handed out is counted (1): in late_hits_voided, as the
+     * void comes from a late input (the coordinator's ruling of 2026-11-15,
+     * clarified; -DSIG_HAS_LATE_VOIDED). Cases 3 and 8 void by a late
+     * disarm_at, a state call: superseded or retracted, as written. */
     g_case = "hold-met-up-to-t";
     n[0] = pen(1); n[1] = det(0, YSIG_ENTRY_ARM, 10 * 1e-3);
     open_g(n, 2, 1);
@@ -222,7 +228,14 @@ int main(void) {
     { static const int nd[] = { 1 }; static const double ms[] = { 10 }; expect("after the disarm", nd, ms, 1); }
     feed(1, 9, 0);
     expect_none("after the late 9 ms report");
+    /* (the 2026-11-15 ruling, clarified) the void comes from a late input:
+     * late_hits_voided 1, superseded + retracted 0 */
+#ifdef SIG_HAS_LATE_VOIDED
+    { ysig_stats s; ysig_get_stats(&g, &s); if (s.late_hits_voided != 1) bad("late_hits_voided %g, expected %g", (double)s.late_hits_voided, 1); }
+    if (voided() != 0) bad("superseded + retracted %g, expected %g", (double)voided(), 0);
+#else
     if (voided() != 1) bad("superseded + retracted %g, expected %g", (double)voided(), 1);
+#endif
 
     /* 7. U1, plain ysig_disarm() at N (the ruling). S1 (device 1), S2
      * (device 2), C2 a detect on S2, entry now. 5 @ 95 on device 2, 0 @
@@ -272,6 +285,9 @@ int main(void) {
     ysig_disarm_at(&g, 2, 8 * MS);
     expect_none("after the disarm");
     if (voided() != 1) bad("superseded + retracted %g, expected %g", (double)voided(), 1);
+#ifdef SIG_HAS_LATE_VOIDED
+    { ysig_stats s; ysig_get_stats(&g, &s); if (s.late_hits_voided != 0) bad("late_hits_voided %g, expected %g (a late state call keeps the 0.6.x split)", (double)s.late_hits_voided, 0); }
+#endif
     feed(1, 15, 5);
     expect_none("after 15");
 

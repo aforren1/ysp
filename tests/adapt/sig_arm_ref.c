@@ -4,8 +4,11 @@
  * does not read the header's internals.
  *
  * Late voids (the coordinator's ruling of 2026-11-15; the builder's case
- *   763 of seed 20261115): a hit handed out that a late call voids counts
- *   in late_hits_voided, a guard stop. hand_check() used to fail any void
+ *   763 of seed 20261115; clarified: late inputs only): a hit handed out
+ *   that a late input (feed, frame, settle) voids counts in
+ *   late_hits_voided, a guard stop; a late state call keeps the 0.6.x
+ *   split (superseded, retracted); a run again with both: all
+ *   late_hits_voided. hand_check() used to fail any void
  *   with no arm since the last check. In late modes, with a late call since
  *   the last check, the voids must now rise late_hits_voided (no arm since)
  *   or the three counts together (arms too). Compile with
@@ -1354,9 +1357,10 @@ static void hand_check(int ci, int mark, const ysig_stats* s0, const ysig_stats*
     }
     {
         /* (late modes) the late calls since the last check */
-        int lates = 0;
+        int lates = 0, late_in = 0, late_st = 0;
         long dlate = 0;
-        for (k = g_chk_ci + 1; k <= ci && k < (int)sizeof g_call_late; k++) if (k >= 0 && g_call_late[k]) lates++;
+        for (k = g_chk_ci + 1; k <= ci && k < (int)sizeof g_call_late; k++)
+            if (k >= 0 && g_call_late[k]) { lates++; if (g_call_late[k] == 1) late_in++; else late_st++; }
 #ifdef SIG_HAS_LATE_VOIDED
         dlate = (long)(s1->late_hits_voided - g_chk_st.late_hits_voided);
 #endif
@@ -1368,7 +1372,15 @@ static void hand_check(int ci, int mark, const ysig_stats* s0, const ysig_stats*
              * total can be checked. */
             long dsup = s1->arm_hits_superseded - g_chk_st.arm_hits_superseded, dret = s1->arm_hits_retracted - g_chk_st.arm_hits_retracted;
 #ifdef SIG_HAS_LATE_VOIDED
-            int ok = arms ? dsup + dret + dlate == esup + eret : (dlate == esup + eret && dsup + dret == 0);
+            /* (the ruling, as clarified) late_hits_voided for voids by a late
+             * input (feed, frame, settle); a late state call keeps the 0.6.x
+             * split (superseded or retracted); a run again with both: all
+             * late_hits_voided. Arms or several runs again since the last
+             * check: the total only */
+            int ok;
+            if (late_in && !late_st && !arms) ok = dlate == esup + eret && dsup + dret == 0;
+            else if (!late_in && !arms) ok = dlate == 0 && dsup + dret == esup + eret;
+            else ok = dsup + dret + dlate == esup + eret;
 #else
             int ok = dsup + dret == esup + eret;   /* (a header before the count: the text before the ruling) */
             g_lv_old++;
@@ -1907,7 +1919,7 @@ static void step(int ci) {
             tmp.fp = g_call_fp[ci]; tmp.flags = E_STATE;
             kc = r_key(&tmp);
             for (q = 0; q < g_nR; q++) if (g_R[q].flags & E_BARRIER) lb = q;
-            for (q = lb + 1; q < g_nR; q++) if (!(g_R[q].flags & E_NEUTRAL) && (g_R[q].fp & g_call_fp[ci]) && okey_lt(kc, r_key(&g_R[q]))) { g_lc.late_state++; g_late_state_ci = ci; g_call_late[ci] = 1; break; }
+            for (q = lb + 1; q < g_nR; q++) if (!(g_R[q].flags & E_NEUTRAL) && (g_R[q].fp & g_call_fp[ci]) && okey_lt(kc, r_key(&g_R[q]))) { g_lc.late_state++; g_late_state_ci = ci; g_call_late[ci] = 2; break; }
         }
         g_R[g_nR++] = mk_ent(ci, -1, g_call_time[ci]);
         if (g_npend < 15) g_pend[g_npend++] = ci;
