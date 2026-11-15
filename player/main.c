@@ -277,6 +277,9 @@ static int run_main(pl_args* ap, int argc, char** argv) {
             printf("ysp_player: frame work p50 %.1f us, p99 %.1f us, p99.9 %.1f us; %lld frames over the period (%.3f ms)\n", us[0], us[1], us[2],
                    (long long)g_p.work_over_period, (double)g_p.caps.period_ns / 1e6);
         }
+        if (a.sim)
+            printf("ysp_player: --sim writes in place, not in the frame work above (a real run queues them to its writer thread): max %.1f us in a frame (frame %lld)\n",
+                   (double)g_p.work_wr_max_ns / 1e3, (long long)g_p.work_wr_max_frame);
         if (!a.sim)
             printf("ysp_player: the input (SDL's pump and the collectors) max %.1f us (frame %lld)\n", (double)g_p.work_input_max_ns / 1e3,
                    (long long)g_p.work_input_max_frame);

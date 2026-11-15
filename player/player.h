@@ -696,6 +696,11 @@ struct pl_player {
     int       rec_lag_frames;     /* display's period (pl_frames_of())     */
     uint32_t* work_hist;          /* per-frame work in PL_WORK_BIN_NS bins     */
     int64_t   work_input_max_ns, work_input_max_frame;   /* a real run's input: SDL's pump */
+    /* --sim writes in place on the frame thread, where a real run queues
+     * the write to its writer thread: under --measure that time is kept
+     * out of the frame work (an ext4 write-back held one for 17 ms) */
+    int64_t   work_wr_ns;                                /* in-place writes so far */
+    int64_t   work_wr_max_ns, work_wr_max_frame;         /* the most in one frame */
     /* version 2 (v2.c) */
     struct pl_v2_session* v2s;
     /* --profile */

@@ -210,6 +210,12 @@ the examples; the default build has none.
 
    The player writes `DIR/profile.csv`: `frame,zone,t_ns,dur_ns,value`, one
    row a zone. A build with no trace ring refuses `--profile` (exit code 2).
+
+   Under `--sim`, `--measure` keeps the in-place writes out of the frame
+   work and the trial start, and prints their largest frame separately: a
+   real run queues each write to its writer thread, and `--sim` does the
+   write on the frame thread. On ext4 one such write blocked for 17 ms
+   (below, "The 17 ms frame").
 3. Summarize it:
 
    ```sh
@@ -907,11 +913,39 @@ timing fields) are equal in 7 of the 8 runs. In the bimanual example at
 frames more fed one by one (2797 against 2795, 2792 against 2790), and
 `session.json` `sig_arms.late_frames` 4 more (39534 against 39530). Every
 exit, time, outcome and value is equal. `late_frames` is sig.h's count
-of drawn frames that a run again changed; fed one by one, a frame can be
+of drawn frames that a run again changed; likely (not verified), fed one by one, a frame can be
 changed by one report's run again and changed back by the next, which
 one part's run again does not see. It is a diagnostic count, not a value
 the trial uses; to make it equal needs ysp/sig.h (count a frame by its
 value after the part, not after each run again). Open.
+
+### The 17 ms frame (bimanual, 500 Hz, 10 ms late)
+
+The bimanual example at 500 Hz, 10 ms late, showed one frame of 16.9 to
+17.7 ms in some runs, at a different frame each time (294,695 at
+601f7c0; 292,946 and 293,469 at 27d52a1 and 2d52faa, 1 run in 2 or 3).
+Tracy (2d52faa, the player at CPU 2, the capture at CPU 4, load 1.5):
+the frame of 16.95 ms (frame 246,048) was 16.90 ms in one
+`pl.write_inplace` under `pl.flip_records`. `--sim` writes its rows on
+the frame thread, and the output folder is on ext4 (95 % full): the
+`write()` waited for the kernel's write-back, as the 2AFC's frame 933
+did before the writer thread (Results). A real run queues the write to
+its writer thread, so the frame thread does not wait. The same holds for
+the trial start's 1.9 ms at frame 281,055 (every run): 1,877 in-place
+writes of the last trial's sample trace rows at the flush (2.0 ms in
+Tracy).
+
+The fix is in the measurement, not the frame: `--measure` takes the
+in-place writes out of the frame work and the trial start, and prints
+their largest frame. Linux desktop, i5-14500, CPU 2, 2d52faa plus this
+change, load 0.8 to 0.9, three runs: frame work max 1,657, 131 and 766
+us (frames 238,528, 290,968 and 87,724), trial start max 94 to 97 us,
+p99.9 29 to 37 us, no frame over the 2 ms period; in-place writes max
+1,863, 16,892 and 1,876 us in a frame. The largest frame work left moves
+from run to run, has no zone of its own in the profile and is not
+explained (not verified: preemption on CPU 2 is the likely cause).
+Tracy's own cost makes about 900 frames over 0.4 ms in a captured run,
+so the capture cannot place a frame of that size.
 
 ### The reviewer's findings on the first draft (3f6d21c), and the answers
 

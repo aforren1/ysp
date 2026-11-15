@@ -112,10 +112,12 @@ static int pl_wq_push(pl_player* p, const pl_wjob* j) {
     if (!p->writer_open) {
         pl_wjob c = *j;
         int rc;
+        int64_t w0 = p->args.measure ? yrt_real_ns() : 0;
         YRT_ZONE(zw, "pl.write_inplace");   /* --sim: the write itself */
         YRT_ZONE_VALUE(zw, j->type);
         rc = pl_wq_run(p, &c);
         YRT_ZONE_END(zw);
+        if (p->args.measure) p->work_wr_ns += yrt_real_ns() - w0;
         if (rc < 0) { pl_fail(p, "%s", p->werror); return -1; }
         return 0;
     }
@@ -135,10 +137,12 @@ int pl_wq_push_row(pl_player* p, int stream, const void* row, size_t n) {
     int slot;
     if (!p->writer_open) {
         int rc;
+        int64_t w0 = p->args.measure ? yrt_real_ns() : 0;
         YRT_ZONE(zw, "pl.write_inplace");
         YRT_ZONE_VALUE(zw, PL_WJ_ROWBUF);
         rc = yds_write_stream(&p->ds, stream, row);
         YRT_ZONE_END(zw);
+        if (p->args.measure) p->work_wr_ns += yrt_real_ns() - w0;
         if (rc < 0) { pl_fail(p, "a trace's stream: %s", yds_error(&p->ds)); return -1; }
         return 0;
     }
@@ -2216,7 +2220,7 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
     p->frame_trial[f->index % PL_FRAME_RING] = YTR_MISSING_INT;   /* until a trial claims it */
     if (p->t0_session == 0) p->t0_session = f->onset;
     if (!p->in_trial) {
-        int64_t t0 = p->args.measure ? yrt_real_ns() : 0;
+        int64_t t0 = p->args.measure ? yrt_real_ns() : 0, wr0 = p->work_wr_ns;
         int bwait = 0;
         if (p->pending_stop) return 1;
         if (p->v2s) {
@@ -2240,7 +2244,7 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
             YRT_ZONE_END(zt);
         }
         if (p->args.measure) {
-            int64_t d = yrt_real_ns() - t0;
+            int64_t d = yrt_real_ns() - t0 - (p->work_wr_ns - wr0);
             if (d > p->work_trial_max_ns) p->work_trial_max_ns = d;
         }
         if (rc < 0) return -1;
@@ -2628,13 +2632,16 @@ int pl_run(pl_player* p) {
             p->now_tier = p->now_dropped = p->now_flags = 0;
         }
         if (p->args.measure) {
-            int64_t t0 = yrt_real_ns(), t1;
+            int64_t t0 = yrt_real_ns(), t1, wr0 = p->work_wr_ns, wr;
             YRT_ZONE(zfr, "pl.frame");
             pl_loop_active = 1;
             r = pl_frame(p, &f);
             pl_loop_active = 0;
             YRT_ZONE_END(zfr);
             t1 = yrt_real_ns();
+            wr = p->work_wr_ns - wr0;
+            if (wr > p->work_wr_max_ns) { p->work_wr_max_ns = wr; p->work_wr_max_frame = f.index; }
+            t1 -= wr;
             p->work_n++;
             if (t1 - t0 > p->work_max_ns) { p->work_max_ns = t1 - t0; p->work_max_frame = f.index; }
             if (t1 - t0 > 16000000) p->work_over_16ms++;
