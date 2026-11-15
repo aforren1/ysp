@@ -1396,8 +1396,15 @@ again that gives it again leaves it queued once; `arm_hits_superseded`,
 `arm_hits_retracted` and `late_hits_voided` count only hits handed out.
 `ysig_detected()` is `ysig_detected_to()` with no limit. Across calls
 with a rising `t`, a hit held by an earlier call comes out after hits
-that R has after it; within one call, the order is R's. The queue holds
-`YSIG_QUEUE_CAP` plus `catchup_calls` hits; a hit that finds it full is
+that R has after it. Within one call, two hits come out in R's order
+when R fixes their order: an input can reach both of their nodes (the
+two nodes have a source or an op upstream in common), or a frame or a
+settle found one of them. R does not fix the order of other hits: the
+calls that found them do not meet, so they commute ("Footprint"), and
+the hits can come out in either order. Take hits by their time and by
+the caller's own order, not by the order of the hand-out. The player
+does this (case 453, the coordinator's ruling of 2026-11-15). The queue
+holds `YSIG_QUEUE_CAP` plus `catchup_calls` hits; a hit that finds it full is
 counted in `hits_lost`, which a caller that holds hits treats as a guard
 stop. A reset or a trial reset empties the queue, held hits too.
 
@@ -1411,7 +1418,10 @@ counts only events handed out. `ysig_derived()` is `ysig_derived_to()`
 with no limit. The queue holds `YSIG_QUEUE_CAP` plus `catchup_calls`
 events; an event that finds it full is counted in `derived_lost`, a
 guard stop for a caller that holds events. A reset or a trial reset
-empties it.
+empties it. The same is true for derived events of different nodes. For
+the events of one node, the order is R's within one call. Across calls,
+an event that an earlier call held comes out after events that R has
+after it.
 
 **Rows and derived events (L9).** Final-only mode still holds: a row or
 an event is final when the call that made it is older than the oldest

@@ -6277,12 +6277,13 @@ static void ysig__arm_past(ysig_graph* g, ysig_entry* e, uint64_t seq) {
     g->st.arm_caught_up++;
 }
 
-static void ysig__arm_now(ysig_graph* g, ysig_entry* ep, uint64_t seq);
+static void ysig__arm_now(ysig_graph* g, ysig_entry* ep, uint64_t seq, int late);
 YSIG_API bool ysig_arm(ysig_graph* g, int node, int64_t t_ns) {
     ysig_entry e;
     ysig__cu* cu;
     uint64_t seq;
     int64_t nfg;
+    uint64_t fg[YSIG__FPW];
     if (!g || !g->ok || node < 0 || node >= g->n || g->nd[node].op != YSIG_OP_DETECT) return false;
     if (g->busy) {
         /* from a callback (on_row, a custom op, the journal) inside a call
@@ -6303,7 +6304,6 @@ YSIG_API bool ysig_arm(ysig_graph* g, int node, int64_t t_ns) {
         /* v0.7.0: the class is by the group's footprint (its arm's and
          * its gap's calls): input of another device that does not reach
          * the group makes it neither past nor present */
-        uint64_t fg[YSIG__FPW];
         int w;
         for (w = 0; w < g->dw; w++) fg[w] = g->wt->gap_f[w];
         ysig__fp_or(g, fg, node);
@@ -6339,7 +6339,14 @@ YSIG_API bool ysig_arm(ysig_graph* g, int node, int64_t t_ns) {
         ysig__arm_wait(g, node, t_ns, seq);
     } else {
         int64_t cu0 = g->st.arm_caught_up;
-        if (t_ns == nfg || !cu) ysig__arm_now(g, &e, seq);
+        /* a present group can still be late: R can hold a meeting call
+         * with a greater key that is not an input (a group a disarm_at, a
+         * frame or a settle let in at a later tau, or that disarm_at
+         * itself). At R's end the group would follow it, and a later call
+         * placed by key before it (a frame) would run again before the
+         * group's calls: it goes to its place (the oracle's case 438: a
+         * set of a channel's index lost by a run again) */
+        if (t_ns == nfg || !cu) ysig__arm_now(g, &e, seq, ysig__is_late(g, fg, t_ns, 2, seq));
         else ysig__arm_past(g, &e, seq);
         ysig__c4(g, seq, t_ns);
         if (g->st.arm_caught_up == cu0) {
@@ -6363,7 +6370,7 @@ YSIG_API bool ysig_arm(ysig_graph* g, int node, int64_t t_ns) {
 }
 /* A present arm (no input later than t), or a past one with no window: at
  * the end of R */
-static void ysig__arm_now(ysig_graph* g, ysig_entry* ep, uint64_t seq) {
+static void ysig__arm_now(ysig_graph* g, ysig_entry* ep, uint64_t seq, int late) {
     ysig__cu* cu = g->cu;
     ysig_entry e = *ep;
     int node = e.node;
@@ -6371,9 +6378,11 @@ static void ysig__arm_now(ysig_graph* g, ysig_entry* ep, uint64_t seq) {
     {
         /* present (no input later than t), or past with no window */
         int logged = 0;
+        uint64_t from0 = 0;
         if (t_ns < g->wt->nfg) g->st.arm_past_off++;
         if (cu) {
             uint64_t s, from = cu->grp_open && !cu->grp_bad ? cu->grp_from : cu->c_head;
+            from0 = from;
             ysig__dis_last(g);
             logged = ysig__log(g, &e);
             for (s = from; s < cu->c_head; s++) {
@@ -6390,6 +6399,10 @@ static void ysig__arm_now(ysig_graph* g, ysig_entry* ep, uint64_t seq) {
         ysig__gap_disarms(g, t_ns, 1);
         ysig__arm_made(g, node, t_ns, t_ns, logged ? cu->c_head - 1 : UINT64_MAX);
         /* present: N(G) is t, exact by condition 2; no late report counts */
+        if (late) {
+            if (logged) (void)ysig__late_place(g, from0, cu->c_head, cu->c_tail, t_ns, 2, seq);
+            else ysig__late_nolog(g);
+        }
     }
 }
 

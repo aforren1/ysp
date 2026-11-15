@@ -6724,6 +6724,41 @@ static void test_frame_ties(void) {
     }
 }
 
+/* The oracle's case 438 (the reviewer's trace), reduced: a present arm's
+ * group (a set of a channel node's index, then an arm at N) made after a
+ * ysig_disarm_at let in a group at a later tau. R holds that group and the
+ * disarm_at with greater keys, so the present group is late: it goes to
+ * its place. At R's end, a frame placed before the disarm_at by key ran
+ * again before the set, and read the old channel (1, value 0). The
+ * control: the set made before the waiting arm, in its gap */
+static void frame2(int64_t o, float c0, float c1) {
+    float v[2];
+    ysig_frame_in f;
+    v[0] = c0; v[1] = c1;
+    memset(&f, 0, sizeof f);
+    f.index = o / MS; f.onset_ns = o; f.poll_ns = o; f.has_poll = true; f.values = v; f.n_values = 2;
+    ysig_frame(&g_rp, &f);
+}
+static void test_late_present_group(void) {
+    int v;
+    g_where = "a present group behind a let-in group (case 438)";
+    for (v = 0; v < 2; v++) {
+        ysig_node n[3];
+        n[0] = ysig_node_of(YSIG_OP_CHANNEL, -1, -1); n[0].p[0] = 1; n[0].history = 64;
+        n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1); n[1].p[YSIG_DETECT_LEVEL] = 5; n[1].history = 64;
+        n[2] = ysig_node_of(YSIG_OP_DETECT, 0, -1); n[2].p[YSIG_DETECT_LEVEL] = 5; n[2].history = 64;
+        if (!rp_open(n, 3, 4, 0, false, false)) return;
+        frame2(10 * MS, 1, 0);
+        if (v) CHECK(ysig_set(&g_rp, 0, 0, 0));
+        CHECK(ysig_arm(&g_rp, 1, 20 * MS) && g_rp.wt->n == 1);
+        CHECK(ysig_disarm_at(&g_rp, 1, 30 * MS) && g_rp.wt->n == 0);
+        if (!v) CHECK(ysig_set(&g_rp, 0, 0, 0));
+        CHECK(ysig_arm(&g_rp, 2, 10 * MS));
+        frame2(25 * MS, 1, 0);
+        CHECK(ysig_value_of(&g_rp, 0)->v[0] == 1 && ysig_value_of(&g_rp, 0)->t == 25 * MS);
+    }
+}
+
 static void test_late(void) {
     ysig_stats st;
     int v, k;
@@ -7095,6 +7130,7 @@ int main(void) {
     test_pending();
     test_late();
     test_frame_ties();
+    test_late_present_group();
     test_hold();
     if (g_failures) { fprintf(stderr, "sig_test: %d failures\n", g_failures); return 1; }
     printf("sig_test: all checks passed\n");
