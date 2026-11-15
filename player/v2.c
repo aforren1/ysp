@@ -2957,6 +2957,21 @@ static int64_t v2_after_t(const pl_v2* v, const v2_exit* x, int64_t a) {
     return t > e ? t : e;
 }
 
+/* A key response's end that waited for the horizon (resp_pend) is a
+ * candidate as any other (docs/player.md, "The order of exits"): before a
+ * candidate at tn is taken, a pending end at or before the horizon and
+ * before tn (at or before, `tie`, where the caller leaves the tie to
+ * v2_resp_states()' list order) goes first. pl_v2_frame_timed() asked for
+ * it only after v2_timed() and the feed's v2_hits(), so a timed exit 1 ns
+ * after a press won (the model's harness, 500 Hz, 10 ms late, seed
+ * 100640). Returns 1 when it took the end. */
+static int v2_resp_end(pl_player* p, pl_v2* v, const yscr_frame* f, int64_t t, bool responded);
+static int v2_resp_pend_first(pl_player* p, pl_v2* v, const yscr_frame* f, int64_t tn, bool tie) {
+    if (!v->resp_pend || v->cur < 0 || v->resp_pend_t > tn || (!tie && v->resp_pend_t == tn) || v->resp_pend_t > v2_horizon(p, v)) return 0;
+    v->resp_pend = false;
+    return v2_resp_end(p, v, f, v->resp_pend_t, v->resp_pend_responded) < 0 ? -1 : 1;
+}
+
 static int v2_hits(pl_player* p, pl_v2* v, const yscr_frame* f) {
     ysig_hit h[V2_HITQ];
     uint32_t hg[V2_HITQ];
@@ -3035,6 +3050,15 @@ static int v2_hits(pl_player* p, pl_v2* v, const yscr_frame* f) {
                     tx = v->resp_tie_t > v->entry_t ? v->resp_tie_t : v->entry_t;
                 }
                 if (tx < bt) { bt = tx; best = x; }
+            }
+            {
+                int64_t tn = v->steps_pending && v->steps_end <= tmax && v->steps_end < bt ? v->steps_end : bt;
+                int rc = tn == INT64_MAX ? 0 : v2_resp_pend_first(p, v, f, tn, false);
+                if (rc < 0) return -1;
+                if (rc) {
+                    for (i = 0; i < n; i++) if (h[i].t <= v->entry_t) h[i].node = -1;
+                    continue;
+                }
             }
             if (v->steps_pending && v->steps_end <= tmax && v->steps_end < bt) {
                 if (v2_steps_end(p, v, f) < 0) return -1;
@@ -3123,6 +3147,11 @@ static int v2_timed_to(pl_player* p, pl_v2* v, const yscr_frame* f, int64_t limi
             /* 0.12.0: with a late role, a timed candidate waits for the
              * horizon, as a hit does: no hit at or before it can come */
             int64_t g = v->has_graph && v->late ? v2_horizon(p, v) : INT64_MAX;
+            int64_t tn = v->steps_pending && v->steps_end <= wend && v->steps_end <= bt && v->steps_end <= g ? v->steps_end
+                       : best && bt <= wend && bt <= g ? bt : INT64_MAX;
+            int rc = tn == INT64_MAX ? 0 : v2_resp_pend_first(p, v, f, tn, true);
+            if (rc < 0) return -1;
+            if (rc) continue;
             if (v->steps_pending && v->steps_end <= wend && v->steps_end <= bt && v->steps_end <= g) {
                 if (v2_steps_end(p, v, f) < 0) return -1;
                 continue;

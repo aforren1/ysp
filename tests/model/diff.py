@@ -215,6 +215,82 @@ def compare(exp, got):
     return None
 
 
+def _ns(x):
+    a, _, b = x.partition(".")
+    return int(a) * 1000000000 + int((b + "000000000")[:9])
+
+
+LATE_WHY = None   # why late_verdict() found no declared lag (for a report)
+
+
+def _why(w):
+    global LATE_WHY
+    LATE_WHY = w
+    return None
+
+
+def late_verdict(exp, got):
+    """--late: whether a difference is the lag that docs/player.md ("What
+    the data shows") declares, mechanically. The model feeds every sample at
+    its time; the player takes an exit, a steps' end or an until's end only
+    once the input is complete to it. So, per trial: a state row's text and
+    code are the model's; its frame and t_s are later or equal (the entry
+    frame); its end_s is later or equal: an after_s or a timeout counts
+    from an entry frame (the row's own, or an until's wait, which has no
+    row) that lagged. Once an end_s is later, the trial runs on a later
+    clock: a timed exit can lose to a hit or a press it beat in the model,
+    so the rest of the trial is not compared ("shifted"). Landings: the
+    same stimuli and marks, each on a frame later or equal; time_elapsed_s
+    later or equal. Returns "lag", "shifted" or None (not declared)."""
+    if exp["refused"] is not None or got["refused"] is not None:
+        return _why("refused")
+    et, gt = exp["trials"], got["trials"]
+    if len(et) != len(gt):
+        return _why("trial count")
+    any_shift = False
+    for e, g in zip(et, gt):
+        shifted = False
+        for j in range(max(len(e["states"]), len(g["states"]))):
+            if j >= len(e["states"]) or j >= len(g["states"]):
+                if shifted:
+                    break
+                return _why("row count")
+            es, gs = e["states"][j], g["states"][j]
+            lagged = gs["frame"] > es["frame"] and _ns(gs["t_s"]) > _ns(es["t_s"]) and gs["end_s"] == es["end_s"] or \
+                _ns(gs["end_s"]) > _ns(es["end_s"])
+            if es["text"] != gs["text"] or es["code"] != gs["code"]:
+                # a row whose entry frame lagged, or that ends later: its
+                # timed exits count from a later frame, so another exit
+                # can win; the trial runs on a later clock from here
+                if shifted or (es["text"] == gs["text"] and lagged):
+                    shifted = True
+                    break
+                return _why("text or code")
+            if gs["frame"] < es["frame"] or _ns(gs["t_s"]) < _ns(es["t_s"]) or _ns(gs["end_s"]) < _ns(es["end_s"]):
+                if shifted:
+                    break
+                return _why("row earlier")
+            if _ns(gs["end_s"]) > _ns(es["end_s"]):
+                shifted = True
+        if _ns(g["time_elapsed_s"]) < _ns(e["time_elapsed_s"]) and not shifted:
+            return _why("time_elapsed_s earlier")
+        if not shifted:
+            # each of the model's landings on a frame later or equal; the
+            # player's extra ones are the steps that landed between an
+            # exit's time and its take (3.11 rule 8 under the wait)
+            gl = sorted((x["kind"], x["name"], x["frame"]) for x in g["lands"])
+            for a in sorted((x["kind"], x["name"], x["frame"]) for x in e["lands"]):
+                m = next((b for b in gl if b[:2] == a[:2] and b[2] >= a[2]), None)
+                if m is None:
+                    return _why("a landing missing or earlier")
+                gl.remove(m)
+            for k in ("outcome", "response", "rt_s", "flags"):
+                if e[k] != g[k]:
+                    return _why("outcome, response, rt or flags")
+        any_shift = any_shift or shifted
+    return "shifted" if any_shift else "lag"
+
+
 def signature(diff):
     """The kind of a difference: what differs, not where."""
     m = re.match(r"trial \d+ (state row \d+|landings|\w+)", diff)
@@ -420,11 +496,14 @@ def one(args):
     except subprocess.TimeoutExpired:
         got = {"refused": ["timeout"]}
     diff = compare(exp, got)
+    declared = late_verdict(exp, got) if diff and LATE is not None else None
+    if declared:
+        diff = None
     inv_m = invariant(exp["trials"]) if exp.get("refused") is None and exp.get("trials") else None
     inv_p = invariant(got["trials"]) if got.get("refused") is None and got.get("trials") else None
     res = {"seed": seed, "dir": d, "inv_model": inv_m, "inv_player": inv_p, "refused": exp["refused"], "player_refused": got["refused"],
            "sig_arms": got.get("sig_arms"), "guard": guard_counts(got),
-           "gaps": trial_gaps(exp, diff), "diff": diff,
+           "gaps": trial_gaps(exp, diff), "diff": diff, "declared": declared,
            "hang": diff is None and exp["refused"] is None and bool(exp["trials"])
                    and bool(exp["trials"][-1].get("hang") or exp["trials"][-1].get("loop"))}
     if diff and do_shrink:
@@ -474,6 +553,7 @@ def main(argv):
     n_guard = 0
     arms = Counter()
     n_arms = 0
+    declared = Counter()
     with multiprocessing.Pool(min(a.jobs, 8), initializer=setup, initargs=(a.hz, a.late, extra)) as pool:
         for r in pool.imap_unordered(one, jobs):
             n += 1
@@ -482,6 +562,8 @@ def main(argv):
                 log.flush()
             if r.get("hang"):
                 hangs += 1
+            if r.get("declared"):
+                declared[r["declared"]] += 1
             if r.get("guard"):
                 n_guard += 1
                 for k, v in r["guard"].items():
@@ -517,6 +599,9 @@ def main(argv):
     print("cases %d, refused by the model %d (agreed %d), hangs both agree on %d (rows not compared), "
           "mismatches %d (%d at a GAP); invariant failures: model %d, player %d" %
           (n, refused, agreed_ref, hangs, bad, gap_bad, inv_m, inv_p))
+    if LATE is not None:
+        print("--late: differences that are the declared lag, not counted above: %d (%s)" %
+              (sum(declared.values()), dict(declared)))
     print("guard stops %d (cases with a count above 0: %s); sessions with sig_arms %d, summed: %s" %
           (n_guard, dict(guards), n_arms, dict(arms)))
     return 1 if (bad or inv_m or inv_p) else 0

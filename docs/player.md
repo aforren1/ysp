@@ -750,16 +750,41 @@ frame runs as in 0.11.0.
 
 ### What the data shows
 
-- Exact: hit times, exit times (the state rows' `end_s`), the `time` and
-  `hit` columns, the sample traces, the response's times.
+- Exact: hit times, the `time` and `hit` columns, the sample traces, the
+  response's times, and the `end_s` of a state row that a hit or a
+  response ends.
 - Later by up to the lateness plus a frame: a state's entry frame (the
-  state rows' `frame`, `t_s`, `planned_s`) and what it shows.
+  state rows' `frame`, `t_s`, `planned_s`) and what it shows. An until's
+  wait has an entry frame too (rule 9 makes it a state, with no row of
+  its own): the steps before it end at a time that the horizon must pass,
+  and an until met at its arm is a hit that waits, so the steps after it
+  land later too.
+- Later by the lag of the entry frame it counts from: the `end_s` of a
+  row that an `after_s` or an until's `timeout_s` ends (it counts from the
+  row's entry frame or from the until's wait's), so a row whose own entry
+  frame did not lag can end later. From there on the trial runs on a
+  later clock: a timed exit can now lose to a hit or a press that it beat
+  with no late role, or win against one, and the trial's next states,
+  outcome and response can differ. That is the cost of counting from what
+  the participant saw (D20 rule 2).
+- Later by up to the lateness plus a frame: `trials.csv`
+  `time_elapsed_s`, since the trial's end lags as an exit does.
 - The lag of the exit that started a visit (L2): the poll time at which
   the player took it, minus its time (the visit's entry time). On a state
   row of `events.csv` it is `t_s` minus the `end_s` of the visit before,
   so the file has no column for it. A later `after_s` exit counts from
   the entry frame, so this lag moves it too. With `B` 0 it is under a
   frame, as in 0.11.0.
+- Not covered by the wait (open, 2026-11-15): a report stamped after a
+  trial's end that arrives after the end frame's flush (a barrier) is
+  dropped (`late_barrier`). Held values persist across a trial's reset,
+  so the next trial's first arms read the value before that report. The
+  model's harness, 60 Hz, 10 ms late, seed 102928: the hand left the
+  region 10 ms after trial 0's exit, the report came after the flush,
+  and trial 1's entry arm found the hand still in the region, a hit the
+  hand did not make. A fix needs the next trial's start to wait for
+  complete input to the barrier, or sig.h to apply a dropped report's
+  value to the held state. Neither is built.
 - New in `trials.csv`: `exit_lag_max_s`, the trial's largest exit lag;
   `late_frames` (sig.h's count of the trial's drawn frames that a late
   report changed).
