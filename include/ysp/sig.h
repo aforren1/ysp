@@ -6608,15 +6608,15 @@ static void ysig__arm_now(ysig_graph* g, ysig_entry* ep, uint64_t seq, int late)
             ysig__cas_end(g, 0);
         } else if (g->wt->n && ysig__tie_live(g)) {
             /* a present group's ties (S1' (b)) not made at their place */
-            ysig__wt* w = g->wt;
+            ysig__wt* wt = g->wt;
             ysig__cas_begin(g, YSIG__CAS_STATE, t_ns, gf);
-            w->cas_dis = w->gap4_wp;
+            wt->cas_dis = wt->gap4_wp;
             for (;;) {
                 int k, j, best = -1;
-                for (k = 0; k < w->n; k++) {
-                    for (j = 0; j < w->n_tie && w->tie_seq[j] != w->a[k].seq; j++) { }
-                    if (j == w->n_tie) continue;
-                    if (best < 0 || w->a[k].t < w->a[best].t || (w->a[k].t == w->a[best].t && w->a[k].seq < w->a[best].seq)) best = k;
+                for (k = 0; k < wt->n; k++) {
+                    for (j = 0; j < wt->n_tie && wt->tie_seq[j] != wt->a[k].seq; j++) { }
+                    if (j == wt->n_tie) continue;
+                    if (best < 0 || wt->a[k].t < wt->a[best].t || (wt->a[k].t == wt->a[best].t && wt->a[k].seq < wt->a[best].seq)) best = k;
                 }
                 if (best < 0) break;
                 ysig__wait_place(g, best, 1);
