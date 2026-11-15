@@ -3069,7 +3069,11 @@ static void test_reset_trial(void) {
         ysig_reset(&g, 60 * MS);                             /* a full reset forgets the order */
         e = PEN_E(40 * MS, 1, 9, 9, YIN_TIER_SIM); ysig_feed(&g, &e);
         ysig_get_stats(&g, &st);
-        CHECK(st.dropped_order == 1 && ysig_value_of(&g, 0)->v[0] == 9);
+        /* v0.7.0: a report before the last barrier's time is dropped (R
+         * does not have it either), counted in late_barrier */
+        CHECK(st.dropped_order == 1 && st.late_barrier == 1 && ysig_value_of(&g, 0)->v[0] != 9);
+        e = PEN_E(60 * MS, 1, 9, 9, YIN_TIER_SIM); ysig_feed(&g, &e);
+        CHECK(ysig_value_of(&g, 0)->v[0] == 9);
         role.type = YSIG_TYPE_POSITION2D_RELATIVE;
     }
     /* no adapters: ysig_reset_trial is ysig_reset, node for node */
@@ -4040,9 +4044,11 @@ static void test_arm_spec(void) {
         ysig_get_stats(&g, &st);
         CHECK(st.arm_caught_up == 1 && st.arm_past_pinned == 0 && st.arm_hits_retracted == 0);
     }
-    /* pinned: the same with the late report from a second device on the
-     * detect's own source (any device): it must come before the arm, and
-     * the 21 ms sample came before it. Counted; no hit at 21 ms */
+    /* v0.7.0: the same with the late report from a second device on the
+     * detect's own source (any device). In 0.6.x it stayed after the 21 ms
+     * sample (the arm pinned behind it, no hit); now it goes to its place
+     * by key, before the 21 ms sample (a run again), and the arm at 20
+     * goes between them: the hit at 21 ms */
     n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 2); n[0].history = 64;
     n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1);
     n[1].p[YSIG_DETECT_LANE] = 0; n[1].p[YSIG_DETECT_LEVEL] = 5; n[1].p[YSIG_DETECT_START] = 1;
@@ -4051,9 +4057,9 @@ static void test_arm_spec(void) {
     f = frame_at(1, 16 * MS, 0, NULL, 0); ysig_frame(&g, &f);
     e = PEN_E(21 * MS, 1, 10, 0, YIN_TIER_2); ysig_feed(&g, &e);
     e = PEN_E(19 * MS, 2, 0, 0, YIN_TIER_2); ysig_feed(&g, &e);
-    CHECK(ysig_arm(&g, 1, 20 * MS) && ysig_detected(&g, h, 64) == 0);
+    CHECK(ysig_arm(&g, 1, 20 * MS) && sp_hits(&g, h, 1, 21 * MS));
     ysig_get_stats(&g, &st);
-    CHECK(st.arm_past_pinned == 1);
+    CHECK(st.arm_past_pinned == 0 && st.late_far == 0 && st.late_full == 0);
     /* r11b: a 15 ms hold; in at 19 ms, out 21 to 29, in at 30; a set of
      * an unrelated node, then the arm at 20 ms: the hold starts at 30 ms
      * (out at 20 by the 19 ms value? in: the hold from 20 breaks at 21),
