@@ -258,11 +258,14 @@ struct pl_v2 {
      * late input"): per signal role, whether it reaches a detect or an
      * emit; any such role with a lateness bound above 0 (late) */
     bool* feeds; bool late;
-    int64_t g_used;            /* the highest horizon a take used (N1)      */
-    int64_t n_takes;
-    int64_t* arm_tk;           /* per node: n_takes at its arm, and at the */
-    int64_t* arm_tk_prev;      /* arm before (a hit of an arm made before a
-                                * take, at or before g_used, came late)    */
+    int64_t g_used;            /* the horizon of the drain before the latest
+                                * take (N1)                                */
+    int64_t dr_n, dr_g;        /* hit drains so far; the latest's horizon   */
+    int64_t take_dr;           /* dr_n at the latest take                   */
+    int64_t* arm_tk;           /* per node: dr_n at its arm, and at the    */
+    int64_t* arm_tk_prev;      /* arm before: a hit of an arm that a drain
+                                * before a take followed, earlier than that
+                                * drain's horizon, came late               */
     int64_t g_der;             /* the horizon of the last derived drain     */
     int64_t arm_min;           /* the earliest arm or recenter since then:
                                 * an event before it is no arm's (N1)      */
@@ -2429,7 +2432,7 @@ static int v2_arm_ctl(pl_player* p, pl_v2* v, int ci, int64_t t) {
     v->arm_gen[c->hit]++;
     v->arm_t[c->hit] = t;
     v->arm_tk_prev[c->hit] = v->arm_tk[c->hit];
-    v->arm_tk[c->hit] = v->n_takes;
+    v->arm_tk[c->hit] = v->dr_n;
     if (t < v->arm_min) v->arm_min = t;
     if (!ysig_arm(&v->g, c->hit, t)) { pl_fail(p, "template '%s': cannot arm '%s'", v->def->name, c->def->name); return -1; }
     return v2_arm_check(p, v, c->def->name, t);
@@ -2445,7 +2448,7 @@ static int v2_arm_exit(pl_player* p, pl_v2* v, const v2_exit* x, int64_t t) {
     v->arm_gen[x->node]++;
     v->arm_t[x->node] = t;
     v->arm_tk_prev[x->node] = v->arm_tk[x->node];
-    v->arm_tk[x->node] = v->n_takes;
+    v->arm_tk[x->node] = v->dr_n;
     if (t < v->arm_min) v->arm_min = t;
     v2_late_arm(v, t);
     if (!ysig_arm(&v->g, x->node, t)) { pl_fail(p, "template '%s': cannot arm '%s'", v->def->name, v->ctl[x->ctl].def->name); return -1; }
@@ -2784,14 +2787,16 @@ static bool v2_from_due(pl_player* p, const pl_v2* v) {
  * exit_lag_max_s, session.json exit_lag), and the horizon it used (N1) */
 static void v2_took(pl_player* p, pl_v2* v, int64_t t, const yscr_frame* f) {
     pl_v2_session* S = p->v2s;
-    int64_t lag = f->onset - t, g = v->has_graph ? v2_horizon(p, v) : INT64_MIN;
+    int64_t lag = f->onset - t;
     v->lag_pend = lag;
     if (v->lag_max == YTR_MISSING_NS || lag > v->lag_max) v->lag_max = lag;
     if (S->lag_n == 0 || lag > S->lag_max) S->lag_max = lag;
     S->lag_n++;
     S->lag_sum += (double)lag;
-    if (g > v->g_used) v->g_used = g;
-    v->n_takes++;
+    /* the take decided on what the drains so far gave: a hit of an arm
+     * they followed, earlier than their horizon, should have been in */
+    if (v->dr_n > 0 && v->dr_g > v->g_used) v->g_used = v->dr_g;
+    v->take_dr = v->dr_n;
 }
 
 static int v2_take(pl_player* p, pl_v2* v, const v2_exit* x, int64_t t, const yscr_frame* f, bool hit) {
@@ -2916,8 +2921,12 @@ static int v2_hits(pl_player* p, pl_v2* v, const yscr_frame* f) {
     uint32_t hg[V2_HITQ];
     int n, i, k, guard = 0, from;
     int64_t g_to = v2_drain_to(p, v);
-    while ((n = ysig_detected_to(&v->g, h, V2_HITQ, g_to)) > 0) {
+    for (;;) {
         int64_t tmax = INT64_MIN;
+        n = ysig_detected_to(&v->g, h, V2_HITQ, g_to);
+        v->dr_n++;
+        v->dr_g = v2_horizon(p, v);
+        if (n <= 0) break;
         if (++guard > 256) { pl_fail(p, "template '%s': hits that never stop", v->def->name); return -1; }
         from = 0;
     more:
@@ -2930,11 +2939,15 @@ static int v2_hits(pl_player* p, pl_v2* v, const yscr_frame* f) {
              * arm's time), so it is that arm's generation */
             if (h[i].t < v->arm_t[h[i].node] || (h[i].t == v->arm_t[h[i].node] && !v->det_now[h[i].node])) hg[i]--;
             if (ci < 0) continue;
-            if (h[i].t <= v->g_used) {
-                /* N1: its arm was made before the take that used g_used */
-                int64_t tk = hg[i] == v->arm_gen[h[i].node] ? v->arm_tk[h[i].node]
-                           : hg[i] + 1 == v->arm_gen[h[i].node] ? v->arm_tk_prev[h[i].node] : -1;
-                if (tk < v->n_takes) return v2_beyond(p, v, "a hit", h[i].t, v->g_used);
+            if (h[i].t < v->g_used) {
+                /* strictly before: a hit at a take's own time that a chain
+                 * of takes at that time had not drained lost by rule 4's
+                 * list order, as in 0.11.0, not by lateness */
+                /* N1: its arm was made before the take that used g_used. A
+                 * hit at the latest arm's time can be that arm's (an entry
+                 * arm met at once): taken as its, so no false stop */
+                int64_t tk = h[i].t >= v->arm_t[h[i].node] ? v->arm_tk[h[i].node] : v->arm_tk_prev[h[i].node];
+                if (tk < v->take_dr) return v2_beyond(p, v, "a hit", h[i].t, v->g_used);
             }
             v->ctl[ci].hit_t = h[i].t;
             v->ctl[ci].has_hit = true;
@@ -3254,7 +3267,7 @@ static int v2_feed_part(pl_player* p, pl_v2* v, const yscr_frame* f, int n) {
             if (v->n_der < 0) v->n_der = 0;
             if (p->tmpl->collector)
                 for (k = 0; k < v->n_der; k++)
-                    if (v->der[k].t <= v->g_der && v->der[k].t < v->arm_min) return v2_beyond(p, v, "a derived event", v->der[k].t, v->g_der);
+                    if (v->der[k].t < v->g_der && v->der[k].t < v->arm_min) return v2_beyond(p, v, "a derived event", v->der[k].t, v->g_der);
             if (gd > v->g_der) v->g_der = gd;
             v->arm_min = INT64_MAX;
             if (v2_hits(p, v, f) < 0) return -1;
