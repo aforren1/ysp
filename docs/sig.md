@@ -1203,9 +1203,18 @@ at `N(F(c))`; a plain disarm in no group at `N`. The readings
   call and `τ` does not goes back to waiting. With no window the gap's
   calls are made already: a group that `τ` lets in is made after them, a
   late call (`late_off`).
-- (b) A let-in by a group's state call is inclusive by key: a waiting
-  group at `τ'` = `τ` whose arm call is earlier goes in; one whose arm
-  call is later does not.
+- (b) A let-in by a group's state call is inclusive by key: it lets in
+  a waiting group whose `τ'` equals the let-in time `t` when that group's
+  key is smaller. When `t` is earlier than the group's `τ` (a present or
+  an ahead group's call at `N(F(c))`), that is every waiting group at
+  `t`; when `t` is the group's `τ` (a past group), only one whose arm
+  call is earlier. A state call in no group lets in strictly, as an
+  input does. A call of an open gap does not know yet which it is: it
+  lets in strictly at its call, and the header notes the waiting groups
+  at its `t` that it meets. When an arm makes the gap a present group,
+  those go in right before the call: the window runs again from the
+  gap's start; with no window they are made after the arm, late calls
+  (`late_off`).
 - (c) With no window, a group made where R does not have it yet counts
   `late_off`.
 

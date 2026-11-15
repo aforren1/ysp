@@ -7026,7 +7026,8 @@ static void test_v2_present_key(void) {
  *     device 1's too (30), and lets d in.
  * (d) a plain disarm in no group lets in at N (30): d is made, an
  *     entry-now hit at 19, then ended. At N(F(c)), 10, it would cancel
- *     d. Control: N is 10 too, and the disarm cancels d's arm. */
+ *     d. Control: N is 10 too, and the disarm cancels d's arm.
+ * (e) below: inclusive by key. */
 static void test_v2_s1(void) {
     ysig_stats st;
     int v;
@@ -7038,6 +7039,21 @@ static void test_v2_s1(void) {
         if (v) CHECK(ysig_set(&g_rp, 2, YSIG_DETECT_LEVEL, 20));
         CHECK(g_rp.wt->n == 1);
         CHECK(ysig_arm(&g_rp, 3, 24 * MS) && g_rp.wt->n == !v);
+        CHECK(v2_hits(2, &t) == v && (v ? t == 19 * MS : 1));
+        ysig_get_stats(&g_rp, &st);
+        CHECK(st.late_far == 0 && st.late_full == 0 && st.arm_past_far == 0 && st.arm_past_full == 0);
+    }
+    /* (a2) S1' (b) for a past group: [set d's level, arm e at 19], past
+     * by device 1 at 30. Its set lets in at 19, inclusive by key: d at 19,
+     * its arm made earlier, goes in right before it, a hit at 19 with the
+     * old level. Control (v 0): e armed at 18, d (19) stays waiting */
+    g_where = "S1' (b), a past group at a waiting tau";
+    for (v = 0; v < 2; v++) {
+        int64_t t = 0;
+        if (!s1_open(4)) return;
+        rp_feed(30 * MS, 0, YIN_AXIS_POSITION, 1);
+        CHECK(ysig_set(&g_rp, 2, YSIG_DETECT_LEVEL, 20));
+        CHECK(ysig_arm(&g_rp, 3, (v ? 19 : 18) * MS) && g_rp.wt->n == !v);
         CHECK(v2_hits(2, &t) == v && (v ? t == 19 * MS : 1));
         ysig_get_stats(&g_rp, &st);
         CHECK(st.late_far == 0 && st.late_full == 0 && st.arm_past_far == 0 && st.arm_past_full == 0);
@@ -7054,6 +7070,32 @@ static void test_v2_s1(void) {
         CHECK(v2_hits(2, &t) == v && (v ? t == 19 * MS : 1));
         ysig_get_stats(&g_rp, &st);
         CHECK(st.late_far == 0 && st.late_full == 0);
+    }
+    /* (e) S1' (b), inclusive by key: device 3 reports at 19, d's tau (an
+     * input lets in only groups earlier than itself): d waits, and the
+     * set of d's level is at N(F(c)) = 19. As a present group's call
+     * [set, arm e at 24] it lets d in right before itself (d's key is
+     * smaller): a hit at 19 with the old level. With no window d is made
+     * after the arm, a late call (late_off), no hit. Control (v 0): an
+     * input ends the gap, the set is in no group (strict): d waits */
+    {
+        int K;
+        for (K = 4; K >= 0; K -= 4)
+            for (v = 0; v < 2; v++) {
+                int64_t t = 0;
+                g_where = K ? "S1' (b), a present group's set at a waiting tau" : "S1' (b), no window";
+                if (!s1_open(K)) return;
+                rp_feed(19 * MS, 9, YIN_AXIS_POSITION, 3);
+                rp_feed(24 * MS, 0, YIN_AXIS_POSITION, 1);
+                CHECK(g_rp.wt->n == 1);
+                CHECK(ysig_set(&g_rp, 2, YSIG_DETECT_LEVEL, 20));
+                CHECK(g_rp.wt->n == 1);
+                if (v) CHECK(ysig_arm(&g_rp, 3, 24 * MS));
+                else rp_feed(25 * MS, 0, YIN_AXIS_POSITION, 1);
+                ysig_get_stats(&g_rp, &st);
+                CHECK(g_rp.wt->n == !v && st.late_off == (!K && v) && st.late_far == 0 && st.late_full == 0);
+                CHECK(v2_hits(2, &t) == (K && v) && (K && v ? t == 19 * MS : 1));
+            }
     }
     g_where = "S1', a set in no group";
     for (v = 0; v < 2; v++) {
