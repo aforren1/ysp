@@ -2831,13 +2831,55 @@ def t_v2_beyond_bound0(ctx):
     check("late_beyond_bound" not in txt and "internal guard" not in txt, "v2_beyond_bound0: no guard stop with every bound 0: %s" % txt[-300:])
 
 
+def t_v2_frame_rows_late(ctx):
+    # a frame trace's row reads its items at its frame's record, a frame
+    # after the onset; a report up to the onset can still come for the
+    # role's bound. 27d52a1 read the row at once: at 500 Hz, 10 ms late,
+    # five rows after the hand's step read the place before it, and the
+    # row at trial 1's first frame read the place before a step between
+    # the reset's barrier (G + 1 ns) and the onset T. Rows now wait for the
+    # input to the time they read (docs/player.md, "What the data shows").
+    # The control: the same samples on time
+    hand = {"hand": {"type": "position2d", "units": "display_px"}}
+    t = {"controls": {"near": {"control": "distance", "of": "hand"}, "fr": {"control": "trace", "of": ["near"], "rate": "frame"}},
+         "states": [{"name": "s0", "exits": [{"after_s": 0.2, "to": "end", "outcome": "timed"}]}]}
+    rows = {}
+
+    def go(nm, late, step1):
+        # mid-trial 0, a step to 50 at 0.1003; at step1 (s, from trial 0's
+        # onset), a step to 100
+        smp = os.path.join(ctx.out, nm + ".csv")
+        write_samples(smp, [(0.001 * k, "hand", 100 if step1 is not None and 0.001 * k >= step1 - 1e-9 else (50 if 0.001 * k >= 0.1003 else 0), 0)
+                            for k in range(600)])
+        return Run(ctx, nm, v2base({"t": t}, [{"name": "l", "trial": "t", "rules": ["reps 2"]}], roles=hand),
+                   args=["--sim-gain", "hand=1", "--samples", smp, "--max-seconds", "20"] + late)
+    for v, late in ((0, ["--test-sample-late", "hand=0.01"]), (1, [])):
+        nm = "v2_frame_rows_late" if v == 0 else "v2_frame_rows_late_control"
+        # trial 1's onset T, from a run with no second step
+        r = go(nm + "_t1", late, None)
+        st = [x for x in r.read("events.csv") if x["kind"] == "state"] if r.rc == 0 else []
+        if len(st) < 2:
+            check(False, "%s: two trials: exit %d %s" % (nm, r.rc, r.err[-300:]))
+            continue
+        t1 = float(st[1]["t_s"]) - float(st[0]["t_s"])
+        # 5 ms before T: inside (G, T) when late (G is T - 10 ms)
+        r = go(nm, late, round(t1 - 0.005, 3))
+        fr = r.read(os.path.join("streams", "fr.csv")) if r.rc == 0 else []
+        t0 = float(fr[0]["planned_s"]) if fr else 0
+        rows[v] = [(x["frame"], x["near"]) for x in fr if x["trial_index"] == "0" and float(x["planned_s"]) - t0 < 0.19]
+        first1 = [x["near"] for x in fr if x["trial_index"] == "1"][:1]
+        check(r.rc == 0 and first1 == ["100"], "%s: the row at trial 1's first frame reads the step 5 ms before it: exit %d %s %s" %
+              (nm, r.rc, r.err[-300:] if r.rc else "", first1))
+    check(len(rows.get(0, [])) > 10 and rows.get(0) == rows.get(1), "v2_frame_rows_late: trial 0's rows match the control's: %s" %
+          [(a, b) for a, b in zip(rows.get(0, []), rows.get(1, [])) if a != b][:6])
+
 TESTS = [t_nested, t_if_unless, t_empty_and_zero, t_loop, t_requeue, t_track_ends, t_lookup_keys, t_triggers, t_after_timing, t_outcomes,
          t_method_update, t_seeds, t_refused, t_unused_stim, t_record_data, t_fix_density, t_fix_key_reapply, t_fix_stale_rdk,
          t_fix_timeout_values, t_fix_any_key, t_fix_from_in_if, t_fix_shown_twice, t_fix_vars_data, t_fix_sound_twice, t_fix_rdk_limit,
          t_fix_record_inherit, t_fix_backward_at, t_fix_refusals, t_fix_michelson_order, t_fix_texture_vars, t_fix_walk_budget,
          t_fix_data_set, t_fix_check_all_leaves, t_fix_release_order, t_fix_key_var_reapply,
          t_r2_release_other_template, t_r2_yield_draws_nothing, t_r2_low, t_r2_relaxed, t_r4_leaf_loop_done_track, t_r4_requeue_full,
-         t_r5_wait_final, t_r6_allow_below, t_v2_states, t_v2_until, t_v2_hand, t_v2_rule5, t_v2_review2, t_v2_review3, t_v2_f34, t_v2_ties, t_v2_review4, t_v2_review5, t_v2_findings, t_v2_corpus, t_v2_window_8k, t_v2_two_hands, t_v2_two_exits_one_ctl, t_v2_n1_tie, t_v2_n1_chain, t_v2_n1_derived, t_v2_resp_pend_first, t_v2_barrier, t_v2_resp_plim, t_v2_signal_from_first, t_v2_beyond_bound0]
+         t_r5_wait_final, t_r6_allow_below, t_v2_states, t_v2_until, t_v2_hand, t_v2_rule5, t_v2_review2, t_v2_review3, t_v2_f34, t_v2_ties, t_v2_review4, t_v2_review5, t_v2_findings, t_v2_corpus, t_v2_window_8k, t_v2_two_hands, t_v2_two_exits_one_ctl, t_v2_n1_tie, t_v2_n1_chain, t_v2_n1_derived, t_v2_resp_pend_first, t_v2_barrier, t_v2_resp_plim, t_v2_signal_from_first, t_v2_beyond_bound0, t_v2_frame_rows_late]
 
 
 def main():

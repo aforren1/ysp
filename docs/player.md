@@ -814,6 +814,49 @@ frame runs as in 0.11.0.
   arm found it still in the region, a hit the hand did not make).
   `player_test` `t_v2_barrier` holds the shape: at 60 Hz the reset at
   the horizon is the part that matters, at 500 Hz the flush's wait.
+- Exact: the frame traces. A frame row reads its items at its frame's
+  record onset (3.7), and it waits until the input is complete to that
+  time (`G` over every signal role reaches it). Before (27d52a1), the
+  row read at the record, a frame after the onset, and missed the
+  reports that were still late: at 500 Hz and 10 ms late, the five rows
+  after a step of the hand read the place before it. `player_test`
+  `t_v2_frame_rows_late` holds this, with the same samples on time as its
+  control. A row can wait the largest bound in frames more; the queue is
+  sized for it at load.
+- Input before the trial's onset (the reset at `G + 1 ns`). The
+  experiment's nodes take the reports stamped between `G + 1 ns` and the
+  onset `T`; with every bound 0 they start at `T` from the held values.
+  What reads them (measured 2026-11-15 at 27d52a1, 60 and 500 Hz, 10 ms
+  late, a sample 5 ms before `T` against one 30 ms before `T` and against
+  the same samples on time):
+  - No change: the sample traces (their rows are cut at `T`), the frame
+    traces (after the fix above), and the stateless controls (`cursor`,
+    `distance`, a `region`'s test without `speed_below`): their value at
+    `T` and later is the held value.
+  - Changes, open: a node with time state restarts at `G + 1 ns`, not at
+    `T`. A `speed` (a `peak`, a `region` with `speed_below`) takes the
+    step before `T` into its first `lag_s` after `T`, and a `peak` with
+    no `from` keeps it (`peak` 10000 against 0). A `signal_lost` counts
+    the silence from the last report before `T` (500 Hz: its hit 4 ms
+    and 8 ms earlier than on time). The player cannot restart the
+    experiment's nodes at `T` without a barrier there, and a barrier at
+    `T` drops the late reports before it from the adapters (the stale
+    hand of seed 102928). A fix needs ysp/sig.h: a trial reset whose
+    barrier and whose restart of the experiment's nodes have two times.
+  - A movement's origin (no `origin`): the reports before `T` reach the
+    collector before its arm (`v2_der_upto()`), so the origin is the
+    hand's place at `T`. With every bound 0, the derived events of the
+    polls between two trials are dropped (`v2_feed()` has no active
+    template there), so the origin is the place at the last trial's end,
+    and a hand that moved between trials makes a response at the
+    trial's first sample (60 Hz, a step 5 ms before `T`: `go` at `rt_s`
+    0.0003). That is 0.11.0's, not the wait's; not changed here.
+- Not exact, open: a `{"signal": N}` column (and a `when` column's test)
+  reads the graph's value at the end frame, with the input fed by then:
+  complete to `G`, so a report between `G` and the end frame's onset is
+  not in it (60 Hz, 10 ms late, a step 5 ms before the end frame: 0
+  against 100 on time). A fix reads it at the end frame's onset once the
+  flush's wait is done, which needs a history on the column's nodes.
 - New in `trials.csv`: `exit_lag_max_s`, the trial's largest exit lag;
   `late_frames` (sig.h's count of the trial's drawn frames that a late
   report changed).

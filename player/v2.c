@@ -124,9 +124,11 @@ typedef struct v2_trace {
     int64_t* rt; double* rv; uint8_t* rtier; uint32_t* rdev; int nrows; long lost;
 } v2_trace;
 
-/* A frame trace's row waiting for its frame's flip record (3.7). One the
- * next trial's reset overtakes keeps its values read at planned_s. */
-typedef struct v2_frow { int64_t frame, planned; int trial; int tmpl; bool snap; int flags; double vals[32]; } v2_frow;
+/* A frame trace's row waiting for its frame's flip record (3.7), and then
+ * for the input to the time it reads (rec_t, the record's onset or
+ * planned_s): a value read before late input to that time is in misses
+ * it. One the next trial's reset overtakes keeps its values read then. */
+typedef struct v2_frow { int64_t frame, planned, rec_t; int trial; int tmpl; bool snap, rec, rec_have; int flags; double vals[32]; } v2_frow;
 enum { V2_FR_NO_RECORD = 1, V2_FR_AT_PLANNED = 2 };   /* a frame trace's flags column */
 
 typedef struct v2_srow {       /* a state row waiting for its entry frame's record */
@@ -2018,7 +2020,14 @@ int pl_v2_load(pl_player* p) {
         pl_fail(p, "the definition has %d frame traces; the player takes at most %d", S->cap_fpend, V2_MAX_FRAME_TRACES);
         return -1;
     }
-    S->cap_fpend = (S->cap_fpend > 0 ? S->cap_fpend : 1) * V2_FRAME_WAIT(p);
+    {
+        /* a row also waits for the input to its time: the largest bound in
+         * frames, and two for the poll's place in the frame */
+        int64_t per = p->caps.period_ns > 0 ? p->caps.period_ns : 16666667;
+        int64_t wb = S->bnd_max > 0 ? S->bnd_max / per + 2 : 0;
+        if (wb > 100000) { pl_fail(p, "a signal role's bound of %.3f s holds frame trace rows for more than 100000 frames", (double)S->bnd_max / 1e9); return -1; }
+        S->cap_fpend = (S->cap_fpend > 0 ? S->cap_fpend : 1) * (V2_FRAME_WAIT(p) + (int)wb);
+    }
     S->fpend = (v2_frow*)pl_alloc(p, sizeof(v2_frow) * (size_t)S->cap_fpend);
     if (!S->fpend) return -1;
     S->n_vals = p->n_channels + (max_slots > 0 ? max_slots : 1);
@@ -3527,6 +3536,8 @@ static int v2_frame_rows_queue(pl_player* p, pl_v2* v, const yscr_frame* f) {
         S->fpend[S->n_fpend].trial = p->global_trial - 1;
         S->fpend[S->n_fpend].tmpl = v->index * 64 + i;
         S->fpend[S->n_fpend].snap = false;
+        S->fpend[S->n_fpend].rec = S->fpend[S->n_fpend].rec_have = false;
+        S->fpend[S->n_fpend].rec_t = 0;
         S->fpend[S->n_fpend].flags = 0;
         S->n_fpend++;
     }
@@ -3570,24 +3581,36 @@ static int v2_frame_row_write(pl_player* p, const v2_frow* fr, int64_t onset, bo
     return pl_wq_push_row(p, tr->stream, &row, sizeof row);
 }
 
+/* A frame row reads its values once the input is complete to the time it
+ * reads: with a bound above 0 a late report up to that time can still come
+ * (0.12.0; the rows read 10 ms of stale values at 500 Hz before). Every
+ * bound 0: at its record, as 0.11.0 */
+static bool v2_frow_ready(const pl_player* p, const v2_frow* fr) {
+    const pl_v2_session* S = p->v2s;
+    return S->bnd_max <= 0 || v2_horizon_all(p) >= (fr->rec_have ? fr->rec_t : fr->planned);
+}
+
 /* Frame rows whose record came; with all, every one left (planned_s only). */
 static int v2_frame_rows_flush(pl_player* p, bool all) {
     pl_v2_session* S = p->v2s;
-    int i;
+    int i, m = 0;
     if (!S || !all) return 0;
     /* the next trial's reset empties the rings: the waiting rows keep their
-     * values at planned_s and wait on for their record's t_s (reading F29) */
+     * values at the time they read and wait on for their record's t_s
+     * (reading F29). The last trial's flush waited for the input to its
+     * barrier, so those values are complete */
     for (i = 0; i < S->n_fpend; i++) {
         v2_frow* fr = &S->fpend[i];
         pl_v2* v = S->t[fr->tmpl / 64];
         v2_trace* tr = &v->traces[fr->tmpl % 64];
         int k, c = 0;
-        if (fr->snap) continue;
+        int64_t at = fr->rec_have ? fr->rec_t : fr->planned;
+        if (fr->snap) { S->fpend[m++] = *fr; continue; }
         memset(fr->vals, 0, sizeof fr->vals);
         for (k = 0; k < tr->n_items; k++) {
             ysig_value val;
             int l;
-            if (ysig_value_at(&v->g, tr->item_node[k], fr->planned, &val) < 0) {
+            if (ysig_value_at(&v->g, tr->item_node[k], at, &val) < 0) {
                 const ysig_value* y = ysig_value_of(&v->g, tr->item_node[k]);
                 if (!y) { pl_fail(p, "the trace '%s': an item has no value in the graph", tr->def->name); return -1; }
                 val = *y;
@@ -3595,8 +3618,16 @@ static int v2_frame_rows_flush(pl_player* p, bool all) {
             for (l = 0; l < tr->item_lanes[k] && c < 32; l++) fr->vals[c++] = val.v[l];
         }
         fr->snap = true;
+        if (fr->rec) {
+            /* its record came: written now, in frame order before the rows
+             * still waiting for theirs */
+            if (v2_frame_row_write(p, fr, fr->rec_t, fr->rec_have) < 0) return -1;
+            continue;
+        }
         fr->flags |= V2_FR_AT_PLANNED;
+        S->fpend[m++] = *fr;
     }
+    S->n_fpend = m;
     return 0;
 }
 
@@ -3615,16 +3646,22 @@ int pl_v2_on_record(pl_player* p, const yscr_record* rec) {
     int i, m = 0;
     if (!S) return 0;
     for (i = 0; i < S->n_fpend; i++) {
-        if (S->fpend[i].frame == rec->index) {
-            if (v2_frame_row_write(p, &S->fpend[i], rec->onset ? rec->onset : rec->planned, rec->onset != 0) < 0) return -1;
-            continue;
-        }
-        if (rec->index >= S->fpend[i].frame + p->out_wait_frames) {
+        v2_frow* fr = &S->fpend[i];
+        if (!fr->rec && fr->frame == rec->index) {
+            fr->rec = true;
+            fr->rec_have = rec->onset != 0;
+            fr->rec_t = rec->onset ? rec->onset : rec->planned;
+        } else if (!fr->rec && rec->index >= fr->frame + p->out_wait_frames) {
             /* its record did not come in the rows' bound: t_s empty, flagged */
-            if (v2_frame_row_write(p, &S->fpend[i], 0, false) < 0) return -1;
+            fr->rec = true;
+            fr->rec_have = false;
+            fr->rec_t = 0;
+        }
+        if (fr->rec && (fr->snap || v2_frow_ready(p, fr))) {
+            if (v2_frame_row_write(p, fr, fr->rec_t, fr->rec_have) < 0) return -1;
             continue;
         }
-        S->fpend[m++] = S->fpend[i];
+        S->fpend[m++] = *fr;
     }
     S->n_fpend = m;
     for (i = 0; i < S->n_srow; i++)
