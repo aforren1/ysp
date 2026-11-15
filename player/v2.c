@@ -2455,6 +2455,22 @@ static int v2_arm_exit(pl_player* p, pl_v2* v, const v2_exit* x, int64_t t) {
     return v2_arm_check(p, v, v->ctl[x->ctl].def->name, t);
 }
 
+/* Whether the loop arms exit i of r (`to` < 0: every hit exit, else those
+ * to `to`): each detect once. One arm per detect gives the same R: two
+ * exits on one control would arm one detect twice at one time with no call
+ * between, and the second arm restarts what the first started. But a
+ * second arm at one time is a later group that meets the first, and
+ * sig.h's condition 2 (b) counts the first arm_unverified when a
+ * disarm_at lets both in (X1): a guard stop (seed 100829 of the model's
+ * harness at 500 Hz; player_test t_v2_two_exits_one_ctl). */
+static bool v2_arms(const v2_rs* r, int i, int to) {
+    int j;
+    if (r->exits[i].kind != X_HIT || (to >= 0 && r->exits[i].to != to)) return false;
+    for (j = 0; j < i; j++)
+        if (r->exits[j].kind == X_HIT && (to < 0 || r->exits[j].to == to) && r->exits[j].node == r->exits[i].node) return false;
+    return true;
+}
+
 /* A poll's derived events earlier than t, to the collector: fed one sample
  * at a time, these came before a hit at t was taken (the hit's sample's
  * own after it). Held events stay in their order. */
@@ -2631,7 +2647,7 @@ static int v2_enter(pl_player* p, pl_v2* v, int rs, int64_t t, const yscr_frame*
                 v->arm_after = &st->steps[h - 1];
             } else
                 for (i = 0; i < r->n_exits; i++)
-                    if (r->exits[i].kind == X_HIT && v2_arm_exit(p, v, &r->exits[i], t) < 0) return -1;
+                    if (v2_arms(r, i, -1) && v2_arm_exit(p, v, &r->exits[i], t) < 0) return -1;
             if (v->resp_from_kind == YEXP_REF_STATE && v->resp_from_index == r->def) v2_resp_arm(p, v, t);
             /* an instant exit is taken when the state starts, before its
              * steps run (reading F21) */
@@ -2660,7 +2676,7 @@ static int v2_enter(pl_player* p, pl_v2* v, int rs, int64_t t, const yscr_frame*
             if (rid >= 0) { v->arm_wait = rs; v->arm_wait_id = rid; }
             else
                 for (i = 0; i < r->n_exits; i++)
-                    if (r->exits[i].kind == X_HIT && r->exits[i].to == rs + 1 && v2_arm_exit(p, v, &r->exits[i], t) < 0) return -1;
+                    if (v2_arms(r, i, rs + 1) && v2_arm_exit(p, v, &r->exits[i], t) < 0) return -1;
         }
         break;
     }
@@ -3592,7 +3608,7 @@ int pl_v2_on_mark(pl_player* p, const ytl_event* e) {
             const v2_rs* r = &v->rs[v->arm_wait];
             int k;
             for (k = 0; k < r->n_exits; k++)
-                if (r->exits[k].kind == X_HIT && r->exits[k].to == v->arm_wait + 1 && v2_arm_exit(p, v, &r->exits[k], e->onset) < 0) return -1;
+                if (v2_arms(r, k, v->arm_wait + 1) && v2_arm_exit(p, v, &r->exits[k], e->onset) < 0) return -1;
             v->arm_wait = -1;
         }
         if (v->arm_rs >= 0 && s == v->arm_after && v->rs[v->arm_rs].def == v->def_cur) {
@@ -3601,7 +3617,7 @@ int pl_v2_on_mark(pl_player* p, const ytl_event* e) {
             int k;
             v->arm_rs = -1;
             for (k = 0; k < r->n_exits; k++)
-                if (r->exits[k].kind == X_HIT && v2_arm_exit(p, v, &r->exits[k], e->onset) < 0) return -1;
+                if (v2_arms(r, k, -1) && v2_arm_exit(p, v, &r->exits[k], e->onset) < 0) return -1;
         }
         return 1;
     }

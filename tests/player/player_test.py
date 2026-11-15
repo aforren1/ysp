@@ -2546,13 +2546,42 @@ def t_v2_two_hands(ctx):
     check(r.rc == 0 and [x["outcome"] for x in r.trials] == ["near", "near"] and arms.get("unverified") == 0 and arms.get("ahead_cancelled") == 0,
           "two hands: an exit at the entry disarms the second hand's waiting arm: exit %d %s %s %s" % (r.rc, r.err[-400:] if r.rc else "", [x["outcome"] for x in r.trials], arms))
 
+
+def t_v2_two_exits_one_ctl(ctx):
+    # seed 100829 of the model's harness at 500 Hz: s0's steps end 1 ns
+    # after a frame's onset (0.030000001 there; the first onset at or after
+    # 0.03 at any rate), ahead of the input; s1 arms its exits there
+    # and leaves at once by its instant exit (ysig_disarm_at at the same
+    # time, which lets the waiting arms in: sig.md's X1). With two exits on
+    # one control, a second arm of the detect at that time was a later
+    # group meeting the first, counted arm_unverified (sig.md, condition
+    # 2 (b)): a guard stop in player 0.12.0 before v2_arms(). The control:
+    # one exit on the control, one arm
+    hand = {"hand": {"type": "position2d", "units": "display_px"}}
+    smp = os.path.join(ctx.out, "v2_two_exits.csv")
+    # in r0 at 0 (its 8 ms hold ends the until at 0.008), out from 0.014 on
+    write_samples(smp, [(0.0, "hand", 10, 0)] + [(0.014 + 0.001 * k, "hand", 0, 100) for k in range(200)])
+    P = period_ns(ctx)
+    wait = round(((30000000 + P - 1) // P * P + 1 - 8000000) / 1e9, 9)
+    for two in (False, True):
+        ex = [{"on": "r0", "to": "s2"}, {"to": "s2"}] + ([{"on": "r0", "to": "end"}] if two else [])
+        t = {"controls": {"r0": {"control": "region", "of": "hand", "radius": 20, "stay_s": 0.008}},
+             "states": [{"name": "s0", "steps": [{"until": "r0", "timeout_s": 0.028}, {"wait_s": wait}]},
+                        {"name": "s1", "exits": ex},
+                        {"name": "s2", "steps": [{"wait_s": 0.05}]}]}
+        nm = "v2_two_exits_one_ctl" if two else "v2_two_exits_one_ctl_control"
+        r = Run(ctx, nm, v2base({"t": t}, [{"name": "l", "trial": "t"}], roles=hand), args=["--sim-gain", "hand=1", "--samples", smp])
+        states = [e["text"] for e in r.events if e["kind"] == "state"] if r.rc == 0 else []
+        check(r.rc == 0 and states == ["s0", "s1", "s2"], "%s: s1 arms r0 %s and leaves at once: exit %d %s %s" %
+              (nm, "twice" if two else "once", r.rc, r.err[-300:] if r.rc else "", states))
+
 TESTS = [t_nested, t_if_unless, t_empty_and_zero, t_loop, t_requeue, t_track_ends, t_lookup_keys, t_triggers, t_after_timing, t_outcomes,
          t_method_update, t_seeds, t_refused, t_unused_stim, t_record_data, t_fix_density, t_fix_key_reapply, t_fix_stale_rdk,
          t_fix_timeout_values, t_fix_any_key, t_fix_from_in_if, t_fix_shown_twice, t_fix_vars_data, t_fix_sound_twice, t_fix_rdk_limit,
          t_fix_record_inherit, t_fix_backward_at, t_fix_refusals, t_fix_michelson_order, t_fix_texture_vars, t_fix_walk_budget,
          t_fix_data_set, t_fix_check_all_leaves, t_fix_release_order, t_fix_key_var_reapply,
          t_r2_release_other_template, t_r2_yield_draws_nothing, t_r2_low, t_r2_relaxed, t_r4_leaf_loop_done_track, t_r4_requeue_full,
-         t_r5_wait_final, t_r6_allow_below, t_v2_states, t_v2_until, t_v2_hand, t_v2_rule5, t_v2_review2, t_v2_review3, t_v2_f34, t_v2_ties, t_v2_review4, t_v2_review5, t_v2_findings, t_v2_corpus, t_v2_window_8k, t_v2_two_hands]
+         t_r5_wait_final, t_r6_allow_below, t_v2_states, t_v2_until, t_v2_hand, t_v2_rule5, t_v2_review2, t_v2_review3, t_v2_f34, t_v2_ties, t_v2_review4, t_v2_review5, t_v2_findings, t_v2_corpus, t_v2_window_8k, t_v2_two_hands, t_v2_two_exits_one_ctl]
 
 
 def main():
