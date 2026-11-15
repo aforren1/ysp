@@ -894,6 +894,10 @@ these:
   settle too: their footprint is every node): it lets G in, after every
   call between, none of which met `F(G)`. Decided exact; condition 3
   stays on G (below).
+- **An input that does not meet `F(G)` but lets in another group whose
+  footprint meets it** (a pending group or a waiting one): the graph
+  with no window makes that group first and G later, against R's order
+  (the oracle's "two waiting arms let in out of R's order"). Counted.
 - **An input at or before `τ` that meets `F(G)`:** R puts it after G's
   arm, the graph with no window before it, so the arm's entry reads it
   there. Counted (one earlier than `τ` is condition 3's late report).
@@ -918,6 +922,12 @@ these:
   player's guard reads the counts after that flush too. A pending G
   never decides itself: a caller that makes no more calls keeps it
   pending, which no read can tell from R.
+
+A G decided exact stays an open group with the call that let it in as
+its `L`: a later past group placed between G and that call is tested by
+2 (b), as for any G whose `L` is in R (the oracle's 890 of seed 778001: a
+group at an earlier time placed after G, before the frame that let G
+in).
 
 The window does not decide a pending G. When the log drops G's calls
 before `L(G)` (the second hand silent for longer than the window: 8 ms
