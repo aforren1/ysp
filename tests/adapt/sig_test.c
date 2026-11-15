@@ -7171,7 +7171,9 @@ static void test_v2_s1(void) {
  * (b) a present group [set d's level, arm e at 24]; device 3 at 26 lets d
  *     in, a late call before the set (W1): 2 (b) counts d (the set lies
  *     between d and L). Device 1 at 19 does not make N(d) 19. The control:
- *     no set.
+ *     no set (2 (b) then has nothing to count). The footprint control (the
+ *     second reviewer): the set kept and the input at 19 on d's own
+ *     device (3): N(d) = 19, exact by 2.
  * (c) X present at 19 (by device 5 at 19, which meets X's node and not
  *     d's) lets d in at its call (S3): L(d) is not an input, 2 (a) counts
  *     d. The control: device 6 at 19 makes X present and meets d too (K
@@ -7192,16 +7194,17 @@ static void test_v2_n_tau(void) {
         CHECK(st.arm_unverified == v);
     }
     g_where = "ruling 4 by footprint, a present group's set";
-    for (v = 0; v < 2; v++) {
+    for (v = 0; v < 3; v++) {
         if (!s1_open(4)) return;
-        rp_feed(19 * MS, 0, YIN_AXIS_POSITION, 1);
+        rp_feed(19 * MS, 0, YIN_AXIS_POSITION, v == 2 ? 3 : 1);
         rp_feed(24 * MS, 0, YIN_AXIS_POSITION, 1);
         if (v) CHECK(ysig_set(&g_rp, 2, YSIG_DETECT_LEVEL, 20));
-        CHECK(ysig_arm(&g_rp, 3, 24 * MS) && g_rp.wt->n == 1);
+        /* v 2: the set lets d in at its N(F(c)), 19, inclusive by key (S1' (b)) */
+        CHECK(ysig_arm(&g_rp, 3, 24 * MS) && g_rp.wt->n == (v < 2));
         rp_feed(26 * MS, 9, YIN_AXIS_POSITION, 3);
         ysig_get_stats(&g_rp, &st);
         CHECK(g_rp.wt->n == 0 && st.late_far == 0 && st.late_full == 0);
-        CHECK(st.arm_unverified == v);
+        CHECK(st.arm_unverified == (v == 1));
     }
     g_where = "ruling 4 by footprint, an arm at tau";
     for (v = 0; v < 2; v++) {
