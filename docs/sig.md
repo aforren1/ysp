@@ -873,6 +873,11 @@ When the header tests:
 - At each later past group's place between G and `L(G)`: condition 2 (b)
   again, over every call between them, since a later group can be the
   link of a chain that lets an earlier H in before G.
+- (0.7.0, proposed in "Late input") At each late call that takes a place
+  between G and `L(G)`: a state call that meets `F(G)` retests 2 (b)
+  (U2); an input later than `τ` that meets `F(G)` becomes G's `L` and
+  retests 2 (a) and 2 (b) (L5); one that meets an exception group there
+  retests 2 (b) with R's order at `L` (L6).
 - At each input call: condition 3.
 - Condition 4: at G's place (a past group), at the trigger that lets G
   in, or at G's arm at the end of R.
@@ -1084,10 +1089,11 @@ harness and 13 in `player_test.py`, every one at most 17 ms ahead, and
 #### Late input (proposed for 0.7.0; not built)
 
 Status: a proposal for the reviewer's oracle, before the header. It
-changes R. Third draft (2026-11-15): it answers the reviewer's findings
-T1 to T7 on the second draft (25837ee), which answered L1 to L11 on the
-first (d906e19), and the user's decisions of 2026-11-15. Two tables at
-the end map each finding to its answer. Where this subsection and the
+changes R. Fourth draft (2026-11-15): it answers the reviewer's findings
+U1 to U5 on the third draft (7a17176); the third answered T1 to T7 on
+the second (25837ee), which answered L1 to L11 on the first (d906e19)
+and the user's decisions of 2026-11-15. Three tables at the end map each
+finding to its answer. Where this subsection and the
 rules above disagree, this subsection is the rule for 0.7.0.
 
 The user's choice (2026-11-14): the header places a late input at its
@@ -1184,10 +1190,27 @@ again. With no window it stays at R's end (counted, `late_off`).
 `ysig_disarm_at(g, d, t)` (new): a disarm with the caller's time. It is
 a state call of time `t`. It ends d's arm at `t`: an arm of d at or
 before `t` goes into R before it, made, and is then ended (its hold met
-by `t` is that arm's hit, as for any disarm); a waiting arm of d with a
-`τ` later than `t` is cancelled. So a disarm at a state's exit time
+by `t` is that arm's hit, as for any disarm); an arm of d with a `τ`
+later than `t` is cancelled (below). So a disarm at a state's exit time
 never cancels what R gives at or before that time (the coordinator's
 requirement, T4).
+
+**The cancel, by key (U1, U5; replaces rule 3's "at or before `τ`").** A
+disarm of d, plain or with a time, cancels an arm of d made before it
+(in call order) exactly when the disarm's key is smaller than the key of
+the arm's group: the disarm then comes first in R, and the arm comes
+after it, not made. That holds whether the arm still waits, or a call
+already let it in (a closure of T1, or a past group's place): in R it
+goes after the disarm all the same, so it is cancelled there too, and a
+run again takes it out (U5: T1's W7 and W8 let in by the closure, then
+`ysig_disarm_at(d1, 8)` cancels W7's arm at 10). An arm whose group key
+is smaller than the disarm's is made first and then ended. At one time
+the call order decides, and the disarm, made later, is the greater key:
+an arm at `τ` and a disarm at `τ` give the arm, then its end (U1: dev1 at
+100, dev2's last report at 95, `ysig_arm(C2, 100)` with entry now, then a
+plain `ysig_disarm(C2)` at `N` = 100: the entry-now hit at 100 stands).
+For a plain disarm at `N` this reads: it cancels an arm with `τ` later
+than `N`, and makes and ends one at or before `N`.
 
 Ruling (the coordinator, 2026-11-15): a plain `ysig_disarm()` keeps
 0.6.x's time, `N` at its call (the input time of every node), not
@@ -1196,8 +1219,18 @@ makes by `N`. With `N(F(c))` it could: T4's two-hand case, C2 armed at
 100, the second hand's last report at 95 and the first hand's at 100 or
 later, then the state ends; a disarm at 95 would cancel C2's entry-now
 hit at 100, and one at `N` (100 or later) makes C2 and ends it.
-`ysig_disarm_at()` is for callers that know the time. How a disarm keyed
-at `N` fits the order by key is with the reviewer.
+`ysig_disarm_at()` is for callers that know the time. Keyed at `N`, the
+disarm fits the order by key as any state call (U1 above).
+
+A plain disarm at `N` also makes later reports of a lagging device late
+(U3): its key is `N`, and a report with a time before `N` that meets the
+detect, fed after it, must precede it. The window runs again for such a
+report, and the report now reaches the detect before the disarm (in
+0.6.x it came after the disarm and moved nothing of the ended arm). The
+reviewer counted 199 such inputs in 180 of 6,000 cases and estimates
+about 120 us a disarm with two 1 kHz devices and 10 ms of lag. The
+player uses `ysig_disarm_at(exit time)`, which is not later than the
+reports it has, so this does not touch it. The build measures the cost.
 
 The player ends a state with `ysig_disarm_at(exit time)` for each of the
 state's controls, made or waiting. That replaces 0.6.x's rule (disarm
@@ -1349,6 +1382,25 @@ R as usual.
    group H there that 2 (b)'s exception admitted, it can let H in before
    G (the reviewer's 489 shape; L6): the header tests 2 (b) again, with
    R's order at `L`, for every G whose span holds it.
+4. When a late state call takes a place inside a waiting group G's span
+   (from G to `L(G)`) and meets `F(G)`, the header tests 2 (b) again for
+   G (U2: G = [arm d at 10] waiting, `L` = dev1@20, then a state call at
+   time 15 that meets `D(d)`). This joins "When the header tests": a
+   late call between G and `L(G)` is one more call that goes into R
+   between them.
+
+The oracle for `ysig_disarm_at()` (U4). The reviewer's B is the 0.6.1
+header with no window, which has no `ysig_disarm_at()`. So the build
+needs, for this call only: hand-derived spec cases in
+`tests/adapt/sig_arm_spec_cases.c`, written by the reviewer, not by the
+header's author; and a second B, the 0.7.0 header with a zeroed window,
+used only for cases that call `ysig_disarm_at()`. That B is less
+independent: it shares the header's code. It is trusted for this call
+because with no window the header places nothing: `ysig_disarm_at()`
+there is a disarm at `t` made at its call, with the cancel test above
+against the waiting arms and the arm's end at `t`, the same two steps a
+plain disarm takes in 0.6.1, only with `t` given. The spec cases check
+that path against hand-derived results.
 
 Every group condition of "Exactness" stays, tested at a group's going-in
 as now, with `N(G)` from R's order.
@@ -1374,6 +1426,18 @@ as before.
 - With no window nothing is placed (`late_off`), as with arms.
 - `history_skipped` and `time_clamped` stay diagnostics that a run again
   can change by a few (as for arms).
+
+**The reviewer's findings on the third draft (7a17176), and the
+answers.** No high finding; every T answer held, and every order
+difference on cases with nothing late is now declared.
+
+| Finding | Answer here |
+|---|---|
+| U1 (medium): at `τ` = `N` a plain disarm cancelled what the ruling promises to make (7 of 6,000) | The cancel is by key: only a disarm whose key is smaller than the arm's group key cancels; at one time the arm comes first and is then ended |
+| U2 (medium): a late state call inside a waiting G's span that meets `F(G)` (34 of 6,000) | Exactness condition 4: 2 (b) again for G; added to the calls that go in between G and `L(G)` |
+| U3 (low): a plain disarm at `N` makes a lagging device's later reports late | Stated: they run the window again and now reach the detect before the disarm; the reviewer's estimate given; the player uses `ysig_disarm_at()`; the build measures it |
+| U4 (low): the oracle's B has no `ysig_disarm_at()` | Spec cases by the reviewer, and a second B, the 0.7.0 header with no window, for that call only; why that path is simple enough to trust |
+| U5 (medium): an arm already let in by a closure, then a disarm with a smaller key (2 of 6,000) | The cancel covers every arm of d made before the disarm with a greater group key, waiting or let in; a run again takes it out |
 
 **The reviewer's findings on the second draft (25837ee), and the
 answers.** The reviewer compared 0.6.x's R with the time order on cases
