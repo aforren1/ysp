@@ -947,6 +947,80 @@ explained (not verified: preemption on CPU 2 is the likely cause).
 Tracy's own cost makes about 900 frames over 0.4 ms in a captured run,
 so the capture cannot place a frame of that size.
 
+### Results at 8c3cb20 (2026-11-15)
+
+Linux desktop, i5-14500, GCC 12.2, Release, `--sim`.
+
+The model's harness (`tests/model/diff.py --no-shrink --jobs 6`, exact
+compare), 1,000 cases a run: 60 Hz seeds 102001 to 103000, 500 Hz seeds
+100001 to 101000. Mismatches (at a GAP) and guard stops by counter,
+against 0.11.0 (`b_`) and 43e2d10 (`n2_`), whose runs used that day's
+`diff.py`:
+
+| Hz | Late | 8c3cb20 mismatches | 8c3cb20 guard stops | 0.11.0 mismatches, stops | 43e2d10 mismatches, stops |
+|---|---|---|---|---|---|
+| 60 | 0 | 6 (6) | 0 | 7 (7), 1 unverified | 6 (6), 0 |
+| 60 | 5 ms | 1 (0) | 1 late_unverified (102932) | 45 (22), 5 | 329 (46), 4 late_unverified |
+| 60 | 10 ms | 1 (1) | 1 late_unverified (102788) | 51 (23), 9 | 372 (45), 1 late_unverified |
+| 60 | 20 ms | 4 (0) | 4 late_unverified (102032, 102139, 102587, 102932) | 104 (38), 43 | 391 (44), 7 late_unverified |
+| 60 | 40 ms | 1 (0) | 1 late_unverified (102932) | 137 (52), 69 | 392 (41), 3 late_unverified |
+| 60 | 60 ms | 1 (0) | 1 late_unverified (102478) | 150 (55), 76 | 395 (41), 1 late_unverified |
+| 500 | 0 | 4 (4) | 0 | 4 (4), 0 | 5 (4), 1 unverified |
+| 500 | 5 ms | 0 | 0 | 101 (38), 24 | 395 (42), 1 late_unverified |
+| 500 | 10 ms | 0 | 0 | 127 (41), 41 | 400 (42), 0 |
+| 500 | 20 ms | 1 (0) | 1 late_hits_voided (100308) | 153 (48), 58 | 408 (43), 0 |
+| 500 | 40 ms | 3 (0) | 3 late_hits_voided (100162, 100601, 100823) | 154 (49), 58 | 426 (43), 0 |
+| 500 | 60 ms | 5 (0) | 5 late_hits_voided (100045, 100162, 100572, 100601, 100823) | 159 (48), 57 | 469 (62), 308 (286 late_far) |
+
+0.11.0's stops are `pinned` and `unverified`; every mismatch off a GAP
+at 8c3cb20 is a stopped case. Open: the `late_unverified` stops at 60 Hz
+(102788 is with the reviewer) and the `late_hits_voided` stops at 500 Hz
+from 20 ms. A hit the player took as final was voided by a report that
+the bound covers, so the player's horizon or sig.h's placement is wrong
+in those cases; not looked into.
+
+Exit lag over the harness's sessions (`session.json` `exit_lag`), mean
+and max: 60 Hz: 0 ms 2.16 and 16.67 ms; 5 ms 14.36 and 21.67; 10 ms
+17.81 and 26.33; 20 ms 30.26 and 36.33; 40 ms 48.37 and 56.33; 60 ms
+67.66 and 76.33. 500 Hz: 0 ms 0.05 and 2.00; 5 ms 5.81 and 7.00; 10 ms
+10.44 and 12.00; 20 ms 20.46 and 22.00; 40 ms 40.45 and 42.00; 60 ms
+60.44 and 62.00. The lag is at most the lateness plus a frame and a
+third of a frame at 60 Hz, as the design says ("What the data shows").
+
+The examples at 10 ms late (2d52faa, the data the same at 8c3cb20):
+every session finishes (visuomotor 160 trials, bimanual 132), no guard
+count, `late_beyond_bound` 0. Exit lag mean and max: visuomotor 16.69
+and 25.00 ms at 60 Hz, 10.00 and 11.00 ms at 500 Hz; bimanual 16.67 and
+16.67 ms at 60 Hz, 10.00 and 10.00 ms at 500 Hz. `late_frames` (sum of
+the trials, and sig.h's count): visuomotor 6,515 at 60 Hz and 54,880 at
+500 Hz; bimanual 39,528 (39,530) at 60 Hz and 329,433 (329,442) at 500
+Hz. sig.h's count also has the frames between trials.
+
+Frame work (`--measure`, in-place writes left out, the pack and samples
+of `scratchpad/fast/time/in`, CPU 2, one run at a time, load 0.56 to
+0.81 at each start, three runs each; max with its frame, p99, p99.9, in
+us):
+
+| Example | Hz | Late | Max | p99 | p99.9 | Writes in place, max in a frame |
+|---|---|---|---|---|---|---|
+| visuomotor | 500 | 0 | 68, 66, 64 (frame 0) | 3.7 to 3.8 | 15.1 to 15.3 | 618 to 627 |
+| visuomotor | 500 | 10 ms | 65, 65, 77 | 19.4 to 19.6 | 27.0 to 27.2 | 621 to 764 |
+| bimanual | 500 | 0 | 83, 1,874 (frame 395,935), 75 | 6.0 | 7.0 to 22.9 | 1,860 to 1,866 |
+| bimanual | 500 | 10 ms | 115, 101, 1,719 (frame 361,176) | 27.6 to 27.8 | 28.7 to 38.1 | 1,941 to 17,508 |
+| visuomotor | 60 | 0 | 62, 64, 82 | 16.0 to 16.6 | 26.0 to 26.3 | 630 to 641 |
+| bimanual | 60 | 0 | 80, 80, 88 | 30.0 to 30.2 | 46.8 to 49.1 | 1,849 to 1,857 |
+| 0.11.0 visuomotor | 60 | 0 | 649 to 658 | 17.6 to 18.8 | 628 to 632 | (in the frame work) |
+| 0.11.0 bimanual | 60 | 0 | 1,901 to 1,958 (frame 33,866) | 29.9 to 30.0 | 1,030 to 1,039 | (in the frame work) |
+
+0.11.0's largest frames are its in-place writes: 8c3cb20's writes at
+the same frame (33,866) take 1,849 to 1,857 us. With the writes left
+out, 8c3cb20 at 60 Hz has p99 within 3 us of 0.11.0's. At 500 Hz no
+frame is over the 2 ms period; one frame in 400,000 of 1.7 to 1.9 ms
+comes in some runs, at a different frame each time, with no late input
+too (not explained; above, "The 17 ms frame"). 10 ms late costs about
+22 us at p99 in the bimanual example and 16 us in the visuomotor
+(sig.h's runs again).
+
 ### The reviewer's findings on the first draft (3f6d21c), and the answers
 
 The reviewer confirmed one `G` per graph, the order of exits, the entry
