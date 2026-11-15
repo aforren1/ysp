@@ -2710,13 +2710,45 @@ def t_v2_resp_pend_first(ctx):
               (nm, "1 ns later" if v == 0 else "1 ns earlier", r.rc, r.err[-300:] if r.rc else "", out))
 
 
+def t_v2_barrier(ctx):
+    # the trial's end and the next trial's reset are barriers: sig.h drops a
+    # report stamped before one that arrives after it (late_barrier). The
+    # hand, in r0 at 0, leaves after trial 0's hit at 0.001; its report
+    # comes 10 ms late, after the end frame's flush and the next
+    # reset, and 3fd398b's trial 1 read the held value before it: a hit the
+    # hand did not make (the model's harness, 60 Hz, 10 ms late, seed
+    # 102928). The fix: the flush waits for the input to its barrier, and
+    # the reset goes at the horizon (docs/player.md, "The trial's end").
+    # The control: the same samples on time
+    hand = {"hand": {"type": "position2d", "units": "display_px"}}
+    smp = os.path.join(ctx.out, "v2_barrier.csv")
+    # leaves between trial 0's end frame (at or after 0.001) and trial 1's
+    # first frame, at any rate: 1.5 periods
+    leave = 1.5 * period_ns(ctx) / 1e9
+    write_samples(smp, [(0.0, "hand", 0, 0), (leave, "hand", 50, 0), (2.0, "hand", 50, 0)])
+    t = {"controls": {"r0": {"control": "region", "of": "hand", "radius": 20, "stay_s": 0.001}},
+         "states": [{"name": "s0", "exits": [{"on": "r0", "to": "end", "outcome": "hit"}, {"after_s": 0.05, "to": "end", "outcome": "timed"}]}]}
+    for v, late in ((0, ["--test-sample-late", "hand=0.01"]), (1, [])):
+        nm = "v2_barrier" if v == 0 else "v2_barrier_control"
+        r = Run(ctx, nm, v2base({"t": t}, [{"name": "l", "trial": "t", "rules": ["reps 2"]}], roles=hand),
+                args=["--sim-gain", "hand=1", "--samples", smp, "--max-seconds", "20"] + late)
+        arms = {}
+        if r.rc == 0:
+            with open(os.path.join(r.data, "session.json")) as f:
+                arms = json.load(f).get("sig_arms", {})
+        out = [x["outcome"] for x in r.trials] if r.rc == 0 else []
+        check(r.rc == 0 and out == ["hit", "timed"] and arms.get("late_barrier") == 0,
+              "%s: a report after the trial's end is in the next trial: exit %d %s %s late_barrier %s" %
+              (nm, r.rc, r.err[-300:] if r.rc else "", out, arms.get("late_barrier")))
+
+
 TESTS = [t_nested, t_if_unless, t_empty_and_zero, t_loop, t_requeue, t_track_ends, t_lookup_keys, t_triggers, t_after_timing, t_outcomes,
          t_method_update, t_seeds, t_refused, t_unused_stim, t_record_data, t_fix_density, t_fix_key_reapply, t_fix_stale_rdk,
          t_fix_timeout_values, t_fix_any_key, t_fix_from_in_if, t_fix_shown_twice, t_fix_vars_data, t_fix_sound_twice, t_fix_rdk_limit,
          t_fix_record_inherit, t_fix_backward_at, t_fix_refusals, t_fix_michelson_order, t_fix_texture_vars, t_fix_walk_budget,
          t_fix_data_set, t_fix_check_all_leaves, t_fix_release_order, t_fix_key_var_reapply,
          t_r2_release_other_template, t_r2_yield_draws_nothing, t_r2_low, t_r2_relaxed, t_r4_leaf_loop_done_track, t_r4_requeue_full,
-         t_r5_wait_final, t_r6_allow_below, t_v2_states, t_v2_until, t_v2_hand, t_v2_rule5, t_v2_review2, t_v2_review3, t_v2_f34, t_v2_ties, t_v2_review4, t_v2_review5, t_v2_findings, t_v2_corpus, t_v2_window_8k, t_v2_two_hands, t_v2_two_exits_one_ctl, t_v2_n1_tie, t_v2_n1_chain, t_v2_n1_derived, t_v2_resp_pend_first]
+         t_r5_wait_final, t_r6_allow_below, t_v2_states, t_v2_until, t_v2_hand, t_v2_rule5, t_v2_review2, t_v2_review3, t_v2_f34, t_v2_ties, t_v2_review4, t_v2_review5, t_v2_findings, t_v2_corpus, t_v2_window_8k, t_v2_two_hands, t_v2_two_exits_one_ctl, t_v2_n1_tie, t_v2_n1_chain, t_v2_n1_derived, t_v2_resp_pend_first, t_v2_barrier]
 
 
 def main():

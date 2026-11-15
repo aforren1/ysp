@@ -2217,6 +2217,7 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
     if (p->t0_session == 0) p->t0_session = f->onset;
     if (!p->in_trial) {
         int64_t t0 = p->args.measure ? yrt_real_ns() : 0;
+        int bwait = 0;
         if (p->pending_stop) return 1;
         if (p->v2s) {
             /* version 2: the samples up to this onset before the trial's
@@ -2227,8 +2228,13 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
             rc = pl_v2_frame_input(p, f);
             YRT_ZONE_END(zi);
             if (rc < 0) return -1;
+            /* the last trial's flush waits for the input to its barrier */
+            bwait = pl_v2_barrier_wait(p);
+            if (bwait < 0) return -1;
         }
-        {
+        if (bwait == 1) {
+            rc = 2;   /* no trial on this frame: it draws nothing, as a yield */
+        } else {
             YRT_ZONE(zt, "pl.trial_start");
             rc = pl_start_trial(p, f);
             YRT_ZONE_END(zt);

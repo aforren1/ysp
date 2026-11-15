@@ -761,6 +761,7 @@ int  pl_v2_row_fill(pl_player* p, pl_row* r);
 int  pl_v2_column(pl_player* p, pl_row* r, int col, const yexp_value* f, pl_val* out, bool* deferred);
 const char* pl_v2_rsp_role(pl_player* p, const yrsp_result* res);
 int  pl_v2_trial_rows(pl_player* p);
+int  pl_v2_barrier_wait(pl_player* p);
 int  pl_v2_response(pl_player* p, const yrsp_result* r, const yscr_frame* f);
 void pl_v2_on_onset(pl_player* p, const ytl_event* e, int stim);
 int  pl_v2_step_ops(pl_player* p, const yexp_step* s, ytl_op* ops, int c, int cap);

@@ -317,6 +317,7 @@ typedef struct pl_v2_session {
     int64_t poll, plim;        /* the last whole feed's poll time and limit */
     bool polled;
     int64_t lag_n, lag_max; double lag_sum;   /* session.json exit_lag    */
+    pl_v2* flush_pend;         /* a trial's end whose flush waits (C2)      */
 } pl_v2_session;
 
 typedef struct v2_tcell { int col; int64_t a, b; int sa, sb; bool has_a, has_b; int64_t fa, fb; } v2_tcell;
@@ -1555,6 +1556,25 @@ static int64_t v2_horizon(const pl_player* p, const pl_v2* v) {
     }
     return g;
 }
+/* The horizon over every signal role, fed or not: a barrier (a flush, a
+ * reset) drops a report of any device stamped before it, so the trial's
+ * end waits on all of them, not only the template's (docs/player.md, "The
+ * trial's end"). P when no role has a bound above 0. */
+static int64_t v2_horizon_all(const pl_player* p) {
+    const pl_v2_session* S = p->v2s;
+    int64_t g, c;
+    int r;
+    if (!S->polled) return INT64_MIN;
+    g = S->poll < S->plim ? S->poll : S->plim;
+    for (r = 0; r < p->def->n_sigroles; r++) {
+        c = S->poll - S->bnd[r];
+        if (c > S->plim) c = S->plim;
+        if (S->newest[r] != INT64_MIN && S->newest[r] - 1 > c) c = S->newest[r] - 1;
+        if (c < g) g = c;
+    }
+    return g;
+}
+
 /* What a drain hands out: up to G when the template waits; else all, as
  * 0.11.0 (every bound 0: nothing waits) */
 static int64_t v2_drain_to(const pl_player* p, const pl_v2* v) {
@@ -3262,7 +3282,18 @@ int pl_v2_trial_start(pl_player* p, const yscr_frame* f) {
                 }
             }
         }
-        ysig_reset_trial(&v->g, f->onset);
+        {
+            /* the reset is a barrier: a report stamped before its time that
+             * arrives after it is dropped (late_barrier), and the held value
+             * it carried would be stale in this trial. At its onset the input
+             * is complete only to G (below P while a bound is above 0), so
+             * the barrier goes at G + 1, and this trial's arms at the onset
+             * wait in sig.h for input past them (an arm ahead of the input).
+             * Every bound 0: G is P, the onset */
+            int64_t ga = v2_horizon_all(p), tb = f->onset;
+            if (S->bnd_max > 0 && ga != INT64_MIN && ga < tb - 1) tb = ga + 1;
+            ysig_reset_trial(&v->g, tb);
+        }
         {
             /* the newest stamps are this trial's (the reset dropped the
              * rest); hits and events of an earlier trial do not come */
@@ -4335,10 +4366,7 @@ static int v2_traces_end(pl_player* p, pl_v2* v) {
     return 0;
 }
 
-int pl_v2_trial_rows(pl_player* p);
-int pl_v2_trial_rows(pl_player* p) {
-    pl_v2* v = p->tmpl ? p->tmpl->v2 : NULL;
-    if (!v) return 0;
+static int v2_trial_rows_now(pl_player* p, pl_v2* v) {
     /* the trial's held rows come now: a flush is a barrier, so every row
      * so far is final; then the traces */
     if (v->has_graph && v->rows_open && !ysig_flush(&v->g)) {
@@ -4350,6 +4378,36 @@ int pl_v2_trial_rows(pl_player* p) {
     if (v2_guard(p, v, "the trial's end", NULL, 0) < 0) return -1;
     if (v2_traces_end(p, v) < 0) return -1;
     return v2_srow_flush(p, false);
+}
+
+/* The flush's barrier is the graph's newest input or frame (t_cover). A
+ * report of any role stamped before it that arrives after it is dropped
+ * (late_barrier), and the next trial reads the held value before it (the
+ * model's harness, 60 Hz, 10 ms late, seed 102928). So the flush and the
+ * trial's rows wait until the input is complete to the barrier
+ * (pl_v2_barrier_wait()); the next trial starts once they are done. Every
+ * bound 0: G is the poll's time, never before the barrier. */
+int pl_v2_trial_rows(pl_player* p);
+int pl_v2_trial_rows(pl_player* p) {
+    pl_v2* v = p->tmpl ? p->tmpl->v2 : NULL;
+    if (!v) return 0;
+    if (p->v2s->bnd_max > 0 && v->has_graph && v->rows_open && v2_horizon_all(p) < v->g.t_cover - 1) {
+        p->v2s->flush_pend = v;
+        return 0;
+    }
+    return v2_trial_rows_now(p, v);
+}
+
+/* Between trials, after the poll is fed: 1 while a trial's end waits for
+ * the input to its barrier (no trial starts on this frame), 0 when none
+ * waits or it is done now, -1 on an error. */
+int pl_v2_barrier_wait(pl_player* p) {
+    pl_v2_session* S = p->v2s;
+    pl_v2* v = S ? S->flush_pend : NULL;
+    if (!v) return 0;
+    if (v2_horizon_all(p) < v->g.t_cover - 1) return 1;
+    S->flush_pend = NULL;
+    return v2_trial_rows_now(p, v) < 0 ? -1 : 0;
 }
 
 /* --- what a template reads (3.14: a leaf draws only what it reads) -------- */

@@ -725,10 +725,29 @@ frame runs as in 0.11.0.
   between the exit's time and its take were shown and stay in
   `events.csv`; `ytl_remove()` takes the ones that have not fired.
 - **The trial's end**: the exit to `end` is taken when `G` reaches its
-  time, and the flush follows at the end frame. A report stamped after
-  the end's time that arrives after the flush is dropped
-  (`late_barrier`; R drops it too). No report at or before the end's
-  time is lost.
+  time. The flush and the next trial's reset are barriers: sig.h drops a
+  report stamped before a barrier that arrives after it (`late_barrier`;
+  R drops it too), and the held values (an adapter's state) carry over
+  the reset, so the next trial would read the value before that report.
+  So the player waits for complete input up to each barrier (the
+  coordinator's ruling C2, 2026-11-15, after the user's decision):
+  - The flush's barrier is the graph's newest input or frame (the end
+    frame's onset, or later). The flush and the trial's held rows wait
+    until `G` over every signal role (fed by the template or not: a
+    barrier drops a report of any device) reaches the barrier minus
+    1 ns. The next trial does not start before the flush: frames between
+    draw no trial. In `--sim` with one role whose bound is its lateness
+    `L`, the next trial starts on the first frame after the end frame
+    whose onset is at or after the end frame's onset plus `L` minus 1 ns.
+  - The reset cannot wait: at the trial's first onset `T` the input is
+    complete only to `G`, which is before `T` while a bound is above 0.
+    So the reset's barrier goes at `G + 1 ns` (`G` over every role, as
+    above), not at `T`. The trial's arms at `T` are then ahead of the
+    input and wait in sig.h for input past them (an arm ahead of the
+    input). The experiment's nodes see the input from `G + 1 ns` on;
+    detects are not armed before `T`, so a control's hits do not change.
+  - With every bound 0, `G` is the poll's time: nothing waits, and the
+    reset goes at `T`, as in 0.11.0.
 
 ### The response window
 
@@ -775,16 +794,15 @@ frame runs as in 0.11.0.
   so the file has no column for it. A later `after_s` exit counts from
   the entry frame, so this lag moves it too. With `B` 0 it is under a
   frame, as in 0.11.0.
-- Not covered by the wait (open, 2026-11-15): a report stamped after a
-  trial's end that arrives after the end frame's flush (a barrier) is
-  dropped (`late_barrier`). Held values persist across a trial's reset,
-  so the next trial's first arms read the value before that report. The
-  model's harness, 60 Hz, 10 ms late, seed 102928: the hand left the
-  region 10 ms after trial 0's exit, the report came after the flush,
-  and trial 1's entry arm found the hand still in the region, a hit the
-  hand did not make. A fix needs the next trial's start to wait for
-  complete input to the barrier, or sig.h to apply a dropped report's
-  value to the held state. Neither is built.
+- Later by up to the lateness plus a frame, beyond the end's own lag:
+  the next trial's first frame, when the flush waits (above, "The
+  trial's end"). Before that wait, a report stamped before a barrier
+  that arrived after it was dropped, and the next trial read a stale
+  held value (the model's harness, 60 Hz, 10 ms late, seed 102928: the
+  hand left the region 10 ms after trial 0's exit, and trial 1's entry
+  arm found it still in the region, a hit the hand did not make).
+  `player_test` `t_v2_barrier` holds the shape: at 60 Hz the reset at
+  the horizon is the part that matters, at 500 Hz the flush's wait.
 - New in `trials.csv`: `exit_lag_max_s`, the trial's largest exit lag;
   `late_frames` (sig.h's count of the trial's drawn frames that a late
   report changed).
