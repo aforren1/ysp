@@ -802,7 +802,8 @@ Terms:
   arm, it is the footprint of the disarms only.
 - `N(G)` is the latest input time in R before G's place, after the last
   barrier. A reset and a trial reset set it to their `t`; a flush keeps
-  it.
+  it. In 0.7.0 only an input whose footprint meets `F(G)` counts (a
+  frame or a settle meets every footprint; ruling 4 below).
 - `L(G)` is the first call after G in R that lets G in and whose
   footprint meets `F(G)`: an input later than `τ`, a frame or a settle at
   `τ`, or a `ysig_disarm_at` with `t` at or after `τ` (X1). (R1,
@@ -1678,9 +1679,24 @@ questions).**
    that depends on order: `N(G)` (Exactness), the gap that condition 4
    reads, and `L(G)`. "Up to commuting calls" stays true for the results
    (values, rings, states, counts), but these readings use the key order.
-   So `N(G)` is `τ` when an input at `τ` is in R, and earlier than `τ`
-   otherwise: every input later than `τ` comes after G in the key order,
-   whatever its footprint, and condition 2 applies to most past groups.
+   So `N(G)` is `τ` when an input at `τ` that meets `F(G)` is in R, and
+   earlier than `τ` otherwise: every input later than `τ` comes after G
+   in the key order, whatever its footprint, and condition 2 applies to
+   most past groups. An input at `τ` that does not meet `F(G)` does not
+   make `N(G)` reach `τ` (proposed by the builder, 2026-11-15, for the
+   coordinator and the reviewer to confirm): it does not let G in, so a
+   graph with no window, given R, keeps G waiting as the classes by
+   footprint say, and conditions 2 (a) and 2 (b) decide G. Read over
+   every footprint, such an input made G exact by condition 2 while that
+   graph could not give R. The oracle's B-cannot cases 169, 204, 1094,
+   1444, 1915 and 2600 of seed 20261115 (late generator on) and 237, 1185
+   and 1425 (`OFF=l`) were counted by none of the header's tests: a set,
+   an arm or a plain disarm that R makes after a waiting G, and that
+   graph before it, with an input of another device at G's `τ`.
+   `sig_test` `test_v2_n_tau`. 1444 (B-cannot reason 9, a disarm read in
+   no group before the arm of its own group closed its gap) is now
+   counted in `late_unverified`, by a later late call's retest of a group
+   this reading leaves open; the header does not count it by condition 4.
 5. (R1, R2; the coordinator's rulings of 2026-11-15, from the reviewer's
    analysis.) At one time a feed comes first; frames, settles, state
    calls and groups then go by call order, as in 0.6.x. A frame or a
@@ -1732,6 +1748,14 @@ with A's checks, seed 20261115, 3,000 cases, the Linux desktop):
 `arm_unverified` in right cases rose from about 2.7% of made groups
 (`N(G)` read in the header's log order) to about 7% (key order), and the
 B-cannot cases other than reasons 6 and 8 are all counted.
+
+Measured effect of ruling 4 by footprint (the oracle at ctest's
+switches, seed 20261115, 3,000 cases, the Linux desktop, two oracle runs
+at once): B-cannot counted 778 of 784 before and 784 of 784 after with
+the late generator on, 789 of 792 and 792 of 792 with it off (`OFF=l`);
+wrong cases with no count 0 before and after. `arm_unverified` in right
+cases: 2,471 to 2,675 counts over 30,783 made groups (8.0% to 8.7%), and
+3,383 to 3,706 over 40,691 (8.3% to 9.1%) with `OFF=l`.
 
 **Open questions for this text.**
 

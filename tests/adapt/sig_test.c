@@ -4921,14 +4921,17 @@ static void test_arm_exact(void) {
     /* 2 (c) at any N(G): a disarm of d1 cancels d1's waiting arm, whose
      * group has a disarm of d2; device 3 moves N to 30 ms, device 1 at 35
      * lets the group's disarm in with N(G) past its time (the reviewer's
-     * 490 and 1821). The control: N(G) at its time (device 3 at 20) */
+     * 490 and 1821). The control: N(G) at its time (device 1 at 20; by
+     * footprint, so device 3 at 20, which meets no node of G, would not
+     * do: a graph with no window still lets G in at 35) */
     for (v = 0; v < 2; v++) {
         if (!ex_open(n, 4)) return;
         ysig_disarm(&g_rp, 2);
         ysig_arm(&g_rp, 1, 20 * MS);
         rp_feed(12 * MS, 0, YIN_AXIS_POSITION, 1);
         ysig_disarm(&g_rp, 1);
-        rp_feed((v ? 30 : 20) * MS, 0, YIN_AXIS_PEN_PRESSURE, 3);
+        if (v) rp_feed(30 * MS, 0, YIN_AXIS_PEN_PRESSURE, 3);
+        else rp_feed(20 * MS, 0, YIN_AXIS_POSITION, 1);
         CHECK(g_rp.wt->n == 1 && ex_unv() == 0);
         rp_feed(35 * MS, 0, YIN_AXIS_POSITION, 1);
         CHECK(g_rp.wt->n == 0 && ex_unv() == v);
@@ -7155,6 +7158,73 @@ static void test_v2_s1(void) {
         CHECK(v2_hits(2, NULL) == 0);
     }
 }
+/* Ruling 4 by footprint (the oracle's cases 169, 204, 237, 1094, 1185,
+ * 1425, 1915 and 2600 of seed 20261115): N(G) is tau only when the input
+ * at tau meets F(G). An input of another device at tau does not let G in,
+ * so a graph with no window, given R, still keeps G waiting, and
+ * conditions 2 (a) and 2 (b) decide it. d (device 3) armed at 19 waits.
+ * (a) a past group [set d's level, arm e at 24] (past by device 1 at 30)
+ *     lets d in at 24, right before the set (H13). Device 1 at 19 (d's
+ *     tau) meets no node of d: d is counted (L(d) is not in R). The
+ *     control: device 3 at 19 (it does not let d in, an input lets in
+ *     only earlier groups), N(d) = 19: exact.
+ * (b) a present group [set d's level, arm e at 24]; device 3 at 26 lets d
+ *     in, a late call before the set (W1): 2 (b) counts d (the set lies
+ *     between d and L). Device 1 at 19 does not make N(d) 19. The control:
+ *     no set.
+ * (c) X present at 19 (by device 5 at 19, which meets X's node and not
+ *     d's) lets d in at its call (S3): L(d) is not an input, 2 (a) counts
+ *     d. The control: device 6 at 19 makes X present and meets d too (K
+ *     reads both): N(d) = 19, exact. */
+static void test_v2_n_tau(void) {
+    ysig_stats st;
+    int v;
+    g_where = "ruling 4 by footprint, a past group's set";
+    for (v = 0; v < 2; v++) {
+        if (!s1_open(4)) return;
+        rp_feed(19 * MS, v ? 0 : 9, YIN_AXIS_POSITION, v ? 1 : 3);
+        rp_feed(30 * MS, 0, YIN_AXIS_POSITION, 1);
+        CHECK(g_rp.wt->n == 1);
+        CHECK(ysig_set(&g_rp, 2, YSIG_DETECT_LEVEL, 20));
+        CHECK(ysig_arm(&g_rp, 3, 24 * MS) && g_rp.wt->n == 0);
+        ysig_get_stats(&g_rp, &st);
+        CHECK(st.late_far == 0 && st.late_full == 0 && st.arm_past_far == 0 && st.arm_past_full == 0);
+        CHECK(st.arm_unverified == v);
+    }
+    g_where = "ruling 4 by footprint, a present group's set";
+    for (v = 0; v < 2; v++) {
+        if (!s1_open(4)) return;
+        rp_feed(19 * MS, 0, YIN_AXIS_POSITION, 1);
+        rp_feed(24 * MS, 0, YIN_AXIS_POSITION, 1);
+        if (v) CHECK(ysig_set(&g_rp, 2, YSIG_DETECT_LEVEL, 20));
+        CHECK(ysig_arm(&g_rp, 3, 24 * MS) && g_rp.wt->n == 1);
+        rp_feed(26 * MS, 9, YIN_AXIS_POSITION, 3);
+        ysig_get_stats(&g_rp, &st);
+        CHECK(g_rp.wt->n == 0 && st.late_far == 0 && st.late_full == 0);
+        CHECK(st.arm_unverified == v);
+    }
+    g_where = "ruling 4 by footprint, an arm at tau";
+    for (v = 0; v < 2; v++) {
+        ysig_node n[7];
+        n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 3, 1); n[0].history = 64;
+        n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1); n[1].p[YSIG_DETECT_LEVEL] = 5; n[1].history = 64;   /* d */
+        n[2] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 6, 1); n[2].history = 64;
+        n[3] = ysig_node_of(YSIG_OP_DETECT, 2, -1); n[3].p[YSIG_DETECT_LEVEL] = 5; n[3].history = 64;   /* X */
+        n[4] = ysig_node_of(YSIG_OP_ALL, 1, 3);                                                         /* K */
+        n[5] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 5, 1); n[5].history = 64;
+        n[6] = ysig_node_of(YSIG_OP_SUM, 3, 5); n[6].history = 64;
+        if (!rp_open(n, 7, 4, 0, false, false)) return;
+        rp_feed(10 * MS, 0, YIN_AXIS_POSITION, 3);
+        rp_feed(10 * MS, 0, YIN_AXIS_POSITION, 6);
+        rp_feed(10 * MS, 0, YIN_AXIS_POSITION, 5);
+        CHECK(ysig_arm(&g_rp, 1, 19 * MS) && g_rp.wt->n == 1);
+        rp_feed(19 * MS, 0, YIN_AXIS_POSITION, v ? 5 : 6);
+        CHECK(g_rp.wt->n == 1);
+        CHECK(ysig_arm(&g_rp, 3, 19 * MS) && g_rp.wt->n == 0);
+        ysig_get_stats(&g_rp, &st);
+        CHECK(st.arm_unverified == v && st.late_far == 0 && st.late_full == 0);
+    }
+}
 /* Ruling 2 extended (the oracle's case 350 of seed 20261115): a call whose
  * time is before the last barrier keys at the barrier's time, call order
  * deciding among them; so do the cancel by key and the let-in tests. d's
@@ -7677,6 +7747,7 @@ int main(void) {
     test_v2_old_shapes();
     test_v2_present_key();
     test_v2_s1();
+    test_v2_n_tau();
     test_v2_bar_clamp();
     test_v2_lost_set();
     test_v2_exit_late();

@@ -4804,6 +4804,36 @@ static int ysig__fp_entry(ysig_graph* g, const ysig__call* c, uint64_t* f) {
     }
 }
 
+/* Ruling 4 by footprint: N(G) is tau when R holds, before G by key, an
+ * input at tau that meets F(G) (a frame or a settle meets every node; a
+ * reset at tau sets every node's input time). An input of another device
+ * at tau does not let G in, so a graph with no window, given R, still
+ * keeps G waiting there and conditions 2 (a) and 2 (b) decide it (the
+ * oracle's cases 169 and 237 of seed 20261115: such an input read as
+ * N(G) = tau, and a set that R makes after G, and the graph with no
+ * window before it, was not counted). From the image of checkpoint k
+ * when its input time is tau (the nodes' input times then; NULL: none),
+ * and the log from call from. Only ever false where the reading over every footprint
+ * was false too. */
+static int ysig__n_tau(ysig_graph* g, const ysig__ck* k, uint64_t from, const uint64_t* F, int64_t t) {
+    const ysig__cu* cu = g->cu;
+    uint64_t s, f[YSIG__FPW];
+    int64_t ti;
+    int i;
+    if (k && k->cover == t)
+        for (i = 0; i < g->n; i++) {
+            int64_t nt;
+            if (!((F[i >> 6] >> (i & 63)) & 1u)) continue;
+            memcpy(&nt, k->img + sizeof *g + sizeof(ysig__nd) * (size_t)i + offsetof(ysig__nd, nt), sizeof nt);
+            if (nt == t) return 1;
+        }
+    for (s = from; s < cu->c_head; s++) {
+        const ysig__call* c = &cu->calls[s % (uint64_t)cu->C];
+        if (!ysig__input_t(&c->e, &ti) || ti != t) continue;
+        if (ysig__fp_entry(g, c, f) == 1 && ysig__fp_meets(g, f, F)) return 1;
+    }
+    return 0;
+}
 /* A logged state call's time: its group's (a disarm acts at it) */
 static void ysig__set_tr(ysig__call* c, int64_t t) {
     c->tr = t;
@@ -4900,22 +4930,18 @@ static int ysig__cas_group(ysig_graph* g, const ysig__wa* a, const ysig_entry* c
     c->gid = a->seq;
     c->t = a->t;
     c->n_at = g->t_cover;
-    if (c->n_at > a->t && g->cu) {
+    ysig__wait_fp(g, a, c->F);
+    if (c->n_at >= a->t && g->cu) {
         /* ruling 4: N(G) in R's key order, which puts every input later
          * than tau after G, whatever its footprint: tau when R holds an
          * input at tau, else earlier (G waits at its place, condition 2).
          * An input of another device later than tau made it read as past
          * (the oracle's case 218 of seed 20261121, OFF=l: L met F(G) but
-         * not F_a(G), 2 (a), and nothing was counted) */
+         * not F_a(G), 2 (a), and nothing was counted). The input at tau
+         * must meet F(G) (ysig__n_tau()) */
         const ysig__cu* cu = g->cu;
-        uint64_t q;
-        int64_t ti;
-        c->n_at = a->t - 1;
-        if (cu->n_ck && cu->ck[cu->ck0].cover == a->t) c->n_at = a->t;
-        for (q = cu->c_tail; q < cu->c_head && c->n_at < a->t; q++)
-            if (ysig__input_t(&cu->calls[q % (uint64_t)cu->C].e, &ti) && ti == a->t) c->n_at = a->t;
+        c->n_at = ysig__n_tau(g, cu->n_ck ? &cu->ck[cu->ck0] : NULL, cu->c_tail, c->F, a->t) ? a->t : a->t - 1;
     }
-    ysig__wait_fp(g, a, c->F);
     for (i = 0; i < g->dw; i++) c->Fa[i] = 0;
     c->cancelled = !(with_arm && a->node >= 0);
     if (!c->cancelled) ysig__fp_or(g, c->Fa, a->node);
@@ -5136,13 +5162,11 @@ static void ysig__late_2b(ysig_graph* g, uint64_t gid, int64_t t, const uint64_t
     const uint64_t C = (uint64_t)cu->C;
     uint64_t s, last = UINT64_MAX, f[YSIG__FPW];
     int64_t ti;
-    for (s = cu->c_tail; s < cu->c_head; s++) {
-        const ysig__call* c = &cu->calls[s % C];
-        if (c->gid == gid) last = s;
-        /* an input at t is in R before G by key: N(G) = t, exact by 2 */
-        if (ysig__input_t(&c->e, &ti) && ti == t) return;
-    }
-    if (last == UINT64_MAX || (cu->n_ck && cu->ck[cu->ck0].cover == t)) return;
+    for (s = cu->c_tail; s < cu->c_head; s++)
+        if (cu->calls[s % C].gid == gid) last = s;
+    /* an input at t that meets F(G) is in R before G by key: N(G) = t,
+     * exact by 2 (ysig__n_tau()) */
+    if (last == UINT64_MAX || ysig__n_tau(g, cu->n_ck ? &cu->ck[cu->ck0] : NULL, cu->c_tail, F, t)) return;
     for (s = last + 1; s < cu->c_head; s++) {
         const ysig__call* x = &cu->calls[s % C];
         if (ysig__input_t(&x->e, &ti)) continue;
@@ -6174,13 +6198,9 @@ static void ysig__unv_place(ysig_graph* g, int kslot, uint64_t pos, int nb) {
         {
             /* v0.7.0: N(G) in R's order by key, which puts every input
              * later than t after G, whatever its footprint: t when an input
-             * at t is in R, else before t (G waits at its place) */
-            N = t - 1;
-            if (k->cover == t) N = t;
-            for (u = k->call; u < cu->c_head && N < t; u++) {
-                const ysig__call* c = &cu->calls[u % (uint64_t)cu->C];
-                if (ysig__input_t(&c->e, &ti) && ti == t) N = t;
-            }
+             * at t that meets F(G) is in R (ysig__n_tau()), else before t
+             * (G waits at its place) */
+            N = ysig__n_tau(g, k, k->call, F, t) ? t : t - 1;
         }
         bad = ysig__unv_spans(g, first, last, gid);
         /* 2 (c) at any N(G): a cancelled group's disarm, unless N(G) is t */
