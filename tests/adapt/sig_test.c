@@ -5252,27 +5252,32 @@ static void test_arm_repro(void) {
     ysig_get_stats(&g_rp, &s1);
     CHECK(g_rp_rows == 20 && g_rp_ooo == 0 && s1.arm_past_full >= 1);
     /* H8: a barrier makes 240 derived events final at once: none lost to
-     * the 64-event queue, a caller that drains until 0 gets them all */
-    for (barrier = 0; barrier < 3; barrier++) {
+     * the 64-event queue, a caller that drains until 0 gets them all.
+     * 0.7.0's queue holds 64 + catchup_calls: with the default calls all
+     * 240 fit. Barrier 3: 16 calls (a queue of 80), 120 events and no
+     * drain before a flush: the queue is full and 40 final events wait
+     * for room, which ysig_derived() makes as it drains */
+    for (barrier = 0; barrier < 4; barrier++) {
         n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 2);
         n[1] = ysig_node_of(YSIG_OP_EMIT, 0, -1);
         n[2] = ysig_node_of(YSIG_OP_RECORD, 0, -1);
-        if (!rp_open(n, 3, 8, 0, true, true)) return;
+        if (!rp_open(n, 3, 8, barrier == 3 ? 16 : 0, true, true)) return;
         got = 0;
-        for (f = 1; f <= 6; f++) {
+        for (f = 1; f <= (barrier == 3 ? 3 : 6); f++) {
             for (k = 0; k < 40; k++) {
                 rp_feed((f - 1) * 16 * MS + (k + 1) * 400000, 0, YIN_AXIS_POSITION, 1);
-                while ((m = ysig_derived(&g_rp, ev, 64)) > 0) got += m;
+                while (barrier < 3 && (m = ysig_derived(&g_rp, ev, 64)) > 0) got += m;
             }
             rp_frame(f * 16 * MS);
-            while ((m = ysig_derived(&g_rp, ev, 64)) > 0) got += m;
+            while (barrier < 3 && (m = ysig_derived(&g_rp, ev, 64)) > 0) got += m;
         }
-        if (barrier == 0) ysig_flush(&g_rp);
+        if (barrier == 3) CHECK(g_rp.n_der == 80 && g_rp.cu->db_head - g_rp.cu->db_tail == 40);
+        if (barrier == 0 || barrier == 3) ysig_flush(&g_rp);
         else if (barrier == 1) ysig_reset(&g_rp, 100 * MS);
         else ysig_reset_trial(&g_rp, 100 * MS);
         while ((m = ysig_derived(&g_rp, ev, 64)) > 0) got += m;
         ysig_get_stats(&g_rp, &s1);
-        CHECK(got == 240 && g_rp_rows == 240 && s1.derived_lost == 0);
+        CHECK(got == (barrier == 3 ? 120 : 240) && g_rp_rows == got && s1.derived_lost == 0);
     }
     /* H12: an ahead arm lets in nothing at its call. A set with an arm at
      * 20 ms waits; input of another stream moves N to 30; an arm at 40 ms
@@ -7531,6 +7536,11 @@ static void test_v2_gap_late(void) {
         CHECK(st.arm_hits_retracted == (v < 2));
         CHECK(st.hits == (v < 2 ? 0 : 1));
         CHECK(st.late_off == (v == 3));
+        /* the next gap ends in no group: the arm's gap counts nothing
+         * there either (its calls took the group's key) */
+        rp_feed(13 * MS, 0, YIN_AXIS_POSITION, 2);
+        ysig_get_stats(&g_rp, &st);
+        CHECK(st.late_off == (v == 3));
     }
 }
 /* The op-order gap (the reviewer, on 3a4bc3f): a late call that becomes
@@ -7601,6 +7611,162 @@ static void test_v2_time_ends(void) {
         n0 = g_rp.cu->n_ck;
         rp_frame(v ? INT64_MAX - 1 : 1001 * MS);
         CHECK(n0 < 3 && g_rp.cu->n_ck == n0 + 1);
+    }
+}
+/* With no window a late report is made at R's end (late_off), after an arm
+ * made at its call: the detect sees a value older than the arm's time. Such
+ * a value cannot hit or start a hold, but a failing one breaks the hold
+ * that runs (the final review's S2). 0.7.0 places a late report by key
+ * when there is a window, so only a graph with no window reaches this.
+ * Hand A is in at 90 and 100 ms; the arm at 100 ms is present. v 0: B in
+ * at 91 ms, so the hold runs from 100; B's late 99 ms report is out and
+ * breaks it. v 1: the control, the late report in: the hold stands (a hit
+ * at 600 ms). v 2: B out at 91 ms; its late 99 ms report is in, before the
+ * arm: no hold starts. v 3: the control, B in at 101 ms (not late): the
+ * hold starts there (a hit at 601 ms). */
+static void test_late_no_window(void) {
+    int v;
+    g_where = "a late report with no window, before the arm's time";
+    for (v = 0; v < 4; v++) {
+        ysig_node n[4];
+        ysig_desc d;
+        ysig_graph g;
+        ysig_hit h[4];
+        ysig_stats st;
+        ysig_frame_in f;
+        yin_event e;
+        int nh;
+        n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 1);
+        n[1] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 2, 1);
+        n[2] = ysig_node_of(YSIG_OP_JOIN, 0, 1);
+        n[3] = ysig_node_of(YSIG_OP_DETECT, 2, -1);
+        n[3].p[0] = YSIG_TEST_LE; n[3].p[1] = -1; n[3].p[2] = 10; n[3].p[4] = 0.5; n[3].p[6] = 1;
+        d = desc_of(n, 4);
+        if (!open_desc(&g, &d)) { g_failures++; return; }
+        ysig_reset(&g, 0);
+        e = pen3(90 * MS, 1, 0);
+        ysig_feed(&g, &e);
+        e = pen3(91 * MS, 2, v < 2 ? 0 : 50);
+        ysig_feed(&g, &e);
+        e = pen3(100 * MS, 1, 0);
+        ysig_feed(&g, &e);
+        CHECK(ysig_arm(&g, 3, 100 * MS) && g.wt->n == 0);   /* present: made now */
+        e = pen3(v == 3 ? 101 * MS : 99 * MS, 2, v == 0 ? 50 : 0);
+        ysig_feed(&g, &e);
+        f = frame_at(1, 700 * MS, 0, NULL, 0);
+        CHECK(ysig_frame(&g, &f) == 0);
+        nh = ysig_detected(&g, h, 4);
+        ysig_get_stats(&g, &st);
+        CHECK(st.late_off == (v != 3));
+        if (v == 0 || v == 2) CHECK(nh == 0);
+        else CHECK(nh == 1 && h[0].t == (v == 1 ? 600 : 601) * MS);
+    }
+    /* O3 there: a failing value older than the arm makes any detect ready
+     * again, one with no hold too. A fresh detect (le 5) armed at 25 ms on
+     * a held 3, present; device 2's late 6 at 20 ms fails: 4 at 35 ms is a
+     * hit. The control: the late value 4 passes, and 35 ms is no hit */
+    for (v = 0; v < 2; v++) {
+        ysig_node n[2];
+        ysig_hit h[4];
+        n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_PEN_PRESSURE, 0, 1);   /* any device */
+        n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1); n[1].p[YSIG_DETECT_TEST] = 1; n[1].p[YSIG_DETECT_LEVEL] = 5;
+        n[1].p[YSIG_DETECT_START] = 1; n[1].p[YSIG_DETECT_ENTRY] = YSIG_ENTRY_FRESH;
+        if (!rp_open(n, 2, 0, 0, false, false)) return;
+        rp_feed(10 * MS, 3, YIN_AXIS_PEN_PRESSURE, 1);
+        rp_feed(25 * MS, 3, YIN_AXIS_PEN_PRESSURE, 1);
+        CHECK(ysig_arm(&g_rp, 1, 25 * MS) && g_rp.wt->n == 0);
+        rp_feed(20 * MS, v ? 4 : 6, YIN_AXIS_PEN_PRESSURE, 2);
+        CHECK(ysig_detected(&g_rp, h, 4) == 0);
+        rp_feed(35 * MS, 4, YIN_AXIS_PEN_PRESSURE, 1);
+        if (!v) CHECK(ysig_detected(&g_rp, h, 4) == 1 && h[0].t == 35 * MS);
+        else CHECK(ysig_detected(&g_rp, h, 4) == 0);
+    }
+}
+/* L(G) at tau (ruling 5, R1, R2, X1): a ysig_disarm_at() at tau that lets
+ * a waiting group in, and a frame at tau placed late between a group and
+ * its L, are G's L: 2 (a) holds and G is exact. A detect d (entry now)
+ * armed at 20 ms with input at 10 waits. v 0: ysig_disarm_at(d, 20) lets
+ * it in; v 1, the control: at 21 ms. v 2: an input at 25 ms lets it in,
+ * then a frame at 20 ms is late, placed after G, its new L; v 3, the
+ * control: the frame at 21 ms. v 4: a disarm_at at 22 ms made before the
+ * arm: G goes in late, by key before it, and 2 (b) does not count it (X1;
+ * ysig__late_2b()); v 5, the control: no disarm_at. None is counted */
+static void test_v2_l_at_tau(void) {
+    int v;
+    g_where = "L(G) at tau: a disarm_at, a late frame";
+    for (v = 0; v < 6; v++) {
+        ysig_node n[2];
+        ysig_stats st;
+        n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 1); n[0].history = 64;
+        n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1); n[1].p[YSIG_DETECT_LEVEL] = 5;
+        n[1].p[YSIG_DETECT_ENTRY] = YSIG_ENTRY_NOW; n[1].history = 64;
+        if (!rp_open(n, 2, 4, 0, false, false)) return;
+        rp_feed(10 * MS, 9, YIN_AXIS_POSITION, 1);
+        (void)v2_hits(1, NULL);
+        CHECK(ysig_disarm(&g_rp, 1));
+        rp_feed(11 * MS, 9, YIN_AXIS_POSITION, 1);
+        if (v == 4) CHECK(ysig_disarm_at(&g_rp, 1, 22 * MS));
+        CHECK(ysig_arm(&g_rp, 1, 20 * MS) && g_rp.wt->n == 1);
+        if (v < 2) {
+            CHECK(ysig_disarm_at(&g_rp, 1, (v ? 21 : 20) * MS) && g_rp.wt->n == 0);
+        } else {
+            rp_feed(25 * MS, 9, YIN_AXIS_POSITION, 1);
+            CHECK(g_rp.wt->n == 0);
+            if (v < 4) rp_frame((v == 2 ? 20 : 21) * MS);
+        }
+        ysig_get_stats(&g_rp, &st);
+        CHECK(st.arm_unverified == 0 && st.late_unverified == 0 && st.late_far == 0 && st.late_full == 0);
+    }
+}
+/* Ruling 4 with no window (ysig__n_tau(), no log): a late group is exact
+ * by 2 only when a node of F(G) has its input at tau; input of another
+ * device at tau does not count. d (device 1) armed at 20 ms with input at
+ * 10 waits; ysig_disarm_at(d, 22), made before it, is in R with a greater
+ * key, so G is late when device 1's 25 ms lets it in, and made at R's end
+ * (late_off). v 0: device 2 (another source) has input at 20 ms: G is
+ * counted. v 1, the control: device 2 at 19 ms: the same */
+static void test_v2_n_tau_nowin(void) {
+    int v;
+    g_where = "ruling 4 with no window: another device at tau";
+    for (v = 0; v < 2; v++) {
+        ysig_node n[3];
+        ysig_stats st;
+        n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 1);
+        n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1); n[1].p[YSIG_DETECT_LEVEL] = 5;
+        n[1].p[YSIG_DETECT_ENTRY] = YSIG_ENTRY_NOW;
+        n[2] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 2, 1);
+        if (!rp_open(n, 3, 0, 0, false, false)) return;
+        rp_feed(10 * MS, 0, YIN_AXIS_POSITION, 1);
+        CHECK(ysig_disarm(&g_rp, 1));
+        CHECK(ysig_disarm_at(&g_rp, 1, 22 * MS));
+        rp_feed((v ? 19 : 20) * MS, 0, YIN_AXIS_POSITION, 2);
+        CHECK(ysig_arm(&g_rp, 1, 20 * MS) && g_rp.wt->n == 1);
+        rp_feed(25 * MS, 0, YIN_AXIS_POSITION, 1);
+        ysig_get_stats(&g_rp, &st);
+        CHECK(g_rp.wt->n == 0 && st.late_off >= 1 && st.arm_unverified == 1);
+    }
+}
+/* S1' (b) with no window: a past group's calls let in at its tau, by key
+ * inclusive: a waiting group at tau made before the group's arm goes in.
+ * H = [arm e at 20 ms] waits (device 2 at 10). G = [set e's level, arm d
+ * at 20 ms] is past (device 1 at 25) and made at R's end: its set lets H
+ * in at 20. v 1, the control: H at 19 ms, let in either way */
+static void test_v2_s1b_nowin(void) {
+    int v;
+    g_where = "S1' (b) with no window: a past group's set at tau";
+    for (v = 0; v < 2; v++) {
+        ysig_node n[4];
+        n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 1);
+        n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1); n[1].p[YSIG_DETECT_LEVEL] = 5;   /* d */
+        n[2] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 2, 1);
+        n[3] = ysig_node_of(YSIG_OP_DETECT, 2, -1); n[3].p[YSIG_DETECT_LEVEL] = 5;   /* e */
+        if (!rp_open(n, 4, 0, 0, false, false)) return;
+        rp_feed(10 * MS, 0, YIN_AXIS_POSITION, 2);
+        rp_feed(25 * MS, 0, YIN_AXIS_POSITION, 1);
+        CHECK(ysig_arm(&g_rp, 3, (v ? 19 : 20) * MS) && g_rp.wt->n == 1);   /* H */
+        CHECK(ysig_set(&g_rp, 3, YSIG_DETECT_LEVEL, 6) && g_rp.wt->n == 1);
+        CHECK(ysig_arm(&g_rp, 1, 20 * MS));                                  /* G */
+        CHECK(g_rp.wt->n == 0);
     }
 }
 static void test_late(void) {
@@ -7723,8 +7889,9 @@ static void test_late(void) {
         static const int dev[8] = { 1, 1, 2, 1, 2, 2, 1, 2 };
         static const int ms[8] = { 3, 9, 5, 12, 8, 14, 15, 11 };
         yin_event ev[8];
-        ysig_value a[3];
+        ysig_value a[3], ra[16], rb;
         ysig_stats sa, sb;
+        int j;
         for (k = 0; k < 8; k++) {
             memset(&ev[k], 0, sizeof ev[k]);
             ev[k].t = ms[k] * MS; ev[k].type = YIN_SAMPLE; ev[k].kind = YIN_KIND_PEN; ev[k].control = YIN_AXIS_POSITION;
@@ -7735,6 +7902,15 @@ static void test_late(void) {
             ysig_arm(&g_rp, 1, 0);
             if (v) CHECK(ysig_feed_n(&g_rp, ev, 8) == 7);   /* device 2's 11 after its 14: dropped */
             else for (k = 0; k < 8; k++) ysig_feed(&g_rp, &ev[k]);
+            /* the batch's late events ran again at its end: none pending,
+             * and the source's ring in time order (at R's end, device 1's
+             * late 12 and 15 would be skipped: history_skipped) */
+            CHECK(g_rp.cu->defer == 0 && g_rp.cu->def_k < 0);
+            for (j = 0; j < 16; j++) {
+                if (!v) { if (ysig_value_at(&g_rp, 0, j * MS, &ra[j]) < 0) ra[j].t = -1; }
+                else if (ysig_value_at(&g_rp, 0, j * MS, &rb) < 0) CHECK(ra[j].t == -1);
+                else CHECK(!memcmp(&ra[j], &rb, sizeof rb));
+            }
             rp_frame(16 * MS);
             if (!v) { a[0] = *ysig_value_of(&g_rp, 0); a[1] = *ysig_value_of(&g_rp, 1); ysig_get_stats(&g_rp, &sa); k = lt_hits(); a[2].t = k ? g_lt_hit[0] : -1; }
             else {
@@ -7990,6 +8166,10 @@ int main(void) {
     test_v2_gap_late();
     test_v2_op_order();
     test_v2_time_ends();
+    test_late_no_window();
+    test_v2_l_at_tau();
+    test_v2_n_tau_nowin();
+    test_v2_s1b_nowin();
     test_hold();
     if (g_failures) { fprintf(stderr, "sig_test: %d failures\n", g_failures); return 1; }
     printf("sig_test: all checks passed\n");

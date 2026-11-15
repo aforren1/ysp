@@ -18,24 +18,33 @@ libs = ["-lm"]
 timeout = 60
 
 [test.sig_ref]
+# The reviewer's oracle as ctest runs it for 0.7.0 (CMakeLists.txt,
+# test_sig_arm_ref_late): late mode 4 with A's checks and the switches of
+# 2026-11-15, 3,000 cases, seed 20261115. Seed 20261114 with no switches
+# was 0.6.x's; mutant 330's test at seed 778001 went with the pending code.
 source = "tests/adapt/sig_arm_ref_targets.c"
 compiler = "gcc"
-flags = ["-std=c99", "-O2", "-w", "-DSIG_ARM_REF_SPEC=1", "-DSIG_HAS_UNV"]
+flags = ["-std=c99", "-O2", "-w", "-DSIG_ARM_REF_SPEC=1", "-DSIG_HAS_UNV=1", "-DSIG_HAS_LATE=1", "-DSIG_HAS_LATE_VOIDED=1",
+         "-DSIG_HAS_DISARM_AT=1", "-DSIG_HAS_DETECTED_TO=1", "-DSIG_HAS_DERIVED_TO=1"]
 libs = ["-lm"]
 timeout = 300
-env = { SIG_ORACLE_CASES = "3000", SIG_ORACLE_SEED = "20261114" }
+env = { SIG_ORACLE_CASES = "3000", SIG_ORACLE_SEED = "20261115", SIG_ORACLE_R1 = "1", SIG_ORACLE_GEN_TIE = "1", SIG_ORACLE_GEN_DISARM_AT = "1", SIG_ORACLE_GEN_EXIT = "1", SIG_ORACLE_DAX = "1", SIG_ORACLE_GEN_DRAIN_TO = "1", SIG_ORACLE_DERIVED_TO = "1", SIG_ORACLE_LATE = "4", SIG_ORACLE_LATE_A = "1", SIG_ORACLE_P2STRICT = "1", SIG_ORACLE_PRED = "1" }
 
-[test.sig_ref_778001]
-# The oracle at a second seed, for mutants 330 and 331: seed 20261114 has
-# no input that lets in a group overlapping a pending one but not it;
-# 778001 has (its cases 2140 and 2990). It was one of the coordinator's
-# unseen seeds, chosen for the round before these mutants.
-source = "tests/adapt/sig_arm_ref_targets.c"
+[test.sig_spec]
+# The reviewer's hand-derived cases (ctest test_sig_arm_spec).
+source = "tests/adapt/sig_arm_spec_cases.c"
 compiler = "gcc"
-flags = ["-std=c99", "-O2", "-w", "-DSIG_ARM_REF_SPEC=1", "-DSIG_HAS_UNV"]
+flags = ["-std=c99", "-O2", "-w", "-DSIG_ARM_REF_SPEC=1", "-DSIG_SPEC_R1=1", "-DSIG_SPEC_X1=1"]
 libs = ["-lm"]
-timeout = 300
-env = { SIG_ORACLE_CASES = "3000", SIG_ORACLE_SEED = "778001" }
+timeout = 60
+
+[test.sig_disarm_at]
+# The reviewer's ysig_disarm_at() cases (ctest test_sig_disarm_at).
+source = "tests/adapt/sig_disarm_at_cases.c"
+compiler = "gcc"
+flags = ["-std=c99", "-O2", "-w", "-DSIG_HAS_LATE_VOIDED=1", "-DSIG_SPEC_R1=1", "-DSIG_SPEC_X1=1"]
+libs = ["-lm"]
+timeout = 60
 
 [[mutant]]
 id = "00"
@@ -382,6 +391,7 @@ replace = '                    float c = (float)x->v[0];'
 id = "42"
 name = "detect: samples before the arm's time count"
 test = "sig"
+note = "0.7.0: with a window a late report goes to its place before the arm, so only a graph with no window reaches this (test_late_no_window, v 2)."
 why = "A sample stamped before the window would end it."
 find = '    if (t < s->t_arm) {'
 replace = '    if (0) {'
@@ -576,8 +586,8 @@ test = "sig"
 why = "Two runs whose derived events differ would give one digest."
 find = '''    ysig__digest_word(g, (uint64_t)(uint32_t)i);
     ysig__digest_value(g, v);
-    if (g->cu) g->cu->der_h'''
-replace = '    if (g->cu) g->cu->der_h'
+    e = &held;'''
+replace = '    e = &held;'
 
 [[mutant]]
 id = "66"
@@ -681,6 +691,7 @@ replace = '    if (1) {'
 id = "88"
 name = "detect: a late failing report ignored"
 test = "sig"
+note = "0.7.0: only a graph with no window reaches this (test_late_no_window, v 0)."
 why = "A hand that left before the arm, reported late, would not break the hold (final review S2)."
 find = '''        if (!r) {
             s->holding = 0;'''
@@ -1082,17 +1093,9 @@ test = "sig"
 why = "The call moves the hand: without the entry a replay diverges."
 find = '''    e.t = t_ns;
     ysig__journal(g, &e);
-    ysig__before_state(g, id);
-    g->wt->seq++;
-    g->wt->gap_n++;
-    ysig__log(g, &e);
-    ysig__do_recenter(g, role, x, y, t_ns);'''
+    ysig__before_state(g, id, ysig__nf(g, ysig__down(g, id)));'''
 replace = '''    e.t = t_ns;
-    ysig__before_state(g, id);
-    g->wt->seq++;
-    g->wt->gap_n++;
-    ysig__log(g, &e);
-    ysig__do_recenter(g, role, x, y, t_ns);'''
+    ysig__before_state(g, id, ysig__nf(g, ysig__down(g, id)));'''
 
 [[mutant]]
 id = "126"
@@ -1396,18 +1399,22 @@ test = "sig"
 why = "A replay would place the point at time 0, with other ring times and t."
 find = '''    e.t = t_ns;
     ysig__journal(g, &e);
-    ysig__before_state(g, id);
+    ysig__before_state(g, id, ysig__nf(g, ysig__down(g, id)));
     g->wt->seq++;
+    g->ko = g->wt->seq;
     g->wt->gap_n++;
-    ysig__log(g, &e);
-    ysig__do_recenter(g, role, x, y, t_ns);'''
+    ysig__fp_or(g, g->wt->gap_f, id);
+    ysig__gap_off_note(g, id, ysig__nf(g, ysig__down(g, id)));
+    ysig__log(g, &e);'''
 replace = '''    ysig__journal(g, &e);
-    ysig__before_state(g, id);
+    ysig__before_state(g, id, ysig__nf(g, ysig__down(g, id)));
     g->wt->seq++;
+    g->ko = g->wt->seq;
     g->wt->gap_n++;
+    ysig__fp_or(g, g->wt->gap_f, id);
+    ysig__gap_off_note(g, id, ysig__nf(g, ysig__down(g, id)));
     e.t = t_ns;
-    ysig__log(g, &e);
-    ysig__do_recenter(g, role, x, y, t_ns);'''
+    ysig__log(g, &e);'''
 
 [[mutant]]
 id = "162"
@@ -1768,11 +1775,11 @@ replace = '            (void)e;'
 
 [[mutant]]
 id = "209"
-name = "set: the set's time is the newest event, not the last onset"
+name = "set: the set's time is the newest input of any node, not of the nodes it reaches"
 test = "sig"
 why = "Review 1: with a still hand the newest event is the old sample; its ring entry would take the new value back to before the set."
-find = '    int64_t ts = g->t_fed > g->onset ? g->t_fed : g->onset;'
-replace = '    int64_t ts = g->t_fed;'
+find = '    int64_t ts = ysig__nf(g, ysig__down(g, from));'
+replace = '    int64_t ts = ysig__nf(g, NULL);'
 
 [[mutant]]
 id = "210"
@@ -1781,26 +1788,28 @@ test = "sig"
 why = "v0.6.0 (test_arm_window 2, sig_arm_oracle)."
 find = '''    cu->arm_live = 0;
     ysig__rerun(g, kslot, node, t);
-    if (pnb) {'''
+    cu->n_grp_dis = 0;'''
 replace = '''    cu->arm_live = 0;
     ysig__arm_plain(g, node, t, t);
-    if (pnb) {'''
+    cu->n_grp_dis = 0;'''
 
 [[mutant]]
 id = "211"
 name = "the arm placed at the call, not after the last call that must come first"
 test = "sig"
 why = "v0.6.0 (test_arm_window 2)."
-find = '''        if (ysig__must_before(g, &cu->calls[(pos - 1) % (uint64_t)cu->C], t, F)) break;'''
-replace = '''        if (1) break;'''
+find = '''        while (s > cu->c_tail && c->gid && cu->calls[(s - 1) % (uint64_t)cu->C].gid == c->gid) s--;
+        pos = s;
+        break;'''
+replace = '        break;'
 
 [[mutant]]
 id = "212"
 name = "a call at the group's time counted as later"
 test = "sig"
 why = "v0.6.0: equal times come first (sig_arm_oracle)."
-find = '''    return c->tr <= t && ysig__fp_meets(g, f, F);'''
-replace = '''    return c->tr < t && ysig__fp_meets(g, f, F);'''
+find = '    return ct > t || (ct == t && (k > cls || (k == cls && o > ord)));'
+replace = '    return ct >= t || (ct == t && (k > cls || (k == cls && o > ord)));'
 
 [[mutant]]
 id = "213"
@@ -1848,11 +1857,11 @@ replace = '''            (void)seen;'''
 
 [[mutant]]
 id = "218"
-name = "a hit queued before the checkpoint and handed out since queued again"
+name = "a queued hit made after the checkpoint kept, and queued again by the run again"
 test = "sig"
-why = "v0.6.0 (sig_arm_diff)."
-find = '''        if (cu->qseq[q] > delivered) { g->hitq[j] = g->hitq[q]; cu->qseq[j] = cu->qseq[q]; j++; }'''
-replace = '''        { g->hitq[j] = g->hitq[q]; cu->qseq[j] = cu->qseq[q]; j++; }'''
+why = "v0.6.0 (sig_arm_diff); 0.7.0's anchor: the queue keeps the hits made before the checkpoint, and the run again makes the rest again."
+find = '        if (cu->qseq[q] <= k->hseq) { g->hitq[j] = g->hitq[q];'
+replace = '        { g->hitq[j] = g->hitq[q];'
 
 [[mutant]]
 id = "219"
@@ -1934,8 +1943,8 @@ id = "227"
 name = "no window counted as a window"
 test = "sig"
 why = "v0.6.0 (test_arm_window 1)."
-find = '''        if (t_ns < g->t_cover) g->st.arm_past_off++;'''
-replace = '''        (void)0;'''
+find = '        if (t_ns < g->wt->nfg) g->st.arm_past_off++;'
+replace = '        (void)0;'
 
 [[mutant]]
 id = "228"
@@ -1985,16 +1994,16 @@ id = "233"
 name = "every hit the run again does not give counted as superseded"
 test = "sig"
 why = "v0.6.0 (test_arm_window, sig_arm_oracle): one at or before the arm's time is retracted."
-find = '''            if (cu->tmp[i].h.t > t && ysig__grp_ends(cu, node, cu->tmp[i].h.node)) keep.arm_hits_superseded++;'''
-replace = '''            if (1) keep.arm_hits_superseded++;'''
+find = '            else if (cu->tmp[i].h.t > t && ysig__grp_ends(cu, node, hn)) keep.arm_hits_superseded++;'
+replace = '            else if (1) keep.arm_hits_superseded++;'
 
 [[mutant]]
 id = "234"
 name = "a superseded hit counted as retracted"
 test = "sig"
 why = "v0.6.0 (test_arm_window 5): hits later than the arm's time."
-find = '''            if (cu->tmp[i].h.t > t && ysig__grp_ends(cu, node, cu->tmp[i].h.node)) keep.arm_hits_superseded++;'''
-replace = '''            if (0) keep.arm_hits_superseded++;'''
+find = '            else if (cu->tmp[i].h.t > t && ysig__grp_ends(cu, node, hn)) keep.arm_hits_superseded++;'
+replace = '            else if (0) keep.arm_hits_superseded++;'
 
 [[mutant]]
 id = "235"
@@ -2032,11 +2041,14 @@ replace = '''    if (n->p[5] == 1 || (g->nd[n->in[0]].flags & YSIG__F_FRAME)) re
 
 [[mutant]]
 id = "240"
-name = "a state call at or before the group's time does not restrict its place"
-test = "sig"
-why = "Rule 2: a set made at an input time at or before the arm's, sharing a node, comes before it."
-find = '''    return c->tr <= t && ysig__fp_meets(g, f, F);'''
-replace = '''    return ysig__fp_meets(g, f, F) && c->tr <= t && !ysig__is_state(c->e.kind);'''
+name = "a later state call does not restrict a past group's place"
+test = "sig_ref"
+note = "0.7.0: killed by the reviewer's oracle (sig_ref, seed 20261115: a wrong case with no count). No unit test reaches it."
+why = "Rule 2 by key (v0.7.0): a past group goes before the first logged call that meets it with a greater key, a state call too; left before it, the set's value is read by the group's arm."
+find = '''        if (ysig__fp_entry(g, c, f) == 2 || !ysig__call_gt(g, c, t, 2, seq) || !ysig__fp_meets(g, f, F)) continue;
+        while (s > cu->c_tail'''
+replace = '''        if (ysig__fp_entry(g, c, f) == 2 || !ysig__call_gt(g, c, t, 2, seq) || !ysig__fp_meets(g, f, F) || ysig__is_state(c->e.kind)) continue;
+        while (s > cu->c_tail'''
 
 [[mutant]]
 id = "241"
@@ -2052,9 +2064,9 @@ id = "242"
 name = "a waiting arm made before an input at its own time"
 test = "sig"
 why = "Rule 3: an input at the arm's time comes before it (it waits for one later)."
-find = '''            if (incl ? w->a[k].t > t || (w->a[k].t == t && w->a[k].seq > incl) : w->a[k].t >= t) continue;
+find = '''            if (incl ? at > kt || (at == kt && w->a[k].seq > incl) : at >= kt) continue;
             if (f) {'''
-replace = '''            if (incl ? w->a[k].t > t || (w->a[k].t == t && w->a[k].seq > incl) : w->a[k].t > t) continue;
+replace = '''            if (incl ? at > kt || (at == kt && w->a[k].seq > incl) : at > kt) continue;
             if (f) {'''
 
 [[mutant]]
@@ -2075,19 +2087,11 @@ replace = '''        return true;'''
 
 [[mutant]]
 id = "245"
-name = "a run again's hits capped at the live queue"
+name = "the hit queue holds 64, not 64 + catchup_calls (a run again's hits capped at the live queue)"
 test = "sig"
 why = "Review of 0.6.0, finding 6 (test_arm_review 6: 88 hits handed out, none lost)."
-find = '''    if (g->n_hit >= YSIG_QUEUE_CAP + (g->cu && g->cu->replaying ? g->cu->C : 0)) { g->st.hits_lost++; return; }'''
-replace = '''    if (g->n_hit >= YSIG_QUEUE_CAP) { g->st.hits_lost++; return; }'''
-
-[[mutant]]
-id = "246"
-name = "a run again's derived losses counted"
-test = "sig"
-why = "Review of 0.6.0, finding 6 (test_arm_review 6)."
-find = '''    g->st.derived_lost = keep.derived_lost;'''
-replace = '''    (void)0;'''
+find = '#define YSIG__QCAP(g) (YSIG_QUEUE_CAP + ((g)->cu ? (g)->cu->C : 0))'
+replace = '#define YSIG__QCAP(g) (YSIG_QUEUE_CAP)'
 
 [[mutant]]
 id = "247"
@@ -2145,8 +2149,8 @@ id = "254"
 name = "another detect's voided later hit counted superseded"
 test = "sig"
 why = "The second review of the fix round, C: only the re-armed detect's own later hits are superseded; another's the caller may have taken (test_arm_review2, r12)."
-find = '''            if (cu->tmp[i].h.t > t && ysig__grp_ends(cu, node, cu->tmp[i].h.node)) keep.arm_hits_superseded++;'''
-replace = '''            if (cu->tmp[i].h.t > t) keep.arm_hits_superseded++;'''
+find = '            else if (cu->tmp[i].h.t > t && ysig__grp_ends(cu, node, hn)) keep.arm_hits_superseded++;'
+replace = '            else if (cu->tmp[i].h.t > t) keep.arm_hits_superseded++;'
 
 [[mutant]]
 id = "255"
@@ -2203,19 +2207,11 @@ replace = '''    (void)a; (void)b; (void)w;
     return 1;'''
 
 [[mutant]]
-id = "261"
-name = "a pinned group not counted"
-test = "sig"
-why = "The semantics: a pinned group is a fallback the guard sees (test_arm_spec)."
-find = '''ysig__fp_entry(g, c, f) == 1 && ysig__fp_meets(g, f, F)) pinned = 1;'''
-replace = '''ysig__fp_entry(g, c, f) == 1 && ysig__fp_meets(g, f, F)) (void)0;'''
-
-[[mutant]]
 id = "262"
 name = "an arm ahead of the input made at once"
 test = "sig"
 why = "Rule 3 (E): it waits for input past its time (test_arm_spec r15, test_arm_window finding 4)."
-find = '''    if (t_ns > g->t_cover) {
+find = '''    if (t_ns > nfg) {
         ysig__arm_wait(g, node, t_ns, seq);'''
 replace = '''    if (0) {
         ysig__arm_wait(g, node, t_ns, seq);'''
@@ -2225,8 +2221,8 @@ id = "263"
 name = "a disarm does not cancel a waiting arm"
 test = "sig"
 why = "Rule 3: a disarm cancels the waiting arms of its detect with a later time (test_arm_spec, alone and in an exit's group)."
-find = '''        if (w->a[k].node == node && w->a[k].t >= t && w->a[k].seq < seq) {'''
-replace = '''        if (0) {'''
+find = '        if (w->a[k].node == node && ysig__kt(g, w->a[k].t) > ysig__kt(g, t) && w->a[k].seq < seq) {'
+replace = '        if (0) {'
 
 [[mutant]]
 id = "264"
@@ -2274,32 +2270,20 @@ id = "269"
 name = "a flush not a barrier"
 test = "sig"
 why = "ysig_flush(): every row so far is final, no arm goes before it (test_arm_spec)."
-find = '''static void ysig__do_flush(ysig_graph* g) {
-    if (g->cu) {'''
-replace = '''static void ysig__do_flush(ysig_graph* g) {
-    if (0) {'''
-
-[[mutant]]
-id = "270"
-name = "a run again's checkpoint kept with more than 64 hits queued"
-test = "sig_ubsan"
-why = "An image keeps 64 hits (F): more would write past it (test_arm_review finding 6, then frames)."
-find = '''    if (g->n_hit > YSIG_QUEUE_CAP) return;
-    if (cu->n_ck == cu->K) {'''
-replace = '''    if (cu->n_ck == cu->K) {'''
+find = '''    ysig__key_bar(g, g->t_cover, 0);
+    if (g->cu) {
+        ysig__cu_clear'''
+replace = '''    ysig__key_bar(g, g->t_cover, 0);
+    if (0) {
+        ysig__cu_clear'''
 
 [[mutant]]
 id = "271"
 name = "a past group not moved to its place"
 test = "sig"
 why = "Rule 2: the group and its arm go as one block to their place (test_arm_spec r11 and r11b)."
-find = '''        for (q = from; q > pos; q--) cu->calls[(q - 1 + (uint64_t)nb) % (uint64_t)cu->C] = cu->calls[(q - 1) % (uint64_t)cu->C];
-        for (w = 0; w < nb; w++) cu->calls[(pos + (uint64_t)w) % (uint64_t)cu->C] = blk[w];
-        cu->c_head = from + (uint64_t)nb;
-        cu->arm_pos = pos + (uint64_t)nb - 1;'''
-replace = '''        for (w = 0; w < nb; w++) cu->calls[(from + (uint64_t)w) % (uint64_t)cu->C] = blk[w];
-        cu->c_head = from + (uint64_t)nb;
-        cu->arm_pos = from + (uint64_t)nb - 1;'''
+find = '        pos = pos < from ? ysig__late_move_k(g, from, pos, pf, t, 2, seq) : from;'
+replace = '        pos = from;'
 
 [[mutant]]
 id = "272"
@@ -2314,8 +2298,8 @@ id = "273"
 name = "final-only derived events handed out at once"
 test = "sig"
 why = "desc.derived_final (test_arm_spec: held, then handed out once final)."
-find = '''    if (g->cu && g->cu->derived_final) e = &held;'''
-replace = '''    if (0) e = &held;'''
+find = '    if (g->cu && g->cu->derived_final) { ysig__db_push(g, &held); return; }'
+replace = '    (void)0;'
 
 [[mutant]]
 id = "274"
@@ -2327,11 +2311,11 @@ replace = '''    (void)k;'''
 
 [[mutant]]
 id = "275"
-name = "input before the window never pins"
+name = "a call before the window that must follow the group never pins"
 test = "sig"
 why = "The reviewer's H1: frames older than the log that pin a group (test_arm_repro)."
-find = '''    if (cu->n_ck && !cu->ck[cu->ck0].bar && cu->ck[cu->ck0].cover > t) pinned = 1;'''
-replace = '''    (void)0;'''
+find = '    if (!cu->n_ck || ysig__ck_late(g, cu->ck0, F, t, 2, seq)) pinned = 1;'
+replace = '    if (!cu->n_ck) pinned = 1;'
 
 [[mutant]]
 id = "276"
@@ -2356,8 +2340,8 @@ id = "278"
 name = "an arm call lets no waiting arm in"
 test = "sig"
 why = "S2: an arm call is at the smaller of its time and N (the reviewer's H6, test_arm_repro)."
-find = '''    if (g->wt->n && t_ns <= g->t_cover) {'''
-replace = '''    if (0) {'''
+find = '    if (g->wt->n && t_ns <= nfg) {'
+replace = '    if (0) {'
 
 [[mutant]]
 id = "279"
@@ -2371,9 +2355,10 @@ replace = '''    return cu->cur != UINT64_MAX ? cu->cur : cu->c_head;'''
 id = "280"
 name = "ysig_derived() does not refill the queue"
 test = "sig"
+note = "0.7.0: the queue holds 64 + catchup_calls, so H8's 240 events fit; the H8 loop's barrier 3 (16 calls, no drain before the flush) needs the refill."
 why = "The reviewer's H8: final events that waited for room (test_arm_repro: a barrier makes 240 final)."
-find = '''    if (g->cu && g->cu->derived_final && !g->busy) ysig__out_final(g);'''
-replace = '''    (void)0;'''
+find = '    if (cu && cu->derived_final && !g->busy) ysig__out_final(g);'
+replace = '    (void)0;'
 
 [[mutant]]
 id = "281"
@@ -2396,6 +2381,7 @@ replace = '''        continue;'''
 id = "283"
 name = "a waiting group placed in a gap ends the gap"
 test = "sig"
+note = "Open (0.7.0 release gates, 2026-11-15): survives sig_test (also with no window in test_arm_exact), the spec and disarm_at cases, and the oracle at seed 20261115 with the late generator on and off. Not shown equivalent; no killing test yet."
 why = "H9: a waiting group let in by a state call is not that gap's group; the gap stays open (test_arm_repro: the offset's set waits with the group)."
 find = '''    if (!st && !cu->placing) cu->grp_open = cu->grp_bad = 0;'''
 replace = '''    if (!st) cu->grp_open = cu->grp_bad = 0;'''
@@ -2405,13 +2391,16 @@ id = "284"
 name = "an arm call lets in only earlier waiting groups"
 test = "sig"
 why = "S3: at or before its time (test_arm_repro)."
-find = '''        ysig__wait_fire(g, t_ns, f, UINT64_MAX);'''
-replace = '''        ysig__wait_fire(g, t_ns, f, 0);'''
+find = '''        g->wt->cas_dis = g->wt->n_dis > 0 || g->wt->gap4_wp;
+        ysig__wait_fire(g, t_ns, f, UINT64_MAX);'''
+replace = '''        g->wt->cas_dis = g->wt->n_dis > 0 || g->wt->gap4_wp;
+        ysig__wait_fire(g, t_ns, f, 0);'''
 
 [[mutant]]
 id = "285"
 name = "a gap opens after its first state call's triggers"
 test = "sig"
+note = "Open (0.7.0 release gates, 2026-11-15): survives sig_test (also with no window in test_arm_exact), the spec and disarm_at cases, and the oracle at seed 20261115 with the late generator on and off. Not shown equivalent; no killing test yet."
 why = "H9 with a recenter: what the gap's first call lets in is in the gap, so an ahead group takes it back (test_arm_repro)."
 find = '''    if (g->cu && !g->cu->grp_open && !g->cu->replaying && g->cu->n_ck) {
         g->cu->grp_open = 1;'''
@@ -2423,13 +2412,14 @@ id = "286"
 name = "an ahead arm lets in at its call"
 test = "sig"
 why = "H12: an ahead arm lets in nothing until its group goes in (test_arm_repro H12)."
-find = '''    if (g->wt->n && t_ns <= g->t_cover) {'''
-replace = '''    if (g->wt->n) {'''
+find = '    if (g->wt->n && t_ns <= nfg) {'
+replace = '    if (g->wt->n) {'
 
 [[mutant]]
 id = "287"
 name = "a waiting arm lets in nothing when its group goes in"
 test = "sig"
+note = "Open (0.7.0 release gates, 2026-11-15): survives sig_test (also with no window in test_arm_exact), the spec and disarm_at cases, and the oracle at seed 20261115 with the late generator on and off. Not shown equivalent; no killing test yet."
 why = "H12: the ahead arm lets in at its time when its group goes in."
 find = '''        ysig__wait_fire(g, a.t, f, a.seq);'''
 replace = '''        (void)f;'''
@@ -2439,36 +2429,39 @@ id = "288"
 name = "a past group's calls let nothing in at its place"
 test = "sig"
 why = "H13: a waiting group that a past group's call lets in goes in at the group's place (test_arm_repro H13: detect a armed at 20 ms)."
-find = '''            ysig__wait_fire_blk(g, t, fs, c->e.kind == YSIG_J_ARM ? UINT64_MAX : 0, &nb);'''
-replace = '''            (void)fs;'''
+find = '''            ysig__wait_fire_blk(g, present ? c->n_at : t, fs,
+                                c->e.kind == YSIG_J_ARM || (present && ysig__kt(g, c->n_at) < ysig__kt(g, t)) ? UINT64_MAX : seq, &nb);'''
+replace = '            (void)fs;'
 
 [[mutant]]
 id = "289"
-name = "a past group lets in at N, not at its time"
+name = "a past group's calls let in at their N(F(c)), not at its time"
 test = "sig"
-why = "H13: at the group's place its calls are at its time; a waiting group later than it goes back to waiting (test_arm_repro H13, the arm at 15 ms)."
-find = '''            ysig__wait_fire_blk(g, t, fs, c->e.kind == YSIG_J_ARM ? UINT64_MAX : 0, &nb);'''
-replace = '''            ysig__wait_fire_blk(g, g->t_cover, fs, c->e.kind == YSIG_J_ARM ? UINT64_MAX : 0, &nb);'''
+why = "H13 and S1': at a past group's place its calls are at its time (tau), not at their call's N(F(c)); a waiting group between the two goes in at the wrong place."
+find = '            ysig__wait_fire_blk(g, present ? c->n_at : t, fs,'
+replace = '            ysig__wait_fire_blk(g, c->n_at, fs,'
 
 [[mutant]]
 id = "290"
-name = "final-only: the queue put back after a run again"
+name = "the live queue's events made since the checkpoint kept in a run again"
 test = "sig"
-why = "H11: the final events a run again hands out (its held buffer full) stay in the queue (test_arm_repro H11 (b): a held buffer of 48)."
+why = "H11, 0.7.0's anchor: in a run again the queue keeps only the events made before the checkpoint; the run again makes the rest again, so keeping them queues them twice."
 find = '''    if (!cu->derived_final) {
-        g->st.derived_lost = keep.derived_lost;'''
-replace = '''    if (1) {
-        g->st.derived_lost = keep.derived_lost;'''
+        for (q = j = 0; q < g->n_der; q++)'''
+replace = '''    if (0) {
+        for (q = j = 0; q < g->n_der; q++)'''
 
 [[mutant]]
 id = "291"
-name = "final-only: the queue as the checkpoint had it in a run again"
+name = "final-only: the queue cut back to the checkpoint's in a run again"
 test = "sig"
-why = "H11: events queued and not drained when a run again starts stay (test_arm_repro H11, no drains until the flush)."
-find = '''    if (cu->derived_final) {
-        /* the queue as the caller left it'''
-replace = '''    if (0) {
-        /* the queue as the caller left it'''
+note = "Equivalent (0.7.0): with derived_final every event reaches the queue through ysig__out_final(), which writes no dseq; ysig_open() zeroes the arena, so every queued final event has dseq 0 and k->dseq is 0 too (next_dseq is only raised on the non-final path). The filter keeps them all, as the original does."
+expect = "survived"
+why = "H11: final-only events queued and not drained when a run again starts stay, as the caller left them (test_arm_repro H11, no drains until the flush)."
+find = '''    if (!cu->derived_final) {
+        for (q = j = 0; q < g->n_der; q++)'''
+replace = '''    if (1) {
+        for (q = j = 0; q < g->n_der; q++)'''
 
 [[mutant]]
 id = "292"
@@ -2483,6 +2476,7 @@ replace = '''        cu->ck0 = (cu->ck0 + 1) % cu->K;'''
 id = "293"
 name = "a failing value before the arm readies only a detect with a hold"
 test = "sig"
+note = "0.7.0: only a graph with no window reaches this (test_late_no_window, the O3 loop)."
 why = "O3: a value earlier than the arm is before it: no hit and no hold start, but its failure makes any detect ready again (test_arm_repro O3: a fresh detect hits at 35 ms)."
 find = '''        if (!r) {
             s->holding = 0;
@@ -2508,16 +2502,16 @@ id = "295"
 name = "the equal-time later group not let in after the arm"
 test = "sig"
 why = "H16, S3: the arm still lets it in, right after itself (test_arm_repro H16, no window: D2 hits)."
-find = '''        ysig__cas_pop(g, ci);
-        ci = -1;
-        ysig__wait_fire(g, a.t, f, UINT64_MAX);'''
-replace = '''        ysig__cas_pop(g, ci);
-        ci = -1;'''
+find = '''        ysig__wait_fire(g, a.t, f, UINT64_MAX);
+    } else if (a.node >= 0) {'''
+replace = '    } else if (a.node >= 0) {'
 
 [[mutant]]
 id = "296"
 name = "a past arm placed by a log no checkpoint keeps"
 test = "sig"
+note = "Equivalent (0.7.0): with no checkpoint, ysig__arm_past() sets pinned (if (!cu->n_ck || ysig__ck_late(...))), and the block's only effect is under if (nothing && !pinned); the scan before it has no side effect."
+expect = "survived"
 why = "Residual 1414: with no checkpoint the log is stale; the arm falls back, counted (test_arm_repro, the late report at 0.5 ms)."
 find = '''    if (cu->n_ck && !cu->grp_bad && cu->c_head - cu->c_tail < (uint64_t)cu->C &&'''
 replace = '''    if (!cu->grp_bad && cu->c_head - cu->c_tail < (uint64_t)cu->C &&'''
@@ -2526,30 +2520,16 @@ replace = '''    if (!cu->grp_bad && cu->c_head - cu->c_tail < (uint64_t)cu->C &
 id = "297"
 name = "what a past arm lets in placed at the end of the log"
 test = "sig"
+note = "Open (0.7.0 release gates, 2026-11-15): survives sig_test (also with no window in test_arm_exact), the spec and disarm_at cases, and the oracle at seed 20261115 with the late generator on and off. Not shown equivalent; no killing test yet."
 why = "Residual 1650: it goes in at the arm's place; at the end it pinned the group after later input (test_arm_repro)."
-find = '''        if (cu && t_ns < g->t_cover && !cu->grp_open && !cu->replaying && cu->n_ck) {'''
-replace = '''        if (0) {'''
-
-[[mutant]]
-id = "298"
-name = "exactness: no late report counted (condition 3)"
-test = "sig"
-why = "Condition 3: an input earlier than an arm in R that meets it, made after it (test_arm_exact 3)."
-find = '''        if (t < w->lr[i].t && (!f || ysig__fp_meets(g, f, w->lr[i].F))) ysig__unv(g, w->lr[i].gid);'''
-replace = '''        if (0) ysig__unv(g, w->lr[i].gid);'''
-
-[[mutant]]
-id = "299"
-name = "exactness: a late report at the arm's time counted"
-test = "sig"
-why = "Condition 3 as decided: an input at the arm's time is not a late report (test_arm_exact 3, the 25 ms control)."
-find = '''        if (t < w->lr[i].t && (!f || ysig__fp_meets(g, f, w->lr[i].F))) ysig__unv(g, w->lr[i].gid);'''
-replace = '''        if (t <= w->lr[i].t && (!f || ysig__fp_meets(g, f, w->lr[i].F))) ysig__unv(g, w->lr[i].gid);'''
+find = '        if (cu && t_ns < nfg && !cu->grp_open && !cu->replaying && cu->n_ck) {'
+replace = '        if (0) {'
 
 [[mutant]]
 id = "300"
 name = "exactness: a group let in inside another's block not counted"
 test = "sig"
+note = "Open (0.7.0 release gates, 2026-11-15): survives sig_test (also with no window in test_arm_exact), the spec and disarm_at cases, and the oracle at seed 20261115 with the late generator on and off. Not shown equivalent; no killing test yet."
 why = "Condition 1 (test_arm_exact: x inside y's block)."
 find = '''        int bad = c->inside || w->cas_in;
         if (c->cancelled && !c->ncalls) continue;'''
@@ -2561,8 +2541,8 @@ id = "301"
 name = "exactness: L need not meet the arm"
 test = "sig"
 why = "Condition 2 (a): L meets F_a(G) (test_arm_exact 2 (a): device 3 lets in d1's group by its set)."
-find = '''                (!w->cas_all && (!ysig__fp_meets(g, w->cas_f, c->F) || !ysig__fp_meets(g, w->cas_f, c->Fa))) || !ysig__fp_any(g, c->Fa)) bad = 1;'''
-replace = '''                (!w->cas_all && !ysig__fp_meets(g, w->cas_f, c->F)) || !ysig__fp_any(g, c->Fa)) bad = 1;'''
+find = '(!w->cas_all && (!ysig__fp_meets(g, w->cas_f, c->F) || !ysig__fp_meets(g, w->cas_f, c->Fa))) || !ysig__fp_any(g, c->Fa)) bad = 1;'
+replace = '(!w->cas_all && !ysig__fp_meets(g, w->cas_f, c->F)) || !ysig__fp_any(g, c->Fa)) bad = 1;'
 
 [[mutant]]
 id = "302"
@@ -2603,8 +2583,8 @@ id = "306"
 name = "exactness: a later past group between an open group and its L not counted"
 test = "sig"
 why = "Condition 2 (b) with a window (test_arm_exact: d2's group with a set of d1 placed between)."
-find = '''                    !ysig__unv_x_ok(g, s, o->gid, o->t, s >= pos && s < end ? N : nx, li)) {'''
-replace = '''                    0) {'''
+find = '                    !ysig__unv_x_ok(g, s, o->gid, o->t, s >= pos && s < end ? N : nx, li, 0)) {'
+replace = '                    0) {'
 
 [[mutant]]
 id = "307"
@@ -2650,6 +2630,7 @@ replace = '''        if (0) return 0;'''
 id = "312"
 name = "exactness: a late report after a past group with N(G) at its time counted"
 test = "sig"
+note = "Open (0.7.0 release gates): condition 3's table (w->lr) has no reader since 4413272 removed ysig__ux_input(); its only effect is the overflow count at YSIG__UX (32) armed detects. The mutant changes which groups enter the table, so only that count can change. Survives sig_test and the oracle (seed 20261115, on and off). For the reviewer: remove the table, or test the overflow."
 why = "Condition 3 is for a group that waits at its place (test_arm_exact: device 3 at 30 ms before the place)."
 find = '''        if (armed >= 0 && N < t) ysig__ux_arm(g, armed, t, gid, F);   /* condition 3: while it waits */'''
 replace = '''        if (armed >= 0) ysig__ux_arm(g, armed, t, gid, F);   /* condition 3: while it waits */'''
@@ -2658,6 +2639,7 @@ replace = '''        if (armed >= 0) ysig__ux_arm(g, armed, t, gid, F);   /* con
 id = "313"
 name = "exactness: 2 (c) only while the group waits"
 test = "sig"
+note = "Open (0.7.0 release gates, 2026-11-15): survives sig_test (also with no window in test_arm_exact), the spec and disarm_at cases, and the oracle at seed 20261115 with the late generator on and off. Not shown equivalent; no killing test yet."
 why = "2 (c) at any N(G) but its time (the reviewer's 490 and 1821; test_arm_exact)."
 find = '''        if (c->cancelled && ysig__fp_any(g, c->Fa) && c->n_at != c->t) bad = 1;'''
 replace = ''''''
@@ -2676,6 +2658,7 @@ replace = ''''''
 id = "314"
 name = "exactness: condition 4 not tested in a cascade"
 test = "sig"
+note = "Open (0.7.0 release gates, 2026-11-15): survives sig_test (also with no window in test_arm_exact), the spec and disarm_at cases, and the oracle at seed 20261115 with the late generator on and off. Not shown equivalent; no killing test yet."
 why = "Condition 4: a disarm in the gap a let-in group's arm closes (the reviewer's 883; test_arm_exact 4 (a), (c))."
 find = '''                if (w->cc[j].kind == YSIG_J_DISARM) { bad = 1; break; }
             }
@@ -2687,6 +2670,7 @@ replace = '''                if (w->cc[j].kind == YSIG_J_DISARM) { bad = 1; brea
 id = "315"
 name = "exactness: condition 4 not tested at a past group's place"
 test = "sig"
+note = "Open (0.7.0 release gates, 2026-11-15): survives sig_test (also with no window in test_arm_exact), the spec and disarm_at cases, and the oracle at seed 20261115 with the late generator on and off. Not shown equivalent; no killing test yet."
 why = "Condition 4 in the log (the reviewer's 404; test_arm_exact 4 (b))."
 find = '''                if (c->e.kind == YSIG_J_DISARM) { bad = 1; break; }
             }
@@ -2708,6 +2692,7 @@ replace = ''''''
 id = "318"
 name = "exactness: an arm's let-ins not inside its group's block"
 test = "sig"
+note = "Open (0.7.0 release gates, 2026-11-15): survives sig_test (also with no window in test_arm_exact), the spec and disarm_at cases, and the oracle at seed 20261115 with the late generator on and off. Not shown equivalent; no killing test yet."
 why = "Condition 1 (the reviewer's 1137; test_arm_exact 4 (d))."
 find = '''        g->wt->cas_in = g->wt->gap_n > 0;'''
 replace = ''''''
@@ -2751,81 +2736,344 @@ test = "sig"
 why = "S1: in a waiting (ahead) group the disarms go after the group's other calls, as the gap's end (the oracle's case 3578 of seed 31415; test_disarm_at_gap_end, the ahead group)."
 find = '''     * group) */
     ysig__dis_last(g);
-    if (cu)'''
+    if (cu && w->n) {'''
 replace = '''     * group) */
-    if (cu)'''
-
-[[mutant]]
-id = "324"
-name = "a group with no L in R yet counted at its going-in, as 0.6.0"
-test = "sig"
-why = "0.6.1: an arm and disarms only is pending (test_pending: L, a frame, a disarm in no group, a present group decide it exact)."
-find = '''                if (!bad) {
-                    ysig__op_add(g, gid, t, F, 0, armed);'''
-replace = '''                if (1) bad = 1;
-                if (!bad) {
-                    ysig__op_add(g, gid, t, F, 0, armed);'''
-
-[[mutant]]
-id = "325"
-name = "a pending group's change at its call not counted"
-test = "sig"
-why = "A read sees the arm's entry-now hit at its call; the graph with no window does not yet (test_pending, its own call)."
-find = '''        if (ysig__pend_hash(g, pf) != ph || g->st.hits != phits) {'''
-replace = '''        if (0) {'''
+    if (cu && w->n) {'''
 
 [[mutant]]
 id = "326"
-name = "an input at or before a pending group's time taken as its L"
+name = "an input at a past group's time taken as its L"
 test = "sig"
-why = "R puts it after the arm, the graph with no window before it (test_pending: inputs at 22 and at 25 ms)."
-find = '''            if (meets && t > o->t) { o->l_seq = w->seq; i++; continue; }   /* L: this input, logged next */'''
-replace = '''            if (meets) { o->l_seq = w->seq; i++; continue; }   /* L: this input, logged next */'''
+note = "Open (0.7.0 release gates): in a log in key order every input after a past group's place that meets F(G) is later than tau, so the mutant can differ only where a fallback (late_far, late_full) left a late input out of key order, a case already counted. Survives sig_test and the oracle (seed 20261115, on and off). Not proven equivalent."
+why = "L(G) is an input later than tau (2 (a)); an input at tau is in R before G when it meets F(G) (ruling 4), not its L. Was a pending-group mutant (0.6.1); the pending code went in 181093f."
+find = '                    if (ti > t && ysig__fp_meets(g, f, F)) { li = u; break; }'
+replace = '                    if (ti >= t && ysig__fp_meets(g, f, F)) { li = u; break; }'
 
 [[mutant]]
-id = "327"
-name = "a barrier decides a pending group exact"
+id = "340"
+name = "late input: a late call not placed by key (left at R's end)"
 test = "sig"
-why = "The graph with no window cancels the waiting arm at a barrier, R keeps it made (test_pending: a flush, a trial reset)."
-find = '''        ysig__pend_hit(g, NULL, 1, 0);
-    }
-    ysig__dis_last(g);'''
-replace = '''        ysig__pend_hit(g, NULL, 0, 0);
-    }
-    ysig__dis_last(g);'''
+why = "sig.md, Late input: a call with a key smaller than a call R holds goes to its place by key, and the window runs again; at R's end a later input on the same nodes is read before it."
+find = '''        while (s > lo && c->gid && cu->calls[(s - 1) % C].gid == c->gid) s--;
+        p0 = s;
+        break;'''
+replace = '        break;'
 
 [[mutant]]
-id = "328"
-name = "an ahead group that meets a pending one decides it exact"
+id = "341"
+name = "late input: a late feed not seen as late"
 test = "sig"
-why = "It waits too in the graph with no window, which makes its sets at once (test_pending, the ahead group)."
-find = '''        else if (t_ns > g->t_cover) ysig__pend_hit(g, fpend, 1, 0);'''
-replace = '''        else if (t_ns > g->t_cover) ysig__pend_hit(g, fpend, 0, 0);'''
+why = "A feed with an input time before an input R holds on its nodes is late (sig.md, Late input); made at R's end it is read after the later input, and a hit or a value is wrong with no count."
+find = '        late = ysig__is_late(g, f, e->t, 0, g->ko);'
+replace = '        late = 0;'
 
 [[mutant]]
-id = "329"
-name = "a gap with no arm counts a pending group it meets"
+id = "342"
+name = "R1: three classes at one time (a frame or a settle before a state call)"
 test = "sig"
-why = "A state call in no group is at the input time and lets the waiting arm in first (test_pending: the disarm when the state ends)."
-find = '''        if (ysig__pend_gap_fp(g, -1, fg)) ysig__pend_hit(g, fg, 0, ysig__pend_gap_seq(g));
-        else ysig__pend_hit(g, NULL, 1, 0);'''
-replace = '''        if (ysig__pend_gap_fp(g, -1, fg)) ysig__pend_hit(g, fg, 1, 0);
-        else ysig__pend_hit(g, NULL, 1, 0);'''
+why = "R1 (2026-11-15): at one time a feed comes first; frames, settles, state calls and groups then go by call order, as in 0.6.x. With three classes a frame made after a set at its time goes before it in R."
+find = '#define YSIG__OC(cls) ((cls) > 0)'
+replace = '#define YSIG__OC(cls) (cls)'
 
 [[mutant]]
-id = "330"
-name = "a pending group decided exact is not kept open with its L"
-test = "sig_ref_778001"
-expect = "survived"
-note = "Not reached: the oracle at 778001 to 778004 and 20261114 (3,000 cases each) and 61441 (20,000) finds no case with no count with it. Case 890 of 778001, which showed the shape on the first build, is counted by the rule of mutant 331 since. Kept as the text's rule (sig.md, Pending groups) and a guard."
-why = "A later past group placed between it and the call that let it in is tested by 2 (b) (the oracle's 890 of seed 778001)."
-find = '''            if (!count && lseq) { o->l_seq = lseq; i++; continue; }'''
-replace = '''            if (!count && lseq) count = 0;'''
+id = "343"
+name = "X1: a disarm_at lets no waiting group in"
+test = "sig"
+why = "X1: ysig_disarm_at() lets in the waiting groups at or before its t, as an arm call does; else a group at or before t stays waiting after the arm ends and its hit is lost or late."
+find = '''        w->cas_dax = node + 1;
+        ysig__wait_fire(g, t_ns, f, UINT64_MAX);'''
+replace = '        w->cas_dax = node + 1;'
 
 [[mutant]]
-id = "331"
-name = "an input that lets in a group sharing a node with a pending one, not counted"
+id = "344"
+name = "X1: a disarm_at lets in only the groups before its t"
 test = "sig"
-why = "The graph with no window makes that group before the pending one, against R's order (the oracle's reason 6; test_pending's pg_reason6: an ahead group let in by an input that does not meet the pending group, no fallback in the case). The oracle at 778001 killed it too until its B-cannot tally accepted fallbacks."
-find = '''        if (!o->l_seq && (meets || ysig__fp_meets(g, gone, o->F))) {'''
-replace = '''        if (!o->l_seq && meets) {'''
+why = "X1: inclusive at t (S3): an arm of the node at t is made, then ended, as the call's text says; every waiting group at t was made before the call."
+find = '''        w->cas_dax = node + 1;
+        ysig__wait_fire(g, t_ns, f, UINT64_MAX);'''
+replace = '''        w->cas_dax = node + 1;
+        ysig__wait_fire(g, t_ns, f, 0);'''
+
+[[mutant]]
+id = "345"
+name = "X1, R2: a disarm_at at tau is not L(G) (2 (a) counts G)"
+test = "sig"
+note = "Killed by test_v2_l_at_tau (v 0; v 1 the control)."
+why = "Ruling 5 (R2): a ysig_disarm_at() with t at or after tau that lets G in is G's L for 2 (a). Read as later only, a group the player's state ends at its own tau is counted with no cause."
+find = '(w->cas_kind == YSIG__CAS_STATE && w->cas_dax > 0 && w->cas_t >= c->t)'
+replace = '(w->cas_kind == YSIG__CAS_STATE && w->cas_dax > 0 && w->cas_t > c->t)'
+
+[[mutant]]
+id = "346"
+name = "R2: a frame or a settle at tau is not L(G) (2 (a) counts G)"
+test = "sig"
+why = "Ruling 5 (R2): a frame or a settle at G's tau lets G in and is its L. Without it, every group a frame at its onset lets in is counted with no cause."
+find = '(w->cas_t > c->t || (w->cas_t == c->t && w->cas_fs))'
+replace = 'w->cas_t > c->t'
+
+[[mutant]]
+id = "347"
+name = "R1: a frame or a settle lets in only the groups before its time"
+test = "sig"
+why = "R1: a frame or a settle at t lets in the waiting groups at t too (by key they are before it). Left waiting, such a group goes in later, before a frame already drawn: a run again and a late_frames count."
+find = '        ysig__wait_fire(g, t, f, fs ? UINT64_MAX : 0);'
+replace = '        ysig__wait_fire(g, t, f, 0);'
+
+[[mutant]]
+id = "348"
+name = "R2: a late frame or settle at tau is not a group's new L"
+test = "sig"
+note = "Killed by test_v2_l_at_tau (v 2; v 3 the control)."
+why = "ysig__late_lets(): a late unit lets G in as its new L when it is an input after tau, a frame or a settle at tau (R1), or a lone disarm_at at or after tau. Without the frame at tau, 2 (a) is not tested again with it and G is counted (late_unverified)."
+find = '(t > o->t || (cls == 1 && t == o->t))'
+replace = '(t > o->t)'
+
+[[mutant]]
+id = "349"
+name = "S1': a set lets in at N, not at N(F(c))"
+test = "sig"
+why = "S1' (2026-11-15): a state call in no group or of a present or ahead group lets in at N(F(c)) at its call. At N, input of another device that is not complete yet lets a group in, and that device's next report voids a hit already handed out."
+find = '''    e.kind = YSIG_J_SET;
+    e.node = node;
+    e.param = param;
+    e.value = v;
+    ysig__journal(g, &e);
+    ysig__before_state(g, node, ysig__nf(g, ysig__down(g, node)));'''
+replace = '''    e.kind = YSIG_J_SET;
+    e.node = node;
+    e.param = param;
+    e.value = v;
+    ysig__journal(g, &e);
+    ysig__before_state(g, node, g->t_cover);'''
+
+[[mutant]]
+id = "350"
+name = "S1': an ahead group's state call lets in at tau, not at its N(F(c))"
+test = "sig_ref"
+note = "0.7.0: killed by the reviewer's oracle (sig_ref, seed 20261115). No unit test reaches it."
+why = "S1': an ahead group's state calls let in at their call's N(F(c)); at tau they let a group in on input that is not complete yet."
+find = '        ysig__wait_fire(g, cn[i], f, !with_arm ? 0 :'
+replace = '        ysig__wait_fire(g, a.t, f, !with_arm ? 0 :'
+
+[[mutant]]
+id = "351"
+name = "S1' (b): a present group's calls not inclusive by key"
+test = "sig"
+note = "Killed by test_v2_s1b_nowin (v 0; v 1 the control)."
+why = "S1' (b): a waiting group at a call's key time that the call meets goes in right before it (made before the arm); exclusive, it goes in after the present group's calls, against R."
+find = '''            ysig__wait_fire(g, t_ns, gf, seq);   /* inclusive by key (S1' (b)) */'''
+replace = '''            ysig__wait_fire(g, t_ns, gf, 0);   /* inclusive by key (S1' (b)) */'''
+
+[[mutant]]
+id = "352"
+name = "ruling 2 extended: a call's key time not clamped to the last barrier"
+test = "sig"
+why = "Case 350 of seed 20261115: after a reset, an arm at a time before it and a disarm_at earlier still. Unclamped, the disarm's key is the smaller and cancels the arm, voiding a hit already handed out."
+find = '    return t < g->bar_t ? g->bar_t : t;'
+replace = '    return t;'
+
+[[mutant]]
+id = "353"
+name = "ruling 4: an input at tau of any device makes N(G) tau"
+test = "sig"
+why = "Ruling 4 by footprint (0b4410e): an input at tau that does not meet F(G) does not let G in, so the graph with no window keeps G waiting and 2 (a), 2 (b) decide it. Read over every footprint, G is exact where R cannot be given (the oracle's cases 169 and 237 of seed 20261115; test_v2_n_tau)."
+find = '''        if (!ysig__input_t(&c->e, &ti) || ti != t) continue;
+        if (ysig__fp_entry(g, c, f) == 1 && ysig__fp_meets(g, f, F)) return 1;'''
+replace = '''        if (!ysig__input_t(&c->e, &ti) || ti != t) continue;
+        return 1;'''
+
+[[mutant]]
+id = "354"
+name = "ruling 4: N(G) read to the log's end, not to G's first call"
+test = "sig"
+why = "N(G) is bounded at G (97705c0, 3a4bc3f): an input at tau logged after G is after it in R (a frame or a settle at tau, G's L by R1). Read to the end, 2 (c) at a cancel by key goes uncounted (the second reviewer's c2_frame; test_v2_c2_cancel)."
+find = '    for (s = from; s < to && s < cu->c_head; s++) {'
+replace = '    for (s = from; s < cu->c_head; s++) {'
+
+[[mutant]]
+id = "355"
+name = "ruling 4, no window: N(G) read over every node"
+test = "sig"
+note = "Killed by test_v2_n_tau_nowin (v 0; v 1 the control)."
+why = "With no window the graph reads N(G) from its nodes' input times; read over every node, an input of another device at tau makes G exact by 2 (the reviewer's nowin.c; test_v2_n_tau with a zeroed window)."
+find = '            if (((F[i >> 6] >> (i & 63)) & 1u) && g->nd[i].nt == t) return 1;'
+replace = '            if (g->nd[i].nt == t) return 1;'
+
+[[mutant]]
+id = "356"
+name = "ruling 4: the oldest image's input times read over every node"
+test = "sig"
+note = "Open (0.7.0 release gates, 2026-11-15): survives sig_test (also with no window in test_arm_exact), the spec and disarm_at cases, and the oracle at seed 20261115 with the late generator on and off. Not shown equivalent; no killing test yet."
+why = "From the window's oldest image, only a node of F(G) with its input time at tau shows N(G) = tau; any node makes G exact where R cannot be given."
+find = '''            if (!((F[i >> 6] >> (i & 63)) & 1u)) continue;
+            memcpy(&nt,'''
+replace = '            memcpy(&nt,'
+
+[[mutant]]
+id = "357"
+name = "2 (b) for a late group not tested at its place (late_2b)"
+test = "sig"
+why = "W1: a waiting group placed by key as a late call has, at its place, the calls it went before between it and L(G); a state call there of another group that meets F(G) counts G (the oracle's cases 297 and 616 of seed 20261121, OFF=l)."
+find = 'if (ysig__late_place(g, h0, g->cu->c_head, g->cu->c_tail, a.t, 2, a.seq)) ysig__late_2b(g, a.seq, a.t, fl);'
+replace = '(void)ysig__late_place(g, h0, g->cu->c_head, g->cu->c_tail, a.t, 2, a.seq);'
+
+[[mutant]]
+id = "358"
+name = "late_2b: a disarm_at at or after tau counts the late group"
+test = "sig"
+note = "Killed by test_v2_l_at_tau (v 4; v 5 the control)."
+why = "X1: a disarm_at at or after tau lets G in before itself; it is not a state call between G and L(G), so 2 (b) does not count G for it."
+find = '''        if (x->e.kind == YSIG_J_DISARM_AT && x->tr >= t) continue;
+        ysig__unv(g, gid);'''
+replace = '        ysig__unv(g, gid);'
+
+[[mutant]]
+id = "359"
+name = "late_2b, no window: a late group not counted"
+test = "sig"
+why = "With no window R puts G before the meeting call R holds, a state call between G and L(G): 2 (b) counts G unless N(G) is tau (the second reviewer's nowin.c: late_off alone, arm_unverified 0)."
+find = '                if (!g->cu && !ysig__n_tau(g, NULL, 0, 0, fl, a.t)) ysig__unv(g, a.seq);'
+replace = '                (void)0;'
+
+[[mutant]]
+id = "360"
+name = "L5: 2 (b)'s exception left out of the retest with a late L"
+test = "sig"
+why = "d6a852c: 2 (b) is one condition, at a late L as at G's going-in. Left out, a group H of an arm and disarms that the late input lets in after G counts G with no cause."
+find = '''                if (ysig__unv_x_ok(g, s, o->gid, o->t, nx, at, dax)) continue;
+                ok = 0;'''
+replace = '                ok = 0;'
+
+[[mutant]]
+id = "361"
+name = "L5: a disarm_at at or after tau counts G in the retest"
+test = "sig"
+note = "Open (0.7.0 release gates, 2026-11-15): survives sig_test (also with no window in test_arm_exact), the spec and disarm_at cases, and the oracle at seed 20261115 with the late generator on and off. Not shown equivalent; no killing test yet."
+why = "A disarm_at at or after G's time is 2 (b)'s exception (X1); in the retest with a late L it must not count G (the player's 60 Hz seed 102401)."
+find = '                if (c->e.kind == YSIG_J_DISARM_AT && c->e.t >= o->t) continue;'
+replace = '                (void)0;'
+
+[[mutant]]
+id = "362"
+name = "2 (c) at a cancel by key: the cancelled group not counted"
+test = "sig"
+why = "40e34a9: a group made in R whose arm a disarm with a smaller key cancels is a cancelled group; with a disarm it is exact only when N(G) is tau (the reviewer's spec case 2c-at-cancel-by-key; test_v2_c2_cancel)."
+find = '                if (dis && !ysig__n_tau(g, cu->n_ck ? &cu->ck[cu->ck0] : NULL, cu->c_tail, first, F, c->tr)) ysig__unv(g, c->gid);'
+replace = '                (void)dis;'
+
+[[mutant]]
+id = "363"
+name = "the cancel by key: a past group's disarm does not cancel a later arm in R"
+test = "sig_ref"
+note = "0.7.0: killed by the reviewer's oracle (sig_ref, seed 20261115). No unit test reaches it."
+why = "W3: an arm in R after a past group's block, made before a disarm of the block, is cancelled by it (a graph with no window, given R, cancels it)."
+find = '            if (blk[w].e.kind == YSIG_J_DISARM) ysig__cx_count(g, pos + (uint64_t)nb, blk[w].e.node, blk[w].cseq);'
+replace = '            (void)0;'
+
+[[mutant]]
+id = "364"
+name = "no window: a gap's late state call never counted (gap_off)"
+test = "sig"
+why = "924e140, case 812: with no window an open gap's state call that is late at its own key is counted in late_off when the gap ends in no group."
+find = '    if (ysig__is_late(g, f, t, 2, g->ko)) g->wt->gap_off++;'
+replace = '    (void)0;'
+
+[[mutant]]
+id = "365"
+name = "no window: a gap's state calls counted late although an arm closes the gap"
+test = "sig"
+note = "Killed by test_v2_gap_late's next gap in no group (v 4; v 3 the control)."
+why = "An arm that ends the gap gives its calls the group's key: they are not late at it, and late_off counts nothing for them."
+find = '''    g->wt->gap_off = 0;   /* the gap's calls take the group's key */'''
+replace = '    (void)0;'
+
+[[mutant]]
+id = "366"
+name = "no window: a late call not counted in late_off"
+test = "sig"
+why = "With no window a late call is made at R's end with no run again; late_off is its count (Counts and fallbacks)."
+find = '    if (!g->cu) g->st.late_off++;'
+replace = '    if (!g->cu) (void)0;'
+
+[[mutant]]
+id = "367"
+name = "op order: a late L set at each group's own retest only (no l_late pass)"
+test = "sig"
+why = "2dc806c: 2 (b)'s order at L reads the groups whose L the late unit is; the op table is in no call order, so a group K made before G but retested after it keeps its old L and G goes uncounted (test_v2_op_order)."
+find = '''        o->l_late = o->l_seq && ysig__fp_meets(g, F, o->F) && ysig__op_span(g, o, at, n, &zl, &li) && at >= zl && at <= li &&
+                    ysig__late_lets(g, o, at, n, t, cls);'''
+replace = '        o->l_late = 0;'
+
+[[mutant]]
+id = "368"
+name = "ysig_detected_to(): hits after the limit handed out"
+test = "sig"
+why = "ysig_detected_to() hands out the hits at or before t and keeps the rest queued, so a later input can still void them before the caller acts."
+find = '        if (n < cap && g->hitq[q].t <= t_ns) {'
+replace = '        if (n < cap) {'
+
+[[mutant]]
+id = "369"
+name = "ysig_detected_to(): a hit at the limit held"
+test = "sig"
+why = "The limit is inclusive: a hit at t is handed out (sig.md, Holding hits)."
+find = '        if (n < cap && g->hitq[q].t <= t_ns) {'
+replace = '        if (n < cap && g->hitq[q].t < t_ns) {'
+
+[[mutant]]
+id = "370"
+name = "ysig_derived_to(): events after the limit handed out"
+test = "sig"
+why = "ysig_derived_to() hands out the derived events at or before t and keeps the rest queued."
+find = '        if (n < cap && g->derq[q].t <= t_ns) {'
+replace = '        if (n < cap) {'
+
+[[mutant]]
+id = "371"
+name = "ysig_feed_n(): the batch's run again never made"
+test = "sig"
+note = "Killed by test_late's ysig_feed_n() case: the source's ring after the batch, against one ysig_feed() each (the control)."
+why = "ysig_feed_n() defers the run again for the batch's late events to its end; with the deferral left open no run again comes and the late events stay at R's end."
+find = '    if (g->cu) g->cu->defer--;'
+replace = '    (void)0;'
+
+[[mutant]]
+id = "372"
+name = "ysig_feed_n(): the count of the last event, not of the batch"
+test = "sig"
+why = "ysig_feed_n() returns the number of sources that took the batch's events, as the sum of ysig_feed()'s results."
+find = '        if (r > 0) taken += r;'
+replace = '        if (r > 0) taken = r;'
+
+[[mutant]]
+id = "373"
+name = "a disarm_at does not cancel a waiting arm after its t"
+test = "sig"
+why = "A ysig_disarm_at() cancels the node's waiting arms with a greater key, made before it, as a disarm does at its time."
+find = '''    ysig__wait_cancel(g, node, t_ns, w->seq);
+    late = ysig__is_late(g, f, t_ns, 2, w->seq);'''
+replace = '    late = ysig__is_late(g, f, t_ns, 2, w->seq);'
+
+[[mutant]]
+id = "374"
+name = "a present arm with a later meeting call in R not placed by key"
+test = "sig"
+why = "A present group can still be late: R can hold a meeting call with a greater key that is not an input (the oracle's case 438: a set of a channel's index lost by a run again)."
+find = '        if ((t_ns == nfg && !tie) || !cu) ysig__arm_now(g, &e, seq, ysig__is_late(g, fg, t_ns, 2, seq));'
+replace = '        if ((t_ns == nfg && !tie) || !cu) ysig__arm_now(g, &e, seq, 0);'
+
+[[mutant]]
+id = "375"
+name = "a feed before the last barrier taken into R"
+test = "sig"
+why = "A feed before the last barrier is not in R either (sig.md, Late input); it is counted in late_barrier and changes no node."
+find = '    if (takers && e->t < g->bar_t) {'
+replace = '    if (0) {'
+
+[[mutant]]
+id = "376"
+name = "checkpoint spacing: the input time difference not saturated"
+test = "sig_ubsan"
+why = "af5a751: t_cover - cover overflows at the ends of int64 (sig_fuzz, seed 3); wrapped, the frame takes no checkpoint (test_v2_time_ends; UBSan reports it)."
+find = '''if (cu->n_ck && !cu->at_bar && ysig__sub(g->t_cover, cu->ck[(cu->ck0 + cu->n_ck - 1) % cu->K].cover) < cu->span_ns / 8) return;'''
+replace = '''if (cu->n_ck && !cu->at_bar && g->t_cover - cu->ck[(cu->ck0 + cu->n_ck - 1) % cu->K].cover < cu->span_ns / 8) return;'''
