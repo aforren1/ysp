@@ -7294,6 +7294,38 @@ static void test_v2_l5_exc(void) {
         CHECK(st.late_unverified == !v);
     }
 }
+/* 2 (c) at a cancel by key (the reviewer's spec case 10,
+ * "2c-at-cancel-by-key", in sig_disarm_at_cases.c): D2 holds 10 ms from 1;
+ * G = [disarm D2, arm D at 20] waits and goes in at 25 (exact, N(G) 5);
+ * ysig_disarm_at(D, 15), a smaller key, cancels G's arm in R. G is a
+ * cancelled group with a disarm and N(G) is not 20: counted at the
+ * disarm_at's call. Controls: G without the disarm of D2 (no 2 (c)); and
+ * an input at 20 on the device G's disarm reads (N(G) = 20). */
+static void test_v2_c2_cancel(void) {
+    ysig_stats st;
+    int v;
+    g_where = "2 (c) at a cancel by key";
+    for (v = 0; v < 3; v++) {
+        ysig_node n[3];
+        n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 1); n[0].history = 64;
+        n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1); n[1].p[YSIG_DETECT_LEVEL] = 1; n[1].p[YSIG_DETECT_HOLD] = 10e-3; n[1].history = 64;   /* D2 */
+        n[2] = ysig_node_of(YSIG_OP_DETECT, 0, -1); n[2].p[YSIG_DETECT_LEVEL] = 1; n[2].history = 64;                                  /* D */
+        if (!rp_open(n, 3, 4, 0, false, false)) return;
+        rp_feed(1 * MS, 5, YIN_AXIS_POSITION, 1);
+        CHECK(ysig_arm(&g_rp, 1, 1 * MS));
+        rp_feed(5 * MS, 5, YIN_AXIS_POSITION, 1);
+        if (v != 1) CHECK(ysig_disarm(&g_rp, 1));
+        CHECK(ysig_arm(&g_rp, 2, 20 * MS) && g_rp.wt->n == 1);
+        if (v == 2) rp_feed(20 * MS, 5, YIN_AXIS_POSITION, 1);
+        rp_feed(25 * MS, 5, YIN_AXIS_POSITION, 1);
+        ysig_get_stats(&g_rp, &st);
+        CHECK(g_rp.wt->n == 0 && st.arm_unverified == 0);
+        CHECK(ysig_disarm_at(&g_rp, 2, 15 * MS));
+        ysig_get_stats(&g_rp, &st);
+        CHECK(st.arm_ahead_cancelled == 1 && st.late_far == 0 && st.late_full == 0);
+        CHECK(st.arm_unverified == (v == 0));
+    }
+}
 /* Ruling 2 extended (the oracle's case 350 of seed 20261115): a call whose
  * time is before the last barrier keys at the barrier's time, call order
  * deciding among them; so do the cancel by key and the let-in tests. d's
@@ -7819,6 +7851,7 @@ int main(void) {
     test_v2_n_tau();
     test_v2_past_letin();
     test_v2_l5_exc();
+    test_v2_c2_cancel();
     test_v2_bar_clamp();
     test_v2_lost_set();
     test_v2_exit_late();

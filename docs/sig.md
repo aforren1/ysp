@@ -924,6 +924,12 @@ When the header tests:
 - (R2, 2026-11-15) At each late disarm whose place is in the gap a
   group's arm closes in R (back to the last input, barrier, arm or
   `ysig_disarm_at`): condition 4 for that group.
+- At a cancel by key of an arm already in R (a disarm with a smaller key
+  than the arm's group): condition 2 (c) for that group, at the disarm's
+  call. (The reviewer's text gap, 2026-11-15: the oracle's reason-8
+  misses, case 1378 of seed 20261202 and 1050 of 20261207; spec case 10,
+  "2c-at-cancel-by-key", in `sig_disarm_at_cases.c`; `sig_test`
+  `test_v2_c2_cancel`.)
 
 **Pending groups (0.6.1).** G is pending when it holds its arm and
 disarms only, `N(G)` is earlier than `τ`, `L(G)` is not in R yet, and no

@@ -5569,6 +5569,24 @@ static void ysig__cx_count(ysig_graph* g, uint64_t a, int node, uint64_t dseq) {
         if (c->e.kind == YSIG_J_ARM && c->e.node == node && ysig__call_ko(c) < dseq && !c->cx) {
             c->cx = 1;
             g->st.arm_ahead_cancelled++;
+            if (c->gid) {
+                /* 2 (c) at the cancel by key (the reviewer's spec case
+                 * "2c-at-cancel-by-key"): a group made in R whose arm a
+                 * disarm with a smaller key cancels is a cancelled group
+                 * now; with a disarm, it is exact only when N(G) is tau.
+                 * Its footprint is its other calls' (Exactness, F_a) */
+                uint64_t q, F[YSIG__FPW], f[YSIG__FPW];
+                int w, dis = 0;
+                for (w = 0; w < g->dw; w++) F[w] = 0;
+                for (q = cu->c_tail; q < cu->c_head; q++) {
+                    const ysig__call* x = &cu->calls[q % (uint64_t)cu->C];
+                    if (x->gid != c->gid || x->e.kind == YSIG_J_ARM) continue;
+                    if (x->e.kind == YSIG_J_DISARM) dis = 1;
+                    (void)ysig__fp_entry(g, x, f);
+                    for (w = 0; w < g->dw; w++) F[w] |= f[w];
+                }
+                if (dis && !ysig__n_tau(g, cu->n_ck ? &cu->ck[cu->ck0] : NULL, cu->c_tail, F, c->tr)) ysig__unv(g, c->gid);
+            }
         }
     }
 }
