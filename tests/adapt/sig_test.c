@@ -6888,6 +6888,41 @@ static void test_v2_old_shapes(void) {
     }
 }
 
+/* The oracle's case 334 (on 20261121), reduced: d's arm at 19 waits (its
+ * device's last report is at 10); then a present group [set d's level,
+ * arm e at 24], present by e's device. In R the set has the group's key
+ * (24), so d's arm, let in later by its device's report at 26, goes before
+ * it by key and tests d's old level: an entry-now hit at 19. With a window
+ * it is placed there; with none it is made after the set, and that is a
+ * late call: counted in late_off (it went uncounted). The control: no set */
+static void test_v2_present_key(void) {
+    ysig_stats st;
+    int v, K;
+    for (K = 4; K >= 0; K -= 4) {
+        g_where = K ? "a present group's calls keyed at tau (case 334)" : "a present group's calls keyed at tau, no window";
+        for (v = 0; v < 2; v++) {
+            ysig_node n[4];
+            int64_t t = 0;
+            n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 1); n[0].history = 64;
+            n[1] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 3, 1); n[1].history = 64;
+            n[2] = ysig_node_of(YSIG_OP_DETECT, 1, -1); n[2].p[YSIG_DETECT_LEVEL] = 5;
+            n[2].p[YSIG_DETECT_ENTRY] = YSIG_ENTRY_NOW; n[2].p[YSIG_DETECT_OUT] = YSIG_OUT_HIT; n[2].history = 64;
+            n[3] = ysig_node_of(YSIG_OP_DETECT, 0, -1); n[3].p[YSIG_DETECT_LEVEL] = 5; n[3].history = 64;
+            if (!rp_open(n, 4, K, 0, false, false)) return;
+            rp_feed(10 * MS, 0, YIN_AXIS_POSITION, 1);
+            rp_feed(10 * MS, 9, YIN_AXIS_POSITION, 3);
+            (void)v2_hits(2, NULL);   /* the reset's arm */
+            CHECK(ysig_arm(&g_rp, 2, 19 * MS) && g_rp.wt->n == 1);
+            rp_feed(24 * MS, 0, YIN_AXIS_POSITION, 1);
+            if (v) CHECK(ysig_set(&g_rp, 2, YSIG_DETECT_LEVEL, 20));
+            CHECK(ysig_arm(&g_rp, 3, 24 * MS) && g_rp.wt->n == 1);
+            rp_feed(26 * MS, 9, YIN_AXIS_POSITION, 3);
+            ysig_get_stats(&g_rp, &st);
+            CHECK(g_rp.wt->n == 0 && st.late_off == (K ? 0 : v));
+            CHECK(v2_hits(2, &t) == (!K && v ? 0 : 1) && (!K && v ? 1 : t == 19 * MS));
+        }
+    }
+}
 static void test_late(void) {
     ysig_stats st;
     int v, k;
@@ -7262,6 +7297,7 @@ int main(void) {
     test_late_present_group();
     test_v2_plain_disarm();
     test_v2_old_shapes();
+    test_v2_present_key();
     test_hold();
     if (g_failures) { fprintf(stderr, "sig_test: %d failures\n", g_failures); return 1; }
     printf("sig_test: all checks passed\n");

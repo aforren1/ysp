@@ -6395,6 +6395,12 @@ static void ysig__arm_now(ysig_graph* g, ysig_entry* ep, uint64_t seq, int late)
                 (void)ysig__fp_entry(g, c, f);
                 ysig__key_note(g, f, t_ns, 2);
             }
+        } else {
+            /* with no window too: in R the gap's calls have the group's key,
+             * so a waiting group let in later that meets them is a late call
+             * (late_off), not silently made after them (the oracle's case 334:
+             * a set of a detect's level made before that detect's earlier arm) */
+            ysig__key_note(g, g->wt->gap_f, t_ns, 2);
         }
         ysig__gap_disarms(g, t_ns, 1);
         ysig__arm_made(g, node, t_ns, t_ns, logged ? cu->c_head - 1 : UINT64_MAX);
