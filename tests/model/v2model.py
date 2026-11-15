@@ -638,6 +638,18 @@ class Run:
         self.trigger = None
         self.carry = []
         self.late = []
+        if self.L is not None:
+            # Under the wait the reset's barrier is at the horizon, before
+            # the onset, so a report stamped at or before the onset that
+            # arrives after it is placed before the trial's arms (R keeps a
+            # feed before state calls at its time): the arms read every
+            # sample up to the onset, the ones of the frames that the
+            # flush's wait added too (docs/player.md, "The trial's end")
+            while self.si < len(self.samples) and self.samples[self.si][0] <= e0:
+                s = self.samples[self.si]
+                self.si += 1
+                self.hand = (s[1], s[2])
+            self.fed_until = e0
         if tpl.kind == "states":
             # 3.11 rule 1: the first state's entry time is the first frame's
             # onset. GAP (arm order): whether the trial starts before or
