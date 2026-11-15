@@ -4575,9 +4575,40 @@ static int pg_e_hits(void) {
     while ((m = ysig_detected(&g_rp, h, 8)) > 0) for (k = 0; k < m; k++) n += h[k].node == 3;
     return n;
 }
+/* Pending groups and an input that lets in an overlapping group but not
+ * them (the oracle's reason 6, with no fallback in the case; mutant 331).
+ * Sources s1 to s4 on devices 1 to 4; e on s3 (G), w on s2 (W); X =
+ * all(w, e) gives G and W a node in common; Y = all(w, k), k on s1, makes
+ * s1's input meet W but not G. Inputs to 20 ms on s1 to s3. W arms w at
+ * 27 ms, ahead (it waits); s4 at 30 ms meets nothing; G arms e at 25 ms,
+ * in the past and pending (its place after s3's 20 ms, nothing after it
+ * meets it, W's calls wait outside the log). s1 at 31 ms lets W in and
+ * not G: a graph with no window makes W, then G at G's L, where R has G
+ * first (at its place). G is counted then. The control: no X */
+static void pg_reason6(int with_x) {
+    ysig_node n[9];
+    int k;
+    for (k = 0; k < 4; k++) { n[k] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, k + 1, 2); n[k].history = 64; }
+    n[4] = ysig_node_of(YSIG_OP_DETECT, 1, -1); n[4].p[YSIG_DETECT_LANE] = 0; n[4].p[YSIG_DETECT_LEVEL] = 5; n[4].p[YSIG_DETECT_START] = 1; n[4].history = 64;   /* w */
+    n[5] = ysig_node_of(YSIG_OP_DETECT, 2, -1); n[5].p[YSIG_DETECT_LANE] = 0; n[5].p[YSIG_DETECT_LEVEL] = 5; n[5].p[YSIG_DETECT_START] = 1; n[5].history = 64;   /* e */
+    n[6] = ysig_node_of(YSIG_OP_OFFSET, 0, -1);                                 /* k */
+    n[7] = ysig_node_of(YSIG_OP_ALL, 4, 6); n[7].history = 64;                 /* Y */
+    n[8] = ysig_node_of(YSIG_OP_ALL, 4, with_x ? 5 : 6); n[8].history = 64;    /* X (or a second Y) */
+    if (!rp_open(n, 9, 4, 0, false, false)) return;
+    for (k = 1; k <= 3; k++) { rp_feed(10 * MS, 0, YIN_AXIS_POSITION, k); rp_feed(20 * MS, 0, YIN_AXIS_POSITION, k); }
+    ysig_arm(&g_rp, 4, 27 * MS);   /* W, ahead */
+    rp_feed(30 * MS, 0, YIN_AXIS_POSITION, 4);
+    ysig_arm(&g_rp, 5, 25 * MS);   /* G, pending */
+    CHECK(ex_unv() == 0 && g_rp.wt->n == 1);
+    rp_feed(31 * MS, 0, YIN_AXIS_POSITION, 1);
+    CHECK(ex_unv() == with_x && g_rp.wt->n == 0);
+}
+
 static void test_pending(void) {
     int k;
     g_where = "pending groups";
+    pg_reason6(1);
+    pg_reason6(0);
     /* L: rh's 30 ms sample decides it, exact; a crossing after it hits */
     pg_open(0, 0);
     CHECK(ex_unv() == 0);
