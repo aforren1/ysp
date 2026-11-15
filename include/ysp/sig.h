@@ -4140,7 +4140,9 @@ YSIG_API int ysig_frame(ysig_graph* g, const ysig_frame_in* f) {
     /* v0.7.0: a frame is at its onset in R; one after a feed later than
      * it (the frame loop fed past the onset first) is late */
     ysig__before_input(g, f->onset_ns, NULL);
-    late = f->onset_ns >= g->bar_t && ysig__is_late(g, NULL, f->onset_ns, 1, g->ko);
+    /* one before the last barrier goes right after it (every call since
+     * has a greater key); a frame is not dropped: its pass draws */
+    late = ysig__is_late(g, NULL, f->onset_ns, 1, g->ko);
     logged = ysig__log(g, &e);
     g->ko = g->wt->seq;
     ysig__do_frame(g, f);
@@ -5463,6 +5465,15 @@ static int ysig__late_place(ysig_graph* g, uint64_t a, uint64_t b, uint64_t lo, 
         a = cu->c_head - n;
     }
     at = ysig__late_move_k(g, a, p0, F, t, cls, ord);
+    if (cls < 2) {
+        /* a late input before a disarm in no group: in R that disarm's gap
+         * is open again after the input (it takes effect at its gap's end,
+         * S1), where the header made it at the input's call. Not verified */
+        for (s = at + n; s < cu->c_head; s++) {
+            const ysig__call* c = &cu->calls[s % C];
+            if (c->e.kind == YSIG_J_DISARM && !c->gid) { g->st.late_unverified++; break; }
+        }
+    }
     if (cu->def_k < 0) { cu->n_grp_dis = 0; cu->late_in = 0; }
     for (s = at; s < at + n; s++) {
         const ysig__call* c = &cu->calls[s % C];
@@ -6326,7 +6337,7 @@ YSIG_API int ysig_settle(ysig_graph* g, int64_t t_ns) {
     g->wt->seq++;
     g->ko = g->wt->seq;
     ysig__before_input(g, t_ns, NULL);
-    late = t_ns >= g->bar_t && ysig__is_late(g, NULL, t_ns, 1, g->ko);
+    late = ysig__is_late(g, NULL, t_ns, 1, g->ko);
     logged = ysig__log(g, &e);
     g->ko = g->wt->seq;
     ysig__do_settle(g, t_ns);
