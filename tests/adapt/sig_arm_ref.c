@@ -28,6 +28,14 @@
  *   (5feeb5b) No compare while a plain disarm's gap is open in B but ended
  *   in call order (b_gap_mismatch(); SIG_ORACLE_GAPKEY=1 compares anyway):
  *   R's key order put the next-called input before the disarm.
+ *   (S1', 2026-11-15) A past group's calls let in at its tau; a present or
+ *   ahead group's at N(F(c)) at the call (trig_time; SIG_ORACLE_S1=1: S1,
+ *   tau for all). A group's state call lets in, inclusive by key, a
+ *   waiting group at its let-in time whose key is smaller (S1 (b);
+ *   SIG_ORACLE_S1STRICT=1 strict). Ruling 2 extended (case 350): a call
+ *   whose time is before the last barrier keys at the barrier's time,
+ *   call order deciding (clampt() in r_key, the cancel by key and the
+ *   let-in; SIG_ORACLE_NOCLAMP=1 off).
  *   (279b393) The gap test runs both ways (A's gap open and B's ended
  *   too: a disarm_at called before the disarm that R puts after it; the
  *   builder's 438-family finding; ruling 6). B's waiting arms use B's
@@ -826,6 +834,15 @@ static uint64_t g_call_fp[MAXC];
 static int64_t g_call_time[MAXC];
 static int g_call_flags[MAXC];
 static int64_t g_call_N[MAXC];          /* N at the call (rule 3's test for a state call) */
+/* (ruling 2 extended, case 350) a call whose time is before the last
+ * barrier takes the barrier's time as its key time; call order decides
+ * among them. g_bar_before[ci]: the last barrier's time at call ci.
+ * SIG_ORACLE_NOCLAMP=1: off */
+static int64_t g_bar_t = INT64_MIN, g_bar_before[MAXC];
+static int64_t clampt(int64_t t, int ci) {
+    if (getenv("SIG_ORACLE_NOCLAMP") || ci < 0 || g_bar_before[ci] == INT64_MIN) return t;
+    return t < g_bar_before[ci] ? g_bar_before[ci] : t;
+}
 static int64_t g_call_nf[MAXC];         /* N(F(c)) at the call (25837ee: a state call's time outside a group) */
 
 static uint64_t state_fp(const call* c) {
@@ -907,7 +924,7 @@ static void cancel_by_disarm(int node, int64_t t, int disarm_ci) {
         for (gi = 0; gi < g_ngr; gi++) {
             group* G = &g_gr[gi];
             int waits = 0, q;
-            if (G->cancelled || G->node != node || G->arm_ci > disarm_ci || !(t < G->tau)) continue;
+            if (G->cancelled || G->node != node || G->arm_ci > disarm_ci || !(clampt(t, disarm_ci) < clampt(G->tau, disarm_ci))) continue;
             for (q = 0; q < g_nwait; q++) if (g_wait[q] == gi) waits = 1;
             if (!waits) {
                 int in = 0;
@@ -1006,6 +1023,7 @@ static void put_group_end(int gi, int with_arm) { (void)put_group_at(gi, with_ar
  * in, by (tau, call order), put in at pos (R's end for an input). incl
  * (S3): an arm call lets in one whose tau is at or before t */
 static void call_triggers(int ci, int64_t t, int incl, int pos_before);
+static void group_call_trig(const group* G, int ci, int pos_before);
 static int r_index_ci(int ci);
 /* a group call's time for rule 3's test (085bbb6 text): a state call's is
  * N at its call, in a past group the group's tau; an arm's the smaller of
@@ -1013,6 +1031,12 @@ static int r_index_ci(int ci);
  * in, at its tau) */
 static int64_t trig_time(const group* G, int ci) {
     int64_t tn = g_call_N[ci];
+    /* (S1', the coordinator's ruling of 2026-11-15, S1 withdrawn for
+     * present and ahead groups) a past group's calls let in at its tau; a
+     * present or ahead group's at N(F(c)) at the call, an arm the smaller
+     * of its t and that (an ahead arm at tau, when its group goes in).
+     * SIG_ORACLE_S1=1: S1, tau for every group's calls */
+    if (getenv("SIG_ORACLE_S1")) return G->tau;
     if (G->cls == 0 && !getenv("SIG_ORACLE_PASTN")) return G->tau;
     if (ci == G->arm_ci) return G->cls == 2 ? G->tau : (G->tau < tn ? G->tau : tn);
     return tn;
@@ -1028,9 +1052,10 @@ static void place_waiting_at(int64_t t, uint64_t fp, int incl, int pos) {
     int sel[MAXC], ns = 0, w, k;
     for (w = 0; w < g_nwait; w++) {
         group* G = &g_gr[g_wait[w]];
-        int eq = incl && G->tau == t && (g_pw_hi < 0 || G->arm_ci < g_pw_hi) && (g_pw_lo < 0 || G->arm_ci > g_pw_lo);
+        int64_t gt = clampt(G->tau, G->arm_ci), tc = clampt(t, G->arm_ci);
+        int eq = incl && gt == tc && (g_pw_hi < 0 || G->arm_ci < g_pw_hi) && (g_pw_lo < 0 || G->arm_ci > g_pw_lo);
         if (g_pw_lo >= 0 && !eq) continue;   /* the second pass takes the later equal ones only */
-        if ((G->tau < t || eq) && (G->fp & fp)) sel[ns++] = g_wait[w];
+        if ((gt < tc || eq) && (G->fp & fp)) sel[ns++] = g_wait[w];
     }
     g_pw_lo = g_pw_hi = -1;
     if (!ns) return;
@@ -1071,7 +1096,7 @@ static void place_waiting_at(int64_t t, uint64_t fp, int incl, int pos) {
             for (c2 = 0; c2 < G->n; c2++) {
                 int ci = G->calls[c2], arm = ci == G->arm_ci;
                 if (arm && G->cancelled) continue;
-                call_triggers(ci, trig_time(G, ci), arm, -1);
+                (void)arm; group_call_trig(G, ci, -1);
             }
             for (c2 = 0; c2 < G->n; c2++) { int r = r_index_ci(G->calls[c2]); if (r < g_nR && r > last) last = r; }
             if (last >= 0) pos = last + 1;
@@ -1127,13 +1152,26 @@ static void call_triggers(int ci, int64_t t, int incl, int pos_before) {
  * before for an arm (S3). The waiting groups go in right before the call
  * where the call goes into R: a past group's at its place (the
  * coordinator's ruling on rule 3, after c2c5459) */
+/* (S1 (b)) a group's state call at tau lets in a waiting group at tau
+ * whose arm call is earlier (the smaller key), as S3 for an arm.
+ * SIG_ORACLE_S1STRICT=1: strict, tau' < tau */
+static void group_call_trig(const group* G, int ci, int pos_before) {
+    int arm = ci == G->arm_ci;
+    if (!arm && !getenv("SIG_ORACLE_S1STRICT")) {
+        /* (b) inclusive by key: a waiting group at the let-in time t goes in
+         * when its key is smaller than this call's (tau_G, arm_G): any one
+         * when t is earlier than tau_G, else one whose arm call is earlier */
+        int64_t t = trig_time(G, ci);
+        g_pw_hi = clampt(t, ci) < clampt(G->tau, ci) ? -1 : G->arm_ci;
+        call_triggers(ci, t, 1, pos_before);
+        return;
+    }
+    call_triggers(ci, trig_time(G, ci), arm, pos_before);
+}
 static void group_triggers(int gi, int at_end) {
     group* G = &g_gr[gi];
     int k;
-    for (k = 0; k < G->n; k++) {
-        int ci = G->calls[k], arm = ci == G->arm_ci;
-        call_triggers(ci, trig_time(G, ci), arm, at_end ? g_nR : -1);
-    }
+    for (k = 0; k < G->n; k++) group_call_trig(G, G->calls[k], at_end ? g_nR : -1);
 }
 
 /* Rule 2: the place of a past group; pinned is set */
@@ -1942,7 +1980,13 @@ static void late_input(int ci, uint64_t fp) {
  * first, call order); a group's calls one block at its tau, keyed by its
  * arm; a state call outside a group at N(F(c)) at its call. */
 typedef struct { int64_t t; int rank; int order, sub; } okey;
+static okey r_key_raw(const rent* e);
 static okey r_key(const rent* e) {
+    okey k = r_key_raw(e);
+    if (!(e->flags & E_BARRIER)) k.t = clampt(k.t, e->grp >= 0 ? g_gr[e->grp].arm_ci : e->ci);
+    return k;
+}
+static okey r_key_raw(const rent* e) {
     okey k;
     const call* c = &g_c[e->ci];
     k.sub = e->ci;
@@ -2144,7 +2188,13 @@ static void horizon_check(int ci, int64_t h, int first) {
 
 /* one call: A makes it, R takes it, B follows, compare */
 static void step_(int ci);
-static void step(int ci) { g_step_ci = ci; step_(ci); }
+static void step(int ci) {
+    g_step_ci = ci;
+    if (ci == 0) g_bar_t = INT64_MIN;
+    g_bar_before[ci] = g_bar_t;
+    step_(ci);
+    if (g_call_flags[ci] & E_BARRIER) { g_bar_t = g_call_time[ci]; }
+}
 static void step_(int ci) {
     call* c = &g_c[ci];
     ysig_stats s0, s1;

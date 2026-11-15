@@ -856,7 +856,11 @@ G is exact when all of these are true:
    for every node, as for any call (a slow device's late sample after an
    arm at a frame's onset). An input at `τ` is not a late report: a feed
    at `τ` goes before G by key (L3); a frame or a settle at `τ` goes by
-   call order.
+   call order. With a window this condition no longer fires: a report
+   earlier than `τ` goes before G by key, to its place. It applies only
+   where a report cannot be placed (no window, a place before the
+   window, or the log full); those cases count `late_off`, `late_far` or
+   `late_full` (the coordinator, 2026-11-15).
 
 4. No disarm of another group, or of no group, lies in the gap that G's
    arm closes with no window: between G's arm and the last input,
