@@ -28,6 +28,9 @@
  *   (5feeb5b) No compare while a plain disarm's gap is open in B but ended
  *   in call order (b_gap_mismatch(); SIG_ORACLE_GAPKEY=1 compares anyway):
  *   R's key order put the next-called input before the disarm.
+ *   (dab3686) rule2_place() compares clamped times; the horizon order check
+ *   orders two hits only when their nodes are on one path (or a frame or
+ *   a settle found one): two arms' hits commute (case 804).
  *   (S1', 2026-11-15) A past group's calls let in at its tau; a present or
  *   ahead group's at N(F(c)) at the call (trig_time; SIG_ORACLE_S1=1: S1,
  *   tau for all). A group's state call lets in, inclusive by key, a
@@ -1181,7 +1184,9 @@ static int rule2_place(const group* G, int* pinned) {
     for (p = g_nR; p > 0; p--) {
         const rent* e = &g_R[p - 1];
         if (e->flags & E_BARRIER) break;
-        if ((e->fp & G->fp) && e->time <= G->tau && !(e->flags & E_NEUTRAL)) break;
+        /* (dab3686 review) by the clamped times (ruling 2 extended): a feed
+         * at the barrier's time T comes before a group with tau before T */
+        if ((e->fp & G->fp) && clampt(e->time, e->ci) <= clampt(G->tau, G->arm_ci) && !(e->flags & E_NEUTRAL)) break;
     }
     for (i = 0; i < p; i++) if (g_R[i].flags & E_BARRIER) lb = i;
     *pinned = 0;
@@ -2148,7 +2153,14 @@ static void late_input2(int ci, uint64_t fp) {
  * them is free ("R is defined up to that freedom") */
 static int hits_ordered(const ysig_hit* a, const ysig_hit* b) {
     int s, q;
-    for (s = 0; s < g_ntot; s++) if ((g_D[s] >> a->node & 1) && (g_D[s] >> b->node & 1)) return 1;
+    /* (dab3686 review, case 804) nodes on one path (one is downstream of
+     * the other, or the same node): the calls that found them meet. Two
+     * nodes that only share an upstream node can be found by calls that do
+     * not meet (two arms), so R does not fix their order.
+     * SIG_ORACLE_HZUP=1: the upstream test of 279b393 */
+    if ((g_D[a->node] >> b->node & 1) || (g_D[b->node] >> a->node & 1)) return 1;
+    if (getenv("SIG_ORACLE_HZUP"))
+        for (s = 0; s < g_ntot; s++) if ((g_D[s] >> a->node & 1) && (g_D[s] >> b->node & 1)) return 1;
     for (q = 0; q < g_nc; q++)
         if ((g_c[q].kind == C_FRAME || g_c[q].kind == C_SETTLE) && (g_c[q].t == a->t_found || g_c[q].t == b->t_found)) return 1;
     return 0;
