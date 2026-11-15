@@ -35,12 +35,17 @@ typedef struct sig_api {
     const char* (*op_name)(int);
     int (*settle)(ysig_graph*, int64_t);
     bool (*flush)(ysig_graph*);
+    int (*feed_n)(ysig_graph*, const yin_event*, int);   /* v0.7.0 */
+    bool (*disarm_at)(ysig_graph*, int, int64_t);
+    int (*detected_to)(ysig_graph*, ysig_hit*, int, int64_t);
+    int (*derived_to)(ysig_graph*, yin_event*, int, int64_t);
 } sig_api;
 
 static const sig_api g_sig_api = {
     ysig_version, ysig_check, ysig_arena_size, ysig_open, ysig_error, ysig_reset, ysig_reset_trial, ysig_recenter, ysig_set, ysig_set_data,
     ysig_feed, ysig_frame, ysig_arm, ysig_disarm, ysig_detected, ysig_derived, ysig_value_of, ysig_value_at,
-    ysig_adapter_node, ysig_get_stats, ysig_replay, ysig_op_params, ysig_op_name, ysig_settle, ysig_flush
+    ysig_adapter_node, ysig_get_stats, ysig_replay, ysig_op_params, ysig_op_name, ysig_settle, ysig_flush,
+    ysig_feed_n, ysig_disarm_at, ysig_detected_to, ysig_derived_to
 };
 
 static double g_arena[4096];
@@ -99,6 +104,15 @@ int main(void) {
         st.arm_past_pinned != 0 || st.arm_ahead_cancelled != 0 || g_sig_api.settle(&g, 3000) != 0 || !g_sig_api.flush(&g)) return 10;
     if (d.rows_final || d.derived_final || d.catchup_rows != 0 || (int)YSIG_J_FLUSH != 11) return 12;
     if (d.catchup_frames != 0 || d.catchup_calls != 0 || d.catchup_writes != 0 || (int)YSIG_J_SETTLE != 10) return 11;
+    /* v0.7.0: a batch, the late counts, the limited reads, a disarm at a
+     * time (no detect here: refused) */
+    e.t = 3500;
+    e.x = 0;   /* the value checks below stay at 3 */
+    if (g_sig_api.feed_n(&g, &e, 1) != 1 || g_sig_api.feed_n(&g, NULL, 0) != 0) return 13;
+    g_sig_api.get_stats(&g, &st);
+    if (st.late_far != 0 || st.late_full != 0 || st.late_barrier != 0 || st.late_off != 0 || st.late_frames != 0 ||
+        st.late_unverified != 0 || st.late_hits_voided != 0 || (int)YSIG_J_DISARM_AT != 12) return 14;
+    if (g_sig_api.detected_to(&g, NULL, 0, 0) != 0 || g_sig_api.derived_to(&g, NULL, 0, 0) != 0 || g_sig_api.disarm_at(&g, 1, 4000)) return 15;
     if (strcmp(g_sig_api.version(), YSIG_VERSION_STRING) || strcmp(g_sig_api.op_name(YSIG_OP_BIND), "bind")) return 6;
     if ((int)YSIG_ENTRY_NOW != 2 || (int)YSIG_ENTRY_FRESH != 1 || (int)YSIG_ENTRY_ARM != 0) return 9;   /* p12's values */
     if (g_sig_api.value_of(&g, 1)->v[0] != 3 || g_sig_api.value_at(&g, 1, 0, NULL) != -1) return 7;
