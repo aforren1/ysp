@@ -2826,6 +2826,8 @@ replace = '''            if (!count && lseq) count = 0;'''
 id = "331"
 name = "an input that lets in a group sharing a node with a pending one, not counted"
 test = "sig_ref_778001"
+expect = "survived"
+note = "Killed by the oracle at 778001 until the reviewer's tally fix (2026-11-15): the B-cannot tally now accepts a fallback the guard stops on, and 778001's cases 2140 and 2990 have one by the call B is found unable to run R (978 of 978 counted with the mutant). Kept as the text's rule (sig.md, Pending groups) and a guard."
 why = "The graph with no window makes that group before the pending one, against R's order (the oracle's reason 6)."
 find = '''        if (!o->l_seq && (meets || ysig__fp_meets(g, gone, o->F))) {'''
 replace = '''        if (!o->l_seq && meets) {'''
