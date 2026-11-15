@@ -984,8 +984,8 @@ and max: 60 Hz: 0 ms 2.16 and 16.67 ms; 5 ms 14.36 and 21.67; 10 ms
 17.81 and 26.33; 20 ms 30.26 and 36.33; 40 ms 48.37 and 56.33; 60 ms
 67.66 and 76.33. 500 Hz: 0 ms 0.05 and 2.00; 5 ms 5.81 and 7.00; 10 ms
 10.44 and 12.00; 20 ms 20.46 and 22.00; 40 ms 40.45 and 42.00; 60 ms
-60.44 and 62.00. The lag is at most the lateness plus a frame and a
-third of a frame at 60 Hz, as the design says ("What the data shows").
+60.44 and 62.00. The lag is at most the lateness plus a frame, as the
+design says ("What the data shows").
 
 The examples at 10 ms late (2d52faa, the data the same at 8c3cb20):
 every session finishes (visuomotor 160 trials, bimanual 132), no guard
