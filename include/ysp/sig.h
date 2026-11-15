@@ -1,4 +1,4 @@
-/* ysp/sig.h - v0.6.1 - public domain single-header signal path
+/* ysp/sig.h - v0.7.0 - public domain single-header signal path
  *
  *   Continuous input to stimuli: a small graph, fixed at open, from input
  *   sources through per-sample transforms and maps to stimulus channels,
@@ -401,6 +401,27 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.7.0 - late input (docs/sig.md, "Late input"): a call goes to its
+ *          place in R by its key (time, class, call order), as an arm in
+ *          the past does, and the window runs again; the window bounds
+ *          the lateness it can absorb (catchup_ns). A feed comes first at
+ *          one time; frames, settles, state calls and groups go by call
+ *          order (R1). Classes by footprint: input of another device does
+ *          not make a group past, and pending groups go. A frame or a
+ *          settle lets in the groups at its time and is their L (R2).
+ *          ysig_disarm_at() ends an arm at a time and lets in the groups
+ *          at or before it (X1); ysig_feed_n() runs the window again once
+ *          for a batch; ysig_detected_to() and ysig_derived_to() hand out
+ *          what is due by a time. A state call lets in at N(F(c)) (S1');
+ *          a call before the last barrier keys at the barrier (ruling 2
+ *          extended); N(G) by footprint, up to G (ruling 4). Exactness for
+ *          late calls: 2 (b) at a late group's place, 2 (c) at a cancel by
+ *          key, a late L retests every group whose L it is. Counts
+ *          late_far, _full, _barrier, _off, _frames, _unverified,
+ *          late_hits_voided; queues of 64 + catchup_calls; checkpoints
+ *          spaced by input time (struct changes: ysig__wt, ysig__ux, the
+ *          stats). The release gates: the checkpoint spacing saturates at
+ *          the ends of int64 (found by the fuzz).
  *   v0.6.1 - pending groups (docs/sig.md, "Pending groups"): a past group
  *          of an arm and disarms only, whose input time at its place is
  *          before its time and with no L in R yet, is made at its place
@@ -553,9 +574,9 @@
 #define YSP_SIG_H_INCLUDED
 
 #define YSIG_VERSION_MAJOR 0
-#define YSIG_VERSION_MINOR 6
-#define YSIG_VERSION_PATCH 1
-#define YSIG_VERSION_STRING "0.6.1"
+#define YSIG_VERSION_MINOR 7
+#define YSIG_VERSION_PATCH 0
+#define YSIG_VERSION_STRING "0.7.0"
 
 #include <stdint.h>
 #include <stdbool.h>

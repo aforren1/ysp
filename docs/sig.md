@@ -910,7 +910,7 @@ When the header tests:
 - At each later past group's place between G and `L(G)`: condition 2 (b)
   again, over every call between them, since a later group can be the
   link of a chain that lets an earlier H in before G.
-- (0.7.0, proposed in "Late input") At each late call that takes a place
+- (0.7.0, "Late input") At each late call that takes a place
   between G and `L(G)`: a state call that meets `F(G)` retests 2 (b)
   (U2), except a `ysig_disarm_at` with `t` at or after `τ` (it lets G in
   before itself, X1): that one becomes G's `L` (R2), 2 (a) and 2 (b)
@@ -1151,15 +1151,17 @@ change the player meets is the waiting itself: 33,277 ahead arms in the
 harness and 13 in `player_test.py`, every one at most 17 ms ahead, and
 118 in the harness that a barrier would cancel.
 
-#### Late input (proposed for 0.7.0; not built)
+#### Late input (0.7.0)
 
-Status: a proposal for the reviewer's oracle, before the header. It
-changes R. Fourth draft (2026-11-15): it answers the reviewer's findings
-U1 to U5 on the third draft (7a17176); the third answered T1 to T7 on
-the second (25837ee), which answered L1 to L11 on the first (d906e19)
-and the user's decisions of 2026-11-15. Three tables at the end map each
-finding to its answer. Where this subsection and the
-rules above disagree, this subsection is the rule for 0.7.0.
+Status: built in 0.7.0 (2026-11-15). This subsection changes R. It was
+written for the reviewer's oracle before the header. The fourth draft
+(2026-11-15) answers the reviewer's findings U1 to U5 on the third draft
+(7a17176); the third answered T1 to T7 on the second (25837ee), which
+answered L1 to L11 on the first (d906e19) and the user's decisions of
+2026-11-15. Three tables at the end map each finding to its answer. The
+rulings of 2026-11-15 below are in the header too. Where this subsection
+and the rules above disagree, this subsection is the rule. The release
+gates' results are in "Tests, fuzzing and mutations".
 
 The user's choice (2026-11-14): the header places a late input at its
 time, as it places a past arm, and the window bounds the lateness that it
@@ -2269,6 +2271,76 @@ and `free` before the implementation, so a call fails the link; the bench
 counts this program's allocator calls during the 60 s run (glibc).
 
 ### Tests, fuzzing and mutations
+
+The release gates of 0.7.0 (2026-11-15, Linux desktop, i5-14500, GCC
+12.2). The oracle runs with ctest's switches (late mode 4 with A's
+checks, R1, the tie, the disarm_at and exit shapes, the horizons), 3,000
+cases a seed, with the late generator on and off (`OFF=l`), two runs at
+a time (load average 5.8 at the start, 3.4 at the end, with mutant jobs
+and the fuzz on the machine):
+
+| Seed | Generator | B cannot run (counted) | Wrong (by `arm_unverified`; by another count; none) | Right cases with a count (counts over made groups) | Time |
+|---|---|---|---|---|---|
+| 20261115 | on | 747 (747) | 1,398 (959; 439; 0) | 710 of 855 (2,799 of 31,205) | 82 s |
+| 20261115 | off | 754 (754) | 1,059 (731; 328; 0) | 1,014 of 1,187 (4,036 of 43,438) | 63 s |
+| 20261123 | on | 724 (724) | 1,429 (1,031; 398; 0) | 723 of 847 (2,892 of 31,024) | 66 s |
+| 20261123 | off | 701 (701) | 1,078 (761; 317; 0) | 1,046 of 1,221 (4,144 of 45,887) | 58 s |
+| 20261124 | on | 757 (757) | 1,358 (992; 366; 0) | 738 of 885 (2,942 of 32,435) | 73 s |
+| 20261124 | off | 698 (698) | 1,137 (796; 340; **1**) | 977 of 1,165 (4,130 of 43,673) | 56 s |
+
+The first target holds on every run. The second fails once: case 2005 of
+seed 20261124 with `OFF=l` is wrong ("rows (final only) not R's") and
+has no count. The header at 2dc806c gives the same. Open: not
+diagnosed, not fixed (the gates fix only what the text decides).
+
+- Fuzz: `sig_fuzz` now feeds late events (1, 5 and 20 ms), batches
+  through `ysig_feed_n()`, `ysig_disarm_at()` before and after the newest
+  call, and reads with a limit, among resets, flushes, frames and
+  settles. 10,200,000 inputs under ASan and UBSan (`setarch -R`, 6
+  processes, seeds 8601 to 8606), 74 s: no report. 1,528,341 graphs
+  opened, 4,594,718 late events, 1,488,668 batches, 744,395 disarm_at
+  calls, 12,109 arms run again. The bind check after a frame now runs
+  only when the frame is at R's end: a late frame's channels hold R's
+  values at its place.
+- A defect the gates found and fixed: the checkpoint spacing by input
+  time (`ysig__ck_take()`) subtracted times with no saturation; an input
+  at `INT64_MAX` after a negative one overflowed (UBSan, the fuzz's seed
+  3). It now uses `ysig__sub()` ("Times saturate at the ends of
+  int64"); `sig_test` `test_v2_time_ends`, with a control.
+- Sanitizers: the `sanitizers` tree, built and run under `setarch -R`
+  (build 42 s at `-j 8`, incremental): ctest 125 of 125, 456 s at
+  `-j 6`, no sanitizer report; the oracle there 401 s (generator on)
+  and 362 s (off). ctest Release 126 of 126, 80 s at `-j 6` (the two
+  ran at the same time; load average 2.3 to 5.0).
+- Compile checks: C11 and C++17 with the 0.7.0 calls in the API table
+  (`ysig_feed_n()`, `ysig_disarm_at()`, `ysig_detected_to()`,
+  `ysig_derived_to()`), in the Linux, sanitizers and `nothreads-cxx`
+  trees.
+- Mutants: sig.toml 335 of 348 as expected (killed 327, survived 21;
+  628 s, 4 jobs, load average 0.3 at the start, 2.7 at the end). 47
+  anchors had gone stale with the 0.7.0 code: 35 follow the code; 12
+  are removed with their code: 246 and 270 (no `derived_lost` restore,
+  no checkpoint skip at 64 hits), 261 (the log no longer pins a group),
+  298 and 299 (`ysig__ux_input()` went: a late report goes to its
+  place), 324, 325 and 327 to 331 (pending groups went). 340 to 376 are
+  new: one or more for each 0.7.0 rule, and 376 for the overflow fix.
+  The oracle test of the list runs ctest's 0.7.0 switches (seed
+  20261115); `sig_spec` and `sig_disarm_at` are new tests (the
+  reviewer's cases). New `sig_test` cases, each with a control:
+  `test_late_no_window` (a late report reaches the detect's
+  before-the-arm branch only with no window; mutants 42, 88, 293),
+  `test_v2_l_at_tau` (345, 348, 358), `test_v2_n_tau_nowin` (355),
+  `test_v2_s1b_nowin` (351), H8's barrier 3 (280: the queue of 64 +
+  `catchup_calls` held all 240 events), the next gap of
+  `test_v2_gap_late` (365), the ring after a `ysig_feed_n()` batch (371).
+  The oracle kills 240, 350 and 363. 291 and 296 are equivalent (their
+  notes say why). Open: 13 survive every test (283, 285, 287, 297, 300,
+  312 to 315, 318, 326, 356, 361); the list's notes give what each
+  survived. Most are 0.6.x's counts (conditions 1, 3, 4 and 2 (c)) and
+  gap mechanics (H9, H12, 1650) that 0.7.0's classes by footprint and
+  its other count sites now reach first. Condition 3's table (`w->lr`)
+  has had no reader since `ysig__ux_input()` went; it only counts on its
+  overflow (mutant 312).
 
 The reviewer's oracle (2026-11-14, final round). `tests/adapt/sig_arm_ref.c`
 and `sig_arm_spec_cases.c` are by an independent reviewer, written from
