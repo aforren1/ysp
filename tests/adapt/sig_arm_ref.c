@@ -3,6 +3,14 @@
  * 09ecfb2, amended in b6676f4) and the graph's other rules in sig.md. It
  * does not read the header's internals.
  *
+ * Tally fix (the builder's case 14 of seed 20261115): push() read A's
+ *   counts at the failing call itself, without the late counts; it now
+ *   uses a_counts(), as the B-cannot tally and the end checks do. Counted:
+ *   arm_unverified and late_unverified; the fallbacks the guard stops on
+ *   (pinned, far, full, off, retracted, rows and derived stale, late_far,
+ *   late_full). Not counted: late_barrier and late_frames (the guard does
+ *   not stop on them) and late_off (no window; not compared).
+ *
  * The 9834173 text (SIG_ORACLE_LATE=4; 3 keeps the 7a17176 draft):
  *   - The cancel by key (U1, U5): a disarm cancels an arm of its detect
  *     made before it, waiting or already in R, exactly when its key is
@@ -2074,8 +2082,10 @@ static void push(const call* c) {
     if (g_why && g_fail_ci < 0) {
         g_fail_ci = g_nc;
 #ifdef SIG_HAS_UNV
-        { ysig_stats st; ysig_get_stats(&g_a, &st); g_unv_fail = st.arm_unverified;
-          g_other_fail = st.arm_past_pinned + st.arm_past_far + st.arm_past_full + st.arm_past_off + st.arm_hits_retracted + st.arm_rows_stale + st.arm_derived_stale; }
+        /* one reading for every tally: a_counts() (arm_unverified and, with
+         * a 0.7.0 header, late_unverified; the guard-stop fallbacks, with
+         * late_far and late_full; not late_barrier, late_frames, late_off) */
+        a_counts(&g_unv_fail, &g_other_fail);
 #endif
     }
     g_nc++;
