@@ -1084,239 +1084,276 @@ harness and 13 in `player_test.py`, every one at most 17 ms ahead, and
 #### Late input (proposed for 0.7.0; not built)
 
 Status: a proposal for the reviewer's oracle, before the header. It
-changes R. The user chose it on 2026-11-14: the header places a late
-input at its time, as it places a past arm, and the window bounds the
-lateness that it can absorb. The other options were the player waiting
-for complete input (drawing would lag by the lateness) and keeping the
-guard's stop. Where this subsection and the rules above disagree, this
-subsection is the rule for 0.7.0; what it does not change stays.
+changes R. Second draft (2026-11-15): it answers the reviewer's findings
+L1 to L11 on the first draft (d906e19) and the user's decisions of
+2026-11-15; the table at the end maps each finding to its answer. Where
+this subsection and the rules above disagree, this subsection is the
+rule for 0.7.0.
 
-Reason: with 0.6.x a report that comes after a call whose time is later
-than its own stays after that call in R (rule 4). A past arm at the
-time of a hit goes after the late report, so later input reaches the
-arm's nodes before it (pinned), or a waiting group sees a late report
-after its place (condition 3). The player's harness (player.md, "A
-500 Hz display") stopped on the guard in 24, 41 and 58 of 1,000 cases at
+The user's choice (2026-11-14): the header places a late input at its
+time, as it places a past arm, and the window bounds the lateness that it
+can absorb. Rejected: the player waiting for complete input (drawing
+would lag by the lateness), and keeping the guard's stop.
+
+Reason: in 0.6.x a report that comes after a call with a later time
+stays after that call in R (rule 4). A past arm at the time of a hit
+goes after the late report, so later input reaches the arm's nodes
+before it (pinned), or a waiting group sees a late report after its
+place (condition 3). The player's harness (player.md, "A 500 Hz
+display") stopped on the guard in 24, 41 and 58 of 1,000 cases at
 500 Hz for samples 5, 10 and 20 ms late, and the window's length did not
-change that. Placing the report at its time removes both shapes.
+change that.
 
 **Terms.**
 
-- **Input time of a footprint** `N(F)`: after the last barrier, the
-  latest time of an input in R whose footprint meets `F` (a frame or a
-  settle meets every footprint); a barrier's time after a reset. `N`
-  (the input time of every node) is `N(all)`.
-- **Late input**: an input call c whose time is earlier than the time of
-  a call already in R that it must follow by time and footprint: an
-  input whose time is later and whose footprint meets `F(c)`, a frame or
-  a settle with a later onset (every node), or a group or a state call
-  whose time is later and whose footprint meets `F(c)`. Lateness is that
-  difference. An input that is not late goes at the end of R, as before.
-- **Ahead, per footprint.** A group G is past when `N(F(G))` is later
+- **The time of a call** is as in "The time of each call", with three
+  changes. A frame's time is its onset, and a settle's its `t`, for
+  placing it among the other calls too (in 0.6.x a frame and a settle
+  went at R's end). A state call outside a group has the time `N(F(c))`
+  at its call (below), not `N`. A present group's time is its `τ`.
+- **Input time of a footprint** `N(F)`: the latest time of an input in
+  R whose footprint meets `F`, since the last barrier (a frame or a
+  settle meets every footprint). After a reset, the reset's `t`, for
+  every `F`. A flush changes no `N(F)`: it resets nothing (L11). `N`,
+  the input time of every node, is `N(all)`.
+- **Classes, per footprint.** A group G is past when `N(F(G))` is later
   than `τ` at its arm's call, present when it equals `τ`, and ahead when
-  it is earlier. A state call outside a group has the time `N(F(c))` at
-  its call. Before, the classes and the times used `N`, the input time of
-  every node: an input of another device that does not meet G made G
-  past although nothing G reads had reached `τ` (the two-hand entry,
-  "Pending groups"). With this rule that group is ahead and waits (rule
-  3) until an input on its own footprint passes `τ`; "Pending groups"
-  then has nothing left to decide, and the header drops them.
+  it is earlier. In 0.6.x the classes used `N`: input of another device
+  that does not meet G made G past although nothing G reads had reached
+  `τ` (the two-hand entry of "Pending groups"). Such a group is now
+  ahead and waits (rule 3) until an input on its footprint passes `τ`;
+  pending groups no longer arise.
+- **Late input**: an input call c (a feed, a frame or a settle) such that
+  R already holds a call whose time is later than c's and whose
+  footprint meets c's. c must precede that call (L11's wording).
+  Lateness is the largest such difference. An input that is not late
+  goes at the end of R, as before.
 
-**Its place in R.** Rule 4 becomes: an input call goes into R right
-after the last call of R that must come before it, as a past group does
-(rule 2):
+**R as a time order (replaces rules 2 and 4; L1, L2, L3, L4).** R holds
+the calls since the last barrier. For every two calls whose footprints
+meet, the one with the earlier time comes first; at equal times an input
+comes before a state call or a group (L3), and otherwise the earlier
+call comes first. Calls whose footprints do not meet can be in either
+order: they commute, so R is defined up to that freedom. A group's calls
+stay one block at the group's time. Rules 2, 3 and 4 above are
+instances of this order:
 
-- a barrier (a barrier is never crossed); or
-- a call whose time is at or before the input's time and whose footprint
-  meets the input's: an input, a frame or a settle, a state call, or a
-  group (the group's calls are one block, so the input goes after the
-  whole block).
+- rule 2 (a past group after the last call that must come before it);
+- rule 3 (a waiting group right before the first later call that meets
+  it): in time order, a group at `τ` goes after every call at or before
+  `τ` that meets it and before every later one. Lets in, cancels and
+  the H9, H12, H13 and H16 readings stay as written: they say when a
+  waiting group's calls go in and which of them are made;
+- rule 4 (input in call order): now only for inputs whose footprints do
+  not meet, or that are not late.
 
-At equal times the input goes after the calls already in R (call order).
-What stays:
+A late input therefore goes before every call of R that it must precede,
+and after every call it must follow. When a call X already in R must
+follow the input (a later time, a meeting footprint) but sits before a
+call Y the input must follow, X moves after the input. So do the calls
+that must follow X, by the same rule (the reviewer's L2: d3@13 must
+follow d2@12 through T and precede G, which sat before d2@12; G moves
+after d3@13). The order is acyclic: it is the order by (time, inputs
+first, call order) restricted to pairs that meet.
 
-- Order per device: a sample older than its device's last sample is
-  dropped and counted (`dropped_order`), as now. A late input is late
-  against other devices, frames and state calls, never against its own
-  device. A raw mouse's counts are never dropped.
-- A frame call is never late: its onset is the display's clock. It goes
-  at the end of R. A late input with a time earlier than a frame's onset
-  goes before that frame, so the frame's pass sees it, as a view's rule
-  already says ("input up to the earlier of the onset and the poll").
-- Groups: rules 2 and 3 as above, with the per-footprint classes. A
-  waiting group goes in right before the first call of R later than its
-  `τ` that meets it: when a late input takes a place before the call
-  that let a group in, and it is later than `τ` and meets the group, the
-  group goes in right before the late input instead.
-- Pinned: a late input at or before `τ` that meets `F(G)` now goes before
-  G, so it pins nothing. A group is pinned only when an input before the
-  window's oldest checkpoint is later than `τ` (H1, unchanged).
-- Condition 3 (a late report after a waiting group) does not arise: the
-  report goes before the group.
+Equal times (L3): an input at a time at or before `τ` comes before G,
+whatever its call order: G's arm tests the held value at `τ`, and a
+report at `τ` is part of it. In 0.6.x such an input made after a waiting
+G went after it, which a graph with no window cannot run.
+
+**Frames and settles (L1).** A frame goes into R at its onset among the
+calls it meets, which are all calls. Its pass reads every node as of
+that place: the inputs at or before its onset that are in R, and no
+later one (views as now: input up to the earlier of the onset and the
+poll). A settle goes at its `t` the same way. In the player nothing
+changes for a frame made in time: it feeds the reports up to a frame's
+onset before the frame's call (`v2_feed()`), so the frame is at R's end.
+A report later than the onset that a caller feeds before the frame call
+goes after the frame in R, and the header runs the window again for the
+frame (the frame is then the late call).
+
+What the display already used: the bound channels that `ysig_frame()`
+wrote at the frame's call, from R as it was then. A late input placed
+before an earlier frame changes what R gives at that frame. That frame
+was drawn; its channels are not drawn again. The header counts each such
+frame once in `input_late_frames`, not a fallback: the difference is the
+input's lateness, which R makes visible, not an error. After every call
+the bound channels hold R's values for the newest frame in R (a run
+again writes them again, as in 0.6.x; L8).
+
+The 0.6.x pin through a frame (dev1@20, a frame with onset 16, dev2@18,
+then `ysig_arm(det, 17)`): the frame now goes before dev1@20 and dev2@18
+goes before dev1@20, so R is [frame 16, arm 17, dev2@18, dev1@20] where
+they meet, and nothing is pinned. The arm's effect on the frame's pass
+is not there (the frame is before the arm), so no frame is counted.
+
+**The batch, `ysig_feed_n()` (L7).** `ysig_feed_n(g, events, n)` is
+`ysig_feed()` of each event in array order, with the window run again
+once at the end, from the checkpoint at or before the earliest place the
+batch needed, instead of once a late event. Per-device order
+(`dropped_order`) and equal-time call order are the array's order. The
+results are those of the same events fed one call each; only the reads
+between them are not possible. A late event fed alone with `ysig_feed()`
+runs the window again at once.
+
+The player feeds a poll's reports with one `ysig_feed_n()`, drains the
+hits, and takes the exits by time. Format 3.11 rule 4 says "for each
+event" and "the player does not wait for the poll's end". Proposed note
+for 3.11 rule 4, for the format's owner to mark DECIDED (the user's
+condition, 2026-11-15): "The player may feed one poll's events in one
+call and take the exits by time when the results equal feeding each
+event alone. Checked: the reviewer's oracle in late mode, and the model
+harness fed per event against batched, with no difference." The build
+adds both checks before the player uses the batch.
 
 **What the header does.** With a window, a late input whose place is in
-the window goes into the log at its place, and the window runs again
-from the newest checkpoint at or before it, as for a past group. Hits,
-rows and derived events follow "Hits, rows and derived events" above: a
-hit handed out that R no longer has is counted (`arm_hits_superseded`
-when it is a hit later than the input's time of a detect whose state
-the input changed, else `arm_hits_retracted`), and so is a row or an
-event changed in at-once mode (`arm_rows_stale`, `arm_derived_stale`).
-The counts keep their names: they count what the caller had that R does
-not have, whatever call made the change.
+the window goes into the log at its place, the calls that move (above)
+move, and the window runs again from the newest checkpoint at or before
+the earliest place that changed. Hits, rows and derived events follow
+"Hits, rows and derived events": a hit handed out that R no longer has
+is counted (`arm_hits_superseded` for a hit later than the input's time
+of a detect whose input the late input changed, else
+`arm_hits_retracted`), and so is a row or an event changed in at-once
+mode (`arm_rows_stale`, `arm_derived_stale`). The names stay: they
+count what the caller had that R no longer has.
 
-**When R cannot be met, counted** (new counts, all fallbacks that the
-player's guard stops on unless the item says otherwise):
+**When R cannot be met** (new counts):
 
-| Count | When | What the header does |
-|---|---|---|
-| `input_late_far` | the input's place is before the window's oldest checkpoint: lateness beyond the window | makes it at the end of R, as 0.6.x does |
-| `input_late_full` | the window's logs ran full, or the batch below did not fit | the same |
-| `input_late_barrier` | the input's time is before the last barrier (a report of the trial that ended) | makes it at the end of R, after the barrier; not a guard stop when the barrier is a trial's end and the input's role has no control in the next trial (the player decides; the count is kept) |
-| `input_late_off` | no window (a zeroed desc) | makes it at the end of R; an oracle's graph counts this, not compared |
+| Count | When | What the header does | Guard |
+|---|---|---|---|
+| `input_late_far` | the input's place is before the window's oldest checkpoint: lateness beyond the window | makes it at the end of R, as 0.6.x does | stops |
+| `input_late_full` | the window's logs ran full, or the batch did not fit | the same | stops |
+| `input_late_barrier` | the input's time is before the last barrier's time | drops it: in R too it is not there, the trial it belongs to ended (L10) | does not stop |
+| `input_late_off` | no window (a zeroed desc) | makes it at the end of R; an oracle's graph counts this, not compared | n/a |
+| `input_late_frames` | a frame already made whose bound channels R now gives otherwise | nothing: the frame was drawn | does not stop |
 
-A frame's bound channels and its frame rows are made at the frame's
-call. A late input before a frame changes what R gives at that frame. The
-channels are not given again: the display already used them. That
-difference is the input's lateness, not an error of R, so it is counted
-in `input_late_frames` (the frames a late input reached again) and the
-guard does not stop on it. Frame rows follow the final-only rule below.
+An input dropped as before a barrier changes nothing in R or in the
+header (L10: in the first draft R put it after the barrier and the
+header at R's end). `input_late_frames` goes in the data: a trial's
+count is a column of trials.csv, and the session's total is in
+session.json (the coordinator's choice, 2026-11-15; player.md's data
+reference when built).
 
-**Rows and derived events.** Final-only mode still holds:
-a row or an event is final when the call that made it is older than the
-oldest call the window can still run again. A late input that would
-change a final row has its place before the oldest checkpoint, so it
-falls back (`input_late_far`) and changes nothing that was handed out.
-The latency of a final row stays the window's span. In at-once mode a
-late input that changes a row or an event already handed out is counted
-in `arm_rows_stale` or `arm_derived_stale`, as a past group is.
+**Rows and derived events (L9).** Final-only mode still holds: a row or
+an event is final when the call that made it is older than the oldest
+call the window can still run again, and a late input whose place is
+before that falls back (`input_late_far`) and changes nothing handed
+out. A final row's latency is the window's span, `catchup_ns`. In
+at-once mode a late input that changes a row or an event already handed
+out, a frame row too, counts `arm_rows_stale` or `arm_derived_stale`,
+and the guard stops on them. The player opens its graphs final-only for
+rows, so its frame rows never stop it; its derived events stay at once
+(a movement's emit feeds the response collector), so a late report that
+changes an emitted event stops it.
 
-**The window in time.** The window's span becomes a time,
-`desc.catchup_ns`, not a count of frames: lateness is a time, and the
-same count of frames covers 8.3 times less at 500 Hz than at 60 Hz
-(player.md, "Limits counted in frames"). The header keeps up to 8
-checkpoint images, as now, spaced in input time: a new checkpoint at a
-frame or a barrier when the newest is at least `catchup_ns / 8` older,
-and the oldest dropped when the newest is `catchup_ns` past it. So the
-memory for images does not grow with the display's rate, and a run again
-starts at most `catchup_ns / 8` (plus one frame) before the place it
-needs. `catchup_frames` stays as the count of images (1 to 8, as now).
-`catchup_calls` and `catchup_writes` size the logs for `catchup_ns` of
-calls; the player computes them from its roles' report rates, as 0.11.0
-does for 5 frames now.
+**The window in time.** `desc.catchup_ns` (new; the user's choice of
+2026-11-15: a knob with a 50 ms default) is the window's span in input
+time. The header keeps up to 8 checkpoint images, spaced in input time:
+a new checkpoint at a frame or a barrier when the newest is at least
+`catchup_ns / 8` older, and the oldest dropped when the newest is
+`catchup_ns` past it. Memory for images then does not grow with the
+display's rate, and a run again starts at most `catchup_ns / 8` plus one
+frame before the place it needs. `catchup_frames` stays as the count of
+images (1 to 8). `catchup_calls` and `catchup_writes` size the logs for
+`catchup_ns` of calls; the player computes them from its roles' report
+rates.
 
-Sizing (a knob, with a default). The lateness the player must absorb is
-the sum of:
+Sizing: the lateness to absorb is the frame loop's own (a report stamped
+before a frame's onset that a poll reads after the frame call: up to one
+frame period plus the frame's work), plus the transport: a raw mouse or
+a pen up to its report period (1 ms at 1 kHz); a USB serial device with
+HOST stamps behind an FTDI latency timer, 16 ms by default
+(devices_spec.md); LSL streams, per-setup offsets of 6 to 20 ms that a
+setup must measure (devices_spec.md, Kothe et al. 2025); an eye
+tracker's delivery, which devices_spec.md lists only as a vendor's claim
+(EyeLink 1.4 ms at 2 kHz). No device here has a measured lateness
+(devices_spec.md: "A latency is never taken from a manual"), so the
+default, 50 ms, covers a 16 ms FTDI timer, a 20 ms LSL offset and one
+frame at 60 Hz. The player sets `catchup_ns` from the rig profile when a
+role's device has a measured input lateness: that lateness plus two
+frame periods.
 
-- the frame loop's own: a report stamped before a frame's onset that a
-  poll reads after the frame call, up to one frame period plus the
-  frame's work (2 ms at 500 Hz, 17 ms at 60 Hz);
-- the transport: a raw mouse or a pen up to its report period (1 ms at
-  1 kHz); a USB serial device with HOST stamps behind an FTDI latency
-  timer, 16 ms by default (devices_spec.md, "FTDI latency timer"); LSL
-  streams, per-setup offsets of 6 to 20 ms that a setup must measure
-  (devices_spec.md, Kothe et al. 2025); an eye tracker's delivery, which
-  devices_spec.md lists only as a vendor's claim (EyeLink 1.4 ms at
-  2 kHz), not a measurement.
-
-No device here has a measured lateness yet (devices_spec.md: "A latency
-is never taken from a manual"). So `catchup_ns` is a knob: the default is
-50 ms, which covers a 16 ms FTDI timer, a 20 ms LSL offset and one frame
-at 60 Hz. The player sets it from the rig profile when a role's device
-has a measured input lateness (the loopback summary's input bounds), as
-that lateness plus two frame periods. A report later than the window is
-counted (`input_late_far`) and the guard stops: the definition then needs
-a longer window or the rig a faster device.
-
-**What a run again costs, and the batch.** A run again costs the calls
-since its checkpoint (measured above: about 0.76 us a call, 202.7 us for
-half a frame of four 8 kHz mice). A device with a steady lateness makes
-every one of its reports late. One run again per report is not
-affordable: at 500 Hz, a 10 ms tracker at 1 kHz and one window of 50 ms
-would run about 50 ms of calls again 1,000 times a second. So the header
-batches:
-
-- `ysig_feed_n(g, events, n)` (new): one poll's reports, in any order.
-  The header places each at its time (rule 4) in the log, then runs the
-  window again once, from the checkpoint at or before the earliest
-  place. Hits come out in R's order. A report that is not late costs
-  what `ysig_feed()` costs now.
-- `ysig_feed()` of a late report stays allowed and runs again at once
-  (exact, one run again per call).
-- Reads made between the reports of one `ysig_feed_n()` are not
-  possible; a read after it sees R so far, as for every call.
-
-The bound per frame: the player feeds each poll's reports with one
-`ysig_feed_n()`, so a frame makes at most one run again for late input,
-plus one per past arm it makes, as now. One run again replays at most
-the calls of `catchup_ns / 8 + lateness` before the newest call: with
-`catchup_ns` 50 ms and a lateness of 10 ms, about 16 ms of calls. With
-four 8 kHz mice that is about 128 reports a mouse, 512 calls, about
-0.4 ms on the P-core (by the cost above); at 1 kHz and two roles, about
-32 calls, 25 us. These are estimates from the 0.6.0 measurements; the
-build measures them before the API is final (a frame's work at 60 and
-500 Hz, the examples, `--test-sample-late` 5, 10, 20 ms).
-
-This changes the player's order of work in a poll (format 3.11 rule 4:
-"for each event, feed, drain, take an exit"). With `ysig_feed_n()` the
-player feeds the poll, drains the hits in R's order, and takes the exits
-by time, arming the next state's controls in the past at the hit's time.
-That is what 0.6.0's window already makes exact for an arm. Whether the
-format's rule 4 keeps "the player does not wait for the poll's end" is a
-format question; it is listed in "Open questions" below.
+**What a run again costs.** A run again costs the calls since its
+checkpoint (measured above: about 0.76 us a call, 202.7 us for half a
+frame of four 8 kHz mice). A device with a steady lateness makes every
+one of its reports late; one run again per report is not affordable at
+500 Hz, hence the batch. With one `ysig_feed_n()` a poll, a frame makes
+at most one run again for late input, plus one per past arm it makes,
+as now. One run again replays at most the calls of `catchup_ns / 8` plus
+the lateness before the newest call: with `catchup_ns` 50 ms and a
+lateness of 10 ms, about 16 ms of calls; with four 8 kHz mice about 512
+calls, about 0.4 ms on the P-core; at 1 kHz and two roles about 32
+calls, 25 us. Estimates from the 0.6.0 measurements; the build measures
+them (a frame's work at 60 and 500 Hz, the examples, and
+`--test-sample-late` 5, 10 and 20 ms).
 
 **Exactness for late input.** A graph with no window given R in order
 places nothing: every call of R is in time order for the nodes it
 reaches, so the oracle's B runs R as a graph that gets its calls on
 time. The header gives R's result for a late input when it meets the
 conditions below; else it counts the input once in `input_unverified`
-(new; the guard stops on it, as on `arm_unverified`) and makes R as
-usual.
+(new; the guard stops on it) and makes R as usual.
 
 1. Its place is in the window and after the newest barrier.
-2. It does not move a waiting group's going-in. When a later call
-   already let a group W in, and the late input is later than W's `τ`
-   and meets `F(W)`, R now puts W right before the late input, so W's
-   calls move across every call between. The header counts the input
-   in that case. Reason: the run again of one place does not move a
-   group that went in elsewhere (a later build may extend this).
-3. It does not take a place inside the span from a group G with
-   `N(G) < τ` to `L(G)` when it meets `F(G)` and is later than `τ`: it
-   becomes G's `L`. The header retests 2 (b) for G with the new `L`
-   ("When the header tests"), and counts G if that fails.
-4. Equal times: an input at the time of a call that meets it goes after
-   it (call order), and the header does the same; no condition.
+2. When it takes a place between a group G with `N(G) < τ` and `L(G)`,
+   meets `F(G)` and is later than `τ`, it becomes G's `L`: the header
+   tests 2 (a) and 2 (b) again for G with that `L` (the new `L` must meet
+   `F_a(G)`; L5), and counts G if one fails.
+3. When it takes a place inside such a span and meets the footprint of a
+   group H there that 2 (b)'s exception admitted, it can let H in before
+   G (the reviewer's 489 shape; L6): the header tests 2 (b) again, with
+   R's order at `L`, for every G whose span holds the input.
 
-Every group condition above (1 to 4 of "Exactness") stays, tested at a
-group's going-in as now, with `N(G)` from R's order (a late input
-before G's place raises `N(G)`).
+The first draft's condition 2 (a late input that moves a waiting
+group's going-in) goes (L4): in time order a waiting group's place is
+the time order's, and the reviewer's 12,000 cases never met it. Every
+group condition of "Exactness" stays, tested at a group's going-in as
+now, with `N(G)` from R's time order.
+
+**What the caller can rely on (0.7.0, in place of the 0.6.x
+paragraph).** After each call, every node's value, ring and state, and
+every count but the window's own, are those of R's calls so far on a
+graph with no window, given in R's order. The exceptions: the bound
+channels hold R's values for the newest frame only; a frame already
+drawn keeps what the caller read at its call (`input_late_frames` counts
+the frames where R now differs); and `history_skipped` and
+`time_clamped`, as before.
 
 **Exceptions: refused or counted, and why.**
 
 - A sample older than its device's last stays dropped (`dropped_order`):
   per device, time order is the device's own, and a report that goes
-  back is a device or driver fault, not lateness.
+  back is a device or driver fault, not lateness. In a batch, the
+  array's order decides (L7).
 - A report with a stamp later than the poll by more than
   `YSIG_FUTURE_NS` stays a bad stamp (the frame's recovery, as now).
-- A frame never moves (its onset is the clock); `input_late_frames`
-  counts the frames a late input reached again, and the guard does not
-  stop on it.
-- A late input before the window or after a barrier is made at the end
-  of R and counted (`input_late_far`, `input_late_barrier`).
+- An input before the last barrier is dropped (`input_late_barrier`).
+- A late input before the window falls back (`input_late_far`).
 - With no window nothing is placed (`input_late_off`), as with arms.
 - `history_skipped` and `time_clamped` stay diagnostics that a run again
   can change by a few (as for arms).
 
+**The reviewer's findings on the first draft, and the answers.**
+
+| Finding | Answer here |
+|---|---|
+| L1 (high): a frame at R's end breaks the place rule; dev2@18 after a frame with onset 16 went after dev1@20 | A frame and a settle go at their time among all calls (time order); the frame's pass reads input at or before its onset; the display's channels at the call are not given again (`input_late_frames`, no stop). The 0.6.x pin through a frame no longer arises |
+| L2 (high): the last call the input must follow comes after a call it must precede | R is a time order over meeting pairs; a call that must follow the input moves after it, with the calls that must follow it |
+| L3 (medium): an input at `τ` after a waiting G | At equal times an input comes before a group; an input at or before `τ` comes before G whatever its call order |
+| L4 (low): condition 2 never applies; "right before" against "at the end of R" | Condition 2 deleted; the time order fixes the wording |
+| L5 (medium): condition 3 must retest 2 (a) | Condition 2 (was 3) tests 2 (a) and 2 (b) with the new `L` |
+| L6 (medium): a late input that meets only an exception group H | Condition 3: 2 (b) again, with R's order at `L`, for every G whose span holds the input |
+| L7 (medium): `ysig_feed_n()`'s order | Array order, as one `ysig_feed()` each; results equal per-event feeding |
+| L8 (medium): bound channels given again or not | Given again for the newest frame (as 0.6.x); a drawn frame is not; stated in "What the caller can rely on" |
+| L9 (low): at-once frame rows | They count `arm_rows_stale` and stop the guard; final-only's latency is `catchup_ns`; the player is final-only for rows |
+| L10 (low): `input_late_barrier`'s exemption against R | Such an input is dropped in R and in the header, so they agree; the exemption stays |
+| L11 (low): `N(F)` after a flush; a settle's place; "must follow" | A flush changes no `N(F)`; a settle goes at its `t` as a frame does; the definition says "must precede" |
+
 **Open questions for this text.**
 
-1. Format 3.11 rule 4: feed a poll's reports together, then take exits
-   by time, against "for each event" as written. The window makes the
-   result the same; the text of rule 4 would change.
-2. Whether `input_late_frames` should be in the data (a frame shown
-   without a report that R puts before it): it is a measure of the rig's
-   input lateness per frame.
-3. The default `catchup_ns` (50 ms) until a rig's devices have measured
-   input lateness.
+1. The proposed note for format 3.11 rule 4 (above), and its two checks.
+2. The default `catchup_ns` until a rig's devices have a measured input
+   lateness.
 
 #### Where 0.6.0 before this section differed
 
