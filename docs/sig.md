@@ -1657,7 +1657,8 @@ questions).**
 2. A frame or a settle with a time before the last barrier goes right
    after the barrier; it is not dropped. The display already used the
    frame, and the reviewer's R does the same. `late_barrier`'s drop
-   applies to feeds only. Such a frame or settle counts nothing of its
+   applies to feeds only (ruling 8 extends this to every call's key).
+   Such a frame or settle counts nothing of its
    own: it is a late call (every call since the barrier has a greater
    key), placed with a run again, and `late_frames` counts a frame it
    changes, as for any late call.
@@ -1705,6 +1706,22 @@ questions).**
    group at `N`. An open gap's calls let in at their call until the arm
    closes the gap; for a past group then at `τ`, and the run again
    corrects them ("Rule 3's let-in time for a state call" above).
+8. (Ruling 2 extended, the coordinator, 2026-11-15, from the reviewer's
+   case 350 of seed 20261115.) Any call whose time is before the last
+   barrier takes the barrier's time as its key time; call order decides
+   among them. This covers state calls, groups and `ysig_disarm_at()`,
+   not frames and settles alone. The clamp applies to three readings:
+   the key; the cancel by key (a disarm's time against an arm's `τ`);
+   and the let-in tests (a waiting group's `τ` against the let-in time,
+   and the bound of S1' (b)). What a call does at its time is unchanged:
+   an arm tests its input at its `τ`, a `ysig_disarm_at()` ends its arm
+   at its `t`. The case: after a reset at 19.254 ms, arms at 12.873 ms,
+   then `ysig_disarm_at()` of the same detect at 3.828 ms. Unclamped, the
+   disarm's key (3.828) is smaller than the arm's (12.873) and cancels
+   it, voiding a hit already handed out; clamped, both key at 19.254 and
+   the arm, made first, is the smaller: it goes in, and the disarm ends
+   it. The header clamps with the last barrier's time (`ysig__kt()`):
+   every call in its log and every waiting arm is after that barrier.
 
 Measured effect of ruling 4 (the reviewer's oracle at 99addca, mode 4
 with A's checks, seed 20261115, 3,000 cases, the Linux desktop):

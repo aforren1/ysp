@@ -7155,6 +7155,42 @@ static void test_v2_s1(void) {
         CHECK(v2_hits(2, NULL) == 0);
     }
 }
+/* Ruling 2 extended (the oracle's case 350 of seed 20261115): a call whose
+ * time is before the last barrier keys at the barrier's time, call order
+ * deciding among them; so do the cancel by key and the let-in tests. d's
+ * device (3) last at 10, device 1 at 20, then a flush (at N, 20): d's arm at
+ * 12 waits (ahead), ysig_disarm_at(d, 5) follows. Both key at 20, the arm
+ * made first: the disarm_at does not cancel it; it lets it in (at or
+ * before its t) and ends it: an entry-now hit at 12. The control (v 0):
+ * no flush, 5 is earlier than 12, the disarm_at cancels the arm by key */
+static void test_v2_bar_clamp(void) {
+    ysig_stats st;
+    int v;
+    g_where = "ruling 2 extended, the key clamp (case 350)";
+    for (v = 0; v < 2; v++) {
+        int64_t t = 0, cancelled0;
+        ysig_node n[3];
+        n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 1); n[0].history = 64;
+        n[1] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 3, 1); n[1].history = 64;
+        n[2] = ysig_node_of(YSIG_OP_DETECT, 1, -1); n[2].p[YSIG_DETECT_LEVEL] = 5;
+        n[2].p[YSIG_DETECT_ENTRY] = YSIG_ENTRY_NOW; n[2].p[YSIG_DETECT_OUT] = YSIG_OUT_HIT; n[2].history = 64;
+        if (!rp_open(n, 3, 4, 0, false, false)) return;
+        rp_feed(10 * MS, 9, YIN_AXIS_POSITION, 3);
+        rp_feed(20 * MS, 0, YIN_AXIS_POSITION, 1);
+        (void)v2_hits(2, NULL);   /* the reset's arm */
+        CHECK(ysig_disarm_at(&g_rp, 2, 10 * MS));   /* ends it: nothing armed */
+        ysig_get_stats(&g_rp, &st);
+        cancelled0 = st.arm_ahead_cancelled;
+        if (v) CHECK(ysig_flush(&g_rp));
+        CHECK(ysig_arm(&g_rp, 2, 12 * MS) && g_rp.wt->n == 1);
+        (void)v2_hits(2, NULL);
+        CHECK(ysig_disarm_at(&g_rp, 2, 5 * MS));
+        ysig_get_stats(&g_rp, &st);
+        /* a cancelled arm's entry stays until something lets its group in */
+        CHECK(g_rp.wt->n == !v && st.arm_ahead_cancelled - cancelled0 == !v);
+        CHECK(v2_hits(2, &t) == v && (v ? t == 12 * MS : 1));
+    }
+}
 /* The oracle's case 971 (OFF=l 20261122), reduced: an ahead group W
  * [set X's offset to -1, arm d at tw], X an offset of device 3 and d a
  * detect of X, waits; ysig_disarm_at(d, 60) cancels W's arm by key, so W
@@ -7641,6 +7677,7 @@ int main(void) {
     test_v2_old_shapes();
     test_v2_present_key();
     test_v2_s1();
+    test_v2_bar_clamp();
     test_v2_lost_set();
     test_v2_exit_late();
     test_v2_two_untils();

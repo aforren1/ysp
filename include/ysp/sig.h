@@ -3498,13 +3498,23 @@ static void ysig__settle(ysig_graph* g, int from, int64_t t);
  * the caller's order, as in 0.6.x; a feed at a time carries the input that
  * the others at that time read (L3, T7) */
 #define YSIG__OC(cls) ((cls) > 0)
+/* Ruling 2 extended (case 350, 2026-11-15): a call whose time is before
+ * the last barrier takes the barrier's time as its key time; call order
+ * decides among them. It holds for the key, the cancel by key and the
+ * let-in tests, not for what a call does at its time (an arm tests its
+ * tau). Every call R holds and every waiting arm is after the last
+ * barrier (a barrier clears both), so one barrier time serves all. */
+static int64_t ysig__kt(const ysig_graph* g, int64_t t) {
+    return t < g->bar_t ? g->bar_t : t;
+}
 static void ysig__key_note(ysig_graph* g, const uint64_t* f, int64_t t, int cls) {
     int i, oc = YSIG__OC(cls);
+    int64_t kt = ysig__kt(g, t);
     for (i = 0; i < g->n; i++) {
         ysig__nd* n;
         if (f && !((f[i >> 6] >> (i & 63)) & 1u)) continue;
         n = &g->nd[i];
-        if (t > n->kt || (t == n->kt && (oc > n->kc || (oc == n->kc && g->ko > n->ko)))) { n->kt = t; n->kc = oc; n->ko = g->ko; }
+        if (kt > n->kt || (kt == n->kt && (oc > n->kc || (oc == n->kc && g->ko > n->ko)))) { n->kt = kt; n->kc = oc; n->ko = g->ko; }
         if (cls < 2 && t > n->nt) n->nt = t;
     }
 }
@@ -3524,6 +3534,7 @@ static int64_t ysig__nf(const ysig_graph* g, const uint64_t* f) {
  * earlier, so smaller) */
 static int ysig__is_late(const ysig_graph* g, const uint64_t* f, int64_t t, int cls, uint64_t ord) {
     int i;
+    t = ysig__kt(g, t);
     cls = YSIG__OC(cls);
     for (i = 0; i < g->n; i++) {
         const ysig__nd* n = &g->nd[i];
@@ -4607,11 +4618,13 @@ static int ysig__kcls(int kind) {
     return kind == YSIG_J_FEED ? 0 : kind == YSIG_J_FRAME || kind == YSIG_J_SETTLE ? 1 : 2;
 }
 static uint64_t ysig__call_ko(const ysig__call* c) { return c->gid ? c->gid : c->cseq; }
-static int ysig__call_gt(const ysig__call* c, int64_t t, int cls, uint64_t ord) {
+static int ysig__call_gt(const ysig_graph* g, const ysig__call* c, int64_t t, int cls, uint64_t ord) {
     int k = YSIG__OC(ysig__kcls(c->e.kind));
     uint64_t o = ysig__call_ko(c);
+    int64_t ct = ysig__kt(g, c->tr);
+    t = ysig__kt(g, t);
     cls = YSIG__OC(cls);
-    return c->tr > t || (c->tr == t && (k > cls || (k == cls && o > ord)));
+    return ct > t || (ct == t && (k > cls || (k == cls && o > ord)));
 }
 
 /* From checkpoint k: its state, the ring slots written since put back,
@@ -5065,7 +5078,7 @@ static void ysig__wait_cancel(ysig_graph* g, int node, int64_t t, uint64_t seq) 
     ysig__wt* w = g->wt;
     int k;
     for (k = 0; k < w->n; k++)
-        if (w->a[k].node == node && w->a[k].t > t && w->a[k].seq < seq) {
+        if (w->a[k].node == node && ysig__kt(g, w->a[k].t) > ysig__kt(g, t) && w->a[k].seq < seq) {
             w->a[k].node = -1 - node;   /* its group's other calls still go in */
             g->st.arm_ahead_cancelled++;
         }
@@ -5168,7 +5181,7 @@ static void ysig__wait_place(ysig_graph* g, int k, int with_arm) {
          * call's N(F(c)), not at tau: at tau it would let a group in on
          * input of another device that is not complete yet, and that
          * device's next report would void a hit already handed out */
-        ysig__wait_fire(g, cn[i], f, with_arm ? UINT64_MAX : 0);
+        ysig__wait_fire(g, cn[i], f, !with_arm ? 0 : ysig__kt(g, cn[i]) < ysig__kt(g, a.t) ? UINT64_MAX : a.seq);
         if (e.kind == YSIG_J_DISARM) e.t = a.t;
         ysig__cas_call(g, ci, a.seq, a.t, e.kind, e.node);
         if (g->cu) {
@@ -5272,11 +5285,13 @@ static void ysig__state_fp(ysig_graph* g, const ysig_entry* e, uint64_t* f) {
 }
 static void ysig__wait_fire(ysig_graph* g, int64_t t, const uint64_t* f, uint64_t incl) {
     ysig__wt* w = g->wt;
+    int64_t kt = ysig__kt(g, t);
     for (;;) {
         int k, best = -1;
         for (k = 0; k < w->n; k++) {
             uint64_t fa[YSIG__FPW];
-            if (incl ? w->a[k].t > t || (w->a[k].t == t && w->a[k].seq > incl) : w->a[k].t >= t) continue;
+            int64_t at = ysig__kt(g, w->a[k].t);   /* ruling 2 extended */
+            if (incl ? at > kt || (at == kt && w->a[k].seq > incl) : at >= kt) continue;
             if (f) {
                 ysig__wait_fp(g, &w->a[k], fa);
                 if (!ysig__fp_meets(g, fa, f)) continue;
@@ -5369,7 +5384,7 @@ static void ysig__tie_note(ysig_graph* g, int64_t t, const uint64_t* f) {
     uint64_t fa[YSIG__FPW];
     int k, j;
     for (k = 0; k < w->n; k++) {
-        if (w->a[k].t != t) continue;
+        if (ysig__kt(g, w->a[k].t) != ysig__kt(g, t)) continue;
         ysig__wait_fp(g, &w->a[k], fa);
         if (!ysig__fp_meets(g, fa, f)) continue;
         for (j = 0; j < w->n_tie && w->tie_seq[j] != w->a[k].seq; j++) { }
@@ -5449,6 +5464,7 @@ static int ysig__ck_late(const ysig_graph* g, int kslot, const uint64_t* F, int6
     const ysig__nd* nd = (const ysig__nd*)(const void*)(k->img + ((sizeof(ysig_graph) + 7u) & ~(size_t)7u));
     int i;
     if (k->bar) return 0;
+    t = ysig__kt(g, t);
     cls = YSIG__OC(cls);
     for (i = 0; i < g->n; i++) {
         const ysig__nd* n = &nd[i];
@@ -5478,7 +5494,7 @@ static uint64_t ysig__late_move_k(ysig_graph* g, uint64_t a, uint64_t p0, const 
                 (void)ysig__fp_entry(g, &cu->calls[u1 % C], f);
                 for (w = 0; w < g->dw; w++) fu[w] |= f[w];
             }
-        move = (ysig__call_gt(c, t, cls, ord) && ysig__fp_meets(g, fu, F)) || (any && ysig__fp_meets(g, fu, Mf));
+        move = (ysig__call_gt(g, c, t, cls, ord) && ysig__fp_meets(g, fu, F)) || (any && ysig__fp_meets(g, fu, Mf));
         if (move) {
             for (q = s; q < u1; q++) cu->mv[nm++] = cu->calls[q % C];
             for (w = 0; w < g->dw; w++) Mf[w] |= fu[w];
@@ -5553,7 +5569,7 @@ static int ysig__late_place(ysig_graph* g, uint64_t a, uint64_t b, uint64_t lo, 
     if (!cu->n_ck || ysig__ck_late(g, cu->ck0, F, t, cls, ord)) { g->st.late_far++; return 0; }
     for (s = lo; s < a; s++) {
         const ysig__call* c = &cu->calls[s % C];
-        if (ysig__fp_entry(g, c, f) == 2 || !ysig__call_gt(c, t, cls, ord) || !ysig__fp_meets(g, f, F)) continue;
+        if (ysig__fp_entry(g, c, f) == 2 || !ysig__call_gt(g, c, t, cls, ord) || !ysig__fp_meets(g, f, F)) continue;
         while (s > lo && c->gid && cu->calls[(s - 1) % C].gid == c->gid) s--;
         p0 = s;
         break;
@@ -5719,9 +5735,9 @@ static const ysig__call* ysig__c4_best(ysig_graph* g, uint64_t gid, int64_t t) {
         const ysig__call* c = &cu->calls[s % (uint64_t)cu->C];
         int64_t ti;
         int k = c->e.kind;
-        if (c->gid == gid || ysig__call_gt(c, t, 2, gid)) continue;
+        if (c->gid == gid || ysig__call_gt(g, c, t, 2, gid)) continue;
         if (!ysig__input_t(&c->e, &ti) && k != YSIG_J_ARM && k != YSIG_J_DISARM && k != YSIG_J_DISARM_AT) continue;
-        if (!best || ysig__call_gt(c, best->tr, ysig__kcls(best->e.kind), ysig__call_ko(best)) ||
+        if (!best || ysig__call_gt(g, c, best->tr, ysig__kcls(best->e.kind), ysig__call_ko(best)) ||
             (c->tr == best->tr && YSIG__OC(ysig__kcls(k)) == YSIG__OC(ysig__kcls(best->e.kind)) && ysig__call_ko(c) == ysig__call_ko(best) && c->cseq > best->cseq))
             best = c;
     }
@@ -5794,7 +5810,7 @@ static void ysig__wait_blk(ysig_graph* g, int k, int* nb) {
         ysig__state_fp(g, &calls[i], f);
         /* S1': an ahead group's call at its N(F(c)), earlier than its
          * tau: inclusive by key (b) */
-        ysig__wait_fire_blk(g, cn[i], f, UINT64_MAX, nb);
+        ysig__wait_fire_blk(g, cn[i], f, ysig__kt(g, cn[i]) < ysig__kt(g, a.t) ? UINT64_MAX : a.seq, nb);
         c = &g->cu->blk[(*nb)++];
         memset(c, 0, sizeof *c);
         c->e = calls[i];
@@ -5821,11 +5837,13 @@ static void ysig__wait_blk(ysig_graph* g, int k, int* nb) {
 }
 static void ysig__wait_fire_blk(ysig_graph* g, int64_t t, const uint64_t* f, uint64_t incl, int* nb) {
     ysig__wt* w = g->wt;
+    int64_t kt = ysig__kt(g, t);
     for (;;) {
         int k, best = -1;
         for (k = 0; k < w->n; k++) {
             uint64_t fa[YSIG__FPW];
-            if (incl ? w->a[k].t > t || (w->a[k].t == t && w->a[k].seq > incl) : w->a[k].t >= t) continue;
+            int64_t at = ysig__kt(g, w->a[k].t);   /* ruling 2 extended */
+            if (incl ? at > kt || (at == kt && w->a[k].seq > incl) : at >= kt) continue;
             ysig__wait_fp(g, &w->a[k], fa);
             if (!ysig__fp_meets(g, fa, f)) continue;
             if (best < 0 || w->a[k].t < w->a[best].t || (w->a[k].t == w->a[best].t && w->a[k].seq < w->a[best].seq)) best = k;
@@ -6292,14 +6310,14 @@ static int ysig__gap_tau(ysig_graph* g, uint64_t from, int64_t t) {
     for (s = from; s < cu->c_head; s++) {
         const ysig__call* c = &cu->calls[s % (uint64_t)cu->C];
         if (c->wp) {
-            if (c->tr > t) return 1;
+            if (ysig__kt(g, c->tr) > ysig__kt(g, t)) return 1;
             continue;
         }
         if (c->e.kind == YSIG_J_ARM) continue;
         ysig__state_fp(g, &c->e, f);
         /* inclusive by key (S1' (b)): one at t was made before the arm */
         for (k = 0; k < w->n; k++) {
-            if (w->a[k].t > t) continue;
+            if (ysig__kt(g, w->a[k].t) > ysig__kt(g, t)) continue;
             ysig__wait_fp(g, &w->a[k], fa);
             if (ysig__fp_meets(g, fa, f)) return 1;
         }
@@ -6331,7 +6349,7 @@ static void ysig__arm_past(ysig_graph* g, ysig_entry* e, uint64_t seq) {
     pos = UINT64_MAX;
     for (s = cu->c_tail; s < from; s++) {
         const ysig__call* c = &cu->calls[s % (uint64_t)cu->C];
-        if (ysig__fp_entry(g, c, f) == 2 || !ysig__call_gt(c, t, 2, seq) || !ysig__fp_meets(g, f, F)) continue;
+        if (ysig__fp_entry(g, c, f) == 2 || !ysig__call_gt(g, c, t, 2, seq) || !ysig__fp_meets(g, f, F)) continue;
         while (s > cu->c_tail && c->gid && cu->calls[(s - 1) % (uint64_t)cu->C].gid == c->gid) s--;
         pos = s;
         break;
@@ -6399,7 +6417,8 @@ static void ysig__arm_past(ysig_graph* g, ysig_entry* e, uint64_t seq) {
              * waiting group at t made before this arm. A present group
              * here has ties at its calls' N(F(c)) (ysig__tie_note): each
              * lets in at its N(F(c)), at or before t, inclusive */
-            ysig__wait_fire_blk(g, present ? c->n_at : t, fs, c->e.kind == YSIG_J_ARM || present ? UINT64_MAX : seq, &nb);
+            ysig__wait_fire_blk(g, present ? c->n_at : t, fs,
+                                c->e.kind == YSIG_J_ARM || (present && ysig__kt(g, c->n_at) < ysig__kt(g, t)) ? UINT64_MAX : seq, &nb);
             ysig__set_tr(c, t);
             c->gid = seq;
             blk[nb++] = *c;
