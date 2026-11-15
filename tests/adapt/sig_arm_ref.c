@@ -3,6 +3,16 @@
  * 09ecfb2, amended in b6676f4) and the graph's other rules in sig.md. It
  * does not read the header's internals.
  *
+ * Late voids (the coordinator's ruling of 2026-11-15; the builder's case
+ *   763 of seed 20261115): a hit handed out that a late call voids counts
+ *   in late_hits_voided, a guard stop. hand_check() used to fail any void
+ *   with no arm since the last check. In late modes, with a late call since
+ *   the last check, the voids must now rise late_hits_voided (no arm since)
+ *   or the three counts together (arms too). Compile with
+ *   -DSIG_HAS_LATE_VOIDED for a header with the count; without it the
+ *   check takes the pre-ruling text (superseded + retracted) and counts
+ *   those checks. a_counts() puts late_hits_voided on the fallback side.
+ *
  * Tally fix (the builder's case 14 of seed 20261115): push() read A's
  *   counts at the failing call itself, without the late counts; it now
  *   uses a_counts(), as the B-cannot tally and the end checks do. Counted:
@@ -721,6 +731,7 @@ static void r_remove_ci(int ci) {
 /* ---- late input (d906e19, "Late input", proposed for 0.7.0) ------------- */
 static int g_late;            /* SIG_ORACLE_LATE=1: R by that text */
 static int g_noA;             /* late mode without A's checks (no SIG_ORACLE_LATE_A) */
+static char g_call_late[MAXC];   /* (late modes) the call was a late call: an input or a state call placed before calls already in R */
 static struct {
     long late, far, barrier, frames, cond2, l_new, l_new_nfa, ooo_in, ooo_grp, by_frame, by_fb, by_other, closure, late_state, late_by_disarm, cancel_eq, late_state_span, closure_escape, cancel_letin;
 } g_lc;                       /* per case: what the text counts, and what it leaves out */
@@ -1290,6 +1301,7 @@ static void add_probe(int64_t t) {
  * this call, which must be a past arm, counted: superseded when its own
  * detect's and later than tau, retracted otherwise. */
 static ysig_stats g_chk_st;   /* A's counts at the last hand_check that ran */
+static long g_lv_old;         /* voids after a late call checked by the pre-ruling text (no late_hits_voided) */
 static int g_chk_ci;          /* its call */
 static void hand_check(int ci, int mark, const ysig_stats* s0, const ysig_stats* s1) {
     static char now[8192];
@@ -1339,6 +1351,38 @@ static void hand_check(int ci, int mark, const ysig_stats* s0, const ysig_stats*
                  : c->kind == C_DRAIN ? "drain" : "drain before a barrier or a full queue");
         g_why = g_whybuf;
         return;
+    }
+    {
+        /* (late modes) the late calls since the last check */
+        int lates = 0;
+        long dlate = 0;
+        for (k = g_chk_ci + 1; k <= ci && k < (int)sizeof g_call_late; k++) if (k >= 0 && g_call_late[k]) lates++;
+#ifdef SIG_HAS_LATE_VOIDED
+        dlate = (long)(s1->late_hits_voided - g_chk_st.late_hits_voided);
+#endif
+        if (g_late && lates && (esup || eret || dlate)) {
+            /* (the coordinator's ruling, 2026-11-15) a hit handed out that a
+             * late call voids counts in late_hits_voided, whatever its time;
+             * arm_hits_superseded and _retracted stay for voids an arm or a
+             * disarm causes. With arms since the last check too, only the
+             * total can be checked. */
+            long dsup = s1->arm_hits_superseded - g_chk_st.arm_hits_superseded, dret = s1->arm_hits_retracted - g_chk_st.arm_hits_retracted;
+#ifdef SIG_HAS_LATE_VOIDED
+            int ok = arms ? dsup + dret + dlate == esup + eret : (dlate == esup + eret && dsup + dret == 0);
+#else
+            int ok = dsup + dret == esup + eret;   /* (a header before the count: the text before the ruling) */
+            g_lv_old++;
+#endif
+            if (!ok && !skip('V')) {
+                snprintf(g_whybuf, sizeof g_whybuf, "hits voided after a late call: late_hits_voided +%ld, superseded +%ld, retracted +%ld; voided %ld (arms since %d)",
+                         dlate, dsup, dret, esup + eret, arms);
+                g_why = g_whybuf;
+                return;
+            }
+            g_chk_st = *s1;
+            g_chk_ci = ci;
+            return;
+        }
     }
     if (!arms && (esup || eret)) {
         g_why = "a hit handed out earlier voided with no arm made since";
@@ -1751,10 +1795,10 @@ static void late_input2(int ci, uint64_t fp) {
             if (!(g_R[i].flags & E_NEUTRAL) && (g_R[i].fp & fp) && okey_lt(kc, r_key(&g_R[i]))) {
                 if (g_R[i].grp < 0 && g_c[g_R[i].ci].kind == C_DISARM && r_key(&g_R[i]).t > t && g_call_nf[g_R[i].ci] <= t) by_dis = 1; else by_other = 1;
             }
-        if (by_dis || by_other) g_lc.late++;
+        if (by_dis || by_other) { g_lc.late++; g_call_late[ci] = 1; }
         if (by_dis && !by_other) g_lc.late_by_disarm++;   /* late only because a plain disarm sits at N, past N(F) */
     } else
-    for (i = lb + 1; i < g_nR; i++) if (!(g_R[i].flags & E_NEUTRAL) && (g_R[i].fp & fp) && r_key(&g_R[i]).t > t) { g_lc.late++; break; }
+    for (i = lb + 1; i < g_nR; i++) if (!(g_R[i].flags & E_NEUTRAL) && (g_R[i].fp & fp) && r_key(&g_R[i]).t > t) { g_lc.late++; g_call_late[ci] = 1; break; }
     place_waiting(t, fp);
     g_R[g_nR++] = mk_ent(ci, -1, t);
     r_sort();
@@ -1863,7 +1907,7 @@ static void step(int ci) {
             tmp.fp = g_call_fp[ci]; tmp.flags = E_STATE;
             kc = r_key(&tmp);
             for (q = 0; q < g_nR; q++) if (g_R[q].flags & E_BARRIER) lb = q;
-            for (q = lb + 1; q < g_nR; q++) if (!(g_R[q].flags & E_NEUTRAL) && (g_R[q].fp & g_call_fp[ci]) && okey_lt(kc, r_key(&g_R[q]))) { g_lc.late_state++; g_late_state_ci = ci; break; }
+            for (q = lb + 1; q < g_nR; q++) if (!(g_R[q].flags & E_NEUTRAL) && (g_R[q].fp & g_call_fp[ci]) && okey_lt(kc, r_key(&g_R[q]))) { g_lc.late_state++; g_late_state_ci = ci; g_call_late[ci] = 1; break; }
         }
         g_R[g_nR++] = mk_ent(ci, -1, g_call_time[ci]);
         if (g_npend < 15) g_pend[g_npend++] = ci;
@@ -2069,6 +2113,9 @@ static void a_counts(long long* unv, long long* oth) {
     /* (0.7.0) late_unverified, and the late fallbacks the guard stops on */
     *unv += st.late_unverified;
     *oth += st.late_far + st.late_full;
+#ifdef SIG_HAS_LATE_VOIDED
+    *oth += st.late_hits_voided;   /* (the 2026-11-15 ruling) a guard stop */
+#endif
 #endif
 }
 static void push(const call* c) {
@@ -2458,7 +2505,7 @@ int main(int argc, char** argv) {
         g_final_der = SIG_ARM_REF_SPEC && rnd() % 3 == 0;
         if (!open_graph(&g_a, g_ar_a, g_ch_a, 1)) return 2;
         memset(g_ch_a, 0, sizeof g_ch_a);
-        memset(&g_lc, 0, sizeof g_lc); memset(g_lci, 0xff, sizeof g_lci); g_bc_ci = -1; g_end_fail_kind = 0; g_exc_dis_case = 0; g_unv_fail = 0; g_other_fail = 0; g_why = NULL; g_b_cannot = 0; g_cannot_why = 0; g_h9 = 0; g_fail_ci = -1; g_pred = 0; g_pred_why = 0; g_r_moved = 0; g_bw_n = 0; g_nbran = 0;
+        memset(&g_lc, 0, sizeof g_lc); memset(g_lci, 0xff, sizeof g_lci); memset(g_call_late, 0, sizeof g_call_late); g_bc_ci = -1; g_end_fail_kind = 0; g_exc_dis_case = 0; g_unv_fail = 0; g_other_fail = 0; g_why = NULL; g_b_cannot = 0; g_cannot_why = 0; g_h9 = 0; g_fail_ci = -1; g_pred = 0; g_pred_why = 0; g_r_moved = 0; g_bw_n = 0; g_nbran = 0;
         memset(g_bdone, 0, sizeof g_bdone); memset(g_bseen, 0, sizeof g_bseen);
         g_nc = g_nR = g_ngr = g_nwait = g_npend = 0; g_cancelled = 0; memset(g_pw_after, 0, sizeof g_pw_after);
         g_nha = g_nhb = g_nda = g_ndb = 0; g_nprobe = 0; g_nhr = 0;
@@ -2641,6 +2688,7 @@ int main(int argc, char** argv) {
     printf("cases %ld, wrong %ld, with a fallback %ld; not compared: B cannot run R %ld, an ahead arm with no room %ld, a disarm in a group B sees ahead %ld; spec mode %d\n",
            cases, wrong, fellback, cannot, noroom, disarm_ahead, SIG_ARM_REF_SPEC);
     if (h9) printf("  set aside as H9-shaped (SIG_ORACLE_H9): %ld\n", h9);
+    if (g_late) printf("  late voids checked by the pre-ruling text (a header without late_hits_voided): %ld\n", g_lv_old);
     if (g_late >= 3)
         printf(g_late == 4 ? "  late (9834173) also: let-in arms cancelled by key %ld cases;" : "  late (7a17176) also:", lt_cli), printf(" T1 closure let in a group in %ld cases; a late state call (T3) in %ld cases; inputs late only by a plain disarm at N: %ld in %ld cases; a plain disarm cancelling an arm at its own tau: %ld cases; a late state call inside a waiting group's span, meeting it: %ld cases; a disarm at or before tau of a group the closure let in, made after its arm (it escapes the cancel): %ld cases\n",
                lt_clo, lt_lst, lt_lbd_in, lt_lbd, lt_ceq, lt_lss, lt_esc);
