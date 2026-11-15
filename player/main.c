@@ -4,7 +4,7 @@
  *                   [--rig FILE|NAME] [--cal FILE] [--windowed] [--allow-below-tier ROLE[,ROLE]]
  *                   [--participant SPEC] [--rt S] [--max-trials N]
  *                   [--measure] [--trace-channels FILE] [--rdk-buffer N]
- *                   [--sim-hz HZ] [--test-sample-late ROLE=S]...
+ *                   [--sim-hz HZ] [--test-sample-late ROLE=S]... [--test-feed-each]
  *
  * Without --sim the session runs for real: a window on the display (full
  * screen; --windowed for development), the keyboard and the rig profile's
@@ -28,6 +28,9 @@
  * --sim-hz HZ: the simulated display's rate (default 60), its period
  * rounded to whole ns. --test-sample-late ROLE=S: that role's samples reach
  * the player S seconds after their t_s (tests: a late device report).
+ * --test-feed-each: each sample in its own ysig_feed(), its hits taken
+ * before the next sample, in place of one ysig_feed_n() a poll (tests:
+ * format 3.11 rule 4's check that both give the same results).
  * --profile (debug; a build with YSP_TRACE_RING): every zone of the frame
  * loop to DIR/profile.csv; tools/profile_summary.py summarizes it.
  * --hang-at-trial N stops the frame loop in trial N (tests: the panic
@@ -110,6 +113,7 @@ static int run_main(pl_args* ap, int argc, char** argv) {
         else if (!strcmp(s, "--test-plan-early") && v) { a.plan_early_ns = (int64_t)llround(atof(v) * 1e9); i++; }
         else if (!strcmp(s, "--test-record-late") && v) { a.record_late_ns = (int64_t)llround(atof(v) * 1e9); i++; }
         else if (!strcmp(s, "--test-record-delay") && v) { a.record_delay = atoi(v); i++; }
+        else if (!strcmp(s, "--test-feed-each")) a.feed_each = true;
         else if (!strcmp(s, "--trace-channels") && v) { a.trace_path = v; i++; }
         else if (!strcmp(s, "--rdk-buffer") && v) { a.rdk_buffer = atoi(v); i++; }
         else if (!strcmp(s, "--samples") && v) { a.samples_path = v; i++; }
@@ -199,8 +203,8 @@ static int run_main(pl_args* ap, int argc, char** argv) {
         fprintf(stderr, "ysp_player: --samples, --sim-gain and --test-draws are for --sim\n");
         return 2;
     }
-    if (!a.sim && (a.sim_period_ns || a.n_lates)) {
-        fprintf(stderr, "ysp_player: --sim-hz and --test-sample-late are for --sim\n");
+    if (!a.sim && (a.sim_period_ns || a.n_lates || a.feed_each)) {
+        fprintf(stderr, "ysp_player: --sim-hz, --test-sample-late and --test-feed-each are for --sim\n");
         return 2;
     }
 #if !defined(YRT_TRACE_RING)

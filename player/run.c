@@ -195,7 +195,7 @@ enum {
     CS_TIER_WORST, CS_FRAMES_DROPPED, CS_FLIP_FLAGS,
     CS_ROLE_N, CS_ROLE_FAILED, CS_ROLE_LAG,
     CS_RSP_RESPONSE, CS_CORRECT, CS_OUTCOME, CS_RSP_OTHER, CS_COLUMN,
-    CS_V2_FLAG, CS_V2_RSP_ROLE
+    CS_V2_FLAG, CS_V2_RSP_ROLE, CS_V2_LATE_FRAMES
 };
 
 typedef struct pl_csrc { int source; int ref; } pl_csrc;
@@ -526,6 +526,9 @@ int pl_columns_build(pl_player* p) {
         for (k = 0; k < t->n_flags; k++)
             if (pl_col_add(p, t->flags[k], YTR_COL_BOOL, CS_V2_FLAG, k, CF_COLUMN) < 0) return -1;
     }
+    /* sig.h 0.7.0: the trial's frames that a late report changed after they
+     * were drawn (the coordinator's choice, 2026-11-15) */
+    if (pl_v2_any_graph(p) && pl_col_add(p, "late_frames", YTR_COL_INT, CS_V2_LATE_FRAMES, 0, CF_BUILTIN) < 0) return -1;
     for (i = 0; i < p->n_cols; i++) {
         memset(&p->ytr_cols[i], 0, sizeof p->ytr_cols[i]);
         p->ytr_cols[i].name = p->cols[i].name;
@@ -1327,6 +1330,9 @@ static int pl_row_fill(pl_player* p, pl_row* r) {
         }
         case CS_V2_RSP_ROLE:
             if (r->has_res && (s = pl_v2_rsp_role(p, &r->res)) != NULL) have = 3;
+            break;
+        case CS_V2_LATE_FRAMES:
+            if (pl_v2_late_frames(p, &v) == 1) have = 1;
             break;
         default: break;
         }

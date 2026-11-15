@@ -25,7 +25,8 @@
 #define V2_FRAME_WAIT(p) (((p)->out_wait_frames + 12) * 2 > 64 ? ((p)->out_wait_frames + 12) * 2 : 64)
 #define V2_STATE_ROWS 64         /* state rows waiting for their record     */
 #define V2_HISTORY 4096          /* D38's ring for a value read at a time   */
-#define V2_WINDOW_FRAMES 4       /* sig.h's catch-up window, in frames       */
+#define V2_WINDOW_CKS 8          /* sig.h's checkpoints (catchup_frames)    */
+#define V2_CATCHUP_NS 50000000LL /* sig.h's window in input time (catchup_ns) */
 #define V2_WINDOW_HZ 8000        /* the fastest raw mouse a role may have   */
 #define V2_WINDOW_FRAME_CALLS 16 /* a frame's own calls into the log        */
 #define V2_SAMPLE_MAX_S 1e7      /* a samples file's latest time: 115 days  */
@@ -209,9 +210,12 @@ struct pl_v2 {
                                 * counts seen                               */
     int64_t* arm_t;            /* per node: its latest arm's time           */
     int16_t* st_armed;         /* the nodes the current state's exits armed */
-    int64_t* wait_t;           /* per node: the latest time of an arm made
-                                * ahead of the input this visit (it may still
-                                * wait in sig.h), INT64_MIN: none            */
+    int64_t* dis_t;            /* per node: the time of its latest
+                                * ysig_disarm_at() this trial, INT64_MIN: an
+                                * arm before it would be ended by it (W2)    */
+    int64_t late_frames0;      /* sig.h's late_frames at the trial's start  */
+    yin_event* der; int n_der; /* a poll's derived events, held while its
+                                * hits are taken (v2_der_upto())            */
     int64_t late_bound;        /* the latest time of an arm made at or
                                 * before the graph's input time (in sig.h's
                                 * reference order at its call)              */
@@ -270,7 +274,8 @@ typedef struct pl_v2_session {
     int64_t t0;                /* the samples' time 0: the first frame's onset */
     bool t0_set;
     long recenter_skipped;
-    int64_t unv_seen;          /* sig.h's arm_unverified, summed: the guard */
+    int64_t bad_seen;          /* sig.h's counts the guard stops on, summed */
+    yin_event* batch; int batch_cap;   /* a poll's samples, one ysig_feed_n() */
     int n_sample_rows;
     bool* reads;               /* pl_v2_reads()'s scratch, one per stimulus */
 } pl_v2_session;
@@ -1462,15 +1467,31 @@ static int v2_samples_load(pl_player* p) {
 
 /* The --sim adapter of each signal role: a raw mouse's counts integrated
  * at --sim-gain units per count (3.19 item 3; G18 has no rig block). */
+/* sig.h's window in input time (catchup_ns): the lateness it absorbs. The
+ * rig profile has no measured input lateness for a signal role (it has no
+ * adapter block, G18), so 50 ms, the user's default (2026-11-15): a 16 ms
+ * FTDI timer, a 20 ms LSL offset and a 60 Hz frame (docs/sig.md, "The
+ * window in time"). With a measured lateness it is that plus two frames. */
+static int64_t v2_catchup_ns(const pl_player* p) {
+    (void)p;
+    return V2_CATCHUP_NS;
+}
+
 /* The window's logs (sig.h catchup_calls, catchup_writes): every role at
- * V2_WINDOW_HZ over the window's frames and one more (the log holds the
- * calls since the oldest checkpoint, up to the next frame's), and a frame's
- * own calls (the frame, settles, arms, sets). A report writes at most one
- * value to each ring in its role's downstream set (sig.md, Footprint);
- * a frame's calls at most one to each ring. */
+ * V2_WINDOW_HZ over the span the log holds, and a frame's own calls (the
+ * frame, settles, arms, sets) for each frame in it. The log holds the calls
+ * since the oldest checkpoint: sig.h takes one at a frame catchup_ns / 8
+ * after the newest (s, whole frames) and drops the oldest when the next is
+ * catchup_ns behind the newest, so the oldest is at most catchup_ns + 2 s
+ * old, and at most 8 s with 8 images; one frame more for the calls up to
+ * the next. A report writes at most one value to each ring in its role's
+ * downstream set (sig.md, Footprint); a frame's calls at most one to each
+ * ring. */
 static void v2_window_size(pl_player* p, const pl_v2* v, int* calls, int* writes) {
     int64_t per = p->caps.period_ns > 0 ? p->caps.period_ns : 16666667;
-    int64_t span = (int64_t)(V2_WINDOW_FRAMES + 1) * per;
+    int64_t ns = v2_catchup_ns(p), sp = (ns / 8 + per - 1) / per * per;
+    int64_t span = (ns + 2 * sp < V2_WINDOW_CKS * sp ? ns + 2 * sp : V2_WINDOW_CKS * sp) + per;
+    int64_t frames = (span + per - 1) / per;
     int64_t reps = (V2_WINDOW_HZ * span + 999999999) / 1000000000, c, w = 0, rings = 0;
     int r, i, roles = p->def->n_sigroles > 2 ? p->def->n_sigroles : 2;
     unsigned char* in_d = (unsigned char*)calloc((size_t)v->nn + 1, 1);
@@ -1495,10 +1516,10 @@ static void v2_window_size(pl_player* p, const pl_v2* v, int* calls, int* writes
         if (wr > w) w = wr;
     }
     free(in_d);
-    c = reps * roles + (int64_t)(V2_WINDOW_FRAMES + 1) * V2_WINDOW_FRAME_CALLS;
+    c = reps * roles + frames * V2_WINDOW_FRAME_CALLS;
     if (c < 1024) c = 1024;   /* 0.10.0's, the floor */
     *calls = (int)c;
-    c = reps * roles * (w > 0 ? w : 1) + (int64_t)(V2_WINDOW_FRAMES + 1) * V2_WINDOW_FRAME_CALLS * (rings > 0 ? rings : 1);
+    c = reps * roles * (w > 0 ? w : 1) + frames * V2_WINDOW_FRAME_CALLS * (rings > 0 ? rings : 1);
     if (c < 16384) c = 16384;
     *writes = (int)c;
 }
@@ -1766,13 +1787,16 @@ int pl_v2_load(pl_player* p) {
             d->user = v;
             /* ysig/sig.h 0.6.0: an arm at a state's entry time, after the
              * input the frame fed, runs the graph again from a checkpoint
-             * (3.11 rules 2 and 4). Four frames: a response's end can be
-             * final two frames after it. The logs hold the window's
-             * input at the fastest raw mouse (docs/signal_spec.md: 125 to
-             * 8000 Hz) on every role, and at least two: a full log clears
-             * the window, and the next past arm falls back
-             * (arm_past_full; t_v2_window_8k) */
-            d->catchup_frames = V2_WINDOW_FRAMES;
+             * (3.11 rules 2 and 4); 0.7.0 places a late report at its time
+             * the same way. The window is catchup_ns of input time in 8
+             * images (sig.md, the coordinator's ruling 3), whatever the
+             * display's rate. The logs hold the window's input at the
+             * fastest raw mouse (docs/signal_spec.md: 125 to 8000 Hz) on
+             * every role, and at least two: a full log clears the window,
+             * and the next past arm or late report falls back
+             * (arm_past_full, late_full; t_v2_window_8k) */
+            d->catchup_frames = V2_WINDOW_CKS;
+            d->catchup_ns = v2_catchup_ns(p);
             v2_window_size(p, v, &d->catchup_calls, &d->catchup_writes);
             /* the sample traces are written at the trial's end: their rows
              * come once no arm can change them, so they are always the
@@ -1840,21 +1864,38 @@ int pl_v2_load(pl_player* p) {
         memset(v->arm_gen, 0, sizeof(uint32_t) * (size_t)v->nn);
         v->arm_t = (int64_t*)pl_alloc(p, sizeof(int64_t) * (size_t)v->nn);
         v->st_armed = (int16_t*)pl_alloc(p, sizeof(int16_t) * (size_t)v->nn);
-        v->wait_t = (int64_t*)pl_alloc(p, sizeof(int64_t) * (size_t)v->nn);
-        if (!v->st_armed || !v->wait_t) return -1;
+        v->dis_t = (int64_t*)pl_alloc(p, sizeof(int64_t) * (size_t)v->nn);
+        v->der = (yin_event*)pl_alloc(p, sizeof(yin_event) * YSIG_QUEUE_CAP);
+        if (!v->st_armed || !v->dis_t || !v->der) return -1;
         v->det_now = (bool*)pl_alloc(p, sizeof(bool) * (size_t)v->nn);
         if (!v->arm_t || !v->det_now) return -1;
         {
             int k;
             for (k = 0; k < v->nn; k++) {
                 v->arm_t[k] = INT64_MIN;
-                v->wait_t[k] = INT64_MIN;
+                v->dis_t[k] = INT64_MIN;
                 v->det_now[k] = v->nodes[k].op == YSIG_OP_DETECT && v->nodes[k].p[YSIG_DETECT_ENTRY] == YSIG_ENTRY_NOW;
             }
         }
         ysig_reset(&v->g, 0);
         v->cur = V2_END;
         v->ended = true;
+    }
+    {
+        /* a poll's samples go in one ysig_feed_n() a graph, in parts that
+         * each emit at most sig.h's derived queue (64): every sample can
+         * fire each emit node once, and the hits and events are taken
+         * after the part */
+        int e = 1, tj;
+        for (tj = 0; tj < S->n_t; tj++) {
+            int k, n = 0;
+            if (!S->t[tj] || !S->t[tj]->has_graph) continue;
+            for (k = 0; k < S->t[tj]->nn; k++) n += S->t[tj]->nodes[k].op == YSIG_OP_EMIT;
+            if (n > e) e = n;
+        }
+        S->batch_cap = YSIG_QUEUE_CAP / e > 0 ? YSIG_QUEUE_CAP / e : 1;
+        S->batch = (yin_event*)pl_alloc(p, sizeof(yin_event) * (size_t)S->batch_cap);
+        if (!S->batch) return -1;
     }
     S->cur_t = -1;
     return v2_samples_load(p);
@@ -2152,29 +2193,71 @@ static bool v2_if_true(pl_player* p, pl_v2* v, const v2_exit* x) {
 static int v2_take(pl_player* p, pl_v2* v, const v2_exit* x, int64_t t, const yscr_frame* f, bool hit);
 
 /* sig.h 0.6.0: an arm before input the graph had runs it again from a
- * checkpoint. The player takes changes in time order and arms at a take's
+ * checkpoint; 0.7.0 places a late report or state call at its time the
+ * same way. The player takes changes in time order and arms at a take's
  * time t, so a run again changes only what is after t: the re-armed
  * detect's earlier arm's hits (superseded, and dropped here by arm_gen)
  * and the hit at t that ended that arm. A hit of another detect, a row
  * or a derived event that it changes is one the player may have acted on
- * or written: an internal guard (docs/player.md, "An arm in the past"). */
+ * or written; a fallback or a shape outside the verified ones is not the
+ * reference order's result: an internal guard (docs/player.md, "An arm in
+ * the past"). Summed over every graph: each takes every sample, and an
+ * adapter keeps its state across templates. Not late_frames (a drawn
+ * frame, the input's own lateness) or late_barrier (a report of a trial
+ * that ended, dropped in R too). */
+static int v2_guard(pl_player* p, const pl_v2* v, const char* what, const char* name, int64_t t) {
+    pl_v2_session* S = p->v2s;
+    int64_t c[13], bad = 0;
+    int ti, k;
+    memset(c, 0, sizeof c);
+    for (ti = 0; S && ti < S->n_t; ti++) {
+        ysig_stats st;
+        if (!S->t[ti] || !S->t[ti]->has_graph) continue;
+        ysig_get_stats(&S->t[ti]->g, &st);
+        c[0] += st.arm_hits_retracted;
+        c[1] += st.arm_rows_stale;
+        c[2] += st.arm_derived_stale;
+        c[3] += st.arm_past_pinned;
+        c[4] += st.arm_past_far;
+        c[5] += st.arm_past_full;
+        c[6] += st.arm_past_off;
+        c[7] += st.arm_unverified;
+        c[8] += st.late_far;
+        c[9] += st.late_full;
+        c[10] += st.late_off;
+        c[11] += st.late_unverified;
+        c[12] += st.late_hits_voided;
+    }
+    for (k = 0; k < 13; k++) bad += c[k];
+    if (!S || bad == S->bad_seen) return 0;
+    S->bad_seen = bad;
+    {
+        char at[192];
+        if (name) snprintf(at, sizeof at, "%s '%s' at %.9f s", what, name, (double)(t - v2_anchor(p)) / 1e9);
+        else snprintf(at, sizeof at, "%s", what);
+        /* the counts last: a harness keeps the message's tail */
+        pl_fail(p, "template '%s': internal guard: %s (a hit taken, or a row or event written, changed; a fallback; or a shape "
+                "outside the verified ones; sig.h: %lld hits retracted, %lld row runs, %lld derived runs changed; "
+                "%lld pinned, %lld before the window, %lld logs full, %lld no window; %lld unverified; late: %lld before the window, "
+                "%lld logs full, %lld no window, %lld unverified, %lld hits voided)",
+                v->def->name, at, (long long)c[0], (long long)c[1], (long long)c[2], (long long)c[3], (long long)c[4],
+                (long long)c[5], (long long)c[6], (long long)c[7], (long long)c[8], (long long)c[9], (long long)c[10],
+                (long long)c[11], (long long)c[12]);
+    }
+    return -1;
+}
 static int v2_arm_check(pl_player* p, pl_v2* v, const char* name, int64_t t) {
-    ysig_stats st;
-    int64_t bad;
-    ysig_get_stats(&v->g, &st);
-    /* sig.h's semantics of an arm in the past: a retracted hit, a stale
-     * row or event, and every fallback (pinned, before the window, logs
-     * full, no window) are not the reference order's result */
-    bad = st.arm_hits_retracted + st.arm_rows_stale + st.arm_derived_stale + st.arm_past_pinned + st.arm_past_far +
-          st.arm_past_full + st.arm_past_off + st.arm_unverified;
-    if (bad == v->arm_bad) return 0;
-    v->arm_bad = bad;
-    pl_fail(p, "template '%s': internal guard: a past arm of '%s' at %.9f s changed a hit already taken, or a row or event already written, "
-            "or fell back, or is outside the verified shapes (sig.h: %lld hits retracted, %lld row runs, %lld derived runs changed; "
-            "%lld pinned, %lld before the window, %lld logs full, %lld no window; %lld unverified)",
-            v->def->name, name, (double)(t - v2_anchor(p)) / 1e9, (long long)st.arm_hits_retracted, (long long)st.arm_rows_stale,
-            (long long)st.arm_derived_stale, (long long)st.arm_past_pinned, (long long)st.arm_past_far, (long long)st.arm_past_full,
-            (long long)st.arm_past_off, (long long)st.arm_unverified);
+    return v2_guard(p, v, "a past arm of", name, t);
+}
+
+/* W2 (docs/sig.md, "The cancel, by key"): a disarm at a state's exit time
+ * ends every arm of the control with a smaller key, also one made after
+ * it, so an arm earlier than that time would be made and ended at once.
+ * The next state's arms are at the exit time or later: an internal guard. */
+static int v2_arm_after_disarm(pl_player* p, pl_v2* v, int node, const char* name, int64_t t) {
+    if (t >= v->dis_t[node]) return 0;
+    pl_fail(p, "template '%s': internal guard: '%s' armed at %.9f s, before its disarm at %.9f s (docs/sig.md, W2)", v->def->name, name,
+            (double)(t - v2_anchor(p)) / 1e9, (double)(v->dis_t[node] - v2_anchor(p)) / 1e9);
     return -1;
 }
 
@@ -2190,6 +2273,7 @@ static void v2_late_in(pl_v2* v, int64_t t) {
 static int v2_arm_ctl(pl_player* p, pl_v2* v, int ci, int64_t t) {
     v2_ctl* c = &v->ctl[ci];
     if (c->hit < 0) return 0;
+    if (v2_arm_after_disarm(p, v, c->hit, c->def->name, t) < 0) return -1;
     v2_late_arm(v, t);
     v->arm_gen[c->hit]++;
     v->arm_t[c->hit] = t;
@@ -2203,7 +2287,7 @@ static int v2_arm_exit(pl_player* p, pl_v2* v, const v2_exit* x, int64_t t) {
     /* the state's own: disarmed when it exits (v2_disarm_state) */
     for (k = 0; k < v->n_st_armed && v->st_armed[k] != x->node; k++) { }
     if (k == v->n_st_armed && v->n_st_armed < v->nn) v->st_armed[v->n_st_armed++] = (int16_t)x->node;
-    if (t > v->g.t_cover && t > v->wait_t[x->node]) v->wait_t[x->node] = t;   /* it waits in sig.h */
+    if (v2_arm_after_disarm(p, v, x->node, v->ctl[x->ctl].def->name, t) < 0) return -1;
     v->arm_gen[x->node]++;
     v->arm_t[x->node] = t;
     v2_late_arm(v, t);
@@ -2211,11 +2295,25 @@ static int v2_arm_exit(pl_player* p, pl_v2* v, const v2_exit* x, int64_t t) {
     return v2_arm_check(p, v, v->ctl[x->ctl].def->name, t);
 }
 
+/* A poll's derived events earlier than t, to the collector: fed one sample
+ * at a time, these came before a hit at t was taken (the hit's sample's
+ * own after it). Held events stay in their order. */
+static void v2_der_upto(pl_player* p, pl_v2* v, int64_t t) {
+    int k, w = 0;
+    for (k = 0; k < v->n_der; k++) {
+        if (v->der[k].t < t) { if (p->tmpl->collector) yrsp_feed(p->tmpl->collector, &v->der[k]); }
+        else v->der[w++] = v->der[k];
+    }
+    v->n_der = w;
+}
+
 static void v2_resp_arm(pl_player* p, pl_v2* v, int64_t t) {
     const yexp_response* r = v->def->response;
     int i;
     yrsp_collector* c = p->tmpl->collector;
     if (!c || !r || !r->signal_choices) return;
+    /* the window's reference is the last position fed before the arm */
+    v2_der_upto(p, v, t);
     /* yrsp_arm() sets the desc's window again: the trial's deadline and
      * minimum rt go back on at every arm */
     yrsp_arm(c, t);
@@ -2282,23 +2380,25 @@ int pl_v2_events_response(pl_player* p, int64_t bt) {
     return v2_after(p, v);
 }
 
-/* The state left: a control of it whose latest arm is still ahead of the
- * input (sig.h: an arm ahead of the input waits, as at a mark's onset
- * ahead of the poll) is disarmed, so that waiting arm is cancelled, not
- * made later for a state that ended. Only those: a disarm with no arm in
- * its group of calls takes the input time, and the next state's arm of
- * the same control made after a settle at an earlier time would go
- * before it in sig.h's order and be ended by it. A one-hit control's
- * output stands (a freeze_at latch keeps its value). */
-static void v2_disarm_state(pl_v2* v) {
+/* The state left at t: each control its exits armed, made or waiting, is
+ * disarmed at t (sig.h 0.7.0, ysig_disarm_at()). An arm at or before t is
+ * made and ended at t, so what the reference order gives by the exit time
+ * stands; a waiting arm later than t is cancelled, not made later for a
+ * state that ended. The next state's arms of the same control are at t or
+ * later, after the disarm by call order, so it does not end them (the
+ * shape 0.10.0's ca9bc48 fixed by disarming only the arms ahead of the
+ * input). A one-hit control's output stands (a freeze_at latch keeps its
+ * value). */
+static int v2_disarm_state(pl_player* p, pl_v2* v, int64_t t) {
     int k;
     for (k = 0; k < v->n_st_armed; k++) {
         int node = v->st_armed[k];
-        /* any arm of it still ahead of the input, not only the latest */
-        if (v->wait_t[node] > v->g.t_cover) (void)ysig_disarm(&v->g, node);
-        v->wait_t[node] = INT64_MIN;
+        if (!ysig_disarm_at(&v->g, node, t)) { pl_fail(p, "template '%s': cannot disarm node %d", v->def->name, node); return -1; }
+        v->dis_t[node] = t;
     }
     v->n_st_armed = 0;
+    /* a disarm placed before calls already made runs the window again */
+    return v2_guard(p, v, "a state's end", NULL, t);
 }
 
 /* Enter runtime state rs at time t; f is the frame being made (the entry
@@ -2310,7 +2410,7 @@ static int v2_enter(pl_player* p, pl_v2* v, int rs, int64_t t, const yscr_frame*
         if (++guard > 4096) { pl_fail(p, "template '%s': more than 4096 instant exits at one time", v->def->name); return -1; }
         /* a state left (not a part of it: an until's next part keeps the
          * state's exits armed) */
-        if (v->has_graph && (rs == V2_END || v->rs[rs].first)) v2_disarm_state(v);
+        if (v->has_graph && (rs == V2_END || v->rs[rs].first) && v2_disarm_state(p, v, t) < 0) return -1;
         if (rs == V2_END && !v->def->states) {
             /* an events template: its events are done; `after` follows
              * them and the response (2.5), and its end MARK ends the trial */
@@ -2843,7 +2943,7 @@ int pl_v2_trial_start(pl_player* p, const yscr_frame* f) {
     for (i = 0; i < v->def->n_flags; i++) v->flags[i] = false;
     for (i = 0; i < v->n_ctl; i++) v->ctl[i].has_hit = false;
     for (i = 0; i < v->n_traces; i++) { v->traces[i].nrows = 0; }
-    for (i = 0; i < v->n_st_armed; i++) v->wait_t[v->st_armed[i]] = INT64_MIN;
+    for (i = 0; v->dis_t && i < v->nn; i++) v->dis_t[i] = INT64_MIN;   /* the reset is a barrier */
     v->n_st_armed = 0;
     v->rows_open = false;
     if (v->has_graph) {
@@ -2871,6 +2971,11 @@ int pl_v2_trial_start(pl_player* p, const yscr_frame* f) {
             }
         }
         ysig_reset_trial(&v->g, f->onset);
+        {
+            ysig_stats st;
+            ysig_get_stats(&v->g, &st);
+            v->late_frames0 = st.late_frames;   /* the trial's late_frames column */
+        }
         v->rows_open = true;   /* the rows the reset made final were the last trial's */
         /* every control whose hits no exit names arms at the trial's start */
         for (i = 0; i < v->n_ctl; i++)
@@ -2926,53 +3031,72 @@ int pl_v2_frame_input(pl_player* p, const yscr_frame* f) {
     return v2_feed(p, f, INT64_MAX);
 }
 
+/* A part of a poll's samples through every graph: one ysig_feed_n() each
+ * (sig.h 0.7.0 places a late one at its time, with one run again at the
+ * part's end), then the active graph's hits, taken by time (v2_hits()),
+ * and its derived events, each one earlier than a hit's arm of the
+ * collector before that arm (v2_resp_arm()). Format 3.11 rule 4 feeds each
+ * event alone; --test-feed-each does, to check the results match. */
+static int v2_feed_part(pl_player* p, pl_v2* v, const yscr_frame* f, int n) {
+    pl_v2_session* S = p->v2s;
+    int ti;
+    for (ti = 0; ti < S->n_t; ti++) {
+        pl_v2* w = S->t[ti];
+        if (!w || !w->has_graph) continue;
+        if (n == 1) (void)ysig_feed(&w->g, S->batch);
+        else (void)ysig_feed_n(&w->g, S->batch, n);
+        if (w == v) {
+            int k;
+            v->n_der = ysig_derived(&w->g, v->der, YSIG_QUEUE_CAP);
+            if (v->n_der < 0) v->n_der = 0;
+            if (v2_hits(p, v, f) < 0) return -1;
+            for (k = 0; k < v->n_der; k++) if (p->tmpl->collector) yrsp_feed(p->tmpl->collector, &v->der[k]);
+            v->n_der = 0;
+        } else {
+            ysig_hit h[V2_HITQ];
+            yin_event der[YSIG_QUEUE_CAP];
+            while (ysig_detected(&w->g, h, V2_HITQ) > 0) { }
+            while (ysig_derived(&w->g, der, YSIG_QUEUE_CAP) > 0) { }
+        }
+    }
+    return 0;
+}
+
 /* The samples up to the frame's onset and `limit` (a key response's end,
- * pl_v2_response()), each through every graph, the active one's hits. */
+ * pl_v2_response()), through every graph, the active one's hits. */
 static int v2_feed(pl_player* p, const yscr_frame* f, int64_t limit) {
     pl_v2_session* S = p->v2s;
     pl_v2* v = p->in_trial && p->tmpl ? p->tmpl->v2 : NULL;
-    int ti;
+    int ti, cap;
     if (!S || !S->t0_set) return 0;
+    if (v && !v->has_graph) v = NULL;
+    cap = p->args.feed_each ? 1 : S->batch_cap;
     {
-    int fed = 0, rc = 0;
+    int fed = 0, rc = 0, nb = 0;
     YRT_ZONE(zs, "sig.samples");
     while (rc == 0 && S->next_smp < S->n_smp && S->t0 + S->smp[S->next_smp].arr <= f->onset && S->t0 + S->smp[S->next_smp].t <= limit) {
         const struct v2_sample* sm = &S->smp[S->next_smp++];
-        yin_event e;
-        memset(&e, 0, sizeof e);
-        e.t = S->t0 + sm->t;
+        yin_event* e = &S->batch[nb++];
+        memset(e, 0, sizeof *e);
+        e->t = S->t0 + sm->t;
         {
             const yexp_sigrole* sr = &p->def->sigroles[sm->role];
             bool rel = sr->type == YEXP_SIG_POSITION2D_RELATIVE || (sr->type == YEXP_SIG_POSITION2D && sr->allow_relative);
-            e.kind = rel ? YIN_KIND_MOUSE : YIN_KIND_PEN;
-            e.control = rel ? YIN_AXIS_DELTA : YIN_AXIS_POSITION;
+            e->kind = rel ? YIN_KIND_MOUSE : YIN_KIND_PEN;
+            e->control = rel ? YIN_AXIS_DELTA : YIN_AXIS_POSITION;
         }
-        e.type = YIN_SAMPLE;
-        e.device = (uint32_t)sm->role + 1;
-        e.x = sm->x;
-        e.y = sm->y;
-        e.stamp = YIN_TIER_SIM;
+        e->type = YIN_SAMPLE;
+        e->device = (uint32_t)sm->role + 1;
+        e->x = sm->x;
+        e->y = sm->y;
+        e->stamp = YIN_TIER_SIM;
         S->n_sample_rows++;
-        for (ti = 0; ti < S->n_t; ti++) {
-            pl_v2* w = S->t[ti];
-            if (!w || !w->has_graph) continue;
-            v2_late_in(w, e.t);
-            (void)ysig_feed(&w->g, &e);
-            if (w == v && v->has_graph) {
-                yin_event der[YSIG_QUEUE_CAP];
-                int n, k;
-                if (v2_hits(p, v, f) < 0) { rc = -1; break; }
-                n = ysig_derived(&w->g, der, YSIG_QUEUE_CAP);
-                for (k = 0; k < n; k++) if (p->tmpl->collector) yrsp_feed(p->tmpl->collector, &der[k]);
-            } else {
-                ysig_hit h[V2_HITQ];
-                yin_event der[YSIG_QUEUE_CAP];
-                while (ysig_detected(&w->g, h, V2_HITQ) > 0) { }
-                while (ysig_derived(&w->g, der, YSIG_QUEUE_CAP) > 0) { }
-            }
-        }
+        for (ti = 0; ti < S->n_t; ti++)
+            if (S->t[ti] && S->t[ti]->has_graph) v2_late_in(S->t[ti], e->t);
         fed++;
+        if (nb == cap) { rc = v2_feed_part(p, v, f, nb); nb = 0; }
     }
+    if (rc == 0 && nb) rc = v2_feed_part(p, v, f, nb);
     YRT_ZONE_VALUE(zs, fed);
     YRT_ZONE_END(zs);
     if (rc < 0) return -1;
@@ -3144,26 +3268,6 @@ int pl_v2_on_record(pl_player* p, const yscr_record* rec) {
 
 /* After ytl_evaluate(): the graph's frame (3.6), the hits it found (rule 5),
  * the frame rows, and the trial's end after its ysig_frame (3.10). */
-/* The guard on sig.h's arm_unverified, summed over every graph. */
-static int v2_unv_guard(pl_player* p, const pl_v2* v) {
-    pl_v2_session* S = p->v2s;
-    int64_t u = 0;
-    int ti;
-    for (ti = 0; S && ti < S->n_t; ti++) {
-        ysig_stats st;
-        if (!S->t[ti] || !S->t[ti]->has_graph) continue;
-        ysig_get_stats(&S->t[ti]->g, &st);
-        u += st.arm_unverified;
-    }
-    if (S && u != S->unv_seen) {
-        S->unv_seen = u;
-        pl_fail(p, "template '%s': internal guard: an arm outside sig.h's verified shapes (%lld arm_unverified, docs/sig.md "
-                "\"Exactness\")", v->def->name, (long long)u);
-        return -1;
-    }
-    return 0;
-}
-
 int pl_v2_frame_eval(pl_player* p, const yscr_frame* f) {
     pl_v2* v = p->tmpl ? p->tmpl->v2 : NULL;
     int guard = 0;
@@ -3217,9 +3321,9 @@ int pl_v2_frame_eval(pl_player* p, const yscr_frame* f) {
         YRT_ZONE_END(zq);
         if (rc < 0) return -1;
     }
-    /* sig.h counts an arm outside the verified shapes at an input too (a
-     * late report, a group an input lets in): every graph, each frame */
-    if (v2_unv_guard(p, v) < 0) return -1;
+    /* sig.h counts at an input too (a late report placed with a run again,
+     * a group an input lets in): every graph, each frame */
+    if (v2_guard(p, v, "the frame's input", NULL, 0) < 0) return -1;
     if (v->end_pending) {
         v->end_pending = false;
         v->ended = true;
@@ -3906,9 +4010,8 @@ int pl_v2_trial_rows(pl_player* p) {
         return -1;
     }
     v->rows_open = false;
-    /* sig.h decides a group still pending at the flush (counted: docs/sig.md,
-     * "Pending groups"), after the frame's own check */
-    if (v2_unv_guard(p, v) < 0) return -1;
+    /* the inputs since the trial's last frame, before the flush's barrier */
+    if (v2_guard(p, v, "the trial's end", NULL, 0) < 0) return -1;
     if (v2_traces_end(p, v) < 0) return -1;
     return v2_srow_flush(p, false);
 }
@@ -4051,8 +4154,9 @@ int pl_v2_session_json(pl_player* p, yjs_arena* a, yjs_value* s) {
 
 /* sig.h 0.6.0's window, summed over the templates' graphs (stats outlive
  * a reset): the arms run again, the arms that fell back to the newest
- * value (inexact), and what a run again changed after the player had it.
- * Version 2 only, so version 1's session.json keeps its bytes. */
+ * value (inexact), and what a run again changed after the player had it;
+ * 0.7.0's late calls (LATE INPUT). Version 2 only, so version 1's
+ * session.json keeps its bytes. */
 int pl_v2_arm_counts(pl_player* p, int64_t c[PL_ARM_COUNTS]) {
     pl_v2_session* S = p->v2s;
     ysig_stats st;
@@ -4074,15 +4178,42 @@ int pl_v2_arm_counts(pl_player* p, int64_t c[PL_ARM_COUNTS]) {
         c[9] += st.arm_ahead_cancelled;
         c[10] += S->t[i]->n_late;
         c[11] += st.arm_unverified;
+        c[12] += st.late_far;
+        c[13] += st.late_full;
+        c[14] += st.late_barrier;
+        c[15] += st.late_off;
+        c[16] += st.late_frames;
+        c[17] += st.late_unverified;
+        c[18] += st.late_hits_voided;
         n++;
     }
     return n;
 }
 
+/* The trial's late_frames column: sig.h's frames of this trial already
+ * drawn when a late report changed what they show; empty with no graph. */
+int pl_v2_late_frames(pl_player* p, int64_t* n) {
+    pl_v2* v = p->tmpl ? p->tmpl->v2 : NULL;
+    ysig_stats st;
+    if (!v || !v->has_graph) return 0;
+    ysig_get_stats(&v->g, &st);
+    *n = st.late_frames - v->late_frames0;
+    return 1;
+}
+
+/* Whether any template has a graph: the late_frames column. */
+bool pl_v2_any_graph(pl_player* p) {
+    int i;
+    for (i = 0; p->v2s && i < p->v2s->n_t; i++)
+        if (p->v2s->t[i] && p->v2s->t[i]->has_graph) return true;
+    return false;
+}
+
 int pl_v2_session_end(pl_player* p, yjs_arena* a) {
     static const char* const name[PL_ARM_COUNTS] = { "caught_up", "past_off", "past_far", "past_full", "hits_superseded", "hits_retracted",
                                                      "rows_stale", "derived_stale", "past_pinned", "ahead_cancelled", "late_input",
-                                                     "unverified" };
+                                                     "unverified", "late_far", "late_full", "late_barrier", "late_off", "late_frames",
+                                                     "late_unverified", "late_hits_voided" };
     int64_t c[PL_ARM_COUNTS];
     yjs_value* o;
     int i;
@@ -4091,6 +4222,8 @@ int pl_v2_session_end(pl_player* p, yjs_arena* a) {
     for (i = 0; i < PL_ARM_COUNTS; i++) yjs_set(a, o, name[i], yjs_new_int(a, c[i]));
     if (c[1] + c[2] + c[3] + c[8] > 0)
         fprintf(stderr, "ysp_player: %lld arms in the past fell back (inexact; session.json sig_arms)\n", (long long)(c[1] + c[2] + c[3] + c[8]));
+    if (c[12] + c[13] + c[15] > 0)
+        fprintf(stderr, "ysp_player: %lld late reports fell back (inexact; session.json sig_arms)\n", (long long)(c[12] + c[13] + c[15]));
     return yds_session_set(&p->ds, "sig_arms", o);
 }
 

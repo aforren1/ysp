@@ -234,17 +234,26 @@ def signature(diff):
 GUARD_RE = re.compile(r"sig\.h: (-?\d+) hits retracted, (-?\d+) row runs, (-?\d+) derived runs changed; (-?\d+) pinned, "
                       r"(-?\d+) before the window, (-?\d+) logs full, (-?\d+) no window; (-?\d+) unverified")
 GUARD_KEYS = ("retracted", "rows_stale", "derived_stale", "pinned", "far", "full", "off", "unverified")
+# player 0.12.0 (sig.h 0.7.0) adds the late calls' counts
+GUARD_LATE_RE = re.compile(r"late: (-?\d+) before the window, (-?\d+) logs full, (-?\d+) no window, (-?\d+) unverified, "
+                           r"(-?\d+) hits voided")
+GUARD_LATE_KEYS = ("late_far", "late_full", "late_off", "late_unverified", "late_hits_voided")
 
 
 def guard_counts(got):
     """The counts of the player's guard stop (v2.c v2_arm_check(), and the
     frame's arm_unverified check), or None when it did not stop."""
     txt = " ".join(got.get("refused") or [])
-    if "internal guard" not in txt:
+    # the message's tail is kept (300 characters): its counts come last
+    if "internal guard" not in txt and not GUARD_RE.search(txt):
         return None
     m = GUARD_RE.search(txt)
     if m:
-        return dict(zip(GUARD_KEYS, (int(x) for x in m.groups())))
+        d = dict(zip(GUARD_KEYS, (int(x) for x in m.groups())))
+        m = GUARD_LATE_RE.search(txt)
+        if m:
+            d.update(zip(GUARD_LATE_KEYS, (int(x) for x in m.groups())))
+        return d
     m = re.search(r"\((\d+) arm_unverified", txt)
     return {"unverified": int(m.group(1)) if m else -1}
 

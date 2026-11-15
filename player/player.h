@@ -44,7 +44,7 @@
 extern "C" {
 #endif
 
-#define PL_VERSION_STRING "0.11.0"
+#define PL_VERSION_STRING "0.12.0"
 /* The newest format version this player lowers (2: format part 3, in
  * v2.c). session.json's format_version is the definition's. */
 #define PL_FORMAT_VERSION 2
@@ -462,6 +462,10 @@ typedef struct pl_args {
     pl_field_arg lates[16];    /* tests (--sim): --test-sample-late ROLE=S,
                                 * a role's samples reach the player S
                                 * seconds after their time                  */
+    bool  feed_each;           /* tests (--sim): --test-feed-each, each sample
+                                * in its own ysig_feed() and its hits taken
+                                * before the next (3.11 rule 4's reading), not
+                                * a poll's in one ysig_feed_n()             */
 } pl_args;
 
 typedef struct pl_script_row { int trial; char* resp; bool silent; double rt_s, hold_s; } pl_script_row;
@@ -770,8 +774,10 @@ int  pl_v2_session_end(pl_player* p, yjs_arena* a);
 /* ysp/sig.h's arm counts summed over the session's graphs: caught up, past
  * off, far, full, hits superseded, retracted, rows stale, derived stale.
  * Returns the number of graphs. */
-#define PL_ARM_COUNTS 12
+#define PL_ARM_COUNTS 19
 int  pl_v2_arm_counts(pl_player* p, int64_t c[PL_ARM_COUNTS]);
+int  pl_v2_late_frames(pl_player* p, int64_t* n);
+bool pl_v2_any_graph(pl_player* p);
 int  pl_v2_streams(pl_player* p);
 /* The running template's version 2 runtime, or none (a version 1 template). */
 void pl_v2_select(pl_player* p);

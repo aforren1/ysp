@@ -2327,10 +2327,12 @@ def t_v2_findings(ctx):
     # session.json: the window's counts (version 2 only)
     sj = json.load(open(os.path.join(r.data, "session.json"))) if r.rc == 0 else {}
     arms = sj.get("sig_arms", {})
-    check(sorted(arms) == ["ahead_cancelled", "caught_up", "derived_stale", "hits_retracted", "hits_superseded", "late_input", "past_far",
+    check(sorted(arms) == ["ahead_cancelled", "caught_up", "derived_stale", "hits_retracted", "hits_superseded", "late_barrier", "late_far",
+                           "late_frames", "late_full", "late_hits_voided", "late_input", "late_off", "late_unverified", "past_far",
                            "past_full", "past_off", "past_pinned", "rows_stale", "unverified"] and
           arms["hits_retracted"] == arms["rows_stale"] == arms["derived_stale"] == arms["past_far"] == arms["past_full"] ==
-          arms["past_off"] == arms["past_pinned"] == arms["late_input"] == arms["unverified"] == 0,
+          arms["past_off"] == arms["past_pinned"] == arms["late_input"] == arms["unverified"] == 0 and
+          arms["late_far"] == arms["late_full"] == arms["late_off"] == arms["late_unverified"] == arms["late_hits_voided"] == 0,
           "session.json sig_arms: %s" % arms)
     # the model's s19383: s1 goes back to itself by after_s at the time its
     # r0 hold ends (list order: the after_s exit). The re-arm at that time
