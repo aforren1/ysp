@@ -1315,6 +1315,9 @@ typedef struct ysig__wa { int node; int64_t t; uint64_t seq; int c0, nc; uint64_
  * its L (condition 2 (b)) */
 typedef struct ysig__ux {
     int       node;
+    int       l_late;      /* ysig__late_unv(): the late call is its L now
+                            * (read by 2 (b)'s order at L before its own
+                            * retest sets l_seq)                         */
     int64_t   t;
     uint64_t  gid, l_seq;  /* l_seq: L's call number (0: none)          */
     uint64_t* F;           /* dw words of the pool, fixed per slot       */
@@ -5112,6 +5115,7 @@ static void ysig__op_add(ysig_graph* g, uint64_t gid, int64_t t, const uint64_t*
         i = w->n_op++;
     }
     w->op[i].node = node;   /* its arm's detect (2 (b): what its arm lets in) */
+    w->op[i].l_late = 0;
     w->op[i].t = t;
     w->op[i].gid = gid;
     w->op[i].l_seq = l_seq;
@@ -5726,29 +5730,56 @@ static int ysig__late_place(ysig_graph* g, uint64_t a, uint64_t b, uint64_t lo, 
  * a state call there, or a shape the header does not order). Counted
  * once a late call (late_unverified). */
 static int ysig__unv_x_ok(ysig_graph* g, uint64_t xi, uint64_t gid, int64_t t, int64_t n_x, uint64_t li, int dax);
+/* G's span in the log, past the late unit [at, at + n): its last call
+ * (zl) and its L (li); 0 when either is not there */
+static int ysig__op_span(ysig_graph* g, const ysig__ux* o, uint64_t at, uint64_t n, uint64_t* zl, uint64_t* li) {
+    ysig__cu* cu = g->cu;
+    uint64_t s;
+    *zl = *li = UINT64_MAX;
+    for (s = cu->c_tail; s < cu->c_head; s++) {
+        const ysig__call* c = &cu->calls[s % (uint64_t)cu->C];
+        if (s >= at && s < at + n) continue;
+        if (c->gid == o->gid) *zl = s;
+        if (c->cseq == o->l_seq && !c->wp && *li == UINT64_MAX) *li = s;
+    }
+    return *zl != UINT64_MAX && *li != UINT64_MAX;
+}
+/* The late unit lets G in, as its new L: an input later than G's time, a
+ * frame or a settle at it (R1), a lone disarm_at at or after it (X1, R2) */
+static int ysig__late_lets(ysig_graph* g, const ysig__ux* o, uint64_t at, uint64_t n, int64_t t, int cls) {
+    const ysig__call* c = &g->cu->calls[at % (uint64_t)g->cu->C];
+    int dax = cls == 2 && n == 1 && c->e.kind == YSIG_J_DISARM_AT && t >= o->t;
+    return (dax || (cls < 2 && (t > o->t || (cls == 1 && t == o->t)))) && o->node >= 0;
+}
 static void ysig__late_unv(ysig_graph* g, uint64_t at, uint64_t n, const uint64_t* F, int64_t t, int cls) {
     ysig__cu* cu = g->cu;
     ysig__wt* w = g->wt;
     const uint64_t C = (uint64_t)cu->C;
-    int i;
+    int i, counted = 0;
+    /* First every open group that the late unit lets in takes it as L,
+     * then each is retested: 2 (b)'s order at L reads the groups whose L
+     * it is, and the table is in no call order (ysig__op_add() and the
+     * drops swap entries), so a group K made before G but retested after
+     * it would still hold the old L there and be left out (the reviewer:
+     * K's arm can let in H before G, the 1061 shape) */
     for (i = 0; i < w->n_op; i++) {
         ysig__ux* o = &w->op[i];
-        uint64_t s, zl = UINT64_MAX, li = UINT64_MAX, fa[YSIG__FPW], f[YSIG__FPW];
+        uint64_t zl, li;
+        o->l_late = o->l_seq && ysig__fp_meets(g, F, o->F) && ysig__op_span(g, o, at, n, &zl, &li) && at >= zl && at <= li &&
+                    ysig__late_lets(g, o, at, n, t, cls);
+    }
+    for (i = 0; i < w->n_op && !counted; i++) {
+        ysig__ux* o = &w->op[i];
+        uint64_t s, zl, li, fa[YSIG__FPW], f[YSIG__FPW];
         int ok, q;
         if (!o->l_seq || !ysig__fp_meets(g, F, o->F)) continue;
-        for (s = cu->c_tail; s < cu->c_head; s++) {
-            const ysig__call* c = &cu->calls[s % C];
-            if (s >= at && s < at + n) continue;
-            if (c->gid == o->gid) zl = s;
-            if (c->cseq == o->l_seq && !c->wp && li == UINT64_MAX) li = s;
-        }
-        if (zl == UINT64_MAX || li == UINT64_MAX || at < zl || at > li) continue;
+        if (!ysig__op_span(g, o, at, n, &zl, &li) || at < zl || at > li) continue;
         /* X1, R2: a late disarm_at at or after G's time lets G in right
          * before itself, so it is G's L now (2 (b)'s exception for the
          * call itself); 2 (a) and 2 (b) again with it, as for an input */
         int dax = cls == 2 && n == 1 && cu->calls[at % C].e.kind == YSIG_J_DISARM_AT && t >= o->t;
         ok = 0;
-        if ((dax || (cls < 2 && (t > o->t || (cls == 1 && t == o->t)))) && o->node >= 0) {
+        if (ysig__late_lets(g, o, at, n, t, cls)) {
             uint64_t l_old = o->l_seq, u0 = cu->n_ck ? cu->ck[cu->ck0].call : UINT64_MAX;
             /* N before each call of the span, for 2 (b)'s exception (H waits
              * at its place); unknown when the window starts after G */
@@ -5756,8 +5787,6 @@ static void ysig__late_unv(ysig_graph* g, uint64_t at, uint64_t n, const uint64_
             for (q = 0; q < g->dw; q++) fa[q] = 0;
             ysig__fp_or(g, fa, o->node);
             ok = ysig__fp_meets(g, F, fa);
-            /* the exception's order at L reads the groups whose L it is: G's
-             * is the late call now (put back when G is counted) */
             o->l_seq = cu->calls[at % C].cseq;
             for (s = u0 <= zl ? u0 : zl + 1; ok && s < at; s++) {
                 const ysig__call* c = &cu->calls[s % C];
@@ -5778,14 +5807,15 @@ static void ysig__late_unv(ysig_graph* g, uint64_t at, uint64_t n, const uint64_
                 if (ysig__unv_x_ok(g, s, o->gid, o->t, nx, at, dax)) continue;
                 ok = 0;
             }
-            if (ok) { o->l_seq = cu->calls[at % C].cseq; continue; }
-            o->l_seq = l_old;
+            if (ok) { o->l_late = 0; continue; }
+            o->l_seq = l_old;   /* counted: it keeps its old L, as those not yet retested */
         } else if (dax) {
             continue;   /* a cancelled G: the cancel, not an L */
         }
         g->st.late_unverified++;
-        return;
+        counted = 1;
     }
+    for (i = 0; i < w->n_op; i++) w->op[i].l_late = 0;
 }
 /* A late call logged at a (its unit to the log's end), made at the end:
  * to its place in R; the run again at the API call's end. */
@@ -6200,7 +6230,8 @@ static int ysig__unv_x_ok(ysig_graph* g, uint64_t xi, uint64_t gid, int64_t t, i
         m.at = 0;
         for (i = 0; i < wt->n_op; i++) {
             const ysig__ux* o = &wt->op[i];
-            if (o->l_seq != l->cseq || o->t != t || o->gid == x->gid) continue;
+            /* l_late: the late call l is its L, its retest not yet run */
+            if ((o->l_seq != l->cseq && !o->l_late) || o->t != t || o->gid == x->gid) continue;
             if (m.n == YSIG__LSIM) return 0;   /* too many to order here */
             m.seq[m.n] = o->gid; m.node[m.n] = o->node; m.F[m.n] = o->F; m.n++;
         }

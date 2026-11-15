@@ -928,6 +928,11 @@ When the header tests:
   reviewer, 2026-11-15). A group H between G and the input, that the
   input lets in too and no input between H and it does, is not counted
   (`sig_test` `test_v2_l5_exc`). Without it the retest only counted more.
+  R's order at the new `L` reads every group that `L` lets in, so the
+  header gives each of them the new `L` before it retests any (the
+  reviewer's op-order gap: a group K made before G but retested after
+  it was left out of G's order, and G went uncounted; `sig_test`
+  `test_v2_op_order`).
 - At each input call: condition 3.
 - Condition 4: at G's place (a past group), at the trigger that lets G
   in, or at G's arm at the end of R.

@@ -7533,6 +7533,53 @@ static void test_v2_gap_late(void) {
         CHECK(st.late_off == (v == 3));
     }
 }
+/* The op-order gap (the reviewer, on 3a4bc3f): a late call that becomes
+ * the L of several open groups retests them in the table's order, which
+ * is not call order. K = [arm d at 20] waits; G = [disarm P, arm y at 20]
+ * is past (device 5 at 21) and goes into the table first; device 1 at 22
+ * lets K in after it. H = [disarm d, arm P at 20] is past and exact (K's
+ * L, device 1 at 22, is H's; G's L, device 5 at 21, does not meet H).
+ * A late settle at 20.2 goes before both Ls and is the L of K, G and H.
+ * In R it lets K in first; K's arm lets H in; H's arm lets G in, after
+ * H's disarm: G's arm is not before H's calls, so 2 (b)'s exception does
+ * not hold for G (late_unverified 1). The table holds G before K, so G's
+ * retest read K with its old L and left it out (counted 0). The control
+ * (v 1): H disarms e, which K's arm does not reach (H waits, e's input
+ * is at 10): the settle is the L of K and G and lets H in, G's arm
+ * before H's calls, exact. P reads e; d, e and y read devices 1, 2, 5 */
+static void test_v2_op_order(void) {
+    int v;
+    g_where = "the op-order gap (a late L of K and G, K made first)";
+    for (v = 0; v < 2; v++) {
+        ysig_node n[7];
+        ysig_stats st;
+        n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 1); n[0].history = 64;
+        n[1] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 2, 1); n[1].history = 64;
+        n[2] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 5, 1); n[2].history = 64;
+        n[3] = ysig_node_of(YSIG_OP_DETECT, 0, -1); n[3].p[YSIG_DETECT_LEVEL] = 5; n[3].history = 64;     /* d */
+        n[4] = ysig_node_of(YSIG_OP_DETECT, 1, -1); n[4].p[YSIG_DETECT_LEVEL] = 5; n[4].history = 64;     /* e */
+        n[5] = ysig_node_of(YSIG_OP_DETECT, 4, -1); n[5].p[YSIG_DETECT_LEVEL] = 0.5; n[5].history = 64;   /* P */
+        n[6] = ysig_node_of(YSIG_OP_DETECT, 2, -1); n[6].p[YSIG_DETECT_LEVEL] = 5; n[6].history = 64;     /* y */
+        if (!rp_open(n, 7, 4, 0, false, false)) return;
+        rp_feed(10 * MS, 0, YIN_AXIS_POSITION, 1);
+        rp_feed(10 * MS, 0, YIN_AXIS_POSITION, 2);
+        rp_feed(10 * MS, 0, YIN_AXIS_POSITION, 5);
+        CHECK(ysig_arm(&g_rp, 3, 20 * MS) && g_rp.wt->n == 1);       /* K */
+        rp_feed(21 * MS, 9, YIN_AXIS_POSITION, 5);
+        CHECK(ysig_disarm(&g_rp, 5) && ysig_arm(&g_rp, 6, 20 * MS));  /* G */
+        rp_feed(22 * MS, 0, YIN_AXIS_POSITION, 1);
+        CHECK(g_rp.wt->n == 0);
+        CHECK(ysig_disarm(&g_rp, v ? 4 : 3) && ysig_arm(&g_rp, 5, 20 * MS));   /* H */
+        /* G is before K in the table, K made first */
+        CHECK(g_rp.wt->n_op == 3 - v && g_rp.wt->op[0].node == 6 && g_rp.wt->op[1].node == 3 && g_rp.wt->op[0].gid > g_rp.wt->op[1].gid);
+        ysig_get_stats(&g_rp, &st);
+        CHECK(st.arm_unverified == 0 && st.late_unverified == 0);
+        CHECK(ysig_settle(&g_rp, 20200000) >= 0);
+        ysig_get_stats(&g_rp, &st);
+        CHECK(st.late_far == 0 && st.late_full == 0 && st.arm_unverified == 0);
+        CHECK(st.late_unverified == !v);
+    }
+}
 static void test_late(void) {
     ysig_stats st;
     int v, k;
@@ -7918,6 +7965,7 @@ int main(void) {
     test_v2_exit_late();
     test_v2_two_untils();
     test_v2_gap_late();
+    test_v2_op_order();
     test_hold();
     if (g_failures) { fprintf(stderr, "sig_test: %d failures\n", g_failures); return 1; }
     printf("sig_test: all checks passed\n");
