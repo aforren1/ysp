@@ -634,10 +634,13 @@ desktop; the numbers go into Results when the build is measured).
    bound counts in `G` only when an exit compares its response with
    hits.
 
-sig.h's window: `catchup_ns` is the larger of 50 ms and `max B(r)` plus
-two frame periods. An exit taken at the horizon arms the next state at
-the exit's time, up to `max B(r)` plus a frame before the newest input:
-the window must reach that far back.
+sig.h's window: `catchup_ns` is the larger of 50 ms and
+`ceil((max B(r) + 3 periods) * 8 / 7)`. An exit taken at the horizon
+arms the next state at the exit's time, up to `max B(r)` plus two frame
+periods before the newest input: the window must reach that far back.
+The window keeps only about 7/8 of `catchup_ns`, because sig.h takes a
+checkpoint each `catchup_ns / 8`, and the newest input can be up to
+`catchup_ns / 8` plus a period past the newest checkpoint.
 
 ### Which hits wait
 
@@ -748,12 +751,13 @@ frame runs as in 0.11.0.
   `hit` columns, the sample traces, the response's times.
 - Later by up to the lateness plus a frame: a state's entry frame (the
   state rows' `frame`, `t_s`, `planned_s`) and what it shows.
-- New in `events.csv`, on each state row (L2): `lag_s`, the lag of the
-  exit that started the visit: the poll time at which the player took
-  it, minus its time (the visit's entry time). A later `after_s` exit
-  counts from the entry frame, so this lag moves it too. With `B` 0 it is
-  under a frame, as in 0.11.0. Other rows leave it empty.
-- New in `trials.csv`: `exit_lag_max_s`, the trial's largest `lag_s`;
+- The lag of the exit that started a visit (L2): the poll time at which
+  the player took it, minus its time (the visit's entry time). On a state
+  row of `events.csv` it is `t_s` minus the `end_s` of the visit before,
+  so the file has no column for it. A later `after_s` exit counts from
+  the entry frame, so this lag moves it too. With `B` 0 it is under a
+  frame, as in 0.11.0.
+- New in `trials.csv`: `exit_lag_max_s`, the trial's largest exit lag;
   `late_frames` (sig.h's count of the trial's drawn frames that a late
   report changed).
 - New in `session.json`: `exit_lag` (`n`, `mean_s`, `max_s`) over the
@@ -800,7 +804,7 @@ frame, F40, F41, 3.11 rule 8 and the trial's end.
 | M2 (medium): the queues' size | A count the player computes from its controls and report rates over `max B` plus a frame; `hits_lost` and `derived_lost` stop the guard while a bound is above 0 |
 | M3 (medium): the text of `ysig_detected_to()` | The reviewer's text, verbatim; `ysig_derived_to()` adapted from it |
 | L1 (low): keys and buttons are 0 only when stamped on arrival | A response box behind a transport needs a measured bound or is refused |
-| L2 (low): the lag per state row | `events.csv` `lag_s` on each state row; `trials.csv` `exit_lag_max_s` |
+| L2 (low): the lag per state row | A state row's `t_s` minus the `end_s` of the visit before (no column: the coordinator's decision, 2026-11-15); `trials.csv` `exit_lag_max_s` |
 
 ## Results
 

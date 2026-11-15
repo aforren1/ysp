@@ -10,6 +10,7 @@ import itertools
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -2252,10 +2253,11 @@ def t_v2_findings(ctx):
     # arms in time order and the trial finishes
     r = one("vm_guard_pinned", v2base({"t": t}, [{"name": "l", "trial": "t"}], roles={"hand": {"type": "position2d", "units": "display_px"}}), ["--sim-gain", "hand=1", "--samples", jump, "--test-sample-late", "hand=0.02"])
     check(r.rc == 0 and len(r.trials) == 1, "a 20 ms late report: the player waits for it and the trial finishes: exit %d %s" % (r.rc, r.err[:300]))
-    # a report 60 ms late with a bound of 0: later than the window (50 ms):
-    # late_far, a guard stop
-    r = one("vm_late_far", v2base({"t": t}, [{"name": "l", "trial": "t"}], roles={"hand": {"type": "position2d", "units": "display_px"}}), ["--sim-gain", "hand=1", "--samples", jump, "--test-sample-late", "hand=0.06", "--test-sample-bound", "hand=0"])
-    check(r.rc != 0 and "internal guard" in r.err, "a report later than its bound and the window stops the guard: exit %d %s" % (r.rc, r.err[-300:]))
+    # a report 150 ms late with a bound of 0: later than the window
+    # (catchup_ns 50 ms at 500 Hz, 57 ms at 60 Hz, and the log reaches at
+    # most two checkpoint spacings further back): late_far, a guard stop
+    r = one("vm_late_far", v2base({"t": t}, [{"name": "l", "trial": "t"}], roles={"hand": {"type": "position2d", "units": "display_px"}}), ["--sim-gain", "hand=1", "--samples", jump, "--test-sample-late", "hand=0.15", "--test-sample-bound", "hand=0"])
+    check(r.rc != 0 and re.search(r"late: [1-9][0-9]* before the window", r.err), "a report later than its bound and the window stops the guard on late_far: exit %d %s" % (r.rc, r.err[-300:]))
     # N1 (docs/player.md): the hand's reports come 30 ms late, its bound is
     # 10 ms. The poll at 0.1167 moves the horizon past 0.1, so s0's after_s
     # exit at 0.1 is taken; the report stamped 0.095 that enters home

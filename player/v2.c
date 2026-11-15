@@ -131,7 +131,6 @@ enum { V2_FR_NO_RECORD = 1, V2_FR_AT_PLANNED = 2 };   /* a frame trace's flags c
 
 typedef struct v2_srow {       /* a state row waiting for its entry frame's record */
     int64_t frame, end_ns, onset, planned, residual;
-    int64_t lag;               /* lag_s: the take's poll minus the entry time */
     int trial, code;
     const char* name;
     bool ended, rec_in;
@@ -269,7 +268,6 @@ struct pl_v2 {
     int64_t g_der;             /* the horizon of the last derived drain     */
     int64_t arm_min;           /* the earliest arm or recenter since then:
                                 * an event before it is no arm's (N1)      */
-    int64_t lag_pend;          /* the lag of the exit that starts the visit */
     int64_t lag_max;           /* the trial's largest; YTR_MISSING_NS none */
     bool resp_pend, resp_pend_responded;   /* a key response's end later */
     int64_t resp_pend_t;       /* than the horizon waits for it            */
@@ -1570,13 +1568,16 @@ static int v2_beyond(pl_player* p, const pl_v2* v, const char* what, int64_t t, 
  * rig profile has no measured input lateness for a signal role (it has no
  * adapter block, G18), so 50 ms, the user's default (2026-11-15): a 16 ms
  * FTDI timer, a 20 ms LSL offset and a 60 Hz frame (docs/sig.md, "The
- * window in time"). With a measured lateness it is that plus two frames. */
+ * window in time"). With a measured lateness, larger when it needs (below). */
 static int64_t v2_catchup_ns(const pl_player* p) {
     /* 0.12.0: an exit taken at the horizon arms the next state at the
-     * exit's time, up to max B plus a frame before the newest input: the
-     * window reaches that far back (docs/player.md) */
+     * exit's time, up to max B plus two frames before the newest input, and
+     * the newest input can be up to catchup_ns / 8 plus a frame past the
+     * newest checkpoint (sig.h takes one each catchup_ns / 8): the window
+     * keeps about 7/8 of catchup_ns, so max B plus three frames, times 8/7
+     * (docs/player.md; the coordinator's R4, 2026-11-15) */
     int64_t per = p->caps.period_ns > 0 ? p->caps.period_ns : 16666667;
-    int64_t b = p->v2s ? p->v2s->bnd_max + 2 * per : 0;
+    int64_t b = p->v2s ? ((p->v2s->bnd_max + 3 * per) * 8 + 6) / 7 : 0;
     return b > V2_CATCHUP_NS ? b : V2_CATCHUP_NS;
 }
 
@@ -2013,7 +2014,7 @@ int pl_v2_load(pl_player* p) {
         memset(v->arm_tk_prev, 0, sizeof(int64_t) * (size_t)v->nn);
         v->g_used = v->g_der = INT64_MIN;
         v->arm_min = INT64_MAX;
-        v->lag_pend = v->lag_max = YTR_MISSING_NS;
+        v->lag_max = YTR_MISSING_NS;
         if (!v->st_armed || !v->dis_t || !v->der) return -1;
         v->det_now = (bool*)pl_alloc(p, sizeof(bool) * (size_t)v->nn);
         if (!v->arm_t || !v->det_now) return -1;
@@ -2307,8 +2308,6 @@ static int v2_srow_flush(pl_player* p, bool all) {
             ev.end_ns = r->end_ns;
             ev.code = r->code;
             ev.text = r->name;
-            /* r->lag goes to events.csv lag_s once yds_event has the
-             * column (ysp/dataset.h; not built) */
             if (pl_event_queue(p, &ev) < 0) return -1;
             continue;
         }
@@ -2328,7 +2327,6 @@ static int v2_srow_open(pl_player* p, pl_v2* v, int def, const yscr_frame* f) {
     r->planned = f->onset;
     r->trial = p->global_trial - 1;
     r->name = v->def->states[def].name;
-    r->lag = v->lag_pend;
     return 0;
 }
 
@@ -2799,12 +2797,11 @@ static bool v2_from_due(pl_player* p, const pl_v2* v) {
 }
 
 /* An exit (or a steps' end) taken at t on frame f: its lag (the poll's
- * time, the frame's onset in --sim, minus t: events.csv lag_s, trials.csv
+ * time, the frame's onset in --sim, minus t: trials.csv
  * exit_lag_max_s, session.json exit_lag), and the horizon it used (N1) */
 static void v2_took(pl_player* p, pl_v2* v, int64_t t, const yscr_frame* f) {
     pl_v2_session* S = p->v2s;
     int64_t lag = f->onset - t;
-    v->lag_pend = lag;
     if (v->lag_max == YTR_MISSING_NS || lag > v->lag_max) v->lag_max = lag;
     if (S->lag_n == 0 || lag > S->lag_max) S->lag_max = lag;
     S->lag_n++;
@@ -3128,7 +3125,7 @@ int pl_v2_trial_start(pl_player* p, const yscr_frame* f) {
     pl_v2_session* S = p->v2s;
     int i;
     S->cur_t = v->index;
-    v->lag_pend = v->lag_max = YTR_MISSING_NS;   /* the first visit: no exit started it */
+    v->lag_max = YTR_MISSING_NS;   /* the first visit: no exit started it */
     v->resp_pend = false;
     /* the last trial's frame rows read its graph's rings: before the reset */
     if (v2_frame_rows_flush(p, true) < 0) return -1;
