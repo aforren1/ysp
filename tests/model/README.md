@@ -59,9 +59,15 @@ Options:
   durations and sample times in frames, so a seed gives another case at
   another rate.
 - `--late S` gives the hand's samples to the player S seconds after their
-  time (`--test-sample-late`). The model has no arrival time: it predicts
-  the rows of samples fed at their time, so its mismatches count only as
-  context; the guard's stops are the measure.
+  time (`--test-sample-late`, which also makes S the hand's bound). The
+  model waits as the player does (docs/player.md, "Explanation: late
+  input, and exits that wait for it"): after frame k's poll the input is
+  complete to `onset(k) - S` (the horizon G), and a candidate (a hit, a
+  timed exit, a response's end) is taken at the first frame whose G
+  reaches its time, earliest first. A trial's next trial starts on the
+  first frame after its end frame whose onset is at or after the end
+  frame's onset plus S minus 1 ns (the flush's wait). Both apply to a
+  template whose controls read the hand. The rows compare exactly.
 - `--extra "OPTIONS"` passes more options to the player (the model does
   not see them).
 - The log (`--log`) has each run's `sig_arms` from `session.json` and the

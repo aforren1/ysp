@@ -55,6 +55,20 @@ def set_period(ns):
     LEAD = PERIOD // 2
 
 
+# --late (docs/player.md, "Explanation: late input, and exits that wait for
+# it"): the hand's reports reach the player LATE ns after their time, and
+# its bound is LATE, so after frame k's poll the input is complete to
+# onset(k) - LATE (the horizon G). The player takes a candidate only once G
+# reaches its time; so does the model (Run.gate), with every candidate in.
+# None: no wait (0.11.0).
+LATE = None
+
+
+def set_late(ns):
+    global LATE
+    LATE = int(ns) if ns else None
+
+
 def period_of_hz(hz):
     return int(round(1e9 / float(hz)))
 
@@ -512,6 +526,9 @@ class Run:
         self.max_trial_ns = max_trial_s * NS
         self.seq = 0
         self.vid = 0
+        # the wait applies to a template whose controls read the late hand
+        # (the player's v->late; its graph's flush waits too)
+        self.L = LATE if (LATE and self.samples and self.tpl.regions) else None
 
     # ------------------------------------------------------------ helpers
     def gap(self, name):
@@ -602,6 +619,12 @@ class Run:
             if tr.end_frame is None:
                 break
             k = tr.end_frame + 1   # 3.11 rule 10: the next trial starts on the next frame
+            if self.L is not None:
+                # the flush waits until G reaches its barrier, the end
+                # frame's onset (docs/player.md, "The trial's end"): the
+                # next trial starts on the first frame after it whose
+                # onset is at or after that onset plus LATE minus 1 ns
+                k = max(k, hit_frame(onset(tr.end_frame) + self.L - 1))
         return results
 
     def trial(self, tr):
@@ -633,11 +656,25 @@ class Run:
             tr.loop = True
 
     # ------------------------------------------------------------ frames
+    def gate(self, k):
+        """The horizon G after frame k's poll, or None with no wait."""
+        return onset(k) - self.L if self.L is not None else None
+
     def frame(self, k):
         tr = self.tr
         o = onset(k)
+        if self.L is not None:
+            # Under the wait no candidate is taken in the poll: each is
+            # taken once G reaches its time, earliest first, so the order of
+            # the poll's parts does not matter; the frame's phases below take
+            # them (gated in resolve()).
+            while True:
+                nxt = self.next_input(o)
+                if nxt is None:
+                    break
+                self.carry.extend(self.feed_input(nxt[0], nxt[1], nxt[2], k))
         # Phase P: the poll's inputs in time order (3.11 rule 4).
-        while True:
+        while self.L is None:
             nxt = self.next_input(o)
             if nxt is None:
                 break
@@ -1003,12 +1040,13 @@ class Run:
         and F) every timed candidate this frame's window reaches is."""
         tr = self.tr
         cands = list(cands)
+        g = self.gate(k)
         while self.cur is not None:
             v = self.cur
             pool = []
             for c in cands:
                 oe = self.order_of(c, v)
-                if oe is not None:
+                if oe is not None and (g is None or c[1] <= g):
                     pool.append((c[1], oe[0], c, oe[1]))
             if phase == "P":
                 if not cands:
@@ -1051,23 +1089,27 @@ class Run:
                     c = ("hit", h, name, v.vid)
                     cands.append(c)
                     oe = self.order_of(c, v)
-                    if oe is not None:
+                    if oe is not None and (g is None or h <= g):
                         pool.append((h, oe[0], c, oe[1]))
             if v.until_det is not None:
                 h = v.until_det.frame(settle)
                 if h is not None:
                     c = ("until", h, None, v.vid)
                     cands.append(c)
-                    pool.append((h, self.order_of(c, v)[0], c, None))
+                    if g is None or h <= g:
+                        pool.append((h, self.order_of(c, v)[0], c, None))
             if phase == "P" and pool:
                 limit = max(limit, max(p[0] for p in pool))
             for c5 in self.visit_timed(v):
                 c = c5[:4]
-                if c[1] <= limit and k >= c5[4]:
+                if c[1] <= limit and k >= c5[4] and (g is None or c[1] <= g):
                     oe = self.order_of(c, v)
                     if oe is not None:
                         pool.append((c[1], oe[0], c, oe[1]))
             if not pool:
+                if g is not None:
+                    # later than G: taken at a later frame's resolve
+                    self.carry.extend(c for c in cands if c[1] > g)
                 return
             pool.sort(key=lambda p: (p[0], p[1]))
             t, _, c, ex = pool[0]
