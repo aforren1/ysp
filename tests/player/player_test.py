@@ -2938,13 +2938,47 @@ def t_v2_move_origin(ctx):
               "%s: the hand steps %+.4f s from trial 1's onset: response %r (exit %d %s)" % (nm, dj, got, r.rc, r.err[-300:] if r.rc else ""))
 
 
+def t_v2_signal_column_late(ctx):
+    # a `{"signal": N}` column reads the value at the end frame's onset.
+    # With a bound above 0 the input at the end frame is complete only to
+    # G, so 0.12.0 to 5ead8ef missed a report between G and the onset (60
+    # Hz, 10 ms late, a step 5 ms before the end frame: 0 against 100 on
+    # time). Now the column is read from the node's ring at the onset once
+    # the flush's wait has the input to it. The step is half the lateness
+    # before the end frame's onset (found in a run with a still hand). The
+    # control: the same samples on time, and a step half the lateness after
+    # the onset, late (0: after the end frame)
+    hand = {"hand": {"type": "position2d", "units": "display_px"}}
+    late = 0.01
+    t = {"states": [{"name": "s0", "exits": [{"after_s": 0.1, "to": "end", "outcome": "timed"}]}],
+         "columns": {"hx": {"signal": "hand.x"}}}
+    d = v2base({"t": t}, [{"name": "l", "trial": "t"}], roles=hand)
+    smp = os.path.join(ctx.out, "v2_sigcol_still.csv")
+    write_samples(smp, [(0.001 * k, "hand", 0, 0) for k in range(1000)])
+    r = Run(ctx, "v2_sigcol_still", d, args=["--sim-gain", "hand=1", "--samples", smp, "--max-seconds", "20", "--test-sample-late", "hand=%g" % late])
+    check(r.rc == 0 and len(r.trials) == 1, "v2_sigcol_still: exit %d %s" % (r.rc, r.err[-300:] if r.rc else ""))
+    if r.rc != 0 or not r.trials:
+        return
+    E = float(r.trials[0]["time_elapsed_s"])   # the end frame's onset from the trial's start
+    for nm, dj, args, want in (("v2_sigcol_late", -late / 2, ["--test-sample-late", "hand=%g" % late], "100"),
+                               ("v2_sigcol_ontime", -late / 2, [], "100"),
+                               ("v2_sigcol_after", late / 2, ["--test-sample-late", "hand=%g" % late], "0")):
+        j = round(E + dj, 6)
+        smp = os.path.join(ctx.out, nm + ".csv")
+        write_samples(smp, [(0.001 * k, "hand", 100 if 0.001 * k >= j - 1e-9 else 0, 0) for k in range(1000)])
+        r = Run(ctx, nm, d, args=["--sim-gain", "hand=1", "--samples", smp, "--max-seconds", "20"] + args)
+        got = r.trials[0].get("hx") if r.rc == 0 and r.trials else None
+        check(r.rc == 0 and got is not None and got.split(".")[0] == want,
+              "%s: the hand steps %+.4f s from the end frame: hx %r, want %s (exit %d %s)" % (nm, dj, got, want, r.rc, r.err[-300:] if r.rc else ""))
+
+
 TESTS = [t_nested, t_if_unless, t_empty_and_zero, t_loop, t_requeue, t_track_ends, t_lookup_keys, t_triggers, t_after_timing, t_outcomes,
          t_method_update, t_seeds, t_refused, t_unused_stim, t_record_data, t_fix_density, t_fix_key_reapply, t_fix_stale_rdk,
          t_fix_timeout_values, t_fix_any_key, t_fix_from_in_if, t_fix_shown_twice, t_fix_vars_data, t_fix_sound_twice, t_fix_rdk_limit,
          t_fix_record_inherit, t_fix_backward_at, t_fix_refusals, t_fix_michelson_order, t_fix_texture_vars, t_fix_walk_budget,
          t_fix_data_set, t_fix_check_all_leaves, t_fix_release_order, t_fix_key_var_reapply,
          t_r2_release_other_template, t_r2_yield_draws_nothing, t_r2_low, t_r2_relaxed, t_r4_leaf_loop_done_track, t_r4_requeue_full,
-         t_r5_wait_final, t_r6_allow_below, t_v2_states, t_v2_until, t_v2_hand, t_v2_rule5, t_v2_review2, t_v2_review3, t_v2_f34, t_v2_ties, t_v2_review4, t_v2_review5, t_v2_findings, t_v2_corpus, t_v2_window_8k, t_v2_two_hands, t_v2_two_exits_one_ctl, t_v2_n1_tie, t_v2_n1_chain, t_v2_n1_derived, t_v2_resp_pend_first, t_v2_barrier, t_v2_resp_plim, t_v2_signal_from_first, t_v2_beyond_bound0, t_v2_frame_rows_late, t_v2_ended_hits, t_v2_move_origin]
+         t_r5_wait_final, t_r6_allow_below, t_v2_states, t_v2_until, t_v2_hand, t_v2_rule5, t_v2_review2, t_v2_review3, t_v2_f34, t_v2_ties, t_v2_review4, t_v2_review5, t_v2_findings, t_v2_corpus, t_v2_window_8k, t_v2_two_hands, t_v2_two_exits_one_ctl, t_v2_n1_tie, t_v2_n1_chain, t_v2_n1_derived, t_v2_resp_pend_first, t_v2_barrier, t_v2_resp_plim, t_v2_signal_from_first, t_v2_beyond_bound0, t_v2_frame_rows_late, t_v2_ended_hits, t_v2_move_origin, t_v2_signal_column_late]
 
 
 def main():

@@ -1174,6 +1174,21 @@ static int pl_cell_text(pl_player* p, pl_row* r, const char* name, const pl_val*
     return 0;
 }
 
+/* A column's value as a cell, set after the fill: a version 2 signal
+ * column read at the trial's flush (pl_v2_trial_rows()). */
+int pl_row_cell_value(pl_player* p, pl_row* r, int col, const pl_val* x) {
+    const char* s = NULL;
+    if (r->n_cells >= YTR_DATA_MAX_COLS) { pl_fail(p, "too many cells"); return -1; }
+    if (pl_cell_text(p, r, p->cols[col].name, x, &s) < 0) return -1;
+    r->cells[r->n_cells].col = col;
+    r->cells[r->n_cells].type = 3;
+    r->cells[r->n_cells].i = 0;
+    r->cells[r->n_cells].d = 0;
+    r->cells[r->n_cells].s = s;
+    r->n_cells++;
+    return 0;
+}
+
 /* Set the cells of the row's own columns, per trial, from the environment. */
 static int pl_row_fill(pl_player* p, pl_row* r) {
     int i;
@@ -1523,7 +1538,8 @@ static int pl_on_record(pl_player* p, const yscr_record* rec) {
      * frames), with the missing ones counted failed */
     for (i = 0; i < PL_PENDING_ROWS; i++) {
         pl_row* r = &p->rows[i];
-        if (!r->used || r->final || !r->last_in) continue;
+        /* a version 2 row also waits for its signal columns (the flush) */
+        if (!r->used || r->final || !r->last_in || pl_v2_row_waits(r)) continue;
         if (!pl_row_owed(p, r) || rec->index >= r->last_frame + p->out_wait_frames) r->final = true;
     }
     while (p->rows[p->row_tail].used && p->rows[p->row_tail].final) {

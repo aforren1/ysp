@@ -774,6 +774,8 @@ int  pl_v2_clear_ops(pl_player* p, const char* stim, const char* prop, ytl_op* o
 bool pl_v2_reads(pl_player* p, const yexp_template* t, const char* name);
 int  pl_on_fired(pl_player* p, const yscr_frame* f, int n);
 int  pl_v2_row_flush(pl_player* p, pl_row* r, ytr_data* w);
+bool pl_v2_row_waits(const pl_row* r);
+int  pl_row_cell_value(pl_player* p, pl_row* r, int col, const pl_val* x);
 int  pl_v2_on_record(pl_player* p, const yscr_record* rec);
 int  pl_v2_columns(pl_player* p);
 /* --test-draws: every leaf's trials and variables, no frames. */

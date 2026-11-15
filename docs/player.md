@@ -864,12 +864,18 @@ frame runs as in 0.11.0.
     `player_test` `t_v2_move_origin`: a step 0.4 periods before trial 1's
     onset makes no response; its control, the step 0.4 periods after,
     makes one.
-- Not exact, open: a `{"signal": N}` column (and a `when` column's test)
-  reads the graph's value at the end frame, with the input fed by then:
-  complete to `G`, so a report between `G` and the end frame's onset is
-  not in it (60 Hz, 10 ms late, a step 5 ms before the end frame: 0
-  against 100 on time). A fix reads it at the end frame's onset once the
-  flush's wait is done, which needs a history on the column's nodes.
+- Exact: a `{"signal": N}` column. With a bound above 0 it is read at the
+  end frame's onset from its node's ring when the flush's wait is done
+  (the input complete to the barrier), and the trial's row waits for it
+  (`pl_v2_row_waits()`). Before (to 5ead8ef) it read the value at the end
+  frame, with the input complete only to `G`: a report between `G` and
+  the onset was not in it (60 and 500 Hz, 10 ms late, a step 5 ms before
+  the end frame: 0 against 100 on time; `player_test`
+  `t_v2_signal_column_late`, with the samples on time and a step after
+  the onset as its controls). With every bound 0 it is read at the end
+  frame, as 0.11.0.
+- Not exact, open: a `when` column's test (and a signal inside a `when`)
+  still reads the value at the end frame with the input complete to `G`.
 - New in `trials.csv`: `exit_lag_max_s`, the trial's largest exit lag;
   `late_frames` (sig.h's count of the trial's drawn frames that a late
   report changed).

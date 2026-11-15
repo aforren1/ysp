@@ -285,6 +285,8 @@ struct pl_v2 {
     bool resp_pend, resp_pend_responded;   /* a key response's end later */
     int64_t resp_pend_t;       /* than the horizon waits for it            */
     int der_cap;               /* v->der's room: sig.h's derived queue      */
+    int64_t col_t;             /* the end frame's onset: a signal column's time */
+    struct pl_row* col_row;    /* the row whose signal columns wait for the flush */
 };
 
 typedef struct pl_v2_session {
@@ -323,9 +325,14 @@ typedef struct pl_v2_session {
 } pl_v2_session;
 
 typedef struct v2_tcell { int col; int64_t a, b; int sa, sb; bool has_a, has_b; int64_t fa, fb; } v2_tcell;
+/* a `{"signal": N}` column read at the trial's flush (a bound above 0) */
+typedef struct v2_scell { int col, node, lane; int64_t t; } v2_scell;
 struct pl_v2_row {
     int n, cap;                /* cap: the most `time` columns of a template */
     v2_tcell* t;
+    int ns, scap;              /* scap: the most signal columns of a template */
+    v2_scell* s;
+    bool wait;                 /* its signal columns wait for the flush      */
 };
 
 /* --- helpers ----------------------------------------------------------- */
@@ -1332,7 +1339,14 @@ static int v2_template_checks(pl_player* p, pl_v2* v) {
  * so the fill only reads them. */
 static int v2_column_nodes(pl_player* p, pl_v2* v, const yexp_value* f) {
     if (!f) return 0;
-    if (f->kind == YEXP_V_SIGNAL) return v2_name_node(p, v, f->str, NULL) < 0 ? -1 : 0;
+    if (f->kind == YEXP_V_SIGNAL) {
+        /* a ring: the column is read at the end frame's onset after the
+         * flush's wait (pl_v2_column()) */
+        int n = v2_name_node(p, v, f->str, NULL);
+        if (n < 0) return -1;
+        if (v->nodes[n].history < V2_HISTORY) v->nodes[n].history = V2_HISTORY;
+        return 0;
+    }
     if (f->kind == YEXP_V_WHEN) {
         if (f->by && f->by->kind == YEXP_V_SIGNAL && v2_name_node(p, v, f->by->str, NULL) < 0) return -1;
         if (v2_column_nodes(p, v, &f->items[0]) < 0) return -1;
@@ -3674,12 +3688,16 @@ static int v2_frame_rows_flush(pl_player* p, bool all) {
 }
 
 /* The session's end: frame trace rows whose record never came, flagged. */
+static int v2_scells_fill(pl_player* p, pl_v2* v);
 int pl_v2_finish(pl_player* p) {
     pl_v2_session* S = p->v2s;
     int i;
     if (!S) return 0;
     for (i = 0; i < S->n_fpend; i++) if (v2_frame_row_write(p, &S->fpend[i], 0, false) < 0) return -1;
     S->n_fpend = 0;
+    /* a session that ends while a trial's flush waits: its signal columns
+     * with the input there is, not an empty cell */
+    if (S->flush_pend && v2_scells_fill(p, S->flush_pend) < 0) return -1;
     return 0;
 }
 
@@ -4139,7 +4157,8 @@ static bool v2_text_in(pl_player* p, const yexp_value* arr, const char* text) {
 int pl_v2_trial_end(pl_player* p, const yscr_frame* f, int choice, int* outcome_val, bool* requeue) {
     pl_v2* v = p->tmpl->v2;
     const yexp_template* d = v->def;
-    (void)f;
+    v->col_t = f->onset;
+    v->col_row = NULL;
     v2_srow_close(p, v, -1, v->end_onset);
     if (v->outcome_set) {
         if (v->outcome_text) snprintf(v->outcome_buf, sizeof v->outcome_buf, "%s", v->outcome_text);
@@ -4302,6 +4321,27 @@ int pl_v2_column(pl_player* p, pl_row* r, int col, const yexp_value* f, pl_val* 
         x->n++;
         return 0;
     }
+    if (f->kind == YEXP_V_SIGNAL && !f->by && v->has_graph && p->v2s->bnd_max > 0 && r->v2) {
+        /* the value at the end frame's onset, with the input complete to
+         * it: the flush waits for that (pl_v2_trial_rows()), and the row
+         * with it. Read now, the input is complete only to G, and a report
+         * between G and the onset is not in it (60 Hz, 10 ms late, a step
+         * 5 ms before the end frame: 0 against 100 on time). Every bound
+         * 0: read now, as 0.11.0 */
+        struct pl_v2_row* x = r->v2;
+        int lanes = 1, n = v2_name_node(p, v, f->str, &lanes);
+        if (n < 0) return -1;
+        if (x->ns >= x->scap) { pl_fail(p, "template '%s': internal: more signal columns than the row holds", v->def->name); return -1; }
+        x->s[x->ns].col = col;
+        x->s[x->ns].node = n;
+        x->s[x->ns].lane = f->i >= 0 ? f->i : 0;
+        x->s[x->ns].t = v->col_t;
+        x->ns++;
+        x->wait = true;
+        v->col_row = r;
+        *deferred = true;
+        return 0;
+    }
     if (v2_is_form(f) || f->kind == YEXP_V_HIT) return v2_value_form(p, v, f, out);
     return pl_eval(p, &p->env, f, out);
 }
@@ -4318,25 +4358,37 @@ int pl_v2_row_fill(pl_player* p, pl_row* r) {
         if (!r->v2) return -1;
     }
     r->v2->n = 0;
+    r->v2->ns = 0;
+    r->v2->wait = false;
     return 0;
 }
+
+bool pl_v2_row_waits(const pl_row* r);
+bool pl_v2_row_waits(const pl_row* r) { return r->v2 && r->v2->wait; }
 
 /* A row's cells for the most `time` columns any template has (the
  * loader bounds the columns), sized at load. */
 static struct pl_v2_row* v2_row_new(pl_player* p) {
-    int ti, k, most = 1;
+    int ti, k, most = 1, most_s = 1;
     struct pl_v2_row* x;
     for (ti = 0; ti < p->def->n_templates; ti++) {
         const yexp_template* t = &p->def->templates[ti];
-        int n = 0;
-        for (k = 0; k < t->n_columns; k++) if (t->columns[k].value && t->columns[k].value->kind == YEXP_V_TIME) n++;
+        int n = 0, ns = 0;
+        for (k = 0; k < t->n_columns; k++) {
+            const yexp_value* f = t->columns[k].value;
+            if (f && f->kind == YEXP_V_TIME) n++;
+            if (f && f->kind == YEXP_V_SIGNAL && !f->by) ns++;
+        }
         if (n > most) most = n;
+        if (ns > most_s) most_s = ns;
     }
     x = (struct pl_v2_row*)pl_alloc(p, sizeof(struct pl_v2_row));
     if (!x) return NULL;
     x->t = (v2_tcell*)pl_alloc(p, sizeof(v2_tcell) * (size_t)most);
-    if (!x->t) return NULL;
+    x->s = (v2_scell*)pl_alloc(p, sizeof(v2_scell) * (size_t)most_s);
+    if (!x->t || !x->s) return NULL;
     x->cap = most;
+    x->scap = most_s;
     return x;
 }
 
@@ -4468,7 +4520,34 @@ static int v2_traces_end(pl_player* p, pl_v2* v) {
     return 0;
 }
 
+/* The signal columns, at the end frame's onset from the node's ring, the
+ * input complete to the barrier now; then the row may go. */
+static int v2_scells_fill(pl_player* p, pl_v2* v) {
+    if (v->col_row && v->col_row->v2) {
+        struct pl_row* r = v->col_row;
+        int i;
+        for (i = 0; i < r->v2->ns; i++) {
+            const v2_scell* c = &r->v2->s[i];
+            ysig_value x;
+            pl_val val;
+            if (ysig_value_at(&v->g, c->node, c->t, &x) < 0) {
+                const ysig_value* y = ysig_value_of(&v->g, c->node);
+                if (!y) { pl_fail(p, "template '%s': a signal column has no value in the graph", v->def->name); return -1; }
+                x = *y;
+            }
+            memset(&val, 0, sizeof val);
+            val.kind = YEXP_V_NUMBER;
+            val.num = x.v[c->lane];
+            if (pl_row_cell_value(p, r, c->col, &val) < 0) return -1;
+        }
+        r->v2->wait = false;
+        v->col_row = NULL;
+    }
+    return 0;
+}
+
 static int v2_trial_rows_now(pl_player* p, pl_v2* v) {
+    if (v2_scells_fill(p, v) < 0) return -1;
     /* the trial's held rows come now: a flush is a barrier, so every row
      * so far is final; then the traces */
     if (v->has_graph && v->rows_open && !ysig_flush(&v->g)) {
