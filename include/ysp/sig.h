@@ -5662,6 +5662,30 @@ static void ysig__arm_wait(ysig_graph* g, int node, int64_t t, uint64_t seq) {
      * 31415: a disarm made before the group's recenters; 2192 for a past
      * group) */
     ysig__dis_last(g);
+    if (cu && w->n) {
+        /* a graph with no window makes this group's sets, set_data and
+         * recenters at once, before the waiting groups they meet with a
+         * smaller key go in (R makes them with this group, after those):
+         * those groups are not verified (the oracle's B, reason 4) */
+        uint64_t fs[YSIG__FPW], fx[YSIG__FPW], fa[YSIG__FPW];
+        int q, any = 0;
+        for (q = 0; q < g->dw; q++) fs[q] = 0;
+        if (cu->grp_bad) { for (q = 0; q < g->dw; q++) fs[q] = w->gap_f[q]; any = 1; }
+        else
+            for (s = from; s < cu->c_head; s++) {
+                const ysig__call* c = &cu->calls[s % (uint64_t)cu->C];
+                if (c->wp || c->e.kind == YSIG_J_DISARM || c->e.kind == YSIG_J_DISARM_AT) continue;
+                (void)ysig__fp_entry(g, c, fx);
+                for (q = 0; q < g->dw; q++) fs[q] |= fx[q];
+                any = 1;
+            }
+        if (any)
+            for (q = 0; q < w->n; q++) {
+                if (w->a[q].t > t) continue;
+                ysig__wait_fp(g, &w->a[q], fa);
+                if (ysig__fp_meets(g, fa, fs)) ysig__unv(g, w->a[q].seq);
+            }
+    }
     if (cu)
         for (s = from; s < cu->c_head; s++) {
             const ysig__call* c = &cu->calls[s % (uint64_t)cu->C];
