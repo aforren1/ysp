@@ -3444,9 +3444,13 @@ static int v2_feed(pl_player* p, const yscr_frame* f, int64_t limit) {
     YRT_ZONE_END(zs);
     if (rc < 0) return -1;
     }
-    /* the poll is whole: input arrived by P is in, up to the limit */
+    /* the poll is whole: input arrived by P is in, up to the limit. A feed
+     * with a limit (a key response's end, v2_resp_end()) after this
+     * poll's whole feed adds nothing and must not lower the claim: it
+     * held a timed exit after the response's time to the next frame
+     * (the model's harness, 60 Hz, 10 ms late, seed 102486) */
+    if (!(S->polled && S->poll == f->onset && S->plim > limit)) S->plim = limit;
     S->poll = f->onset;
-    S->plim = limit;
     S->polled = true;
     return 0;
 }
