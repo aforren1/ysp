@@ -6866,29 +6866,73 @@ static void test_v2_old_shapes(void) {
         ysig_get_stats(&g_rp, &st);
         CHECK(st.late_far == 0 && st.late_full == 0 && st.late_off == 0);
     }
-    g_where = "old shapes, (c) a state call at N(F(c)) above tau";
-    for (v = 0; v < 2; v++) {
-        ysig_node n[7];
-        n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 1); n[0].history = 64;
-        n[1] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 2, 1); n[1].history = 64;
-        n[2] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 3, 1); n[2].history = 64;
-        n[3] = ysig_node_of(YSIG_OP_OFFSET, 0, -1); n[3].history = 64;
-        n[4] = ysig_node_of(YSIG_OP_DETECT, 1, -1); n[4].p[YSIG_DETECT_LEVEL] = 5;
-        n[4].p[YSIG_DETECT_ENTRY] = YSIG_ENTRY_NOW; n[4].p[YSIG_DETECT_OUT] = YSIG_OUT_HIT; n[4].history = 64;
-        n[5] = ysig_node_of(YSIG_OP_SUM, 3, 4); n[5].history = 64;
-        n[6] = ysig_node_of(YSIG_OP_SUM, 3, 2); n[6].history = 64;
-        if (!rp_open(n, 7, 4, 0, false, false)) return;
-        rp_feed(10 * MS, 1, YIN_AXIS_POSITION, 1);
-        rp_feed(10 * MS, 9, YIN_AXIS_POSITION, 2);
-        rp_feed(30 * MS, 0, YIN_AXIS_POSITION, 3);
-        if (!v) CHECK(ysig_set(&g_rp, 3, 0, 100));
-        rp_feed(31 * MS, 0, YIN_AXIS_POSITION, 3);   /* ends the set's gap: in no group */
-        if (v) CHECK(ysig_set(&g_rp, 3, 0, 100));
-        CHECK(ysig_arm(&g_rp, 4, 10 * MS));
-        CHECK(ysig_value_at(&g_rp, 5, 15 * MS, &r) && r.v[0] == (v ? 102 : 2));
-        CHECK(ysig_value_of(&g_rp, 5)->v[0] == 102);
-        ysig_get_stats(&g_rp, &st);
-        CHECK(st.late_far == 0 && st.late_full == 0 && st.late_off == 0);
+    /* (c) G present, so the order by key alone decides. The sum (5) is
+     * computed from its inputs' rings at the time asked (two sources), so
+     * its value at tau does not show the order; the delay (7) after it
+     * takes the arm's rise at tau as a sample, with the sum as R has it
+     * there ("A change at an arm reaches every node (D)").
+     * (c1) the set in no group keyed at N(F(c)) (30, device 3 reaches only
+     *      F(c)) above tau (10): G goes first, the delay reads 2 at 10.
+     *      The control: the set in G's gap, at tau, 102.
+     * (c2) N(F(c)) (30) below tau (35) below N (40, device 5 reaches
+     *      nothing of either): the set goes first, the delay reads 102 at
+     *      35. The control: no set, 2.
+     * (c3) the set after G in call order, keyed at N(F(c)) (10) below tau
+     *      (35; device 4 makes G present through a sum, 9, that D(c) does
+     *      not hold): a late call, it goes before G when its gap ends, and
+     *      the delay reads 102 at 35. The control: the set before G's gap. */
+    for (K = 0; K < 3; K++) {
+        g_where = K == 0 ? "old shapes, (c1) N(F(c)) above a present tau" :
+                  K == 1 ? "old shapes, (c2) N(F(c)) below a present tau below N" : "old shapes, (c3) a late set before a present group";
+        for (v = 0; v < 2; v++) {
+            ysig_node n[11];
+            int64_t tau = K ? 35 * MS : 10 * MS;
+            double want;
+            n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 1); n[0].history = 64;
+            n[1] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 2, 1); n[1].history = 64;
+            n[2] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 3, 1); n[2].history = 64;
+            n[3] = ysig_node_of(YSIG_OP_OFFSET, 0, -1); n[3].history = 64;
+            n[4] = ysig_node_of(YSIG_OP_DETECT, 1, -1); n[4].p[YSIG_DETECT_LEVEL] = 5;
+            n[4].p[YSIG_DETECT_ENTRY] = YSIG_ENTRY_NOW; n[4].p[YSIG_DETECT_OUT] = YSIG_OUT_HIT; n[4].history = 64;
+            n[5] = ysig_node_of(YSIG_OP_SUM, 3, 4); n[5].history = 64;
+            n[6] = ysig_node_of(YSIG_OP_SUM, 3, 2); n[6].history = 64;
+            n[7] = ysig_node_of(YSIG_OP_DELAY, 5, -1); n[7].history = 64;
+            n[8] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 4, 1); n[8].history = 64;
+            n[9] = ysig_node_of(YSIG_OP_SUM, 4, 8); n[9].history = 64;
+            n[10] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 5, 1); n[10].history = 64;
+            if (!rp_open(n, 11, 4, 0, false, false)) return;
+            rp_feed(10 * MS, 1, YIN_AXIS_POSITION, 1);
+            rp_feed(10 * MS, 9, YIN_AXIS_POSITION, 2);
+            if (K == 0) {
+                rp_feed(30 * MS, 0, YIN_AXIS_POSITION, 3);
+                if (!v) CHECK(ysig_set(&g_rp, 3, 0, 100));
+                rp_feed(31 * MS, 0, YIN_AXIS_POSITION, 3);   /* ends the set's gap: in no group */
+                if (v) CHECK(ysig_set(&g_rp, 3, 0, 100));
+                CHECK(ysig_arm(&g_rp, 4, tau));
+                CHECK(g_rp.wt->nfg == (v ? 31 * MS : tau));   /* the control's group is past */
+                want = v ? 102 : 2;
+            } else if (K == 1) {
+                rp_feed(30 * MS, 1, YIN_AXIS_POSITION, 1);
+                rp_feed(40 * MS, 0, YIN_AXIS_POSITION, 5);
+                if (v) CHECK(ysig_set(&g_rp, 3, 0, 100));
+                rp_feed(41 * MS, 0, YIN_AXIS_POSITION, 5);   /* ends the set's gap */
+                rp_feed(35 * MS, 9, YIN_AXIS_POSITION, 2);
+                CHECK(ysig_arm(&g_rp, 4, tau) && g_rp.wt->nfg == tau);
+                want = v ? 102 : 2;
+            } else {
+                rp_feed(35 * MS, 0, YIN_AXIS_POSITION, 4);
+                if (!v) { CHECK(ysig_set(&g_rp, 3, 0, 100)); rp_feed(36 * MS, 0, YIN_AXIS_POSITION, 3); }
+                CHECK(ysig_arm(&g_rp, 4, tau) && g_rp.wt->nfg == tau);
+                if (v) CHECK(ysig_set(&g_rp, 3, 0, 100));
+                rp_feed(41 * MS, 0, YIN_AXIS_POSITION, 3);   /* ends the set's gap: in no group */
+                want = 102;
+            }
+            CHECK(ysig_value_at(&g_rp, 5, tau, &r) && r.v[0] == want);
+            CHECK(ysig_value_at(&g_rp, 7, tau, &r) && r.v[0] == want && r.t == tau);
+            CHECK(ysig_value_of(&g_rp, 5)->v[0] == (K == 1 && !v ? 2 : 102));
+            ysig_get_stats(&g_rp, &st);
+            CHECK(st.late_far == 0 && st.late_full == 0 && st.late_off == 0);
+        }
     }
 }
 
