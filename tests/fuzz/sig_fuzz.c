@@ -9,7 +9,11 @@
  *              negative, NaN, infinity), and for sines a data length
  *   the rest   a stream of events (kind, control, device, time steps that
  *              go back too), frames, resets, resets of a trial, recenters,
- *              sets, arms, value reads
+ *              sets, arms, value reads; v0.7.0: late events (1 to 20 ms
+ *              before the newest call), ysig_feed_n() batches with late
+ *              events in them, ysig_disarm_at() before and after the
+ *              newest call, ysig_detected_to() and ysig_derived_to() with
+ *              limits; resets, flushes, frames and settles as barriers
  * Every input must return without a sanitizer report, and a graph that
  * opened must replay its own journal to the same digest. A refusal is a
  * correct answer to a bad graph.
@@ -46,6 +50,7 @@ static uint64_t g_arena2[(4u << 20) / 8];
 static float g_ch[16];
 static volatile double g_sink;
 static long long g_taken, g_rows_all, g_hits_all, g_refused, g_caught, g_back;
+static long long g_late, g_batches, g_dis_at, g_late_count;
 
 #define J_CAP 2048
 static ysig_entry g_j[J_CAP];
@@ -96,6 +101,42 @@ static void build_node(rd* r, ysig_node* nd, int i, int n, double* data) {
         nd->n_data = m;
     }
     nd->name = (i & 1) ? "node" : NULL;
+}
+
+/* One event from the bytes. The step byte's high nibble (unused by the
+ * step) makes some late: 12 to 14 put it 1, 5 or 20 ms before the newest
+ * call's time, which stays; 15 asks the caller for a batch (batch set) */
+static void read_event(rd* r, yin_event* e, int64_t* t, int64_t* tfed, int* batch) {
+    static const int64_t late_ms[3] = { 1, 5, 20 };
+    unsigned k = rb(r), sb = rb(r);
+    memset(e, 0, sizeof *e);
+    *t += (int64_t)(sb % 16) * 100000 - ((k & 0x80) ? 300000 : 0);
+    e->t = *t;
+    if ((sb >> 4) >= 12 && (sb >> 4) <= 14) {
+        e->t = *t - late_ms[(sb >> 4) - 12] * 1000000;
+        g_late++;
+    }
+    if (batch) *batch = (sb >> 4) == 15;
+    /* the ends of int64: the time arithmetic must saturate */
+    if ((k & 0x60) == 0x60) e->t = (k & 0x10) ? INT64_MAX - (int64_t)(k & 7) : INT64_MIN + (int64_t)(k & 7);
+    e->kind = (uint8_t)(k % 9);
+    e->type = (uint8_t)(1 + rb(r) % 4);
+    e->control = rb(r) % 4;
+    e->device = rb(r) % 12;   /* more than a source's 8 device slots */
+    e->x = (float)g_vals[rb(r) % 29];
+    e->y = (float)((int)rb(r) - 128);
+    e->value = (float)g_vals[rb(r) % 29];
+    e->stamp = (uint8_t)(rb(r) % 6);
+    if (e->t > *tfed) *tfed = e->t;
+}
+
+/* A detect of the graph, picked by a byte (node when there is none) */
+static int pick_detect(const ysig_graph* g, unsigned pick, int node) {
+    int i2, nd2 = 0, seen = 0;
+    for (i2 = 0; i2 < g->n; i2++) nd2 += g->nd[i2].op == YSIG_OP_DETECT;
+    for (i2 = 0; nd2 && i2 < g->n; i2++)
+        if (g->nd[i2].op == YSIG_OP_DETECT && seen++ == (int)(pick % (unsigned)nd2)) node = i2;
+    return node;
 }
 
 static void run_one(const uint8_t* data, size_t size) {
@@ -179,23 +220,19 @@ static void run_one(const uint8_t* data, size_t size) {
         ops++;
         switch (c % 8) {
         case 0: case 1: case 2: case 3: {
-            yin_event e;
-            unsigned k = rb(&r);
-            memset(&e, 0, sizeof e);
-            t += (int64_t)(rb(&r) % 16) * 100000 - ((k & 0x80) ? 300000 : 0);
-            e.t = t;
-            /* the ends of int64: the time arithmetic must saturate */
-            if ((k & 0x60) == 0x60) e.t = (k & 0x10) ? INT64_MAX - (int64_t)(k & 7) : INT64_MIN + (int64_t)(k & 7);
-            e.kind = (uint8_t)(k % 9);
-            e.type = (uint8_t)(1 + rb(&r) % 4);
-            e.control = rb(&r) % 4;
-            e.device = rb(&r) % 12;   /* more than a source's 8 device slots */
-            e.x = (float)g_vals[rb(&r) % 29];
-            e.y = (float)((int)rb(&r) - 128);
-            e.value = (float)g_vals[rb(&r) % 29];
-            e.stamp = (uint8_t)(rb(&r) % 6);
-            if (e.t > tfed) tfed = e.t;
-            g_sink += ysig_feed(&g, &e);
+            yin_event e[8];
+            int batch = 0;
+            read_event(&r, &e[0], &t, &tfed, &batch);
+            if (!batch) {
+                g_sink += ysig_feed(&g, &e[0]);
+            } else {
+                /* v0.7.0: a batch of 1 to 8, late ones among them, the
+                 * window run again once at its end; n 0 too */
+                int nb = (int)(rb(&r) % 9), q;
+                for (q = 1; q < nb; q++) read_event(&r, &e[q], &t, &tfed, NULL);
+                if (ysig_feed_n(&g, e, nb) < 0) { fprintf(stderr, "sig_fuzz: ysig_feed_n refused %d events\n", nb); abort(); }
+                g_batches++;
+            }
             break;
         }
         case 4: {
@@ -230,10 +267,18 @@ static void run_one(const uint8_t* data, size_t size) {
                     abort();
                 }
                 float want[16];
-                int set[16], c;
+                int set[16], c, at_end = 1;
                 memset(set, 0, sizeof set);
+                /* v0.7.0: a late frame (R holds a call with a greater key:
+                 * an event later than its onset, a state call or a
+                 * disarm_at later than it) goes to its place by key; its
+                 * channels hold R's values there, not the newest
+                 * (docs/sig.md, Late input). The newest call, it is at
+                 * R's end when no node has a greater key time */
+                for (b = 0; b < g.n; b++)
+                    if (g.nd[b].kt > ysig__kt(&g, f.onset_ns)) at_end = 0;
                 /* binds run in node order: the last one on a channel wins */
-                for (b = 0; rc == 0 && b < n; b++) {
+                for (b = 0; rc == 0 && at_end && b < n; b++) {
                     const ysig_value* x;
                     int lane;
                     if (nodes[b].op != YSIG_OP_BIND) continue;
@@ -244,7 +289,7 @@ static void run_one(const uint8_t* data, size_t size) {
                         set[c] = 1;
                     }
                 }
-                for (c = 0; rc == 0 && c < 16; c++)
+                for (c = 0; rc == 0 && at_end && c < 16; c++)
                     if (set[c] && memcmp(&want[c], &g_ch[c], sizeof want[c])) {
                         fprintf(stderr, "sig_fuzz: channel %d holds %g, its bind's input %g\n", c, g_ch[c], want[c]);
                         abort();
@@ -257,8 +302,20 @@ static void run_one(const uint8_t* data, size_t size) {
             yin_event e[8];
             ysig_value v;
             int node = (int)(rb(&r) % (unsigned)(g.n + 1));
-            g_sink += ysig_detected(&g, h, (int)(rb(&r) % 9));
-            g_sink += ysig_derived(&g, e, (int)(rb(&r) % 9));
+            unsigned lb = rb(&r);
+            if (lb < 128) {
+                g_sink += ysig_detected(&g, h, (int)(rb(&r) % 9));
+                g_sink += ysig_derived(&g, e, (int)(rb(&r) % 9));
+            } else {
+                /* v0.7.0: what is due by a limit; the rest stays queued */
+                int64_t lim = t - (int64_t)(lb & 31) * 1000000 + ((lb & 32) ? 2000000 : 0);
+                int nh = ysig_detected_to(&g, h, (int)(rb(&r) % 9), lim), nd = ysig_derived_to(&g, e, (int)(rb(&r) % 9), lim), q;
+                for (q = 0; q < nh; q++)
+                    if (h[q].t > lim) { fprintf(stderr, "sig_fuzz: ysig_detected_to() gave a hit after its limit\n"); abort(); }
+                for (q = 0; q < nd; q++)
+                    if (e[q].t > lim) { fprintf(stderr, "sig_fuzz: ysig_derived_to() gave an event after its limit\n"); abort(); }
+                g_sink += nh + nd;
+            }
             if (ysig_value_at(&g, node, t - (int64_t)rb(&r) * 1000000, &v) >= 0) g_sink += v.v[0];
             if (ysig_value_of(&g, node)) g_sink += ysig_value_of(&g, node)->v[0];
             break;
@@ -277,18 +334,21 @@ static void run_one(const uint8_t* data, size_t size) {
             if (b % 5 == 0) { ysig_reset(&g, t); tfed = t; }
             else if (b % 5 == 1) {
                 /* most arms on a detect: arms in the past run the window */
-                if (!(b & 0x40)) {
-                    int i2, nd2 = 0, pick = (int)rb(&r), seen = 0;
-                    for (i2 = 0; i2 < g.n; i2++) nd2 += g.nd[i2].op == YSIG_OP_DETECT;
-                    for (i2 = 0; nd2 && i2 < g.n; i2++)
-                        if (g.nd[i2].op == YSIG_OP_DETECT && seen++ == pick % nd2) node = i2;
-                }
+                if (!(b & 0x40)) node = pick_detect(&g, rb(&r), node);
                 g_sink += ysig_arm(&g, node, t - (int64_t)(b % 7) * 1000000);
                 /* v0.6.0: a settle at a time input is fed up to */
                 if (b & 0x20) g_sink += ysig_settle(&g, t - (int64_t)(b % 3) * 500000);
             }
             else if (b % 5 == 2) {
-                g_sink += ysig_disarm(&g, node);
+                if (b & 0x40) {
+                    /* v0.7.0: a disarm at a time, 4 ms before to 2 ms after
+                     * the newest call's */
+                    node = pick_detect(&g, rb(&r), node);
+                    g_sink += ysig_disarm_at(&g, node, t + 2000000 - (int64_t)(b % 7) * 1000000);
+                    g_dis_at++;
+                } else {
+                    g_sink += ysig_disarm(&g, node);
+                }
                 /* v0.6.0: a flush, a barrier that resets nothing */
                 if (b & 0x20) g_sink += ysig_flush(&g);
             }
@@ -313,6 +373,7 @@ static void run_one(const uint8_t* data, size_t size) {
         g_hits_all += a.hits;
         g_caught += a.arm_caught_up;
         g_back += a.arm_past_far + a.arm_past_full + a.arm_past_off;
+        g_late_count += a.late_far + a.late_full + a.late_off + a.late_barrier;
         d.journal = NULL;
         d.arena = g_arena2;
         if (!ysig_open(&g2, &d)) abort();
@@ -368,6 +429,13 @@ static size_t put_node(uint8_t* o, size_t n, int op, int a, int b, int c, int la
  * through a rate integrator, then an offset or a scale), the experiment's
  * nodes on the role with the new ops, and a stream that recenters, resets
  * trials and arms: without it the adapter paths never open. */
+/* A step byte: 0 to 1.5 ms on; one in six late (1, 5 or 20 ms) or a batch */
+static uint8_t late_step(void) {
+    uint8_t b = (uint8_t)(gen() % 16);
+    if (gen() % 6 == 0) b = (uint8_t)(b | (12 + gen() % 4) << 4);
+    return b;
+}
+
 static size_t seed_adapter(uint8_t* o) {
     size_t n = 1;
     int two[16], one[16], nt = 0, no = 0, nn = 8 + (int)(gen() % 18), i, rate = gen() % 3 == 0;
@@ -440,7 +508,7 @@ static size_t seed_adapter(uint8_t* o) {
         if (m < 22) {
             o[n++] = 0;
             o[n++] = (uint8_t)(rate ? 4 : 1);
-            o[n++] = (uint8_t)(gen() % 16);
+            o[n++] = late_step();
             o[n++] = 2;
             o[n++] = (uint8_t)(rate ? 0 : 1);
             o[n++] = (uint8_t)(gen() % 3);
@@ -458,6 +526,7 @@ static size_t seed_adapter(uint8_t* o) {
         } else if (m < 28) {
             o[n++] = 5;
             o[n++] = (uint8_t)gen();
+            o[n++] = (uint8_t)gen();                            /* a limit for half */
             o[n++] = 4;
             o[n++] = 4;
             o[n++] = (uint8_t)gen();
@@ -534,10 +603,14 @@ static size_t seed(int which, uint8_t* o) {
         }
         o[n++] = 16;
         for (i = 0; i < 600 && n + 12 < 16000; i++) {
-            uint64_t m = gen() % 12;
+            uint64_t m = gen() % 14;
+            /* v0.7.0: arms on a detect, disarms at a time, limited reads */
+            if (m == 9) { o[n++] = 7; o[n++] = (uint8_t)(1 + 5 * (gen() % 12)); o[n++] = (uint8_t)gen(); continue; }
+            if (m == 10) { o[n++] = 7; o[n++] = (uint8_t)(67 + 5 * (gen() % 7)); o[n++] = (uint8_t)gen(); continue; }
+            if (m == 11) { o[n++] = 5; o[n++] = (uint8_t)gen(); o[n++] = (uint8_t)(128 + gen() % 128); o[n++] = 8; o[n++] = 8; o[n++] = (uint8_t)gen(); continue; }
             o[n++] = (uint8_t)(m < 8 ? 0 : m == 8 ? 4 : (uint8_t)gen());
             o[n++] = (uint8_t)(gen() % 2 ? 1 : 3);   /* kind: mouse, pen */
-            o[n++] = (uint8_t)(gen() % 16);
+            o[n++] = late_step();
             o[n++] = 2;
             o[n++] = (uint8_t)(gen() % 2);
             o[n++] = (uint8_t)(gen() % 3);
@@ -600,8 +673,9 @@ int main(int argc, char** argv) {
         opened += g_nj > 0;   /* a graph opened and ran: not only refusals */
     }
     printf("sig_fuzz: %ld inputs, %lld refused by ysig_check(), %ld graphs opened and ran: %lld events taken, %lld rows, "
-           "%lld hits; arms in the past run again %lld, fell back %lld\n", iters, g_refused, opened, g_taken, g_rows_all, g_hits_all,
-           g_caught, g_back);
+           "%lld hits; arms in the past run again %lld, fell back %lld; late events %lld, batches %lld, disarm_at %lld, "
+           "late calls not placed (far, full, off, barrier) %lld\n", iters, g_refused, opened, g_taken, g_rows_all, g_hits_all,
+           g_caught, g_back, g_late, g_batches, g_dis_at, g_late_count);
     return 0;
 }
 #elif defined(YSP_FUZZ_SEEDS)
