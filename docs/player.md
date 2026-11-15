@@ -849,14 +849,21 @@ frame runs as in 0.11.0.
     `T` drops the late reports before it from the adapters (the stale
     hand of seed 102928). A fix needs ysp/sig.h: a trial reset whose
     barrier and whose restart of the experiment's nodes have two times.
-  - A movement's origin (no `origin`): the reports before `T` reach the
-    collector before its arm (`v2_der_upto()`), so the origin is the
-    hand's place at `T`. With every bound 0, the derived events of the
-    polls between two trials are dropped (`v2_feed()` has no active
-    template there), so the origin is the place at the last trial's end,
-    and a hand that moved between trials makes a response at the
-    trial's first sample (60 Hz, a step 5 ms before `T`: `go` at `rt_s`
-    0.0003). That is 0.11.0's, not the wait's; not changed here.
+  - A movement's origin (no `origin`): the format's is the last position
+    fed before the arm (3.11, 3.13). With a bound above 0 the reports
+    before `T` reach the collector through the trial's graph, so the
+    origin is the hand's place at `T`. With every bound 0 the derived
+    events of the polls between two trials go to no collector
+    (`v2_feed_part()`: no trial's graph), and in 0.11.0 and up to 6ace730
+    the origin was the place at the last trial's end: a hand that moved
+    between trials made a response at the trial's first sample (60 Hz, a
+    step 5 ms before `T`: `go` at `rt_s` 0.0003; 500 Hz, 1 ms before:
+    0.001). Now, when the reset is at `T`, the trial's start gives the
+    collector the place that each movement's `of` holds at `T`, as the
+    emit would have, before the arm (`pl_v2_trial_start()`).
+    `player_test` `t_v2_move_origin`: a step 0.4 periods before trial 1's
+    onset makes no response; its control, the step 0.4 periods after,
+    makes one.
 - Not exact, open: a `{"signal": N}` column (and a `when` column's test)
   reads the graph's value at the end frame, with the input fed by then:
   complete to `G`, so a report between `G` and the end frame's onset is

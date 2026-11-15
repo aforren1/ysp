@@ -2903,13 +2903,48 @@ def t_v2_ended_hits(ctx):
               (nm, r.rc, r.err[-300:] if r.rc else "", len(r.trials) if r.rc == 0 else -1, arms.get("late_hits_voided")))
 
 
+def t_v2_move_origin(ctx):
+    # a movement with no origin starts from the last position fed before
+    # its arm (3.11, 3.13), here the trial's first frame: the hand's place
+    # at the onset. With every bound 0 the derived events of the polls
+    # between two trials went to no collector, which kept the last trial's
+    # place: a hand that moved between the trials made a response at the
+    # trial's first sample (0.11.0 and 0.12.0 to 6ace730: 60 Hz rt 0.0003
+    # s). The hand steps 0.4 periods before trial 1's onset: no response.
+    # The control: the same step 0.4 periods after the onset, a response
+    hand = {"hand": {"type": "position2d", "units": "display_px"}}
+    P = period_ns(ctx) / 1e9
+    t = {"controls": {"go": {"control": "movement", "of": "hand", "onset": 50}},
+         "states": [{"name": "s0", "steps": [{"on": "s"}], "exits": [{"after_s": 0.2, "to": "end", "outcome": "timed"}]}],
+         "response": {"choices": [{"signal": "go"}], "from": "s", "duration_s": 0.15, "response_ends_trial": False}}
+    d = v2base({"t": t}, [{"name": "l", "trial": "t", "rules": ["reps 2"]}], roles=hand)
+    smp = os.path.join(ctx.out, "v2_move_origin_still.csv")
+    write_samples(smp, [(0.001 * k, "hand", 0, 0) for k in range(1000)])
+    r = Run(ctx, "v2_move_origin_still", d, args=["--sim-gain", "hand=1", "--samples", smp, "--max-seconds", "20"])
+    ev = [e for e in r.read("events.csv") if e["kind"] == "state"] if r.rc == 0 else []
+    t1 = [float(e["t_s"]) for e in ev if e["trial_index"] == "1"]
+    check(r.rc == 0 and len(t1) > 0, "v2_move_origin: no trial 1 (exit %d %s)" % (r.rc, r.err[-300:] if r.rc else ""))
+    if not t1:
+        return
+    T1 = t1[0] - float(ev[0]["t_s"])
+    for v, dj in ((0, -0.4 * P), (1, 0.4 * P)):
+        nm = "v2_move_origin" if v == 0 else "v2_move_origin_control"
+        j = round(T1 + dj, 6)
+        smp = os.path.join(ctx.out, nm + ".csv")
+        write_samples(smp, [(0.001 * k, "hand", 100 if 0.001 * k >= j else 0, 0) for k in range(1000)])
+        r = Run(ctx, nm, d, args=["--sim-gain", "hand=1", "--samples", smp, "--max-seconds", "20"])
+        got = r.trials[1].get("response") if r.rc == 0 and len(r.trials) > 1 else None
+        check(r.rc == 0 and got == ("go" if v else ""),
+              "%s: the hand steps %+.4f s from trial 1's onset: response %r (exit %d %s)" % (nm, dj, got, r.rc, r.err[-300:] if r.rc else ""))
+
+
 TESTS = [t_nested, t_if_unless, t_empty_and_zero, t_loop, t_requeue, t_track_ends, t_lookup_keys, t_triggers, t_after_timing, t_outcomes,
          t_method_update, t_seeds, t_refused, t_unused_stim, t_record_data, t_fix_density, t_fix_key_reapply, t_fix_stale_rdk,
          t_fix_timeout_values, t_fix_any_key, t_fix_from_in_if, t_fix_shown_twice, t_fix_vars_data, t_fix_sound_twice, t_fix_rdk_limit,
          t_fix_record_inherit, t_fix_backward_at, t_fix_refusals, t_fix_michelson_order, t_fix_texture_vars, t_fix_walk_budget,
          t_fix_data_set, t_fix_check_all_leaves, t_fix_release_order, t_fix_key_var_reapply,
          t_r2_release_other_template, t_r2_yield_draws_nothing, t_r2_low, t_r2_relaxed, t_r4_leaf_loop_done_track, t_r4_requeue_full,
-         t_r5_wait_final, t_r6_allow_below, t_v2_states, t_v2_until, t_v2_hand, t_v2_rule5, t_v2_review2, t_v2_review3, t_v2_f34, t_v2_ties, t_v2_review4, t_v2_review5, t_v2_findings, t_v2_corpus, t_v2_window_8k, t_v2_two_hands, t_v2_two_exits_one_ctl, t_v2_n1_tie, t_v2_n1_chain, t_v2_n1_derived, t_v2_resp_pend_first, t_v2_barrier, t_v2_resp_plim, t_v2_signal_from_first, t_v2_beyond_bound0, t_v2_frame_rows_late, t_v2_ended_hits]
+         t_r5_wait_final, t_r6_allow_below, t_v2_states, t_v2_until, t_v2_hand, t_v2_rule5, t_v2_review2, t_v2_review3, t_v2_f34, t_v2_ties, t_v2_review4, t_v2_review5, t_v2_findings, t_v2_corpus, t_v2_window_8k, t_v2_two_hands, t_v2_two_exits_one_ctl, t_v2_n1_tie, t_v2_n1_chain, t_v2_n1_derived, t_v2_resp_pend_first, t_v2_barrier, t_v2_resp_plim, t_v2_signal_from_first, t_v2_beyond_bound0, t_v2_frame_rows_late, t_v2_ended_hits, t_v2_move_origin]
 
 
 def main():

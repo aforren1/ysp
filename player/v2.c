@@ -3244,6 +3244,7 @@ int pl_v2_trial_start(pl_player* p, const yscr_frame* f) {
     pl_v2* v = p->tmpl->v2;
     pl_v2_session* S = p->v2s;
     int i;
+    bool seed_origin = false;
     S->cur_t = v->index;
     v->lag_max = YTR_MISSING_NS;   /* the first visit: no exit started it */
     v->resp_pend = false;
@@ -3321,6 +3322,7 @@ int pl_v2_trial_start(pl_player* p, const yscr_frame* f) {
             int64_t ga = v2_horizon_all(p), tb = f->onset;
             if (S->bnd_max > 0 && ga != INT64_MIN && ga < tb - 1) tb = ga + 1;
             ysig_reset_trial(&v->g, tb);
+            seed_origin = tb == f->onset;
         }
         {
             /* the newest stamps are this trial's (the reset dropped the
@@ -3350,6 +3352,37 @@ int pl_v2_trial_start(pl_player* p, const yscr_frame* f) {
         if (pl_window_check(p, v->def, dur, minrt) < 0) return -1;
         v->resp_dur = dur;
         v->resp_minrt = minrt;
+        if (seed_origin && r->signal_choices) {
+            /* a movement with no origin starts from the last position fed
+             * before its arm (3.11, 3.13): the hand's place at the onset.
+             * Every bound 0, the reset is at the onset, and the derived
+             * events of the polls since the last trial went to no collector
+             * (v2_feed_part(): no trial's graph), so the collector still
+             * held the last trial's place, and a hand that moved between
+             * trials made a response at the trial's first sample (60 Hz: rt
+             * 0.0003 s). Give it the place `of` holds at the onset, as the
+             * emit would have; before the arm, so the arm takes it. With a
+             * bound above 0 the reset is at G + 1 and the reports up to the
+             * onset reach the collector through the trial's graph */
+            int k;
+            for (k = 0; k < v->n_ctl; k++) {
+                const ysig_value* ov;
+                yin_event e;
+                if (v->ctl[k].def->kind != YEXP_MOVEMENT || v->ctl[k].choice < 0 || v->ctl[k].of < 0 || v->ctl[k].emit < 0) continue;
+                ov = ysig_value_of(&v->g, v->ctl[k].of);
+                if (!ov || ov->tier == YIN_TIER_UNKNOWN || ov->lanes < 2) continue;
+                memset(&e, 0, sizeof e);
+                e.t = ov->t;
+                e.kind = (uint8_t)(YIN_KIND_USER + (int)v->nodes[v->ctl[k].emit].p[YSIG_EMIT_KIND]);
+                e.type = (uint8_t)YIN_SAMPLE;
+                e.device = (uint32_t)v->ctl[k].emit;
+                e.control = (uint32_t)v->nodes[v->ctl[k].emit].p[YSIG_EMIT_CONTROL];
+                e.stamp = ov->tier;
+                e.x = (float)ov->v[0];
+                e.y = (float)ov->v[1];
+                yrsp_feed(c, &e);
+            }
+        }
         /* signal choices with a from: armed again there (D34 (c)); this
          * arm only clears the last trial's result */
         yrsp_arm(c, f->onset);
