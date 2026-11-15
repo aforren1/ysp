@@ -5181,6 +5181,13 @@ static void ysig__wait_place(ysig_graph* g, int k, int with_arm) {
         ysig__wait_fire(g, a.t, f, UINT64_MAX);
     } else if (a.node >= 0) {
         g->st.arm_ahead_cancelled++;
+    } else if (late) {
+        /* a group whose arm a disarm cancelled goes in with its other
+         * calls at its key all the same: to its place, as above (the
+         * oracle's case 971: such a group's set, made at R's end after a
+         * later group's set of the same node, left the older value) */
+        if (g->cu && h0 < g->cu->c_head && all_logged && !g->cu->replaying) (void)ysig__late_place(g, h0, g->cu->c_head, g->cu->c_tail, a.t, 2, a.seq);
+        else ysig__late_nolog(g);
     }
     ysig__cas_pop(g, ci);
     w->fired = 1;

@@ -7012,6 +7012,47 @@ static void test_v2_s1(void) {
         CHECK(v2_hits(2, NULL) == 0);
     }
 }
+/* The oracle's case 971 (OFF=l 20261122), reduced: an ahead group W
+ * [set X's offset to -1, arm d at tw], X an offset of device 3 and d a
+ * detect of X, waits; ysig_disarm_at(d, 60) cancels W's arm by key, so W
+ * waits with its set alone. A present group G [set X to 0.25, arm e at
+ * 74] follows, present by device 2. In R, W's set (key tw) goes before
+ * G's (74): after device 3's report at 75, X is 0.25 plus the report's
+ * 0.5. Device 3's report lets W in; by key it is a late call. The header
+ * placed a let-in group by key only when its arm was live, so W's set
+ * was made after G's and X read -1 plus 0.5. v: tw 72 (S1: G's set lets
+ * W in at its arm, the oracle's case) or 74 (the same tau, made before
+ * G: S1's strict let-in leaves it waiting for the report). The control
+ * (c 0): no set in G, X -1 plus 0.5 */
+static void test_v2_lost_set(void) {
+    int v, c;
+    g_where = "a cancelled group's set placed by key (case 971)";
+    for (v = 0; v < 2; v++)
+        for (c = 0; c < 2; c++) {
+            ysig_node n[5];
+            ysig_stats st;
+            n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 2, 1); n[0].history = 64;
+            n[1] = src_node(YIN_KIND_PEN, YIN_AXIS_PEN_PRESSURE, 3, 1); n[1].history = 64;
+            n[2] = ysig_node_of(YSIG_OP_OFFSET, 1, -1); n[2].history = 64;
+            n[3] = ysig_node_of(YSIG_OP_DETECT, 2, -1); n[3].p[YSIG_DETECT_LEVEL] = 5; n[3].history = 64;
+            n[4] = ysig_node_of(YSIG_OP_DETECT, 0, -1); n[4].p[YSIG_DETECT_LEVEL] = 5; n[4].history = 64;
+            if (!rp_open(n, 5, 4, 0, false, false)) return;
+            rp_feed(10 * MS, 0, YIN_AXIS_POSITION, 2);
+            rp_feed(10 * MS, 0, YIN_AXIS_PEN_PRESSURE, 3);
+            rp_feed(66 * MS, 0, YIN_AXIS_POSITION, 2);
+            CHECK(ysig_set(&g_rp, 2, YSIG_OFFSET_D_X, -1));
+            CHECK(ysig_arm(&g_rp, 3, (v ? 74 : 72) * MS) && g_rp.wt->n == 1);
+            CHECK(ysig_disarm_at(&g_rp, 3, 60 * MS));
+            rp_feed(74 * MS, 0, YIN_AXIS_POSITION, 2);
+            if (c) CHECK(ysig_set(&g_rp, 2, YSIG_OFFSET_D_X, 0.25));
+            CHECK(ysig_arm(&g_rp, 4, 74 * MS));
+            rp_feed(75 * MS, 0.5, YIN_AXIS_PEN_PRESSURE, 3);
+            ysig_get_stats(&g_rp, &st);
+            CHECK(g_rp.wt->n == 0 && st.arm_ahead_cancelled == 1);
+            CHECK(ysig_value_of(&g_rp, 2)->v[0] == (c ? 0.75 : -0.5) && ysig_value_of(&g_rp, 2)->t == 75 * MS);
+            CHECK(st.late_far == 0 && st.late_full == 0 && st.late_off == 0);
+        }
+}
 static void test_late(void) {
     ysig_stats st;
     int v, k;
@@ -7388,6 +7429,7 @@ int main(void) {
     test_v2_old_shapes();
     test_v2_present_key();
     test_v2_s1();
+    test_v2_lost_set();
     test_hold();
     if (g_failures) { fprintf(stderr, "sig_test: %d failures\n", g_failures); return 1; }
     printf("sig_test: all checks passed\n");
