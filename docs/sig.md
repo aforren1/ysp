@@ -1608,6 +1608,37 @@ it makes at seed 20261114, where case 1382 had none before.
 `test_hit_whole_value` (the oracle's case 286, reduced to a mux that a
 past arm switches to another device) now kills it: 315 of 315.
 
+Pending groups (0.6.1, 2026-11-14, the same machine, Release, 8
+processes). The oracle with 0.6.0's header (v2-fast, a1c2717) and with
+0.6.1's, on the same cases:
+
+| Seed | Cases | B cannot run (counted), both | Wrong, both (0.6.1: by `arm_unverified`; another count; none) | Right cases with a count, 0.6.0 | 0.6.1 |
+|---|---|---|---|---|---|
+| 20261114 | 3,000 | 972 (972) | 3 (2; 1; 0) | 1,565 of 2,025 (4,686 arms) | 1,352 (3,183) |
+| 778001 | 3,000 | 978 (978) | 1 (1; 0; 0) | 1,563 of 2,021 (4,500) | 1,320 (3,073) |
+| 778002 | 3,000 | 999 (999) | 8 (4; 4; 0) | 1,542 of 1,993 (4,458) | 1,294 (3,053) |
+| 778003 | 3,000 | 959 (959) | 4 (2; 2; 0) | 1,605 of 2,037 (4,745) | 1,375 (3,232) |
+| 778004 | 3,000 | 995 (995) | 5 (4; 1; 0) | 1,549 of 2,000 (4,534) | 1,322 (3,097) |
+| 61441 | 20,000 | 6,547 (6,547) | 20 (11; 9; 0) | 10,563 of 13,433 (30,819) | 9,005 (20,842) |
+
+Both targets hold on every seed. The wrong cases are the same cases with
+both headers; 0.6.1 counts some of them by a fallback or a retracted hit
+where 0.6.0 counted `arm_unverified` too. Over the six runs the arms
+counted in right cases fall from 53,742 to 36,480 of 851,475 made groups
+(6.31 % to 4.28 %, 32 % fewer). The first build (pending decided by L,
+counted by calls of waiting groups, no more) left 9 B-cannot cases with
+no count on four seeds (reasons 2, 3 and 6 of the oracle); the two rules
+of 20b8b93 cover them.
+
+ctest Release 124 of 124, the sanitizers tree (`setarch -R`) 123 of 123,
+no sanitizer report. `test_pending` covers L, a frame, a change at the
+call, inputs at and before `τ`, a disarm in no group, a present, an
+ahead and a later past group, a flush, a trial reset, and a log that
+drops G's calls before L. sig.toml 323 of 323 as expected (352 s, 4
+jobs): 324 to 329 killed by `test_pending`, 331 by the oracle at seed
+778001 (a second `sig_ref` test, `sig_ref_778001`), 330 kept as a guard
+(not reached; its note says why); 210's anchor follows the code.
+
 - `tests/adapt/sig_test.c` (ctest `test_sig`): v0.6.0 adds
   `test_arm_window`: no window (counted), two crossings after the arm as
   two hits with a latch frozen at the first and the ring's rise and fall,

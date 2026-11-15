@@ -594,6 +594,51 @@ With the 64-step buffer it was 219 to 373 us. The two runs' streams are
 identical. A 4,096-step buffer would put a 16 ms frame at risk with five
 or six RDKs; 64 steps keep a flush under 50 us an RDK.
 
+### Two hands and sig.h 0.6.1 (0.11.0, 2026-11-14)
+
+A plain two-mouse definition stopped on the guard at 60 Hz with 1 kHz
+samples, one `arm_unverified` at each entry of its state b (the
+coordinator's `repro_unv`): roles lh and rh, both relative; state a exits
+on a hold region of lh (`stay_s` 0.1155), and b exits on `far` (lh), on
+`farr` (rh) and on `after_s`. The hold ends between samples, so the lh
+sample after it finds the hit, and the player arms both hands' controls
+at the hit's time. rh's sample at the same time is not fed yet, so
+`farr`'s past group had no `L` in R, and sig.h 0.6.0 counted it at once
+(docs/sig.md, "When the header tests"). sig.h 0.6.1 makes it pending:
+made at its place as before, decided by rh's next sample or the next
+frame (exact), and counted only on what a graph with no window would make
+differently (docs/sig.md, "Pending groups").
+
+The player changes in one place: its guard reads sig.h's counts after a
+trial's flush too, since a group still pending at the flush is counted
+there (`v2_unv_guard()`). It disarms an ended state's controls as before:
+a pending arm is past, and the disarm at the input time makes it and ends
+it (rule 3). `player_test.py`'s `t_v2_two_hands` runs the repro's shape
+(two trials, `done`) and one where b exits at its entry while `farr`'s arm
+is still pending.
+
+The Linux desktop (i5-14500, GCC 12.2, Release), against v2-fast (a1c2717,
+sig.h 0.6.0):
+
+| Check | 60 Hz | 500 Hz |
+|---|---|---|
+| `repro_unv` | 2 trials, `unverified` 0 (0.6.0: the guard stops the first) | the same |
+| `player_test.py` | 59 cases, 0 failures; `unverified` 0 in 127 sessions | 59, 0 failures; 0 in 121 |
+| `compare.py`, the six examples | No exact column differs; 70 of 70 CSV files byte-identical to a1c2717's | the same, 70 of 70 |
+| The model's harness, 1,000 cases (106001 to 107000; 107001 to 108000 at 500 Hz) | 112 refused (agreed), 50 hangs agreed, 4 mismatches, all at a GAP; no guard stop | 132 refused, 35 hangs, 7 mismatches, all at a GAP; no guard stop |
+| A two-hand sample (below), seeds 108001 to 110500 | 1,271 cases ran: 1 guard stop (0.6.0: 2) | 1,275: 1 (0.6.0: 2) |
+
+The model's generator makes one hand, so the harness never made this
+shape. The two-hand sample is a scratch script, not in the repository:
+it takes the generator's cases, puts every other region on a second
+absolute hand with samples at the same times at another point, and runs
+the player alone (the model has one hand, so no rows are compared). The
+seeds with no region (1,024 of 2,500 at 60 Hz, 1,022 at 500 Hz) and
+those the pack refuses do not run. 0.6.1 removes one stop at each rate (seed 108318). The one left at
+each rate is the same on 0.6.0: at 60 Hz condition 1 (a group
+let in inside another's block, seed 109772), at 500 Hz 2 (c) (a cancelled
+group's disarm, seed 109726).
+
 ### A 500 Hz display on `--sim` (0.11.0, 2026-11-14)
 
 The Linux desktop (i5-14500, Debian 12, liquorix 6.11, GCC 12.2, Release),
