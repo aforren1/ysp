@@ -4380,7 +4380,7 @@ static void ysig__ck_take(ysig_graph* g) {
     call = cu->replaying ? cu->c_pos : cu->c_head;
     /* v0.7.0: spaced in input time, catchup_ns / 8 apart (a barrier's
      * always), so the images do not grow with the display's rate */
-    if (cu->n_ck && !cu->at_bar && g->t_cover - cu->ck[(cu->ck0 + cu->n_ck - 1) % cu->K].cover < cu->span_ns / 8) return;
+    if (cu->n_ck && !cu->at_bar && ysig__sub(g->t_cover, cu->ck[(cu->ck0 + cu->n_ck - 1) % cu->K].cover) < cu->span_ns / 8) return;
     if (cu->n_ck == cu->K) {
         cu->ck0 = (cu->ck0 + 1) % cu->K;
         cu->n_ck--;
@@ -4407,7 +4407,7 @@ static void ysig__ck_take(ysig_graph* g) {
     ysig__ck_save(g, k->img);
     /* the oldest goes when the next oldest is catchup_ns behind the newest
      * already: the window keeps catchup_ns of input time, not more */
-    while (cu->n_ck > 2 && cu->ck[(cu->ck0 + 1) % cu->K].cover != INT64_MIN && g->t_cover - cu->ck[(cu->ck0 + 1) % cu->K].cover >= cu->span_ns) {
+    while (cu->n_ck > 2 && cu->ck[(cu->ck0 + 1) % cu->K].cover != INT64_MIN && ysig__sub(g->t_cover, cu->ck[(cu->ck0 + 1) % cu->K].cover) >= cu->span_ns) {
         cu->ck0 = (cu->ck0 + 1) % cu->K;
         cu->n_ck--;
         k = &cu->ck[cu->ck0];

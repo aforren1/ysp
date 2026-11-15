@@ -7580,6 +7580,29 @@ static void test_v2_op_order(void) {
         CHECK(st.late_unverified == !v);
     }
 }
+/* Checkpoint spacing by input time (0.7.0, ysig__ck_take()) with input
+ * times at the ends of int64: the difference saturates ("Times saturate
+ * at the ends of int64"; sig_fuzz, seed 3: INT64_MAX - -299000 overflowed,
+ * a UBSan report). Wrapped, the difference read as negative and the frame
+ * took no checkpoint; saturated, it takes one. The control: the same calls
+ * at times far from the ends. */
+static void test_v2_time_ends(void) {
+    int v;
+    g_where = "checkpoint spacing at the ends of int64";
+    for (v = 0; v < 2; v++) {
+        ysig_node n[2];
+        int n0;
+        n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 1); n[0].history = 64;
+        n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1); n[1].p[YSIG_DETECT_LEVEL] = 5;
+        if (!rp_open(n, 2, 4, 0, false, false)) return;
+        ysig_reset(&g_rp, -299000);
+        rp_frame(-299000);
+        rp_feed(v ? INT64_MAX - 5 : 1000 * MS, 1, YIN_AXIS_POSITION, 1);
+        n0 = g_rp.cu->n_ck;
+        rp_frame(v ? INT64_MAX - 1 : 1001 * MS);
+        CHECK(n0 < 3 && g_rp.cu->n_ck == n0 + 1);
+    }
+}
 static void test_late(void) {
     ysig_stats st;
     int v, k;
@@ -7966,6 +7989,7 @@ int main(void) {
     test_v2_two_untils();
     test_v2_gap_late();
     test_v2_op_order();
+    test_v2_time_ends();
     test_hold();
     if (g_failures) { fprintf(stderr, "sig_test: %d failures\n", g_failures); return 1; }
     printf("sig_test: all checks passed\n");
