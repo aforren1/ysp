@@ -580,9 +580,9 @@ R is built call by call, in call order:
    follow input later than the past group's `τ`, and so pin that group
    (the reviewer's H13).
    Waiting groups go in by `τ`, then call order. A group that never
-   meets such a call is never made. A state call with a time at or
-   before `τ` goes before the group: a `ysig_set()` of its detect then
-   applies to the waiting arm. A disarm cancels a waiting arm:
+   meets such a call is never made. A state call with a time before
+   `τ`, or at `τ` and made before G's arm, goes before the group: a
+   `ysig_set()` of its detect then applies to the waiting arm. A disarm cancels a waiting arm:
    - a `ysig_disarm(d)`, in a group or in no group, whose time is at or
      before `τ` cancels the waiting arms of d made before it. One whose
      time is later than `τ` goes after the arm, in time order (the arm
@@ -803,8 +803,10 @@ Terms:
 - `N(G)` is the latest input time in R before G's place, after the last
   barrier. A reset and a trial reset set it to their `t`; a flush keeps
   it.
-- `L(G)` is the first input after G in R whose time is later than `τ` and
-  whose footprint meets `F(G)`.
+- `L(G)` is the first call after G in R that lets G in and whose
+  footprint meets `F(G)`: an input later than `τ`, a frame or a settle at
+  `τ`, or a `ysig_disarm_at` with `t` at or after `τ` (X1). (R1,
+  2026-11-15.)
 
 G is exact when all of these are true:
 
@@ -852,12 +854,13 @@ G is exact when all of these are true:
    `N(G) ≥ τ` is exact by condition 2 whatever comes after it: input up
    to `τ` was in before it, so a later report earlier than `τ` is late
    for every node, as for any call (a slow device's late sample after an
-   arm at a frame's onset). An input at `τ` is not a late report: R puts
-   it after G, as the header does.
+   arm at a frame's onset). An input at `τ` is not a late report: a feed
+   at `τ` goes before G by key (L3); a frame or a settle at `τ` goes by
+   call order.
 
 4. No disarm of another group, or of no group, lies in the gap that G's
    arm closes with no window: between G's arm and the last input,
-   barrier or arm before it in R. Reason: with no window that disarm
+   barrier, arm or `ysig_disarm_at` before it in R (ruling 1 below). Reason: with no window that disarm
    joins G's gap and takes G's time (the reviewer's 883 and 404: a
    disarm in no group, then G's calls; 1137: a present group's disarm,
    then the group its arm lets in right before itself). The condition
@@ -886,6 +889,9 @@ When the header tests:
 - At each input call: condition 3.
 - Condition 4: at G's place (a past group), at the trigger that lets G
   in, or at G's arm at the end of R.
+- (R2, 2026-11-15) At each late disarm whose place is in the gap a
+  group's arm closes in R (back to the last input, barrier, arm or
+  `ysig_disarm_at`): condition 4 for that group.
 
 **Pending groups (0.6.1).** G is pending when it holds its arm and
 disarms only, `N(G)` is earlier than `τ`, `L(G)` is not in R yet, and no
@@ -1135,14 +1141,20 @@ change that.
   for any other state call outside a group, `N(F(c))` at its call. A
   barrier's: as in "The time of each call".
 - **The key of a call**: (its time, its class, its call order). Classes,
-  first to last at one time: a feed; a frame or a settle; a state call or
-  a group. A group's calls share one key, its arm's call order (T6: as
-  S3 and H16 order groups at one time), and stay one block in their own
-  call order.
+  first to last at one time: a feed; then a frame, a settle, a state call
+  or a group, by call order. Reason: a feed at a time carries the input
+  at that time, which every other call at that time reads (L3, T7). A
+  frame, a settle and a state call at one time are the caller's own
+  moments, in the caller's order, as in 0.6.x. The player ends a state at
+  a frame's onset and arms the next state there before it makes the
+  frame, and the frame must see them (the 500 Hz tie, R1, 2026-11-15).
+  A group's calls share one key, its arm's call order (T6: as S3 and H16
+  order groups at one time), and stay one block in their own call
+  order.
 - **Late call**: a call c such that R already holds a call whose
   footprint meets c's and whose key is greater than c's (T2). Since c is
-  the newest call, that means a later time, or the same time and a later
-  class. Lateness is the largest such difference in time. A call that is
+  the newest call, that means a later time, or the same time with c a
+  feed and the other call not a feed. Lateness is the largest such difference in time. A call that is
   not late goes at the end of R, as before. A late call is an input
   (the case this subsection is for), a `ysig_disarm_at()` with an earlier
   `t`, or a state call outside a group whose `N(F(c))` is earlier than a
@@ -1175,15 +1187,17 @@ same rule (the reviewer's L2).
 
 What this order says at one time:
 
-- An input at a time at or before `τ` comes before G, whatever its call
+- A feed at a time at or before `τ` comes before G, whatever its call
   order (L3): G's arm tests the held value at `τ`, and a report at `τ` is
-  part of it.
+  part of it. A frame or a settle at `τ` goes by call order: one made
+  before G's arm comes before G; one made after comes after G and lets G
+  in right before itself when G waits.
 - A feed at a frame's onset comes before the frame, whatever its call
   order (T7): the frame's pass reads input at or before its onset. A feed
   at the onset fed after the frame call is late; the window runs again
   for the frame.
-- A settle at `t` comes after the feeds at `t` and before the state calls
-  and groups at `t`.
+- A settle at `t` comes after the feeds at `t`. Among the frames,
+  settles, state calls and groups at `t`, call order decides.
 
 **State calls (T3, T4).** A state call outside a group goes into R by
 the same order, at its time. Most are at R's end: `N(F(c))` is the time
@@ -1207,6 +1221,12 @@ as an arm call: S3), by key; an arm of d among them is made, then ended
 at `t`. Reason: the sentence above says an arm at or before `t` is made
 and then ended, but rule 3's strict "earlier than" left a group at
 `τ = t` waiting. The header does this with a window and without one.
+
+A frame or a settle at `t` lets in, right before itself, every waiting
+group whose `τ` is at or before `t` (inclusive, as an arm call: S3), by
+key, with T1's closure. Reason: such a group has the smaller key; left
+waiting, it would go in later, before a frame already drawn (R1,
+2026-11-15).
 
 **The cancel, by key (U1, U5; replaces rule 3's "at or before `τ`").** A
 disarm of d, plain or with a time, cancels an arm of d made before it
@@ -1285,6 +1305,8 @@ nothing changes for a frame made in time: it feeds the reports up to a
 frame's onset before the frame call (`v2_feed()`), so the frame is at R's
 end. A report later than the onset that a caller feeds before the frame
 call goes after the frame in R, and the window runs again for the frame.
+A frame made after state calls or groups at its onset comes after them
+in R (R1).
 
 What the display already used: the bound channels that `ysig_frame()`
 wrote at the frame's call, from R as it was then. A late call placed
@@ -1540,7 +1562,7 @@ declares (T5).
 |---|---|
 | L1 (high): a frame at R's end breaks the place rule; dev2@18 after a frame with onset 16 went after dev1@20 | A frame and a settle go at their time among all calls (time order); the frame's pass reads input at or before its onset; the display's channels at the call are not given again (`input_late_frames`, no stop). The 0.6.x pin through a frame no longer arises |
 | L2 (high): the last call the input must follow comes after a call it must precede | R is a time order over meeting pairs; a call that must follow the input moves after it, with the calls that must follow it |
-| L3 (medium): an input at `τ` after a waiting G | At equal times an input comes before a group; an input at or before `τ` comes before G whatever its call order |
+| L3 (medium): an input at `τ` after a waiting G | At equal times a feed comes before a group; a feed at or before `τ` comes before G whatever its call order (R1: a frame or a settle at `τ` goes by call order) |
 | L4 (low): condition 2 never applies; "right before" against "at the end of R" | Condition 2 deleted; the time order fixes the wording |
 | L5 (medium): condition 3 must retest 2 (a) | Condition 2 (was 3) tests 2 (a) and 2 (b) with the new `L` |
 | L6 (medium): a late input that meets only an exception group H | Condition 3: 2 (b) again, with R's order at `L`, for every G whose span holds the input |
@@ -1579,6 +1601,16 @@ questions).**
    So `N(G)` is `τ` when an input at `τ` is in R, and earlier than `τ`
    otherwise: every input later than `τ` comes after G in the key order,
    whatever its footprint, and condition 2 applies to most past groups.
+5. (R1, R2; the coordinator's rulings of 2026-11-15, from the reviewer's
+   analysis.) At one time a feed comes first; frames, settles, state
+   calls and groups then go by call order, as in 0.6.x. A frame or a
+   settle lets in the waiting groups at or before its time, and is
+   `L(G)` for a group at its time. A `ysig_disarm_at` with `t` at or
+   after `τ` that lets G in is G's `L` for 2 (a); conditions 1, 2 (b),
+   2 (c) and 4 still apply (this replaces the builder's exception at a
+   group's going-in, d38539c). Condition 4's gap ends at a
+   `ysig_disarm_at` too, and a late disarm placed in a group's gap counts
+   the group.
 
 Measured effect of ruling 4 (the reviewer's oracle at 99addca, mode 4
 with A's checks, seed 20261115, 3,000 cases, the Linux desktop):

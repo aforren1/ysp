@@ -3,6 +3,17 @@
  * 09ecfb2, amended in b6676f4) and the graph's other rules in sig.md. It
  * does not read the header's internals.
  *
+ * Fixes at 43e2d10 (the builder's findings): drain() with no derived list
+ *   (the hits-only drains at arm calls and past 40 queued hits) no longer
+ *   drains derived events; with SIG_ORACLE_DERIVED_TO the end check
+ *   compares each node's derived events as a set (a held event comes out
+ *   after events R has after it); the X1 line also counts the wrong cases
+ *   with no count (M counts every wrong case). Reason 9 and the
+ *   predicate's condition 4 walk the arm's gap back to a disarm_at too
+ *   (ruling 1: it ends the open gap as an input does; case 757 OFF=l was
+ *   a false B-cannot). The horizon order check matches equal hits in
+ *   this call's order first (two equal hits read as out of order).
+ *
  * Horizons (the player's wait for complete input; sig.md text of
  *   2026-11-15): -DSIG_HAS_DETECTED_TO with SIG_ORACLE_GEN_DRAIN_TO=1: about
  *   half the drains are ysig_detected_to(h), h the newest input minus 0 to
@@ -667,8 +678,12 @@ static void drain(ysig_graph* g, hitrec* hr, int* nh, derrec* dr, int* nd, int a
     if (hits_too)
         while ((m = ysig_detected(g, h, 64)) > 0)
             for (k = 0; k < m; k++) if (hr && *nh < 8192) { hr[*nh].h = h[k]; hr[*nh].at = at; (*nh)++; }
-    while ((m = ysig_derived(g, e, 64)) > 0)
-        for (k = 0; k < m; k++) if (dr && *nd < 8192) { dr[*nd].e = e[k]; dr[*nd].at = g_cur_ci; (*nd)++; }
+    /* (the builder's finding, 43e2d10) a hits-only drain leaves derived
+     * events queued: with ysig_derived_to() they may be held, and draining
+     * them here handed them out and dropped them */
+    if (dr)
+        while ((m = ysig_derived(g, e, 64)) > 0)
+            for (k = 0; k < m; k++) if (*nd < 8192) { dr[*nd].e = e[k]; dr[*nd].at = g_cur_ci; (*nd)++; }
 }
 
 static void do_call(ysig_graph* g, const call* c) {
@@ -816,6 +831,8 @@ static int g_emit_hz;    /* the emitter prints horizon drains (SIG_ORACLE_GEN_DR
 static int g_late;            /* SIG_ORACLE_LATE=1: R by that text */
 static int g_noA;             /* late mode without A's checks (no SIG_ORACLE_LATE_A) */
 static int g_dax;             /* SIG_ORACLE_DAX=1: proposal X1, a disarm_at lets in at or before its t */
+static int g_r1;              /* SIG_ORACLE_R1=1: ruling R1 (2026-11-15): frames and settles key with state calls, by call order; they let in at or before their t; L(G) is the call that lets G in */
+static int is_fs(int ci);
 static char g_call_late[MAXC];   /* (late modes) the call was a late call: an input or a state call placed before calls already in R */
 static struct {
     long late, far, barrier, frames, cond2, l_new, l_new_nfa, ooo_in, ooo_grp, by_frame, by_fb, by_other, closure, late_state, late_by_disarm, cancel_eq, late_state_span, closure_escape, cancel_letin, dax_letin, dax_exc, dax_shape;
@@ -1156,6 +1173,9 @@ static void fail(const char* fmt, const char* a, long b) {
 #else
 #define B_DISARM_AT_OK(e) 0
 #endif
+static int is_fs(int ci) { return g_c[ci].kind == C_FRAME || g_c[ci].kind == C_SETTLE; }
+/* an input lets a waiting arm of B in: later than its tau; R1: a frame or a settle at its tau too */
+#define B_LETS(e, w) (((e)->time > g_bw_tau[w] || (g_r1 && is_fs((e)->ci) && (e)->time == g_bw_tau[w])) && ((e)->fp & g_bw_fp[w]))
 /* give B one entry of R (B drains after each call: B never loses a hit) */
 static void b_issue(const rent* e) {
     const call* c = &g_c[e->ci];
@@ -1243,8 +1263,11 @@ static void b_issue(const rent* e) {
         int me = (int)(e - g_R), q;
         for (q = me - 1; q >= 0; q--) {
             const rent* x = &g_R[q];
-            if ((x->flags & (E_INPUT | E_BARRIER)) || g_c[x->ci].kind == C_ARM) break;
-            if (g_c[x->ci].kind == C_DISARM && x->grp != e->grp && x->time != e->time) { g_b_cannot = 1; g_cannot_why = 9; break; }
+            if ((x->flags & (E_INPUT | E_BARRIER)) || g_c[x->ci].kind == C_ARM || g_c[x->ci].kind == C_DISARM_AT) break;   /* ruling 1: a disarm_at ends the gap */
+            if (g_c[x->ci].kind == C_DISARM && x->grp != e->grp && x->time != e->time) { g_b_cannot = 1; g_cannot_why = 9;
+                if (getenv("SIG_ORACLE_DEBUG8")) { int z; printf("  case %ld reason 9: arm call %d (node %d grp %d tau %.3f) gap has disarm call %d (node %d grp %d time %.3f)\n", g_case, e->ci, c->node, e->grp, e->time / 1e6, x->ci, g_c[x->ci].node, x->grp, x->time / 1e6);
+                    for (z = (me - 8 > 0 ? me - 8 : 0); z <= me + 3 && z < g_nR; z++) printf("    R[%d] call %d kind %d node %d grp %d time %.3f flags %d\n", z, g_R[z].ci, g_c[g_R[z].ci].kind, g_c[g_R[z].ci].node, g_R[z].grp, g_R[z].time / 1e6, g_R[z].flags); }
+                break; }
         }
     }
     g_rows = &g_rows_b;
@@ -1270,7 +1293,7 @@ static void b_issue(const rent* e) {
          * graph takes it before the arm is made, and the arm's entry then
          * reads it (the o1 shape) */
         for (w = 0; w < g_bw_n; w++)
-            if (e->time <= g_bw_tau[w] && (e->fp & g_bw_fp[w])) {
+            if (e->time <= g_bw_tau[w] && (e->fp & g_bw_fp[w]) && !(g_r1 && is_fs(e->ci) && e->time == g_bw_tau[w])) {
                 g_b_cannot = 1; g_cannot_why = 7;
                 if (getenv("SIG_ORACLE_DEBUG7")) printf("  case %ld reason 7: input call %d t %.3f, waiting group %d (arm call %d, tau %.3f), B's N %.3f%s\n", g_case, e->ci, e->time / 1e6, g_bw_grp[w],
                                                         g_bw_grp[w] >= 0 ? g_gr[g_bw_grp[w]].arm_ci : -1, g_bw_tau[w] / 1e6, g_bN / 1e6, e->time == g_bw_tau[w] ? " (equal times)" : "");
@@ -1283,11 +1306,11 @@ static void b_issue(const rent* e) {
          * waiting on node 6's output, arm6 let in first by an input that does
          * not reach node 31) */
         for (w = 0; w < g_bw_n; w++) {
-            int in_w = e->time > g_bw_tau[w] && (e->fp & g_bw_fp[w]);
+            int in_w = B_LETS(e, w);
             int w2;
             if (in_w) continue;
             for (w2 = w + 1; w2 < g_bw_n; w2++)
-                if (e->time > g_bw_tau[w2] && (e->fp & g_bw_fp[w2]) && (g_bw_fp[w] & g_bw_fp[w2]) && !g_b_cannot) {
+                if (B_LETS(e, w2) && (g_bw_fp[w] & g_bw_fp[w2]) && !g_b_cannot) {
                     g_b_cannot = 1; g_cannot_why = 6;
                     if (getenv("SIG_ORACLE_DEBUG6")) {
                         const group* a = &g_gr[g_bw_grp[w]]; const group* b = &g_gr[g_bw_grp[w2]];
@@ -1298,7 +1321,7 @@ static void b_issue(const rent* e) {
         }
         if (e->time > g_bN) g_bN = e->time;
         for (w = k = 0; w < g_bw_n; w++)
-            if (!(e->time > g_bw_tau[w] && (e->fp & g_bw_fp[w]))) { g_bw_tau[k] = g_bw_tau[w]; g_bw_fp[k] = g_bw_fp[w]; g_bw_grp[k] = g_bw_grp[w]; k++; }
+            if (!B_LETS(e, w)) { g_bw_tau[k] = g_bw_tau[w]; g_bw_fp[k] = g_bw_fp[w]; g_bw_grp[k] = g_bw_grp[w]; k++; }
         g_bw_n = k;
     }
     if (c->kind == C_RESET || c->kind == C_RESET_TRIAL) { g_bN = c->t; g_bw_n = 0; }
@@ -1586,6 +1609,10 @@ static int p1_let(int gi, int from) {
     for (k = from; k < g_nR; k++) {
         if (g_R[k].flags & E_BARRIER) return g_nR;
         if ((g_R[k].flags & E_INPUT) && g_R[k].time > g_gr[gi].tau && (g_R[k].fp & g_gr[gi].fp)) return k;
+        /* R1: L(G) is the call that lets G in: a frame or a settle at tau,
+         * a disarm_at at or after tau (X1) */
+        if (g_r1 && (g_R[k].fp & g_gr[gi].fp) && g_R[k].time >= g_gr[gi].tau &&
+            (((g_R[k].flags & E_INPUT) && is_fs(g_R[k].ci)) || g_c[g_R[k].ci].kind == C_DISARM_AT)) return k;
     }
     return g_nR;
 }
@@ -1631,7 +1658,7 @@ static int p1_bad(int gi) {
         if (ar >= 0)
             for (k = ar - 1; k >= 0; k--) {
                 const rent* x = &g_R[k];
-                if ((x->flags & (E_INPUT | E_BARRIER)) || g_c[x->ci].kind == C_ARM) break;
+                if ((x->flags & (E_INPUT | E_BARRIER)) || g_c[x->ci].kind == C_ARM || g_c[x->ci].kind == C_DISARM_AT) break;   /* ruling 1: a disarm_at ends the gap */
                 if (g_c[x->ci].kind == C_DISARM && x->grp != gi) return 8;
             }
     }
@@ -1646,8 +1673,8 @@ static int p1_bad(int gi) {
     for (k = last + 1; k < g_nR; k++) {
         const rent* x = &g_R[k];
         if (x->flags & E_BARRIER) return 1;
-        if ((x->flags & E_INPUT) && x->time > G->tau && (x->fp & G->fp)) {
-            /* it must meet the arm's own footprint (and its group's
+        if ((x->flags & E_INPUT) && (x->time > G->tau || (g_r1 && is_fs(x->ci) && x->time == G->tau)) && (x->fp & G->fp)) {
+            /* (R1: a frame or a settle at tau lets G in, so it is L(G)) it must meet the arm's own footprint (and its group's
              * disarms'): with no window the group's other calls are made
              * where they are, and only these keep the arm waiting */
             uint64_t fa = G->cancelled ? 0 : g_D[G->node];
@@ -1659,6 +1686,13 @@ static int p1_bad(int gi) {
             /* (proposal X1) a disarm_at at or after tau lets G in before
              * itself wherever it goes: exact */
             g_lc.dax_exc++;
+            if (g_r1) {
+                /* R1/R2: it is L(G); 2 (a) wants it to meet F_a(G) */
+                uint64_t fa = G->cancelled ? 0 : g_D[G->node];
+                int q;
+                for (q = 0; q < G->n; q++) if (g_c[G->calls[q]].kind == C_DISARM) fa |= g_call_fp[G->calls[q]];
+                return (x->fp & fa) || !fa ? 0 : 6;
+            }
             continue;
         }
         if ((x->flags & E_STATE) && x->grp != gi && (x->fp & G->fp)) {
@@ -1823,7 +1857,7 @@ static okey r_key(const rent* e) {
          * in R: it stays at its call position, N at its call, so a graph
          * that gets R's calls drops it as the header did */
         if (e->flags & E_NEUTRAL) { k.t = g_call_N[e->ci]; k.rank = 0; k.order = e->ci; return k; }
-        if (e->flags & E_INPUT) { k.t = c->t; k.rank = (c->kind == C_FRAME || c->kind == C_SETTLE) ? 1 : 0; k.order = e->ci; return k; }
+        if (e->flags & E_INPUT) { k.t = c->t; k.rank = (c->kind == C_FRAME || c->kind == C_SETTLE) ? (g_r1 ? 2 : 1) : 0; k.order = e->ci; return k; }   /* R1: a frame or a settle keys with the state calls */
         if (e->grp >= 0) { k.t = g_gr[e->grp].tau; k.rank = 2; k.order = g_gr[e->grp].arm_ci; return k; }
         k.t = c->kind == C_DISARM_AT ? c->t : c->kind == C_DISARM ? g_call_N[e->ci] : g_call_nf[e->ci]; k.rank = 2; k.order = e->ci;
         return k;
@@ -1976,10 +2010,18 @@ static void horizon_check(int ci, int64_t h, int first) {
     memset(used, 0, sizeof used);
     for (j = 0; j < g_nhr; j++) {
         if (g_hr[j].h.t > h) continue;
+        /* equal hits (two arms' hits at one time): match this call's copies
+         * in order first, so equal copies do not read as out of order */
+        for (i = (last_r + 1 > first ? last_r + 1 : first); i < g_nha; i++) if (!used[i] && hit_eq(&g_ha[i].h, &g_hr[j].h)) { used[i] = 1; break; }
+        if (i >= g_nha)
         for (i = g_nha - 1; i >= 0; i--) if (!used[i] && hit_eq(&g_ha[i].h, &g_hr[j].h)) { used[i] = 1; break; }
         if (i < 0) { snprintf(g_whybuf, sizeof g_whybuf, "a hit of R at or before the horizon held by ysig_detected_to() (node %d t %.3f)", g_hr[j].h.node, g_hr[j].h.t / 1e6); g_why = g_whybuf; return; }
         if (i >= first) {
-            if (i < last_r) { snprintf(g_whybuf, sizeof g_whybuf, "ysig_detected_to() handed out its hits out of R's order"); g_why = g_whybuf; return; }
+            if (i < last_r) {
+                if (getenv("SIG_ORACLE_HZDBG")) { int z; printf("  hz order: h %.3f first %d; R's hits:\n", h / 1e6, first);
+                    for (z = 0; z < g_nhr; z++) printf("    R[%d] node %d t %.3f found %.3f\n", z, g_hr[z].h.node, g_hr[z].h.t / 1e6, g_hr[z].h.t_found / 1e6);
+                    for (z = 0; z < g_nha; z++) printf("    A[%d] node %d t %.3f found %.3f\n", z, g_ha[z].h.node, g_ha[z].h.t / 1e6, g_ha[z].h.t_found / 1e6); }
+                snprintf(g_whybuf, sizeof g_whybuf, "ysig_detected_to() handed out its hits out of R's order"); g_why = g_whybuf; return; }
             last_r = i;
         }
     }
@@ -2089,7 +2131,9 @@ static void step(int ci) {
         g_call_flags[ci] = E_INPUT;
         g_call_time[ci] = c->t;
         gap_end();
-        place_waiting(c->t, g_all);
+        /* R1: it lets in, right before itself, the waiting groups at or
+         * before its t (each made before it: the smaller key) */
+        place_waiting_at(c->t, g_all, g_r1, g_nR);
         g_R[g_nR++] = mk_ent(ci, -1, c->t);
         if (c->t > g_N) g_N = c->t;
         add_probe(c->t);
@@ -2411,6 +2455,7 @@ static void drain_h(call* c) {
 static int64_t g_last_onset = -1;
 static void gen_frame(void) {
     call c;
+    int tie;
     memset(&c, 0, sizeof c);
     c.kind = C_FRAME; c.t = g_onset; c.poll = g_onset - (int64_t)(rnd() % 3) * 300 * US; c.chbits = (int)(rnd() & 0xff);
     if (c.poll < g_newest - 2 * MS) c.poll = g_newest;   /* a poll near the input (no bad stamps) */
@@ -2422,7 +2467,32 @@ static void gen_frame(void) {
     }
     if (g_late && c.t <= g_last_onset) c.t = g_last_onset + MS;
     g_last_onset = c.t;
+    tie = getenv("SIG_ORACLE_GEN_TIE") && rnd() % 3 == 0 ? 1 + (int)(rnd() % 5) : 0;
+    if (tie) {
+        /* (R1) calls at the frame's onset: 1 arms, then the frame (the
+         * player's next state at a timed exit); 2 disarm_at, arm, frame (the
+         * exit and the next state); 3 a set, the frame, an arm (the frame
+         * ends the gap); 4 the frame, then a feed at the onset (T7); 5 an
+         * arm, a settle at the onset, the frame */
+        call x;
+        int q, d = g_dets[rnd() % (unsigned)g_ndet];
+        if (tie == 2) for (q = 0; q < 1 + (int)(rnd() % 2); q++) { memset(&x, 0, sizeof x); x.kind = C_DISARM_AT; x.node = q ? g_dets[rnd() % (unsigned)g_ndet] : d; x.t = c.t; push(&x); }
+        if (tie == 3) { memset(&x, 0, sizeof x); x.kind = C_SET; x.node = g_dets[rnd() % (unsigned)g_ndet]; x.param = YSIG_DETECT_LEVEL; x.v = 0.5 + rnd() % 6; push(&x); }
+        if (tie == 1 || tie == 2 || tie == 5)
+            for (q = 0; q < 1 + (int)(rnd() % 2); q++) { memset(&x, 0, sizeof x); x.kind = C_ARM; x.node = q ? g_dets[rnd() % (unsigned)g_ndet] : d; x.t = c.t; push(&x); }
+        if (tie == 5) { memset(&x, 0, sizeof x); x.kind = C_SETTLE; x.t = c.t; push(&x); }
+    }
     push(&c);
+    if (tie == 3) { call x; memset(&x, 0, sizeof x); x.kind = C_ARM; x.node = g_dets[rnd() % (unsigned)g_ndet]; x.t = c.t; push(&x); }
+    if (tie == 4) {
+        call x;
+        memset(&x, 0, sizeof x);
+        x.kind = C_FEED; x.dev = 1; x.t = c.t;
+        if (g_rel) { x.ekind = YIN_KIND_MOUSE; x.ectl = YIN_AXIS_DELTA; x.x = (double)((int)(rnd() % 7) - 3); x.y = (double)((int)(rnd() % 7) - 3); }
+        else { x.ekind = YIN_KIND_PEN; x.ectl = YIN_AXIS_POSITION; x.x = g_x; x.y = g_y; }
+        if (x.t > g_last[1]) g_last[1] = x.t;
+        push(&x);
+    }
     if (c.t > g_newest) g_newest = c.t;
     g_onset += 16 * MS + (int64_t)(rnd() % 3) * US * 500;
     memset(&c, 0, sizeof c);
@@ -2563,8 +2633,27 @@ static int rows_node_eq(const rowlist* a, const rowlist* b, int node) {
         i++; j++;
     }
 }
+static int ev_cmp(const void* a, const void* b) {
+    const yin_event* x = (const yin_event*)a; const yin_event* y = (const yin_event*)b;
+    if (x->t != y->t) return x->t < y->t ? -1 : 1;
+    return memcmp(x, y, sizeof *x);
+}
 static int der_node_eq(int node) {
     int i = 0, j = 0;
+#ifdef SIG_HAS_DERIVED_TO
+    if (getenv("SIG_ORACLE_DERIVED_TO")) {
+        /* a held event comes out after events R has after it (sig.md,
+         * "Holding hits and derived events"): compare per node as sets */
+        static yin_event xa[8192], xb[8192];
+        int na = 0, nb = 0, q;
+        for (q = 0; q < g_nda; q++) if ((int)g_da[q].e.device == node) xa[na++] = g_da[q].e;
+        for (q = 0; q < g_ndb; q++) if ((int)g_db[q].e.device == node) xb[nb++] = g_db[q].e;
+        if (na != nb) return 0;
+        qsort(xa, (size_t)na, sizeof *xa, ev_cmp);
+        qsort(xb, (size_t)nb, sizeof *xb, ev_cmp);
+        return !memcmp(xa, xb, sizeof *xa * (size_t)na);
+    }
+#endif
     for (;;) {
         while (i < g_nda && (int)g_da[i].e.device != node) i++;
         while (j < g_ndb && (int)g_db[j].e.device != node) j++;
@@ -2807,10 +2896,12 @@ static void emit_case(void) {
 /* ---- main ---------------------------------------------------------------- */
 
 int main(int argc, char** argv) {
-    long cases = getenv("SIG_ORACLE_CASES") ? atol(getenv("SIG_ORACLE_CASES")) : 2000, wrong = 0, cannot = 0, fellback = 0, noroom = 0, disarm_ahead = 0, h9 = 0, pred_n[3] = { 0, 0, 0 }, pred_f[3] = { 0, 0, 0 }, pred_why[10] = { 0 }, pred_show = 0, cannot_why[10] = { 0 }, hu_n[3] = { 0, 0, 0 }, hu_f[3] = { 0, 0, 0 }, hu_show = 0, hu_late = 0, hu_other = 0, hu_bare = 0, hu_arms = 0, hu_cnt = 0, hu_bc_at = 0, hu_end_late = 0, exc_n[3] = { 0, 0, 0 }, exc_only[3] = { 0, 0, 0 }, lt_cases = 0, lt_far = 0, lt_bar = 0, lt_frames = 0, lt_cond2 = 0, lt_ooo = 0, lt_ooo_unc = 0, lt_bc = 0, lt_bc_f = 0, lt_inputs = 0, lt_show = 0, lt_byf = 0, lt_byfb = 0, lt_byo = 0, lt_lnew = 0, lt_lnfa = 0, lt_clo = 0, lt_lst = 0, lt_lbd = 0, lt_lbd_in = 0, lt_ceq = 0, lt_dxs = 0, lt_dxe = 0, lt_dxl = 0, lt_dxw = 0, lt_lss = 0, lt_esc = 0, lt_cli = 0, oc_cases[8] = { 0 }, oc_pairs[8] = { 0 }, oc_any = 0, oc_show = 0;
+    long cases = getenv("SIG_ORACLE_CASES") ? atol(getenv("SIG_ORACLE_CASES")) : 2000, wrong = 0, cannot = 0, fellback = 0, noroom = 0, disarm_ahead = 0, h9 = 0, pred_n[3] = { 0, 0, 0 }, pred_f[3] = { 0, 0, 0 }, pred_why[10] = { 0 }, pred_show = 0, cannot_why[10] = { 0 }, hu_n[3] = { 0, 0, 0 }, hu_f[3] = { 0, 0, 0 }, hu_show = 0, hu_late = 0, hu_other = 0, hu_bare = 0, hu_arms = 0, hu_cnt = 0, hu_bc_at = 0, hu_end_late = 0, exc_n[3] = { 0, 0, 0 }, exc_only[3] = { 0, 0, 0 }, lt_cases = 0, lt_far = 0, lt_bar = 0, lt_frames = 0, lt_cond2 = 0, lt_ooo = 0, lt_ooo_unc = 0, lt_bc = 0, lt_bc_f = 0, lt_inputs = 0, lt_show = 0, lt_byf = 0, lt_byfb = 0, lt_byo = 0, lt_lnew = 0, lt_lnfa = 0, lt_clo = 0, lt_lst = 0, lt_lbd = 0, lt_lbd_in = 0, lt_ceq = 0, lt_dxs = 0, lt_dxe = 0, lt_dxl = 0, lt_dxw = 0, lt_dxu = 0, lt_lss = 0, lt_esc = 0, lt_cli = 0, oc_cases[8] = { 0 }, oc_pairs[8] = { 0 }, oc_any = 0, oc_show = 0;
     g_late = getenv("SIG_ORACLE_LATE") ? atoi(getenv("SIG_ORACLE_LATE")) : 0;
     g_noA = g_late && !getenv("SIG_ORACLE_LATE_A");
     g_dax = getenv("SIG_ORACLE_DAX") != NULL;
+    g_r1 = getenv("SIG_ORACLE_R1") != NULL;
+    if (g_r1) g_dax = 1;   /* R1's L(G) includes X1's disarm_at */
     g_emit_hz = getenv("SIG_ORACLE_GEN_DRAIN_TO") != NULL;
     int show = argc > 1 ? atoi(argv[1]) : 0, w;
     const char* names[64];
@@ -2899,7 +2990,7 @@ int main(int argc, char** argv) {
             if (g_lc.late_by_disarm) { lt_lbd++; lt_lbd_in += g_lc.late_by_disarm; }
             if (g_lc.cancel_eq) lt_ceq++;
             if (g_lc.dax_shape) lt_dxs++;
-            if (g_lc.dax_exc) { lt_dxe++; if (g_why) lt_dxw++; }
+            if (g_lc.dax_exc) { lt_dxe++; if (g_why) lt_dxw++; if (g_why && !g_unv_fail && !g_other_fail) lt_dxu++; }
             if (g_lc.dax_letin) lt_dxl++;
             if (g_lc.late_state_span) lt_lss++;
             if (g_lc.closure_escape) lt_esc++;
@@ -3026,7 +3117,7 @@ int main(int argc, char** argv) {
     printf("cases %ld, wrong %ld, with a fallback %ld; not compared: B cannot run R %ld, an ahead arm with no room %ld, a disarm in a group B sees ahead %ld; spec mode %d\n",
            cases, wrong, fellback, cannot, noroom, disarm_ahead, SIG_ARM_REF_SPEC);
     if (h9) printf("  set aside as H9-shaped (SIG_ORACLE_H9): %ld\n", h9);
-    if (g_late >= 4) printf("  disarm_at exits (X1): the player's exit shape in %ld cases; the exception taken in %ld cases (%ld of them wrong); B let a group in at a disarm_at in %ld cases\n", lt_dxs, lt_dxe, lt_dxw, lt_dxl);
+    if (g_late >= 4) printf("  disarm_at exits (X1): the player's exit shape in %ld cases; the exception taken in %ld cases (%ld of them wrong, %ld wrong with no count); B let a group in at a disarm_at in %ld cases\n", lt_dxs, lt_dxe, lt_dxw, lt_dxu, lt_dxl);
     if (g_late) printf("  late voids checked by the pre-ruling text (a header without late_hits_voided): %ld\n", g_lv_old);
     if (g_late >= 3)
         printf(g_late == 4 ? "  late (9834173) also: let-in arms cancelled by key %ld cases;" : "  late (7a17176) also:", lt_cli), printf(" T1 closure let in a group in %ld cases; a late state call (T3) in %ld cases; inputs late only by a plain disarm at N: %ld in %ld cases; a plain disarm cancelling an arm at its own tau: %ld cases; a late state call inside a waiting group's span, meeting it: %ld cases; a disarm at or before tau of a group the closure let in, made after its arm (it escapes the cancel): %ld cases\n",

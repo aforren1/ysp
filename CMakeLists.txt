@@ -765,7 +765,8 @@ if(YSP_BUILD_TESTS)
     target_compile_definitions(test_sig_disarm_at PRIVATE SIG_HAS_LATE_VOIDED=1 SIG_SPEC_X1=1)
     add_test(NAME test_sig_disarm_at COMMAND test_sig_disarm_at)
     ysp_add_program(test_sig_arm_ref tests/adapt/sig_arm_ref.c core)
-    target_compile_definitions(test_sig_arm_ref PRIVATE SIG_ARM_REF_SPEC=1 SIG_HAS_UNV=1 SIG_HAS_LATE=1 SIG_HAS_LATE_VOIDED=1)
+    target_compile_definitions(test_sig_arm_ref PRIVATE SIG_ARM_REF_SPEC=1 SIG_HAS_UNV=1 SIG_HAS_LATE=1 SIG_HAS_LATE_VOIDED=1
+                               SIG_HAS_DISARM_AT=1 SIG_HAS_DETECTED_TO=1 SIG_HAS_DERIVED_TO=1)
     add_test(NAME test_sig_arm_ref_late COMMAND ${CMAKE_COMMAND} -DPROG=$<TARGET_FILE:test_sig_arm_ref>
              -DCASES=3000 -DSEED=20261115 "-DENV=SIG_ORACLE_LATE=4;SIG_ORACLE_PRED=1;SIG_ORACLE_P2STRICT=1;SIG_ORACLE_LATE_A=1"
              -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/adapt/sig_arm_ref_check.cmake)

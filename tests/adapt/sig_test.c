@@ -6615,6 +6615,115 @@ static void lt_det_open(double hold_s, int K) {
     n[1].p[YSIG_DETECT_START] = 1; n[1].p[YSIG_DETECT_REPEAT] = 1; n[1].p[YSIG_DETECT_HOLD] = hold_s; n[1].history = 64;
     (void)rp_open(n, 2, K, 0, false, false);
 }
+/* R1 and R2 (the coordinator's rulings of 2026-11-15, docs/sig.md "Late
+ * input"): a frame, a settle and a state call at one time go by call
+ * order; a frame or a settle lets in the waiting groups at or before its
+ * onset; L(G) can be a frame at tau; a plain disarm placed in a group's
+ * gap counts the group (condition 4). Each case with a control. A detect
+ * at frame rate, met at <= 5, a hit at the frame where it is armed */
+static void ft_open(void) {
+    ysig_node n[2];
+    n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 2); n[0].history = 64;
+    n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1);
+    n[1].p[YSIG_DETECT_TEST] = YSIG_TEST_LE; n[1].p[YSIG_DETECT_LANE] = 0; n[1].p[YSIG_DETECT_LEVEL] = 5;
+    n[1].p[YSIG_DETECT_START] = 1; n[1].p[YSIG_DETECT_ENTRY] = YSIG_ENTRY_NOW; n[1].p[YSIG_DETECT_AT] = 1; n[1].history = 64;
+    (void)rp_open(n, 2, 4, 0, false, false);
+}
+static int ft_bad(void) {
+    ysig_stats st;
+    ysig_get_stats(&g_rp, &st);
+    return (int)(st.arm_unverified + st.late_unverified + st.late_far + st.late_full + st.late_off + st.arm_hits_retracted +
+                 st.late_hits_voided + st.arm_past_far + st.arm_past_full + st.arm_past_off + st.arm_past_pinned);
+}
+static void test_frame_ties(void) {
+    ysig_stats st;
+    int v;
+    g_where = "frame ties (R1, R2)";
+    /* the player's 500 Hz tie: a state ends at a frame's onset (4 ms), the
+     * next arms there after a settle at it, then the frame: it comes after
+     * the arm in R and sees it, a hit at 4 with no run again (0.7.0 by
+     * class put the frame first: a hit at 6). The control: the frame made
+     * before the arm does not see it: a hit at the next frame */
+    for (v = 0; v < 2; v++) {
+        ft_open();
+        rp_feed(3 * MS, 1, YIN_AXIS_POSITION, 1);
+        CHECK(ysig_settle(&g_rp, 4 * MS) >= 0);
+        if (!v) { CHECK(ysig_arm(&g_rp, 1, 4 * MS)); rp_frame(4 * MS); }
+        else { rp_frame(4 * MS); CHECK(ysig_arm(&g_rp, 1, 4 * MS)); }
+        rp_frame(6 * MS);
+        ysig_get_stats(&g_rp, &st);
+        CHECK(lt_hits() == 1 && g_lt_hit[0] == (v ? 6 : 4) * MS);
+        CHECK(st.arm_caught_up == 0 && st.late_frames == 0 && ft_bad() == 0);
+    }
+    /* a waiting group at tau 4 goes in right before the frame at 4
+     * (inclusive), which is its L(G): a hit at 4, not counted. The
+     * control: tau 5 waits past the frame at 4 and goes in at the frame at
+     * 6, an input later than tau */
+    for (v = 0; v < 2; v++) {
+        ft_open();
+        rp_feed(1 * MS, 1, YIN_AXIS_POSITION, 1);
+        CHECK(ysig_arm(&g_rp, 1, (v ? 5 : 4) * MS) && g_rp.wt->n == 1);
+        rp_frame(4 * MS);
+        CHECK(g_rp.wt->n == v);
+        rp_frame(6 * MS);
+        CHECK(lt_hits() == 1 && g_lt_hit[0] == (v ? 6 : 4) * MS && ft_bad() == 0);
+    }
+    /* ysig_disarm_at(4) then the frame at 4: the frame comes after the
+     * disarm and does not see the arm. The control: the frame first, a hit
+     * at 4, then the disarm */
+    for (v = 0; v < 2; v++) {
+        ft_open();
+        rp_feed(1 * MS, 9, YIN_AXIS_POSITION, 1);
+        CHECK(ysig_arm(&g_rp, 1, 1 * MS));
+        rp_frame(2 * MS);
+        rp_feed(3 * MS, 1, YIN_AXIS_POSITION, 1);
+        if (!v) { CHECK(ysig_disarm_at(&g_rp, 1, 4 * MS)); rp_frame(4 * MS); }
+        else { rp_frame(4 * MS); CHECK(ysig_disarm_at(&g_rp, 1, 4 * MS)); }
+        CHECK(lt_hits() == v && (!v || g_lt_hit[0] == 4 * MS) && ft_bad() == 0);
+    }
+    /* a set, then an arm ahead at 4 (one group, the set in its gap), then
+     * the frame at 4: the frame lets the group in and sees it, a hit at 4.
+     * The control: the frame between the set and the arm ends the set's
+     * gap (no group) and comes before the arm: a hit at the next frame */
+    for (v = 0; v < 2; v++) {
+        ft_open();
+        rp_feed(1 * MS, 7, YIN_AXIS_POSITION, 1);
+        CHECK(ysig_set(&g_rp, 1, YSIG_DETECT_LEVEL, 8));
+        if (!v) { CHECK(ysig_arm(&g_rp, 1, 4 * MS)); rp_frame(4 * MS); }
+        else { rp_frame(4 * MS); CHECK(ysig_arm(&g_rp, 1, 4 * MS)); }
+        rp_frame(6 * MS);
+        CHECK(lt_hits() == 1 && g_lt_hit[0] == (v ? 6 : 4) * MS && ft_bad() == 0);
+    }
+    /* a feed at 4 after the frame at 4 is late (a feed is first at one
+     * time, L3): placed before the frame, whose pass then sees it, a hit
+     * at 4 by a run again. The control: the feed before the frame */
+    for (v = 0; v < 2; v++) {
+        ft_open();
+        rp_feed(1 * MS, 9, YIN_AXIS_POSITION, 1);
+        CHECK(ysig_arm(&g_rp, 1, 1 * MS));
+        if (!v) { rp_frame(4 * MS); rp_feed(4 * MS, 1, YIN_AXIS_POSITION, 1); }
+        else { rp_feed(4 * MS, 1, YIN_AXIS_POSITION, 1); rp_frame(4 * MS); }
+        ysig_get_stats(&g_rp, &st);
+        CHECK(lt_hits() == 1 && g_lt_hit[0] == 4 * MS && ft_bad() == 0);
+        CHECK(v ? st.arm_caught_up == 0 : 1);
+    }
+    /* R2: a group let in by ysig_disarm_at (X1) at tau 20; a plain disarm
+     * made after it, at N (10), goes before the group's arm by key, into
+     * the gap the arm closes: condition 4 counts the group. The control:
+     * the plain disarm before the arm is in the arm's own group */
+    for (v = 0; v < 2; v++) {
+        ft_open();
+        rp_feed(10 * MS, 9, YIN_AXIS_POSITION, 1);
+        if (v) CHECK(ysig_disarm(&g_rp, 1));
+        CHECK(ysig_arm(&g_rp, 1, 20 * MS) && g_rp.wt->n == 1);
+        CHECK(ysig_disarm_at(&g_rp, 1, 30 * MS) && g_rp.wt->n == 0);
+        if (!v) CHECK(ysig_disarm(&g_rp, 1));
+        rp_feed(40 * MS, 9, YIN_AXIS_POSITION, 1);
+        ysig_get_stats(&g_rp, &st);
+        CHECK(st.arm_unverified == !v);
+    }
+}
+
 static void test_late(void) {
     ysig_stats st;
     int v, k;
@@ -6985,6 +7094,7 @@ int main(void) {
     test_hit_whole_value();
     test_pending();
     test_late();
+    test_frame_ties();
     test_hold();
     if (g_failures) { fprintf(stderr, "sig_test: %d failures\n", g_failures); return 1; }
     printf("sig_test: all checks passed\n");
