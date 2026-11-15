@@ -898,6 +898,21 @@ arrives in a later poll with a time before a taken exit does not undo
 it" no longer arises, since no exit is taken before its time is
 complete.
 
+Measured (2026-11-15, 2d52faa, Linux desktop, i5-14500, `--sim`): each
+example with `--test-feed-each` against batches, 60 and 500 Hz, with 0
+and 10 ms late (`--test-sample-late` on every role). `trials.csv`,
+`events.csv`, `frames.csv`, the streams and `session.json` (less its
+timing fields) are equal in 7 of the 8 runs. In the bimanual example at
+60 Hz, 10 ms late, only `late_frames` differs: 2 of its trials count 2
+frames more fed one by one (2797 against 2795, 2792 against 2790), and
+`session.json` `sig_arms.late_frames` 4 more (39534 against 39530). Every
+exit, time, outcome and value is equal. `late_frames` is sig.h's count
+of drawn frames that a run again changed; fed one by one, a frame can be
+changed by one report's run again and changed back by the next, which
+one part's run again does not see. It is a diagnostic count, not a value
+the trial uses; to make it equal needs ysp/sig.h (count a frame by its
+value after the part, not after each run again). Open.
+
 ### The reviewer's findings on the first draft (3f6d21c), and the answers
 
 The reviewer confirmed one `G` per graph, the order of exits, the entry
