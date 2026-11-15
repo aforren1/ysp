@@ -3788,9 +3788,11 @@ static bool ysig__set_ok(const ysig_graph* g, const ysig__nd* n, int param, doub
 static void ysig__recompute(ysig_graph* g, int from) {
     uint8_t reach[YSIG_MAX_NODES];
     int k, j, pos = -1;
-    /* the set's time: the newest the graph knows (it has no clock), the
-     * later of the newest event fed and the last frame's onset */
-    int64_t ts = g->t_fed > g->onset ? g->t_fed : g->onset;
+    /* the newest input that reaches the set at its place in R (v0.7.0),
+     * not the newest event fed: input that does not reach the set commutes
+     * with it, so it must not move its entry; a run again computes it at
+     * the set's place, as a graph with no window does at its call */
+    int64_t ts = ysig__nf(g, ysig__down(g, from));
     for (k = 0; k < g->n; k++) if (g->order[k] == from) pos = k;
     if (pos < 0) return;
     memset(reach, 0, (size_t)g->n);
@@ -5254,6 +5256,22 @@ static int ysig__ck_at(const ysig__cu* cu, uint64_t pos, int64_t t) {
     return -1;
 }
 
+/* v0.7.0: a call of key (t, cls, ord) with footprint F must go before a
+ * call older than checkpoint k (R holds, before k, a call that meets F
+ * with a greater key): the image's nodes keep those keys */
+static int ysig__ck_late(const ysig_graph* g, int kslot, const uint64_t* F, int64_t t, int cls, uint64_t ord) {
+    const ysig__ck* k = &g->cu->ck[kslot];
+    const ysig__nd* nd = (const ysig__nd*)(const void*)(k->img + ((sizeof(ysig_graph) + 7u) & ~(size_t)7u));
+    int i;
+    if (k->bar) return 0;
+    for (i = 0; i < g->n; i++) {
+        const ysig__nd* n = &nd[i];
+        if (F && !((F[i >> 6] >> (i & 63)) & 1u)) continue;
+        if (n->kt > t || (n->kt == t && (n->kc > cls || (n->kc == cls && n->ko > ord)))) return 1;
+    }
+    return 0;
+}
+
 /* v0.7.0 (docs/sig.md, LATE INPUT). The unit [a, c_head) (a call, or a
  * group's calls, which share one key) was logged at the end of R and made
  * there. Its place: before the first logged call that reaches a node of
@@ -5282,13 +5300,11 @@ static uint64_t ysig__late_p0(ysig_graph* g, uint64_t a, uint64_t* F) {
  * (they reach F with a greater key, or follow one that moves and share a
  * node with it: the reviewer's L2) move after it, in their order; the
  * rest stay before it. A group moves whole. */
-static void ysig__late_move(ysig_graph* g, uint64_t a, uint64_t p0, const uint64_t* F) {
+static uint64_t ysig__late_move_k(ysig_graph* g, uint64_t a, uint64_t p0, const uint64_t* F, int64_t t, int cls, uint64_t ord) {
     ysig__cu* cu = g->cu;
     const uint64_t C = (uint64_t)cu->C;
-    const ysig__call* c0 = &cu->calls[a % C];
-    int64_t t = c0->tr;
-    int cls = ysig__kcls(c0->e.kind), w, any = 0;
-    uint64_t ord = ysig__call_ko(c0), Mf[YSIG__FPW], fu[YSIG__FPW], f[YSIG__FPW], s = p0, wr = p0, q, nm = 0, i;
+    int w, any = 0;
+    uint64_t Mf[YSIG__FPW], fu[YSIG__FPW], f[YSIG__FPW], s = p0, wr = p0, q, nm = 0, i, at;
     for (w = 0; w < g->dw; w++) Mf[w] = 0;
     while (s < a) {
         const ysig__call* c = &cu->calls[s % C];
@@ -5310,8 +5326,14 @@ static void ysig__late_move(ysig_graph* g, uint64_t a, uint64_t p0, const uint64
         }
         s = u1;
     }
+    at = wr;
     for (q = a; q < cu->c_head; q++, wr++) cu->calls[wr % C] = cu->calls[q % C];
     for (i = 0; i < nm; i++, wr++) cu->calls[wr % C] = cu->mv[i];
+    return at;
+}
+static uint64_t ysig__late_move(ysig_graph* g, uint64_t a, uint64_t p0, const uint64_t* F) {
+    const ysig__call* c0 = &g->cu->calls[a % (uint64_t)g->cu->C];
+    return ysig__late_move_k(g, a, p0, F, c0->tr, ysig__kcls(c0->e.kind), ysig__call_ko(c0));
 }
 static void ysig__rerun(ysig_graph* g, int kslot, int node, int64_t t);
 /* A run again for the late calls placed since the last (one for a batch) */
@@ -5342,10 +5364,10 @@ static int ysig__late_fix(ysig_graph* g, uint64_t a) {
     int64_t t = c0->tr;
     int kslot, w;
     p0 = ysig__late_p0(g, a, F);
-    if (p0 == UINT64_MAX) { g->st.late_far++; return 0; }
-    kslot = ysig__ck_at(cu, p0, t);
+    if (p0 == UINT64_MAX || !cu->n_ck || ysig__ck_late(g, cu->ck0, F, t, ysig__kcls(c0->e.kind), ysig__call_ko(c0))) { g->st.late_far++; return 0; }
+    kslot = ysig__ck_at(cu, p0, INT64_MAX);
     if (kslot < 0) { g->st.late_far++; return 0; }
-    ysig__late_move(g, a, p0, F);
+    (void)ysig__late_move(g, a, p0, F);
     if (cu->def_k < 0) {
         for (w = 0; w < g->dw; w++) cu->late_f[w] = 0;
         cu->late_t = t;
@@ -5849,31 +5871,31 @@ static void ysig__arm_past(ysig_graph* g, ysig_entry* e, uint64_t seq) {
         for (w = 0; w < g->dw; w++) F[w] |= f[w];
         ng++;
     }
-    /* the place: before the gap, past what must come first. Its own
-     * calls alone set it: a waiting group placed in the gap goes in again
-     * with the call that lets it in at the place (H13) */
-    for (pos = from; pos > cu->c_tail; pos--)
-        if (ysig__must_before(g, &cu->calls[(pos - 1) % (uint64_t)cu->C], t, F)) break;
-    /* pinned: an input before the place, later than t, that shares a node;
-     * before the window, any input later than t (its nodes are not kept) */
-    if (cu->n_ck && !cu->ck[cu->ck0].bar && cu->ck[cu->ck0].cover > t) pinned = 1;
-    for (s = cu->c_tail; s < pos && !pinned; s++) {
+    /* v0.7.0, the place by key (time t, a group, its arm's call order):
+     * before the first logged call that meets F with a greater key; the
+     * calls that must follow the group move after it (L2). Its own calls
+     * alone set it: a waiting group placed in the gap goes in again with
+     * the call that lets it in at the place (H13) */
+    pos = UINT64_MAX;
+    for (s = cu->c_tail; s < from; s++) {
         const ysig__call* c = &cu->calls[s % (uint64_t)cu->C];
-        int64_t ti;
-        if (ysig__input_t(&c->e, &ti) && ti > t && ysig__fp_entry(g, c, f) == 1 && ysig__fp_meets(g, f, F)) pinned = 1;
+        if (ysig__fp_entry(g, c, f) == 2 || !ysig__call_gt(c, t, 2, seq) || !ysig__fp_meets(g, f, F)) continue;
+        while (s > cu->c_tail && c->gid && cu->calls[(s - 1) % (uint64_t)cu->C].gid == c->gid) s--;
+        pos = s;
+        break;
     }
-    /* at the log's start, the place is known only after a barrier or
-     * when no input before the window is later than t. With no checkpoint
-     * the log is not kept (a clear inside a run again leaves its calls
-     * after that one): nothing is known (residual 1414) */
-    if (cu->n_ck && !cu->grp_bad && cu->c_head - cu->c_tail < (uint64_t)cu->C &&
-        (pos > cu->c_tail || (cu->n_ck && (cu->ck[cu->ck0].bar || cu->ck[cu->ck0].cover <= t)))) {
-        /* nothing logged after its place but its own calls: made where it is */
+    /* a call before the window that must follow the group (the oldest
+     * image's keys): its place is before the window (arm_past_far below).
+     * v0.7.0 never pins: the calls that must follow it move */
+    if (!cu->n_ck || ysig__ck_late(g, cu->ck0, F, t, 2, seq)) pinned = 1;
+    /* nothing logged must follow it but the gap's let-ins: made where it
+     * is. With no checkpoint the log is not kept (a clear inside a run
+     * again leaves its calls after that one): nothing is known (1414) */
+    if (cu->n_ck && !cu->grp_bad && cu->c_head - cu->c_tail < (uint64_t)cu->C && pos == UINT64_MAX) {
         int nothing = 1;
-        for (s = pos; s < cu->c_head && nothing; s++)
-            if (s < from || cu->calls[s % (uint64_t)cu->C].wp) nothing = 0;
-        if (nothing) {
-            if (pinned) g->st.arm_past_pinned++;
+        for (s = from; s < cu->c_head && nothing; s++)
+            if (cu->calls[s % (uint64_t)cu->C].wp) nothing = 0;
+        if (nothing && !pinned) {
             ysig__dis_last(g);
             logged = ysig__log(g, e);
             for (s = from; s < cu->c_head; s++)
@@ -5883,7 +5905,8 @@ static void ysig__arm_past(ysig_graph* g, ysig_entry* e, uint64_t seq) {
             return;
         }
     }
-    kslot = cu->grp_bad ? -1 : ysig__ck_at(cu, pos, t);
+    if (pos == UINT64_MAX) pos = from;
+    kslot = cu->grp_bad || pinned ? -1 : ysig__ck_at(cu, pos, INT64_MAX);
     if (kslot < 0 || cu->c_head - cu->c_tail >= (uint64_t)cu->C || ng > YSIG__WAIT_CALLS) {
         if (cu->full || kslot >= 0 || cu->grp_bad || ng > YSIG__WAIT_CALLS) g->st.arm_past_full++;
         else g->st.arm_past_far++;
@@ -5894,16 +5917,15 @@ static void ysig__arm_past(ysig_graph* g, ysig_entry* e, uint64_t seq) {
         ysig__arm_made(g, node, t, t, logged ? cu->c_head - 1 : UINT64_MAX);
         return;
     }
-    if (pinned) g->st.arm_past_pinned++;
     ysig__dis_last(g);
     logged = ysig__log(g, e);
     end = cu->c_head;
     {
-        /* the gap's calls, out of [from, end), as one block at pos: the
-         * waiting groups placed in the gap go back to waiting, and each of
-         * its own calls lets in at t what it meets, right before it (H13).
-         * At t no group can come in that N did not let in, so the block
-         * is no longer than the gap. */
+        /* the gap's calls, out of [from, end), as one block: the waiting
+         * groups placed in the gap go back to waiting, and each of its own
+         * calls lets in at t what it meets, right before it (H13). At t no
+         * group can come in that N did not let in, so the block is no
+         * longer than the gap. */
         ysig__call* blk = cu->blk;
         int nb = 0;
         ysig__gap_unplace(g, from, end);
@@ -5921,10 +5943,14 @@ static void ysig__arm_past(ysig_graph* g, ysig_entry* e, uint64_t seq) {
         /* the rest of the gap's disarms cancel at t (the run again makes
          * them, from the log) */
         ysig__gap_disarms(g, t, 0);
-        /* [pos, from) moves up by nb, the block goes in at pos */
-        for (q = from; q > pos; q--) cu->calls[(q - 1 + (uint64_t)nb) % (uint64_t)cu->C] = cu->calls[(q - 1) % (uint64_t)cu->C];
-        for (w = 0; w < nb; w++) cu->calls[(pos + (uint64_t)w) % (uint64_t)cu->C] = blk[w];
+        for (w = 0; w < nb; w++) cu->calls[(from + (uint64_t)w) % (uint64_t)cu->C] = blk[w];
         cu->c_head = from + (uint64_t)nb;
+        for (w = 0; w < g->dw; w++) pf[w] = F[w];
+        for (q = from; q < cu->c_head; q++) {
+            (void)ysig__fp_entry(g, &cu->calls[q % (uint64_t)cu->C], f);
+            for (w = 0; w < g->dw; w++) pf[w] |= f[w];
+        }
+        pos = pos < from ? ysig__late_move_k(g, from, pos, pf, t, 2, seq) : from;
         cu->arm_pos = pos + (uint64_t)nb - 1;
         cu->n_grp_dis = 0;
         for (w = 0; w < nb && cu->n_grp_dis < 16; w++)
