@@ -261,13 +261,21 @@ struct pl_v2 {
                                 * take (N1)                                */
     int64_t dr_n, dr_g;        /* hit drains so far; the latest's horizon   */
     int64_t take_dr;           /* dr_n at the latest take                   */
+    int took_rs, took_k;       /* the state the latest take left and its
+                                * exit's place in the list (n_exits: a
+                                * steps' end, which a hit at its time beats;
+                                * -1: none). R5 (i): a hit at the take's time
+                                * of an exit earlier in the list would have
+                                * won by rule 4, so it came late           */
     int64_t* arm_tk;           /* per node: dr_n at its arm, and at the    */
     int64_t* arm_tk_prev;      /* arm before: a hit of an arm that a drain
                                 * before a take followed, earlier than that
                                 * drain's horizon, came late               */
     int64_t g_der;             /* the horizon of the last derived drain     */
-    int64_t arm_min;           /* the earliest arm or recenter since then:
-                                * an event before it is no arm's (N1)      */
+    int64_t arm_min;           /* the earliest state call placed since then
+                                * (an arm, a disarm_at, a recenter): an
+                                * event before it is no such call's (N1,
+                                * R5 (ii))                                */
     int64_t lag_max;           /* the trial's largest; YTR_MISSING_NS none */
     bool resp_pend, resp_pend_responded;   /* a key response's end later */
     int64_t resp_pend_t;       /* than the horizon waits for it            */
@@ -2013,6 +2021,7 @@ int pl_v2_load(pl_player* p) {
         memset(v->arm_tk, 0, sizeof(int64_t) * (size_t)v->nn);
         memset(v->arm_tk_prev, 0, sizeof(int64_t) * (size_t)v->nn);
         v->g_used = v->g_der = INT64_MIN;
+        v->took_rs = -1;
         v->arm_min = INT64_MAX;
         v->lag_max = YTR_MISSING_NS;
         if (!v->st_armed || !v->dis_t || !v->der) return -1;
@@ -2569,6 +2578,7 @@ static int v2_disarm_state(pl_player* p, pl_v2* v, int64_t t) {
         int node = v->st_armed[k];
         if (!ysig_disarm_at(&v->g, node, t)) { pl_fail(p, "template '%s': cannot disarm node %d", v->def->name, node); return -1; }
         v->dis_t[node] = t;
+        if (t < v->arm_min) v->arm_min = t;   /* R5 (ii): a state call placed */
     }
     v->n_st_armed = 0;
     /* a disarm placed before calls already made runs the window again */
@@ -2799,9 +2809,11 @@ static bool v2_from_due(pl_player* p, const pl_v2* v) {
 /* An exit (or a steps' end) taken at t on frame f: its lag (the poll's
  * time, the frame's onset in --sim, minus t: trials.csv
  * exit_lag_max_s, session.json exit_lag), and the horizon it used (N1) */
-static void v2_took(pl_player* p, pl_v2* v, int64_t t, const yscr_frame* f) {
+static void v2_took(pl_player* p, pl_v2* v, int64_t t, const yscr_frame* f, int k) {
     pl_v2_session* S = p->v2s;
     int64_t lag = f->onset - t;
+    v->took_rs = v->cur;
+    v->took_k = k;
     if (v->lag_max == YTR_MISSING_NS || lag > v->lag_max) v->lag_max = lag;
     if (S->lag_n == 0 || lag > S->lag_max) S->lag_max = lag;
     S->lag_n++;
@@ -2863,7 +2875,7 @@ static int v2_take(pl_player* p, pl_v2* v, const v2_exit* x, int64_t t, const ys
         v2_outcome(v, x->outcome, x->outcome_text);
         if (r && r->def >= 0 && !stays) v2_srow_close(p, v, x->code, t);
     }
-    v2_took(p, v, t, f);
+    v2_took(p, v, t, f, r && x >= r->exits && x < r->exits + r->n_exits ? (int)(x - r->exits) : -1);
     return v2_enter(p, v, x->to, t, f, hit);
 }
 
@@ -2896,7 +2908,7 @@ static int v2_steps_end(pl_player* p, pl_v2* v, const yscr_frame* f) {
         if (recount && !p->from_landed) v->from_pending = v2_from_due(p, v);
         if (to < 0 || v->rs[to].def != r->def || v->rs[to].first) v2_srow_close(p, v, -1, t);
     }
-    v2_took(p, v, t, f);
+    v2_took(p, v, t, f, r->n_exits);
     return v2_enter(p, v, to, t, f, false);
 }
 
@@ -2961,6 +2973,15 @@ static int v2_hits(pl_player* p, pl_v2* v, const yscr_frame* f) {
                  * arm met at once): taken as its, so no false stop */
                 int64_t tk = h[i].t >= v->arm_t[h[i].node] ? v->arm_tk[h[i].node] : v->arm_tk_prev[h[i].node];
                 if (tk < v->take_dr) return v2_beyond(p, v, "a hit", h[i].t, v->g_used);
+            } else if (h[i].t == v->take_t && v->took_rs >= 0 && v->took_k > 0) {
+                /* R5 (i): at the take's own time, a hit of an arm the take
+                 * followed whose exit comes earlier in the list than the
+                 * one taken would have won by rule 4: it came late */
+                int64_t tk = h[i].t >= v->arm_t[h[i].node] ? v->arm_tk[h[i].node] : v->arm_tk_prev[h[i].node];
+                const v2_rs* tr = &v->rs[v->took_rs];
+                int j;
+                for (j = 0; tk < v->take_dr && j < v->took_k && j < tr->n_exits; j++)
+                    if (tr->exits[j].kind == X_HIT && tr->exits[j].node == h[i].node) return v2_beyond(p, v, "a hit", h[i].t, v->take_t);
             }
             v->ctl[ci].hit_t = h[i].t;
             v->ctl[ci].has_hit = true;
@@ -3197,6 +3218,7 @@ int pl_v2_trial_start(pl_player* p, const yscr_frame* f) {
             int r;
             for (r = 0; r < p->def->n_sigroles; r++) S->newest[r] = INT64_MIN;
             v->g_used = v->g_der = INT64_MIN;
+            v->took_rs = -1;
             v->arm_min = INT64_MAX;
         }
         {
@@ -3598,8 +3620,10 @@ int pl_v2_on_mark(pl_player* p, const ytl_event* e) {
         if (s->point->kind == YEXP_V_ARRAY) {
             if (v2_item(p, &s->point->items[0], -1, &x, P_NUM) < 0 || v2_item(p, &s->point->items[1], -1, &y, P_NUM) < 0) return -1;
         } else if (v2_item(p, s->point, 0, &x, P_NUM) < 0 || v2_item(p, s->point, 1, &y, P_NUM) < 0) return -1;
-        for (ti = 0; ti < S->n_t; ti++)
+        for (ti = 0; ti < S->n_t; ti++) {
             if (S->t[ti] && S->t[ti]->has_graph && !ysig_recenter(&S->t[ti]->g, s->target.index, x, y, e->onset)) S->recenter_skipped++;
+            if (S->t[ti] && e->onset < S->t[ti]->arm_min) S->t[ti]->arm_min = e->onset;   /* R5 (ii) */
+        }
         if (v->arm_wait >= 0 && e->id == v->arm_wait_id && v->cur == v->arm_wait) {
             /* the until after a recenter arms at the call (3.12) */
             const v2_rs* r = &v->rs[v->arm_wait];

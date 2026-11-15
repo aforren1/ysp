@@ -701,7 +701,10 @@ A timed candidate (an `after_s`, a timeout, the steps' end, a response's
 end) that the frame's window reaches but that is later than `G` waits
 for `G`, as a hit does. So no candidate is taken while a hit at or
 before its time can still come: a hit that becomes final late cannot
-lose to a timed exit that is later in time. After a take at t, the next
+lose to a timed exit that is later in time. With every bound 0, a timed
+candidate is taken by the lead rule as in 0.11.0, and a hit later than
+the poll can lose to it, as in 0.11.0 (R6, 2026-11-15). After a take at
+t, the next
 state arms at t (a past arm; sig.h runs the window again), and its hits
 up to `G` are drained in the same pass, so a chain of states at one
 frame runs as in 0.11.0.
