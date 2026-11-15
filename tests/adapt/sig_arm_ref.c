@@ -3,6 +3,25 @@
  * 09ecfb2, amended in b6676f4) and the graph's other rules in sig.md. It
  * does not read the header's internals.
  *
+ * Review of be18843 (the second reviewer, 2026-11-15):
+ *   - Pins in late mode 4 read the clamped key times (ruling 8): a feed at
+ *     the last barrier's time comes before a group whose tau is before that
+ *     time by key, which is R, not a pin. The header never pins in 0.7.0
+ *     (a place before the window falls back as arm_past_far). Before, such
+ *     a feed made the group "pinned" by its raw time and the oracle wanted
+ *     arm_past_pinned (seed 20261123 OFF=l case 992: a flush at 13.967 ms,
+ *     dev 2 at 13.967 ms after it, then an arm at 11.989 ms).
+ *     SIG_ORACLE_PINRAW=1 keeps the raw-time pin.
+ *   - B's waiting arms (the B-cannot test): an arm call lets in, right
+ *     before itself, a waiting group at its own time whose arm call is
+ *     earlier (S3, H16), as the header with no window does; the strict
+ *     test made a false B-cannot reason 2 (seed 20261115 late on, case
+ *     1094). SIG_ORACLE_BARMSTRICT=1 keeps the strict test.
+ *   - The predicate reads N(G) by footprint (ruling 4 as amended in
+ *     0b4410e): only an input that meets F(G) counts, a frame or a settle
+ *     always. It changes the predicate's tallies only, not the two
+ *     targets. SIG_ORACLE_PRED_NALL=1 keeps every input.
+ *
  * Fixes at 43e2d10 (the builder's findings): drain() with no derived list
  *   (the hits-only drains at arm calls and past 40 queued hits) no longer
  *   drains derived events; with SIG_ORACLE_DERIVED_TO the end check
@@ -1178,6 +1197,25 @@ static void group_triggers(int gi, int at_end) {
 }
 
 /* Rule 2: the place of a past group; pinned is set */
+static long g_r9_pend;     /* (rev2) reason-9 tests put off: the disarm's gap still open */
+/* (rev2, debug) SIG_ORACLE_R9PEND_CASE=n (-1: every case): a disarm in no
+ * group whose gap is still open (no arm, input or barrier after it in call
+ * order yet) is not reason 9 now: an arm can still close the gap into its
+ * own group (case 1444 of seed 20261115, late on: disarm 150 joins group
+ * 153 at 97.871 ms). B runs R again when that arm moves it. Not for ctest:
+ * a gap that an input ends never runs B again, so a real reason 9 there
+ * would go unflagged */
+static int r9_pending(int ci) {
+    const char* v = getenv("SIG_ORACLE_R9PEND_CASE");
+    long n;
+    if (!v) return 0;
+    n = atol(v);
+    if (n >= 0 && n != g_case) return 0;
+    for (n = 0; n < g_npend; n++) if (g_pend[n] == ci) return 1;
+    return 0;
+}
+static long g_barm_incl;   /* (rev2) B's arm let-ins at equal tau taken (S3) */
+static long g_pin_clamped;   /* (rev2) pins read away by the clamp (ruling 8) */
 static int g_may_pin;   /* (8594b73) an input of any footprint, later than tau, before the place */
 static int rule2_place(const group* G, int* pinned) {
     int p, i, lb = -1;
@@ -1203,6 +1241,10 @@ static int rule2_place(const group* G, int* pinned) {
     }
     for (i = lb + 1; i < p; i++)
         if ((g_R[i].flags & E_INPUT) && g_R[i].time > G->tau && (g_R[i].fp & G->fp)) {
+            /* (rev2) in late mode 4 the pin reads the clamped key times
+             * (ruling 8): a feed at the barrier's time before a group whose
+             * tau is before it is R's order by key, not a pin */
+            if (g_late >= 4 && !getenv("SIG_ORACLE_PINRAW") && clampt(g_R[i].time, g_R[i].ci) <= clampt(G->tau, G->arm_ci)) { g_pin_clamped++; continue; }
             if (getenv("SIG_ORACLE_DEBUG") && !*pinned) printf("  pin: R[%d] call %d (time %.3f) before place %d after R[%d] call %d kind %d time %.3f\n", i, g_R[i].ci, g_R[i].time / 1e6, p, p - 1, p > 0 ? g_R[p - 1].ci : -1, p > 0 ? g_c[g_R[p - 1].ci].kind : -1, p > 0 ? g_R[p - 1].time / 1e6 : 0.0);
             *pinned = 1;
         }
@@ -1353,6 +1395,14 @@ static void b_issue(const rent* e) {
                 continue;
             }
             if (meets && tt > g_bw_tau[w]) continue;                     /* let in first, as R has it */
+            /* (rev2) S3, H16: an arm lets in, right before itself, a waiting
+             * group at its own time whose arm call is earlier (the header
+             * with no window does the same); strict here, it made a false
+             * B-cannot reason 2 (seed 20261115 late on, case 1094: arms at
+             * 1.895 ms, B's N 1.895 ms). SIG_ORACLE_BARMSTRICT=1 keeps the
+             * strict test; SIG_ORACLE_BARMINCL_CASE=n takes it in case n only */
+            if (meets && c->kind == C_ARM && tt == g_bw_tau[w] && g_bw_grp[w] >= 0 && g_gr[g_bw_grp[w]].arm_ci < e->ci && !getenv("SIG_ORACLE_BARMSTRICT") &&
+                (!getenv("SIG_ORACLE_BARMINCL_CASE") || atol(getenv("SIG_ORACLE_BARMINCL_CASE")) == g_case)) { g_barm_incl++; continue; }
             if (meets) {                                                  /* R has it first; B's graph would not */
                 if (!g_b_cannot) {
                     g_cannot_why = c->kind == C_ARM ? 2 : e->grp >= 0 ? (g_gr[e->grp].cls == 0 ? 3 : 4) : 5;
@@ -1388,6 +1438,7 @@ static void b_issue(const rent* e) {
         for (q = me - 1; q >= 0; q--) {
             const rent* x = &g_R[q];
             if ((x->flags & (E_INPUT | E_BARRIER)) || g_c[x->ci].kind == C_ARM || g_c[x->ci].kind == C_DISARM_AT) break;   /* ruling 1: a disarm_at ends the gap */
+            if (g_c[x->ci].kind == C_DISARM && x->grp != e->grp && x->time != e->time && r9_pending(x->ci)) { g_r9_pend++; break; }
             if (g_c[x->ci].kind == C_DISARM && x->grp != e->grp && x->time != e->time) { g_b_cannot = 1; g_cannot_why = 9;
                 if (getenv("SIG_ORACLE_DEBUG8")) { int z; printf("  case %ld reason 9: arm call %d (node %d grp %d tau %.3f) gap has disarm call %d (node %d grp %d time %.3f)\n", g_case, e->ci, c->node, e->grp, e->time / 1e6, x->ci, g_c[x->ci].node, x->grp, x->time / 1e6);
                     for (z = (me - 8 > 0 ? me - 8 : 0); z <= me + 3 && z < g_nR; z++) printf("    R[%d] call %d kind %d node %d grp %d time %.3f flags %d\n", z, g_R[z].ci, g_c[g_R[z].ci].kind, g_c[g_R[z].ci].node, g_R[z].grp, g_R[z].time / 1e6, g_R[z].flags); }
@@ -1730,6 +1781,15 @@ static int g_pred, g_pred_why;
 /* for the predicate's refinement: the input time at a group's place, and
  * the R index of the first input after it later than its tau that meets
  * its footprint (g_nR: none) */
+/* (rev2) N(G) by footprint (sig.md ruling 4 as amended in 0b4410e): only
+ * an input that meets F(G) counts; a frame or a settle meets every node
+ * (its entry's footprint is all). SIG_ORACLE_PRED_NALL=1: every input, the
+ * reading before the amendment */
+static int p1_nmeets(const rent* e, uint64_t fp) {
+    static int all = -1;
+    if (all < 0) all = getenv("SIG_ORACLE_PRED_NALL") != NULL;
+    return all || (e->fp & fp) != 0;
+}
 static int64_t p1_np(int gi, int* lastp) {
     int i, first = -1, last = -1;
     int64_t np = INT64_MIN;
@@ -1739,7 +1799,7 @@ static int64_t p1_np(int gi, int* lastp) {
             if (kd == C_RESET || kd == C_RESET_TRIAL) np = g_c[g_R[i].ci].t;
         }
         if (g_R[i].grp == gi) { if (first < 0) first = i; last = i; }
-        else if (first < 0 && (g_R[i].flags & E_INPUT) && g_R[i].time > np) np = g_R[i].time;
+        else if (first < 0 && (g_R[i].flags & E_INPUT) && p1_nmeets(&g_R[i], g_gr[gi].fp) && g_R[i].time > np) np = g_R[i].time;
     }
     *lastp = last;
     return np;
@@ -1777,7 +1837,7 @@ static int p1_bad(int gi) {
             if (kd == C_RESET || kd == C_RESET_TRIAL) np = g_c[g_R[i].ci].t;
         }
         if (g_R[i].grp == gi) { if (first < 0) first = i; last = i; }
-        else if (first < 0 && (g_R[i].flags & E_INPUT) && g_R[i].time > np) np = g_R[i].time;
+        else if (first < 0 && (g_R[i].flags & E_INPUT) && p1_nmeets(&g_R[i], G->fp) && g_R[i].time > np) np = g_R[i].time;
     }
     (void)lb;
     if (first < 0) return -1;             /* not in R yet (waits), or cancelled */
@@ -3296,6 +3356,9 @@ int main(int argc, char** argv) {
            cases, wrong, fellback, cannot, noroom, disarm_ahead, SIG_ARM_REF_SPEC);
     if (h9) printf("  set aside as H9-shaped (SIG_ORACLE_H9): %ld\n", h9);
     if (g_late >= 4) printf("  disarm_at exits (X1): the player's exit shape in %ld cases; the exception taken in %ld cases (%ld of them wrong, %ld wrong with no count); B let a group in at a disarm_at in %ld cases\n", lt_dxs, lt_dxe, lt_dxw, lt_dxu, lt_dxl);
+    if (getenv("SIG_ORACLE_R9PEND_CASE")) printf("  (rev2, debug) reason-9 tests put off on an open gap: %ld\n", g_r9_pend);
+    printf("  (rev2) B: waiting groups an arm let in at its own time (S3, inclusive by call order; SIG_ORACLE_BARMSTRICT=1 off): %ld\n", g_barm_incl);
+    if (g_late >= 4) printf("  (rev2) inputs before a past group read as no pin by the clamped key (ruling 8; SIG_ORACLE_PINRAW=1 off): %ld\n", g_pin_clamped);
     if (g_late) printf("  late voids checked by the pre-ruling text (a header without late_hits_voided): %ld\n", g_lv_old);
     if (g_late >= 3)
         printf(g_late == 4 ? "  late (9834173) also: let-in arms cancelled by key %ld cases;" : "  late (7a17176) also:", lt_cli), printf(" T1 closure let in a group in %ld cases; a late state call (T3) in %ld cases; inputs late only by a plain disarm at N: %ld in %ld cases; a plain disarm cancelling an arm at its own tau: %ld cases; a late state call inside a waiting group's span, meeting it: %ld cases; a disarm at or before tau of a group the closure let in, made after its arm (it escapes the cancel): %ld cases\n",
