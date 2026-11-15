@@ -5688,8 +5688,8 @@ static void ysig__late_unv(ysig_graph* g, uint64_t at, uint64_t n, const uint64_
             ysig__fp_or(g, fa, o->node);
             ok = ysig__fp_meets(g, F, fa);
             /* the exception's order at L reads the groups whose L it is: G's
-             * is the disarm_at now (put back when G is counted) */
-            if (dax) o->l_seq = cu->calls[at % C].cseq;
+             * is the late call now (put back when G is counted) */
+            o->l_seq = cu->calls[at % C].cseq;
             for (s = u0 <= zl ? u0 : zl + 1; ok && s < at; s++) {
                 const ysig__call* c = &cu->calls[s % C];
                 if (c->e.kind == YSIG_J_RESET || c->e.kind == YSIG_J_RESET_TRIAL) { nx = c->e.t; continue; }
@@ -5698,12 +5698,15 @@ static void ysig__late_unv(ysig_graph* g, uint64_t at, uint64_t n, const uint64_
                 /* a disarm_at at or after G's time is 2 (b)'s exception */
                 if (c->e.kind == YSIG_J_DISARM_AT && c->e.t >= o->t) continue;
                 if (ysig__fp_entry(g, c, f) != 1 || !ysig__fp_meets(g, f, o->F)) continue;
-                /* the 2 (b) exception with the disarm_at as L: a group H with
+                /* the 2 (b) exception with the late call as L: a group H with
                  * its arm and disarms only, later than G, waiting at its place,
-                 * that the disarm_at lets in too (X1), after G (the player's
-                 * 60 Hz seed 102401: an until's arm of r0 at tau, then a second
-                 * until's arm of r0 at tau, then the state's disarm_at at tau) */
-                if (dax && ysig__unv_x_ok(g, s, o->gid, o->t, nx, at, 1)) continue;
+                 * that L lets in too, after G. With a disarm_at as L (X1): the
+                 * player's 60 Hz seed 102401 (an until's arm of r0 at tau, then
+                 * a second until's arm of r0 at tau, then the state's
+                 * disarm_at at tau). With an input as L (L5): 2 (b) is one
+                 * condition, here as at G's going-in (the reviewer, 2026-11-15;
+                 * left out, it only counted more) */
+                if (ysig__unv_x_ok(g, s, o->gid, o->t, nx, at, dax)) continue;
                 ok = 0;
             }
             if (ok) { o->l_seq = cu->calls[at % C].cseq; continue; }

@@ -913,7 +913,11 @@ When the header tests:
   (the player's 60 Hz seed 102401: an until's arm at `τ`, the next
   until's arm of the same control at `τ`, then the state's disarm_at at
   `τ`; `sig_test` `test_v2_two_untils`); one that meets an exception group there
-  retests 2 (b) with R's order at `L` (L6).
+  retests 2 (b) with R's order at `L` (L6). With an input as the new `L`
+  (L5) the exception holds the same way: 2 (b) is one condition (the
+  reviewer, 2026-11-15). A group H between G and the input, that the
+  input lets in too and no input between H and it does, is not counted
+  (`sig_test` `test_v2_l5_exc`). Without it the retest only counted more.
 - At each input call: condition 3.
 - Condition 4: at G's place (a past group), at the trigger that lets G
   in, or at G's arm at the end of R.

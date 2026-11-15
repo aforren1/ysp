@@ -7250,6 +7250,50 @@ static void test_v2_past_letin(void) {
         CHECK(st.arm_unverified == v);
     }
 }
+/* L5 with 2 (b)'s exception (the reviewer, 2026-11-15): a late input
+ * that becomes G's L retests 2 (b) with the same exception as at G's
+ * going-in. d reads S = sum(devices 3, 6 and 5); x and h read device 6;
+ * K = all(x, h, device 5's source). G = [disarm x, arm d at 19] and
+ * H = [arm h at 20] wait; H's arm meets F(G) at K. Device 6 at 26 lets
+ * both in: exact (H is G's exception there). Device 5 at 22, late (device
+ * 6 at 26 is in R and meets it at K), goes before it: G's L now. H's arm
+ * lies between G and the new L, but the new L lets H in too (it meets K;
+ * it meets d at S, so it meets G's arm, 2 (a)), and no input between H
+ * and it does: exact, as a graph with no window
+ * given R (G and H wait; 22 lets both in, by key). The control: device 3
+ * at 22, late too (it meets device 6 at 26 at S), G's L now, but it does
+ * not meet H: H's L is not G's, the exception does not hold,
+ * late_unverified 1 (the text's reading; that graph makes H after 22,
+ * which commutes with H). */
+static void test_v2_l5_exc(void) {
+    ysig_stats st;
+    int v;
+    g_where = "L5, 2 (b)'s exception for a late input as L";
+    for (v = 0; v < 2; v++) {
+        ysig_node n[8];
+        n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 3, 1); n[0].history = 64;
+        n[1] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 6, 1); n[1].history = 64;
+        n[2] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 5, 1); n[2].history = 64;
+        n[3] = ysig_node_of(YSIG_OP_SUM, 0, 1); n[3].in[2] = 2; n[3].history = 64;                      /* S */
+        n[4] = ysig_node_of(YSIG_OP_DETECT, 3, -1); n[4].p[YSIG_DETECT_LEVEL] = 5; n[4].history = 64;   /* d */
+        n[5] = ysig_node_of(YSIG_OP_DETECT, 1, -1); n[5].p[YSIG_DETECT_LEVEL] = 5; n[5].history = 64;   /* x */
+        n[6] = ysig_node_of(YSIG_OP_DETECT, 1, -1); n[6].p[YSIG_DETECT_LEVEL] = 5; n[6].history = 64;   /* h */
+        n[7] = ysig_node_of(YSIG_OP_ALL, 5, 6); n[7].in[2] = 2;                                         /* K */
+        if (!rp_open(n, 8, 4, 0, false, false)) return;
+        rp_feed(10 * MS, 0, YIN_AXIS_POSITION, 3);
+        rp_feed(10 * MS, 0, YIN_AXIS_POSITION, 6);
+        rp_feed(10 * MS, 0, YIN_AXIS_POSITION, 5);
+        CHECK(ysig_disarm(&g_rp, 5));
+        CHECK(ysig_arm(&g_rp, 4, 19 * MS) && ysig_arm(&g_rp, 6, 20 * MS) && g_rp.wt->n == 2);
+        rp_feed(26 * MS, 0, YIN_AXIS_POSITION, 6);
+        ysig_get_stats(&g_rp, &st);
+        CHECK(g_rp.wt->n == 0 && st.arm_unverified == 0 && st.late_unverified == 0);
+        rp_feed(22 * MS, 0, YIN_AXIS_POSITION, v ? 5 : 3);
+        ysig_get_stats(&g_rp, &st);
+        CHECK(st.late_far == 0 && st.late_full == 0 && st.arm_unverified == 0);
+        CHECK(st.late_unverified == !v);
+    }
+}
 /* Ruling 2 extended (the oracle's case 350 of seed 20261115): a call whose
  * time is before the last barrier keys at the barrier's time, call order
  * deciding among them; so do the cancel by key and the let-in tests. d's
@@ -7774,6 +7818,7 @@ int main(void) {
     test_v2_s1();
     test_v2_n_tau();
     test_v2_past_letin();
+    test_v2_l5_exc();
     test_v2_bar_clamp();
     test_v2_lost_set();
     test_v2_exit_late();
