@@ -2679,13 +2679,44 @@ def t_v2_n1_derived(ctx):
             check(r.rc != 0 and "late_beyond_bound" in r.err, "%s: reports later than their bound stop the guard: exit %d %s" % (nm, r.rc, r.err[-300:]))
 
 
+def t_v2_resp_pend_first(ctx):
+    # a key response's end that waits for the horizon (a late hand role
+    # holds it back) is a candidate at the press's time: an after_s exit
+    # 1 ns later must not win, though both become final at the same poll
+    # (v2_resp_pend_first(); the model's harness, 500 Hz, 10 ms late, seed
+    # 100640). 9109ecd took the after_s: it asked for the pending end only
+    # after the timed exits. The control: the after_s 1 ns before the press
+    # wins, as the order of exits says
+    hand = {"hand": {"type": "position2d", "units": "display_px"}}
+    smp = os.path.join(ctx.out, "v2_resp_pend.csv")
+    write_samples(smp, [(0.005 * k, "hand", 9, 0) for k in range(100)])
+    script = os.path.join(ctx.out, "v2_resp_pend_part.csv")
+    with open(script, "w", newline="\n") as f:
+        f.write("trial_index,response,rt_s,hold_s\n0,f,0.061000000,0.020000000\n")
+    for v, after in ((0, 0.061000001), (1, 0.060999999)):
+        t = {"controls": {"home": {"control": "region", "of": "hand", "radius": 3}},
+             "response": {"role": "keys", "choices": ["f", "j"], "from": "s", "duration_s": 0.5, "response_ends_trial": False, "max_responses": 1},
+             "states": [{"name": "s0", "steps": [{"on": "s"}],
+                         "exits": [{"on": "home", "to": "end", "outcome": "home"}, {"on": "response", "to": "end", "outcome": "rsp"},
+                                   {"after_s": after, "to": "end", "outcome": "timed"}]}]}
+        nm = "v2_resp_pend_first" if v == 0 else "v2_resp_pend_first_control"
+        d = v2base({"t": t}, [{"name": "l", "trial": "t"}], roles=hand)
+        d["devices"] = {"keys": {"direction": "in", "family": ["keyboard"]}}
+        r = Run(ctx, nm, d, args=["--sim-gain", "hand=1", "--samples", smp, "--test-sample-late", "hand=0.01",
+                                  "--participant", "script:" + script, "--max-seconds", "20"])
+        out = [x["outcome"] for x in r.trials] if r.rc == 0 else []
+        want = ["rsp"] if v == 0 else ["timed"]
+        check(r.rc == 0 and out == want, "%s: a pending press against an after_s %s: exit %d %s %s" %
+              (nm, "1 ns later" if v == 0 else "1 ns earlier", r.rc, r.err[-300:] if r.rc else "", out))
+
+
 TESTS = [t_nested, t_if_unless, t_empty_and_zero, t_loop, t_requeue, t_track_ends, t_lookup_keys, t_triggers, t_after_timing, t_outcomes,
          t_method_update, t_seeds, t_refused, t_unused_stim, t_record_data, t_fix_density, t_fix_key_reapply, t_fix_stale_rdk,
          t_fix_timeout_values, t_fix_any_key, t_fix_from_in_if, t_fix_shown_twice, t_fix_vars_data, t_fix_sound_twice, t_fix_rdk_limit,
          t_fix_record_inherit, t_fix_backward_at, t_fix_refusals, t_fix_michelson_order, t_fix_texture_vars, t_fix_walk_budget,
          t_fix_data_set, t_fix_check_all_leaves, t_fix_release_order, t_fix_key_var_reapply,
          t_r2_release_other_template, t_r2_yield_draws_nothing, t_r2_low, t_r2_relaxed, t_r4_leaf_loop_done_track, t_r4_requeue_full,
-         t_r5_wait_final, t_r6_allow_below, t_v2_states, t_v2_until, t_v2_hand, t_v2_rule5, t_v2_review2, t_v2_review3, t_v2_f34, t_v2_ties, t_v2_review4, t_v2_review5, t_v2_findings, t_v2_corpus, t_v2_window_8k, t_v2_two_hands, t_v2_two_exits_one_ctl, t_v2_n1_tie, t_v2_n1_chain, t_v2_n1_derived]
+         t_r5_wait_final, t_r6_allow_below, t_v2_states, t_v2_until, t_v2_hand, t_v2_rule5, t_v2_review2, t_v2_review3, t_v2_f34, t_v2_ties, t_v2_review4, t_v2_review5, t_v2_findings, t_v2_corpus, t_v2_window_8k, t_v2_two_hands, t_v2_two_exits_one_ctl, t_v2_n1_tie, t_v2_n1_chain, t_v2_n1_derived, t_v2_resp_pend_first]
 
 
 def main():
