@@ -5874,6 +5874,17 @@ static void ysig__unv_place(ysig_graph* g, int kslot, uint64_t pos, int nb) {
             if (c->e.kind == YSIG_J_ARM) { armed = c->e.node; t = c->tr; ysig__fp_or(g, Fa, c->e.node); }
             if (c->e.kind == YSIG_J_DISARM) ysig__fp_or(g, Fa, c->e.node);
         }
+        {
+            /* v0.7.0: N(G) in R's order by key, which puts every input
+             * later than t after G, whatever its footprint: t when an input
+             * at t is in R, else before t (G waits at its place) */
+            N = t - 1;
+            if (k->cover == t) N = t;
+            for (u = k->call; u < cu->c_head && N < t; u++) {
+                const ysig__call* c = &cu->calls[u % (uint64_t)cu->C];
+                if (ysig__input_t(&c->e, &ti) && ti == t) N = t;
+            }
+        }
         bad = ysig__unv_spans(g, first, last, gid);
         /* 2 (c) at any N(G): a cancelled group's disarm, unless N(G) is t */
         if (!bad && armed < 0 && ysig__fp_any(g, Fa) && N != t) bad = 1;

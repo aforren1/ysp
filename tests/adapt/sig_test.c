@@ -4159,12 +4159,19 @@ static void test_arm_spec(void) {
         CHECK(g.wt->n == 1);   /* that input shares no node with it */
         if (what == 0) CHECK(ysig_disarm(&g, 1));
         else CHECK(ysig_set(&g, 1, YSIG_DETECT_LEVEL, 100));
-        CHECK(g.wt->n == 0 && ((ysig__det_st*)g.nd[1].st)->t_arm == 60 * MS);
+        /* v0.7.0: a plain disarm is at N (70 ms, the ruling): it lets the
+         * arm in first. A set is at N(F(c)), 40 ms (only device 1 reaches
+         * the detect): before the arm's 60 ms, it lets nothing in, and the
+         * arm still waits ("The time of a call") */
+        if (what == 0) CHECK(g.wt->n == 0 && ((ysig__det_st*)g.nd[1].st)->t_arm == 60 * MS);
+        else CHECK(g.wt->n == 1);
         /* a disarm takes effect at the end of its gap (S1): the next input */
         e = PEN_E(75 * MS, 2, 0, 0, YIN_TIER_2); ysig_feed(&g, &e);
         ysig_get_stats(&g, &st);
         CHECK(st.arm_ahead_cancelled == 0);
-        CHECK(((ysig__det_st*)g.nd[1].st)->armed == (what == 1));
+        /* the disarm ended the arm; after the set the arm still waits
+         * (device 2's input does not reach it) */
+        CHECK(!((ysig__det_st*)g.nd[1].st)->armed && g.wt->n == (what == 1));
     }
     /* a barrier cancels every waiting arm; its group's set goes in first */
     n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 2); n[0].history = 64;
@@ -4266,9 +4273,11 @@ static void test_arm_spec2(void) {
     e = PEN_E(30 * MS, 1, 3, 0, YIN_TIER_2); ysig_feed(&g, &e);
     CHECK(ysig_arm(&g, 1, 20 * MS) && sp_hits(&g, h, 1, 20 * MS));
     n[1].p[YSIG_DETECT_ENTRY] = YSIG_ENTRY_ARM;
-    /* rule 2: a group's footprint has its set's nodes: input of the set's
-     * node at or before t, made after the 21 ms crossing, comes before the
-     * group, so the group comes after the crossing too (pinned) */
+    /* a group's footprint has its set's nodes: input of the set's node at
+     * or before t, made after the 21 ms crossing, comes before the group.
+     * v0.7.0 (R by key, L2): the group goes before the crossing all the
+     * same (the 19 ms input meets the set, not the crossing): not pinned,
+     * the arm at 20 is ready on the held 0 and the crossing is its hit */
     n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2); n[0].history = 64;
     n[2] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 2, 2); n[2].history = 64;
     n[3] = ysig_node_of(YSIG_OP_OFFSET, 2, -1);
@@ -4278,9 +4287,9 @@ static void test_arm_spec2(void) {
     e = PEN_E(21 * MS, 1, 10, 0, YIN_TIER_2); ysig_feed(&g, &e);
     e = PEN_E(19 * MS, 2, 0, 0, YIN_TIER_2); ysig_feed(&g, &e);
     CHECK(ysig_set(&g, 3, YSIG_OFFSET_D_X, 1));
-    CHECK(ysig_arm(&g, 1, 20 * MS) && ysig_detected(&g, h, 256) == 0);
+    CHECK(ysig_arm(&g, 1, 20 * MS) && sp_hits(&g, h, 1, 21 * MS));
     ysig_get_stats(&g, &st);
-    CHECK(st.arm_past_pinned == 1);
+    CHECK(st.arm_past_pinned == 0);
     /* rule 3: input at the waiting arm's own time goes before it; a later
      * one lets it in */
     SP_OPEN(2, 4);
@@ -4552,13 +4561,14 @@ static int ex_open(ysig_node* n, int K) {
     rp_feed(10 * MS, 0, YIN_AXIS_PEN_PRESSURE, 3);
     return 1;
 }
-/* 0.6.1: pending groups (docs/sig.md, "Pending groups"). Two hands, each a
- * device: lh (device 1) and rh (device 2), d on lh, e on rh (entry now,
- * a hit output). lh's sample at 30 ms is fed, rh's at 30 ms not yet, and
- * e is armed at 25 ms: its place is after rh's 20 ms sample, N(G) 20 ms,
- * and L not in R yet. The bimanual definition's entry (t_v2_two_hands).
- * rh9: rh's 20 ms value meets e's test (the arm's entry-now hit at its
- * call); calls: the window's log (0: the default) */
+/* Two hands, each a device: lh (device 1) and rh (device 2), d on lh, e on
+ * rh (entry now, a hit output). lh's sample at 30 ms is fed, rh's at 30
+ * ms not yet, and e is armed at 25 ms. The bimanual definition's entry
+ * (t_v2_two_hands). 0.6.1 made G (e's group) at its place, "pending" until
+ * L came. v0.7.0 classes a group by its own footprint: N(F(G)) is rh's
+ * 20 ms, so G is ahead and waits for rh's next sample (docs/sig.md, "Late
+ * input": "pending groups no longer arise"). rh9: rh's 20 ms value meets
+ * e's test; calls: the window's log (0: the default) */
 static void pg_open(int rh9, int calls) {
     ysig_node n[4];
     n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2); n[0].history = 64;
@@ -4572,25 +4582,32 @@ static void pg_open(int rh9, int calls) {
     rp_feed(20 * MS, 0, YIN_AXIS_POSITION, 1);
     rp_feed(20 * MS, rh9 ? 9 : 0, YIN_AXIS_POSITION, 2);
     rp_feed(30 * MS, 0, YIN_AXIS_POSITION, 1);
-    ysig_arm(&g_rp, 2, 25 * MS);   /* the first hand's control: L in R */
-    ysig_arm(&g_rp, 3, 25 * MS);   /* G, pending */
+    ysig_arm(&g_rp, 2, 25 * MS);   /* the first hand's control: past */
+    ysig_arm(&g_rp, 3, 25 * MS);   /* G: ahead by its footprint, waits */
 }
+/* e's hits since the last read: how many, and the last one's time */
+static int64_t g_pg_t;
 static int pg_e_hits(void) {
     ysig_hit h[8];
     int m, k, n = 0;
-    while ((m = ysig_detected(&g_rp, h, 8)) > 0) for (k = 0; k < m; k++) n += h[k].node == 3;
+    while ((m = ysig_detected(&g_rp, h, 8)) > 0)
+        for (k = 0; k < m; k++) if (h[k].node == 3) { n++; g_pg_t = h[k].t; }
     return n;
 }
-/* Pending groups and an input that lets in an overlapping group but not
- * them (the oracle's reason 6, with no fallback in the case; mutant 331).
+static int64_t pg_late_unv0(void);
+static int64_t pg_late_unv(void) {
+    ysig_stats st;
+    ysig_get_stats(&g_rp, &st);
+    return st.late_unverified;
+}
+/* The oracle's reason 6 shape (mutant 331 in 0.6.1), under T1's closure.
  * Sources s1 to s4 on devices 1 to 4; e on s3 (G), w on s2 (W); X =
  * all(w, e) gives G and W a node in common; Y = all(w, k), k on s1, makes
  * s1's input meet W but not G. Inputs to 20 ms on s1 to s3. W arms w at
- * 27 ms, ahead (it waits); s4 at 30 ms meets nothing; G arms e at 25 ms,
- * in the past and pending (its place after s3's 20 ms, nothing after it
- * meets it, W's calls wait outside the log). s1 at 31 ms lets W in and
- * not G: a graph with no window makes W, then G at G's L, where R has G
- * first (at its place). G is counted then. The control: no X */
+ * 27 ms and G arms e at 25 ms: both ahead by their footprints (v0.7.0),
+ * both wait. s1 at 31 ms lets W in, and with X, T1's closure lets G in
+ * right before it (it meets W, smaller key): R's order, exact. The
+ * control (no X): G still waits */
 static void pg_reason6(int with_x) {
     ysig_node n[9];
     int k;
@@ -4604,84 +4621,102 @@ static void pg_reason6(int with_x) {
     for (k = 1; k <= 3; k++) { rp_feed(10 * MS, 0, YIN_AXIS_POSITION, k); rp_feed(20 * MS, 0, YIN_AXIS_POSITION, k); }
     ysig_arm(&g_rp, 4, 27 * MS);   /* W, ahead */
     rp_feed(30 * MS, 0, YIN_AXIS_POSITION, 4);
-    ysig_arm(&g_rp, 5, 25 * MS);   /* G, pending */
-    CHECK(ex_unv() == 0 && g_rp.wt->n == 1);
+    ysig_arm(&g_rp, 5, 25 * MS);   /* G, ahead too */
+    CHECK(ex_unv() == 0 && g_rp.wt->n == 2);
     rp_feed(31 * MS, 0, YIN_AXIS_POSITION, 1);
-    CHECK(ex_unv() == with_x && g_rp.wt->n == 0);
+    CHECK(ex_unv() == 0 && g_rp.wt->n == (with_x ? 0 : 1));
+    CHECK(((ysig__det_st*)g_rp.nd[5].st)->t_arm == (with_x ? 25 * MS : 0));
 }
 
 static void test_pending(void) {
+    ysig_stats st;
     int k;
-    g_where = "pending groups";
+    g_where = "two hands (0.6.1's pending groups)";
     pg_reason6(1);
     pg_reason6(0);
-    /* L: rh's 30 ms sample decides it, exact; a crossing after it hits */
+    /* G waits; rh's 30 ms sample lets it in (L), exact; a crossing after
+     * it hits */
     pg_open(0, 0);
-    CHECK(ex_unv() == 0);
+    CHECK(ex_unv() == 0 && g_rp.wt->n == 1);
     rp_feed(30 * MS, 0, YIN_AXIS_POSITION, 2);
+    CHECK(g_rp.wt->n == 0);
     rp_feed(40 * MS, 9, YIN_AXIS_POSITION, 2);
-    CHECK(ex_unv() == 0 && pg_e_hits() == 1);
-    /* a frame is L too (every node) */
+    CHECK(ex_unv() == 0 && pg_e_hits() == 1 && g_pg_t == 40 * MS);
+    /* a frame lets it in too (every node); rh's 30 ms sample after it is a
+     * late input that becomes G's L ("Exactness for late calls", 2):
+     * placed before the frame, exact */
     pg_open(0, 0);
     rp_frame(33 * MS);
-    CHECK(ex_unv() == 0);
+    CHECK(ex_unv() == 0 && g_rp.wt->n == 0);
     rp_feed(30 * MS, 0, YIN_AXIS_POSITION, 2);
-    CHECK(ex_unv() == 0);
-    /* its own call: the arm's entry-now hit is read now, counted */
+    CHECK(ex_unv() == 0 && pg_late_unv() == 0);
+    /* rh's 20 ms value meets the test: 0.6.1 read the entry-now hit at the
+     * arm's call (counted). Now the arm waits; L makes it at 25 on the held
+     * 9: the hit at 25, exact */
     pg_open(1, 0);
-    CHECK(ex_unv() == 1);
-    /* an input at or before its time: R has it after the arm, counted */
-    pg_open(0, 0);
-    rp_feed(22 * MS, 9, YIN_AXIS_POSITION, 2);
-    CHECK(ex_unv() == 1);
-    pg_open(0, 0);
-    rp_feed(25 * MS, 9, YIN_AXIS_POSITION, 2);
-    CHECK(ex_unv() == 1);
-    /* the state ends: a disarm in no group, at the input time (30 ms):
-     * it lets the arm in and ends it, exact; no crossing hits after */
+    CHECK(ex_unv() == 0 && pg_e_hits() == 0);
+    rp_feed(30 * MS, 0, YIN_AXIS_POSITION, 2);
+    CHECK(ex_unv() == 0 && pg_e_hits() == 1 && g_pg_t == 25 * MS);
+    /* an input at or before its time comes before it in R (key: an input
+     * first at one time) and does not let it in: L makes it on that value
+     * (0.6.1 counted both) */
+    for (k = 22; k <= 25; k += 3) {
+        pg_open(0, 0);
+        rp_feed(k * MS, 9, YIN_AXIS_POSITION, 2);
+        CHECK(ex_unv() == 0 && g_rp.wt->n == 1);
+        rp_feed(30 * MS, 0, YIN_AXIS_POSITION, 2);
+        CHECK(ex_unv() == 0 && pg_e_hits() == 1 && g_pg_t == 25 * MS);
+    }
+    /* the state ends: a plain disarm, at N (30 ms, the ruling): it lets
+     * the arm in, which it then ends, exact; no crossing hits after */
     pg_open(0, 0);
     ysig_disarm(&g_rp, 3);
     rp_feed(31 * MS, 0, YIN_AXIS_POSITION, 1);   /* ends the disarm's gap */
     rp_feed(40 * MS, 9, YIN_AXIS_POSITION, 2);
     CHECK(ex_unv() == 0 && pg_e_hits() == 0);
-    /* a present group that meets it: at the input time, exact */
+    /* ysig_disarm_at() at the exit time 30: the same */
     pg_open(0, 0);
-    ysig_arm(&g_rp, 3, 30 * MS);
-    CHECK(ex_unv() == 0);
-    /* an ahead group, or a past one placed after it, that meets it: it
-     * waits too in a graph with no window, counted */
-    pg_open(0, 0);
-    ysig_arm(&g_rp, 3, 50 * MS);
-    CHECK(ex_unv() == 1);
-    pg_open(0, 0);
-    ysig_arm(&g_rp, 3, 26 * MS);
-    CHECK(ex_unv() >= 1);
-    /* a barrier: counted (the graph with no window cancels it there) */
+    CHECK(ysig_disarm_at(&g_rp, 3, 30 * MS) && g_rp.wt->n == 0);
+    rp_feed(40 * MS, 9, YIN_AXIS_POSITION, 2);
+    CHECK(ex_unv() == 0 && pg_e_hits() == 0);
+    /* another arm of e, at 30, 50 or 26 ms: ahead by its footprint too,
+     * both wait (0.6.1 counted G) */
+    for (k = 0; k < 3; k++) {
+        static const int at[3] = { 30, 50, 26 };
+        pg_open(0, 0);
+        ysig_arm(&g_rp, 3, at[k] * MS);
+        CHECK(ex_unv() == 0 && g_rp.wt->n == 2);
+    }
+    /* a barrier cancels the waiting arm (0.6.1 counted G) */
     pg_open(0, 0);
     ysig_flush(&g_rp);
-    CHECK(ex_unv() == 1);
+    ysig_get_stats(&g_rp, &st);
+    CHECK(ex_unv() == 0 && g_rp.wt->n == 0 && st.arm_ahead_cancelled == 1);
     pg_open(0, 0);
     ysig_reset_trial(&g_rp, 40 * MS);
-    CHECK(ex_unv() == 1);
-    /* the window's log drops G's calls before L (a 32-call log, the first
-     * hand alone for 40 calls): still decided by L, exact */
+    ysig_get_stats(&g_rp, &st);
+    CHECK(ex_unv() == 0 && st.arm_ahead_cancelled == 1);
+    /* the window's log drops the calls before L (a 32-call log, the first
+     * hand alone for 40 calls): G waits outside the log, L lets it in */
     pg_open(0, 32);
     for (k = 0; k < 40; k++) rp_feed((31 + k) * MS, 0, YIN_AXIS_POSITION, 1);
-    CHECK(ex_unv() == 0);
+    CHECK(ex_unv() == 0 && g_rp.wt->n == 1);
     rp_feed(80 * MS, 0, YIN_AXIS_POSITION, 2);
-    CHECK(ex_unv() == 0);
+    CHECK(ex_unv() == 0 && g_rp.wt->n == 0);
 }
+
+static int64_t pg_late_unv0(void) { return pg_late_unv(); }
 
 static void test_arm_exact(void) {
     ysig_node n[5];
     int v;
     g_where = "exactness";
     {
-        /* condition 1: a waiting group let in between another's calls. y
-         * (on x's hit output) waits at 30 ms with a set of X, x at 20 ms;
-         * device 3's input lets y's group in (it meets X), y's arm lets x
-         * in after the set: x is inside y's block (1), and y's L meets
-         * only the set (2 (a)) */
+        /* condition 1: a waiting group let in between another's calls (0.6.x).
+         * y (on x's hit output) waits at 30 ms with a set of X, x at 20 ms;
+         * device 3's input lets y's group in (it meets X); 0.6.x let x in
+         * after the set, inside y's block (1), and y's L meets only the set
+         * (2 (a)) */
         ysig_node m[7];
         m[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2); m[0].history = 64;
         m[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1); m[1].p[YSIG_DETECT_LANE] = 0; m[1].p[YSIG_DETECT_LEVEL] = 5; m[1].p[YSIG_DETECT_START] = 1;
@@ -4698,7 +4733,11 @@ static void test_arm_exact(void) {
         ysig_arm(&g_rp, 2, 30 * MS);
         rp_feed(25 * MS, 0, YIN_AXIS_POSITION, 2);   /* N(x) 25: x fails 1 alone */
         rp_feed(35 * MS, 0, YIN_AXIS_PEN_PRESSURE, 3);
-        CHECK(g_rp.wt->n == 0 && ex_unv() == 2);
+        /* v0.7.0: T1's closure lets x in right before y's group (it meets
+         * y, smaller key), not inside its block: condition 1 holds for x,
+         * and N(x) is 25 (device 2), past its 20: exact by 2. y's L meets
+         * only the set (2 (a)): y alone is counted */
+        CHECK(g_rp.wt->n == 0 && ex_unv() == 1);
     }
     /* 2 (a): L meets the group's set, not its arm (device 3 lets in d1's
      * group with a set of X); the control: device 1's input, which meets
@@ -4899,11 +4938,15 @@ static void test_arm_exact(void) {
         if (v == 1 || v == 2) ysig_disarm(&g_rp, 5);
         else ysig_set(&g_rp, 4, YSIG_OFFSET_D_X, 1);
         CHECK(g_rp.wt->n == 1);
-        ysig_set(&g_rp, 1, YSIG_DETECT_LEVEL, 4);       /* lets d1 in */
-        CHECK(g_rp.wt->n == 0);
+        /* v0.7.0: the set is at N(F(c)), 10 ms (device 1 alone reaches d1):
+         * earlier than d1's 20, it lets nothing in (0.6.x: at N, 30 ms, it
+         * let d1 in, and the shapes above counted 1 or 4). d1 waits; device
+         * 3's input does not meet it; nothing is counted */
+        ysig_set(&g_rp, 1, YSIG_DETECT_LEVEL, 4);
+        CHECK(g_rp.wt->n == 1);
         if (v >= 2) ysig_arm(&g_rp, 5, 30 * MS);
         rp_feed(31 * MS, 0, YIN_AXIS_PEN_PRESSURE, 3);
-        CHECK(ex_unv() == (v > 0));
+        CHECK(ex_unv() == 0 && g_rp.wt->n == 1);
     }
     /* (d) the reviewer's 1137: a present arm (of d2, at N) lets d1 in
      * right before itself, after its own group's disarm of d3: d1 is in
@@ -4922,8 +4965,12 @@ static void test_arm_exact(void) {
         if (v == 1) ysig_disarm(&g_rp, 5);
         if (v == 2) ysig_set(&g_rp, 4, YSIG_OFFSET_D_X, 1);
         CHECK(g_rp.wt->n == 1);
-        ysig_arm(&g_rp, 2, 30 * MS);   /* present: lets d1 in (20 <= 30) */
-        CHECK(g_rp.wt->n == 0 && ex_unv() == (v > 0));
+        /* v0.7.0, classes by the group's footprint: the arm alone (v 0) is
+         * ahead (only device 1 reaches d2, at 10 ms) and waits too, letting
+         * nothing in. With the disarm of d3 or the set of X, device 3's 30
+         * ms reaches the group: present, it lets d1 in as before */
+        ysig_arm(&g_rp, 2, 30 * MS);
+        CHECK(g_rp.wt->n == (v ? 0 : 2) && ex_unv() == (v > 0));
     }
     for (v = 0; v < 2; v++) {
         n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 2); n[0].history = 64;
@@ -4967,7 +5014,9 @@ static void test_arm_exact(void) {
         if (v == 0) rp_feed(20 * MS, 0, YIN_AXIS_POSITION, 1);
         else if (v == 1) rp_feed(25 * MS, 0, YIN_AXIS_POSITION, 1);
         else rp_feed(20 * MS, 0, YIN_AXIS_PEN_PRESSURE, 3);
-        CHECK(ex_unv() == (v == 0));
+        /* v0.7.0: device 1's 20 ms sample is a late input, placed before
+         * the group (key 20 < 25), not a late report: nothing counted */
+        CHECK(ex_unv() == 0 && pg_late_unv0() == 0);
     }
 }
 
@@ -4990,7 +5039,10 @@ static void test_arm_repro(void) {
     ysig_get_stats(&g_rp, &s0);
     ysig_arm(&g_rp, 2, 5 * MS);
     ysig_get_stats(&g_rp, &s1);
-    CHECK(s1.arm_past_pinned - s0.arm_past_pinned == 1);
+    /* v0.7.0: never pinned; a call before the window that must follow the
+     * group (the frames, by the oldest image's keys) puts its place before
+     * the window: arm_past_far */
+    CHECK(s1.arm_past_pinned == s0.arm_past_pinned && s1.arm_past_far - s0.arm_past_far == 1);
     /* H2: a disarm in a waiting group cancels when that group goes in */
     n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 2);
     n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1); n[1].p[YSIG_DETECT_LANE] = 0; n[1].p[YSIG_DETECT_LEVEL] = 5; n[1].p[YSIG_DETECT_START] = 1;
@@ -5130,10 +5182,9 @@ static void test_arm_repro(void) {
         ysig_get_stats(&g_rp, &s1);
         CHECK(s1.arm_past_full == 0 && s1.arm_past_off == 0);
     }
-    /* S3: an arm call lets in a waiting group it meets at or before its
-     * time: a past arm at 15 ms of the same detect (input of another
-     * source moved N to 20) lets in the arm waiting at 15 ms, which R
-     * puts first (equal times in call order) */
+    /* S3 (0.6.x): an arm call lets in a waiting group it meets at or
+     * before its time: a past arm at 15 ms of the same detect (input of
+     * another source moved N to 20) let in the arm waiting at 15 ms */
     n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2);
     n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1); n[1].p[YSIG_DETECT_LANE] = 0; n[1].p[YSIG_DETECT_LEVEL] = 5; n[1].p[YSIG_DETECT_START] = 1;
     n[2] = src_node(YIN_KIND_PEN, YIN_AXIS_PEN_PRESSURE, 3, 1);
@@ -5143,7 +5194,12 @@ static void test_arm_repro(void) {
         rp_feed(10 * MS, 0, YIN_AXIS_POSITION, 1);
         CHECK(ysig_arm(&g_rp, 1, 15 * MS) && g_rp.wt->n == 1);
         rp_feed(20 * MS, 1, YIN_AXIS_PEN_PRESSURE, 3);
-        CHECK(ysig_arm(&g_rp, 1, 15 * MS) && g_rp.wt->n == 0);
+        /* v0.7.0: by its footprint the second arm is ahead too (device 3
+         * does not reach the detect): both wait; device 1's next sample
+         * lets both in, by key (call order at one time) */
+        CHECK(ysig_arm(&g_rp, 1, 15 * MS) && g_rp.wt->n == 2);
+        rp_feed(21 * MS, 0, YIN_AXIS_POSITION, 1);
+        CHECK(g_rp.wt->n == 0);
         CHECK(((ysig__det_st*)g_rp.nd[1].st)->armed && ((ysig__det_st*)g_rp.nd[1].st)->t_arm == 15 * MS);
     }
     /* H7: final-only rows with small logs and a fallback: every frame row
@@ -5264,7 +5320,10 @@ static void test_arm_repro(void) {
         ysig_arm(&g_rp, 2, 20 * MS);
         rp_feed(30 * MS, 0, YIN_AXIS_POSITION, 1);
         ysig_set(&g_rp, 1, YSIG_OFFSET_D_X, 3);
-        CHECK(g_rp.wt->n == 0);   /* let in at N for now (a read sees it) */
+        /* v0.7.0: the set is at N(F(c)), 10 ms (the stream it moves):
+         * earlier than a's 20, it lets nothing in (0.6.x: at N, 30 ms, it
+         * let a in for now) */
+        CHECK(g_rp.wt->n == 1);
         ysig_arm(&g_rp, 4, 15 * MS);
         CHECK(g_rp.wt->n == 1 && !((ysig__det_st*)g_rp.nd[2].st)->armed && ysig_value_of(&g_rp, 1)->v[0] == 4);
         rp_feed(35 * MS, 2, YIN_AXIS_PEN_PRESSURE, 3);
@@ -5284,7 +5343,11 @@ static void test_arm_repro(void) {
     for (f = 1; f <= 6; f++) {
         for (k = 0; k < 6; k++) rp_feed((f - 1) * 16 * MS + (k + 1) * MS, 0, YIN_AXIS_POSITION, 1);
         rp_frame(f * 16 * MS);
-        if (f >= 3) ysig_arm(&g_rp, 2, (f - 2) * 16 * MS);   /* past: a run again */
+        /* past: a run again. v0.7.0: inside the window (after the last
+         * frame but one, 3.5 ms into it); one at the frame before it is
+         * before the oldest image now (the samples after it must follow
+         * it: arm_past_far, not a pinned group placed in the window) */
+        if (f >= 3) ysig_arm(&g_rp, 2, (f - 1) * 16 * MS + 3500000);
     }
     ysig_flush(&g_rp);
     while ((m = ysig_derived(&g_rp, ev, 64)) > 0) got += m;
@@ -5447,7 +5510,10 @@ static void test_arm_repro(void) {
                     CHECK(s1.arm_past_full - s0.arm_past_full + s1.arm_past_far - s0.arm_past_far == 1);
                 }
             }
-        CHECK(stale > 0);
+        /* v0.7.0: the run again that a write-full log starts no longer
+         * leaves this state on these shapes (stale is 0 here); the check
+         * above stays for a shape that does */
+        (void)stale;
     }
     /* Residual 1650: a past arm lets a waiting group in at its place, not
      * at the end of the log. x (on y's hit output) waits at 20 ms; input
@@ -6532,6 +6598,166 @@ static void test_u(void) {
     }
 }
 
+/* v0.7.0, late input (docs/sig.md, "Late input"): a call goes into R by
+ * its key, and a late one runs the window again. */
+static int64_t g_lt_hit[8];
+static int lt_hits(void) {
+    ysig_hit h[8];
+    int m, k, n = 0;
+    while ((m = ysig_detected(&g_rp, h, 8)) > 0) for (k = 0; k < m && n < 8; k++) g_lt_hit[n++] = h[k].t;
+    return n;
+}
+static void lt_det_open(double hold_s, int K) {
+    ysig_node n[2];
+    n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 2); n[0].history = 64;   /* any device */
+    n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1); n[1].p[YSIG_DETECT_LANE] = 0; n[1].p[YSIG_DETECT_LEVEL] = 5;
+    n[1].p[YSIG_DETECT_START] = 1; n[1].p[YSIG_DETECT_REPEAT] = 1; n[1].p[YSIG_DETECT_HOLD] = hold_s; n[1].history = 64;
+    (void)rp_open(n, 2, K, 0, false, false);
+}
+static void test_late(void) {
+    ysig_stats st;
+    int v, k;
+    g_where = "late input";
+    /* a late report goes to its place: the crossing moves from 15 to 13 ms
+     * (the coordinator's ruling of 2026-11-15: the voided 15 ms hit counts
+     * in late_hits_voided, a guard stop; the oracle's case 763 of seed
+     * 20261115, reduced). The control: a late report that changes no hit
+     * handed out counts nothing */
+    for (v = 0; v < 2; v++) {
+        lt_det_open(0, 4);
+        rp_feed(1 * MS, 0, YIN_AXIS_POSITION, 1);
+        ysig_arm(&g_rp, 1, 1 * MS);
+        rp_feed(10 * MS, 0, YIN_AXIS_POSITION, 1);
+        rp_feed(15 * MS, 9, YIN_AXIS_POSITION, 1);
+        CHECK(lt_hits() == 1 && g_lt_hit[0] == 15 * MS);
+        rp_feed(13 * MS, v ? 0 : 9, YIN_AXIS_POSITION, 2);   /* device 2, late */
+        ysig_get_stats(&g_rp, &st);
+        if (!v) CHECK(lt_hits() == 1 && g_lt_hit[0] == 13 * MS && st.late_hits_voided == 1);
+        else CHECK(lt_hits() == 0 && st.late_hits_voided == 0);
+        CHECK(st.arm_hits_superseded == 0 && st.arm_hits_retracted == 0 && st.late_far == 0 && st.late_unverified == 0);
+    }
+    /* ysig_disarm_at() at a state's exit time, then a late report before
+     * that time (the player's path at a state's end): the report goes
+     * before the disarm (key 9 < 12), breaks the hold, and voids the hit
+     * at 10 that the disarm met (late_hits_voided). Not counted
+     * unverified: a disarm with a time is not deferred to its gap's end
+     * (S1). The control: a late report after the exit time (13 ms) is not
+     * late for the disarm: the hit stands */
+    for (v = 0; v < 2; v++) {
+        lt_det_open(0.01, 4);
+        rp_feed(0, 9, YIN_AXIS_POSITION, 1);
+        ysig_arm(&g_rp, 1, 0);
+        rp_feed(4 * MS, 9, YIN_AXIS_POSITION, 1);
+        rp_feed(8 * MS, 9, YIN_AXIS_POSITION, 1);
+        CHECK(ysig_disarm_at(&g_rp, 1, 12 * MS));
+        CHECK(lt_hits() == 1 && g_lt_hit[0] == 10 * MS);
+        rp_feed((v ? 13 : 9) * MS, 0, YIN_AXIS_POSITION, 2);
+        ysig_get_stats(&g_rp, &st);
+        CHECK(lt_hits() == 0 && st.late_hits_voided == (v ? 0 : 1) && st.late_unverified == 0);
+    }
+    /* the same with a plain ysig_disarm() (at N, 8 ms) and a late report at
+     * 8: in R the disarm's gap is open again after the report (S1), where
+     * the header made it at the report's call: late_unverified (the
+     * oracle's case 411 shape). The control: a report at 9, after the
+     * disarm's key, is not late for it */
+    for (v = 0; v < 2; v++) {
+        lt_det_open(0.01, 4);
+        rp_feed(0, 0, YIN_AXIS_POSITION, 1);
+        ysig_arm(&g_rp, 1, 0);
+        rp_feed(8 * MS, 0, YIN_AXIS_POSITION, 1);
+        CHECK(ysig_disarm(&g_rp, 1));
+        rp_feed((v ? 9 : 8) * MS, 0, YIN_AXIS_POSITION, 2);
+        ysig_get_stats(&g_rp, &st);
+        CHECK(st.late_unverified == !v);
+    }
+    /* a report before the last barrier is dropped (late_barrier), not fed */
+    lt_det_open(0, 4);
+    rp_feed(10 * MS, 1, YIN_AXIS_POSITION, 1);
+    ysig_reset_trial(&g_rp, 20 * MS);
+    ysig_get_stats(&g_rp, &st);
+    k = (int)st.fed;
+    rp_feed(15 * MS, 7, YIN_AXIS_POSITION, 2);
+    ysig_get_stats(&g_rp, &st);
+    CHECK(st.late_barrier == 1 && st.fed == k && ysig_value_of(&g_rp, 0)->v[0] != 7);
+    /* with no window: made at R's end, counted late_off */
+    lt_det_open(0, 0);
+    rp_feed(10 * MS, 1, YIN_AXIS_POSITION, 1);
+    rp_feed(5 * MS, 2, YIN_AXIS_POSITION, 2);
+    ysig_get_stats(&g_rp, &st);
+    CHECK(st.late_off == 1 && ysig_value_of(&g_rp, 0)->v[0] == 2);
+    /* with a window: R's value, the newest by time */
+    lt_det_open(0, 4);
+    rp_feed(10 * MS, 1, YIN_AXIS_POSITION, 1);
+    rp_feed(5 * MS, 2, YIN_AXIS_POSITION, 2);
+    ysig_get_stats(&g_rp, &st);
+    CHECK(st.late_off == 0 && ysig_value_of(&g_rp, 0)->v[0] == 1 && ysig_value_of(&g_rp, 0)->t == 10 * MS);
+    /* a late report before a frame: the frame's bound channel as R gives it
+     * differs from what was drawn: late_frames 1, once. The control: a
+     * report after the frame's onset is not late for it */
+    for (v = 0; v < 2; v++) {
+        ysig_node n[2];
+        n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 2); n[0].history = 64;
+        n[1] = ysig_node_of(YSIG_OP_BIND, 0, -1); n[1].p[0] = 0;
+        if (!rp_open(n, 2, 4, 0, false, false)) return;
+        rp_feed(10 * MS, 1, YIN_AXIS_POSITION, 1);
+        rp_frame(16 * MS);
+        CHECK(g_ch[0] == 1);
+        rp_feed((v ? 17 : 15) * MS, 5, YIN_AXIS_POSITION, 2);
+        rp_frame(32 * MS);
+        ysig_get_stats(&g_rp, &st);
+        CHECK(st.late_frames == !v && g_ch[0] == 5);
+    }
+    /* catchup_ns: images catchup_ns / 8 apart in input time, the oldest
+     * gone once the next oldest is catchup_ns behind: at 500 Hz (2 ms
+     * frames) with 8 images and 16 ms, the window keeps about 16 ms, and a
+     * report 30 ms late falls back (late_far); one 10 ms late is placed */
+    for (v = 0; v < 2; v++) {
+        ysig_node n[2];
+        ysig_desc d;
+        n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 2); n[0].history = 64;
+        n[1] = ysig_node_of(YSIG_OP_BIND, 0, -1); n[1].p[0] = 0;
+        memset(&d, 0, sizeof d);
+        d.nodes = n; d.n_nodes = 2; d.arena = g_rp_ar; d.catchup_frames = 8; d.catchup_ns = 16 * MS;
+        d.channels = g_ch; d.n_channels = 64;
+        d.arena_size = ysig_arena_size(&d);
+        if (!d.arena_size || d.arena_size > sizeof g_rp_ar || !ysig_open(&g_rp, &d)) { g_failures++; return; }
+        ysig_reset(&g_rp, 0);
+        for (k = 1; k <= 50; k++) { rp_feed(k * 2 * MS - MS, k, YIN_AXIS_POSITION, 1); rp_frame(k * 2 * MS); }
+        CHECK(g_rp.cu->n_ck >= 2 && g_rp.cu->n_ck <= 8);
+        CHECK(g_rp.cu->ck[(g_rp.cu->ck0 + g_rp.cu->n_ck - 1) % g_rp.cu->K].cover - g_rp.cu->ck[(g_rp.cu->ck0 + 1) % g_rp.cu->K].cover < 16 * MS);
+        rp_feed((v ? 90 : 70) * MS, 0, YIN_AXIS_POSITION, 2);
+        ysig_get_stats(&g_rp, &st);
+        CHECK(st.late_far == !v);
+    }
+    /* ysig_feed_n(): the same results as one ysig_feed() each (L7) */
+    {
+        static const int dev[8] = { 1, 1, 2, 1, 2, 2, 1, 2 };
+        static const int ms[8] = { 3, 9, 5, 12, 8, 14, 15, 11 };
+        yin_event ev[8];
+        ysig_value a[3];
+        ysig_stats sa, sb;
+        for (k = 0; k < 8; k++) {
+            memset(&ev[k], 0, sizeof ev[k]);
+            ev[k].t = ms[k] * MS; ev[k].type = YIN_SAMPLE; ev[k].kind = YIN_KIND_PEN; ev[k].control = YIN_AXIS_POSITION;
+            ev[k].device = (uint32_t)dev[k]; ev[k].x = (float)(k * 2); ev[k].stamp = YIN_TIER_2;
+        }
+        for (v = 0; v < 2; v++) {
+            lt_det_open(0.002, 4);
+            ysig_arm(&g_rp, 1, 0);
+            if (v) CHECK(ysig_feed_n(&g_rp, ev, 8) == 7);   /* device 2's 11 after its 14: dropped */
+            else for (k = 0; k < 8; k++) ysig_feed(&g_rp, &ev[k]);
+            rp_frame(16 * MS);
+            if (!v) { a[0] = *ysig_value_of(&g_rp, 0); a[1] = *ysig_value_of(&g_rp, 1); ysig_get_stats(&g_rp, &sa); k = lt_hits(); a[2].t = k ? g_lt_hit[0] : -1; }
+            else {
+                int m = lt_hits();
+                ysig_get_stats(&g_rp, &sb);
+                CHECK(!memcmp(&a[0], ysig_value_of(&g_rp, 0), sizeof a[0]) && !memcmp(&a[1], ysig_value_of(&g_rp, 1), sizeof a[1]));
+                CHECK(m == k && (m == 0 || g_lt_hit[0] == a[2].t) && sa.hits == sb.hits && sa.taken == sb.taken);
+            }
+        }
+    }
+}
+
 int main(void) {
     test_conventions();
     test_param_names();
@@ -6589,6 +6815,7 @@ int main(void) {
     test_disarm_at_gap_end();
     test_hit_whole_value();
     test_pending();
+    test_late();
     if (g_failures) { fprintf(stderr, "sig_test: %d failures\n", g_failures); return 1; }
     printf("sig_test: all checks passed\n");
     return 0;
