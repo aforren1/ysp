@@ -1157,8 +1157,10 @@ change that.
   feed and the other call not a feed. Lateness is the largest such difference in time. A call that is
   not late goes at the end of R, as before. A late call is an input
   (the case this subsection is for), a `ysig_disarm_at()` with an earlier
-  `t`, or a state call outside a group whose `N(F(c))` is earlier than a
-  meeting call already in R (T3).
+  `t`, a state call outside a group whose `N(F(c))` is earlier than a
+  meeting call already in R (T3), or a group whose key is smaller than a
+  meeting call already in R (a present group after a `ysig_disarm_at()`
+  with a later `t`, or after groups that X1 or R1 let in).
 
 **R as an order by key (replaces rules 2 and 4).** R holds the calls
 since the last barrier. Of two calls whose footprints meet, the one with
@@ -1621,6 +1623,16 @@ questions).**
    group's going-in, d38539c). Condition 4's gap ends at a
    `ysig_disarm_at` too, and a late disarm placed in a group's gap counts
    the group.
+6. (The coordinator, 2026-11-15.) A disarm's gap ends at the next input
+   call or barrier in call order ("Groups" defines gaps in call order;
+   ruling 1 adds `ysig_disarm_at()`), even when R places that input before
+   the disarm. Until then the disarm has not taken effect, and a read sees
+   its detect still armed. The same reading in the other direction: a call
+   made before the disarm does not end its gap, even when R places it after
+   the disarm (a `ysig_disarm_at()` with a later `t`). The reviewer's cases
+   379, 477, 557, 438, 462 and 690 at 5feeb5b end with such a disarm: the
+   header keeps the hit until an input ends the gap, then counts it
+   (`arm_hits_superseded`, a late state call).
 
 Measured effect of ruling 4 (the reviewer's oracle at 99addca, mode 4
 with A's checks, seed 20261115, 3,000 cases, the Linux desktop):
