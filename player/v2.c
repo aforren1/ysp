@@ -2529,8 +2529,20 @@ static void v2_resp_arm(pl_player* p, pl_v2* v, int64_t t) {
     /* the window's reference is the last position fed before the arm */
     v2_der_upto(p, v, t);
     /* yrsp_arm() sets the desc's window again: the trial's deadline and
-     * minimum rt go back on at every arm */
-    yrsp_arm(c, t);
+     * minimum rt go back on at every arm. It also clears the onset; but
+     * $rt_s and the deadline count from the `from` stimulus's onset
+     * (3.13), which can land before the movements' from (a stimulus at
+     * the trial's first frame, a hold later): give it back, else the
+     * window never got an onset again and a state that waits on the
+     * response never ended (0.11.0 too) */
+    {
+        yrsp_onset plan = c->plan, on = c->onset;
+        int had_plan = c->have_plan, had_onset = c->have_onset, rec_in = c->record_in;
+        yrsp_arm(c, t);
+        if (had_plan) (void)yrsp_set_onset(c, &plan);
+        if (had_onset && (on.final || !had_plan)) (void)yrsp_set_onset(c, &on);
+        if (had_onset) c->record_in = rec_in;
+    }
     yrsp_set_window(c, v->resp_minrt, v->resp_dur);
     yrsp_set_wait_final(c, PL_WAIT_FINAL_NS);
     /* each movement's origin, else the last position fed before the arm */
@@ -3015,7 +3027,14 @@ static int v2_hits(pl_player* p, pl_v2* v, const yscr_frame* f) {
              * arm's time), so it is that arm's generation */
             if (h[i].t < v->arm_t[h[i].node] || (h[i].t == v->arm_t[h[i].node] && !v->det_now[h[i].node])) hg[i]--;
             if (ci < 0) continue;
-            if (h[i].t < v->g_used) {
+            /* N1 and R5 (i) name a report later than its bound: only a
+             * template that waits has one. With every bound 0 nothing
+             * waits, and a hit at a take's time that comes out later (an
+             * arm ahead of the input, the lead rule's early take) loses by
+             * rule 4 as in 0.11.0 (R6); the check stopped the model's
+             * harness, 500 Hz, no lateness, seed 100619 (9109ecd on) */
+            if (!v->late) {
+            } else if (h[i].t < v->g_used) {
                 /* strictly before: a hit at a take's own time that a chain
                  * of takes at that time had not drained lost by rule 4's
                  * list order, as in 0.11.0, not by lateness */
@@ -3385,7 +3404,7 @@ static int v2_feed_part(pl_player* p, pl_v2* v, const yscr_frame* f, int n) {
             if (v->n_der < 0) v->n_der = 0;
             if (p->tmpl->collector)
                 for (k = 0; k < v->n_der; k++)
-                    if (v->der[k].t < v->g_der && v->der[k].t < v->arm_min) return v2_beyond(p, v, "a derived event", v->der[k].t, v->g_der);
+                    if (v->late && v->der[k].t < v->g_der && v->der[k].t < v->arm_min) return v2_beyond(p, v, "a derived event", v->der[k].t, v->g_der);
             if (gd > v->g_der) v->g_der = gd;
             v->arm_min = INT64_MAX;
             if (v2_hits(p, v, f) < 0) return -1;

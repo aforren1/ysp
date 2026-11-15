@@ -763,6 +763,17 @@ frame runs as in 0.11.0.
   as 3.11 rule 4's order per event. The collector's clock (`duration_s`,
   the deadline) is `G`, not the frame's onset, so a deadline is not
   judged on input that is not in. Its end lags as an exit does.
+- The arm (`yrsp_arm()`) clears the collector's onset, but `$rt_s` and
+  the deadline count from the `from` stimulus's onset (3.13). When that
+  stimulus lands before the movements' `from` (for example at the
+  trial's first frame, with the hold later), the player gives the onset
+  back after the arm. Before (0.11.0 too), the window never got an onset
+  again, and a state that waits on the response never ended
+  (`player_test` `t_v2_signal_from_first`, with `from` after the arm as
+  its control). A `from` that is never shown (a state left at its entry,
+  so its steps do not land) still opens no window: a state whose only
+  exit is on the response then waits until the session's budget, in
+  0.11.0 too. That is the definition's, not the wait's.
 - A derived event that a run again changes after the player took it
   (at or before `G`) counts `arm_derived_stale`, and the guard stops: a
   report came later than its bound.
@@ -819,11 +830,17 @@ frame runs as in 0.11.0.
 - `late_far` (a report later than the window, `catchup_ns`), `late_full`,
   `late_off`, `late_unverified`.
 - `hits_lost` and `derived_lost`, when a bound is above 0 (M2).
+- A hit or a derived event that comes out at or before a horizon that
+  the player already used (N1, R5), counted in `late_beyond_bound`: only
+  in a template that waits (a role that feeds it has a bound above 0).
+  With every bound 0 such a hit is an arm ahead of the input, and it
+  loses by rule 4 as in 0.11.0 (R6); 9109ecd stopped on it (the model's
+  harness, 500 Hz, no lateness, seed 100619; `t_v2_beyond_bound0`).
 - The arm counts, as before: `hits_retracted`, `rows_stale`,
   `derived_stale`, and the fallbacks `past_pinned`, `past_far`,
   `past_full`, `past_off`, and `unverified`.
-- Not: `late_frames`, `late_barrier`, `late_beyond_bound` (counted, in
-  the data).
+- Not: `late_frames`, `late_barrier`, and the per-role
+  `late_beyond_bound` of reports fed (counted, in the data).
 
 ### Format 3.11 rule 4
 

@@ -2773,13 +2773,71 @@ def t_v2_resp_plim(ctx):
               "%s: the trial ends on frame onset %s s: exit %d %s %s" % (nm, want, r.rc, r.err[-300:] if r.rc else "", got))
 
 
+def t_v2_signal_from_first(ctx):
+    # a signal choice's `from` stimulus that lands before the movements'
+    # from (shown at the trial's first frame; the hand reaches home at
+    # 0.1 s): yrsp_arm() at home's hit cleared the collector's onset, the
+    # window never got one again, and state c, which waits on the
+    # response, never ended (0.11.0 and 0.12.0 at 3fd398b). $rt_s counts
+    # from the `from` stimulus's onset (3.13). The control: `from` is t,
+    # shown at b's entry, after the arm
+    hand = {"hand": {"type": "position2d", "units": "display_px"}}
+    smp = os.path.join(ctx.out, "v2_signal_from.csv")
+    write_samples(smp, [(0.001 * k, "hand", 9 if k < 100 else (0 if k < 400 else (k - 400) * 0.5), 0) for k in range(2000)])
+    rts = {}
+    for frm in ("s", "t"):
+        t = {"controls": {"home": {"control": "region", "of": "hand", "radius": 3},
+                          "go": {"control": "movement", "of": "hand", "onset": 50, "from": "home"}},
+             "states": [{"name": "a", "steps": [{"on": "s"}], "exits": [{"on": "home", "to": "b"}]},
+                        {"name": "b", "steps": [{"on": "t"}], "exits": [{"after_s": 0.3, "to": "c"}]},
+                        {"name": "c", "exits": [{"on": "response", "to": "end", "outcome": "rsp"}]}],
+             "response": {"choices": [{"signal": "go"}], "from": frm, "duration_s": 3}}
+        nm = "v2_signal_from_first" if frm == "s" else "v2_signal_from_first_control"
+        r = Run(ctx, nm, v2base({"t": t}, [{"name": "l", "trial": "t"}], roles=hand),
+                args=["--sim-gain", "hand=1", "--samples", smp, "--max-seconds", "20"])
+        ok = r.rc == 0 and len(r.trials) == 1 and r.trials[0]["response"] == "go"
+        rts[frm] = float(r.trials[0]["rt_s"]) if ok else None
+        check(ok, "%s: from %s: the movement is the response: exit %d %s %s" %
+              (nm, frm, r.rc, r.err[-300:] if r.rc else "", [(x["response"], x["rt_s"]) for x in r.trials] if r.rc == 0 else ""))
+    if rts["s"] is not None and rts["t"] is not None:
+        # t lands on the first frame at or after home's hit at 0.1 s
+        check(abs(rts["s"] - rts["t"] - at_frame(ctx, 0.1)) < 1e-6,
+              "v2_signal_from_first: $rt_s counts from the from stimulus's onset: %s" % rts)
+
+
+def t_v2_beyond_bound0(ctx):
+    # N1 and R5 (i) (late_beyond_bound) name a report later than its bound,
+    # so only a template that waits for late input checks them. With every
+    # bound 0, a hit at a take's time that comes out later (an arm ahead of
+    # the input after the lead rule's early take) loses by rule 4 as in
+    # 0.11.0; 9109ecd on stopped the guard on it (the model's harness, 500
+    # Hz, no lateness, seed 100619; the case is at its GAPs future-arm-hit
+    # and future-arm-hold, so only the stop is checked). t_v2_n1_tie and
+    # t_v2_n1_chain keep the check's stops with a bound above 0
+    sys.path.insert(0, os.path.join(HERE, "..", "model"))
+    import diff as model_diff
+    import gen as model_gen
+    model_diff.YPAK = ctx.ypak
+    model_diff.PLAYER = ctx.player
+    model_diff.setup("500", None)
+    try:
+        defn, script, samples, _ = model_gen.make_case(100619)
+        work = os.path.join(ctx.out, "v2_beyond_bound0")
+        os.makedirs(work, exist_ok=True)
+        got = model_diff.run_player(None, tempfile.mkdtemp(prefix="c", dir=work), defn, script, samples)
+    finally:
+        model_diff.setup(ctx.hz, None)
+    txt = " ".join(got.get("refused") or [])
+    check("late_beyond_bound" not in txt and "internal guard" not in txt, "v2_beyond_bound0: no guard stop with every bound 0: %s" % txt[-300:])
+
+
 TESTS = [t_nested, t_if_unless, t_empty_and_zero, t_loop, t_requeue, t_track_ends, t_lookup_keys, t_triggers, t_after_timing, t_outcomes,
          t_method_update, t_seeds, t_refused, t_unused_stim, t_record_data, t_fix_density, t_fix_key_reapply, t_fix_stale_rdk,
          t_fix_timeout_values, t_fix_any_key, t_fix_from_in_if, t_fix_shown_twice, t_fix_vars_data, t_fix_sound_twice, t_fix_rdk_limit,
          t_fix_record_inherit, t_fix_backward_at, t_fix_refusals, t_fix_michelson_order, t_fix_texture_vars, t_fix_walk_budget,
          t_fix_data_set, t_fix_check_all_leaves, t_fix_release_order, t_fix_key_var_reapply,
          t_r2_release_other_template, t_r2_yield_draws_nothing, t_r2_low, t_r2_relaxed, t_r4_leaf_loop_done_track, t_r4_requeue_full,
-         t_r5_wait_final, t_r6_allow_below, t_v2_states, t_v2_until, t_v2_hand, t_v2_rule5, t_v2_review2, t_v2_review3, t_v2_f34, t_v2_ties, t_v2_review4, t_v2_review5, t_v2_findings, t_v2_corpus, t_v2_window_8k, t_v2_two_hands, t_v2_two_exits_one_ctl, t_v2_n1_tie, t_v2_n1_chain, t_v2_n1_derived, t_v2_resp_pend_first, t_v2_barrier, t_v2_resp_plim]
+         t_r5_wait_final, t_r6_allow_below, t_v2_states, t_v2_until, t_v2_hand, t_v2_rule5, t_v2_review2, t_v2_review3, t_v2_f34, t_v2_ties, t_v2_review4, t_v2_review5, t_v2_findings, t_v2_corpus, t_v2_window_8k, t_v2_two_hands, t_v2_two_exits_one_ctl, t_v2_n1_tie, t_v2_n1_chain, t_v2_n1_derived, t_v2_resp_pend_first, t_v2_barrier, t_v2_resp_plim, t_v2_signal_from_first, t_v2_beyond_bound0]
 
 
 def main():
