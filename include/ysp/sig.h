@@ -5696,6 +5696,22 @@ static void ysig__arm_wait(ysig_graph* g, int node, int64_t t, uint64_t seq) {
                 ysig__wait_fp(g, &w->a[q], fa);
                 if (ysig__fp_meets(g, fa, fs)) ysig__unv(g, w->a[q].seq);
             }
+        /* the other way round: a waiting group H with a greater key whose
+         * sets the graph with no window made already, before this group,
+         * which R makes first */
+        for (q = 0; q < g->dw; q++) fs[q] = w->gap_f[q];
+        ysig__fp_or(g, fs, node);
+        for (q = 0; q < w->n; q++) {
+            int i2;
+            if (w->a[q].t < t || (w->a[q].t == t && w->a[q].seq < seq)) continue;
+            for (i2 = 0; i2 < g->dw; i2++) fa[i2] = w->a[q].xf[i2];
+            for (i2 = 0; i2 < w->a[q].nc; i2++) {
+                const ysig_entry* x = &w->calls[w->a[q].c0 + i2];
+                if (x->kind == YSIG_J_DISARM) continue;
+                ysig__fp_or(g, fa, x->kind == YSIG_J_RECENTER ? ysig__recenter_node(g, x->node) : x->node);
+            }
+            if (ysig__fp_meets(g, fa, fs)) { ysig__unv(g, seq); break; }
+        }
     }
     if (cu)
         for (s = from; s < cu->c_head; s++) {
