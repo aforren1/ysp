@@ -1301,6 +1301,16 @@ of the newest input that meets c. One that a call already in R must
 follow (a group made at a later `τ` that it meets, the reviewer's T3
 case) is a late call: it goes before that group, and the window runs
 again. With no window it stays at R's end (counted, `late_off`).
+A late state call in an open gap (one that no arm, input, barrier or
+`ysig_disarm_at` has ended yet) takes its place by key when the gap
+ends: with its group's time when an arm closes the gap, else at its own
+time. Until then a read sees it at R's end, made at its call, as "A read
+in an open gap" says. A hit handed out that its placement voids is
+decided and counted at the gap's end (`arm_hits_superseded` or
+`arm_hits_retracted`, the split for a late state call); with no window
+the call stays where made (`late_off`). A barrier ends a gap, so a gap
+that the caller leaves open is decided at the trial's flush at the
+latest.
 
 `ysig_disarm_at(g, d, t)` (new): a disarm with the caller's time. It is
 a state call of time `t`. It ends d's arm at `t`: an arm of d at or
@@ -1620,7 +1630,9 @@ graph with no window, given in R's order. The exceptions: the bound
 channels hold R's values for the newest frame only; a frame already
 drawn keeps what the caller read at its call (`late_frames` counts the
 frames where R now differs); and `history_skipped` and `time_clamped`,
-as before.
+as before. While a gap is open, its late state calls are at R's end, not
+at their place by key (State calls, above); R's order holds for them from
+the gap's end.
 
 **Exceptions: refused or counted, and why.**
 

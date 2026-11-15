@@ -7489,6 +7489,50 @@ static void test_v2_two_untils(void) {
         CHECK(st.late_hits_voided == 0 && st.arm_hits_retracted == 0);
     }
 }
+/* The coordinator's ruling on the oracle's case 812 (seed 20261124,
+ * OFF=l): an open gap's late state calls take their place by key when the
+ * gap ends, and a void they cause is counted then, not at the call. D
+ * holds 5 ms from 10 (device 1); ysig_disarm_at(D, 30) meets the hold: a
+ * hit at 15, handed out. A set of D's hold to 50 ms at N (10) is late
+ * (the disarm_at at 30 meets D); until the gap ends, nothing is counted
+ * and the hit stands. v 0: device 2 at 12 (it meets no node of D) ends the
+ * gap in no group: the set goes before the disarm_at, the hit is voided
+ * (arm_hits_retracted, a late state call's split). v 1: a flush ends it:
+ * the same, at the flush. v 2, the control (case 812's own shape): an arm
+ * at 40 ends the gap; the group is ahead and its set goes at 40, after the
+ * disarm_at: nothing voided. v 3: no window, device 2 ends the gap: the
+ * set stays where made, late_off 1 then and not before. v 4: no window,
+ * the arm at 40: the gap's calls take the group's key, late_off 0 */
+static void test_v2_gap_late(void) {
+    int v;
+    g_where = "an open gap's late state call (case 812)";
+    for (v = 0; v < 5; v++) {
+        ysig_node n[3];
+        ysig_stats st;
+        int64_t t = 0;
+        n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 1); n[0].history = 64;
+        n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1); n[1].p[YSIG_DETECT_LEVEL] = 5; n[1].p[YSIG_DETECT_HOLD] = 5e-3; n[1].history = 64;
+        n[2] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 2, 1); n[2].history = 64;
+        if (!rp_open(n, 3, v < 3 ? 4 : 0, 0, false, false)) return;
+        rp_feed(1 * MS, 0, YIN_AXIS_POSITION, 1);
+        rp_feed(1 * MS, 0, YIN_AXIS_POSITION, 2);
+        CHECK(ysig_arm(&g_rp, 1, 1 * MS));
+        rp_feed(10 * MS, 10, YIN_AXIS_POSITION, 1);
+        CHECK(ysig_disarm_at(&g_rp, 1, 30 * MS));
+        CHECK(v2_hits(1, &t) == 1 && t == 15 * MS);
+        CHECK(ysig_set(&g_rp, 1, YSIG_DETECT_HOLD, 50e-3));
+        ysig_get_stats(&g_rp, &st);
+        CHECK(st.hits == 1 && st.arm_hits_retracted == 0 && st.arm_hits_superseded == 0 && st.late_off == 0);
+        if (v == 1) CHECK(ysig_flush(&g_rp));
+        else if (v == 2 || v == 4) CHECK(ysig_arm(&g_rp, 1, 40 * MS) && g_rp.wt->n == 1);
+        else rp_feed(12 * MS, 0, YIN_AXIS_POSITION, 2);
+        ysig_get_stats(&g_rp, &st);
+        CHECK(st.late_hits_voided == 0 && st.arm_hits_superseded == 0 && st.late_far == 0 && st.late_full == 0);
+        CHECK(st.arm_hits_retracted == (v < 2));
+        CHECK(st.hits == (v < 2 ? 0 : 1));
+        CHECK(st.late_off == (v == 3));
+    }
+}
 static void test_late(void) {
     ysig_stats st;
     int v, k;
@@ -7873,6 +7917,7 @@ int main(void) {
     test_v2_lost_set();
     test_v2_exit_late();
     test_v2_two_untils();
+    test_v2_gap_late();
     test_hold();
     if (g_failures) { fprintf(stderr, "sig_test: %d failures\n", g_failures); return 1; }
     printf("sig_test: all checks passed\n");

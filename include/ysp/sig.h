@@ -1371,6 +1371,9 @@ typedef struct ysig__wt {
                              * open gap's own calls (an arm's let-in)     */
     int        gap4_wp;     /* a let-in group's disarm after the last arm
                              * in the open gap                           */
+    int        gap_off;     /* no window: the open gap's state calls late
+                             * at their own key, counted in late_off if
+                             * the gap ends in no group                  */
     int        n_pin;       /* groups a state call let in after the open
                              * gap's own calls: inside if an arm closes it */
     uint64_t   pin[8];
@@ -3543,6 +3546,20 @@ static int ysig__is_late(const ysig_graph* g, const uint64_t* f, int64_t t, int 
     }
     return 0;
 }
+/* No window: a state call of the open gap that is late at its own key
+ * (t, made now) is counted in late_off only when the gap ends in no
+ * group (ysig__gap_late()); an arm that ends it gives its calls the
+ * group's key instead (sig.md, "State calls"). Noted before the call's
+ * own key is. */
+static void ysig__fp_or(const ysig_graph* g, uint64_t* f, int node);
+static void ysig__gap_off_note(ysig_graph* g, int node, int64_t t) {
+    uint64_t f[YSIG__FPW];
+    int w;
+    if (g->cu) return;
+    for (w = 0; w < g->dw; w++) f[w] = 0;
+    ysig__fp_or(g, f, node);
+    if (ysig__is_late(g, f, t, 2, g->ko)) g->wt->gap_off++;
+}
 /* A barrier at t: R starts again (N(F) is t after a reset; a flush
  * changes no N(F), only what a later call can go before) */
 static void ysig__key_bar(ysig_graph* g, int64_t t, int reset) {
@@ -3822,6 +3839,7 @@ YSIG_API bool ysig_recenter(ysig_graph* g, int role, double x, double y, int64_t
     g->ko = g->wt->seq;
     g->wt->gap_n++;
     ysig__fp_or(g, g->wt->gap_f, id);
+    ysig__gap_off_note(g, id, ysig__nf(g, ysig__down(g, id)));
     ysig__log(g, &e);
     g->tk = ysig__nf(g, ysig__down(g, id));
     ysig__do_recenter(g, role, x, y, t_ns);
@@ -4000,6 +4018,7 @@ YSIG_API bool ysig_set(ysig_graph* g, int node, int param, double v) {
     g->ko = g->wt->seq;
     g->wt->gap_n++;
     ysig__fp_or(g, g->wt->gap_f, node);
+    ysig__gap_off_note(g, node, ysig__nf(g, ysig__down(g, node)));
     ysig__log(g, &e);
     g->tk = ysig__nf(g, ysig__down(g, node));
     ysig__do_set(g, node, param, v);
@@ -4022,6 +4041,7 @@ YSIG_API bool ysig_set_data(ysig_graph* g, int node, int index, double v) {
     g->ko = g->wt->seq;
     g->wt->gap_n++;
     ysig__fp_or(g, g->wt->gap_f, node);
+    ysig__gap_off_note(g, node, ysig__nf(g, ysig__down(g, node)));
     ysig__log(g, &e);
     g->tk = ysig__nf(g, ysig__down(g, node));
     ysig__key_note(g, ysig__down(g, node), g->tk, 2);
@@ -5380,7 +5400,13 @@ static void ysig__gap_late(ysig_graph* g) {
     ysig__cu* cu = g->cu;
     uint64_t seqs[YSIG__WAIT_CALLS], from, s;
     int n = 0, i;
-    if (!cu || cu->replaying || !cu->grp_open || cu->grp_bad) return;
+    if (!cu) {
+        /* no window: the late ones stay where made */
+        g->st.late_off += g->wt->gap_off;
+        g->wt->gap_off = 0;
+        return;
+    }
+    if (cu->replaying || !cu->grp_open || cu->grp_bad) return;
     from = cu->grp_from;
     for (s = from; s < cu->c_head && n < YSIG__WAIT_CALLS; s++)
         if (!cu->calls[s % (uint64_t)cu->C].wp) seqs[n++] = cu->calls[s % (uint64_t)cu->C].cseq;
@@ -6543,6 +6569,7 @@ YSIG_API bool ysig_arm(ysig_graph* g, int node, int64_t t_ns) {
     e.t = t_ns;
     ysig__journal(g, &e);
     cu = g->cu;
+    g->wt->gap_off = 0;   /* the gap's calls take the group's key */
     {
         /* v0.7.0: the class is by the group's footprint (its arm's and
          * its gap's calls): input of another device that does not reach
@@ -6730,6 +6757,7 @@ YSIG_API bool ysig_disarm(ysig_graph* g, int node) {
     g->ko = w->seq;
     w->gap_n++;
     ysig__fp_or(g, w->gap_f, node);
+    ysig__gap_off_note(g, node, g->t_cover);
     /* it cancels waiting arms of node at its time: known when its gap
      * closes (its group's time, or the input time) */
     e.t = g->t_cover;
