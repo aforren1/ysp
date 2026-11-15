@@ -1507,6 +1507,42 @@ declares (T5).
 | L10 (low): `input_late_barrier`'s exemption against R | Such an input is dropped in R and in the header, so they agree; the exemption stays |
 | L11 (low): `N(F)` after a flush; a settle's place; "must follow" | A flush changes no `N(F)`; a settle goes at its `t` as a frame does; the definition says "must precede" |
 
+**Rulings while building (the coordinator, 2026-11-15, on the builder's
+questions).**
+
+1. `ysig_disarm_at()` is in no group. It ends the open gap as an input
+   does, and keeps its own time `t` (W2). State calls before it in the
+   gap are in no group; an arm after it closes a gap that starts after
+   it.
+2. A frame or a settle with a time before the last barrier goes right
+   after the barrier; it is not dropped. The display already used the
+   frame, and the reviewer's R does the same. `late_barrier`'s drop
+   applies to feeds only. Such a frame or settle counts nothing of its
+   own: it is a late call (every call since the barrier has a greater
+   key), placed with a run again, and `late_frames` counts a frame it
+   changes, as for any late call.
+3. The oldest checkpoint goes only when the next oldest is already
+   `catchup_ns` behind the newest, so the window covers at least
+   `catchup_ns` of input time. A new checkpoint is taken at a frame when
+   the newest is at least `catchup_ns / 8` older (a barrier's always).
+   Memory bound: at most `catchup_frames` images (1 to 8), each the size
+   given in "Memory (F)", whatever the display's rate. With fewer than 8
+   images the window covers less than `catchup_ns` when the frames are
+   closer than `catchup_ns / 8`; the player sets `catchup_frames` 8.
+4. R's order is the key order, total and canonical, for every reading
+   that depends on order: `N(G)` (Exactness), the gap that condition 4
+   reads, and `L(G)`. "Up to commuting calls" stays true for the results
+   (values, rings, states, counts), but these readings use the key order.
+   So `N(G)` is `τ` when an input at `τ` is in R, and earlier than `τ`
+   otherwise: every input later than `τ` comes after G in the key order,
+   whatever its footprint, and condition 2 applies to most past groups.
+
+Measured effect of ruling 4 (the reviewer's oracle at 99addca, mode 4
+with A's checks, seed 20261115, 3,000 cases, the Linux desktop):
+`arm_unverified` in right cases rose from about 2.7% of made groups
+(`N(G)` read in the header's log order) to about 7% (key order), and the
+B-cannot cases other than reasons 6 and 8 are all counted.
+
 **Open questions for this text.**
 
 1. The proposed note for format 3.11 rule 4 (above), and its two checks.
