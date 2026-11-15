@@ -1330,6 +1330,19 @@ second draft, since a state call can be late too):
 | `late_barrier` | an input's time is before the last barrier's time | drops it: in R too it is not there, the trial it belongs to ended | does not stop |
 | `late_off` | no window (a zeroed desc) | makes it at the end of R; an oracle's graph counts this, not compared | n/a |
 | `late_frames` | a frame already made whose bound channels R now gives otherwise | nothing: the frame was drawn | does not stop |
+| `late_hits_voided` | a hit handed out that a late input's run again does not give (below) | nothing more: the caller had the hit | stops |
+
+Ruling (the coordinator, 2026-11-15, on the builder's question): a hit
+handed out that a late input voids counts in `late_hits_voided`, whatever
+its time, and the guard stops on it. Reason: 0.6.x's
+`arm_hits_superseded` covered a hit of an arm the caller itself ended or
+replaced, which is harmless; a late input voids a hit with no caller
+action, and the player takes hits at once to drive exits, so the trial
+can hold an exit that R does not have. A late input is a feed, a frame or
+a settle. A late state call (a disarm, `ysig_disarm_at()`, a set, a
+recenter, a group let in late) keeps the 0.6.x split
+(`arm_hits_superseded`, `arm_hits_retracted`). When one run again holds
+both kinds, all of its voided hits count in `late_hits_voided`.
 
 `late_frames` goes in the data: a trial's count is a column of
 trials.csv, and the session's total is in session.json (the
