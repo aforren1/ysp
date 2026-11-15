@@ -609,6 +609,35 @@ that structure; it does not invent a new one.
   unchanged (the lead rule and F40). The loader needs nothing: it knows
   no display rate, and F26 already counts every `after_s` as a wait.
 
+  DECIDED (2026-11-15, the user), "wait for complete input", for input
+  that reaches the player after its stamp (a late report): the player
+  takes a hit, as an exit or as a recorded hit, only when the input is
+  complete up to the hit's time for every role that feeds the hit's
+  control. Exits and state changes lag by the lateness; the drawing does
+  not lag; every recorded time stays exact. This qualifies:
+  - The amendment's hit clause above (and 3.11 rule 2): the next state
+    starts on the first frame whose onset is at or after the time the hit
+    became final, that is, at or after both the hit's time and the poll
+    that completed the input up to it. A timed exit lands on the later of
+    its lead-rule frame and that frame. The F40 and F41 notes hold with
+    this entry frame. The entry time stays the exit's time (3.11 rule 1).
+  - Rule 4 and 3.11 rule 4: the earliest time wins, then the list order,
+    among the candidates whose times the input is complete to. A timed
+    exit, a steps' end or a response's end that the frame reaches waits
+    while a hit at or before its time can still come. 3.11 rule 4's last
+    sentence (a later report does not undo a taken exit) no longer
+    arises within a role's bound.
+  - 3.11 rule 8: steps of the old state that landed between the exit's
+    time and its take were shown and stay; the rest are removed.
+  - 3.13: a signal-choice collector gets the movements' events and its
+    arm in time order, up to the complete time, and judges its deadline
+    on it.
+  When every role's bound is 0 (arrival-stamped devices: evdev, keys),
+  nothing waits and these rules read as before. How "complete" is
+  measured, where each role's bound comes from, and the data that shows
+  the lag: docs/player.md, "Explanation: late input, and exits that wait
+  for it".
+
 D16 to D20 add keys and change what a step can
 do, so they are format version 2 (D12).
 

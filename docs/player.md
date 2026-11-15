@@ -556,6 +556,194 @@ ended it (the final result takes the earlier stamp; `real_test.py`
 (`PL_RSP_AFTER_LIVE`), a bit ysp/response.h leaves to its caller (bits 15
 to 31). `--sim`'s files did not change.
 
+## Explanation: late input, and exits that wait for it (0.12.0)
+
+Status: design for review (2026-11-15); not built. The user's decision of
+2026-11-15: "wait for complete input". ysp/sig.h 0.7.0 places a late
+report at its time (docs/sig.md, "Late input"). The player takes a hit
+only when the input is complete up to the hit's time for every role that
+feeds the hit's control. Exits and state changes lag by the lateness. The
+drawing does not lag. Every recorded time stays exact. The format's note:
+docs/experiment_format.md, D20, "DECIDED (2026-11-15, the user)".
+
+Why: a hit that the player takes before the reports up to its time are in
+can be wrong. A frame's pass, a settle at the onset or an entry-now arm
+finds a hit, and a late report with a time at or before the hit then
+moves it or removes it (`late_hits_voided`). With 0.7.0 and hits taken at
+once, the guard stopped more sessions than 0.11.0 at every lateness; the
+bimanual example stopped at 5 ms (player.md, "Late input, measured").
+
+### Terms
+
+- **Lateness bound** `B(r)` of a signal role r: the longest time from a
+  report's stamp to the poll that reads it.
+- **Poll time** `P`: the time of the newest poll whose reports the player
+  fed. In `--sim` it is the frame's onset: the player feeds the samples
+  that arrived by the onset (`v2_feed()`).
+- **Newest stamp** `S(r)`: the latest stamp of a report of r that the
+  player fed in this trial (since the trial's reset).
+- **Complete to** `C(r) = max(S(r) - 1 ns, P - B(r))`. Every report of r
+  with a stamp at or before `C(r)` is fed. The two parts:
+  - `P - B(r)`: a report stamped at or before it reached a poll by `P`.
+  - `S(r) - 1 ns`: a role's device does not go back (sig.h drops a sample
+    older than its device's last, `dropped_order`), so after a report
+    stamped `S(r)` no report of r stamped before it comes. A second
+    report at the same stamp can come, so `S(r)` itself is not complete.
+    A raw mouse's counts are the exception sig.h makes (T6: placed, not
+    dropped); a source whose stamps can go back uses `P - B(r)` only. The
+    sources of ysp/input.h stamp in order.
+- **A role with no reports** (a still relative mouse, a pen out of
+  range): `S(r)` does not move, so `C(r) = P - B(r)`. For a source that
+  the kernel stamps when it queues a report and that one poll reads to
+  its end (evdev raw mice and pens, keyboards), `B(r)` is 0: no report
+  stamped before the poll's read can come later. So a still device of
+  that kind holds nothing back.
+- **The roles of a control** `R(c)`: the signal roles with a path to the
+  control's detect in the graph. A detect that reads only timeline
+  channels has none.
+- **The horizon** `G` of a template's graph: the least `C(r)` over the
+  roles that feed any of the template's controls or movements, and `P`
+  when there is none (no role, or every such role with `B(r)` 0 and so
+  `C(r) = P`).
+
+### Where each bound comes from
+
+1. `--sim`: `--test-sample-late ROLE=S` gives `B(ROLE) = S`; every other
+   role has 0.
+2. A real run: the rig profile gives a measured input lateness per role
+   (a field of G18's adapter block, not designed yet). Until G18, a real
+   run binds no signal role, so this path has no user.
+3. The default, with no measured value: 0 for an arrival-stamped source
+   (above); none for a source with its own clock or a transport (a
+   serial device with host stamps behind an FTDI timer, LSL, an eye
+   tracker). The player refuses such a role without a measured bound, by
+   name: a latency comes from a measurement on the rig, not from a
+   manual (devices_spec.md).
+4. Keys and buttons that feed a key response are arrival-stamped: 0.
+
+sig.h's window: `catchup_ns` is the larger of 50 ms and `max B(r)` plus
+two frame periods. An exit taken at the horizon arms the next state at
+the exit's time, up to `max B(r)` plus a frame before the newest input:
+the window must reach that far back.
+
+### Which hits wait
+
+Every hit, by one rule: a hit at t is final when `t <= G`. A hit whose
+roles all have `B(r)` 0 is final at the poll that found it (its time is
+at or before `P`, and `G = P`), so in a template with no late role
+nothing waits and the player behaves as 0.11.0. One horizon per graph,
+not one per control: the exit test compares hits of several controls
+and timed exits by time (below), and that needs one bound under which
+every candidate is known. Cost: in a template with one late role, an
+exit on a control that reads only an on-time role waits too.
+
+Holding a hit needs a sig.h call (not in 0.7.0's text):
+`ysig_detected_to(g, out, cap, t)` hands out the queued hits with a time
+at or before t, in queue order, and keeps the rest queued, not handed
+out. A queued hit that is not handed out is not the caller's: a run
+again that does not give it drops it with no count, and one it gives
+again stays queued once. Reason: sig.h counts `late_hits_voided` for
+every hit it handed out, and a drained hit is handed out. The queue
+holds the hits of `max B(r)` plus a frame (sized with `catchup_calls`;
+now 64 outside a run again). Without this call the player cannot hold a
+hit without the count. For the reviewer and the coordinator.
+
+### The order of exits (D20 rule 4)
+
+At each pass of the exit test (after each part of a poll, after
+`ysig_frame()`, after a key response's end), the candidates are: the
+hits drained up to `G`, the `after_s` times, an until's `timeout_s`, the
+steps' end, and the response's end. The player takes the earliest
+candidate whose time is at or before `G`; at one time, the list order.
+A timed candidate (an `after_s`, a timeout, the steps' end, a response's
+end) that the frame's window reaches but that is later than `G` waits
+for `G`, as a hit does. So no candidate is taken while a hit at or
+before its time can still come: a hit that becomes final late cannot
+lose to a timed exit that is later in time. After a take at t, the next
+state arms at t (a past arm; sig.h runs the window again), and its hits
+up to `G` are drained in the same pass, so a chain of states at one
+frame runs as in 0.11.0.
+
+### Frames, times and steps
+
+- **Entry time**: the exit's time, exact, as 3.11 rule 1. The next
+  state's controls arm at it, `at_s` counts from it, and F41's clamp
+  holds.
+- **Entry frame** (amends the hit clause of the D20 amendment and 3.11
+  rule 2): the first frame at or after both the exit's time and the
+  time the exit became final, that is, the frame whose poll moved `G`
+  past it. A timed exit lands on the later of its lead-rule frame and
+  that frame. F40 holds with this entry frame. `after_s` counts from
+  the entry frame's onset (D20 rule 2), so it counts from what the
+  participant saw.
+- **Leaving a state** (3.11 rule 8): the old state's events that landed
+  between the exit's time and its take were shown and stay in
+  `events.csv`; `ytl_remove()` takes the ones that have not fired.
+- **The trial's end**: the exit to `end` is taken when `G` reaches its
+  time, and the flush follows at the end frame. A report stamped after
+  the end's time that arrives after the flush is dropped
+  (`late_barrier`; R drops it too). No report at or before the end's
+  time is lost.
+
+### The response window
+
+- **Keys** (a key response; arrival-stamped, `B` 0): the collector is
+  unchanged and arms at the trial's first frame (3.13). Its end is a
+  candidate at its time, taken when final (the flip record, 3.11 rule
+  11) and at or before `G`.
+- **Signal choices** (3.13): the collector's input is the movements'
+  derived events. The player feeds them to the collector up to `G` only,
+  and holds the rest in a buffer of `catchup_ns`. It arms the collector
+  (a `from` hit, a state's entry) when it takes that event, at its time
+  t: the held events before t go in before the arm, the rest after it,
+  as 3.11 rule 4's order per event. The collector's clock (`duration_s`,
+  the deadline) is `G`, not the frame's onset, so a deadline is not
+  judged on input that is not in. Its end lags as an exit does.
+- A derived event that a run again changes after the player gave it to
+  the collector still counts `arm_derived_stale`, and the guard stops.
+
+### What the data shows
+
+- Exact: hit times, exit times (the state rows' `end_s`), the `time` and
+  `hit` columns, the sample traces, the response's times.
+- Later by up to the lateness plus a frame: a state's entry frame (the
+  state rows' `frame`, `t_s`, `planned_s`) and what it shows.
+- New in `trials.csv`: `exit_lag_max_s`, the trial's largest lag of a
+  state change: the poll time at which the player took the exit, minus
+  the exit's time. With `B` 0 it is under a frame, as in 0.11.0.
+  `late_frames` (sig.h's count of the trial's drawn frames that a late
+  report changed).
+- New in `session.json`: `exit_lag` (`n`, `mean_s`, `max_s`) over the
+  session's exits; `late_beyond_bound` per role (reports whose stamp was
+  at or before the role's `C(r)` when fed: the bound is too small); the
+  late counts in `sig_arms`.
+
+### What still stops the guard
+
+- `late_hits_voided`: now only a hit the player took (final by the
+  bound) that a later report voids, which means a report came later than
+  its role's bound.
+- `late_far` (a report later than the window, `catchup_ns`), `late_full`,
+  `late_off`, `late_unverified`.
+- The arm counts, as before: `hits_retracted`, `rows_stale`,
+  `derived_stale`, and the fallbacks `past_pinned`, `past_far`,
+  `past_full`, `past_off`, and `unverified`.
+- Not: `late_frames`, `late_barrier`, `late_beyond_bound` (counted, in
+  the data).
+
+### Format 3.11 rule 4
+
+Rule 4 feeds each event, drains its hits and takes an exit before the
+next event. Under the wait the player takes exits at `G`: it feeds a
+poll with `ysig_feed_n()` in parts, drains the hits up to `G` and takes
+them by time. With every bound 0, `G` is the poll's time, and the two
+orders must give the same results (the check of the proposed 3.11 rule 4
+note: the oracle and the model harness fed per event against batched).
+With a bound above 0 they differ by design: rule 4's "a report that
+arrives in a later poll with a time before a taken exit does not undo
+it" no longer arises, since no exit is taken before its time is
+complete.
+
 ## Results
 
 2026-11-09, the Linux desktop (Debian 12, gcc 12.2, 20 threads), `--sim`
