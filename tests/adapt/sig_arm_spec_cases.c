@@ -518,6 +518,45 @@ int main(void) {
     if (s.arm_past_full != 1) bad("arm_past_full %g, expected %g", (double)s.arm_past_full, 1);
 #endif
 
+#if SIG_ARM_REF_SPEC
+    /* 22. (0.7.0, T1) The closure's order, checked by hand: the oracle's B
+     * is the same header with no window, so it cannot check this itself.
+     * S1 pen dev 1, S2 pen dev 2; D1 on S1 and D2 on S2, x >= 5, entry
+     * now, not armed at start; K a detect on D1's hit output, level 5
+     * (D1's 1 fails), entry arm, armed at start, every crossing. W7 =
+     * [arm D1 at 10]; W8 = [set K level 0.5, arm D2 at 10], made after
+     * W7: F(W8) meets F(W7) at K. 1 ms dev 1 x 10, 1 ms dev 2 x 0: both
+     * groups ahead (N(F) = 1). 12 ms dev 2 x 0 meets W8 only.
+     * 0.7.0: it lets W8 in and, right before it, W7 (smaller key, meets
+     * W8). R: W7 (D1 entry now on the held x 10: a hit at 10; its rise
+     * reaches K at 10 with level 5: fails, K ready), W8 (K's level 0.5;
+     * D2's held x 0 fails), then the 12 ms input. The 13 ms dev 1 sample:
+     * D1's standing output 1 reaches K with level 0.5: K's hit at 13.
+     * 0.6.x (no closure): W8 went in alone (K's level 0.5 first), and W7
+     * waited for device 1; the 13 ms sample lets it in: D1's rise at 10
+     * reaches K with level 0.5: K's hit at 10, and none at 13 (no failure
+     * between). So K's hit is at 13 with the closure, at 10 without. */
+    g_case = "t1-closure-order";
+    n[0] = pen(1); n[1] = pen(2);
+    n[2] = det(0, 5, YSIG_ENTRY_NOW, 0, 1, 0);
+    n[3] = det(1, 5, YSIG_ENTRY_NOW, 0, 1, 0);
+    n[4] = det(2, 5, YSIG_ENTRY_ARM, 0, 0, 1);
+    open_g(n, 5, 4);
+    feed(1 * MS, 10, 1, YIN_AXIS_POSITION); feed(1 * MS, 0, 2, YIN_AXIS_POSITION);
+    ysig_arm(&g, 2, 10 * MS);
+    ysig_set(&g, 4, YSIG_DETECT_LEVEL, 0.5);
+    ysig_arm(&g, 3, 10 * MS);
+    feed(12 * MS, 0, 2, YIN_AXIS_POSITION);
+    feed(13 * MS, 10, 1, YIN_AXIS_POSITION);
+    {
+        int m = hits(h, 64), j, d1 = 0, kk = 0;
+        int64_t kt = -1;
+        for (j = 0; j < m; j++) { if (h[j].node == 2 && h[j].t == 10 * MS) d1++; if (h[j].node == 4) { kk++; kt = h[j].t; } }
+        if (d1 != 1) bad("D1 hits at 10 ms: %g, expected %g", d1, 1);
+        if (kk != 1 || kt != (SPEC07 ? 13 : 10) * MS) bad("K: %g hits, the last at %g ms (the closure makes W7 before W8's set: one at 13; without it, one at 10)", kk, kt / 1e6);
+    }
+#endif
+
     printf("%s: %d failed\n", g_fail ? "sig_arm_spec_cases" : "sig_arm_spec_cases ok", g_fail);
     return g_fail ? 1 : 0;
 }
