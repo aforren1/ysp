@@ -1482,8 +1482,8 @@ again that gives it again leaves it queued once; `arm_hits_superseded`,
 `ysig_detected()` is `ysig_detected_to()` with no limit. Across calls
 with a rising `t`, a hit held by an earlier call comes out after hits
 that R has after it. Within one call, two hits come out in R's order
-when R fixes their order: an input can reach both of their nodes (the
-two nodes have a source or an op upstream in common), or a frame or a
+when R fixes their order: the calls that found them meet (always for
+two nodes on one path, one downstream of the other), or a frame or a
 settle found one of them. R does not fix the order of other hits: the
 calls that found them do not meet, so they commute ("Footprint"), and
 the hits can come out in either order. Take hits by their time and by
