@@ -12,7 +12,34 @@
  *   predicate's condition 4 walk the arm's gap back to a disarm_at too
  *   (ruling 1: it ends the open gap as an input does; case 757 OFF=l was
  *   a false B-cannot). The horizon order check matches equal hits in
- *   this call's order first (two equal hits read as out of order).
+ *   this call's order first (two equal hits read as out of order), and an
+ *   inversion fails only for hits whose order R fixes: nodes that share an
+ *   upstream node, or a hit found at a frame or a settle (case 453 OFF=l:
+ *   a pen detect's and a pressure detect's hits from calls that commute;
+ *   SIG_ORACLE_HZSTRICT=1 keeps the strict check).
+ *
+ * Ruling R1/R2 (2026-11-15), SIG_ORACLE_R1=1 (turns on SIG_ORACLE_DAX):
+ *   frames and settles key with the state calls and groups, by call order
+ *   (r_key rank 2); a frame or a settle lets in, right before itself, the
+ *   waiting groups at or before its t (place_waiting_at incl); L(G) is the
+ *   call that lets G in (an input later than tau, a frame or a settle at
+ *   tau, a disarm_at at or after tau): p1_let(), p1_bad()'s 2 (a), and B's
+ *   let-in (B_LETS; reason 7 skips a frame or a settle at tau).
+ *   (5feeb5b) No compare while a plain disarm's gap is open in B but ended
+ *   in call order (b_gap_mismatch(); SIG_ORACLE_GAPKEY=1 compares anyway):
+ *   R's key order put the next-called input before the disarm.
+ *   (279b393) The gap test runs both ways (A's gap open and B's ended
+ *   too: a disarm_at called before the disarm that R puts after it; the
+ *   builder's 438-family finding; ruling 6). B's waiting arms use B's
+ *   N(F) (b_nf(); SIG_ORACLE_BN_ALL=1 the 0.6.x N; case 480). B's own
+ *   late_off as B-cannot (reason 10) is opt-in, SIG_ORACLE_R10=1: it is
+ *   no sign that B is not R (B makes a call it finds late at its end,
+ *   which is the call's place in R); SIG_ORACLE_R10PASTOFF=1 adds
+ *   arm_past_off.
+ *   SIG_ORACLE_GEN_TIE=1: calls at a frame's onset (arms then the frame;
+ *   disarm_at, arms, frame; a set, the frame, an arm; the frame then a
+ *   feed at the onset; an arm, a settle, the frame). Off, the case stream
+ *   is unchanged (seed 20261115 late on: byte-identical output).
  *
  * Horizons (the player's wait for complete input; sig.md text of
  *   2026-11-15): -DSIG_HAS_DETECTED_TO with SIG_ORACLE_GEN_DRAIN_TO=1: about
@@ -1176,6 +1203,54 @@ static void fail(const char* fmt, const char* a, long b) {
 static int is_fs(int ci) { return g_c[ci].kind == C_FRAME || g_c[ci].kind == C_SETTLE; }
 /* an input lets a waiting arm of B in: later than its tau; R1: a frame or a settle at its tau too */
 #define B_LETS(e, w) (((e)->time > g_bw_tau[w] || (g_r1 && is_fs((e)->ci) && (e)->time == g_bw_tau[w])) && ((e)->fp & g_bw_fp[w]))
+/* (5feeb5b review) a plain disarm in no group whose gap is still open in
+ * B (nothing after it in R ends it: R placed the later-called input before
+ * it by key) while the caller's next input or barrier call ended it: its
+ * effect waits in B and not in A ("Groups": a gap is in call order). No
+ * compare until R ends it too. SIG_ORACLE_GAPKEY=1: compare anyway. */
+static long g_gapdefer;
+static int g_step_ci = -1;   /* the call being made */
+/* (279b393 review, case 480) B's input time of a footprint at R's entry
+ * idx: the latest input B was given before it that meets fp (0.7.0 classes
+ * are per footprint; g_bN, over every node, is the 0.6.x N).
+ * SIG_ORACLE_BN_ALL=1: the old g_bN. */
+static int64_t b_nf(int idx, uint64_t fp) {
+    int64_t n = INT64_MIN;
+    int i;
+    if (getenv("SIG_ORACLE_BN_ALL")) return g_bN;
+    for (i = 0; i < idx && i < g_nR; i++) {
+        const rent* x = &g_R[i];
+        int kd = g_c[x->ci].kind;
+        if (x->flags & E_DROPPED) continue;
+        if (x->flags & E_BARRIER) { if (kd == C_RESET || kd == C_RESET_TRIAL) n = g_c[x->ci].t; continue; }
+        if ((x->flags & E_INPUT) && !(x->flags & E_NEUTRAL) && (x->fp & fp) && x->time > n) n = x->time;
+    }
+    return n;
+}
+static int gap_end_call(int q) {   /* the call ends a gap, in call order (A) */
+    int kd = g_c[q].kind;
+    return (g_call_flags[q] & (E_INPUT | E_BARRIER | E_NEUTRAL)) || kd == C_ARM || kd == C_DISARM_AT;
+}
+static int gap_end_ent(const rent* x) {   /* the entry ends a gap in B (R's order; B never gets a dropped one) */
+    int kd = g_c[x->ci].kind;
+    if (x->flags & E_DROPPED) return 0;
+    return (x->flags & (E_INPUT | E_BARRIER | E_NEUTRAL)) || kd == C_ARM || kd == C_DISARM_AT;
+}
+static int b_gap_mismatch(void) {
+    int i, q, k;
+    if (getenv("SIG_ORACLE_GAPKEY")) return 0;
+    for (i = g_nR - 1; i >= 0; i--) {
+        const rent* x = &g_R[i];
+        int openA = 1, openB = 1;
+        if (x->flags & E_BARRIER) return 0;
+        if (g_c[x->ci].kind != C_DISARM || x->grp >= 0) continue;
+        for (q = x->ci + 1; q <= g_step_ci && q < g_nc + 1; q++) if (gap_end_call(q)) { openA = 0; break; }
+        if (getenv("SIG_ORACLE_GAPONEWAY") && openA) continue;   /* (the first fix: only A ended it) */
+        for (k = i + 1; k < g_nR; k++) if (gap_end_ent(&g_R[k])) { openB = 0; break; }
+        if (openA != openB) { g_gapdefer++; return 1; }   /* ruling 6: gaps in call order */
+    }
+    return 0;
+}
 /* give B one entry of R (B drains after each call: B never loses a hit) */
 static void b_issue(const rent* e) {
     const call* c = &g_c[e->ci];
@@ -1184,7 +1259,9 @@ static void b_issue(const rent* e) {
      * waits there, alone (b6676f4: with no window a group's state calls
      * stay where made); it goes in before the first input later than tau,
      * or state call at N later than tau, that meets its footprint */
-    int bw_new = SIG_ARM_REF_SPEC && c->kind == C_ARM && g_bN < e->time;
+    int e_idx = (int)(e - g_R);
+    uint64_t e_gfp = e->grp >= 0 ? g_gr[e->grp].fp : e->fp;
+    int bw_new = SIG_ARM_REF_SPEC && c->kind == C_ARM && b_nf(e_idx, e_gfp) < e->time;   /* per footprint (0.7.0) */
     if (c->kind == C_DRAIN) return;
     if (e->flags & E_DROPPED) return;   /* (late_barrier) not in R: B never gets it */
     /* a disarm of a group that B's graph sees ahead is made at once there
@@ -1204,7 +1281,7 @@ static void b_issue(const rent* e) {
         for (q = 0; q < g_nR; q++) { if (&g_R[q] == e) me = q; if (me >= 0 && g_R[q].ci == g_gr[e->grp].arm_ci) { arm = q; break; } }
         if (me >= 0 && arm > me) {
             for (q = me + 1; q < arm; q++) if (g_R[q].flags & (E_INPUT | E_BARRIER)) inp = 1;
-            if (!inp && g_bN < g_gr[e->grp].tau) dis_waits = 1;
+            if (!inp && b_nf(e_idx, g_gr[e->grp].fp) < g_gr[e->grp].tau) dis_waits = 1;
         }
     }
     if (c->kind == C_DISARM && getenv("SIG_ORACLE_DISDBG") && atol(getenv("SIG_ORACLE_DISDBG")) == g_case)
@@ -1213,7 +1290,11 @@ static void b_issue(const rent* e) {
     if (g_bw_n && (e->flags & (E_STATE | E_BARRIER)) && !bw_new && !dis_waits) {
         for (w = k = 0; w < g_bw_n; w++) {
             int meets = (e->fp & g_bw_fp[w]) != 0;
-            int64_t tt = c->kind == C_ARM && e->time < g_bN ? e->time : g_bN;   /* the trigger's time (S2) */
+            /* the trigger's time (S2): a plain disarm in no group, N (the
+             * ruling); another state call, N(F(c)) (0.7.0); an arm, the
+             * smaller of its t and that */
+            int64_t nb = (c->kind == C_DISARM && e->grp < 0) ? g_bN : b_nf(e_idx, e->fp);
+            int64_t tt = c->kind == C_ARM && e->time < nb ? e->time : nb;
             if (c->kind == C_DISARM_AT && g_dax) {
                 /* (proposal X1) a disarm_at lets in, right before itself, a
                  * waiting group it meets at or before its t, as an arm does */
@@ -1277,6 +1358,22 @@ static void b_issue(const rent* e) {
 #endif
     do_call(&g_b, c);
     drain(&g_b, g_hr, &g_nhr, NULL, NULL, 0, 1);
+    /* off by default: B is given R in order, so a call B's own keys call late
+     * is made at B's end, its place in R; B counted late_off in 43 to 48% of
+     * cases (279b393, six streams). Only a group B lets in late (behind a
+     * call it had made) means B is not R, and the waiting-arm model with
+     * B's N(F) covers that (reasons 2 to 6). SIG_ORACLE_R10=1: on. */
+    if (!g_b_cannot && getenv("SIG_ORACLE_R10")) {
+        /* (279b393 review, case 334) B says itself that it did not give R:
+         * a late call made at R's end (late_off), or an ahead group's set
+         * made where called (arm_past_off) */
+        ysig_stats bs;
+        ysig_get_stats(&g_b, &bs);
+        /* arm_past_off stays out: the oracle models an ahead group's sets
+         * made at once in B (note 5, reasons 2 to 5); taking it in made 60%
+         * of cases B-cannot (seed 20261115, 279b393) */
+        if (bs.late_off > 0 || (getenv("SIG_ORACLE_R10PASTOFF") && bs.arm_past_off > 0)) { g_b_cannot = 1; g_cannot_why = 10; }
+    }
     if (bw_new && g_bw_n < MAXC) {
         /* what waits in B's graph: the arm, and its group's disarms (S1) */
         uint64_t f = e->fp;
@@ -1453,7 +1550,7 @@ static void hand_check(int ci, int mark, const ysig_stats* s0, const ysig_stats*
     long esup = 0, eret = 0, fresh = 0;
     int i, k, arms = 0;
     (void)s0;
-    if (g_why || g_bw_n || g_b_cannot) return;   /* checked at the next call that can */
+    if (g_why || g_bw_n || g_b_cannot || b_gap_mismatch()) return;   /* checked at the next call that can */
     /* the arms made since the last check: a hit voided by one of them is
      * superseded when it is that group's detect's and later than its tau */
     for (k = 0; k < g_ngr; k++) if (g_gr[k].arm_ci > g_chk_ci && g_gr[k].arm_ci <= ci) arms++;
@@ -2001,10 +2098,21 @@ static void late_input2(int ci, uint64_t fp) {
 /* after a ysig_detected_to(h): (1) every hit handed out by it is at or
  * before h; (2) none of R's hits at or before h is held (each has an equal
  * hit handed out, not voided); (3) within the call, R's order */
+/* two hits whose order R fixes: their nodes share an upstream node (an
+ * input can meet both), or one was found at a frame or a settle (which
+ * meets every node). Others come from calls that commute: R's order between
+ * them is free ("R is defined up to that freedom") */
+static int hits_ordered(const ysig_hit* a, const ysig_hit* b) {
+    int s, q;
+    for (s = 0; s < g_ntot; s++) if ((g_D[s] >> a->node & 1) && (g_D[s] >> b->node & 1)) return 1;
+    for (q = 0; q < g_nc; q++)
+        if ((g_c[q].kind == C_FRAME || g_c[q].kind == C_SETTLE) && (g_c[q].t == a->t_found || g_c[q].t == b->t_found)) return 1;
+    return 0;
+}
 static void horizon_check(int ci, int64_t h, int first) {
     static char used[8192];
     int i, j, last_r = -1;
-    if (g_why || g_bw_n || g_b_cannot) return;
+    if (g_why || g_bw_n || g_b_cannot || b_gap_mismatch()) return;
     for (i = first; i < g_nha; i++)
         if (g_ha[i].h.t > h) { snprintf(g_whybuf, sizeof g_whybuf, "a hit later than the horizon handed out by ysig_detected_to()"); g_why = g_whybuf; return; }
     memset(used, 0, sizeof used);
@@ -2017,6 +2125,11 @@ static void horizon_check(int ci, int64_t h, int first) {
         for (i = g_nha - 1; i >= 0; i--) if (!used[i] && hit_eq(&g_ha[i].h, &g_hr[j].h)) { used[i] = 1; break; }
         if (i < 0) { snprintf(g_whybuf, sizeof g_whybuf, "a hit of R at or before the horizon held by ysig_detected_to() (node %d t %.3f)", g_hr[j].h.node, g_hr[j].h.t / 1e6); g_why = g_whybuf; return; }
         if (i >= first) {
+            int bad_pair = 0, q;
+
+            /* an earlier R hit matched to a later A copy: out of order when R fixes that pair */
+            for (q = i + 1; q < g_nha && q <= last_r; q++) if (used[q] && q >= first && hits_ordered(&g_ha[q].h, &g_ha[i].h)) bad_pair = 1;
+            if (i < last_r && !bad_pair && !getenv("SIG_ORACLE_HZSTRICT")) { continue; }
             if (i < last_r) {
                 if (getenv("SIG_ORACLE_HZDBG")) { int z; printf("  hz order: h %.3f first %d; R's hits:\n", h / 1e6, first);
                     for (z = 0; z < g_nhr; z++) printf("    R[%d] node %d t %.3f found %.3f\n", z, g_hr[z].h.node, g_hr[z].h.t / 1e6, g_hr[z].h.t_found / 1e6);
@@ -2030,7 +2143,9 @@ static void horizon_check(int ci, int64_t h, int first) {
 #endif
 
 /* one call: A makes it, R takes it, B follows, compare */
-static void step(int ci) {
+static void step_(int ci);
+static void step(int ci) { g_step_ci = ci; step_(ci); }
+static void step_(int ci) {
     call* c = &g_c[ci];
     ysig_stats s0, s1;
     int k;
@@ -2378,7 +2493,7 @@ static void step(int ci) {
     /* while a gap is open its state calls' rule-3 triggers are not decided
      * (H9 decision: they take effect when the calls go into R, at the gap's
      * end or its group's arm); a read then can see either, so no compare */
-    if (!g_noA && !g_why && !g_bw_n && !g_b_cannot && !g_npend) {
+    if (!g_noA && !g_why && !g_bw_n && !g_b_cannot && !g_npend && !b_gap_mismatch()) {
         const char* w = cmp_values();
         if (w) {
             snprintf(g_whybuf, sizeof g_whybuf, "after a %s call: %s",
@@ -2896,7 +3011,7 @@ static void emit_case(void) {
 /* ---- main ---------------------------------------------------------------- */
 
 int main(int argc, char** argv) {
-    long cases = getenv("SIG_ORACLE_CASES") ? atol(getenv("SIG_ORACLE_CASES")) : 2000, wrong = 0, cannot = 0, fellback = 0, noroom = 0, disarm_ahead = 0, h9 = 0, pred_n[3] = { 0, 0, 0 }, pred_f[3] = { 0, 0, 0 }, pred_why[10] = { 0 }, pred_show = 0, cannot_why[10] = { 0 }, hu_n[3] = { 0, 0, 0 }, hu_f[3] = { 0, 0, 0 }, hu_show = 0, hu_late = 0, hu_other = 0, hu_bare = 0, hu_arms = 0, hu_cnt = 0, hu_bc_at = 0, hu_end_late = 0, exc_n[3] = { 0, 0, 0 }, exc_only[3] = { 0, 0, 0 }, lt_cases = 0, lt_far = 0, lt_bar = 0, lt_frames = 0, lt_cond2 = 0, lt_ooo = 0, lt_ooo_unc = 0, lt_bc = 0, lt_bc_f = 0, lt_inputs = 0, lt_show = 0, lt_byf = 0, lt_byfb = 0, lt_byo = 0, lt_lnew = 0, lt_lnfa = 0, lt_clo = 0, lt_lst = 0, lt_lbd = 0, lt_lbd_in = 0, lt_ceq = 0, lt_dxs = 0, lt_dxe = 0, lt_dxl = 0, lt_dxw = 0, lt_dxu = 0, lt_lss = 0, lt_esc = 0, lt_cli = 0, oc_cases[8] = { 0 }, oc_pairs[8] = { 0 }, oc_any = 0, oc_show = 0;
+    long cases = getenv("SIG_ORACLE_CASES") ? atol(getenv("SIG_ORACLE_CASES")) : 2000, wrong = 0, cannot = 0, fellback = 0, noroom = 0, disarm_ahead = 0, h9 = 0, pred_n[3] = { 0, 0, 0 }, pred_f[3] = { 0, 0, 0 }, pred_why[10] = { 0 }, pred_show = 0, cannot_why[12] = { 0 }, hu_n[3] = { 0, 0, 0 }, hu_f[3] = { 0, 0, 0 }, hu_show = 0, hu_late = 0, hu_other = 0, hu_bare = 0, hu_arms = 0, hu_cnt = 0, hu_bc_at = 0, hu_end_late = 0, exc_n[3] = { 0, 0, 0 }, exc_only[3] = { 0, 0, 0 }, lt_cases = 0, lt_far = 0, lt_bar = 0, lt_frames = 0, lt_cond2 = 0, lt_ooo = 0, lt_ooo_unc = 0, lt_bc = 0, lt_bc_f = 0, lt_inputs = 0, lt_show = 0, lt_byf = 0, lt_byfb = 0, lt_byo = 0, lt_lnew = 0, lt_lnfa = 0, lt_clo = 0, lt_lst = 0, lt_lbd = 0, lt_lbd_in = 0, lt_ceq = 0, lt_dxs = 0, lt_dxe = 0, lt_dxl = 0, lt_dxw = 0, lt_dxu = 0, lt_lss = 0, lt_esc = 0, lt_cli = 0, oc_cases[8] = { 0 }, oc_pairs[8] = { 0 }, oc_any = 0, oc_show = 0;
     g_late = getenv("SIG_ORACLE_LATE") ? atoi(getenv("SIG_ORACLE_LATE")) : 0;
     g_noA = g_late && !getenv("SIG_ORACLE_LATE_A");
     g_dax = getenv("SIG_ORACLE_DAX") != NULL;
@@ -2926,6 +3041,7 @@ int main(int argc, char** argv) {
 #ifdef SIG_HAS_DERIVED_TO
         if (getenv("SIG_ORACLE_DERIVED_TO")) g_dlag = (int64_t)(rnd() % 21) * MS;
 #endif
+        if (getenv("SIG_ORACLE_DEBUG")) printf("=== case %ld\n", g_case);
         memset(&g_lc, 0, sizeof g_lc); memset(g_lci, 0xff, sizeof g_lci); memset(g_call_late, 0, sizeof g_call_late); g_bc_ci = -1; g_end_fail_kind = 0; g_exc_dis_case = 0; g_unv_fail = 0; g_other_fail = 0; g_why = NULL; g_b_cannot = 0; g_cannot_why = 0; g_h9 = 0; g_fail_ci = -1; g_pred = 0; g_pred_why = 0; g_r_moved = 0; g_bw_n = 0; g_nbran = 0;
         memset(g_bdone, 0, sizeof g_bdone); memset(g_bseen, 0, sizeof g_bseen);
         g_nc = g_nR = g_ngr = g_nwait = g_npend = 0; g_cancelled = 0; memset(g_pw_after, 0, sizeof g_pw_after);
@@ -3011,7 +3127,7 @@ int main(int argc, char** argv) {
         if (g_b_cannot && !g_why) {
             if (getenv("SIG_ORACLE_EMIT") && atol(getenv("SIG_ORACLE_EMIT")) == g_case) { emit_case(); return 0; }
             cannot++;
-            if (g_cannot_why < 10) cannot_why[g_cannot_why]++;
+            if (g_cannot_why < 12) cannot_why[g_cannot_why]++;
 #ifdef SIG_HAS_UNV
             {
                 /* (B-cannot fix) arm_unverified or a fallback the guard stops
@@ -3043,7 +3159,7 @@ int main(int argc, char** argv) {
             g_cur_ci = g_nc > 0 ? g_nc - 1 : 0;
             drain(&g_a, g_ha, &g_nha, g_da, &g_nda, g_cur_ci, 1);
 #endif
-            end_checks();
+            if (!b_gap_mismatch()) end_checks();
             if (g_why && g_fail_ci < 0) {
                 /* (end-check fix) a failure found at the end: A's counts at
                  * the call that handed out the first wrong row or event; a
@@ -3093,7 +3209,7 @@ int main(int argc, char** argv) {
             if (w < 64) counts[w]++;
             if (getenv("SIG_ORACLE_DEBUG")) {
                 int q;
-                static const char* kn[] = { "feed", "frame", "settle", "arm", "disarm", "set", "recenter", "reset", "reset_trial", "flush", "drain" };
+                static const char* kn[] = { "feed", "frame", "settle", "arm", "disarm", "set", "recenter", "reset", "reset_trial", "flush", "drain", "disarm_at" };
                 for (q = 0; q < g_nc; q++)
                     printf("  A%3d %-8s node %2d dev %d t %8.3f x %6.2f grp %d\n", q, kn[g_c[q].kind], g_c[q].node, g_c[q].dev, g_c[q].t / 1e6, g_c[q].x, g_call_grp[q]);
                 printf("  R:");
@@ -3133,6 +3249,7 @@ int main(int argc, char** argv) {
     printf("  header arm_unverified: B-cannot %ld of %ld, wrong %ld of %ld at the failing call (%ld more only later), right %ld of %ld cases; %ld counts over %ld made groups in right cases; wrong unflagged: %ld with a fallback (pinned included), retracted or stale count, %ld with none\n",
            hu_f[0], hu_n[0], hu_f[1], hu_n[1], hu_late, hu_f[2], hu_n[2], hu_cnt, hu_arms, hu_other, hu_bare);
     printf("  B-cannot counted (arm_unverified or a guard-stop fallback) by the call B was found unable: %ld of %ld; wrong cases read at the end for want of a call: %ld\n", hu_bc_at, hu_n[0], hu_end_late);
+    printf("  compares put off while a plain disarm's gap is open in B only (b_gap_mismatch): %ld\n", g_gapdefer);
 #else
     (void)hu_n; (void)hu_f; (void)hu_show; (void)hu_late; (void)hu_other; (void)hu_bare; (void)hu_bc_at; (void)hu_end_late; (void)hu_arms; (void)hu_cnt;
 #endif
@@ -3147,6 +3264,7 @@ int main(int argc, char** argv) {
     if (cannot)
         printf("  B cannot run R: a barrier while an arm waits in B %ld; a meeting call not past tau while it waits: an arm %ld, a past group's call %ld, a present or ahead group's call %ld, a call in no group %ld; two waiting arms let in out of R's order %ld; a late input at or before a waiting arm's tau %ld; a disarm of a cancelled group at a tau not B's N %ld; a disarm of another group or none in the gap an arm closes %ld\n",
                cannot_why[1], cannot_why[2], cannot_why[3], cannot_why[4], cannot_why[5], cannot_why[6], cannot_why[7], cannot_why[8], cannot_why[9]);
+    if (cannot) printf("  B cannot run R, B's own late_off (reason 10): %ld\n", cannot_why[10]);
     for (w = 0; w < nnames; w++) printf("  %6ld  %s\n", counts[w], names[w]);
     return wrong ? 1 : 0;
 }

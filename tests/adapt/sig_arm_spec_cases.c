@@ -557,6 +557,152 @@ int main(void) {
     }
 #endif
 
+#ifdef SIG_SPEC_R1
+    /* Ruling R1 (2026-11-15): at one time a feed comes first, then frames,
+     * settles, state calls and groups by call order; a frame or a settle
+     * lets in, right before itself, the waiting groups at or before its t;
+     * L(G) is the call that lets G in. R2: a late disarm that takes a
+     * place in the gap a group's arm closes in R retests condition 4.
+     * Hand-derived from the text; each R1 case gives another result under
+     * the 7a17176 key (frames before state calls), named in its note. */
+
+    /* R1-1. A frame made after an ahead arm at its onset sees the arm.
+     * x >= 5 at frame rate, entry now (true at the arm: a hit at the next
+     * onset). x 0 at 2, frame 5, x 10 at 8, arm at 10 (ahead: N 8), frame
+     * 10. R: the frame lets the group in right before itself; the arm's
+     * next onset is this frame's: a hit at 10, found at 10. Old key: the
+     * frame goes first; the arm, let in at 12, waits for the next onset:
+     * a hit at 15. (The first draft used entry arm: a crossing detect
+     * armed while its held value is true is held, in either order, so it
+     * told nothing.) */
+    g_case = "r1-frame-after-arm-at-onset";
+    n[0] = pen(0);
+    n[1] = det(0, 5, YSIG_ENTRY_NOW, 0, 1, 0); n[1].p[YSIG_DETECT_AT] = 1;
+    open_g(n, 2, 4);
+    pen_at(2 * MS, 0); frame(5 * MS, 5 * MS); pen_at(8 * MS, 10);
+    ysig_arm(&g, 1, 10 * MS);
+    frame(10 * MS, 10 * MS);
+    { double e[] = { 10 }; int m = hits(h, 64); expect_hits(h, m, e, 1); if (m == 1 && h[0].t_found != 10 * MS) bad("found at %g ms, expected %g", h[0].t_found / 1e6, 10); }
+    pen_at(12 * MS, 10); frame(15 * MS, 15 * MS);
+    if (hits(h, 64)) bad("%g more hits by 15 ms, expected %g", 1, 0);
+    ysig_get_stats(&g, &s);
+    if (s.arm_unverified || s.late_frames) bad("arm_unverified %g, late_frames %g, expected 0 and 0 (the frame is G's L; the frame is at R's end)", (double)s.arm_unverified, (double)s.late_frames);
+
+    /* R1-2 (control). The frame made before the arm: frame 10, then arm
+     * at 10 (present: N 10). The pass at 10 ran before the arm: the hit is
+     * at the next onset, 15. The same under the old key. */
+    g_case = "r1-frame-before-arm-at-onset";
+    n[0] = pen(0);
+    n[1] = det(0, 5, YSIG_ENTRY_NOW, 0, 1, 0); n[1].p[YSIG_DETECT_AT] = 1;
+    open_g(n, 2, 4);
+    pen_at(2 * MS, 0); frame(5 * MS, 5 * MS); pen_at(8 * MS, 10);
+    frame(10 * MS, 10 * MS);
+    ysig_arm(&g, 1, 10 * MS);
+    if (hits(h, 64)) bad("%g hits at the arm, expected %g", 1, 0);
+    pen_at(12 * MS, 10); frame(15 * MS, 15 * MS);
+    { double e[] = { 15 }; expect_hits(h, hits(h, 64), e, 1); }
+    ysig_get_stats(&g, &s);
+    if (s.arm_unverified) bad("arm_unverified %g, expected %g", (double)s.arm_unverified, 0);
+
+    /* R1-3. disarm_at(t), then the frame at t: the frame sees the control
+     * disarmed. Frame-rate crossing x >= 5, armed at 1 (present), frame 5
+     * (false), x 10 at 8, disarm_at(10), frame 10: the arm ends at 10
+     * before the pass, no hit; the frame is not late. Old key: the frame
+     * goes before the disarm_at (late, run again): a hit at 10. */
+    g_case = "r1-disarm-at-then-frame";
+    n[0] = pen(0);
+    n[1] = det(0, 5, YSIG_ENTRY_ARM, 0, 1, 0); n[1].p[YSIG_DETECT_AT] = 1;
+    open_g(n, 2, 4);
+    pen_at(1 * MS, 0);
+    ysig_arm(&g, 1, 1 * MS);
+    frame(5 * MS, 5 * MS); pen_at(8 * MS, 10);
+    ysig_disarm_at(&g, 1, 10 * MS);
+    frame(10 * MS, 10 * MS);
+    pen_at(12 * MS, 10);
+    if (hits(h, 64)) bad("%g hits, expected %g (the control ended at 10, before the frame)", 1, 0);
+    ysig_get_stats(&g, &s);
+    if (s.late_frames || s.arm_unverified) bad("late_frames %g, arm_unverified %g, expected 0 and 0", (double)s.late_frames, (double)s.arm_unverified);
+
+    /* R1-4. A set, the frame, an arm, at one time: the frame ends the gap
+     * and sees the set. D1 frame-rate crossing x >= 5 armed at 1, frame 5
+     * (false), x 3 at 10, set D1's level to 2 (at N 10), frame 10, arm D2
+     * (x >= 1, entry now, at sample rate) at 10. R: the pass at 10 tests
+     * 3 >= 2: D1's hit at 10; D2 present, true at the arm: a hit at 10.
+     * Old key: the frame before the set (3 >= 5 false): no D1 hit. */
+    g_case = "r1-set-frame-arm-gap";
+    n[0] = pen(0);
+    n[1] = det(0, 5, YSIG_ENTRY_ARM, 0, 1, 0); n[1].p[YSIG_DETECT_AT] = 1;
+    n[2] = det(0, 1, YSIG_ENTRY_NOW, 0, 1, 0);
+    open_g(n, 3, 4);
+    pen_at(1 * MS, 0);
+    ysig_arm(&g, 1, 1 * MS);
+    frame(5 * MS, 5 * MS); pen_at(10 * MS, 3);
+    ysig_set(&g, 1, YSIG_DETECT_LEVEL, 2);
+    frame(10 * MS, 10 * MS);
+    ysig_arm(&g, 2, 10 * MS);
+    {
+        int m = hits(h, 64), j, d1 = 0, d2 = 0;
+        for (j = 0; j < m; j++) { if (h[j].node == 1 && h[j].t == 10 * MS) d1++; if (h[j].node == 2 && h[j].t == 10 * MS) d2++; }
+        if (m != 2 || d1 != 1 || d2 != 1) bad("D1 hits at 10: %g, D2 hits at 10: %g, expected 1 and 1", d1, d2);
+    }
+    ysig_get_stats(&g, &s);
+    if (s.arm_unverified || s.late_frames) bad("arm_unverified %g, late_frames %g, expected 0 and 0", (double)s.arm_unverified, (double)s.late_frames);
+
+    /* R1-5 (control, T7). A feed at the onset fed after the frame is late
+     * and goes before it. Frame-rate crossing x >= 5 armed at 1, frame 5
+     * (false), frame 10 (false), then x 10 at 10: the frame runs again,
+     * its pass is true: a hit at 10. The same under the old key. */
+    g_case = "r1-feed-after-frame";
+    n[0] = pen(0);
+    n[1] = det(0, 5, YSIG_ENTRY_ARM, 0, 1, 0); n[1].p[YSIG_DETECT_AT] = 1;
+    open_g(n, 2, 4);
+    pen_at(1 * MS, 0);
+    ysig_arm(&g, 1, 1 * MS);
+    frame(5 * MS, 5 * MS); frame(10 * MS, 10 * MS);
+    if (hits(h, 64)) bad("%g hits before the late feed, expected %g", 1, 0);
+    pen_at(10 * MS, 10);
+    { double e[] = { 10 }; expect_hits(h, hits(h, 64), e, 1); }
+    ysig_get_stats(&g, &s);
+    if (s.late_hits_voided || s.arm_unverified) bad("late_hits_voided %g, arm_unverified %g, expected 0 and 0", (double)s.late_hits_voided, (double)s.arm_unverified);
+
+    /* R1-6. A settle at an ahead arm's time lets it in: x >= 5 entry now
+     * at sample rate, x 10 at 2, arm at 10 (ahead), settle(10): the
+     * group goes in right before the settle, true at the arm: a hit at 10,
+     * handed out at the settle. Old key: the settle first, the arm waits
+     * for input later than 10. */
+    g_case = "r1-settle-after-arm-at-t";
+    n[0] = pen(0);
+    n[1] = det(0, 5, YSIG_ENTRY_NOW, 0, 1, 0);
+    open_g(n, 2, 4);
+    pen_at(2 * MS, 10);
+    ysig_arm(&g, 1, 10 * MS);
+    if (hits(h, 64)) bad("%g hits at the ahead arm's call, expected %g", 1, 0);
+    ysig_settle(&g, 10 * MS);
+    { double e[] = { 10 }; expect_hits(h, hits(h, 64), e, 1); }
+    ysig_get_stats(&g, &s);
+    if (s.arm_unverified) bad("arm_unverified %g, expected %g (the settle is G's L)", (double)s.arm_unverified, 0);
+
+    /* R1-7 (R2, the oracle's case 962 shape). A late plain disarm takes a
+     * place in the gap of a group already in R: condition 4 fails, so the
+     * group is counted. D1, D2 on the pen. x 0 at 8; arm D1 at 10 (ahead);
+     * disarm_at(D2, 12); disarm_at(D1, 12) lets D1's group in (X1); then
+     * a plain disarm of D2 at N 8: late (disarm_at(D2, 12) has the greater
+     * key), placed after the 8 ms input, before D1's arm, in its gap. */
+    g_case = "r1-late-disarm-in-gap";
+    n[0] = pen(0);
+    n[1] = det(0, 5, YSIG_ENTRY_NOW, 0, 1, 0);
+    n[2] = det(0, 5, YSIG_ENTRY_NOW, 0.002, 1, 0);
+    open_g(n, 3, 4);
+    pen_at(8 * MS, 0);
+    ysig_arm(&g, 1, 10 * MS);
+    ysig_disarm_at(&g, 2, 12 * MS);
+    ysig_disarm_at(&g, 1, 12 * MS);
+    ysig_disarm(&g, 2);
+    pen_at(14 * MS, 0);   /* a disarm in no group takes effect at its gap's end */
+    ysig_get_stats(&g, &s);
+    if (s.arm_unverified < 1) bad("arm_unverified %g, expected at least %g (condition 4, retested at the late disarm)", (double)s.arm_unverified, 1);
+#endif
+
     printf("%s: %d failed\n", g_fail ? "sig_arm_spec_cases" : "sig_arm_spec_cases ok", g_fail);
     return g_fail ? 1 : 0;
 }

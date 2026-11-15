@@ -752,26 +752,28 @@ if(YSP_BUILD_TESTS)
     add_test(NAME test_experiment_tables COMMAND test_experiment_tables)
     # ysp/sig.h's arm in the past and late input: the reviewer's oracle and
     # spec cases, written from docs/sig.md ("An arm in the past: the
-    # semantics", "Late input"). The oracle in late mode 4 with A's checks,
-    # at 3,000 cases and a fixed seed, with the late generator on and off;
+    # semantics", "Late input"). The oracle in late mode 4 with A's checks
+    # and the reviewer's switches of 2026-11-15 (R1, the tie, disarm_at and
+    # exit shapes, the horizons), at 3,000 cases and a fixed seed, with the
+    # late generator on and off;
     # it passes on the two targets of "Exactness"
     # (sig_arm_ref_check.cmake). The run at scale is in docs/sig.md.
     # ysig_disarm_at(): the reviewer's hand-derived cases, and the 0.7.0
     # header with a zeroed window as the second B (in the same file).
     ysp_add_program(test_sig_arm_spec tests/adapt/sig_arm_spec_cases.c core)
-    target_compile_definitions(test_sig_arm_spec PRIVATE SIG_ARM_REF_SPEC=1)
+    target_compile_definitions(test_sig_arm_spec PRIVATE SIG_ARM_REF_SPEC=1 SIG_SPEC_R1=1 SIG_SPEC_X1=1)
     add_test(NAME test_sig_arm_spec COMMAND test_sig_arm_spec)
     ysp_add_program(test_sig_disarm_at tests/adapt/sig_disarm_at_cases.c core)
-    target_compile_definitions(test_sig_disarm_at PRIVATE SIG_HAS_LATE_VOIDED=1 SIG_SPEC_X1=1)
+    target_compile_definitions(test_sig_disarm_at PRIVATE SIG_HAS_LATE_VOIDED=1 SIG_SPEC_R1=1 SIG_SPEC_X1=1)
     add_test(NAME test_sig_disarm_at COMMAND test_sig_disarm_at)
     ysp_add_program(test_sig_arm_ref tests/adapt/sig_arm_ref.c core)
     target_compile_definitions(test_sig_arm_ref PRIVATE SIG_ARM_REF_SPEC=1 SIG_HAS_UNV=1 SIG_HAS_LATE=1 SIG_HAS_LATE_VOIDED=1
                                SIG_HAS_DISARM_AT=1 SIG_HAS_DETECTED_TO=1 SIG_HAS_DERIVED_TO=1)
     add_test(NAME test_sig_arm_ref_late COMMAND ${CMAKE_COMMAND} -DPROG=$<TARGET_FILE:test_sig_arm_ref>
-             -DCASES=3000 -DSEED=20261115 "-DENV=SIG_ORACLE_LATE=4;SIG_ORACLE_PRED=1;SIG_ORACLE_P2STRICT=1;SIG_ORACLE_LATE_A=1"
+             -DCASES=3000 -DSEED=20261115 "-DENV=SIG_ORACLE_R1=1;SIG_ORACLE_GEN_TIE=1;SIG_ORACLE_GEN_DISARM_AT=1;SIG_ORACLE_GEN_EXIT=1;SIG_ORACLE_DAX=1;SIG_ORACLE_GEN_DRAIN_TO=1;SIG_ORACLE_DERIVED_TO=1;SIG_ORACLE_LATE=4;SIG_ORACLE_LATE_A=1;SIG_ORACLE_P2STRICT=1;SIG_ORACLE_PRED=1"
              -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/adapt/sig_arm_ref_check.cmake)
     add_test(NAME test_sig_arm_ref_late_off COMMAND ${CMAKE_COMMAND} -DPROG=$<TARGET_FILE:test_sig_arm_ref>
-             -DCASES=3000 -DSEED=20261115 "-DENV=SIG_ORACLE_LATE=4;SIG_ORACLE_PRED=1;SIG_ORACLE_P2STRICT=1;SIG_ORACLE_LATE_A=1;SIG_ORACLE_OFF=l"
+             -DCASES=3000 -DSEED=20261115 "-DENV=SIG_ORACLE_R1=1;SIG_ORACLE_GEN_TIE=1;SIG_ORACLE_GEN_DISARM_AT=1;SIG_ORACLE_GEN_EXIT=1;SIG_ORACLE_DAX=1;SIG_ORACLE_GEN_DRAIN_TO=1;SIG_ORACLE_DERIVED_TO=1;SIG_ORACLE_LATE=4;SIG_ORACLE_LATE_A=1;SIG_ORACLE_P2STRICT=1;SIG_ORACLE_PRED=1;SIG_ORACLE_OFF=l"
              -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/adapt/sig_arm_ref_check.cmake)
 endif()
 if(TARGET SDL3::SDL3 AND YSP_BUILD_EXAMPLES)
