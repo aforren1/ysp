@@ -261,12 +261,15 @@ struct pl_v2 {
                                 * take (N1)                                */
     int64_t dr_n, dr_g;        /* hit drains so far; the latest's horizon   */
     int64_t take_dr;           /* dr_n at the latest take                   */
-    int took_rs, took_k;       /* the state the latest take left and its
-                                * exit's place in the list (n_exits: a
-                                * steps' end, which a hit at its time beats;
-                                * -1: none). R5 (i): a hit at the take's time
-                                * of an exit earlier in the list would have
-                                * won by rule 4, so it came late           */
+    /* R5 (i): every take at one time, not only the latest: a hit at that
+     * time of an exit earlier in a left state's list would have won by
+     * rule 4, so it came late. A chain of takes at one time leaves several
+     * states, and the latest alone misses the earlier ones' exits. Per
+     * take: the state left, its exit's place (n_exits: a steps' end, which
+     * a hit at its time beats; -1: none), dr_n at it */
+    int64_t ch_t;              /* the chain's time; INT64_MIN: none         */
+    int ch_n, ch_cap;
+    int* ch_rs; int* ch_k; int64_t* ch_dr;
     int64_t* arm_tk;           /* per node: dr_n at its arm, and at the    */
     int64_t* arm_tk_prev;      /* arm before: a hit of an arm that a drain
                                 * before a take followed, earlier than that
@@ -2021,7 +2024,15 @@ int pl_v2_load(pl_player* p) {
         memset(v->arm_tk, 0, sizeof(int64_t) * (size_t)v->nn);
         memset(v->arm_tk_prev, 0, sizeof(int64_t) * (size_t)v->nn);
         v->g_used = v->g_der = INT64_MIN;
-        v->took_rs = -1;
+        /* every v2_take() and steps' end at one time: take_cap bounds the
+         * takes, and each take can follow a steps' end */
+        v->ch_cap = 2 * v->take_cap + 2;
+        v->ch_rs = (int*)pl_alloc(p, sizeof(int) * (size_t)v->ch_cap);
+        v->ch_k = (int*)pl_alloc(p, sizeof(int) * (size_t)v->ch_cap);
+        v->ch_dr = (int64_t*)pl_alloc(p, sizeof(int64_t) * (size_t)v->ch_cap);
+        if (!v->ch_rs || !v->ch_k || !v->ch_dr) return -1;
+        v->ch_t = INT64_MIN;
+        v->ch_n = 0;
         v->arm_min = INT64_MAX;
         v->lag_max = YTR_MISSING_NS;
         if (!v->st_armed || !v->dis_t || !v->der) return -1;
@@ -2812,8 +2823,13 @@ static bool v2_from_due(pl_player* p, const pl_v2* v) {
 static void v2_took(pl_player* p, pl_v2* v, int64_t t, const yscr_frame* f, int k) {
     pl_v2_session* S = p->v2s;
     int64_t lag = f->onset - t;
-    v->took_rs = v->cur;
-    v->took_k = k;
+    if (t != v->ch_t) { v->ch_t = t; v->ch_n = 0; }
+    if (v->ch_n < v->ch_cap) {
+        v->ch_rs[v->ch_n] = v->cur;
+        v->ch_k[v->ch_n] = k;
+        v->ch_dr[v->ch_n] = v->dr_n;
+        v->ch_n++;
+    }
     if (v->lag_max == YTR_MISSING_NS || lag > v->lag_max) v->lag_max = lag;
     if (S->lag_n == 0 || lag > S->lag_max) S->lag_max = lag;
     S->lag_n++;
@@ -2973,15 +2989,21 @@ static int v2_hits(pl_player* p, pl_v2* v, const yscr_frame* f) {
                  * arm met at once): taken as its, so no false stop */
                 int64_t tk = h[i].t >= v->arm_t[h[i].node] ? v->arm_tk[h[i].node] : v->arm_tk_prev[h[i].node];
                 if (tk < v->take_dr) return v2_beyond(p, v, "a hit", h[i].t, v->g_used);
-            } else if (h[i].t == v->take_t && v->took_rs >= 0 && v->took_k > 0) {
-                /* R5 (i): at the take's own time, a hit of an arm the take
-                 * followed whose exit comes earlier in the list than the
-                 * one taken would have won by rule 4: it came late */
+            } else if (h[i].t == v->ch_t) {
+                /* R5 (i): at a take's own time, a hit of an arm that take
+                 * followed whose exit comes earlier in the left state's
+                 * list than the one taken would have won by rule 4: it came
+                 * late. Each take of the chain at that time, not only the
+                 * latest */
                 int64_t tk = h[i].t >= v->arm_t[h[i].node] ? v->arm_tk[h[i].node] : v->arm_tk_prev[h[i].node];
-                const v2_rs* tr = &v->rs[v->took_rs];
-                int j;
-                for (j = 0; tk < v->take_dr && j < v->took_k && j < tr->n_exits; j++)
-                    if (tr->exits[j].kind == X_HIT && tr->exits[j].node == h[i].node) return v2_beyond(p, v, "a hit", h[i].t, v->take_t);
+                int c, j;
+                for (c = 0; c < v->ch_n; c++) {
+                    const v2_rs* tr;
+                    if (v->ch_rs[c] < 0 || tk >= v->ch_dr[c]) continue;
+                    tr = &v->rs[v->ch_rs[c]];
+                    for (j = 0; j < v->ch_k[c] && j < tr->n_exits; j++)
+                        if (tr->exits[j].kind == X_HIT && tr->exits[j].node == h[i].node) return v2_beyond(p, v, "a hit", h[i].t, v->ch_t);
+                }
             }
             v->ctl[ci].hit_t = h[i].t;
             v->ctl[ci].has_hit = true;
@@ -3218,7 +3240,8 @@ int pl_v2_trial_start(pl_player* p, const yscr_frame* f) {
             int r;
             for (r = 0; r < p->def->n_sigroles; r++) S->newest[r] = INT64_MIN;
             v->g_used = v->g_der = INT64_MIN;
-            v->took_rs = -1;
+            v->ch_t = INT64_MIN;
+            v->ch_n = 0;
             v->arm_min = INT64_MAX;
         }
         {

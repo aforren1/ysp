@@ -2606,13 +2606,86 @@ def t_v2_n1_tie(ctx):
             check(r.rc == 0 and len(r.trials) == 1, "%s: a hit after the take's time changes nothing: exit %d %s" % (nm, r.rc, r.err[-300:]))
 
 
+def t_v2_n1_chain(ctx):
+    # R5 (i) through a chain of takes at one time: as t_v2_n1_tie, but s0's
+    # after_s exit at 0.1 goes to s1, whose exit on away (a second role, on
+    # time, far from its region) is met at its arm and taken at 0.1 too. The
+    # latest take left s1, which has no exit on home, so a check of the
+    # latest take alone missed home's hit at 0.1, which comes earlier in
+    # s0's list than the exit taken. (An instant exit is no take: it is
+    # followed inside the entry.) The control: the hand enters at 0.105
+    P = period_ns(ctx)
+    poll = (100000000 + P) // P * P
+    bound = (poll - 100000000) / 1e9
+    for v, enter in ((0, 0.1), (1, 0.105)):
+        smp = os.path.join(ctx.out, "v2_n1_chain_%d.csv" % v)
+        write_samples(smp, sorted([(0.005 * k, "hand", 0 if 0.005 * k >= enter - 1e-9 else 9, 0) for k in range(0, 80)] +
+                                  [(0.005 * k, "aux", 100, 0) for k in range(0, 80)]))
+        t = {"controls": {"home": {"control": "region", "of": "hand", "radius": 3},
+                          "away": {"control": "region", "of": "aux", "radius": 5, "outside": True}},
+             "states": [{"name": "s0", "exits": [{"on": "home", "to": "end", "outcome": "hit"}, {"after_s": 0.1, "to": "s1"}]},
+                        {"name": "s1", "exits": [{"on": "away", "to": "s2"}]},
+                        {"name": "s2", "exits": [{"after_s": 0.2, "to": "end"}]}]}
+        nm = "v2_n1_chain_%d" % v
+        roles = {"hand": {"type": "position2d", "units": "display_px"}, "aux": {"type": "position2d", "units": "display_px"}}
+        r = Run(ctx, nm, v2base({"t": t}, [{"name": "l", "trial": "t"}], roles=roles),
+                args=["--sim-gain", "hand=1", "--sim-gain", "aux=1", "--samples", smp, "--test-sample-late", "hand=0.03", "--test-sample-bound", "hand=%.9f" % bound,
+                      "--max-seconds", "20"])
+        states = [e["text"] for e in r.events if e["kind"] == "state"] if r.rc == 0 else []
+        if v == 0:
+            check(r.rc != 0 and "late_beyond_bound" in r.err, "%s: a hit at a chain's time with an earlier exit of the first state stops the guard: exit %d %s" %
+                  (nm, r.rc, r.err[-300:]))
+        else:
+            check(r.rc == 0 and states == ["s0", "s1", "s2"], "%s: a hit after the chain's time changes nothing: exit %d %s %s" % (nm, r.rc, r.err[-300:], states))
+
+
+def t_v2_n1_derived(ctx):
+    # R5 (ii): a derived event earlier than the last derived drain's
+    # horizon is excused when a state call placed since that drain is at or
+    # before it. The hand's reports come 30 ms late within their bound; a
+    # movement response collects its emits. a's exit on home is taken at
+    # the hit's time, once the horizon passes it, and ends a with
+    # ysig_disarm_at() there; b arms nothing, so the disarm is the only
+    # state call placed since the drain. The window runs again from the
+    # hit's time and gives the same emits, which stay handed out: no stop.
+    # Measured 2026-11-15: this case passes with the disarm's excuse taken
+    # out too, so it holds the shape, not the excuse. In the player no state
+    # call can make a new emit before the horizon: the emits are the
+    # samples' positions at the samples' times, a disarm does not change
+    # them, ysig_set() comes only at a trial's start before
+    # ysig_reset_trial() (a barrier), and a recenter goes at N, after every
+    # input of its footprint. The control: the same run with a bound of
+    # 10 ms under 30 ms late reports, so emits before the horizon do come
+    # late: the guard stops
+    hand = {"hand": {"type": "position2d", "units": "display_px"}}
+    smp = os.path.join(ctx.out, "v2_n1_derived.csv")
+    write_samples(smp, [(0.001 * k, "hand", 9 if k < 100 else 0, 0) for k in range(5000)])
+    t = {"controls": {"home": {"control": "region", "of": "hand", "radius": 3},
+                      "go": {"control": "movement", "of": "hand", "onset": 50, "from": "home"}},
+         "states": [{"name": "a", "steps": [{"on": "s"}], "exits": [{"on": "home", "to": "b"}]},
+                    {"name": "b", "steps": [{"on": "t"}], "exits": [{"after_s": 0.3, "to": "c"}]},
+                    {"name": "c", "exits": [{"on": "response", "to": "end", "outcome": "rsp"}, {"after_s": 0.5, "to": "end", "outcome": "none"}]}],
+         "response": {"choices": [{"signal": "go"}], "from": "t", "duration_s": 3}}
+    for v, bound in ((0, "0.03"), (1, "0.01")):
+        nm = "v2_n1_derived" if v == 0 else "v2_n1_derived_control"
+        r = Run(ctx, nm, v2base({"t": t}, [{"name": "l", "trial": "t"}], roles=hand),
+                args=["--sim-gain", "hand=1", "--samples", smp, "--test-sample-late", "hand=0.03", "--test-sample-bound", "hand=" + bound,
+                      "--max-seconds", "20"])
+        if v == 0:
+            states = [e["text"] for e in r.events if e["kind"] == "state"] if r.rc == 0 else []
+            check(r.rc == 0 and states == ["a", "b", "c"], "%s: a late disarm before the horizon is no late report: exit %d %s %s" %
+                  (nm, r.rc, r.err[-300:], states))
+        else:
+            check(r.rc != 0 and "late_beyond_bound" in r.err, "%s: reports later than their bound stop the guard: exit %d %s" % (nm, r.rc, r.err[-300:]))
+
+
 TESTS = [t_nested, t_if_unless, t_empty_and_zero, t_loop, t_requeue, t_track_ends, t_lookup_keys, t_triggers, t_after_timing, t_outcomes,
          t_method_update, t_seeds, t_refused, t_unused_stim, t_record_data, t_fix_density, t_fix_key_reapply, t_fix_stale_rdk,
          t_fix_timeout_values, t_fix_any_key, t_fix_from_in_if, t_fix_shown_twice, t_fix_vars_data, t_fix_sound_twice, t_fix_rdk_limit,
          t_fix_record_inherit, t_fix_backward_at, t_fix_refusals, t_fix_michelson_order, t_fix_texture_vars, t_fix_walk_budget,
          t_fix_data_set, t_fix_check_all_leaves, t_fix_release_order, t_fix_key_var_reapply,
          t_r2_release_other_template, t_r2_yield_draws_nothing, t_r2_low, t_r2_relaxed, t_r4_leaf_loop_done_track, t_r4_requeue_full,
-         t_r5_wait_final, t_r6_allow_below, t_v2_states, t_v2_until, t_v2_hand, t_v2_rule5, t_v2_review2, t_v2_review3, t_v2_f34, t_v2_ties, t_v2_review4, t_v2_review5, t_v2_findings, t_v2_corpus, t_v2_window_8k, t_v2_two_hands, t_v2_two_exits_one_ctl, t_v2_n1_tie]
+         t_r5_wait_final, t_r6_allow_below, t_v2_states, t_v2_until, t_v2_hand, t_v2_rule5, t_v2_review2, t_v2_review3, t_v2_f34, t_v2_ties, t_v2_review4, t_v2_review5, t_v2_findings, t_v2_corpus, t_v2_window_8k, t_v2_two_hands, t_v2_two_exits_one_ctl, t_v2_n1_tie, t_v2_n1_chain, t_v2_n1_derived]
 
 
 def main():
