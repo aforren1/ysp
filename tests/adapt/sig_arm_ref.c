@@ -3,6 +3,12 @@
  * 09ecfb2, amended in b6676f4) and the graph's other rules in sig.md. It
  * does not read the header's internals.
  *
+ * Cancel by key across a barrier (the builder's cases 187 and 205 of seed
+ *   20261115, OFF=l): mode 4's cancel of an arm already in R searched all
+ *   of R, so a disarm after a barrier cancelled arms made before it. R
+ *   holds the calls since the last barrier and a barrier is never crossed:
+ *   the search now starts after the last barrier.
+ *
  * Late voids (the coordinator's ruling of 2026-11-15; the builder's case
  *   763 of seed 20261115; clarified: late inputs only): a hit handed out
  *   that a late input (feed, frame, settle) voids counts in
@@ -773,7 +779,11 @@ static void cancel_by_disarm(int node, int64_t t, int disarm_ci) {
          * its detect made before it, waiting or already let in, exactly when
          * its key is smaller than the arm's group key: time earlier than
          * tau (at one time the arm, made before, has the smaller key) */
-        int gi;
+        int gi, lb = -1, q0;
+        /* R holds the calls since the last barrier, and a barrier is never
+         * crossed: only arms after it (the builder's case 187 of seed
+         * 20261115, OFF=l) */
+        for (q0 = 0; q0 < g_nR; q0++) if (g_R[q0].flags & E_BARRIER) lb = q0;
         for (gi = 0; gi < g_ngr; gi++) {
             group* G = &g_gr[gi];
             int waits = 0, q;
@@ -781,7 +791,7 @@ static void cancel_by_disarm(int node, int64_t t, int disarm_ci) {
             for (q = 0; q < g_nwait; q++) if (g_wait[q] == gi) waits = 1;
             if (!waits) {
                 int in = 0;
-                for (q = 0; q < g_nR; q++) if (g_R[q].ci == G->arm_ci) in = 1;
+                for (q = lb + 1; q < g_nR; q++) if (g_R[q].ci == G->arm_ci) in = 1;
                 if (!in) continue;   /* not made (never let in): nothing in R */
                 r_remove_ci(G->arm_ci);
                 g_r_moved = 1;
