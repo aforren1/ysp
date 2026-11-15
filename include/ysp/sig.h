@@ -5113,7 +5113,10 @@ static void ysig__wait_place(ysig_graph* g, int k, int with_arm) {
         ysig_entry e = calls[i];
         uint64_t f[YSIG__FPW];
         ysig__state_fp(g, &e, f);
-        ysig__wait_fire(g, cn[i], f, 0);
+        /* S1: a group's call lets in at its tau (T1's closure above let
+         * in every such group already); at a barrier, with no arm, at
+         * the call's own input time as before */
+        ysig__wait_fire(g, with_arm ? a.t : cn[i], f, 0);
         if (e.kind == YSIG_J_DISARM) e.t = a.t;
         ysig__cas_call(g, ci, a.seq, a.t, e.kind, e.node);
         if (g->cu) {
@@ -5679,7 +5682,7 @@ static void ysig__wait_blk(ysig_graph* g, int k, int* nb) {
     for (i = 0; i < nc && *nb < YSIG__BLK - 1; i++) {
         uint64_t f[YSIG__FPW];
         ysig__state_fp(g, &calls[i], f);
-        ysig__wait_fire_blk(g, cn[i], f, 0, nb);
+        ysig__wait_fire_blk(g, a.t, f, 0, nb);   /* S1: at the group's tau */
         c = &g->cu->blk[(*nb)++];
         memset(c, 0, sizeof *c);
         c->e = calls[i];
@@ -6158,10 +6161,38 @@ static void ysig__unv_place(ysig_graph* g, int kslot, uint64_t pos, int nb) {
  * last logged call that must come before it; the window runs again from
  * the newest checkpoint at or before that place. The waiting groups its
  * calls let in at their calls stay where they went in (wp). */
+/* S1 (2026-11-15): a group's state calls let in at its tau, but an open
+ * gap's calls let in at their call (N(F(c)), a plain disarm's N), since
+ * no arm closed the gap yet. 1 when the two differ for the gap [from,
+ * c_head): a waiting group earlier than t meets one of its calls, or a
+ * call let in a group at a time t does not reach (a plain disarm at N
+ * later than tau). The block is then made again at t. */
+static int ysig__gap_tau(ysig_graph* g, uint64_t from, int64_t t) {
+    ysig__cu* cu = g->cu;
+    ysig__wt* w = g->wt;
+    uint64_t s, f[YSIG__FPW], fa[YSIG__FPW];
+    int k;
+    for (s = from; s < cu->c_head; s++) {
+        const ysig__call* c = &cu->calls[s % (uint64_t)cu->C];
+        if (c->wp) {
+            if (c->tr > t) return 1;
+            continue;
+        }
+        if (c->e.kind == YSIG_J_ARM) continue;
+        ysig__state_fp(g, &c->e, f);
+        for (k = 0; k < w->n; k++) {
+            if (w->a[k].t >= t) continue;
+            ysig__wait_fp(g, &w->a[k], fa);
+            if (ysig__fp_meets(g, fa, f)) return 1;
+        }
+    }
+    return 0;
+}
 static void ysig__arm_past(ysig_graph* g, ysig_entry* e, uint64_t seq) {
     ysig__cu* cu = g->cu;
-    int node = e->node, kslot, pinned = 0, logged, ng = 0;
+    int node = e->node, kslot, pinned = 0, logged, ng = 0, s1;
     int64_t t = e->t;
+    uint64_t room;
     uint64_t F[YSIG__FPW], f[YSIG__FPW], pf[YSIG__FPW];
     uint64_t from = cu->grp_open && !cu->grp_bad ? cu->grp_from : cu->c_head, pos, s, end, q;
     int w;
@@ -6193,7 +6224,11 @@ static void ysig__arm_past(ysig_graph* g, ysig_entry* e, uint64_t seq) {
     /* nothing logged must follow it but the gap's let-ins: made where it
      * is. With no checkpoint the log is not kept (a clear inside a run
      * again leaves its calls after that one): nothing is known (1414) */
-    if (cu->n_ck && !cu->grp_bad && cu->c_head - cu->c_tail < (uint64_t)cu->C && pos == UINT64_MAX) {
+    /* S1: what the gap's calls let in at t that they did not at their
+     * calls goes into the block, so the log needs room for it too */
+    s1 = !cu->grp_bad && ysig__gap_tau(g, from, t);
+    room = s1 ? (uint64_t)(g->wt->nc + g->wt->n) : 0;
+    if (cu->n_ck && !cu->grp_bad && cu->c_head - cu->c_tail < (uint64_t)cu->C && pos == UINT64_MAX && !s1) {
         int nothing = 1;
         for (s = from; s < cu->c_head && nothing; s++)
             if (cu->calls[s % (uint64_t)cu->C].wp) nothing = 0;
@@ -6214,7 +6249,7 @@ static void ysig__arm_past(ysig_graph* g, ysig_entry* e, uint64_t seq) {
     }
     if (pos == UINT64_MAX) pos = from;
     kslot = cu->grp_bad || pinned ? -1 : ysig__ck_at(cu, pos, INT64_MAX);
-    if (kslot < 0 || cu->c_head - cu->c_tail >= (uint64_t)cu->C || ng > YSIG__WAIT_CALLS) {
+    if (kslot < 0 || cu->c_head - cu->c_tail + room >= (uint64_t)cu->C || ng > YSIG__WAIT_CALLS) {
         if (cu->full || kslot >= 0 || cu->grp_bad || ng > YSIG__WAIT_CALLS) g->st.arm_past_full++;
         else g->st.arm_past_far++;
         ysig__dis_last(g);
@@ -6230,9 +6265,9 @@ static void ysig__arm_past(ysig_graph* g, ysig_entry* e, uint64_t seq) {
     {
         /* the gap's calls, out of [from, end), as one block: the waiting
          * groups placed in the gap go back to waiting, and each of its own
-         * calls lets in at t what it meets, right before it (H13). At t no
-         * group can come in that N did not let in, so the block is no
-         * longer than the gap. */
+         * calls lets in at t what it meets, right before it (H13, S1). A
+         * call at N(F(c)) earlier than t let in less at its call: the
+         * block can be longer than the gap, by the room tested above. */
         ysig__call* blk = cu->blk;
         int nb = 0;
         ysig__gap_unplace(g, from, end);
@@ -6346,7 +6381,14 @@ YSIG_API bool ysig_arm(ysig_graph* g, int node, int64_t t_ns) {
          * placed by key before it (a frame) would run again before the
          * group's calls: it goes to its place (the oracle's case 438: a
          * set of a channel's index lost by a run again) */
-        if (t_ns == nfg || !cu) ysig__arm_now(g, &e, seq, ysig__is_late(g, fg, t_ns, 2, seq));
+        /* S1: a present group's calls let in at tau, which can be later
+         * than their N(F(c)): when that lets in more, or a disarm let in
+         * at N what tau does not, the block is made again at its place as
+         * a past group's is. With no window, or no image to run again
+         * from, the arm is made at R's end and the rest let in after it */
+        int s1 = cu && t_ns == nfg && cu->grp_open && !cu->grp_bad && !cu->replaying && ysig__gap_tau(g, cu->grp_from, t_ns);
+        if (s1 && (ysig__ck_at(cu, cu->grp_from, INT64_MAX) < 0 || cu->c_head - cu->c_tail + (uint64_t)(g->wt->nc + g->wt->n) >= (uint64_t)cu->C)) s1 = 0;
+        if ((t_ns == nfg && !s1) || !cu) ysig__arm_now(g, &e, seq, ysig__is_late(g, fg, t_ns, 2, seq));
         else ysig__arm_past(g, &e, seq);
         ysig__c4(g, seq, t_ns);
         if (g->st.arm_caught_up == cu0) {
@@ -6377,8 +6419,9 @@ static void ysig__arm_now(ysig_graph* g, ysig_entry* ep, uint64_t seq, int late)
     int64_t t_ns = e.t;
     {
         /* present (no input later than t), or past with no window */
-        int logged = 0;
-        uint64_t from0 = 0;
+        int logged = 0, w;
+        uint64_t from0 = 0, gf[YSIG__FPW];
+        for (w = 0; w < g->dw; w++) gf[w] = g->wt->gap_f[w];   /* the disarms below clear it */
         if (t_ns < g->wt->nfg) g->st.arm_past_off++;
         if (cu) {
             uint64_t s, from = cu->grp_open && !cu->grp_bad ? cu->grp_from : cu->c_head;
@@ -6408,6 +6451,15 @@ static void ysig__arm_now(ysig_graph* g, ysig_entry* ep, uint64_t seq, int late)
         if (late) {
             if (logged) (void)ysig__late_place(g, from0, cu->c_head, cu->c_tail, t_ns, 2, seq);
             else ysig__late_nolog(g);
+        }
+        /* S1: the gap's calls let in at tau what their N(F(c)) did not.
+         * Made after them here, such a group is a late call: placed by
+         * key with a window, counted in late_off with none */
+        if (g->wt->n) {
+            ysig__cas_begin(g, YSIG__CAS_STATE, t_ns, gf);
+            g->wt->cas_dis = g->wt->gap4_wp;
+            ysig__wait_fire(g, t_ns, gf, 0);
+            ysig__cas_end(g, 0);
         }
     }
 }

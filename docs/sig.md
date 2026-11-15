@@ -552,7 +552,7 @@ R is built call by call, in call order:
    call, whose time is later than `τ` and whose footprint meets `F(G)`,
    or right before a barrier. For this test a state call's time is `N`
    at its call (input that does not meet `F(G)` can move `N` past `τ`;
-   in a past group, the group's `τ`, below),
+   in a past group, the group's `τ`, below; in 0.7.0 a group's `τ` in every class, "Late input", S1),
    and an arm call's is the smaller of its `t` and `N`: a present arm
    lets in an earlier waiting group it meets (it is at `N`), a past arm
    only one earlier than its own time (E's example: the arm at 40 ms
@@ -1181,6 +1181,25 @@ and W7 at dev1@13. Now dev2@12 lets in W8 and, before it, W7 (they meet,
 and W7's key is smaller). A report of dev1 at or before 10 that comes
 later is a late input: it goes before W7, and the window runs again.
 
+Rule 3's let-in time for a state call (S1, the coordinator's ruling of
+2026-11-15, from the reviewer): a state call of a group lets in at the
+group's `τ`, its key's time; a state call in no group at `N(F(c))`; a
+plain disarm in no group at `N`. This holds for past, present and ahead
+groups alike; the calls of an ahead group let in when the group goes in.
+The calls of an open gap let in at their call (`N(F(c))`, a plain
+disarm's `N`), since no arm has closed the gap yet; when an arm closes
+it, they let in at `τ`, and the window runs again to correct them: a
+waiting group that `τ` lets in goes in right before the call, and one
+that a call let in at its call and `τ` does not goes back to waiting.
+With no window the gap's calls are made already: a group that `τ` lets
+in is made after them, a late call (`late_off`). Reason: `τ` is the only
+reading under which a graph with a window and one without agree. The
+reduced case 334: d's arm at 19 waits (its device's last report is at
+10); a present group [set d's level, arm e at 24] follows. With `τ` the
+set lets d in right before itself, as R orders them. With `N(F(c))` =
+10, d waits, and its device's report at 26 lets it in by key before a
+set already made: a run again with a window, `late_off` without.
+
 A late call goes before every call of R that it must precede and after
 every call it must follow. When a call X already in R must follow the
 late call but sits before a call Y the late call must follow, X moves
@@ -1627,12 +1646,20 @@ questions).**
    call or barrier in call order ("Groups" defines gaps in call order;
    ruling 1 adds `ysig_disarm_at()`), even when R places that input before
    the disarm. Until then the disarm has not taken effect, and a read sees
-   its detect still armed. The same reading in the other direction: a call
-   made before the disarm does not end its gap, even when R places it after
-   the disarm (a `ysig_disarm_at()` with a later `t`). The reviewer's cases
+   its detect still armed. The same reading in the other direction (S2,
+   the coordinator's ruling of 2026-11-15): a call made before the disarm
+   does not end its gap, even when R places it after the disarm (a
+   `ysig_disarm_at()` with a later `t`); only an input, a barrier, an arm
+   or a `ysig_disarm_at()` made after it does. The reviewer's cases
    379, 477, 557, 438, 462 and 690 at 5feeb5b end with such a disarm: the
    header keeps the hit until an input ends the gap, then counts it
    (`arm_hits_superseded`, a late state call).
+7. (S1, the coordinator's ruling of 2026-11-15, from the reviewer.) A
+   state call of a group lets in at the group's `τ`, its key's time; a
+   state call in no group at `N(F(c))`; a plain disarm in no group at
+   `N`. An open gap's calls let in at their call until the arm closes the
+   gap, then at `τ`, and the run again corrects them ("Rule 3's let-in
+   time for a state call" above).
 
 Measured effect of ruling 4 (the reviewer's oracle at 99addca, mode 4
 with A's checks, seed 20261115, 3,000 cases, the Linux desktop):
