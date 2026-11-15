@@ -5106,6 +5106,7 @@ static void ysig__wait_place(ysig_graph* g, int k, int with_arm) {
     int64_t cn[YSIG__WAIT_CALLS];
     int i, nc = a.nc;
     int ci;
+    memset(&calls[0], 0, sizeof calls[0]);   /* GCC 12 -O3 -Wmaybe-uninitialized when nc is 0 */
     for (i = 0; i < nc; i++) { calls[i] = w->calls[a.c0 + i]; cseq[i] = w->call_seq[a.c0 + i]; cn[i] = w->call_n[a.c0 + i]; }
     ci = ysig__cas_group(g, &a, calls, nc, with_arm);
     ysig__wait_drop(w, k);
@@ -5553,10 +5554,12 @@ static void ysig__late_unv(ysig_graph* g, uint64_t at, uint64_t n, const uint64_
             if (c->cseq == o->l_seq && !c->wp && li == UINT64_MAX) li = s;
         }
         if (zl == UINT64_MAX || li == UINT64_MAX || at < zl || at > li) continue;
-        /* X1: a late disarm_at at or after G's time (2 (b)'s exception) */
-        if (cls == 2 && n == 1 && cu->calls[at % C].e.kind == YSIG_J_DISARM_AT && t >= o->t) continue;
+        /* X1, R2: a late disarm_at at or after G's time lets G in right
+         * before itself, so it is G's L now (2 (b)'s exception for the
+         * call itself); 2 (a) and 2 (b) again with it, as for an input */
+        int dax = cls == 2 && n == 1 && cu->calls[at % C].e.kind == YSIG_J_DISARM_AT && t >= o->t;
         ok = 0;
-        if (cls < 2 && (t > o->t || (cls == 1 && t == o->t)) && o->node >= 0) {
+        if ((dax || (cls < 2 && (t > o->t || (cls == 1 && t == o->t)))) && o->node >= 0) {
             for (q = 0; q < g->dw; q++) fa[q] = 0;
             ysig__fp_or(g, fa, o->node);
             ok = ysig__fp_meets(g, F, fa);
@@ -5564,9 +5567,13 @@ static void ysig__late_unv(ysig_graph* g, uint64_t at, uint64_t n, const uint64_
                 const ysig__call* c = &cu->calls[s % C];
                 int64_t ti;
                 if (ysig__input_t(&c->e, &ti) || c->gid == o->gid) continue;
+                /* a disarm_at at or after G's time is 2 (b)'s exception */
+                if (c->e.kind == YSIG_J_DISARM_AT && c->e.t >= o->t) continue;
                 if (ysig__fp_entry(g, c, f) == 1 && ysig__fp_meets(g, f, o->F)) ok = 0;
             }
             if (ok) { o->l_seq = cu->calls[at % C].cseq; continue; }
+        } else if (dax) {
+            continue;   /* a cancelled G: the cancel, not an L */
         }
         g->st.late_unverified++;
         return;

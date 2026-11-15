@@ -883,7 +883,10 @@ When the header tests:
 - (0.7.0, proposed in "Late input") At each late call that takes a place
   between G and `L(G)`: a state call that meets `F(G)` retests 2 (b)
   (U2), except a `ysig_disarm_at` with `t` at or after `τ` (it lets G in
-  before itself, X1); an input later than `τ` that meets `F(G)` becomes G's `L` and
+  before itself, X1): that one becomes G's `L` (R2), 2 (a) and 2 (b)
+  again with it, so a later call placed after it is outside G's span (the
+  player's 60 Hz seed 102788: a late report after the trial's end); an
+  input later than `τ` that meets `F(G)` becomes G's `L` and
   retests 2 (a) and 2 (b) (L5); one that meets an exception group there
   retests 2 (b) with R's order at `L` (L6).
 - At each input call: condition 3.
