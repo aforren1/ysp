@@ -2472,13 +2472,55 @@ def t_v2_window_8k(ctx):
           "two 8 kHz mice: the window's log holds them: exit %d %s %s" % (r.rc, r.err[-400:] if r.rc else "", arms))
 
 
+
+def t_v2_two_hands(ctx):
+    # sig.h 0.7.0: both hands' controls armed at a hit that a sample of the
+    # first hand found, the second hand's sample at that time not fed yet.
+    # The second hand's arm waits in sig.h as R has it (sig.md, "When the
+    # header tests"); before, it was made at once and counted unverified,
+    # and the guard stopped the first trial. The coordinator's repro_unv
+    # (1 kHz samples, stay_s 0.1155 so the hold ends between samples).
+    roles = {"lh": {"type": "position2d_relative", "units": "display_px"},
+             "rh": {"type": "position2d_relative", "units": "display_px"}}
+    t = {"controls": {"home": {"control": "region", "of": "lh", "radius": 5, "stay_s": 0.1155},
+                      "far": {"control": "region", "of": "lh", "radius": 5, "outside": True},
+                      "farr": {"control": "region", "of": "rh", "radius": 5, "outside": True}},
+         "states": [{"name": "a", "steps": [{"on": "s"}], "exits": [{"on": "home", "to": "b"}]},
+                    {"name": "b", "exits": [{"on": "far", "to": "end", "outcome": "far"}, {"on": "farr", "to": "end", "outcome": "far"},
+                                            {"after_s": 0.2, "to": "end", "outcome": "done"}]}]}
+    smp = os.path.join(ctx.out, "v2_two_hands.csv")
+    write_samples(smp, [(k / 1000.0, role, 0, 0) for k in range(2000) for role in ("lh", "rh")])
+    r = Run(ctx, "v2_two_hands", v2base({"t": t}, [{"name": "l", "trial": "t", "rules": ["reps 2"]}], roles=roles),
+            args=["--sim-gain", "lh=1", "--sim-gain", "rh=1", "--samples", smp, "--seed", "99"])
+    arms = {}
+    if r.rc == 0:
+        with open(os.path.join(r.data, "session.json")) as f:
+            arms = json.load(f).get("sig_arms", {})
+    check(r.rc == 0 and [x["outcome"] for x in r.trials] == ["done", "done"] and arms.get("unverified") == 0,
+          "two hands: the second hand's past arm waits for its sample: exit %d %s %s" % (r.rc, r.err[-400:] if r.rc else "", arms))
+    # b's own exit is met at its arm (near: the first hand is in it), so b
+    # ends at its entry while farr's arm still waits (the second hand's next
+    # sample is not fed): the exit disarms it (ysig_arm_waiting()), and the
+    # disarm, later than the arm, makes it and ends it (rule 3)
+    t2 = {"controls": dict(t["controls"], near={"control": "region", "of": "lh", "radius": 5}),
+          "states": [{"name": "a", "steps": [{"on": "s"}], "exits": [{"on": "home", "to": "b"}]},
+                     {"name": "b", "exits": [{"on": "near", "to": "end", "outcome": "near"}, {"on": "farr", "to": "end", "outcome": "farr"}]}]}
+    r = Run(ctx, "v2_two_hands_exit", v2base({"t": t2}, [{"name": "l", "trial": "t", "rules": ["reps 2"]}], roles=roles),
+            args=["--sim-gain", "lh=1", "--sim-gain", "rh=1", "--samples", smp, "--seed", "99"])
+    arms = {}
+    if r.rc == 0:
+        with open(os.path.join(r.data, "session.json")) as f:
+            arms = json.load(f).get("sig_arms", {})
+    check(r.rc == 0 and [x["outcome"] for x in r.trials] == ["near", "near"] and arms.get("unverified") == 0 and arms.get("ahead_cancelled") == 0,
+          "two hands: an exit at the entry disarms the second hand's waiting arm: exit %d %s %s %s" % (r.rc, r.err[-400:] if r.rc else "", [x["outcome"] for x in r.trials], arms))
+
 TESTS = [t_nested, t_if_unless, t_empty_and_zero, t_loop, t_requeue, t_track_ends, t_lookup_keys, t_triggers, t_after_timing, t_outcomes,
          t_method_update, t_seeds, t_refused, t_unused_stim, t_record_data, t_fix_density, t_fix_key_reapply, t_fix_stale_rdk,
          t_fix_timeout_values, t_fix_any_key, t_fix_from_in_if, t_fix_shown_twice, t_fix_vars_data, t_fix_sound_twice, t_fix_rdk_limit,
          t_fix_record_inherit, t_fix_backward_at, t_fix_refusals, t_fix_michelson_order, t_fix_texture_vars, t_fix_walk_budget,
          t_fix_data_set, t_fix_check_all_leaves, t_fix_release_order, t_fix_key_var_reapply,
          t_r2_release_other_template, t_r2_yield_draws_nothing, t_r2_low, t_r2_relaxed, t_r4_leaf_loop_done_track, t_r4_requeue_full,
-         t_r5_wait_final, t_r6_allow_below, t_v2_states, t_v2_until, t_v2_hand, t_v2_rule5, t_v2_review2, t_v2_review3, t_v2_f34, t_v2_ties, t_v2_review4, t_v2_review5, t_v2_findings, t_v2_corpus, t_v2_window_8k]
+         t_r5_wait_final, t_r6_allow_below, t_v2_states, t_v2_until, t_v2_hand, t_v2_rule5, t_v2_review2, t_v2_review3, t_v2_f34, t_v2_ties, t_v2_review4, t_v2_review5, t_v2_findings, t_v2_corpus, t_v2_window_8k, t_v2_two_hands]
 
 
 def main():

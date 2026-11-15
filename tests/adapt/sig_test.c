@@ -4546,6 +4546,95 @@ static int ex_open(ysig_node* n, int K) {
     rp_feed(10 * MS, 0, YIN_AXIS_PEN_PRESSURE, 3);
     return 1;
 }
+/* 0.6.1: pending groups (docs/sig.md, "Pending groups"). Two hands, each a
+ * device: lh (device 1) and rh (device 2), d on lh, e on rh (entry now,
+ * a hit output). lh's sample at 30 ms is fed, rh's at 30 ms not yet, and
+ * e is armed at 25 ms: its place is after rh's 20 ms sample, N(G) 20 ms,
+ * and L not in R yet. The bimanual definition's entry (t_v2_two_hands).
+ * rh9: rh's 20 ms value meets e's test (the arm's entry-now hit at its
+ * call); calls: the window's log (0: the default) */
+static void pg_open(int rh9, int calls) {
+    ysig_node n[4];
+    n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2); n[0].history = 64;
+    n[1] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 2, 2); n[1].history = 64;
+    n[2] = ysig_node_of(YSIG_OP_DETECT, 0, -1); n[2].p[YSIG_DETECT_LANE] = 0; n[2].p[YSIG_DETECT_LEVEL] = 5; n[2].p[YSIG_DETECT_START] = 1; n[2].history = 64;
+    n[3] = ysig_node_of(YSIG_OP_DETECT, 1, -1); n[3].p[YSIG_DETECT_LANE] = 0; n[3].p[YSIG_DETECT_LEVEL] = 5; n[3].p[YSIG_DETECT_START] = 1;
+    n[3].p[YSIG_DETECT_ENTRY] = YSIG_ENTRY_NOW; n[3].p[YSIG_DETECT_OUT] = YSIG_OUT_HIT; n[3].history = 64;
+    if (!rp_open(n, 4, 4, calls, false, false)) return;
+    rp_feed(10 * MS, 0, YIN_AXIS_POSITION, 1);
+    rp_feed(10 * MS, 0, YIN_AXIS_POSITION, 2);
+    rp_feed(20 * MS, 0, YIN_AXIS_POSITION, 1);
+    rp_feed(20 * MS, rh9 ? 9 : 0, YIN_AXIS_POSITION, 2);
+    rp_feed(30 * MS, 0, YIN_AXIS_POSITION, 1);
+    ysig_arm(&g_rp, 2, 25 * MS);   /* the first hand's control: L in R */
+    ysig_arm(&g_rp, 3, 25 * MS);   /* G, pending */
+}
+static int pg_e_hits(void) {
+    ysig_hit h[8];
+    int m, k, n = 0;
+    while ((m = ysig_detected(&g_rp, h, 8)) > 0) for (k = 0; k < m; k++) n += h[k].node == 3;
+    return n;
+}
+static void test_pending(void) {
+    int k;
+    g_where = "pending groups";
+    /* L: rh's 30 ms sample decides it, exact; a crossing after it hits */
+    pg_open(0, 0);
+    CHECK(ex_unv() == 0);
+    rp_feed(30 * MS, 0, YIN_AXIS_POSITION, 2);
+    rp_feed(40 * MS, 9, YIN_AXIS_POSITION, 2);
+    CHECK(ex_unv() == 0 && pg_e_hits() == 1);
+    /* a frame is L too (every node) */
+    pg_open(0, 0);
+    rp_frame(33 * MS);
+    CHECK(ex_unv() == 0);
+    rp_feed(30 * MS, 0, YIN_AXIS_POSITION, 2);
+    CHECK(ex_unv() == 0);
+    /* its own call: the arm's entry-now hit is read now, counted */
+    pg_open(1, 0);
+    CHECK(ex_unv() == 1);
+    /* an input at or before its time: R has it after the arm, counted */
+    pg_open(0, 0);
+    rp_feed(22 * MS, 9, YIN_AXIS_POSITION, 2);
+    CHECK(ex_unv() == 1);
+    pg_open(0, 0);
+    rp_feed(25 * MS, 9, YIN_AXIS_POSITION, 2);
+    CHECK(ex_unv() == 1);
+    /* the state ends: a disarm in no group, at the input time (30 ms):
+     * it lets the arm in and ends it, exact; no crossing hits after */
+    pg_open(0, 0);
+    ysig_disarm(&g_rp, 3);
+    rp_feed(31 * MS, 0, YIN_AXIS_POSITION, 1);   /* ends the disarm's gap */
+    rp_feed(40 * MS, 9, YIN_AXIS_POSITION, 2);
+    CHECK(ex_unv() == 0 && pg_e_hits() == 0);
+    /* a present group that meets it: at the input time, exact */
+    pg_open(0, 0);
+    ysig_arm(&g_rp, 3, 30 * MS);
+    CHECK(ex_unv() == 0);
+    /* an ahead group, or a past one placed after it, that meets it: it
+     * waits too in a graph with no window, counted */
+    pg_open(0, 0);
+    ysig_arm(&g_rp, 3, 50 * MS);
+    CHECK(ex_unv() == 1);
+    pg_open(0, 0);
+    ysig_arm(&g_rp, 3, 26 * MS);
+    CHECK(ex_unv() >= 1);
+    /* a barrier: counted (the graph with no window cancels it there) */
+    pg_open(0, 0);
+    ysig_flush(&g_rp);
+    CHECK(ex_unv() == 1);
+    pg_open(0, 0);
+    ysig_reset_trial(&g_rp, 40 * MS);
+    CHECK(ex_unv() == 1);
+    /* the window's log drops G's calls before L (a 32-call log, the first
+     * hand alone for 40 calls): still decided by L, exact */
+    pg_open(0, 32);
+    for (k = 0; k < 40; k++) rp_feed((31 + k) * MS, 0, YIN_AXIS_POSITION, 1);
+    CHECK(ex_unv() == 0);
+    rp_feed(80 * MS, 0, YIN_AXIS_POSITION, 2);
+    CHECK(ex_unv() == 0);
+}
+
 static void test_arm_exact(void) {
     ysig_node n[5];
     int v;
@@ -6462,6 +6551,7 @@ int main(void) {
     test_arm_exact();
     test_disarm_at_gap_end();
     test_hit_whole_value();
+    test_pending();
     if (g_failures) { fprintf(stderr, "sig_test: %d failures\n", g_failures); return 1; }
     printf("sig_test: all checks passed\n");
     return 0;

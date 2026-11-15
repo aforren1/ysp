@@ -3144,6 +3144,26 @@ int pl_v2_on_record(pl_player* p, const yscr_record* rec) {
 
 /* After ytl_evaluate(): the graph's frame (3.6), the hits it found (rule 5),
  * the frame rows, and the trial's end after its ysig_frame (3.10). */
+/* The guard on sig.h's arm_unverified, summed over every graph. */
+static int v2_unv_guard(pl_player* p, const pl_v2* v) {
+    pl_v2_session* S = p->v2s;
+    int64_t u = 0;
+    int ti;
+    for (ti = 0; S && ti < S->n_t; ti++) {
+        ysig_stats st;
+        if (!S->t[ti] || !S->t[ti]->has_graph) continue;
+        ysig_get_stats(&S->t[ti]->g, &st);
+        u += st.arm_unverified;
+    }
+    if (S && u != S->unv_seen) {
+        S->unv_seen = u;
+        pl_fail(p, "template '%s': internal guard: an arm outside sig.h's verified shapes (%lld arm_unverified, docs/sig.md "
+                "\"Exactness\")", v->def->name, (long long)u);
+        return -1;
+    }
+    return 0;
+}
+
 int pl_v2_frame_eval(pl_player* p, const yscr_frame* f) {
     pl_v2* v = p->tmpl ? p->tmpl->v2 : NULL;
     int guard = 0;
@@ -3197,26 +3217,9 @@ int pl_v2_frame_eval(pl_player* p, const yscr_frame* f) {
         YRT_ZONE_END(zq);
         if (rc < 0) return -1;
     }
-    {
-        /* sig.h counts an arm outside the verified shapes at an input too
-         * (a late report, a group an input lets in): every graph, each
-         * frame */
-        pl_v2_session* S = p->v2s;
-        int64_t u = 0;
-        int ti;
-        for (ti = 0; S && ti < S->n_t; ti++) {
-            ysig_stats st;
-            if (!S->t[ti] || !S->t[ti]->has_graph) continue;
-            ysig_get_stats(&S->t[ti]->g, &st);
-            u += st.arm_unverified;
-        }
-        if (S && u != S->unv_seen) {
-            S->unv_seen = u;
-            pl_fail(p, "template '%s': internal guard: an arm outside sig.h's verified shapes (%lld arm_unverified, docs/sig.md "
-                    "\"Exactness\")", v->def->name, (long long)u);
-            return -1;
-        }
-    }
+    /* sig.h counts an arm outside the verified shapes at an input too (a
+     * late report, a group an input lets in): every graph, each frame */
+    if (v2_unv_guard(p, v) < 0) return -1;
     if (v->end_pending) {
         v->end_pending = false;
         v->ended = true;
@@ -3903,6 +3906,9 @@ int pl_v2_trial_rows(pl_player* p) {
         return -1;
     }
     v->rows_open = false;
+    /* sig.h decides a group still pending at the flush (counted: docs/sig.md,
+     * "Pending groups"), after the frame's own check */
+    if (v2_unv_guard(p, v) < 0) return -1;
     if (v2_traces_end(p, v) < 0) return -1;
     return v2_srow_flush(p, false);
 }

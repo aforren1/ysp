@@ -25,6 +25,18 @@ libs = ["-lm"]
 timeout = 300
 env = { SIG_ORACLE_CASES = "3000", SIG_ORACLE_SEED = "20261114" }
 
+[test.sig_ref_778001]
+# The oracle at a second seed, for mutants 330 and 331: seed 20261114 has
+# no input that lets in a group overlapping a pending one but not it;
+# 778001 has (its cases 2140 and 2990). It was one of the coordinator's
+# unseen seeds, chosen for the round before these mutants.
+source = "tests/adapt/sig_arm_ref_targets.c"
+compiler = "gcc"
+flags = ["-std=c99", "-O2", "-w", "-DSIG_ARM_REF_SPEC=1", "-DSIG_HAS_UNV"]
+libs = ["-lm"]
+timeout = 300
+env = { SIG_ORACLE_CASES = "3000", SIG_ORACLE_SEED = "778001" }
+
 [[mutant]]
 id = "00"
 name = "control: no change (must pass)"
@@ -1767,10 +1779,12 @@ id = "210"
 name = "no run again: an arm in the past tests the newest value"
 test = "sig"
 why = "v0.6.0 (test_arm_window 2, sig_arm_oracle)."
-find = '''    ysig__rerun(g, kslot, node, t);
-    cu->n_grp_dis = 0;'''
-replace = '''    ysig__arm_plain(g, node, t, t);
-    cu->n_grp_dis = 0;'''
+find = '''    cu->arm_live = 0;
+    ysig__rerun(g, kslot, node, t);
+    if (pnb) {'''
+replace = '''    cu->arm_live = 0;
+    ysig__arm_plain(g, node, t, t);
+    if (pnb) {'''
 
 [[mutant]]
 id = "211"
@@ -2740,3 +2754,78 @@ find = '''     * group) */
     if (cu)'''
 replace = '''     * group) */
     if (cu)'''
+
+[[mutant]]
+id = "324"
+name = "a group with no L in R yet counted at its going-in, as 0.6.0"
+test = "sig"
+why = "0.6.1: an arm and disarms only is pending (test_pending: L, a frame, a disarm in no group, a present group decide it exact)."
+find = '''                if (!bad) {
+                    ysig__op_add(g, gid, t, F, 0, armed);'''
+replace = '''                if (1) bad = 1;
+                if (!bad) {
+                    ysig__op_add(g, gid, t, F, 0, armed);'''
+
+[[mutant]]
+id = "325"
+name = "a pending group's change at its call not counted"
+test = "sig"
+why = "A read sees the arm's entry-now hit at its call; the graph with no window does not yet (test_pending, its own call)."
+find = '''        if (ysig__pend_hash(g, pf) != ph || g->st.hits != phits) {'''
+replace = '''        if (0) {'''
+
+[[mutant]]
+id = "326"
+name = "an input at or before a pending group's time taken as its L"
+test = "sig"
+why = "R puts it after the arm, the graph with no window before it (test_pending: inputs at 22 and at 25 ms)."
+find = '''            if (meets && t > o->t) { o->l_seq = w->seq; i++; continue; }   /* L: this input, logged next */'''
+replace = '''            if (meets) { o->l_seq = w->seq; i++; continue; }   /* L: this input, logged next */'''
+
+[[mutant]]
+id = "327"
+name = "a barrier decides a pending group exact"
+test = "sig"
+why = "The graph with no window cancels the waiting arm at a barrier, R keeps it made (test_pending: a flush, a trial reset)."
+find = '''        ysig__pend_hit(g, NULL, 1, 0);
+    }
+    ysig__dis_last(g);'''
+replace = '''        ysig__pend_hit(g, NULL, 0, 0);
+    }
+    ysig__dis_last(g);'''
+
+[[mutant]]
+id = "328"
+name = "an ahead group that meets a pending one decides it exact"
+test = "sig"
+why = "It waits too in the graph with no window, which makes its sets at once (test_pending, the ahead group)."
+find = '''        else if (t_ns > g->t_cover) ysig__pend_hit(g, fpend, 1, 0);'''
+replace = '''        else if (t_ns > g->t_cover) ysig__pend_hit(g, fpend, 0, 0);'''
+
+[[mutant]]
+id = "329"
+name = "a gap with no arm counts a pending group it meets"
+test = "sig"
+why = "A state call in no group is at the input time and lets the waiting arm in first (test_pending: the disarm when the state ends)."
+find = '''        if (ysig__pend_gap_fp(g, -1, fg)) ysig__pend_hit(g, fg, 0, ysig__pend_gap_seq(g));
+        else ysig__pend_hit(g, NULL, 1, 0);'''
+replace = '''        if (ysig__pend_gap_fp(g, -1, fg)) ysig__pend_hit(g, fg, 1, 0);
+        else ysig__pend_hit(g, NULL, 1, 0);'''
+
+[[mutant]]
+id = "330"
+name = "a pending group decided exact is not kept open with its L"
+test = "sig_ref_778001"
+expect = "survived"
+note = "Not reached: the oracle at 778001 to 778004 and 20261114 (3,000 cases each) and 61441 (20,000) finds no case with no count with it. Case 890 of 778001, which showed the shape on the first build, is counted by the rule of mutant 331 since. Kept as the text's rule (sig.md, Pending groups) and a guard."
+why = "A later past group placed between it and the call that let it in is tested by 2 (b) (the oracle's 890 of seed 778001)."
+find = '''            if (!count && lseq) { o->l_seq = lseq; i++; continue; }'''
+replace = '''            if (!count && lseq) count = 0;'''
+
+[[mutant]]
+id = "331"
+name = "an input that lets in a group sharing a node with a pending one, not counted"
+test = "sig_ref_778001"
+why = "The graph with no window makes that group before the pending one, against R's order (the oracle's reason 6)."
+find = '''        if (!o->l_seq && (meets || ysig__fp_meets(g, gone, o->F))) {'''
+replace = '''        if (!o->l_seq && meets) {'''
