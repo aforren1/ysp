@@ -876,7 +876,17 @@ When the header tests:
 
 - At G's going-in: conditions 1 and 2. When `L(G)` is not in R yet, the
   header counts G then. This covers reads made while G waits. The
-  exception is a **pending** group (0.6.1, below).
+  exception is a **pending** group (0.6.1, below). `N(G)` is read in R's
+  key order (ruling 4): an input of another device later than `τ`, made
+  before `L(G)`, goes after G and does not make `N(G)` reach `τ` (the
+  oracle's case 218 of seed 20261121, `OFF=l`: the header read it as
+  `N(G)` and did not test 2 (a)).
+- At G's going-in as a late call (a waiting group whose key is smaller
+  than a meeting call already in R, W1): 2 (b) again at G's place, over
+  the calls G goes before, since `L(G)` comes after them (the oracle's
+  cases 297 and 616 of seed 20261121, `OFF=l`: a present group's set made
+  while G waited, at an `N(F(c))` that did not let G in). The 2 (b)
+  exception is not ordered there: such a call counts G.
 - At each later past group's place between G and `L(G)`: condition 2 (b)
   again, over every call between them, since a later group can be the
   link of a chain that lets an earlier H in before G.

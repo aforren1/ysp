@@ -4607,8 +4607,10 @@ static int64_t pg_late_unv(void) {
  * s1's input meet W but not G. Inputs to 20 ms on s1 to s3. W arms w at
  * 27 ms and G arms e at 25 ms: both ahead by their footprints (v0.7.0),
  * both wait. s1 at 31 ms lets W in, and with X, T1's closure lets G in
- * right before it (it meets W, smaller key): R's order, exact. The
- * control (no X): G still waits */
+ * right before it (it meets W, smaller key): R's order. Ruling 4: s4's
+ * input at 30 goes after G by key, so N(G) is 20, and L(G) must meet
+ * F(G) (2 (a)); s1 does not: G is counted (the header read N(G) as 30
+ * before). The control (no X): G still waits, W exact */
 static void pg_reason6(int with_x) {
     ysig_node n[9];
     int k;
@@ -4625,7 +4627,7 @@ static void pg_reason6(int with_x) {
     ysig_arm(&g_rp, 5, 25 * MS);   /* G, ahead too */
     CHECK(ex_unv() == 0 && g_rp.wt->n == 2);
     rp_feed(31 * MS, 0, YIN_AXIS_POSITION, 1);
-    CHECK(ex_unv() == 0 && g_rp.wt->n == (with_x ? 0 : 1));
+    CHECK(ex_unv() == with_x && g_rp.wt->n == (with_x ? 0 : 1));
     CHECK(((ysig__det_st*)g_rp.nd[5].st)->t_arm == (with_x ? 25 * MS : 0));
 }
 
@@ -4669,12 +4671,14 @@ static void test_pending(void) {
         CHECK(ex_unv() == 0 && pg_e_hits() == 1 && g_pg_t == 25 * MS);
     }
     /* the state ends: a plain disarm, at N (30 ms, the ruling): it lets
-     * the arm in, which it then ends, exact; no crossing hits after */
+     * the arm in, which it then ends; no crossing hits after. A plain
+     * disarm is no L(G) (R1), and by ruling 4 N(G) is 20 (lh's 30 goes
+     * after G by key): counted, 2 (a). ysig_disarm_at() below is G's L */
     pg_open(0, 0);
     ysig_disarm(&g_rp, 3);
     rp_feed(31 * MS, 0, YIN_AXIS_POSITION, 1);   /* ends the disarm's gap */
     rp_feed(40 * MS, 9, YIN_AXIS_POSITION, 2);
-    CHECK(ex_unv() == 0 && pg_e_hits() == 0);
+    CHECK(ex_unv() == 1 && pg_e_hits() == 0);
     /* ysig_disarm_at() at the exit time 30: the same */
     pg_open(0, 0);
     CHECK(ysig_disarm_at(&g_rp, 3, 30 * MS) && g_rp.wt->n == 0);
@@ -4735,10 +4739,11 @@ static void test_arm_exact(void) {
         rp_feed(25 * MS, 0, YIN_AXIS_POSITION, 2);   /* N(x) 25: x fails 1 alone */
         rp_feed(35 * MS, 0, YIN_AXIS_PEN_PRESSURE, 3);
         /* v0.7.0: T1's closure lets x in right before y's group (it meets
-         * y, smaller key), not inside its block: condition 1 holds for x,
-         * and N(x) is 25 (device 2), past its 20: exact by 2. y's L meets
-         * only the set (2 (a)): y alone is counted */
-        CHECK(g_rp.wt->n == 0 && ex_unv() == 1);
+         * y, smaller key), not inside its block: condition 1 holds for x.
+         * By ruling 4 device 2's 25 goes after x (20) by key: N(x) is 10,
+         * and x's L, device 3's input, does not meet x (2 (a)). y's L
+         * meets only the set (2 (a)). Both counted */
+        CHECK(g_rp.wt->n == 0 && ex_unv() == 2);
     }
     /* 2 (a): L meets the group's set, not its arm (device 3 lets in d1's
      * group with a set of X); the control: device 1's input, which meets
@@ -4747,6 +4752,28 @@ static void test_arm_exact(void) {
         if (!ex_open(n, 4)) return;
         ysig_set(&g_rp, 4, YSIG_OFFSET_D_X, 3);
         ysig_arm(&g_rp, 1, 20 * MS);
+        if (v) rp_feed(25 * MS, 0, YIN_AXIS_PEN_PRESSURE, 3);
+        else rp_feed(25 * MS, 0, YIN_AXIS_POSITION, 1);
+        CHECK(g_rp.wt->n == 0 && ex_unv() == v);
+    }
+    /* 2 (a) with an input of another device later than tau before L (the
+     * oracle's case 218 of seed 20261121, OFF=l): by ruling 4 it goes
+     * after G by key, so N(G) is 10, not 22, and L must meet the arm. The
+     * header read N(G) as 22 at G's going-in and counted nothing. Device
+     * 2 reaches only its own source. Control (v 0): device 1's input,
+     * which meets the arm */
+    for (v = 0; v < 2; v++) {
+        ysig_node m[6];
+        if (!ex_open(m, 4)) return;
+        m[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2); m[0].history = 64;
+        m[5] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 2, 2); m[5].history = 64;
+        if (!rp_open(m, 6, 4, 0, false, false)) return;
+        rp_feed(10 * MS, 0, YIN_AXIS_POSITION, 1);
+        rp_feed(10 * MS, 0, YIN_AXIS_PEN_PRESSURE, 3);
+        ysig_set(&g_rp, 4, YSIG_OFFSET_D_X, 3);
+        ysig_arm(&g_rp, 1, 20 * MS);
+        rp_feed(22 * MS, 0, YIN_AXIS_POSITION, 2);
+        CHECK(g_rp.wt->n == 1 && ex_unv() == 0);
         if (v) rp_feed(25 * MS, 0, YIN_AXIS_PEN_PRESSURE, 3);
         else rp_feed(25 * MS, 0, YIN_AXIS_POSITION, 1);
         CHECK(g_rp.wt->n == 0 && ex_unv() == v);
@@ -6968,6 +6995,10 @@ static int s1_open(int K) {
  * it goes before the set and tests the old level: a hit at 19. With a
  * window it is placed there; with none it is made after the set, a late
  * call (late_off), no hit. The control: no set.
+ * With a window d is counted in arm_unverified by 2 (b): the set lies
+ * between d and L(d) (the oracle's cases 297 and 616 of seed 20261121,
+ * OFF=l, B-cannot reason 4: the header did not test 2 (b) for a waiting
+ * group placed by key as a late call). The control: no set, no count.
  * The deciding case (the reviewer): then d's device reports 15 with a
  * value that makes d's test false. Under S1 the set let d in at 24 and
  * its hit at 19 was handed out; the report at 15 voided it
@@ -6992,6 +7023,8 @@ static void test_v2_present_key(void) {
             ysig_get_stats(&g_rp, &st);
             CHECK(g_rp.wt->n == 0 && st.late_off == (K ? 0 : v) && st.late_far == 0 && st.late_full == 0);
             CHECK(v2_hits(2, &t) == (!K && v ? 0 : 1) && (!K && v ? 1 : t == 19 * MS));
+            /* 2 (b): the set lies between d and its L (the report at 26) */
+            CHECK(st.arm_unverified == (K && v));
         }
         g_where = K ? "S1', the deciding case" : "S1', the deciding case, no window";
         for (v = 0; v < 2; v++) {
@@ -7006,6 +7039,7 @@ static void test_v2_present_key(void) {
             rp_feed(26 * MS, 9, YIN_AXIS_POSITION, 3);
             ysig_get_stats(&g_rp, &st);
             CHECK(g_rp.wt->n == 0 && st.late_hits_voided == 0 && st.arm_hits_superseded == 0 && st.arm_hits_retracted == 0);
+            CHECK(st.arm_unverified == (K != 0));
             CHECK(st.late_far == 0 && st.late_full == 0);
             CHECK(v2_hits(2, &t) == (K && !v) && (K && !v ? t == 19 * MS : 1));
         }

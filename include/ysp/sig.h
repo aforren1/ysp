@@ -4887,6 +4887,21 @@ static int ysig__cas_group(ysig_graph* g, const ysig__wa* a, const ysig_entry* c
     c->gid = a->seq;
     c->t = a->t;
     c->n_at = g->t_cover;
+    if (c->n_at > a->t && g->cu) {
+        /* ruling 4: N(G) in R's key order, which puts every input later
+         * than tau after G, whatever its footprint: tau when R holds an
+         * input at tau, else earlier (G waits at its place, condition 2).
+         * An input of another device later than tau made it read as past
+         * (the oracle's case 218 of seed 20261121, OFF=l: L met F(G) but
+         * not F_a(G), 2 (a), and nothing was counted) */
+        const ysig__cu* cu = g->cu;
+        uint64_t q;
+        int64_t ti;
+        c->n_at = a->t - 1;
+        if (cu->n_ck && cu->ck[cu->ck0].cover == a->t) c->n_at = a->t;
+        for (q = cu->c_tail; q < cu->c_head && c->n_at < a->t; q++)
+            if (ysig__input_t(&cu->calls[q % (uint64_t)cu->C].e, &ti) && ti == a->t) c->n_at = a->t;
+    }
     ysig__wait_fp(g, a, c->F);
     for (i = 0; i < g->dw; i++) c->Fa[i] = 0;
     c->cancelled = !(with_arm && a->node >= 0);
@@ -5094,6 +5109,36 @@ static int ysig__wait_closure(ysig_graph* g, uint64_t seq, int blk, int* nb);
 static int ysig__late_place(ysig_graph* g, uint64_t a, uint64_t b, uint64_t lo, int64_t t, int cls, uint64_t ord);
 static void ysig__late_nolog(ysig_graph* g);
 static void ysig__c4(ysig_graph* g, uint64_t gid, int64_t t);
+/* Condition 2 (b) for a waiting group G placed by key as a late call
+ * (W1): the cascade tested it at R's end, where nothing lay between G and
+ * the input that lets it in. At its place the calls it went before lie
+ * between G and L(G) (L is logged after them): a state call there of
+ * another group, or of none, that meets F(G) counts G (the oracle's cases
+ * 297 and 616 of seed 20261121, OFF=l: a present group's set made while G
+ * waited). A disarm_at at or after tau is not counted (X1). The 2 (b)
+ * exception (a later group H of arms and disarms) is not ordered here:
+ * such a call counts G too. */
+static void ysig__late_2b(ysig_graph* g, uint64_t gid, int64_t t, const uint64_t* F) {
+    ysig__cu* cu = g->cu;
+    const uint64_t C = (uint64_t)cu->C;
+    uint64_t s, last = UINT64_MAX, f[YSIG__FPW];
+    int64_t ti;
+    for (s = cu->c_tail; s < cu->c_head; s++) {
+        const ysig__call* c = &cu->calls[s % C];
+        if (c->gid == gid) last = s;
+        /* an input at t is in R before G by key: N(G) = t, exact by 2 */
+        if (ysig__input_t(&c->e, &ti) && ti == t) return;
+    }
+    if (last == UINT64_MAX || (cu->n_ck && cu->ck[cu->ck0].cover == t)) return;
+    for (s = last + 1; s < cu->c_head; s++) {
+        const ysig__call* x = &cu->calls[s % C];
+        if (ysig__input_t(&x->e, &ti)) continue;
+        if (x->gid == gid || ysig__fp_entry(g, x, f) != 1 || !ysig__fp_meets(g, f, F)) continue;
+        if (x->e.kind == YSIG_J_DISARM_AT && x->tr >= t) continue;
+        ysig__unv(g, gid);
+        return;
+    }
+}
 static void ysig__wait_place(ysig_graph* g, int k, int with_arm) {
     ysig__wt* w;
     ysig__wa a;
@@ -5182,8 +5227,9 @@ static void ysig__wait_place(ysig_graph* g, int k, int with_arm) {
         if (late) {
             /* to its place (with the groups let in before it here), the
              * run again at the API call's end */
-            if (g->cu && logged && all_logged && !g->cu->replaying) (void)ysig__late_place(g, h0, g->cu->c_head, g->cu->c_tail, a.t, 2, a.seq);
-            else ysig__late_nolog(g);
+            if (g->cu && logged && all_logged && !g->cu->replaying) {
+                if (ysig__late_place(g, h0, g->cu->c_head, g->cu->c_tail, a.t, 2, a.seq)) ysig__late_2b(g, a.seq, a.t, fl);
+            } else ysig__late_nolog(g);
         }
         ysig__wait_fire(g, a.t, f, UINT64_MAX);
     } else if (a.node >= 0) {
