@@ -22,6 +22,19 @@
  *     always. It changes the predicate's tallies only, not the two
  *     targets. SIG_ORACLE_PRED_NALL=1 keeps every input.
  *
+ * Review of 3a4bc3f (the second reviewer, 2026-11-15):
+ *   - A feed that is no input call (E_NEUTRAL: no source takes it, every
+ *     taking source drops it, a late_barrier drop) does not end a gap in
+ *     the gap tests of b_gap_mismatch() (gap_end_call(), gap_end_ent()), as
+ *     sig.md "Input call" says and as R's gap_end() and the header do
+ *     (case 1730 of seed 20261115, late on). SIG_ORACLE_GAPNEUTRAL=1 keeps
+ *     the old test.
+ *   - The coordinator's ruling on case 812 (seed 20261124, OFF=l): an open
+ *     gap's late state calls take their place by key when the gap ends;
+ *     a void they cause is decided and counted then. hand_check() puts the
+ *     void checks off while the open gap holds a late state call.
+ *     SIG_ORACLE_GAPLATE_NOW=1 checks at each call (the literal reading).
+ *
  * Fixes at 43e2d10 (the builder's findings): drain() with no derived list
  *   (the hits-only drains at arm calls and past 40 queued hits) no longer
  *   drains derived events; with SIG_ORACLE_DERIVED_TO the end check
@@ -1214,6 +1227,7 @@ static int r9_pending(int ci) {
     for (n = 0; n < g_npend; n++) if (g_pend[n] == ci) return 1;
     return 0;
 }
+static long g_gaplate_defer;   /* (rev2b) void checks put off to an open gap's end */
 static long g_barm_incl;   /* (rev2) B's arm let-ins at equal tau taken (S3) */
 static long g_pin_clamped;   /* (rev2) pins read away by the clamp (ruling 8) */
 static int g_may_pin;   /* (8594b73) an input of any footprint, later than tau, before the place */
@@ -1312,14 +1326,28 @@ static int64_t b_nf(int idx, uint64_t fp) {
     }
     return n;
 }
+/* (rev2b) a feed that is no input call (no source takes it, every taking
+ * source drops it, or a late_barrier drop) does not end a gap: sig.md
+ * "Input call", and the header (ysig_feed()); R's own gap_end() already
+ * skips it. Case 1730 of seed 20261115, late on: a plain disarm, then a
+ * feed every source drops, then calls R and the header keep in the
+ * disarm's gap. SIG_ORACLE_GAPNEUTRAL=1: such a feed ends it (the old
+ * reading) */
+static int gap_neutral_ends(void) {
+    static int v = -1;
+    if (v < 0) v = getenv("SIG_ORACLE_GAPNEUTRAL") != NULL;
+    return v;
+}
 static int gap_end_call(int q) {   /* the call ends a gap, in call order (A) */
     int kd = g_c[q].kind;
-    return (g_call_flags[q] & (E_INPUT | E_BARRIER | E_NEUTRAL)) || kd == C_ARM || kd == C_DISARM_AT;
+    int fl = E_INPUT | E_BARRIER | (gap_neutral_ends() ? E_NEUTRAL : 0);
+    return (g_call_flags[q] & fl) || kd == C_ARM || kd == C_DISARM_AT;
 }
 static int gap_end_ent(const rent* x) {   /* the entry ends a gap in B (R's order; B never gets a dropped one) */
     int kd = g_c[x->ci].kind;
+    int fl = E_INPUT | E_BARRIER | (gap_neutral_ends() ? E_NEUTRAL : 0);
     if (x->flags & E_DROPPED) return 0;
-    return (x->flags & (E_INPUT | E_BARRIER | E_NEUTRAL)) || kd == C_ARM || kd == C_DISARM_AT;
+    return (x->flags & fl) || kd == C_ARM || kd == C_DISARM_AT;
 }
 static int b_gap_mismatch(void) {
     int i, q, k;
@@ -1645,6 +1673,17 @@ static void hand_check(int ci, int mark, const ysig_stats* s0, const ysig_stats*
     int i, k, arms = 0;
     (void)s0;
     if (g_why || g_bw_n || g_b_cannot || b_gap_mismatch()) return;   /* checked at the next call that can */
+    if (g_late && !getenv("SIG_ORACLE_GAPLATE_NOW")) {
+        /* (rev2b, the coordinator's ruling on case 812 of seed 20261124
+         * OFF=l) an open gap's late state calls take their place by key
+         * when the gap ends; until then reads see them at R's end, and a
+         * void they would cause is decided, and counted, at the gap's end.
+         * So the voids are checked at the first call after the gap ends.
+         * SIG_ORACLE_GAPLATE_NOW=1: at each call, on R so far (the literal
+         * reading) */
+        int q;
+        for (q = 0; q < g_npend; q++) if (g_pend[q] < (int)sizeof g_call_late && g_call_late[g_pend[q]] == 2) { g_gaplate_defer++; return; }
+    }
     /* the arms made since the last check: a hit voided by one of them is
      * superseded when it is that group's detect's and later than its tau */
     for (k = 0; k < g_ngr; k++) if (g_gr[k].arm_ci > g_chk_ci && g_gr[k].arm_ci <= ci) arms++;
@@ -3357,6 +3396,7 @@ int main(int argc, char** argv) {
     if (h9) printf("  set aside as H9-shaped (SIG_ORACLE_H9): %ld\n", h9);
     if (g_late >= 4) printf("  disarm_at exits (X1): the player's exit shape in %ld cases; the exception taken in %ld cases (%ld of them wrong, %ld wrong with no count); B let a group in at a disarm_at in %ld cases\n", lt_dxs, lt_dxe, lt_dxw, lt_dxu, lt_dxl);
     if (getenv("SIG_ORACLE_R9PEND_CASE")) printf("  (rev2, debug) reason-9 tests put off on an open gap: %ld\n", g_r9_pend);
+    if (g_late) printf("  (rev2b) void checks put off while an open gap holds a late state call (SIG_ORACLE_GAPLATE_NOW=1 off): %ld\n", g_gaplate_defer);
     printf("  (rev2) B: waiting groups an arm let in at its own time (S3, inclusive by call order; SIG_ORACLE_BARMSTRICT=1 off): %ld\n", g_barm_incl);
     if (g_late >= 4) printf("  (rev2) inputs before a past group read as no pin by the clamped key (ruling 8; SIG_ORACLE_PINRAW=1 off): %ld\n", g_pin_clamped);
     if (g_late) printf("  late voids checked by the pre-ruling text (a header without late_hits_voided): %ld\n", g_lv_old);
