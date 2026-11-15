@@ -5512,6 +5512,8 @@ static void ysig__late_unv(ysig_graph* g, uint64_t at, uint64_t n, const uint64_
             if (c->cseq == o->l_seq && !c->wp && li == UINT64_MAX) li = s;
         }
         if (zl == UINT64_MAX || li == UINT64_MAX || at < zl || at > li) continue;
+        /* X1: a late disarm_at at or after G's time (2 (b)'s exception) */
+        if (cls == 2 && n == 1 && cu->calls[at % C].e.kind == YSIG_J_DISARM_AT && t >= o->t) continue;
         ok = 0;
         if (cls < 2 && t > o->t && o->node >= 0) {
             for (q = 0; q < g->dw; q++) fa[q] = 0;
@@ -5877,6 +5879,10 @@ static int ysig__unv_x_ok(ysig_graph* g, uint64_t xi, uint64_t gid, int64_t t, i
     uint64_t s, fh[YSIG__FPW], f[YSIG__FPW], hl = xi;
     int64_t th = INT64_MIN, ti;
     int w, armed = 0, hn = -1;
+    /* X1: a disarm_at at or after G's time lets G in right before itself
+     * in a graph with no window, so G is there as R has it, and every call
+     * after it comes after G in both, whichever detect it disarms */
+    if (x->e.kind == YSIG_J_DISARM_AT && x->tr >= t) return 1;
     if (!x->gid || (x->e.kind != YSIG_J_ARM && x->e.kind != YSIG_J_DISARM)) return 0;
     for (w = 0; w < g->dw; w++) fh[w] = 0;
     for (s = cu->c_tail; s < cu->c_head; s++) {
@@ -6395,8 +6401,8 @@ YSIG_API bool ysig_disarm(ysig_graph* g, int node) {
 
 /* v0.7.0: a disarm with the caller's time, a state call of time t in no
  * group (LATE INPUT, "ysig_disarm_at()"). The open gap ends here, in no
- * group, as at an input; the waiting groups earlier than t that meet the
- * detect go in first (rule 3); a waiting arm of it later than t, made
+ * group, as at an input; the waiting groups at or before t that meet the
+ * detect go in first (X1); a waiting arm of it later than t, made
  * before, is cancelled; one already in R with a greater key is cancelled
  * by the run again that places this call (the cancel by key). */
 YSIG_API bool ysig_disarm_at(ysig_graph* g, int node, int64_t t_ns) {
@@ -6420,9 +6426,12 @@ YSIG_API bool ysig_disarm_at(ysig_graph* g, int node, int64_t t_ns) {
     ysig__gap_disarms(g, g->t_cover, 1);
     ysig__gap_late(g);
     if (w->n) {
+        /* X1: at or before t, as an arm call (S3): an arm of node at t is
+         * made, then ended, as the text of this call says; every waiting
+         * group was made before this call */
         ysig__cas_begin(g, YSIG__CAS_STATE, t_ns, f);
         w->cas_dis = w->gap4_wp;
-        ysig__wait_fire(g, t_ns, f, 0);
+        ysig__wait_fire(g, t_ns, f, UINT64_MAX);
         ysig__cas_end(g, 0);
     }
     w->gap4_wp = 0;

@@ -25,6 +25,13 @@
 #include "ysp/sig.h"
 
 #define MS 1000000LL
+/* -DSIG_SPEC_X1: the reviewer's proposal X1 (2026-11-15): a disarm_at(d, t)
+ * lets in, right before itself, every waiting group that meets D(d) at or
+ * before t, as an arm call does; and it is exact inside a waiting group's
+ * span when t >= tau. Changes case 4; adds cases 11 and 12. */
+#ifndef SIG_SPEC_X1
+#define SIG_SPEC_X1 0
+#endif
 static uint64_t g_arena[(8u << 20) / 8];
 static ysig_graph g;
 static int g_fail;
@@ -182,9 +189,18 @@ int main(void) {
     feed(1, 10, 5);
     ysig_arm(&g, 1, 20 * MS);
     ysig_disarm_at(&g, 1, 20 * MS);
-    expect_none("after the disarm");
-    feed(1, 30, 0);
-    { static const int nd[] = { 1 }; static const double ms[] = { 20 }; expect("after 30", nd, ms, 1); }
+    if (SIG_SPEC_X1) {
+        /* X1: the disarm at 20 lets the waiting arm in before itself: made
+         * at 20 (the entry-now hit at 20, handed out now), then ended */
+        static const int nd[] = { 1 }; static const double ms[] = { 20 };
+        expect("after the disarm (X1)", nd, ms, 1);
+        feed(1, 30, 0);
+        expect_none("after 30 (X1)");
+    } else {
+        expect_none("after the disarm");
+        feed(1, 30, 0);
+        { static const int nd[] = { 1 }; static const double ms[] = { 20 }; expect("after 30", nd, ms, 1); }
+    }
     feed(1, 32, 0);
     feed(1, 34, 5);
     expect_none("after 34 (ended)");
@@ -309,6 +325,93 @@ int main(void) {
         feed(1, 25, 5);
         expect_none("after 25");
     }
+
+    /* 10. 2 (c) at a cancel by key of an arm already in R (the reviewer's
+     * text gap; the oracle's 1378 of seed 20261202 and 1050 of 20261207).
+     * D2 on S1, entry arm, hold 10 ms; D on S1, entry arm, no hold.
+     * 5 @ 1, arm(D2, 1) (present: holding from 1). 5 @ 5. G = [disarm D2,
+     * arm(D, 20)]: ahead (N(F) = 5), waits. 5 @ 25 lets G in, at 20: G's
+     * disarm of D2 meets D2's hold up to 20 (1 + 10 = 11: D2's hit at 11),
+     * ends D2; D's arm at 20, entry arm, held 5 passes: held, no hit. G is
+     * exact at its going-in (N(G) 5 < 20, L(G) = 5 @ 25 meets D, nothing
+     * between): arm_unverified 0. disarm_at(D, 15): key 15 is smaller than
+     * G's (20) and G's arm was made before it: cancelled by key, though in
+     * R. G is now a cancelled group with a disarm, and N(G) (5) is not
+     * tau (20): 2 (c) says it is not exact; arm_unverified 1 by this call.
+     * D2's hit at 11 stands (G's disarm at 20 is still in R). */
+    g_case = "2c-at-cancel-by-key";
+    n[0] = pen(1); n[1] = det(0, YSIG_ENTRY_ARM, 10 * 1e-3); n[2] = det(0, YSIG_ENTRY_ARM, 0);
+    open_g(n, 3, 1);
+    feed(1, 1, 5);
+    ysig_arm(&g, 1, 1 * MS);
+    feed(1, 5, 5);
+    ysig_disarm(&g, 1);
+    ysig_arm(&g, 2, 20 * MS);
+    feed(1, 25, 5);
+    { static const int nd[] = { 1 }; static const double ms[] = { 11 }; expect("after 25", nd, ms, 1); }
+    { ysig_stats s; ysig_get_stats(&g, &s); if (s.arm_unverified != 0) bad("arm_unverified %g before the cancel, expected %g", (double)s.arm_unverified, 0); }
+    ysig_disarm_at(&g, 2, 15 * MS);
+    expect_none("after the disarm");
+    { ysig_stats s; ysig_get_stats(&g, &s); if (s.arm_unverified != 1) bad("arm_unverified %g after the cancel by key, expected %g (2 (c))", (double)s.arm_unverified, 1); }
+
+#if SIG_SPEC_X1
+    /* 11. X1, the player's exit at tau on its own control. D on S1, entry
+     * now, every crossing. 5 @ 10. arm(D, 20): ahead (N(F) = 10), waits.
+     * 5 @ 25 (L) lets it in: made at 20, an entry-now hit at 20, handed out
+     * now. The state exits at 20: disarm_at(D, 20), a late call (L's key is
+     * greater), placed after the arm and before L. R: arm 20 (hit), end at
+     * 20, 5 @ 25. A graph with no window given R: the arm waits; the
+     * disarm at 20 lets it in (X1), made (the hit at 20), then ended; then
+     * 25. The same: exact, no late_unverified and no arm_unverified. Then
+     * 0 @ 30 and 5 @ 35: D is not armed, no hit (without the disarm it
+     * would hit at 35). */
+    {
+        ysig_stats s;
+        g_case = "X1-exit-own-control";
+        n[0] = pen(1); n[1] = det(0, YSIG_ENTRY_NOW, 0); n[1].p[YSIG_DETECT_REPEAT] = 1;
+        open_g(n, 2, 1);
+        feed(1, 10, 5);
+        ysig_arm(&g, 1, 20 * MS);
+        feed(1, 25, 5);
+        { static const int nd[] = { 1 }; static const double ms[] = { 20 }; expect("after 25", nd, ms, 1); }
+        ysig_disarm_at(&g, 1, 20 * MS);
+        expect_none("after the disarm");
+        feed(1, 30, 0);
+        feed(1, 35, 5);
+        expect_none("after 35");
+        ysig_get_stats(&g, &s);
+        if (s.late_unverified || s.arm_unverified) bad("late_unverified %g, arm_unverified %g, expected 0 and 0", (double)s.late_unverified, (double)s.arm_unverified);
+        if (voided()) bad("superseded + retracted %g, expected %g", (double)voided(), 0);
+    }
+
+    /* 12. X1, another control of the same state. D as in 11; D2 on S1,
+     * entry arm, every crossing, armed at 5 (present); K = all(D, D2)
+     * reads both hit outputs, so D(D2) meets F(G) at K. 5 @ 5, arm(D2, 5).
+     * arm(D, 20) waits; 5 @ 25 lets it in: D's hit at 20. The state exits
+     * at 20 on both controls: disarm_at(D2, 20), then disarm_at(D, 20);
+     * both late, both inside G's span, D2's meets F(G). X1: the first
+     * disarm lets G in before itself in a graph with no window (it meets
+     * F(G) at K, at or before 20), so that graph makes G, then the two
+     * ends, as R has them: exact, nothing counted. */
+    {
+        ysig_stats s;
+        g_case = "X1-exit-other-control";
+        n[0] = pen(1); n[1] = det(0, YSIG_ENTRY_NOW, 0); n[1].p[YSIG_DETECT_REPEAT] = 1;
+        n[2] = det(0, YSIG_ENTRY_ARM, 0); n[2].p[YSIG_DETECT_REPEAT] = 1;
+        n[3] = ysig_node_of(YSIG_OP_ALL, 1, 2);
+        open_g(n, 4, 1);
+        feed(1, 5, 5);
+        ysig_arm(&g, 2, 5 * MS);
+        ysig_arm(&g, 1, 20 * MS);
+        feed(1, 25, 5);
+        { static const int nd[] = { 1 }; static const double ms[] = { 20 }; expect("after 25", nd, ms, 1); }
+        ysig_disarm_at(&g, 2, 20 * MS);
+        ysig_disarm_at(&g, 1, 20 * MS);
+        expect_none("after the disarms");
+        ysig_get_stats(&g, &s);
+        if (s.late_unverified || s.arm_unverified) bad("late_unverified %g, arm_unverified %g, expected 0 and 0", (double)s.late_unverified, (double)s.arm_unverified);
+    }
+#endif
 
     if (g_fail) { printf("sig_disarm_at_cases: %d failed\n", g_fail); return 1; }
     printf("sig_disarm_at_cases ok: 0 failed\n");
