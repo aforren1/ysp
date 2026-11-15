@@ -4823,6 +4823,14 @@ static int ysig__n_tau(ysig_graph* g, const ysig__ck* k, uint64_t from, uint64_t
     uint64_t s, f[YSIG__FPW];
     int64_t ti;
     int i;
+    if (!cu) {
+        /* no window, no log: only a node of F(G) whose newest input is at
+         * tau shows one. One at tau that a later input on the same node
+         * hides reads as none: G counted, never missed */
+        for (i = 0; i < g->n; i++)
+            if (((F[i >> 6] >> (i & 63)) & 1u) && g->nd[i].nt == t) return 1;
+        return 0;
+    }
     if (k && k->cover == t)
         for (i = 0; i < g->n; i++) {
             int64_t nt;
@@ -4932,18 +4940,21 @@ static int ysig__cas_group(ysig_graph* g, const ysig__wa* a, const ysig_entry* c
     c = &w->cg[w->n_cg];
     c->gid = a->seq;
     c->t = a->t;
-    c->n_at = g->t_cover;
     ysig__wait_fp(g, a, c->F);
-    if (c->n_at >= a->t && g->cu) {
+    c->n_at = ysig__nf(g, c->F);
+    if (c->n_at >= a->t) {
         /* ruling 4: N(G) in R's key order, which puts every input later
          * than tau after G, whatever its footprint: tau when R holds an
          * input at tau, else earlier (G waits at its place, condition 2).
          * An input of another device later than tau made it read as past
          * (the oracle's case 218 of seed 20261121, OFF=l: L met F(G) but
          * not F_a(G), 2 (a), and nothing was counted). The input at tau
-         * must meet F(G) (ysig__n_tau()) */
+         * must meet F(G) (ysig__n_tau()). With no window too: t_cover
+         * there read every footprint, outside key order, and made G exact
+         * by 2 where the text tests 2 (a) and 2 (b) (the second
+         * reviewer's nowin.c: a set between G and L, arm_unverified 0) */
         const ysig__cu* cu = g->cu;
-        c->n_at = ysig__n_tau(g, cu->n_ck ? &cu->ck[cu->ck0] : NULL, cu->c_tail, cu->c_head, c->F, a->t) ? a->t : a->t - 1;
+        c->n_at = ysig__n_tau(g, cu && cu->n_ck ? &cu->ck[cu->ck0] : NULL, cu ? cu->c_tail : 0, cu ? cu->c_head : 0, c->F, a->t) ? a->t : a->t - 1;
     }
     for (i = 0; i < g->dw; i++) c->Fa[i] = 0;
     c->cancelled = !(with_arm && a->node >= 0);
@@ -5269,7 +5280,17 @@ static void ysig__wait_place(ysig_graph* g, int k, int with_arm) {
              * run again at the API call's end */
             if (g->cu && logged && all_logged && !g->cu->replaying) {
                 if (ysig__late_place(g, h0, g->cu->c_head, g->cu->c_tail, a.t, 2, a.seq)) ysig__late_2b(g, a.seq, a.t, fl);
-            } else ysig__late_nolog(g);
+            } else {
+                ysig__late_nolog(g);
+                /* no window: R puts G before the meeting call R holds, a
+                 * state call between G and L(G), and 2 (b) counts G as
+                 * ysig__late_2b() does (the second reviewer's nowin.c:
+                 * late_off alone, arm_unverified 0). No log to read the
+                 * call from: the exceptions late_2b skips are not seen
+                 * (a disarm_at at or after tau lets G in before itself,
+                 * so it is not such a call) */
+                if (!g->cu && !ysig__n_tau(g, NULL, 0, 0, fl, a.t)) ysig__unv(g, a.seq);
+            }
         }
         ysig__wait_fire(g, a.t, f, UINT64_MAX);
     } else if (a.node >= 0) {

@@ -6998,7 +6998,7 @@ static int s1_open(int K) {
  * it goes before the set and tests the old level: a hit at 19. With a
  * window it is placed there; with none it is made after the set, a late
  * call (late_off), no hit. The control: no set.
- * With a window d is counted in arm_unverified by 2 (b): the set lies
+ * With or without a window d is counted in arm_unverified by 2 (b): the set lies
  * between d and L(d) (the oracle's cases 297 and 616 of seed 20261121,
  * OFF=l, B-cannot reason 4: the header did not test 2 (b) for a waiting
  * group placed by key as a late call). The control: no set, no count.
@@ -7026,8 +7026,9 @@ static void test_v2_present_key(void) {
             ysig_get_stats(&g_rp, &st);
             CHECK(g_rp.wt->n == 0 && st.late_off == (K ? 0 : v) && st.late_far == 0 && st.late_full == 0);
             CHECK(v2_hits(2, &t) == (!K && v ? 0 : 1) && (!K && v ? 1 : t == 19 * MS));
-            /* 2 (b): the set lies between d and its L (the report at 26) */
-            CHECK(st.arm_unverified == (K && v));
+            /* 2 (b): the set lies between d and its L (the report at 26),
+             * with no window too (not late_off alone) */
+            CHECK(st.arm_unverified == v);
         }
         g_where = K ? "S1', the deciding case" : "S1', the deciding case, no window";
         for (v = 0; v < 2; v++) {
@@ -7042,7 +7043,7 @@ static void test_v2_present_key(void) {
             rp_feed(26 * MS, 9, YIN_AXIS_POSITION, 3);
             ysig_get_stats(&g_rp, &st);
             CHECK(g_rp.wt->n == 0 && st.late_hits_voided == 0 && st.arm_hits_superseded == 0 && st.arm_hits_retracted == 0);
-            CHECK(st.arm_unverified == (K != 0));
+            CHECK(st.arm_unverified == 1);
             CHECK(st.late_far == 0 && st.late_full == 0);
             CHECK(v2_hits(2, &t) == (K && !v) && (K && !v ? t == 19 * MS : 1));
         }
@@ -7177,10 +7178,15 @@ static void test_v2_s1(void) {
  * (c) X present at 19 (by device 5 at 19, which meets X's node and not
  *     d's) lets d in at its call (S3): L(d) is not an input, 2 (a) counts
  *     d. The control: device 6 at 19 makes X present and meets d too (K
- *     reads both): N(d) = 19, exact. */
+ *     reads both): N(d) = 19, exact.
+ * (b) and (c) run with a zeroed window too, with the same counts: N(G) is
+ * read by footprint and key there as well (the second reviewer's nowin.c:
+ * N(G) was t_cover, every footprint, so G was exact by 2; (b) counted
+ * late_off only, (c) nothing). (b) with no window makes d after the set
+ * (late_off) and 2 (b) counts d as with a window. */
 static void test_v2_n_tau(void) {
     ysig_stats st;
-    int v;
+    int v, K;
     g_where = "ruling 4 by footprint, a past group's set";
     for (v = 0; v < 2; v++) {
         if (!s1_open(4)) return;
@@ -7193,9 +7199,10 @@ static void test_v2_n_tau(void) {
         CHECK(st.late_far == 0 && st.late_full == 0 && st.arm_past_far == 0 && st.arm_past_full == 0);
         CHECK(st.arm_unverified == v);
     }
-    g_where = "ruling 4 by footprint, a present group's set";
+    for (K = 4; K >= 0; K -= 4)
     for (v = 0; v < 3; v++) {
-        if (!s1_open(4)) return;
+        g_where = K ? "ruling 4 by footprint, a present group's set" : "ruling 4 by footprint, a present group's set, no window";
+        if (!s1_open(K)) return;
         rp_feed(19 * MS, 0, YIN_AXIS_POSITION, v == 2 ? 3 : 1);
         rp_feed(24 * MS, 0, YIN_AXIS_POSITION, 1);
         if (v) CHECK(ysig_set(&g_rp, 2, YSIG_DETECT_LEVEL, 20));
@@ -7203,11 +7210,14 @@ static void test_v2_n_tau(void) {
         CHECK(ysig_arm(&g_rp, 3, 24 * MS) && g_rp.wt->n == (v < 2));
         rp_feed(26 * MS, 9, YIN_AXIS_POSITION, 3);
         ysig_get_stats(&g_rp, &st);
-        CHECK(g_rp.wt->n == 0 && st.late_far == 0 && st.late_full == 0);
+        /* no window, v 2: the arm makes the set's group present and d goes
+         * before the set by key, made after it (late_off); N(d) = 19: no 2 */
+        CHECK(g_rp.wt->n == 0 && st.late_far == 0 && st.late_full == 0 && st.late_off == (!K && v > 0));
         CHECK(st.arm_unverified == (v == 1));
     }
-    g_where = "ruling 4 by footprint, an arm at tau";
+    for (K = 4; K >= 0; K -= 4)
     for (v = 0; v < 2; v++) {
+        g_where = K ? "ruling 4 by footprint, an arm at tau" : "ruling 4 by footprint, an arm at tau, no window";
         ysig_node n[7];
         n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 3, 1); n[0].history = 64;
         n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1); n[1].p[YSIG_DETECT_LEVEL] = 5; n[1].history = 64;   /* d */
@@ -7216,7 +7226,7 @@ static void test_v2_n_tau(void) {
         n[4] = ysig_node_of(YSIG_OP_ALL, 1, 3);                                                         /* K */
         n[5] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 5, 1); n[5].history = 64;
         n[6] = ysig_node_of(YSIG_OP_SUM, 3, 5); n[6].history = 64;
-        if (!rp_open(n, 7, 4, 0, false, false)) return;
+        if (!rp_open(n, 7, K, 0, false, false)) return;
         rp_feed(10 * MS, 0, YIN_AXIS_POSITION, 3);
         rp_feed(10 * MS, 0, YIN_AXIS_POSITION, 6);
         rp_feed(10 * MS, 0, YIN_AXIS_POSITION, 5);
@@ -7225,7 +7235,7 @@ static void test_v2_n_tau(void) {
         CHECK(g_rp.wt->n == 1);
         CHECK(ysig_arm(&g_rp, 3, 19 * MS) && g_rp.wt->n == 0);
         ysig_get_stats(&g_rp, &st);
-        CHECK(st.arm_unverified == v && st.late_far == 0 && st.late_full == 0);
+        CHECK(st.arm_unverified == v && st.late_far == 0 && st.late_full == 0 && st.late_off == 0);
     }
 }
 /* The oracle's case 899 family (the coordinator, 2026-11-15): a past
