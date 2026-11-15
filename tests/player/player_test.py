@@ -2247,8 +2247,38 @@ def t_v2_findings(ctx):
     t = {"controls": {"home": {"control": "region", "of": "hand", "radius": 3}},
          "states": [{"name": "s0", "exits": [{"on": "home", "to": "s1"}]},
                     {"name": "s1", "exits": [{"on": "home", "to": "end", "outcome": "again"}, {"after_s": 0.05, "to": "end"}]}]}
+    # 0.12.0 (the wait for complete input): the player takes the hit at
+    # 0.0301 only once the input is complete to it (20 ms later), so s1
+    # arms in time order and the trial finishes
     r = one("vm_guard_pinned", v2base({"t": t}, [{"name": "l", "trial": "t"}], roles={"hand": {"type": "position2d", "units": "display_px"}}), ["--sim-gain", "hand=1", "--samples", jump, "--test-sample-late", "hand=0.02"])
-    check(r.rc != 0 and "internal guard" in r.err and "1 pinned" in r.err, "the guard stops on a pinned arm (a late report): exit %d %s" % (r.rc, r.err[:300]))
+    check(r.rc == 0 and len(r.trials) == 1, "a 20 ms late report: the player waits for it and the trial finishes: exit %d %s" % (r.rc, r.err[:300]))
+    # a report 60 ms late with a bound of 0: later than the window (50 ms):
+    # late_far, a guard stop
+    r = one("vm_late_far", v2base({"t": t}, [{"name": "l", "trial": "t"}], roles={"hand": {"type": "position2d", "units": "display_px"}}), ["--sim-gain", "hand=1", "--samples", jump, "--test-sample-late", "hand=0.06", "--test-sample-bound", "hand=0"])
+    check(r.rc != 0 and "internal guard" in r.err, "a report later than its bound and the window stops the guard: exit %d %s" % (r.rc, r.err[-300:]))
+    # N1 (docs/player.md): the hand's reports come 30 ms late, its bound is
+    # 10 ms. The poll at 0.1167 moves the horizon past 0.1, so s0's after_s
+    # exit at 0.1 is taken; the report stamped 0.095 that enters home
+    # arrives at 0.125: home's hit at 0.095 comes out after the take that
+    # used the horizon 0.1067. The control: the hand enters at 0.15, after
+    # the exit; reports beyond their bound change nothing the player took
+    for v, enter in ((0, 0.095), (1, 0.15)):
+        n1 = os.path.join(ctx.out, "vm_n1_%d.csv" % v)
+        write_samples(n1, [(0.005 * k, "hand", 0 if 0.005 * k >= enter - 1e-9 else 9, 0) for k in range(0, 80)])
+        t1 = {"controls": {"home": {"control": "region", "of": "hand", "radius": 3}},
+              "states": [{"name": "s0", "exits": [{"on": "home", "to": "end", "outcome": "hit"}, {"after_s": 0.1, "to": "s1"}]},
+                         {"name": "s1", "exits": [{"after_s": 0.2, "to": "end"}]}]}
+        r = one("vm_n1_%d" % v, v2base({"t": t1}, [{"name": "l", "trial": "t"}], roles={"hand": {"type": "position2d", "units": "display_px"}}),
+                ["--sim-gain", "hand=1", "--samples", n1, "--test-sample-late", "hand=0.03", "--test-sample-bound", "hand=0.01"])
+        if v == 0:
+            check(r.rc != 0 and "late_beyond_bound" in r.err, "N1: a hit at or before a horizon the player used stops the guard: exit %d %s" % (r.rc, r.err[-300:]))
+        else:
+            sj = {}
+            if r.rc == 0:
+                with open(os.path.join(r.data, "session.json")) as f:
+                    sj = json.load(f)
+            check(r.rc == 0 and sj.get("late_beyond_bound", {}).get("hand", 0) > 0 and sj["late_beyond_bound"]["after_take"] == 0,
+                  "N1's control: reports beyond their bound that change nothing taken: exit %d %s %s" % (r.rc, r.err[-200:], sj.get("late_beyond_bound")))
     # c: two presses in one frame before the deadline both count
     with open(sc2, "w", newline="\n") as f:
         f.write("trial_index,response,rt_s,hold_s\n0,right,0.2,0.002\n0,left,0.205,0.002\n")

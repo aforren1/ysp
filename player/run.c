@@ -195,7 +195,7 @@ enum {
     CS_TIER_WORST, CS_FRAMES_DROPPED, CS_FLIP_FLAGS,
     CS_ROLE_N, CS_ROLE_FAILED, CS_ROLE_LAG,
     CS_RSP_RESPONSE, CS_CORRECT, CS_OUTCOME, CS_RSP_OTHER, CS_COLUMN,
-    CS_V2_FLAG, CS_V2_RSP_ROLE, CS_V2_LATE_FRAMES
+    CS_V2_FLAG, CS_V2_RSP_ROLE, CS_V2_LATE_FRAMES, CS_V2_EXIT_LAG
 };
 
 typedef struct pl_csrc { int source; int ref; } pl_csrc;
@@ -529,6 +529,7 @@ int pl_columns_build(pl_player* p) {
     /* sig.h 0.7.0: the trial's frames that a late report changed after they
      * were drawn (the coordinator's choice, 2026-11-15) */
     if (pl_v2_any_graph(p) && pl_col_add(p, "late_frames", YTR_COL_INT, CS_V2_LATE_FRAMES, 0, CF_BUILTIN) < 0) return -1;
+    if (pl_v2_any_graph(p) && pl_col_add(p, "exit_lag_max_s", YTR_COL_TIME_NS, CS_V2_EXIT_LAG, 0, CF_BUILTIN) < 0) return -1;
     for (i = 0; i < p->n_cols; i++) {
         memset(&p->ytr_cols[i], 0, sizeof p->ytr_cols[i]);
         p->ytr_cols[i].name = p->cols[i].name;
@@ -1333,6 +1334,9 @@ static int pl_row_fill(pl_player* p, pl_row* r) {
             break;
         case CS_V2_LATE_FRAMES:
             if (pl_v2_late_frames(p, &v) == 1) have = 1;
+            break;
+        case CS_V2_EXIT_LAG:
+            if (pl_v2_exit_lag_max(p, &v) == 1) have = 4;
             break;
         default: break;
         }
@@ -2325,7 +2329,11 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
         int st;
         {
             YRT_ZONE(zu, "pl.update_frame");
-            st = yrsp_update_frame(p->tmpl->collector, f);
+            /* a signal choice's clock is the horizon when its template
+             * waits for late input (docs/player.md, "The response window") */
+            yscr_frame fc = *f;
+            if (p->tmpl->v2) fc.onset = pl_v2_collector_now(p, f->onset);
+            st = yrsp_update_frame(p->tmpl->collector, &fc);
             YRT_ZONE_END(zu);
         }
         if (p->responding && st == YRSP_ENDED) {

@@ -4,7 +4,8 @@
  *                   [--rig FILE|NAME] [--cal FILE] [--windowed] [--allow-below-tier ROLE[,ROLE]]
  *                   [--participant SPEC] [--rt S] [--max-trials N]
  *                   [--measure] [--trace-channels FILE] [--rdk-buffer N]
- *                   [--sim-hz HZ] [--test-sample-late ROLE=S]... [--test-feed-each]
+ *                   [--sim-hz HZ] [--test-sample-late ROLE=S]... [--test-sample-bound ROLE=S]...
+ *                   [--test-feed-each]
  *
  * Without --sim the session runs for real: a window on the display (full
  * screen; --windowed for development), the keyboard and the rig profile's
@@ -27,7 +28,10 @@
  * running a frame (tests: the C programs take the player's draws).
  * --sim-hz HZ: the simulated display's rate (default 60), its period
  * rounded to whole ns. --test-sample-late ROLE=S: that role's samples reach
- * the player S seconds after their t_s (tests: a late device report).
+ * the player S seconds after their t_s (tests: a late device report); the
+ * player waits for it (its lateness bound, docs/player.md "Explanation:
+ * late input"). --test-sample-bound ROLE=S: the bound the player waits for
+ * in place of the late value (tests: a report later than its bound).
  * --test-feed-each: each sample in its own ysig_feed(), its hits taken
  * before the next sample, in place of one ysig_feed_n() a poll (tests:
  * format 3.11 rule 4's check that both give the same results).
@@ -76,6 +80,7 @@ int main(int argc, char** argv) {
     for (i = 0; i < a.n_fields; i++) free((void*)a.fields[i].name);
     for (i = 0; i < a.n_gains; i++) free((void*)a.gains[i].name);
     for (i = 0; i < a.n_lates; i++) free((void*)a.lates[i].name);
+    for (i = 0; i < a.n_bounds; i++) free((void*)a.bounds[i].name);
     return rc;
 }
 
@@ -128,6 +133,26 @@ static int run_main(pl_args* ap, int argc, char** argv) {
                 return 2;
             }
             a.sim_period_ns = (int64_t)llround(1e9 / hz);
+            i++;
+        }
+        else if (!strcmp(s, "--test-sample-bound") && v) {
+            /* ROLE=S: the lateness bound the player waits for, not the
+             * late value: a report later than its bound (N1) */
+            const char* eq = strchr(v, '=');
+            double b = eq ? atof(eq + 1) : -1.0;
+            if (!eq || eq == v || !(b >= 0.0 && b <= 10.0) || a.n_bounds == 16) {
+                fprintf(stderr, "ysp_player: --test-sample-bound '%s': give ROLE=S, 0 to 10 s\n", v);
+                return 2;
+            }
+            {
+                char* name = (char*)malloc((size_t)(eq - v) + 1);
+                if (!name) return 1;
+                memcpy(name, v, (size_t)(eq - v));
+                name[eq - v] = 0;
+                a.bounds[a.n_bounds].name = name;
+                a.bounds[a.n_bounds].value = eq + 1;
+                a.n_bounds++;
+            }
             i++;
         }
         else if (!strcmp(s, "--test-sample-late") && v) {
@@ -203,8 +228,8 @@ static int run_main(pl_args* ap, int argc, char** argv) {
         fprintf(stderr, "ysp_player: --samples, --sim-gain and --test-draws are for --sim\n");
         return 2;
     }
-    if (!a.sim && (a.sim_period_ns || a.n_lates || a.feed_each)) {
-        fprintf(stderr, "ysp_player: --sim-hz, --test-sample-late and --test-feed-each are for --sim\n");
+    if (!a.sim && (a.sim_period_ns || a.n_lates || a.n_bounds || a.feed_each)) {
+        fprintf(stderr, "ysp_player: --sim-hz, --test-sample-late, --test-sample-bound and --test-feed-each are for --sim\n");
         return 2;
     }
 #if !defined(YRT_TRACE_RING)

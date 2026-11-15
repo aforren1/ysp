@@ -462,6 +462,11 @@ typedef struct pl_args {
     pl_field_arg lates[16];    /* tests (--sim): --test-sample-late ROLE=S,
                                 * a role's samples reach the player S
                                 * seconds after their time                  */
+    int   n_bounds;
+    pl_field_arg bounds[16];   /* tests (--sim): --test-sample-bound ROLE=S,
+                                * the lateness bound the player waits for
+                                * (default: the role's --test-sample-late),
+                                * so a report can come later than its bound */
     bool  feed_each;           /* tests (--sim): --test-feed-each, each sample
                                 * in its own ysig_feed() and its hits taken
                                 * before the next (3.11 rule 4's reading), not
@@ -777,6 +782,8 @@ int  pl_v2_session_end(pl_player* p, yjs_arena* a);
 #define PL_ARM_COUNTS 19
 int  pl_v2_arm_counts(pl_player* p, int64_t c[PL_ARM_COUNTS]);
 int  pl_v2_late_frames(pl_player* p, int64_t* n);
+int  pl_v2_exit_lag_max(pl_player* p, int64_t* ns);
+int64_t pl_v2_collector_now(pl_player* p, int64_t onset);
 bool pl_v2_any_graph(pl_player* p);
 int  pl_v2_streams(pl_player* p);
 /* The running template's version 2 runtime, or none (a version 1 template). */
