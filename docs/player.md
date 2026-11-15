@@ -558,7 +558,9 @@ to 31). `--sim`'s files did not change.
 
 ## Explanation: late input, and exits that wait for it (0.12.0)
 
-Status: design for review (2026-11-15); not built. The user's decision of
+Status: design, second draft (2026-11-15), after the reviewer's
+findings H1, M1 to M3, L1 and L2 on the first (3f6d21c; table at the
+end); not built. The user's decision of
 2026-11-15: "wait for complete input". ysp/sig.h 0.7.0 places a late
 report at its time (docs/sig.md, "Late input"). The player takes a hit
 only when the input is complete up to the hit's time for every role that
@@ -570,8 +572,9 @@ Why: a hit that the player takes before the reports up to its time are in
 can be wrong. A frame's pass, a settle at the onset or an entry-now arm
 finds a hit, and a late report with a time at or before the hit then
 moves it or removes it (`late_hits_voided`). With 0.7.0 and hits taken at
-once, the guard stopped more sessions than 0.11.0 at every lateness; the
-bimanual example stopped at 5 ms (player.md, "Late input, measured").
+once, the guard stopped more sessions than 0.11.0 at every lateness, and
+the bimanual example stopped at 5 ms (measured 2026-11-15 on the Linux
+desktop; the numbers go into Results when the build is measured).
 
 ### Terms
 
@@ -580,20 +583,25 @@ bimanual example stopped at 5 ms (player.md, "Late input, measured").
 - **Poll time** `P`: the time of the newest poll whose reports the player
   fed. In `--sim` it is the frame's onset: the player feeds the samples
   that arrived by the onset (`v2_feed()`).
-- **Newest stamp** `S(r)`: the latest stamp of a report of r that the
-  player fed in this trial (since the trial's reset).
-- **Complete to** `C(r) = max(S(r) - 1 ns, P - B(r))`. Every report of r
-  with a stamp at or before `C(r)` is fed. The two parts:
-  - `P - B(r)`: a report stamped at or before it reached a poll by `P`.
-  - `S(r) - 1 ns`: a role's device does not go back (sig.h drops a sample
-    older than its device's last, `dropped_order`), so after a report
-    stamped `S(r)` no report of r stamped before it comes. A second
-    report at the same stamp can come, so `S(r)` itself is not complete.
-    A raw mouse's counts are the exception sig.h makes (T6: placed, not
-    dropped); a source whose stamps can go back uses `P - B(r)` only. The
-    sources of ysp/input.h stamp in order.
-- **A role with no reports** (a still relative mouse, a pen out of
-  range): `S(r)` does not move, so `C(r) = P - B(r)`. For a source that
+- **Newest stamp** `S(d)`: the latest stamp of a report of device d that
+  the player fed in this trial (since the trial's reset). sig.h keeps
+  time order per device (M1), not per role.
+- **Complete to**, per device: `C(d) = max(S(d) - 1 ns, P - B(d))`. Every
+  report of d with a stamp at or before `C(d)` is fed. The two parts:
+  - `P - B(d)`: a report stamped at or before it reached a poll by `P`.
+  - `S(d) - 1 ns`: a device does not go back (sig.h drops a sample older
+    than its device's last, `dropped_order`), so after a report stamped
+    `S(d)` no report of d stamped before it comes. A second report at
+    the same stamp can come, so `S(d)` itself is not complete. A raw
+    mouse's counts are the exception sig.h makes (T6: placed, not
+    dropped); a source whose stamps can go back uses `P - B(d)` only.
+    The sources of ysp/input.h stamp in order.
+- **Complete to, per role**: `C(r)`, the least `C(d)` over the role's
+  devices. A device of the role not yet seen in the trial gives
+  `P - B(d)`. When the player cannot know a role's devices (device 0,
+  "any device"), `C(r) = P - B(r)`. In `--sim` a role has one device.
+- **A device with no reports** (a still relative mouse, a pen out of
+  range): `S(d)` does not move, so `C(d) = P - B(d)`. For a source that
   the kernel stamps when it queues a report and that one poll reads to
   its end (evdev raw mice and pens, keyboards), `B(r)` is 0: no report
   stamped before the poll's read can come later. So a still device of
@@ -619,7 +627,12 @@ bimanual example stopped at 5 ms (player.md, "Late input, measured").
    tracker). The player refuses such a role without a measured bound, by
    name: a latency comes from a measurement on the rig, not from a
    manual (devices_spec.md).
-4. Keys and buttons that feed a key response are arrival-stamped: 0.
+4. Keys and buttons that feed a key response: 0 only when the OS stamps
+   them on arrival (evdev, the OS's key events). A response box stamped
+   behind a transport (a serial box with host stamps) needs a measured
+   bound, else the player refuses it, as in item 3 (L1). A key role's
+   bound counts in `G` only when an exit compares its response with
+   hits.
 
 sig.h's window: `catchup_ns` is the larger of 50 ms and `max B(r)` plus
 two frame periods. An exit taken at the horizon arms the next state at
@@ -637,16 +650,42 @@ and timed exits by time (below), and that needs one bound under which
 every candidate is known. Cost: in a template with one late role, an
 exit on a control that reads only an on-time role waits too.
 
-Holding a hit needs a sig.h call (not in 0.7.0's text):
-`ysig_detected_to(g, out, cap, t)` hands out the queued hits with a time
-at or before t, in queue order, and keeps the rest queued, not handed
-out. A queued hit that is not handed out is not the caller's: a run
-again that does not give it drops it with no count, and one it gives
-again stays queued once. Reason: sig.h counts `late_hits_voided` for
-every hit it handed out, and a drained hit is handed out. The queue
-holds the hits of `max B(r)` plus a frame (sized with `catchup_calls`;
-now 64 outside a run again). Without this call the player cannot hold a
-hit without the count. For the reviewer and the coordinator.
+Holding a hit or a derived event needs two sig.h calls (0.7.0; their
+text goes into docs/sig.md, "Late input"). Reason: sig.h counts
+`late_hits_voided` for every hit it handed out, and `arm_derived_stale`
+for every derived event it handed out, used or not (H1). So the player
+leaves what is not final in sig.h's queues.
+
+- `ysig_detected_to(g, out, cap, t)` (the reviewer's text, M3): hands
+  out, in R's order among them, at most `cap` queued hits whose time is
+  at or before `t`, and returns their number. The queued hits later than
+  `t` stay queued and are not handed out. A queued hit is the caller's
+  only once handed out: a run again that no longer gives a queued hit
+  removes it, with no count; a run again that gives it again leaves it
+  queued once; `arm_hits_superseded`, `arm_hits_retracted` and
+  `late_hits_voided` count only hits handed out. `ysig_detected()` is
+  `ysig_detected_to()` with no limit. Across calls with a rising `t`, a
+  hit held by an earlier call comes out after hits that R has after it;
+  within one call, the order is R's. The queue holds `YSIG_QUEUE_CAP`
+  plus `catchup_calls` hits; a hit that finds it full is counted in
+  `hits_lost`, which a caller that holds hits treats as a guard stop. A
+  reset or a trial reset empties the queue, held hits too.
+- `ysig_derived_to(g, out, cap, t)`: the same for derived events. It
+  hands out, in R's order among them, at most `cap` queued events whose
+  time is at or before `t`; later ones stay queued and are not handed
+  out. A queued event is the caller's only once handed out: a run again
+  that no longer gives it, or gives it otherwise, removes it with no
+  count, and gives the new one queued; `arm_derived_stale` counts only
+  events handed out. `ysig_derived()` is `ysig_derived_to()` with no
+  limit. The queue holds `YSIG_QUEUE_CAP` plus `catchup_calls` events;
+  an event that finds it full is counted in `derived_lost`, a guard stop
+  for a caller that holds events. A reset or a trial reset empties it.
+
+The queues' size (M2): the player computes the count it needs, the hits
+and derived events that `max B` plus a frame can make (its controls and
+movements, at `V2_WINDOW_HZ` per role), and sets `catchup_calls` to at
+least that. `hits_lost` and `derived_lost` stop the guard whenever a
+bound is above 0.
 
 ### The order of exits (D20 rule 4)
 
@@ -692,15 +731,16 @@ frame runs as in 0.11.0.
   candidate at its time, taken when final (the flip record, 3.11 rule
   11) and at or before `G`.
 - **Signal choices** (3.13): the collector's input is the movements'
-  derived events. The player feeds them to the collector up to `G` only,
-  and holds the rest in a buffer of `catchup_ns`. It arms the collector
+  derived events. The player takes them with `ysig_derived_to(..., G)`,
+  so the later ones stay in sig.h's queue (H1). It arms the collector
   (a `from` hit, a state's entry) when it takes that event, at its time
-  t: the held events before t go in before the arm, the rest after it,
+  t: the events before t go in before the arm, the rest after it,
   as 3.11 rule 4's order per event. The collector's clock (`duration_s`,
   the deadline) is `G`, not the frame's onset, so a deadline is not
   judged on input that is not in. Its end lags as an exit does.
-- A derived event that a run again changes after the player gave it to
-  the collector still counts `arm_derived_stale`, and the guard stops.
+- A derived event that a run again changes after the player took it
+  (at or before `G`) counts `arm_derived_stale`, and the guard stops: a
+  report came later than its bound.
 
 ### What the data shows
 
@@ -708,9 +748,12 @@ frame runs as in 0.11.0.
   `hit` columns, the sample traces, the response's times.
 - Later by up to the lateness plus a frame: a state's entry frame (the
   state rows' `frame`, `t_s`, `planned_s`) and what it shows.
-- New in `trials.csv`: `exit_lag_max_s`, the trial's largest lag of a
-  state change: the poll time at which the player took the exit, minus
-  the exit's time. With `B` 0 it is under a frame, as in 0.11.0.
+- New in `events.csv`, on each state row (L2): `lag_s`, the lag of the
+  exit that started the visit: the poll time at which the player took
+  it, minus its time (the visit's entry time). A later `after_s` exit
+  counts from the entry frame, so this lag moves it too. With `B` 0 it is
+  under a frame, as in 0.11.0. Other rows leave it empty.
+- New in `trials.csv`: `exit_lag_max_s`, the trial's largest `lag_s`;
   `late_frames` (sig.h's count of the trial's drawn frames that a late
   report changed).
 - New in `session.json`: `exit_lag` (`n`, `mean_s`, `max_s`) over the
@@ -725,6 +768,7 @@ frame runs as in 0.11.0.
   its role's bound.
 - `late_far` (a report later than the window, `catchup_ns`), `late_full`,
   `late_off`, `late_unverified`.
+- `hits_lost` and `derived_lost`, when a bound is above 0 (M2).
 - The arm counts, as before: `hits_retracted`, `rows_stale`,
   `derived_stale`, and the fallbacks `past_pinned`, `past_far`,
   `past_full`, `past_off`, and `unverified`.
@@ -743,6 +787,20 @@ With a bound above 0 they differ by design: rule 4's "a report that
 arrives in a later poll with a time before a taken exit does not undo
 it" no longer arises, since no exit is taken before its time is
 complete.
+
+### The reviewer's findings on the first draft (3f6d21c), and the answers
+
+The reviewer confirmed one `G` per graph, the order of exits, the entry
+frame, F40, F41, 3.11 rule 8 and the trial's end.
+
+| Finding | Answer here |
+|---|---|
+| H1 (high): holding derived events in the player does not prevent `arm_derived_stale`; sig.h counts any event `ysig_derived()` handed out (a bimanual midpoint's emit at a frame at 100, hand 2's report at 97 arriving at 105, `G` at most 90) | `ysig_derived_to()`, built as `ysig_detected_to()`; the collector takes events from it up to `G` |
+| M1 (medium): `S(r)` assumes one device a role; sig.h drops by device | Complete-to per device, `C(r)` the least over the role's devices; an unseen device gives `P - B(d)`; device 0 ("any") gives `P - B(r)` |
+| M2 (medium): the queues' size | A count the player computes from its controls and report rates over `max B` plus a frame; `hits_lost` and `derived_lost` stop the guard while a bound is above 0 |
+| M3 (medium): the text of `ysig_detected_to()` | The reviewer's text, verbatim; `ysig_derived_to()` adapted from it |
+| L1 (low): keys and buttons are 0 only when stamped on arrival | A response box behind a transport needs a measured bound or is refused |
+| L2 (low): the lag per state row | `events.csv` `lag_s` on each state row; `trials.csv` `exit_lag_max_s` |
 
 ## Results
 

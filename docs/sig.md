@@ -836,6 +836,10 @@ G is exact when all of these are true:
      `L(G)`; with more, it counts G. Groups at an earlier time go in
      before G whatever they let in, and their arms let in no group at
      G's `τ`.
+     A `ysig_disarm_at(d, t)` with `t` at or after `τ` is not counted
+     here, whichever control it disarms: it lets G in right before
+     itself, so a graph with no window makes G there, as R has it, and
+     every call after it comes after G in both (X1).
    - (c) When a disarm or a barrier cancelled G's arm, G has no disarm.
      This one holds for any `N(G)` too: when a disarm or a barrier
      cancelled G's arm and G has a disarm, G is not exact unless
@@ -875,7 +879,8 @@ When the header tests:
   link of a chain that lets an earlier H in before G.
 - (0.7.0, proposed in "Late input") At each late call that takes a place
   between G and `L(G)`: a state call that meets `F(G)` retests 2 (b)
-  (U2); an input later than `τ` that meets `F(G)` becomes G's `L` and
+  (U2), except a `ysig_disarm_at` with `t` at or after `τ` (it lets G in
+  before itself, X1); an input later than `τ` that meets `F(G)` becomes G's `L` and
   retests 2 (a) and 2 (b) (L5); one that meets an exception group there
   retests 2 (b) with R's order at `L` (L6).
 - At each input call: condition 3.
@@ -1195,6 +1200,14 @@ later than `t` is cancelled (below). So a disarm at a state's exit time
 never cancels what R gives at or before that time (the coordinator's
 requirement, T4).
 
+X1 (the coordinator's ruling, 2026-11-15, from the reviewer's analysis):
+`ysig_disarm_at(d, t)` lets in, right before itself, every waiting group
+whose footprint meets `D(d)` and whose `τ` is at or before `t` (inclusive,
+as an arm call: S3), by key; an arm of d among them is made, then ended
+at `t`. Reason: the sentence above says an arm at or before `t` is made
+and then ended, but rule 3's strict "earlier than" left a group at
+`τ = t` waiting. The header does this with a window and without one.
+
 **The cancel, by key (U1, U5; replaces rule 3's "at or before `τ`").** A
 disarm of d, plain or with a time, cancels an arm of d made before it
 (in call order) exactly when the disarm's key is smaller than the key of
@@ -1349,6 +1362,35 @@ trials.csv, and the session's total is in session.json (the
 coordinator's choice, 2026-11-15; player.md's data reference when
 built).
 
+**Holding hits and derived events (0.7.0; the player's wait for
+complete input, docs/player.md).** The reviewer's text (M3):
+
+`ysig_detected_to(g, out, cap, t)` (new) hands out, in R's order among
+them, at most `cap` queued hits whose time is at or before `t`, and
+returns their number. The queued hits later than `t` stay queued and are
+not handed out. A queued hit is the caller's only once handed out: a run
+again that no longer gives a queued hit removes it, with no count; a run
+again that gives it again leaves it queued once; `arm_hits_superseded`,
+`arm_hits_retracted` and `late_hits_voided` count only hits handed out.
+`ysig_detected()` is `ysig_detected_to()` with no limit. Across calls
+with a rising `t`, a hit held by an earlier call comes out after hits
+that R has after it; within one call, the order is R's. The queue holds
+`YSIG_QUEUE_CAP` plus `catchup_calls` hits; a hit that finds it full is
+counted in `hits_lost`, which a caller that holds hits treats as a guard
+stop. A reset or a trial reset empties the queue, held hits too.
+
+`ysig_derived_to(g, out, cap, t)` (new) is the same for derived events:
+it hands out, in R's order among them, at most `cap` queued events whose
+time is at or before `t`, and returns their number; later ones stay
+queued and are not handed out. A queued event is the caller's only once
+handed out: a run again that no longer gives it, or gives it otherwise,
+removes it with no count and queues the new one; `arm_derived_stale`
+counts only events handed out. `ysig_derived()` is `ysig_derived_to()`
+with no limit. The queue holds `YSIG_QUEUE_CAP` plus `catchup_calls`
+events; an event that finds it full is counted in `derived_lost`, a
+guard stop for a caller that holds events. A reset or a trial reset
+empties it.
+
 **Rows and derived events (L9).** Final-only mode still holds: a row or
 an event is final when the call that made it is older than the oldest
 call the window can still run again, and a late call whose place is
@@ -1422,7 +1464,8 @@ R as usual.
 4. When a late state call takes a place inside a waiting group G's span
    (from G to `L(G)`) and meets `F(G)`, the header tests 2 (b) again for
    G (U2: G = [arm d at 10] waiting, `L` = dev1@20, then a state call at
-   time 15 that meets `D(d)`). This joins "When the header tests": a
+   time 15 that meets `D(d)`), except a `ysig_disarm_at` whose `t` is at
+   or after `τ` (2 (b)'s exception, X1). This joins "When the header tests": a
    late call between G and `L(G)` is one more call that goes into R
    between them.
 
