@@ -656,6 +656,12 @@ when an input there is later than `τ` (and no barrier is between), the
 group counts as pinned whatever that input's footprint (the reviewer's
 H1: frames older than the log).
 
+In 0.7.0 no group is pinned (the coordinator, 2026-11-15): ruling 8's
+clamp puts such a group after the feeds at the barrier's time, by key
+(an input at the last barrier's time comes before a group whose `τ` is
+before that time). A place before the window falls back as
+`arm_past_far`. `arm_past_pinned` stays in the stats and reads 0.
+
 Arms ahead and an earlier arm (E): an ahead arm waits for input past its
 time, so a later arm with an earlier time goes before it in R. For
 `ysig_arm(d, 60 ms)`, frames at 16 and 33 ms, a crossing at 41 ms, then
@@ -891,7 +897,11 @@ When the header tests:
   the calls G goes before, since `L(G)` comes after them (the oracle's
   cases 297 and 616 of seed 20261121, `OFF=l`: a present group's set made
   while G waited, at an `N(F(c))` that did not let G in). The 2 (b)
-  exception is not ordered there: such a call counts G. A past group's
+  exception is not ordered there: such a call counts G. With no window
+  the header cannot place G and counts `late_off`; it counts G by 2 (b)
+  too, unless `N(G)` is `τ` (the coordinator's ruling of 2026-11-15:
+  `late_off` alone did not count G; `sig_test` `test_v2_n_tau` and
+  `test_v2_present_key`). A past group's
   call is never among them: one that meets G with a greater key lets G
   in at its `τ`, so G goes in at that group's place, right before the
   call (H13), and is tested there; `L(G)` is not an input then, and 2 (a)
@@ -931,7 +941,8 @@ When the header tests:
   "2c-at-cancel-by-key", in `sig_disarm_at_cases.c`; `sig_test`
   `test_v2_c2_cancel`.)
 
-**Pending groups (0.6.1).** G is pending when it holds its arm and
+**Pending groups (0.6.1).** This case does not arise in 0.7.0 (the
+coordinator, 2026-11-15); the paragraph is kept for 0.6.x. G is pending when it holds its arm and
 disarms only, `N(G)` is earlier than `τ`, `L(G)` is not in R yet, and no
 state call after G in R meets `F(G)`. R makes G at its place, and so does
 the header. A graph with no window, given R, keeps G's arm and disarms
@@ -1698,20 +1709,32 @@ questions).**
    earlier than `τ` otherwise: every input later than `τ` comes after G
    in the key order, whatever its footprint, and condition 2 applies to
    most past groups. An input at `τ` that does not meet `F(G)` does not
-   make `N(G)` reach `τ` (proposed by the builder, 2026-11-15, for the
-   coordinator and the reviewer to confirm): it does not let G in, so a
-   graph with no window, given R, keeps G waiting as the classes by
+   make `N(G)` reach `τ` (0b4410e; accepted by the coordinator,
+   2026-11-15, on the second reviewer's review): it does not let G in, so
+   a graph with no window, given R, keeps G waiting as the classes by
    footprint say, and conditions 2 (a) and 2 (b) decide G. Read over
    every footprint, such an input made G exact by condition 2 while that
-   graph could not give R. The oracle's B-cannot cases 169, 204, 1094,
-   1444, 1915 and 2600 of seed 20261115 (late generator on) and 237, 1185
-   and 1425 (`OFF=l`) were counted by none of the header's tests: a set,
-   an arm or a plain disarm that R makes after a waiting G, and that
-   graph before it, with an input of another device at G's `τ`.
-   `sig_test` `test_v2_n_tau`. 1444 (B-cannot reason 9, a disarm read in
-   no group before the arm of its own group closed its gap) is now
-   counted in `late_unverified`, by a later late call's retest of a group
-   this reading leaves open; the header does not count it by condition 4.
+   graph could not give R. The oracle's B-cannot cases 169, 204, 1915 and
+   2600 of seed 20261115 (late generator on) and 237, 1185 and 1425
+   (`OFF=l`) were counted by none of the header's tests: a set, an arm or
+   a plain disarm that R makes after a waiting G, and that graph before
+   it, with an input of another device at G's `τ`. `sig_test`
+   `test_v2_n_tau`. (Cases 1094 and 1444 were oracle artifacts, not
+   evidence: the reviewer's oracle after be18843 no longer flags them.)
+   With this reading, 2 (b)'s exception ("H waits at its place") can
+   admit more groups H: an H whose only input at its time is of another
+   device now waits at its place. This is sound: the graph with no window
+   keeps H waiting by footprint too, so it makes H at `L(G)` as R does.
+   The input at `τ` must come before G in R: one logged after G (a frame
+   or a settle at `τ`, G's `L` by R1) does not make `N(G)` reach `τ`
+   (the second reviewer's `c2_frame`: at a cancel by key, 2 (c) went
+   uncounted; `sig_test` `test_v2_c2_cancel`). A graph with no window
+   reads `N(G)` the same way, from its nodes' input times (it keeps no
+   log; an input at `τ` that a later input of the same node hides reads
+   as none, so G is counted, never missed): before, it read the newest
+   input of every device and made G exact by 2 where the text tests 2 (a)
+   and 2 (b) (the reviewer's `nowin.c`; `sig_test` `test_v2_n_tau` with
+   a zeroed window).
 5. (R1, R2; the coordinator's rulings of 2026-11-15, from the reviewer's
    analysis.) At one time a feed comes first; frames, settles, state
    calls and groups then go by call order, as in 0.6.x. A frame or a
