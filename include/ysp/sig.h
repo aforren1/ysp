@@ -4813,9 +4813,12 @@ static int ysig__fp_entry(ysig_graph* g, const ysig__call* c, uint64_t* f) {
  * N(G) = tau, and a set that R makes after G, and the graph with no
  * window before it, was not counted). From the image of checkpoint k
  * when its input time is tau (the nodes' input times then; NULL: none),
- * and the log from call from. Only ever false where the reading over every footprint
- * was false too. */
-static int ysig__n_tau(ysig_graph* g, const ysig__ck* k, uint64_t from, const uint64_t* F, int64_t t) {
+ * and the log from call from up to G's first logged call (to): an input
+ * at tau logged after G is after it in R (a frame or a settle at tau that
+ * is G's L by R1; the reviewer's c2_frame, where it read N(G) = tau at a
+ * cancel by key and 2 (c) went uncounted). Only ever false where the
+ * reading over every footprint was false too. */
+static int ysig__n_tau(ysig_graph* g, const ysig__ck* k, uint64_t from, uint64_t to, const uint64_t* F, int64_t t) {
     const ysig__cu* cu = g->cu;
     uint64_t s, f[YSIG__FPW];
     int64_t ti;
@@ -4827,7 +4830,7 @@ static int ysig__n_tau(ysig_graph* g, const ysig__ck* k, uint64_t from, const ui
             memcpy(&nt, k->img + sizeof *g + sizeof(ysig__nd) * (size_t)i + offsetof(ysig__nd, nt), sizeof nt);
             if (nt == t) return 1;
         }
-    for (s = from; s < cu->c_head; s++) {
+    for (s = from; s < to && s < cu->c_head; s++) {
         const ysig__call* c = &cu->calls[s % (uint64_t)cu->C];
         if (!ysig__input_t(&c->e, &ti) || ti != t) continue;
         if (ysig__fp_entry(g, c, f) == 1 && ysig__fp_meets(g, f, F)) return 1;
@@ -4940,7 +4943,7 @@ static int ysig__cas_group(ysig_graph* g, const ysig__wa* a, const ysig_entry* c
          * not F_a(G), 2 (a), and nothing was counted). The input at tau
          * must meet F(G) (ysig__n_tau()) */
         const ysig__cu* cu = g->cu;
-        c->n_at = ysig__n_tau(g, cu->n_ck ? &cu->ck[cu->ck0] : NULL, cu->c_tail, c->F, a->t) ? a->t : a->t - 1;
+        c->n_at = ysig__n_tau(g, cu->n_ck ? &cu->ck[cu->ck0] : NULL, cu->c_tail, cu->c_head, c->F, a->t) ? a->t : a->t - 1;
     }
     for (i = 0; i < g->dw; i++) c->Fa[i] = 0;
     c->cancelled = !(with_arm && a->node >= 0);
@@ -5160,13 +5163,13 @@ static void ysig__c4(ysig_graph* g, uint64_t gid, int64_t t);
 static void ysig__late_2b(ysig_graph* g, uint64_t gid, int64_t t, const uint64_t* F) {
     ysig__cu* cu = g->cu;
     const uint64_t C = (uint64_t)cu->C;
-    uint64_t s, last = UINT64_MAX, f[YSIG__FPW];
+    uint64_t s, first = UINT64_MAX, last = UINT64_MAX, f[YSIG__FPW];
     int64_t ti;
     for (s = cu->c_tail; s < cu->c_head; s++)
-        if (cu->calls[s % C].gid == gid) last = s;
+        if (cu->calls[s % C].gid == gid) { if (first == UINT64_MAX) first = s; last = s; }
     /* an input at t that meets F(G) is in R before G by key: N(G) = t,
      * exact by 2 (ysig__n_tau()) */
-    if (last == UINT64_MAX || ysig__n_tau(g, cu->n_ck ? &cu->ck[cu->ck0] : NULL, cu->c_tail, F, t)) return;
+    if (last == UINT64_MAX || ysig__n_tau(g, cu->n_ck ? &cu->ck[cu->ck0] : NULL, cu->c_tail, first, F, t)) return;
     for (s = last + 1; s < cu->c_head; s++) {
         const ysig__call* x = &cu->calls[s % C];
         if (ysig__input_t(&x->e, &ti)) continue;
@@ -5575,17 +5578,18 @@ static void ysig__cx_count(ysig_graph* g, uint64_t a, int node, uint64_t dseq) {
                  * disarm with a smaller key cancels is a cancelled group
                  * now; with a disarm, it is exact only when N(G) is tau.
                  * Its footprint is its other calls' (Exactness, F_a) */
-                uint64_t q, F[YSIG__FPW], f[YSIG__FPW];
+                uint64_t q, first = UINT64_MAX, F[YSIG__FPW], f[YSIG__FPW];
                 int w, dis = 0;
                 for (w = 0; w < g->dw; w++) F[w] = 0;
                 for (q = cu->c_tail; q < cu->c_head; q++) {
                     const ysig__call* x = &cu->calls[q % (uint64_t)cu->C];
+                    if (x->gid == c->gid && first == UINT64_MAX) first = q;
                     if (x->gid != c->gid || x->e.kind == YSIG_J_ARM) continue;
                     if (x->e.kind == YSIG_J_DISARM) dis = 1;
                     (void)ysig__fp_entry(g, x, f);
                     for (w = 0; w < g->dw; w++) F[w] |= f[w];
                 }
-                if (dis && !ysig__n_tau(g, cu->n_ck ? &cu->ck[cu->ck0] : NULL, cu->c_tail, F, c->tr)) ysig__unv(g, c->gid);
+                if (dis && !ysig__n_tau(g, cu->n_ck ? &cu->ck[cu->ck0] : NULL, cu->c_tail, first, F, c->tr)) ysig__unv(g, c->gid);
             }
         }
     }
@@ -6221,7 +6225,7 @@ static void ysig__unv_place(ysig_graph* g, int kslot, uint64_t pos, int nb) {
              * later than t after G, whatever its footprint: t when an input
              * at t that meets F(G) is in R (ysig__n_tau()), else before t
              * (G waits at its place) */
-            N = ysig__n_tau(g, k, k->call, F, t) ? t : t - 1;
+            N = ysig__n_tau(g, k, k->call, first, F, t) ? t : t - 1;
         }
         bad = ysig__unv_spans(g, first, last, gid);
         /* 2 (c) at any N(G): a cancelled group's disarm, unless N(G) is t */
