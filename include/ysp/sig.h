@@ -5450,6 +5450,7 @@ static void ysig__cx_count(ysig_graph* g, uint64_t a, int node, uint64_t dseq) {
  * (L2), and the window runs again (now, or at the API call's end: def_*).
  * A call before the window that must follow it: late_far; the logs or the
  * block full: late_full. 1: placed (or nothing to move). */
+static void ysig__late_unv(ysig_graph* g, uint64_t at, uint64_t n, const uint64_t* F, int64_t t, int cls);
 static int ysig__late_place(ysig_graph* g, uint64_t a, uint64_t b, uint64_t lo, int64_t t, int cls, uint64_t ord) {
     ysig__cu* cu = g->cu;
     const uint64_t C = (uint64_t)cu->C;
@@ -5481,6 +5482,7 @@ static int ysig__late_place(ysig_graph* g, uint64_t a, uint64_t b, uint64_t lo, 
         a = cu->c_head - n;
     }
     at = ysig__late_move_k(g, a, p0, F, t, cls, ord);
+    ysig__late_unv(g, at, n, F, t, cls);
     if (cls < 2) {
         /* a late input before a disarm in no group: in R that disarm's gap
          * is open again after the input (it takes effect at its gap's end,
@@ -5511,6 +5513,49 @@ static int ysig__late_place(ysig_graph* g, uint64_t a, uint64_t b, uint64_t lo, 
     }
     for (w = 0; w < g->dw; w++) cu->late_f[w] |= F[w];
     return 1;
+}
+/* v0.7.0, "Exactness for late calls", conditions 2 to 4: a late unit
+ * placed at [at, at + n) of the log with footprint F, key time t, class
+ * cls. For each open group G (placed waiting at its place, its L in the
+ * log) whose span, from its calls to L, holds the unit and whose footprint
+ * the unit meets: an input later than G's time is G's L now (2): 2 (a)
+ * and 2 (b) again with it (it meets G's arm; no state call of another
+ * group, or of none, meets G between them); any other is counted (3, 4:
+ * a state call there, or a shape the header does not order). Counted
+ * once a late call (late_unverified). */
+static void ysig__late_unv(ysig_graph* g, uint64_t at, uint64_t n, const uint64_t* F, int64_t t, int cls) {
+    ysig__cu* cu = g->cu;
+    ysig__wt* w = g->wt;
+    const uint64_t C = (uint64_t)cu->C;
+    int i;
+    for (i = 0; i < w->n_op; i++) {
+        ysig__ux* o = &w->op[i];
+        uint64_t s, zl = UINT64_MAX, li = UINT64_MAX, fa[YSIG__FPW], f[YSIG__FPW];
+        int ok, q;
+        if (!o->l_seq || !ysig__fp_meets(g, F, o->F)) continue;
+        for (s = cu->c_tail; s < cu->c_head; s++) {
+            const ysig__call* c = &cu->calls[s % C];
+            if (s >= at && s < at + n) continue;
+            if (c->gid == o->gid) zl = s;
+            if (c->cseq == o->l_seq && !c->wp && li == UINT64_MAX) li = s;
+        }
+        if (zl == UINT64_MAX || li == UINT64_MAX || at < zl || at > li) continue;
+        ok = 0;
+        if (cls < 2 && t > o->t && o->node >= 0) {
+            for (q = 0; q < g->dw; q++) fa[q] = 0;
+            ysig__fp_or(g, fa, o->node);
+            ok = ysig__fp_meets(g, F, fa);
+            for (s = zl + 1; ok && s < at; s++) {
+                const ysig__call* c = &cu->calls[s % C];
+                int64_t ti;
+                if (ysig__input_t(&c->e, &ti) || c->gid == o->gid) continue;
+                if (ysig__fp_entry(g, c, f) == 1 && ysig__fp_meets(g, f, o->F)) ok = 0;
+            }
+            if (ok) { o->l_seq = cu->calls[at % C].cseq; continue; }
+        }
+        g->st.late_unverified++;
+        return;
+    }
 }
 /* A late call logged at a (its unit to the log's end), made at the end:
  * to its place in R; the run again at the API call's end. */
