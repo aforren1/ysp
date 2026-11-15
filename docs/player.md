@@ -875,7 +875,16 @@ frame runs as in 0.11.0.
 
 - `late_hits_voided`: now only a hit the player took (final by the
   bound) that a later report voids, which means a report came later than
-  its role's bound.
+  its role's bound. A graph that is not the trial's (between trials, or
+  another template's) gets every poll too, and no one takes its hits and
+  derived events, but sig.h counts one handed out that a late report then
+  voids. So the player hands them out only up to `G` over every role
+  (`v2_feed_part()`). Before (156d2b5), it took all of them: a hit of
+  the ended trial's control, held past `G` at the trial's end, came out
+  between trials, and the hand's late report voided it (the model's
+  harness, 500 Hz: seed 100308 at 20 ms late, 100162, 100601 and 100823
+  at 40 ms, those and 100045 and 100572 at 60 ms; `player_test`
+  `t_v2_ended_hits`).
 - `late_far` (a report later than the window, `catchup_ns`), `late_full`,
   `late_off`, `late_unverified`.
 - `hits_lost` and `derived_lost`, when a bound is above 0 (M2).

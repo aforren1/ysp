@@ -2873,13 +2873,43 @@ def t_v2_frame_rows_late(ctx):
     check(len(rows.get(0, [])) > 10 and rows.get(0) == rows.get(1), "v2_frame_rows_late: trial 0's rows match the control's: %s" %
           [(a, b) for a, b in zip(rows.get(0, []), rows.get(1, [])) if a != b][:6])
 
+def t_v2_ended_hits(ctx):
+    # a graph that is not the trial's (between trials, or another
+    # template's) had its hits drained with ysig_detected(), no limit: a hit
+    # past the horizon, held at the trial's end, was handed out after it,
+    # and a late report then voided it (late_hits_voided, a guard stop; the
+    # model's harness, 500 Hz, 20 ms late, seed 100308, and four seeds at 40
+    # and 60 ms). Lateness 3 periods: trial 1 starts at 6 periods and ends
+    # at 9 (its end waits for G). Its control (no exit, armed at the onset,
+    # the hand in it) holds 2 periods: a frame at 8 periods meets it, past
+    # G, so the hit is held. The report at 6.9 periods comes in after the end,
+    # and the hand's exit at 7.5 periods, later still, voids the hold. The
+    # control: the same samples on time
+    hand = {"hand": {"type": "position2d", "units": "display_px"}}
+    P = period_ns(ctx) / 1e9
+    smp = os.path.join(ctx.out, "v2_ended_hits.csv")
+    write_samples(smp, [(0.0, "hand", 0, 0), (6.9 * P, "hand", 0, 0), (7.5 * P, "hand", 50, 0), (2.0, "hand", 50, 0)])
+    t = {"controls": {"r": {"control": "region", "of": "hand", "radius": 10, "stay_s": round(2 * P, 9)}}}
+    for v, late in ((0, ["--test-sample-late", "hand=%.9f" % (3 * P)]), (1, [])):
+        nm = "v2_ended_hits" if v == 0 else "v2_ended_hits_control"
+        r = Run(ctx, nm, v2base({"t": t}, [{"name": "l", "trial": "t", "rules": ["reps 2"]}], roles=hand),
+                args=["--sim-gain", "hand=1", "--samples", smp, "--max-seconds", "20"] + late)
+        arms = {}
+        if r.rc == 0:
+            with open(os.path.join(r.data, "session.json")) as f:
+                arms = json.load(f).get("sig_arms", {})
+        check(r.rc == 0 and len(r.trials) == 2 and arms.get("late_hits_voided") == 0,
+              "%s: a hit of an ended trial's graph is not handed out past the horizon: exit %d %s trials %d late_hits_voided %s" %
+              (nm, r.rc, r.err[-300:] if r.rc else "", len(r.trials) if r.rc == 0 else -1, arms.get("late_hits_voided")))
+
+
 TESTS = [t_nested, t_if_unless, t_empty_and_zero, t_loop, t_requeue, t_track_ends, t_lookup_keys, t_triggers, t_after_timing, t_outcomes,
          t_method_update, t_seeds, t_refused, t_unused_stim, t_record_data, t_fix_density, t_fix_key_reapply, t_fix_stale_rdk,
          t_fix_timeout_values, t_fix_any_key, t_fix_from_in_if, t_fix_shown_twice, t_fix_vars_data, t_fix_sound_twice, t_fix_rdk_limit,
          t_fix_record_inherit, t_fix_backward_at, t_fix_refusals, t_fix_michelson_order, t_fix_texture_vars, t_fix_walk_budget,
          t_fix_data_set, t_fix_check_all_leaves, t_fix_release_order, t_fix_key_var_reapply,
          t_r2_release_other_template, t_r2_yield_draws_nothing, t_r2_low, t_r2_relaxed, t_r4_leaf_loop_done_track, t_r4_requeue_full,
-         t_r5_wait_final, t_r6_allow_below, t_v2_states, t_v2_until, t_v2_hand, t_v2_rule5, t_v2_review2, t_v2_review3, t_v2_f34, t_v2_ties, t_v2_review4, t_v2_review5, t_v2_findings, t_v2_corpus, t_v2_window_8k, t_v2_two_hands, t_v2_two_exits_one_ctl, t_v2_n1_tie, t_v2_n1_chain, t_v2_n1_derived, t_v2_resp_pend_first, t_v2_barrier, t_v2_resp_plim, t_v2_signal_from_first, t_v2_beyond_bound0, t_v2_frame_rows_late]
+         t_r5_wait_final, t_r6_allow_below, t_v2_states, t_v2_until, t_v2_hand, t_v2_rule5, t_v2_review2, t_v2_review3, t_v2_f34, t_v2_ties, t_v2_review4, t_v2_review5, t_v2_findings, t_v2_corpus, t_v2_window_8k, t_v2_two_hands, t_v2_two_exits_one_ctl, t_v2_n1_tie, t_v2_n1_chain, t_v2_n1_derived, t_v2_resp_pend_first, t_v2_barrier, t_v2_resp_plim, t_v2_signal_from_first, t_v2_beyond_bound0, t_v2_frame_rows_late, t_v2_ended_hits]
 
 
 def main():

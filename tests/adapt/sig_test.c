@@ -7131,6 +7131,41 @@ static void test_v2_exit_late(void) {
         CHECK(v2_hits(1, &t) == v && (v ? t == 1001 * MS : 1));
     }
 }
+/* The player harness, 60 Hz seed 102401 (0, 5 and 10 ms late), reduced:
+ * G = [arm d at 1001] waits (N(G) 990) and a settle at 1016 lets it in, G's
+ * L. The state's next until arms d again at 1001: H, a past group that
+ * waits at its place with the settle as its L too, 2 (b)'s exception (no
+ * count). The state's end, ysig_disarm_at(d, 1001), is late (before the
+ * settle by key) and goes right after H. By R2 it is G's L now, and X1
+ * makes it H's L too (it lets in every waiting group at or before its t
+ * that meets d), so H is still the exception, G's arm before H's. The 2 (b)
+ * retest with the disarm_at as L counted H's arm (late_unverified). The
+ * control (v 1): H = [set d's level, arm d at 1001] has a set, so it is not
+ * the exception, and G is counted at H's place (arm_unverified) */
+static void test_v2_two_untils(void) {
+    int v;
+    g_where = "a late disarm_at after a second arm at tau (102401)";
+    for (v = 0; v < 2; v++) {
+        ysig_node n[2];
+        ysig_stats st;
+        int64_t t = 0;
+        n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 1); n[0].history = 64;
+        n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1); n[1].p[YSIG_DETECT_LEVEL] = 5;
+        n[1].p[YSIG_DETECT_ENTRY] = YSIG_ENTRY_NOW; n[1].history = 64;
+        if (!rp_open(n, 2, 4, 0, false, false)) return;
+        rp_feed(990 * MS, 9, YIN_AXIS_POSITION, 1);
+        (void)v2_hits(1, NULL);
+        CHECK(ysig_arm(&g_rp, 1, 1001 * MS) && g_rp.wt->n == 1);
+        CHECK(ysig_settle(&g_rp, 1016 * MS) >= 0 && g_rp.wt->n == 0);
+        CHECK(v2_hits(1, &t) == 1 && t == 1001 * MS);
+        if (v) CHECK(ysig_set(&g_rp, 1, YSIG_DETECT_LEVEL, 5));
+        CHECK(ysig_arm(&g_rp, 1, 1001 * MS));
+        CHECK(ysig_disarm_at(&g_rp, 1, 1001 * MS));
+        ysig_get_stats(&g_rp, &st);
+        CHECK(st.late_unverified == 0 && st.arm_unverified == v && st.late_far == 0 && st.late_full == 0);
+        CHECK(st.late_hits_voided == 0 && st.arm_hits_retracted == 0);
+    }
+}
 static void test_late(void) {
     ysig_stats st;
     int v, k;
@@ -7509,6 +7544,7 @@ int main(void) {
     test_v2_s1();
     test_v2_lost_set();
     test_v2_exit_late();
+    test_v2_two_untils();
     test_hold();
     if (g_failures) { fprintf(stderr, "sig_test: %d failures\n", g_failures); return 1; }
     printf("sig_test: all checks passed\n");

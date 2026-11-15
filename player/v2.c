@@ -3420,10 +3420,19 @@ static int v2_feed_part(pl_player* p, pl_v2* v, const yscr_frame* f, int n) {
             for (k = 0; k < v->n_der; k++) if (p->tmpl->collector) yrsp_feed(p->tmpl->collector, &v->der[k]);
             v->n_der = 0;
         } else {
+            /* not the trial's graph (between trials, or another template's):
+             * no one takes its hits and events, but sig.h counts one handed
+             * out that a late report then voids (late_hits_voided,
+             * arm_derived_stale), and the guard stops on it (the model's
+             * harness, 500 Hz, 20 ms late, seed 100308: a hit of the ended
+             * trial's control handed out between trials, past the horizon).
+             * So hand out only what is final: up to the horizon over every
+             * role. Every bound 0: all, as 0.11.0 */
             ysig_hit h[V2_HITQ];
             yin_event der[64];
-            while (ysig_detected(&w->g, h, V2_HITQ) > 0) { }
-            while (ysig_derived(&w->g, der, 64) > 0) { }
+            int64_t ga = S->bnd_max > 0 ? v2_horizon_all(p) : INT64_MAX;
+            while (ysig_detected_to(&w->g, h, V2_HITQ, ga) > 0) { }
+            while (ysig_derived_to(&w->g, der, 64, ga) > 0) { }
         }
     }
     return 0;

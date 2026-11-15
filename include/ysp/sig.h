@@ -5537,6 +5537,7 @@ static int ysig__late_place(ysig_graph* g, uint64_t a, uint64_t b, uint64_t lo, 
  * group, or of none, meets G between them); any other is counted (3, 4:
  * a state call there, or a shape the header does not order). Counted
  * once a late call (late_unverified). */
+static int ysig__unv_x_ok(ysig_graph* g, uint64_t xi, uint64_t gid, int64_t t, int64_t n_x, uint64_t li, int dax);
 static void ysig__late_unv(ysig_graph* g, uint64_t at, uint64_t n, const uint64_t* F, int64_t t, int cls) {
     ysig__cu* cu = g->cu;
     ysig__wt* w = g->wt;
@@ -5560,18 +5561,34 @@ static void ysig__late_unv(ysig_graph* g, uint64_t at, uint64_t n, const uint64_
         int dax = cls == 2 && n == 1 && cu->calls[at % C].e.kind == YSIG_J_DISARM_AT && t >= o->t;
         ok = 0;
         if ((dax || (cls < 2 && (t > o->t || (cls == 1 && t == o->t)))) && o->node >= 0) {
+            uint64_t l_old = o->l_seq, u0 = cu->n_ck ? cu->ck[cu->ck0].call : UINT64_MAX;
+            /* N before each call of the span, for 2 (b)'s exception (H waits
+             * at its place); unknown when the window starts after G */
+            int64_t nx = u0 <= zl ? cu->ck[cu->ck0].cover : INT64_MAX, ti;
             for (q = 0; q < g->dw; q++) fa[q] = 0;
             ysig__fp_or(g, fa, o->node);
             ok = ysig__fp_meets(g, F, fa);
-            for (s = zl + 1; ok && s < at; s++) {
+            /* the exception's order at L reads the groups whose L it is: G's
+             * is the disarm_at now (put back when G is counted) */
+            if (dax) o->l_seq = cu->calls[at % C].cseq;
+            for (s = u0 <= zl ? u0 : zl + 1; ok && s < at; s++) {
                 const ysig__call* c = &cu->calls[s % C];
-                int64_t ti;
-                if (ysig__input_t(&c->e, &ti) || c->gid == o->gid) continue;
+                if (c->e.kind == YSIG_J_RESET || c->e.kind == YSIG_J_RESET_TRIAL) { nx = c->e.t; continue; }
+                if (ysig__input_t(&c->e, &ti)) { if (nx != INT64_MAX && ti > nx) nx = ti; continue; }
+                if (s <= zl || c->gid == o->gid) continue;
                 /* a disarm_at at or after G's time is 2 (b)'s exception */
                 if (c->e.kind == YSIG_J_DISARM_AT && c->e.t >= o->t) continue;
-                if (ysig__fp_entry(g, c, f) == 1 && ysig__fp_meets(g, f, o->F)) ok = 0;
+                if (ysig__fp_entry(g, c, f) != 1 || !ysig__fp_meets(g, f, o->F)) continue;
+                /* the 2 (b) exception with the disarm_at as L: a group H with
+                 * its arm and disarms only, later than G, waiting at its place,
+                 * that the disarm_at lets in too (X1), after G (the player's
+                 * 60 Hz seed 102401: an until's arm of r0 at tau, then a second
+                 * until's arm of r0 at tau, then the state's disarm_at at tau) */
+                if (dax && ysig__unv_x_ok(g, s, o->gid, o->t, nx, at, 1)) continue;
+                ok = 0;
             }
             if (ok) { o->l_seq = cu->calls[at % C].cseq; continue; }
+            o->l_seq = l_old;
         } else if (dax) {
             continue;   /* a cancelled G: the cancel, not an L */
         }
@@ -5936,7 +5953,7 @@ static void ysig__lsim_place(ysig__lsim* m, int k) {
         }
     }
 }
-static int ysig__unv_x_ok(ysig_graph* g, uint64_t xi, uint64_t gid, int64_t t, int64_t n_x, uint64_t li) {
+static int ysig__unv_x_ok(ysig_graph* g, uint64_t xi, uint64_t gid, int64_t t, int64_t n_x, uint64_t li, int dax) {
     /* the exception of 2 (b): the call is of a group H that holds its arm
      * and disarms only, later than G by (time, call order), that waits at
      * its place too, and whose own L is G's: L lets H in, and no input
@@ -5962,7 +5979,11 @@ static int ysig__unv_x_ok(ysig_graph* g, uint64_t xi, uint64_t gid, int64_t t, i
         (void)ysig__fp_entry(g, c, f);
         for (w = 0; w < g->dw; w++) fh[w] |= f[w];
     }
-    if (!armed || !(th > t || (th == t && x->gid > gid)) || n_x >= th || l->tr <= th || hl >= li) return 0;
+    /* L lets H in: an input later than H's time; with dax (the late
+     * disarm_at that ysig__late_unv() makes G's L, R2), that disarm_at at
+     * or after it (X1, inclusive as an arm call) */
+    if (!armed || !(th > t || (th == t && x->gid > gid)) || n_x >= th || hl >= li) return 0;
+    if (l->tr < th || (l->tr == th && !(dax && l->e.kind == YSIG_J_DISARM_AT))) return 0;
     if (ysig__fp_entry(g, l, f) != 1 || !ysig__fp_meets(g, f, fh)) return 0;
     for (s = hl + 1; s < li; s++) {
         const ysig__call* c = &cu->calls[s % (uint64_t)cu->C];
@@ -6103,7 +6124,7 @@ static void ysig__unv_place(ysig_graph* g, int kslot, uint64_t pos, int nb) {
                     const ysig__call* x = &cu->calls[u % (uint64_t)cu->C];
                     if (ysig__input_t(&x->e, &ti)) { if (ti > nx) nx = ti; continue; }
                     if (x->gid == gid || ysig__fp_entry(g, x, f) != 1 || !ysig__fp_meets(g, f, F)) continue;
-                    if (!ysig__unv_x_ok(g, u, gid, t, nx, li)) bad = 1;
+                    if (!ysig__unv_x_ok(g, u, gid, t, nx, li, 0)) bad = 1;
                 }
                 if (!bad) ysig__op_add(g, gid, t, F, l->cseq, armed);
             }
@@ -6153,7 +6174,7 @@ static void ysig__unv_place(ysig_graph* g, int kslot, uint64_t pos, int nb) {
                 uint64_t fx[YSIG__FPW];
                 int in = ysig__input_t(&x->e, &ti);
                 if (s > zl && !in && ysig__fp_entry(g, x, fx) == 1 && ysig__fp_meets(g, fx, o->F) &&
-                    !ysig__unv_x_ok(g, s, o->gid, o->t, s >= pos && s < end ? N : nx, li)) {
+                    !ysig__unv_x_ok(g, s, o->gid, o->t, s >= pos && s < end ? N : nx, li, 0)) {
                     ysig__unv(g, o->gid);
                     drop = 1;
                 }

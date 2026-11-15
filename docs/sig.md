@@ -887,7 +887,12 @@ When the header tests:
   again with it, so a later call placed after it is outside G's span (the
   player's 60 Hz seed 102788: a late report after the trial's end); an
   input later than `τ` that meets `F(G)` becomes G's `L` and
-  retests 2 (a) and 2 (b) (L5); one that meets an exception group there
+  retests 2 (a) and 2 (b) (L5). In the retest with the disarm_at as `L`,
+  2 (b)'s exception holds as at G's going-in: a group H between G and the
+  disarm_at that the disarm_at lets in too (X1), after G, is not counted
+  (the player's 60 Hz seed 102401: an until's arm at `τ`, the next
+  until's arm of the same control at `τ`, then the state's disarm_at at
+  `τ`; `sig_test` `test_v2_two_untils`); one that meets an exception group there
   retests 2 (b) with R's order at `L` (L6).
 - At each input call: condition 3.
 - Condition 4: at G's place (a past group), at the trigger that lets G
