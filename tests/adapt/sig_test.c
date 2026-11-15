@@ -4351,8 +4351,9 @@ static void test_arm_spec2(void) {
     CHECK(ysig_disarm(&g, 1) && ysig_arm(&g, 2, 18 * MS));
     ysig_get_stats(&g, &st);
     CHECK(st.arm_caught_up == 1 && st.arm_hits_retracted == 0 && st.arm_hits_superseded == 1);
-    /* an image keeps 64 hits: a run again that queues more, then a frame,
-     * does not keep that frame's checkpoint */
+    /* v0.7.0: an image keeps no queue (a run again keeps the live queue's
+     * entries made before its checkpoint): a run again that queues more
+     * than 64, then a frame, keeps that frame's checkpoint (0.6.x did not) */
     n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2); n[0].history = 256;
     n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1);
     n[1].p[YSIG_DETECT_LANE] = 0; n[1].p[YSIG_DETECT_LEVEL] = 5; n[1].p[YSIG_DETECT_REPEAT] = 1;
@@ -4365,7 +4366,7 @@ static void test_arm_spec2(void) {
     m = g.n_hit;
     k = g.cu->n_ck;
     f = frame_at(1, 16 * MS, 0, NULL, 0); ysig_frame(&g, &f);
-    CHECK(m > 64 && g.cu->n_ck == k);
+    CHECK(m > 64 && g.cu->n_ck == k + 1);
     /* D: a re-arm's fall reaches a record of the hit output: a row of 0 at
      * the arm's time */
     n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 2); n[0].history = 64;
@@ -6758,6 +6759,174 @@ static void test_late(void) {
     }
 }
 
+/* v0.7.0: ysig_detected_to(), ysig_derived_to() (docs/sig.md, "Holding
+ * hits and derived events"): one case per sentence, each with a control */
+static int hd_to(int64_t t, int cap) {
+    ysig_hit h[8];
+    int m = ysig_detected_to(&g_rp, h, cap < 8 ? cap : 8, t), k;
+    for (k = 0; k < m; k++) g_lt_hit[k] = h[k].t;
+    return m;
+}
+static void hd_der_open(int K, int calls) {
+    ysig_node n[3];
+    n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 2); n[0].history = 64;   /* any device */
+    n[1] = ysig_node_of(YSIG_OP_INTEGRATE, 0, -1);
+    n[2] = ysig_node_of(YSIG_OP_EMIT, 1, -1);
+    (void)rp_open(n, 3, K, calls, false, false);
+}
+static void test_hold(void) {
+    ysig_stats st;
+    yin_event ev[8];
+    int v, k, m;
+    g_where = "holding hits and events";
+    /* "hands out, in R's order among them, at most cap queued hits whose
+     * time is at or before t ... The queued hits later than t stay queued
+     * and are not handed out." Control: ysig_detected() hands out all */
+    for (v = 0; v < 2; v++) {
+        lt_det_open(0, 4);
+        rp_feed(1 * MS, 0, YIN_AXIS_POSITION, 1);
+        ysig_arm(&g_rp, 1, 1 * MS);
+        for (k = 1; k <= 3; k++) { rp_feed(k * 5 * MS, 9, YIN_AXIS_POSITION, 1); rp_feed(k * 5 * MS + MS, 0, YIN_AXIS_POSITION, 1); }
+        if (!v) {
+            CHECK(hd_to(10 * MS, 8) == 2 && g_lt_hit[0] == 5 * MS && g_lt_hit[1] == 10 * MS);
+            CHECK(hd_to(14 * MS, 8) == 0 && g_rp.n_hit == 1);
+            CHECK(hd_to(INT64_MAX, 8) == 1 && g_lt_hit[0] == 15 * MS);
+        } else {
+            CHECK(lt_hits() == 3 && g_lt_hit[0] == 5 * MS && g_lt_hit[2] == 15 * MS);
+        }
+        /* at most cap */
+        lt_det_open(0, 4);
+        rp_feed(1 * MS, 0, YIN_AXIS_POSITION, 1);
+        ysig_arm(&g_rp, 1, 1 * MS);
+        for (k = 1; k <= 3; k++) { rp_feed(k * 5 * MS, 9, YIN_AXIS_POSITION, 1); rp_feed(k * 5 * MS + MS, 0, YIN_AXIS_POSITION, 1); }
+        m = hd_to(v ? INT64_MAX : 10 * MS, 1);
+        CHECK(m == 1 && g_lt_hit[0] == 5 * MS && g_rp.n_hit == 2);
+    }
+    /* "a run again that no longer gives a queued hit removes it, with no
+     * count": the hit at 15 is held (not handed out) and a late report
+     * moves the crossing to 13. Control: handed out, it counts in
+     * late_hits_voided */
+    for (v = 0; v < 2; v++) {
+        lt_det_open(0, 4);
+        rp_feed(1 * MS, 0, YIN_AXIS_POSITION, 1);
+        ysig_arm(&g_rp, 1, 1 * MS);
+        rp_feed(10 * MS, 0, YIN_AXIS_POSITION, 1);
+        rp_feed(15 * MS, 9, YIN_AXIS_POSITION, 1);
+        CHECK(hd_to(v ? 15 * MS : 12 * MS, 8) == v);
+        rp_feed(13 * MS, 9, YIN_AXIS_POSITION, 2);   /* device 2, late */
+        ysig_get_stats(&g_rp, &st);
+        CHECK(lt_hits() == 1 && g_lt_hit[0] == 13 * MS && st.late_hits_voided == v);
+        CHECK(st.arm_hits_superseded == 0 && st.arm_hits_retracted == 0 && st.late_unverified == 0);
+    }
+    /* "a run again that gives it again leaves it queued once". Control:
+     * handed out, it is not queued again, and nothing counts */
+    for (v = 0; v < 2; v++) {
+        lt_det_open(0, 4);
+        rp_feed(1 * MS, 0, YIN_AXIS_POSITION, 1);
+        ysig_arm(&g_rp, 1, 1 * MS);
+        rp_feed(10 * MS, 0, YIN_AXIS_POSITION, 1);
+        rp_feed(15 * MS, 9, YIN_AXIS_POSITION, 1);
+        CHECK(hd_to(v ? 15 * MS : 12 * MS, 8) == v);
+        rp_feed(13 * MS, 0, YIN_AXIS_POSITION, 2);   /* late, changes no hit */
+        ysig_get_stats(&g_rp, &st);
+        CHECK(st.late_hits_voided == 0 && st.arm_hits_retracted == 0 && st.arm_caught_up == 0);
+        m = lt_hits();
+        CHECK(m == !v && (v || g_lt_hit[0] == 15 * MS));
+    }
+    /* "The queue holds YSIG_QUEUE_CAP plus catchup_calls hits; a hit that
+     * finds it full is counted in hits_lost." Control: with no window, 64 */
+    for (v = 0; v < 2; v++) {
+        ysig_node n[2];
+        n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 2); n[0].history = 64;
+        n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1); n[1].p[YSIG_DETECT_LANE] = 0; n[1].p[YSIG_DETECT_LEVEL] = 5;
+        n[1].p[YSIG_DETECT_REPEAT] = 1; n[1].history = 64;
+        if (!rp_open(n, 2, v ? 0 : 4, 100, false, false)) return;
+        ysig_arm(&g_rp, 1, 0);
+        for (k = 0; k < 200; k++) { rp_feed((k * 2 + 1) * MS, 9, YIN_AXIS_POSITION, 1); rp_feed((k * 2 + 2) * MS, 0, YIN_AXIS_POSITION, 1); }
+        ysig_get_stats(&g_rp, &st);
+        CHECK(st.hits == 200 && g_rp.n_hit == (v ? 64 : 164) && st.hits_lost == (v ? 136 : 36));
+    }
+    /* "A reset or a trial reset empties the queue, held hits too."
+     * Control: no reset, the held hit stays */
+    for (v = 0; v < 3; v++) {
+        lt_det_open(0, 4);
+        rp_feed(1 * MS, 0, YIN_AXIS_POSITION, 1);
+        ysig_arm(&g_rp, 1, 1 * MS);
+        rp_feed(15 * MS, 9, YIN_AXIS_POSITION, 1);
+        CHECK(hd_to(12 * MS, 8) == 0);
+        if (v == 1) ysig_reset_trial(&g_rp, 20 * MS);
+        if (v == 2) ysig_reset(&g_rp, 20 * MS);
+        CHECK(lt_hits() == (v == 0));
+    }
+    /* derived events: the same sentences. The integral of the samples of
+     * any device (a step hold: x times the time to the next sample),
+     * emitted at each sample */
+    /* "hands out ... at most cap queued events whose time is at or before
+     * t ...; later ones stay queued and are not handed out". Control:
+     * ysig_derived() hands out all */
+    for (v = 0; v < 2; v++) {
+        hd_der_open(4, 0);
+        rp_feed(10 * MS, 1, YIN_AXIS_POSITION, 1);
+        rp_feed(15 * MS, 1, YIN_AXIS_POSITION, 1);
+        if (!v) {
+            CHECK(ysig_derived_to(&g_rp, ev, 8, 12 * MS) == 1 && ev[0].t == 10 * MS && g_rp.n_der == 1);
+            CHECK(ysig_derived_to(&g_rp, ev, 8, 14 * MS) == 0);
+            CHECK(ysig_derived_to(&g_rp, ev, 8, INT64_MAX) == 1 && ev[0].t == 15 * MS);
+        } else {
+            CHECK(ysig_derived(&g_rp, ev, 8) == 2 && ev[1].t == 15 * MS);
+        }
+    }
+    /* "a run again that no longer gives it, or gives it otherwise, removes
+     * it with no count and queues the new one; arm_derived_stale counts only
+     * events handed out": a late sample of 5 at 13 makes a new event there
+     * and the integral at 15 is 0.013, not 0.005. Control: the event at 15
+     * handed out */
+    for (v = 0; v < 2; v++) {
+        hd_der_open(4, 0);
+        rp_feed(10 * MS, 1, YIN_AXIS_POSITION, 1);
+        rp_feed(15 * MS, 1, YIN_AXIS_POSITION, 1);
+        CHECK(ysig_derived_to(&g_rp, ev, 8, v ? 15 * MS : 12 * MS) == 1 + v);
+        CHECK(!v || fabs(ev[1].x - 0.005) < 1e-6);
+        rp_feed(13 * MS, 5, YIN_AXIS_POSITION, 2);
+        ysig_get_stats(&g_rp, &st);
+        CHECK(st.arm_derived_stale == v && st.late_unverified == 0 && st.late_far == 0);
+        m = ysig_derived(&g_rp, ev, 8);
+        CHECK(m == 2 && ev[0].t == 13 * MS && ev[1].t == 15 * MS && fabs(ev[1].x - 0.013) < 1e-6);
+    }
+    /* a run again that gives it again leaves it queued once: a late sample
+     * of 1, the value held, changes no integral. Control: handed out, it is
+     * not queued again, and is stale all the same: its node's sequence in R
+     * now has the event at 13 before it, which the caller did not have */
+    for (v = 0; v < 2; v++) {
+        hd_der_open(4, 0);
+        rp_feed(10 * MS, 1, YIN_AXIS_POSITION, 1);
+        rp_feed(15 * MS, 1, YIN_AXIS_POSITION, 1);
+        CHECK(ysig_derived_to(&g_rp, ev, 8, v ? 15 * MS : 12 * MS) == 1 + v);
+        rp_feed(13 * MS, 1, YIN_AXIS_POSITION, 2);
+        ysig_get_stats(&g_rp, &st);
+        CHECK(st.arm_derived_stale == v);
+        m = ysig_derived(&g_rp, ev, 8);
+        CHECK(m == 2 - v && ev[0].t == 13 * MS && (v || (ev[1].t == 15 * MS && fabs(ev[1].x - 0.005) < 1e-6)));
+    }
+    /* "The queue holds YSIG_QUEUE_CAP plus catchup_calls events; an event
+     * that finds it full is counted in derived_lost." Control: no window */
+    for (v = 0; v < 2; v++) {
+        hd_der_open(v ? 0 : 4, 100);
+        for (k = 0; k < 200; k++) rp_feed((k + 1) * MS, 1, YIN_AXIS_POSITION, 1);
+        ysig_get_stats(&g_rp, &st);
+        CHECK(g_rp.n_der == (v ? 64 : 164) && st.derived_lost == (v ? 136 : 36));
+    }
+    /* "A reset or a trial reset empties it." Control: no reset */
+    for (v = 0; v < 3; v++) {
+        hd_der_open(4, 0);
+        rp_feed(15 * MS, 1, YIN_AXIS_POSITION, 1);
+        CHECK(ysig_derived_to(&g_rp, ev, 8, 12 * MS) == 0);
+        if (v == 1) ysig_reset_trial(&g_rp, 20 * MS);
+        if (v == 2) ysig_reset(&g_rp, 20 * MS);
+        CHECK(ysig_derived(&g_rp, ev, 8) == (v == 0));
+    }
+}
+
 int main(void) {
     test_conventions();
     test_param_names();
@@ -6816,6 +6985,7 @@ int main(void) {
     test_hit_whole_value();
     test_pending();
     test_late();
+    test_hold();
     if (g_failures) { fprintf(stderr, "sig_test: %d failures\n", g_failures); return 1; }
     printf("sig_test: all checks passed\n");
     return 0;
