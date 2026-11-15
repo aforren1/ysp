@@ -1043,6 +1043,36 @@ too (not explained; above, "The 17 ms frame"). 10 ms late costs about
 22 us at p99 in the bimanual example and 16 us in the visuomotor
 (sig.h's runs again).
 
+### Results at cfb3856 (2026-11-15)
+
+Linux desktop, i5-14500, GCC 12.2, Release, `--sim`; the model's
+harness as above (1,000 cases a run, `--jobs 6`, exact compare). The
+load was 2.0 to 7.9 during the runs (the reviewer's oracle jobs); none
+of these numbers is a timing.
+
+| Hz | Late | 156d2b5 mismatches (at a GAP), guard stops | cfb3856 mismatches (at a GAP), guard stops |
+|---|---|---|---|
+| 60 | 0 | 6 (6), 1 late_unverified (102401) | 6 (6), 0 |
+| 60 | 5 ms | 1 (1), 1 late_unverified (102401) | 0, 0 |
+| 60 | 10 ms | 1 (1), 1 late_unverified (102401) | 0, 0 |
+| 60 | 20, 40, 60 ms | 0, 0 | 0, 0 |
+| 500 | 0, 5, 10 ms | 4 (4), 0, 0 at 0 ms; 0 and 0 at 5 and 10 ms | 4 (4) at 0 ms; 0 at 5 and 10 ms; 0 stops |
+| 500 | 20 ms | 1 (0), 1 late_hits_voided (100308) | 0, 0 |
+| 500 | 40 ms | 3 (0), 3 late_hits_voided (100162, 100601, 100823) | 0, 0 |
+| 500 | 60 ms | 5 (0), 5 late_hits_voided (100045, 100162, 100572, 100601, 100823) | 0, 0 |
+
+The causes: every `late_hits_voided` stop was a hit of a graph that was
+not the trial's, handed out past `G` between trials ("What still stops
+the guard"); 102401's `late_unverified` was sig.h's 2 (b) retest with a
+late disarm_at as `L` (docs/sig.md, "When the header tests").
+
+`player_test` 72/0 at 60 and 500 Hz. `compare.py` rc 0 at both rates. The
+60 Hz identity against 0.11.0 (`late5/ident.py` over `player_test`'s
+data) is the same at 156d2b5 and cfb3856: 975 files identical, 342
+differ, in the declared columns only. Feed-each against batches, both
+examples, 500 Hz, 10 ms late: the data and `session.json` (less its
+timing fields) equal; and equal to 156d2b5's batch data.
+
 ### The reviewer's findings on the first draft (3f6d21c), and the answers
 
 The reviewer confirmed one `G` per graph, the order of exits, the entry
