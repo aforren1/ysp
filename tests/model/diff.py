@@ -238,6 +238,10 @@ GUARD_KEYS = ("retracted", "rows_stale", "derived_stale", "pinned", "far", "full
 GUARD_LATE_RE = re.compile(r"late: (-?\d+) before the window, (-?\d+) logs full, (-?\d+) no window, (-?\d+) unverified, "
                            r"(-?\d+) hits voided")
 GUARD_LATE_KEYS = ("late_far", "late_full", "late_off", "late_unverified", "late_hits_voided")
+# the wait for complete input: held hits and events lost, and N1 (a hit or
+# event at or before a horizon the player used: late_beyond_bound)
+GUARD_HELD_RE = re.compile(r"held: (-?\d+) hits lost, (-?\d+) derived lost")
+GUARD_HELD_KEYS = ("hits_lost", "derived_lost")
 
 
 def guard_counts(got):
@@ -247,12 +251,17 @@ def guard_counts(got):
     # the message's tail is kept (300 characters): its counts come last
     if "internal guard" not in txt and not GUARD_RE.search(txt):
         return None
+    if "late_beyond_bound" in txt:
+        return {"beyond_bound": 1}
     m = GUARD_RE.search(txt)
     if m:
         d = dict(zip(GUARD_KEYS, (int(x) for x in m.groups())))
         m = GUARD_LATE_RE.search(txt)
         if m:
             d.update(zip(GUARD_LATE_KEYS, (int(x) for x in m.groups())))
+        m = GUARD_HELD_RE.search(txt)
+        if m:
+            d.update(zip(GUARD_HELD_KEYS, (int(x) for x in m.groups())))
         return d
     m = re.search(r"\((\d+) arm_unverified", txt)
     return {"unverified": int(m.group(1)) if m else -1}
