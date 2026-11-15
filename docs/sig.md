@@ -891,7 +891,12 @@ When the header tests:
   the calls G goes before, since `L(G)` comes after them (the oracle's
   cases 297 and 616 of seed 20261121, `OFF=l`: a present group's set made
   while G waited, at an `N(F(c))` that did not let G in). The 2 (b)
-  exception is not ordered there: such a call counts G.
+  exception is not ordered there: such a call counts G. A past group's
+  call is never among them: one that meets G with a greater key lets G
+  in at its `τ`, so G goes in at that group's place, right before the
+  call (H13), and is tested there; `L(G)` is not an input then, and 2 (a)
+  counts G (the oracle's case 899 family: a past group's set at 54.187
+  ms, G waiting at 49.937 ms; `sig_test` `test_v2_past_letin`).
 - At each later past group's place between G and `L(G)`: condition 2 (b)
   again, over every call between them, since a later group can be the
   link of a chain that lets an earlier H in before G.

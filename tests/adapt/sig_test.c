@@ -7225,6 +7225,31 @@ static void test_v2_n_tau(void) {
         CHECK(st.arm_unverified == v && st.late_far == 0 && st.late_full == 0);
     }
 }
+/* The oracle's case 899 family (the coordinator, 2026-11-15): a past
+ * group's set meets an arm that waits at an earlier time. Under S1' the
+ * past group's calls let in at its tau, so R makes d right before the
+ * set, inside the group's block (H13); a graph with no window makes the
+ * set at its N(F(c)) and lets nothing in (late_off). d's L is not an
+ * input there: 2 (a) counts d at its going-in. No input at d's tau (19).
+ * The control: the group at 18, before d by key: the set lets nothing in,
+ * d waits, and device 3 at 26 (L, an input that meets d) lets it in with
+ * nothing between: exact. ysig__late_2b() never sees such a call: one
+ * with a greater key than d's that meets d lets d in at its place. */
+static void test_v2_past_letin(void) {
+    ysig_stats st;
+    int v;
+    g_where = "a past group's set lets a waiting arm in (899)";
+    for (v = 0; v < 2; v++) {
+        if (!s1_open(4)) return;
+        rp_feed(30 * MS, 0, YIN_AXIS_POSITION, 1);
+        CHECK(ysig_set(&g_rp, 2, YSIG_DETECT_LEVEL, 20));
+        CHECK(ysig_arm(&g_rp, 3, (v ? 24 : 18) * MS) && g_rp.wt->n == !v);
+        rp_feed(26 * MS, 9, YIN_AXIS_POSITION, 3);
+        ysig_get_stats(&g_rp, &st);
+        CHECK(g_rp.wt->n == 0 && st.late_far == 0 && st.late_full == 0 && st.arm_past_far == 0 && st.arm_past_full == 0);
+        CHECK(st.arm_unverified == v);
+    }
+}
 /* Ruling 2 extended (the oracle's case 350 of seed 20261115): a call whose
  * time is before the last barrier keys at the barrier's time, call order
  * deciding among them; so do the cancel by key and the let-in tests. d's
@@ -7748,6 +7773,7 @@ int main(void) {
     test_v2_present_key();
     test_v2_s1();
     test_v2_n_tau();
+    test_v2_past_letin();
     test_v2_bar_clamp();
     test_v2_lost_set();
     test_v2_exit_late();
