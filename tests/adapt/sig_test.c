@@ -4947,11 +4947,10 @@ static void test_arm_exact(void) {
         CHECK(g_rp.wt->n == 1);
         if (v >= 2) ysig_arm(&g_rp, 5, 30 * MS);
         rp_feed(31 * MS, 0, YIN_AXIS_PEN_PRESSURE, 3);
-        /* S1 (2026-11-15): with the arm at 30 (v 2, 3) the set is a call
-         * of that group and lets in at its tau, 30: d1 goes in right
-         * before it, inside the group's block (condition 1). With no arm
-         * the set is in no group, at N(F(c)) */
-        CHECK(ex_unv() == (v >= 2) && g_rp.wt->n == (v >= 2 ? 0 : 1));
+        /* S1' (2026-11-15): with the arm at 30 (v 2, 3) the group is
+         * present and its set lets in at its N(F(c)), 10, as with no arm
+         * (S1, now withdrawn, let d1 in at 30 inside the group's block) */
+        CHECK(ex_unv() == 0 && g_rp.wt->n == 1);
     }
     /* (d) the reviewer's 1137: a present arm (of d2, at N) lets d1 in
      * right before itself, after its own group's disarm of d3: d1 is in
@@ -6936,8 +6935,8 @@ static void test_v2_old_shapes(void) {
     }
 }
 
-/* S1 (2026-11-15): a group's state call lets in waiting groups at the
- * group's tau, for past, present and ahead groups; a state call in no
+/* S1' (2026-11-15): a state call of a present or ahead group lets in at
+ * its call's N(F(c)); a past group's calls at its tau; a state call in no
  * group at N(F(c)); a plain disarm in no group at N. Nodes: device 1
  * reaches e (3), device 3 reaches d (2, entry now, a hit output). X (5),
  * an offset of device 5 (never fed), feeds a sum with device 1 (6) and
@@ -6962,42 +6961,66 @@ static int s1_open(int K) {
     CHECK(ysig_arm(&g_rp, 2, 19 * MS) && g_rp.wt->n == 1);
     return 1;
 }
-/* The oracle's case 334 (on 20261121), reduced: a present group [set d's
- * level, arm e at 24], present by e's device. The set is a call of that
- * group: it lets in at 24 (S1), so d goes in right before it, tests the
- * old level and hits at 19, as R orders them. With a window the block is
- * made again at the arm; with none the set is made already, and d made
- * after it is a late call (late_off), no hit. At N(F(c)) (10) the set let
- * nothing in, and d's device's report at 26 let it in by key before a set
- * already made. The control: no set, d waits for its device */
+/* S1' (2026-11-15): a present group's state call lets in at its call's
+ * N(F(c)), as before S1. The oracle's case 334 (on 20261121), reduced: a
+ * present group [set d's level, arm e at 24], present by e's device. The
+ * set lets in at 10: d waits. d's device's report at 26 lets it in; by key
+ * it goes before the set and tests the old level: a hit at 19. With a
+ * window it is placed there; with none it is made after the set, a late
+ * call (late_off), no hit. The control: no set.
+ * The deciding case (the reviewer): then d's device reports 15 with a
+ * value that makes d's test false. Under S1 the set let d in at 24 and
+ * its hit at 19 was handed out; the report at 15 voided it
+ * (late_hits_voided, a guard stop). At N(F(c)) d waits until its
+ * device's input is complete: nothing handed out, nothing voided, no hit.
+ * Control: the report at 15 keeps the test true, the hit at 19 (window). */
 static void test_v2_present_key(void) {
     ysig_stats st;
     int v, K;
     for (K = 4; K >= 0; K -= 4) {
-        g_where = K ? "S1, a present group (case 334)" : "S1, a present group, no window";
+        g_where = K ? "S1', a present group (case 334)" : "S1', a present group, no window";
         for (v = 0; v < 2; v++) {
             int64_t t = 0;
             if (!s1_open(K)) return;
             rp_feed(24 * MS, 0, YIN_AXIS_POSITION, 1);
             if (v) CHECK(ysig_set(&g_rp, 2, YSIG_DETECT_LEVEL, 20));
-            CHECK(ysig_arm(&g_rp, 3, 24 * MS) && g_rp.wt->n == !v);
+            CHECK(ysig_arm(&g_rp, 3, 24 * MS) && g_rp.wt->n == 1);
             ysig_get_stats(&g_rp, &st);
-            CHECK(st.late_off == (K ? 0 : v) && st.late_far == 0 && st.late_full == 0);
-            CHECK(v2_hits(2, &t) == (!K && v ? 0 : v) && (K && v ? t == 19 * MS : 1));
+            CHECK(st.late_off == 0 && st.late_far == 0 && st.late_full == 0);
+            CHECK(v2_hits(2, NULL) == 0);
             rp_feed(26 * MS, 9, YIN_AXIS_POSITION, 3);
             ysig_get_stats(&g_rp, &st);
             CHECK(g_rp.wt->n == 0 && st.late_off == (K ? 0 : v) && st.late_far == 0 && st.late_full == 0);
-            CHECK(v2_hits(2, &t) == !v && (v ? 1 : t == 19 * MS));
+            CHECK(v2_hits(2, &t) == (!K && v ? 0 : 1) && (!K && v ? 1 : t == 19 * MS));
+        }
+        g_where = K ? "S1', the deciding case" : "S1', the deciding case, no window";
+        for (v = 0; v < 2; v++) {
+            int64_t t = 0;
+            if (!s1_open(K)) return;
+            rp_feed(24 * MS, 0, YIN_AXIS_POSITION, 1);
+            CHECK(ysig_set(&g_rp, 2, YSIG_DETECT_LEVEL, 20));
+            CHECK(ysig_arm(&g_rp, 3, 24 * MS) && g_rp.wt->n == 1);
+            CHECK(v2_hits(2, NULL) == 0);
+            rp_feed(15 * MS, v ? 1 : 9, YIN_AXIS_POSITION, 3);
+            CHECK(g_rp.wt->n == 1 && v2_hits(2, NULL) == 0);
+            rp_feed(26 * MS, 9, YIN_AXIS_POSITION, 3);
+            ysig_get_stats(&g_rp, &st);
+            CHECK(g_rp.wt->n == 0 && st.late_hits_voided == 0 && st.arm_hits_superseded == 0 && st.arm_hits_retracted == 0);
+            CHECK(st.late_far == 0 && st.late_full == 0);
+            CHECK(v2_hits(2, &t) == (K && !v) && (K && !v ? t == 19 * MS : 1));
         }
     }
 }
-/* S1, the other shapes:
+/* S1', the other shapes:
  * (a) a past group [set d's level, arm e at 24], past by device 1 at 30:
- *     the set lets in at 24, not at its N(F(c)) (10): d goes in right
- *     before it, a hit at 19 with the old level. Control: no set.
- * (b) an ahead group [set d's level, arm e at 40]: the set lets in when
- *     its group goes in (device 1 at 45), at 40: d before it, a hit at
- *     19. Control: no set, d is not in the group's footprint and waits.
+ *     the set lets in at 24 (a past group's calls keep tau), not at its
+ *     N(F(c)) (10): d goes in right before it, a hit at 19 with the old
+ *     level. Control: no set.
+ * (b) an ahead group [set d's level, arm e at 40]: the set lets in at
+ *     its N(F(c)) (10, nothing); when its group goes in (device 1 at 45),
+ *     T1's closure lets d in before it (they meet, d's key is smaller): a
+ *     hit at 19. Control: no set, d is not in the group's footprint and
+ *     waits.
  * (c) a set in no group lets in at N(F(c)): a set of d's level reaches
  *     only device 3's nodes (10), so d waits; a set of X (v 0) reaches
  *     device 1's too (30), and lets d in.
@@ -7007,7 +7030,7 @@ static void test_v2_present_key(void) {
 static void test_v2_s1(void) {
     ysig_stats st;
     int v;
-    g_where = "S1, a past group";
+    g_where = "S1', a past group";
     for (v = 0; v < 2; v++) {
         int64_t t = 0;
         if (!s1_open(4)) return;
@@ -7019,7 +7042,7 @@ static void test_v2_s1(void) {
         ysig_get_stats(&g_rp, &st);
         CHECK(st.late_far == 0 && st.late_full == 0 && st.arm_past_far == 0 && st.arm_past_full == 0);
     }
-    g_where = "S1, an ahead group";
+    g_where = "S1', an ahead group";
     for (v = 0; v < 2; v++) {
         int64_t t = 0;
         if (!s1_open(4)) return;
@@ -7032,7 +7055,7 @@ static void test_v2_s1(void) {
         ysig_get_stats(&g_rp, &st);
         CHECK(st.late_far == 0 && st.late_full == 0);
     }
-    g_where = "S1, a set in no group";
+    g_where = "S1', a set in no group";
     for (v = 0; v < 2; v++) {
         if (!s1_open(4)) return;
         rp_feed(30 * MS, 0, YIN_AXIS_POSITION, 1);
@@ -7042,7 +7065,7 @@ static void test_v2_s1(void) {
         rp_feed(31 * MS, 0, YIN_AXIS_POSITION, 1);   /* ends the gap: in no group */
         CHECK(g_rp.wt->n == v);
     }
-    g_where = "S1, a plain disarm in no group";
+    g_where = "S1', a plain disarm in no group";
     for (v = 0; v < 2; v++) {
         int64_t t = 0;
         if (!s1_open(4)) return;

@@ -5114,10 +5114,11 @@ static void ysig__wait_place(ysig_graph* g, int k, int with_arm) {
         ysig_entry e = calls[i];
         uint64_t f[YSIG__FPW];
         ysig__state_fp(g, &e, f);
-        /* S1: a group's call lets in at its tau (T1's closure above let
-         * in every such group already); at a barrier, with no arm, at
-         * the call's own input time as before */
-        ysig__wait_fire(g, with_arm ? a.t : cn[i], f, 0);
+        /* S1' (2026-11-15): an ahead group's state call lets in at its
+         * call's N(F(c)), not at tau: at tau it would let a group in on
+         * input of another device that is not complete yet, and that
+         * device's next report would void a hit already handed out */
+        ysig__wait_fire(g, cn[i], f, 0);
         if (e.kind == YSIG_J_DISARM) e.t = a.t;
         ysig__cas_call(g, ci, a.seq, a.t, e.kind, e.node);
         if (g->cu) {
@@ -5713,7 +5714,7 @@ static void ysig__wait_blk(ysig_graph* g, int k, int* nb) {
     for (i = 0; i < nc && *nb < YSIG__BLK - 1; i++) {
         uint64_t f[YSIG__FPW];
         ysig__state_fp(g, &calls[i], f);
-        ysig__wait_fire_blk(g, a.t, f, 0, nb);   /* S1: at the group's tau */
+        ysig__wait_fire_blk(g, cn[i], f, 0, nb);   /* S1': an ahead group's call at its N(F(c)) */
         c = &g->cu->blk[(*nb)++];
         memset(c, 0, sizeof *c);
         c->e = calls[i];
@@ -6196,9 +6197,10 @@ static void ysig__unv_place(ysig_graph* g, int kslot, uint64_t pos, int nb) {
  * last logged call that must come before it; the window runs again from
  * the newest checkpoint at or before that place. The waiting groups its
  * calls let in at their calls stay where they went in (wp). */
-/* S1 (2026-11-15): a group's state calls let in at its tau, but an open
- * gap's calls let in at their call (N(F(c)), a plain disarm's N), since
- * no arm closed the gap yet. 1 when the two differ for the gap [from,
+/* A past group's state calls let in at its tau (S1' keeps that for past
+ * groups), but an open gap's calls let in at their call (N(F(c)), a plain
+ * disarm's N), since no arm closed the gap yet. 1 when the two differ for
+ * the gap [from,
  * c_head): a waiting group earlier than t meets one of its calls, or a
  * call let in a group at a time t does not reach (a plain disarm at N
  * later than tau). The block is then made again at t. */
@@ -6416,14 +6418,9 @@ YSIG_API bool ysig_arm(ysig_graph* g, int node, int64_t t_ns) {
          * placed by key before it (a frame) would run again before the
          * group's calls: it goes to its place (the oracle's case 438: a
          * set of a channel's index lost by a run again) */
-        /* S1: a present group's calls let in at tau, which can be later
-         * than their N(F(c)): when that lets in more, or a disarm let in
-         * at N what tau does not, the block is made again at its place as
-         * a past group's is. With no window, or no image to run again
-         * from, the arm is made at R's end and the rest let in after it */
-        int s1 = cu && t_ns == nfg && cu->grp_open && !cu->grp_bad && !cu->replaying && ysig__gap_tau(g, cu->grp_from, t_ns);
-        if (s1 && (ysig__ck_at(cu, cu->grp_from, INT64_MAX) < 0 || cu->c_head - cu->c_tail + (uint64_t)(g->wt->nc + g->wt->n) >= (uint64_t)cu->C)) s1 = 0;
-        if ((t_ns == nfg && !s1) || !cu) ysig__arm_now(g, &e, seq, ysig__is_late(g, fg, t_ns, 2, seq));
+        /* S1': a present group's calls let in at their call (N(F(c))),
+         * as made: nothing to make again at tau */
+        if (t_ns == nfg || !cu) ysig__arm_now(g, &e, seq, ysig__is_late(g, fg, t_ns, 2, seq));
         else ysig__arm_past(g, &e, seq);
         ysig__c4(g, seq, t_ns);
         if (g->st.arm_caught_up == cu0) {
@@ -6487,10 +6484,11 @@ static void ysig__arm_now(ysig_graph* g, ysig_entry* ep, uint64_t seq, int late)
             if (logged) (void)ysig__late_place(g, from0, cu->c_head, cu->c_tail, t_ns, 2, seq);
             else ysig__late_nolog(g);
         }
-        /* S1: the gap's calls let in at tau what their N(F(c)) did not.
-         * Made after them here, such a group is a late call: placed by
-         * key with a window, counted in late_off with none */
-        if (g->wt->n) {
+        /* a past group's calls let in at tau what their N(F(c)) did not.
+         * Made after them here (no window), such a group is a late call,
+         * counted in late_off. A present group's calls let in at N(F(c))
+         * (S1'), as they were made */
+        if (g->wt->n && t_ns < g->wt->nfg) {
             ysig__cas_begin(g, YSIG__CAS_STATE, t_ns, gf);
             g->wt->cas_dis = g->wt->gap4_wp;
             ysig__wait_fire(g, t_ns, gf, 0);
