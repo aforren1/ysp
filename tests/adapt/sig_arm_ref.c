@@ -666,7 +666,7 @@ static void src_reset(int exp_only) {
 
 /* ---- R ------------------------------------------------------------------- */
 
-enum { E_INPUT = 1, E_BARRIER = 2, E_STATE = 4, E_NEUTRAL = 8 };
+enum { E_INPUT = 1, E_BARRIER = 2, E_STATE = 4, E_NEUTRAL = 8, E_DROPPED = 16 };
 typedef struct { int ci, flags, grp; int64_t time; uint64_t fp; } rent;
 static rent g_R[MAXC * 2];
 static int g_nR;
@@ -712,6 +712,7 @@ static void r_remove_ci(int ci) {
 }
 /* ---- late input (d906e19, "Late input", proposed for 0.7.0) ------------- */
 static int g_late;            /* SIG_ORACLE_LATE=1: R by that text */
+static int g_noA;             /* late mode without A's checks (no SIG_ORACLE_LATE_A) */
 static struct {
     long late, far, barrier, frames, cond2, l_new, l_new_nfa, ooo_in, ooo_grp, by_frame, by_fb, by_other, closure, late_state, late_by_disarm, cancel_eq, late_state_span, closure_escape, cancel_letin;
 } g_lc;                       /* per case: what the text counts, and what it leaves out */
@@ -1029,7 +1030,7 @@ static int64_t g_probe[16];
 static int g_nprobe;
 
 static void fail(const char* fmt, const char* a, long b) {
-    if (g_why || g_late) return;
+    if (g_why || g_noA) return;
     snprintf(g_whybuf, sizeof g_whybuf, fmt, a, b);
     g_why = g_whybuf;
 }
@@ -1044,6 +1045,7 @@ static void b_issue(const rent* e) {
      * or state call at N later than tau, that meets its footprint */
     int bw_new = SIG_ARM_REF_SPEC && c->kind == C_ARM && g_bN < e->time;
     if (c->kind == C_DRAIN) return;
+    if (e->flags & E_DROPPED) return;   /* (late_barrier) not in R: B never gets it */
     /* a disarm of a group that B's graph sees ahead is made at once there
      * (a no-window graph cannot take back a state call), meeting the hold
      * only up to B's input time, where R meets it up to tau: B cannot give
@@ -1614,12 +1616,17 @@ static okey r_key(const rent* e) {
     if (g_late >= 3 || getenv("SIG_ORACLE_KEY3")) {
         /* (7a17176) classes at one time: a feed, then a frame or a settle,
          * then a state call or a group; a plain disarm at N (the ruling) */
-        if (e->flags & (E_INPUT | E_NEUTRAL)) { k.t = c->t; k.rank = (c->kind == C_FRAME || c->kind == C_SETTLE) ? 1 : 0; k.order = e->ci; return k; }
+        /* a feed no source keeps (T6: older than its device's last) is not
+         * in R: it stays at its call position, N at its call, so a graph
+         * that gets R's calls drops it as the header did */
+        if (e->flags & E_NEUTRAL) { k.t = g_call_N[e->ci]; k.rank = 0; k.order = e->ci; return k; }
+        if (e->flags & E_INPUT) { k.t = c->t; k.rank = (c->kind == C_FRAME || c->kind == C_SETTLE) ? 1 : 0; k.order = e->ci; return k; }
         if (e->grp >= 0) { k.t = g_gr[e->grp].tau; k.rank = 2; k.order = g_gr[e->grp].arm_ci; return k; }
         k.t = c->kind == C_DISARM ? g_call_N[e->ci] : g_call_nf[e->ci]; k.rank = 2; k.order = e->ci;
         return k;
     }
-    if (e->flags & (E_INPUT | E_NEUTRAL)) { k.t = c->t; k.rank = 0; k.order = e->ci; return k; }
+    if (e->flags & E_NEUTRAL) { k.t = g_late >= 2 ? g_call_N[e->ci] : c->t; k.rank = 0; k.order = e->ci; return k; }
+    if (e->flags & E_INPUT) { k.t = c->t; k.rank = 0; k.order = e->ci; return k; }
     k.t = g_call_nf[e->ci]; k.rank = 1; k.order = e->ci;
     return k;
 }
@@ -1722,7 +1729,7 @@ static void late_input2(int ci, uint64_t fp) {
     if (lb >= 0 && g_R[lb].time > t) {
         /* (L10 answer) before the last barrier's time: dropped, in R too */
         g_lc.barrier++; g_lc.late++;
-        g_call_flags[ci] = E_NEUTRAL; g_call_fp[ci] = 0;
+        g_call_flags[ci] = E_NEUTRAL | E_DROPPED; g_call_fp[ci] = 0;
         g_R[g_nR++] = mk_ent(ci, -1, t);
         return;
     }
@@ -1767,7 +1774,7 @@ static void step(int ci) {
     ysig_get_stats(&g_a, &s0);
     if (c->kind == C_DRAIN) {
         drain(&g_a, g_ha, &g_nha, g_da, &g_nda, ci, 1);
-        if (!g_late) hand_check(ci, mark, &s0, &s0);
+        if (!g_noA) hand_check(ci, mark, &s0, &s0);
         return;
     }
     /* a reset clears the queues: a caller drains before a barrier */
@@ -2015,11 +2022,11 @@ static void step(int ci) {
         printf("\n");
     }
     b_sync();
-    if (!g_late) hand_check(ci, mark, &s0, &s1);
+    if (!g_noA) hand_check(ci, mark, &s0, &s1);
     /* while a gap is open its state calls' rule-3 triggers are not decided
      * (H9 decision: they take effect when the calls go into R, at the gap's
      * end or its group's arm); a read then can see either, so no compare */
-    if (!g_late && !g_why && !g_bw_n && !g_b_cannot && !g_npend) {
+    if (!g_noA && !g_why && !g_bw_n && !g_b_cannot && !g_npend) {
         const char* w = cmp_values();
         if (w) {
             snprintf(g_whybuf, sizeof g_whybuf, "after a %s call: %s",
@@ -2050,6 +2057,11 @@ static void a_counts(long long* unv, long long* oth) {
     *unv = 0;
 #endif
     *oth = st.arm_past_pinned + st.arm_past_far + st.arm_past_full + st.arm_past_off + st.arm_hits_retracted + st.arm_rows_stale + st.arm_derived_stale;
+#ifdef SIG_HAS_LATE
+    /* (0.7.0) late_unverified, and the late fallbacks the guard stops on */
+    *unv += st.late_unverified;
+    *oth += st.late_far + st.late_full;
+#endif
 }
 static void push(const call* c) {
     int b4 = g_b_cannot;
@@ -2074,7 +2086,7 @@ static void gen_frame(void) {
     memset(&c, 0, sizeof c);
     c.kind = C_FRAME; c.t = g_onset; c.poll = g_onset - (int64_t)(rnd() % 3) * 300 * US; c.chbits = (int)(rnd() & 0xff);
     if (c.poll < g_newest - 2 * MS) c.poll = g_newest;   /* a poll near the input (no bad stamps) */
-    if (g_late && !getenv("SIG_ORACLE_NOLATEGEN") && rnd() % 2 && g_newest - 2 * MS > g_last_onset) {
+    if (g_late && !getenv("SIG_ORACLE_NOLATEGEN") && !off('l') && rnd() % 2 && g_newest - 2 * MS > g_last_onset) {
         /* (late mode) the poll after the onset: input up to the poll was fed
          * before the frame call, some of it later than the onset */
         c.t = g_newest - (int64_t)(1 + rnd() % 2) * MS;
@@ -2110,7 +2122,7 @@ static void gen_feed(int dense) {
         if (off('l')) { }
         else if (rnd() % 12 == 0 && !off('q')) c.t = g_last[c.dev] - (int64_t)(rnd() % 3000) * US;                 /* older than its device's last: dropped */
         else if (rnd() % 8 == 0) { int o = 3 - c.dev; c.dev = o; c.t = g_last[o] + (g_t - g_last[o]) / 2; }   /* a late report of the other device */
-        else if (g_late && !getenv("SIG_ORACLE_NOLATEGEN") && c.dev == 2 && rnd() % 2) {
+        else if (g_late && !getenv("SIG_ORACLE_NOLATEGEN") && !off('l') && c.dev == 2 && rnd() % 2) {
             /* (late mode) device 2 delivers 1 to 20 ms late, in its own order */
             int64_t tl = g_t - (int64_t)(1 + rnd() % 20) * MS;
             c.t = tl > g_last[2] ? tl : g_last[2];
@@ -2416,6 +2428,7 @@ static void emit_case(void) {
 int main(int argc, char** argv) {
     long cases = getenv("SIG_ORACLE_CASES") ? atol(getenv("SIG_ORACLE_CASES")) : 2000, wrong = 0, cannot = 0, fellback = 0, noroom = 0, disarm_ahead = 0, h9 = 0, pred_n[3] = { 0, 0, 0 }, pred_f[3] = { 0, 0, 0 }, pred_why[10] = { 0 }, pred_show = 0, cannot_why[10] = { 0 }, hu_n[3] = { 0, 0, 0 }, hu_f[3] = { 0, 0, 0 }, hu_show = 0, hu_late = 0, hu_other = 0, hu_bare = 0, hu_arms = 0, hu_cnt = 0, hu_bc_at = 0, hu_end_late = 0, exc_n[3] = { 0, 0, 0 }, exc_only[3] = { 0, 0, 0 }, lt_cases = 0, lt_far = 0, lt_bar = 0, lt_frames = 0, lt_cond2 = 0, lt_ooo = 0, lt_ooo_unc = 0, lt_bc = 0, lt_bc_f = 0, lt_inputs = 0, lt_show = 0, lt_byf = 0, lt_byfb = 0, lt_byo = 0, lt_lnew = 0, lt_lnfa = 0, lt_clo = 0, lt_lst = 0, lt_lbd = 0, lt_lbd_in = 0, lt_ceq = 0, lt_lss = 0, lt_esc = 0, lt_cli = 0, oc_cases[8] = { 0 }, oc_pairs[8] = { 0 }, oc_any = 0, oc_show = 0;
     g_late = getenv("SIG_ORACLE_LATE") ? atoi(getenv("SIG_ORACLE_LATE")) : 0;
+    g_noA = g_late && !getenv("SIG_ORACLE_LATE_A");
     int show = argc > 1 ? atoi(argv[1]) : 0, w;
     const char* names[64];
     long counts[64];
@@ -2485,7 +2498,7 @@ int main(int argc, char** argv) {
             for (q = 0; q < 8; q++) if (g_oc[q]) { oc_cases[q]++; oc_pairs[q] += g_oc[q]; any = 1; }
             if (any) { oc_any++; if (oc_show++ < 6 || (getenv("SIG_ORACLE_OCALL") && g_oc[4])) printf("  order: case %ld differs from the time order (frame/settle %ld, feed %ld, input at tau %ld, input after group %ld, group after later input %ld, state call %ld, groups %ld, other %ld)\n", g_case, g_oc[0], g_oc[1], g_oc[2], g_oc[3], g_oc[4], g_oc[5], g_oc[6], g_oc[7]); }
         }
-        if (g_late) g_why = NULL;   /* no 0.7.0 header: A is not compared */
+        if (g_noA) g_why = NULL;   /* no 0.7.0 header: A is not compared (SIG_ORACLE_LATE_A=1 compares it) */
         if (g_late) {
             int counted = g_lc.far || g_lc.barrier || g_lc.cond2 || fb;   /* fb: a group fell back (arm_past_far, _full): counted */
             if (g_lc.late) { lt_cases++; lt_inputs += g_lc.late; }
@@ -2529,7 +2542,7 @@ int main(int argc, char** argv) {
                 a_counts(&u, &o);
                 hu_n[0]++;
                 if (u || o) hu_f[0]++;
-                else if (hu_show++ < 8) printf("  header missed a B-cannot case %ld (reason %d)\n", g_case, g_cannot_why);
+                else if (hu_show++ < 40) printf("  header missed a B-cannot case %ld (reason %d)\n", g_case, g_cannot_why);
                 if (g_bc_ci >= 0 && (g_unv_at[g_bc_ci] || g_oth_at[g_bc_ci])) hu_bc_at++;
                 else if (u || o) printf("  B-cannot case %ld (reason %d, found at call %d) counted only after that call\n", g_case, g_cannot_why, g_bc_ci);
             }
@@ -2542,7 +2555,7 @@ int main(int argc, char** argv) {
             }
             continue;
         }
-        if (!g_why && !g_late) {
+        if (!g_why && !g_noA) {
             g_end_fail_ci = -1;
             end_checks();
             if (g_why && g_fail_ci < 0) {
