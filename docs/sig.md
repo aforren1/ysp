@@ -2580,7 +2580,7 @@ GCC 12.2; H1, the text of M1 to M3 and L1 to L7, M4's gate):
 - ctest's gate (M4): the oracle ran `CASES` cases; at the fixed seed, the
   wrong cases, the right cases with a count and their counts at most the
   run above plus 1 % rounded up; `BARE_MAX` 1 for the two runs with late
-  input (H1's case). A scratch header with one more `arm_unverified` on
+  input (H1's case; gone since V2FIN2, below). A scratch header with one more `arm_unverified` on
   1 call in 64 fails the feed_n gate (229 right cases with a count, at
   most 221), and on 1 call in 256 too (824 counts, at most 817).
 - ctest Release 128 of 128, 91 s at `-j 6` (load 2.6 to 3.9). The
@@ -2598,9 +2598,66 @@ GCC 12.2; H1, the text of M1 to M3 and L1 to L7, M4's gate):
   H1, all killed by `test_v2_bar_counts`), `-j 4`, 778 s (load 0.7 to
   3.8): 363 of 363 as expected, killed 351, survived 12 (the same as
   V2SIG10). The targets wrapper reads `SIG_REF_BARE_MAX` (1 for
-  `sig_ref`), so a mutant that adds a bare case still fails it.
+  `sig_ref`), so a mutant that adds a bare case still fails it (gone
+  since V2FIN2, below: no bare case is allowed).
 - Stack (L7): "Limits".
 - The player's gates: docs/player.md, "Results at 0.12.0".
+
+The H1 key round (V2FIN2, 2026-11-16, Linux desktop, i5-14500, GCC
+12.2; a recenter's origin is its key in R, "Per device (T6)"; one gate
+at a time, load average 1.0 to 4.0):
+
+- The reviewer's probes: `rc.c` gives x = 1 with no barrier, with a
+  flush or `ysig_reset_trial(30 ms)` after the recenter, and with the
+  recenter after a flush at 20 ms (before: 2 with a barrier); with no
+  window and no barrier the late count is made at the end of R
+  (`late_off`), x = 2, as before. `rc2.c` gives 2 after the late count,
+  the same as the calls in time order (before: 2 where the live rule
+  gave 3). `sig_test` `test_v2_recenter_key`.
+- The oracle (`tests/adapt/sig_arm_ref.c`, the reviewer's copy with the
+  H1 model) with ctest's switches and `SIG_ORACLE_BARCOUNT_KEY=1`, seed
+  20261115: late generator on, 3,000 cases, wrong 1,398 (1,000 by
+  `arm_unverified`; 398 by another count; 0 with none), right cases
+  with a count 709 of 855 (2,799 counts over 31,205 made groups), B
+  cannot run 747 (747 counted); off, 1,059 (784; 275; 0), 1,013 of
+  1,187 (4,063 of 43,438), 754 (754); feed_n mode, 1,000 cases, wrong
+  466 (325; 141; 0), 215 of 266 (793 counts), 5 cases batched lower;
+  past groups, 1,000 cases, wrong 442 (0 with none), 335 B-cannot cases
+  counted, no flagged group with no count. Case 144 is now right: B
+  gets the count from before the barrier. The "bar counts" line: the
+  generator made 5 raw mouse counts before the last barrier with late
+  input on, 0 with it off, 2 in feed_n mode and 1 with past groups; the
+  two readings (the time passed and the key) differ for 0 of them, so
+  the oracle does not tell the two rules apart; `rc.c` and `rc2.c` do.
+  Seeds 20261123 and 20261124 with `PRED_TARGET` too (four at once,
+  74 s, load 0.6 to 2.9): late generator on, wrong 1,429 (1,062; 367;
+  0) and 1,365 (1,035; 330; 0), B cannot run 724 and 751, all counted;
+  off, wrong 1,078 and 1,137 (0 with none), B cannot run 701 and 698,
+  all counted; no flagged group with no count. Bar counts 6, 0, 1, 0;
+  the two readings differ for none.
+  ctest's runs set `SIG_ORACLE_BARCOUNT_KEY=1`; `BARE_MAX` and
+  `SIG_REF_BARE_MAX` are gone, so a wrong case with no count fails.
+  With `SIG_ORACLE_BARDROP=1` (the old R) the late gate fails on case
+  144 (1 wrong case with no count).
+- ctest Release 128 of 128, 84 s at `-j 6` (load 1.0 to 3.5). The
+  sanitizers tree under `setarch -R`: build 38 s at `-j 6`, ctest 127 of
+  127, 383 s at `-j 4` (load 3.2 to 4.0), no sanitizer report.
+  `sig_test` as C99 and as C++17 at `-O2` and `-O3`: passed.
+- `sig_fuzz` (`YSIG_DEBUG_FEED_BOUND` on): 10,000,000 inputs under ASan
+  and UBSan (`setarch -R`, 4 processes, seeds 11001 to 11004), 86 s
+  (load 1.8 to 3.1): no abort, no report. 1,495,590 graphs opened,
+  4,503,859 late events, 1,458,298 batches, 730,768 disarm_at calls,
+  11,734 arms run again; 3,213,167 quiet feeds checked, the largest use
+  1.000 of the need in each log (at most 15 undo entries in one feed).
+  Not verified: whether the fuzz makes a recenter after a barrier and
+  then a raw mouse's count from before it.
+- Mutants: sig.toml 364 (393 new: `t_org` the time passed; 392's anchor
+  follows the code). `--only` 00 and 388 to 393, `-j 4`, 14 s: 7 of 7
+  as expected (393 killed by `test_v2_recenter_key`). The oracle tests
+  with the new switches (`--only` 213, 214, 240, 283, 316, 350, 363),
+  294 s (load 2.0 to 2.3): 7 of 7 as expected, the baselines of
+  `sig_ref` and `sig_ref_23off` pass. The whole list was not run.
+- `player_test` 78 of 78 at 60 Hz (14 s) and at 500 Hz (14 s).
 
 The V2SIG10 round's other gates (one at a time, load average 1.3 to
 4.7):
