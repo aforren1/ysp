@@ -957,6 +957,14 @@ When the header tests:
   misses, case 1378 of seed 20261202 and 1050 of 20261207; spec case 10,
   "2c-at-cancel-by-key", in `sig_disarm_at_cases.c`; `sig_test`
   `test_v2_c2_cancel`.)
+- At a cancel by key that takes an arm out of R: condition 4 again for
+  the group whose arm comes next after it in R. That group's gap now
+  reaches back past the removed arm, so it can hold a disarm the arm
+  bounded before. (The reviewer's case 2107 of seed 20261124, late on,
+  `SIG_ORACLE_PRED_TARGET=1`: G0 = [disarm d, arm d at 2.193], then a
+  past group G3 = [arm e at 2.934]; a late `ysig_disarm_at(d, 0.000)`
+  cancels G0's arm, and G0's disarm at 2.193 is now in G3's gap.
+  `sig_test` `test_v2_c4_cancel`.)
 
 **Pending groups (0.6.1).** This case does not arise in 0.7.0 (the
 coordinator, 2026-11-15); the paragraph is kept for 0.6.x. G is pending when it holds its arm and
@@ -2411,9 +2419,10 @@ machine):
   conditions those count are counted by condition 2 too unless
   `N(G) = τ`, which the oracle's generator rarely makes. It is in
   sig.toml as `sig_ref_pt` (seed 20261115, late on, 3,000 cases). The
-  unmutated header fails it at seed 20261124 late on, once in 3,000
+  unmutated header failed it at seed 20261124 late on, once in 3,000
   cases (case 2107: a group flagged by condition 4 at a `disarm_at` at
-  0.000 after the reset); not diagnosed.
+  0.000 after the reset). V2SIG9 found the cause, a text gap: condition 4
+  was not tested again at a cancel by key ("When the header tests").
 - Mutants: sig.toml 347 of 347 as expected (killed 335, survived 12:
   the control 00 and 11 that their notes expect to survive, 300, 313
   and 326 among them), 807 s, 4 jobs (load average 5.9 at

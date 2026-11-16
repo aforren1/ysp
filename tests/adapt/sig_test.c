@@ -8400,6 +8400,40 @@ static void test_v2_c1_c4_exact(void) {
     }
 }
 
+/* Condition 4 at a cancel by key (the reviewer's case 2107 of seed
+ * 20261124, PRED_TARGET): G0 = [disarm D, arm D at 10] at N = 10, then
+ * G3 = [arm E at 15] past (device 1 at 20), E reading D: G0's arm bounds
+ * G3's gap, exact. ysig_disarm_at(D, 5), a smaller key than G0's, cancels
+ * G0's arm by key and takes it out of R: G3's gap now reaches back to
+ * device 1 at 10 and holds G0's disarm at 10, not G3's 15: condition 4
+ * counts G3 (G0 itself is exact by 2 (c), N(G0) = 10). The control (v 1):
+ * the disarm_at at 17 ends G0's arm without cancelling it; nothing
+ * counted. */
+static void test_v2_c4_cancel(void) {
+    int v;
+    g_where = "condition 4 at a cancel by key";
+    for (v = 0; v < 2; v++) {
+        ysig_node n[3];
+        ysig_stats st;
+        n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 1); n[0].history = 64;
+        n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1); n[1].p[YSIG_DETECT_LEVEL] = 1; n[1].history = 64;   /* D */
+        n[2] = ysig_node_of(YSIG_OP_DETECT, 1, -1); n[2].p[YSIG_DETECT_LEVEL] = 0.5; n[2].history = 64; /* E */
+        if (!rp_open(n, 3, 4, 0, false, false)) return;
+        rp_feed(1 * MS, 0, YIN_AXIS_POSITION, 1);
+        rp_feed(10 * MS, 0, YIN_AXIS_POSITION, 1);
+        CHECK(ysig_disarm(&g_rp, 1));
+        CHECK(ysig_arm(&g_rp, 1, 10 * MS) && g_rp.wt->n == 0);
+        rp_feed(20 * MS, 5, YIN_AXIS_POSITION, 1);
+        CHECK(ysig_arm(&g_rp, 2, 15 * MS) && g_rp.wt->n == 0);
+        ysig_get_stats(&g_rp, &st);
+        CHECK(st.arm_caught_up == 1 && st.arm_unverified == 0 && st.arm_ahead_cancelled == 0);
+        CHECK(ysig_disarm_at(&g_rp, 1, (v ? 17 : 5) * MS));
+        ysig_get_stats(&g_rp, &st);
+        CHECK(st.late_far == 0 && st.late_full == 0 && st.late_off == 0);
+        CHECK(st.arm_ahead_cancelled == !v && st.arm_unverified == !v);
+    }
+}
+
 int main(void) {
     test_conventions();
     test_param_names();
@@ -8485,6 +8519,7 @@ int main(void) {
     test_v2_n_tau_image();
     test_v2_c4_past();
     test_v2_c1_c4_exact();
+    test_v2_c4_cancel();
     if (g_failures) { fprintf(stderr, "sig_test: %d failures\n", g_failures); return 1; }
     printf("sig_test: all checks passed\n");
     return 0;

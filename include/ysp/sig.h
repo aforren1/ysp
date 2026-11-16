@@ -428,7 +428,9 @@
  *          (format 3.11 rule 4, DECIDED 2026-11-15); its bound on one
  *          feed's log use is checked in a YSIG_DEBUG_FEED_BOUND build.
  *          Condition 4 at a past group's place skips a disarm at the
- *          group's own time, as the text and ysig__c4() do.
+ *          group's own time, as the text and ysig__c4() do. A cancel by
+ *          key that takes an arm out of R tests condition 4 again for the
+ *          group whose arm comes next (ysig__c4_next()).
  *          "N(G) earlier than tau" is a flag, not tau - 1 (a signed
  *          overflow at an arm at INT64_MIN).
  *          Condition 3's table of armed detects (w->lr) went: no reader,
@@ -5600,6 +5602,7 @@ static uint64_t ysig__late_move_k(ysig_graph* g, uint64_t a, uint64_t p0, const 
 }
 static void ysig__rerun(ysig_graph* g, int kslot, int node, int64_t t);
 static void ysig__cx_count(ysig_graph* g, uint64_t a, int node, uint64_t dseq);
+static void ysig__c4_next(ysig_graph* g, const ysig__call* c);
 /* A run again for the late calls placed since the last (one for a batch,
  * or for the calls one API call placed): from the newest checkpoint at or
  * before the earliest place */
@@ -5653,6 +5656,7 @@ static void ysig__cx_count(ysig_graph* g, uint64_t a, int node, uint64_t dseq) {
                 }
                 if (dis && !ysig__n_tau(g, cu->n_ck ? &cu->ck[cu->ck0] : NULL, cu->c_tail, first, F, c->tr)) ysig__unv(g, c->gid);
             }
+            ysig__c4_next(g, c);
         }
     }
 }
@@ -5840,7 +5844,8 @@ static int ysig__late_fix(ysig_graph* g, uint64_t a) {
  * to the gap an arm closes whatever their footprints. So the gap of the
  * group with key (t, a group, gid) is read in the order by key over every
  * logged call: the call with the greatest key below the group's among the
- * inputs, arms, disarms and disarm_at (no gap holds one); when it is a
+ * inputs, arms, disarms and disarm_at (no gap holds one; an arm a cancel
+ * by key took out is not in R, so not among them); when it is a
  * disarm of another group or of none, at another time, G is counted. */
 static void ysig__unv(ysig_graph* g, uint64_t gid);
 static const ysig__call* ysig__c4_best(ysig_graph* g, uint64_t gid, int64_t t);
@@ -5863,6 +5868,24 @@ static void ysig__c4_late_dis(ysig_graph* g, uint64_t cseq) {
         if (best && best->cseq == cseq && best->e.kind == YSIG_J_DISARM && best->tr != x->tr) ysig__unv(g, x->gid);
     }
 }
+/* A cancel by key took arm c out of R: the gap of the group whose arm
+ * comes next after it by key now reaches back past it, to calls the arm
+ * bounded before (the reviewer's case 2107 of seed 20261124: that group's
+ * gap took in the cancelled group's disarm at another time). Condition 4
+ * again for that group; for any other the removed arm was not the call
+ * before its gap's end, so the test gives what it gave. */
+static void ysig__c4_next(ysig_graph* g, const ysig__call* c) {
+    ysig__cu* cu = g->cu;
+    const ysig__call* nx = NULL;
+    uint64_t s;
+    for (s = cu->c_tail; s < cu->c_head; s++) {
+        const ysig__call* x = &cu->calls[s % (uint64_t)cu->C];
+        if (x->e.kind != YSIG_J_ARM || !x->gid || x->cx || x->gid == c->gid) continue;
+        if (!ysig__call_gt(g, x, c->tr, 2, ysig__call_ko(c))) continue;
+        if (!nx || ysig__call_gt(g, nx, x->tr, 2, x->gid)) nx = x;
+    }
+    if (nx) ysig__c4(g, nx->gid, nx->tr);
+}
 static const ysig__call* ysig__c4_best(ysig_graph* g, uint64_t gid, int64_t t) {
     ysig__cu* cu = g->cu;
     const ysig__call* best = NULL;
@@ -5874,6 +5897,7 @@ static const ysig__call* ysig__c4_best(ysig_graph* g, uint64_t gid, int64_t t) {
         int k = c->e.kind;
         if (c->gid == gid || ysig__call_gt(g, c, t, 2, gid)) continue;
         if (!ysig__input_t(&c->e, &ti) && k != YSIG_J_ARM && k != YSIG_J_DISARM && k != YSIG_J_DISARM_AT) continue;
+        if (k == YSIG_J_ARM && c->cx) continue;   /* cancelled by key: not in R, bounds no gap */
         if (!best || ysig__call_gt(g, c, best->tr, ysig__kcls(best->e.kind), ysig__call_ko(best)) ||
             (c->tr == best->tr && YSIG__OC(ysig__kcls(k)) == YSIG__OC(ysig__kcls(best->e.kind)) && ysig__call_ko(c) == ysig__call_ko(best) && c->cseq > best->cseq))
             best = c;
