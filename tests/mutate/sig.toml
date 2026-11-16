@@ -3136,3 +3136,63 @@ replace = '''        int64_t kk = w->a[k].t, kb = 0;
         ysig__wait_fp(g, &w->a[k], fk);
         for (j = 0; j < w->n; j++) {
             int64_t kj = w->a[j].t;'''
+
+[[mutant]]
+id = "380"
+name = "rule 3's let-in pick by raw time"
+test = "sig"
+why = "V2SIG10: waiting groups go in by key (ruling 8: before the last barrier both key at its time, call order decides); by raw time an input that lets in two disjoint groups made the later-made one first (test_v2_wk_fire: the hits' order)."
+find = '''            if (best < 0 || ysig__wa_before(g, &w->a[k], &w->a[best])) best = k;
+        }
+        if (best < 0) break;
+        ysig__wait_place(g, best, 1);'''
+replace = '''            if (best < 0 || w->a[k].t < w->a[best].t || (w->a[k].t == w->a[best].t && w->a[k].seq < w->a[best].seq)) best = k;
+        }
+        if (best < 0) break;
+        ysig__wait_place(g, best, 1);'''
+
+[[mutant]]
+id = "381"
+name = "a barrier's pick of the waiting groups by raw time"
+test = "sig"
+why = "V2SIG10: before a barrier the waiting groups' calls go in by key; by raw time two groups before the last barrier went in the other order and the later-made set lost (test_v2_wk_barrier: X 10, not 11)."
+find = '            if (ysig__wa_before(g, &w->a[k], &w->a[best])) best = k;'
+replace = '            if (w->a[k].t < w->a[best].t || (w->a[k].t == w->a[best].t && w->a[k].seq < w->a[best].seq)) best = k;'
+
+[[mutant]]
+id = "382"
+name = "a past group's block lets in by raw time"
+test = "sig"
+why = "V2SIG10: in a past group's block the waiting groups its calls let in go by key; by raw time the later-made one went first (test_v2_wk_blk and test_v2_wk_tie with a window: the hits' order)."
+find = '''            if (best < 0 || ysig__wa_before(g, &w->a[k], &w->a[best])) best = k;
+        }
+        if (best < 0) break;
+        ysig__wait_blk(g, best, nb);'''
+replace = '''            if (best < 0 || w->a[k].t < w->a[best].t || (w->a[k].t == w->a[best].t && w->a[k].seq < w->a[best].seq)) best = k;
+        }
+        if (best < 0) break;
+        ysig__wait_blk(g, best, nb);'''
+
+[[mutant]]
+id = "383"
+name = "a present group's ties by raw time"
+test = "sig"
+why = "V2SIG10: S1' (b)'s ties all key at one time; before the last barrier their raw taus differ and call order decides (test_v2_wk_tie with no window: the hits' order)."
+find = '                    if (best < 0 || ysig__wa_before(g, &wt->a[k], &wt->a[best])) best = k;'
+replace = '                    if (best < 0 || wt->a[k].t < wt->a[best].t || (wt->a[k].t == wt->a[best].t && wt->a[k].seq < wt->a[best].seq)) best = k;'
+
+[[mutant]]
+id = "384"
+name = "the arm's reason-4 test skips a smaller key by raw time"
+test = "sig"
+why = "V2SIG10: a waiting group made before this one, both before the last barrier, has the smaller key whatever its raw tau; skipped by raw time it was counted only at its going-in, after the call B cannot follow (test_v2_wk_reason4, WK5; test_v2_closure_key)."
+find = '                if (ysig__kt(g, w->a[q].t) > ysig__kt(g, t)) continue;'
+replace = '                if (w->a[q].t > t) continue;'
+
+[[mutant]]
+id = "385"
+name = "the arm's greater-key sets test by raw time"
+test = "sig"
+why = "V2SIG10: a waiting group with a later raw tau but the smaller key (both before the last barrier) is made first in R too; by raw time the new group was counted (test_v2_wk_reason4, WK6: 2, not 1)."
+find = '            if (ysig__kt(g, w->a[q].t) < ysig__kt(g, t) || (ysig__kt(g, w->a[q].t) == ysig__kt(g, t) && w->a[q].seq < seq)) continue;'
+replace = '            if (w->a[q].t < t || (w->a[q].t == t && w->a[q].seq < seq)) continue;'

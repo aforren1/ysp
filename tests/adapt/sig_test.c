@@ -8447,10 +8447,15 @@ static void test_v2_c4_cancel(void) {
  * counted G too. By key nothing goes before G, and only J is counted:
  * its L, device 5, does not meet F_a(J) (2 (a)). With no window (K 0) the
  * sets stay where made (arm_past_off 2) and G's arm is made after J's
- * set, which meets G's: late_off 1, and 2 (b) counts G there. The
- * control (v 0, no flush): J's key 12 is the smaller, R makes J first and
- * X ends at 1 (2 with no window, the sets where made); J is counted, by
- * 2 (a) again. */
+ * set, which meets G's: late_off 1, and 2 (b) counts G there. With a
+ * window G is counted too since V2SIG10, at J's arm: J's set meets G and
+ * G's key is the smaller, so a graph with no window, given R, could not
+ * make G first if R let J in first (ysig__arm_wait()'s reason-4 test, by
+ * key now; by raw time 15 is after 12 and it skipped G). Here G goes in
+ * first by its own device and that graph could; the test cannot know at
+ * J's arm, so it counts. The control (v 0, no flush): J's key 12 is the
+ * smaller, R makes J first and X ends at 1 (2 with no window, the sets
+ * where made); J is counted, by 2 (a) again. */
 static void test_v2_closure_key(void) {
     int v, K;
     for (K = 4; K >= 0; K -= 4)
@@ -8481,7 +8486,174 @@ static void test_v2_closure_key(void) {
         CHECK(g_rp.wt->n == 0 && st.late_far == 0 && st.late_full == 0);
         CHECK(ysig_value_of(&g_rp, 6)->v[0] == (v || !K ? 2 : 1));
         CHECK(st.arm_past_off == (K ? 0 : 2) && st.late_off == (v && !K));
-        CHECK(st.arm_unverified == (v && !K ? 2 : 1));
+        CHECK(st.arm_unverified == (v ? 2 : 1));
+    }
+}
+
+/* Waiting groups by key (ruling 8, T1), the graph for the picks: X, an
+ * offset of device 3, feeds g and j (entry-now hit detects, so each arm's
+ * hit shows where it went into R); p reads device 6 and never hits. */
+static int wk_open(int K, int v) {
+    ysig_node n[7];
+    ysig_hit h[16];
+    n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 3, 1); n[0].history = 64;
+    n[1] = ysig_node_of(YSIG_OP_OFFSET, 0, -1); n[1].history = 64;                                  /* X */
+    n[2] = ysig_node_of(YSIG_OP_DETECT, 1, -1); n[2].p[YSIG_DETECT_LEVEL] = 5;                      /* g */
+    n[2].p[YSIG_DETECT_ENTRY] = YSIG_ENTRY_NOW; n[2].p[YSIG_DETECT_OUT] = YSIG_OUT_HIT; n[2].history = 64;
+    n[3] = ysig_node_of(YSIG_OP_DETECT, 1, -1); n[3].p[YSIG_DETECT_LEVEL] = 5;                      /* j */
+    n[3].p[YSIG_DETECT_ENTRY] = YSIG_ENTRY_NOW; n[3].p[YSIG_DETECT_OUT] = YSIG_OUT_HIT; n[3].history = 64;
+    n[4] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 6, 1); n[4].history = 64;
+    n[5] = ysig_node_of(YSIG_OP_DETECT, 4, -1); n[5].p[YSIG_DETECT_LEVEL] = 5; n[5].history = 64;   /* p */
+    n[6] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 9, 1); n[6].history = 64;
+    if (!rp_open(n, 7, K, 0, false, false)) return 0;
+    rp_feed(10 * MS, 9, YIN_AXIS_POSITION, 3);
+    rp_feed(10 * MS, 0, YIN_AXIS_POSITION, 6);
+    rp_feed(20 * MS, 0, YIN_AXIS_POSITION, 9);
+    if (v) CHECK(ysig_flush(&g_rp));
+    while (ysig_detected(&g_rp, h, 16) > 0) { }
+    return 1;
+}
+/* g's hit at 15, then j's at 12 (gj), or the other way */
+static int wk_hits(int gj) {
+    ysig_hit h[16];
+    int m = ysig_detected(&g_rp, h, 16);
+    if (gj) return m == 2 && h[0].node == 2 && h[0].t == 15 * MS && h[1].node == 3 && h[1].t == 12 * MS;
+    return m == 2 && h[0].node == 3 && h[0].t == 12 * MS && h[1].node == 2 && h[1].t == 15 * MS;
+}
+/* WK1, ysig__wait_fire()'s pick. G = [arm g at 15] and J = [arm j at 12],
+ * G made first; both wait (device 3 last at 10). Device 3 at 25 meets both
+ * and lets both in. After a flush at 20 (v 1) both key at 20 and G's key
+ * is the smaller: R has g's hit first. By raw time J went first. Their
+ * footprints do not meet, so no closure orders them. The control (v 0,
+ * no flush): J's key 12 is the smaller, j's hit first. */
+static void test_v2_wk_fire(void) {
+    int v, K;
+    for (K = 4; K >= 0; K -= 4)
+    for (v = 0; v < 2; v++) {
+        g_where = K ? "WK1, the let-in pick by key" : "WK1, the let-in pick by key, no window";
+        if (!wk_open(K, v)) return;
+        CHECK(ysig_arm(&g_rp, 2, 15 * MS));
+        CHECK(ysig_arm(&g_rp, 3, 12 * MS) && g_rp.wt->n == 2);
+        rp_feed(25 * MS, 9, YIN_AXIS_POSITION, 3);
+        CHECK(g_rp.wt->n == 0);
+        CHECK(wk_hits(v));
+    }
+}
+/* WK2, ysig__before_barrier()'s pick. G = [set X to 1, arm g at 15] and
+ * J = [set X to 2, arm j at 12], both waiting; a flush cancels both arms
+ * and their sets go in right before it, by key. After a first flush at
+ * 20 (v 1) G's key is the smaller: G's set, then J's, and X ends at 9 + 2.
+ * By raw time J's went first (9 + 1). The control (v 0): J's key is the
+ * smaller and X ends at 9 + 1. With no window the sets stay where made
+ * (call order, 9 + 2 either way). */
+static void test_v2_wk_barrier(void) {
+    int v, K;
+    for (K = 4; K >= 0; K -= 4)
+    for (v = 0; v < 2; v++) {
+        ysig_stats st;
+        g_where = K ? "WK2, the barrier's pick by key" : "WK2, the barrier's pick by key, no window";
+        if (!wk_open(K, v)) return;
+        CHECK(ysig_set(&g_rp, 1, YSIG_OFFSET_D_X, 1));
+        CHECK(ysig_arm(&g_rp, 2, 15 * MS));
+        CHECK(ysig_set(&g_rp, 1, YSIG_OFFSET_D_X, 2));
+        CHECK(ysig_arm(&g_rp, 3, 12 * MS) && g_rp.wt->n == 2);
+        CHECK(ysig_flush(&g_rp));
+        ysig_get_stats(&g_rp, &st);
+        CHECK(g_rp.wt->n == 0 && st.arm_ahead_cancelled == 2);
+        CHECK(ysig_value_of(&g_rp, 1)->v[0] == (v || !K ? 11 : 10));
+    }
+}
+/* WK3, ysig__wait_fire_blk()'s pick (and, with no window, the pick of
+ * ysig__wait_fire() at a past arm made at once). G and J as in WK1;
+ * device 6 at 30 makes P = [set X to 0, arm p at 22] past. P's set lets
+ * in G and J at P's place in its block, by key: g's hit first after the
+ * flush (v 1), j's in the control. */
+static void test_v2_wk_blk(void) {
+    int v, K;
+    for (K = 4; K >= 0; K -= 4)
+    for (v = 0; v < 2; v++) {
+        g_where = K ? "WK3, a past group's let-in pick by key" : "WK3, a past group's let-in pick by key, no window";
+        if (!wk_open(K, v)) return;
+        CHECK(ysig_arm(&g_rp, 2, 15 * MS));
+        CHECK(ysig_arm(&g_rp, 3, 12 * MS) && g_rp.wt->n == 2);
+        rp_feed(30 * MS, 0, YIN_AXIS_POSITION, 6);
+        CHECK(g_rp.wt->n == 2);
+        CHECK(ysig_set(&g_rp, 1, YSIG_OFFSET_D_X, 0));
+        CHECK(ysig_arm(&g_rp, 5, 22 * MS));
+        CHECK(g_rp.wt->n == 0);
+        CHECK(wk_hits(v));
+    }
+}
+/* WK4, the present group's ties (S1' (b)). G and J as in WK1. After the
+ * flush (v 1), P = [set X to 0, arm p at 10] is present (N(F(P)) is 10):
+ * the set's key time is 20, G's and J's too, so its strict let-in left
+ * them waiting as ties, and P's arm makes them, by key: g's hit first.
+ * With no window that is ysig__arm_now()'s pick; with one, P's block at
+ * its place. The control (v 0): the set at 10 does not reach them; device
+ * 3 at 25 lets them in, j's hit first. */
+static void test_v2_wk_tie(void) {
+    int v, K;
+    for (K = 4; K >= 0; K -= 4)
+    for (v = 0; v < 2; v++) {
+        g_where = K ? "WK4, the ties' pick by key" : "WK4, the ties' pick by key, no window";
+        if (!wk_open(K, v)) return;
+        CHECK(ysig_arm(&g_rp, 2, 15 * MS));
+        CHECK(ysig_arm(&g_rp, 3, 12 * MS) && g_rp.wt->n == 2);
+        CHECK(ysig_set(&g_rp, 1, YSIG_OFFSET_D_X, 0));
+        CHECK(ysig_arm(&g_rp, 5, 10 * MS));
+        CHECK(g_rp.wt->n == (v ? 0 : 2));
+        rp_feed(25 * MS, 9, YIN_AXIS_POSITION, 3);
+        CHECK(g_rp.wt->n == 0);
+        CHECK(wk_hits(v));
+    }
+}
+/* WK5 and WK6, ysig__arm_wait()'s reason-4 tests (the oracle's B: a graph
+ * with no window, given R, makes a group's sets at once, so a waiting
+ * group with the smaller key that they meet cannot go in first). H made
+ * first, J second, both waiting (devices 3 and 6 last at 10).
+ * WK5: H = [arm g at 15], J = [set g's level, arm j at 12]. J's set meets
+ * H. After a flush at 20 (v 1) H's key is the smaller: counted at J's
+ * arm. By raw time 15 is after 12 and H was counted only later, at its
+ * going-in (device 6 at 25 lets J in, and J's closure H, before J's set:
+ * 2 (b), L(H) is device 3 at 26), after the call that B cannot follow.
+ * Control (v 0): H's key is the greater; R makes J's set before H and
+ * nothing is counted.
+ * WK6: H = [set j's level, arm g at 15], J = [arm j at 12]. H's set meets
+ * J. Raw: H later than J, so J (made after H's set) was counted. By key
+ * after the flush H is the smaller and R makes H's set first too: J is
+ * exact (2 (a): device 6 at 25 meets j). H is counted either way (its L,
+ * device 6, does not meet F_a(H), 2 (a)). Control (v 0): J's key is the
+ * smaller, counted at its arm. */
+static void test_v2_wk_reason4(void) {
+    int v, s;
+    for (s = 0; s < 2; s++)
+    for (v = 0; v < 2; v++) {
+        ysig_node n[5];
+        ysig_stats st;
+        int64_t u;
+        g_where = s ? "WK6, a greater key's sets at the arm, by key" : "WK5, a smaller key that the sets meet, by key";
+        n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 3, 1); n[0].history = 64;
+        n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1); n[1].p[YSIG_DETECT_LEVEL] = 5; n[1].history = 64;   /* g */
+        n[2] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 6, 1); n[2].history = 64;
+        n[3] = ysig_node_of(YSIG_OP_DETECT, 2, -1); n[3].p[YSIG_DETECT_LEVEL] = 5; n[3].history = 64;   /* j */
+        n[4] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 9, 1); n[4].history = 64;
+        if (!rp_open(n, 5, 4, 0, false, false)) return;
+        rp_feed(10 * MS, 0, YIN_AXIS_POSITION, 3);
+        rp_feed(10 * MS, 0, YIN_AXIS_POSITION, 6);
+        rp_feed(20 * MS, 0, YIN_AXIS_POSITION, 9);
+        if (v) CHECK(ysig_flush(&g_rp));
+        if (s) CHECK(ysig_set(&g_rp, 3, YSIG_DETECT_LEVEL, 5));
+        CHECK(ysig_arm(&g_rp, 1, 15 * MS));
+        if (!s) CHECK(ysig_set(&g_rp, 1, YSIG_DETECT_LEVEL, 5));
+        CHECK(ysig_arm(&g_rp, 3, 12 * MS) && g_rp.wt->n == 2);
+        ysig_get_stats(&g_rp, &st);
+        u = st.arm_unverified;
+        CHECK(u == (s ? !v : v));
+        rp_feed(25 * MS, 0, YIN_AXIS_POSITION, 6);
+        rp_feed(26 * MS, 0, YIN_AXIS_POSITION, 3);
+        ysig_get_stats(&g_rp, &st);
+        CHECK(g_rp.wt->n == 0 && st.late_off == 0 && st.late_far == 0 && st.late_full == 0);
+        CHECK(st.arm_unverified == (s ? 2 - v : v));
     }
 }
 
@@ -8572,6 +8744,11 @@ int main(void) {
     test_v2_c1_c4_exact();
     test_v2_c4_cancel();
     test_v2_closure_key();
+    test_v2_wk_fire();
+    test_v2_wk_barrier();
+    test_v2_wk_blk();
+    test_v2_wk_tie();
+    test_v2_wk_reason4();
     if (g_failures) { fprintf(stderr, "sig_test: %d failures\n", g_failures); return 1; }
     printf("sig_test: all checks passed\n");
     return 0;

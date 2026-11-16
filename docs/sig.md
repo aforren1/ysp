@@ -965,6 +965,17 @@ When the header tests:
   past group G3 = [arm e at 2.934]; a late `ysig_disarm_at(d, 0.000)`
   cancels G0's arm, and G0's disarm at 2.193 is now in G3's gap.
   `sig_test` `test_v2_c4_cancel`.)
+- At the arm call of a group J that waits (with a window): a waiting
+  group H with the smaller key whose footprint J's sets, set_data or
+  recenters meet is counted, and J is counted when a waiting H with the
+  greater key has such calls that meet J. A graph with no window, given
+  R, makes those calls at once, so it cannot give R's order if R lets
+  the two in that way (the oracle's B-cannot reason 4). The test is
+  conservative: at J's arm the header cannot know which goes in first.
+  It compares keys: before the last barrier, call order (V2SIG10; by raw
+  `τ` it counted H only at its going-in, after the call B cannot
+  follow, and counted J where R makes H's calls first anyway. `sig_test`
+  `test_v2_wk_reason4`).
 
 **Pending groups (0.6.1).** This case does not arise in 0.7.0 (the
 coordinator, 2026-11-15); the paragraph is kept for 0.6.x. G is pending when it holds its arm and
@@ -1261,7 +1272,14 @@ before the last barrier both key at the barrier's time, and call order
 decides between them. (Before V2SIG9 the header's closure compared raw
 times and could put the group made later first; W1 then found the other
 late and placed it by key, and counted it. `sig_test`
-`test_v2_closure_key`.)
+`test_v2_closure_key`.) The same key orders every other pick among
+waiting groups: the groups one call lets in, those a past group's block
+lets in, a present group's ties (S1' (b)), and the calls of the groups a
+barrier cancels. Two groups before the last barrier go in by call order,
+not by raw `τ`. (Before V2SIG10 these went by raw `τ`: with footprints
+that do not meet, the hits came in the other order; at a barrier, the
+set of the group made later lost. `sig_test` `test_v2_wk_fire`,
+`test_v2_wk_barrier`, `test_v2_wk_blk`, `test_v2_wk_tie`.)
 
 Rule 3's let-in time for a state call (S1', the coordinator's ruling of
 2026-11-15, from the reviewer; it replaces S1 of the same day): a state

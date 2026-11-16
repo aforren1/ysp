@@ -432,7 +432,9 @@
  *          key that takes an arm out of R tests condition 4 again for the
  *          group whose arm comes next (ysig__c4_next()). T1's closure
  *          compares keys (the barrier clamp, then call order), not raw
- *          times.
+ *          times; so do the other picks among waiting groups (a let-in,
+ *          a past group's block, a present group's ties, a barrier) and
+ *          the arm's two reason-4 tests (ysig__wa_before()).
  *          "N(G) earlier than tau" is a flag, not tau - 1 (a signed
  *          overflow at an arm at INT64_MIN).
  *          Condition 3's table of armed detects (w->lr) went: no reader,
@@ -3568,6 +3570,13 @@ static void ysig__settle(ysig_graph* g, int from, int64_t t);
 static int64_t ysig__kt(const ysig_graph* g, int64_t t) {
     return t < g->bar_t ? g->bar_t : t;
 }
+/* Waiting groups go in by key, (ysig__kt(tau), call order), not by raw
+ * tau: two groups before the last barrier both key at its time and the
+ * one made first goes first, as R orders them (ruling 8, T1) */
+static int ysig__wa_before(const ysig_graph* g, const ysig__wa* a, const ysig__wa* b) {
+    int64_t ka = ysig__kt(g, a->t), kb = ysig__kt(g, b->t);
+    return ka < kb || (ka == kb && a->seq < b->seq);
+}
 static void ysig__key_note(ysig_graph* g, const uint64_t* f, int64_t t, int cls) {
     int i, oc = YSIG__OC(cls);
     int64_t kt = ysig__kt(g, t);
@@ -5383,7 +5392,7 @@ static void ysig__wait_fire(ysig_graph* g, int64_t t, const uint64_t* f, uint64_
                 ysig__wait_fp(g, &w->a[k], fa);
                 if (!ysig__fp_meets(g, fa, f)) continue;
             }
-            if (best < 0 || w->a[k].t < w->a[best].t || (w->a[k].t == w->a[best].t && w->a[k].seq < w->a[best].seq)) best = k;
+            if (best < 0 || ysig__wa_before(g, &w->a[k], &w->a[best])) best = k;
         }
         if (best < 0) break;
         ysig__wait_place(g, best, 1);
@@ -5529,7 +5538,7 @@ static void ysig__before_barrier(ysig_graph* g) {
     while (w->n) {
         int k, best = 0;
         for (k = 1; k < w->n; k++)
-            if (w->a[k].t < w->a[best].t || (w->a[k].t == w->a[best].t && w->a[k].seq < w->a[best].seq)) best = k;
+            if (ysig__wa_before(g, &w->a[k], &w->a[best])) best = k;
         ysig__wait_place(g, best, 0);
     }
     if (w->cas_kind) ysig__cas_end(g, 0);
@@ -6009,7 +6018,7 @@ static void ysig__wait_fire_blk(ysig_graph* g, int64_t t, const uint64_t* f, uin
             if (incl ? at > kt || (at == kt && w->a[k].seq > incl) : at >= kt) continue;
             ysig__wait_fp(g, &w->a[k], fa);
             if (!ysig__fp_meets(g, fa, f)) continue;
-            if (best < 0 || w->a[k].t < w->a[best].t || (w->a[k].t == w->a[best].t && w->a[k].seq < w->a[best].seq)) best = k;
+            if (best < 0 || ysig__wa_before(g, &w->a[k], &w->a[best])) best = k;
         }
         if (best < 0) break;
         ysig__wait_blk(g, best, nb);
@@ -6079,7 +6088,9 @@ static void ysig__arm_wait(ysig_graph* g, int node, int64_t t, uint64_t seq) {
             }
         if (any)
             for (q = 0; q < w->n; q++) {
-                if (w->a[q].t > t) continue;
+                /* by key: a group before the last barrier made earlier
+                 * keys before this one whatever its raw tau */
+                if (ysig__kt(g, w->a[q].t) > ysig__kt(g, t)) continue;
                 ysig__wait_fp(g, &w->a[q], fa);
                 if (ysig__fp_meets(g, fa, fs)) ysig__unv(g, w->a[q].seq);
             }
@@ -6090,7 +6101,7 @@ static void ysig__arm_wait(ysig_graph* g, int node, int64_t t, uint64_t seq) {
         ysig__fp_or(g, fs, node);
         for (q = 0; q < w->n; q++) {
             int i2;
-            if (w->a[q].t < t || (w->a[q].t == t && w->a[q].seq < seq)) continue;
+            if (ysig__kt(g, w->a[q].t) < ysig__kt(g, t) || (ysig__kt(g, w->a[q].t) == ysig__kt(g, t) && w->a[q].seq < seq)) continue;
             for (i2 = 0; i2 < g->dw; i2++) fa[i2] = w->a[q].xf[i2];
             for (i2 = 0; i2 < w->a[q].nc; i2++) {
                 const ysig_entry* x = &w->calls[w->a[q].c0 + i2];
@@ -6786,7 +6797,7 @@ static void ysig__arm_now(ysig_graph* g, ysig_entry* ep, uint64_t seq, int late)
                 for (k = 0; k < wt->n; k++) {
                     for (j = 0; j < wt->n_tie && wt->tie_seq[j] != wt->a[k].seq; j++) { }
                     if (j == wt->n_tie) continue;
-                    if (best < 0 || wt->a[k].t < wt->a[best].t || (wt->a[k].t == wt->a[best].t && wt->a[k].seq < wt->a[best].seq)) best = k;
+                    if (best < 0 || ysig__wa_before(g, &wt->a[k], &wt->a[best])) best = k;
                 }
                 if (best < 0) break;
                 ysig__wait_place(g, best, 1);
