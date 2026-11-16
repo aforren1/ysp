@@ -1122,6 +1122,14 @@ jobs): every `--sim` mutant of the five lists, 228 of 228 as expected.
 - Not run: the 35 mutants of the real path (test `real`), which need a
   display.
 
+ASan and UBSan (the `sanitizers` preset, Debug, `setarch -R` for the
+build and the runs, `UBSAN_OPTIONS=halt_on_error=1`, a 6 GB memory scope,
+load 5 to 10): `player_test` 78 of 78 at 60 Hz and at 500 Hz (the 500 Hz
+run is more than the gate asks), `vm_guard_arm_full` again after it was
+added; the model's harness at 60 Hz, seeds 102001 to 102200, `--jobs 4`:
+no lateness, 200 cases, 1 mismatch (at a GAP), no guard stop; 10 ms late,
+200 cases, no mismatch, no guard stop. No sanitizer report in any run.
+
 Open in 0.12.0 (each above, in "What the data shows" and "Results at
 8c3cb20"):
 
