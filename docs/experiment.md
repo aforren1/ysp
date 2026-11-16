@@ -345,6 +345,14 @@ reading below and marks it in the code as "finding Fn". The lines are of
 
 ## Results
 
+### v0.5.3: a finite test without isfinite() (2026-11-16)
+
+No behavior change. MinGW-w64's `isfinite()` macro has a branch for a
+float argument, and on a double that branch converts it to float.
+`-Wfloat-conversion` reports this, and CI's MinGW build of the player
+failed on the test of a uniform's width. `yexp__finite()` makes the same
+test with two comparisons.
+
 ### v0.5.2: an unused count (2026-11-16)
 
 No behavior change. The F26 cycle check counted each SCC's size and did

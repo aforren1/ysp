@@ -1523,7 +1523,7 @@ id = "171"
 name = "recenter: a point not finite after the chain"
 test = "sig"
 why = "T11: a tiny scale makes it infinite: refused, or the role reads inf."
-find = '    if (!isfinite(xy[0]) || !isfinite(xy[1])) {'
+find = '    if (!ysig__finite(xy[0]) || !ysig__finite(xy[1])) {'
 replace = '    if (0) {'
 
 [[mutant]]

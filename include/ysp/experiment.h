@@ -1,4 +1,4 @@
-/* ysp/experiment.h - v0.5.2 - public domain single-header loader for experiment definitions
+/* ysp/experiment.h - v0.5.3 - public domain single-header loader for experiment definitions
  *
  *   Reads a ysp experiment definition of format version 1 or 2
  *   (docs/experiment_format.md, the pack's EXPERIMENT entry) into a checked,
@@ -153,6 +153,9 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.5.3 - no behavior change (2026-11-16): a uniform's width is
+ *          tested finite by comparisons, not isfinite(), whose
+ *          MinGW-w64 macro fails -Wfloat-conversion on a double.
  *   v0.5.2 - no behavior change (2026-11-16): the cycle check no longer
  *          keeps an SCC size it only counted (clang's
  *          -Wunused-but-set-variable, an error in CI's clang build).
@@ -247,7 +250,7 @@
  *   v0.1.0 - first version: the loader for format version 1, its defaults
  *          table, the host interface and the canonical writer.
  *
- *   STATUS: v0.5.2 (2026-11-16). Tested; the player (docs/player.md) uses
+ *   STATUS: v0.5.3 (2026-11-16). Tested; the player (docs/player.md) uses
  *   it for both versions. A version 2 file with a signal role runs on --sim
  *   only (the rig profile has no adapter block, G18); one with none runs in
  *   a real window too.
@@ -261,8 +264,8 @@
 
 #define YEXP_VERSION_MAJOR 0
 #define YEXP_VERSION_MINOR 5
-#define YEXP_VERSION_PATCH 2
-#define YEXP_VERSION_STRING "0.5.2"
+#define YEXP_VERSION_PATCH 3
+#define YEXP_VERSION_STRING "0.5.3"
 
 /* The newest format version this header reads (D12). */
 #define YEXP_FORMAT_VERSION 2
@@ -821,6 +824,11 @@ extern "C" {
 #endif
 
 YEXP_API const char* yexp_version(void) { return YEXP_VERSION_STRING; }
+
+/* isfinite() in comparisons a NaN loses on its own: MinGW-w64's macro has a
+ * float branch that converts a double argument, which -Wfloat-conversion
+ * makes an error (the CI's MinGW build of the player). */
+static bool yexp__finite(double x) { return x > -HUGE_VAL && x < HUGE_VAL; }
 
 /* Sections of the table. */
 enum {
@@ -2274,7 +2282,7 @@ static yexp_value* yexp__uniform_form(yexp__ctx* c, const yjs_value* src, const 
             yexp__err(c, lh->pos, "%s: 'uniform' is [lo, hi], two numbers", sub);
         } else if (!(lh->items[0].num < lh->items[1].num)) {
             yexp__err(c, lh->pos, "%s: 'uniform': lo is below hi; [lo, hi) is empty otherwise", sub);
-        } else if (!isfinite(lh->items[1].num - lh->items[0].num)) {
+        } else if (!yexp__finite(lh->items[1].num - lh->items[0].num)) {
             /* lo + (hi - lo) x u must be a number, as every number is */
             yexp__err(c, lh->pos, "%s: 'uniform': hi - lo is past the range of a double", sub);
         } else {

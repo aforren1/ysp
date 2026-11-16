@@ -2379,7 +2379,7 @@ ctest; the oracle covers its shapes and compares after every call too.
 `sig_fuzz` (10,000,000 inputs, seeds 8501 to 8508,
 39 s): no report, every replay equal.
 
-### v0.7.1: MSVC's flow warning
+### v0.7.1 and v0.7.2: compiler warnings
 
 No behavior change (2026-11-16). In `ysig_feed()`, `ysig__feed_fp()`
 sets the footprint mask and the all-nodes flag, and the journal reads them
@@ -2388,6 +2388,13 @@ does not follow this and reports C4701 (a variable that is possibly not
 initialized). Under `/WX` this is an error, so every Windows target that
 includes the header failed in CI. GCC 12.2 and clang do not report it.
 The two variables are now set to 0 at their declaration.
+
+v0.7.2 changes no behavior either. MinGW-w64's `isfinite()` macro has a
+branch for a float argument, and on a double argument that branch
+converts it to float. `-Wfloat-conversion` reports this, and CI's MinGW
+build of the player failed. The header now tests a value with
+`ysig__finite()`, two comparisons that a NaN and an infinity fail, as
+ysp/timeline.h does.
 
 ### Byte-identical ports
 

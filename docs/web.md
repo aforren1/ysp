@@ -40,9 +40,10 @@ You need [emsdk](https://emscripten.org/docs/getting_started/downloads.html)
    sh examples/web/build.sh web_site
    ```
 
-   The script copies `examples/web/site/`, fetches `coi-serviceworker.js`
-   at a pinned commit and miniaudio 0.11.25 and checks their SHA-256, and
-   compiles each demo to `web_site/<name>.js` and `web_site/<name>.wasm`;
+   The script copies `examples/web/site/`, writes `favicon.ico` from the
+   window icon in ysp/screen.h (`tools/web_favicon.py`, so it needs
+   `python3`), fetches `coi-serviceworker.js` at a pinned commit and
+   miniaudio 0.11.25 and checks their SHA-256, and compiles each demo to `web_site/<name>.js` and `web_site/<name>.wasm`;
    the sound demo twice, `av_sync` and `av_sync_mt`. The first build also
    compiles SDL3's port, without and with threads (about 40 s each).
 

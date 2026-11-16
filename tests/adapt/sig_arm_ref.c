@@ -526,6 +526,25 @@
 #define SIG_ARM_REF_SPEC 0
 #endif
 
+/* Each switch is read from the environment once. The per-call paths ask
+ * for them about 100,000 times a case (31 million calls in 300 cases of
+ * the late ctest run), and msvcrt's getenv() takes a lock and compares
+ * names without case: test_sig_arm_ref_late ran for more than an hour on
+ * MinGW-w64. Every name is a literal and nothing sets the environment, so
+ * the literal's address keys its value. */
+#include <stdint.h>
+static char* ref_getenv(const char* name) {
+    static struct { const char* name; char* value; } tab[512];
+    size_t h = (size_t)(((uintptr_t)name >> 3) * 0x9E3779B97F4A7C15ull) & 511u;
+    while (tab[h].name && tab[h].name != name) h = (h + 1) & 511u;
+    if (!tab[h].name) {
+        tab[h].value = getenv(name);
+        tab[h].name = name;
+    }
+    return tab[h].value;
+}
+#define getenv(name) ref_getenv(name)
+
 #define MS 1000000LL
 #define US 1000LL
 #define MAXC 1400

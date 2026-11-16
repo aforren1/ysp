@@ -1488,7 +1488,7 @@ static int v2_samples_load(pl_player* p) {
         }
         /* a time past int64 ns, or a value past a float, would wrap or
          * turn infinite: refused, with the bounds */
-        if (!(t <= V2_SAMPLE_MAX_S) || !isfinite(x) || !isfinite(y) || fabs(x) > V2_SAMPLE_MAX_V || fabs(y) > V2_SAMPLE_MAX_V) {
+        if (!(t <= V2_SAMPLE_MAX_S) || !(fabs(x) <= V2_SAMPLE_MAX_V) || !(fabs(y) <= V2_SAMPLE_MAX_V)) {   /* a NaN fails <=; no isfinite(), whose MinGW-w64 macro fails -Wfloat-conversion */
             fclose(f);
             pl_fail(p, "--samples line %d: t_s must be 0 to %g s, and x and y finite and within %g", ln, V2_SAMPLE_MAX_S, V2_SAMPLE_MAX_V);
             p->bad_arg = true;

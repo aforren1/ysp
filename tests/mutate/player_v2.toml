@@ -201,8 +201,8 @@ id = "v2-23"
 name = "a sample time past int64 ns accepted"
 test = "player"
 why = "Review item 14 (rv14)."
-find = '''        if (!(t <= V2_SAMPLE_MAX_S) || !isfinite(x) || !isfinite(y) || fabs(x) > V2_SAMPLE_MAX_V || fabs(y) > V2_SAMPLE_MAX_V) {'''
-replace = '''        if (!isfinite(x) || !isfinite(y) || fabs(x) > V2_SAMPLE_MAX_V || fabs(y) > V2_SAMPLE_MAX_V) {'''
+find = '''        if (!(t <= V2_SAMPLE_MAX_S) || !(fabs(x) <= V2_SAMPLE_MAX_V) || !(fabs(y) <= V2_SAMPLE_MAX_V)) {   /* a NaN fails <=; no isfinite(), whose MinGW-w64 macro fails -Wfloat-conversion */'''
+replace = '''        if (!(fabs(x) <= V2_SAMPLE_MAX_V) || !(fabs(y) <= V2_SAMPLE_MAX_V)) {'''
 
 [[mutant]]
 id = "v2-24"
@@ -287,7 +287,7 @@ id = "v2-33"
 name = "a sample's x and y not bounded"
 test = "player"
 why = "Review item 14 (rv14 hugeval, inf)."
-find = '''        if (!(t <= V2_SAMPLE_MAX_S) || !isfinite(x) || !isfinite(y) || fabs(x) > V2_SAMPLE_MAX_V || fabs(y) > V2_SAMPLE_MAX_V) {'''
+find = '''        if (!(t <= V2_SAMPLE_MAX_S) || !(fabs(x) <= V2_SAMPLE_MAX_V) || !(fabs(y) <= V2_SAMPLE_MAX_V)) {   /* a NaN fails <=; no isfinite(), whose MinGW-w64 macro fails -Wfloat-conversion */'''
 replace = '''        if (!(t <= V2_SAMPLE_MAX_S)) {'''
 
 [[mutant]]

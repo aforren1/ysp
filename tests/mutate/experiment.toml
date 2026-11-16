@@ -2423,7 +2423,7 @@ id = "w-21"
 name = "a uniform of infinite width"
 test = "experiment"
 why = "Review: a number is finite."
-find = '''        } else if (!isfinite(lh->items[1].num - lh->items[0].num)) {'''
+find = '''        } else if (!yexp__finite(lh->items[1].num - lh->items[0].num)) {'''
 replace = '''        } else if (0) {'''
 
 [[mutant]]

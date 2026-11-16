@@ -1,4 +1,4 @@
-/* ysp/sig.h - v0.7.1 - public domain single-header signal path
+/* ysp/sig.h - v0.7.2 - public domain single-header signal path
  *
  *   Continuous input to stimuli: a small graph, fixed at open, from input
  *   sources through per-sample transforms and maps to stimulus channels,
@@ -411,6 +411,9 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.7.2 - no behavior change (2026-11-16): the finite tests are
+ *          comparisons, not isfinite(), whose MinGW-w64 macro fails
+ *          -Wfloat-conversion on a double.
  *   v0.7.1 - no behavior change (2026-11-16): ysig_feed() sets its
  *          footprint mask and flag at their declaration. MSVC's C4701
  *          (an error under /WX) did not see that they are set on
@@ -567,7 +570,7 @@
  *          adapters, custom ops, parameter tables, and a name for
  *          each p[] index (YSIG_<OP>_<ROW>).
  *
- *   STATUS: v0.7.1 (no behavior change; v0.7.0's gates). v0.7.0, 2026-11-16, Linux desktop (i5-14500, GCC 12.2): the
+ *   STATUS: v0.7.2 (no behavior change since v0.7.0; v0.7.0's gates). v0.7.0, 2026-11-16, Linux desktop (i5-14500, GCC 12.2): the
  *   oracle at 3,000 cases on seeds 20261115, 20261123 and 20261124, late
  *   generator on and off: every case its B cannot run counted, every
  *   wrong case with a count but the one H1 declares (a raw mouse's count
@@ -631,8 +634,8 @@
 
 #define YSIG_VERSION_MAJOR 0
 #define YSIG_VERSION_MINOR 7
-#define YSIG_VERSION_PATCH 1
-#define YSIG_VERSION_STRING "0.7.1"
+#define YSIG_VERSION_PATCH 2
+#define YSIG_VERSION_STRING "0.7.2"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -1211,6 +1214,11 @@ extern "C" {
 #endif
 
 #define YSIG__PI 3.14159265358979323846
+
+/* isfinite() in comparisons a NaN loses on its own: MinGW-w64's macro has a
+ * float branch that converts a double argument, which -Wfloat-conversion
+ * makes an error (the CI's MinGW build of the player). */
+static bool ysig__finite(double x) { return x > -HUGE_VAL && x < HUGE_VAL; }
 
 /* node flags */
 #define YSIG__F_FRAME  0x01u  /* changes at a frame                       */
@@ -2034,7 +2042,7 @@ static bool ysig__analyze(const ysig_desc* d, ysig__an* a, char* err, size_t es)
                                   op < YSIG_OP_COUNT ? ysig__ops[op].name : "custom", mn, mx, a->n_in[id]);
             rows = ysig__table(d, op, &nr);
             for (k = 0; k < YSIG_NP; k++) {
-                if (!isfinite(nd->p[k])) return ysig__fail(err, es, "ysig: node %d (%s): p[%d] not finite", id, ysig__nm(nd), k);
+                if (!ysig__finite(nd->p[k])) return ysig__fail(err, es, "ysig: node %d (%s): p[%d] not finite", id, ysig__nm(nd), k);
                 if (k < nr && !ysig__param_ok(&rows[k], nd->p[k]))
                     return ysig__fail(err, es, "ysig: node %d (%s): %s = %g out of [%g, %g]", id, ysig__nm(nd), rows[k].name,
                                       nd->p[k], rows[k].min, rows[k].max);
@@ -2044,7 +2052,7 @@ static bool ysig__analyze(const ysig_desc* d, ysig__an* a, char* err, size_t es)
             if (nd->n_data && op != YSIG_OP_SINES && op < YSIG_OP_COUNT)
                 return ysig__fail(err, es, "ysig: node %d (%s): data on an op that reads none", id, ysig__nm(nd));
             for (k = 0; k < nd->n_data; k++)
-                if (!isfinite(nd->data[k])) return ysig__fail(err, es, "ysig: node %d: data[%d] not finite", id, k);
+                if (!ysig__finite(nd->data[k])) return ysig__fail(err, es, "ysig: node %d: data[%d] not finite", id, k);
             if (nd->history < 0 || nd->history > YSIG_MAX_HISTORY)
                 return ysig__fail(err, es, "ysig: node %d (%s): history %d", id, ysig__nm(nd), (int)nd->history);
             if (nd->lanes > 4) return ysig__fail(err, es, "ysig: node %d (%s): %d lanes", id, ysig__nm(nd), nd->lanes);
@@ -3961,7 +3969,7 @@ static int ysig__recenter_at(ysig_graph* g, int role, double xy[2], int* id) {
                  "a scale or an offset", role, ysig_op_name(g->nd[bad].op));
         return 0;
     }
-    if (!isfinite(xy[0]) || !isfinite(xy[1])) {
+    if (!ysig__finite(xy[0]) || !ysig__finite(xy[1])) {
         snprintf(g->err, sizeof g->err, "ysig_recenter: the point is not finite after the adapter's scale");
         return 0;
     }
@@ -3978,7 +3986,7 @@ YSIG_API bool ysig_recenter(ysig_graph* g, int role, double x, double y, int64_t
     int id = -1, k;
     ysig__nd* n;
     if (!g || !g->ok || ysig__reentered(g, "ysig_recenter")) return false;
-    if (role < 0 || !isfinite(x) || !isfinite(y)) {
+    if (role < 0 || !ysig__finite(x) || !ysig__finite(y)) {
         snprintf(g->err, sizeof g->err, "ysig_recenter: a bad role or a point that is not finite");
         return false;
     }
@@ -4172,7 +4180,7 @@ YSIG_API bool ysig_set(ysig_graph* g, int node, int param, double v) {
     ysig__nd* n;
     ysig_entry e;
     int nr;
-    if (!g || !g->ok || node < 0 || node >= g->n || param < 0 || param >= YSIG_NP || !isfinite(v)) return false;
+    if (!g || !g->ok || node < 0 || node >= g->n || param < 0 || param >= YSIG_NP || !ysig__finite(v)) return false;
     if (ysig__reentered(g, "ysig_set")) return false;
     n = &g->nd[node];
     if (n->vt) { rows = n->vt->params; nr = n->vt->n_params; }
@@ -4199,7 +4207,7 @@ YSIG_API bool ysig_set(ysig_graph* g, int node, int param, double v) {
 
 YSIG_API bool ysig_set_data(ysig_graph* g, int node, int index, double v) {
     ysig_entry e;
-    if (!g || !g->ok || node < 0 || node >= g->n || index < 0 || index >= g->nd[node].n_data || !isfinite(v)) return false;
+    if (!g || !g->ok || node < 0 || node >= g->n || index < 0 || index >= g->nd[node].n_data || !ysig__finite(v)) return false;
     if (ysig__reentered(g, "ysig_set_data")) return false;
     memset(&e, 0, sizeof e);
     e.kind = YSIG_J_SET_DATA;

@@ -11,6 +11,9 @@ set -eu
 out=${1:?usage: sh examples/web/build.sh OUTDIR}
 mkdir -p "$out"
 cp examples/web/site/*.html examples/web/site/*.css examples/web/site/*.js "$out/"
+# The pages' icon: ysp/screen.h's window icon, which SDL gives a demo page
+# once its window opens; the index opens none.
+python3 tools/web_favicon.py "$out/favicon.ico"
 
 # The service worker that makes a page cross-origin isolated where the host
 # sets no headers (GitHub Pages sets none). MIT; its license goes beside it.
