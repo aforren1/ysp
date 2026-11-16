@@ -1,6 +1,6 @@
 # The player
 
-Status: v0.11.0, 2026-11-14. It loads a pack, checks its experiment
+Status: v0.12.0, 2026-11-15. It loads a pack, checks its experiment
 definition, lowers the definition onto the ysp headers and runs it: in a
 real window with the participant's keyboard and the rig's devices, or on
 the simulated display (`--sim`). It is a program (`player/`, target
@@ -564,9 +564,10 @@ to 31). `--sim`'s files did not change.
 
 ## Explanation: late input, and exits that wait for it (0.12.0)
 
-Status: design, second draft (2026-11-15), after the reviewer's
-findings H1, M1 to M3, L1 and L2 on the first (3f6d21c; table at the
-end); not built. The user's decision of
+Status: built in 0.12.0 (2026-11-15), from the second draft of the
+design, after the reviewer's findings H1, M1 to M3, L1 and L2 on the
+first (3f6d21c; table at the end). The release's gates are in "Results
+at 0.12.0", below. The user's decision of
 2026-11-15: "wait for complete input". ysp/sig.h 0.7.0 places a late
 report at its time (docs/sig.md, "Late input"). The player takes a hit
 only when the input is complete up to the hit's time for every role that
@@ -1072,6 +1073,68 @@ data) is the same at 156d2b5 and cfb3856: 975 files identical, 342
 differ, in the declared columns only. Feed-each against batches, both
 examples, 500 Hz, 10 ms late: the data and `session.json` (less its
 timing fields) equal; and equal to 156d2b5's batch data.
+
+### Results at 0.12.0 (2026-11-15)
+
+The release's gates. Linux desktop, i5-14500, GCC 12.2, `--sim`. The load
+is given with each group; only the frame work is a timing.
+
+Mutants (`tests/mutate/player_*.toml`, `-j 4`, load 4 to 12 from other
+jobs): every `--sim` mutant of the five lists, 228 of 228 as expected.
+
+| List | Mutants | Killed | Kept |
+|---|---|---|---|
+| `player_v2.toml` | 127 | 116 | 11 |
+| `player_run.toml` | 64 | 60 | 4 |
+| `player_lower.toml` | 26 | 25 | 1 |
+| `player_eval.toml` | 6 | 5 | 1 |
+| `player_host.toml` | 5 | 4 | 1 |
+
+- 14 anchors of `player_v2.toml` had gone stale; 12 keep their intent at
+  the new code. v2-91 and v2-92 are removed with their code: 0.12.0
+  disarms every armed control of a state at the exit's time
+  (`ysig_disarm_at()`), not only the arms ahead of the input. v2-85 (an
+  until's next part disarms the state's exits) is now killed.
+- 36 new mutants, v2-97 to v2-132, one or more for each rule of 0.12.0:
+  the horizon (per-role bound, `C(d)`'s parts, the poll's claim, which
+  roles feed `G`), the drains to `G`, timed candidates that wait, the
+  entry frame, `catchup_ns`, the queues' size, `hits_lost` and
+  `derived_lost`, N1 and R5, the trial's barriers (C2), frame rows that
+  wait, the signal column, the movement's origin, the signal choice's
+  `from` onset, `v2_resp_pend_first()`, `v2_arms()`, the drain of a graph
+  that is not the trial's, and `ysig_disarm_at()` at a state's end. 31 are
+  killed; v2-104, v2-107 and v2-119 only at 500 Hz (`YPL_HZ`, which
+  `tests/player/mut_test.c` gives `player_test.py` as `--hz`).
+- New `player_test` cases for the mutants the cases did not see, each
+  with a control: `t_v2_newest_stamp`, `t_v2_cross_roles`,
+  `t_v2_entry_frame_after`, `t_v2_window_reach`, `t_v2_frame_rows_long`,
+  `t_v2_resp_pend_hit`, and `vm_guard_arm_full` in `t_v2_findings`
+  (v2-89: since 0.12.0 a state's end disarms at the exit's time, and that
+  call met the full log first, so the old case stopped on a late count,
+  not on the arm's own).
+- Kept, with the reason in the list: v2-100 and v2-128 are equivalent;
+  v2-108 (`catchup_ns` from two periods) is not reached in `--sim`, where
+  an exit arms less than `B` plus one period back. Open: v2-110 and
+  v2-111 (the queues' size, `hits_lost` and `derived_lost`) are not
+  reached. Six movements of an 8 kHz hand at 200 ms late, and the same at
+  16 kHz, lost no derived event, so the test held fewer events than the
+  size assumes; not looked into.
+- Not run: the 35 mutants of the real path (test `real`), which need a
+  display.
+
+Open in 0.12.0 (each above, in "What the data shows" and "Results at
+8c3cb20"):
+
+- Input before the trial's onset for nodes with time state (`speed`,
+  `peak`, `signal_lost`): the reset at `G + 1 ns` restarts them there,
+  not at `T`. A fix needs a ysp/sig.h trial reset with separate barrier
+  and restart times.
+- A `when` column's test (and a signal inside a `when`) reads the value
+  at the end frame with the input complete only to `G`.
+- At 500 Hz, one frame in about 400,000 of 1.7 to 1.9 ms, with no late
+  input too, at a different frame each run: not explained.
+- `--sim` writes its rows in place on the frame thread; `--measure` takes
+  them out of the frame work. A real run queues them to the writer.
 
 ### The reviewer's findings on the first draft (3f6d21c), and the answers
 
@@ -1808,9 +1871,11 @@ with only `left`).
 - A display faster than 60 Hz: the 500 Hz numbers are `--sim`'s. No 500 Hz
   display, photodiode run, GLX_OML swap events at 2 ms or flip-record lag in
   frames was measured. `PL_RECORD_LAG_NS` keeps 60 Hz's 2 frames as a time.
-- Late reports from a signal role: a lateness that spans a frame pins or
-  leaves unverified the arms it reaches (Results, "A 500 Hz display"), at
-  any window. The player's guard stops; no other path is built.
+- Late reports from a signal role in a real run: 0.12.0 waits for
+  complete input by each role's lateness bound, but only `--sim` gives a
+  bound (`--test-sample-late`, `--test-sample-bound`). A real run binds no
+  signal role until the rig profile has its adapter block (G18), so no
+  measured bound and no real late device was run.
 - The sound lead on a real device at 500 Hz: `--sim` has the null device,
   and no test sees when a sound is scheduled.
 
