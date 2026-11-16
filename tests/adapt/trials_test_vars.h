@@ -875,7 +875,7 @@ static void test_walk_review(void) {
         wt_put(snap + len - 32, 7.0); wt_put(snap + len - 16, -5.0);
         CHECK(ytr_open_saved(&g_t, &d, snap, (size_t)len));
         CHECK_I(ytr_var_walk(&g_t, 3, 1, v), 0);
-        CHECK(v[4] == 0.0 && !signbit(v[4]));
+        CHECK(v[4] == 0.0 && copysign(1.0, v[4]) > 0.0);
         d.rng_ctx = &s;
     }
     /* trial 0's from point is the start, exactly */

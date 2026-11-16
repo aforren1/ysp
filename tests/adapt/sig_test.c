@@ -7646,12 +7646,12 @@ static void test_late_no_window(void) {
         ysig_reset(&g, 0);
         e = pen3(90 * MS, 1, 0);
         ysig_feed(&g, &e);
-        e = pen3(91 * MS, 2, v < 2 ? 0 : 50);
+        e = pen3(91 * MS, 2, v < 2 ? 0.0f : 50.0f);
         ysig_feed(&g, &e);
         e = pen3(100 * MS, 1, 0);
         ysig_feed(&g, &e);
         CHECK(ysig_arm(&g, 3, 100 * MS) && g.wt->n == 0);   /* present: made now */
-        e = pen3(v == 3 ? 101 * MS : 99 * MS, 2, v == 0 ? 50 : 0);
+        e = pen3(v == 3 ? 101 * MS : 99 * MS, 2, v == 0 ? 50.0f : 0.0f);
         ysig_feed(&g, &e);
         f = frame_at(1, 700 * MS, 0, NULL, 0);
         CHECK(ysig_frame(&g, &f) == 0);

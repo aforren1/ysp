@@ -289,14 +289,14 @@ function test_aep()
 
     % The fixed values are desc.hyperparams (ysp/aep.h 0.17.0); the old name
     % hyper is an unknown field.
-    hd = struct('lo', 0, 'hi', 1, 'stop_trials', 5, ...
+    hd = struct('lo', 0, 'hi', 1, 'stop_trials', 5, 'target_p', 0.75, ...
                 'hyperparams', struct('lengthscale', 0.2, 'outputscale', 2), ...
                 'hyperparams_max', struct('mean', 3));
     hh = ysp_aep('open', hd);
     hy = ysp_aep('get_hyper', hh);
     check(hy.lengthscale == 0.2 && hy.outputscale == 2, 'desc.hyperparams in force');
     ysp_aep('close', hh);
-    expect_error('ysp_aep:arg', @() ysp_aep('open', struct('lo', 0, 'hi', 1, 'stop_trials', 5, ...
+    expect_error('ysp_aep:arg', @() ysp_aep('open', struct('lo', 0, 'hi', 1, 'stop_trials', 5, 'target_p', 0.75, ...
                  'hyper', struct('lengthscale', 0.2))));
 
     % Async with fit_in_idle off equals the plain loop.

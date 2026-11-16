@@ -2379,6 +2379,16 @@ ctest; the oracle covers its shapes and compares after every call too.
 `sig_fuzz` (10,000,000 inputs, seeds 8501 to 8508,
 39 s): no report, every replay equal.
 
+### v0.7.1: MSVC's flow warning
+
+No behavior change (2026-11-16). In `ysig_feed()`, `ysig__feed_fp()`
+sets the footprint mask and the all-nodes flag, and the journal reads them
+only while `takers` stays 1, which means that the call set them. MSVC
+does not follow this and reports C4701 (a variable that is possibly not
+initialized). Under `/WX` this is an error, so every Windows target that
+includes the header failed in CI. GCC 12.2 and clang do not report it.
+The two variables are now set to 0 at their declaration.
+
 ### Byte-identical ports
 
 Both examples run on the header. Their CI `--sim` runs give the same data

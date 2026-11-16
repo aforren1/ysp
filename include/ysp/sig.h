@@ -1,4 +1,4 @@
-/* ysp/sig.h - v0.7.0 - public domain single-header signal path
+/* ysp/sig.h - v0.7.1 - public domain single-header signal path
  *
  *   Continuous input to stimuli: a small graph, fixed at open, from input
  *   sources through per-sample transforms and maps to stimulus channels,
@@ -411,6 +411,10 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.7.1 - no behavior change (2026-11-16): ysig_feed() sets its
+ *          footprint mask and flag at their declaration. MSVC's C4701
+ *          (an error under /WX) did not see that they are set on
+ *          every path that reads them.
  *   v0.7.0 - late input (docs/sig.md, "Late input"): a call goes to its
  *          place in R by its key (time, class, call order), as an arm in
  *          the past does, and the window runs again; the window bounds
@@ -563,7 +567,7 @@
  *          adapters, custom ops, parameter tables, and a name for
  *          each p[] index (YSIG_<OP>_<ROW>).
  *
- *   STATUS: v0.7.0, 2026-11-16, Linux desktop (i5-14500, GCC 12.2): the
+ *   STATUS: v0.7.1 (no behavior change; v0.7.0's gates). v0.7.0, 2026-11-16, Linux desktop (i5-14500, GCC 12.2): the
  *   oracle at 3,000 cases on seeds 20261115, 20261123 and 20261124, late
  *   generator on and off: every case its B cannot run counted, every
  *   wrong case with a count but the one H1 declares (a raw mouse's count
@@ -627,8 +631,8 @@
 
 #define YSIG_VERSION_MAJOR 0
 #define YSIG_VERSION_MINOR 7
-#define YSIG_VERSION_PATCH 0
-#define YSIG_VERSION_STRING "0.7.0"
+#define YSIG_VERSION_PATCH 1
+#define YSIG_VERSION_STRING "0.7.1"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -4374,8 +4378,8 @@ static void ysig__bar_counts(ysig_graph* g, const yin_event* e) {
 
 YSIG_API int ysig_feed(ysig_graph* g, const yin_event* e) {
     ysig_entry j;
-    int i, takers = 0, r, all, late = 0, logged = 0;
-    uint64_t f[YSIG__FPW], mask;
+    int i, takers = 0, r, all = 0, late = 0, logged = 0;
+    uint64_t f[YSIG__FPW], mask = 0;
     if (!g || !g->ok || !e || ysig__reentered(g, "ysig_feed")) return -1;
     for (i = 0; i < g->n_src; i++)
         if (ysig__source_takes(&g->nd[g->src_ids[i]], e)) takers = 1;

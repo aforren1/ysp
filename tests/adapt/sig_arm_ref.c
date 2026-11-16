@@ -512,6 +512,9 @@
  *     SIG_ORACLE_CASES=20000 SIG_ORACLE_SEED=1 ./sig_arm_ref [show]
  * Prints "FAIL case N: reason" for each wrong case; exit 1 when any.
  */
+#if defined(_MSC_VER) && !defined(_CRT_SECURE_NO_WARNINGS)
+#define _CRT_SECURE_NO_WARNINGS   /* getenv for the switches */
+#endif
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1800,7 +1803,7 @@ static void hand_check(int ci, int mark, const ysig_stats* s0, const ysig_stats*
              * arm_hits_superseded and _retracted stay for voids an arm or a
              * disarm causes. With arms since the last check too, only the
              * total can be checked. */
-            long dsup = s1->arm_hits_superseded - g_chk_st.arm_hits_superseded, dret = s1->arm_hits_retracted - g_chk_st.arm_hits_retracted;
+            long dsup = (long)(s1->arm_hits_superseded - g_chk_st.arm_hits_superseded), dret = (long)(s1->arm_hits_retracted - g_chk_st.arm_hits_retracted);
 #ifdef SIG_HAS_LATE_VOIDED
             /* (the ruling, as clarified) late_hits_voided for voids by a late
              * input (feed, frame, settle); a late state call keeps the 0.6.x
@@ -1835,7 +1838,7 @@ static void hand_check(int ci, int mark, const ysig_stats* s0, const ysig_stats*
          * known; with several (checks skipped while an arm waited in B) a
          * hit that one of them may supersede may have been voided by another
          * first: the total must agree, the superseded ones within range */
-        long dsup = s1->arm_hits_superseded - g_chk_st.arm_hits_superseded, dret = s1->arm_hits_retracted - g_chk_st.arm_hits_retracted;
+        long dsup = (long)(s1->arm_hits_superseded - g_chk_st.arm_hits_superseded), dret = (long)(s1->arm_hits_retracted - g_chk_st.arm_hits_retracted);
         long smin = arms == 1 ? esup : 0;
         if (!skip('V') && (dsup + dret != esup + eret || dsup < smin || dsup > esup)) {
             snprintf(g_whybuf, sizeof g_whybuf, "voided hits: superseded +%ld retracted +%ld, the spec +%ld and +%ld",
@@ -3690,7 +3693,7 @@ int main(int argc, char** argv) {
             }
             else {
                 for (k2 = 0; k2 < g_ngr; k2++) if (!g_gr[k2].fallback) made++;
-                hu_n[2]++; if (st.arm_unverified) hu_f[2]++; hu_arms += made; hu_cnt += st.arm_unverified;
+                hu_n[2]++; if (st.arm_unverified) hu_f[2]++; hu_arms += made; hu_cnt += (long)st.arm_unverified;
             }
         }
 #endif

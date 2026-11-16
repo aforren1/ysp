@@ -1804,6 +1804,9 @@ static int pl_end_trial_(pl_player* p, const yscr_frame* f) {
     int outcome_val = YTR_INVALID;
     bool requeue = false;
     bool have_res = false;
+    /* every read is under have_res, but MSVC's C4701 (an error under /WX)
+     * does not follow that */
+    memset(&res, 0, sizeof res);
     if (t->collector) {
         /* the rule's codes, so the result flags a code its final response
          * does not match (SENT_MISMATCH in rsp_flags) */
