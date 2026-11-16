@@ -131,13 +131,14 @@ def run_player(bin_dir, d, defn, script, samples):
                 trials[ti]["lands"].append({"kind": row["kind"],
                                             "name": row["text"] if row["kind"] == "mark" else row["stimulus"],
                                             "frame": int(row["frame"]), "t_s": row["t_s"]})
-    arms = None
+    arms = lag = None
     try:
         with open(os.path.join(out, "session.json")) as f:
-            arms = json.load(f).get("sig_arms")
+            js = json.load(f)
+            arms, lag = js.get("sig_arms"), js.get("exit_lag")
     except (OSError, ValueError):
         pass
-    return {"refused": None, "trials": [trials[i] for i in sorted(trials)], "out": out, "sig_arms": arms}
+    return {"refused": None, "trials": [trials[i] for i in sorted(trials)], "out": out, "sig_arms": arms, "exit_lag": lag}
 
 
 def invariant(trials):
@@ -425,7 +426,7 @@ def one(args):
     inv_m = invariant(exp["trials"]) if exp.get("refused") is None and exp.get("trials") else None
     inv_p = invariant(got["trials"]) if got.get("refused") is None and got.get("trials") else None
     res = {"seed": seed, "dir": d, "inv_model": inv_m, "inv_player": inv_p, "refused": exp["refused"], "player_refused": got["refused"],
-           "sig_arms": got.get("sig_arms"), "guard": guard_counts(got),
+           "sig_arms": got.get("sig_arms"), "exit_lag": got.get("exit_lag"), "guard": guard_counts(got),
            "gaps": trial_gaps(exp, diff), "diff": diff,
            "hang": diff is None and exp["refused"] is None and bool(exp["trials"])
                    and bool(exp["trials"][-1].get("hang") or exp["trials"][-1].get("loop"))}

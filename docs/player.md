@@ -1130,6 +1130,42 @@ added; the model's harness at 60 Hz, seeds 102001 to 102200, `--jobs 4`:
 no lateness, 200 cases, 1 mismatch (at a GAP), no guard stop; 10 ms late,
 200 cases, no mismatch, no guard stop. No sanitizer report in any run.
 
+The other gates (Release, load 6 to 13 from other jobs, none a timing):
+
+- ctest, `DISPLAY` unset: 127 of 127.
+- `player_test`: 78 of 78 at 60 Hz and at 500 Hz. `compare.py`: exit 0 at
+  60 and 500 Hz, no exact column differs.
+- The 60 Hz identity against 0.11.0 (b995055's player, built in scratch,
+  `player_test.py --player`, over the same cases): 1,053 data files
+  identical, 420 differ. 22 cases differ beyond the declared fields
+  (`player_version`, `headers.sig`, `exit_lag`, `late_beyond_bound`,
+  sig.h's new late counts, `trials.csv` `exit_lag_max_s` and
+  `late_frames`): 14 cases with a lateness bound above 0, which wait by
+  design; with every bound 0, `t_v2_move_origin` and
+  `t_v2_signal_from_first` (the two fixes, "What the data shows" and "The
+  response window"), and 6 cases in sig.h's diagnostic counts only
+  (`sig_arms` `caught_up`, `ahead_cancelled`, `hits_superseded`: sig.h
+  0.7.0 against 0.6.1, and one arm per detect in
+  `t_v2_two_exits_one_ctl`). 0.11.0 fails 24 checks of the 0.12.0 cases.
+- The model's harness (`--no-shrink --jobs 6`, exact compare), 1,000
+  cases a run, 60 Hz seeds 102001 to 103000, 500 Hz seeds 100001 to
+  101000. Mismatches at 60 Hz: 6 at no lateness, all at a GAP, 0 at 5,
+  10, 20, 40 and 60 ms; at 500 Hz: 4 at no lateness, all at a GAP, 0 at
+  every lateness. No guard stop in any of the 12 runs: the same as at
+  cfb3856. Exit lag (`session.json` `exit_lag`, now in the harness's
+  log), mean and max over the sessions: 60 Hz 2.16 and 16.67 ms at no
+  lateness, 14.36 and 21.67 at 5 ms, 17.81 and 26.33 at 10 ms, 30.26 and
+  36.33 at 20 ms, 48.37 and 56.33 at 40 ms, 67.64 and 76.33 at 60 ms;
+  500 Hz 0.05 and 2.00, 5.81 and 7.00, 10.44 and 12.00, 20.46 and 22.00,
+  40.45 and 42.00, 60.44 and 62.00. The lag stays under the lateness
+  plus a frame.
+- Feed-each against batches, both examples, 500 Hz, 10 ms late on every
+  role (the C programs' samples from `compare.py --hz 500`): every file
+  byte-identical, `session.json` too. Visuomotor: 160 trials, exit lag
+  mean 10.00 and max 11.00 ms over 480 exits, `late_frames` 54,880;
+  bimanual: 132 trials, 10.00 and 10.00 ms over 160 exits, `late_frames`
+  329,442; `late_beyond_bound` 0, no guard count.
+
 Open in 0.12.0 (each above, in "What the data shows" and "Results at
 8c3cb20"):
 
