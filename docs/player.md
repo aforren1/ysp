@@ -1166,6 +1166,29 @@ The other gates (Release, load 6 to 13 from other jobs, none a timing):
   bimanual: 132 trials, 10.00 and 10.00 ms over 160 exits, `late_frames`
   329,442; `late_beyond_bound` 0, no guard count.
 
+Frame work at 500 Hz (`--measure`, in-place writes left out, CPU 2, one
+run at a time, nothing else of mine running, load 1.71 to 1.98 at each
+start; the pack and the C programs' samples of `compare.py --hz 500`,
+which may not be the inputs of 8c3cb20's runs). Three runs each; max with
+its frame, p99, p99.9, in us:
+
+| Example | Late | Max | p99 | p99.9 | Trial start max | 8c3cb20: max; p99; p99.9 |
+|---|---|---|---|---|---|---|
+| visuomotor | 0 | 377 (frame 108,719), 70, 73 | 3.7 to 3.8 | 15.3 to 15.5 | 54 to 56 | 64 to 68; 3.7 to 3.8; 15.1 to 15.3 |
+| visuomotor | 10 ms | 67, 78, 64 | 20.3 to 20.5 | 27.0 to 27.5 | 49 to 52 | 65 to 77; 19.4 to 19.6; 27.0 to 27.2 |
+| bimanual | 0 | 87, 596 (frame 187,688), 90 | 5.9 to 6.0 | 7.6 to 10.4 | 61 to 70 | 75 to 1,874; 6.0; 7.0 to 22.9 |
+| bimanual | 10 ms | 666, 749, 1,206 (frames 311,825, 281,012, 147,833) | 28.9 to 29.0 | 30.5 to 38.7 | 97 to 190 | 101 to 1,719; 27.6 to 27.8; 28.7 to 38.1 |
+
+No frame was over the 2 ms period. The bimanual example at 10 ms late,
+three runs more at load 0.97 to 1.06: max 145, 824 (frame 279,263) and
+109 us, p99 28.9 to 29.0, p99.9 30.0 to 34.8, trial start max 102 to 109
+us. So the single large frame comes in some runs at a different frame
+each time, as at 8c3cb20 ("The 17 ms frame"); at the higher load it came
+in each of the three runs. p99 at 10 ms late is about 1 us (4 to 5 %)
+above 8c3cb20's in both examples; with no lateness it is the same. The
+in-place writes, left out: 632 to 790 us (visuomotor) and 1,871 to
+16,931 us (bimanual) in a frame, the 17 ms write-back wait again.
+
 Open in 0.12.0 (each above, in "What the data shows" and "Results at
 8c3cb20"):
 
