@@ -1206,6 +1206,24 @@ above 8c3cb20's in both examples; with no lateness it is the same. The
 in-place writes, left out: 632 to 790 us (visuomotor) and 1,871 to
 16,931 us (bimanual) in a frame, the 17 ms write-back wait again.
 
+The final review's round (2026-11-16, Linux desktop, i5-14500, GCC 12.2,
+Release, `--sim`; with ysp/sig.h 0.7.0's H1 and the player's L5):
+
+- `player_test` 78 of 78 at 60 Hz (11 s) and at 500 Hz (13 s), load 1.2
+  to 1.3. `compare.py` exit 0 at 60 and 500 Hz, no exact column differs
+  (load 2.8).
+- The model's harness (`--no-shrink --jobs 6`; seeds 102001:103000 and
+  100001:101000 are 999 cases each), load 1.9 to 4.7: 60 Hz, 6
+  mismatches at no lateness, all at a GAP, 0 at 10 ms; 500 Hz, 4 at no
+  lateness, all at a GAP, 0 at 10 ms. No guard stop in the four runs,
+  with `hits_lost` and `derived_lost` now in the guard at every bound.
+  As many as at V2SIG10 (which seeds was not compared).
+- Mutants: `player_v2.toml` 129 (v2-111 at the new guard lines; v2-133
+  and v2-134 for L5), `-j 4`, 1,029 s (load 2.1 to 4.0): 129 of 129 as
+  expected, killed 116, survived 13. The mutants of the other player
+  lists were not run in this round.
+- Feed-each at 60 Hz: "Open in 0.12.0" below.
+
 Open in 0.12.0 (each above, in "What the data shows" and "Results at
 8c3cb20"):
 

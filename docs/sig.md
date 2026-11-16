@@ -2532,6 +2532,54 @@ each): no batch that did not fit, and 14 cases with a first difference,
 each a count, batched lower (`late_hits_voided` 8, `late_frames` 6), as
 in V2SIG7 and V2SIG8.
 
+The final review's round (V2FIN1, 2026-11-16, Linux desktop, i5-14500,
+GCC 12.2; H1, the text of M1 to M3 and L1 to L7, M4's gate):
+
+- The oracle with ctest's switches at seed 20261115 after H1: late
+  generator on, 3,000 cases, wrong 1,403 (1,008 by `arm_unverified`; 394
+  by another count; 1 with none), right cases with a count 711 of 855
+  (2,817 counts over 31,366 made groups), B cannot run 742 (742
+  counted); off, 1,059 (784; 275; 0), 1,013 of 1,187 (4,063 of 43,438),
+  754 (754), the same as V2SIG10; feed_n mode, 1,000 cases, wrong 466
+  (326; 139; 1), 218 of 269 (808 counts). The case with none, in both
+  runs with late input, is H1's own: case 144, node 35 (the adapter's
+  integrator) at (-4, -6) in the header and (-5, -5) in B, one count
+  apart; R drops the count before the barrier, the header keeps it.
+  Before H1 the case was wrong too, counted at a later call (a past arm).
+  From case 144 on, the generator's draws differ, so the other numbers
+  of the run with late input move a little (V2SIG10: 1,398, 709 of 855).
+  Seeds 20261123 and 20261124 with `PRED_TARGET` too (four at once, 76 s,
+  load 3.4 to 3.7): late generator on, wrong 1,417 (1,052; 365; 0) and
+  1,365 (1,035; 330; 0), right cases with a count 726 of 854 (2,886 of
+  31,120) and 734 of 884 (2,921 of 32,446), B cannot run 729 and 751,
+  all counted; off, the same as V2SIG10. No bare case and no flagged
+  group without a count in any of the four: H1 moves these runs' numbers
+  by a few cases (V2SIG10: 1,429 and 1,358), every one counted.
+- ctest's gate (M4): the oracle ran `CASES` cases; at the fixed seed, the
+  wrong cases, the right cases with a count and their counts at most the
+  run above plus 1 % rounded up; `BARE_MAX` 1 for the two runs with late
+  input (H1's case). A scratch header with one more `arm_unverified` on
+  1 call in 64 fails the feed_n gate (229 right cases with a count, at
+  most 221), and on 1 call in 256 too (824 counts, at most 817).
+- ctest Release 128 of 128, 91 s at `-j 6` (load 2.6 to 3.9). The
+  sanitizers tree under `setarch -R`: build 36 s at `-j 6`, ctest 127 of
+  127, 411 s at `-j 4` (load 2.8 to 4.0), no sanitizer report.
+  `sig_test` as C99 and as C++17 at `-O2` and `-O3`: passed.
+- `sig_fuzz` (`YSIG_DEBUG_FEED_BOUND` on): 10,000,000 inputs under ASan
+  and UBSan (`setarch -R`, 4 processes, seeds 10001 to 10004), 95 s
+  (load 3.1 to 3.8): no abort, no report; the same totals as V2SIG10
+  (1,495,391 graphs, 4,503,339 late events, 1,460,529 batches, 3,218,622
+  quiet feeds, the largest use 1.000 of the need, at most 14 undo
+  entries). Not verified: whether the fuzz feeds a raw mouse's count
+  before a barrier (its totals did not move).
+- Mutants: sig.toml 363 (01 and 45 at the factored code; 388 to 392 for
+  H1, all killed by `test_v2_bar_counts`), `-j 4`, 778 s (load 0.7 to
+  3.8): 363 of 363 as expected, killed 351, survived 12 (the same as
+  V2SIG10). The targets wrapper reads `SIG_REF_BARE_MAX` (1 for
+  `sig_ref`), so a mutant that adds a bare case still fails it.
+- Stack (L7): "Limits".
+- The player's gates: docs/player.md, "Results at 0.12.0".
+
 The V2SIG10 round's other gates (one at a time, load average 1.3 to
 4.7):
 
