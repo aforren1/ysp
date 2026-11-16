@@ -48,9 +48,9 @@ env = { SIG_ORACLE_CASES = "3000", SIG_ORACLE_SEED = "20261123", SIG_ORACLE_OFF 
 # a made group the text's predicate flags by condition 1 or 4 must have
 # an arm_unverified or late_unverified in its case ("FAIL line 4" of
 # sig_arm_ref_targets.c). Seed 20261115, late generator on, 3,000 cases,
-# ctest's switches. The unmutated header passes it (the control); at
-# seed 20261124 it does not (case 2107, a disarm_at at 0 after a reset,
-# under review). It does not tell 300, 314, 315 or 318 from the header.
+# ctest's switches. The unmutated header passes it (the control); since
+# V2SIG9 also at seed 20261124 (case 2107: condition 4 again at a cancel
+# by key). It does not tell 300, 314, 315 or 318 from the header.
 source = "tests/adapt/sig_arm_ref_targets.c"
 compiler = "gcc"
 flags = ["-std=c99", "-O2", "-w", "-DSIG_ARM_REF_SPEC=1", "-DSIG_HAS_UNV=1", "-DSIG_HAS_LATE=1", "-DSIG_HAS_LATE_VOIDED=1",
@@ -2429,7 +2429,8 @@ replace = '''        g->wt->cas_dis = g->wt->n_dis > 0 || g->wt->gap4_wp;
 id = "285"
 name = "a gap opens after its first state call's triggers"
 test = "sig_ref_23off"
-note = "Killed by sig_ref_23off (V2SIG7, 2026-11-15): 707 of the 708 cases B cannot run at seed 20261123 with OFF=l are counted; the unmutated header counts all."
+note = "Survives since V2SIG9 (measured: also on 229b23f, step 1 alone). V2SIG7 killed it by sig_ref_23off: 707 of the 708 cases B cannot run at seed 20261123, OFF=l, were counted. Now the oracle gives 708 of 708 for the mutant (the header: 701 of 701; wrong 1,072 against 1,078), so the case it left uncounted is counted, most likely by condition 4 again at a cancel by key (not traced). Not equivalent: outputs differ, and no target fails. Open: no sig_test shape."
+expect = "survived"
 why = "H9 with a recenter: what the gap's first call lets in is in the gap, so an ahead group takes it back (test_arm_repro)."
 find = '''    if (g->cu && !g->cu->grp_open && !g->cu->replaying && g->cu->n_ck) {
         g->cu->grp_open = 1;'''
@@ -2448,7 +2449,8 @@ replace = '    if (g->wt->n) {'
 id = "287"
 name = "a waiting arm lets in nothing when its group goes in"
 test = "sig"
-note = "Killed (V2SIG8, 2026-11-15) by sig_test test_v2_h12_before with no window: H = [arm h at 15] and G = [set x, arm d at 12], both before the last barrier (key 20), H made first; G's waiting closure goes by raw time and skips H, so G's arm lets H in (an equal key made before). Mutated, H goes in after the arm: late_off 1 and the hits in the other order. With a window H goes to its place by key either way (the same hits). The control: no meet (K = all(d, d)), H waits. The reviewer's shape (H made after G) does not tell them apart: the arm's second ysig__wait_fire() (UINT64_MAX) lets such an H in after the arm, as R has it."
+note = "Equivalent since V2SIG9 (T1's closure by key). The pre-arm ysig__wait_fire(a.t, f, a.seq) lets in waiting groups with a key at most the arm's ((kt, call order)) that meet the arm; ysig__wait_closure() placed every such group first (the arm's footprint is in wait_fp), and no group goes back to waiting during ysig__wait_place(), so the call finds nothing. Killed in V2SIG8 by test_v2_h12_before, where the raw-time closure skipped H and this call let it in; now the closure lets H in. The no-window late_off check of that test stays."
+expect = "survived"
 why = "H12: the ahead arm lets in at its time when its group goes in."
 find = '''        ysig__wait_fire(g, a.t, f, a.seq);'''
 replace = '''        (void)f;'''
@@ -2558,7 +2560,7 @@ replace = '        if (0) {'
 id = "300"
 name = "exactness: a group let in inside another's block not counted"
 test = "sig_ref_pt"
-note = "Equivalent (V2SIG8, 2026-11-15). c->inside is set for a group G let in by a call of a waiting group P after part of P went in. ysig__wait_closure() places first every waiting group at or before P's raw time that meets F(P), and P's calls meet only F(P), so such a G is later than P in raw time with an equal key: both before the last barrier (ruling 2 extended). Such a G waits with N(G) earlier than tau (an input at tau before the barrier would have made it present; one after it is a late_barrier drop), so condition 2 is tested, and 2 (b) counts G: the call of P that let G in lies after G in the cascade, meets F(G), and is not 2 (b)'s exception (that needs P later than G in raw time, or made after G). Every group the removed term counts is counted. The oracle with SIG_ORACLE_PRED_TARGET=1 (seeds 20261115, 20261123, 20261125 with SIG_ORACLE_PAST_GROUPS=1, both modes, 2,000 and 3,000 cases; test sig_ref_pt) does not tell them apart."
+note = "Survives; not equivalent (V2SIG9, 2026-11-15). The V2SIG8 argument rested on the raw-time closure (an inside group later than its parent in raw time with an equal key); T1's closure now compares keys, and the argument does not hold either way: c->inside is set 18 times at seed 20261115, late on, 3,000 cases, SIG_ORACLE_PRED_TARGET=1 and SIG_ORACLE_PAST_GROUPS=1, each a group G at its parent P's time made after P (a greater key), let in by a call of P after part of P went in (a state call that lets in at N(F(c)) later than tau). There the mutant drops one count (2,788 against 2,789 counts in right cases), in a case the oracle reads right, and no target fails; seeds 20261115 off and 20261124 both modes give the same output as the header. Not killed: no sig_test shape yet (a waiting P whose state call's N(F(c)) is later than its tau; the V2SIG9 attempt made P a past group). Open."
 expect = "survived"
 why = "Condition 1 (test_arm_exact: x inside y's block)."
 find = '''        int bad = c->inside || w->cas_in;
@@ -2766,7 +2768,7 @@ replace = '''     * group) */
 id = "326"
 name = "an input at a past group's time taken as its L"
 test = "sig"
-note = "Equivalent outside counted fallbacks (V2SIG8, 2026-11-15). In a log in key order every input after a past group's place that meets F(G) is later than tau: an input at tau that meets F(G) keys before G (a feed comes first at one time, R1), so it is before the place. The mutant (ti >= t) differs only on an input at tau after the place, which exists only where a fallback (late_far, late_full, late_off) left a late input out of key order, a case already counted."
+note = "Equivalent outside counted fallbacks (V2SIG8, 2026-11-15). In a log in key order every input after a past group's place that meets F(G) is later than tau: an input at tau that meets F(G) keys before G (a feed comes first at one time, R1), so it is before the place. The mutant (ti >= t) differs only on an input at tau after the place, which exists only where a fallback (late_far, late_full, late_off) left a late input out of key order, a case already counted. An input after a past group's place that meets F(G) is later than tau, except a late frame or settle at tau made after G's arm, which keys after G by R1 and is G's L anyway, so the mutant gives the same result."
 expect = "survived"
 why = "L(G) is an input later than tau (2 (a)); an input at tau is in R before G when it meets F(G) (ruling 4), not its L. Was a pending-group mutant (0.6.1); the pending code went in 181093f."
 find = '                    if (ti > t && ysig__fp_meets(g, f, F)) { li = u; break; }'
@@ -3101,3 +3103,36 @@ test = "sig_ubsan"
 why = "af5a751: t_cover - cover overflows at the ends of int64 (sig_fuzz, seed 3); wrapped, the frame takes no checkpoint (test_v2_time_ends; UBSan reports it)."
 find = '''if (cu->n_ck && !cu->at_bar && ysig__sub(g->t_cover, cu->ck[(cu->ck0 + cu->n_ck - 1) % cu->K].cover) < cu->span_ns / 8) return;'''
 replace = '''if (cu->n_ck && !cu->at_bar && g->t_cover - cu->ck[(cu->ck0 + cu->n_ck - 1) % cu->K].cover < cu->span_ns / 8) return;'''
+
+[[mutant]]
+id = "377"
+name = "condition 4: an arm cancelled by key still bounds a gap"
+test = "sig"
+why = "A cancel by key takes the arm out of R; the next group's gap reaches back past it (the reviewer's case 2107 of seed 20261124; test_v2_c4_cancel)."
+find = '        if (k == YSIG_J_ARM && c->cx) continue;   /* cancelled by key: not in R, bounds no gap */'
+replace = ''
+
+[[mutant]]
+id = "378"
+name = "condition 4 not tested again at a cancel by key"
+test = "sig"
+why = "When the header tests: at a cancel by key that takes an arm out of R, condition 4 again for the group whose arm comes next (test_v2_c4_cancel)."
+find = '            ysig__c4_next(g, c);'
+replace = '            (void)ysig__c4_next;'
+
+[[mutant]]
+id = "379"
+name = "T1's closure by raw time"
+test = "sig"
+why = "T1: the closure takes the waiting groups with a smaller key (ruling 2 extended: before the last barrier, call order); by raw time it put the group made later first and W1 counted the other (test_v2_closure_key)."
+find = '''        int64_t kk = ysig__kt(g, w->a[k].t), kb = 0;
+        ysig__wait_fp(g, &w->a[k], fk);
+        for (j = 0; j < w->n; j++) {
+            /* by key, not raw time (ruling 2 extended): two groups before
+             * the last barrier key at its time and call order decides, as
+             * R orders them where their footprints meet */
+            int64_t kj = ysig__kt(g, w->a[j].t);'''
+replace = '''        int64_t kk = w->a[k].t, kb = 0;
+        ysig__wait_fp(g, &w->a[k], fk);
+        for (j = 0; j < w->n; j++) {
+            int64_t kj = w->a[j].t;'''
