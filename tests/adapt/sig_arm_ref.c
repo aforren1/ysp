@@ -22,6 +22,23 @@
  *     always. It changes the predicate's tallies only, not the two
  *     targets. SIG_ORACLE_PRED_NALL=1 keeps every input.
  *
+ * SIG_ORACLE_PRED_TARGET=1 (rev2e, with SIG_ORACLE_PRED=1): a case where
+ *   the text's predicate (N(G) by footprint) flags a made group by
+ *   condition 1 (reason 7) or condition 4 (reason 8), and A's
+ *   arm_unverified plus late_unverified did not rise in the case, prints
+ *   "PRED_TARGET case ..." and counts in the summary's pred_target line.
+ *   For the count-dropping mutants (sig.toml 300, 314, 315, 318). It reads
+ *   nothing else and changes no case stream. The predicate's condition 4
+ *   now skips a disarm at G's own time, as the header's ysig__c4() and
+ *   B's reason 9 do (SIG_ORACLE_C4EQ=1 flags it), and waits while the
+ *   disarm's gap is open (SIG_ORACLE_C4OPEN=1 does not).
+ *
+ * Final-only rows and events (rev2d, case 2005 of seed 20261124 OFF=l):
+ *   a row A handed out at call `at` can stop being R's at a later late call
+ *   that falls back (late_full there); A's counts are read at the latest
+ *   late call or past arm after `at` (out_fail_at()). SIG_ORACLE_ROWAT_OLD=1
+ *   reads at `at`.
+ *
  * ysig_feed_n() against ysig_feed() (SIG_ORACLE_FEEDN=1; the second
  *   reviewer, for the user's condition on format 3.11 rule 4): two more
  *   graphs with A's desc, one fed per event, one with runs of feeds in
@@ -1240,7 +1257,7 @@ static int r9_pending(int ci) {
 }
 static long g_gaplate_defer;   /* (rev2b) void checks put off to an open gap's end */
 static long g_barm_incl;   /* (rev2) B's arm let-ins at equal tau taken (S3) */
-static long g_pin_clamped;   /* (rev2) pins read away by the clamp (ruling 8) */
+static long g_pin_clamped, g_out_moved;   /* (rev2) pins read away by the clamp (ruling 8) */
 static int g_may_pin;   /* (8594b73) an input of any footprint, later than tau, before the place */
 static int rule2_place(const group* G, int* pinned) {
     int p, i, lb = -1;
@@ -1828,6 +1845,10 @@ static void hand_check(int ci, int mark, const ysig_stats* s0, const ysig_stats*
  *      arm call came before the feed, with a time before tau (a late report
  *      for an armed detect). */
 static int g_pred, g_pred_why;
+/* (rev2e) SIG_ORACLE_PRED_TARGET=1 (with SIG_ORACLE_PRED): the first made
+ * group the predicate flags by condition 1 (reason 7) or 4 (reason 8) */
+static int g_pt_r, g_pt_grp, g_pt_ci;
+static long g_pt_cases, g_pt_fail;
 /* for the predicate's refinement: the input time at a group's place, and
  * the R index of the first input after it later than its tau that meets
  * its footprint (g_nR: none) */
@@ -1909,7 +1930,19 @@ static int p1_bad(int gi) {
             for (k = ar - 1; k >= 0; k--) {
                 const rent* x = &g_R[k];
                 if ((x->flags & (E_INPUT | E_BARRIER)) || g_c[x->ci].kind == C_ARM || g_c[x->ci].kind == C_DISARM_AT) break;   /* ruling 1: a disarm_at ends the gap */
-                if (g_c[x->ci].kind == C_DISARM && x->grp != gi) return 8;
+                /* (rev2e) at G's own time the disarm takes no other time with no
+                 * window: as the header's ysig__c4() and B's reason 9 (SIG_ORACLE_C4EQ=1:
+                 * flagged too) */
+                if (g_c[x->ci].kind == C_DISARM && x->grp != gi && (x->time != G->tau || getenv("SIG_ORACLE_C4EQ"))) {
+                    /* (rev2e) a disarm whose gap is still open has no place
+                     * by key yet (the ruling on case 812): an arm can still
+                     * take it into its group. Decided when the gap ends
+                     * (SIG_ORACLE_C4OPEN=1: at once; case 604 of seed
+                     * 20261123, late on) */
+                    int q;
+                    if (!getenv("SIG_ORACLE_C4OPEN")) for (q = 0; q < g_npend; q++) if (g_pend[q] == x->ci) return -1;
+                    return 8;
+                }
             }
     }
     /* (2c, any N(G)) a cancelled group's disarm acts at tau, which a graph
@@ -1981,6 +2014,7 @@ static void pred_check(int ci) {
             printf("  P1 step %d grp %d (arm call %d cls %d tau %.3f fp %llx node %d) -> %d\n", ci, k, G->arm_ci, G->cls, G->tau / 1e6, (unsigned long long)G->fp, G->node, r);
         if (r >= 0) G->p1_done = 1;
         if (r > 0) { G->pflag = 1; if (!g_pred) { g_pred = 1; g_pred_why = r; } }
+        if ((r == 7 || r == 8) && !G->fallback && g_pt_r == 0) { g_pt_r = r; g_pt_grp = k; g_pt_ci = ci; }
     }
     if (c->kind == C_FEED && (g_call_flags[ci] & E_INPUT) && !getenv("SIG_ORACLE_NOP2"))
         for (k = 0; k < g_ngr; k++) {
@@ -2957,6 +2991,20 @@ static int der_node_eq(int node) {
  * (a count made after the caller had the wrong row does not cover it).
  * A row A never handed out has no such call: the case's last call. */
 static int g_end_fail_ci = -1;
+/* (rev2d, case 2005 of seed 20261124 OFF=l) a final-only row or event that
+ * A handed out at call `at` as R's can stop being R's at a later late call
+ * (or a past group placed before it); a fallback that call counts (there:
+ * late_full at call 77, the row handed out at 76) explains it. So A's
+ * counts are read at the latest such call after `at`, else at `at`.
+ * SIG_ORACLE_ROWAT_OLD=1 reads at `at` */
+static int out_fail_at(int at) {
+    int k, last = at;
+    if (at < 0 || getenv("SIG_ORACLE_ROWAT_OLD")) return at;
+    for (k = at + 1; k < g_nc && k < MAXC; k++)
+        if (g_call_late[k] || (g_c[k].kind == C_ARM && g_call_grp[k] >= 0 && g_gr[g_call_grp[k]].cls == 0)) last = k;
+    if (last != at) g_out_moved++;
+    return last;
+}
 static int g_end_fail_kind;   /* 0 at a call, 1 an end check with a call, 2 an end check read at the end */
 static int rows_fail_at(void) {
     int q, best = -1;
@@ -3057,7 +3105,7 @@ static void end_checks(void) {
                 }
                 printf("   A rows %d B rows %d; A stats.rows %lld\n", g_rows_a.n, g_rows_b.n, (long long)sa.rows);
             }
-            if (rd) { g_why = "rows (final only) not R's"; g_end_fail_ci = rows_fail_at(); } else if (sa.arm_rows_stale) g_why = "arm_rows_stale in final-only mode"; }
+            if (rd) { g_why = "rows (final only) not R's"; g_end_fail_ci = out_fail_at(rows_fail_at()); } else if (sa.arm_rows_stale) g_why = "arm_rows_stale in final-only mode"; }
         else if (rd && !sa.arm_rows_stale) { g_why = "rows changed, not counted stale"; g_end_fail_ci = rows_fail_at(); }
     }
     if (!g_why) {
@@ -3086,7 +3134,7 @@ static void end_checks(void) {
             }
         }
         if (g_final_der && skip('D')) { }
-        else if (g_final_der) { if (dd) { g_why = "derived events (final only) not R's"; g_end_fail_ci = der_fail_at(); } else if (sa.arm_derived_stale) g_why = "arm_derived_stale in final-only mode"; }
+        else if (g_final_der) { if (dd) { g_why = "derived events (final only) not R's"; g_end_fail_ci = out_fail_at(der_fail_at()); } else if (sa.arm_derived_stale) g_why = "arm_derived_stale in final-only mode"; }
         else if (dd && !sa.arm_derived_stale) { g_why = "derived events changed, not counted stale"; g_end_fail_ci = der_fail_at(); }
 #ifdef SIG_HAS_DERIVED_TO
         else if (!dd && sa.arm_derived_stale && getenv("SIG_ORACLE_DERIVED_TO")) g_why = "arm_derived_stale counted with no handed-out event changed";
@@ -3446,6 +3494,19 @@ int main(int argc, char** argv) {
             memset(&c, 0, sizeof c); c.kind = C_DRAIN; drain_h(&c); push(&c);
         }
         fn_end();
+        if (g_pt_r && getenv("SIG_ORACLE_PRED_TARGET")) {
+            /* the text counts that group: A's arm_unverified or
+             * late_unverified must have risen in the case */
+            ysig_stats pst;
+            ysig_get_stats(&g_a, &pst);
+            g_pt_cases++;
+            if (pst.arm_unverified + pst.late_unverified == 0) {
+                g_pt_fail++;
+                printf("PRED_TARGET case %ld: group %d (arm call %d, tau %.3f, node %d) flagged at call %d by condition %d, and arm_unverified + late_unverified is 0\n",
+                       g_case, g_pt_grp, g_gr[g_pt_grp].arm_ci, g_gr[g_pt_grp].tau / 1e6, g_gr[g_pt_grp].node, g_pt_ci, g_pt_r == 7 ? 1 : 4);
+            }
+        }
+        g_pt_r = 0;
         for (s = 0; s < g_ngr; s++) if (g_gr[s].fallback) fb = 1;
         if (fb) fellback++;
         if (g_h9) { h9++; continue; }
@@ -3600,12 +3661,14 @@ int main(int argc, char** argv) {
     g_fn_on > 0 ? printf("  feed_n differences by mode (rows/derived): at once/at once %ld, at once/final %ld, final/at once %ld, final/final %ld (history_skipped and time_clamped not compared: diagnostics a run again changes; SIG_ORACLE_FEEDN_ALL=1 compares them)\n",
                          g_fn_cls[0][0], g_fn_cls[0][1], g_fn_cls[1][0], g_fn_cls[1][1]) : 0,
     g_fn_on > 0 ? printf("  feed_n: cases where a batch did not fit (late_full, declared; not compared on): %ld. Not compared unless SIG_ORACLE_FEEDN_ALL=1: rows, rows and arm_rows_stale with at-once rows; derived events and arm_derived_stale with at-once derived events (a callback or queue between the events of a batch, which a batch does not have)\n", g_fn_nofit) : 0;
+    if (getenv("SIG_ORACLE_PRED_TARGET")) printf("  pred_target (SIG_ORACLE_PRED_TARGET): cases with a made group flagged by condition 1 or 4: %ld; with no arm_unverified or late_unverified: %ld\n", g_pt_cases, g_pt_fail);
     printf("cases %ld, wrong %ld, with a fallback %ld; not compared: B cannot run R %ld, an ahead arm with no room %ld, a disarm in a group B sees ahead %ld; spec mode %d\n",
            cases, wrong, fellback, cannot, noroom, disarm_ahead, SIG_ARM_REF_SPEC);
     if (h9) printf("  set aside as H9-shaped (SIG_ORACLE_H9): %ld\n", h9);
     if (g_late >= 4) printf("  disarm_at exits (X1): the player's exit shape in %ld cases; the exception taken in %ld cases (%ld of them wrong, %ld wrong with no count); B let a group in at a disarm_at in %ld cases\n", lt_dxs, lt_dxe, lt_dxw, lt_dxu, lt_dxl);
     if (getenv("SIG_ORACLE_R9PEND_CASE")) printf("  (rev2, debug) reason-9 tests put off on an open gap: %ld\n", g_r9_pend);
     if (g_late) printf("  (rev2b) void checks put off while an open gap holds a late state call (SIG_ORACLE_GAPLATE_NOW=1 off): %ld\n", g_gaplate_defer);
+    printf("  (rev2d) final-only row or event failures read at a later late call or past arm (SIG_ORACLE_ROWAT_OLD=1 off): %ld\n", g_out_moved);
     printf("  (rev2) B: waiting groups an arm let in at its own time (S3, inclusive by call order; SIG_ORACLE_BARMSTRICT=1 off): %ld\n", g_barm_incl);
     if (g_late >= 4) printf("  (rev2) inputs before a past group read as no pin by the clamped key (ruling 8; SIG_ORACLE_PINRAW=1 off): %ld\n", g_pin_clamped);
     if (g_late) printf("  late voids checked by the pre-ruling text (a header without late_hits_voided): %ld\n", g_lv_old);
