@@ -8012,6 +8012,38 @@ static void test_late(void) {
     }
 }
 
+/* An arm at INT64_MIN (the reviewer's read of 501fea5): a past group's
+ * "N(G) earlier than tau" was tau - 1, a signed overflow there (the
+ * sanitizers' UBSan run reports it). Now a flag. The arm keys at the last
+ * barrier (ruling 2 extended), so the control is the same arm at the
+ * barrier's time (0): the same hits and counts. Both with the input at
+ * tau (exact by 2) and without (G waits at its place) */
+static void test_arm_int64_min(void) {
+    int v, w;
+    g_where = "an arm at INT64_MIN";
+    for (w = 0; w < 2; w++) {
+        ysig_stats s[2];
+        int64_t h[2] = { -1, -1 };
+        int nh[2] = { 0, 0 };
+        for (v = 0; v < 2; v++) {
+            lt_det_open(0, 4);
+            if (w) rp_feed(0, 9, YIN_AXIS_POSITION, 1);
+            rp_feed(2 * MS, 9, YIN_AXIS_POSITION, 1);
+            rp_frame(4 * MS);
+            CHECK(ysig_set(&g_rp, 1, YSIG_DETECT_LEVEL, 5));
+            CHECK(ysig_arm(&g_rp, 1, v ? INT64_MIN : 0));
+            rp_feed(6 * MS, 9, YIN_AXIS_POSITION, 1);
+            rp_frame(8 * MS);
+            nh[v] = lt_hits();
+            h[v] = nh[v] ? g_lt_hit[0] : -1;
+            ysig_get_stats(&g_rp, &s[v]);
+        }
+        CHECK(nh[0] == nh[1] && h[0] == h[1] && nh[0] == !w && s[0].arm_caught_up == 1);
+        CHECK(s[0].arm_unverified == s[1].arm_unverified && s[0].arm_caught_up == s[1].arm_caught_up && s[0].hits == s[1].hits &&
+              s[0].arm_past_far == s[1].arm_past_far && s[0].late_unverified == s[1].late_unverified);
+    }
+}
+
 /* v0.7.0: ysig_detected_to(), ysig_derived_to() (docs/sig.md, "Holding
  * hits and derived events"): one case per sentence, each with a control */
 static int hd_to(int64_t t, int cap) {
@@ -8255,6 +8287,7 @@ int main(void) {
     test_v2_gap_late();
     test_v2_op_order();
     test_v2_time_ends();
+    test_arm_int64_min();
     test_late_no_window();
     test_v2_l_at_tau();
     test_v2_n_tau_nowin();

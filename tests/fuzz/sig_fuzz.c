@@ -335,7 +335,10 @@ static void run_one(const uint8_t* data, size_t size) {
             else if (b % 5 == 1) {
                 /* most arms on a detect: arms in the past run the window */
                 if (!(b & 0x40)) node = pick_detect(&g, rb(&r), node);
-                g_sink += ysig_arm(&g, node, t - (int64_t)(b % 7) * 1000000);
+                /* one in about 24 at the int64 floor: a past group's "N(G)
+                 * earlier than tau" was tau - 1 (the reviewer's read of
+                 * 501fea5) */
+                g_sink += ysig_arm(&g, node, (b & 0x90) == 0x90 && b % 3 == 0 ? INT64_MIN + (int64_t)(b % 2) : t - (int64_t)(b % 7) * 1000000);
                 /* v0.6.0: a settle at a time input is fed up to */
                 if (b & 0x20) g_sink += ysig_settle(&g, t - (int64_t)(b % 3) * 500000);
             }
