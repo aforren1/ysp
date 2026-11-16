@@ -8804,6 +8804,98 @@ static void test_v2_closure_key_arm(void) {
     }
 }
 
+/* H1 (the final review, 2026-11-16; the reviewer's bar.c): a raw mouse's
+ * count stamped before the last barrier goes into its integrator, with no
+ * run again, and counts late_barrier; any other input before the barrier
+ * is dropped (the control: a pen's first report, taken without the
+ * barrier). With a window the count is in the checkpoint images too: a
+ * late count after the barrier runs the window again from the barrier's
+ * image and keeps it. An integrator reset or recentered after the count's
+ * stamp does not take it; ysig_reset_trial() keeps an adapter's (D19), so
+ * the adapter's integrator does. */
+static void bc_mouse(int64_t t, float dx) {
+    yin_event e = delta(t, 1, dx, 0);
+    e.stamp = YIN_TIER_2;
+    ysig_feed(&g_rp, &e);
+}
+static void test_v2_bar_counts(void) {
+    int K, v;
+    ysig_stats st;
+    g_where = "a raw mouse's count before the last barrier";
+    for (K = 0; K <= 4; K += 4)
+        for (v = 0; v < 2; v++) {
+            ysig_node n[3];
+            n[0] = src_node(YIN_KIND_MOUSE, YIN_AXIS_DELTA, 1, 2);
+            n[1] = ysig_node_of(YSIG_OP_INTEGRATE, 0, -1);
+            n[1].p[YSIG_INTEGRATE_GAIN_X] = n[1].p[YSIG_INTEGRATE_GAIN_Y] = 1;
+            n[1].history = 64;
+            n[2] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 2, 2);
+            if (!rp_open(n, 3, K, 0, false, false)) return;
+            bc_mouse(10 * MS, 1);
+            if (v) ysig_flush(&g_rp);
+            bc_mouse(5 * MS, 1);
+            rp_feed2(6 * MS, 7, 7, 2);
+            bc_mouse(12 * MS, 1);
+            ysig_get_stats(&g_rp, &st);
+            CHECK(ysig_value_of(&g_rp, 1)->v[0] == 3);
+            CHECK(ysig_value_of(&g_rp, 2)->v[0] == (v ? 0 : 7));
+            CHECK(st.late_barrier == (v ? 2 : 0) && st.dropped_order == 0);
+            if (!K) continue;
+            /* a late count after the barrier: the window runs again from
+             * an image taken at the barrier or after it */
+            rp_frame(14 * MS);
+            bc_mouse(20 * MS, 1);
+            bc_mouse(15 * MS, 1);
+            CHECK(ysig_value_of(&g_rp, 1)->v[0] == 5);
+            /* a batch: its run again is deferred to the batch's end, from
+             * an image the count before the barrier went into */
+            {
+                yin_event b[3];
+                b[0] = delta(30 * MS, 1, 1, 0);
+                b[1] = delta(25 * MS, 1, 1, 0);
+                b[2] = delta(3 * MS, 1, 1, 0);
+                b[0].stamp = b[1].stamp = b[2].stamp = YIN_TIER_2;
+                ysig_feed_n(&g_rp, b, 3);
+                ysig_get_stats(&g_rp, &st);
+                CHECK(ysig_value_of(&g_rp, 1)->v[0] == 8 && st.late_barrier == (v ? 3 : 0));
+            }
+        }
+    for (v = 0; v < 3; v++) {
+        ysig_role role;
+        ysig_adapter ad;
+        ysig_node ad_n[2], e_n[1];
+        ysig_desc d;
+        int in;
+        memset(&role, 0, sizeof role);
+        role.name = "hand"; role.type = YSIG_TYPE_POSITION2D_RELATIVE; role.units = YSIG_UNITS_DISPLAY_PX;
+        ad_n[0] = src_node(YIN_KIND_MOUSE, YIN_AXIS_DELTA, 0, 2);
+        ad_n[1] = ysig_node_of(YSIG_OP_INTEGRATE, 0, -1);
+        ad_n[1].p[0] = ad_n[1].p[1] = 1;
+        memset(&ad, 0, sizeof ad);
+        ad.role = "hand"; ad.name = "mouse"; ad.type = YSIG_TYPE_POSITION2D_RELATIVE; ad.units = YSIG_UNITS_DISPLAY_PX;
+        ad.nodes = ad_n; ad.n_nodes = 2;
+        e_n[0] = ysig_node_of(YSIG_OP_ROLE, -1, -1);
+        d = desc_of(e_n, 1);
+        d.roles = &role; d.n_roles = 1; d.adapters = &ad; d.n_adapters = 1;
+        d.arena = g_rp_ar; d.catchup_frames = 4;
+        d.arena_size = ysig_arena_size(&d);
+        if (!d.arena_size || d.arena_size > sizeof g_rp_ar || !ysig_open(&g_rp, &d)) { g_failures++; return; }
+        in = ysig_adapter_node(&g_rp, 0, 1);
+        ysig_reset(&g_rp, 0);
+        bc_mouse(10 * MS, 1);
+        /* 0: the trial's barrier keeps the adapter's sum; 1: a full reset
+         * starts it at 20; 2: a recenter at 22 places it */
+        if (v == 1) ysig_reset(&g_rp, 20 * MS);
+        else ysig_reset_trial(&g_rp, 20 * MS);
+        if (v == 2) CHECK(ysig_recenter(&g_rp, 0, 0, 0, 22 * MS));
+        bc_mouse(15 * MS, 1);
+        bc_mouse(25 * MS, 1);
+        ysig_get_stats(&g_rp, &st);
+        CHECK(st.late_barrier == 1);
+        CHECK(ysig_value_of(&g_rp, in)->v[0] == (v == 0 ? 3 : 1));
+    }
+}
+
 int main(void) {
     test_conventions();
     test_param_names();
@@ -8900,6 +8992,7 @@ int main(void) {
     test_v2_h9_first();
     test_v2_inside_waiting();
     test_v2_closure_key_arm();
+    test_v2_bar_counts();
     if (g_failures) { fprintf(stderr, "sig_test: %d failures\n", g_failures); return 1; }
     printf("sig_test: all checks passed\n");
     return 0;

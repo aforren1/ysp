@@ -1264,7 +1264,8 @@ change that.
   with a later `t`, or after groups that X1 or R1 let in).
 
 **R as an order by key (replaces rules 2 and 4).** R holds the calls
-since the last barrier. Of two calls whose footprints meet, the one with
+since the last barrier (a raw mouse's count from before it is not in R;
+it goes into its integrators, "Per device"). Of two calls whose footprints meet, the one with
 the smaller key comes first. Calls whose footprints do not meet can be in
 either order: they commute, so R is defined up to that freedom. The
 order is acyclic: it is the order by key, restricted to pairs that meet.
@@ -1497,6 +1498,30 @@ than one of its own device already in R is a late input, placed by its
 stamp like any other. The first draft's "never late against its own
 device" holds for every source but a raw mouse.
 
+A raw mouse's count stamped before the last barrier (the coordinator's
+ruling H1, 2026-11-16, on the reviewer's `bar.c`) is not in R either, but
+it is not dropped: the header adds it to each counts integrator of each
+source that takes it, with no run again, and counts it in `late_barrier`.
+A sum does not depend on the order of its terms, so the integrator's sum
+is the sum of every count of the device. Every other input before the
+last barrier is dropped, as before. Exactly:
+
+- The count goes into the integrator's sum and position (with the
+  integrator's bounds, at the time it is added), not into its ring, and no
+  node after the integrator runs: they take the new sum at the device's
+  next count. No hit, row or derived event comes from it.
+- With a window, the count goes into every checkpoint image too (each is
+  after the last barrier), so a run again from any image keeps it. A batch
+  (`ysig_feed_n()`) does the same; such a count writes no log, so the
+  batch's fit bound holds unchanged.
+- An integrator reset or recentered after the count's stamp does not take
+  it: the count is before that sum's origin. `ysig_reset_trial()` keeps an
+  adapter's integrator (D19), so the adapter's integrator takes a count
+  from before the trial's barrier; `ysig_reset()` does not.
+- `stats.fed` does not count it (it is not one of R's calls).
+
+`sig_test` `test_v2_bar_counts`.
+
 **The batch, `ysig_feed_n()` (L7).** `ysig_feed_n(g, events, n)` is
 `ysig_feed()` of each event in array order, with the window run again
 once at the end, from the checkpoint at or before the earliest place the
@@ -1599,7 +1624,7 @@ second draft, since a state call can be late too):
 |---|---|---|---|
 | `late_far` | a late call's place is before the window's oldest checkpoint | makes it at the end of R, as 0.6.x does | stops |
 | `late_full` | the window's logs ran full, or the batch did not fit | the same | stops |
-| `late_barrier` | an input's time is before the last barrier's time | drops it: in R too it is not there, the trial it belongs to ended | does not stop |
+| `late_barrier` | an input's time is before the last barrier's time | drops it: in R too it is not there, the trial it belongs to ended. A raw mouse's count is the exception (H1): it goes into each counts integrator of its source, with no run again (below, "Per device") | does not stop |
 | `late_off` | no window (a zeroed desc) | makes it at the end of R; an oracle's graph counts this, not compared | n/a |
 | `late_frames` | a frame already made whose bound channels R now gives otherwise | nothing: the frame was drawn | does not stop |
 | `late_hits_voided` | a hit handed out that a late input's run again does not give (below) | nothing more: the caller had the hit | stops |
@@ -1772,7 +1797,9 @@ the gap's end.
   decides (L7).
 - A report with a stamp later than the poll by more than
   `YSIG_FUTURE_NS` stays a bad stamp (the frame's recovery, as now).
-- An input before the last barrier is dropped (`late_barrier`).
+- An input before the last barrier is dropped (`late_barrier`), but a
+  raw mouse's count goes into its integrators with no run again ("Per
+  device", H1).
 - A late call before the window falls back (`late_far`).
 - With no window nothing is placed (`late_off`), as with arms.
 - `history_skipped` and `time_clamped` stay diagnostics that a run again
@@ -1831,7 +1858,8 @@ questions).**
 2. A frame or a settle with a time before the last barrier goes right
    after the barrier; it is not dropped. The display already used the
    frame, and the reviewer's R does the same. `late_barrier`'s drop
-   applies to feeds only (ruling 8 extends this to every call's key).
+   applies to feeds only, and not to a raw mouse's count (H1, "Per
+   device") (ruling 8 extends this to every call's key).
    Such a frame or settle counts nothing of its
    own: it is a late call (every call since the barrier has a greater
    key), placed with a run again, and `late_frames` counts a frame it

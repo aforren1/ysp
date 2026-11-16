@@ -138,8 +138,13 @@
  *   it is 0; before its first sample a source has no value: tier UNKNOWN,
  *   nothing in its ring. Order is kept per source and device: a sample
  *   older than the last of its device is counted and dropped
- *   (ysig_stats.dropped_order); equal times pass; a raw mouse's counts
- *   are never dropped (a sum does not depend on order). A source keeps 8
+ *   (ysig_stats.dropped_order); equal times pass. A raw mouse's counts
+ *   are never dropped (a sum does not depend on order): a count older
+ *   than its device's last is a late input, placed by its stamp (LATE
+ *   INPUT); a count stamped before the last barrier goes into each counts
+ *   integrator of its source with no run again (ysig_stats.late_barrier),
+ *   except an integrator reset or recentered after its stamp. Any other
+ *   input before the last barrier is dropped (late_barrier). A source keeps 8
  *   devices; a ninth takes the slot of the least recently seen one
  *   (ysig_stats.order_evicted), whose next late sample then passes.
  *   Times saturate at the ends of int64.
@@ -442,6 +447,11 @@
  *          overflow at an arm at INT64_MIN).
  *          Condition 3's table of armed detects (w->lr) went: no reader,
  *          and an arm_unverified on its overflow at 32 armed detects.
+ *          The final review (2026-11-16): a raw mouse's count stamped
+ *          before the last barrier goes into its counts integrators
+ *          (live and in every checkpoint image) with no run again, and
+ *          counts late_barrier, unless the integrator was reset or
+ *          recentered after its stamp (H1; ysig__int_st.t_org).
  *   v0.6.1 - pending groups (docs/sig.md, "Pending groups"): a past group
  *          of an arm and disarms only, whose input time at its place is
  *          before its time and with no L in R yet, is made at its place
@@ -886,7 +896,9 @@ typedef struct ysig_stats {
                                  * checkpoint: made at the end of R       */
     int64_t  late_full;         /* the window's logs ran full: the same   */
     int64_t  late_barrier;      /* inputs before the last barrier's time:
-                                 * dropped (R drops them too)             */
+                                 * dropped (R drops them too), but a raw
+                                 * mouse's count goes into its counts
+                                 * integrators, with no run (H1)         */
     int64_t  late_off;          /* late calls with no window: made at the
                                  * end of R                               */
     int64_t  late_frames;       /* frames made before a late call whose
@@ -1218,6 +1230,9 @@ typedef struct ysig__int_st {
     int64_t t_prev;
     int     has, recentered;
     double  org[4];   /* the count grid's origin after ysig_recenter()    */
+    int64_t t_org;    /* the last reset or recenter: a count stamped before
+                       * it is before this sum's origin (ysig_feed(), a
+                       * count before the last barrier)                  */
 } ysig__int_st;
 typedef struct ysig__lp_st { double y1[4], y2[4]; int64_t t_prev; int init, reserved_; } ysig__lp_st;
 typedef struct ysig__det_st {
@@ -3137,6 +3152,21 @@ static double ysig__counts_axis(int64_t* n, double o, double gn, double lo, doub
 
 static double ysig__gain(const ysig__nd* n, int k) { return n->p[k] != 0 ? n->p[k] : 1.0; }
 
+/* A counts integrator takes one sample's counts v[] into its sum s and its
+ * position o */
+static void ysig__counts_add(const ysig__nd* n, ysig__int_st* s, ysig_value* o, const double* v) {
+    int k;
+    for (k = 0; k < n->lanes; k++) {
+        double c = v[k];
+        int64_t dc;
+        /* raw counts are whole; NaN or a count no mouse sends is no move */
+        if (!(c > -1e9 && c < 1e9)) c = 0;
+        dc = (int64_t)(c < 0 ? c - 0.5 : c + 0.5);
+        o->v[k] = ysig__counts_axis(&s->n[k], s->recentered ? s->org[k] : n->p[4 + k], ysig__gain(n, k), n->p[8 + k],
+                                    n->p[12 + k], dc);
+    }
+}
+
 static double ysig__bound(const ysig__nd* n, int k, double v) {
     double lo = n->p[8 + k], hi = n->p[12 + k];
     if (lo == 0 && hi == 0) return v;
@@ -3281,19 +3311,12 @@ static void ysig__run(ysig_graph* g, int i, int mode, int64_t t) {
             memset(s, 0, sizeof *s);
             for (k = 0; k < n->lanes; k++) { s->acc[k] = n->p[4 + k]; o->v[k] = n->p[4 + k]; }
             s->t_prev = t;
+            s->t_org = t;
             break;
         }
         if (n->flags & YSIG__F_COUNTS) {
             if (mode != 0) break;
-            for (k = 0; k < n->lanes; k++) {
-                double v = x->v[k];
-                int64_t dc;
-                /* raw counts are whole; NaN or a count no mouse sends is no move */
-                if (!(v > -1e9 && v < 1e9)) v = 0;
-                dc = (int64_t)(v < 0 ? v - 0.5 : v + 0.5);
-                o->v[k] = ysig__counts_axis(&s->n[k], s->recentered ? s->org[k] : n->p[4 + k], ysig__gain(n, k), n->p[8 + k],
-                                            n->p[12 + k], dc);
-            }
+            ysig__counts_add(n, s, o, x->v);
         } else {
             /* rate: the held input over the time since the last value; a
              * view runs only to the time input is known (t_known) */
@@ -3958,6 +3981,7 @@ static void ysig__do_recenter(ysig_graph* g, int role, double x, double y, int64
     s->recentered = 1;
     ysig__key_note(g, ysig__down(g, id), g->tk, 2);
     s->t_prev = t_ns;                /* a rate integrator: no jump by the time since its last sample */
+    s->t_org = t_ns;
     o->t = o->t_oldest = t_ns;
     n->pass = ++g->pass;
     ysig__hist_push(g, n, o);        /* a new entry: the history before t_ns stands */
@@ -4164,6 +4188,22 @@ static int ysig__source_takes(const ysig__nd* n, const yin_event* e) {
            (n->p[2] == 0 || e->device == (uint32_t)n->p[2]);
 }
 
+/* A source's lanes from an event: p3's mask of x, y, value, aux, else
+ * value (1 lane) or the first L of them */
+static void ysig__src_vals(const ysig__nd* n, const yin_event* e, double* v) {
+    unsigned m = (unsigned)n->p[3];
+    int k, L = n->lanes, at = 0;
+    float f[4];
+    f[0] = e->x; f[1] = e->y; f[2] = e->value; f[3] = e->aux;
+    if (!m) {
+        if (L == 1) v[0] = (double)e->value;
+        else for (k = 0; k < L; k++) v[k] = (double)f[k];
+    } else {
+        for (k = 0; k < 4; k++)
+            if (m & (1u << k)) v[at++] = (double)f[k];
+    }
+}
+
 static int ysig__do_feed(ysig_graph* g, const yin_event* e) {
     int i, k, taken = 0, journaled = 0;
     g->st.fed++;
@@ -4172,9 +4212,7 @@ static int ysig__do_feed(ysig_graph* g, const yin_event* e) {
         ysig__nd* n = &g->nd[id];
         ysig__src_st* s = (ysig__src_st*)n->st;
         ysig_value* o = &g->val[id];
-        unsigned m = (unsigned)n->p[3];
-        int L = n->lanes, at = 0;
-        float f[4];
+        int L = n->lanes;
         if (!ysig__source_takes(n, e)) continue;
         /* the newest time a source saw bounds the poll from below
          * (ysig_frame()); only those events are journaled */
@@ -4211,14 +4249,7 @@ static int ysig__do_feed(ysig_graph* g, const yin_event* e) {
             s->used[d] = ++s->clock;
             if (e->t > s->last_t[d]) s->last_t[d] = e->t;
         }
-        f[0] = e->x; f[1] = e->y; f[2] = e->value; f[3] = e->aux;
-        if (!m) {
-            if (L == 1) o->v[0] = (double)e->value;
-            else for (k = 0; k < L; k++) o->v[k] = (double)f[k];
-        } else {
-            for (k = 0; k < 4; k++)
-                if (m & (1u << k)) o->v[at++] = (double)f[k];
-        }
+        ysig__src_vals(n, e, o->v);
         o->t = o->t_oldest = e->t;
         o->device = e->device;
         o->tier = e->stamp ? e->stamp : (uint8_t)n->p[4];
@@ -4238,6 +4269,52 @@ static int ysig__do_feed(ysig_graph* g, const yin_event* e) {
 static int ysig__log(ysig_graph* g, const ysig_entry* e);
 static int ysig__late_fix(ysig_graph* g, uint64_t a);
 static void ysig__late_nolog(ysig_graph* g);
+static size_t ysig__st_bytes(const ysig__nd* n);
+
+/* v0.7.0 (H1): a raw mouse's count before the last barrier. The sum does
+ * not depend on the order of its terms, so the count goes into each counts
+ * integrator of a source that takes it, with no run: the live state and
+ * every checkpoint image, so a run again from any of them keeps it. An
+ * integrator reset or recentered after the count's stamp does not take
+ * it: the count is before that sum's origin. */
+static void ysig__bar_count_one(ysig__nd* n, ysig__int_st* s, ysig_value* o, const double* v, int64_t t) {
+    if (t < s->t_org) return;
+    ysig__counts_add(n, s, o, v);
+}
+static void ysig__bar_counts(ysig_graph* g, const yin_event* e) {
+    int i, j;
+    for (i = 0; i < g->n_src; i++) {
+        int id = g->src_ids[i];
+        ysig__nd* sn = &g->nd[id];
+        double v[4] = { 0, 0, 0, 0 };
+        if ((int)sn->p[0] != YIN_KIND_MOUSE || (uint32_t)sn->p[1] != YIN_AXIS_DELTA || !ysig__source_takes(sn, e)) continue;
+        ysig__src_vals(sn, e, v);
+        for (j = 0; j < g->n; j++) {
+            ysig__nd* n = &g->nd[j];
+            int c;
+            if (n->op != YSIG_OP_INTEGRATE || !(n->flags & YSIG__F_COUNTS) || n->in[0] != id) continue;
+            ysig__bar_count_one(n, (ysig__int_st*)n->st, &g->val[j], v, e->t);
+            if (!g->cu) continue;
+            for (c = 0; c < g->cu->n_ck; c++) {
+                /* an image: g, nd[], val[], each node's state in id order
+                 * (ysig__ck_save()); copied, as its offsets need not be
+                 * aligned for the state's types */
+                char* p = g->cu->ck[(g->cu->ck0 + c) % g->cu->K].img;
+                char* pv = p + sizeof *g + sizeof(ysig__nd) * (size_t)g->n + sizeof(ysig_value) * (size_t)j;
+                char* ps = p + sizeof *g + (sizeof(ysig__nd) + sizeof(ysig_value)) * (size_t)g->n;
+                ysig__int_st is;
+                ysig_value iv;
+                int q;
+                for (q = 0; q < j; q++) ps += ysig__st_bytes(&g->nd[q]);
+                memcpy(&is, ps, sizeof is);
+                memcpy(&iv, pv, sizeof iv);
+                ysig__bar_count_one(n, &is, &iv, v, e->t);
+                memcpy(ps, &is, sizeof is);
+                memcpy(pv, &iv, sizeof iv);
+            }
+        }
+    }
+}
 
 YSIG_API int ysig_feed(ysig_graph* g, const yin_event* e) {
     ysig_entry j;
@@ -4256,14 +4333,17 @@ YSIG_API int ysig_feed(ysig_graph* g, const yin_event* e) {
         if (!ysig__feed_fp(g, e, f, &mask, &all)) takers = 0;
     }
     if (takers && e->t < g->bar_t) {
-        /* v0.7.0: before the last barrier: R does not have it either */
+        /* v0.7.0: before the last barrier: R does not have it either
+         * (a raw mouse's count goes into its integrators all the same) */
         if (g->journal) {
             memset(&j, 0, sizeof j);
             j.kind = YSIG_J_FEED;
             j.event = *e;
             ysig__journal(g, &j);
         }
-        /* not in R: not one of R's calls fed (fed counts R's) */
+        /* not in R: not one of R's calls fed (fed counts R's); a raw
+         * mouse's count is kept all the same (H1) */
+        ysig__bar_counts(g, e);
         g->st.late_barrier++;
         return 0;
     }
