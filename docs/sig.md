@@ -408,7 +408,8 @@ definition. A zero field means the row's `def`.
 - Order is kept per source and device: a sample older than the last of
   its device is dropped and counted (`dropped_order`), so two mice on one
   any-device source do not drop each other. Equal times pass. A raw
-  mouse's counts are never dropped: a sum does not depend on order. A
+  mouse's counts are never dropped: they are placed by their stamps
+  ("Per device (T6)" under the late input rules). A
   source keeps the last time of 8 devices; a ninth takes the slot of the
   least recently seen one (`order_evicted`), and that device's next late
   sample passes. Give a source a device (`YSIG_SOURCE_DEVICE`) when more than 8 share
@@ -1505,34 +1506,55 @@ again writes them again, as in 0.6.x).
 dropped and counted (`dropped_order`), as now: per device, time order is
 the device's own, and a report that goes back is a device or driver
 fault. The one exception is a raw mouse's counts, which are never
-dropped (a sum does not depend on order): a count with an earlier stamp
-than one of its own device already in R is a late input, placed by its
-stamp like any other. The first draft's "never late against its own
+dropped: a count with an earlier stamp than one of its own device
+already in R is a late input, placed by its stamp like any other. The first draft's "never late against its own
 device" holds for every source but a raw mouse.
 
 A raw mouse's count stamped before the last barrier (the coordinator's
 ruling H1, 2026-11-16, on the reviewer's `bar.c`) is not in R either, but
-it is not dropped: the header adds it to each counts integrator of each
-source that takes it, with no run again, and counts it in `late_barrier`.
-A sum does not depend on the order of its terms, so the integrator's sum
-is the sum of every count of the device. Every other input before the
-last barrier is dropped, as before. Exactly:
+it is not dropped: the header adds it to each counts integrator (an
+integrate node with a raw mouse source as its input 0) of each source
+that takes it, with no run again, and counts it in `late_barrier`. With
+no integrator bounds, a sum does not depend on the order of its terms,
+so the integrator's sum is the sum of every count of the device. With
+bounds, the clamped sum depends on the order: the header clamps such a
+count at the time it adds it, against the sum at that time, not at the
+place its stamp gives it in R. Every other input before the last barrier
+is dropped, as before. Exactly:
 
-- The count goes into the integrator's sum and position (with the
-  integrator's bounds, at the time it is added), not into its ring, and no
+- The count goes into the integrator's sum and position (clamped to the
+  integrator's bounds at the time it is added), not into its ring, and no
   node after the integrator runs: they take the new sum at the device's
   next count. No hit, row or derived event comes from it.
 - With a window, the count goes into every checkpoint image too (each is
   after the last barrier), so a run again from any image keeps it. A batch
   (`ysig_feed_n()`) does the same; such a count writes no log, so the
   batch's fit bound holds unchanged.
-- An integrator reset or recentered after the count's stamp does not take
-  it: the count is before that sum's origin. `ysig_reset_trial()` keeps an
-  adapter's integrator (D19), so the adapter's integrator takes a count
-  from before the trial's barrier; `ysig_reset()` does not.
+- A counts integrator whose reset or recenter has a key in R later than
+  the count's stamp does not take it: the count is before that sum's
+  origin. A reset's key is its time. A recenter's key is
+  max(N(F(c)), the last barrier's time) (ruling 2 extended), or its
+  group's tau raised to the last barrier, not the time the caller
+  passes. Every recenter after the last barrier has a key later than
+  the count's stamp, so the integrator does not take the count, whether
+  or not a barrier falls between the recenter and the count. A recenter
+  in a past group gets its new key when the window runs again. `ysig_reset_trial()` keeps an adapter's integrator (D19),
+  so the adapter's integrator takes a count from before the trial's
+  barrier; `ysig_reset()` does not.
 - `stats.fed` does not count it (it is not one of R's calls).
 
-`sig_test` `test_v2_bar_counts`.
+Before the third review of bdb8ff1 (2026-11-16) a recenter's origin was
+the time the caller passed. The reviewer's `rc.c`: counts at 10 and
+20 ms, `ysig_recenter()` passed 12 ms (key 20 ms), a late count at
+15 ms, a count at 45 ms. With no barrier R puts the late count before
+the recenter, which erases it: x = 1. With a flush or
+`ysig_reset_trial(30 ms)` after the recenter the header kept it: x = 2.
+Now x = 1 every way. The reviewer's `rc2.c`: a run again from an image
+that took a count before the barrier, then replayed a recenter, erased
+the count that the live state had kept (x = 2 where the live rule gave
+3); now the run again equals the same calls in time order.
+
+`sig_test` `test_v2_bar_counts`, `test_v2_recenter_key`.
 
 **The batch, `ysig_feed_n()` (L7).** `ysig_feed_n(g, events, n)` is
 `ysig_feed()` of each event in array order, with the window run again

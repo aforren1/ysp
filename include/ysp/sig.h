@@ -139,13 +139,18 @@
  *   nothing in its ring. Order is kept per source and device: a sample
  *   older than the last of its device is counted and dropped
  *   (ysig_stats.dropped_order); equal times pass. A raw mouse's counts
- *   are never dropped (a sum does not depend on order): a count older
- *   than its device's last is a late input, placed by its stamp (LATE
- *   INPUT); a count stamped before the last barrier goes into each counts
- *   integrator of its source with no run again (ysig_stats.late_barrier),
- *   except an integrator reset or recentered after its stamp. Any other
- *   input before the last barrier is dropped (late_barrier). A source keeps 8
- *   devices; a ninth takes the slot of the least recently seen one
+ *   are never dropped (with no integrator bounds a sum does not depend on
+ *   the order of its terms): a count older than its device's last is a
+ *   late input, placed by its stamp (LATE INPUT); a count stamped before
+ *   the last barrier goes into each counts integrator (a raw mouse source
+ *   as its input 0) with no run again (ysig_stats.late_barrier). A counts
+ *   integrator whose reset or recenter has a key in R later than the
+ *   count's stamp does not take it; every recenter after the last barrier
+ *   has such a key (it keys at or after the barrier). With bounds, the
+ *   clamped sum depends on order: such a count is clamped at the time it
+ *   is added, not at its stamp's place. Any other input before the last
+ *   barrier is dropped (late_barrier). A source keeps 8 devices; a ninth
+ *   takes the slot of the least recently seen one
  *   (ysig_stats.order_evicted), whose next late sample then passes.
  *   Times saturate at the ends of int64.
  *   ysig_frame() runs, in node order: the generators (sines, noise,
@@ -4277,7 +4282,7 @@ static int ysig__do_feed(ysig_graph* g, const yin_event* e) {
         }
         /* within one device of a source times rise (ysp/input.h); an older
          * sample is counted and dropped. Raw mouse counts are never
-         * dropped: a sum does not depend on the order of its terms. */
+         * dropped: they are placed by stamp like any late input. */
         {
             int d, counts = (int)n->p[0] == YIN_KIND_MOUSE && (uint32_t)n->p[1] == YIN_AXIS_DELTA;
             for (d = 0; d < s->n && s->dev[d] != e->device; d++) { }
@@ -4320,12 +4325,14 @@ static int ysig__late_fix(ysig_graph* g, uint64_t a);
 static void ysig__late_nolog(ysig_graph* g);
 static size_t ysig__st_bytes(const ysig__nd* n);
 
-/* v0.7.0 (H1): a raw mouse's count before the last barrier. The sum does
- * not depend on the order of its terms, so the count goes into each counts
- * integrator of a source that takes it, with no run: the live state and
- * every checkpoint image, so a run again from any of them keeps it. An
- * integrator reset or recentered after the count's stamp does not take
- * it: the count is before that sum's origin. */
+/* v0.7.0 (H1): a raw mouse's count before the last barrier. With no
+ * bounds the sum does not depend on the order of its terms, so the count
+ * goes into each counts integrator of a source that takes it, with no
+ * run: the live state and every checkpoint image, so a run again from any
+ * of them keeps it. With bounds it is clamped now, not at its stamp's
+ * place. An integrator whose reset or recenter has a key in R later than
+ * the count's stamp does not take it: the count is before that sum's
+ * origin. */
 static void ysig__bar_count_one(ysig__nd* n, ysig__int_st* s, ysig_value* o, const double* v, int64_t t) {
     if (t < s->t_org) return;
     ysig__counts_add(n, s, o, v);
