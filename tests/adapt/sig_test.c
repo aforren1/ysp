@@ -8818,6 +8818,31 @@ static void bc_mouse(int64_t t, float dx) {
     e.stamp = YIN_TIER_2;
     ysig_feed(&g_rp, &e);
 }
+/* A relative role "hand" whose adapter integrates a raw mouse's counts;
+ * returns the adapter's integrator, or -1 (counted as a failure) */
+static int bc_open_rel(int K) {
+    static ysig_role role;
+    static ysig_adapter ad;
+    static ysig_node ad_n[2], e_n[1];
+    ysig_desc d;
+    memset(&role, 0, sizeof role);
+    role.name = "hand"; role.type = YSIG_TYPE_POSITION2D_RELATIVE; role.units = YSIG_UNITS_DISPLAY_PX;
+    ad_n[0] = src_node(YIN_KIND_MOUSE, YIN_AXIS_DELTA, 0, 2);
+    ad_n[1] = ysig_node_of(YSIG_OP_INTEGRATE, 0, -1);
+    ad_n[1].p[0] = ad_n[1].p[1] = 1;
+    ad_n[1].history = 64;
+    memset(&ad, 0, sizeof ad);
+    ad.role = "hand"; ad.name = "mouse"; ad.type = YSIG_TYPE_POSITION2D_RELATIVE; ad.units = YSIG_UNITS_DISPLAY_PX;
+    ad.nodes = ad_n; ad.n_nodes = 2;
+    e_n[0] = ysig_node_of(YSIG_OP_ROLE, -1, -1);
+    d = desc_of(e_n, 1);
+    d.roles = &role; d.n_roles = 1; d.adapters = &ad; d.n_adapters = 1;
+    d.arena = g_rp_ar; d.catchup_frames = K;
+    d.arena_size = ysig_arena_size(&d);
+    if (!d.arena_size || d.arena_size > sizeof g_rp_ar || !ysig_open(&g_rp, &d)) { g_failures++; return -1; }
+    ysig_reset(&g_rp, 0);
+    return ysig_adapter_node(&g_rp, 0, 1);
+}
 static void test_v2_bar_counts(void) {
     int K, v;
     ysig_stats st;
@@ -8861,27 +8886,8 @@ static void test_v2_bar_counts(void) {
             }
         }
     for (v = 0; v < 3; v++) {
-        ysig_role role;
-        ysig_adapter ad;
-        ysig_node ad_n[2], e_n[1];
-        ysig_desc d;
-        int in;
-        memset(&role, 0, sizeof role);
-        role.name = "hand"; role.type = YSIG_TYPE_POSITION2D_RELATIVE; role.units = YSIG_UNITS_DISPLAY_PX;
-        ad_n[0] = src_node(YIN_KIND_MOUSE, YIN_AXIS_DELTA, 0, 2);
-        ad_n[1] = ysig_node_of(YSIG_OP_INTEGRATE, 0, -1);
-        ad_n[1].p[0] = ad_n[1].p[1] = 1;
-        memset(&ad, 0, sizeof ad);
-        ad.role = "hand"; ad.name = "mouse"; ad.type = YSIG_TYPE_POSITION2D_RELATIVE; ad.units = YSIG_UNITS_DISPLAY_PX;
-        ad.nodes = ad_n; ad.n_nodes = 2;
-        e_n[0] = ysig_node_of(YSIG_OP_ROLE, -1, -1);
-        d = desc_of(e_n, 1);
-        d.roles = &role; d.n_roles = 1; d.adapters = &ad; d.n_adapters = 1;
-        d.arena = g_rp_ar; d.catchup_frames = 4;
-        d.arena_size = ysig_arena_size(&d);
-        if (!d.arena_size || d.arena_size > sizeof g_rp_ar || !ysig_open(&g_rp, &d)) { g_failures++; return; }
-        in = ysig_adapter_node(&g_rp, 0, 1);
-        ysig_reset(&g_rp, 0);
+        int in = bc_open_rel(4);
+        if (in < 0) return;
         bc_mouse(10 * MS, 1);
         /* 0: the trial's barrier keeps the adapter's sum; 1: a full reset
          * starts it at 20; 2: a recenter at 22 places it */
@@ -8893,6 +8899,75 @@ static void test_v2_bar_counts(void) {
         ysig_get_stats(&g_rp, &st);
         CHECK(st.late_barrier == 1);
         CHECK(ysig_value_of(&g_rp, in)->v[0] == (v == 0 ? 3 : 1));
+    }
+}
+
+
+/* H1's origin by key (the third review of bdb8ff1; the reviewer's rc.c
+ * and rc2.c): a recenter's origin is its key in R, max(N(F), the last
+ * barrier), not the time the caller passed. rc.c: counts at 10 and 20, a
+ * recenter passed 12 (key 20), a late count at 15. R puts it before the
+ * recenter, which erases it, with a barrier after the recenter or with
+ * none (the window's run again); before, a barrier between made the
+ * header keep it. The control: a late count at 22, after the key, is kept
+ * every way. rc2.c: a count at 10, a flush (barrier 10, an image), a
+ * recenter passed 5 (key 10), a count at 7 before the barrier, 30, a
+ * frame, then a late count at 25: the run again from the flush's image
+ * (which took the count at 7) equals the same calls in time order, where
+ * the count at 7 is before the recenter's origin. The same with the
+ * recenter before the barrier (rk_calls()). */
+/* rc2.c's calls (v 0), and a recenter before the barrier with a count
+ * before its key (v 1, the frame at 5 keys it at 5) or after it (v 2);
+ * the count at 25 late (order 0) or in time order (order 1). Returns x. */
+static double rk_calls(int v, int order) {
+    int in = bc_open_rel(4);
+    if (in < 0) return -1;
+    if (v == 0) {
+        bc_mouse(10 * MS, 1);
+        ysig_flush(&g_rp);
+        CHECK(ysig_recenter(&g_rp, 0, 0, 0, 5 * MS));
+        bc_mouse(7 * MS, 1);
+    } else {
+        bc_mouse(2 * MS, 1);
+        rp_frame(5 * MS);
+        CHECK(ysig_recenter(&g_rp, 0, 0, 0, 1 * MS));
+        bc_mouse(8 * MS, 1);
+        ysig_flush(&g_rp);
+        bc_mouse((v == 1 ? 4 : 6) * MS, 1);
+    }
+    if (order) bc_mouse(25 * MS, 1);
+    bc_mouse(30 * MS, 1);
+    rp_frame(32 * MS);
+    if (!order) bc_mouse(25 * MS, 1);
+    return ysig_value_of(&g_rp, in)->v[0];
+}
+static void test_v2_recenter_key(void) {
+    int K, v, late;
+    ysig_stats st;
+    g_where = "a recenter's origin is its key in R";
+    for (K = 0; K <= 4; K += 4)
+        for (late = 15; late <= 22; late += 7)
+            for (v = 0; v < 4; v++) {
+                int in;
+                if (!K && !v) continue;   /* no window, no barrier: made at the end of R (late_off) */
+                in = bc_open_rel(K);
+                if (in < 0) return;
+                bc_mouse(10 * MS, 1);
+                bc_mouse(20 * MS, 1);
+                if (v == 3) ysig_flush(&g_rp);
+                CHECK(ysig_recenter(&g_rp, 0, 0, 0, 12 * MS));
+                if (v == 1) ysig_flush(&g_rp);
+                if (v == 2) ysig_reset_trial(&g_rp, 30 * MS);
+                bc_mouse(late * MS, 1);
+                bc_mouse(45 * MS, 1);
+                ysig_get_stats(&g_rp, &st);
+                CHECK(ysig_value_of(&g_rp, in)->v[0] == (late == 15 ? 1 : 2));
+                CHECK(st.late_barrier == (v == 0 || (v != 2 && late == 22) ? 0 : 1));
+            }
+    for (v = 0; v < 3; v++) {
+        double x_late = rk_calls(v, 0), x_order = rk_calls(v, 1);
+        CHECK(x_late == x_order);
+        CHECK(x_late == (v == 2 ? 4 : v == 1 ? 3 : 2));
     }
 }
 
@@ -8993,6 +9068,7 @@ int main(void) {
     test_v2_inside_waiting();
     test_v2_closure_key_arm();
     test_v2_bar_counts();
+    test_v2_recenter_key();
     if (g_failures) { fprintf(stderr, "sig_test: %d failures\n", g_failures); return 1; }
     printf("sig_test: all checks passed\n");
     return 0;

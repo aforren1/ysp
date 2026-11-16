@@ -452,6 +452,11 @@
  *          (live and in every checkpoint image) with no run again, and
  *          counts late_barrier, unless the integrator was reset or
  *          recentered after its stamp (H1; ysig__int_st.t_org).
+ *          A recenter's origin (t_org) is its key in R, max(N(F), the
+ *          last barrier), not the time passed: a recenter after the last
+ *          barrier never takes a count from before it, with or without a
+ *          barrier between, and a run again gives the same as the calls
+ *          in time order (the third review of bdb8ff1: rc.c, rc2.c).
  *   v0.6.1 - pending groups (docs/sig.md, "Pending groups"): a past group
  *          of an arm and disarms only, whose input time at its place is
  *          before its time and with no L in R yet, is made at its place
@@ -1268,9 +1273,10 @@ typedef struct ysig__int_st {
     int64_t t_prev;
     int     has, recentered;
     double  org[4];   /* the count grid's origin after ysig_recenter()    */
-    int64_t t_org;    /* the last reset or recenter: a count stamped before
-                       * it is before this sum's origin (ysig_feed(), a
-                       * count before the last barrier)                  */
+    int64_t t_org;    /* the key in R of the last reset or recenter: a
+                       * count stamped before it is before this sum's
+                       * origin (ysig_feed(), a count before the last
+                       * barrier)                                         */
 } ysig__int_st;
 typedef struct ysig__lp_st { double y1[4], y2[4]; int64_t t_prev; int init, reserved_; } ysig__lp_st;
 typedef struct ysig__det_st {
@@ -4019,7 +4025,12 @@ static void ysig__do_recenter(ysig_graph* g, int role, double x, double y, int64
     s->recentered = 1;
     ysig__key_note(g, ysig__down(g, id), g->tk, 2);
     s->t_prev = t_ns;                /* a rate integrator: no jump by the time since its last sample */
-    s->t_org = t_ns;
+    /* the origin is the recenter's key in R, not the time passed: R puts a
+     * count before the recenter by key, and a recenter after the last
+     * barrier keys at or after it, so it never takes a count from before
+     * the barrier whether a barrier fell between or not (rc.c), and a run
+     * again gives it its key again (rc2.c) */
+    s->t_org = ysig__kt(g, g->tk);
     o->t = o->t_oldest = t_ns;
     n->pass = ++g->pass;
     ysig__hist_push(g, n, o);        /* a new entry: the history before t_ns stands */
