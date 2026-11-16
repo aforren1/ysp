@@ -430,7 +430,9 @@
  *          Condition 4 at a past group's place skips a disarm at the
  *          group's own time, as the text and ysig__c4() do. A cancel by
  *          key that takes an arm out of R tests condition 4 again for the
- *          group whose arm comes next (ysig__c4_next()).
+ *          group whose arm comes next (ysig__c4_next()). T1's closure
+ *          compares keys (the barrier clamp, then call order), not raw
+ *          times.
  *          "N(G) earlier than tau" is a flag, not tau - 1 (a signed
  *          overflow at an arm at INT64_MIN).
  *          Condition 3's table of armed detects (w->lr) went: no reader,
@@ -6021,12 +6023,17 @@ static int ysig__wait_closure(ysig_graph* g, uint64_t seq, int blk, int* nb) {
         int k, j, best = -1;
         for (k = 0; k < w->n && w->a[k].seq != seq; k++) { }
         if (k == w->n) return -1;   /* a group of its closure let it in */
+        int64_t kk = ysig__kt(g, w->a[k].t), kb = 0;
         ysig__wait_fp(g, &w->a[k], fk);
         for (j = 0; j < w->n; j++) {
-            if (j == k || w->a[j].t > w->a[k].t || (w->a[j].t == w->a[k].t && w->a[j].seq > w->a[k].seq)) continue;
+            /* by key, not raw time (ruling 2 extended): two groups before
+             * the last barrier key at its time and call order decides, as
+             * R orders them where their footprints meet */
+            int64_t kj = ysig__kt(g, w->a[j].t);
+            if (j == k || kj > kk || (kj == kk && w->a[j].seq > w->a[k].seq)) continue;
             ysig__wait_fp(g, &w->a[j], fa);
             if (!ysig__fp_meets(g, fa, fk)) continue;
-            if (best < 0 || w->a[j].t < w->a[best].t || (w->a[j].t == w->a[best].t && w->a[j].seq < w->a[best].seq)) best = j;
+            if (best < 0 || kj < kb || (kj == kb && w->a[j].seq < w->a[best].seq)) { best = j; kb = kj; }
         }
         if (best < 0) return k;
         if (blk) ysig__wait_blk(g, best, nb);

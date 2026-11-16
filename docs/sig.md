@@ -1256,6 +1256,12 @@ d1, both ahead; dev2@12 meets W8 only. 0.6.x let W8 in alone at dev2@12
 and W7 at dev1@13. Now dev2@12 lets in W8 and, before it, W7 (they meet,
 and W7's key is smaller). A report of dev1 at or before 10 that comes
 later is a late input: it goes before W7, and the window runs again.
+The key is the one of ruling 2 extended: two groups whose times are
+before the last barrier both key at the barrier's time, and call order
+decides between them. (Before V2SIG9 the header's closure compared raw
+times and could put the group made later first; W1 then found the other
+late and placed it by key, and counted it. `sig_test`
+`test_v2_closure_key`.)
 
 Rule 3's let-in time for a state call (S1', the coordinator's ruling of
 2026-11-15, from the reviewer; it replaces S1 of the same day): a state

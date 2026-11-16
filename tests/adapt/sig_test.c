@@ -8212,17 +8212,21 @@ static void test_hold(void) {
     }
 }
 
-/* H12 under ruling 2 extended (mutant 287): H = [arm h at 15] and G =
- * [set x, arm d at 12], H made first, both wait, both before the last
+/* T1's closure and H12 under ruling 2 extended: H = [arm h at 15] and
+ * G = [set x, arm d at 12], H made first, both wait, both before the last
  * barrier (a flush at 20), so both key at 20 and H's key is the smaller.
  * K = all(d, h): D(d) meets F(H). Device 7 at 25 meets x only: it lets G
- * in and not H. G's waiting closure goes by raw time (15 is after 12) and
- * skips H; G's arm lets H in right before itself (H12, an equal key made
- * before), so h's hit at 15 comes before d's at 12, as R has them by key.
- * Let in after the arm, H is made after a call with a greater key: with a
- * window it goes to its place (the same hits), with none it is late_off
- * and the hits come in the other order. The control: K = all(d, d), no
- * meet: H waits for its own device. */
+ * in and not H. By the text (T1) every waiting group that meets G with a
+ * smaller key goes in right before G: R is H, G's set, G's arm, so h's
+ * hit at 15 comes before d's at 12. The expectation is the text's and did
+ * not change in V2SIG9; the way did: G's closure went by raw time (15 is
+ * after 12) and skipped H, and G's arm let H in right before itself (H12,
+ * an equal key made before), after G's set, which does not meet H. Now
+ * the closure, by key, puts H before G's set. Let in after the arm, H
+ * would be made after a call with a greater key: with a window it goes to
+ * its place (the same hits), with none it is late_off and the hits come
+ * in the other order. The control: K = all(d, d), no meet: H waits for
+ * its own device. */
 static void test_v2_h12_before(void) {
     int v, K;
     for (K = 4; K >= 0; K -= 4)
@@ -8434,6 +8438,53 @@ static void test_v2_c4_cancel(void) {
     }
 }
 
+/* T1's closure by key (ruling 2 extended). G = [set X to 1, arm g at
+ * 15] and J = [set X to 2, arm j at 12], G made first; both wait. Device
+ * 3 at 25 reaches g only and lets G in; device 5 at 26 (X's) lets J in.
+ * After a flush at 20 (v 1) both key at 20 and G's key is the smaller:
+ * R makes G, then J, and X ends at 2. G's closure by raw time put J (12)
+ * first; W1 then found G late and placed it by key (the same X), and
+ * counted G too. By key nothing goes before G, and only J is counted:
+ * its L, device 5, does not meet F_a(J) (2 (a)). With no window (K 0) the
+ * sets stay where made (arm_past_off 2) and G's arm is made after J's
+ * set, which meets G's: late_off 1, and 2 (b) counts G there. The
+ * control (v 0, no flush): J's key 12 is the smaller, R makes J first and
+ * X ends at 1 (2 with no window, the sets where made); J is counted, by
+ * 2 (a) again. */
+static void test_v2_closure_key(void) {
+    int v, K;
+    for (K = 4; K >= 0; K -= 4)
+    for (v = 0; v < 2; v++) {
+        ysig_node n[7];
+        ysig_stats st;
+        g_where = K ? "T1's closure by key" : "T1's closure by key, no window";
+        n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 3, 1); n[0].history = 64;
+        n[1] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 6, 1); n[1].history = 64;
+        n[2] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 9, 1); n[2].history = 64;
+        n[3] = ysig_node_of(YSIG_OP_DETECT, 0, -1); n[3].p[YSIG_DETECT_LEVEL] = 5; n[3].history = 64;   /* g */
+        n[4] = ysig_node_of(YSIG_OP_DETECT, 1, -1); n[4].p[YSIG_DETECT_LEVEL] = 5; n[4].history = 64;   /* j */
+        n[5] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 5, 1); n[5].history = 64;
+        n[6] = ysig_node_of(YSIG_OP_OFFSET, 5, -1); n[6].history = 64;                                  /* X */
+        if (!rp_open(n, 7, K, 0, false, false)) return;
+        rp_feed(10 * MS, 0, YIN_AXIS_POSITION, 3);
+        rp_feed(10 * MS, 0, YIN_AXIS_POSITION, 6);
+        rp_feed(10 * MS, 0, YIN_AXIS_POSITION, 5);
+        rp_feed(20 * MS, 0, YIN_AXIS_POSITION, 9);
+        if (v) CHECK(ysig_flush(&g_rp));
+        CHECK(ysig_set(&g_rp, 6, YSIG_OFFSET_D_X, 1));
+        CHECK(ysig_arm(&g_rp, 3, 15 * MS));
+        CHECK(ysig_set(&g_rp, 6, YSIG_OFFSET_D_X, 2));
+        CHECK(ysig_arm(&g_rp, 4, 12 * MS) && g_rp.wt->n == 2);
+        rp_feed(25 * MS, 0, YIN_AXIS_POSITION, 3);
+        rp_feed(26 * MS, 0, YIN_AXIS_POSITION, 5);
+        ysig_get_stats(&g_rp, &st);
+        CHECK(g_rp.wt->n == 0 && st.late_far == 0 && st.late_full == 0);
+        CHECK(ysig_value_of(&g_rp, 6)->v[0] == (v || !K ? 2 : 1));
+        CHECK(st.arm_past_off == (K ? 0 : 2) && st.late_off == (v && !K));
+        CHECK(st.arm_unverified == (v && !K ? 2 : 1));
+    }
+}
+
 int main(void) {
     test_conventions();
     test_param_names();
@@ -8520,6 +8571,7 @@ int main(void) {
     test_v2_c4_past();
     test_v2_c1_c4_exact();
     test_v2_c4_cancel();
+    test_v2_closure_key();
     if (g_failures) { fprintf(stderr, "sig_test: %d failures\n", g_failures); return 1; }
     printf("sig_test: all checks passed\n");
     return 0;
