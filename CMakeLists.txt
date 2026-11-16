@@ -801,7 +801,7 @@ if(YSP_BUILD_TESTS)
              SIG_ORACLE_PAST_GROUPS=1 SIG_ORACLE_PRED_TARGET=1 SIG_ORACLE_BARCOUNT_KEY=1 $<TARGET_FILE:test_sig_arm_ref>)
     set_tests_properties(test_sig_arm_ref_past PROPERTIES
              PASS_REGULAR_EXPRESSION "with no arm_unverified or late_unverified: 0[^0-9]"
-             FAIL_REGULAR_EXPRESSION "header missed a B-cannot case;stale count, [1-9][0-9]* with none;PRED_TARGET case")
+             FAIL_REGULAR_EXPRESSION "header missed a B-cannot case;H1 lag\\), [1-9][0-9]* with none;PRED_TARGET case")
 endif()
 if(TARGET SDL3::SDL3 AND YSP_BUILD_EXAMPLES)
     # The jsPsych-style trials of examples/response/ (docs/response.md,

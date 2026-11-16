@@ -19,6 +19,14 @@
  *   (0 to 3 a 1,000 cases) and none where the two readings differ, so the
  *   oracle does not decide between them; the reviewer's rc.c and rc2.c do.
  *
+ * H1 lag (2026-11-16, MSVC's CI): B's count at the segment's start is exact
+ *   for the integrator's sum, not for the nodes after it, which A runs only
+ *   at the device's next count (g_barc_at). A wrong case at a call after a
+ *   count B is given, in its barrier segment, with no other count, is
+ *   printed and tallied apart ("H1 lag"), not as one with none. And the
+ *   generator's two rnd() calls in gen_group() are two statements: MSVC
+ *   made them in the other order, so its cases differed from GCC's.
+ *
  * Review of be18843 (the second reviewer, 2026-11-15):
  *   - Pins in late mode 4 read the clamped key times (ruling 8): a feed at
  *     the last barrier's time comes before a group whose tau is before that
@@ -2825,6 +2833,17 @@ static int g_fail_ci = -1;   /* the call at which the case first failed */
 static long long g_unv_fail, g_other_fail;   /* A's arm_unverified, and its fallback (pinned included), retracted and stale counts, then */
 static long long g_unv_at[MAXC], g_oth_at[MAXC];   /* A's arm_unverified, and its guard-stop fallback counts, after each call */
 static int g_bc_ci = -1;                            /* the call at which B was first found unable to run R */
+/* (H1 lag, 2026-11-16) a raw mouse's count from before the last barrier that
+ * the integrator took, at or before each call in its barrier segment. The
+ * header adds it to the integrator with no run again, so the nodes after
+ * the integrator keep the old sum until the device's next count (sig.md,
+ * "Per device (T6)"), and their rings keep that sample for the segment.
+ * B gets the count at the segment's start, so a count of the same device
+ * that came after the barrier and before the late count carries the sum on
+ * in B but not in A. late_barrier counts it; a wrong case at such a call is
+ * tallied apart from "with none". MSVC's order of two rnd() calls (fixed in
+ * gen_group) gave seed 20261115 two such cases: late on 1940, past 416. */
+static unsigned char g_barc_at[MAXC];
 static void a_counts(long long* unv, long long* oth) {
     ysig_stats st;
     ysig_get_stats(&g_a, &st);
@@ -2851,6 +2870,7 @@ static void push(const call* c) {
     g_nletin = 0;
     step(g_nc);
     a_counts(&g_unv_at[g_nc], &g_oth_at[g_nc]);
+    g_barc_at[g_nc] = (unsigned char)((g_call_flags[g_nc] & E_BARC) || (g_nc > 0 && g_barc_at[g_nc - 1] && !(g_call_flags[g_nc] & E_BARRIER)));
     if (g_b_cannot && !b4 && g_bc_ci < 0) g_bc_ci = g_nc;
     if (g_why && g_fail_ci < 0) {
         g_fail_ci = g_nc;
@@ -2986,7 +3006,13 @@ static void gen_group(void) {
     else if (sh == 2) { int q = (int)(rnd() % (unsigned)(g_nc ? g_nc : 1)); tau = g_c[q].kind == C_FEED || g_c[q].kind == C_FRAME ? g_c[q].t : g_newest - MS; }
     else if (sh == 3 && g_nha) { tau = g_ha[g_nha - 1].h.t; if (!off('1')) d = g_ha[g_nha - 1].h.node; }
     else if (sh == 4) tau = g_N;
-    else tau = g_newest + (int64_t)(rnd() % 20) * MS + (int64_t)(rnd() % 1000) * US;
+    else {
+        /* Two statements: in one expression the order of the two rnd() calls
+         * is unspecified, MSVC calls the second first, and its stream (and
+         * every case after) then differs from GCC's at the same seed. */
+        int64_t ms = (int64_t)(rnd() % 20);
+        tau = g_newest + ms * MS + (int64_t)(rnd() % 1000) * US;
+    }
     if (off('p') && tau < g_N) tau = g_N;
     if (off('a') && tau > g_N) tau = g_N;
     if (tau < 0) tau = 0;
@@ -3524,7 +3550,7 @@ static void fn_end(void) {
 }
 
 int main(int argc, char** argv) {
-    long cases = getenv("SIG_ORACLE_CASES") ? atol(getenv("SIG_ORACLE_CASES")) : 2000, wrong = 0, cannot = 0, fellback = 0, noroom = 0, disarm_ahead = 0, h9 = 0, pred_n[3] = { 0, 0, 0 }, pred_f[3] = { 0, 0, 0 }, pred_why[10] = { 0 }, pred_show = 0, cannot_why[12] = { 0 }, hu_n[3] = { 0, 0, 0 }, hu_f[3] = { 0, 0, 0 }, hu_show = 0, hu_late = 0, hu_other = 0, hu_bare = 0, hu_arms = 0, hu_cnt = 0, hu_bc_at = 0, hu_end_late = 0, exc_n[3] = { 0, 0, 0 }, exc_only[3] = { 0, 0, 0 }, lt_cases = 0, lt_far = 0, lt_bar = 0, lt_frames = 0, lt_cond2 = 0, lt_ooo = 0, lt_ooo_unc = 0, lt_bc = 0, lt_bc_f = 0, lt_inputs = 0, lt_show = 0, lt_byf = 0, lt_byfb = 0, lt_byo = 0, lt_lnew = 0, lt_lnfa = 0, lt_clo = 0, lt_lst = 0, lt_lbd = 0, lt_lbd_in = 0, lt_ceq = 0, lt_dxs = 0, lt_dxe = 0, lt_dxl = 0, lt_dxw = 0, lt_dxu = 0, lt_lss = 0, lt_esc = 0, lt_cli = 0, oc_cases[8] = { 0 }, oc_pairs[8] = { 0 }, oc_any = 0, oc_show = 0;
+    long cases = getenv("SIG_ORACLE_CASES") ? atol(getenv("SIG_ORACLE_CASES")) : 2000, wrong = 0, cannot = 0, fellback = 0, noroom = 0, disarm_ahead = 0, h9 = 0, pred_n[3] = { 0, 0, 0 }, pred_f[3] = { 0, 0, 0 }, pred_why[10] = { 0 }, pred_show = 0, cannot_why[12] = { 0 }, hu_n[3] = { 0, 0, 0 }, hu_f[3] = { 0, 0, 0 }, hu_show = 0, hu_late = 0, hu_other = 0, hu_barc = 0, hu_bare = 0, hu_arms = 0, hu_cnt = 0, hu_bc_at = 0, hu_end_late = 0, exc_n[3] = { 0, 0, 0 }, exc_only[3] = { 0, 0, 0 }, lt_cases = 0, lt_far = 0, lt_bar = 0, lt_frames = 0, lt_cond2 = 0, lt_ooo = 0, lt_ooo_unc = 0, lt_bc = 0, lt_bc_f = 0, lt_inputs = 0, lt_show = 0, lt_byf = 0, lt_byfb = 0, lt_byo = 0, lt_lnew = 0, lt_lnfa = 0, lt_clo = 0, lt_lst = 0, lt_lbd = 0, lt_lbd_in = 0, lt_ceq = 0, lt_dxs = 0, lt_dxe = 0, lt_dxl = 0, lt_dxw = 0, lt_dxu = 0, lt_lss = 0, lt_esc = 0, lt_cli = 0, oc_cases[8] = { 0 }, oc_pairs[8] = { 0 }, oc_any = 0, oc_show = 0;
     g_late = getenv("SIG_ORACLE_LATE") ? atoi(getenv("SIG_ORACLE_LATE")) : 0;
     g_noA = g_late && !getenv("SIG_ORACLE_LATE_A");
     g_dax = getenv("SIG_ORACLE_DAX") != NULL;
@@ -3707,6 +3733,7 @@ int main(int argc, char** argv) {
                 hu_n[1]++;
                 if (g_unv_fail) hu_f[1]++;
                 else if (g_other_fail) hu_other++;
+                else if (g_fail_ci >= 0 && g_barc_at[g_fail_ci]) { hu_barc++; printf("  wrong case %ld after a pre-barrier count the integrator took (late_barrier, H1 lag): %s\n", g_case, g_why); }
                 else { hu_bare++; printf("  header missed a wrong case %ld, no other count (%s)\n", g_case, g_why); }
                 if (g_end_fail_kind == 2) { hu_end_late++; printf("  wrong case %ld (%s) found at the end with no call to read A's counts at: read at the last call\n", g_case, g_why); }
             }
@@ -3787,12 +3814,12 @@ int main(int argc, char** argv) {
                " R not in time order for a node %ld cases (the call it must follow: a frame %ld, a fallen-back group %ld, other %ld), %ld of them with no count; B cannot run R %ld, counted by the text %ld; a late input became a waiting group's L %ld times, %ld of them not meeting F_a\n",
                lt_cases, lt_inputs, lt_far, lt_bar, lt_cond2, lt_frames, lt_ooo, lt_byf, lt_byfb, lt_byo, lt_ooo_unc, lt_bc, lt_bc_f, lt_lnew, lt_lnfa);
 #ifdef SIG_HAS_UNV
-    printf("  header arm_unverified: B-cannot %ld of %ld, wrong %ld of %ld at the failing call (%ld more only later), right %ld of %ld cases; %ld counts over %ld made groups in right cases; wrong unflagged: %ld with a fallback (pinned included), retracted or stale count, %ld with none\n",
-           hu_f[0], hu_n[0], hu_f[1], hu_n[1], hu_late, hu_f[2], hu_n[2], hu_cnt, hu_arms, hu_other, hu_bare);
+    printf("  header arm_unverified: B-cannot %ld of %ld, wrong %ld of %ld at the failing call (%ld more only later), right %ld of %ld cases; %ld counts over %ld made groups in right cases; wrong unflagged: %ld with a fallback (pinned included), retracted or stale count, %ld after a pre-barrier count the integrator took (H1 lag), %ld with none\n",
+           hu_f[0], hu_n[0], hu_f[1], hu_n[1], hu_late, hu_f[2], hu_n[2], hu_cnt, hu_arms, hu_other, hu_barc, hu_bare);
     printf("  B-cannot counted (arm_unverified or a guard-stop fallback) by the call B was found unable: %ld of %ld; wrong cases read at the end for want of a call: %ld\n", hu_bc_at, hu_n[0], hu_end_late);
     printf("  compares put off while a plain disarm's gap is open in B only (b_gap_mismatch): %ld\n", g_gapdefer);
 #else
-    (void)hu_n; (void)hu_f; (void)hu_show; (void)hu_late; (void)hu_other; (void)hu_bare; (void)hu_bc_at; (void)hu_end_late; (void)hu_arms; (void)hu_cnt;
+    (void)hu_n; (void)hu_f; (void)hu_show; (void)hu_late; (void)hu_other; (void)hu_barc; (void)hu_bare; (void)hu_bc_at; (void)hu_end_late; (void)hu_arms; (void)hu_cnt;
 #endif
     if (getenv("SIG_ORACLE_PRED")) {
         printf("  predicate: flags %ld of %ld B-cannot cases, %ld of %ld wrong, %ld of %ld right (P1 barrier %ld, P1 meeting state call %ld, P1 no input yet %ld, P2 late report %ld, P1 cancelled group's disarm %ld, P1 input meets the group but not its arm %ld, P1 inside another group's block %ld, P1 a disarm of another group or none in its arm's gap %ld)\n",

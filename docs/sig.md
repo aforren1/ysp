@@ -1543,6 +1543,19 @@ is dropped, as before. Exactly:
   barrier; `ysig_reset()` does not.
 - `stats.fed` does not count it (it is not one of R's calls).
 
+The nodes after the integrator lag (found 2026-11-16). Until the
+device's next count, they keep the sum without the late count, and
+their rings keep that sample for the rest of the barrier segment. The
+oracle's B gets the count at the segment's start. When a count of the
+same device came after the barrier and before the late count, that
+count carries the new sum on in B, but not in A. So A and B differ
+after the late count, in those nodes and in what they drive (a speed or
+a detect, say). `late_barrier` counts the case. The oracle tallies a
+wrong case at a call after such a count, in the same barrier segment,
+as "after a pre-barrier count the integrator took (H1 lag)", not "with
+none". Seed 20261115 with MSVC's generator order had two such cases:
+late on, case 1940; past groups, case 416 (below, "The MSVC order").
+
 Before the third review of bdb8ff1 (2026-11-16) a recenter's origin was
 the time the caller passed. The reviewer's `rc.c`: counts at 10 and
 20 ms, `ysig_recenter()` passed 12 ms (key 20 ms), a late count at
@@ -2675,6 +2688,24 @@ at a time, load average 1.0 to 4.0):
   294 s (load 2.0 to 2.3): 7 of 7 as expected, the baselines of
   `sig_ref` and `sig_ref_23off` pass. The whole list was not run.
 - `player_test` 78 of 78 at 60 Hz (14 s) and at 500 Hz (14 s).
+
+The MSVC order (2026-11-16, Linux desktop, i5-14500, GCC 12.2). CI's
+MSVC build failed the four `test_sig_arm_ref` gates at seed 20261115:
+late on, wrong 1,411 (bound 1,418), 1 of them with no count; off,
+1,115 (bound 1,070); feed_n, 501 (bound 471); past groups, 1 with no
+count.
+Cause: the oracle's generator called `rnd()` twice in one expression in
+`gen_group()`, and MSVC calls the two in the other order, so every case
+from the first such call on differs. A GCC build with the two calls
+swapped gives MSVC's numbers exactly. The generator now makes the two
+calls in two statements, in GCC's order: GCC's output is the same byte
+for byte, and the bounds stand. MSVC's stream had one wrong case with no
+count in two gates (late on, case 1940; past groups, case 416); both are
+the H1 lag ("Per device (T6)"), now tallied apart. With the swapped
+order and with GCC's, seeds 20261115 (all four gates), 1, 777001,
+20261123 and 20261124 (late on, past groups, 3,000 cases): 0 with none;
+H1 lag 0 in GCC's order, 4 in the swapped one (two above, 20261123 case
+1454, 777001 case 2849), each a role node after the late count.
 
 The V2SIG10 round's other gates (one at a time, load average 1.3 to
 4.7):

@@ -1621,7 +1621,7 @@ jobs:
           ./mingw_order_as_c.exe; ./mingw_order_as_cxx.exe; ./mingw_order_sa_c.exe; ./mingw_order_sa_cxx.exe
           # the player (docs/player.md), every source with MinGW-w64, and its
           # system tests on --sim with the MSVC build's ypak and player_make_rig
-          gcc -std=c11 $W $MA -Iplayer -o mingw_player.exe player/impl.c player/eval.c player/host.c player/lower.c player/run.c player/main.c \
+          gcc -std=c11 $W $MA -Iplayer -o mingw_player.exe player/impl.c player/eval.c player/host.c player/lower.c player/run.c player/v2.c player/main.c \
               -L"$SDL3_MINGW/lib" -lSDL3 -lsetupapi -lole32 -lm
           PY=$(command -v python3 || command -v python)
           "$PY" tests/player/player_test.py --bin build --player "$PWD/mingw_player.exe" --out "$RUNNER_TEMP/mingw_player"

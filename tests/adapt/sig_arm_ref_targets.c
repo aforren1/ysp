@@ -30,7 +30,8 @@ int main(int argc, char** argv) {
             cannot = b;
             fputs(line, stdout);
         }
-        if ((q = strstr(line, "stale count, ")) && sscanf(q, "stale count, %ld with none", &a) == 1) bare = a;
+        /* the count after the H1 lag's tally (sig_arm_ref.c, g_barc_at) */
+        if ((q = strstr(line, "(H1 lag), ")) && sscanf(q, "(H1 lag), %ld with none", &a) == 1) bare = a;
         if ((q = strstr(line, "with no arm_unverified or late_unverified: ")) &&
             sscanf(q, "with no arm_unverified or late_unverified: %ld", &a) == 1) {
             pt = a;
