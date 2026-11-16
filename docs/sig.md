@@ -933,7 +933,12 @@ When the header tests:
   reviewer's op-order gap: a group K made before G but retested after
   it was left out of G's order, and G went uncounted; `sig_test`
   `test_v2_op_order`).
-- At each input call: condition 3.
+- Condition 3 (a late report of an arm in R): met by the placement
+  code. A late report goes to its place by key and the window runs
+  again, or it falls back counted (`late_off`, `late_far`, `late_full`).
+  0.6.x's table of armed detects (`w->lr`) went in 0.7.0: it had no
+  reader, and on its overflow at 32 armed detects it counted an
+  `arm_unverified` that no shape needed.
 - Condition 4: at G's place (a past group), at the trigger that lets G
   in, or at G's arm at the end of R.
 - (R2, 2026-11-15) At each late disarm whose place is in the gap a

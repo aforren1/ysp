@@ -428,6 +428,8 @@
  *          (format 3.11 rule 4, DECIDED 2026-11-15).
  *          "N(G) earlier than tau" is a flag, not tau - 1 (a signed
  *          overflow at an arm at INT64_MIN).
+ *          Condition 3's table of armed detects (w->lr) went: no reader,
+ *          and an arm_unverified on its overflow at 32 armed detects.
  *   v0.6.1 - pending groups (docs/sig.md, "Pending groups"): a past group
  *          of an arm and disarms only, whose input time at its place is
  *          before its time and with no L in R yet, is made at its place
@@ -1349,7 +1351,6 @@ typedef struct ysig__ux {
     uint64_t  gid, l_seq;  /* l_seq: L's call number (0: none)          */
     uint64_t* F;           /* dw words of the pool, fixed per slot       */
 } ysig__ux;
-#define YSIG__UX 32
 /* A group placed while a trigger lets waiting groups in (a cascade) */
 typedef struct ysig__ucg {
     uint64_t  gid;
@@ -1364,7 +1365,7 @@ typedef struct ysig__ucc { uint64_t gid; int64_t t; int kind, node; } ysig__ucc;
 #define YSIG__UCG 33       /* the waiting arms, and the one going in      */
 #define YSIG__UCC 96
 /* the footprints' pool: dw words each (the graph's nodes, not 512) */
-#define YSIG__UFP (YSIG__UX + 2 * YSIG__UCG)
+#define YSIG__UFP (2 * YSIG__UCG)
 typedef struct ysig__wt {
     int        n, nc, n_dis, gap_n, fired;   /* fired: one went in this gap */
     uint64_t   gap_f[YSIG__FPW];            /* v0.7.0: the open gap's footprint */
@@ -1376,12 +1377,12 @@ typedef struct ysig__wt {
     int64_t    call_n[YSIG__WAIT_CALLS];    /* the input time at each call  */
     int        dis_node[YSIG__GAP_DIS];
     uint64_t   dis_seq[YSIG__GAP_DIS];
-    /* exactness: arms counted once; arms in R for condition 3 (lr) and
-     * open for condition 2 (b) (op); the cascade a trigger lets in */
+    /* exactness: arms counted once; arms open for condition 2 (b) (op);
+     * the cascade a trigger lets in. Condition 3 (a late report of an arm
+     * in R) needs no table: the placement code counts it (late_off,
+     * late_far, late_full) or places the report by key */
     uint64_t   unv[64];
     int        n_unv, unv_at;
-    ysig__ux   lr[YSIG__UX];
-    int        n_lr;
     ysig__ux*  op;          /* with a window: catchup_calls of them      */
     int        n_op, cap_op;
     int        cas_kind, cas_depth, n_cg, n_cc, cas_stack[YSIG__UCG], cas_top;
@@ -2248,7 +2249,6 @@ static size_t ysig__layout(const ysig_desc* d, const ysig__an* a, ysig_graph* g,
     if (g) {
         uint64_t* q = (uint64_t*)(void*)(base + at);
         int dw = (n + 63) / 64, j;
-        for (j = 0; j < YSIG__UX; j++, q += dw) g->wt->lr[j].F = q;
         for (j = 0; j < YSIG__UCG; j++, q += 2 * dw) { g->wt->cg[j].F = q; g->wt->cg[j].Fa = q + dw; }
     }
     for (i = 0; i < n; i++) {
@@ -4924,43 +4924,7 @@ static int ysig__fp_any(const ysig_graph* g, const uint64_t* f) {
     for (w = 0; w < g->dw; w++) if (f[w]) return 1;
     return 0;
 }
-/* Condition 3: the newest arm of each detect in R, with its group's
- * footprint; an input earlier than its time that meets it, later in R, is
- * a late report (one at its time is not: the frame at an onset that the
- * arms at that onset came before) */
-static void ysig__ux_arm(ysig_graph* g, int node, int64_t t, uint64_t gid, const uint64_t* F) {
-    ysig__wt* w = g->wt;
-    int i;
-    for (i = 0; i < w->n_lr && w->lr[i].node != node; i++) { }
-    if (i == w->n_lr) {
-        if (w->n_lr == YSIG__UX) {
-            /* no room: one goes, its late reports not seen (counted). Slots
-             * keep their footprint storage: entries move by swapping */
-            ysig__unv(g, w->lr[0].gid);
-            i = 0;
-        } else {
-            i = w->n_lr++;
-        }
-    }
-    w->lr[i].node = node;
-    w->lr[i].t = t;
-    w->lr[i].gid = gid;
-    w->lr[i].l_seq = 0;
-    memcpy(w->lr[i].F, F, sizeof(uint64_t) * (size_t)g->dw);
-}
-static void ysig__ux_disarm(ysig_graph* g, int node) {
-    ysig__wt* w = g->wt;
-    int i;
-    for (i = 0; i < w->n_lr; i++)
-        if (w->lr[i].node == node) {
-            ysig__ux x = w->lr[i];
-            w->lr[i] = w->lr[w->n_lr - 1];
-            w->lr[--w->n_lr] = x;
-            return;
-        }
-}
 static void ysig__ux_clear(ysig_graph* g) {
-    g->wt->n_lr = 0;
     g->wt->n_op = 0;
 }
 /* A logged call's footprint for the state-call tests (a recenter: its
@@ -5191,7 +5155,6 @@ static void ysig__gap_disarms(ysig_graph* g, int64_t t, int made) {
         g->cs = w->dis_seq[k];
         if (made) ysig__do_disarm(g, w->dis_node[k], t);
         ysig__wait_cancel(g, w->dis_node[k], t, w->dis_seq[k]);
-        ysig__ux_disarm(g, w->dis_node[k]);
     }
     w->n_dis = 0;
     w->gap_n = 0;
@@ -5323,12 +5286,6 @@ static void ysig__wait_place(ysig_graph* g, int k, int with_arm) {
         g->ko = a.seq;
         ysig__arm_made(g, a.node, a.t, a.t, logged ? g->cu->c_head - 1 : UINT64_MAX);
         if (g->cu && !g->cu->replaying) ysig__c4(g, a.seq, a.t);
-        if (g->t_cover < a.t) {
-            /* waits at its place: a late report counts (condition 3) */
-            uint64_t F[YSIG__FPW];
-            ysig__wait_fp(g, &a, F);
-            ysig__ux_arm(g, a.node, a.t, a.seq, F);
-        }
         ysig__cas_pop(g, ci);
         ci = -1;
         if (late) {
@@ -6388,7 +6345,6 @@ static void ysig__unv_place(ysig_graph* g, int kslot, uint64_t pos, int nb) {
             }
         }
         if (bad) ysig__unv(g, gid);
-        if (armed >= 0 && N_below) ysig__ux_arm(g, armed, t, gid, F);   /* condition 3: while it waits */
     }
     /* the open groups this block goes between (2 (b)), after the block's
      * own are open too: one of them can link a group K to an H placed
@@ -6838,7 +6794,6 @@ YSIG_API bool ysig_disarm(ysig_graph* g, int node) {
         g->cs = w->seq;
         ysig__do_disarm(g, node, g->t_cover);
         ysig__wait_cancel(g, node, g->t_cover, w->seq);
-        ysig__ux_disarm(g, node);
     }
     ysig__out_final(g);
     return true;
@@ -6896,7 +6851,6 @@ YSIG_API bool ysig_disarm_at(ysig_graph* g, int node, int64_t t_ns) {
     g->tk = t_ns;
     g->cs = w->seq;
     ysig__do_disarm(g, node, t_ns);
-    ysig__ux_disarm(g, node);
     if (late) {
         if (logged) (void)ysig__late_fix(g, g->cu->c_head - 1);
         else ysig__late_nolog(g);
