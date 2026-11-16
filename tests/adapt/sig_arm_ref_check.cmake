@@ -17,11 +17,8 @@
 # -DFLAGGED_MAX (right cases with a count) and -DCOUNTS_MAX (counts in
 # right cases). Each is the run at 2fbd646 (Linux desktop, GCC 12.2,
 # Release) plus 1 % rounded up, for another compiler's rounding; the
-# numbers and the margin are in CMakeLists.txt. -DBARE_MAX (default 0):
-# wrong cases with no count allowed; H1 (docs/sig.md, "Per device") makes
-# one at seed 20261115 with the late generator on: case 144, a raw
-# mouse's count before the last barrier, which the header keeps and the
-# oracle's R drops (the adapter's integrator one count apart).
+# numbers and the margin are in CMakeLists.txt. A wrong case with no
+# count fails: no case is allowed one.
 execute_process(
     COMMAND ${CMAKE_COMMAND} -E env SIG_ORACLE_CASES=${CASES} SIG_ORACLE_SEED=${SEED} ${ENV} ${PROG}
     OUTPUT_VARIABLE out RESULT_VARIABLE rc)
@@ -54,11 +51,8 @@ set(counts ${CMAKE_MATCH_3})
 if(NOT counted EQUAL cannot)
     message(FATAL_ERROR "sig_arm_ref: ${counted} of ${cannot} cases B cannot run are counted")
 endif()
-if(NOT DEFINED BARE_MAX)
-    set(BARE_MAX 0)
-endif()
-if(bare GREATER BARE_MAX)
-    message(FATAL_ERROR "sig_arm_ref: ${bare} wrong cases with no count (at most ${BARE_MAX})")
+if(NOT bare EQUAL 0)
+    message(FATAL_ERROR "sig_arm_ref: ${bare} wrong cases with no count")
 endif()
 foreach(b WRONG_MAX FLAGGED_MAX COUNTS_MAX)
     if(NOT DEFINED ${b})

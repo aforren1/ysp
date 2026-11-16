@@ -7,10 +7,7 @@
  * the same criterion. With SIG_ORACLE_PRED_TARGET=1, "FAIL line 4": a made
  * group the text's predicate flags by condition 1 or 4 has no
  * arm_unverified or late_unverified in its case (the count-dropping
- * mutants of sig.toml). SIG_REF_BARE_MAX (default 0): wrong cases with no
- * count allowed, as ctest's BARE_MAX: H1's declared case (a raw mouse's
- * count before the last barrier, which the oracle's R drops; case 144 of
- * seed 20261115 with the late generator on). POSIX (popen). */
+ * mutants of sig.toml). POSIX (popen). */
 #define _POSIX_C_SOURCE 200809L
 #define main sig_arm_ref_main
 #include "sig_arm_ref.c"
@@ -43,7 +40,7 @@ int main(int argc, char** argv) {
     pclose(p);
     if (counted < 0 || bare < 0) { printf("FAIL line 3: no summary from the oracle\n"); return 1; }
     if (counted != cannot) { printf("FAIL line 1: %ld of %ld cases B cannot run counted\n", counted, cannot); rc = 1; }
-    if (bare > (getenv("SIG_REF_BARE_MAX") ? atol(getenv("SIG_REF_BARE_MAX")) : 0)) {
+    if (bare) {
         printf("FAIL line 2: %ld wrong cases with no count\n", bare);
         rc = 1;
     }

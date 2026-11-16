@@ -761,7 +761,10 @@ if(YSP_BUILD_TESTS)
     # Upper bounds at the fixed seed (M4, 2026-11-16): the run at 2fbd646
     # (late: wrong 1,403, right cases with a count 711, counts 2,817;
     # late_off: 1,059, 1,013, 4,063; feed_n: 466, 218, 808) plus 1 %
-    # rounded up. BARE_MAX 1: H1's case 144 (sig_arm_ref_check.cmake).
+    # rounded up. Every run sets SIG_ORACLE_BARCOUNT_KEY=1: the oracle's R
+    # gives B a raw mouse's count from before the last barrier by the
+    # header's rule (a reset's or recenter's origin is its key in R; H1,
+    # docs/sig.md "Per device"), so no wrong case is left with no count.
     # ysig_disarm_at(): the reviewer's hand-derived cases, and the 0.7.0
     # header with a zeroed window as the second B (in the same file).
     ysp_add_program(test_sig_arm_spec tests/adapt/sig_arm_spec_cases.c core)
@@ -774,18 +777,18 @@ if(YSP_BUILD_TESTS)
     target_compile_definitions(test_sig_arm_ref PRIVATE SIG_ARM_REF_SPEC=1 SIG_HAS_UNV=1 SIG_HAS_LATE=1 SIG_HAS_LATE_VOIDED=1
                                SIG_HAS_DISARM_AT=1 SIG_HAS_DETECTED_TO=1 SIG_HAS_DERIVED_TO=1)
     add_test(NAME test_sig_arm_ref_late COMMAND ${CMAKE_COMMAND} -DPROG=$<TARGET_FILE:test_sig_arm_ref>
-             -DWRONG_MAX=1418 -DFLAGGED_MAX=719 -DCOUNTS_MAX=2846 -DBARE_MAX=1
-             -DCASES=3000 -DSEED=20261115 "-DENV=SIG_ORACLE_R1=1;SIG_ORACLE_GEN_TIE=1;SIG_ORACLE_GEN_DISARM_AT=1;SIG_ORACLE_GEN_EXIT=1;SIG_ORACLE_DAX=1;SIG_ORACLE_GEN_DRAIN_TO=1;SIG_ORACLE_DERIVED_TO=1;SIG_ORACLE_LATE=4;SIG_ORACLE_LATE_A=1;SIG_ORACLE_P2STRICT=1;SIG_ORACLE_PRED=1"
+             -DWRONG_MAX=1418 -DFLAGGED_MAX=719 -DCOUNTS_MAX=2846
+             -DCASES=3000 -DSEED=20261115 "-DENV=SIG_ORACLE_R1=1;SIG_ORACLE_GEN_TIE=1;SIG_ORACLE_GEN_DISARM_AT=1;SIG_ORACLE_GEN_EXIT=1;SIG_ORACLE_DAX=1;SIG_ORACLE_GEN_DRAIN_TO=1;SIG_ORACLE_DERIVED_TO=1;SIG_ORACLE_LATE=4;SIG_ORACLE_LATE_A=1;SIG_ORACLE_P2STRICT=1;SIG_ORACLE_PRED=1;SIG_ORACLE_BARCOUNT_KEY=1"
              -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/adapt/sig_arm_ref_check.cmake)
     add_test(NAME test_sig_arm_ref_late_off COMMAND ${CMAKE_COMMAND} -DPROG=$<TARGET_FILE:test_sig_arm_ref>
              -DWRONG_MAX=1070 -DFLAGGED_MAX=1024 -DCOUNTS_MAX=4104
-             -DCASES=3000 -DSEED=20261115 "-DENV=SIG_ORACLE_R1=1;SIG_ORACLE_GEN_TIE=1;SIG_ORACLE_GEN_DISARM_AT=1;SIG_ORACLE_GEN_EXIT=1;SIG_ORACLE_DAX=1;SIG_ORACLE_GEN_DRAIN_TO=1;SIG_ORACLE_DERIVED_TO=1;SIG_ORACLE_LATE=4;SIG_ORACLE_LATE_A=1;SIG_ORACLE_P2STRICT=1;SIG_ORACLE_PRED=1;SIG_ORACLE_OFF=l"
+             -DCASES=3000 -DSEED=20261115 "-DENV=SIG_ORACLE_R1=1;SIG_ORACLE_GEN_TIE=1;SIG_ORACLE_GEN_DISARM_AT=1;SIG_ORACLE_GEN_EXIT=1;SIG_ORACLE_DAX=1;SIG_ORACLE_GEN_DRAIN_TO=1;SIG_ORACLE_DERIVED_TO=1;SIG_ORACLE_LATE=4;SIG_ORACLE_LATE_A=1;SIG_ORACLE_P2STRICT=1;SIG_ORACLE_PRED=1;SIG_ORACLE_BARCOUNT_KEY=1;SIG_ORACLE_OFF=l"
              -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/adapt/sig_arm_ref_check.cmake)
     # ysig_feed_n() against ysig_feed() (the oracle's SIG_ORACLE_FEEDN mode;
     # format 3.11 rule 4, DECIDED 2026-11-15)
     add_test(NAME test_sig_arm_ref_feed_n COMMAND ${CMAKE_COMMAND} -DPROG=$<TARGET_FILE:test_sig_arm_ref>
-             -DWRONG_MAX=471 -DFLAGGED_MAX=221 -DCOUNTS_MAX=817 -DBARE_MAX=1
-             -DCASES=1000 -DSEED=20261115 -DFEEDN=1 "-DENV=SIG_ORACLE_R1=1;SIG_ORACLE_GEN_TIE=1;SIG_ORACLE_GEN_DISARM_AT=1;SIG_ORACLE_GEN_EXIT=1;SIG_ORACLE_DAX=1;SIG_ORACLE_GEN_DRAIN_TO=1;SIG_ORACLE_DERIVED_TO=1;SIG_ORACLE_LATE=4;SIG_ORACLE_LATE_A=1;SIG_ORACLE_P2STRICT=1;SIG_ORACLE_PRED=1;SIG_ORACLE_FEEDN=1"
+             -DWRONG_MAX=471 -DFLAGGED_MAX=221 -DCOUNTS_MAX=817
+             -DCASES=1000 -DSEED=20261115 -DFEEDN=1 "-DENV=SIG_ORACLE_R1=1;SIG_ORACLE_GEN_TIE=1;SIG_ORACLE_GEN_DISARM_AT=1;SIG_ORACLE_GEN_EXIT=1;SIG_ORACLE_DAX=1;SIG_ORACLE_GEN_DRAIN_TO=1;SIG_ORACLE_DERIVED_TO=1;SIG_ORACLE_LATE=4;SIG_ORACLE_LATE_A=1;SIG_ORACLE_P2STRICT=1;SIG_ORACLE_PRED=1;SIG_ORACLE_BARCOUNT_KEY=1;SIG_ORACLE_FEEDN=1"
              -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/adapt/sig_arm_ref_check.cmake)
     # The past-groups generator (SIG_ORACLE_PAST_GROUPS=1: past groups as
     # often as the others, as the player makes them) with the predicate's
@@ -795,7 +798,7 @@ if(YSP_BUILD_TESTS)
     add_test(NAME test_sig_arm_ref_past COMMAND ${CMAKE_COMMAND} -E env SIG_ORACLE_CASES=1000 SIG_ORACLE_SEED=20261115
              SIG_ORACLE_R1=1 SIG_ORACLE_GEN_TIE=1 SIG_ORACLE_GEN_DISARM_AT=1 SIG_ORACLE_GEN_EXIT=1 SIG_ORACLE_DAX=1 SIG_ORACLE_GEN_DRAIN_TO=1
              SIG_ORACLE_DERIVED_TO=1 SIG_ORACLE_LATE=4 SIG_ORACLE_LATE_A=1 SIG_ORACLE_P2STRICT=1 SIG_ORACLE_PRED=1
-             SIG_ORACLE_PAST_GROUPS=1 SIG_ORACLE_PRED_TARGET=1 $<TARGET_FILE:test_sig_arm_ref>)
+             SIG_ORACLE_PAST_GROUPS=1 SIG_ORACLE_PRED_TARGET=1 SIG_ORACLE_BARCOUNT_KEY=1 $<TARGET_FILE:test_sig_arm_ref>)
     set_tests_properties(test_sig_arm_ref_past PROPERTIES
              PASS_REGULAR_EXPRESSION "with no arm_unverified or late_unverified: 0[^0-9]"
              FAIL_REGULAR_EXPRESSION "header missed a B-cannot case;stale count, [1-9][0-9]* with none;PRED_TARGET case")

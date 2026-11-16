@@ -3,6 +3,22 @@
  * 09ecfb2, amended in b6676f4) and the graph's other rules in sig.md. It
  * does not read the header's internals.
  *
+ * H1 (bdb8ff1, the third reviewer, 2026-11-16): a raw mouse's count stamped
+ *   before the last barrier is no longer lost in R. The header adds it to the
+ *   adapter's counts integrator unless that integrator was reset or
+ *   recentered after the count's stamp (2fbd646). B is given such a count
+ *   (E_BARC) when the oracle's own model says the rule takes it: right after
+ *   the last recenter made before it in the count's barrier segment, else at
+ *   the segment's start (bar_count(), barc_key()). Before, B never got it,
+ *   and seed 20261115 late on, case 144, compared node 35 (-4,-6) in A
+ *   against (-5,-5) in B with no count. SIG_ORACLE_BARDROP=1: the old R (B
+ *   never gets it). SIG_ORACLE_BARCOUNT_KEY=1: the key reading (a reset's or
+ *   recenter's origin is its key in R, so a recenter after the barrier
+ *   always erases the count). The summary's "bar counts" line tallies both
+ *   readings for every such count. The generator makes few such counts
+ *   (0 to 3 a 1,000 cases) and none where the two readings differ, so the
+ *   oracle does not decide between them; the reviewer's rc.c and rc2.c do.
+ *
  * Review of be18843 (the second reviewer, 2026-11-15):
  *   - Pins in late mode 4 read the clamped key times (ruling 8): a feed at
  *     the last barrier's time comes before a group whose tau is before that
@@ -875,7 +891,7 @@ static void src_reset(int exp_only) {
 
 /* ---- R ------------------------------------------------------------------- */
 
-enum { E_INPUT = 1, E_BARRIER = 2, E_STATE = 4, E_NEUTRAL = 8, E_DROPPED = 16 };
+enum { E_INPUT = 1, E_BARRIER = 2, E_STATE = 4, E_NEUTRAL = 8, E_DROPPED = 16, E_BARC = 32 };
 typedef struct { int ci, flags, grp; int64_t time; uint64_t fp; } rent;
 static rent g_R[MAXC * 2];
 static int g_nR;
@@ -1404,7 +1420,7 @@ static void b_issue(const rent* e) {
     uint64_t e_gfp = e->grp >= 0 ? g_gr[e->grp].fp : e->fp;
     int bw_new = SIG_ARM_REF_SPEC && c->kind == C_ARM && b_nf(e_idx, e_gfp) < e->time;   /* per footprint (0.7.0) */
     if (c->kind == C_DRAIN) return;
-    if (e->flags & E_DROPPED) return;   /* (late_barrier) not in R: B never gets it */
+    if ((e->flags & E_DROPPED) && !(e->flags & E_BARC)) return;   /* (late_barrier) not in R: B never gets it; (H1) a raw mouse's count it keeps goes to the integrators */
     /* a disarm of a group that B's graph sees ahead is made at once there
      * (a no-window graph cannot take back a state call), meeting the hold
      * only up to B's input time, where R meets it up to tau: B cannot give
@@ -2135,10 +2151,12 @@ static okey r_key(const rent* e) {
     if (!(e->flags & E_BARRIER)) k.t = clampt(k.t, e->grp >= 0 ? g_gr[e->grp].arm_ci : e->ci);
     return k;
 }
+static okey barc_key(const rent* e);
 static okey r_key_raw(const rent* e) {
     okey k;
     const call* c = &g_c[e->ci];
     k.sub = e->ci;
+    if (e->flags & E_BARC) return barc_key(e);
     if (e->grp >= 0 && !(g_late >= 3 || getenv("SIG_ORACLE_KEY3"))) { k.t = g_gr[e->grp].tau; k.rank = 1; k.order = g_gr[e->grp].arm_ci; return k; }
     if (g_late >= 3 || getenv("SIG_ORACLE_KEY3")) {
         /* (7a17176) classes at one time: a feed, then a frame or a settle,
@@ -2162,6 +2180,66 @@ static int okey_lt(okey a, okey b) {
     if (a.rank != b.rank) return a.rank < b.rank;
     if (a.order != b.order) return a.order < b.order;
     return a.sub < b.sub;
+}
+
+/* (H1, bdb8ff1) A raw mouse's count stamped before the last barrier is not
+ * in R, but the header adds it to each counts integrator of its source
+ * (the adapter's, g_integ), with no run again, unless that integrator was
+ * reset or recentered after the count's stamp (sig.md, "Per device (T6)",
+ * as rewritten in 2fbd646). B is the header with no window, so B is given
+ * the count at a place in R where B's integrator decides as A's did, and
+ * only when the oracle's own model of the rule says it is taken:
+ *   header (default): the origin is the last full reset or recenter made
+ *     before the count in call order, at the time the caller passed it
+ *     (t_org). Taken when the count's stamp is at or after it. B gets the
+ *     count right after that recenter's entry in R when the recenter is in
+ *     the count's barrier segment, else at the segment's start.
+ *   SIG_ORACLE_BARCOUNT_KEY=1: the key reading. The origin is the last
+ *     full reset or recenter before the segment's barrier, at its key in
+ *     R; every recenter after the barrier keys after the count (ruling 2
+ *     extended) and erases it. B gets the count at the segment's start.
+ *   SIG_ORACLE_BARDROP=1: the old R (before bdb8ff1): B never gets it.
+ * Both models are evaluated for every such count and tallied (g_bc_*), so
+ * the summary shows where the two readings differ. */
+static int g_barc_anchor[MAXC];       /* -1: the segment's start; else a recenter's call */
+static int64_t g_barc_bar[MAXC];      /* the segment's barrier time at the count */
+static long g_bc_n, g_bc_hdr, g_bc_key, g_bc_diff, g_bc_diff_cases, g_bc_case_seen = -1;
+static int barc_mode(void) { return getenv("SIG_ORACLE_BARDROP") ? 0 : getenv("SIG_ORACLE_BARCOUNT_KEY") ? 2 : 1; }
+static okey barc_key(const rent* e) {
+    okey k;
+    int a = g_barc_anchor[e->ci], i;
+    if (a >= 0)
+        for (i = 0; i < g_nR; i++)
+            if (g_R[i].ci == a && !(g_R[i].flags & E_BARC)) { k = r_key(&g_R[i]); k.sub = e->ci; return k; }
+    /* the segment's start: before every call at the barrier's time */
+    k.t = g_barc_bar[e->ci]; k.rank = -1; k.order = 0; k.sub = e->ci;
+    return k;
+}
+/* ci: a feed R drops as before the last barrier (lb: that barrier's entry) */
+static void bar_count(int ci, int lb) {
+    const call* c = &g_c[ci];
+    int q, o = -1, okey_o = -1, bar_ci = g_R[lb].ci, take_h, take_k, mode = barc_mode();
+    int64_t org_h = 0, org_k = 0;
+    if (!g_rel || c->ekind != YIN_KIND_MOUSE || c->ectl != YIN_AXIS_DELTA) return;
+    if ((int)(c->x < 0 ? c->x - 0.5 : c->x + 0.5) == 0 && (int)(c->y < 0 ? c->y - 0.5 : c->y + 0.5) == 0) return;   /* moves nothing */
+    for (q = ci - 1; q >= 0; q--) if (g_c[q].kind == C_RESET || g_c[q].kind == C_RECENTER) { o = q; break; }
+    for (q = bar_ci - (g_c[bar_ci].kind == C_RESET ? 0 : 1); q >= 0; q--) if (g_c[q].kind == C_RESET || g_c[q].kind == C_RECENTER) { okey_o = q; break; }
+    if (o >= 0) org_h = g_c[o].t;
+    if (okey_o >= 0) {
+        org_k = g_c[okey_o].t;
+        if (g_c[okey_o].kind == C_RECENTER)
+            for (q = 0; q < g_nR; q++) if (g_R[q].ci == okey_o) { org_k = r_key(&g_R[q]).t; break; }
+    }
+    take_h = c->t >= org_h;
+    take_k = c->t >= org_k && !(o > bar_ci && g_c[o].kind == C_RECENTER);
+    g_bc_n++; g_bc_hdr += take_h; g_bc_key += take_k;
+    if (take_h != take_k) { g_bc_diff++; if (g_bc_case_seen != g_case) { g_bc_case_seen = g_case; g_bc_diff_cases++; } }
+    if (getenv("SIG_ORACLE_BCDBG")) printf("  case %ld bar count call %d t %.3f (barrier call %d at %.3f): header origin call %d t %.3f takes %d; key origin call %d at %.3f takes %d\n",
+                                           g_case, ci, c->t / 1e6, bar_ci, g_R[lb].time / 1e6, o, org_h / 1e6, take_h, okey_o, org_k / 1e6, take_k);
+    if (!mode || !(mode == 1 ? take_h : take_k)) return;
+    g_barc_bar[ci] = g_R[lb].time;
+    g_barc_anchor[ci] = mode == 1 && o > bar_ci && g_c[o].kind == C_RECENTER ? o : -1;
+    g_call_flags[ci] |= E_BARC;
 }
 /* SIG_ORACLE_ORDERCMP=1: at each case's end, every meeting pair of R (in
  * one barrier segment) whose order is not the time order's, by class */
@@ -2257,6 +2335,7 @@ static void late_input2(int ci, uint64_t fp) {
         /* (L10 answer) before the last barrier's time: dropped, in R too */
         g_lc.barrier++; g_lc.late++;
         g_call_flags[ci] = E_NEUTRAL | E_DROPPED; g_call_fp[ci] = 0;
+        bar_count(ci, lb);
         g_R[g_nR++] = mk_ent(ci, -1, t);
         return;
     }
@@ -2427,6 +2506,7 @@ static void step_(int ci) {
                 g_lc.barrier++; g_lc.late++;
                 g_call_time[ci] = c->t;
                 g_call_flags[ci] = E_NEUTRAL | E_DROPPED; g_call_fp[ci] = 0;
+                bar_count(ci, lb);
                 g_R[g_nR++] = mk_ent(ci, -1, c->t);
                 break;
             }
@@ -3665,6 +3745,8 @@ int main(int argc, char** argv) {
     printf("cases %ld, wrong %ld, with a fallback %ld; not compared: B cannot run R %ld, an ahead arm with no room %ld, a disarm in a group B sees ahead %ld; spec mode %d\n",
            cases, wrong, fellback, cannot, noroom, disarm_ahead, SIG_ARM_REF_SPEC);
     if (h9) printf("  set aside as H9-shaped (SIG_ORACLE_H9): %ld\n", h9);
+    printf("  bar counts (H1, mode %s): raw mouse counts before the last barrier %ld; the header's rule (t_org) takes %ld, the key reading %ld; they differ for %ld counts in %ld cases\n",
+           barc_mode() == 0 ? "drop" : barc_mode() == 1 ? "header" : "key", g_bc_n, g_bc_hdr, g_bc_key, g_bc_diff, g_bc_diff_cases);
     if (g_late >= 4) printf("  disarm_at exits (X1): the player's exit shape in %ld cases; the exception taken in %ld cases (%ld of them wrong, %ld wrong with no count); B let a group in at a disarm_at in %ld cases\n", lt_dxs, lt_dxe, lt_dxw, lt_dxu, lt_dxl);
     if (getenv("SIG_ORACLE_R9PEND_CASE")) printf("  (rev2, debug) reason-9 tests put off on an open gap: %ld\n", g_r9_pend);
     if (g_late) printf("  (rev2b) void checks put off while an open gap holds a late state call (SIG_ORACLE_GAPLATE_NOW=1 off): %ld\n", g_gaplate_defer);

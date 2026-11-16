@@ -20,7 +20,8 @@ timeout = 60
 [test.sig_ref]
 # The reviewer's oracle as ctest runs it for 0.7.0 (CMakeLists.txt,
 # test_sig_arm_ref_late): late mode 4 with A's checks and the switches of
-# 2026-11-15, 3,000 cases, seed 20261115. Seed 20261114 with no switches
+# 2026-11-15 and SIG_ORACLE_BARCOUNT_KEY=1 (H1, 2026-11-16), 3,000 cases,
+# seed 20261115. Seed 20261114 with no switches
 # was 0.6.x's; mutant 330's test at seed 778001 went with the pending code.
 source = "tests/adapt/sig_arm_ref_targets.c"
 compiler = "gcc"
@@ -28,7 +29,7 @@ flags = ["-std=c99", "-O2", "-w", "-DSIG_ARM_REF_SPEC=1", "-DSIG_HAS_UNV=1", "-D
          "-DSIG_HAS_DISARM_AT=1", "-DSIG_HAS_DETECTED_TO=1", "-DSIG_HAS_DERIVED_TO=1"]
 libs = ["-lm"]
 timeout = 300
-env = { SIG_ORACLE_CASES = "3000", SIG_ORACLE_SEED = "20261115", SIG_ORACLE_R1 = "1", SIG_ORACLE_GEN_TIE = "1", SIG_ORACLE_GEN_DISARM_AT = "1", SIG_ORACLE_GEN_EXIT = "1", SIG_ORACLE_DAX = "1", SIG_ORACLE_GEN_DRAIN_TO = "1", SIG_ORACLE_DERIVED_TO = "1", SIG_ORACLE_LATE = "4", SIG_ORACLE_LATE_A = "1", SIG_ORACLE_P2STRICT = "1", SIG_ORACLE_PRED = "1", SIG_REF_BARE_MAX = "1" }
+env = { SIG_ORACLE_CASES = "3000", SIG_ORACLE_SEED = "20261115", SIG_ORACLE_R1 = "1", SIG_ORACLE_GEN_TIE = "1", SIG_ORACLE_GEN_DISARM_AT = "1", SIG_ORACLE_GEN_EXIT = "1", SIG_ORACLE_DAX = "1", SIG_ORACLE_GEN_DRAIN_TO = "1", SIG_ORACLE_DERIVED_TO = "1", SIG_ORACLE_LATE = "4", SIG_ORACLE_LATE_A = "1", SIG_ORACLE_P2STRICT = "1", SIG_ORACLE_PRED = "1", SIG_ORACLE_BARCOUNT_KEY = "1" }
 
 [test.sig_ref_23off]
 # The same oracle at seed 20261123 with the late generator off (OFF=l),
@@ -41,7 +42,7 @@ flags = ["-std=c99", "-O2", "-w", "-DSIG_ARM_REF_SPEC=1", "-DSIG_HAS_UNV=1", "-D
          "-DSIG_HAS_DISARM_AT=1", "-DSIG_HAS_DETECTED_TO=1", "-DSIG_HAS_DERIVED_TO=1"]
 libs = ["-lm"]
 timeout = 300
-env = { SIG_ORACLE_CASES = "3000", SIG_ORACLE_SEED = "20261123", SIG_ORACLE_OFF = "l", SIG_ORACLE_R1 = "1", SIG_ORACLE_GEN_TIE = "1", SIG_ORACLE_GEN_DISARM_AT = "1", SIG_ORACLE_GEN_EXIT = "1", SIG_ORACLE_DAX = "1", SIG_ORACLE_GEN_DRAIN_TO = "1", SIG_ORACLE_DERIVED_TO = "1", SIG_ORACLE_LATE = "4", SIG_ORACLE_LATE_A = "1", SIG_ORACLE_P2STRICT = "1", SIG_ORACLE_PRED = "1" }
+env = { SIG_ORACLE_CASES = "3000", SIG_ORACLE_SEED = "20261123", SIG_ORACLE_OFF = "l", SIG_ORACLE_R1 = "1", SIG_ORACLE_GEN_TIE = "1", SIG_ORACLE_GEN_DISARM_AT = "1", SIG_ORACLE_GEN_EXIT = "1", SIG_ORACLE_DAX = "1", SIG_ORACLE_GEN_DRAIN_TO = "1", SIG_ORACLE_DERIVED_TO = "1", SIG_ORACLE_LATE = "4", SIG_ORACLE_LATE_A = "1", SIG_ORACLE_P2STRICT = "1", SIG_ORACLE_PRED = "1", SIG_ORACLE_BARCOUNT_KEY = "1" }
 
 [test.sig_ref_pt]
 # The oracle with SIG_ORACLE_PRED_TARGET=1 (the reviewer's rev2e, V2SIG8):
@@ -57,7 +58,7 @@ flags = ["-std=c99", "-O2", "-w", "-DSIG_ARM_REF_SPEC=1", "-DSIG_HAS_UNV=1", "-D
          "-DSIG_HAS_DISARM_AT=1", "-DSIG_HAS_DETECTED_TO=1", "-DSIG_HAS_DERIVED_TO=1"]
 libs = ["-lm"]
 timeout = 300
-env = { SIG_ORACLE_CASES = "3000", SIG_ORACLE_SEED = "20261115", SIG_ORACLE_R1 = "1", SIG_ORACLE_GEN_TIE = "1", SIG_ORACLE_GEN_DISARM_AT = "1", SIG_ORACLE_GEN_EXIT = "1", SIG_ORACLE_DAX = "1", SIG_ORACLE_GEN_DRAIN_TO = "1", SIG_ORACLE_DERIVED_TO = "1", SIG_ORACLE_LATE = "4", SIG_ORACLE_LATE_A = "1", SIG_ORACLE_P2STRICT = "1", SIG_ORACLE_PRED = "1", SIG_ORACLE_PRED_TARGET = "1" }
+env = { SIG_ORACLE_CASES = "3000", SIG_ORACLE_SEED = "20261115", SIG_ORACLE_R1 = "1", SIG_ORACLE_GEN_TIE = "1", SIG_ORACLE_GEN_DISARM_AT = "1", SIG_ORACLE_GEN_EXIT = "1", SIG_ORACLE_DAX = "1", SIG_ORACLE_GEN_DRAIN_TO = "1", SIG_ORACLE_DERIVED_TO = "1", SIG_ORACLE_LATE = "4", SIG_ORACLE_LATE_A = "1", SIG_ORACLE_P2STRICT = "1", SIG_ORACLE_PRED = "1", SIG_ORACLE_BARCOUNT_KEY = "1", SIG_ORACLE_PRED_TARGET = "1" }
 
 [test.sig_spec]
 # The reviewer's hand-derived cases (ctest test_sig_arm_spec).
