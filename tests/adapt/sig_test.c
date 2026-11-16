@@ -7892,6 +7892,7 @@ static void test_late(void) {
         ysig_value a[3], ra[16], rb;
         ysig_stats sa, sb;
         int j;
+        memset(&sa, 0, sizeof sa);
         for (k = 0; k < 8; k++) {
             memset(&ev[k], 0, sizeof ev[k]);
             ev[k].t = ms[k] * MS; ev[k].type = YIN_SAMPLE; ev[k].kind = YIN_KIND_PEN; ev[k].control = YIN_AXIS_POSITION;

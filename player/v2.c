@@ -2174,8 +2174,8 @@ int pl_v2_leaf_open(pl_player* p, uint64_t leaf_seed) {
     {
         /* rank by byte order: sort the names, carry the values */
         const char* sorted[64];
-        memcpy(sorted, names, sizeof(char*) * (size_t)nn);
-        qsort(sorted, (size_t)nn, sizeof(char*), v2_name_cmp);
+        memcpy((void*)sorted, names, sizeof(char*) * (size_t)nn);
+        qsort((void*)sorted, (size_t)nn, sizeof(char*), v2_name_cmp);
         for (j = 0; j < nn; j++) {
             const yexp_value* v = NULL;
             struct v2_uni* u = &S->uni[j];
@@ -3786,7 +3786,7 @@ int pl_v2_frame_eval(pl_player* p, const yscr_frame* f) {
                  * added since), its late flags cleared */
                 int n = ytl_evaluate(&p->tl, &(ytl_frame){ f->onset, f->period, f->index }, p->fired, p->fired_cap), k;
                 if (n < 0) { pl_fail(p, "ytl_evaluate: %s", ytl_strerror(n)); return -1; }
-                for (k = 0; k < n; k++) { p->fired[k].flags &= (uint16_t)~YTL_EV_LATE; p->fired[k].residual = 0; }
+                for (k = 0; k < n; k++) { p->fired[k].flags = (uint16_t)(p->fired[k].flags & ~YTL_EV_LATE); p->fired[k].residual = 0; }
                 if (pl_on_fired(p, f, n) < 0) return -1;
                 pl_v2_values(p, ytl_values(&p->tl));
             }
@@ -4345,7 +4345,7 @@ int pl_v2_column(pl_player* p, pl_row* r, int col, const yexp_value* f, pl_val* 
         if (x->ns >= x->scap) { pl_fail(p, "template '%s': internal: more signal columns than the row holds", v->def->name); return -1; }
         x->s[x->ns].col = col;
         x->s[x->ns].node = n;
-        x->s[x->ns].lane = f->i >= 0 ? f->i : 0;
+        x->s[x->ns].lane = f->i >= 0 ? (int)f->i : 0;
         x->s[x->ns].t = v->col_t;
         x->ns++;
         x->wait = true;

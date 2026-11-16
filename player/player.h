@@ -756,6 +756,10 @@ int  pl_v2_leaf_open(pl_player* p, uint64_t leaf_seed);
 int  pl_v2_var(pl_player* p, const pl_env* e, const char* name, pl_val* out);
 /* A template's flag by name: 1 and *out, or 0. */
 int  pl_v2_flag(pl_player* p, const char* name, bool* out);
+/* Version 2's row cells, before the frame path. */
+int  pl_v2_rows(pl_player* p);
+/* A template's runtime-state steps: the count (k -1), or state k's. */
+int  pl_v2_rs_steps(pl_player* p, int ti, int k, const yexp_step** st, int* n);
 /* The trial: its start, each frame's parts, its end and its row. */
 int  pl_v2_trial_start(pl_player* p, const yscr_frame* f);
 int  pl_v2_frame_input(pl_player* p, const yscr_frame* f);

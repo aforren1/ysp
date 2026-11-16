@@ -277,7 +277,6 @@ static int h_check_ops(void* ctx, const yexp_def* d, const yexp_template* t, cha
     int mode, bound, rc = 0;
     pl_env saved = p->env;
     int ti = (int)(t - d->templates), n_rs;
-    extern int pl_v2_rs_steps(pl_player* p, int ti, int k, const yexp_step** st, int* n);
     if (d->format_version > PL_FORMAT_VERSION) return 0;
     p->def = (yexp_def*)d;
     if (pl_channels_assign(p) < 0) { snprintf(msg, cap, "%s", p->error); p->failed = 0; p->env = saved; return 1; }

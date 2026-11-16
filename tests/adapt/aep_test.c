@@ -326,7 +326,7 @@ static void test_laplace_probit(void) {
     double xs[6] = { -0.9, -0.5, -0.1, 0.2, 0.6, 0.95 };
     int ys[6] = { 0, 0, 1, 0, 1, 1 };
     double K[36], A[36], ks[6], mu, sd, vref, kxx;
-    double probe = 0.35;
+    double probe[YAEP_MAX_DIMS] = { 0.35 };   /* a whole point: GCC 15.2 reads past a scalar */
     memset(&d, 0, sizeof(d));
     d.n_dims = 1;
     d.lo[0] = -1.0; d.hi[0] = 1.0;
@@ -361,8 +361,8 @@ static void test_laplace_probit(void) {
     tinv(A, n);
     for (int i = 0; i < n; i++) A[i * n + i] += g.W[i];
     tinv(A, n);   /* A = (K^-1 + W)^-1, the posterior covariance at the sites */
-    for (int i = 0; i < n; i++) ks[i] = yaep__kernel(&g, xs + i, &probe);
-    kxx = yaep__kernel(&g, &probe, &probe);
+    for (int i = 0; i < n; i++) ks[i] = yaep__kernel(&g, xs + i, probe);
+    kxx = yaep__kernel(&g, probe, probe);
     {
         /* var = k** - k*' K^-1 k* + k*' K^-1 A K^-1 k*, which is the
          * same thing as k** - k*' (K + W^-1)^-1 k* written through A. */
@@ -380,11 +380,11 @@ static void test_laplace_probit(void) {
         for (int i = 0; i < n; i++) { t1 += ks[i] * v1[i]; t2 += v1[i] * v2[i]; }
         vref = kxx - t1 + t2;
     }
-    CHECK(yaep_predict_f(&g, &probe, 0, &mu, &sd) == YAEP_OK, "predict_f");
+    CHECK(yaep_predict_f(&g, probe, 0, &mu, &sd) == YAEP_OK, "predict_f");
     track(&worst_var, fabs(sd * sd - vref));
     CLOSE(sd * sd, vref, 1e-9 * tolx, "Laplace predictive variance");
     /* The probit closed form is what yaep_predict_p must return. */
-    CLOSE(yaep_predict_p(&g, &probe),
+    CLOSE(yaep_predict_p(&g, probe),
           0.5 * erfc(-(mu / sqrt(1.0 + sd * sd)) / sqrt(2.0)), 1e-13,
           "predict_p closed form");   /* both sides read the same mu and sd */
     /* The Laplace log marginal likelihood (R&W eq. 3.32) is what the
