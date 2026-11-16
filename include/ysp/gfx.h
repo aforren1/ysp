@@ -1,4 +1,4 @@
-/* ysp/gfx.h - v0.20.0 - public domain single-header stimulus graphics library
+/* ysp/gfx.h - v0.20.1 - public domain single-header stimulus graphics library
  *   (with MIT-licensed parts: see below)
  *
  *   Stimuli on GL ES 3.0, on top of ysp/screen.h: signed-distance shapes
@@ -1367,6 +1367,11 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.20.1 - GL_MAX_UNIFORM_BLOCK_SIZE is read with glGetInteger64v
+ *          and clamped to INT32_MAX. Firefox's WebGL2 reports 2^31;
+ *          glGetIntegerv wrapped it to INT32_MIN under Emscripten, so
+ *          open() refused every web page in Firefox. Needs
+ *          glGetInteger64v (GL ES 3.0 core).
  *   v0.20.0 - Centimeters as units (gap G14 of the experiment format,
  *          D23): YGFX_CM, one scale factor, px per cm = drawable width x
  *          10 / view.width_mm, refused without view.width_mm. Units past
@@ -1711,6 +1716,9 @@
  *          source rectangle, not the sampler's.
  *   v0.1.0 - first release.
  *
+ *   STATUS: v0.20.1, 2026-11-16, the Linux desktop (GCC 12.2, Mesa
+ *   llvmpipe headless): test_gfx and the compile checks; not yet run in
+ *   Firefox.
  *   STATUS: v0.20.0, 2026-11-11, the Linux desktop (GCC 12.2, Mesa
  *   llvmpipe headless): test_coordinates checks YGFX_CM's scale and its
  *   refusals; the compile checks; mutants cm-01 to cm-05 killed.
@@ -1948,8 +1956,8 @@
 
 #define YGFX_VERSION_MAJOR 0
 #define YGFX_VERSION_MINOR 20
-#define YGFX_VERSION_PATCH 0
-#define YGFX_VERSION_STRING "0.20.0"
+#define YGFX_VERSION_PATCH 1
+#define YGFX_VERSION_STRING "0.20.1"
 
 #include "ysp/screen.h"
 #include "ysp/color.h"
@@ -3666,6 +3674,7 @@ typedef char          ygfx__GLchar;
     X(const unsigned char*, GetString, (ygfx__GLenum)) \
     X(const unsigned char*, GetStringi, (ygfx__GLenum, ygfx__GLuint)) \
     X(void, GetIntegerv, (ygfx__GLenum, ygfx__GLint*)) \
+    X(void, GetInteger64v, (ygfx__GLenum, int64_t*)) \
     X(ygfx__GLenum, GetError, (void)) \
     X(void, Enable, (ygfx__GLenum)) \
     X(void, Disable, (ygfx__GLenum)) \
@@ -3911,7 +3920,13 @@ static int ygfx__gl_open(void* c, const ygfx_backend_open* in, ygfx_backend_caps
     caps->float_linear = ygfx__gl_ext(gl, "GL_OES_texture_float_linear") != 0;
     caps->parallel_compile = ygfx__gl_ext(gl, "GL_KHR_parallel_shader_compile") != 0 && !ygfx__test_serial;
     gl->f.GetIntegerv(YGFX__GL_UBO_ALIGN, &caps->ubo_align);
-    gl->f.GetIntegerv(YGFX__GL_MAX_UBO_SIZE, &caps->max_ubo);
+    {
+        /* a 64-bit limit: Firefox reports 2^31, which glGetIntegerv wrapped
+         * to INT32_MIN under Emscripten; any size past int32 is enough */
+        int64_t m = 0;
+        gl->f.GetInteger64v(YGFX__GL_MAX_UBO_SIZE, &m);
+        caps->max_ubo = m > INT32_MAX ? INT32_MAX : (int32_t)m;
+    }
     gl->f.GetIntegerv(YGFX__GL_MAX_TEXTURE_SIZE, &caps->max_texture);
     r = gl->f.GetString(YGFX__GL_RENDERER);
     snprintf(caps->renderer, sizeof caps->renderer, "%s", r ? (const char*)r : "?");

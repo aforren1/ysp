@@ -4509,6 +4509,24 @@ of `cm` without `view.width_mm` and of units 3. `tests/compile/gfx.c`
 names `YGFX_CM`. Mutants `cm-01` to `cm-05` (the scale left out, mm for
 cm, the two refusals, the row's values): 5 of 5 killed.
 
+## v0.20.1: a uniform block size past int32
+
+Every web demo failed to open in Firefox with "uniform buffer alignment 4
+or size -2147483648 not supported". `GL_MAX_UNIFORM_BLOCK_SIZE` is a
+64-bit value. Firefox's WebGL2 reports 2^31. The header read it with
+`glGetIntegerv`, and Emscripten's `glGetIntegerv` stores the value in 32
+bits, so it became `INT32_MIN` and the open refused it. A native driver
+clamps the value; Emscripten does not.
+
+The header now reads the value with `glGetInteger64v` (GL ES 3.0 core)
+and clamps it to `INT32_MAX`. The open needs only 64 KiB.
+
+### Tests
+
+`test_gfx` and the compile checks pass on the Linux desktop (GCC 12.2,
+Mesa llvmpipe headless). No test reproduces Firefox's value: the tests
+run on a real GL, which reports 64 KiB or more and fits in 32 bits.
+
 ## Bindings
 
 `ysp/gfx.h` is bound in `ysp-vis` with `ysp/screen.h` and `ysp/video.h`
