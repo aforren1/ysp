@@ -30,6 +30,9 @@
 #if defined(_MSC_VER) && !defined(_CRT_SECURE_NO_WARNINGS)
 #define _CRT_SECURE_NO_WARNINGS
 #endif
+/* ysig_feed_n()'s bound on one feed's log use, checked on every quiet
+ * feed of a batch (aborts if a feed asks a log for more) */
+#define YSIG_DEBUG_FEED_BOUND
 #define YSP_SIG_IMPLEMENTATION
 #include "ysp/sig.h"
 
@@ -679,6 +682,15 @@ int main(int argc, char** argv) {
            "%lld hits; arms in the past run again %lld, fell back %lld; late events %lld, batches %lld, disarm_at %lld, "
            "late calls not placed (far, full, off, barrier) %lld\n", iters, g_refused, opened, g_taken, g_rows_all, g_hits_all,
            g_caught, g_back, g_late, g_batches, g_dis_at, g_late_count);
+    {
+        static const char* const name[6] = { "calls", "undo", "hits", "derived", "row buffer", "derived buffer" };
+        int k;
+        printf("sig_fuzz: %llu quiet feeds of batches checked against their need; largest use, as a share of the need:",
+               (unsigned long long)ysig__dbg_feeds);
+        for (k = 0; k < 6; k++)
+            printf("%s %s %.3f (%llu)", k ? "," : "", name[k], ysig__dbg_share[k], (unsigned long long)ysig__dbg_use_max[k]);
+        printf("\n");
+    }
     return 0;
 }
 #elif defined(YSP_FUZZ_SEEDS)

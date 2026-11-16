@@ -1456,10 +1456,19 @@ three cases. Each is a point where per-event feeding has done its run
 again and the batch would otherwise lose or merge it:
 
 - The next event could end the window: a log has less room than one
-  event can use (one call; per scheduled node two ring writes and one
-  hit, derived event or row). Without this, a batch whose later events
-  fill the logs loses the checkpoint of its run again and counts
-  `late_full`, where per-event feeding does not.
+  event can use (one call; one history write per source; per scheduled
+  node two ring writes and one hit, derived event or row). Without this,
+  a batch whose later events fill the logs loses the checkpoint of its
+  run again and counts `late_full`, where per-event feeding does not.
+  Why the bound holds: a source's schedule runs once a feed, and each
+  node in it once. A detect makes at most one hit an evaluation (with a
+  hold it returns before the crossing test, and with hold 0 there is no
+  held hit to complete). A delay writes the one new sample to its ring and
+  reads one entry; it does not release a queue. Only ring and history
+  writes take undo entries; other op state is in the checkpoint's image.
+  A build with `YSIG_DEBUG_FEED_BOUND` defined (the fuzz target sets it)
+  counts each log's use in each such feed of a batch and aborts if a
+  feed uses more than its bound.
 - The next event could let in a waiting group (a waiting arm before the
   event's time), or a gap is open. Such an event can run the window
   again itself, so its log use has no bound.

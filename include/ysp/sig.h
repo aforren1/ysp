@@ -425,7 +425,8 @@
  *          window again before an event that could end its window, or let
  *          a waiting group in, or after a run for late state calls only,
  *          so a batch never falls back where per-event feeding does not
- *          (format 3.11 rule 4, DECIDED 2026-11-15).
+ *          (format 3.11 rule 4, DECIDED 2026-11-15); its bound on one
+ *          feed's log use is checked in a YSIG_DEBUG_FEED_BOUND build.
  *          "N(G) earlier than tau" is a flag, not tau - 1 (a signed
  *          overflow at an arm at INT64_MIN).
  *          Condition 3's table of armed detects (w->lr) went: no reader,
@@ -1126,6 +1127,9 @@ static inline uint8_t ysig_tier_worst(uint8_t a, uint8_t b) {
 #include <math.h>
 #include <stdio.h>
 #include <stdarg.h>
+#ifdef YSIG_DEBUG_FEED_BOUND
+#include <stdlib.h>
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -1325,7 +1329,17 @@ typedef struct ysig__cu {
     uint64_t    def_p;
     int64_t     def_t;
     int64_t     n_lf;           /* a run again: frames late_frames counts */
+#ifdef YSIG_DEBUG_FEED_BOUND
+    uint64_t    dbg_use[6];     /* entries each log was asked for: calls,
+                                 * undo, hits, derived, row and derived
+                                 * buffers (ysig__feed_need())           */
+#endif
 } ysig__cu;
+#ifdef YSIG_DEBUG_FEED_BOUND
+#define YSIG__DBG_USE(cu, k) ((cu)->dbg_use[k]++)
+#else
+#define YSIG__DBG_USE(cu, k) ((void)0)
+#endif
 
 /* v0.6.0: the arms that wait for input past their time (rule 3) and the
  * calls of their groups; the disarms of the open gap. Live state only: a
@@ -1439,6 +1453,7 @@ static void ysig__undo_note(ysig_graph* g, ysig_value* at) {
     ysig__cu* cu = g->cu;
     ysig__undo* u;
     if (!cu || !cu->n_ck) return;
+    YSIG__DBG_USE(cu, 1);
     if (cu->u_head - cu->u_tail >= (uint64_t)cu->W) { ysig__cu_full(cu); return; }
     u = &cu->undo[cu->u_head++ % (uint64_t)cu->W];
     u->at = at;
@@ -1447,6 +1462,7 @@ static void ysig__undo_note(ysig_graph* g, ysig_value* at) {
 static void ysig__hl_add(ysig__cu* cu, uint64_t seq, const ysig_hit* h) {
     ysig__hl* l;
     if (!cu->n_ck) return;
+    YSIG__DBG_USE(cu, 2);
     if (cu->h_head - cu->h_tail >= (uint64_t)cu->C) { ysig__cu_full(cu); return; }
     l = &cu->hl[cu->h_head++ % (uint64_t)cu->C];
     l->seq = seq;
@@ -1456,6 +1472,7 @@ static void ysig__hl_add(ysig__cu* cu, uint64_t seq, const ysig_hit* h) {
 static void ysig__dl_add(ysig__cu* cu, uint64_t seq, const yin_event* e) {
     ysig__dl* l;
     if (!cu->n_ck || !cu->DC) return;
+    YSIG__DBG_USE(cu, 3);
     if (cu->d_head - cu->d_tail >= (uint64_t)cu->DC) { ysig__cu_full(cu); return; }
     l = &cu->dl[cu->d_head++ % (uint64_t)cu->DC];
     l->seq = seq;
@@ -2972,6 +2989,7 @@ static void ysig__rb_push(ysig_graph* g, const ysig_row* r) {
     ysig__cu* cu = g->cu;
     ysig__rbuf* b;
     if (!cu->rb) return;
+    YSIG__DBG_USE(cu, 4);
     if (cu->rb_head - cu->rb_tail >= (uint64_t)cu->R) ysig__buf_room(g, cu->rb[cu->rb_tail % (uint64_t)cu->R].idx);
     if (cu->rb_head - cu->rb_tail >= (uint64_t)cu->R) {
         /* every checkpoint went, and on_row took the rest: at once */
@@ -2986,6 +3004,7 @@ static void ysig__db_push(ysig_graph* g, const yin_event* e) {
     ysig__cu* cu = g->cu;
     ysig__dbuf* b;
     if (!cu->db) return;
+    YSIG__DBG_USE(cu, 5);
     if (cu->db_head - cu->db_tail >= (uint64_t)cu->R) ysig__buf_room(g, cu->db[cu->db_tail % (uint64_t)cu->R].idx);
     if (cu->db_head - cu->db_tail >= (uint64_t)cu->R) {
         if (g->n_der >= YSIG__QCAP(g)) g->st.derived_lost++;
@@ -4460,6 +4479,7 @@ static int ysig__log(ysig_graph* g, const ysig_entry* e) {
     if (!cu || cu->replaying) return 0;
     cu->cur = UINT64_MAX;
     if (!st && !cu->placing) cu->grp_open = cu->grp_bad = 0;
+    if (cu->n_ck) YSIG__DBG_USE(cu, 0);
     if (!cu->n_ck || cu->c_head - cu->c_tail >= (uint64_t)cu->C) {
         if (cu->n_ck) ysig__cu_full(cu);
         if (st && !cu->placing) { cu->grp_bad = 1; cu->grp_open = 1; }
@@ -6871,12 +6891,15 @@ YSIG_API bool ysig_disarm_at(ysig_graph* g, int node, int64_t t_ns) {
  * state calls only (an open gap's, placed at the batch's first input):
  * merged with a late input's, the hits it voids would count as
  * late_hits_voided, where fed alone they are superseded or retracted. */
-static int ysig__feed_fits(const ysig_graph* g, const yin_event* e) {
-    const ysig__cu* cu = g->cu;
+/* The most one quiet feed can ask of each log (calls, undo, hits,
+ * derived, row and derived buffers), or 0 if the feed may let groups in.
+ * Each source's schedule runs at most once a feed, so the schedules' sum
+ * bounds every source that takes the event. */
+static int ysig__feed_need(const ysig_graph* g, const yin_event* e, uint64_t need[6]) {
     const ysig__wt* w = g->wt;
     uint64_t nu = (uint64_t)g->n_src, nh = 0, nd = 0, nr = 0;
     int k;
-    if (!cu->late_in || !cu->n_ck || cu->grp_open || w->n_dis || w->gap4_wp) return 0;
+    if (!g->cu->n_ck || g->cu->grp_open || w->n_dis || w->gap4_wp) return 0;
     for (k = 0; k < w->n; k++) if (ysig__kt(g, w->a[k].t) < ysig__kt(g, e->t)) return 0;
     for (k = 0; k < g->src_off[g->n_src]; k++) {
         int op = g->nd[g->sched[k]].op;
@@ -6885,14 +6908,48 @@ static int ysig__feed_fits(const ysig_graph* g, const yin_event* e) {
         nd += op == YSIG_OP_EMIT;
         nr += op == YSIG_OP_RECORD;
     }
-    if (cu->c_head - cu->c_tail + 1u > (uint64_t)cu->C) return 0;
-    if (cu->u_head - cu->u_tail + nu > (uint64_t)cu->W) return 0;
-    if (cu->h_head - cu->h_tail + nh > (uint64_t)cu->C) return 0;
-    if (cu->DC && cu->d_head - cu->d_tail + nd > (uint64_t)cu->DC) return 0;
-    if (cu->rb && cu->rb_head - cu->rb_tail + nr > (uint64_t)cu->R) return 0;
-    if (cu->db && cu->db_head - cu->db_tail + nd > (uint64_t)cu->R) return 0;
+    need[0] = 1;
+    need[1] = nu;
+    need[2] = nh;
+    need[3] = nd;
+    need[4] = nr;
+    need[5] = nd;
     return 1;
 }
+static int ysig__feed_fits(const ysig_graph* g, const yin_event* e) {
+    const ysig__cu* cu = g->cu;
+    uint64_t need[6];
+    if (!cu->late_in || !ysig__feed_need(g, e, need)) return 0;
+    if (cu->c_head - cu->c_tail + need[0] > (uint64_t)cu->C) return 0;
+    if (cu->u_head - cu->u_tail + need[1] > (uint64_t)cu->W) return 0;
+    if (cu->h_head - cu->h_tail + need[2] > (uint64_t)cu->C) return 0;
+    if (cu->DC && cu->d_head - cu->d_tail + need[3] > (uint64_t)cu->DC) return 0;
+    if (cu->rb && cu->rb_head - cu->rb_tail + need[4] > (uint64_t)cu->R) return 0;
+    if (cu->db && cu->db_head - cu->db_tail + need[5] > (uint64_t)cu->R) return 0;
+    return 1;
+}
+
+#ifdef YSIG_DEBUG_FEED_BOUND
+/* A debug build's proof check of ysig__feed_need() (the fuzz sets the
+ * macro): each quiet feed of a batch asks no log for more than its need.
+ * The largest share of the need seen, per log, for the fuzz to print. */
+static double ysig__dbg_share[6];
+static uint64_t ysig__dbg_use_max[6], ysig__dbg_feeds;
+static void ysig__dbg_feed_check(const ysig_graph* g, const uint64_t* need, const uint64_t* u0) {
+    int k;
+    ysig__dbg_feeds++;
+    for (k = 0; k < 6; k++) {
+        uint64_t use = g->cu->dbg_use[k] - u0[k];
+        if (use > need[k]) {
+            fprintf(stderr, "ysig: a feed of a batch asked log %d for %llu entries, its need is %llu\n", k,
+                    (unsigned long long)use, (unsigned long long)need[k]);
+            abort();
+        }
+        if (use > ysig__dbg_use_max[k]) ysig__dbg_use_max[k] = use;
+        if (use && (double)use / (double)need[k] > ysig__dbg_share[k]) ysig__dbg_share[k] = (double)use / (double)need[k];
+    }
+}
+#endif
 
 /* v0.7.0: ysig_feed() of each event, the window run again once at the end
  * for the late ones ("The batch"), or earlier when the next event
@@ -6907,7 +6964,17 @@ YSIG_API int ysig_feed_n(ysig_graph* g, const yin_event* e, int n) {
             ysig__out_final(g);
             g->cu->defer++;
         }
+#ifdef YSIG_DEBUG_FEED_BOUND
+        {
+            uint64_t need[6], u0[6];
+            int chk = g->cu && ysig__feed_need(g, &e[i], need);
+            if (chk) memcpy(u0, g->cu->dbg_use, sizeof u0);
+            r = ysig_feed(g, &e[i]);
+            if (chk) ysig__dbg_feed_check(g, need, u0);
+        }
+#else
         r = ysig_feed(g, &e[i]);
+#endif
         if (r > 0) taken += r;
     }
     if (g->cu) g->cu->defer--;
