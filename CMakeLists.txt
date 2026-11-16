@@ -758,6 +758,10 @@ if(YSP_BUILD_TESTS)
     # late generator on and off;
     # it passes on the two targets of "Exactness"
     # (sig_arm_ref_check.cmake). The run at scale is in docs/sig.md.
+    # Upper bounds at the fixed seed (M4, 2026-11-16): the run at 2fbd646
+    # (late: wrong 1,403, right cases with a count 711, counts 2,817;
+    # late_off: 1,059, 1,013, 4,063; feed_n: 466, 218, 808) plus 1 %
+    # rounded up. BARE_MAX 1: H1's case 144 (sig_arm_ref_check.cmake).
     # ysig_disarm_at(): the reviewer's hand-derived cases, and the 0.7.0
     # header with a zeroed window as the second B (in the same file).
     ysp_add_program(test_sig_arm_spec tests/adapt/sig_arm_spec_cases.c core)
@@ -770,14 +774,17 @@ if(YSP_BUILD_TESTS)
     target_compile_definitions(test_sig_arm_ref PRIVATE SIG_ARM_REF_SPEC=1 SIG_HAS_UNV=1 SIG_HAS_LATE=1 SIG_HAS_LATE_VOIDED=1
                                SIG_HAS_DISARM_AT=1 SIG_HAS_DETECTED_TO=1 SIG_HAS_DERIVED_TO=1)
     add_test(NAME test_sig_arm_ref_late COMMAND ${CMAKE_COMMAND} -DPROG=$<TARGET_FILE:test_sig_arm_ref>
+             -DWRONG_MAX=1418 -DFLAGGED_MAX=719 -DCOUNTS_MAX=2846 -DBARE_MAX=1
              -DCASES=3000 -DSEED=20261115 "-DENV=SIG_ORACLE_R1=1;SIG_ORACLE_GEN_TIE=1;SIG_ORACLE_GEN_DISARM_AT=1;SIG_ORACLE_GEN_EXIT=1;SIG_ORACLE_DAX=1;SIG_ORACLE_GEN_DRAIN_TO=1;SIG_ORACLE_DERIVED_TO=1;SIG_ORACLE_LATE=4;SIG_ORACLE_LATE_A=1;SIG_ORACLE_P2STRICT=1;SIG_ORACLE_PRED=1"
              -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/adapt/sig_arm_ref_check.cmake)
     add_test(NAME test_sig_arm_ref_late_off COMMAND ${CMAKE_COMMAND} -DPROG=$<TARGET_FILE:test_sig_arm_ref>
+             -DWRONG_MAX=1070 -DFLAGGED_MAX=1024 -DCOUNTS_MAX=4104
              -DCASES=3000 -DSEED=20261115 "-DENV=SIG_ORACLE_R1=1;SIG_ORACLE_GEN_TIE=1;SIG_ORACLE_GEN_DISARM_AT=1;SIG_ORACLE_GEN_EXIT=1;SIG_ORACLE_DAX=1;SIG_ORACLE_GEN_DRAIN_TO=1;SIG_ORACLE_DERIVED_TO=1;SIG_ORACLE_LATE=4;SIG_ORACLE_LATE_A=1;SIG_ORACLE_P2STRICT=1;SIG_ORACLE_PRED=1;SIG_ORACLE_OFF=l"
              -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/adapt/sig_arm_ref_check.cmake)
     # ysig_feed_n() against ysig_feed() (the oracle's SIG_ORACLE_FEEDN mode;
     # format 3.11 rule 4, DECIDED 2026-11-15)
     add_test(NAME test_sig_arm_ref_feed_n COMMAND ${CMAKE_COMMAND} -DPROG=$<TARGET_FILE:test_sig_arm_ref>
+             -DWRONG_MAX=471 -DFLAGGED_MAX=221 -DCOUNTS_MAX=817 -DBARE_MAX=1
              -DCASES=1000 -DSEED=20261115 -DFEEDN=1 "-DENV=SIG_ORACLE_R1=1;SIG_ORACLE_GEN_TIE=1;SIG_ORACLE_GEN_DISARM_AT=1;SIG_ORACLE_GEN_EXIT=1;SIG_ORACLE_DAX=1;SIG_ORACLE_GEN_DRAIN_TO=1;SIG_ORACLE_DERIVED_TO=1;SIG_ORACLE_LATE=4;SIG_ORACLE_LATE_A=1;SIG_ORACLE_P2STRICT=1;SIG_ORACLE_PRED=1;SIG_ORACLE_FEEDN=1"
              -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/adapt/sig_arm_ref_check.cmake)
     # The past-groups generator (SIG_ORACLE_PAST_GROUPS=1: past groups as
