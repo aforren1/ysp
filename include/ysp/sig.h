@@ -421,7 +421,11 @@
  *          late_hits_voided; queues of 64 + catchup_calls; checkpoints
  *          spaced by input time (struct changes: ysig__wt, ysig__ux, the
  *          stats). The release gates: the checkpoint spacing saturates at
- *          the ends of int64 (found by the fuzz).
+ *          the ends of int64 (found by the fuzz); ysig_feed_n() runs the
+ *          window again before an event that could end its window, or let
+ *          a waiting group in, or after a run for late state calls only,
+ *          so a batch never falls back where per-event feeding does not
+ *          (format 3.11 rule 4, DECIDED 2026-11-15).
  *   v0.6.1 - pending groups (docs/sig.md, "Pending groups"): a past group
  *          of an arm and disarms only, whose input time at its place is
  *          before its time and with no L in R yet, is made at its place
@@ -6890,13 +6894,54 @@ YSIG_API bool ysig_disarm_at(ysig_graph* g, int node, int64_t t_ns) {
     return true;
 }
 
+/* v0.7.0: the next feed of a batch cannot end the deferred run's window.
+ * Fed alone, a late event's run again is done before the next event; a
+ * batch that let the logs run full first would lose its checkpoint
+ * (late_full) where per-event feeding does not. A feed that lets in no
+ * waiting group logs one call and runs each source's schedule once: per
+ * node at most two ring writes (a state ring and the history), one hit,
+ * one derived event or one row. A feed that may let groups in (a waiting
+ * arm before its time: ysig__wait_fire()), or a log without that room,
+ * gets the run first, as per-event feeding has it. So does a run for late
+ * state calls only (an open gap's, placed at the batch's first input):
+ * merged with a late input's, the hits it voids would count as
+ * late_hits_voided, where fed alone they are superseded or retracted. */
+static int ysig__feed_fits(const ysig_graph* g, const yin_event* e) {
+    const ysig__cu* cu = g->cu;
+    const ysig__wt* w = g->wt;
+    uint64_t nu = (uint64_t)g->n_src, nh = 0, nd = 0, nr = 0;
+    int k;
+    if (!cu->late_in || !cu->n_ck || cu->grp_open || w->n_dis || w->gap4_wp) return 0;
+    for (k = 0; k < w->n; k++) if (ysig__kt(g, w->a[k].t) < ysig__kt(g, e->t)) return 0;
+    for (k = 0; k < g->src_off[g->n_src]; k++) {
+        int op = g->nd[g->sched[k]].op;
+        nu += 2;
+        nh += op == YSIG_OP_DETECT;
+        nd += op == YSIG_OP_EMIT;
+        nr += op == YSIG_OP_RECORD;
+    }
+    if (cu->c_head - cu->c_tail + 1u > (uint64_t)cu->C) return 0;
+    if (cu->u_head - cu->u_tail + nu > (uint64_t)cu->W) return 0;
+    if (cu->h_head - cu->h_tail + nh > (uint64_t)cu->C) return 0;
+    if (cu->DC && cu->d_head - cu->d_tail + nd > (uint64_t)cu->DC) return 0;
+    if (cu->rb && cu->rb_head - cu->rb_tail + nr > (uint64_t)cu->R) return 0;
+    if (cu->db && cu->db_head - cu->db_tail + nd > (uint64_t)cu->R) return 0;
+    return 1;
+}
+
 /* v0.7.0: ysig_feed() of each event, the window run again once at the end
- * for the late ones ("The batch"). */
+ * for the late ones ("The batch"), or earlier when the next event
+ * could end its window (ysig__feed_fits()). */
 YSIG_API int ysig_feed_n(ysig_graph* g, const yin_event* e, int n) {
     int i, r, taken = 0;
     if (!g || !g->ok || n < 0 || (n && !e) || ysig__reentered(g, "ysig_feed_n")) return -1;
     if (g->cu) g->cu->defer++;
     for (i = 0; i < n; i++) {
+        if (g->cu && g->cu->def_k >= 0 && !ysig__feed_fits(g, &e[i])) {
+            g->cu->defer--;
+            ysig__out_final(g);
+            g->cu->defer++;
+        }
         r = ysig_feed(g, &e[i]);
         if (r > 0) taken += r;
     }

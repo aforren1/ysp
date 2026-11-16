@@ -22,6 +22,17 @@
  *     always. It changes the predicate's tallies only, not the two
  *     targets. SIG_ORACLE_PRED_NALL=1 keeps every input.
  *
+ * ysig_feed_n() against ysig_feed() (SIG_ORACLE_FEEDN=1; the second
+ *   reviewer, for the user's condition on format 3.11 rule 4): two more
+ *   graphs with A's desc, one fed per event, one with runs of feeds in
+ *   batches of 1 to 8; both compared at each batch's end and after each
+ *   other call (see fn_step()). Off, nothing changes. Not compared (they
+ *   are outputs between a batch's events, which sig.md says a batch does
+ *   not have; SIG_ORACLE_FEEDN_ALL=1 compares them): at-once rows (their
+ *   list, rows and arm_rows_stale), at-once derived events (their list and
+ *   arm_derived_stale), history_skipped and time_clamped; a case whose
+ *   batch did not fit (late_full, declared) is counted and left.
+ *
  * Review of 3a4bc3f (the second reviewer, 2026-11-15):
  *   - A feed that is no input call (E_NEUTRAL: no source takes it, every
  *     taking source drops it, a late_barrier drop) does not end a gap in
@@ -2299,11 +2310,13 @@ static void horizon_check(int ci, int64_t h, int first) {
 
 /* one call: A makes it, R takes it, B follows, compare */
 static void step_(int ci);
+static void fn_step(int ci);
 static void step(int ci) {
     g_step_ci = ci;
     if (ci == 0) g_bar_t = INT64_MIN;
     g_bar_before[ci] = g_bar_t;
     step_(ci);
+    fn_step(ci);
     if (g_call_flags[ci] & E_BARRIER) { g_bar_t = g_call_time[ci]; }
 }
 static void step_(int ci) {
@@ -3171,6 +3184,195 @@ static void emit_case(void) {
 
 /* ---- main ---------------------------------------------------------------- */
 
+
+/* ---- (rev2c) SIG_ORACLE_FEEDN: ysig_feed_n() against ysig_feed() ------------ *
+ * Format 3.11 rule 4, the user's condition (2026-11-15): feeding a poll's
+ * events in one batch must give the results of feeding each event alone.
+ * Two more graphs, A's desc: P gets every call as A does, each feed alone;
+ * Q gets the same calls, but runs of feeds (no other call between them)
+ * go in ysig_feed_n() batches of 1 to 8 events, as a poll's would. Neither
+ * reads between the feeds of a batch (sig.md: only the reads between are
+ * not possible). At each batch's end and after each other call both make
+ * the same reads (A's: derived events, hits at arms, drains, before
+ * barriers) and are compared: every count, every node's value and ring
+ * at the probe times, the bound channels, the hits handed out, rows and
+ * derived events. A difference is printed with its case and call. The
+ * batch sizes come from their own generator: the case stream is A's. */
+static uint64_t g_ar_p[(24u << 20) / 8], g_ar_q[(24u << 20) / 8];
+static float g_ch_p[NCH], g_ch_q[NCH];
+static ysig_graph g_p, g_q;
+static rowlist g_rows_p, g_rows_q;
+static hitrec g_hp[8192], g_hq[8192];
+static int g_nhp, g_nhq, g_fn_hcmp;
+static derrec g_dp[8192], g_dq[8192];
+static int g_ndp, g_ndq;
+static yin_event g_fq[64];
+static int g_nfq, g_fn_on = -1, g_fn_open, g_fn_bmax, g_fn_bad;
+static uint64_t g_fn_rs;
+static long g_fn_cls[2][2], g_fn_nofit;   /* differing cases by rows (at once, final-only) and derived mode */
+static long g_fn_cases, g_fn_diff, g_fn_batches, g_fn_bevents, g_fn_big, g_fn_cmps, g_fn_shown;
+static const char* g_fn_names[] = { "fed", "taken", "dropped_order", "hits_lost", "derived_lost", "rows", "hits", "ring_short", "history_skipped", "order_evicted", "late_poll", "late_poll_max_ns",
+    "time_clamped", "arm_caught_up", "arm_past_off", "arm_past_far", "arm_past_full", "arm_hits_retracted", "arm_rows_stale", "arm_derived_stale",
+    "arm_hits_superseded", "arm_reentry", "call_reentry", "arm_past_pinned", "arm_ahead_cancelled", "arm_unverified", "late_far", "late_full",
+    "late_barrier", "late_off", "late_frames", "late_unverified", "late_hits_voided", "digest" };
+static uint32_t fn_rnd(void) { g_fn_rs ^= g_fn_rs << 13; g_fn_rs ^= g_fn_rs >> 7; g_fn_rs ^= g_fn_rs << 17; return (uint32_t)(g_fn_rs >> 11); }
+static int ev_cmp(const void* a, const void* b);
+static void fn_open(void) {
+    static rowrec rp[16384], rq[16384];
+    if (g_fn_on < 0) g_fn_on = getenv("SIG_ORACLE_FEEDN") != NULL;
+    g_fn_open = 0;
+    if (!g_fn_on) return;
+    g_rows_p.v = rp; g_rows_p.cap = 16384; g_rows_p.n = 0;
+    g_rows_q.v = rq; g_rows_q.cap = 16384; g_rows_q.n = 0;
+    if (!open_graph(&g_p, g_ar_p, g_ch_p, 1) || !open_graph(&g_q, g_ar_q, g_ch_q, 1)) return;
+    memset(g_ch_p, 0, sizeof g_ch_p); memset(g_ch_q, 0, sizeof g_ch_q);
+    g_nhp = g_nhq = g_ndp = g_ndq = g_nfq = g_fn_hcmp = 0;
+    g_fn_rs = 0x9e3779b97f4a7c15ull ^ ((uint64_t)g_case * 2654435761u) ^ (uint64_t)(g_rs | 1);
+    g_fn_bmax = 1 + (int)(fn_rnd() % 8);
+    g_fn_bad = 0;
+    g_fn_open = 1;
+    g_fn_cases++;
+}
+static void fn_event(const call* c, yin_event* e) {
+    memset(e, 0, sizeof *e);
+    e->t = c->t; e->type = YIN_SAMPLE; e->kind = (uint8_t)c->ekind; e->control = (uint32_t)c->ectl; e->device = (uint32_t)c->dev;
+    e->x = (float)c->x; e->y = (float)c->y; e->value = (float)c->v; e->stamp = YIN_TIER_2;
+}
+/* the reads both make, the same on each: derived events (to A's horizon
+ * when A uses one), hits when asked or past 40 queued */
+static void fn_reads(ysig_graph* g, rowlist* rl, hitrec* hr, int* nh, derrec* dr, int* nd, int ci, int hits) {
+    (void)rl;
+#ifdef SIG_HAS_DERIVED_TO
+    if (getenv("SIG_ORACLE_DERIVED_TO")) {
+        yin_event ev[64];
+        int m, k;
+        while ((m = ysig_derived_to(g, ev, 64, g_N - g_dlag)) > 0)
+            for (k = 0; k < m; k++) if (*nd < 8192) { dr[*nd].e = ev[k]; dr[*nd].at = ci; (*nd)++; }
+    } else
+#endif
+    drain(g, NULL, NULL, dr, nd, ci, 0);
+    if (hits || g->n_hit > 40) drain(g, hr, nh, NULL, NULL, ci, 1);
+}
+static void fn_fail(int ci, const char* what) {
+    g_fn_bad = 1;
+    if (g_fn_shown++ < 30 || (g_final_rows && g_final_der)) printf("  feed_n: case %ld differs at call %d (kind %d; rows %s, derived %s): %s\n", g_case, ci, g_c[ci].kind,
+                                  g_final_rows ? "final-only" : "at once", g_final_der ? "final-only" : "at once", what);
+    g_fn_cls[g_final_rows ? 1 : 0][g_final_der ? 1 : 0]++;
+}
+static void fn_cmp(int ci) {
+    ysig_stats sp, sq;
+    const int64_t* a = (const int64_t*)(const void*)&sp;
+    const int64_t* b = (const int64_t*)(const void*)&sq;
+    char buf[256];
+    int i, k;
+    int all = getenv("SIG_ORACLE_FEEDN_ALL") != NULL;
+    if (g_fn_bad) return;
+    g_fn_cmps++;
+    ysig_get_stats(&g_p, &sp); ysig_get_stats(&g_q, &sq);
+    if (sq.late_full > sp.late_full && !all) {
+        /* the batch did not fit (sig.md, late_full: "or the batch did not
+         * fit"): a fallback the guard stops on, declared; not compared on */
+        g_fn_bad = 2; g_fn_nofit++;
+        if (g_fn_shown++ < 30) printf("  feed_n: case %ld, call %d: the batch did not fit (late_full +%lld batched; catchup_calls %d, frames %d, writes %d)\n", g_case, ci,
+                                      (long long)(sq.late_full - sp.late_full), g_C, g_K, g_W);
+        return;
+    }
+    for (i = 0; i < (int)(sizeof sp / sizeof(int64_t)); i++)
+        if (a[i] != b[i] && (all || (strcmp(g_fn_names[i], "history_skipped") && strcmp(g_fn_names[i], "time_clamped") &&
+                                     (g_final_rows || (strcmp(g_fn_names[i], "rows") && strcmp(g_fn_names[i], "arm_rows_stale"))) &&
+                                     (g_final_der || strcmp(g_fn_names[i], "arm_derived_stale"))))) {
+            snprintf(buf, sizeof buf, "count %s: per event %lld, batched %lld (errors: \"%.60s\" | \"%.60s\")", i < (int)(sizeof g_fn_names / sizeof *g_fn_names) ? g_fn_names[i] : "?", (long long)a[i], (long long)b[i],
+                     ysig_error(&g_p), ysig_error(&g_q));
+            fn_fail(ci, buf); return;
+        }
+    for (i = 0; i < g_ntot; i++) {
+        if (value_ne(ysig_value_of(&g_p, i), ysig_value_of(&g_q, i))) { snprintf(buf, sizeof buf, "node %d's value", i); fn_fail(ci, buf); return; }
+        for (k = 0; k < g_nprobe; k++) {
+            ysig_value xa, xb;
+            int ra = ysig_value_at(&g_p, i, g_probe[k], &xa), rb = ysig_value_at(&g_q, i, g_probe[k], &xb);
+            if (ra != rb || (ra >= 0 && value_ne(&xa, &xb))) { snprintf(buf, sizeof buf, "node %d's ring at %.3f ms", i, g_probe[k] / 1e6); fn_fail(ci, buf); return; }
+        }
+        if ((g_final_rows || all) && !rows_node_eq(&g_rows_p, &g_rows_q, i)) { snprintf(buf, sizeof buf, "node %d's rows", i); fn_fail(ci, buf); return; }
+    }
+    if (memcmp(g_ch_p, g_ch_q, sizeof g_ch_p)) { fn_fail(ci, "the bound channels"); return; }
+    if (g_nhp != g_nhq) { snprintf(buf, sizeof buf, "hits handed out: per event %d, batched %d", g_nhp, g_nhq); fn_fail(ci, buf); return; }
+    for (i = g_fn_hcmp; i < g_nhp; i++)
+        if (!hit_eq(&g_hp[i].h, &g_hq[i].h) || g_hp[i].h.t_found != g_hq[i].h.t_found) {
+            snprintf(buf, sizeof buf, "hit %d: node %d t %.3f found %.3f, batched node %d t %.3f found %.3f", i, g_hp[i].h.node, g_hp[i].h.t / 1e6, g_hp[i].h.t_found / 1e6,
+                     g_hq[i].h.node, g_hq[i].h.t / 1e6, g_hq[i].h.t_found / 1e6);
+            fn_fail(ci, buf); return;
+        }
+    g_fn_hcmp = g_nhp;
+    if (!g_final_der && !all) return;
+    if (g_ndp != g_ndq) { snprintf(buf, sizeof buf, "derived events handed out: per event %d, batched %d", g_ndp, g_ndq); fn_fail(ci, buf); return; }
+    {
+        static yin_event x[8192], y[8192];
+        for (i = 0; i < g_ndp; i++) { x[i] = g_dp[i].e; y[i] = g_dq[i].e; }
+        qsort(x, (size_t)g_ndp, sizeof *x, ev_cmp); qsort(y, (size_t)g_ndq, sizeof *y, ev_cmp);
+        for (i = 0; i < g_ndp; i++) if (memcmp(&x[i], &y[i], sizeof x[i])) { fn_fail(ci, "derived events"); return; }
+    }
+}
+static void fn_flush(int ci) {
+    if (!g_nfq) return;
+    g_rows = &g_rows_q;
+    (void)ysig_feed_n(&g_q, g_fq, g_nfq);
+    g_fn_batches++; g_fn_bevents += g_nfq;
+    if (g_nfq > 1) g_fn_big++;
+    g_nfq = 0;
+    fn_reads(&g_p, &g_rows_p, g_hp, &g_nhp, g_dp, &g_ndp, ci, 0);
+    fn_reads(&g_q, &g_rows_q, g_hq, &g_nhq, g_dq, &g_ndq, ci, 0);
+    fn_cmp(ci);
+    g_fn_bmax = 1 + (int)(fn_rnd() % 8);
+}
+static void fn_step(int ci) {
+    const call* c = &g_c[ci];
+    int hits;
+    if (!g_fn_open) return;
+    if (c->kind == C_FEED) {
+        g_rows = &g_rows_p;
+        do_call(&g_p, c);
+        fn_event(c, &g_fq[g_nfq++]);
+        if (g_nfq >= g_fn_bmax) fn_flush(ci);
+        return;
+    }
+    fn_flush(ci > 0 ? ci - 1 : 0);
+    if (c->kind == C_DRAIN) {
+#ifdef SIG_HAS_DETECTED_TO
+        if (c->param == 1) {
+            ysig_hit hh[64];
+            int m, k;
+            while ((m = ysig_detected_to(&g_p, hh, 64, c->t)) > 0) for (k = 0; k < m; k++) if (g_nhp < 8192) { g_hp[g_nhp].h = hh[k]; g_hp[g_nhp].at = ci; g_nhp++; }
+            while ((m = ysig_detected_to(&g_q, hh, 64, c->t)) > 0) for (k = 0; k < m; k++) if (g_nhq < 8192) { g_hq[g_nhq].h = hh[k]; g_hq[g_nhq].at = ci; g_nhq++; }
+            fn_cmp(ci);
+            return;
+        }
+#endif
+        drain(&g_p, g_hp, &g_nhp, g_dp, &g_ndp, ci, 1);
+        drain(&g_q, g_hq, &g_nhq, g_dq, &g_ndq, ci, 1);
+        fn_cmp(ci);
+        return;
+    }
+    if (c->kind == C_RESET || c->kind == C_RESET_TRIAL || c->kind == C_FLUSH) {
+        drain(&g_p, g_hp, &g_nhp, g_dp, &g_ndp, ci, 1);
+        drain(&g_q, g_hq, &g_nhq, g_dq, &g_ndq, ci, 1);
+    }
+    g_rows = &g_rows_p; do_call(&g_p, c);
+    g_rows = &g_rows_q; do_call(&g_q, c);
+    hits = c->kind == C_ARM;
+    fn_reads(&g_p, &g_rows_p, g_hp, &g_nhp, g_dp, &g_ndp, ci, hits);
+    fn_reads(&g_q, &g_rows_q, g_hq, &g_nhq, g_dq, &g_ndq, ci, hits);
+    fn_cmp(ci);
+}
+static void fn_end(void) {
+    if (!g_fn_open) return;
+    fn_flush(g_nc > 0 ? g_nc - 1 : 0);
+    drain(&g_p, g_hp, &g_nhp, g_dp, &g_ndp, g_nc - 1, 1);
+    drain(&g_q, g_hq, &g_nhq, g_dq, &g_ndq, g_nc - 1, 1);
+    fn_cmp(g_nc > 0 ? g_nc - 1 : 0);
+    if (g_fn_bad == 1) g_fn_diff++;
+    g_fn_open = 0;
+}
+
 int main(int argc, char** argv) {
     long cases = getenv("SIG_ORACLE_CASES") ? atol(getenv("SIG_ORACLE_CASES")) : 2000, wrong = 0, cannot = 0, fellback = 0, noroom = 0, disarm_ahead = 0, h9 = 0, pred_n[3] = { 0, 0, 0 }, pred_f[3] = { 0, 0, 0 }, pred_why[10] = { 0 }, pred_show = 0, cannot_why[12] = { 0 }, hu_n[3] = { 0, 0, 0 }, hu_f[3] = { 0, 0, 0 }, hu_show = 0, hu_late = 0, hu_other = 0, hu_bare = 0, hu_arms = 0, hu_cnt = 0, hu_bc_at = 0, hu_end_late = 0, exc_n[3] = { 0, 0, 0 }, exc_only[3] = { 0, 0, 0 }, lt_cases = 0, lt_far = 0, lt_bar = 0, lt_frames = 0, lt_cond2 = 0, lt_ooo = 0, lt_ooo_unc = 0, lt_bc = 0, lt_bc_f = 0, lt_inputs = 0, lt_show = 0, lt_byf = 0, lt_byfb = 0, lt_byo = 0, lt_lnew = 0, lt_lnfa = 0, lt_clo = 0, lt_lst = 0, lt_lbd = 0, lt_lbd_in = 0, lt_ceq = 0, lt_dxs = 0, lt_dxe = 0, lt_dxl = 0, lt_dxw = 0, lt_dxu = 0, lt_lss = 0, lt_esc = 0, lt_cli = 0, oc_cases[8] = { 0 }, oc_pairs[8] = { 0 }, oc_any = 0, oc_show = 0;
     g_late = getenv("SIG_ORACLE_LATE") ? atoi(getenv("SIG_ORACLE_LATE")) : 0;
@@ -3198,6 +3400,7 @@ int main(int argc, char** argv) {
         g_final_der = SIG_ARM_REF_SPEC && rnd() % 3 == 0;
         if (!open_graph(&g_a, g_ar_a, g_ch_a, 1)) return 2;
         memset(g_ch_a, 0, sizeof g_ch_a);
+        fn_open();
         g_dlag = 0;
 #ifdef SIG_HAS_DERIVED_TO
         if (getenv("SIG_ORACLE_DERIVED_TO")) g_dlag = (int64_t)(rnd() % 21) * MS;
@@ -3242,6 +3445,7 @@ int main(int argc, char** argv) {
             if (SIG_ARM_REF_SPEC) { memset(&c, 0, sizeof c); c.kind = C_FLUSH; push(&c); }
             memset(&c, 0, sizeof c); c.kind = C_DRAIN; drain_h(&c); push(&c);
         }
+        fn_end();
         for (s = 0; s < g_ngr; s++) if (g_gr[s].fallback) fb = 1;
         if (fb) fellback++;
         if (g_h9) { h9++; continue; }
@@ -3391,6 +3595,11 @@ int main(int argc, char** argv) {
             }
         }
     }
+    if (g_fn_on > 0) printf("  feed_n (SIG_ORACLE_FEEDN): cases %ld, batches %ld (%ld events, %ld of 2 or more), compares %ld; cases where batched differs from per event: %ld\n",
+                            g_fn_cases, g_fn_batches, g_fn_bevents, g_fn_big, g_fn_cmps, g_fn_diff),
+    g_fn_on > 0 ? printf("  feed_n differences by mode (rows/derived): at once/at once %ld, at once/final %ld, final/at once %ld, final/final %ld (history_skipped and time_clamped not compared: diagnostics a run again changes; SIG_ORACLE_FEEDN_ALL=1 compares them)\n",
+                         g_fn_cls[0][0], g_fn_cls[0][1], g_fn_cls[1][0], g_fn_cls[1][1]) : 0,
+    g_fn_on > 0 ? printf("  feed_n: cases where a batch did not fit (late_full, declared; not compared on): %ld. Not compared unless SIG_ORACLE_FEEDN_ALL=1: rows, rows and arm_rows_stale with at-once rows; derived events and arm_derived_stale with at-once derived events (a callback or queue between the events of a batch, which a batch does not have)\n", g_fn_nofit) : 0;
     printf("cases %ld, wrong %ld, with a fallback %ld; not compared: B cannot run R %ld, an ahead arm with no room %ld, a disarm in a group B sees ahead %ld; spec mode %d\n",
            cases, wrong, fellback, cannot, noroom, disarm_ahead, SIG_ARM_REF_SPEC);
     if (h9) printf("  set aside as H9-shaped (SIG_ORACLE_H9): %ld\n", h9);

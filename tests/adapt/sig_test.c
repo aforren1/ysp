@@ -7921,6 +7921,95 @@ static void test_late(void) {
             }
         }
     }
+    /* A batch whose writes fill the window after a late event: its run
+     * again goes first, as per-event feeding has it, not lost to the full
+     * log (late_full; the reviewer's feed_n check of 2dc806c, 131 cases).
+     * catchup_writes 64; the batch: a late report (9.5 ms, device 2), then
+     * 70 on-time ones, a ring write each. The control: the same events one
+     * ysig_feed() each. Both end with the window cleared (full) and the
+     * late report at its place in the ring, nothing counted */
+    {
+        static yin_event ev[71];
+        ysig_value ra[8], rb;
+        ysig_stats sa, sb;
+        int j;
+        for (k = 0; k < 71; k++) {
+            memset(&ev[k], 0, sizeof ev[k]);
+            ev[k].t = k ? (10 + k) * MS : 9 * MS + MS / 2; ev[k].type = YIN_SAMPLE; ev[k].kind = YIN_KIND_PEN; ev[k].control = YIN_AXIS_POSITION;
+            ev[k].device = k ? 1u : 2u; ev[k].x = (float)k; ev[k].stamp = YIN_TIER_2;
+        }
+        memset(&sa, 0, sizeof sa);
+        for (v = 0; v < 2; v++) {
+            ysig_node n[2];
+            ysig_desc d;
+            n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 2); n[0].history = 256;
+            n[1] = ysig_node_of(YSIG_OP_BIND, 0, -1); n[1].p[0] = 0;
+            memset(&d, 0, sizeof d);
+            d.nodes = n; d.n_nodes = 2; d.arena = g_rp_ar; d.catchup_frames = 4; d.catchup_writes = 64;
+            d.channels = g_ch; d.n_channels = 64;
+            d.arena_size = ysig_arena_size(&d);
+            if (!d.arena_size || d.arena_size > sizeof g_rp_ar || !ysig_open(&g_rp, &d)) { g_failures++; return; }
+            ysig_reset(&g_rp, 0);
+            for (k = 1; k <= 10; k++) { rp_feed(k * MS, 100 + k, YIN_AXIS_POSITION, 1); if (!(k & 1)) rp_frame(k * MS); }
+            if (v) CHECK(ysig_feed_n(&g_rp, ev, 71) == 71);
+            else for (k = 0; k < 71; k++) CHECK(ysig_feed(&g_rp, &ev[k]) == 1);
+            CHECK(g_rp.cu->full && g_rp.cu->def_k < 0);
+            rp_frame(81 * MS);
+            for (j = 0; j < 8; j++) {
+                if (!v) { if (ysig_value_at(&g_rp, 0, 8 * MS + j * MS / 2, &ra[j]) < 0) ra[j].t = -1; }
+                else if (ysig_value_at(&g_rp, 0, 8 * MS + j * MS / 2, &rb) < 0) CHECK(ra[j].t == -1);
+                else CHECK(!memcmp(&ra[j], &rb, sizeof rb));
+            }
+            if (!v) { ysig_get_stats(&g_rp, &sa); CHECK(ra[3].t == 9 * MS + MS / 2 && ra[3].v[0] == 0); }
+            else {
+                ysig_get_stats(&g_rp, &sb);
+                CHECK(sa.late_full == 0 && sb.late_full == 0 && sb.late_far == 0 && sa.history_skipped == sb.history_skipped);
+            }
+            CHECK(g_ch[0] == 70);
+        }
+    }
+    /* A batch whose first input ends a gap with a late state call and
+     * that holds a late input too: the state call's run again goes before
+     * the late input, as per-event feeding has it, so the hit it voids
+     * counts as fed alone (superseded), not late_hits_voided (a merged
+     * run's; the reviewer's feed_n check, case 257 of 20261123). Entry
+     * now: the arm at 2 ms waits; the disarm_at at 3 lets it in (a hit at
+     * 2); the plain disarm (at N, 1 ms) after it is in the open gap. The
+     * batch: 4 ms ends the gap (the disarm goes before the arm: superseded),
+     * then 3 ms on device 2, late. The control: one ysig_feed() each */
+    {
+        yin_event ev[2];
+        ysig_stats sa, sb;
+        memset(ev, 0, sizeof ev);
+        for (k = 0; k < 2; k++) {
+            ev[k].type = YIN_SAMPLE; ev[k].kind = YIN_KIND_PEN; ev[k].control = YIN_AXIS_POSITION; ev[k].stamp = YIN_TIER_2; ev[k].x = 9;
+        }
+        ev[0].t = 4 * MS; ev[0].device = 1;
+        ev[1].t = 3 * MS; ev[1].device = 2;
+        memset(&sa, 0, sizeof sa);
+        for (v = 0; v < 2; v++) {
+            ysig_node n[2];
+            n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 0, 2); n[0].history = 64;
+            n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1); n[1].p[YSIG_DETECT_LANE] = 0; n[1].p[YSIG_DETECT_LEVEL] = 5;
+            n[1].p[YSIG_DETECT_START] = 1; n[1].p[YSIG_DETECT_REPEAT] = 1; n[1].p[YSIG_DETECT_ENTRY] = YSIG_ENTRY_NOW; n[1].history = 64;
+            if (!rp_open(n, 2, 4, 0, false, false)) return;
+            rp_feed(1 * MS, 9, YIN_AXIS_POSITION, 1);
+            ysig_arm(&g_rp, 1, 2 * MS);
+            CHECK(lt_hits() == 0);
+            CHECK(ysig_disarm_at(&g_rp, 1, 3 * MS));
+            CHECK(lt_hits() == 1 && g_lt_hit[0] == 2 * MS);
+            CHECK(ysig_disarm(&g_rp, 1));
+            if (v) CHECK(ysig_feed_n(&g_rp, ev, 2) == 2);
+            else for (k = 0; k < 2; k++) CHECK(ysig_feed(&g_rp, &ev[k]) == 1);
+            if (!v) {
+                ysig_get_stats(&g_rp, &sa);
+                CHECK(sa.arm_hits_superseded == 1 && sa.late_hits_voided == 0 && sa.hits == 0);
+            } else {
+                ysig_get_stats(&g_rp, &sb);
+                CHECK(sb.arm_hits_superseded == 1 && sb.late_hits_voided == 0 && sb.arm_hits_retracted == sa.arm_hits_retracted && sb.hits == 0);
+            }
+        }
+    }
 }
 
 /* v0.7.0: ysig_detected_to(), ysig_derived_to() (docs/sig.md, "Holding
