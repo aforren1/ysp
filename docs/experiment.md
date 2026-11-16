@@ -345,6 +345,14 @@ reading below and marks it in the code as "finding Fn". The lines are of
 
 ## Results
 
+### v0.5.2: an unused count (2026-11-16)
+
+No behavior change. The F26 cycle check counted each SCC's size and did
+not read it. Clang reports this with `-Wunused-but-set-variable`, and
+CI's clang build failed on it (`-Werror`); gcc 12.2 does not report it.
+The count is removed. Mutant f26-15 used it; it now reads the size as
+`sp - bottom`.
+
 ### v0.5.1: a window with no time (2026-11-12)
 
 A reading of 2.6 that follows ysp/response.h, from the reference model

@@ -2581,7 +2581,7 @@ name = "a self-loop not a cycle"
 test = "experiment"
 why = "F26: run_f26b, a state whose MAYBE exit goes to itself."
 find = '''                            if (!in) continue;'''
-replace = '''                            if (!in || size == 1) continue;'''
+replace = '''                            if (!in || sp - bottom == 1) continue;'''
 
 [[mutant]]
 id = "f26-17"

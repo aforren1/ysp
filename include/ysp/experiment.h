@@ -1,4 +1,4 @@
-/* ysp/experiment.h - v0.5.1 - public domain single-header loader for experiment definitions
+/* ysp/experiment.h - v0.5.2 - public domain single-header loader for experiment definitions
  *
  *   Reads a ysp experiment definition of format version 1 or 2
  *   (docs/experiment_format.md, the pack's EXPERIMENT entry) into a checked,
@@ -153,6 +153,9 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.5.2 - no behavior change (2026-11-16): the cycle check no longer
+ *          keeps an SCC size it only counted (clang's
+ *          -Wunused-but-set-variable, an error in CI's clang build).
  *   v0.5.1 - a reading of 2.6 that follows ysp/response.h (2026-11-12): a
  *          response whose minimum_valid_rt_s is at or past its duration_s
  *          (above 0, in ns after rounding) leaves no time, and the
@@ -244,7 +247,7 @@
  *   v0.1.0 - first version: the loader for format version 1, its defaults
  *          table, the host interface and the canonical writer.
  *
- *   STATUS: v0.5.1 (2026-11-12). Tested; the player (docs/player.md) uses
+ *   STATUS: v0.5.2 (2026-11-16). Tested; the player (docs/player.md) uses
  *   it for both versions. A version 2 file with a signal role runs on --sim
  *   only (the rig profile has no adapter block, G18); one with none runs in
  *   a real window too.
@@ -258,8 +261,8 @@
 
 #define YEXP_VERSION_MAJOR 0
 #define YEXP_VERSION_MINOR 5
-#define YEXP_VERSION_PATCH 1
-#define YEXP_VERSION_STRING "0.5.1"
+#define YEXP_VERSION_PATCH 2
+#define YEXP_VERSION_STRING "0.5.2"
 
 /* The newest format version this header reads (D12). */
 #define YEXP_FORMAT_VERSION 2
@@ -7345,10 +7348,9 @@ static void yexp__f26_cycles(yexp__ctx* c) {
                 if (cs && low[a] < low[cst[cs - 1]]) low[cst[cs - 1]] = low[a];
                 if (low[a] == index[a]) {
                     /* an SCC: a, and what is above it on the stack */
-                    int bottom = sp, size = 0, ea = -1, eb = -1, ew = -1, q;
+                    int bottom = sp, ea = -1, eb = -1, ew = -1, q;
                     do {
                         bottom--;
-                        size++;
                     } while (stk[bottom] != a);
                     for (q = bottom; q < sp; q++) {
                         int x2 = stk[q], ei;
