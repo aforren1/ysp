@@ -2347,8 +2347,39 @@ and the fuzz on the machine):
 
 The first target holds on every run. The second fails once: case 2005 of
 seed 20261124 with `OFF=l` is wrong ("rows (final only) not R's") and
-has no count. The header at 2dc806c gives the same. Open: not
-diagnosed, not fixed (the gates fix only what the text decides).
+has no count at the call the oracle reads. Diagnosed (V2SIG7): not a
+header defect. The case's window has `catchup_calls` 64; the log runs
+full at call 70 and the window is empty from then to the next frame, so
+rows are final at once (final once no arm can change them). The arm at
+call 76 makes a row of `all()` at 50.206 ms with device 1's provenance,
+handed out at once. Call 77, device 2 at 50.206 ms, is late by key (R
+puts it before the arm's group, so R's row has device 2's provenance);
+with no window it is counted `late_full` at call 77. The oracle reads
+A's counts at the call that handed out the wrong row (76), one call
+before the late call that made it wrong. Counted, by the late call.
+
+The V2SIG7 round (2026-11-15, Linux desktop, i5-14500, GCC 12.2, one
+gate at a time, load average 1.1 to 4.4): `ysig_feed_n()`'s early run
+again (format 3.11 rule 4, "The batch"), "N(G) earlier than tau" as a
+flag, condition 3's table removed.
+
+- The oracle at ctest's switches, the six runs above at once (78 s):
+  every number in the table is the same.
+- The oracle's feed_n mode (`test_sig_arm_ref_feed_n`, new in ctest):
+  see "The batch".
+- `sig_fuzz` arms at `INT64_MIN` about one arm in 24 (the 501fea5
+  header gives a UBSan report in under 1 s). 10,200,000 inputs under
+  ASan and UBSan (`setarch -R`, 6 processes, seeds 8701 to 8706), 75 s:
+  no report. 1,525,804 graphs opened, 4,601,481 late events, 1,490,905
+  batches, 748,060 disarm_at calls, 12,175 arms run again.
+- ctest Release 127 of 127, 71 s at `-j 6`. The sanitizers tree under
+  `setarch -R`: build 30 s at `-j 8` (incremental), ctest 126 of 126,
+  415 s at `-j 6`, no sanitizer report. `player_test` 72 cases at 60 Hz
+  and 72 at 500 Hz, no failure.
+- New `sig_test` cases, each with a control: the batch that fills the
+  window after a late event, the state-call run again then a late
+  input in one batch, `test_arm_int64_min` (at the barrier's time, with
+  and without an input at tau).
 
 - Fuzz: `sig_fuzz` now feeds late events (1, 5 and 20 ms), batches
   through `ysig_feed_n()`, `ysig_disarm_at()` before and after the newest
@@ -2373,7 +2404,15 @@ diagnosed, not fixed (the gates fix only what the text decides).
   (`ysig_feed_n()`, `ysig_disarm_at()`, `ysig_detected_to()`,
   `ysig_derived_to()`), in the Linux, sanitizers and `nothreads-cxx`
   trees.
-- Mutants: sig.toml 335 of 348 as expected (killed 327, survived 21;
+- Mutants (V2SIG7): sig.toml 338 of 347 as expected (killed 329,
+  survived 18; 679 s, 4 jobs, load average 2.7 at the start, 2.8 at the
+  end). 312 went with condition 3's table; 283 and 285 are killed by a
+  new test, `sig_ref_23off` (the oracle at seed 20261123 with `OFF=l`,
+  3,000 cases: 283 leaves case 493 wrong with no count, 285 one case B
+  cannot run uncounted); 361 is equivalent (its note says why). Open:
+  9 survive every test (287, 297, 300, 313 to 315, 318, 326, 356);
+  none is killed by the oracle at seeds 20261123 and 20261124, on and
+  off. Before V2SIG7: 335 of 348 as expected (killed 327, survived 21;
   628 s, 4 jobs, load average 0.3 at the start, 2.7 at the end). 47
   anchors had gone stale with the 0.7.0 code: 35 follow the code; 12
   are removed with their code: 246 and 270 (no `derived_lost` restore,
@@ -2391,13 +2430,10 @@ diagnosed, not fixed (the gates fix only what the text decides).
   `catchup_calls` held all 240 events), the next gap of
   `test_v2_gap_late` (365), the ring after a `ysig_feed_n()` batch (371).
   The oracle kills 240, 350 and 363. 291 and 296 are equivalent (their
-  notes say why). Open: 13 survive every test (283, 285, 287, 297, 300,
-  312 to 315, 318, 326, 356, 361); the list's notes give what each
-  survived. Most are 0.6.x's counts (conditions 1, 3, 4 and 2 (c)) and
-  gap mechanics (H9, H12, 1650) that 0.7.0's classes by footprint and
-  its other count sites now reach first. Condition 3's table (`w->lr`)
-  has had no reader since `ysig__ux_input()` went; it only counts on its
-  overflow (mutant 312).
+  notes say why). Then 13 survived every test; V2SIG7 left 9 (above).
+  Most are 0.6.x's counts (conditions 1, 4 and 2 (c)) and gap mechanics
+  (H12, 1650) that 0.7.0's classes by footprint and its other count
+  sites now reach first.
 
 The reviewer's oracle (2026-11-14, final round). `tests/adapt/sig_arm_ref.c`
 and `sig_arm_spec_cases.c` are by an independent reviewer, written from
