@@ -2112,12 +2112,16 @@ D20's rules 1 to 12 hold as written, with the user's amendment of rule 5
    overflow". The player may feed one poll's events with one
    `ysig_feed_n()`, drain the hits, and take the exits by time, the
    earliest first. The results are those of feeding each event alone:
-   every exit, time, value, row and derived event. sig.h never falls
-   back on a batch where feeding each event alone would not. Only
-   diagnostic counts differ, and they are lower or equal: fed one by
+   every exit, time, value, final-only row and final-only derived
+   event. sig.h never falls back on a batch where feeding each event
+   alone would not. Only counts differ. `late_hits_voided`,
+   `late_frames`, `arm_rows_stale` and `arm_derived_stale` are lower or
+   equal. Of the three voided-hit counts only the sum is, since a void
+   can move to `arm_hits_superseded`. The guard stops on any of them,
+   so a batch never stops where per-event feeding would not. Fed one by
    one, a report can void a hit or change a drawn frame that the next
-   report restores (`late_hits_voided`, `late_frames`; the sum of the
-   voided-hit counts too, docs/sig.md, "The batch").
+   report restores, and an at-once row or derived event handed out
+   between two reports can change (docs/sig.md, "The batch").
    Checked (2026-11-15, sig.h at 77e070b, Linux desktop, i5-14500):
    - The reviewer's oracle with `SIG_ORACLE_FEEDN=1`, seeds 20261115,
      20261123 and 20261124, late generator on and off, 1,000 cases each:

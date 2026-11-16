@@ -869,12 +869,16 @@ G is exact when all of these are true:
    window, or the log full); those cases count `late_off`, `late_far` or
    `late_full` (the coordinator, 2026-11-15).
 
-4. No disarm of another group, or of no group, lies in the gap that G's
-   arm closes with no window: between G's arm and the last input,
-   barrier, arm or `ysig_disarm_at` before it in R (ruling 1 below). Reason: with no window that disarm
+4. No disarm of another group, or of no group, at a time other than
+   `τ`, lies in the gap that G's arm closes with no window: between G's
+   arm and the last input, barrier, arm or `ysig_disarm_at` before it in
+   R (ruling 1 below). Reason: with no window that disarm
    joins G's gap and takes G's time (the reviewer's 883 and 404: a
    disarm in no group, then G's calls; 1137: a present group's disarm,
-   then the group its arm lets in right before itself). The condition
+   then the group its arm lets in right before itself). A disarm in that
+   gap at G's own `τ` is not counted: taking G's time does not move it
+   (the header's `ysig__c4()`, and the oracle's B-cannot reason 9 and
+   predicate, skip it too). The condition
    covers disarms only: the reviewer tested every state call there,
    which flagged more cases and found no other wrong one.
 
@@ -1477,14 +1481,21 @@ again and the batch would otherwise lose or merge it:
   again, the hits it voids would count as `late_hits_voided`; fed alone,
   they count as superseded or retracted.
 
-What batching changes. Values, rings, bound channels, rows, derived
-events and the hits that stand are those of the same events fed one call
-each; only the reads between them are not possible. Some counts are
-lower: fed one by one, a report's run again can void a hit or change a
-drawn frame that the next report's run again restores. The batch does
-not see that short-lived state, so `late_hits_voided` and `late_frames`
-are lower or equal, and so are the hits handed out (fed one by one, the
-restored hit is handed out again). A batch never falls back where
+What batching changes. Values, rings, bound channels and the hits that
+stand are those of the same events fed one call each; only the reads
+between them are not possible. Rows and derived events are those of
+per-event feeding only when they are final-only (`rows_final`,
+`derived_final`). At once, per-event feeding hands out rows and derived
+events between a batch's events, and a later event can change them; a
+batch does not hand them out there. So `arm_rows_stale`,
+`arm_derived_stale` and the at-once lists of rows and derived events are
+lower or equal batched. For that reason the oracle's check below does not
+compare at-once rows and derived events. Some counts are lower: fed one
+by one, a report's run again can void a hit or change a drawn frame that
+the next report's run again restores. The batch does not see that
+short-lived state, so `late_hits_voided` and `late_frames` are lower or
+equal, and so are the hits handed out (fed one by one, the restored hit
+is handed out again). A batch never falls back where
 per-event feeding does not (`late_full` 0 in the check below). The sum of
 the voided-hit counts (`late_hits_voided`, `arm_hits_superseded`,
 `arm_hits_retracted`) is lower or equal, but one of them can be higher: a
