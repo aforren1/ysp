@@ -579,9 +579,12 @@ Why: a hit that the player takes before the reports up to its time are in
 can be wrong. A frame's pass, a settle at the onset or an entry-now arm
 finds a hit, and a late report with a time at or before the hit then
 moves it or removes it (`late_hits_voided`). With 0.7.0 and hits taken at
-once, the guard stopped more sessions than 0.11.0 at every lateness, and
-the bimanual example stopped at 5 ms (measured 2026-11-15 on the Linux
-desktop; the numbers go into Results when the build is measured).
+once (601f7c0, 2026-11-15, Linux desktop, i5-14500, the model's harness,
+1,000 cases a run), the guard stopped more sessions than 0.11.0 at every
+lateness. Guard stops per 1,000 sessions at 0, 5, 10, 20, 40 and 60 ms
+late: at 60 Hz 23, 30, 31, 68, 92 and 337 (0.11.0: 1, 5, 9, 43, 69 and
+76); at 500 Hz 6, 72, 96, 124, 105 and 204 (0.11.0: 0, 24, 41, 58, 58
+and 57). The bimanual example stopped at 10 ms late.
 
 ### Terms
 
@@ -602,17 +605,25 @@ desktop; the numbers go into Results when the build is measured).
     the same stamp can come, so `S(d)` itself is not complete. A raw
     mouse's counts are the exception sig.h makes (T6: placed, not
     dropped); a source whose stamps can go back uses `P - B(d)` only.
-    The sources of ysp/input.h stamp in order.
+    That the sources of ysp/input.h stamp in order is an assumption
+    (the final review's L3): it is not measured.
 - **Complete to, per role**: `C(r)`, the least `C(d)` over the role's
   devices. A device of the role not yet seen in the trial gives
   `P - B(d)`. When the player cannot know a role's devices (device 0,
   "any device"), `C(r) = P - B(r)`. In `--sim` a role has one device.
+  As built (`v2_horizon()`), 0.12.0 keeps one newest stamp per role, not
+  per device, and uses `max(S(r) - 1 ns, P - B(r))`. That is this rule
+  only when a role has one device (the final review's L4). It holds in
+  `--sim` and while a real run binds no signal role (until G18); a role
+  with two devices needs `S(d)` per device first.
 - **A device with no reports** (a still relative mouse, a pen out of
   range): `S(d)` does not move, so `C(d) = P - B(d)`. For a source that
   the kernel stamps when it queues a report and that one poll reads to
   its end (evdev raw mice and pens, keyboards), `B(r)` is 0: no report
   stamped before the poll's read can come later. So a still device of
-  that kind holds nothing back.
+  that kind holds nothing back. `B(r)` 0 for evdev is an assumption from
+  how the kernel stamps and queues, not a measurement (L3); a rig
+  measures it before a real run binds such a role (G18).
 - **The roles of a control** `R(c)`: the signal roles with a path to the
   control's detect in the graph. A detect that reads only timeline
   channels has none.
@@ -691,11 +702,17 @@ leaves what is not final in sig.h's queues.
   an event that finds it full is counted in `derived_lost`, a guard stop
   for a caller that holds events. A reset or a trial reset empties it.
 
-The queues' size (M2): the player computes the count it needs, the hits
-and derived events that `max B` plus a frame can make (its controls and
-movements, at `V2_WINDOW_HZ` per role), and sets `catchup_calls` to at
-least that. `hits_lost` and `derived_lost` stop the guard whenever a
-bound is above 0.
+The queues' size (M2; L5 of the final review, 2026-11-16): the player
+computes the count it needs and sets `catchup_calls` to at least that.
+Between two drains each detect and each emit queues at most one hit or
+event an evaluation: one a sample of a feed part (at most
+`YSIG_QUEUE_CAP`, 64, samples), one at the frame, and what a run again
+gives from `max B` plus two periods back (as far back as an exit's arm
+reaches), at `V2_WINDOW_HZ` per role. So with this size neither queue
+fills at any bound, 0 included (under the `V2_WINDOW_HZ` assumption that
+the log size makes too), and `hits_lost` and `derived_lost` stop the
+guard at any bound. 0.12.0 as first built sized for `max B` plus one
+period and counted them only while a bound was above 0.
 
 ### The order of exits (D20 rule 4)
 
@@ -1202,6 +1219,26 @@ Open in 0.12.0 (each above, in "What the data shows" and "Results at
   input too, at a different frame each run: not explained.
 - `--sim` writes its rows in place on the frame thread; `--measure` takes
   them out of the frame work. A real run queues them to the writer.
+- No test fills sig.h's queues: mutants v2-110 (the queues' size) and
+  v2-111 (`hits_lost` and `derived_lost` do not stop the guard) survive,
+  so nothing tests that a lost hit or event stops the guard. Since the
+  final review (L5) the size covers every bound and they stop it at any
+  bound; still not reached by a test.
+- v2-108 (`catchup_ns` from two periods) is not reached in `--sim`: an
+  exit there arms less than `B` plus one period back.
+- The 35 mutants of the real path (test `real`) are not run: they need a
+  display.
+- Fed one event at a time (`--test-feed-each`), the bimanual example at
+  60 Hz and 10 ms late counts more `late_frames` than fed in parts (2d52faa,
+  "What still stops the guard"): 2 trials 2 frames more each (2,797
+  against 2,795 and 2,792 against 2,790), `session.json`
+  `sig_arms.late_frames` 39,534 against 39,530. The gate of 0.12.0 ran
+  feed-each at 500 Hz only. Run again at 60 Hz, 10 ms late on every role,
+  after the final review's fixes (2026-11-16, Linux desktop, i5-14500,
+  load 2.5, `--sim`, the C programs' samples of `compare.py`): the
+  visuomotor example equal in every file; the bimanual example the same
+  difference, `late_frames` only, every exit, time, outcome and value
+  equal. A diagnostic count; open.
 
 ### The reviewer's findings on the first draft (3f6d21c), and the answers
 

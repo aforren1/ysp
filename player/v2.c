@@ -1552,8 +1552,10 @@ static int v2_feeds(pl_player* p, pl_v2* v) {
 }
 
 /* The horizon G: input is complete to it for every role that feeds the
- * template's controls and movements (docs/player.md, "Terms"). Per role
- * (one device in --sim), C = max(S - 1, min(L, P - B)): every report
+ * template's controls and movements (docs/player.md, "Terms"). Per role,
+ * not per device: right only while a role has one device, as in --sim
+ * and while a real run binds no signal role (the final review's L4).
+ * C = max(S - 1, min(L, P - B)): every report
  * stamped at or before P - B reached a poll by P, and a device's stamps
  * do not go back. P and L are the last whole feed's: a poll fed in
  * parts claims only its newest stamps until its end. */
@@ -1573,7 +1575,8 @@ static int64_t v2_horizon(const pl_player* p, const pl_v2* v) {
     return g;
 }
 /* The horizon over every signal role, fed or not: a barrier (a flush, a
- * reset) drops a report of any device stamped before it, so the trial's
+ * reset) drops a report of any device stamped before it (a raw mouse's
+ * count goes into its integrator, sig.h's H1), so the trial's
  * end waits on all of them, not only the template's (docs/player.md, "The
  * trial's end"). P when no role has a bound above 0. */
 static int64_t v2_horizon_all(const pl_player* p) {
@@ -1669,11 +1672,17 @@ static void v2_window_size(pl_player* p, const pl_v2* v, int* calls, int* writes
     free(in_d);
     c = reps * roles + frames * V2_WINDOW_FRAME_CALLS;
     if (c < 1024) c = 1024;   /* 0.10.0's, the floor */
-    if (p->v2s && p->v2s->bnd_max > 0) {
-        /* sig.h's queues hold YSIG_QUEUE_CAP + catchup_calls: the hits and
-         * derived events that max B plus a frame can make, each detect
-         * and emit at V2_WINDOW_HZ, wait in them (M2) */
-        int64_t q = 0, each = (V2_WINDOW_HZ * (p->v2s->bnd_max + per) + 999999999) / 1000000000;
+    {
+        /* sig.h's queues hold YSIG_QUEUE_CAP + catchup_calls. Between two
+         * drains a detect or an emit queues at most one hit or event an
+         * evaluation: one a sample of a feed part (at most YSIG_QUEUE_CAP
+         * samples, S->batch_cap), one at the frame, and what a run again
+         * gives from max B plus two periods back (an exit's arm reaches
+         * that far), at V2_WINDOW_HZ. With this size neither queue fills at
+         * any bound, 0 too, so hits_lost and derived_lost stop the guard
+         * at any bound (M2; the final review's L5) */
+        int64_t q = 0, b = p->v2s ? p->v2s->bnd_max : 0;
+        int64_t each = YSIG_QUEUE_CAP + 1 + (V2_WINDOW_HZ * (b + 2 * per) + 999999999) / 1000000000;
         for (i = 0; i < v->nn; i++) q += (v->nodes[i].op == YSIG_OP_DETECT || v->nodes[i].op == YSIG_OP_EMIT) ? each : 0;
         if (q > c) c = q;
     }
@@ -2439,9 +2448,11 @@ static int v2_guard(pl_player* p, const pl_v2* v, const char* what, const char* 
         c[10] += st.late_off;
         c[11] += st.late_unverified;
         c[12] += st.late_hits_voided;
-        /* a hit or event that found sig.h's queue full while the player
-         * held it past the horizon: lost (M2) */
-        if (S->bnd_max > 0) { c[13] += st.hits_lost; c[14] += st.derived_lost; }
+        /* a hit or event that found sig.h's queue full: lost. The queues
+         * are sized so this does not happen at any bound (v2_window_size(),
+         * M2, L5) */
+        c[13] += st.hits_lost;
+        c[14] += st.derived_lost;
     }
     for (k = 0; k < 15; k++) bad += c[k];
     if (!S || bad == S->bad_seen) return 0;
