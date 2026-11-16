@@ -190,12 +190,11 @@ id = "v2-22"
 name = "frame rows past the next trial's start written with t_s empty"
 test = "player"
 why = "Review item 13 (rv13, --test-record-delay)."
-find = '''        fr->snap = true;
-        fr->flags |= V2_FR_AT_PLANNED;'''
-replace = '''        fr->snap = true;
-        fr->flags |= V2_FR_AT_PLANNED;
+find = '''        fr->flags |= V2_FR_AT_PLANNED;
+        S->fpend[m++] = *fr;'''
+replace = '''        fr->flags |= V2_FR_AT_PLANNED;
         if (v2_frame_row_write(p, fr, 0, false) < 0) return -1;
-        fr->frame = -1000;'''
+        continue;'''
 
 [[mutant]]
 id = "v2-23"
@@ -264,8 +263,8 @@ id = "v2-30"
 name = "the waiting frame rows sized for 2 frames a trace"
 test = "player"
 why = "Re-review G (9 traces, --test-record-delay 8)."
-find = '''    S->cap_fpend = (S->cap_fpend > 0 ? S->cap_fpend : 1) * V2_FRAME_WAIT(p);'''
-replace = '''    S->cap_fpend = (S->cap_fpend > 0 ? S->cap_fpend : 1) * 2;'''
+find = '''        S->cap_fpend = (S->cap_fpend > 0 ? S->cap_fpend : 1) * (V2_FRAME_WAIT(p) + (int)wb);'''
+replace = '''        S->cap_fpend = (S->cap_fpend > 0 ? S->cap_fpend : 1) * 2;'''
 
 [[mutant]]
 id = "v2-31"
@@ -306,8 +305,8 @@ test = "player"
 expect = "survived"
 note = "A guard: on --sim every frame's record comes (--test-record-delay only delays it); a real run's dropped record reaches it. The session's end writes such a row too (pl_v2_finish)."
 why = "F29: the trial rows' bound, PL_OUT_WAIT_NS (30 frames at 60 Hz)."
-find = '''        if (rec->index >= S->fpend[i].frame + p->out_wait_frames) {'''
-replace = '''        if (0) {'''
+find = '''        } else if (!fr->rec && rec->index >= fr->frame + p->out_wait_frames) {'''
+replace = '''        } else if (0) {'''
 
 [[mutant]]
 id = "v2-36"
@@ -366,9 +365,11 @@ id = "v2-42"
 name = "a signal choice's arm drops the trial's window"
 test = "player"
 why = "Third re-review 1 (t_v2_review4 rv4_1): yrsp_arm() sets the desc's window again."
-find = '''    yrsp_arm(c, t);
+find = '''        if (had_onset) c->record_in = rec_in;
+    }
     yrsp_set_window(c, v->resp_minrt, v->resp_dur);'''
-replace = '''    yrsp_arm(c, t);'''
+replace = '''        if (had_onset) c->record_in = rec_in;
+    }'''
 
 [[mutant]]
 id = "v2-43"
@@ -605,7 +606,7 @@ id = "v2-73"
 name = "no window: an arm in the past tests the newest value"
 test = "player"
 why = "sig.h 0.6.0 (vm_refound): 3.11 rule 2."
-find = '''            d->catchup_frames = V2_WINDOW_FRAMES;'''
+find = '''            d->catchup_frames = V2_WINDOW_CKS;'''
 replace = '''            d->catchup_frames = 0;'''
 
 [[mutant]]
@@ -631,16 +632,16 @@ id = "v2-76"
 name = "no stop when a past arm changes what was taken or written"
 test = "player"
 why = "sig.h 0.6.0's arm_hits_retracted, arm_rows_stale, arm_derived_stale: never silent."
-find = '''    if (bad == v->arm_bad) return 0;'''
-replace = '''    if (bad == v->arm_bad || 1) return 0;'''
+find = '''    if (!S || bad == S->bad_seen) return 0;'''
+replace = '''    if (!S || bad == S->bad_seen || 1) return 0;'''
 
 [[mutant]]
 id = "v2-77"
 name = "no sig_arms in session.json"
 test = "player"
 why = "The window's counts per session (vm_settle_tie checks sig_arms)."
-find = '''    return yds_session_set(&p->ds, "sig_arms", o);'''
-replace = '''    return 0;'''
+find = '''    if (yds_session_set(&p->ds, "sig_arms", o) < 0) return -1;'''
+replace = '''    (void)o;'''
 
 [[mutant]]
 id = "v2-78"
@@ -696,18 +697,16 @@ id = "v2-84"
 name = "a state's exit does not disarm its controls"
 test = "player"
 why = "sig.h's semantics, rule 3: a waiting arm of a state that ended is cancelled by the exit's disarm."
-find = '''        if (v->has_graph && (rs == V2_END || v->rs[rs].first)) v2_disarm_state(v);'''
+find = '''        if (v->has_graph && (rs == V2_END || v->rs[rs].first) && v2_disarm_state(p, v, t) < 0) return -1;'''
 replace = ''''''
 
 [[mutant]]
 id = "v2-85"
 name = "an until's next part disarms the state's exits"
 test = "player"
-expect = "survived"
-note = "Not reached since the player disarms only arms still ahead of the input (ca9bc48): the exits a state arms at its entry are not ahead when an until's next part starts. Kept as a guard."
 why = "A part of a state is not its exit: the state's exits stay armed (the model's s814: the hit ends the until and takes the exit)."
-find = '''        if (v->has_graph && (rs == V2_END || v->rs[rs].first)) v2_disarm_state(v);'''
-replace = '''        if (v->has_graph) v2_disarm_state(v);'''
+find = '''        if (v->has_graph && (rs == V2_END || v->rs[rs].first) && v2_disarm_state(p, v, t) < 0) return -1;'''
+replace = '''        if (v->has_graph && v2_disarm_state(p, v, t) < 0) return -1;'''
 
 [[mutant]]
 id = "v2-86"
@@ -737,10 +736,12 @@ replace = '''    if (0) {'''
 id = "v2-89"
 name = "the guard does not stop on a fallback"
 test = "player"
-why = "sig.h's semantics: a pinned group, a place before the window, full logs and no window are not the reference order's result."
-find = '''    bad = st.arm_hits_retracted + st.arm_rows_stale + st.arm_derived_stale + st.arm_past_pinned + st.arm_past_far +
-          st.arm_past_full + st.arm_past_off + st.arm_unverified;'''
-replace = '''    bad = st.arm_hits_retracted + st.arm_rows_stale + st.arm_derived_stale + st.arm_unverified;'''
+why = "sig.h's semantics: a pinned group, a place before the window, full logs and no window are not the reference order's result (t_v2_findings vm_guard_arm_full: an until's arm in the past meets a full log)."
+find = '''        c[3] += st.arm_past_pinned;
+        c[4] += st.arm_past_far;
+        c[5] += st.arm_past_full;
+        c[6] += st.arm_past_off;'''
+replace = ''''''
 
 [[mutant]]
 id = "v2-90"
@@ -749,24 +750,6 @@ test = "player"
 why = "The reset makes the last trial's held rows final: they are not this trial's."
 find = '''        v->rows_open = true;   /* the rows the reset made final were the last trial's */'''
 replace = '''        (void)0;'''
-
-[[mutant]]
-id = "v2-91"
-name = "every control of the state left disarmed"
-test = "player"
-why = "A disarm with no arm in its group takes the input time: the next state's arm of the control after a settle, at an earlier time, would be ended by it (the model's 68666, 66120)."
-find = '''        if (v->wait_t[node] > v->g.t_cover) (void)ysig_disarm(&v->g, node);'''
-replace = '''        (void)ysig_disarm(&v->g, node);'''
-
-[[mutant]]
-id = "v2-92"
-name = "only the latest arm of a control checked for waiting"
-test = "player"
-expect = "survived"
-note = "Not reached through --sim: within a visit the player arms a control once (an until's control has a detect of its own), so the latest arm is the only one; and every settle and frame lets a waiting arm in, so an arm still ahead at an exit is the visit's latest. vm_exit_cancels_wait covers the shape the latest arm does. Kept as the coordinator's guard against a format change that arms a control twice in a visit."
-why = "Any arm of a state's control still ahead of the input waits in sig.h; the exit disarms it, before the next state's arms."
-find = '''        if (v->wait_t[node] > v->g.t_cover) (void)ysig_disarm(&v->g, node);'''
-replace = '''        if (v->arm_t[node] > v->g.t_cover) (void)ysig_disarm(&v->g, node);'''
 
 [[mutant]]
 id = "v2-93"
@@ -795,7 +778,7 @@ id = "v2-95"
 name = "the window's logs at 0.10.0's 1,024 calls"
 test = "player"
 why = "Two 8 kHz mice put 1,067 calls in four 60 Hz frames; a full log clears the window, and a past arm right after falls back (t_v2_window_8k)."
-find = '''    c = reps * roles + (int64_t)(V2_WINDOW_FRAMES + 1) * V2_WINDOW_FRAME_CALLS;'''
+find = '''    c = reps * roles + frames * V2_WINDOW_FRAME_CALLS;'''
 replace = '''    c = 0;'''
 
 [[mutant]]
@@ -805,5 +788,332 @@ test = "player"
 expect = "survived"
 note = "A guard: the measured writes stay under 16,384 on every case here (t_v2_window_8k: 5,088 at the full 1,024-call log; the bimanual example at 8 kHz: 10,776). The bound is for a graph with more rings downstream of a role."
 why = "Each report writes up to one value to each ring in its role's downstream set."
-find = '''    c = reps * roles * (w > 0 ? w : 1) + (int64_t)(V2_WINDOW_FRAMES + 1) * V2_WINDOW_FRAME_CALLS * (rings > 0 ? rings : 1);'''
+find = '''    c = reps * roles * (w > 0 ? w : 1) + frames * V2_WINDOW_FRAME_CALLS * (rings > 0 ? rings : 1);'''
 replace = '''    c = 0;'''
+
+[[mutant]]
+id = "v2-97"
+name = "the horizon ignores the role's lateness bound"
+test = "player"
+why = "0.12.0, C(r) = P - B(r): a hit later than P - B is not final (t_v2_n1_tie, the late cases)."
+find = '''        if (!v->feeds || !v->feeds[r]) continue;
+        c = S->poll - S->bnd[r];'''
+replace = '''        if (!v->feeds || !v->feeds[r]) continue;
+        c = S->poll;'''
+
+[[mutant]]
+id = "v2-98"
+name = "the newest stamp itself counted complete"
+test = "player"
+count = 2
+why = "C(d) = max(S(d) - 1 ns, P - B(d)): a second report at the stamp S(d) can still come."
+find = '''S->newest[r] - 1 > c) c = S->newest[r] - 1;'''
+replace = '''S->newest[r] > c) c = S->newest[r];'''
+
+[[mutant]]
+id = "v2-99"
+name = "complete-to without the newest stamp"
+test = "player"
+count = 2
+why = "C(d)'s S(d) - 1 ns part: after a report stamped S(d) none of d stamped before it comes."
+find = '''        if (S->newest[r] != INT64_MIN && S->newest[r] - 1 > c) c = S->newest[r] - 1;
+'''
+replace = ''''''
+
+[[mutant]]
+id = "v2-100"
+name = "a poll fed in parts claims its whole time"
+test = "player"
+count = 2
+expect = "survived"
+note = "Equivalent in this player. plim is below P only between a key response's feed with a limit (pl_v2_response() goes first in the frame, key_first in run.c) and that frame's whole feed, which sets it back. In between, the samples fed reach only the limit, the timed candidates stop before it (v2_timed_to()'s wend), and a hit an earlier poll fed past the limit is taken in that frame by the same time order; the pending decision (t > G) is the same with G = min(t, P - B) or P - B, and S - 1 < t. t_v2_resp_plim holds the other half, the claim not lowered after the whole feed."
+why = "P is the last whole feed's: a feed with a limit (a key response's end) claims only its newest stamps (t_v2_resp_plim)."
+find = '''        if (c > S->plim) c = S->plim;
+'''
+replace = ''''''
+also = [{ find = '''    g = S->poll < S->plim ? S->poll : S->plim;''', replace = '''    g = S->poll;''', count = 2 }]
+
+[[mutant]]
+id = "v2-101"
+name = "no template waits"
+test = "player"
+why = "0.12.0: a template with a late role that feeds a control or a movement waits for complete input (every late case)."
+find = '''        if (v->feeds[r] && S->bnd[r] > 0) v->late = true;'''
+replace = '''        (void)0;'''
+
+[[mutant]]
+id = "v2-102"
+name = "every role feeds every template's horizon"
+test = "player"
+why = "G is over the roles that feed the template's controls and movements, not over every role."
+find = '''        v->feeds[r] = false;
+        for (i = 0; i < v->nn; i++)'''
+replace = '''        v->feeds[r] = true;
+        for (i = 0; i < v->nn; i++)'''
+
+[[mutant]]
+id = "v2-103"
+name = "hits drained past the horizon"
+test = "player"
+why = "H1: a hit not yet final stays in sig.h's queue (ysig_detected_to(..., G)); one handed out that a late report voids is counted."
+find = '''    int64_t g_to = v2_drain_to(p, v);
+    for (;;) {'''
+replace = '''    int64_t g_to = INT64_MAX;
+    for (;;) {'''
+
+[[mutant]]
+id = "v2-104"
+name = "derived events drained past the horizon"
+test = "player"
+env = { YPL_HZ = "500" }
+why = "H1: ysig_derived_to(..., G); an event handed out that a run again changes counts arm_derived_stale."
+find = '''v->n_der = ysig_derived_to(&w->g, v->der, v->der_cap, v2_drain_to(p, v));'''
+replace = '''v->n_der = ysig_derived_to(&w->g, v->der, v->der_cap, INT64_MAX);'''
+
+[[mutant]]
+id = "v2-105"
+name = "a timed candidate does not wait for the horizon"
+test = "player"
+why = "D20 rule 4 under the wait: an after_s, timeout or steps' end later than G waits, so a hit at or before it that becomes final late wins."
+find = '''            int64_t g = v->has_graph && v->late ? v2_horizon(p, v) : INT64_MAX;'''
+replace = '''            int64_t g = INT64_MAX;'''
+
+[[mutant]]
+id = "v2-106"
+name = "after_s counts from the frame of the exit's time, not the frame where it became final"
+test = "player"
+why = "The entry frame is the first at or after both the exit's time and the time it became final; after_s counts from its onset (D20 rule 2)."
+find = '''    v->entry_onset = f->onset;
+    if (r->def < 0)'''
+replace = '''    v->entry_onset = f->onset - (f->onset - t) / f->period * f->period;
+    if (r->def < 0)'''
+also = [{ find = '''            v->visit_onset = f->onset;
+            v->state_onset[r->def] = f->onset;''', replace = '''            v->visit_onset = f->onset - (f->onset - t) / f->period * f->period;
+            v->state_onset[r->def] = f->onset;''' }]
+
+[[mutant]]
+id = "v2-107"
+name = "catchup_ns without the 8/7"
+test = "player"
+env = { YPL_HZ = "500" }
+why = "R4: sig.h keeps about 7/8 of catchup_ns (a checkpoint each catchup_ns / 8)."
+find = '''((p->v2s->bnd_max + 3 * per) * 8 + 6) / 7'''
+replace = '''(p->v2s->bnd_max + 3 * per)'''
+
+[[mutant]]
+id = "v2-108"
+name = "catchup_ns from two periods"
+test = "player"
+env = { YPL_HZ = "500" }
+expect = "survived"
+note = "Not reached in --sim: an exit is taken at the first poll P with P - B at or past its time t, so its arm is less than B plus one period back. sig.h keeps a checkpoint at or before P - (catchup_ns - spacing), spacing at most catchup_ns / 8 plus a period, so (B + 2 periods) * 8/7 already reaches it. The third period is the design's margin for a take a frame after G allows (a real run's poll after the onset); no --sim path makes one. t_v2_window_reach kills v2-107 and v2-109 with 100 ms late input."
+why = "R4: an exit taken at G arms the next state up to max B plus two frames back, and the newest input is up to a frame past the checkpoint."
+find = '''((p->v2s->bnd_max + 3 * per) * 8 + 6) / 7'''
+replace = '''((p->v2s->bnd_max + 2 * per) * 8 + 6) / 7'''
+
+[[mutant]]
+id = "v2-109"
+name = "catchup_ns without the bound"
+test = "player"
+why = "R4: the window reaches max B back beyond the frames."
+find = '''((p->v2s->bnd_max + 3 * per) * 8 + 6) / 7'''
+replace = '''((3 * per) * 8 + 6) / 7'''
+
+[[mutant]]
+id = "v2-110"
+name = "the queues not sized for the held hits and events"
+test = "player"
+expect = "survived"
+note = "Not reached: every test graph's held hits and events fit the window's own log size (catchup_calls from the calls V2_WINDOW_HZ makes per role), so the larger M2 count never binds. A test with six movements of an 8 kHz hand, 200 ms late, and a 16 kHz control lost no event (2026-11-15): the derived events held were fewer than the per-sample count the size assumes; not looked into further. Open."
+why = "M2: catchup_calls holds the hits and derived events max B plus a frame can make."
+find = '''        if (q > c) c = q;
+'''
+replace = ''''''
+
+[[mutant]]
+id = "v2-111"
+name = "hits_lost and derived_lost do not stop the guard"
+test = "player"
+expect = "survived"
+note = "Not reached: no test fills sig.h's queue (v2-110), so hits_lost and derived_lost stay 0 and the guard has nothing to stop on. Open, as v2-110."
+why = "M2: a held hit or event that found sig.h's queue full is lost; a guard stop while a bound is above 0."
+find = '''        if (S->bnd_max > 0) { c[13] += st.hits_lost; c[14] += st.derived_lost; }'''
+replace = '''        (void)0;'''
+
+[[mutant]]
+id = "v2-112"
+name = "N1 does not stop on a hit before a used horizon"
+test = "player"
+why = "N1: a hit of an arm made before a take, earlier than the horizon that take used, came later than its bound (t_v2_n1_tie)."
+find = '''                if (tk < v->take_dr) return v2_beyond(p, v, "a hit", h[i].t, v->g_used);'''
+replace = '''                (void)tk;'''
+
+[[mutant]]
+id = "v2-113"
+name = "R5 (i) does not stop on a hit at a take's own time"
+test = "player"
+why = "R5 (i): a hit at a take's time of an arm the take followed, of an exit before the taken one in the list, would have won by rule 4."
+find = '''                        if (tr->exits[j].kind == X_HIT && tr->exits[j].node == h[i].node) return v2_beyond(p, v, "a hit", h[i].t, v->ch_t);'''
+replace = '''                        (void)tr;'''
+
+[[mutant]]
+id = "v2-114"
+name = "R5 (i) checks only the latest take of a chain"
+test = "player"
+why = "R5 (i) over every take of a chain at one time (t_v2_n1_chain)."
+find = '''                for (c = 0; c < v->ch_n; c++) {'''
+replace = '''                for (c = v->ch_n > 0 ? v->ch_n - 1 : 0; c < v->ch_n; c++) {'''
+
+[[mutant]]
+id = "v2-115"
+name = "N1 does not stop on a derived event before a used horizon"
+test = "player"
+why = "R5 (ii): a derived event behind the horizon that no arm since explains came late (t_v2_n1_derived)."
+find = '''                    if (v->late && v->der[k].t < v->g_der && v->der[k].t < v->arm_min) return v2_beyond(p, v, "a derived event", v->der[k].t, v->g_der);'''
+replace = '''                    (void)0;'''
+
+[[mutant]]
+id = "v2-116"
+name = "N1 and R5 (i) in a template that does not wait"
+test = "player"
+why = "R6: with every bound 0 a hit at or before a take's time that comes out later loses by rule 4, as 0.11.0 (t_v2_beyond_bound0; the harness, 500 Hz, seed 100619)."
+find = '''            if (!v->late) {
+            } else if (h[i].t < v->g_used) {'''
+replace = '''            if (0) {
+            } else if (h[i].t < v->g_used) {'''
+
+[[mutant]]
+id = "v2-117"
+name = "the flush does not wait for input to its barrier"
+test = "player"
+why = "C2: a report stamped before the flush's barrier that arrives after it is dropped (t_v2_barrier, 500 Hz)."
+find = '''    if (p->v2s->bnd_max > 0 && v->has_graph && v->rows_open && v2_horizon_all(p) < v->g.t_cover - 1) {'''
+replace = '''    if (0) {'''
+
+[[mutant]]
+id = "v2-118"
+name = "the trial's reset at its onset under late input"
+test = "player"
+why = "C2: the reset's barrier goes at G + 1 ns, else a late report before the onset is dropped and the trial reads a stale held value (t_v2_barrier, 60 Hz; the harness's seed 102928)."
+find = '''            if (S->bnd_max > 0 && ga != INT64_MIN && ga < tb - 1) tb = ga + 1;
+'''
+replace = ''''''
+
+[[mutant]]
+id = "v2-119"
+name = "the barrier's wait over the template's roles only"
+test = "player"
+env = { YPL_HZ = "500" }
+why = "C2: a barrier drops a report of any device, so the wait is over every signal role, fed by the template or not."
+find = '''    if (v2_horizon_all(p) < v->g.t_cover - 1) return 1;'''
+replace = '''    if (v2_horizon(p, v) < v->g.t_cover - 1) return 1;'''
+
+[[mutant]]
+id = "v2-120"
+name = "a frame row does not wait for complete input"
+test = "player"
+why = "3.7: a frame row reads at its record onset once the input is complete to it (t_v2_frame_rows_late)."
+find = '''    return S->bnd_max <= 0 || v2_horizon_all(p) >= (fr->rec_have ? fr->rec_t : fr->planned);'''
+replace = '''    return true;'''
+
+[[mutant]]
+id = "v2-121"
+name = "the frame rows' queue not sized for the wait"
+test = "player"
+why = "A row can wait the largest bound in frames more; the queue is sized for it at load."
+find = '''        int64_t wb = S->bnd_max > 0 ? S->bnd_max / per + 2 : 0;'''
+replace = '''        int64_t wb = 0;'''
+
+[[mutant]]
+id = "v2-122"
+name = "a signal column read at the end frame under late input"
+test = "player"
+why = "A {\"signal\": N} column is read at the end frame's onset with the input complete to it (t_v2_signal_column_late)."
+find = '''    if (f->kind == YEXP_V_SIGNAL && !f->by && v->has_graph && p->v2s->bnd_max > 0 && r->v2) {'''
+replace = '''    if (0) {'''
+
+[[mutant]]
+id = "v2-123"
+name = "a deferred signal column read at the newest input"
+test = "player"
+why = "The column's time is the end frame's onset, not the graph's newest input when the wait is done."
+find = '''        x->s[x->ns].t = v->col_t;'''
+replace = '''        x->s[x->ns].t = INT64_MAX;'''
+
+[[mutant]]
+id = "v2-124"
+name = "a movement's origin is the last trial's place"
+test = "player"
+why = "3.11, 3.13: the last position fed before the arm, the hand's place at the onset (t_v2_move_origin)."
+find = '''            seed_origin = tb == f->onset;'''
+replace = '''            seed_origin = false;'''
+
+[[mutant]]
+id = "v2-125"
+name = "a signal choice's arm drops the from stimulus's onset"
+test = "player"
+why = "3.13: $rt_s and the deadline count from the from stimulus's onset; yrsp_arm() clears it (t_v2_signal_from_first)."
+find = '''        if (had_plan) (void)yrsp_set_onset(c, &plan);
+        if (had_onset && (on.final || !had_plan)) (void)yrsp_set_onset(c, &on);
+'''
+replace = ''''''
+
+[[mutant]]
+id = "v2-126"
+name = "a pending response's end not taken before a hit's exit"
+test = "player"
+why = "D20 rule 4: a key response's end that waited for G competes with a later hit (v2_resp_pend_first; t_v2_resp_pend_first)."
+find = '''                int rc = tn == INT64_MAX ? 0 : v2_resp_pend_first(p, v, f, tn, false);'''
+replace = '''                int rc = 0;'''
+
+[[mutant]]
+id = "v2-127"
+name = "a pending response's end not taken before a timed exit"
+test = "player"
+why = "D20 rule 4: a key response's end that waited for G wins against a later timed exit (the harness, 500 Hz, 10 ms late, seed 100640)."
+find = '''            int rc = tn == INT64_MAX ? 0 : v2_resp_pend_first(p, v, f, tn, true);'''
+replace = '''            int rc = 0;'''
+
+[[mutant]]
+id = "v2-128"
+name = "a pending response's end taken past the horizon"
+test = "player"
+expect = "survived"
+note = "Equivalent. resp_pend is set only in a template that waits (pl_v2_response(), v->late). Both callers pass a candidate time tn at or before the horizon there: v2_hits() drains hits up to G (g_to) and its after_s, response-tie and steps' end candidates are at or before the latest drained hit; v2_timed_to() takes tn only at or before g. resp_pend_t <= tn <= G, and no feed comes between the drain and the call, so the dropped test never decides."
+why = "The response's end is taken when final and at or before G."
+find = ''' || v->resp_pend_t > v2_horizon(p, v)) return 0;'''
+replace = ''') return 0;'''
+
+[[mutant]]
+id = "v2-129"
+name = "a response's end does not wait for the horizon"
+test = "player"
+why = "0.12.0: the response's end is a candidate at its time, taken once the input is complete to it."
+find = '''        if (t > v2_horizon(p, v)) {
+            v->resp_pend = true;'''
+replace = '''        if (0) {
+            v->resp_pend = true;'''
+
+[[mutant]]
+id = "v2-130"
+name = "two exits on one control arm its detect twice"
+test = "player"
+why = "One arm per detect: a second arm at one time is a later group sig.h counts arm_unverified (t_v2_two_exits_one_ctl; the harness, 500 Hz, seed 100829)."
+find = '''        if (r->exits[j].kind == X_HIT && (to < 0 || r->exits[j].to == to) && r->exits[j].node == r->exits[i].node) return false;'''
+replace = '''        (void)0;'''
+
+[[mutant]]
+id = "v2-131"
+name = "an ended trial's hits handed out past the horizon"
+test = "player"
+why = "A graph that is not the trial's hands out only up to G over every role; a late report voids one handed out (t_v2_ended_hits; the harness, 500 Hz, seed 100308)."
+find = '''            int64_t ga = S->bnd_max > 0 ? v2_horizon_all(p) : INT64_MAX;'''
+replace = '''            int64_t ga = INT64_MAX;'''
+
+[[mutant]]
+id = "v2-132"
+name = "a state's controls disarmed at the input time"
+test = "player"
+why = "sig.h 0.7.0: ysig_disarm_at() at the exit's time; a plain disarm takes the input time and ends the next state's arms made earlier."
+find = '''        if (!ysig_disarm_at(&v->g, node, t)) {'''
+replace = '''        if (!ysig_disarm(&v->g, node)) {'''

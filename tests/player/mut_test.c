@@ -367,11 +367,16 @@ static int run_shapes(void) {
     char cmd[4096], self[1024];
     const char* repo = getenv("YPL_REPO");
     const char* bin = getenv("YPL_BIN");
+    /* YPL_HZ: the simulated display's rate (a mutant's env); some 0.12.0
+     * rules show only at 500 Hz, where a frame is shorter than the lateness */
+    const char* hz = getenv("YPL_HZ");
+    char hzarg[64] = "";
     ssize_t n = readlink("/proc/self/exe", self, sizeof self - 1);
     int rc;
     if (n <= 0 || !repo || !bin) { printf("run_shapes needs YPL_REPO and YPL_BIN\n"); return 2; }
     self[n] = 0;
-    snprintf(cmd, sizeof cmd, "YPL_AS_PLAYER=1 python3 '%s/tests/player/player_test.py' --bin '%s' --player '%s' --out '%s/shapes' > '%s/shapes.txt' 2>&1; st=$?; grep -E 'FAIL|cases' '%s/shapes.txt' | head -12; exit $st", repo, bin, self, workdir, workdir, workdir);
+    if (hz && *hz) snprintf(hzarg, sizeof hzarg, " --hz '%s'", hz);
+    snprintf(cmd, sizeof cmd, "YPL_AS_PLAYER=1 python3 '%s/tests/player/player_test.py' --bin '%s' --player '%s'%s --out '%s/shapes' > '%s/shapes.txt' 2>&1; st=$?; grep -E 'FAIL|cases' '%s/shapes.txt' | head -12; exit $st", repo, bin, self, hzarg, workdir, workdir, workdir);
     rc = system(cmd);
     return WEXITSTATUS(rc);
 }

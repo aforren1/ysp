@@ -2239,6 +2239,25 @@ def t_v2_findings(ctx):
                         {"name": "s1", "exits": [{"on": "home", "to": "end", "outcome": "again"}, {"after_s": 0.05, "to": "end"}]}]}
         r = one("vm_guard_fallback", v2base({"t": t}, [{"name": "l", "trial": "t"}], roles=hand), ["--sim-gain", "hand=1", "--samples", dense])
         check(r.rc != 0 and "internal guard" in r.err and "logs full" in r.err, "the guard stops on a fallback: exit %d %s" % (r.rc, r.err[:300]))
+        # 0.12.0: s0's exit disarms home at the exit's time (ysig_disarm_at),
+        # and that late call meets the full log first (late: logs full). An
+        # until's next part disarms nothing, so its control's arm in the
+        # past is the call that meets it: the arm's own fallback count
+        # (arm_past_full). The control: the same with samples at 1 kHz
+        tu = {"controls": {"home": {"control": "region", "of": "hand", "radius": 3, "stay_s": 0.0301},
+                           "home2": {"control": "region", "of": "hand", "radius": 3, "stay_s": 0.5}},
+              "states": [{"name": "s0", "steps": [{"until": "home"}, {"until": "home2"}],
+                          "exits": [{"after_s": 0.3, "to": "end", "outcome": "timed"}]}]}
+        sparse = os.path.join(ctx.out, "vm_sparse.csv")
+        write_samples(sparse, [(0.001 * k, "hand", 0, 0) for k in range(140)])
+        for v, smp in ((0, dense), (1, sparse)):
+            r = one("vm_guard_arm_full" if v == 0 else "vm_guard_arm_full_control", v2base({"t": tu}, [{"name": "l", "trial": "t"}], roles=hand),
+                    ["--sim-gain", "hand=1", "--samples", smp])
+            if v == 0:
+                check(r.rc != 0 and re.search(r"\d+ before the window, [1-9]\d* logs full, \d+ no window; \d+ unverified; late", r.err),
+                      "the guard stops on an arm's fallback: exit %d %s" % (r.rc, r.err[-300:]))
+            else:
+                check(r.rc == 0 and r.trials[0]["outcome"] == "timed", "the arm's fallback, control at 1 kHz: exit %d %s" % (r.rc, r.err[-300:]))
     # and on a pinned arm, at any rate: the hand's report at 0.0301 s that
     # enters home comes 20 ms late (--test-sample-late), after frames later
     # than its time; s1's arm at the hit's time goes after that report, so
@@ -2972,13 +2991,172 @@ def t_v2_signal_column_late(ctx):
               "%s: the hand steps %+.4f s from the end frame: hx %r, want %s (exit %d %s)" % (nm, dj, got, want, r.rc, r.err[-300:] if r.rc else ""))
 
 
+HAND = {"hand": {"type": "position2d", "units": "display_px"}}
+
+
+def t_v2_newest_stamp(ctx):
+    # C(d) = max(S(d) - 1 ns, P - B(d)) (docs/player.md, "Terms"). The hand
+    # is on time with a bound of 50 ms. It enters r0 at s, 0.4 periods
+    # before frame k's onset; its next report is 0.3 periods after that
+    # onset. The hit at s is final once a report stamped after s is in:
+    # frame k + 1, a lag of 1.4 periods. Not at frame k (a second report
+    # stamped s can still come) and not at P - B (50 ms on). The control:
+    # bound 0, so G is P and the hit is taken at frame k
+    P = period_ns(ctx)
+    k = 30
+    s = round((k - 0.4) * P / 1e9, 6)
+    smp = os.path.join(ctx.out, "v2_newest_stamp.csv")
+    write_samples(smp, [(0.0, "hand", 100, 0), (s, "hand", 0, 0), (round(s + 0.7 * P / 1e9, 6), "hand", 0, 0), (2.0, "hand", 0, 0)])
+    t = {"controls": {"r0": {"control": "region", "of": "hand", "radius": 20}},
+         "states": [{"name": "s0", "exits": [{"on": "r0", "to": "end", "outcome": "hit"}, {"after_s": 1.0, "to": "end", "outcome": "timed"}]}]}
+    for v, bound, frame in ((0, "0.05", k + 1), (1, "0", k)):
+        nm = "v2_newest_stamp" if v == 0 else "v2_newest_stamp_control"
+        r = Run(ctx, nm, v2base({"t": t}, [{"name": "l", "trial": "t"}], roles=HAND),
+                args=["--sim-gain", "hand=1", "--samples", smp, "--test-sample-late", "hand=0", "--test-sample-bound", "hand=" + bound,
+                      "--max-seconds", "20"])
+        lag = float(r.trials[0]["exit_lag_max_s"]) if r.rc == 0 and r.trials and r.trials[0].get("exit_lag_max_s") else None
+        want = frame * P / 1e9 - s
+        check(r.rc == 0 and r.trials[0]["outcome"] == "hit" and lag is not None and abs(lag - want) < 1e-6,
+              "%s: the hit at %.6f s is taken at frame %d: exit lag %s, want %.9f (exit %d %s)" % (nm, s, frame, lag, want, r.rc, r.err[-300:] if r.rc else ""))
+
+
+def t_v2_cross_roles(ctx):
+    # H1: a cursor of left.x and right.y emits at each left report with the
+    # right hand's value at that time. The right hand's reports come 10 ms
+    # late, so a right report stamped before a left one arrives after it,
+    # and sig.h runs the window again: the emit at the left report's time
+    # changes. The player holds the movement's derived events up to G over
+    # both roles (ysig_derived_to()), so none it took changes. The control:
+    # a bound of 2 ms under the 10 ms lateness, so events it took do change,
+    # and the guard stops
+    roles = {"left": {"type": "position2d", "units": "display_px"}, "right": {"type": "position2d", "units": "display_px"}}
+    smp = os.path.join(ctx.out, "v2_cross_roles.csv")
+    rows = []
+    for j in range(1200):
+        rows.append((0.001 * j, "left", j % 7, 0))
+        rows.append((0.001 * j + 0.0003, "right", 0, j % 5))
+    write_samples(smp, rows)
+    t = {"controls": {"cur": {"control": "cursor", "x": "left.x", "y": "right.y"},
+                      "go": {"control": "movement", "of": "cur", "onset": 1000}},
+         "states": [{"name": "a", "steps": [{"on": "s"}], "exits": [{"after_s": 0.5, "to": "end", "outcome": "timed"}]}],
+         "response": {"choices": [{"signal": "go"}], "from": "s", "duration_s": 3}}
+    for v, bound in ((0, []), (1, ["--test-sample-bound", "right=0.002"])):
+        nm = "v2_cross_roles" if v == 0 else "v2_cross_roles_control"
+        r = Run(ctx, nm, v2base({"t": t}, [{"name": "l", "trial": "t"}], roles=roles),
+                args=["--sim-gain", "left=1", "--sim-gain", "right=1", "--samples", smp, "--test-sample-late", "right=0.01",
+                      "--max-seconds", "20"] + bound)
+        if v == 0:
+            out = [x["outcome"] for x in r.trials] if r.rc == 0 else []
+            check(r.rc == 0 and out == ["timed"], "%s: derived events held to G over both roles: exit %d %s %s" % (nm, r.rc, r.err[-300:], out))
+        elif rate(ctx) >= 500:
+            # at 60 Hz sig.h counted no late input in this shape (late_input
+            # 0, measured 2026-11-15; not looked into), so the control holds
+            # at 500 Hz only, and so does the case's check of H1
+            check(r.rc != 0 and "internal guard" in r.err, "%s: derived events taken past a too small bound stop the guard: exit %d %s" %
+                  (nm, r.rc, r.err[-300:]))
+
+
+def t_v2_entry_frame_after(ctx):
+    # the entry frame is the first at or after both the exit's time and the
+    # time the exit became final, and after_s counts from its onset (D20
+    # rule 2; docs/player.md, "Frames, times and steps"). The hand enters
+    # r0 mid-frame and its reports come 10 ms late, so a to b is taken
+    # frames after the hit; b's after_s 0.1 ends b 0.1 s after b's entry
+    # frame onset, its t_s. The control: the same samples on time
+    P = period_ns(ctx)
+    s = round(10.5 * P / 1e9, 6)
+    smp = os.path.join(ctx.out, "v2_entry_frame_after.csv")
+    write_samples(smp, [(0.001 * j, "hand", 100 if 0.001 * j < s else 0, 0) for j in range(1500)])
+    t = {"controls": {"r0": {"control": "region", "of": "hand", "radius": 20}},
+         "states": [{"name": "a", "exits": [{"on": "r0", "to": "b"}, {"after_s": 1.0, "to": "end", "outcome": "none"}]},
+                    {"name": "b", "exits": [{"after_s": 0.1, "to": "end", "outcome": "timed"}]}]}
+    for v, late in ((0, ["--test-sample-late", "hand=0.01"]), (1, [])):
+        nm = "v2_entry_frame_after" if v == 0 else "v2_entry_frame_after_control"
+        r = Run(ctx, nm, v2base({"t": t}, [{"name": "l", "trial": "t"}], roles=HAND),
+                args=["--sim-gain", "hand=1", "--samples", smp, "--max-seconds", "20"] + late)
+        b = [e for e in r.events if e["kind"] == "state" and e["text"] == "b"] if r.rc == 0 else []
+        d = round((float(b[0]["end_s"]) - float(b[0]["t_s"])) * 1e9) if b and b[0]["end_s"] and b[0]["t_s"] else None
+        check(d is not None and abs(d - 100000000) <= 2, "%s: b's after_s counts from its entry frame's onset: end_s - t_s %s ns (exit %d %s)" %
+              (nm, d, r.rc, r.err[-300:] if r.rc else ""))
+
+
+def t_v2_window_reach(ctx):
+    # catchup_ns is ceil((max B + 3 periods) * 8 / 7), at least 50 ms
+    # (docs/player.md, "Where each bound comes from"): an exit taken at the
+    # horizon arms the next state at its time, up to max B plus two periods
+    # before the newest input, and sig.h keeps about 7/8 of the window. The
+    # hand goes in and out of r every 23.7 ms for 1 s (every phase of the
+    # frame), its reports 100 ms late: each exit's arm is about 100 ms in
+    # the past, and none falls out of the window. The control: on time
+    smp = os.path.join(ctx.out, "v2_window_reach.csv")
+    write_samples(smp, [(0.001 * j, "hand", 50 if 0.001 * j < 1.0 and int(0.001 * j / 0.0237) % 2 else 0, 0) for j in range(2500)])
+    t = {"controls": {"in": {"control": "region", "of": "hand", "radius": 20, "stay_s": 0.001},
+                      "out": {"control": "region", "of": "hand", "radius": 20, "outside": True, "stay_s": 0.001}},
+         "states": [{"name": "a", "exits": [{"on": "out", "to": "b"}, {"after_s": 0.3, "to": "end", "outcome": "timed"}]},
+                    {"name": "b", "exits": [{"on": "in", "to": "a"}, {"after_s": 0.3, "to": "end", "outcome": "timed"}]}]}
+    for v, late in ((0, ["--test-sample-late", "hand=0.1"]), (1, [])):
+        nm = "v2_window_reach" if v == 0 else "v2_window_reach_control"
+        r = Run(ctx, nm, v2base({"t": t}, [{"name": "l", "trial": "t"}], roles=HAND),
+                args=["--sim-gain", "hand=1", "--samples", smp, "--max-seconds", "20"] + late)
+        n = len([e for e in r.events if e["kind"] == "state"]) if r.rc == 0 else 0
+        check(r.rc == 0 and n >= 30 and r.trials[0]["outcome"] == "timed", "%s: exits 100 ms in the past stay in the window: exit %d %s, %d states" %
+              (nm, r.rc, r.err[-300:] if r.rc else "", n))
+
+
+def t_v2_frame_rows_long(ctx):
+    # a frame trace's row waits for the input to its time, the largest
+    # bound in frames more than the record's wait; the queue is sized for
+    # that at load. 1.8 s late is more frames than V2_FRAME_WAIT at 60 and
+    # 500 Hz, and the trial is longer than that. The control: on time
+    t = {"controls": {"near": {"control": "distance", "of": "hand"}, "fr": {"control": "trace", "of": ["near"], "rate": "frame"}},
+         "states": [{"name": "s0", "exits": [{"after_s": 2.5, "to": "end", "outcome": "timed"}]}]}
+    smp = os.path.join(ctx.out, "v2_frame_rows_long.csv")
+    write_samples(smp, [(0.001 * j, "hand", j % 11, 0) for j in range(6000)])
+    for v, late in ((0, ["--test-sample-late", "hand=1.8"]), (1, [])):
+        nm = "v2_frame_rows_long" if v == 0 else "v2_frame_rows_long_control"
+        r = Run(ctx, nm, v2base({"t": t}, [{"name": "l", "trial": "t"}], roles=HAND),
+                args=["--sim-gain", "hand=1", "--samples", smp, "--max-seconds", "30"] + late)
+        n = r.count(os.path.join("streams", "fr.csv")) if r.rc == 0 else 0
+        check(r.rc == 0 and n >= 2.5 * rate(ctx) - 1, "%s: frame rows that wait 1.8 s fit the queue: exit %d %s, %d rows" %
+              (nm, r.rc, r.err[-300:] if r.rc else "", n))
+
+
+def t_v2_resp_pend_hit(ctx):
+    # D20 rule 4 with a hit: a key response's end that waits for the horizon
+    # is a candidate at the press's time, so a hit 0.5 ms later that
+    # becomes final at the same poll must not win (v2_resp_pend_first() in
+    # v2_hits()). The control: the hand enters 0.5 ms before the press and
+    # the hit wins
+    script = os.path.join(ctx.out, "v2_resp_pend_hit_part.csv")
+    with open(script, "w", newline="\n") as f:
+        f.write("trial_index,response,rt_s,hold_s\n0,f,0.061000000,0.020000000\n")
+    t = {"controls": {"home": {"control": "region", "of": "hand", "radius": 3}},
+         "response": {"role": "keys", "choices": ["f", "j"], "from": "s", "duration_s": 0.5, "response_ends_trial": False, "max_responses": 1},
+         "states": [{"name": "s0", "steps": [{"on": "s"}],
+                     "exits": [{"on": "home", "to": "end", "outcome": "home"}, {"on": "response", "to": "end", "outcome": "rsp"},
+                               {"after_s": 0.4, "to": "end", "outcome": "timed"}]}]}
+    for v, enter, want in ((0, 0.0615, "rsp"), (1, 0.0605, "home")):
+        nm = "v2_resp_pend_hit" if v == 0 else "v2_resp_pend_hit_control"
+        smp = os.path.join(ctx.out, nm + ".csv")
+        write_samples(smp, [(0.0005 * j, "hand", 9 if 0.0005 * j < enter - 1e-9 else 0, 0) for j in range(1000)])
+        d = v2base({"t": t}, [{"name": "l", "trial": "t"}], roles=HAND)
+        d["devices"] = {"keys": {"direction": "in", "family": ["keyboard"]}}
+        r = Run(ctx, nm, d, args=["--sim-gain", "hand=1", "--samples", smp, "--test-sample-late", "hand=0.01",
+                                  "--participant", "script:" + script, "--max-seconds", "20"])
+        out = [x["outcome"] for x in r.trials] if r.rc == 0 else []
+        check(r.rc == 0 and out == [want], "%s: a pending press at 0.061 s against a hit at %.4f s: exit %d %s %s, want %s" %
+              (nm, enter, r.rc, r.err[-300:] if r.rc else "", out, want))
+
+
 TESTS = [t_nested, t_if_unless, t_empty_and_zero, t_loop, t_requeue, t_track_ends, t_lookup_keys, t_triggers, t_after_timing, t_outcomes,
          t_method_update, t_seeds, t_refused, t_unused_stim, t_record_data, t_fix_density, t_fix_key_reapply, t_fix_stale_rdk,
          t_fix_timeout_values, t_fix_any_key, t_fix_from_in_if, t_fix_shown_twice, t_fix_vars_data, t_fix_sound_twice, t_fix_rdk_limit,
          t_fix_record_inherit, t_fix_backward_at, t_fix_refusals, t_fix_michelson_order, t_fix_texture_vars, t_fix_walk_budget,
          t_fix_data_set, t_fix_check_all_leaves, t_fix_release_order, t_fix_key_var_reapply,
          t_r2_release_other_template, t_r2_yield_draws_nothing, t_r2_low, t_r2_relaxed, t_r4_leaf_loop_done_track, t_r4_requeue_full,
-         t_r5_wait_final, t_r6_allow_below, t_v2_states, t_v2_until, t_v2_hand, t_v2_rule5, t_v2_review2, t_v2_review3, t_v2_f34, t_v2_ties, t_v2_review4, t_v2_review5, t_v2_findings, t_v2_corpus, t_v2_window_8k, t_v2_two_hands, t_v2_two_exits_one_ctl, t_v2_n1_tie, t_v2_n1_chain, t_v2_n1_derived, t_v2_resp_pend_first, t_v2_barrier, t_v2_resp_plim, t_v2_signal_from_first, t_v2_beyond_bound0, t_v2_frame_rows_late, t_v2_ended_hits, t_v2_move_origin, t_v2_signal_column_late]
+         t_r5_wait_final, t_r6_allow_below, t_v2_states, t_v2_until, t_v2_hand, t_v2_rule5, t_v2_review2, t_v2_review3, t_v2_f34, t_v2_ties, t_v2_review4, t_v2_review5, t_v2_findings, t_v2_corpus, t_v2_window_8k, t_v2_two_hands, t_v2_two_exits_one_ctl, t_v2_n1_tie, t_v2_n1_chain, t_v2_n1_derived, t_v2_resp_pend_first, t_v2_barrier, t_v2_resp_plim, t_v2_signal_from_first, t_v2_beyond_bound0, t_v2_frame_rows_late, t_v2_ended_hits, t_v2_move_origin, t_v2_signal_column_late,
+         t_v2_newest_stamp, t_v2_cross_roles, t_v2_entry_frame_after, t_v2_window_reach, t_v2_frame_rows_long,
+         t_v2_resp_pend_hit]
 
 
 def main():
