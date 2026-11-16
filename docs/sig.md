@@ -944,7 +944,10 @@ When the header tests:
   reader, and on its overflow at 32 armed detects it counted an
   `arm_unverified` that no shape needed.
 - Condition 4: at G's place (a past group), at the trigger that lets G
-  in, or at G's arm at the end of R.
+  in, or at G's arm at the end of R. At the place, a group that the past
+  arm lets into its block is tested there too (`sig_test`
+  `test_v2_c4_past`); a disarm at G's own `τ` is skipped there as in
+  `ysig__c4()` (V2SIG8: the place's test counted it).
 - (R2, 2026-11-15) At each late disarm whose place is in the gap a
   group's arm closes in R (back to the last input, barrier, arm or
   `ysig_disarm_at`): condition 4 for that group.

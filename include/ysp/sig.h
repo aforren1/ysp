@@ -427,6 +427,8 @@
  *          so a batch never falls back where per-event feeding does not
  *          (format 3.11 rule 4, DECIDED 2026-11-15); its bound on one
  *          feed's log use is checked in a YSIG_DEBUG_FEED_BOUND build.
+ *          Condition 4 at a past group's place skips a disarm at the
+ *          group's own time, as the text and ysig__c4() do.
  *          "N(G) earlier than tau" is a flag, not tau - 1 (a signed
  *          overflow at an arm at INT64_MIN).
  *          Condition 3's table of armed detects (w->lr) went: no reader,
@@ -6320,14 +6322,15 @@ static void ysig__unv_place(ysig_graph* g, int kslot, uint64_t pos, int nb) {
         /* 2 (c) at any N(G): a cancelled group's disarm, unless N(G) is t */
         if (!bad && armed < 0 && ysig__fp_any(g, Fa) && N_below) bad = 1;
         if (!bad && armed >= 0) {
-            /* condition 4: a disarm of another group, or of no group, in
-             * the gap G's arm closes: back from its arm to the last input,
-             * barrier or arm */
+            /* condition 4: a disarm of another group, or of no group, at
+             * another time than G's, in the gap G's arm closes: back from
+             * its arm to the last input, barrier or arm. One at G's time
+             * keeps its time when it joins G's gap, as ysig__c4() has it */
             for (u = last; u > cu->c_tail; u--) {
                 const ysig__call* c = &cu->calls[(u - 1) % (uint64_t)cu->C];
                 if (c->gid == gid) continue;
                 if (ysig__input_t(&c->e, &ti) || ysig__fp_entry(g, c, f) == 2 || c->e.kind == YSIG_J_ARM) break;
-                if (c->e.kind == YSIG_J_DISARM) { bad = 1; break; }
+                if (c->e.kind == YSIG_J_DISARM) { bad = c->tr != t; break; }
             }
         }
         if (!bad && N_below) {

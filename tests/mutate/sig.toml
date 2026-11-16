@@ -43,6 +43,22 @@ libs = ["-lm"]
 timeout = 300
 env = { SIG_ORACLE_CASES = "3000", SIG_ORACLE_SEED = "20261123", SIG_ORACLE_OFF = "l", SIG_ORACLE_R1 = "1", SIG_ORACLE_GEN_TIE = "1", SIG_ORACLE_GEN_DISARM_AT = "1", SIG_ORACLE_GEN_EXIT = "1", SIG_ORACLE_DAX = "1", SIG_ORACLE_GEN_DRAIN_TO = "1", SIG_ORACLE_DERIVED_TO = "1", SIG_ORACLE_LATE = "4", SIG_ORACLE_LATE_A = "1", SIG_ORACLE_P2STRICT = "1", SIG_ORACLE_PRED = "1" }
 
+[test.sig_ref_pt]
+# The oracle with SIG_ORACLE_PRED_TARGET=1 (the reviewer's rev2e, V2SIG8):
+# a made group the text's predicate flags by condition 1 or 4 must have
+# an arm_unverified or late_unverified in its case ("FAIL line 4" of
+# sig_arm_ref_targets.c). Seed 20261115, late generator on, 3,000 cases,
+# ctest's switches. The unmutated header passes it (the control); at
+# seed 20261124 it does not (case 2107, a disarm_at at 0 after a reset,
+# under review). It does not tell 300, 314, 315 or 318 from the header.
+source = "tests/adapt/sig_arm_ref_targets.c"
+compiler = "gcc"
+flags = ["-std=c99", "-O2", "-w", "-DSIG_ARM_REF_SPEC=1", "-DSIG_HAS_UNV=1", "-DSIG_HAS_LATE=1", "-DSIG_HAS_LATE_VOIDED=1",
+         "-DSIG_HAS_DISARM_AT=1", "-DSIG_HAS_DETECTED_TO=1", "-DSIG_HAS_DERIVED_TO=1"]
+libs = ["-lm"]
+timeout = 300
+env = { SIG_ORACLE_CASES = "3000", SIG_ORACLE_SEED = "20261115", SIG_ORACLE_R1 = "1", SIG_ORACLE_GEN_TIE = "1", SIG_ORACLE_GEN_DISARM_AT = "1", SIG_ORACLE_GEN_EXIT = "1", SIG_ORACLE_DAX = "1", SIG_ORACLE_GEN_DRAIN_TO = "1", SIG_ORACLE_DERIVED_TO = "1", SIG_ORACLE_LATE = "4", SIG_ORACLE_LATE_A = "1", SIG_ORACLE_P2STRICT = "1", SIG_ORACLE_PRED = "1", SIG_ORACLE_PRED_TARGET = "1" }
+
 [test.sig_spec]
 # The reviewer's hand-derived cases (ctest test_sig_arm_spec).
 source = "tests/adapt/sig_arm_spec_cases.c"
@@ -2432,7 +2448,7 @@ replace = '    if (g->wt->n) {'
 id = "287"
 name = "a waiting arm lets in nothing when its group goes in"
 test = "sig"
-note = "Open (0.7.0 release gates, 2026-11-15): survives sig_test (also with no window in test_arm_exact), the spec and disarm_at cases, and the oracle at seed 20261115 with the late generator on and off. Not shown equivalent; no killing test yet."
+note = "Killed (V2SIG8, 2026-11-15) by sig_test test_v2_h12_before with no window: H = [arm h at 15] and G = [set x, arm d at 12], both before the last barrier (key 20), H made first; G's waiting closure goes by raw time and skips H, so G's arm lets H in (an equal key made before). Mutated, H goes in after the arm: late_off 1 and the hits in the other order. With a window H goes to its place by key either way (the same hits). The control: no meet (K = all(d, d)), H waits. The reviewer's shape (H made after G) does not tell them apart: the arm's second ysig__wait_fire() (UINT64_MAX) lets such an H in after the arm, as R has it."
 why = "H12: the ahead arm lets in at its time when its group goes in."
 find = '''        ysig__wait_fire(g, a.t, f, a.seq);'''
 replace = '''        (void)f;'''
@@ -2533,7 +2549,7 @@ replace = '''    if (!cu->grp_bad && cu->c_head - cu->c_tail < (uint64_t)cu->C &
 id = "297"
 name = "what a past arm lets in placed at the end of the log"
 test = "sig"
-note = "Open (0.7.0 release gates, 2026-11-15): survives sig_test (also with no window in test_arm_exact), the spec and disarm_at cases, and the oracle at seed 20261115 with the late generator on and off. Not shown equivalent; no killing test yet."
+note = "Killed (V2SIG8, 2026-11-15) by sig_test test_v2_c4_past (v 1): what the past arm G lets in (H, waiting at 12 with N(H) = 12) goes into G's gap, so H is in G's block at G's place, after a disarm in no group at 12.5, and condition 4 at the place counts H (2 counted). Mutated, H is logged at the log's end and goes to its own key by late placement, outside the block: the place's test does not see it (1 counted). The reviewer's shape (a late report at 11 after device 1's 13 to 20) did not tell them apart here: outputs and counts equal."
 why = "Residual 1650: it goes in at the arm's place; at the end it pinned the group after later input (test_arm_repro)."
 find = '        if (cu && t_ns < nfg && !cu->grp_open && !cu->replaying && cu->n_ck) {'
 replace = '        if (0) {'
@@ -2541,8 +2557,9 @@ replace = '        if (0) {'
 [[mutant]]
 id = "300"
 name = "exactness: a group let in inside another's block not counted"
-test = "sig"
-note = "Open (0.7.0 release gates, 2026-11-15): survives sig_test (also with no window in test_arm_exact), the spec and disarm_at cases, and the oracle at seed 20261115 with the late generator on and off. Not shown equivalent; no killing test yet."
+test = "sig_ref_pt"
+note = "Equivalent (V2SIG8, 2026-11-15). c->inside is set for a group G let in by a call of a waiting group P after part of P went in. ysig__wait_closure() places first every waiting group at or before P's raw time that meets F(P), and P's calls meet only F(P), so such a G is later than P in raw time with an equal key: both before the last barrier (ruling 2 extended). Such a G waits with N(G) earlier than tau (an input at tau before the barrier would have made it present; one after it is a late_barrier drop), so condition 2 is tested, and 2 (b) counts G: the call of P that let G in lies after G in the cascade, meets F(G), and is not 2 (b)'s exception (that needs P later than G in raw time, or made after G). Every group the removed term counts is counted. The oracle with SIG_ORACLE_PRED_TARGET=1 (seeds 20261115, 20261123, 20261125 with SIG_ORACLE_PAST_GROUPS=1, both modes, 2,000 and 3,000 cases; test sig_ref_pt) does not tell them apart."
+expect = "survived"
 why = "Condition 1 (test_arm_exact: x inside y's block)."
 find = '''        int bad = c->inside || w->cas_in;
         if (c->cancelled && !c->ncalls) continue;'''
@@ -2643,7 +2660,8 @@ replace = '''        if (0) return 0;'''
 id = "313"
 name = "exactness: 2 (c) only while the group waits"
 test = "sig"
-note = "Open (0.7.0 release gates, 2026-11-15): survives sig_test (also with no window in test_arm_exact), the spec and disarm_at cases, and the oracle at seed 20261115 with the late generator on and off. Not shown equivalent; no killing test yet."
+note = "Equivalent (V2SIG8, 2026-11-15). ysig__cas_group() sets n_at to tau when the newest input reaching F(G) is at or after tau, so n_at is never above tau and 'n_at != t' is 'n_at < t'. For a cancelled group lg is 0, so when the removed line would count (early or n_at < t), the 2 (a) test right after it counts the same group (!lg). In key order N(G) is never above tau either, and N(G) = tau is exact by 2 in both. No input can tell them apart."
+expect = "survived"
 why = "2 (c) at any N(G) but its time (the reviewer's 490 and 1821; test_arm_exact)."
 find = '''        if (c->cancelled && ysig__fp_any(g, c->Fa) && (c->early || c->n_at != c->t)) bad = 1;'''
 replace = ''''''
@@ -2662,7 +2680,7 @@ replace = ''''''
 id = "314"
 name = "exactness: condition 4 not tested in a cascade"
 test = "sig"
-note = "Open (0.7.0 release gates, 2026-11-15): survives sig_test (also with no window in test_arm_exact), the spec and disarm_at cases, and the oracle at seed 20261115 with the late generator on and off. Not shown equivalent; no killing test yet."
+note = "Killed (V2SIG8, 2026-11-15) by sig_test test_v2_c1_c4_exact (4): G waits at 12 with N(G) = 12 (its device reports at 12), a disarm in the open gap, then its device at 14 lets G in: 2 does not count G (exact by N), condition 4 in the cascade does (1, with and without a window); mutated 0. The control: no disarm. The oracle cannot reach it: with SIG_ORACLE_PRED_TARGET=1 at seeds 20261115, 20261123, 20261125 (SIG_ORACLE_PAST_GROUPS=1), both modes, no flagged group goes uncounted."
 why = "Condition 4: a disarm in the gap a let-in group's arm closes (the reviewer's 883; test_arm_exact 4 (a), (c))."
 find = '''                if (w->cc[j].kind == YSIG_J_DISARM) { bad = 1; break; }
             }
@@ -2674,9 +2692,9 @@ replace = '''                if (w->cc[j].kind == YSIG_J_DISARM) { bad = 1; brea
 id = "315"
 name = "exactness: condition 4 not tested at a past group's place"
 test = "sig"
-note = "Open (0.7.0 release gates, 2026-11-15): survives sig_test (also with no window in test_arm_exact), the spec and disarm_at cases, and the oracle at seed 20261115 with the late generator on and off. Not shown equivalent; no killing test yet."
+note = "Killed (V2SIG8, 2026-11-15) by sig_test test_v2_c4_past: H waits at 12 with N(H) = 12, a past group G at 13 lets H into its block, and a disarm in no group at 12.5 lies in H's gap at the place: condition 4 there counts H (2 does not; ysig__c4() runs for G only): 2 counted, mutated 1. The control: no disarm. V2SIG8 also skips a disarm at the group's own time here, as the text and ysig__c4() do (v 2)."
 why = "Condition 4 in the log (the reviewer's 404; test_arm_exact 4 (b))."
-find = '''                if (c->e.kind == YSIG_J_DISARM) { bad = 1; break; }
+find = '''                if (c->e.kind == YSIG_J_DISARM) { bad = c->tr != t; break; }
             }
         }
         if (!bad && N_below) {'''
@@ -2696,7 +2714,7 @@ replace = ''''''
 id = "318"
 name = "exactness: an arm's let-ins not inside its group's block"
 test = "sig"
-note = "Open (0.7.0 release gates, 2026-11-15): survives sig_test (also with no window in test_arm_exact), the spec and disarm_at cases, and the oracle at seed 20261115 with the late generator on and off. Not shown equivalent; no killing test yet."
+note = "Killed (V2SIG8, 2026-11-15) by sig_test test_v2_c1_c4_exact (1) with no window: G waits at 12 with N(G) = 12; a past group [set y, arm h at 13] lets G in at its arm, inside its block: condition 1 alone counts G (1); mutated 0. With a window the run again counts the past group and G either way. The control: no set."
 why = "Condition 1 (the reviewer's 1137; test_arm_exact 4 (d))."
 find = '''        g->wt->cas_in = g->wt->gap_n > 0;'''
 replace = ''''''
@@ -2748,7 +2766,8 @@ replace = '''     * group) */
 id = "326"
 name = "an input at a past group's time taken as its L"
 test = "sig"
-note = "Open (0.7.0 release gates): in a log in key order every input after a past group's place that meets F(G) is later than tau, so the mutant can differ only where a fallback (late_far, late_full) left a late input out of key order, a case already counted. Survives sig_test and the oracle (seed 20261115, on and off). Not proven equivalent."
+note = "Equivalent outside counted fallbacks (V2SIG8, 2026-11-15). In a log in key order every input after a past group's place that meets F(G) is later than tau: an input at tau that meets F(G) keys before G (a feed comes first at one time, R1), so it is before the place. The mutant (ti >= t) differs only on an input at tau after the place, which exists only where a fallback (late_far, late_full, late_off) left a late input out of key order, a case already counted."
+expect = "survived"
 why = "L(G) is an input later than tau (2 (a)); an input at tau is in R before G when it meets F(G) (ruling 4), not its L. Was a pending-group mutant (0.6.1); the pending code went in 181093f."
 find = '                    if (ti > t && ysig__fp_meets(g, f, F)) { li = u; break; }'
 replace = '                    if (ti >= t && ysig__fp_meets(g, f, F)) { li = u; break; }'
@@ -2907,7 +2926,7 @@ replace = '            if (g->nd[i].nt == t) return 1;'
 id = "356"
 name = "ruling 4: the oldest image's input times read over every node"
 test = "sig"
-note = "Open (0.7.0 release gates, 2026-11-15): survives sig_test (also with no window in test_arm_exact), the spec and disarm_at cases, and the oracle at seed 20261115 with the late generator on and off. Not shown equivalent; no killing test yet."
+note = "Killed (V2SIG8, 2026-11-15) by sig_test test_v2_n_tau_image: test_v2_n_tau's present group's set with a flush after device 1's report at 19, so that input is only in the oldest image. 2 (b) counts d (N(d) by F(d) is 10); mutated, the image read over every node gives 19 = tau, and d is taken as exact (0). The control: no set."
 why = "From the window's oldest image, only a node of F(G) with its input time at tau shows N(G) = tau; any node makes G exact where R cannot be given."
 find = '''            if (!((F[i >> 6] >> (i & 63)) & 1u)) continue;
             memcpy(&nt,'''
