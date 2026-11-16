@@ -1443,20 +1443,70 @@ device" holds for every source but a raw mouse.
 `ysig_feed()` of each event in array order, with the window run again
 once at the end, from the checkpoint at or before the earliest place the
 batch needed, instead of once a late event. Per-device order
-(`dropped_order`) and equal-time call order are the array's order. The
-results are those of the same events fed one call each; only the reads
-between them are not possible. A late event fed alone with `ysig_feed()`
-runs the window again at once.
+(`dropped_order`) and equal-time call order are the array's order. A late
+event fed alone with `ysig_feed()` runs the window again at once.
+
+The run again comes earlier, before the next event of the batch, in
+three cases. Each is a point where per-event feeding has done its run
+again and the batch would otherwise lose or merge it:
+
+- The next event could end the window: a log has less room than one
+  event can use (one call; per scheduled node two ring writes and one
+  hit, derived event or row). Without this, a batch whose later events
+  fill the logs loses the checkpoint of its run again and counts
+  `late_full`, where per-event feeding does not.
+- The next event could let in a waiting group (a waiting arm before the
+  event's time), or a gap is open. Such an event can run the window
+  again itself, so its log use has no bound.
+- The pending run again is for late state calls only (an open gap's,
+  placed at the batch's first input). Merged with a late event's run
+  again, the hits it voids would count as `late_hits_voided`; fed alone,
+  they count as superseded or retracted.
+
+What batching changes. Values, rings, bound channels, rows, derived
+events and the hits that stand are those of the same events fed one call
+each; only the reads between them are not possible. Some counts are
+lower: fed one by one, a report's run again can void a hit or change a
+drawn frame that the next report's run again restores. The batch does
+not see that short-lived state, so `late_hits_voided` and `late_frames`
+are lower or equal, and so are the hits handed out (fed one by one, the
+restored hit is handed out again). A batch never falls back where
+per-event feeding does not (`late_full` 0 in the check below). The sum of
+the voided-hit counts (`late_hits_voided`, `arm_hits_superseded`,
+`arm_hits_retracted`) is lower or equal, but one of them can be higher: a
+hit that per-event feeding voids as late and makes again before the
+caller drains it, and that a later arm or disarm then voids, counts in
+`late_hits_voided` fed one by one and in `arm_hits_superseded` batched
+(1 case in 6,000 of the check below).
 
 The player feeds a poll's reports with one `ysig_feed_n()`, drains the
-hits, and takes the exits by time. Format 3.11 rule 4 says "for each
-event" and "the player does not wait for the poll's end". Proposed note
-for 3.11 rule 4, for the format's owner to mark DECIDED (the user's
-condition, 2026-11-15): "The player may feed one poll's events in one
-call and take the exits by time when the results equal feeding each
-event alone. Checked: the reviewer's oracle in late mode, and the model
-harness fed per event against batched, with no difference." The build
-adds both checks before the player uses the batch.
+hits, and takes the exits by time: format 3.11 rule 4, DECIDED
+2026-11-15 ("allow, fix overflow"). Checked (2026-11-15, 77e070b,
+Linux desktop, i5-14500, GCC 12.2, no other load):
+
+- The reviewer's oracle, `SIG_ORACLE_FEEDN=1` (one graph fed per event,
+  one in batches of 1 to 8, compared after each batch and each other
+  call), seeds 20261115, 20261123, 20261124, the late generator on and
+  off, 1,000 cases each: no batch that did not fit (131 cases at
+  2dc806c), and in 14 cases a first difference, each a count, batched
+  lower (`late_hits_voided` 8, `late_frames` 6). A variant that reports
+  every count at every compare: where the void counts differ, the sum is
+  never higher; the case above (20261123, case 110) is the only one where
+  a void count is higher. After a count differs, the per-event graph has
+  handed out one hit more in 7 cases, each a hit it voided and handed
+  out again. ctest runs seed 20261115
+  with the generator on (`test_sig_arm_ref_feed_n`, 30 s).
+- A scratch search (two-node graph, random feeds, arms, disarms, sets,
+  `ysig_disarm_at()` and batches): 5,000,000 sequences, no count of a
+  fallback, `late_frames`, the voided-hit sum or `arm_ahead_cancelled`
+  higher batched.
+- The model harness (`tests/model/diff.py --extra=--test-feed-each`
+  against batches), 1,000 cases each at 60 and 500 Hz, 0 and 10 ms late:
+  `trials.csv`, `events.csv`, `frames.csv`, the streams and
+  `session.json` equal in every case that ran (836 or 837; the rest the
+  loader refuses), the `sig_arms` counts equal. Its cases have one role,
+  equally late, so no report is late to sig.h (`late_input` 0): this
+  checks the player's order, not the window's run again.
 
 **What the header does.** With a window, a late call whose place is in
 the window goes into the log at its place, the calls that move (above)
@@ -1823,9 +1873,11 @@ right-case counts 810, 1,290, 951, 1,120 before, 886, 1,401, 1,039,
 
 **Open questions for this text.**
 
-1. The proposed note for format 3.11 rule 4 (above), and its two checks.
-2. The default `catchup_ns` until a rig's devices have a measured input
+1. The default `catchup_ns` until a rig's devices have a measured input
    lateness.
+
+(The note for format 3.11 rule 4 is DECIDED, 2026-11-15; its checks are
+above, under "The batch".)
 
 #### Where 0.6.0 before this section differed
 

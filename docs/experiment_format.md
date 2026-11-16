@@ -2106,6 +2106,30 @@ D20's rules 1 to 12 hold as written, with the user's amendment of rule 5
    next state's controls must arm before the next sample. A report that
    arrives in a later poll with a time before a taken exit does not undo
    it.
+
+   DECIDED (2026-11-15, the user), on feeding a poll in one call: first
+   "allow, if results match", then, after the check below, "allow, fix
+   overflow". The player may feed one poll's events with one
+   `ysig_feed_n()`, drain the hits, and take the exits by time, the
+   earliest first. The results are those of feeding each event alone:
+   every exit, time, value, row and derived event. sig.h never falls
+   back on a batch where feeding each event alone would not. Only
+   diagnostic counts differ, and they are lower or equal: fed one by
+   one, a report can void a hit or change a drawn frame that the next
+   report restores (`late_hits_voided`, `late_frames`; the sum of the
+   voided-hit counts too, docs/sig.md, "The batch").
+   Checked (2026-11-15, sig.h at 77e070b, Linux desktop, i5-14500):
+   - The reviewer's oracle with `SIG_ORACLE_FEEDN=1`, seeds 20261115,
+     20261123 and 20261124, late generator on and off, 1,000 cases each:
+     at 2dc806c, 131 cases where a batch lost its run again (`late_full`,
+     "the batch did not fit") and one `late_far`; the fix (77e070b):
+     none, and 14 cases with a different count, each lower batched.
+   - The model harness, the player with `--test-feed-each` against
+     batches, 60 and 500 Hz, 0 and 10 ms late, 1,000 cases each: the
+     data files and the `sig_arms` counts equal in every case.
+   - The examples (2d52faa, docs/player.md "Measured"): equal but for 4
+     `late_frames` more fed one by one, in the bimanual example at 60 Hz,
+     10 ms late.
 5. **A hit that a frame finds** (a `rate` frame test, a hold that a still
    input completes) starts the next state on the same frame: the player
    adds its op table and calls `ytl_evaluate()` again for the frame (an
