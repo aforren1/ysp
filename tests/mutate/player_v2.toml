@@ -936,9 +936,31 @@ name = "hits_lost and derived_lost do not stop the guard"
 test = "player"
 expect = "survived"
 note = "Not reached: no test fills sig.h's queue (v2-110), so hits_lost and derived_lost stay 0 and the guard has nothing to stop on. Open, as v2-110."
-why = "M2: a held hit or event that found sig.h's queue full is lost; a guard stop while a bound is above 0."
-find = '''        if (S->bnd_max > 0) { c[13] += st.hits_lost; c[14] += st.derived_lost; }'''
+why = "M2, L5: a hit or event that found sig.h's queue full is lost; a guard stop at any bound."
+find = '''        c[13] += st.hits_lost;
+        c[14] += st.derived_lost;'''
 replace = '''        (void)0;'''
+
+[[mutant]]
+id = "v2-133"
+name = "hits_lost and derived_lost stop the guard only while a bound is above 0"
+test = "player"
+expect = "survived"
+note = "Not reached, as v2-110 and v2-111: no test fills sig.h's queue at bound 0 either."
+why = "L5 (the final review, 2026-11-16): with the queues sized at every bound, a loss at bound 0 is a fault too."
+find = '''        c[13] += st.hits_lost;
+        c[14] += st.derived_lost;'''
+replace = '''        if (S->bnd_max > 0) { c[13] += st.hits_lost; c[14] += st.derived_lost; }'''
+
+[[mutant]]
+id = "v2-134"
+name = "the queues sized for max B plus one period, not a feed part and two periods"
+test = "player"
+expect = "survived"
+note = "Not reached, as v2-110: every test graph's hits and events fit the log's own size."
+why = "L5: between two drains a detect or an emit queues one a sample of a part, one at the frame, and a run again's from max B plus two periods."
+find = '''        int64_t each = YSIG_QUEUE_CAP + 1 + (V2_WINDOW_HZ * (b + 2 * per) + 999999999) / 1000000000;'''
+replace = '''        int64_t each = (V2_WINDOW_HZ * (b + per) + 999999999) / 1000000000;'''
 
 [[mutant]]
 id = "v2-112"

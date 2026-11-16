@@ -28,7 +28,7 @@ flags = ["-std=c99", "-O2", "-w", "-DSIG_ARM_REF_SPEC=1", "-DSIG_HAS_UNV=1", "-D
          "-DSIG_HAS_DISARM_AT=1", "-DSIG_HAS_DETECTED_TO=1", "-DSIG_HAS_DERIVED_TO=1"]
 libs = ["-lm"]
 timeout = 300
-env = { SIG_ORACLE_CASES = "3000", SIG_ORACLE_SEED = "20261115", SIG_ORACLE_R1 = "1", SIG_ORACLE_GEN_TIE = "1", SIG_ORACLE_GEN_DISARM_AT = "1", SIG_ORACLE_GEN_EXIT = "1", SIG_ORACLE_DAX = "1", SIG_ORACLE_GEN_DRAIN_TO = "1", SIG_ORACLE_DERIVED_TO = "1", SIG_ORACLE_LATE = "4", SIG_ORACLE_LATE_A = "1", SIG_ORACLE_P2STRICT = "1", SIG_ORACLE_PRED = "1" }
+env = { SIG_ORACLE_CASES = "3000", SIG_ORACLE_SEED = "20261115", SIG_ORACLE_R1 = "1", SIG_ORACLE_GEN_TIE = "1", SIG_ORACLE_GEN_DISARM_AT = "1", SIG_ORACLE_GEN_EXIT = "1", SIG_ORACLE_DAX = "1", SIG_ORACLE_GEN_DRAIN_TO = "1", SIG_ORACLE_DERIVED_TO = "1", SIG_ORACLE_LATE = "4", SIG_ORACLE_LATE_A = "1", SIG_ORACLE_P2STRICT = "1", SIG_ORACLE_PRED = "1", SIG_REF_BARE_MAX = "1" }
 
 [test.sig_ref_23off]
 # The same oracle at seed 20261123 with the late generator off (OFF=l),
@@ -89,8 +89,8 @@ id = "01"
 name = "integrate: counts truncated, not rounded"
 test = "sig"
 why = "A negative count of -3.0 read as -2: the hand drifts toward the origin, off the exact count sum."
-find = 'dc = (int64_t)(v < 0 ? v - 0.5 : v + 0.5);'
-replace = 'dc = (int64_t)(v + 0.5);'
+find = 'dc = (int64_t)(c < 0 ? c - 0.5 : c + 0.5);'
+replace = 'dc = (int64_t)(c + 0.5);'
 
 [[mutant]]
 id = "02"
@@ -446,8 +446,8 @@ id = "45"
 name = "source: one lane is x, not value"
 test = "sig"
 why = "A box's analog line or a trigger would read the x field."
-find = 'if (L == 1) o->v[0] = (double)e->value;'
-replace = 'if (0) o->v[0] = (double)e->value;'
+find = 'if (L == 1) v[0] = (double)e->value;'
+replace = 'if (0) v[0] = (double)e->value;'
 
 [[mutant]]
 id = "46"
@@ -3210,3 +3210,44 @@ test = "sig"
 why = "V2SIG10: a disarm made while the logs, run full, keep nothing is lost to the log at once (test_v2_c4_lost: 0, not 1)."
 find = '        if (e->kind == YSIG_J_DISARM) ysig__lost_add(cu, INT64_MIN, e->t > g->t_cover ? e->t : g->t_cover);'
 replace = ''
+
+[[mutant]]
+id = "388"
+name = "H1: a raw mouse's count before the last barrier dropped"
+test = "sig"
+why = "The final review's H1 (the reviewer's bar.c): the count goes into its integrator; dropped, x is 2, not 3 (test_v2_bar_counts)."
+find = """        ysig__bar_counts(g, e);
+        g->st.late_barrier++;"""
+replace = """        g->st.late_barrier++;"""
+
+[[mutant]]
+id = "389"
+name = "H1: the count not in the checkpoint images"
+test = "sig"
+why = "A run again from an image taken at or after the barrier loses the count (test_v2_bar_counts: 4, not 5; the batch 7, not 8)."
+find = "            if (!g->cu) continue;"
+replace = "            continue;"
+
+[[mutant]]
+id = "390"
+name = "H1: an integrator reset or recentered after the count takes it"
+test = "sig"
+why = "A count before an integrator's reset or recenter is before that sum's origin (test_v2_bar_counts, the adapter after ysig_reset() and after a recenter: 2, not 1)."
+find = "    if (t < s->t_org) return;"
+replace = "    (void)t;"
+
+[[mutant]]
+id = "391"
+name = "H1: a reset does not move the integrator's origin time"
+test = "sig"
+why = "After ysig_reset() at 20 ms a count at 15 ms would go in (test_v2_bar_counts, the full reset: 2, not 1)."
+find = "            s->t_org = t;"
+replace = ""
+
+[[mutant]]
+id = "392"
+name = "H1: a recenter does not move the integrator's origin time"
+test = "sig"
+why = "After a recenter at 22 ms a count at 15 ms would go in (test_v2_bar_counts, the recenter: 2, not 1)."
+find = "    s->t_org = t_ns;"
+replace = ""
