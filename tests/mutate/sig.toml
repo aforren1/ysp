@@ -30,6 +30,19 @@ libs = ["-lm"]
 timeout = 300
 env = { SIG_ORACLE_CASES = "3000", SIG_ORACLE_SEED = "20261115", SIG_ORACLE_R1 = "1", SIG_ORACLE_GEN_TIE = "1", SIG_ORACLE_GEN_DISARM_AT = "1", SIG_ORACLE_GEN_EXIT = "1", SIG_ORACLE_DAX = "1", SIG_ORACLE_GEN_DRAIN_TO = "1", SIG_ORACLE_DERIVED_TO = "1", SIG_ORACLE_LATE = "4", SIG_ORACLE_LATE_A = "1", SIG_ORACLE_P2STRICT = "1", SIG_ORACLE_PRED = "1" }
 
+[test.sig_ref_23off]
+# The same oracle at seed 20261123 with the late generator off (OFF=l),
+# 3,000 cases (V2SIG7, 2026-11-15): it kills 283 (case 493, wrong with no
+# count) and 285 (708 cases B cannot run, 707 counted), which survive the
+# seed above. The unmutated header passes it (the control).
+source = "tests/adapt/sig_arm_ref_targets.c"
+compiler = "gcc"
+flags = ["-std=c99", "-O2", "-w", "-DSIG_ARM_REF_SPEC=1", "-DSIG_HAS_UNV=1", "-DSIG_HAS_LATE=1", "-DSIG_HAS_LATE_VOIDED=1",
+         "-DSIG_HAS_DISARM_AT=1", "-DSIG_HAS_DETECTED_TO=1", "-DSIG_HAS_DERIVED_TO=1"]
+libs = ["-lm"]
+timeout = 300
+env = { SIG_ORACLE_CASES = "3000", SIG_ORACLE_SEED = "20261123", SIG_ORACLE_OFF = "l", SIG_ORACLE_R1 = "1", SIG_ORACLE_GEN_TIE = "1", SIG_ORACLE_GEN_DISARM_AT = "1", SIG_ORACLE_GEN_EXIT = "1", SIG_ORACLE_DAX = "1", SIG_ORACLE_GEN_DRAIN_TO = "1", SIG_ORACLE_DERIVED_TO = "1", SIG_ORACLE_LATE = "4", SIG_ORACLE_LATE_A = "1", SIG_ORACLE_P2STRICT = "1", SIG_ORACLE_PRED = "1" }
+
 [test.sig_spec]
 # The reviewer's hand-derived cases (ctest test_sig_arm_spec).
 source = "tests/adapt/sig_arm_spec_cases.c"
@@ -2380,8 +2393,8 @@ replace = '''        continue;'''
 [[mutant]]
 id = "283"
 name = "a waiting group placed in a gap ends the gap"
-test = "sig"
-note = "Open (0.7.0 release gates, 2026-11-15): survives sig_test (also with no window in test_arm_exact), the spec and disarm_at cases, and the oracle at seed 20261115 with the late generator on and off. Not shown equivalent; no killing test yet."
+test = "sig_ref_23off"
+note = "Killed by sig_ref_23off (V2SIG7, 2026-11-15): case 493 of seed 20261123 with OFF=l is wrong with no count (a ring read after a feed); the unmutated header counts it."
 why = "H9: a waiting group let in by a state call is not that gap's group; the gap stays open (test_arm_repro: the offset's set waits with the group)."
 find = '''    if (!st && !cu->placing) cu->grp_open = cu->grp_bad = 0;'''
 replace = '''    if (!st) cu->grp_open = cu->grp_bad = 0;'''
@@ -2399,8 +2412,8 @@ replace = '''        g->wt->cas_dis = g->wt->n_dis > 0 || g->wt->gap4_wp;
 [[mutant]]
 id = "285"
 name = "a gap opens after its first state call's triggers"
-test = "sig"
-note = "Open (0.7.0 release gates, 2026-11-15): survives sig_test (also with no window in test_arm_exact), the spec and disarm_at cases, and the oracle at seed 20261115 with the late generator on and off. Not shown equivalent; no killing test yet."
+test = "sig_ref_23off"
+note = "Killed by sig_ref_23off (V2SIG7, 2026-11-15): 707 of the 708 cases B cannot run at seed 20261123 with OFF=l are counted; the unmutated header counts all."
 why = "H9 with a recenter: what the gap's first call lets in is in the gap, so an ahead group takes it back (test_arm_repro)."
 find = '''    if (g->cu && !g->cu->grp_open && !g->cu->replaying && g->cu->n_ck) {
         g->cu->grp_open = 1;'''
@@ -2939,7 +2952,8 @@ replace = '                ok = 0;'
 id = "361"
 name = "L5: a disarm_at at or after tau counts G in the retest"
 test = "sig"
-note = "Open (0.7.0 release gates, 2026-11-15): survives sig_test (also with no window in test_arm_exact), the spec and disarm_at cases, and the oracle at seed 20261115 with the late generator on and off. Not shown equivalent; no killing test yet."
+note = "Equivalent (2026-11-15, V2SIG7): the removed test is the first test of ysig__unv_x_ok(), which the loop reaches next with the same call and t = o->t (X1: x->tr >= t returns 1, so the loop continues; a call with fp_entry() != 1 or not meeting F(G) continues before that). For a disarm_at x->tr is x->e.t: ysig__log() sets tr to e->t, and ysig__set_tr() reaches only the open gap's calls from grp_from, a range a disarm_at never enters (it is no state call, so its ysig__log() closes the gap). No input can tell them apart."
+expect = "survived"
 why = "A disarm_at at or after G's time is 2 (b)'s exception (X1); in the retest with a late L it must not count G (the player's 60 Hz seed 102401)."
 find = '                if (c->e.kind == YSIG_J_DISARM_AT && c->e.t >= o->t) continue;'
 replace = '                (void)0;'
