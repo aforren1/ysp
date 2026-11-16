@@ -8694,6 +8694,116 @@ static void test_v2_c4_lost(void) {
     }
 }
 
+/* H9 at a gap's first call (mutant 285). W = [arm d at 15] waits (device
+ * 1 last at 10). Device 3 at 20 reaches sum(X, device 3) but not d, so
+ * N(F(set X)) is 20: the gap's first call, set X, lets W in (S1'). The
+ * gap then closes with an arm of e at 30, ahead: the group waits whole
+ * and what its calls let in goes back to waiting (H9), so two groups
+ * wait. With the gap opened only after the first call's let-in, W stayed
+ * in R, outside the group (1 waiting). Device 1 at 40 lets both in, W
+ * first. The control (v 1): the sum reads device 3 alone, N(F(set X)) is
+ * 10, the set lets nothing in, and both wait the same way. */
+static void test_v2_h9_first(void) {
+    int v;
+    for (v = 0; v < 2; v++) {
+        ysig_node n[7];
+        g_where = v ? "H9 at a gap's first call (control)" : "H9 at a gap's first call";
+        n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 1); n[0].history = 64;
+        n[1] = ysig_node_of(YSIG_OP_OFFSET, 0, -1); n[1].history = 64;                                  /* X */
+        n[2] = ysig_node_of(YSIG_OP_DETECT, 1, -1); n[2].p[YSIG_DETECT_LEVEL] = 5; n[2].history = 64;   /* d */
+        n[3] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 3, 1); n[3].history = 64;
+        n[4] = ysig_node_of(YSIG_OP_SUM, v ? 3 : 1, 3); n[4].history = 64;
+        n[5] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 5, 1); n[5].history = 64;
+        n[6] = ysig_node_of(YSIG_OP_DETECT, 5, -1); n[6].p[YSIG_DETECT_LEVEL] = 5; n[6].history = 64;   /* e */
+        if (!rp_open(n, 7, 4, 0, false, false)) return;
+        rp_feed(10 * MS, 9, YIN_AXIS_POSITION, 1);
+        rp_feed(10 * MS, 0, YIN_AXIS_POSITION, 3);
+        rp_feed(10 * MS, 0, YIN_AXIS_POSITION, 5);
+        CHECK(ysig_arm(&g_rp, 2, 15 * MS) && g_rp.wt->n == 1);
+        rp_feed(20 * MS, 0, YIN_AXIS_POSITION, 3);
+        CHECK(ysig_set(&g_rp, 1, YSIG_OFFSET_D_X, 0));
+        CHECK(g_rp.wt->n == v);
+        CHECK(ysig_arm(&g_rp, 6, 30 * MS));
+        CHECK(g_rp.wt->n == 2);
+        rp_feed(40 * MS, 9, YIN_AXIS_POSITION, 1);
+        CHECK(g_rp.wt->n == 0);
+        CHECK(((ysig__det_st*)g_rp.nd[2].st)->t_arm == 15 * MS && ((ysig__det_st*)g_rp.nd[6].st)->t_arm == 30 * MS);
+    }
+}
+
+/* Condition 1, a group let in inside a waiting parent's block (mutant
+ * 300). P = [set d's level, disarm x, arm d at 15] and G = [arm x at 15],
+ * made after P, both wait (devices 1 and 3 last at 10, N 20). Device 3 at
+ * 15 makes N(G) = tau, so condition 2 does not apply to G. Device 1 at 25
+ * lets P in; P's set goes in, then its disarm, which lets in at N at its
+ * call (20, sig.h: N for a disarm, N(F(c)) for a set, set_data and
+ * recenter), so G, at 15, goes in right before it: inside P's block, not
+ * exact by condition 1, counted. The control (v 1): no disarm in P; G
+ * waits for device 3 at 26 and is exact. */
+static void test_v2_inside_waiting(void) {
+    int v;
+    for (v = 0; v < 2; v++) {
+        ysig_node n[5];
+        ysig_stats st;
+        g_where = v ? "condition 1 in a waiting parent's block (control)" : "condition 1 in a waiting parent's block";
+        n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 1, 1); n[0].history = 64;
+        n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1); n[1].p[YSIG_DETECT_LEVEL] = 5; n[1].history = 64;   /* d */
+        n[2] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 3, 1); n[2].history = 64;
+        n[3] = ysig_node_of(YSIG_OP_DETECT, 2, -1); n[3].p[YSIG_DETECT_LEVEL] = 5; n[3].history = 64;   /* x */
+        n[4] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 9, 1); n[4].history = 64;
+        if (!rp_open(n, 5, 4, 0, false, false)) return;
+        rp_feed(10 * MS, 0, YIN_AXIS_POSITION, 1);
+        rp_feed(10 * MS, 0, YIN_AXIS_POSITION, 3);
+        rp_feed(20 * MS, 0, YIN_AXIS_POSITION, 9);
+        CHECK(ysig_set(&g_rp, 1, YSIG_DETECT_LEVEL, 5));
+        if (!v) CHECK(ysig_disarm(&g_rp, 3));
+        CHECK(ysig_arm(&g_rp, 1, 15 * MS));
+        CHECK(ysig_arm(&g_rp, 3, 15 * MS) && g_rp.wt->n == 2);
+        rp_feed(15 * MS, 0, YIN_AXIS_POSITION, 3);
+        CHECK(g_rp.wt->n == 2);
+        rp_feed(25 * MS, 0, YIN_AXIS_POSITION, 1);
+        CHECK(g_rp.wt->n == v);
+        rp_feed(26 * MS, 0, YIN_AXIS_POSITION, 3);
+        ysig_get_stats(&g_rp, &st);
+        CHECK(g_rp.wt->n == 0 && st.late_off == 0 && st.late_far == 0 && st.late_full == 0);
+        CHECK(st.arm_unverified == !v && st.late_unverified == 0);
+    }
+}
+
+/* T1's closure by key where only an arm meets (mutant 379; V2SIG10:
+ * test_v2_closure_key's sets now also count G by the arm's reason-4 test,
+ * so its counts no longer tell the closures apart). G = [set X to 1, arm
+ * g at 15], J = [arm j at 12], j reading X, G made first; both wait.
+ * Device 3 at 25 reaches g only and lets G in. After a flush at 20 (v 1)
+ * G's key is the smaller: its closure takes nothing and J waits for X's
+ * device. By raw time the closure put J (12) first. The control (v 0):
+ * J's key 12 is the smaller and meets G, so J goes in first. */
+static void test_v2_closure_key_arm(void) {
+    int v;
+    for (v = 0; v < 2; v++) {
+        ysig_node n[6];
+        g_where = v ? "T1's closure by key, an arm" : "T1's closure by key, an arm (control)";
+        n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 3, 1); n[0].history = 64;
+        n[1] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 5, 1); n[1].history = 64;
+        n[2] = ysig_node_of(YSIG_OP_OFFSET, 1, -1); n[2].history = 64;                                  /* X */
+        n[3] = ysig_node_of(YSIG_OP_DETECT, 0, -1); n[3].p[YSIG_DETECT_LEVEL] = 5; n[3].history = 64;   /* g */
+        n[4] = ysig_node_of(YSIG_OP_DETECT, 2, -1); n[4].p[YSIG_DETECT_LEVEL] = 5; n[4].history = 64;   /* j */
+        n[5] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 9, 1); n[5].history = 64;
+        if (!rp_open(n, 6, 4, 0, false, false)) return;
+        rp_feed(10 * MS, 0, YIN_AXIS_POSITION, 3);
+        rp_feed(10 * MS, 0, YIN_AXIS_POSITION, 5);
+        rp_feed(20 * MS, 0, YIN_AXIS_POSITION, 9);
+        if (v) CHECK(ysig_flush(&g_rp));
+        CHECK(ysig_set(&g_rp, 2, YSIG_OFFSET_D_X, 1));
+        CHECK(ysig_arm(&g_rp, 3, 15 * MS));
+        CHECK(ysig_arm(&g_rp, 4, 12 * MS) && g_rp.wt->n == 2);
+        rp_feed(25 * MS, 0, YIN_AXIS_POSITION, 3);
+        CHECK(g_rp.wt->n == v);
+        rp_feed(26 * MS, 0, YIN_AXIS_POSITION, 5);
+        CHECK(g_rp.wt->n == 0);
+    }
+}
+
 int main(void) {
     test_conventions();
     test_param_names();
@@ -8787,6 +8897,9 @@ int main(void) {
     test_v2_wk_tie();
     test_v2_wk_reason4();
     test_v2_c4_lost();
+    test_v2_h9_first();
+    test_v2_inside_waiting();
+    test_v2_closure_key_arm();
     if (g_failures) { fprintf(stderr, "sig_test: %d failures\n", g_failures); return 1; }
     printf("sig_test: all checks passed\n");
     return 0;

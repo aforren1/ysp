@@ -2429,10 +2429,8 @@ replace = '''        g->wt->cas_dis = g->wt->n_dis > 0 || g->wt->gap4_wp;
 [[mutant]]
 id = "285"
 name = "a gap opens after its first state call's triggers"
-test = "sig_ref_23off"
-note = "Survives since V2SIG9 (measured: also on 229b23f, step 1 alone). V2SIG7 killed it by sig_ref_23off: 707 of the 708 cases B cannot run at seed 20261123, OFF=l, were counted. Now the oracle gives 708 of 708 for the mutant (the header: 701 of 701; wrong 1,072 against 1,078), so the case it left uncounted is counted, most likely by condition 4 again at a cancel by key (not traced). Not equivalent: outputs differ, and no target fails. Open: no sig_test shape."
-expect = "survived"
-why = "H9 with a recenter: what the gap's first call lets in is in the gap, so an ahead group takes it back (test_arm_repro)."
+test = "sig"
+why = "H9 at a gap's first call: what it lets in is in the gap, so an ahead group takes it back (test_v2_h9_first, V2SIG10: device 3 reaches sum(X, device 3) and not d, so the first call, set X, lets W in at N(F(c)); with the mutant W stayed in R and 1 group waited, not 2). Survived V2SIG9's oracle runs: the sig_ref_23off difference (708 of 708 B-cannot against 701 of 701) is in the calls the generator makes after the mutant's outputs, and no target failed."
 find = '''    if (g->cu && !g->cu->grp_open && !g->cu->replaying && g->cu->n_ck) {
         g->cu->grp_open = 1;'''
 replace = '''    if (0) {
@@ -2560,10 +2558,8 @@ replace = '        if (0) {'
 [[mutant]]
 id = "300"
 name = "exactness: a group let in inside another's block not counted"
-test = "sig_ref_pt"
-note = "Survives; not equivalent (V2SIG9, 2026-11-15). The V2SIG8 argument rested on the raw-time closure (an inside group later than its parent in raw time with an equal key); T1's closure now compares keys, and the argument does not hold either way: c->inside is set 18 times at seed 20261115, late on, 3,000 cases, SIG_ORACLE_PRED_TARGET=1 and SIG_ORACLE_PAST_GROUPS=1, each a group G at its parent P's time made after P (a greater key), let in by a call of P after part of P went in (a state call that lets in at N(F(c)) later than tau). There the mutant drops one count (2,788 against 2,789 counts in right cases), in a case the oracle reads right, and no target fails; seeds 20261115 off and 20261124 both modes give the same output as the header. Not killed: no sig_test shape yet (a waiting P whose state call's N(F(c)) is later than its tau; the V2SIG9 attempt made P a past group). Open."
-expect = "survived"
-why = "Condition 1 (test_arm_exact: x inside y's block)."
+test = "sig"
+why = "Condition 1 (test_arm_exact: x inside y's block). V2SIG10, test_v2_inside_waiting: a waiting parent P = [set, disarm x, arm d at 15]; its disarm lets in at N at its call (20), so G = [arm x at 15], made after P, goes in inside P's block; device 3 at 15 makes N(G) = tau, so condition 1 alone counts G (the mutant: 0). V2SIG9's try made P past."
 find = '''        int bad = c->inside || w->cas_in;
         if (c->cancelled && !c->ncalls) continue;'''
 replace = '''        int bad = w->cas_in;
@@ -3125,7 +3121,7 @@ replace = '            (void)ysig__c4_next;'
 id = "379"
 name = "T1's closure by raw time"
 test = "sig"
-why = "T1: the closure takes the waiting groups with a smaller key (ruling 2 extended: before the last barrier, call order); by raw time it put the group made later first and W1 counted the other (test_v2_closure_key)."
+why = "T1: the closure takes the waiting groups with a smaller key (ruling 2 extended: before the last barrier, call order); by raw time it put the group made later first (test_v2_closure_key_arm: J went in with G, 0 waiting, not 1). test_v2_closure_key's counts no longer tell it since V2SIG10: the arm's reason-4 test counts G there too."
 find = '''        int64_t kk = ysig__kt(g, w->a[k].t), kb = 0;
         ysig__wait_fp(g, &w->a[k], fk);
         for (j = 0; j < w->n; j++) {
