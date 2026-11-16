@@ -553,6 +553,18 @@
  *          adapters, custom ops, parameter tables, and a name for
  *          each p[] index (YSIG_<OP>_<ROW>).
  *
+ *   STATUS: v0.7.0, 2026-11-16, Linux desktop (i5-14500, GCC 12.2): the
+ *   oracle at 3,000 cases on seeds 20261115, 20261123 and 20261124, late
+ *   generator on and off: every case its B cannot run counted, every
+ *   wrong case with a count but the one H1 declares (a raw mouse's count
+ *   before the last barrier, which the oracle's R drops; docs/sig.md,
+ *   "Per device"); its feed_n mode; ctest Release and the sanitizers
+ *   tree; sig_fuzz 10,000,000 inputs under ASan and UBSan; the mutants;
+ *   docs/sig.md, "Tests, fuzzing and mutations", has the numbers. Stack:
+ *   ysig_open(), ysig_check() and ysig_arena_size() take about 14 KB of
+ *   stack, and a waiting group's let-in (in ysig_feed(), ysig_frame(),
+ *   ysig_arm() and the state calls) about 11 KB a nested group (GCC 12.2,
+ *   -fstack-usage); give a small thread stack room for that.
  *   STATUS: v0.6.1, 2026-11-14, the same machine: the oracle at 3,000
  *   cases on seeds 20261114 and 778001 to 778004 and at 20,000 on 61441:
  *   both targets hold, the same wrong cases as 0.6.0, 32 % fewer arms
@@ -832,13 +844,18 @@ typedef struct ysig_entry {
     int32_t       reserved_;
     double        value;        /* SET, SET_DATA; RECENTER's x            */
     double        y;            /* RECENTER                               */
-    int64_t       t;            /* RESET, RESET_TRIAL, RECENTER, ARM      */
+    int64_t       t;            /* RESET, RESET_TRIAL, RECENTER, ARM,
+                                 * SETTLE, DISARM_AT                      */
     yin_event     event;        /* FEED                                  */
     ysig_frame_in frame;        /* FRAME                                 */
 } ysig_entry;
 
 typedef struct ysig_stats {
-    int64_t  fed;               /* ysig_feed() calls                     */
+    int64_t  fed;               /* ysig_feed() calls with good arguments
+                                 * (one per event of ysig_feed_n()), but
+                                 * not one a source takes that is before
+                                 * the last barrier (late_barrier), a raw
+                                 * mouse's count there too: not R's       */
     int64_t  taken;             /* events a source took                  */
     int64_t  dropped_order;     /* older than their source's last        */
     int64_t  hits_lost, derived_lost;
@@ -890,7 +907,7 @@ typedef struct ysig_stats {
     int64_t  arm_unverified;    /* arms whose group is outside the shapes
                                  * whose result is verified (docs/sig.md,
                                  * "Exactness"): R is made, not checked   */
-    /* v0.7.0, LATE INPUT: calls whose place in R (the order by key) is
+    /* v0.7.0, docs/sig.md "Late input": calls whose place in R (the order by key) is
      * before a call the graph already had that shares a node with them */
     int64_t  late_far;          /* placed before the window's oldest
                                  * checkpoint: made at the end of R       */
@@ -944,7 +961,7 @@ typedef struct ysig_desc {
     bool                          rows_final;
     bool                          derived_final;
     int                           catchup_rows;
-    /* v0.7.0, LATE INPUT: the window's span in input time; checkpoints
+    /* v0.7.0, docs/sig.md "Late input": the window's span in input time; checkpoints
      * are spaced catchup_ns / 8 apart (0: 50 ms) */
     int64_t                       catchup_ns;
 } ysig_desc;
@@ -1070,24 +1087,45 @@ YSIG_API bool ysig_set_data(ysig_graph* g, int node, int index, double v);
  * a bad argument. */
 YSIG_API int ysig_feed(ysig_graph* g, const yin_event* e);
 /* v0.7.0: ysig_feed() of each event in array order, the window run again
- * once at the end for the late ones (LATE INPUT, "The batch"). The events
- * the sources took, or -1. */
+ * once at the end for the late ones (docs/sig.md, "Late input", "The
+ * batch"), or earlier where the next event could end the window. Returns
+ * the sum of ysig_feed()'s results, the sources that took each event (an
+ * event two sources take adds 2), or -1, with nothing fed, for a bad
+ * argument: g NULL or not open, n < 0, e NULL with n > 0, a call from a
+ * callback. No event of the array is refused and none ends the batch:
+ * one no source takes adds 0 (counted in stats.fed), one before the last
+ * barrier adds 0 (late_barrier; a raw mouse's count goes into its
+ * integrators), one older than its device's last adds 0 for that source
+ * (dropped_order), a stamp far past the poll is taken (the next frame's
+ * late_poll). */
 YSIG_API int ysig_feed_n(ysig_graph* g, const yin_event* e, int n);
 
 /* Once per frame, after the frame's input was fed. 0, or -1. */
 YSIG_API int ysig_frame(ysig_graph* g, const ysig_frame_in* f);
 
 /* Detects: arm from t (DETECTORS; a t before input the graph already had
- * runs the window again, AN ARM IN THE PAST), or stop. */
+ * runs the window again, AN ARM IN THE PAST), or stop. An arm with a t
+ * earlier than a ysig_disarm_at() already made for the same detect (W2):
+ * by key the arm comes first, so it is made and ended at once by that
+ * disarm, and gives no hit after it (with no window: made at R's end and
+ * counted, late_off). */
 YSIG_API bool ysig_arm(ysig_graph* g, int node, int64_t t_ns);
 /* v0.6.0: the caller has fed all input up to t: a sample-rate detect's
  * hold that the held value meets by t is a hit now, at start + hold, as
  * a frame's pass would find it (no frame rows, no views). Journaled. */
 YSIG_API int  ysig_settle(ysig_graph* g, int64_t t_ns);
+/* Stop node's arm at N, the newest input time of every node, in a group
+ * or not. In a group it lets waiting groups in at N, which can be before
+ * the input of their own device is complete: a later report of that
+ * device can then void a hit already handed out (late_hits_voided and
+ * arm_unverified, a guard stop). A caller that knows the time uses
+ * ysig_disarm_at(). */
 YSIG_API bool ysig_disarm(ysig_graph* g, int node);
 /* v0.7.0: a disarm at the caller's time t: an arm of node at or before t
  * is made, then ended at t; one later than t, made before this call, is
- * cancelled (LATE INPUT, "The cancel, by key"). Journaled. */
+ * cancelled (docs/sig.md, "Late input", "The cancel, by key"). An arm of
+ * node made after this call with a t earlier than this t is made and
+ * ended at once (W2, ysig_arm()). Journaled. */
 YSIG_API bool ysig_disarm_at(ysig_graph* g, int node, int64_t t_ns);
 /* v0.6.0: a barrier that resets nothing: no arm goes before it, waiting
  * arms are cancelled, and every row and derived event so far is final
@@ -1342,7 +1380,7 @@ typedef struct ysig__cu {
     ysig__rbuf* rb;
     ysig__dbuf* db;
     uint64_t    rb_tail, rb_head, db_tail, db_head;
-    /* v0.7.0, LATE INPUT */
+    /* v0.7.0, docs/sig.md "Late input" */
     int64_t     span_ns;        /* desc.catchup_ns                       */
     ysig__call* mv;             /* C calls: those a late call moves      */
     uint64_t    late_f[YSIG__FPW_];   /* a run again for late calls: the
@@ -4808,7 +4846,7 @@ static int ysig__grp_ends(const ysig__cu* cu, int node, int hit_node) {
     return 0;
 }
 
-/* v0.7.0: a logged call's key (LATE INPUT, "The key of a call"): its
+/* v0.7.0: a logged call's key (docs/sig.md, "Late input", "The key of a call"): its
  * time tr, its class, its call order (a group's calls: their arm's) */
 static int ysig__kcls(int kind) {
     return kind == YSIG_J_FEED ? 0 : kind == YSIG_J_FRAME || kind == YSIG_J_SETTLE ? 1 : 2;
@@ -6984,7 +7022,7 @@ YSIG_API bool ysig_disarm(ysig_graph* g, int node) {
 }
 
 /* v0.7.0: a disarm with the caller's time, a state call of time t in no
- * group (LATE INPUT, "ysig_disarm_at()"). The open gap ends here, in no
+ * group (docs/sig.md, "Late input", "ysig_disarm_at()"). The open gap ends here, in no
  * group, as at an input; the waiting groups at or before t that meet the
  * detect go in first (X1); a waiting arm of it later than t, made
  * before, is cancelled; one already in R with a greater key is cancelled

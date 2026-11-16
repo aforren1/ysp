@@ -1210,8 +1210,12 @@ gates' results are in "Tests, fuzzing and mutations".
 
 The user's choice (2026-11-14): the header places a late input at its
 time, as it places a past arm, and the window bounds the lateness that it
-can absorb. Rejected: the player waiting for complete input (drawing
-would lag by the lateness), and keeping the guard's stop.
+can absorb. Rejected on 2026-11-14: the player waiting for complete
+input (drawing would lag by the lateness), and keeping the guard's stop.
+The user chose the player's wait for complete input on 2026-11-15 all
+the same, in addition to the header's placing (player 0.12.0, as built:
+docs/player.md, the input horizon). The header's rules stand: they apply
+to any input the player hands over late.
 
 Reason: in 0.6.x a report that comes after a call with a later time
 stays after that call in R (rule 4). A past arm at the time of a hit
@@ -1300,8 +1304,16 @@ Rule 3's let-in time for a state call (S1', the coordinator's ruling of
 2026-11-15, from the reviewer; it replaces S1 of the same day): a state
 call of a present or an ahead group lets in at `N(F(c))` at its call; a
 state call of a past group at the group's `τ`; a state call in no group
-at `N(F(c))`; a plain disarm in no group at `N`. The readings
-(reviewer):
+at `N(F(c))`; a plain disarm at `N`, in a group or in no group (M1, the
+coordinator, 2026-11-16: the text before said "in no group"; the header
+used `N` in every group, and that stays). `N` is the newest input of
+every node, so a group that holds a plain disarm can let a waiting group
+in before the input of that group's own device is complete. A later
+report of that device can then void a hit already handed out
+(`late_hits_voided`, with `arm_unverified`; a guard stop): the
+reviewer's `q5.c`, [disarm d, arm e at 24] with d's device at 10, then
+its report at 15. A caller that knows the time uses `ysig_disarm_at()`;
+the player does. The readings (reviewer):
 
 - (a) The calls of an open gap let in at their call until an arm closes
   the gap. When the arm makes a past group, its calls let in at `τ` and
@@ -1780,15 +1792,31 @@ Every group condition of "Exactness" stays, tested at a group's going-in
 as now, with `N(G)` from R's order.
 
 **What the caller can rely on (0.7.0, in place of the 0.6.x
-paragraph).** After each call, every node's value, ring and state, and
-every count but the window's own, are those of R's calls so far on a
-graph with no window, given in R's order. The exceptions: the bound
-channels hold R's values for the newest frame only; a frame already
-drawn keeps what the caller read at its call (`late_frames` counts the
-frames where R now differs); and `history_skipped` and `time_clamped`,
-as before. While a gap is open, its late state calls are at R's end, not
-at their place by key (State calls, above); R's order holds for them from
-the gap's end.
+paragraph).** With no fallback count, after each call, every node's
+value, ring and state, and every count but the window's own, are those
+of R's calls so far on a graph with no window, given in R's order. The
+counts under which this fails (the call or the group is made at R's end,
+or a hit already handed out is voided): `late_far`, `late_full`,
+`late_unverified`, `arm_unverified`, `arm_past_off`, `arm_past_far`,
+`arm_past_full`, `arm_past_pinned`, `late_off` and `late_hits_voided`.
+The window's own counts, as in 0.6.x and the oracle's check: the
+`arm_*` counts, `call_reentry`, `derived_lost` and the digest, and now
+every `late_*` count (R's calls given in R's order to a graph with no
+window make no call late, and that graph never has an input before the
+last barrier). The other exceptions: the bound channels hold R's
+values for the newest frame only; a frame already drawn keeps what the
+caller read at its call (`late_frames` counts the frames where R now
+differs); `history_skipped` and `time_clamped`, as before; and a raw
+mouse's count before the last barrier, which R does not have and the
+integrator does ("Per device", H1). While a gap is open, its late state
+calls are at R's end, not at their place by key (State calls, above);
+R's order holds for them from the gap's end. With `ysig_feed_n()` the
+claim holds after the batch, not after each event in it; at-once rows
+and derived events (no `rows_final`, `derived_final`) and the counts can
+differ from feeding the same events one call each ("The batch"). Hits of
+detects whose calls' footprints do not meet can come out of R's time
+order: R orders only calls that meet, so a hit of one detect can come
+after a later hit of another (`ysig_detected_to()` hands out by time).
 
 **Exceptions: refused or counted, and why.**
 
@@ -1931,8 +1959,8 @@ questions).**
 7. (S1', the coordinator's ruling of 2026-11-15, from the reviewer; S1
    of the same day is withdrawn.) A state call of a present or an ahead
    group lets in at `N(F(c))` at its call; a past group's state calls at
-   its `τ`; a state call in no group at `N(F(c))`; a plain disarm in no
-   group at `N`. An open gap's calls let in at their call until the arm
+   its `τ`; a state call in no group at `N(F(c))`; a plain disarm at `N`,
+   in a group or not (M1, 2026-11-16). An open gap's calls let in at their call until the arm
    closes the gap; for a past group then at `τ`, and the run again
    corrects them ("Rule 3's let-in time for a state call" above).
 8. (Ruling 2 extended, the coordinator, 2026-11-15, from the reviewer's
@@ -2018,6 +2046,16 @@ above, under "The batch".)
 node, 64 hits and 64 derived events between drains (the rest counted),
 16 adapters, 256 roles, a ring of at most 2^20 values. The arena must be
 8-byte aligned. One thread.
+
+Stack (the final review's L7; GCC 12.2 `-fstack-usage`, x86-64, `-O2`
+and `-O0`, 2026-11-16): `ysig_open()` 14,048 bytes, `ysig_check()` 13,936
+to 13,968, `ysig_arena_size()` 13,952; a waiting group's let-in
+(`ysig__wait_place()`, 10,736 to 10,864, and `ysig__wait_blk()`, 10,432 to
+10,496), reached from `ysig_feed()`, `ysig_frame()`, `ysig_arm()` and the
+state calls, and called again for each group that a let-in lets in
+(transitively). Every other function is under 1.4 KB. A thread with a
+small stack (an audio callback, an embedded task) must have room for
+these; the depth of the nested let-ins is not measured.
 
 ## Design notes
 
