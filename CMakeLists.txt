@@ -780,6 +780,18 @@ if(YSP_BUILD_TESTS)
     add_test(NAME test_sig_arm_ref_feed_n COMMAND ${CMAKE_COMMAND} -DPROG=$<TARGET_FILE:test_sig_arm_ref>
              -DCASES=1000 -DSEED=20261115 -DFEEDN=1 "-DENV=SIG_ORACLE_R1=1;SIG_ORACLE_GEN_TIE=1;SIG_ORACLE_GEN_DISARM_AT=1;SIG_ORACLE_GEN_EXIT=1;SIG_ORACLE_DAX=1;SIG_ORACLE_GEN_DRAIN_TO=1;SIG_ORACLE_DERIVED_TO=1;SIG_ORACLE_LATE=4;SIG_ORACLE_LATE_A=1;SIG_ORACLE_P2STRICT=1;SIG_ORACLE_PRED=1;SIG_ORACLE_FEEDN=1"
              -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/adapt/sig_arm_ref_check.cmake)
+    # The past-groups generator (SIG_ORACLE_PAST_GROUPS=1: past groups as
+    # often as the others, as the player makes them) with the predicate's
+    # target (SIG_ORACLE_PRED_TARGET=1), read from the oracle's own lines:
+    # a B-cannot case missed, a wrong case with no count, or a flagged group
+    # with no arm_unverified or late_unverified fails it (V2SIG10)
+    add_test(NAME test_sig_arm_ref_past COMMAND ${CMAKE_COMMAND} -E env SIG_ORACLE_CASES=1000 SIG_ORACLE_SEED=20261115
+             SIG_ORACLE_R1=1 SIG_ORACLE_GEN_TIE=1 SIG_ORACLE_GEN_DISARM_AT=1 SIG_ORACLE_GEN_EXIT=1 SIG_ORACLE_DAX=1 SIG_ORACLE_GEN_DRAIN_TO=1
+             SIG_ORACLE_DERIVED_TO=1 SIG_ORACLE_LATE=4 SIG_ORACLE_LATE_A=1 SIG_ORACLE_P2STRICT=1 SIG_ORACLE_PRED=1
+             SIG_ORACLE_PAST_GROUPS=1 SIG_ORACLE_PRED_TARGET=1 $<TARGET_FILE:test_sig_arm_ref>)
+    set_tests_properties(test_sig_arm_ref_past PROPERTIES
+             PASS_REGULAR_EXPRESSION "with no arm_unverified or late_unverified: 0[^0-9]"
+             FAIL_REGULAR_EXPRESSION "header missed a B-cannot case;stale count, [1-9][0-9]* with none;PRED_TARGET case")
 endif()
 if(TARGET SDL3::SDL3 AND YSP_BUILD_EXAMPLES)
     # The jsPsych-style trials of examples/response/ (docs/response.md,

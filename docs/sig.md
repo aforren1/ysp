@@ -948,6 +948,20 @@ When the header tests:
   arm lets into its block is tested there too (`sig_test`
   `test_v2_c4_past`); a disarm at G's own `τ` is skipped there as in
   `ysig__c4()` (V2SIG8: the place's test counted it).
+  Where the log no longer holds G's gap (its calls left with the
+  oldest checkpoint, or the logs ran full and keep nothing until the
+  next frame), the header keeps the key times of the disarms it lost
+  since the last barrier. When one of them can lie between the gap's
+  end found in the log (or the barrier) and G's key, G is counted: the
+  header cannot read the gap, as before the window in 0.6.x (H1). (The
+  oracle's case 1928 of seed 20261124, `SIG_ORACLE_PAST_GROUPS=1`,
+  `SIG_ORACLE_PRED_TARGET=1`: the 64-call log ran full at call 54; a
+  disarm in no group at 27.458 ms, device 1 at 31.561 ms, then a group's
+  arm at 30.561 ms that a settle let in. By key the input is after the
+  arm, so the disarm is in its gap. `sig_test` `test_v2_c4_lost`.) Cost:
+  0.3% to 1.1% more counts in right cases (the oracle at ctest's
+  switches, seed 20261115: 2,788 to 2,799 of 31,205 made groups, late
+  generator on; 4,017 to 4,063 of 43,438 with `OFF=l`).
 - (R2, 2026-11-15) At each late disarm whose place is in the gap a
   group's arm closes in R (back to the last input, barrier, arm or
   `ysig_disarm_at`): condition 4 for that group.

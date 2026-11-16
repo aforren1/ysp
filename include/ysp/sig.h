@@ -435,6 +435,9 @@
  *          times; so do the other picks among waiting groups (a let-in,
  *          a past group's block, a present group's ties, a barrier) and
  *          the arm's two reason-4 tests (ysig__wa_before()).
+ *          Condition 4 where the log no longer holds the gap: the key
+ *          times of the disarms the log lost since the last barrier
+ *          count G when one can lie in its gap (ysig__lost_add()).
  *          "N(G) earlier than tau" is a flag, not tau - 1 (a signed
  *          overflow at an arm at INT64_MIN).
  *          Condition 3's table of armed detects (w->lr) went: no reader,
@@ -1337,6 +1340,10 @@ typedef struct ysig__cu {
     uint64_t    def_p;
     int64_t     def_t;
     int64_t     n_lf;           /* a run again: frames late_frames counts */
+    /* condition 4 where the log no longer holds a gap: the key times of the
+     * disarms it dropped, or did not log, since the last barrier */
+    int64_t     lost_lo, lost_hi;
+    int         lost_n;
 #ifdef YSIG_DEBUG_FEED_BOUND
     uint64_t    dbg_use[6];     /* entries each log was asked for: calls,
                                  * undo, hits, derived, row and derived
@@ -1445,8 +1452,22 @@ static void ysig__before_state(struct ysig_graph* g, int node, int64_t t);
 static void ysig__before_barrier(struct ysig_graph* g);
 static int ysig__feed_fp(const struct ysig_graph* g, const yin_event* e, uint64_t* f, uint64_t* mask, int* all);
 
+static void ysig__lost_add(ysig__cu* cu, int64_t lo, int64_t hi) {
+    if (!cu->lost_n || lo < cu->lost_lo) cu->lost_lo = lo;
+    if (!cu->lost_n || hi > cu->lost_hi) cu->lost_hi = hi;
+    cu->lost_n = 1;
+}
+/* The calls [from, to) leave the log: its disarms' key times are kept */
+static void ysig__lost_note(ysig__cu* cu, uint64_t from, uint64_t to) {
+    uint64_t s;
+    for (s = from; s < to; s++) {
+        const ysig__call* c = &cu->calls[s % (uint64_t)cu->C];
+        if (c->e.kind == YSIG_J_DISARM) ysig__lost_add(cu, c->tr, c->tr);
+    }
+}
 /* The logs ran full (or a reset): no checkpoint to run again from. */
 static void ysig__cu_clear(ysig__cu* cu, uint64_t call) {
+    if (call > cu->c_tail) ysig__lost_note(cu, cu->c_tail, call);
     cu->n_ck = 0;
     cu->c_tail = call;
     cu->u_tail = cu->u_head;
@@ -2978,6 +2999,7 @@ static void ysig__buf_room(ysig_graph* g, uint64_t idx0) {
         cu->n_ck--;
         if (cu->n_ck) {
             const ysig__ck* k = &cu->ck[cu->ck0];
+            ysig__lost_note(cu, cu->c_tail, k->call);
             cu->c_tail = k->call;
             cu->u_tail = k->undo;
             cu->h_tail = k->hit;
@@ -4449,6 +4471,7 @@ static void ysig__ck_take(ysig_graph* g) {
         cu->ck0 = (cu->ck0 + 1) % cu->K;
         cu->n_ck--;
         k = &cu->ck[cu->ck0];
+        ysig__lost_note(cu, cu->c_tail, k->call);
         cu->c_tail = k->call;
         cu->u_tail = k->undo;
         cu->h_tail = k->hit;
@@ -4475,6 +4498,7 @@ static void ysig__ck_take(ysig_graph* g) {
         cu->ck0 = (cu->ck0 + 1) % cu->K;
         cu->n_ck--;
         k = &cu->ck[cu->ck0];
+        ysig__lost_note(cu, cu->c_tail, k->call);
         cu->c_tail = k->call;
         cu->u_tail = k->undo;
         cu->h_tail = k->hit;
@@ -4497,6 +4521,9 @@ static int ysig__log(ysig_graph* g, const ysig_entry* e) {
     if (cu->n_ck) YSIG__DBG_USE(cu, 0);
     if (!cu->n_ck || cu->c_head - cu->c_tail >= (uint64_t)cu->C) {
         if (cu->n_ck) ysig__cu_full(cu);
+        /* not logged: its key is not known here (a gap's disarm takes its
+         * group's), so any time up to now */
+        if (e->kind == YSIG_J_DISARM) ysig__lost_add(cu, INT64_MIN, e->t > g->t_cover ? e->t : g->t_cover);
         if (st && !cu->placing) { cu->grp_bad = 1; cu->grp_open = 1; }
         return 0;
     }
@@ -4556,6 +4583,7 @@ static void ysig__do_reset(ysig_graph* g, int64_t t, int exp_only) {
     if (g->cu) {
         ysig__cu_clear(g->cu, g->cu->replaying ? g->cu->c_pos : g->cu->c_head);
         g->cu->at_bar = 1;
+        g->cu->lost_n = 0;   /* nothing before a barrier is in a gap after it */
     }
     ysig__ck_take(g);
 }
@@ -5860,9 +5888,20 @@ static int ysig__late_fix(ysig_graph* g, uint64_t a) {
  * disarm of another group or of none, at another time, G is counted. */
 static void ysig__unv(ysig_graph* g, uint64_t gid);
 static const ysig__call* ysig__c4_best(ysig_graph* g, uint64_t gid, int64_t t);
+/* A disarm the log no longer holds can lie in the gap when its key time
+ * is between the gap's end found (or the last barrier) and G's: G is not
+ * verified, as an input before the window pinned a group in 0.6.x (H1).
+ * The oracle's case 1928 of seed 20261124, SIG_ORACLE_PAST_GROUPS=1: the
+ * 64-call log ran full at call 54 and kept nothing until the next frame;
+ * a disarm in no group at 27.458 ms, device 1 at 31.561 ms, then an arm
+ * at 30.561 ms that a settle let in. By key the input is after the arm
+ * and the disarm in its gap. */
 static void ysig__c4(ysig_graph* g, uint64_t gid, int64_t t) {
     const ysig__call* best = ysig__c4_best(g, gid, t);
+    ysig__cu* cu = g->cu;
     if (best && best->e.kind == YSIG_J_DISARM && best->tr != t) ysig__unv(g, gid);
+    else if (cu && cu->lost_n && ysig__kt(g, cu->lost_lo) <= ysig__kt(g, t) && (!best || ysig__kt(g, cu->lost_hi) >= ysig__kt(g, best->tr)))
+        ysig__unv(g, gid);
 }
 /* R2: a plain disarm placed late (cseq) whose place is in the gap a
  * group's arm closes in R (back to the last input, barrier, arm or
@@ -7032,6 +7071,7 @@ static void ysig__do_flush(ysig_graph* g) {
     if (g->cu) {
         ysig__cu_clear(g->cu, g->cu->replaying ? g->cu->c_pos : g->cu->c_head);
         g->cu->at_bar = 1;
+        g->cu->lost_n = 0;   /* nothing before a barrier is in a gap after it */
     }
     ysig__ck_take(g);
 }

@@ -8657,6 +8657,43 @@ static void test_v2_wk_reason4(void) {
     }
 }
 
+/* Condition 4 where the log no longer holds the gap (the oracle's case
+ * 1928 of seed 20261124, SIG_ORACLE_PAST_GROUPS=1). Device 9 (no node of
+ * G's) fills a 32-call log, which runs full and keeps nothing until the
+ * next frame; a disarm of e in no group at N (14.9 ms); device 9 at 31;
+ * G = [arm d at 30] waits (device 3 last at 10) and device 3 at 35 lets
+ * it in. By key device 9 at 31 is after G's arm, so the disarm, at
+ * another time, lies in G's gap: not exact (4). The log did not keep the
+ * disarm; the header counts G from the disarms it lost (before V2SIG10
+ * nothing: arm_unverified 0). With a log that keeps the gap (calls 0, the
+ * default) the log's own test counts G. The controls: no disarm, with
+ * either log: 0 (the full log lost feeds only; test_pending's "two hands"
+ * is the same). */
+static void test_v2_c4_lost(void) {
+    int v, k;
+    for (v = 0; v < 4; v++) {
+        ysig_node n[4];
+        ysig_stats st;
+        int full = !(v & 1), dis = !(v & 2);
+        g_where = full ? "condition 4, a disarm the full log lost" : "condition 4, a disarm in the log";
+        n[0] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 3, 1); n[0].history = 64;
+        n[1] = ysig_node_of(YSIG_OP_DETECT, 0, -1); n[1].p[YSIG_DETECT_LEVEL] = 5; n[1].history = 64;   /* d */
+        n[2] = src_node(YIN_KIND_PEN, YIN_AXIS_POSITION, 9, 1); n[2].history = 64;
+        n[3] = ysig_node_of(YSIG_OP_DETECT, 2, -1); n[3].p[YSIG_DETECT_LEVEL] = 5; n[3].history = 64;   /* e */
+        if (!rp_open(n, 4, 4, full ? 32 : 0, false, false)) return;
+        rp_feed(10 * MS, 0, YIN_AXIS_POSITION, 3);
+        for (k = 0; k < 40; k++) rp_feed(11 * MS + k * (MS / 10), 0, YIN_AXIS_POSITION, 9);
+        CHECK(g_rp.cu->n_ck == !full);
+        if (dis) CHECK(ysig_disarm(&g_rp, 3));
+        rp_feed(31 * MS, 0, YIN_AXIS_POSITION, 9);
+        CHECK(ysig_arm(&g_rp, 1, 30 * MS) && g_rp.wt->n == 1);
+        rp_feed(35 * MS, 0, YIN_AXIS_POSITION, 3);
+        ysig_get_stats(&g_rp, &st);
+        CHECK(g_rp.wt->n == 0 && st.late_far == 0 && st.late_full == 0);
+        CHECK(st.arm_unverified == dis);
+    }
+}
+
 int main(void) {
     test_conventions();
     test_param_names();
@@ -8749,6 +8786,7 @@ int main(void) {
     test_v2_wk_blk();
     test_v2_wk_tie();
     test_v2_wk_reason4();
+    test_v2_c4_lost();
     if (g_failures) { fprintf(stderr, "sig_test: %d failures\n", g_failures); return 1; }
     printf("sig_test: all checks passed\n");
     return 0;

@@ -1925,6 +1925,7 @@ why = "v0.6.0 (test_arm_window 7; test_arm_repro H8: a reset makes the held even
 find = '''    if (g->cu) {
         ysig__cu_clear(g->cu, g->cu->replaying ? g->cu->c_pos : g->cu->c_head);
         g->cu->at_bar = 1;
+        g->cu->lost_n = 0;   /* nothing before a barrier is in a gap after it */
     }
     ysig__ck_take(g);
 }
@@ -3196,3 +3197,20 @@ test = "sig"
 why = "V2SIG10: a waiting group with a later raw tau but the smaller key (both before the last barrier) is made first in R too; by raw time the new group was counted (test_v2_wk_reason4, WK6: 2, not 1)."
 find = '            if (ysig__kt(g, w->a[q].t) < ysig__kt(g, t) || (ysig__kt(g, w->a[q].t) == ysig__kt(g, t) && w->a[q].seq < seq)) continue;'
 replace = '            if (w->a[q].t < t || (w->a[q].t == t && w->a[q].seq < seq)) continue;'
+
+[[mutant]]
+id = "386"
+name = "condition 4: a disarm the log lost not counted"
+test = "sig"
+why = "V2SIG10: where the log no longer holds G's gap, a disarm it lost can lie in it; the oracle's case 1928 of seed 20261124 with SIG_ORACLE_PAST_GROUPS=1 (test_v2_c4_lost: 0, not 1)."
+find = '''    else if (cu && cu->lost_n && ysig__kt(g, cu->lost_lo) <= ysig__kt(g, t) && (!best || ysig__kt(g, cu->lost_hi) >= ysig__kt(g, best->tr)))
+        ysig__unv(g, gid);'''
+replace = '''    else (void)cu;'''
+
+[[mutant]]
+id = "387"
+name = "condition 4: a disarm the full log did not take not kept"
+test = "sig"
+why = "V2SIG10: a disarm made while the logs, run full, keep nothing is lost to the log at once (test_v2_c4_lost: 0, not 1)."
+find = '        if (e->kind == YSIG_J_DISARM) ysig__lost_add(cu, INT64_MIN, e->t > g->t_cover ? e->t : g->t_cover);'
+replace = ''
