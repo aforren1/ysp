@@ -2352,34 +2352,78 @@ counts this program's allocator calls during the 60 s run (glibc).
 
 ### Tests, fuzzing and mutations
 
-The release gates of 0.7.0 (2026-11-15, Linux desktop, i5-14500, GCC
-12.2). The oracle runs with ctest's switches (late mode 4 with A's
-checks, R1, the tie, the disarm_at and exit shapes, the horizons), 3,000
-cases a seed, with the late generator on and off (`OFF=l`), two runs at
-a time (load average 5.8 at the start, 3.4 at the end, with mutant jobs
-and the fuzz on the machine):
+The release gates of 0.7.0 (V2SIG8, 2026-11-15, Linux desktop,
+i5-14500, GCC 12.2). The oracle (the reviewer's rev2e copy) runs with
+ctest's switches (late mode 4 with A's checks, R1, the tie, the
+disarm_at and exit shapes, the horizons), 3,000 cases a seed, with the
+late generator on and off (`OFF=l`), four runs at a time (load average
+6.9 at the start, 7.4 at the end, with other builders on the machine):
 
 | Seed | Generator | B cannot run (counted) | Wrong (by `arm_unverified`; by another count; none) | Right cases with a count (counts over made groups) | Time |
 |---|---|---|---|---|---|
-| 20261115 | on | 747 (747) | 1,398 (959; 439; 0) | 710 of 855 (2,799 of 31,205) | 82 s |
-| 20261115 | off | 754 (754) | 1,059 (731; 328; 0) | 1,014 of 1,187 (4,036 of 43,438) | 63 s |
-| 20261123 | on | 724 (724) | 1,429 (1,031; 398; 0) | 723 of 847 (2,892 of 31,024) | 66 s |
-| 20261123 | off | 701 (701) | 1,078 (761; 317; 0) | 1,046 of 1,221 (4,144 of 45,887) | 58 s |
-| 20261124 | on | 757 (757) | 1,358 (992; 366; 0) | 738 of 885 (2,942 of 32,435) | 73 s |
-| 20261124 | off | 698 (698) | 1,137 (796; 340; **1**) | 977 of 1,165 (4,130 of 43,673) | 56 s |
+| 20261115 | on | 747 (747) | 1,398 (958; 440; 0) | 708 of 855 (2,788 of 31,205) | 69 s |
+| 20261115 | off | 754 (754) | 1,059 (729; 330; 0) | 1,011 of 1,187 (4,017 of 43,438) | 63 s |
+| 20261123 | on | 724 (724) | 1,429 (1,031; 398; 0) | 723 of 847 (2,883 of 31,024) | 63 s |
+| 20261123 | off | 701 (701) | 1,078 (760; 318; 0) | 1,045 of 1,221 (4,135 of 45,887) | 66 s |
+| 20261124 | on | 757 (757) | 1,358 (991; 367; 0) | 736 of 885 (2,933 of 32,435) | 64 s |
+| 20261124 | off | 698 (698) | 1,137 (796; 341; 0) | 977 of 1,165 (4,121 of 43,673) | 54 s |
 
-The first target holds on every run. The second fails once: case 2005 of
-seed 20261124 with `OFF=l` is wrong ("rows (final only) not R's") and
-has no count at the call the oracle reads. Diagnosed (V2SIG7): not a
-header defect. The case's window has `catchup_calls` 64; the log runs
-full at call 70 and the window is empty from then to the next frame, so
-rows are final at once (final once no arm can change them). The arm at
-call 76 makes a row of `all()` at 50.206 ms with device 1's provenance,
-handed out at once. Call 77, device 2 at 50.206 ms, is late by key (R
-puts it before the arm's group, so R's row has device 2's provenance);
-with no window it is counted `late_full` at call 77. The oracle reads
-A's counts at the call that handed out the wrong row (76), one call
-before the late call that made it wrong. Counted, by the late call.
+Both targets hold on every run. Against V2SIG7's table: the same cases
+are wrong and B cannot run the same ones; a few wrong cases move from
+`arm_unverified` to another count, and 9 to 19 fewer counts in right
+cases, from condition 4 at a past group's place, which no longer counts
+a disarm at the group's own time (the text's condition 4). Case 2005 of
+seed 20261124 with `OFF=l` (V2SIG7's one bare case) is now read at the
+late call that made its row wrong (the reviewer's rev2d): counted
+(`late_full`). Diagnosed in V2SIG7: its window was empty (the 64-call
+log ran full at call 70), a row of `all()` was final at once at the arm
+(call 76), and call 77, device 2 at the row's time, is late by key and
+counted `late_full` there.
+
+The oracle's feed_n mode (`SIG_ORACLE_FEEDN=1`, the same switches,
+1,000 cases, the three seeds, both modes, about 30 s each): no batch
+that did not fit, and 14 cases with a first difference, each a count,
+batched lower (`late_hits_voided` 8, `late_frames` 6), as in V2SIG7.
+
+The V2SIG8 round (2026-11-15, Linux desktop, i5-14500, GCC 12.2, one
+gate at a time, load average 2.4 to 7.8, with other builders on the
+machine):
+
+- `ysig_feed_n()`'s bound on one feed's log use ("The batch") is
+  checked: `sig_fuzz` sets `YSIG_DEBUG_FEED_BOUND`, and each quiet feed
+  of a batch aborts if it uses a log past its need. 10,000,000 inputs
+  under ASan and UBSan (`setarch -R`, 4 processes, seeds 8901 to 8904),
+  93 s: no abort, no report. 3,227,249 feeds checked; the largest use
+  is 1.000 of the need in each of the six logs (the bound holds and is
+  reached; at most 14 undo entries in one feed). 1,498,018 graphs
+  opened, 4,516,417 late events, 1,462,512 batches, 732,735 disarm_at
+  calls, 12,062 arms run again. Controls: the need of one log set to 0
+  (calls, hits, derived, row buffer), or the undo need halved, aborts
+  within 2,000,000 inputs. The derived buffer's control was not run.
+- The nine open mutants: 287, 297, 314, 315, 318 and 356 are killed by
+  new `sig_test` cases, each with a control (`test_v2_h12_before`,
+  `test_v2_c4_past`, `test_v2_c1_c4_exact`, `test_v2_n_tau_image`); 300,
+  313 and 326 are equivalent (their notes say why). The reviewer's
+  `SIG_ORACLE_PRED_TARGET=1` (a made group that the text's predicate
+  flags by condition 1 or 4 must have a count) tells none of 300, 314,
+  315 or 318 apart at seeds 20261115, 20261123 and 20261125 (2,000 to
+  3,000 cases, both modes, also with `SIG_ORACLE_PAST_GROUPS=1`): the
+  conditions those count are counted by condition 2 too unless
+  `N(G) = τ`, which the oracle's generator rarely makes. It is in
+  sig.toml as `sig_ref_pt` (seed 20261115, late on, 3,000 cases). The
+  unmutated header fails it at seed 20261124 late on, once in 3,000
+  cases (case 2107: a group flagged by condition 4 at a `disarm_at` at
+  0.000 after the reset); not diagnosed.
+- Mutants: sig.toml 347 of 347 as expected (killed 335, survived 12:
+  the control 00 and 11 that their notes expect to survive, 300, 313
+  and 326 among them), 807 s, 4 jobs (load average 5.9 at
+  the start, 2.9 at the end).
+- ctest Release 127 of 127, 79 s at `-j 4`. `sig_test` as C99 and as
+  C++17, at `-O2` and `-O3` (`-Wall -Wextra -Werror`): passed.
+- Sanitizers: the `sanitizers` tree (layout, pack and player on),
+  configured and built under `setarch -R` (204 s at `-j 6`, from
+  clean), ctest 126 of 126, 467 s at `-j 4`, no sanitizer report (load
+  average 2.2 at the start, 2.1 at the end).
 
 The V2SIG7 round (2026-11-15, Linux desktop, i5-14500, GCC 12.2, one
 gate at a time, load average 1.1 to 4.4): `ysig_feed_n()`'s early run
