@@ -1,4 +1,4 @@
-/* ysp/pack_tool.h - v0.8.0 - the pack tool as a library (prefix ypt_)
+/* ysp/pack_tool.h - v0.10.0 - the pack tool as a library (prefix ypt_)
  *
  *   Builds, verifies, lists, extracts, rebuilds and appends ysp packs
  *   (docs/pack.md). The CLI `ypak` (pack/ypak.c) is a thin layer over these
@@ -78,6 +78,17 @@
  *   its entries, its tables' columns and levels and ytr_rules(); the rig,
  *   the parameter tables and ytl_check_ops() are skipped.
  *
+ *   v0.10.0 (2026-11-18): glyph runs through pack/layout 0.2.0, whose
+ *   font fallback goes past the script (Skribidi patch 0003): a digit or
+ *   punctuation mark in Hebrew or Arabic text comes from the first listed
+ *   font that has it, where v0.9.0 refused the block. A block still with
+ *   glyph 0 is refused naming its characters, their runs' scripts and
+ *   codepoints (at most 8, then a count), and only when no font in the list
+ *   maps them; a glyph 0 for a character a font maps has its own message.
+ *   Every pack with glyph runs gets a new manifest (the layout line lists
+ *   three patch hashes and ylay 0.2.0) and pack ID; its entries are
+ *   byte-identical.
+ *
  *   v0.7.0 (2026-10-22): the definition's canonical bytes and its lookups
  *   (docs/pack.md 16). An experiment entry that is a definition ("format":
  *   "ysp-experiment") is stored as ysp/json.h's canonical form with one
@@ -140,7 +151,7 @@
 extern "C" {
 #endif
 
-#define YPT_VERSION_STRING "0.9.0"
+#define YPT_VERSION_STRING "0.10.0"
 
 typedef struct ypt_options {
     const char* sources;   /* the sources' folder; NULL: the description's folder */

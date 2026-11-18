@@ -23,7 +23,7 @@ command. CI runs it with a tarball cache keyed on the manifest. Decision record:
 
 | Directory | Upstream | Pin | License files kept | Local patches |
 |---|---|---|---|---|
-| `skribidi/` | https://github.com/memononen/skribidi | `dee63d6ba76aeddd49dea6d1b2508cf9aa391f46` (2026-08-17) | `LICENSE` (MIT) | `patches/skribidi-0001-bidi-run-merge.patch`, then `patches/skribidi-0002-l1-trailing-whitespace.patch` |
+| `skribidi/` | https://github.com/memononen/skribidi | `dee63d6ba76aeddd49dea6d1b2508cf9aa391f46` (2026-08-17) | `LICENSE` (MIT) | `patches/skribidi-0001-bidi-run-merge.patch`, `patches/skribidi-0002-l1-trailing-whitespace.patch`, `patches/skribidi-0003-font-fallback.patch`, in that order |
 | `harfbuzz/` | https://github.com/harfbuzz/harfbuzz | tag `14.6.0`, `c7a7457b7385f33178e8cf87615ca077a810bbe7` | `COPYING` (Old MIT), `AUTHORS`, `src/ms-use/COPYING` (MIT; the USE table is generated from its data) | none |
 | `sheenbidi/` | https://github.com/Tehreer/SheenBidi | `83f77108a2873600283f6da4b326a2dca7a3a7a6` (2025-06-06) | `LICENSE` (Apache-2.0) | none |
 | `libunibreak/` | https://github.com/adah1972/libunibreak | tag `libunibreak_6_1`, `304585d8e2d63187507368d612c3d5fff1486368` | `LICENCE` (zlib), `AUTHORS` | none |
@@ -45,12 +45,12 @@ command. CI runs it with a tarball cache keyed on the manifest. Decision record:
 
 Kept: the license files above, and the include closure of the sources that
 `CMakeLists.txt` here compiles (gcc's `-MM` output; MSVC's `/showIncludes`
-gives the same HarfBuzz list). 463 files, 7719645 bytes:
+gives the same HarfBuzz list). 463 files, 7725840 bytes:
 
 | Directory | Files | Bytes | Kept |
 |---|---|---|---|
 | `harfbuzz/` | 332 | 5167534 | `src/harfbuzz.cc` and the 328 `src/*.h`, `*.hh`, `*.cc` and `src/OT/` files it includes |
-| `skribidi/` | 33 | 896122 | 11 `src/*.c` (layout, editor, rich text and what they need), `emoji_presentation_scanner.c` (included by `skb_common.c`), their internal headers, 12 of 15 `include/skribidi/*.h` |
+| `skribidi/` | 33 | 902317 | 11 `src/*.c` (layout, editor, rich text and what they need), `emoji_presentation_scanner.c` (included by `skb_common.c`), their internal headers, 12 of 15 `include/skribidi/*.h` |
 | `libunibreak/` | 27 | 760171 | the 25 `src/` files of its `Makefile.gcc` build |
 | `sheenbidi/` | 63 | 609024 | `Source/` and `Headers/SheenBidi/` as `SheenBidi.c` includes them |
 | `budouxc/` | 8 | 286794 | `src/budoux.c`, `src/model_*.h`, `include/budoux.h` |
@@ -78,7 +78,8 @@ particular:
 
 ## The patches
 
-Both change `src/skb_layout.c` and apply in this order:
+All three change `src/skb_layout.c`, and 0003 also `src/skb_font_collection.c`
+and `include/skribidi/skb_font_collection.h`. They apply in this order:
 
 1. `patches/skribidi-0001-bidi-run-merge.patch` changes the merge
    condition in `skb__line_append_shaping_run()`: runs merge only in LTR
@@ -91,6 +92,12 @@ Both change `src/skb_layout.c` and apply in this order:
    whitespace out of the fit in either direction. SHA-256
    `36ce7aec18d9f2b1256ee4374522ef36e87b6850be8bab4ba0bd720c162fb1b1`.
    Why: docs/layout.md, "Known issues" and "The patches".
+3. `patches/skribidi-0003-font-fallback.patch` lets `skb__itemize()` take
+   a codepoint that none of the fonts of its run's script has from the
+   first font of the collection that has its grapheme cluster (new
+   `skb_font_collection_match_fallback_fonts()`). SHA-256
+   `bf6296af91c73737b18637e57f86f95fa443fad83848013cb427a5f47a2ca225`.
+   Why: docs/layout.md, "Patch 0003: font fallback past the script".
 
 The tree here holds the patched source; the script applies the patches,
 in order, to a fresh download.
@@ -108,7 +115,8 @@ uv run --no-project python tools/vendor_layout.py --cache DIR  # keep the tarbal
 
 Verify compares every file with the download and with `MANIFEST.sha256`,
 and reports a file here that the manifest does not list. On 2026-10-07 it
-reported `ok: 463 files, 7719645 bytes` (both patches applied).
+reported `ok: 463 files, 7719645 bytes` (both patches applied); on
+2026-11-18, with the third, `ok: 463 files, 7725840 bytes`.
 
 `.gitattributes` here turns off line-ending conversion, so a Windows
 checkout with `core.autocrlf=true` keeps the files as upstream has them.
@@ -118,7 +126,7 @@ checkout with `core.autocrlf=true` keeps the files as upstream has them.
 1. Change the commit in `PINS` in `tools/vendor_layout.py` and in
    `pack/layout.c`, and here.
 2. `uv run --no-project python tools/vendor_layout.py --extract DIR`: the
-   whole upstream trees, Skribidi patched (the patch must still apply).
+   whole upstream trees, Skribidi patched (the patches must still apply).
 3. `uv run --no-project python tools/vendor_layout.py --closure DIR > list.txt`
    (needs gcc and g++ on PATH): the file list.
 4. `uv run --no-project python tools/vendor_layout.py --write --list list.txt`:
@@ -127,6 +135,20 @@ checkout with `core.autocrlf=true` keeps the files as upstream has them.
    `tests/layout/corpus_ref.txt` only if Chromium's version is the reason.
    Every difference in glyph ids, order or positions goes in
    docs/layout.md (policy point 4).
+
+## Add a patch
+
+1. Make the change in `skribidi/` here (the earlier patches applied) and
+   write it as `patches/skribidi-NNNN-name.patch`: a git-style diff with
+   `a/` and `b/` paths relative to `skribidi/`, LF line endings, and a
+   header that says what it fixes and which patches it applies after.
+2. Add the file name to `PATCHES` in `tools/vendor_layout.py` and to the
+   `foreach` in `CMakeLists.txt` here, in the order they apply.
+3. Put the new SHA-256 of each file it changes in `MANIFEST.sha256`.
+4. `uv run --no-project python tools/vendor_layout.py`: the patches must
+   apply to a fresh download and give the tree here (`ok`).
+5. Configure again (CMake hashes the patches at configure time), build,
+   and run `test_layout`; the logged patch field lists one hash more.
 
 ## lodepng, for the pack tool
 

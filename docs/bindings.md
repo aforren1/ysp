@@ -724,7 +724,11 @@ v0.8.1), and `ysp-audio` is 0.7.2, the header's. The adaptive MEX
 functions and `ysp_color` have no number of their own: `'version'`
 returns the header's.
 
-`ysp-vis` is 0.19.0.1 (2026-11-11: `ysp/gfx.h` 0.20.0, `YGFX_CM`, which
+`ysp-vis` is 0.19.0.3 (2026-11-18: pack/layout 0.2.0 and Skribidi patch
+0003, font fallback past the script, linked into the binding's text: a
+digit or punctuation mark in Hebrew or Arabic text comes from the next font
+of the list that has it, where it drew glyph 0. 0.19.0.2 was `ysp/gfx.h`
+0.20.1, the uniform block size by `glGetInteger64v`. 0.19.0.1 was 2026-11-11: `ysp/gfx.h` 0.20.0, `YGFX_CM`, which
 the binding's `units` option does not take yet. 0.19.0 was 2026-11-06: `ysp/screen.h` 0.19.0, Linux key
 tiers by stamp, which the binding does not use; `ysp/gfx.h` 0.19.0, the
 shape attribute `trim_set`, with which trim (0, 0) draws nothing; a gfx
@@ -739,7 +743,13 @@ Linux X11, with the open options `backend="glx_oml"`, `x_display` and
 no change to the binding's calls): one distribution for three headers,
 so its version tracks `ysp/screen.h`'s, and a release for a change of
 `ysp/gfx.h` or `ysp/video.h` alone, or of the binding alone, adds the
-fourth number ([ysp-vis](#display-stimuli-movies-ysp-vis)); 0.10.1.1 was
+fourth number ([ysp-vis](#display-stimuli-movies-ysp-vis)). The binding
+links pack/layout and the vendored layout stack, so a change of either
+(a new `third_party/patches/` file or pin) changes what it draws and adds
+the fourth number too; `tools/vendor_vis.py` then reports the layout
+libraries as stale until they are built again (0.19.0.3 was the first such
+release). The MEX files embed the same layout and kept 1.4.0: no MEX
+build or test runs on the Linux desktop. 0.10.1.1 was
 0.10.1 with phase B (the gfx and the movies), 0.10.2.1 was 0.10.2
 with phase C (the text), 0.10.4 was `ysp/screen.h` 0.10.4 with the
 CPython 3.10 floor, `ysp/gfx.h` 0.17.2 (text runs batched) and

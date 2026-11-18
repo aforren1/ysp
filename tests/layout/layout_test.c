@@ -1,7 +1,7 @@
 /* layout_test.c - checks of pack/layout (docs/layout.md, Checks).
  *
- *   1. The versions the glue logs: Skribidi's commit, the patch hash, the
- *      HarfBuzz version.
+ *   1. The versions the glue logs: Skribidi's commit, the three patch
+ *      hashes, the HarfBuzz version.
  *   2. Visual order on every platform: a TrueType font written here (a box
  *      for every ASCII, Hebrew and Arabic codepoint) and the strings that
  *      hit Skribidi's run-merge bug (docs/layout_probe.md 2.3). Each line's
@@ -25,6 +25,13 @@
  *      ylay_layout() and Skribidi's editor, each line's ink extent, and on
  *      one line, and wrapped at two widths, every selection's rectangles and
  *      every caret. All must equal Edge's (docs/layout.md).
+ *   7. Font fallback (Skribidi patch 0003), with fonts written here of one
+ *      script each: digits and punctuation in Hebrew and Arabic text come
+ *      from the Latin font in either font order, with no glyph 0, in bidi
+ *      order, on one baseline, the line with both fonts' metrics; a grapheme
+ *      cluster moves whole when a font has it, else only the codepoint; a
+ *      ZWJ stays; a character no font has is glyph 0, and
+ *      ylay_missing_chars() names it with its run's script.
  * Exit 0 on pass, 1 on a failure. YSP_FONTS_DIR overrides the font folder
  * (YLAY_TEST_FONTS, C:/Windows/Fonts by default).
  */
@@ -81,31 +88,33 @@ static const uint32_t font_ranges[][2] = {
 };
 #define N_RANGES 5
 
-static void make_font(bb* out) {
+/* A font of the ranges rg[0 .. nr - 1] (sorted, below 0xFFFF), ascender asc
+ * and descender desc (font units, desc < 0, 1000 units per em). */
+static void make_font_r(bb* out, const uint32_t (*rg)[2], uint32_t nr, int asc, int desc) {
     bb t[7];
     static const char* tags[7] = { "cmap", "glyf", "head", "hhea", "hmtx", "loca", "maxp" };
     uint32_t ng = 2, g, i, r;
     size_t dir;
     memset(t, 0, sizeof t);
-    for (r = 0; r < N_RANGES; r++) ng += font_ranges[r][1] - font_ranges[r][0] + 1;
+    for (r = 0; r < nr; r++) ng += rg[r][1] - rg[r][0] + 1;
     /* cmap: format 4, the space, the ranges, 0xFFFF */
     {
         bb* c = &t[0];
-        uint32_t nseg = N_RANGES + 2, base = 2, sr = 1, es = 0;
+        uint32_t nseg = nr + 2, base = 2, sr = 1, es = 0;
         while (sr * 2 <= nseg) { sr *= 2; es++; }
         b16(c, 0); b16(c, 1); b16(c, 3); b16(c, 1); b32(c, 12);
         b16(c, 4); b16(c, 16 + 8 * nseg); b16(c, 0);
         b16(c, 2 * nseg); b16(c, 2 * sr); b16(c, es); b16(c, 2 * nseg - 2 * sr);
         b16(c, 0x20);
-        for (r = 0; r < N_RANGES; r++) b16(c, font_ranges[r][1]);
+        for (r = 0; r < nr; r++) b16(c, rg[r][1]);
         b16(c, 0xffff); b16(c, 0);
         b16(c, 0x20);
-        for (r = 0; r < N_RANGES; r++) b16(c, font_ranges[r][0]);
+        for (r = 0; r < nr; r++) b16(c, rg[r][0]);
         b16(c, 0xffff);
         b16(c, (1 - 0x20) & 0xffff);
-        for (r = 0; r < N_RANGES; r++) {
-            b16(c, (base - font_ranges[r][0]) & 0xffff);
-            base += font_ranges[r][1] - font_ranges[r][0] + 1;
+        for (r = 0; r < nr; r++) {
+            b16(c, (base - rg[r][0]) & 0xffff);
+            base += rg[r][1] - rg[r][0] + 1;
         }
         b16(c, 1);
         for (i = 0; i < nseg; i++) b16(c, 0);
@@ -133,8 +142,9 @@ static void make_font(bb* out) {
     for (i = 0; i < 54; i++) b8(&t[2], 0);
     t[2].d[18] = 1000 >> 8; t[2].d[19] = 1000 & 255; t[2].d[51] = 1;
     for (i = 0; i < 36; i++) b8(&t[3], 0);
-    t[3].d[4] = 0x03; t[3].d[5] = 0x20;                 /* ascender 800  */
-    t[3].d[6] = 0xff; t[3].d[7] = 0x38;                 /* descender -200 */
+    t[3].d[1] = 1;                                      /* version 1.0: HarfBuzz reads no metrics from another */
+    t[3].d[4] = (uint8_t)((uint32_t)asc >> 8); t[3].d[5] = (uint8_t)asc;
+    t[3].d[6] = (uint8_t)((uint32_t)desc >> 8); t[3].d[7] = (uint8_t)desc;
     t[3].d[34] = (uint8_t)(ng >> 8); t[3].d[35] = (uint8_t)ng;
     for (g = 0; g < ng; g++) { b16(&t[4], 500); b16(&t[4], g >= 2 ? 50 : 0); }
     b32(&t[6], 0x00005000); b16(&t[6], ng);
@@ -159,6 +169,8 @@ static void make_font(bb* out) {
     }
     bpad4(out);
 }
+
+static void make_font(bb* out) { make_font_r(out, font_ranges, N_RANGES, 800, -200); }
 
 /* --- visual order ------------------------------------------------------------- */
 
@@ -280,6 +292,250 @@ static int n_order_cases(order_case* oc) {
     oc[2] = (order_case){ "caret string", S3, YLAY_DIR_LTR, 4,
         { { 0, 4, 0 }, { n123, n123 + 3, 0 }, { 4, n123, 1 }, { n123 + 3, nend, 0 } } };
     return 3;
+}
+
+/* --- font fallback ------------------------------------------------------------ */
+
+/* Fonts written here, each with one script or none, so the run's script
+ * picks one font and the fallback must find the others. QUIRK has the
+ * ASCII numerals, the combining marks and Hebrew, but no Hebrew script for
+ * Skribidi: each of its ranges starts and ends with characters of no
+ * script or of Common or Inherited (U+0590 and U+05FF are unassigned). */
+static const uint32_t fr_he[][2]     = { { 0x05b0, 0x05ea } };
+static const uint32_t fr_hel[][2]    = { { 0x05d0, 0x05ea } };
+static const uint32_t fr_la[][2]     = { { 0x21, 0x3f }, { 0x41, 0x5f }, { 0x61, 0x7e } };
+static const uint32_t fr_ar[][2]     = { { 0x0600, 0x06ff } };
+static const uint32_t fr_acute[][2]  = { { 0x0300, 0x036f } };
+static const uint32_t fr_lacute[][2] = { { 0x21, 0x3f }, { 0x41, 0x5f }, { 0x61, 0x7e }, { 0x0300, 0x036f } };
+static const uint32_t fr_quirk[][2]  = { { 0x30, 0x39 }, { 0x0300, 0x036f }, { 0x0590, 0x05ff } };
+static const uint32_t fr_lazw[][2]   = { { 0x21, 0x3f }, { 0x41, 0x5f }, { 0x61, 0x7e }, { 0x200c, 0x200d } };
+
+typedef struct fb_font { const char* name; const uint32_t (*rg)[2]; uint32_t nr; int asc, desc; } fb_font;
+enum { FB_HE, FB_HEL, FB_LA, FB_AR, FB_ACUTE, FB_LACUTE, FB_QUIRK, FB_LAZW, FB_N };
+static const fb_font fb_fonts[FB_N] = {
+    { "he", fr_he, 1, 800, -200 }, { "hel", fr_hel, 1, 800, -200 },
+    /* the Latin fonts are taller, so a line's metrics show which fonts it used */
+    { "la", fr_la, 3, 900, -300 }, { "ar", fr_ar, 1, 800, -200 }, { "acute", fr_acute, 1, 800, -200 },
+    { "lacute", fr_lacute, 4, 900, -300 }, { "quirk", fr_quirk, 3, 800, -200 }, { "lazw", fr_lazw, 4, 900, -300 },
+};
+
+/* The glyph of cp in a written font: the space is 1, the ranges count from 2. */
+static uint32_t fb_gid(int font, uint32_t cp) {
+    const fb_font* f = &fb_fonts[font];
+    uint32_t r, g = 2;
+    if (cp == ' ') return 1;
+    for (r = 0; r < f->nr; r++) {
+        if (cp >= f->rg[r][0] && cp <= f->rg[r][1]) return g + cp - f->rg[r][0];
+        g += f->rg[r][1] - f->rg[r][0] + 1;
+    }
+    return 0;
+}
+
+/* Lays text out with the fonts list[0 .. n - 1] (indexes into fb_fonts), in
+ * that order, into b; font_of[k] is the fb_fonts index of item k's font. */
+static int fb_layout(yol_ctx* ol, bb* fonts, const int* list, int n, const char* text, ylay_lib** L, ylay_block* b, int* font_of) {
+    int i;
+    uint32_t r, k;
+    if (ylay_create(L, &(ylay_desc){ .ol = ol }) != YLAY_OK) return -1;
+    for (i = 0; i < n; i++)
+        if (ylay_add_font(*L, fonts[list[i]].d, fonts[list[i]].n, 0, fb_fonts[list[i]].name) != i) return -1;
+    if (ylay_layout(*L, text, -1, &(ylay_style){ .size = 100 }, NULL, 0, b) != YLAY_OK) return -1;
+    for (r = 0; r < b->n_runs; r++)
+        for (k = b->runs[r].first; k < b->runs[r].first + b->runs[r].n && k < 512; k++) font_of[k] = list[b->runs[r].font];
+    return 0;
+}
+
+#define HE_SHALOM "\xd7\xa9\xd7\x9c\xd7\x95\xd7\x9d"
+#define AR_MARHABA_ "\xd9\x85\xd8\xb1\xd8\xad\xd8\xa8\xd8\xa7"
+
+static void fallback_checks(yol_ctx* ol) {
+    bb fonts[FB_N];
+    ylay_lib* L = NULL;
+    ylay_block b;
+    int font_of[512], f, t, o;
+    uint32_t cps[512], k;
+    memset(&b, 0, sizeof b);
+    for (f = 0; f < FB_N; f++) {
+        memset(&fonts[f], 0, sizeof fonts[f]);
+        make_font_r(&fonts[f], fb_fonts[f].rg, fb_fonts[f].nr, fb_fonts[f].asc, fb_fonts[f].desc);
+    }
+
+    /* Digits and punctuation in Hebrew and Arabic text, both font orders: the
+     * letters (and U+060C) from the script's font, the digits and Latin
+     * punctuation from the Latin font, the spaces from the script's font (the
+     * run's font keeps what it has), no glyph 0, the bidi order kept, and one
+     * baseline whose line has the taller Latin font's metrics. */
+    {
+        static const struct { const char* text; int script_font; int dir_rtl; } cases[] = {
+            { HE_SHALOM " 123", FB_HE, 1 }, { "123 " HE_SHALOM, FB_HE, 1 }, { HE_SHALOM " 12:30, 4.5%", FB_HE, 1 },
+            { AR_MARHABA_ " 123\xd8\x8c 4.5%", FB_AR, 1 },
+        };
+        for (t = 0; t < (int)(sizeof cases / sizeof cases[0]); t++)
+            for (o = 0; o < 2; o++) {
+                int list[2], ncp, bad = 0;
+                list[o] = cases[t].script_font;
+                list[1 - o] = FB_LA;
+                ncp = utf32(cases[t].text, cps, 512);
+                if (fb_layout(ol, fonts, list, 2, cases[t].text, &L, &b, font_of) < 0) { CHECK(0, "fallback %d/%d: %s", t, o, L ? ylay_error(L) : ""); }
+                else {
+                    CHECK(b.n_missing == 0, "fallback '%s' fonts [%s, %s]: %u glyphs 0", cases[t].text, fb_fonts[list[0]].name, fb_fonts[list[1]].name, b.n_missing);
+                    CHECK(b.n_lines == 1 && b.dir == (cases[t].dir_rtl ? YLAY_DIR_RTL : YLAY_DIR_LTR), "fallback '%s': %u lines, dir %d", cases[t].text, b.n_lines, b.dir);
+                    for (k = 0; k < b.n_items; k++) {
+                        uint32_t c = b.cluster[k] < (uint32_t)ncp ? cps[b.cluster[k]] : 0;
+                        int want = (c >= 0x21 && c <= 0x7e) ? FB_LA : cases[t].script_font;
+                        if (font_of[k] != want || (uint32_t)b.items[k].glyph != fb_gid(want, c) || b.items[k].y != b.items[0].y) {
+                            if (!bad) printf("  fallback '%s' fonts [%s, %s]: U+%04X in %s glyph %g at y %g, want %s glyph %u at y %g\n", cases[t].text,
+                                             fb_fonts[list[0]].name, fb_fonts[list[1]].name, (unsigned)c, fb_fonts[font_of[k]].name,
+                                             (double)b.items[k].glyph, (double)b.items[k].y, fb_fonts[want].name, (unsigned)fb_gid(want, c), (double)b.items[0].y);
+                            bad++;
+                        }
+                    }
+                    CHECK(bad == 0, "fallback '%s' fonts [%s, %s]: %d items in the wrong font, glyph or baseline", cases[t].text,
+                          fb_fonts[list[0]].name, fb_fonts[list[1]].name, bad);
+                    CHECK(b.n_lines == 1 && fabsf(b.lines[0].ascent - 90.0f) < 1e-3f && fabsf(b.lines[0].descent - 30.0f) < 1e-3f,
+                          "fallback '%s': line ascent %g, descent %g, want the Latin font's 90, 30", cases[t].text,
+                          (double)b.lines[0].ascent, (double)b.lines[0].descent);
+                }
+                ylay_destroy(L);
+                L = NULL;
+            }
+        /* the bidi order of the first two, as the order checks above do */
+        {
+            int n1 = cp_len(HE_SHALOM " 123"), list[2] = { FB_HE, FB_LA };
+            order_case oc1 = { "fallback, Hebrew then number", HE_SHALOM " 123", YLAY_DIR_AUTO, 2, { { 5, n1, 0 }, { 0, 5, 1 } } };
+            order_case oc2 = { "fallback, number then Hebrew", "123 " HE_SHALOM, YLAY_DIR_AUTO, 2, { { 3, n1, 1 }, { 0, 3, 0 } } };
+            if (fb_layout(ol, fonts, list, 2, oc1.text, &L, &b, font_of) == 0) CHECK(check_order(&oc1, &b, 1) == 0, "%s: out of bidi order", oc1.name);
+            ylay_destroy(L);
+            if (fb_layout(ol, fonts, list, 2, oc2.text, &L, &b, font_of) == 0) CHECK(check_order(&oc2, &b, 1) == 0, "%s: out of bidi order", oc2.name);
+            ylay_destroy(L);
+            L = NULL;
+        }
+        /* text the script's font covers keeps its own metrics: no fallback font
+         * enters the line */
+        {
+            int list[2] = { FB_HE, FB_LA };
+            if (fb_layout(ol, fonts, list, 2, HE_SHALOM " " HE_SHALOM, &L, &b, font_of) == 0)
+                CHECK(b.n_runs == 1 && font_of[0] == FB_HE && fabsf(b.lines[0].ascent - 80.0f) < 1e-3f,
+                      "Hebrew alone: %u runs, ascent %g (want 1 run in he, 80)", b.n_runs, (double)b.lines[0].ascent);
+            ylay_destroy(L);
+            L = NULL;
+        }
+    }
+
+    /* The grapheme cluster is the unit. */
+    {
+        /* a numeral and an acute: neither in the Hebrew font; the Latin font
+         * has the numeral, lacute both, so both come from lacute; the 6 after
+         * them from la again, the first font that has it */
+        int list[3] = { FB_HE, FB_LA, FB_LACUTE };
+        const char* text = HE_SHALOM " 5\xcc\x81" "6";
+        int n = 0;
+        if (fb_layout(ol, fonts, list, 3, text, &L, &b, font_of) == 0) {
+            for (k = 0; k < b.n_items; k++) {
+                if (b.cluster[k] == 5) { n++; CHECK(font_of[k] == FB_LACUTE, "cluster 5+acute: item %u in %s, want lacute", k, fb_fonts[font_of[k]].name); }
+                if (b.cluster[k] == 7) CHECK(font_of[k] == FB_LA, "the 6 after 5+acute: in %s, want la", fb_fonts[font_of[k]].name);
+            }
+            CHECK(n == 2 && b.n_missing == 0, "cluster 5+acute: %d items, %u glyphs 0 (want 2, 0)", n, b.n_missing);
+        } else CHECK(0, "cluster 5+acute: %s", L ? ylay_error(L) : "");
+        ylay_destroy(L);
+        L = NULL;
+    }
+    {
+        /* a numeral and a Hebrew point: he has the point, la the numeral,
+         * quirk both; the point stays with its base in quirk, though the
+         * run's font has it */
+        int list[3] = { FB_HE, FB_LA, FB_QUIRK };
+        const char* text = HE_SHALOM " 5\xd6\xb4";
+        int n = 0;
+        if (fb_layout(ol, fonts, list, 3, text, &L, &b, font_of) == 0) {
+            for (k = 0; k < b.n_items; k++)
+                if (b.cluster[k] >= 5) { n++; CHECK(font_of[k] == FB_QUIRK, "cluster 5+hiriq: item %u in %s, want quirk", k, fb_fonts[font_of[k]].name); }
+            CHECK(n == 2 && b.n_missing == 0, "cluster 5+hiriq: %d items, %u glyphs 0 (want 2, 0)", n, b.n_missing);
+        } else CHECK(0, "cluster 5+hiriq: %s", L ? ylay_error(L) : "");
+        ylay_destroy(L);
+        L = NULL;
+    }
+    {
+        /* alef and an acute: the letter in hel, which lacks the acute; quirk
+         * has both, so the cluster moves to it whole; the bet after it goes
+         * back to hel */
+        int list[2] = { FB_HEL, FB_QUIRK }, n0 = 0;
+        const char* text = "\xd7\x90\xcc\x81\xd7\x91";
+        if (fb_layout(ol, fonts, list, 2, text, &L, &b, font_of) == 0) {
+            for (k = 0; k < b.n_items; k++) {
+                int want = b.cluster[k] < 2 ? FB_QUIRK : FB_HEL;
+                if (b.cluster[k] < 2) n0++;
+                CHECK(font_of[k] == want, "cluster alef+acute: item %u (cluster %u) in %s, want %s", k, b.cluster[k], fb_fonts[font_of[k]].name, fb_fonts[want].name);
+            }
+            CHECK(n0 == 2 && b.n_missing == 0, "cluster alef+acute: %d items of the cluster, %u glyphs 0 (want 2, 0)", n0, b.n_missing);
+        } else CHECK(0, "cluster alef+acute: %s", L ? ylay_error(L) : "");
+        ylay_destroy(L);
+        L = NULL;
+    }
+    {
+        /* no font has alef and the acute together: the acute alone from the
+         * first font that has it, the letters in hel */
+        int list[3] = { FB_HEL, FB_LA, FB_ACUTE };
+        const char* text = "\xd7\x90\xcc\x81\xd7\x91";
+        if (fb_layout(ol, fonts, list, 3, text, &L, &b, font_of) == 0) {
+            for (k = 0; k < b.n_items; k++) {
+                int want = b.cluster[k] == 1 ? FB_ACUTE : FB_HEL;
+                CHECK(font_of[k] == want, "split alef+acute: item %u (cluster %u) in %s, want %s", k, b.cluster[k], fb_fonts[font_of[k]].name, fb_fonts[want].name);
+            }
+            CHECK(b.n_items == 3 && b.n_missing == 0, "split alef+acute: %u items, %u glyphs 0 (want 3, 0)", b.n_items, b.n_missing);
+        } else CHECK(0, "split alef+acute: %s", L ? ylay_error(L) : "");
+        ylay_destroy(L);
+        L = NULL;
+    }
+    {
+        /* a ZWJ between Arabic letters: the Arabic font lacks it and lazw has
+         * it, but it needs no glyph (HarfBuzz hides it), so it stays and the
+         * run is not split */
+        int list[2] = { FB_AR, FB_LAZW };
+        const char* text = "\xd9\x84\xe2\x80\x8d\xd9\x84";
+        if (fb_layout(ol, fonts, list, 2, text, &L, &b, font_of) == 0) {
+            int others = 0;
+            for (k = 0; k < b.n_items; k++) others += font_of[k] != FB_AR;
+            CHECK(b.n_runs == 1 && others == 0 && b.n_missing == 0, "ZWJ: %u runs, %d items not in ar, %u glyphs 0 (want 1, 0, 0)", b.n_runs, others, b.n_missing);
+        } else CHECK(0, "ZWJ: %s", L ? ylay_error(L) : "");
+        ylay_destroy(L);
+        L = NULL;
+    }
+
+    /* What no font has: glyph 0, named with its run's script. */
+    {
+        static const struct { const char* text; uint32_t cp; const char* script; } cases[] = {
+            { HE_SHALOM " \xe2\x98\x83 12", 0x2603, "Hebr" },   /* a snowman in Hebrew text */
+            { "abc \xe2\x98\x83", 0x2603, "Latn" },
+            { "a\xcc\x81", 0x0301, "Latn" },                     /* the acute, not its base */
+        };
+        int list[2] = { FB_HE, FB_LA };
+        for (t = 0; t < (int)(sizeof cases / sizeof cases[0]); t++) {
+            ylay_missing m[4];
+            int nm;
+            if (fb_layout(ol, fonts, list, 2, cases[t].text, &L, &b, font_of) < 0) { CHECK(0, "unmapped %d: %s", t, L ? ylay_error(L) : ""); }
+            else {
+                nm = ylay_missing_chars(L, m, 4);
+                CHECK(b.n_missing == 1 && nm == 1 && m[0].codepoint == cases[t].cp && !strcmp(m[0].script, cases[t].script) && m[0].in_a_font == 0,
+                      "unmapped '%s': %u glyphs 0, %d characters, first U+%04X in %s (in a font %d); want 1, 1, U+%04X in %s", cases[t].text,
+                      b.n_missing, nm, nm > 0 ? (unsigned)m[0].codepoint : 0u, nm > 0 ? m[0].script : "-", nm > 0 ? m[0].in_a_font : -1,
+                      (unsigned)cases[t].cp, cases[t].script);
+            }
+            ylay_destroy(L);
+            L = NULL;
+        }
+        /* the list empties with the next call on the same library */
+        if (fb_layout(ol, fonts, list, 2, "abc \xe2\x98\x83", &L, &b, font_of) == 0) {
+            CHECK(ylay_missing_chars(L, NULL, 0) == 1, "the snowman is not listed");
+            CHECK(ylay_layout(L, "abc", -1, &(ylay_style){ .size = 100 }, NULL, 0, &b) == YLAY_OK && ylay_missing_chars(L, NULL, 0) == 0,
+                  "the missing list was not emptied by a layout without glyph 0");
+        }
+        ylay_destroy(L);
+        L = NULL;
+    }
+    ylay_block_free(&b);
+    for (f = 0; f < FB_N; f++) free(fonts[f].d);
+    printf("fallback: %d checks so far\n", checks);
 }
 
 /* --- the corpus against Chromium ------------------------------------------- */
@@ -908,9 +1164,9 @@ int main(void) {
     /* 1. versions */
     printf("skribidi %s, patch %s, harfbuzz %s\n", v->skribidi, v->skribidi_patch, v->harfbuzz);
     CHECK(strlen(v->skribidi) == 40, "Skribidi's commit is not set: %s", v->skribidi);
-    CHECK(strlen(v->skribidi_patch) == 2 * (7 + 64) + 1 && strncmp(v->skribidi_patch, "sha256:", 7) == 0 &&
-          strncmp(v->skribidi_patch + 72, "sha256:", 7) == 0,
-          "the two patch hashes are not set, or the tree differs from the manifest: %s", v->skribidi_patch);
+    CHECK(strlen(v->skribidi_patch) == 3 * (7 + 64) + 2 && strncmp(v->skribidi_patch, "sha256:", 7) == 0 &&
+          strncmp(v->skribidi_patch + 72, "sha256:", 7) == 0 && strncmp(v->skribidi_patch + 144, "sha256:", 7) == 0,
+          "the three patch hashes are not set, or the tree differs from the manifest: %s", v->skribidi_patch);
     CHECK(strcmp(v->harfbuzz, "14.6.0") == 0, "HarfBuzz is %s, the pin is 14.6.0", v->harfbuzz);
 
     /* 2. visual order with the written font */
@@ -978,6 +1234,9 @@ int main(void) {
     ylay_block_free(&b);
     ylay_destroy(L);
     free(font.d);
+
+    /* 7. font fallback past the script */
+    fallback_checks(&ol);
 
     /* 3. the corpus */
     corpus(&ol);

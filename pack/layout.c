@@ -136,6 +136,7 @@ struct ylay_lib {
     skb_attribute_t*            cattrs;  uint32_t cap_cattrs;
     float*                      ccolor;
     ylay__key*                keys;    uint32_t cap_keys;
+    ylay_missing*             miss;    uint32_t n_miss, cap_miss;   /* the last call's */
     ylay_versions             versions;
     char                        error[256];
 };
@@ -201,7 +202,7 @@ void ylay_destroy(ylay_lib* L) {
     if (L->fc) skb_font_collection_destroy(L->fc);
     if (L->ac) skb_attribute_collection_destroy(L->ac);
     if (L->temp) skb_temp_alloc_destroy(L->temp);
-    free(L->cruns); free(L->cattrs); free(L->ccolor); free(L->keys);
+    free(L->cruns); free(L->cattrs); free(L->ccolor); free(L->keys); free(L->miss);
     free(L);
 }
 
@@ -319,6 +320,57 @@ static int ylay__build(ylay_lib* L, ylay_block* b) {
     return YLAY_OK;
 }
 
+static int ylay__mapped(const ylay_lib* L, uint32_t cp) {
+    int f;
+    for (f = 0; f < L->n_fonts; f++)
+        if (skb_font_collection_font_has_codepoint(L->fc, L->fonts[f].handle, cp)) return 1;
+    return 0;
+}
+
+static int ylay__add_missing(ylay_lib* L, uint32_t cp, uint32_t at, uint32_t tag, int in_a_font) {
+    ylay_missing* m;
+    uint32_t k;
+    for (k = 0; k < L->n_miss; k++)
+        if (L->miss[k].codepoint == cp) {
+            if (at < L->miss[k].offset) {   /* RTL runs give items right to left */
+                L->miss[k].offset = at;
+                L->miss[k].script[0] = (char)(tag >> 24); L->miss[k].script[1] = (char)(tag >> 16);
+                L->miss[k].script[2] = (char)(tag >> 8);  L->miss[k].script[3] = (char)tag;
+            }
+            return 1;
+        }
+    if (!ylay__grow((void**)&L->miss, &L->cap_miss, L->n_miss + 1, sizeof *L->miss)) return 0;
+    m = &L->miss[L->n_miss++];
+    m->codepoint = cp;
+    m->offset = at;
+    m->script[0] = (char)(tag >> 24); m->script[1] = (char)(tag >> 16);
+    m->script[2] = (char)(tag >> 8);  m->script[3] = (char)tag; m->script[4] = 0;
+    m->in_a_font = in_a_font;
+    return 1;
+}
+
+static int ylay__by_offset(const void* a, const void* b) {
+    uint32_t x = ((const ylay_missing*)a)->offset, y = ((const ylay_missing*)b)->offset;
+    return x < y ? -1 : x > y;
+}
+
+/* Records the characters of a glyph-0 cluster that no font of L maps; when
+ * every one is mapped (a font maps it to glyph 0, or shaping gave glyph 0),
+ * the cluster's first, flagged, so a message never claims what is false. */
+static int ylay__note_missing(ylay_lib* L, const skb_layout_t* lay, const skb_layout_run_t* run, const skb_cluster_t* cl) {
+    const uint32_t* text = skb_layout_get_text(lay);
+    uint32_t tag = skb_script_to_iso15924_tag(run->script);
+    int32_t i, end = cl->text_offset + cl->text_count;
+    int any = 0;
+    for (i = cl->text_offset; i < end; i++)
+        if (!ylay__mapped(L, text[i])) {
+            any = 1;
+            if (!ylay__add_missing(L, text[i], (uint32_t)i, tag, 0)) return 0;
+        }
+    if (!any && cl->text_count > 0) return ylay__add_missing(L, text[cl->text_offset], (uint32_t)cl->text_offset, tag, 1);
+    return 1;
+}
+
 /* Appends lay's text runs to b as runs of one font and size each: a count
  * pass sizes the groups, a fill pass writes them, so every group's items are
  * contiguous for one ygfx_crun. colors: per content run, or NULL for color. */
@@ -330,8 +382,9 @@ static int ylay__convert(ylay_lib* L, const skb_layout_t* lay, float ox, float o
     const skb_layout_line_t* lines = skb_layout_get_lines(lay);
     int32_t n_runs = skb_layout_get_layout_runs_count(lay);
     int32_t n_lines = skb_layout_get_lines_count(lay);
-    uint32_t n_keys = 0, base = b->n_items, total = 0, k;
+    uint32_t n_keys = 0, base = b->n_items, total = 0, k, missing0 = b->n_missing;
     int32_t r, gi, li;
+    L->n_miss = 0;
     for (r = 0; r < n_runs; r++) {
         const skb_layout_run_t* run = &runs[r];
         int f;
@@ -391,6 +444,17 @@ static int ylay__convert(ylay_lib* L, const skb_layout_t* lay, float ox, float o
         }
     }
     b->n_items = base + total;
+    /* a second pass, only when a glyph is 0: the first stays as lean as it
+     * was (noting in it cost 1 % of a 500-codepoint layout, docs/layout.md) */
+    if (b->n_missing != missing0) {
+        for (r = 0; r < n_runs; r++) {
+            const skb_layout_run_t* run = &runs[r];
+            if (run->type != SKB_CONTENT_RUN_UTF8 && run->type != SKB_CONTENT_RUN_UTF32) continue;
+            for (gi = run->glyph_range.start; gi < run->glyph_range.end; gi++)
+                if (glyphs[gi].gid == 0 && !ylay__note_missing(L, lay, run, &clusters[glyphs[gi].cluster_idx])) return YLAY_ERR_NOMEM;
+        }
+        if (L->n_miss > 1) qsort(L->miss, L->n_miss, sizeof *L->miss, ylay__by_offset);
+    }
     b->n_runs += n_keys;
     if (!ylay__grow((void**)&b->lines, &b->cap_lines, b->n_lines + (uint32_t)n_lines, sizeof *b->lines)) return YLAY_ERR_NOMEM;
     for (li = 0; li < n_lines; li++) {
@@ -537,6 +601,13 @@ int ylay_stamp(const ylay_lib* L, const ylay_block* b, char* buf, size_t cap) {
         }
     }
     return (int)need;
+}
+
+int ylay_missing_chars(const ylay_lib* L, ylay_missing* out, int cap) {
+    int i;
+    if (!L || cap < 0 || (cap && !out)) return YLAY_ERR_ARG;
+    for (i = 0; i < cap && (uint32_t)i < L->n_miss; i++) out[i] = L->miss[i];
+    return (int)L->n_miss;
 }
 
 struct skb_font_collection_t* ylay_skb_fonts(ylay_lib* L) { return L ? L->fc : NULL; }

@@ -9,13 +9,14 @@
 Each component is downloaded as a GitHub tarball by full commit SHA (a git
 checkout of HarfBuzz fails on Windows: some test file names are not legal
 there). Only the files listed in third_party/MANIFEST.sha256 are taken; the
-Skribidi patch is applied with `git apply`; then every file is compared byte
-for byte with third_party/ and with its SHA-256 in the manifest.
+Skribidi patches (PATCHES, in order) are applied with `git apply`; then every
+file is compared byte for byte with third_party/ and with its SHA-256 in the
+manifest.
 
 --extract writes every pin's whole tree (Skribidi patched), to work out the
 file list of a new pin; --list FILE then takes the paths from FILE (one per
 line) instead of the manifest and writes a new manifest. third_party/README.md
-gives the procedure. Standard library only.
+gives the procedures (update a pin, add a patch). Standard library only.
 """
 import argparse
 import hashlib
@@ -32,7 +33,8 @@ import urllib.request
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TP = os.path.join(ROOT, "third_party")
 MANIFEST = os.path.join(TP, "MANIFEST.sha256")
-PATCHES = ["skribidi-0001-bidi-run-merge.patch", "skribidi-0002-l1-trailing-whitespace.patch"]   # in order
+PATCHES = ["skribidi-0001-bidi-run-merge.patch", "skribidi-0002-l1-trailing-whitespace.patch",
+           "skribidi-0003-font-fallback.patch"]   # in order
 
 # component directory -> (GitHub repository, full commit SHA, label)
 PINS = {

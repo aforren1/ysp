@@ -1,7 +1,7 @@
-/* ysp/layout.h - v0.1.0 - text layout for the pack tool and the player
+/* ysp/layout.h - v0.2.0 - text layout for the pack tool and the player
  *
  *   Lays out UTF-8 text with Skribidi (vendored in third_party/, pinned, with
- *   a local bidi patch) and gives glyphs as ysp/gfx.h curve-run items over
+ *   local patches) and gives glyphs as ysp/gfx.h curve-run items over
  *   ysp/outline.h curve sets built from the same font bytes. Not a single
  *   header: it links the vendored Skribidi, HarfBuzz, SheenBidi, libunibreak
  *   and budouxc (CMake option YSP_BUILD_LAYOUT). The headers in include/ysp stay
@@ -25,6 +25,16 @@
  *       ylay_stamp(L, &b, line, sizeof line);    // versions and font hashes
  *
  *   Threads: a ylay_lib is for one thread, with its yol_ctx.
+ *
+ *   v0.2.0 (2026-11-18): font fallback past the script (Skribidi patch
+ *   0003). A character that no font supporting its run's script maps, such
+ *   as a digit or punctuation in Hebrew text, now comes from the first font
+ *   in the order added that has its grapheme cluster, as browsers do;
+ *   before, it got glyph 0 from the script's font. Text whose characters
+ *   the script's fonts map lays out byte for byte as in v0.1.0.
+ *   ylay_missing_chars() names the characters of the last call's glyph-0
+ *   items and their runs' scripts. The stamp's patch field lists three
+ *   hashes.
  */
 #ifndef YSP_LAYOUT_H_INCLUDED
 #define YSP_LAYOUT_H_INCLUDED
@@ -38,7 +48,7 @@
 extern "C" {
 #endif
 
-#define YLAY_VERSION_STRING "0.1.0"
+#define YLAY_VERSION_STRING "0.2.0"
 #define YLAY_MAX_FONTS      64
 
 /* Return codes: ysp/outline.h's values for the same meaning. */
@@ -77,7 +87,10 @@ const char* ylay_error(const ylay_lib* L);
 /* Adds a font: face `face` of the bytes (a .ttc holds several). The bytes
  * stay the caller's and must outlive L. Fonts are tried in the order added:
  * for each run of one script, the fonts that support the script, in that
- * order, and the first that maps the codepoint (Skribidi's rule). Opens the
+ * order, and the first that maps the codepoint (Skribidi's rule); for a
+ * codepoint none of them maps (digits and punctuation take the script of
+ * the text around them), the first font of all that maps its grapheme
+ * cluster, else the codepoint (docs/layout.md, Font fallback). Opens the
  * face with HarfBuzz and with ysp/outline.h, hashes the bytes (SHA-256) and
  * makes an empty curve set (resolved, backward lists) whose glyphs are built
  * when a layout first uses them. Returns the font index or a code. */
@@ -147,7 +160,7 @@ typedef struct ylay_block {
     ylay_line*  lines;   uint32_t n_lines, cap_lines;
     float         w, h;          /* the laid-out box, units                        */
     int           dir;           /* the paragraph's resolved direction             */
-    uint32_t      n_missing;     /* items with glyph 0: no font has the codepoint   */
+    uint32_t      n_missing;     /* items with glyph 0 (ylay_missing_chars())      */
     uint64_t      fonts_used;    /* bit i: font i                                  */
     const ylay_versions* versions;
     double        layout_us;     /* the last call: Skribidi and the conversion     */
@@ -162,6 +175,21 @@ typedef struct ylay_block {
 int  ylay_layout(ylay_lib* L, const char* text, int n, const ylay_style* st,
                    const ylay_span* spans, int n_spans, ylay_block* b);
 void ylay_block_free(ylay_block* b);
+
+/* A character of a glyph-0 item. */
+typedef struct ylay_missing {
+    uint32_t codepoint;
+    uint32_t offset;           /* codepoint offset of its first use in the text   */
+    char     script[5];        /* ISO 15924 tag of its run's script, e.g. "Hebr"  */
+    int      in_a_font;        /* 0: no font of L maps it; 1: a font maps it, and
+                                * glyph 0 came from the font or from shaping     */
+} ylay_missing;
+
+/* The distinct characters of the last ylay_layout() or ylay_from_skb() call's
+ * glyph-0 items, in text order: for each glyph-0 cluster, the
+ * characters no font of L maps, or its first character with in_a_font set
+ * when every one is mapped. Copies up to cap into out; returns the count. */
+int  ylay_missing_chars(const ylay_lib* L, ylay_missing* out, int cap);
 
 /* One line for a log or a manifest: the versions, the patch hash, and
  * name#face=sha256 for each font b used (every font when b is NULL).

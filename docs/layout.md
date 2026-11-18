@@ -1,6 +1,8 @@
 # ysp_layout: text layout for the pack tool and the player
 
-Status: v0.1.0, 2026-10-07. The decision record is
+Status: v0.2.0, 2026-11-18 (v0.1.0, 2026-10-07: the first build; v0.2.0:
+font fallback past the script, [Patch 0003](#patch-0003-font-fallback-past-the-script)).
+The decision record is
 [layout_probe.md](layout_probe.md); this note is the manual of what was
 built on it, with the checks and the costs. The plan is
 [rig_spec.md](rig_spec.md) 5.2 (Font row) and 11 (item 6).
@@ -15,7 +17,7 @@ header. The `ysp/*.h` headers stay free of Skribidi and HarfBuzz.
 
 - Skribidi does bidi, script and font runs, shaping (HarfBuzz), line
   breaking (libunibreak, BudouX for Japanese, Chinese and Thai) and the
-  editor. It is pinned at a commit with two local patches. The sources are
+  editor. It is pinned at a commit with three local patches. The sources are
   fetched into `third_party/` by `tools/vendor_layout.py` and checked
   against `third_party/MANIFEST.sha256`; git tracks only that recipe.
 - The glue converts Skribidi's layout runs into one group of items per
@@ -66,13 +68,13 @@ three, with the same corpus result.
 
 | Component | Pin | License | Local change |
 |---|---|---|---|
-| Skribidi | `dee63d6ba76aeddd49dea6d1b2508cf9aa391f46` (2026-08-17) | MIT | `patches/skribidi-0001-bidi-run-merge.patch`, then `patches/skribidi-0002-l1-trailing-whitespace.patch` |
+| Skribidi | `dee63d6ba76aeddd49dea6d1b2508cf9aa391f46` (2026-08-17) | MIT | `patches/skribidi-0001-bidi-run-merge.patch`, `patches/skribidi-0002-l1-trailing-whitespace.patch`, `patches/skribidi-0003-font-fallback.patch`, in that order |
 | HarfBuzz | tag 14.6.0, `c7a7457b7385` (2026-10-05) | Old MIT; `src/ms-use` MIT | none |
 | SheenBidi | `83f77108a2873600283f6da4b326a2dca7a3a7a6` | Apache-2.0 | none |
 | libunibreak | tag `libunibreak_6_1`, `304585d8e2d6` | zlib | none |
 | budouxc | `a044d49afc654117fac7623fff15bec15943270c` | MIT; its models are BudouX's, Apache-2.0 | none |
 
-- 463 files, 7719645 bytes: HarfBuzz 5167534, Skribidi 896122, libunibreak
+- 463 files, 7725840 bytes: HarfBuzz 5167534, Skribidi 902317, libunibreak
   760171, SheenBidi 609024, budouxc 286794.
 - The files are the include closure of the sources `third_party/CMakeLists.txt`
   compiles (as gcc's dependency output gives it; MSVC's gives the same
@@ -89,12 +91,15 @@ three, with the same corpus result.
 
 ## The patches
 
-Two local patches, applied in this order to `src/skb_layout.c`:
+Three local patches, applied in this order. 0001 and 0002 change
+`src/skb_layout.c`; 0003 changes it, `src/skb_font_collection.c` and
+`include/skribidi/skb_font_collection.h`.
 
 | Patch | SHA-256 | What it fixes |
 |---|---|---|
 | `skribidi-0001-bidi-run-merge.patch` | `ff058faa3c16aa62ec0af21ce30e2db6eee9bce380fec3d51970ceb582164788` | `skb__line_append_shaping_run()` merged a shaping run into the previous layout run without comparing their bidi levels, and merged RTL runs (layout_probe.md 2.3). It adds the two conditions. |
 | `skribidi-0002-l1-trailing-whitespace.patch` | `36ce7aec18d9f2b1256ee4374522ef36e87b6850be8bab4ba0bd720c162fb1b1` | Unicode's rule L1 was not applied per line, so a line-end space in an RTL run of an LTR paragraph stayed inside the line (Known issues, fixed). |
+| `skribidi-0003-font-fallback.patch` | `bf6296af91c73737b18637e57f86f95fa443fad83848013cb427a5f47a2ca225` | A script run took its fonts only from the fonts that support its script, so a digit or punctuation mark in Hebrew or Arabic text got glyph 0 when the script's font lacked it, though another font in the list had it ([Patch 0003](#patch-0003-font-fallback-past-the-script)). |
 
 Patch 0002, and why it sits where it does:
 
@@ -126,7 +131,75 @@ Patch 0002, and why it sits where it does:
 CMake hashes the patches and checks the patched `skb_layout.c` against the
 manifest; a tree that differs still builds, and its logged patch field
 ends in `,tree-differs`, which the test refuses. The logged field lists
-both hashes in order: `sha256:ff058faa...,sha256:36ce7aec...`.
+the three hashes in order: `sha256:ff058faa...,sha256:36ce7aec...,sha256:bf6296af...`.
+The pack manifest's `tool.libraries.layout` line carries the same field,
+so a pack records which patches laid out its glyph runs (rig_spec 5.2).
+
+### Patch 0003: font fallback past the script
+
+Found 2026-11-18 on the Linux desktop (GCC 12) with `ypak build`. Skribidi
+splits a script run by font, but takes the candidates only from the fonts
+that support the run's script (`skb_font_collection_match_fonts()`).
+Digits and punctuation (script Common) take the script of the text next to
+them. So "שלום 123" with the fonts [Noto Sans Hebrew, Noto Sans], in either
+order, was one Hebrew run in Noto Sans Hebrew, which has no digits and none
+of `: , . %`: those characters got glyph 0, and Noto Sans, which has them,
+was never a candidate. "123" alone and "abc 123 שלום" got Noto Sans's
+digits; DejaVu Sans alone, which has Hebrew and digits, worked. The pack
+tool then refused the pack and told the author to add a font that was
+already in the list.
+
+Upstream: Skribidi's `main` is at the pin, `dee63d6` (checked 2026-11-18);
+no open pull request changes this rule. Not reported upstream; the user
+decides that.
+
+The rule the patch adds, in `skb__itemize()`:
+
+- When none of the fonts of the run's script has a codepoint, its grapheme
+  cluster comes from the first font of the family, in the order added, that
+  has every codepoint of the cluster, as browsers do; if no font has the
+  whole cluster, from the first font that has the codepoint. The new
+  `skb_font_collection_match_fallback_fonts()` lists the candidates with
+  the same style matching as `skb_font_collection_match_fonts()` (weight,
+  style, stretch), with the codepoint in place of the script as the hard
+  constraint. It does not call the font fallback callback, which is keyed
+  by script.
+- The run's font keeps everything it has: after a fallback cluster, the
+  next codepoint is checked against the script's fonts first, and a
+  codepoint they lack is looked up again, so it comes from the first font
+  that has it, not from the previous fallback font.
+- Default ignorable codepoints (ZWJ, ZWNJ, variation selectors and the rest
+  of HarfBuzz's `is_default_ignorable()` set) never fall back. HarfBuzz
+  hides them, so they need no glyph; moved to another font, a ZWJ would
+  split the Arabic run around it and break the joining. The ZWJ check of
+  `test_layout` part 7 guards this.
+- 135 added and 14 removed lines in three files, in Skribidi's style.
+
+Decisions, and why:
+
+| Question | Choice | Why |
+|---|---|---|
+| Common and Inherited only, or every missing cluster | Every cluster none of the script's fonts has | A letter the script's font lacks (a rare letter, a font made for a test) is the same fault: glyph 0 while a font in the list has it. Browsers fall back for any character. The pack tool's message can then say "no font in the list maps" and be true. Text the script's fonts cover is not touched, so the rule changes no output that had no glyph 0 |
+| The unit | The grapheme cluster, else the codepoint | A mark stays with its base: shaped in another font than its base, a mark is placed without the base. If the base is in the run's font and only a fallback font has the mark, the whole cluster moves to that font (the run is split at the cluster's start). If no font has the whole cluster, the codepoint alone moves, as Skribidi already does between two fonts of one script |
+| Where to split | At the cluster's ends, inside the script run and the bidi run | The fallback run is a shaping run like any other font split: it keeps the script run's script, direction and bidi level, so bidi reordering and the cluster map are unchanged. Digits in RTL text already have their own bidi level and run; punctuation at level 1 (", " in "שלום 12:30, 4.5%") is shaped RTL in the fallback font, so HarfBuzz mirrors what needs it |
+| Line metrics | Each run's own font, as before | Skribidi takes a line's ascender, descender and line height as the extremes of its runs' fonts. A line that uses a fallback font can be taller than the script's font alone (in the test, 90 and 30 units against 80 and 20); a line that uses none keeps its metrics. Browsers do the same for `line-height: normal`. Noto Sans and Noto Sans Hebrew have the same metrics, so the reported texts do not move |
+| Baseline | Shared | Every run sits on the layout's baseline (alphabetic by default), as before; the fallback run's baseline set is the fallback font's for the run's script |
+| Cost | A lookup only for codepoints the script's fonts lack | The lookup walks every font of the collection. The helper is kept out of line: inlined, it made the layout of text that needs no fallback 0.5 to 0.8 % slower (GCC 12, Costs) |
+
+Outputs that changed: none of text with no glyph 0. With the Linux fonts
+of this machine (Arial, DejaVu Sans, Noto Sans and the Noto fonts of each
+script, Droid Sans Fallback), the corpus and editor texts and seven more
+(numbers and punctuation in Hebrew and Arabic, a ZWJ, a ZWNJ and a
+variation selector in Arabic, an English label), each in up to nine font
+lists, at widths 0, 250 and 600: all 492 layouts that had no glyph 0 are
+byte-identical (every item's glyph, position and cluster, every line, run
+and box); of the 228 that had glyph 0, 72 have none now, and in the 156
+left no font of the list has the character (Devanagari with Arial alone,
+the Chinese of `page4` with Noto Sans Arabic and Arial, and so on). The
+harness (a dump of every block, and a comparison) ran from a scratch
+folder and is not in the repository: it needs this machine's fonts. The
+corpus against Chromium and the editing checks need the Windows fonts and
+did not run here.
 
 ## Pinning and update policy
 
@@ -160,21 +233,38 @@ The header is the reference. In short:
 | `ylay_take_new_glyphs(L, font, &glyphs)` | The glyphs built since the last call, for `ygfx_cset_add()` |
 | `ylay_from_skb(L, layout, x, y, color, append, block)` | The same conversion for a Skribidi layout the caller made (the editor's paragraphs) |
 | `ylay_stamp(L, block, buf, cap)` | The versions and font hashes as one line |
+| `ylay_missing_chars(L, out, cap)` | The characters of the last call's glyph-0 items, in text order, with their runs' ISO 15924 scripts; `in_a_font` tells a character no font maps from one a font maps (v0.2.0) |
 | `ylay_skb_fonts`, `_attributes`, `_temp` | Skribidi's objects, for its editor |
 
-Font fallback is Skribidi's rule: for each run of one script, the fonts
-that support the script in the order added, and the first that maps the
-codepoint. Skribidi gives a font a script only when a run of the font's
-cmap starts or ends with a character of that script (it samples the
-ends of each range). Real fonts pass; a font made for a test needs a range
-that starts with a letter (see `tests/layout/layout_test.c`).
+### Font fallback
+
+Fonts are tried in the order added. For each run of one script, the fonts
+that support the script, and the first that maps the codepoint
+(Skribidi's rule). For a codepoint none of them maps (digits and
+punctuation take the script of the text around them), the first font of
+all that maps its whole grapheme cluster, else the codepoint (patch 0003).
+So [Noto Sans Hebrew, Noto Sans] and [Noto Sans, Noto Sans Hebrew] both
+give "שלום 12:30, 4.5%" the Hebrew font's letters and spaces and Noto
+Sans's digits and punctuation.
+
+Skribidi gives a font a script only when a range of the font's cmap starts
+or ends with a character of that script (it samples the ends of each
+range). Real fonts pass; a font made for a test needs a range that starts
+or ends with a letter (see `tests/layout/layout_test.c`). The fallback
+looks at the cmap itself, so a font whose scripts the sampling misses is
+still found for the codepoints it has.
+
+A character that no font in the list maps still gets glyph 0.
+`ylay_missing_chars()` names the characters of the last call's glyph-0
+items, each with its run's script, so the pack tool can say which
+characters are missing and from which text.
 
 ## Checks
 
 `tests/layout/layout_test.c` (ctest `test_layout`):
 
-1. The logged versions: the Skribidi commit, the patch hash (and no
-   `tree-differs`) of both patches, HarfBuzz 14.6.0.
+1. The logged versions: the Skribidi commit, the hashes (and no
+   `tree-differs`) of the three patches, HarfBuzz 14.6.0.
 2. Visual order on every platform, with a TrueType font the test writes (a
    box for every ASCII, Hebrew and Arabic codepoint): the two bug strings
    and the editor's caret string. The items of each line, by x, must visit
@@ -190,6 +280,31 @@ that starts with a letter (see `tests/layout/layout_test.c`).
 6. Editing against Edge (below): line starts, run order and ink extents at
    10 widths, and selection rectangles and carets on one line and wrapped.
    Every count of differences must be 0.
+7. Font fallback (v0.2.0), with fonts the test writes, one script each, so
+   no system font is needed: "שלום 123", "123 שלום", "שלום 12:30, 4.5%"
+   and "مرحبا 123، 4.5%" with [script font, Latin font] in both orders give
+   no glyph 0, the letters, spaces and U+060C in the script's font and
+   their glyph ids, the digits and Latin punctuation in the Latin font and
+   theirs, one baseline, and the line with the taller Latin font's ascent
+   and descent; the first two keep the bidi order of part 2; Hebrew alone
+   keeps the Hebrew font's metrics. A numeral and an acute, and a numeral
+   and a Hebrew point the run's font has, move whole to the first font
+   with both, and the numeral after them comes from the first font that
+   has it; an alef whose acute only another font has moves whole when
+   that font has the alef too, else only the acute moves; a ZWJ between
+   Arabic letters stays in the Arabic font. A snowman in Hebrew and in
+   Latin text, and an acute no font has, are glyph 0, and
+   `ylay_missing_chars()` names them with "Hebr" or "Latn"; the list
+   empties with the next layout.
+
+   Without patch 0003 (its three files reverted, 2026-11-18, Linux gcc 12):
+   36 of the 81 checks failed. Every text of the first group had glyph 0
+   in both font orders (3, 3, 10 and 7 glyphs; the line kept the script
+   font's 80 and 20), the numeral and alef clusters stayed in the run's
+   font with glyph 0, and "שלום ☃ 12" had 3 glyphs 0 and 3 characters
+   listed, the digits with the snowman. The ZWJ check passed: it guards
+   against a fallback that splits the run, a fault of the patch, not of
+   Skribidi.
 
 ### The corpus against Chromium
 
@@ -331,6 +446,18 @@ start of line 1; Edge's is at x 8200 on line 0).
 
 ## Known issues
 
+### Open: emoji are dropped without a trace
+
+Skribidi lays out a run of emoji with the fonts of its emoji family
+(`SKB_FONT_FAMILY_EMOJI`) only, and when there is none it skips the run.
+`ylay_add_font()` adds every font to the default family, so "a 😀 b" gives
+the items of "a  b": no glyph 0, `n_missing` 0, and the pack tool builds
+the pack. Seen 2026-11-18 with DejaVu Sans, and with Noto Sans and Noto
+Color Emoji (which `ysp/outline.h` refuses: bitmap only). Not fixed by
+patch 0003, which works inside a run that has fonts; the fix is a choice
+of what an emoji should become (an outline emoji font in the emoji family,
+or a refusal), which is open.
+
 ### Fixed by patch 0002: Skribidi kept a line-end space of an RTL run inside the line
 
 In an LTR paragraph, when a line ends with an RTL word and the space after
@@ -414,6 +541,47 @@ What this means for the player (rig_spec 6):
   repeated sentence), so this is not a measure of the patch's cost. The
   patch makes more layout runs in RTL text; this table puts RTL text at
   1.8 times Latin, as the probe's did (1.6).
+
+### The fallback's cost (v0.2.0)
+
+Measured 2026-11-18 on the Linux desktop (i5-14500, 6 P-cores and 8
+E-cores; gcc 12.2, the Release build with `-O3`), each program pinned to
+P-core CPU 4 with `taskset` and holding `/tmp/psy-measure.lock`, nothing
+else running; load average (1 min) 1.19 to 1.44, falling from a build. The
+unpinned runs were bimodal: the scheduler put whole rounds on an E-core
+(the English label 7.2 us there, 4.3 us on a P-core), so only pinned runs
+count. Three runs of v0.1.0 (HEAD's glue and Skribidi with patches 0001
+and 0002) and v0.2.0, interleaved; each number is one run's median of 3
+rounds, as layout_bench prints it. `layout_bench` with Arial as
+`segoeui.ttf` and Droid Sans Fallback as `msyh.ttc` (none of its texts
+needs a fallback); the Hebrew rows from a program with the same method,
+fonts Noto Sans Hebrew and Noto Sans, or DejaVu Sans alone.
+
+| Item | v0.1.0, us | v0.2.0, us |
+|---|---|---|
+| Label, English | 4.3, 4.3, 4.3 | 4.3, 4.4, 4.3 |
+| Label, Arabic | 4.9, 4.9, 4.9 | 4.9, 4.9, 4.9 |
+| Paragraph, English, 600 px | 59.5, 59.9, 59.8 | 59.1, 59.4, 59.2 |
+| Paragraph, Arabic with a Latin sentence | 94.5, 94.5, 94.5 | 94.3, 94.3, 94.2 |
+| Keystroke at 500, English | 69.7, 69.6, 69.9 | 68.8, 69.1, 68.8 |
+| Keystroke at 500, Arabic | 106.1, 106.1, 105.9 | 106.1, 106.4, 105.6 |
+| Label "שלום שלום שלום", [Hebrew, Latin] | 3.12, 3.10, 3.10 | 3.13, 3.13, 3.13 |
+| 516 codepoints of Hebrew with numbers, DejaVu Sans | 88.06, 87.49, 87.75 | 87.36, 88.16, 87.68 |
+| Label "שלום 12:30, 4.5%", [Hebrew, Latin]: 10 fallback codepoints | 4.47, 4.47, 4.46 (glyph 0) | 4.99, 5.02, 5.02 |
+| The 516 codepoints, [Hebrew, Latin]: 84 fallback codepoints | 98.63, 98.07, 98.48 (glyph 0) | 112.86, 113.52, 113.22 |
+
+- Text that needs no fallback: no change outside the run-to-run spread,
+  but the Hebrew label, 0.01 to 0.03 us (up to 1 %) slower in each pair.
+  By instruction count (`perf stat`, 20,000 layouts): 137 more a label
+  (0.24 %) and 2886 more for the 516 codepoints (0.18 %).
+- The first build of the patch inlined the fallback helper into the font
+  split loop: the DejaVu paragraph then took 0.4 to 0.7 us (0.5 to 0.8 %) more,
+  in every pair. Kept out of line it is within the spread above. The glue
+  first noted glyph-0 characters inside its conversion loop, 1 % of the
+  same paragraph; it now does a second pass only when a glyph is 0.
+- Text that needs the fallback: 0.05 to 0.18 us more for each codepoint that
+  falls back (each looks up every font of the collection and adds a run
+  to shape). Before, that text had glyph 0 and the pack tool refused it.
 
 In `examples/layout/gfx_layout.c` (MSVC, `--sim`, two runs, not under the lock):
 setting up all four pages (seven paragraphs, three bidi lines, four

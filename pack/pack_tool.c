@@ -2288,6 +2288,46 @@ static int blk_cmp(const void* a, const void* b2) {
 /* A layout library over a fallback list of the entry's fonts. */
 typedef struct runlib { int font[65]; int n; ylay_lib* L; } runlib;
 
+/* The characters of L's last layout whose glyph is 0 and that no font of L
+ * maps (in_a_font 0), or that a font maps (1), as "script Hebr: 'x' U+0078,
+ * ...", grouped by their runs' scripts, at most 8, then "and N more".
+ * Returns how many there are, or -1 with no memory to list them. */
+static int missing_list(const ylay_lib* L, int in_a_font, char* out, size_t cap) {
+    int n = ylay_missing_chars(L, NULL, 0), i, j, shown = 0, total = 0;
+    ylay_missing* m = n > 0 ? (ylay_missing*)malloc((size_t)n * sizeof *m) : NULL;
+    size_t at = 0;
+    out[0] = 0;
+    if (!m) return n > 0 ? -1 : 0;
+    ylay_missing_chars(L, m, n);
+    for (i = 0; i < n; i++) total += m[i].in_a_font == in_a_font;
+    for (i = 0; i < n; i++) {
+        int first = 1;
+        if (m[i].in_a_font != in_a_font) continue;
+        for (j = 0; j < i; j++)   /* each script once, at its first character */
+            if (m[j].in_a_font == in_a_font && !strcmp(m[j].script, m[i].script)) break;
+        if (j < i) continue;
+        for (j = i; j < n && shown < 8; j++) {
+            uint32_t c = m[j].codepoint;
+            char u[5];
+            int k;
+            if (m[j].in_a_font != in_a_font || strcmp(m[j].script, m[i].script)) continue;
+            if (c < 0x80) { u[0] = (char)c; u[1] = 0; }
+            else if (c < 0x800) { u[0] = (char)(0xc0 | c >> 6); u[1] = (char)(0x80 | (c & 63)); u[2] = 0; }
+            else if (c < 0x10000) { u[0] = (char)(0xe0 | c >> 12); u[1] = (char)(0x80 | (c >> 6 & 63)); u[2] = (char)(0x80 | (c & 63)); u[3] = 0; }
+            else { u[0] = (char)(0xf0 | c >> 18); u[1] = (char)(0x80 | (c >> 12 & 63)); u[2] = (char)(0x80 | (c >> 6 & 63)); u[3] = (char)(0x80 | (c & 63)); u[4] = 0; }
+            if (first) k = snprintf(out + at, cap - at, "%sscript %s: '%s' U+%04X", shown ? "; " : "", m[j].script, u, (unsigned)c);
+            else k = snprintf(out + at, cap - at, ", '%s' U+%04X", u, (unsigned)c);
+            if (k > 0) at += (size_t)k;
+            if (at >= cap) { at = cap - 1; out[at] = 0; }
+            first = 0;
+            shown++;
+        }
+    }
+    if (total > shown && at < cap) snprintf(out + at, cap - at, " and %d more", total - shown);
+    free(m);
+    return total;
+}
+
 static int real_text(B* b, const E* e, const blk* k, const char* field, const char* s, double* out) {
     if (ytb_parse_number(s, strlen(s), out) != YTB_NUM_OK)
         return cfail(b->c, YPAK_ERR_FORMAT, "'%s' block '%s': '%s' is \"%s\", not a decimal number", e->name, k->key, field, s);
@@ -2476,8 +2516,21 @@ static int build_glyphruns(B* b, E* e) {
         if (s.dir < 0 || s.align < 0) { rc = cfail(b->c, YPAK_ERR_FORMAT, "'%s' block '%s': dir is auto, ltr or rtl; align is start, end or center", e->name, bl[i].key); break; }
         if (ylay_layout(L, text, -1, &s, NULL, 0, &lb) < 0) { rc = cfail(b->c, YPAK_ERR_FORMAT, "'%s' block '%s': %s", e->name, bl[i].key, ylay_error(L)); break; }
         if (lb.n_missing) {
-            rc = cfail(b->c, YPAK_ERR_FORMAT, "'%s' block '%s': %u characters no font maps; add a font that has them%s", e->name, bl[i].key,
-                       lb.n_missing, v->derived ? " (a fallback in 'fonts' of a glyphruns resource of this name)" : "");
+            char list[512];
+            int nm = missing_list(L, 0, list, sizeof list);
+            if (nm < 0)
+                rc = cfail(b->c, YPAK_ERR_NOMEM, "'%s' block '%s': %u glyphs are 0, and no memory to name their characters", e->name, bl[i].key, lb.n_missing);
+            else if (nm)
+                rc = cfail(b->c, YPAK_ERR_FORMAT, "'%s' block '%s': no font in the list maps %d character%s (%s); add a font that has %s%s", e->name,
+                           bl[i].key, nm, nm == 1 ? "" : "s", list, nm == 1 ? "it" : "them",
+                           v->derived ? " (a fallback in 'fonts' of a glyphruns resource of this name)" : "");
+            else {
+                /* a font maps each character, yet its glyph is 0: another font
+                 * would not help, so the message says what the fonts did */
+                nm = missing_list(L, 1, list, sizeof list);
+                rc = cfail(b->c, YPAK_ERR_FORMAT, "'%s' block '%s': %u glyphs are 0 though a font in the list maps their characters (%s); "
+                           "the font's cmap points them at glyph 0 or its shaping gave glyph 0", e->name, bl[i].key, lb.n_missing, list);
+            }
             break;
         }
         memset(r, 0, sizeof r);

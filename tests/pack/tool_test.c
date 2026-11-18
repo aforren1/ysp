@@ -930,7 +930,7 @@ static void test_refusals(void) {
     expect_refusal("missing glyph",
                    "{\"kind\": \"font\", \"source\": \"fonts/box.ttf\"}, {\"kind\": \"curveset\", \"from\": \"fonts/box.ttf\"}, {\"kind\": \"glyphruns\", "
                    "\"name\": \"t.ysprun\", \"fonts\": [\"fonts/box.ttf\"], \"blocks\": [{\"key\": \"a\", \"text\": \"mail@example\", \"size\": \"10\"}]}",
-                   "no font maps", 0);
+                   "'t.ysprun' block 'a': no font in the list maps 1 character (script Latn: '@' U+0040); add a font that has it", 0);
     /* glyphs "used": .notdef and the glyphs of the text */
     {
         static const char t[] = "{\"format\": \"ysp-pack-source\", \"version\": 1, \"resources\": ["
@@ -1436,6 +1436,16 @@ static void test_stroop_pack(void) {
         make_font_r(&f, -1, at_only, 2);
         write_file(WS "/fonts/at.ttf", f.d, f.n);
     }
+    {
+        /* one script each, for the fallback past the script (layout v0.2.0):
+         * Hebrew without numerals or punctuation, and ASCII without Hebrew */
+        static const uint32_t he_only[1][2] = { { 0x05b0, 0x05ea } };
+        static const uint32_t la_only[3][2] = { { 0x21, 0x3f }, { 0x41, 0x5f }, { 0x61, 0x7e } };
+        make_font_r(&f, -1, he_only, 1);
+        write_file(WS "/fonts/he.ttf", f.d, f.n);
+        make_font_r(&f, -1, la_only, 3);
+        write_file(WS "/fonts/la.ttf", f.d, f.n);
+    }
     free(f.d);
     rc = ypt_build(WS "/pack.json", WS "/stroop.ysppak", NULL, err, sizeof err);
 #ifdef YPT_NO_LAYOUT
@@ -1794,6 +1804,88 @@ static void test_stroop_pack(void) {
         } else CHECK(0, "fallback runs view: %s", err);
         free(x);
     }
+    /* numbers and punctuation in Hebrew text: the letters and spaces from
+     * he.ttf, the rest from la.ttf, whichever is the stimulus's font and
+     * which the listed fallback (ypak 0.9.0 refused these: Skribidi took
+     * each script run's fonts from that script's fonts only) */
+    {
+        static const char* const htexts[3] = { "\xd7\xa9\xd7\x9c\xd7\x95\xd7\x9d 123", "123 \xd7\xa9\xd7\x9c\xd7\x95\xd7\x9d",
+                                              "\xd7\xa9\xd7\x9c\xd7\x95\xd7\x9d 12:30, 4.5%" };
+        static const char* const fonts[2] = { "fonts/he.ttf", "fonts/la.ttf" };
+        int t, o;
+        for (t = 0; t < 3; t++)
+            for (o = 0; o < 2; o++) {
+                char stim[256], extra[1024], name[32];
+                snprintf(name, sizeof name, "hebrew%d%d", t, o);
+                snprintf(stim, sizeof stim, "\"s\": {\"kind\": \"text\", \"font\": \"%s\", \"size\": 20, \"text\": \"%s\"}", fonts[o], htexts[t]);
+                snprintf(extra, sizeof extra, ", {\"kind\": \"font\", \"source\": \"fonts/he.ttf\"}, {\"kind\": \"curveset\", \"from\": \"fonts/he.ttf\"},"
+                         " {\"kind\": \"font\", \"source\": \"fonts/la.ttf\"}, {\"kind\": \"curveset\", \"from\": \"fonts/la.ttf\"},"
+                         " {\"kind\": \"glyphruns\", \"name\": \"exp/%s.ysprun\", \"fonts\": [\"%s\"]}", name, fonts[1 - o]);
+                rc = build_def(name, stim, extra, WS "/hebrew.ysppak", err, sizeof err);
+                CHECK(rc == 0, "Hebrew '%s', stimulus font %s: %s", htexts[t], fonts[o], err);
+                if (rc == 0) {
+                    char rn[64];
+                    size_t n;
+                    uint8_t* x;
+                    ypak_runs r;
+                    snprintf(rn, sizeof rn, "exp/%s.ysprun", name);
+                    x = entry_bytes(WS "/hebrew.ysppak", rn, &n);
+                    memset(&r, 0, sizeof r);
+                    if (x && ypak_runs_view(x, (int64_t)n, &r, err, sizeof err) == 0 && r.n_blocks == 1) {
+                        const ypak_runs_block_rec* bk = &r.blocks[0];
+                        const unsigned char* p = (const unsigned char*)htexts[t];
+                        uint32_t cps[32], ncp = 0, k, i2;
+                        int bad = 0;
+                        while (*p && ncp < 32) {   /* the text's codepoints: ASCII or 2-byte Hebrew */
+                            if (*p < 0x80) cps[ncp++] = *p++;
+                            else { cps[ncp++] = (uint32_t)(p[0] & 31) << 6 | (p[1] & 63); p += 2; }
+                        }
+                        CHECK(bk->n_missing == 0, "Hebrew '%s': %u glyphs 0 in the block", htexts[t], bk->n_missing);
+                        for (k = 0; k < bk->n_runs; k++) {
+                            const ypak_runs_run* ru = &r.runs[bk->run_first + k];
+                            const char* fn = ypak_runs_str(&r, r.fonts[ru->font].font_off);
+                            for (i2 = 0; i2 < ru->n; i2++) {
+                                uint32_t cl = r.clusters[bk->item_first + ru->first + i2];
+                                uint32_t c = cl < ncp ? cps[cl] : 0;
+                                const char* want = c >= 0x21 && c <= 0x7e ? "fonts/la.ttf" : "fonts/he.ttf";
+                                if (strcmp(fn, want)) bad++;
+                            }
+                        }
+                        CHECK(bad == 0 && bk->n_runs == 2, "Hebrew '%s', stimulus font %s: %d items in the wrong font, %u runs (want 0, 2)",
+                              htexts[t], fonts[o], bad, bk->n_runs);
+                    } else CHECK(0, "Hebrew runs view: %s", err);
+                    free(x);
+                }
+            }
+    }
+    /* what no font in the list has: named with its run's script, the
+     * character and its codepoint; at most 8, then a count */
+    {
+        static const struct { const char* text; const char* font; const char* fb; const char* says; } cases[3] = {
+            { "\xd7\xa9\xd7\x9c\xd7\x95\xd7\x9d \xe2\x98\x83\xe2\x98\x85 12", "fonts/he.ttf", "fonts/la.ttf",
+              "no font in the list maps 2 characters (script Hebr: '\xe2\x98\x83' U+2603, '\xe2\x98\x85' U+2605); add a font that has them "
+              "(a fallback in 'fonts' of a glyphruns resource of this name)" },
+            { "abc \xe2\x98\x83", "fonts/la.ttf", "fonts/he.ttf",
+              "no font in the list maps 1 character (script Latn: '\xe2\x98\x83' U+2603); add a font that has it (a fallback" },
+            { "abc \xe2\x91\xa0\xe2\x91\xa1\xe2\x91\xa2\xe2\x91\xa3\xe2\x91\xa4 \xd7\xa9\xd7\x9c\xd7\x95\xd7\x9d "
+              "\xe2\x91\xa5\xe2\x91\xa6\xe2\x91\xa7\xe2\x91\xa8\xe2\x91\xa9", "fonts/la.ttf", "fonts/he.ttf",
+              "no font in the list maps 10 characters (script Latn: '\xe2\x91\xa0' U+2460, '\xe2\x91\xa1' U+2461, '\xe2\x91\xa2' U+2462, "
+              "'\xe2\x91\xa3' U+2463, '\xe2\x91\xa4' U+2464; script Hebr: '\xe2\x91\xa5' U+2465, '\xe2\x91\xa6' U+2466, "
+              "'\xe2\x91\xa7' U+2467 and 2 more); add a font that has them (a fallback" },
+        };
+        int t;
+        for (t = 0; t < 3; t++) {
+            char stim[512], extra[1024];
+            snprintf(stim, sizeof stim, "\"s\": {\"kind\": \"text\", \"font\": \"%s\", \"size\": 20, \"text\": \"%s\"}", cases[t].font, cases[t].text);
+            snprintf(extra, sizeof extra, ", {\"kind\": \"font\", \"source\": \"fonts/he.ttf\"}, {\"kind\": \"curveset\", \"from\": \"fonts/he.ttf\"},"
+                     " {\"kind\": \"font\", \"source\": \"fonts/la.ttf\"}, {\"kind\": \"curveset\", \"from\": \"fonts/la.ttf\"},"
+                     " {\"kind\": \"glyphruns\", \"name\": \"exp/unmapped.ysprun\", \"fonts\": [\"%s\"]}", cases[t].fb);
+            remove(WS "/unmapped.ysppak");
+            rc = build_def("unmapped", stim, extra, WS "/unmapped.ysppak", err, sizeof err);
+            CHECK(rc < 0 && strstr(err, cases[t].says), "unmapped %d: rc %d, '%s' (wanted '%s')", t, rc, err, cases[t].says);
+            CHECK(fopen(WS "/unmapped.ysppak", "rb") == NULL, "unmapped %d: a failed build left a file", t);
+        }
+    }
     /* refusals, each by its message; none may leave a pack (a file from
      * an earlier run is removed first, so the last check sees this run) */
     remove(WS "/x.ysppak");
@@ -1837,7 +1929,7 @@ static void test_stroop_pack(void) {
                     WS "/x.ysppak", err, sizeof err) < 0 && strstr(err, "'$weight' is a column of 'stroop.pstb' of type integer"),
           "a number column as text: %s", err);
     CHECK(build_def("missing", "\"s\": {\"kind\": \"text\", \"font\": \"fonts/NotoSans-Regular.ttf\", \"size\": 20, \"text\": \"mail@example\"}", "",
-                    WS "/x.ysppak", err, sizeof err) < 0 && strstr(err, "'exp/missing.ysprun' block 'fonts/NotoSans-Regular.ttf#0|20|0|0|start|auto||mail@example': 1 characters no font maps") &&
+                    WS "/x.ysppak", err, sizeof err) < 0 && strstr(err, "'exp/missing.ysprun' block 'fonts/NotoSans-Regular.ttf#0|20|0|0|start|auto||mail@example': no font in the list maps 1 character (script Latn: '@' U+0040); add a font that has it") &&
           strstr(err, "a fallback in 'fonts'"), "a derived text the font lacks: %s", err);
     CHECK(fopen(WS "/x.ysppak", "rb") == NULL, "a refused build left a file");
 #endif

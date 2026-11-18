@@ -1,0 +1,280 @@
+Subject: [PATCH] layout: fall back to fonts of other scripts for missing codepoints
+
+skb__itemize() split a script run by font, but chose only from the fonts
+that support the run's script. Digits and punctuation (script Common) take
+the script of the text next to them, so in "<shalom> 123" with the fonts
+[Noto Sans Hebrew, Noto Sans], in either order, the whole text was one
+Hebrew run in Noto Sans Hebrew, which has no digits: they got glyph 0,
+though Noto Sans, which has them, was in the collection.
+
+- When none of the fonts of the script has a codepoint, the codepoint's
+  grapheme cluster comes from the first font of the family, in the order
+  the fonts were added, that has every codepoint of the cluster, as
+  browsers do; if no font has the whole cluster, from the first font that
+  has the codepoint. The new skb_font_collection_match_fallback_fonts()
+  lists the candidates: the same style matching as
+  skb_font_collection_match_fonts(), with the codepoint in place of the
+  script as the hard constraint (skb__match_fonts() takes the codepoint,
+  -1 for the script).
+- A fallback font is used only for what the fonts of the script lack:
+  the next codepoint they have goes back to them, and each codepoint they
+  lack is looked up again, so it comes from the first font that has it.
+- Default ignorable codepoints (ZWJ, variation selectors and the rest of
+  HarfBuzz's set) never fall back: HarfBuzz hides them, and moving one to
+  another font would split the run around it.
+- A text whose codepoints the script's fonts all have is itemized as
+  before, so its layout does not change.
+
+The fallback run keeps the script run's script, direction and bidi level,
+so shaping, bidi reordering and cluster mapping are as for any other font
+split; the line takes the fallback font's ascender, descender and line
+height into its maxima, as it does for any run.
+
+Found by psy's pack tool, which refuses a glyph 0 (docs/layout.md, "Font
+fallback"). Applies to skribidi dee63d6 after skribidi-0001-bidi-run-merge.patch
+and skribidi-0002-l1-trailing-whitespace.patch.
+
+diff --git a/include/skribidi/skb_font_collection.h b/include/skribidi/skb_font_collection.h
+index 6702814..5be3321 100644
+--- a/include/skribidi/skb_font_collection.h
++++ b/include/skribidi/skb_font_collection.h
+@@ -354,6 +354,27 @@
+ 	skb_font_handle_t* results, int32_t results_cap);
+ 
+ /**
++ * Returns fonts matching specific font properties that have a glyph for the codepoint, in the order they were added, regardless of script.
++ * Used for font fallback, when none of the fonts that support a run's script has a codepoint, e.g. digits and punctuation, which take the script of the text around them.
++ * Codepoint and font family are hard constraints, for the rest, we do best effort to find something compatible, as in skb_font_collection_match_fonts().
++ * The font fallback callback is not called.
++ * @param font_collection font collection to use.
++ * @param codepoint codepoint the fonts must have.
++ * @param font_family font family to match.
++ * @param weight weight to match.
++ * @param style style to match.
++ * @param stretch stretch to match.
++ * @param results pointer to results array.
++ * @param results_cap results array capacity.
++ * @return number of fonts matching the parameters.
++ */
++SKB_API int32_t skb_font_collection_match_fallback_fonts(
++	const skb_font_collection_t* font_collection,
++	uint32_t codepoint, uint8_t font_family,
++	skb_weight_t weight, skb_style_t style, skb_stretch_t stretch,
++	skb_font_handle_t* results, int32_t results_cap);
++
++/**
+  * Retruns true if the specified font supports given codepoint.
+  * @param font_collection font collection to use.
+  * @param font_handle font to query.
+diff --git a/src/skb_font_collection.c b/src/skb_font_collection.c
+index 14b6e9f..07d71c5 100644
+--- a/src/skb_font_collection.c
++++ b/src/skb_font_collection.c
+@@ -528,7 +528,7 @@
+ 
+ int32_t skb__match_fonts(
+ 	const skb_font_collection_t* font_collection,
+-	const char* requested_lang, const uint8_t requested_script, uint8_t requested_font_family,
++	const char* requested_lang, const uint8_t requested_script, const int32_t requested_codepoint, uint8_t requested_font_family,
+ 	skb_weight_t requested_weight, skb_style_t requested_style, skb_stretch_t requested_stretch,
+ 	skb_font_handle_t* results, int32_t results_cap)
+ {
+@@ -540,11 +540,13 @@
+ 	bool multiple_styles = false;
+ 	bool multiple_weights = false;
+ 
+-	// Match script and font family.
++	// Match script (or codepoint, for font fallback) and font family.
+ 	for (int32_t font_idx = 0; font_idx < font_collection->fonts_count; font_idx++) {
+ 		const skb_font_t* font = &font_collection->fonts[font_idx];
+-		if (font->font_family == requested_font_family
+-			&& (requested_font_family == SKB_FONT_FAMILY_EMOJI || skb__supports_script(font, requested_script))) { // Ignore script for emoji fonts, as emojis are the same on each writing system.
++		const bool supported = requested_codepoint >= 0
++			? font->unicodes && hb_set_has(font->unicodes, (hb_codepoint_t)requested_codepoint)
++			: requested_font_family == SKB_FONT_FAMILY_EMOJI || skb__supports_script(font, requested_script); // Ignore script for emoji fonts, as emojis are the same on each writing system.
++		if (font->font_family == requested_font_family && supported) {
+ 			if (results_count < results_cap) {
+ 				if (results_count > 0) {
+ 					const skb_font_t* prev_font = skb__get_font_unchecked(font_collection, results[results_count - 1]);
+@@ -764,7 +766,7 @@
+ 	skb_font_handle_t* results, int32_t results_cap)
+ {
+ 	int32_t results_count =  skb__match_fonts(
+-		font_collection, requested_lang, requested_script, requested_font_family,
++		font_collection, requested_lang, requested_script, -1, requested_font_family,
+ 		requested_weight, requested_style, requested_stretch, results, results_cap);
+ 
+ 	if (results_count != 0)
+@@ -774,12 +776,25 @@
+ 	if (font_collection->fallback_func) {
+ 		if (font_collection->fallback_func(font_collection, requested_lang, requested_script, requested_font_family, font_collection->fallback_context)) {
+ 			results_count =  skb__match_fonts(
+-				font_collection, requested_lang, requested_script, requested_font_family,
++				font_collection, requested_lang, requested_script, -1, requested_font_family,
+ 				requested_weight, requested_style, requested_stretch, results, results_cap);
+ 		}
+ 	}
+ 
+ 	return results_count;
++}
++
++int32_t skb_font_collection_match_fallback_fonts(
++	const skb_font_collection_t* font_collection,
++	uint32_t codepoint, uint8_t requested_font_family,
++	skb_weight_t requested_weight, skb_style_t requested_style, skb_stretch_t requested_stretch,
++	skb_font_handle_t* results, int32_t results_cap)
++{
++	if (codepoint > 0x10ffff)
++		return 0;
++	return skb__match_fonts(
++		font_collection, "", 0, (int32_t)codepoint, requested_font_family,
++		requested_weight, requested_style, requested_stretch, results, results_cap);
+ }
+ 
+ bool skb_font_collection_font_has_codepoint(const skb_font_collection_t* font_collection, skb_font_handle_t font_handle, uint32_t codepoint)
+diff --git a/src/skb_layout.c b/src/skb_layout.c
+index 9fb73d2..1e21bf1 100644
+--- a/src/skb_layout.c
++++ b/src/skb_layout.c
+@@ -281,6 +281,75 @@
+ 	const SBRun* run_a = a;
+ 	const SBRun* run_b = b;
+ 	return (int)run_a->offset - (int)run_b->offset;
++}
++
++// Default ignorable codepoints need no glyph, HarfBuzz hides them. Same set as HarfBuzz's is_default_ignorable().
++static bool skb__is_default_ignorable(uint32_t codepoint)
++{
++	if ((codepoint >> 16) == 0) {
++		switch (codepoint >> 8) {
++		case 0x00: return codepoint == 0x00ad;
++		case 0x03: return codepoint == 0x034f;
++		case 0x06: return codepoint == 0x061c;
++		case 0x17: return codepoint >= 0x17b4 && codepoint <= 0x17b5;
++		case 0x18: return codepoint >= 0x180b && codepoint <= 0x180f;
++		case 0x20: return (codepoint >= 0x200b && codepoint <= 0x200f) || (codepoint >= 0x202a && codepoint <= 0x202e) || (codepoint >= 0x2060 && codepoint <= 0x206f);
++		case 0xfe: return (codepoint >= 0xfe00 && codepoint <= 0xfe0f) || codepoint == 0xfeff;
++		case 0xff: return codepoint >= 0xfff0 && codepoint <= 0xfff8;
++		default: return false;
++		}
++	}
++	if ((codepoint >> 16) == 0x01)
++		return codepoint >= 0x1d173 && codepoint <= 0x1d17a;
++	if ((codepoint >> 16) == 0x0e)
++		return codepoint >= 0xe0000 && codepoint <= 0xe0fff;
++	return false;
++}
++
++// Font fallback for a codepoint that none of the fonts of the run's script has (e.g. digits and punctuation,
++// which take the script of the text around them). Like browsers, the codepoint's grapheme cluster is taken whole
++// from the first font of the family, in the order the fonts were added, that has every codepoint of the cluster,
++// so that marks stay with their base. If no font has the whole cluster, the first font that has the codepoint.
++// The cluster does not reach before range_start (the start of the current font run). Returns 0 if no font has the codepoint.
++// Kept out of line: inlined into skb__itemize(), it made the font split of text that needs no fallback slower.
++#if defined(_MSC_VER)
++__declspec(noinline)
++#elif defined(__GNUC__)
++__attribute__((noinline))
++#endif
++static skb_font_handle_t skb__match_fallback_font(
++	const skb_layout_t* layout, int32_t offset, int32_t range_start, int32_t range_end,
++	uint8_t font_family, skb_weight_t font_weight, skb_style_t font_style, skb_stretch_t font_stretch,
++	skb_range_t* fallback_range)
++{
++	skb_font_handle_t fonts[32];
++	const int32_t fonts_count = skb_font_collection_match_fallback_fonts(
++		layout->params.font_collection, layout->text[offset], font_family,
++		font_weight, font_style, font_stretch,
++		fonts, SKB_COUNTOF(fonts));
++	if (fonts_count == 0)
++		return 0;
++
++	skb_range_t cluster = { .start = offset, .end = offset + 1 };
++	while (cluster.start > range_start && !(layout->text_props[cluster.start - 1].flags & SKB_TEXT_PROP_GRAPHEME_BREAK))
++		cluster.start--;
++	while (cluster.end < range_end && !(layout->text_props[cluster.end - 1].flags & SKB_TEXT_PROP_GRAPHEME_BREAK))
++		cluster.end++;
++
++	for (int32_t k = 0; k < fonts_count; k++) {
++		bool has_cluster = true;
++		for (int32_t i = cluster.start; i < cluster.end && has_cluster; i++) {
++			const uint32_t codepoint = layout->text_props[i].flags & SKB_TEXT_PROP_CONTROL ? 32 : layout->text[i];
++			has_cluster = skb__is_default_ignorable(codepoint) || skb_font_collection_font_has_codepoint(layout->params.font_collection, fonts[k], codepoint);
++		}
++		if (has_cluster) {
++			*fallback_range = cluster;
++			return fonts[k];
++		}
++	}
++
++	*fallback_range = (skb_range_t){ .start = offset, .end = offset + 1 };
++	return fonts[0];
+ }
+ 
+ static void skb__itemize(skb__layout_build_context_t* build_context, skb_layout_t* layout)
+@@ -422,18 +491,37 @@
+ 							// Split run based on which font can be used.
+ 							int32_t font_run_start = text_range.start;
+ 							skb_font_handle_t cur_font_handle = 0;
++							bool cur_font_is_fallback = false;
+ 
+ 							for (int32_t j = text_range.start; j < text_range.end; j++) {
+ 								// Treat control characters are space for font selection, since fonts dont have glyphs for control chars.
+ 								// Missing glyph would break runs, and cause missing glyphs. During rendering we do treat control chars as spaces too.
+ 								const uint32_t codepoint = layout->text_props[j].flags & SKB_TEXT_PROP_CONTROL ? 32 : layout->text[j];
+ 								skb_font_handle_t font_handle = cur_font_handle;
+-								if (!skb_font_collection_font_has_codepoint(layout->params.font_collection, cur_font_handle, codepoint)) {
++								bool font_is_fallback = cur_font_is_fallback;
++								int32_t font_start = j;
++								// A fallback font is used only for what the fonts of the script do not have.
++								if (cur_font_is_fallback || !skb_font_collection_font_has_codepoint(layout->params.font_collection, cur_font_handle, codepoint)) {
+ 									// Find new font
++									bool found = false;
+ 									for (int32_t k = 0; k < fonts_count; k++) {
+ 										if (skb_font_collection_font_has_codepoint(layout->params.font_collection, fonts[k], codepoint)) {
+ 											font_handle = fonts[k];
++											font_is_fallback = false;
++											found = true;
+ 											break;
++										}
++									}
++									if (!found && !skb__is_default_ignorable(codepoint)) {
++										skb_range_t fallback_range = {0};
++										const skb_font_handle_t fallback_font_handle = skb__match_fallback_font(
++											layout, j, font_run_start, text_range.end, font_family, font_weight, font_style, font_stretch, &fallback_range);
++										if (fallback_font_handle) {
++											font_handle = fallback_font_handle;
++											font_is_fallback = true;
++											font_start = fallback_range.start;
++											// The rest of the grapheme cluster stays in the fallback font.
++											j = fallback_range.end - 1;
+ 										}
+ 									}
+ 								}
+@@ -443,13 +531,13 @@
+ 
+ 								if (font_handle && font_handle != cur_font_handle) {
+ 									// Close the run so far.
+-									if (j > font_run_start) {
++									if (font_start > font_run_start) {
+ 										SKB_ARRAY_RESERVE(layout->shaping_runs, layout->shaping_runs_count + 1);
+ 										skb__shaping_run_t* shaping_run = &layout->shaping_runs[layout->shaping_runs_count++];
+ 										SKB_ZERO_STRUCT(shaping_run);
+ 										shaping_run->script = script;
+ 										shaping_run->text_range.start = font_run_start;
+-										shaping_run->text_range.end = j;
++										shaping_run->text_range.end = font_start;
+ 										shaping_run->direction = (uint8_t)bidi_direction;
+ 										shaping_run->is_emoji = has_emoji;
+ 										shaping_run->content_run_idx = content_run_idx;
+@@ -457,8 +545,9 @@
+ 										shaping_run->bidi_level = bidi_run->level;
+ 									}
+ 
+-									font_run_start = j;
++									font_run_start = font_start;
+ 									cur_font_handle = font_handle;
++									cur_font_is_fallback = font_is_fallback;
+ 								}
+ 							}
+ 

@@ -15,7 +15,9 @@ description lists no glyph runs for them (gap G9 of
 experiment_format.md). Tool v0.7.0 (2026-10-22, section 16) stores a
 definition's canonical bytes (D2) and refuses a lookup whose map lacks a
 level of its `by`. Tool v0.8.0 (2026-11-09, section 16) reads the definition
-through ysp/experiment.h. Where the build
+through ysp/experiment.h. Tool v0.10.0 (2026-11-18, section 16) lays out
+glyph runs with the layout library's font fallback past the script and
+names the characters no font has. Where the build
 changed the design, the text says so. When this page and rig_spec 5
 disagree, this page is newer.
 
@@ -2104,7 +2106,8 @@ starts `ypak: experiment 'NAME': stimulus 'S':`.
 | A layout key out of range | `"size": 0`, `"width": -1`, `"align": "middle"` | `'size' is 0; it is above 0 and at most 1e9`; `'align' is "middle"; it is start, end or center` |
 | vars that name each other | `"a": "$b", "b": "$a"` | `'$a': variables nest more than 8 deep; is there a loop?` |
 | A node's table that is not in the pack | `"timeline_variables": "x.pstb"` | `node 'main': 'timeline_variables' is 'x.pstb', which is not a table entry of this pack` (only when a text reads it) |
-| A character no font has | `"mail@example"` in a font without `@` | `'exp/x.ysprun' block 's/mail@example': 1 characters no font maps; add a font that has them (a fallback in 'fonts' of a glyphruns resource of this name)` |
+| A character no font has | `"mail@example"` in a font without `@` | `'exp/x.ysprun' block 's/mail@example': no font in the list maps 1 character (script Latn: '@' U+0040); add a font that has it (a fallback in 'fonts' of a glyphruns resource of this name)`. The characters come grouped by their runs' scripts (ISO 15924), in text order, at most 8, then `and N more` (tool v0.10.0; v0.9.0 said `N characters no font maps` and counted glyphs, and said it also when a font in the list had them) |
+| A glyph 0 for a character a font in the list maps | none known since tool v0.10.0 | `'exp/x.ysprun' block 'k': N glyphs are 0 though a font in the list maps their characters (script Hebr: '1' U+0031, ...); the font's cmap points them at glyph 0 or its shaping gave glyph 0`: another font would not help, so the message does not ask for one |
 | A stimulus's font that is not in the pack | | `font 'fonts/x.ttf' is not a font entry of this pack` (or `no curveset entry is made from 'fonts/x.ttf' face 0; add one`) |
 
 The core tool refuses a definition with text stimuli by name, and
@@ -2305,6 +2308,48 @@ are byte-identical to v0.8.0's, and its manifest differs in the tool's
 version and `ysp/experiment.h`'s; with the two strings put back, the
 manifest and so the pack ID are v0.8.0's (Results of experiment.md).
 
+### Tool v0.10.0: font fallback past the script (2026-11-18)
+
+A Hebrew text stimulus with numbers, "שלום 123" in Noto Sans Hebrew with
+Noto Sans as the listed fallback (or the other way round), stopped the
+build: `3 characters no font maps; add a font that has them`, though Noto
+Sans has the digits. The layout library (pack/layout 0.2.0, Skribidi patch
+0003) took a script run's fonts only from the fonts that support its
+script, and digits and punctuation take the script of the text around
+them. docs/layout.md, "Patch 0003", has the rule and the decisions; in
+short, a character none of the script's fonts maps now comes from the
+first font of the list that maps its grapheme cluster, and the run's font
+keeps everything it has.
+
+The message for what is still missing is true by construction: it lists
+only characters that no font of the block's list maps
+(`ylay_missing_chars()`), with their runs' scripts, the character and its
+codepoint, at most 8, then `and N more`. A glyph 0 for a character a font
+maps gets its own message (the table in section 15), which asks for no
+font. On v0.9.0 the test's "שלום ☃★ 12" said `4 characters no font maps`:
+it counted glyphs, and with the Hebrew-only font the digits were among
+them.
+
+Hashes that moved: every pack with glyph runs gets a new manifest and pack
+ID, because the manifest's `tool.libraries.layout` line records the patch
+hashes (now three) and `ylay 0.2.0`; its glyph run entries are
+byte-identical when no block had glyph 0, which v0.9.0 refused anyway. The
+corpus pin (`tests/pack/corpus.sha256`, with `text/pages.ysprun`) is
+unchanged.
+
+Tests (Linux desktop, gcc 12.2, Release): `test_pack_tool` 371 checks, 0
+failed. New: six builds of "שלום 123", "123 שלום" and "שלום 12:30, 4.5%",
+each with the Hebrew-only box font and the ASCII-only box font as the
+stimulus's font and the listed fallback in both orders: each builds, its
+block has no glyph 0, two runs, letters and spaces in the Hebrew font and
+the rest in the other; three refusals by their whole message (two
+scripts, one character, 10 characters across two scripts); and the two
+earlier `@` refusals with the new text. On v0.9.0 with the old layout
+library, 11 of these checks failed (the six builds were refused). With the
+system's Noto fonts, `ypak build` of the three texts in both orders now
+writes a pack that `ypak verify` accepts. Hand mutants (the runner cannot
+build the tool): 5 of the message's code, 5 of the library's list, 10 of
+the patch, all 20 killed (docs/layout.md, Checks).
 ## 17. Bindings (2026-10-25)
 
 `ysp-pack` (Python, `import ysp.pack`) and the MEX function `ysp_pack`
