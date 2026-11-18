@@ -44,7 +44,7 @@
 
 /* The MEX function's own version (docs/bindings.md, Versions); the
  * header's is the second output of 'version'. */
-#define MEX_BINDING_VERSION "1.0.0"
+#define MEX_BINDING_VERSION "1.1.0"   /* 1.1.0: frames.csv's extension_s (ysp/dataset.h 0.3.0) */
 
 #define YSP_DATASET_IMPLEMENTATION
 #include "ysp/dataset.h"

@@ -219,7 +219,9 @@ The columns of the fixed tables (the header's THE TABLES):
 
 - `FRAME_COLUMNS`: `frame, trial_index, target_s, planned_s, onset_s,
   residual_s, dropped, path, tier, flags, code_risk, evaluate_s, script_s,
-  draw_s, upload_s, swap_s, gpu_s`.
+  draw_s, upload_s, swap_s, gpu_s, extension_s` (`extension_s` since
+  0.3.0: a renderer extension's CPU time, ysp/screen.h's
+  `YSCR_PHASE_EXTENSION`).
 - `EVENT_COLUMNS`: `t_s, trial_index, kind, role, stimulus, frame,
   planned_s, residual_s, code, control, type, value, x, y, deadline_s,
   end_s, tier, flags, ticks, text`. `kind` says what the row is: a

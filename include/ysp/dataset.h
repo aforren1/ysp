@@ -1,4 +1,4 @@
-/* ysp/dataset.h - v0.2.1 - public domain single-header session data set writer
+/* ysp/dataset.h - v0.3.0 - public domain single-header session data set writer
  *
  *   The folder a session's data goes into (docs/experiment_format.md D9 and
  *   2.10): session.json (canonical JSON, format "ysp-session" 1, written at
@@ -142,8 +142,9 @@
  *   player's column); frame joins events.csv to frames.csv.
  *   frames.csv   frame, trial_index, target_s, planned_s, onset_s,
  *                residual_s, dropped, path, tier, flags, code_risk,
- *                evaluate_s, script_s, draw_s, upload_s, swap_s, gpu_s:
- *                ysp/screen.h's yscr_record (yds_frame_from_screen()).
+ *                evaluate_s, script_s, draw_s, upload_s, swap_s, gpu_s,
+ *                extension_s (v0.3.0): ysp/screen.h's yscr_record
+ *                (yds_frame_from_screen()).
  *   events.csv   t_s, trial_index, kind, role, stimulus, frame,
  *                planned_s, residual_s, code, control, type, value, x, y,
  *                deadline_s, end_s, tier, flags, ticks, text. kind says
@@ -242,6 +243,12 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.3.0 - frames.csv's last column extension_s (yds_frame.extension_ns,
+ *          appended): ysp/screen.h 0.20.0's YSCR_PHASE_EXTENSION, a
+ *          renderer extension's CPU time on the frame thread
+ *          (docs/filly_probe.md, section 5). YDS_FRAME_COLS is 18. With
+ *          an older ysp/screen.h, yds_frame_from_screen() leaves it
+ *          missing. The other columns keep their names and places.
  *   v0.2.1 - macOS: session.json.tmp and the folder after the rename get
  *          fcntl(F_FULLFSYNC), and fsync() only when the volume refuses
  *          it. fsync() alone left them in the drive's write cache, so a
@@ -258,6 +265,9 @@
  *          stored zip. On ysp/trials.h v0.6 (256 columns, a 38 KB writer):
  *          yds_seed_text() for a trial_seed column in trials' spelling.
  *
+ *   STATUS: v0.3.0, 2026-11-18, the Linux desktop (GCC 12.2): 659 checks of
+ *   tests/adapt/dataset_test.c pass, -O2 and ASan with UBSan; the golden
+ *   frames.csv and zip have extension_s; mutants dx-01 to dx-03 killed.
  *   STATUS: v0.2.1, 2026-11-04: an Apple M2 Mac mini, macOS 27.0.1, Apple clang 21, APFS
  *   (case-insensitive); every test passes, Release, ASan and UBSan, the
  *   crash test's child process included. Each rewrite of session.json
@@ -280,9 +290,9 @@
 #define YSP_DATASET_H_INCLUDED
 
 #define YDS_VERSION_MAJOR 0
-#define YDS_VERSION_MINOR 2
-#define YDS_VERSION_PATCH 1
-#define YDS_VERSION_STRING "0.2.1"
+#define YDS_VERSION_MINOR 3
+#define YDS_VERSION_PATCH 0
+#define YDS_VERSION_STRING "0.3.0"
 
 /* mkdir(), fsync() and fileno() under -std=c11: the feature-test macro of
  * ysp/rt.h and ysp/trials.h, set before the first system header (Linux and
@@ -346,6 +356,8 @@ typedef struct yds_frame {
     int64_t upload_ns;
     int64_t swap_ns;
     int64_t gpu_ns;
+    int64_t extension_ns; /* v0.3.0: YSCR_PHASE_EXTENSION, a renderer
+                           * extension's CPU time on the frame thread      */
 } yds_frame;
 
 /* One row of events.csv. */
@@ -386,7 +398,7 @@ typedef struct yds_clock {
     int         epoch;
 } yds_clock;
 
-#define YDS_FRAME_COLS 17
+#define YDS_FRAME_COLS 18
 #define YDS_EVENT_COLS 20
 #define YDS_CLOCK_COLS 11
 
@@ -519,6 +531,9 @@ static inline void yds_frame_from_screen(yds_frame* f, const yscr_record* r, int
     f->upload_ns = yds__phase(r->phase_ns[YSCR_PHASE_UPLOAD]);
     f->swap_ns = yds__phase(r->phase_ns[YSCR_PHASE_SWAP]);
     f->gpu_ns = yds__phase(r->phase_ns[YSCR_PHASE_GPU]);
+#if defined(YSCR_PHASE_EXTENSION)
+    f->extension_ns = yds__phase(r->phase_ns[YSCR_PHASE_EXTENSION]);
+#endif
 }
 #endif
 
@@ -654,6 +669,7 @@ static const ytr_col yds__frame_cols[YDS_FRAME_COLS] = {
     YTR_COL(yds_frame, upload_ns, YTR_COL_TIME_NS),
     YTR_COL(yds_frame, swap_ns, YTR_COL_TIME_NS),
     YTR_COL(yds_frame, gpu_ns, YTR_COL_TIME_NS),
+    YTR_COL(yds_frame, extension_ns, YTR_COL_TIME_NS),
 };
 
 static const ytr_col yds__event_cols[YDS_EVENT_COLS] = {
@@ -744,7 +760,7 @@ YDS_API void yds_frame_init(yds_frame* f) {
     f->frame = YTR_MISSING_I64;
     f->trial_index = f->dropped = f->path = f->tier = f->flags = f->code_risk = YTR_MISSING_INT;
     f->target_ns = f->planned_ns = f->onset_ns = f->residual_ns = YTR_MISSING_NS;
-    f->evaluate_ns = f->script_ns = f->draw_ns = f->upload_ns = f->swap_ns = f->gpu_ns = YTR_MISSING_NS;
+    f->evaluate_ns = f->script_ns = f->draw_ns = f->upload_ns = f->swap_ns = f->gpu_ns = f->extension_ns = YTR_MISSING_NS;
 }
 
 YDS_API void yds_event_init(yds_event* e) {

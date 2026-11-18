@@ -4527,6 +4527,109 @@ and clamps it to `INT32_MAX`. The open needs only 64 KiB.
 Mesa llvmpipe headless). No test reproduces Firefox's value: the tests
 run on a real GL, which reports 64 KiB or more and fits in 32 bits.
 
+## v0.21.0: rows bottom first and shared textures
+
+The filly renderer probe ([filly_probe.md](filly_probe.md), findings 8 and
+9, section 5) found two gaps for a renderer extension. filly writes GL's
+row order, bottom first, and `ygfx_texture_import()` took texel row 0 as
+the top, so the model showed upside down. And the probe made the texture
+that filly draws into with raw GL in the gfx's context, then had to call
+`ygfx_reset_state()`.
+
+| Change | Why |
+|---|---|
+| `ygfx_import_desc.rows` (appended), a `ygfx_rows` | `BOTTOM_UP` says texel row 0 is the image's bottom. `AUTO` (0) and `TOP_DOWN` keep v0.20's meaning, so a zeroed desc draws as before. The name and the enum are `ygfx_desc.rows`'s, which says the same of framebuffer 0 |
+| Both import kinds, every format, each NV12 plane | Only the row of each `texelFetch` turns over (row `H - 1 - y` for the image's row `y`; the CbCr plane's `H` is `ceil(h / 2)`). The source rectangle, the clamps and the bilinear weights are the top-first image's, so the image is bit for bit the same texels uploaded top first: no filtering change, no half-texel shift |
+| The turn only in programs made with `YSP_ROWS_UP` | A turn chosen per fragment in the image programs cost 4 % of a linear 1080p image and 10 % of a linear encoded one (below). The variants (image color, modulation, add, video, and their instanced forms) compile at the first `BOTTOM_UP` texture; every other image runs v0.20's code |
+| Refused as a mask, a glyph atlas or a user body's `ysp_tex0` | Those read texels as stored; a turned mask would be drawn upside down without a message |
+| `ygfx_texture_shared()`, `ygfx_shared_desc`, `ygfx_native` | The texture a renderer in a sharing context draws into: immutable RGBA8 storage made by the gfx through its own GL calls (no raw GL, no reset), its GL name and sized format given |
+| `GL_RGBA8` with an encoding, or `GL_SRGB8_ALPHA8` (`srgb`) | filly writes sRGB codes into RGBA8 (through its own sRGB view); the gfx decodes them in float. A renderer that writes linear values on GL ES or WebGL (no texture views) needs the GPU to encode: an sRGB texture, read back through the GPU's decode, so its `enc` is all 0. Float formats are not offered: no renderer was measured writing one |
+| Backend version 5: `texture_src.srgb`, `texture_native` (appended) | The core has no GL of its own; open takes 3 to 5, refuses a newer table, and reads `texture_native` from a version 5 table only |
+| Double buffering by `ygfx_texture_rebind()` | Two shared textures and a rebind each frame: no GL call. A texture's row order goes with its texels, so a top-first texture rebound to a bottom-first one shows it upright |
+
+Not built: a D3D11 texture made by the gfx for a renderer on another API
+on Windows. ANGLE gives no D3D11 resource for a GL texture it made, so
+the gfx would have to make the texture on `yscr_native()`'s device and
+share it by an NT handle (with a keyed mutex), then import it. No Windows
+compiler or GPU was on the Linux desktop, so the code could not be built
+or run; the host can do the same today and import the texture with
+`YGFX_IMPORT_D3D11` and `rows`.
+
+### Tests
+
+`tests/adapt/gfx_test.c`, part "v0.21 rows+shared" (Mesa llvmpipe
+headless, the Linux desktop, GCC 12.2):
+
+| Check | Result |
+|---|---|
+| Bottom-first imports written with raw GL (RGBA8 straight alpha as color, modulation, ADD and two instances; RGBA8 with an sRGB encoding, also instanced; R8 as coverage; NV12 37 x 23 with interpolated chroma and 38 x 24 with replicated chroma), each nearest and linear at 1:1, 3 x 3, 2.5 x 1.75 and a source rectangle, against the top-first texture of the same image | 80 of 80 scenes equal bit for bit |
+| A 1:1 nearest draw against the codes (rgb x alpha over black) | within 1.43e-7 |
+| `AUTO` and `TOP_DOWN` imports of top-first rows against today's texture | 16 of 16 equal |
+| `AUTO` of bottom-first rows | 8 of 8 scenes differ: the check sees a turn |
+| A second EGL context that shares the gfx's paints two shared textures by scissored clears, a fence, `glWaitSync()` in the gfx's context, one stimulus rebound to each in turn, 4 frames for each storage | `GL_RGBA8`: the codes exactly (within 7.4e-8), equal bit for bit to the gfx's own upload; `GL_SRGB8_ALPHA8`: the producer's codes exact, the decode within 1.19e-3 of the formula |
+| Refusals: `rows` 3, a bottom-first mask and user texture, a shared RGBA16F, sRGB with an encoding, `rows` 3, w 0, no `out` | 8 of 8 |
+| CPU half: the null backend has no `texture_native`; a version 6 table refused; a version 4 table's `texture_native` never called | pass |
+
+The sRGB decode is the driver's: llvmpipe's was 1.19e-3 off the formula
+for some codes (0.3 of a code step), where `GL_RGBA8` with `TRC_SRGB` is
+the gfx's float math (the transfers within 7.5e-7, v0.4). Prefer RGBA8 and
+an encoding when a renderer can write codes.
+
+Mutants `rs-01` to `rs-24`: 24 of 24 killed.
+
+### Cost
+
+12 full-size 1920 x 1080 RGBA8 image draws a frame and `glFinish`, ms a
+frame (p50 of 300 frames, two runs), headless on Mesa 22.3.6's Intel UHD
+770 (iris; the RX 6600 is not the surfaceless platform's first device),
+idle machine. v0.20.1 against v0.21.0 with rows top first and bottom
+first:
+
+| Draw | v0.20.1 | v0.21.0, top first | v0.21.0, bottom first |
+|---|---|---|---|
+| nearest | 15.23, 15.27 | 15.22, 15.30 | 15.23, 15.34 |
+| nearest, sRGB-encoded (video program) | 14.18, 14.30 | 14.24, 14.20 | 14.37, 14.26 |
+| linear | 16.06, 16.01 | 15.99, 16.01 | 16.68, 16.71 |
+| linear, sRGB-encoded | 15.66, 15.67 | 15.72, 15.59 | 17.40, 17.22 |
+
+The first version turned rows by a value chosen per fragment in every
+image program; with rows top first it cost 17.30 against 15.28 (nearest,
+a second uniform read per fragment) and 18.35 against 16.05 (linear).
+Moving the height to a flat input took the nearest cost away (15.22) but
+left linear at 16.63. With the turn in its own programs, top-first images
+cost what v0.20.1's did, and a bottom-first image costs 0.06 ms more a
+linear 1080p draw (0.13 ms encoded, under 0.01 ms nearest) on this GPU.
+The first `BOTTOM_UP` import compiles the variants: 161 ms for the three
+image programs, 84 ms for them and the video program in another process
+(no program cache; Mesa's own shader cache warm in the second). The
+handle grows by 544 bytes, to 24,824 on x86-64 (the program ids and the
+GL backend's larger program table).
+
+### The filly probe again
+
+The probe's program (`tests/probe/filly/filly_ysp.cpp` on the
+`filly-probe` branch) was built again against v0.21.0 and ysp/screen.h
+0.20.0 in a scratch copy, with three changes: route (a)'s texture from
+`ygfx_texture_shared()` (rows `BOTTOM_UP`, `GL_RGBA8`, the sRGB
+encoding) in place of raw GL, the import and its reset; filly's time
+marked to `YSCR_PHASE_EXTENSION` in place of `_SCRIPT`; and the pixel
+check against the CPU copy uploaded top first (upright) and, as a
+control, turned over. The copy is not in the repository: it needs filly
+and a Filament build, and the probe's branch keeps the original. The
+Linux desktop of the probe (RX 6600, Mesa 22.3.6, GLX_OML, a 1024 x 768
+window, every present a copy), Filament 1.80.1, filly v0.5.0,
+`samples/horse.glb`, frame thread at normal priority:
+
+| Check | Result |
+|---|---|
+| `--check`, 12 poses: the shared texture against the CPU copy, upright | 0 values differ (max 0); against the copy turned over, 198,866 differ; outside the model, 0 differ from the output before filly |
+| 3,600 frames, 512 x 512 (load average 0.39 at the start) | filly 0.130 / 0.183 / 0.252 ms (p50 / p99 / max, the probe's clock); the record's `EXTENSION` phase 0.130 / 0.183 / 0.253, `SCRIPT` 0; dropped 0, late 0; interval p99 16.668 ms, none over 1.5 periods |
+| 3,600 frames, 1920 x 1080 (load average 0.17) | filly 0.138 / 0.178 / 0.208 ms; `EXTENSION` 0.138 / 0.179 / 0.209, `SCRIPT` 0; dropped 0, late 0; interval p99 16.669 ms |
+| gfx begin..end (CPU) | 0.010 / 0.026 ms (512), 0.009 / 0.030 ms (1080), against 0.014 / 0.031 and 0.011 / 0.025 in the probe |
+
+The record's phase and the probe's own clock around filly's calls agree
+within 1 us at p50.
+
 ## Bindings
 
 `ysp/gfx.h` is bound in `ysp-vis` with `ysp/screen.h` and `ysp/video.h`

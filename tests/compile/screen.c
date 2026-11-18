@@ -119,5 +119,10 @@ int main(void) {
         for (r = 0; t && r < n; r++) k += (t[r].values != NULL) == !strcmp(t[r].type, "enum");
         if (!t || k != n) return 15;
     }
+    {   /* v0.20.0: the extension phase, after the GPU's; the record holds 7 */
+        yscr_record rr;
+        if (YSCR_PHASE_EXTENSION != 6 || YSCR_N_PHASES != 7 || sizeof rr.phase_ns != 7 * sizeof(uint32_t)) return 21;
+        yscr_mark(NULL, YSCR_PHASE_EXTENSION);
+    }
     return yscr_params(&n) && n > 0 ? 0 : 4;
 }

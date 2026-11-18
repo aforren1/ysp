@@ -32,7 +32,7 @@ function test_mex_dataset()
     check(isequal(lines(fullfile(d, 'trials.csv')), {'participant,trial_index,response,correct,rt_s,contrast,big'}), ...
           'trials.csv header');
     fc = ysp_dataset('columns', 'frames');
-    check(numel(fc) == 17 && strcmp(fc{5}, 'onset_s'), 'frame columns');
+    check(numel(fc) == 18 && strcmp(fc{5}, 'onset_s') && strcmp(fc{18}, 'extension_s'), 'frame columns');
     check(isequal(lines(fullfile(d, 'frames.csv')), {strjoin(fc, ',')}), 'frames.csv header');
     check(numel(ysp_dataset('columns', 'events')) == 20 && numel(ysp_dataset('columns', 'clock')) == 11, 'columns');
 
@@ -81,8 +81,8 @@ function test_mex_dataset()
     ysp_dataset('write_clock', h, 'role', 'box', 'kind', 'fit', 't_s', 1.5, 'ticks', 1000, ...
                 'ns_per_tick', 1000.000123, 'ppm', 0.123, 'span_s', 60, 'points', 40, 'epoch', 1);
     fr = lines(fullfile(d, 'frames.csv'));
-    check(strcmp(fr{2}, '120,3,10.000000000,,10.000412000,0.000412000,0,1,,,,,,0.000300000,,,'), 'frame row');
-    check(strcmp(fr{3}, ['121' repmat(',', 1, 16)]), 'a frame of one field');
+    check(strcmp(fr{2}, '120,3,10.000000000,,10.000412000,0.000412000,0,1,,,,,,0.000300000,,,,'), 'frame row');
+    check(strcmp(fr{3}, ['121' repmat(',', 1, 17)]), 'a frame of one field');
     ev = lines(fullfile(d, 'events.csv'));
     check(strcmp(ev{2}, '10.250000000,3,keyboard,kb,,121,,,37,,,1,0.5,-0.5,,,,,1099511627776,left'), 'event row');
     ck = lines(fullfile(d, 'clock.csv'));

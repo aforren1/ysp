@@ -5374,6 +5374,41 @@ Workarounds:
 A person rarely clicks this fast; a script, a button box read as a mouse,
 or a worn switch that bounces can. Not measured: a real mouse.
 
+## An extension phase (v0.20.0)
+
+The filly renderer probe ([filly_probe.md](filly_probe.md), section 5)
+needed a phase for a renderer extension's CPU time on the frame thread
+(its render and its wait for the renderer's fence), and charged it to
+`YSCR_PHASE_SCRIPT` for want of one. A late frame then could not say
+whether the script or the renderer took its time.
+
+| Change | Why |
+|---|---|
+| `YSCR_PHASE_EXTENSION` (6), `YSCR_N_PHASES` 7 | rig_spec.md section 12: a Renderer's frame time is a phase in the flip record. The indices 0 to 5 keep their places, so code that names them does not change |
+| `yscr_mark()` takes it | It rejected every phase from `_GPU` (5) on. It still ignores `_GPU` (a CPU mark would replace "unknown" with a time) and indices out of range |
+| `yscr_record.phase_ns` has 7 entries | `code_risk` moves 4 bytes; the size stays 80 bytes on x86-64 (the new entry takes what was tail padding). A minor version: a binding or a share table that carries the record must be built again |
+| The ring's FLIP event carries phases 0 to 5 only | Its 40-byte payload is full (`u.u32[9]` is the frame index). The record (`f.done`, `on_flip`, `yscr_wait_flip()`) and the data set (ysp/dataset.h 0.3.0, frames.csv's `extension_s`) have it. `examples/screen/flipstats.c` read `u.u32[3 + k]` for `k < YSCR_N_PHASES`, which would have taken the frame index as phase 6; it now reads 6 |
+
+Users of the phases, and what changed in each: ysp/dataset.h 0.3.0
+(`yds_frame.extension_ns`, the last column of frames.csv); the player
+(`--sim` empties it with the other costs); ysp-vis 0.20.0 (Python
+`PHASE_EXTENSION`, `mark()` takes it, a `Record`'s `phases` has 7
+entries); the MEX files 1.5.0 (`'mark'` takes `'extension'`, `phases` 1 x
+7, the record row n x 16); `bindings/share` carries the record by pointer
+and was built again with it.
+
+### Tests
+
+`tests/adapt/screen_test.c`, `test_phases_and_wait()` (the scripted
+presenter): 250 us marked to `_EXTENSION` lands there (at least 250 us,
+under 2 ms), `_SCRIPT` stays 0, marks of `_GPU`, 7 and -1 change
+nothing (`_GPU` stays unknown), and a frame with no extension mark has
+0. `tests/compile/screen.c` checks the index, the count and the array's
+size. Mutants `ex-01` (v0.19's rule), `ex-02` (`_GPU` marked) and `ex-03`
+(the extension charged to the script): 3 of 3 killed. The filly probe
+built against it put filly's time in `_EXTENSION` and none in `_SCRIPT`
+over 3,600 frames ([gfx.md](gfx.md#the-filly-probe-again)).
+
 ## Not measured
 
 The open findings of v0.10.0 (5 handles an open and close, SDL's

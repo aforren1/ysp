@@ -143,6 +143,27 @@ WSL2 Ubuntu 22.04 gcc 11.4, emcc under node 24.19.
 | trials v0.6's data-line columns | A session with a variable and a seed: each row's variable text and `trial_seed` (`yds_seed_text()`) equal the trials writer's own data line (`ytr_format_row()`), and read back from trials.csv as text |
 | Mutants (`tests/mutate/dataset.toml`) | v0.2.0: 39 in all, MinGW gcc 16.1: 38 killed, among them the 6 new ones (ds-34 to ds-39: the abandon finishes, leaves the streams' files open, leaves the handle open; the existing folder reported as I/O; the open keeps an earlier code; a failure without a code). ds-35 needs Windows (a held file refuses a writer); on POSIX it survives. v0.1.0: 33 in all, 32 killed; ds-09 (no sync before the rename) survives as expected, since only a power cut shows it |
 
+### frames.csv's extension_s (v0.3.0, 2026-11-18)
+
+ysp/screen.h 0.20.0 adds `YSCR_PHASE_EXTENSION`, a renderer extension's
+CPU time on the frame thread ([screen.md](screen.md#an-extension-phase-v0200)).
+frames.csv gains `extension_s` as its last column (`yds_frame.extension_ns`,
+appended; `YDS_FRAME_COLS` 18), so the other columns keep their names and
+places for a reader by position. `yds_frame_from_screen()` copies it;
+`yds_frame_init()` makes it missing, so a row filled field by field, or
+from an older ysp/screen.h, writes an empty cell. The bindings build their
+column lists from the header's table: ysp-dataset 0.3.0 (Python,
+`FRAME_COLUMNS` has 18) and the MEX `ysp_dataset` 1.1.0.
+
+On the Linux desktop (GCC 12.2): `tests/adapt/dataset_test.c` 659 checks
+pass (C11 -O2, and -O1 with ASan and UBSan under `setarch -R`); the golden
+frames.csv has the column (one row 131,072 ns, the others 0) and the
+golden zip's digest and size (2,943 bytes) are new. `tests/compile/dataset.c`
+copies a phase through. The Python binding's 21 tests pass (CPython
+3.12.14). Mutants `dx-01` to `dx-03` (the phase not copied, the column
+before `gpu_s`, the init leaving it 0): 3 of 3 killed. The MEX
+`ysp_dataset` passed a syntax check only (no MEX build here).
+
 ### macOS (v0.2.1, 2026-11-04)
 
 The first run on a Mac: an Apple M2 Mac mini, macOS 27.0.1, Apple clang

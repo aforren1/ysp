@@ -1504,7 +1504,7 @@ static int pl_on_record(pl_player* p, const yscr_record* rec) {
     if (p->args.sim) {
         /* the phase durations are real CPU costs (ysp/rt.h, COSTS), not the
          * virtual clock's, so two --sim runs would differ only in them */
-        fr.evaluate_ns = fr.script_ns = fr.draw_ns = fr.upload_ns = fr.swap_ns = fr.gpu_ns = YTR_MISSING_NS;
+        fr.evaluate_ns = fr.script_ns = fr.draw_ns = fr.upload_ns = fr.swap_ns = fr.gpu_ns = fr.extension_ns = YTR_MISSING_NS;
     }
     {
         pl_wjob j;

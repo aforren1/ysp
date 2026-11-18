@@ -128,7 +128,7 @@ static PyStructSequence_Field vs_record_fields[] = {
     { "path", "PATH_COMPOSED, PATH_OVERLAY, PATH_INDEPENDENT, PATH_SIMULATED" },
     { "tier", "TIER_1 to TIER_3, TIER_SIM: how far the onset can be trusted" },
     { "flags", "FLIP_* bits" },
-    { "phases", "seconds charged to PHASE_EVALUATE, _SCRIPT, _DRAW, _UPLOAD, _SWAP, _GPU; None: unknown" },
+    { "phases", "seconds charged to PHASE_EVALUATE, _SCRIPT, _DRAW, _UPLOAD, _SWAP, _GPU, _EXTENSION; None: unknown" },
     { "code_risk", "CODE_RISK_* bits; 0 without codes" },
     { NULL, NULL }
 };
@@ -575,8 +575,8 @@ static PyObject* Screen_mark(PyObject* self, PyObject* arg) {
     ScreenObject* o = SC_OF(self);
     long ph = PyLong_AsLong(arg);
     if (ph == -1 && PyErr_Occurred()) return NULL;
-    if (ph < YSCR_PHASE_EVALUATE || ph > YSCR_PHASE_UPLOAD) {
-        PyErr_SetString(VsArgumentError, "mark(phase): PHASE_EVALUATE, PHASE_SCRIPT, PHASE_DRAW or PHASE_UPLOAD");
+    if ((ph < YSCR_PHASE_EVALUATE || ph > YSCR_PHASE_UPLOAD) && ph != YSCR_PHASE_EXTENSION) {
+        PyErr_SetString(VsArgumentError, "mark(phase): PHASE_EVALUATE, PHASE_SCRIPT, PHASE_DRAW, PHASE_UPLOAD or PHASE_EXTENSION");
         return NULL;
     }
     if (!sc_ready(o)) return NULL;
@@ -1010,7 +1010,7 @@ PyMODINIT_FUNC PyInit__vis(void) {
         { "ABORT_QUIT", YSCR_ABORT_QUIT }, { "ABORT_REQUEST", YSCR_ABORT_REQUEST }, { "ABORT_PANIC", YSCR_ABORT_PANIC },
         { "PHASE_EVALUATE", YSCR_PHASE_EVALUATE }, { "PHASE_SCRIPT", YSCR_PHASE_SCRIPT },
         { "PHASE_DRAW", YSCR_PHASE_DRAW }, { "PHASE_UPLOAD", YSCR_PHASE_UPLOAD }, { "PHASE_SWAP", YSCR_PHASE_SWAP },
-        { "PHASE_GPU", YSCR_PHASE_GPU },
+        { "PHASE_GPU", YSCR_PHASE_GPU }, { "PHASE_EXTENSION", YSCR_PHASE_EXTENSION },
         { "SETTLED", YSCR_SETTLED }, { "SETTLE_FAILED", YSCR_SETTLE_FAILED }, { "SETTLE_SKIPPED", YSCR_SETTLE_SKIPPED },
         { "SETTLE_ABORTED", YSCR_SETTLE_ABORTED },
         { "PANIC_EXIT_CODE", YSCR_PANIC_EXIT_CODE },

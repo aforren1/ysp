@@ -953,6 +953,14 @@ static void test_coordinates(void) {
 }
 
 /* The null backend runs the frame; the ring gets the open and clipped records. */
+static int g_t21_native;
+static int t21_native(void* c, uint32_t id, uint32_t* gl_name, uint32_t* gl_format) {
+    (void)c; (void)id;
+    g_t21_native++;
+    *gl_name = 1; *gl_format = 0x8058;
+    return 0;
+}
+
 static void test_null_and_ring(void) {
     static yscr_screen scr;
     static ygfx_gfx g;
@@ -1011,7 +1019,36 @@ static void test_null_and_ring(void) {
         if (ev[i].kind == YGFX_EV_CLIPPED) { clips++; CHECK(ev[i].aux == 1 && ev[i].u.i64[0] == 0); }
     }
     CHECK(opens == 1 && clips == 1);   /* none for the frame without a clip */
-    ygfx_close(&g);
+    {
+        /* v0.21: the null backend has no texture_native, so no shared
+         * texture; a version 6 table is refused, 3 to 5 open */
+        ygfx_shared_desc sd;
+        ygfx_native nat;
+        static ygfx_backend be6, be4;
+        static ygfx__null nctx;
+        memset(&sd, 0, sizeof sd);
+        sd.w = sd.h = 4;
+        nat.gl_name = 77;
+        CHECK(ygfx_texture_shared(&g, &sd, &nat).id == 0 && nat.gl_name == 0);
+        CHECK(strstr(ygfx_error(&g), "texture_native") != NULL);
+        ygfx_close(&g);
+        be6 = ygfx__null_backend; be6.version = 6;
+        be4 = ygfx__null_backend; be4.version = 4;
+        gd.backend = &be6;
+        gd.backend_ctx = &nctx;
+        CHECK(!ygfx_open(&g, &gd) && strstr(ygfx_error(&g), "backend version 6") != NULL);
+        gd.backend = &be4;
+        CHECK(ygfx_open(&g, &gd));
+        if (ygfx_is_open(&g)) {
+            /* a version 4 table's caller compiled without the member: never read */
+            be4.texture_native = t21_native;
+            g_t21_native = 0;
+            CHECK(ygfx_texture_shared(&g, &sd, &nat).id == 0 && g_t21_native == 0);
+            ygfx_close(&g);
+        }
+        gd.backend = NULL;
+        gd.backend_ctx = NULL;
+    }
     yscr_close(&scr);
     /* refusals */
     gd.output = YGFX_OUT_10;
@@ -6319,6 +6356,501 @@ static void gl_v05_kinds(stats* st) {
     ygfx_close(&R->g);
 }
 
+/* ------------------------------------------------- v0.21 rows and shared */
+
+/* What v0.21's checks measured: a texture with rows bottom first against
+ * the same texels top first, and a texture a second context draws into. */
+typedef struct stats21 {
+    int ran;
+    long rows_cases, rows_bad;      /* scenes not bit for bit the top-first one's */
+    long default_bad;               /* AUTO, TOP_DOWN: not today's (top-first) scene */
+    long auto_flipped;              /* AUTO of rows stored bottom first: scenes that differ */
+    double rows_ref;                /* 1:1 nearest against code / 255         */
+    long refused_ok, refused_n;
+    long shared_codes_bad;          /* the producer's readback against its codes */
+    long shared_bad;                /* scenes not equal to ysp_gfx's own upload */
+    double shared_ref;              /* RGBA8: the scene against code / 255     */
+    double srgb_ref;                /* SRGB8_ALPHA8: against the sRGB formula */
+    double srgb_vs_enc;             /* against an RGBA8 texture, enc TRC_SRGB  */
+    long rebind_bad, frames;
+    int share_made;
+} stats21;
+static stats21 S21;
+
+typedef void (YGFX_HL__API *v21_gen_fn)(int, uint32_t*);
+typedef void (YGFX_HL__API *v21_bind_fn)(uint32_t, uint32_t);
+typedef void (YGFX_HL__API *v21_storage_fn)(uint32_t, int, uint32_t, int, int);
+typedef void (YGFX_HL__API *v21_sub_fn)(uint32_t, int, int, int, int, int, uint32_t, uint32_t, const void*);
+typedef void (YGFX_HL__API *v21_pi_fn)(uint32_t, int);
+typedef void (YGFX_HL__API *v21_del_fn)(int, const uint32_t*);
+typedef void (YGFX_HL__API *v21_fbtex_fn)(uint32_t, uint32_t, uint32_t, uint32_t, int);
+typedef uint32_t (YGFX_HL__API *v21_status_fn)(uint32_t);
+typedef void (YGFX_HL__API *v21_cap_fn)(uint32_t);
+typedef void (YGFX_HL__API *v21_rect_fn)(int, int, int, int);
+typedef void (YGFX_HL__API *v21_color_fn)(float, float, float, float);
+typedef void (YGFX_HL__API *v21_clear_fn)(uint32_t);
+typedef void* (YGFX_HL__API *v21_fence_fn)(uint32_t, uint32_t);
+typedef void (YGFX_HL__API *v21_wait_fn)(void*, uint32_t, uint64_t);
+typedef void (YGFX_HL__API *v21_dsync_fn)(void*);
+typedef void (YGFX_HL__API *v21_void_fn)(void);
+typedef void (YGFX_HL__API *v21_read_fn)(int, int, int, int, uint32_t, uint32_t, void*);
+typedef uint32_t (YGFX_HL__API *v21_err_fn)(void);
+
+typedef struct v21_gl {
+    v21_gen_fn GenTextures, GenFramebuffers;
+    v21_bind_fn BindTexture, BindFramebuffer;
+    v21_storage_fn TexStorage2D;
+    v21_sub_fn TexSubImage2D;
+    v21_pi_fn PixelStorei;
+    v21_del_fn DeleteTextures, DeleteFramebuffers;
+    v21_fbtex_fn FramebufferTexture2D;
+    v21_status_fn CheckFramebufferStatus;
+    v21_cap_fn Enable, Disable;
+    v21_rect_fn Scissor, Viewport;
+    v21_color_fn ClearColor;
+    v21_clear_fn Clear;
+    v21_fence_fn FenceSync;
+    v21_wait_fn WaitSync;
+    v21_dsync_fn DeleteSync;
+    v21_void_fn Flush;
+    v21_read_fn ReadPixels;
+    v21_err_fn GetError;
+} v21_gl;
+
+static int v21_load(v21_gl* f) {
+    yscr_proc* p = (yscr_proc*)(void*)f;
+    static const char* const names[] = {
+        "glGenTextures", "glGenFramebuffers", "glBindTexture", "glBindFramebuffer", "glTexStorage2D", "glTexSubImage2D",
+        "glPixelStorei", "glDeleteTextures", "glDeleteFramebuffers", "glFramebufferTexture2D", "glCheckFramebufferStatus",
+        "glEnable", "glDisable", "glScissor", "glViewport", "glClearColor", "glClear", "glFenceSync", "glWaitSync",
+        "glDeleteSync", "glFlush", "glReadPixels", "glGetError" };
+    size_t i;
+    /* every member is a function pointer of one size, in the order above */
+    for (i = 0; i < sizeof names / sizeof names[0]; i++) {
+        yscr_proc q = ygfx_hl__sym(&R->hl, names[i]);
+        if (!q) return 0;
+        memcpy(&p[i], &q, sizeof q);
+    }
+    return 1;
+}
+
+/* A GL texture of the gfx's context made with raw GL, rows as given
+ * (bytes per texel bpp: 1 R8, 2 RG8, 4 RGBA8). */
+static uint32_t v21_raw_tex(const v21_gl* f, int w, int h, uint32_t ifmt, uint32_t fmt, const uint8_t* rows) {
+    uint32_t t = 0;
+    f->GenTextures(1, &t);
+    f->BindTexture(0x0DE1, t);
+    f->TexStorage2D(0x0DE1, 1, ifmt, w, h);
+    f->PixelStorei(0x0CF5, 1);                     /* GL_UNPACK_ALIGNMENT */
+    f->TexSubImage2D(0x0DE1, 0, 0, 0, w, h, fmt, 0x1401, rows);
+    f->BindTexture(0x0DE1, 0);
+    return t;
+}
+
+static void v21_flip_rows(uint8_t* dst, const uint8_t* src, int w, int h, int bpp) {
+    int y;
+    for (y = 0; y < h; y++) memcpy(dst + (size_t)y * w * bpp, src + (size_t)(h - 1 - y) * w * bpp, (size_t)w * bpp);
+}
+
+/* The scene of one image of t at (5, 5) top-left; cover 1 coverage, 2 a
+ * modulation, 3 an ADD image, 4 two instances of it. */
+static void v21_scene(ygfx_tex t, float sx, float sy, const float* src, int lin, int cover, float* out) {
+    ygfx_image_desc idd;
+    ygfx_stim s;
+    memset(&idd, 0, sizeof idd);
+    idd.tex = t; idd.place = YGFX_TOP_LEFT; idd.anchor = YGFX_TOP_LEFT; idd.x = 5; idd.y = 5;
+    idd.w = sx; idd.h = sy; idd.linear = lin != 0; idd.coverage = cover == 1;
+    idd.modulation = cover == 2; idd.add = cover == 3;
+    if (cover == 1) { idd.tint[0] = 0.25f; idd.tint[1] = 0.5f; idd.tint[2] = 1.0f; idd.tint[3] = 1.0f; }
+    if (cover == 2) { idd.dir[0] = 0.5f; idd.dir[1] = 0.25f; idd.dir[2] = 0.125f; idd.contrast = 0.5f; }
+    if (src) memcpy(idd.src, src, sizeof idd.src);
+    s = ygfx_image(&R->g, &idd);
+    if (cover == 4) {
+        static ygfx_inst el[2];
+        ygfx_instances_desc ind;
+        ygfx_stim e;
+        memset(el, 0, sizeof el);
+        el[1].x = 60; el[1].y = 30;
+        memset(&ind, 0, sizeof ind);
+        ind.inst = el; ind.n = 2; ind.fields = YGFX_I_XY;
+        e = ygfx_instances(&R->g, &s, &ind);
+        CHECK(e.n_inst == 2);
+        gl_frame(&e, 1);
+    } else {
+        gl_frame(&s, 1);
+    }
+    memcpy(out, R->scene, sizeof R->scene);
+}
+
+/* Draws a (top-first texture) and b in every case; counts the scenes that
+ * are not bit for bit equal. */
+static long v21_same(ygfx_tex a, ygfx_tex b, int w, int h, int cover, long* cases) {
+    static float sa[W * H * 4], sb[W * H * 4];
+    static const float sub[4] = { 2, 1, 7, 4 };
+    const float sc[4][2] = { { 0, 0 }, { 3, 3 }, { 2.5f, 1.75f }, { 1, 1 } };
+    long bad = 0;
+    int k, lin;
+    for (k = 0; k < 4; k++)
+        for (lin = 0; lin < 2; lin++) {
+            const float* src = k == 3 ? sub : NULL;
+            float sx = sc[k][0] * (float)(k == 3 ? sub[2] : (float)w), sy = sc[k][1] * (float)(k == 3 ? sub[3] : (float)h);
+            v21_scene(a, sx, sy, src, lin, cover, sa);
+            v21_scene(b, sx, sy, src, lin, cover, sb);
+            bad += memcmp(sa, sb, sizeof sa) != 0;
+            (*cases)++;
+        }
+    return bad;
+}
+
+/* Paints texel (x, y), GL rows, of the bound framebuffer with code c(x, y)
+ * by one scissored clear each: a renderer's writes, not an upload. */
+static void v21_paint(const v21_gl* f, int w, int h, int salt, int srgb, uint8_t* codes) {
+    int x, y, c;
+    f->Enable(0x0C11);                              /* GL_SCISSOR_TEST */
+    for (y = 0; y < h; y++)
+        for (x = 0; x < w; x++) {
+            uint8_t* q = codes + ((size_t)y * w + x) * 4;
+            float v[4];
+            q[0] = (uint8_t)(x * 37 + salt); q[1] = (uint8_t)(y * 53 + 3 * salt); q[2] = (uint8_t)((x * 11 + y * 29 + salt) & 255);
+            q[3] = 255;
+            for (c = 0; c < 4; c++) v[c] = q[c] / 255.0f;
+            /* sRGB storage: clear with the code's light; the GPU encodes it */
+            if (srgb) for (c = 0; c < 3; c++) v[c] = (float)trc_ref(q[c] / 255.0, YGFX_TRC_SRGB);
+            f->Scissor(x, y, 1, 1);
+            f->ClearColor(v[0], v[1], v[2], v[3]);
+            f->Clear(0x4000);                       /* GL_COLOR_BUFFER_BIT */
+        }
+    f->Disable(0x0C11);
+}
+
+static void gl_v21_rows_shared(stats* st) {
+    v21_gl f;
+    enum { TW = 13, TH = 7 };
+    static uint8_t px[TW * TH * 4], rev[TW * TH * 4], g8[TW * TH], g8r[TW * TH];
+    ygfx_texture_desc td;
+    ygfx_import_desc id;
+    ygfx_tex t0, t1, ta, tb;
+    uint32_t raw_top, raw_rev, raw_g8r;
+    int i, x, y, c;
+    (void)st;
+    if (!gl_open(0, YGFX_RGBA32F, YGFX_DITHER_NONE)) return;
+    if (!v21_load(&f)) { fprintf(stderr, "gfx_test [%s]: v0.21: GL entry points missing\n", g_where); g_failures++; ygfx_close(&R->g); return; }
+    S21.ran = 1;
+    /* the pattern, top first; alpha varies, so straight-alpha filtering is in it */
+    for (i = 0; i < TW * TH; i++) {
+        px[i * 4] = (uint8_t)(i * 29 + 7); px[i * 4 + 1] = (uint8_t)(i * 71 + 1); px[i * 4 + 2] = (uint8_t)(255 - i * 13);
+        px[i * 4 + 3] = (uint8_t)(i % 5 == 0 ? 0 : 128 + i);
+        g8[i] = (uint8_t)(i * 97 + 11);
+    }
+    v21_flip_rows(rev, px, TW, TH, 4);
+    v21_flip_rows(g8r, g8, TW, TH, 1);
+    raw_top = v21_raw_tex(&f, TW, TH, 0x8058, 0x1908, px);       /* GL_RGBA8, GL_RGBA */
+    raw_rev = v21_raw_tex(&f, TW, TH, 0x8058, 0x1908, rev);
+    raw_g8r = v21_raw_tex(&f, TW, TH, 0x8229, 0x1903, g8r);       /* GL_R8, GL_RED */
+    ygfx_reset_state(&R->g);
+    memset(&td, 0, sizeof td);
+    td.w = TW; td.h = TH; td.format = YGFX_RGBA8; td.data = px;
+    t0 = ygfx_texture(&R->g, &td);
+    memset(&id, 0, sizeof id);
+    id.kind = YGFX_IMPORT_GL; id.w = TW; id.h = TH; id.format = YGFX_RGBA8; id.gl_tex[0] = raw_rev; id.rows = YGFX_ROWS_BOTTOM_UP;
+    t1 = ygfx_texture_import(&R->g, &id);
+    CHECK(t0.id && t1.id);
+    if (t0.id && t1.id) {
+        static float sa[W * H * 4];
+        S21.rows_bad += v21_same(t0, t1, TW, TH, 0, &S21.rows_cases);
+        /* the modulation, ADD and instanced programs' rows variants */
+        S21.rows_bad += v21_same(t0, t1, TW, TH, 2, &S21.rows_cases);
+        S21.rows_bad += v21_same(t0, t1, TW, TH, 3, &S21.rows_cases);
+        S21.rows_bad += v21_same(t0, t1, TW, TH, 4, &S21.rows_cases);
+        /* 1:1 nearest: each pixel is its texel's code / 255 */
+        v21_scene(t1, 0, 0, NULL, 0, 0, sa);
+        for (y = 0; y < TH; y++)
+            for (x = 0; x < TW; x++) {
+                const uint8_t* q = px + ((size_t)y * TW + x) * 4;
+                const float* o = sa + ((size_t)(y + 5) * W + x + 5) * 4;
+                double a = q[3] / 255.0;
+                /* straight alpha over black: rgb x a in the scene */
+                for (c = 0; c < 3; c++) S21.rows_ref = maxd(S21.rows_ref, fabs(o[c] - q[c] / 255.0 * a));
+            }
+        /* the default: AUTO and TOP_DOWN are today's meaning */
+        {
+            ygfx_tex ta2, tt;
+            long n0 = 0, bad;
+            id.gl_tex[0] = raw_top; id.rows = YGFX_ROWS_AUTO;
+            ta2 = ygfx_texture_import(&R->g, &id);
+            id.rows = YGFX_ROWS_TOP_DOWN;
+            tt = ygfx_texture_import(&R->g, &id);
+            CHECK(ta2.id && tt.id);
+            S21.default_bad += v21_same(t0, ta2, TW, TH, 0, &n0) + v21_same(t0, tt, TW, TH, 0, &n0);
+            ygfx_texture_free(&R->g, ta2);
+            ygfx_texture_free(&R->g, tt);
+            /* and AUTO of the bottom-first rows shows them upside down: the check
+             * above can see a turn */
+            id.gl_tex[0] = raw_rev; id.rows = YGFX_ROWS_AUTO;
+            ta2 = ygfx_texture_import(&R->g, &id);
+            bad = v21_same(t0, ta2, TW, TH, 0, &n0);
+            S21.auto_flipped += bad;
+            ygfx_texture_free(&R->g, ta2);
+        }
+        /* rebind: a top-first texture shows the bottom-first import's texels upright */
+        CHECK(ygfx_texture_rebind(&R->g, t0, t1) == YGFX_OK);
+        {
+            long n0 = 0;
+            ygfx_tex tc;
+            td.data = px;
+            tc = ygfx_texture(&R->g, &td);
+            S21.rows_bad += v21_same(tc, t0, TW, TH, 0, &S21.rows_cases);
+            ygfx_texture_free(&R->g, tc);
+            (void)n0;
+        }
+        CHECK(ygfx_texture_rebind(&R->g, t0, t0) == YGFX_OK);
+    }
+    /* an 8-bit sRGB image (the filly probe's import): the video program's path */
+    {
+        ygfx_tex e0, e1;
+        td.enc.matrix = YGFX_MATRIX_RGB; td.enc.range = YGFX_RANGE_FULL; td.enc.transfer = YGFX_TRC_SRGB;
+        td.enc.primaries = YGFX_PRIM_DEVICE; td.enc.siting = YGFX_SITING_NONE;
+        e0 = ygfx_texture(&R->g, &td);
+        id.gl_tex[0] = raw_rev; id.rows = YGFX_ROWS_BOTTOM_UP; id.enc = td.enc;
+        e1 = ygfx_texture_import(&R->g, &id);
+        CHECK(e0.id && e1.id);
+        if (e0.id && e1.id) {
+            S21.rows_bad += v21_same(e0, e1, TW, TH, 0, &S21.rows_cases);
+            S21.rows_bad += v21_same(e0, e1, TW, TH, 4, &S21.rows_cases);   /* the instanced video program */
+        }
+        ygfx_texture_free(&R->g, e0);
+        ygfx_texture_free(&R->g, e1);
+        memset(&td.enc, 0, sizeof td.enc);
+        memset(&id.enc, 0, sizeof id.enc);
+    }
+    /* R8 as coverage */
+    {
+        ygfx_tex c0, c1;
+        td.format = YGFX_R8; td.data = g8;
+        c0 = ygfx_texture(&R->g, &td);
+        id.format = YGFX_R8; id.gl_tex[0] = raw_g8r; id.rows = YGFX_ROWS_BOTTOM_UP;
+        c1 = ygfx_texture_import(&R->g, &id);
+        CHECK(c0.id && c1.id);
+        if (c0.id && c1.id) S21.rows_bad += v21_same(c0, c1, TW, TH, 1, &S21.rows_cases);
+        ygfx_texture_free(&R->g, c0);
+        ygfx_texture_free(&R->g, c1);
+        td.format = YGFX_RGBA8; td.data = px;
+        id.format = YGFX_RGBA8;
+    }
+    /* NV12, odd and even sizes, interpolated and replicated chroma: each
+     * plane's rows bottom first */
+    {
+        static vframe vf;
+        static uint8_t yr[64 * 64], cr[64 * 64];
+        int k;
+        for (k = 0; k < 2; k++) {
+            ygfx_tex v0, v1;
+            uint32_t ry, rc;
+            vf_fill(&vf, YGFX_NV12, k ? 38 : 37, k ? 24 : 23);
+            vf.e.matrix = YGFX_MATRIX_BT709; vf.e.range = YGFX_RANGE_LIMITED; vf.e.transfer = YGFX_TRC_BT1886;
+            vf.e.primaries = YGFX_PRIM_DEVICE; vf.e.siting = k ? YGFX_SITING_TOP_LEFT : YGFX_SITING_LEFT;
+            vf.e.chroma_nearest = (uint8_t)k;
+            v0 = vf_texture(&vf);
+            v21_flip_rows(yr, vf.y, vf.w, vf.h, 1);
+            v21_flip_rows(cr, vf.u, vf_cw(&vf), vf_ch(&vf), 2);
+            ry = v21_raw_tex(&f, vf.w, vf.h, 0x8229, 0x1903, yr);                 /* R8 */
+            rc = v21_raw_tex(&f, vf_cw(&vf), vf_ch(&vf), 0x822B, 0x8227, cr);    /* GL_RG8, GL_RG */
+            ygfx_reset_state(&R->g);
+            memset(&id, 0, sizeof id);
+            id.kind = YGFX_IMPORT_GL; id.w = vf.w; id.h = vf.h; id.format = YGFX_NV12; id.enc = vf.e;
+            id.gl_tex[0] = ry; id.gl_tex[1] = rc; id.rows = YGFX_ROWS_BOTTOM_UP;
+            v1 = ygfx_texture_import(&R->g, &id);
+            CHECK(v0.id && v1.id);
+            if (v0.id && v1.id) S21.rows_bad += v21_same(v0, v1, vf.w, vf.h, 0, &S21.rows_cases);
+            ygfx_texture_free(&R->g, v0);
+            ygfx_texture_free(&R->g, v1);
+            f.DeleteTextures(1, &ry);
+            f.DeleteTextures(1, &rc);
+            ygfx_reset_state(&R->g);
+        }
+    }
+    /* refusals: rows out of range; a bottom-first texture as a mask or a
+     * shader's texture; a shared texture's format, encoding and rows */
+    {
+        ygfx_shared_desc sd;
+        ygfx_native nat;
+        ygfx_shape_desc shd;
+        ygfx_stim s;
+        int rc;
+        memset(&id, 0, sizeof id);
+        id.kind = YGFX_IMPORT_GL; id.w = TW; id.h = TH; id.format = YGFX_RGBA8; id.gl_tex[0] = raw_rev;
+        id.rows = (ygfx_rows)3;
+        S21.refused_n++; S21.refused_ok += ygfx_texture_import(&R->g, &id).id == 0;
+        memset(&shd, 0, sizeof shd);
+        shd.shape = YGFX_MASK_TEX; shd.w = 40; shd.h = 40; shd.mask = t1; shd.color[0] = 1;
+        s = ygfx_shape(&shd);
+        CHECK(yscr_begin(&R->scr, &R->f) == YSCR_OK);
+        CHECK(ygfx_begin(&R->g, &R->f) == YGFX_OK);
+        rc = ygfx_draw(&R->g, &s);
+        S21.refused_n++; S21.refused_ok += rc == YGFX_ERR_ARG && strstr(ygfx_error(&R->g), "rows BOTTOM_UP") != NULL;
+        {
+            ygfx_pipeline_desc pd;
+            ygfx_user_desc ud;
+            ygfx_pipe pp;
+            memset(&pd, 0, sizeof pd);
+            CHECK(ygfx_end(&R->g) == YGFX_OK);
+            CHECK(yscr_flip(&R->scr) == YSCR_OK);
+            pd.body = "vec4 ysp_main(vec2 p) { return texelFetch(ysp_tex0, ivec2(0), 0); }\n";
+            pd.mode = YGFX_COLOR;
+            pp = ygfx_pipeline(&R->g, &pd);
+            CHECK(pp.id != 0);
+            memset(&ud, 0, sizeof ud);
+            ud.pipe = pp; ud.w = 20; ud.h = 20; ud.tex = t1;
+            s = ygfx_user(&ud);
+            CHECK(yscr_begin(&R->scr, &R->f) == YSCR_OK);
+            CHECK(ygfx_begin(&R->g, &R->f) == YGFX_OK);
+            rc = ygfx_draw(&R->g, &s);
+            S21.refused_n++; S21.refused_ok += rc == YGFX_ERR_ARG && strstr(ygfx_error(&R->g), "rows BOTTOM_UP") != NULL;
+            CHECK(ygfx_end(&R->g) == YGFX_OK);
+            CHECK(yscr_flip(&R->scr) == YSCR_OK);
+            ygfx_pipeline_free(&R->g, pp);
+        }
+        memset(&sd, 0, sizeof sd);
+        sd.w = 8; sd.h = 8; sd.format = YGFX_RGBA16F;
+        S21.refused_n++; S21.refused_ok += ygfx_texture_shared(&R->g, &sd, &nat).id == 0 && nat.gl_name == 0;
+        sd.format = YGFX_RGBA8; sd.srgb = true; sd.enc.matrix = YGFX_MATRIX_RGB; sd.enc.range = YGFX_RANGE_FULL;
+        sd.enc.transfer = YGFX_TRC_SRGB; sd.enc.primaries = YGFX_PRIM_DEVICE; sd.enc.siting = YGFX_SITING_NONE;
+        S21.refused_n++; S21.refused_ok += ygfx_texture_shared(&R->g, &sd, &nat).id == 0;
+        memset(&sd.enc, 0, sizeof sd.enc);
+        sd.srgb = false; sd.rows = (ygfx_rows)3;
+        S21.refused_n++; S21.refused_ok += ygfx_texture_shared(&R->g, &sd, &nat).id == 0;
+        sd.rows = YGFX_ROWS_AUTO; sd.w = 0;
+        S21.refused_n++; S21.refused_ok += ygfx_texture_shared(&R->g, &sd, &nat).id == 0;
+        sd.w = 8;
+        S21.refused_n++; S21.refused_ok += ygfx_texture_shared(&R->g, &sd, NULL).id == 0;
+    }
+    ygfx_texture_free(&R->g, t1);
+    ygfx_texture_free(&R->g, t0);
+    f.DeleteTextures(1, &raw_top);
+    f.DeleteTextures(1, &raw_rev);
+    f.DeleteTextures(1, &raw_g8r);
+    ygfx_reset_state(&R->g);
+
+    /* SHARED TEXTURES: a second context that shares the gfx's paints two
+     * shared textures by clears, orders them with a fence and glWaitSync,
+     * and the gfx shows them through one texture by rebind, upright */
+    {
+        typedef unsigned (YGFX_HL__API *choose_fn)(void*, const int32_t*, void**, int32_t, int32_t*);
+        typedef void* (YGFX_HL__API *ctx_fn)(void*, void*, void*, const int32_t*);
+        typedef void* (YGFX_HL__API *pb_fn)(void*, void*, const int32_t*);
+        choose_fn choose = (choose_fn)ygfx_hl__sym(&R->hl, "eglChooseConfig");
+        ctx_fn mkctx = (ctx_fn)ygfx_hl__sym(&R->hl, "eglCreateContext");
+        pb_fn mkpb = (pb_fn)ygfx_hl__sym(&R->hl, "eglCreatePbufferSurface");
+        static const int32_t cattr[] = { 0x3024, 8, 0x3023, 8, 0x3022, 8, 0x3021, 8, 0x3033, 1, 0x3040, 0x40, 0x3038 };
+        static const int32_t xattr[] = { 0x3098, 3, 0x3038 };
+        static const int32_t pattr[] = { 0x3057, 16, 0x3056, 16, 0x3038 };
+        void *cfg = NULL, *pctx = NULL, *psurf = NULL;
+        int32_t n = 0;
+        int srgb;
+        if (choose && mkctx && mkpb && choose(R->hl.dpy, cattr, &cfg, 1, &n) && n > 0) {
+            pctx = mkctx(R->hl.dpy, cfg, R->hl.ctx, xattr);
+            psurf = pctx ? mkpb(R->hl.dpy, cfg, pattr) : NULL;
+        }
+        S21.share_made = pctx && psurf;
+        CHECK(S21.share_made);
+        for (srgb = 0; srgb < 2 && S21.share_made; srgb++) {
+            enum { SW = 11, SH = 6 };
+            ygfx_shared_desc sd;
+            ygfx_native na, nb;
+            ygfx_tex show;
+            uint32_t fbo[2] = { 0, 0 };
+            static uint8_t codes[2][SW * SH * 4], back[SW * SH * 4], top[SW * SH * 4];
+            static float sref[W * H * 4];
+            int frame;
+            memset(&sd, 0, sizeof sd);
+            sd.w = SW; sd.h = SH; sd.srgb = srgb != 0; sd.rows = YGFX_ROWS_BOTTOM_UP;
+            ta = ygfx_texture_shared(&R->g, &sd, &na);
+            tb = ygfx_texture_shared(&R->g, &sd, &nb);
+            CHECK(ta.id && tb.id && na.gl_name && nb.gl_name && na.gl_name != nb.gl_name);
+            CHECK(na.gl_format == (srgb ? 0x8C43u : 0x8058u) && nb.gl_format == na.gl_format);
+            if (!ta.id || !tb.id) continue;
+            show = ta;
+            /* the producer's framebuffers, in its own context */
+            R->hl.make_current(R->hl.dpy, psurf, psurf, pctx);
+            for (i = 0; i < 2; i++) {
+                f.GenFramebuffers(1, &fbo[i]);
+                f.BindFramebuffer(0x8D40, fbo[i]);
+                f.FramebufferTexture2D(0x8D40, 0x8CE0, 0x0DE1, i ? nb.gl_name : na.gl_name, 0);
+                CHECK(f.CheckFramebufferStatus(0x8D40) == 0x8CD5);
+            }
+            for (frame = 0; frame < 4; frame++) {
+                int k = frame & 1;
+                void* fence;
+                /* the producer writes this frame's texture */
+                R->hl.make_current(R->hl.dpy, psurf, psurf, pctx);
+                f.BindFramebuffer(0x8D40, fbo[k]);
+                f.Viewport(0, 0, SW, SH);
+                v21_paint(&f, SW, SH, 17 * frame + 5, srgb, codes[k]);
+                /* the codes the GPU stored (an sRGB attachment reads back encoded) */
+                f.ReadPixels(0, 0, SW, SH, 0x1908, 0x1401, back);
+                for (i = 0; i < SW * SH * 4; i++) S21.shared_codes_bad += back[i] != codes[k][i];
+                fence = f.FenceSync(0x9117, 0);      /* GL_SYNC_GPU_COMMANDS_COMPLETE */
+                f.Flush();
+                CHECK(f.GetError() == 0);
+                /* the gfx's context waits on the GPU, then shows it: no state of
+                 * the gfx's context changed, so no ygfx_reset_state() */
+                R->hl.make_current(R->hl.dpy, R->hl.surf, R->hl.surf, R->hl.ctx);
+                f.WaitSync(fence, 0, 0xFFFFFFFFFFFFFFFFull);   /* GL_TIMEOUT_IGNORED */
+                f.DeleteSync(fence);
+                CHECK(ygfx_texture_rebind(&R->g, show, k ? tb : ta) == YGFX_OK);
+                v21_scene(show, 0, 0, NULL, 0, 0, sref);
+                S21.frames++;
+                /* each pixel against its texel: GL row SH - 1 - y is the image's row y */
+                for (y = 0; y < SH; y++)
+                    for (x = 0; x < SW; x++) {
+                        const uint8_t* q = codes[k] + ((size_t)(SH - 1 - y) * SW + x) * 4;
+                        const float* o = sref + ((size_t)(y + 5) * W + x + 5) * 4;
+                        for (c = 0; c < 3; c++) {
+                            if (srgb) S21.srgb_ref = maxd(S21.srgb_ref, fabs(o[c] - trc_ref(q[c] / 255.0, YGFX_TRC_SRGB)));
+                            else S21.shared_ref = maxd(S21.shared_ref, fabs(o[c] - q[c] / 255.0));
+                        }
+                    }
+                /* the same codes uploaded top first to a texture of ysp_gfx's own */
+                {
+                    static float sown[W * H * 4];
+                    ygfx_tex own;
+                    v21_flip_rows(top, codes[k], SW, SH, 4);
+                    memset(&td, 0, sizeof td);
+                    td.w = SW; td.h = SH; td.format = YGFX_RGBA8; td.data = top;
+                    if (srgb) {
+                        td.enc.matrix = YGFX_MATRIX_RGB; td.enc.range = YGFX_RANGE_FULL; td.enc.transfer = YGFX_TRC_SRGB;
+                        td.enc.primaries = YGFX_PRIM_DEVICE; td.enc.siting = YGFX_SITING_NONE;
+                    }
+                    own = ygfx_texture(&R->g, &td);
+                    CHECK(own.id != 0);
+                    v21_scene(own, 0, 0, NULL, 0, 0, sown);
+                    if (srgb) {
+                        for (i = 0; i < W * H * 4; i++) S21.srgb_vs_enc = maxd(S21.srgb_vs_enc, fabs(sown[i] - sref[i]));
+                    } else {
+                        S21.shared_bad += memcmp(sown, sref, sizeof sown) != 0;
+                    }
+                    ygfx_texture_free(&R->g, own);
+                    /* the stimulus still shows the shared texture after a rebind back */
+                    CHECK(ygfx_texture_rebind(&R->g, show, k ? tb : ta) == YGFX_OK);
+                    v21_scene(show, 0, 0, NULL, 0, 0, sown);
+                    S21.rebind_bad += memcmp(sown, sref, sizeof sown) != 0;
+                }
+            }
+            CHECK(ygfx_texture_rebind(&R->g, show, show) == YGFX_OK);
+            R->hl.make_current(R->hl.dpy, psurf, psurf, pctx);
+            f.BindFramebuffer(0x8D40, 0);
+            f.DeleteFramebuffers(2, fbo);
+            R->hl.make_current(R->hl.dpy, R->hl.surf, R->hl.surf, R->hl.ctx);
+            ygfx_texture_free(&R->g, ta);
+            ygfx_texture_free(&R->g, tb);
+        }
+        if (psurf && R->hl.destroy_surface) R->hl.destroy_surface(R->hl.dpy, psurf);
+        if (pctx && R->hl.destroy_context) R->hl.destroy_context(R->hl.dpy, pctx);
+        R->hl.make_current(R->hl.dpy, R->hl.surf, R->hl.surf, R->hl.ctx);
+    }
+    ygfx_close(&R->g);
+}
+
 static int gl_suite(const char* name, ygfx_hl_device dev) {
     yscr_desc d;
     stats st;
@@ -6345,13 +6877,15 @@ static int gl_suite(const char* name, ygfx_hl_device dev) {
                                                  gl_alpha_passes, gl_edge_truth, gl_v03_kinds, gl_v03_truth, gl_v03_fx, gl_v03_paint, gl_v03_msdf,
                                                  gl_v04_cache, gl_v04_fixes, gl_v04_video, gl_v04_inst, gl_v04_order, gl_v05_color,
                                                  gl_v06_text, gl_v06_blur, gl_v05_kinds, gl_v08, gl_v10_simplex, gl_v10_user_tex,
-                                                 gl_v11_prime, gl_v11_start, gl_v12_capture, gl_v15_first, gl_v18_paths };
+                                                 gl_v11_prime, gl_v11_start, gl_v12_capture, gl_v15_first, gl_v18_paths,
+                                                 gl_v21_rows_shared };
         static const char* const names[] = { "shapes", "gratings", "gabors", "dots", "images", "noise",
                                              "output", "user+batch+rows", "strokes", "masks", "sprites", "tint",
                                              "groups", "targets", "alpha+passes", "edge truth", "v0.3 kinds", "v0.3 truth", "v0.3 fx", "v0.3 paint", "v0.3 msdf",
                                              "v0.4 cache", "v0.4 fixes", "v0.4 video", "v0.4 inst", "v0.4 order", "v0.5 color",
                                              "v0.6 text", "v0.6 blur", "vspec", "v0.8", "v0.10 simplex", "v0.10 user tex",
-                                             "v0.11 prime", "v0.11.1 start", "v0.12 capture", "v0.15 first", "v0.18 paths" };
+                                             "v0.11 prime", "v0.11.1 start", "v0.12 capture", "v0.15 first", "v0.18 paths",
+                                             "v0.21 rows+shared" };
         int k;
         memset(&S2, 0, sizeof S2);
         memset(&S3, 0, sizeof S3);
@@ -6362,6 +6896,7 @@ static int gl_suite(const char* name, ygfx_hl_device dev) {
         memset(&S8, 0, sizeof S8);
         memset(&SK, 0, sizeof SK);
         memset(&S18, 0, sizeof S18);
+        memset(&S21, 0, sizeof S21);
         mc_clear(&g_mc);
         printf("  seconds:");
         for (k = 0; k < (int)(sizeof parts / sizeof parts[0]); k++) {
@@ -6491,6 +7026,31 @@ static int gl_suite(const char* name, ygfx_hl_device dev) {
         CHECK_LE(S18.paint_moved, 1e-4);
         CHECK(S18.quad_bad == 0);
         CHECK_LE(S18.inst, 1e-4);
+    }
+    if (S21.ran) {
+        printf("  v0.21 rows: bottom-first imports (RGBA8, sRGB-encoded RGBA8, R8 coverage, NV12 odd and even) against the "
+               "top-first texture, scenes not bit for bit equal %ld of %ld; 1:1 against the codes %.2e; AUTO and TOP_DOWN "
+               "not today's %ld; AUTO of bottom-first rows differing %ld of 8; refusals %ld of %ld\n",
+               S21.rows_bad, S21.rows_cases, S21.rows_ref, S21.default_bad, S21.auto_flipped, S21.refused_ok, S21.refused_n);
+        printf("  v0.21 shared: second context %s, %ld frames through one rebound stimulus; producer codes wrong %ld; "
+               "RGBA8 against the codes %.2e, against ysp_gfx's upload unequal %ld; SRGB8_ALPHA8 against the sRGB "
+               "formula %.2e, against RGBA8 with TRC_SRGB %.2e; rebind unequal %ld\n",
+               S21.share_made ? "made" : "NOT made", S21.frames, S21.shared_codes_bad, S21.shared_ref, S21.shared_bad,
+               S21.srgb_ref, S21.srgb_vs_enc, S21.rebind_bad);
+        CHECK(S21.rows_cases == 80 && S21.rows_bad == 0);
+        CHECK_LE(S21.rows_ref, 2.2e-7);   /* rgb x alpha in float: 1.43e-7 on llvmpipe */
+        CHECK(S21.default_bad == 0);
+        CHECK(S21.auto_flipped == 8);
+        CHECK(S21.refused_ok == S21.refused_n && S21.refused_n == 8);
+        CHECK(S21.frames == 8);
+        CHECK(S21.shared_codes_bad == 0);
+        CHECK_LE(S21.shared_ref, 1e-7);
+        CHECK(S21.shared_bad == 0);
+        CHECK(S21.rebind_bad == 0);
+        /* the GPU's sRGB decode, not ysp_gfx's: 1.19e-3 on llvmpipe (0.3 of a
+         * code step); below half a step */
+        CHECK_LE(S21.srgb_ref, 1.9e-3);
+        CHECK_LE(S21.srgb_vs_enc, 1.9e-3);
     }
     printf("  v0.3 truth: QBEZIER (chords) GPU - F(brute force) %.2e, distance error %.4f px\n", S5.t2_qb_cov, S5.t2_qb_dist);
     printf("  v0.3 truth: exact kinds, GPU - F(brute-force Euclidean d) max %.2e (%s), the CPU form's distance error %.2e px\n"

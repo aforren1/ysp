@@ -1,4 +1,4 @@
-/* ysp/gfx.h - v0.20.1 - public domain single-header stimulus graphics library
+/* ysp/gfx.h - v0.21.0 - public domain single-header stimulus graphics library
  *   (with MIT-licensed parts: see below)
  *
  *   Stimuli on GL ES 3.0, on top of ysp/screen.h: signed-distance shapes
@@ -1039,6 +1039,75 @@
  *   with no GL call, so a movie's stimulus keeps its handle while the
  *   decoder's surfaces rotate. The video program compiles at the first
  *   encoded texture: an open without video costs nothing more.
+ *   ROWS (v0.21). import_desc.rows says which texel row is the image's
+ *   top: AUTO (0, a zeroed desc) and TOP_DOWN mean row 0, as before;
+ *   BOTTOM_UP means the last row, GL's order, which a GL renderer writes
+ *   (docs/filly_probe.md, finding 8). It holds for both kinds, for every
+ *   format an import takes, and for each plane of an NV12 import (each
+ *   plane's rows reversed: CbCr has ceil(h / 2) of them). Only the row of
+ *   each texelFetch turns over; the source rectangle, the clamps and the
+ *   weights are the top-first image's, so a BOTTOM_UP texture draws bit
+ *   for bit as the same texels uploaded top first (tested: nearest and
+ *   linear, scaled, a src rectangle, straight alpha, coverage, sRGB, NV12
+ *   with interpolated and replicated chroma). The turn is in its own
+ *   programs (image color, modulation, add, video and their instanced
+ *   forms), compiled at the first BOTTOM_UP texture (84 to 161 ms there
+ *   without a program cache, Mesa iris); every other image runs v0.20's
+ *   code at v0.20's cost (measured, docs/gfx.md). A BOTTOM_UP texture
+ *   costs 0.06 ms more a linear 1080p draw, 0.13 ms encoded, under 0.01
+ *   ms nearest (Intel UHD 770). A BOTTOM_UP texture draws as
+ *   an image (and through rebind) only: as a mask, a glyph atlas or a user
+ *   body's ysp_tex0 it is refused, because those read the texels as
+ *   stored. ygfx_texture_update() writes texel rows as given, so for a
+ *   BOTTOM_UP texture its data's row 0 is the image's bottom row.
+ *
+ *   ---------------------------------------------------------------------
+ *   SHARED TEXTURES (v0.21)
+ *   ---------------------------------------------------------------------
+ *   A renderer extension (rig_spec.md section 12) draws into a texture the
+ *   host owns. ygfx_texture_shared() makes that texture: immutable storage
+ *   (glTexStorage2D), one level, and gives its GL name and sized format in
+ *   ygfx_native. The renderer writes it from a context that shares this
+ *   gfx's (Filament on Mesa: a GL 4.1 core context sharing ysp's ES 3.0
+ *   one, docs/filly_probe.md route a). The gfx makes it with its own GL
+ *   calls, so its state cache stays right and the host needs no
+ *   ygfx_reset_state() (the probe made it with raw GL and had to reset).
+ *   The order of the write before the read is the caller's: a fence in
+ *   the renderer's context and
+ *   glWaitSync() in this one before ygfx_end(), and a fence after the
+ *   flip that the renderer waits on before it writes again (the probe's
+ *   acquire and release; tested headless with EGL, exact).
+ *       ygfx_shared_desc sd = { .w = 512, .h = 512, .rows = YGFX_ROWS_BOTTOM_UP,
+ *           .enc = { YGFX_MATRIX_RGB, YGFX_RANGE_FULL, YGFX_TRC_SRGB,
+ *                    YGFX_PRIM_DEVICE, YGFX_SITING_NONE } };
+ *       ygfx_native nat;
+ *       ygfx_tex t = ygfx_texture_shared(&gfx, &sd, &nat);
+ *       renderer_import(nat.gl_name, nat.gl_format, 512, 512);
+ *   Formats: RGBA8 only, in two storages. GL_RGBA8 (srgb false) holds the
+ *   renderer's 8-bit codes as written, and enc says how to decode them;
+ *   this is what filly writes (sRGB codes through its own sRGB view), and
+ *   ysp_gfx decodes them in float (the transfers within 7.5e-7, v0.4's
+ *   measure). GL_SRGB8_ALPHA8 (srgb
+ *   true) is for a renderer that writes linear values and wants the GPU to
+ *   encode them, the only way on GL ES and WebGL, which have no texture
+ *   views; ysp_gfx then reads the GPU's decode, so enc must be all 0. That
+ *   decode is the driver's: Mesa llvmpipe's was within 1.19e-3 of the
+ *   formula (0.3 of a code step; measured, the test's 256 codes), where
+ *   GL_RGBA8 with TRC_SRGB is exact. Prefer GL_RGBA8 and an encoding when
+ *   the renderer can write codes. Float formats are not offered: no
+ *   renderer was measured writing one. rows is the renderer's row order
+ *   (AUTO is TOP_DOWN, as for an import; a GL renderer writes BOTTOM_UP).
+ *   Double buffering needs nothing new: two shared textures, the renderer
+ *   writing one while the stimulus shows the other, and
+ *   ygfx_texture_rebind(stim_tex, the_written_one) each frame (no GL call;
+ *   a texture's row order goes with its texels). A texture the renderer
+ *   owns (its own target) is an import (ygfx_texture_import() with rows).
+ *   On Windows ANGLE gives no D3D11 resource for a GL texture it made; a
+ *   renderer on another API needs a D3D11 texture made on yscr_native()'s
+ *   device and shared by handle, which the host makes and imports
+ *   (YGFX_IMPORT_D3D11 with rows); ysp_gfx does not make it (not built:
+ *   no Windows compiler here). ygfx_texture_free() deletes the texture:
+ *   free it after the renderer lets it go.
  *
  *   ---------------------------------------------------------------------
  *   INSTANCES (v0.4)
@@ -1252,9 +1321,10 @@
  *   ---------------------------------------------------------------------
  *   BACKENDS
  *   ---------------------------------------------------------------------
- *   ygfx_backend (version 4) is a table of 24 calls (pipelines from
+ *   ygfx_backend (version 5) is a table of 25 calls (pipelines from
  *   shader text, textures, buffers, passes, apply, draw, present, read,
- *   reset, pipeline_finish, pipeline_binary, and five capture calls): the
+ *   reset, pipeline_finish, pipeline_binary, five capture calls and
+ *   texture_native): the
  *   gfx backend of the rig's
  *   extensions. Version 3 (v0.4) asks an out-of-tree backend for: the caps
  *   strings vendor, version and glsl and binary_format (0: no binaries);
@@ -1269,7 +1339,11 @@
  *   this. Version 4 (v0.13) adds capture_make, _read, _poll, _unmap and
  *   _free (CAPTURE), each NULL when the backend has no reads that do not
  *   wait; open() still takes a version 3 table, and capture then returns
- *   YGFX_ERR_NOT_IMPLEMENTED.
+ *   YGFX_ERR_NOT_IMPLEMENTED. Version 5 (v0.21) adds texture_src.srgb
+ *   (make RGBA8 as SRGB8_ALPHA8) and texture_native (a texture's GL name
+ *   and sized format), for SHARED TEXTURES; NULL, or a table of version 3
+ *   or 4, and ygfx_texture_shared() fails. The core reads texture_native
+ *   only from a version 5 table.
  *   open() starts every built-in program with pipeline_src.deferred set,
  *   then calls pipeline_finish on each: a driver that compiles in parallel
  *   (ANGLE does) then overlaps them. caps.parallel_compile (v0.11.1) says
@@ -1343,7 +1417,7 @@
  *   4 bytes each). The capture's frame work allocates nothing in this
  *   header (what the driver does at a map is the driver's); the
  *   writer opens files (the C runtime allocates a FILE) on its own thread.
- *   The handle is about 23 KB on 64-bit targets. A target pass takes no memory of its own;
+ *   The handle is about 24 KB on 64-bit targets. A target pass takes no memory of its own;
  *   ygfx_target() makes its texture and framebuffer at setup. One thread
  *   calls everything, the thread that owns the screen's context. Textures,
  *   buffers and pipelines are made and updated between frames, never
@@ -1367,6 +1441,27 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.21.0 - Two gaps the filly renderer probe found (docs/filly_probe.md,
+ *          findings 8 and 9, section 5). ROWS: ygfx_import_desc.rows
+ *          (appended), a ygfx_rows: BOTTOM_UP says texel row 0 is the
+ *          image's bottom (GL's order, what filly writes); AUTO (0) and
+ *          TOP_DOWN keep v0.20's top-first meaning. Both import kinds,
+ *          every format, each NV12 plane; the image and video programs
+ *          turn only the row of each texelFetch, so the image is bit for
+ *          bit the top-first one's. Refused as a mask, glyph atlas or
+ *          user texture. ygfx_rows moved above ygfx_import_desc (same
+ *          values). SHARED TEXTURES: ygfx_texture_shared(),
+ *          ygfx_shared_desc and ygfx_native: an RGBA8 texture (GL_RGBA8,
+ *          or GL_SRGB8_ALPHA8 with srgb) that a renderer in a sharing
+ *          context draws into, its GL name given, no raw GL and no
+ *          ygfx_reset_state() for the host. The backend interface is
+ *          version 5: texture_src.srgb, texture_native (appended); open()
+ *          takes 3 to 5 and refuses a newer table. The turn is in
+ *          programs of its own (YSP_ROWS_UP), made at the first BOTTOM_UP
+ *          texture: one chosen per fragment in every image program cost
+ *          4 % of a linear 1080p image and 10 % of an encoded one. The
+ *          image programs' text changed, so program caches compile them
+ *          once again. The handle grows by 544 bytes (24,824 on x86-64).
  *   v0.20.1 - GL_MAX_UNIFORM_BLOCK_SIZE is read with glGetInteger64v
  *          and clamped to INT32_MAX. Firefox's WebGL2 reports 2^31;
  *          glGetIntegerv wrapped it to INT32_MIN under Emscripten, so
@@ -1716,6 +1811,18 @@
  *          source rectangle, not the sampler's.
  *   v0.1.0 - first release.
  *
+ *   STATUS: v0.21.0, 2026-11-18, the Linux desktop (GCC 12.2, Mesa
+ *   llvmpipe headless; the filly probe on radeonsi): test_gfx part "v0.21
+ *   rows+shared" draws bottom-first imports (RGBA8 as color, modulation,
+ *   ADD and instances, sRGB-encoded RGBA8, R8 coverage, NV12 37 x 23 and
+ *   38 x 24) equal bit for bit to the top-first textures in 80 of 80
+ *   scenes, and a second EGL context's writes to two shared textures
+ *   through one rebound stimulus (RGBA8 exact; SRGB8_ALPHA8 within
+ *   1.19e-3 of the formula); the compile checks; ASan and UBSan. Mutants
+ *   rs-01 to rs-24 killed (24 of 24). The filly probe built against it
+ *   (RX 6600, GLX_OML): the model upright (0 values differ from the CPU
+ *   copy), no frame dropped in 3,600. Not built here: Windows (D3D11
+ *   imports with rows), macOS, the web.
  *   STATUS: v0.20.1, 2026-11-16, the Linux desktop (GCC 12.2, Mesa
  *   llvmpipe headless): test_gfx and the compile checks; not yet run in
  *   Firefox.
@@ -1955,9 +2062,9 @@
 #define YSP_GFX_H_INCLUDED
 
 #define YGFX_VERSION_MAJOR 0
-#define YGFX_VERSION_MINOR 20
-#define YGFX_VERSION_PATCH 1
-#define YGFX_VERSION_STRING "0.20.1"
+#define YGFX_VERSION_MINOR 21
+#define YGFX_VERSION_PATCH 0
+#define YGFX_VERSION_STRING "0.21.0"
 
 #include "ysp/screen.h"
 #include "ysp/color.h"
@@ -2109,6 +2216,17 @@ typedef struct ygfx_texture_desc {
     const ygfx_planes* planes; /* NV12, I420: the first frame; NULL = black   */
 } ygfx_texture_desc;
 
+/* A row order. In ygfx_desc.rows, the order of framebuffer 0, which the
+ * output stage writes (not the coordinate convention: that is COORDINATES
+ * in the manual). In ygfx_import_desc.rows and ygfx_shared_desc.rows
+ * (v0.21), the order of a texture's texel rows, where AUTO is TOP_DOWN. */
+typedef enum ygfx_rows {
+    YGFX_ROWS_AUTO = 0,        /* from the screen's backend; a texture: TOP_DOWN */
+    YGFX_ROWS_BOTTOM_UP,       /* row 0 is the bottom (GL's own)               */
+    YGFX_ROWS_TOP_DOWN         /* row 0 is the top (ANGLE's client buffers; an
+                                  * uploaded image)                             */
+} ygfx_rows;
+
 /* A texture ysp_gfx did not make (VIDEO): a GL texture of this context, or
  * on Windows a D3D11 texture on ANGLE's device (yscr_native()). */
 typedef enum ygfx_import_kind { YGFX_IMPORT_GL = 1, YGFX_IMPORT_D3D11 = 2 } ygfx_import_kind;
@@ -2122,7 +2240,33 @@ typedef struct ygfx_import_desc {
     void*         d3d11_tex;     /* D3D11: an ID3D11Texture2D* with
                                   * D3D11_BIND_SHADER_RESOURCE                   */
     uint32_t      d3d11_slice;   /* D3D11: the array slice (a decoder's output) */
+    /* v0.21 */
+    ygfx_rows     rows;          /* texel row 0 is the image's top (AUTO,
+                                  * TOP_DOWN) or its bottom (BOTTOM_UP: what a GL
+                                  * renderer writes); every plane alike         */
 } ygfx_import_desc;
+
+/* v0.21: a texture another renderer draws into (SHARED TEXTURES): ysp_gfx
+ * makes and owns it, with immutable storage; the renderer writes it through
+ * its GL name in a context that shares this gfx's. */
+typedef struct ygfx_shared_desc {
+    int32_t       w, h;          /* required                                     */
+    ygfx_format   format;        /* 0 = RGBA8, the only format in v0.21          */
+    bool          srgb;          /* storage SRGB8_ALPHA8: the renderer writes
+                                  * linear values, the GPU stores sRGB codes and
+                                  * decodes them when ysp_gfx reads (enc all 0).
+                                  * false: GL_RGBA8, the renderer's codes as
+                                  * written, decoded as enc says                 */
+    ygfx_encoding enc;           /* RGBA8 without srgb: as ygfx_texture_desc  */
+    ygfx_rows     rows;          /* the renderer's row order: AUTO = TOP_DOWN  */
+} ygfx_shared_desc;
+
+/* What a shared texture is to the renderer. */
+typedef struct ygfx_native {
+    uint32_t      gl_name;       /* the GL texture name in this gfx's context   */
+    uint32_t      gl_format;     /* its sized internal format: GL_RGBA8 0x8058,
+                                  * GL_SRGB8_ALPHA8 0x8C43                       */
+} ygfx_native;
 
 /* --- open ------------------------------------------------------------------ */
 
@@ -2141,14 +2285,6 @@ typedef enum ygfx_output {
     YGFX_OUT_MONO_PP,          /* Bits# Mono++, refused in v0.1                */
     YGFX_OUT_COLOR_PP          /* Bits# Color++, refused in v0.1               */
 } ygfx_output;
-/* The row order of framebuffer 0, which the output stage writes. Not the
- * coordinate convention: that is COORDINATES in the manual. */
-typedef enum ygfx_rows {
-    YGFX_ROWS_AUTO = 0,        /* from the screen's backend                    */
-    YGFX_ROWS_BOTTOM_UP,       /* row 0 is the bottom (GL's own)               */
-    YGFX_ROWS_TOP_DOWN         /* row 0 is the top (ANGLE's client buffers)    */
-} ygfx_rows;
-
 /* Nine points of a box: of the screen for `place`, of the stimulus's own box
  * for `anchor`. CENTER is the zero default for both. */
 typedef enum ygfx_align {
@@ -2835,10 +2971,11 @@ typedef struct ygfx_param {
 
 /* --- backend (the gfx backend interface) ------------------------------------ */
 
-#define YGFX_BACKEND_VERSION 4   /* 3: v0.4, program binaries (caps strings,
+#define YGFX_BACKEND_VERSION 5   /* 3: v0.4, program binaries (caps strings,
                                     * pipeline_src.binary, pipeline_binary);
-                                    * 4: v0.13, the capture calls. open()
-                                    * takes 3 and 4 */
+                                    * 4: v0.13, the capture calls; 5: v0.21,
+                                    * texture_src.srgb and texture_native.
+                                    * open() takes 3 to 5 */
 
 typedef struct ygfx_backend_open {
     yscr_proc (*gl_proc)(void* ctx, const char* name);
@@ -2898,6 +3035,8 @@ typedef struct ygfx_texture_src {
     uint32_t      gl_name;         /* a GL name of this context; not deleted      */
     void*         d3d11;           /* an ID3D11Texture2D* through EGL             */
     int32_t       plane, slice;    /* d3d11: the plane (NV12 0 Y, 1 CbCr), slice   */
+    /* version 5 */
+    bool          srgb;            /* RGBA8 made as SRGB8_ALPHA8 (a shared texture) */
 } ygfx_texture_src;
 
 #define YGFX_BUFFER_UNIFORM  1
@@ -2958,6 +3097,10 @@ typedef struct ygfx_backend {
     int  (*capture_poll)(void* c, int slot, int64_t wait_ns, const void** data);
     void (*capture_unmap)(void* c, int slot);
     void (*capture_free)(void* c);
+    /* version 5 (SHARED TEXTURES): a texture's GL name and sized internal
+     * format, for a renderer in a context that shares this one; < 0 = none.
+     * NULL = no shared textures */
+    int  (*texture_native)(void* c, uint32_t id, uint32_t* gl_name, uint32_t* gl_format);
 } ygfx_backend;
 
 /* --- the handle ------------------------------------------------------------ */
@@ -2973,7 +3116,7 @@ typedef struct ygfx_backend {
 #endif
 #define YGFX__N_BUILTIN     10
 #define YGFX__N_VSPEC       3           /* specialized vector programs (KINDS) */
-#define YGFX__BACKEND_WORDS 1280
+#define YGFX__BACKEND_WORDS 1344   /* v0.21: the rows programs (was 1280) */
 #define YGFX__UBO_RING      3
 #ifndef YGFX_MAX_PASSES
 #define YGFX_MAX_PASSES    16          /* target passes per frame              */
@@ -3088,6 +3231,10 @@ typedef struct ygfx_gfx {
     uint32_t               features;                /* YGFX_FEAT_*             */
     uint32_t               video_pipe;              /* backend id; made at the first
                                                      * encoded texture           */
+    uint32_t               rows_pipe[4];            /* v0.21: image color, modulation,
+                                                     * add and video with YSP_ROWS_UP;
+                                                     * made at the first texture with
+                                                     * rows bottom first          */
     uint32_t               eotf;                    /* the display's transfer: 256 x 3
                                                      * R32F, the inverse of the CLUT */
     uint32_t               gauss;                   /* NOISE GAUSSIAN's quantiles:
@@ -3103,7 +3250,8 @@ typedef struct ygfx_gfx {
     unsigned char*         inst_staging;
     int32_t                inst_cap, inst_used;
     uint32_t               inst_buf[YGFX__UBO_RING];
-    uint32_t               inst_pipe[YGFX__N_BUILTIN + 1];   /* + the video program */
+    uint32_t               inst_pipe[YGFX__N_BUILTIN + 5];   /* + the video program and
+                                                     * the four of rows_pipe   */
     uint32_t               pipe_inst[YGFX_MAX_PIPELINES];   /* users' */
     char*                  pipe_body[YGFX_MAX_PIPELINES];   /* kept for them */
     /* v0.6: curve sets and the text program, made at the first set */
@@ -3296,6 +3444,13 @@ YGFX_API int        ygfx_texture_update_plane(ygfx_gfx* g, ygfx_tex t, int plane
  * the import made (a GL texture and an EGLImage per plane for D3D11), never
  * the source. Setup only. YGFX_ERR_NOT_IMPLEMENTED without the feature. */
 YGFX_API ygfx_tex ygfx_texture_import(ygfx_gfx* g, const ygfx_import_desc* d);
+/* v0.21 (SHARED TEXTURES): makes a texture another renderer draws into and
+ * gives its GL name in *out; the gfx owns it and ygfx_texture_free()
+ * deletes it, so free it only after the renderer stops writing. Its texels
+ * are not set until the renderer writes them. Setup only. Id 0 on a
+ * failure, with the reason in ygfx_error() (a backend before version 5 has
+ * no texture_native). */
+YGFX_API ygfx_tex ygfx_texture_shared(ygfx_gfx* g, const ygfx_shared_desc* d, ygfx_native* out);
 /* t shows src's texels from now on (the same format, size and encoding);
  * src = t gives t its own back. No GL call, nothing allocated: per frame,
  * between frames. Freeing src gives every texture that shows it its own. */
@@ -3793,6 +3948,7 @@ typedef struct ygfx__glf { YGFX__GL_FUNCS(YGFX__GL_FIELD) } ygfx__glf;
 #define YGFX__GL_R8                   0x8229
 #define YGFX__GL_RG8                  0x822B
 #define YGFX__GL_RGBA8                0x8058
+#define YGFX__GL_SRGB8_ALPHA8         0x8C43
 #define YGFX__GL_R16F                 0x822D
 #define YGFX__GL_RGBA16F              0x881A
 #define YGFX__GL_R32F                 0x822E
@@ -3811,7 +3967,9 @@ typedef struct ygfx__glf { YGFX__GL_FUNCS(YGFX__GL_FIELD) } ygfx__glf;
 typedef struct ygfx__gltex {
     ygfx__GLuint tex, fbo;
     int32_t w, h, format;
-    int32_t borrowed;              /* an imported GL name: not ours to delete     */
+    int16_t borrowed;              /* an imported GL name: not ours to delete     */
+    int16_t srgb;                  /* made as SRGB8_ALPHA8 (16 bits each: the
+                                    * table fills the gfx's backend_mem)          */
     void*   image;                 /* an EGLImage over a D3D11 texture            */
 } ygfx__gltex;
 typedef struct ygfx__glbuf { ygfx__GLuint buf; ygfx__GLenum target; uint32_t bytes; } ygfx__glbuf;
@@ -3819,7 +3977,7 @@ typedef struct ygfx__glpipe { ygfx__GLuint prog, vao, vs, fs; int32_t blend, ins
 
 #define YGFX__GL_TEX  (3 * YGFX_MAX_TEXTURES + 9)   /* three planes a texture */
 #define YGFX__GL_BUF  (YGFX_MAX_BUFFERS + YGFX__UBO_RING + 1)
-#define YGFX__GL_PIPE (YGFX_MAX_PIPELINES + 2 * YGFX__N_BUILTIN + YGFX__N_VSPEC + 8)
+#define YGFX__GL_PIPE (YGFX_MAX_PIPELINES + 2 * YGFX__N_BUILTIN + YGFX__N_VSPEC + 16)   /* v0.21: + 8, the rows programs */
 
 /* Program binaries: ES 3.0 has them, WebGL 2 does not, so they are loaded
  * apart from the required table and may be NULL. */
@@ -4185,8 +4343,12 @@ static int ygfx__gl_texture_make(void* c, const ygfx_texture_src* d, uint32_t* i
     for (slot = 0; slot < YGFX__GL_TEX && gl->tex[slot].tex; slot++) {}
     if (slot == YGFX__GL_TEX) return YGFX_ERR_FULL;
     ygfx__gl_fmt(d->format, &ifmt, &fmt, &type);
-    if (!ifmt) return YGFX_ERR_ARG;
+    if (!ifmt || (d->srgb && (d->format != YGFX_RGBA8 || d->gl_name || d->d3d11))) return YGFX_ERR_ARG;
+    /* sRGB storage: the GPU encodes a renderer's writes and decodes the
+     * texelFetch, so ysp_gfx reads linear values */
+    if (d->srgb) ifmt = YGFX__GL_SRGB8_ALPHA8;
     t = &gl->tex[slot];
+    t->srgb = (int16_t)(d->srgb != 0);
     if (d->gl_name || d->d3d11) {
         /* an import: texelFetch needs a complete texture, so its filters
          * become NEAREST (the caller's texture, changed) */
@@ -4274,6 +4436,16 @@ static void ygfx__gl_texture_free(void* c, uint32_t id) {
     if (t->image && gl->DestroyImage) gl->DestroyImage(gl->dpy, t->image);
     memset(t, 0, sizeof *t);
     ygfx__gl_reset(gl);
+}
+
+static int ygfx__gl_texture_native(void* c, uint32_t id, uint32_t* gl_name, uint32_t* gl_format) {
+    ygfx__gl* gl = (ygfx__gl*)c;
+    ygfx__GLenum ifmt, fmt, type;
+    if (id < 1 || id > YGFX__GL_TEX || !gl->tex[id - 1].tex) return YGFX_ERR_ARG;
+    ygfx__gl_fmt((ygfx_format)gl->tex[id - 1].format, &ifmt, &fmt, &type);
+    *gl_name = gl->tex[id - 1].tex;
+    *gl_format = gl->tex[id - 1].srgb ? YGFX__GL_SRGB8_ALPHA8 : ifmt;
+    return YGFX_OK;
 }
 
 static int ygfx__gl_buffer_make(void* c, int kind, size_t bytes, uint32_t* id) {
@@ -4520,7 +4692,7 @@ static const ygfx_backend ygfx__gl_backend = {
     ygfx__gl_present, ygfx__gl_read, ygfx__gl_reset, ygfx__gl_pipeline_finish,
     ygfx__gl_pipeline_binary,
     ygfx__gl_capture_make, ygfx__gl_capture_read, ygfx__gl_capture_poll,
-    ygfx__gl_capture_unmap, ygfx__gl_capture_free
+    ygfx__gl_capture_unmap, ygfx__gl_capture_free, ygfx__gl_texture_native
 };
 
 /* --- null backend: a screen without GL (SIM), and the interface's second
@@ -4635,7 +4807,7 @@ static const ygfx_backend ygfx__null_backend = {
     ygfx__null_pass_begin, ygfx__null_apply, ygfx__null_draw, ygfx__null_void,
     ygfx__null_void, ygfx__null_read, ygfx__null_void, NULL, NULL,
     ygfx__null_capture_make, ygfx__null_capture_read, ygfx__null_capture_poll,
-    ygfx__null_capture_unmap, ygfx__null_capture_free
+    ygfx__null_capture_unmap, ygfx__null_capture_free, NULL
 };
 
 typedef char ygfx__gl_fits[sizeof(ygfx__gl) <= sizeof(((ygfx_gfx*)0)->backend_mem) ? 1 : -1];
@@ -4733,6 +4905,9 @@ static const char ygfx__glsl_vs_body[] =
     "flat out int ysp_i;\n"
     "#ifdef YSP_VIDEO\n"
     "flat out vec4 ysp_vk[7];\n"
+    "#endif\n"
+    "#if defined(YSP_ROWS_UP) && !defined(YSP_VIDEO)\n"
+    "flat out int ysp_rh;\n"
     "#endif\n"
     "#ifdef YSP_GLYPHS\n"
     "layout(location = 0) in vec4 ysp_g0;\n"     /* x, y units; atlas x, y */
@@ -4835,6 +5010,10 @@ static const char ygfx__glsl_vs_body[] =
      * the uniform array, they cost 0.25 ms of 0.94 at 1080p (measured) */
     "#ifdef YSP_VIDEO\n"
     "    for (int k = 0; k < 7; k++) ysp_vk[k] = ysp_v[i * 16 + 8 + k];\n"
+    "#endif\n"
+    /* an image's rows bottom first (v0.21): its height, once a vertex */
+    "#if defined(YSP_ROWS_UP) && !defined(YSP_VIDEO)\n"
+    "    ysp_rh = int(ysp_v[i * 16 + 9].x);\n"
     "#endif\n"
     "}\n";
 
@@ -5146,17 +5325,43 @@ static const char ygfx__body_noise[] =
     "    if (ysp_misc.z > 0.5) return (h & 0x80000000u) != 0u ? 1.0 : -1.0;\n"
     "    return float(int(((h >> 9u) << 1u) + 1u) - 8388608) * (1.0 / 8388608.0);\n"
     "}\n";
+/* Rows bottom first (v0.21), in the programs made with YSP_ROWS_UP only (at
+ * the first such texture): H is the texture's height. Only the row of each
+ * texelFetch turns over; the clamps and weights are the top-first image's,
+ * so the result equals the same texels uploaded top first, bit for bit. In
+ * the other programs the macros give v0.20's code: a turn chosen per
+ * fragment cost 4 % of a linear 1080p image and 10 % of a linear encoded
+ * one on Mesa's Intel UHD 770 (measured, docs/gfx.md). */
+#define YGFX__GLSL_ROWS \
+    "#ifndef YSP_ROWS_UP\n" \
+    "#define ysp_row_(t, H) (t)\n" \
+    "#define ysp_bilinear_h_(t, x, sr, H) ysp_bilinear(t, x, sr)\n" \
+    "#else\n" \
+    "#ifndef YSP_VIDEO\n" \
+    "flat in int ysp_rh;\n" \
+    "#endif\n" \
+    "ivec2 ysp_row_(ivec2 t, int H) { return ivec2(t.x, H - 1 - t.y); }\n" \
+    "vec4 ysp_bilinear_h_(sampler2D t, vec2 x, vec4 sr, int H) {\n" \
+    "    vec2 f = x - 0.5, i0 = floor(f), w = f - i0;\n" \
+    "    ivec2 lo = ivec2(sr.xy), hi = ivec2(sr.xy + sr.zw) - 1;\n" \
+    "    ivec2 a = ysp_row_(clamp(ivec2(i0), lo, hi), H), b = ysp_row_(clamp(ivec2(i0) + 1, lo, hi), H);\n" \
+    "    vec4 c00 = texelFetch(t, a, 0), c10 = texelFetch(t, ivec2(b.x, a.y), 0);\n" \
+    "    vec4 c01 = texelFetch(t, ivec2(a.x, b.y), 0), c11 = texelFetch(t, b, 0);\n" \
+    "    return mix(mix(c00, c10, w.x), mix(c01, c11, w.x), w.y);\n" \
+    "}\n" \
+    "#endif\n"
 /* The source rectangle's texel under p: nearest by texelFetch, clamped to
  * the rectangle; linear by hand, clamped the same way. */
 static const char ygfx__body_image_fetch[] =
+    YGFX__GLSL_ROWS
     /* A straight-alpha color image is filtered as premultiplied texels, then
      * divided back: a clear texel's rgb has no weight, so it cannot darken
      * its neighbors at the edges of a magnified sprite. */
     "#ifdef YSP_STRAIGHT\n"
-    "vec4 ysp_bilinear_s_(vec2 x, vec4 sr, int ach) {\n"
+    "vec4 ysp_bilinear_s_(vec2 x, vec4 sr, int ach, int H) {\n"
     "    vec2 f = x - 0.5, i0 = floor(f), w = f - i0;\n"
     "    ivec2 lo = ivec2(sr.xy), hi = ivec2(sr.xy + sr.zw) - 1;\n"
-    "    ivec2 a = clamp(ivec2(i0), lo, hi), b = clamp(ivec2(i0) + 1, lo, hi);\n"
+    "    ivec2 a = ysp_row_(clamp(ivec2(i0), lo, hi), H), b = ysp_row_(clamp(ivec2(i0) + 1, lo, hi), H);\n"
     "    vec4 c00 = texelFetch(ysp_tex0, a, 0), c10 = texelFetch(ysp_tex0, ivec2(b.x, a.y), 0);\n"
     "    vec4 c01 = texelFetch(ysp_tex0, ivec2(a.x, b.y), 0), c11 = texelFetch(ysp_tex0, b, 0);\n"
     "    vec4 q = mix(mix(vec4(c00.rgb * c00[ach], c00[ach]), vec4(c10.rgb * c10[ach], c10[ach]), w.x),\n"
@@ -5168,16 +5373,21 @@ static const char ygfx__body_image_fetch[] =
     "    int mode = int(ysp_misc.y);\n"
     "    vec2 r = vec2(p.x + ysp_size.x, ysp_size.y + p.y) / (2.0 * ysp_size.xy);\n"
     "    vec4 sr = ysp_v[ysp_i * 16 + 8];\n"
-    "    ivec2 t = ivec2(sr.xy) + clamp(ivec2(floor(r * sr.zw)), ivec2(0), ivec2(sr.zw) - 1);\n"
+    "#ifdef YSP_ROWS_UP\n"
+    "    int H = ysp_rh;\n"
+    "#else\n"
+    "    int H = 0;\n"
+    "#endif\n"
+    "    ivec2 t = ysp_row_(ivec2(sr.xy) + clamp(ivec2(floor(r * sr.zw)), ivec2(0), ivec2(sr.zw) - 1), H);\n"
     "    int ch = int(ysp_misc.x);\n"
     "    if (mode == 2) return vec4(vec3(float(texelFetch(ysp_utex0, t, 0).r) * (1.0 / 65535.0)), 1.0);\n"
     "#ifdef YSP_STRAIGHT\n"
     "    if (mode == 1 && ch != 1 && ysp_misc.z < 0.5) {\n"
-    "        vec4 s = ysp_bilinear_s_(sr.xy + r * sr.zw, sr, ch == 2 ? 1 : 3);\n"
+    "        vec4 s = ysp_bilinear_s_(sr.xy + r * sr.zw, sr, ch == 2 ? 1 : 3, H);\n"
     "        return ch == 2 ? vec4(s.rrr, s.a) : s;\n"
     "    }\n"
     "#endif\n"
-    "    vec4 v = mode == 1 ? ysp_bilinear(ysp_tex0, sr.xy + r * sr.zw, sr) : texelFetch(ysp_tex0, t, 0);\n"
+    "    vec4 v = mode == 1 ? ysp_bilinear_h_(ysp_tex0, sr.xy + r * sr.zw, sr, H) : texelFetch(ysp_tex0, t, 0);\n"
     "    if (ch == 1) return vec4(v.rrr, 1.0);\n"
     "    if (ch == 2) return vec4(v.rrr, v.g);\n"
     "    return v;\n"
@@ -6136,6 +6346,7 @@ static int ygfx__test_scene32 = 0;
 
 #define YGFX__BLOCK 256u
 #define YGFX__RES_TARGET 0x1     /* ygfx__res.flags: a render target */
+#define YGFX__RES_ROWS_UP 0x2    /* texel row 0 is the image's bottom (v0.21) */
 /* The local y axis sign the coordinate convention gives (ygfx__place). */
 #define YGFX__Y_SIGN (-1.0f)
 /* Frame blocks at the start of the staging: the scene's, then one per
@@ -6397,6 +6608,24 @@ static const struct ygfx__builtin_def {
     { "#define YSP_GLYPHS 1\n#define YSP_OFFSET 1\n", ygfx__body_shape, YGFX_COLOR, 2, "glyphs" },
 };
 
+/* ROWS (v0.21): the built-ins rows_pipe[0..2] are made from; [3] is video. */
+static const int ygfx__rows_builtin[3] = { YGFX__B_IMAGE_COLOR, YGFX__B_IMAGE_MOD, YGFX__B_IMAGE_ADD };
+
+/* pipe's index in rows_pipe, or -1. */
+static int ygfx__rows_index(const ygfx_gfx* g, uint32_t pipe) {
+    int k;
+    for (k = 0; k < 4; k++) if (g->rows_pipe[k] && g->rows_pipe[k] == pipe) return k;
+    return -1;
+}
+
+/* The rows-bottom-first program of an image program; 0 when not made. */
+static uint32_t ygfx__rows_of(const ygfx_gfx* g, uint32_t pipe) {
+    int k;
+    if (pipe && pipe == g->video_pipe) return g->rows_pipe[3];
+    for (k = 0; k < 3; k++) if (pipe && pipe == g->builtin[ygfx__rows_builtin[k]]) return g->rows_pipe[k];
+    return 0;
+}
+
 /* Specialized vector programs (KINDS): the vector program's text with
  * defines that remove what one case cannot reach, so each computes what the
  * generic program computes for that case (the test compares them bit for
@@ -6530,8 +6759,8 @@ static bool ygfx__open_a(ygfx_gfx* g, const ygfx_desc* d) {
     else if (in.gl_proc) { g->be = &ygfx__gl_backend; g->bctx = g->backend_mem; }
     else { g->be = &ygfx__null_backend; g->bctx = g->backend_mem; }
     /* a version 3 table ends before the capture calls: CAPTURE checks */
-    if (g->be->version != YGFX_BACKEND_VERSION && g->be->version != 3) {
-        ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: backend version %u, want 3 or %u", g->be->version, YGFX_BACKEND_VERSION);
+    if (g->be->version < 3 || g->be->version > YGFX_BACKEND_VERSION) {
+        ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: backend version %u, want 3 to %u", g->be->version, YGFX_BACKEND_VERSION);
         return false;
     }
     rc = g->be->open(g->bctx, &in, &g->caps, g->error, sizeof g->error);
@@ -7847,6 +8076,10 @@ static uint32_t ygfx__pack(ygfx_gfx* g, const ygfx_stim* s, float* b, ygfx__cmd*
                               : (mod ? YGFX__B_IMAGE_MOD : YGFX__B_IMAGE_COLOR)];
             if (r->format == YGFX_R16UI) cmd->tex[3] = r->bid; else cmd->tex[0] = r->bid;
         }
+        if (r->flags & YGFX__RES_ROWS_UP) {
+            pipe = ygfx__rows_of(g, pipe);
+            if (!pipe) return ygfx__refuse(g, why, YGFX_ERR_ARG, "no rows-bottom-first program (made with the texture)");
+        }
         b[28] = (r->format == YGFX_R8 || r->format == YGFX_R16F || r->format == YGFX_R32F ||
                  r->format == YGFX_R16UI) ? 1.0f : (r->format == YGFX_RG8 ? 2.0f : 4.0f);
         b[29] = r->format == YGFX_R16UI ? 2.0f : ((s->flags & YGFX_STIM_LINEAR) ? 1.0f : 0.0f);
@@ -7863,6 +8096,9 @@ static uint32_t ygfx__pack(ygfx_gfx* g, const ygfx_stim* s, float* b, ygfx__cmd*
         if (sx < 0 || sy < 0 || sw < 1 || sh < 1 || sx + sw > (float)r->w || sy + sh > (float)r->h)
             return ygfx__refuse(g, why, YGFX_ERR_ARG, "the image's src rectangle is not inside its texture");
         b[32] = sx; b[33] = sy; b[34] = sw; b[35] = sh;
+        /* rows bottom first (v0.21): the texture's height, so the program
+         * reads row H - 1 - y for the image's row y (0: rows top first) */
+        if (r->flags & YGFX__RES_ROWS_UP) b[r->enc.matrix ? 58 : 36] = (float)r->h;
         break;
     }
     case YGFX_DOTS:
@@ -7894,6 +8130,9 @@ static uint32_t ygfx__pack(ygfx_gfx* g, const ygfx_stim* s, float* b, ygfx__cmd*
             if (r->enc.matrix)
                 return ygfx__refuse(g, why, YGFX_ERR_ARG, "an encoded texture (video, or a stated transfer) draws as a color image only: "
                                                              "a modulation, add, coverage or shader texture holds linear values (enc all zero)");
+            if (r->flags & YGFX__RES_ROWS_UP)
+                return ygfx__refuse(g, why, YGFX_ERR_ARG, "a texture with rows bottom first (rows BOTTOM_UP) draws as an image only, "
+                                                             "not as a shader's texture");
             if (r->format == YGFX_R16UI) cmd->tex[3] = r->bid; else cmd->tex[0] = r->bid;
         }
         break;
@@ -7924,6 +8163,8 @@ static uint32_t ygfx__pack(ygfx_gfx* g, const ygfx_stim* s, float* b, ygfx__cmd*
         if (s->kind == YGFX_DOTS || s->mask.id < 1 || s->mask.id > YGFX_MAX_TEXTURES || !g->tex[s->mask.id - 1].used)
             return ygfx__refuse(g, why, YGFX_ERR_ARG, "MASK_TEX needs a texture of this gfx (mask); dots have no mask");
         m = &g->tex[s->mask.id - 1];
+        if (m->flags & YGFX__RES_ROWS_UP)
+            return ygfx__refuse(g, why, YGFX_ERR_ARG, "a texture with rows bottom first (rows BOTTOM_UP) draws as an image only, not as a mask");
         mask_kind = m->sdf ? m->sdf : YGFX_SDF_DIST;
         if (mask_kind == YGFX_SDF_DIST && m->format != YGFX_R16F && m->format != YGFX_R32F)
             return ygfx__refuse(g, why, YGFX_ERR_ARG, "a distance mask is R16F or R32F");
@@ -8070,6 +8311,7 @@ static uint32_t ygfx__pack(ygfx_gfx* g, const ygfx_stim* s, float* b, ygfx__cmd*
 }
 
 static const char ygfx__body_image_video[] =
+    YGFX__GLSL_ROWS
     "uniform sampler2D ysp_tex3;\n"   /* Cr (I420), unit 4 */
     "uniform sampler2D ysp_tex4;\n"   /* the display's transfer, 256 x 3, unit 5 */
     "float ysp_eotf_(float v, int tr, int ch) {\n"
@@ -8094,7 +8336,13 @@ static const char ygfx__body_image_video[] =
     "    bool lin = ysp_misc.y > 0.5;\n"
     "    vec2 L = sr.xy + r * sr.zw;\n"
     "    ivec2 t = ivec2(sr.xy) + clamp(ivec2(floor(r * sr.zw)), ivec2(0), ivec2(sr.zw) - 1);\n"
-    "    vec4 y = lin ? ysp_bilinear(ysp_tex0, L, sr) : texelFetch(ysp_tex0, t, 0);\n"
+    /* rows bottom first: the Y plane's height, and the chroma planes' */
+    "#ifdef YSP_ROWS_UP\n"
+    "    int H = int(M2.z), Hc = (H + 1) / 2;\n"
+    "#else\n"
+    "    int H = 0, Hc = 0;\n"
+    "#endif\n"
+    "    vec4 y = lin ? ysp_bilinear_h_(ysp_tex0, L, sr, H) : texelFetch(ysp_tex0, ysp_row_(t, H), 0);\n"
     "    int kind = int(F.x);\n"
     "    vec3 e;\n"
     "    float a = 1.0;\n"
@@ -8110,11 +8358,12 @@ static const char ygfx__body_image_video[] =
     "        vec4 cr = vec4(c0, ceil((sr.xy + sr.zw) * 0.5) - c0);\n"
     "        vec2 q;\n"
     "        if (M0.x > 0.5) {\n"
-    "            ivec2 n = clamp(ivec2(floor(Lc)) / 2, ivec2(cr.xy), ivec2(cr.xy + cr.zw) - 1);\n"
+    "            ivec2 n = ysp_row_(clamp(ivec2(floor(Lc)) / 2, ivec2(cr.xy), ivec2(cr.xy + cr.zw) - 1), Hc);\n"
     "            q = kind == 1 ? texelFetch(ysp_tex2, n, 0).rg : vec2(texelFetch(ysp_tex2, n, 0).r, texelFetch(ysp_tex3, n, 0).r);\n"
     "        } else {\n"
     "            vec2 c = Lc * 0.5 + F.zw;\n"
-    "            q = kind == 1 ? ysp_bilinear(ysp_tex2, c, cr).rg : vec2(ysp_bilinear(ysp_tex2, c, cr).r, ysp_bilinear(ysp_tex3, c, cr).r);\n"
+    "            q = kind == 1 ? ysp_bilinear_h_(ysp_tex2, c, cr, Hc).rg\n"
+    "                          : vec2(ysp_bilinear_h_(ysp_tex2, c, cr, Hc).r, ysp_bilinear_h_(ysp_tex3, c, cr, Hc).r);\n"
     "        }\n"
     "        float Y = y.r * K.x + K.y;\n"
     "        q = q * K.z + K.w;\n"   /* Cb, Cr */
@@ -8136,6 +8385,7 @@ static uint32_t* ygfx__inst_slot(ygfx_gfx* g, uint32_t pipe) {
     int i;
     for (i = 0; i < YGFX__N_BUILTIN; i++) if (g->builtin[i] == pipe) return &g->inst_pipe[i];
     if (g->video_pipe && g->video_pipe == pipe) return &g->inst_pipe[YGFX__N_BUILTIN];
+    for (i = 0; i < 4; i++) if (g->rows_pipe[i] && g->rows_pipe[i] == pipe) return &g->inst_pipe[YGFX__N_BUILTIN + 1 + i];
     for (i = 0; i < YGFX_MAX_PIPELINES; i++) if (g->pipe[i].used && g->pipe[i].bid == pipe) return &g->pipe_inst[i];
     return NULL;
 }
@@ -8156,12 +8406,18 @@ static int ygfx__inst_program(ygfx_gfx* g, uint32_t pipe) {
         body = ygfx__builtin_body(i);
         snprintf(defs, sizeof defs, "%s#define YSP_INST 1\n%s", ygfx__builtins[i].defs,
                  mode == YGFX_MODULATION ? "#define YSP_INST_MOD 1\n" : "");
-    } else if (pipe == g->video_pipe) {
+    } else if (pipe == g->video_pipe || (g->rows_pipe[3] && pipe == g->rows_pipe[3])) {
         size_t n = sizeof ygfx__body_image_video + sizeof ygfx__body_image_color;
         mode = YGFX_COLOR;
         body = (char*)malloc(n);
         if (body) snprintf(body, n, "%s%s", ygfx__body_image_video, ygfx__body_image_color);
-        snprintf(defs, sizeof defs, "#define YSP_VIDEO 1\n#define YSP_INST 1\n");
+        snprintf(defs, sizeof defs, "#define YSP_VIDEO 1\n#define YSP_INST 1\n%s", pipe == g->video_pipe ? "" : "#define YSP_ROWS_UP 1\n");
+    } else if (ygfx__rows_index(g, pipe) >= 0) {
+        int b = ygfx__rows_builtin[ygfx__rows_index(g, pipe)];
+        mode = ygfx__builtins[b].mode;
+        body = ygfx__builtin_body(b);
+        snprintf(defs, sizeof defs, "#define YSP_ROWS_UP 1\n%s#define YSP_INST 1\n%s", ygfx__builtins[b].defs,
+                 mode == YGFX_MODULATION ? "#define YSP_INST_MOD 1\n" : "");
     } else {
         for (i = 0; i < YGFX_MAX_PIPELINES && !(g->pipe[i].used && g->pipe[i].bid == pipe); i++) {}
         if (i == YGFX_MAX_PIPELINES || !g->pipe_body[i]) return YGFX_ERR_FULL;
@@ -8719,7 +8975,7 @@ static int ygfx__end(ygfx_gfx* g, int setup) {
  * no shader loops over data, but each program is bound and drawn once. */
 static int ygfx__prime(ygfx_gfx* g) {
     ygfx_bindings bd;
-    uint32_t ids[YGFX__N_BUILTIN * 2 + YGFX__N_VSPEC + 8 + 2 * YGFX_MAX_PIPELINES];
+    uint32_t ids[YGFX__N_BUILTIN * 2 + YGFX__N_VSPEC + 16 + 2 * YGFX_MAX_PIPELINES];
     unsigned char inst[sizeof ids / sizeof ids[0]];
     int n = 0, i, rc;
     float px[4];
@@ -8732,8 +8988,9 @@ static int ygfx__prime(ygfx_gfx* g) {
     if (ygfx__sync(g) < 0) return YGFX_ERR_LOST;
     for (i = 0; i < YGFX__N_BUILTIN; i++) if (g->builtin[i]) { inst[n] = 0; ids[n++] = g->builtin[i]; }
     for (i = 0; i < YGFX__N_VSPEC; i++) if (g->vspec[i]) { inst[n] = 0; ids[n++] = g->vspec[i]; }
-    for (i = 0; i <= YGFX__N_BUILTIN; i++) if (g->inst_pipe[i]) { inst[n] = 1; ids[n++] = g->inst_pipe[i]; }
+    for (i = 0; i < YGFX__N_BUILTIN + 5; i++) if (g->inst_pipe[i]) { inst[n] = 1; ids[n++] = g->inst_pipe[i]; }
     if (g->video_pipe) { inst[n] = 0; ids[n++] = g->video_pipe; }
+    for (i = 0; i < 4; i++) if (g->rows_pipe[i]) { inst[n] = 0; ids[n++] = g->rows_pipe[i]; }
     if (g->text_pipe) { inst[n] = 0; ids[n++] = g->text_pipe; }
     if (g->text_rays_pipe) { inst[n] = 0; ids[n++] = g->text_rays_pipe; }
     if (g->blur_pipe) { inst[n] = 0; ids[n++] = g->blur_pipe; }
@@ -8846,6 +9103,35 @@ static int ygfx__video_pipe(ygfx_gfx* g) {
     snprintf(body, n, "%s%s", ygfx__body_image_video, ygfx__body_image_color);
     rc = ygfx__make_pipe(g, "#define YSP_VIDEO 1\n", body, YGFX_COLOR, 0, 0, &g->video_pipe, "image video", &r);
     free(body);
+    g->be->reset(g->bctx);
+    return rc < 0 ? rc : YGFX_OK;
+}
+
+/* ROWS (v0.21): the image programs with YSP_ROWS_UP, made at the first
+ * texture with rows bottom first (and the video one at the first encoded
+ * one), so the programs of every other image keep v0.20's code. */
+static int ygfx__rows_pipes(ygfx_gfx* g, int video) {
+    static const char* const names[4] = { "image, rows up", "image modulation, rows up", "image add, rows up", "image video, rows up" };
+    char defs[96];
+    char* body;
+    ygfx__prec r;
+    int k, rc = YGFX_OK;
+    for (k = 0; k < 4 && rc >= 0; k++) {
+        if (g->rows_pipe[k] || (k == 3 && !video)) continue;
+        if (k < 3) {
+            body = ygfx__builtin_body(ygfx__rows_builtin[k]);
+            snprintf(defs, sizeof defs, "#define YSP_ROWS_UP 1\n%s", ygfx__builtins[ygfx__rows_builtin[k]].defs);
+        } else {
+            size_t n = sizeof ygfx__body_image_video + sizeof ygfx__body_image_color;
+            body = (char*)malloc(n);
+            if (body) snprintf(body, n, "%s%s", ygfx__body_image_video, ygfx__body_image_color);
+            snprintf(defs, sizeof defs, "#define YSP_VIDEO 1\n#define YSP_ROWS_UP 1\n");
+        }
+        if (!body) return YGFX_ERR_FULL;
+        rc = ygfx__make_pipe(g, defs, body, k < 3 ? ygfx__builtins[ygfx__rows_builtin[k]].mode : YGFX_COLOR, 0, 0,
+                               &g->rows_pipe[k], names[k], &r);
+        free(body);
+    }
     g->be->reset(g->bctx);
     return rc < 0 ? rc : YGFX_OK;
 }
@@ -8966,6 +9252,10 @@ static ygfx_tex ygfx__texture_import(ygfx_gfx* g, const ygfx_import_desc* d) {
         ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: import kind, size, format (not I420 or R16UI) or source");
         return t;
     }
+    if ((unsigned)d->rows > (unsigned)YGFX_ROWS_TOP_DOWN) {
+        ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: import rows is AUTO, BOTTOM_UP or TOP_DOWN");
+        return t;
+    }
     need = d->kind == YGFX_IMPORT_GL ? YGFX_FEAT_IMPORT_GL : (d->format == YGFX_NV12 ? YGFX_FEAT_IMPORT_NV12 : YGFX_FEAT_IMPORT_D3D11);
     if (!(g->features & need)) {
         ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: this renderer cannot import %s (%s): EGL_ANGLE_image_d3d11_texture "
@@ -8977,6 +9267,7 @@ static ygfx_tex ygfx__texture_import(ygfx_gfx* g, const ygfx_import_desc* d) {
     if (slot < 0) { ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: %d textures in use", YGFX_MAX_TEXTURES); return t; }
     if (ygfx__sync(g) < 0) return t;
     if (d->enc.matrix && ygfx__video_pipe(g) < 0) return t;
+    if (d->rows == YGFX_ROWS_BOTTOM_UP && ygfx__rows_pipes(g, d->enc.matrix != 0) < 0) return t;
     r = &g->tex[slot];
     memset(r, 0, sizeof *r);
     r->enc = d->enc;
@@ -8989,6 +9280,64 @@ static ygfx_tex ygfx__texture_import(ygfx_gfx* g, const ygfx_import_desc* d) {
     }
     r->used = 1;
     r->w = d->w; r->h = d->h; r->format = d->format;
+    if (d->rows == YGFX_ROWS_BOTTOM_UP) r->flags |= YGFX__RES_ROWS_UP;
+    t.id = (uint32_t)slot + 1;
+    return t;
+}
+
+/* SHARED TEXTURES: made by the backend as a texture of its own (immutable
+ * storage, deleted at free), then named to the caller. */
+static ygfx_tex ygfx__texture_shared(ygfx_gfx* g, const ygfx_shared_desc* d, ygfx_native* out) {
+    ygfx_tex t;
+    ygfx__res* r;
+    ygfx_texture_src src;
+    ygfx_format f;
+    int slot, rc, maxt;
+    t.id = 0;
+    if (out) memset(out, 0, sizeof *out);
+    if (!g || !g->open || !d || !out) return t;
+    if (g->in_frame) { ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: texture made inside begin..end"); return t; }
+    f = d->format ? d->format : YGFX_RGBA8;
+    if (d->w <= 0 || d->h <= 0 || f != YGFX_RGBA8 || (unsigned)d->rows > (unsigned)YGFX_ROWS_TOP_DOWN) {
+        ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: a shared texture is RGBA8, w and h > 0, rows AUTO, BOTTOM_UP or TOP_DOWN");
+        return t;
+    }
+    if (d->srgb && d->enc.matrix) {
+        ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: an sRGB shared texture holds linear values when read: enc all 0");
+        return t;
+    }
+    if (g->be->version < 5 || !g->be->texture_native) {
+        ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: backend %s has no shared textures (version 5, texture_native)", g->be->name);
+        return t;
+    }
+    maxt = g->caps.max_texture > 0 ? g->caps.max_texture : 2048;
+    if (d->w > maxt || d->h > maxt) {
+        ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: shared texture %dx%d over GL_MAX_TEXTURE_SIZE %d", d->w, d->h, maxt);
+        return t;
+    }
+    if (ygfx__enc_check(g, f, &d->enc) < 0) return t;
+    slot = ygfx__slot(g->tex, YGFX_MAX_TEXTURES);
+    if (slot < 0) { ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: %d textures in use", YGFX_MAX_TEXTURES); return t; }
+    if (ygfx__sync(g) < 0) return t;
+    if (d->enc.matrix && ygfx__video_pipe(g) < 0) return t;
+    if (d->rows == YGFX_ROWS_BOTTOM_UP && ygfx__rows_pipes(g, d->enc.matrix != 0) < 0) return t;
+    r = &g->tex[slot];
+    memset(r, 0, sizeof *r);
+    memset(&src, 0, sizeof src);
+    src.w = d->w; src.h = d->h; src.format = f; src.srgb = d->srgb;
+    rc = g->be->texture_make(g->bctx, &src, &r->bid);
+    if (rc >= 0) rc = g->be->texture_native(g->bctx, r->bid, &out->gl_name, &out->gl_format);
+    if (rc < 0) {
+        if (r->bid) g->be->texture_free(g->bctx, r->bid);
+        memset(r, 0, sizeof *r);
+        memset(out, 0, sizeof *out);
+        ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: shared texture %dx%d", d->w, d->h);
+        return t;
+    }
+    r->used = 1;
+    r->enc = d->enc;
+    r->w = d->w; r->h = d->h; r->format = f;
+    if (d->rows == YGFX_ROWS_BOTTOM_UP) r->flags |= YGFX__RES_ROWS_UP;
     t.id = (uint32_t)slot + 1;
     return t;
 }
@@ -12355,6 +12704,13 @@ YGFX_API ygfx_tex ygfx_texture_import(ygfx_gfx* g, const ygfx_import_desc* d) {
     char c0 = ygfx__hold(g);
     ygfx_tex r = ygfx__texture_import(g, d);
     ygfx__done(g, c0, ygfx__made(g, r.id), "texture_import");
+    return r;
+}
+
+YGFX_API ygfx_tex ygfx_texture_shared(ygfx_gfx* g, const ygfx_shared_desc* d, ygfx_native* out) {
+    char c0 = ygfx__hold(g);
+    ygfx_tex r = ygfx__texture_shared(g, d, out);
+    ygfx__done(g, c0, ygfx__made(g, r.id), "texture_shared");
     return r;
 }
 

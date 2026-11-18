@@ -1670,10 +1670,10 @@ directory ANGLE is loaded from and the SDL version. Handles start at
 | `'displays'`, `'modes' [, display]`, `'mode_multiple', num, den, [w h], tol_ppm, display` | struct rows; `[k, mode, err_ppm]` | `'open'` takes a display's `id` and a mode struct |
 | `'options'`, `'constants'` | struct | the options with a line each; `TIER_*`, `PATH_*`, `FLIP_*`, `ABORT_*`, `KIND_*`, `PRESS` ... |
 | `'open' [, opts]` | `uint64` handle | a struct or name-value pairs: `windowed`, `size`, `display`, `mode`, `backend` (`'auto'`, `'dxgi_flip'`, `'composition'`, `'metal'` (macOS), `'sim'`), `color_depth` (8, or 10 on `'metal'`), `window_thread`, `lead`, `onset_offset` (s), `depth`, `depth_learn`, `settle`, `settle_flips`, `settle_min`, `settle_max` (s), `foreground`, `panic`, `panic_presses`, `panic_window`, `panic_grace` (s), `patch`, `patch_size`, `patch_corner`, `show_cursor`, `keep_os_gamma`, `key_dedup` (s), `gamepads`, `min_tier`, `sim_period` (s). Settles: 0.5 to 0.8 s fullscreen, 2.5 s in a window. Two options of the binding: `gfx` (`true` or a struct of `ysp_gfx('open')` options: the gfx starts while the screen settles, and `ysp_gfx('open', h)` finishes it) and `frame` (`'struct'`, the default, or `'row'`: see `'begin'`) |
-| `[f, quit, done] = ('begin', h)` | frame | `f`: `onset`, `onset_ns`, `period`, `period_ns`, `index`, `vblank`, `n_done`, `done_lost` (`_ns` as `int64`); `done`: the records completed since the last begin, only when asked for (a third output). With `'frame', 'row'`: `f = [onset period index vblank n_done done_lost]` and `done` an n x 15 matrix (below). An abort raises `ysp_screen:abort`; `[f, quit] = ...` returns it in `quit` (`reasons`, `presses`, `t`, `t_ns`, `panic`) with `f` empty |
+| `[f, quit, done] = ('begin', h)` | frame | `f`: `onset`, `onset_ns`, `period`, `period_ns`, `index`, `vblank`, `n_done`, `done_lost` (`_ns` as `int64`); `done`: the records completed since the last begin, only when asked for (a third output). With `'frame', 'row'`: `f = [onset period index vblank n_done done_lost]` and `done` an n x 16 matrix (below). An abort raises `ysp_screen:abort`; `[f, quit] = ...` returns it in `quit` (`reasons`, `presses`, `t`, `t_ns`, `panic`) with `f` empty |
 | `'flip', h`, `'flip_at', h, t` | none | at the predicted onset, or at the vblank `t` snaps to |
-| `'wait_flip', h`, `'records', h` | record, record row | `records`: every record since the last call (4096 kept; the second output counts the overflow); an n x 15 matrix on a `'frame', 'row'` screen: `index target planned onset residual dropped path tier flags` and the six phases (seconds; `NaN` unknown) |
-| `'mark', h, phase` | none | `'evaluate'`, `'script'`, `'draw'`, `'upload'` |
+| `'wait_flip', h`, `'records', h` | record, record row | `records`: every record since the last call (4096 kept; the second output counts the overflow); an n x 16 matrix on a `'frame', 'row'` screen: `index target planned onset residual dropped path tier flags` and the seven phases (seconds; `NaN` unknown; the seventh, the extension phase, since 1.5.0) |
+| `'mark', h, phase` | none | `'evaluate'`, `'script'`, `'draw'`, `'upload'`, `'extension'` (1.5.0: a renderer extension's CPU time) |
 | `'poll', h [, max]` | event row | the shared event layout of `ysp_device` and `ysp_response` |
 | `'title', h, text`, `'cursor', h, show`, `'grab', h, on` | none | through the window thread; `:not_implemented` on `'sim'` |
 | `'describe', h`, `'caps', h`, `'settle', h`, `'sync', h`, `'set_patch', h, v` | | `caps`: `kind`, `backend`, `period`, `mode`, `native_target`, `hw_onset`, `vrr_capable`, `max_in_flight`, `worst_tier`, `raw_keyboard`, `os_input_stamps` (keys and mouse buttons get their OS event's time: METAL's NSEvent.timestamp), `margin` (s; 0 = the core's, 2 ms on METAL), with `period_ns` and `margin_ns` |
@@ -1685,7 +1685,8 @@ directory ANGLE is loaded from and the SDL version. Handles start at
 
 A record has `index`, `target`, `planned`, `onset`, `residual` (each with
 `_ns`, `int64`), `dropped`, `missed`, `late` (`FLIP_LATE_TARGET`), `path`,
-`tier`, `flags`, `phases` (1 x 6 seconds, `NaN` for the GPU phase) and
+`tier`, `flags`, `phases` (1 x 7 seconds: evaluate, script, draw, upload,
+swap, GPU and, since 1.5.0, extension; `NaN` for the GPU phase) and
 `code_risk`. A frame number starts at 0, as the header's. Errors are
 `ysp_screen:arg`, `:closed`, `:order`, `:timeout`, `:lost`, `:refused`,
 `:not_implemented`, `:abort`, `:open`, `:handle` and `:usage` (and the same

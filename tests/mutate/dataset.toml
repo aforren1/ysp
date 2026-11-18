@@ -396,3 +396,30 @@ find = '''    if (YDS__FULLFSYNC(fd) == 0) return 0;
 replace = '''    return YDS__FULLFSYNC(fd);
 #endif
     return fsync(fd);'''
+
+# v0.3.0 (dx-: frames.csv's extension_s).
+[[mutant]]
+id = "dx-01"
+name = "the extension phase not copied"
+test = "dataset"
+why = "yds_frame_from_screen() must carry YSCR_PHASE_EXTENSION into frames.csv."
+find = "    f->extension_ns = yds__phase(r->phase_ns[YSCR_PHASE_EXTENSION]);\n"
+replace = ""
+
+[[mutant]]
+id = "dx-02"
+name = "the extension column before gpu_s"
+test = "dataset"
+why = "The new column is appended: the others keep their places for readers by position."
+find = '''    YTR_COL(yds_frame, gpu_ns, YTR_COL_TIME_NS),
+    YTR_COL(yds_frame, extension_ns, YTR_COL_TIME_NS),'''
+replace = '''    YTR_COL(yds_frame, extension_ns, YTR_COL_TIME_NS),
+    YTR_COL(yds_frame, gpu_ns, YTR_COL_TIME_NS),'''
+
+[[mutant]]
+id = "dx-03"
+name = "an unknown extension phase written as a duration"
+test = "dataset"
+why = "The init marks it missing, so a record from an older screen.h writes an empty cell."
+find = "    f->evaluate_ns = f->script_ns = f->draw_ns = f->upload_ns = f->swap_ns = f->gpu_ns = f->extension_ns = YTR_MISSING_NS;"
+replace = "    f->evaluate_ns = f->script_ns = f->draw_ns = f->upload_ns = f->swap_ns = f->gpu_ns = YTR_MISSING_NS;"

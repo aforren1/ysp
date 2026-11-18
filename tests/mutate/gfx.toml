@@ -985,7 +985,7 @@ name = "prime skips the instanced programs"
 test = "gfx"
 env = { YGFX_TEST_PARTS = "v0.11 prime", YGFX_TEST_DEVICES = "hardware" }
 why = "v0.11: the instanced programs had the largest first draws (14 to 27 ms with no program cache)."
-find = '    for (i = 0; i <= YGFX__N_BUILTIN; i++) if (g->inst_pipe[i]) { inst[n] = 1; ids[n++] = g->inst_pipe[i]; }'
+find = '    for (i = 0; i < YGFX__N_BUILTIN + 5; i++) if (g->inst_pipe[i]) { inst[n] = 1; ids[n++] = g->inst_pipe[i]; }'
 replace = ''
 
 # v0.11.1 (os-): ygfx_open_start() (OPEN START). The CPU half (fake backend
@@ -1678,3 +1678,240 @@ env = { YGFX_TEST_PARTS = "none", YGFX_TEST_DEVICES = "none" }
 why = "A designer's panel and a binding read the units' names from the row."
 find = '"factor from view.width_mm)", "px=0,deg=1,cm=2" },'
 replace = '"factor from view.width_mm)", "px=0,deg=1" },'
+
+# v0.21.0 (rs-: an import's or a shared texture's rows bottom first, and
+# the shared textures; docs/filly_probe.md findings 8 and 9), run by
+# tests/adapt/gfx_test.c with gcc on the Linux desktop (Mesa llvmpipe;
+# "none" is the CPU half alone).
+[[mutant]]
+id = "rs-01"
+name = "the image's row height not packed"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.21 rows+shared", YGFX_TEST_DEVICES = "mesa" }
+why = "Without the height the program reads rows top first: a GL renderer's frame shows upside down (filly probe, finding 8)."
+find = "        if (r->flags & YGFX__RES_ROWS_UP) b[r->enc.matrix ? 58 : 36] = (float)r->h;\n"
+replace = ""
+
+[[mutant]]
+id = "rs-02"
+name = "the video program's height in the image program's place"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.21 rows+shared", YGFX_TEST_DEVICES = "mesa" }
+why = "An encoded texture (the probe's sRGB RGBA8, NV12) reads its height from vk[6].z, not from block float 36."
+find = "b[r->enc.matrix ? 58 : 36] = (float)r->h;"
+replace = "b[36] = (float)r->h;"
+
+[[mutant]]
+id = "rs-03"
+name = "the import's rows ignored"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.21 rows+shared", YGFX_TEST_DEVICES = "mesa" }
+why = "import_desc.rows BOTTOM_UP must mark the texture."
+find = '''    r->w = d->w; r->h = d->h; r->format = d->format;
+    if (d->rows == YGFX_ROWS_BOTTOM_UP) r->flags |= YGFX__RES_ROWS_UP;'''
+replace = '''    r->w = d->w; r->h = d->h; r->format = d->format;'''
+
+[[mutant]]
+id = "rs-04"
+name = "AUTO taken as bottom first"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.21 rows+shared", YGFX_TEST_DEVICES = "mesa" }
+why = "A zeroed import desc keeps v0.20's meaning: rows top first."
+find = '''    r->w = d->w; r->h = d->h; r->format = d->format;
+    if (d->rows == YGFX_ROWS_BOTTOM_UP) r->flags |= YGFX__RES_ROWS_UP;'''
+replace = '''    r->w = d->w; r->h = d->h; r->format = d->format;
+    if (d->rows != YGFX_ROWS_TOP_DOWN) r->flags |= YGFX__RES_ROWS_UP;'''
+
+[[mutant]]
+id = "rs-05"
+name = "the shared texture's rows ignored"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.21 rows+shared", YGFX_TEST_DEVICES = "mesa" }
+why = "shared_desc.rows BOTTOM_UP must mark the texture a GL renderer writes."
+find = '''    r->w = d->w; r->h = d->h; r->format = f;
+    if (d->rows == YGFX_ROWS_BOTTOM_UP) r->flags |= YGFX__RES_ROWS_UP;'''
+replace = '''    r->w = d->w; r->h = d->h; r->format = f;'''
+
+[[mutant]]
+id = "rs-06"
+name = "the turned row off by one"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.21 rows+shared", YGFX_TEST_DEVICES = "mesa" }
+why = "Row y of the image is texel row H - 1 - y: one more reads past the texture (texelFetch gives 0) and shifts every row."
+find = "ivec2 ysp_row_(ivec2 t, int H) { return ivec2(t.x, H - 1 - t.y); }"
+replace = "ivec2 ysp_row_(ivec2 t, int H) { return ivec2(t.x, H - t.y); }"
+
+[[mutant]]
+id = "rs-07"
+name = "the chroma planes turned at the luma height"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.21 rows+shared", YGFX_TEST_DEVICES = "mesa" }
+why = "NV12's CbCr plane has ceil(h / 2) rows."
+find = "int H = int(M2.z), Hc = (H + 1) / 2;"
+replace = "int H = int(M2.z), Hc = H;"
+
+[[mutant]]
+id = "rs-08"
+name = "replicated chroma not turned"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.21 rows+shared", YGFX_TEST_DEVICES = "mesa" }
+why = "chroma_nearest reads the CbCr plane by its own texelFetch."
+find = "ivec2 n = ysp_row_(clamp(ivec2(floor(Lc)) / 2, ivec2(cr.xy), ivec2(cr.xy + cr.zw) - 1), Hc);"
+replace = "ivec2 n = clamp(ivec2(floor(Lc)) / 2, ivec2(cr.xy), ivec2(cr.xy + cr.zw) - 1);"
+
+[[mutant]]
+id = "rs-09"
+name = "linear sampling not turned"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.21 rows+shared", YGFX_TEST_DEVICES = "mesa" }
+why = "A scaled, linear image takes its four texels through ysp_bilinear_h_."
+find = "ivec2 a = ysp_row_(clamp(ivec2(i0), lo, hi), H), b = ysp_row_(clamp(ivec2(i0) + 1, lo, hi), H);\\n\" \\"
+replace = "ivec2 a = clamp(ivec2(i0), lo, hi), b = clamp(ivec2(i0) + 1, lo, hi);\\n\" \\"
+
+[[mutant]]
+id = "rs-10"
+name = "straight-alpha linear sampling not turned"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.21 rows+shared", YGFX_TEST_DEVICES = "mesa" }
+why = "A straight-alpha RGBA image drawn linear has its own bilinear (premultiplied weights)."
+find = '''    "vec4 ysp_bilinear_s_(vec2 x, vec4 sr, int ach, int H) {\n"'''
+replace = '''    "vec4 ysp_bilinear_s_(vec2 x, vec4 sr, int ach, int H0) { int H = 0;\n"'''
+
+[[mutant]]
+id = "rs-11"
+name = "rows out of range taken"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.21 rows+shared", YGFX_TEST_DEVICES = "mesa" }
+why = "An import's rows is one of the three ygfx_rows values."
+find = '''    if ((unsigned)d->rows > (unsigned)YGFX_ROWS_TOP_DOWN) {
+        ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: import rows is AUTO, BOTTOM_UP or TOP_DOWN");'''
+replace = '''    if (0) {
+        ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: import rows is AUTO, BOTTOM_UP or TOP_DOWN");'''
+
+[[mutant]]
+id = "rs-12"
+name = "a bottom-first mask taken"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.21 rows+shared", YGFX_TEST_DEVICES = "mesa" }
+why = "The mask program does not turn rows; a bottom-first texture is refused as a mask, not drawn upside down."
+find = '''        if (m->flags & YGFX__RES_ROWS_UP)
+            return ygfx__refuse('''
+replace = '''        if (0)
+            return ygfx__refuse('''
+
+[[mutant]]
+id = "rs-13"
+name = "a bottom-first shader texture taken"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.21 rows+shared", YGFX_TEST_DEVICES = "mesa" }
+why = "A user body reads ysp_tex0 by its own texelFetch; a bottom-first texture is refused there."
+find = '''            if (r->flags & YGFX__RES_ROWS_UP)
+                return ygfx__refuse('''
+replace = '''            if (0)
+                return ygfx__refuse('''
+
+[[mutant]]
+id = "rs-14"
+name = "sRGB storage not made"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.21 rows+shared", YGFX_TEST_DEVICES = "mesa" }
+why = "shared_desc.srgb makes SRGB8_ALPHA8, so the GPU encodes the renderer's linear writes."
+find = "    if (d->srgb) ifmt = YGFX__GL_SRGB8_ALPHA8;\n"
+replace = ""
+
+[[mutant]]
+id = "rs-15"
+name = "the native format says RGBA8 for sRGB storage"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.21 rows+shared", YGFX_TEST_DEVICES = "mesa" }
+why = "The renderer needs the sized format to make its own view or framebuffer."
+find = "    t->srgb = (int16_t)(d->srgb != 0);\n"
+replace = ""
+
+[[mutant]]
+id = "rs-16"
+name = "an sRGB shared texture with an encoding taken"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.21 rows+shared", YGFX_TEST_DEVICES = "mesa" }
+why = "The GPU decodes an sRGB texture already: an encoding would decode it twice."
+find = "    if (d->srgb && d->enc.matrix) {"
+replace = "    if (0) {"
+
+[[mutant]]
+id = "rs-17"
+name = "texture_native read from a version 4 table"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "none", YGFX_TEST_DEVICES = "none" }
+why = "A version 4 backend was compiled without the member: reading it reads past the caller's table."
+find = "    if (g->be->version < 5 || !g->be->texture_native) {"
+replace = "    if (!g->be->texture_native) {"
+
+[[mutant]]
+id = "rs-18"
+name = "backend version 6 opened"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "none", YGFX_TEST_DEVICES = "none" }
+why = "A table newer than the header has members it cannot know."
+find = "    if (g->be->version < 3 || g->be->version > YGFX_BACKEND_VERSION) {"
+replace = "    if (g->be->version < 3) {"
+
+[[mutant]]
+id = "rs-19"
+name = "the producer's texture not given"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.21 rows+shared", YGFX_TEST_DEVICES = "mesa" }
+why = "out->gl_name is the texture ysp_gfx draws; another name draws nothing the renderer wrote."
+find = "    *gl_name = gl->tex[id - 1].tex;\n"
+replace = "    *gl_name = gl->tex[id - 1].tex + 1;\n"
+
+[[mutant]]
+id = "rs-20"
+name = "the rows programs not chosen"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.21 rows+shared", YGFX_TEST_DEVICES = "mesa" }
+why = "Only the YSP_ROWS_UP programs turn rows; the others keep v0.20's code (a turn in every program cost 4 to 10 % of a linear 1080p image)."
+find = "            pipe = ygfx__rows_of(g, pipe);\n"
+replace = ""
+
+[[mutant]]
+id = "rs-21"
+name = "the rows programs not made at the import"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.21 rows+shared", YGFX_TEST_DEVICES = "mesa" }
+why = "They compile at setup, with the first bottom-first texture, never in a frame."
+find = '''    if (d->enc.matrix && ygfx__video_pipe(g) < 0) return t;
+    if (d->rows == YGFX_ROWS_BOTTOM_UP && ygfx__rows_pipes(g, d->enc.matrix != 0) < 0) return t;
+    r = &g->tex[slot];
+    memset(r, 0, sizeof *r);
+    r->enc = d->enc;'''
+replace = '''    if (d->enc.matrix && ygfx__video_pipe(g) < 0) return t;
+    r = &g->tex[slot];
+    memset(r, 0, sizeof *r);
+    r->enc = d->enc;'''
+
+[[mutant]]
+id = "rs-22"
+name = "an encoded image on the plain rows program"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.21 rows+shared", YGFX_TEST_DEVICES = "mesa" }
+why = "The video program's rows variant decodes; the image one does not."
+find = "    if (pipe && pipe == g->video_pipe) return g->rows_pipe[3];"
+replace = "    if (pipe && pipe == g->video_pipe) return g->rows_pipe[0];"
+
+[[mutant]]
+id = "rs-23"
+name = "the instanced rows program without YSP_ROWS_UP"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.21 rows+shared", YGFX_TEST_DEVICES = "mesa" }
+why = "Elements of a bottom-first image template turn rows as the template does."
+find = '''        snprintf(defs, sizeof defs, "#define YSP_ROWS_UP 1\n%s#define YSP_INST 1\n%s", ygfx__builtins[b].defs,'''
+replace = '''        snprintf(defs, sizeof defs, "%s#define YSP_INST 1\n%s", ygfx__builtins[b].defs,'''
+
+[[mutant]]
+id = "rs-24"
+name = "the image's height from the wrong float"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.21 rows+shared", YGFX_TEST_DEVICES = "mesa" }
+why = "The vertex shader passes block float 36, the height, to the fragments."
+find = '''    "    ysp_rh = int(ysp_v[i * 16 + 9].x);\n"'''
+replace = '''    "    ysp_rh = int(ysp_v[i * 16 + 8].w);\n"'''

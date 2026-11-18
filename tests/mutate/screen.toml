@@ -2330,3 +2330,28 @@ find = '''    if (yscr__hid_empty(relative, v)) {
         YSCR__RM_VALUE(page, usage, v, t, YSCR__RM_EMPTY);'''
 replace = '''    if (0) {
         YSCR__RM_VALUE(page, usage, v, t, YSCR__RM_EMPTY);'''
+
+# v0.20.0 (ex-: the extension phase), run by tests/adapt/screen_test.c.
+[[mutant]]
+id = "ex-01"
+name = "the extension phase not marked"
+test = "screen"
+why = "yscr_mark(YSCR_PHASE_EXTENSION) must charge a renderer's time to its own phase (v0.19's rule stopped at _GPU)."
+find = "    if (!s || !s->begun || phase < 0 || phase >= YSCR_N_PHASES || phase == YSCR_PHASE_GPU) return;"
+replace = "    if (!s || !s->begun || phase < 0 || phase >= YSCR_PHASE_GPU) return;"
+
+[[mutant]]
+id = "ex-02"
+name = "the GPU phase marked"
+test = "screen"
+why = "_GPU is UNKNOWN, not CPU time; a mark of it is ignored."
+find = "    if (!s || !s->begun || phase < 0 || phase >= YSCR_N_PHASES || phase == YSCR_PHASE_GPU) return;"
+replace = "    if (!s || !s->begun || phase < 0 || phase >= YSCR_N_PHASES) return;"
+
+[[mutant]]
+id = "ex-03"
+name = "the extension phase charged to the script"
+test = "screen"
+why = "The probe's workaround: a renderer's time in _SCRIPT hides which of the two took a late frame's time."
+find = "    s->acc[phase] = yscr__sat32((int64_t)s->acc[phase] + (now - s->mark_t));"
+replace = "    if (phase == YSCR_PHASE_EXTENSION) phase = YSCR_PHASE_SCRIPT;\n    s->acc[phase] = yscr__sat32((int64_t)s->acc[phase] + (now - s->mark_t));"

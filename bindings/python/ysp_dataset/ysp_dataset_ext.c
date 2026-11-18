@@ -60,7 +60,7 @@
 
 /* The distribution's version is the header's (docs/bindings.md, Versions);
  * tests/test_dataset.py checks that this and pyproject.toml agree. */
-#define DS_VERSION YDS_VERSION_STRING ".1"   /* .1: the CPython 3.10 floor (2026-10-27) */
+#define DS_VERSION YDS_VERSION_STRING   /* no binding change since v0.2.1.1 (.1: the CPython 3.10 floor) */
 
 static PyObject* DsError;
 static PyObject* DsArgumentError;

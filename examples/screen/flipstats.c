@@ -262,7 +262,8 @@ static void drain(void) {
                 r.path = (uint8_t)YSCR_EV_PATH_OF(e->u.u16[5]);
                 r.flags = (uint16_t)YSCR_EV_FLAGS_OF(e->u.u16[5]);
                 r.tier = (uint8_t)YSCR_EV_TIER_OF(e->u.u16[5]);
-                for (k = 0; k < YSCR_N_PHASES; k++) r.phase_ns[k] = e->u.u32[3 + k];
+                /* the ring's FLIP event carries phases 0 to 5 only (no _EXTENSION) */
+                for (k = 0; k <= YSCR_PHASE_GPU; k++) r.phase_ns[k] = e->u.u32[3 + k];
                 r.index = e->u.u32[9];
                 r.residual = r.onset - r.target;
                 if (g_nrec < MAX_FRAMES) g_rec[g_nrec++] = r;

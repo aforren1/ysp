@@ -1408,8 +1408,8 @@ context on the web, and a sketch of the Renderer vtable.
   owns the frame thread and the audio callback. An extension may run
   its own threads. It must not block the frame thread, must not
   allocate or do I/O in the audio callback, and must report its own
-  timing through the hooks. The flip record's extension phase shows
-  when one does not.
+  timing through the hooks. The flip record's extension phase
+  (`YSCR_PHASE_EXTENSION`, ysp/screen.h 0.20.0) shows when one does not.
 - **Licenses.** The boundary does not change them. The manifest records
   each module's license beside its hash. A lab that distributes a
   player with a GPL module distributes under the GPL.

@@ -20,7 +20,7 @@ function test_mex_vis()
 
     % ---- versions and the core
     [bv, hv] = ysp_screen('version');
-    check(strcmp(bv, '1.4.1') && ~isempty(regexp(hv, '^\d+\.\d+\.\d+$', 'once')), 'version: binding %s, header %s', bv, hv);
+    check(strcmp(bv, '1.5.0') && ~isempty(regexp(hv, '^\d+\.\d+\.\d+$', 'once')), 'version: binding %s, header %s', bv, hv);
     [~, gv] = ysp_gfx('version');
     [~, vv] = ysp_video('version');
     info = ysp_vis('info');
@@ -89,7 +89,7 @@ function test_mex_vis()
     check(all(arrayfun(@(x) x.residual_ns == x.onset_ns - x.target_ns && x.onset == double(x.onset_ns) / 1e9, recs)), ...
           'records: seconds and exact ns');
     check(recs(1).target_ns == f1.onset_ns, 'flip targets the predicted onset');
-    check(numel(recs(1).phases) == 6 && isnan(recs(1).phases(6)), 'phases: GPU unknown');
+    check(numel(recs(1).phases) == 7 && isnan(recs(1).phases(6)) && recs(1).phases(7) == 0, 'phases: GPU unknown, no extension');
     check(isempty(ysp_screen('records', h)), 'records drains');
 
     f = ysp_screen('begin', h);
@@ -109,6 +109,13 @@ function test_mex_vis()
     ysp_screen('flip', h);
     r = ysp_screen('wait_flip', h);
     check(~isnan(r.phases(1)), 'mark: the evaluate phase');
+    ysp_screen('begin', h);
+    t0 = tic;
+    while toc(t0) < 0.002, end
+    ysp_screen('mark', h, 'extension');
+    ysp_screen('flip', h);
+    r = ysp_screen('wait_flip', h);
+    check(r.phases(7) >= 0.002 && r.phases(2) == 0, 'mark: the extension phase (1.5.0)');
 
     % ---- aborts
     ysp_screen('request_abort');

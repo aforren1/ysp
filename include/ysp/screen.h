@@ -1,4 +1,4 @@
-/* ysp/screen.h - v0.19.0 - public domain single-header display library
+/* ysp/screen.h - v0.20.0 - public domain single-header display library
  *
  *   The window, the GL ES 3.0 context, the display mode and the swap path
  *   of a stimulus display, with flip at a time: each frame learns the
@@ -356,9 +356,11 @@
  *     record completed in close() reaches the ring and on_flip only.
  *
  *   PHASES
- *     phase_ns[YSCR_PHASE_EVALUATE, _SCRIPT, _DRAW, _UPLOAD] is the time
- *     charged by yscr_mark(); the time not marked before flip_at() goes
- *     to _DRAW. _SWAP is begin()'s wait for a slot plus the present call,
+ *     phase_ns[YSCR_PHASE_EVALUATE, _SCRIPT, _DRAW, _UPLOAD, _EXTENSION]
+ *     is the time charged by yscr_mark(); the time not marked before
+ *     flip_at() goes to _DRAW. _EXTENSION (v0.20) is a renderer
+ *     extension's work on the frame thread (its render and its wait for
+ *     the renderer's fence), apart from the host's own script and draw. _SWAP is begin()'s wait for a slot plus the present call,
  *     not flip_at()'s planned wait for a later vblank. _GPU is
  *     YSCR_PHASE_UNKNOWN in v0.1: a GL_EXT_disjoint_timer_query per frame
  *     was built and measured, and it tracked the GPU work but cost about
@@ -374,7 +376,8 @@
  *       u.u16[4]  dropped, at most 65535
  *       u.u16[5]  path in bits 0..2, flags in bits 3..12, tier in bits
  *                 13..15: YSCR_EV_PATH_OF(), _FLAGS_OF(), _TIER_OF()
- *       u.u32[3..8]  phase_ns[0..5]
+ *       u.u32[3..8]  phase_ns[0..5]; not _EXTENSION (6): the payload
+ *                 is full. The record (f.done, on_flip) has it
  *       u.u32[9]  the frame index, low 32 bits (ytl_event.frame)
  *     Residual is t_ns - u.i64[0]. A flip never shown carries its planned
  *     vblank in t_ns, because the ring reads 0 as "now". Also
@@ -1901,6 +1904,15 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.20.0 - An extension phase (docs/filly_probe.md, section 5):
+ *          YSCR_PHASE_EXTENSION (6) for a renderer extension's CPU time
+ *          on the frame thread, which yscr_mark() takes; the filly probe
+ *          had to charge it to _SCRIPT. YSCR_N_PHASES is 7: the
+ *          indices 0 to 5 are unchanged; yscr_record.code_risk moves 4
+ *          bytes and the size stays 80 on x86-64 (the phase takes what
+ *          was tail padding). The ring's FLIP event has no room for it and
+ *          carries phases 0 to 5 as before. yscr_mark() still ignores
+ *          _GPU and phases out of range.
  *   v0.19.0 - Linux X11 key tiers by stamp (docs/examples_findings.md,
  *          B7): caps.os_input_stamps is true while the X11 hook reads a
  *          keyboard's evdev node, and yscr_event_input() then sets
@@ -2369,6 +2381,13 @@
  *          groups, input restamping, mode lists and the parameter table.
  *          The other swap paths are stubs that refuse to open.
  *
+ *   STATUS: v0.20.0 (2026-11-18, the Linux desktop): tests/adapt/
+ *   screen_test.c's phase test puts 250 us marked to _EXTENSION there and
+ *   none in _SCRIPT, ignores marks of _GPU, 7 and -1; the compile checks;
+ *   test_screen_glx on the display; mutants ex-01 to ex-03 killed. The
+ *   filly probe built against it: filly's CPU time in _EXTENSION, 0.130 /
+ *   0.183 ms (p50 / p99) over 3,600 GLX_OML frames, none dropped
+ *   (docs/gfx.md, "The filly probe again").
  *   STATUS: v0.19.0 (2026-11-06, the Linux desktop, under a lock on the
  *   display): tests/adapt/screen_glx_test.c part 11 gives 20 of 20 uinput
  *   keys stamp 0 and the kernel's time from yscr_event_input(), equal to
@@ -2757,9 +2776,9 @@
 #define YSP_SCREEN_H_INCLUDED
 
 #define YSCR_VERSION_MAJOR 0
-#define YSCR_VERSION_MINOR 19
+#define YSCR_VERSION_MINOR 20
 #define YSCR_VERSION_PATCH 0
-#define YSCR_VERSION_STRING "0.19.0"
+#define YSCR_VERSION_STRING "0.20.0"
 
 #include "ysp/rt.h"
 #include "ysp/input.h"
@@ -2802,7 +2821,9 @@ union SDL_Event;
 #define YSCR_PHASE_UPLOAD   3   /* texture upload                         */
 #define YSCR_PHASE_SWAP     4   /* begin's wait for a slot + present call */
 #define YSCR_PHASE_GPU      5   /* GPU time: always UNKNOWN in v0.1       */
-#define YSCR_N_PHASES       6
+#define YSCR_PHASE_EXTENSION 6  /* v0.20: a renderer extension's CPU time
+                                 * on the frame thread (rig_spec.md 12)   */
+#define YSCR_N_PHASES       7
 #define YSCR_PHASE_UNKNOWN  0xFFFFFFFFu
 
 /* Flip record flags. */
@@ -3790,9 +3811,9 @@ YSCR_API void        yscr_settle_check(const yscr_screen* s, yscr_settle_info* o
  * YSCR_ERR_TIMEOUT or YSCR_ERR_LOST from the swap path. */
 YSCR_API int  yscr_begin(yscr_screen* s, yscr_frame* f);
 
-/* Ends a phase of this frame (YSCR_PHASE_EVALUATE .. _UPLOAD): the time
- * since begin() or the previous mark goes to that phase. Optional; ignored
- * outside a frame. */
+/* Ends a phase of this frame (YSCR_PHASE_EVALUATE .. _UPLOAD, or
+ * _EXTENSION): the time since begin() or the previous mark goes to that
+ * phase. Optional; ignored outside a frame and for _GPU. */
 YSCR_API void yscr_mark(yscr_screen* s, int phase);
 
 /* Ends the frame: draws the patch, and presents the frame for the vblank
@@ -15956,7 +15977,7 @@ static int yscr__begin(yscr_screen* s, yscr_frame* f) {
 
 YSCR_API void yscr_mark(yscr_screen* s, int phase) {
     int64_t now;
-    if (!s || !s->begun || phase < 0 || phase >= YSCR_PHASE_GPU) return;
+    if (!s || !s->begun || phase < 0 || phase >= YSCR_N_PHASES || phase == YSCR_PHASE_GPU) return;
     now = YSCR__COST_NOW();
     s->acc[phase] = yscr__sat32((int64_t)s->acc[phase] + (now - s->mark_t));
     s->mark_t = now;

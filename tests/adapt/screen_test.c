@@ -2733,6 +2733,13 @@ static void test_phases_and_wait(void) {
     yscr_mark(&s, YSCR_PHASE_EVALUATE);
     busy_until(now_ns() + 200000);
     yscr_mark(&s, YSCR_PHASE_UPLOAD);
+    /* v0.20: a renderer extension's time; _GPU and indices out of range
+     * are ignored, so the time since the last mark goes to DRAW */
+    busy_until(now_ns() + 250000);
+    yscr_mark(&s, YSCR_PHASE_EXTENSION);
+    yscr_mark(&s, YSCR_PHASE_GPU);
+    yscr_mark(&s, YSCR_N_PHASES);
+    yscr_mark(&s, -1);
     yscr_set_patch(&s, 2.0f);
     CHECK_I(yscr_flip(&s), YSCR_OK);
     CHECK_I(yscr_wait_flip(&s, &r), YSCR_OK);
@@ -2740,13 +2747,23 @@ static void test_phases_and_wait(void) {
     CHECK(r.phase_ns[YSCR_PHASE_EVALUATE] >= 300000);
     CHECK(r.phase_ns[YSCR_PHASE_UPLOAD] >= 200000);
     CHECK(r.phase_ns[YSCR_PHASE_UPLOAD] < 2000000);
+    CHECK(r.phase_ns[YSCR_PHASE_EXTENSION] >= 250000);
+    CHECK(r.phase_ns[YSCR_PHASE_EXTENSION] < 2000000);
+    CHECK_I(r.phase_ns[YSCR_PHASE_SCRIPT], 0);
     CHECK_I(r.phase_ns[YSCR_PHASE_GPU], YSCR_PHASE_UNKNOWN);
+    CHECK_I(YSCR_PHASE_EXTENSION, 6);
+    CHECK_I(YSCR_N_PHASES, 7);
     if (!(r.flags & YSCR_FLIP_LATE_TARGET)) {
         CHECK_I(r.onset, f.onset);
         CHECK_I((r.onset - 7000 - c.t0) % P_NS, 0);
         CHECK_I(r.residual, 0);
     }
     CHECK(s.patch_value == 1.0f);
+    /* a frame with no extension mark has none */
+    CHECK_I(yscr_begin(&s, &f), YSCR_OK);
+    CHECK_I(yscr_flip(&s), YSCR_OK);
+    CHECK_I(yscr_wait_flip(&s, &r), YSCR_OK);
+    CHECK_I(r.phase_ns[YSCR_PHASE_EXTENSION], 0);
     yscr_close(&s);
 }
 

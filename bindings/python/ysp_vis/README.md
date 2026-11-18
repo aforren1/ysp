@@ -292,7 +292,7 @@ fullscreen, 2.5 s in a window. Keyword options only;
 | `s.wait_flip()` | `Record` of the newest flip, after every flip has its record |
 | `s.records()` | `list[Record]`: every record completed since the last call (`records_lost` counts the overflow of 4096) |
 | `s.poll(max=0)` | `list[Event]`: the input events since the last poll, in the shared layout of `ysp.device` and `ysp.response` |
-| `s.mark(phase)` | charge the time since `begin()` or the last mark to `PHASE_EVALUATE`, `_SCRIPT`, `_DRAW` or `_UPLOAD` |
+| `s.mark(phase)` | charge the time since `begin()` or the last mark to `PHASE_EVALUATE`, `_SCRIPT`, `_DRAW`, `_UPLOAD` or `_EXTENSION` (a renderer extension's CPU time, since 0.20.0) |
 | `s.title(text)`, `s.cursor(show)`, `s.grab(on)` | through `yscr_window_call()`: the window thread does the SDL call |
 | `s.describe()`, `s.caps()`, `s.settle()`, `s.sync()` | the log line, the capabilities, open's settling, the sync guard. `caps()` has `os_input_stamps` (keys and mouse buttons get their OS event's time: METAL's NSEvent.timestamp) and `margin` (seconds, with `margin_ns`; 0 = the core's, 2 ms on METAL) since 0.15.0 |
 | `s.close()` | lets the last flip complete; closes a `Gfx` on the screen first |
@@ -302,8 +302,9 @@ fullscreen, 2.5 s in a window. Keyword options only;
 A `Record` has `index`, `target`, `planned`, `onset`, `residual` (each with
 `_ns`), `dropped`, `missed` (`dropped > 0`), `late` (`FLIP_LATE_TARGET`:
 the caller asked for a vblank it could no longer make), `path`, `tier`,
-`flags`, `phases` (seconds per phase; `None` for the GPU phase, which the
-header does not measure) and `code_risk`.
+`flags`, `phases` (seconds per phase, indexed by `PHASE_*`, 7 of them since
+0.20.0; `None` for the GPU phase, which the header does not measure) and
+`code_risk`.
 
 `Abort` is not an `Error`: the operator asked to stop. It has `reasons`
 (`ABORT_*` bits), `presses`, `t`, `t_ns` and `panic`. After `begin()` raised

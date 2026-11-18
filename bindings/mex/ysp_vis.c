@@ -317,11 +317,11 @@ static mxArray* vx_records(const yscr_record* r, int n) {
     return s;
 }
 
-/* Records as one n x 15 double matrix (the open option frame='row'): index,
+/* Records as one n x 16 double matrix (the open option frame='row'): index,
  * target, planned, onset, residual (s), dropped, path, tier, flags, then the
- * six phases (s; NaN unknown). One array: a struct of records cost 3.5 us
+ * seven phases (s; NaN unknown; 1.5.0 added the extension phase). One array: a struct of records cost 3.5 us
  * a record in MATLAB and 94 us in Octave (bench_frame.m, 2026-10-27). */
-#define VX_REC_COLS 15
+#define VX_REC_COLS (9 + YSCR_N_PHASES)
 static mxArray* vx_records_matrix(const yscr_record* r, int n) {
     mxArray* m = mxCreateDoubleMatrix((size_t)(n > 0 ? n : 0), VX_REC_COLS, mxREAL);
     double* p = mxGetPr(m);
@@ -574,7 +574,7 @@ static const vx_const vx_consts[] = {
 
 static const yv_name vx_phases[] = {
     { "evaluate", YSCR_PHASE_EVALUATE }, { "script", YSCR_PHASE_SCRIPT }, { "draw", YSCR_PHASE_DRAW },
-    { "upload", YSCR_PHASE_UPLOAD }, { NULL, 0 } };
+    { "upload", YSCR_PHASE_UPLOAD }, { "extension", YSCR_PHASE_EXTENSION }, { NULL, 0 } };
 
 static void vx_window(yv_screen* v, void (*fn)(void*), const char* text, int on) {
     int rc = yv_window(v, fn, text, on);
@@ -692,10 +692,10 @@ static void vx_screen_cmd(const char* cmd, int nlhs, mxArray* plhs[], int nrhs, 
         yv_screen* v;
         char ph[16];
         int p;
-        vx_nargs(nrhs, 3, "ysp_screen('mark', h, 'evaluate' | 'script' | 'draw' | 'upload')");
+        vx_nargs(nrhs, 3, "ysp_screen('mark', h, 'evaluate' | 'script' | 'draw' | 'upload' | 'extension')");
         v = vx_scr(prhs[1]);
         vx_string(prhs[2], ph, sizeof ph, "mark: the phase");
-        if (yv_name_value(vx_phases, ph, &p) < 0) vx_err("arg", "mark: 'evaluate', 'script', 'draw' or 'upload'");
+        if (yv_name_value(vx_phases, ph, &p) < 0) vx_err("arg", "mark: 'evaluate', 'script', 'draw', 'upload' or 'extension'");
         yscr_mark(&v->s, p);
     } else if (!strcmp(cmd, "records")) {
         yv_screen* v;

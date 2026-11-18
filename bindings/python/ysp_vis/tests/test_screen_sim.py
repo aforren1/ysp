@@ -12,6 +12,7 @@ import os
 import re
 import sys
 import threading
+import time
 
 import pytest
 
@@ -178,7 +179,7 @@ def test_frame_loop_records():
             assert x.path == yscr.PATH_SIMULATED and x.tier == yscr.TIER_SIM
             assert x.onset == x.onset_ns / 1e9 and x.residual_ns == x.onset_ns - x.target_ns
             assert x.missed == (x.dropped > 0)
-            assert len(x.phases) == 6 and x.phases[yscr.PHASE_GPU] is None
+            assert len(x.phases) == 7 and x.phases[yscr.PHASE_GPU] is None
         # flip() targets the predicted onset: the record's target is the frame's.
         assert recs[5].target_ns == frames[5].onset_ns
         assert s.records() == []
@@ -226,6 +227,21 @@ def test_marks_go_to_phases():
         s.flip()
         r = s.wait_flip()
         assert r.phases[yscr.PHASE_EVALUATE] is not None
+        # screen.h 0.20.0: a renderer extension's time has its own phase
+        assert yscr.PHASE_EXTENSION == 6
+        s.begin()
+        t = time.perf_counter()
+        while time.perf_counter() - t < 0.002:
+            pass
+        s.mark(yscr.PHASE_EXTENSION)
+        s.flip()
+        r = s.wait_flip()
+        assert r.phases[yscr.PHASE_EXTENSION] >= 0.002
+        assert r.phases[yscr.PHASE_SCRIPT] == 0
+        with pytest.raises(yscr.ArgumentError):
+            s.begin()
+            s.mark(yscr.PHASE_GPU)
+        s.flip()
 
 
 def test_request_abort_raises_abort_once():

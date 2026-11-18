@@ -334,6 +334,7 @@ static void write_rows(yds_dataset* ds, int* dots_id, int n_trials) {
         r.phase_ns[YSCR_PHASE_UPLOAD] = 0;
         r.phase_ns[YSCR_PHASE_SWAP] = 900000;
         r.phase_ns[YSCR_PHASE_GPU] = YSCR_PHASE_UNKNOWN;
+        r.phase_ns[YSCR_PHASE_EXTENSION] = i == 1 ? 131072u : 0u;   /* v0.3.0: the last column */
         yds_frame_from_screen(&f, &r, i < 2 ? 0 : 1);
         CHECK_I(yds_write_frame(ds, &f), 0);
     }
@@ -582,6 +583,14 @@ static void test_golden(bool print) {
     CHECK(isnan(ytb_num(&g_tab, 3, ytb_col(&g_tab, "onset_s"))));
     CHECK(isnan(ytb_num(&g_tab, 0, ytb_col(&g_tab, "gpu_s"))));
     CHECK(fabs(ytb_num(&g_tab, 0, ytb_col(&g_tab, "draw_s")) - 0.00025) < 1e-15);
+    CHECK_I(ytb_col(&g_tab, "extension_s"), YDS_FRAME_COLS - 1);
+    {
+        /* v0.3.0: a row filled field by field leaves extension_s empty */
+        yds_frame fi;
+        yds_frame_init(&fi);
+        CHECK(fi.extension_ns == YTR_MISSING_NS);
+    }
+    CHECK(ytb_num(&g_tab, 1, ytb_col(&g_tab, "extension_s")) == 0.000131072);
     CHECK_I(ytb_col(&g_tab, "frame"), 0);
     CHECK(read_csv(GOLD_EVENTS, strlen(GOLD_EVENTS)));
     CHECK_I(g_tab.n_rows, 5);

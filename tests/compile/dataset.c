@@ -84,8 +84,9 @@ int main(void) {
     r.index = 7;
     r.onset = 1000;
     r.phase_ns[YSCR_PHASE_GPU] = YSCR_PHASE_UNKNOWN;
+    r.phase_ns[YSCR_PHASE_EXTENSION] = 5;
     yds_frame_from_screen(&f, &r, 3);
-    if (f.frame != 7 || f.trial_index != 3 || f.gpu_ns != YTR_MISSING_NS || f.draw_ns != 0) return 7;
+    if (f.frame != 7 || f.trial_index != 3 || f.gpu_ns != YTR_MISSING_NS || f.draw_ns != 0 || f.extension_ns != 5) return 7;
     memset(&in, 0, sizeof in);
     in.kind = (uint8_t)YIN_KIND_MOUSE;
     yds_event_from_input(&e, &in, "resp", 0);

@@ -160,6 +160,32 @@ int main(void) {
         ygfx_units u = YGFX_CM;
         if ((int)u != 2 || (int)YGFX_DEG + 1 != (int)YGFX_CM) return 31;
     }
+    {   /* v0.21: an import's rows (appended, 0 = AUTO = top first); a shared
+         * texture on a simulated display's null backend is refused */
+        ygfx_import_desc id;
+        ygfx_shared_desc sd;
+        ygfx_native nat;
+        yscr_desc sdd;
+        yscr_screen ss;
+        ygfx_desc gdd;
+        ygfx_gfx gg;
+        memset(&id, 0, sizeof id);
+        if (id.rows != YGFX_ROWS_AUTO || (int)YGFX_ROWS_BOTTOM_UP != 1 || (int)YGFX_ROWS_TOP_DOWN != 2) return 32;
+        if (YGFX_BACKEND_VERSION != 5) return 33;
+        memset(&sd, 0, sizeof sd);
+        sd.w = sd.h = 4; sd.rows = YGFX_ROWS_BOTTOM_UP; sd.srgb = false;
+        memset(&sdd, 0, sizeof sdd);
+        sdd.backend = YSCR_BACKEND_SIM;
+        memset(&ss, 0, sizeof ss);
+        if (!yscr_open(&ss, &sdd)) return 34;
+        memset(&gdd, 0, sizeof gdd);
+        gdd.screen = &ss;
+        memset(&gg, 0, sizeof gg);
+        if (!ygfx_open(&gg, &gdd)) return 35;
+        if (ygfx_texture_shared(&gg, &sd, &nat).id != 0 || nat.gl_name != 0 || nat.gl_format != 0) return 36;
+        ygfx_close(&gg);
+        yscr_close(&ss);
+    }
     return ygfx_params(&n) && n == YGFX_P_COUNT && ygfx_desc_params(&m) && m > 0 &&
            ygfx_group_params(&k) && k > 0 ? 0 : 8;
 }

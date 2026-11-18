@@ -51,13 +51,14 @@ def test_version_matches_pyproject():
     with open(os.path.join(here, "pyproject.toml"), encoding="utf-8") as f:
         text = f.read()
     assert re.search(r'^version = "([^"]+)"', text, re.M).group(1) == yds.__version__
-    assert yds.__version__.startswith(yds.version() + ".")
+    # the header's version, with a fourth number for a change of the binding alone
+    assert yds.__version__ == yds.version() or yds.__version__.startswith(yds.version() + ".")
 
 
 def test_constants():
     assert yds.FORMAT == "ysp-session" and yds.FORMAT_VERSION == 1
     assert yds.MAX_STREAMS == 16 and yds.MAX_COLUMNS == 256
-    assert len(yds.FRAME_COLUMNS) == 17 and yds.FRAME_COLUMNS[:6] == (
+    assert len(yds.FRAME_COLUMNS) == 18 and yds.FRAME_COLUMNS[-1] == "extension_s" and yds.FRAME_COLUMNS[:6] == (
         "frame", "trial_index", "target_s", "planned_s", "onset_s", "residual_s")
     assert len(yds.EVENT_COLUMNS) == 20 and yds.EVENT_COLUMNS[0] == "t_s" and yds.EVENT_COLUMNS[-1] == "text"
     assert len(yds.CLOCK_COLUMNS) == 11 and yds.CLOCK_COLUMNS[:3] == ("role", "kind", "t_s")
@@ -187,7 +188,7 @@ def test_open_refusals(tmp_path):
 def test_fixed_tables(ds, tmp_path):
     ds.write_frame(frame=120, trial_index=3, target_s=10.0, planned_s=10.0, onset_s=10.000412, residual_s=0.000412,
                    dropped=0, path=1, tier=1, flags=0, code_risk=0, evaluate_s=0.0001, script_s=0.0002,
-                   draw_s=0.0003, upload_s=0.0004, swap_s=0.0005, gpu_s=0.0006)
+                   draw_s=0.0003, upload_s=0.0004, swap_s=0.0005, gpu_s=0.0006, extension_s=0.0007)
     ds.write_frame({"frame": 121})
     ds.write_event(t_s=10.25, trial_index=3, kind="keyboard", role="kb", stimulus=None, frame=121, code=37,
                    control=80, type=1, value=1.0, x=0.5, y=-0.5, tier=2, flags=4, ticks=2**40, text="left")
@@ -200,8 +201,8 @@ def test_fixed_tables(ds, tmp_path):
     fr = read_csv(d / "frames.csv")
     assert fr[1] == ["120", "3", "10.000000000", "10.000000000", "10.000412000", "0.000412000", "0", "1", "1",
                      "0", "0", "0.000100000", "0.000200000", "0.000300000", "0.000400000", "0.000500000",
-                     "0.000600000"]
-    assert fr[2] == ["121"] + [""] * 16
+                     "0.000600000", "0.000700000"]
+    assert fr[2] == ["121"] + [""] * 17
     ev = read_csv(d / "events.csv")
     assert ev[1] == ["10.250000000", "3", "keyboard", "kb", "", "121", "", "", "37", "80", "1", "1", "0.5", "-0.5",
                      "", "", "2", "4", str(2**40), "left"]

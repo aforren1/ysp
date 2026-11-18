@@ -81,17 +81,12 @@
 #endif
 
 /* The distribution's version tracks screen.h's, with a fourth number for a
- * change of the binding alone (docs/bindings.md, ysp-vis). */
-/* .3: pack/layout 0.2.0 and Skribidi patch 0003 (font fallback past the
- * script), linked into the binding's text. .2: ysp/gfx.h 0.20.1 (the
- * uniform block size by glGetInteger64v); .1:
- * ysp/gfx.h 0.20.0 (YGFX_CM). Changes of gfx.h or of the layout alone. The fourth number
- * belongs to this screen.h; a new screen.h drops it, so the build stops
- * here until someone does (the review of 0.19.0.1). */
-#if YSCR_VERSION_MAJOR != 0 || YSCR_VERSION_MINOR != 19 || YSCR_VERSION_PATCH != 0
-#error "ysp-vis: YV_VERSION's .3 is for ysp/screen.h 0.19.0; screen.h moved: drop it (docs/bindings.md, ysp-vis)"
-#endif
-#define YV_VERSION YSCR_VERSION_STRING ".3"
+ * change of the binding alone (docs/bindings.md, ysp-vis). 0.20.0 has no
+ * fourth number: screen.h 0.20.0 (the extension phase, PHASE_EXTENSION)
+ * with gfx.h 0.21.0 and the layout of 0.19.0.3. A fourth number belongs to
+ * one screen.h; add the guard below again with it (the review of
+ * 0.19.0.1). */
+#define YV_VERSION YSCR_VERSION_STRING
 
 #define YV_RECORDS 4096   /* flip records kept between records() calls */
 #define YV_EVENTS  1024   /* input events kept between poll() calls    */
