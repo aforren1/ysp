@@ -71,7 +71,8 @@ endif()
 # differs still builds (to compare with upstream, for example), but its
 # logged versions say so.
 set(patches "")
-foreach(name skribidi-0001-bidi-run-merge skribidi-0002-l1-trailing-whitespace skribidi-0003-font-fallback skribidi-0004-emoji-family-fallback)
+foreach(name skribidi-0001-bidi-run-merge skribidi-0002-l1-trailing-whitespace skribidi-0003-font-fallback skribidi-0004-emoji-family-fallback
+        skribidi-0005-text-grapheme-breaks skribidi-0006-caret-split-grapheme)
     file(SHA256 ${CMAKE_CURRENT_SOURCE_DIR}/patches/${name}.patch sha)
     list(APPEND patches "sha256:${sha}")
 endforeach()

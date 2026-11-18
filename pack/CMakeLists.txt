@@ -24,6 +24,14 @@ if(YSP_BUILD_LAYOUT)
         target_compile_definitions(test_layout PRIVATE YSCR_NO_SDL
             YLAY_TEST_DIR="${PROJECT_SOURCE_DIR}/tests/layout" YLAY_TEST_FONTS="${YSP_LAYOUT_TEST_FONTS}")
         add_test(NAME test_layout COMMAND test_layout)
+        # Skribidi's editor with no window, for the designer's text fields
+        # (tests/layout/editor_test.c): fonts it writes, and the probe's Noto
+        # fonts where the folder has them (YSP_NOTO_DIR overrides it).
+        ysp_add_program(test_layout_editor ${PROJECT_SOURCE_DIR}/tests/layout/editor_test.c core)
+        target_link_libraries(test_layout_editor PRIVATE ysp_skribidi)
+        set(YSP_EDITOR_TEST_FONTS "/usr/share/fonts/truetype/noto" CACHE PATH "Folder of the Noto fonts of the editor test (YSP_NOTO_DIR overrides it at run time)")
+        target_compile_definitions(test_layout_editor PRIVATE YSP_EDITOR_TEST_FONTS="${YSP_EDITOR_TEST_FONTS}")
+        add_test(NAME test_layout_editor COMMAND test_layout_editor)
         # The color glyphs' fuzz target, self-driven (tests/fuzz/colr_fuzz.c:
         # colr_fuzz N [seed], or --replay FILES); not a test.
         ysp_add_program(colr_fuzz ${PROJECT_SOURCE_DIR}/tests/fuzz/colr_fuzz.c rig)

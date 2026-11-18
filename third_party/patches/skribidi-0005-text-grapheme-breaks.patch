@@ -1,0 +1,165 @@
+Subject: [PATCH] text: find grapheme breaks again with their context after an edit
+
+skb_text_t keeps a grapheme break flag per codepoint, which the editor
+uses to turn a caret position into an offset (removal, Backspace, caret
+moves). Each append, insert and remove set the flags of the new
+codepoints only, as if they were a text of their own:
+
+- The codepoint before the edit kept the flag it had. At the end of the
+  text that flag is always a break, so typing "नमस्ते" one codepoint at a
+  time left a break after U+0924 (ta), which is not one: the text had
+  the graphemes [na][ma][sa virama ta][e], the layout (which breaks the
+  whole paragraph) [na][ma][sa virama ta e] (UAX #29 rule GB9c).
+  skb_editor_select_all() ends the selection at the last grapheme's
+  start with end-of-line affinity, from the layout; the removal took the
+  end of that grapheme from the text's flags, one codepoint short, so
+  select all and Backspace left U+0947 (e) in the field. The caret after
+  typing was at offset 5, inside the layout's grapheme.
+- The last new codepoint always got a break, though the codepoint after
+  an insert may join it.
+- An insert or remove in the middle moved the codepoints after it but
+  not their flags.
+
+skb__update_grapheme_breaks() replaces skb__set_grapheme_breaks() and runs
+after text_count is updated. A break depends on the text before it and
+on the next codepoint only, so the flags before the grapheme that holds
+the codepoint before the edit stay, and libunibreak restarts at that
+grapheme's start. The breaks after the edit can change up to the end of
+the text (one regional indicator pairs all the ones after it), so the
+flags are found again from there to the end: an append costs the new
+codepoints and one grapheme, an edit in the middle the rest of the
+paragraph, as the layout of the paragraph does.
+
+Found by psy's designer probe (docs/designer_ui_probe.md, part 2,
+section 3). Applies to skribidi dee63d6 after
+skribidi-0001-bidi-run-merge.patch, skribidi-0002-l1-trailing-whitespace.patch,
+skribidi-0003-font-fallback.patch and
+skribidi-0004-emoji-family-fallback.patch.
+
+diff --git a/src/skb_text.c b/src/skb_text.c
+--- a/src/skb_text.c
++++ b/src/skb_text.c
+@@ -481,16 +481,31 @@
+ 	skb__attributes_merge_adjacent(text);
+ }
+ 
+-static void skb__set_grapheme_breaks(const uint32_t* text, int32_t start_offset, int32_t text_count, uint8_t* text_props)
+-{
+-	if (!text_count) return;
+-
+-	set_graphemebreaks_utf32(text + start_offset, text_count, NULL, (char*)text_props + start_offset);
+-
+-	const int32_t end = start_offset + text_count;
+-	for (int32_t i = start_offset; i < end; i++) {
+-		const uint8_t prop = text_props[i];
+-		text_props[i] = prop == GRAPHEMEBREAK_BREAK ? SKB_TEXT_PROP_GRAPHEME_BREAK : 0;
++// Finds the grapheme breaks again after the text changed at edit_offset; call
++// it after text_count is updated. Breaking only the changed codepoints left
++// stale flags: the codepoint before an edit kept the break it had at the end
++// of the text (typing a virama after a consonant), and an insert or remove
++// in the middle did not move the flags of the text after it. A break depends
++// on the text before it and on the next codepoint only, so the breaks before
++// the grapheme that holds the codepoint before the edit stay, and a fresh
++// start at that grapheme's start is exact. The breaks after the edit can
++// change up to the end of the text (a regional indicator pairs the ones after
++// it), so they are found again up to the end.
++static void skb__update_grapheme_breaks(skb_text_t* text, int32_t edit_offset)
++{
++	edit_offset = skb_clampi(edit_offset, 0, text->text_count);
++	int32_t start_offset = edit_offset;
++	while (start_offset > 0 && (start_offset == edit_offset || !(text->text_props[start_offset - 1] & SKB_TEXT_PROP_GRAPHEME_BREAK)))
++		start_offset--;
++
++	const int32_t count = text->text_count - start_offset;
++	if (count <= 0) return;
++
++	set_graphemebreaks_utf32(text->text + start_offset, count, NULL, (char*)text->text_props + start_offset);
++
++	for (int32_t i = start_offset; i < text->text_count; i++) {
++		const uint8_t prop = text->text_props[i];
++		text->text_props[i] = prop == GRAPHEMEBREAK_BREAK ? SKB_TEXT_PROP_GRAPHEME_BREAK : 0;
+ 	}
+ }
+ 
+@@ -506,9 +521,9 @@
+ 
+ 	// Copy text
+ 	memcpy(text->text + start_offset, text_from->text, text_from->text_count * sizeof(uint32_t));
+-	skb__set_grapheme_breaks(text->text, start_offset, text_from->text_count, text->text_props);
+ 
+ 	text->text_count += text_from->text_count;
++	skb__update_grapheme_breaks(text, start_offset);
+ 
+ 	// Copy attributes
+ 	if (text_from->spans_count > 0) {
+@@ -544,8 +559,8 @@
+ 
+ 	// Copy text
+ 	memcpy(text->text + start_offset, source_text->text + copy_offset, copy_count * sizeof(uint32_t));
+-	skb__set_grapheme_breaks(text->text, start_offset, copy_count, text->text_props);
+ 	text->text_count += copy_count;
++	skb__update_grapheme_breaks(text, start_offset);
+ 
+ 	// Copy attributes
+ 	if (source_text->spans_count > 0) {
+@@ -584,8 +599,8 @@
+ 	};
+ 
+ 	skb_utf8_to_utf32(utf8, utf8_count, text->text + text->text_count, utf32_count);
+-	skb__set_grapheme_breaks(text->text, text->text_count, utf32_count, text->text_props);
+ 	text->text_count += utf32_count;
++	skb__update_grapheme_breaks(text, range.start);
+ 
+ 	skb__spans_reserve(text, text->spans_count + skb_attributes_get_copy_flat_count(attributes));
+ 	skb__insert_attributes(text, range, attributes, span_flags, payload);
+@@ -611,8 +626,8 @@
+ 	};
+ 
+ 	memcpy(text->text + text->text_count, utf32, utf32_count * sizeof(uint32_t));
+-	skb__set_grapheme_breaks(text->text, text->text_count, utf32_count, text->text_props);
+ 	text->text_count += utf32_count;
++	skb__update_grapheme_breaks(text, range.start);
+ 
+ 	skb__spans_reserve(text, text->spans_count + skb_attributes_get_copy_flat_count(attributes));
+ 	skb__insert_attributes(text, range, attributes, span_flags, payload);
+@@ -638,9 +653,9 @@
+ 	// Copy
+ 	if (source_text_count > 0) {
+ 		memcpy(text->text + range.start, source_text->text, source_text_count * sizeof(uint32_t));
+-		skb__set_grapheme_breaks(text->text, range.start, source_text_count, text->text_props);
+ 	}
+ 	text->text_count += source_text_count - remove_count;
++	skb__update_grapheme_breaks(text, range.start);
+ 
+ 	// Make space for attributes.
+ 	skb__attributes_replace_with_empty(text, range, text->text_count);
+@@ -685,9 +700,9 @@
+ 	// Copy
+ 	if (utf32_count > 0) {
+ 		skb_utf8_to_utf32(utf8, utf8_count, text->text + range.start, utf32_count);
+-		skb__set_grapheme_breaks(text->text, range.start, utf32_count, text->text_props);
+ 	}
+ 	text->text_count += utf32_count - remove_count;
++	skb__update_grapheme_breaks(text, range.start);
+ 
+ 	// Replace attributes
+ 	skb__attributes_replace(text, range, utf32_count, attributes, span_flags, payload);
+@@ -717,9 +732,9 @@
+ 	// Copy
+ 	if (utf32_count > 0) {
+ 		memcpy(text->text + range.start, utf32, utf32_count * sizeof(uint32_t));
+-		skb__set_grapheme_breaks(text->text, range.start, utf32_count, text->text_props);
+ 	}
+ 	text->text_count += utf32_count - remove_count;
++	skb__update_grapheme_breaks(text, range.start);
+ 
+ 	// Replace attributes
+ 	skb__attributes_replace(text, range, utf32_count, attributes, span_flags, payload);
+@@ -736,6 +751,7 @@
+ 	// Remove text
+ 	memmove(text->text + range.start, text->text + range.end, (text->text_count - range.end) * sizeof(uint32_t));
+ 	text->text_count -= range.end - range.start;
++	skb__update_grapheme_breaks(text, range.start);
+ 
+ 	// Remove attributes
+ 	skb__attributes_replace(text, range, 0, (skb_attribute_set_t){0}, 0, NULL);

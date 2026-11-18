@@ -1,9 +1,11 @@
 # ysp_layout: text layout for the pack tool and the player
 
-Status: v0.3.0, 2026-11-18 (v0.1.0, 2026-10-07: the first build; v0.2.0:
+Status: v0.3.1, 2026-11-18 (v0.1.0, 2026-10-07: the first build; v0.2.0:
 font fallback past the script, [Patch 0003](#patch-0003-font-fallback-past-the-script);
 v0.3.0: emoji and color glyphs, [Emoji](#emoji), [Color glyphs](#color-glyphs) and
-[Patch 0004](#patch-0004-a-run-whose-family-has-no-font)).
+[Patch 0004](#patch-0004-a-run-whose-family-has-no-font); v0.3.1: two
+editing faults with Devanagari,
+[Patches 0005 and 0006](#patches-0005-and-0006-editing-devanagari)).
 The decision record is
 [layout_probe.md](layout_probe.md); this note is the manual of what was
 built on it, with the checks and the costs. The plan is
@@ -70,7 +72,7 @@ three, with the same corpus result.
 
 | Component | Pin | License | Local change |
 |---|---|---|---|
-| Skribidi | `dee63d6ba76aeddd49dea6d1b2508cf9aa391f46` (2026-08-17) | MIT | `patches/skribidi-0001-bidi-run-merge.patch`, `patches/skribidi-0002-l1-trailing-whitespace.patch`, `patches/skribidi-0003-font-fallback.patch`, `patches/skribidi-0004-emoji-family-fallback.patch`, in that order |
+| Skribidi | `dee63d6ba76aeddd49dea6d1b2508cf9aa391f46` (2026-08-17) | MIT | `patches/skribidi-0001-bidi-run-merge.patch`, `patches/skribidi-0002-l1-trailing-whitespace.patch`, `patches/skribidi-0003-font-fallback.patch`, `patches/skribidi-0004-emoji-family-fallback.patch`, `patches/skribidi-0005-text-grapheme-breaks.patch`, `patches/skribidi-0006-caret-split-grapheme.patch`, in that order |
 | HarfBuzz | tag 14.6.0, `c7a7457b7385` (2026-10-05) | Old MIT; `src/ms-use` MIT | none |
 | SheenBidi | `83f77108a2873600283f6da4b326a2dca7a3a7a6` | Apache-2.0 | none |
 | libunibreak | tag `libunibreak_6_1`, `304585d8e2d6` | zlib | none |
@@ -93,9 +95,10 @@ three, with the same corpus result.
 
 ## The patches
 
-Four local patches, applied in this order. 0001, 0002 and 0004 change
-`src/skb_layout.c`; 0003 changes it, `src/skb_font_collection.c` and
-`include/skribidi/skb_font_collection.h`.
+Six local patches, applied in this order. 0001, 0002, 0004 and 0006
+change `src/skb_layout.c`; 0003 changes it, `src/skb_font_collection.c`
+and `include/skribidi/skb_font_collection.h`; 0005 changes
+`src/skb_text.c`.
 
 | Patch | SHA-256 | What it fixes |
 |---|---|---|
@@ -103,6 +106,8 @@ Four local patches, applied in this order. 0001, 0002 and 0004 change
 | `skribidi-0002-l1-trailing-whitespace.patch` | `36ce7aec18d9f2b1256ee4374522ef36e87b6850be8bab4ba0bd720c162fb1b1` | Unicode's rule L1 was not applied per line, so a line-end space in an RTL run of an LTR paragraph stayed inside the line (Known issues, fixed). |
 | `skribidi-0003-font-fallback.patch` | `bf6296af91c73737b18637e57f86f95fa443fad83848013cb427a5f47a2ca225` | A script run took its fonts only from the fonts that support its script, so a digit or punctuation mark in Hebrew or Arabic text got glyph 0 when the script's font lacked it, though another font in the list had it ([Patch 0003](#patch-0003-font-fallback-past-the-script)). |
 | `skribidi-0004-emoji-family-fallback.patch` | `ce9aa9eea3585162bb2aff62725f883465f63e54e2ea3d3e4bc21c847add4ab2` | A run whose font family had no font was skipped: with no emoji font, an emoji vanished with no glyph 0, and with emoji fonts only, text did ([Patch 0004](#patch-0004-a-run-whose-family-has-no-font)). |
+| `skribidi-0005-text-grapheme-breaks.patch` | `11081a2421b97f0111040b4934d98bfc349471a5b1647f5a34a07552c65ab69c` | An edit of `skb_text` set grapheme breaks for the new codepoints only, as if they were a separate text, so typed Devanagari got breaks inside a grapheme ([Patches 0005 and 0006](#patches-0005-and-0006-editing-devanagari)). |
+| `skribidi-0006-caret-split-grapheme.patch` | `dfa7cdbd1cc8e05ffb4c93a7135a348d193a9084cc31b3cd1aff0065d3ca12d5` | The caret iterator took each cluster as whole graphemes; where HarfBuzz splits a grapheme into two clusters, the first got no caret stop and its width was lost ([Patches 0005 and 0006](#patches-0005-and-0006-editing-devanagari)). |
 
 Patch 0002, and why it sits where it does:
 
@@ -236,6 +241,58 @@ Outputs that changed: only runs Skribidi skipped before, and codepoints
 that had glyph 0 because their family lacked them. A collection without a
 COLR font gives the same layouts as with patch 0003 alone, except that a
 skipped emoji run now shows as glyph 0. `test_layout` part 8 checks it.
+
+### Patches 0005 and 0006: editing Devanagari
+
+Found 2026-11-18 in the designer's spike
+([designer_ui_probe.md](designer_ui_probe.md) part 2, section 3). Both
+patches change only code that Skribidi's editor calls: the grapheme
+breaks of `skb_text`, and the caret, hit test and selection functions of
+a layout. Glyphs, clusters and line breaks do not change, and the pack
+tool and the player do not call the changed functions.
+
+Patch 0005, select all and Backspace left a vowel sign:
+
+- Each insert, append or remove of `skb_text` set the grapheme-break
+  flags only for the new codepoints, as if they were a separate text. The
+  codepoint before the edit kept its old flag, and at the end of a text
+  that flag is always a break. An edit in the middle moved the codepoints
+  but not their flags.
+- Typed one codepoint at a time, "नमस्ते" got a break after ta (U+0924).
+  The layout breaks the whole paragraph again and finds three graphemes,
+  the last "स्ते" (UAX #29 rule GB9c). Select all ended at that
+  grapheme's start, from the layout; the removal took the next break from
+  the text's flags, one codepoint short, and U+0947 stayed. Text set as
+  one string had the right flags.
+- The patch recomputes the flags after each edit with libunibreak, from
+  the start of the grapheme that holds the codepoint before the edit to
+  the end of the text. An append costs the new codepoints and one
+  grapheme; an edit in the middle costs the rest of the paragraph, which
+  the layout breaks again in any case.
+
+Patch 0006, the caret after "नमस्ते" was drawn after "नम":
+
+- HarfBuzz gives the clusters [na] [ma] [sa virama] [ta e]: the last
+  grapheme spans two clusters. Skribidi's caret iterator took each
+  cluster as whole graphemes, so [sa virama], which has no grapheme break,
+  got no caret stop and an advance of 0. With Noto Sans Devanagari at
+  16 px, the end caret was at x 27.57 of a 33.79 px word; hit tests gave
+  an offset inside the grapheme, and a selection of the grapheme divided
+  by a grapheme count of 0 (NaN, no rectangle).
+- The patch groups neighboring clusters of one run until the group starts
+  and ends at grapheme boundaries, steps the caret iterator past the
+  group, and selects a cluster with no break whole. Clusters that end at
+  grapheme boundaries give the same stops as before.
+
+`test_layout_editor` (`tests/layout/editor_test.c`) checks both with box
+fonts it writes, so it runs on every platform, and again with the Debian
+Noto fonts when `YSP_NOTO_DIR` or `YSP_EDITOR_TEST_FONTS` names them. On
+the Linux desktop with the Noto fonts, 20 of its 68 checks fail with
+patches 0001 to 0004 only, 10 with 0005 added, and none with both. Its
+part 3 shows that patch 0003 also covers the editor's path: a digit in
+Hebrew text comes from the Latin font. The probe's box for U+2192 was
+missing coverage (none of its four Noto files maps it), not a fallback
+fault.
 
 ## Pinning and update policy
 
@@ -669,6 +726,14 @@ start of line 1; Edge's is at x 8200 on line 0).
   carets for that offset.
 
 ## Known issues
+
+### Open: a right-to-left override before Devanagari
+
+Pinned Skribidi hangs or crashes in layout on text that starts with
+U+202E (RIGHT-TO-LEFT OVERRIDE) followed by Devanagari; with asserts on,
+`skb__line_append_shaping_run()`'s assert fails. Seen 2026-11-18 with
+patches 0001 to 0006 and without 0005 and 0006. Not patched yet. The
+pack tool lays out definition text, so a definition can reach it.
 
 ### Fixed in v0.3.0: emoji were dropped without a trace
 

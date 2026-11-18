@@ -1,0 +1,113 @@
+Subject: [PATCH] layout: caret stops in a grapheme that spans clusters
+
+The caret iterator (carets, hit tests) and the selection rectangles
+assumed that a HarfBuzz cluster holds whole graphemes. HarfBuzz merges
+marks into their base, but not a consonant after a virama, which UAX #29
+(rule GB9c) joins into the grapheme before it: "नमस्ते" is the graphemes
+[na][ma][sa virama ta e] and the clusters [na][ma][sa virama][ta e].
+
+- A cluster with no grapheme break ([sa virama]) got no caret stop and
+  an advance of 0: its width was lost, so the caret after the word was
+  short by it (drawn after "नम" in psy's designer probe), and the stops
+  in the next cluster were at offsets inside the grapheme (4), so hit
+  tests returned such offsets, or none.
+- A selection of such a grapheme divided by its cluster's grapheme
+  count, 0: NaN, and no rectangle.
+
+skb__init_cluster_iter() now takes the neighboring clusters of the run,
+in logical order, until the range starts and ends at grapheme
+boundaries, and steps over them as one cluster; skb_caret_iterator_next()
+moves past the clusters it took. A selection gives a cluster with no
+grapheme break whole, as a range at grapheme boundaries holds all of it.
+A cluster that already starts and ends at grapheme boundaries is
+iterated as before. Glyphs, clusters and line breaking do not change:
+only the caret, hit test and selection functions read the result.
+
+Found by psy's designer probe (docs/designer_ui_probe.md, part 2,
+section 3). Applies to skribidi dee63d6 after skribidi-0001 to
+skribidi-0005.
+
+diff --git a/src/skb_layout.c b/src/skb_layout.c
+--- a/src/skb_layout.c
++++ b/src/skb_layout.c
+@@ -4250,9 +4250,11 @@
+ 						if (selected_cluster_text_range.end == cluster_text_range.end)
+ 							grapheme_end_idx = grapheme_count;
+ 
+-						// Interpolate caret location.
+-						float start_u = (float)(grapheme_start_idx) / (float)grapheme_count;
+-						float end_u = (float)(grapheme_end_idx) / (float)grapheme_count;
++						// Interpolate caret location. A cluster with no grapheme break is
++						// part of a grapheme that HarfBuzz split into clusters; a range
++						// at grapheme boundaries holds all of it (the division gave NaN).
++						float start_u = grapheme_count > 0 ? (float)(grapheme_start_idx) / (float)grapheme_count : 0.f;
++						float end_u = grapheme_count > 0 ? (float)(grapheme_end_idx) / (float)grapheme_count : 1.f;
+ 
+ 						if (is_rtl) {
+ 							float u = start_u;
+@@ -4375,7 +4377,31 @@
+ 	const skb_layout_run_t* cur_layout_run = &layout->layout_runs[iter->layout_run_idx];
+ 	const skb_cluster_t* cur_cluster = &layout->clusters[iter->cluster_idx];
+ 	skb_range_t text_range = { .start = cur_cluster->text_offset, .end = cur_cluster->text_offset + cur_cluster->text_count };
+-	skb_range_t glyph_range = { .start = cur_cluster->glyphs_offset, .end = cur_cluster->glyphs_offset + cur_cluster->glyphs_count };
++
++	// HarfBuzz can split a grapheme into clusters: in Devanagari "sa virama ta"
++	// is one grapheme (UAX #29 rule GB9c) but two clusters. A cluster with no
++	// grapheme break then had no caret stop and no advance, so its width was
++	// lost and the stops after it were short. Take the neighboring clusters
++	// of the run (logical order) until the range starts and ends at grapheme
++	// boundaries.
++	int32_t first_cluster_idx = iter->cluster_idx;
++	int32_t last_cluster_idx = iter->cluster_idx;
++	while (first_cluster_idx > cur_layout_run->cluster_range.start && text_range.start > 0
++		&& !(layout->text_props[text_range.start - 1].flags & SKB_TEXT_PROP_GRAPHEME_BREAK)) {
++		const skb_cluster_t* prev_cluster = &layout->clusters[first_cluster_idx - 1];
++		if (prev_cluster->text_offset + prev_cluster->text_count != text_range.start)
++			break;
++		first_cluster_idx--;
++		text_range.start = prev_cluster->text_offset;
++	}
++	while (last_cluster_idx + 1 < cur_layout_run->cluster_range.end && text_range.end > text_range.start
++		&& !(layout->text_props[text_range.end - 1].flags & SKB_TEXT_PROP_GRAPHEME_BREAK)) {
++		const skb_cluster_t* next_cluster = &layout->clusters[last_cluster_idx + 1];
++		if (next_cluster->text_offset != text_range.end)
++			break;
++		last_cluster_idx++;
++		text_range.end = next_cluster->text_offset + next_cluster->text_count;
++	}
+ 
+ 	int32_t grapheme_count = 0;
+ 	for (int32_t ti = text_range.start; ti < text_range.end; ti++) {
+@@ -4384,8 +4410,11 @@
+ 	}
+ 
+ 	float cluster_width = 0.f;
+-	for (int32_t gi = glyph_range.start; gi < glyph_range.end; gi++)
+-		cluster_width += layout->glyphs[gi].advance_x;
++	for (int32_t ci = first_cluster_idx; ci <= last_cluster_idx; ci++) {
++		const skb_cluster_t* cluster = &layout->clusters[ci];
++		for (int32_t gi = cluster->glyphs_offset; gi < cluster->glyphs_offset + cluster->glyphs_count; gi++)
++			cluster_width += layout->glyphs[gi].advance_x;
++	}
+ 
+ 	iter->advance = (grapheme_count > 0) ? (cluster_width / (float)grapheme_count) : 0.f;
+ 
+@@ -4548,10 +4577,14 @@
+ 
+ 			bool end_of_clusters = false;
+ 			if (end_of_graphemes) {
+-				if (skb_is_rtl(cur_layout_run->direction))
+-					iter->cluster_idx--;
+-				else
+-					iter->cluster_idx++;
++				// Step past the clusters that skb__init_cluster_iter() took with this one.
++				if (skb_is_rtl(cur_layout_run->direction)) {
++					do iter->cluster_idx--;
++					while (iter->cluster_idx != iter->cluster_end && layout->clusters[iter->cluster_idx].text_offset > iter->grapheme_end);
++				} else {
++					do iter->cluster_idx++;
++					while (iter->cluster_idx != iter->cluster_end && layout->clusters[iter->cluster_idx].text_offset < iter->grapheme_end);
++				}
+ 				end_of_clusters = iter->cluster_idx == iter->cluster_end;
+ 				if (!end_of_clusters) {
+ 					// Start new cluster

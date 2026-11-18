@@ -295,7 +295,7 @@ static const char* const page_keys[N_PAGES] = {
     "Type; arrows, Home, End; Shift: select; Ctrl+Z, Ctrl+Y, Ctrl+A; the mouse",
 };
 static tb frame_tb[6];
-static char stamp_line[1200], stamp_short[200];
+static char stamp_line[4096], stamp_short[200];   /* the stamp: about 600 bytes of versions and patch hashes, then about 100 a font */
 
 static void frame_static(int p) {
     char s[1000];

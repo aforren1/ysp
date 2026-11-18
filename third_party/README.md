@@ -23,7 +23,7 @@ command. CI runs it with a tarball cache keyed on the manifest. Decision record:
 
 | Directory | Upstream | Pin | License files kept | Local patches |
 |---|---|---|---|---|
-| `skribidi/` | https://github.com/memononen/skribidi | `dee63d6ba76aeddd49dea6d1b2508cf9aa391f46` (2026-08-17) | `LICENSE` (MIT) | `patches/skribidi-0001-bidi-run-merge.patch`, `patches/skribidi-0002-l1-trailing-whitespace.patch`, `patches/skribidi-0003-font-fallback.patch`, `patches/skribidi-0004-emoji-family-fallback.patch`, in that order |
+| `skribidi/` | https://github.com/memononen/skribidi | `dee63d6ba76aeddd49dea6d1b2508cf9aa391f46` (2026-08-17) | `LICENSE` (MIT) | `patches/skribidi-0001-bidi-run-merge.patch`, `patches/skribidi-0002-l1-trailing-whitespace.patch`, `patches/skribidi-0003-font-fallback.patch`, `patches/skribidi-0004-emoji-family-fallback.patch`, `patches/skribidi-0005-text-grapheme-breaks.patch`, `patches/skribidi-0006-caret-split-grapheme.patch`, in that order |
 | `harfbuzz/` | https://github.com/harfbuzz/harfbuzz | tag `14.6.0`, `c7a7457b7385f33178e8cf87615ca077a810bbe7` | `COPYING` (Old MIT), `AUTHORS`, `src/ms-use/COPYING` (MIT; the USE table is generated from its data) | none |
 | `sheenbidi/` | https://github.com/Tehreer/SheenBidi | `83f77108a2873600283f6da4b326a2dca7a3a7a6` (2025-06-06) | `LICENSE` (Apache-2.0) | none |
 | `libunibreak/` | https://github.com/adah1972/libunibreak | tag `libunibreak_6_1`, `304585d8e2d63187507368d612c3d5fff1486368` | `LICENCE` (zlib), `AUTHORS` | none |
@@ -104,6 +104,18 @@ and `include/skribidi/skb_font_collection.h`. They apply in this order:
    and lets the fallback of 0003 look in the other family after the run's.
    SHA-256 `ce9aa9eea3585162bb2aff62725f883465f63e54e2ea3d3e4bc21c847add4ab2`.
    Why: docs/layout.md, "Patch 0004: a run whose family has no font".
+5. `patches/skribidi-0005-text-grapheme-breaks.patch` makes each edit of
+   `skb_text` (insert, append, remove) recompute the grapheme breaks from
+   the start of the grapheme before the edit to the end of the text (new
+   `skb__update_grapheme_breaks()` in `src/skb_text.c`). SHA-256
+   `11081a2421b97f0111040b4934d98bfc349471a5b1647f5a34a07552c65ab69c`.
+   Why: docs/layout.md, "Patches 0005 and 0006: editing Devanagari".
+6. `patches/skribidi-0006-caret-split-grapheme.patch` groups neighboring
+   clusters of a run in the caret iterator until the group starts and ends
+   at grapheme boundaries, and selects a cluster with no break whole
+   (`src/skb_layout.c`). SHA-256
+   `dfa7cdbd1cc8e05ffb4c93a7135a348d193a9084cc31b3cd1aff0065d3ca12d5`.
+   Why: docs/layout.md, "Patches 0005 and 0006: editing Devanagari".
 
 The tree here holds the patched source; the script applies the patches,
 in order, to a fresh download.
