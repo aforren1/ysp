@@ -555,7 +555,7 @@ jobs:
             emcc -O2 -w -std=gnu17 -I$T/skribidi/include -I$T/skribidi/src -I$T/harfbuzz/src -I$T/sheenbidi/Headers \
               -I$T/libunibreak/src -I$T/budouxc/include -c $T/skribidi/src/skb_$f.c -o lo/skb_$f.o
           done
-          P=$(for f in skribidi-0001-bidi-run-merge skribidi-0002-l1-trailing-whitespace skribidi-0003-font-fallback skribidi-0004-emoji-family-fallback; do
+          P=$(for f in skribidi-0001-bidi-run-merge skribidi-0002-l1-trailing-whitespace skribidi-0003-font-fallback skribidi-0004-emoji-family-fallback skribidi-0005-text-grapheme-breaks skribidi-0006-caret-split-grapheme; do
                 printf 'sha256:%s,' "$(sha256sum $T/patches/$f.patch | cut -c1-64)"; done)
           emcc $W -isystem $T/skribidi/include -isystem $T/harfbuzz/src -DYLAY_PATCHES="\"${P%,}\"" -c pack/layout.c -o lo/ysp_layout.o
           emcc $W -isystem $T/skribidi/include -isystem $T/harfbuzz/src -c pack/colr.c -o lo/ysp_colr.o
@@ -563,6 +563,12 @@ jobs:
           # HarfBuzz needs the C++ library: link with em++.
           em++ -O2 -sNODERAWFS=1 -sSTACK_SIZE=16MB -sINITIAL_MEMORY=64MB -sALLOW_MEMORY_GROWTH=1 -o lo/test_layout.js lo/*.o
           node lo/test_layout.js
+          # Skribidi's editor with no window (tests/layout/editor_test.c), on
+          # the fonts it writes; the Noto part skips where the runner has none.
+          emcc $W -isystem $T/skribidi/include -c tests/layout/editor_test.c -o editor_test.o
+          em++ -O2 -sNODERAWFS=1 -sSTACK_SIZE=16MB -sINITIAL_MEMORY=64MB -sALLOW_MEMORY_GROWTH=1 -o test_layout_editor.js \
+            editor_test.o lo/skb_*.o lo/hb.o lo/sb.o lo/ub_*.o lo/bx.o
+          node test_layout_editor.js
 
   # --------------------------------------------------------------------- #
   # Python: cibuildwheel builds one abi3 wheel (Limited API, cp310+) per    #
@@ -1518,7 +1524,7 @@ jobs:
         shell: bash
         run: |
           set -eu
-          cmake --build build --config Release --target test_layout gfx_layout trial_stroop trial_instructions
+          cmake --build build --config Release --target test_layout test_layout_editor gfx_layout trial_stroop trial_instructions
           ctest --test-dir build -C Release -R layout --output-on-failure
           if [ "$RUNNER_OS" = Windows ]; then bin=build/pack/Release; else bin=build/pack; fi
           "$bin/gfx_layout" --sim

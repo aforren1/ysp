@@ -1,6 +1,6 @@
 /* layout_test.c - checks of pack/layout (docs/layout.md, Checks).
  *
- *   1. The versions the glue logs: Skribidi's commit, the four patch
+ *   1. The versions the glue logs: Skribidi's commit, the six patch
  *      hashes, the HarfBuzz version.
  *   2. Visual order on every platform: a TrueType font written here (a box
  *      for every ASCII, Hebrew and Arabic codepoint) and the strings that
@@ -1622,10 +1622,11 @@ int main(void) {
     /* 1. versions */
     printf("skribidi %s, patch %s, harfbuzz %s\n", v->skribidi, v->skribidi_patch, v->harfbuzz);
     CHECK(strlen(v->skribidi) == 40, "Skribidi's commit is not set: %s", v->skribidi);
-    CHECK(strlen(v->skribidi_patch) == 4 * (7 + 64) + 3 && strncmp(v->skribidi_patch, "sha256:", 7) == 0 &&
-          strncmp(v->skribidi_patch + 72, "sha256:", 7) == 0 && strncmp(v->skribidi_patch + 144, "sha256:", 7) == 0 &&
-          strncmp(v->skribidi_patch + 216, "sha256:", 7) == 0,
-          "the four patch hashes are not set, or the tree differs from the manifest: %s", v->skribidi_patch);
+    {
+        int ok = strlen(v->skribidi_patch) == 6 * (7 + 64) + 5, k;
+        for (k = 0; k < 6 && ok; k++) ok = strncmp(v->skribidi_patch + 72 * k, "sha256:", 7) == 0;
+        CHECK(ok, "the six patch hashes are not set, or the tree differs from the manifest: %s", v->skribidi_patch);
+    }
     CHECK(strcmp(v->harfbuzz, "14.6.0") == 0, "HarfBuzz is %s, the pin is 14.6.0", v->harfbuzz);
 
     /* 2. visual order with the written font */
