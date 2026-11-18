@@ -290,7 +290,8 @@ that structure; it does not invent a new one.
 - Evidence: the hash covers every byte (D2). Node positions in an editor
   or a collapsed panel would change the experiment ID.
 - Decision: the designer keeps its view state in the project
-  (local storage), not in the definition. `note` is the only free text.
+  (its folder, or the browser's storage in the web build), not in the
+  definition. `note` is the only free text.
 
 **D14. Text from tables is laid out at pack build. DECIDED (2026-10-14).**
 - Evidence: rig_spec 5.2: static text is stored as laid-out glyph runs;
@@ -1358,7 +1359,8 @@ from version 1.
 
 The designer edits the definition and the pack source description; it
 never edits the rig profile. Panels come from the parameter tables
-(G6). On each change it runs the loader in WebAssembly: the strict read,
+(G6). On each change it runs the player's loader (natively, or in
+WebAssembly in the browser build): the strict read,
 `ytr_rules()` and a dry `ytr_open()` per node (an impossible constraint
 fails here), `ytl_check_ops()` per template, `yrsp_desc` checks, the
 lookups' levels, and every pack entry name. It writes canonical bytes

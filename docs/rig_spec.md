@@ -46,7 +46,7 @@ format follows them.
 ## 2. Architecture
 
 ```
-designer (web app, static, offline PWA)
+designer (ImGui on SDL3: native, and a WebAssembly build)
     |  runner protocol: JSON over WebSocket, localhost, token
     v
 player (prebuilt per platform, and wasm)   <--  pack (zip, store-only)
@@ -84,7 +84,8 @@ produces packs and talks to the player.
 | WebGPU via Dawn | Deferred | The consistent choice if compute becomes a must. Larger binary, WGSL, no present timing. |
 | GStreamer | Rejected | Hundreds of megabytes, runtime plugin discovery, platform install failures. |
 | Magnum | Rejected | C++ engine, single author, GL-centric, nothing ES 3.0 does not do for this surface. |
-| Dear ImGui | Accepted for the operator window in examples, C++ only. Rejected for stimuli | UI batcher, packed 8-bit color, no gamma or bit depth control. |
+| Dear ImGui | Accepted for the designer (native and WebAssembly, decided 2026-11-18, docs/designer.md) and the operator window in examples, C++ only. Rejected for stimuli | UI batcher, packed 8-bit color, no gamma or bit depth control. The designer's user text is laid out by Skribidi, not ImGui's fonts, which do not shape (docs/designer_ui_probe.md). |
+| AccessKit | Deferred. The accepted exception to "no Rust dependencies" when the designer gets accessibility (2026-11-18) | Native accessibility trees for an immediate-mode UI that gives stable IDs. Rust core with a C API; no web adapter. |
 | alwan | Not a dependency | Color science library, explicitly no device characterization. The rig needs measured primaries, not standard ones. |
 | Basis Universal | Opt-in only | Lossy in exactly the values a calibrated stimulus is made of. |
 | Luau | Proposed, in the player only, for scripted logic | Sandboxed by default, fast interpreter, incremental collector, a type checker and language server that build to WebAssembly for the designer's editor. C++, so never in a header. Plain Lua 5.4 is the fallback if C matters more than tooling. |
@@ -1172,26 +1173,32 @@ go to nanoseconds by `ytl_ns()`, rounded to nearest.
 
 ## 7. The designer
 
-A static web app, offline as a PWA, with the project in local storage.
-There is no server. The only job that wants one is the build job.
+A C++ program with Dear ImGui on SDL3, built per platform, and a
+WebAssembly build of the same source for a machine with no install
+(decided 2026-11-18). Its decisions, first version and order of work are
+in [designer.md](designer.md); the measurements are in
+[designer_ui_probe.md](designer_ui_probe.md). There is no server. The
+only job that wants one is the build job.
 
-- **Import is normalization.** Dropping a file runs the pack tool in the
-  browser, shows what it did and what it chose, exposes the choices
-  that matter (lossy or lossless, project rate, exclusive audio), and
-  writes the manifest. A resource that cannot be normalized fails in
+- **Import is normalization.** Dropping a file runs the pack tool, which
+  is linked into the designer. The designer shows what it did and what it
+  chose, exposes the choices that matter (lossy or lossless, project
+  rate, exclusive audio), and writes the manifest. A resource that cannot be normalized fails in
   the designer with the file selected, never at run time.
-- **Preview** runs the WebAssembly player in the page. It is faithful in
-  logic and not in timing, and the page says so.
+- **Preview** runs the player's simulated session in a panel, natively or
+  in WebAssembly. It is faithful in logic and not in timing, and the
+  panel says so.
 - **Run** talks to the native player on the rig through the runner
-  protocol. A browser is never the rig.
-- **Shaders** are validated in the browser with the WebAssembly build of
-  glslang, through the same wrapper function the runtime uses. ANGLE
+  protocol. A browser is never the rig. The first version starts the
+  command-line player instead (designer.md).
+- **Shaders** are validated in the designer with glslang (its WebAssembly
+  build in the browser), through the same wrapper function the runtime uses. ANGLE
   compiles them on the rig when the pack loads (5.2).
-- **Text** is edited in the designer with Skribidi compiled to
-  WebAssembly: bidirectional editing, shaping and line breaking for
+- **Text** is edited in the designer with Skribidi, natively or compiled
+  to WebAssembly: bidirectional editing, shaping and line breaking for
   complex scripts, laid out by the same pinned version the pack tool
   and the player use.
-- **Operator console** is a browser tab on the runner protocol: live
+- **Operator console** is a client of the runner protocol: live
   parameters, the staircase plot, the dropped-frame counter, the log.
 - **Build jobs** go to a template repository with a GitHub Actions
   workflow, hosted or self-hosted runners, submitted through the
@@ -1315,7 +1322,7 @@ Details, versions and measurements per header are in
 | 6. `ysp/video.h` | v0.8.0: Media Foundation, AVFoundation with VideoToolbox (macOS; decode, open and seek timed on an M2), FFmpeg on Linux (opt-in: VAAPI or software, loaded at run time) and pl_mpeg, the soundtrack on audio streams, UTF-8 paths, error codes. On Linux X11 it runs on GLX_OML. Not built: capture. |
 | Also built | `ysp/outline.h` v0.4.1, `ysp/rdk.h` v0.3.1, `ysp/color.h` v0.4.0, `ysp/trials.h` v0.6.1, `ysp/table.h` v0.3.0, `ysp/dataset.h` v0.2.1, `ysp/json.h` v0.2.1, `ysp/pack.h` v0.4.0 and the pack tool v0.7.0 (item 6), the device headers of docs/devices_spec.md (input, response, box, device, rigfile, serial, parallel, net). The experiment format (docs/experiment_format.md) with its gaps G1 to G13 closed. |
 | Host bindings | Python wheels and MATLAB/Octave MEX for the headers above (docs/bindings.md); ysp-vis 0.17.0.1 (screen, gfx, video, text; Windows x64, macOS arm64 and Linux X11) on ysp-audio 0.9.0 and ysp-timeline through function tables (section 12). |
-| 7 and 8 | Not started. |
+| 7 and 8 | Not started. The designer's UI is decided (2026-11-18, docs/designer.md): Dear ImGui on SDL3 with Skribidi text, from two probes (docs/designer_ui_probe.md). |
 | Player (step 3 of "Next") | `player/` v0.2.0 (`docs/player.md`): loads a pack, lowers format version 1 onto the headers, and runs it in a real window (2026-11-10: GLX_OML full screen, the keyboard with the kernel's key times, rig roles through ysp/rigfile.h, outputs as trigger channels, a response rule on a device role, `display.min_tier`, Shift+Esc and the panic) or on the simulated display (`--sim`, 2026-11-09). The four worked examples ran on the Linux X11 desktop with a uinput participant and a pty TriggerBox, no frame dropped; compared with their C programs on `--sim`. A response waits for the flip record (ysp/response.h 0.9.0), and a role below its `min_tier` refuses a start unless `--allow-below-tier` (decided 2026-11-10). Open: a tier for a keyboard role (the rig profile cannot bind one); Windows and macOS real windows; a photodiode run. Not the loop of 4.2.1. |
 | 9 | `ysp/net.h` v0.3.2 (Lab Streaming Layer) is built. Build jobs are not started. |
 
@@ -1349,7 +1356,9 @@ Details, versions and measurements per header are in
    and CoreAudio is built, tier 3 until a line-in run. Next: Wayland
    (presentation-time). A platform gets its tier from a photodiode or
    line-in run on that platform, not from CI.
-5. The designer.
+5. The designer (docs/designer.md, "Order of work"). Brought forward on
+   2026-11-08: authoring in the designer is the baseline, before steps
+   1, 2 and 4 are done.
 6. Build jobs.
 
 Measurements on the development machine run one at a time: on
