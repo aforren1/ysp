@@ -550,3 +550,11 @@ test = "check"
 why = "r.needs is the list the load met."
 find = '''    r->n_needs = p->n_needs;'''
 replace = '''    r->n_needs = 0;'''
+
+[[mutant]]
+id = "ck-19"
+name = "a given calibration copied short"
+test = "check"
+why = "d.cal stands in whole: the given and the made calibration give one answer (afc2)."
+find = '''            if (p->check_cal) memcpy(&p->cal, p->check_cal, sizeof p->cal);'''
+replace = '''            if (p->check_cal) memcpy(&p->cal, p->check_cal, sizeof p->cal / 2);'''

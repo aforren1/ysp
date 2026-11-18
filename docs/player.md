@@ -382,6 +382,7 @@ definition on each change with the player's own loader
 ```c
 int  pl_check(pl_player* p, const pl_check_desc* d, pl_check_result* r);
 void pl_close(pl_player* p);
+int  pl_check_nominal_cal(ycol_cal* out);   /* the stand-in calibration */
 ```
 
 Call `pl_close(p)` after you read `r`, and before the next `pl_check()` on
@@ -392,9 +393,10 @@ the same `p`. Every pointer in `r` points into `p`. `pl_player` is large
 
 | Field of `pl_check_desc` | Meaning |
 |---|---|
-| `pack` | A `ypak_desc`: the pack in memory (`data`, `size`, 8-byte aligned) or a range reader (`reader`, `reader_ctx`). With a reader, the player reads each entry that it uses whole, and the reader's cursor verifies each chunk. A `path` also works; the player maps the file read-only. |
+| `pack` | A `ypak_desc`: the pack in memory (`data`, `size`, 8-byte aligned) or a range reader (`reader`, `reader_ctx`). With a reader, the player reads each entry that it uses whole through a `ypak_cursor`, which verifies each chunk by `pack.verify`. A `path` also works; the player maps the file read-only. |
 | `def_text`, `def_len` | The definition's bytes. `NULL`: the pack's experiment entry. The tables, textures, fonts and other entries come from the pack. |
 | `seed` | The session seed (D8). The same inputs give the same result. |
+| `cal` | The stand-in for a required calibration. `NULL`: `pl_check()` makes `pl_check_nominal_cal()`'s on each call, which is most of the time of a check that needs one (Measured). Make it once with `pl_check_nominal_cal()` and give it here. |
 
 ### The result
 
@@ -444,6 +446,10 @@ These stand-ins apply always, with no need listed:
   display's size, 800 x 600 px, and at 60 Hz. The null backend makes every
   texture, buffer, glyph set and program, and uploads and draws nothing.
   A texture is still decoded, and a glyph run's curve set is still read.
+  The gfx gets no calibration: it draws nothing, and its check of the
+  stand-in (`ycol_cal_check()`) cost 20 to 33 ms of afc2's check
+  (Measured). The player's own color context (a Michelson contrast) still
+  gets the stand-in.
 - The audio device: a device that opens at the pack's format and never
   starts a thread. A sound's audio entry is still loaded.
 - The roles: unbound, as in `--sim`. A role whose first family is
@@ -479,9 +485,37 @@ Two calls must not run at the same time in one process. The loader's
 host checks use static scratch (`h_rules()` and `h_check_ops()` in
 `player/host.c`).
 
+A fault of the load, in `pl_check()` too: a definition whose `participant`
+session field is a string ends the process (a segmentation fault, found
+2026-11-18 at `bd4e922`). `pl_fields_init()` looks for `@participant` in
+`p->leaves[i].node->rules` before `pl_leaves_collect()` sets `node`. Not
+fixed here: the fix changes the command line's behavior.
+
 ### Measured
 
-PLACEHOLDER
+Order of magnitude only: one run, on a desktop that other builds share.
+Intel Core i5-14500, Linux 6.11 (Liquorix), GCC 12, Release
+(`-O3`), 2026-11-18. Load average 0.5 (1 min) at the run; other agents'
+builds ran on the machine before and after it. `test_player_check --time
+50`: 50 calls of `pl_check()` and `pl_close()` per pack, after one call
+to warm the caches; the packs in memory.
+
+| Pack | Median, `cal` `NULL` | Max | Median, `cal` given | Max |
+|---|---|---|---|---|
+| rdk | 0.20 ms | 0.50 ms | 0.35 ms | 0.36 ms |
+| stroop (Noto Sans, 599 KB) | 0.32 ms | 0.43 ms | 0.52 ms | 0.56 ms |
+| afc2 (calibration required) | 29.7 ms | 38.0 ms | 3.4 ms | 3.4 ms |
+| oddball (two textures) | 0.37 ms | 0.40 ms | 0.37 ms | 0.39 ms |
+| visuomotor (version 2) | 2.8 ms | 6.1 ms | 2.8 ms | 2.8 ms |
+| bimanual (version 2) | 6.9 ms | 9.1 ms | 6.9 ms | 7.3 ms |
+| sound (rdk with a sound) | 0.38 ms | 0.41 ms | 0.21 ms | 0.35 ms |
+
+`perf` gave 90 % of afc2's time to the derivation of a calibration
+(`ycol__cal_derive()`): in `pl_check_nominal_cal()`, and, before the gfx
+lost its calibration, in the gfx's check of it. With the gfx's
+calibration, the medians were 49.5 ms (`cal` `NULL`) and 36.8 ms (`cal`
+given). Starting the command line on rdk or stroop
+(`--max-trials 1`) took about 10 ms a process on the same machine.
 
 ## Explanation: what lowering decided
 

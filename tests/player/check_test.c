@@ -37,6 +37,8 @@
 #include <unistd.h>
 #else
 #include <direct.h>
+#include <process.h>
+#define getpid _getpid
 #include <io.h>
 #endif
 
@@ -66,6 +68,8 @@ typedef struct pk { const char* name; void* data; size_t size; } pk;
 static pk packs[8];
 static int n_packs;
 static pl_player P;
+static ycol_cal nominal;          /* pl_check_desc.cal, made once */
+static int given_cal;
 
 static pk* pack_of(const char* name) {
     int i;
@@ -135,6 +139,7 @@ static int run_check(const pk* k, const char* def, pl_check_result* r) {
     d.def_text = def;
     d.def_len = def ? strlen(def) : 0;
     d.seed = 1;
+    d.cal = given_cal ? &nominal : NULL;
     return pl_check(&P, &d, r);
 }
 
@@ -383,6 +388,27 @@ static void case_entries(void) {
     free(def);
 }
 
+/* afc2 needs a calibration: one given in d.cal, or the one made on the
+ * call, give one answer. */
+static void case_given_cal(void) {
+    pk* k = pack_of("afc2");
+    pl_check_result r;
+    char a[2048], b[2048];
+    memset(&r, 0, sizeof r);
+    if (!k) return;
+    given_cal = 0;
+    CHECK(run_check(k, NULL, &r) == PL_CHECK_OK && P.have_cal, "afc2, the calibration made: %s", r.message);
+    needs_text(&r, a, sizeof a);
+    CHECK(memcmp(&P.cal, &nominal, sizeof nominal) == 0, "afc2: the calibration made is not pl_check_nominal_cal()'s");
+    pl_close(&P);
+    given_cal = 1;
+    CHECK(run_check(k, NULL, &r) == PL_CHECK_OK && P.have_cal, "afc2, the calibration given: %s", r.message);
+    needs_text(&r, b, sizeof b);
+    CHECK(strcmp(a, b) == 0 && memcmp(&P.cal, &nominal, sizeof nominal) == 0, "afc2: the given calibration gives '%s', the made one '%s'", b, a);
+    pl_close(&P);
+    given_cal = 0;
+}
+
 /* Two calls give one answer (seeded), and a call leaves no clock behind:
  * the same answer on the virtual clock, and the real clock after. */
 static void case_repeat_and_clock(void) {
@@ -461,7 +487,7 @@ static void time_packs(int n) {
             t[j] = now_s() - t0;
         }
         qsort(t, (size_t)n, sizeof *t, cmp_d);
-        printf("time %s: %d calls, median %.3f ms, max %.3f ms\n", packs[i].name, n, t[n / 2] * 1e3, t[n - 1] * 1e3);
+        printf("time %s%s: %d calls, median %.3f ms, max %.3f ms\n", packs[i].name, given_cal ? " (d.cal given)" : "", n, t[n / 2] * 1e3, t[n - 1] * 1e3);
     }
     free(t);
 }
@@ -549,15 +575,22 @@ int main(int argc, char** argv) {
     if (n_packs == 0 && build_packs() != 0) { printf("no packs: give NAME=PACK, or set YPAK\n"); return 2; }
 #endif
     if (!pack_of("rdk") || !pack_of("oddball")) { printf("the rdk and oddball packs are required\n"); return 2; }
-    if (timing > 0) { time_packs(timing); return 0; }
+    if (pl_check_nominal_cal(&nominal) < 0) { printf("pl_check_nominal_cal() failed\n"); return 2; }
+    if (timing > 0) {
+        time_packs(timing);
+        given_cal = 1;
+        time_packs(timing);
+        return 0;
+    }
     {
         /* the cases run in an empty folder, with TMPDIR another: a write to
          * either shows */
         char cwd_dir[1024], tmp_dir[1024], old[1024];
         const char* base = getenv("TMPDIR") ? getenv("TMPDIR") : getenv("TEMP") ? getenv("TEMP") : "/tmp";
         long long live0 = 0;
-        snprintf(cwd_dir, sizeof cwd_dir, "%s/pl_check_cwd_%d", base, (int)time(NULL));
-        snprintf(tmp_dir, sizeof tmp_dir, "%s/pl_check_tmp_%d", base, (int)time(NULL));
+        /* the process id: the mutation runner runs several at once */
+        snprintf(cwd_dir, sizeof cwd_dir, "%s/pl_check_cwd_%d_%d", base, (int)getpid(), (int)time(NULL));
+        snprintf(tmp_dir, sizeof tmp_dir, "%s/pl_check_tmp_%d_%d", base, (int)getpid(), (int)time(NULL));
 #if !defined(_WIN32)
         if (!getcwd(old, sizeof old) || mkdir(cwd_dir, 0700) != 0 || mkdir(tmp_dir, 0700) != 0 || chdir(cwd_dir) != 0) { printf("no work folders under %s\n", base); return 2; }
         setenv("TMPDIR", tmp_dir, 1);
@@ -573,6 +606,7 @@ int main(int argc, char** argv) {
         case_refusals();
         case_entries();
         case_repeat_and_clock();
+        case_given_cal();
 #if defined(PL_CHECK_COUNT)
         /* every case's blocks, then 20 more rounds of the examples: the live
          * count must not grow */

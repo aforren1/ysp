@@ -1807,6 +1807,12 @@ static int pl_rig_load(pl_player* p) {
     return 0;
 }
 
+int pl_check_nominal_cal(ycol_cal* out) {
+    static const float srgb_xy[4][2] = { { 0.64f, 0.33f }, { 0.30f, 0.60f }, { 0.15f, 0.06f }, { 0.3127f, 0.3290f } };
+    if (ycol_cal_nominal(out, srgb_xy, 100.0f, 2.2) < 0 || ycol_cal_save(out, NULL, 0) < 0) return -1;
+    return 0;
+}
+
 static int pl_cal_load(pl_player* p) {
     const char* path = p->args.cal_path;
     char joined[PL_MAX_PATH], err[300];
@@ -1822,9 +1828,9 @@ static int pl_cal_load(pl_player* p) {
     if (!path) {
         if (p->def->calibration_required && p->checking) {
             /* pl_check(): player_make_rig's nominal calibration stands in */
-            static const float srgb_xy[4][2] = { { 0.64f, 0.33f }, { 0.30f, 0.60f }, { 0.15f, 0.06f }, { 0.3127f, 0.3290f } };
             pl_need_add(p, PL_NEED_CALIBRATION, NULL, 0);
-            if (ycol_cal_nominal(&p->cal, srgb_xy, 100.0f, 2.2) < 0 || ycol_cal_save(&p->cal, NULL, 0) < 0) { pl_fail(p, "the stand-in calibration"); return -1; }
+            if (p->check_cal) memcpy(&p->cal, p->check_cal, sizeof p->cal);
+            else if (pl_check_nominal_cal(&p->cal) < 0) { pl_fail(p, "the stand-in calibration"); return -1; }
         } else if (p->def->calibration_required) {
             pl_fail(p, "display.calibration is required: give --rig with a calibration, or --cal FILE");
             return -1;
@@ -2371,7 +2377,10 @@ static int pl_screen_open(pl_player* p) {
         p->rig->view.width_mm = 0.27 * 1920.0;
         p->rig->view.width_px = 1920;
     }
-    if (p->have_cal) c.gd.cal = &p->cal;
+    /* pl_check(): the null gfx draws nothing, and its check of the
+     * calibration (ycol_cal_check(), most of a check's time) would only
+     * check the stand-in */
+    if (p->have_cal && !p->checking) c.gd.cal = &p->cal;
     if (p->checking) {
         if (pl_screen_none(p, &c.gd) < 0) return -1;
         pl_frame_counts(p);
@@ -2761,6 +2770,7 @@ static int pl_load_pack(pl_player* p, const ypak_desc* pd) {
         memset(&p->env, 0, sizeof p->env);
         p->env.node = NULL;
         if (pl_leaves_collect(p, p->def->timeline, p->def->n_timeline, &idx) < 0) return -1;
+        pl_at(p, PL_OBJ_NONE, NULL);
     }
 
     if (pl_check_nodes(p, p->def->timeline, p->def->n_timeline) < 0) return -1;
@@ -2818,6 +2828,7 @@ int pl_check(pl_player* p, const pl_check_desc* d, pl_check_result* r) {
     p->args.def_text = d->def_text;
     p->args.def_len = d->def_text ? d->def_len : 0;
     p->pack_reader = !d->pack.path && !d->pack.data && d->pack.reader;
+    p->check_cal = d->cal;
     (void)pl_load_pack(p, &d->pack);
     r->status = !p->failed ? PL_CHECK_OK : p->report.n_errors > 0 ? PL_CHECK_DEFINITION : PL_CHECK_REFUSED;
     r->report = p->arena_open ? &p->report : NULL;

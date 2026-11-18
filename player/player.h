@@ -515,6 +515,8 @@ typedef struct pl_check_desc {
     const char* def_text;   /* the definition; NULL: the pack's experiment   */
     size_t      def_len;
     uint64_t    seed;       /* the session seed (D8)                          */
+    const ycol_cal* cal;    /* the stand-in for a required calibration; NULL:
+                             * pl_check_nominal_cal()'s, made on each call   */
 } pl_check_desc;
 
 /* Every pointer stays valid until pl_close(). */
@@ -763,6 +765,7 @@ struct pl_player {
     bool      checking;       /* stand-ins for the rig, the session, the
                                * screen and the audio device; no stderr     */
     bool      pack_reader;    /* entries come whole through a cursor       */
+    const ycol_cal* check_cal; /* pl_check_desc.cal                        */
     pl_need*  needs; int n_needs, c_needs;
     int       at_obj;         /* the object the load is at (PL_OBJ_*)      */
     const char* at_name;
@@ -778,6 +781,10 @@ int  pl_load(pl_player* p, const pl_args* a);
  * profile, device, window, GL, audio device, thread or clock change. Returns
  * r->status. Call pl_close() after reading r, before p's next pl_check(). */
 int  pl_check(pl_player* p, const pl_check_desc* d, pl_check_result* r);
+/* pl_check()'s stand-in calibration, player_make_rig's nominal one. Making
+ * it is most of a check's time (docs/player.md, "Reference: pl_check()"):
+ * a caller that checks often makes it once and gives it in d->cal. 0, or < 0. */
+int  pl_check_nominal_cal(ycol_cal* out);
 void pl_close(pl_player* p);
 void pl_fail(pl_player* p, const char* fmt, ...);
 /* The object a refusal from here on names (PL_OBJ_NONE: none). */
