@@ -555,9 +555,10 @@ jobs:
             emcc -O2 -w -std=gnu17 -I$T/skribidi/include -I$T/skribidi/src -I$T/harfbuzz/src -I$T/sheenbidi/Headers \
               -I$T/libunibreak/src -I$T/budouxc/include -c $T/skribidi/src/skb_$f.c -o lo/skb_$f.o
           done
-          P=$(for f in skribidi-0001-bidi-run-merge skribidi-0002-l1-trailing-whitespace skribidi-0003-font-fallback; do
+          P=$(for f in skribidi-0001-bidi-run-merge skribidi-0002-l1-trailing-whitespace skribidi-0003-font-fallback skribidi-0004-emoji-family-fallback; do
                 printf 'sha256:%s,' "$(sha256sum $T/patches/$f.patch | cut -c1-64)"; done)
           emcc $W -isystem $T/skribidi/include -isystem $T/harfbuzz/src -DYLAY_PATCHES="\"${P%,}\"" -c pack/layout.c -o lo/ysp_layout.o
+          emcc $W -isystem $T/skribidi/include -isystem $T/harfbuzz/src -c pack/colr.c -o lo/ysp_colr.o
           emcc $W -Ipack -isystem $T/skribidi/include -DYSCR_NO_SDL -DYLAY_TEST_DIR='"tests/layout"' -DYLAY_TEST_FONTS='"/no-fonts"' -c tests/layout/layout_test.c -o lo/test.o
           # HarfBuzz needs the C++ library: link with em++.
           em++ -O2 -sNODERAWFS=1 -sSTACK_SIZE=16MB -sINITIAL_MEMORY=64MB -sALLOW_MEMORY_GROWTH=1 -o lo/test_layout.js lo/*.o
@@ -682,7 +683,7 @@ jobs:
           path: |
             ~/ysp-vis-downloads
             third_party/vis
-          key: vis-natives-${{ hashFiles('tools/vendor_vis.py', 'tools/vis_layout/CMakeLists.txt', 'third_party/CMakeLists.txt', 'third_party/MANIFEST.sha256', 'third_party/patches/*', 'pack/layout.c', 'pack/ysp/layout.h', 'include/ysp/outline.h') }}-macos${{ env.MACOSX_DEPLOYMENT_TARGET }}-v2
+          key: vis-natives-${{ hashFiles('tools/vendor_vis.py', 'tools/vis_layout/CMakeLists.txt', 'third_party/CMakeLists.txt', 'third_party/MANIFEST.sha256', 'third_party/patches/*', 'pack/layout.c', 'pack/colr.c', 'pack/colr.h', 'pack/ysp/layout.h', 'include/ysp/outline.h') }}-macos${{ env.MACOSX_DEPLOYMENT_TARGET }}-v2
 
       - name: Natives (static SDL3 and text layout with MSVC; ANGLE from the Electron zip; pl_mpeg)
         if: steps.viscache.outputs.cache-hit != 'true'
@@ -782,7 +783,7 @@ jobs:
           path: |
             ~/ysp-vis-downloads
             third_party/vis
-          key: vis-natives-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tools/vendor_vis.py', 'tools/vis_layout/CMakeLists.txt', 'third_party/CMakeLists.txt', 'third_party/MANIFEST.sha256', 'third_party/patches/*', 'pack/layout.c', 'pack/ysp/layout.h', 'include/ysp/outline.h') }}-macos${{ env.MACOSX_DEPLOYMENT_TARGET }}-v1
+          key: vis-natives-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tools/vendor_vis.py', 'tools/vis_layout/CMakeLists.txt', 'third_party/CMakeLists.txt', 'third_party/MANIFEST.sha256', 'third_party/patches/*', 'pack/layout.c', 'pack/colr.c', 'pack/colr.h', 'pack/ysp/layout.h', 'include/ysp/outline.h') }}-macos${{ env.MACOSX_DEPLOYMENT_TARGET }}-v1
 
       - name: Natives (static SDL3 and text layout with Apple clang; ANGLE from the Electron zip; pl_mpeg)
         if: steps.viscache.outputs.cache-hit != 'true'
@@ -884,7 +885,7 @@ jobs:
           path: |
             ~/ysp-vis-downloads
             third_party/vis
-          key: vis-natives-linux-bookworm-${{ hashFiles('tools/vendor_vis.py', 'tools/vis_layout/CMakeLists.txt', 'third_party/CMakeLists.txt', 'third_party/MANIFEST.sha256', 'third_party/patches/*', 'pack/layout.c', 'pack/ysp/layout.h', 'include/ysp/outline.h') }}-v1
+          key: vis-natives-linux-bookworm-${{ hashFiles('tools/vendor_vis.py', 'tools/vis_layout/CMakeLists.txt', 'third_party/CMakeLists.txt', 'third_party/MANIFEST.sha256', 'third_party/patches/*', 'pack/layout.c', 'pack/colr.c', 'pack/colr.h', 'pack/ysp/layout.h', 'include/ysp/outline.h') }}-v1
 
       - name: Natives (static SDL3 3.4.18 and text layout with gcc; pl_mpeg)
         if: steps.viscache.outputs.cache-hit != 'true'

@@ -2086,6 +2086,7 @@ static void test_core_pack(void) {
 
 static void write_cfb(const char* path, const cfb_buf* b) { write_file(path, b->d, b->n); }
 
+#ifndef YPT_NO_LAYOUT
 /* The table tags of a single font's directory, as one string. */
 static void font_tags(const uint8_t* d, size_t n, char* out, size_t cap) {
     uint32_t nt = n >= 12 ? ((uint32_t)d[4] << 8 | d[5]) : 0, i;
@@ -2098,6 +2099,7 @@ static void font_tags(const uint8_t* d, size_t n, char* out, size_t cap) {
         out[k] = 0;
     }
 }
+#endif
 
 #define COLOR_DESC(fonts, csets, runfonts, text) \
     "{\"format\": \"ysp-pack-source\", \"version\": 1, \"resources\": [" fonts csets \
@@ -2170,10 +2172,12 @@ static void color_pack_checks(const char* path, const char* font_path, const cha
 #endif
 
 static void test_color_pack(void) {
-    char err[1024];
     cfb_buf f0 = { 0, 0, 0 }, f1 = { 0, 0, 0 }, fx = { 0, 0, 0 };
     static cfb_font cf;
+#ifndef YPT_NO_LAYOUT
+    char err[1024];
     int rc;
+#endif
     cfb_emoji_v0(&f0);
     cfb_emoji_v1(&f1);
     MKDIR(W "/fonts");

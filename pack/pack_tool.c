@@ -1141,6 +1141,7 @@ static int build_curveset(B* b, E* e) {
         ylay_desc ld;
         ylay_font_info fi;
         memset(&ld, 0, sizeof ld);
+        memset(&fi, 0, sizeof fi);   /* MSVC C4701: rc != 0 leaves it unset, and it is read only when rc == 0 */
         ld.ol = &b->ol;
         if (ylay_create(&L, &ld) < 0) return cfail(b->c, YPAK_ERR_NOMEM, "'%s': ylay_create failed", e->name);
         rc = ylay_add_font(L, font->data, (size_t)font->size, face, font->name) < 0 ? YPAK_ERR_FORMAT : 0;

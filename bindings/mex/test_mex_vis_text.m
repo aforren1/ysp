@@ -80,10 +80,12 @@ function test_mex_vis_text()
     check(W(2, 1) == strfind(s, '中'), 'a CJK word starts at strfind (%d, %d)', W(2, 1), strfind(s, '中'));
     G = ysp_gfx('glyphs', u);
     check(size(G, 2) == 6 && G(1, 1) == 1 && any(G(:, 1) == strfind(s, '中')), 'glyphs: [char line x0 y0 x1 y1]');
+    % Since 1.6.0 (pack/layout 0.3.0) the emoji is a word: a font without it
+    % gives glyph 0, where before the emoji had no glyph and no word.
     if is_octave
-        check(numel(s) == 22 && W(3, 1) == 20, 'Octave: UTF-8 byte indices');
+        check(numel(s) == 22 && size(W, 1) == 4 && W(3, 1) == 15 && W(3, 2) == 18 && W(4, 1) == 20, 'Octave: UTF-8 byte indices');
     else
-        check(numel(s) == 15 && W(3, 1) == 13, 'MATLAB: UTF-16 indices (the emoji takes two)');
+        check(numel(s) == 15 && size(W, 1) == 4 && W(3, 1) == 10 && W(3, 2) == 11 && W(4, 1) == 13, 'MATLAB: UTF-16 indices (the emoji takes two)');
     end
     ar = 'مرحبا بالعالم';
     a = ysp_gfx('text', g, ar, 'size', 40);
