@@ -1,16 +1,15 @@
 # The player
 
-Status: v0.12.0, 2026-11-15. It loads a pack, checks its experiment
+Status: v0.13.2, 2026-11-17. It loads a pack, checks its experiment
 definition, lowers the definition onto the ysp headers and runs it: in a
-real window with the participant's keyboard and the rig's devices, or on
-the simulated display (`--sim`). It is a program (`player/`, target
+real window with the participant's keyboard, mice and the rig's devices,
+or on the simulated display (`--sim`). It is a program (`player/`, target
 `ysp_player`, option `YSP_BUILD_PLAYER`), not a single header. It reads
 format versions 1 and 2 ([experiment_format.md](experiment_format.md), D1
-to D15 and part 3). Version 2 runs on `--sim` only when it has a signal
-role: the rig profile has no adapter block yet (G18), so a real run refuses
-the role by name. Real runs are measured on the Linux X11 desktop only
-(Results). The runner protocol and `ysp/app.h`'s loop (rig_spec 4.2.1) are
-not built.
+to D15 and part 3). A version 2 signal role takes its adapter from the rig
+profile's `signals` (G18; raw mice only). Real runs are measured on the
+Linux X11 desktop only (Results). The runner protocol and `ysp/app.h`'s
+loop (rig_spec 4.2.1) are not built.
 
 ## How-to: run a session
 
@@ -128,6 +127,41 @@ rig profile with a `view` and a calibration: `--rig FILE` (and `--cal FILE`,
 or a calibration named in the profile). Test profiles come from
 `player_make_rig DIR`.
 
+## How-to: run a version 2 definition with signal roles on a rig
+
+A signal role (experiment_format.md 3.5) takes its adapter from the rig
+profile's `signals` block (devices_spec.md 11.2, "The signal block"). The
+first adapter is a raw mouse.
+
+1. Give each signal role a signal in the rig profile:
+   `rigfile_profile --signal left display_cm 0.0078125 click` (docs/
+   device.md, "How-to: set a signal role's adapter"). Display units need
+   the profile's `view`.
+2. Run the player with that profile: `ysp_player PACK --out DIR --rig
+   NAME ...`. At load it checks each signal role against its signal: a
+   role with no signal (unless `required` is false), a `position2d` role
+   without `allow_relative`, and units that do not convert stop the start,
+   with the role's name.
+3. For each role with `device` `click`, the console asks for a click:
+   `player: click the mouse for signal role 'left' (left button)`. Click
+   the left button of that role's mouse in the player's window. The first
+   trial starts after the last role's click; counts that reach the player
+   before that click are not used (a count that comes later is, even if
+   it is stamped before the click). A click from a mouse that is bound already, or with device 0
+   (injected input, a touchpad on Windows), is refused, and the console
+   asks again.
+4. A role with `device` `any` takes every mouse's counts and needs no
+   click. It must be the only raw mouse signal in the profile.
+5. If a bound mouse is removed, the console says so and asks for a click
+   at once. The trial in progress gets no input from that role meanwhile;
+   no trial starts until the click comes.
+
+The window must have the input focus: on Linux and Windows, reports come
+only while the player's window is in front. `session.json` has each
+role's adapter and mouse (`signal_roles`), every click and removal with
+its time (`signal_bindings`), and the counts the player did not use
+(`raw_mice`).
+
 ## How-to: run a version 2 definition on the simulated display
 
 A definition with signal roles (3.4) needs a scripted participant for each
@@ -141,12 +175,18 @@ ysp_player PACK.ysppak --out DIR --sim --seed 3 --field participant=1 \
 1. Write the samples file as CSV with the header `t_s,role,x,y`. Each row
    is one report of a raw mouse (`x` and `y` are counts) or of a pen (`x`
    and `y` are positions). `t_s` is seconds from the first frame's onset.
-   Rows are in time order.
+   Rows are in time order. An optional fifth column, `arr_s` (0.13.2), is
+   when the report reaches the player, at or after `t_s` (tests: one late
+   report among on-time ones, as two mice of a `device` `any` role give).
 2. Give `--sim-gain ROLE=UNITS` for each relative role
    (`position2d_relative`). The `--sim` adapter integrates the counts at
    that many role units a count. An absolute role multiplies the position
-   by its gain (1 by default). A relative role with no gain is a bad
-   argument (exit code 2). Reading F32 of experiment.md.
+   by its gain (1 by default). A relative role with no gain, and no signal
+   in the rig profile, is a bad argument (exit code 2). Reading F32 of
+   experiment.md. A role that `--sim-gain` does not name and the rig
+   profile's `signals` has takes the profile's adapter: its scale, bounds
+   and `late_s`, as a real run does; `device` `click` binds the scripted
+   participant with no click.
 3. For `display_cm` or `cm` units, give a rig profile with a `view` (its
    width in mm). `player_make_rig DIR --view 1024 320` writes one: 1024 px
    over 320 mm.
@@ -184,7 +224,10 @@ Two more test options, `--sim` only:
   and `compare.py`, `player_test.py` and the model's harness take `--hz`.
 - `--test-sample-late ROLE=S` gives that role's samples to the player S
   seconds after their `t_s`, the time they keep. It is a device whose
-  reports come late (a USB transport, an FTDI latency timer).
+  reports come late (a USB transport, an FTDI latency timer). It replaces
+  the role's `arr_s` values.
+- `--test-live-cap N` (a real run) makes one poll hold N raw mouse
+  samples, not 8,192, so a test can fill it: the session stops.
 
 ## How-to: profile a run
 
@@ -321,6 +364,8 @@ it says), for each version:
 | `signal_roles` | Not written | One object a signal role: `name`, `adapter` (`sim raw mouse` or `sim positions`), `device` (`--samples` or `none`), `type`, `units`, `per_count` (the `--sim-gain`), `calibration_sha256` (empty) |
 | `recenter_skipped` | Not written | The `recenter` steps that a graph did not apply (D40) |
 | `sig_arms` | Not written | ysp/sig.h's counts of arms in the past, summed over the session's graphs: `caught_up` (run again, exact), `past_off`, `past_far`, `past_full` (fell back to the newest value: inexact), `hits_superseded`, `hits_retracted`, `rows_stale`, `derived_stale`, `past_pinned` (a fallback), `ahead_cancelled` (waiting arms a disarm or a barrier cancelled), `late_input` (input calls with a time before an arm that the player made with the graph's input at or past its time, any footprint: sig.h's reference order puts them after that arm), `unverified` (arms outside the shapes whose result sig.h verifies: docs/sig.md, "Exactness") (docs/sig.md, "An arm in the past: the semantics"). A run stops at a retracted hit, a stale row or event, any fallback (`past_off`, `past_far`, `past_full`, `past_pinned`), or an unverified arm, so those are 0 in a finished session |
+| `signal_bindings` (0.13.0) | Not written | A real run with signal roles: one object a click that bound a mouse or a removal, in order: `role`, `event` (`click` or `removed`), `mouse` (SDL's id), `name` (the mouse's name), `t_s` (from the session's first frame) |
+| `raw_mice` (0.13.0) | Not written | A real run with signal roles: the raw mouse reports that no role used. `other_mice` (a mouse that no role has), `device0` (no device: injected input), `absolute` (positions: a tablet, a virtual machine), `wheel` (scroll reports, 0.13.1: 0.13.0 counted them in `absolute`; no adapter reads the wheel), `refused_clicks`, `samples_lost` (a role's samples over the poll's buffer of 8,192; 0.13.2 stops the session at the first, so 0 in a session that ends), `inputs_lost` (other inputs over the collectors' buffer of 1,024) |
 
 No other field changes. A version 1 data set keeps every other byte
 (Results).
@@ -609,21 +654,25 @@ and 57). The bimanual example stopped at 10 ms late.
     (the final review's L3): it is not measured.
 - **Complete to, per role**: `C(r)`, the least `C(d)` over the role's
   devices. A device of the role not yet seen in the trial gives
-  `P - B(d)`. When the player cannot know a role's devices (device 0,
-  "any device"), `C(r) = P - B(r)`. In `--sim` a role has one device.
-  As built (`v2_horizon()`), 0.12.0 keeps one newest stamp per role, not
-  per device, and uses `max(S(r) - 1 ns, P - B(r))`. That is this rule
-  only when a role has one device (the final review's L4). It holds in
-  `--sim` and while a real run binds no signal role (until G18); a role
-  with two devices needs `S(d)` per device first.
+  `P - B(d)`. In `--sim` a role has one device. As built
+  (`v2_horizon()`), the player keeps one newest stamp per role and uses
+  `max(S(r) - 1 ns, P - B(r))`, this rule for a role of one device (the
+  final review's L4). A `device` `any` role (0.13.2) takes `P - B(r)`
+  and no newest stamp: a mouse not heard from yet can send a report
+  stamped before another mouse's newest, within its bound. 0.13.0 and
+  0.13.1 took each seen mouse's `max(S(d) - 1 ns, P - B)` and counted a
+  mouse not seen yet as still, and a timed exit after such a report went
+  first (the review of 0.13.1; `t_v2_any_unseen`).
 - **A device with no reports** (a still relative mouse, a pen out of
   range): `S(d)` does not move, so `C(d) = P - B(d)`. For a source that
   the kernel stamps when it queues a report and that one poll reads to
   its end (evdev raw mice and pens, keyboards), `B(r)` is 0: no report
   stamped before the poll's read can come later. So a still device of
-  that kind holds nothing back. `B(r)` 0 for evdev is an assumption from
-  how the kernel stamps and queues, not a measurement (L3); a rig
-  measures it before a real run binds such a role (G18).
+  that kind holds nothing back. `B(r)` 0 for evdev was an assumption from
+  how the kernel stamps and queues (L3). Measured in 0.13.0 with `P` the
+  poll's start: 0 idle, 1.6 ms with every core busy, 15 to 36 ms at twice
+  that ("Signal roles on a rig"); a real run's raw mouse has 4 ms by
+  default.
 - **The roles of a control** `R(c)`: the signal roles with a path to the
   control's detect in the graph. A detect that reads only timeline
   channels has none.
@@ -636,15 +685,17 @@ and 57). The bimanual example stopped at 10 ms late.
 
 1. `--sim`: `--test-sample-late ROLE=S` gives `B(ROLE) = S`; every other
    role has 0.
-2. A real run: the rig profile gives a measured input lateness per role
-   (a field of G18's adapter block, not designed yet). Until G18, a real
-   run binds no signal role, so this path has no user.
-3. The default, with no measured value: 0 for an arrival-stamped source
-   (above); none for a source with its own clock or a transport (a
-   serial device with host stamps behind an FTDI timer, LSL, an eye
-   tracker). The player refuses such a role without a measured bound, by
-   name: a latency comes from a measurement on the rig, not from a
-   manual (devices_spec.md).
+2. The rig profile's `late_s` for the role's signal (G18; ysp/rigfile.h
+   0.6.0), a measured lateness. In `--sim` too, for a role that takes
+   the profile's adapter.
+3. The default, with no measured value: 4 ms for a raw mouse in a real
+   run (0.13.0: "Signal roles on a rig", below). In a real run `P` is
+   when the frame's poll started, not the onset, so this is the time
+   from a report's stamp to the queue the poll drains, not a frame. None
+   for a source with its own clock or a transport (a serial device with
+   host stamps behind an FTDI timer, LSL, an eye tracker): the player
+   will refuse such a role without a measured bound, by name, when an
+   adapter for one exists (only raw mice have one).
 4. Keys and buttons that feed a key response: 0 only when the OS stamps
    them on arrival (evdev, the OS's key events). A response box stamped
    behind a transport (a serial box with host stamps) needs a measured
@@ -838,6 +889,9 @@ frame runs as in 0.11.0.
   arm found it still in the region, a hit the hand did not make).
   `player_test` `t_v2_barrier` holds the shape: at 60 Hz the reset at
   the horizon is the part that matters, at 500 Hz the flush's wait.
+- In a real run (0.13.0), each "plus a frame" above is plus two frames.
+  The player polls at the frame's start, up to a frame before the onset,
+  and the input is complete to that poll's time `P` minus `B`.
 - Exact: the frame traces. A frame row reads its items at its frame's
   record onset (3.7), and it waits until the input is complete to that
   time (`G` over every signal role reaches it). Before (27d52a1), the
@@ -1273,6 +1327,69 @@ frame, F40, F41, 3.11 rule 8 and the trial's end.
 | L2 (low): the lag per state row | A state row's `t_s` minus the `end_s` of the visit before (no column: the coordinator's decision, 2026-11-15); `trials.csv` `exit_lag_max_s` |
 
 ## Results
+
+### The review of 0.13.1 (0.13.2, 2026-11-17)
+
+A reviewer read the late-input changes of 0.13.0 with no account of
+them but the code and the contracts, and reproduced findings in `--sim`.
+Linux desktop (i5-14500, GCC 12.2, Release).
+
+| Finding | Fix | Test |
+|---|---|---|
+| A `device` `any` role counted a mouse not heard from yet as still, so its first report, late within the bound, could come after a horizon the player used: a timed exit after it went first, silently | `P - B` for an `any` role, no newest stamp (Explanation, "Signal roles on a rig") | `t_v2_any_unseen`: a second mouse's report 3 ms late, a timed exit 1 ms after it; the hit wins. Its control (the newest stamp's claim) gives `timed`. Mutant `v2-152` killed |
+| `bounds` with `device` `any`: two mice's counts reach the bounded integrator out of time order, and the clip depends on the order (`end_y` 2 for 1.21875) | Refused at load, by name | `t_v2_rig_signals` (`anybounds`); mutant `v2-154` killed |
+| A feed with a limit (a key response's end) stopped at its first sample past the limit and claimed input complete to the limit; a sample queued behind it, stamped before the limit, came out under a horizon already used: a guard stop for a report within its bound (0.12.0 on, `--sim` too) | The claim ends before the earliest stamp still queued (`v2_fed_to()`); the response waits for the whole feed | `t_v2_limited_feed` (the reviewer's case); mutant `v2-153` killed with the reviewer's guard message |
+| A full poll buffer dropped a role's counts and only counted them | The session stops, by name | `real_test.py livecap` (`--test-live-cap 16`, 200 reports in a frame); mutant `v2-155` killed |
+| `late_seen_s` missed the samples that a feed with a limit left for the frame's whole feed | Measured as each sample is polled | None: a real run's poll and a key response in one frame |
+
+The samples file got an optional arrival column (`arr_s`) for the first
+test; `--sim` now runs a `device` `any` role. Two mutants' anchors moved
+(`v2-98`, `v2-99`; killed again). `player_test.py`: 82 of 82 at 60 and
+500 Hz. The model's harness, seeds 0 to 299, 10 ms late: 0 mismatches and
+0 guard stops at 60 and 500 Hz. The real cases `signals`,
+`signals_examples` and `livecap` pass (the mutant runner's baseline).
+Not fixed: a removal that SDL's event does not name ("What a
+real-window run needs next").
+
+### Hand-moved mice and the wheel count (0.13.1, 2026-11-17)
+
+Linux desktop (i5-14500, GCC 12.2, X11 at 1920x1080 60 Hz, SDL 3.4.18).
+Two USB mice moved by hand: a Dell Universal Receiver and an HP USB
+Optical Mouse. The profiles are the real cases' (0.25 px a count for
+visuomotor, 0.0078125 cm a count for bimanual), not a measurement of
+these mice.
+
+| Run | Result |
+|---|---|
+| bimanual, two roles bound by click; the receiver unplugged in trial 0 and bound again by a click 13.8 s later | The bindings in order: left, right, left removed, left. In the trace, left changed in 252 of 332 frames before the removal, in 0 of 825 while unbound (right in 191 of them), and in 451 of 697 after the click. Stopped with Shift+Esc 31 s into the first trial's 46 s of tracking |
+| visuomotor, `device` `any` | Both mice moved the cursor, with no click. The reach ended at (-5.5, 270.75) px for a target at (0, 268.8) |
+| visuomotor, `device` `click` | Only the bound mouse moved the cursor; the other's 268 reports went to `other_mice`. Both reaches ended on their targets |
+| Each run | 0 frames dropped, `late_seen_s` 0, 0 reports past the bound, 0 samples or inputs lost, no guard stop. Largest `evaluate_s` 1.68 ms (bimanual) |
+
+Found: 0.13.0 counted scroll reports (`YIN_AXIS_WHEEL`) in `raw_mice`'s
+`absolute`, which is for tablets and virtual machines (12 and 2 in two
+runs). 0.13.1 counts them in `wheel`. `real_test.py signals` sends 3
+scroll reports and checks `wheel` 3 and `absolute` 0; mutant `v2-151`
+(the wheel's branch removed) killed. `player_test.py`: 80 of 80 at 60
+and 500 Hz. One baseline run of the mutant harness (`signals` and
+`signals_examples`, 8 trials) had 1 failing check, and the runner
+deleted its log; the failure did not come back in 4 later runs of
+`signals` and 5 of `signals_examples`. Not reached by hand: a bimanual
+trial's end, the reach blocks and visuomotor's rotation.
+
+### Signal roles on a rig (0.13.0, 2026-11-16)
+
+Linux desktop (i5-14500, GCC 12.2, Debian 12, X11 at 1920x1080 60 Hz,
+SDL 3.4.18), uinput mice. Explanation: "Signal roles on a rig".
+
+| Check | Result |
+|---|---|
+| `player_test.py` (`t_v2_rig_signals`, `t_v2_two_templates_late`, the two-template check in `t_v2_frame_rows_late`) | 80 of 80 at 60 and 500 Hz. The profile's 0.25 px a count at 32 px a cm gives the data of `--sim-gain 0.0078125`; a negative y scale with bounds y in [-2, 3] cm gives the data of the positive one with the counts negated (the bound holds y at 3); `--sim-gain` wins over the profile; `late_s` 0.004 from the profile; refusals by name (a `position2d` role, `workspace_cm` against `display_cm`, display units with no view, no signal and no `--sim-gain`). Bimanual with both hands 2 and 3 ms late at 500 reports a second: no guard stop (0.12.0: "5 logs full") |
+| The model's harness (`tests/model/diff.py`, seeds 0 to 299, 10 ms late) | 60 and 500 Hz: 0 mismatches, 0 guard stops |
+| `real_test.py signals` | Two mice bound by click (the first one's second click refused), 4 trials on their counts, the left mouse removed in trial 3 (which waits on it) and a third bound by a click then; counts moved before the last click not in trial 0's hit (2.03125 cm, on the grid from 0); the bindings in `session.json` in order |
+| `real_test.py signals_examples` | bimanual (two mice by click) and visuomotor (one role, `device` `any`, two mice moving) for 15 s on circles at 500 reports a second a mouse, then Shift+Esc: exit 3, no guard stop, 0 or 1 frame dropped, under 60 frames of no trial between trials. 12 runs in a row after the last fix, the last 4 without the sort of each poll's reports by stamp that the first 8 had (it measured no better, and went); before the fix, 1 failure in 3 to 4 (the flush and the idle graphs, above) |
+| Other real cases (`refuse`, `afc2`, `oddball`, 10 trials) | Pass |
+| Mutants | player_v2.toml: 13 new on `--sim` killed, 6 new on the real path killed (`v2-143` to `v2-148`), 2 recorded survivors (`v2-147`: no output shows sig.h's poll time; `v2-150`: no case reaches a waiting frame row across an idle graph's reset). `rr-01` (run.c, its anchor moved): killed |
 
 2026-11-09, the Linux desktop (Debian 12, gcc 12.2, 20 threads), `--sim`
 on the virtual clock, unless the row says otherwise.
@@ -1965,6 +2082,43 @@ with only `left`).
   examples, 8,197 loaded, 7,945 ran to the end, no report. The target
   stays `--sim`.
 
+## Explanation: signal roles on a rig (0.13.0)
+
+G18's player part (devices_spec.md 11.2, "The signal block", build order
+step 2). Decided by the user on 2026-11-16: a mouse is bound by a click,
+an adapter is a named preset, display units convert through the
+profile's `view`, and a removed mouse is replaced by a click.
+
+| Question | Decision | Why |
+|---|---|---|
+| Where the checks run | The host's `sigrole()` (experiment.h), at load: a signal for each required role, the type by `ysig_open()`'s rule, the units by `yrig_units_factor()`; a real run with signal roles and no rig profile stops there too | Before the window or a device opens, with the role's name, as the device roles' checks |
+| The lowering | The `--sim` adapter's source and integrator, at `per_count` times the units' factor, with the bounds times the factor. A lane with a negative scale runs mirrored (gain `-q`, bounds `[-hi, -lo]`) and a scale node of -1 turns it back | sig.h bounds a lane only with a positive gain ("flip with affine") |
+| The input | Once a frame, at the frame's start, the player drains the screen's queue (`pl_v2_poll_screen()`). A role's raw mouse samples go to its graphs, their device made the role's (as `--sim`'s); every other input waits for the collectors, which get it where `yrsp_feed_screen()` fed them | The trial's reset at this onset must come after the samples polled before it. A role's samples go to no collector: at 1 kHz a mouse they filled the collectors' buffer in long frames (226 inputs lost under 40 busy loops on 20 cores) |
+| `P` | When the poll started (`yrt_now_ns()`), for the horizon and for `ysig_frame_in.poll_ns` | sig.h's contract: input is known up to the poll. A real run polls before the onset; with the onset as `P`, every report between the two was late input |
+| A click | Binds the first role that waits (definition order), refused for device 0 or a bound mouse, at any frame | A trial that waits on a role whose mouse was removed ends only on that role's input: the first build bound only between trials and hung |
+| `device` `any` | The role is complete to `P - B`; no newest stamp raises it (0.13.2) | A mouse not heard from yet can send a report stamped before another mouse's newest, within its bound. 0.13.0 took the least of each seen mouse's `max(S(d) - 1, P - B)` and counted a mouse not seen yet as still: a timed exit after such a report went first, silently (the review of 0.13.1) |
+| `device` `any` with `bounds` | Refused at load (0.13.2) | Every mouse feeds one integrator. A report late within its bound reaches it after another mouse's later counts; a sum does not depend on that order, a bound's clip does (the review of 0.13.1: `end_y` 2 for 1.21875) |
+| The trial's flush (a real run) | Waits for the input to the barrier as it was at the trial's end, not to the graph's newest input | The graph still takes every sample, so its newest input moves on. A report after the trial's end that comes after the flush goes into its integrator (sig.h's H1): exact, as an integrator with no bounds sums in any order and a bounded one has one mouse `--sim` keeps the newest, which a pen's held value needs (seed 102928) |
+| A graph with no trial (any bound above 0) | Reset (`ysig_reset_trial()`) at the horizon over every role after each poll, unless its trial's flush waits or its frame trace rows wait for their records | It takes every sample (its adapters) but no frame, so it takes no checkpoint: its logs filled, a late report fell back, and the guard stopped bimanual (v0.12.0 too, in `--sim` with 2 and 3 ms late hands at 500 reports a second). A trial reset clears an experiment node's ring, which a waiting frame row reads |
+| `late_frames` in a real run | Counts nearly every frame with motion (bimanual 901 of 971, visuomotor 847 of 956) | A frame shows the input to its poll; the reports between the poll and the onset arrive at the next poll and change what it would have shown. In a real run it measures motion, not lateness |
+
+A raw mouse's lateness: the player's `late_seen_s` per role (`session.json`)
+is the largest `P' - t` of a sample, where `P'` is the poll before the one
+that read it. Linux desktop (i5-14500, 20 threads, GCC 12.2, 60 Hz), two
+uinput mice at 1 kHz each for 60 s, 2026-11-16:
+
+| Load | `late_seen_s` | Reports past the 4 ms bound |
+|---|---|---|
+| none | 0 (58,000 samples a mouse) | 0 |
+| a busy loop on each of the 20 cores | 1.6 ms | 0 |
+| 40 busy loops | 15 to 36 ms | 59 to 395 a mouse; 1 of 3 runs stopped on the guard (reports before sig.h's window) |
+
+So 4 ms: the loaded case with a margin. The raw mouse reader runs
+SCHED_OTHER; a rig that oversubscribes its cores gets stops, not wrong data.
+
+Frame work (`--measure`, the same machine, two mice at 1 kHz each, 30 s,
+idle): p50 183 us, p99 215 us, max 270 us; no frame over the period.
+
 ## What a real-window run needs next
 
 - A tier for a keyboard role: the rig profile's family, a rule for a
@@ -1981,11 +2135,16 @@ with only `left`).
 - `clock.csv`: the devices' clock fits are not logged.
 - The loop as ysp/app.h's `yscr_run` when rig_spec 4.2.1 exists: `pl_run`
   and `pl_frame` are its two parts.
-- Version 2 with a signal role: the rig profile's adapter block (G18), so
-  a role binds a real device (a raw mouse, a pen, an eye tracker) with its
-  units and calibration; `yexp_host.sigrole()` against it; the real run's
-  input path (the screen's queue and the devices' events into the graphs,
-  in place of `--samples`); a photodiode run for the cursor's latency.
+- A removed mouse is seen only through SDL's `SDL_EVENT_MOUSE_REMOVED`,
+  whose id is the raw reader's on Linux X11 only for a mouse X lists. On
+  macOS (IORegistry ids) and for a node X does not list, the removal is
+  not seen: no click is asked for, and a trial that waits on the role
+  waits until Shift+Esc. The fix is to read the screen's `YSCR_EV_DEVICE`
+  records, which use the reader's ids (a screen ring the player drains).
+- Version 2 signal roles from other devices: a pen (ysp/screen.h delivers
+  no pen events), an absolute pointer, a stream sample, an eye tracker;
+  a stable mouse key for unattended sessions; the calibration procedure
+  of signal_spec 5.5; a photodiode run for the cursor's latency.
 - The role samples as input rows of `events.csv` (F30).
 
 ## Not verified
@@ -1993,11 +2152,14 @@ with only `left`).
 - A display faster than 60 Hz: the 500 Hz numbers are `--sim`'s. No 500 Hz
   display, photodiode run, GLX_OML swap events at 2 ms or flip-record lag in
   frames was measured. `PL_RECORD_LAG_NS` keeps 60 Hz's 2 frames as a time.
-- Late reports from a signal role in a real run: 0.12.0 waits for
-  complete input by each role's lateness bound, but only `--sim` gives a
-  bound (`--test-sample-late`, `--test-sample-bound`). A real run binds no
-  signal role until the rig profile has its adapter block (G18), so no
-  measured bound and no real late device was run.
+- Signal roles on real hardware mice: the tests use uinput mice
+  (tests/player/real_test.py, `signals` and `signals_examples`), on Linux
+  X11 only. Three short runs with hand-moved mice (Results, 0.13.1) did
+  not reach a bimanual trial's end, the reach blocks or visuomotor's
+  rotation. No Windows or macOS run was made.
+- `pl_v2_poll_screen()` under player_alloc_test: the alloc case runs the
+  four examples without signal roles. A click prints to the console
+  (stdio).
 - The sound lead on a real device at 500 Hz: `--sim` has the null device,
   and no test sees when a sound is scheduled.
 
@@ -2018,10 +2180,10 @@ with only `left`).
 - A rule's codes from two input roles into one output: the arms are kept
   per output and the press time picks one; no rig here has two boxes.
 - `aep`, `artwork`, `video`: refused.
-- Version 2 in a real run: refused with a signal role (G18). The trace
-  rows' path through the writer's side buffer (`pl_wq_push_row()`) runs
-  only in a real run, so no test reaches it; `--sim` writes the rows in
-  place.
+- Version 2 in a real run: the trace rows' path through the writer's side
+  buffer (`pl_wq_push_row()`) runs only in a real run; `signals_examples`
+  reaches it with bimanual's and visuomotor's traces, but no check reads
+  those rows. `--sim` writes the rows in place.
 - A real run's trial-end cost with traces: the copy to the writer is not
   measured (Results, "Format version 2").
 - Format version 2 on Windows, macOS and emcc.

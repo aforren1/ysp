@@ -5,7 +5,7 @@
  *                   [--participant SPEC] [--rt S] [--max-trials N]
  *                   [--measure] [--trace-channels FILE] [--rdk-buffer N]
  *                   [--sim-hz HZ] [--test-sample-late ROLE=S]... [--test-sample-bound ROLE=S]...
- *                   [--test-feed-each]
+ *                   [--test-feed-each] [--test-live-cap N]
  *
  * Without --sim the session runs for real: a window on the display (full
  * screen; --windowed for development), the keyboard and the rig profile's
@@ -21,8 +21,9 @@
  * trial_index,response,rt_s,hold_s). DIR must not exist.
  * --rdk-buffer sets an RDK's step buffer (tests: a small one flushes often).
  * Format version 2 (--sim): --samples FILE is the scripted participant of
- * the signal roles, a CSV of t_s,role,x,y (each a raw mouse's counts, t_s
- * from the first frame's onset); --sim-gain ROLE=UNITS is each role's
+ * the signal roles, a CSV of t_s,role,x,y[,arr_s] (each a raw mouse's counts, t_s
+ * from the first frame's onset; arr_s when the report reaches the player,
+ * t_s when left out); --sim-gain ROLE=UNITS is each role's
  * adapter scale per count (the rig profile has no adapter block, G18);
  * --test-draws FILE writes every leaf's trials and variables without
  * running a frame (tests: the C programs take the player's draws).
@@ -32,6 +33,8 @@
  * player waits for it (its lateness bound, docs/player.md "Explanation:
  * late input"). --test-sample-bound ROLE=S: the bound the player waits for
  * in place of the late value (tests: a report later than its bound).
+ * --test-live-cap N (a real run): one poll holds N raw mouse samples, not
+ * 8,192 (tests: a full buffer stops the session).
  * --test-feed-each: each sample in its own ysig_feed(), its hits taken
  * before the next sample, in place of one ysig_feed_n() a poll (tests:
  * format 3.11 rule 4's check that both give the same results).
@@ -118,6 +121,7 @@ static int run_main(pl_args* ap, int argc, char** argv) {
         else if (!strcmp(s, "--test-plan-early") && v) { a.plan_early_ns = (int64_t)llround(atof(v) * 1e9); i++; }
         else if (!strcmp(s, "--test-record-late") && v) { a.record_late_ns = (int64_t)llround(atof(v) * 1e9); i++; }
         else if (!strcmp(s, "--test-record-delay") && v) { a.record_delay = atoi(v); i++; }
+        else if (!strcmp(s, "--test-live-cap") && v) { a.live_cap = atoi(v); i++; }
         else if (!strcmp(s, "--test-feed-each")) a.feed_each = true;
         else if (!strcmp(s, "--trace-channels") && v) { a.trace_path = v; i++; }
         else if (!strcmp(s, "--rdk-buffer") && v) { a.rdk_buffer = atoi(v); i++; }
@@ -218,6 +222,10 @@ static int run_main(pl_args* ap, int argc, char** argv) {
     }
     if (!a.sim && (a.record_late_ns || a.record_delay)) {
         fprintf(stderr, "ysp_player: --test-record-late and --test-record-delay are for --sim\n");
+        return 2;
+    }
+    if (a.live_cap && (a.sim || a.live_cap < 1 || a.live_cap > 8192)) {
+        fprintf(stderr, "ysp_player: --test-live-cap is for a real run, 1 to 8192 samples\n");
         return 2;
     }
     if (a.record_delay < 0 || a.record_delay > 8 || a.record_late_ns < 0) {

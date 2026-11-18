@@ -200,6 +200,16 @@ jobs:
           expect 2 "$bin/rigfile_profile" --bogus
           expect 0 "$bin/rigfile_profile" --dir "$rig" --bind ref lsl lsl:Data::LabStreamer:
           expect 2 "$bin/rigfile_profile" --dir "$rig" --bind ref lsl serial:0403:6001::
+          # Signal adapters (ysp/rigfile.h v0.6.0), in a profile of their own:
+          # two click-bound mice; "any" beside them refused at the save (1);
+          # unknown units refused at the arguments (2).
+          expect 0 "$bin/rigfile_profile" --dir "$rig" --rig sig --new "signals"
+          expect 0 "$bin/rigfile_profile" --dir "$rig" --rig sig --signal left display_cm 0.0078125 click
+          expect 0 "$bin/rigfile_profile" --dir "$rig" --rig sig --signal right display_cm 0.0078125,-0.0078125 click
+          expect 1 "$bin/rigfile_profile" --dir "$rig" --rig sig --signal hand display_px 0.25 any
+          expect 2 "$bin/rigfile_profile" --dir "$rig" --rig sig --signal left cm 1 click
+          expect 0 "$bin/rigfile_profile" --dir "$rig" --rig sig --unsignal right
+          expect 1 "$bin/rigfile_profile" --dir "$rig" --rig sig --unsignal right
           # The rig profile tools (ysp/rigfile.h v0.4.0): an input's bounds on
           # two simulated line boards, and the onset offset from a generated
           # photodiode CSV (300 edges, light 12.0 to 12.6 ms after the onset),

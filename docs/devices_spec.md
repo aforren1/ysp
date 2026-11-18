@@ -658,6 +658,136 @@ What the build settled (2026-10-09):
   run's summary and hash, checked at load like a role's; an offset that is
   not the file's DIFFERS.
 
+#### The signal block (G18; proposed 2026-11-16; the profile's part built)
+
+Status: the user decided three of its choices on 2026-11-16 (a mouse is
+bound by a click at the start, not by a stored key; an adapter is a
+named preset, not a node list; display units convert by the `view`
+block) and accepted the rest the same day. Built the same day: (1)
+ysp/rigfile.h 0.6.0 (docs/device.md, "The signal adapters"); (2) the
+player 0.13.0 and (3) its real runs on uinput mice (docs/player.md,
+"Signal roles on a rig"). The real runs changed two points: a click
+binds at once after a removal, also during a trial (a trial that waits on
+the role could not end), and the default `late_s` is 4 ms, measured.
+
+Aim: a version 2 definition with a signal role runs on a real rig. The
+player refuses that today (experiment_format.md G18), because the
+profile cannot say which device feeds the role, in which units, at
+which scale. This block gives the rig's part of signal_spec 5.5: one
+adapter per signal role.
+
+**The key.** A new top-level key, `signals`: `{ NAME: signal, ... }`,
+at most 16. NAME is the definition's signal role name (experiment_format
+3.5), with the same characters as a role name. `signals` is separate
+from `roles` because a signal is not a ysp/device.h instance: a raw
+mouse comes through ysp/screen.h's `desc.raw_mice`, and it has no match
+key. The format stays "ysp-rig 1", as it did when `view` was added. A
+profile without `signals` has the bytes and the hash it has now.
+
+**A signal:**
+
+| Key | Value | Default |
+|---|---|---|
+| `adapter` | `"raw_mouse"`: a raw mouse's counts, integrated. The only preset in the first build | required |
+| `units` | the adapter's units: `"display_px"`, `"display_cm"`, `"display_deg"`, `"workspace_cm"`, `"device"` | required |
+| `per_count` | the scale per count in `units`: a number for both lanes, or `[x, y]`. Not 0; magnitude at most 1e6. A negative y turns y up | required |
+| `bounds` | `{ "lo": [x, y], "hi": [x, y] }` in `units`, `lo` below `hi` in each lane, each magnitude at most 1e9: the integrator's bounds (yrsp_cursor's rule) | no bounds |
+| `device` | `"any"`: every raw mouse's counts; `"click"`: the mouse of a click at the start (below) | `"any"` |
+| `late_s` | the longest time after its stamp that a report of this device reaches the player, measured on this rig, 0 to 1: the player's wait for complete input for this role (player.md, the input horizon) | the player's default (open, below) |
+
+The values are written in the canonical form of the rest of the file:
+numbers as the shortest decimal that reads back as the same double,
+`late_s` as an exact decimal of nanoseconds, a default left out.
+
+```json
+"signals": {
+  "left":  { "adapter": "raw_mouse", "device": "click", "per_count": 0.0078125, "units": "display_cm" },
+  "right": { "adapter": "raw_mouse", "device": "click", "per_count": 0.0078125, "units": "display_cm" }
+}
+```
+
+**Checks at load** (`yrig_load()`): the keys and value ranges above,
+strict as for every other key. A `raw_mouse` signal with `device`
+`"any"` must be the only `raw_mouse` signal: it takes every mouse's
+counts, a clicked one's too, so one movement would drive two roles.
+(The first draft refused two `"any"` signals only; `"any"` beside a
+`"click"` has the same fault.)
+
+**Checks at the player's start** (experiment_format 3.5, "Checks with
+a rig"):
+
+- Each signal role of the definition has a signal of the same name,
+  unless the role has `required` false. A missing one is refused, by
+  name.
+- The adapter's type and the role's type agree by `ysig_open()`'s rule.
+  `raw_mouse` gives `position2d_relative`, so a `position2d` role takes
+  it only with `allow_relative`.
+- The units convert (below), else the start is refused, naming both.
+- `desc.raw_mice` opens.
+
+**Units.** `display_px`, `display_cm` and `display_deg` are one plane.
+The profile's `view` gives the conversion: `width_px / width_mm`
+pixels per mm, and `yrig_ppd()` pixels per degree, at the center, the
+scale that ysp/gfx.h's `YGFX_DEG` uses. The player multiplies
+`per_count` and `bounds` by that factor. A conversion needs `view`; with
+none, the start is refused. `workspace_cm` and `device` convert to
+nothing: the role's units must be the adapter's.
+
+**Lowering.** `raw_mouse` lowers to the two nodes of the `--sim`
+adapter (player/v2.c, `v2_adapters()`): a source of `YIN_KIND_MOUSE`
+`YIN_AXIS_DELTA` at the raw mouse tier, and an integrator at
+`per_count` times the conversion factor, with the converted bounds. A
+lane with a negative scale runs mirrored (sig.h bounds a lane only with
+a positive gain) and a third node, a scale of -1, turns it back. The
+source's device is the role's (its index plus 1) whatever mouse sends
+the counts. The player refuses `bounds` with `"any"` (0.13.2): two mice's
+counts can reach one bounded integrator out of time order, and the
+clip depends on the order.
+
+**Binding by a click.** After the window opens and before the first
+trial, for each signal with `device` `"click"`, in the definition's role
+order, the window asks for a click with that role's mouse. The first
+press from a raw mouse binds it. A press with device 0 (injected input,
+a touchpad on Windows) or from a mouse already bound is refused, and the
+window asks again, as `trial_bimanual.c` does. Shift+Esc ends the
+session. On `--sim`, the scripted participant's devices bind in role
+order, with no click.
+
+**A mouse removed during a session** (decided by the user 2026-11-16).
+Its role gets no more samples, and plugged in again it gets a new id
+(X can give it the removed one's). The player asks for a click at once,
+for each role whose mouse is gone, in role order, with the rules above;
+the click binds also during a trial, as a trial that waits on the role
+ends only on its input; no trial starts until it comes. The rebinding
+goes into the data with its time.
+
+**The data.** `session.json` has, per signal role (D40): the adapter,
+`device` and the bound mouse's id and name (`YSCR_EV_DEVICE`),
+`per_count` and `bounds` in the adapter's units, the conversion factor,
+the role's units, `late_s`, and the profile's hash.
+
+**Open.**
+
+- The default `late_s` on Windows and macOS: 4 ms comes from Linux
+  (docs/player.md, "Signal roles on a rig"); `session.json`'s
+  `late_seen_s` measures it on a rig.
+- A removal that SDL's event does not name: on macOS and for an
+  evdev node X does not list, the raw reader's id is not SDL's, so the
+  player does not see the mouse go and does not ask for a click
+  (docs/player.md, "What a real-window run needs next").
+- Later presets: `pen` (needs pen events from ysp/screen.h, which it
+  does not deliver yet), a stream sample (signal_spec 5.5, not read
+  yet), an absolute pointer. A stable mouse key (the USB location on
+  each OS) as a third `device` value, for unattended sessions. The
+  calibration procedure of signal_spec 5.5.
+
+**Build order.** (1) `ysp/rigfile.h` 0.6.0: read, check, write and hash
+`signals`, with tests, the fuzz target and the mutation list. (2) The
+player: the start's checks, the lowering, the click binding and the data,
+with `player_test` cases on `--sim`. (3) A real run on the Linux desktop
+with two uinput mice: `trial_bimanual` and `trial_visuomotor` as
+definitions, at 60 Hz, and the 500 Hz check on `--sim`.
+
 ### 11.3 Binding
 
 Through the runner protocol, the designer's Run view lists the rig's

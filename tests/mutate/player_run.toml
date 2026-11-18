@@ -407,8 +407,8 @@ env = { YPL_REAL_CASES = "oddball" }
 name = "a real run reads no input"
 test = "real"
 why = "ysp/response.h, The order in a frame: the screen's queue goes to every collector each frame."
-find = '''        (void)yrsp_feed_screen(&p->scr, p->collectors, p->n_collectors);'''
-replace = '''        (void)p->n_collectors;'''
+find = '''        else (void)yrsp_feed_screen(&p->scr, p->collectors, p->n_collectors);'''
+replace = '''        else (void)p->n_collectors;'''
 
 [[mutant]]
 id = "rr-02"

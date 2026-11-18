@@ -23,6 +23,15 @@
  *       GEOMETRY): the eye to the screen's center, the lit image's width,
  *       and the pixels across it, from a tape or a ruler; writes the
  *       profile and prints the pixels per degree.
+ *   rigfile_profile --signal ROLE UNITS PER_COUNT DEVICE [--rig NAME | --file PATH] [--dir DIR]
+ *       Sets the adapter of the signal role ROLE (ysp/rigfile.h v0.6.0,
+ *       SIGNALS): a raw mouse, UNITS one of display_px, display_cm,
+ *       display_deg, workspace_cm, device; PER_COUNT the scale per count,
+ *       X or X,Y (a negative Y turns y up); DEVICE any or click. Other
+ *       units drop the role's bounds, which were in the old ones; late_s
+ *       stays. Edit the file for bounds and late_s.
+ *   rigfile_profile --unsignal ROLE [--rig NAME | --file PATH] [--dir DIR]
+ *       Removes the signal role ROLE.
  *   --dir DIR is a rig folder other than the user's (yrig_dir()).
  *
  * Exit code 0 when the profile is valid and every file it names checks; 3
@@ -50,7 +59,9 @@ static void usage(void) {
                     "       rigfile_profile --list [--dir DIR]\n"
                     "       rigfile_profile --new RIGNAME [--rig NAME | --file PATH] [--dir DIR]\n"
                     "       rigfile_profile --bind ROLE FAMILY KEY [--rig NAME | --file PATH] [--dir DIR]\n"
-                    "       rigfile_profile --view DISTANCE_MM WIDTH_MM WIDTH_PX [--rig NAME | --file PATH] [--dir DIR]\n");
+                    "       rigfile_profile --view DISTANCE_MM WIDTH_MM WIDTH_PX [--rig NAME | --file PATH] [--dir DIR]\n"
+                    "       rigfile_profile --signal ROLE UNITS PER_COUNT DEVICE [--rig NAME | --file PATH] [--dir DIR]\n"
+                    "       rigfile_profile --unsignal ROLE [--rig NAME | --file PATH] [--dir DIR]\n");
 }
 
 static int list(const char* dir) {
@@ -149,6 +160,14 @@ static int show(const yrig_profile* p, const char* path) {
     if (p->view.set)
         printf("view: %g mm away, %g mm across %d px: %.4f px/deg\n", p->view.distance_mm, p->view.width_mm, (int)p->view.width_px,
                yrig_ppd(p));
+    for (i = 0; i < p->n_signals; i++) {
+        const yrig_signal* s = &p->signal[i];
+        printf("signal %-12s %s %s, %g,%g per count, device %s", s->name, yrig_adapter_name(s->adapter), yrig_units_name(s->units),
+               s->per_count[0], s->per_count[1], s->device == YRIG_DEVICE_CLICK ? "click" : "any");
+        if (s->bounded) printf(", bounds %g,%g to %g,%g", s->lo[0], s->lo[1], s->hi[0], s->hi[1]);
+        if (s->late_ns >= 0) { secs(a, sizeof a, s->late_ns); printf(", late %s s", a); }
+        printf("\n");
+    }
     for (i = 0; i < p->n_notes; i++) printf("note: %s\n", p->notes[i]);
     if (yrig_hash(p, hash) == YRIG_OK) printf("sha256 %s\n", hash);
     return bad ? 3 : 0;
@@ -161,7 +180,9 @@ int main(int argc, char** argv) {
     const char* new_rig = NULL;
     const char* bind[3] = { NULL, NULL, NULL };
     const char* view[3] = { NULL, NULL, NULL };
-    int i, do_list = 0, canonical = 0, rc;
+    const char* sig[4] = { NULL, NULL, NULL, NULL };
+    const char* unsig = NULL;
+    int changes, i, do_list = 0, canonical = 0, rc;
     char dir[600], path[700], err[512];
     for (i = 1; i < argc; i++) {
         const char* a = argv[i];
@@ -174,10 +195,15 @@ int main(int argc, char** argv) {
         else if (strcmp(a, "--new") == 0 && v) { new_rig = v; i++; }
         else if (strcmp(a, "--bind") == 0 && i + 3 < argc) { bind[0] = argv[i + 1]; bind[1] = argv[i + 2]; bind[2] = argv[i + 3]; i += 3; }
         else if (strcmp(a, "--view") == 0 && i + 3 < argc) { view[0] = argv[i + 1]; view[1] = argv[i + 2]; view[2] = argv[i + 3]; i += 3; }
+        else if (strcmp(a, "--signal") == 0 && i + 4 < argc) {
+            sig[0] = argv[i + 1]; sig[1] = argv[i + 2]; sig[2] = argv[i + 3]; sig[3] = argv[i + 4];
+            i += 4;
+        }
+        else if (strcmp(a, "--unsignal") == 0 && v) { unsig = v; i++; }
         else { usage(); return 2; }
     }
-    if ((name && file) || (new_rig && (bind[0] || view[0])) || (bind[0] && view[0]) ||
-        (do_list && (file || new_rig || bind[0] || view[0]))) {
+    changes = (bind[0] != NULL) + (view[0] != NULL) + (sig[0] != NULL) + (unsig != NULL);
+    if ((name && file) || (new_rig && changes) || changes > 1 || (do_list && (file || new_rig || changes))) {
         usage();
         return 2;
     }
@@ -237,7 +263,40 @@ int main(int argc, char** argv) {
         g_p.view.width_mm = w;
         g_p.view.width_px = (int32_t)px;
     }
-    if (new_rig || bind[0] || view[0]) {
+    if (sig[0]) {
+        int units = 0, k;
+        double x, y;
+        char* e;
+        yrig_signal* s;
+        for (k = 1; k <= 5; k++)
+            if (strcmp(yrig_units_name(k), sig[1]) == 0) units = k;
+        x = strtod(sig[2], &e);
+        y = x;
+        if (*e == ',') y = strtod(e + 1, &e);
+        /* the ranges are the read-back's (yrig_save_file()); only the shape is checked here */
+        if (!units || *e || e == sig[2] || (strcmp(sig[3], "any") != 0 && strcmp(sig[3], "click") != 0)) {
+            fprintf(stderr, "rigfile_profile: --signal takes ROLE, UNITS (display_px, display_cm, display_deg, workspace_cm or "
+                            "device), PER_COUNT (X or X,Y) and DEVICE (any or click)\n");
+            return 2;
+        }
+        s = yrig_add_signal(&g_p, sig[0]);
+        if (!s) {
+            fprintf(stderr, "rigfile_profile: cannot set \"%s\": a role is 1 to 31 of A-Z a-z 0-9 _ . -, and a profile has at most %d "
+                            "signals\n", sig[0], YRIG_MAX_SIGNALS);
+            return 2;
+        }
+        if (s->units != units) s->bounded = false;   /* bounds in the old units mean nothing in the new */
+        s->adapter = YRIG_ADAPTER_RAW_MOUSE;
+        s->units = units;
+        s->per_count[0] = x;
+        s->per_count[1] = y;
+        s->device = strcmp(sig[3], "click") == 0 ? YRIG_DEVICE_CLICK : YRIG_DEVICE_ANY;
+    }
+    if (unsig && !yrig_remove_signal(&g_p, unsig)) {
+        fprintf(stderr, "rigfile_profile: the profile has no signal \"%s\"\n", unsig);
+        return 1;
+    }
+    if (new_rig || changes) {
         if (yrig_save_file(&g_p, path, err, sizeof err) != YRIG_OK) {
             fprintf(stderr, "rigfile_profile: %s\n", err);
             return 1;

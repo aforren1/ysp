@@ -218,6 +218,8 @@ struct pl_v2 {
     int64_t late_frames0;      /* sig.h's late_frames at the trial's start  */
     yin_event* der; int n_der; /* a poll's derived events, held while its
                                 * hits are taken (v2_der_upto())            */
+    int64_t idle_reset;        /* the last idle barrier (v2_idle_resets()); 0 none */
+    int64_t end_bar;           /* a real run: t_cover at the trial's end      */
     int64_t late_bound;        /* the latest time of an arm made at or
                                 * before the graph's input time (in sig.h's
                                 * reference order at its call)              */
@@ -322,6 +324,34 @@ typedef struct pl_v2_session {
     bool polled;
     int64_t lag_n, lag_max; double lag_sum;   /* session.json exit_lag    */
     pl_v2* flush_pend;         /* a trial's end whose flush waits (C2)      */
+    /* G18 (devices_spec.md 11.2, "The signal block"): per signal role, the
+     * adapter the rig profile gives, lowered (pl_v2_rig_signals()) */
+    struct v2_sig {
+        const yrig_signal* sg; /* NULL: --sim's adapter (--sim-gain)        */
+        double factor;         /* the profile's units to the role's         */
+        double gain[2];        /* the integrator's: positive with bounds     */
+        double sign[2];        /* the scale after it: 1, or -1 for a lane    */
+        bool bounded;          /* whose profile scale is negative            */
+        double lo[2], hi[2];   /* the integrator's, in the role's units      */
+        uint32_t dev;          /* the bound mouse's id; 0 none               */
+        char dev_name[24];
+        bool any;              /* device "any": every mouse                  */
+        bool need_click;       /* device "click", no mouse bound now         */
+        bool optional_unbound; /* required false and no signal: no input     */
+        int64_t late_max;      /* the largest P' - t of a sample (P' the     */
+        int64_t fed;           /* poll before the one that read it)          */
+    }* sig;
+    /* a real run's input, polled once a frame (pl_v2_poll_screen()) */
+    bool real;
+    yin_event* live; int n_live, live_next, cap_live;   /* raw mouse samples */
+    yrsp_input* keys; int n_keys, cap_keys;   /* every input, for the collectors */
+    int64_t live_poll;         /* when this frame's poll started: P          */
+    int64_t poll_frame;        /* the frame of the last whole feed           */
+    bool bound0;               /* the first binding is complete              */
+    int prompted;              /* the role last asked for, -1 none           */
+    int64_t n_other, n_dev0, n_absolute, n_wheel, n_live_lost, n_keys_lost, n_refused;
+    struct v2_bind { int role; uint32_t dev; char name[24]; int64_t t; bool removed; } binds[64];
+    int n_binds;               /* clicks and removals, in order (session.json) */
 } pl_v2_session;
 
 typedef struct v2_tcell { int col; int64_t a, b; int sa, sb; bool has_a, has_b; int64_t fa, fb; } v2_tcell;
@@ -1436,8 +1466,9 @@ static void v2_on_row(void* user, const ysig_row* row) {
 /* --- load -------------------------------------------------------------- */
 
 /* --test-sample-late: each role's reports reach the player that much after
- * their stamp. The player takes them in the order they arrive, as a real
- * run's queue gives them; a role's own order is its stamps'. */
+ * their stamp; the samples file's arr_s, one report's arrival (a role
+ * the option names takes the option's). The player takes them in the
+ * order they arrive, as a real run's queue gives them. */
 static int v2_smp_cmp(const void* a, const void* b) {
     const struct v2_sample* x = (const struct v2_sample*)a;
     const struct v2_sample* y = (const struct v2_sample*)b;
@@ -1445,10 +1476,13 @@ static int v2_smp_cmp(const void* a, const void* b) {
     if (x->t != y->t) return x->t < y->t ? -1 : 1;   /* the file's order: stamps never go back */
     return x->role - y->role;
 }
-static int v2_samples_late(pl_player* p) {
+static int v2_samples_late(pl_player* p, bool sort) {
     pl_v2_session* S = p->v2s;
     int i, k;
-    if (p->args.n_lates == 0) return 0;
+    if (p->args.n_lates == 0) {
+        if (sort && S->n_smp > 1) qsort(S->smp, (size_t)S->n_smp, sizeof *S->smp, v2_smp_cmp);
+        return 0;
+    }
     for (k = 0; k < p->args.n_lates; k++) {
         const yexp_sigrole* sr = yexp_sigrole_get(p->def, p->args.lates[k].name);
         int64_t late = (int64_t)llround(atof(p->args.lates[k].value) * 1e9);
@@ -1469,20 +1503,24 @@ static int v2_samples_load(pl_player* p) {
     FILE* f;
     char line[512];
     int cap = 0, ln = 0;
+    bool arrivals = false;
     if (!p->args.samples_path) return 0;
     f = fopen(p->args.samples_path, "r");
     if (!f) { pl_fail(p, "--samples '%s': cannot read it", p->args.samples_path); p->bad_arg = true; return -1; }
     while (fgets(line, sizeof line, f)) {
         char role[128];
-        double t, x, y;
-        int r;
+        double t, x, y, arr = -1;
+        int r, nf;
         const yexp_sigrole* sr;
         ln++;
         if (ln == 1 && strncmp(line, "t_s", 3) == 0) continue;
         if (line[0] == '#' || line[0] == '\n') continue;
-        if (sscanf(line, "%lf,%127[^,],%lf,%lf", &t, role, &x, &y) != 4 || !(t >= 0)) {
+        /* an optional fifth column, arr_s: when the report reaches the
+         * player (tests: one report late, the others on time) */
+        nf = sscanf(line, "%lf,%127[^,],%lf,%lf,%lf", &t, role, &x, &y, &arr);
+        if ((nf != 4 && nf != 5) || !(t >= 0) || (nf == 5 && !(arr >= t && arr <= V2_SAMPLE_MAX_S))) {
             fclose(f);
-            pl_fail(p, "--samples '%s', line %d: expected t_s,role,x,y", p->args.samples_path, ln);
+            pl_fail(p, "--samples '%s', line %d: expected t_s,role,x,y and an optional arr_s at or after t_s", p->args.samples_path, ln);
             p->bad_arg = true;
             return -1;
         }
@@ -1515,10 +1553,14 @@ static int v2_samples_load(pl_player* p) {
             return -1;
         }
         S->smp[S->n_smp].arr = S->smp[S->n_smp].t;
+        if (nf == 5) {
+            S->smp[S->n_smp].arr = (int64_t)llround(arr * 1e9);
+            arrivals = true;
+        }
         S->n_smp++;
     }
     fclose(f);
-    return v2_samples_late(p);
+    return v2_samples_late(p, arrivals);
 }
 
 /* 0.12.0: the roles that reach a detect or an emit (a control's or a
@@ -1569,7 +1611,10 @@ static int64_t v2_horizon(const pl_player* p, const pl_v2* v) {
         if (!v->feeds || !v->feeds[r]) continue;
         c = S->poll - S->bnd[r];
         if (c > S->plim) c = S->plim;
-        if (S->newest[r] != INT64_MIN && S->newest[r] - 1 > c) c = S->newest[r] - 1;
+        /* device "any": a mouse not heard from yet can send a report
+         * stamped before another mouse's newest and still be within its
+         * bound, so no newest stamp raises the claim (docs/player.md, L4) */
+        if (!(S->sig && S->sig[r].any) && S->newest[r] != INT64_MIN && S->newest[r] - 1 > c) c = S->newest[r] - 1;
         if (c < g) g = c;
     }
     return g;
@@ -1588,7 +1633,7 @@ static int64_t v2_horizon_all(const pl_player* p) {
     for (r = 0; r < p->def->n_sigroles; r++) {
         c = S->poll - S->bnd[r];
         if (c > S->plim) c = S->plim;
-        if (S->newest[r] != INT64_MIN && S->newest[r] - 1 > c) c = S->newest[r] - 1;
+        if (!(S->sig && S->sig[r].any) && S->newest[r] != INT64_MIN && S->newest[r] - 1 > c) c = S->newest[r] - 1;
         if (c < g) g = c;
     }
     return g;
@@ -1697,13 +1742,14 @@ static int v2_adapters(pl_player* p, pl_v2* v) {
     pl_v2_session* S = p->v2s;
     v->roles = (ysig_role*)pl_alloc(p, sizeof(ysig_role) * (size_t)(n + 1));
     v->adapters = (ysig_adapter*)pl_alloc(p, sizeof(ysig_adapter) * (size_t)(n + 1));
-    v->ad_nodes = (ysig_node*)pl_alloc(p, sizeof(ysig_node) * 2 * (size_t)(n + 1));
+    v->ad_nodes = (ysig_node*)pl_alloc(p, sizeof(ysig_node) * 3 * (size_t)(n + 1));
     if (!v->roles || !v->adapters || !v->ad_nodes) return -1;
     for (i = 0; i < n; i++) {
         const yexp_sigrole* r = &p->def->sigroles[i];
         static const int ty[] = { YSIG_TYPE_POSITION2D, YSIG_TYPE_POSITION2D_RELATIVE, YSIG_TYPE_POSITION3D, YSIG_TYPE_SCALAR, YSIG_TYPE_GAZE };
         static const int un[] = { YSIG_UNITS_DISPLAY_PX, YSIG_UNITS_DISPLAY_CM, YSIG_UNITS_DISPLAY_DEG, YSIG_UNITS_WORKSPACE_CM, YSIG_UNITS_DEVICE };
-        ysig_node* an = &v->ad_nodes[2 * i];
+        ysig_node* an = &v->ad_nodes[3 * i];
+        const struct v2_sig* sg = S->sig ? &S->sig[i] : NULL;
         v->roles[i].name = r->name;
         v->roles[i].type = (uint8_t)ty[r->type];
         v->roles[i].units = (uint8_t)un[r->units];
@@ -1736,15 +1782,32 @@ static int v2_adapters(pl_player* p, pl_v2* v) {
         an[0].p[YSIG_SOURCE_DEVICE] = i + 1;
         an[0].p[YSIG_SOURCE_TIER] = yin_raw_mouse_source().tier;
         an[1] = ysig_node_of(YSIG_OP_INTEGRATE, 0, -1);
-        an[1].p[YSIG_INTEGRATE_GAIN_X] = an[1].p[YSIG_INTEGRATE_GAIN_Y] = S->gain[i];
+        an[1].p[YSIG_INTEGRATE_GAIN_X] = sg ? sg->gain[0] : S->gain[i];
+        an[1].p[YSIG_INTEGRATE_GAIN_Y] = sg ? sg->gain[1] : S->gain[i];
+        if (sg && sg->bounded) {
+            an[1].p[YSIG_INTEGRATE_LOW_X] = sg->lo[0];
+            an[1].p[YSIG_INTEGRATE_LOW_Y] = sg->lo[1];
+            an[1].p[YSIG_INTEGRATE_HIGH_X] = sg->hi[0];
+            an[1].p[YSIG_INTEGRATE_HIGH_Y] = sg->hi[1];
+        }
         an[1].history = V2_HISTORY;
         memset(&v->adapters[i], 0, sizeof v->adapters[i]);
         v->adapters[i].role = r->name;
-        v->adapters[i].name = "sim raw mouse";
+        v->adapters[i].name = sg && sg->sg ? "raw_mouse" : "sim raw mouse";
         v->adapters[i].type = YSIG_TYPE_POSITION2D_RELATIVE;
         v->adapters[i].units = (uint8_t)un[r->units];
         v->adapters[i].nodes = an;
         v->adapters[i].n_nodes = 2;
+        if (sg && (sg->sign[0] < 0 || sg->sign[1] < 0)) {
+            /* sig.h bounds a lane only with a positive gain ("flip with
+             * affine"): the integrator runs on the mirrored range, and
+             * this scale turns the lane back */
+            an[2] = ysig_node_of(YSIG_OP_SCALE, 1, -1);
+            an[2].p[YSIG_SCALE_K_X] = sg->sign[0];
+            an[2].p[YSIG_SCALE_K_Y] = sg->sign[1];
+            an[2].history = V2_HISTORY;
+            v->adapters[i].n_nodes = 3;
+        }
     }
     return 0;
 }
@@ -1847,6 +1910,128 @@ static int v2_binds(pl_player* p, pl_v2* v) {
     return 0;
 }
 
+/* The lateness bound of a raw mouse role whose profile states no late_s.
+ * Measured with the player's own late_seen_s (docs/player.md, "A raw
+ * mouse's lateness"; Linux desktop, i5-14500, 2026-11-16, two uinput mice
+ * at 1 kHz, 60 s): 0 idle, 1.6 ms with a busy loop on each of the 20
+ * cores, 15 ms at twice that. 4 ms: the loaded case and a margin. */
+#define V2_RAW_MOUSE_LATE_NS 4000000LL
+
+static bool v2_relative(const yexp_sigrole* r) {
+    return r->type == YEXP_SIG_POSITION2D_RELATIVE || (r->type == YEXP_SIG_POSITION2D && r->allow_relative);
+}
+
+/* The host's sigrole() check (experiment.h; format 3.5, "Checks with a
+ * rig"): the profile's signal for the role, its type, its units. --sim
+ * takes a role the profile leaves out (--sim-gain gives its adapter). */
+int pl_v2_sigrole_check(pl_player* p, const yexp_sigrole* r, char* msg, size_t cap) {
+    const yrig_signal* sg = p->have_rig ? yrig_find_signal(p->rig, r->name) : NULL;
+    double f;
+    if (!sg) {
+        if (r->required && !p->args.sim) {
+            if (!p->have_rig) snprintf(msg, cap, "a real run takes the role's adapter from a rig profile, and there is none (--rig, or the user's profile.json)");
+            else snprintf(msg, cap, "the rig profile has no signal for the required signal role (rigfile_profile --signal %s ...)", r->name);
+            return 1;
+        }
+        return 0;
+    }
+    if (!v2_relative(r)) {
+        snprintf(msg, cap, "the rig's adapter %s gives position2d_relative, which this role takes only as position2d with allow_relative",
+                 yrig_adapter_name(sg->adapter));
+        return 1;
+    }
+    f = yrig_units_factor(p->rig, sg->units, r->units + 1);
+    if (!(f > 0)) {
+        snprintf(msg, cap, "the rig's adapter is in %s and the role in %s, which do not convert%s", yrig_units_name(sg->units),
+                 yrig_units_name(r->units + 1), p->rig->view.set ? "" : " (two display units convert through the profile's view, which it has not)");
+        return 1;
+    }
+    if (sg->device == YRIG_DEVICE_ANY && sg->bounded) {
+        /* every mouse feeds one integrator; a report late within its
+         * bound reaches it after another mouse's later counts, and a
+         * bound's clip depends on the order (the sum does not) */
+        snprintf(msg, cap, "the rig's signal has bounds and device any; two mice's counts can reach a bounded integrator out of time order, "
+                 "which changes the clip: give device click, or no bounds");
+        return 1;
+    }
+    return 0;
+}
+
+/* Each signal role's adapter: the profile's (a real run; --sim when no
+ * --sim-gain names the role), else --sim's. The integrator takes the
+ * profile's scale and bounds in the role's units; a negative lane runs
+ * mirrored, and a scale node turns it back (v2_adapters()). */
+static int v2_rig_signals(pl_player* p) {
+    pl_v2_session* S = p->v2s;
+    int i, k, n = p->def->n_sigroles;
+    S->sig = (struct v2_sig*)pl_alloc(p, sizeof(struct v2_sig) * (size_t)(n + 1));
+    if (!S->sig) return -1;
+    S->real = !p->args.sim && n > 0;
+    S->prompted = -1;
+    S->bound0 = true;
+    for (i = 0; i < n; i++) {
+        struct v2_sig* g = &S->sig[i];
+        const yexp_sigrole* r = &p->def->sigroles[i];
+        const yrig_signal* sg = p->have_rig ? yrig_find_signal(p->rig, r->name) : NULL;
+        char msg[300];
+        memset(g, 0, sizeof *g);
+        g->sign[0] = g->sign[1] = 1;
+        g->gain[0] = g->gain[1] = S->gain[i];
+        g->factor = 1;
+        if (p->args.sim && (S->gain[i] > 0 || !sg || !v2_relative(r))) continue;   /* --sim's adapter */
+        if (!sg) {
+            if (!p->args.sim && r->required) { pl_fail(p, "signal role '%s': the rig profile has no signal for it", r->name); return -1; }
+            g->optional_unbound = true;   /* no mouse feeds it: it reads its origin */
+            g->gain[0] = g->gain[1] = 1;
+            continue;
+        }
+        if (pl_v2_sigrole_check(p, r, msg, sizeof msg)) { pl_fail(p, "signal role '%s': %s", r->name, msg); return -1; }
+        g->sg = sg;
+        g->factor = yrig_units_factor(p->rig, sg->units, r->units + 1);
+        g->bounded = sg->bounded;
+        for (k = 0; k < 2; k++) {
+            double q = sg->per_count[k] * g->factor;
+            double lo = sg->lo[k] * g->factor, hi = sg->hi[k] * g->factor;
+            g->sign[k] = q < 0 ? -1 : 1;
+            g->gain[k] = q < 0 ? -q : q;
+            /* the mirrored range for a negative lane: x in [lo, hi] is
+             * -x in [-hi, -lo] */
+            g->lo[k] = q < 0 ? -hi : lo;
+            g->hi[k] = q < 0 ? -lo : hi;
+        }
+        /* --sim's samples file stands for any number of mice */
+        g->any = sg->device == YRIG_DEVICE_ANY;
+        if (sg->device == YRIG_DEVICE_CLICK) {
+            /* --sim: the scripted participant's device, no click */
+            if (S->real) { g->need_click = true; S->bound0 = false; }
+            else g->dev = (uint32_t)i + 1;
+        }
+        /* the bound B: the profile's measured late_s; a real run without
+         * one, the default; --sim's samples come on time unless a test
+         * option says otherwise */
+        {
+            bool test_bound = false;
+            for (k = 0; k < p->args.n_lates; k++) if (strcmp(p->args.lates[k].name, r->name) == 0) test_bound = true;
+            for (k = 0; k < p->args.n_bounds; k++) if (strcmp(p->args.bounds[k].name, r->name) == 0) test_bound = true;
+            if (!test_bound) {
+                if (sg->late_ns >= 0) S->bnd[i] = sg->late_ns;
+                else if (S->real) S->bnd[i] = V2_RAW_MOUSE_LATE_NS;
+            }
+        }
+    }
+    S->bnd_max = 0;
+    for (i = 0; i < n; i++) if (S->bnd[i] > S->bnd_max) S->bnd_max = S->bnd[i];
+    if (S->real) {
+        /* a poll's inputs: raw mice up to 8 kHz each for a long frame */
+        S->cap_live = p->args.live_cap > 0 ? p->args.live_cap : 8192;
+        S->cap_keys = 1024;
+        S->live = (yin_event*)pl_alloc(p, sizeof(yin_event) * (size_t)S->cap_live);
+        S->keys = (yrsp_input*)pl_alloc(p, sizeof(yrsp_input) * (size_t)S->cap_keys);
+        if (!S->live || !S->keys) return -1;
+    }
+    return 0;
+}
+
 int pl_v2_load(pl_player* p) {
     pl_v2_session* S = p->v2s;
     int ti, i, max_slots = 0;
@@ -1878,8 +2063,8 @@ int pl_v2_load(pl_player* p) {
     /* the lateness bound B per role (docs/player.md, "Where each bound
      * comes from"): in --sim, --test-sample-late's value, or
      * --test-sample-bound's; 0 for every other role (a scripted source
-     * stamps on arrival). A real run binds no signal role (G18), so no
-     * role there needs a measured bound yet */
+     * stamps on arrival). The rig profile's late_s, or a real run's
+     * default, in v2_rig_signals() */
     S->bnd = (int64_t*)pl_alloc(p, sizeof(int64_t) * (size_t)(p->def->n_sigroles + 1));
     S->newest = (int64_t*)pl_alloc(p, sizeof(int64_t) * (size_t)(p->def->n_sigroles + 1));
     S->beyond = (int64_t*)pl_alloc(p, sizeof(int64_t) * (size_t)(p->def->n_sigroles + 1));
@@ -1902,17 +2087,11 @@ int pl_v2_load(pl_player* p) {
             p->bad_arg = true;
             return -1;
         }
-    if (p->def->n_sigroles > 0) {
-        if (!p->args.sim) {
-            /* G18: the rig profile has no adapter block, so a real run cannot bind a signal role */
-            pl_fail(p, "signal role '%s': a real run needs the rig profile's adapter block (gap G18, not built); --sim gives each role a scripted source",
-                    p->def->sigroles[0].name);
-            return -1;
-        }
+    if (v2_rig_signals(p) < 0) return -1;
+    if (p->def->n_sigroles > 0 && p->args.sim) {
         for (i = 0; i < p->def->n_sigroles; i++)
-            if (!(S->gain[i] > 0) && (p->def->sigroles[i].type == YEXP_SIG_POSITION2D_RELATIVE ||
-                                      (p->def->sigroles[i].type == YEXP_SIG_POSITION2D && p->def->sigroles[i].allow_relative))) {
-                pl_fail(p, "signal role '%s': --sim needs --sim-gain %s=UNITS (its --sim adapter's %s per count)", p->def->sigroles[i].name,
+            if (!(S->gain[i] > 0) && !S->sig[i].sg && v2_relative(&p->def->sigroles[i])) {
+                pl_fail(p, "signal role '%s': --sim needs --sim-gain %s=UNITS (its --sim adapter's %s per count), or a rig profile with its signal", p->def->sigroles[i].name,
                         p->def->sigroles[i].name, p->def->units == 2 ? "cm" : p->def->units == 1 ? "deg" : "px");
                 p->bad_arg = true;
                 return -1;
@@ -3353,7 +3532,9 @@ int pl_v2_trial_start(pl_player* p, const yscr_frame* f) {
             /* the newest stamps are this trial's (the reset dropped the
              * rest); hits and events of an earlier trial do not come */
             int r;
-            for (r = 0; r < p->def->n_sigroles; r++) S->newest[r] = INT64_MIN;
+            for (r = 0; r < p->def->n_sigroles; r++) {
+                S->newest[r] = INT64_MIN;
+            }
             v->g_used = v->g_der = INT64_MIN;
             v->ch_t = INT64_MIN;
             v->ch_n = 0;
@@ -3496,6 +3677,56 @@ static int v2_feed_part(pl_player* p, pl_v2* v, const yscr_frame* f, int n) {
     return 0;
 }
 
+/* With a bound above 0: each graph not running a trial gets a trial reset
+ * at the horizon over every role after each whole poll. Such a graph only
+ * keeps its adapters (the raw mice's integrators) for its next trial,
+ * whose own reset ends everything else. Its window was never needed and,
+ * with no ysig_frame() to take checkpoints, its logs filled: a late
+ * report then fell back (late_full), and the guard, which sums every
+ * graph, stopped the session (the bimanual example, two hands at 500
+ * reports a second, 2 and 3 ms late, in --sim as on real mice: v0.12.0
+ * too). After the barrier a late count goes into its integrator (sig.h's
+ * H1), exact: with no bounds a sum, and bounds only with one mouse a
+ * role (device any with bounds is refused). Not a graph whose trial's flush waits (it reads
+ * its signal columns and rows) or whose frame trace rows wait for their
+ * records (they read its values at their onsets). Every bound 0: not called, so those
+ * runs keep their bytes. */
+static void v2_idle_resets(pl_player* p, const pl_v2* active) {
+    pl_v2_session* S = p->v2s;
+    int64_t tb;
+    int ti, k;
+    if (S->bnd_max <= 0 || !S->polled) return;
+    tb = v2_horizon_all(p);
+    if (tb == INT64_MIN || tb == INT64_MAX) return;
+    tb++;
+    for (ti = 0; ti < S->n_t; ti++) {
+        pl_v2* w = S->t[ti];
+        bool owed = false;
+        if (!w || !w->has_graph || w == active || w == S->flush_pend || (p->tmpl && p->tmpl->v2 == w && p->in_trial)) continue;
+        if (w->idle_reset != 0 && tb <= w->idle_reset) continue;
+        for (k = 0; k < S->n_fpend && !owed; k++) owed = S->fpend[k].tmpl / 64 == ti;
+        if (owed) continue;
+        ysig_reset_trial(&w->g, tb);
+        w->idle_reset = tb;
+    }
+}
+
+/* What a feed up to `limit` makes complete. The queue is in arrival
+ * order, and the feed stops at its first sample past the limit; a
+ * sample behind that one (another role, or another mouse of a device
+ * "any" role) can be stamped at or before the limit, so the claim ends
+ * before the earliest stamp still queued. */
+static int64_t v2_fed_to(const pl_v2_session* S, const yscr_frame* f, int64_t limit) {
+    int64_t c = limit;
+    int i;
+    if (limit == INT64_MAX) return limit;
+    for (i = S->next_smp; i < S->n_smp && S->t0 + S->smp[i].arr <= f->onset; i++)
+        if (S->t0 + S->smp[i].t <= c) c = S->t0 + S->smp[i].t - 1;
+    for (i = S->live_next; S->real && i < S->n_live; i++)
+        if (S->live[i].t <= c) c = S->live[i].t - 1;
+    return c;
+}
+
 /* The samples up to the frame's onset and `limit` (a key response's end,
  * pl_v2_response()), through every graph, the active one's hits. */
 static int v2_feed(pl_player* p, const yscr_frame* f, int64_t limit) {
@@ -3534,6 +3765,23 @@ static int v2_feed(pl_player* p, const yscr_frame* f, int64_t limit) {
         fed++;
         if (nb == cap) { rc = v2_feed_part(p, v, f, nb); nb = 0; }
     }
+    {
+        /* a real run's raw mouse samples (pl_v2_poll_screen()), in poll
+         * order, device already the role's */
+        while (rc == 0 && S->real && S->live_next < S->n_live && S->live[S->live_next].t <= limit) {
+            const yin_event* le = &S->live[S->live_next++];
+            int r = (int)le->device - 1;
+            yin_event* e = &S->batch[nb++];
+            *e = *le;
+            if (S->polled && e->t <= (S->poll - S->bnd[r] < S->plim ? S->poll - S->bnd[r] : S->plim)) S->beyond[r]++;
+            S->sig[r].fed++;
+            if (e->t > S->newest[r]) S->newest[r] = e->t;
+            for (ti = 0; ti < S->n_t; ti++)
+                if (S->t[ti] && S->t[ti]->has_graph) v2_late_in(S->t[ti], e->t);
+            fed++;
+            if (nb == cap) { rc = v2_feed_part(p, v, f, nb); nb = 0; }
+        }
+    }
     if (rc == 0 && nb) rc = v2_feed_part(p, v, f, nb);
     YRT_ZONE_VALUE(zs, fed);
     YRT_ZONE_END(zs);
@@ -3544,10 +3792,200 @@ static int v2_feed(pl_player* p, const yscr_frame* f, int64_t limit) {
      * poll's whole feed adds nothing and must not lower the claim: it
      * held a timed exit after the response's time to the next frame
      * (the model's harness, 60 Hz, 10 ms late, seed 102486) */
-    if (!(S->polled && S->poll == f->onset && S->plim > limit)) S->plim = limit;
-    S->poll = f->onset;
+    if (!(S->polled && S->poll_frame == f->index && S->plim > limit)) S->plim = v2_fed_to(S, f, limit);
+    /* P: --sim polls at the onset; a real run when its poll started, as a
+     * report stamped after that may not be in it */
+    S->poll = S->real ? S->live_poll : f->onset;
+    S->poll_frame = f->index;
     S->polled = true;
+    v2_idle_resets(p, v);
     return 0;
+}
+
+/* --- a real run's input (G18) -------------------------------------------- */
+
+bool pl_v2_polls(const pl_player* p) { return p->v2s && p->v2s->real; }
+
+/* The role a raw mouse feeds: device "any" takes every mouse, "click" its
+ * bound one; -1 none. */
+static int v2_role_of_mouse(const pl_player* p, uint32_t dev) {
+    const pl_v2_session* S = p->v2s;
+    int r;
+    for (r = 0; r < p->def->n_sigroles; r++) {
+        const struct v2_sig* g = &S->sig[r];
+        if (!g->sg) continue;
+        if (g->any || (g->dev != 0 && g->dev == dev)) return r;
+    }
+    return -1;
+}
+
+static void v2_bind_log(pl_v2_session* S, int role, uint32_t dev, const char* name, int64_t t, bool removed) {
+    struct v2_bind* b;
+    if (S->n_binds >= (int)(sizeof S->binds / sizeof S->binds[0])) return;
+    b = &S->binds[S->n_binds++];
+    b->role = role;
+    b->dev = dev;
+    snprintf(b->name, sizeof b->name, "%s", name ? name : "");
+    b->t = t;
+    b->removed = removed;
+}
+
+/* A left press from a raw mouse: it binds the first role that waits for a
+ * click (definition order), as trial_bimanual.c does. A press with device
+ * 0 (injected input, a touchpad on Windows) or from a mouse bound to a
+ * role already is refused, and the role still waits. Also during a trial:
+ * a trial that waits on a role whose mouse was removed ends only on that
+ * role's input (real_test.py's signals case hung there when the click
+ * waited for the trial's end). */
+static void v2_click(pl_player* p, const yin_event* e, const char* name) {
+    pl_v2_session* S = p->v2s;
+    int r, b = -1;
+    for (r = 0; r < p->def->n_sigroles && b < 0; r++) if (S->sig[r].need_click) b = r;
+    if (b < 0) return;
+    if (e->device == 0) {
+        S->n_refused++;
+        printf("player: refused: a click with no device id (injected input or a touchpad); click the mouse for signal role '%s'\n",
+               p->def->sigroles[b].name);
+        fflush(stdout);
+        return;
+    }
+    for (r = 0; r < p->def->n_sigroles; r++)
+        if (S->sig[r].dev == e->device) {
+            S->n_refused++;
+            printf("player: refused: that mouse is bound to signal role '%s'; click the mouse for '%s'\n", p->def->sigroles[r].name,
+                   p->def->sigroles[b].name);
+            fflush(stdout);
+            return;
+        }
+    S->sig[b].dev = e->device;
+    S->sig[b].need_click = false;
+    snprintf(S->sig[b].dev_name, sizeof S->sig[b].dev_name, "%s", name ? name : "");
+    v2_bind_log(S, b, e->device, name, e->t, false);
+    printf("player: signal role '%s': mouse %u (%s)%s\n", p->def->sigroles[b].name, (unsigned)e->device, name && *name ? name : "no name",
+           (e->flags & YIN_UNLISTED) ? ", not in SDL's list" : "");
+    fflush(stdout);
+    for (r = 0; r < p->def->n_sigroles; r++) if (S->sig[r].need_click) return;
+    S->bound0 = true;
+    S->prompted = -1;
+}
+
+/* A bound mouse removed: its role waits for a click (the user's decision,
+ * 2026-11-16), asked at once; no trial starts until it comes, and the
+ * trial in progress gets no input from the role meanwhile. */
+static void v2_mouse_removed(pl_player* p, uint32_t dev, int64_t t) {
+    pl_v2_session* S = p->v2s;
+    int r;
+    if (dev == 0) return;
+    for (r = 0; r < p->def->n_sigroles; r++) {
+        struct v2_sig* g = &S->sig[r];
+        if (!g->sg || g->any || g->dev != dev) continue;
+        g->dev = 0;
+        g->need_click = true;
+        v2_bind_log(S, r, dev, g->dev_name, t, true);
+        printf("player: signal role '%s': its mouse %u was removed\n", p->def->sigroles[r].name, (unsigned)dev);
+        if (S->prompted < 0 || !S->sig[S->prompted].need_click) {
+            printf("player: click the mouse for signal role '%s' (left button)\n", p->def->sigroles[r].name);
+            S->prompted = r;
+        }
+        fflush(stdout);
+    }
+}
+
+/* 1 while a role waits for a click: the trial does not start (the frame
+ * draws nothing). Asks once a role, on the console. */
+int pl_v2_bind_wait(pl_player* p) {
+    pl_v2_session* S = p->v2s;
+    int r;
+    if (!S || !S->real) return 0;
+    for (r = 0; r < p->def->n_sigroles; r++)
+        if (S->sig[r].need_click) {
+            if (S->prompted != r) {
+                printf("player: click the mouse for signal role '%s' (left button)\n", p->def->sigroles[r].name);
+                fflush(stdout);
+                S->prompted = r;
+            }
+            return 1;
+        }
+    return 0;
+}
+
+#if !defined(YSCR_NO_SDL)
+/* The screen's queue, once a frame before anything reads it: every input
+ * kept for the collectors (pl_v2_feed_keys(), where yrsp_feed_screen()
+ * fed them), each raw mouse's counts for its role's graph (the device
+ * becomes the role's, as --sim's), the clicks that bind, the removals. P
+ * is when the poll started. */
+int pl_v2_poll_screen(pl_player* p, const yscr_frame* f) {
+    pl_v2_session* S = p->v2s;
+    SDL_Event ev;
+    yrsp_input in;
+    int64_t prev;
+    (void)f;
+    if (!S || !S->real) return 0;
+    if (S->live_next > 0) {
+        memmove(S->live, S->live + S->live_next, sizeof(yin_event) * (size_t)(S->n_live - S->live_next));
+        S->n_live -= S->live_next;
+        S->live_next = 0;
+    }
+    S->n_keys = 0;
+    prev = S->live_poll;
+    S->live_poll = yrt_now_ns();
+    while (yscr_poll(&p->scr, &ev, NULL)) {
+        int r = -1;
+        bool raw;
+        if (ev.type == SDL_EVENT_MOUSE_REMOVED) v2_mouse_removed(p, (uint32_t)ev.mdevice.which, S->live_poll);
+        if (!yscr_event_input(&p->scr, &ev, &in)) continue;
+        raw = ev.type == yscr_input_event_type() && in.kind == YIN_KIND_MOUSE;
+        if (raw && in.type == YIN_SAMPLE && in.control == YIN_AXIS_DELTA) r = v2_role_of_mouse(p, in.device);
+        /* a role's counts go to its graph only: at 1 kHz a mouse they
+         * filled the collectors' buffer in long frames (40 busy loops on
+         * 20 cores: 226 inputs lost), and no collector reads them */
+        if (r < 0) {
+            if (S->n_keys < S->cap_keys) S->keys[S->n_keys++] = in;
+            else S->n_keys_lost++;
+        }
+        if (!raw) continue;
+        if (in.type == YIN_PRESS && in.control == 1) v2_click(p, &in, SDL_GetMouseNameForID((SDL_MouseID)in.device));
+        if (in.type != YIN_SAMPLE) continue;
+        /* no adapter reads the wheel yet; counted apart, or a scroll reads
+         * as a tablet in the data */
+        if (in.control == YIN_AXIS_WHEEL) { S->n_wheel++; continue; }
+        if (in.control != YIN_AXIS_DELTA) { S->n_absolute++; continue; }   /* a tablet, a VM: positions */
+        if (r < 0) {
+            if (in.device) S->n_other++;
+            else S->n_dev0++;
+            continue;
+        }
+        if (!S->bound0) continue;   /* the session starts at the last click */
+        if (S->n_live >= S->cap_live) {
+            /* a dropped count moves the role for the rest of the session:
+             * stop, as the guard does for a report later than its bound */
+            S->n_live_lost++;
+            pl_fail(p, "signal role '%s': more than %d raw mouse samples in one poll (a long frame); the session stops rather than lose counts",
+                    p->def->sigroles[r].name, S->cap_live);
+            return -1;
+        }
+        /* P' - t, with P' the poll before this one, is how long after a
+         * poll it missed the sample came: its largest is the role's
+         * lateness seen (session.json). Taken here, as every sample passes
+         * once; a feed with a limit leaves some for the next */
+        if (prev && prev - in.t > S->sig[r].late_max) S->sig[r].late_max = prev - in.t;
+        S->live[S->n_live] = in;
+        S->live[S->n_live].device = (uint32_t)r + 1;
+        S->n_live++;
+    }
+    return 0;
+}
+#endif
+
+/* The poll's inputs to every collector, where a real run fed the screen's
+ * queue (run.c) */
+void pl_v2_feed_keys(pl_player* p) {
+    pl_v2_session* S = p->v2s;
+    int i, k;
+    for (i = 0; i < S->n_keys; i++)
+        for (k = 0; k < p->n_collectors; k++) yrsp_feed(&p->collectors[k], &S->keys[i]);
+    S->n_keys = 0;
 }
 
 const float* pl_v2_values(pl_player* p, const float* tl_values) {
@@ -3759,7 +4197,12 @@ int pl_v2_frame_eval(pl_player* p, const yscr_frame* f) {
         fi.base_ns = v->base_state >= 0 ? (v->base_onset >= 0 ? f->onset - v->base_onset : 0) : f->onset - p->trial_start_onset;
         fi.values = ytl_values(&p->tl);
         fi.n_values = p->n_channels;
-        fi.poll_ns = f->onset;
+        /* input is known up to the poll: --sim polls at the onset; a real
+         * run when its poll started, before the onset, and a report stamped
+         * between the two comes next frame. Known to the onset, sig.h took
+         * each such report for late input and ran the window again
+         * (real_test.py signals_examples, bimanual: the logs ran full) */
+        fi.poll_ns = p->v2s->real && p->v2s->live_poll < f->onset ? p->v2s->live_poll : f->onset;
         fi.has_poll = true;
         pl_v2_values(p, ytl_values(&p->tl));
         {
@@ -3768,7 +4211,7 @@ int pl_v2_frame_eval(pl_player* p, const yscr_frame* f) {
             int rf;
             YRT_ZONE(zs, "sig.frame");
             YRT_ZONE_VALUE(zs, v->g.n);
-            v2_late_in(v, fi.onset_ns);
+            v2_late_in(v, fi.poll_ns);
             rf = ysig_frame(&v->g, &fi);
             YRT_ZONE_END(zs);
             if (rf < 0) { pl_fail(p, "template '%s': ysig_frame", v->def->name); return -1; }
@@ -4583,6 +5026,7 @@ int pl_v2_trial_rows(pl_player* p);
 int pl_v2_trial_rows(pl_player* p) {
     pl_v2* v = p->tmpl ? p->tmpl->v2 : NULL;
     if (!v) return 0;
+    v->end_bar = v->g.t_cover;
     if (p->v2s->bnd_max > 0 && v->has_graph && v->rows_open && v2_horizon_all(p) < v->g.t_cover - 1) {
         p->v2s->flush_pend = v;
         return 0;
@@ -4597,7 +5041,18 @@ int pl_v2_barrier_wait(pl_player* p) {
     pl_v2_session* S = p->v2s;
     pl_v2* v = S ? S->flush_pend : NULL;
     if (!v) return 0;
-    if (v2_horizon_all(p) < v->g.t_cover - 1) return 1;
+    /* a real run: the barrier as it was at the trial's end. The graph
+     * still takes every sample, so its t_cover moves on; with two mice
+     * moving, the horizon (the older of their newest stamps) never reached
+     * the newest, and the flush waited until the hands stopped
+     * (real_test.py signals_examples, visuomotor: 14 s, in which the
+     * waiting graph's logs filled and a late report fell back). What the
+     * trial's rows read is complete once its own input is; a report after
+     * its end and before the flush's barrier that comes after the flush
+     * goes into its raw mouse's integrator (sig.h's H1), exact, and a real
+     * run has only those adapters. --sim keeps the newest (a pen's held
+     * value, the model's harness seed 102928) */
+    if (v2_horizon_all(p) < (S->real ? v->end_bar : v->g.t_cover) - 1) return 1;
     S->flush_pend = NULL;
     return v2_trial_rows_now(p, v) < 0 ? -1 : 0;
 }
@@ -4713,13 +5168,12 @@ int pl_v2_streams(pl_player* p) {
 
 /* Per signal role: the adapter's name, the device, the type, the units,
  * the scale, and the recenter steps skipped (3.15, D40); the samples. */
-int pl_v2_session_json(pl_player* p, yjs_arena* a, yjs_value* s) {
+static yjs_value* v2_sigroles_json(pl_player* p, yjs_arena* a) {
     pl_v2_session* S = p->v2s;
     yjs_value* arr;
     int i;
     static const char* const tn[] = { "position2d", "position2d_relative", "position3d", "scalar", "gaze" };
     static const char* const un[] = { "display_px", "display_cm", "display_deg", "workspace_cm", "device" };
-    if (!S || p->def->n_sigroles == 0) return 0;
     arr = yjs_new(a, YJS_ARRAY);
     for (i = 0; i < p->def->n_sigroles; i++) {
         const yexp_sigrole* r = &p->def->sigroles[i];
@@ -4729,11 +5183,99 @@ int pl_v2_session_json(pl_player* p, yjs_arena* a, yjs_value* s) {
         yjs_set(a, o, "device", yjs_new_stringz(a, p->args.samples_path ? "--samples" : "none"));
         yjs_set(a, o, "type", yjs_new_stringz(a, tn[r->type]));
         yjs_set(a, o, "units", yjs_new_stringz(a, un[r->units]));
-        yjs_set(a, o, "per_count", yjs_new_double(a, S->gain ? S->gain[i] : 0));
+        if (S->sig && S->sig[i].sg) {
+            /* the profile's adapter (D40, devices_spec.md 11.2 "The data"):
+             * its numbers in its own units, the factor to the role's */
+            const struct v2_sig* g = &S->sig[i];
+            const yrig_signal* sg = g->sg;
+            yjs_value* pc = yjs_new(a, YJS_ARRAY);
+            yjs_push(a, pc, yjs_new_double(a, sg->per_count[0]));
+            yjs_push(a, pc, yjs_new_double(a, sg->per_count[1]));
+            yjs_set(a, o, "adapter", yjs_new_stringz(a, yrig_adapter_name(sg->adapter)));
+            yjs_set(a, o, "device", yjs_new_stringz(a, sg->device == YRIG_DEVICE_CLICK ? "click" : "any"));
+            yjs_set(a, o, "per_count", pc);
+            yjs_set(a, o, "adapter_units", yjs_new_stringz(a, yrig_units_name(sg->units)));
+            yjs_set(a, o, "factor", yjs_new_double(a, g->factor));
+            if (sg->bounded) {
+                yjs_value* b = yjs_new(a, YJS_OBJECT);
+                yjs_value* lo = yjs_new(a, YJS_ARRAY);
+                yjs_value* hi = yjs_new(a, YJS_ARRAY);
+                yjs_push(a, lo, yjs_new_double(a, sg->lo[0]));
+                yjs_push(a, lo, yjs_new_double(a, sg->lo[1]));
+                yjs_push(a, hi, yjs_new_double(a, sg->hi[0]));
+                yjs_push(a, hi, yjs_new_double(a, sg->hi[1]));
+                yjs_set(a, b, "lo", lo);
+                yjs_set(a, b, "hi", hi);
+                yjs_set(a, o, "bounds", b);
+            } else {
+                yjs_set(a, o, "bounds", yjs_new(a, YJS_NULL));
+            }
+            /* the bound the player used, and whether the profile stated it */
+            yjs_set(a, o, "late_s", yjs_new_fixed(a, S->bnd[i], 9));
+            yjs_set(a, o, "late_s_from", yjs_new_stringz(a, sg->late_ns >= 0 ? "profile" : S->real ? "default" : "none"));
+            if (S->real) {
+                yjs_set(a, o, "late_seen_s", yjs_new_fixed(a, g->late_max, 9));
+                yjs_set(a, o, "samples", yjs_new_int(a, g->fed));
+                if (g->dev) {
+                    yjs_value* m = yjs_new(a, YJS_OBJECT);
+                    yjs_set(a, m, "id", yjs_new_int(a, (int64_t)g->dev));
+                    yjs_set(a, m, "name", yjs_new_stringz(a, g->dev_name));
+                    yjs_set(a, o, "mouse", m);
+                } else {
+                    yjs_set(a, o, "mouse", yjs_new(a, YJS_NULL));
+                }
+            }
+            yjs_set(a, o, "rig_sha256", yjs_new_stringz(a, p->rig_hash));
+        } else if (S->sig && S->sig[i].optional_unbound) {
+            yjs_set(a, o, "adapter", yjs_new_stringz(a, "none"));
+            yjs_set(a, o, "device", yjs_new_stringz(a, "none"));
+            yjs_set(a, o, "per_count", yjs_new_double(a, 0));
+        } else {
+            yjs_set(a, o, "per_count", yjs_new_double(a, S->gain ? S->gain[i] : 0));
+        }
         yjs_set(a, o, "calibration_sha256", yjs_new_stringz(a, ""));
         yjs_push(a, arr, o);
     }
-    yjs_set(a, s, "signal_roles", arr);
+    return arr;
+}
+
+/* A real run's binding data, at the session's end: the clicks that bound
+ * a mouse and the removals, in order, times from the session's first
+ * frame; the raw mice's counts not fed. */
+static int v2_bindings_json(pl_player* p, yjs_arena* a) {
+    pl_v2_session* S = p->v2s;
+    int i;
+    {
+        yjs_value* bl = yjs_new(a, YJS_ARRAY);
+        yjs_value* rm = yjs_new(a, YJS_OBJECT);
+        for (i = 0; i < S->n_binds; i++) {
+            const struct v2_bind* b = &S->binds[i];
+            yjs_value* o = yjs_new(a, YJS_OBJECT);
+            yjs_set(a, o, "role", yjs_new_stringz(a, p->def->sigroles[b->role].name));
+            yjs_set(a, o, "event", yjs_new_stringz(a, b->removed ? "removed" : "click"));
+            yjs_set(a, o, "mouse", yjs_new_int(a, (int64_t)b->dev));
+            yjs_set(a, o, "name", yjs_new_stringz(a, b->name));
+            yjs_set(a, o, "t_s", yjs_new_fixed(a, p->t0_session && b->t > p->t0_session ? b->t - p->t0_session : 0, 9));
+            yjs_push(a, bl, o);
+        }
+        if (yds_session_set(&p->ds, "signal_bindings", bl) < 0) return -1;
+        yjs_set(a, rm, "other_mice", yjs_new_int(a, S->n_other));
+        yjs_set(a, rm, "device0", yjs_new_int(a, S->n_dev0));
+        yjs_set(a, rm, "absolute", yjs_new_int(a, S->n_absolute));
+        yjs_set(a, rm, "wheel", yjs_new_int(a, S->n_wheel));
+        yjs_set(a, rm, "refused_clicks", yjs_new_int(a, S->n_refused));
+        yjs_set(a, rm, "samples_lost", yjs_new_int(a, S->n_live_lost));
+        yjs_set(a, rm, "inputs_lost", yjs_new_int(a, S->n_keys_lost));
+        if (yds_session_set(&p->ds, "raw_mice", rm) < 0) return -1;
+    }
+    /* the roles again: the bound mice, the samples, the lateness seen */
+    return yds_session_set(&p->ds, "signal_roles", v2_sigroles_json(p, a));
+}
+
+int pl_v2_session_json(pl_player* p, yjs_arena* a, yjs_value* s) {
+    pl_v2_session* S = p->v2s;
+    if (!S || p->def->n_sigroles == 0) return 0;
+    yjs_set(a, s, "signal_roles", v2_sigroles_json(p, a));
     yjs_set(a, s, "recenter_skipped", yjs_new_int(a, S->recenter_skipped));
     return 0;
 }
@@ -4822,6 +5364,7 @@ int pl_v2_session_end(pl_player* p, yjs_arena* a) {
     int64_t c[PL_ARM_COUNTS];
     yjs_value* o;
     int i;
+    if (p->v2s && p->v2s->real && v2_bindings_json(p, a) < 0) return -1;
     if (!pl_v2_arm_counts(p, c)) return 0;
     o = yjs_new(a, YJS_OBJECT);
     for (i = 0; i < PL_ARM_COUNTS; i++) yjs_set(a, o, name[i], yjs_new_int(a, c[i]));

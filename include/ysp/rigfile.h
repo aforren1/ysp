@@ -1,13 +1,13 @@
-/* ysp/rigfile.h - v0.5.2 - public domain single-header rig profile
+/* ysp/rigfile.h - v0.6.0 - public domain single-header rig profile
  *
  *   The file on a rig that says which device plays each role and what the
  *   rig's loopbacks measured, kept outside every pack (docs/devices_spec.md
  *   11.2, decided 2026-10-09): "ysp-rig 1", JSON in one canonical form,
  *   in the user's config folder. Load it with errors that name the field,
  *   check every loopback file it names by SHA-256, give a role's desc for
- *   ysp/device.h and open the instance, give the viewing geometry,
- *   change a binding, store a loopback result, write it back canonically,
- *   and give its hash for the data file header.
+ *   ysp/device.h and open the instance, give the viewing geometry and
+ *   the signal adapters, change a binding, store a loopback result, write
+ *   it back canonically, and give its hash for the data file header.
  *
  *   REQUIRES ysp/device.h (and so ysp/rt.h, ysp/input.h, ysp/box.h,
  *   ysp/serial.h) and ysp/json.h beside it; this header includes them, and
@@ -52,6 +52,8 @@
  *     display   { onset_offset_s, latency, calibration: { file, sha256 } }
  *     view      { distance_mm, width_mm, width_px }, all required
  *               (v0.5.0, VIEWING GEOMETRY)
+ *     signals   { NAME: signal, ... }, at most 16; NAME as a role's
+ *               (v0.6.0, SIGNALS)
  *   A role:
  *     family    a ysp/box.h family name: xid, line, photo, triggerbox,
  *               biosemi, mmbts, lines, parallel; or lsl, a Lab
@@ -85,11 +87,13 @@
  *   trailing zeros (0.000577, 2); millimeters as the shortest decimal that
  *   reads back as the same double (570, 518.4); a default is left out
  *   (options with no option, latched false, an unset pulse, an empty
- *   button map, no view). The profile's hash, yrig_hash(), is the SHA-256
- *   of these bytes, so it does not change with the whitespace or number
- *   spelling of a hand edit. A profile without view has the bytes, and so
- *   the hash, that v0.4.0 gave it; adding or changing view changes the
- *   hash, as it changes every size in degrees.
+ *   button map, no view, no signals, device "any", an unset late_s, a
+ *   per_count of equal lanes as one number). The profile's hash,
+ *   yrig_hash(), is the SHA-256 of these bytes, so it does not change with
+ *   the whitespace or number spelling of a hand edit. A profile without
+ *   view has the bytes, and so the hash, that v0.4.0 gave it; adding or
+ *   changing view changes the hash, as it changes every size in degrees.
+ *   A profile without signals has the bytes that v0.5.2 gave it.
  *
  *   ---------------------------------------------------------------------
  *   VIEWING GEOMETRY
@@ -108,6 +112,38 @@
  *   does not change with the window. A full-screen mode of another width
  *   scales the image: measure again in that mode. The geometry is the
  *   rig's, never a pack's (docs/experiment_format.md, D4).
+ *
+ *   ---------------------------------------------------------------------
+ *   SIGNALS
+ *   ---------------------------------------------------------------------
+ *   signals says which device feeds each signal role of a version 2
+ *   definition (docs/experiment_format.md 3.5), in which units, at which
+ *   scale: the rig's part of an adapter (docs/devices_spec.md 11.2, "The
+ *   signal block"; gap G18). A signal is not a ysp/device.h role: a raw
+ *   mouse comes through ysp/screen.h's desc.raw_mice and has no match key.
+ *     adapter    "raw_mouse", a raw mouse's counts, integrated; the only
+ *                preset                                         required
+ *     units      the adapter's: "display_px", "display_cm",
+ *                "display_deg", "workspace_cm", "device"        required
+ *     per_count  the scale per count in units: a number for both lanes,
+ *                or [x, y]; each not 0, magnitude at most 1e6; a
+ *                negative y turns y up                          required
+ *     bounds     { lo: [x, y], hi: [x, y] } in units, lo below hi in
+ *                each lane, each magnitude at most 1e9: the integrator's
+ *                bounds
+ *     device     "any", every raw mouse's counts (the default); "click",
+ *                the mouse of a click at the start
+ *     late_s     the longest time after its stamp that a report of this
+ *                device reaches the program, measured on this rig, 0 to
+ *                1; unset, the program's default
+ *   A raw_mouse signal with device "any" must be the only raw_mouse
+ *   signal: it takes every mouse's counts, a bound one's too.
+ *   yrig_units_factor() gives the factor from one unit to another: 1 for
+ *   the same units; for two display units, through view (width_px /
+ *   width_mm pixels per mm, yrig_ppd() per degree); else 0, which the
+ *   program refuses. The program checks a definition's roles against the
+ *   signals, lowers each adapter and binds a "click" mouse; this header
+ *   reads, checks and writes the block only.
  *
  *   ---------------------------------------------------------------------
  *   LOOPBACK FILES
@@ -189,6 +225,13 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.6.0 - signals: one adapter per signal role (SIGNALS; yrig_signal,
+ *          yrig_find_signal(), yrig_add_signal(), yrig_remove_signal(),
+ *          yrig_units_factor(), yrig_units_name(), yrig_adapter_name()).
+ *          yrig_profile grows (n_signals, signal[]). A profile without
+ *          signals writes and hashes as in v0.5.2; a v0.5.2 reader refuses
+ *          signals (an unknown key). Gap G18 of docs/experiment_format.md,
+ *          the profile's part.
  *   v0.5.2 - macOS: a save's temporary file gets fcntl(F_FULLFSYNC) before
  *          the rename, and fsync() only when the volume refuses it.
  *          fsync() alone left it in the drive's write cache, so a power
@@ -237,6 +280,10 @@
  *   v0.1.0 - first version: the "ysp-rig 1" format, load, check, write,
  *          hash, bind, store a loopback result.
  *
+ *   STATUS: v0.6.0, 2026-11-16 (docs/device.md, "The signal adapters"):
+ *   tests/adapt/rigfile_test.c on Linux (GCC 12), Release and ASan with
+ *   UBSan. The player (0.13.0) reads them: docs/player.md, "Signal roles
+ *   on a rig".
  *   STATUS: v0.5.2, 2026-11-04 (docs/device.md, "F_FULLFSYNC on
  *   macOS"): an Apple M2 Mac mini, macOS 27.0.1, Apple clang 21, APFS;
  *   tests/adapt/rigfile_test.c counts one F_FULLFSYNC on the file and one
@@ -257,9 +304,9 @@
 #define YSP_RIGFILE_H_INCLUDED
 
 #define YRIG_VERSION_MAJOR 0
-#define YRIG_VERSION_MINOR 5
-#define YRIG_VERSION_PATCH 2
-#define YRIG_VERSION_STRING "0.5.2"
+#define YRIG_VERSION_MINOR 6
+#define YRIG_VERSION_PATCH 0
+#define YRIG_VERSION_STRING "0.6.0"
 
 #include "ysp/device.h"
 #include "ysp/json.h"
@@ -280,6 +327,7 @@ extern "C" {
 #define YRIG_MAX_ROLES   YDEV_MAX_ROLES
 #define YRIG_MAX_BUTTONS 16
 #define YRIG_MAX_NOTES   16
+#define YRIG_MAX_SIGNALS 16
 #define YRIG_MAX_BYTES   ((size_t)1 << 20)
 
 /* The family id of "lsl": a Lab Streaming Layer stream, started with
@@ -309,6 +357,16 @@ extern "C" {
 #define YRIG_FILE_OUT_LATENCY   1   /* "ysp-out-latency 1"                     */
 #define YRIG_FILE_IN_BOUNDS     2   /* "ysp-in-bounds 1"                       */
 #define YRIG_FILE_DISPLAY_ONSET 3   /* "ysp-display-onset 1"                   */
+
+/* A signal's adapter, units and device (SIGNALS); 0 is none. */
+#define YRIG_ADAPTER_RAW_MOUSE   1
+#define YRIG_UNITS_DISPLAY_PX    1
+#define YRIG_UNITS_DISPLAY_CM    2
+#define YRIG_UNITS_DISPLAY_DEG   3
+#define YRIG_UNITS_WORKSPACE_CM  4
+#define YRIG_UNITS_DEVICE        5
+#define YRIG_DEVICE_ANY          0
+#define YRIG_DEVICE_CLICK        1
 
 /* A loopback's summary: latency (an output, the display) uses n, p5,
  * median, p95, max; bounds (an input) uses n, lo, hi. */
@@ -363,6 +421,18 @@ typedef struct yrig_view {
     int32_t  width_px;           /* the pixels across width_mm                */
 } yrig_view;
 
+/* One signal role's adapter (v0.6.0, SIGNALS). */
+typedef struct yrig_signal {
+    char     name[32];
+    int      adapter;            /* YRIG_ADAPTER_*                            */
+    int      units;              /* YRIG_UNITS_*                              */
+    int      device;             /* YRIG_DEVICE_ANY or YRIG_DEVICE_CLICK      */
+    double   per_count[2];       /* x, y: units per count                     */
+    bool     bounded;            /* lo and hi hold                            */
+    double   lo[2], hi[2];
+    int64_t  late_ns;            /* -1 = not stated: the program's default    */
+} yrig_signal;
+
 typedef struct yrig_profile {
     char         rig[64];
     char         written[24];
@@ -370,6 +440,8 @@ typedef struct yrig_profile {
     yrig_role    role[YRIG_MAX_ROLES];
     yrig_display display;
     yrig_view    view;           /* v0.5.0                                    */
+    int          n_signals;      /* v0.6.0                                    */
+    yrig_signal  signal[YRIG_MAX_SIGNALS];
     char         dir[512];       /* the folder of loopback/; "" = none       */
     int          n_notes;
     char         notes[YRIG_MAX_NOTES][160];   /* what the checks found      */
@@ -408,6 +480,18 @@ YRIG_API int  yrig_bind(yrig_profile* p, const char* role, int family, const cha
 /* Pixels per degree of visual angle at the screen's center, from view;
  * 0 when the profile has none (VIEWING GEOMETRY). */
 YRIG_API double yrig_ppd(const yrig_profile* p);
+/* Signals (SIGNALS). add: the signal, added with adapter and units 0
+ * (which a write refuses until they are set), device any, per_count 1
+ * and late_ns -1 when it is new; NULL for a bad name or a full table. */
+YRIG_API yrig_signal* yrig_find_signal(const yrig_profile* p, const char* name);
+YRIG_API yrig_signal* yrig_add_signal(yrig_profile* p, const char* name);
+YRIG_API bool yrig_remove_signal(yrig_profile* p, const char* name);
+/* The factor from units from to units to (YRIG_UNITS_*): 1 for the same
+ * units, through view for two display units, else 0. */
+YRIG_API double yrig_units_factor(const yrig_profile* p, int from, int to);
+/* "display_px", ...; "raw_mouse"; "" for 0 or an unknown id. */
+YRIG_API const char* yrig_units_name(int units);
+YRIG_API const char* yrig_adapter_name(int adapter);
 
 /* --- loopback files ------------------------------------------------------------ */
 /* Writes data to dir/loopback/<sha256>.txt; sha_hex gets the name. */
@@ -494,6 +578,12 @@ YRIG_API const char* yrig_check_name(int check) {
     default:                 return "?";
     }
 }
+
+static const char* const yrig__units[6] = { "", "display_px", "display_cm", "display_deg", "workspace_cm", "device" };
+static const char* const yrig__adapters[2] = { "", "raw_mouse" };
+
+YRIG_API const char* yrig_units_name(int units) { return units >= 1 && units <= 5 ? yrig__units[units] : ""; }
+YRIG_API const char* yrig_adapter_name(int adapter) { return adapter == YRIG_ADAPTER_RAW_MOUSE ? yrig__adapters[1] : ""; }
 
 static int yrig__err(char* err, size_t cap, int code, const char* fmt, ...) {
     va_list ap;
@@ -1094,6 +1184,110 @@ static int yrig__view(yrig__rd* r, const yjs_value* o, yrig_view* w) {
     return YRIG_OK;
 }
 
+/* The index of v's string in names[1..n], or 0. */
+static int yrig__pick(const yjs_value* v, const char* const* names, int n) {
+    int k;
+    for (k = 1; k <= n; k++)
+        if (strlen(names[k]) == v->n && memcmp(names[k], v->u.s, v->n) == 0) return k;
+    return 0;
+}
+
+/* Two numbers, [x, y]; or, with one_ok, one number for both. Each finite,
+ * magnitude at most lim, and not 0 when nonzero. */
+static int yrig__xy(yrig__rd* r, const yjs_value* v, const char* field, double out[2], double lim, bool one_ok, bool nonzero) {
+    int k;
+    const char* shape = one_ok ? "must be a number or [x, y]" : "must be [x, y]";
+    if (v->type == YJS_NUMBER && one_ok) {
+        if (yjs_double(v, &out[0]) != YJS_OK) return yrig__bad(r, v, field, "%s", shape);
+        out[1] = out[0];
+    } else if (v->type == YJS_ARRAY && v->n == 2) {
+        for (k = 0; k < 2; k++)
+            if (yjs_at(v, (size_t)k)->type != YJS_NUMBER || yjs_double(yjs_at(v, (size_t)k), &out[k]) != YJS_OK)
+                return yrig__bad(r, v, field, "%s", shape);
+    } else {
+        return yrig__bad(r, v, field, "%s", shape);
+    }
+    for (k = 0; k < 2; k++) {
+        /* !(a <= b) also takes a NaN, which no JSON number gives but an
+         * overflow to infinity can */
+        if (!(fabs(out[k]) <= lim)) return yrig__bad(r, v, field, "a magnitude above %g", lim);
+        if (nonzero && out[k] == 0.0) return yrig__bad(r, v, field, "must not be 0");
+    }
+    return YRIG_OK;
+}
+
+static int yrig__signal(yrig__rd* r, const yjs_member* m, yrig_signal* sg) {
+    static const char* const keys[] = { "adapter", "units", "per_count", "bounds", "device", "late_s", NULL };
+    static const char* const bkeys[] = { "lo", "hi", NULL };
+    static const char* const devices[3] = { "", "any", "click" };
+    const yjs_value* o = m->value;
+    const yjs_value* v;
+    char f[96];
+    int rc, k;
+    if (!yrig__name_ok(m->key, 31, true)) {
+        uint32_t line, col;
+        yjs_line_col(r->text, r->n, m->key_pos, &line, &col);
+        return yrig__err(r->err, r->cap, YRIG_ERR_FORMAT,
+                         "%s: signals: \"%.40s\" is not a role name (1 to 31 of A-Z a-z 0-9 _ . -) (line %u, column %u)", r->what, m->key,
+                         (unsigned)line, (unsigned)col);
+    }
+    memset(sg, 0, sizeof *sg);
+    sg->late_ns = -1;
+    yrig__copy(sg->name, sizeof sg->name, m->key, m->key_len);
+    snprintf(f, sizeof f, "signals.%s", sg->name);
+    if ((rc = yrig__keys(r, o, f, keys)) != YRIG_OK) return rc;
+    snprintf(f, sizeof f, "signals.%s.adapter", sg->name);
+    if (!(v = yjs_get(o, "adapter"))) return yrig__bad(r, o, f, "is missing");
+    if (v->type != YJS_STRING || !(sg->adapter = yrig__pick(v, yrig__adapters, 1)))
+        return yrig__bad(r, v, f, "must be \"raw_mouse\"");
+    snprintf(f, sizeof f, "signals.%s.units", sg->name);
+    if (!(v = yjs_get(o, "units"))) return yrig__bad(r, o, f, "is missing");
+    if (v->type != YJS_STRING || !(sg->units = yrig__pick(v, yrig__units, 5)))
+        return yrig__bad(r, v, f, "must be display_px, display_cm, display_deg, workspace_cm or device");
+    snprintf(f, sizeof f, "signals.%s.per_count", sg->name);
+    if (!(v = yjs_get(o, "per_count"))) return yrig__bad(r, o, f, "is missing");
+    if ((rc = yrig__xy(r, v, f, sg->per_count, 1e6, true, true)) != YRIG_OK) return rc;
+    if ((v = yjs_get(o, "bounds")) != NULL) {
+        snprintf(f, sizeof f, "signals.%s.bounds", sg->name);
+        if ((rc = yrig__keys(r, v, f, bkeys)) != YRIG_OK) return rc;
+        snprintf(f, sizeof f, "signals.%s.bounds.lo", sg->name);
+        if (!yjs_get(v, "lo")) return yrig__bad(r, v, f, "is missing");
+        if ((rc = yrig__xy(r, yjs_get(v, "lo"), f, sg->lo, 1e9, false, false)) != YRIG_OK) return rc;
+        snprintf(f, sizeof f, "signals.%s.bounds.hi", sg->name);
+        if (!yjs_get(v, "hi")) return yrig__bad(r, v, f, "is missing");
+        if ((rc = yrig__xy(r, yjs_get(v, "hi"), f, sg->hi, 1e9, false, false)) != YRIG_OK) return rc;
+        snprintf(f, sizeof f, "signals.%s.bounds", sg->name);
+        for (k = 0; k < 2; k++)
+            if (!(sg->lo[k] < sg->hi[k])) return yrig__bad(r, v, f, "lo below hi does not hold in %c", k ? 'y' : 'x');
+        sg->bounded = true;
+    }
+    if ((v = yjs_get(o, "device")) != NULL) {
+        snprintf(f, sizeof f, "signals.%s.device", sg->name);
+        if (v->type != YJS_STRING || !(k = yrig__pick(v, devices, 2))) return yrig__bad(r, v, f, "must be \"any\" or \"click\"");
+        sg->device = k == 2 ? YRIG_DEVICE_CLICK : YRIG_DEVICE_ANY;
+    }
+    snprintf(f, sizeof f, "signals.%s.late_s", sg->name);
+    return yrig__secs(r, o, "late_s", f, &sg->late_ns, 0, (int64_t)1000000000, false);
+}
+
+/* A raw_mouse signal with device "any" takes every mouse's counts, so it
+ * must be the only raw_mouse signal: beside another, one mouse's motion
+ * would drive two roles. */
+static int yrig__signals_check(const yrig_profile* p, char* err, size_t cap, const char* what) {
+    int i, mice = 0, any = -1;
+    for (i = 0; i < p->n_signals; i++) {
+        if (p->signal[i].adapter != YRIG_ADAPTER_RAW_MOUSE) continue;
+        mice++;
+        if (p->signal[i].device == YRIG_DEVICE_ANY && any < 0) any = i;
+    }
+    if (any >= 0 && mice > 1)
+        return yrig__err(err, cap, YRIG_ERR_FORMAT,
+                         "%s: signals.%s: device \"any\" takes every mouse, so it must be the only raw_mouse signal (bind each by "
+                         "\"click\")",
+                         what, p->signal[any].name);
+    return YRIG_OK;
+}
+
 static void yrig__note(yrig_profile* p, const char* fmt, ...) {
     va_list ap;
     if (p->n_notes >= YRIG_MAX_NOTES) return;
@@ -1268,7 +1462,7 @@ static void yrig__checks(yrig_profile* p, const char* dir) {
 }
 
 static int yrig__parse(yrig_profile* p, const char* text, size_t n, const char* dir, const char* what, char* err, size_t cap) {
-    static const char* const keys[] = { "format", "rig", "written", "roles", "display", "view", NULL };
+    static const char* const keys[] = { "format", "rig", "written", "roles", "display", "view", "signals", NULL };
     yjs_arena a;
     yjs_value* root;
     yjs_error e;
@@ -1314,6 +1508,15 @@ static int yrig__parse(yrig_profile* p, const char* text, size_t n, const char* 
     }
     if (rc == YRIG_OK && (v = yjs_get(root, "display")) != NULL) rc = yrig__display(&r, v, &p->display);
     if (rc == YRIG_OK && (v = yjs_get(root, "view")) != NULL) rc = yrig__view(&r, v, &p->view);
+    if (rc == YRIG_OK && (v = yjs_get(root, "signals")) != NULL) {
+        if (v->type != YJS_OBJECT) rc = yrig__bad(&r, v, "signals", "must be an object");
+        else if (v->n > YRIG_MAX_SIGNALS) rc = yrig__bad(&r, v, "signals", "more than %d signals", YRIG_MAX_SIGNALS);
+        for (i = 0; rc == YRIG_OK && i < v->n; i++) rc = yrig__signal(&r, &v->u.members[i], &p->signal[i]);
+        if (rc == YRIG_OK) {
+            p->n_signals = (int)v->n;
+            rc = yrig__signals_check(p, err, cap, what);
+        }
+    }
     yjs_arena_free(&a);
     if (rc != YRIG_OK) {
         memset(p, 0, sizeof *p);
@@ -1392,6 +1595,33 @@ static yjs_value* yrig__lb_json(yjs_arena* a, const yrig_loopback* lb, bool late
     return ok ? o : NULL;
 }
 
+static yjs_value* yrig__xy_json(yjs_arena* a, const double xy[2], bool one) {
+    yjs_value* v;
+    if (one && xy[0] == xy[1]) return yjs_new_double(a, xy[0]);
+    v = yjs_new(a, YJS_ARRAY);
+    if (!v || yjs_push(a, v, yjs_new_double(a, xy[0])) != YJS_OK || yjs_push(a, v, yjs_new_double(a, xy[1])) != YJS_OK) return NULL;
+    return v;
+}
+
+/* NULL for a value the format cannot hold; the read-back in yrig__bytes()
+ * refuses the ranges. */
+static yjs_value* yrig__signal_json(yjs_arena* a, const yrig_signal* sg) {
+    yjs_value* o = yjs_new(a, YJS_OBJECT);
+    const char* un = yrig_units_name(sg->units);
+    bool ok;
+    if (sg->adapter != YRIG_ADAPTER_RAW_MOUSE || !un[0] || (sg->device != YRIG_DEVICE_ANY && sg->device != YRIG_DEVICE_CLICK)) return NULL;
+    ok = o && yrig__set_str(a, o, "adapter", yrig__adapters[sg->adapter]) && yrig__set_str(a, o, "units", un) &&
+         yjs_set(a, o, "per_count", yrig__xy_json(a, sg->per_count, true)) == YJS_OK;
+    if (ok && sg->bounded) {
+        yjs_value* b = yjs_new(a, YJS_OBJECT);
+        ok = b && yjs_set(a, b, "lo", yrig__xy_json(a, sg->lo, false)) == YJS_OK &&
+             yjs_set(a, b, "hi", yrig__xy_json(a, sg->hi, false)) == YJS_OK && yjs_set(a, o, "bounds", b) == YJS_OK;
+    }
+    if (ok && sg->device == YRIG_DEVICE_CLICK) ok = yrig__set_str(a, o, "device", "click");
+    if (ok && sg->late_ns >= 0) ok = yrig__set_secs(a, o, "late_s", sg->late_ns);
+    return ok ? o : NULL;
+}
+
 static yjs_value* yrig__json(yjs_arena* a, const yrig_profile* p) {
     yjs_value* root = yjs_new(a, YJS_OBJECT);
     yjs_value* roles = yjs_new(a, YJS_OBJECT);
@@ -1435,6 +1665,13 @@ static yjs_value* yrig__json(yjs_arena* a, const yrig_profile* p) {
         ok = w && yjs_set(a, w, "distance_mm", yjs_new_double(a, p->view.distance_mm)) == YJS_OK &&
              yjs_set(a, w, "width_mm", yjs_new_double(a, p->view.width_mm)) == YJS_OK &&
              yjs_set(a, w, "width_px", yjs_new_int(a, p->view.width_px)) == YJS_OK && yjs_set(a, root, "view", w) == YJS_OK;
+    }
+    if (p->n_signals < 0 || p->n_signals > YRIG_MAX_SIGNALS) return NULL;
+    if (ok && p->n_signals > 0) {
+        yjs_value* sgs = yjs_new(a, YJS_OBJECT);
+        ok = sgs != NULL;
+        for (i = 0; ok && i < p->n_signals; i++) ok = yjs_set(a, sgs, p->signal[i].name, yrig__signal_json(a, &p->signal[i])) == YJS_OK;
+        if (ok) ok = yjs_set(a, root, "signals", sgs) == YJS_OK;
     }
     return ok ? root : NULL;
 }
@@ -1605,6 +1842,55 @@ YRIG_API double yrig_ppd(const yrig_profile* p) {
     /* ysp/gfx.h's YGFX_DEG scale, the same expression: one factor, exact
      * at the center, where a degree spans distance * tan(1 deg) mm */
     return (double)p->view.width_px / p->view.width_mm * p->view.distance_mm * tan(3.14159265358979323846 / 180.0);
+}
+
+YRIG_API yrig_signal* yrig_find_signal(const yrig_profile* p, const char* name) {
+    int i;
+    if (!p || !name) return NULL;
+    for (i = 0; i < p->n_signals && i < YRIG_MAX_SIGNALS; i++)
+        if (strcmp(p->signal[i].name, name) == 0) return (yrig_signal*)&p->signal[i];
+    return NULL;
+}
+
+YRIG_API yrig_signal* yrig_add_signal(yrig_profile* p, const char* name) {
+    yrig_signal* s = yrig_find_signal(p, name);
+    if (s) return s;
+    if (!p || !yrig__name_ok(name, 31, true) || p->n_signals < 0 || p->n_signals >= YRIG_MAX_SIGNALS) return NULL;
+    s = &p->signal[p->n_signals++];
+    memset(s, 0, sizeof *s);
+    yrig__copy(s->name, sizeof s->name, name, strlen(name));
+    s->per_count[0] = s->per_count[1] = 1.0;
+    s->late_ns = -1;
+    return s;
+}
+
+YRIG_API bool yrig_remove_signal(yrig_profile* p, const char* name) {
+    yrig_signal* s = yrig_find_signal(p, name);
+    int i;
+    if (!s) return false;
+    i = (int)(s - p->signal);
+    memmove(&p->signal[i], &p->signal[i + 1], (size_t)(p->n_signals - i - 1) * sizeof(yrig_signal));
+    p->n_signals--;
+    return true;
+}
+
+/* Pixels per unit of a display unit; 0 for another unit or with no view. */
+static double yrig__px_per(const yrig_profile* p, int units) {
+    if (units == YRIG_UNITS_DISPLAY_PX) return 1.0;
+    if (!p || !p->view.set || !(p->view.width_mm > 0.0) || p->view.width_px < 1) return 0.0;
+    if (units == YRIG_UNITS_DISPLAY_CM) return 10.0 * (double)p->view.width_px / p->view.width_mm;
+    if (units == YRIG_UNITS_DISPLAY_DEG) return yrig_ppd(p);
+    return 0.0;
+}
+
+YRIG_API double yrig_units_factor(const yrig_profile* p, int from, int to) {
+    double a, b;
+    if (from < 1 || from > 5 || to < 1 || to > 5) return 0.0;
+    /* the same units need no view, and the factor is exactly 1 */
+    if (from == to) return 1.0;
+    a = yrig__px_per(p, from);
+    b = yrig__px_per(p, to);
+    return a > 0.0 && b > 0.0 ? a / b : 0.0;
 }
 
 YRIG_API int yrig_store_loopback(const char* dir, const void* data, size_t n, char sha_hex[65], char* err, size_t cap) {

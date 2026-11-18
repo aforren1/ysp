@@ -35,6 +35,16 @@ Cases (--only takes one name):
                             TriggerBox) through player_alloc_test --real:
                             no heap call on the frame thread inside
                             pl_frame(), keys and codes included
+  signals                   G18: two signal roles fed by two uinput mice,
+                            each bound by a click (the first mouse twice:
+                            refused); the left mouse removed after trial
+                            2 and a third bound by a click; each hit, the
+                            bindings in session.json, the lateness seen
+                            (the mouse rule of 70-ysp-input.rules)
+  signals_examples          G18: bimanual (two mice by click) and
+                            visuomotor (one, device any) on uinput mice
+                            on circles for 15 s, then Shift+Esc: exit 3,
+                            no guard stop, every role fed
 
 The participant: a --sim run of the same seed gives each trial's key (the
 correct one) and how long the trial takes before its `from` stimulus and
@@ -49,6 +59,7 @@ import decimal
 import fcntl
 import hashlib
 import json
+import math
 import os
 import random
 import select
@@ -73,6 +84,8 @@ UI_SET_KEYBIT = 0x40045565
 UI_DEV_SETUP = 0x405C5503
 UI_DEV_CREATE = 0x5501
 UI_DEV_DESTROY = 0x5502
+UI_SET_RELBIT = 0x40045566
+EV_REL, REL_X, REL_Y, REL_WHEEL, BTN_LEFT = 2, 0, 1, 8, 0x110
 
 
 def check(cond, msg):
@@ -111,6 +124,53 @@ class Keyboard:
         return t0, t1
 
     def close(self):
+        try:
+            fcntl.ioctl(self.fd, UI_DEV_DESTROY)
+        finally:
+            os.close(self.fd)
+
+
+class Mouse:
+    """A uinput mouse: relative X and Y, a wheel and a left button, what udev
+    takes for a mouse (ID_INPUT_MOUSE) and ysp/screen.h's raw mouse reader
+    reads (tools/linux/70-ysp-input.rules)."""
+
+    def __init__(self, name):
+        self.fd = os.open("/dev/uinput", os.O_WRONLY | os.O_NONBLOCK)
+        fcntl.ioctl(self.fd, UI_SET_EVBIT, EV_KEY)
+        fcntl.ioctl(self.fd, UI_SET_KEYBIT, BTN_LEFT)
+        fcntl.ioctl(self.fd, UI_SET_EVBIT, EV_REL)
+        fcntl.ioctl(self.fd, UI_SET_RELBIT, REL_X)
+        fcntl.ioctl(self.fd, UI_SET_RELBIT, REL_Y)
+        fcntl.ioctl(self.fd, UI_SET_RELBIT, REL_WHEEL)
+        setup = struct.pack("HHHH80sI", 3, 0x1234, 0x5679, 1, name.encode(), 0)
+        fcntl.ioctl(self.fd, UI_DEV_SETUP, setup)
+        fcntl.ioctl(self.fd, UI_DEV_CREATE)
+        self.open = True
+
+    def _ev(self, typ, code, value):
+        return struct.pack("llHHi", 0, 0, typ, code, value)
+
+    def move(self, dx, dy):
+        buf = b""
+        if dx:
+            buf += self._ev(EV_REL, REL_X, dx)
+        if dy:
+            buf += self._ev(EV_REL, REL_Y, dy)
+        os.write(self.fd, buf + self._ev(EV_SYN, 0, 0))
+
+    def wheel(self, notches):
+        os.write(self.fd, self._ev(EV_REL, REL_WHEEL, notches) + self._ev(EV_SYN, 0, 0))
+
+    def click(self):
+        os.write(self.fd, self._ev(EV_KEY, BTN_LEFT, 1) + self._ev(EV_SYN, 0, 0))
+        time.sleep(0.05)
+        os.write(self.fd, self._ev(EV_KEY, BTN_LEFT, 0) + self._ev(EV_SYN, 0, 0))
+
+    def close(self):
+        if not self.open:
+            return
+        self.open = False
         try:
             fcntl.ioctl(self.fd, UI_DEV_DESTROY)
         finally:
@@ -1034,6 +1094,301 @@ def case_abort(ctx, kind):
     print("  %s: before %s; ramp set to %s; after %s" % (kind, before, changed, after), flush=True)
 
 
+SIG_DEF = {
+    "format": "ysp-experiment", "version": 2,
+    "display": {"units": "cm"},
+    "roles": {"left": {"type": "position2d_relative", "units": "display_cm"},
+              "right": {"type": "position2d_relative", "units": "display_cm"}},
+    "stimuli": {"dot": {"kind": "shape", "w": 0.5, "h": 0.5}},
+    "trials": {"t": {
+        "controls": {"lout": {"control": "region", "of": "left", "radius": 2, "outside": True},
+                     "rout": {"control": "region", "of": "right", "radius": 2, "outside": True}},
+        "states": [{"name": "l", "steps": [{"on": "dot"}], "exits": [{"on": "lout", "to": "r"}]},
+                   {"name": "r", "steps": [], "exits": [{"on": "rout", "to": "end"}]}],
+        "columns": {"lx": {"hit": "lout.x"}, "ry": {"hit": "rout.y"}}}},
+    "timeline": [{"name": "l", "trial": "t", "rules": ["reps 4"]}]}
+
+
+def sig_pack(ctx):
+    """SIG_DEF's pack, and a rig profile whose two signals are bound by
+    a click."""
+    work = os.path.join(ctx.out, "signals_src")
+    shutil.rmtree(work, ignore_errors=True)
+    os.makedirs(work)
+    with open(os.path.join(work, "experiment.json"), "w", newline="\n") as f:
+        json.dump(SIG_DEF, f)
+    with open(os.path.join(work, "pack.json"), "w", newline="\n") as f:
+        json.dump({"format": "ysp-pack-source", "version": 1,
+                   "experiment": {"entry": "experiment/main.json", "source": "experiment.json", "media_type": "application/vnd.ysp.experiment"},
+                   "resources": []}, f)
+    pack = os.path.join(ctx.out, "signals.ysppak")
+    subprocess.check_call([ctx.ypak, "build", "pack.json", "-o", pack], cwd=work, stdout=subprocess.DEVNULL)
+    rig = make_rig(ctx, "signals")
+    with open(rig) as f:
+        prof = json.load(f)
+    # 0.0078125 cm a count (trial_bimanual's 0.25 px at 32 px a cm)
+    prof["signals"] = {r: {"adapter": "raw_mouse", "units": "display_cm", "per_count": 0.0078125, "device": "click"} for r in ("left", "right")}
+    with open(rig, "w", newline="\n") as f:
+        json.dump(prof, f, indent=2, sort_keys=True)
+    return pack, rig
+
+
+def case_livecap(ctx):
+    """A poll with more raw mouse samples than its buffer holds stops the
+    session (0.13.2; 0.13.0 dropped the counts and only counted them):
+    --test-live-cap 16, two mice bound by click, then 200 reports of the
+    left mouse within one frame."""
+    print("== livecap", flush=True)
+    pack, rig = sig_pack(ctx)
+    d = os.path.join(ctx.out, "livecap_real")
+    shutil.rmtree(d, ignore_errors=True)
+    cmd = [ctx.player, pack, "--out", d, "--seed", "11", "--field", "participant=1", "--rig", rig, "--test-live-cap", "16"]
+    cfg = os.path.join(ctx.out, "config")
+    os.makedirs(cfg, mode=0o700, exist_ok=True)
+    ma, mb = Mouse("ysp-cap-mouse-a"), Mouse("ysp-cap-mouse-b")
+    time.sleep(1.5)   # X adds a new device about a second after its node
+    lines = []
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=dict(os.environ, XDG_CONFIG_HOME=cfg))
+    th = threading.Thread(target=lambda: [lines.append(l) for l in p.stdout], daemon=True)
+    th.start()
+    try:
+        end = time.monotonic() + 10
+        while time.monotonic() < end and not any("signal role 'left'" in l for l in lines):
+            time.sleep(0.01)
+        time.sleep(0.3)
+        if not check(focus_pid() == p.pid, "livecap: the player's window has no focus; no click sent"):
+            return
+        ma.click()
+        time.sleep(0.3)
+        mb.click()
+        time.sleep(0.5)
+        for _ in range(200):
+            ma.move(1, 0)
+        try:
+            p.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            pass
+    finally:
+        if p.poll() is None:
+            p.kill()
+            p.wait()
+            restore_display()
+        ma.close()
+        mb.close()
+    th.join(timeout=2)
+    out = "".join(lines)
+    check(p.returncode not in (0, 3, None) and "more than 16 raw mouse samples in one poll" in out,
+          "livecap: a full poll buffer stops the session: exit %s %s" % (p.returncode, out[-600:]))
+
+
+def case_signals(ctx):
+    """G18: two signal roles fed by two uinput mice, each bound by a click
+    at the start (a second click of the first mouse is refused); the trials
+    run on their counts; the left mouse removed in trial 3, which waits on
+    it, and a third one bound by a click then. Then the data: each hit, the
+    bindings in order, the lateness seen."""
+    print("== signals", flush=True)
+    pack, rig = sig_pack(ctx)
+    d = os.path.join(ctx.out, "signals_real")
+    shutil.rmtree(d, ignore_errors=True)
+    cmd = [ctx.player, pack, "--out", d, "--seed", "11", "--field", "participant=1", "--rig", rig, "--measure"]
+    if ctx.windowed:
+        cmd += ["--windowed"]
+    cfg = os.path.join(ctx.out, "config")
+    os.makedirs(cfg, mode=0o700, exist_ok=True)
+    ma, mb = Mouse("ysp-test-mouse-a"), Mouse("ysp-test-mouse-b")
+    mc = None
+    time.sleep(1.5)   # X adds a new device about a second after its node
+    lines = []
+    q = []
+
+    def reader(p):
+        for line in p.stdout:
+            lines.append(line)
+            q.append(line)
+
+    def wait_for(text, timeout=10.0):
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            for i, line in enumerate(q):
+                if text in line:
+                    del q[:i + 1]
+                    return True
+            time.sleep(0.01)
+        return False
+
+    def reach(m, dx, dy):
+        # 300 counts (2.34 cm, past the 2 cm region) in 30 reports 2 ms
+        # apart, then back in one report
+        for _ in range(30):
+            m.move(dx, dy)
+            time.sleep(0.002)
+        time.sleep(0.05)
+        m.move(-30 * dx, -30 * dy)
+
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=dict(os.environ, XDG_CONFIG_HOME=cfg))
+    th = threading.Thread(target=reader, args=(p,), daemon=True)
+    th.start()
+    try:
+        if not check(wait_for("running") and wait_for("click the mouse for signal role 'left'"), "signals: no prompt: %s" % "".join(lines)[-800:]):
+            return
+        time.sleep(0.3)
+        if not check(focus_pid() == p.pid, "signals: the player's window has no focus; no click sent"):
+            return
+        ma.click()
+        check(wait_for("signal role 'left': mouse"), "signals: the first click binds left: %s" % "".join(lines)[-400:])
+        ma.click()
+        check(wait_for("refused: that mouse is bound to signal role 'left'"), "signals: the same mouse again is refused: %s" % "".join(lines)[-400:])
+        # 3 counts before the last click: the session starts at it, so they
+        # are dropped and trial 0's hit is on the grid from 0 (2.03125)
+        ma.move(3, 0)
+        time.sleep(0.1)
+        mb.click()
+        check(wait_for("signal role 'right': mouse"), "signals: the second mouse binds right: %s" % "".join(lines)[-400:])
+        # 3 scroll reports, one from each mouse and one more: the wheel's
+        # own count, not a tablet's (0.13.0 counted them as absolute)
+        for m in (ma, mb, mb):
+            m.wheel(1)
+            time.sleep(0.02)
+        for i in range(4):
+            time.sleep(0.3)
+            if i == 2:
+                ma.close()
+                check(wait_for("signal role 'left': its mouse"), "signals: the removal is seen, in a trial: %s" % "".join(lines)[-400:])
+                check(wait_for("click the mouse for signal role 'left'"), "signals: asked again: %s" % "".join(lines)[-400:])
+                mc = Mouse("ysp-test-mouse-c")
+                time.sleep(1.5)
+                mc.click()
+                check(wait_for("signal role 'left': mouse"), "signals: the third mouse binds left: %s" % "".join(lines)[-400:])
+                time.sleep(0.3)
+            reach(mc if i >= 2 else ma, 10, 0)
+            time.sleep(0.1)
+            reach(mb, 0, 10)
+        try:
+            p.wait(timeout=20)
+        except subprocess.TimeoutExpired:
+            pass
+    finally:
+        if p.poll() is None:
+            p.kill()
+            p.wait()
+            restore_display()
+        for m in (ma, mb, mc):
+            if m:
+                m.close()
+    th.join(timeout=2)
+    out = "".join(lines)
+    if not check(p.returncode == 0, "signals: exit %s: %s" % (p.returncode, out[-800:])):
+        return
+    rows = read_csv(os.path.join(d, "trials.csv"))
+    check(len(rows) == 4 and all(float(r["lx"]) >= 2 and float(r["ry"]) >= 2 for r in rows),
+          "signals: 4 trials, each with left's hit past 2 cm in x and right's in y: %s" % [(r.get("lx"), r.get("ry")) for r in rows])
+    check(rows and rows[0]["lx"] == "2.03125", "signals: the counts before the last click are not in trial 0's hit: %s" % (rows[0].get("lx") if rows else None))
+    with open(os.path.join(d, "session.json")) as f:
+        sj = json.load(f)
+    b = [(x["role"], x["event"]) for x in sj.get("signal_bindings", [])]
+    check(b == [("left", "click"), ("right", "click"), ("left", "removed"), ("left", "click")], "signals: the bindings in order: %s" % b)
+    # by name: X gives a removed device's id to the next one (here the
+    # third mouse got the first one's 20)
+    names = [x["name"] for x in sj.get("signal_bindings", [])]
+    check(names == ["ysp-test-mouse-a", "ysp-test-mouse-b", "ysp-test-mouse-a", "ysp-test-mouse-c"], "signals: the mice: %s" % names)
+    rm = sj.get("raw_mice", {})
+    check(rm.get("refused_clicks") == 1 and rm.get("samples_lost") == 0 and rm.get("inputs_lost") == 0, "signals: raw_mice: %s" % rm)
+    check(rm.get("wheel") == 3 and rm.get("absolute") == 0, "signals: 3 scroll reports counted as wheel, none as absolute: %s" % rm)
+    for sr in sj.get("signal_roles", []):
+        print("  %s: mouse %s, samples %s, late_s %s (%s), late_seen_s %s" % (sr["name"], sr.get("mouse"), sr.get("samples"), sr.get("late_s"),
+              sr.get("late_s_from"), sr.get("late_seen_s")), flush=True)
+        # 31 reports a trial; the last trial's return may come after the end
+        check(sr.get("adapter") == "raw_mouse" and sr.get("samples", 0) >= 4 * 31 - 1, "signals: %s fed: %s" % (sr["name"], sr))
+
+
+def case_signals_examples(ctx):
+    """G18: the version 2 examples (bimanual: two roles bound by click;
+    visuomotor: one role, device any) on real mice: each for 15 s with
+    the mice on circles at 500 reports a second, then Shift+Esc. The real
+    path runs them: exit 3, no guard stop, every role fed."""
+    for name, sigs in (("bimanual", {r: {"adapter": "raw_mouse", "units": "display_cm", "per_count": 0.0078125, "device": "click"} for r in ("left", "right")}),
+                       ("visuomotor", {"hand": {"adapter": "raw_mouse", "units": "display_px", "per_count": 0.25}})):
+        print("== signals_examples %s" % name, flush=True)
+        pack, definition = build_pack(ctx, name)
+        rig = make_rig(ctx, "sx_" + name)
+        with open(rig) as f:
+            prof = json.load(f)
+        prof["signals"] = sigs
+        with open(rig, "w", newline="\n") as f:
+            json.dump(prof, f, indent=2, sort_keys=True)
+        d = os.path.join(ctx.out, "sx_%s_real" % name)
+        shutil.rmtree(d, ignore_errors=True)
+        cmd = [ctx.player, pack, "--out", d, "--seed", "11", "--field", "participant=1", "--rig", rig, "--measure"]
+        cfg = os.path.join(ctx.out, "config")
+        os.makedirs(cfg, mode=0o700, exist_ok=True)
+        mice = [Mouse("ysp-sx-%d" % i) for i in range(2)]
+        kb = Keyboard()
+        time.sleep(1.5)
+        lines = []
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=dict(os.environ, XDG_CONFIG_HOME=cfg))
+        th = threading.Thread(target=lambda: [lines.append(l) for l in p.stdout], daemon=True)
+        th.start()
+        try:
+            end = time.monotonic() + 10
+            while time.monotonic() < end and not any("running" in l for l in lines):
+                time.sleep(0.01)
+            time.sleep(0.5)
+            if not check(focus_pid() == p.pid, "%s: the player's window has no focus" % name):
+                continue
+            for m in mice[:len(sigs)]:
+                m.click()
+                time.sleep(0.2)
+            stop = time.monotonic() + 15
+            k = 0
+            while time.monotonic() < stop and p.poll() is None:
+                # a circle of radius about 3 cm, once every 2 s, opposite ways
+                a = 2 * math.pi * k / 1000.0
+                dx, dy = round(4 * math.cos(a)), round(4 * math.sin(a))
+                mice[0].move(dx, dy)
+                mice[1].move(-dx, dy)
+                k += 1
+                time.sleep(0.002)
+            kb.key("shift", 1)
+            kb.key("esc", 1)
+            kb.key("esc", 0)
+            kb.key("shift", 0)
+            try:
+                p.wait(timeout=20)
+            except subprocess.TimeoutExpired:
+                pass
+        finally:
+            if p.poll() is None:
+                p.kill()
+                p.wait()
+                restore_display()
+            for m in mice:
+                m.close()
+            kb.close()
+        th.join(timeout=2)
+        out = "".join(lines)
+        if not check(p.returncode == 3 and "internal guard" not in out, "%s: exit %s (want 3, Shift+Esc), no guard stop: %s" % (name, p.returncode, out[-600:])):
+            continue
+        with open(os.path.join(d, "session.json")) as f:
+            sj = json.load(f)
+        rows = read_csv(os.path.join(d, "trials.csv"))
+        frames = read_csv(os.path.join(d, "frames.csv"))
+        dropped = sum(1 for r in frames if r.get("dropped") not in ("", "0", None))
+        print("  %s: %d trials, %d frames, %d dropped; late_beyond_bound %s" % (name, len(rows), len(frames), dropped, sj.get("late_beyond_bound")), flush=True)
+        for sr in sj.get("signal_roles", []):
+            print("  %s: mouse %s, samples %s, late_s %s, late_seen_s %s" % (sr["name"], sr.get("mouse"), sr.get("samples"), sr.get("late_s"), sr.get("late_seen_s")),
+                  flush=True)
+            check(sr.get("samples", 0) > 5000, "%s: role %s fed: %s" % (name, sr["name"], sr))
+        check(sj.get("late_beyond_bound", {}).get("after_take") == 0, "%s: no take changed by a late report: %s" % (name, sj.get("late_beyond_bound")))
+        # between two trials, frames of no trial: the end's flush waits for
+        # input only to the trial's end (with two mice moving, a wait for
+        # the newest input took until the hands stopped: 14 s)
+        idx = [r.get("trial_index", "") for r in frames]
+        inner = [i for i in range(len(idx)) if idx[i] != ""]
+        gap = sum(1 for i in range(inner[0], inner[-1]) if idx[i] == "") if inner else 0
+        check(gap < 60, "%s: %d frames of no trial between trials (want under 60, a second)" % (name, gap))
+
+
 def case_refuse(ctx):
     print("== refuse", flush=True)
     pack, definition = build_pack(ctx, "afc2")
@@ -1146,7 +1501,8 @@ def main():
         return 0
     ctx = Ctx(a)
     os.makedirs(ctx.out, exist_ok=True)
-    cases = ["rdk", "afc2", "stroop", "oddball", "noafter", "lost", "rule", "rule2", "lateread", "fewer", "maxfires", "abort", "panic", "refuse", "alloc"]
+    cases = ["rdk", "afc2", "stroop", "oddball", "noafter", "lost", "rule", "rule2", "lateread", "fewer", "maxfires", "abort", "panic", "refuse", "alloc",
+             "signals", "signals_examples", "livecap"]
     for c in cases:
         if a.only and c != a.only:
             continue
@@ -1170,6 +1526,12 @@ def main():
             case_maxfires(ctx)
         elif c == "fewer":
             case_fewer(ctx)
+        elif c == "signals":
+            case_signals(ctx)
+        elif c == "signals_examples":
+            case_signals_examples(ctx)
+        elif c == "livecap":
+            case_livecap(ctx)
         else:
             case_example(ctx, c)
     print("%d failures" % fails)

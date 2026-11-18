@@ -27,7 +27,7 @@ C11 or C++17, and its top comment is its manual.
 | [sig](docs/sig.md) | `ysig_` | Signal path: continuous input to stimulus channels, detectors and records through a fixed graph | 0.7.2 | tested |
 | [box](docs/box.md) | `ybox_` | Response and trigger box protocols, bytes to events | 0.3.1 | no device |
 | [device](docs/device.md) | `ydev_` | Boxes and boards on the rig clock, with outputs and response rules | 0.5.2 | 3 machines |
-| [rigfile](docs/device.md#how-to-keep-a-rigs-devices-and-latencies-in-its-rig-profile) | `yrig_` | Rig profile: devices per role, loopback results, viewing geometry | 0.5.2 | no device |
+| [rigfile](docs/device.md#how-to-keep-a-rigs-devices-and-latencies-in-its-rig-profile) | `yrig_` | Rig profile: devices per role, loopback results, viewing geometry, signal adapters | 0.6.0 | no device |
 | [net](docs/net.md) | `ynet_` | Lab Streaming Layer markers and streams | 0.3.2 | no device |
 | [color](docs/color.md) | `ycol_` | Display calibration and color space conversions | 0.4.0 | tested |
 | [rdk](docs/rdk.md) | `yrdk_` | Random dot kinematograms, reproducible bit for bit | 0.3.1 | tested |

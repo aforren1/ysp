@@ -276,3 +276,53 @@ def test_source_of_a_device(rigdir):
         assert p.source(dev)["tier"] == yr.TIER_UNKNOWN
     with pytest.raises(TypeError):
         p.source(42)
+
+
+def test_signals():
+    p = yr.Profile("booth-2")
+    h0 = p.hash
+    assert p.signals == {}
+    p.set_signal("left", "display_cm", 0.0078125, device="click")
+    p.set_signal("right", "display_cm", (0.0078125, -0.0078125), device="click",
+                 bounds={"lo": (-20, -15), "hi": (20, 15.5)}, late_s=0.004)
+    assert p.signals == {
+        "left": {"adapter": "raw_mouse", "units": "display_cm", "per_count": (0.0078125, 0.0078125),
+                 "device": "click", "bounds": None, "late": None},
+        "right": {"adapter": "raw_mouse", "units": "display_cm", "per_count": (0.0078125, -0.0078125),
+                  "device": "click", "bounds": {"lo": (-20.0, -15.0), "hi": (20.0, 15.5)}, "late": 0.004},
+    }
+    assert p.hash != h0
+    assert '"per_count": 0.0078125,' in p.text and '"late_s": 0.004,' in p.text
+    q = yr.parse(p.text)
+    assert q.signals == p.signals and q.hash == p.hash
+    # refused with the reader's message, and nothing changes
+    h1 = p.hash
+    with pytest.raises(ValueError, match="device \"any\" takes every mouse"):
+        p.set_signal("hand", "display_px", 0.25)
+    with pytest.raises(ValueError, match="per_count: must not be 0"):
+        p.set_signal("left", "display_cm", (1, 0), device="click")
+    with pytest.raises(ValueError, match="lo below hi"):
+        p.set_signal("left", "display_cm", 1, device="click", bounds={"lo": (1, 0), "hi": (0, 1)})
+    with pytest.raises(ValueError):
+        p.set_signal("left", "cm", 1)
+    with pytest.raises(ValueError):
+        p.set_signal("left", "display_cm", 1, device="first")
+    with pytest.raises(ValueError):
+        p.set_signal("left", "display_cm", 1, late_s=2)
+    with pytest.raises(TypeError):
+        p.set_signal("left", "display_cm", (1, 2, 3))
+    with pytest.raises(yr.Error):
+        p.set_signal("bad name", "display_cm", 1, device="click")
+    assert p.hash == h1 and sorted(p.signals) == ["left", "right"]
+    # the factors: the same units 1; display units through view only
+    assert p.units_factor("display_cm", "display_cm") == 1.0
+    assert p.units_factor("display_cm", "display_px") == 0.0
+    p.set_view(570, 518.4, 1920)
+    assert p.units_factor("display_cm", "display_px") == 10 * 1920 / 518.4
+    assert p.units_factor("display_deg", "display_px") == p.ppd
+    assert p.units_factor("workspace_cm", "display_cm") == 0.0
+    with pytest.raises(ValueError):
+        p.units_factor("cm", "display_px")
+    p.clear_view()
+    assert p.remove_signal("left") and p.remove_signal("right") and not p.remove_signal("right")
+    assert p.hash == h0

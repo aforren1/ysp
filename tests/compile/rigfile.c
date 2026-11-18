@@ -38,6 +38,12 @@ typedef struct rigfile_api {
     yin_source (*source)(const yrig_profile*, const ydev_device*);
     yin_source (*source_role)(const yrig_profile*, const char*, yin_source);
     double (*ppd)(const yrig_profile*);
+    yrig_signal* (*find_signal)(const yrig_profile*, const char*);
+    yrig_signal* (*add_signal)(yrig_profile*, const char*);
+    bool (*remove_signal)(yrig_profile*, const char*);
+    double (*units_factor)(const yrig_profile*, int, int);
+    const char* (*units_name)(int);
+    const char* (*adapter_name)(int);
 } rigfile_api;
 
 static const rigfile_api g_api = {
@@ -45,7 +51,8 @@ static const rigfile_api g_api = {
     yrig_parse, yrig_save, yrig_save_file, yrig_init, yrig_write, yrig_hash,
     yrig_find, yrig_add, yrig_remove, yrig_bind, yrig_store_loopback,
     yrig_read_latency, yrig_read_loopback, yrig_sha256, yrig_desc, yrig_open_device, yrig_source,
-    yrig_source_role, yrig_ppd
+    yrig_source_role, yrig_ppd, yrig_find_signal, yrig_add_signal, yrig_remove_signal, yrig_units_factor,
+    yrig_units_name, yrig_adapter_name
 };
 
 static yrig_profile g_prof;
@@ -61,6 +68,16 @@ int main(void) {
     if (g_api.parse(&g_prof, text, sizeof text - 1, NULL, err, sizeof err) != YRIG_OK) return 1;
     if (g_api.write(&g_prof, out, sizeof out) == 0 || g_api.hash(&g_prof, hash) != YRIG_OK) return 2;
     if (g_api.ppd(&g_prof) != 0.0) return 6;   /* v0.5.0: no view, no degrees */
+    {   /* v0.6.0: a signal, written and hashed */
+        yrig_signal* s = g_api.add_signal(&g_prof, "hand");
+        if (!s || g_api.find_signal(&g_prof, "hand") != s) return 7;
+        s->adapter = YRIG_ADAPTER_RAW_MOUSE;
+        s->units = YRIG_UNITS_DISPLAY_PX;
+        if (g_api.hash(&g_prof, hash) != YRIG_OK || strcmp(g_api.units_name(s->units), "display_px") != 0 ||
+            strcmp(g_api.adapter_name(s->adapter), "raw_mouse") != 0 || g_api.units_factor(&g_prof, 1, 1) != 1.0 ||
+            !g_api.remove_signal(&g_prof, "hand"))
+            return 7;
+    }
     {
         static const char bounds[] = "format ysp-in-bounds 1\nn 1\nlo_s -0.0001\nhi_s 0.0002\ndate 2026-10-13T00:00:00Z\n";
         yrig_loopback lb;

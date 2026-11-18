@@ -402,7 +402,8 @@ static void case_out_queue(void) {
 }
 
 /* A version 2 definition with an `until` on a control loads on --sim (the
- * player 0.3.0 lowers it); a real run refuses its signal role (G18). */
+ * player 0.3.0 lowers it); a real run with no rig profile refuses its
+ * signal role, which takes its adapter from the profile (G18). */
 static void case_v2(void) {
     const char* d = "{\"format\":\"ysp-experiment\",\"version\":2,\"roles\":{\"hand\":{\"type\":\"position2d\",\"units\":\"display_px\"}},"
                     "\"stimuli\":{\"s\":{\"kind\":\"shape\",\"w\":2,\"h\":2}},\"trials\":{\"t\":{\"controls\":{\"near\":{\"control\":\"region\",\"of\":\"hand\",\"radius\":5}},"
@@ -425,12 +426,12 @@ static void case_v2(void) {
     rc = pl_load(&P, &a);
     CHECK(rc == 0, "a version 2 definition loads on --sim: %s", P.error);
     pl_close(&P);
-    /* G18: no adapter block, so a real run refuses the role by name */
+    /* G18: no rig profile, so no adapter: a real run refuses the role by name */
     memset(&P, 0, sizeof P);
     snprintf(out, sizeof out, "%s/v2real", workdir);
     a.sim = false;
     rc = pl_load(&P, &a);
-    CHECK(rc != 0 && strstr(P.error, "signal role 'hand'") != NULL && strstr(P.error, "G18") != NULL, "a real run refuses the signal role: %s", P.error);
+    CHECK(rc != 0 && strstr(P.error, "signal role 'hand'") != NULL && strstr(P.error, "rig profile") != NULL, "a real run refuses the signal role: %s", P.error);
     pl_close(&P);
 }
 

@@ -1042,14 +1042,16 @@ static void check_binding(void) {
 
 /* ---------------------------------------------- random damage, round trips */
 
-static void check_damage(void) {
+/* 20000 random edits of base: each parse is refused with a message and
+ * leaves the profile empty, or gives canonical bytes that parse to the same
+ * bytes again. Returns the count still valid. */
+static int damage(const char* base, size_t gn) {
     static char t[8192], t1[8192], t2[8192];
     int k, ok = 0, bad = 0;
-    size_t gn = sizeof GOLDEN - 1;
     for (k = 0; k < 20000; k++) {
         size_t n = gn, j;
         int edits = 1 + rnd(3), m;
-        memcpy(t, GOLDEN, gn);
+        memcpy(t, base, gn);
         for (m = 0; m < edits; m++) {
             j = (size_t)rnd((int)n);
             switch (rnd(3)) {
@@ -1068,11 +1070,16 @@ static void check_damage(void) {
             n2 = yrig_write(&g_q, t2, sizeof t2);
             if (n1 != n2 || memcmp(t1, t2, n1) != 0) bad++;
             ok++;
-        } else if (!g_err[0] || g_q.n_roles != 0) {
+        } else if (!g_err[0] || g_q.n_roles != 0 || g_q.n_signals != 0) {
             bad++;
         }
     }
     CHECK_I(bad, 0);
+    return ok;
+}
+
+static void check_damage(void) {
+    int ok = damage(GOLDEN, sizeof GOLDEN - 1);
     printf("  damage: 20000 edits of the golden profile, %d still valid, each canonical and stable\n", ok);
 }
 
@@ -1495,6 +1502,361 @@ static void check_view(void) {
     printf("  viewing geometry (v0.5.0): %.5f px/deg\n", ppd);
 }
 
+/* ------------------------------------------------ the signal adapters (v0.6.0) */
+
+static const char SIG_BLOCK[] =
+    "  \"signals\": {\n"
+    "    \"left\": {\n"
+    "      \"adapter\": \"raw_mouse\",\n"
+    "      \"device\": \"click\",\n"
+    "      \"per_count\": 0.0078125,\n"
+    "      \"units\": \"display_cm\"\n"
+    "    },\n"
+    "    \"right\": {\n"
+    "      \"adapter\": \"raw_mouse\",\n"
+    "      \"bounds\": {\n"
+    "        \"hi\": [20, 15.5],\n"
+    "        \"lo\": [-20, -15]\n"
+    "      },\n"
+    "      \"device\": \"click\",\n"
+    "      \"late_s\": 0.004,\n"
+    "      \"per_count\": [0.0078125, -0.0078125],\n"
+    "      \"units\": \"display_cm\"\n"
+    "    }\n"
+    "  },\n"
+    "  \"written\": \"2026-10-09T14:03:00Z\"\n"
+    "}\n";
+
+static void set_signals(yrig_profile* p) {
+    yrig_signal* s = yrig_add_signal(p, "right");
+    s->adapter = YRIG_ADAPTER_RAW_MOUSE;
+    s->units = YRIG_UNITS_DISPLAY_CM;
+    s->device = YRIG_DEVICE_CLICK;
+    s->per_count[0] = 0.0078125;
+    s->per_count[1] = -0.0078125;
+    s->bounded = true;
+    s->lo[0] = -20.0; s->lo[1] = -15.0;
+    s->hi[0] = 20.0;  s->hi[1] = 15.5;
+    s->late_ns = 4000000;
+    s = yrig_add_signal(p, "left");
+    s->adapter = YRIG_ADAPTER_RAW_MOUSE;
+    s->units = YRIG_UNITS_DISPLAY_CM;
+    s->device = YRIG_DEVICE_CLICK;
+    s->per_count[0] = s->per_count[1] = 0.0078125;
+}
+
+/* The written profile with one signal (a raw mouse, device any) in the
+ * place of SIG_BLOCK's two, for the refusals. */
+static const char SIG_ONE[] =
+    "  \"signals\": {\n"
+    "    \"hand\": {\n"
+    "      \"adapter\": \"raw_mouse\",\n"
+    "      \"bounds\": {\"lo\": [-1, -2], \"hi\": [1, 2]},\n"
+    "      \"late_s\": 0.004,\n"
+    "      \"per_count\": [0.25, 0.25],\n"
+    "      \"units\": \"display_px\"\n"
+    "    }\n"
+    "  },\n"
+    "  \"written\": \"2026-10-09T14:03:00Z\"\n"
+    "}\n";
+
+static void check_signals(void) {
+    static char t[1 << 16], one[1 << 16];
+    size_t n, pre;
+    char h0[65], h1[65], h2[65], want[65];
+    const char* at;
+    yrig_signal* s;
+    int i;
+    double f;
+    /* GOLDEN has no signals: its bytes and hash are v0.5.2's */
+    build_golden(&g_p);
+    CHECK_I(g_p.n_signals, 0);
+    CHECK_I(yrig_hash(&g_p, h0), YRIG_OK);
+    sha_hex(GOLDEN, sizeof GOLDEN - 1, want);
+    CHECK_S(h0, want);
+    CHECK(yrig_find_signal(&g_p, "left") == NULL);
+    /* with two: the block before written, in name order, defaults left out */
+    set_signals(&g_p);
+    CHECK_I(g_p.n_signals, 2);
+    n = yrig_write(&g_p, g_buf, sizeof g_buf);
+    at = strstr(g_buf, "  \"signals\"");
+    CHECK(at != NULL && strcmp(at, SIG_BLOCK) == 0);
+    CHECK(n == sizeof GOLDEN - 1 + strlen(SIG_BLOCK) - strlen("  \"written\": \"2026-10-09T14:03:00Z\"\n}\n"));
+    CHECK_I(yrig_hash(&g_p, h1), YRIG_OK);
+    CHECK(strcmp(h1, h0) != 0);
+    /* parse back: the values, the bytes and the hash */
+    CHECK_I(yrig_parse(&g_q, g_buf, n, NULL, g_err, sizeof g_err), YRIG_OK);
+    CHECK_I(g_q.n_signals, 2);
+    s = yrig_find_signal(&g_q, "right");
+    CHECK(s != NULL);
+    if (s) {
+        CHECK(s->adapter == YRIG_ADAPTER_RAW_MOUSE && s->units == YRIG_UNITS_DISPLAY_CM && s->device == YRIG_DEVICE_CLICK);
+        CHECK(s->per_count[0] == 0.0078125 && s->per_count[1] == -0.0078125);
+        CHECK(s->bounded && s->lo[0] == -20.0 && s->lo[1] == -15.0 && s->hi[0] == 20.0 && s->hi[1] == 15.5);
+        CHECK_I(s->late_ns, 4000000);
+    }
+    s = yrig_find_signal(&g_q, "left");
+    CHECK(s != NULL);
+    if (s) {
+        CHECK(s->per_count[0] == 0.0078125 && s->per_count[1] == 0.0078125 && !s->bounded && s->late_ns == -1);
+        CHECK(s->device == YRIG_DEVICE_CLICK);
+    }
+    CHECK_I(yrig_hash(&g_q, h2), YRIG_OK);
+    CHECK_S(h2, h1);
+    /* a hand edit in another spelling: [x, x] is one number, 0.0040 is
+     * 0.004, the keys in another order; the same canonical bytes */
+    {
+        static const char hand[] =
+            "  \"signals\": {\"right\": {\"units\": \"display_cm\", \"late_s\": 0.0040, \"device\": \"click\", "
+            "\"bounds\": {\"lo\": [-2e1, -15.0], \"hi\": [20, 1.55e1]}, \"per_count\": [7.8125e-3, -0.0078125], \"adapter\": \"raw_mouse\"},\n"
+            "  \"left\": {\"per_count\": [0.0078125, 0.00781250], \"adapter\": \"raw_mouse\", \"device\": \"click\", \"units\": \"display_cm\"}},\n"
+            "  \"written\": \"2026-10-09T14:03:00Z\"\n}\n";
+        pre = (size_t)(strstr(GOLDEN, "  \"written\"") - GOLDEN);
+        memcpy(t, GOLDEN, pre);
+        strcpy(t + pre, hand);
+        CHECK_I(yrig_parse(&g_q, t, strlen(t), NULL, g_err, sizeof g_err), YRIG_OK);
+        CHECK_I(yrig_hash(&g_q, h2), YRIG_OK);
+        CHECK_S(h2, h1);
+    }
+    /* device "any" written out is the default, left out */
+    pre = (size_t)(strstr(GOLDEN, "  \"written\"") - GOLDEN);
+    memcpy(one, GOLDEN, pre);
+    strcpy(one + pre, SIG_ONE);
+    CHECK_I(yrig_parse(&g_q, one, strlen(one), NULL, g_err, sizeof g_err), YRIG_OK);
+    CHECK_I(yrig_hash(&g_q, h1), YRIG_OK);
+    s = yrig_find_signal(&g_q, "hand");
+    CHECK(s && s->device == YRIG_DEVICE_ANY && s->units == YRIG_UNITS_DISPLAY_PX && s->per_count[0] == 0.25 && s->per_count[1] == 0.25);
+    n = yrig_write(&g_q, g_buf, sizeof g_buf);
+    CHECK(strstr(g_buf, "\"device\"") == NULL && strstr(g_buf, "\"per_count\": 0.25,") != NULL);
+    refuse_in(__LINE__, one, "\"late_s\": 0.004,", "\"device\": \"any\", \"late_s\": 0.004,", YRIG_OK, "");
+    CHECK_I(yrig_hash(&g_q, h2), YRIG_OK);
+    CHECK_S(h2, h1);
+    /* the refusals, each naming the field */
+    refuse_in(__LINE__, one, "      \"adapter\": \"raw_mouse\",\n", "", YRIG_ERR_FORMAT, "signals.hand.adapter: is missing");
+    refuse_in(__LINE__, one, "\"raw_mouse\"", "\"pen\"", YRIG_ERR_FORMAT, "signals.hand.adapter: must be \"raw_mouse\"");
+    refuse_in(__LINE__, one, "\"raw_mouse\"", "\"raw_mous\"", YRIG_ERR_FORMAT, "signals.hand.adapter: must be");
+    refuse_in(__LINE__, one, "\"raw_mouse\"", "\"raw_mouse \"", YRIG_ERR_FORMAT, "signals.hand.adapter: must be");
+    refuse_in(__LINE__, one, "\"raw_mouse\"", "1", YRIG_ERR_FORMAT, "signals.hand.adapter: must be");
+    refuse_in(__LINE__, one, ",\n      \"units\": \"display_px\"", "", YRIG_ERR_FORMAT, "signals.hand.units: is missing");
+    refuse_in(__LINE__, one, "\"display_px\"", "\"px\"", YRIG_ERR_FORMAT, "signals.hand.units: must be display_px");
+    refuse_in(__LINE__, one, "\"display_px\"", "\"\"", YRIG_ERR_FORMAT, "signals.hand.units: must be display_px");
+    refuse_in(__LINE__, one, "\"display_px\"", "[\"display_px\"]", YRIG_ERR_FORMAT, "signals.hand.units: must be display_px");
+    refuse_in(__LINE__, one, "      \"per_count\": [0.25, 0.25],\n", "", YRIG_ERR_FORMAT, "signals.hand.per_count: is missing");
+    refuse_in(__LINE__, one, "[0.25, 0.25]", "0", YRIG_ERR_FORMAT, "signals.hand.per_count: must not be 0");
+    refuse_in(__LINE__, one, "[0.25, 0.25]", "-0.0", YRIG_ERR_FORMAT, "signals.hand.per_count: must not be 0");
+    refuse_in(__LINE__, one, "[0.25, 0.25]", "[0.25, 0]", YRIG_ERR_FORMAT, "signals.hand.per_count: must not be 0");
+    refuse_in(__LINE__, one, "[0.25, 0.25]", "[0, 0.25]", YRIG_ERR_FORMAT, "signals.hand.per_count: must not be 0");
+    refuse_in(__LINE__, one, "[0.25, 0.25]", "1000000", YRIG_OK, "");
+    refuse_in(__LINE__, one, "[0.25, 0.25]", "-1000000", YRIG_OK, "");
+    refuse_in(__LINE__, one, "[0.25, 0.25]", "1e-300", YRIG_OK, "");
+    refuse_in(__LINE__, one, "[0.25, 0.25]", "1000000.0001", YRIG_ERR_FORMAT, "signals.hand.per_count: a magnitude above 1e+06");
+    refuse_in(__LINE__, one, "[0.25, 0.25]", "[1, -1000001]", YRIG_ERR_FORMAT, "signals.hand.per_count: a magnitude above");
+    refuse_in(__LINE__, one, "[0.25, 0.25]", "1e400", YRIG_ERR_FORMAT, "signals.hand.per_count");
+    refuse_in(__LINE__, one, "[0.25, 0.25]", "[0.25]", YRIG_ERR_FORMAT, "signals.hand.per_count: must be a number or [x, y]");
+    refuse_in(__LINE__, one, "[0.25, 0.25]", "[0.25, 0.25, 1]", YRIG_ERR_FORMAT, "signals.hand.per_count: must be a number or [x, y]");
+    refuse_in(__LINE__, one, "[0.25, 0.25]", "[]", YRIG_ERR_FORMAT, "signals.hand.per_count: must be a number or [x, y]");
+    refuse_in(__LINE__, one, "[0.25, 0.25]", "\"0.25\"", YRIG_ERR_FORMAT, "signals.hand.per_count: must be a number or [x, y]");
+    refuse_in(__LINE__, one, "[0.25, 0.25]", "[0.25, \"0.25\"]", YRIG_ERR_FORMAT, "signals.hand.per_count: must be a number or [x, y]");
+    refuse_in(__LINE__, one, "[0.25, 0.25]", "[\"0.25\", 0.25]", YRIG_ERR_FORMAT, "signals.hand.per_count: must be a number or [x, y]");
+    refuse_in(__LINE__, one, "[0.25, 0.25]", "{\"x\": 0.25}", YRIG_ERR_FORMAT, "signals.hand.per_count: must be a number or [x, y]");
+    refuse_in(__LINE__, one, "\"lo\": [-1, -2]", "\"lo\": [1, -2]", YRIG_ERR_FORMAT, "signals.hand.bounds: lo below hi does not hold in x");
+    refuse_in(__LINE__, one, "\"lo\": [-1, -2]", "\"lo\": [-1, 2]", YRIG_ERR_FORMAT, "signals.hand.bounds: lo below hi does not hold in y");
+    refuse_in(__LINE__, one, "\"lo\": [-1, -2]", "\"lo\": [-1, 3]", YRIG_ERR_FORMAT, "signals.hand.bounds: lo below hi does not hold in y");
+    refuse_in(__LINE__, one, "\"lo\": [-1, -2]", "\"lo\": [-1e9, -2]", YRIG_OK, "");
+    refuse_in(__LINE__, one, "\"lo\": [-1, -2]", "\"lo\": [-1000000000.5, -2]", YRIG_ERR_FORMAT, "signals.hand.bounds.lo: a magnitude above 1e+09");
+    refuse_in(__LINE__, one, "\"hi\": [1, 2]", "\"hi\": [1, 2e9]", YRIG_ERR_FORMAT, "signals.hand.bounds.hi: a magnitude above");
+    refuse_in(__LINE__, one, "\"lo\": [-1, -2]", "\"lo\": -1", YRIG_ERR_FORMAT, "signals.hand.bounds.lo: must be [x, y]");
+    refuse_in(__LINE__, one, "\"hi\": [1, 2]", "\"hi\": [1]", YRIG_ERR_FORMAT, "signals.hand.bounds.hi: must be [x, y]");
+    refuse_in(__LINE__, one, "\"lo\": [-1, -2], ", "", YRIG_ERR_FORMAT, "signals.hand.bounds.lo: is missing");
+    refuse_in(__LINE__, one, ", \"hi\": [1, 2]", "", YRIG_ERR_FORMAT, "signals.hand.bounds.hi: is missing");
+    refuse_in(__LINE__, one, "\"hi\": [1, 2]}", "\"hi\": [1, 2], \"mid\": [0, 0]}", YRIG_ERR_FORMAT, "signals.hand.bounds: unknown key \"mid\"");
+    refuse_in(__LINE__, one, "{\"lo\": [-1, -2], \"hi\": [1, 2]}", "[[-1, -2], [1, 2]]", YRIG_ERR_FORMAT, "signals.hand.bounds: must be an object");
+    refuse_in(__LINE__, one, "\"late_s\": 0.004,", "\"device\": \"first\",", YRIG_ERR_FORMAT, "signals.hand.device: must be \"any\" or \"click\"");
+    refuse_in(__LINE__, one, "\"late_s\": 0.004,", "\"device\": \"\",", YRIG_ERR_FORMAT, "signals.hand.device: must be");
+    refuse_in(__LINE__, one, "\"late_s\": 0.004,", "\"device\": 0,", YRIG_ERR_FORMAT, "signals.hand.device: must be");
+    refuse_in(__LINE__, one, "\"late_s\": 0.004", "\"late_s\": 0", YRIG_OK, "");
+    refuse_in(__LINE__, one, "\"late_s\": 0.004", "\"late_s\": 1", YRIG_OK, "");
+    refuse_in(__LINE__, one, "\"late_s\": 0.004", "\"late_s\": -0.000000001", YRIG_ERR_FORMAT, "signals.hand.late_s: -0.000000001 is out of range");
+    refuse_in(__LINE__, one, "\"late_s\": 0.004", "\"late_s\": 1.000000001", YRIG_ERR_FORMAT, "signals.hand.late_s: 1.000000001 is out of range");
+    refuse_in(__LINE__, one, "\"late_s\": 0.004", "\"late_s\": \"0.004\"", YRIG_ERR_FORMAT, "signals.hand.late_s: must be a number (seconds)");
+    refuse_in(__LINE__, one, "\"late_s\": 0.004", "\"late_ms\": 4", YRIG_ERR_FORMAT, "signals.hand: unknown key \"late_ms\"");
+    refuse_in(__LINE__, one, "\"hand\": {", "\"bad name\": {", YRIG_ERR_FORMAT, "signals: \"bad name\" is not a role name");
+    refuse_in(__LINE__, one, "\"hand\": {", "\"\": {", YRIG_ERR_FORMAT, "signals: \"\" is not a role name");
+    refuse_in(__LINE__, one, "\"hand\": {", "\"h234567890123456789012345678901\": {", YRIG_OK, "");
+    refuse_in(__LINE__, one, "\"hand\": {", "\"h2345678901234567890123456789012\": {", YRIG_ERR_FORMAT, "is not a role name");
+    refuse_in(__LINE__, one, "\"hand\": {", "\"hand\": [], \"x\": {", YRIG_ERR_FORMAT, "signals.hand: must be an object");
+    refuse_in(__LINE__, one, "  \"signals\": {\n", "  \"signals\": [], \"s2\": {\n", YRIG_ERR_FORMAT, "unknown key \"s2\"");
+    {
+        static const char t2[] = "{\"format\":\"ysp-rig 1\",\"rig\":\"r\",\"written\":\"2026-01-01T00:00:00Z\",\"roles\":{},\"signals\":7}";
+        refuse_in(__LINE__, t2, "7", "[]", YRIG_ERR_FORMAT, "signals: must be an object");
+        refuse_in(__LINE__, t2, "7", "{}", YRIG_OK, "");
+        CHECK_I(g_q.n_signals, 0);
+        /* "signals": {} writes as no signals, the v0.5.2 bytes */
+        n = yrig_write(&g_q, g_buf, sizeof g_buf);
+        CHECK(strstr(g_buf, "signals") == NULL);
+    }
+    /* "any" must be the only raw_mouse signal */
+    {
+        static const char two[] =
+            "{\"format\":\"ysp-rig 1\",\"rig\":\"r\",\"written\":\"2026-01-01T00:00:00Z\",\"roles\":{},\"signals\":{"
+            "\"a\":{\"adapter\":\"raw_mouse\",\"units\":\"device\",\"per_count\":1,\"device\":\"click\"},"
+            "\"b\":{\"adapter\":\"raw_mouse\",\"units\":\"device\",\"per_count\":1,\"device\":\"click\"}}}";
+        refuse_in(__LINE__, two, "\"a\"", "\"a\"", YRIG_OK, "");   /* no edit: two clicks are fine */
+        refuse_in(__LINE__, two, ",\"device\":\"click\"}}}", "}}}", YRIG_ERR_FORMAT,
+                  "signals.b: device \"any\" takes every mouse, so it must be the only raw_mouse signal");
+        refuse_in(__LINE__, two, ",\"device\":\"click\"},", "},", YRIG_ERR_FORMAT, "signals.a: device \"any\"");
+        refuse_in(__LINE__, two, ",\"device\":\"click\"},", ",\"device\":\"any\"},", YRIG_ERR_FORMAT, "signals.a: device \"any\"");
+        refuse_in(__LINE__, two, "\"device\":\"click\"}}}", "\"device\":\"any\"}}}", YRIG_ERR_FORMAT, "signals.b: device \"any\"");
+    }
+    /* at most 16 */
+    {
+        char* w = t;
+        w += sprintf(w, "{\"format\":\"ysp-rig 1\",\"rig\":\"r\",\"written\":\"2026-01-01T00:00:00Z\",\"roles\":{},\"signals\":{");
+        for (i = 0; i < 17; i++)
+            w += sprintf(w, "%s\"s%02d\":{\"adapter\":\"raw_mouse\",\"units\":\"device\",\"per_count\":1,\"device\":\"click\"}", i ? "," : "", i);
+        strcpy(w, "}}");
+        refuse_in(__LINE__, t, "\"s16\":{\"adapter\":\"raw_mouse\",\"units\":\"device\",\"per_count\":1,\"device\":\"click\"}", "\"s16\":{}",
+                  YRIG_ERR_FORMAT, "signals: more than 16 signals");
+        refuse_in(__LINE__, t, ",\"s16\":{\"adapter\":\"raw_mouse\",\"units\":\"device\",\"per_count\":1,\"device\":\"click\"}", "", YRIG_OK, "");
+        CHECK_I(g_q.n_signals, 16);
+        CHECK(yrig_find_signal(&g_q, "s15") == &g_q.signal[15]);
+        CHECK(yrig_add_signal(&g_q, "s15") == &g_q.signal[15]);   /* found, not added */
+        CHECK(yrig_add_signal(&g_q, "s16") == NULL);              /* full */
+        CHECK(yrig_remove_signal(&g_q, "s00"));
+        CHECK(!yrig_remove_signal(&g_q, "s00"));
+        CHECK_I(g_q.n_signals, 15);
+        CHECK_S(g_q.signal[0].name, "s01");
+        CHECK_S(g_q.signal[14].name, "s15");
+        s = yrig_add_signal(&g_q, "s16");
+        CHECK(s == &g_q.signal[15]);
+        if (s) {
+            CHECK(s->adapter == 0 && s->units == 0 && s->device == YRIG_DEVICE_ANY && s->late_ns == -1 && !s->bounded);
+            CHECK(s->per_count[0] == 1.0 && s->per_count[1] == 1.0);
+        }
+        /* adapter and units unset: no bytes, no hash */
+        CHECK(yrig_write(&g_q, g_buf, sizeof g_buf) == 0);
+        CHECK_I(yrig_hash(&g_q, h2), YRIG_ERR_FORMAT);
+        if (s) {
+            s->adapter = YRIG_ADAPTER_RAW_MOUSE;
+            s->units = YRIG_UNITS_DEVICE;
+        }
+        CHECK(yrig_write(&g_q, g_buf, sizeof g_buf) > 0);
+        /* any beside 15 clicks: written, but the read-back refuses it */
+        CHECK_I(yrig_hash(&g_q, h2), YRIG_ERR_FORMAT);
+        if (s) s->device = YRIG_DEVICE_CLICK;
+        CHECK_I(yrig_hash(&g_q, h2), YRIG_OK);
+    }
+    CHECK(yrig_add_signal(&g_q, "bad name") == NULL);
+    CHECK(yrig_add_signal(&g_q, "") == NULL);
+    CHECK(yrig_add_signal(&g_q, NULL) == NULL);
+    CHECK(yrig_add_signal(NULL, "x") == NULL);
+    CHECK(yrig_find_signal(NULL, "x") == NULL && yrig_find_signal(&g_q, NULL) == NULL);
+    CHECK(!yrig_remove_signal(NULL, "x"));
+    /* values in memory that the format cannot hold: no bytes or no hash */
+    build_golden(&g_q);
+    set_signals(&g_q);
+    s = yrig_find_signal(&g_q, "left");
+    CHECK_I(yrig_hash(&g_q, h2), YRIG_OK);
+    if (s) {
+        s->units = 6;
+        CHECK(yrig_write(&g_q, g_buf, sizeof g_buf) == 0);
+        s->units = 0;
+        CHECK(yrig_write(&g_q, g_buf, sizeof g_buf) == 0);
+        s->units = YRIG_UNITS_DISPLAY_CM;
+        s->adapter = 2;
+        CHECK(yrig_write(&g_q, g_buf, sizeof g_buf) == 0);
+        s->adapter = YRIG_ADAPTER_RAW_MOUSE;
+        s->device = 2;
+        CHECK(yrig_write(&g_q, g_buf, sizeof g_buf) == 0);
+        s->device = -1;
+        CHECK(yrig_write(&g_q, g_buf, sizeof g_buf) == 0);
+        s->device = YRIG_DEVICE_CLICK;
+        s->per_count[1] = 0.0;
+        CHECK_I(yrig_hash(&g_q, h2), YRIG_ERR_FORMAT);
+        s->per_count[1] = HUGE_VAL - HUGE_VAL;   /* NaN */
+        CHECK_I(yrig_hash(&g_q, h2), YRIG_ERR_FORMAT);
+        s->per_count[1] = 0.0078125;
+        s->bounded = true;                       /* lo == hi == 0 */
+        CHECK_I(yrig_hash(&g_q, h2), YRIG_ERR_FORMAT);
+        s->bounded = false;
+        s->late_ns = 1000000001;
+        CHECK_I(yrig_hash(&g_q, h2), YRIG_ERR_FORMAT);
+        s->late_ns = -1;
+        CHECK_I(yrig_hash(&g_q, h2), YRIG_OK);
+    }
+    g_q.n_signals = YRIG_MAX_SIGNALS + 1;
+    CHECK(yrig_write(&g_q, g_buf, sizeof g_buf) == 0);
+    g_q.n_signals = -1;
+    CHECK(yrig_write(&g_q, g_buf, sizeof g_buf) == 0);
+    g_q.n_signals = 2;
+    /* names */
+    CHECK_S(yrig_units_name(YRIG_UNITS_DISPLAY_PX), "display_px");
+    CHECK_S(yrig_units_name(YRIG_UNITS_DISPLAY_CM), "display_cm");
+    CHECK_S(yrig_units_name(YRIG_UNITS_DISPLAY_DEG), "display_deg");
+    CHECK_S(yrig_units_name(YRIG_UNITS_WORKSPACE_CM), "workspace_cm");
+    CHECK_S(yrig_units_name(YRIG_UNITS_DEVICE), "device");
+    CHECK_S(yrig_units_name(0), "");
+    CHECK_S(yrig_units_name(6), "");
+    CHECK_S(yrig_units_name(-1), "");
+    CHECK_S(yrig_adapter_name(YRIG_ADAPTER_RAW_MOUSE), "raw_mouse");
+    CHECK_S(yrig_adapter_name(0), "");
+    CHECK_S(yrig_adapter_name(2), "");
+    /* the factors: the same units 1 with no view; display units through
+     * view; workspace_cm and device to nothing else */
+    build_golden(&g_q);
+    for (i = 1; i <= 5; i++) {
+        CHECK(yrig_units_factor(&g_q, i, i) == 1.0);
+        CHECK(yrig_units_factor(NULL, i, i) == 1.0);
+    }
+    CHECK(yrig_units_factor(&g_q, YRIG_UNITS_DISPLAY_CM, YRIG_UNITS_DISPLAY_PX) == 0.0);
+    CHECK(yrig_units_factor(&g_q, YRIG_UNITS_DISPLAY_PX, YRIG_UNITS_DISPLAY_DEG) == 0.0);
+    CHECK(yrig_units_factor(NULL, YRIG_UNITS_DISPLAY_CM, YRIG_UNITS_DISPLAY_PX) == 0.0);
+    g_q.view.set = true;
+    g_q.view.distance_mm = 570.0;
+    g_q.view.width_mm = 518.4;
+    g_q.view.width_px = 1920;
+    f = yrig_units_factor(&g_q, YRIG_UNITS_DISPLAY_CM, YRIG_UNITS_DISPLAY_PX);
+    CHECK(f == 10.0 * 1920.0 / 518.4);
+    CHECK(fabs(f - 1920.0 / 51.84) < 1e-12);
+    CHECK(yrig_units_factor(&g_q, YRIG_UNITS_DISPLAY_PX, YRIG_UNITS_DISPLAY_CM) == 1.0 / f);
+    CHECK(yrig_units_factor(&g_q, YRIG_UNITS_DISPLAY_DEG, YRIG_UNITS_DISPLAY_PX) == yrig_ppd(&g_q));
+    CHECK(yrig_units_factor(&g_q, YRIG_UNITS_DISPLAY_PX, YRIG_UNITS_DISPLAY_DEG) == 1.0 / yrig_ppd(&g_q));
+    /* a degree at 570 mm is 570 tan(1 deg) mm on the screen */
+    f = yrig_units_factor(&g_q, YRIG_UNITS_DISPLAY_DEG, YRIG_UNITS_DISPLAY_CM);
+    CHECK(fabs(f - 57.0 * tan(3.14159265358979323846 / 180.0)) < 1e-12);
+    CHECK(fabs(yrig_units_factor(&g_q, YRIG_UNITS_DISPLAY_CM, YRIG_UNITS_DISPLAY_DEG) * f - 1.0) < 1e-15);
+    CHECK(yrig_units_factor(&g_q, YRIG_UNITS_WORKSPACE_CM, YRIG_UNITS_DISPLAY_CM) == 0.0);
+    CHECK(yrig_units_factor(&g_q, YRIG_UNITS_DISPLAY_CM, YRIG_UNITS_WORKSPACE_CM) == 0.0);
+    CHECK(yrig_units_factor(&g_q, YRIG_UNITS_DEVICE, YRIG_UNITS_DISPLAY_PX) == 0.0);
+    CHECK(yrig_units_factor(&g_q, YRIG_UNITS_DISPLAY_PX, YRIG_UNITS_DEVICE) == 0.0);
+    CHECK(yrig_units_factor(&g_q, YRIG_UNITS_DEVICE, YRIG_UNITS_WORKSPACE_CM) == 0.0);
+    CHECK(yrig_units_factor(&g_q, 0, 0) == 0.0);
+    CHECK(yrig_units_factor(&g_q, 6, 6) == 0.0);
+    CHECK(yrig_units_factor(&g_q, YRIG_UNITS_DISPLAY_PX, 6) == 0.0);
+    CHECK(yrig_units_factor(&g_q, 0, YRIG_UNITS_DISPLAY_PX) == 0.0);
+    /* a view that does not hold gives no factor */
+    g_q.view.width_px = 0;
+    CHECK(yrig_units_factor(&g_q, YRIG_UNITS_DISPLAY_CM, YRIG_UNITS_DISPLAY_PX) == 0.0);
+    g_q.view.width_px = 1920;
+    g_q.view.width_mm = 0.0;
+    CHECK(yrig_units_factor(&g_q, YRIG_UNITS_DISPLAY_CM, YRIG_UNITS_DISPLAY_PX) == 0.0);
+    g_q.view.width_mm = 518.4;
+    g_q.view.set = false;
+    CHECK(yrig_units_factor(&g_q, YRIG_UNITS_DISPLAY_CM, YRIG_UNITS_DISPLAY_PX) == 0.0);
+    CHECK(yrig_units_factor(&g_q, YRIG_UNITS_DISPLAY_PX, YRIG_UNITS_DISPLAY_PX) == 1.0);
+    /* damage to the signals block, as to the golden profile */
+    n = yrig_write(&g_p, g_buf, sizeof g_buf);
+    CHECK(n > 0 && n < 8192);
+    i = damage(g_buf, n);
+    CHECK(i > 0);
+    printf("  damage: 20000 edits of a profile with signals, %d still valid, each canonical and stable\n", i);
+    /* removing both gives the v0.5.2 bytes again */
+    CHECK(yrig_remove_signal(&g_p, "left") && yrig_remove_signal(&g_p, "right"));
+    CHECK_I(yrig_hash(&g_p, h2), YRIG_OK);
+    CHECK_S(h2, h0);
+    printf("  signal adapters (v0.6.0): ok\n");
+}
+
 int main(void) {
     printf("ysp_rig %s (ysp_json %s, ysp_device %s)\n", yrig_version(), yjs_version(), ydev_version());
     CHECK_S(yrig_version(), YRIG_VERSION_STRING);
@@ -1510,6 +1872,7 @@ int main(void) {
     check_v04();
     check_damage();
     check_view();
+    check_signals();
     if (g_failures) {
         fprintf(stderr, "rigfile_test: %d of %d checks FAILED\n", g_failures, g_checks);
         return 1;

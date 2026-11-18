@@ -13,6 +13,15 @@ timeout = 300
 env = { YPL_REPO = "{repo}" }
 env_default = { YPL_BIN = "{repo}/build/linux", YPAK = "{repo}/build/linux/pack/ypak" }
 
+[test.real]
+source = "tests/player/mut_real.c"
+compiler = "gcc"
+flags = ["-std=c11", "-O1", "-w", "-I$YSP_SDL3/include", "-I$YSP_MINIAUDIO"]
+libs = ["-L$YSP_SDL3/lib", "-Wl,-rpath,$YSP_SDL3/lib", "-lSDL3", "-lm", "-lpthread", "-ldl"]
+timeout = 900
+env = { YPL_REPO = "{repo}", YPL_REAL_CASES = "signals,signals_examples,livecap" }
+env_default = { YPL_BIN = "{repo}/build/linux" }
+
 [[mutant]]
 id = "v2-01"
 name = "max_visits counts one visit more"
@@ -82,8 +91,8 @@ id = "v2-09"
 name = "the sim adapter ignores --sim-gain"
 test = "player"
 why = "F32: a relative role integrates counts at --sim-gain units a count."
-find = '''an[1].p[YSIG_INTEGRATE_GAIN_X] = an[1].p[YSIG_INTEGRATE_GAIN_Y] = S->gain[i];'''
-replace = '''an[1].p[YSIG_INTEGRATE_GAIN_X] = an[1].p[YSIG_INTEGRATE_GAIN_Y] = 1;'''
+find = '''        g->gain[0] = g->gain[1] = S->gain[i];'''
+replace = '''        g->gain[0] = g->gain[1] = 1;'''
 
 [[mutant]]
 id = "v2-10"
@@ -807,8 +816,8 @@ name = "the newest stamp itself counted complete"
 test = "player"
 count = 2
 why = "C(d) = max(S(d) - 1 ns, P - B(d)): a second report at the stamp S(d) can still come."
-find = '''S->newest[r] - 1 > c) c = S->newest[r] - 1;'''
-replace = '''S->newest[r] > c) c = S->newest[r];'''
+find = '''S->newest[r] != INT64_MIN && S->newest[r] - 1 > c) c = S->newest[r] - 1;'''
+replace = '''S->newest[r] != INT64_MIN && S->newest[r] > c) c = S->newest[r];'''
 
 [[mutant]]
 id = "v2-99"
@@ -816,7 +825,7 @@ name = "complete-to without the newest stamp"
 test = "player"
 count = 2
 why = "C(d)'s S(d) - 1 ns part: after a report stamped S(d) none of d stamped before it comes."
-find = '''        if (S->newest[r] != INT64_MIN && S->newest[r] - 1 > c) c = S->newest[r] - 1;
+find = '''        if (!(S->sig && S->sig[r].any) && S->newest[r] != INT64_MIN && S->newest[r] - 1 > c) c = S->newest[r] - 1;
 '''
 replace = ''''''
 
@@ -1027,8 +1036,8 @@ name = "the barrier's wait over the template's roles only"
 test = "player"
 env = { YPL_HZ = "500" }
 why = "C2: a barrier drops a report of any device, so the wait is over every signal role, fed by the template or not."
-find = '''    if (v2_horizon_all(p) < v->g.t_cover - 1) return 1;'''
-replace = '''    if (v2_horizon(p, v) < v->g.t_cover - 1) return 1;'''
+find = '''    if (v2_horizon_all(p) < (S->real ? v->end_bar : v->g.t_cover) - 1) return 1;'''
+replace = '''    if (v2_horizon(p, v) < (S->real ? v->end_bar : v->g.t_cover) - 1) return 1;'''
 
 [[mutant]]
 id = "v2-120"
@@ -1139,3 +1148,205 @@ test = "player"
 why = "sig.h 0.7.0: ysig_disarm_at() at the exit's time; a plain disarm takes the input time and ends the next state's arms made earlier."
 find = '''        if (!ysig_disarm_at(&v->g, node, t)) {'''
 replace = '''        if (!ysig_disarm(&v->g, node)) {'''
+
+# G18 (2026-11-16): a signal role's adapter from the rig profile, on --sim
+# (t_v2_rig_signals). The real run's poll, clicks and removals are built
+# with SDL, which this test's player is not: tests/player/real_test.py's
+# signals case.
+
+[[mutant]]
+id = "v2-135"
+name = "the profile's scale without the units' factor"
+test = "player"
+why = "0.25 px a count is 0.0078125 cm at 32 px a cm; without the factor the cursor moves 32 times too far."
+find = '''            double q = sg->per_count[k] * g->factor;'''
+replace = '''            double q = sg->per_count[k];'''
+
+[[mutant]]
+id = "v2-136"
+name = "a negative lane's bounds not mirrored"
+test = "player"
+why = "The integrator runs a negative lane mirrored: y in [-2, 3] is -y in [-3, 2]; unmirrored, the bound holds y at 2, not 3."
+find = '''            g->lo[k] = q < 0 ? -hi : lo;
+            g->hi[k] = q < 0 ? -lo : hi;'''
+replace = '''            g->lo[k] = lo;
+            g->hi[k] = hi;'''
+
+[[mutant]]
+id = "v2-137"
+name = "no scale node for a negative lane"
+test = "player"
+why = "The integrator's gain is the scale's magnitude; without the -1 after it, y moves the wrong way."
+find = '''        if (sg && (sg->sign[0] < 0 || sg->sign[1] < 0)) {'''
+replace = '''        if (0) {'''
+
+[[mutant]]
+id = "v2-138"
+name = "the profile's late_s ignored"
+test = "player"
+why = "late_s is the rig's measured lateness: the bound B the player waits for complete input on."
+find = '''                if (sg->late_ns >= 0) S->bnd[i] = sg->late_ns;'''
+replace = '''                if (0) S->bnd[i] = sg->late_ns;'''
+
+[[mutant]]
+id = "v2-139"
+name = "the profile's bounds dropped"
+test = "player"
+why = "The integrator's bounds hold the cursor inside them (yrsp_cursor's rule)."
+find = '''        g->bounded = sg->bounded;'''
+replace = '''        g->bounded = false;'''
+
+[[mutant]]
+id = "v2-140"
+name = "the profile wins over --sim-gain"
+test = "player"
+why = "--sim-gain names its role's adapter for a test; a profile on the rig must not change that run."
+find = '''        if (p->args.sim && (S->gain[i] > 0 || !sg || !v2_relative(r))) continue;   /* --sim's adapter */'''
+replace = '''        if (p->args.sim && (!sg || !v2_relative(r))) continue;   /* --sim's adapter */'''
+
+[[mutant]]
+id = "v2-141"
+name = "a role's type not checked against the adapter"
+test = "player"
+why = "Format 3.5: a position2d role takes a relative adapter only with allow_relative; the refusal names the role and the rule."
+find = '''    if (!v2_relative(r)) {
+        snprintf(msg, cap, "the rig's adapter %s gives position2d_relative'''
+replace = '''    if (0) {
+        snprintf(msg, cap, "the rig's adapter %s gives position2d_relative'''
+
+[[mutant]]
+id = "v2-142"
+name = "units that do not convert taken"
+test = "player"
+why = "A workspace cm is not a screen cm, and display units need the view: a factor of 0 is no scale."
+find = '''    if (!(f > 0)) {
+        snprintf(msg, cap, "the rig's adapter is in %s'''
+replace = '''    if (0) {
+        snprintf(msg, cap, "the rig's adapter is in %s'''
+
+# G18 on the real path (test "real": tests/player/mut_real.c runs
+# real_test.py's signals cases with the mutated player; a window, uinput,
+# the mouse rule; run them one at a time, -j 1).
+
+[[mutant]]
+id = "v2-143"
+name = "a mouse bound to a role binds another"
+test = "real"
+why = "One mouse would drive two roles; the second click of the first mouse is refused."
+find = '''    for (r = 0; r < p->def->n_sigroles; r++)
+        if (S->sig[r].dev == e->device) {'''
+replace = '''    for (r = 0; r < 0; r++)
+        if (S->sig[r].dev == e->device) {'''
+
+[[mutant]]
+id = "v2-144"
+name = "a removed mouse not seen"
+test = "real"
+why = "The role keeps a mouse that is gone, and the trial that waits on it never ends (the user's decision: a click binds another)."
+find = '''        if (!g->sg || g->any || g->dev != dev) continue;
+        g->dev = 0;'''
+replace = '''        if (1) continue;
+        g->dev = 0;'''
+
+[[mutant]]
+id = "v2-145"
+name = "a click waits for the trial's end"
+test = "real"
+why = "A trial that waits on the role whose mouse was removed ends only on that role's input: it hung (real_test.py signals)."
+find = '''    int r, b = -1;
+    for (r = 0; r < p->def->n_sigroles && b < 0; r++) if (S->sig[r].need_click) b = r;'''
+replace = '''    int r, b = -1;
+    if (p->in_trial) return;
+    for (r = 0; r < p->def->n_sigroles && b < 0; r++) if (S->sig[r].need_click) b = r;'''
+
+[[mutant]]
+id = "v2-146"
+name = "the real run's flush waits for the newest input"
+test = "real"
+why = "With two mice moving, the horizon never reaches the newest input: the next trial waited until the hands stopped."
+find = '''    if (v2_horizon_all(p) < (S->real ? v->end_bar : v->g.t_cover) - 1) return 1;'''
+replace = '''    if (v2_horizon_all(p) < v->g.t_cover - 1) return 1;'''
+
+[[mutant]]
+id = "v2-147"
+name = "the graph's poll is the onset in a real run"
+test = "real"
+expect = "survived"
+note = "No output shows it (2026-11-16): sig.h's late_poll count is not in session.json, and the time-alone nodes' views up to min(onset, poll) changed no column of the signals cases. Kept because sig.h's contract says so (ysig_frame_in.poll_ns: the poll's time)."
+why = "sig.h: input is known up to the poll's time, before the onset; known to the onset, each report between the two is late input run again."
+find = '''        fi.poll_ns = p->v2s->real && p->v2s->live_poll < f->onset ? p->v2s->live_poll : f->onset;'''
+replace = '''        fi.poll_ns = f->onset;'''
+
+[[mutant]]
+id = "v2-148"
+name = "a role's samples dropped before the first binding ends"
+test = "real"
+why = "The session starts at the last click; samples of the first bound mouse while the second waits would move its role before the session."
+find = '''        if (!S->bound0) continue;   /* the session starts at the last click */'''
+replace = ''''''
+
+[[mutant]]
+id = "v2-149"
+name = "the idle graphs not reset"
+test = "player"
+why = "A graph with no trial takes no checkpoints, its logs fill, and a late report falls back: the guard stopped bimanual (t_v2_two_templates_late)."
+find = '''    if (S->bnd_max <= 0 || !S->polled) return;
+    tb = v2_horizon_all(p);'''
+replace = '''    if (1) return;
+    tb = v2_horizon_all(p);'''
+
+[[mutant]]
+id = "v2-150"
+name = "an idle graph reset while its frame rows wait"
+test = "player"
+expect = "survived"
+note = "No case reaches it (2026-11-16). A trial reset does clear an experiment node's ring (a direct check: ysig_value_at() at an earlier time found nothing after ysig_reset_trial()), but t_v2_frame_rows_late's two-template check, with records held 4 frames and 10 ms late input, read a distance and a rotated cursor whose rows came out the same: their values come from rings the reset keeps, or are read before it. Kept as a guard."
+why = "A frame trace's row reads the graph's value at its onset when the flip record comes, after the trial's end; a reset clears the ring."
+find = '''        for (k = 0; k < S->n_fpend && !owed; k++) owed = S->fpend[k].tmpl / 64 == ti;'''
+replace = ''''''
+
+[[mutant]]
+id = "v2-151"
+name = "a scroll counted as an absolute sample"
+test = "real"
+why = "A scroll is a raw mouse sample with the wheel's axis; counted with tablets' positions, the data says a tablet or a VM was there (0.13.0, a hand run on the Linux desktop)."
+find = '''        if (in.control == YIN_AXIS_WHEEL) { S->n_wheel++; continue; }'''
+replace = ''''''
+
+[[mutant]]
+id = "v2-152"
+name = "a device any role complete to its newest stamp"
+test = "player"
+count = 2
+why = "A mouse not heard from yet can send a report stamped before another mouse's newest, within its bound: the timed exit after it went first (t_v2_any_unseen; the review of 0.13.1)."
+find = '''        if (!(S->sig && S->sig[r].any) && S->newest[r] != INT64_MIN'''
+replace = '''        if (S->newest[r] != INT64_MIN'''
+
+[[mutant]]
+id = "v2-153"
+name = "a feed with a limit claims the limit"
+test = "player"
+why = "The feed stops at its first sample past the limit; a sample queued behind it can be stamped before the limit: a guard stop for a report within its bound (t_v2_limited_feed; the review of 0.13.1)."
+find = '''    if (limit == INT64_MAX) return limit;
+    for (i = S->next_smp;'''
+replace = '''    return limit;
+    for (i = S->next_smp;'''
+
+[[mutant]]
+id = "v2-154"
+name = "bounds with device any not refused"
+test = "player"
+why = "Two mice's counts reach one bounded integrator out of time order, and the clip depends on the order (t_v2_rig_signals; the review of 0.13.1)."
+find = '''    if (sg->device == YRIG_DEVICE_ANY && sg->bounded) {'''
+replace = '''    if (0) {'''
+
+[[mutant]]
+id = "v2-155"
+name = "a full poll buffer drops counts"
+test = "real"
+why = "A dropped count moves the role for the rest of the session, and 0.13.1 only counted it (real_test.py livecap; the review of 0.13.1)."
+find = '''            S->n_live_lost++;
+            pl_fail(p,'''
+replace = '''            S->n_live_lost++;
+            continue;
+            pl_fail(p,'''

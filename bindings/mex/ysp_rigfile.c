@@ -5,7 +5,7 @@
  * profile, never reused.
  *
  *     p = ysp_rigfile('load');                   % the user's profile.json
- *     info = ysp_rigfile('info', p);             % rig, notes, hash, roles, view, ppd
+ *     info = ysp_rigfile('info', p);             % rig, notes, hash, roles, view, ppd, signals
  *     cellfun(@disp, info.notes);                % what the checks found
  *     h = ysp_device('open', ysp_rigfile('desc', p, 'resp'));
  *     src = ysp_rigfile('source', p, ysp_device('info', h));   % tier 1 only when checked
@@ -29,7 +29,7 @@
 #define YSP_RIGFILE_IMPLEMENTATION
 #include "ysp/rigfile.h"
 
-#define RM_BINDING_VERSION "1.0.0"
+#define RM_BINDING_VERSION "1.1.0"   /* 1.1.0: info.signals (ysp/rigfile.h v0.6.0) */
 
 static void rm_destroy(void* p) { free(p); }
 
@@ -94,12 +94,13 @@ static const char* rm_role_fields[] = { "name", "family", "family_id", "key", "b
                                         "buttons", "latency", "bounds" };
 
 static mxArray* rm_info(const yrig_profile* p) {
-    static const char* f[] = { "rig", "written", "dir", "notes", "hash", "ppd", "view", "display", "roles" };
+    static const char* f[] = { "rig", "written", "dir", "notes", "hash", "ppd", "view", "display", "roles", "signals" };
+    static const char* fs[] = { "name", "adapter", "units", "per_count", "device", "lo", "hi", "late" };
     static const char* fv[] = { "distance_mm", "width_mm", "width_px" };
     static const char* fd[] = { "onset_offset", "latency", "calibration", "calibration_sha256", "calibration_check",
                                 "calibration_check_name" };
-    mxArray* s = mxCreateStructMatrix(1, 1, 9, f);
-    mxArray *notes, *roles;
+    mxArray* s = mxCreateStructMatrix(1, 1, 10, f);
+    mxArray *notes, *roles, *sigs;
     char hex[65];
     int i;
     mxSetField(s, 0, "rig", mxCreateString(p->rig));
@@ -134,6 +135,31 @@ static mxArray* rm_info(const yrig_profile* p) {
     roles = mxCreateStructMatrix(1, (size_t)p->n_roles, 11, rm_role_fields);
     for (i = 0; i < p->n_roles && i < YRIG_MAX_ROLES; i++) rm_role_into(roles, (size_t)i, &p->role[i]);
     mxSetField(s, 0, "roles", roles);
+    sigs = mxCreateStructMatrix(1, (size_t)p->n_signals, 8, fs);
+    for (i = 0; i < p->n_signals && i < YRIG_MAX_SIGNALS; i++) {
+        const yrig_signal* g = &p->signal[i];
+        mxArray* pc = mxCreateDoubleMatrix(1, 2, mxREAL);
+        mxGetPr(pc)[0] = g->per_count[0];
+        mxGetPr(pc)[1] = g->per_count[1];
+        mxSetField(sigs, (size_t)i, "name", mxCreateString(g->name));
+        mxSetField(sigs, (size_t)i, "adapter", mxCreateString(yrig_adapter_name(g->adapter)));
+        mxSetField(sigs, (size_t)i, "units", mxCreateString(yrig_units_name(g->units)));
+        mxSetField(sigs, (size_t)i, "per_count", pc);
+        mxSetField(sigs, (size_t)i, "device", mxCreateString(g->device == YRIG_DEVICE_CLICK ? "click" : "any"));
+        if (g->bounded) {
+            mxArray* lo = mxCreateDoubleMatrix(1, 2, mxREAL);
+            mxArray* hi = mxCreateDoubleMatrix(1, 2, mxREAL);
+            mxGetPr(lo)[0] = g->lo[0]; mxGetPr(lo)[1] = g->lo[1];
+            mxGetPr(hi)[0] = g->hi[0]; mxGetPr(hi)[1] = g->hi[1];
+            mxSetField(sigs, (size_t)i, "lo", lo);
+            mxSetField(sigs, (size_t)i, "hi", hi);
+        } else {
+            mxSetField(sigs, (size_t)i, "lo", rm_empty());
+            mxSetField(sigs, (size_t)i, "hi", rm_empty());
+        }
+        mxSetField(sigs, (size_t)i, "late", rm_opt_s(g->late_ns));
+    }
+    mxSetField(s, 0, "signals", sigs);
     return s;
 }
 

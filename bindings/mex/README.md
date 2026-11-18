@@ -625,7 +625,7 @@ and loop.
 | Command | Returns | Notes |
 |---|---|---|
 | `'load' [, name]`, `'load_file', path`, `'parse', text [, dir]`, `'new' [, rig]` | handle | `ysp_rigfile:missing` (no file), `:folder` (no rig folder, or one that another user can write), `:json`, `:format` (the message names the field) |
-| `'info', p` | struct | `rig`, `written`, `dir`, `notes` (cell), `hash`, `ppd`, `view`, `display`, `roles` (a struct array; times in seconds, `[]` for none) |
+| `'info', p` | struct | `rig`, `written`, `dir`, `notes` (cell), `hash`, `ppd`, `view`, `display`, `roles` (a struct array; times in seconds, `[]` for none), `signals` (1.1.0: a struct array of `name`, `adapter`, `units`, `per_count` `[x y]`, `device`, `lo` and `hi` (`[]` for no bounds), `late` (seconds, `[]` for none)) |
 | `'role', p, name`, `'desc', p, role` | struct | `desc` is the struct for `ysp_device('open', ...)`. It raises `:format` for an unbound or `lsl` role |
 | `'source', p, role_or_info` | struct | The tier rule by role name, or for `ysp_device('info', h)` |
 | `'text', p`, `'hash', p` | string | The canonical JSON and its SHA-256 |

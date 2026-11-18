@@ -44,7 +44,7 @@
 extern "C" {
 #endif
 
-#define PL_VERSION_STRING "0.12.0"
+#define PL_VERSION_STRING "0.13.2"
 /* The newest format version this player lowers (2: format part 3, in
  * v2.c). session.json's format_version is the definition's. */
 #define PL_FORMAT_VERSION 2
@@ -434,6 +434,7 @@ typedef struct pl_args {
                                 * their min_tier; NULL: none                */
     int64_t record_late_ns;    /* tests (--sim): every flip record's onset this much late */
     int record_delay;          /* tests (--sim): records handed on this many frames late */
+    int live_cap;              /* tests (a real run): raw mouse samples one poll holds; 0 the default */
     int64_t plan_early_ns;     /* tests: a response's plan onset this much
                                 * before the timeline's (--sim)             */
     int   lose_code;           /* tests: the screen never writes the Nth code
@@ -771,6 +772,18 @@ int  pl_v2_column(pl_player* p, pl_row* r, int col, const yexp_value* f, pl_val*
 const char* pl_v2_rsp_role(pl_player* p, const yrsp_result* res);
 int  pl_v2_trial_rows(pl_player* p);
 int  pl_v2_barrier_wait(pl_player* p);
+/* G18: a real run's signal roles from the rig profile (v2.c). polls: the
+ * frame polls the screen once (pl_v2_poll_screen()) and feeds its inputs
+ * to the collectors later (pl_v2_feed_keys()); bind_wait: 1 while a role
+ * waits for a click, so no trial starts; sigrole_check: the host's
+ * sigrole() */
+bool pl_v2_polls(const pl_player* p);
+#if !defined(YSCR_NO_SDL)
+int  pl_v2_poll_screen(pl_player* p, const yscr_frame* f);
+#endif
+void pl_v2_feed_keys(pl_player* p);
+int  pl_v2_bind_wait(pl_player* p);
+int  pl_v2_sigrole_check(pl_player* p, const yexp_sigrole* r, char* msg, size_t cap);
 int  pl_v2_response(pl_player* p, const yrsp_result* r, const yscr_frame* f);
 void pl_v2_on_onset(pl_player* p, const ytl_event* e, int stim);
 int  pl_v2_step_ops(pl_player* p, const yexp_step* s, ytl_op* ops, int c, int cap);

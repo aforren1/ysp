@@ -33,8 +33,10 @@ id = "rig-03"
 name = "any role name"
 test = "rig"
 why = "A role name is a ydev_roles name and a field path; a space or a dot breaks both."
-find = '''    if (!yrig__name_ok(m->key, 31, true)) {'''
-replace = '''    if (0) {'''
+find = '''    int rc;
+    if (!yrig__name_ok(m->key, 31, true)) {'''
+replace = '''    int rc;
+    if (0) {'''
 
 [[mutant]]
 id = "rig-04"
@@ -326,8 +328,8 @@ id = "rig-38"
 name = "view is an unknown key"
 test = "rig"
 why = "v0.5.0: a profile with the geometry would be refused, so no program gets degrees from it."
-find = '''    static const char* const keys[] = { "format", "rig", "written", "roles", "display", "view", NULL };'''
-replace = '''    static const char* const keys[] = { "format", "rig", "written", "roles", "display", NULL };'''
+find = '''    static const char* const keys[] = { "format", "rig", "written", "roles", "display", "view", "signals", NULL };'''
+replace = '''    static const char* const keys[] = { "format", "rig", "written", "roles", "display", "signals", NULL };'''
 
 [[mutant]]
 id = "rig-39"
@@ -374,8 +376,8 @@ id = "rig-44"
 name = "yrig_ppd() ignores set"
 test = "rig"
 why = "v0.5.0: a view a caller cleared would still give degrees."
-find = '''    if (!p || !p->view.set || !(p->view.width_mm > 0.0)'''
-replace = '''    if (!p || !(p->view.width_mm > 0.0)'''
+find = '''    if (!p || !p->view.set || !(p->view.width_mm > 0.0) || !(p->view.distance_mm > 0.0)'''
+replace = '''    if (!p || !(p->view.width_mm > 0.0) || !(p->view.distance_mm > 0.0)'''
 
 [[mutant]]
 id = "rig-45"
@@ -482,3 +484,292 @@ platform = "darwin"
 why = "A power cut after yrig_save() returned can bring the old profile back. The test sees it through the F_FULLFSYNC hook, so on macOS only."
 find = '''        yrig__sync_dir(path);'''
 replace = ''
+
+# v0.6.0: the signals block (SIGNALS).
+
+[[mutant]]
+id = "rig-55"
+name = "signals not a known key"
+test = "rig"
+why = "A v0.6.0 profile with signals would not load at all."
+find = '''"view", "signals", NULL };'''
+replace = '''"view", NULL };'''
+
+[[mutant]]
+id = "rig-56"
+name = "any signal name"
+test = "rig"
+why = "A signal name is a definition's role name and a field path; a space breaks both."
+find = '''static int yrig__signal(yrig__rd* r, const yjs_member* m, yrig_signal* sg) {
+    static const char* const keys[] = { "adapter", "units", "per_count", "bounds", "device", "late_s", NULL };
+    static const char* const bkeys[] = { "lo", "hi", NULL };
+    static const char* const devices[3] = { "", "any", "click" };
+    const yjs_value* o = m->value;
+    const yjs_value* v;
+    char f[96];
+    int rc, k;
+    if (!yrig__name_ok(m->key, 31, true)) {'''
+replace = '''static int yrig__signal(yrig__rd* r, const yjs_member* m, yrig_signal* sg) {
+    static const char* const keys[] = { "adapter", "units", "per_count", "bounds", "device", "late_s", NULL };
+    static const char* const bkeys[] = { "lo", "hi", NULL };
+    static const char* const devices[3] = { "", "any", "click" };
+    const yjs_value* o = m->value;
+    const yjs_value* v;
+    char f[96];
+    int rc, k;
+    if (0) {'''
+
+[[mutant]]
+id = "rig-57"
+name = "unknown keys in a signal"
+test = "rig"
+why = "late_ms for late_s would be a silent default, the program's wait, not the measured one."
+find = '''    snprintf(f, sizeof f, "signals.%s", sg->name);
+    if ((rc = yrig__keys(r, o, f, keys)) != YRIG_OK) return rc;'''
+replace = '''    snprintf(f, sizeof f, "signals.%s", sg->name);'''
+
+[[mutant]]
+id = "rig-58"
+name = "adapter optional"
+test = "rig"
+why = "A signal without an adapter cannot be lowered; the start would fail far from the file."
+find = '''    if (!(v = yjs_get(o, "adapter"))) return yrig__bad(r, o, f, "is missing");'''
+replace = '''    if (!(v = yjs_get(o, "adapter"))) return YRIG_OK;'''
+
+[[mutant]]
+id = "rig-59"
+name = "a prefix of an adapter name"
+test = "rig"
+why = "raw_mous would read as raw_mouse, and the writer then gives other bytes than the file's."
+find = '''        if (strlen(names[k]) == v->n && memcmp(names[k], v->u.s, v->n) == 0) return k;'''
+replace = '''        if (v->n && memcmp(names[k], v->u.s, v->n) == 0) return k;'''
+
+[[mutant]]
+id = "rig-60"
+name = "per_count may be 0"
+test = "rig"
+why = "A 0 scale freezes the role: every movement reads as none."
+find = '''        if (nonzero && out[k] == 0.0) return yrig__bad(r, v, field, "must not be 0");'''
+replace = ''''''
+
+[[mutant]]
+id = "rig-61"
+name = "per_count of any size"
+test = "rig"
+why = "Without the bound an overflow to infinity reads as a scale, and the integrator's sum is infinite after one count."
+find = '''        if (!(fabs(out[k]) <= lim)) return yrig__bad(r, v, field, "a magnitude above %g", lim);'''
+replace = '''        if (fabs(out[k]) > lim * 1e300) return yrig__bad(r, v, field, "a magnitude above %g", lim);'''
+
+[[mutant]]
+id = "rig-62"
+name = "only y of per_count checked"
+test = "rig"
+why = "A 0 or a huge x scale passes."
+find = '''    for (k = 0; k < 2; k++) {
+        /* !(a <= b) also takes a NaN'''
+replace = '''    for (k = 1; k < 2; k++) {
+        /* !(a <= b) also takes a NaN'''
+
+[[mutant]]
+id = "rig-63"
+name = "per_count of one number sets x only"
+test = "rig"
+why = "y would scale by 0: the cursor moves along x only."
+find = '''        out[1] = out[0];'''
+replace = '''        out[1] = 0.0;'''
+
+[[mutant]]
+id = "rig-64"
+name = "an array of any length"
+test = "rig"
+why = "[x] reads past the array, and [x, y, z] drops z silently."
+find = '''    } else if (v->type == YJS_ARRAY && v->n == 2) {'''
+replace = '''    } else if (v->type == YJS_ARRAY && v->n >= 1) {'''
+
+[[mutant]]
+id = "rig-65"
+name = "bounds in any order"
+test = "rig"
+why = "lo above hi gives the integrator an empty range: the role is clamped to one point."
+find = '''            if (!(sg->lo[k] < sg->hi[k])) return'''
+replace = '''            if (0) return'''
+
+[[mutant]]
+id = "rig-66"
+name = "bounds' y not checked"
+test = "rig"
+why = "An empty y range passes."
+find = '''        for (k = 0; k < 2; k++)
+            if (!(sg->lo[k] < sg->hi[k])) return'''
+replace = '''        for (k = 0; k < 1; k++)
+            if (!(sg->lo[k] < sg->hi[k])) return'''
+
+[[mutant]]
+id = "rig-67"
+name = "lo equal to hi accepted"
+test = "rig"
+why = "A range of one point clamps the role to it."
+find = '''            if (!(sg->lo[k] < sg->hi[k])) return'''
+replace = '''            if (!(sg->lo[k] <= sg->hi[k])) return'''
+
+[[mutant]]
+id = "rig-68"
+name = "bounds without hi"
+test = "rig"
+why = "hi would be 0 by the memset: a bound the file does not state."
+find = '''        if (!yjs_get(v, "hi")) return yrig__bad(r, v, f, "is missing");'''
+replace = ''''''
+
+[[mutant]]
+id = "rig-69"
+name = "late_s of any length"
+test = "rig"
+why = "A late_s of an hour makes the player wait an hour for complete input."
+find = '''    return yrig__secs(r, o, "late_s", f, &sg->late_ns, 0, (int64_t)1000000000, false);'''
+replace = '''    return yrig__secs(r, o, "late_s", f, &sg->late_ns, -YRIG__S_MAX, YRIG__S_MAX, false);'''
+
+[[mutant]]
+id = "rig-70"
+name = "device any beside another raw mouse"
+test = "rig"
+why = "One mouse's motion would drive two roles."
+find = '''    if (any >= 0 && mice > 1)'''
+replace = '''    if (any >= 0 && mice > 2)'''
+
+[[mutant]]
+id = "rig-71"
+name = "device any counted as a click"
+test = "rig"
+why = "The check never finds the any signal."
+find = '''        if (p->signal[i].device == YRIG_DEVICE_ANY && any < 0) any = i;'''
+replace = '''        if (p->signal[i].device == YRIG_DEVICE_CLICK && any < 0) any = i;'''
+
+[[mutant]]
+id = "rig-72"
+name = "more than 16 signals"
+test = "rig"
+why = "The 17th overruns signal[]."
+find = '''        else if (v->n > YRIG_MAX_SIGNALS) rc = yrig__bad(&r, v, "signals", "more than %d signals", YRIG_MAX_SIGNALS);'''
+replace = ''''''
+
+[[mutant]]
+id = "rig-73"
+name = "per_count always written as an array"
+test = "rig"
+why = "Two spellings of one value: the hash of a hand-written 0.25 would not be that of [0.25, 0.25]'s canonical form, and the golden block differs."
+find = '''    if (one && xy[0] == xy[1]) return yjs_new_double(a, xy[0]);'''
+replace = ''''''
+
+[[mutant]]
+id = "rig-74"
+name = "device click not written"
+test = "rig"
+why = "A saved profile would bind every mouse to each role."
+find = '''    if (ok && sg->device == YRIG_DEVICE_CLICK) ok = yrig__set_str(a, o, "device", "click");'''
+replace = ''''''
+
+[[mutant]]
+id = "rig-75"
+name = "late_s not written"
+test = "rig"
+why = "A saved profile would lose the measured lateness."
+find = '''    if (ok && sg->late_ns >= 0) ok = yrig__set_secs(a, o, "late_s", sg->late_ns);'''
+replace = ''''''
+
+[[mutant]]
+id = "rig-76"
+name = "bounds not written"
+test = "rig"
+why = "A saved profile would lose the integrator's bounds."
+find = '''    if (ok && sg->bounded) {'''
+replace = '''    if (0) {'''
+
+[[mutant]]
+id = "rig-77"
+name = "any units id has a name"
+test = "rig"
+why = "units 6 reads past the names, and the writer would write what it finds there."
+find = '''YRIG_API const char* yrig_units_name(int units) { return units >= 1 && units <= 5 ? yrig__units[units] : ""; }'''
+replace = '''YRIG_API const char* yrig_units_name(int units) { return units >= 1 && units <= 6 ? yrig__units[units] : ""; }'''
+
+[[mutant]]
+id = "rig-87"
+name = "writer takes units 0"
+test = "rig"
+why = "A signal whose units were never set would be written with units \"\", which the reader refuses: a saved profile that does not load."
+find = '''    if (sg->adapter != YRIG_ADAPTER_RAW_MOUSE || !un[0] ||'''
+replace = '''    if (sg->adapter != YRIG_ADAPTER_RAW_MOUSE ||'''
+
+[[mutant]]
+id = "rig-78"
+name = "signals' count not checked before the write"
+test = "rig"
+why = "A count above 16 reads past signal[]."
+find = '''    if (p->n_signals < 0 || p->n_signals > YRIG_MAX_SIGNALS) return NULL;'''
+replace = ''''''
+
+[[mutant]]
+id = "rig-79"
+name = "a signal added to a full table"
+test = "rig"
+why = "The 17th overruns signal[]."
+find = '''    if (!p || !yrig__name_ok(name, 31, true) || p->n_signals < 0 || p->n_signals >= YRIG_MAX_SIGNALS) return NULL;'''
+replace = '''    if (!p || !yrig__name_ok(name, 31, true) || p->n_signals < 0) return NULL;'''
+
+[[mutant]]
+id = "rig-80"
+name = "a new signal with per_count 0"
+test = "rig"
+why = "A program that sets only adapter and units writes a scale the reader refuses."
+find = '''    s->per_count[0] = s->per_count[1] = 1.0;'''
+replace = ''''''
+
+[[mutant]]
+id = "rig-81"
+name = "remove shifts one too few"
+test = "rig"
+why = "The last signal is lost."
+find = '''    memmove(&p->signal[i], &p->signal[i + 1], (size_t)(p->n_signals - i - 1) * sizeof(yrig_signal));'''
+replace = '''    memmove(&p->signal[i], &p->signal[i + 1], (size_t)(p->n_signals - i - 2 > 0 ? p->n_signals - i - 2 : 0) * sizeof(yrig_signal));'''
+
+[[mutant]]
+id = "rig-82"
+name = "cm per px from mm"
+test = "rig"
+why = "Every display_cm scale would be 10 times too small."
+find = '''    if (units == YRIG_UNITS_DISPLAY_CM) return 10.0 * (double)p->view.width_px / p->view.width_mm;'''
+replace = '''    if (units == YRIG_UNITS_DISPLAY_CM) return (double)p->view.width_px / p->view.width_mm;'''
+
+[[mutant]]
+id = "rig-83"
+name = "the factor inverted"
+test = "rig"
+why = "A cm scale converted to px would shrink, not grow."
+find = '''    return a > 0.0 && b > 0.0 ? a / b : 0.0;'''
+replace = '''    return a > 0.0 && b > 0.0 ? b / a : 0.0;'''
+
+[[mutant]]
+id = "rig-84"
+name = "a factor with no view"
+test = "rig"
+why = "Without view a cm is no known number of pixels; the start must be refused, not run at a scale of 0."
+find = '''    if (!p || !p->view.set || !(p->view.width_mm > 0.0) || p->view.width_px < 1) return 0.0;
+    if (units == YRIG_UNITS_DISPLAY_CM)'''
+replace = '''    if (!p) return 0.0;
+    if (units == YRIG_UNITS_DISPLAY_CM)'''
+
+[[mutant]]
+id = "rig-85"
+name = "workspace_cm as display_cm"
+test = "rig"
+why = "A workspace cm is not a screen cm; the conversion needs a gain the profile does not have."
+find = '''    if (units == YRIG_UNITS_DISPLAY_CM) return 10.0'''
+replace = '''    if (units == YRIG_UNITS_DISPLAY_CM || units == YRIG_UNITS_WORKSPACE_CM) return 10.0'''
+
+[[mutant]]
+id = "rig-86"
+name = "the same units through view"
+test = "rig"
+why = "display_cm to display_cm with no view would be refused, and with one would be inexact."
+find = '''    if (from == to) return 1.0;'''
+replace = ''''''

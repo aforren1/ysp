@@ -665,7 +665,7 @@ the header.
 | G15 | CLOSED in ysp/trials.h v0.8.0 (2026-11-11): `ytr_var_walk2d()`, `ytr_var_walk()` and `var NAME walk2d ...` as proposed; the point is a function of the seed and trial indices 0 to i, so a re-queue moves nothing; the snapshot (format 6) keeps the last point; a walk's name is at most 24 bytes. Was OPEN (2026-11-11): no variable depends on the last trial's value. Proposed: `ytr_var_walk2d(name, step, lo_x, hi_x, lo_y, hi_y, x0, y0)` and rules text `var NAME walk2d STEP LO_X HI_X LO_Y HI_Y X0 Y0`: trial i draws angles from a sub-stream of its trial stream until the previous point plus `step` (cos a, -sin a) is inside the box; a leaf's first trial starts at (x0, y0); the snapshot (`ytr_save()`) and `ytr_restore()` keep the last point; the data line gets NAME_x, NAME_y, NAME_from_x, NAME_from_y and NAME_deg | ysp/trials.h | D30; `trial_bimanual` | Medium |
 | G16 | CLOSED in ysp/sig.h v0.3.0 (2026-11-11): `entry` `now` (2, `YSIG_ENTRY_NOW`) as proposed; with a hold it is `arm`. Was OPEN (2026-11-11): a `detect` with `hold` 0 that is armed while its test is true gives no hit until the test fails (the CROSSINGS rule). Proposed: `entry` value `now` (2): a test true at the arm is a hit at the arm's time; a detect at frame rate armed between frames tests at the next onset | ysp/sig.h | D35; every region hit with `stay_s` 0: `trial_bimanual`'s `ready` (needed for its data) and `trial_visuomotor`'s `past_target` (no data change) | Small |
 | G17 | CLOSED in ysp/sig.h v0.4.0 (2026-11-11): as proposed; the recompute adds no ring entry, and stateful nodes keep their values. Was OPEN (2026-11-11): `ysig_set()` on a stateless node leaves its held value, and its stateless users', at the old parameters until the next sample (docs/sig.md, "The target's color in trial_bimanual"). Proposed: the call recomputes them from their inputs' held values, journaled as now | ysp/sig.h | 3.6; `trial_bimanual`'s block changes | Small |
-| G18 | OPEN (2026-11-11): the rig profile has no adapter block. signal_spec 5.5 proposes one and 11 leaves its schema open, to go in devices_spec 11.2, which has none yet. Needed: per signal role, the device, the adapter's type and units, and its scale per count or its map | ysp/rigfile.h | D21; both acceptance tasks | Medium |
+| G18 | CLOSED for raw mice (2026-11-16): the rig profile's `signals` (ysp/rigfile.h 0.6.0; devices_spec 11.2, "The signal block") and the player 0.13.0's checks, lowering, click binding and data. OPEN for other devices: an absolute device's map (a pen, an eye tracker). signal_spec 5.5 proposes one and 11 leaves its schema open, to go in devices_spec 11.2, which has none yet. Needed: per signal role, the device, the adapter's type and units, and its scale per count or its map | ysp/rigfile.h | D21; both acceptance tasks | Medium |
 | G19 | OPEN, not needed by a task (2026-11-11): `ysig_frame_in` has one base time for every generator. Proposed when a task needs two generators with different `from`: a time origin per generator | ysp/sig.h | D39 | Small |
 | G20 | OPEN, version 3 (2026-11-11): a press choice has no region, and a window cannot end on an early press (F3). Proposed: a rectangle or a circle on `yrsp_choice`; `desc.end_on_early`, `YRSP_R_EARLY_END`, `yrsp_ended_by()` | ysp/response.h | D31; mouse tracking; D20 rule 7 | Small each |
 
@@ -1729,11 +1729,11 @@ Lanes: `position2d`, `position2d_relative` and `gaze` have x and y;
 
 - **Adapters.** The rig supplies one adapter per signal role (signal_spec
   5.5): nodes that read a device and end in the role's value, in the
-  role's type and units (`ysig_adapter`). The profile's adapter block is
-  not built (G18): it must give, per signal role, the device and, for a
-  relative device, its scale per count in the role's units, or for an
-  absolute one the map from its coordinates. `--sim` gives each role a
-  scripted source in the role's units (3.19).
+  role's type and units (`ysig_adapter`). The profile's `signals` block
+  (G18; ysp/rigfile.h 0.6.0, devices_spec 11.2 "The signal block") gives,
+  per signal role, the device and a raw mouse's scale per count; the
+  player 0.13.0 reads it. A map for an absolute device is not built. `--sim` gives each role a scripted source in the role's units
+  (3.19).
 - **Start and bounds.** A relative role reads [0, 0] at the session's
   start. Its adapter never resets at a trial boundary (D19): the player
   calls `ysig_reset_trial()`, not `ysig_reset()`. A role has no bound

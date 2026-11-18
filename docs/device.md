@@ -268,6 +268,56 @@ The hash of the profile changes with `view`, so a data file's header
 names the geometry its degrees came from. Change the chin rest or the
 mode, and measure again.
 
+## How-to: set a signal role's adapter
+
+A version 2 definition with a signal role (experiment_format.md 3.5)
+needs the rig to say which device feeds the role, in which units and at
+which scale. The rig profile keeps this in `signals` (ysp/rigfile.h
+v0.6.0, SIGNALS). The first adapter is a raw mouse: its counts, times a
+scale, summed.
+
+1. Find the scale. Move the mouse a known distance on the desk and read
+   the count, or take the scale from a calibration. For
+   `trial_bimanual`, 0.25 px per count at 32 px per cm is 0.0078125
+   `display_cm` per count.
+2. Choose the device. `click` binds the mouse that the participant
+   clicks at the start, one role at a time. `any` takes every mouse's
+   counts, so it must be the only raw mouse signal in the profile.
+3. Set each role:
+   `rigfile_profile --signal left display_cm 0.0078125 click` and
+   `rigfile_profile --signal right display_cm 0.0078125 click`.
+   For a y axis that points up, give a negative y scale:
+   `0.0078125,-0.0078125`.
+4. For bounds on the sum, or a measured `late_s`, edit the file (see
+   below) and run `rigfile_profile` to check it.
+5. For display units, set the viewing geometry too (the previous
+   how-to): a profile in `display_cm` that feeds a `display_px` or
+   `display_deg` role converts through `view`. Without `view`, the
+   program refuses the start.
+
+A signal in the file:
+
+```json
+"signals": {
+  "right": {
+    "adapter": "raw_mouse",
+    "bounds": { "hi": [20, 15.5], "lo": [-20, -15] },
+    "device": "click",
+    "late_s": 0.004,
+    "per_count": [0.0078125, -0.0078125],
+    "units": "display_cm"
+  }
+}
+```
+
+`rigfile_profile --unsignal ROLE` removes a role. The hash of the
+profile changes with `signals`, so a data file's header names the scale
+its positions came from. In Python, `Profile.set_signal()` does the same
+with bounds and `late_s` (ysp.rigfile 0.6.0.1).
+
+The player (0.13.0) reads `signals`: docs/player.md, "How-to: run a
+version 2 definition with signal roles on a rig".
+
 ## How-to: open a role's device from the profile
 
 ```c
@@ -457,6 +507,27 @@ had no geometry. The 2AFC example hard-coded a distance and a pixel pitch.
 | The helper | `yrig_ppd()`: width_px / width_mm * distance_mm * tan(1 deg), ysp/gfx.h's YGFX_DEG expression, 0 without a view | ysp/rigfile.h does not include ysp/gfx.h; the manual gives the two lines that fill a `ygfx_view` |
 | No view | `yrig_ppd()` gives 0; the program decides. The 2AFC example falls back to nominal numbers (570 mm, 0.27 mm a pixel), flagged NOMINAL in its meta, as it does for the calibration; the definition has no fallback (experiment_format.md 2.14) | An example must run on CI with no profile; a definition's degrees are a claim |
 | A full-screen mode of another width | Not converted; the 2AFC example prints the ratio and flags MODE in its meta | The panel may scale, letterbox or center the image: no rule fits every display, so the user measures in the mode used |
+
+### The signal adapters (`ysp/rigfile.h` v0.6.0, 2026-11-16)
+
+Gap G18 of [experiment_format.md](experiment_format.md): the player
+refuses a definition with a signal role on a real rig, because the
+profile cannot say which device feeds the role. The design is
+devices_spec 11.2, "The signal block"; the user chose three of its
+points on 2026-11-16 (a mouse bound by a click, named presets, display
+units through `view`).
+
+| Question | Decision | Why |
+|---|---|---|
+| Where in the file | A top-level `signals` object, beside `roles` | A signal is not a ysp/device.h instance: a raw mouse comes through ysp/screen.h's `desc.raw_mice` and has no match key, family or loopback. In `roles` every reader of a role would have to skip it |
+| An adapter | A named preset, `raw_mouse`, not a list of ysp/sig.h nodes | The rig says what the device is and its scale; the program owns the nodes (the `--sim` adapter's source and integrator). A node list in the profile would tie it to ysp/sig.h's node set |
+| `per_count` | One number for both lanes, or `[x, y]`; written as one number when the lanes are equal | A mouse is mostly isotropic; a y axis that points up is a negative y. One spelling per value keeps the hash stable under a hand edit |
+| Ranges | `per_count` not 0, magnitude at most 1e6; `bounds` magnitude at most 1e9, `lo` below `hi` in each lane; `late_s` 0 to 1 s | A 0 scale freezes the role; an overflow to infinity must not read as a scale; an empty range clamps the role to a point; a lateness above a second is a fault, not a rig |
+| `device` | `any` (default) or `click`; a `raw_mouse` signal with `any` must be the only `raw_mouse` signal | The spec first refused two `any`s only. `any` beside a `click` also takes the clicked mouse's counts, so one movement would drive two roles |
+| No stable mouse key | Not in this version | A raw mouse has a session id and a 23-byte name, both unstable across a replug. The USB location is the stable key on each OS; it waits for unattended sessions |
+| Units | `yrig_units_factor()`: 1 for the same units; display_px, display_cm and display_deg convert through `view` (`width_px / width_mm` px per mm, `yrig_ppd()` px per degree, at the center); `workspace_cm` and `device` convert to nothing | The profile already holds the only rig fact the conversion needs. A workspace cm is not a screen cm: that needs a gain the profile does not have |
+| The hash | A profile without `signals` writes the bytes of v0.5.2; `"signals": {}` writes none | Existing profiles keep their hash; a data file's hash changes with the scale its positions came from |
+| What the header does | Read, check, write, find, add, remove, the factor. The checks against a definition, the lowering and the click binding are the player's | ysp/rigfile.h does not include ysp/sig.h or ysp/experiment.h |
 
 ### Open, close and the wait for RUNNING (v0.3.0)
 
@@ -925,12 +996,27 @@ only.
 | Fuzzing | A seed with `view` added to target 2 of `tests/fuzz/json_fuzz.c`; the 18 seeds replayed on WSL2 gcc 11.4 under ASan and UBSan with no report. No libFuzzer run yet |
 | Mutants (`tests/mutate/rigfile.toml`) | `rig-38` to `rig-45`: 8 of 8 killed |
 
+### The signal adapters (v0.6.0)
+
+On 2026-11-16, gcc 12.2 on Debian 12 (Linux 6.11, x86-64). Files and
+arithmetic; the player's runs are in docs/player.md.
+
+| Check | Result |
+|---|---|
+| `tests/adapt/rigfile_test.c` (`check_signals()`) | 751 checks pass (C11 -O2, C++17, and ASan with UBSan under `setarch -R`). GOLDEN (no signals) keeps its bytes and hash. Two signals: the block's exact bytes, in name order, defaults left out; parsed back to the same values and hash; a hand edit in another spelling (`[x, x]`, `0.0040`, `-2e1`, keys in another order) gives the same hash; `"device": "any"` written out is left out. 66 edits refused, each by field: each required key missing, an unknown adapter (and its prefix, and a trailing space), unknown units, `per_count` 0, -0.0, 0 in a lane, above 1e6, `1e400`, the wrong shape (1 or 3 numbers, a string, an object); bounds out of order in x or y, equal, above 1e9, the wrong shape, a key missing or unknown; `device` unknown; `late_s` below 0, above 1 s, a string; an unknown key; bad names (with the 31-byte limit); not an object; 17 signals; `any` beside another raw mouse (in each position). In memory: an unset adapter or units, units 6, device 2 or -1, a 0 or NaN scale, empty bounds, `late_s` above 1 s: not written or not hashed. Add, find, remove (and a full table). The factors: the same units 1 with no view; cm to px 10 * 1920 / 518.4 exactly; deg to px `yrig_ppd()` exactly; deg to cm 570 tan(1 deg) / 10 within 1e-12; workspace_cm and device to nothing; no factor without a valid view. Damage: 20,000 random edits of a profile with signals, 2000 still valid, each canonical and stable |
+| Compile checks (`tests/compile/rigfile.c`, `.cpp`) | The six new entry points in the table; C99 `-pedantic`, C11 and C++17 with `-Werror` |
+| `rigfile_profile --signal`, `--unsignal` | Two `click` mice written, shown and hashed; `any` beside them refused by the save's read-back (exit 1); unknown units and a bad `PER_COUNT` refused (exit 2); a missing role on `--unsignal` (exit 1). The CI steps |
+| Fuzzing | A seed with `signals` added to target 2 of `tests/fuzz/json_fuzz.c`; the 19 seeds replayed under ASan and UBSan with no report. No libFuzzer run: this machine has no clang |
+| Mutants (`tests/mutate/rigfile.toml`) | `rig-55` to `rig-87`: 33 of 33 killed. The first `rig-77` (the writer's units range) survived: past the table, the read is undefined and found a NULL by luck. The writer now takes the name from `yrig_units_name()`, which checks the range, and `rig-77` mutates that check. The anchors of `rig-03`, `rig-38` and `rig-44` moved with the code. On Linux `rig-47` to `rig-51` survive as before: they mutate Windows code and have no `platform` |
+| `ysp.rigfile` 0.6.0.1 | `signals`, `set_signal()` (a refused value changes nothing and raises `ValueError` with the reader's message), `remove_signal()`, `units_factor()`; 10 pass and 1 skipped (CPython 3.12, Linux) |
+
 ## Bindings
 
 `ysp/device.h` and `ysp/rigfile.h` have Python and MATLAB/Octave bindings
 (2026-10-25): the distributions `ysp-device` 0.5.1 (`ysp.device`) and
-`ysp-rigfile` 0.5.1 (`ysp.rigfile`), and the MEX functions `ysp_device`
-1.0.1 and `ysp_rigfile` 1.0.0. The user is a PsychoPy or Psychtoolbox experiment:
+`ysp-rigfile` 0.5.1 (`ysp.rigfile`; 0.6.0.1 since 2026-11-16, with the
+signal adapters), and the MEX functions `ysp_device` 1.0.1 and
+`ysp_rigfile` 1.0.0 (1.1.0 since 2026-11-16: `info.signals`). The user is a PsychoPy or Psychtoolbox experiment:
 it loads the rig profile, opens a role's device, reads its events on the
 ysp_rt clock, sends trigger codes, reads the device's status, and logs the
 profile's notes and the tiers. The packages' READMEs
@@ -944,8 +1030,8 @@ reference.
 | Binding | Surface |
 |---|---|
 | `ysp.device` | `Device` (open, `wait_running`, `poll`, `wait`, `clear`, `pending`, `set`, `pulse`, `mark`, `last_out`, `stats`, `source`, `state`, `error`, `close`), `Rule` (`arm`, `window`, `disarm`, `info`, `fires`, `close`), `Sim`, `Event`, `now`, `list_ports`, `key_match`, `family`, `roles`, and the constants of ysp/device.h, ysp/box.h's families and ysp/input.h |
-| `ysp.rigfile` | `load`, `load_file`, `parse`, `dir`, `path`, `Profile` (`notes`, `roles`, `role`, `desc`, `source`, `display`, `view`, `ppd`, `text`, `hash`, `bind`, `remove`, `set_view`, `clear_view`, `save`, `save_file`) |
-| `ysp_device`, `ysp_rigfile` (MEX) | The same commands, with handles; `ysp_rigfile('desc', p, role)` is the struct that `ysp_device('open', ...)` takes |
+| `ysp.rigfile` | `load`, `load_file`, `parse`, `dir`, `path`, `Profile` (`notes`, `roles`, `role`, `desc`, `source`, `display`, `view`, `ppd`, `signals`, `text`, `hash`, `bind`, `remove`, `set_view`, `clear_view`, `set_signal`, `remove_signal`, `units_factor`, `save`, `save_file`) |
+| `ysp_device`, `ysp_rigfile` (MEX) | The same commands, with handles; `ysp_rigfile('desc', p, role)` is the struct that `ysp_device('open', ...)` takes. `ysp_rigfile` 1.1.0: `info.signals` (read only; no setters yet) |
 
 ### Decisions
 
@@ -958,7 +1044,7 @@ reference.
 | Close order | `close()` of an output raises while an open `Rule` writes to it; `Rule.close()` raises while an open `Device` feeds it. A `Device` holds its `Rule`, a `Rule` its output, so the garbage collector closes them in the header's order. The MEX `clear` closes inputs with rules, then rules, then the rest | `ydev_rule_input()` on a closed output would take a freed lock. The header's contract is "close the box, then the rule, then the output" |
 | Calls during `close()` | A call that takes the handle's locks counts itself; `close()` waits for those calls, then closes. After it, the state, the stats and the error stay readable | Outputs come from any thread, and `ydev_close()` frees the locks they take |
 | Errors | `Error` with `args == (message, code)`; `Closed` for a closed handle; `wait_running()` returns `False` on a timeout | The output calls return a code and write no message (README.md, Conventions); the code is in the exception |
-| MEX versions | `ysp_device` and `ysp_rigfile` 1.0.0, their own numbers; the second output of `'version'` is the header's. `ysp_device` 1.0.1 (2026-10-27) passes `Inf` to `'wait_running'` as `INT64_MAX` (1.0.0 passed `INT64_MAX / 2`, because ysp/device.h 0.5.0 overflowed on `INT64_MAX`) | As `ysp_serial` |
+| MEX versions | `ysp_device` and `ysp_rigfile` 1.0.0, their own numbers; the second output of `'version'` is the header's. `ysp_rigfile` 1.1.0 (2026-11-16) adds `info.signals`. `ysp_device` 1.0.1 (2026-10-27) passes `Inf` to `'wait_running'` as `INT64_MAX` (1.0.0 passed `INT64_MAX / 2`, because ysp/device.h 0.5.0 overflowed on `INT64_MAX`) | As `ysp_serial` |
 
 ### What is not bound, and why
 

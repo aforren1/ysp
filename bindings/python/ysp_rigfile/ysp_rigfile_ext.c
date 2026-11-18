@@ -294,6 +294,163 @@ static PyObject* Profile_clear_view(PyObject* self, PyObject* Py_UNUSED(a)) {
     Py_RETURN_NONE;
 }
 
+/* x, or (x, y), into xy. */
+static int rg_xy(PyObject* o, double xy[2], const char* what) {
+    if (PyFloat_Check(o) || PyLong_Check(o)) {
+        xy[0] = xy[1] = PyFloat_AsDouble(o);
+        return PyErr_Occurred() ? -1 : 0;
+    }
+    if (PySequence_Check(o) && PySequence_Size(o) == 2) {
+        int k;
+        for (k = 0; k < 2; k++) {
+            PyObject* v = PySequence_GetItem(o, k);
+            if (!v) return -1;
+            xy[k] = PyFloat_AsDouble(v);
+            Py_DECREF(v);
+            if (PyErr_Occurred()) return -1;
+        }
+        return 0;
+    }
+    PyErr_Format(PyExc_TypeError, "set_signal: %s is a number or (x, y)", what);
+    return -1;
+}
+
+/* The profile read back from its canonical bytes, as a save would: the
+ * reader's message, or "" when it holds. */
+static int rg_check(const yrig_profile* p, char* err, size_t cap) {
+    size_t n = yrig_write(p, NULL, 0);
+    char* b;
+    yrig_profile* q;
+    int rc;
+    err[0] = '\0';
+    if (!n) { snprintf(err, cap, "a value the format cannot hold"); return -1; }
+    b = (char*)malloc(n + 1);
+    q = (yrig_profile*)malloc(sizeof *q);
+    if (!b || !q) { free(b); free(q); snprintf(err, cap, "out of memory"); return -1; }
+    yrig_write(p, b, n + 1);
+    rc = yrig_parse(q, b, n, NULL, err, cap);
+    free(b);
+    free(q);
+    return rc == YRIG_OK ? 0 : -1;
+}
+
+static PyObject* Profile_set_signal(PyObject* self, PyObject* args, PyObject* kwds) {
+    static char* kw[] = { "role", "units", "per_count", "device", "bounds", "late_s", NULL };
+    const char *role, *units, *device = "any";
+    PyObject *pc, *bounds = Py_None, *late = Py_None;
+    yrig_profile* p = rg_prof(self);
+    yrig_signal old, *s;
+    double xy[2], lo[2] = { 0, 0 }, hi[2] = { 0, 0 };
+    int k, u = 0, existed;
+    int64_t late_ns = -1;
+    char err[512];
+    if (!p || !PyArg_ParseTupleAndKeywords(args, kwds, "ssO|sOO", kw, &role, &units, &pc, &device, &bounds, &late)) return NULL;
+    for (k = 1; k <= 5; k++)
+        if (strcmp(yrig_units_name(k), units) == 0) u = k;
+    if (!u) {
+        PyErr_SetString(PyExc_ValueError, "set_signal: units is display_px, display_cm, display_deg, workspace_cm or device");
+        return NULL;
+    }
+    if (strcmp(device, "any") != 0 && strcmp(device, "click") != 0) {
+        PyErr_SetString(PyExc_ValueError, "set_signal: device is 'any' or 'click'");
+        return NULL;
+    }
+    if (rg_xy(pc, xy, "per_count") < 0) return NULL;
+    if (bounds != Py_None) {
+        PyObject *l = PyDict_Check(bounds) ? PyDict_GetItemString(bounds, "lo") : NULL;
+        PyObject *h = PyDict_Check(bounds) ? PyDict_GetItemString(bounds, "hi") : NULL;
+        if (!l || !h) {
+            PyErr_SetString(PyExc_TypeError, "set_signal: bounds is {'lo': (x, y), 'hi': (x, y)} or None");
+            return NULL;
+        }
+        if (rg_xy(l, lo, "bounds['lo']") < 0 || rg_xy(h, hi, "bounds['hi']") < 0) return NULL;
+    }
+    if (late != Py_None) {
+        double sec = PyFloat_AsDouble(late);
+        if (PyErr_Occurred()) return NULL;
+        /* the file holds whole ns; the reader's range is 0 to 1 s */
+        if (!(sec >= 0.0 && sec <= 1.0)) {
+            PyErr_SetString(PyExc_ValueError, "set_signal: late_s is 0 to 1 (seconds) or None");
+            return NULL;
+        }
+        late_ns = (int64_t)llround(sec * 1e9);
+    }
+    existed = yrig_find_signal(p, role) != NULL;
+    s = yrig_add_signal(p, role);
+    if (!s) {
+        PyErr_Format(RgError, "set_signal: \"%.40s\" is not a role name (1 to 31 of A-Z a-z 0-9 _ . -), or the profile has %d signals",
+                     role, YRIG_MAX_SIGNALS);
+        return NULL;
+    }
+    old = *s;
+    s->adapter = YRIG_ADAPTER_RAW_MOUSE;
+    s->units = u;
+    s->device = strcmp(device, "click") == 0 ? YRIG_DEVICE_CLICK : YRIG_DEVICE_ANY;
+    s->per_count[0] = xy[0];
+    s->per_count[1] = xy[1];
+    s->bounded = bounds != Py_None;
+    s->lo[0] = lo[0]; s->lo[1] = lo[1];
+    s->hi[0] = hi[0]; s->hi[1] = hi[1];
+    s->late_ns = late_ns;
+    /* refused now, with the reader's message, not at the next save */
+    if (rg_check(p, err, sizeof err) < 0) {
+        if (existed) *s = old;
+        else yrig_remove_signal(p, role);
+        PyErr_Format(PyExc_ValueError, "set_signal: %s", err);
+        return NULL;
+    }
+    Py_RETURN_NONE;
+}
+
+static PyObject* Profile_remove_signal(PyObject* self, PyObject* args) {
+    const char* role;
+    yrig_profile* p = rg_prof(self);
+    if (!p || !PyArg_ParseTuple(args, "s", &role)) return NULL;
+    return PyBool_FromLong(yrig_remove_signal(p, role));
+}
+
+static PyObject* Profile_units_factor(PyObject* self, PyObject* args) {
+    const char *from, *to;
+    int k, f = 0, t = 0;
+    yrig_profile* p = rg_prof(self);
+    if (!p || !PyArg_ParseTuple(args, "ss", &from, &to)) return NULL;
+    for (k = 1; k <= 5; k++) {
+        if (strcmp(yrig_units_name(k), from) == 0) f = k;
+        if (strcmp(yrig_units_name(k), to) == 0) t = k;
+    }
+    if (!f || !t) {
+        PyErr_SetString(PyExc_ValueError, "units_factor: units are display_px, display_cm, display_deg, workspace_cm or device");
+        return NULL;
+    }
+    return PyFloat_FromDouble(yrig_units_factor(p, f, t));
+}
+
+static PyObject* rg_pair(const double xy[2]) { return Py_BuildValue("(dd)", xy[0], xy[1]); }
+
+static PyObject* Profile_get_signals(PyObject* self, void* c) {
+    yrig_profile* p = rg_prof(self);
+    PyObject* d;
+    int i;
+    (void)c;
+    if (!p || !(d = PyDict_New())) return NULL;
+    for (i = 0; i < p->n_signals; i++) {
+        const yrig_signal* s = &p->signal[i];
+        PyObject* b = s->bounded ? Py_BuildValue("{s:N,s:N}", "lo", rg_pair(s->lo), "hi", rg_pair(s->hi)) : (Py_INCREF(Py_None), Py_None);
+        PyObject* late = s->late_ns >= 0 ? rg_s(s->late_ns) : (Py_INCREF(Py_None), Py_None);
+        PyObject* v = b && late ? Py_BuildValue("{s:s,s:s,s:N,s:s,s:N,s:N}", "adapter", yrig_adapter_name(s->adapter), "units",
+                                                yrig_units_name(s->units), "per_count", rg_pair(s->per_count), "device",
+                                                s->device == YRIG_DEVICE_CLICK ? "click" : "any", "bounds", b, "late", late)
+                                : NULL;
+        if (!v || PyDict_SetItemString(d, s->name, v) < 0) {
+            Py_XDECREF(v);
+            Py_DECREF(d);
+            return NULL;
+        }
+        Py_DECREF(v);
+    }
+    return d;
+}
+
 static PyObject* Profile_save(PyObject* self, PyObject* args, PyObject* kwds) {
     static char* kw[] = { "name", NULL };
     const char* name = NULL;
@@ -425,6 +582,9 @@ static PyGetSetDef Profile_getset[] = {
       "run, or None), calibration (a file name), calibration_sha256, calibration_check(_name).", NULL },
     { "view", Profile_get_view, NULL, "dict or None: distance_mm, width_mm, width_px (VIEWING GEOMETRY).", NULL },
     { "ppd", Profile_get_ppd, NULL, "Pixels per degree at the screen's center from view; 0 without one.", NULL },
+    { "signals", Profile_get_signals, NULL,
+      "dict {role: dict}: each signal role's adapter ('raw_mouse'), units, per_count (x, y), device ('any' or "
+      "'click'), bounds ({'lo': (x, y), 'hi': (x, y)} or None) and late (seconds or None) (SIGNALS).", NULL },
     { "text", Profile_get_text, NULL, "The canonical JSON text (yrig_write).", NULL },
     { "hash", Profile_get_hash, NULL, "The SHA-256 of the canonical text, hex: name it in the data file's header.", NULL },
     { NULL }
@@ -450,6 +610,14 @@ static PyMethodDef Profile_methods[] = {
     { "set_view", (PyCFunction)(void (*)(void))Profile_set_view, METH_VARARGS | METH_KEYWORDS,
       "set_view(distance_mm, width_mm, width_px): the viewing geometry. It changes the hash." },
     { "clear_view", Profile_clear_view, METH_NOARGS, "clear_view(): no viewing geometry." },
+    { "set_signal", (PyCFunction)(void (*)(void))Profile_set_signal, METH_VARARGS | METH_KEYWORDS,
+      "set_signal(role, units, per_count, device='any', bounds=None, late_s=None): a raw mouse adapter for the signal "
+      "role (added when new). per_count is a number or (x, y); bounds {'lo': (x, y), 'hi': (x, y)}. Raises "
+      "ValueError, and changes nothing, for a value the file refuses (0, a range, 'any' beside another mouse)." },
+    { "remove_signal", Profile_remove_signal, METH_VARARGS, "remove_signal(role) -> bool." },
+    { "units_factor", Profile_units_factor, METH_VARARGS,
+      "units_factor(from_units, to_units) -> float: 1 for the same units, through view for two display units, "
+      "else 0 (no conversion)." },
     { "save", (PyCFunction)(void (*)(void))Profile_save, METH_VARARGS | METH_KEYWORDS,
       "save(name=None): set written to now and write the profile to the user's rig folder (profile.json, or "
       "<name>.json), through a temporary file. Raises Folder when the folder is refused." },

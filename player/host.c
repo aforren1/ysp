@@ -79,6 +79,11 @@ static int h_role(void* ctx, const yexp_role* role, char* msg, size_t cap) {
     return 1;
 }
 
+/* A signal role against the rig profile's signals (G18; v2.c). */
+static int h_sigrole(void* ctx, const yexp_sigrole* role, char* msg, size_t cap) {
+    return pl_v2_sigrole_check((pl_player*)ctx, role, msg, cap);
+}
+
 /* A value against a header's table, where the value is a literal. The
  * tables' ranges are the headers' own, so an out-of-range literal is
  * refused at load with the key's name, not at the first frame. */
@@ -387,4 +392,7 @@ void pl_host_init(pl_player* p, yexp_host* h) {
     h->rules = h_rules;
     h->check_ops = h_check_ops;
     if (p->have_rig) h->role = h_role;
+    /* a real run checks every signal role, a profile or none; --sim only
+     * those a profile has */
+    if (p->have_rig || !p->args.sim) h->sigrole = h_sigrole;
 }

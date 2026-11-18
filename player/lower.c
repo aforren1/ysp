@@ -2236,6 +2236,9 @@ static int pl_screen_open(pl_player* p) {
     sd.windowed = p->args.sim || p->args.windowed;
     sd.sim_period_ns = p->args.sim ? p->args.sim_period_ns : 0;
     sd.min_tier = p->def->min_tier;
+    /* a signal role's raw mouse (G18): every mouse's counts, read apart
+     * from the system cursor (ysp/screen.h, INPUT) */
+    sd.raw_mice = !p->args.sim && p->def->n_sigroles > 0 && p->have_rig && p->rig->n_signals > 0;
     if (!p->args.sim && !sd.windowed) {
         /* Shift+Esc 3 times when the loop hangs */
         sd.panic = true;
@@ -2406,11 +2409,11 @@ int pl_load(pl_player* p, const pl_args* a) {
     memset(&p->env, 0, sizeof p->env);
     if (pl_cal_load(p) < 0) return -1;
 
-    if (!a->sim && p->def->n_sigroles > 0) {
-        /* G18: the rig profile has no adapter block, so a real run cannot
-         * bind a signal role; refused before any device or window opens */
-        pl_fail(p, "signal role '%s': a real run needs the rig profile's adapter block (gap G18, not built); --sim gives each role a scripted source",
-                p->def->sigroles[0].name);
+    if (!a->sim && p->def->n_sigroles > 0 && !p->have_rig) {
+        /* a signal role's adapter is the rig's (G18, devices_spec.md 11.2);
+         * the definition's checks ran the profile's signals through the
+         * host's sigrole(); refused before any device or window opens */
+        pl_fail(p, "signal role '%s': a real run needs a rig profile with its signals (--rig, rigfile_profile --signal)", p->def->sigroles[0].name);
         return -1;
     }
     if (pl_allow_check(p) < 0 || pl_channels_assign(p) < 0) return -1;

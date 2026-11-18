@@ -2,8 +2,8 @@
 
 A CPython extension that wraps [ysp/rigfile.h](../../../include/ysp/rigfile.h):
 the rig profile ("ysp-rig 1"), the file on a rig that says which device
-plays each role, what the rig's loopbacks measured, and the viewing
-geometry. It uses the Limited API (one abi3 wheel per platform for CPython
+plays each role, what the rig's loopbacks measured, the viewing
+geometry, and the adapter of each signal role. It uses the Limited API (one abi3 wheel per platform for CPython
 3.10+) and has no run-time dependencies. The distribution is `ysp-rigfile`,
 the module `ysp.rigfile`. Its version is the header's.
 
@@ -47,8 +47,11 @@ A build outside the repository (an sdist, cibuildwheel) needs copies of
 | `.desc(role)` | The keyword arguments of `ysp.device.Device`: `role`, `family`, `key`, `baud`, `latched`, and `pulse` when the rig fixes it. Raises for an `lsl` role: give its key to ysp/net.h |
 | `.source(role)`, `.source(device)` | The tier rule: `tier` 1 with the role's bounds (`lo`, `hi`) only when its bounds file checked and its family maps a device clock |
 | `.display`, `.view`, `.ppd` | The display's onset offset and its photodiode run; the viewing geometry; pixels per degree at the center |
+| `.signals` | A dict per signal role: `adapter` (`'raw_mouse'`), `units`, `per_count` `(x, y)`, `device` (`'any'` or `'click'`), `bounds` (`{'lo': (x, y), 'hi': (x, y)}` or `None`), `late` (seconds or `None`) |
+| `.units_factor(from_units, to_units)` | 1 for the same units; display units through the view; else 0 (no conversion) |
 | `.text`, `.hash` | The canonical JSON and its SHA-256 |
 | `.bind(role, family, key)`, `.remove(role)`, `.set_view(distance_mm, width_mm, width_px)`, `.clear_view()` | Changes in memory; a new binding drops the role's latency and bounds |
+| `.set_signal(role, units, per_count, device='any', bounds=None, late_s=None)`, `.remove_signal(role)` | A raw mouse adapter for a signal role, in memory. A value the file refuses raises `ValueError` with the reader's message and changes nothing |
 | `.save(name=None)`, `.save_file(path)` | Write it (the user's folder through a temporary file, or a path) |
 | `check_name(check)`, `CHECK_*`, `ERR_*`, `TIER_*`, `FAMILY_LSL`, `FORMAT` | Names and constants |
 | `Error`, `Missing`, `Folder` | Exceptions; `args == (message, ERR_*)` |

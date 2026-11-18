@@ -2238,6 +2238,12 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
     }
     p->frame_trial[f->index % PL_FRAME_RING] = YTR_MISSING_INT;   /* until a trial claims it */
     if (p->t0_session == 0) p->t0_session = f->onset;
+#if !defined(YSCR_NO_SDL)
+    /* a real run with signal roles: the screen's queue once, here, so the
+     * raw mice's counts reach the graphs before a trial's reset at this
+     * onset; its keys go to the collectors where they did (below) */
+    if (pl_v2_polls(p) && pl_v2_poll_screen(p, f) < 0) return -1;
+#endif
     if (!p->in_trial) {
         int64_t t0 = p->args.measure ? yrt_real_ns() : 0, wr0 = p->work_wr_ns;
         int bwait = 0;
@@ -2255,6 +2261,8 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
             bwait = pl_v2_barrier_wait(p);
             if (bwait < 0) return -1;
         }
+        /* a signal role waiting for its mouse's click (G18) */
+        if (bwait == 0 && p->v2s) bwait = pl_v2_bind_wait(p);
         if (bwait == 1) {
             rc = 2;   /* no trial on this frame: it draws nothing, as a yield */
         } else {
@@ -2284,7 +2292,8 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
     if (!p->args.sim) {
         int64_t t0 = p->args.measure ? yrt_real_ns() : 0;
         YRT_ZONE(zf, "pl.feed_screen");
-        (void)yrsp_feed_screen(&p->scr, p->collectors, p->n_collectors);
+        if (pl_v2_polls(p)) pl_v2_feed_keys(p);
+        else (void)yrsp_feed_screen(&p->scr, p->collectors, p->n_collectors);
         YRT_ZONE_END(zf);
         if (p->args.measure && yrt_real_ns() - t0 > p->work_input_max_ns) {
             p->work_input_max_ns = yrt_real_ns() - t0;

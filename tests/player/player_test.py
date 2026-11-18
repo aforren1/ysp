@@ -1160,10 +1160,133 @@ def v2_rig(ctx, run_dir):
 
 
 def write_samples(path, rows):
+    # a row of five: the fifth is arr_s, when the report reaches the player
     with open(path, "w", newline="\n") as f:
         f.write("t_s,role,x,y\n")
-        for t, role, x, y in rows:
-            f.write("%.6f,%s,%g,%g\n" % (t, role, x, y))
+        for row in rows:
+            f.write("%.6f,%s,%g,%g" % row[:4] + (",%.6f\n" % row[4] if len(row) > 4 else "\n"))
+
+
+def v2_sig_rig(ctx, name, signals, view=True):
+    """A rig profile with signals (ysp/rigfile.h 0.6.0, G18): the view of
+    v2_rig (1024 px over 320 mm: 32 px a cm) and the given block."""
+    rig = os.path.join(ctx.out, "v2_sigrig_" + name)
+    os.makedirs(rig, exist_ok=True)
+    prof = {"format": "ysp-rig 1", "rig": "t", "written": "2026-11-16T00:00:00Z", "roles": {}, "signals": signals}
+    if view:
+        prof["view"] = {"distance_mm": 570, "width_mm": 320, "width_px": 1024}
+    path = os.path.join(rig, "profile.json")
+    with open(path, "w", newline="\n") as f:
+        json.dump(prof, f)
+    return path
+
+
+def t_v2_rig_signals(ctx):
+    # G18 on --sim: a signal role's adapter from the rig profile. Its scale
+    # in px through the view to the role's cm equals --sim-gain's; a
+    # negative y scale with bounds runs mirrored and turns back (sig.h
+    # bounds a lane only with a positive gain), so its data equal a
+    # positive scale's with the counts negated; bounds change the data;
+    # session.json names the adapter; the checks refuse by name
+    roles = {"hand": {"type": "position2d_relative", "units": "display_cm"}}
+    stim = {"dot": {"kind": "shape", "w": 0.5, "h": 0.5}}
+    t = {"controls": {
+            "cur": {"control": "cursor", "role": "hand", "stimulus": "dot"},
+            "home": {"control": "region", "of": "hand", "radius": 1, "stay_s": 0.2},
+            "out": {"control": "region", "of": "hand", "radius": 5, "outside": True}},
+         "states": [
+            {"name": "hold", "steps": [{"on": "dot"}], "exits": [{"on": "home", "to": "reach"}]},
+            {"name": "reach", "steps": [], "exits": [{"on": "out", "to": "end"}]}],
+         "columns": {"out_x": {"hit": "out.x"}, "out_y": {"hit": "out.y"}, "out_s": {"time": "out", "from": "dot"}, "end_y": {"signal": "cur.y"}}}
+    d = v2base({"t": t}, [{"name": "l", "trial": "t"}], stimuli=stim, roles=roles, extra={"display": {"units": "cm"}})
+
+    def samples(name, sy):
+        # still 0.4 s; then y by 1000 counts in one report (7.8 cm, past a
+        # 3 cm bound); then x at 2 counts a ms
+        smp = [(0.001 * k, "hand", 0, 0) for k in range(400)]
+        smp.append((0.4, "hand", 0, 1000 * sy))
+        smp += [(0.4 + 0.001 * k, "hand", 2, 0) for k in range(1, 400)]
+        sp = os.path.join(ctx.out, "v2_rigsig_%s.csv" % name)
+        write_samples(sp, smp)
+        return sp
+
+    pos, neg = samples("pos", 1), samples("neg", -1)
+    ref = Run(ctx, "v2_rigsig_ref", d, args=["--rig", v2_rig(ctx, None), "--sim-gain", "hand=0.0078125", "--samples", pos, "--max-seconds", "30"])
+    sig = {"adapter": "raw_mouse", "units": "display_px", "per_count": 0.25}
+    unb = Run(ctx, "v2_rigsig_unbounded", d, args=["--rig", v2_sig_rig(ctx, "unb", {"hand": sig}), "--samples", pos, "--max-seconds", "30"])
+    check(ref.rc == 0 and unb.rc == 0 and ref.trials and ref.trials == unb.trials,
+          "rig signals: 0.25 px a count at 32 px a cm is --sim-gain 0.0078125: %d %d %s | %s" % (ref.rc, unb.rc, ref.trials[:1], unb.trials[:1]))
+    # x in [-6, 6] cm, y in [-2, 3]: not symmetric, so a negative lane's
+    # range must be mirrored to come out the same
+    bounds = {"lo": [-192, -64], "hi": [192, 96]}
+    # bounds need one mouse a role (device click): device any is refused
+    bpos = Run(ctx, "v2_rigsig_bpos", d, args=["--rig", v2_sig_rig(ctx, "bpos", {"hand": dict(sig, bounds=bounds, device="click")}), "--samples", pos, "--max-seconds", "30"])
+    bneg = Run(ctx, "v2_rigsig_bneg", d, args=["--rig", v2_sig_rig(ctx, "bneg", {"hand": dict(sig, per_count=[0.25, -0.25], bounds=bounds, device="click")}),
+                                              "--samples", neg, "--max-seconds", "30"])
+    check(bpos.rc == 0 and bneg.rc == 0 and bpos.trials and bpos.trials == bneg.trials,
+          "rig signals: a negative y scale with bounds is the positive one with the counts negated: %d %d %s | %s"
+          % (bpos.rc, bneg.rc, bpos.trials[:1], bneg.trials[:1]))
+    if bpos.trials and unb.trials:
+        yb, yu = float(bpos.trials[0]["out_y"]), float(unb.trials[0]["out_y"])
+        check(abs(yb - 3) < 1e-9 and yu > 7.8 - 1e-9, "rig signals: the bound holds y at 3 cm (unbounded %.4f): %.6f" % (yu, yb))
+        check(float(bpos.trials[0]["out_s"]) > float(unb.trials[0]["out_s"]), "rig signals: bounded, out comes later: %s %s"
+              % (bpos.trials[0]["out_s"], unb.trials[0]["out_s"]))
+    try:
+        with open(os.path.join(bpos.data, "session.json")) as f:
+            sr = json.load(f)["signal_roles"][0]
+    except (OSError, ValueError, KeyError, IndexError) as e:
+        sr = {"error": str(e)}
+    check(sr.get("adapter") == "raw_mouse" and sr.get("device") == "click" and sr.get("per_count") == [0.25, 0.25] and
+          sr.get("adapter_units") == "display_px" and sr.get("factor") == 0.03125 and sr.get("bounds") == {"lo": [-192, -64], "hi": [192, 96]} and
+          sr.get("late_s_from") == "none" and len(sr.get("rig_sha256", "")) == 64,
+          "rig signals: session.json names the profile's adapter: %s" % sr)
+    # --sim-gain names the role: its adapter, not the profile's
+    over = Run(ctx, "v2_rigsig_over", d, args=["--rig", v2_sig_rig(ctx, "over", {"hand": dict(sig, bounds=bounds, device="click")}), "--sim-gain", "hand=0.0078125",
+                                              "--samples", pos, "--max-seconds", "30"])
+    check(over.rc == 0 and over.trials == ref.trials, "rig signals: --sim-gain wins over the profile: %d %s" % (over.rc, over.trials[:1]))
+    # a measured late_s: the bound B the player waits on
+    late = Run(ctx, "v2_rigsig_late", d, args=["--rig", v2_sig_rig(ctx, "late", {"hand": dict(sig, late_s=0.004, device="click")}),
+                                              "--samples", pos, "--max-seconds", "30"])
+    try:
+        with open(os.path.join(late.data, "session.json")) as f:
+            sl = json.load(f)["signal_roles"][0]
+    except (OSError, ValueError, KeyError, IndexError) as e:
+        sl = {"error": str(e)}
+    check(late.rc == 0 and sl.get("late_s") == 0.004 and sl.get("late_s_from") == "profile" and sl.get("device") == "click"
+          and late.trials and late.trials[0]["out_y"] == unb.trials[0]["out_y"],
+          "rig signals: late_s 0.004 from the profile, the same hit: %d %s" % (late.rc, sl))
+    # the checks, by name
+    for nm, rl, sgs, view, want in (
+            ("type", {"hand": {"type": "position2d", "units": "display_cm"}}, {"hand": sig}, True, "gives position2d_relative"),
+            ("units", roles, {"hand": dict(sig, units="workspace_cm")}, True, "do not convert"),
+            ("view", roles, {"hand": sig}, False, "through the profile's view"),
+            ("anybounds", roles, {"hand": dict(sig, bounds=bounds)}, True, "bounds and device any")):
+        dd = v2base({"t": t}, [{"name": "l", "trial": "t"}], stimuli=stim, roles=rl, extra={"display": {"units": "cm"}})
+        r = Run(ctx, "v2_rigsig_" + nm, dd, args=["--rig", v2_sig_rig(ctx, nm, sgs, view=view), "--samples", pos])
+        check(r.rc != 0 and "signal role 'hand'" in r.err and want in r.err, "rig signals refused (%s): exit %d %s" % (nm, r.rc, r.err[:300]))
+    r = Run(ctx, "v2_rigsig_none", d, args=["--rig", v2_sig_rig(ctx, "none", {}), "--samples", pos])
+    check(r.rc == 2 and "or a rig profile with its signal" in r.err, "rig signals: --sim with no signal and no --sim-gain: exit %d %s" % (r.rc, r.err[:200]))
+
+
+def t_v2_two_templates_late(ctx):
+    # a definition of two templates (the bimanual example), both hands at
+    # 500 reports a second, 3 and 2 ms late: the graph with no trial takes
+    # every sample but no frame, so no checkpoint; its logs filled and a
+    # late report fell back, and the guard stopped the session (v0.12.0
+    # too). The player resets such a graph at the horizon each poll
+    with open(os.path.join(HERE, "bimanual", "experiment.json")) as f:
+        d = json.load(f)
+    smp = []
+    for k in range(4500):
+        a = 2 * math.pi * k / 1000.0
+        dx, dy = round(4 * math.cos(a)), round(4 * math.sin(a))
+        smp.append((1.0 + 0.002 * k, "left", dx, dy))
+        smp.append((1.0003 + 0.002 * k, "right", -dx, dy))
+    sp = os.path.join(ctx.out, "v2_two_late_samples.csv")
+    write_samples(sp, smp)
+    r = Run(ctx, "v2_two_late", d, args=["--rig", v2_rig(ctx, None), "--sim-gain", "left=0.0078125", "--sim-gain", "right=0.0078125", "--samples", sp,
+                                         "--test-sample-late", "left=0.003", "--test-sample-late", "right=0.002", "--max-seconds", "10"])
+    check("internal guard" not in r.err and "budget" in r.err, "two templates, late hands: no guard stop: exit %d %s" % (r.rc, r.err[-400:]))
 
 
 def t_v2_states(ctx):
@@ -1200,7 +1323,7 @@ def t_v2_states(ctx):
 def t_v2_until(ctx):
     # an events template with until (rule 9) and a timeout: no sample, so
     # the timeout ends the trial with "timeout"; a real run with a signal
-    # role is refused by name before anything opens (G18)
+    # role and no rig profile is refused by name before anything opens (G18)
     t = {"controls": {"near": {"control": "region", "of": "hand", "radius": 5, "outside": True}},
          "events": [{"on": "s"}, {"until": "near", "timeout_s": 0.5}, {"off": "s"}]}
     roles = {"hand": {"type": "position2d_relative", "units": "display_px"}}
@@ -1220,8 +1343,8 @@ def t_v2_until(ctx):
     # a player built without SDL (the mutation test's) has no real run; its
     # in-process check (mut_test.c, case_v2) sees the refusal instead
     if "built without SDL" not in p2.stderr:
-        check(p2.returncode == 1 and "G18" in p2.stderr and "signal role 'hand'" in p2.stderr and not os.path.exists(os.path.join(r.dir, "real")),
-              "v2: a real run with a signal role is refused by name: exit %d %s" % (p2.returncode, p2.stderr[:300]))
+        check(p2.returncode == 1 and "rig profile" in p2.stderr and "signal role 'hand'" in p2.stderr and not os.path.exists(os.path.join(r.dir, "real")),
+              "v2: a real run with a signal role and no rig profile is refused by name: exit %d %s" % (p2.returncode, p2.stderr[:300]))
     # an event role below its min_tier in a version 2 definition: refused as
     # version 1 is, before the screen opens
     d2 = v2base({"t": tmpl()}, [{"name": "l", "trial": "t"}])
@@ -2891,6 +3014,25 @@ def t_v2_frame_rows_late(ctx):
               (nm, r.rc, r.err[-300:] if r.rc else "", first1))
     check(len(rows.get(0, [])) > 10 and rows.get(0) == rows.get(1), "v2_frame_rows_late: trial 0's rows match the control's: %s" %
           [(a, b) for a, b in zip(rows.get(0, []), rows.get(1, [])) if a != b][:6])
+    # two templates, one samples file for both runs: t's last rows still
+    # wait for their records (held 4 frames) while u's trial runs, and t's
+    # graph has no trial then; the player's reset of such a graph (a bound
+    # above 0) must wait for them, as a reset clears the rings they read
+    two = {}
+    t2 = {"controls": {"cur": {"control": "cursor", "role": "hand", "transform": {"rotation_deg": 30}},
+                       "fr": {"control": "trace", "of": ["cur"], "rate": "frame"}},
+          "states": [{"name": "s0", "exits": [{"after_s": 0.2, "to": "end", "outcome": "timed"}]}]}
+    for v, late in ((0, ["--test-sample-late", "hand=0.01"]), (1, [])):
+        nm = "v2_frame_rows_two" + ("" if v == 0 else "_control")
+        smp = os.path.join(ctx.out, nm + ".csv")
+        write_samples(smp, [(0.001 * k, "hand", (k // 7) % 50, 0) for k in range(900)])
+        r = Run(ctx, nm, v2base({"t": t2, "u": t2}, [{"name": "a", "trial": "t"}, {"name": "b", "trial": "u"}], roles=hand),
+                args=["--sim-gain", "hand=1", "--samples", smp, "--max-seconds", "20", "--test-record-delay", "4"] + late)
+        fr = r.read(os.path.join("streams", "fr.csv")) if r.rc == 0 else []
+        two[v] = {x["frame"]: (x["cur_x"], x["cur_y"]) for x in fr if x["trial_index"] == "0"}
+    both = sorted(set(two.get(0, {})) & set(two.get(1, {})), key=int)
+    check(len(both) > 10 and all(two[0][k] == two[1][k] for k in both),
+          "v2_frame_rows_late, two templates: every row of t both runs have matches: %s" % [(k, two[0][k], two[1][k]) for k in both if two[0][k] != two[1][k]][:6])
 
 def t_v2_ended_hits(ctx):
     # a graph that is not the trial's (between trials, or another
@@ -3148,15 +3290,94 @@ def t_v2_resp_pend_hit(ctx):
               (nm, enter, r.rc, r.err[-300:] if r.rc else "", out, want))
 
 
+def t_v2_any_unseen(ctx):
+    # A device "any" role: every mouse feeds it. One mouse reports every ms
+    # on time and stays still; a second, not heard from before, reports
+    # once (+100 x, out of a 50 px region) stamped s, 0.1 period before
+    # frame k's onset, and the report reaches the player 3 ms later, within
+    # the profile's late_s of 4 ms. A timed exit 1 ms after s competes.
+    # 0.13.0 claimed input complete to the first mouse's newest stamp (a
+    # mouse not seen yet taken as still), so the horizon passed the timed
+    # exit before the report came, and the timed exit went. Now an any role
+    # is complete to P - B only: the hit at s wins, exact. The control: the
+    # same samples on a click role (one mouse, whose stamps do not go
+    # back), the claim 0.13.0 made: the timed exit goes, and the trial
+    # ends before the report comes, so no guard sees it
+    P = period_ns(ctx)
+    k = 30
+    s = round((k - 0.1) * P / 1e9, 6)
+    rows = [(0.001 * j, "hand", 0, 0) for j in range(1500)]
+    rows.append((s, "hand", 100, 0, round(s + 0.003, 6)))
+    rows.sort(key=lambda r: r[0])
+    smp = os.path.join(ctx.out, "v2_any_unseen.csv")
+    write_samples(smp, rows)
+    roles = {"hand": {"type": "position2d_relative", "units": "display_px"}}
+    t = {"controls": {"out": {"control": "region", "of": "hand", "radius": 50, "outside": True}},
+         "states": [{"name": "s0", "exits": [{"on": "out", "to": "end", "outcome": "hit"}, {"after_s": round(s + 0.001, 6), "to": "end", "outcome": "timed"}]}],
+         "columns": {"out_x": {"hit": "out.x"}}}
+    d = v2base({"t": t}, [{"name": "l", "trial": "t"}], roles=roles)
+    sig = {"adapter": "raw_mouse", "units": "display_px", "per_count": 1, "late_s": 0.004}
+    r = Run(ctx, "v2_any_unseen", d, args=["--rig", v2_sig_rig(ctx, "any_unseen", {"hand": sig}), "--samples", smp, "--max-seconds", "20"])
+    try:
+        with open(os.path.join(r.data, "session.json")) as f:
+            sj = json.load(f)
+    except (OSError, ValueError) as e:
+        sj = {"error": str(e)}
+    check(r.rc == 0 and len(r.trials) == 1 and r.trials[0]["outcome"] == "hit" and r.trials[0]["out_x"] == "100"
+          and sj.get("late_beyond_bound", {}).get("hand") == 0,
+          "v2_any_unseen: the second mouse's late report is in, its hit at %.6f s: exit %d %s %s" %
+          (s, r.rc, r.err[-300:] if r.rc else "", [(x["outcome"], x["out_x"]) for x in r.trials] if r.rc == 0 else ""))
+    c = Run(ctx, "v2_any_unseen_control", d, args=["--rig", v2_sig_rig(ctx, "any_unseen_click", {"hand": dict(sig, device="click")}),
+                                                   "--samples", smp, "--max-seconds", "20"])
+    check(c.rc == 0 and len(c.trials) == 1 and c.trials[0]["outcome"] == "timed",
+          "v2_any_unseen_control: with the newest stamp's claim the timed exit goes: exit %d %s %s" %
+          (c.rc, c.err[-300:] if c.rc else "", [x["outcome"] for x in c.trials] if c.rc == 0 else ""))
+
+
+def t_v2_limited_feed(ctx):
+    # A key response's end at t feeds the samples up to t (v2_feed() with a
+    # limit), in arrival order, and stops at the first one past t. R's
+    # report (+10, out of its 5 px region) is stamped before t and arrives
+    # 2 ms late, behind an on-time report of L stamped after t: the feed
+    # stopped at L's and left R's, yet claimed input complete to t, and the
+    # hit at R's stamp then came out before a horizon the player had used:
+    # a guard stop for a report within its bound (0.12.0 to 0.13.1). Now
+    # the claim ends before the earliest stamp still queued, the response
+    # waits for the poll's whole feed, and R's exit, before the response's
+    # end, wins. The control: the same samples on time
+    script = os.path.join(ctx.out, "v2_limited_feed_part.csv")
+    with open(script, "w", newline="\n") as f:
+        f.write("trial_index,response,rt_s,hold_s\n0,f,0.310000000,0.020000000\n")
+    roles = {"L": {"type": "position2d", "units": "display_px"}, "R": {"type": "position2d", "units": "display_px"}}
+    t = {"controls": {"rout": {"control": "region", "of": "R", "radius": 5, "outside": True}},
+         "response": {"role": "keys", "choices": ["f"], "from": "s", "duration_s": 2},
+         "states": [{"name": "s0", "steps": [{"on": "s"}],
+                     "exits": [{"on": "rout", "to": "end", "outcome": "rmoved"}, {"on": "response", "to": "end", "outcome": "key"}]}]}
+    d = v2base({"t": t}, [{"name": "l", "trial": "t"}], roles=roles)
+    d["devices"] = {"keys": {"direction": "in", "family": ["keyboard"]}}
+    for v in (0, 1):
+        nm = "v2_limited_feed" if v == 0 else "v2_limited_feed_control"
+        rows = [(0.0005 * j, "L", 0, 0) for j in range(1200)]
+        rows.append((0.309, "R", 10, 0) + ((0.311,) if v == 0 else ()))
+        rows.sort(key=lambda r: r[0])
+        smp = os.path.join(ctx.out, nm + ".csv")
+        write_samples(smp, rows)
+        r = Run(ctx, nm, d, args=["--sim-gain", "L=1", "--sim-gain", "R=1", "--samples", smp, "--participant", "script:" + script,
+                                  "--test-sample-bound", "R=0.004", "--max-seconds", "20"])
+        check(r.rc == 0 and len(r.trials) == 1 and r.trials[0]["outcome"] == "rmoved",
+              "%s: R's exit at 0.309 s wins over the response's end at 0.31 s: exit %d %s %s" %
+              (nm, r.rc, r.err[-300:] if r.rc else "", [x["outcome"] for x in r.trials] if r.rc == 0 else ""))
+
+
 TESTS = [t_nested, t_if_unless, t_empty_and_zero, t_loop, t_requeue, t_track_ends, t_lookup_keys, t_triggers, t_after_timing, t_outcomes,
          t_method_update, t_seeds, t_refused, t_unused_stim, t_record_data, t_fix_density, t_fix_key_reapply, t_fix_stale_rdk,
          t_fix_timeout_values, t_fix_any_key, t_fix_from_in_if, t_fix_shown_twice, t_fix_vars_data, t_fix_sound_twice, t_fix_rdk_limit,
          t_fix_record_inherit, t_fix_backward_at, t_fix_refusals, t_fix_michelson_order, t_fix_texture_vars, t_fix_walk_budget,
          t_fix_data_set, t_fix_check_all_leaves, t_fix_release_order, t_fix_key_var_reapply,
          t_r2_release_other_template, t_r2_yield_draws_nothing, t_r2_low, t_r2_relaxed, t_r4_leaf_loop_done_track, t_r4_requeue_full,
-         t_r5_wait_final, t_r6_allow_below, t_v2_states, t_v2_until, t_v2_hand, t_v2_rule5, t_v2_review2, t_v2_review3, t_v2_f34, t_v2_ties, t_v2_review4, t_v2_review5, t_v2_findings, t_v2_corpus, t_v2_window_8k, t_v2_two_hands, t_v2_two_exits_one_ctl, t_v2_n1_tie, t_v2_n1_chain, t_v2_n1_derived, t_v2_resp_pend_first, t_v2_barrier, t_v2_resp_plim, t_v2_signal_from_first, t_v2_beyond_bound0, t_v2_frame_rows_late, t_v2_ended_hits, t_v2_move_origin, t_v2_signal_column_late,
+         t_r5_wait_final, t_r6_allow_below, t_v2_states, t_v2_until, t_v2_hand, t_v2_rig_signals, t_v2_two_templates_late, t_v2_rule5, t_v2_review2, t_v2_review3, t_v2_f34, t_v2_ties, t_v2_review4, t_v2_review5, t_v2_findings, t_v2_corpus, t_v2_window_8k, t_v2_two_hands, t_v2_two_exits_one_ctl, t_v2_n1_tie, t_v2_n1_chain, t_v2_n1_derived, t_v2_resp_pend_first, t_v2_barrier, t_v2_resp_plim, t_v2_signal_from_first, t_v2_beyond_bound0, t_v2_frame_rows_late, t_v2_ended_hits, t_v2_move_origin, t_v2_signal_column_late,
          t_v2_newest_stamp, t_v2_cross_roles, t_v2_entry_frame_after, t_v2_window_reach, t_v2_frame_rows_long,
-         t_v2_resp_pend_hit]
+         t_v2_resp_pend_hit, t_v2_any_unseen, t_v2_limited_feed]
 
 
 def main():
