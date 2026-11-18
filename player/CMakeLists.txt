@@ -25,6 +25,14 @@ if(YSP_BUILD_TESTS)
         ysp_add_program(player_alloc_test ${PROJECT_SOURCE_DIR}/tests/player/alloc_test.c rig methods devices)
         target_link_libraries(player_alloc_test PRIVATE ysp_player_lib -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc)
     endif()
+    # pl_check() (docs/player.md); with --wrap it also counts the heap blocks
+    # that stay live over repeated calls
+    ysp_add_program(test_player_check ${PROJECT_SOURCE_DIR}/tests/player/check_test.c rig methods devices)
+    target_link_libraries(test_player_check PRIVATE ysp_player_lib)
+    if(NOT WIN32 AND NOT APPLE)
+        target_compile_definitions(test_player_check PRIVATE PL_CHECK_COUNT)
+        target_link_libraries(test_player_check PRIVATE -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc -Wl,--wrap=free)
+    endif()
     ysp_add_program(player_fuzz ${PROJECT_SOURCE_DIR}/tests/fuzz/player_fuzz.c rig methods devices)
     target_link_libraries(player_fuzz PRIVATE ysp_player_lib)
     # The system tests and the comparison with the C programs build packs
@@ -33,6 +41,8 @@ if(YSP_BUILD_TESTS)
     if(Python3_Interpreter_FOUND AND YSP_BUILD_PACK)
         add_test(NAME test_player_shapes COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/player/player_test.py --bin ${CMAKE_BINARY_DIR}
                                                  --out ${CMAKE_BINARY_DIR}/player_test_shapes)
+        add_test(NAME test_player_check COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/player/check_test.py --bin ${CMAKE_BINARY_DIR}
+                                                --out ${CMAKE_BINARY_DIR}/player_test_check)
         add_test(NAME test_player_compare COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/player/compare.py --bin ${CMAKE_BINARY_DIR}
                                                  --out ${CMAKE_BINARY_DIR}/player_test_compare)
     endif()

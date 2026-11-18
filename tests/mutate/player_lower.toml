@@ -21,6 +21,17 @@ libs = ["-L$YSP_SDL3/lib", "-Wl,-rpath,$YSP_SDL3/lib", "-lSDL3", "-lm", "-lpthre
 timeout = 900
 env = { YPL_REPO = "{repo}" }
 env_default = { YPL_BIN = "{repo}/build/linux" }
+
+# pl_check() (tests/player/check_test.c): the player's sources compiled in,
+# the example packs built with YPAK from the repository's tests/player
+[test.check]
+source = "tests/player/check_test.c"
+compiler = "gcc"
+flags = ["-std=c11", "-O1", "-w", "-DYSCR_NO_SDL", "-DPL_CHECK_MUT", "-I$YSP_MINIAUDIO"]
+libs = ["-lm", "-lpthread", "-ldl"]
+timeout = 300
+env = { YPL_REPO = "{repo}" }
+env_default = { YPAK = "{repo}/build/linux/pack/ypak" }
 [[mutant]]
 id = "pl-01"
 name = "the node seed ignores the path"
@@ -384,3 +395,174 @@ note = "A guard: the table is sized at load from pl_ops_bound() x 4 for version 
 why = "Review item 16."
 find = '''                if (c + 2 > cap) { pl_fail(p, "the op table is full"); return -1; }'''
 replace = ''''''
+
+[[mutant]]
+id = "ck-01"
+name = "a refusal names no object"
+test = "check"
+why = "The designer links a refusal to the object it names; the node, stimulus and template refusals check it."
+find = '''    p->fail_obj = p->at_obj;
+'''
+replace = '''    p->fail_obj = PL_OBJ_NONE;
+'''
+
+[[mutant]]
+id = "ck-02"
+name = "the stimuli's loop names no stimulus"
+test = "check"
+why = "An rdk's count that is not a literal names the stimulus 'dots'."
+find = '''        pl_at(p, PL_OBJ_STIMULUS, s->def->name);
+        s->ch_visible = pl_channel(p, s->def->name, NULL);'''
+replace = '''        s->ch_visible = pl_channel(p, s->def->name, NULL);'''
+
+[[mutant]]
+id = "ck-03"
+name = "the node checks name no node"
+test = "check"
+why = "One name in vars and data names the node 'main'."
+find = '''        pl_at(p, PL_OBJ_NODE, n[i].path);
+        /* one node, one name, two values'''
+replace = '''        /* one node, one name, two values'''
+
+[[mutant]]
+id = "ck-04"
+name = "the templates' loop names no template"
+test = "check"
+why = "33 choices name the template 'rdk'."
+find = '''        pl_at(p, PL_OBJ_TEMPLATE, p->tmpls[i].def->name);
+        if (pl_tmpl_open'''
+replace = '''        if (pl_tmpl_open'''
+
+[[mutant]]
+id = "ck-05"
+name = "a required field is not listed as a need"
+test = "check"
+why = "Every example lists field:participant."
+find = '''            pl_need_add(p, PL_NEED_FIELD, f->name, f->is_string ? 1 : 0);
+'''
+replace = ''''''
+
+[[mutant]]
+id = "ck-06"
+name = "a required field has no placeholder"
+test = "check"
+why = "The check goes on past a field the session lacks; without the placeholder every example is refused."
+find = '''            given = f->is_string ? "x" : "1";'''
+replace = '''            given = NULL;'''
+
+[[mutant]]
+id = "ck-07"
+name = "a required calibration refuses the check"
+test = "check"
+why = "afc2 needs a calibration: the nominal one stands in and the check goes on."
+find = '''        if (p->def->calibration_required && p->checking) {'''
+replace = '''        if (p->def->calibration_required && !p->checking) {'''
+
+[[mutant]]
+id = "ck-08"
+name = "the view need says deg for cm"
+test = "check"
+why = "bimanual's units are cm: view::2."
+find = '''        pl_need_add(p, PL_NEED_VIEW, NULL, p->def->units == 2 ? 2 : 1);'''
+replace = '''        pl_need_add(p, PL_NEED_VIEW, NULL, 1);'''
+
+[[mutant]]
+id = "ck-09"
+name = "a role's min_tier goes to stderr, not the needs"
+test = "check"
+why = "oddball's resp has min_tier 2: role_tier:resp:2, and pl_check() writes nothing."
+find = '''        if (p->checking) {
+            pl_need_add(p, PL_NEED_ROLE_TIER'''
+replace = '''        if (false) {
+            pl_need_add(p, PL_NEED_ROLE_TIER'''
+
+[[mutant]]
+id = "ck-10"
+name = "a keyboard role needs a device"
+test = "check"
+why = "A required input role that lists the keyboard takes it in a real run: rdk lists no device need."
+find = '''        if (p->checking && r->def->required && !(r->def->direction == 0 && pl_role_lists(r->def, "keyboard")))'''
+replace = '''        if (p->checking && r->def->required)'''
+
+[[mutant]]
+id = "ck-11"
+name = "the check opens the simulated screen"
+test = "check"
+why = "pl_check() opens no screen (P.scr_open stays false)."
+find = '''    if (p->checking) {
+        if (pl_screen_none(p, &c.gd) < 0) return -1;'''
+replace = '''    if (false) {
+        if (pl_screen_none(p, &c.gd) < 0) return -1;'''
+
+[[mutant]]
+id = "ck-12"
+name = "display.min_tier is not a need"
+test = "check"
+why = "afc2 and oddball list display_tier."
+find = '''    if (p->def->min_tier) pl_need_add(p, PL_NEED_DISPLAY_TIER, NULL, p->def->min_tier);'''
+replace = '''    (void)0;'''
+
+[[mutant]]
+id = "ck-13"
+name = "the check's sound opens miniaudio's null device"
+test = "check"
+why = "The null device is a real-time thread; the check's own device has none (the thread count)."
+find = '''                ad.backend = YAU_BACKEND_CUSTOM;'''
+replace = '''                ad.backend = YAU_BACKEND_NULL;'''
+
+[[mutant]]
+id = "ck-14"
+name = "a reader's pack read with ypak_data()"
+test = "check"
+why = "ypak_data() returns NULL for a range reader; the reader case fails."
+find = '''    p->pack_reader = !d->pack.path && !d->pack.data && d->pack.reader;'''
+replace = '''    p->pack_reader = false;'''
+
+[[mutant]]
+id = "ck-15"
+name = "a reader's entry read half"
+test = "check"
+why = "The cursor must read the whole entry: the reader case's definition would be cut."
+find = '''ypak_cursor_read(&c, 0, buf, e->size) != e->size) return NULL;'''
+replace = '''ypak_cursor_read(&c, 0, buf, e->size / 2) != e->size / 2) return NULL;'''
+
+[[mutant]]
+id = "ck-16"
+name = "a relative signal role gets no gain"
+test = "check"
+why = "--sim refuses a relative role with no gain; the check gives gain 1 and lists sim_gain."
+find = '''            p->args.n_gains++;
+'''
+replace = ''''''
+
+[[mutant]]
+id = "ck-17"
+name = "a refusal after the loader is called a definition error"
+test = "check"
+why = "The tiers: yexp's errors are DEFINITION, the player's refusals REFUSED."
+find = '''p->report.n_errors > 0 ? PL_CHECK_DEFINITION : PL_CHECK_REFUSED;'''
+replace = '''p->report.n_errors >= 0 ? PL_CHECK_DEFINITION : PL_CHECK_REFUSED;'''
+
+[[mutant]]
+id = "ck-18"
+name = "the checked needs are dropped"
+test = "check"
+why = "r.needs is the list the load met."
+find = '''    r->n_needs = p->n_needs;'''
+replace = '''    r->n_needs = 0;'''
+
+[[mutant]]
+id = "ck-19"
+name = "a given calibration copied short"
+test = "check"
+why = "d.cal stands in whole: the given and the made calibration give one answer (afc2)."
+find = '''            if (p->check_cal) memcpy(&p->cal, p->check_cal, sizeof p->cal);'''
+replace = '''            if (p->check_cal) memcpy(&p->cal, p->check_cal, sizeof p->cal / 2);'''
+
+[[mutant]]
+id = "ck-20"
+name = "the string participant check skipped"
+test = "check"
+why = "A string participant with '@participant' in a node's rules is refused by the node (the check reads the definition's leaves; 0.13.2 read p->leaves before they were set and ended the process)."
+find = '''                for (i = 0; p->def_leaves && p->def_leaves[i]; i++)'''
+replace = '''                for (i = 0; p->def_leaves && p->def_leaves[i] && 0; i++)'''

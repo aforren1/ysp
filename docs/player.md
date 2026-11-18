@@ -1,6 +1,8 @@
 # The player
 
-Status: v0.13.2, 2026-11-17. It loads a pack, checks its experiment
+Status: v0.14.0, 2026-11-18 (0.14.0: `pl_check()` for the designer,
+[Reference: pl_check()](#reference-pl_check); a string `participant`
+field no longer ends the process). It loads a pack, checks its experiment
 definition, lowers the definition onto the ysp headers and runs it: in a
 real window with the participant's keyboard, mice and the rig's devices,
 or on the simulated display (`--sim`). It is a program (`player/`, target
@@ -370,6 +372,154 @@ it says), for each version:
 No other field changes. A version 1 data set keeps every other byte
 (Results).
 
+## Reference: pl_check()
+
+`pl_check()` runs the player's load on a definition and a pack, and keeps
+all its results in memory. It is for the designer, which checks the
+definition on each change with the player's own loader
+([designer.md](designer.md), "Architecture"). It is in the player library
+(`ysp_player_lib`; declared in `player/player.h`, built in
+`player/lower.c`).
+
+```c
+int  pl_check(pl_player* p, const pl_check_desc* d, pl_check_result* r);
+void pl_close(pl_player* p);
+int  pl_check_nominal_cal(ycol_cal* out);   /* the stand-in calibration */
+```
+
+Call `pl_close(p)` after you read `r`, and before the next `pl_check()` on
+the same `p`. Every pointer in `r` points into `p`. `pl_player` is large
+(1.6 MB with GCC 12 on x86-64 Linux): give it static or heap storage.
+
+### Inputs
+
+| Field of `pl_check_desc` | Meaning |
+|---|---|
+| `pack` | A `ypak_desc`: the pack in memory (`data`, `size`, 8-byte aligned) or a range reader (`reader`, `reader_ctx`). With a reader, the player reads each entry that it uses whole through a `ypak_cursor`, which verifies each chunk by `pack.verify`. A `path` also works; the player maps the file read-only. |
+| `def_text`, `def_len` | The definition's bytes. `NULL`: the pack's experiment entry. The tables, textures, fonts and other entries come from the pack. |
+| `seed` | The session seed (D8). The same inputs give the same result. |
+| `cal` | The stand-in for a required calibration. `NULL`: `pl_check()` makes `pl_check_nominal_cal()`'s on each call, which is most of the time of a check that needs one (Measured). Make it once with `pl_check_nominal_cal()` and give it here. |
+
+### The result
+
+`pl_check()` returns `r->status`:
+
+| Status | Tier | Meaning |
+|---|---|---|
+| `PL_CHECK_DEFINITION` | 1 | `yexp_load()` refused the definition. `r->report` holds its diagnostics, errors and warnings, each with a line and a column (`YEXP_MAX_DIAGS`, 32, are kept; `n_errors` counts all). |
+| `PL_CHECK_REFUSED` | 2 | The player refused the definition after `yexp_load()` accepted it, or the pack did not open. `r->message` is the refusal, the same text the command line prints. The check stops at the first refusal, as the command line does. |
+| `PL_CHECK_OK` | | The definition loads and lowers. |
+
+`r->object` and `r->object_name` give the object that a tier 2 refusal names, when the player knows it:
+
+| `r->object` | `r->object_name` | Refusals that give it |
+|---|---|---|
+| `PL_OBJ_NODE` | the node's path | a leaf's rules and variables (`pl_leaf_prepare()`), the node checks (`pl_check_nodes()`: a name in both `vars` and `data`, an `if` field that is not 0 or 1), `@participant` with a text field |
+| `PL_OBJ_STIMULUS` | its name | a stimulus's lowering (`pl_stim_make()`: rdk, text, sound, image, the kinds the player does not lower), its static keys, its textures, a channel of one of its properties |
+| `PL_OBJ_TEMPLATE` | its name | the response's collector (`pl_tmpl_open()`), a version 2 template's graph, controls, forms and exits (`pl_v2_load()`), the steps' `if` fields |
+| `PL_OBJ_METHOD` | its name | a method's open (`pl_method_open()`) |
+| `PL_OBJ_SIGNAL_ROLE` | its name | a signal role's adapter (`v2_rig_signals()`) |
+| `PL_OBJ_FIELD` | its name | a session field's value (`pl_fields_init()`) |
+| `PL_OBJ_NONE` | `NULL` | every other refusal: the pack, the format version, the timeline's size, the data set's columns, and refusals inside `yexp_load()`'s host checks (those are tier 1) |
+
+The object comes from the step of the load that is running when the
+refusal happens, not from the message text. No `pl_fail()` site changed.
+
+`r->needs` (tier 3) lists what a real run asks of the rig or the session.
+The check does not refuse them. It continues with a stand-in for each,
+and lists each in the order the load meets it. After a tier 2 refusal,
+the list holds the needs met before the refusal; after a tier 1 refusal it
+is empty.
+
+| Need | `name`, `value` | What a real run asks | The check's stand-in |
+|---|---|---|---|
+| `PL_NEED_FIELD` | the field; 1 text, 0 integer | a required session field, `--field NAME=VALUE` | the integer 1, or the text `x` |
+| `PL_NEED_CALIBRATION` | | `display.calibration` `"required"`: `--rig` with a calibration, or `--cal FILE` | the nominal calibration of `player_make_rig`: sRGB primaries, D65 white at 100 cd/m2, gamma 2.2 |
+| `PL_NEED_VIEW` | 1 deg, 2 cm | `display.units` `deg` or `cm`: a rig profile with a view | the view of `player_make_rig`: 570 mm away, 1920 px over 518.4 mm |
+| `PL_NEED_DISPLAY_TIER` | the tier | `display.min_tier`: a display that gives that tier | not checked, as in `--sim` |
+| `PL_NEED_DEVICE` | the role; its direction (0 in, 1 out, 2 both) | a required role that the keyboard cannot take (an output, or an input that does not list `keyboard`): a device in the rig profile | no device, as in `--sim`: an input role is the scripted participant, an output role the in-process sink |
+| `PL_NEED_ROLE_TIER` | the role; the tier | a role's `min_tier`: a checked loopback in the rig profile, or `--allow-below-tier` | not checked. `--sim` prints a line to stderr here; `pl_check()` prints nothing |
+| `PL_NEED_SIGNAL` | the signal role; 1 when required | a signal role's adapter in the rig profile's `signals` | the `--sim` adapter |
+| `PL_NEED_SIM_GAIN` | the signal role | a relative signal role: `--sim` needs `--sim-gain` or the rig's signal | gain 1: one role unit a count |
+
+These stand-ins apply always, with no need listed:
+
+- The display: none. ysp/gfx.h opens on its null backend at the simulated
+  display's size, 800 x 600 px, and at 60 Hz. The null backend makes every
+  texture, buffer, glyph set and program, and uploads and draws nothing.
+  A texture is still decoded, and a glyph run's curve set is still read.
+  The gfx gets no calibration: it draws nothing, and its check of the
+  stand-in (`ycol_cal_check()`) cost 20 to 33 ms of afc2's check
+  (Measured). The player's own color context (a Michelson contrast) still
+  gets the stand-in.
+- The audio device: a device that opens at the pack's format and never
+  starts a thread. A sound's audio entry is still loaded.
+- The roles: unbound, as in `--sim`. A role whose first family is
+  `keyboard` takes key choices; any other role takes box buttons.
+- No rig profile. The loader's role and signal role checks against a rig
+  do not run (`r->report->skipped` says so).
+
+### What it does not do
+
+- It writes no file and makes no folder. It reads no file other than the
+  pack's path when you give one. It does not read `/dev/urandom`.
+- It opens no device, window, GL context, audio device or data set, and
+  starts no thread. `test_player_check` counts the process's threads
+  during a check with a sound stimulus: one.
+- It does not change the clock. It does not call `yrt_virtual_begin()`
+  and needs no virtual clock. `--sim` runs on the virtual clock (from
+  `main.c`, before the load) so that two runs give the same bytes. In the
+  load, two parts use the clock: the simulated display, whose vblank grid
+  runs on ysp/rt.h's clock, and the null audio device (on the virtual
+  clock ysp/audio.h's own virtual device; on the real clock miniaudio's
+  null device, a real-time thread). The check opens neither, so it runs
+  on either clock. The same check on the real clock and on the virtual
+  clock gives the same result (`test_player_check`).
+- It writes nothing to stdout or stderr.
+- These checks of a real run do not run: a response trigger's rule on a
+  device role (`pl_rules_check()`, which needs a role bound to a device),
+  the display's tier in the lead-in frames, and the data set's checks of
+  stream names and trace columns (`yds_stream()` needs an open data set).
+  The data set's checks of the `trials.csv` columns run, through a writer
+  that discards the bytes.
+
+Two calls must not run at the same time in one process. The loader's
+host checks use static scratch (`h_rules()` and `h_check_ops()` in
+`player/host.c`).
+
+Fixed in 0.14.0: a definition whose `participant` session field is a
+string ended the process (a segmentation fault, found 2026-11-18).
+`pl_fields_init()` looked for `@participant` in `p->leaves[i].node->rules`
+before `pl_leaves_collect()` set `node`. It now reads the definition's
+leaves. Such a definition loads, and a node whose rules use
+`@participant` is refused by name. `test_player_check` checks both; on
+0.13.2 it fails.
+
+### Measured
+
+Order of magnitude only: one run, on a desktop that other builds share.
+Intel Core i5-14500, Linux 6.11 (Liquorix), GCC 12, Release
+(`-O3`), 2026-11-18. Load average 0.5 (1 min) at the run; other agents'
+builds ran on the machine before and after it. `test_player_check --time
+50`: 50 calls of `pl_check()` and `pl_close()` per pack, after one call
+to warm the caches; the packs in memory.
+
+| Pack | Median, `cal` `NULL` | Max | Median, `cal` given | Max |
+|---|---|---|---|---|
+| rdk | 0.20 ms | 0.50 ms | 0.35 ms | 0.36 ms |
+| stroop (Noto Sans, 599 KB) | 0.32 ms | 0.43 ms | 0.52 ms | 0.56 ms |
+| afc2 (calibration required) | 29.7 ms | 38.0 ms | 3.4 ms | 3.4 ms |
+| oddball (two textures) | 0.37 ms | 0.40 ms | 0.37 ms | 0.39 ms |
+| visuomotor (version 2) | 2.8 ms | 6.1 ms | 2.8 ms | 2.8 ms |
+| bimanual (version 2) | 6.9 ms | 9.1 ms | 6.9 ms | 7.3 ms |
+| sound (rdk with a sound) | 0.38 ms | 0.41 ms | 0.21 ms | 0.35 ms |
+
+`perf` gave 90 % of afc2's time to the derivation of a calibration
+(`ycol__cal_derive()`): in `pl_check_nominal_cal()`, and, before the gfx
+lost its calibration, in the gfx's check of it. With the gfx's
+calibration, the medians were 49.5 ms (`cal` `NULL`) and 36.8 ms (`cal`
+given). Starting the command line on rdk or stroop
+(`--max-trials 1`) took about 10 ms a process on the same machine.
 
 ## Explanation: what lowering decided
 

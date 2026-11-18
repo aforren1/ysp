@@ -30,3 +30,21 @@
 #include "ysp/sig.h"
 #define YSP_EXPERIMENT_IMPLEMENTATION
 #include "ysp/experiment.h"
+
+/* pl_check()'s gfx (lower.c): ysp/gfx.h's null backend, static in the
+ * implementation above, which makes every object and uploads and draws
+ * nothing. ygfx_open() wants a screen or a GL loader; the null backend
+ * never calls the loader given here. */
+static yscr_proc pl_no_gl(void* ctx, const char* name) {
+    (void)ctx;
+    (void)name;
+    return NULL;
+}
+bool pl_gfx_open_null(ygfx_gfx* g, ygfx_desc* d);
+bool pl_gfx_open_null(ygfx_gfx* g, ygfx_desc* d) {
+    d->screen = NULL;
+    d->gl_proc = pl_no_gl;
+    d->backend = &ygfx__null_backend;
+    d->backend_ctx = g->backend_mem;
+    return ygfx_open(g, d);
+}

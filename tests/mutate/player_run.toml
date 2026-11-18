@@ -22,6 +22,16 @@ libs = ["-L$YSP_SDL3/lib", "-Wl,-rpath,$YSP_SDL3/lib", "-lSDL3", "-lm", "-lpthre
 timeout = 900
 env = { YPL_REPO = "{repo}" }
 env_default = { YPL_BIN = "{repo}/build/linux" }
+# pl_check() (tests/player/check_test.c), as in player_lower.toml
+[test.check]
+source = "tests/player/check_test.c"
+compiler = "gcc"
+flags = ["-std=c11", "-O1", "-w", "-DYSCR_NO_SDL", "-DPL_CHECK_MUT", "-I$YSP_MINIAUDIO"]
+libs = ["-lm", "-lpthread", "-ldl"]
+timeout = 300
+env = { YPL_REPO = "{repo}" }
+env_default = { YPAK = "{repo}/build/linux/pack/ypak" }
+
 [[mutant]]
 id = "r-01"
 name = "after starts at the response's end alone"
@@ -754,3 +764,12 @@ find = '''        if (p->v2s) {
             /* version 2: the samples up to this onset before the trial's'''
 replace = '''        if (0) {
             /* version 2: the samples up to this onset before the trial's'''
+
+[[mutant]]
+id = "ck-r1"
+name = "the check opens the data set"
+test = "check"
+why = "pl_check() writes no file: the columns are checked through a writer that discards."
+find = '''    if (p->checking) return pl_columns_check(p);
+'''
+replace = ''''''

@@ -44,7 +44,7 @@
 extern "C" {
 #endif
 
-#define PL_VERSION_STRING "0.13.2"
+#define PL_VERSION_STRING "0.14.0"
 /* The newest format version this player lowers (2: format part 3, in
  * v2.c). session.json's format_version is the definition's. */
 #define PL_FORMAT_VERSION 2
@@ -480,6 +480,58 @@ typedef struct pl_node_seed_rec { const char* path; int iteration; uint64_t seed
 
 typedef struct pl_csrc pl_csrc;
 
+/* --- the check (lower.c): the load without side effects ------------------- */
+
+/* pl_check()'s answer: the definition loaded and lowered, the loader refused
+ * it (tier 1), or the player refused it after the loader (tier 2). */
+enum { PL_CHECK_OK = 0, PL_CHECK_DEFINITION = 1, PL_CHECK_REFUSED = 2 };
+/* The object a refusal names, for a link to it. */
+enum { PL_OBJ_NONE = 0, PL_OBJ_NODE, PL_OBJ_STIMULUS, PL_OBJ_TEMPLATE, PL_OBJ_METHOD, PL_OBJ_SIGNAL_ROLE, PL_OBJ_FIELD };
+/* What a real run asks of the rig or the session (tier 3). The check goes
+ * on with a stand-in for each (docs/player.md, "Reference: pl_check()"). */
+enum {
+    PL_NEED_FIELD = 1,      /* a required session field: --field NAME=VALUE  */
+    PL_NEED_CALIBRATION,    /* display.calibration "required"                */
+    PL_NEED_VIEW,           /* display.units deg (value 1) or cm (2): a view */
+    PL_NEED_DISPLAY_TIER,   /* display.min_tier (value)                      */
+    PL_NEED_DEVICE,         /* a required role that the keyboard cannot take:
+                             * a device in the rig profile (value: direction) */
+    PL_NEED_ROLE_TIER,      /* a role's min_tier (value)                     */
+    PL_NEED_SIGNAL,         /* a signal role: its adapter in the rig profile
+                             * (value 1: required)                          */
+    PL_NEED_SIM_GAIN        /* a relative signal role: --sim needs --sim-gain
+                             * or the rig's signal                          */
+};
+
+typedef struct pl_need {
+    int         kind;       /* PL_NEED_*                                     */
+    const char* name;       /* the field or role; NULL for the display       */
+    int         value;      /* by kind, above; FIELD: 1 text, 0 integer       */
+} pl_need;
+
+typedef struct pl_check_desc {
+    ypak_desc   pack;       /* data and size, or a reader; a path is mapped
+                             * read-only                                     */
+    const char* def_text;   /* the definition; NULL: the pack's experiment   */
+    size_t      def_len;
+    uint64_t    seed;       /* the session seed (D8)                          */
+    const ycol_cal* cal;    /* the stand-in for a required calibration; NULL:
+                             * pl_check_nominal_cal()'s, made on each call   */
+} pl_check_desc;
+
+/* Every pointer stays valid until pl_close(). */
+typedef struct pl_check_result {
+    int                status;      /* PL_CHECK_*                            */
+    const yexp_report* report;      /* tier 1: yexp_load()'s diagnostics,
+                                     * errors and warnings; NULL when the
+                                     * loader did not run                   */
+    const char*        message;     /* tier 2: the refusal; "" with none     */
+    int                object;      /* PL_OBJ_*: what the refusal names      */
+    const char*        object_name; /* a node's path, or the object's name   */
+    const pl_need*     needs;       /* tier 3, in the order the load met them */
+    int                n_needs;
+} pl_check_result;
+
 /* --- the player --------------------------------------------------------- */
 
 struct pl_player {
@@ -709,13 +761,36 @@ struct pl_player {
     void*     profile_mem;
     yrt_event* profile_buf;
     void*     profile_file;
+    /* pl_check() */
+    bool      checking;       /* stand-ins for the rig, the session, the
+                               * screen and the audio device; no stderr     */
+    bool      pack_reader;    /* entries come whole through a cursor       */
+    const ycol_cal* check_cal; /* pl_check_desc.cal                        */
+    pl_need*  needs; int n_needs, c_needs;
+    int       at_obj;         /* the object the load is at (PL_OBJ_*)      */
+    const char* at_name;
+    int       fail_obj;       /* at_obj and at_name at the first pl_fail() */
+    const char* fail_name;
 };
 
 /* --- load (lower.c) ------------------------------------------------------ */
 
 int  pl_load(pl_player* p, const pl_args* a);
+/* The load of pl_load() as --sim does it, with no side effects outside
+ * memory: no file is written or read but the pack (and its path), no rig
+ * profile, device, window, GL, audio device, thread or clock change. Returns
+ * r->status. Call pl_close() after reading r, before p's next pl_check(). */
+int  pl_check(pl_player* p, const pl_check_desc* d, pl_check_result* r);
+/* pl_check()'s stand-in calibration, player_make_rig's nominal one. Making
+ * it is most of a check's time (docs/player.md, "Reference: pl_check()"):
+ * a caller that checks often makes it once and gives it in d->cal. 0, or < 0. */
+int  pl_check_nominal_cal(ycol_cal* out);
 void pl_close(pl_player* p);
 void pl_fail(pl_player* p, const char* fmt, ...);
+/* The object a refusal from here on names (PL_OBJ_NONE: none). */
+void pl_at(pl_player* p, int obj, const char* name);
+/* A gfx on ysp/gfx.h's null backend, with no screen and no GL (impl.c). */
+bool pl_gfx_open_null(ygfx_gfx* g, ygfx_desc* d);
 void* pl_alloc(pl_player* p, size_t n);
 /* A span of time in whole frames of the display's period, rounded up. */
 int pl_frames_of(const pl_player* p, int64_t ns);
