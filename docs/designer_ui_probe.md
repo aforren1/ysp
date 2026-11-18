@@ -781,6 +781,9 @@ Natively:
    kana, before DejaVu Sans.
 2. Start fcitx5. Start the spike from `WORK/native` with
    `XMODIFIERS=@im=fcitx SDL_IM_MODULE=fcitx ./spike`.
+   Note (2026-11-18): on X11, `SDL_IM_MODULE` does nothing, and with
+   fcitx5's default XIM settings step 4's `TEXT_EDITING` lines do not
+   come ([designer.md](designer.md), "Open questions").
 3. Click the "Skribidi text" field, press End, switch the IME to
    Japanese, type "nihongo".
 4. Expect: stdout shows `TEXT_EDITING` lines and `SKB_COMPOSE` lines

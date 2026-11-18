@@ -133,10 +133,17 @@ ysp_designer (C++, Dear ImGui, SDL3, GL ES 3.0)
      template or method that it names, and what a real run needs of the
      rig and the session. `pl_load()` and `pl_check()` run one load
      function. The command line's behavior and output bytes did not
-     change.
+     change, apart from the version (player 0.14.0).
 2. Fix the text stack's faults from probe part 2: the two Skribidi
    editing faults with Devanagari, and a font list per script that has
    digits and punctuation.
+   - Done 2026-11-18: Skribidi patches 0005 and 0006 (pack/layout 0.3.1;
+     [layout.md](layout.md), "Patches 0005 and 0006: editing
+     Devanagari"). `test_layout_editor` checks both without a window.
+   - The font list: patch 0003 gives a Hebrew run its digits from the
+     Latin font on the editor's path too. U+2192 was a box because none
+     of the probe's four Noto fonts has it; the designer's list needs a
+     symbols font (Noto Sans Symbols) after the script fonts.
 3. A skeleton: the window, open and save of a project, the loader's
    checks with refusals linked to fields, and redraw on input only.
 4. The state chart, the tables and the panels from parameter tables.
@@ -149,17 +156,35 @@ ysp_designer (C++, Dear ImGui, SDL3, GL ES 3.0)
 - IME composition (fcitx5 with Mozc, tested by hand 2026-11-18 on the
   Linux desktop; logs in the session scratchpad, not kept). Committed text
   arrived natively and in Firefox. Two faults:
-  - Firefox: during conversion the caret was drawn one character past the
-    composition, inside the text after it (x 217.2 where 203.6 is the
-    composition's end). The glue reads the caret from the textarea's
-    selection in `compositionupdate`, which fires before the browser
-    updates the textarea, so the selection still counts the previous
-    composition (4 kana against 3 kanji). Read the caret in the `input`
-    event that follows, and clamp it to the composition's length.
-  - Natively: SDL sent no `SDL_EVENT_TEXT_EDITING` (0 in the log), so the
-    composition did not show inline in the field. SDL 3.4.18 has fcitx
-    support and the spike sets `SDL_HINT_IME_IMPLEMENTED_UI` to
-    `composition` before `SDL_Init`. Not yet found why.
+  - Web, fixed on branch `spike-ime-web` (2026-11-18), not yet checked
+    with a real IME. The glue read the caret from the textarea's
+    selection in `compositionupdate`, before the browser updates the
+    textarea. Firefox (128 and 159) then gave the previous composition's
+    caret, one step behind (the hand test's x 217.2 where 203.6 is
+    right), and lost caret moves with no text change, which fire no
+    `compositionupdate`. Chromium 159 gave 0, the composition's start,
+    at every step. In both browsers the selection is the IME's caret by
+    the `input` event, so the glue now reads it there and clamps it to
+    the composition's length. A second fault: committed text overtook
+    keys still in SDL's queue (Backspace, then a commit of "X", deleted
+    the X; 5 of 5 rounds in Chromium); `spike_text` now runs those keys
+    first. `designer/spike/tools/ime_check.py` drives a real composition
+    (Chromium through `Input.imeSetComposition`, Firefox through
+    Marionette and `nsITextInputProcessor`): the old glue fails it in all
+    three browsers, the new one passes.
+  - Native, cause found (2026-11-18). On X11, SDL 3.4.18 takes the IME
+    through XIM only; its D-Bus clients (fcitx, IBus) are called only by
+    the Wayland driver, so `SDL_IM_MODULE` does nothing on X11. fcitx5
+    5.0.21's XIM server offers no preedit-callback style by default
+    (`UseOnTheSpot` false), so it draws the composition in its own window
+    and sends only the committed text: `SDL_EVENT_TEXT_INPUT` and no
+    `SDL_EVENT_TEXT_EDITING`. The hint value `composition` is right.
+    Firefox goes through GTK's fcitx5 module over D-Bus (inferred from
+    the module cache, not observed). Ways out: a local SDL patch that
+    calls SDL's IME clients from the X11 driver, as the Wayland driver
+    does (preferred: fcitx and IBus, code SDL keeps up); or the spike's
+    own fcitx5 D-Bus client (branch `spike-ime-native`, `--ime=dbus`;
+    fcitx only, built and not yet typed into).
 - A file dialog on a Linux desktop with no xdg-desktop-portal and no
   zenity: `SDL_ShowOpenFileDialog()` fails at once there (probe part 1,
   section 6). The designer needs a fallback.
