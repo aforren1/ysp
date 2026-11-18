@@ -34,7 +34,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TP = os.path.join(ROOT, "third_party")
 MANIFEST = os.path.join(TP, "MANIFEST.sha256")
 PATCHES = ["skribidi-0001-bidi-run-merge.patch", "skribidi-0002-l1-trailing-whitespace.patch",
-           "skribidi-0003-font-fallback.patch"]   # in order
+           "skribidi-0003-font-fallback.patch", "skribidi-0004-emoji-family-fallback.patch"]   # in order
 
 # component directory -> (GitHub repository, full commit SHA, label)
 PINS = {

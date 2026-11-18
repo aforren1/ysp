@@ -1,7 +1,8 @@
 # ysp_layout: text layout for the pack tool and the player
 
-Status: v0.2.0, 2026-11-18 (v0.1.0, 2026-10-07: the first build; v0.2.0:
-font fallback past the script, [Patch 0003](#patch-0003-font-fallback-past-the-script)).
+Status: v0.3.0, 2026-11-18 (v0.1.0, 2026-10-07: the first build; v0.2.0:
+font fallback past the script, [Patch 0003](#patch-0003-font-fallback-past-the-script);
+v0.3.0: emoji, [Emoji](#emoji) and [Patch 0004](#patch-0004-a-run-whose-family-has-no-font)).
 The decision record is
 [layout_probe.md](layout_probe.md); this note is the manual of what was
 built on it, with the checks and the costs. The plan is
@@ -68,7 +69,7 @@ three, with the same corpus result.
 
 | Component | Pin | License | Local change |
 |---|---|---|---|
-| Skribidi | `dee63d6ba76aeddd49dea6d1b2508cf9aa391f46` (2026-08-17) | MIT | `patches/skribidi-0001-bidi-run-merge.patch`, `patches/skribidi-0002-l1-trailing-whitespace.patch`, `patches/skribidi-0003-font-fallback.patch`, in that order |
+| Skribidi | `dee63d6ba76aeddd49dea6d1b2508cf9aa391f46` (2026-08-17) | MIT | `patches/skribidi-0001-bidi-run-merge.patch`, `patches/skribidi-0002-l1-trailing-whitespace.patch`, `patches/skribidi-0003-font-fallback.patch`, `patches/skribidi-0004-emoji-family-fallback.patch`, in that order |
 | HarfBuzz | tag 14.6.0, `c7a7457b7385` (2026-10-05) | Old MIT; `src/ms-use` MIT | none |
 | SheenBidi | `83f77108a2873600283f6da4b326a2dca7a3a7a6` | Apache-2.0 | none |
 | libunibreak | tag `libunibreak_6_1`, `304585d8e2d6` | zlib | none |
@@ -91,7 +92,7 @@ three, with the same corpus result.
 
 ## The patches
 
-Three local patches, applied in this order. 0001 and 0002 change
+Four local patches, applied in this order. 0001, 0002 and 0004 change
 `src/skb_layout.c`; 0003 changes it, `src/skb_font_collection.c` and
 `include/skribidi/skb_font_collection.h`.
 
@@ -100,6 +101,7 @@ Three local patches, applied in this order. 0001 and 0002 change
 | `skribidi-0001-bidi-run-merge.patch` | `ff058faa3c16aa62ec0af21ce30e2db6eee9bce380fec3d51970ceb582164788` | `skb__line_append_shaping_run()` merged a shaping run into the previous layout run without comparing their bidi levels, and merged RTL runs (layout_probe.md 2.3). It adds the two conditions. |
 | `skribidi-0002-l1-trailing-whitespace.patch` | `36ce7aec18d9f2b1256ee4374522ef36e87b6850be8bab4ba0bd720c162fb1b1` | Unicode's rule L1 was not applied per line, so a line-end space in an RTL run of an LTR paragraph stayed inside the line (Known issues, fixed). |
 | `skribidi-0003-font-fallback.patch` | `bf6296af91c73737b18637e57f86f95fa443fad83848013cb427a5f47a2ca225` | A script run took its fonts only from the fonts that support its script, so a digit or punctuation mark in Hebrew or Arabic text got glyph 0 when the script's font lacked it, though another font in the list had it ([Patch 0003](#patch-0003-font-fallback-past-the-script)). |
+| `skribidi-0004-emoji-family-fallback.patch` | `ce9aa9eea3585162bb2aff62725f883465f63e54e2ea3d3e4bc21c847add4ab2` | A run whose font family had no font was skipped: with no emoji font, an emoji vanished with no glyph 0, and with emoji fonts only, text did ([Patch 0004](#patch-0004-a-run-whose-family-has-no-font)). |
 
 Patch 0002, and why it sits where it does:
 
@@ -131,7 +133,7 @@ Patch 0002, and why it sits where it does:
 CMake hashes the patches and checks the patched `skb_layout.c` against the
 manifest; a tree that differs still builds, and its logged patch field
 ends in `,tree-differs`, which the test refuses. The logged field lists
-the three hashes in order: `sha256:ff058faa...,sha256:36ce7aec...,sha256:bf6296af...`.
+the four hashes in order: `sha256:ff058faa...,sha256:36ce7aec...,sha256:bf6296af...,sha256:ce9aa9ee...`.
 The pack manifest's `tool.libraries.layout` line carries the same field,
 so a pack records which patches laid out its glyph runs (rig_spec 5.2).
 
@@ -201,6 +203,39 @@ folder and is not in the repository: it needs this machine's fonts. The
 corpus against Chromium and the editing checks need the Windows fonts and
 did not run here.
 
+### Patch 0004: a run whose family has no font
+
+Found 2026-11-18 (Known issues, "emoji were
+dropped without a trace"). Skribidi lays out a run of emoji
+(`skb_emoji_run_iterator`: emoji presentation, VS16, ZWJ, keycap and flag
+sequences) with the fonts of `SKB_FONT_FAMILY_EMOJI` only, and any other
+run with the fonts of its text family. When the run's family had no font
+that matched and no default font, `skb__itemize()` skipped the run. With
+the layout glue's fonts all in the default family, "a 😀 b" gave the
+items of "a  b", `n_missing` 0, and the pack tool built the pack.
+
+The rule the patch adds:
+
+- Where the run would be skipped, it is laid out in the other family: an
+  emoji run in its text family, a text run in the emoji family. The
+  codepoints then get that family's glyphs, or glyph 0, which
+  `n_missing` counts and `ylay_missing_chars()` names. A run that was not
+  skipped is itemized as before.
+- The fallback of patch 0003 (a codepoint none of the run's fonts has)
+  looks in the run's family, then in the other family. An emoji that the
+  emoji fonts lack (U+2764 with VS16, when only a text font has U+2764)
+  comes from the text font; a character with text presentation that no
+  text font has (U+2603 SNOWMAN alone) from the first emoji font that has
+  it, as a browser does.
+- In each family the first font, in the order added, that has the
+  cluster wins, so the result does not depend on anything but the list.
+- 32 added and 3 changed lines in one file.
+
+Outputs that changed: only runs Skribidi skipped before, and codepoints
+that had glyph 0 because their family lacked them. A collection without a
+COLR font gives the same layouts as with patch 0003 alone, except that a
+skipped emoji run now shows as glyph 0. `test_layout` part 8 checks it.
+
 ## Pinning and update policy
 
 From layout_probe.md 7, unchanged:
@@ -228,7 +263,7 @@ The header is the reference. In short:
 | Call | What it does |
 |---|---|
 | `ylay_create`, `ylay_destroy` | A library: Skribidi's font and attribute collections, a temp allocator, one reused layout object. One thread, with its `yol_ctx` |
-| `ylay_add_font(L, bytes, n, face, name)` | A font, in fallback order; any face of a collection. Opens it with HarfBuzz and `ysp/outline.h`, hashes it, makes an empty curve set. A font `ysp/outline.h` refuses (CFF2, no outlines) is refused by name |
+| `ylay_add_font(L, bytes, n, face, name)` | A font, in fallback order; any face of a collection. Opens it with HarfBuzz and `ysp/outline.h`, hashes it, makes an empty curve set. A font `ysp/outline.h` refuses (CFF2, no outlines) is refused by name. A COLR font goes in the emoji family (v0.3.0, [Emoji](#emoji)); a font whose color glyphs are CBDT, sbix or SVG with no COLR is refused (`YLAY_ERR_REFUSED`) |
 | `ylay_layout(L, text, n, style, spans, n_spans, block)` | Lays out UTF-8 text: size, width (0: no wrapping), line height, direction, alignment, language, a palette color; spans change size, color and language |
 | `ylay_take_new_glyphs(L, font, &glyphs)` | The glyphs built since the last call, for `ygfx_cset_add()` |
 | `ylay_from_skb(L, layout, x, y, color, append, block)` | The same conversion for a Skribidi layout the caller made (the editor's paragraphs) |
@@ -254,6 +289,30 @@ or ends with a letter (see `tests/layout/layout_test.c`). The fallback
 looks at the cmap itself, so a font whose scripts the sampling misses is
 still found for the codepoints it has.
 
+### Emoji
+
+A font with a COLR table (version 0 or 1, as HarfBuzz reads it) goes in
+Skribidi's emoji family (v0.3.0); every other font stays in the default
+family. `ylay_font_info.color` says which COLR a font has (1: version 0
+layers, 2: version 1 paints).
+
+- An emoji run (emoji presentation, a VS16 sequence, ZWJ, keycap and flag
+  sequences, as Skribidi's emoji iterator finds them) takes the COLR
+  fonts in the order added; a codepoint they lack, the text fonts
+  (patch 0004). A ZWJ sequence is shaped in one font, so the emoji
+  font's GSUB makes its ligature.
+- A text run takes the text fonts as before; a codepoint they all lack,
+  the COLR fonts in the order added. A character with text presentation
+  (U+2603 SNOWMAN without VS16) that only the emoji font has is drawn from
+  it.
+- No emoji font: an emoji is glyph 0, counted in `n_missing` and named by
+  `ylay_missing_chars()`. Emoji fonts only: text is glyph 0 the same way.
+- Refused by name (`YLAY_ERR_REFUSED`): a font whose color glyphs are CBDT
+  or sbix bitmaps or SVG documents and that has no COLR (Noto Color Emoji's
+  CBDT build, Apple Color Emoji), with the advice to use Twemoji. A font
+  with COLR and CBDT or SVG (the Fluent builds) is accepted; its COLR is
+  used. A COLR table that HarfBuzz rejects is refused (`YLAY_ERR_FORMAT`).
+
 A character that no font in the list maps still gets glyph 0.
 `ylay_missing_chars()` names the characters of the last call's glyph-0
 items, each with its run's script, so the pack tool can say which
@@ -264,7 +323,7 @@ characters are missing and from which text.
 `tests/layout/layout_test.c` (ctest `test_layout`):
 
 1. The logged versions: the Skribidi commit, the hashes (and no
-   `tree-differs`) of the three patches, HarfBuzz 14.6.0.
+   `tree-differs`) of the four patches, HarfBuzz 14.6.0.
 2. Visual order on every platform, with a TrueType font the test writes (a
    box for every ASCII, Hebrew and Arabic codepoint): the two bug strings
    and the editor's caret string. The items of each line, by x, must visit
@@ -305,6 +364,29 @@ characters are missing and from which text.
    listed, the digits with the snowman. The ZWJ check passed: it guards
    against a fallback that splits the run, a fault of the patch, not of
    Skribidi.
+
+8. Emoji (v0.3.0), with fonts the test writes
+   (`tests/adapt/colr_font_build.h`: a Latin box font and a COLR version
+   0 emoji font with a GSUB ligature for a ZWJ sequence), so no system
+   font is needed. In both font orders: "a😀b" takes the grin from the
+   emoji font and the letters from the text font, with no glyph 0; "a☃️b"
+   (VS16) and "a☃b" (text presentation; only the emoji font has it) take
+   the snowman from the emoji font; "x👨‍👩" is the ligature glyph. With no
+   emoji font, the grin is glyph 0, `n_missing` 1, and
+   `ylay_missing_chars()` names U+1F600 as in no font; with the emoji font
+   only, both letters are glyph 0 and counted. With two emoji fonts the
+   first added gives the grin, in either order. "a❤️" with a text font that
+   has U+2764 and an emoji font that lacks it takes the heart from the text
+   font. Two layouts of one text give the same items. A font with a CBDT,
+   sbix or SVG table and no COLR is refused with a message that names
+   Twemoji; the COLR font's `color` is 1.
+
+   Without the change (fonts in the default family, patch 0004 reverted
+   and the refusal off; 2026-11-18, Linux gcc 12): 14 of the 99 checks
+   failed: the emoji vanished ("a😀b" gave 2 items, `n_missing` 0), the
+   ZWJ sequence was 1 item of glyph 3, text with only the emoji font gave
+   no items, the two-font order and the heart checks failed, and the three
+   refusals were accepted.
 
 ### The corpus against Chromium
 
@@ -446,17 +528,18 @@ start of line 1; Edge's is at x 8200 on line 0).
 
 ## Known issues
 
-### Open: emoji are dropped without a trace
+### Fixed in v0.3.0: emoji were dropped without a trace
 
 Skribidi lays out a run of emoji with the fonts of its emoji family
-(`SKB_FONT_FAMILY_EMOJI`) only, and when there is none it skips the run.
-`ylay_add_font()` adds every font to the default family, so "a 😀 b" gives
-the items of "a  b": no glyph 0, `n_missing` 0, and the pack tool builds
+(`SKB_FONT_FAMILY_EMOJI`) only, and when there was none it skipped the run.
+`ylay_add_font()` added every font to the default family, so "a 😀 b" gave
+the items of "a  b": no glyph 0, `n_missing` 0, and the pack tool built
 the pack. Seen 2026-11-18 with DejaVu Sans, and with Noto Sans and Noto
-Color Emoji (which `ysp/outline.h` refuses: bitmap only). Not fixed by
-patch 0003, which works inside a run that has fonts; the fix is a choice
-of what an emoji should become (an outline emoji font in the emoji family,
-or a refusal), which is open.
+Color Emoji (CBDT, which `ysp/outline.h` refused as bitmap only). v0.3.0
+puts COLR fonts in the emoji family and refuses CBDT, sbix and SVG fonts
+without COLR by name ([Emoji](#emoji)); patch 0004 lays a run whose family
+has no font out in the other family, so an emoji no font has is glyph 0
+and counted.
 
 ### Fixed by patch 0002: Skribidi kept a line-end space of an RTL run inside the line
 

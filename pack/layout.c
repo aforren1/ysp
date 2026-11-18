@@ -8,6 +8,7 @@
 #include "ysp/layout.h"
 
 #include <hb.h>
+#include <hb-ot.h>
 #include "skribidi/skb_common.h"
 #include "skribidi/skb_font_collection.h"
 #include "skribidi/skb_attribute_collection.h"
@@ -119,6 +120,7 @@ typedef struct ylay__font {
     uint32_t          cap_taken;
     uint32_t          n_built;
     double            build_us;
+    int               color;         /* 0 none, 1 COLR v0, 2 COLR v1 paints      */
 } ylay__font;
 
 typedef struct ylay__key { int font; float size; uint32_t n, at; } ylay__key;
@@ -208,12 +210,22 @@ void ylay_destroy(ylay_lib* L) {
 
 const char* ylay_error(const ylay_lib* L) { return L ? L->error : ""; }
 
+/* The size of table tag in face (0: absent). */
+static unsigned ylay__table_len(hb_face_t* face, hb_tag_t tag) {
+    hb_blob_t* b = hb_face_reference_table(face, tag);
+    unsigned n = hb_blob_get_length(b);
+    hb_blob_destroy(b);
+    return n;
+}
+
 int ylay_add_font(ylay_lib* L, const void* bytes, size_t n, int face, const char* name) {
     ylay__font* F;
     hb_blob_t* blob;
     hb_face_t* hf;
-    hb_font_t* font;
+    hb_font_t* font = NULL;
     char err[200];
+    const char* other = NULL;
+    int colr = 0, colr_table = 0;
     yol_cset_desc cd;
     if (!L || !bytes || n == 0 || n > 0x7fffffffu || face < 0) return YLAY_ERR_ARG;
     if (L->n_fonts == YLAY_MAX_FONTS) return ylay__fail(L, YLAY_ERR_FULL, "ysp_layout: %d fonts already", YLAY_MAX_FONTS);
@@ -221,17 +233,43 @@ int ylay_add_font(ylay_lib* L, const void* bytes, size_t n, int face, const char
     memset(F, 0, sizeof *F);
     snprintf(F->name, sizeof F->name, "%s", name ? name : "font");
     F->face = face;
-    /* ysp/outline.h reads the outlines; a font it refuses (CFF2, no outlines)
-     * cannot become a curve set, so it is refused here, by its reason. */
-    if (yol_font_view(&F->f, bytes, n, face, err, sizeof err) < 0)
-        return ylay__fail(L, YLAY_ERR_FORMAT, "ysp_layout: %s: %s", F->name, err);
     blob = hb_blob_create_or_fail((const char*)bytes, (unsigned)n, HB_MEMORY_MODE_READONLY, NULL, NULL);
     hf = blob ? hb_face_create_or_fail(blob, (unsigned)face) : NULL;
-    font = hf ? hb_font_create(hf) : NULL;
-    if (font) F->handle = skb_font_collection_add_hb_font(L->fc, F->name, font, SKB_FONT_FAMILY_DEFAULT, NULL);
+    hb_blob_destroy(blob);
+    if (!hf) return ylay__fail(L, YLAY_ERR_FORMAT, "ysp_layout: %s: HarfBuzz could not open face %d", F->name, face);
+    /* Color: COLR (versions 0 and 1) only. A font whose color glyphs are
+     * bitmaps (CBDT, sbix) or SVG documents and that has no COLR would be
+     * drawn as its monochrome outlines, or not at all: refused by name. A
+     * COLR that HarfBuzz rejects would draw the same way: refused too. */
+    colr_table = ylay__table_len(hf, HB_TAG('C', 'O', 'L', 'R')) > 0;
+    colr = hb_ot_color_has_layers(hf) || hb_ot_color_has_paint(hf);
+    if (ylay__table_len(hf, HB_TAG('C', 'B', 'D', 'T'))) other = "CBDT bitmaps";
+    else if (ylay__table_len(hf, HB_TAG('s', 'b', 'i', 'x'))) other = "sbix bitmaps";
+    else if (ylay__table_len(hf, HB_TAG('S', 'V', 'G', ' '))) other = "SVG documents";
+    if (colr_table && !colr) {
+        hb_face_destroy(hf);
+        return ylay__fail(L, YLAY_ERR_FORMAT, "ysp_layout: %s: its COLR table is malformed or holds no color glyph (HarfBuzz reads none); "
+                          "use a COLR font that HarfBuzz reads, such as Twemoji (docs/layout.md, Emoji)", F->name);
+    }
+    if (!colr && other) {
+        hb_face_destroy(hf);
+        return ylay__fail(L, YLAY_ERR_REFUSED, "ysp_layout: %s: its color glyphs are %s and it has no COLR table; ysp draws COLR color "
+                          "fonts only: use Twemoji (Mozilla's COLR build) or another COLR font (docs/layout.md, Emoji)", F->name, other);
+    }
+    /* ysp/outline.h reads the outlines; a font it refuses (CFF2, no outlines)
+     * cannot become a curve set, so it is refused here, by its reason. */
+    if (yol_font_view(&F->f, bytes, n, face, err, sizeof err) < 0) {
+        hb_face_destroy(hf);
+        return ylay__fail(L, YLAY_ERR_FORMAT, "ysp_layout: %s: %s", F->name, err);
+    }
+    font = hb_font_create(hf);
+    /* A COLR font goes in Skribidi's emoji family, which its emoji runs
+     * (emoji presentation, VS16, ZWJ and flag sequences) take; every other
+     * font in the default family. Fonts of one family keep the order added. */
+    F->color = colr ? (hb_ot_color_has_paint(hf) ? 2 : 1) : 0;
+    if (font) F->handle = skb_font_collection_add_hb_font(L->fc, F->name, font, colr ? SKB_FONT_FAMILY_EMOJI : SKB_FONT_FAMILY_DEFAULT, NULL);
     hb_font_destroy(font);
     hb_face_destroy(hf);
-    hb_blob_destroy(blob);
     if (!F->handle) return ylay__fail(L, YLAY_ERR_FORMAT, "ysp_layout: %s: HarfBuzz could not open face %d", F->name, face);
     memset(&cd, 0, sizeof cd);
     cd.n_glyphs = (uint32_t)F->f.n_glyphs;
@@ -264,6 +302,7 @@ int ylay_font(const ylay_lib* L, int font, ylay_font_info* out) {
     out->set = &F->set;
     out->n_built = F->n_built;
     out->build_us = F->build_us;
+    out->color = F->color;
     return YLAY_OK;
 }
 

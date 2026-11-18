@@ -23,7 +23,7 @@ command. CI runs it with a tarball cache keyed on the manifest. Decision record:
 
 | Directory | Upstream | Pin | License files kept | Local patches |
 |---|---|---|---|---|
-| `skribidi/` | https://github.com/memononen/skribidi | `dee63d6ba76aeddd49dea6d1b2508cf9aa391f46` (2026-08-17) | `LICENSE` (MIT) | `patches/skribidi-0001-bidi-run-merge.patch`, `patches/skribidi-0002-l1-trailing-whitespace.patch`, `patches/skribidi-0003-font-fallback.patch`, in that order |
+| `skribidi/` | https://github.com/memononen/skribidi | `dee63d6ba76aeddd49dea6d1b2508cf9aa391f46` (2026-08-17) | `LICENSE` (MIT) | `patches/skribidi-0001-bidi-run-merge.patch`, `patches/skribidi-0002-l1-trailing-whitespace.patch`, `patches/skribidi-0003-font-fallback.patch`, `patches/skribidi-0004-emoji-family-fallback.patch`, in that order |
 | `harfbuzz/` | https://github.com/harfbuzz/harfbuzz | tag `14.6.0`, `c7a7457b7385f33178e8cf87615ca077a810bbe7` | `COPYING` (Old MIT), `AUTHORS`, `src/ms-use/COPYING` (MIT; the USE table is generated from its data) | none |
 | `sheenbidi/` | https://github.com/Tehreer/SheenBidi | `83f77108a2873600283f6da4b326a2dca7a3a7a6` (2025-06-06) | `LICENSE` (Apache-2.0) | none |
 | `libunibreak/` | https://github.com/adah1972/libunibreak | tag `libunibreak_6_1`, `304585d8e2d63187507368d612c3d5fff1486368` | `LICENCE` (zlib), `AUTHORS` | none |
@@ -78,7 +78,7 @@ particular:
 
 ## The patches
 
-All three change `src/skb_layout.c`, and 0003 also `src/skb_font_collection.c`
+All four change `src/skb_layout.c`, and 0003 also `src/skb_font_collection.c`
 and `include/skribidi/skb_font_collection.h`. They apply in this order:
 
 1. `patches/skribidi-0001-bidi-run-merge.patch` changes the merge
@@ -98,6 +98,12 @@ and `include/skribidi/skb_font_collection.h`. They apply in this order:
    `skb_font_collection_match_fallback_fonts()`). SHA-256
    `bf6296af91c73737b18637e57f86f95fa443fad83848013cb427a5f47a2ca225`.
    Why: docs/layout.md, "Patch 0003: font fallback past the script".
+4. `patches/skribidi-0004-emoji-family-fallback.patch` lays a run whose
+   font family has no font (an emoji run with no emoji font, a text run
+   with emoji fonts only) out in the other family instead of skipping it,
+   and lets the fallback of 0003 look in the other family after the run's.
+   SHA-256 `ce9aa9eea3585162bb2aff62725f883465f63e54e2ea3d3e4bc21c847add4ab2`.
+   Why: docs/layout.md, "Patch 0004: a run whose family has no font".
 
 The tree here holds the patched source; the script applies the patches,
 in order, to a fresh download.
@@ -116,7 +122,8 @@ uv run --no-project python tools/vendor_layout.py --cache DIR  # keep the tarbal
 Verify compares every file with the download and with `MANIFEST.sha256`,
 and reports a file here that the manifest does not list. On 2026-10-07 it
 reported `ok: 463 files, 7719645 bytes` (both patches applied); on
-2026-11-18, with the third, `ok: 463 files, 7725840 bytes`.
+2026-11-18, with the third, `ok: 463 files, 7725840 bytes`; with the
+fourth, `ok: 463 files, 7727613 bytes`.
 
 `.gitattributes` here turns off line-ending conversion, so a Windows
 checkout with `core.autocrlf=true` keeps the files as upstream has them.

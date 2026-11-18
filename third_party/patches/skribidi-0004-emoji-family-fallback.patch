@@ -1,0 +1,100 @@
+Subject: [PATCH] layout: do not drop a run whose font family has no font
+
+skb__itemize() laid out a run of emoji with the fonts of
+SKB_FONT_FAMILY_EMOJI only. With no font in that family it skipped the
+run: "a <grinning face> b" gave the glyphs of "a  b", with no glyph 0 to
+tell the caller that a character was lost. A text run in a collection
+that holds only emoji fonts was skipped the same way.
+
+- Where the run would be skipped (its family has no font that matches,
+  and no default font), it is laid out in the other family: an emoji
+  run in the run's text family, a text run in the emoji family. Its
+  codepoints then get the other family's glyphs, or glyph 0, which the
+  caller sees. A run that was not skipped is itemized as before.
+- The fallback of a codepoint that none of the run's fonts has (patch
+  0003) looks in the run's family first, then in the other family: an
+  emoji that the emoji fonts lack comes from a text font that has it,
+  and a character that the text fonts lack (a snowman, with text
+  presentation) from an emoji font that has it. The first font of a
+  family, in the order the fonts were added, wins, so the order stays
+  deterministic.
+
+Found by psy's layout glue (docs/layout.md, "Known issues": emoji were
+dropped without a trace). Applies to skribidi dee63d6 after
+skribidi-0001-bidi-run-merge.patch, skribidi-0002-l1-trailing-whitespace.patch
+and skribidi-0003-font-fallback.patch.
+
+diff --git a/src/skb_layout.c b/src/skb_layout.c
+--- a/src/skb_layout.c
++++ b/src/skb_layout.c
+@@ -317,7 +317,7 @@
+ #elif defined(__GNUC__)
+ __attribute__((noinline))
+ #endif
+-static skb_font_handle_t skb__match_fallback_font(
++static skb_font_handle_t skb__match_fallback_font_in_family(
+ 	const skb_layout_t* layout, int32_t offset, int32_t range_start, int32_t range_end,
+ 	uint8_t font_family, skb_weight_t font_weight, skb_style_t font_style, skb_stretch_t font_stretch,
+ 	skb_range_t* fallback_range)
+@@ -352,6 +352,21 @@
+ 	return fonts[0];
+ }
+ 
++// The run's family first, then the other one: emoji fonts for text that the
++// text fonts lack, text fonts for an emoji that the emoji fonts lack.
++static skb_font_handle_t skb__match_fallback_font(
++	const skb_layout_t* layout, int32_t offset, int32_t range_start, int32_t range_end,
++	uint8_t font_family, uint8_t other_family, skb_weight_t font_weight, skb_style_t font_style, skb_stretch_t font_stretch,
++	skb_range_t* fallback_range)
++{
++	const skb_font_handle_t font_handle = skb__match_fallback_font_in_family(
++		layout, offset, range_start, range_end, font_family, font_weight, font_style, font_stretch, fallback_range);
++	if (font_handle || other_family == font_family)
++		return font_handle;
++	return skb__match_fallback_font_in_family(
++		layout, offset, range_start, range_end, other_family, font_weight, font_style, font_stretch, fallback_range);
++}
++
+ static void skb__itemize(skb__layout_build_context_t* build_context, skb_layout_t* layout)
+ {
+ 	const skb_text_direction_t base_direction = skb_attributes_get_text_base_direction(layout->params.layout_attributes, layout->params.attribute_collection);
+@@ -466,7 +481,9 @@
+ 						bool has_emoji = false;
+ 						while (skb_emoji_run_iterator_next(&emoji_iter, &text_range, &has_emoji)) {
+ 
+-							const uint8_t font_family = has_emoji ? SKB_FONT_FAMILY_EMOJI : skb_attributes_get_font_family(content_run_attributes, layout->params.attribute_collection);
++							const uint8_t text_font_family = skb_attributes_get_font_family(content_run_attributes, layout->params.attribute_collection);
++							uint8_t font_family = has_emoji ? SKB_FONT_FAMILY_EMOJI : text_font_family;
++							uint8_t other_font_family = has_emoji ? text_font_family : SKB_FONT_FAMILY_EMOJI;
+ 							const skb_weight_t font_weight = skb_attributes_get_font_weight(content_run_attributes, layout->params.attribute_collection);
+ 							const skb_style_t font_style = skb_attributes_get_font_style(content_run_attributes, layout->params.attribute_collection);
+ 							const skb_stretch_t font_stretch = skb_attributes_get_font_stretch(content_run_attributes, layout->params.attribute_collection);
+@@ -479,6 +496,19 @@
+ 								font_weight, font_style, font_stretch,
+ 								fonts, SKB_COUNTOF(fonts));
+ 
++							if (fonts_count == 0 && other_font_family != font_family &&
++								!skb_font_collection_get_default_font(layout->params.font_collection, font_family)) {
++								// Where the run would be dropped (no emoji font, or emoji fonts only), lay the
++								// run out in the other family, so that its codepoints get glyphs, or glyph 0
++								// that the caller can count, and are not dropped.
++								const uint8_t t = font_family;
++								font_family = other_font_family;
++								other_font_family = t;
++								fonts_count = skb_font_collection_match_fonts(
++									layout->params.font_collection, hb_language_to_string(run_lang), script, font_family,
++									font_weight, font_style, font_stretch,
++									fonts, SKB_COUNTOF(fonts));
++							}
+ 							if (fonts_count == 0) {
+ 								// If not fonts found, try the font family's default font.
+ 								fonts[0] = skb_font_collection_get_default_font(layout->params.font_collection, font_family);
+@@ -515,7 +545,7 @@
+ 									if (!found && !skb__is_default_ignorable(codepoint)) {
+ 										skb_range_t fallback_range = {0};
+ 										const skb_font_handle_t fallback_font_handle = skb__match_fallback_font(
+-											layout, j, font_run_start, text_range.end, font_family, font_weight, font_style, font_stretch, &fallback_range);
++											layout, j, font_run_start, text_range.end, font_family, other_font_family, font_weight, font_style, font_stretch, &fallback_range);
+ 										if (fallback_font_handle) {
+ 											font_handle = fallback_font_handle;
+ 											font_is_fallback = true;

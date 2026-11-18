@@ -1,6 +1,6 @@
 /* layout_test.c - checks of pack/layout (docs/layout.md, Checks).
  *
- *   1. The versions the glue logs: Skribidi's commit, the three patch
+ *   1. The versions the glue logs: Skribidi's commit, the four patch
  *      hashes, the HarfBuzz version.
  *   2. Visual order on every platform: a TrueType font written here (a box
  *      for every ASCII, Hebrew and Arabic codepoint) and the strings that
@@ -32,6 +32,14 @@
  *      cluster moves whole when a font has it, else only the codepoint; a
  *      ZWJ stays; a character no font has is glyph 0, and
  *      ylay_missing_chars() names it with its run's script.
+ *   8. Emoji (v0.3.0, Skribidi patch 0004), with fonts written here
+ *      (tests/adapt/colr_font_build.h): a COLR font takes emoji runs,
+ *      VS16 and ZWJ sequences in either font order; with no emoji font an
+ *      emoji is glyph 0 and counted missing; with emoji fonts only, text
+ *      is glyph 0 and counted; the first emoji font added wins; an emoji
+ *      the emoji fonts lack comes from a text font that has it, and a
+ *      text character the text fonts lack from an emoji font; a font of
+ *      CBDT, sbix or SVG color glyphs without COLR is refused.
  * Exit 0 on pass, 1 on a failure. YSP_FONTS_DIR overrides the font folder
  * (YLAY_TEST_FONTS, C:/Windows/Fonts by default).
  */
@@ -51,6 +59,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "../adapt/colr_font_build.h"
 
 #ifndef YLAY_TEST_DIR
 #define YLAY_TEST_DIR "tests/layout"
@@ -1150,6 +1159,174 @@ static void editor_compare(yol_ctx* ol) {
 
 /* --- main ---------------------------------------------------------------------- */
 
+/* --- 8. emoji ------------------------------------------------------------------ */
+
+/* The UTF-8 of a codepoint. */
+static int u8(uint32_t c, char* o) {
+    if (c < 0x80) { o[0] = (char)c; return 1; }
+    if (c < 0x800) { o[0] = (char)(0xC0 | c >> 6); o[1] = (char)(0x80 | (c & 63)); return 2; }
+    if (c < 0x10000) { o[0] = (char)(0xE0 | c >> 12); o[1] = (char)(0x80 | (c >> 6 & 63)); o[2] = (char)(0x80 | (c & 63)); return 3; }
+    o[0] = (char)(0xF0 | c >> 18); o[1] = (char)(0x80 | (c >> 12 & 63)); o[2] = (char)(0x80 | (c >> 6 & 63)); o[3] = (char)(0x80 | (c & 63));
+    return 4;
+}
+/* UTF-8 text from codepoints, 0-ended; one of two static buffers. */
+static const char* cps(const uint32_t* c) {
+    static char buf[2][128];
+    static int which;
+    char* o = buf[which ^= 1];
+    int n = 0;
+    while (*c) n += u8(*c++, o + n);
+    o[n] = 0;
+    return o;
+}
+
+/* One layout with the fonts fl[0 .. n - 1] in that order; for each item in
+ * logical order, its font's index in the list and its glyph. Returns the
+ * item count, or -1. */
+typedef struct em_font { const bb* f; const char* name; } em_font;
+static int em_layout(yol_ctx* ol, const em_font* fl, int n, const char* text, int* font_of, uint32_t* glyph_of, uint32_t* missing,
+                     ylay_missing* miss, int* n_miss) {
+    ylay_lib* L;
+    ylay_block b;
+    int i, n_items = -1;
+    uint32_t r, k;
+    memset(&b, 0, sizeof b);
+    if (ylay_create(&L, &(ylay_desc){ .ol = ol }) != YLAY_OK) return -1;
+    for (i = 0; i < n; i++)
+        if (ylay_add_font(L, fl[i].f->d, fl[i].f->n, 0, fl[i].name) != i) { printf("  add %s: %s\n", fl[i].name, ylay_error(L)); goto done; }
+    if (ylay_layout(L, text, -1, &(ylay_style){ .size = 100 }, NULL, 0, &b) != YLAY_OK) { printf("  layout: %s\n", ylay_error(L)); goto done; }
+    {   /* logical order: by cluster, then by x (one LTR line here) */
+        int order[64], m = (int)(b.n_items < 64 ? b.n_items : 64), a, c;
+        for (a = 0; a < m; a++) { order[a] = a; font_of[a] = -1; glyph_of[a] = 0; }
+        for (a = 1; a < m; a++)
+            for (c = a; c > 0 && (b.cluster[order[c - 1]] > b.cluster[order[c]] ||
+                                  (b.cluster[order[c - 1]] == b.cluster[order[c]] && b.items[order[c - 1]].x > b.items[order[c]].x)); c--) {
+                int t = order[c]; order[c] = order[c - 1]; order[c - 1] = t;
+            }
+        for (r = 0; r < b.n_runs; r++)
+            for (k = b.runs[r].first; k < b.runs[r].first + b.runs[r].n && k < 64; k++)
+                for (a = 0; a < m; a++)
+                    if (order[a] == (int)k) { font_of[a] = b.runs[r].font; glyph_of[a] = (uint32_t)b.items[k].glyph; }
+        n_items = m;
+    }
+    *missing = b.n_missing;
+    if (miss) *n_miss = ylay_missing_chars(L, miss, 8);
+done:
+    ylay_block_free(&b);
+    ylay_destroy(L);
+    return n_items;
+}
+
+static void emoji_checks(yol_ctx* ol) {
+    static const uint32_t fr_heart[][2] = { { 0x21, 0x3f }, { 0x41, 0x5f }, { 0x61, 0x7e }, { 0x2764, 0x2764 } };
+    bb text = { 0, 0, 0 }, heart = { 0, 0, 0 };
+    cfb_buf emo = { 0, 0, 0 }, emo2 = { 0, 0, 0 }, bad = { 0, 0, 0 };
+    bb e1, e2;
+    int fo[64], n, o, nm = 0;
+    uint32_t gl[64], miss = 0;
+    ylay_missing mc[8];
+    char t[256];
+    const uint32_t a_grin_b[] = { 'a', CFB_GRIN, 'b', 0 };
+    const uint32_t snow_vs16[] = { 'a', CFB_SNOW, 0xFE0F, 'b', 0 };
+    const uint32_t snow_text[] = { 'a', CFB_SNOW, 'b', 0 };
+    const uint32_t family[] = { 'x', CFB_MAN, CFB_ZWJ, CFB_WOMAN, 0 };
+    const uint32_t heart_vs16[] = { 'a', CFB_HEART, 0xFE0F, 0 };
+    make_font_r(&text, fb_fonts[FB_LA].rg, fb_fonts[FB_LA].nr, 900, -300);
+    make_font_r(&heart, fr_heart, 4, 900, -300);
+    cfb_emoji_v0(&emo);
+    cfb_emoji_v0(&emo2);
+    e1.d = emo.d; e1.n = emo.n; e1.cap = emo.cap;
+    e2.d = emo2.d; e2.n = emo2.n; e2.cap = emo2.cap;
+    for (o = 0; o < 2; o++) {   /* both font orders */
+        em_font fl[2];
+        int ti = o ? 1 : 0, ei = o ? 0 : 1;
+        fl[ti].f = &text; fl[ti].name = "la";
+        fl[ei].f = &e1; fl[ei].name = "emoji";
+        n = em_layout(ol, fl, 2, cps(a_grin_b), fo, gl, &miss, NULL, NULL);
+        CHECK(n == 3 && fo[0] == ti && fo[1] == ei && gl[1] == CFB0_GRIN && fo[2] == ti && miss == 0,
+              "emoji, order %d: a grin b gave %d items, fonts %d %d %d, glyph %u, %u missing", o, n, fo[0], fo[1], fo[2], gl[1], miss);
+        n = em_layout(ol, fl, 2, cps(snow_vs16), fo, gl, &miss, NULL, NULL);
+        CHECK(n >= 3 && fo[1] == ei && gl[1] == CFB0_SNOW && miss == 0,
+              "emoji, order %d: snowman VS16: %d items, font %d glyph %u, %u missing", o, n, fo[1], gl[1], miss);
+        /* text presentation, which the text font lacks: the emoji font's, by the fallback to the other family */
+        n = em_layout(ol, fl, 2, cps(snow_text), fo, gl, &miss, NULL, NULL);
+        CHECK(n == 3 && fo[1] == ei && gl[1] == CFB0_SNOW && fo[0] == ti && miss == 0,
+              "emoji, order %d: snowman as text: %d items, font %d glyph %u, %u missing", o, n, fo[1], gl[1], miss);
+        n = em_layout(ol, fl, 2, cps(family), fo, gl, &miss, NULL, NULL);
+        CHECK(n == 2 && fo[1] == ei && gl[1] == CFB0_FAMILY && miss == 0,
+              "emoji, order %d: the ZWJ sequence: %d items, font %d glyph %u (want the ligature %d), %u missing", o, n, fo[1], gl[1],
+              CFB0_FAMILY, miss);
+    }
+    {   /* no emoji font: glyph 0, counted, named */
+        em_font fl[1] = { { &text, "la" } };
+        n = em_layout(ol, fl, 1, cps(a_grin_b), fo, gl, &miss, mc, &nm);
+        CHECK(n == 3 && gl[1] == 0 && miss == 1 && nm == 1 && mc[0].codepoint == CFB_GRIN && !mc[0].in_a_font,
+              "emoji, no emoji font: %d items (want 3), glyph %u, %u missing, %d named (want U+1F600, in no font)", n, gl[1], miss, nm);
+    }
+    {   /* emoji fonts only: the letters are glyph 0, counted */
+        em_font fl[1] = { { &e1, "emoji" } };
+        n = em_layout(ol, fl, 1, cps(a_grin_b), fo, gl, &miss, NULL, NULL);
+        CHECK(n == 3 && gl[0] == 0 && gl[1] == CFB0_GRIN && gl[2] == 0 && miss == 2,
+              "emoji only: %d items (want 3), glyphs %u %u %u, %u missing (want 2)", n, gl[0], gl[1], gl[2], miss);
+    }
+    {   /* two emoji fonts: the first added wins, either way round */
+        em_font fl[3] = { { &text, "la" }, { &e1, "emoji1" }, { &e2, "emoji2" } };
+        n = em_layout(ol, fl, 3, cps(a_grin_b), fo, gl, &miss, NULL, NULL);
+        CHECK(n == 3 && fo[1] == 1, "two emoji fonts: the grin from font %d, want 1", fo[1]);
+        fl[1].f = &e2; fl[1].name = "emoji2"; fl[2].f = &e1; fl[2].name = "emoji1";
+        n = em_layout(ol, fl, 3, cps(a_grin_b), fo, gl, &miss, NULL, NULL);
+        CHECK(n == 3 && fo[1] == 1, "two emoji fonts, swapped: the grin from font %d, want 1", fo[1]);
+    }
+    {   /* an emoji the emoji font lacks, which a text font has */
+        em_font fl[2] = { { &heart, "la+heart" }, { &e1, "emoji" } };
+        n = em_layout(ol, fl, 2, cps(heart_vs16), fo, gl, &miss, NULL, NULL);
+        CHECK(n >= 2 && fo[1] == 0 && gl[1] == fb_gid(FB_LA, 0x7e) + 1 && miss == 0,
+              "a heart only the text font has: font %d glyph %u, %u missing", fo[1], gl[1], miss);
+    }
+    {   /* determinism: the same layout twice gives the same items */
+        em_font fl[2] = { { &text, "la" }, { &e1, "emoji" } };
+        int fo2[64];
+        uint32_t gl2[64], m2 = 0;
+        int n2;
+        snprintf(t, sizeof t, "%s %s", cps(a_grin_b), cps(family));
+        n = em_layout(ol, fl, 2, t, fo, gl, &miss, NULL, NULL);
+        n2 = em_layout(ol, fl, 2, t, fo2, gl2, &m2, NULL, NULL);
+        CHECK(n > 0 && n == n2 && !memcmp(fo, fo2, sizeof(int) * (size_t)n) && !memcmp(gl, gl2, sizeof(uint32_t) * (size_t)n) && miss == 0,
+              "emoji: two layouts of one text differ, or %u missing", miss);
+    }
+    {   /* color glyphs the layout cannot draw: refused by name */
+        static const char* const tags[3] = { "CBDT", "sbix", "SVG " };
+        int k;
+        for (k = 0; k < 3; k++) {
+            static cfb_font f;
+            ylay_lib* L;
+            int rc;
+            cfb_init(&f, 1000);
+            cfb_add_glyph(&f);
+            cfb_box(&f.g[1], 100, 0, 900, 800);
+            cfb_map(&f, CFB_GRIN, 1);
+            cfb_extra(&f, tags[k]);
+            cfb_write(&f, &bad);
+            ylay_create(&L, &(ylay_desc){ .ol = ol });
+            rc = ylay_add_font(L, bad.d, bad.n, 0, "bitmaps");
+            CHECK(rc == YLAY_ERR_REFUSED && strstr(ylay_error(L), "no COLR") && strstr(ylay_error(L), "Twemoji"),
+                  "a font with %s and no COLR: %d, '%s'", tags[k], rc, ylay_error(L));
+            ylay_destroy(L);
+        }
+    }
+    {   /* the COLR font's info */
+        ylay_lib* L;
+        ylay_font_info fi;
+        memset(&fi, 0, sizeof fi);
+        ylay_create(&L, &(ylay_desc){ .ol = ol });
+        CHECK(ylay_add_font(L, emo.d, emo.n, 0, "emoji") == 0 && ylay_font(L, 0, &fi) == YLAY_OK && fi.color == 1,
+              "the COLR v0 font: color %d, want 1", fi.color);
+        ylay_destroy(L);
+    }
+    printf("emoji: done\n");
+    free(text.d); free(heart.d); free(emo.d); free(emo2.d); free(bad.d);
+}
+
 int main(void) {
     yol_ctx ol;
     ylay_lib* L;
@@ -1164,9 +1341,10 @@ int main(void) {
     /* 1. versions */
     printf("skribidi %s, patch %s, harfbuzz %s\n", v->skribidi, v->skribidi_patch, v->harfbuzz);
     CHECK(strlen(v->skribidi) == 40, "Skribidi's commit is not set: %s", v->skribidi);
-    CHECK(strlen(v->skribidi_patch) == 3 * (7 + 64) + 2 && strncmp(v->skribidi_patch, "sha256:", 7) == 0 &&
-          strncmp(v->skribidi_patch + 72, "sha256:", 7) == 0 && strncmp(v->skribidi_patch + 144, "sha256:", 7) == 0,
-          "the three patch hashes are not set, or the tree differs from the manifest: %s", v->skribidi_patch);
+    CHECK(strlen(v->skribidi_patch) == 4 * (7 + 64) + 3 && strncmp(v->skribidi_patch, "sha256:", 7) == 0 &&
+          strncmp(v->skribidi_patch + 72, "sha256:", 7) == 0 && strncmp(v->skribidi_patch + 144, "sha256:", 7) == 0 &&
+          strncmp(v->skribidi_patch + 216, "sha256:", 7) == 0,
+          "the four patch hashes are not set, or the tree differs from the manifest: %s", v->skribidi_patch);
     CHECK(strcmp(v->harfbuzz, "14.6.0") == 0, "HarfBuzz is %s, the pin is 14.6.0", v->harfbuzz);
 
     /* 2. visual order with the written font */
@@ -1237,6 +1415,8 @@ int main(void) {
 
     /* 7. font fallback past the script */
     fallback_checks(&ol);
+    /* 8. emoji */
+    emoji_checks(&ol);
 
     /* 3. the corpus */
     corpus(&ol);

@@ -1,4 +1,4 @@
-/* ysp/layout.h - v0.2.0 - text layout for the pack tool and the player
+/* ysp/layout.h - v0.3.0 - text layout for the pack tool and the player
  *
  *   Lays out UTF-8 text with Skribidi (vendored in third_party/, pinned, with
  *   local patches) and gives glyphs as ysp/gfx.h curve-run items over
@@ -35,6 +35,18 @@
  *   ylay_missing_chars() names the characters of the last call's glyph-0
  *   items and their runs' scripts. The stamp's patch field lists three
  *   hashes.
+ *
+ *   v0.3.0 (2026-11-18): emoji. A font with a COLR table (version 0 or 1)
+ *   goes in Skribidi's emoji family, so emoji runs (emoji presentation,
+ *   VS16, ZWJ and flag sequences) take it; other fonts stay in the default
+ *   family. Skribidi patch 0004: a run whose family has no font is laid
+ *   out in the other family, and a codepoint that the run's fonts lack
+ *   falls back to the run's family, then to the other one, so an emoji
+ *   no font has is glyph 0 (n_missing counts it; before, it vanished with
+ *   n_missing 0). A font whose color glyphs are CBDT or sbix bitmaps or
+ *   SVG documents and that has no COLR is refused (YLAY_ERR_REFUSED);
+ *   ylay_font_info.color says which COLR a font has. The stamp's patch
+ *   field lists four hashes.
  */
 #ifndef YSP_LAYOUT_H_INCLUDED
 #define YSP_LAYOUT_H_INCLUDED
@@ -48,13 +60,14 @@
 extern "C" {
 #endif
 
-#define YLAY_VERSION_STRING "0.2.0"
+#define YLAY_VERSION_STRING "0.3.0"
 #define YLAY_MAX_FONTS      64
 
 /* Return codes: ysp/outline.h's values for the same meaning. */
 #define YLAY_OK            0
 #define YLAY_ERR_ARG     (-1)
 #define YLAY_ERR_FULL    (-4)
+#define YLAY_ERR_REFUSED (-7)   /* v0.3: a font or glyph feature ysp does not draw, named */
 #define YLAY_ERR_FORMAT  (-8)
 #define YLAY_ERR_NOMEM  (-10)
 
@@ -90,7 +103,11 @@ const char* ylay_error(const ylay_lib* L);
  * order, and the first that maps the codepoint (Skribidi's rule); for a
  * codepoint none of them maps (digits and punctuation take the script of
  * the text around them), the first font of all that maps its grapheme
- * cluster, else the codepoint (docs/layout.md, Font fallback). Opens the
+ * cluster, else the codepoint (docs/layout.md, Font fallback).
+ * A font with a COLR table goes in the emoji family: emoji runs try those
+ * fonts first, in the order added, then the others; other runs the other
+ * way round (v0.3, docs/layout.md, Emoji). A font whose color glyphs are
+ * CBDT, sbix or SVG with no COLR is refused (YLAY_ERR_REFUSED). Opens the
  * face with HarfBuzz and with ysp/outline.h, hashes the bytes (SHA-256) and
  * makes an empty curve set (resolved, backward lists) whose glyphs are built
  * when a layout first uses them. Returns the font index or a code. */
@@ -105,6 +122,9 @@ typedef struct ylay_font_info {
     const yol_cset* set;             /* the glyphs built so far                  */
     uint32_t          n_built;
     double            build_us;        /* time spent building them, in all         */
+    int               color;           /* v0.3: 0 no COLR; 1 COLR version 0 layers;
+                                        * 2 COLR version 1 paints. A COLR font is in
+                                        * the emoji family (docs/layout.md, Emoji)   */
 } ylay_font_info;
 int ylay_font(const ylay_lib* L, int font, ylay_font_info* out);
 int ylay_font_count(const ylay_lib* L);
