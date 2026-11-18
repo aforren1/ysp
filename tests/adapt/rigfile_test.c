@@ -1504,7 +1504,7 @@ static void check_view(void) {
 
 /* ------------------------------------------------ the signal adapters (v0.6.0) */
 
-static const char SIG_BLOCK[] =
+static const char SIGNALS_BLOCK[] =
     "  \"signals\": {\n"
     "    \"left\": {\n"
     "      \"adapter\": \"raw_mouse\",\n"
@@ -1546,7 +1546,7 @@ static void set_signals(yrig_profile* p) {
 }
 
 /* The written profile with one signal (a raw mouse, device any) in the
- * place of SIG_BLOCK's two, for the refusals. */
+ * place of SIGNALS_BLOCK's two, for the refusals. */
 static const char SIG_ONE[] =
     "  \"signals\": {\n"
     "    \"hand\": {\n"
@@ -1580,8 +1580,8 @@ static void check_signals(void) {
     CHECK_I(g_p.n_signals, 2);
     n = yrig_write(&g_p, g_buf, sizeof g_buf);
     at = strstr(g_buf, "  \"signals\"");
-    CHECK(at != NULL && strcmp(at, SIG_BLOCK) == 0);
-    CHECK(n == sizeof GOLDEN - 1 + strlen(SIG_BLOCK) - strlen("  \"written\": \"2026-10-09T14:03:00Z\"\n}\n"));
+    CHECK(at != NULL && strcmp(at, SIGNALS_BLOCK) == 0);
+    CHECK(n == sizeof GOLDEN - 1 + strlen(SIGNALS_BLOCK) - strlen("  \"written\": \"2026-10-09T14:03:00Z\"\n}\n"));
     CHECK_I(yrig_hash(&g_p, h1), YRIG_OK);
     CHECK(strcmp(h1, h0) != 0);
     /* parse back: the values, the bytes and the hash */
