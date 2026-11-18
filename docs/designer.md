@@ -122,6 +122,18 @@ ysp_designer (C++, Dear ImGui, SDL3, GL ES 3.0)
 
 1. Split the player into a library and `main.c`, with no change in
    behavior: the player's tests and mutation lists pass unchanged.
+   - Done before this plan: `player/CMakeLists.txt` builds the library
+     `ysp_player_lib`, and `main.c` only reads the arguments.
+   - Added 2026-11-18: `pl_check()`, the entry point the designer calls
+     on each change ([player.md](player.md), "Reference: pl_check()"). It
+     takes the definition's bytes and a pack, in memory or through a
+     range reader, and runs the player's load with no side effects
+     outside memory. It gives the loader's diagnostics with lines and
+     columns, the player's first refusal with the node, stimulus,
+     template or method that it names, and what a real run needs of the
+     rig and the session. `pl_load()` and `pl_check()` run one load
+     function. The command line's behavior and output bytes did not
+     change.
 2. Fix the text stack's faults from probe part 2: the two Skribidi
    editing faults with Devanagari, and a font list per script that has
    digits and punctuation.

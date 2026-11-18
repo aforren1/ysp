@@ -460,6 +460,32 @@ static int pl_dataset_open(pl_player* p) {
     return pl_v2_streams(p);
 }
 
+/* pl_check(): yds_open()'s check of trials.csv's columns (a writer that
+ * discards), with no folder. The streams' names and columns are not checked:
+ * yds_stream() needs an open data set. */
+static bool pl_discard(void* ctx, const void* bytes, size_t n) {
+    (void)ctx;
+    (void)bytes;
+    (void)n;
+    return true;
+}
+static int pl_columns_check(pl_player* p) {
+    ytr_data* w = (ytr_data*)pl_alloc(p, sizeof(ytr_data));
+    ytr_data_desc dd;
+    if (!w) return -1;
+    memset(&dd, 0, sizeof dd);
+    dd.write = pl_discard;
+    dd.cols = p->ytr_cols;
+    dd.n_cols = p->n_cols;
+    if (!ytr_data_open(w, &dd)) {
+        pl_fail(p, "the data set: yds_open: trial_cols: %s", ytr_data_error(w));
+        ytr_data_close(w);
+        return -1;
+    }
+    ytr_data_close(w);
+    return 0;
+}
+
 /* 2.10's order; a column every leaf has is one column, and a leaf that lacks
  * one leaves it empty. */
 int pl_columns_build(pl_player* p) {
@@ -540,6 +566,7 @@ int pl_columns_build(pl_player* p) {
         p->ytr_cols[i].type = (ytr_col_type)p->cols[i].type;
         p->ytr_cols[i].offset = YTR_UNBOUND;
     }
+    if (p->checking) return pl_columns_check(p);
     return pl_dataset_open(p);
 }
 

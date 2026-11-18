@@ -29,9 +29,16 @@ void pl_fail(pl_player* p, const char* fmt, ...) {
     va_list ap;
     if (p->failed) return;
     p->failed = 1;
+    p->fail_obj = p->at_obj;
+    p->fail_name = p->at_name;
     va_start(ap, fmt);
     vsnprintf(p->error, sizeof p->error, fmt, ap);
     va_end(ap);
+}
+
+void pl_at(pl_player* p, int obj, const char* name) {
+    p->at_obj = obj;
+    p->at_name = obj ? name : NULL;
 }
 
 typedef struct pl_block { struct pl_block* next; } pl_block;
@@ -54,6 +61,40 @@ static char* pl_strdup(pl_player* p, const char* s) {
     char* c = (char*)pl_alloc(p, n);
     if (c) memcpy(c, s, n);
     return c;
+}
+
+/* An entry's bytes: zero-copy from a mapping or memory; from a range
+ * reader (pl_check()'s pack) read whole, verified chunk by chunk, into the
+ * load's blocks, where the views made of them live until pl_close(). */
+static const void* pl_entry_data(pl_player* p, const ypak_entry* e) {
+    ypak_cursor c;
+    unsigned char* buf;
+    void* scratch;
+    size_t cap;
+    if (!p->pack_reader) return ypak_data(&p->pack, e);
+    cap = (size_t)(e->size < YPAK_CHUNK ? e->size : YPAK_CHUNK);
+    buf = (unsigned char*)pl_alloc(p, (size_t)e->size + 64);
+    scratch = pl_alloc(p, cap + 1);
+    if (!buf || !scratch) return NULL;
+    buf += (64 - ((uintptr_t)buf & 63)) & 63;   /* as aligned as a mapping's views need */
+    if (ypak_cursor_init(&c, &p->pack, e, scratch, cap) != 0 || ypak_cursor_read(&c, 0, buf, e->size) != e->size) return NULL;
+    return buf;
+}
+
+/* What a real run needs, in pl_check() (tier 3). */
+static void pl_need_add(pl_player* p, int kind, const char* name, int value) {
+    if (p->n_needs == p->c_needs) {
+        int nc = p->c_needs ? p->c_needs * 2 : 16;
+        pl_need* q = (pl_need*)pl_alloc(p, sizeof(pl_need) * (size_t)nc);
+        if (!q) return;
+        if (p->n_needs) memcpy(q, p->needs, sizeof(pl_need) * (size_t)p->n_needs);
+        p->needs = q;
+        p->c_needs = nc;
+    }
+    p->needs[p->n_needs].kind = kind;
+    p->needs[p->n_needs].name = name;
+    p->needs[p->n_needs].value = value;
+    p->n_needs++;
 }
 
 /* --- seeds (D8) --------------------------------------------------------- */
@@ -96,7 +137,7 @@ const ytb_table* pl_table_get(pl_player* p, const char* name) {
         if (strcmp(p->tables[i].name, name) == 0) return p->tables[i].table;
     if (ypak_find(&p->pack, name, &e) != 0) return NULL;
     if (e.kind != YPAK_KIND_TABLE) return NULL;
-    if (!(data = ypak_data(&p->pack, &e))) { pl_fail(p, "the pack entry '%s' cannot be read: %s", name, ypak_error(&p->pack)); return NULL; }
+    if (!(data = pl_entry_data(p, &e))) { pl_fail(p, "the pack entry '%s' cannot be read: %s", name, ypak_error(&p->pack)); return NULL; }
     if (p->n_tables == p->c_tables) {
         int nc = p->c_tables ? p->c_tables * 2 : 16;
         pl_table_ref* q = (pl_table_ref*)pl_alloc(p, sizeof(pl_table_ref) * (size_t)nc);
@@ -809,7 +850,7 @@ static int pl_texture_get(pl_player* p, const char* name, ygfx_tex* out) {
     for (i = 0; i < p->n_tex; i++)
         if (strcmp(p->tex_names[i], name) == 0) { *out = p->tex[i]; return 0; }
     if (p->n_tex == PL_MAX_TEXTURES) { pl_fail(p, "more than %d textures", PL_MAX_TEXTURES); return -1; }
-    if (ypak_find(&p->pack, name, &e) != 0 || e.kind != YPAK_KIND_TEXTURE || !(data = ypak_data(&p->pack, &e))) {
+    if (ypak_find(&p->pack, name, &e) != 0 || e.kind != YPAK_KIND_TEXTURE || !(data = pl_entry_data(p, &e))) {
         pl_fail(p, "the texture '%s' is not a pack entry", name);
         return -1;
     }
@@ -898,7 +939,7 @@ static int pl_runs_open(pl_player* p) {
     if (ln == 0 || ln + 8 >= sizeof name) { pl_fail(p, "the experiment entry's name has no extension"); return -1; }
     memcpy(name, ex.name, ln);
     memcpy(name + ln, "ysprun", 7);
-    if (ypak_find(&p->pack, name, &e) != 0 || e.kind != YPAK_KIND_GLYPHRUNS || !(data = ypak_data(&p->pack, &e))) {
+    if (ypak_find(&p->pack, name, &e) != 0 || e.kind != YPAK_KIND_GLYPHRUNS || !(data = pl_entry_data(p, &e))) {
         pl_fail(p, "the pack has no glyph runs entry '%s'", name);
         return -1;
     }
@@ -912,7 +953,7 @@ static int pl_runs_open(pl_player* p) {
         const ypak_runs_font* f = &p->runs.fonts[i];
         const void* cd;
         if (ypak_find_n(&p->pack, ypak_runs_str(&p->runs, f->cset_off), f->cset_len, &ce) != 0 ||
-            ce.kind != YPAK_KIND_CURVESET || !(cd = ypak_data(&p->pack, &ce))) {
+            ce.kind != YPAK_KIND_CURVESET || !(cd = pl_entry_data(p, &ce))) {
             pl_fail(p, "font %u of the glyph runs: no curve set entry", i);
             return -1;
         }
@@ -964,6 +1005,21 @@ int pl_stim_set_text(pl_player* p, pl_stim* s) {
     }
     return 0;
 }
+
+/* pl_check()'s audio device: the project's format, no thread, no callback;
+ * a sound's entry still loads (yau_wav_load()) and is checked. */
+static int pl_ca_open(void* ctx, const yau_device_open* in, yau_device_caps* caps, char* err, size_t cap) {
+    (void)ctx; (void)err; (void)cap;
+    caps->rate = in->format->rate;
+    caps->channels = in->format->channels;
+    caps->out = YAU_OUT_F32;
+    caps->period = in->period;
+    snprintf(caps->name, sizeof caps->name, "pl_check (no device)");
+    return 0;
+}
+static int pl_ca_start(void* ctx, yau_render_fn render, void* host) { (void)ctx; (void)render; (void)host; return 0; }
+static void pl_ca_none(void* ctx) { (void)ctx; }
+static const yau_device pl_check_audio = { YAU_DEVICE_VERSION, "pl_check", pl_ca_open, pl_ca_start, pl_ca_none, pl_ca_none, NULL };
 
 static int pl_stim_make(pl_player* p, pl_stim* s) {
     const yexp_stim* d = s->def;
@@ -1027,11 +1083,17 @@ static int pl_stim_make(pl_player* p, pl_stim* s) {
             /* --sim: the null device on the virtual clock; a real run: the
              * one AUTO picks (ysp/audio.h, BACKENDS) */
             ad.backend = p->args.sim ? YAU_BACKEND_NULL : YAU_BACKEND_AUTO;
+            if (p->checking) {
+                /* pl_check(): a device that opens and never runs, so the
+                 * check has no audio thread and needs no virtual clock */
+                ad.backend = YAU_BACKEND_CUSTOM;
+                ad.dev = &pl_check_audio;
+            }
             if (!yau_open(&p->audio, &ad)) { pl_fail(p, "audio: %s", yau_error(&p->audio)); return -1; }
             p->audio_open = true;
         }
         if (!a || a->value->kind != YEXP_V_STRING) { pl_fail(p, "stimulus '%s': a sound's 'audio' must be a literal entry name", d->name); return -1; }
-        if (ypak_find(&p->pack, a->value->str, &e) != 0 || e.kind != YPAK_KIND_AUDIO || !(data = ypak_data(&p->pack, &e))) {
+        if (ypak_find(&p->pack, a->value->str, &e) != 0 || e.kind != YPAK_KIND_AUDIO || !(data = pl_entry_data(p, &e))) {
             pl_fail(p, "stimulus '%s': no audio entry '%s'", d->name, a->value->str);
             return -1;
         }
@@ -1372,6 +1434,7 @@ static int pl_leaf_prepare(pl_player* p, const yexp_node* n, pl_leaf* lf) {
     char err[512];
     int i;
     const ytb_table* table = n->table ? pl_table_get(p, n->table) : NULL;
+    pl_at(p, PL_OBJ_NODE, n->path);
     if (n->table && !table) { pl_fail(p, "node '%s': no table '%s'", n->path, n->table); return -1; }
     memset(lf, 0, sizeof *lf);
     lf->node = n;
@@ -1533,6 +1596,7 @@ static int pl_check_nodes(pl_player* p, const yexp_node* n, int count) {
     int i;
     for (i = 0; i < count; i++) {
         int a, b;
+        pl_at(p, PL_OBJ_NODE, n[i].path);
         /* one node, one name, two values: the row would have to pick one */
         for (a = 0; a < n[i].n_vars; a++)
             for (b = 0; b < n[i].n_data; b++)
@@ -1756,18 +1820,25 @@ static int pl_cal_load(pl_player* p) {
         path = joined;
     }
     if (!path) {
-        if (p->def->calibration_required) {
+        if (p->def->calibration_required && p->checking) {
+            /* pl_check(): player_make_rig's nominal calibration stands in */
+            static const float srgb_xy[4][2] = { { 0.64f, 0.33f }, { 0.30f, 0.60f }, { 0.15f, 0.06f }, { 0.3127f, 0.3290f } };
+            pl_need_add(p, PL_NEED_CALIBRATION, NULL, 0);
+            if (ycol_cal_nominal(&p->cal, srgb_xy, 100.0f, 2.2) < 0 || ycol_cal_save(&p->cal, NULL, 0) < 0) { pl_fail(p, "the stand-in calibration"); return -1; }
+        } else if (p->def->calibration_required) {
             pl_fail(p, "display.calibration is required: give --rig with a calibration, or --cal FILE");
             return -1;
+        } else {
+            return 0;
         }
-        return 0;
+    } else {
+        bytes = pl_alloc(p, sizeof(ycol_cal));
+        if (!bytes) return -1;
+        if (!(fp = fopen(path, "rb"))) { pl_fail(p, "cannot read the calibration '%s'", path); return -1; }
+        n = (long)fread(bytes, 1, sizeof(ycol_cal), fp);
+        fclose(fp);
+        if (ycol_cal_load(&p->cal, bytes, (size_t)n, err, sizeof err) < 0) { pl_fail(p, "the calibration '%s': %s", path, err); return -1; }
     }
-    bytes = pl_alloc(p, sizeof(ycol_cal));
-    if (!bytes) return -1;
-    if (!(fp = fopen(path, "rb"))) { pl_fail(p, "cannot read the calibration '%s'", path); return -1; }
-    n = (long)fread(bytes, 1, sizeof(ycol_cal), fp);
-    fclose(fp);
-    if (ycol_cal_load(&p->cal, bytes, (size_t)n, err, sizeof err) < 0) { pl_fail(p, "the calibration '%s': %s", path, err); return -1; }
     p->have_cal = true;
     memset(&cxd, 0, sizeof cxd);
     cxd.cal = &p->cal;
@@ -1817,6 +1888,10 @@ static int pl_roles_bind(pl_player* p) {
         r->rig = rr && rr->family[0] ? rr : NULL;
         r->trigger = pl_trigger_channel(p, r->def->name);
         r->rule_out = -1;
+        /* pl_check(): a required role that the keyboard cannot take needs a
+         * device in the rig profile; --sim binds none */
+        if (p->checking && r->def->required && !(r->def->direction == 0 && pl_role_lists(r->def, "keyboard")))
+            pl_need_add(p, PL_NEED_DEVICE, r->def->name, r->def->direction);
         if (p->args.sim) continue;
         r->keyboard = !r->rig && r->def->direction == 0 && pl_role_lists(r->def, "keyboard");
         if (r->def->required && !r->rig && !r->keyboard) {
@@ -2027,6 +2102,10 @@ static int pl_roles_tier(pl_player* p) {
         pl_role* r = &p->roles[i];
         int tier;
         if (!r->def->min_tier) continue;
+        if (p->checking) {
+            pl_need_add(p, PL_NEED_ROLE_TIER, r->def->name, r->def->min_tier);
+            continue;
+        }
         if (p->args.sim) {
             fprintf(stderr, "ysp_player: --sim: role '%s' has min_tier %d; a real run checks it against the rig\n", r->def->name, r->def->min_tier);
             continue;
@@ -2157,6 +2236,34 @@ static void pl_panic_fn(void* ctx) {
 
 typedef struct pl_open_ctx { pl_player* p; ygfx_desc gd; } pl_open_ctx;
 
+/* The gfx's units and view on a screen s, or on none (pl_check()). */
+static void pl_gd_units(pl_player* p, yscr_screen* s, ygfx_desc* gd) {
+    if (p->def->units_deg) {
+        yscr_caps caps;
+        double w;
+        memset(&caps, 0, sizeof caps);
+        if (s) yscr_get_caps(s, &caps);
+        /* the simulated display has no mode: the scene is 800 px wide (the
+         * default window); a window keeps the panel's pitch (ysp/rigfile.h,
+         * VIEWING GEOMETRY), so the width in mm follows the pixels */
+        w = caps.mode.w > 0 ? (double)caps.mode.w : 800.0;
+        gd->units = YGFX_DEG;
+        gd->view.distance_mm = (float)p->rig->view.distance_mm;
+        gd->view.width_mm = (float)(p->rig->view.width_mm * (w / (double)p->rig->view.width_px));
+        p->view = gd->view;
+    } else if (p->def->units == 2) {
+        /* cm (D23, G14): one scale factor from the view's width */
+        yscr_caps caps;
+        double w;
+        memset(&caps, 0, sizeof caps);
+        if (s) yscr_get_caps(s, &caps);
+        w = caps.mode.w > 0 ? (double)caps.mode.w : 800.0;
+        gd->units = YGFX_CM;
+        gd->view.width_mm = (float)(p->rig->view.width_mm * (w / (double)p->rig->view.width_px));
+        p->view = gd->view;
+    }
+}
+
 /* The screen's context hook (ysp/screen.h, CONTEXT HOOK): the mode is known
  * here, so a size in deg comes from the pixels the screen got, and the gfx
  * compiles while the screen settles (as ygfx_open_screen() does). */
@@ -2164,29 +2271,22 @@ static void pl_open_hook(void* ctx, yscr_screen* s) {
     pl_open_ctx* c = (pl_open_ctx*)ctx;
     pl_player* p = c->p;
     c->gd.screen = s;
-    if (p->def->units_deg) {
-        yscr_caps caps;
-        double w;
-        yscr_get_caps(s, &caps);
-        /* the simulated display has no mode: the scene is 800 px wide (the
-         * default window); a window keeps the panel's pitch (ysp/rigfile.h,
-         * VIEWING GEOMETRY), so the width in mm follows the pixels */
-        w = caps.mode.w > 0 ? (double)caps.mode.w : 800.0;
-        c->gd.units = YGFX_DEG;
-        c->gd.view.distance_mm = (float)p->rig->view.distance_mm;
-        c->gd.view.width_mm = (float)(p->rig->view.width_mm * (w / (double)p->rig->view.width_px));
-        p->view = c->gd.view;
-    } else if (p->def->units == 2) {
-        /* cm (D23, G14): one scale factor from the view's width */
-        yscr_caps caps;
-        double w;
-        yscr_get_caps(s, &caps);
-        w = caps.mode.w > 0 ? (double)caps.mode.w : 800.0;
-        c->gd.units = YGFX_CM;
-        c->gd.view.width_mm = (float)(p->rig->view.width_mm * (w / (double)p->rig->view.width_px));
-        p->view = c->gd.view;
-    }
+    pl_gd_units(p, s, &c->gd);
     (void)ygfx_open_start(&p->gfx, &c->gd);
+}
+
+/* pl_check()'s screen: none. ysp/gfx.h's null backend (impl.c) makes every
+ * object and uploads nothing, at the simulated display's size (800 x 600)
+ * and period, as --sim's gfx; display.min_tier is a need. */
+static int pl_screen_none(pl_player* p, ygfx_desc* gd) {
+    if (p->def->min_tier) pl_need_add(p, PL_NEED_DISPLAY_TIER, NULL, p->def->min_tier);
+    pl_gd_units(p, NULL, gd);
+    gd->width = 800;
+    gd->height = 600;
+    if (!pl_gfx_open_null(&p->gfx, gd)) { pl_fail(p, "the gfx: %s", ygfx_error(&p->gfx)); return -1; }
+    p->gfx_open = true;
+    p->caps.period_ns = p->args.sim_period_ns > 0 ? p->args.sim_period_ns : 16666667;
+    return 0;
 }
 
 /* A real run's first frames, blank, before the data set opens: a frame
@@ -2222,6 +2322,13 @@ static int pl_lead_in(pl_player* p) {
     return 0;
 }
 
+/* The spans counted in frames of the display's period. */
+static void pl_frame_counts(pl_player* p) {
+    p->out_wait_frames = pl_frames_of(p, PL_OUT_WAIT_NS);
+    p->end_frames = pl_frames_of(p, PL_END_DRAIN_NS);
+    p->rec_lag_frames = pl_frames_of(p, PL_RECORD_LAG_NS);
+}
+
 /* The screen and the gfx. --sim: the simulated display. A real run: the
  * backend AUTO picks (GLX_OML on X11), fullscreen unless --windowed, the
  * panic watchdog armed, compiled programs cached, and display.min_tier
@@ -2253,10 +2360,23 @@ static int pl_screen_open(pl_player* p) {
     c.gd.background[1] = (float)p->def->background[1];
     c.gd.background[2] = (float)p->def->background[2];
     if ((p->def->units_deg || p->def->units == 2) && (!p->have_rig || !p->rig->view.set)) {
-        pl_fail(p, "display.units is %s: the rig profile needs a view (rigfile_profile --view); give --rig", p->def->units == 2 ? "cm" : "deg");
-        return -1;
+        if (!p->checking) {
+            pl_fail(p, "display.units is %s: the rig profile needs a view (rigfile_profile --view); give --rig", p->def->units == 2 ? "cm" : "deg");
+            return -1;
+        }
+        /* pl_check(): player_make_rig's nominal view stands in */
+        pl_need_add(p, PL_NEED_VIEW, NULL, p->def->units == 2 ? 2 : 1);
+        p->rig->view.set = true;
+        p->rig->view.distance_mm = 570.0;
+        p->rig->view.width_mm = 0.27 * 1920.0;
+        p->rig->view.width_px = 1920;
     }
     if (p->have_cal) c.gd.cal = &p->cal;
+    if (p->checking) {
+        if (pl_screen_none(p, &c.gd) < 0) return -1;
+        pl_frame_counts(p);
+        return 0;
+    }
     if (!p->args.sim) c.gd.cache = pl_program_cache(p);
     if (p->n_triggers) {
         /* a bound output role's device writes at the flip's vblank
@@ -2294,9 +2414,7 @@ static int pl_screen_open(pl_player* p) {
     if (ygfx_prime(&p->gfx) < 0) { pl_fail(p, "the gfx: %s", ygfx_error(&p->gfx)); return -1; }
     if (!p->args.sim && pl_lead_in(p) < 0) return -1;
     yscr_get_caps(&p->scr, &p->caps);
-    p->out_wait_frames = pl_frames_of(p, PL_OUT_WAIT_NS);
-    p->end_frames = pl_frames_of(p, PL_END_DRAIN_NS);
-    p->rec_lag_frames = pl_frames_of(p, PL_RECORD_LAG_NS);
+    pl_frame_counts(p);
     return 0;
 }
 
@@ -2311,6 +2429,12 @@ static int pl_fields_init(pl_player* p) {
         pl_val* v = &p->field_values[i];
         for (k = 0; k < p->args.n_fields; k++)
             if (strcmp(p->args.fields[k].name, f->name) == 0) given = p->args.fields[k].value;
+        pl_at(p, PL_OBJ_FIELD, f->name);
+        if (!given && f->required && p->checking) {
+            /* pl_check(): a placeholder of the field's type */
+            pl_need_add(p, PL_NEED_FIELD, f->name, f->is_string ? 1 : 0);
+            given = f->is_string ? "x" : "1";
+        }
         if (!given) {
             if (f->required) { pl_fail(p, "the session field '%s' is required: give --field %s=VALUE", f->name, f->name); return -1; }
             v->kind = f->is_string ? YEXP_V_STRING : YEXP_V_NUMBER;
@@ -2340,32 +2464,54 @@ static int pl_fields_init(pl_player* p) {
             if (strcmp(p->def->fields[li].name, "participant") == 0 && p->def->fields[li].is_string) {
                 for (i = 0; i < p->n_leaves; i++)
                     if (strstr(p->leaves[i].node->rules, "@participant")) {
+                        pl_at(p, PL_OBJ_NODE, p->leaves[i].node->path);
                         pl_fail(p, "node '%s': '@participant' needs an integer session field, but 'participant' is a string", p->leaves[i].node->path);
                         return -1;
                     }
             }
     }
+    pl_at(p, PL_OBJ_NONE, NULL);
     return 0;
 }
 
 extern int pl_columns_build(pl_player* p);
 extern int pl_channels_assign(pl_player* p);
 
-int pl_load(pl_player* p, const pl_args* a) {
-    ypak_desc pd;
+/* pl_check(): what a real run asks of the rig for each signal role, and
+ * gain 1 as the --sim adapter of a relative role (a role's units a count),
+ * so the check goes on where --sim would ask for --sim-gain. */
+static void pl_check_sigroles(pl_player* p) {
+    int i;
+    for (i = 0; i < p->def->n_sigroles; i++) {
+        const yexp_sigrole* r = &p->def->sigroles[i];
+        pl_need_add(p, PL_NEED_SIGNAL, r->name, r->required ? 1 : 0);
+        if ((r->type == YEXP_SIG_POSITION2D_RELATIVE || (r->type == YEXP_SIG_POSITION2D && r->allow_relative)) &&
+            p->args.n_gains < (int)(sizeof p->args.gains / sizeof p->args.gains[0])) {
+            pl_need_add(p, PL_NEED_SIM_GAIN, r->name, 0);
+            p->args.gains[p->args.n_gains].name = r->name;
+            p->args.gains[p->args.n_gains].value = "1";
+            p->args.n_gains++;
+        }
+    }
+}
+
+/* The load, from the pack's open to the data set's columns: pl_load() with
+ * the arguments' pack file, pl_check() with its pack and p->checking set.
+ * The steps with side effects (the rig and calibration files, the seed
+ * from /dev/urandom, the writer, the devices, the screen, the audio device)
+ * either do nothing in --sim or take pl_check()'s stand-ins; every check of
+ * the definition runs in both. */
+static int pl_load_pack(pl_player* p, const ypak_desc* pd) {
+    const pl_args* a = &p->args;
     ypak_entry e;
     const void* data;
     yexp_host host;
     int rc, i, count_leaves = 0;
-    memset(p, 0, sizeof *p);
-    p->args = *a;
-    memset(&pd, 0, sizeof pd);
-    pd.path = a->pack_path;
-    if (!ypak_open(&p->pack, &pd)) { pl_fail(p, "the pack '%s': %s", a->pack_path, ypak_error(&p->pack)); return -1; }
+    if (!ypak_open(&p->pack, pd)) { pl_fail(p, "the pack '%s': %s", pd->path ? pd->path : "(in memory)", ypak_error(&p->pack)); return -1; }
     p->pack_open = true;
     ypak_id(&p->pack, p->pack_id);
     if (ypak_first_of(&p->pack, YPAK_KIND_EXPERIMENT, &e) != 0) { pl_fail(p, "the pack has no experiment entry"); return -1; }
-    if (!(data = ypak_data(&p->pack, &e))) { pl_fail(p, "the experiment entry cannot be read: %s", ypak_error(&p->pack)); return -1; }
+    if (!(data = pl_entry_data(p, &e))) { pl_fail(p, "the experiment entry cannot be read: %s", ypak_error(&p->pack)); return -1; }
     if (a->def_text) {
         /* the fuzz target's bytes, against this pack's tables */
         data = a->def_text;
@@ -2412,6 +2558,7 @@ int pl_load(pl_player* p, const pl_args* a) {
     memset(&p->env, 0, sizeof p->env);
     if (pl_cal_load(p) < 0) return -1;
 
+    if (p->checking) pl_check_sigroles(p);
     if (!a->sim && p->def->n_sigroles > 0 && !p->have_rig) {
         /* a signal role's adapter is the rig's (G18, devices_spec.md 11.2);
          * the definition's checks ran the profile's signals through the
@@ -2432,9 +2579,11 @@ int pl_load(pl_player* p, const pl_args* a) {
     for (i = 0; i < p->n_stims; i++) p->stims[i].def = &p->def->stimuli[i];
     for (i = 0; i < p->n_stims; i++) {
         pl_stim* s = &p->stims[i];
+        pl_at(p, PL_OBJ_STIMULUS, s->def->name);
         s->ch_visible = pl_channel(p, s->def->name, NULL);
         if (pl_stim_make(p, s) < 0) return -1;
     }
+    pl_at(p, PL_OBJ_NONE, NULL);
     /* draw order: layer, then the name (D3) */
     for (i = 0; i < p->n_stims; i++) p->draw_order[i] = i;
     for (i = 1; i < p->n_stims; i++) {
@@ -2447,8 +2596,8 @@ int pl_load(pl_player* p, const pl_args* a) {
         p->draw_order[j + 1] = v;
     }
     /* the text program's first draw now, off the frame path (docs/gfx.md),
-     * as trial_stroop does */
-    if (p->runs_open) {
+     * as trial_stroop does; pl_check() has no GPU to warm */
+    if (p->runs_open && !p->checking) {
         ygfx_crun_desc rd;
         ygfx_citem item;
         uint32_t f;
@@ -2478,6 +2627,7 @@ int pl_load(pl_player* p, const pl_args* a) {
     for (i = 0; i < p->n_stims; i++) {
         pl_stim* s = &p->stims[i];
         int k;
+        pl_at(p, PL_OBJ_STIMULUS, s->def->name);
         for (k = 0; k < s->def->n_props; k++)
             if (pl_apply_key(p, s, &s->def->props[k], PL_KEY_LOAD) < 0) return -1;
     }
@@ -2494,6 +2644,7 @@ int pl_load(pl_player* p, const pl_args* a) {
         if (d->kind == YEXP_IMAGE) {
             const yexp_prop* tx = yexp_prop_get(d->props, d->n_props, "texture");
             int k;
+            pl_at(p, PL_OBJ_STIMULUS, d->name);
             pl_each_text(p, tx->value, NULL, pl_preload_tex_cb);
             for (k = 0; k < count_leaves && !p->failed; k++)
                 pl_each_text(p, tx->value, p->def_leaves[k], pl_preload_tex_cb);
@@ -2507,6 +2658,7 @@ int pl_load(pl_player* p, const pl_args* a) {
     if (!p->methods) return -1;
     for (i = 0; i < p->n_methods; i++) {
         p->methods[i].def = &p->def->methods[i];
+        pl_at(p, PL_OBJ_METHOD, p->methods[i].def->name);
         if (pl_method_open(p, &p->methods[i]) < 0) return -1;
     }
 
@@ -2516,6 +2668,7 @@ int pl_load(pl_player* p, const pl_args* a) {
     if (!p->tmpls) return -1;
     for (i = 0; i < p->n_tmpls; i++) {
         p->tmpls[i].def = &p->def->templates[i];
+        pl_at(p, PL_OBJ_TEMPLATE, p->tmpls[i].def->name);
         if (pl_tmpl_open(p, &p->tmpls[i]) < 0) return -1;
     }
 
@@ -2533,6 +2686,7 @@ int pl_load(pl_player* p, const pl_args* a) {
         pl_stim* s = pl_stim_by_name(p, c->stim->name);
         ygfx_bind* b = &p->binds[i];
         int gkind = pl_kind_gfx(s->def->kind), idx;
+        pl_at(p, PL_OBJ_STIMULUS, s->def->name);
         memset(b, 0, sizeof *b);
         b->channel = (uint16_t)i;
         if (c->prop && c->prop[0] == '\x01') {
@@ -2593,7 +2747,9 @@ int pl_load(pl_player* p, const pl_args* a) {
     }
 
     /* version 2: the graphs, the forms' binds, the samples (v2.c) */
+    pl_at(p, PL_OBJ_NONE, NULL);
     if (pl_v2_load(p) < 0) return -1;
+    pl_at(p, PL_OBJ_NONE, NULL);
 
     /* the leaves */
     {
@@ -2608,6 +2764,7 @@ int pl_load(pl_player* p, const pl_args* a) {
     }
 
     if (pl_check_nodes(p, p->def->timeline, p->def->n_timeline) < 0) return -1;
+    pl_at(p, PL_OBJ_NONE, NULL);
     if (!pl_runnable(p, p->def->timeline, p->def->n_timeline)) {
         pl_fail(p, "the timeline has no leaf that can run: its containers have no children or tables with no rows");
         return -1;
@@ -2621,10 +2778,13 @@ int pl_load(pl_player* p, const pl_args* a) {
         }
     }
     if (pl_text_bound(p) < 0 || pl_rdk_steps(p) < 0) return -1;
-    for (i = 0; i < p->def->n_templates; i++)
+    for (i = 0; i < p->def->n_templates; i++) {
+        pl_at(p, PL_OBJ_TEMPLATE, p->def->templates[i].name);
         if (pl_check_steps(p, p->def->templates[i].events, p->def->templates[i].n_events, p->def->templates[i].name) < 0 ||
             pl_check_steps(p, p->def->templates[i].after, p->def->templates[i].n_after, p->def->templates[i].name) < 0)
             return -1;
+    }
+    pl_at(p, PL_OBJ_NONE, NULL);
     if (pl_columns_build(p) < 0) return -1;
     {
         /* a row's text: each text column's longest value */
@@ -2633,6 +2793,40 @@ int pl_load(pl_player* p, const pl_args* a) {
         p->row_text_cap = (size_t)n_text * (p->max_text + 1) + 64;
     }
     return p->failed ? -1 : 0;
+}
+
+int pl_load(pl_player* p, const pl_args* a) {
+    ypak_desc pd;
+    memset(p, 0, sizeof *p);
+    p->args = *a;
+    memset(&pd, 0, sizeof pd);
+    pd.path = a->pack_path;
+    return pl_load_pack(p, &pd);
+}
+
+/* --sim's load with pl_check()'s stand-ins (docs/player.md, "Reference:
+ * pl_check()"): no rig, no output folder, the seed given, a field's
+ * placeholder, the nominal view and calibration, gain 1, no screen, a null
+ * gfx and an audio device that never runs. */
+int pl_check(pl_player* p, const pl_check_desc* d, pl_check_result* r) {
+    memset(p, 0, sizeof *p);
+    memset(r, 0, sizeof *r);
+    p->checking = true;
+    p->args.sim = true;
+    p->args.have_seed = true;
+    p->args.seed = d->seed;
+    p->args.def_text = d->def_text;
+    p->args.def_len = d->def_text ? d->def_len : 0;
+    p->pack_reader = !d->pack.path && !d->pack.data && d->pack.reader;
+    (void)pl_load_pack(p, &d->pack);
+    r->status = !p->failed ? PL_CHECK_OK : p->report.n_errors > 0 ? PL_CHECK_DEFINITION : PL_CHECK_REFUSED;
+    r->report = p->arena_open ? &p->report : NULL;
+    r->message = p->failed ? p->error : "";
+    r->object = p->failed ? p->fail_obj : PL_OBJ_NONE;
+    r->object_name = r->object ? p->fail_name : NULL;
+    r->needs = p->needs;
+    r->n_needs = p->n_needs;
+    return r->status;
 }
 
 void pl_close(pl_player* p) {

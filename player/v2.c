@@ -1974,6 +1974,7 @@ static int v2_rig_signals(pl_player* p) {
         const yexp_sigrole* r = &p->def->sigroles[i];
         const yrig_signal* sg = p->have_rig ? yrig_find_signal(p->rig, r->name) : NULL;
         char msg[300];
+        pl_at(p, PL_OBJ_SIGNAL_ROLE, r->name);
         memset(g, 0, sizeof *g);
         g->sign[0] = g->sign[1] = 1;
         g->gain[0] = g->gain[1] = S->gain[i];
@@ -2019,6 +2020,7 @@ static int v2_rig_signals(pl_player* p) {
             }
         }
     }
+    pl_at(p, PL_OBJ_NONE, NULL);
     S->bnd_max = 0;
     for (i = 0; i < n; i++) if (S->bnd[i] > S->bnd_max) S->bnd_max = S->bnd[i];
     if (S->real) {
@@ -2105,6 +2107,7 @@ int pl_v2_load(pl_player* p) {
         t = v->def;
         p->tmpls[ti].v2 = v;
         S->cur_t = ti;
+        pl_at(p, PL_OBJ_TEMPLATE, t->name);
         n_ctl = t->n_controls;
         for (k = 0; k < p->def->n_controls; k++) if (t->uses_top && t->uses_top[k]) n_ctl++;
         v->ctl = (v2_ctl*)pl_alloc(p, sizeof(v2_ctl) * (size_t)(n_ctl + 1));
@@ -2193,6 +2196,7 @@ int pl_v2_load(pl_player* p) {
         }
         if (v2_binds(p, v) < 0 || v2_recenter_scan(p, v) < 0) return -1;
     }
+    pl_at(p, PL_OBJ_NONE, NULL);
     /* a stream a trace name, and one an rdk: the data set holds
      * YDS_MAX_STREAMS; refused here by name, not at the session's start */
     {
