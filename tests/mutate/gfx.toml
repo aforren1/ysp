@@ -1915,3 +1915,107 @@ env = { YGFX_TEST_PARTS = "v0.21 rows+shared", YGFX_TEST_DEVICES = "mesa" }
 why = "The vertex shader passes block float 36, the height, to the fragments."
 find = '''    "    ysp_rh = int(ysp_v[i * 16 + 9].x);\n"'''
 replace = '''    "    ysp_rh = int(ysp_v[i * 16 + 8].w);\n"'''
+
+# pt-: v0.22.0 paint records (color glyphs), run on the Linux desktop with
+# Mesa llvmpipe.
+
+[[mutant]]
+id = "pt-01"
+name = "a record kind the stage does not know"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.22 paint", YGFX_TEST_DEVICES = "mesa" }
+why = "A record of an unknown kind (a hostile pack) must draw nothing, not be read as a radial."
+find = 'h.y == float(ns) && kind >= 1 && kind <= 3 &&'
+replace = 'h.y == float(ns) && kind >= 1 && kind <= 7 &&'
+
+[[mutant]]
+id = "pt-02"
+name = "17 stops read"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.22 paint", YGFX_TEST_DEVICES = "mesa" }
+why = "Records hold at most 16 stops; a longer one would read other records' texels as stops."
+find = '(kind == 1 || (ns >= 1 && ns <= 16))'
+replace = '(kind == 1 || (ns >= 1 && ns <= 17))'
+
+[[mutant]]
+id = "pt-03"
+name = "the radial root's other form"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.22 paint", YGFX_TEST_DEVICES = "mesa" }
+why = "Where b <= 0 the root t >= 0 is (D - b) / -a; the other root is negative."
+find = '"        t = b > 0.0 ? c / (D + b) : (D - b) / -a;\n"'
+replace = '"        t = b > 0.0 ? c / (D + b) : (D + b) / -a;\n"'
+
+[[mutant]]
+id = "pt-04"
+name = "every stop at the first offset of its texel"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.22 paint", YGFX_TEST_DEVICES = "mesa" }
+why = "Offsets are packed four to a texel; reading one per texel puts each stop at another one's offset."
+find = '"        float oi = ysp_t4_(s0 + i / 4)[i & 3];\n"'
+replace = '"        float oi = ysp_t4_(s0 + i / 4)[0];\n"'
+
+[[mutant]]
+id = "pt-05"
+name = "paint without coverage"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.22 paint", YGFX_TEST_DEVICES = "mesa" }
+why = "A layer is its paint times the glyph's coverage; without it the glyph's whole box is painted."
+find = '"    ysp_out = ysp_paint_(p) * (cov * ysp_tc.a);\n"'
+replace = '"    ysp_out = ysp_paint_(p) * ysp_tc.a;\n"'
+
+[[mutant]]
+id = "pt-06"
+name = "the set's texel count not in the block"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.22 paint", YGFX_TEST_DEVICES = "mesa" }
+why = "The vertex stage bounds a record by the set's texels; without the count every record is refused."
+find = 'b[28] = (float)c->n_texels;'
+replace = 'b[28] = 0.0f;'
+
+[[mutant]]
+id = "pt-07"
+name = "a paint run with a palette"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.22 paint", YGFX_TEST_DEVICES = "mesa" }
+why = "YGFX_I_PAINT and YGFX_I_COLOR read the same field; one of them must be refused."
+find = 'if ((f & YGFX_I_PAINT) && (f & YGFX_I_COLOR))'
+replace = 'if (0)'
+
+[[mutant]]
+id = "pt-08"
+name = "a paint run on the monochrome program"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.22 paint", YGFX_TEST_DEVICES = "mesa" }
+why = "Only the paint program reads records; the monochrome one draws the run's color."
+find = '''        *why = YGFX_OK;
+        return g->text_paint_pipe;'''
+replace = '''        *why = YGFX_OK;
+        return g->text_pipe;'''
+
+[[mutant]]
+id = "pt-09"
+name = "a linear gradient without its offset"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.22 paint", YGFX_TEST_DEVICES = "mesa" }
+why = "t = ax x + ay y + a0; without a0 the gradient slides along its axis."
+find = '"    if (kind == 2) t = dot(ysp_tp1.xy, p) + ysp_tp1.z;\n"'
+replace = '"    if (kind == 2) t = dot(ysp_tp1.xy, p);\n"'
+
+[[mutant]]
+id = "pt-10"
+name = "a fraction of a texel as an index"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.22 paint", YGFX_TEST_DEVICES = "mesa" }
+why = "An index that is not an integer is not a record's; it must draw nothing, not round to one."
+find = 'vec4 h = ri >= 0.0 && ri == floor(ri) && ri + 2.0 <= nt ?'
+replace = 'vec4 h = ri >= 0.0 && ri + 2.0 <= nt ?'
+
+[[mutant]]
+id = "pt-11"
+name = "no pad below the first stop"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.22 paint", YGFX_TEST_DEVICES = "mesa" }
+why = "COLR's pad extend repeats the first stop's color before it; nothing there is a hole in the gradient."
+find = '"    if (!(t > olo)) return lo;\n"'
+replace = '"    if (!(t > olo)) return vec4(0.0);\n"'

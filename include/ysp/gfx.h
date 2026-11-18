@@ -1,4 +1,4 @@
-/* ysp/gfx.h - v0.21.0 - public domain single-header stimulus graphics library
+/* ysp/gfx.h - v0.22.0 - public domain single-header stimulus graphics library
  *   (with MIT-licensed parts: see below)
  *
  *   Stimuli on GL ES 3.0, on top of ysp/screen.h: signed-distance shapes
@@ -765,7 +765,8 @@
  *   one rendered in a frame, bit for bit. The fill rule maps each ray's
  *   fractional winding to coverage: exact while a pixel sees one
  *   transition. .aliased gives 0 or 1 from the winding at the pixel center.
- *   Edge profiles, strokes, offsets, dashes, fx and paint are refused on a
+ *   Edge profiles, strokes, offsets, dashes, fx and paint (the stimulus's
+ *   ygfx_paint; a run's layers take PAINT RECORDS) are refused on a
  *   run: the outline builder expands outlines and bold into fills; soft
  *   edges, glow and shadow come from BLUR. A hard shadow is a second draw
  *   of the same run, offset and recolored. Blend OVER, ADD or MULTIPLY, as
@@ -775,6 +776,53 @@
  *   topmost item (artwork: the layer); items in a buffer are on the GPU
  *   only, so neither sees them. In the reorder a run's bounds are the whole
  *   pass.
+ *
+ *   ---------------------------------------------------------------------
+ *   PAINT RECORDS (v0.22)
+ *   ---------------------------------------------------------------------
+ *   Color glyphs (emoji of COLR fonts; pack/layout 0.3.0 flattens them) are
+ *   layers: each one an item of a curve run whose glyph is the layer's
+ *   outline and whose color field is the texel index of its paint record in
+ *   the run's own set. Give the run fields YGFX_I_PAINT:
+ *       ygfx_stim emoji = ygfx_crun(&gfx, &(ygfx_crun_desc){
+ *           .set = font, .items = layers, .n = n, .size = 48,
+ *           .fields = YGFX_I_PAINT });
+ *   A record is texels of the set that no glyph references (ysp/outline.h
+ *   yol_cset_add_texels()), in the set's units, y down: the glyph's space.
+ *     T[r]       kind (1 solid, 2 linear, 3 radial), stops n, 0, 0
+ *     solid      T[r + 1]: r, g, b, a, premultiplied linear light
+ *     linear     T[r + 1]: ax, ay, a0, 0; t = ax x + ay y + a0
+ *     radial     T[r + 1]: m00, m01, m02, m10; T[r + 2]: m11, m12, dx, dy;
+ *                q = M (x, y, 1) and t >= 0 with |q - t d| = t: the end
+ *                circle is the unit circle about the start point, the
+ *                start radius 0, |d| < 1 (d = 0 concentric, else two-point
+ *                with the focal point inside); an ellipse is in M
+ *     stops      after the parameters: ceil(n / 4) texels of offsets, four
+ *                to a texel, ascending (two equal: a hard edge), then n
+ *                colors r, g, b, a premultiplied linear light; 1 to 16;
+ *                pad below the first and above the last
+ *   The pixel's point is the one coverage uses, so a paint moves, turns and
+ *   scales with its item. A layer adds paint x coverage x opacity x gate,
+ *   OVER, premultiplied; stops mix premultiplied in linear light, as COLR
+ *   asks. Layers blend in linear light like every color stimulus, where a
+ *   browser blends sRGB-encoded values: translucent layers and the
+ *   antialiased edges between layers differ from Chrome's rendering of the
+ *   same emoji; an opaque interior does not. The vertex stage draws
+ *   nothing for a record not wholly in the set, of a kind it does not know,
+ *   or of 0 or more than 16 stops, so a hostile pack reads no texel past
+ *   the set. YGFX_I_COLOR (it reads the same field), .rays and .aliased are
+ *   refused on a paint run; the run's color is not used. The first
+ *   YGFX_I_PAINT run made compiles the paint program (the exact-area
+ *   program with the record read and the gradient evaluated; a program of
+ *   its own, so the monochrome programs keep their text and their cost,
+ *   measured), as long as the rays program takes: make runs at setup and
+ *   prime. Paint runs batch as other runs do (CURVE RUNS).
+ *   Exactness: coverage is CURVE RUNS', bit for bit (a solid paint against
+ *   the monochrome program at a fraction of a px and turned: 0 of 512,000
+ *   values differ on llvmpipe); records, stops and t are f32. The gradients
+ *   against their record evaluated in double: within 4.7e-7 of full scale
+ *   on llvmpipe; with the record's own rounding from double parameters,
+ *   5.9e-7 (docs/gfx.md, "v0.22.0").
  *
  *   ---------------------------------------------------------------------
  *   BLUR (v0.6)
@@ -1441,6 +1489,15 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.22.0 - PAINT RECORDS: color glyphs. YGFX_I_PAINT (crun_desc.fields):
+ *          an item's color is the texel index of a paint record in the
+ *          run's set (a solid, or a linear or radial gradient with its own
+ *          2x3 map, up to 16 premultiplied linear-light stops, pad), drawn
+ *          by a third text program made at the first such run and primed
+ *          with the others. The monochrome text programs' text is the same
+ *          bytes as v0.21.0's. A run's block carries the set's texel count
+ *          (vec4 7.x). Refused on a paint run: YGFX_I_COLOR, .rays,
+ *          .aliased. The handle grows by 4 bytes (text_paint_pipe).
  *   v0.21.0 - Two gaps the filly renderer probe found (docs/filly_probe.md,
  *          findings 8 and 9, section 5). ROWS: ygfx_import_desc.rows
  *          (appended), a ygfx_rows: BOTTOM_UP says texel row 0 is the
@@ -2062,9 +2119,9 @@
 #define YSP_GFX_H_INCLUDED
 
 #define YGFX_VERSION_MAJOR 0
-#define YGFX_VERSION_MINOR 21
+#define YGFX_VERSION_MINOR 22
 #define YGFX_VERSION_PATCH 0
-#define YGFX_VERSION_STRING "0.21.0"
+#define YGFX_VERSION_STRING "0.22.0"
 
 #include "ysp/screen.h"
 #include "ysp/color.h"
@@ -2557,6 +2614,8 @@ typedef struct ygfx_inst {
 #define YGFX_I_SCALE    0x10u
 #define YGFX_I_GATE     0x20u
 #define YGFX_I_COLOR    0x40u
+#define YGFX_I_PAINT    0x80u   /* v0.22, curve runs: color is a paint record's
+                                 * texel index in the run's set (PAINT RECORDS) */
 #define YGFX_MAX_PALETTE 16
 
 struct ygfx_group;
@@ -3259,6 +3318,8 @@ typedef struct ygfx_gfx {
     uint32_t               text_pipe;
     uint32_t               text_rays_pipe;          /* without the exact area, at
                                                      * the first .rays run      */
+    uint32_t               text_paint_pipe;         /* v0.22: paint records, at the
+                                                     * first YGFX_I_PAINT run   */
     uint32_t               blur_pipe;               /* BLUR, at the first blur   */
     float                  ppu_keep;                /* px per unit outside a 2x layer */
     /* v0.11.1: ygfx_open_start() to ygfx_open() (OPEN START) */
@@ -5958,7 +6019,18 @@ static const char ygfx__glsl_text_vs[] =
     "flat out uvec4 ysp_th;\n"                   /* record word, band counts, flags */
     "flat out vec4 ysp_tc;\n"                    /* rgb, alpha */
     YGFX__GLSL_CSD
-    "uvec4 ysp_w4_(int t, int L) { return texelFetch(ysp_utex0, ivec2(t & ((1 << L) - 1), t >> L), 0); }\n"
+    "uvec4 ysp_w4_(int t, int L) { return texelFetch(ysp_utex0, ivec2(t & ((1 << L) - 1), t >> L), 0); }\n";
+
+/* v0.22 (PAINT RECORDS): the paint program's vertex stage reads the item's
+ * record from the curve texels and hands its header and parameters on */
+static const char ygfx__glsl_text_vs_paint_decl[] =
+    "uniform sampler2D ysp_tex0;\n"
+    "flat out vec4 ysp_tp0;\n"                  /* kind, stops, first stop texel, 0 */
+    "flat out vec4 ysp_tp1;\n"                  /* solid rgba; linear (ax, ay, a0); radial m00 m01 m02 m10 */
+    "flat out vec4 ysp_tp2;\n"                  /* radial m11 m12 dx dy */
+    "vec4 ysp_t4v_(int t, int L) { return texelFetch(ysp_tex0, ivec2(t & ((1 << L) - 1), t >> L), 0); }\n";
+
+static const char ygfx__glsl_text_vs_main[] =
     "void main() {\n"
     /* a draw holds up to 16 runs of one block each (CURVE RUNS), their
      * items one after another: the instance's run is the first whose item
@@ -6009,9 +6081,25 @@ static const char ygfx__glsl_text_vs[] =
     "        pc = f > 0.0 ? mix(ysp_v[32 + i0].rgb, ysp_v[32 + min(i0 + 1, n - 1)].rgb, f) : ysp_v[32 + i0].rgb;\n"
     "    }\n"
     "    ysp_tq = vec4(Q, ce); ysp_tj = vec4(ex, ey) / sp; ysp_tb = bb;\n"
-    "    ysp_th = uvec4(o, h1.x, h1.y, 0u); ysp_tc = vec4(pc, a);\n"
+    "    ysp_th = uvec4(o, h1.x, h1.y, 0u); ysp_tc = vec4(pc, a);\n";
 
-    "}\n";
+/* The record at the item's color field: in the set's texels (B7.x of
+ * them), of a kind it knows and of 1 to 16 stops, else nothing is drawn,
+ * so a hostile pack reads no texel past the set */
+static const char ygfx__glsl_text_vs_paint[] =
+    "    {\n"
+    "        float ri = ysp_a1.w, nt = ysp_v[r + 7].x;\n"
+    "        vec4 h = ri >= 0.0 && ri == floor(ri) && ri + 2.0 <= nt ? ysp_t4v_(int(ri), L) : vec4(0.0);\n"
+    "        int kind = int(h.x), ns = int(h.y);\n"
+    "        float rs = kind == 1 ? 2.0 : float((kind == 2 ? 2 : 3) + (ns + 3) / 4 + ns);\n"
+    "        if (!(h.x == float(kind) && h.y == float(ns) && kind >= 1 && kind <= 3 && (kind == 1 || (ns >= 1 && ns <= 16)) &&\n"
+    "              ri + rs <= nt)) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }\n"
+    "        ysp_tp1 = ysp_t4v_(int(ri) + 1, L);\n"
+    "        ysp_tp2 = kind == 3 ? ysp_t4v_(int(ri) + 2, L) : vec4(0.0);\n"
+    "        ysp_tp0 = vec4(float(kind), float(ns), ri + (kind == 3 ? 3.0 : 2.0), 0.0);\n"
+    "    }\n";
+
+static const char ygfx__glsl_text_vs_end[] = "}\n";
 
 static const char ygfx__glsl_text_fs0[] =
     "uniform sampler2D ysp_tex0;\n"
@@ -6234,7 +6322,46 @@ static const char ygfx__glsl_text_main[] =
     "            cov = mix(0.5 * (fx + fy), sw > 0.0 ? (fx * rx.y + fy * ry.y) / sw : 0.0, t);\n"
     "        }\n"
     "    }\n"
+    ;
+static const char ygfx__glsl_text_out[] =
     "    ysp_out = vec4(ysp_tc.rgb * (cov * ysp_tc.a), cov * ysp_tc.a);\n"
+    "}\n";
+
+/* v0.22 (PAINT RECORDS): the paint at the pixel's em point p, premultiplied
+ * linear light. A gradient's parameter t: linear, an affine function of p;
+ * radial, the root t >= 0 of |q - t d| = t with q the record's map of p
+ * (the end circle the unit circle about the start point, the start radius
+ * 0, |d| < 1), in the form that does not cancel. Stops: offsets four to a
+ * texel, then the colors; pad below the first and above the last; equal
+ * offsets a hard edge */
+static const char ygfx__glsl_text_fs_paint[] =
+    "flat in vec4 ysp_tp0, ysp_tp1, ysp_tp2;\n"
+    "vec4 ysp_paint_(vec2 p) {\n"
+    "    int kind = int(ysp_tp0.x);\n"
+    "    if (kind == 1) return ysp_tp1;\n"
+    "    float t;\n"
+    "    if (kind == 2) t = dot(ysp_tp1.xy, p) + ysp_tp1.z;\n"
+    "    else {\n"
+    "        vec2 q = vec2(dot(ysp_tp1.xy, p) + ysp_tp1.z, ysp_tp1.w * p.x + ysp_tp2.x * p.y + ysp_tp2.y), d = ysp_tp2.zw;\n"
+    "        float a = dot(d, d) - 1.0, b = dot(q, d), c = dot(q, q), D = sqrt(max(b * b - a * c, 0.0));\n"
+    "        t = b > 0.0 ? c / (D + b) : (D - b) / -a;\n"
+    "    }\n"
+    "    int n = int(ysp_tp0.y), s0 = int(ysp_tp0.z), sc = s0 + (n + 3) / 4;\n"
+    "    float olo = ysp_t4_(s0).x;\n"
+    "    vec4 lo = ysp_t4_(sc);\n"
+    "    if (!(t > olo)) return lo;\n"
+    "    for (int i = 1; i < 16; i++) {\n"
+    "        if (i >= n) break;\n"
+    "        float oi = ysp_t4_(s0 + i / 4)[i & 3];\n"
+    "        vec4 ci = ysp_t4_(sc + i);\n"
+    "        if (t <= oi) return oi > olo ? mix(lo, ci, (t - olo) / (oi - olo)) : ci;\n"
+    "        lo = ci; olo = oi;\n"
+    "    }\n"
+    "    return lo;\n"
+    "}\n";
+
+static const char ygfx__glsl_text_out_paint[] =
+    "    ysp_out = ysp_paint_(p) * (cov * ysp_tc.a);\n"
     "}\n";
 
 static const char ygfx__glsl_output[] =
@@ -8695,7 +8822,7 @@ static int ygfx__text_batch(const ygfx_gfx* g, int i, int end, int max, uint32_t
     const float* ba = (const float*)(g->staging + YGFX__FRAME_BYTES + (size_t)a->block * YGFX__BLOCK);
     int j;
     *n = a->count;
-    if (!a->inst || a->nblk != 1 || (a->pipe != g->text_pipe && a->pipe != g->text_rays_pipe)) return 0;
+    if (!a->inst || a->nblk != 1 || (a->pipe != g->text_pipe && a->pipe != g->text_rays_pipe && a->pipe != g->text_paint_pipe)) return 0;
     for (j = i + 1; j < end && j - i < max; j++) {
         const ygfx__cmd* p = &g->cmds[j - 1];
         const ygfx__cmd* b = &g->cmds[j];
@@ -8993,6 +9120,7 @@ static int ygfx__prime(ygfx_gfx* g) {
     for (i = 0; i < 4; i++) if (g->rows_pipe[i]) { inst[n] = 0; ids[n++] = g->rows_pipe[i]; }
     if (g->text_pipe) { inst[n] = 0; ids[n++] = g->text_pipe; }
     if (g->text_rays_pipe) { inst[n] = 0; ids[n++] = g->text_rays_pipe; }
+    if (g->text_paint_pipe) { inst[n] = 0; ids[n++] = g->text_paint_pipe; }
     if (g->blur_pipe) { inst[n] = 0; ids[n++] = g->blur_pipe; }
     for (i = 0; i < YGFX_MAX_PIPELINES; i++) {
         if (g->pipe[i].used && g->pipe[i].bid) { inst[n] = 0; ids[n++] = g->pipe[i].bid; }
@@ -10269,34 +10397,39 @@ static int   ygfx__text_v3 = 1;
 static int   ygfx__text_auto = 1;
 static float ygfx__text_cap = 1.0f, ygfx__text_e = 1.0f / 64.0f;
 
-/* rays 1: the program without the exact area, for .rays runs. A flag in the
+/* kind 1: the program without the exact area, for .rays runs. A flag in the
  * one program cost 0.7 ms more on a 12 px page than a program without the
  * code (6.0 against 5.3 ms, Iris Xe): the exact area's registers stay
- * reserved (docs/gfx.md, v0.7). */
-static int ygfx__text_program(ygfx_gfx* g, int rays) {
+ * reserved (docs/gfx.md, v0.7). kind 2 (v0.22): the paint program, the
+ * exact-area program with paint records, a program of its own for the same
+ * reason; the monochrome programs' text is the same bytes as v0.21's. */
+static int ygfx__text_program(ygfx_gfx* g, int kind) {
     char defs[80];
     size_t nv, nf;
     char* vs;
     ygfx__prec r;
-    int rc;
-    uint32_t* pipe = rays ? &g->text_rays_pipe : &g->text_pipe;
+    int rc, paint = kind == 2;
+    uint32_t* pipe = kind == 1 ? &g->text_rays_pipe : paint ? &g->text_paint_pipe : &g->text_pipe;
     if (*pipe) return YGFX_OK;
-    snprintf(defs, sizeof defs, "#define YSP_TEXT 1\n#define YSP_TEXT_V3 %d\n", rays ? 0 : ygfx__text_v3);
-    nv = strlen(ygfx__glsl_common) + strlen(defs) + strlen(ygfx__glsl_text_vs) + 1;
+    snprintf(defs, sizeof defs, "#define YSP_TEXT 1\n#define YSP_TEXT_V3 %d\n", kind == 1 ? 0 : ygfx__text_v3);
+    nv = strlen(ygfx__glsl_common) + strlen(defs) + strlen(ygfx__glsl_text_vs) + strlen(ygfx__glsl_text_vs_main) +
+         strlen(ygfx__glsl_text_vs_end) + (paint ? strlen(ygfx__glsl_text_vs_paint_decl) + strlen(ygfx__glsl_text_vs_paint) : 0) + 1;
     nf = strlen(ygfx__glsl_common) + strlen(defs) + strlen(ygfx__glsl_text_fs0) + strlen(ygfx__glsl_text_slab) +
-         strlen(ygfx__glsl_text_ray) + strlen(ygfx__glsl_text_main) + 1;
+         strlen(ygfx__glsl_text_ray) + strlen(ygfx__glsl_text_main) +
+         (paint ? strlen(ygfx__glsl_text_fs_paint) + strlen(ygfx__glsl_text_out_paint) : strlen(ygfx__glsl_text_out)) + 1;
     vs = (char*)malloc(nv + nf);
     if (!vs) { ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: out of memory"); return YGFX_ERR_FULL; }
-    snprintf(vs, nv, "%s%s%s", ygfx__glsl_common, defs, ygfx__glsl_text_vs);
-    snprintf(vs + nv, nf, "%s%s%s%s%s%s", ygfx__glsl_common, defs, ygfx__glsl_text_fs0, ygfx__glsl_text_slab,
-             ygfx__glsl_text_ray, ygfx__glsl_text_main);
+    snprintf(vs, nv, "%s%s%s%s%s%s%s", ygfx__glsl_common, defs, ygfx__glsl_text_vs, paint ? ygfx__glsl_text_vs_paint_decl : "",
+             ygfx__glsl_text_vs_main, paint ? ygfx__glsl_text_vs_paint : "", ygfx__glsl_text_vs_end);
+    snprintf(vs + nv, nf, "%s%s%s%s%s%s%s%s", ygfx__glsl_common, defs, ygfx__glsl_text_fs0, paint ? ygfx__glsl_text_fs_paint : "",
+             ygfx__glsl_text_slab, ygfx__glsl_text_ray, ygfx__glsl_text_main, paint ? ygfx__glsl_text_out_paint : ygfx__glsl_text_out);
     rc = ygfx__build(g, vs, vs + nv, YGFX_BLEND_OVER, 2, 0, pipe, &r);
     free(vs);
     g->be->reset(g->bctx);
     if (rc < 0) {
         char tmp[sizeof g->error];
         memcpy(tmp, g->error, sizeof tmp);
-        ygfx__set_error(g->error, sizeof g->error, "%s (text%s)", tmp, rays ? ", rays" : "");
+        ygfx__set_error(g->error, sizeof g->error, "%s (text%s)", tmp, kind == 1 ? ", rays" : paint ? ", paint" : "");
         *pipe = 0;
         return rc;
     }
@@ -10470,8 +10603,11 @@ YGFX_API ygfx_stim ygfx_crun(ygfx_gfx* g, const ygfx_crun_desc* d) {
     /* setup: the rays program, for .rays and for the runs that may take it
      * automatically (turned, aliased, grouped); without it a turned run
      * stays on the exact-area program, which draws the same bits */
-    if (d->rays || d->aliased || d->group || (d->fields & YGFX_I_ORI) || fmodf(fabsf(d->ori), 90.0f) != 0.0f)
+    if (!(d->fields & YGFX_I_PAINT) &&
+        (d->rays || d->aliased || d->group || (d->fields & YGFX_I_ORI) || fmodf(fabsf(d->ori), 90.0f) != 0.0f))
         ygfx__text_program(g, 1);
+    /* setup: the paint program, for runs of color glyph layers (v0.22) */
+    if (d->fields & YGFX_I_PAINT) ygfx__text_program(g, 2);
     /* no box: the items' extent, its top-left kept in shape_p[0..1] (item units) */
     if (d->w == 0.0f && d->h == 0.0f && d->items && s.count && d->set.id >= 1 && d->set.id <= YGFX_MAX_CSETS &&
         g->cset[d->set.id - 1].used) {
@@ -10563,6 +10699,10 @@ static uint32_t ygfx__text_pack(ygfx_gfx* g, const ygfx_stim* s, float* b, ygfx_
     if (s->inst) return ygfx__refuse(g, why, YGFX_ERR_ARG, "a run is instanced already: it cannot be an instances template");
     if ((f & YGFX_I_COLOR) && (!s->palette || s->n_palette < 1 || s->n_palette > YGFX_MAX_PALETTE))
         return ygfx__refuse(g, why, YGFX_ERR_ARG, "YGFX_I_COLOR needs a palette of 1 to 16 rgb entries");
+    if ((f & YGFX_I_PAINT) && (f & YGFX_I_COLOR))
+        return ygfx__refuse(g, why, YGFX_ERR_ARG, "YGFX_I_PAINT and YGFX_I_COLOR both read an item's color: a run takes one");
+    if ((f & YGFX_I_PAINT) && (s->flags & (YGFX_STIM_RAYS | YGFX_STIM_ALIASED)))
+        return ygfx__refuse(g, why, YGFX_ERR_ARG, "a paint run takes the paint program: .rays and .aliased are not built for it");
     ygfx__place(g, s, b);
     ygfx__geom(g, s, &hx, &hy, sp);
     ppu = g->ppu * ygfx__scale(s);
@@ -10574,6 +10714,7 @@ static uint32_t ygfx__text_pack(ygfx_gfx* g, const ygfx_stim* s, float* b, ygfx_
     b[16] = (float)c->lt; b[17] = 0.75f; b[18] = (float)c->G; b[19] = (float)s->count;   /* a batch finds its runs by it */
     b[20] = ygfx__text_cap; b[21] = ygfx__text_e;
     b[22] = s->shape_p[0]; b[23] = s->shape_p[1];   /* the box's top-left in item units */
+    b[28] = (float)c->n_texels;   /* v0.22: the paint program's bound on a record */
     {   /* the placement in px with y down, the same in every pass (the text program) */
         double a[2], m[2], cs, sn;
         ygfx__frame_px(g, s, (double)g->cur_w, (double)g->cur_h, a, m, &cs, &sn);
@@ -10635,6 +10776,12 @@ static uint32_t ygfx__text_pack(ygfx_gfx* g, const ygfx_stim* s, float* b, ygfx_
     cmd->tex[3] = c->tex_w;
     if ((s->flags & YGFX_STIM_RAYS) && !g->text_rays_pipe)
         return ygfx__refuse(g, why, YGFX_ERR_GL, "the rays program was not built: make the run with ygfx_crun(.rays)");
+    if (f & YGFX_I_PAINT) {
+        if (!g->text_paint_pipe)
+            return ygfx__refuse(g, why, YGFX_ERR_GL, "the paint program was not built: make the run with ygfx_crun(), fields YGFX_I_PAINT");
+        *why = YGFX_OK;
+        return g->text_paint_pipe;
+    }
     *why = YGFX_OK;
     if ((s->flags & YGFX_STIM_RAYS) ||
         (ygfx__text_auto && g->text_rays_pipe && (turned || (s->flags & YGFX_STIM_ALIASED))))

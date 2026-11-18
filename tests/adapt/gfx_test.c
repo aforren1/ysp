@@ -6851,6 +6851,202 @@ static void gl_v21_rows_shared(stats* st) {
     ygfx_close(&R->g);
 }
 
+static ygfx_crun_desc cs_rd(ygfx_cset set, ygfx_citem* it, int n, float size);
+
+/* ---------------------------------------------------------- v0.22: paint */
+
+/* Paint records (PAINT RECORDS) appended to a test set, by hand: the
+ * layout library writes them for fonts, this test for one square glyph. */
+static uint32_t p22_put(tcs_set* s, const float* t, uint32_t n) {
+    uint32_t at = s->n_texels;
+    tcs__tgrow(s, n);
+    if (s->fail) return 0;
+    memcpy(s->texels + 4 * (size_t)at, t, 16 * (size_t)n);
+    s->n_texels += n;
+    return at;
+}
+
+/* A gradient's color at em point x, y in double: kind, its parameters
+ * (linear ax ay a0; radial m00 m01 m02 m10 m11 m12 dx dy), n stops, the
+ * offsets and the colors. What the shader computes, without its f32
+ * arithmetic. */
+static void p22_eval_p(int kind, const double* q8, int n, const float* off, const float* col, double x, double y, double out[4]) {
+    double t, olo;
+    int i, k;
+    if (kind == 2) t = q8[0] * x + q8[1] * y + q8[2];
+    else {
+        double qx = q8[0] * x + q8[1] * y + q8[2], qy = q8[3] * x + q8[4] * y + q8[5], dx = q8[6], dy = q8[7];
+        double a = dx * dx + dy * dy - 1, b = qx * dx + qy * dy, c = qx * qx + qy * qy, D = sqrt(fmax(b * b - a * c, 0));
+        t = b > 0 ? c / (D + b) : (D - b) / -a;
+    }
+    olo = off[0];
+    for (k = 0; k < 4; k++) out[k] = col[k];
+    if (!(t > olo)) return;
+    for (i = 1; i < n; i++) {
+        double oi = off[i];
+        if (t <= oi) {
+            double f = oi > olo ? (t - olo) / (oi - olo) : 1;
+            for (k = 0; k < 4; k++) out[k] = (1 - f) * col[4 * (i - 1) + k] + f * col[4 * i + k];
+            return;
+        }
+        olo = oi;
+    }
+    for (k = 0; k < 4; k++) out[k] = col[4 * (n - 1) + k];
+}
+/* The same from a record's floats. */
+static void p22_eval(const float* r, double x, double y, double out[4]) {
+    int kind = (int)r[0], n = (int)r[1], s0 = kind == 3 ? 3 : 2, k;
+    double q8[8];
+    if (kind == 1) { for (k = 0; k < 4; k++) out[k] = r[4 + k]; return; }
+    for (k = 0; k < 8; k++) q8[k] = r[4 + k];
+    p22_eval_p(kind, q8, n, r + 4 * s0, r + 4 * (s0 + (n + 3) / 4), x, y, out);
+}
+
+static void gl_v22_paint(stats* st) {
+    /* a unit square, resolved, y down, clockwise on the screen */
+    static const double sq[16] = { 0, 0, 0, 0, 1, 0, 1, 0, 1, 1, 1, 1, 0, 1, 0, 1 };
+    static float mono[W * H * 4];
+    enum { X0 = 20, Y0 = 30, SZ = 128 };
+    tcs_set s;
+    tcs_contour c;
+    ygfx_cset_desc d;
+    ygfx_cset set;
+    ygfx_citem it;
+    ygfx_crun_desc rd;
+    ygfx_stim run;
+    uint32_t r_solid, r_lin, r_rad, r_two, r_bad[5], k;
+    double err_rec = 0, err_exact = 0;
+    long outside = 0;
+    int x, y, i, ci;
+    /* records: solid; linear t = 1.25 x - 0.125 (red to blue, 3 stops with
+     * alpha); concentric radial about (0.5, 0.5), r 0.4; two-point radial,
+     * focal (0.4, 0.5), end circle (0.5, 0.5) r 0.45, 4 stops, a hard edge */
+    static const float solid[8] = { 1, 0, 0, 0, 0.3f, 0.6f, 0.9f, 1.0f };
+    static const float lin[4 * 6] = { 2, 3, 0, 0, 1.25f, 0, -0.125f, 0, 0.0f, 0.5f, 1.0f, 0, 1, 0, 0, 1, 0, 0.25f, 0, 0.5f, 0, 0, 1, 1 };
+    static const float rad[4 * 6] = { 3, 2, 0, 0, 2.5f, 0, -1.25f, 0, 2.5f, -1.25f, 0, 0, 0.2f, 1.0f, 0, 0, 1, 1, 1, 1, 0, 0, 0.5f, 0.5f };
+    static float two[4 * 8] = { 3, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.5f, 0.5f, 1, 1, 0, 0, 1, 0, 1, 0, 1, 0, 0, 1, 1, 1, 1, 1, 1 };
+    static const double q8two[8] = { 1 / 0.45, 0, -0.4 / 0.45, 0, 1 / 0.45, -0.5 / 0.45, 0.1 / 0.45, 0 };
+    (void)st;
+    g_where = "v0.22 paint";
+    for (i = 0; i < 8; i++) two[4 + i] = (float)q8two[i];
+    c.pts = sq; c.n = 8;
+    tcs_init(&s, 2);
+    CHECK(tcs_glyph(&s, 0, &c, 1, 1, 1, YGFX_CSET_RESOLVED) == 0);
+    r_solid = p22_put(&s, solid, 2);
+    r_lin = p22_put(&s, lin, 6);
+    r_rad = p22_put(&s, rad, 6);
+    r_two = p22_put(&s, two, 8);
+    {   /* records the vertex stage must not draw: past the set, not whole, an
+         * unknown kind, 17 stops, a fraction of a texel */
+        /* each whole and well formed but for the one fault, so only its own check refuses it */
+        static float k7[4 * 8], n17[4 * 24];
+        static const float h[4] = { 2, 3, 0, 0 };
+        for (i = 0; i < 4 * 8; i++) k7[i] = 1;
+        k7[0] = 7; k7[1] = 2; k7[2] = k7[3] = 0; k7[12] = 0; k7[13] = 1;
+        for (i = 0; i < 4 * 24; i++) n17[i] = 1;
+        n17[0] = 2; n17[1] = 17; n17[2] = n17[3] = 0; n17[5] = n17[6] = n17[7] = 0;
+        for (i = 0; i < 17; i++) n17[8 + i] = (float)i / 16;
+        for (i = 17; i < 20; i++) n17[8 + i] = 1;
+        r_bad[2] = p22_put(&s, k7, 8);
+        r_bad[3] = p22_put(&s, n17, 24);
+        r_bad[1] = p22_put(&s, h, 1);   /* a linear header with no room for its stops: the set's last texel */
+        r_bad[0] = s.n_texels + 5;
+        r_bad[4] = r_lin;
+    }
+    CHECK(!s.fail);
+    if (!gl_open(0, YGFX_RGBA32F, YGFX_DITHER_NONE)) { tcs_free(&s); return; }
+    memset(&d, 0, sizeof d);
+    d.texels = s.texels; d.n_texels = s.n_texels; d.words = s.words; d.n_words = s.n_words;
+    set = ygfx_cset_make(&R->g, &d);
+    CHECK(set.id != 0);
+    memset(&it, 0, sizeof it);
+    it.x = X0; it.y = Y0; it.glyph = 0; it.scale = 1; it.gate = 1;
+    rd = cs_rd(set, &it, 1, SZ);
+    rd.fields = YGFX_I_PAINT;
+    /* the gradients against the record in double, and against the exact
+     * gradient (the two-point record's parameters are rounded to f32) */
+    for (ci = 0; ci < 4; ci++) {
+        const float* rec = ci == 0 ? solid : ci == 1 ? lin : ci == 2 ? rad : two;
+        it.color = (float)(ci == 0 ? r_solid : ci == 1 ? r_lin : ci == 2 ? r_rad : r_two);
+        run = ygfx_crun(&R->g, &rd);
+        gl_frame(&run, 1);
+        for (y = Y0 + 1; y < Y0 + SZ - 1; y++)
+            for (x = X0 + 1; x < X0 + SZ - 1; x++) {
+                double ex = (x + 0.5 - X0) / SZ, ey = (y + 0.5 - Y0) / SZ, want[4], exact[4];
+                const float* got = R->scene + 4 * ((size_t)y * W + (size_t)x);
+                p22_eval(rec, ex, ey, want);
+                memcpy(exact, want, sizeof exact);
+                if (ci == 3) p22_eval_p(3, q8two, 4, two + 12, two + 16, ex, ey, exact);
+                for (i = 0; i < 3; i++) {   /* rgb: over the black opaque background, the paint's own */
+                    err_rec = maxd(err_rec, fabs((double)got[i] - want[i]));
+                    err_exact = maxd(err_exact, fabs((double)got[i] - exact[i]));
+                }
+            }
+        for (k = 0; k < (uint32_t)(W * H); k++) {   /* nothing outside the square's px */
+            x = (int)(k % W); y = (int)(k / W);
+            if ((x < X0 || x >= X0 + SZ || y < Y0 || y >= Y0 + SZ) && (R->scene[4 * k] != 0.0f || R->scene[4 * k + 1] != 0.0f || R->scene[4 * k + 2] != 0.0f)) outside++;
+        }
+    }
+    printf("v0.22 paint: the gradients against their record in double: max %.2e; against the exact gradient (the record's "
+           "rounding too): max %.2e; pixels drawn outside the glyph: %ld\n", err_rec, err_exact, outside);
+    CHECK_LE(err_rec, 2e-6);
+    CHECK_LE(err_exact, 2e-6);
+    CHECK(outside == 0);
+    /* a solid paint's coverage is the monochrome program's, bit for bit, at
+     * a fraction of a px and turned (the rays branch) */
+    {
+        long diff = 0, cover = 0;
+        int turn;
+        for (turn = 0; turn < 2; turn++) {
+            ygfx_crun_desc md = cs_rd(set, &it, 1, 37.3f);
+            it.x = X0 + 0.37f; it.y = Y0 + 0.61f;
+            md.ori = turn ? 17.0f : 0.0f;
+            md.color[0] = 0.3f; md.color[1] = 0.6f; md.color[2] = 0.9f;
+            run = ygfx_crun(&R->g, &md);
+            gl_frame(&run, 1);
+            memcpy(mono, R->scene, sizeof mono);
+            md.fields = YGFX_I_PAINT;
+            it.color = (float)r_solid;
+            run = ygfx_crun(&R->g, &md);
+            gl_frame(&run, 1);
+            for (k = 0; k < (uint32_t)(4 * W * H); k++) {
+                if (mono[k] != R->scene[k]) diff++;
+                if (k % 4 == 0 && mono[k] > 0 && mono[k] < 0.3f) cover++;
+            }
+        }
+        printf("v0.22 paint: a solid paint against the monochrome run, straight and turned 17 degrees: %ld of %d values differ "
+               "(%ld edge px)\n", diff, 8 * W * H, cover);
+        CHECK(diff == 0 && cover > 100);
+        it.x = X0; it.y = Y0;
+    }
+    /* records the vertex stage refuses draw nothing */
+    for (i = 0; i < 5; i++) {
+        float drawn = 0;
+        it.color = i == 4 ? (float)r_bad[4] + 0.5f : (float)r_bad[i];
+        run = ygfx_crun(&R->g, &rd);
+        gl_frame(&run, 1);
+        for (k = 0; k < (uint32_t)(W * H); k++) drawn += R->scene[4 * k] + R->scene[4 * k + 1] + R->scene[4 * k + 2];
+        CHECK(drawn == 0);
+    }
+    /* a paint run and a palette read the same field: refused */
+    {
+        ygfx_crun_desc bd = rd;
+        int rc;
+        bd.fields = YGFX_I_PAINT | YGFX_I_COLOR;
+        bd.palette = solid + 4; bd.n_palette = 1;
+        run = ygfx_crun(&R->g, &bd);
+        CHECK(yscr_begin(&R->scr, &R->f) == YSCR_OK);
+        CHECK(ygfx_begin(&R->g, &R->f) == YGFX_OK);
+        rc = ygfx_draw(&R->g, &run);
+        CHECK(rc == YGFX_ERR_ARG && strstr(ygfx_error(&R->g), "YGFX_I_PAINT"));
+        ygfx_end(&R->g);
+        CHECK(yscr_flip(&R->scr) == YSCR_OK);
+    }
+    ygfx_cset_free(&R->g, set);
+    ygfx_close(&R->g);
+    tcs_free(&s);
+}
+
 static int gl_suite(const char* name, ygfx_hl_device dev) {
     yscr_desc d;
     stats st;
@@ -6878,14 +7074,14 @@ static int gl_suite(const char* name, ygfx_hl_device dev) {
                                                  gl_v04_cache, gl_v04_fixes, gl_v04_video, gl_v04_inst, gl_v04_order, gl_v05_color,
                                                  gl_v06_text, gl_v06_blur, gl_v05_kinds, gl_v08, gl_v10_simplex, gl_v10_user_tex,
                                                  gl_v11_prime, gl_v11_start, gl_v12_capture, gl_v15_first, gl_v18_paths,
-                                                 gl_v21_rows_shared };
+                                                 gl_v21_rows_shared, gl_v22_paint };
         static const char* const names[] = { "shapes", "gratings", "gabors", "dots", "images", "noise",
                                              "output", "user+batch+rows", "strokes", "masks", "sprites", "tint",
                                              "groups", "targets", "alpha+passes", "edge truth", "v0.3 kinds", "v0.3 truth", "v0.3 fx", "v0.3 paint", "v0.3 msdf",
                                              "v0.4 cache", "v0.4 fixes", "v0.4 video", "v0.4 inst", "v0.4 order", "v0.5 color",
                                              "v0.6 text", "v0.6 blur", "vspec", "v0.8", "v0.10 simplex", "v0.10 user tex",
                                              "v0.11 prime", "v0.11.1 start", "v0.12 capture", "v0.15 first", "v0.18 paths",
-                                             "v0.21 rows+shared" };
+                                             "v0.21 rows+shared", "v0.22 paint" };
         int k;
         memset(&S2, 0, sizeof S2);
         memset(&S3, 0, sizeof S3);

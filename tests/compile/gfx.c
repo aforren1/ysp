@@ -186,6 +186,12 @@ int main(void) {
         ygfx_close(&gg);
         yscr_close(&ss);
     }
+    {   /* v0.22: paint records; a field bit of its own past YGFX_I_COLOR */
+        ygfx_crun_desc pr;
+        memset(&pr, 0, sizeof pr);
+        pr.fields = YGFX_I_PAINT | YGFX_I_GATE;
+        if (YGFX_I_PAINT != 0x80u || (YGFX_I_PAINT & YGFX_I_COLOR) || !(pr.fields & YGFX_I_PAINT)) return 37;
+    }
     return ygfx_params(&n) && n == YGFX_P_COUNT && ygfx_desc_params(&m) && m > 0 &&
            ygfx_group_params(&k) && k > 0 ? 0 : 8;
 }

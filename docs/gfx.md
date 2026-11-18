@@ -4630,6 +4630,113 @@ window, every present a copy), Filament 1.80.1, filly v0.5.0,
 The record's phase and the probe's own clock around filly's calls agree
 within 1 us at p50.
 
+## v0.22.0: color glyphs (paint records)
+
+Color emoji from COLR fonts, the user's decisions of 2026-11-18
+([emoji_colr_survey.md](emoji_colr_survey.md), "Decisions"). The layout
+library flattens each color glyph into layers ([layout.md](layout.md#color-glyphs));
+the pack stores them ([pack.md](pack.md#18-color-glyphs-tool-v0110-2026-11-18));
+this header draws them. The manual is the header's PAINT RECORDS.
+
+### How it fits
+
+| Question | Choice | Why |
+|---|---|---|
+| A layer | An item of a curve run: glyph the layer's outline, `color` the texel index of its paint record (`YGFX_I_PAINT`) | A color glyph is a stack of glyphs of the font's set; a run already stacks its items in order and batches. No new stimulus kind, no new item layout, no new binding table |
+| Where paints live | Texels of the run's own set that no glyph references | The curve set format allows them (a glyph's lists reference its own texels only), so the format stays version 1, the set keeps one RGBA32F and one RGBA32UI texture, the program one more read of the sampler it has, and the backend interface does not change. `ygfx_cset_add()` uploads new records as it uploads new curves |
+| The program | A third text program, made at the first `YGFX_I_PAINT` run and primed with the others | A per-fragment branch in a shared program cost 13 to 14 % before (the ysp-gaps work, v0.21.0) and the exact area's registers stay reserved (v0.7). The monochrome programs' text is the same bytes as v0.21.0's (checked by concatenating both headers' strings), so their compiled code, their cache entries' contents and their cost do not change |
+| The record's form | Header (kind, stops), the parameters, offsets four to a texel, colors | A solid is 2 texels; a linear gradient with n stops 2 + ceil(n / 4) + n; a radial 3 + ceil(n / 4) + n. The vertex stage reads the header and parameters once per item and hands them on as three flat vec4s; the fragment stage reads the stops |
+| A gradient's space | The pixel's em point, the one coverage computes | Transforms are baked into the outline, and each gradient carries its own 2x3 map from that point, so an elliptical radial (a radial under a non-similarity) costs nothing more, and the paint moves, turns and scales with its item |
+| Radial gradients | Start radius 0, the end circle the unit circle about the start point, t >= 0 with abs(q - t d) = t | The survey's radials: concentric with start radius 0, and 15 of Noto's two-point with the focal point inside; one form for both, with a root that does not cancel. Other radials are refused by the pack tool |
+| Blending | OVER, premultiplied, linear light, stops mixed premultiplied | As every color stimulus; COLR asks for premultiplied interpolation. A browser blends sRGB-encoded values, so translucent layers and antialiased edges between layers differ from Chrome's rendering of the same emoji; opaque interiors do not |
+| Robustness | The vertex stage draws nothing for a record not wholly in the set (B7.x holds the set's texel count), of a kind it does not know, or of 0 or more than 16 stops; an index that is not an integer is no record | A pack is untrusted input: no texel past the set is read |
+| Refused on a paint run | `YGFX_I_COLOR` (the same field), `.rays`, `.aliased` | A turned paint run stays on the paint program, whose rays branch is the rays program's code: a turned solid paint equals the monochrome run bit for bit |
+
+### Exactness
+
+- Coverage is CURVE RUNS': a solid paint against a monochrome run of the
+  same color, at a fraction of a pixel and turned by 17 degrees: 0 of
+  512,000 scene values differ (Mesa llvmpipe, RGBA32F scene).
+- Records, stops and t are f32. A gradient's error against its record
+  evaluated in double, at every pixel center inside a 128 px square
+  (linear with 3 stops and alpha; concentric radial; two-point radial with
+  4 stops and a hard edge): max 4.7e-7 of full scale on Mesa llvmpipe.
+  Against the exact gradient (the two-point record's parameters rounded
+  from double): max 5.9e-7. Not measured on a GPU: the test reads an
+  RGBA32F scene on llvmpipe only.
+- Records out of the set, of an unknown kind, of 17 stops, without room
+  for their stops, or at a fraction of a texel draw nothing (checked).
+
+### Tests and mutants
+
+`test_gfx` part "v0.22 paint" (Mesa llvmpipe, headless, RGBA32F scene):
+the four records against double (above), nothing drawn outside the
+square, the solid against the monochrome run straight and turned, five
+records the vertex stage must refuse, and `YGFX_I_PAINT | YGFX_I_COLOR`
+refused by name. The C and C++ compile checks take `YGFX_I_PAINT`.
+Mutants `pt-01` to `pt-11` in `tests/mutate/gfx.toml` (test `gfx_linux`,
+Mesa): an unknown kind read, 17 stops read, the radial's other root, the
+stops' offsets one to a texel, paint without coverage, no texel count in
+the block, a palette with paint, a paint run on the monochrome program, a
+linear gradient without its offset, a fraction of a texel as an index, no
+pad below the first stop: 11 of 11 killed (two after the test's bad
+records were made to fail one check each).
+
+### Cost
+
+The Linux desktop: i5-14500, AMD Radeon RX 6600 (Mesa 22.3.6, radeonsi,
+LLVM 15.0.6), Debian 12, kernel 6.11.5-1-liquorix-amd64; GLX_OML in a 1920
+x 1080 window on the 1920 x 1080 display; gcc 12.2 `-O3`. One measuring job
+under `/tmp/psy-measure.lock`, load average (1 min) 0.03 to 0.43.
+`tests/probe/colr/emoji_bench.c` (CMake target `emoji_bench`): 600 frames
+a scene; host time from `ygfx_begin()` to `ygfx_end()`'s return, GPU time
+from a `GL_EXT_disjoint_timer_query` around them, read 4 frames later
+(both include the output stage: an empty frame is 0.31 ms of GPU).
+
+**Text and images before and after.** The same bench source built
+against v0.21.0's header (main) and v0.22.0's, with the same flags, three
+interleaved rounds each; GPU p50, ms:
+
+| Scene | v0.21.0 | v0.22.0 |
+|---|---|---|
+| empty (the output stage) | 0.309, 0.313, 0.314 | 0.314, 0.313, 0.314 |
+| 12 full-size 1080p RGBA8 images | 2.697, 2.753, 2.787 | 2.825, 2.752, 2.688 |
+| a page of 2,016 glyphs at 16 px (DejaVu Sans) | 0.737, 0.737, 0.735 | 0.736, 0.737, 0.736 |
+| 100 glyphs at 48 px | 0.462, 0.462, 0.462 | 0.462, 0.462, 0.463 |
+| one glyph at 600 px | 0.431, 0.430, 0.430 | 0.432, 0.430, 0.437 |
+
+Host time p50 was 0.012 to 0.042 ms in every row of both, with no order
+between them (the rounds' spread is larger than any difference). The
+monochrome programs' text is unchanged, so this is the expected result:
+the only new work on their path is two flag tests and one store in the
+run's block.
+
+**Color glyphs.** 100 emoji at 48 px (the first 100 the font draws from
+U+1F300 on, 10 to a row), one emoji at 600 px (U+1F600), and the font's
+emoji with the most layers at 600 px; the same window, the same run with
+100 monochrome glyphs at 48 px gave 0.460 to 0.462 ms (GPU p50) and one at
+600 px 0.430 to 0.432. Host time p50 was 0.017 to 0.040 ms in every row
+(a run's items are copied at each draw; 2,393 layers are 77 KB).
+
+| Font | 100 emoji: layers, GPU p50 (p99), ms | U+1F600 at 600 px: layers, GPU p50 | Most layers at 600 px: emoji, layers, GPU p50 |
+|---|---|---|---|
+| Twemoji Mozilla (COLRv0) | 451, 0.826 (0.864) | 3, 0.462 | U+1FAB4, 44, 0.891 |
+| OpenMoji 17 (COLRv1) | 1,216, 1.265 (1.303) | 8, 0.570 | U+1F391, 76, 0.934 |
+| Noto Color Emoji COLRv1, no flags | 1,669, 1.218 (1.241) | 10, 0.648 | U+1F307, 114, 0.989 |
+| Fluent Emoji Color | 2,393, 1.958 (2.012) | 16, 1.630 | U+1FAA2, 335, 0.840 |
+
+- Over the empty frame, 100 emoji cost 0.52 (Twemoji) to 1.65 ms (Fluent
+  Color) of GPU against 0.15 ms for 100 monochrome glyphs: the layers'
+  count and their gradients. A frame of 2 ms (the 500 Hz target) holds
+  100 Twemoji or Noto emoji at 48 px with room; 100 Fluent Color emoji
+  take most of it.
+- One large emoji costs by its covered area times its layers' overdraw,
+  not by its layer count: Fluent's U+1F600 has 16 layers, most of them
+  gradients over the whole face, and costs 1.32 ms over the empty frame;
+  its 335-layer U+1FAA2 has small layers and costs 0.53 ms.
+- Not measured: the cost on Windows (ANGLE) and in a browser; a frame of
+  emoji in a target, drawn as an image, costs what an image does.
+
 ## Bindings
 
 `ysp/gfx.h` is bound in `ysp-vis` with `ysp/screen.h` and `ysp/video.h`

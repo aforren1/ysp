@@ -29,6 +29,12 @@ if(YSP_BUILD_LAYOUT)
         ysp_add_program(colr_fuzz ${PROJECT_SOURCE_DIR}/tests/fuzz/colr_fuzz.c rig)
         target_link_libraries(colr_fuzz PRIVATE ysp_layout)
         target_compile_definitions(colr_fuzz PRIVATE YSCR_NO_SDL YSP_FUZZ_SELF)
+        # What color glyphs cost, and text and images before and after them
+        # (docs/gfx.md v0.22.0); a window on the display, not a test.
+        if(TARGET SDL3::SDL3)
+            ysp_add_program(emoji_bench ${PROJECT_SOURCE_DIR}/tests/probe/colr/emoji_bench.c rig)
+            target_link_libraries(emoji_bench PRIVATE ysp_layout)
+        endif()
         # The costs of docs/layout.md; not a test (run it under the lock).
         ysp_add_program(layout_bench ${PROJECT_SOURCE_DIR}/tests/layout/layout_bench.c rig)
         target_link_libraries(layout_bench PRIVATE ysp_layout)
