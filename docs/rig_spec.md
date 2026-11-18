@@ -1384,6 +1384,10 @@ extension implements one of these kinds, each a versioned C vtable:
 | Video decoder | The interface in `ysp/video.h`. | A codec the built-in backends lack. |
 | Script module | Exports a parameter table and typed functions. The host generates the Luau binding from the table. | Any of the above exposing parameters. |
 
+The first Renderer probe (filly on Filament, 2026-11-18) is
+[filly_probe.md](filly_probe.md): a shared GL context on Linux, one WebGL2
+context on the web, and a sketch of the Renderer vtable.
+
 - **Mechanics.** A shared module with one exported symbol that returns
   the vtable and its interface version, compiled by its author against
   the ysp C headers with any toolchain. The ABI is plain C structs. On

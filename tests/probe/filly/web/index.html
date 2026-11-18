@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>filly in ysp's WebGL2 context</title>
+<style>body { margin: 0; background: #222; color: #ddd; } canvas { display: block; } pre { font-size: 11px; }</style>
+</head>
+<body>
+<canvas id="canvas" width="1024" height="768" tabindex="-1"></canvas>
+<pre id="log"></pre>
+<script type="module">
+// Two Emscripten modules on one page: filly's (an ES module, filly/filly.js) and
+// ysp's (filly_web.js, a classic script with a global Module). ysp makes the
+// WebGL2 context and the texture; the hooks below give both to filly.
+import { createRenderer, loadModule, version, filamentVersion } from "./filly/filly.js";
+
+const args = (new URLSearchParams(location.search).get("args") || "--mode filly").split(" ").filter(Boolean);
+const logEl = document.getElementById("log");
+const post = (path, body) => fetch(path, { method: "POST", body }).catch(() => {});
+function log(text) {
+	console.log(text);
+	logEl.textContent += text + "\n";
+	post("/log", text);
+}
+log(`args ${args.join(" ")}; crossOriginIsolated ${self.crossOriginIsolated}; ${navigator.userAgent}`);
+const horse = new Uint8Array(await (await fetch("horse.glb")).arrayBuffer());
+
+// Column-major rotation about +Y, as the native probe's rot_y().
+function rotY(deg) {
+	const a = deg * Math.PI / 180, c = Math.cos(a), s = Math.sin(a);
+	return [c, 0, -s, 0, 0, 1, 0, 0, s, 0, c, 0, 0, 0, 0, 1];
+}
+
+let renderer, scene, model, target, animated = false, width = 0, height = 0;
+window.Module = {
+	canvas: document.getElementById("canvas"),
+	noInitialRun: true,
+	print: log,
+	printErr: log,
+	fillyProbe: {
+		async setup(gl, texture, w, h) {
+			try {
+				const tm = performance.now();
+				await loadModule();
+				const t0 = performance.now();
+				renderer = await createRenderer(gl);
+				const tr = performance.now();
+				target = renderer.importTarget(texture, w, h);
+				width = w;
+				height = h;
+				scene = renderer.createScene();
+				model = scene.load(horse);
+				animated = model.animations.length > 0;
+				scene.camera = renderer.createCamera();
+				scene.camera.frame(model, { direction: [-1, -0.3, -1] });
+				scene.addDirectionalLight({ direction: [-1, -1, -2], intensity: 100000 });
+				scene.background = [0.2, 0.2, 0.25, 1];
+				const t1 = performance.now();
+				await renderer.prepare(scene);
+				const t2 = performance.now();
+				renderer.render(scene, target);
+				renderer.handBack();
+				log(`filly ${await version()}, Filament ${await filamentVersion()}: module ${(t0 - tm).toFixed(1)} ms, `
+					+ `renderer ${(tr - t0).toFixed(1)} ms, model ${(t1 - tr).toFixed(1)} ms, `
+					+ `prepare ${(t2 - t1).toFixed(1)} ms, first render ${(performance.now() - t2).toFixed(1)} ms`);
+				return 0;
+			} catch (error) {
+				log(`setup failed: ${error.stack || error}`);
+				return 1;
+			}
+		},
+		frame(t) {
+			const start = performance.now();
+			model.transform = rotY(90 * t);
+			if (animated) model.applyAnimation(0, t);
+			renderer.render(scene, target);
+			renderer.handBack();
+			return performance.now() - start;
+		},
+		gpuMs() {
+			return renderer.stats.gpuFrameMs ?? -1;
+		},
+		// ImportedTarget.read() gives rows from the top; the GL texture holds them bottom first.
+		readGlOrder() {
+			const top = target.read();
+			const out = new Uint8Array(top.length), stride = width * 4;
+			for (let row = 0; row < height; row++) {
+				out.set(top.subarray(row * stride, (row + 1) * stride), (height - 1 - row) * stride);
+			}
+			return out;
+		},
+		result(json) {
+			window.probeResult = JSON.parse(json);
+			post("/result", json);
+		},
+	},
+	onRuntimeInitialized() {
+		Module.callMain(args);
+	},
+};
+const script = document.createElement("script");
+script.src = "filly_web.js";
+document.body.appendChild(script);
+</script>
+</body>
+</html>
