@@ -584,8 +584,10 @@ static void ylay__premul(hb_color_t c, double mult, float* o) {
     o[3] = (float)a;
 }
 
+#define YLAY__NOTHING 0xFFFFFFFFu   /* an ill-formed gradient: the layer draws nothing */
+
 /* The record of fill f into rec (texels of 4 floats); returns its texel
- * count, or 0 with the refusal set. */
+ * count, YLAY__NOTHING, or 0 with the refusal set. */
 static uint32_t ylay__paint_rec(ylay__pstate* p, const ylay__fill* f, float* rec) {
     uint32_t n = 0, i, nofs;
     ylay__m F = { 0, 0, 0, 0, 0, 0 }, G, A;
@@ -597,19 +599,24 @@ static uint32_t ylay__paint_rec(ylay__pstate* p, const ylay__fill* f, float* rec
     }
     F.a = 1.0 / p->upem; F.d = -1.0 / p->upem;
     G = ylay__mmul(F, f->gm);              /* gradient space to em */
-    if (!ylay__minv(G, &A)) { ylay__refuse(p, YLAY__REF_DEGENERATE, 1); return 0; }
+    /* COLRv1: a gradient flattened by its transform is degenerate and must
+     * not be rendered: the layer draws nothing */
+    if (!ylay__minv(G, &A)) return YLAY__NOTHING;
     rec[0] = (float)f->kind; rec[1] = (float)f->n;
     if (f->kind == 2) {
         /* t = n . (A P - p0) / n . (p1 - p0), n normal to p2 - p0 (COLRv1) */
         double nx = -(f->g[5] - f->g[1]), ny = f->g[4] - f->g[0];
         double den = nx * (f->g[2] - f->g[0]) + ny * (f->g[3] - f->g[1]);
-        if (!(fabs(den) > 1e-9 * (nx * nx + ny * ny + 1e-300)) || (nx == 0 && ny == 0)) { ylay__refuse(p, YLAY__REF_DEGENERATE, 0); return 0; }
+        /* p1 or p2 at p0, or p0p2 parallel to p0p1 (within 1e-6 of the sine):
+         * ill-formed, "must not be rendered" (COLR, linear gradients) */
+        if (!(fabs(den) > 1e-6 * sqrt(nx * nx + ny * ny) * hypot(f->g[2] - f->g[0], f->g[3] - f->g[1]))) return YLAY__NOTHING;
         rec[4] = (float)((nx * A.a + ny * A.b) / den);
         rec[5] = (float)((nx * A.c + ny * A.d) / den);
         rec[6] = (float)((nx * (A.e - f->g[0]) + ny * (A.f - f->g[1])) / den);
         n = 2;
     } else {
         double r0 = f->g[2], r1 = f->g[5], dx = f->g[3] - f->g[0], dy = f->g[4] - f->g[1];
+        if (r0 == 0 && r1 == 0) return YLAY__NOTHING;   /* both radii 0: nothing is painted (COLR) */
         if (r0 != 0) { ylay__refuse(p, YLAY__REF_RADIAL_R0, 0); return 0; }
         if (!(r1 > 0) || !(dx * dx + dy * dy < r1 * r1)) { ylay__refuse(p, YLAY__REF_RADIAL_FOCAL, 0); return 0; }
         /* q = (A P - c0) / r1, d = (c1 - c0) / r1: |q - t d| = t */
@@ -838,6 +845,7 @@ int ylay__colr_build(ylay__colr* c, hb_face_t* face, const yol_font* yf, yol_ctx
                 if (!any) continue;
                 n = ylay__paint_rec(p, f, rec);
                 if (!n) break;
+                if (n == YLAY__NOTHING) continue;
                 if (lg.gid != UINT32_MAX && !lg.cut && lg.m[0] == 1 && lg.m[1] == 0 && lg.m[2] == 0 && lg.m[3] == 1 &&
                     lg.m[4] == 0 && lg.m[5] == 0)
                     sg = lg.gid;   /* the font's own glyph: no layer glyph */
@@ -927,7 +935,7 @@ void ylay__colr_message(int ref, int32_t detail, char* buf, size_t cap) {
         snprintf(buf, cap, "a two-point radial gradient whose start circle is not inside its end circle is not drawn; %s", other);
         break;
     case YLAY__REF_STOPS: snprintf(buf, cap, "a color line of %d stops is not drawn (1 to 16); %s", (int)detail, other); break;
-    case YLAY__REF_DEGENERATE: snprintf(buf, cap, "a gradient with no direction or under a singular transform is not drawn; %s", other); break;
+    case YLAY__REF_DEGENERATE: snprintf(buf, cap, "a gradient whose values are not finite is not drawn; %s", other); break;
     case YLAY__REF_UNCLIPPED: snprintf(buf, cap, "a fill with no glyph clip and no clip box is not drawn; %s", other); break;
     case YLAY__REF_GLYPH_ID: snprintf(buf, cap, "a layer's glyph %d is past the font's glyphs (a damaged font); %s", (int)detail, other); break;
     case YLAY__REF_OUTLINE: snprintf(buf, cap, "a clip glyph's outline is refused by ysp/outline.h (code %d); %s", (int)detail, other); break;

@@ -37,7 +37,7 @@ enum {
     YLAY__REF_RADIAL_R0,      /* a radial with a start radius above 0            */
     YLAY__REF_RADIAL_FOCAL,   /* a two-point radial whose focal point is not inside */
     YLAY__REF_STOPS,          /* a color line of 0 or more than 16 stops (detail) */
-    YLAY__REF_DEGENERATE,     /* a gradient with no direction or a singular transform */
+    YLAY__REF_DEGENERATE,     /* a gradient whose values are not finite          */
     YLAY__REF_UNCLIPPED,      /* a fill with no glyph clip and no clip box       */
     YLAY__REF_OUTLINE,        /* an outline ysp/outline.h refuses (detail: its code) */
     YLAY__REF_GLYPH_ID        /* a clip glyph past the font's glyphs (detail: the id) */

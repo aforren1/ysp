@@ -1506,6 +1506,9 @@ static void color_checks(yol_ctx* ol) {
                   near_(rec_t(r, 0.5, -0.55), 1, 1e-6) && near_(rec_t(r, 0.65, -0.4), 0.5, 1e-6),
                   "color v1: ellipse t %g %g %g %g", rec_t(r, 0.5, -0.4), rec_t(r, 0.8, -0.4), rec_t(r, 0.5, -0.55), rec_t(r, 0.65, -0.4));
         }
+        n = ylay_color_glyph(L, 0, CFB1_B_ILLFORMED, &ly);
+        CHECK(n == 1 && ly[0].glyph == CFB1_L_DISC, "color v1: an ill-formed gradient (p2 = p0) draws nothing, the disc beside it "
+              "does: %d layers (want 1)", n);
         n = ylay_color_glyph(L, 0, CFB1_B_OPACITY, &ly);
         if (CHECK_N(n == 2, "color v1: group opacity over two boxes apart: %d layers (want 2)", n)) {
             const float* r0 = pt + 4 * (size_t)ly[0].paint, *r1 = pt + 4 * (size_t)ly[1].paint;

@@ -2587,9 +2587,16 @@ flags (Noto-COLRv1-noflags.ttf) or Twemoji
 | A radial with a start radius above 0 | a radial gradient with a start radius above 0 is not drawn |
 | A two-point radial whose focal point is not inside | a two-point radial gradient whose start circle is not inside its end circle is not drawn |
 | 0 or more than 16 stops | a color line of N stops is not drawn (1 to 16) |
-| A gradient with no direction, or a singular transform | a gradient with no direction or under a singular transform is not drawn |
+| A gradient record whose values are not finite (a damaged font) | a gradient whose values are not finite is not drawn |
 | A fill with no glyph clip and no clip box | a fill with no glyph clip and no clip box is not drawn |
 | A layer glyph past the font's glyphs (a damaged font) | a layer's glyph N is past the font's glyphs (a damaged font) |
+
+Not refused, because COLR defines them: an ill-formed linear gradient
+(p1 or p2 at p0, or p0p2 parallel to p0p1, within 1e-6 of the sine), a
+gradient flattened by a singular transform, and a radial with both radii
+0 "must not be rendered" (OpenType 1.9.1, COLR), so their layer draws
+nothing and the glyph's other layers draw. Fluent Color has 9 such glyphs
+(p2 equal to p0); the first build refused them.
 
 Each ends with what to do: "use Noto's build without flags
 (Noto-COLRv1-noflags.ttf) or Twemoji" for SOFT_LIGHT, else "use a font

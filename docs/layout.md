@@ -367,6 +367,11 @@ stores them (pack.md 18). The decisions are the user's of 2026-11-18
   formats. HarfBuzz's sanitizer already refuses a chain of more than 64
   paints (the whole COLR, and the font with it); a chain through the
   LayerList passes it, and the walk catches that.
+- A gradient that COLR calls ill-formed (p1 or p2 at p0, p0p2 parallel
+  to p0p1 within 1e-6 of the sine, flattened by a singular transform, or
+  a radial with both radii 0) "must not be rendered": its layer is left
+  out and the glyph's other layers draw (`test_layout` part 9's p2 = p0
+  case).
 - What the layers cannot draw exactly is refused per glyph; a layout that
   uses the glyph fails with `YLAY_ERR_REFUSED`, naming the font, the
   cluster's codepoints, the glyph, the feature and what to use instead.

@@ -577,6 +577,8 @@ enum {
     CFB1_B_STOPS17,    /* a color line of 17 stops                           */
     CFB1_B_R0,         /* a radial with a start radius of 50                 */
     CFB1_B_FOCAL,      /* a two-point radial whose focal point is outside     */
+    CFB1_B_ILLFORMED,  /* a box whose linear gradient has p2 = p0, and a disc:
+                        * the gradient's layer draws nothing (COLR), the disc does */
     CFB1_N
 };
 #define CFB1_CP(g) (0xE000u + (uint32_t)(g))   /* each base glyph's codepoint */
@@ -660,6 +662,13 @@ CFB_FN void cfb_emoji_v1_skip(cfb_buf* out, uint64_t skip) {
     cfb_v1_base(&f, CFB1_B_R0, cfb_paint_glyph(CFB1_L_BOX, k));
     k = cfb_paint_radial(100, 400, 0, 500, 400, 300); cfb_stops(k, 2, off2, pal2, NULL, CFB_EXTEND_PAD);
     cfb_v1_base(&f, CFB1_B_FOCAL, cfb_paint_glyph(CFB1_L_BOX, k));
+    {
+        int l0;
+        k = cfb_paint_linear(100, 0, 900, 0, 100, 0); cfb_stops(k, 2, off2, pal2, NULL, CFB_EXTEND_PAD);
+        l0 = cfb_v1_layer(&f, cfb_paint_glyph(CFB1_L_BOX, k));
+        cfb_v1_layer(&f, cfb_paint_glyph(CFB1_L_DISC, cfb_paint_solid(1, 1.0)));
+        cfb_v1_base(&f, CFB1_B_ILLFORMED, cfb_paint_layers(l0, 2));
+    }
     for (k = 0; k < f.n_base1; k++)   /* the cases skip leaves out: for a probe */
         if (skip >> (f.base1[k][0] - CFB1_B_SOLID) & 1u) { memmove(f.base1[k], f.base1[k + 1], sizeof f.base1[0] * (size_t)(f.n_base1 - k - 1)); f.n_base1--; k--; }
     cfb_write(&f, out);
