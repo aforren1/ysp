@@ -735,10 +735,12 @@ int ylay_stamp(const ylay_lib* L, const ylay_block* b, char* buf, size_t cap) {
     char tmp[512];
     if (!L) return YLAY_ERR_ARG;
     v = &L->versions;
-    k = snprintf(tmp, sizeof tmp, "ylay=%s skribidi=%s patch=%s harfbuzz=%s sheenbidi=%s libunibreak=%s budouxc=%s fonts=",
+    /* Straight into buf: the patch list outgrows any fixed buffer (six
+     * hashes made the line 600 bytes, and a 512-byte copy cut it). */
+    k = snprintf(buf && cap ? buf : NULL, buf ? cap : 0,
+                 "ylay=%s skribidi=%s patch=%s harfbuzz=%s sheenbidi=%s libunibreak=%s budouxc=%s fonts=",
                  v->ylay, v->skribidi, v->skribidi_patch, v->harfbuzz, v->sheenbidi, v->libunibreak, v->budouxc);
     need = (size_t)(k < 0 ? 0 : k);
-    if (buf && cap) snprintf(buf, cap, "%s", tmp);
     for (i = 0; i < L->n_fonts; i++) {
         const ylay__font* F = &L->fonts[i];
         if (b && !(b->fonts_used & ((uint64_t)1 << i))) continue;
