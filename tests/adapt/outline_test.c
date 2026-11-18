@@ -725,6 +725,29 @@ static void t1_vector(void) {
         CHECK(cset_ok(&r));
         yol_cset_close(&r);
     }
+    /* v0.5.0: texels no glyph references (ysp/gfx.h's paint records) before
+     * and after a glyph; the set still checks, the glyph's own texels are
+     * where the format says, and a value that is not finite is refused */
+    {
+        yol_cset r;
+        yol_cset_desc dr;
+        float rec[8] = { 1, 0, 0, 0, 0.25f, 0.5f, 0.75f, 1 }, bad[4] = { 0, 0, 0, 0 };
+        uint32_t o;
+        memset(&dr, 0, sizeof dr);
+        dr.n_glyphs = 1;
+        CHECK(yol_cset_open(&r, &g_cx, &dr));
+        CHECK(yol_cset_add_texels(&r, rec, 2) == 0);
+        CHECK(yol_cset_add(&r, 0, &p) == YOL_OK);
+        o = r.words[8];
+        CHECK(r.words[o + 6] == 2 && r.n_texels == 2 + r.words[o + 7]);   /* the glyph's first texel follows the record */
+        CHECK(yol_cset_add_texels(&r, rec, 2) == (int)r.n_texels - 2);
+        CHECK(!memcmp(r.texels, rec, sizeof rec) && !memcmp(r.texels + 4 * (r.n_texels - 2), rec, sizeof rec));
+        CHECK(cset_ok(&r));
+        bad[2] = (float)(1e308 * 1e10);
+        CHECK(yol_cset_add_texels(&r, bad, 1) == YOL_ERR_ARG && strstr(yol_error(&g_cx), "not finite"));
+        CHECK(yol_cset_add_texels(&r, NULL, 1) == YOL_ERR_ARG && yol_cset_add_texels(&r, NULL, 0) == (int)r.n_texels);
+        yol_cset_close(&r);
+    }
     yol_cset_close(&s);
     yol_path_free(&p);
 }

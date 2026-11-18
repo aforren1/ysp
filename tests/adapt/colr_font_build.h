@@ -551,4 +551,119 @@ CFB_FN void cfb_emoji_v0(cfb_buf* out) {
     cfb_write(&f, out);
 }
 
+
+/* Glyph ids of cfb_emoji_v1(): the outlines, then one base glyph per case.
+ * CFB1_B_SOLID .. CFB1_B_CLIP draw; CFB1_B_OVERLAP on are refused. */
+enum {
+    CFB1_L_BOX = 1, CFB1_L_DISC, CFB1_L_TRI, CFB1_L_SMALL, CFB1_L_RIGHT,
+    CFB1_B_SOLID,      /* two layers: a box, a disc at alpha 0.5           */
+    CFB1_B_LINEAR,     /* a box, a linear gradient from x 100 to 900        */
+    CFB1_B_RADIAL,     /* a disc, a radial gradient: center (500, 400), r 300, 3 stops */
+    CFB1_B_TWOPT,      /* a box, a two-point radial: focal (400, 400), end circle (500, 400) r 300 */
+    CFB1_B_XFORM,      /* the small box translated by (300, 100): a layer glyph */
+    CFB1_B_ROTATE,     /* the small box and its linear gradient turned 30 degrees (F2DOT14: 2731 / 16384 half turns) */
+    CFB1_B_ELLIPSE,    /* a box; the radial gradient scaled 2 x 1 inside it  */
+    CFB1_B_OPACITY,    /* group opacity 0.5 over two boxes that do not overlap */
+    CFB1_B_CLIP,       /* a box cut by its clip box (200, 100) - (700, 600)  */
+    CFB1_B_OVERLAP,    /* group opacity over a box and a disc that overlap   */
+    CFB1_B_SOFT,       /* SOFT_LIGHT                                         */
+    CFB1_B_SWEEP,      /* a sweep gradient                                   */
+    CFB1_B_COLRGLYPH,  /* PaintColrGlyph                                     */
+    CFB1_B_FG,         /* the foreground color                               */
+    CFB1_B_REPEAT,     /* a linear gradient with extend repeat               */
+    CFB1_B_VAR,        /* PaintVarSolid                                      */
+    CFB1_B_DEEP,       /* 70 PaintColrLayers nested through the LayerList     */
+    CFB1_B_WIDE,       /* 255 x 64 layers: past 16,384 edges                  */
+    CFB1_B_STOPS17,    /* a color line of 17 stops                           */
+    CFB1_B_R0,         /* a radial with a start radius of 50                 */
+    CFB1_B_FOCAL,      /* a two-point radial whose focal point is outside     */
+    CFB1_N
+};
+#define CFB1_CP(g) (0xE000u + (uint32_t)(g))   /* each base glyph's codepoint */
+
+/* A COLR version 1 font (1000 units per em, palette red, green, blue,
+ * white) of the cases above, each base glyph mapped to CFB1_CP(id). */
+CFB_FN void cfb_emoji_v1_skip(cfb_buf* out, uint64_t skip) {
+    static cfb_font f;
+    int g, k, i;
+    double off2[2] = { 0, 1 }, off3[3] = { 0, 0.5, 1 }, off17[17];
+    int pal2[2] = { 0, 2 }, pal3[3] = { 0, 1, 2 }, pal17[17];
+    double a3[3] = { 1, 0.5, 1 };
+    cfb_nn = 0;
+    cfb_init(&f, 1000);
+    for (g = 1; g < CFB1_N; g++) cfb_add_glyph(&f);
+    cfb_box(&f.g[CFB1_L_BOX], 100, 0, 900, 800);
+    cfb_disc(&f.g[CFB1_L_DISC], 500, 400, 300);
+    cfb_tri(&f.g[CFB1_L_TRI], 200, 100, 500, 700, 800, 100);
+    cfb_box(&f.g[CFB1_L_SMALL], 0, 100, 200, 300);
+    cfb_box(&f.g[CFB1_L_RIGHT], 600, 0, 900, 300);
+    for (g = CFB1_B_SOLID; g < CFB1_N; g++) { cfb_box(&f.g[g], 100, 0, 900, 800); cfb_map(&f, CFB1_CP(g), g); }
+    cfb_color(&f, 0xFF0000FFu); cfb_color(&f, 0x00FF00FFu); cfb_color(&f, 0x0000FFFFu); cfb_color(&f, 0xFFFFFFFFu);
+    {
+        int l0 = cfb_v1_layer(&f, cfb_paint_glyph(CFB1_L_BOX, cfb_paint_solid(0, 1.0)));
+        cfb_v1_layer(&f, cfb_paint_glyph(CFB1_L_DISC, cfb_paint_solid(1, 0.5)));
+        cfb_v1_base(&f, CFB1_B_SOLID, cfb_paint_layers(l0, 2));
+    }
+    k = cfb_paint_linear(100, 0, 900, 0, 100, 100); cfb_stops(k, 2, off2, pal2, NULL, CFB_EXTEND_PAD);
+    cfb_v1_base(&f, CFB1_B_LINEAR, cfb_paint_glyph(CFB1_L_BOX, k));
+    k = cfb_paint_radial(500, 400, 0, 500, 400, 300); cfb_stops(k, 3, off3, pal3, a3, CFB_EXTEND_PAD);
+    cfb_v1_base(&f, CFB1_B_RADIAL, cfb_paint_glyph(CFB1_L_DISC, k));
+    k = cfb_paint_radial(400, 400, 0, 500, 400, 300); cfb_stops(k, 2, off2, pal2, NULL, CFB_EXTEND_PAD);
+    cfb_v1_base(&f, CFB1_B_TWOPT, cfb_paint_glyph(CFB1_L_BOX, k));
+    cfb_v1_base(&f, CFB1_B_XFORM, cfb_paint_translate(cfb_paint_glyph(CFB1_L_SMALL, cfb_paint_solid(2, 1.0)), 300, 100));
+    k = cfb_paint_linear(0, 0, 200, 0, 0, 100); cfb_stops(k, 2, off2, pal2, NULL, CFB_EXTEND_PAD);
+    cfb_v1_base(&f, CFB1_B_ROTATE, cfb_paint_rotate(cfb_paint_glyph(CFB1_L_SMALL, k), 30));
+    k = cfb_paint_radial(250, 400, 0, 250, 400, 150); cfb_stops(k, 2, off2, pal2, NULL, CFB_EXTEND_PAD);
+    cfb_v1_base(&f, CFB1_B_ELLIPSE, cfb_paint_glyph(CFB1_L_BOX, cfb_paint_transform(k, 2.0, 0, 0, 1.0, 0, 0)));   /* F2DOT14 stops below 2 */
+    {
+        int l0 = cfb_v1_layer(&f, cfb_paint_glyph(CFB1_L_SMALL, cfb_paint_solid(2, 1.0)));
+        cfb_v1_layer(&f, cfb_paint_glyph(CFB1_L_RIGHT, cfb_paint_solid(3, 0.8)));
+        cfb_v1_base(&f, CFB1_B_OPACITY, cfb_paint_composite(cfb_paint_layers(l0, 2), CFB_SRC_IN, cfb_paint_solid(1, 0.5)));
+    }
+    cfb_v1_base(&f, CFB1_B_CLIP, cfb_paint_glyph(CFB1_L_BOX, cfb_paint_solid(1, 1.0)));
+    cfb_v1_clip(&f, CFB1_B_CLIP, CFB1_B_CLIP, 200, 100, 700, 600);
+    {
+        int l0 = cfb_v1_layer(&f, cfb_paint_glyph(CFB1_L_BOX, cfb_paint_solid(0, 1.0)));
+        cfb_v1_layer(&f, cfb_paint_glyph(CFB1_L_DISC, cfb_paint_solid(1, 1.0)));
+        cfb_v1_base(&f, CFB1_B_OVERLAP, cfb_paint_composite(cfb_paint_layers(l0, 2), CFB_SRC_IN, cfb_paint_solid(1, 0.5)));
+    }
+    cfb_v1_base(&f, CFB1_B_SOFT, cfb_paint_composite(cfb_paint_glyph(CFB1_L_BOX, cfb_paint_solid(0, 1.0)), CFB_SOFT_LIGHT,
+                                                     cfb_paint_glyph(CFB1_L_DISC, cfb_paint_solid(1, 1.0))));
+    k = cfb_paint_sweep(500, 400, 0, 1.0); cfb_stops(k, 2, off2, pal2, NULL, CFB_EXTEND_PAD);
+    cfb_v1_base(&f, CFB1_B_SWEEP, cfb_paint_glyph(CFB1_L_BOX, k));
+    cfb_v1_base(&f, CFB1_B_COLRGLYPH, cfb_paint_colr_glyph(CFB1_B_SOLID));
+    cfb_v1_base(&f, CFB1_B_FG, cfb_paint_glyph(CFB1_L_BOX, cfb_paint_solid(0xFFFF, 1.0)));
+    k = cfb_paint_linear(100, 0, 900, 0, 100, 100); cfb_stops(k, 2, off2, pal2, NULL, CFB_EXTEND_REPEAT);
+    cfb_v1_base(&f, CFB1_B_REPEAT, cfb_paint_glyph(CFB1_L_BOX, k));
+    cfb_v1_base(&f, CFB1_B_VAR, cfb_paint_glyph(CFB1_L_BOX, cfb_paint_var_solid(0, 1.0)));
+    {   /* nested through the LayerList: HarfBuzz's sanitizer does not follow
+         * it (a chain of 70 transforms fails sanitizing, and the whole COLR
+         * with it), its paint walk stops at 64 levels without an error */
+        int d0 = f.n_layer1;
+        for (i = 0; i < 70; i++) cfb_v1_layer(&f, cfb_paint_layers(d0 + i + 1, 1));
+        cfb_v1_layer(&f, cfb_paint_glyph(CFB1_L_SMALL, cfb_paint_solid(0, 1.0)));
+        cfb_v1_base(&f, CFB1_B_DEEP, cfb_paint_layers(d0, 1));
+    }
+    {
+        int leaf0 = f.n_layer1, mid0;
+        cfb_v1_layer(&f, cfb_paint_glyph(CFB1_L_SMALL, cfb_paint_solid(0, 1.0)));
+        for (i = 1; i < 64; i++) cfb_v1_layer(&f, -1);
+        mid0 = f.n_layer1;
+        cfb_v1_layer(&f, cfb_paint_layers(leaf0, 64));
+        for (i = 1; i < 255; i++) cfb_v1_layer(&f, -1);
+        cfb_v1_base(&f, CFB1_B_WIDE, cfb_paint_layers(mid0, 255));
+    }
+    for (i = 0; i < 17; i++) { off17[i] = i / 16.0; pal17[i] = i & 3; }
+    k = cfb_paint_linear(100, 0, 900, 0, 100, 100); cfb_stops(k, 17, off17, pal17, NULL, CFB_EXTEND_PAD);
+    cfb_v1_base(&f, CFB1_B_STOPS17, cfb_paint_glyph(CFB1_L_BOX, k));
+    k = cfb_paint_radial(500, 400, 50, 500, 400, 300); cfb_stops(k, 2, off2, pal2, NULL, CFB_EXTEND_PAD);
+    cfb_v1_base(&f, CFB1_B_R0, cfb_paint_glyph(CFB1_L_BOX, k));
+    k = cfb_paint_radial(100, 400, 0, 500, 400, 300); cfb_stops(k, 2, off2, pal2, NULL, CFB_EXTEND_PAD);
+    cfb_v1_base(&f, CFB1_B_FOCAL, cfb_paint_glyph(CFB1_L_BOX, k));
+    for (k = 0; k < f.n_base1; k++)   /* the cases skip leaves out: for a probe */
+        if (skip >> (f.base1[k][0] - CFB1_B_SOLID) & 1u) { memmove(f.base1[k], f.base1[k + 1], sizeof f.base1[0] * (size_t)(f.n_base1 - k - 1)); f.n_base1--; k--; }
+    cfb_write(&f, out);
+}
+CFB_FN void cfb_emoji_v1(cfb_buf* out) { cfb_emoji_v1_skip(out, 0); }
+
 #endif

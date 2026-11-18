@@ -15,7 +15,7 @@ C11 or C++17, and its top comment is its manual.
 | [trials](docs/trials.md) | `ytr_` | Trial orders, blocks, adaptive tracks, jitter, variables per trial, walks, replay, a CSV row per trial | 0.8.1 | tested |
 | [dataset](docs/dataset.md) | `yds_` | A session's data set: session.json, trial, frame, event, clock and stream tables, a zip for the web | 0.3.0 | tested |
 | [table](docs/table.md) | `ytb_` | Typed tables and a bounded CSV parser | 0.3.1 | tested |
-| [pack](docs/pack.md) | `ypak_` | Read and verify ysp packs (store-only zip) | 0.4.0 | tested |
+| [pack](docs/pack.md) | `ypak_` | Read and verify ysp packs (store-only zip); pack formats 1 and 2 (color glyphs) | 0.5.0 | tested |
 | [json](docs/json.md) | `yjs_` | Strict JSON reader and canonical writer | 0.2.1 | tested |
 | [experiment](docs/experiment.md) | `yexp_` | Reads an experiment definition (format versions 1 and 2) into a checked, fully defaulted form; canonical bytes and experiment ID, which the pack tool stores | 0.5.3 | tested |
 | [stair](docs/adapt.md) | `yst_` | Adaptive staircases | 0.3.0 | tested |
@@ -31,7 +31,7 @@ C11 or C++17, and its top comment is its manual.
 | [net](docs/net.md) | `ynet_` | Lab Streaming Layer markers and streams | 0.3.2 | no device |
 | [color](docs/color.md) | `ycol_` | Display calibration and color space conversions | 0.4.0 | tested |
 | [rdk](docs/rdk.md) | `yrdk_` | Random dot kinematograms, reproducible bit for bit | 0.3.1 | tested |
-| [outline](docs/outline.md) | `yol_` | Paths, font glyphs and SVG into curve sets | 0.4.1 | tested |
+| [outline](docs/outline.md) | `yol_` | Paths, font glyphs and SVG into curve sets | 0.5.0 | tested |
 | [screen](docs/screen.md) | `yscr_` | Stimulus window, flip at a time, flip records; Linux X11, macOS and web backends | 0.20.0 | 3 machines |
 | [audio](docs/audio.md) | `yau_` | Sound at a time and its capture on the rig clock; Linux ALSA exclusive, output and input; CoreAudio on macOS; Web Audio in a browser | 0.9.1 | 3 machines |
 | [gfx](docs/gfx.md) | `ygfx_` | GL ES 3.0 stimuli: shapes, gratings, gabors, text, frame capture | 0.21.0 | 2 machines |

@@ -2,7 +2,8 @@
 
 Status: v0.3.0, 2026-11-18 (v0.1.0, 2026-10-07: the first build; v0.2.0:
 font fallback past the script, [Patch 0003](#patch-0003-font-fallback-past-the-script);
-v0.3.0: emoji, [Emoji](#emoji) and [Patch 0004](#patch-0004-a-run-whose-family-has-no-font)).
+v0.3.0: emoji and color glyphs, [Emoji](#emoji), [Color glyphs](#color-glyphs) and
+[Patch 0004](#patch-0004-a-run-whose-family-has-no-font)).
 The decision record is
 [layout_probe.md](layout_probe.md); this note is the manual of what was
 built on it, with the checks and the costs. The plan is
@@ -270,6 +271,9 @@ The header is the reference. In short:
 | `ylay_stamp(L, block, buf, cap)` | The versions and font hashes as one line |
 | `ylay_missing_chars(L, out, cap)` | The characters of the last call's glyph-0 items, in text order, with their runs' ISO 15924 scripts; `in_a_font` tells a character no font maps from one a font maps (v0.2.0) |
 | `ylay_skb_fonts`, `_attributes`, `_temp` | Skribidi's objects, for its editor |
+| `ylay_color_glyph(L, font, glyph, &layers)` | A color glyph's layers (set glyph, paint texel index), or `YLAY_ERR_REFUSED` with the reason (v0.3.0) |
+| `ylay_color_paints(L, font, &texels)` | The font's paint records, the first texels of its set (v0.3.0) |
+| `ylay_open_set`, `ylay_build_glyphs` | A set built as the library builds the font's: paints first, then font and layer glyphs; the pack tool's CURVESET (v0.3.0) |
 
 ### Font fallback
 
@@ -312,6 +316,65 @@ layers, 2: version 1 paints).
   CBDT build, Apple Color Emoji), with the advice to use Twemoji. A font
   with COLR and CBDT or SVG (the Fluent builds) is accepted; its COLR is
   used. A COLR table that HarfBuzz rejects is refused (`YLAY_ERR_FORMAT`).
+
+### Color glyphs
+
+`ylay_add_font()` flattens every color glyph of a COLR font (v0.3.0), so
+a layout gives an emoji as layers that `ysp/gfx.h` draws, and the pack
+stores them (pack.md 18). The decisions are the user's of 2026-11-18
+([emoji_colr_survey.md](emoji_colr_survey.md), "Decisions").
+
+- Each glyph that COLR has (version 1 paint, or version 0 layers) is
+  painted once with `hb_font_paint_glyph()`, palette 0, at a scale of
+  units per em, so every coordinate is in font units. Callbacks keep a
+  stack of transforms, clips and groups and collect the fills.
+- A fill becomes a **layer**: a clip outline and a paint.
+  - The outline is the clip glyph under the transform in force at the
+    clip, baked into its points (an affine map of a quadratic is exact),
+    in em with y down. With no transform it is the font's own glyph; else
+    a **layer glyph**, an id past the font's glyphs in the font's set,
+    one per distinct glyph, transform and cut. A clip box (the ClipList
+    rectangle at the root, under an axis-aligned transform) that cuts the
+    outline's control-point box is cut into it: each contour clipped to
+    the four half-planes, the parts outside replaced by the boundary
+    line, then resolved; a box that does not cut adds nothing.
+  - The paint is a **paint record** of texels (gfx.md, "Paint records"):
+    a solid; a linear gradient as an affine function t of the em point
+    (COLRv1's p0, p1 and the normal to p2 - p0, through the inverse of
+    the gradient's own transform); a radial gradient as a 2x3 matrix to
+    the space where the end circle is the unit circle about the start
+    point, and the start point's offset d, so t solves
+    |q - t d| = t. Up to 16 stops, sorted stably by offset (equal offsets
+    are a hard edge), pad. Colors are CPAL's sRGB codes decoded to linear
+    light (IEC 61966-2-1) and premultiplied, as gfx.h blends, in f32.
+- Group opacity (nanoemoji's SVG opacity: PaintComposite SRC_IN over a
+  backdrop of one solid with no glyph clip) becomes the solid's alpha on
+  each layer of the source, when no two of those layers overlap: each
+  pair's areas against the area of their union, resolved (overlap above
+  1e-7 of the two areas refuses the glyph). SRC_OVER composites draw in
+  order.
+- Alpha reaches the flattening as HarfBuzz's 8 bits (`hb_color_t`): a
+  PaintSolid alpha of 0.5 (F2DOT14 8192) is 128/255 = 0.50196. Within
+  1/510 of the font's value.
+- Records are deduplicated by their bytes, layer glyphs by glyph,
+  transform and cut. Every record is written into the font's set at open,
+  first, in glyph id order, so the indexes depend on the font alone: the
+  pack tool's set (`ylay_open_set()`) has the same ones.
+- A second, independent walk of the COLR table counts each glyph's paint
+  graph the way HarfBuzz recurses (an edge per paint, depth from the
+  root), and refuses a glyph that reaches 64 levels or 16,384 edges,
+  where HarfBuzz stops without an error; it also finds the PaintVar
+  formats. HarfBuzz's sanitizer already refuses a chain of more than 64
+  paints (the whole COLR, and the font with it); a chain through the
+  LayerList passes it, and the walk catches that.
+- What the layers cannot draw exactly is refused per glyph; a layout that
+  uses the glyph fails with `YLAY_ERR_REFUSED`, naming the font, the
+  cluster's codepoints, the glyph, the feature and what to use instead.
+  The list is in [pack.md](pack.md#what-the-tool-refuses) 18.
+- A layout puts each color glyph's layers, in order, in a run of their
+  own (`ylay_run.flags` `YLAY_RUN_PAINT`): one per font and size, so a
+  page of emoji is one draw. The items' `color` is the record's texel
+  index; draw the run with `YGFX_I_PAINT`.
 
 A character that no font in the list maps still gets glyph 0.
 `ylay_missing_chars()` names the characters of the last call's glyph-0
@@ -387,6 +450,35 @@ characters are missing and from which text.
    ZWJ sequence was 1 item of glyph 3, text with only the emoji font gave
    no items, the two-font order and the heart checks failed, and the three
    refusals were accepted.
+
+9. Color glyphs (v0.3.0), with a COLR version 0 font and a COLR version
+   1 font of 21 cases, both written by the test. Version 0: the grin's
+   two layers, its yellow record (kind 1, linear-light values of
+   0xFFCC22, alpha 1) and the snowman's half alpha, premultiplied; no
+   layer glyph. Version 1: the solid case (alpha 128/255); a linear
+   gradient's t at three points; a three-stop radial's t and its middle
+   stop; a two-point radial at its focal point and on its end circle; an
+   elliptical radial (the gradient scaled 2 x 1 inside an unscaled box)
+   at four points; group opacity over two boxes apart as alphas 128/255
+   and 204/255 of that; the set (`ylay_open_set()`, every glyph) passes
+   `ygfx_cset_check()` and starts with the paints; a translated box, a
+   box turned by COLR's 30 degrees (2731/16384 half turns) and a box cut
+   by its clip box are layer glyphs with the boxes they should have
+   (within 1e-6 em); a second flattening gives the same records and
+   layers; a layout of an emoji gives one paint run and builds its layer
+   glyph. The twelve refused cases each name their feature, and a
+   layout of the soft light case names U+E010 and glyph 16.
+
+   The fuzz target `tests/fuzz/colr_fuzz.c` (CMake target `colr_fuzz`,
+   self-driven: mutations of the two written fonts, a third of them
+   inside the COLR table) checks every accepted font's layers, records
+   and set (2026-11-18, Linux gcc 12): 300,002 inputs under ASan and
+   UBSan (the sanitizers tree, Debug, `setarch -R`), no report, 461,031
+   color glyphs flattened and 77,537 sets built and checked; 300,002 more
+   in Release with a layout each. Its first run found a layer whose clip
+   glyph is past the font's glyphs (HarfBuzz passes COLR's glyph ids on
+   unchecked), which gave a layer glyph past the set; such a glyph is now
+   refused as a damaged font.
 
 ### The corpus against Chromium
 
@@ -690,9 +782,17 @@ as `examples/layout/gfx_layout.c` does. Its manual is
 - Variable-font instances and CFF2 through HarfBuzz's draw API into
   `ysp/outline.h`'s builder (layout_probe.md 8.4): a font `ysp/outline.h`
   refuses is refused here.
-- Color glyphs, decorations (underline, the IME composition's underline),
-  Skribidi's icons and inline objects: the glue converts text runs only.
-  What color emoji fonts need: [emoji_colr_survey.md](emoji_colr_survey.md).
+- Decorations (underline, the IME composition's underline), Skribidi's
+  icons and inline objects: the glue converts text runs only.
+- Color glyphs the layers cannot draw exactly (Color glyphs): offscreen
+  groups (SOFT_LIGHT, group opacity over overlapping layers) are a later
+  addition; sweep gradients, extend repeat and reflect, the foreground
+  color, variable COLR and PaintColrGlyph are refused by name.
+- A damaged cmap or GSUB can give a shaped glyph id above 0xFFFF:
+  Skribidi asserts on it in a Debug build (`skb__shape_run()`, found by
+  `tests/fuzz/colr_fuzz.c` with its layout step) and keeps the low 16
+  bits in a Release build; the glue drops an id past the font's set, so
+  the result is a wrong glyph or none.
 - Serializing blocks into the pack: the pack tool's job, next.
 - The designer's path (Skribidi in a browser page with composition events
   and a hidden text input) and the editor's IME with a real input method:

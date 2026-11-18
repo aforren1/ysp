@@ -1,4 +1,4 @@
-/* ysp/outline.h - v0.4.1 - public domain single-header outline builder:
+/* ysp/outline.h - v0.5.0 - public domain single-header outline builder:
  *   paths, font outlines, overlap removal, strokes, exact alpha and curve
  *   sets for ysp/gfx.h
  *
@@ -256,6 +256,11 @@
  *   so ygfx_cset_add() never sees half a glyph. The arrays grow on the
  *   context's allocator, or stay in the caller's storage (ctx NULL at
  *   init; growth past the caps is YOL_ERR_FULL).
+ *   yol_cset_add_texels() (v0.5) appends texels that no glyph references:
+ *   records a reader finds by texel index, such as ysp/gfx.h's paint
+ *   records for color glyphs (gfx.h CURVE RUNS, PAINT RECORDS). The format
+ *   allows them: a glyph's list entries reference its own texels only.
+ *   This header writes them and draws nothing in color.
  *
  *   ---------------------------------------------------------------------
  *   MEMORY
@@ -307,6 +312,10 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.5.0 - yol_cset_add_texels(): appends texels no glyph references and
+ *          returns the first one's index, for paint records that
+ *          ysp/gfx.h reads from a set's texels (color glyphs, pack/layout
+ *          0.3.0). Not finite values are refused. No output changed.
  *   v0.4.1 - Builds under gcc 11.4 -O1 -Werror (Ubuntu 22.04): gcc
  *          flagged (-Wmaybe-uninitialized) a CFF DICT operand that the
  *          number reader always writes before it returns 0; the reader
@@ -426,9 +435,9 @@ extern "C" {
 #endif
 
 #define YOL_VERSION_MAJOR  0
-#define YOL_VERSION_MINOR  4
-#define YOL_VERSION_PATCH  1
-#define YOL_VERSION_STRING "0.4.1"
+#define YOL_VERSION_MINOR  5
+#define YOL_VERSION_PATCH  0
+#define YOL_VERSION_STRING "0.5.0"
 
 /* YOL_VERSION_STRING, as compiled into the implementation. */
 YOL_API const char* yol_version(void);
@@ -709,6 +718,10 @@ YOL_API void yol_cset_close(yol_cset* s);
  * contours, the record, the bands and their lists, then the table entry
  * last. An empty or zero-area p gives an empty record. */
 YOL_API int  yol_cset_add(yol_cset* s, uint32_t glyph, const yol_path* p);
+/* v0.5: appends n texels (4 floats each, all finite) that no glyph
+ * references, such as ysp/gfx.h's paint records. Returns the first one's
+ * index, or a code (YOL_ERR_ARG for a value that is not finite). */
+YOL_API int  yol_cset_add_texels(yol_cset* s, const float* texels, uint32_t n);
 /* Font glyphs in em, y down, pen at 0, 0. glyphs NULL: every glyph 0 .. n - 1
  * (n 0: the font's count). tol: the CFF cubic tolerance in em (0: 1e-4). */
 YOL_API int  yol_cset_add_font(yol_cset* s, const yol_font* f, const uint32_t* glyphs,
@@ -4617,6 +4630,27 @@ YOL_API int yol_cset_add(yol_cset* s, uint32_t glyph, const yol_path* p) {
     yol_ctx* c = s ? s->ctx : NULL;
     uint32_t n0 = c ? c->n_err : 0;
     return yol__done(c, n0, yol__cset_add(s, glyph, p), "curve set");
+}
+
+static int yol__cset_add_texels(yol_cset* s, const float* t, uint32_t n) {
+    uint32_t i, at;
+    int rc;
+    if (n && !t) return yol__err(s->ctx, YOL_ERR_ARG, "curve set: no texels");
+    for (i = 0; i < 4 * n; i++)
+        if (!yol__finite((double)t[i])) return yol__err(s->ctx, YOL_ERR_ARG, "curve set: texel %u is not finite", i / 4);
+    rc = yol__cset_texels(s, n);
+    if (rc < 0) return rc;
+    at = s->n_texels;
+    if (n) memcpy(s->texels + 4 * (size_t)at, t, 16 * (size_t)n);
+    s->n_texels += n;
+    return (int)at;
+}
+
+YOL_API int yol_cset_add_texels(yol_cset* s, const float* texels, uint32_t n) {
+    yol_ctx* c = s ? s->ctx : NULL;
+    uint32_t n0 = c ? c->n_err : 0;
+    if (!s) return YOL_ERR_ARG;
+    return yol__done(c, n0, yol__cset_add_texels(s, texels, n), "curve set");
 }
 
 YOL_API int yol_cset_add_font(yol_cset* s, const yol_font* f, const uint32_t* glyphs, uint32_t n, double tol) {

@@ -41,5 +41,9 @@ int main(void) {
     (void)g_pack_api.strerror;
     (void)g_pack_api.cursor_init;
     if (g_pack_api.verify_entry(&pk, NULL) != YPAK_ERR_ARG) return 7;
+    {   /* v0.5.0: formats 1 and 2; a run's 16-bit font index and its flags */
+        ypak_runs_run r = { 1, YPAK_RUN_PAINT, 32.0f, 0, 1 };
+        if (YPAK_FORMAT_MIN != 1 || YPAK_FORMAT != 2 || sizeof r != 16 || r.flags != YPAK_RUN_PAINT || (YPAK_CSET_COLOR & YPAK_CSET_ALL)) return 8;
+    }
     return ypak_kind_id("table") == YPAK_KIND_TABLE ? 0 : 4;
 }

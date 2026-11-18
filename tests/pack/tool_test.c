@@ -58,6 +58,7 @@ static int g_fail, g_checks;
 #define W "pack_tool_work"
 
 #include "../adapt/import_gen.h"
+#include "../adapt/colr_font_build.h"
 
 #ifndef YPT_NO_LAYOUT
 /* Whether the n bytes at p hold the k bytes at q. */
@@ -2078,6 +2079,227 @@ static void test_core_pack(void) {
 #endif
 }
 
+/* --- color glyphs (tool v0.11.0, pack format 2) ------------------------------- */
+
+#define EM_GRIN "\xF0\x9F\x98\x80"
+#define EM_FAMILY "\xF0\x9F\x91\xA8\xE2\x80\x8D\xF0\x9F\x91\xA9"
+
+static void write_cfb(const char* path, const cfb_buf* b) { write_file(path, b->d, b->n); }
+
+/* The table tags of a single font's directory, as one string. */
+static void font_tags(const uint8_t* d, size_t n, char* out, size_t cap) {
+    uint32_t nt = n >= 12 ? ((uint32_t)d[4] << 8 | d[5]) : 0, i;
+    size_t k = 0;
+    out[0] = 0;
+    for (i = 0; i < nt && 12 + 16 * (size_t)i + 4 <= n && k + 6 < cap; i++) {
+        memcpy(out + k, d + 12 + 16 * i, 4);
+        out[k + 4] = ' ';
+        k += 5;
+        out[k] = 0;
+    }
+}
+
+#define COLOR_DESC(fonts, csets, runfonts, text) \
+    "{\"format\": \"ysp-pack-source\", \"version\": 1, \"resources\": [" fonts csets \
+    " {\"name\": \"text/emoji.ysprun\", \"kind\": \"glyphruns\", \"fonts\": [" runfonts "],\n" \
+    "  \"blocks\": [{\"key\": \"k1\", \"text\": \"" text "\", \"size\": \"48\"}]}]}\n"
+
+#ifndef YPT_NO_LAYOUT
+/* The pack's color checks: format 2, a GLYPHRUNS of version 2 with a paint
+ * run, a CURVESET with the color flag whose first texels are the layout
+ * library's paints and that holds every glyph the paint run names. */
+static void color_pack_checks(const char* path, const char* font_path, const char* cset_name, int font_index) {
+    ypak_pack p;
+    ypak_desc d;
+    ypak_entry e, ce;
+    ypak_runs r;
+    ypak_cset cs;
+    char err[300];
+    uint32_t i, paint_runs = 0, items_ok = 1;
+    memset(&d, 0, sizeof d);
+    d.path = path;
+    if (!ypak_open(&p, &d)) { CHECK(0, "%s: %s", path, ypak_error(&p)); return; }
+    CHECK(p.format == 2, "%s: pack format %d, want 2", path, (int)p.format);
+    if (ypak_find(&p, "text/emoji.ysprun", &e) == 0 && ypak_find(&p, cset_name, &ce) == 0) {
+        const uint8_t* rd = (const uint8_t*)ypak_data(&p, &e);
+        const void* cd = ypak_data(&p, &ce);
+        CHECK(rd && rd[8] == 2, "%s: glyph runs version %d, want 2", path, rd ? rd[8] : -1);
+        CHECK(ypak_runs_view(rd, e.size, &r, err, sizeof err) == 0, "%s: runs view: %s", path, err);
+        CHECK(ypak_cset_view(cd, ce.size, &cs, err, sizeof err) == 0 && (cs.flags & YPAK_CSET_COLOR), "%s: color set: %s, flags %u", path, err, cs.flags);
+        {
+            ygfx_cset_desc gd;
+            char msg[300];
+            memset(&gd, 0, sizeof gd);
+            gd.texels = cs.texels; gd.n_texels = cs.n_texels; gd.words = cs.words; gd.n_words = cs.n_words;
+            CHECK(ygfx_cset_check(&gd, msg, sizeof msg) == YGFX_OK, "%s: the color set's check: %s", path, msg);
+        }
+        {   /* its first texels are the layout library's paints */
+            size_t fn;
+            uint8_t* fb = read_all(font_path, &fn);
+            yol_ctx ol;
+            ylay_lib* L;
+            const float* pt;
+            int np;
+            yol_open(&ol, NULL);
+            ylay_create(&L, &(ylay_desc){ .ol = &ol });
+            ylay_add_font(L, fb, fn, 0, "f");
+            np = ylay_color_paints(L, 0, &pt);
+            CHECK(np > 0 && (uint32_t)np <= cs.n_texels && !memcmp(pt, cs.texels, 16 * (size_t)np), "%s: the set's first texels are not "
+                  "the %d paint texels", path, np);
+            for (i = 0; i < r.n_runs; i++) {
+                const ypak_runs_run* q = &r.runs[i];
+                uint32_t k;
+                if (!(q->flags & YPAK_RUN_PAINT)) continue;
+                paint_runs++;
+                CHECK(q->font == font_index, "%s: a paint run in font %u, want %d", path, q->font, font_index);
+                for (k = 0; k < q->n; k++) {
+                    const float* it = r.items + 8 * ((size_t)r.blocks[0].item_first + q->first + k);
+                    uint32_t g = (uint32_t)it[3], pi = (uint32_t)it[7];
+                    if (g >= cs.n_glyphs || !cs.words[8 + g] || (int)pi >= np || it[7] != (float)pi) items_ok = 0;
+                }
+            }
+            ylay_destroy(L);
+            yol_close(&ol);
+            free(fb);
+        }
+        CHECK(paint_runs == 1 && items_ok, "%s: %u paint runs (want 1); every layer's glyph in the set and paint a record: %d", path,
+              paint_runs, (int)items_ok);
+    } else CHECK(0, "%s: no glyph runs or no curve set entry", path);
+    ypak_close(&p);
+}
+#endif
+
+static void test_color_pack(void) {
+    char err[1024];
+    cfb_buf f0 = { 0, 0, 0 }, f1 = { 0, 0, 0 }, fx = { 0, 0, 0 };
+    static cfb_font cf;
+    int rc;
+    cfb_emoji_v0(&f0);
+    cfb_emoji_v1(&f1);
+    MKDIR(W "/fonts");
+    write_cfb(W "/fonts/emoji0.ttf", &f0);
+    write_cfb(W "/fonts/emoji1.ttf", &f1);
+    /* bitmaps and no COLR: refused at the font entry */
+    cfb_init(&cf, 1000);
+    cfb_add_glyph(&cf);
+    cfb_box(&cf.g[1], 100, 0, 900, 800);
+    cfb_map(&cf, CFB_GRIN, 1);
+    cfb_extra(&cf, "CBDT"); cfb_extra(&cf, "CBLC");
+    cfb_write(&cf, &fx);
+    write_cfb(W "/fonts/cbdt.ttf", &fx);
+    expect_refusal("CBDT font", "{\"kind\": \"font\", \"source\": \"fonts/cbdt.ttf\"}", "CBDT bitmaps and it has no COLR table", 0);
+#ifdef YPT_NO_LAYOUT
+    expect_refusal("COLR curve set, core tool",
+                   "{\"kind\": \"font\", \"source\": \"fonts/emoji0.ttf\"}, {\"kind\": \"curveset\", \"from\": \"fonts/emoji0.ttf\"}",
+                   "needs the layout library", 0);
+#else
+    {   /* COLR with CBDT and SVG: the font entry keeps COLR, drops the rest */
+        ypak_pack p;
+        ypak_desc d;
+        ypak_entry e;
+        char tags[256];
+        cfb_buf both = { 0, 0, 0 };
+        static cfb_font cb;
+        int g;
+        cfb_init(&cb, 1000);
+        for (g = 1; g < 3; g++) cfb_add_glyph(&cb);
+        cfb_box(&cb.g[1], 100, 0, 900, 800); cfb_box(&cb.g[2], 200, 100, 800, 700);
+        cfb_map(&cb, CFB_GRIN, 1);
+        cfb_color(&cb, 0xFF0000FFu);
+        { int gl = 2, pl = 0; cfb_v0(&cb, 1, 1, &gl, &pl); }
+        cfb_extra(&cb, "CBDT"); cfb_extra(&cb, "CBLC"); cfb_extra(&cb, "SVG ");
+        cfb_write(&cb, &both);
+        write_cfb(W "/fonts/both.ttf", &both);
+        rc = build_text("{\"format\": \"ysp-pack-source\", \"version\": 1, \"resources\": [{\"kind\": \"font\", \"source\": \"fonts/both.ttf\"}]}",
+                        W "/both.ysppak", err, sizeof err);
+        CHECK(rc == 0, "COLR with CBDT and SVG: %s", err);
+        memset(&d, 0, sizeof d);
+        d.path = W "/both.ysppak";
+        if (rc == 0 && ypak_open(&p, &d)) {
+            const uint8_t* x = ypak_find(&p, "fonts/both.ttf", &e) == 0 ? (const uint8_t*)ypak_data(&p, &e) : NULL;
+            const uint8_t* man = ypak_find(&p, "ysp/manifest.json", &e) == 0 ? (const uint8_t*)ypak_data(&p, &e) : NULL;
+            ypak_entry fe;
+            ypak_find(&p, "fonts/both.ttf", &fe);
+            if (x) font_tags(x, (size_t)fe.size, tags, sizeof tags);
+            CHECK(x && strstr(tags, "COLR") && strstr(tags, "CPAL") && !strstr(tags, "CBDT") && !strstr(tags, "CBLC") && !strstr(tags, "SVG ") &&
+                  (size_t)fe.size < both.n && p.format == 1,
+                  "COLR with CBDT and SVG: stored tables '%s', %lld of %zu bytes, format %d", tags, (long long)fe.size, both.n, (int)p.format);
+            CHECK(man && strstr((const char*)man, "\"drop_tables\"") && strstr((const char*)man, "\"CBDT\""), "the font entry's derivation records the drop");
+            {
+                yol_font yf;
+                char m[200];
+                CHECK(x && yol_font_view(&yf, x, (size_t)fe.size, 0, m, sizeof m) == 0, "the stripped font opens: %s", m);
+            }
+            ypak_close(&p);
+        }
+        free(both.d);
+        CHECK(ypt_verify(W "/both.ysppak", NULL, err, sizeof err) == 0 && ypt_rebuild(W "/both.ysppak", W, NULL, NULL, err, sizeof err) == 0,
+              "COLR with CBDT and SVG: verify and rebuild: %s", err);
+    }
+    {   /* COLR version 0: used glyphs, then all */
+        static const char* desc_used = COLOR_DESC(
+            "{\"kind\": \"font\", \"source\": \"fonts/box.ttf\"}, {\"kind\": \"font\", \"source\": \"fonts/emoji0.ttf\"},\n",
+            " {\"kind\": \"curveset\", \"from\": \"fonts/box.ttf\", \"glyphs\": \"used\"},"
+            " {\"kind\": \"curveset\", \"from\": \"fonts/emoji0.ttf\", \"glyphs\": \"used\"},\n",
+            "\"fonts/box.ttf\", \"fonts/emoji0.ttf\"", "a" EM_GRIN "b " EM_FAMILY);
+        static const char* desc_all = COLOR_DESC(
+            "{\"kind\": \"font\", \"source\": \"fonts/box.ttf\"}, {\"kind\": \"font\", \"source\": \"fonts/emoji0.ttf\"},\n",
+            " {\"kind\": \"curveset\", \"from\": \"fonts/box.ttf\"}, {\"kind\": \"curveset\", \"from\": \"fonts/emoji0.ttf\"},\n",
+            "\"fonts/box.ttf\", \"fonts/emoji0.ttf\"", "a" EM_GRIN "b " EM_FAMILY);
+        rc = build_text(desc_used, W "/emoji0.ysppak", err, sizeof err);
+        CHECK(rc == 0, "emoji v0 pack: %s", err);
+        if (rc == 0) {
+            color_pack_checks(W "/emoji0.ysppak", W "/fonts/emoji0.ttf", "fonts/emoji0.yspcset", 1);
+            CHECK(build_text(desc_used, W "/emoji0b.ysppak", err, sizeof err) == 0 && same_file(W "/emoji0.ysppak", W "/emoji0b.ysppak"),
+                  "emoji v0 pack twice: the same bytes");
+            CHECK(ypt_verify(W "/emoji0.ysppak", NULL, err, sizeof err) == 0, "emoji v0 pack verifies: %s", err);
+            rc = ypt_rebuild(W "/emoji0.ysppak", W, W "/emoji0r.ysppak", NULL, err, sizeof err);
+            CHECK(rc == 0 && same_file(W "/emoji0.ysppak", W "/emoji0r.ysppak"), "emoji v0 pack rebuilds: %s", err);
+        }
+        rc = build_text(desc_all, W "/emoji0all.ysppak", err, sizeof err);
+        CHECK(rc == 0, "emoji v0 pack, all glyphs: %s", err);
+        if (rc == 0) color_pack_checks(W "/emoji0all.ysppak", W "/fonts/emoji0.ttf", "fonts/emoji0.yspcset", 1);
+    }
+    {   /* COLR version 1: layer glyphs (a transform, a clip box) in a used set */
+        char text[64], desc[2048];
+        int n = 0;
+        uint32_t cps[3] = { CFB1_CP(CFB1_B_XFORM), CFB1_CP(CFB1_B_CLIP), CFB1_CP(CFB1_B_LINEAR) }, k;
+        for (k = 0; k < 3; k++) {   /* U+E00x in UTF-8 */
+            text[n++] = (char)(0xE0 | cps[k] >> 12); text[n++] = (char)(0x80 | (cps[k] >> 6 & 63)); text[n++] = (char)(0x80 | (cps[k] & 63));
+        }
+        text[n] = 0;
+        snprintf(desc, sizeof desc, COLOR_DESC("{\"kind\": \"font\", \"source\": \"fonts/box.ttf\"}, {\"kind\": \"font\", \"source\": \"fonts/emoji1.ttf\"},\n",
+                                               " {\"kind\": \"curveset\", \"from\": \"fonts/box.ttf\", \"glyphs\": \"used\"},"
+                                               " {\"kind\": \"curveset\", \"from\": \"fonts/emoji1.ttf\", \"glyphs\": \"used\"},\n",
+                                               "\"fonts/box.ttf\", \"fonts/emoji1.ttf\"", "%s"), text);
+        rc = build_text(desc, W "/emoji1.ysppak", err, sizeof err);
+        CHECK(rc == 0, "emoji v1 pack: %s", err);
+        if (rc == 0) color_pack_checks(W "/emoji1.ysppak", W "/fonts/emoji1.ttf", "fonts/emoji1.yspcset", 1);
+        /* a refused glyph: its codepoint, glyph, feature and advice */
+        n = 0;
+        cps[0] = CFB1_CP(CFB1_B_SOFT);
+        text[n++] = (char)(0xE0 | cps[0] >> 12); text[n++] = (char)(0x80 | (cps[0] >> 6 & 63)); text[n++] = (char)(0x80 | (cps[0] & 63));
+        text[n] = 0;
+        snprintf(desc, sizeof desc, COLOR_DESC("{\"kind\": \"font\", \"source\": \"fonts/box.ttf\"}, {\"kind\": \"font\", \"source\": \"fonts/emoji1.ttf\"},\n",
+                                               " {\"kind\": \"curveset\", \"from\": \"fonts/box.ttf\"}, {\"kind\": \"curveset\", \"from\": \"fonts/emoji1.ttf\"},\n",
+                                               "\"fonts/box.ttf\", \"fonts/emoji1.ttf\"", "%s"), text);
+        rc = build_text(desc, W "/refused.ysppak", err, sizeof err);
+        CHECK(rc < 0 && strstr(err, "U+E010 (glyph 16)") && strstr(err, "SOFT_LIGHT") && strstr(err, "Noto-COLRv1-noflags.ttf") &&
+              strstr(err, "fonts/emoji1.ttf") && strstr(err, "block 'k1'"),
+              "a soft light glyph: rc %d, '%s'", rc, err);
+    }
+    {   /* a pack without color glyphs stays format 1 */
+        ypak_pack p;
+        ypak_desc d;
+        memset(&d, 0, sizeof d);
+        d.path = W "/corpus.ysppak";
+        CHECK(ypak_open(&p, &d) && p.format == 1, "the corpus pack: format %d, want 1", (int)p.format);
+        ypak_close(&p);
+    }
+#endif
+    free(f0.d); free(f1.d); free(fx.d);
+}
+
 int main(void) {
     char err[1024];
     int rc;
@@ -2244,6 +2466,7 @@ int main(void) {
     test_ffmpeg_refusals();
     test_video();
     test_refusals();
+    test_color_pack();
     printf("tool_test: %d checks, %d failed\n", g_checks, g_fail);
     return g_fail ? 1 : 0;
 }

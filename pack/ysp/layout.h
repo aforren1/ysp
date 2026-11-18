@@ -47,6 +47,21 @@
  *   SVG documents and that has no COLR is refused (YLAY_ERR_REFUSED);
  *   ylay_font_info.color says which COLR a font has. The stamp's patch
  *   field lists four hashes.
+ *   Color glyphs: each color glyph of a COLR font is flattened at
+ *   ylay_add_font() with HarfBuzz's paint API into layers, each a clip
+ *   outline (the font's glyph, or a layer glyph past the font's: the glyph
+ *   under its transform, baked, and cut by the clip box where the box cuts
+ *   it) and a paint record (an RGBA solid, or a linear or radial gradient
+ *   of up to 16 stops, premultiplied, linear light) stored as texels at
+ *   the start of the font's curve set (ysp/gfx.h PAINT RECORDS). A layout
+ *   gives a color glyph as one item per layer in a run with
+ *   YLAY_RUN_PAINT: glyph the layer's set glyph, color its paint's texel
+ *   index; draw such a run with fields YGFX_I_PAINT. What the layers
+ *   cannot draw exactly is refused per glyph by name when a layout uses
+ *   it (YLAY_ERR_REFUSED; docs/layout.md, Color glyphs). New:
+ *   ylay_layer, ylay_color_glyph(), ylay_color_paints(), ylay_open_set(),
+ *   ylay_build_glyphs(); ylay_run.flags; ylay_font_info's color counts.
+ *   Breaking: ylay_run and ylay_font_info grew.
  */
 #ifndef YSP_LAYOUT_H_INCLUDED
 #define YSP_LAYOUT_H_INCLUDED
@@ -125,9 +140,39 @@ typedef struct ylay_font_info {
     int               color;           /* v0.3: 0 no COLR; 1 COLR version 0 layers;
                                         * 2 COLR version 1 paints. A COLR font is in
                                         * the emoji family (docs/layout.md, Emoji)   */
+    uint32_t          set_glyphs;      /* v0.3: the set's glyph table: n_glyphs plus
+                                        * the layer glyphs                         */
+    uint32_t          n_color_glyphs, n_refused;   /* v0.3: color glyphs; of them
+                                        * refused (a layout that uses one fails)    */
+    uint32_t          n_layers, n_layer_glyphs;    /* v0.3: layers of all color
+                                        * glyphs; layer glyphs past the font's      */
+    uint32_t          n_paint_texels;  /* v0.3: texels 0 .. n - 1 of the set        */
+    double            color_us;        /* v0.3: the flattening's time at add        */
 } ylay_font_info;
 int ylay_font(const ylay_lib* L, int font, ylay_font_info* out);
 int ylay_font_count(const ylay_lib* L);
+
+/* v0.3: color glyphs. A layer of a color glyph: a glyph of the font's set
+ * (the font's own, or a layer glyph, >= n_glyphs) and the texel index of
+ * its paint record in the same set. */
+typedef struct ylay_layer { uint32_t glyph, paint; } ylay_layer;
+
+/* The layers of glyph (a font glyph id), bottom first, in *layers (L's,
+ * valid until L is destroyed). Returns the layer count (0: not a color
+ * glyph, or a color glyph with nothing to draw), or YLAY_ERR_REFUSED with
+ * the reason in ylay_error() (the feature and what to use instead). */
+int ylay_color_glyph(ylay_lib* L, int font, uint32_t glyph, const ylay_layer** layers);
+/* The paint records' texels (4 floats each), the first texels of the
+ * font's set. Returns their count (0 for a font without COLR). */
+int ylay_color_paints(const ylay_lib* L, int font, const float** texels);
+/* Opens a set the way L builds the font's: set_glyphs entries, resolved,
+ * backward lists, the paint records first, so the glyph ids and paint
+ * indexes of L's layouts hold in it (the pack tool's CURVESET). On ctx. */
+int ylay_open_set(ylay_lib* L, int font, yol_cset* set, yol_ctx* ctx);
+/* Builds set glyphs (font glyphs, layer glyphs, or both; NULL: all of
+ * them, 0 .. set_glyphs - 1) into a set from ylay_open_set(). tol: the CFF
+ * cubic tolerance in em (0: 1e-4). */
+int ylay_build_glyphs(ylay_lib* L, int font, yol_cset* set, const uint32_t* glyphs, uint32_t n, double tol);
 
 /* The glyphs added to font's set since the last call, for ygfx_cset_add()
  * (or ygfx_cset_make() the first time). *glyphs is L's array and stays
@@ -164,10 +209,13 @@ typedef struct ylay_line {
 } ylay_line;
 
 /* The items of one font at one size: one ygfx_crun. */
+#define YLAY_RUN_PAINT 0x1u    /* v0.3: color glyph layers: glyph a set glyph, color
+                                * a paint record's texel index; YGFX_I_PAINT    */
 typedef struct ylay_run {
     int      font;
     float    size;             /* crun_desc.size                                   */
     uint32_t first, n;         /* into the block's items                           */
+    uint32_t flags;            /* v0.3: YLAY_RUN_PAINT                             */
 } ylay_run;
 
 typedef struct ylay_block {

@@ -40,6 +40,14 @@
  *      the emoji fonts lack comes from a text font that has it, and a
  *      text character the text fonts lack from an emoji font; a font of
  *      CBDT, sbix or SVG color glyphs without COLR is refused.
+ *   9. Color glyphs (v0.3.0), with a COLR version 0 and a version 1 font
+ *      written here: layers and paint records (solids premultiplied in
+ *      linear light; linear, radial, two-point and elliptical gradients by
+ *      their parameter at known points; group opacity as per-layer alpha),
+ *      transforms baked into layer glyphs and a clip box cut into one (by
+ *      their boxes in the set), the set's check, the same result from a
+ *      second flattening, a layout's paint run, and the twelve refusals by
+ *      name, a layout's with the codepoint and glyph.
  * Exit 0 on pass, 1 on a failure. YSP_FONTS_DIR overrides the font folder
  * (YLAY_TEST_FONTS, C:/Windows/Fonts by default).
  */
@@ -56,6 +64,7 @@
 #include "skribidi/skb_editor.h"
 
 #include <math.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -71,6 +80,24 @@
 static int failures, checks;
 
 #define CHECK(cond, ...) do { checks++; if (!(cond)) { failures++; printf("FAIL %s:%d: ", __FILE__, __LINE__); printf(__VA_ARGS__); printf("\n"); } } while (0)
+/* CHECK as an expression: the condition, for the checks that follow it */
+static int check_n(int ok, int line, const char* fmt, ...) {
+    va_list ap;
+    checks++;
+    if (!ok) {
+        failures++;
+        printf("FAIL %s:%d: ", __FILE__, line);
+        va_start(ap, fmt);
+        vprintf(fmt, ap);
+        va_end(ap);
+        printf("\n");
+    }
+    return ok;
+}
+#define CHECK_N(cond, ...) check_n((cond) ? 1 : 0, __LINE__, __VA_ARGS__)
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
 /* --- a font written here ---------------------------------------------------- */
 
@@ -1195,19 +1222,43 @@ static int em_layout(yol_ctx* ol, const em_font* fl, int n, const char* text, in
     for (i = 0; i < n; i++)
         if (ylay_add_font(L, fl[i].f->d, fl[i].f->n, 0, fl[i].name) != i) { printf("  add %s: %s\n", fl[i].name, ylay_error(L)); goto done; }
     if (ylay_layout(L, text, -1, &(ylay_style){ .size = 100 }, NULL, 0, &b) != YLAY_OK) { printf("  layout: %s\n", ylay_error(L)); goto done; }
-    {   /* logical order: by cluster, then by x (one LTR line here) */
-        int order[64], m = (int)(b.n_items < 64 ? b.n_items : 64), a, c;
-        for (a = 0; a < m; a++) { order[a] = a; font_of[a] = -1; glyph_of[a] = 0; }
+    {   /* logical order: by cluster, then by x (one LTR line here); a color
+         * glyph's layers (one cluster in a paint run) count as one entry,
+         * its glyph the color glyph whose layers they are */
+        int order[64], run_of[64], m = (int)(b.n_items < 64 ? b.n_items : 64), a, c, outn = 0;
+        for (a = 0; a < m; a++) { order[a] = a; font_of[a] = -1; glyph_of[a] = 0; run_of[a] = 0; }
         for (a = 1; a < m; a++)
             for (c = a; c > 0 && (b.cluster[order[c - 1]] > b.cluster[order[c]] ||
                                   (b.cluster[order[c - 1]] == b.cluster[order[c]] && b.items[order[c - 1]].x > b.items[order[c]].x)); c--) {
                 int t = order[c]; order[c] = order[c - 1]; order[c - 1] = t;
             }
         for (r = 0; r < b.n_runs; r++)
-            for (k = b.runs[r].first; k < b.runs[r].first + b.runs[r].n && k < 64; k++)
-                for (a = 0; a < m; a++)
-                    if (order[a] == (int)k) { font_of[a] = b.runs[r].font; glyph_of[a] = (uint32_t)b.items[k].glyph; }
-        n_items = m;
+            for (k = b.runs[r].first; k < b.runs[r].first + b.runs[r].n && k < 64; k++) run_of[k] = (int)r;
+        for (a = 0; a < m;) {
+            int k0 = order[a], rr = run_of[k0];
+            font_of[outn] = b.runs[rr].font;
+            if (b.runs[rr].flags & YLAY_RUN_PAINT) {
+                int e = a, nl;
+                uint32_t g;
+                while (e < m && run_of[order[e]] == rr && b.cluster[order[e]] == b.cluster[k0]) e++;
+                glyph_of[outn] = 0xFFFFFFFFu;
+                for (g = 0; g < 64; g++) {
+                    const ylay_layer* ly;
+                    int q, same = 1;
+                    nl = ylay_color_glyph(L, b.runs[rr].font, g, &ly);
+                    if (nl != e - a) continue;
+                    for (q = 0; q < nl; q++)
+                        if (b.items[order[a + q]].glyph != (float)ly[q].glyph || b.items[order[a + q]].color != (float)ly[q].paint) same = 0;
+                    if (same) { glyph_of[outn] = g; break; }
+                }
+                a = e;
+            } else {
+                glyph_of[outn] = (uint32_t)b.items[k0].glyph;
+                a++;
+            }
+            outn++;
+        }
+        n_items = outn;
     }
     *missing = b.n_missing;
     if (miss) *n_miss = ylay_missing_chars(L, miss, 8);
@@ -1327,6 +1378,222 @@ static void emoji_checks(yol_ctx* ol) {
     free(text.d); free(heart.d); free(emo.d); free(emo2.d); free(bad.d);
 }
 
+/* --- 9. color glyphs ----------------------------------------------------------- */
+
+/* A paint record's gradient parameter at em point x, y, as the shader
+ * computes it (ysp/gfx.h PAINT RECORDS), in double. */
+static double rec_t(const float* r, double x, double y) {
+    double qx, qy, dx, dy, a, b, c, D;
+    if ((int)r[0] == 2) return r[4] * x + r[5] * y + r[6];
+    qx = r[4] * x + r[5] * y + r[6]; qy = r[7] * x + r[8] * y + r[9]; dx = r[10]; dy = r[11];
+    a = dx * dx + dy * dy - 1; b = qx * dx + qy * dy; c = qx * qx + qy * qy;
+    D = sqrt(fmax(b * b - a * c, 0.0));
+    return b > 0 ? c / (D + b) : (D - b) / -a;
+}
+static int near_(double a, double b, double tol) { return fabs(a - b) <= tol; }
+/* The sRGB code c in linear light, as the flattening converts it. */
+static double lin8(int c) { double v = c / 255.0; return v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4); }
+
+/* The bbox (em) of set glyph g of a set, from its record. */
+static int set_box(const yol_cset* s, uint32_t g, float box[4]) {
+    uint32_t o;
+    if (g >= s->words[2] || !(o = s->words[8 + g])) return 0;
+    memcpy(box, &s->words[o], 16);
+    return 1;
+}
+
+static void color_checks(yol_ctx* ol) {
+    cfb_buf v0 = { 0, 0, 0 }, v1 = { 0, 0, 0 };
+    bb text = { 0, 0, 0 };
+    ylay_lib* L;
+    ylay_font_info fi;
+    const ylay_layer* ly;
+    const float* pt;
+    int n, np, f1;
+    char msg[300];
+    cfb_emoji_v0(&v0);
+    cfb_emoji_v1(&v1);
+    make_font_r(&text, fb_fonts[FB_LA].rg, fb_fonts[FB_LA].nr, 900, -300);
+    /* COLR version 0: layers and solid paints */
+    ylay_create(&L, &(ylay_desc){ .ol = ol });
+    CHECK(ylay_add_font(L, v0.d, v0.n, 0, "v0") == 0, "color: the v0 font: %s", ylay_error(L));
+    np = ylay_color_paints(L, 0, &pt);
+    n = ylay_color_glyph(L, 0, CFB0_GRIN, &ly);
+    CHECK(n == 2 && ly[0].glyph == CFB0_L_DISC && ly[1].glyph == CFB0_L_EYE && np > 0,
+          "color v0: the grin has %d layers (want 2: the disc, the eyes), %d paint texels", n, np);
+    if (n == 2) {
+        const float* y0 = pt + 4 * (size_t)ly[0].paint, *y1 = pt + 4 * (size_t)ly[1].paint;
+        CHECK(y0[0] == 1 && y0[1] == 0 && (float)y0[4] == 1.0f && y0[5] == (float)lin8(0xCC) && y0[6] == (float)lin8(0x22) && y0[7] == 1.0f,
+              "color v0: the yellow record: %g %g | %g %g %g %g", y0[0], y0[1], y0[4], y0[5], y0[6], y0[7]);
+        CHECK(y1[4] == (float)lin8(0x20) && y1[7] == 1.0f, "color v0: the near-black record: %g %g", y1[4], y1[7]);
+    }
+    n = ylay_color_glyph(L, 0, CFB0_SNOW, &ly);
+    CHECK(n == 1 && pt[4 * ly[0].paint + 7] == (float)(0x80 / 255.0) && pt[4 * ly[0].paint + 4] == (float)(0x80 / 255.0),
+          "color v0: the snowman: %d layers, white at half alpha premultiplied", n);
+    CHECK(ylay_color_glyph(L, 0, CFB0_L_BOX, &ly) == 0, "color v0: a layer glyph is not a color glyph");
+    ylay_font(L, 0, &fi);
+    CHECK(fi.n_color_glyphs == 5 && fi.n_refused == 0 && fi.n_layer_glyphs == 0 && fi.set_glyphs == (uint32_t)CFB0_N &&
+          fi.n_paint_texels == (uint32_t)np,
+          "color v0: %u color glyphs (want 5), %u refused, %u layer glyphs (want 0: no transform), set %u", fi.n_color_glyphs,
+          fi.n_refused, fi.n_layer_glyphs, fi.set_glyphs);
+    ylay_destroy(L);
+
+    /* COLR version 1 */
+    ylay_create(&L, &(ylay_desc){ .ol = ol });
+    f1 = ylay_add_font(L, v1.d, v1.n, 0, "v1");
+    CHECK(f1 == 0, "color: the v1 font: %s", ylay_error(L));
+    if (f1 == 0) {
+        static const struct { int g; const char* says; } refused[] = {
+            { CFB1_B_OVERLAP, "overlap" }, { CFB1_B_SOFT, "SOFT_LIGHT" }, { CFB1_B_SWEEP, "sweep" },
+            { CFB1_B_COLRGLYPH, "PaintColrGlyph" }, { CFB1_B_FG, "foreground" }, { CFB1_B_REPEAT, "repeat" },
+            { CFB1_B_VAR, "variable" }, { CFB1_B_DEEP, "HarfBuzz's limits" }, { CFB1_B_WIDE, "HarfBuzz's limits" },
+            { CFB1_B_STOPS17, "17 stops" }, { CFB1_B_R0, "start radius" }, { CFB1_B_FOCAL, "start circle" },
+        };
+        size_t k;
+        yol_cset set;
+        ygfx_cset_desc cd;
+        float box[4];
+        ylay_font(L, 0, &fi);
+        np = ylay_color_paints(L, 0, &pt);
+        CHECK(fi.color == 2 && fi.n_color_glyphs == (uint32_t)(CFB1_N - CFB1_B_SOLID) && fi.n_refused == 12,
+              "color v1: color %d, %u color glyphs (want %d), %u refused (want 12)", fi.color, fi.n_color_glyphs,
+              CFB1_N - CFB1_B_SOLID, fi.n_refused);
+        for (k = 0; k < sizeof refused / sizeof refused[0]; k++) {
+            n = ylay_color_glyph(L, 0, (uint32_t)refused[k].g, &ly);
+            CHECK(n == YLAY_ERR_REFUSED && strstr(ylay_error(L), refused[k].says) && strstr(ylay_error(L), "glyph"),
+                  "color v1: glyph %d gave %d, '%s' (want refused: %s)", refused[k].g, n, ylay_error(L), refused[k].says);
+        }
+        n = ylay_color_glyph(L, 0, CFB1_B_SOFT, &ly);
+        CHECK(strstr(ylay_error(L), "Noto-COLRv1-noflags.ttf") != NULL, "color v1: the soft light refusal names Noto's build without flags");
+        /* solids: alpha premultiplied, linear light */
+        n = ylay_color_glyph(L, 0, CFB1_B_SOLID, &ly);
+        CHECK(n == 2 && ly[0].glyph == CFB1_L_BOX && ly[1].glyph == CFB1_L_DISC, "color v1: the solid case: %d layers", n);
+        if (n == 2) {
+            const float* r0 = pt + 4 * (size_t)ly[0].paint, *r1 = pt + 4 * (size_t)ly[1].paint;
+            /* alpha reaches the flattening as HarfBuzz's 8 bits: 0.5 is 128 / 255 */
+            CHECK(r0[0] == 1 && r0[4] == 1 && r0[5] == 0 && r0[7] == 1 && r1[5] == (float)(128 / 255.0) && r1[7] == (float)(128 / 255.0) && r1[4] == 0,
+                  "color v1: solids %g %g %g %g, %g %g %g %g", r0[4], r0[5], r0[6], r0[7], r1[4], r1[5], r1[6], r1[7]);
+        }
+        /* linear: t from x 0.1 em to 0.9 em */
+        n = ylay_color_glyph(L, 0, CFB1_B_LINEAR, &ly);
+        if (CHECK_N(n == 1, "color v1: the linear case: %d layers", n)) {
+            const float* r = pt + 4 * (size_t)ly[0].paint;
+            CHECK(r[0] == 2 && r[1] == 2 && near_(rec_t(r, 0.1, -0.3), 0, 1e-6) && near_(rec_t(r, 0.9, -0.7), 1, 1e-6) &&
+                  near_(rec_t(r, 0.5, 0), 0.5, 1e-6) && r[8] == 0 && r[9] == 1 && r[12] == 1 && r[13] == 0 && r[18] == 1,
+                  "color v1: linear record: kind %g n %g, t %g %g %g, offsets %g %g, stop colors %g / %g", r[0], r[1],
+                  rec_t(r, 0.1, -0.3), rec_t(r, 0.9, -0.7), rec_t(r, 0.5, 0), r[8], r[9], r[12], r[18]);
+        }
+        n = ylay_color_glyph(L, 0, CFB1_B_RADIAL, &ly);
+        if (CHECK_N(n == 1, "color v1: the radial case: %d layers", n)) {
+            const float* r = pt + 4 * (size_t)ly[0].paint;
+            CHECK(r[0] == 3 && r[1] == 3 && near_(rec_t(r, 0.5, -0.4), 0, 1e-6) && near_(rec_t(r, 0.8, -0.4), 1, 1e-6) &&
+                  near_(rec_t(r, 0.5, -0.55), 0.5, 1e-6) && r[12] == 0 && r[13] == 0.5f && r[14] == 1 &&
+                  r[16 + 4 + 3] == (float)(128 / 255.0) && r[16 + 4 + 1] == (float)(128 / 255.0),
+                  "color v1: radial record: t %g %g %g, offsets %g %g %g, the middle stop %g %g %g %g", rec_t(r, 0.5, -0.4),
+                  rec_t(r, 0.8, -0.4), rec_t(r, 0.5, -0.55), r[12], r[13], r[14], r[20], r[21], r[22], r[23]);
+        }
+        n = ylay_color_glyph(L, 0, CFB1_B_TWOPT, &ly);
+        if (CHECK_N(n == 1, "color v1: the two-point case: %d layers", n)) {
+            const float* r = pt + 4 * (size_t)ly[0].paint;
+            CHECK(near_(rec_t(r, 0.4, -0.4), 0, 1e-6) && near_(rec_t(r, 0.8, -0.4), 1, 1e-6) && near_(rec_t(r, 0.5, -0.1), 1, 1e-6),
+                  "color v1: two-point t at the focal point %g, on the end circle %g %g", rec_t(r, 0.4, -0.4), rec_t(r, 0.8, -0.4),
+                  rec_t(r, 0.5, -0.1));
+        }
+        n = ylay_color_glyph(L, 0, CFB1_B_ELLIPSE, &ly);
+        if (CHECK_N(n == 1, "color v1: the ellipse case: %d layers", n)) {
+            const float* r = pt + 4 * (size_t)ly[0].paint;
+            CHECK(ly[0].glyph == CFB1_L_BOX && near_(rec_t(r, 0.5, -0.4), 0, 1e-6) && near_(rec_t(r, 0.8, -0.4), 1, 1e-6) &&
+                  near_(rec_t(r, 0.5, -0.55), 1, 1e-6) && near_(rec_t(r, 0.65, -0.4), 0.5, 1e-6),
+                  "color v1: ellipse t %g %g %g %g", rec_t(r, 0.5, -0.4), rec_t(r, 0.8, -0.4), rec_t(r, 0.5, -0.55), rec_t(r, 0.65, -0.4));
+        }
+        n = ylay_color_glyph(L, 0, CFB1_B_OPACITY, &ly);
+        if (CHECK_N(n == 2, "color v1: group opacity over two boxes apart: %d layers (want 2)", n)) {
+            const float* r0 = pt + 4 * (size_t)ly[0].paint, *r1 = pt + 4 * (size_t)ly[1].paint;
+            const double a = 128 / 255.0, b8 = 204 / 255.0 * a;   /* 0.5 and 0.8 in 8 bits */
+            CHECK(r0[6] == (float)a && r0[7] == (float)a && r1[4] == (float)b8 && r1[7] == (float)b8,
+                  "color v1: group opacity 0.5: alphas %g, %g (want 128/255, 204/255 of that)", r0[7], r1[7]);
+        }
+        /* the set: paints first, then every font and layer glyph; checked */
+        CHECK(ylay_open_set(L, 0, &set, ol) == YLAY_OK && ylay_build_glyphs(L, 0, &set, NULL, 0, 0) == YLAY_OK,
+              "color v1: the set: %s", ylay_error(L));
+        memset(&cd, 0, sizeof cd);
+        cd.texels = set.texels; cd.n_texels = set.n_texels; cd.words = set.words; cd.n_words = set.n_words;
+        CHECK(ygfx_cset_check(&cd, msg, sizeof msg) == YGFX_OK && !memcmp(set.texels, pt, 16 * (size_t)np) &&
+              set.words[2] == fi.set_glyphs && fi.set_glyphs > (uint32_t)CFB1_N,
+              "color v1: the set fails its check (%s), or its first texels are not the paints, or it has %u glyphs", msg, set.words[2]);
+        n = ylay_color_glyph(L, 0, CFB1_B_XFORM, &ly);
+        CHECK(n == 1 && ly[0].glyph >= (uint32_t)CFB1_N && set_box(&set, ly[0].glyph, box) &&
+              near_(box[0], 0.3, 1e-6) && near_(box[2], 0.5, 1e-6) && near_(box[1], -0.4, 1e-6) && near_(box[3], -0.2, 1e-6),
+              "color v1: the translated box: layer glyph %u, box %g %g %g %g (want 0.3 -0.4 0.5 -0.2)", n == 1 ? ly[0].glyph : 0,
+              box[0], box[1], box[2], box[3]);
+        n = ylay_color_glyph(L, 0, CFB1_B_ROTATE, &ly);
+        if (CHECK_N(n == 1 && set_box(&set, ly[0].glyph, box), "color v1: the turned box: %d layers", n)) {
+            const float* r = pt + 4 * (size_t)ly[0].paint;
+            const double an = 2731.0 / 16384.0 * M_PI, cs = cos(an), sn = sin(an);   /* 30 degrees in F2DOT14 */
+            CHECK(near_(box[0], -0.3 * sn, 1e-6) && near_(box[2], 0.2 * cs - 0.1 * sn, 1e-6) &&
+                  near_(box[1], -(0.2 * sn + 0.3 * cs), 1e-6) && near_(box[3], -0.1 * cs, 1e-6),
+                  "color v1: the turned box's box %g %g %g %g", box[0], box[1], box[2], box[3]);
+            CHECK(near_(rec_t(r, 0, 0), 0, 1e-6) && near_(rec_t(r, 0.2 * cs, -0.2 * sn), 1, 1e-6),
+                  "color v1: the turned gradient: t %g at the origin, %g at the turned end", rec_t(r, 0, 0), rec_t(r, 0.2 * cs, -0.2 * sn));
+        }
+        n = ylay_color_glyph(L, 0, CFB1_B_CLIP, &ly);
+        CHECK(n == 1 && ly[0].glyph >= (uint32_t)CFB1_N && set_box(&set, ly[0].glyph, box) && near_(box[0], 0.2, 1e-6) &&
+              near_(box[2], 0.7, 1e-6) && near_(box[1], -0.6, 1e-6) && near_(box[3], -0.1, 1e-6),
+              "color v1: the box cut by its clip box: %g %g %g %g (want 0.2 -0.6 0.7 -0.1)", box[0], box[1], box[2], box[3]);
+        yol_cset_close(&set);
+        {   /* the same font again gives the same paints and layers */
+            ylay_lib* L2;
+            const float* pt2;
+            const ylay_layer* l2;
+            int same = 1;
+            uint32_t g;
+            ylay_create(&L2, &(ylay_desc){ .ol = ol });
+            ylay_add_font(L2, v1.d, v1.n, 0, "v1");
+            same = ylay_color_paints(L2, 0, &pt2) == np && !memcmp(pt, pt2, 16 * (size_t)np);
+            for (g = 0; g < (uint32_t)CFB1_N; g++) {
+                int a = ylay_color_glyph(L, 0, g, &ly), b2 = ylay_color_glyph(L2, 0, g, &l2);
+                if (a != b2 || (a > 0 && memcmp(ly, l2, sizeof *ly * (size_t)a))) same = 0;
+            }
+            CHECK(same, "color v1: a second flattening of the font differs");
+            ylay_destroy(L2);
+        }
+    }
+    ylay_destroy(L);
+    {   /* a layout: the color glyph's layers in a paint run; a refused glyph by name */
+        ylay_block b;
+        char t[32];
+        uint32_t cp[3] = { 'a', CFB1_CP(CFB1_B_XFORM), 0 }, r, paint_runs = 0, layer_items = 0;
+        int rc;
+        memset(&b, 0, sizeof b);
+        ylay_create(&L, &(ylay_desc){ .ol = ol });
+        ylay_add_font(L, text.d, text.n, 0, "la");
+        ylay_add_font(L, v1.d, v1.n, 0, "v1");
+        snprintf(t, sizeof t, "%s", cps(cp));
+        rc = ylay_layout(L, t, -1, &(ylay_style){ .size = 64 }, NULL, 0, &b);
+        for (r = 0; r < b.n_runs; r++)
+            if (b.runs[r].flags & YLAY_RUN_PAINT) { paint_runs++; layer_items += b.runs[r].n; }
+        CHECK(rc == YLAY_OK && paint_runs == 1 && layer_items == 1 && b.n_missing == 0, "color layout: %d, %u paint runs, %u layer items",
+              rc, paint_runs, layer_items);
+        ylay_font(L, 1, &fi);
+        {
+            ygfx_cset_desc cd;
+            memset(&cd, 0, sizeof cd);
+            cd.texels = fi.set->texels; cd.n_texels = fi.set->n_texels; cd.words = fi.set->words; cd.n_words = fi.set->n_words;
+            CHECK(ygfx_cset_check(&cd, msg, sizeof msg) == YGFX_OK && fi.n_built == 1, "color layout: the font's set: %s, %u built", msg, fi.n_built);
+        }
+        cp[1] = CFB1_CP(CFB1_B_SOFT);
+        snprintf(t, sizeof t, "%s", cps(cp));
+        rc = ylay_layout(L, t, -1, &(ylay_style){ .size = 64 }, NULL, 0, &b);
+        snprintf(msg, sizeof msg, "U+%04X (glyph %d)", (unsigned)CFB1_CP(CFB1_B_SOFT), CFB1_B_SOFT);
+        CHECK(rc == YLAY_ERR_REFUSED && strstr(ylay_error(L), msg) && strstr(ylay_error(L), "SOFT_LIGHT") && strstr(ylay_error(L), "v1"),
+              "color layout: a refused glyph gave %d, '%s' (want '%s', the mode and the font)", rc, ylay_error(L), msg);
+        ylay_block_free(&b);
+        ylay_destroy(L);
+    }
+    printf("color glyphs: done\n");
+    free(v0.d); free(v1.d); free(text.d);
+}
+
 int main(void) {
     yol_ctx ol;
     ylay_lib* L;
@@ -1417,6 +1684,8 @@ int main(void) {
     fallback_checks(&ol);
     /* 8. emoji */
     emoji_checks(&ol);
+    /* 9. color glyphs */
+    color_checks(&ol);
 
     /* 3. the corpus */
     corpus(&ol);

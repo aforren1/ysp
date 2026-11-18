@@ -115,14 +115,17 @@ typedef struct tin { const char* name; uint32_t kind, flags; const uint8_t* data
 
 enum {
     F_NONE, F_UNSORTED, F_GAP, F_DATAOFF, F_NO_EXT, F_EXTRA_EXT, F_METHOD, F_ENCRYPT, F_DESCRIPTOR,
-    F_FORMAT2, F_KIND, F_NO_CHUNKS, F_CHUNK_INDEX, F_COMMENT, F_CDHASH, F_MANIFEST_SHA, F_LOCAL_NAME,
+    F_FORMAT2, F_FORMAT0, F_KIND, F_NO_CHUNKS, F_CHUNK_INDEX, F_COMMENT, F_CDHASH, F_MANIFEST_SHA, F_LOCAL_NAME,
     F_PADDING, F_ATTR, F_TIME, F_ENTRY_HASH, F_CHUNK_TABLE, F_VERSION, F_TRAILING, F_LOCAL_CRC,
     F_DATA, F_SIZES, F_EXT_VERSION, F_FLAGS_UNKNOWN, F_MANIFEST_KIND, F_COUNT
 };
 
+/* the format a good pack's comment names (v0.5.0: 2 opens too) */
+static int g_format = 1;
+
 static const char* const fault_names[F_COUNT] = {
     "none", "unsorted", "gap", "data offset", "no private record", "extra field", "deflate method", "encrypted",
-    "data descriptor", "format 2", "unknown kind", "no chunks entry", "chunk index", "comment", "directory hash",
+    "data descriptor", "format 3", "format 0", "unknown kind", "no chunks entry", "chunk index", "comment", "directory hash",
     "manifest sha", "local name", "padding", "attributes", "time", "entry hash", "chunk table", "version needed",
     "trailing bytes", "local crc", "data byte", "sizes", "record version", "unknown flags", "manifest kind"
 };
@@ -369,7 +372,8 @@ static void build(vfile* f, const tin* in, int n_in, int fault, int64_t prefix, 
         ypak_sha256(manifest, sizeof(manifest) - 1, sha);
         if (fault == F_MANIFEST_SHA) sha[5] ^= 1;
         if (fault == F_CDHASH) cdh ^= 1;
-        snprintf(cm, sizeof(cm), "ysp-pack/%d manifest=sha256:", fault == F_FORMAT2 ? 2 : 1);
+        /* v0.5.0: format 2 (color glyphs) opens; 3 is past this reader, 0 before it */
+        snprintf(cm, sizeof(cm), "ysp-pack/%d manifest=sha256:", fault == F_FORMAT2 ? 3 : fault == F_FORMAT0 ? 0 : g_format);
         k = strlen(cm);
         for (i = 0; i < 32; i++) k += (size_t)snprintf(cm + k, sizeof(cm) - k, "%02x", sha[i]);
         k += (size_t)snprintf(cm + k, sizeof(cm) - k, " cd=xxh64:%016llx", (unsigned long long)cdh);
@@ -888,6 +892,21 @@ static void test_appended(void) {
     }
 }
 
+/* v0.5.0: a pack of format 2 opens, and says so */
+static void test_format2(void) {
+    vfile f;
+    uint8_t* m;
+    ypak_pack pk;
+    g_format = 2;
+    build(&f, g_basic, N_BASIC, F_NONE, 0, 0);
+    g_format = 1;
+    m = vf_flat(&f);
+    CHECK(open_mem(&pk, m, f.size, YPAK_VERIFY_OPEN) == 0 && pk.format == 2, "a format 2 pack opens: %s", ypak_error(&pk));
+    ypak_close(&pk);
+    free(m);
+    vf_free(&f);
+}
+
 static void test_faults(void) {
     int fault;
     for (fault = 1; fault < F_COUNT; fault++) {
@@ -908,8 +927,9 @@ static void test_faults(void) {
             CHECK(rc == 0 && rc2 == YPAK_ERR_CORRUPT, "fault '%s': open %d, use %d", fault_names[fault], rc, rc2);
         else if (fault == F_LOCAL_NAME || fault == F_PADDING || fault == F_LOCAL_CRC)
             CHECK((rc < 0) || rc2 == YPAK_ERR_FORMAT, "fault '%s': open %d, use %d", fault_names[fault], rc, rc2);
-        else if (fault == F_FORMAT2)
-            CHECK(rc == YPAK_ERR_VERSION, "fault '%s': %d (%s)", fault_names[fault], rc, ypak_error(&pk));
+        else if (fault == F_FORMAT2 || fault == F_FORMAT0)
+            CHECK(rc == YPAK_ERR_VERSION && strstr(ypak_error(&pk), "formats 1 to 2"), "fault '%s': %d (%s)", fault_names[fault], rc,
+                  ypak_error(&pk));
         else
             /* refused for the fault's own reason: a hash fault as corrupt,
              * a rule fault as format (a rule fault that only a hash
@@ -1106,6 +1126,15 @@ static void test_views(void) {
         w64(b + 56, 64 + 176);
         CHECK(ypak_cset_view(b, (int64_t)n + 16, &s, err, sizeof(err)) == YPAK_ERR_FORMAT, "cset offsets");
         CHECK(ypak_cset_view(b + 4, (int64_t)n, &s, err, sizeof(err)) == YPAK_ERR_FORMAT, "cset misaligned");
+        /* v0.5.0: the color flag, on em units only; other flags refused */
+        n = make_cset(b, 0);
+        w32(b + 24, YPAK_CSET_COLOR | YPAK_CSET_ALL);
+        CHECK(ypak_cset_view(b, (int64_t)n, &s, err, sizeof(err)) == 0 && s.flags == (YPAK_CSET_COLOR | YPAK_CSET_ALL), "cset color flag: %s", err);
+        w32(b + 16, YPAK_CSET_UNITS_USER);
+        CHECK(ypak_cset_view(b, (int64_t)n, &s, err, sizeof(err)) == YPAK_ERR_FORMAT, "cset color flag in user units");
+        w32(b + 16, YPAK_CSET_UNITS_EM); w32(b + 24, 4);
+        CHECK(ypak_cset_view(b, (int64_t)n, &s, err, sizeof(err)) == YPAK_ERR_FORMAT, "cset unknown flag");
+        w32(b + 24, 0);
     }
     /* artwork */
     {
@@ -1223,6 +1252,20 @@ static void test_views(void) {
         CHECK(ypak_runs_view(p, (int64_t)n, &r, err, sizeof(err)) == YPAK_ERR_FORMAT, "runs range");
         w32(p + 332, 1); w32(p + 320, 1);
         CHECK(ypak_runs_view(p, (int64_t)n, &r, err, sizeof(err)) == YPAK_ERR_FORMAT, "runs font index");
+        /* v0.5.0: version 2 carries a run's flags above its 16-bit font index */
+        w32(p + 320, 0 | (YPAK_RUN_PAINT << 16));
+        CHECK(ypak_runs_view(p, (int64_t)n, &r, err, sizeof(err)) == YPAK_ERR_FORMAT && strstr(err, "unknown to version 1"),
+              "runs v1 with a flag: %s", err);
+        w32(p + 8, 2);
+        CHECK(ypak_runs_view(p, (int64_t)n, &r, err, sizeof(err)) == 0 && r.runs[0].font == 0 && r.runs[0].flags == YPAK_RUN_PAINT &&
+              r.runs[1].flags == 0 && r.runs[0].size == 0.0f && r.runs[0].n == 1, "runs v2 with a paint run: %s", err);
+        w32(p + 320, 0 | (2u << 16));
+        CHECK(ypak_runs_view(p, (int64_t)n, &r, err, sizeof(err)) == YPAK_ERR_FORMAT && strstr(err, "flags 0x2"), "runs v2, an unknown flag: %s", err);
+        w32(p + 320, 1 | (YPAK_RUN_PAINT << 16));
+        CHECK(ypak_runs_view(p, (int64_t)n, &r, err, sizeof(err)) == YPAK_ERR_FORMAT, "runs v2, font index");
+        w32(p + 320, 0); w32(p + 8, 3);
+        CHECK(ypak_runs_view(p, (int64_t)n, &r, err, sizeof(err)) == YPAK_ERR_FORMAT && strstr(err, "knows 1 to 2"), "runs version 3: %s", err);
+        w32(p + 8, 1);
     }
     CHECK(ypak_kind_id("glyphruns") == YPAK_KIND_GLYPHRUNS && ypak_kind_name(YPAK_KIND_ALPHA) && !ypak_kind_name(0) && !ypak_kind_name(18) &&
           ypak_kind_id("nope") == 0, "kind names");
@@ -1441,6 +1484,7 @@ int main(void) {
     test_verify_entry();
     test_appended();
     test_faults();
+    test_format2();
     test_views();
     test_claim();
     test_verify_threads();

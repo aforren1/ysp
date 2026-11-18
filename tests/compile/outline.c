@@ -23,11 +23,12 @@ typedef struct outline_api {
     void (*cset_close)(yol_cset*);
     int  (*cset_add)(yol_cset*, uint32_t, const yol_path*);
     int  (*svg)(yol_ctx*, const char*, size_t, const yol_svg_desc*, double*, char*, size_t);
+    int  (*cset_add_texels)(yol_cset*, const float*, uint32_t);   /* v0.5.0 */
 } outline_api;
 
 static const outline_api g_api = {
     yol_open, yol_close, yol_error, yol_path_init, yol_path_free, yol_close_path,
-    yol_font_view, yol_cset_open, yol_cset_close, yol_cset_add, yol_svg
+    yol_font_view, yol_cset_open, yol_cset_close, yol_cset_add, yol_svg, yol_cset_add_texels
 };
 
 int main(void) {

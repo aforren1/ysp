@@ -4,7 +4,7 @@
 # third_party/, added before this).
 
 if(YSP_BUILD_LAYOUT)
-    add_library(ysp_layout STATIC layout.c ysp/layout.h)
+    add_library(ysp_layout STATIC layout.c colr.c colr.h ysp/layout.h)
     target_include_directories(ysp_layout PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(ysp_layout PUBLIC ysp::rig ysp_skribidi)
     target_compile_options(ysp_layout PRIVATE ${YSP_WARNINGS})
@@ -24,6 +24,11 @@ if(YSP_BUILD_LAYOUT)
         target_compile_definitions(test_layout PRIVATE YSCR_NO_SDL
             YLAY_TEST_DIR="${PROJECT_SOURCE_DIR}/tests/layout" YLAY_TEST_FONTS="${YSP_LAYOUT_TEST_FONTS}")
         add_test(NAME test_layout COMMAND test_layout)
+        # The color glyphs' fuzz target, self-driven (tests/fuzz/colr_fuzz.c:
+        # colr_fuzz N [seed], or --replay FILES); not a test.
+        ysp_add_program(colr_fuzz ${PROJECT_SOURCE_DIR}/tests/fuzz/colr_fuzz.c rig)
+        target_link_libraries(colr_fuzz PRIVATE ysp_layout)
+        target_compile_definitions(colr_fuzz PRIVATE YSCR_NO_SDL YSP_FUZZ_SELF)
         # The costs of docs/layout.md; not a test (run it under the lock).
         ysp_add_program(layout_bench ${PROJECT_SOURCE_DIR}/tests/layout/layout_bench.c rig)
         target_link_libraries(layout_bench PRIVATE ysp_layout)

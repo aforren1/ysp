@@ -1,6 +1,6 @@
 # ysp/outline.h design notes
 
-Status: v0.3.1, 2026-10-10 (v0.2.1, 2026-10-07, for the measurements). v0.1.0 built the font reader, the sweep,
+Status: v0.5.0, 2026-11-18 (v0.2.1, 2026-10-07, for the measurements; v0.5.0: [texels no glyph references](#v050-texels-no-glyph-references)). v0.1.0 built the font reader, the sweep,
 exact alpha, strokes and curve sets; v0.2.0 adds the SVG subset reader and
 cheaper strokes; v0.2.1 places TrueType glyphs where HarfBuzz places them. The design was reviewed and approved by the coordinator
 on 2026-10-06; "Decisions" records the answers. The manual in the header
@@ -634,6 +634,35 @@ CI's Release build is -O3 and its Debug builds are -O0, so neither saw
 this. The `linux-extra` job has a `gcc-O1` entry now: the whole tree,
 Debug with `-O1`. With gcc 11.4 on WSL2 it builds and passes ctest (79
 of 79).
+
+## v0.5.0: texels no glyph references
+
+A color glyph (pack/layout 0.3.0, docs/layout.md "Color glyphs") is drawn
+as layers, each a glyph of the font's curve set with a paint: an RGBA
+solid, or a linear or radial gradient with its own matrix and up to 16
+stops. ysp/gfx.h reads a layer's paint record by its texel index from
+the set's own texel texture (gfx.h PAINT RECORDS), so a run needs no
+second texture and no second sampler. `yol_cset_add_texels()` appends
+those records.
+
+- The format allows them. A glyph's list entries must reference its own
+  texels (`first` to `first + n - 1`); a texel that no glyph references is
+  not checked beyond being finite, by `ygfx_cset_check()` and by this
+  call. The format version stays 1.
+- The call returns the first texel's index, so the caller can store it
+  as the record's address. pack/layout puts every paint record first, at
+  open, in an order the font alone gives: the pack tool's set and the
+  layout library's own set then agree on every index, though they build
+  glyphs in another order.
+- A value that is not finite is refused (`YOL_ERR_ARG`, the texel named):
+  `ygfx_cset_check()` would refuse the whole set for it.
+
+Tests (`outline_test.c`, T1): two records before a glyph and two after
+it; the glyph's first texel follows the records, the returned indexes
+are where the records are, the set passes `ygfx_cset_check()`, and an
+infinite value and a NULL array are refused. Mutants `tx-01` (the count
+not grown), `tx-02` (the finite check removed) and `tx-03` (the index one
+off): 3 of 3 killed.
 
 ## Next
 

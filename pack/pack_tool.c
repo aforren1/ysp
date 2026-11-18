@@ -413,6 +413,10 @@ typedef struct E {
     /* fonts: the face count; glyphs that glyph runs use, per face (a bitmap) */
     int      faces;
     uint8_t* used[16]; uint32_t n_glyphs[16];
+    uint32_t used_n[16];   /* bits in used: the set's glyphs, layer glyphs included */
+    int      colr[16];     /* the face has a COLR table                            */
+    int      fmt;          /* the pack format this entry needs: 2 for color (else 0) */
+    jv*      color_rec;    /* a color curve set's counts, for its derivation        */
     /* a video's index entry, made with it; on the index, its video */
     struct E* idx;
 } E;
@@ -878,6 +882,96 @@ static int build_calibration(B* b, E* e) {
 
 /* OS/2 fsType of a face (TrueType, OpenType, or a face of a collection);
  * -1 when the font has no OS/2 table. */
+/* Table tag of face's directory: its offset and length, or 0. */
+static int font_table(const uint8_t* d, int64_t n, int face, const char* tag, uint32_t* off, uint32_t* len) {
+    uint32_t o = 0, nt, i;
+    if (n >= 12 && memcmp(d, "ttcf", 4) == 0) {
+        uint32_t nf = ((uint32_t)d[8] << 24) | ((uint32_t)d[9] << 16) | ((uint32_t)d[10] << 8) | d[11];
+        if ((uint32_t)face >= nf || 12 + 4 * (int64_t)nf > n) return 0;
+        o = ((uint32_t)d[12 + 4 * face] << 24) | ((uint32_t)d[13 + 4 * face] << 16) | ((uint32_t)d[14 + 4 * face] << 8) | d[15 + 4 * face];
+    }
+    if ((int64_t)o + 12 > n) return 0;
+    nt = ((uint32_t)d[o + 4] << 8) | d[o + 5];
+    for (i = 0; i < nt; i++) {
+        int64_t r = (int64_t)o + 12 + 16 * (int64_t)i;
+        if (r + 16 > n) return 0;
+        if (memcmp(d + r, tag, 4) != 0) continue;
+        if (off) *off = ((uint32_t)d[r + 8] << 24) | ((uint32_t)d[r + 9] << 16) | ((uint32_t)d[r + 10] << 8) | d[r + 11];
+        if (len) *len = ((uint32_t)d[r + 12] << 24) | ((uint32_t)d[r + 13] << 16) | ((uint32_t)d[r + 14] << 8) | d[r + 15];
+        return 1;
+    }
+    return 0;
+}
+
+/* The color tables a pack drops from a COLR font: bitmaps and SVG
+ * documents, which ysp does not draw (docs/pack.md 4.3). */
+static const char* const drop_tags[4] = { "CBDT", "CBLC", "sbix", "SVG " };
+
+static uint32_t be_sum(const uint8_t* p, uint32_t n) {
+    uint32_t s = 0, i;
+    for (i = 0; i < n; i += 4) {
+        uint32_t w = 0, k;
+        for (k = 0; k < 4; k++) w = w << 8 | (i + k < n ? p[i + k] : 0u);
+        s += w;
+    }
+    return s;
+}
+
+/* A single font without the tables of drop_tags: the directory rewritten,
+ * every kept table copied in directory order, 4-byte aligned, checksums
+ * and head's checkSumAdjustment computed again. NULL: malformed, or no
+ * memory (cfail set). */
+static uint8_t* font_strip(B* b, const E* e, const uint8_t* d, int64_t n, int64_t* out_n) {
+    uint32_t nt = (uint32_t)(n >= 12 ? ((uint32_t)d[4] << 8 | d[5]) : 0), i, keep = 0, k, sr = 1, es = 0, head_at = 0;
+    int64_t total, at;
+    uint8_t* o;
+    if (n < 12 || 12 + 16 * (int64_t)nt > n) { cfail(b->c, YPAK_ERR_FORMAT, "'%s': the font's table directory is cut short", e->name); return NULL; }
+    total = 12;
+    for (i = 0; i < nt; i++) {
+        const uint8_t* r = d + 12 + 16 * i;
+        uint32_t off = (uint32_t)r[8] << 24 | (uint32_t)r[9] << 16 | (uint32_t)r[10] << 8 | r[11];
+        uint32_t len = (uint32_t)r[12] << 24 | (uint32_t)r[13] << 16 | (uint32_t)r[14] << 8 | r[15];
+        int drop = 0;
+        for (k = 0; k < 4; k++) if (!memcmp(r, drop_tags[k], 4)) drop = 1;
+        if ((int64_t)off + len > n) { cfail(b->c, YPAK_ERR_FORMAT, "'%s': table %.4s passes the file's end", e->name, (const char*)r); return NULL; }
+        if (drop) continue;
+        keep++;
+        total += 16 + (((int64_t)len + 3) & ~(int64_t)3);
+    }
+    while (sr * 2 <= keep) { sr *= 2; es++; }
+    o = (uint8_t*)calloc_c(b->c, (size_t)total + 16);
+    if (!o) { cfail(b->c, YPAK_ERR_NOMEM, "out of memory"); return NULL; }
+    memcpy(o, d, 4);
+    o[4] = (uint8_t)(keep >> 8); o[5] = (uint8_t)keep;
+    o[6] = (uint8_t)((16 * sr) >> 8); o[7] = (uint8_t)(16 * sr); o[8] = (uint8_t)(es >> 8); o[9] = (uint8_t)es;
+    o[10] = (uint8_t)((16 * keep - 16 * sr) >> 8); o[11] = (uint8_t)(16 * keep - 16 * sr);
+    at = 12 + 16 * (int64_t)keep;
+    for (i = 0, k = 0; i < nt; i++) {
+        const uint8_t* r = d + 12 + 16 * i;
+        uint32_t off = (uint32_t)r[8] << 24 | (uint32_t)r[9] << 16 | (uint32_t)r[10] << 8 | r[11];
+        uint32_t len = (uint32_t)r[12] << 24 | (uint32_t)r[13] << 16 | (uint32_t)r[14] << 8 | r[15], q, sum;
+        uint8_t* w = o + 12 + 16 * k;
+        int drop = 0;
+        for (q = 0; q < 4; q++) if (!memcmp(r, drop_tags[q], 4)) drop = 1;
+        if (drop) continue;
+        memcpy(o + at, d + off, len);
+        if (!memcmp(r, "head", 4) && len >= 12) { head_at = (uint32_t)at; memset(o + at + 8, 0, 4); }
+        sum = be_sum(o + at, len);
+        memcpy(w, r, 4);
+        w[4] = (uint8_t)(sum >> 24); w[5] = (uint8_t)(sum >> 16); w[6] = (uint8_t)(sum >> 8); w[7] = (uint8_t)sum;
+        w[8] = (uint8_t)(at >> 24); w[9] = (uint8_t)(at >> 16); w[10] = (uint8_t)(at >> 8); w[11] = (uint8_t)at;
+        w[12] = (uint8_t)(len >> 24); w[13] = (uint8_t)(len >> 16); w[14] = (uint8_t)(len >> 8); w[15] = (uint8_t)len;
+        at += ((int64_t)len + 3) & ~(int64_t)3;
+        k++;
+    }
+    if (head_at) {
+        uint32_t adj = 0xB1B0AFBAu - be_sum(o, (uint32_t)total);
+        o[head_at + 8] = (uint8_t)(adj >> 24); o[head_at + 9] = (uint8_t)(adj >> 16); o[head_at + 10] = (uint8_t)(adj >> 8); o[head_at + 11] = (uint8_t)adj;
+    }
+    *out_n = total;
+    return o;
+}
+
 static int font_fstype(const uint8_t* d, int64_t n, int face) {
     uint32_t off = 0, nt, i;
     if (n >= 12 && memcmp(d, "ttcf", 4) == 0) {
@@ -932,8 +1026,43 @@ static int build_font(B* b, E* e) {
         if (rc) return rc;
     }
     e->faces = faces;
-    snprintf(ver, sizeof ver, "ysp/outline.h %s", YOL_VERSION_STRING);
-    e->deriv = deriv_new(b, "copy", ver);
+    {   /* color: COLR is drawn; bitmap and SVG color tables are not. A font
+         * that has them and no COLR is refused; a COLR font keeps its COLR
+         * and loses them (the Fluent builds: 80 of their 88 MB) */
+        const char* other = NULL;
+        int any_colr = 0, k;
+        for (f = 0; f < faces; f++) {
+            e->colr[f] = font_table(e->data, e->size, f, "COLR", NULL, NULL);
+            any_colr |= e->colr[f];
+            for (k = 0; k < 4 && !other; k++)
+                if (k != 1 && font_table(e->data, e->size, f, drop_tags[k], NULL, NULL)) other = drop_tags[k];
+            if (!e->colr[f] && other)
+                return cfail(b->c, YPAK_ERR_FORMAT, "'%s' face %d: its color glyphs are %s %s and it has no COLR table; ysp draws COLR "
+                             "color fonts only: use Twemoji (Mozilla's COLR build) or another COLR font", e->name, f,
+                             !strcmp(other, "SVG ") ? "SVG" : other, !strcmp(other, "SVG ") ? "documents" : "bitmaps");
+        }
+        snprintf(ver, sizeof ver, "ysp/outline.h %s", YOL_VERSION_STRING);
+        if (any_colr && other) {
+            jv* tl = jnew(b->c, J_ARR);
+            int64_t sn = 0;
+            uint8_t* sd;
+            if (faces != 1)
+                return cfail(b->c, YPAK_ERR_FORMAT, "'%s': a collection whose faces have COLR beside CBDT, sbix or SVG tables is not "
+                             "built; give the face as a font file of its own", e->name);
+            for (k = 0; k < 4; k++)
+                if (font_table(e->data, e->size, 0, drop_tags[k], NULL, NULL)) jpush(b->c, tl, jstrz(b->c, k == 3 ? "SVG" : drop_tags[k]));
+            sd = font_strip(b, e, e->data, e->size, &sn);
+            if (!sd) return YPAK_ERR_FORMAT;
+            if (yol_font_view(&(yol_font){ 0 }, sd, (size_t)sn, 0, msg, sizeof msg) < 0)
+                return cfail(b->c, YPAK_ERR_FORMAT, "'%s': the font without its bitmap and SVG tables: %s", e->name, msg);
+            e->data = sd;
+            e->size = sn;
+            e->deriv = deriv_new(b, "drop_tables", ver);
+            jset(b->c, e->deriv, "dropped", tl);
+        } else {
+            e->deriv = deriv_new(b, "copy", ver);
+        }
+    }
     jset(b->c, e->deriv, "faces", jint(b->c, faces));
     jset(b->c, e->deriv, "fs_type", jint(b->c, fst));
     return 0;
@@ -1001,21 +1130,72 @@ static int build_curveset(B* b, E* e) {
             for (g = 1; g < (uint32_t)yf.n_glyphs; g++)
                 if (font->used[face][g >> 3] & (1u << (g & 7))) list[nl++] = g;
     }
-    memset(&sd, 0, sizeof sd);
-    sd.n_glyphs = (uint32_t)yf.n_glyphs;
-    sd.backward = true;
-    if (!yol_cset_open(&set, &b->ol, &sd)) {
-        yol_cset_close(&set);
-        return cfail(b->c, YPAK_ERR_FORMAT, "'%s': %s", e->name, yol_error(&b->ol));
-    }
-    rc = yol_cset_add_font(&set, &yf, list, list ? nl : 0, tol);
-    if (rc < 0) {
-        yol_cset_close(&set);
-        return cfail(b->c, YPAK_ERR_FORMAT, "'%s': %s", e->name, yol_error(&b->ol));
+    if (font->colr[face]) {
+        /* color glyphs: the layout library flattens them as the glyph runs
+         * did, so the set's layer glyphs and paint indexes are theirs */
+#ifdef YPT_NO_LAYOUT
+        return cfail(b->c, YPAK_ERR_FORMAT, "'%s': '%s' has COLR color glyphs; flattening them needs the layout library: build the pack "
+                     "with the full tool (YSP_BUILD_LAYOUT)", e->name, from);
+#else
+        ylay_lib* L = NULL;
+        ylay_desc ld;
+        ylay_font_info fi;
+        memset(&ld, 0, sizeof ld);
+        ld.ol = &b->ol;
+        if (ylay_create(&L, &ld) < 0) return cfail(b->c, YPAK_ERR_NOMEM, "'%s': ylay_create failed", e->name);
+        rc = ylay_add_font(L, font->data, (size_t)font->size, face, font->name) < 0 ? YPAK_ERR_FORMAT : 0;
+        if (rc == 0) {
+            ylay_font(L, 0, &fi);
+            if (list) {   /* the layer glyphs the runs used, after the font's */
+                uint32_t* l2 = (uint32_t*)calloc_c(b->c, sizeof(uint32_t) * ((size_t)fi.set_glyphs + 1));
+                if (!l2) rc = YPAK_ERR_NOMEM;
+                else {
+                    memcpy(l2, list, sizeof(uint32_t) * nl);
+                    if (font->used[face])
+                        for (g = (uint32_t)yf.n_glyphs; g < fi.set_glyphs && g < font->used_n[face]; g++)
+                            if (font->used[face][g >> 3] & (1u << (g & 7))) l2[nl++] = g;
+                    list = l2;
+                }
+            }
+        }
+        if (rc == 0 && ylay_open_set(L, 0, &set, &b->ol) < 0) rc = YPAK_ERR_FORMAT;
+        else if (rc == 0) {
+            rc = ylay_build_glyphs(L, 0, &set, list, list ? nl : 0, tol) < 0 ? YPAK_ERR_FORMAT : 0;
+            if (rc) yol_cset_close(&set);
+        }
+        if (rc == YPAK_ERR_NOMEM) { ylay_destroy(L); return cfail(b->c, YPAK_ERR_NOMEM, "out of memory"); }
+        if (rc) { rc = cfail(b->c, YPAK_ERR_FORMAT, "'%s': %s", e->name, ylay_error(L)); ylay_destroy(L); return rc; }
+        {
+            jv* co = jnew(b->c, J_OBJ);
+            jset(b->c, co, "color_glyphs", jint(b->c, fi.n_color_glyphs));
+            jset(b->c, co, "refused", jint(b->c, fi.n_refused));
+            jset(b->c, co, "layers", jint(b->c, fi.n_layers));
+            jset(b->c, co, "layer_glyphs", jint(b->c, fi.n_layer_glyphs));
+            jset(b->c, co, "paint_texels", jint(b->c, fi.n_paint_texels));
+            jset(b->c, co, "colr_version", jint(b->c, fi.color == 2 ? 1 : 0));
+            e->color_rec = co;
+        }
+        ylay_destroy(L);
+        e->fmt = 2;
+#endif
+    } else {
+        memset(&sd, 0, sizeof sd);
+        sd.n_glyphs = (uint32_t)yf.n_glyphs;
+        sd.backward = true;
+        if (!yol_cset_open(&set, &b->ol, &sd)) {
+            yol_cset_close(&set);
+            return cfail(b->c, YPAK_ERR_FORMAT, "'%s': %s", e->name, yol_error(&b->ol));
+        }
+        rc = yol_cset_add_font(&set, &yf, list, list ? nl : 0, tol);
+        if (rc < 0) {
+            yol_cset_close(&set);
+            return cfail(b->c, YPAK_ERR_FORMAT, "'%s': %s", e->name, yol_error(&b->ol));
+        }
     }
     rc = check_cset(b, e, &set);
     if (rc == 0) {
-        e->data = cset_bytes(b, &set, YPAK_CSET_UNITS_EM, list ? 0u : YPAK_CSET_ALL, (uint32_t)face, &e->size);
+        e->data = cset_bytes(b, &set, YPAK_CSET_UNITS_EM, (list ? 0u : YPAK_CSET_ALL) | (e->fmt == 2 ? YPAK_CSET_COLOR : 0u),
+                             (uint32_t)face, &e->size);
         if (!e->data) rc = cfail(b->c, YPAK_ERR_NOMEM, "out of memory");
     }
     yol_cset_close(&set);
@@ -1029,6 +1209,7 @@ static int build_curveset(B* b, E* e) {
     jset(b->c, e->deriv, "tol", jstrz(b->c, tols));
     jset(b->c, e->deriv, "resolve", jbool(b->c, 1));
     jset(b->c, e->deriv, "backward", jbool(b->c, 1));
+    if (e->color_rec) jset(b->c, e->deriv, "color", e->color_rec);
     return 0;
 }
 
@@ -2348,6 +2529,7 @@ static int build_glyphruns(B* b, E* e) {
     blk* bl;
     sb pool, runs, items, clus, lines, brec;
     uint32_t n_runs = 0, n_items = 0, n_lines = 0;
+    int any_paint = 0;
     char stamp[8192];
     if (e->res && (keys_ok(b->c, e->res, keys, e->name) || want_type(b->c, e->res, "fonts", J_ARR, e->name) ||
                    want_type(b->c, e->res, "blocks", J_ARR, e->name)))
@@ -2545,23 +2727,33 @@ static int build_glyphruns(B* b, E* e) {
         for (k = 0; k < lb.n_runs; k++) {
             uint8_t q[16];
             const ylay_run* ru = &lb.runs[k];
-            w32(q, (uint32_t)rl->font[ru->font]); memcpy(q + 4, &ru->size, 4); w32(q + 8, ru->first); w32(q + 12, ru->n);
+            /* format 2: the font index in 16 bits, the run's flags above it */
+            w32(q, (uint32_t)rl->font[ru->font] | (ru->flags & YLAY_RUN_PAINT ? (uint32_t)YPAK_RUN_PAINT << 16 : 0u));
+            memcpy(q + 4, &ru->size, 4); w32(q + 8, ru->first); w32(q + 12, ru->n);
+            if (ru->flags & YLAY_RUN_PAINT) any_paint = 1;
             sb_put(&runs, q, 16);
         }
         for (k = 0; k < lb.n_items; k++) {
             const ygfx_citem* it = &lb.items[k];
-            uint32_t g = (uint32_t)it->glyph, fi = 0, rr;
+            uint32_t g = (uint32_t)it->glyph, fi = 0, rr, lf = 0;
             uint8_t cl[4];
             sb_put(&items, it, 32);
             w32(cl, lb.cluster[k]);
             sb_put(&clus, cl, 4);
             for (rr = 0; rr < lb.n_runs; rr++)
-                if (k >= lb.runs[rr].first && k < lb.runs[rr].first + lb.runs[rr].n) fi = (uint32_t)rl->font[lb.runs[rr].font];
+                if (k >= lb.runs[rr].first && k < lb.runs[rr].first + lb.runs[rr].n) { fi = (uint32_t)rl->font[lb.runs[rr].font]; lf = (uint32_t)lb.runs[rr].font; }
             if (fi < (uint32_t)nf) {
                 E* f = fe[fi];
                 int face = ff[fi];
-                if (!f->used[face]) f->used[face] = (uint8_t*)calloc_c(b->c, (size_t)f->n_glyphs[face] / 8 + 1);
-                if (f->used[face] && g < f->n_glyphs[face]) f->used[face][g >> 3] |= (uint8_t)(1u << (g & 7));
+                if (!f->used[face]) {
+                    /* the set's glyphs: a COLR font's layer glyphs follow its own */
+                    ylay_font_info inf;
+                    memset(&inf, 0, sizeof inf);
+                    ylay_font(L, (int)lf, &inf);
+                    f->used_n[face] = inf.set_glyphs > f->n_glyphs[face] ? inf.set_glyphs : f->n_glyphs[face];
+                    f->used[face] = (uint8_t*)calloc_c(b->c, (size_t)f->used_n[face] / 8 + 1);
+                }
+                if (f->used[face] && g < f->used_n[face]) f->used[face][g >> 3] |= (uint8_t)(1u << (g & 7));
             }
         }
         for (k = 0; k < lb.n_lines; k++) {
@@ -2608,7 +2800,11 @@ static int build_glyphruns(B* b, E* e) {
         if (!d) rc = cfail(b->c, YPAK_ERR_NOMEM, "out of memory");
         else {
             memcpy(d, "YSPGRUN1", 8);
-            w32(d + 8, 1); w32(d + 12, 112); w32(d + 16, (uint32_t)nf); w32(d + 20, (uint32_t)nb); w32(d + 24, n_runs);
+            /* version 2 only with color glyph runs, so a pack without them
+             * keeps its bytes and an older player reads it */
+            w32(d + 8, any_paint ? 2u : 1u); w32(d + 12, 112);
+            if (any_paint) e->fmt = 2;
+            w32(d + 16, (uint32_t)nf); w32(d + 20, (uint32_t)nb); w32(d + 24, n_runs);
             w32(d + 28, n_items); w32(d + 32, n_lines);
             w64(d + 40, fo); w64(d + 48, bo); w64(d + 56, ro); w64(d + 64, io); w64(d + 72, co); w64(d + 80, lo); w64(d + 88, po);
             w64(d + 96, pool.n);
@@ -2772,7 +2968,7 @@ static E* make_chunks(C* c, E** ents, int n) {
  * ysp/chunks among them, every entry hashed and chunk-indexed. prefix: the
  * bytes before the zip start (already written by the caller); absolute:
  * offsets count from the file start. */
-static int write_pack(C* c, sink* s, E** ents, int n, int64_t prefix, int absolute) {
+static int write_pack(C* c, sink* s, E** ents, int n, int64_t prefix, int absolute, int format) {
     int64_t at = 0, base = absolute ? 0 : prefix, cd_start, cd_size;
     sb cd;
     int i;
@@ -2841,7 +3037,7 @@ static int write_pack(C* c, sink* s, E** ents, int n, int64_t prefix, int absolu
             sk_put(s, t, 76);
         }
         hex(ents[0]->sha, 32, sha);
-        k = (size_t)snprintf(cm, sizeof cm, "ysp-pack/%d manifest=sha256:%s cd=xxh64:%016llx", YPAK_FORMAT, sha,
+        k = (size_t)snprintf(cm, sizeof cm, "ysp-pack/%d manifest=sha256:%s cd=xxh64:%016llx", format, sha,
                              (unsigned long long)ypak_xxh64(cd.p, cd.n, 0));
         w32(t, 0x06054B50u); w16(t + 4, 0); w16(t + 6, 0);
         w16(t + 8, n >= 0xFFFF ? 0xFFFFu : (uint32_t)n); w16(t + 10, n >= 0xFFFF ? 0xFFFFu : (uint32_t)n);
@@ -2928,7 +3124,7 @@ static int build_desc(C* c, jv* desc, const char* base_dir, const bopt* bo, sink
     jv* au;
     jv* manifest;
     jv* earr;
-    int i, pass, rc = 0;
+    int i, pass, rc = 0, fmt = 1;
     E* man;
     E* chunks;
     E** all;
@@ -3111,7 +3307,12 @@ static int build_desc(C* c, jv* desc, const char* base_dir, const bopt* bo, sink
     chunks->deriv = deriv_new(&b, "chunks", "ysp/pack.h " YPAK_VERSION_STRING);
     manifest = jnew(c, J_OBJ);
     jset(c, manifest, "format", jstrz(c, "ysp-pack"));
-    jset(c, manifest, "version", jint(c, YPAK_FORMAT));
+    {   /* the lowest format that holds the pack: format 2 only for color
+         * glyphs, so every other pack keeps its bytes and its ID, and an
+         * older player still reads it */
+        for (i = 0; i < b.n; i++) if (b.e[i]->fmt > fmt) fmt = b.e[i]->fmt;
+    }
+    jset(c, manifest, "version", jint(c, fmt));
     {
         jv* tool = jnew(c, J_OBJ);
         int laid_out = 0;
@@ -3142,7 +3343,7 @@ static int build_desc(C* c, jv* desc, const char* base_dir, const bopt* bo, sink
     free(mt.p);
     rc = hash_entry(c, man);
     man->chunk = YPAK_NO_CHUNK;
-    if (rc == 0) rc = write_pack(c, out, all, b.n + 2, 0, 0);
+    if (rc == 0) rc = write_pack(c, out, all, b.n + 2, 0, 0, fmt);
 done:
     if (b.ol_ok) yol_close(&b.ol);
     ypt_texts_free(&b.tx);
@@ -3306,8 +3507,8 @@ int ypt_verify(const char* pack_path, FILE* report, char* err, size_t cap) {
     if (report) fprintf(report, "CRC-32 of every entry: ok\n");
     m = pack_manifest(&c, &p);
     if (!m) { rc = YPAK_ERR_FORMAT; goto out; }
-    if (strcmp(str_of(m, "format", ""), "ysp-pack") || !jget(m, "version") || jget(m, "version")->i != YPAK_FORMAT) {
-        rc = cfail(&c, YPAK_ERR_FORMAT, "the manifest's format or version is not ysp-pack 1");
+    if (strcmp(str_of(m, "format", ""), "ysp-pack") || !jget(m, "version") || jget(m, "version")->i != p.format) {
+        rc = cfail(&c, YPAK_ERR_FORMAT, "the manifest's format or version is not ysp-pack %d, the comment's", (int)p.format);
         goto out;
     }
     ents = jget(m, "entries");
@@ -3341,7 +3542,7 @@ int ypt_verify(const char* pack_path, FILE* report, char* err, size_t cap) {
         s.diff = -1;
         s.cmp = p.base_ + p.zip_start;
         s.cmp_n = p.file_size - p.zip_start;
-        rc = write_pack(&c, &s, all, (int)p.n, p.zip_start, p.base == 0 && p.zip_start > 0);
+        rc = write_pack(&c, &s, all, (int)p.n, p.zip_start, p.base == 0 && p.zip_start > 0, p.format);
         if (rc == 0 && (s.diff >= 0 || s.pos != s.cmp_n)) {
             rc = cfail(&c, YPAK_ERR_FORMAT, "the container is not the canonical one: the first difference is at byte %lld",
                        (long long)(s.diff >= 0 ? s.diff + p.zip_start : (s.pos < s.cmp_n ? s.pos : s.cmp_n) + p.zip_start));
@@ -3512,9 +3713,9 @@ static jv* manifest_to_desc(C* c, const jv* m) {
             const char* key = jkey(dv, k);
             if (!strcmp(key, "op") || !strcmp(key, "by")) continue;
             /* what the tool records but does not take back */
-            if ((!strcmp(kind, "font") && (!strcmp(key, "faces") || !strcmp(key, "fs_type"))) ||
+            if ((!strcmp(kind, "font") && (!strcmp(key, "faces") || !strcmp(key, "fs_type") || !strcmp(key, "dropped"))) ||
                 (!strcmp(kind, "calibration") && !strcmp(key, "role")) ||
-                (!strcmp(kind, "curveset") && (!strcmp(key, "resolve") || !strcmp(key, "backward"))) ||
+                (!strcmp(kind, "curveset") && (!strcmp(key, "resolve") || !strcmp(key, "backward") || !strcmp(key, "color"))) ||
                 (!strcmp(kind, "glyphruns") && (!strcmp(key, "experiment") || !strcmp(key, "derived"))) ||
                 (!strcmp(kind, "shader") && (!strcmp(key, "contract") || !strcmp(key, "validated"))) ||
                 (!strcmp(kind, "audio") && (!strcmp(key, "convert") || !strcmp(key, "from_rate") || !strcmp(key, "clipped"))) ||
@@ -3675,7 +3876,7 @@ int ypt_append(const char* player_path, const char* pack_path, const char* out_p
     if (!s.f) { ypak_close(&p); rc = cfail(&c, YPAK_ERR_IO, "cannot create '%s'", tmp); cfree_all(&c); return rc; }
     sk_put(&s, player, (size_t)pn);
     sk_zeros(&s, padded - pn);
-    rc = write_pack(&c, &s, all, (int)p.n, padded, 1);
+    rc = write_pack(&c, &s, all, (int)p.n, padded, 1, p.format);
     ypak_close(&p);
     rc = finish_file(&c, &s, tmp, out_path, rc);
     cfree_all(&c);

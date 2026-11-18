@@ -1,4 +1,4 @@
-/* ysp/pack.h - v0.4.0 - public domain single-header pack reader
+/* ysp/pack.h - v0.5.0 - public domain single-header pack reader
  *
  *   Reads a ysp pack (docs/pack.md): one zip file in store-only mode, every
  *   entry's data aligned to 4096 bytes, a JSON manifest first, a private
@@ -135,6 +135,18 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.5.0 - Pack format 2 (docs/pack.md 2.6): color glyphs. The reader
+ *          opens formats 1 and 2 (YPAK_FORMAT_MIN, YPAK_FORMAT) and
+ *          refuses others; the tool writes format 2 only for a pack that
+ *          holds color glyphs, so other packs keep format 1 and their IDs.
+ *          A CURVESET may set flag bit 1, YPAK_CSET_COLOR: its first
+ *          texels are paint records and its glyph table holds layer glyphs
+ *          past the font's (ysp/gfx.h PAINT RECORDS). GLYPHRUNS version 2:
+ *          a run's font index is 16 bits and the 16 above it are flags,
+ *          YPAK_RUN_PAINT for a run of color glyph layers (draw it with
+ *          YGFX_I_PAINT); ypak_runs_run is { uint16_t font, flags; ... },
+ *          the same bytes as v0.4's uint32_t font for a version 1 entry,
+ *          whose flags must be 0. Breaking: ypak_runs_run's fields.
  *   v0.4.0 - ypak_verify_entry(): hashes and checks one entry whatever the
  *          policy. Under YPAK_VERIFY_NONE, ypak_data() skips the hash and
  *          ypak_check() returns 0 after the header, so before this no call
@@ -213,9 +225,9 @@
 #define YSP_PACK_H_INCLUDED
 
 #define YPAK_VERSION_MAJOR 0
-#define YPAK_VERSION_MINOR 4
+#define YPAK_VERSION_MINOR 5
 #define YPAK_VERSION_PATCH 0
-#define YPAK_VERSION_STRING "0.4.0"
+#define YPAK_VERSION_STRING "0.5.0"
 
 /* The file source's mmap(), open() and fstat() under -std=c11: the same
  * feature-test macro, for the same reasons, as ysp/rt.h's (set before the
@@ -236,7 +248,8 @@ extern "C" {
 #define YPAK_API extern
 #endif
 
-#define YPAK_FORMAT       1                      /* the pack format this reader reads */
+#define YPAK_FORMAT       2                      /* the newest pack format this reader reads */
+#define YPAK_FORMAT_MIN   1                      /* v0.5: and the oldest; 2 adds color glyphs */
 #define YPAK_ALIGN        4096
 #define YPAK_CHUNK_LOG2   20
 #define YPAK_CHUNK        ((int64_t)1 << YPAK_CHUNK_LOG2)
@@ -470,6 +483,7 @@ typedef struct ypak_cset {
 #define YPAK_CSET_UNITS_EM   0u
 #define YPAK_CSET_UNITS_USER 1u
 #define YPAK_CSET_ALL        0x1u
+#define YPAK_CSET_COLOR      0x2u   /* v0.5: paint records first, layer glyphs past the font's */
 YPAK_API int ypak_cset_view(const void* data, int64_t size, ypak_cset* out, char* err, size_t cap);
 
 typedef struct ypak_art_layer { uint32_t glyph, rgba; int32_t source, element; } ypak_art_layer;
@@ -520,7 +534,10 @@ typedef struct ypak_runs_block_rec {
     uint32_t run_first, n_runs, item_first, n_items, line_first, n_lines;
     uint32_t reserved_[2];
 } ypak_runs_block_rec;
-typedef struct ypak_runs_run { uint32_t font; float size; uint32_t first, n; } ypak_runs_run;
+/* v0.5: font and flags were one uint32_t font; a version 1 entry has flags 0 */
+typedef struct ypak_runs_run { uint16_t font, flags; float size; uint32_t first, n; } ypak_runs_run;
+#define YPAK_RUN_PAINT 0x1u      /* the run's items are color glyph layers: glyph a set
+                                  * glyph, color a paint record's texel (YGFX_I_PAINT) */
 typedef struct ypak_runs_line {
     float x, baseline, width, ascent, descent;
     uint32_t text_start, text_end, reserved_;
@@ -1108,12 +1125,12 @@ static int ypak__tail(ypak_pack* p, const ypak__src* w) {
         while (k < clen && c[k] >= '0' && c[k] <= '9' && v < 100000) v = v * 10 + (uint32_t)(c[k++] - '0');
         if (k == 9) return ypak__fail(p, YPAK_ERR_FORMAT, "the ysp-pack comment has no format version");
         p->format = (int32_t)v;
-        if (v != YPAK_FORMAT)
-            return ypak__fail(p, YPAK_ERR_VERSION, "pack format %u; this reader (ysp/pack.h %s) reads format %d; "
-                              "update the player or rebuild the pack", v, YPAK_VERSION_STRING, YPAK_FORMAT);
+        if (v < YPAK_FORMAT_MIN || v > YPAK_FORMAT)
+            return ypak__fail(p, YPAK_ERR_VERSION, "pack format %u; this reader (ysp/pack.h %s) reads formats %d to %d; "
+                              "update the player or rebuild the pack", v, YPAK_VERSION_STRING, YPAK_FORMAT_MIN, YPAK_FORMAT);
         if (clen != 117 || memcmp(c + 10, " manifest=sha256:", 17) != 0 || memcmp(c + 91, " cd=xxh64:", 10) != 0 ||
             !ypak__hex(c + 27, 32, idh) || !ypak__hex(c + 101, 8, cdh))
-            return ypak__fail(p, YPAK_ERR_FORMAT, "the ysp-pack comment is malformed (expected 'ysp-pack/1 "
+            return ypak__fail(p, YPAK_ERR_FORMAT, "the ysp-pack comment is malformed (expected 'ysp-pack/N "
                               "manifest=sha256:<64 hex> cd=xxh64:<16 hex>')");
         memcpy(p->id, idh, 32);
         p->cd_hash_ = 0;
@@ -2015,13 +2032,18 @@ static int ypak__vfail(char* err, size_t cap, const char* fmt, ...) {
     return YPAK_ERR_FORMAT;
 }
 
-static int ypak__view_head(const uint8_t* b, int64_t size, const char* magic, uint32_t hsize, char* err, size_t cap) {
+static int ypak__view_head2(const uint8_t* b, int64_t size, const char* magic, uint32_t hsize, uint32_t vmax, char* err, size_t cap) {
     if (!b || size < (int64_t)hsize) return ypak__vfail(err, cap, "%.8s: shorter than its %u-byte header", magic, hsize);
     if (((uintptr_t)b & 7u) != 0) return ypak__vfail(err, cap, "%.8s: not 8-byte aligned in memory", magic);
     if (memcmp(b, magic, 8) != 0) return ypak__vfail(err, cap, "not a %.8s entry (wrong magic)", magic);
-    if (ypak__rd32(b + 8) != 1) return ypak__vfail(err, cap, "%.8s: version %u; this reader knows 1", magic, ypak__rd32(b + 8));
+    if (ypak__rd32(b + 8) < 1 || ypak__rd32(b + 8) > vmax)
+        return ypak__vfail(err, cap, "%.8s: version %u; this reader (ysp/pack.h %s) knows 1 to %u", magic, ypak__rd32(b + 8),
+                           YPAK_VERSION_STRING, vmax);
     if (ypak__rd32(b + 12) != hsize) return ypak__vfail(err, cap, "%.8s: header size %u, expected %u", magic, ypak__rd32(b + 12), hsize);
     return 0;
+}
+static int ypak__view_head(const uint8_t* b, int64_t size, const char* magic, uint32_t hsize, char* err, size_t cap) {
+    return ypak__view_head2(b, size, magic, hsize, 1, err, cap);
 }
 
 /* A curve set body at b, of exactly size bytes. */
@@ -2038,7 +2060,8 @@ static int ypak__cset_at(const uint8_t* b, int64_t size, ypak_cset* out, char* e
     nw = ypak__rd64(b + 40);
     to = ypak__rd64(b + 48);
     wo = ypak__rd64(b + 56);
-    if (out->units > 1 || (out->flags & ~1u) || out->n_glyphs >= (1u << 24))
+    if (out->units > 1 || (out->flags & ~(YPAK_CSET_ALL | YPAK_CSET_COLOR)) || out->n_glyphs >= (1u << 24) ||
+        ((out->flags & YPAK_CSET_COLOR) && out->units != YPAK_CSET_UNITS_EM))
         return ypak__vfail(err, cap, "YSPCSET1: units, flags or glyph count out of range");
     if (nt > 0xFFFFFFFFu || nw > 0xFFFFFFFFu || nw % 4 || nw < 8u + out->n_glyphs || to != 64 || wo != 64 + 16 * nt ||
         (uint64_t)size != wo + 4 * nw)
@@ -2285,12 +2308,13 @@ YPAK_API size_t ypak_qoi_encode(const uint8_t* rgba, uint32_t w, uint32_t h, uin
 YPAK_API int ypak_runs_view(const void* data, int64_t size, ypak_runs* out, char* err, size_t cap) {
     const uint8_t* b = (const uint8_t*)data;
     uint64_t fo, bo, ro, io, co, lo, po, pb;
-    uint32_t i;
+    uint32_t i, version;
     int rc;
     if (!out) return YPAK_ERR_ARG;
-    rc = ypak__view_head(b, size, "YSPGRUN1", 112, err, cap);
+    rc = ypak__view_head2(b, size, "YSPGRUN1", 112, 2, err, cap);
     if (rc) return rc;
     memset(out, 0, sizeof(*out));
+    version = ypak__rd32(b + 8);
     out->n_fonts = ypak__rd32(b + 16);
     out->n_blocks = ypak__rd32(b + 20);
     out->n_runs = ypak__rd32(b + 24);
@@ -2337,6 +2361,8 @@ YPAK_API int ypak_runs_view(const void* data, int64_t size, ypak_runs* out, char
             const ypak_runs_run* q = &out->runs[k->run_first + r];
             if (q->font >= out->n_fonts || q->first > k->n_items || q->n > k->n_items - q->first)
                 return ypak__vfail(err, cap, "YSPGRUN1: block %u run %u is out of range", i, r);
+            if (q->flags & ~(version >= 2 ? YPAK_RUN_PAINT : 0u))
+                return ypak__vfail(err, cap, "YSPGRUN1: block %u run %u has flags 0x%x, unknown to version %u", i, r, (unsigned)q->flags, version);
         }
     }
     return 0;

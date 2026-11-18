@@ -654,3 +654,29 @@ test = "outline"
 why = "v0.4.0: an enum row without values leaves the names in the doc text only."
 find = '"u8=0,u16=1,f32=2,f64=3" },'
 replace = 'NULL },'
+
+# v0.5.0: texels no glyph references (paint records for color glyphs).
+
+[[mutant]]
+id = "tx-01"
+name = "texels not counted"
+test = "outline"
+why = "v0.5.0: the records must take their room; uncounted, the next glyph's curves overwrite them."
+find = "    s->n_texels += n;\n    return (int)at;"
+replace = "    return (int)at;"
+
+[[mutant]]
+id = "tx-02"
+name = "a value that is not finite accepted"
+test = "outline"
+why = "v0.5.0: a NaN in a paint record would draw nothing, or garbage, where ygfx_cset_check() refuses the whole set."
+find = 'if (!yol__finite((double)t[i])) return yol__err(s->ctx, YOL_ERR_ARG, "curve set: texel %u is not finite", i / 4);'
+replace = 'if (0) return yol__err(s->ctx, YOL_ERR_ARG, "curve set: texel %u is not finite", i / 4);'
+
+[[mutant]]
+id = "tx-03"
+name = "the index of the texel after"
+test = "outline"
+why = "v0.5.0: callers store the returned index as the record's address."
+find = "    return (int)at;\n}"
+replace = "    return (int)at + 1;\n}"

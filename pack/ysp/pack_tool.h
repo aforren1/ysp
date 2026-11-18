@@ -89,6 +89,22 @@
  *   three patch hashes and ylay 0.2.0) and pack ID; its entries are
  *   byte-identical.
  *
+ *   v0.11.0 (2026-11-18): color glyphs (pack/layout 0.3.0, ysp/pack.h
+ *   0.5.0, docs/pack.md 18). An emoji of a COLR font in a block's text is
+ *   laid out as its layers in a paint run; the GLYPHRUNS entry is then
+ *   version 2 (a run's flags above its 16-bit font index), the font's
+ *   CURVESET holds the paint records first and the layer glyphs after the
+ *   font's (flag YPAK_CSET_COLOR, "used" includes the layer glyphs the
+ *   runs use), and the pack is format 2. Every other pack keeps format 1
+ *   and its bytes. A color glyph the layers cannot draw exactly is refused
+ *   by codepoint, glyph, font and feature, with what to use instead. A
+ *   FONT whose color glyphs are CBDT, sbix or SVG with no COLR is refused;
+ *   one with COLR beside them is stored without them (derivation op
+ *   "drop_tables", the tables in "dropped"). The core tool refuses a
+ *   CURVESET of a COLR font: flattening needs the layout library. Every
+ *   pack with glyph runs gets a new manifest (four patch hashes, ylay
+ *   0.3.0); entries without color glyphs are byte-identical.
+ *
  *   v0.7.0 (2026-10-22): the definition's canonical bytes and its lookups
  *   (docs/pack.md 16). An experiment entry that is a definition ("format":
  *   "ysp-experiment") is stored as ysp/json.h's canonical form with one
@@ -151,7 +167,7 @@
 extern "C" {
 #endif
 
-#define YPT_VERSION_STRING "0.10.0"
+#define YPT_VERSION_STRING "0.11.0"
 
 typedef struct ypt_options {
     const char* sources;   /* the sources' folder; NULL: the description's folder */

@@ -13,11 +13,27 @@ timeout = 300
 
 [[mutant]]
 id = "c-01"
-name = "format 2 read as 1"
+name = "format 3 read as 2"
 test = "pack"
-why = "An unknown format version must be refused, not parsed as the known one."
-find = 'if (v != YPAK_FORMAT)'
-replace = 'if (v != YPAK_FORMAT && v != 2)'
+why = "An unknown format version must be refused, not parsed as the known one (v0.5.0: 1 and 2 are known)."
+find = 'if (v < YPAK_FORMAT_MIN || v > YPAK_FORMAT)'
+replace = 'if (v < YPAK_FORMAT_MIN || v > YPAK_FORMAT + 1)'
+
+[[mutant]]
+id = "c-01b"
+name = "format 0 read"
+test = "pack"
+why = "v0.5.0: below the oldest format is unknown too."
+find = 'if (v < YPAK_FORMAT_MIN || v > YPAK_FORMAT)'
+replace = 'if (v > YPAK_FORMAT)'
+
+[[mutant]]
+id = "c-01c"
+name = "format 2 refused"
+test = "pack"
+why = "v0.5.0: a pack with color glyphs is format 2; this reader must open it."
+find = 'if (v < YPAK_FORMAT_MIN || v > YPAK_FORMAT)'
+replace = 'if (v < YPAK_FORMAT_MIN || v > YPAK_FORMAT_MIN)'
 
 [[mutant]]
 id = "c-02"
@@ -442,3 +458,61 @@ why = "An incremental pack has no bytes of its own; the call must say to use ypa
 find = '''    if (!p->base_ && !p->rd_)
         return ypak__fail(p, YPAK_ERR_ARG, "ypak_verify_entry: an incremental pack has no bytes to read; use ypak_check()");'''
 replace = ''
+
+# --- v0.5.0: color glyphs (pack format 2) ----------------------------------------
+
+[[mutant]]
+id = "fc-01"
+name = "glyph runs version 3 read"
+test = "pack"
+why = "A form version past the reader's must be refused by name, not read with the known layout."
+find = 'rc = ypak__view_head2(b, size, "YSPGRUN1", 112, 2, err, cap);'
+replace = 'rc = ypak__view_head2(b, size, "YSPGRUN1", 112, 3, err, cap);'
+
+[[mutant]]
+id = "fc-02"
+name = "glyph runs version 2 refused"
+test = "pack"
+why = "A pack with color glyph runs writes version 2; the player must read it."
+find = 'rc = ypak__view_head2(b, size, "YSPGRUN1", 112, 2, err, cap);'
+replace = 'rc = ypak__view_head2(b, size, "YSPGRUN1", 112, 1, err, cap);'
+
+[[mutant]]
+id = "fc-03"
+name = "run flags not checked"
+test = "pack"
+why = "A flag a version does not define (any flag in version 1) would be drawn as if it were known."
+find = 'if (q->flags & ~(version >= 2 ? YPAK_RUN_PAINT : 0u))'
+replace = 'if (0)'
+
+[[mutant]]
+id = "fc-04"
+name = "paint flag allowed in version 1"
+test = "pack"
+why = "Version 1 has no flags: its font field's upper bits are 0 in every pack the tool wrote."
+find = 'if (q->flags & ~(version >= 2 ? YPAK_RUN_PAINT : 0u))'
+replace = 'if (q->flags & ~YPAK_RUN_PAINT)'
+
+[[mutant]]
+id = "fc-05"
+name = "curve set color flag refused"
+test = "pack"
+why = "A color set (paint records, layer glyphs) sets flag bit 1; the player must take it."
+find = '(out->flags & ~(YPAK_CSET_ALL | YPAK_CSET_COLOR))'
+replace = '(out->flags & ~YPAK_CSET_ALL)'
+
+[[mutant]]
+id = "fc-06"
+name = "curve set unknown flags read"
+test = "pack"
+why = "A flag this reader does not know must be refused."
+find = '(out->flags & ~(YPAK_CSET_ALL | YPAK_CSET_COLOR))'
+replace = '(out->flags & ~(YPAK_CSET_ALL | YPAK_CSET_COLOR | 4u))'
+
+[[mutant]]
+id = "fc-07"
+name = "color set in user units"
+test = "pack"
+why = "Paint records are in em, as a font's set is; artwork's user units with paints are not a form this version writes."
+find = '((out->flags & YPAK_CSET_COLOR) && out->units != YPAK_CSET_UNITS_EM))'
+replace = '(0))'

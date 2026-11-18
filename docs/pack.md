@@ -17,7 +17,9 @@ definition's canonical bytes (D2) and refuses a lookup whose map lacks a
 level of its `by`. Tool v0.8.0 (2026-11-09, section 16) reads the definition
 through ysp/experiment.h. Tool v0.10.0 (2026-11-18, section 16) lays out
 glyph runs with the layout library's font fallback past the script and
-names the characters no font has. Where the build
+names the characters no font has. Tool v0.11.0 (2026-11-18, section 18)
+stores color glyphs: a COLR font's emoji as layers in glyph runs, their
+paints in the font's curve set, in pack format 2. Where the build
 changed the design, the text says so. When this page and rig_spec 5
 disagree, this page is newer.
 
@@ -170,8 +172,11 @@ The end record's comment is ASCII, one line, no line end:
 ysp-pack/1 manifest=sha256:<64 hex> cd=xxh64:<16 hex>
 ```
 
-- `1` is the format version. The reader refuses any other value: "pack
-  format 2; this player reads format 1; update the player".
+- `1` is the format version, or `2` for a pack that holds color glyphs
+  (section 18; the tool writes the lowest version that holds the pack).
+  The reader refuses any other value: "pack format 3; this reader
+  (ysp/pack.h 0.5.0) reads formats 1 to 2; update the player or rebuild
+  the pack".
 - `manifest=` is the pack ID (2.8).
 - `cd=` is the XXH64 (seed 0) of the central directory bytes. A zip tool
   that changes the pack keeps the comment and changes the directory, so
@@ -542,7 +547,9 @@ tool (`calibration_role()`) decides this.
 ### 4.3 FONT (license rule decided 2026-10-09: open question 7)
 
 The font file, unchanged: TrueType, CFF OpenType, or a collection of up
-to 16 faces. Every face is opened with `yol_font_view()`. The tool reads
+to 16 faces. Tool v0.11.0: a font whose color glyphs are CBDT, sbix or
+SVG and that has no COLR is refused; a COLR font with them is stored
+without them (`"op": "drop_tables"`, section 18). Every face is opened with `yol_font_view()`. The tool reads
 each face's OS/2 `fsType` and refuses a face marked restricted license
 embedding (bits 0 to 3 equal 2) unless the source description sets
 `"private": true`. One function in the tool (`font_license_ok()`) decides
@@ -557,7 +564,7 @@ this. The derivation records `faces` and face 0's `fs_type` (-1: no OS/2).
 | 12 | 4 | header size 64 |
 | 16 | 4 | units: 0 em (a font), 1 user units (artwork) |
 | 20 | 4 | G, the glyph table size, below 2^24 |
-| 24 | 4 | flags: bit 0, every glyph of the face is built |
+| 24 | 4 | flags: bit 0, every glyph of the face is built; bit 1 (pack format 2), color: paint records first, layer glyphs past the font's (section 18) |
 | 28 | 4 | face |
 | 32 | 8 | n_texels |
 | 40 | 8 | n_words, a multiple of 4 |
@@ -596,7 +603,9 @@ Each section follows the one before at the next multiple of 16. Records:
   item count, first line, line count (u32); 8 bytes 0. Blocks are sorted
   by key, keys unique.
 - run, 16 bytes: font index, size (f32), first item (from the block's
-  first item), count.
+  first item), count. Version 2 (pack format 2, section 18): the font
+  index is 16 bits and the 16 above it are flags, bit 0 a run of color
+  glyph layers (`YPAK_RUN_PAINT`); version 1 has them 0.
 - item, 32 bytes: `ygfx_citem` as ysp/gfx.h takes it.
 - cluster, 4 bytes per item: the codepoint offset where its cluster starts.
 - line, 32 bytes: x, baseline, width, ascent, descent (f32), text start,
@@ -2496,3 +2505,139 @@ header skipped, the incremental refusal removed): 4 of 4 caught.
   bindings. Not tested.
 - The bindings on macOS and CPython 3.8 to 3.13 not run here; CI builds
   the abi3 wheels. The header's tests ran on macOS (2026-11-04).
+
+## 18. Color glyphs (tool v0.11.0, 2026-11-18)
+
+Emoji from COLR fonts (versions 0 and 1), end to end. The scope is the
+user's decision of 2026-11-18 ([emoji_colr_survey.md](emoji_colr_survey.md),
+"Decisions"). The layout library flattens each color glyph
+([layout.md](layout.md#color-glyphs)); this section is what the pack
+stores and refuses. ysp/gfx.h draws the layers (gfx.md, "v0.22.0").
+
+### Decisions
+
+| Question | Choice | Why |
+|---|---|---|
+| A new kind, or extended forms | Extended forms: CURVESET and GLYPHRUNS | A color glyph is glyphs of the font's set and paint records. The records are texels of the same set (`yol_cset_add_texels()`), so a curve set made from a font holds its paints; the player makes one texture pair per set, as for text. A new kind would hold the same arrays in a third place and need a third upload |
+| Where layers are expanded | At layout, in the pack tool | GLYPHRUNS items are the layers: glyph a set glyph, color a paint record's texel index. The player parses no font table and does no per-glyph work: one `ygfx_crun()` per run, as before |
+| The pack format version | 2, written only for a pack that holds color glyphs | An older reader then refuses the pack at open with "pack format 2; ... update the player", not at the first text stimulus. A pack without color glyphs is still format 1: its bytes and its ID do not change, and older players read it |
+| A run's flag | GLYPHRUNS version 2: the 32-bit font index is a 16-bit index (at most 64 fonts) and 16 bits of flags | The record stays 16 bytes; a version 1 entry has the same bytes, flags 0 |
+| Fonts with CBDT or SVG beside COLR | Stored without CBDT, CBLC, sbix and SVG | The Fluent builds carry all three; COLR is what is drawn. Fluent Color drops from 87.8 MB to the measured size below |
+
+### The forms
+
+- **Pack format 2** (2.6): the comment `ysp-pack/2 manifest=...` and the
+  manifest's `"version": 2`. ysp/pack.h 0.5.0 opens formats 1 and 2
+  (`YPAK_FORMAT_MIN`, `YPAK_FORMAT`) and refuses others: "pack format 3;
+  this reader (ysp/pack.h 0.5.0) reads formats 1 to 2; update the player
+  or rebuild the pack". `ypak verify` checks that the manifest's version
+  equals the comment's.
+- **CURVESET** (4.4), flag bit 1 `YPAK_CSET_COLOR`, em units only: texels
+  0 to P - 1 are paint records (gfx.md, "Paint records"), the curves
+  follow; the glyph table holds the font's glyphs and then the layer
+  glyphs (a glyph under a baked transform, or cut by its clip box), G =
+  font glyphs + layer glyphs. The curve set format stays version 1. The
+  derivation records `"color": {"color_glyphs", "refused", "layers",
+  "layer_glyphs", "paint_texels", "colr_version"}` (a record; a rebuild
+  computes it again). `"glyphs": "used"` keeps the layer glyphs the
+  pack's runs use.
+- **GLYPHRUNS** version 2 (4.5): a run's first field is the font index
+  (16 bits) and flags (16 bits above it); `YPAK_RUN_PAINT` marks a run of
+  color glyph layers. Draw it with `YGFX_I_PAINT`: an item's `color` is
+  then the texel index of its paint record. Each emoji is its layers in
+  order, consecutive, at the emoji's pen position, with the cluster of
+  the emoji. Written only when a block has a paint run.
+- **FONT** (4.3): a font whose color glyphs are CBDT, sbix or SVG and
+  that has no COLR is refused. A COLR font that also has them is stored
+  without them: derivation `"op": "drop_tables"`, `"dropped": ["CBDT",
+  "CBLC", "SVG"]`; the directory is written again (kept tables in
+  directory order, 4-byte aligned, checksums and head's
+  checkSumAdjustment computed again). A collection with such a face is
+  refused ("give the face as a font file of its own"). The source's
+  SHA-256 in the manifest is the file's; the entry's is the stored bytes'.
+- The core tool (no layout library) refuses a CURVESET of a COLR font:
+  "flattening them needs the layout library: build the pack with the full
+  tool (YSP_BUILD_LAYOUT)". It cannot build glyph runs either.
+
+### What the tool refuses
+
+Per glyph, when a block's text uses it, with the block, the font, the
+cluster's codepoints and the glyph; for example:
+
+```
+'text/emoji.ysprun' block 'k1': ysp_layout: fonts/Noto-COLRv1.ttf: U+1F1FA U+1F1F8 (glyph 3830):
+composite mode SOFT_LIGHT needs an offscreen group, which is not built; use Noto's build without
+flags (Noto-COLRv1-noflags.ttf) or Twemoji
+```
+
+| Feature | The message's feature part |
+|---|---|
+| Sweep gradient | a sweep gradient (PaintSweepGradient) is not drawn |
+| Extend repeat or reflect | a gradient with extend repeat (reflect) is not drawn (pad only) |
+| The foreground color | the foreground color (palette index 0xFFFF) is not drawn |
+| Variable COLR | variable COLR (a PaintVar format or variation data) is not drawn |
+| PaintColrGlyph | PaintColrGlyph (glyph N) is not drawn |
+| Nested glyph clips | a fill under two glyph clips is not drawn |
+| A composite mode other than SRC_OVER (SOFT_LIGHT in Noto's flags) | composite mode M needs an offscreen group, which is not built |
+| SRC_IN that is not group opacity (a mask) | composite mode SRC_IN as a mask (not a group opacity) needs an offscreen group, which is not built |
+| Group opacity over layers that overlap | group opacity over layers that overlap needs an offscreen group, which is not built |
+| HarfBuzz's silent limits | its paint graph reaches HarfBuzz's limits (64 levels, 16,384 edges), past which HarfBuzz stops without an error |
+| An image paint | an image paint is not drawn |
+| A clip rectangle under a turn | a clip rectangle under a turn is not drawn |
+| A radial with a start radius above 0 | a radial gradient with a start radius above 0 is not drawn |
+| A two-point radial whose focal point is not inside | a two-point radial gradient whose start circle is not inside its end circle is not drawn |
+| 0 or more than 16 stops | a color line of N stops is not drawn (1 to 16) |
+| A gradient with no direction, or a singular transform | a gradient with no direction or under a singular transform is not drawn |
+| A fill with no glyph clip and no clip box | a fill with no glyph clip and no clip box is not drawn |
+| A layer glyph past the font's glyphs (a damaged font) | a layer's glyph N is past the font's glyphs (a damaged font) |
+
+Each ends with what to do: "use Noto's build without flags
+(Noto-COLRv1-noflags.ttf) or Twemoji" for SOFT_LIGHT, else "use a font
+without it, such as Twemoji (docs/layout.md, Color glyphs)". Palettes:
+the tool always uses palette 0, and nothing in a description asks for
+another, so nothing reaches another palette.
+
+Per font: "its color glyphs are CBDT bitmaps (sbix bitmaps, SVG
+documents) and it has no COLR table; ysp draws COLR color fonts only: use
+Twemoji (Mozilla's COLR build) or another COLR font". A COLR table that
+HarfBuzz rejects (its sanitizer refuses, for example, a chain of more
+than 64 paints) makes the font refused by the layout library: "its COLR
+table is malformed or holds no color glyph (HarfBuzz reads none)".
+
+### Tests
+
+`tests/pack/tool_test.c` (`test_color_pack`, 39 checks; fonts written by
+`tests/adapt/colr_font_build.h`):
+
+- A COLR version 0 emoji font and the box font, "a😀b 👨‍👩" (a ZWJ
+  ligature): format 2, GLYPHRUNS version 2 with one paint run in the
+  emoji font, the CURVESET with the color flag passes `ygfx_cset_check()`,
+  its first texels are the layout library's paints, and every layer's
+  glyph is in the set and its paint a record; the same with `"glyphs":
+  "all"`. Built twice: the same bytes; `ypak verify` and `ypak rebuild`
+  (identical).
+- A COLR version 1 font, a translated layer, a layer cut by its clip box
+  and a linear gradient, `"glyphs": "used"`: the same checks; the layer
+  glyphs are in the used set.
+- Refusals: a SOFT_LIGHT glyph (the codepoint and glyph, the mode, Noto's
+  build, the font, the block); a CBDT font without COLR. A COLR font with
+  CBDT, CBLC and SVG: stored without them (its directory lists COLR and
+  CPAL and none of them), opens with `yol_font_view()`, smaller, the
+  derivation `drop_tables`; the pack is format 1 (no glyph runs) and
+  verifies and rebuilds. The corpus pack is format 1.
+- Under `YPT_NO_LAYOUT` (the core tool), the COLR curve set's refusal.
+
+`tests/adapt/pack_test.c`: a format 2 pack opens and says so; formats 0
+and 3 are refused with the range; GLYPHRUNS version 2 reads a paint run's
+flags, refuses an unknown flag and version 3, and version 1 refuses any
+flag; the curve set's color flag is read, refused in user units, and an
+unknown flag refused. Mutants `c-01` to `c-01c` and `fc-01` to `fc-07`
+in `tests/mutate/pack.toml`: 10 of 10 killed.
+
+### Hashes that moved
+
+Every pack with glyph runs gets a new manifest and pack ID (the layout
+line lists four patch hashes and ylay 0.3.0; ysp/pack.h 0.5.0 and
+ysp/outline.h 0.5.0 in `tool.libraries`). Entries without color glyphs
+are byte-identical; the corpus pin (`tests/pack/corpus.sha256`) is
+unchanged.

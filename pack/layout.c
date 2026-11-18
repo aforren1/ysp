@@ -6,6 +6,7 @@
 #define _POSIX_C_SOURCE 200809L   /* clock_gettime under -std=c11 */
 #endif
 #include "ysp/layout.h"
+#include "colr.h"
 
 #include <hb.h>
 #include <hb-ot.h>
@@ -121,9 +122,11 @@ typedef struct ylay__font {
     uint32_t          n_built;
     double            build_us;
     int               color;         /* 0 none, 1 COLR v0, 2 COLR v1 paints      */
+    uint32_t          G;             /* the set's glyph table: font and layer glyphs */
+    ylay__colr        colr;          /* the color glyphs' layers and paints       */
 } ylay__font;
 
-typedef struct ylay__key { int font; float size; uint32_t n, at; } ylay__key;
+typedef struct ylay__key { int font; float size; uint32_t n, at, flags; } ylay__key;
 
 struct ylay_lib {
     yol_ctx*                  ol;
@@ -199,6 +202,7 @@ void ylay_destroy(ylay_lib* L) {
     for (i = 0; i < L->n_fonts; i++) {
         ylay__font* F = &L->fonts[i];
         yol_cset_close(&F->set);
+        ylay__colr_free(&F->colr);
         free(F->have); free(F->fresh); free(F->todo); free(F->taken);
     }
     if (L->fc) skb_font_collection_destroy(L->fc);
@@ -262,6 +266,18 @@ int ylay_add_font(ylay_lib* L, const void* bytes, size_t n, int face, const char
         hb_face_destroy(hf);
         return ylay__fail(L, YLAY_ERR_FORMAT, "ysp_layout: %s: %s", F->name, err);
     }
+    if (colr) {
+        /* every color glyph flattened now, so the paint records sit at the
+         * set's start in an order the font alone gives: the pack tool's set
+         * (ylay_open_set) then has the same paint indexes */
+        int rc = ylay__colr_build(&F->colr, hf, &F->f, L->ol, err, sizeof err);
+        if (rc != YLAY_OK) {
+            ylay__colr_free(&F->colr);
+            hb_face_destroy(hf);
+            return ylay__fail(L, rc, "ysp_layout: %s: %s", F->name, err);
+        }
+    }
+    F->G = colr ? F->colr.G : (uint32_t)F->f.n_glyphs;
     font = hb_font_create(hf);
     /* A COLR font goes in Skribidi's emoji family, which its emoji runs
      * (emoji presentation, VS16, ZWJ and flag sequences) take; every other
@@ -270,13 +286,19 @@ int ylay_add_font(ylay_lib* L, const void* bytes, size_t n, int face, const char
     if (font) F->handle = skb_font_collection_add_hb_font(L->fc, F->name, font, colr ? SKB_FONT_FAMILY_EMOJI : SKB_FONT_FAMILY_DEFAULT, NULL);
     hb_font_destroy(font);
     hb_face_destroy(hf);
-    if (!F->handle) return ylay__fail(L, YLAY_ERR_FORMAT, "ysp_layout: %s: HarfBuzz could not open face %d", F->name, face);
+    if (!F->handle) {
+        ylay__colr_free(&F->colr);
+        return ylay__fail(L, YLAY_ERR_FORMAT, "ysp_layout: %s: HarfBuzz could not open face %d", F->name, face);
+    }
     memset(&cd, 0, sizeof cd);
-    cd.n_glyphs = (uint32_t)F->f.n_glyphs;
+    cd.n_glyphs = F->G;
     cd.backward = true;   /* the rays are 18 to 27 % faster with them (ysp/gfx.h) */
-    F->have = (uint8_t*)calloc(((size_t)F->f.n_glyphs + 7) / 8, 1);
-    if (!F->have || !yol_cset_open(&F->set, L->ol, &cd)) {
+    F->have = (uint8_t*)calloc(((size_t)F->G + 7) / 8, 1);
+    if (!F->have || !yol_cset_open(&F->set, L->ol, &cd) ||
+        (F->colr.n_paint && yol_cset_add_texels(&F->set, F->colr.paints, F->colr.n_paint) != 0)) {
         skb_font_collection_remove_font(L->fc, F->handle);
+        yol_cset_close(&F->set);
+        ylay__colr_free(&F->colr);
         free(F->have);
         return ylay__fail(L, YLAY_ERR_NOMEM, "ysp_layout: %s: no memory for its curve set", F->name);
     }
@@ -303,6 +325,13 @@ int ylay_font(const ylay_lib* L, int font, ylay_font_info* out) {
     out->n_built = F->n_built;
     out->build_us = F->build_us;
     out->color = F->color;
+    out->set_glyphs = F->G;
+    out->n_color_glyphs = F->colr.n_color;
+    out->n_refused = F->colr.n_refused;
+    out->n_layers = F->colr.n_layers;
+    out->n_layer_glyphs = F->colr.n_lg;
+    out->n_paint_texels = F->colr.n_paint;
+    out->color_us = F->colr.build_us;
     return YLAY_OK;
 }
 
@@ -326,13 +355,38 @@ static int ylay__font_index(const ylay_lib* L, skb_font_handle_t h) {
     return -1;
 }
 
-/* Marks glyph g of font F to be built, once. */
+/* Marks set glyph g of font F (a font or a layer glyph) to be built, once. */
 static int ylay__want(ylay__font* F, uint32_t g) {
-    if (g >= (uint32_t)F->f.n_glyphs || (F->have[g >> 3] & (1u << (g & 7)))) return 1;
+    if (g >= F->G || (F->have[g >> 3] & (1u << (g & 7)))) return 1;
     if (!ylay__grow((void**)&F->todo, &F->cap_todo, F->n_todo + 1, sizeof *F->todo)) return 0;
     F->have[g >> 3] |= (uint8_t)(1u << (g & 7));
     F->todo[F->n_todo++] = g;
     return 1;
+}
+
+/* Builds set glyphs (font glyphs, then layer glyphs) into set. */
+static int ylay__build_set(ylay_lib* L, ylay__font* F, yol_cset* set, const uint32_t* glyphs, uint32_t n, double tol) {
+    uint32_t i, k, nf = 0, ng = (uint32_t)F->f.n_glyphs;
+    int rc = YOL_OK;
+    yol_path path;
+    for (i = 0; i < n; i++) if (glyphs[i] < ng) nf++;
+    if (nf == n) rc = yol_cset_add_font(set, &F->f, glyphs, n, tol);
+    else {
+        /* font glyphs in runs of the list, each layer glyph by its path */
+        yol_path_init(&path, L->ol);
+        for (i = 0; i < n && rc >= 0; i = k) {
+            for (k = i; k < n && glyphs[k] < ng; k++) {}
+            if (k > i) { rc = yol_cset_add_font(set, &F->f, glyphs + i, k - i, tol); continue; }
+            if (glyphs[i] >= F->G) { rc = YOL_ERR_RANGE; k = i + 1; break; }
+            yol_path_clear(&path);
+            rc = ylay__colr_layer_path(&F->colr, &F->f, L->ol, glyphs[i], &path);
+            if (rc >= 0) rc = yol_cset_add(set, glyphs[i], &path);
+            k = i + 1;
+        }
+        yol_path_free(&path);
+    }
+    if (rc < 0) return ylay__fail(L, YLAY_ERR_FORMAT, "ysp_layout: %s: %s", F->name, yol_error(L->ol));
+    return YLAY_OK;
 }
 
 /* Builds every font's wanted glyphs into its set and lists them as fresh. */
@@ -343,8 +397,7 @@ static int ylay__build(ylay_lib* L, ylay_block* b) {
         double t0;
         if (!F->n_todo) continue;
         t0 = ylay__now_us();
-        if (yol_cset_add_font(&F->set, &F->f, F->todo, F->n_todo, 0) != YOL_OK)
-            return ylay__fail(L, YLAY_ERR_FORMAT, "ysp_layout: %s: %s", F->name, yol_error(L->ol));
+        if (ylay__build_set(L, F, &F->set, F->todo, F->n_todo, 0) != YLAY_OK) return YLAY_ERR_FORMAT;
         t0 = ylay__now_us() - t0;
         F->build_us += t0;
         b->build_us += t0;
@@ -413,6 +466,31 @@ static int ylay__note_missing(ylay_lib* L, const skb_layout_t* lay, const skb_la
 /* Appends lay's text runs to b as runs of one font and size each: a count
  * pass sizes the groups, a fill pass writes them, so every group's items are
  * contiguous for one ygfx_crun. colors: per content run, or NULL for color. */
+/* The refusal of a color glyph used by a layout: the font, the cluster's
+ * codepoints, the glyph and the feature. */
+static int ylay__refused(ylay_lib* L, const skb_layout_t* lay, const ylay__font* F, const skb_cluster_t* cl, uint32_t gid) {
+    const uint32_t* text = skb_layout_get_text(lay);
+    char cps[96], why[300];
+    size_t k = 0;
+    int32_t i;
+    cps[0] = 0;
+    for (i = cl->text_offset; i < cl->text_offset + cl->text_count && k + 12 < sizeof cps; i++)
+        k += (size_t)snprintf(cps + k, sizeof cps - k, "%sU+%04X", k ? " " : "", (unsigned)text[i]);
+    ylay__colr_message(F->colr.ref[gid], F->colr.detail[gid], why, sizeof why);
+    return ylay__fail(L, YLAY_ERR_REFUSED, "ysp_layout: %s: %s (glyph %u): %s", F->name, cps, (unsigned)gid, why);
+}
+
+/* The key of a glyph: one per font, size and paint, so a run is one draw. */
+static int ylay__key_of(ylay_lib* L, int f, float size, uint32_t flags, uint32_t* n_keys) {
+    uint32_t k;
+    for (k = 0; k < *n_keys; k++)
+        if (L->keys[k].font == f && L->keys[k].size == size && L->keys[k].flags == flags) return (int)k;
+    if (!ylay__grow((void**)&L->keys, &L->cap_keys, *n_keys + 1, sizeof *L->keys)) return -1;
+    L->keys[k].font = f; L->keys[k].size = size; L->keys[k].n = 0; L->keys[k].flags = flags;
+    (*n_keys)++;
+    return (int)k;
+}
+
 static int ylay__convert(ylay_lib* L, const skb_layout_t* lay, float ox, float oy,
                            const float* colors, int n_colors, float color, ylay_block* b) {
     const skb_layout_run_t* runs = skb_layout_get_layout_runs(lay);
@@ -430,14 +508,22 @@ static int ylay__convert(ylay_lib* L, const skb_layout_t* lay, float ox, float o
         if (run->type != SKB_CONTENT_RUN_UTF8 && run->type != SKB_CONTENT_RUN_UTF32) continue;
         f = ylay__font_index(L, run->font_handle);
         if (f < 0) return ylay__fail(L, YLAY_ERR_ARG, "ysp_layout: a run's font is not this library's");
-        for (k = 0; k < n_keys; k++)
-            if (L->keys[k].font == f && L->keys[k].size == run->font_size) break;
-        if (k == n_keys) {
-            if (!ylay__grow((void**)&L->keys, &L->cap_keys, n_keys + 1, sizeof *L->keys)) return YLAY_ERR_NOMEM;
-            L->keys[k].font = f; L->keys[k].size = run->font_size; L->keys[k].n = 0;
-            n_keys++;
+        if (!L->fonts[f].color) {
+            int kk = ylay__key_of(L, f, run->font_size, 0, &n_keys);
+            if (kk < 0) return YLAY_ERR_NOMEM;
+            L->keys[kk].n += (uint32_t)(run->glyph_range.end - run->glyph_range.start);
+            continue;
         }
-        L->keys[k].n += (uint32_t)(run->glyph_range.end - run->glyph_range.start);
+        for (gi = run->glyph_range.start; gi < run->glyph_range.end; gi++) {
+            const ylay__font* F = &L->fonts[f];
+            uint32_t g = glyphs[gi].gid;
+            int paint = g < F->colr.n_glyphs && F->colr.is_color[g];
+            int kk;
+            if (paint && F->colr.ref[g]) return ylay__refused(L, lay, F, &clusters[glyphs[gi].cluster_idx], g);
+            kk = ylay__key_of(L, f, run->font_size, paint ? YLAY_RUN_PAINT : 0u, &n_keys);
+            if (kk < 0) return YLAY_ERR_NOMEM;
+            L->keys[kk].n += paint ? F->colr.count[g] : 1u;
+        }
     }
     for (k = 0; k < n_keys; k++) { L->keys[k].at = base + total; total += L->keys[k].n; }
     {   /* cluster shares cap_items with items */
@@ -453,6 +539,7 @@ static int ylay__convert(ylay_lib* L, const skb_layout_t* lay, float ox, float o
     for (k = 0; k < n_keys; k++) {
         ylay_run* o = &b->runs[b->n_runs + k];
         o->font = L->keys[k].font; o->size = L->keys[k].size; o->first = L->keys[k].at; o->n = L->keys[k].n;
+        o->flags = L->keys[k].flags;
         b->fonts_used |= (uint64_t)1 << L->keys[k].font;
     }
     for (r = 0; r < n_runs; r++) {
@@ -464,12 +551,35 @@ static int ylay__convert(ylay_lib* L, const skb_layout_t* lay, float ox, float o
         f = ylay__font_index(L, run->font_handle);
         F = &L->fonts[f];
         for (k = 0; k < n_keys; k++)
-            if (L->keys[k].font == f && L->keys[k].size == run->font_size) break;
+            if (L->keys[k].font == f && L->keys[k].size == run->font_size && !L->keys[k].flags) break;
         if (colors && run->content_run_idx >= 0 && run->content_run_idx < n_colors) c = colors[run->content_run_idx];
         for (gi = run->glyph_range.start; gi < run->glyph_range.end; gi++) {
             const skb_glyph_t* g = &glyphs[gi];
-            uint32_t at = L->keys[k].at++;
-            ygfx_citem* it = &b->items[at];
+            uint32_t at;
+            ygfx_citem* it;
+            if (F->color && g->gid < F->colr.n_glyphs && F->colr.is_color[g->gid]) {
+                /* a color glyph: one item per layer, the layer's glyph and paint */
+                const ylay_layer* ly = F->colr.layers + F->colr.first[g->gid];
+                uint32_t kp, lj;
+                for (kp = 0; kp < n_keys; kp++)
+                    if (L->keys[kp].font == f && L->keys[kp].size == run->font_size && L->keys[kp].flags) break;
+                for (lj = 0; lj < F->colr.count[g->gid]; lj++) {
+                    at = L->keys[kp].at++;
+                    it = &b->items[at];
+                    memset(it, 0, sizeof *it);
+                    it->x = ox + g->offset_x;
+                    it->y = oy + g->offset_y;
+                    it->glyph = (float)ly[lj].glyph;
+                    it->scale = 1.0f;
+                    it->gate = 1.0f;
+                    it->color = (float)ly[lj].paint;
+                    b->cluster[at] = (uint32_t)clusters[g->cluster_idx].text_offset;
+                    if (!ylay__want(F, ly[lj].glyph)) return YLAY_ERR_NOMEM;
+                }
+                continue;
+            }
+            at = L->keys[k].at++;
+            it = &b->items[at];
             memset(it, 0, sizeof *it);
             it->x = ox + g->offset_x;
             it->y = oy + g->offset_y;
@@ -652,3 +762,59 @@ int ylay_missing_chars(const ylay_lib* L, ylay_missing* out, int cap) {
 struct skb_font_collection_t* ylay_skb_fonts(ylay_lib* L) { return L ? L->fc : NULL; }
 struct skb_attribute_collection_t* ylay_skb_attributes(ylay_lib* L) { return L ? L->ac : NULL; }
 struct skb_temp_alloc_t* ylay_skb_temp(ylay_lib* L) { return L ? L->temp : NULL; }
+
+/* --- color glyphs (v0.3) ------------------------------------------------------- */
+
+int ylay_color_glyph(ylay_lib* L, int font, uint32_t glyph, const ylay_layer** layers) {
+    const ylay__font* F;
+    char why[300];
+    if (!L || !layers || font < 0 || font >= L->n_fonts) return YLAY_ERR_ARG;
+    F = &L->fonts[font];
+    *layers = NULL;
+    if (!F->color || glyph >= F->colr.n_glyphs || !F->colr.is_color[glyph]) return 0;
+    if (F->colr.ref[glyph]) {
+        ylay__colr_message(F->colr.ref[glyph], F->colr.detail[glyph], why, sizeof why);
+        return ylay__fail(L, YLAY_ERR_REFUSED, "ysp_layout: %s: glyph %u: %s", F->name, (unsigned)glyph, why);
+    }
+    *layers = F->colr.layers + F->colr.first[glyph];
+    return (int)F->colr.count[glyph];
+}
+
+int ylay_color_paints(const ylay_lib* L, int font, const float** texels) {
+    const ylay__font* F;
+    if (!L || !texels || font < 0 || font >= L->n_fonts) return YLAY_ERR_ARG;
+    F = &L->fonts[font];
+    *texels = F->colr.paints;
+    return (int)F->colr.n_paint;
+}
+
+int ylay_open_set(ylay_lib* L, int font, yol_cset* set, yol_ctx* ctx) {
+    const ylay__font* F;
+    yol_cset_desc cd;
+    if (!L || !set || !ctx || font < 0 || font >= L->n_fonts) return YLAY_ERR_ARG;
+    F = &L->fonts[font];
+    memset(&cd, 0, sizeof cd);
+    cd.n_glyphs = F->G;
+    cd.backward = true;
+    if (!yol_cset_open(set, ctx, &cd)) return ylay__fail(L, YLAY_ERR_NOMEM, "ysp_layout: %s: %s", F->name, yol_error(ctx));
+    if (F->colr.n_paint && yol_cset_add_texels(set, F->colr.paints, F->colr.n_paint) != 0)
+        return ylay__fail(L, YLAY_ERR_NOMEM, "ysp_layout: %s: %s", F->name, yol_error(ctx));
+    return YLAY_OK;
+}
+
+int ylay_build_glyphs(ylay_lib* L, int font, yol_cset* set, const uint32_t* glyphs, uint32_t n, double tol) {
+    ylay__font* F;
+    uint32_t* all = NULL, i;
+    int rc;
+    if (!L || !set || font < 0 || font >= L->n_fonts) return YLAY_ERR_ARG;
+    F = &L->fonts[font];
+    if (!glyphs) {
+        all = (uint32_t*)malloc(sizeof(uint32_t) * (F->G ? F->G : 1));
+        if (!all) return ylay__fail(L, YLAY_ERR_NOMEM, "ysp_layout: no memory");
+        for (i = 0; i < F->G; i++) all[i] = i;
+        glyphs = all; n = F->G;
+    }
+    rc = ylay__build_set(L, F, set, glyphs, n, tol);
+    free(all);
+    return rc;
+}
