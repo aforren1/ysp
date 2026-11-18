@@ -2466,15 +2466,17 @@ static int pl_fields_init(pl_player* p) {
         if (strcmp(f->name, "participant") == 0) p->participant = v->i;
     }
     /* A string participant cannot be @participant (the loader's gap; the
-     * rules text is known now). */
+     * rules text is known now). The definition's leaves, not p->leaves:
+     * pl_leaves_collect() fills those after this, and reading them here
+     * ended the process (0.13.2). */
     {
         int li;
         for (li = 0; li < p->def->n_fields; li++)
             if (strcmp(p->def->fields[li].name, "participant") == 0 && p->def->fields[li].is_string) {
-                for (i = 0; i < p->n_leaves; i++)
-                    if (strstr(p->leaves[i].node->rules, "@participant")) {
-                        pl_at(p, PL_OBJ_NODE, p->leaves[i].node->path);
-                        pl_fail(p, "node '%s': '@participant' needs an integer session field, but 'participant' is a string", p->leaves[i].node->path);
+                for (i = 0; p->def_leaves && p->def_leaves[i]; i++)
+                    if (p->def_leaves[i]->rules && strstr(p->def_leaves[i]->rules, "@participant")) {
+                        pl_at(p, PL_OBJ_NODE, p->def_leaves[i]->path);
+                        pl_fail(p, "node '%s': '@participant' needs an integer session field, but 'participant' is a string", p->def_leaves[i]->path);
                         return -1;
                     }
             }

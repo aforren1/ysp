@@ -1,6 +1,8 @@
 # The player
 
-Status: v0.13.2, 2026-11-17. It loads a pack, checks its experiment
+Status: v0.14.0, 2026-11-18 (0.14.0: `pl_check()` for the designer,
+[Reference: pl_check()](#reference-pl_check); a string `participant`
+field no longer ends the process). It loads a pack, checks its experiment
 definition, lowers the definition onto the ysp headers and runs it: in a
 real window with the participant's keyboard, mice and the rig's devices,
 or on the simulated display (`--sim`). It is a program (`player/`, target
@@ -485,11 +487,13 @@ Two calls must not run at the same time in one process. The loader's
 host checks use static scratch (`h_rules()` and `h_check_ops()` in
 `player/host.c`).
 
-A fault of the load, in `pl_check()` too: a definition whose `participant`
-session field is a string ends the process (a segmentation fault, found
-2026-11-18 at `bd4e922`). `pl_fields_init()` looks for `@participant` in
-`p->leaves[i].node->rules` before `pl_leaves_collect()` sets `node`. Not
-fixed here: the fix changes the command line's behavior.
+Fixed in 0.14.0: a definition whose `participant` session field is a
+string ended the process (a segmentation fault, found 2026-11-18).
+`pl_fields_init()` looked for `@participant` in `p->leaves[i].node->rules`
+before `pl_leaves_collect()` set `node`. It now reads the definition's
+leaves. Such a definition loads, and a node whose rules use
+`@participant` is refused by name. `test_player_check` checks both; on
+0.13.2 it fails.
 
 ### Measured
 

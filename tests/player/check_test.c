@@ -309,6 +309,23 @@ static void case_refusals(void) {
     printf("  refused (%d %s): %s\n", r.object, r.object_name ? r.object_name : "", r.message);
     pl_close(&P);
     free(e);
+    /* a string participant: the load ended the process (0.13.2, pl_fields_init
+     * read p->leaves before they were set); now it loads, and refuses
+     * '@participant' in a node's rules by the node */
+    e = edit(def, "\"devices\":", "\"session\": { \"fields\": { \"participant\": { \"type\": \"string\", \"required\": true } } },\n  \"devices\":", NULL);
+    CHECK(e && run_check(k, e, &r) == PL_CHECK_OK, "a string participant: status %d: %s", r.status, r.message ? r.message : "");
+    pl_close(&P);
+    {
+        char* e2 = e ? edit(e, "\"reps 5\"]", "\"reps 5\", \"where coherence=@participant\"]", NULL) : NULL;
+        CHECK(e2 && run_check(k, e2, &r) != PL_CHECK_OK && r.message && strstr(r.message, "@participant"),
+              "a string participant and @participant: status %d: %s", r.status, r.message ? r.message : "");
+        if (r.status == PL_CHECK_REFUSED)
+            CHECK(r.object == PL_OBJ_NODE && r.object_name && strcmp(r.object_name, "main") == 0, "@participant: the node, object %d", r.object);
+        printf("  string participant and @participant (%d): %s\n", r.status, r.message ? r.message : "");
+        pl_close(&P);
+        free(e2);
+    }
+    free(e);
     /* a stimulus: an rdk's count must be a literal */
     e = edit(def, "\"count\": 200", "\"count\": \"$coherent_direction\"", NULL);
     CHECK(e && run_check(k, e, &r) == PL_CHECK_REFUSED, "rdk count: status %d: %s", r.status, r.message);
