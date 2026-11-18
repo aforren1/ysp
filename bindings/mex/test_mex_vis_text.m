@@ -124,8 +124,14 @@ function test_mex_vis_text()
     check(~has_cjk || (ysp_gfx('get', c, 'missing') == 0 && ysp_gfx('get', c, 'n_runs') == 2 && isequal(ysp_gfx('get', c2, 'box'), ysp_gfx('get', c, 'box'))), ...
           'a fallback list: a handle or a cell of paths');
     % 1.6.0 (pack/layout 0.3.0): an emoji no font has is glyph 0 and counted,
-    % where it vanished (U+1FAB4, potted plant, as UTF-16 surrogates)
-    e = ysp_gfx('text', g, ['a ' char([55358 57012])], 'font', segoe, 'size', 30);
+    % where it vanished (U+1FAB4, potted plant). Octave's char holds UTF-8
+    % bytes, MATLAB's UTF-16 units.
+    if is_octave
+        plant = char([240 159 170 180]);
+    else
+        plant = char([55358 57012]);
+    end
+    e = ysp_gfx('text', g, ['a ' plant], 'font', segoe, 'size', 30);
     check(ysp_gfx('get', e, 'missing') == 1, 'an emoji no font has: missing');
     expect_error('ysp_gfx:error', @() ysp_gfx('font', g, 'C:/no/such/font.ttf'));
     expect_error('ysp_gfx:arg', @() ysp_gfx('font', g, uint8('not a font, only bytes')));
