@@ -367,7 +367,7 @@ clock the binding's frames and decisions equal the C path's line by line
   `ysp/gfx.h` or `ysp/video.h` alone that changes the binding adds the
   fourth number, as a binding-only change does (0.17.0.1: the binding on
   Linux X11). The MEX files have the
-  number 1.4.0 of their own (1.0.0 was phase A; 1.1.0 adds `ysp_gfx`'s stimuli and `ysp_video`'s movies; 1.2.0 the text; 1.2.1 `ysp_video`'s UTF-8 paths and its error ids by the header's code; 1.3.0 macOS, `caps` with `os_input_stamps` and `margin`, the open options `backend` `'metal'` and `color_depth`; 1.4.0 Linux X11, the open options `backend` `'glx_oml'`, `x_display` and `x11_override_redirect`, and the movie backends `'avf'` and `'ffmpeg'` in `info`); their `'version'` gives it
+  number 1.4.1 of their own (1.0.0 was phase A; 1.1.0 adds `ysp_gfx`'s stimuli and `ysp_video`'s movies; 1.2.0 the text; 1.2.1 `ysp_video`'s UTF-8 paths and its error ids by the header's code; 1.3.0 macOS, `caps` with `os_input_stamps` and `margin`, the open options `backend` `'metal'` and `color_depth`; 1.4.0 Linux X11, the open options `backend` `'glx_oml'`, `x_display` and `x11_override_redirect`, and the movie backends `'avf'` and `'ffmpeg'` in `info`; 1.4.1 the layout's font fallback); their `'version'` gives it
   and the header's as the second output. `ysp-audio` and `ysp-timeline` are dependencies
   of the same major.minor as the headers ysp-vis was built against
   (`>=0.8,<0.9` and `>=0.8.1,<0.9`), the rule of the tables (below).
@@ -748,8 +748,9 @@ links pack/layout and the vendored layout stack, so a change of either
 (a new `third_party/patches/` file or pin) changes what it draws and adds
 the fourth number too; `tools/vendor_vis.py` then reports the layout
 libraries as stale until they are built again (0.19.0.3 was the first such
-release). The MEX files embed the same layout and kept 1.4.0: no MEX
-build or test runs on the Linux desktop. 0.10.1.1 was
+release). The MEX files embed the same layout and add the third number
+for it (1.4.1, the same release; not built or tested on the Linux
+desktop, where no MEX build runs). 0.10.1.1 was
 0.10.1 with phase B (the gfx and the movies), 0.10.2.1 was 0.10.2
 with phase C (the text), 0.10.4 was `ysp/screen.h` 0.10.4 with the
 CPython 3.10 floor, `ysp/gfx.h` 0.17.2 (text runs batched) and
@@ -759,8 +760,9 @@ macOS arm64 wheel (`cp310-abi3-macosx_14_0_arm64`), `caps()`'s `margin`
 and `os_input_stamps`, the open options `backend="metal"` and
 `color_depth`, the main-thread refusal, and `ysp-audio` 0.8 as the
 dependency. The MEX files of ysp-vis (`ysp_vis`,
-`ysp_screen`, `ysp_gfx`, `ysp_video`) are 1.4.0 (1.0.0 was phase A, 1.1.0
-phase B, 1.2.0 phase C, 1.2.1 UTF-8 paths, 1.3.0 macOS, 1.4.0 Linux X11), one number for the four, because the thin files refuse a core
+`ysp_screen`, `ysp_gfx`, `ysp_video`) are 1.4.1 (1.0.0 was phase A, 1.1.0
+phase B, 1.2.0 phase C, 1.2.1 UTF-8 paths, 1.3.0 macOS, 1.4.0 Linux X11,
+1.4.1 the layout's font fallback), one number for the four, because the thin files refuse a core
 of another build. 1.3.0 also fixes `ysp_gfx('free', obj)`, which read
 the handle's node after freeing it: on macOS the freed node's kind was
 gone, so the list or stimulus was not freed and its items kept their

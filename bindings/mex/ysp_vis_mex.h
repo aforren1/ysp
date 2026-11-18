@@ -37,13 +37,14 @@
 
 /* The binding's own version (docs/bindings.md, Versions): the thin files and
  * the core must be the same build. */
-#define YV_MEX_VERSION "1.4.0"   /* 1.1.0: ysp_gfx stimuli, lists, groups, textures, bindings; the slim frame; ysp_video movies;
+#define YV_MEX_VERSION "1.4.1"   /* 1.1.0: ysp_gfx stimuli, lists, groups, textures, bindings; the slim frame; ysp_video movies;
                                   * 1.2.0: ysp_gfx text (fonts, texts laid out by Skribidi, glyph and word boxes);
                                   * 1.2.1: ysp_video paths in UTF-8 and error ids by the header's code (ysp/video.h 0.6.0);
                                   * 1.3.0: macOS arm64 (METAL; every call on the main thread), caps os_input_stamps and
                                   *        margin, the open options backend 'metal' and color_depth (ysp/screen.h 0.15.0);
                                   * 1.4.0: Linux X11 (GLX_OML; MATLAB and Octave), the open options backend 'glx_oml',
-                                  *        x_display and x11_override_redirect, ysp_video backends 'avf' and 'ffmpeg' */
+                                  *        x_display and x11_override_redirect, ysp_video backends 'avf' and 'ffmpeg';
+                                  * 1.4.1: text layout falls back past the run's script (Skribidi patch 0003, pack/layout 0.2.0) */
 #define YV_CORE_ABI 1
 #define YV_CORE_SYMBOL "ysp_vis_core"
 
