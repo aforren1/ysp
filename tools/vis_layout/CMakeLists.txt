@@ -1,4 +1,5 @@
-# The text layout of ysp-vis (docs/bindings.md, ysp-vis): pack/layout.c and
+# The text layout of ysp-vis (docs/bindings.md, ysp-vis): pack/layout.c (and
+# colr.c, its color glyphs, since pack/layout 0.3.0) and
 # the vendored Skribidi, HarfBuzz, SheenBidi, libunibreak and budouxc of
 # third_party/, as static libraries that the Python extension and the MEX
 # core link. tools/vendor_vis.py --layout configures, builds and installs
@@ -19,7 +20,7 @@ endif()
 
 add_subdirectory(${YSP_ROOT}/third_party third_party)
 
-add_library(ysp_vis_layout STATIC ${YSP_ROOT}/pack/layout.c)
+add_library(ysp_vis_layout STATIC ${YSP_ROOT}/pack/layout.c ${YSP_ROOT}/pack/colr.c)
 target_include_directories(ysp_vis_layout PRIVATE ${YSP_ROOT}/include ${YSP_ROOT}/pack)
 target_compile_definitions(ysp_vis_layout PRIVATE YSCR_NO_SDL YLAY_PATCHES="${YSP_SKRIBIDI_PATCHES}")
 target_link_libraries(ysp_vis_layout PRIVATE ysp_skribidi)

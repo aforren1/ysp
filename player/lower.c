@@ -952,6 +952,9 @@ int pl_stim_set_text(pl_player* p, pl_stim* s) {
         if (!run->n || run->font >= p->runs.n_fonts) continue;
         memset(&d, 0, sizeof d);
         d.set = p->csets[run->font];
+        /* a run of color glyph layers: each item's color is its paint
+         * record's texel in the set (pack format 2, docs/pack.md 18) */
+        if (run->flags & YPAK_RUN_PAINT) d.fields = YGFX_I_PAINT;
         d.items = (const ygfx_citem*)(const void*)(p->runs.items + 8 * (size_t)(block->item_first + run->first));
         d.n = (int)run->n;
         d.size = run->size;
@@ -2459,6 +2462,15 @@ int pl_load(pl_player* p, const pl_args* a) {
             rd.set = p->csets[f];
             (void)ygfx_crun(&p->gfx, &rd);
         }
+        /* and the paint program, when a run has color glyphs */
+        for (f = 0; f < p->runs.n_runs; f++)
+            if (p->runs.runs[f].flags & YPAK_RUN_PAINT) {
+                rd.set = p->csets[p->runs.runs[f].font];
+                rd.fields = YGFX_I_PAINT;
+                (void)ygfx_crun(&p->gfx, &rd);
+                rd.fields = 0;
+                break;
+            }
         ygfx_prime(&p->gfx);
     }
     /* static properties once, with session-level values */

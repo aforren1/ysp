@@ -544,13 +544,19 @@ LAYOUT_LIBS = ["ysp_vis_layout", "ysp_skribidi", "ysp_harfbuzz", "ysp_sheenbidi"
 
 
 def layout_source_hash():
-    """The SHA-256 of third_party/MANIFEST.sha256 and the patches: what the
-    libraries were built from (the stamp records it; verify compares)."""
+    """The SHA-256 of third_party/MANIFEST.sha256, the patches and the glue
+    (pack/layout.c, pack/colr.c and their headers): what the libraries were
+    built from (the stamp records it; verify compares). The glue joined the
+    hash with pack/layout 0.3.0, whose color glyphs are in colr.c: a change
+    of it alone left the libraries stale without a word."""
     tp = os.path.join(ROOT, "third_party")
     h = hashlib.sha256()
     names = ["MANIFEST.sha256"] + sorted("patches/" + n for n in os.listdir(os.path.join(tp, "patches")))
     for n in names:
         with open(os.path.join(tp, n), "rb") as f:
+            h.update(n.encode() + b"\0" + f.read())
+    for n in ("pack/layout.c", "pack/colr.c", "pack/colr.h", "pack/ysp/layout.h"):
+        with open(os.path.join(ROOT, n), "rb") as f:
             h.update(n.encode() + b"\0" + f.read())
     return h.hexdigest()
 

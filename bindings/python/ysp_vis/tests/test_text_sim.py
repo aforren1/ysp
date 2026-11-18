@@ -383,3 +383,70 @@ def test_a_thousand_texts_a_frame(sg):
     with pytest.raises(yscr.Error, match="full"):
         g.frame(g.list(texts))
     s.flip()
+
+
+def colr_font():
+    """A COLR version 0 font written here (units per em 1000): U+1F600 is a
+    color glyph of two layers, a red box and a blue box above it; U+1F601 a
+    plain outline. glyf, cmap 12, hmtx, COLR and CPAL; no download."""
+    import struct
+
+    def box(x0, y0, x1, y1):
+        dx = struct.pack(">4h", x0, 0, x1 - x0, 0)
+        dy = struct.pack(">4h", y0, y1 - y0, 0, y0 - y1)
+        g = struct.pack(">hhhhhHH", 1, x0, y0, x1, y1, 3, 0) + bytes([1, 1, 1, 1]) + dx + dy
+        return g + b"\0" * (-len(g) % 4)
+
+    glyphs = [b"", box(100, 0, 900, 800), box(100, 0, 900, 800), box(200, 400, 800, 700), box(100, 0, 900, 800)]
+    loca, glyf = b"", b""
+    for g in glyphs:
+        loca += struct.pack(">I", len(glyf))
+        glyf += g
+    loca += struct.pack(">I", len(glyf))
+    n = len(glyphs)
+    maps = [(0x1F600, 1), (0x1F601, 4)]
+    cmap = struct.pack(">HHHHI", 0, 1, 3, 10, 12) + struct.pack(">HHIII", 12, 0, 16 + 12 * len(maps), 0, len(maps))
+    for cp, gid in maps:
+        cmap += struct.pack(">III", cp, cp, gid)
+    head = bytearray(54)
+    struct.pack_into(">I", head, 0, 0x10000)
+    struct.pack_into(">I", head, 12, 0x5F0F3CF5)
+    struct.pack_into(">H", head, 18, 1000)
+    struct.pack_into(">h", head, 50, 1)
+    hhea = bytearray(36)
+    struct.pack_into(">Ihh", hhea, 0, 0x10000, 800, -200)
+    struct.pack_into(">H", hhea, 10, 1000)
+    struct.pack_into(">H", hhea, 34, n)
+    hmtx = b"".join(struct.pack(">Hh", 1000, 100 if i else 0) for i in range(n))
+    maxp = struct.pack(">IH", 0x5000, n)
+    # COLR v0: base glyph 1, layers 2 (palette 0, red) and 3 (palette 1, blue)
+    colr = struct.pack(">HHIIH", 0, 1, 14, 20, 2) + struct.pack(">HHH", 1, 0, 2) + struct.pack(">HHHH", 2, 0, 3, 1)
+    cpal = struct.pack(">HHHHIH", 0, 2, 1, 2, 14, 0) + bytes([0, 0, 255, 255, 255, 0, 0, 255])   # BGRA
+    tables = {b"COLR": colr, b"CPAL": cpal, b"cmap": cmap, b"glyf": glyf, b"head": bytes(head), b"hhea": bytes(hhea),
+              b"hmtx": hmtx, b"loca": loca, b"maxp": maxp}
+    tags = sorted(tables)
+    out = struct.pack(">IHHHH", 0x10000, len(tags), 128, 3, len(tags) * 16 - 128)
+    off = 12 + 16 * len(tags)
+    data = b""
+    for t in tags:
+        out += t + struct.pack(">III", 0, off + len(data), len(tables[t]))
+        data += tables[t] + b"\0" * (-len(tables[t]) % 4)
+    return out + data
+
+
+def test_color_glyphs(sg):
+    # pack/layout 0.3.0: a COLR font's glyph is its layers, drawn as a
+    # paint run (ysp/gfx.h 0.22.0, YGFX_I_PAINT)
+    s, g = sg
+    emoji = g.font([SEGOE, colr_font()])
+    t = g.text("a\U0001F600", font=emoji, size=48)
+    assert t.missing == 0 and t.n_runs == 2                   # the letter's run and the layers' run
+    assert t.n_glyphs == 3                                    # a, and the emoji's two layers
+    plain = g.text("a\U0001F601", font=emoji, size=48)
+    assert plain.missing == 0 and plain.n_runs == 2 and plain.n_glyphs == 2
+    alone = g.text("\U0001FAB4", font=SEGOE, size=48)         # no emoji font has it: glyph 0, counted
+    assert alone.missing == 1
+    frame(s, g, t, plain, alone)
+    t.ori = 20                                                # turned: still the paint program
+    t.color = (0.2, 0.4, 0.6)
+    frame(s, g, t)

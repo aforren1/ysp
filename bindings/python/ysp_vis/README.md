@@ -462,6 +462,20 @@ one line with the layout's versions and the hashes of the fonts a text
 used, for a data file. TrueType and CFF fonts; CFF2 and fonts without
 outlines are refused (ysp/outline.h reads the outlines; docs/layout.md).
 
+**Emoji** (0.20.0.1). A COLR color font in the list (versions 0 and 1;
+Twemoji Mozilla, OpenMoji, Noto Color Emoji COLRv1) draws emoji in
+color: its emoji, VS16 and ZWJ sequences take it before the text fonts,
+and each color glyph is drawn as its layers, solids and gradients in
+linear light (docs/layout.md, Color glyphs; docs/gfx.md, PAINT RECORDS).
+`g.font([r"C:\Windows\Fonts\segoeui.ttf", "Twemoji.Mozilla.ttf"])` is
+enough; `tools/fetch_twemoji.py` fetches that font and checks its hash.
+An emoji no font has is counted in `missing`. A color glyph the layers
+cannot draw exactly (Noto's flags: soft light) fails the text with a
+message that names it; a CBDT, sbix or SVG font with no COLR is refused.
+Translucent layers and edges blend in linear light, so they differ from a
+browser's rendering, which blends sRGB values. `color` does not tint an
+emoji; `opacity`, `gate`, `ori` and `scale` apply to it.
+
 **Parameters.** `g.text(text="", **p)` returns a `Text`, a `Stim` with its
 own parameters:
 

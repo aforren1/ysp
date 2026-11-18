@@ -73,7 +73,7 @@ def test_hashes():
 
 def check_open(pk, entries):
     want = {n: bytes(d) for n, _, d, *_ in entries}
-    assert len(pk) == len(want) + 2 and pk.format == yp.FORMAT
+    assert len(pk) == len(want) + 2 and pk.format == 1 and yp.FORMAT == 2
     assert pk.names()[0] == yp.MANIFEST and yp.CHUNKS in pk
     for n, d in want.items():
         assert pk.read(n) == d and pk[n] == d and n in pk
@@ -268,8 +268,11 @@ def test_flipped_bytes_tool_fixture():
 
 
 def test_versions_and_garbage(small):
-    with pytest.raises(yp.VersionError, match="format 2"):
-        yp.Pack.from_bytes(pw.build(SMALL, comment_format=2))
+    # ysp/pack.h 0.5.0 reads formats 1 and 2 (color glyphs); 3 is refused
+    with yp.Pack.from_bytes(pw.build(SMALL, comment_format=2)) as pk:
+        assert pk.format == 2
+    with pytest.raises(yp.VersionError, match="format 3"):
+        yp.Pack.from_bytes(pw.build(SMALL, comment_format=3))
     for junk in (b"", b"\0" * 100, b"PK\x05\x06" + bytes(18), os.urandom(70000)):
         with pytest.raises(yp.FormatError):
             yp.Pack.from_bytes(junk)

@@ -5032,7 +5032,14 @@ The first was a change of ysp/screen.h (v0.10.3), the second is none.
 - OpenType feature switches and a language per span: `ylay_style` and
   `ylay_span` take neither (pack/layout v0.1.0); HarfBuzz's defaults
   apply (kerning, ligatures, marks).
-- Vertical text, justification, color glyphs, Skribidi's editor (caret,
+- Color glyphs are bound since `ysp-vis` 0.20.0.1 (MEX 1.6.0): a COLR
+  font in a text's font list draws its emoji in color, each run of layers
+  drawn with `YGFX_I_PAINT` (`bindings/share/ysp_vis_text.h`,
+  `yv_paint_run()`); the text's `color` does not tint them. Tested on the
+  simulated display with a COLR font the test writes
+  (`test_text_sim.py::test_color_glyphs`) and in a window by hand (Noto
+  COLRv1 through Python, 2026-11-18, the Linux desktop).
+- Vertical text, justification, Skribidi's editor (caret,
   selection, IME): pack/layout has the editor; a typed response in a
   host needs `yscr_text_input()` and a design of its own.
 - Outlines and faux bold (ysp/outline.h's strokes into a set of their

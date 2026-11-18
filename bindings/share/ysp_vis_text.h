@@ -511,6 +511,25 @@ static int yv_text_layout(yv_stim* st, char* err, size_t cap) {
             d.aliased = (st->s.flags & YGFX_STIM_ALIASED) != 0;
             (void)ygfx_crun(&g->g, &d);
         }
+        {   /* color glyphs (pack/layout 0.3.0): their runs draw on the paint
+             * program, made by the first such run and primed then, as the
+             * text program is at the first set */
+            uint32_t r;
+            for (r = 0; r < t->b.n_runs; r++)
+                if ((t->b.runs[r].flags & YLAY_RUN_PAINT) && !g->g.text_paint_pipe) {
+                    ygfx_crun_desc d;
+                    memset(&d, 0, sizeof d);
+                    d.set = f->set[t->b.runs[r].font];
+                    d.items = t->b.items + t->b.runs[r].first;
+                    d.n = (int)t->b.runs[r].n;
+                    d.size = t->b.runs[r].size;
+                    d.w = d.h = 1;
+                    d.fields = YGFX_I_PAINT;
+                    (void)ygfx_crun(&g->g, &d);
+                    if (g->g.text_paint_pipe && g->prime && ygfx_prime(&g->g) < 0) return yv_gfx_err(g, YGFX_ERR_GL, err, cap);
+                    break;
+                }
+        }
     } else {
         st->s.items = NULL;
         st->s.count = 0;
@@ -518,8 +537,19 @@ static int yv_text_layout(yv_stim* st, char* err, size_t cap) {
     return 0;
 }
 
+/* A paint run's copy of a text's stimulus: its items' color fields are
+ * paint records (ysp/gfx.h PAINT RECORDS), so no palette; .rays and
+ * .aliased are not built for the paint program. */
+static void yv_paint_run(ygfx_stim* x) {
+    x->inst_fields = (x->inst_fields & ~YGFX_I_COLOR) | YGFX_I_PAINT;
+    x->palette = NULL;
+    x->n_palette = 0;
+    x->flags &= ~(uint32_t)(YGFX_STIM_RAYS | YGFX_STIM_ALIASED);
+}
+
 /* Draws every run of a text: run 0 is st->s itself, the rest copies of it
- * with their run's set, items and size. Allocates nothing. */
+ * with their run's set, items and size; a run of color glyph layers is a
+ * copy with the paint fields. Allocates nothing. */
 static int yv_text_draw(yv_gfx* g, yv_stim* st) {
     yv_text* t = (yv_text*)st->text;
     yv_font* f = t->font;
@@ -528,7 +558,13 @@ static int yv_text_draw(yv_gfx* g, yv_stim* st) {
     if (t->b.n_runs == 0) return 0;
     st->s.set = f->set[t->b.runs[0].font];   /* a set made again has a new id */
     if (st->s.palette) { st->palette[0] = st->s.color[0]; st->palette[1] = st->s.color[1]; st->palette[2] = st->s.color[2]; }
-    rc = ygfx_draw(&g->g, &st->s);
+    if (t->b.runs[0].flags & YLAY_RUN_PAINT) {
+        ygfx_stim x = st->s;
+        yv_paint_run(&x);
+        rc = ygfx_draw(&g->g, &x);
+    } else {
+        rc = ygfx_draw(&g->g, &st->s);
+    }
     for (r = 1; rc >= 0 && r < t->b.n_runs; r++) {
         const ylay_run* run = &t->b.runs[r];
         ygfx_stim x;
@@ -538,6 +574,7 @@ static int yv_text_draw(yv_gfx* g, yv_stim* st) {
         x.items = t->b.items + run->first;
         x.count = run->n;
         x.size = run->size;
+        if (run->flags & YLAY_RUN_PAINT) yv_paint_run(&x);
         rc = ygfx_draw(&g->g, &x);
     }
     return rc;

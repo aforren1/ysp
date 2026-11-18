@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ysp-pack"
-version = "0.4.0.1"  # ysp/pack.h v0.4.0, binding change 1 (the CPython 3.10 floor); tests/test_pack.py checks it against __version__
+version = "0.5.0.1"  # ysp/pack.h v0.5.0 (pack format 2), binding change 1 (the CPython 3.10 floor); tests/test_pack.py checks it against __version__
 description = "Read and verify ysp packs: store-only zip, 4 KiB aligned entries, XXH64 chunk hashes, SHA-256 manifest"
 readme = "README.md"
 requires-python = ">=3.10"
