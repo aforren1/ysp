@@ -1,4 +1,4 @@
-/* ysp/layout.h - v0.3.0 - text layout for the pack tool and the player
+/* ysp/layout.h - v0.3.1 - text layout for the pack tool and the player
  *
  *   Lays out UTF-8 text with Skribidi (vendored in third_party/, pinned, with
  *   local patches) and gives glyphs as ysp/gfx.h curve-run items over
@@ -62,6 +62,13 @@
  *   ylay_layer, ylay_color_glyph(), ylay_color_paints(), ylay_open_set(),
  *   ylay_build_glyphs(); ylay_run.flags; ylay_font_info's color counts.
  *   Breaking: ylay_run and ylay_font_info grew.
+ *
+ *   v0.3.1 (2026-11-18): Skribidi patches 0005 and 0006 fix two editing
+ *   faults with Devanagari (docs/layout.md, Patches 0005 and 0006). Glyphs,
+ *   clusters and line breaks do not change; only skb_text's grapheme breaks
+ *   and the caret, hit test and selection functions do, which the pack tool
+ *   and the player do not call. The stamp's patch field lists six hashes,
+ *   and ylay_stamp() no longer cuts a version line longer than 512 bytes.
  */
 #ifndef YSP_LAYOUT_H_INCLUDED
 #define YSP_LAYOUT_H_INCLUDED
@@ -75,7 +82,7 @@
 extern "C" {
 #endif
 
-#define YLAY_VERSION_STRING "0.3.0"
+#define YLAY_VERSION_STRING "0.3.1"
 #define YLAY_MAX_FONTS      64
 
 /* Return codes: ysp/outline.h's values for the same meaning. */
