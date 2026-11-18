@@ -609,6 +609,7 @@ as `examples/layout/gfx_layout.c` does. Its manual is
   refuses is refused here.
 - Color glyphs, decorations (underline, the IME composition's underline),
   Skribidi's icons and inline objects: the glue converts text runs only.
+  What color emoji fonts need: [emoji_colr_survey.md](emoji_colr_survey.md).
 - Serializing blocks into the pack: the pack tool's job, next.
 - The designer's path (Skribidi in a browser page with composition events
   and a hidden text input) and the editor's IME with a real input method:
