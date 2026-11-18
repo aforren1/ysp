@@ -114,6 +114,20 @@ repository; the URLs and hashes below get the same bytes.
    The pack tool should count edges itself, or compare against a
    separate walk, and refuse a glyph that reaches a limit.
 
+## Decisions (2026-11-18)
+
+- Scope of the first build: the minimum feature set above (solid fills
+  in glyph clips, transforms baked into the outlines, per-layer alpha,
+  linear and radial gradients with their own 2x3 matrix, the clip box, and
+  two-point radials). The pack tool refuses everything else by name.
+  Offscreen groups (SOFT_LIGHT for Noto's flags, group opacity over
+  overlapping layers) are a later addition; until then, use Noto's build
+  without flags or another font.
+- Blending: linear light, as the rest of `ysp/gfx.h`. The manual states
+  that translucent layers and edges differ from a browser, which blends
+  on sRGB-encoded values.
+- Default emoji font: Twemoji (Mozilla's COLRv0 build; art CC BY 4.0).
+
 ## Conditions
 
 - Linux desktop: Intel Core i5-14500, Debian 12, kernel
