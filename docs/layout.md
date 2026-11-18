@@ -381,6 +381,36 @@ stores them (pack.md 18). The decisions are the user's of 2026-11-18
   page of emoji is one draw. The items' `color` is the record's texel
   index; draw the run with `YGFX_I_PAINT`.
 
+### The default emoji font
+
+Twemoji Mozilla v0.7.0 (the user's decision, 2026-11-18): COLR version 0,
+3,689 color glyphs, no gradients and no transforms, so every glyph draws
+exactly (0 refused; 33,179 layers, no layer glyph of its own), and the
+smallest pack of the fonts measured (pack.md 18). "Default" means:
+
+- `tools/fetch_twemoji.py` fetches the font and its `LICENSE.md` at tag
+  v0.7.0 and writes them only when their SHA-256 values match the ones in
+  the script (`6d90152e...` for the font). The repository does not hold
+  the font: CC BY 4.0 would allow it, but the repository keeps third-party
+  binaries out, as `third_party/` does.
+- `examples/pack/emoji/` is a pack source that uses it.
+- The refusal messages and these docs name it as the font to use.
+- Nothing picks it without being asked: a font list holds what the caller
+  gives, and a missing emoji is glyph 0, counted.
+
+A pack that embeds it carries the attribution CC BY 4.0 asks for: who
+made the art (Twemoji, Twitter, Inc and other contributors), the license
+and its link, and whether it was changed. `examples/pack/emoji/ATTRIBUTION.txt`
+is one such text: the art unchanged, the pack's curve set a conversion of
+the glyphs for drawing; with the font's `LICENSE.md` (Mozilla's build
+code, Apache-2.0) as a FILE entry beside it.
+
+Blending: layers are drawn in linear light, as everything in ysp/gfx.h.
+A browser blends sRGB-encoded values, so translucent layers and the
+antialiased edges between layers come out lighter or darker than in
+Chrome or Firefox; opaque interiors and the stops' own colors match
+(gfx.h PAINT RECORDS).
+
 A character that no font in the list maps still gets glyph 0.
 `ylay_missing_chars()` names the characters of the last call's glyph-0
 items, each with its run's script, so the pack tool can say which
@@ -472,7 +502,22 @@ characters are missing and from which text.
    (within 1e-6 em); a second flattening gives the same records and
    layers; a layout of an emoji gives one paint run and builds its layer
    glyph. The twelve refused cases each name their feature, and a
-   layout of the soft light case names U+E010 and glyph 16.
+   layout of the soft light case names U+E010 and glyph 16. Two more
+   cases: ill-formed gradients (p2 = p0, both radii 0) leave their layers
+   out and keep the glyph's disc, and a radial under a skewed affine is
+   right at its mapped center and circle.
+
+   Hand mutants (`tests/probe/colr/hand_mutants.py`; the mutation runner
+   cannot build the layout library or the tool), 2026-11-18, Linux gcc 12:
+   11 of pack/colr.c (the overlap test, the em transform's signs, the clip
+   box cut, the walk's depth, alpha, the PaintVar check, the radial map's
+   off-diagonal terms, both radii 0, ill-formed linear gradients, the
+   group-opacity backdrop, a composite mode), 3 of pack/layout.c (the
+   emoji family, the refusal in a layout, the paint records at the set's
+   start) and 6 of the tool (GLYPHRUNS version 2, pack format 2, dropping
+   tables, refusing CBDT, the run's paint flag, layer glyphs in a used
+   set): 20 of 20 killed, two (the radial map, both radii 0) after the
+   test gained the last two cases.
 
    The fuzz target `tests/fuzz/colr_fuzz.c` (CMake target `colr_fuzz`,
    self-driven: mutations of the two written fonts, a third of them

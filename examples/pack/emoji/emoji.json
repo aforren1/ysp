@@ -1,0 +1,22 @@
+{
+  "format": "ysp-experiment", "version": 1, "name": "emoji",
+  "display": { "background": [0.5, 0.5, 0.5] },
+  "devices": { "resp": { "direction": "in", "family": ["keyboard"], "required": true } },
+  "stimuli": {
+    "fix": { "kind": "shape", "shape": "cross", "w": 24, "h": 24, "shape_p0": 3,
+             "edge": "cosine", "edge_width": 1, "color": [0.1, 0.1, 0.1] },
+    "face": { "kind": "text", "font": "fonts/Twemoji.Mozilla.ttf", "size": 160, "text": "$face" }
+  },
+  "trials": {
+    "valence": {
+      "events": [{ "on": "fix" }, { "wait_s": 0.5 }, { "off": "fix" }, { "on": "face" }],
+      "response": { "role": "resp", "from": "face", "duration_s": 2, "minimum_valid_rt_s": 0.1,
+                    "choices": [{ "key": "f", "name": "happy" }, { "key": "j", "name": "sad" }],
+                    "key_answer": "$answer" },
+      "after": [{ "off": "face" }, { "wait_s": 0.5 }]
+    }
+  },
+  "timeline": [
+    { "name": "main", "timeline_variables": "emoji.pstb", "trial": "valence", "rules": ["order random"] }
+  ]
+}

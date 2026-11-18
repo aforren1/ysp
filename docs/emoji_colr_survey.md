@@ -128,6 +128,14 @@ repository; the URLs and hashes below get the same bytes.
   on sRGB-encoded values.
 - Default emoji font: Twemoji (Mozilla's COLRv0 build; art CC BY 4.0).
 
+Built 2026-11-18: [layout.md](layout.md#color-glyphs) (the flattening and
+the refusals), [pack.md](pack.md#18-color-glyphs-tool-v0110-2026-11-18)
+(the forms and the measured packs) and [gfx.md](gfx.md#v0220-color-glyphs-paint-records)
+(the drawing and its cost). The exact overlap test refuses 15 of Noto's
+group-opacity glyphs and 8 of Fluent Color's, within the box bounds
+above; 9 Fluent Color glyphs whose linear gradient has p2 = p0 are
+ill-formed by the specification and draw without that layer.
+
 ## Conditions
 
 - Linux desktop: Intel Core i5-14500, Debian 12, kernel

@@ -2641,6 +2641,57 @@ flag; the curve set's color flag is read, refused in user units, and an
 unknown flag refused. Mutants `c-01` to `c-01c` and `fc-01` to `fc-07`
 in `tests/mutate/pack.toml`: 10 of 10 killed.
 
+### Measured
+
+The Linux desktop (i5-14500, Debian 12, gcc 12.2 `-O3`, the Release
+tool), one job under `/tmp/psy-measure.lock`, load average 0.09 to 0.30,
+2026-11-18. The fonts are the survey's, fetched into a scratch folder and
+checked against its SHA-256 values (Noto's build without flags:
+`2D/fonts/Noto-COLRv1-noflags.ttf` at commit `1ffdd21`, 3,038,756 bytes,
+`741815c198323b067670a1cfe6660ad8463ffcb8733314af30868eab9c4eb18b`).
+
+What the layout library does with each font (`emoji_bench --info`;
+"set" is every glyph built as the pack tool builds it):
+
+| Font | Flatten at add, ms | Color glyphs | Refused | Layers | Layer glyphs | Paint texels | Set build, ms | Set, MB |
+|---|---|---|---|---|---|---|---|---|
+| Twemoji Mozilla v0.7.0 | 18 | 3,689 | 0 | 33,179 | 0 | 2,126 | 166 | 11.1 |
+| OpenMoji 17.0.0, COLRv1 | 38 | 4,495 | 0 | 62,304 | 7,366 | 72 | 298 | 22.1 |
+| Noto Color Emoji COLRv1, no flags | 84 | 3,727 | 18 | 88,807 | 5,331 | 42,909 | 337 | 26.6 |
+| Noto Color Emoji COLRv1 | 93 | 4,012 | 277 | 88,833 | 5,334 | 42,911 | 601 | 41.4 |
+| Fluent Emoji Color v0.8.5 | 373 | 3,145 | 8 | 174,506 | 35,258 | 634,802 | 519 | 55.4 |
+
+- Refused: Noto without flags, 15 glyphs of group opacity over layers that
+  overlap and 3 of SOFT_LIGHT (its build without flags keeps 3 tag-sequence
+  flags, glyphs 3737 to 3739); Noto, the same 15 and the 262 flags;
+  Fluent Color, 8 of overlapping group opacity. The survey's box test
+  bounded these at 32 and 8 glyphs; the exact test finds 15 and 8.
+- Twemoji's layers equal its COLR layer records (33,179); its paint texels
+  are its 1,063 palette colors, 2 each, and no layer needs a glyph of its
+  own (no transform, no clip box).
+
+A pack of one font, its CURVESET and a GLYPHRUNS block of 100 emoji
+(U+1F600 to U+1F64F and U+1F300 to U+1F313, 48 px), `ypak build`, median
+of 3:
+
+| Font | Curve set | Build, s | Pack, MB | FONT entry, MB | CURVESET, MB | GLYPHRUNS, KB |
+|---|---|---|---|---|---|---|
+| Twemoji Mozilla | all | 0.28 | 12.6 | 1.47 | 11.1 | 16.6 |
+| | used | 0.06 | 2.0 | 1.47 | 0.53 | 16.6 |
+| OpenMoji COLRv1 | all | 0.51 | 24.6 | 2.40 | 22.1 | 42.7 |
+| | used | 0.12 | 3.4 | 2.40 | 0.89 | 42.7 |
+| Noto COLRv1, no flags | all | 0.68 | 29.7 | 3.04 | 26.6 | 56.7 |
+| | used | 0.22 | 5.0 | 3.04 | 1.85 | 56.7 |
+| Fluent Emoji Color | all | 1.43 | 63.4 | 7.91 | 55.4 | 97.6 |
+| | used | 0.69 | 19.2 | 7.91 | 11.2 | 97.6 |
+
+- Fluent Color's FONT entry is 7.9 MB of its 87.8 MB: the CBDT, CBLC and
+  SVG tables dropped.
+- A `"used"` set keeps every paint record of the font, so that the indexes
+  the glyph runs name hold in it: 10.2 MB of Fluent Color's 11.2 MB, 0.7
+  MB of Noto's. Renumbering the records per pack would shrink it; not
+  built (the runs and the set would then depend on each other's build).
+
 ### Hashes that moved
 
 Every pack with glyph runs gets a new manifest and pack ID (the layout

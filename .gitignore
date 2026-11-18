@@ -75,3 +75,6 @@ rig_test_work/
 
 # scratch/temporary files
 scratch/
+
+# fetched by tools/fetch_twemoji.py (third-party font, not committed)
+examples/pack/emoji/fonts/

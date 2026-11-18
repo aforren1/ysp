@@ -1,0 +1,13 @@
+{
+  "format": "ysp-pack-source",
+  "version": 1,
+  "experiment": { "entry": "experiment/emoji.json", "source": "emoji.json",
+                  "media_type": "application/vnd.ysp.experiment" },
+  "resources": [
+    { "name": "emoji.pstb", "kind": "table", "source": "emoji.csv" },
+    { "kind": "font", "source": "fonts/Twemoji.Mozilla.ttf", "license": "CC-BY-4.0 AND Apache-2.0" },
+    { "kind": "curveset", "from": "fonts/Twemoji.Mozilla.ttf", "glyphs": "used" },
+    { "name": "ATTRIBUTION.txt", "kind": "file", "source": "ATTRIBUTION.txt", "license": "CC-BY-4.0" },
+    { "name": "fonts/Twemoji.LICENSE.md", "kind": "file", "source": "fonts/LICENSE.md", "license": "CC-BY-4.0 AND Apache-2.0" }
+  ]
+}

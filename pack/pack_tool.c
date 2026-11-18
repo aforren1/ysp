@@ -1076,7 +1076,7 @@ static uint8_t* cset_bytes(B* b, const yol_cset* s, uint32_t units, uint32_t fla
     memcpy(d, "YSPCSET1", 8);
     w32(d + 8, 1); w32(d + 12, 64); w32(d + 16, units); w32(d + 20, s->words[2]); w32(d + 24, flags); w32(d + 28, face);
     w64(d + 32, s->n_texels); w64(d + 40, s->n_words); w64(d + 48, 64); w64(d + 56, 64 + 16 * (uint64_t)s->n_texels);
-    memcpy(d + 64, s->texels, 16 * (size_t)s->n_texels);
+    if (s->n_texels) memcpy(d + 64, s->texels, 16 * (size_t)s->n_texels);   /* a set of empty glyphs has no texels (NULL) */
     memcpy(d + 64 + 16 * (size_t)s->n_texels, s->words, 4 * (size_t)s->n_words);
     *n = total;
     return d;

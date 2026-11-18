@@ -1,0 +1,11 @@
+Emoji graphics: Twemoji, copyright 2020 Twitter, Inc and other contributors,
+https://github.com/twitter/twemoji, licensed under CC BY 4.0,
+https://creativecommons.org/licenses/by/4.0/
+
+Font: Twemoji Mozilla v0.7.0 (Twemoji.Mozilla.ttf), Mozilla Foundation,
+https://github.com/mozilla/twemoji-colr, code under the Apache License 2.0;
+its LICENSE.md is in this pack as fonts/Twemoji.LICENSE.md.
+
+Changes: none to the art. The pack stores the font file unchanged, and the
+glyphs this experiment shows converted to curves and color paints for
+drawing (fonts/Twemoji.Mozilla.yspcset, made by the ysp pack tool).

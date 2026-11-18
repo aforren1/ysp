@@ -1507,8 +1507,19 @@ static void color_checks(yol_ctx* ol) {
                   "color v1: ellipse t %g %g %g %g", rec_t(r, 0.5, -0.4), rec_t(r, 0.8, -0.4), rec_t(r, 0.5, -0.55), rec_t(r, 0.65, -0.4));
         }
         n = ylay_color_glyph(L, 0, CFB1_B_ILLFORMED, &ly);
-        CHECK(n == 1 && ly[0].glyph == CFB1_L_DISC, "color v1: an ill-formed gradient (p2 = p0) draws nothing, the disc beside it "
-              "does: %d layers (want 1)", n);
+        CHECK(n == 1 && ly[0].glyph == CFB1_L_DISC, "color v1: ill-formed gradients (p2 = p0; both radii 0) draw nothing, the disc "
+              "beside them does: %d layers (want 1)", n);
+        n = ylay_color_glyph(L, 0, CFB1_B_TURNED_RAD, &ly);
+        if (CHECK_N(n == 1, "color v1: the skewed radial: %d layers", n)) {
+            /* x' = 1.5 x - 0.2 y, y' = 0.3 x + y (Fixed 16.16 rounds 0.3 and 0.2), font units y up; in em y down */
+            const float* r = pt + 4 * (size_t)ly[0].paint;
+            const double a = 1.5, b = 19661.0 / 65536.0, c = -13107.0 / 65536.0, d = 1.0;
+            const double px = 500 + 300 * cos(0.7), py = 400 + 300 * sin(0.7);
+            const double cx = (a * 500 + c * 400) / 1000, cy = -(b * 500 + d * 400) / 1000;
+            const double ex = (a * px + c * py) / 1000, ey = -(b * px + d * py) / 1000;
+            CHECK(near_(rec_t(r, cx, cy), 0, 1e-6) && near_(rec_t(r, ex, ey), 1, 1e-6),
+                  "color v1: the skewed radial: t %g at the mapped center, %g on its mapped circle", rec_t(r, cx, cy), rec_t(r, ex, ey));
+        }
         n = ylay_color_glyph(L, 0, CFB1_B_OPACITY, &ly);
         if (CHECK_N(n == 2, "color v1: group opacity over two boxes apart: %d layers (want 2)", n)) {
             const float* r0 = pt + 4 * (size_t)ly[0].paint, *r1 = pt + 4 * (size_t)ly[1].paint;
