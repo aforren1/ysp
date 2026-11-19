@@ -1,8 +1,11 @@
 # The designer
 
-Status: planned, not built (2026-11-18). This document gives the
-designer's decisions, its first version's scope, its architecture and
-its order of work. [rig_spec.md](rig_spec.md) section 7 gives the
+Status: the skeleton is built (step 3 of "Order of work", 2026-11-18, branch
+`designer-skeleton`): a window, open and save of a project, the player's
+check on each change with its refusals linked to their places in the
+text, and redraw on input only. Steps 4 to 7 are not started. This document
+gives the designer's decisions, its first version's scope, its architecture
+and its order of work. [rig_spec.md](rig_spec.md) section 7 gives the
 designer's place in the rig. The measurements behind the UI decision are
 in [designer_ui_probe.md](designer_ui_probe.md).
 
@@ -56,6 +59,98 @@ continuous-input tasks in it is the baseline that format version 2 and
 a version 1 definition by the one-step migration of
 [experiment_format.md](experiment_format.md) 3.2 (D12: migration happens
 only in the designer), and saves version 2.
+
+### Decisions of step 3 (2026-11-18)
+
+These were chosen while the skeleton was built. Each can change when a
+later step needs it.
+
+**The project folder.** A project is a folder with a pack source
+description ([pack.md](pack.md) 5.2), normally `pack.json`, the definition
+that its `experiment.source` names, and the other sources that it lists.
+The folders `tests/player/rdk/` and `tests/player/stroop/` are projects.
+The designer adds one folder, `.designer/`:
+
+| Path | What | Keep it? |
+|---|---|---|
+| `.designer/view.json` | The view state (D13): the caret's line and column, the editor's scroll, ImGui's window settings. Canonical JSON, `"format": "ysp-designer-view"`, version 1. | Optional. A missing or bad file gives an empty view; open notes a bad one and goes on. |
+| `.designer/check/experiment.json` | The text of the last check pack build. | No: a cache. |
+| `.designer/check/check.ysppak` | The check pack (below). | No: a cache. |
+
+- Why one folder: deleting it loses the view and a cache, never the
+  experiment. A project under git can ignore it.
+- Open takes the folder or its description file. New makes a folder with
+  `pack.json` and `experiment.json`, a version 2 definition with one trial
+  that checks clean; it does not overwrite either file.
+
+**The check pack.** `pl_check()` needs a pack for the tables, fonts and
+other entries. The designer builds one with the linked pack tool, from the
+project's description with the definition replaced by the editor's text,
+and keeps it in memory.
+- It builds the pack at the first check whose text `yexp_load()` reads,
+  and again when the set of texts that the definition's text stimuli can
+  show changes (`ypt_derive_texts()`). The glyph runs are the only entries
+  that the definition decides; any other change is checked against the
+  pack in memory. A failed build is not tried again for the same text.
+- Until a pack exists, a check gives `yexp_load()`'s diagnostics with no
+  host and a note that the other checks wait.
+- The player and the pack tool each compile their own header
+  implementations, so their libraries cannot link into one program.
+  `designer/core/engine_impl.c` compiles the player's implementations
+  once, with ysp/outline.h's and ysp/video.h's for the pack tool, and
+  `ysp_designer_core` compiles both libraries' other sources against it.
+  Neither library changes.
+
+**A refusal's link, while the definition is text.** Step 3 edits the
+definition as JSON text in a multi-line Skribidi editor. Each issue has a
+line and a column in that text; a click on the issue puts the caret
+there.
+- Tier 1 (`yexp_load()`) and the pack tool give a line and a column.
+- Tier 2 gives an object (`PL_OBJ_*`) and its name. The designer finds its
+  key: `stimuli`, `trials`, `methods`, `roles` or `session.fields` by
+  name; a node by its path, name by name down `timeline` (a node with no
+  name matches an empty part). If the key is not there, the link goes to
+  the set's key, then to the parent node. This reimplements no rule: it
+  only finds a name in the text.
+- Tier 3 (what a real run needs) links to the key that asks for it:
+  `display.calibration`, `display.units`, `display.min_tier`, the role in
+  `devices` or `roles`, the session field. The default `participant` field
+  has no key, so it has no link.
+- Step 4 replaces the text with panels; the same object and name then
+  select the panel's field.
+
+**Save.** Save writes the definition's file through a temporary file.
+- When `yexp_load()` reads the text, Save writes `yexp_migrated()`'s bytes:
+  canonical, format version 2 (D2, D12). The editor then shows those
+  bytes, with the caret at the same line and column.
+- When it does not, Save writes the text as typed and says so: no work is
+  lost, and the next Save of a fixed text writes canonical bytes.
+- A version 1 file opens as its migrated version 2 bytes. It shows as
+  changed until Save.
+- Opening another project or quitting with changes asks: Save, Discard or
+  Cancel.
+
+**The file dialog's fallback: a typed path.** Open... calls
+`SDL_ShowOpenFolderDialog()`. Where it fails (a Linux desktop with no
+xdg-desktop-portal and no zenity, probe part 1, section 6), the status line
+says so and the path field takes the keyboard: type the folder and press
+Enter. A path on the command line and a folder or file dropped on the
+window also open a project. The dialog's answer comes back through SDL's
+event queue, because SDL can call the callback on another thread.
+
+**The redraw rule.** The loop blocks in `SDL_WaitEvent()` and draws only
+when one of these is true:
+- An event came in the last `DSG_SETTLE_FRAMES` (3) frames: ImGui settles
+  hover and focus over two frames.
+- ImGui's input queue holds events: ImGui applies one key or button change
+  a frame.
+- Work waits for a frame: a check, a scroll to restore, a question to
+  open.
+- A panel animates (none in step 3).
+
+The check runs in the frame of the edit, after the editor and before the
+issues panel. The caret does not blink: a blinking caret is an animation.
+The rule is `dsg_redraw_*()` in `designer/core/redraw.c`.
 
 ## First version
 
@@ -113,6 +208,13 @@ ysp_designer (C++, Dear ImGui, SDL3, GL ES 3.0)
   while ImGui's input queue holds events, because ImGui applies one key or
   button change a frame (probe part 1, section 2). Animation (a running
   preview) draws every frame.
+- **Code.** `designer/core/` (C11, `dsg.h`) holds every part with no
+  window: the project, the check, the places of issues and the redraw
+  rule. `designer/app/` (C++20) holds the UI: `ui.cpp` (the panels, no SDL
+  or GL), `skf.cpp` (the Skribidi edit field), `skt.cpp` (Skribidi text in
+  ImGui) and `main.cpp` (SDL3, GL ES 3.0, the loop). Only
+  `designer/core/platform.c` calls the OS (files and folders); its POSIX
+  branch also serves emscripten.
 - **Web build.** A hidden-textarea glue gives text input, IME
   composition and the system clipboard, which SDL's web backend does not
   (probe part 2, section 1). A dropped file arrives through SDL; a save is
@@ -146,10 +248,41 @@ ysp_designer (C++, Dear ImGui, SDL3, GL ES 3.0)
      symbols font (Noto Sans Symbols) after the script fonts.
 3. A skeleton: the window, open and save of a project, the loader's
    checks with refusals linked to fields, and redraw on input only.
+   - Done 2026-11-18 (branch `designer-skeleton`), with the decisions in
+     "Decisions of step 3". `test_designer_core` (82 checks) and
+     `test_designer_ui` (27 checks, ImGui with no window) run in ctest; 11
+     hand-made mutants of the core and the UI each fail one of them. Both
+     tests pass under ASan and UBSan (gcc 12, `setarch -R`), with one
+     UBSan report in Skribidi suppressed (below, "Open questions").
+   - Not done: the window was built and never opened, because the session
+     had no free display; no person has used it. The web build, the IME on the
+     multi-line editor, and Windows and macOS builds are not tried.
 4. The state chart, the tables and the panels from parameter tables.
 5. The preview.
 6. Build and Run.
 7. The web build, with the text glue.
+
+## How to build and run the skeleton
+
+From the repository root, with SDL 3.4.18 or later:
+
+```sh
+uv run --no-project python tools/vendor_layout.py --write
+uv run --no-project python tools/vendor_pack.py --write
+uv run --no-project python tools/vendor_designer.py --write
+cmake -B build/designer -DCMAKE_BUILD_TYPE=Release -DYSP_BUILD_DESIGNER=ON -DYSP_BUILD_PLAYER=ON \
+      -DYSP_BUILD_PACK=ON -DYSP_BUILD_LAYOUT=ON -DYSP_FETCH_MINIAUDIO=ON -DYSP_FETCH_PL_MPEG=ON \
+      -DCMAKE_PREFIX_PATH=/path/to/sdl3
+cmake --build build/designer --target ysp_designer test_designer_core test_designer_ui
+ctest --test-dir build/designer -R designer
+cp -r tests/player/rdk /tmp/rdk_project
+build/designer/designer/ysp_designer /tmp/rdk_project
+```
+
+The build copies the fonts that `YSP_DESIGNER_FONTS` lists (Debian's Noto
+and DejaVu paths by default) to `designer/fonts/` beside the program, and
+the program reads them from there. Open a copy of a project, not the
+repository's: Save and the check pack write into the folder.
 
 ## Open questions
 
@@ -187,10 +320,30 @@ ysp_designer (C++, Dear ImGui, SDL3, GL ES 3.0)
     fcitx only, built and not yet typed into).
 - A file dialog on a Linux desktop with no xdg-desktop-portal and no
   zenity: `SDL_ShowOpenFileDialog()` fails at once there (probe part 1,
-  section 6). The designer needs a fallback.
+  section 6). Answered in step 3 with a typed path ("Decisions of step
+  3"); a file browser of the designer's own is not built.
 - The glyph atlas uses `RegisterUserTexture`, an ImGui API marked
   internal and experimental. The ImGui version is pinned, and each
   upgrade checks it.
 - UI tests: the Dear ImGui Test Engine, as
   [lsl-viewer](https://github.com/aforren1/lsl-viewer) uses. Check its
   license before taking it.
+- The check pack's build cost is not measured. It runs at open and on each
+  edit that changes the texts of text stimuli (typing in a text literal
+  builds once a keystroke), in the frame of the edit. In
+  `test_designer_core` the whole test, with four builds of the stroop
+  pack, took 0.05 s on the Linux desktop; that is not a measurement.
+- The program links libstdc++ for one symbol: the vendored HarfBuzz
+  amalgamation refers to `std::__throw_system_error`. The designer's own
+  C++ and ImGui need no C++ runtime (built with `-fno-exceptions
+  -fno-rtti -fno-threadsafe-statics`). `ypak` links it for the same reason.
+- The issues panel lays out each message through the shared layout cache,
+  which never evicts. A long session of edits keeps every message it has
+  shown.
+- `platform.c`'s Windows branch (UTF-16 paths, `MoveFileExW`) is not
+  compiled or tested.
+- Skribidi at dee63d6 passes a NULL buffer to `memcpy()` with a length of
+  0 when a paragraph is empty (`skb_text.c` line 628, UBSan
+  `nonnull-attribute`); every text that ends with LF has one, so every
+  canonical definition does. It is harmless on the compilers used, and not
+  patched here.
