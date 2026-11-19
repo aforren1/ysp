@@ -269,7 +269,7 @@ static void case_definition(void) {
     pk* k = pack_of("rdk");
     size_t n;
     char* def, *e1, *e2;
-    unsigned l1, l2;
+    unsigned l1 = 0, l2 = 0;  /* MSVC C4701: set only when e1 is */
     pl_check_result r;
     int i, at1 = 0, at2 = 0;
     memset(&r, 0, sizeof r);
