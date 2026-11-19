@@ -153,7 +153,7 @@ the columns through `scratch`, which it closes again. It returns
 `yds_stream()`'s code and writes `yds_stream()`'s message to `err`, with
 the `ysp_dataset: ` prefix of `yds_error()`; `err` is empty on `YDS_OK`.
 `yds_stream()` calls the same internal function with its own names, so
-the two cannot drift. The player's `pl_check()` (0.14.1) uses it for the
+the two cannot drift. The player's `pl_check()` (0.15.0) uses it for the
 rdk and trace streams ([player.md](player.md#reference-pl_check)). No
 struct change; the bindings do not wrap it. ysp-dataset 0.4.0 (Python)
 reports the version, with no binding change.

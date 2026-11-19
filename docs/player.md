@@ -1,6 +1,6 @@
 # The player
 
-Status: v0.14.1, 2026-11-18 (0.14.1: `pl_check()` refuses what a real
+Status: v0.15.0, 2026-11-18 (0.15.0: `pl_check()` refuses what a real
 run refuses from the definition alone: a response trigger or a choice on
 a role that a rig can bind to a device, and the data set's streams;
 0.14.0: `pl_check()` for the designer,
@@ -418,8 +418,8 @@ the same `p`. Every pointer in `r` points into `p`. `pl_player` is large
 | `r->object` | `r->object_name` | Refusals that give it |
 |---|---|---|
 | `PL_OBJ_NODE` | the node's path | a leaf's rules and variables (`pl_leaf_prepare()`), the node checks (`pl_check_nodes()`: a name in both `vars` and `data`, an `if` field that is not 0 or 1), `@participant` with a text field |
-| `PL_OBJ_STIMULUS` | its name | a stimulus's lowering (`pl_stim_make()`: rdk, text, sound, image, the kinds the player does not lower), its static keys, its textures, a channel of one of its properties, an rdk's stream (0.14.1) |
-| `PL_OBJ_TEMPLATE` | its name | the response's collector (`pl_tmpl_open()`), a choice that is not a button of a role that a rig can bind to a device (0.14.1), a response trigger's rule on such a role (`pl_rule_make()`, 0.14.1), a version 2 template's graph, controls, forms and exits (`pl_v2_load()`), a trace's stream (0.14.1), the steps' `if` fields |
+| `PL_OBJ_STIMULUS` | its name | a stimulus's lowering (`pl_stim_make()`: rdk, text, sound, image, the kinds the player does not lower), its static keys, its textures, a channel of one of its properties, an rdk's stream (0.15.0) |
+| `PL_OBJ_TEMPLATE` | its name | the response's collector (`pl_tmpl_open()`), a choice that is not a button of a role that a rig can bind to a device (0.15.0), a response trigger's rule on such a role (`pl_rule_make()`, 0.15.0), a version 2 template's graph, controls, forms and exits (`pl_v2_load()`), a trace's stream (0.15.0), the steps' `if` fields |
 | `PL_OBJ_METHOD` | its name | a method's open (`pl_method_open()`) |
 | `PL_OBJ_SIGNAL_ROLE` | its name | a signal role's adapter (`v2_rig_signals()`) |
 | `PL_OBJ_FIELD` | its name | a session field's value (`pl_fields_init()`) |
@@ -485,10 +485,10 @@ These stand-ins apply always, with no need listed:
   and audio device, a rig profile's bindings and signals, and the files
   of the arguments (`--rig`, `--cal`, `--samples`, the output folder). The
   checks of a trial's values, which depend on the draws and on the
-  responses, run in the trials only. [Results, 0.14.1](#pl_checks-gaps-0141-2026-11-18)
+  responses, run in the trials only. [Results, 0.15.0](#pl_checks-gaps-0150-2026-11-18)
   lists each refusal that the check does not reach.
 
-Since 0.14.1, the check also runs these checks of a real run, which need
+Since 0.15.0, the check also runs these checks of a real run, which need
 the definition only:
 
 - The response rules (`pl_rules_check()`). A real run checks them for each
@@ -527,7 +527,7 @@ leaves. Such a definition loads, and a node whose rules use
 
 ### Measured
 
-Measured at 0.14.0. 0.14.1 adds the rule checks and a stream check per
+Measured at 0.14.0. 0.15.0 adds the rule checks and a stream check per
 rdk and trace to each call; it was not measured again.
 
 Order of magnitude only: one run, on a desktop that other builds share.
@@ -1511,7 +1511,7 @@ frame, F40, F41, 3.11 rule 8 and the trial's end.
 
 ## Results
 
-### pl_check()'s gaps (0.14.1, 2026-11-18)
+### pl_check()'s gaps (0.15.0, 2026-11-18)
 
 The designer's only check of a definition is `pl_check()`
 ([designer.md](designer.md), "Architecture"), so a refusal that a real
@@ -1852,7 +1852,7 @@ The same after the changes (0.11.0; load average 0.19 at the start and
 | Bimanual, 60 Hz | 1,893 to 1,915 us | 29.3 to 29.9 us | 1,021 to 1,035 us | 0 |
 | Bimanual, 500 Hz | 1,901 to 1,916 us | 9.5 to 9.7 us | 11.5 to 25.9 us | 0 |
 
-The largest frame at both rates is a trial's end. Tracy (v0.14.1,
+The largest frame at both rates is a trial's end. Tracy (v0.15.0,
 `tracy-capture` and `tracy-csvexport -u`; a scratch build with zones on 16
 of sig.h's functions, about 1.5 us a frame; player on CPUs 2 and 4),
 bimanual at 500 Hz, self time:

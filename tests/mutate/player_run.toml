@@ -773,7 +773,7 @@ why = "pl_check() writes no file: the columns are checked through a writer that 
 find = '''    if (p->checking ? pl_columns_check(p) < 0 : pl_dataset_open(p) < 0) return -1;'''
 replace = '''    if (pl_dataset_open(p) < 0) return -1;'''
 
-# 0.14.1: the streams' checks in pl_check() (yds_stream_check())
+# 0.15.0: the streams' checks in pl_check() (yds_stream_check())
 
 [[mutant]]
 id = "ck-r2"

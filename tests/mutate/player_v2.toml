@@ -1362,7 +1362,7 @@ replace = '''            S->n_live_lost++;
             continue;
             pl_fail(p,'''
 
-# 0.14.1: a trace's stream through pl_stream(), so pl_check() checks it
+# 0.15.0: a trace's stream through pl_stream(), so pl_check() checks it
 
 [[mutant]]
 id = "ck-v1"

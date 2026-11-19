@@ -567,7 +567,7 @@ why = "A string participant with '@participant' in a node's rules is refused by 
 find = '''                for (i = 0; p->def_leaves && p->def_leaves[i]; i++)'''
 replace = '''                for (i = 0; p->def_leaves && p->def_leaves[i] && 0; i++)'''
 
-# 0.14.1: a real run's checks of a role a rig binds to a device, in pl_check()
+# 0.15.0: a real run's checks of a role a rig binds to a device, in pl_check()
 
 [[mutant]]
 id = "ck-21"
