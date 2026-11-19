@@ -39,7 +39,7 @@ if(YSP_BUILD_LAYOUT)
         target_compile_definitions(colr_fuzz PRIVATE YSCR_NO_SDL YSP_FUZZ_SELF)
         # Text layout and Skribidi's editor, self-driven (tests/fuzz/layout_fuzz.c:
         # layout_fuzz N [seed], or --replay FILES). Its seeds alone, with no
-        # mutation, are a test: they hold the faults of Skribidi patch 0007.
+        # mutation, are a test: they hold the faults of Skribidi patches 0007 and 0008.
         ysp_add_program(layout_fuzz ${PROJECT_SOURCE_DIR}/tests/fuzz/layout_fuzz.c rig)
         target_link_libraries(layout_fuzz PRIVATE ysp_layout)
         target_compile_definitions(layout_fuzz PRIVATE YSCR_NO_SDL YSP_FUZZ_SELF)
