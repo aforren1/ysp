@@ -555,7 +555,7 @@ jobs:
             emcc -O2 -w -std=gnu17 -I$T/skribidi/include -I$T/skribidi/src -I$T/harfbuzz/src -I$T/sheenbidi/Headers \
               -I$T/libunibreak/src -I$T/budouxc/include -c $T/skribidi/src/skb_$f.c -o lo/skb_$f.o
           done
-          P=$(for f in skribidi-0001-bidi-run-merge skribidi-0002-l1-trailing-whitespace skribidi-0003-font-fallback skribidi-0004-emoji-family-fallback skribidi-0005-text-grapheme-breaks skribidi-0006-caret-split-grapheme skribidi-0007-monotone-clusters skribidi-0008-editor-empty-text; do
+          P=$(for f in skribidi-0001-bidi-run-merge skribidi-0002-l1-trailing-whitespace skribidi-0003-font-fallback skribidi-0004-emoji-family-fallback skribidi-0005-text-grapheme-breaks skribidi-0006-caret-split-grapheme skribidi-0007-monotone-clusters skribidi-0008-editor-empty-text skribidi-0009-line-end-offset; do
                 printf 'sha256:%s,' "$(sha256sum $T/patches/$f.patch | cut -c1-64)"; done)
           emcc $W -isystem $T/skribidi/include -isystem $T/harfbuzz/src -DYLAY_PATCHES="\"${P%,}\"" -c pack/layout.c -o lo/ysp_layout.o
           emcc $W -isystem $T/skribidi/include -isystem $T/harfbuzz/src -c pack/colr.c -o lo/ysp_colr.o

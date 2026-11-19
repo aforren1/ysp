@@ -36,7 +36,8 @@ MANIFEST = os.path.join(TP, "MANIFEST.sha256")
 PATCHES = ["skribidi-0001-bidi-run-merge.patch", "skribidi-0002-l1-trailing-whitespace.patch",
            "skribidi-0003-font-fallback.patch", "skribidi-0004-emoji-family-fallback.patch",
            "skribidi-0005-text-grapheme-breaks.patch", "skribidi-0006-caret-split-grapheme.patch",
-           "skribidi-0007-monotone-clusters.patch", "skribidi-0008-editor-empty-text.patch"]   # in order
+           "skribidi-0007-monotone-clusters.patch", "skribidi-0008-editor-empty-text.patch",
+           "skribidi-0009-line-end-offset.patch"]   # in order
 
 # component directory -> (GitHub repository, full commit SHA, label)
 PINS = {
