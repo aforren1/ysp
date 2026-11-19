@@ -155,6 +155,10 @@ SkfField* skf_create(float font_size, bool multiline) {
     p.editor_width = multiline ? SKB_SIZE_AUTO : 200.0f;
     p.editor_height = multiline ? SKB_SIZE_AUTO : font_size * 1.6f;
     f->ed = skb_editor_create(&p);
+    /* A new editor has no paragraph: its caret has height 0 and an IME
+     * composition does not show (docs/layout.md, Known issues). An empty
+     * text gives it one; set before the callback so it is not an edit. */
+    skb_editor_set_text_utf8(f->ed, skt_temp(), "", 0);
     skb_editor_set_on_text_change_callback(f->ed, on_change, f);
     return f;
 }

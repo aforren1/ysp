@@ -268,8 +268,8 @@ ysp_designer (C++, Dear ImGui, SDL3, GL ES 3.0)
      offset 0); [layout.md](layout.md), "Patch 0008: the editor at its
      text's edges". A UBSan run of the designer no longer needs to accept
      `skb_text.c` line 628. Open: a field that never had text has a caret
-     of height 0 and shows no IME composition; set its text to "" after
-     `skb_editor_create()` ([layout.md](layout.md), Known issues).
+     of height 0 and shows no IME composition, so `skf_create()` sets its
+     text to "" ([layout.md](layout.md), Known issues).
 3. A skeleton: the window, open and save of a project, the loader's
    checks with refusals linked to fields, and redraw on input only.
    - Done 2026-11-18 (branch `designer-skeleton`), with the decisions in
@@ -366,8 +366,3 @@ repository's: Save and the check pack write into the folder.
   shown.
 - `platform.c`'s Windows branch (UTF-16 paths, `MoveFileExW`) is not
   compiled or tested.
-- Skribidi at dee63d6 passes a NULL buffer to `memcpy()` with a length of
-  0 when a paragraph is empty (`skb_text.c` line 628, UBSan
-  `nonnull-attribute`); every text that ends with LF has one, so every
-  canonical definition does. It is harmless on the compilers used, and not
-  patched here.
