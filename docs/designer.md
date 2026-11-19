@@ -164,6 +164,168 @@ The check runs in the frame of the edit, after the editor and before the
 issues panel. The caret does not blink: a blinking caret is an animation.
 The rule is `dsg_redraw_*()` in `designer/core/redraw.c`.
 
+### Decisions of step 4
+
+#### The chart
+
+Built 2026-11-19 (part A, branch `designer-step4-chart`). The chart view
+(`designer/app/view_chart.cpp`) shows the states of one template and edits
+them through the document. The model, the commands and the view state are
+in `designer/core/chart.h` and `chart.c`. They need no window, so
+`test_designer_chart` tests them headless.
+
+**What the chart shows.** The list above the chart picks the template. By
+default it is the first template with `states`, in byte order.
+
+| Item | How it shows |
+|---|---|
+| A state | A box with its name (Skribidi), its number of steps and exits, and `max_visits` when it is set. An arrow points into the box of the first state: the trial starts there. |
+| The end | A circle with the name `end`. |
+| An exit | A solid arrow from its state to its `to`. The label tells what the exit waits for: `on X`, `after T s`, `instant`, `if C`, `outcome O`. |
+| A shared exit | A blue arrow from each state in its `in` to its `to`, with the same label. |
+| The next state (format 3.11 rule 10) | A dashed gray arrow with the label `steps end`. It goes from a state that has no exits and is in no `in` of a shared exit, to the next state in the list, or to the end from the last state. This is the player's rule (`player/v2.c`): a state in a shared exit has exits. |
+| `over` | A purple arrow with the label `over N visits`. |
+| A `to` that names no state | A short red arrow to nowhere. |
+| An issue | A red border (error) or a yellow border (warning) on the box or the arrow that `ui_issue_path()` puts it in. A badge on the box shows the number of issues in the state. |
+| The selection | A yellow border or arrow. |
+
+Two arrows between the same two nodes bow to opposite sides. An arrow
+from a state to the same state is a loop above the box.
+
+A template that uses `events` shows read-only, with a note. Its boxes are
+the parts that `until` splits it into (format 3.11 rule 9): the steps
+before an `until`, the wait, and the steps after it. To edit such a
+template, use the text view.
+
+**What a person does.**
+
+| To | Do this |
+|---|---|
+| Select a state, an exit or the template | Click the box, the arrow or its label, or empty space. The side column shows the panel of the selection. |
+| Move a state or the end | Drag its box. |
+| Pan | Drag empty space with the left or the middle button. |
+| Zoom | Turn the mouse wheel over the chart. The point under the mouse stays where it is. |
+| Connect | Drag from the round port on the right edge of a box to a box (the same box too) or to the end. |
+| Rename | Double-click the box, press F2, or click Rename. Type the name, then press Enter or click OK. Escape or Cancel stops the rename. |
+| Delete | Press Delete, or click Delete. |
+| Set the first state | Click Set first. |
+| Add a state | Click Add state. The box goes to the middle of the chart, with the name `state`, `state2` and so on. |
+
+**The commands.** Each command is one transaction, so one undo step. Each
+command selects what it made or changed, so undo and redo put the
+selection back.
+
+| Command | What it changes | What it selects |
+|---|---|---|
+| Add state | Appends `{"name": N}`. Makes `states` when the template has neither `states` nor `events`. | the state |
+| Connect | Appends the exit `{"to": T}` to the state. | the exit |
+| Delete state | Removes the state; each exit and shared exit whose `to` is the state; the name of the state in each `in` (and a shared exit whose `in` becomes empty); `over` and its `max_visits` where `over` goes to the state; and each `exits` array that becomes empty. | the template |
+| Delete exit | Removes the exit, the shared exit, or `over` and its `max_visits`, and an `exits` array that becomes empty. | the template |
+| Rename state | Sets the name, and each reference to it in the template: the `to` of an exit, a shared exit and `over`; the `in` of a shared exit; and the `from`, `to` and `time` of the controls and the columns of the template (format 3.9). Notes the rename for the view state. | the state |
+| Set first | Moves the state to the start of `states`. | the state |
+
+- **Connect makes an instant exit.** An exit with no `on` and no
+  `after_s` is taken when the state starts. No default for `on` or
+  `after_s` is correct for every chart, and an instant exit is valid. The
+  label says `instant` until a panel gives the exit its condition.
+- **Why a rename changes references.** `dsg_def_rename()` changes a key,
+  not the names that point to it. A template has one namespace (format
+  3.9), so a string at those keys that is equal to the old name can only
+  be the state. The bimanual definition shows why the controls count: its
+  controls `goal` and `frames` start `from` the state `move`. The rename
+  does not change the top-level controls, because they serve each
+  template. The check reports a reference that the rename did not change.
+- **Names that the chart refuses.** An empty name, `end`, `response`, and
+  the name of another state of the template. Two states with one name
+  would share their references and their positions. The other rules for
+  a name (an ASCII identifier of 63 bytes or less, no stimulus or control
+  with the same name) are the loader's rules: the chart writes the name
+  and the check reports it. A refusal makes no step and changes no byte.
+  `dsg_chart_error()` gives the reason, and the status line shows it.
+- **A command takes effect at the end of the frame.** A rename moves
+  positions through the rename listener, so the chart does a command
+  after it draws the frame. The next frame makes the model again.
+- **The name field exists only during a rename.** It is a Skribidi field
+  (`skf_create()`). The rename makes it and destroys it at the end. A
+  field that stays keeps the keyboard focus, and then Ctrl+Z goes to the
+  undo of the field, not to the undo of the document.
+
+**Positions are view state.** The part `chart` of the view file holds
+the template shown and, for each template, the pan, the zoom and the top
+left corner of each box, by the name of the state (`end` for the end).
+The definition never holds them (format D13). `test_designer_chart`
+checks the bytes of the definition for them.
+- A state that has no position gets one on a grid of four columns. The
+  chart keeps it, so the box stays where it is when other states come
+  and go.
+- A rename of a state or of a template moves its entry through
+  `dsg_doc_listen()`: the rename, its undo and its redo.
+- The position of a deleted state stays in the part, so an undo puts the
+  box back where it was.
+- The file holds positions and the pan in whole units, and the zoom with
+  3 decimals. The chart ignores an entry that has the wrong shape.
+- An events template keeps no positions: its parts have no names in the
+  definition.
+
+**Measured.** `bench_designer_chart` (`tests/designer/chart_bench.cpp`)
+draws the chart with no window, as `test_designer_ui` does.
+Linux desktop, Intel Core i5-14500, gcc 12.2, Release, pinned to CPU 2 (a
+P-core), 1,000 frames each, two runs; load average 0.91 during the runs
+(`uptime`). Microseconds, median and p99 of run 1; run 2 was within 1 % at
+the median. The made-up charts have an exit from each state to the next,
+an `after_s` exit to the end from every third state, one `over`, and a
+shared exit in every state.
+
+| Chart | States, edges | `draw()` of the view | Whole frame | Model build |
+|---|---|---|---|---|
+| `v2_retry`, the largest in the repository, zoom 1 | 8, 18 | 27.0, 31.8 | 44.0, 47.5 | 2.4, 3.2 |
+| made up, zoom 1 | 50, 117 | 65.6, 70.4 | 77.6, 81.4 | 21.8, 23.2 |
+| made up, zoom 0.25 (all on the canvas) | 50, 117 | 94.7, 98.7 | 111.1, 113.6 | 23.3, 24.5 |
+| made up, zoom 1 | 200, 467 | 237.8, 242.0 | 251.9, 256.0 | 198.1, 201.5 |
+| made up, zoom 0.25 | 200, 467 | 240.8, 256.0 | 251.5, 267.9 | 220.6, 227.3 |
+
+- The largest chart in the repository costs 27 us a frame: 0.2 % of a
+  16 ms frame. A chart of 200 states costs 0.24 ms.
+- Boxes and arrows off the canvas still go into ImGui's draw list; only
+  their glyphs are skipped. At 200 states, zoom 1 costs as much as zoom
+  0.25. Culling them is an option if a chart grows past a few hundred
+  states.
+- The model build grows with the square of the states (each `to` is
+  found by a scan of the names). It runs only when the text changes, and
+  the check after each change costs 0.2 to 7 ms, so it does not count at
+  this size.
+
+**Tests.** `test_designer_chart` has 159 checks: the models of
+bimanual, visuomotor and `v2_retry` (each kind of edge, the labels, the
+bows) and of an events template; the places of paths; each command as one
+step that undo and redo take to the same bytes, with the player's check
+clean after it where the definition allows; the refusals; the positions
+through a rename, its undo and its redo; and the part `chart` through the
+view file. `test_designer_te` (optional) has five chart tests:
+
+| Test | What it does |
+|---|---|
+| `chart/drag` | Drags a box by (60, 45). The box moves, the bytes of the definition do not change, and Save writes the position to the view file. |
+| `chart/connect` | Drags from the port of `hold_start` to the box of `begin`: a new exit, one undo step, selected. A drop on empty space makes nothing. |
+| `chart/issue` | Gives a state `max_visits` with no `over`, then clicks the issue in the text view. The chart shows, the state is selected, and its box is in the middle of the canvas. |
+| `chart/delete` | Clicks a box (the selection is its path), presses Delete, then Ctrl+Z: the same bytes and the same selection. |
+| `chart/rename` | Double-clicks a box, types a name with the keys of the engine and presses Enter. The state and the two exits to it have the new name, the box stays where it was, and the check is clean. Then Ctrl+Z goes to the document. |
+
+86 hand mutants of `chart.c` (76) and `view_chart.cpp` (10) each fail
+`test_designer_chart` or a `chart/` test of `test_designer_te`. They were
+reverted and are not in a mutation list. The 159 checks of a run come
+from 129 lines with a check. For 13 of these lines no mutant of part A's
+code fails the check: the projects' clean check before any command, and
+the checks of the shared document's undo, redo, selection and listeners.
+
+**Not done.**
+- The window was not opened: no person used the chart. No test checks
+  the issue marks, the zoom with the wheel, the pan or the look of the
+  arrows.
+- The Windows (MSVC) and macOS builds were not compiled.
+- The chart cannot add, rename or delete a template. The text view does
+  that, and the panels will.
+
 ## First version
 
 In:

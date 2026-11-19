@@ -284,7 +284,7 @@ static void test_commands(void) {
     snap s0, s;
     int dep;
     float x = 0, y = 0;
-    char err[512];
+    char err[512] = "";
     memset(&c, 0, sizeof c);
     dsg_chart_view_init(&v);
     if (project("bimanual", "tests/player/bimanual/experiment.json", "cmd_bimanual", &p)) { CHECK(0, "copy bimanual"); return; }
