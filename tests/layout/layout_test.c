@@ -1,6 +1,6 @@
 /* layout_test.c - checks of pack/layout (docs/layout.md, Checks).
  *
- *   1. The versions the glue logs: Skribidi's commit, the seven patch
+ *   1. The versions the glue logs: Skribidi's commit, the eight patch
  *      hashes, the HarfBuzz version.
  *   2. Visual order on every platform: a TrueType font written here (a box
  *      for every ASCII, Hebrew and Arabic codepoint) and the strings that
@@ -1623,9 +1623,9 @@ int main(void) {
     printf("skribidi %s, patch %s, harfbuzz %s\n", v->skribidi, v->skribidi_patch, v->harfbuzz);
     CHECK(strlen(v->skribidi) == 40, "Skribidi's commit is not set: %s", v->skribidi);
     {
-        int ok = strlen(v->skribidi_patch) == 7 * (7 + 64) + 6, k;
-        for (k = 0; k < 7 && ok; k++) ok = strncmp(v->skribidi_patch + 72 * k, "sha256:", 7) == 0;
-        CHECK(ok, "the seven patch hashes are not set, or the tree differs from the manifest: %s", v->skribidi_patch);
+        int ok = strlen(v->skribidi_patch) == 8 * (7 + 64) + 7, k;
+        for (k = 0; k < 8 && ok; k++) ok = strncmp(v->skribidi_patch + 72 * k, "sha256:", 7) == 0;
+        CHECK(ok, "the eight patch hashes are not set, or the tree differs from the manifest: %s", v->skribidi_patch);
     }
     CHECK(strcmp(v->harfbuzz, "14.6.0") == 0, "HarfBuzz is %s, the pin is 14.6.0", v->harfbuzz);
 

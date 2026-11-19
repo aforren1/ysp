@@ -1,4 +1,4 @@
-/* ysp/layout.h - v0.3.2 - text layout for the pack tool and the player
+/* ysp/layout.h - v0.3.3 - text layout for the pack tool and the player
  *
  *   Lays out UTF-8 text with Skribidi (vendored in third_party/, pinned, with
  *   local patches) and gives glyphs as ysp/gfx.h curve-run items over
@@ -78,6 +78,18 @@
  *   0007). Skribidi now merges such glyphs into one cluster. Text whose
  *   cluster values come in order lays out byte for byte as in v0.3.1. The
  *   stamp's patch field lists seven hashes.
+ *
+ *   v0.3.3 (2026-11-19): Skribidi patch 0008, for the designer's text
+ *   fields; the layout does not change. Skribidi's editor read paragraph 0
+ *   of none on a caret move, a line or column query, the first IME
+ *   composition or the selection bounds of an editor that never had text
+ *   (an assert in a Debug build, NULL in a Release one); read text
+ *   properties past the text on Ctrl+Right and before it on a double click
+ *   at offset 0; and gave memcpy() NULL for each empty paragraph (Enter,
+ *   text that ends in LF). docs/layout.md, Patch 0008. The pack tool and
+ *   the player do not call the editor. The stamp's patch field lists eight
+ *   hashes, and ends in ",tree-differs" when any source file a patch
+ *   changes differs from the manifest (skb_layout.c only before).
  */
 #ifndef YSP_LAYOUT_H_INCLUDED
 #define YSP_LAYOUT_H_INCLUDED
@@ -91,7 +103,7 @@
 extern "C" {
 #endif
 
-#define YLAY_VERSION_STRING "0.3.2"
+#define YLAY_VERSION_STRING "0.3.3"
 #define YLAY_MAX_FONTS      64
 
 /* Return codes: ysp/outline.h's values for the same meaning. */
