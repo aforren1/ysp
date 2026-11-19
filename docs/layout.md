@@ -1,11 +1,13 @@
 # ysp_layout: text layout for the pack tool and the player
 
-Status: v0.3.1, 2026-11-18 (v0.1.0, 2026-10-07: the first build; v0.2.0:
+Status: v0.3.2, 2026-11-18 (v0.1.0, 2026-10-07: the first build; v0.2.0:
 font fallback past the script, [Patch 0003](#patch-0003-font-fallback-past-the-script);
 v0.3.0: emoji and color glyphs, [Emoji](#emoji), [Color glyphs](#color-glyphs) and
 [Patch 0004](#patch-0004-a-run-whose-family-has-no-font); v0.3.1: two
 editing faults with Devanagari,
-[Patches 0005 and 0006](#patches-0005-and-0006-editing-devanagari)).
+[Patches 0005 and 0006](#patches-0005-and-0006-editing-devanagari);
+v0.3.2: cluster values out of order after a right-to-left override,
+[Patch 0007](#patch-0007-cluster-values-out-of-order)).
 The decision record is
 [layout_probe.md](layout_probe.md); this note is the manual of what was
 built on it, with the checks and the costs. The plan is
@@ -72,7 +74,7 @@ three, with the same corpus result.
 
 | Component | Pin | License | Local change |
 |---|---|---|---|
-| Skribidi | `dee63d6ba76aeddd49dea6d1b2508cf9aa391f46` (2026-08-17) | MIT | `patches/skribidi-0001-bidi-run-merge.patch`, `patches/skribidi-0002-l1-trailing-whitespace.patch`, `patches/skribidi-0003-font-fallback.patch`, `patches/skribidi-0004-emoji-family-fallback.patch`, `patches/skribidi-0005-text-grapheme-breaks.patch`, `patches/skribidi-0006-caret-split-grapheme.patch`, in that order |
+| Skribidi | `dee63d6ba76aeddd49dea6d1b2508cf9aa391f46` (2026-08-17) | MIT | `patches/skribidi-0001-bidi-run-merge.patch`, `patches/skribidi-0002-l1-trailing-whitespace.patch`, `patches/skribidi-0003-font-fallback.patch`, `patches/skribidi-0004-emoji-family-fallback.patch`, `patches/skribidi-0005-text-grapheme-breaks.patch`, `patches/skribidi-0006-caret-split-grapheme.patch`, `patches/skribidi-0007-monotone-clusters.patch`, in that order |
 | HarfBuzz | tag 14.6.0, `c7a7457b7385` (2026-10-05) | Old MIT; `src/ms-use` MIT | none |
 | SheenBidi | `83f77108a2873600283f6da4b326a2dca7a3a7a6` | Apache-2.0 | none |
 | libunibreak | tag `libunibreak_6_1`, `304585d8e2d6` | zlib | none |
@@ -95,8 +97,8 @@ three, with the same corpus result.
 
 ## The patches
 
-Six local patches, applied in this order. 0001, 0002, 0004 and 0006
-change `src/skb_layout.c`; 0003 changes it, `src/skb_font_collection.c`
+Seven local patches, applied in this order. 0001, 0002, 0004, 0006 and
+0007 change `src/skb_layout.c`; 0003 changes it, `src/skb_font_collection.c`
 and `include/skribidi/skb_font_collection.h`; 0005 changes
 `src/skb_text.c`.
 
@@ -108,6 +110,7 @@ and `include/skribidi/skb_font_collection.h`; 0005 changes
 | `skribidi-0004-emoji-family-fallback.patch` | `ce9aa9eea3585162bb2aff62725f883465f63e54e2ea3d3e4bc21c847add4ab2` | A run whose font family had no font was skipped: with no emoji font, an emoji vanished with no glyph 0, and with emoji fonts only, text did ([Patch 0004](#patch-0004-a-run-whose-family-has-no-font)). |
 | `skribidi-0005-text-grapheme-breaks.patch` | `11081a2421b97f0111040b4934d98bfc349471a5b1647f5a34a07552c65ab69c` | An edit of `skb_text` set grapheme breaks for the new codepoints only, as if they were a separate text, so typed Devanagari got breaks inside a grapheme ([Patches 0005 and 0006](#patches-0005-and-0006-editing-devanagari)). |
 | `skribidi-0006-caret-split-grapheme.patch` | `dfa7cdbd1cc8e05ffb4c93a7135a348d193a9084cc31b3cd1aff0065d3ca12d5` | The caret iterator took each cluster as whole graphemes; where HarfBuzz splits a grapheme into two clusters, the first got no caret stop and its width was lost ([Patches 0005 and 0006](#patches-0005-and-0006-editing-devanagari)). |
+| `skribidi-0007-monotone-clusters.patch` | `f8459c8b13e50157995ca0769329e7698cbd4ce82a33666f0aebcd93eacf191c` | `skb__shape_run()` took each cluster's text range from the cluster values next to it and assumed them in order; HarfBuzz gave them out of order for Devanagari after U+202E, and a cluster got a negative range ([Patch 0007](#patch-0007-cluster-values-out-of-order)). |
 
 Patch 0002, and why it sits where it does:
 
@@ -294,6 +297,81 @@ Hebrew text comes from the Latin font. The probe's box for U+2192 was
 missing coverage (none of its four Noto files maps it), not a fallback
 fault.
 
+### Patch 0007: cluster values out of order
+
+The fault, as reproduced 2026-11-18 (Linux gcc 12, HarfBuzz 14.6.0):
+
+- Text: U+202E (RIGHT-TO-LEFT OVERRIDE), then U+094D U+200C U+094E
+  (virama, ZWNJ, the pre-base vowel sign prishthamatra), with a font
+  that has no U+25CC. The override makes the Devanagari an RTL run.
+- HarfBuzz shapes a script against its direction by reversing the
+  graphemes, shaping in the script's direction, and reversing back
+  (`hb_ensure_native_direction()`). The Indic shaper's reordering then
+  moves a glyph across two of the reversed graphemes. The RTL run's
+  cluster values come back as 2, 1, 2. HarfBuzz alone gives the same
+  values. With a font that has U+25CC, HarfBuzz inserts a dotted circle,
+  the syllables differ, and the values are in order.
+- `skb__shape_run()` takes the text range of a cluster from the values of
+  the glyphs next to it, so it expects the values in order (descending in
+  RTL). The last cluster got the range [2, 1).
+- Debug build: `assert(text_end >= text_start)` in `skb__shape_run()`
+  fails. Release build: the cluster's text count is clamped to 0, so its
+  glyph maps to no codepoint, carets and hit tests are wrong there, and
+  code that reads a cluster's last codepoint
+  (`text_offset + text_count - 1`) reads the codepoint before the
+  cluster. Under ASan with asserts off, no memory error came from it.
+
+The patch adds `skb__merge_non_monotone_clusters()`, which runs on
+HarfBuzz's output before the cluster loop:
+
+- When the values are in order, one pass and no allocation: the clusters
+  do not change. Compared with and without the patch (Release; glyph ids,
+  offsets, advances, clusters and runs), 220,006 random layouts of bidi
+  controls with Devanagari, Arabic, Hebrew and Latin (the Noto fonts, and
+  box fonts) differ in 22, each one whose clusters were wrong without it.
+- Else, it merges the glyphs into the fewest clusters whose values are in
+  order in the run's direction, each with the lowest value in it, as
+  HarfBuzz merges clusters. It allocates one `uint32_t` per glyph from the
+  layout's temporary allocator. The case above becomes one cluster of
+  U+094D U+200C U+094E with its 3 glyphs.
+- The function does not look at the direction of the script, so a left-
+  to-right override (U+202D) before Arabic or Hebrew gets the same
+  treatment. HarfBuzz gave no values out of order for 8,000,000 random
+  Arabic and Hebrew runs forced to LTR with box fonts, and 600,000 with
+  Noto Sans Arabic and Hebrew; for Devanagari forced to RTL it gave 4 in
+  2,000,000 with a box font and 0 in 300,000 with Noto Sans Devanagari.
+
+Checks:
+
+- `test_layout_editor` part 5 (box fonts the test writes, none with
+  U+25CC): each bidi control (U+202A to U+202E, U+2066 to U+2069, U+200E,
+  U+200F), before and after the first codepoint of 6 texts (Devanagari,
+  Hebrew, Arabic, mixed), at the 3 base directions: 414 layouts. Every
+  codepoint must be in exactly one cluster and no cluster may be empty;
+  Hebrew and Arabic keep one cluster per codepoint; the fault's text gives
+  the clusters [U+202E] [U+094D U+200C U+094E]. The editor types U+202E
+  U+094D U+200C U+094E, a space and ka, moves the caret, and removes the
+  text with Backspace, with the same check after each edit. Without the
+  patch, Release: 6 of 85 checks fail (12 of the 414 layouts, all with
+  U+202E, and 5 of the editor's layouts); Debug: the assert stops the
+  test. With it: 81 of 81 pass (the Noto fonts present), also under ASan
+  and UBSan.
+- `tests/fuzz/layout_fuzz.c` (CMake target `layout_fuzz`, self-driven):
+  text with bidi controls, Devanagari, Arabic and Hebrew through
+  `ylay_layout()`, through Skribidi's layout with the same cluster check,
+  and through Skribidi's editor with key presses. Its 6 seeds hold the
+  fault; ctest `layout_fuzz_seeds` runs them. Without the patch the first
+  seed fails (Release: the cluster check; Debug: the assert). With the
+  patch, 4 runs of 300,006 inputs (2,076,458 editor keys) in the
+  sanitizers tree (Debug, ASan and UBSan, `setarch -R`): no report.
+- Hand mutants of the new function (Release, `test_layout_editor`): 6 of
+  7 killed. The survivor takes the last value as the bound of the glyphs
+  before it, not the lowest so far (RTL) or the highest (LTR); it differs
+  only for values such as 5, 2, 4, 3, 1, which no input here made
+  HarfBuzz give.
+
+The cost of the extra pass was not measured.
+
 ## Pinning and update policy
 
 From layout_probe.md 7, unchanged:
@@ -478,7 +556,7 @@ characters are missing and from which text.
 `tests/layout/layout_test.c` (ctest `test_layout`):
 
 1. The logged versions: the Skribidi commit, the hashes (and no
-   `tree-differs`) of the four patches, HarfBuzz 14.6.0.
+   `tree-differs`) of the seven patches, HarfBuzz 14.6.0.
 2. Visual order on every platform, with a TrueType font the test writes (a
    box for every ASCII, Hebrew and Arabic codepoint): the two bug strings
    and the editor's caret string. The items of each line, by x, must visit
@@ -727,13 +805,37 @@ start of line 1; Edge's is at x 8200 on line 0).
 
 ## Known issues
 
-### Open: a right-to-left override before Devanagari
+### Open: three faults of Skribidi's editor
 
-Pinned Skribidi hangs or crashes in layout on text that starts with
-U+202E (RIGHT-TO-LEFT OVERRIDE) followed by Devanagari; with asserts on,
-`skb__line_append_shaping_run()`'s assert fails. Seen 2026-11-18 with
-patches 0001 to 0006 and without 0005 and 0006. Not patched yet. The
-pack tool lays out definition text, so a definition can reach it.
+Found 2026-11-18 by `tests/fuzz/layout_fuzz.c` and confirmed on plain
+text, so not bidi faults; pinned Skribidi with patches 0001 to 0007. The
+fuzz target leaves these inputs out. The pack tool and the player do not
+call the editor; the designer's text fields do.
+
+- Ctrl+Right (`skb_editor_move_to_next_word()`, Windows behavior) reads
+  one past the text's properties: `skb__advance_word_forward()` reads
+  `text_props[next_offset]` when `next_offset` is the text's end. ASan
+  reports it on "ab" with the caret at the start and Ctrl+Right twice.
+- A key press in an editor that never had text dereferences NULL: the
+  editor has no paragraph, and `skb_rich_layout_get_direction()` reads
+  paragraph 0. Debug: an assert; Release: a crash.
+- Enter, and an insert that starts with a paragraph separator, append an
+  empty text to an empty paragraph: `skb_text_append_utf32_with_payload()`
+  calls `memcpy()` with a NULL destination and a size of 0. UBSan reports
+  it; the copy does nothing.
+
+### Fixed by patch 0007: a right-to-left override before Devanagari
+
+Recorded 2026-11-18 as: pinned Skribidi hangs or crashes on text that
+starts with U+202E followed by Devanagari, and with asserts on,
+`skb__line_append_shaping_run()`'s assert fails. The fault reproduced
+here asserts in `skb__shape_run()` instead
+([Patch 0007](#patch-0007-cluster-values-out-of-order)); no hang, crash
+or `skb__line_append_shaping_run()` assert came up in about 800,000
+random layouts (bidi controls with Devanagari, Arabic, Hebrew and Latin;
+box fonts, the Debian Noto fonts, and DejaVu Sans first in the list;
+Debug, and ASan with asserts off) and 18,000 random editor sessions. If
+the recorded symptom had another input, that input is not known.
 
 ### Fixed in v0.3.0: emoji were dropped without a trace
 
@@ -892,8 +994,9 @@ as `examples/layout/gfx_layout.c` does. Its manual is
 
 ## Not done
 
-- Vertical text (Skribidi has none), justification, explicit bidi
-  controls (U+202A to U+2069; untested).
+- Vertical text (Skribidi has none), justification. Explicit bidi
+  controls (U+202A to U+2069) are checked for whole clusters only
+  (patch 0007's checks), not for their order against a browser's.
 - Variable-font instances and CFF2 through HarfBuzz's draw API into
   `ysp/outline.h`'s builder (layout_probe.md 8.4): a font `ysp/outline.h`
   refuses is refused here.

@@ -1,4 +1,4 @@
-/* ysp/layout.h - v0.3.1 - text layout for the pack tool and the player
+/* ysp/layout.h - v0.3.2 - text layout for the pack tool and the player
  *
  *   Lays out UTF-8 text with Skribidi (vendored in third_party/, pinned, with
  *   local patches) and gives glyphs as ysp/gfx.h curve-run items over
@@ -69,6 +69,15 @@
  *   and the caret, hit test and selection functions do, which the pack tool
  *   and the player do not call. The stamp's patch field lists six hashes,
  *   and ylay_stamp() no longer cuts a version line longer than 512 bytes.
+ *
+ *   v0.3.2 (2026-11-18): Skribidi patch 0007. HarfBuzz can give cluster
+ *   values out of order for a script shaped against its direction, as
+ *   Devanagari after U+202E RIGHT-TO-LEFT OVERRIDE: U+202E U+094D U+200C
+ *   U+094E with a font without U+25CC failed an assert in a Debug build and
+ *   gave a cluster of no codepoints in a Release one (docs/layout.md, Patch
+ *   0007). Skribidi now merges such glyphs into one cluster. Text whose
+ *   cluster values come in order lays out byte for byte as in v0.3.1. The
+ *   stamp's patch field lists seven hashes.
  */
 #ifndef YSP_LAYOUT_H_INCLUDED
 #define YSP_LAYOUT_H_INCLUDED
@@ -82,7 +91,7 @@
 extern "C" {
 #endif
 
-#define YLAY_VERSION_STRING "0.3.1"
+#define YLAY_VERSION_STRING "0.3.2"
 #define YLAY_MAX_FONTS      64
 
 /* Return codes: ysp/outline.h's values for the same meaning. */

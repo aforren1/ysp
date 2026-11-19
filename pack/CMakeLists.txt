@@ -37,6 +37,13 @@ if(YSP_BUILD_LAYOUT)
         ysp_add_program(colr_fuzz ${PROJECT_SOURCE_DIR}/tests/fuzz/colr_fuzz.c rig)
         target_link_libraries(colr_fuzz PRIVATE ysp_layout)
         target_compile_definitions(colr_fuzz PRIVATE YSCR_NO_SDL YSP_FUZZ_SELF)
+        # Text layout and Skribidi's editor, self-driven (tests/fuzz/layout_fuzz.c:
+        # layout_fuzz N [seed], or --replay FILES). Its seeds alone, with no
+        # mutation, are a test: they hold the faults of Skribidi patch 0007.
+        ysp_add_program(layout_fuzz ${PROJECT_SOURCE_DIR}/tests/fuzz/layout_fuzz.c rig)
+        target_link_libraries(layout_fuzz PRIVATE ysp_layout)
+        target_compile_definitions(layout_fuzz PRIVATE YSCR_NO_SDL YSP_FUZZ_SELF)
+        add_test(NAME layout_fuzz_seeds COMMAND layout_fuzz 0)
         # What color glyphs cost, and text and images before and after them
         # (docs/gfx.md v0.22.0); a window on the display, not a test.
         if(TARGET SDL3::SDL3)
