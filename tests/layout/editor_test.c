@@ -32,7 +32,16 @@
  *      12 small texts in both behaviors, keep the editor whole. Without the
  *      patch the moves of a new editor crash; the other faults show only
  *      under ASan and UBSan.
- * Parts 1 to 3, 5 and 6 use fonts written here (tests/adapt/colr_font_build.h):
+ *   7. End on each line of texts whose lines are paragraphs that end in LF
+ *      (patch 0009; the designer's editor has a paragraph per line), LTR,
+ *      RTL and soft-wrapped: the caret stops before the LF, at the outer
+ *      edge of the line's last visible character, and a letter typed there
+ *      goes at the line's end. Shift+End, Command+Right, triple clicks and a
+ *      drag by lines run the same code. Home, a click past a line's end and
+ *      Down and Up into shorter lines are checked too; they were right.
+ *      Without the patch End took the caret past the LF on each line but
+ *      the first: 7 of 110 checks fail.
+ * Parts 1 to 3 and 5 to 7 use fonts written here (tests/adapt/colr_font_build.h):
  * a box for each codepoint, 1000 units per em, at 16 px a glyph is 16 px
  * wide.
  * Exit 0 on pass, 1 on a failure.
@@ -657,6 +666,226 @@ static void check_commands(skb_font_collection_t* fc) {
     printf("commands: %d sessions, %d commands\n", runs, N_CMDS);
 }
 
+/* --- 7: End, Home, clicks and line moves on each line ------------------------- */
+
+static skb_editor_t* editor_make_wrap(skb_font_collection_t* fc, skb_editor_behavior_t behavior, float width) {
+    static skb_attribute_t pa[2];
+    skb_editor_params_t p;
+    pa[0] = skb_attribute_make_font_size(SIZE);
+    pa[1] = skb_attribute_make_text_wrap(SKB_WRAP_WORD);
+    memset(&p, 0, sizeof p);
+    p.font_collection = fc;
+    p.editor_width = width;
+    p.editor_height = -1.0f;
+    p.paragraph_attributes = (skb_attribute_set_t){ pa, 2, 0, NULL };
+    p.editor_behavior = behavior;
+    return skb_editor_create(&p);
+}
+
+/* A line of the editor, in global offsets: the start, the end of its visible
+ * text (before the paragraph separator that ends the line, if any), the
+ * caret's x at each, and the y of its baseline and of its middle. */
+typedef struct ed_line { int start, end; float x_start, x_end, y, mid_y; } ed_line;
+
+static int lines_of(const skb_editor_t* ed, ed_line* out, int cap) {
+    uint32_t t[64];
+    const int total = skb_editor_get_text_utf32(ed, t, 64);
+    int p, i, n = 0;
+    if (total < 0 || total >= 64) return 0;
+    for (p = 0; p < skb_editor_get_paragraph_count(ed); p++) {
+        const skb_layout_t* lay = skb_editor_get_paragraph_layout(ed, p);
+        const skb_layout_line_t* lines = skb_layout_get_lines(lay);
+        const int gto = skb_editor_get_paragraph_global_text_offset(ed, p);
+        for (i = 0; i < skb_layout_get_lines_count(lay) && n < cap; i++) {
+            ed_line* L = &out[n++];
+            skb_caret_info_t ci;
+            L->start = gto + lines[i].text_range.start;
+            L->end = gto + lines[i].text_range.end;
+            if (L->end > L->start && skb_is_paragraph_separator(t[L->end - 1])) L->end--;
+            /* The outer edges of the first and the last visible character
+             * (one codepoint each here), not the SOL or EOL caret that the
+             * fault is about. */
+            ci = skb_editor_get_caret_info_at(ed, (skb_text_position_t){ L->start, SKB_AFFINITY_TRAILING });
+            L->x_start = L->end > L->start ? ci.x : caret_x(ed, L->start, SKB_AFFINITY_SOL);
+            L->x_end = L->end > L->start ? caret_x(ed, L->end - 1, SKB_AFFINITY_LEADING) : L->x_start;
+            L->y = ci.y;
+            L->mid_y = ci.y + 0.5f * (ci.ascender + ci.descender);
+        }
+    }
+    return n;
+}
+
+static int near(float a, float b) { return fabsf(a - b) < 0.01f; }
+
+static void caret_to(skb_editor_t* ed, int offset, uint8_t affinity) {
+    const skb_text_position_t p = { offset, affinity };
+    skb_editor_select(ed, (skb_text_range_t){ p, p });
+}
+
+/* Skribidi patch 0009. In the designer's editor each line of a definition is
+ * a paragraph that ends in LF. End took the caret past the LF on each line
+ * but the first: skb_editor_get_line_end_at() gave a global offset to the
+ * step that keeps the caret before a line's last control character, and
+ * that step compares it with an offset in the paragraph. Each check runs on
+ * each line of each text, in both behaviors: End and Shift+End from the
+ * line's start, a letter typed after End, Home from the line's end, a click
+ * past the line's end and a triple click; then Down and Up through lines of
+ * other lengths. The oracle of a caret's place is the outer edge of the
+ * line's first or last visible character. */
+static void check_line_ends(skb_font_collection_t* fc) {
+    static const struct { const char* text; float width; const char* name; } texts[] = {
+        { "ab\ncd\n", -1.0f, "LTR" },
+        { "\xD7\x90\xD7\x91\nab\n\xD7\x92\xD7\x93\n\xD7\x94\xD7\x95", -1.0f, "RTL" },
+        { "ab cd ef\nab cd ef\n", 40.0f, "wrapped" },
+    };
+    enum { END_AT, END_XY, TYPED, SHIFT_END, HOME, CLICK, TRIPLE, N_KINDS };
+    static const char* kind_names[N_KINDS] = { "End: offset", "End: caret x or y", "a letter typed after End", "Shift+End", "Home",
+                                               "a click past the end", "a triple click" };
+    int fails[N_KINDS] = { 0 }, shown = 0, x, b, i, k, lines_total = 0, wrapped_lines = 0;
+    ed_line L[16];
+    uint32_t t[64];
+    skb_editor_t* ed;
+
+    for (x = 0; x < (int)(sizeof texts / sizeof texts[0]); x++)
+        for (b = 0; b < 2; b++) {
+            const skb_editor_behavior_t beh = b ? SKB_BEHAVIOR_MACOS : SKB_BEHAVIOR_DEFAULT;
+            int n;
+            ed = editor_make_wrap(fc, beh, texts[x].width);
+            skb_editor_set_text_utf8(ed, temp, texts[x].text, -1);
+            n = lines_of(ed, L, 16);
+            if (b == 0) {
+                lines_total += n;
+                if (texts[x].width > 0.0f) wrapped_lines = n;
+            }
+            skb_editor_destroy(ed);
+            for (i = 0; i < n; i++) {
+                const ed_line* l = &L[i];
+                const int rtl = l->x_end < l->x_start;
+                int got[N_KINDS], want[N_KINDS];
+                skb_text_range_t sel;
+                skb_caret_info_t ci;
+                for (k = 0; k < N_KINDS; k++) got[k] = want[k] = 0;
+                ed = editor_make_wrap(fc, beh, texts[x].width);
+                skb_editor_set_text_utf8(ed, temp, texts[x].text, -1);
+
+                /* End, and a letter typed there. */
+                caret_to(ed, l->start, SKB_AFFINITY_TRAILING);
+                skb_editor_process_key_pressed(ed, temp, SKB_KEY_END, 0);
+                got[END_AT] = caret_offset(ed);
+                want[END_AT] = l->end;
+                ci = skb_editor_get_caret_info_at(ed, SKB_CURRENT_SELECTION_END);
+                got[END_XY] = !near(ci.x, l->x_end) || !near(ci.y, l->y);
+                skb_editor_insert_codepoint(ed, temp, SKB_CURRENT_SELECTION, 'z');
+                {
+                    const int m = text_of(ed, t, 64);
+                    want[TYPED] = l->end;
+                    got[TYPED] = -1;
+                    for (k = 0; k < m; k++)
+                        if (t[k] == 'z') got[TYPED] = k;
+                }
+                skb_editor_set_text_utf8(ed, temp, texts[x].text, -1);
+
+                /* Shift+End from the start selects the visible text. */
+                caret_to(ed, l->start, SKB_AFFINITY_TRAILING);
+                skb_editor_process_key_pressed(ed, temp, SKB_KEY_END, SKB_MOD_SHIFT);
+                sel = skb_editor_get_current_selection(ed);
+                want[SHIFT_END] = l->end;
+                got[SHIFT_END] = skb_editor_get_text_offset_from_text_position(ed, sel.start) == l->start ?
+                                 skb_editor_get_text_offset_from_text_position(ed, sel.end) : -1;
+
+                /* Home from before the last visible character. (After it, at
+                 * a soft wrap, the caret counts as on the next line; see
+                 * docs/layout.md, Patch 0009.) */
+                caret_to(ed, l->end > l->start ? l->end - 1 : l->start, SKB_AFFINITY_TRAILING);
+                skb_editor_process_key_pressed(ed, temp, SKB_KEY_HOME, 0);
+                want[HOME] = l->start;
+                got[HOME] = near(skb_editor_get_caret_info_at(ed, SKB_CURRENT_SELECTION_END).x, l->x_start) ? caret_offset(ed) : -1;
+
+                /* A click past the end, then a triple click on the line, each
+                 * 10 s after the one before so that they do not count as one. */
+                skb_editor_process_mouse_click(ed, rtl ? -1000.0f : 1000.0f, l->mid_y, 0, 10.0 * (3 * i + 1));
+                want[CLICK] = l->end;
+                got[CLICK] = near(skb_editor_get_caret_info_at(ed, SKB_CURRENT_SELECTION_END).x, l->x_end) ? caret_offset(ed) : -1;
+                for (k = 0; k < 3; k++)
+                    skb_editor_process_mouse_click(ed, 0.5f * (l->x_start + l->x_end), l->mid_y, 0, 10.0 * (3 * i + 2) + 0.1 * k);
+                sel = skb_editor_get_current_selection(ed);
+                want[TRIPLE] = l->end;
+                got[TRIPLE] = skb_editor_get_text_offset_from_text_position(ed, sel.start) == l->start ?
+                              skb_editor_get_text_offset_from_text_position(ed, sel.end) : -1;
+                skb_editor_destroy(ed);
+
+                for (k = 0; k < N_KINDS; k++)
+                    if (got[k] != want[k] && shown++ < 8)
+                        printf("  %s, %s, line %d (offsets %d to %d): %s: %d, not %d (End's caret x %.2f y %.2f; the line's end x %.2f y %.2f)\n",
+                               texts[x].name, b ? "macOS" : "default", i, l->start, l->end, kind_names[k], got[k], want[k],
+                               ci.x, ci.y, l->x_end, l->y);
+                for (k = 0; k < N_KINDS; k++) fails[k] += got[k] != want[k];
+            }
+        }
+    CHECK(wrapped_lines == 7, "the wrapped text has %d lines, not 7 (3, 3 and the empty line after the last LF)", wrapped_lines);
+    for (k = 0; k < N_KINDS; k++)
+        CHECK(fails[k] == 0, "line ends: %s wrong on %d of %d lines", kind_names[k], fails[k], 2 * lines_total);
+
+    /* macOS: Command+Right is End and Command+Left is Home. */
+    ed = editor_make_wrap(fc, SKB_BEHAVIOR_MACOS, -1.0f);
+    skb_editor_set_text_utf8(ed, temp, "ab\ncd\n", -1);
+    caret_to(ed, 3, SKB_AFFINITY_TRAILING);
+    skb_editor_process_key_pressed(ed, temp, SKB_KEY_RIGHT, SKB_MOD_COMMAND);
+    k = caret_offset(ed);
+    skb_editor_process_key_pressed(ed, temp, SKB_KEY_LEFT, SKB_MOD_COMMAND);
+    CHECK(k == 5 && caret_offset(ed) == 3, "\"ab\\ncd\\n\", macOS: Command+Right from 3 went to %d, not 5; Command+Left to %d, not 3", k, caret_offset(ed));
+    /* A triple click on line 0 and a drag down to line 1 select both lines'
+     * visible text and the LF between them, not the LF after line 1. */
+    {
+        const int n = lines_of(ed, L, 16);
+        skb_text_range_t sel;
+        int s0, s1;
+        for (k = 0; k < 3; k++) skb_editor_process_mouse_click(ed, 8.0f, L[0].mid_y, 0, 500.0 + 0.1 * k);
+        skb_editor_process_mouse_drag(ed, 8.0f, n > 1 ? L[1].mid_y : 0.0f);
+        sel = skb_editor_get_current_selection(ed);
+        s0 = skb_editor_get_text_offset_from_text_position(ed, sel.start);
+        s1 = skb_editor_get_text_offset_from_text_position(ed, sel.end);
+        CHECK(n == 3 && s0 == 0 && s1 == 5, "\"ab\\ncd\\n\": a triple click on line 0 and a drag to line 1 selected %d to %d, not 0 to 5", s0, s1);
+    }
+    skb_editor_destroy(ed);
+
+    /* Down from the end of the longest line keeps its x, and stops at the
+     * end of each shorter line, before its LF; Up from x 48 stops after the
+     * third character or at the end of a shorter line. */
+    for (b = 0; b < 2; b++) {
+        int n, bad = 0;
+        ed = editor_make_wrap(fc, b ? SKB_BEHAVIOR_MACOS : SKB_BEHAVIOR_DEFAULT, -1.0f);
+        skb_editor_set_text_utf8(ed, temp, "abcd\nab\nabcd\na\n\nabc", -1);
+        n = lines_of(ed, L, 16);
+        CHECK(n == 6, "Down and Up: %d lines, not 6", n);
+        for (k = 0; k < 2 && n == 6; k++) {
+            /* End sets the x that the moves keep; skb_editor_select() does
+             * not. Line 0 and the last line are their paragraphs' only
+             * lines, with no LF and in paragraph 0, which End reached before
+             * patch 0009 too. */
+            caret_to(ed, k ? 16 : 0, SKB_AFFINITY_TRAILING);
+            skb_editor_process_key_pressed(ed, temp, SKB_KEY_END, 0);
+            for (i = k ? n - 2 : 1; k ? i >= 0 : i < n; i += k ? -1 : 1) {
+                int want = L[i].end;
+                float want_x = L[i].x_end;
+                if (k && L[i].end - L[i].start > 3) {
+                    want = L[i].start + 3;
+                    want_x = caret_x(ed, want, SKB_AFFINITY_TRAILING);
+                }
+                skb_editor_process_key_pressed(ed, temp, k ? SKB_KEY_UP : SKB_KEY_DOWN, 0);
+                if (caret_offset(ed) != want || !near(skb_editor_get_caret_info_at(ed, SKB_CURRENT_SELECTION_END).x, want_x)) {
+                    if (bad++ == 0)
+                        printf("  %s to line %d: the caret at %d x %.2f, not %d x %.2f\n", k ? "Up" : "Down", i, caret_offset(ed),
+                               skb_editor_get_caret_info_at(ed, SKB_CURRENT_SELECTION_END).x, want, want_x);
+                }
+            }
+        }
+        CHECK(bad == 0, "%s: Down or Up went wrong on %d of 10 lines", b ? "macOS" : "default", bad);
+        skb_editor_destroy(ed);
+    }
+    printf("line ends: %d lines, 7 checks each, in both behaviors\n", lines_total);
+}
+
 /* --- 4: the probe's fonts ---------------------------------------------------- */
 
 static int file_exists(const char* path) {
@@ -698,7 +927,7 @@ static void check_noto(void) {
 }
 
 int main(void) {
-    static cfb_buf deva, latin, hebrew, arabic, arrows, deva5, ab;
+    static cfb_buf deva, latin, hebrew, arabic, arrows, deva5, ab, az;
     uint32_t cps[64];
     int n;
     skb_font_collection_t* fc;
@@ -748,11 +977,19 @@ int main(void) {
     check_commands(fc);
     skb_font_collection_destroy(fc);
 
+    /* 7. a to z and Hebrew. */
+    n = 0; range_cps(cps, &n, 'a', 'z'); range_cps(cps, &n, 0x05D0, 0x05EA);
+    box_font(&az, cps, n);
+    fc = skb_font_collection_create();
+    CHECK(add_font(fc, "az", &az) != 0, "a box font did not open");
+    check_line_ends(fc);
+    skb_font_collection_destroy(fc);
+
     /* 4 */
     check_noto();
 
     skb_temp_alloc_destroy(temp);
-    free(deva.d); free(latin.d); free(hebrew.d); free(arabic.d); free(arrows.d); free(deva5.d); free(ab.d);
+    free(deva.d); free(latin.d); free(hebrew.d); free(arabic.d); free(arrows.d); free(deva5.d); free(ab.d); free(az.d);
     printf("%s: %d checks, %d failures\n", failures ? "FAIL" : "ok", checks, failures);
     return failures ? 1 : 0;
 }

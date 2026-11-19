@@ -23,7 +23,7 @@ command. CI runs it with a tarball cache keyed on the manifest. Decision record:
 
 | Directory | Upstream | Pin | License files kept | Local patches |
 |---|---|---|---|---|
-| `skribidi/` | https://github.com/memononen/skribidi | `dee63d6ba76aeddd49dea6d1b2508cf9aa391f46` (2026-08-17) | `LICENSE` (MIT) | `patches/skribidi-0001-bidi-run-merge.patch`, `patches/skribidi-0002-l1-trailing-whitespace.patch`, `patches/skribidi-0003-font-fallback.patch`, `patches/skribidi-0004-emoji-family-fallback.patch`, `patches/skribidi-0005-text-grapheme-breaks.patch`, `patches/skribidi-0006-caret-split-grapheme.patch`, `patches/skribidi-0007-monotone-clusters.patch`, `patches/skribidi-0008-editor-empty-text.patch`, in that order |
+| `skribidi/` | https://github.com/memononen/skribidi | `dee63d6ba76aeddd49dea6d1b2508cf9aa391f46` (2026-08-17) | `LICENSE` (MIT) | `patches/skribidi-0001-bidi-run-merge.patch`, `patches/skribidi-0002-l1-trailing-whitespace.patch`, `patches/skribidi-0003-font-fallback.patch`, `patches/skribidi-0004-emoji-family-fallback.patch`, `patches/skribidi-0005-text-grapheme-breaks.patch`, `patches/skribidi-0006-caret-split-grapheme.patch`, `patches/skribidi-0007-monotone-clusters.patch`, `patches/skribidi-0008-editor-empty-text.patch`, `patches/skribidi-0009-line-end-offset.patch`, in that order |
 | `harfbuzz/` | https://github.com/harfbuzz/harfbuzz | tag `14.6.0`, `c7a7457b7385f33178e8cf87615ca077a810bbe7` | `COPYING` (Old MIT), `AUTHORS`, `src/ms-use/COPYING` (MIT; the USE table is generated from its data) | none |
 | `sheenbidi/` | https://github.com/Tehreer/SheenBidi | `83f77108a2873600283f6da4b326a2dca7a3a7a6` (2025-06-06) | `LICENSE` (Apache-2.0) | none |
 | `libunibreak/` | https://github.com/adah1972/libunibreak | tag `libunibreak_6_1`, `304585d8e2d63187507368d612c3d5fff1486368` | `LICENCE` (zlib), `AUTHORS` | none |
@@ -78,10 +78,11 @@ particular:
 
 ## The patches
 
-All but 0005 and 0008 change `src/skb_layout.c`; 0003 also changes
+All but 0005, 0008 and 0009 change `src/skb_layout.c`; 0003 also changes
 `src/skb_font_collection.c` and `include/skribidi/skb_font_collection.h`,
-0005 changes `src/skb_text.c` only, and 0008 changes `src/skb_editor.c`,
-`src/skb_text.c` and `src/skb_rich_layout.c`. They apply in this order:
+0005 changes `src/skb_text.c` only, 0008 changes `src/skb_editor.c`,
+`src/skb_text.c` and `src/skb_rich_layout.c`, and 0009 changes
+`src/skb_editor.c` only. They apply in this order:
 
 1. `patches/skribidi-0001-bidi-run-merge.patch` changes the merge
    condition in `skb__line_append_shaping_run()`: runs merge only in LTR
@@ -134,6 +135,13 @@ All but 0005 and 0008 change `src/skb_layout.c`; 0003 also changes
    NULL for an empty append (`src/skb_text.c`). SHA-256
    `4b08c2781fbacaca9b7b0988cd1a6c30e4728e9cb340bb34b715d84c232dac21`.
    Why: docs/layout.md, "Patch 0008: the editor at its text's edges".
+9. `patches/skribidi-0009-line-end-offset.patch` makes
+   `skb_editor_get_line_end_at()` (`src/skb_editor.c`) give the step that
+   keeps the caret before a line's last control character an offset in
+   the paragraph, as that step compares it with one. End no longer stops
+   after the LF on each paragraph but the first. SHA-256
+   `f0c97fa5dfa25375d7f997bdc398931fea71ca27f3b866af79aaec11976bcccb`.
+   Why: docs/layout.md, "Patch 0009: End on each line but the first".
 
 The tree here holds the patched source; the script applies the patches,
 in order, to a fresh download.
@@ -155,7 +163,7 @@ reported `ok: 463 files, 7719645 bytes` (both patches applied); on
 2026-11-18, with the third, `ok: 463 files, 7725840 bytes`; with the
 fourth, `ok: 463 files, 7727613 bytes`; with the seventh,
 `ok: 463 files, 7732502 bytes`; with the eighth, `ok: 463 files, 7734365
-bytes`.
+bytes`; with the ninth, `ok: 463 files, 7734516 bytes`.
 
 `.gitattributes` here turns off line-ending conversion, so a Windows
 checkout with `core.autocrlf=true` keeps the files as upstream has them.

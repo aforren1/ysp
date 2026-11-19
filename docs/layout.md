@@ -1,6 +1,6 @@
 # ysp_layout: text layout for the pack tool and the player
 
-Status: v0.3.3, 2026-11-19 (v0.1.0, 2026-10-07: the first build; v0.2.0:
+Status: v0.3.4, 2026-11-19 (v0.1.0, 2026-10-07: the first build; v0.2.0:
 font fallback past the script, [Patch 0003](#patch-0003-font-fallback-past-the-script);
 v0.3.0: emoji and color glyphs, [Emoji](#emoji), [Color glyphs](#color-glyphs) and
 [Patch 0004](#patch-0004-a-run-whose-family-has-no-font); v0.3.1: two
@@ -9,7 +9,9 @@ editing faults with Devanagari,
 v0.3.2: cluster values out of order after a right-to-left override,
 [Patch 0007](#patch-0007-cluster-values-out-of-order); v0.3.3: faults of
 Skribidi's editor on empty texts and at a text's ends,
-[Patch 0008](#patch-0008-the-editor-at-its-texts-edges)).
+[Patch 0008](#patch-0008-the-editor-at-its-texts-edges); v0.3.4: End past
+the LF on each line but the first,
+[Patch 0009](#patch-0009-end-on-each-line-but-the-first)).
 The decision record is
 [layout_probe.md](layout_probe.md); this note is the manual of what was
 built on it, with the checks and the costs. The plan is
@@ -99,11 +101,11 @@ three, with the same corpus result.
 
 ## The patches
 
-Eight local patches, applied in this order. 0001, 0002, 0004, 0006 and
+Nine local patches, applied in this order. 0001, 0002, 0004, 0006 and
 0007 change `src/skb_layout.c`; 0003 changes it, `src/skb_font_collection.c`
 and `include/skribidi/skb_font_collection.h`; 0005 changes
 `src/skb_text.c`; 0008 changes `src/skb_editor.c`, `src/skb_text.c` and
-`src/skb_rich_layout.c`.
+`src/skb_rich_layout.c`; 0009 changes `src/skb_editor.c`.
 
 | Patch | SHA-256 | What it fixes |
 |---|---|---|
@@ -115,6 +117,7 @@ and `include/skribidi/skb_font_collection.h`; 0005 changes
 | `skribidi-0006-caret-split-grapheme.patch` | `dfa7cdbd1cc8e05ffb4c93a7135a348d193a9084cc31b3cd1aff0065d3ca12d5` | The caret iterator took each cluster as whole graphemes; where HarfBuzz splits a grapheme into two clusters, the first got no caret stop and its width was lost ([Patches 0005 and 0006](#patches-0005-and-0006-editing-devanagari)). |
 | `skribidi-0007-monotone-clusters.patch` | `f8459c8b13e50157995ca0769329e7698cbd4ce82a33666f0aebcd93eacf191c` | `skb__shape_run()` took each cluster's text range from the cluster values next to it and assumed them in order; HarfBuzz gave them out of order for Devanagari after U+202E, and a cluster got a negative range ([Patch 0007](#patch-0007-cluster-values-out-of-order)). |
 | `skribidi-0008-editor-empty-text.patch` | `4b08c2781fbacaca9b7b0988cd1a6c30e4728e9cb340bb34b715d84c232dac21` | The editor read paragraph 0 of none in an editor that never had text, read text properties past the text (Ctrl+Right) and before it (a double click at offset 0), and gave `memcpy()` NULL for each empty paragraph ([Patch 0008](#patch-0008-the-editor-at-its-texts-edges)). |
+| `skribidi-0009-line-end-offset.patch` | `f0c97fa5dfa25375d7f997bdc398931fea71ca27f3b866af79aaec11976bcccb` | `skb_editor_get_line_end_at()` gave the step that keeps the caret before a line's last control character a global offset, which that step compares with an offset in the paragraph; End stopped past the LF on each paragraph but the first ([Patch 0009](#patch-0009-end-on-each-line-but-the-first)). |
 
 Patch 0002, and why it sits where it does:
 
@@ -466,6 +469,68 @@ Checks:
   checks fail only under ASan and UBSan. CI's sanitizer job does not build
   the layout, so only a local sanitizer run catches them.
 
+### Patch 0009: End on each line but the first
+
+Found 2026-11-19 by hand in the designer, whose editor holds a JSON
+definition as one paragraph per line, each line ending in LF. End put the
+caret at the end of the first line, and one character past the end of
+each later line: after the LF. The pack tool and the player do not call
+the editor.
+
+The cause. `skb_editor_get_line_end_at()` makes the caret at the line's
+last grapheme as a global offset (the paragraph's start plus
+`line->last_grapheme_offset`) and gives it to
+`skb__caret_prune_control_eol()`. That function keeps a caret off a
+line's last control character (the LF or U+2029 that ends a paragraph):
+it compares the caret's offset with `line->last_grapheme_offset`, an
+offset in the paragraph, and moves the caret to the character's
+trailing edge. The two offsets are equal in paragraph 0 only. In each
+later paragraph the caret stayed on the LF's leading edge, after it.
+Effects on each line but the first:
+
+- End: the caret was drawn one LF advance past the line's end (box fonts
+  at 16 px: x 48 for "cd", not 32), and a letter typed there went to the
+  start of the next line.
+- Shift+End, Command+Right and Shift+Command+Right on macOS, a triple
+  click and a drag by lines call the same function: they selected the LF
+  too.
+
+Callers that pass an offset in the paragraph were right: the hit test
+(a click past a line's end, Down and Up into a shorter line) and
+`skb_layout_get_line_end_at()`. Home does not prune. Lines that do not end
+in a control character (the first parts of a soft-wrapped paragraph, the
+last paragraph) need no prune.
+
+The fix: the function gives the prune the offset in the paragraph, then
+adds the paragraph's start. Paragraph 0 and lines that do not end in a
+control character get the caret they got before.
+
+Checks (Linux gcc 12):
+
+- `test_layout_editor` part 7 (box fonts the test writes): "ab\ncd\n";
+  Hebrew lines with LF in paragraphs 0 and 2 around an LTR line, and a
+  last Hebrew line with none; and "ab cd ef\nab cd ef\n" wrapped at 40
+  px (3 lines a paragraph). On each of their 14 lines, in both behaviors:
+  End from the line's start gives the end of the visible text, the caret
+  at the outer edge of the last visible character (x and baseline), and a
+  letter typed there at that offset; Shift+End selects the visible text;
+  Home from before the last character goes to the line's start and its x;
+  a click past the end (left of an RTL line) and a triple click give the
+  end and the line. Then Command+Right and Command+Left on macOS, a triple
+  click and a drag by lines over two lines, and Down and Up through lines
+  of 4, 2, 4, 1, 0 and 3 characters, in both behaviors.
+- Without the patch 7 of 110 checks fail: End's offset, its caret, the
+  typed letter, Shift+End and the triple click, each on 8 of 28 lines (the
+  lines that end in LF in paragraphs after the first); Command+Right; the
+  drag by lines. With it, 110 of 110 pass, in Release and under ASan and
+  UBSan. Home, the click past the end, and Down and Up pass both ways.
+- Hand mutants of the patch: 5 of 5 killed (the old code; the
+  paragraph's start added before the prune too; no prune; `=` for `+=`;
+  the prune's offset taken without its affinity).
+- The fuzz target cannot find this fault: the caret stays inside the
+  text, nothing reads out of bounds, and the fuzz target has no oracle of
+  where End must go. No seeds were added.
+
 ## Pinning and update policy
 
 From layout_probe.md 7, unchanged:
@@ -650,7 +715,7 @@ characters are missing and from which text.
 `tests/layout/layout_test.c` (ctest `test_layout`):
 
 1. The logged versions: the Skribidi commit, the hashes (and no
-   `tree-differs`) of the eight patches, HarfBuzz 14.6.0.
+   `tree-differs`) of the nine patches, HarfBuzz 14.6.0.
 2. Visual order on every platform, with a TrueType font the test writes (a
    box for every ASCII, Hebrew and Arabic codepoint): the two bug strings
    and the editor's caret string. The items of each line, by x, must visit
@@ -899,6 +964,22 @@ start of line 1; Edge's is at x 8200 on line 0).
 
 ## Known issues
 
+### Open: at a soft wrap, the caret after End counts as on the next line
+
+Found 2026-11-19 with patch 0009, the same in each paragraph (not the
+fault of patch 0009). On a soft-wrapped line, End puts the caret at the
+line's last grapheme with EOL affinity ("ab cd ef" at 40 px: offset 2,
+the space, drawn at x 48 on line 0). The editor resolves that caret with
+its affinity to offset 3, the next line's start: Home then goes to the
+start of line 1 (offset 3), not line 0; a second End goes to the end of
+line 1; `skb_editor_get_line_index_at()` says line 1. Down and Up, and
+the caret's drawing, take it as on line 0. The same holds for a caret on
+the leading edge of a wrapped line's last character. Not patched: it comes
+from the caret's affinity, not from its offset, and a fix changes which
+line Skribidi takes a caret to be on, which other paths read. A text
+field that does not wrap does not reach it; this repository does not
+hold the designer's editor, so whether it wraps is not checked here.
+
 ### Open: an editor with no paragraph draws no caret and no composition
 
 Found 2026-11-19 with patch 0008. An editor that never had text (and one
@@ -918,6 +999,14 @@ them. The editor calls it only on an empty rich text (`skb_editor_set_text_utf8(
 the scratch text of an input), where it has no effect; a caller that
 builds a rich text of several paragraphs with it gets them joined. Not
 patched: no path of the designer or the pack tool reaches it.
+
+### Fixed by patch 0009: End past the LF on each line but the first
+
+Found 2026-11-19 by hand in the designer: End was right on the first line
+of a definition and one character past the end on each later line.
+Patch 0009 fixes it, and Shift+End, Command+Right, triple clicks and
+drags by lines, which had the same cause
+([Patch 0009](#patch-0009-end-on-each-line-but-the-first)).
 
 ### Fixed by patch 0008: faults of Skribidi's editor on empty texts and at a text's ends
 

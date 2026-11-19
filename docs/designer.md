@@ -157,6 +157,14 @@ ysp_designer (C++, Dear ImGui, SDL3, GL ES 3.0)
      `skb_text.c` line 628. Open: a field that never had text has a caret
      of height 0 and shows no IME composition; set its text to "" after
      `skb_editor_create()` ([layout.md](layout.md), Known issues).
+   - 2026-11-19: patch 0009 (pack/layout 0.3.4) fixes End in the
+     definition editor: it was right on the first line and put the caret
+     after the LF on each later line (seen by hand in the designer), so a
+     letter typed there went to the next line. Shift+End, Command+Right,
+     triple clicks and drags by lines had the same cause;
+     [layout.md](layout.md), "Patch 0009: End on each line but the
+     first". Open: on a soft-wrapped line, Home after End goes to the
+     next line's start ([layout.md](layout.md), Known issues).
 3. A skeleton: the window, open and save of a project, the loader's
    checks with refusals linked to fields, and redraw on input only.
 4. The state chart, the tables and the panels from parameter tables.

@@ -73,7 +73,7 @@ endif()
 set(patches "")
 foreach(name skribidi-0001-bidi-run-merge skribidi-0002-l1-trailing-whitespace skribidi-0003-font-fallback skribidi-0004-emoji-family-fallback
         skribidi-0005-text-grapheme-breaks skribidi-0006-caret-split-grapheme skribidi-0007-monotone-clusters
-        skribidi-0008-editor-empty-text)
+        skribidi-0008-editor-empty-text skribidi-0009-line-end-offset)
     file(SHA256 ${CMAKE_CURRENT_SOURCE_DIR}/patches/${name}.patch sha)
     list(APPEND patches "sha256:${sha}")
 endforeach()
