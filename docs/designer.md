@@ -342,6 +342,11 @@ repository's: Save and the check pack write into the folder.
     does (preferred: fcitx and IBus, code SDL keeps up); or the spike's
     own fcitx5 D-Bus client (branch `spike-ime-native`, `--ime=dbus`;
     fcitx only, built and not yet typed into).
+  - Native, the skeleton (hand test, 2026-11-19, fcitx5 with Mozc, with
+    `XMODIFIERS=@im=fcitx`): committed text arrived in the definition
+    editor, the composition showed only in fcitx's own window, and that
+    window was at the caret. So the editor works with an IME today; inline
+    composition still needs one of the two ways out above.
 - A file dialog on a Linux desktop with no xdg-desktop-portal and no
   zenity: `SDL_ShowOpenFileDialog()` fails at once there (probe part 1,
   section 6). Answered in step 3 with a typed path ("Decisions of step
