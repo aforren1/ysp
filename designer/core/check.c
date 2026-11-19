@@ -6,6 +6,7 @@
 #define _CRT_SECURE_NO_WARNINGS
 #endif
 #include "dsg.h"
+#include "csv.h"
 #include "player.h"
 #include "ysp/pack_tool.h"
 
@@ -31,6 +32,7 @@ struct dsg_checker {
     void*        pack;          /* in memory, malloc's alignment (>= 8)      */
     size_t       pack_size;
     uint8_t      texts[32];     /* the texts it was built for                */
+    uint8_t      tables[32];    /* the unsaved tables it was built from      */
     char         folder[DSG_PATH_MAX];
     /* the last failed build, so an unchanged text does not build again */
     uint8_t      failed_text[32];
@@ -230,6 +232,37 @@ static void add_need(dsg_checker* c, const pl_need* nd, const char* text, size_t
 
 /* --- the check pack -------------------------------------------------------- */
 
+/* The tables' unsaved bytes (csv.h). One document per process, as
+ * pl_check() keeps one static scratch: the designer has one window. */
+static const dsg_doc* g_tables;
+
+void dsg_check_use_tables(const dsg_doc* d) { g_tables = d; }
+
+static bool table_dirty(int b) {
+    return g_tables && dsg_doc_buffer_kind(g_tables, b) == DSG_KIND_TABLE && dsg_doc_dirty(g_tables, b);
+}
+
+/* Which tables the pack must take from the document, and at which
+ * revision: a clean table comes from its file. */
+static void tables_key(uint8_t key[32]) {
+    ypak_sha256_state h;
+    int b;
+    ypak_sha256_init(&h);
+    for (b = 1; g_tables && b < dsg_doc_buffer_count(g_tables); b++) {
+        if (!table_dirty(b)) continue;
+        {
+            const char* nm = dsg_doc_buffer_name(g_tables, b);
+            const uint64_t rev = dsg_doc_rev(g_tables, b);
+            ypak_sha256_update(&h, nm, strlen(nm) + 1);
+            ypak_sha256_update(&h, &rev, sizeof rev);
+        }
+    }
+    ypak_sha256_final(&h, key);
+}
+
+/* Where a dirty table's bytes go for the build, relative to the folder. */
+static void table_copy(char* out, size_t cap, int b) { snprintf(out, cap, DSG_DIR "/check/table%d.csv", b); }
+
 typedef struct tables_ctx { ypak_pack pk; bool open; } tables_ctx;
 
 static const void* table_bytes(void* ctx, const char* name, size_t* n) {
@@ -271,7 +304,8 @@ static int texts_key(const dsg_checker* c, const char* text, size_t n, uint8_t k
 }
 
 /* The project's description with the experiment's source replaced by the
- * text under check. malloc'd, NUL-ended. */
+ * text under check, and each dirty table's by its copy. malloc'd,
+ * NUL-ended. */
 static char* check_description(const dsg_project* p, size_t* len, char* err, size_t cap) {
     yjs_arena a;
     yjs_value* root = NULL;
@@ -284,6 +318,22 @@ static char* check_description(const dsg_project* p, size_t* len, char* err, siz
         yjs_set(&a, ex, "source", yjs_new_stringz(&a, DSG_CHECK_SOURCE)) != YJS_OK) {
         snprintf(err, cap, "%.900s: cannot read its experiment: reopen the project", p->desc_path);
     } else {
+        const yjs_value* res = yjs_get(root, "resources");
+        size_t i;
+        for (i = 0; res && res->type == YJS_ARRAY && i < res->n; i++) {
+            yjs_value* r = yjs_at(res, i);
+            const yjs_value* src = r && r->type == YJS_OBJECT ? yjs_get(r, "source") : NULL;
+            const yjs_value* kind = r && r->type == YJS_OBJECT ? yjs_get(r, "kind") : NULL;
+            int b;
+            if (!src || src->type != YJS_STRING || !kind || kind->type != YJS_STRING || strcmp(kind->u.s, "table") != 0 || !g_tables)
+                continue;
+            b = dsg_doc_find_buffer(g_tables, src->u.s);
+            if (b > 0 && table_dirty(b)) {
+                char rel[64];
+                table_copy(rel, sizeof rel, b);
+                yjs_set(&a, r, "source", yjs_new_stringz(&a, rel));
+            }
+        }
         size_t n = yjs_write_mem(root, YJS_WRITE_COMPACT, NULL, 0);
         out = (char*)malloc(n + 1);
         if (out) {
@@ -297,14 +347,14 @@ static char* check_description(const dsg_project* p, size_t* len, char* err, siz
     return out;
 }
 
-static int build(dsg_checker* c, const dsg_project* p, const char* text, size_t n, char* err, size_t cap) {
+static int build(dsg_checker* c, const dsg_project* p, const char* text, size_t n, const uint8_t tkey[32], char* err, size_t cap) {
     char dir[DSG_PATH_MAX], src[DSG_PATH_MAX], pack[DSG_PATH_MAX];
     char* desc;
     size_t dlen = 0;
     char* bytes = NULL;
     size_t blen = 0;
     ypt_options o;
-    int rc;
+    int rc, b;
     uint8_t key[32];
     if (dsg_join(dir, sizeof dir, p->folder, DSG_DIR) || dsg_join(src, sizeof src, p->folder, DSG_CHECK_SOURCE) ||
         dsg_join(pack, sizeof pack, p->folder, DSG_CHECK_PACK)) {
@@ -315,6 +365,19 @@ static int build(dsg_checker* c, const dsg_project* p, const char* text, size_t 
     dsg_join(dir, sizeof dir, p->folder, DSG_DIR "/check");
     if (dsg_make_dir(dir, err, cap)) return -1;
     if (dsg_write_file(src, text, n, err, cap)) return -1;
+    for (b = 1; g_tables && b < dsg_doc_buffer_count(g_tables); b++) {
+        char rel[64], path[DSG_PATH_MAX];
+        size_t tn = 0;
+        const char* tb;
+        if (!table_dirty(b)) continue;
+        table_copy(rel, sizeof rel, b);
+        tb = dsg_doc_bytes(g_tables, b, &tn);
+        if (dsg_join(path, sizeof path, p->folder, rel)) {
+            snprintf(err, cap, "the project's path is too long");
+            return -1;
+        }
+        if (dsg_write_file(path, tb, tn, err, cap)) return -1;
+    }
     desc = check_description(p, &dlen, err, cap);
     if (!desc) return -1;
     memset(&o, 0, sizeof o);
@@ -327,16 +390,22 @@ static int build(dsg_checker* c, const dsg_project* p, const char* text, size_t 
     c->pack_size = blen;
     if (texts_key(c, text, n, key, err, cap) == 0) memcpy(c->texts, key, sizeof key);
     else memset(c->texts, 0, sizeof c->texts);
+    memcpy(c->tables, tkey, sizeof c->tables);
     return 0;
 }
 
-/* A build, unless this exact text failed the last one. Adds the failure. */
-static bool try_build(dsg_checker* c, const dsg_project* p, const char* text, size_t n, dsg_report* r) {
+/* A build, unless this exact text with these tables failed the last one.
+ * Adds the failure. */
+static bool try_build(dsg_checker* c, const dsg_project* p, const char* text, size_t n, const uint8_t tkey[32], dsg_report* r) {
     uint8_t h[32];
     dsg_place at;
-    ypak_sha256(text, n, h);
+    ypak_sha256_state hs;
+    ypak_sha256_init(&hs);
+    ypak_sha256_update(&hs, text, n);
+    ypak_sha256_update(&hs, tkey, 32);
+    ypak_sha256_final(&hs, h);
     if (!(c->have_failed && memcmp(h, c->failed_text, sizeof h) == 0)) {
-        if (build(c, p, text, n, c->failed_msg, sizeof c->failed_msg) == 0) {
+        if (build(c, p, text, n, tkey, c->failed_msg, sizeof c->failed_msg) == 0) {
             c->have_failed = false;
             r->built = true;
             return true;
@@ -357,6 +426,7 @@ int dsg_check(dsg_checker* c, const dsg_project* p, const char* text, size_t n, 
     int i;
     bool derive_failed = false;
     char derive_err[1024];
+    uint8_t tkey[32] = { 0 };
     memset(r, 0, sizeof *r);
     r->status = -1;
     c->n_issues = 0;
@@ -365,6 +435,7 @@ int dsg_check(dsg_checker* c, const dsg_project* p, const char* text, size_t n, 
         dsg_checker_forget(c);
         snprintf(c->folder, sizeof c->folder, "%s", p->folder);
     }
+    tables_key(tkey);
 
     if (!c->pack) {
         /* No pack yet: the loader alone, with no host, says whether the
@@ -382,7 +453,7 @@ int dsg_check(dsg_checker* c, const dsg_project* p, const char* text, size_t n, 
             finish(c, r);
             return 0;
         }
-        if (!try_build(c, p, text, n, r)) {
+        if (!try_build(c, p, text, n, tkey, r)) {
             finish(c, r);
             return 0;
         }
@@ -390,9 +461,9 @@ int dsg_check(dsg_checker* c, const dsg_project* p, const char* text, size_t n, 
         uint8_t key[32];
         if (texts_key(c, text, n, key, derive_err, sizeof derive_err) != 0) {
             derive_failed = true;
-        } else if (memcmp(key, c->texts, sizeof key) != 0) {
+        } else if (memcmp(key, c->texts, sizeof key) != 0 || memcmp(tkey, c->tables, sizeof tkey) != 0) {
             /* a failed rebuild leaves the old pack, still good for the rest */
-            (void)try_build(c, p, text, n, r);
+            (void)try_build(c, p, text, n, tkey, r);
         }
     }
 

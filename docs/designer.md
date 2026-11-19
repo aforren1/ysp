@@ -540,6 +540,192 @@ the checks of the shared document's undo, redo, selection and listeners.
 - The chart cannot add, rename or delete a template. The text view does
   that, and the panels will.
 
+#### The tables
+
+Part B, branch `designer-step4-tables` (2026-11-19). The Tables view
+edits the project's tables as a grid. The code is in
+`designer/core/csv.h`, `csv.c` and `check.c`, and
+`designer/app/view_tables.cpp`.
+
+**Which tables.** Each resource of `"kind": "table"` in `pack.json` is one
+table, once for each `source`. The view loads them when a project opens.
+- A CSV or TSV source is a buffer of the document (`dsg_doc_add_buffer()`),
+  with the buffer's name equal to its `source`. Its `delimiter` key gives
+  the delimiter: `","` (the default), `";"` or `"\t"`.
+- An Excel source (`.xlsx`, `.xlsm`, with its `sheet` key) shows
+  read-only, through the pack tool's own reader (`ypt_xlsx_read()`). It is
+  not a buffer: its bytes are not CSV, and the designer writes no
+  workbook.
+
+**The bytes are the truth.** The grid is `dsg_csv`, an index of each
+cell's byte range in the buffer. `dsg_csv_sync()` makes it again when the
+buffer's revision (`dsg_doc_rev()`) moves. The index follows ysp/table.h's
+dialect, so it has the rows and cells that `ytb_open_csv()` reads: a
+record of empty fields (`,,` or `"",""`) is not a row, and a record longer
+than the header is an error, also when its fields are empty.
+- The index is made again after each change, not shifted. The plan
+  measured 0.35 ms for a cell edit with its index at 10,000 rows and
+  1.2 ms at 32,767 ("Plan of step 4", Evidence), and a check follows each
+  change. No measurement asks for an incremental index.
+
+**Edits.** Each edit is one undo step of the document, with the edited
+cell selected in the step, so undo and redo select it again.
+- A cell: one splice. The new text is quoted only when it holds the
+  delimiter, a quote, a CR or an LF; a quote is doubled. The other bytes
+  stay as they are: the file's line ends, its BOM, the quotes of other
+  cells and the records that ysp/table.h skips.
+- Add row: a copy of the selected row below it, or of the last row at the
+  end. An empty record is not a row to ysp/table.h, so a new row in a
+  table with no rows has `0` in its first cell. A row takes the line end
+  of the file's first record (LF or CRLF). A file whose last record has
+  no line end keeps it so.
+- Remove row: the record and its line end.
+- Add column: an empty column after the selected one, named `column_N`
+  (the first N that no column has). Remove column: the cell and one
+  delimiter of each record. It refuses the only column. It also removes
+  the records that ysp/table.h skips, because with one column fewer they
+  are longer than the header, which ysp/table.h refuses.
+- The column edits change every record, so they replace the buffer once
+  (`dsg_doc_replace()`, which keeps only the bytes that differ). One splice
+  for each record would move the rest of the buffer each time.
+- Rename: a double-click on a column's name. The name must be a name to
+  ysp/table.h (a letter or `_`, then letters, digits or `_`, at most 63
+  bytes) and not another column's. The step notes the rename in the scope
+  `#SOURCE/columns`, so the column's width follows the rename, its undo
+  and its redo.
+
+**The keys.** Click a cell to select it. Double-click, Enter or F2 edits
+it in a single-line Skribidi field (`skf.h`) with the cell's text; a
+typed character on a selected cell starts an edit with that character.
+Enter or a click outside the field keeps the text, as one step; Escape
+drops it. While the field has the keyboard, Ctrl+Z is Skribidi's undo of
+the typing; after the edit it is the document's. The field is destroyed
+at the end of each edit, so it gives the keyboard back. The arrow keys
+move the selection, and Delete empties the cell. A click on a row number
+or a column name selects the row or the column, for Remove row and
+Remove column.
+
+**Drawing.** The grid is an ImGui table. `ImGuiListClipper` gives the
+visible rows, and a column scrolled out of view lays out nothing. Each
+cell's text is a Skribidi layout, drawn as in the issues panel;
+right-to-left text starts at the cell's right edge.
+- The view has its own layout cache, compacted once a frame. The shared
+  cache (`skt_layout()`) never evicts, and a layout takes about 2.4 KB
+  (docs/designer_ui_probe.md, part 2, section 4): a scroll through 10,000
+  rows of 8 columns would keep about 190 MB.
+- At 10,000 rows with the window of the tests (1400 x 900 px), a frame lays
+  out 126 to 133 cells (at most 17 or 18 rows and the header).
+
+**The view file.** The part `tables` holds the open table, each table's
+column widths by column name, and its scroll as the first row and column
+shown: `{"open": SOURCE, "tables": {SOURCE: {"widths": {COLUMN: px},
+"scroll": [row, column]}}}`. ImGui's own table settings are off for the
+grid, because ImGui keeps widths by column index, which an inserted
+column moves.
+
+**The check sees unsaved tables.** Before step 4, the check pack came
+from the tables on disk, so a table edit was checked only after Save.
+- The tables view gives the check the document (`dsg_check_use_tables()`,
+  csv.h). Each build writes each dirty table's bytes to
+  `.designer/check/tableN.csv` (N is the buffer) and sets that resource's
+  `source` in the check description to it. A clean table comes from its
+  file.
+- The check builds the pack again when the set of dirty tables or the
+  revision of one changes, as it does for the texts. An undo back to the
+  saved bytes after a failed build needs no build: the last pack that was
+  built is of those bytes.
+- A failed build is not tried again for the same text and the same table
+  revisions.
+- `dsg_check()`'s signature is in `dsg.h`, which is shared, so the
+  document reaches it through a call in csv.h that keeps one document for
+  the process. pl_check() keeps one static scratch for the process too.
+
+**Errors in cells.** The pack tool names a table's error as `'ENTRY':
+ysp_table: line L, row R, column 'NAME' (C): ...`; the player and the
+pack tool's rules name a column as `column 'NAME'`. `dsg_csv_place()`
+reads the entry, the row and the column from the message. The view marks
+the cell, the row number or the column's name in red, and lists the
+issues of the open table above the grid; a click on one selects its cell.
+The check gives these issues no place in the definition.
+
+**Measured.** `test_designer_table_ui --bench 3`: the whole UI frame
+(`ImGui::NewFrame()` to `ImGui::Render()`, with the skt atlas, no GL and
+no window) while the grid scrolls 3 rows a frame through 10,000 rows of 8
+columns (a label in mixed scripts as the second column), 3,328 frames a
+pass. Linux desktop, Intel Core i5-14500, gcc 12.2, Release, pinned to
+CPU 2 (a P-core), under the measuring lock; load average 1.11 and 1.10
+(`uptime`), two runs. Milliseconds, median, p99, max:
+
+| Run | First pass (cache cold) | Passes 2 and 3 |
+|---|---|---|
+| 1 | 0.113, 0.126, 0.313 | 0.113, 0.128, 0.372 |
+| 2 | 0.112, 0.126, 0.200 | 0.112, 0.124, 0.388 |
+
+- Each frame laid out 126 to 133 cells. The two passes cost the same
+  because the view's cache evicts a layout after 100 frames unused, and a
+  pass is longer than that.
+- This is the CPU of a frame without GL. The probe's native table took
+  1.39 to 1.45 ms of UI a frame (part 2, section 4), with its trace and
+  chart in the same frame. A frame here is far inside 16 ms.
+
+**Tests.**
+- `test_designer_table` (headless, C), 236 checks: the index against
+  `ytb_open_csv()` on the 11 CSV files in `tests/` and `examples/` and 5
+  made-up tables (quotes, CRLF, BOM, `;`, tabs, skipped records); each
+  edit as one step that ytb reads as intended, with undo and redo to the
+  same bytes, on LF, CRLF and open-ended files; quoting; refusals with no
+  step; the rename's scope through undo and redo; places in messages; the
+  check of `tests/player/oddball` with an unsaved table (an edit builds a
+  clean pack; the rule `max_run type=target 1` with the level `target`
+  removed in the document only is reported, the file on disk unchanged;
+  a byte that is not UTF-8 is reported at its row and column).
+- `test_designer_table_ui` (headless, ImGui, no window): a table of
+  10,000 rows and 8 columns in the Tables view; the layouts in a frame at
+  the top, the middle and the end of the table and in every frame of a
+  scroll through it are at most the visible rows' cells and the header's.
+  With `--bench PASSES` it times the frames of a scroll.
+- Test Engine, `tables/*`: `shows`; `scroll` (10,000 rows, the engine's
+  wheel and scrolls to the end and back); `edit` (a double-click, Arabic
+  text with a comma through the engine's keys, Enter: one step, quoted;
+  Ctrl+Z); `add_row` (a click on a row number, Add row, Ctrl+Z);
+  `widths` (the engine drags a column's border; the width is in the view
+  file and comes back after another project was open; a rename through
+  the header keeps it, and Ctrl+Z moves it back).
+
+**Hand mutants.** 25, each reverted, each failed its test: the quotes
+for the delimiter, for a quote (not doubled) and for an LF; `""` read as
+a value; a long empty record taken; LF rows in a CRLF file; a new last
+row with no line end before it; a removed last row that leaves the line
+end of an open file; the skipped records kept when a column goes; the
+rename not noted; a taken name accepted; the selection not in the step;
+a message's row off by one; an edit with a stale index; the check's key
+without revisions; the check description's source not changed; a failed
+build keyed by the text only (`test_designer_table`); every row drawn
+(`test_designer_table_ui`); Enter does not commit; the field keeps the
+keyboard after the edit; the width does not follow a rename; no widths in
+the view file; widths not read from it; one ImGui table for every
+project; Add row adds an empty row at the end (`tables/*`).
+
+**Not done.**
+- No person used the view: the window was not opened.
+- `test_designer_table_ui` is not in `designer/CMakeLists.txt`, which is
+  shared during step 4: its lines go in at the merge. It was built and run
+  against the build tree's libraries.
+- A click on a table's issue in the Issues panel does not select the
+  cell. `ui_jump_to_issue()` selects only a path in the definition, and
+  `ui.cpp` is shared. The view's own list of the table's issues does.
+- A table edit does not mark the project unsaved in the window: `ui.cpp`
+  sets its unsaved flag only when the definition changes (`sync_editor()`
+  returns early otherwise). So the title shows no `*` and Open or Quit
+  does not ask after a table edit. Save writes the table.
+- The cell's field lays out its text 200 px wide (`skf_create()`), so in
+  a wider cell the text scrolls inside 200 px. Part C owns `skf.cpp`.
+- An Excel source was not opened in a test: the repository has no
+  workbook fixture.
+- An edit open while another main view shows ends at the next frame that
+  draws the tables; until then Ctrl+Z is the field's.
+- IME composition in a cell, MSVC and macOS builds, ASan and UBSan runs.
+
 ## First version
 
 In:

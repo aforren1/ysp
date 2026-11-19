@@ -112,7 +112,7 @@ set_target_properties(ysp_designer_skb PROPERTIES C_STANDARD 17 C_STANDARD_REQUI
 # exceptions, no RTTI, no thread-safe statics: the program needs a C++
 # compiler and no C++ runtime (docs/imgui_probe.md, finding 6).
 set(_ui_sources app/ui.cpp app/ui.h app/skt.cpp app/skt.h app/skf.cpp app/skf.h app/imconfig_designer.h
-    app/views.h app/views.cpp app/view_chart.cpp app/view_tables.cpp app/view_panels.cpp
+    app/views.h app/views.cpp app/view_chart.cpp app/view_tables.h app/view_tables.cpp app/view_panels.cpp
     ${_imgui}/imgui.cpp ${_imgui}/imgui_draw.cpp ${_imgui}/imgui_tables.cpp ${_imgui}/imgui_widgets.cpp)
 add_library(ysp_designer_ui STATIC ${_ui_sources})
 target_include_directories(ysp_designer_ui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/app)
@@ -152,6 +152,15 @@ if(YSP_BUILD_TESTS)
     set_target_properties(test_designer_ui PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
     add_test(NAME test_designer_ui COMMAND test_designer_ui ${CMAKE_CURRENT_BINARY_DIR}/designer_ui_work)
     dsg_test(test_designer_ui)
+
+    # The Tables view with 10,000 rows: only the visible cells are laid out
+    # (docs/designer.md, "The tables"); --bench times a scroll.
+    add_executable(test_designer_table_ui ${PROJECT_SOURCE_DIR}/tests/designer/table_ui_test.cpp)
+    target_link_libraries(test_designer_table_ui PRIVATE ysp_designer_ui)
+    target_compile_definitions(test_designer_table_ui PRIVATE YSP_DESIGNER_FONT_DIR="${CMAKE_CURRENT_BINARY_DIR}/fonts")
+    set_target_properties(test_designer_table_ui PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+    add_test(NAME test_designer_table_ui COMMAND test_designer_table_ui ${CMAKE_CURRENT_BINARY_DIR}/designer_table_ui_work)
+    dsg_test(test_designer_table_ui)
 
     # Times the chart's frames (docs/designer.md, "The chart"); not a test.
     if(NOT WIN32)
