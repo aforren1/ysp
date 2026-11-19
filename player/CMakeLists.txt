@@ -1,15 +1,25 @@
 # The player (docs/player.md): a library so its tests and fuzz target reach
 # the same code, and the ysp_player program. Added by the top-level
 # CMakeLists.txt when YSP_BUILD_PLAYER is ON.
-add_library(ysp_player_lib STATIC impl.c eval.c host.c lower.c run.c v2.c)
-target_include_directories(ysp_player_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(ysp_player_lib PUBLIC ysp::rig ysp::methods ysp::devices)
-target_compile_options(ysp_player_lib PRIVATE ${YSP_WARNINGS})
-# fopen(), getenv() and strcpy() are the C library's; MSVC's /W4 calls them
-# unsafe and asks for its own (C4996)
-target_compile_definitions(ysp_player_lib PUBLIC $<$<C_COMPILER_ID:MSVC>:_CRT_SECURE_NO_WARNINGS _CRT_NONSTDC_NO_DEPRECATE>)
-set_target_properties(ysp_player_lib PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
-ysp_profiled(ysp_player_lib)
+#
+# ysp_player_impl: the header implementations (impl.c), with SDL and
+# miniaudio. Its own target so that a program with the player and the pack
+# tool (the designer) links one set of implementations: this one, with
+# ysp_pack_tool_code, and not ysp_pack_tool's (pack/CMakeLists.txt).
+# ysp_player_lib links it, so the player's other consumers see no change.
+add_library(ysp_player_impl STATIC impl.c)
+add_library(ysp_player_lib STATIC eval.c host.c lower.c run.c v2.c)
+target_link_libraries(ysp_player_lib PUBLIC ysp_player_impl)
+foreach(t ysp_player_impl ysp_player_lib)
+    target_include_directories(${t} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(${t} PUBLIC ysp::rig ysp::methods ysp::devices)
+    target_compile_options(${t} PRIVATE ${YSP_WARNINGS})
+    # fopen(), getenv() and strcpy() are the C library's; MSVC's /W4 calls them
+    # unsafe and asks for its own (C4996)
+    target_compile_definitions(${t} PUBLIC $<$<C_COMPILER_ID:MSVC>:_CRT_SECURE_NO_WARNINGS _CRT_NONSTDC_NO_DEPRECATE>)
+    set_target_properties(${t} PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    ysp_profiled(${t})
+endforeach()
 
 ysp_add_program(ysp_player ${CMAKE_CURRENT_SOURCE_DIR}/main.c rig methods devices)
 target_link_libraries(ysp_player PRIVATE ysp_player_lib)
