@@ -70,17 +70,36 @@ bool skt_init(const char* font_dir, char* err, size_t err_cap) {
     size_t n = 0;
     if (dsg_join(path, sizeof path, font_dir, "fonts.txt") || dsg_read_file(path, &list, &n, err, err_cap)) return false;
     fonts = skb_font_collection_create();
+    // The names that fail and why, for the error: a CI run on Windows gave
+    // only "no font loads", with files that the configure step had found.
+    char tried[512] = "";
+    size_t tried_len = 0;
+    int n_lines = 0;
     for (char* line = list; line && *line;) {
         char* end = strchr(line, '\n');
         if (end) *end = 0;
-        if (*line && dsg_join(path, sizeof path, font_dir, line) == 0 &&
-            skb_font_collection_add_font(fonts, path, SKB_FONT_FAMILY_DEFAULT, nullptr))
-            n_fonts++;
+        size_t ll = strlen(line);
+        if (ll && line[ll - 1] == '\r') line[--ll] = 0;
+        if (*line) {
+            n_lines++;
+            const char* why = nullptr;
+            if (dsg_join(path, sizeof path, font_dir, line)) why = "path too long";
+            else if (skb_font_collection_add_font(fonts, path, SKB_FONT_FAMILY_DEFAULT, nullptr)) n_fonts++;
+            else {
+                FILE* f = fopen(path, "rb");
+                why = f ? "not loaded" : "cannot open";
+                if (f) fclose(f);
+            }
+            if (why && tried_len + 1 < sizeof tried) {
+                int w = snprintf(tried + tried_len, sizeof tried - tried_len, "%s%s (%s)", tried_len ? ", " : "", line, why);
+                if (w > 0) tried_len += (size_t)w < sizeof tried - tried_len ? (size_t)w : sizeof tried - tried_len - 1;
+            }
+        }
         line = end ? end + 1 : nullptr;
     }
     free(list);
     if (n_fonts == 0) {
-        snprintf(err, err_cap, "no font in %s/fonts.txt loads", font_dir);
+        snprintf(err, err_cap, "no font in %s/fonts.txt loads: %d listed%s%s", font_dir, n_lines, n_lines ? ": " : "", tried);
         return false;
     }
     temp = skb_temp_alloc_create(512 * 1024);

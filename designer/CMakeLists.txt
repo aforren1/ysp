@@ -16,6 +16,15 @@ function(dsg_sdl_dll t)
     endif()
 endfunction()
 
+# designer_tests builds every designer test, so CI names one target and a
+# new test needs no change there (a test CI did not build showed as "Not
+# Run"). Each test registers itself with dsg_test().
+add_custom_target(designer_tests)
+function(dsg_test t)
+    dsg_sdl_dll(${t})
+    add_dependencies(designer_tests ${t})
+endfunction()
+
 # The player and the pack tool with one set of header implementations: the
 # player's (ysp_player_impl, with SDL and miniaudio), and the pack tool's
 # code without its own copies of the shared ones (ysp_pack_tool_code, not
@@ -45,7 +54,7 @@ if(YSP_BUILD_TESTS)
     target_compile_definitions(test_designer_core PRIVATE YSP_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
         YSP_DESIGNER_TEST_FONT="${YSP_DESIGNER_TEST_FONT}")
     add_test(NAME test_designer_core COMMAND test_designer_core ${CMAKE_CURRENT_BINARY_DIR}/designer_test_work)
-    dsg_sdl_dll(test_designer_core)
+    dsg_test(test_designer_core)
 
     # Step 4: the document (shared), then one test per part, each in its
     # part's own file. bench_designer_doc times an edit; it is not a test.
@@ -55,7 +64,7 @@ if(YSP_BUILD_TESTS)
         target_compile_options(test_designer_${_t} PRIVATE ${YSP_WARNINGS})
         set_target_properties(test_designer_${_t} PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
         target_compile_definitions(test_designer_${_t} PRIVATE YSP_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
-        dsg_sdl_dll(test_designer_${_t})
+        dsg_test(test_designer_${_t})
     endforeach()
     add_test(NAME test_designer_doc COMMAND test_designer_doc ${CMAKE_CURRENT_BINARY_DIR}/designer_doc_work)
     add_test(NAME test_designer_chart COMMAND test_designer_chart ${CMAKE_CURRENT_BINARY_DIR}/designer_chart_work)
@@ -142,7 +151,7 @@ if(YSP_BUILD_TESTS)
         YSP_DESIGNER_FONT_DIR="${CMAKE_CURRENT_BINARY_DIR}/fonts")
     set_target_properties(test_designer_ui PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
     add_test(NAME test_designer_ui COMMAND test_designer_ui ${CMAKE_CURRENT_BINARY_DIR}/designer_ui_work)
-    dsg_sdl_dll(test_designer_ui)
+    dsg_test(test_designer_ui)
 endif()
 
 if(YSP_BUILD_TESTS AND YSP_DESIGNER_TEST_ENGINE)
@@ -191,7 +200,7 @@ if(YSP_BUILD_TESTS AND YSP_DESIGNER_TEST_ENGINE)
     endif()
     add_test(NAME test_designer_te COMMAND test_designer_te ${CMAKE_CURRENT_BINARY_DIR}/designer_te_work)
     set_tests_properties(test_designer_te PROPERTIES TIMEOUT 120)
-    dsg_sdl_dll(test_designer_te)
+    dsg_test(test_designer_te)
 endif()
 
 if(NOT TARGET SDL3::SDL3)

@@ -1785,7 +1785,7 @@ jobs:
         run: |
           program=""
           if [ "$RUNNER_OS" = Linux ]; then program=ysp_designer; fi
-          cmake --build build --config Release --parallel 4 --target test_designer_core test_designer_ui test_designer_te $program
+          cmake --build build --config Release --parallel 4 --target designer_tests $program
 
       - name: Tests (no window)
         run: ctest --test-dir build -C Release -R designer --output-on-failure
