@@ -293,6 +293,9 @@ ysp_designer (C++, Dear ImGui, SDL3, GL ES 3.0)
    - Not done: the window was built and never opened, because the session
      had no free display; no person has used it. The web build, the IME on the
      multi-line editor, and Windows and macOS builds are not tried.
+   - Added 2026-11-19: the CI job `designer` builds the three tests on
+     Linux, Windows (MSVC) and macOS and runs them ("How to build and run
+     the skeleton"). It has not run yet.
    - Added 2026-11-19: `test_designer_te`, three UI tests on the Dear ImGui
      Test Engine, optional and off by default ("UI tests with the Test
      Engine", below).
@@ -623,7 +626,15 @@ build/designer/designer/ysp_designer /tmp/rdk_project
 The build copies the fonts that `YSP_DESIGNER_FONTS` lists (Debian's Noto
 and DejaVu paths by default) to `designer/fonts/` beside the program, and
 the program reads them from there. Open a copy of a project, not the
-repository's: Save and the check pack write into the folder.
+repository's: Save and the check pack write into the folder. On Windows
+and macOS, set `YSP_DESIGNER_FONTS` to fonts of that system, for example
+`C:/Windows/Fonts/arial.ttf`.
+
+CI: the job `designer` in `.github/workflows/ci.yml` builds
+`test_designer_core`, `test_designer_ui` and `test_designer_te` on Linux,
+Windows (MSVC) and macOS, and runs them with `ctest -R designer`. On Linux
+it also builds `ysp_designer` and does not run it. Each OS gives its own
+fonts to `YSP_DESIGNER_FONTS` and `YSP_DESIGNER_TEST_FONT`.
 
 ## UI tests with the Test Engine
 
@@ -675,6 +686,9 @@ ctest --test-dir build/designer -R test_designer_te
 - When the option is ON and the files are missing, CMake stops and shows
   the fetch command.
 - The test opens no window and needs no display or GL.
+- CI runs the test (job `designer`). The license permits this: ysp is
+  released under MIT-0, an OSI license, and the job keeps no artifact of
+  the engine or of `test_designer_te`, so it distributes neither.
 
 ### What was taken
 
@@ -749,8 +763,8 @@ tests passed in each of 30 runs (Linux desktop, gcc 12.2, Release).
 
 ### Not done
 
-- CI does not build the test. No job was added.
-- Windows (the MSVC flags are written and not compiled) and macOS.
+- A run on Windows (MSVC) and macOS. CI's job `designer` builds and runs
+  the test there; it has not run yet.
 - ASan and UBSan runs of the test.
 - The other parts of `test_designer_ui` (Ctrl+S, the view file, idle
   frames) are not ported; `test_designer_ui` keeps them.
@@ -817,5 +831,11 @@ tests passed in each of 30 runs (Linux desktop, gcc 12.2, Release).
 - The issues panel lays out each message through the shared layout cache,
   which never evicts. A long session of edits keeps every message it has
   shown.
-- `platform.c`'s Windows branch (UTF-16 paths, `MoveFileExW`) is not
-  compiled or tested.
+- `platform.c`'s Windows branch (UTF-16 paths, `MoveFileExW`) is compiled
+  and tested only by CI's job `designer` (`test_designer_core` on Windows),
+  which has not run yet.
+- Skribidi's `skb_common.h` tests `__cplusplus__`, not `__cplusplus`, so
+  in C++ its `SKB_LITERAL()` makes a C compound literal, which MSVC
+  refuses (C4576). `skf.cpp` and `skt.cpp` define it again after the
+  Skribidi includes, as a C++20 designated initializer. A patch to Skribidi
+  would remove the need.

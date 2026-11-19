@@ -421,7 +421,7 @@ static void test_texts(dsg_checker* c) {
     dsg_project p;
     dsg_report r;
     char *t, *t2;
-    size_t m, m2;
+    size_t m = 0, m2 = 0;   /* MSVC C4701: m2 is set only when t is */
     if (!dsg_is_file(YSP_DESIGNER_TEST_FONT)) {
         printf("8. skipped: no font at '%s' (YSP_DESIGNER_TEST_FONT)\n", YSP_DESIGNER_TEST_FONT);
         return;

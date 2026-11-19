@@ -7,6 +7,15 @@
 # built when SDL3, GL ES and Dear ImGui (tools/vendor_designer.py) are there.
 # test_designer_te: only with YSP_DESIGNER_TEST_ENGINE (off by default).
 
+# On Windows the tests import SDL3 through the player's header
+# implementations, and only ysp_add_program() puts the DLL beside a program.
+function(dsg_sdl_dll t)
+    if(WIN32 AND TARGET SDL3::SDL3-shared)
+        add_custom_command(TARGET ${t} POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_FILE:SDL3::SDL3-shared> $<TARGET_FILE_DIR:${t}>)
+    endif()
+endfunction()
+
 # The player and the pack tool with one set of header implementations: the
 # player's (ysp_player_impl, with SDL and miniaudio), and the pack tool's
 # code without its own copies of the shared ones (ysp_pack_tool_code, not
@@ -36,6 +45,7 @@ if(YSP_BUILD_TESTS)
     target_compile_definitions(test_designer_core PRIVATE YSP_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
         YSP_DESIGNER_TEST_FONT="${YSP_DESIGNER_TEST_FONT}")
     add_test(NAME test_designer_core COMMAND test_designer_core ${CMAKE_CURRENT_BINARY_DIR}/designer_test_work)
+    dsg_sdl_dll(test_designer_core)
 
     # Step 4: the document (shared), then one test per part, each in its
     # part's own file. bench_designer_doc times an edit; it is not a test.
@@ -45,6 +55,7 @@ if(YSP_BUILD_TESTS)
         target_compile_options(test_designer_${_t} PRIVATE ${YSP_WARNINGS})
         set_target_properties(test_designer_${_t} PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
         target_compile_definitions(test_designer_${_t} PRIVATE YSP_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+        dsg_sdl_dll(test_designer_${_t})
     endforeach()
     add_test(NAME test_designer_doc COMMAND test_designer_doc ${CMAKE_CURRENT_BINARY_DIR}/designer_doc_work)
     add_test(NAME test_designer_chart COMMAND test_designer_chart ${CMAKE_CURRENT_BINARY_DIR}/designer_chart_work)
@@ -131,6 +142,7 @@ if(YSP_BUILD_TESTS)
         YSP_DESIGNER_FONT_DIR="${CMAKE_CURRENT_BINARY_DIR}/fonts")
     set_target_properties(test_designer_ui PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
     add_test(NAME test_designer_ui COMMAND test_designer_ui ${CMAKE_CURRENT_BINARY_DIR}/designer_ui_work)
+    dsg_sdl_dll(test_designer_ui)
 endif()
 
 if(YSP_BUILD_TESTS AND YSP_DESIGNER_TEST_ENGINE)
@@ -179,6 +191,7 @@ if(YSP_BUILD_TESTS AND YSP_DESIGNER_TEST_ENGINE)
     endif()
     add_test(NAME test_designer_te COMMAND test_designer_te ${CMAKE_CURRENT_BINARY_DIR}/designer_te_work)
     set_tests_properties(test_designer_te PROPERTIES TIMEOUT 120)
+    dsg_sdl_dll(test_designer_te)
 endif()
 
 if(NOT TARGET SDL3::SDL3)
