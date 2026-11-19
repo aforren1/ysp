@@ -230,8 +230,10 @@ void commit_slot(Slot& s) {
     if (s.role == ROLE_NAME) queue(ACT_RENAME, &s.obj, nullptr, t.Data);
     else if (s.role == ROLE_WHOLE) queue(ACT_WHOLE, &s.obj, nullptr, t.Data);
     else queue(ACT_WRITE, &s.obj, s.field, t.Data, s.role == ROLE_JSON ? DSG_WRITE_JSON : DSG_WRITE_TYPED);
-    s.shown.resize(0);
-    s.rev = 0;   // the document's text shows again
+    // committed once: a later commit_all() or end_frame() finds no change,
+    // and the next frame shows the document's text
+    s.shown.swap(t);
+    s.rev = 0;
 }
 
 void commit_edit() {
@@ -309,7 +311,19 @@ Slot* slot_for(ImGuiID id) {
 // A Skribidi field: user text, a name, a value as JSON.
 void text_field(const dsg_obj& o, const dsg_field* f, Role role, const char* text, bool grey, bool ro) {
     const ImGuiID id = ImGui::GetID("##v");
-    Slot* s = slot_for(id);
+    const ImVec2 size(ImGui::GetContentRegionAvail().x, ui_text_size() * 1.6f);
+    Slot* s = nullptr;
+    for (Slot& x : P->pool)
+        if (x.id == id) s = &x;
+    // A row out of view takes no field (an aep method has 83 keys), only
+    // its place and ID, so a scroll or the Test Engine can reach it.
+    if (!s && !ImGui::IsRectVisible(size)) {
+        const ImVec2 at = ImGui::GetCursorScreenPos();
+        ImGui::ItemSize(size);
+        ImGui::ItemAdd(ImRect(at, ImVec2(at.x + size.x, at.y + size.y)), id);
+        return;
+    }
+    if (!s) s = slot_for(id);
     if (!s) {
         ImGui::TextUnformatted(text);
         return;
@@ -329,7 +343,7 @@ void text_field(const dsg_obj& o, const dsg_field* f, Role role, const char* tex
     if (ro) ImGui::BeginDisabled();
     if (grey && !skf_focused(s->f)) ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.55f);
     const bool pushed = grey && !skf_focused(s->f);
-    skf_draw("##v", s->f, ImGui::GetContentRegionAvail().x, ui_text_size() * 1.6f);
+    skf_draw("##v", s->f, size.x, size.y);
     if (pushed) ImGui::PopStyleVar();
     if (ro) ImGui::EndDisabled();
     const unsigned ev = skf_take_events(s->f);

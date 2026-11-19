@@ -247,7 +247,11 @@ static void test_headers(void) {
     f = field("control", 1u << YEXP_TRACE, "rate");
     {
         const dsg_field* g = field("control", 1u << YEXP_REGION, "rate");
-        CHECK(f && g && f != g && strstr(f->doc, "") && f->doc != g->doc, "rate splits: a trace's is record's, a region's is detect's");
+        int n = 0;
+        const ysig_param* rec = ysig_op_params(YSIG_OP_RECORD, &n);
+        CHECK(f && g && f != g && rec && strcmp(f->from, "ysp/sig.h") == 0 && strcmp(f->doc, rec[0].doc) == 0 &&
+                  strcmp(g->from, "ysp/sig.h") == 0 && f->doc != g->doc,
+              "rate splits: a trace's is record's per, a region's is detect's at");
     }
     f = field("control", 1u << YEXP_SIGNAL_LOST, "after_s");
     CHECK(f && strcmp(f->from, "ysp/sig.h") == 0, "signal_lost's after_s: silent's after");
