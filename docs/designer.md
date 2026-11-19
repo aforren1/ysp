@@ -164,6 +164,222 @@ The check runs in the frame of the edit, after the editor and before the
 issues panel. The caret does not blink: a blinking caret is an animation.
 The rule is `dsg_redraw_*()` in `designer/core/redraw.c`.
 
+### Decisions of step 4
+
+#### The panels
+
+Built 2026-11-19 (branch `designer-step4-panels`, part C of "Plan of step
+4"). The side column, `Properties`, shows the keys of the selected object.
+The code is `designer/core/schema.c` (C, no window: the fields, the object
+at a path, the writes, the renames) and `designer/app/view_panels.cpp`
+(the rows).
+
+**What shows.** The selection is a JSON Pointer. `dsg_schema_chain()` finds
+the object that it is in, and the objects that hold that object as far as
+its template. An exit shows three panels: the exit, its state and its
+template. A stimulus shows one panel. Each panel is a collapsing header
+with the object kind, its name and its kind ("stimulus dots (rdk)").
+
+| Path | Object | Section of `yexp_defaults(2)` |
+|---|---|---|
+| `""` | the file | file |
+| `/display`, `/session`, `/session/fields/F`, `/web` | display, session, session field, web | the same names |
+| `/devices/R`, `/roles/R` | event role, signal role | role, signal role |
+| `/stimuli/S` | stimulus | stimulus, kind from `kind` |
+| `/methods/M` | method | stair, quest or aep method, from `type` |
+| `/controls/C`, `/trials/T/controls/C` | control | control, kind from `control` |
+| `/trials/T` | template | template; kind 2 with `states` and no `key_answer`, else 1 |
+| `/trials/T/response`, `.../trigger`, `.../choices/I` | response, response trigger, choice | response, or response with signal choices; a signal choice has no keys |
+| `/trials/T/states/I`, `.../over`, `.../exits/J` | state, over, exit | state, over, exit (kind 1) |
+| `/trials/T/exits/J` | shared exit | exit (kind 2) |
+| `.../events/I`, `.../after/I`, `.../steps/I` | step | step, kind from the key that names the op |
+| `/trials/T/columns/N` | data column | none: a value |
+| `/timeline/I` (and nested), `.../loop` | node, loop | node, loop |
+| `.../vars/N`, `.../data/N` | variable, node data column | uniform, walk2d (its keys under `walk2d`), else a value |
+
+- A path under an object names one of its keys (its focus). The row of
+  that key has a highlight, and a reveal (a click on an issue, a selection
+  in the chart) scrolls to it and opens the panel.
+- Every key that `yexp_defaults(2)` has for the section and the kind shows,
+  in the table's order. A stimulus's `visible` does not: in format 2 it is a
+  step's property (D41). A state's and a node's `name` is the name row.
+- A key that is not in the text shows its default in grey. Reset removes
+  the key. The commit writes a key at its default, and Save drops it (D2),
+  as "The model: the bytes are the truth" says.
+
+**Units, ranges and text from the headers (G6).** `schema.c` joins each
+format row to a header's row by name, at the first call:
+
+| Section | Table |
+|---|---|
+| stimulus | `yrdk_params()` for an rdk, then `ygfx_params()` and `ygfx_enum_params()`; `color` takes `color_r`'s row |
+| response, response with signal choices, choice | `yrsp_params()`: `duration_s` is `duration_ns`, `minimum_valid_rt_s` is `min_rt_ns`, `response_ends_trial` is the negation of `persist`, a choice's keys are `choices.*` |
+| control | `ysig_op_params()` of the op that the key lowers to (format 3.7): a region's `radius` and `speed_below` are `detect`'s `level`, `stay_s` its `hold`, `rate` its `at`, `speed_lag_s` and a peak's `lag_s` are `speed`'s `lag`, a moving target's `ramp_s` is `sines`'s `ramp`, a trace's `rate` is `record`'s `per`, signal_lost's `after_s` is `silent`'s `after`, a distance's `scale` is `scale`'s `k.x`, a cursor's `transform` is `affine`'s `angle`; a movement's `onset` is `yrsp_params()`'s `choices.level` |
+| stair, quest, aep method | `yst_params()`, `yqst_params()`, `yaep_params()` (`hyperparams.mean` is a key with a dot, as the loader reads it) |
+
+- A format row whose kinds take different header rows is split into one
+  field per group of kinds (`rate`: a region's and a trace's).
+- A duration's unit is `s` whatever the header's unit is (D4); a range in
+  ns is converted to seconds.
+- The tooltip of a key gives the header's text, the range, the default,
+  and the source. A key that only the format has (a node's `repetitions`, a
+  state's `max_visits`) shows its name and its default only (prerequisite
+  P2 adds a unit and a text to the format's rows).
+
+**Widgets.** By the row's type, when the value has that type:
+
+| Type | Widget |
+|---|---|
+| number, integer, duration | ImGui's text field (a number is ASCII). Drag the key's name to change the value |
+| bool | a checkbox |
+| enum | a combo of the row's values; `(none)` for an optional key with no default |
+| a name (`to`, `on`, `of`, `from`, `trial`, `role`, ...) | a combo of the names that the key can take there (format 3.9): states and `end` for an exit's `to`, controls with hits and `response` for its `on`, roles with their lanes (`left.x`) for a cursor's `x`, the templates for a node's `trial` |
+| text, string, resource | a Skribidi field (`skf.cpp`): user text in any script |
+| an object with a panel of its own (`response`, `loop`, `over`, `display`) | Select, or Add when absent |
+| a set or a list of objects (`states`, `stimuli`, `timeline`) | the count; the chart and the text view edit them |
+| any other list, map or form, and a value that does not fit its widget (a variable, a lookup) | a Skribidi field with the value's compact JSON. Text opens the text view at the key |
+
+A Skribidi field of a row out of view is not made: the row keeps its
+place and its ID, so a scroll or the Test Engine still reaches it (an aep
+method has 83 keys). At most 48 fields show at once.
+
+**Writes.** `dsg_schema_write()` makes one undo step "Set KEY":
+- A duration: the typed decimal through `yjs_parse_fixed(..., 9)`, written
+  with `dsg_def_set_seconds_ns()`. `0.50` is `0.5`; `1.0000000004` is `1`.
+- A number: `dsg_def_set_number_text()`, so the canonical writer spells it
+  (`5e-1` is `0.5`). An integer: `dsg_def_set_int()`.
+- Text that starts with `$` is a variable, and text that starts with `{`
+  or `[` is JSON, for every type that is not text. Text keeps its spaces.
+  A field that showed JSON also reads `"..."` as JSON.
+- A choice that is a string (`"left"`) becomes `{"key": "left"}` before a
+  second key goes in.
+- A value out of a header's range is written. The check reports it: the
+  loader names the key and the header's range at its place (a coherence of
+  1.5: "outside ysp/rdk.h's 0 to 1"). The panels validate nothing.
+- Text that does not read as the type (`abc` for a number, `1 s` for a
+  duration) writes nothing, and the status line says why.
+
+**Commits.**
+- Each edit is queued while the panels draw and made after them: an edit
+  parses the tree again, and the rows of the frame read the tree they were
+  drawn from.
+- A text field commits on Enter, when it loses the focus, and when the
+  selection changes. Escape gives the field its value back. While a field
+  has the keyboard, Ctrl+Z is the field's own undo (Skribidi's or
+  ImGui's); after the commit, Ctrl+Z takes the whole edit back from the
+  document's stack.
+- A drag of a number's name shows the value as it moves and writes it when
+  the mouse button comes up: one step and one check for the drag. The
+  value moves by the header's range over 500 px, or by 0.5 % of the value
+  when the range is open, and keeps the step's decimals.
+- When the selection changes, every field with typed text writes it and
+  lets the keyboard go, before the frame reads the tree. A field that kept
+  the focus would take the next Ctrl+Z from the document's stack.
+
+**Renames.** The name row of a set member (a stimulus, a control, a role, a
+template, a method, a session field, a variable, a column), a state and a
+node renames it in one step "Rename NAME" with `dsg_schema_rename()`:
+- It changes the keys whose schema type names that kind of thing (format
+  3.9): steps' `on`, `off`, `set`, `to`, `then`; controls' `of`, `x`, `y`,
+  `mean`, `stimulus`, `freeze_at`, `from`, `to`; exits' `on`, `to`, `in`;
+  `over`'s `to`; responses' `role` and `from`; nodes' `trial` and `tracks`;
+  and the forms `{"signal": N}`, `{"when": N}`, `{"hit": "N.x"}` and
+  `{"time": N, "from": M}`. A lane stays (`left.x` becomes `hand_l.x`).
+- A state and a template's control are renamed within their template; the
+  other names are global (3.9). A state's rename tells the rename listeners,
+  so the chart's position follows it.
+- A variable's `"$NAME"` changes only when no other node defines NAME:
+  another node's references are not this one's.
+- The check reports what the walk does not find. A `walk2d` variable `aim`
+  defines `$aim_x` and four more names; renaming `aim` changes none of
+  them, and the check names `$aim_x`.
+- The selection follows a set member to its new key in the same step.
+
+**Issues.** After each check, a key whose path holds an issue's value
+(`ui_issue_path()`) has a mark beside its name, colored by severity. Its
+tooltip is the message; a click goes to the issue, as a click in the
+issues panel does. An issue at the object itself (a tier 2 refusal that
+names a stimulus) marks the panel.
+
+**The view file.** The part `panels` is `{"collapsed": [KIND, ...]}`: the
+object kinds whose panels are collapsed ("stimulus", "template"). A
+selection keeps a collapsed panel collapsed; a reveal opens it.
+
+**The Skribidi field** (`skf.h`, `skf.cpp`; the existing API did not change):
+- One field has the keyboard. Before, a click in a second field kept the
+  first one focused too (a click on an item keeps the focus), and the first
+  one drawn took the characters: the definition editor before the panels.
+- `skf_take_events()` gives a one-line field's Enter and Escape and the
+  loss of its focus; `skf_blur()` lets the keyboard go.
+- A one-line field lays its text out at the width it is drawn at. It makes
+  its editor again when the width changes, because `skb_editor_reset()`
+  with new params copies the attributes from the editor's own array while
+  it grows that array. Skribidi's undo of that field starts again then.
+
+**Measured.** Linux desktop, Intel Core i5-14500, gcc 12.2, Release,
+pinned to CPU 2 (a P-core), load average 0.87 during the runs (`uptime`),
+two runs within 3 % at the median. Microseconds, median and p99.
+
+| Work | bimanual (5.7 KB) | its templates copied to 100 KB | to 1 MB |
+|---|---|---|---|
+| A frame's schema work for an exit: the chain, each object's fields, each value | 2.5, 2.8 | 2.5, 4.8 | 2.8, 11.5 |
+| The same for a stimulus | 3.2, 3.5 | 3.2, 4.5 | 3.2, 6.2 |
+| The candidates of an exit's `on` (a combo opens) | 0.2, 0.5 | 0.2, 1.8 | 0.2, 1.8 |
+| Rename a stimulus: the whole file (4, 72, 732 references) | 80.5, 87.8 | 907.8, 963.5 | 8,612.8, 9,041.0 |
+| Rename a state: its template (3 references) | 42.5, 49.5 | 328.8, 359.5 | 3,000.5, 3,062.5 |
+
+| A whole frame of the UI, with no window (1400 x 900, the rdk project, the text view shown), 2,000 frames | Median | p99 |
+|---|---|---|
+| Nothing selected | 31.6 | 34.2 |
+| The file | 41.5 | 43.7 |
+| Stimulus `dots` (rdk) | 52.4 | 58.4 |
+| Template `rdk` | 42.6 | 48.5 |
+| An aep method (83 keys) | 68.2 | 75.5 |
+
+- The panels cost 10 to 37 us of a drawn frame. The designer draws on
+  input only, and the check after an edit costs 0.2 to 7 ms.
+- A rename at 1 MB is under one 16 ms frame. Its cost is the commit's write
+  of the whole text (3.7 ms in "The model: the bytes are the truth") and
+  732 sets. The first walk found each value's object again from the root:
+  51 ms at 1 MB, in one run with no pinning. The walk now goes down the
+  objects with their sections and kinds (8.6 ms).
+- `test_designer_panels WORK --bench` gives the first table. The second
+  came from a harness in the session's scratch folder that draws frames as
+  `test_designer_ui` does; it is not kept.
+
+**Tests.** `test_designer_panels` (207 checks) and nine tests on the
+Test Engine (`te_panels.cpp`):
+
+| Test | What it checks | Hand mutants killed |
+|---|---|---|
+| `test_designer_panels` 1, 2 | The type mirror where the rows show it (every `_s` key is a duration in seconds, every row with values is an enum, the flags); every row's kinds covered once by the split fields; the joins: every stimulus and method key that a header's table has takes its row, and the response, choice and control joins | no gfx join; no join of a trace's `rate`; no split |
+| 3, 4 | The object at a path for each object kind and each kind of stimulus, control, method, step, exit, template and variable; the chain; every key of each section and kind shows once for its object | a step's property shown; `walk2d`'s keys at the variable; the template's kind always 1 |
+| 5, 6 | Each type writes the canonical value in one step; bad text writes nothing; Reset; a string choice; a value out of range written and named by the check at its key | a duration written as typed; text trimmed; Reset that keeps the key; a string choice kept; a number as text; a write clamped to the range |
+| 7, 8 | Candidates; renames of a state, a stimulus, controls, a role, a template, variables and a node, each one step, the check clean after each, undo to the same bytes, the listener; a shared variable; a state in one of two templates; refusals | lanes dropped; no forms in `props`; a state's rename global; a variable counted twice; a shared variable renamed; candidates not filtered |
+| `panels/follows_text`, `contrast`, `issue_mark`, `hebrew`, `long_panel`, `drag`, `select_commits`, `rename`, `collapsed` | The caret selects the panel; a click in a field takes the keyboard from the editor; a contrast typed over its lookup and a number typed in a number field, each taken back by Ctrl+Z; Escape; Reset; an out-of-range value's mark and its jump; Hebrew typed with the engine's keys; Ctrl+Z in a focused field; the last keys of an aep method's 83; a drag over six frames as one step and one check; a commit on a selection change within one object; a rename through the name row with the selection; the collapsed part through a reopen, and a reveal | focus not exclusive; Enter ignored; Escape commits; Escape ignored; no marks; no commit on a selection change; a drag that commits each frame; no view part; the selection not following a rename; a reveal that does not open; a number field not committed; Ctrl+Z in a field going to the document; a row out of view with no ID |
+
+31 of 31 hand mutants failed a test (18 of the core, 13 of the UI) and
+were reverted; they are not in a mutation list. Without mutants, every
+test passed with `YSP_DESIGNER_TEST_ENGINE` ON and OFF (Linux, gcc 12.2,
+Release).
+
+**Not done.**
+- The window was not opened: no person used the panels. The Skribidi
+  field's width change was not looked at.
+- The Windows (MSVC) build was not compiled. The code was compiled with
+  gcc 12's `-Wconversion` and gave no warning.
+- No ASan or UBSan run.
+- Variables have no candidates: `if` and `unless` are text fields.
+- The panels add and remove no list items (a state, a step, an exit) and
+  no set members.
+- `view_panels.cpp` calls `ui_show_view()`, `ui_editor()` and
+  `ui_jump_to_issue()` from `ui.h` (to open the text view at a key and to
+  go to an issue), which `views.h` does not list for a view.
+- Prerequisites P1 and P2 did not block anything. Without P1, `schema.h`
+  mirrors the type enum and the row flags, and the test checks the mirror
+  where the rows show it. Without P2, a key that only the format has shows
+  no unit or text.
+
 ## First version
 
 In:
