@@ -410,18 +410,17 @@ static void test_check(void) {
     dsg_join(a, sizeof a, dir, "oddball.csv");
     disk0 = read_all(a, &n0);
     f.buf = dsg_doc_add_buffer(f.d, DSG_KIND_TABLE, "oddball.csv", disk0, n0);
-    dsg_check_use_tables(f.d);
 
-    dsg_check(ck, &p, p.text, p.text_len, &rep);
+    dsg_check(ck, &p, p.text, p.text_len, f.d, &rep);
     CHECK(rep.built && rep.n_errors == 0, "oddball checks clean: built %d, %d errors", rep.built, rep.n_errors);
     if (rep.n_errors) print_issues(&rep);
-    dsg_check(ck, &p, p.text, p.text_len, &rep);
+    dsg_check(ck, &p, p.text, p.text_len, f.d, &rep);
     CHECK(!rep.built, "no table changed: no build");
 
     /* An edit the definition takes: the pack is built from the document. */
     dsg_csv_sync(&f.c, f.d, f.buf, ',');
     CHECK(dsg_csv_set_cell(f.d, &f.c, 1, 2, "3", 1) == 0, "edit: %s", f.c.error);
-    dsg_check(ck, &p, p.text, p.text_len, &rep);
+    dsg_check(ck, &p, p.text, p.text_len, f.d, &rep);
     CHECK(rep.built && rep.n_errors == 0, "an unsaved table: built %d, %d errors", rep.built, rep.n_errors);
     dsg_doc_undo(f.d);
 
@@ -429,7 +428,7 @@ static void test_check(void) {
      * 'type'. Its only row becomes "standard", in the document only. */
     dsg_csv_sync(&f.c, f.d, f.buf, ',');
     CHECK(dsg_csv_set_cell(f.d, &f.c, 1, 1, "standard", 8) == 0, "edit: %s", f.c.error);
-    dsg_check(ck, &p, p.text, p.text_len, &rep);
+    dsg_check(ck, &p, p.text, p.text_len, f.d, &rep);
     k = count_errors_with(&rep, "no level 'target'");
     CHECK(k == 1, "the unsaved table is checked: %d errors name the level 'target'", k);
     if (k != 1) print_issues(&rep);
@@ -439,7 +438,7 @@ static void test_check(void) {
 
     /* the pack of the clean table is still the one built last */
     dsg_doc_undo(f.d);
-    dsg_check(ck, &p, p.text, p.text_len, &rep);
+    dsg_check(ck, &p, p.text, p.text_len, f.d, &rep);
     CHECK(rep.n_errors == 0, "undo: checked clean again (%d errors)", rep.n_errors);
     if (rep.n_errors) print_issues(&rep);
 
@@ -447,7 +446,7 @@ static void test_check(void) {
      * message names its row and column. */
     dsg_csv_sync(&f.c, f.d, f.buf, ',');
     CHECK(dsg_csv_set_cell(f.d, &f.c, 2, 3, "l\xFF", 2) == 0, "edit: %s", f.c.error);
-    dsg_check(ck, &p, p.text, p.text_len, &rep);
+    dsg_check(ck, &p, p.text, p.text_len, f.d, &rep);
     k = -1;
     for (i = 0; i < rep.n_issues; i++)
         if (rep.issues[i].from == DSG_FROM_PACK && dsg_csv_place(rep.issues[i].message, entry, sizeof entry, &row, &col, name, sizeof name)) k = i;
@@ -458,16 +457,77 @@ static void test_check(void) {
 
     /* Saved: the pack comes from the file again, with no new build. */
     dsg_doc_undo(f.d);
-    dsg_check(ck, &p, p.text, p.text_len, &rep);
+    dsg_check(ck, &p, p.text, p.text_len, f.d, &rep);
     CHECK(rep.n_errors == 0, "undo again: clean");
-    dsg_check_use_tables(NULL);
-    dsg_check(ck, &p, p.text, p.text_len, &rep);
+    dsg_check(ck, &p, p.text, p.text_len, NULL, &rep);
     CHECK(!rep.built && rep.n_errors == 0, "without the document: the files on disk, which the pack has (built %d)", rep.built);
 
     free(disk0);
     dsg_checker_free(ck);
     dsg_project_close(&p);
     fx_close(&f);
+}
+
+/* A copy of tests/player/oddball in work/NAME, opened, with its table as
+ * buffer 1 of a new document. */
+static int open_oddball(const char* name, dsg_project* p, fixture* f) {
+    static const char* const files[] = { "pack.json", "experiment.json", "oddball.csv", "standard.png", "target.png", NULL };
+    char dir[DSG_PATH_MAX], a[DSG_PATH_MAX], b[DSG_PATH_MAX], err[1024];
+    char* bytes;
+    size_t n = 0;
+    int i;
+    snprintf(dir, sizeof dir, "%s/%s", work, name);
+    if (dsg_make_dir(dir, err, sizeof err)) return -1;
+    for (i = 0; files[i]; i++) {
+        snprintf(a, sizeof a, "%s/tests/player/oddball/%s", YSP_SOURCE_DIR, files[i]);
+        dsg_join(b, sizeof b, dir, files[i]);
+        if (copy_file(a, b)) return -1;
+    }
+    dsg_join(b, sizeof b, dir, DSG_CHECK_PACK);
+    remove(b);
+    if (dsg_project_open(p, dir, err, sizeof err)) return -1;
+    memset(f, 0, sizeof *f);
+    f->c.buf = -1;
+    f->d = dsg_doc_new();
+    dsg_doc_reset(f->d, p->def_source, p->text, p->text_len);
+    dsg_join(a, sizeof a, dir, "oddball.csv");
+    bytes = read_all(a, &n);
+    f->buf = dsg_doc_add_buffer(f->d, DSG_KIND_TABLE, "oddball.csv", bytes, n);
+    free(bytes);
+    return f->buf > 0 ? 0 : -1;
+}
+
+/* Each check reads the tables of the document it is given: two projects,
+ * each with its own document and checker, in one process. Before, the
+ * check read one process-wide document, the one last opened. */
+static void test_check_two_docs(void) {
+    dsg_project pa, pb;
+    fixture fa, fb;
+    dsg_checker* ca = dsg_checker_new();
+    dsg_checker* cb = dsg_checker_new();
+    dsg_report ra, rb;
+    int k;
+    CHECK(open_oddball("two_a", &pa, &fa) == 0 && open_oddball("two_b", &pb, &fb) == 0, "two copies of oddball open");
+    /* a: the level 'target' goes, in the document only; b stays clean */
+    dsg_csv_sync(&fa.c, fa.d, fa.buf, ',');
+    CHECK(dsg_csv_set_cell(fa.d, &fa.c, 1, 1, "standard", 8) == 0, "edit a: %s", fa.c.error);
+    dsg_check(ca, &pa, pa.text, pa.text_len, fa.d, &ra);
+    k = count_errors_with(&ra, "no level 'target'");
+    CHECK(k == 1, "a's edit is checked: %d errors name the level 'target'", k);
+    dsg_check(cb, &pb, pb.text, pb.text_len, fb.d, &rb);
+    CHECK(rb.n_errors == 0, "b, checked after a, is clean: %d errors", rb.n_errors);
+    if (rb.n_errors) print_issues(&rb);
+    /* a again: its checker kept the pack of a's tables */
+    dsg_check(ca, &pa, pa.text, pa.text_len, fa.d, &ra);
+    k = count_errors_with(&ra, "no level 'target'");
+    CHECK(k == 1, "a, checked after b, still has a's edit: %d errors name the level 'target'", k);
+    if (k != 1) print_issues(&ra);
+    dsg_checker_free(ca);
+    dsg_checker_free(cb);
+    dsg_project_close(&pa);
+    dsg_project_close(&pb);
+    fx_close(&fa);
+    fx_close(&fb);
 }
 
 int main(int argc, char** argv) {
@@ -487,6 +547,7 @@ int main(int argc, char** argv) {
     test_rename();
     test_places();
     test_check();
+    test_check_two_docs();
     printf("%s: %d checks, %d failed\n", fails ? "FAIL" : "PASS", checks, fails);
     return fails ? 1 : 0;
 }

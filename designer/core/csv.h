@@ -103,16 +103,6 @@ int dsg_csv_rename_column(dsg_doc* d, dsg_csv* c, int col, const char* name);
  * no table entry. Any out pointer may be NULL. */
 bool dsg_csv_place(const char* msg, char* entry, size_t ecap, int* row, int* col, char* col_name, size_t ncap);
 
-/* --- the check --------------------------------------------------------------- */
-
-/* The document whose table buffers the check pack is built from
- * (check.c): a dirty table's bytes are written under .designer/check/ and
- * the check description's source points at them, so the check sees a
- * table edit before Save. A buffer's name is its "source" in the
- * description. NULL: the tables on disk. The tables view sets it when a
- * project opens; dsg_check() keeps no other state of it. */
-void dsg_check_use_tables(const dsg_doc* d);
-
 #ifdef __cplusplus
 }
 #endif

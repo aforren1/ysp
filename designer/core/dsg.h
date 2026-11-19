@@ -219,8 +219,16 @@ void dsg_checker_forget(dsg_checker* c);
  * pl_check() on text against the check pack in memory.
  *
  * Without a check pack (none yet, or its build failed), the issues are the
- * pack tool's message and yexp_load()'s diagnostics with no host. */
-int dsg_check(dsg_checker* c, const dsg_project* p, const char* text, size_t n, dsg_report* r);
+ * pack tool's message and yexp_load()'s diagnostics with no host.
+ *
+ * tables: the document (doc.h) whose table buffers hold the tables as
+ * edited, or NULL for the tables on disk. Each dirty table's bytes are
+ * written under DSG_DIR/check/ and the check description's source points at
+ * them, so the check sees a table edit before Save; a buffer's name is its
+ * "source" in the description. The pack is built again when the set of
+ * dirty tables or the revision of one changes. */
+struct dsg_doc;
+int dsg_check(dsg_checker* c, const dsg_project* p, const char* text, size_t n, const struct dsg_doc* tables, dsg_report* r);
 
 /* --- the redraw rule ----------------------------------------------------- */
 

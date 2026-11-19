@@ -81,7 +81,7 @@ static int check_errors(dsg_project* p, dsg_doc* d, bool show) {
     const char* t = dsg_doc_bytes(d, DSG_BUF_DEF, &n);
     int i;
     memset(&r, 0, sizeof r);
-    if (dsg_check(checker, p, t, n, &r)) return -1;
+    if (dsg_check(checker, p, t, n, NULL, &r)) return -1;
     for (i = 0; i < r.n_issues && i < 3; i++)
         if (show && r.issues[i].severity == DSG_SEV_ERROR) printf("  check: %s\n", r.issues[i].message);
     return r.status == DSG_CHECK_OK ? r.n_errors : (r.n_errors ? r.n_errors : 1);

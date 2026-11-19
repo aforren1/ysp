@@ -574,7 +574,7 @@ static bool check_clean(dsg_checker* c, dsg_project* p, dsg_doc* d, const char* 
     dsg_report r;
     size_t n;
     const char* t = dsg_doc_bytes(d, DSG_BUF_DEF, &n);
-    bool ok = dsg_check(c, p, t, n, &r) == 0 && r.status == DSG_CHECK_OK && r.n_errors == 0;
+    bool ok = dsg_check(c, p, t, n, NULL, &r) == 0 && r.status == DSG_CHECK_OK && r.n_errors == 0;
     CHECK(ok, "%s: the check is clean (status %d, %d errors)", what, r.status, r.n_errors);
     if (!ok) dump(&r);
     return ok;
@@ -593,7 +593,7 @@ static void test_range(dsg_checker* c) {
     CHECK(write_at(d, "/stimuli/dots", "coherence", "1.5", 0) == 0 && has(d, "\"coherence\": 1.5"),
           "a coherence above rdk's 1 is written");
     t = dsg_doc_bytes(d, DSG_BUF_DEF, &n);
-    CHECK(dsg_check(c, &p, t, n, &r) == 0 && r.n_errors > 0, "and the check refuses it (%d errors)", r.n_errors);
+    CHECK(dsg_check(c, &p, t, n, NULL, &r) == 0 && r.n_errors > 0, "and the check refuses it (%d errors)", r.n_errors);
     is = issue_with(&r, "coherence", "rdk.h");
     {
         char at[DSG_SEL_PATH] = "";
@@ -605,7 +605,7 @@ static void test_range(dsg_checker* c) {
     CHECK(write_at(d, "/stimuli/dots", "dot_size", "-4", 0) == 0 && has(d, "\"dot_size\": -4"), "a dot_size below gfx's 0 is written");
     reset_at(d, "/stimuli/dots", "coherence");
     t = dsg_doc_bytes(d, DSG_BUF_DEF, &n);
-    CHECK(dsg_check(c, &p, t, n, &r) == 0 && issue_with(&r, "dot_size", "gfx.h"), "the check names dot_size and gfx.h's range");
+    CHECK(dsg_check(c, &p, t, n, NULL, &r) == 0 && issue_with(&r, "dot_size", "gfx.h"), "the check names dot_size and gfx.h's range");
     dsg_project_close(&p);
     dsg_doc_free(d);
 }
@@ -757,7 +757,7 @@ static void test_renames(dsg_checker* c) {
     CHECK(rename_at(d, "/timeline/0/vars/aim", "target", &changed) == 0 && changed == 0, "rename walk2d variable aim (%d refs)", changed);
     {
         const char* t = dsg_doc_bytes(d, DSG_BUF_DEF, &n);
-        CHECK(dsg_check(c, &p, t, n, &r) == 0 && r.n_errors > 0 && issue_with(&r, "aim", NULL),
+        CHECK(dsg_check(c, &p, t, n, NULL, &r) == 0 && r.n_errors > 0 && issue_with(&r, "aim", NULL),
               "the check reports the $aim_x it missed (%d errors)", r.n_errors);
     }
     dsg_doc_undo(d);

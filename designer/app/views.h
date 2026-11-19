@@ -32,12 +32,21 @@ struct UiView {
     int (*claims)(const dsg_sel* s);
     void (*reveal)(const dsg_sel* s);     // s is selected: bring it into view
     bool (*animating)();                  // draw every frame while true
+    // The selection that issue i (ui_report()->issues[i]) names in this
+    // view's own data, such as a table's cell; false when it names none.
+    // ui_jump_to_issue() takes the first view's answer before the issue's
+    // path in the definition, and reveals it as above.
+    bool (*issue_sel)(int i, dsg_sel* out);
 };
 
 // The views, in the switch's order (views.cpp).
 const UiView* const* ui_views(int* n);
 
-// What every view may use.
+// What every view may use: the calls below, and three of ui.h's, which
+// change what the window shows as a person's action would:
+// ui_show_view() (show a main view, such as the text at a key),
+// ui_editor() (the text view's field, to put its caret) and
+// ui_jump_to_issue() (as a click on an issue in the issues panel).
 dsg_doc* ui_doc();                        // never NULL after ui_init()
 const dsg_project* ui_project();          // NULL when none is open
 const dsg_report* ui_report();            // NULL before the first check

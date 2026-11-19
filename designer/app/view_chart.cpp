@@ -859,5 +859,5 @@ void draw() {
 extern const UiView ui_view_chart = {
     "chart", "Chart", UI_SLOT_MAIN,
     init, shutdown, opened, closed, save_view,
-    draw, claims, reveal, nullptr,
+    draw, claims, reveal, nullptr, nullptr,
 };

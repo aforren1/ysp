@@ -13,8 +13,15 @@
 //                        Cancel keeps the text, Discard opens the other.
 //   designer/undo_views  A structured edit shows in the text; Ctrl+Z with
 //                        another view shown takes it back (one undo stack).
-//   chart/*, tables/*, panels/*  The step 4 parts' tests (te_chart.cpp,
-//                        te_tables.cpp, te_panels.cpp; te_common.h).
+//   chart/*              5 tests of the state chart (te_chart.cpp): drag,
+//                        connect, issue, delete, rename.
+//   tables/*             5 tests of the tables (te_tables.cpp): shows,
+//                        scroll, edit, add_row, widths.
+//   panels/*             9 tests of the property panels (te_panels.cpp):
+//                        follows_text, contrast, issue_mark, hebrew,
+//                        long_panel, drag, select_commits, rename,
+//                        collapsed.
+//   docs/designer.md, "Decisions of step 4", says what each one checks.
 // Each test sends the engine's mouse and keys through ImGui's input queue,
 // as a person would. Exit 0 when every test passes, 1 otherwise.
 #include "te_common.h"

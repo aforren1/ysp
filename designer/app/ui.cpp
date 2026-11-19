@@ -40,6 +40,7 @@ struct State {
     uint64_t checked = 0;            // the document's revision last checked
     int last_caret = -1;             // the editor's caret last frame
     bool dirty = false;
+    uint64_t dirty_rev = 0;          // the document's revision that dirty is of
     bool check_due = false;
     int checks = 0;
     dsg_report report = {};
@@ -80,6 +81,14 @@ void update_dirty() {
     bool d = false;
     for (int i = 0; S->open && i < dsg_doc_buffer_count(S->doc); i++) d = d || dsg_doc_dirty(S->doc, i);
     S->dirty = d;
+    S->dirty_rev = dsg_doc_revision(S->doc);
+}
+
+// Any buffer's change: a table edit leaves the definition, and so
+// sync_editor(), alone. dsg_doc_dirty() compares a buffer with its saved
+// bytes, so it runs only when the document moved.
+void refresh_dirty() {
+    if (S->open && dsg_doc_revision(S->doc) != S->dirty_rev) update_dirty();
 }
 
 // The editor's text went into the document: typing, a paste, a cut.
@@ -234,6 +243,7 @@ void run_pending() {
 void ask_or_run(Pending p, const char* path) {
     S->pending = p;
     snprintf(S->pending_path, sizeof S->pending_path, "%s", path ? path : "");
+    refresh_dirty();
     if (S->dirty) S->ask_unsaved = true;
     else run_pending();
 }
@@ -259,7 +269,8 @@ void run_check() {
     if (!S->open) return;
     size_t n;
     const char* t = def_bytes(&n);
-    dsg_check(S->checker, &S->proj, t, n, &S->report);
+    // the tables as edited, so a table edit is checked before Save
+    dsg_check(S->checker, &S->proj, t, n, S->doc, &S->report);
     S->checked = dsg_doc_revision(S->doc);
     S->have_report = true;
     S->checks++;
@@ -525,6 +536,7 @@ void ui_dialog_failed(const char* why) {
 }
 
 bool ui_request_quit() {
+    refresh_dirty();
     if (!S->dirty) {
         close_project();
         return true;
@@ -582,12 +594,20 @@ void ui_jump_to_issue(int i) {
     if (!S->have_report || i < 0 || i >= S->report.n_issues) return;
     S->selected = i;
     const dsg_issue* is = &S->report.issues[i];
+    // A place in a view's own data (a table's cell) first: such an issue
+    // has no place in the definition, or one less exact than the cell.
+    int nv;
+    const UiView* const* v = views(&nv);
+    dsg_sel s;
+    dsg_sel_none(&s);
+    bool have = false;
+    for (int k = 0; k < nv && !have; k++) have = v[k]->issue_sel && v[k]->issue_sel(i, &s);
     const char* p = ui_issue_path(i);
-    if (p[0]) {
-        dsg_sel s;
+    if (!have && p[0]) {
         dsg_sel_def(&s, p);
-        ui_reveal(&s);
+        have = true;
     }
+    if (have) ui_reveal(&s);
     if (!is->place.line) return;
     // the place is in the text the check read, which is the editor's text
     size_t n;
@@ -655,6 +675,8 @@ void ui_frame() {
     ImGui::EndChild();
     unsaved_modal();
     ImGui::End();
+    // after the views: an edit in this frame's draw shows in this title
+    refresh_dirty();
     update_title();
 }
 
@@ -677,7 +699,10 @@ const dsg_report* ui_report() { return S && S->have_report ? &S->report : nullpt
 SkfField* ui_editor() { return S ? S->editor : nullptr; }
 const char* ui_text(size_t* n) { return def_bytes(n); }
 const char* ui_status() { return S->status; }
-bool ui_dirty() { return S->dirty; }
+bool ui_dirty() {
+    refresh_dirty();
+    return S->dirty;
+}
 int ui_checks_run() { return S->checks; }
 
 const char* ui_main_view() { return main_id(); }

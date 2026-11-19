@@ -22,8 +22,16 @@ skb_font_collection_t* skt_fonts();
 skb_temp_alloc_t* skt_temp();
 
 // A one-line layout of UTF-8 text at `size` px from the shared layout cache
-// (keyed by text and size; a hit costs a hash and a lookup).
+// (keyed by text and size; a hit costs a hash and a lookup). NUL-ended, or
+// n bytes. NULL when out of memory. Valid until the next skt_frame_begin()
+// at least; that call frees layouts not used for 100 frames, so a view
+// keeps no layout across frames.
 const skb_layout_t* skt_layout(const char* utf8, float size);
+const skb_layout_t* skt_layout_n(const char* utf8, int n, float size);
+// Layouts in the shared cache, and layouts made since skt_init(): for the
+// tests and the bench.
+int skt_layout_count();
+uint64_t skt_layouts_made();
 
 // Glyph quads for a layout at (x, y), layout units times `scale`. Glyphs
 // outside the draw list's clip rectangle are skipped before the atlas sees
@@ -31,7 +39,8 @@ const skb_layout_t* skt_layout(const char* utf8, float size);
 void skt_draw_layout(ImDrawList* dl, const skb_layout_t* layout, float x, float y, float scale, uint32_t col);
 void skt_draw_rich_layout(ImDrawList* dl, const skb_rich_layout_t* layout, float x, float y, uint32_t col);
 
-// Once a frame: before the panels (frees atlas items no longer drawn) and
-// after them, before ImGui::Render() (rasterizes new glyphs, queues uploads).
+// Once a frame: before the panels (frees atlas items and layouts no longer
+// drawn) and after them, before ImGui::Render() (rasterizes new glyphs,
+// queues uploads).
 void skt_frame_begin();
 void skt_frame_end();

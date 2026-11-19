@@ -9,14 +9,22 @@
 //      of the table, each frame lays out at most the visible rows' cells and
 //      the header's, and draws the rows in view (the last row at the end).
 //   3. A scroll through the whole table keeps that bound in every frame.
+//   4. The shared layout cache (skt.h) frees the cells scrolled past.
+//   5. A table edit marks the project unsaved: the title has its '*', and
+//      Quit asks first.
+//   6. A click on a table's issue in the issues panel shows the Tables view
+//      with the issue's cell selected and in view.
 //   --bench: PASSES scrolls through the table, 3 rows a frame, timing each
 //   frame (NewFrame to Render); prints the median, p99 and max, cold (the
-//   first pass) and warm. Not a test: run it pinned, on a quiet machine.
+//   first pass) and warm, and skt_frame_begin() alone (the atlas's and the
+//   layout cache's compaction), and the resident memory after each pass.
+//   Not a test: run it pinned, on a quiet machine.
 // Exit 0 on pass, 1 on a failure.
 #include "ui.h"
 #include "views.h"
 #include "view_tables.h"
 #include "skt.h"
+#include "csv.h"
 
 #include "imgui.h"
 #include "imgui_internal.h"
@@ -41,11 +49,16 @@ static double now_s() {
     return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
 }
 
+static double now_s();
+static float begin_ms;   // the last frame's skt_frame_begin(): the caches' compaction
+
 static void frame() {
     ImGuiIO& io = ImGui::GetIO();
     io.DeltaTime = 1.0f / 60.0f;
     ImGui::NewFrame();
+    const double b0 = now_s();
     skt_frame_begin();
+    begin_ms = (float)((now_s() - b0) * 1e3);
     ui_frame();
     skt_frame_end();
     ImGui::Render();
@@ -131,6 +144,24 @@ static void scroll_to(float y) {
     frame();
 }
 
+// Resident memory, MB: the bench reports what a scroll leaves behind (the
+// layout caches). Linux only; -1 elsewhere.
+static double rss_mb() {
+#ifdef __linux__
+    FILE* f = fopen("/proc/self/statm", "r");
+    long pages = 0, res = 0;
+    if (!f) return -1;
+    const int got = fscanf(f, "%ld %ld", &pages, &res);
+    fclose(f);
+    return got == 2 ? (double)res * 4096.0 / (1024.0 * 1024.0) : -1;
+#else
+    return -1;
+#endif
+}
+
+static char title[DSG_PATH_MAX + 64];
+static void set_title(void*, const char* t) { snprintf(title, sizeof title, "%s", t); }
+
 static int cmp_float(const void* a, const void* b) {
     const float x = *(const float*)a, y = *(const float*)b;
     return x < y ? -1 : x > y ? 1 : 0;
@@ -159,6 +190,7 @@ int main(int argc, char** argv) {
     io.DisplaySize = ImVec2(1400, 900);
     io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures | ImGuiBackendFlags_RendererHasVtxOffset;
     UiPlatform plat = {};
+    plat.set_title = set_title;
     if (!ui_init(YSP_DESIGNER_FONT_DIR, &plat, err, sizeof err)) {
         printf("FAIL: ui_init: %s\n", err);
         return 1;
@@ -172,6 +204,7 @@ int main(int argc, char** argv) {
     CHECK(rep && rep->n_errors == 0, "the project checks clean: %d errors", rep ? rep->n_errors : -1);
     for (int i = 0; rep && rep->n_errors && i < rep->n_issues; i++) printf("  issue: %s\n", rep->issues[i].message);
     CHECK(view_tables_grid_window() != nullptr, "the grid drew");
+    if (passes > 0) printf("BENCH opened: resident %.1f MB, %d layouts in the shared cache\n", rss_mb(), skt_layout_count());
 
     // 2. the top, the middle, the end
     int first = -1, last = -1;
@@ -200,8 +233,39 @@ int main(int argc, char** argv) {
     }
     CHECK(worst <= bound, "a scroll of %d frames: at most %d layouts a frame, bound %d", frames, worst, bound);
 
+    // 4. The shared layout cache lets go of the rows scrolled past: 100
+    // frames after their last use (skt.cpp), only the rows in view stay.
+    const int after_scroll = skt_layout_count();
+    const uint64_t made_scroll = skt_layouts_made();
+    for (int i = 0; i < 101; i++) frame();
+    // the evictions of these frames leave every row in view found
+    CHECK(skt_layouts_made() == made_scroll, "the rows in view stay hits while the rest goes: %llu made",
+          (unsigned long long)(skt_layouts_made() - made_scroll));
+    printf("  shared layout cache: %d layouts after the scroll, %d after 101 frames at rest\n", after_scroll,
+           skt_layout_count());
+    CHECK(after_scroll <= 101 * bound + 64, "the scroll keeps at most 101 frames of cells: %d layouts", after_scroll);
+    CHECK(skt_layout_count() <= bound + 64, "at rest, the cache keeps the cells in view: %d layouts, bound %d",
+          skt_layout_count(), bound + 64);
+    // A layout used every frame stays (a hit, not a new layout); the rows
+    // in view are found again after the evictions (the count holds).
+    const skb_layout_t* probe = skt_layout("cache probe", 16.0f);
+    bool kept = probe != nullptr;
+    const uint64_t made0 = skt_layouts_made();
+    for (int i = 0; i < 150; i++) {
+        frame();
+        kept = kept && skt_layout("cache probe", 16.0f) == probe;
+    }
+    const int with_probe = skt_layout_count();
+    CHECK(kept && skt_layouts_made() == made0, "150 frames at rest make no layout (%llu made): each one is a hit",
+          (unsigned long long)(skt_layouts_made() - made0));
+    for (int i = 0; i < 101; i++) frame();
+    CHECK(skt_layout_count() == with_probe - 1, "101 frames unused, it goes: %d layouts, %d before", skt_layout_count(), with_probe);
+    for (int i = 0; i < 20; i++) frame();
+    CHECK(skt_layout_count() == with_probe - 1, "the rows in view are hits: %d layouts after 20 more frames", skt_layout_count());
+
     if (passes > 0) {
-        ImVector<float> cold, warm;
+        ImVector<float> cold, warm, begin;
+        printf("BENCH before the passes: resident %.1f MB, %d layouts in the shared cache\n", rss_mb(), skt_layout_count());
         for (int p = 0; p < passes; p++) {
             ImGui::SetScrollY(view_tables_grid_window(), 0);
             frame();
@@ -211,12 +275,55 @@ int main(int argc, char** argv) {
                 frame();
                 const float ms = (float)((now_s() - t0) * 1e3);
                 (p == 0 ? cold : warm).push_back(ms);
+                begin.push_back(begin_ms);
             }
+            printf("BENCH after pass %d: resident %.1f MB, %d layouts in the shared cache\n", p + 1, rss_mb(), skt_layout_count());
         }
         printf("BENCH 10,000 rows x 8 columns, 3 rows a frame, %d layouts in the last frame\n", view_tables_layouts_last_frame());
         stats("cold", cold);
         if (warm.Size) stats("warm", warm);
+        stats("skt_frame_begin", begin);
     }
+
+    // 5. A cell edit through the document, as the grid's commit makes it,
+    // while the text view shows: the definition does not change.
+    CHECK(ui_show_view("text"), "the text view");
+    frame();
+    dsg_doc* d = ui_doc();
+    const int buf = dsg_doc_find_buffer(d, "big.csv");
+    dsg_csv idx = {};
+    idx.buf = -1;
+    CHECK(buf > 0 && dsg_csv_sync(&idx, d, buf, ',') == 0, "the table's buffer: %d", buf);
+    CHECK(!ui_dirty() && title[0] != '*', "before the edit, saved: '%s'", title);
+    const int row = 5000, col = 2;
+    CHECK(dsg_csv_set_cell(d, &idx, row, col, "l\xFF", 2) == 0, "the edit: %s", idx.error);
+    frame();
+    frame();
+    CHECK(ui_dirty(), "a table edit leaves the project unsaved");
+    CHECK(title[0] == '*', "the title shows it: '%s'", title);
+
+    // 6. The pack tool refuses the byte that is not UTF-8 and names the cell.
+    const dsg_report* r6 = ui_report();
+    int issue = -1;
+    char entry[64];
+    int prow = -2, pcol = -1;
+    for (int i = 0; r6 && i < r6->n_issues; i++)
+        if (dsg_csv_place(r6->issues[i].message, entry, sizeof entry, &prow, &pcol, nullptr, 0) && strcmp(entry, "big.pstb") == 0) issue = i;
+    CHECK(issue >= 0, "the check names a cell of big.pstb");
+    for (int i = 0; issue < 0 && r6 && i < r6->n_issues; i++) printf("  issue: %s\n", r6->issues[i].message);
+    ui_jump_to_issue(issue);
+    const dsg_sel* sel = dsg_doc_selection(d);
+    CHECK(strcmp(ui_main_view(), "tables") == 0, "the issue shows the Tables view: '%s'", ui_main_view());
+    CHECK(sel->buf == buf && sel->row == row && sel->col == col, "the issue's cell is selected: buffer %d, row %d, column %d",
+          sel->buf, sel->row, sel->col);
+    frame();
+    frame();
+    view_tables_rows_last_frame(&first, &last);
+    CHECK(first <= row && row <= last, "the cell is in view: rows %d to %d", first, last);
+
+    // 5, again: Quit asks before it drops the edit.
+    CHECK(!ui_request_quit(), "Quit asks first");
+    dsg_csv_free(&idx);
 
     ui_shutdown();
     ImGui::DestroyContext();

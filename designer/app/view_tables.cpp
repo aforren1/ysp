@@ -16,7 +16,6 @@
 #include "imgui_internal.h"
 
 #include "skribidi/skb_layout.h"
-#include "skribidi/skb_layout_cache.h"
 
 // skb_common.h tests __cplusplus__ (sic), so in C++ too its SKB_LITERAL()
 // makes a C compound literal, which MSVC refuses (C4576). As a C++20
@@ -67,7 +66,6 @@ struct State {
     ImVector<Table*> tables;
     int open = 0;
     bool select_tab = false;
-    skb_layout_cache_t* cache = nullptr;
     ImVector<char> cell;
     // the cell being edited
     SkfField* field = nullptr;
@@ -142,18 +140,11 @@ void on_rename(void*, const char* scope, const char* from, const char* to) {
 
 // --- the layout of a cell's text ------------------------------------------
 
-// The view's own layout cache, compacted each frame: a scroll through
-// 10,000 rows would leave every cell's layout in the shared cache, which
-// never evicts (2.4 KB a layout, docs/designer_ui_probe.md part 2,
-// section 4).
+// The shared cache (skt.h) frees a layout 100 frames after its last use,
+// so a scroll through 10,000 rows keeps only the rows of the last frames.
 const skb_layout_t* layout(const char* utf8, int n) {
-    const skb_attribute_t attrs[] = { skb_attribute_make_font_size(ui_text_size()) };
-    skb_layout_params_t params = {};
-    params.font_collection = skt_fonts();
-    params.layout_width = SKB_SIZE_AUTO;
-    params.layout_height = SKB_SIZE_AUTO;
     T->layouts++;
-    return skb_layout_cache_get_utf8(T->cache, skt_temp(), &params, utf8, n, SKB_ATTRIBUTE_SET_FROM_STATIC_ARRAY(attrs));
+    return skt_layout_n(utf8, n, ui_text_size());
 }
 
 // Right-to-left text starts at the cell's right edge.
@@ -364,13 +355,8 @@ void free_tables() {
 
 // --- hooks -----------------------------------------------------------------
 
-bool init(char* err, size_t cap) {
+bool init(char*, size_t) {
     T = IM_NEW(State)();
-    T->cache = skb_layout_cache_create();
-    if (!T->cache) {
-        snprintf(err, cap, "out of memory for the tables' layout cache");
-        return false;
-    }
     return true;
 }
 
@@ -378,8 +364,6 @@ void shutdown() {
     if (!T) return;
     free_tables();
     if (T->listening) dsg_doc_unlisten(ui_doc(), on_rename, nullptr);
-    dsg_check_use_tables(nullptr);
-    skb_layout_cache_destroy(T->cache);
     IM_DELETE(T);
     T = nullptr;
 }
@@ -391,9 +375,6 @@ void opened(const dsg_view* v) {
     T->generation++;
     read_tables(p);
     read_part(v);
-    // The check builds its pack from these buffers, so it sees an edit
-    // before Save.
-    dsg_check_use_tables(ui_doc());
     // the document keeps its listeners across projects
     if (!T->listening) T->listening = dsg_doc_listen(ui_doc(), on_rename, nullptr) == 0;
     T->sel_rev = dsg_doc_selection_rev(ui_doc());
@@ -402,7 +383,6 @@ void opened(const dsg_view* v) {
 
 void closed() {
     free_tables();
-    dsg_check_use_tables(nullptr);
 }
 
 void save_view(dsg_view* v) {
@@ -453,23 +433,53 @@ void reveal(const dsg_sel* s) {
 
 // --- drawing ---------------------------------------------------------------
 
+// The place in table t that a message names: *row as dsg_csv_place()'s
+// (-2: the whole column), *col by number or by the column's name. t's index
+// is current.
+bool place_in(const Table* t, const char* msg, int* row, int* col) {
+    char entry[256], name[128], h[128];
+    *row = -2;
+    *col = -1;
+    if (!t->entry[0] || !dsg_csv_place(msg, entry, sizeof entry, row, col, name, sizeof name) || strcmp(entry, t->entry) != 0)
+        return false;
+    if (*col < 0 && name[0]) {
+        size_t n = 0;
+        const char* b = table_bytes(t, &n);
+        for (int c = 0; c < t->idx.n_cols; c++)
+            if (dsg_csv_cell(&t->idx, b, -1, c, h, sizeof h) >= 0 && strcmp(h, name) == 0) *col = c;
+    }
+    return true;
+}
+
 // The issues of the last check that name a place in this table.
 void collect_marks(const Table* t) {
     T->marks.resize(0);
     const dsg_report* r = ui_report();
-    if (!r || !t->entry[0]) return;
-    size_t n = 0;
-    const char* b = table_bytes(t, &n);
-    char entry[256], name[128], h[128];
+    if (!r) return;
     for (int i = 0; i < r->n_issues; i++) {
         int row = -2, col = -1;
-        if (!dsg_csv_place(r->issues[i].message, entry, sizeof entry, &row, &col, name, sizeof name) || strcmp(entry, t->entry) != 0) continue;
-        if (col < 0 && name[0])
-            for (int c = 0; c < t->idx.n_cols; c++)
-                if (dsg_csv_cell(&t->idx, b, -1, c, h, sizeof h) >= 0 && strcmp(h, name) == 0) col = c;
+        if (!place_in(t, r->issues[i].message, &row, &col)) continue;
         Mark m = { row, col, i };
         T->marks.push_back(m);
     }
+}
+
+// A click on a table's issue in the issues panel selects its cell, as the
+// view's own list of the table's issues does.
+bool issue_sel(int i, dsg_sel* out) {
+    const dsg_report* r = ui_report();
+    if (!T || !r || i < 0 || i >= r->n_issues) return false;
+    for (Table* t : T->tables) {
+        int row = -2, col = -1;
+        // a workbook is not a buffer, so it has no cell to select
+        if (t->buf <= DSG_BUF_DEF || !sync(t) || !place_in(t, r->issues[i].message, &row, &col)) continue;
+        dsg_sel_none(out);
+        out->buf = t->buf;
+        out->row = row >= -1 ? row : -1;
+        out->col = col;
+        return true;
+    }
+    return false;
 }
 
 bool marked(int row, int col) {
@@ -736,7 +746,6 @@ void draw() {
         return;
     }
     T->layouts = 0;
-    skb_layout_cache_compact(T->cache);
     const int frame = ImGui::GetFrameCount();
     // The view was not drawn: the field had no keys, and its edit ends.
     if (T->field && T->last_frame != frame - 1) commit_edit();
@@ -825,5 +834,5 @@ SkfField* view_tables_field() { return T ? T->field : nullptr; }
 extern const UiView ui_view_tables = {
     "tables", "Tables", UI_SLOT_MAIN,
     init, shutdown, opened, closed, save_view,
-    draw, claims, reveal, nullptr,
+    draw, claims, reveal, nullptr, issue_sel,
 };
