@@ -16,7 +16,13 @@
  *   4. Parts 1 to 3 with the probe's Noto fonts, if the folder has them
  *      (YSP_NOTO_DIR, else YSP_EDITOR_TEST_FONTS), and the arrow from Noto
  *      Sans Symbols; else skipped, with the reason printed.
- * Parts 1 to 3 use fonts written here (tests/adapt/colr_font_build.h): a
+ *   5. Text shaped against its script's direction (patch 0007): each bidi
+ *      control (U+202A to U+202E, U+2066 to U+2069, U+200E, U+200F) before
+ *      and inside Devanagari, Hebrew, Arabic and mixed text, at each base
+ *      direction, gives clusters that hold every codepoint once, laid out
+ *      and typed in the editor. U+202E before U+094D U+200C U+094E gave a
+ *      cluster of no codepoints (an assert in a Debug build).
+ * Parts 1 to 3 and 5 use fonts written here (tests/adapt/colr_font_build.h): a
  * box for each codepoint, 1000 units per em, at 16 px a glyph is 16 px wide.
  * Exit 0 on pass, 1 on a failure.
  */
@@ -305,6 +311,136 @@ static void check_fallback(skb_font_collection_t* fc, const char* tag, skb_font_
     skb_editor_destroy(ed);
 }
 
+/* --- 5: text shaped against its script's direction --------------------------- */
+
+/* 0 when every codepoint of the layout is in exactly one cluster and no
+ * cluster is empty; else 1 + the first offset that fails (1000 + a run with
+ * no clusters). The caret, hit test and selection functions, and the glue's
+ * glyph-to-text map, read the clusters' text ranges. */
+static int tiling_fault(const skb_layout_t* lay) {
+    static unsigned char seen[256];
+    const skb_layout_run_t* runs = skb_layout_get_layout_runs(lay);
+    const skb_cluster_t* clusters = skb_layout_get_clusters(lay);
+    const int nr = skb_layout_get_layout_runs_count(lay), nt = skb_layout_get_text_count(lay);
+    int r, c, k;
+    if (nt > (int)sizeof seen) return -1;
+    memset(seen, 0, sizeof seen);
+    for (r = 0; r < nr; r++) {
+        if (runs[r].type != SKB_CONTENT_RUN_UTF8 && runs[r].type != SKB_CONTENT_RUN_UTF32) continue;
+        if (runs[r].cluster_range.start >= runs[r].cluster_range.end) return 1000 + r;
+        for (c = runs[r].cluster_range.start; c < runs[r].cluster_range.end; c++) {
+            const int s = clusters[c].text_offset, n = clusters[c].text_count;
+            if (n <= 0 || s < 0 || s + n > nt) return 1 + (s > 0 ? s : 0);
+            for (k = s; k < s + n; k++)
+                if (seen[k]++) return 1 + k;
+        }
+    }
+    for (k = 0; k < nt; k++)
+        if (!seen[k]) return 1 + k;
+    return 0;
+}
+
+static void hex_of(const uint32_t* t, int n, char* out, size_t cap) {
+    size_t at = 0;
+    int i;
+    out[0] = 0;
+    for (i = 0; i < n && at + 8 < cap; i++) at += (size_t)snprintf(out + at, cap - at, "%s%04X", i ? " " : "", (unsigned)t[i]);
+}
+
+/* With these fonts (no U+25CC, so HarfBuzz puts in no dotted circle),
+ * U+094D U+200C U+094E after U+202E got the clusters 1, 0, 1 from HarfBuzz,
+ * and Skribidi gave a cluster a negative text range: an assert in a Debug
+ * build, a cluster of no codepoints in a Release one (Skribidi patch 0007).
+ * Each bidi control, before and inside each text, at each base direction. */
+static void check_override(skb_font_collection_t* fc) {
+    static const uint32_t controls[11] = { 0x202A, 0x202B, 0x202C, 0x202D, 0x202E, 0x2066, 0x2067, 0x2068, 0x2069, 0x200E, 0x200F };
+    static const uint32_t texts[6][8] = {
+        { 0x094D, 0x200C, 0x094E },                             /* virama ZWNJ, then a pre-base vowel sign */
+        { 0x0915, 0x094D, 0x200C, 0x094E },                     /* the same after ka */
+        { 0x0928, 0x092E, 0x0938, 0x094D, 0x0924, 0x0947 },     /* "namaste" */
+        { 0x05E9, 0x05DC, 0x05D5, 0x05DD },                     /* Hebrew "shalom" */
+        { 0x0645, 0x0631, 0x062D, 0x0628, 0x0627 },             /* Arabic "marhaba" */
+        { 'a', ' ', 0x094D, 0x200C, 0x094E, ' ', 0x05D0, '1' }, /* mixed */
+    };
+    static const int text_n[6] = { 3, 4, 6, 4, 5, 8 };
+    static const skb_text_direction_t dirs[3] = { SKB_DIRECTION_AUTO, SKB_DIRECTION_LTR, SKB_DIRECTION_RTL };
+    uint32_t t[16];
+    char hex[160];
+    int x, c, at, d, n, bad = 0, laid = 0;
+    for (x = 0; x < 6; x++)
+        for (c = -1; c < 11; c++)
+            for (at = 0; at < (c < 0 ? 1 : 2); at++)   /* before the text, after its first codepoint */
+                for (d = 0; d < 3; d++) {
+                    skb_attribute_t la[1], ta[1];
+                    skb_layout_params_t p;
+                    skb_layout_t* lay;
+                    int f;
+                    n = 0;
+                    if (c >= 0 && at == 0) t[n++] = controls[c];
+                    t[n++] = texts[x][0];
+                    if (c >= 0 && at == 1) t[n++] = controls[c];
+                    memcpy(t + n, texts[x] + 1, (size_t)(text_n[x] - 1) * sizeof t[0]);
+                    n += text_n[x] - 1;
+                    la[0] = skb_attribute_make_text_base_direction(dirs[d]);
+                    ta[0] = skb_attribute_make_font_size(SIZE);
+                    memset(&p, 0, sizeof p);
+                    p.font_collection = fc;
+                    p.layout_width = -1.0f;
+                    p.layout_height = -1.0f;
+                    p.layout_attributes = (skb_attribute_set_t){ la, 1, 0, NULL };
+                    lay = skb_layout_create_utf32(temp, &p, t, n, (skb_attribute_set_t){ ta, 1, 0, NULL });
+                    f = tiling_fault(lay);
+                    /* The box fonts have no ligatures, so Hebrew and Arabic
+                     * keep a cluster per codepoint: no merge where HarfBuzz
+                     * gave the clusters in order. */
+                    if (!f && (x == 3 || x == 4) && skb_layout_get_clusters_count(lay) != n) f = -2;
+                    /* The fault: the Devanagari is one cluster of 3 codepoints
+                     * and 3 glyphs, and the override another. */
+                    if (!f && x == 0 && c == 4 && at == 0) {
+                        const skb_cluster_t* cl = skb_layout_get_clusters(lay);
+                        const int nc = skb_layout_get_clusters_count(lay);
+                        int k, ok = nc == 2;
+                        for (k = 0; k < nc && ok; k++)
+                            ok = cl[k].text_offset == 0 ? cl[k].text_count == 1 : cl[k].text_offset == 1 && cl[k].text_count == 3 && cl[k].glyphs_count == 3;
+                        if (!ok) f = -3;
+                    }
+                    laid++;
+                    if (f && bad++ < 4) {
+                        hex_of(t, n, hex, sizeof hex);
+                        CHECK(0, "override: %s, base direction %d: %s (fault %d)", hex, (int)dirs[d],
+                              f == -2 ? "a cluster of more than one codepoint" : f == -3 ? "not the clusters [202E] [094D 200C 094E]" : "the clusters do not tile the text", f);
+                    }
+                    skb_layout_destroy(lay);
+                }
+    CHECK(bad == 0, "override: %d of %d layouts have clusters that do not tile the text, or not the ones expected", bad, laid);
+
+    /* The editor's path: typed, the caret moved through it, removed. */
+    {
+        static const uint32_t typed[6] = { 0x202E, 0x094D, 0x200C, 0x094E, ' ', 0x0915 };
+        skb_editor_t* ed = editor_make(fc);
+        int k, f, faults = 0, first = 0, off;
+        for (k = 0; k < 6; k++) {
+            skb_editor_insert_codepoint(ed, temp, SKB_CURRENT_SELECTION, typed[k]);
+            if ((f = tiling_fault(layout_of(ed))) != 0 && !faults++) first = f;
+        }
+        for (k = 0; k < 8; k++) {
+            skb_editor_process_key_pressed(ed, temp, SKB_KEY_LEFT, 0);
+            off = skb_editor_get_text_offset_from_text_position(ed, skb_editor_get_current_selection(ed).end);
+            CHECK(off >= 0 && off <= 6, "override: after %d Left the caret is at offset %d of 6", k + 1, off);
+        }
+        for (k = 0; k < 8; k++) skb_editor_process_key_pressed(ed, temp, SKB_KEY_END, 0);
+        off = skb_editor_get_text_offset_from_text_position(ed, skb_editor_get_current_selection(ed).end);
+        CHECK(off == 6, "override: after End the caret is at offset %d of 6", off);
+        for (k = 0; k < 8 && text_of(ed, t, 16) > 0; k++) {
+            skb_editor_process_key_pressed(ed, temp, SKB_KEY_BACKSPACE, 0);
+            if ((f = tiling_fault(layout_of(ed))) != 0 && !faults++) first = f;
+        }
+        CHECK(faults == 0, "override: typed and removed in the editor, %d layouts do not tile the text (the first fault %d)", faults, first);
+        CHECK(text_of(ed, t, 16) == 0, "override: 8 Backspace from the end left text");
+        skb_editor_destroy(ed);
+    }
+}
+
 /* --- 4: the probe's fonts ---------------------------------------------------- */
 
 static int file_exists(const char* path) {
@@ -346,7 +482,7 @@ static void check_noto(void) {
 }
 
 int main(void) {
-    static cfb_buf deva, latin, hebrew, arabic, arrows;
+    static cfb_buf deva, latin, hebrew, arabic, arrows, deva5;
     uint32_t cps[64];
     int n;
     skb_font_collection_t* fc;
@@ -376,11 +512,22 @@ int main(void) {
     check_fallback(fc, "box", h_latin, h_arrow);
     skb_font_collection_destroy(fc);
 
+    /* 5. The fonts of part 3, and Devanagari with ka and the pre-base vowel
+     * sign U+094E. */
+    memcpy(cps, namaste, sizeof namaste);
+    n = NAMASTE_N; cps[n++] = 0x0915; cps[n++] = 0x094E;
+    box_font(&deva5, cps, n);
+    fc = skb_font_collection_create();
+    CHECK(add_font(fc, "latin", &latin) != 0 && add_font(fc, "deva", &deva5) != 0 && add_font(fc, "arabic", &arabic) != 0 &&
+          add_font(fc, "hebrew", &hebrew) != 0, "a box font did not open");
+    check_override(fc);
+    skb_font_collection_destroy(fc);
+
     /* 4 */
     check_noto();
 
     skb_temp_alloc_destroy(temp);
-    free(deva.d); free(latin.d); free(hebrew.d); free(arabic.d); free(arrows.d);
+    free(deva.d); free(latin.d); free(hebrew.d); free(arabic.d); free(arrows.d); free(deva5.d);
     printf("%s: %d checks, %d failures\n", failures ? "FAIL" : "ok", checks, failures);
     return failures ? 1 : 0;
 }

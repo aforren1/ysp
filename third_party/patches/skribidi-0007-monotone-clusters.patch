@@ -1,0 +1,92 @@
+Subject: [PATCH] layout: merge clusters that HarfBuzz gives out of order
+
+skb__shape_run() takes the text range of each cluster from the cluster
+values of the glyphs next to it, and so assumes that the values are
+monotone in the run's direction (descending in RTL). HarfBuzz shapes
+text against its script's direction, such as Devanagari after U+202E
+RIGHT-TO-LEFT OVERRIDE, by reversing the graphemes, shaping in the
+script's direction and reversing back (hb_ensure_native_direction()).
+When the shaper's reordering moves a glyph across two of those graphemes,
+the values come back out of order: U+202E U+094D U+200C U+094E with a font
+that has no U+25CC (so no dotted circle goes in) gives the RTL run the
+values 2, 1, 2 (HarfBuzz 14.6.0).
+
+- Debug build: assert(text_end >= text_start) in skb__shape_run() fails.
+- Release build: a cluster gets a text count of 0 (clamped from a
+  negative one), so its glyph maps to no codepoint, carets and hit tests
+  are wrong there, and code that reads the last codepoint of a cluster
+  (text_offset + text_count - 1) reads the one before the cluster.
+
+skb__merge_non_monotone_clusters() runs on HarfBuzz's output before the
+cluster loop. When the values are in order (one pass, no allocation) it
+does nothing. Else it merges the glyphs into the fewest clusters whose
+values are monotone in the run's direction, each with the lowest value
+in it, as HarfBuzz merges clusters: the case above becomes one cluster
+of U+094D U+200C U+094E with its 3 glyphs. Runs whose values are in
+order give the same clusters as before.
+
+Recorded in ysp's docs/layout.md (Known issues). Applies to skribidi
+dee63d6 after skribidi-0001 to skribidi-0006.
+
+diff --git a/src/skb_layout.c b/src/skb_layout.c
+--- a/src/skb_layout.c
++++ b/src/skb_layout.c
+@@ -644,6 +644,48 @@ static void skb__collect_font_features(const skb_attribute_set_t attributes, con
+ 		skb__add_font_feature(features, features_count, results[i]->font_feature.tag, results[i]->font_feature.value);
+ }
+ 
++// HarfBuzz shapes text against its script's direction (Devanagari after U+202E RIGHT-TO-LEFT OVERRIDE) by
++// reversing its graphemes, shaping in the script's direction and reversing back. A reordering of the shaper
++// that crosses two of those graphemes leaves the cluster values out of order: U+094D U+200C U+094E in RTL gives
++// the clusters 1, 0, 1 with a font that has no U+25CC (so no dotted circle goes in). skb__shape_run() takes a
++// cluster's text range from its neighbors' values, and such a cluster got a negative range.
++// The glyphs are merged into the fewest clusters whose values are monotone in the run's direction, each with
++// its lowest value, as HarfBuzz merges clusters. Allocates only when the values are out of order.
++static void skb__merge_non_monotone_clusters(skb_temp_alloc_t* temp_alloc, hb_glyph_info_t* info, int32_t count, bool rtl)
++{
++	int32_t first_bad = 1;
++	while (first_bad < count && (rtl ? info[first_bad].cluster <= info[first_bad-1].cluster : info[first_bad].cluster >= info[first_bad-1].cluster))
++		first_bad++;
++	if (first_bad >= count)
++		return;
++
++	// Glyphs i-1 and i can be in separate clusters only if every value before i is past (RTL: above, LTR: below)
++	// every value from i on.
++	uint32_t* suffix = SKB_TEMP_ALLOC(temp_alloc, uint32_t, count);
++	suffix[count-1] = info[count-1].cluster;
++	for (int32_t i = count - 2; i >= 0; i--)
++		suffix[i] = rtl ? skb_maxu(suffix[i+1], info[i].cluster) : skb_minu(suffix[i+1], info[i].cluster);
++
++	int32_t group_start = 0;
++	uint32_t group_min = info[0].cluster;
++	uint32_t prefix = info[0].cluster;
++	for (int32_t i = 1; i <= count; i++) {
++		if (i == count || (rtl ? prefix > suffix[i] : prefix < suffix[i])) {
++			for (int32_t j = group_start; j < i; j++)
++				info[j].cluster = group_min;
++			if (i == count)
++				break;
++			group_start = i;
++			group_min = info[i].cluster;
++		} else {
++			group_min = skb_minu(group_min, info[i].cluster);
++		}
++		prefix = rtl ? skb_minu(prefix, info[i].cluster) : skb_maxu(prefix, info[i].cluster);
++	}
++
++	SKB_TEMP_FREE(temp_alloc, suffix);
++}
++
+ static void skb__shape_run(
+ 	skb__layout_build_context_t* build_context,
+ 	skb_layout_t* layout,
+@@ -723,7 +765,8 @@ static void skb__shape_run(
+ 	hb_shape(font->hb_font, buffer, features, features_count);
+ 
+ 	const int32_t glyph_count = (int32_t)hb_buffer_get_length(buffer);
+-	const hb_glyph_info_t* glyph_info = hb_buffer_get_glyph_infos(buffer, NULL);
++	hb_glyph_info_t* glyph_info = hb_buffer_get_glyph_infos(buffer, NULL);
++	skb__merge_non_monotone_clusters(build_context->temp_alloc, glyph_info, glyph_count, skb_is_rtl(shaping_run->direction));
+ 	const hb_glyph_position_t* glyph_pos = hb_buffer_get_glyph_positions(buffer, NULL);
+ 
+ 	// Get info about regular space character, we'll use it for control characters.
