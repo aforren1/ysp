@@ -130,6 +130,9 @@ int main(int argc, char** argv) {
     io.IniFilename = nullptr;
     io.DisplaySize = ImVec2(1400, 900);
     io.ConfigInputTextCursorBlink = false;
+    // On macOS AddKeyEvent() swaps Ctrl and Cmd, so the made-up Ctrl+Z and
+    // Ctrl+S below would not set io.KeyCtrl there. One key map on every OS.
+    io.ConfigMacOSXBehaviors = false;
     io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures | ImGuiBackendFlags_RendererHasVtxOffset;
     UiPlatform plat = { nullptr, no_dialog, on_title, nullptr };
     if (!ui_init(YSP_DESIGNER_FONT_DIR, &plat, err, sizeof err)) {

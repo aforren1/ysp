@@ -12,6 +12,12 @@
 #include "skribidi/skb_rasterizer.h"
 #include "skribidi/skb_rich_layout.h"
 
+// skb_common.h tests __cplusplus__ (sic), so in C++ too its SKB_LITERAL()
+// makes a C compound literal, which MSVC refuses (C4576). As a C++20
+// designated initializer it is the same value.
+#undef SKB_LITERAL
+#define SKB_LITERAL(type) type
+
 #include "dsg.h"
 
 #include <stdio.h>

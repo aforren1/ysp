@@ -320,8 +320,8 @@ int dsg_project_create(const char* folder, char* err, size_t cap) {
     yjs_arena a;
     yexp_def* d = NULL;
     yexp_report* r;
-    const char* bytes;
-    size_t n;
+    const char* bytes = NULL;   /* MSVC C4701: set only when the load is, and read only then */
+    size_t n = 0;
     int rc;
     if (join(desc, sizeof desc, folder, DSG_DESC_FILE) || join(def, sizeof def, folder, "experiment.json"))
         return fail(err, cap, "'%s': the path is too long", folder);
