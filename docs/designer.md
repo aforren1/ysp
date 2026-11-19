@@ -3,9 +3,10 @@
 Status: the skeleton is built (step 3 of "Order of work", 2026-11-18, branch
 `designer-skeleton`): a window, open and save of a project, the player's
 check on each change with its refusals linked to their places in the
-text, and redraw on input only. Step 4 is planned, and its shared code is
-built (2026-11-19, branch `designer-step4`, "Plan of step 4"). Steps 5 to
-7 are not started. This document
+text, and redraw on input only. Step 4 is partly done (2026-11-19,
+branch `designer-step4`): the state chart, the tables and the property
+panels are built and merged, and the items left are in "The
+integration". Steps 5 to 7 are not started. This document
 gives the designer's decisions, its first version's scope, its architecture
 and its order of work. [rig_spec.md](rig_spec.md) section 7 gives the
 designer's place in the rig. The measurements behind the UI decision are
@@ -374,7 +375,8 @@ Release).
   no set members.
 - `view_panels.cpp` calls `ui_show_view()`, `ui_editor()` and
   `ui_jump_to_issue()` from `ui.h` (to open the text view at a key and to
-  go to an issue), which `views.h` does not list for a view.
+  go to an issue). `views.h` did not list them for a view; it does since
+  the integration.
 - Prerequisites P1 and P2 did not block anything. Without P1, `schema.h`
   mirrors the type enum and the row flags, and the test checks the mirror
   where the rows show it. Without P2, a key that only the format has shows
@@ -609,10 +611,10 @@ Remove column.
 visible rows, and a column scrolled out of view lays out nothing. Each
 cell's text is a Skribidi layout, drawn as in the issues panel;
 right-to-left text starts at the cell's right edge.
-- The view has its own layout cache, compacted once a frame. The shared
-  cache (`skt_layout()`) never evicts, and a layout takes about 2.4 KB
-  (docs/designer_ui_probe.md, part 2, section 4): a scroll through 10,000
-  rows of 8 columns would keep about 190 MB.
+- The cells' layouts come from the shared cache (`skt_layout_n()`), which
+  frees a layout 100 frames after its last use ("The layout cache"). Part
+  B built the view with a cache of its own, because the shared one did not
+  evict then; the integration removed it.
 - At 10,000 rows with the window of the tests (1400 x 900 px), a frame lays
   out 126 to 133 cells (at most 17 or 18 rows and the header).
 
@@ -625,8 +627,8 @@ column moves.
 
 **The check sees unsaved tables.** Before step 4, the check pack came
 from the tables on disk, so a table edit was checked only after Save.
-- The tables view gives the check the document (`dsg_check_use_tables()`,
-  csv.h). Each build writes each dirty table's bytes to
+- `ui.cpp` gives the check the document (`dsg_check()`'s argument
+  `tables`). Each build writes each dirty table's bytes to
   `.designer/check/tableN.csv` (N is the buffer) and sets that resource's
   `source` in the check description to it. A clean table comes from its
   file.
@@ -636,9 +638,10 @@ from the tables on disk, so a table edit was checked only after Save.
   built is of those bytes.
 - A failed build is not tried again for the same text and the same table
   revisions.
-- `dsg_check()`'s signature is in `dsg.h`, which is shared, so the
-  document reaches it through a call in csv.h that keeps one document for
-  the process. pl_check() keeps one static scratch for the process too.
+- Part B could not change `dsg_check()`'s signature (`dsg.h` was
+  shared), so its check read one document for the process, set by the
+  tables view. The integration made the document an argument and deleted
+  that global.
 
 **Errors in cells.** The pack tool names a table's error as `'ENTRY':
 ysp_table: line L, row R, column 'NAME' (C): ...`; the player and the
@@ -708,23 +711,143 @@ project; Add row adds an empty row at the end (`tables/*`).
 
 **Not done.**
 - No person used the view: the window was not opened.
-- `test_designer_table_ui` is not in `designer/CMakeLists.txt`, which is
-  shared during step 4: its lines go in at the merge. It was built and run
-  against the build tree's libraries.
-- A click on a table's issue in the Issues panel does not select the
-  cell. `ui_jump_to_issue()` selects only a path in the definition, and
-  `ui.cpp` is shared. The view's own list of the table's issues does.
-- A table edit does not mark the project unsaved in the window: `ui.cpp`
-  sets its unsaved flag only when the definition changes (`sync_editor()`
-  returns early otherwise). So the title shows no `*` and Open or Quit
-  does not ask after a table edit. Save writes the table.
-- The cell's field lays out its text 200 px wide (`skf_create()`), so in
-  a wider cell the text scrolls inside 200 px. Part C owns `skf.cpp`.
+- Four items of this list were fixed at the integration ("The
+  integration"): `test_designer_table_ui` is in `designer/CMakeLists.txt`;
+  a click on a table's issue in the Issues panel selects its cell; a table
+  edit marks the project unsaved; and the cell's field lays out its text
+  at the cell's width, not at 200 px (part C's change to `skf.cpp`; read
+  in the code, not seen in a window).
 - An Excel source was not opened in a test: the repository has no
   workbook fixture.
 - An edit open while another main view shows ends at the next frame that
   draws the tables; until then Ctrl+Z is the field's.
 - IME composition in a cell, MSVC and macOS builds, ASan and UBSan runs.
+
+#### The layout cache
+
+Built at the integration (2026-11-19). `skt_layout()` and `skt_layout_n()`
+(`designer/app/skt.cpp`) keep one Skribidi layout for each text and size,
+for the issues panel, the chart and the tables. `skt_frame_begin()` frees
+each layout that was not used for 100 frames.
+
+- **Why not Skribidi's cache.** `skb_layout_cache_compact()` (skribidi
+  `dee63d6ba76a`, the designer's rasterizer commit) removes an evicted
+  entry from its table and does not call `skb_layout_destroy()`. So the
+  memory of each evicted layout stays allocated: row A of the table below.
+- **How.** A hash table (open addressing, linear probing, at most half
+  full, removal by backward shift, so no tombstones) keyed by an FNV-1a
+  hash of the text and the size; each entry keeps its text, so two texts
+  with one hash are two entries. A list keeps the entries from the most
+  recently used to the least. The compaction walks the list from its
+  least recent end and stops at the first entry still in use, so a frame
+  pays only for what it frees.
+- **100 frames** is Skribidi's own value. The designer draws on input
+  only, so 100 frames are 100 inputs or animation frames, not a time. A
+  layout stays valid until the next `skt_frame_begin()` at least; a view
+  keeps no layout across frames.
+
+**Measured.** `test_designer_table_ui WORK --bench 3`: the 10,000-row,
+8-column table of the test, opened, scrolled as the test does, then
+scrolled through 3 times at 3 rows a frame (3,328 frames a pass). Linux
+desktop, Intel Core i5-14500, gcc 12.2, Release, pinned to CPU 2 (a
+P-core), under the measuring lock, load average 0.95 over the last minute
+(`uptime`), two runs. Resident memory in MB (`/proc/self/statm`); frames
+in ms, median and p99, of run 1. Run 2 was within 0.2 MB and 0.002 ms at
+the median.
+
+| Cells' layouts | After open | Before the passes | After pass 1 | After pass 3 | Layouts after pass 3 | Frame, pass 1 | Frame, passes 2 and 3 |
+|---|---|---|---|---|---|---|---|
+| A: the tables view's own cache (Skribidi's), as part B built it | 29.2 | 50.9 | 91.5 | 172.6 | not counted | 0.112, 0.126 | 0.112, 0.124 |
+| B: the shared cache with no eviction | 29.4 | 51.9 | 70.3 | 70.3 | 20,015 | 0.092, 0.116 | 0.080, 0.088 |
+| C: the shared cache with eviction (built) | 29.3 | 35.2 | 35.2 | 35.2 | 653 | 0.103, 0.113 | 0.103, 0.115 |
+
+- A keeps 40.6 MB more after each pass: the leak. B is bounded only by
+  the table's distinct texts: this table has about 20,000 (its labels and row
+  numbers are unique; its other columns repeat), about 2 KB a layout. A
+  table of 80,000 distinct cells would keep about 160 MB. C keeps the
+  rows of the last 100 frames.
+- The compaction: `skt_frame_begin()` (the atlas's compaction and the
+  layouts' eviction) took 0.001 ms median, 0.001 ms p99 and 0.29 ms in
+  the worst of 9,984 frames with eviction (C), against 0.000 ms median,
+  p99 and worst with none (B). A scroll at 3 rows a frame frees about 24
+  layouts a frame.
+- C's frames cost 0.01 to 0.02 ms more than B's: B's passes found most
+  layouts in the cache (the test's own scroll had made 11,400 of them
+  before pass 1), and C makes again what it freed. C costs 0.009 ms a
+  frame less than A.
+- **Decision:** the tables view has no cache of its own. It uses the
+  shared one, which costs less a frame than the view's own (A) and keeps
+  no memory after a scroll.
+
+#### The integration
+
+The three parts were merged on `designer-step4` on 2026-11-19, in the
+order panels (C), chart (A), tables (B), each with `git merge --no-ff`.
+
+- **Conflicts:** only `docs/designer.md` (each part added a "Decisions of
+  step 4" heading: one heading is kept, with the parts in the order
+  panels, chart, tables) and `docs/status.md` (all entries kept). The
+  Test Engine's registration lists did not conflict: each part registers
+  its tests in its own file.
+- **CMake:** `bench_designer_chart` (not a test; not on Windows),
+  `test_designer_table_ui` (with `dsg_test()`), and `view_tables.h` in the
+  UI sources.
+- After each merge, `ctest -R designer` passed with the Test Engine ON:
+  7, 7 and 8 tests, and 15, 19 and 23 tests in `test_designer_te`.
+- `bench_designer_chart` after the merges, with the panels in the side
+  column (as in "The chart": CPU 2, 1,000 frames, two runs; load average
+  0.80): `v2_retry` 24.6 us for `draw()` and 41.1 us for the whole frame;
+  200 states at zoom 1, 192.2 and 207.1 us (medians of run 1; run 2 within
+  2 %). These are at or below the part's own numbers.
+
+**Fixes of shared code that the parts asked for.** The shared files were
+frozen for the parts, so each part reported its need and the integration
+made the change. Each fix has a test that failed without it, and hand
+mutants that fail the test (reverted; not in a mutation list).
+
+| Fix | Change | The test, and its run without the fix | Hand mutants killed |
+|---|---|---|---|
+| A table edit marks the project unsaved | `ui.cpp` reads the unsaved state again when `dsg_doc_revision()` (any buffer) moves: after the views draw (before the title), and in Open, New, Quit and `ui_dirty()`. Before, only a change of the definition did, so after a table edit the title had no `*` and Open and Quit did not ask. | `test_designer_table_ui` part 5: a cell edit; `ui_dirty()`, the `*` in the title, Quit asks. Without the fix (`refresh_dirty()` empty), 3 checks failed. | No refresh before the title (1 check failed) |
+| A click on a table's issue in the Issues panel selects its cell | A view hook, `issue_sel` (`views.h`): the selection that an issue names in the view's own data. `ui_jump_to_issue()` takes the first view's answer before the issue's path in the definition, and reveals it (claims, then `reveal`). The tables view answers for a CSV table's cell, row or column. | `test_designer_table_ui` part 6: a byte that is not UTF-8 in row 5,000; the jump to its issue shows the Tables view with the cell selected and in view. Without the fix (no view asked), 2 checks failed: the text view stayed, and rows 9,960 to 9,976 showed. | The answer selected but not revealed (2) |
+| The check takes the document | `dsg_check()` has an argument `tables`, the document whose table buffers it builds from (NULL: the tables on disk). `dsg_check_use_tables()` and its process-wide pointer are deleted. | `test_designer_table`, two documents: two copies of a project, each with its document and checker, one with an unsaved edit; each check reads its own document. Ported to the old call (the pointer set when a project opens, as the tables view did) and run on the merge commit `94657e4`: 2 checks failed, the edited project's check read the other's tables. | The pack's key without the document (3); the check description without it (4); `ui.cpp` gives NULL (3) |
+| The shared layout cache evicts | "The layout cache", above | `test_designer_table_ui` part 4: after a scroll through the table and 101 frames at rest, the cache keeps the cells in view; the rows in view stay hits while the rest goes; a layout used each frame is never made again; one unused for 101 frames goes. Without eviction, 3 checks failed (11,399 layouts at rest). | A hit that does not renew its frame (1); a removal that leaves a hole in the table (1); a hit that keeps its place in the list (3) |
+| `views.h` says what a view may call | `views.h` lists the three calls of `ui.h` that the panels make: `ui_show_view()`, `ui_editor()` and `ui_jump_to_issue()`. | A comment: no test. | - |
+
+**Verified on the integrated branch** (Linux desktop, gcc 12.2):
+- The vendored sources match their hashes (`tools/vendor_layout.py`,
+  `tools/vendor_pack.py`, `tools/vendor_designer.py --test-engine`).
+- A clean configure and a build of every target, with
+  `YSP_BUILD_EXAMPLES=ON`: 628 steps with `YSP_DESIGNER_TEST_ENGINE` ON
+  and 603 with it OFF, Release, no compiler warning.
+- `ctest` from the build tree with `DISPLAY` and `WAYLAND_DISPLAY` unset:
+  138 of 138 passed with the Test Engine ON and 137 of 137 with it OFF
+  (8 and 7 designer tests). `test_designer_te` passed 23 of 23 tests.
+- ASan and UBSan (Debug, built and run under `setarch -R`):
+  `test_designer_core` (82 checks), `_doc` (115), `_chart` (159), `_table`
+  (241), `_panels` (207), `_ui` (39) and `_table_ui` (33) passed with leak
+  checks on and no report; `test_designer_te` (23 tests) passed with leak
+  checks off and no report. With the tables view's old cache (row A
+  above), LeakSanitizer reported 22.2 MB in 113,600 allocations from
+  `skb_layout_cache_get_utf8()`.
+- `-Wconversion -Wsign-conversion` on the 22 designer sources and tests of
+  step 4 (`designer/core`, `designer/app`, their tests): no warning, after
+  one cast in `skt_frame_end()` (a line of step 3).
+
+**Not done.**
+- No person opened the window: nobody used the chart, the tables, the
+  panels or the fixes above.
+- No Excel workbook fixture: an `.xlsx` source was not opened in a test.
+- The panels add and remove no list items (a state, a step, an exit) and
+  no set members.
+- Variables have no candidate lists: `if` and `unless` are text fields.
+- The chart does not cull shapes off the canvas; at 200 states, zoom 1
+  costs as much as zoom 0.25.
+- IME composition in a table cell is not tested.
+- The Windows (MSVC) and macOS builds were not compiled here; CI's job
+  `designer` builds `designer_tests` on both and has not run on this
+  branch.
+- The Test Engine ran in its fast mode only.
+- Prerequisites P1 and P2 (ysp/experiment.h) are not made.
 
 ## First version
 
@@ -865,17 +988,19 @@ ysp_designer (C++, Dear ImGui, SDL3, GL ES 3.0)
    - Planned 2026-11-19 (branch `designer-step4`): "Plan of step 4",
      below. The document that every view edits, the view registry and the
      view file's parts are built; the three parts are stubs.
+   - Partly done 2026-11-19 (branch `designer-step4`): parts A, B and C
+     are built and merged ("Decisions of step 4"). The items left are in
+     "The integration", "Not done".
 5. The preview.
 6. Build and Run.
 7. The web build, with the text glue.
 
 ## Plan of step 4
 
-Status: planned 2026-11-19 on branch `designer-step4`. The shared code
-(the document, the view registry, the view file's parts and their tests)
-is built and tested. Parts A (the chart), B (the tables) and C (the
-panels) are stubs that build, so three workers can build them at the same
-time. This section gives the model that all three parts edit, the shared
+Status: planned 2026-11-19 on branch `designer-step4`, and built the same
+day: parts A (the chart), B (the tables) and C (the panels) are merged,
+with the shared fixes that they asked for ("The integration"). This
+section gives the model that all three parts edit, the shared
 interfaces, the files that each part owns, the tests, the order of
 merges and the risks.
 
@@ -1017,10 +1142,12 @@ an id (its part key), a label (the switch's label and its child window's
 name, so a test finds it as `//##designer/LABEL`), a slot (the main area
 or the side column) and hooks, each optional: `init`, `shutdown`,
 `opened`, `closed`, `save_view`, `draw`, `claims`, `reveal`,
-`animating`. `views.cpp` lists the three step 4 views already, so no part
-edits it. A view may call `ui_doc()`, `ui_project()`, `ui_report()`,
-`ui_issue_path()`, `ui_reveal()`, `ui_set_status()` and
-`ui_text_size()`.
+`animating`, and `issue_sel` (added at the integration: the cell that a
+table's issue names). `views.cpp` lists the three step 4 views already, so
+no part edits it. A view may call `ui_doc()`, `ui_project()`,
+`ui_report()`, `ui_issue_path()`, `ui_reveal()`, `ui_set_status()` and
+`ui_text_size()`, and from `ui.h` `ui_show_view()`, `ui_editor()` and
+`ui_jump_to_issue()` (added at the integration: the panels use them).
 
 `designer/app/ui.cpp` (shared, built): the toolbar with Undo and Redo,
 the switch (Text, Chart, Tables), the main view's child window, the side
@@ -1178,8 +1305,7 @@ uv run --no-project python tools/vendor_designer.py --write
 cmake -B build/designer -DCMAKE_BUILD_TYPE=Release -DYSP_BUILD_DESIGNER=ON -DYSP_BUILD_PLAYER=ON \
       -DYSP_BUILD_PACK=ON -DYSP_BUILD_LAYOUT=ON -DYSP_FETCH_MINIAUDIO=ON -DYSP_FETCH_PL_MPEG=ON \
       -DCMAKE_PREFIX_PATH=/path/to/sdl3
-cmake --build build/designer --target ysp_designer test_designer_core test_designer_ui test_designer_doc \
-      test_designer_chart test_designer_table test_designer_panels
+cmake --build build/designer --target ysp_designer designer_tests
 ctest --test-dir build/designer -R designer
 cp -r tests/player/rdk /tmp/rdk_project
 build/designer/designer/ysp_designer /tmp/rdk_project
@@ -1192,9 +1318,10 @@ repository's: Save and the check pack write into the folder. On Windows
 and macOS, set `YSP_DESIGNER_FONTS` to fonts of that system, for example
 `C:/Windows/Fonts/arial.ttf`.
 
-CI: the job `designer` in `.github/workflows/ci.yml` builds
-`test_designer_core`, `test_designer_ui` and `test_designer_te` on Linux,
-Windows (MSVC) and macOS, and runs them with `ctest -R designer`. On Linux
+CI: the job `designer` in `.github/workflows/ci.yml` builds the target
+`designer_tests` (every designer test; each registers itself with
+`dsg_test()` in `designer/CMakeLists.txt`) on Linux, Windows (MSVC) and
+macOS, and runs them with `ctest -R designer`. On Linux
 it also builds `ysp_designer` and does not run it. Each OS gives its own
 fonts to `YSP_DESIGNER_FONTS` and `YSP_DESIGNER_TEST_FONT`.
 
@@ -1270,13 +1397,14 @@ ctest --test-dir build/designer -R test_designer_te
 | `path_field` | The folder dialog fails. The path field takes the keyboard. The engine types the path and Enter with no click, and the project opens. | `ui_dialog_failed()` does not give the path field the focus. |
 | `edit_jump` | The engine opens a project through the path field and clicks Discard on the question. Its Ctrl+click focuses the Skribidi editor. It types a note with Arabic text, then an `x` before `"stimuli"`; the test puts the caret before each with `skf_set_caret()`. The check finds the error at the `x`. The engine moves the caret with Up and Home, then clicks issue 0: the caret goes to the `x` as a codepoint offset. Ctrl+Z removes the `x`. | `ui_jump_to_issue()` gives the byte offset (caret 177, not 172). Also: `skf.cpp` drops characters above U+007F (the note is not in the text). |
 | `unsaved` | The engine types into the editor, then types another folder in the path field and presses Enter. The question opens and the project stays. Cancel keeps the project, the text and the unsaved state. The Open path button asks again, and Discard opens the other project. | `ask_or_run()` does not ask. |
-
 | `undo_views` (step 4) | A structured edit through the document shows in the text. With the chart shown, the engine's Ctrl+Z takes it back and Ctrl+Shift+Z puts it in again. | `undo_keys_free()` in `ui.cpp` always false; also: `sync_editor()` does not show the document's change. |
-| `chart/shows`, `tables/shows`, `panels/follows_text` (step 4 stubs) | The switch shows the chart and the tables; the caret in the text selects `/stimuli`, which the panels show. Parts A, B and C replace them. | - |
+| `chart/*` (5), `tables/*` (5), `panels/*` (9) (step 4) | The parts' tests: "The chart", "The tables" and "The panels" give each test and its mutants. | - |
 
-Each mutant of the first three tests failed its test, and the other two tests passed. The mutants
-were reverted; they are not in a mutation list. Without mutants, 3 of 3
-tests passed in each of 30 runs (Linux desktop, gcc 12.2, Release).
+Each mutant of the first three tests (step 3) failed its test, and the
+other tests passed. The mutants were reverted; they are not in a mutation
+list. Without mutants, 3 of 3 tests passed in each of 30 runs (Linux
+desktop, gcc 12.2, Release). After the step 4 merges, the runner has 23
+tests ("The integration").
 
 ### How the runner works
 
@@ -1390,9 +1518,10 @@ tests passed in each of 30 runs (Linux desktop, gcc 12.2, Release).
   amalgamation refers to `std::__throw_system_error`. The designer's own
   C++ and ImGui need no C++ runtime (built with `-fno-exceptions
   -fno-rtti -fno-threadsafe-statics`). `ypak` links it for the same reason.
-- The issues panel lays out each message through the shared layout cache,
-  which never evicts. A long session of edits keeps every message it has
-  shown.
+- The issues panel lays out each message through the shared layout cache.
+  Until step 4 the cache never evicted, so a long session of edits kept
+  every message it had shown; it now frees a layout 100 frames after its
+  last use ("The layout cache").
 - `platform.c`'s Windows branch (UTF-16 paths, `MoveFileExW`) is compiled
   and tested only by CI's job `designer` (`test_designer_core` on Windows),
   which has not run yet.
