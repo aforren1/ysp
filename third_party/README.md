@@ -23,7 +23,7 @@ command. CI runs it with a tarball cache keyed on the manifest. Decision record:
 
 | Directory | Upstream | Pin | License files kept | Local patches |
 |---|---|---|---|---|
-| `skribidi/` | https://github.com/memononen/skribidi | `dee63d6ba76aeddd49dea6d1b2508cf9aa391f46` (2026-08-17) | `LICENSE` (MIT) | `patches/skribidi-0001-bidi-run-merge.patch`, `patches/skribidi-0002-l1-trailing-whitespace.patch`, `patches/skribidi-0003-font-fallback.patch`, `patches/skribidi-0004-emoji-family-fallback.patch`, `patches/skribidi-0005-text-grapheme-breaks.patch`, `patches/skribidi-0006-caret-split-grapheme.patch`, in that order |
+| `skribidi/` | https://github.com/memononen/skribidi | `dee63d6ba76aeddd49dea6d1b2508cf9aa391f46` (2026-08-17) | `LICENSE` (MIT) | `patches/skribidi-0001-bidi-run-merge.patch`, `patches/skribidi-0002-l1-trailing-whitespace.patch`, `patches/skribidi-0003-font-fallback.patch`, `patches/skribidi-0004-emoji-family-fallback.patch`, `patches/skribidi-0005-text-grapheme-breaks.patch`, `patches/skribidi-0006-caret-split-grapheme.patch`, `patches/skribidi-0007-monotone-clusters.patch`, in that order |
 | `harfbuzz/` | https://github.com/harfbuzz/harfbuzz | tag `14.6.0`, `c7a7457b7385f33178e8cf87615ca077a810bbe7` | `COPYING` (Old MIT), `AUTHORS`, `src/ms-use/COPYING` (MIT; the USE table is generated from its data) | none |
 | `sheenbidi/` | https://github.com/Tehreer/SheenBidi | `83f77108a2873600283f6da4b326a2dca7a3a7a6` (2025-06-06) | `LICENSE` (Apache-2.0) | none |
 | `libunibreak/` | https://github.com/adah1972/libunibreak | tag `libunibreak_6_1`, `304585d8e2d63187507368d612c3d5fff1486368` | `LICENCE` (zlib), `AUTHORS` | none |
@@ -78,8 +78,9 @@ particular:
 
 ## The patches
 
-All four change `src/skb_layout.c`, and 0003 also `src/skb_font_collection.c`
-and `include/skribidi/skb_font_collection.h`. They apply in this order:
+All but 0005 change `src/skb_layout.c`; 0003 also changes
+`src/skb_font_collection.c` and `include/skribidi/skb_font_collection.h`,
+and 0005 changes `src/skb_text.c` only. They apply in this order:
 
 1. `patches/skribidi-0001-bidi-run-merge.patch` changes the merge
    condition in `skb__line_append_shaping_run()`: runs merge only in LTR
@@ -116,6 +117,13 @@ and `include/skribidi/skb_font_collection.h`. They apply in this order:
    (`src/skb_layout.c`). SHA-256
    `dfa7cdbd1cc8e05ffb4c93a7135a348d193a9084cc31b3cd1aff0065d3ca12d5`.
    Why: docs/layout.md, "Patches 0005 and 0006: editing Devanagari".
+7. `patches/skribidi-0007-monotone-clusters.patch` merges glyphs whose
+   HarfBuzz cluster values are out of order in the run's direction into
+   one cluster before `skb__shape_run()` takes the clusters' text ranges
+   (new `skb__merge_non_monotone_clusters()` in `src/skb_layout.c`).
+   SHA-256
+   `f8459c8b13e50157995ca0769329e7698cbd4ce82a33666f0aebcd93eacf191c`.
+   Why: docs/layout.md, "Patch 0007: cluster values out of order".
 
 The tree here holds the patched source; the script applies the patches,
 in order, to a fresh download.
@@ -135,7 +143,8 @@ Verify compares every file with the download and with `MANIFEST.sha256`,
 and reports a file here that the manifest does not list. On 2026-10-07 it
 reported `ok: 463 files, 7719645 bytes` (both patches applied); on
 2026-11-18, with the third, `ok: 463 files, 7725840 bytes`; with the
-fourth, `ok: 463 files, 7727613 bytes`.
+fourth, `ok: 463 files, 7727613 bytes`; with the seventh,
+`ok: 463 files, 7732502 bytes`.
 
 `.gitattributes` here turns off line-ending conversion, so a Windows
 checkout with `core.autocrlf=true` keeps the files as upstream has them.

@@ -37,7 +37,7 @@
 
 /* The binding's own version (docs/bindings.md, Versions): the thin files and
  * the core must be the same build. */
-#define YV_MEX_VERSION "1.6.1"   /* 1.1.0: ysp_gfx stimuli, lists, groups, textures, bindings; the slim frame; ysp_video movies;
+#define YV_MEX_VERSION "1.6.2"   /* 1.1.0: ysp_gfx stimuli, lists, groups, textures, bindings; the slim frame; ysp_video movies;
                                   * 1.2.0: ysp_gfx text (fonts, texts laid out by Skribidi, glyph and word boxes);
                                   * 1.2.1: ysp_video paths in UTF-8 and error ids by the header's code (ysp/video.h 0.6.0);
                                   * 1.3.0: macOS arm64 (METAL; every call on the main thread), caps os_input_stamps and
@@ -48,7 +48,8 @@
                                   * 1.5.0: the extension phase (ysp/screen.h 0.20.0): 'mark' takes 'extension', a record's
                                   *        phases are 1 x 7 and the record row n x 16;
                                   * 1.6.0: color glyphs in the text (COLR fonts, ysp/gfx.h 0.22.0, pack/layout 0.3.0);
-                                  * 1.6.1: pack/layout 0.3.1, six Skribidi patch hashes in the stamp */
+                                  * 1.6.1: pack/layout 0.3.1, six Skribidi patch hashes in the stamp;
+                                  * 1.6.2: pack/layout 0.3.2, Skribidi patch 0007, seven hashes in the stamp */
 #define YV_CORE_ABI 1
 #define YV_CORE_SYMBOL "ysp_vis_core"
 

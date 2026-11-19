@@ -1329,6 +1329,27 @@ static void pl_mark_stims(pl_player* p, pl_tmpl* t, const yexp_step* st, int n) 
     }
 }
 
+/* A role a rig can bind to a device: one that lists a family other than
+ * the keyboard. The host's role() refuses a binding to a family the role
+ * does not list, and a rig's family is a device's (ysp/rigfile.h), never
+ * the keyboard. pl_check() runs a bound input role's checks on each. */
+static bool pl_role_takes_device(const yexp_role* r) {
+    int i;
+    for (i = 0; i < r->n_family; i++)
+        if (strcmp(r->family[i], "keyboard") != 0) return true;
+    return false;
+}
+
+/* The button of role whose value is choice key: its index, or -1 with the
+ * refusal of template t. */
+static int pl_button_of(pl_player* p, const yexp_template* t, const yexp_role* role, const char* key) {
+    int b, found = -1;
+    for (b = 0; b < role->n_buttons; b++)
+        if (strcmp(role->buttons[b].value->str, key) == 0) found = b;
+    if (found < 0) pl_fail(p, "template '%s': choice '%s' is not one of role '%s''s buttons", t->name, key, role->name);
+    return found;
+}
+
 static int pl_response_kind(const pl_player* p, const pl_role* r) {
     /* A real run: the keyboard, or the device the rig binds. --sim has no
      * rig devices: a role whose first family is keyboard is a keyboard
@@ -1393,12 +1414,13 @@ static int pl_tmpl_open(pl_player* p, pl_tmpl* t) {
                 t->choice_keys[i] = r->choices[i].key;
                 if (kind == 0) {
                     ch[i].key = r->choices[i].key;
+                    /* pl_check(): a device a rig binds to the role takes
+                     * buttons, where --sim takes keys */
+                    if (p->checking && pl_role_takes_device(role) && pl_button_of(p, d, role, r->choices[i].key) < 0) return -1;
                 } else {
                     /* a button role: the role's buttons give the control */
-                    int k, found = -1;
-                    for (k = 0; k < role->n_buttons; k++)
-                        if (strcmp(role->buttons[k].value->str, r->choices[i].key) == 0) found = k;
-                    if (found < 0) { pl_fail(p, "template '%s': choice '%s' is not one of role '%s''s buttons", d->name, r->choices[i].key, role->name); return -1; }
+                    int found = pl_button_of(p, d, role, r->choices[i].key);
+                    if (found < 0) return -1;
                     ch[i].kind = YRSP_KIND_BOX;
                     ch[i].control = (uint32_t)strtoul(role->buttons[found].key, NULL, 10);
                 }
@@ -1973,6 +1995,7 @@ static int pl_rule_make(pl_player* p, pl_role* in, bool open) {
         const yexp_response* r = t->response;
         pl_role* o;
         if (!r || !r->trigger_role || strcmp(r->role, in->def->name) != 0) continue;
+        pl_at(p, PL_OBJ_TEMPLATE, t->name);
         o = pl_role_get(p, r->trigger_role);
         if (!o || o->trigger < 0) { pl_fail(p, "template '%s': response.trigger: '%s' is not an output role", t->name, r->trigger_role); return -1; }
         if (r->n_choices < 1 || r->n_choices > YDEV_RULE_CHOICES) {
@@ -1982,7 +2005,7 @@ static int pl_rule_make(pl_player* p, pl_role* in, bool open) {
         }
         for (k = 0; k < r->n_choices; k++) {
             int64_t code = -1;
-            int b, found = -1;
+            int found;
             ydev_rule_choice c;
             const yexp_value* v = r->trigger_code;
             /* a number, or a lookup by $response whose entries are numbers:
@@ -2000,9 +2023,7 @@ static int pl_rule_make(pl_player* p, pl_role* in, bool open) {
                 return -1;
             }
             if (code < 0 || 255 < code) { pl_fail(p, "template '%s': the response trigger code %lld is not in 0..255", t->name, (long long)code); return -1; }
-            for (b = 0; b < in->def->n_buttons; b++)
-                if (strcmp(in->def->buttons[b].value->str, r->choices[k].key) == 0) found = b;
-            if (found < 0) { pl_fail(p, "template '%s': choice '%s' is not one of role '%s''s buttons", t->name, r->choices[k].key, in->def->name); return -1; }
+            if ((found = pl_button_of(p, t, in->def, r->choices[k].key)) < 0) return -1;
             memset(&c, 0, sizeof c);
             c.kind = (uint8_t)YIN_KIND_BOX;
             c.control = (uint32_t)strtoul(in->def->buttons[found].key, NULL, 10);
@@ -2041,6 +2062,7 @@ static int pl_rule_make(pl_player* p, pl_role* in, bool open) {
             }
         }
     }
+    pl_at(p, PL_OBJ_NONE, NULL);
     if (!first || !open) return 0;
     {
         pl_role* o = NULL;
@@ -2147,13 +2169,15 @@ static int pl_roles_tier(pl_player* p) {
 }
 
 /* The rules' definition checks, for the roles pl_inputs_open() gives a
- * rule (a real run's bound device roles), before the outputs open. */
+ * rule (a real run's bound device roles), before the outputs open.
+ * pl_check() has no rig: every role a rig could bind (the checks need the
+ * definition only). */
 static int pl_rules_check(pl_player* p) {
     int i;
-    if (p->args.sim) return 0;
+    if (p->args.sim && !p->checking) return 0;
     for (i = 0; i < p->def->n_roles; i++) {
         pl_role* r = &p->roles[i];
-        if (r->def->direction != 0 || !r->rig) continue;
+        if (r->def->direction != 0 || (p->checking ? !pl_role_takes_device(r->def) : !r->rig)) continue;
         if (pl_rule_make(p, r, false) < 0) return -1;
     }
     return 0;

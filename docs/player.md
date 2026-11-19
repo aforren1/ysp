@@ -1,6 +1,9 @@
 # The player
 
-Status: v0.14.0, 2026-11-18 (0.14.0: `pl_check()` for the designer,
+Status: v0.15.0, 2026-11-18 (0.15.0: `pl_check()` refuses what a real
+run refuses from the definition alone: a response trigger or a choice on
+a role that a rig can bind to a device, and the data set's streams;
+0.14.0: `pl_check()` for the designer,
 [Reference: pl_check()](#reference-pl_check); a string `participant`
 field no longer ends the process). It loads a pack, checks its experiment
 definition, lowers the definition onto the ysp headers and runs it: in a
@@ -415,8 +418,8 @@ the same `p`. Every pointer in `r` points into `p`. `pl_player` is large
 | `r->object` | `r->object_name` | Refusals that give it |
 |---|---|---|
 | `PL_OBJ_NODE` | the node's path | a leaf's rules and variables (`pl_leaf_prepare()`), the node checks (`pl_check_nodes()`: a name in both `vars` and `data`, an `if` field that is not 0 or 1), `@participant` with a text field |
-| `PL_OBJ_STIMULUS` | its name | a stimulus's lowering (`pl_stim_make()`: rdk, text, sound, image, the kinds the player does not lower), its static keys, its textures, a channel of one of its properties |
-| `PL_OBJ_TEMPLATE` | its name | the response's collector (`pl_tmpl_open()`), a version 2 template's graph, controls, forms and exits (`pl_v2_load()`), the steps' `if` fields |
+| `PL_OBJ_STIMULUS` | its name | a stimulus's lowering (`pl_stim_make()`: rdk, text, sound, image, the kinds the player does not lower), its static keys, its textures, a channel of one of its properties, an rdk's stream (0.15.0) |
+| `PL_OBJ_TEMPLATE` | its name | the response's collector (`pl_tmpl_open()`), a choice that is not a button of a role that a rig can bind to a device (0.15.0), a response trigger's rule on such a role (`pl_rule_make()`, 0.15.0), a version 2 template's graph, controls, forms and exits (`pl_v2_load()`), a trace's stream (0.15.0), the steps' `if` fields |
 | `PL_OBJ_METHOD` | its name | a method's open (`pl_method_open()`) |
 | `PL_OBJ_SIGNAL_ROLE` | its name | a signal role's adapter (`v2_rig_signals()`) |
 | `PL_OBJ_FIELD` | its name | a session field's value (`pl_fields_init()`) |
@@ -476,12 +479,39 @@ These stand-ins apply always, with no need listed:
   on either clock. The same check on the real clock and on the virtual
   clock gives the same result (`test_player_check`).
 - It writes nothing to stdout or stderr.
-- These checks of a real run do not run: a response trigger's rule on a
-  device role (`pl_rules_check()`, which needs a role bound to a device),
-  the display's tier in the lead-in frames, and the data set's checks of
-  stream names and trace columns (`yds_stream()` needs an open data set).
-  The data set's checks of the `trials.csv` columns run, through a writer
-  that discards the bytes.
+- These checks of a real run do not run, because each needs the rig or
+  the session: a device's open, the display's flips and their tier in the
+  lead-in frames (listed as `PL_NEED_DISPLAY_TIER`), the real GL context
+  and audio device, a rig profile's bindings and signals, and the files
+  of the arguments (`--rig`, `--cal`, `--samples`, the output folder). The
+  checks of a trial's values, which depend on the draws and on the
+  responses, run in the trials only. [Results, 0.15.0](#pl_checks-gaps-0150-2026-11-18)
+  lists each refusal that the check does not reach.
+
+Since 0.15.0, the check also runs these checks of a real run, which need
+the definition only:
+
+- The response rules (`pl_rules_check()`). A real run checks them for each
+  input role that the rig binds to a device. The check has no rig, so it
+  checks each input role that a rig can bind: a role that lists a family
+  other than `keyboard`. The host's `role()` refuses a binding to a family
+  that the role does not list, and a rig never binds the keyboard. A role
+  that lists `keyboard` and `xid` is checked, although a run with no rig
+  takes the keyboard for it: the definition says that a device can take
+  it.
+- A choice must be one of the role's buttons when a device takes the
+  role (`pl_tmpl_open()`). `--sim` takes keys for a role whose first family
+  is `keyboard`, so it does not check this.
+- The data set's streams: each rdk's stream and each trace's stream, their
+  names (a name, unique in more than case, at most `YDS_MAX_STREAMS`) and
+  their columns. ysp/dataset.h 0.4.0's `yds_stream_check()` runs the
+  checks of `yds_stream()` with no data set; `yds_stream()` runs the same
+  function. The `trials.csv` columns are checked through a writer that
+  discards the bytes, as before.
+
+A refusal's message is the one that the command line prints in a real
+run. The one exception is a refusal of the `trials.csv` columns: its
+message names no folder.
 
 Two calls must not run at the same time in one process. The loader's
 host checks use static scratch (`h_rules()` and `h_check_ops()` in
@@ -496,6 +526,9 @@ leaves. Such a definition loads, and a node whose rules use
 0.13.2 it fails.
 
 ### Measured
+
+Measured at 0.14.0. 0.15.0 adds the rule checks and a stream check per
+rdk and trace to each call; it was not measured again.
 
 Order of magnitude only: one run, on a desktop that other builds share.
 Intel Core i5-14500, Linux 6.11 (Liquorix), GCC 12, Release
@@ -1478,6 +1511,81 @@ frame, F40, F41, 3.11 rule 8 and the trial's end.
 
 ## Results
 
+### pl_check()'s gaps (0.15.0, 2026-11-18)
+
+The designer's only check of a definition is `pl_check()`
+([designer.md](designer.md), "Architecture"), so a refusal that a real
+run gives and the check does not is a refusal that the designer does not
+show. 0.14.0 listed three such gaps. Each case below is in
+`test_player_check` (`case_run_only()`); 0.14.0 gives OK to each one.
+Linux desktop (i5-14500, GCC 12.2, Release).
+
+| Gap | The case | Where a real run refuses it | The fix |
+|---|---|---|---|
+| A response trigger's rule on a device role | oddball, the response trigger's code `"$code"`: a rig that binds `resp` to `xid` gives the rule a code at the device's open, so the code must be a number or a lookup by `$response` of numbers | `pl_rule_make()` from `pl_rules_check()`, only for a role that the rig binds to a device. `--sim` does not run it. A scratch program showed it: a `--sim` load with a rig that binds `resp` to `xid`, then `pl_rules_check()` with `args.sim` false, refused with the message below | `pl_rules_check()` runs in the check for each input role that a rig can bind: a role that lists a family other than `keyboard`. The same function, so the same message, and the template as the object. A role that lists only `keyboard` is not checked (its control case gives OK) |
+| The display's tier in the lead-in frames | none | `pl_lead_in()` | None: the refusal depends on the display alone. The check lists `PL_NEED_DISPLAY_TIER` (0.14.0, `case_examples()`) |
+| The data set's streams | Two rdk stimuli `Dots` and `dots`; two traces `Path` and `path`; a trace whose columns repeat `hand_x` (a control named `hand_x` beside the role `hand`'s lane); 17 rdk stimuli. `--sim` refuses the first three with the messages that the check now gives | `yds_stream()` in `pl_dataset_open()` and `v2_trace_stream()` | ysp/dataset.h 0.4.0's `yds_stream_check()`: `yds_stream()`'s checks with no data set, which `yds_stream()` itself runs. One function, `pl_stream()`, makes every stream: through `yds_stream()` in a run, through `yds_stream_check()` in the check. The rdk is the object of its stream, the template of a trace's |
+
+A search for more of the same kind found one: a choice that is not a
+button of a role whose first family is `keyboard` and which lists a
+device family. `--sim` takes keys for such a role; a real run with a
+device bound takes buttons and refuses the choice in `pl_tmpl_open()`
+(the same scratch program showed it). The check now looks up the choice
+in the buttons for each role that a rig can bind, through the lookup
+that `pl_tmpl_open()` and `pl_rule_make()` share (`pl_button_of()`).
+
+The search: a static call graph of the player's sources (GCC's
+`-fcallgraph-info`, with the host's checks and the texture callback
+added as edges), each `pl_fail()` call site, and the branches that a
+check, `--sim` or a real run takes (`checking`, `args.sim`). Of 0.14.0's
+328 refusal sites, 206 are on the check's path. The others, and the
+sites on the path that only a real run reaches:
+
+| Group | Sites | Why the check does not run them |
+|---|---|---|
+| The rig profile and its files | `pl_rig_load()`, the host's `role()` and `sigrole()`, `pl_cal_load()`'s file, `v2_rig_signals()` | No rig. `report->skipped` says so; each is a need: `PL_NEED_DEVICE`, `PL_NEED_SIGNAL`, `PL_NEED_CALIBRATION` |
+| Bindings and tiers | `pl_roles_bind()`, `pl_roles_tier()`, a signal role with no rig | Needs: `PL_NEED_DEVICE`, `PL_NEED_ROLE_TIER`, `PL_NEED_SIGNAL` |
+| Devices | `pl_role_open()`, `pl_outputs_open()` (the device ring), `pl_rule_make()`'s `ydev_rule_open()` (it needs the output device), `pl_inputs_open()` | A device |
+| The display | `pl_screen_open()`'s screen, gfx and first draws (`yscr_open()`, `ygfx_open()`, `ygfx_prime()`), `pl_lead_in()` (5 sites) | A display and a GL context. The view is `PL_NEED_VIEW`, the tier `PL_NEED_DISPLAY_TIER` |
+| The audio device | `pl_stim_make()`'s open of the real backend | A device; the check's device takes the pack's format |
+| The data set's folder and writer | `yds_open()` in `pl_dataset_open()`, `pl_writer_open()`, `pl_writer_close()`, `pl_wq_push()`, `pl_wq_push_row()` | A folder and a thread. `yds_open()`'s check of the `trials.csv` columns runs in the check |
+| The command line's arguments | `--allow-below-tier`, `--sim-gain`, `--samples`, `--test-sample-bound`, `--trace-channels`, `--participant script:`, `--profile`, `--test-draws`, `--test-record-delay` | Not the definition. `--sim-gain` is a need (`PL_NEED_SIM_GAIN`) |
+| A trial's values and the participant | `pl_start_trial()`, `pl_window_check()`, `pl_build_after()`, `pl_walk_next_leaf()`, `pl_leaf_open_body()`, `pl_stim_begin_trial()`, `pl_stim_set_text()`, `pl_end_trial_()`, `pl_response_trigger()`, `pl_participant_plan()`, `pl_sounds()`, `pl_from_sound()`, `pl_draw()`, `pl_frame()`, `pl_row_fill()`, `pl_cell_text()`, `pl_timeline_reset()`, the run's values in `eval.c`, version 2's frame path in `v2.c` (about 50 sites) | They depend on the draws, the responses or the frames. The check runs no trial. The load's host checks run the op tables at the variables' extremes |
+
+Open: a trigger code is checked when its trial starts (a step) or at its
+response (a response trigger on a role that only the keyboard takes),
+not at load, so a literal code of 300 in a lookup by `$response` loads.
+A check over the levels belongs in ysp/experiment.h's host checks, not in
+a second rule in the player. A response trigger on a role that a rig can
+bind is checked at load now.
+
+Gates:
+
+- `test_player_check`: 94 checks (70 in 0.14.0). The test built on
+  0.14.0's sources (`PL_CHECK_MUT`): 16 checks fail, in 6 of the 7 new
+  cases; the seventh, the keyboard-only control, passes.
+- ctest from the build tree, `DISPLAY` unset: 129 of 129.
+- The command line, against 0.14.0 (this branch's base, built in
+  scratch): every call of `player_test.py` at 60 and 500 Hz, of
+  `compare.py`, and the examples and the gap packs with three
+  participants each, 880 calls: the same exit code, stdout and stderr
+  (temporary folder names put aside). Of the data files, 7,673 are
+  byte-identical, and 773 `session.json` and rig profiles differ in
+  `player_version`, `headers.dataset`, `rig_profile_sha256` and the
+  profile's `written` date only. One other file differs: the afc2 C
+  program's `.meta` line with the rig profile's hash.
+- Mutants: 12 new for the check (`ck-21` to `ck-25` in
+  player_lower.toml, `ck-r2` to `ck-r5` in player_run.toml, `ck-v1` and
+  `ck-v2` in player_v2.toml, which gets the `check` test), and `ck-r1`
+  with its new anchor: 12 of 12 killed. ysp/dataset.h: `dk-01` to
+  `dk-07`, and `ds-20` and `ds-22` with new anchors: 9 of 9 killed.
+  Every `player` and `check` mutant of the five player lists: 275, of
+  which 255 killed and 20 survived, each as the list expects. The 43
+  `real` mutants did not run: they open a window on the display.
+- ysp/dataset.h's test and the check's test under ASan and UBSan
+  (`setarch -R`): no report. The fuzz target, 2,000 inputs at seed 1:
+  the same summary as 0.14.0's (291 loaded, 130 ran to the end).
+
 ### The review of 0.13.1 (0.13.2, 2026-11-17)
 
 A reviewer read the late-input changes of 0.13.0 with no account of
@@ -1744,7 +1852,7 @@ The same after the changes (0.11.0; load average 0.19 at the start and
 | Bimanual, 60 Hz | 1,893 to 1,915 us | 29.3 to 29.9 us | 1,021 to 1,035 us | 0 |
 | Bimanual, 500 Hz | 1,901 to 1,916 us | 9.5 to 9.7 us | 11.5 to 25.9 us | 0 |
 
-The largest frame at both rates is a trial's end. Tracy (v0.14.1,
+The largest frame at both rates is a trial's end. Tracy (v0.15.0,
 `tracy-capture` and `tracy-csvexport -u`; a scratch build with zones on 16
 of sig.h's functions, about 1.5 us a frame; player on CPUs 2 and 4),
 bimanual at 500 Hz, self time:

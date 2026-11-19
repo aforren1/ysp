@@ -246,6 +246,12 @@ ysp_designer (C++, Dear ImGui, SDL3, GL ES 3.0)
      Latin font on the editor's path too. U+2192 was a box because none
      of the probe's four Noto fonts has it; the designer's list needs a
      symbols font (Noto Sans Symbols) after the script fonts.
+   - 2026-11-18: patch 0007 (pack/layout 0.3.2) fixes U+202E before
+     Devanagari. Open, on any text: three faults of pinned Skribidi's
+     editor that a text field can reach (Ctrl+Right reads past the text,
+     a key in a field that never had text dereferences NULL, Enter passes
+     NULL to `memcpy`); [layout.md](layout.md), "Open: three faults of
+     Skribidi's editor".
 3. A skeleton: the window, open and save of a project, the loader's
    checks with refusals linked to fields, and redraw on input only.
    - Done 2026-11-18 (branch `designer-skeleton`), with the decisions in

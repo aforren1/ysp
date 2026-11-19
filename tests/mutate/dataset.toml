@@ -186,8 +186,8 @@ id = "ds-20"
 name = "stream names differ by case only"
 test = "dataset"
 why = "On Windows dots.csv and DOTS.csv are one file: the second open truncates the first."
-find = '''        if (yds__same_ci(ds->stream_name[i], name))'''
-replace = '''        if (strcmp(ds->stream_name[i], name) == 0)'''
+find = '''        if (yds__same_ci(taken[i], name))'''
+replace = '''        if (strcmp(taken[i], name) == 0)'''
 
 [[mutant]]
 id = "ds-21"
@@ -202,8 +202,8 @@ id = "ds-22"
 name = "one stream too many"
 test = "dataset"
 why = "The 17th stream would write past the handle's array."
-find = '''    if (ds->n_streams >= YDS_MAX_STREAMS)'''
-replace = '''    if (ds->n_streams > YDS_MAX_STREAMS)'''
+find = '''    if (n_taken >= YDS_MAX_STREAMS)'''
+replace = '''    if (n_taken > YDS_MAX_STREAMS)'''
 
 # --- the adapters and the row defaults ------------------------------------------
 
@@ -423,3 +423,64 @@ test = "dataset"
 why = "The init marks it missing, so a record from an older screen.h writes an empty cell."
 find = "    f->evaluate_ns = f->script_ns = f->draw_ns = f->upload_ns = f->swap_ns = f->gpu_ns = f->extension_ns = YTR_MISSING_NS;"
 replace = "    f->evaluate_ns = f->script_ns = f->draw_ns = f->upload_ns = f->swap_ns = f->gpu_ns = YTR_MISSING_NS;"
+
+# --- v0.4.0: yds_stream_check(), yds_stream()'s checks with no data set ----------
+
+[[mutant]]
+id = "dk-01"
+name = "the check skips the columns"
+test = "dataset"
+why = "A loader's check must refuse what yds_stream() refuses: the test compares both on a bad column."
+find = '''    return yds__cols_msg(scratch, cols, n_cols, "yds_stream", err, cap);'''
+replace = '''    return YDS_OK;'''
+
+[[mutant]]
+id = "dk-02"
+name = "yds_stream() checks against no taken name"
+test = "dataset"
+why = "yds_stream() runs the check with its own names: DOTS after dots is refused."
+find = '''    rc = yds__stream_check(taken, ds->n_streams, name, cols, n_cols,'''
+replace = '''    rc = yds__stream_check(taken, 0, name, cols, n_cols,'''
+
+[[mutant]]
+id = "dk-03"
+name = "a NULL scratch taken"
+test = "dataset"
+why = "The public check refuses a NULL scratch rather than write through it."
+find = '''    if (n_taken < 0 || (n_taken > 0 && !taken) || !scratch)'''
+replace = '''    if (n_taken < 0 || (n_taken > 0 && !taken))'''
+
+[[mutant]]
+id = "dk-04"
+name = "a NULL taken name read"
+test = "dataset"
+why = "A NULL in taken is refused by its index, not read by the name compare."
+find = '''        if (!taken[i]) return yds__msg(err, cap, YDS_ERR_ARG, "yds_stream_check: taken[%d] is NULL", i);'''
+replace = '''        if (!taken[i] && 0) return yds__msg(err, cap, YDS_ERR_ARG, "yds_stream_check: taken[%d] is NULL", i);'''
+
+[[mutant]]
+id = "dk-05"
+name = "no empty message on YDS_OK"
+test = "dataset"
+why = "err says nothing when the stream is accepted: a message left from an earlier call would read as a refusal."
+find = '''    if (err && cap) err[0] = '\0';'''
+replace = ''''''
+
+[[mutant]]
+id = "dk-06"
+name = "a message past a short err"
+test = "dataset"
+why = "An err shorter than the prefix is cut at cap; the rest of the message must not be written past it."
+find = '''    if ((size_t)n >= cap) return;'''
+replace = ''''''
+
+[[mutant]]
+id = "dk-07"
+name = "yds_stream()'s refusal keeps no code"
+test = "dataset"
+why = "ds.error_code is the YDS_ERR_* of the last failure, a stream's refusal too (v0.2.0)."
+find = '''    if (rc < 0) {
+        ds->error_code = rc;
+        return rc;
+    }'''
+replace = '''    if (rc < 0) return rc;'''

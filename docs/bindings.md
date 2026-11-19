@@ -367,7 +367,7 @@ clock the binding's frames and decisions equal the C path's line by line
   `ysp/gfx.h` or `ysp/video.h` alone that changes the binding adds the
   fourth number, as a binding-only change does (0.17.0.1: the binding on
   Linux X11). The MEX files have the
-  number 1.6.1 of their own (1.0.0 was phase A; 1.1.0 adds `ysp_gfx`'s stimuli and `ysp_video`'s movies; 1.2.0 the text; 1.2.1 `ysp_video`'s UTF-8 paths and its error ids by the header's code; 1.3.0 macOS, `caps` with `os_input_stamps` and `margin`, the open options `backend` `'metal'` and `color_depth`; 1.4.0 Linux X11, the open options `backend` `'glx_oml'`, `x_display` and `x11_override_redirect`, and the movie backends `'avf'` and `'ffmpeg'` in `info`; 1.4.1 the layout's font fallback; 1.5.0 the extension phase; 1.6.0 color glyphs in the text; 1.6.1 pack/layout 0.3.1); their `'version'` gives it
+  number 1.6.2 of their own (1.0.0 was phase A; 1.1.0 adds `ysp_gfx`'s stimuli and `ysp_video`'s movies; 1.2.0 the text; 1.2.1 `ysp_video`'s UTF-8 paths and its error ids by the header's code; 1.3.0 macOS, `caps` with `os_input_stamps` and `margin`, the open options `backend` `'metal'` and `color_depth`; 1.4.0 Linux X11, the open options `backend` `'glx_oml'`, `x_display` and `x11_override_redirect`, and the movie backends `'avf'` and `'ffmpeg'` in `info`; 1.4.1 the layout's font fallback; 1.5.0 the extension phase; 1.6.0 color glyphs in the text; 1.6.1 pack/layout 0.3.1; 1.6.2 pack/layout 0.3.2); their `'version'` gives it
   and the header's as the second output. `ysp-audio` and `ysp-timeline` are dependencies
   of the same major.minor as the headers ysp-vis was built against
   (`>=0.8,<0.9` and `>=0.8.1,<0.9`), the rule of the tables (below).
@@ -712,7 +712,10 @@ build. The MEX functions of 2026-10-25 (`ysp_rt`, `ysp_box`, `ysp_rdk`,
 `ysp_dataset`, `ysp_pack`) do the same: `'version'` returns 1.0.0, and
 its second output is the version of the header. `ysp_dataset` is 1.1.0
 since 2026-11-18: frames.csv's `extension_s` (ysp/dataset.h 0.3.0); the
-Python `ysp-dataset` of the same change is 0.3.0, the header's. `ysp_pack` is 1.1.0 since
+Python `ysp-dataset` of the same change is 0.3.0, the header's. ysp/dataset.h
+0.4.0 (2026-11-18) adds `yds_stream_check()`, which neither binding wraps:
+`ysp-dataset` is 0.4.0, the header's, with no binding change, and the MEX
+`ysp_dataset` stays 1.1.0. `ysp_pack` is 1.1.0 since
 2026-10-26: `'verify'` of one entry hashes it under `'none'` too
 (`ypak_verify_entry()`, ysp/pack.h 0.4.0). `ysp_audio` is 1.0.2 since
 2026-10-27: WAV paths are passed as UTF-8 (`mxArrayToUTF8String()`;
@@ -727,7 +730,10 @@ v0.8.1), and `ysp-audio` is 0.7.2, the header's. The adaptive MEX
 functions and `ysp_color` have no number of their own: `'version'`
 returns the header's.
 
-`ysp-vis` is 0.20.0.2 (2026-11-18: pack/layout 0.3.1, whose stamp lists
+`ysp-vis` is 0.20.0.3 (2026-11-18: pack/layout 0.3.2, Skribidi patch
+0007: text with a right-to-left override before Devanagari no longer
+gives a cluster of no codepoints; the stamp lists seven patches.
+0.20.0.2: pack/layout 0.3.1, whose stamp lists
 Skribidi patches 0005 and 0006; the text's layout does not change.
 0.20.0.1: color glyphs in the text: `ysp/gfx.h`
 0.22.0's paint records and pack/layout 0.3.0, COLR fonts in the emoji
@@ -773,11 +779,11 @@ macOS arm64 wheel (`cp310-abi3-macosx_14_0_arm64`), `caps()`'s `margin`
 and `os_input_stamps`, the open options `backend="metal"` and
 `color_depth`, the main-thread refusal, and `ysp-audio` 0.8 as the
 dependency. The MEX files of ysp-vis (`ysp_vis`,
-`ysp_screen`, `ysp_gfx`, `ysp_video`) are 1.6.1 (1.0.0 was phase A, 1.1.0
+`ysp_screen`, `ysp_gfx`, `ysp_video`) are 1.6.2 (1.0.0 was phase A, 1.1.0
 phase B, 1.2.0 phase C, 1.2.1 UTF-8 paths, 1.3.0 macOS, 1.4.0 Linux X11,
 1.4.1 the layout's font fallback, 1.5.0 the extension phase: `'mark'`
 takes `'extension'`, a record's `phases` are 1 x 7 and the record row n x
-16; 1.6.0 color glyphs in the text; 1.6.1 pack/layout 0.3.1, whose stamp lists six Skribidi patches; syntax-checked only, no MEX build on the Linux desktop), one number for the four, because the thin files refuse a core
+16; 1.6.0 color glyphs in the text; 1.6.1 pack/layout 0.3.1, whose stamp lists six Skribidi patches; 1.6.2 pack/layout 0.3.2, Skribidi patch 0007; syntax-checked only, no MEX build on the Linux desktop), one number for the four, because the thin files refuse a core
 of another build. 1.3.0 also fixes `ysp_gfx('free', obj)`, which read
 the handle's node after freeing it: on macOS the freed node's kind was
 gone, so the list or stimulus was not freed and its items kept their

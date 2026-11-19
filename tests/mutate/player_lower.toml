@@ -566,3 +566,46 @@ test = "check"
 why = "A string participant with '@participant' in a node's rules is refused by the node (the check reads the definition's leaves; 0.13.2 read p->leaves before they were set and ended the process)."
 find = '''                for (i = 0; p->def_leaves && p->def_leaves[i]; i++)'''
 replace = '''                for (i = 0; p->def_leaves && p->def_leaves[i] && 0; i++)'''
+
+# 0.15.0: a real run's checks of a role a rig binds to a device, in pl_check()
+
+[[mutant]]
+id = "ck-21"
+name = "the check runs no response rule check"
+test = "check"
+why = "A response trigger on a role a rig can bind to a device is refused by the check as by a real run (rule)."
+find = '''    if (p->args.sim && !p->checking) return 0;'''
+replace = '''    if (p->args.sim) return 0;'''
+
+[[mutant]]
+id = "ck-22"
+name = "a keyboard-only role takes a device"
+test = "check"
+why = "No rig binds a role that lists the keyboard alone: its trigger code may be any value (rule, keyboard)."
+find = '''        if (strcmp(r->family[i], "keyboard") != 0) return true;'''
+replace = '''        return true;'''
+
+[[mutant]]
+id = "ck-23"
+name = "the check skips the buttons of a keyboard-first role"
+test = "check"
+why = "--sim takes keys for a role whose first family is the keyboard; a device bound to it takes buttons (buttons)."
+find = '''                    if (p->checking && pl_role_takes_device(role) && pl_button_of(p, d, role, r->choices[i].key) < 0) return -1;'''
+replace = ''''''
+
+[[mutant]]
+id = "ck-24"
+name = "a rule's refusal names no template"
+test = "check"
+why = "The designer shows a refusal on its object: the template whose trigger the rule refuses (rule)."
+find = '''        pl_at(p, PL_OBJ_TEMPLATE, t->name);
+        o = pl_role_get(p, r->trigger_role);'''
+replace = '''        o = pl_role_get(p, r->trigger_role);'''
+
+[[mutant]]
+id = "ck-25"
+name = "a missing button not refused"
+test = "check"
+why = "pl_button_of() refuses by name; a return of -1 with no refusal reads as OK (buttons)."
+find = '''    if (found < 0) pl_fail(p, "template '%s': choice '%s' is not one of role '%s''s buttons", t->name, key, role->name);'''
+replace = ''''''
