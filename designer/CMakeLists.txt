@@ -152,6 +152,14 @@ if(YSP_BUILD_TESTS)
     set_target_properties(test_designer_ui PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
     add_test(NAME test_designer_ui COMMAND test_designer_ui ${CMAKE_CURRENT_BINARY_DIR}/designer_ui_work)
     dsg_test(test_designer_ui)
+
+    # Times the chart's frames (docs/designer.md, "The chart"); not a test.
+    if(NOT WIN32)
+        add_executable(bench_designer_chart ${PROJECT_SOURCE_DIR}/tests/designer/chart_bench.cpp)
+        target_link_libraries(bench_designer_chart PRIVATE ysp_designer_ui)
+        target_compile_definitions(bench_designer_chart PRIVATE YSP_SOURCE_DIR="${PROJECT_SOURCE_DIR}" YSP_DESIGNER_FONT_DIR="${CMAKE_CURRENT_BINARY_DIR}/fonts")
+        set_target_properties(bench_designer_chart PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+    endif()
 endif()
 
 if(YSP_BUILD_TESTS AND YSP_DESIGNER_TEST_ENGINE)
