@@ -5,6 +5,7 @@
 # ysp_designer_core: the parts with no window (designer/core/dsg.h), tested
 # headless by test_designer_core. ysp_designer: the window (designer/app),
 # built when SDL3, GL ES and Dear ImGui (tools/vendor_designer.py) are there.
+# test_designer_te: only with YSP_DESIGNER_TEST_ENGINE (off by default).
 
 # The player and the pack tool with one set of header implementations: the
 # player's (ysp_player_impl, with SDL and miniaudio), and the pack tool's
@@ -38,6 +39,10 @@ endif()
 set(_imgui ${PROJECT_SOURCE_DIR}/third_party/imgui)
 set(_skbx ${PROJECT_SOURCE_DIR}/third_party/skribidi-extra)
 if(NOT EXISTS ${_imgui}/imgui.cpp OR NOT EXISTS ${_skbx}/src/skb_image_atlas.c)
+    if(YSP_DESIGNER_TEST_ENGINE)
+        message(FATAL_ERROR "YSP_DESIGNER_TEST_ENGINE needs Dear ImGui and Skribidi's rasterizer; fetch them with: "
+            "uv run --no-project python tools/vendor_designer.py --write --test-engine")
+    endif()
     message(STATUS "ysp_designer: Dear ImGui or Skribidi's rasterizer is missing, so only the core builds; "
         "fetch them with: uv run --no-project python tools/vendor_designer.py --write")
     return()
@@ -62,9 +67,9 @@ set_target_properties(ysp_designer_skb PROPERTIES C_STANDARD 17 C_STANDARD_REQUI
 # drive it headless. C++20 for Skribidi's designated initializers; no
 # exceptions, no RTTI, no thread-safe statics: the program needs a C++
 # compiler and no C++ runtime (docs/imgui_probe.md, finding 6).
-add_library(ysp_designer_ui STATIC
-    app/ui.cpp app/ui.h app/skt.cpp app/skt.h app/skf.cpp app/skf.h app/imconfig_designer.h
+set(_ui_sources app/ui.cpp app/ui.h app/skt.cpp app/skt.h app/skf.cpp app/skf.h app/imconfig_designer.h
     ${_imgui}/imgui.cpp ${_imgui}/imgui_draw.cpp ${_imgui}/imgui_tables.cpp ${_imgui}/imgui_widgets.cpp)
+add_library(ysp_designer_ui STATIC ${_ui_sources})
 target_include_directories(ysp_designer_ui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/app)
 target_include_directories(ysp_designer_ui SYSTEM PUBLIC ${_imgui})
 target_compile_definitions(ysp_designer_ui PUBLIC IMGUI_USER_CONFIG="imconfig_designer.h")
@@ -101,6 +106,53 @@ if(YSP_BUILD_TESTS)
         YSP_DESIGNER_FONT_DIR="${CMAKE_CURRENT_BINARY_DIR}/fonts")
     set_target_properties(test_designer_ui PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
     add_test(NAME test_designer_ui COMMAND test_designer_ui ${CMAKE_CURRENT_BINARY_DIR}/designer_ui_work)
+endif()
+
+if(YSP_BUILD_TESTS AND YSP_DESIGNER_TEST_ENGINE)
+    # The UI driven by the Dear ImGui Test Engine (docs/designer.md, "UI tests
+    # with the Test Engine"). Its hooks need IMGUI_ENABLE_TEST_ENGINE in every
+    # file that includes imgui.h, so the UI layer and ImGui compile again here
+    # with tests/designer/imconfig_designer_te.h; ysp_designer_ui and the
+    # program keep their own objects and flags.
+    set(_te ${PROJECT_SOURCE_DIR}/third_party/imgui_test_engine)
+    if(NOT EXISTS ${_te}/imgui_te_engine.cpp)
+        message(FATAL_ERROR "YSP_DESIGNER_TEST_ENGINE: the Test Engine is not in third_party/imgui_test_engine. Read its "
+            "license in docs/designer.md, then fetch it with: uv run --no-project python tools/vendor_designer.py --write --test-engine")
+    endif()
+    set(_te_config ${PROJECT_SOURCE_DIR}/tests/designer)
+
+    # The engine: no -fno-threadsafe-statics, because its coroutines are
+    # threads (std::thread) and it has function-local statics.
+    add_library(ysp_designer_te_engine STATIC
+        ${_te}/imgui_te_engine.cpp ${_te}/imgui_te_context.cpp ${_te}/imgui_te_coroutine.cpp ${_te}/imgui_te_ui.cpp
+        ${_te}/imgui_te_utils.cpp ${_te}/imgui_te_exporters.cpp ${_te}/imgui_te_perftool.cpp ${_te}/imgui_capture_tool.cpp)
+    target_include_directories(ysp_designer_te_engine SYSTEM PUBLIC ${_te} ${_imgui})
+    target_include_directories(ysp_designer_te_engine PUBLIC ${_te_config} ${CMAKE_CURRENT_SOURCE_DIR}/app)
+    target_compile_definitions(ysp_designer_te_engine PUBLIC IMGUI_USER_CONFIG="imconfig_designer_te.h")
+    target_link_libraries(ysp_designer_te_engine PUBLIC Threads::Threads)
+    set_target_properties(ysp_designer_te_engine PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+    if(MSVC)
+        target_compile_options(ysp_designer_te_engine PRIVATE /GR- /EHs-c- /W0)
+        target_compile_definitions(ysp_designer_te_engine PRIVATE _HAS_EXCEPTIONS=0)
+    else()
+        target_compile_options(ysp_designer_te_engine PRIVATE -fno-exceptions -fno-rtti -w)
+    endif()
+
+    # The runner, the UI layer and ImGui, with the designer's flags.
+    add_executable(test_designer_te ${PROJECT_SOURCE_DIR}/tests/designer/te_test.cpp ${_te_config}/imconfig_designer_te.h
+        ${_ui_sources})
+    target_link_libraries(test_designer_te PRIVATE ysp_designer_te_engine ysp_designer_core ysp_designer_skb ysp_skribidi)
+    target_compile_definitions(test_designer_te PRIVATE YSP_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+        YSP_DESIGNER_FONT_DIR="${CMAKE_CURRENT_BINARY_DIR}/fonts")
+    set_target_properties(test_designer_te PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+    if(MSVC)
+        target_compile_options(test_designer_te PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/GR- /EHs-c->)
+        target_compile_definitions(test_designer_te PRIVATE _HAS_EXCEPTIONS=0)
+    else()
+        target_compile_options(test_designer_te PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions -fno-rtti -fno-threadsafe-statics>)
+    endif()
+    add_test(NAME test_designer_te COMMAND test_designer_te ${CMAKE_CURRENT_BINARY_DIR}/designer_te_work)
+    set_tests_properties(test_designer_te PROPERTIES TIMEOUT 120)
 endif()
 
 if(NOT TARGET SDL3::SDL3)

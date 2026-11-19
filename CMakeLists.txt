@@ -142,6 +142,11 @@ option(YSP_BUILD_PLAYER "Build the player (docs/player.md); needs YSP_BUILD_PACK
 # tests always, its window when SDL3, GL ES and Dear ImGui
 # (tools/vendor_designer.py) are there.
 option(YSP_BUILD_DESIGNER "Build the designer (docs/designer.md); needs YSP_BUILD_PLAYER, YSP_BUILD_PACK and YSP_BUILD_LAYOUT" OFF)
+# Off by default: the designer's UI tests on the Dear ImGui Test Engine, which
+# has its own license, not MIT (docs/designer.md, "UI tests with the Test
+# Engine"). Nothing else needs it; tools/vendor_designer.py --test-engine
+# fetches it.
+option(YSP_DESIGNER_TEST_ENGINE "Build test_designer_te on the Dear ImGui Test Engine (own license: docs/designer.md)" OFF)
 
 # ysp/screen.h needs SDL3 (3.2 or later). Without it only its SDL-free test is
 # built; point SDL3_DIR at an SDL3 CMake package to build the rest. ANGLE is
