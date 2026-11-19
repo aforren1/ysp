@@ -106,8 +106,7 @@ if(YSP_BUILD_TESTS)
     target_link_libraries(test_designer_ui PRIVATE ysp_designer_ui)
     target_compile_definitions(test_designer_ui PRIVATE YSP_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
         YSP_DESIGNER_FONT_DIR="${CMAKE_CURRENT_BINARY_DIR}/fonts")
-    set_target_properties(test_designer_ui PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF
-        LINKER_LANGUAGE C)
+    set_target_properties(test_designer_ui PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
     add_test(NAME test_designer_ui COMMAND test_designer_ui ${CMAKE_CURRENT_BINARY_DIR}/designer_ui_work)
 endif()
 
@@ -127,7 +126,7 @@ add_executable(ysp_designer app/main.cpp ${_imgui}/backends/imgui_impl_sdl3.cpp 
 target_include_directories(ysp_designer PRIVATE ${_imgui}/backends)
 target_compile_definitions(ysp_designer PRIVATE IMGUI_IMPL_OPENGL_ES3)
 target_link_libraries(ysp_designer PRIVATE ysp_designer_ui SDL3::SDL3 ${YSP_GLESV2})
-# Linked by the C driver: a reference to the C++ runtime fails the link
-# instead of shipping one.
-set_target_properties(ysp_designer PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF
-    LINKER_LANGUAGE C)
+# The designer's own C++ and ImGui need no C++ runtime; the program still
+# links libstdc++ for one symbol of the vendored HarfBuzz
+# (std::__throw_system_error), as ypak does (docs/designer.md).
+set_target_properties(ysp_designer PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)

@@ -131,6 +131,8 @@ bool dsg_locate_need(const char* text, size_t n, int need, const char* name, dsg
 /* Line and column (1-based, bytes) to a byte offset, clamped to the line's
  * end and the text's end. */
 uint32_t dsg_offset_of(const char* text, size_t n, uint32_t line, uint32_t column);
+/* A byte offset to line and column (1-based, bytes). */
+void dsg_line_col(const char* text, size_t n, uint32_t offset, uint32_t* line, uint32_t* column);
 /* Codepoints in text[0, byte_offset): an editor's text position. */
 uint32_t dsg_codepoints_before(const char* text, size_t n, uint32_t byte_offset);
 /* The byte offset of codepoint cp (clamped to n). */
@@ -159,9 +161,12 @@ typedef struct dsg_issue {
 
 /* What a check gives. Every pointer stays valid until the checker's next
  * dsg_check() or dsg_checker_free(). */
+/* dsg_report.status: pl_check()'s PL_CHECK_* values, for callers that do
+ * not include player.h; -1 when pl_check() did not run. */
+enum { DSG_CHECK_NONE = -1, DSG_CHECK_OK = 0, DSG_CHECK_DEFINITION = 1, DSG_CHECK_REFUSED = 2 };
+
 typedef struct dsg_report {
-    int              status;     /* pl_check()'s PL_CHECK_*; -1 when it did
-                                  * not run (no check pack)                   */
+    int              status;     /* DSG_CHECK_*                              */
     const dsg_issue* issues;     /* errors first, then warnings, needs, notes */
     int              n_issues;
     int              n_errors;

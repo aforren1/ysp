@@ -14,6 +14,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* dsg.h names pl_check()'s statuses for callers without player.h. */
+typedef char dsg_status_ok[((int)DSG_CHECK_OK == (int)PL_CHECK_OK && (int)DSG_CHECK_DEFINITION == (int)PL_CHECK_DEFINITION &&
+                            (int)DSG_CHECK_REFUSED == (int)PL_CHECK_REFUSED) ? 1 : -1];
+
 /* The session seed of every check: the result must not change between two
  * checks of one text (pl_check() is deterministic for one seed). */
 #define DSG_CHECK_SEED 1u
@@ -125,13 +129,14 @@ static void add_issue(dsg_checker* c, int sev, int from, const dsg_place* at, in
     c->n_issues++;
 }
 
-/* The place a message gives as "(line N, column M)" (the pack tool's form of
- * a loader refusal), so a build error links to its field too. */
+/* The place a message gives as "line N, column M" (the pack tool's form),
+ * so a build error links to its field too. */
 static void place_in_message(const char* msg, const char* text, size_t n, dsg_place* out) {
-    const char* s = strstr(msg, "(line ");
+    const char* s = msg;
     unsigned l = 0, col = 0;
     memset(out, 0, sizeof *out);
-    if (s && sscanf(s, "(line %u, column %u)", &l, &col) == 2 && l > 0) {
+    while ((s = strstr(s, "line ")) != NULL && sscanf(s, "line %u, column %u", &l, &col) != 2) s += 5;
+    if (s && l > 0) {
         out->line = l;
         out->column = col;
         out->offset = dsg_offset_of(text, n, l, col);
@@ -350,6 +355,8 @@ int dsg_check(dsg_checker* c, const dsg_project* p, const char* text, size_t n, 
     pl_check_desc d;
     pl_check_result res;
     int i;
+    bool derive_failed = false;
+    char derive_err[1024];
     memset(r, 0, sizeof *r);
     r->status = -1;
     c->n_issues = 0;
@@ -381,11 +388,8 @@ int dsg_check(dsg_checker* c, const dsg_project* p, const char* text, size_t n, 
         }
     } else {
         uint8_t key[32];
-        char err[1024];
-        if (texts_key(c, text, n, key, err, sizeof err) != 0) {
-            dsg_place at;
-            place_in_message(err, text, n, &at);
-            add_issue(c, DSG_SEV_ERROR, DSG_FROM_PACK, &at, PL_OBJ_NONE, NULL, "the pack tool: %s", err);
+        if (texts_key(c, text, n, key, derive_err, sizeof derive_err) != 0) {
+            derive_failed = true;
         } else if (memcmp(key, c->texts, sizeof key) != 0) {
             /* a failed rebuild leaves the old pack, still good for the rest */
             (void)try_build(c, p, text, n, r);
@@ -401,6 +405,13 @@ int dsg_check(dsg_checker* c, const dsg_project* p, const char* text, size_t n, 
     d.cal = c->have_cal ? &c->cal : NULL;
     r->status = pl_check(c->pl, &d, &res);
     if (res.report) add_diags(c, res.report, text, n);
+    /* The pack tool's own refusal of the texts; a text the loader refuses
+     * has the loader's message, which says the same with more care. */
+    if (derive_failed && res.status != PL_CHECK_DEFINITION) {
+        dsg_place at;
+        place_in_message(derive_err, text, n, &at);
+        add_issue(c, DSG_SEV_ERROR, DSG_FROM_PACK, &at, PL_OBJ_NONE, NULL, "the pack tool: %s", derive_err);
+    }
     if (res.status == PL_CHECK_REFUSED) {
         dsg_place at;
         dsg_locate_object(text, n, res.object, res.object_name, &at);

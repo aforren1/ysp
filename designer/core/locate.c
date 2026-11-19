@@ -21,6 +21,10 @@ uint32_t dsg_offset_of(const char* text, size_t n, uint32_t line, uint32_t colum
     return (uint32_t)i;
 }
 
+void dsg_line_col(const char* text, size_t n, uint32_t offset, uint32_t* line, uint32_t* column) {
+    yjs_line_col(text, n, offset < n ? offset : n, line, column);
+}
+
 uint32_t dsg_codepoints_before(const char* text, size_t n, uint32_t byte_offset) {
     uint32_t cp = 0;
     size_t i, end = byte_offset < n ? byte_offset : n;
