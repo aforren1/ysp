@@ -1,0 +1,41 @@
+Subject: [PATCH] editor: End on a paragraph after the first stops before its LF
+
+skb_editor_get_line_end_at() (End, Shift+End, Command+Right on macOS, a
+triple click, a drag by lines, Down on the last line) builds the caret at
+the line's last grapheme as a global offset: the paragraph's start plus
+line->last_grapheme_offset. It gives that caret to
+skb__caret_prune_control_eol(), which moves a caret off a line's last
+control character (the LF or U+2029 that ends a paragraph) by comparing
+caret.offset with line->last_grapheme_offset, an offset in the
+paragraph. The two are equal only in paragraph 0. In each later
+paragraph the prune did nothing: the caret stayed on the leading edge of
+the LF, after it. In an editor with a paragraph per line, End was right
+on the first line and one character past the end on each later line;
+a letter typed there went to the start of the next line, and Shift+End
+and a triple click selected the LF.
+
+The prune now gets the offset in the paragraph, and the paragraph's
+start is added after it. Paragraph 0 and lines that do not end in a
+control character give the same caret as before.
+---
+diff --git a/src/skb_editor.c b/src/skb_editor.c
+index caeffd1..b127eaf 100644
+--- a/src/skb_editor.c
++++ b/src/skb_editor.c
+@@ -999,11 +999,14 @@ skb_text_position_t skb_editor_get_line_end_at(const skb_editor_t* editor, skb_t
+ 	const skb_layout_line_t* lines = skb_layout_get_lines(skb__get_layout(editor, paragraph_pos.paragraph_idx));
+ 	const skb_layout_line_t* line = &lines[edit_line_idx];
+ 
++	// The prune compares the caret with the line's offsets in the paragraph; the paragraph's start is added after it.
+ 	skb_text_position_t result = {
+-		.offset = skb__get_global_text_offset(editor, paragraph_pos.paragraph_idx) + line->last_grapheme_offset,
++		.offset = line->last_grapheme_offset,
+ 		.affinity = SKB_AFFINITY_EOL,
+ 	};
+-	return skb__caret_prune_control_eol(skb__get_layout(editor, paragraph_pos.paragraph_idx), line, result);
++	result = skb__caret_prune_control_eol(skb__get_layout(editor, paragraph_pos.paragraph_idx), line, result);
++	result.offset += skb__get_global_text_offset(editor, paragraph_pos.paragraph_idx);
++	return result;
+ }
+ 
+ // TODO: should we expose this?

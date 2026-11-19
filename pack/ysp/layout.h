@@ -1,4 +1,4 @@
-/* ysp/layout.h - v0.3.3 - text layout for the pack tool and the player
+/* ysp/layout.h - v0.3.4 - text layout for the pack tool and the player
  *
  *   Lays out UTF-8 text with Skribidi (vendored in third_party/, pinned, with
  *   local patches) and gives glyphs as ysp/gfx.h curve-run items over
@@ -90,6 +90,14 @@
  *   the player do not call the editor. The stamp's patch field lists eight
  *   hashes, and ends in ",tree-differs" when any source file a patch
  *   changes differs from the manifest (skb_layout.c only before).
+ *
+ *   v0.3.4 (2026-11-19): Skribidi patch 0009, for the designer's text
+ *   fields; the layout does not change. In Skribidi's editor, End took the
+ *   caret past the LF (or U+2029) that ends a paragraph on each paragraph
+ *   but the first, so a letter typed there went to the next line; Shift+End,
+ *   Command+Right on macOS, a triple click and a drag by lines selected the
+ *   LF. docs/layout.md, Patch 0009. The pack tool and the player do not
+ *   call the editor. The stamp's patch field lists nine hashes.
  */
 #ifndef YSP_LAYOUT_H_INCLUDED
 #define YSP_LAYOUT_H_INCLUDED
@@ -103,7 +111,7 @@
 extern "C" {
 #endif
 
-#define YLAY_VERSION_STRING "0.3.3"
+#define YLAY_VERSION_STRING "0.3.4"
 #define YLAY_MAX_FONTS      64
 
 /* Return codes: ysp/outline.h's values for the same meaning. */
