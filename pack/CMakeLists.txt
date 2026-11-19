@@ -133,24 +133,39 @@ if(YSP_BUILD_PACK)
         set(_lsr_pin "${_lsr_pin},tree-differs")
     endif()
 
-    add_library(ysp_pack_tool STATIC pack_tool.c pack_impl.c import.c derive.c ysp/pack_tool.h)
-    target_include_directories(ysp_pack_tool PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-    target_include_directories(ysp_pack_tool SYSTEM PRIVATE ${_plm})
-    target_link_libraries(ysp_pack_tool PRIVATE ysp_stb_image ysp_samplerate)
-    target_compile_definitions(ysp_pack_tool PRIVATE YPT_STB_IMAGE="${_stb_pin}" YPT_PL_MPEG="${_plm_pin}" YPT_LIBSAMPLERATE="${_lsr_pin}")
+    # The tool library in two parts, so that a program with the player too
+    # (the designer) links one set of header implementations:
+    #   ysp_pack_tool_code  the tool's sources and the implementations of the
+    #                       headers only it uses (tool_impl.c)
+    #   ysp_pack_impl       the implementations of the headers it shares with
+    #                       the player (pack_impl.c), without SDL or miniaudio
+    #   ysp_pack_tool       both: what ypak and the tests link
+    # A program with the player links ysp_pack_tool_code and ysp_player_impl
+    # (player/CMakeLists.txt) in place of ysp_pack_impl.
+    add_library(ysp_pack_tool_code STATIC pack_tool.c tool_impl.c import.c derive.c ysp/pack_tool.h)
+    add_library(ysp_pack_impl STATIC pack_impl.c)
+    add_library(ysp_pack_tool INTERFACE)
+    target_link_libraries(ysp_pack_tool INTERFACE ysp_pack_tool_code ysp_pack_impl)
+    target_include_directories(ysp_pack_tool_code PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+    target_include_directories(ysp_pack_tool_code SYSTEM PRIVATE ${_plm})
+    target_link_libraries(ysp_pack_tool_code PRIVATE ysp_stb_image ysp_samplerate)
+    target_compile_definitions(ysp_pack_tool_code PRIVATE YPT_STB_IMAGE="${_stb_pin}" YPT_PL_MPEG="${_plm_pin}" YPT_LIBSAMPLERATE="${_lsr_pin}")
     # The headers' implementations need ysp::core's threads and libm, and dl
     # for ysp/gfx.h's headless presenter; not ysp::rig, which would link SDL3
     # into a tool that never opens a window.
-    target_link_libraries(ysp_pack_tool PUBLIC ysp_lodepng ysp::core ${CMAKE_DL_LIBS})
+    target_link_libraries(ysp_pack_tool_code PUBLIC ysp_lodepng ysp::core ${CMAKE_DL_LIBS})
+    target_link_libraries(ysp_pack_impl PUBLIC ysp::core ${CMAKE_DL_LIBS})
     if(YSP_BUILD_LAYOUT)
-        target_link_libraries(ysp_pack_tool PUBLIC ysp_layout)
+        target_link_libraries(ysp_pack_tool_code PUBLIC ysp_layout)
     else()
         # PUBLIC: ypak and the tool test see which kinds this build has.
-        target_compile_definitions(ysp_pack_tool PUBLIC YPT_NO_LAYOUT)
+        target_compile_definitions(ysp_pack_tool_code PUBLIC YPT_NO_LAYOUT)
     endif()
-    target_compile_options(ysp_pack_tool PRIVATE ${YSP_WARNINGS})
-    target_compile_definitions(ysp_pack_tool PRIVATE YPT_LODEPNG="${_lp_pin}")
-    set_target_properties(ysp_pack_tool PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_compile_definitions(ysp_pack_tool_code PRIVATE YPT_LODEPNG="${_lp_pin}")
+    foreach(t ysp_pack_tool_code ysp_pack_impl)
+        target_compile_options(${t} PRIVATE ${YSP_WARNINGS})
+        set_target_properties(${t} PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    endforeach()
 
     add_executable(ypak ypak.c)
     target_link_libraries(ypak PRIVATE ysp_pack_tool)

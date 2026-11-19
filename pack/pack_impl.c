@@ -1,12 +1,14 @@
-/* The implementations of the ysp headers the pack tool uses, compiled once
- * for the library (pack/ysp/pack_tool.h). ysp/gfx.h without SDL: the tool
- * needs its shader wrapper and curve set check, never a window; its
- * implementation brings ysp/screen.h's, ysp/color.h's and ysp/rt.h's.
- * ysp/video.h for yvid_index_make() and the frame sequence format, with
- * pl_mpeg (third_party/pl_mpeg) for MPEG-1 and Media Foundation for MP4 on
- * Windows; it brings ysp/timeline.h's.
- * ysp/audio.h without miniaudio: the tool needs the WAV probe only.
- * ysp/json.h reads and writes every description and manifest. */
+/* The implementations of the ysp headers that the pack tool shares with the
+ * player, compiled once for the pack tool alone (ysp_pack_impl, linked by
+ * ysp_pack_tool). ysp/gfx.h without SDL: the tool needs its shader wrapper
+ * and curve set check, never a window; its implementation brings
+ * ysp/screen.h's, ysp/color.h's and ysp/rt.h's. ysp/timeline.h for
+ * ysp/video.h. ysp/audio.h without miniaudio: the tool needs the WAV probe
+ * only. ysp/json.h reads and writes every description and manifest.
+ *
+ * Every header here is also in player/impl.c, which a program with the
+ * player and the tool links in place of this file (docs/designer.md). A
+ * header that the player does not implement goes in tool_impl.c. */
 #if defined(_MSC_VER) && !defined(_CRT_SECURE_NO_WARNINGS)
 #define _CRT_SECURE_NO_WARNINGS
 #endif
@@ -18,12 +20,10 @@
 #endif
 #define YSP_GFX_IMPLEMENTATION
 #include "ysp/gfx.h"
-#define YSP_VIDEO_IMPLEMENTATION
-#include "ysp/video.h"
+#define YSP_TIMELINE_IMPLEMENTATION
+#include "ysp/timeline.h"
 #define YSP_AUDIO_IMPLEMENTATION
 #include "ysp/audio.h"
-#define YSP_OUTLINE_IMPLEMENTATION
-#include "ysp/outline.h"
 #define YSP_TABLE_IMPLEMENTATION
 #include "ysp/table.h"
 #define YSP_PACK_IMPLEMENTATION

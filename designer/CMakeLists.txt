@@ -6,22 +6,15 @@
 # headless by test_designer_core. ysp_designer: the window (designer/app),
 # built when SDL3, GL ES and Dear ImGui (tools/vendor_designer.py) are there.
 
-# The player's and the pack tool's sources, compiled again with one set of
-# header implementations (core/engine_impl.c says why). Their libraries stay
-# as they are; the pins and flags are theirs.
-get_target_property(_ypt_defs ysp_pack_tool COMPILE_DEFINITIONS)
-set(_pl ${PROJECT_SOURCE_DIR}/player)
-set(_pk ${PROJECT_SOURCE_DIR}/pack)
+# The player and the pack tool with one set of header implementations: the
+# player's (ysp_player_impl, with SDL and miniaudio), and the pack tool's
+# code without its own copies of the shared ones (ysp_pack_tool_code, not
+# ysp_pack_tool). pack/CMakeLists.txt says how the libraries are split.
 add_library(ysp_designer_core STATIC
-    core/dsg.h core/check.c core/locate.c core/platform.c core/project.c core/redraw.c core/engine_impl.c
-    ${_pl}/eval.c ${_pl}/host.c ${_pl}/lower.c ${_pl}/run.c ${_pl}/v2.c
-    ${_pk}/pack_tool.c ${_pk}/import.c ${_pk}/derive.c)
-target_include_directories(ysp_designer_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core ${_pl} ${_pk})
-target_include_directories(ysp_designer_core SYSTEM PRIVATE ${PROJECT_SOURCE_DIR}/third_party/pl_mpeg)
-target_compile_definitions(ysp_designer_core PRIVATE ${_ypt_defs})
+    core/dsg.h core/check.c core/locate.c core/platform.c core/project.c core/redraw.c)
+target_include_directories(ysp_designer_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core)
 target_compile_definitions(ysp_designer_core PUBLIC $<$<C_COMPILER_ID:MSVC>:_CRT_SECURE_NO_WARNINGS _CRT_NONSTDC_NO_DEPRECATE>)
-target_link_libraries(ysp_designer_core PUBLIC ysp::rig ysp::methods ysp::devices ysp_layout ysp_lodepng
-    PRIVATE ysp_stb_image ysp_samplerate ${CMAKE_DL_LIBS})
+target_link_libraries(ysp_designer_core PUBLIC ysp_player_lib ysp_pack_tool_code ysp_player_impl)
 target_compile_options(ysp_designer_core PRIVATE ${YSP_WARNINGS})
 set_target_properties(ysp_designer_core PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
 ysp_profiled(ysp_designer_core)

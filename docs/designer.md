@@ -94,12 +94,22 @@ and keeps it in memory.
   pack in memory. A failed build is not tried again for the same text.
 - Until a pack exists, a check gives `yexp_load()`'s diagnostics with no
   host and a note that the other checks wait.
-- The player and the pack tool each compile their own header
-  implementations, so their libraries cannot link into one program.
-  `designer/core/engine_impl.c` compiles the player's implementations
-  once, with ysp/outline.h's and ysp/video.h's for the pack tool, and
-  `ysp_designer_core` compiles both libraries' other sources against it.
-  Neither library changes.
+- One implementation of each header, with SDL and miniaudio.
+  `ysp_designer_core` links `ysp_player_lib`, `ysp_pack_tool_code` and
+  `ysp_player_impl` (`player/impl.c`). It does not link `ysp_pack_impl`
+  (`pack/pack_impl.c`), the pack tool's copy of the headers that it
+  shares with the player, compiled without SDL and miniaudio for ypak.
+  `ysp_pack_tool_code` has the implementations of the headers that only
+  the tool uses (`pack/tool_impl.c`: ysp/video.h, ysp/outline.h), so the
+  designer's pack tool is ypak's but for the SDL and miniaudio backends,
+  which the tool does not call. The headers' declarations do not change
+  with `YSCR_NO_SDL` or `YAU_NO_MINIAUDIO`. A header in `pack_impl.c` must
+  also be in `player/impl.c` ([pack.md](pack.md) 5.1); the designer's link
+  fails if it is not.
+- Until 2026-11-19 the designer compiled both libraries' sources again
+  against its own implementation file (`designer/core/engine_impl.c`).
+  Each new source file of either library then also had to go in the
+  designer's list. That file and the lists are gone.
 
 **A refusal's link, while the definition is text.** Step 3 edits the
 definition as JSON text in a multi-line Skribidi editor. Each issue has a
@@ -192,7 +202,8 @@ Out of the first version, in rough order:
 ```
 ysp_designer (C++, Dear ImGui, SDL3, GL ES 3.0)
     +-- player core (C library: load, check, lower, simulated run)
-    +-- ysp_pack_tool, ysp_layout (Skribidi, HarfBuzz)
+    +-- ysp_pack_tool_code, ysp_layout (Skribidi, HarfBuzz)
+    +-- ysp_player_impl (the header implementations, once)
     +-- ysp/gfx.h on ImGui's GL context (preview)
     |
     +-- native: starts ysp_player for a real run

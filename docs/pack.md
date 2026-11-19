@@ -958,15 +958,31 @@ are (`"op": "copy"`). A definition also gives the experiment's glyph runs
 
 ### 5.1 Library and CLI
 
-`pack/ysp/pack_tool.h`, `pack/pack_tool.c` and `pack/pack_impl.c` (prefix
-`ypt_`), a C11 library in the pack tool's tree beside `pack/layout`.
-`pack_impl.c` compiles the implementations of ysp/pack.h, ysp/json.h,
-ysp/table.h, ysp/outline.h, ysp/gfx.h (without SDL: the shader wrapper
-and the curve set check), ysp/color.h, ysp/audio.h (without miniaudio:
-the WAV probe), ysp/video.h (from tool v0.4.0: `yvid_index_make()` with
-pl_mpeg, and Media Foundation on Windows), ysp/timeline.h and ysp/rt.h
-once, so a program that links the library defines none of them.
-`pack/import.c` holds the readers of other formats (`.xlsx`, JPEG, ICC).
+`pack/ysp/pack_tool.h`, `pack/pack_tool.c`, `pack/tool_impl.c` and
+`pack/pack_impl.c` (prefix `ypt_`), a C11 library in the pack tool's tree
+beside `pack/layout`. The two implementation files compile the
+implementations of ysp/pack.h, ysp/json.h, ysp/table.h, ysp/outline.h,
+ysp/gfx.h (without SDL: the shader wrapper and the curve set check),
+ysp/color.h, ysp/audio.h (without miniaudio: the WAV probe), ysp/video.h
+(from tool v0.4.0: `yvid_index_make()` with pl_mpeg, and Media Foundation
+on Windows), ysp/timeline.h and ysp/rt.h once, so a program that links the
+library defines none of them. `pack/import.c` holds the readers of other
+formats (`.xlsx`, JPEG, ICC).
+
+The CMake target `ysp_pack_tool` is the library; ypak and the tests link
+it. It has two parts:
+
+| Target | Files | What |
+|---|---|---|
+| `ysp_pack_tool_code` | `pack_tool.c`, `import.c`, `derive.c`, `tool_impl.c` | The tool, and the implementations of the headers that only the tool uses: ysp/video.h and ysp/outline.h |
+| `ysp_pack_impl` | `pack_impl.c` | The implementations of the headers that the tool shares with the player, without SDL and miniaudio |
+
+A program that also links the player (the designer) links
+`ysp_pack_tool_code` and the player's `ysp_player_impl`, and not
+`ysp_pack_impl`: one implementation of each header, with SDL and
+miniaudio ([designer.md](designer.md), "Decisions of step 3"). Each
+header in `pack_impl.c` must also be in `player/impl.c`; put a header that
+the player does not implement in `tool_impl.c`.
 It also links lodepng and stb_image (each compiled as C from the fetched
 file, its warnings off) and, in the full tool only, `pack/layout`
 (Skribidi and HarfBuzz). It builds with MSVC, MinGW, Linux gcc and emcc,
@@ -984,7 +1000,7 @@ the library's calls and the pack format are the same in both:
 
 Configure stops with the fetch command when a file set is missing. The
 core build compiles the library with `YPT_NO_LAYOUT` (a public definition
-of the `ysp_pack_tool` target) and links no layout code. It refuses a
+of the `ysp_pack_tool_code` target) and links no layout code. It refuses a
 GLYPHRUNS resource by name ("glyph runs need the layout library; this
 ypak was built without it"), so `ypak rebuild` of a pack with glyph runs
 also fails there. From tool v0.6.0 it also refuses a definition with
