@@ -1,6 +1,6 @@
 # ysp/dataset.h
 
-Status: v0.2.0, 2026-10-25 (v0.1.0, 2026-10-21). The header's manual is the reference (THE
+Status: v0.4.0, 2026-11-18 (v0.1.0, 2026-10-21). The header's manual is the reference (THE
 FOLDER, SESSION.JSON, THE TABLES, THE ZIP). This page records why the
 header exists, where it lives, the decisions, and the results.
 
@@ -120,6 +120,7 @@ download the bytes that `write` gets, or give a path. The zip is stored
 | `trial_index` in frames.csv and events.csv | Yes | It joins a frame or an event to its trial row without a time window |
 | Missing values in frames, events, clock | `_init()` sets each field to the trials writer's missing value; the caller sets what the row has | A zeroed struct would write 0, a value, in every field the caller did not set |
 | Stream names | The column rule and unique in more than case | Each name is a file name; on Windows `dots.csv` and `DOTS.csv` are one file |
+| A stream's checks with no data set (v0.4.0) | `yds_stream_check()`: the names taken before, the name, the count, the columns through a caller's `ytr_data`; `yds_stream()` runs the same function | The player's `pl_check()` checks a definition before any folder exists, and must refuse what `yds_stream()` refuses with the same message. A copy of the rules in the player would drift. The caller gives the `ytr_data` (38 KB), so the check allocates nothing and puts nothing large on the stack |
 | The zip | Stored, CRC-32, UTF-8 names (bit 11), every date 1980-01-01, the folder's name as the top folder; no zip64 | The pack tool's zip knowledge (`pack/pack_tool.c`), without its alignment and private records. Fixed dates make the bytes depend on the files only (the test pins a digest). A data set of 4 GiB or more does not fit wasm32's memory; on a rig the folder is the data set |
 | Memory | A `ytr_data` per table in the handle (16 streams: about 770 KB with ysp/trials.h v0.6, 380 KB with v0.5); `session.json`'s values in a heap arena | No allocation per row. The arena grows by the values set, which happens at the open, per live change and at the finish |
 | An abnormal end (v0.2, 2026-10-25) | `yds_abandon()`: close every table file, free the arena, leave session.json as it is | `"closed": true` must mean that the session ended normally. In v0.1 the only end was `yds_close()`, which finishes, so a binding's teardown after an exception (Python's garbage collector, `clear mex`, the exit of MATLAB) wrote `"closed": true` and the row counts for a session that failed (found in the binding review). A crash leaves `"closed": false` already; the abandon gives a cleanup path the same result on purpose |
@@ -142,6 +143,34 @@ WSL2 Ubuntu 22.04 gcc 11.4, emcc under node 24.19.
 | pandas | pandas 2 reads every golden file with its defaults, the quoted line break included |
 | trials v0.6's data-line columns | A session with a variable and a seed: each row's variable text and `trial_seed` (`yds_seed_text()`) equal the trials writer's own data line (`ytr_format_row()`), and read back from trials.csv as text |
 | Mutants (`tests/mutate/dataset.toml`) | v0.2.0: 39 in all, MinGW gcc 16.1: 38 killed, among them the 6 new ones (ds-34 to ds-39: the abandon finishes, leaves the streams' files open, leaves the handle open; the existing folder reported as I/O; the open keeps an earlier code; a failure without a code). ds-35 needs Windows (a held file refuses a writer); on POSIX it survives. v0.1.0: 33 in all, 32 killed; ds-09 (no sync before the rename) survives as expected, since only a power cut shows it |
+
+### A stream's checks with no data set (v0.4.0, 2026-11-18)
+
+`yds_stream_check(taken, n_taken, name, cols, n_cols, scratch, err, cap)`
+runs `yds_stream()`'s checks with no data set, no folder and no file: the
+name rule, the names taken before it in any case, `YDS_MAX_STREAMS`, then
+the columns through `scratch`, which it closes again. It returns
+`yds_stream()`'s code and writes `yds_stream()`'s message to `err`, with
+the `ysp_dataset: ` prefix of `yds_error()`; `err` is empty on `YDS_OK`.
+`yds_stream()` calls the same internal function with its own names, so
+the two cannot drift. The player's `pl_check()` (0.15.0) uses it for the
+rdk and trace streams ([player.md](player.md#reference-pl_check)). No
+struct change; the bindings do not wrap it. ysp-dataset 0.4.0 (Python)
+reports the version, with no binding change.
+
+On the Linux desktop (GCC 12.2): `tests/adapt/dataset_test.c` 800 checks
+pass (C11 -O2, and -O1 with ASan and UBSan under `setarch -R`). Each `yds_stream()` call of the refusal test first runs
+`yds_stream_check()` with the data set's names, and the two give the same
+code and message; the check makes no file and leaves no message on
+`YDS_OK`. Its own arguments: a NULL scratch, a negative count, a NULL
+name in `taken`, an `err` shorter than the prefix (cut, nothing written
+past it). `tests/compile/dataset.c` calls it as C and C++. The Python
+binding's 21 tests pass (CPython 3.12). Mutants `dk-01` to `dk-07` (the
+columns skipped, `yds_stream()` with no names taken, a NULL scratch or
+name read, no empty message, a write past a short `err`, no error code),
+and `ds-20` and `ds-22` with their new anchors: 9 of 9 killed. The whole
+list: 45 killed, `ds-06`, `ds-07` and `ds-35` survive on POSIX and
+`ds-09` survives, as before; the three macOS mutants are skipped.
 
 ### frames.csv's extension_s (v0.3.0, 2026-11-18)
 

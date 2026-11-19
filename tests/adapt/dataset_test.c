@@ -796,6 +796,39 @@ static void test_abandon(void) {
     CHECK(!exists(WORK "/abandon3"));
 }
 
+/* yds_stream() on ds, after yds_stream_check() with ds's names as taken:
+ * the same code and the same message (v0.4.0), and the check makes no
+ * file. Returns yds_stream()'s result. */
+static ytr_data g_scratch;
+static int stream_both(yds_dataset* ds, const char* dir, const char* name, const ytr_col* cols, int n, int line) {
+    const char* taken[YDS_MAX_STREAMS];
+    char err[sizeof ds->error], p[512], file[128];
+    int i, want, got;
+    for (i = 0; i < ds->n_streams; i++) taken[i] = ds->stream_name[i];
+    memset(err, 'x', sizeof err - 1);   /* a message left from before shows */
+    err[sizeof err - 1] = '\0';
+    want = yds_stream_check(taken, ds->n_streams, name, cols, n, &g_scratch, err, sizeof err);
+    snprintf(file, sizeof file, "streams/%s.csv", name ? name : "x");
+    g_checks++;
+    if (name && want == YDS_OK && exists(path_in(p, sizeof p, dir, file))) fail_s(line, "the check made the stream's file", file, "");
+    got = yds_stream(ds, name, cols, n);
+    g_checks++;
+    if ((want < 0 ? want : 0) != (got < 0 ? got : 0)) {
+        char a[16], b[16];
+        snprintf(a, sizeof a, "%d", want);
+        snprintf(b, sizeof b, "%d", got);
+        fail_s(line, "yds_stream_check() and yds_stream() give other codes", a, b);
+    }
+    g_checks++;
+    if (got < 0 && strcmp(err, yds_error(ds)) != 0) fail_s(line, "yds_stream_check() and yds_stream() give other messages", err, yds_error(ds));
+    g_checks++;
+    if (got >= 0 && err[0]) fail_s(line, "yds_stream_check() set a message on YDS_OK", err, "");
+    g_checks++;
+    if (got < 0 && ds->error_code != got) fail_s(line, "yds_stream() kept another error_code", yds_strerror(ds->error_code), yds_strerror(got));
+    return got;
+}
+#define STREAM(name, cols, n) stream_both(&g_ds, WORK "/plain", (name), (cols), (n), __LINE__)
+
 static void test_refusals(void) {
     yds_desc d;
     char longdir[YDS_MAX_DIR + 8];
@@ -929,26 +962,56 @@ static void test_refusals(void) {
         CHECK_S(e.kind, "user");
     }
     /* Streams */
-    CHECK_I(yds_stream(&g_ds, "a-b", g_dots_cols, 3), YDS_ERR_ARG);
+    CHECK_I(STREAM("a-b", g_dots_cols, 3), YDS_ERR_ARG);
     CHECK_HAS(yds_error(&g_ds), "not a name");
-    CHECK_I(yds_stream(&g_ds, "1x", g_dots_cols, 3), YDS_ERR_ARG);
-    CHECK_I(yds_stream(&g_ds, "", g_dots_cols, 3), YDS_ERR_ARG);
-    CHECK_I(yds_stream(&g_ds, NULL, g_dots_cols, 3), YDS_ERR_ARG);
-    CHECK_I(yds_stream(&g_ds, "../up", g_dots_cols, 3), YDS_ERR_ARG);
-    CHECK_I(yds_stream(&g_ds, "a234567890123456789012345678901234567890123456789012345678901234", g_dots_cols, 3),
+    CHECK_I(STREAM("1x", g_dots_cols, 3), YDS_ERR_ARG);
+    CHECK_I(STREAM("", g_dots_cols, 3), YDS_ERR_ARG);
+    CHECK_I(STREAM(NULL, g_dots_cols, 3), YDS_ERR_ARG);
+    CHECK_I(STREAM("../up", g_dots_cols, 3), YDS_ERR_ARG);
+    CHECK_I(STREAM("a234567890123456789012345678901234567890123456789012345678901234", g_dots_cols, 3),
             YDS_ERR_ARG);
-    CHECK_I(yds_stream(&g_ds, "bad", bad_cols, 1), YDS_ERR_ARG);
+    CHECK_I(STREAM("bad", bad_cols, 1), YDS_ERR_ARG);
     CHECK_HAS(yds_error(&g_ds), "rt_s");
     CHECK(!exists(WORK "/plain/streams/bad.csv"));
-    CHECK_I(yds_stream(&g_ds, "dots", g_dots_cols, 3), 0);
-    CHECK_I(yds_stream(&g_ds, "DOTS", g_dots_cols, 3), YDS_ERR_ARG);
+    CHECK_I(STREAM("dots", g_dots_cols, 3), 0);
+    CHECK_I(STREAM("DOTS", g_dots_cols, 3), YDS_ERR_ARG);
     CHECK_HAS(yds_error(&g_ds), "more than case");
     for (i = 1; i < YDS_MAX_STREAMS; i++) {
         char nm[16];
         snprintf(nm, sizeof nm, "s%d", i);
-        CHECK_I(yds_stream(&g_ds, nm, g_dots_cols, 3), i);
+        CHECK_I(STREAM(nm, g_dots_cols, 3), i);
     }
-    CHECK_I(yds_stream(&g_ds, "one_more", g_dots_cols, 3), YDS_ERR_FULL);
+    CHECK_I(STREAM("one_more", g_dots_cols, 3), YDS_ERR_FULL);
+    {
+        /* the check's own arguments; err may be NULL or short */
+        const char* taken[2] = { "dots", NULL };
+        char small[24], big[128];
+        CHECK_I(yds_stream_check(taken, 1, "x", g_dots_cols, 3, NULL, small, sizeof small), YDS_ERR_ARG);
+        CHECK_HAS(small, "ysp_dataset: yds_str");
+        CHECK_I(strlen(small), sizeof small - 1);
+        CHECK_I(yds_stream_check(taken, -1, "x", g_dots_cols, 3, &g_scratch, NULL, 0), YDS_ERR_ARG);
+        CHECK_I(yds_stream_check(NULL, 1, "x", g_dots_cols, 3, &g_scratch, NULL, 0), YDS_ERR_ARG);
+        CHECK_I(yds_stream_check(taken, 2, "x", g_dots_cols, 3, &g_scratch, big, sizeof big), YDS_ERR_ARG);
+        CHECK_HAS(big, "taken[1]");
+        CHECK_I(yds_stream_check(NULL, 0, "x", g_dots_cols, 3, &g_scratch, NULL, 0), YDS_OK);
+        CHECK_I(yds_stream_check(taken, 1, "Dots", g_dots_cols, 3, &g_scratch, NULL, 0), YDS_ERR_ARG);
+        CHECK_I(yds_stream_check(taken, 1, "x", g_dots_cols, 3, &g_scratch, small, 1), YDS_OK);
+        CHECK_I(small[0], 0);
+        {
+            /* err shorter than the "ysp_dataset: " prefix: cut, and nothing
+             * written past cap */
+            struct { char err[8]; char after[24]; } t;
+            memset(&t, 'z', sizeof t);
+            CHECK_I(yds_stream_check(taken, 1, "Dots", g_dots_cols, 3, &g_scratch, t.err, sizeof t.err), YDS_ERR_ARG);
+            CHECK_S(t.err, "ysp_dat");
+            for (i = 0; i < (int)sizeof t.after && t.after[i] == 'z'; i++) {}
+            CHECK_I(i, (int)sizeof t.after);
+        }
+        /* no data set open: the columns are still checked, and the
+         * scratch is left closed */
+        CHECK_I(yds_stream_check(taken, 1, "x", bad_cols, 1, &g_scratch, NULL, 0), YDS_ERR_ARG);
+        CHECK(!g_scratch.open);
+    }
     CHECK(yds_stream_writer(&g_ds, YDS_MAX_STREAMS - 1) != NULL);
     CHECK(yds_stream_writer(&g_ds, YDS_MAX_STREAMS) == NULL);
     CHECK(yds_stream_writer(&g_ds, -1) == NULL);

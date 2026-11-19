@@ -13,6 +13,17 @@ timeout = 300
 env = { YPL_REPO = "{repo}" }
 env_default = { YPL_BIN = "{repo}/build/linux", YPAK = "{repo}/build/linux/pack/ypak" }
 
+# pl_check() (tests/player/check_test.c): the player's sources compiled in,
+# the example packs built with YPAK from the repository's tests/player
+[test.check]
+source = "tests/player/check_test.c"
+compiler = "gcc"
+flags = ["-std=c11", "-O1", "-w", "-DYSCR_NO_SDL", "-DPL_CHECK_MUT", "-I$YSP_MINIAUDIO"]
+libs = ["-lm", "-lpthread", "-ldl"]
+timeout = 300
+env = { YPL_REPO = "{repo}" }
+env_default = { YPAK = "{repo}/build/linux/pack/ypak" }
+
 [test.real]
 source = "tests/player/mut_real.c"
 compiler = "gcc"
@@ -1350,3 +1361,22 @@ find = '''            S->n_live_lost++;
 replace = '''            S->n_live_lost++;
             continue;
             pl_fail(p,'''
+
+# 0.15.0: a trace's stream through pl_stream(), so pl_check() checks it
+
+[[mutant]]
+id = "ck-v1"
+name = "the check skips a trace's stream"
+test = "check"
+why = "A trace's stream name and columns are checked with no data set (trace streams, trace columns)."
+find = '''    tr->stream = pl_stream(p, tr->def->name, tr->cols, tr->n_cols);'''
+replace = '''    tr->stream = p->checking ? 0 : pl_stream(p, tr->def->name, tr->cols, tr->n_cols);'''
+
+[[mutant]]
+id = "ck-v2"
+name = "a trace stream's refusal names no template"
+test = "check"
+why = "The designer shows a refusal on its object: the template of the refused trace."
+find = '''        pl_at(p, PL_OBJ_TEMPLATE, v->def->name);
+        for (i = 0; i < v->n_traces; i++, n++)'''
+replace = '''        for (i = 0; i < v->n_traces; i++, n++)'''

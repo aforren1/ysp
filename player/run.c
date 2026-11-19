@@ -442,27 +442,57 @@ static int pl_dataset_open(pl_player* p) {
     if (!yds_open(&p->ds, &d)) { pl_fail(p, "the data set '%s': %s", p->args.out_dir, yds_error(&p->ds)); yjs_arena_free(&a); return -1; }
     yjs_arena_free(&a);
     p->ds_open = true;
-    /* a stream per rdk (2.7) */
-    {
-        static const ytr_col rdk_cols[] = {
-            YTR_COL(pl_rdk_step_row, trial_index, YTR_COL_INT), YTR_COL(pl_rdk_step_row, update, YTR_COL_INT),
-            YTR_COL_D(pl_rdk_step_row, t_ns, YTR_COL_TIME_NS, 9),
-            YTR_COL_D(pl_rdk_step_row, coherence, YTR_COL_DOUBLE, 0), YTR_COL_D(pl_rdk_step_row, direction, YTR_COL_DOUBLE, 0),
-            YTR_COL_D(pl_rdk_step_row, speed, YTR_COL_DOUBLE, 0),
-        };
-        for (i = 0; i < p->n_stims; i++)
-            if (p->stims[i].def->kind == YEXP_RDK) {
-                int sid = yds_stream(&p->ds, p->stims[i].def->name, rdk_cols, (int)(sizeof rdk_cols / sizeof rdk_cols[0]));
-                if (sid < 0) { pl_fail(p, "the stream '%s': %s", p->stims[i].def->name, yds_error(&p->ds)); return -1; }
-                p->stims[i].stream = sid;
-            }
+    return 0;
+}
+
+/* pl_check()'s writer for the column checks, which discards: one, made
+ * once (38 KB). */
+static ytr_data* pl_check_scratch(pl_player* p) {
+    if (!p->check_scratch) p->check_scratch = (ytr_data*)pl_alloc(p, sizeof(ytr_data));
+    return p->check_scratch;
+}
+
+int pl_stream(pl_player* p, const char* name, const ytr_col* cols, int n) {
+    int id;
+    if (p->checking) {
+        char err[sizeof p->ds.error];
+        ytr_data* w = pl_check_scratch(p);
+        if (!p->check_streams) p->check_streams = (const char**)pl_alloc(p, sizeof(char*) * (YDS_MAX_STREAMS + 1));
+        if (!w || !p->check_streams) return -1;
+        id = yds_stream_check(p->check_streams, p->n_check_streams, name, cols, n, w, err, sizeof err);
+        if (id < 0) { pl_fail(p, "the stream '%s': %s", name, err); return -1; }
+        /* below YDS_MAX_STREAMS: the check refuses the one past it */
+        p->check_streams[p->n_check_streams] = name;
+        return p->n_check_streams++;
     }
+    id = yds_stream(&p->ds, name, cols, n);
+    if (id < 0) { pl_fail(p, "the stream '%s': %s", name, yds_error(&p->ds)); return -1; }
+    return id;
+}
+
+/* A stream per rdk (2.7), then version 2's traces: after the data set's
+ * open, or in pl_check() with none. */
+static int pl_streams_open(pl_player* p) {
+    static const ytr_col rdk_cols[] = {
+        YTR_COL(pl_rdk_step_row, trial_index, YTR_COL_INT), YTR_COL(pl_rdk_step_row, update, YTR_COL_INT),
+        YTR_COL_D(pl_rdk_step_row, t_ns, YTR_COL_TIME_NS, 9),
+        YTR_COL_D(pl_rdk_step_row, coherence, YTR_COL_DOUBLE, 0), YTR_COL_D(pl_rdk_step_row, direction, YTR_COL_DOUBLE, 0),
+        YTR_COL_D(pl_rdk_step_row, speed, YTR_COL_DOUBLE, 0),
+    };
+    int i;
+    for (i = 0; i < p->n_stims; i++)
+        if (p->stims[i].def->kind == YEXP_RDK) {
+            int sid;
+            pl_at(p, PL_OBJ_STIMULUS, p->stims[i].def->name);
+            if ((sid = pl_stream(p, p->stims[i].def->name, rdk_cols, (int)(sizeof rdk_cols / sizeof rdk_cols[0]))) < 0) return -1;
+            p->stims[i].stream = sid;
+        }
+    pl_at(p, PL_OBJ_NONE, NULL);
     return pl_v2_streams(p);
 }
 
 /* pl_check(): yds_open()'s check of trials.csv's columns (a writer that
- * discards), with no folder. The streams' names and columns are not checked:
- * yds_stream() needs an open data set. */
+ * discards), with no folder; the streams' checks follow (pl_stream()). */
 static bool pl_discard(void* ctx, const void* bytes, size_t n) {
     (void)ctx;
     (void)bytes;
@@ -470,7 +500,7 @@ static bool pl_discard(void* ctx, const void* bytes, size_t n) {
     return true;
 }
 static int pl_columns_check(pl_player* p) {
-    ytr_data* w = (ytr_data*)pl_alloc(p, sizeof(ytr_data));
+    ytr_data* w = pl_check_scratch(p);
     ytr_data_desc dd;
     if (!w) return -1;
     memset(&dd, 0, sizeof dd);
@@ -566,8 +596,8 @@ int pl_columns_build(pl_player* p) {
         p->ytr_cols[i].type = (ytr_col_type)p->cols[i].type;
         p->ytr_cols[i].offset = YTR_UNBOUND;
     }
-    if (p->checking) return pl_columns_check(p);
-    return pl_dataset_open(p);
+    if (p->checking ? pl_columns_check(p) < 0 : pl_dataset_open(p) < 0) return -1;
+    return pl_streams_open(p);
 }
 
 /* --- the participant --------------------------------------------------- */

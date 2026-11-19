@@ -355,6 +355,105 @@ static void case_refusals(void) {
     free(def);
 }
 
+/* One case of case_run_only(): the edits on a pack's definition, and the
+ * refusal a real run gives (NULL: none). */
+typedef struct ro_case {
+    const char* name, *pack;
+    const char* from[3], *to[3];
+    int status, object;
+    const char* object_name, *message;
+} ro_case;
+
+/* Refusals of a real run that come only from the definition, the pack and
+ * the check's stand-ins: pl_check() gives each, with the message the
+ * command line prints (0.14.0 said OK to each; "rule, keyboard" is the
+ * control). The pack's definition is ypak's canonical text: the edits
+ * match it. */
+#define TRIG_MAP "\"code\": {\n            \"by\": \"$response\",\n            \"map\": {\n              \"left\": 101,\n              \"right\": 102\n            }\n          }"
+static void case_run_only(void) {
+    static const ro_case cases[] = {
+        /* a response trigger on a role a rig can bind to a device (xid):
+         * the rule's code is fixed when the device opens (pl_rule_make()) */
+        { "rule", "oddball", { TRIG_MAP }, { "\"code\": \"$code\"" }, PL_CHECK_REFUSED, PL_OBJ_TEMPLATE, "oddball",
+          "template 'oddball': the response trigger's code on the device role 'resp' must be a number, or a lookup by $response of numbers: "
+          "a rule's codes are set when the device opens" },
+        /* the keyboard only: no rig binds it, the frame loop writes the code */
+        { "rule, keyboard", "oddball", { TRIG_MAP, "\"family\": [\"xid\", \"keyboard\"]" }, { "\"code\": \"$code\"", "\"family\": [\"keyboard\"]" },
+          PL_CHECK_OK, PL_OBJ_NONE, NULL, NULL },
+        /* keyboard first, so --sim takes keys; a device bound to it takes
+         * buttons, and the role has none (pl_tmpl_open()) */
+        { "buttons", "oddball",
+          { "\"family\": [\"xid\", \"keyboard\"]", "\"buttons\": {\n        \"1\": \"left\",\n        \"2\": \"right\"\n      },",
+            ",\n        \"trigger\": {\n          " TRIG_MAP ",\n          \"role\": \"trig\"\n        }" },
+          { "\"family\": [\"keyboard\", \"xid\"]", "", "" }, PL_CHECK_REFUSED, PL_OBJ_TEMPLATE, "oddball",
+          "template 'oddball': choice 'left' is not one of role 'resp''s buttons" },
+        /* streams/<name>.csv: two rdk stimuli whose names differ in case */
+        { "rdk streams", "rdk", { "\"dots\": {" },
+          { "\"Dots\": { \"kind\": \"rdk\", \"w\": 100, \"count\": 20, \"speed\": 200, \"dot_size\": 4 },\n    \"dots\": {" },
+          PL_CHECK_REFUSED, PL_OBJ_STIMULUS, "dots", "the stream 'dots': ysp_dataset: yds_stream: 'dots' is taken by 'Dots' (names differ in more than case)" },
+        /* two traces whose names differ in case */
+        { "trace streams", "visuomotor", { "\"path\": {" },
+          { "\"Path\": { \"control\": \"trace\", \"of\": [\"hand\"] },\n        \"path\": {" },
+          PL_CHECK_REFUSED, PL_OBJ_TEMPLATE, "reach", "the stream 'path': ysp_dataset: yds_stream: 'path' is taken by 'Path' (names differ in more than case)" },
+        /* a trace's columns: hand_x is the role's lane and a control */
+        { "trace columns", "visuomotor", { "\"of\": [\"hand\", \"cursor\"]", "\"aid\": {" },
+          { "\"of\": [\"hand\", \"hand_x\"]", "\"hand_x\": { \"control\": \"distance\", \"of\": \"hand\" },\n        \"aid\": {" }, PL_CHECK_REFUSED,
+          PL_OBJ_TEMPLATE, "reach", "the stream 'path': ysp_dataset: yds_stream: ysp_trials: ytr_data_open: two columns are named 'hand_x'" },
+    };
+    size_t c;
+    for (c = 0; c < sizeof cases / sizeof cases[0]; c++) {
+        const ro_case* k = &cases[c];
+        pk* pkk = pack_of(k->pack);
+        size_t n;
+        char* def, *e = NULL;
+        int j;
+        pl_check_result r;
+        memset(&r, 0, sizeof r);
+        if (!pkk) { printf("  %s: no pack, skipped\n", k->name); continue; }
+        if (!(def = def_of(pkk, &n))) { CHECK(0, "%s: the pack's definition", k->name); continue; }
+        for (j = 0; j < 3 && k->from[j]; j++) {
+            char* e2 = edit(e ? e : def, k->from[j], k->to[j], NULL);
+            free(e);
+            e = e2;
+            if (!e) break;
+        }
+        CHECK(e != NULL, "%s: the edits", k->name);
+        if (!e) { free(def); continue; }
+        (void)run_check(pkk, e, &r);
+        CHECK(r.status == k->status, "%s: status %d, want %d: %s", k->name, r.status, k->status, r.message ? r.message : "");
+        CHECK(r.object == k->object && (k->object_name ? r.object_name && strcmp(r.object_name, k->object_name) == 0 : !r.object_name),
+              "%s: object %d '%s'", k->name, r.object, r.object_name ? r.object_name : "");
+        if (k->message) CHECK(r.message && strcmp(r.message, k->message) == 0, "%s: message '%s'", k->name, r.message ? r.message : "");
+        printf("  %s (%d %d %s): %s\n", k->name, r.status, r.object, r.object_name ? r.object_name : "", r.message ? r.message : "");
+        pl_close(&P);
+        free(e);
+        free(def);
+    }
+    {
+        /* 17 rdk stimuli: one stream more than ysp/dataset.h holds */
+        pk* pkk = pack_of("rdk");
+        size_t n;
+        char* def = pkk ? def_of(pkk, &n) : NULL, *e;
+        char more[2048] = "";
+        pl_check_result r;
+        int j;
+        memset(&r, 0, sizeof r);
+        for (j = 0; j < YDS_MAX_STREAMS; j++) {
+            char one[128];
+            snprintf(one, sizeof one, "\"r%02d\": { \"kind\": \"rdk\", \"w\": 100, \"count\": 20, \"speed\": 200, \"dot_size\": 4 },\n    ", j);
+            strcat(more, one);
+        }
+        strcat(more, "\"dots\": {");
+        e = def ? edit(def, "\"dots\": {", more, NULL) : NULL;
+        CHECK(e && run_check(pkk, e, &r) == PL_CHECK_REFUSED && strstr(r.message, "yds_stream: 16 streams already (YDS_MAX_STREAMS)"),
+              "17 rdk streams: status %d: %s", r.status, r.message ? r.message : "");
+        printf("  17 rdk streams (%d): %s\n", r.status, r.message ? r.message : "");
+        if (e) pl_close(&P);
+        free(e);
+        free(def);
+    }
+}
+
 /* Entries a stimulus or a node names: missing, or of another kind. */
 static void case_entries(void) {
     pk* k = pack_of("oddball");
@@ -621,6 +720,7 @@ int main(int argc, char** argv) {
         case_reader("oddball");
         case_definition();
         case_refusals();
+        case_run_only();
         case_entries();
         case_repeat_and_clock();
         case_given_cal();
