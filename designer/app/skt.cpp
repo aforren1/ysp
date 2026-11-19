@@ -63,7 +63,7 @@ uint64_t made = 0;
 
 uint64_t key_hash(const char* s, int32_t n, float size) {
     uint64_t h = 14695981039346656037ull;   // FNV-1a
-    uint32_t sb;
+    uint32_t sb = 0;
     memcpy(&sb, &size, sizeof sb);
     for (int i = 0; i < 4; i++) h = (h ^ ((sb >> (8 * i)) & 0xffu)) * 1099511628211ull;
     for (int32_t i = 0; i < n; i++) h = (h ^ (uint8_t)s[i]) * 1099511628211ull;
@@ -286,7 +286,7 @@ const skb_layout_t* skt_layout_n(const char* utf8, int n, float size) {
     text[len] = 0;
     // at most half full, so a probe run stays short
     if ((live + 1) * 2 > slots.Size) slots_grow();
-    int32_t idx;
+    int32_t idx = -1;
     if (free_head >= 0) {
         idx = free_head;
         free_head = entries[idx].next;

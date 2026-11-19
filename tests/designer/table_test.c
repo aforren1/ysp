@@ -507,6 +507,13 @@ static void test_check_two_docs(void) {
     dsg_checker* cb = dsg_checker_new();
     dsg_report ra, rb;
     int k;
+    /* MSVC's C4701 does not see that the calls below fill them */
+    memset(&pa, 0, sizeof pa);
+    memset(&pb, 0, sizeof pb);
+    memset(&fa, 0, sizeof fa);
+    memset(&fb, 0, sizeof fb);
+    memset(&ra, 0, sizeof ra);
+    memset(&rb, 0, sizeof rb);
     CHECK(open_oddball("two_a", &pa, &fa) == 0 && open_oddball("two_b", &pb, &fb) == 0, "two copies of oddball open");
     /* a: the level 'target' goes, in the document only; b stays clean */
     dsg_csv_sync(&fa.c, fa.d, fa.buf, ',');

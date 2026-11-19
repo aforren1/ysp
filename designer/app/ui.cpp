@@ -598,7 +598,7 @@ void ui_jump_to_issue(int i) {
     // has no place in the definition, or one less exact than the cell.
     int nv;
     const UiView* const* v = views(&nv);
-    dsg_sel s;
+    dsg_sel s = {};
     dsg_sel_none(&s);
     bool have = false;
     for (int k = 0; k < nv && !have; k++) have = v[k]->issue_sel && v[k]->issue_sel(i, &s);
