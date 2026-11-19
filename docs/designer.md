@@ -289,6 +289,9 @@ ysp_designer (C++, Dear ImGui, SDL3, GL ES 3.0)
    - Not done: the window was built and never opened, because the session
      had no free display; no person has used it. The web build, the IME on the
      multi-line editor, and Windows and macOS builds are not tried.
+   - Added 2026-11-19: `test_designer_te`, three UI tests on the Dear ImGui
+     Test Engine, optional and off by default ("UI tests with the Test
+     Engine", below).
 4. The state chart, the tables and the panels from parameter tables.
 5. The preview.
 6. Build and Run.
@@ -315,6 +318,133 @@ The build copies the fonts that `YSP_DESIGNER_FONTS` lists (Debian's Noto
 and DejaVu paths by default) to `designer/fonts/` beside the program, and
 the program reads them from there. Open a copy of a project, not the
 repository's: Save and the check pack write into the folder.
+
+## UI tests with the Test Engine
+
+`test_designer_te` drives the UI with the
+[Dear ImGui Test Engine](https://github.com/ocornut/imgui_test_engine). The
+engine moves the mouse, clicks and types through ImGui's input queue, as a
+person does. The test is optional and off by default. `test_designer_core`
+and `test_designer_ui` stay the default tests, and a build of ysp never
+needs the engine.
+
+### The license: read it first
+
+The engine is not MIT. Its folder `imgui_test_engine/` has the Dear ImGui
+Test Engine License v1.04 (`LICENSE.txt` in that folder). Read the license
+before you fetch the engine. In summary:
+
+- You get a free license if one of these is true: you are a natural
+  person; you are not a legal entity, or you are a not-for-profit one; you
+  use it for education; you use it to make software that you release
+  publicly under an OSI open-source license (ysp is MIT-0); your legal
+  entity's turnover was less than USD 2 million in its last fiscal year.
+- Other users get a trial of 45 days at no charge. After the trial, they
+  must buy a paid license from DISCO HELLO.
+- Only license holders can distribute the engine or software made from it.
+
+For these reasons, the repository has no copy of the engine. The vendor
+script fetches it only with `--test-engine`, into
+`third_party/imgui_test_engine/`, which git ignores (the rule
+`/third_party/*/`). Do not distribute those files or `test_designer_te`
+unless you hold a license.
+
+### How to run the tests
+
+From the repository root, after the steps in "How to build and run the
+skeleton":
+
+```sh
+uv run --no-project python tools/vendor_designer.py --write --test-engine
+cmake -B build/designer -DYSP_DESIGNER_TEST_ENGINE=ON
+cmake --build build/designer --target test_designer_te
+ctest --test-dir build/designer -R test_designer_te
+```
+
+- To run one test, give its name as a filter:
+  `build/designer/designer/test_designer_te WORK edit_jump`. `WORK` is a
+  folder for the test's project copies.
+- To check the fetched files against their hashes, run
+  `tools/vendor_designer.py --test-engine` with no `--write`.
+- When the option is ON and the files are missing, CMake stops and shows
+  the fetch command.
+- The test opens no window and needs no display or GL.
+
+### What was taken
+
+- Tag `v1.93.0` of ocornut/imgui_test_engine, commit `16b6efbb393f`. The
+  engine's author made this tag on 2026-10-14, the day of ImGui's
+  `v1.93.0`, which is the designer's ImGui (`c1aaac65`). ImGui did not
+  change.
+- 20 files: the 8 sources and 10 headers of `imgui_test_engine/`, its
+  `LICENSE.txt`, and `thirdparty/Str/Str.h` (public domain).
+- Not taken: `stb_image_write` (screen capture is off), the engine's test
+  suite and app helpers (MIT), and ImPlot.
+
+### The tests
+
+| Test | What it does | The hand mutant that fails it |
+|---|---|---|
+| `path_field` | The folder dialog fails. The path field takes the keyboard. The engine types the path and Enter with no click, and the project opens. | `ui_dialog_failed()` does not give the path field the focus. |
+| `edit_jump` | The engine opens a project through the path field and clicks Discard on the question. Its Ctrl+click focuses the Skribidi editor. It types a note with Arabic text, then an `x` before `"stimuli"`; the test puts the caret before each with `skf_set_caret()`. The check finds the error at the `x`. The engine moves the caret with Up and Home, then clicks issue 0: the caret goes to the `x` as a codepoint offset. Ctrl+Z removes the `x`. | `ui_jump_to_issue()` gives the byte offset (caret 177, not 172). Also: `skf.cpp` drops characters above U+007F (the note is not in the text). |
+| `unsaved` | The engine types into the editor, then types another folder in the path field and presses Enter. The question opens and the project stays. Cancel keeps the project, the text and the unsaved state. The Open path button asks again, and Discard opens the other project. | `ask_or_run()` does not ask. |
+
+Each mutant failed its test, and the other two tests passed. The mutants
+were reverted; they are not in a mutation list. Without mutants, 3 of 3
+tests passed in each of 30 runs (Linux desktop, gcc 12.2, Release).
+
+### How the runner works
+
+- **Hooks.** ImGui calls the engine only when it is compiled with
+  `IMGUI_ENABLE_TEST_ENGINE`. `tests/designer/imconfig_designer_te.h`
+  includes `designer/app/imconfig_designer.h`, then the engine's
+  `imgui_te_imconfig.h`, which defines it. Only `test_designer_te` uses
+  this file: it compiles `ui.cpp`, `skf.cpp`, `skt.cpp` and ImGui again,
+  with the designer's flags. `ysp_designer_ui` and `ysp_designer` do not
+  change. With the option ON, their compile commands and object files
+  were the same, byte for byte, as in a build of `main` in the same build
+  folder (Linux, gcc 12.2, Release). With the option OFF, the build had
+  the same targets and the same tests (132) as `main`.
+- **No window.** The runner draws frames as `test_designer_ui` does: a
+  1400 x 900 display, textures accepted with no renderer, and a fixed
+  frame of 1/60 s. After each frame it calls
+  `ImGuiTestEngine_PostSwap()`. It stops when the engine's queue is
+  empty. The engine runs in its fast mode: the mouse moves at once and no
+  frame waits. The engine's own null app (`shared/imgui_app.cpp`) does
+  the same, so the runner does not take it.
+- **Coroutines.** The engine runs each test function as a coroutine on a
+  second thread, with its `std::thread` implementation. Only one of the
+  two threads runs at a time: the test function runs while the frame loop
+  waits. Thus a test can call `ui_*()` directly.
+- **Item paths.** The engine's item paths do not go into child windows.
+  `WindowInfo()` finds the `Definition` and `Issues/##issue_list` child
+  windows, and their IDs are the seeds of the item IDs.
+- **The Skribidi fields.** They need no glue and no change.
+  `skf_draw()` calls `ItemAdd()` and `ItemHoverable()`, so the engine finds
+  the field and aims at it. The engine's click and Ctrl+click go through
+  the field's own mouse code. `KeyChars()` puts characters in
+  `io.InputQueueCharacters`, which the field reads, and Arabic arrives
+  whole (`IMGUI_USE_WCHAR32`). Keys from `KeyPress()` reach the field
+  through `ImGui::IsKeyPressed()`.
+
+### What it needs
+
+- The C++ runtime (libstdc++ on Linux) and threads, for `std::thread`,
+  `std::mutex`, `std::condition_variable` and `std::chrono`. Only the
+  test needs them; the designer still does not.
+- No exceptions and no RTTI: the engine builds and runs with
+  `-fno-exceptions -fno-rtti`. The engine keeps thread-safe statics,
+  because the coroutine thread can reach its function-local statics.
+- The engine compiles with its warnings off (`-w`), as Skribidi's
+  rasterizer does.
+
+### Not done
+
+- CI does not build the test. No job was added.
+- Windows (the MSVC flags are written and not compiled) and macOS.
+- ASan and UBSan runs of the test.
+- The other parts of `test_designer_ui` (Ctrl+S, the view file, idle
+  frames) are not ported; `test_designer_ui` keeps them.
 
 ## Open questions
 
@@ -362,9 +492,10 @@ repository's: Save and the check pack write into the folder.
 - The glyph atlas uses `RegisterUserTexture`, an ImGui API marked
   internal and experimental. The ImGui version is pinned, and each
   upgrade checks it.
-- UI tests: the Dear ImGui Test Engine, as
-  [lsl-viewer](https://github.com/aforren1/lsl-viewer) uses. Check its
-  license before taking it.
+- UI tests: answered 2026-11-19. The Dear ImGui Test Engine, as
+  [lsl-viewer](https://github.com/aforren1/lsl-viewer) uses, is an
+  optional test layer, off by default, because its license is not MIT
+  ("UI tests with the Test Engine").
 - The check pack's build cost is not measured. It runs at open and on each
   edit that changes the texts of text stimuli (typing in a text literal
   builds once a keystroke), in the frame of the edit. In
