@@ -3,7 +3,9 @@
 Status: the skeleton is built (step 3 of "Order of work", 2026-11-18, branch
 `designer-skeleton`): a window, open and save of a project, the player's
 check on each change with its refusals linked to their places in the
-text, and redraw on input only. Steps 4 to 7 are not started. This document
+text, and redraw on input only. Step 4 is planned, and its shared code is
+built (2026-11-19, branch `designer-step4`, "Plan of step 4"). Steps 5 to
+7 are not started. This document
 gives the designer's decisions, its first version's scope, its architecture
 and its order of work. [rig_spec.md](rig_spec.md) section 7 gives the
 designer's place in the rig. The measurements behind the UI decision are
@@ -219,11 +221,13 @@ ysp_designer (C++, Dear ImGui, SDL3, GL ES 3.0)
   while ImGui's input queue holds events, because ImGui applies one key or
   button change a frame (probe part 1, section 2). Animation (a running
   preview) draws every frame.
-- **Code.** `designer/core/` (C11, `dsg.h`) holds every part with no
-  window: the project, the check, the places of issues and the redraw
-  rule. `designer/app/` (C++20) holds the UI: `ui.cpp` (the panels, no SDL
-  or GL), `skf.cpp` (the Skribidi edit field), `skt.cpp` (Skribidi text in
-  ImGui) and `main.cpp` (SDL3, GL ES 3.0, the loop). Only
+- **Code.** `designer/core/` (C11, `dsg.h`, `doc.h`) holds every part
+  with no window: the project, the document and its undo stack, the
+  check, the places of issues and the redraw rule. `designer/app/`
+  (C++20) holds the UI: `ui.cpp` (the window and the text view, no SDL or
+  GL), one file per other view (`views.h`), `skf.cpp` (the Skribidi edit
+  field), `skt.cpp` (Skribidi text in ImGui) and `main.cpp` (SDL3, GL ES
+  3.0, the loop). Only
   `designer/core/platform.c` calls the OS (files and folders); its POSIX
   branch also serves emscripten.
 - **Web build.** A hidden-textarea glue gives text input, IME
@@ -293,9 +297,310 @@ ysp_designer (C++, Dear ImGui, SDL3, GL ES 3.0)
      Test Engine, optional and off by default ("UI tests with the Test
      Engine", below).
 4. The state chart, the tables and the panels from parameter tables.
+   - Planned 2026-11-19 (branch `designer-step4`): "Plan of step 4",
+     below. The document that every view edits, the view registry and the
+     view file's parts are built; the three parts are stubs.
 5. The preview.
 6. Build and Run.
 7. The web build, with the text glue.
+
+## Plan of step 4
+
+Status: planned 2026-11-19 on branch `designer-step4`. The shared code
+(the document, the view registry, the view file's parts and their tests)
+is built and tested. Parts A (the chart), B (the tables) and C (the
+panels) are stubs that build, so three workers can build them at the same
+time. This section gives the model that all three parts edit, the shared
+interfaces, the files that each part owns, the tests, the order of
+merges and the risks.
+
+### The model: the bytes are the truth
+
+**Decision.** The designer keeps the project's files as buffers of bytes
+in one document (`designer/core/doc.h`). Buffer 0 is the definition; the
+other buffers are the CSV tables. The bytes are the source of truth.
+Every change from every view is a splice of a buffer's bytes, and one
+undo stack holds all the splices.
+
+- The parsed definition (a `ysp/json.h` tree) is a cache of buffer 0. The
+  document parses it again when the bytes change. A table's grid (the
+  byte range of each cell, `dsg_csv`) is a cache of its buffer too.
+- The text view gives the document the editor's text after each change
+  (`dsg_doc_replace()` with `DSG_EDIT_MERGE`). The document keeps only the
+  bytes that differ, and typing at one place is one undo step.
+- A structured edit (the chart, a panel) works on a copy of the tree in a
+  transaction (`dsg_doc_begin()`, `dsg_def_*()`, `dsg_doc_commit()`). The
+  commit writes the tree in the canonical layout (`YJS_WRITE_PRETTY`, one
+  LF after the value) and splices the difference into buffer 0. So one
+  chart or panel action is one undo step, and the text view shows it at
+  once, with the caret at the change.
+- When the text does not parse, the text view is the only editor. The
+  structured edits refuse with the parse error's line and column. The
+  other views show the last tree that parsed, read-only, and say so
+  (`dsg_doc_shown()` gives `stale`). No typed text is lost.
+- The commit writes keys at their defaults; Save drops them
+  (`yexp_migrated()`, format D2), as in step 3. A panel shows a key that
+  is not in the text as its default, and "Reset" removes the key.
+- The canonical layout of a structured edit is `yexp_canonical()`'s:
+  `test_designer_doc` checks that a no-op edit of the bimanual
+  definition's canonical bytes changes no byte and makes no step.
+
+**Evidence.** `bench_designer_doc` (tests/designer/doc_bench.c) times the
+real code. Linux desktop, Intel Core i5-14500, gcc 12.2, Release, pinned
+to CPU 2 (a P-core), 200 edits each, two runs; load average 0.18 to 0.36
+during the runs (`uptime`). Microseconds, median and p99 of run 1; run 2
+was within 2 % at the median.
+
+| Definition | Bytes | yjs parse | One structured edit | Parse again | One typed character | yexp load and canonical |
+|---|---|---|---|---|---|---|
+| kitchen_sink (the largest in the repository) | 5,933 | 10.1, 18.8 | 31.7, 72.2 | 11.7, 12.8 | 2.3, 2.5 | 151.7, 269.4 |
+| bimanual | 5,670 | 9.4, 12.1 | 29.2, 41.1 | 11.3, 11.9 | 2.3, 3.7 | 181.6, 260.7 |
+| bimanual, its templates copied to 100 KB | 101,130 | 118.4, 125.5 | 317.3, 353.8 | 121.5, 136.3 | 27.1, 31.9 | 2,136.8, 2,461.9 |
+| bimanual, its templates copied to 1 MB | 1,001,866 | 1,392.4, 1,422.2 | 3,699.3, 3,815.0 | 1,193.5, 1,474.7 | 273.3, 337.3 | 11,470.6, 15,646.4 |
+
+| Table (8 columns) | Bytes | Index the whole table | One cell edit (splice, index again) |
+|---|---|---|---|
+| 10,000 rows (the probe's table) | 449,114 | 355.4, 584.0 | 354.6, 357.3 |
+| 32,767 rows (ysp/table.h's limit) | 1,547,115 | 1,207.3, 1,240.1 | 1,207.7, 1,212.1 |
+
+- A structured edit of the largest definition in the repository costs
+  about 32 us, and the parse for the views 12 us. The check that follows
+  every change costs 0.2 to 7 ms (player.md, Measured), and its loader
+  part alone 150 to 180 us. So the write of the whole text is not the
+  cost of an edit; the check is.
+- At 1 MB (170 times the largest example), an edit and its parse take
+  about 5 ms, inside a 16 ms frame; the loader alone takes 11.5 ms. If
+  definitions grow that large, the check is the first thing to move off
+  the frame, not the model.
+- A cell edit with a full index costs 0.35 ms at 10,000 rows and 1.2 ms at
+  the 32,767-row limit. The index is 8 bytes a cell (2.1 MB at the limit).
+  An incremental index (shift the offsets after the cell) is an option
+  for part B if a measurement asks for it.
+
+**Rejected.**
+- A parsed model as the truth, with the text made from it. A text that
+  does not parse has no model, so either the typed text is lost or the
+  text view needs a second store and a second undo stack. Step 3 decided
+  that Save keeps a text that does not parse ("Decisions of step 3").
+- `yexp_def` (the loader's checked form) as the model. It exists only
+  when the loader accepts the definition. A chart edit must work on a
+  definition with errors: an exit to a state that is not there yet is
+  normal while a person builds a chart. `yexp_canonical()` also drops a
+  key at its default, so a panel that sets a value equal to its default
+  would see it go at once.
+- Splices of single values in the user's layout, to keep a text as the
+  person typed it. `ysp/json.h` gives a value's start and not its end, and
+  an insert must find its place in sorted keys and indent. The gain is
+  only for text that is not canonical, and Save makes it canonical.
+
+### The shared interfaces
+
+The workers use these and do not change them. A part that needs a change
+stops and reports it; the change goes into this branch first.
+
+`designer/core/doc.h`, the document (C, `doc.c`):
+- Buffers: `dsg_doc_reset()`, `dsg_doc_add_buffer()` (a table),
+  `dsg_doc_bytes()`, `dsg_doc_rev()` (a view's cache key),
+  `dsg_doc_revision()` (any change: the check runs), `dsg_doc_dirty()`,
+  `dsg_doc_set_saved()`, `dsg_doc_mark_saved()`.
+- Changes: `dsg_doc_splice()`, `dsg_doc_replace()`; transactions
+  `dsg_doc_begin()`, `dsg_doc_commit()`, `dsg_doc_cancel()` (nested;
+  the outermost makes one step with its label).
+- Undo: `dsg_doc_undo()`, `dsg_doc_redo()`, their labels, and
+  `dsg_doc_last_change()` (where the text view puts the caret). The stack
+  keeps at most 4,096 steps or 64 MiB of old and new bytes.
+- Selection, shared by every view: `dsg_sel` (a buffer, a JSON Pointer
+  into the definition, or a table's row and column), `dsg_doc_select()`,
+  `dsg_doc_selection()`, `dsg_doc_selection_rev()`. A step keeps the
+  selection from before and after it; undo and redo put it back.
+- Renames: `dsg_doc_listen()` and `dsg_doc_note_rename()`. View state that
+  a name keys (a state's position, a column's width) follows a rename,
+  its undo and its redo through the listener. The scope is the JSON
+  Pointer of the set (`/trials/reach/states`, `/stimuli`), or
+  `#NAME/columns` for the table in buffer NAME.
+- The tree: `dsg_doc_root()`, `dsg_doc_parse_error()`, `dsg_doc_shown()`.
+  Views call one of them once a frame and keep no pointer into the tree
+  across frames.
+- Structured edits: `dsg_def_get()`, `dsg_def_set()` (JSON text),
+  `dsg_def_set_string()`, `_int()`, `_bool()`, `_seconds_ns()` (a
+  duration as the exact decimal of its nanoseconds, D2 and D4),
+  `_number_text()` (a number as typed), `dsg_def_remove()`,
+  `dsg_def_insert()`, `dsg_def_move()`, `dsg_def_rename()`.
+- Paths are JSON Pointers (RFC 6901): `dsg_path_key()`,
+  `dsg_path_index()`, `dsg_path_get()`, `dsg_path_split()`,
+  `dsg_path_within()`, `dsg_path_at()` (a byte offset to the value there)
+  and `dsg_path_offset()` (a value to its offset).
+
+`designer/core/dsg.h`, the view file's parts: `dsg_view` gains
+`main_view`, `selection` and up to 8 parts. A part is a top-level key of
+`.designer/view.json` whose value is an object, kept as compact JSON
+(`dsg_view_part_get()`, `dsg_view_part_set()`). The view that owns a key
+reads it in its `opened` hook and writes it in `save_view`. The file
+keeps a part that no view reads. The format stays version 1: every key
+is optional, and a reader skips a key it does not know.
+
+| Key | Owner | Value |
+|---|---|---|
+| `view` | ui.cpp | the main view shown: `"text"`, `"chart"`, `"tables"` |
+| `selection` | ui.cpp | the selection's JSON Pointer in the definition |
+| `chart` | part A | `{"template": NAME, "templates": {NAME: {"pan": [x, y], "zoom": z, "states": {STATE: [x, y]}}}}`; `end` is the end node (a state cannot have that name, format 3.9) |
+| `tables` | part B | `{"open": SOURCE, "tables": {SOURCE: {"widths": {COLUMN: px}, "scroll": [row, column]}}}`, SOURCE the CSV's path in the project |
+| `panels` | part C | `{"collapsed": [SECTION, ...]}` |
+
+`designer/app/views.h`, the view registry (C++): a view is one `UiView`:
+an id (its part key), a label (the switch's label and its child window's
+name, so a test finds it as `//##designer/LABEL`), a slot (the main area
+or the side column) and hooks, each optional: `init`, `shutdown`,
+`opened`, `closed`, `save_view`, `draw`, `claims`, `reveal`,
+`animating`. `views.cpp` lists the three step 4 views already, so no part
+edits it. A view may call `ui_doc()`, `ui_project()`, `ui_report()`,
+`ui_issue_path()`, `ui_reveal()`, `ui_set_status()` and
+`ui_text_size()`.
+
+`designer/app/ui.cpp` (shared, built): the toolbar with Undo and Redo,
+the switch (Text, Chart, Tables), the main view's child window, the side
+column (the panels), the issues, open, save and the view file.
+- Ctrl+Z, Ctrl+Shift+Z and Ctrl+Y go to the document's stack, unless
+  ImGui's path field or a Skribidi field that keeps its own undo has the
+  keyboard. The definition editor gives its undo to the document
+  (`skf_set_own_undo()`).
+- The check runs in the frame of any change of any buffer.
+- After each check, `ui_issue_path(i)` gives the JSON Pointer of the value
+  at issue i's place (`dsg_path_at()`). Tier 2 and 3 issues have places
+  from `locate.c`, so they get a path too.
+- A click on an issue selects its path and calls `ui_reveal()`: the main
+  view that claims the selection most shows (the text claims 1 for any
+  value in the definition; the chart claims 2 for a state or an exit;
+  the tables claim 2 for a table cell); the side views get `reveal` too.
+  The caret goes to the issue's place, as in step 3.
+- The caret in the text view selects the value it is in, so the panels
+  follow the text.
+- Save writes the definition as in step 3 (its canonical form is an undo
+  step of its own) and each dirty table's bytes as they are.
+
+`designer/app/skf.h`: `skf_move_caret()` (no focus change),
+`skf_set_own_undo()`, `skf_owns_undo()`, `skf_focus_field()`.
+
+**Parameter-table metadata at run time.** Part C reads two sources in
+the program, with no generated table:
+- The format's own table, `yexp_defaults(2)` (ysp/experiment.h): each key
+  of each section, its type, its default, its enum values and whether it
+  is required. This is the list of keys a panel shows.
+- The headers' parameter tables (G6): the unit, the range and the text of
+  a key that a header's desc also has. `schema.c` joins stimulus keys
+  with `yrdk_params()` and `ygfx_params()` by name, as the player's param
+  host does (player/host.c). Part C adds the others it needs:
+  `ysig_params()` for controls, `yrsp_params()` for responses,
+  `yst_params()`, `yqst_params()` and `yaep_params()` for methods.
+- A key that ends in `_s` is a duration in seconds (D4). A panel shows it
+  in seconds and writes it with `dsg_def_set_seconds_ns()` from the
+  decimal text that the person typed (`yjs_parse_fixed()`), so no binary
+  fraction comes between.
+- The section and the value type of a format row are internal numbers in
+  ysp/experiment.h 0.5.3. `schema.h` mirrors the type enum, and
+  `test_designer_panels` checks the mirror where the rows show it (every
+  `_s` key is a duration, every row with enum values is an enum).
+  Prerequisite P1 removes the mirror.
+
+### Who owns which file
+
+| Files | Owner |
+|---|---|
+| `designer/core/doc.h`, `doc.c`, `dsg.h`, `project.c`, `locate.c`, `platform.c`, `redraw.c`; `designer/app/views.h`, `views.cpp`, `ui.cpp`, `ui.h`, `main.cpp`, `skt.*`; `designer/CMakeLists.txt`; `tests/designer/doc_test.c`, `doc_bench.c`, `core_test.c`, `ui_test.cpp`, `te_test.cpp`, `te_common.h`, `imconfig_designer_te.h` | Shared: frozen during step 4 |
+| `designer/core/chart.h`, `chart.c`; `designer/app/view_chart.cpp`; `tests/designer/chart_test.c`, `te_chart.cpp` | A |
+| `designer/core/csv.h`, `csv.c`; `designer/app/view_tables.cpp`; `tests/designer/table_test.c`, `te_tables.cpp`; `designer/core/check.c` (the check pack with unsaved tables) | B |
+| `designer/core/schema.h`, `schema.c`; `designer/app/view_panels.cpp`; `designer/app/skf.h`, `skf.cpp` (a field's width, commit on Enter); `tests/designer/panels_test.c`, `te_panels.cpp` | C |
+| `docs/designer.md`: one subsection each under "Decisions of step 4" (A: "The chart", B: "The tables", C: "The panels"); `docs/status.md`: one entry each | Each part its own subsection and entry |
+
+- A part adds files only under its own names (`chart_*.c`,
+  `view_chart_*.cpp`, and so on) and lists them in the core library or
+  the UI sources through the integrator: `designer/CMakeLists.txt` is
+  shared, so a new file goes in at merge time, in one line.
+- A part does not include another part's header. The chart and the
+  tables do not draw panels: they select, and the side column shows the
+  panel of the selection.
+
+### Tests
+
+Every part keeps `test_designer_core`, `test_designer_doc`,
+`test_designer_ui` and its own test passing in ctest from the build tree
+with `DISPLAY` unset, with `YSP_DESIGNER_TEST_ENGINE` off and on. Each new
+check of a part's test has a hand mutant that fails it, as in step 3.
+
+| Part | Headless (default, `test_designer_<part>`) | Test Engine (optional, `te_<part>.cpp`) |
+|---|---|---|
+| Shared (done) | `test_designer_doc`, 115 checks: paths, buffers, undo and redo, nested transactions, cancel, typing merges, structured edits as one step in the canonical layout, refusal while the text does not parse, selection and renames through undo and redo, an issue's place to its key, the view file's parts. `test_designer_ui` part 7: a structured edit shows in the text; each main view draws; Ctrl+Z with the chart shown takes the edit back | `designer/undo_views`: the same through the engine's keys |
+| A | The chart of each test project with states (bimanual, visuomotor): states, edges of each kind (exit, shared exit per `in` state, next state, `over`), the end. Add, connect, delete (with the exits to it and its `in` entries), rename (with every `to`, `in` and `over.to`), set first: each one undo step, each undone to the same bytes, the check clean after each where the definition allows. Positions: a rename moves the position; undo moves it back; the part round-trips through the view file; the definition's bytes never hold a position | Drag a state: its position changes, the definition's bytes do not. Drag from a state to another: an exit. Select a state: the panel shows it. Delete key on a selected state. A click on an issue of a state shows the chart with the state selected |
+| B | The index against ysp/table.h on every CSV in tests/ (same rows, columns and cell texts as `ytb_open_csv()`); a cell edit, a row and a column added and removed, a column renamed: each one step, the bytes read by `ytb_open_csv()` as intended, quoting where a cell has a delimiter, a quote or a line end, the file's line ends kept; the check pack built with an unsaved table (a level the definition names, then removed: the check says so). Only visible rows laid out: count the layouts per frame with 10,000 rows | Scroll a 10,000-row table; edit a cell with Arabic text through the engine's keys; add a row; Ctrl+Z; column widths in the view file after a reopen |
+| C | The schema: every key that `yexp_defaults(2)` has for a section shows for an object of that section; a unit for every duration and for every key a header's table has; enum values from the table. The object at a path (a node, a stimulus by kind, a template, a state, an exit, a control by kind, a response, a variable, a data column, a role). An edit of each type writes the canonical value (a duration typed `0.50` is `0.5`); Reset removes the key; a refused value (out of a header's range) still writes, and the check reports it, because the loader is the only validator | Select a stimulus; type a contrast; the text shows it; Ctrl+Z. An issue's field shows marked in its panel. A field with Hebrew text edited with the engine's keys |
+
+### Order of merges
+
+1. This branch, `designer-step4`, into `main` (the shared code and the
+   stubs), when the user says so.
+2. Each part works on a branch from `designer-step4` (`designer-step4-chart`,
+   `-tables`, `-panels`) in its own worktree.
+3. The parts share no code, so any order works. Suggested: C, then A,
+   then B. The side column is where a selection in A or B shows, so C
+   first lets the others see their selections. B goes last because its
+   change to `check.c` changes the check that every part's tests run; the
+   others then pass against the check they were built with. Each merge
+   runs the whole designer suite with the option off and on.
+4. The integrator adds a part's new files to `designer/CMakeLists.txt`
+   and resolves `docs/designer.md` and `docs/status.md`, the only files
+   that two parts touch.
+
+### Prerequisites outside designer/
+
+- **P1** (for C, not blocking): ysp/experiment.h makes the format table's
+  section numbers and value types public (`yexp_row.section` and
+  `yexp_row.type` as named enums), so `schema.h` drops its mirror. New
+  public names, no layout change: 0.5.3 to 0.6.0, with docs/experiment.md,
+  the README row, docs/status.md, the header's test and its mutation list.
+- **P2** (for C, not blocking): the format table's rows have no `unit` or
+  `doc` (G6's row shape has them). A panel shows a format-only key (a
+  node's `repeat`, a state's `max_visits`) with its name and its default
+  only. Adding `unit` and `doc` changes `yexp_row`'s layout: a minor
+  version (0.6.0, with P1).
+- Nothing in the player. `pl_check()` serves as it is.
+
+### Risks
+
+- **The check is the cost of an edit**, not the model: 0.2 to 7 ms on the
+  examples and 11.5 ms for the loader alone at 1 MB. A panel's drag (a
+  slider) gives an edit each frame. Part C commits a drag at its end, or
+  merges a drag's steps, so the stack does not hold one step a frame.
+- **Undo inside a Skribidi field.** A panel's field keeps Skribidi's own
+  undo while it has the keyboard, then commits one step. A field that
+  keeps the focus after a click in another view (skf.cpp keeps it when an
+  item is hovered) takes the next Ctrl+Z. Part C commits and drops the
+  focus when the selection changes.
+- **The whole text moves after an edit of a text that was not canonical.**
+  The first structured edit writes the canonical layout, so a person's
+  layout goes at once, not at Save. The text view puts the caret at the
+  change.
+- **References after a rename.** `dsg_def_rename()` changes a key, not
+  the names that point at it. Part A renames a state and its `to`, `in`
+  and `over.to`; part C renames a set member and the references it can
+  find by the schema's name types. The check reports the ones missed.
+- **The tables' check.** Until part B changes `check.c`, the check pack
+  is built from the tables on disk, so a table edit is checked only after
+  Save.
+- **Excel sources** (`"sheet"` in pack.json) are not CSV. Part B shows
+  them read-only.
+- **Parallel work in shared files.** If a part finds that it needs a
+  shared change, it stops and reports. Two parts that each change
+  `ui.cpp` would conflict at merge.
+
+### Not done in the plan
+
+- The window was not opened: no person used the switch or the side
+  column.
+- The Test Engine tests ran with the engine's fast mode only, 1 run.
+- No ASan or UBSan run of the new code.
+- The Windows build (MSVC with C4701 and C4244 as errors) was not
+  compiled; `bench_designer_doc` is not built on Windows (it uses
+  `clock_gettime()`).
 
 ## How to build and run the skeleton
 
@@ -308,7 +613,8 @@ uv run --no-project python tools/vendor_designer.py --write
 cmake -B build/designer -DCMAKE_BUILD_TYPE=Release -DYSP_BUILD_DESIGNER=ON -DYSP_BUILD_PLAYER=ON \
       -DYSP_BUILD_PACK=ON -DYSP_BUILD_LAYOUT=ON -DYSP_FETCH_MINIAUDIO=ON -DYSP_FETCH_PL_MPEG=ON \
       -DCMAKE_PREFIX_PATH=/path/to/sdl3
-cmake --build build/designer --target ysp_designer test_designer_core test_designer_ui
+cmake --build build/designer --target ysp_designer test_designer_core test_designer_ui test_designer_doc \
+      test_designer_chart test_designer_table test_designer_panels
 ctest --test-dir build/designer -R designer
 cp -r tests/player/rdk /tmp/rdk_project
 build/designer/designer/ysp_designer /tmp/rdk_project
@@ -389,7 +695,10 @@ ctest --test-dir build/designer -R test_designer_te
 | `edit_jump` | The engine opens a project through the path field and clicks Discard on the question. Its Ctrl+click focuses the Skribidi editor. It types a note with Arabic text, then an `x` before `"stimuli"`; the test puts the caret before each with `skf_set_caret()`. The check finds the error at the `x`. The engine moves the caret with Up and Home, then clicks issue 0: the caret goes to the `x` as a codepoint offset. Ctrl+Z removes the `x`. | `ui_jump_to_issue()` gives the byte offset (caret 177, not 172). Also: `skf.cpp` drops characters above U+007F (the note is not in the text). |
 | `unsaved` | The engine types into the editor, then types another folder in the path field and presses Enter. The question opens and the project stays. Cancel keeps the project, the text and the unsaved state. The Open path button asks again, and Discard opens the other project. | `ask_or_run()` does not ask. |
 
-Each mutant failed its test, and the other two tests passed. The mutants
+| `undo_views` (step 4) | A structured edit through the document shows in the text. With the chart shown, the engine's Ctrl+Z takes it back and Ctrl+Shift+Z puts it in again. | `undo_keys_free()` in `ui.cpp` always false; also: `sync_editor()` does not show the document's change. |
+| `chart/shows`, `tables/shows`, `panels/follows_text` (step 4 stubs) | The switch shows the chart and the tables; the caret in the text selects `/stimuli`, which the panels show. Parts A, B and C replace them. | - |
+
+Each mutant of the first three tests failed its test, and the other two tests passed. The mutants
 were reverted; they are not in a mutation list. Without mutants, 3 of 3
 tests passed in each of 30 runs (Linux desktop, gcc 12.2, Release).
 

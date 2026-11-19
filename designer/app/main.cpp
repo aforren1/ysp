@@ -105,7 +105,7 @@ int queued() { return ImGui::GetCurrentContext()->InputEventsQueue.Size; }
 void web_iter() {
     SDL_Event e;
     while (SDL_PollEvent(&e)) handle(e);
-    if (dsg_redraw_due(&A.redraw, queued(), false)) draw_frame();
+    if (dsg_redraw_due(&A.redraw, queued(), ui_animating())) draw_frame();
 }
 #endif
 
@@ -179,12 +179,12 @@ int main(int argc, char** argv) {
         // Redraw on input only: block until an event unless a frame is due.
         // ImGui applies one key or button change a frame, so a frame is due
         // while its input queue holds events (designer_ui_probe.md, part 1).
-        const int wait = dsg_redraw_wait_ms(&A.redraw, queued(), false);
+        const int wait = dsg_redraw_wait_ms(&A.redraw, queued(), ui_animating());
         if (wait < 0 ? SDL_WaitEvent(&e) : SDL_PollEvent(&e)) {
             handle(e);
             while (SDL_PollEvent(&e)) handle(e);
         }
-        if (!A.quit && dsg_redraw_due(&A.redraw, queued(), false)) draw_frame();
+        if (!A.quit && dsg_redraw_due(&A.redraw, queued(), ui_animating())) draw_frame();
     }
     ui_shutdown();
     ImGui_ImplOpenGL3_Shutdown();

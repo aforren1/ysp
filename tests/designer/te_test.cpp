@@ -11,9 +11,15 @@
 //                        past Arabic text (bytes are not codepoints).
 //   designer/unsaved     Opening another project with changes asks first;
 //                        Cancel keeps the text, Discard opens the other.
+//   designer/undo_views  A structured edit shows in the text; Ctrl+Z with
+//                        another view shown takes it back (one undo stack).
+//   chart/*, tables/*, panels/*  The step 4 parts' tests (te_chart.cpp,
+//                        te_tables.cpp, te_panels.cpp; te_common.h).
 // Each test sends the engine's mouse and keys through ImGui's input queue,
 // as a person would. Exit 0 when every test passes, 1 otherwise.
+#include "te_common.h"
 #include "ui.h"
+#include "views.h"
 #include "skf.h"
 #include "skt.h"
 
@@ -35,6 +41,8 @@
 #endif
 
 namespace {
+
+const char* g_work = "";
 
 // Three copies of tests/player/rdk, so a test never opens the folder that is
 // already open: an open of the same folder would not show the question.
@@ -172,6 +180,26 @@ void test_edit_jump(ImGuiTestContext* ctx) {
     IM_CHECK_EQ(ui_report()->n_errors, 0);
 }
 
+// One undo stack for every view: a structured edit through the document
+// shows in the text view, and Ctrl+Z with the chart shown takes it back.
+void test_undo_views(ImGuiTestContext* ctx) {
+    open_by_path(ctx, 0);
+    if (ctx->IsError()) return;
+    IM_CHECK_EQ(dsg_def_set_string(ui_doc(), "/name", "undo across views"), 0);
+    ctx->Yield();
+    size_t n;
+    const char* t = editor_text(&n);
+    IM_CHECK(strstr(t, "\"name\": \"undo across views\"") != nullptr);
+    te_show(ctx, "Chart");
+    ctx->KeyPress(ImGuiMod_Ctrl | ImGuiKey_Z);
+    t = editor_text(&n);
+    IM_CHECK(strstr(t, "undo across views") == nullptr);
+    ctx->KeyPress(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_Z);
+    t = editor_text(&n);
+    IM_CHECK(strstr(t, "undo across views") != nullptr);
+    te_show(ctx, "Text");
+}
+
 void test_unsaved(ImGuiTestContext* ctx) {
     open_by_path(ctx, 2);
     if (ctx->IsError()) return;
@@ -209,12 +237,40 @@ void test_unsaved(ImGuiTestContext* ctx) {
 
 } // namespace
 
+bool te_copy_project(const char* name, const char* copy, const char* const* files, char* out, size_t cap) {
+    char err[512], a[DSG_PATH_MAX], b[DSG_PATH_MAX], src[DSG_PATH_MAX], rel[256];
+    snprintf(rel, sizeof rel, "tests/player/%s", name);
+    if (dsg_join(out, cap, g_work, copy) || dsg_make_dir(out, err, sizeof err)) return false;
+    if (dsg_join(src, sizeof src, YSP_SOURCE_DIR, rel)) return false;
+    for (int i = 0; files[i]; i++)
+        if (dsg_join(a, sizeof a, src, files[i]) || dsg_join(b, sizeof b, out, files[i]) || !copy_file(a, b)) return false;
+    if (dsg_join(b, sizeof b, out, DSG_VIEW_FILE) == 0) remove(b);
+    return true;
+}
+
+void te_open(ImGuiTestContext* ctx, const char* folder) {
+    ctx->ItemInputValue("//##designer/##path", folder);
+    if (modal_open()) ctx->ItemClick("//Unsaved changes/Discard");
+    IM_CHECK(ui_project() != nullptr);
+    IM_CHECK_STR_EQ(ui_project()->folder, folder);
+}
+
+ImGuiID te_in_child(ImGuiTestContext* ctx, const char* window, const char* item) { return in_child(ctx, window, item); }
+bool te_modal_open() { return modal_open(); }
+
+void te_show(ImGuiTestContext* ctx, const char* label) {
+    char path[128];
+    snprintf(path, sizeof path, "//##designer/switch/%s", label);
+    ctx->ItemClick(path);
+}
+
 int main(int argc, char** argv) {
     if (argc < 2) {
         printf("usage: test_designer_te WORK [FILTER]\n");
         return 2;
     }
     const char* work = argv[1];
+    g_work = work;
     char err[512];
     static const char* const names[3] = { "rdk", "rdk2", "rdk3" };
     if (dsg_make_dir(work, err, sizeof err)) {
@@ -257,6 +313,10 @@ int main(int argc, char** argv) {
     IM_REGISTER_TEST(engine, "designer", "path_field")->TestFunc = test_path_field;
     IM_REGISTER_TEST(engine, "designer", "edit_jump")->TestFunc = test_edit_jump;
     IM_REGISTER_TEST(engine, "designer", "unsaved")->TestFunc = test_unsaved;
+    IM_REGISTER_TEST(engine, "designer", "undo_views")->TestFunc = test_undo_views;
+    te_register_chart(engine);
+    te_register_tables(engine);
+    te_register_panels(engine);
 
     ImGuiTestEngine_Start(engine, ImGui::GetCurrentContext());
     ImGuiTestEngine_QueueTests(engine, ImGuiTestGroup_Tests, argc > 2 ? argv[2] : nullptr, ImGuiTestRunFlags_RunFromCommandLine);

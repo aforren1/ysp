@@ -1,8 +1,12 @@
-// ui.cpp - the designer's skeleton (docs/designer.md, "Order of work", step
-// 3): a project's definition as text in a Skribidi editor, checked by the
-// player's load on each change, its issues linked to their places, open and
-// save. Everything that needs no ImGui is in designer/core.
+// ui.cpp - the designer's window (docs/designer.md, steps 3 and 4): the
+// toolbar, the switch between the main views, the text view (a Skribidi
+// editor of the definition), the side column, the issues, open and save.
+// Every view edits one document (designer/core/doc.h): its bytes are the
+// truth, and one undo stack serves them all. The views other than the text
+// are in their own files (views.h). Everything that needs no ImGui is in
+// designer/core.
 #include "ui.h"
+#include "views.h"
 #include "skf.h"
 #include "skt.h"
 
@@ -20,22 +24,32 @@ namespace {
 
 enum Pending { PENDING_NONE, PENDING_OPEN, PENDING_NEW, PENDING_QUIT };
 
+// The text view is a view like the others, kept here because the skeleton's
+// tests and the issues' jumps reach into it.
+const int kTextView = -1;
+
 struct State {
     UiPlatform plat = {};
     dsg_project proj = {};
     bool open = false;
     dsg_checker* checker = nullptr;
+    dsg_doc* doc = nullptr;
     SkfField* editor = nullptr;
-    ImVector<char> text;             // the editor's text, NUL-ended
-    size_t text_len = 0;
+    ImVector<char> scratch;          // the editor's text, read after a change
+    uint64_t text_rev = 0;           // buffer 0's revision that the editor holds
+    uint64_t checked = 0;            // the document's revision last checked
+    int last_caret = -1;             // the editor's caret last frame
     bool dirty = false;
     bool check_due = false;
     int checks = 0;
     dsg_report report = {};
     bool have_report = false;
+    ImVector<char> issue_paths;      // NUL-ended paths, one per issue
+    ImVector<int> issue_path_at;
     int selected = -1;               // the issue last clicked
     float scroll_y = 0;              // the editor's scroll, for the view file
     float restore_scroll = -1;       // a scroll to set at the next frame
+    int main_view = kTextView;       // index into the views, or kTextView
     char path[DSG_PATH_MAX] = "";    // the typed path
     bool focus_path = false;
     char status[1024] = "";
@@ -48,58 +62,110 @@ State* S = nullptr;
 
 const float kTextSize = 16.0f;
 
+const UiView* const* views(int* n) { return ui_views(n); }
+
+void set_status_v(const char* fmt, va_list ap) { vsnprintf(S->status, sizeof S->status, fmt, ap); }
+
 void set_status(const char* fmt, ...) IM_FMTARGS(1);
 void set_status(const char* fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
-    vsnprintf(S->status, sizeof S->status, fmt, ap);
+    set_status_v(fmt, ap);
     va_end(ap);
 }
 
-void read_editor() {
-    S->text_len = (size_t)skf_text(S->editor, &S->text);
-    S->dirty = S->open && dsg_project_dirty(&S->proj, S->text.Data, S->text_len);
+const char* def_bytes(size_t* n) { return dsg_doc_bytes(S->doc, DSG_BUF_DEF, n); }
+
+void update_dirty() {
+    bool d = false;
+    for (int i = 0; S->open && i < dsg_doc_buffer_count(S->doc); i++) d = d || dsg_doc_dirty(S->doc, i);
+    S->dirty = d;
 }
 
-void set_editor_text(const char* t, size_t n) {
+// The editor's text went into the document: typing, a paste, a cut.
+void read_editor() {
+    const int n = skf_text(S->editor, &S->scratch);
+    if (dsg_doc_replace(S->doc, DSG_BUF_DEF, S->scratch.Data, (size_t)n, DSG_EDIT_MERGE))
+        set_status("The edit was not kept: %s", dsg_doc_error(S->doc));
+    S->text_rev = dsg_doc_rev(S->doc, DSG_BUF_DEF);
+    update_dirty();
+}
+
+// The document's definition changed elsewhere (another view, undo, save):
+// the editor shows it, with the caret at the change.
+void sync_editor() {
+    const uint64_t r = dsg_doc_rev(S->doc, DSG_BUF_DEF);
+    if (r == S->text_rev) return;
+    size_t n;
+    const char* t = def_bytes(&n);
     skf_set_text(S->editor, t, (int)n);
-    read_editor();
+    S->text_rev = r;
+    int buf = -1;
+    size_t off = 0, len = 0;
+    if (dsg_doc_last_change(S->doc, &buf, &off, &len) && buf == DSG_BUF_DEF)
+        skf_move_caret(S->editor, (int)dsg_codepoints_before(t, n, (uint32_t)(off + len)));
+    S->last_caret = skf_caret(S->editor);
+    update_dirty();
 }
 
 // The caret as line and column, for the view file.
 void caret_line_col(uint32_t* line, uint32_t* col) {
-    uint32_t b = dsg_byte_of_codepoint(S->text.Data, S->text_len, (uint32_t)skf_caret(S->editor));
-    dsg_line_col(S->text.Data, S->text_len, b, line, col);
+    size_t n;
+    const char* t = def_bytes(&n);
+    uint32_t b = dsg_byte_of_codepoint(t, n, (uint32_t)skf_caret(S->editor));
+    dsg_line_col(t, n, b, line, col);
 }
 
 void place_caret(uint32_t line, uint32_t col) {
-    uint32_t off = dsg_offset_of(S->text.Data, S->text_len, line, col);
-    skf_set_caret(S->editor, (int)dsg_codepoints_before(S->text.Data, S->text_len, off));
+    size_t n;
+    const char* t = def_bytes(&n);
+    uint32_t off = dsg_offset_of(t, n, line, col);
+    skf_set_caret(S->editor, (int)dsg_codepoints_before(t, n, off));
+}
+
+const char* main_id() {
+    int nv;
+    const UiView* const* v = views(&nv);
+    return S->main_view >= 0 && S->main_view < nv ? v[S->main_view]->id : "text";
 }
 
 void write_view() {
     if (!S->open) return;
-    dsg_view v = {};
-    caret_line_col(&v.caret_line, &v.caret_column);
-    v.scroll_y = S->scroll_y;
+    int nv;
+    const UiView* const* v = views(&nv);
+    for (int i = 0; i < nv; i++)
+        if (v[i]->save_view) v[i]->save_view(&S->proj.view);
+    // a shallow copy: the parts stay the project's, the ImGui text is ImGui's
+    dsg_view w = S->proj.view;
+    caret_line_col(&w.caret_line, &w.caret_column);
+    w.scroll_y = S->scroll_y;
     size_t n = 0;
-    const char* ini = ImGui::SaveIniSettingsToMemory(&n);
-    v.imgui_ini = (char*)ini;   // not owned: dsg_view_write only reads it
-    v.imgui_ini_len = n;
+    w.imgui_ini = (char*)ImGui::SaveIniSettingsToMemory(&n);
+    w.imgui_ini_len = n;
+    snprintf(w.main_view, sizeof w.main_view, "%s", main_id());
+    const dsg_sel* s = dsg_doc_selection(S->doc);
+    snprintf(w.selection, sizeof w.selection, "%s", s->buf == DSG_BUF_DEF ? s->path : "");
     char err[512];
-    if (dsg_view_write(S->proj.folder, &v, err, sizeof err)) set_status("The view state was not saved: %s", err);
+    if (dsg_view_write(S->proj.folder, &w, err, sizeof err)) set_status("The view state was not saved: %s", err);
 }
 
 void close_project() {
+    int nv;
+    const UiView* const* v = views(&nv);
     if (S->open) {
         write_view();
+        for (int i = 0; i < nv; i++)
+            if (v[i]->closed) v[i]->closed();
         dsg_project_close(&S->proj);
     }
     S->open = false;
     S->have_report = false;
+    S->issue_paths.resize(0);
+    S->issue_path_at.resize(0);
     S->selected = -1;
     S->dirty = false;
-    set_editor_text("", 0);
+    dsg_doc_reset(S->doc, "", "", 0);
+    sync_editor();
     if (S->checker) dsg_checker_forget(S->checker);
 }
 
@@ -113,11 +179,27 @@ void open_now(const char* path) {
     close_project();
     S->proj = p;
     S->open = true;
-    set_editor_text(S->proj.text, S->proj.text_len);
+    if (dsg_doc_reset(S->doc, S->proj.def_source, S->proj.text, S->proj.text_len) == 0)
+        dsg_doc_set_saved(S->doc, DSG_BUF_DEF, S->proj.saved, S->proj.saved_len);
+    sync_editor();
+    int nv;
+    const UiView* const* v = views(&nv);
+    S->main_view = kTextView;
+    for (int i = 0; i < nv; i++) {
+        if (v[i]->slot == UI_SLOT_MAIN && strcmp(v[i]->id, S->proj.view.main_view) == 0) S->main_view = i;
+        if (v[i]->opened) v[i]->opened(&S->proj.view);
+    }
+    if (S->proj.view.selection[0]) {
+        dsg_sel s;
+        dsg_sel_def(&s, S->proj.view.selection);
+        dsg_doc_select(S->doc, &s);
+    }
     if (S->proj.view.imgui_ini) ImGui::LoadIniSettingsFromMemory(S->proj.view.imgui_ini, S->proj.view.imgui_ini_len);
     if (S->proj.view.caret_line) place_caret(S->proj.view.caret_line, S->proj.view.caret_column);
+    S->last_caret = skf_caret(S->editor);
     S->restore_scroll = S->proj.view.scroll_y;
     S->check_due = true;
+    update_dirty();
     snprintf(S->path, sizeof S->path, "%s", S->proj.folder);
     if (S->proj.note[0]) set_status("Opened %s. %s.", S->proj.folder, S->proj.note);
     else set_status("Opened %s.", S->proj.folder);
@@ -156,12 +238,32 @@ void ask_or_run(Pending p, const char* path) {
     else run_pending();
 }
 
+// Each issue's value in the tree the check read, for the views to mark.
+void map_issues() {
+    S->issue_paths.resize(0);
+    S->issue_path_at.resize(0);
+    const yjs_value* root = dsg_doc_root(S->doc);
+    char p[DSG_SEL_PATH];
+    for (int i = 0; i < S->report.n_issues; i++) {
+        const dsg_issue* is = &S->report.issues[i];
+        p[0] = 0;
+        if (root && is->place.line && dsg_path_at(root, is->place.offset, p, sizeof p)) p[0] = 0;
+        S->issue_path_at.push_back(S->issue_paths.Size);
+        const int k = (int)strlen(p);
+        for (int j = 0; j <= k; j++) S->issue_paths.push_back(p[j]);
+    }
+}
+
 void run_check() {
     S->check_due = false;
     if (!S->open) return;
-    dsg_check(S->checker, &S->proj, S->text.Data, S->text_len, &S->report);
+    size_t n;
+    const char* t = def_bytes(&n);
+    dsg_check(S->checker, &S->proj, t, n, &S->report);
+    S->checked = dsg_doc_revision(S->doc);
     S->have_report = true;
     S->checks++;
+    map_issues();
     if (S->selected >= S->report.n_issues) S->selected = -1;
 }
 
@@ -193,6 +295,23 @@ void update_title() {
     }
 }
 
+// Ctrl+Z belongs to the document unless a text field with its own undo has
+// the keyboard: ImGui's path field, or a Skribidi field that keeps its own.
+bool undo_keys_free() {
+    ImGuiContext& g = *ImGui::GetCurrentContext();
+    if (g.ActiveId != 0 && g.InputTextState.ID == g.ActiveId) return false;
+    SkfField* f = skf_focus_field();
+    return !f || !skf_focused(f) || !skf_owns_undo(f);
+}
+
+void undo() {
+    if (dsg_doc_can_undo(S->doc) && dsg_doc_undo(S->doc) == 0) set_status("Undid: %s.", dsg_doc_redo_label(S->doc));
+}
+
+void redo() {
+    if (dsg_doc_can_redo(S->doc) && dsg_doc_redo(S->doc) == 0) set_status("Redid: %s.", dsg_doc_undo_label(S->doc));
+}
+
 void toolbar() {
     if (ImGui::Button("New")) ask_or_run(PENDING_NEW, S->path);
     ImGui::SameLine();
@@ -202,6 +321,16 @@ void toolbar() {
     ImGui::SameLine();
     ImGui::BeginDisabled(!S->open);
     if (ImGui::Button("Save")) ui_save();
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!dsg_doc_can_undo(S->doc));
+    if (ImGui::Button("Undo")) undo();
+    ImGui::SetItemTooltip("%s", dsg_doc_undo_label(S->doc));
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!dsg_doc_can_redo(S->doc));
+    if (ImGui::Button("Redo")) redo();
+    ImGui::SetItemTooltip("%s", dsg_doc_redo_label(S->doc));
     ImGui::EndDisabled();
     ImGui::SameLine();
     ImGui::TextUnformatted("Path");
@@ -216,6 +345,61 @@ void toolbar() {
     ImGui::SameLine();
     if ((ImGui::Button("Open path") || enter) && S->path[0]) ask_or_run(PENDING_OPEN, S->path);
     ImGui::TextWrapped("%s", S->status);
+}
+
+// Text | Chart | Tables: which main view shows.
+void view_switch() {
+    int nv;
+    const UiView* const* v = views(&nv);
+    // its own ID scope: a view's child window has the view's label as its name
+    ImGui::PushID("switch");
+    if (ImGui::RadioButton("Text", S->main_view == kTextView)) S->main_view = kTextView;
+    for (int i = 0; i < nv; i++) {
+        if (v[i]->slot != UI_SLOT_MAIN) continue;
+        ImGui::SameLine();
+        if (ImGui::RadioButton(v[i]->label, S->main_view == i)) S->main_view = i;
+    }
+    ImGui::PopID();
+}
+
+void text_view() {
+    if (!S->open) {
+        ImGui::TextUnformatted("No project is open.");
+        return;
+    }
+    if (S->restore_scroll >= 0) {
+        ImGui::SetScrollY(S->restore_scroll);
+        S->restore_scroll = -1;
+    }
+    if (skf_draw("##definition", S->editor, 0, 0)) read_editor();
+    S->scroll_y = ImGui::GetScrollY();
+    // The caret selects the value it is in, so the panels follow the text.
+    const int c = skf_caret(S->editor);
+    if (c != S->last_caret && skf_focused(S->editor)) {
+        S->last_caret = c;
+        size_t n;
+        const char* t = def_bytes(&n);
+        const yjs_value* root = dsg_doc_root(S->doc);
+        char p[DSG_SEL_PATH];
+        if (root && dsg_path_at(root, dsg_byte_of_codepoint(t, n, (uint32_t)c), p, sizeof p) == 0 &&
+            (dsg_doc_selection(S->doc)->buf != DSG_BUF_DEF || strcmp(p, dsg_doc_selection(S->doc)->path) != 0)) {
+            dsg_sel s;
+            dsg_sel_def(&s, p);
+            dsg_doc_select(S->doc, &s);
+        }
+    }
+}
+
+int text_claims(const dsg_sel* s) { return s->buf == DSG_BUF_DEF ? 1 : 0; }
+
+void text_reveal(const dsg_sel* s) {
+    uint32_t off = 0;
+    const yjs_value* root = dsg_doc_root(S->doc);
+    if (!root || !s->path[0] || !dsg_path_offset(root, s->path, &off)) return;
+    size_t n;
+    const char* t = def_bytes(&n);
+    skf_move_caret(S->editor, (int)dsg_codepoints_before(t, n, off));
+    S->last_caret = skf_caret(S->editor);
 }
 
 void issues_panel() {
@@ -296,16 +480,24 @@ bool ui_init(const char* font_dir, const UiPlatform* platform, char* err, size_t
     if (platform) S->plat = *platform;
     if (!skt_init(font_dir, err, cap)) return false;
     S->checker = dsg_checker_new();
-    if (!S->checker) {
-        snprintf(err, cap, "out of memory for the checker");
+    S->doc = dsg_doc_new();
+    if (!S->checker || !S->doc || dsg_doc_reset(S->doc, "", "", 0)) {
+        snprintf(err, cap, "out of memory for the checker and the document");
         return false;
     }
     S->editor = skf_create(kTextSize, true);
-    set_editor_text("", 0);
+    // the document's undo stack takes Ctrl+Z, so it spans every view
+    skf_set_own_undo(S->editor, false);
+    S->text_rev = 0;
+    sync_editor();
     // The UI's own text: Noto Sans when it is there, else ImGui's font.
     char path[DSG_PATH_MAX];
     if (dsg_join(path, sizeof path, font_dir, "NotoSans-Regular.ttf") == 0 && dsg_is_file(path))
         ImGui::GetIO().Fonts->AddFontFromFileTTF(path, 16.0f);
+    int nv;
+    const UiView* const* v = views(&nv);
+    for (int i = 0; i < nv; i++)
+        if (v[i]->init && !v[i]->init(err, cap)) return false;
     set_status("Open a project: a folder with a pack.json. Type its path, or press Open..., or drop it on the window.");
     return true;
 }
@@ -313,7 +505,12 @@ bool ui_init(const char* font_dir, const UiPlatform* platform, char* err, size_t
 void ui_shutdown() {
     if (!S) return;
     close_project();
+    int nv;
+    const UiView* const* v = views(&nv);
+    for (int i = 0; i < nv; i++)
+        if (v[i]->shutdown) v[i]->shutdown();
     skf_destroy(S->editor);
+    dsg_doc_free(S->doc);
     dsg_checker_free(S->checker);
     skt_shutdown();
     IM_DELETE(S);
@@ -340,34 +537,63 @@ bool ui_save() {
     if (!S->open) return false;
     uint32_t line = 0, col = 0;
     caret_line_col(&line, &col);
+    size_t n;
+    const char* t = def_bytes(&n);
     dsg_saved s;
     char err[1024];
-    if (dsg_project_save(&S->proj, S->text.Data, S->text_len, &s, err, sizeof err)) {
+    if (dsg_project_save(&S->proj, t, n, &s, err, sizeof err)) {
         set_status("Not saved: %s", err);
         return false;
     }
-    if (s.n != S->text_len || memcmp(s.bytes, S->text.Data, s.n) != 0) {
-        // the canonical form moves text: the caret keeps its line and column
-        set_editor_text(s.bytes, s.n);
-        place_caret(line, col);
-        S->check_due = true;
+    if (s.n != n || memcmp(s.bytes, t, s.n) != 0) {
+        // the canonical form is a step of its own: undo gives the text back
+        dsg_doc_begin(S->doc, "Canonical form");
+        dsg_doc_replace(S->doc, DSG_BUF_DEF, s.bytes, s.n, 0);
+        dsg_doc_commit(S->doc);
+        sync_editor();
+        place_caret(line, col);   // the canonical form moves text: the caret keeps its line and column
     }
-    read_editor();
-    if (s.canonical) set_status("Saved %s: canonical bytes, format version 2.", S->proj.def_source);
+    dsg_doc_set_saved(S->doc, DSG_BUF_DEF, s.bytes, s.n);
+    // The tables: their bytes as they are (the designer writes no other form).
+    int failed = 0;
+    for (int b = 1; b < dsg_doc_buffer_count(S->doc); b++) {
+        if (!dsg_doc_dirty(S->doc, b)) continue;
+        char path[DSG_PATH_MAX];
+        size_t bn;
+        const char* bytes = dsg_doc_bytes(S->doc, b, &bn);
+        if (dsg_join(path, sizeof path, S->proj.folder, dsg_doc_buffer_name(S->doc, b)) ||
+            dsg_write_file(path, bytes, bn, err, sizeof err)) {
+            failed++;
+            continue;
+        }
+        dsg_doc_mark_saved(S->doc, b);
+    }
+    update_dirty();
+    if (failed) set_status("Saved %s; %d tables were not saved: %s", S->proj.def_source, failed, err);
+    else if (s.canonical) set_status("Saved %s: canonical bytes, format version 2.", S->proj.def_source);
     else set_status("Saved %s as typed: the loader refuses the text, so the bytes are not canonical. Fix the errors and save again.",
                     S->proj.def_source);
     dsg_saved_free(&s);
     write_view();
-    return true;
+    return failed == 0;
 }
 
 void ui_jump_to_issue(int i) {
     if (!S->have_report || i < 0 || i >= S->report.n_issues) return;
     S->selected = i;
     const dsg_issue* is = &S->report.issues[i];
+    const char* p = ui_issue_path(i);
+    if (p[0]) {
+        dsg_sel s;
+        dsg_sel_def(&s, p);
+        ui_reveal(&s);
+    }
     if (!is->place.line) return;
     // the place is in the text the check read, which is the editor's text
-    skf_set_caret(S->editor, (int)dsg_codepoints_before(S->text.Data, S->text_len, is->place.offset));
+    size_t n;
+    const char* t = def_bytes(&n);
+    skf_set_caret(S->editor, (int)dsg_codepoints_before(t, n, is->place.offset));
+    S->last_caret = skf_caret(S->editor);
 }
 
 void ui_frame() {
@@ -377,29 +603,51 @@ void ui_frame() {
     ImGui::Begin("##designer", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
                                             ImGuiWindowFlags_NoBringToFrontOnFocus);
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_S)) ui_save();
+    if (undo_keys_free()) {
+        if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_Z)) undo();
+        if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_Z) || ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_Y)) redo();
+    }
+    sync_editor();
     toolbar();
     ImGui::Separator();
+    view_switch();
 
+    int nv;
+    const UiView* const* v = views(&nv);
+    bool side = false;
+    for (int i = 0; i < nv; i++) side = side || v[i]->slot == UI_SLOT_SIDE;
     const float issues_h = ImMax(120.0f, ImGui::GetContentRegionAvail().y * 0.3f);
-    ImGui::BeginChild("Definition", ImVec2(0, -issues_h), ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar);
-    if (S->open) {
-        if (S->restore_scroll >= 0) {
-            ImGui::SetScrollY(S->restore_scroll);
-            S->restore_scroll = -1;
-        }
-        if (skf_draw("##definition", S->editor, 0, 0)) {
-            read_editor();
-            S->check_due = true;
-        }
-        S->scroll_y = ImGui::GetScrollY();
+    const float side_w = side ? ImMax(280.0f, ImGui::GetContentRegionAvail().x * 0.3f) : 0.0f;
+    const float main_w = side ? -(side_w + ImGui::GetStyle().ItemSpacing.x) : 0.0f;
+
+    // The text view keeps the skeleton's child name, so its tests' paths hold.
+    if (S->main_view == kTextView) {
+        ImGui::BeginChild("Definition", ImVec2(main_w, -issues_h), ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar);
+        text_view();
     } else {
-        ImGui::TextUnformatted("No project is open.");
+        ImGui::BeginChild(v[S->main_view]->label, ImVec2(main_w, -issues_h), ImGuiChildFlags_Borders);
+        if (S->open) v[S->main_view]->draw();
+        else ImGui::TextUnformatted("No project is open.");
     }
     ImGui::EndChild();
+    if (side) {
+        // Side views are children of the main window too, so a test finds
+        // them as "//##designer/LABEL".
+        ImGui::SameLine();
+        ImGui::BeginGroup();
+        for (int i = 0; i < nv; i++) {
+            if (v[i]->slot != UI_SLOT_SIDE) continue;
+            ImGui::BeginChild(v[i]->label, ImVec2(0, -issues_h), ImGuiChildFlags_Borders);
+            if (S->open) v[i]->draw();
+            ImGui::EndChild();
+        }
+        ImGui::EndGroup();
+    }
 
-    // The check runs in the frame of the change, after the editor, so the
+    // The check runs in the frame of the change, after the views, so the
     // issues below show this text's result. pl_check() takes 0.2 to 7 ms on
     // the example packs (player.md, Measured): inside a frame.
+    if (S->open && dsg_doc_revision(S->doc) != S->checked) S->check_due = true;
     if (S->check_due) run_check();
 
     ImGui::BeginChild("Issues", ImVec2(0, 0), ImGuiChildFlags_Borders);
@@ -410,15 +658,83 @@ void ui_frame() {
     update_title();
 }
 
-bool ui_work_pending() { return S && (S->check_due || S->restore_scroll >= 0 || S->ask_unsaved); }
+bool ui_work_pending() {
+    return S && (S->check_due || S->restore_scroll >= 0 || S->ask_unsaved ||
+                 (S->open && dsg_doc_revision(S->doc) != S->checked) || dsg_doc_rev(S->doc, DSG_BUF_DEF) != S->text_rev);
+}
+
+bool ui_animating() {
+    if (!S) return false;
+    int nv;
+    const UiView* const* v = views(&nv);
+    for (int i = 0; i < nv; i++)
+        if (v[i]->animating && v[i]->animating()) return true;
+    return false;
+}
 
 const dsg_project* ui_project() { return S && S->open ? &S->proj : nullptr; }
 const dsg_report* ui_report() { return S && S->have_report ? &S->report : nullptr; }
 SkfField* ui_editor() { return S ? S->editor : nullptr; }
-const char* ui_text(size_t* n) {
-    *n = S->text_len;
-    return S->text.Data;
-}
+const char* ui_text(size_t* n) { return def_bytes(n); }
 const char* ui_status() { return S->status; }
 bool ui_dirty() { return S->dirty; }
 int ui_checks_run() { return S->checks; }
+
+const char* ui_main_view() { return main_id(); }
+
+bool ui_show_view(const char* id) {
+    int nv;
+    const UiView* const* v = views(&nv);
+    if (strcmp(id, "text") == 0) {
+        S->main_view = kTextView;
+        return true;
+    }
+    for (int i = 0; i < nv; i++)
+        if (v[i]->slot == UI_SLOT_MAIN && strcmp(v[i]->id, id) == 0) {
+            S->main_view = i;
+            return true;
+        }
+    return false;
+}
+
+// --- views.h ---------------------------------------------------------------
+
+dsg_doc* ui_doc() { return S->doc; }
+
+const char* ui_issue_path(int i) {
+    if (!S->have_report || i < 0 || i >= S->issue_path_at.Size) return "";
+    return S->issue_paths.Data + S->issue_path_at[i];
+}
+
+void ui_reveal(const dsg_sel* s) {
+    dsg_doc_select(S->doc, s);
+    int nv;
+    const UiView* const* v = views(&nv);
+    int best = S->main_view;
+    int best_claim = S->main_view == kTextView ? text_claims(s) : (v[S->main_view]->claims ? v[S->main_view]->claims(s) : 0);
+    if (text_claims(s) > best_claim) {
+        best = kTextView;
+        best_claim = text_claims(s);
+    }
+    for (int i = 0; i < nv; i++) {
+        if (v[i]->slot != UI_SLOT_MAIN || !v[i]->claims) continue;
+        const int c = v[i]->claims(s);
+        if (c > best_claim) {
+            best = i;
+            best_claim = c;
+        }
+    }
+    S->main_view = best;
+    if (best == kTextView) text_reveal(s);
+    for (int i = 0; i < nv; i++)
+        if ((i == best || v[i]->slot == UI_SLOT_SIDE) && v[i]->reveal) v[i]->reveal(s);
+}
+
+void ui_set_status(const char* fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    set_status_v(fmt, ap);
+    va_end(ap);
+}
+
+float ui_text_size() { return kTextSize; }

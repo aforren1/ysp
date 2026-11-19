@@ -20,6 +20,7 @@ struct SkfField {
     bool composing = false;
     bool changed = false;      // set by the editor's text callback
     bool reveal = false;       // scroll the caret into view at the next draw
+    bool own_undo = true;      // Ctrl+Z is Skribidi's, not the document's
     float size = 16.0f;
 };
 
@@ -110,12 +111,12 @@ void keys(SkfField* f, uint32_t mods) {
             if (s && *s) skb_editor_insert_text_utf8(f->ed, skt_temp(), SKB_CURRENT_SELECTION, s, -1);
             f->reveal = true;
         }
-        if (ImGui::IsKeyPressed(ImGuiKey_Z, false)) {
+        if (f->own_undo && ImGui::IsKeyPressed(ImGuiKey_Z, false)) {
             if (io.KeyShift) skb_editor_redo(f->ed, skt_temp());
             else skb_editor_undo(f->ed, skt_temp());
             f->reveal = true;
         }
-        if (ImGui::IsKeyPressed(ImGuiKey_Y, false)) { skb_editor_redo(f->ed, skt_temp()); f->reveal = true; }
+        if (f->own_undo && ImGui::IsKeyPressed(ImGuiKey_Y, false)) { skb_editor_redo(f->ed, skt_temp()); f->reveal = true; }
     }
     // Characters, in the order ImGui's queue kept them with the keys.
     if (!io.InputQueueCharacters.empty()) {
@@ -202,6 +203,18 @@ void skf_set_caret(SkfField* f, int cp) {
 }
 
 bool skf_focused(const SkfField* f) { return f->focused; }
+
+void skf_move_caret(SkfField* f, int cp) {
+    skb_text_range_t r;
+    r.start.offset = r.end.offset = cp;
+    r.start.affinity = r.end.affinity = SKB_AFFINITY_TRAILING;
+    skb_editor_select(f->ed, r);
+    f->reveal = true;
+}
+
+void skf_set_own_undo(SkfField* f, bool own) { f->own_undo = own; }
+bool skf_owns_undo(const SkfField* f) { return f->own_undo; }
+SkfField* skf_focus_field() { return focus; }
 
 void skf_compose(const char* utf8, int caret_cp) {
     if (!focus) return;

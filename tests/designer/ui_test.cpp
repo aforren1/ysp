@@ -15,8 +15,12 @@
 //   5. Ctrl+S: canonical bytes on disk, clean, the view file written with
 //      the caret's line.
 //   6. Idle: no work pending, so the loop would block.
+//   7. The document (step 4): a structured edit shows in the text view; each
+//      main view draws; Ctrl+Z with the chart shown takes the edit back, and
+//      Ctrl+Shift+Z puts it in again.
 // Exit 0 on pass, 1 on a failure.
 #include "ui.h"
+#include "views.h"
 #include "skf.h"
 #include "skt.h"
 
@@ -230,6 +234,33 @@ int main(int argc, char** argv) {
     int c1 = ui_checks_run();
     settle();
     CHECK(ui_checks_run() == c1, "idle frames run no check");
+
+    // 7. the document under every view
+    CHECK(dsg_def_set_string(ui_doc(), "/name", "views") == 0, "a structured edit: %s", dsg_doc_error(ui_doc()));
+    settle();
+    t = editor_text(&n);
+    CHECK(strstr(t, "\"name\": \"views\"") != nullptr && ui_dirty(), "the text view shows it, dirty");
+    CHECK(ui_checks_run() > c1, "the edit ran a check");
+    static const char* const ids[] = { "chart", "tables", "text" };
+    for (const char* id : ids) {
+        CHECK(ui_show_view(id), "the %s view", id);
+        settle();
+        CHECK(strcmp(ui_main_view(), id) == 0, "%s shows", id);
+    }
+    CHECK(!ui_show_view("none"), "no such view");
+    ui_show_view("chart");
+    settle();
+    key(ImGuiKey_Z, true);
+    t = editor_text(&n);
+    CHECK(strstr(t, "\"name\": \"views\"") == nullptr, "Ctrl+Z with the chart shown takes it back");
+    ImGui::GetIO().AddKeyEvent(ImGuiMod_Shift, true);
+    key(ImGuiKey_Z, true);
+    ImGui::GetIO().AddKeyEvent(ImGuiMod_Shift, false);
+    settle();
+    t = editor_text(&n);
+    CHECK(strstr(t, "\"name\": \"views\"") != nullptr, "Ctrl+Shift+Z puts it in again");
+    ui_show_view("text");
+    settle();
 
     ui_shutdown();
     ImGui::DestroyContext();
