@@ -238,8 +238,9 @@ static void test_model(void) {
 
 static void test_places(void) {
     static const char def[] =
-        "{\"trials\": {\"a/b\": {\"exits\": [{\"on\": \"x\", \"to\": \"end\", \"in\": [\"s\"]}],"
-        " \"states\": [{\"name\": \"s\", \"exits\": [{\"to\": \"t\"}]}, {\"name\": \"t\", \"max_visits\": 2, \"over\": {\"to\": \"s\"}}]}}}";
+        "{\"trials\": {\"a/b\": {\"exits\": [{\"on\": \"x\", \"to\": \"end\", \"in\": [\"s\", \"u\"]}],"
+        " \"states\": [{\"name\": \"s\", \"exits\": [{\"to\": \"t\"}]}, {\"name\": \"t\", \"max_visits\": 2, \"over\": {\"to\": \"s\"}},"
+        " {\"name\": \"u\"}]}}}";
     dsg_doc* d = dsg_doc_new();
     dsg_chart c;
     dsg_chart_place pl = { -1, -1, -1 };
@@ -247,7 +248,9 @@ static void test_places(void) {
     int i;
     memset(&c, 0, sizeof c);
     dsg_doc_reset(d, "experiment.json", def, sizeof def - 1);
-    CHECK(dsg_chart_build(dsg_doc_root(d), "a/b", &c) == 0 && c.n_edges == 4, "a template with '/' in its name: 4 edges (%d)", c.n_edges);
+    CHECK(dsg_chart_build(dsg_doc_root(d), "a/b", &c) == 0 && c.n_edges == 5, "a template with '/' in its name: 5 edges (%d)", c.n_edges);
+    CHECK(edge(&c, 1, DSG_EDGE_NEXT, 0) && !edge(&c, 2, DSG_EDGE_NEXT, 0) && count_kind(&c, DSG_EDGE_NEXT) == 1,
+          "no exits of its own but in a shared exit's `in`: no next edge (the player's rule 10)");
     CHECK(dsg_chart_state_path(&c, 1, path, sizeof path) == 0 && strcmp(path, "/trials/a~1b/states/1") == 0, "a state's path, escaped");
     CHECK(dsg_chart_locate(&c, "/trials/a~1b/states/1/max_visits", &pl) && pl.state == 1 && pl.kind == -1, "a state's key: the state");
     CHECK(dsg_chart_locate(&c, "/trials/a~1b/states/0/exits/0/to", &pl) && pl.state == 0 && pl.kind == DSG_EDGE_EXIT && pl.index == 0,
@@ -439,7 +442,7 @@ static void test_commands(void) {
         dsg_chart_tview* tv = dsg_chart_view_template(&v, "track", true);
         memset(&vf, 0, sizeof vf);
         memset(&back, 0, sizeof back);
-        tv->pan_x = -12.4f;
+        tv->pan_x = -12.6f;
         tv->pan_y = 33.6f;
         tv->zoom = 1.25f;
         dsg_chart_view_set_pos(&v, "reach", DSG_CHART_END, 640, -80);
@@ -453,7 +456,7 @@ static void test_commands(void) {
         CHECK(part && dsg_chart_view_read(&w, part, m) == 0, "the part reads");
         CHECK(w.current && strcmp(w.current, "reach") == 0, "the template shown");
         tv = dsg_chart_view_template(&w, "track", false);
-        CHECK(tv && tv->pan_x == -12 && tv->pan_y == 34 && fabsf(tv->zoom - 1.25f) < 1e-6f, "pan in whole px, zoom (%g %g %g)",
+        CHECK(tv && tv->pan_x == -13 && tv->pan_y == 34 && fabsf(tv->zoom - 1.25f) < 1e-6f, "pan in whole px, zoom (%g %g %g)",
               tv ? tv->pan_x : 0, tv ? tv->pan_y : 0, tv ? tv->zoom : 0);
         CHECK(dsg_chart_view_pos(&w, "track", "moving", &x, &y) && x == 300 && y == 120 && dsg_chart_view_pos(&w, "reach", "end", &x, &y) &&
               x == 640 && y == -80, "positions, the end's too");
@@ -463,9 +466,9 @@ static void test_commands(void) {
             CHECK(again && n2 == n && memcmp(again, json, n) == 0, "written again, the same bytes");
             free(again);
         }
-        static const char odd[] = "{\"templates\": {\"t\": {\"pan\": \"x\", \"zoom\": -1, \"states\": {\"a\": [1], \"b\": [1, 2]}}}}";
+        static const char odd[] = "{\"templates\": {\"t\": {\"pan\": \"x\", \"zoom\": -1, \"states\": {\"a\": [1], \"b\": [1, 2], \"c\": [1e9, 2], \"d\": [1, 2, 3]}}}}";
         CHECK(dsg_chart_view_read(&w, odd, sizeof odd - 1) == 0 &&
-              dsg_chart_view_pos(&w, "t", "b", &x, &y) && !dsg_chart_view_pos(&w, "t", "a", &x, &y) &&
+              dsg_chart_view_pos(&w, "t", "b", &x, &y) && !dsg_chart_view_pos(&w, "t", "a", &x, &y) && !dsg_chart_view_pos(&w, "t", "c", &x, &y) && !dsg_chart_view_pos(&w, "t", "d", &x, &y) &&
               dsg_chart_view_template(&w, "t", false)->zoom == 1, "entries of the wrong shape are skipped");
         CHECK(dsg_chart_view_read(&w, "{", 1) == -1, "a part that does not parse");
         dsg_chart_view_free(&w);
