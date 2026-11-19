@@ -22,8 +22,19 @@
  *      direction, gives clusters that hold every codepoint once, laid out
  *      and typed in the editor. U+202E before U+094D U+200C U+094E gave a
  *      cluster of no codepoints (an assert in a Debug build).
- * Parts 1 to 3 and 5 use fonts written here (tests/adapt/colr_font_build.h): a
- * box for each codepoint, 1000 units per em, at 16 px a glyph is 16 px wide.
+ *   6. Commands on empty, one-character and separator-only texts (patch
+ *      0008): a move in an editor that never had text (it read paragraph 0
+ *      of none), Ctrl+Right to the end of "ab" (it read past the text's
+ *      properties), a double click at its start (it read before them),
+ *      Enter and separators at a text's ends (memcpy() got NULL); then
+ *      each key with each modifier set, select all, pastes, double and
+ *      triple clicks and an IME composition, from each caret position of
+ *      12 small texts in both behaviors, keep the editor whole. Without the
+ *      patch the moves of a new editor crash; the other faults show only
+ *      under ASan and UBSan.
+ * Parts 1 to 3, 5 and 6 use fonts written here (tests/adapt/colr_font_build.h):
+ * a box for each codepoint, 1000 units per em, at 16 px a glyph is 16 px
+ * wide.
  * Exit 0 on pass, 1 on a failure.
  */
 #if defined(_MSC_VER) && !defined(_CRT_SECURE_NO_WARNINGS)
@@ -441,6 +452,211 @@ static void check_override(skb_font_collection_t* fc) {
     }
 }
 
+/* --- 6: commands on empty, one-character and separator-only texts ------------ */
+
+static skb_editor_t* editor_make_behavior(skb_font_collection_t* fc, skb_editor_behavior_t behavior) {
+    static skb_attribute_t pa[1];
+    skb_editor_params_t p;
+    pa[0] = skb_attribute_make_font_size(SIZE);
+    memset(&p, 0, sizeof p);
+    p.font_collection = fc;
+    p.editor_width = -1.0f;
+    p.editor_height = -1.0f;
+    p.paragraph_attributes = (skb_attribute_set_t){ pa, 1, 0, NULL };
+    p.editor_behavior = behavior;
+    return skb_editor_create(&p);
+}
+
+static int caret_offset(const skb_editor_t* ed) {
+    return skb_editor_get_text_offset_from_text_position(ed, skb_editor_get_current_selection(ed).end);
+}
+
+static void no_rect(skb_rect2_t r, void* ctx) { (void)r; (void)ctx; }
+
+/* 0 when the editor is whole: a paragraph per separator and one more (none
+ * in an editor that never had text), the selection inside the text, clusters
+ * that tile each paragraph, a caret that is a number, a line and column
+ * index that are not negative, and selection bounds that can be read; else a
+ * fault number. */
+static int editor_fault(const skb_editor_t* ed) {
+    const int total = skb_editor_get_text_utf32_count(ed), np = skb_editor_get_paragraph_count(ed);
+    const skb_text_range_t sel = skb_editor_get_current_selection(ed);
+    const int s = skb_editor_get_text_offset_from_text_position(ed, sel.start), e = skb_editor_get_text_offset_from_text_position(ed, sel.end);
+    const skb_caret_info_t ci = skb_editor_get_caret_info_at(ed, SKB_CURRENT_SELECTION_END);
+    uint32_t t[32];
+    int i, seps = 0;
+    if (total < 0 || total >= 32) return 1;
+    skb_editor_get_text_utf32(ed, t, 32);
+    for (i = 0; i < total; i++) seps += skb_is_paragraph_separator(t[i]) ? 1 : 0;
+    if (!(np == seps + 1 || (np == 0 && total == 0))) return 2;
+    if (s < 0 || s > total || e < 0 || e > total) return 3;
+    for (i = 0; i < np; i++)
+        if (tiling_fault(skb_editor_get_paragraph_layout(ed, i))) return 4;
+    if (!(ci.x == ci.x) || !(ci.y == ci.y)) return 5;   /* NaN */
+    if (skb_editor_get_line_index_at(ed, SKB_CURRENT_SELECTION_END) < 0 || skb_editor_get_column_index_at(ed, SKB_CURRENT_SELECTION_END) < 0) return 6;
+    skb_editor_iterate_text_range_bounds(ed, SKB_CURRENT_SELECTION, no_rect, NULL);
+    return 0;
+}
+
+/* The commands of a text field: each key with each modifier set, then select
+ * all, three pastes, a double click, a triple click and drag, and an IME
+ * composition. */
+#define N_MODS 8
+#define N_MOVES (6 * N_MODS)   /* Left, Right, Up, Down, Home, End */
+#define N_KEY_CMDS (9 * N_MODS)
+#define N_CMDS (N_KEY_CMDS + 7)
+static const uint32_t mods_of[N_MODS] = { 0, SKB_MOD_SHIFT, SKB_MOD_CONTROL, SKB_MOD_SHIFT | SKB_MOD_CONTROL, SKB_MOD_OPTION,
+                                          SKB_MOD_SHIFT | SKB_MOD_OPTION, SKB_MOD_COMMAND, SKB_MOD_SHIFT | SKB_MOD_COMMAND };
+
+static void run_command(skb_editor_t* ed, int c) {
+    static const uint32_t lf2[2] = { 0x0A, 0x0A }, ps = 0x2029, ab[2] = { 'a', 'b' };
+    if (c < N_KEY_CMDS) {
+        skb_editor_process_key_pressed(ed, temp, (skb_editor_key_t)(SKB_KEY_LEFT + c / N_MODS), mods_of[c % N_MODS]);
+        return;
+    }
+    switch (c - N_KEY_CMDS) {
+    case 0: skb_editor_select_all(ed); break;
+    case 1: skb_editor_insert_text_utf32(ed, temp, SKB_CURRENT_SELECTION, lf2, 0); break;   /* a paste of nothing */
+    case 2: skb_editor_insert_text_utf32(ed, temp, SKB_CURRENT_SELECTION, lf2, 2); break;
+    case 3: skb_editor_insert_text_utf32(ed, temp, SKB_CURRENT_SELECTION, &ps, 1); break;
+    case 4: skb_editor_process_mouse_click(ed, 4.0f, 4.0f, 0, 1.0); skb_editor_process_mouse_click(ed, 4.0f, 4.0f, 0, 1.1); break;
+    case 5:
+        skb_editor_process_mouse_click(ed, 20.0f, 4.0f, 0, 1.0); skb_editor_process_mouse_click(ed, 20.0f, 4.0f, 0, 1.1);
+        skb_editor_process_mouse_click(ed, 20.0f, 4.0f, 0, 1.2); skb_editor_process_mouse_drag(ed, 40.0f, 4.0f);
+        break;
+    default:
+        skb_editor_set_composition_utf32(ed, temp, ab, 2, 1);
+        skb_editor_iterate_text_range_bounds(ed, SKB_CURRENT_SELECTION, no_rect, NULL);
+        skb_editor_commit_composition_utf32(ed, temp, NULL, 0);
+        break;
+    }
+}
+
+/* Skribidi patch 0008. Three faults that a text field reaches: a key in an
+ * editor that never had text read paragraph 0 of none (an assert in a Debug
+ * build, NULL in a Release one); Ctrl+Right at the last word read the text
+ * property past the text's end (ASan); and Enter, or text that starts or
+ * ends with a paragraph separator, gave memcpy() a NULL destination (UBSan).
+ * Then each command from each caret position of small texts, in both
+ * behaviors: the editor must stay whole, and a move must not change the
+ * text. Without the patch, the checks of the second and third fault fail
+ * only under ASan and UBSan, which report the read and the copy. */
+static void check_commands(skb_font_collection_t* fc) {
+    static const char* texts[] = { NULL, "", "a", "\xD7\x90", " ", "\n", "\xE2\x80\xA9", "\n\n", "a\n", "\na", "ab", "\xD7\x90\xD7\x91" };
+    const int n_texts = (int)(sizeof texts / sizeof texts[0]);
+    uint32_t t[32], u[32];
+    int k, n, x, b, at, c, faults = 0, moved = 0, runs = 0;
+    skb_editor_t* ed;
+
+    /* 1. A move in an editor that never had text. */
+    for (b = 0; b < 2; b++)
+        for (c = 0; c < N_MOVES; c++) {
+            ed = editor_make_behavior(fc, b ? SKB_BEHAVIOR_MACOS : SKB_BEHAVIOR_DEFAULT);
+            run_command(ed, c);
+            if (skb_editor_get_text_utf32_count(ed) != 0 || caret_offset(ed) != 0) faults++;
+            skb_editor_destroy(ed);
+        }
+    CHECK(faults == 0, "never had text: %d of %d moves gave text or moved the caret", faults, 2 * N_MOVES);
+    ed = editor_make(fc);
+    CHECK(skb_editor_get_line_index_at(ed, SKB_CURRENT_SELECTION_END) == 0 && skb_editor_get_column_index_at(ed, SKB_CURRENT_SELECTION_END) == 0,
+          "never had text: the caret is not on line 0, column 0");
+    skb_editor_process_key_pressed(ed, temp, SKB_KEY_ENTER, 0);
+    n = text_of(ed, t, 32);
+    CHECK(n == 1 && t[0] == 0x0A && skb_editor_get_paragraph_count(ed) == 2 && caret_offset(ed) == 1,
+          "never had text: Enter gave %d codepoints, %d paragraphs, the caret at %d", n, skb_editor_get_paragraph_count(ed), caret_offset(ed));
+    CHECK(skb_editor_get_line_index_at(ed, SKB_CURRENT_SELECTION_END) == 1, "never had text: after Enter the caret is on line %d",
+          skb_editor_get_line_index_at(ed, SKB_CURRENT_SELECTION_END));
+    skb_editor_destroy(ed);
+
+    /* 2. Ctrl+Right to the end of the last word; Ctrl+Left in RTL text runs
+     * the same code. */
+    ed = editor_make(fc);
+    skb_editor_set_text_utf8(ed, temp, "ab", -1);
+    skb_editor_process_key_pressed(ed, temp, SKB_KEY_HOME, 0);
+    skb_editor_process_key_pressed(ed, temp, SKB_KEY_RIGHT, SKB_MOD_CONTROL);
+    k = caret_offset(ed);
+    skb_editor_process_key_pressed(ed, temp, SKB_KEY_RIGHT, SKB_MOD_CONTROL);
+    CHECK(k == 2 && caret_offset(ed) == 2, "\"ab\": Ctrl+Right took the caret to %d, then %d, not the end", k, caret_offset(ed));
+    skb_editor_set_text_utf8(ed, temp, "a b", -1);
+    skb_editor_process_key_pressed(ed, temp, SKB_KEY_HOME, 0);
+    skb_editor_process_key_pressed(ed, temp, SKB_KEY_RIGHT, SKB_MOD_CONTROL);
+    CHECK(caret_offset(ed) == 2, "\"a b\": Ctrl+Right took the caret to %d, not the start of b", caret_offset(ed));
+    skb_editor_set_text_utf8(ed, temp, "\xD7\x90\xD7\x91", -1);
+    skb_editor_process_key_pressed(ed, temp, SKB_KEY_HOME, 0);
+    skb_editor_process_key_pressed(ed, temp, SKB_KEY_LEFT, SKB_MOD_CONTROL);
+    CHECK(caret_offset(ed) == 2, "Hebrew: Ctrl+Left took the caret to %d, not the end", caret_offset(ed));
+    /* A double click selects the word, from its first or its last letter
+     * (the word start read the property before offset 0). */
+    skb_editor_set_text_utf8(ed, temp, "ab", -1);
+    for (k = 0; k < 2; k++) {
+        const float cx = k ? 1.25f * SIZE : 0.25f * SIZE;
+        skb_text_range_t sel;
+        int s0, s1;
+        skb_editor_process_mouse_click(ed, cx, 4.0f, 0, 10.0 * (k + 1));
+        skb_editor_process_mouse_click(ed, cx, 4.0f, 0, 10.0 * (k + 1) + 0.1);
+        sel = skb_editor_get_current_selection(ed);
+        s0 = skb_editor_get_text_offset_from_text_position(ed, sel.start);
+        s1 = skb_editor_get_text_offset_from_text_position(ed, sel.end);
+        CHECK(s0 == 0 && s1 == 2, "\"ab\": a double click on %s selected %d to %d", k ? "b" : "a", s0, s1);
+    }
+    skb_editor_destroy(ed);
+
+    /* 3. Empty paragraphs: text that ends in LF, Enter, and an insert that
+     * starts with a separator. */
+    ed = editor_make(fc);
+    skb_editor_set_text_utf8(ed, temp, "a\n", -1);
+    CHECK(text_of(ed, t, 32) == 2 && skb_editor_get_paragraph_count(ed) == 2, "\"a\\n\": %d paragraphs", skb_editor_get_paragraph_count(ed));
+    skb_editor_set_text_utf8(ed, temp, "a", -1);
+    skb_editor_process_key_pressed(ed, temp, SKB_KEY_END, 0);
+    skb_editor_process_key_pressed(ed, temp, SKB_KEY_ENTER, 0);
+    n = text_of(ed, t, 32);
+    CHECK(n == 2 && t[0] == 'a' && t[1] == 0x0A && caret_offset(ed) == 2, "Enter after \"a\": %d codepoints, the caret at %d", n, caret_offset(ed));
+    skb_editor_set_text_utf8(ed, temp, "a", -1);
+    skb_editor_select(ed, (skb_text_range_t){ { 0, SKB_AFFINITY_SOL }, { 0, SKB_AFFINITY_SOL } });
+    skb_editor_insert_text_utf8(ed, temp, SKB_CURRENT_SELECTION, "\xE2\x80\xA9" "b", -1);
+    n = text_of(ed, t, 32);
+    CHECK(n == 3 && t[0] == 0x2029 && t[1] == 'b' && t[2] == 'a' && skb_editor_get_paragraph_count(ed) == 2,
+          "U+2029 b inserted before \"a\": %d codepoints, %d paragraphs", n, skb_editor_get_paragraph_count(ed));
+    skb_editor_destroy(ed);
+
+    /* 4. Each command from each caret position (and from select all) of
+     * each text, and of an editor whose one edit was undone, twice, in both
+     * behaviors. */
+    faults = 0;
+    for (x = 0; x <= n_texts; x++)
+        for (b = 0; b < 2; b++)
+            for (at = -1; at <= 2; at++)   /* -1: select all; else the caret at that offset, where the text has it */
+                for (c = 0; c < N_CMDS; c++) {
+                    int f, total, m = 0;
+                    ed = editor_make_behavior(fc, b ? SKB_BEHAVIOR_MACOS : SKB_BEHAVIOR_DEFAULT);
+                    if (x == n_texts) {
+                        skb_editor_insert_codepoint(ed, temp, SKB_CURRENT_SELECTION, 'a');
+                        skb_editor_undo(ed, temp);
+                    } else if (texts[x]) skb_editor_set_text_utf8(ed, temp, texts[x], -1);
+                    total = skb_editor_get_text_utf32_count(ed);
+                    if (at > total) { skb_editor_destroy(ed); continue; }
+                    if (at < 0) skb_editor_select_all(ed);
+                    else {
+                        const skb_text_position_t p = { at, at ? SKB_AFFINITY_TRAILING : SKB_AFFINITY_SOL };
+                        skb_editor_select(ed, (skb_text_range_t){ p, p });
+                    }
+                    n = text_of(ed, t, 32);
+                    run_command(ed, c);
+                    f = editor_fault(ed);
+                    if (!f) { run_command(ed, c); f = editor_fault(ed); }
+                    runs++;
+                    if (!f && c < N_MOVES) {
+                        m = text_of(ed, u, 32);
+                        if (m != n || memcmp(t, u, (size_t)n * sizeof t[0]) != 0) { f = 7; moved++; }
+                    }
+                    if (f && faults++ < 4)
+                        CHECK(0, "commands: text %d, %s, caret %d, command %d: fault %d", x, b ? "macOS" : "default", at, c, f);
+                    skb_editor_destroy(ed);
+                }
+    CHECK(faults == 0, "commands: %d of %d sessions left the editor broken (%d moves changed the text)", faults, runs, moved);
+    printf("commands: %d sessions, %d commands\n", runs, N_CMDS);
+}
+
 /* --- 4: the probe's fonts ---------------------------------------------------- */
 
 static int file_exists(const char* path) {
@@ -482,7 +698,7 @@ static void check_noto(void) {
 }
 
 int main(void) {
-    static cfb_buf deva, latin, hebrew, arabic, arrows, deva5;
+    static cfb_buf deva, latin, hebrew, arabic, arrows, deva5, ab;
     uint32_t cps[64];
     int n;
     skb_font_collection_t* fc;
@@ -523,11 +739,20 @@ int main(void) {
     check_override(fc);
     skb_font_collection_destroy(fc);
 
+    /* 6. The fonts of part 3, and a and b. */
+    cps[0] = 'a'; cps[1] = 'b'; cps[2] = 0x2192;
+    n = 3; range_cps(cps, &n, 0x05D0, 0x05EA);
+    box_font(&ab, cps, n);
+    fc = skb_font_collection_create();
+    CHECK(add_font(fc, "ab", &ab) != 0, "a box font did not open");
+    check_commands(fc);
+    skb_font_collection_destroy(fc);
+
     /* 4 */
     check_noto();
 
     skb_temp_alloc_destroy(temp);
-    free(deva.d); free(latin.d); free(hebrew.d); free(arabic.d); free(arrows.d); free(deva5.d);
+    free(deva.d); free(latin.d); free(hebrew.d); free(arabic.d); free(arrows.d); free(deva5.d); free(ab.d);
     printf("%s: %d checks, %d failures\n", failures ? "FAIL" : "ok", checks, failures);
     return failures ? 1 : 0;
 }

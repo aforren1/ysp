@@ -6,9 +6,15 @@
  * docs/layout.md).
  *
  * The input: byte 0 picks the base direction (bits 0-1: auto, LTR, RTL),
- * wrapping (bit 2, at a width of 8 to 263 px from byte 1) and the editor
- * step (bit 3, its keys from the bytes after the text); the rest, to the
- * first 0xFF byte, is the text as UTF-8 (any bytes).
+ * wrapping (bit 2, at a width of 8 to 263 px from byte 1), the editor step
+ * (bit 3, its commands from the bytes after the text), the editor's macOS
+ * behavior (bit 4), and an editor that gets the text only from a paste
+ * command (bit 5); the rest, to the first 0xFF byte, is the text as UTF-8
+ * (any bytes). A command byte: bits 0-3 pick Left, Right, Up, Down, Home,
+ * End, Backspace, Delete, Enter, select all, a paste of the text, a paste
+ * of nothing, a paste of U+2029, undo, a double click, or an IME
+ * composition; bits 4-7 are Shift, Ctrl, Option and Command for a key, and
+ * the x of a click.
  *
  * Every input must return without a sanitizer report, and:
  * - ylay_layout() succeeds or fails with a message, and each item's cluster
@@ -16,14 +22,11 @@
  * - in Skribidi's layout of the text, every codepoint is in exactly one
  *   cluster and no cluster is empty (the glue's glyph-to-text map and the
  *   editor's carets read the clusters);
- * - with the editor step, the text's first paragraph inserted into
- *   Skribidi's editor and the keys pressed (arrows, Home, End, Backspace,
- *   Delete, with and without Shift, select all) keep every paragraph's
- *   clusters so, and each paragraph goes through ylay_from_skb(). Left out,
- *   as pinned Skribidi fails them on any text (docs/layout.md, Known
- *   issues): Ctrl and the word moves (Ctrl+Right reads one past the text),
- *   Enter and later paragraphs (an empty paragraph passes NULL to memcpy),
- *   and keys before the first insert (they dereference NULL).
+ * - with the editor step, the text inserted into Skribidi's editor (or
+ *   not, bit 5) and the commands run keep every paragraph's clusters so,
+ *   the caret inside the text, and each paragraph goes through
+ *   ylay_from_skb(). The editor's faults on empty and separator-only texts
+ *   (Skribidi patch 0008) are in the seeds.
  *
  * The fonts are written here (tests/adapt/colr_font_build.h), a box for each
  * codepoint: Latin, Devanagari (two fonts, as a font holds 64 glyphs here;
@@ -123,12 +126,17 @@ static void setup(void) {
     }
 }
 
-static void editor_step(const uint8_t* d, size_t n, const char* text, int len, int dir, float width, const uint8_t* keys, size_t nk) {
+static void no_rect(skb_rect2_t r, void* ctx) { (void)r; (void)ctx; }
+
+static void editor_step(const uint8_t* d, size_t n, const char* text, int len, int dir, int flags, float width, const uint8_t* keys, size_t nk) {
+    static uint32_t cps[MAX_INPUT];
+    static const uint32_t ps = 0x2029;
     skb_attribute_t pa[3];
     skb_editor_params_t p;
     skb_editor_t* ed;
+    skb_temp_alloc_t* temp = ylay_skb_temp(g_L);
     size_t k;
-    int i;
+    int i, nc;
     pa[0] = skb_attribute_make_font_size(16.0f);
     pa[1] = skb_attribute_make_text_base_direction(dir == 1 ? SKB_DIRECTION_LTR : dir == 2 ? SKB_DIRECTION_RTL : SKB_DIRECTION_AUTO);
     pa[2] = skb_attribute_make_text_wrap(SKB_WRAP_WORD);
@@ -138,30 +146,44 @@ static void editor_step(const uint8_t* d, size_t n, const char* text, int len, i
     p.editor_width = width > 0 ? width : -1.0f;
     p.editor_height = -1.0f;
     p.paragraph_attributes = (skb_attribute_set_t){ pa, width > 0 ? 3 : 2, 0, NULL };
+    p.editor_behavior = (flags & 16) ? SKB_BEHAVIOR_MACOS : SKB_BEHAVIOR_DEFAULT;
     ed = skb_editor_create(&p);
     if (!ed) fail("no editor", d, n);
-    {
-        /* The first paragraph only: in pinned Skribidi an insert with an
-         * empty paragraph in it (Enter, or text that starts with a paragraph
-         * separator) passes NULL to memcpy, which UBSan reports
-         * (skb_text_append_utf32_with_payload(); docs/layout.md, Known
-         * issues). */
-        static uint32_t cps[MAX_INPUT];
-        const int nc = skb_utf8_to_utf32(text, len, cps, MAX_INPUT);
-        int e = 0;
-        while (e < nc && !skb_is_paragraph_separator(cps[e])) e++;
-        if (e > 0) skb_editor_insert_text_utf32(ed, ylay_skb_temp(g_L), SKB_CURRENT_SELECTION, cps, e);
-    }
+    nc = skb_utf8_to_utf32(text, len, cps, MAX_INPUT);
+    if (nc > MAX_INPUT) nc = MAX_INPUT;
+    if (!(flags & 32)) skb_editor_insert_text_utf32(ed, temp, SKB_CURRENT_SELECTION, cps, nc);
     for (k = 0; k <= nk && k < 32; k++) {
-        /* A key in an editor that never had text dereferences NULL in pinned
-         * Skribidi (docs/layout.md, Known issues). */
-        if (k > 0 && skb_editor_get_paragraph_count(ed) > 0) {
-            static const skb_editor_key_t key_of[7] = { SKB_KEY_LEFT, SKB_KEY_RIGHT, SKB_KEY_UP, SKB_KEY_DOWN, SKB_KEY_HOME, SKB_KEY_END, SKB_KEY_BACKSPACE };
-            const uint8_t b = keys[k - 1];
-            if (b % 9 == 7) skb_editor_process_key_pressed(ed, ylay_skb_temp(g_L), SKB_KEY_DELETE, 0);
-            else if (b % 9 == 8) skb_editor_select_all(ed);
-            else skb_editor_process_key_pressed(ed, ylay_skb_temp(g_L), key_of[b % 9], (b & 0x80) ? SKB_MOD_SHIFT : 0);
+        if (k > 0) {
+            const uint8_t b = keys[k - 1], hi = (uint8_t)(b >> 4);
+            const uint32_t mods = ((hi & 1) ? SKB_MOD_SHIFT : 0) | ((hi & 2) ? SKB_MOD_CONTROL : 0) | ((hi & 4) ? SKB_MOD_OPTION : 0) | ((hi & 8) ? SKB_MOD_COMMAND : 0);
+            switch (b & 15) {
+            case 9: skb_editor_select_all(ed); break;
+            case 10:   /* the check below reads at most MAX_INPUT codepoints a paragraph */
+                if (skb_editor_get_text_utf32_count(ed) + nc <= MAX_INPUT) skb_editor_insert_text_utf32(ed, temp, SKB_CURRENT_SELECTION, cps, nc);
+                break;
+            case 11: skb_editor_insert_text_utf32(ed, temp, SKB_CURRENT_SELECTION, cps, 0); break;
+            case 12: skb_editor_insert_text_utf32(ed, temp, SKB_CURRENT_SELECTION, &ps, 1); break;
+            case 13: skb_editor_undo(ed, temp); break;
+            case 14:
+                skb_editor_process_mouse_click(ed, 4.0f * (float)hi, 4.0f, 0, 1.0);
+                skb_editor_process_mouse_click(ed, 4.0f * (float)hi, 4.0f, 0, 1.1);
+                break;
+            case 15:
+                skb_editor_set_composition_utf32(ed, temp, cps, nc < 2 ? nc : 2, nc < 2 ? nc : 2);
+                skb_editor_iterate_text_range_bounds(ed, SKB_CURRENT_SELECTION, no_rect, NULL);
+                skb_editor_commit_composition_utf32(ed, temp, NULL, 0);
+                break;
+            default: skb_editor_process_key_pressed(ed, temp, (skb_editor_key_t)(SKB_KEY_LEFT + (b & 15)), mods); break;
+            }
             g_edits++;
+        }
+        {
+            const int total = skb_editor_get_text_utf32_count(ed), caret = skb_editor_get_text_offset_from_text_position(ed, skb_editor_get_current_selection(ed).end);
+            if (caret < 0 || caret > total) fail("the editor's caret is outside its text", d, n);
+            (void)skb_editor_get_caret_info_at(ed, SKB_CURRENT_SELECTION_END);
+            (void)skb_editor_get_line_index_at(ed, SKB_CURRENT_SELECTION_END);
+            (void)skb_editor_get_column_index_at(ed, SKB_CURRENT_SELECTION_END);
+            skb_editor_iterate_text_range_bounds(ed, SKB_CURRENT_SELECTION, no_rect, NULL);
         }
         for (i = 0; i < skb_editor_get_paragraph_count(ed); i++) {
             const skb_layout_t* lay = skb_editor_get_paragraph_layout(ed, i);
@@ -215,12 +237,12 @@ static void one(const uint8_t* d, size_t n) {
 
     if (flags & 8) {
         const size_t keys = 2 + (size_t)len + 1;   /* past the 0xFF */
-        editor_step(d, n, text, len, dir, width, d + (keys < n ? keys : 0), keys < n ? n - keys : 0);
+        editor_step(d, n, text, len, dir, flags, width, d + (keys < n ? keys : 0), keys < n ? n - keys : 0);
     }
 }
 
-/* The fault of patch 0007 and its neighbors; a header of 2 bytes, then the
- * text; 0xFF ends the text where keys follow. */
+/* The faults of patches 0007 and 0008 and their neighbors; a header of 2
+ * bytes, then the text; 0xFF ends the text where commands follow. */
 #define SEED(s) { s, (int)sizeof(s) - 1 }
 static const struct { const char* d; int n; } g_seeds[] = {
     SEED("\x00\x00" "\xE2\x80\xAE" "\xE0\xA5\x8D" "\xE2\x80\x8C" "\xE0\xA5\x8E"),               /* RLO virama ZWNJ U+094E */
@@ -231,7 +253,15 @@ static const struct { const char* d; int n; } g_seeds[] = {
          "\xFF" "\x01\x01\x05\x06\x06"),                                                        /* LRO Arabic Hebrew; the editor */
     SEED("\x01\x00" "\xE2\x80\xAB" "\xE0\xA4\x95" "\xE2\x80\xAC" " " "\xE2\x81\xA7" "\xD7\x90" "\xE2\x81\xA9" " "
          "\xE2\x80\x8F" "\xE0\xA5\x8B" "\xE2\x80\x8E"),                                     /* RLE PDF RLI PDI RLM LRM, LTR */
-    SEED("\x0A\x00" "a\n" "\xE2\x80\xAE" "\xE0\xA5\x8D" "\xE2\x80\x8C" "\xE0\xA5\x8E" "\nb" "\xFF" "\x00\x07\x07\x08\x06"), /* paragraphs, RTL; the editor */
+    SEED("\x0A\x00" "a\n" "\xE2\x80\xAE" "\xE0\xA5\x8D" "\xE2\x80\x8C" "\xE0\xA5\x8E" "\nb" "\xFF" "\x00\x07\x07\x09\x06"), /* paragraphs, RTL; the editor */
+    /* Patch 0008. Moves, a double click, an IME composition and an undo in
+     * an editor that never had text, then the paste. */
+    SEED("\x28\x00" "a b" "\xFF" "\x00\x11\x02\x13\x24\x05\xA0\x0E\x0F\x0D\x00\x0A\x0D\x01"),
+    SEED("\x38\x00" "\xD7\x90" "\xFF" "\x40\x51\x82\x93\x0E\x0F\x0A"),          /* the same, macOS behavior, Hebrew */
+    SEED("\x08\x00" "ab" "\xFF" "\x04\x21\x21\x04\x31\x0E"),                        /* Home, Ctrl+Right twice, a double click at 0 */
+    SEED("\x0A\x00" "\xD7\x90\xD7\x91" "\xFF" "\x04\x20\x20\x30"),                /* RTL: Ctrl+Left runs the same code */
+    SEED("\x08\x00" "a\n" "\xFF" "\x05\x08\x08\x0C\x0B\x06\x07"),                 /* text ending in LF, Enter, U+2029, an empty paste */
+    SEED("\x08\x00" "\xE2\x80\xA9" "b" "\xFF" "\x04\x0A\x09\x06\x08"),            /* text that starts with U+2029 */
 };
 
 #if defined(YSP_FUZZ_SELF)

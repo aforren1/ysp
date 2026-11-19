@@ -258,11 +258,18 @@ ysp_designer (C++, Dear ImGui, SDL3, GL ES 3.0)
      of the probe's four Noto fonts has it; the designer's list needs a
      symbols font (Noto Sans Symbols) after the script fonts.
    - 2026-11-18: patch 0007 (pack/layout 0.3.2) fixes U+202E before
-     Devanagari. Open, on any text: three faults of pinned Skribidi's
-     editor that a text field can reach (Ctrl+Right reads past the text,
-     a key in a field that never had text dereferences NULL, Enter passes
-     NULL to `memcpy`); [layout.md](layout.md), "Open: three faults of
-     Skribidi's editor".
+     Devanagari.
+   - 2026-11-19: patch 0008 (pack/layout 0.3.3) fixes the three faults of
+     Skribidi's editor that a text field reached (an arrow key in a field
+     that never had text read NULL, Ctrl+Right read past the text, Enter
+     and text that ends in LF gave `memcpy()` NULL) and four more of the
+     same kinds (the line and column index, the first IME composition and
+     the selection bounds of a field with no text; a double click at
+     offset 0); [layout.md](layout.md), "Patch 0008: the editor at its
+     text's edges". A UBSan run of the designer no longer needs to accept
+     `skb_text.c` line 628. Open: a field that never had text has a caret
+     of height 0 and shows no IME composition; set its text to "" after
+     `skb_editor_create()` ([layout.md](layout.md), Known issues).
 3. A skeleton: the window, open and save of a project, the loader's
    checks with refusals linked to fields, and redraw on input only.
    - Done 2026-11-18 (branch `designer-skeleton`), with the decisions in

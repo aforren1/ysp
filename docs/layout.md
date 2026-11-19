@@ -1,13 +1,15 @@
 # ysp_layout: text layout for the pack tool and the player
 
-Status: v0.3.2, 2026-11-18 (v0.1.0, 2026-10-07: the first build; v0.2.0:
+Status: v0.3.3, 2026-11-19 (v0.1.0, 2026-10-07: the first build; v0.2.0:
 font fallback past the script, [Patch 0003](#patch-0003-font-fallback-past-the-script);
 v0.3.0: emoji and color glyphs, [Emoji](#emoji), [Color glyphs](#color-glyphs) and
 [Patch 0004](#patch-0004-a-run-whose-family-has-no-font); v0.3.1: two
 editing faults with Devanagari,
 [Patches 0005 and 0006](#patches-0005-and-0006-editing-devanagari);
 v0.3.2: cluster values out of order after a right-to-left override,
-[Patch 0007](#patch-0007-cluster-values-out-of-order)).
+[Patch 0007](#patch-0007-cluster-values-out-of-order); v0.3.3: faults of
+Skribidi's editor on empty texts and at a text's ends,
+[Patch 0008](#patch-0008-the-editor-at-its-texts-edges)).
 The decision record is
 [layout_probe.md](layout_probe.md); this note is the manual of what was
 built on it, with the checks and the costs. The plan is
@@ -23,7 +25,7 @@ header. The `ysp/*.h` headers stay free of Skribidi and HarfBuzz.
 
 - Skribidi does bidi, script and font runs, shaping (HarfBuzz), line
   breaking (libunibreak, BudouX for Japanese, Chinese and Thai) and the
-  editor. It is pinned at a commit with three local patches. The sources are
+  editor. It is pinned at a commit with eight local patches. The sources are
   fetched into `third_party/` by `tools/vendor_layout.py` and checked
   against `third_party/MANIFEST.sha256`; git tracks only that recipe.
 - The glue converts Skribidi's layout runs into one group of items per
@@ -97,10 +99,11 @@ three, with the same corpus result.
 
 ## The patches
 
-Seven local patches, applied in this order. 0001, 0002, 0004, 0006 and
+Eight local patches, applied in this order. 0001, 0002, 0004, 0006 and
 0007 change `src/skb_layout.c`; 0003 changes it, `src/skb_font_collection.c`
 and `include/skribidi/skb_font_collection.h`; 0005 changes
-`src/skb_text.c`.
+`src/skb_text.c`; 0008 changes `src/skb_editor.c`, `src/skb_text.c` and
+`src/skb_rich_layout.c`.
 
 | Patch | SHA-256 | What it fixes |
 |---|---|---|
@@ -111,6 +114,7 @@ and `include/skribidi/skb_font_collection.h`; 0005 changes
 | `skribidi-0005-text-grapheme-breaks.patch` | `11081a2421b97f0111040b4934d98bfc349471a5b1647f5a34a07552c65ab69c` | An edit of `skb_text` set grapheme breaks for the new codepoints only, as if they were a separate text, so typed Devanagari got breaks inside a grapheme ([Patches 0005 and 0006](#patches-0005-and-0006-editing-devanagari)). |
 | `skribidi-0006-caret-split-grapheme.patch` | `dfa7cdbd1cc8e05ffb4c93a7135a348d193a9084cc31b3cd1aff0065d3ca12d5` | The caret iterator took each cluster as whole graphemes; where HarfBuzz splits a grapheme into two clusters, the first got no caret stop and its width was lost ([Patches 0005 and 0006](#patches-0005-and-0006-editing-devanagari)). |
 | `skribidi-0007-monotone-clusters.patch` | `f8459c8b13e50157995ca0769329e7698cbd4ce82a33666f0aebcd93eacf191c` | `skb__shape_run()` took each cluster's text range from the cluster values next to it and assumed them in order; HarfBuzz gave them out of order for Devanagari after U+202E, and a cluster got a negative range ([Patch 0007](#patch-0007-cluster-values-out-of-order)). |
+| `skribidi-0008-editor-empty-text.patch` | `4b08c2781fbacaca9b7b0988cd1a6c30e4728e9cb340bb34b715d84c232dac21` | The editor read paragraph 0 of none in an editor that never had text, read text properties past the text (Ctrl+Right) and before it (a double click at offset 0), and gave `memcpy()` NULL for each empty paragraph ([Patch 0008](#patch-0008-the-editor-at-its-texts-edges)). |
 
 Patch 0002, and why it sits where it does:
 
@@ -139,10 +143,12 @@ Patch 0002, and why it sits where it does:
 - Skribidi's own unit tests pass with both patches (MSVC, MinGW gcc 16.1,
   Linux gcc 13.3).
 
-CMake hashes the patches and checks the patched `skb_layout.c` against the
+CMake hashes the patches and checks each source file a patch changes
+(`skb_layout.c`, `skb_font_collection.c`, `skb_text.c`, `skb_editor.c`,
+`skb_rich_layout.c`; `skb_layout.c` only before v0.3.3) against the
 manifest; a tree that differs still builds, and its logged patch field
 ends in `,tree-differs`, which the test refuses. The logged field lists
-the four hashes in order: `sha256:ff058faa...,sha256:36ce7aec...,sha256:bf6296af...,sha256:ce9aa9ee...`.
+the hashes in the order the patches apply: `sha256:ff058faa...,sha256:36ce7aec...,` and so on.
 The pack manifest's `tool.libraries.layout` line carries the same field,
 so a pack records which patches laid out its glyph runs (rig_spec 5.2).
 
@@ -372,6 +378,94 @@ Checks:
 
 The cost of the extra pass was not measured.
 
+### Patch 0008: the editor at its text's edges
+
+Found 2026-11-18 by `tests/fuzz/layout_fuzz.c` (Known issues), and
+2026-11-19 by commands on small texts: 12 texts (none, empty, one
+character, Hebrew, a space, LF, U+2029, two LFs, text with a separator at
+either end, two letters), each key with each modifier set, select all,
+pastes, double and triple clicks and an IME composition, from each caret
+position, in both behaviors. Linux gcc 12, Debug with ASan and UBSan, and
+Release. The pack tool and the player do not call the editor; the
+designer's text fields do. The faults and their causes:
+
+1. An editor with no paragraph. `skb_editor_create()` and
+   `skb_editor_reset()` leave the editor with no paragraph until text is
+   set or inserted, and an undo of the first edit leaves none again.
+   `skb_editor_select_all()`, the mouse click and the caret's position
+   check for this; other paths read paragraph 0 of none: an assert in a
+   Debug build, a read through NULL (a crash) in a Release one.
+   - A caret move: Left, Right, Up, Down, Home, End, with any modifier
+     (`skb_rich_layout_get_direction()` or `skb_rich_layout_get_layout()`).
+     A new designer text field reaches it with its first arrow key.
+   - `skb_editor_get_line_index_at()` and `skb_editor_get_column_index_at()`.
+   - The first IME composition, `skb_editor_set_composition_utf32()`,
+     through `skb_editor_get_selection_ordered_start()`.
+   - `skb_editor_iterate_text_range_bounds()`, the selection's
+     rectangles: it read paragraph -1 (UBSan; ASan after an undo).
+2. Word boundaries read text properties outside the text.
+   - `skb__advance_word_forward()` (Ctrl+Right, and Ctrl+Left in RTL text,
+     in the default behavior) read the property after the last grapheme
+     when the last word ends at the text's end: "ab", Ctrl+Right (ASan).
+   - `skb_editor_get_word_start_at()` (a double click) read the property
+     before offset 0 (ASan).
+3. `skb_text_append_utf32_with_payload()` called `memcpy()` with a NULL
+   destination and a size of 0. A `skb_text` that never held a codepoint
+   has no buffer, and Skribidi appends an empty text to each empty
+   paragraph it makes: Enter, text set or inserted that ends in LF or
+   starts with a separator, and `skb_editor_set_text_utf8()` with "" (UBSan;
+   the copy does nothing, but a compiler may assume the pointer is not
+   NULL).
+
+The fixes, one patch because each is one to four lines in the editor's
+edge cases, found and checked together:
+
+- No paragraph: `skb_editor_process_key_pressed()` ignores a caret move;
+  Backspace, Delete and Enter run as before (Enter makes the first two
+  paragraphs). The line and column index are 0. The two ordered-selection
+  functions give the range's own start and end, so the first composition
+  starts at offset 0. The selection bounds call back nothing, as
+  `skb_rich_layout_get_caret_info_at()` already returns early.
+- Word boundaries: the forward move stops at the text's end, and the
+  word-start loop stops at offset 0. Both give the offsets they gave
+  before; they no longer read outside the text.
+- The empty append skips the copy, as `skb_text_insert_utf32_with_payload()`
+  already does.
+
+Checks:
+
+- `test_layout_editor` part 6 (box fonts the test writes): the moves of an
+  editor that never had text, Enter in it, Ctrl+Right in "ab" and "a b",
+  Ctrl+Left in Hebrew, a double click on each letter of "ab", text that
+  ends in LF, Enter after "a", U+2029 and a letter inserted before "a";
+  then 6,478 sessions of 79 commands. Each
+  session runs a command twice and requires a paragraph per separator and
+  one more, the selection inside the text, clusters that tile each
+  paragraph, a caret that is a number, readable selection bounds, and an
+  unchanged text after a move.
+- `tests/fuzz/layout_fuzz.c`: the skips are gone. The editor step inserts
+  the whole text, or none (input bit 5: the text comes only from a paste
+  command), in either behavior (bit 4), and runs keys with Shift, Ctrl,
+  Option and Command, select all, pastes, undo, double clicks and IME
+  compositions. 6 new seeds hold the faults.
+- Each fix reversed alone, the others in place (sanitizers tree, Debug,
+  ASan and UBSan with `halt_on_error=1`): no paragraph: the assert stops
+  `test_layout_editor` and `layout_fuzz 0` (in Release both crash); the
+  forward word move: ASan stops both in `skb__advance_word_forward()`;
+  the empty append: UBSan stops both in
+  `skb_text_append_utf32_with_payload()`; the word start: ASan stops both
+  in `skb_editor_get_word_start_at()`. With the patch: 95 of 95 checks
+  pass (Release, and under ASan and UBSan), and the fuzz target ran
+  8 processes, 5,200,096 inputs and 16,821,438 editor commands, with no
+  report (sanitizers tree, `setarch -R`, `halt_on_error=1`).
+- Hand mutants of the patch (sanitizers tree): 6 of 7 killed. The
+  survivor makes the ordered start of an editor with no paragraph give
+  the range's end; its selection is empty there, so the two are equal.
+- Without a sanitizer, the second and third faults change no result: the
+  word move gives the same offset, and the copy is of nothing. Their
+  checks fail only under ASan and UBSan. CI's sanitizer job does not build
+  the layout, so only a local sanitizer run catches them.
+
 ## Pinning and update policy
 
 From layout_probe.md 7, unchanged:
@@ -556,7 +650,7 @@ characters are missing and from which text.
 `tests/layout/layout_test.c` (ctest `test_layout`):
 
 1. The logged versions: the Skribidi commit, the hashes (and no
-   `tree-differs`) of the seven patches, HarfBuzz 14.6.0.
+   `tree-differs`) of the eight patches, HarfBuzz 14.6.0.
 2. Visual order on every platform, with a TrueType font the test writes (a
    box for every ASCII, Hebrew and Arabic codepoint): the two bug strings
    and the editor's caret string. The items of each line, by x, must visit
@@ -805,24 +899,35 @@ start of line 1; Edge's is at x 8200 on line 0).
 
 ## Known issues
 
-### Open: three faults of Skribidi's editor
+### Open: an editor with no paragraph draws no caret and no composition
+
+Found 2026-11-19 with patch 0008. An editor that never had text (and one
+whose first edit was undone) has no paragraph, so
+`skb_editor_get_caret_info_at()` gives a caret of height 0 (ascender and
+descender 0, box fonts at 16 px) and an IME composition is not laid out
+(no paragraph holds it). After `skb_editor_set_text_utf8(editor, temp,
+"", 0)` the editor has one empty paragraph: the caret has the font's
+height (ascender -12.80, descender 3.20 px) and every command works. A
+text field should set its empty text after `skb_editor_create()`.
+
+### Open: `skb_rich_text_append_paragraph()` does not end the last paragraph
+
+Its comment says it ends the current last paragraph with LF, but it
+appends 0 codepoints, so two paragraphs follow with no separator between
+them. The editor calls it only on an empty rich text (`skb_editor_set_text_utf8()`,
+the scratch text of an input), where it has no effect; a caller that
+builds a rich text of several paragraphs with it gets them joined. Not
+patched: no path of the designer or the pack tool reaches it.
+
+### Fixed by patch 0008: faults of Skribidi's editor on empty texts and at a text's ends
 
 Found 2026-11-18 by `tests/fuzz/layout_fuzz.c` and confirmed on plain
-text, so not bidi faults; pinned Skribidi with patches 0001 to 0007. The
-fuzz target leaves these inputs out. The pack tool and the player do not
-call the editor; the designer's text fields do.
-
-- Ctrl+Right (`skb_editor_move_to_next_word()`, Windows behavior) reads
-  one past the text's properties: `skb__advance_word_forward()` reads
-  `text_props[next_offset]` when `next_offset` is the text's end. ASan
-  reports it on "ab" with the caret at the start and Ctrl+Right twice.
-- A key press in an editor that never had text dereferences NULL: the
-  editor has no paragraph, and `skb_rich_layout_get_direction()` reads
-  paragraph 0. Debug: an assert; Release: a crash.
-- Enter, and an insert that starts with a paragraph separator, append an
-  empty text to an empty paragraph: `skb_text_append_utf32_with_payload()`
-  calls `memcpy()` with a NULL destination and a size of 0. UBSan reports
-  it; the copy does nothing.
+text (pinned Skribidi with patches 0001 to 0007): Ctrl+Right read one past
+the text's properties ("ab"; ASan), a key press in an editor that never
+had text read paragraph 0 of none (an assert in a Debug build, a crash in
+a Release one), and Enter passed NULL to `memcpy()` (UBSan). Patch 0008
+fixes them and four faults of the same kinds that commands on small texts
+found ([Patch 0008](#patch-0008-the-editor-at-its-texts-edges)).
 
 ### Fixed by patch 0007: a right-to-left override before Devanagari
 

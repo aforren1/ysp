@@ -24,7 +24,7 @@ function test_mex_video()
 
     % ---- versions
     [bv, hv] = ysp_video('version');
-    check(strcmp(bv, '1.6.2') && ~isempty(regexp(hv, '^\d+\.\d+\.\d+$', 'once')), 'version: binding %s, header %s', bv, hv);
+    check(strcmp(bv, '1.6.3') && ~isempty(regexp(hv, '^\d+\.\d+\.\d+$', 'once')), 'version: binding %s, header %s', bv, hv);
     o = ysp_video('options');
     check(isfield(o, 'loop') && isfield(o, 'hw_decode') && isfield(o, 'timeline') && isfield(o, 'records'), 'options');
     c = ysp_video('constants');
