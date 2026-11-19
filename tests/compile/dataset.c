@@ -35,12 +35,13 @@ typedef struct dataset_api {
     void (*close)(yds_dataset*);
     void (*abandon)(yds_dataset*);
     int (*zip)(yds_dataset*, const char*, ytr_write_fn, void*);
+    int (*stream_check)(const char* const*, int, const char*, const ytr_col*, int, ytr_data*, char*, size_t);
 } dataset_api;
 
 static const dataset_api g_api = {
     yds_open, yds_error, yds_write_trial, yds_write_frame, yds_write_event, yds_write_clock,
     yds_stream, yds_write_stream, yds_trials_writer, yds_stream_writer, yds_session_set,
-    yds_session_push, yds_session, yds_rows, yds_finish, yds_close, yds_abandon, yds_zip
+    yds_session_push, yds_session, yds_rows, yds_finish, yds_close, yds_abandon, yds_zip, yds_stream_check
 };
 
 typedef struct check_row {
@@ -73,6 +74,13 @@ int main(void) {
     if (g_api.zip(&ds, "x.zip", NULL, NULL) != YDS_ERR_ORDER) return 4;
     if (g_api.trials_writer(&ds) || g_api.stream_writer(&ds, 0) || g_api.session(&ds)) return 5;
     if (g_api.rows(&ds, YDS_TABLE_FRAMES) != 0) return 6;
+    {
+        /* the stream checks with no data set: a name taken in another case */
+        static ytr_data scratch;
+        const char* taken[1] = { "dots" };
+        char err[128];
+        if (g_api.stream_check(taken, 1, "Dots", check_cols, 1, &scratch, err, sizeof err) != YDS_ERR_ARG || !err[0]) return 20;
+    }
     g_api.close(&ds);
     g_api.close(&ds);
     g_api.abandon(&ds);

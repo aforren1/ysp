@@ -712,7 +712,10 @@ build. The MEX functions of 2026-10-25 (`ysp_rt`, `ysp_box`, `ysp_rdk`,
 `ysp_dataset`, `ysp_pack`) do the same: `'version'` returns 1.0.0, and
 its second output is the version of the header. `ysp_dataset` is 1.1.0
 since 2026-11-18: frames.csv's `extension_s` (ysp/dataset.h 0.3.0); the
-Python `ysp-dataset` of the same change is 0.3.0, the header's. `ysp_pack` is 1.1.0 since
+Python `ysp-dataset` of the same change is 0.3.0, the header's. ysp/dataset.h
+0.4.0 (2026-11-18) adds `yds_stream_check()`, which neither binding wraps:
+`ysp-dataset` is 0.4.0, the header's, with no binding change, and the MEX
+`ysp_dataset` stays 1.1.0. `ysp_pack` is 1.1.0 since
 2026-10-26: `'verify'` of one entry hashes it under `'none'` too
 (`ypak_verify_entry()`, ysp/pack.h 0.4.0). `ysp_audio` is 1.0.2 since
 2026-10-27: WAV paths are passed as UTF-8 (`mxArrayToUTF8String()`;

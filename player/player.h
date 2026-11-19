@@ -44,7 +44,7 @@
 extern "C" {
 #endif
 
-#define PL_VERSION_STRING "0.14.0"
+#define PL_VERSION_STRING "0.14.1"
 /* The newest format version this player lowers (2: format part 3, in
  * v2.c). session.json's format_version is the definition's. */
 #define PL_FORMAT_VERSION 2
@@ -771,6 +771,9 @@ struct pl_player {
     const char* at_name;
     int       fail_obj;       /* at_obj and at_name at the first pl_fail() */
     const char* fail_name;
+    const char** check_streams; /* the streams named so far, for          */
+    int       n_check_streams;    /* yds_stream_check()                     */
+    ytr_data* check_scratch;  /* the column checks' writer, which discards */
 };
 
 /* --- load (lower.c) ------------------------------------------------------ */
@@ -911,6 +914,9 @@ int  pl_extreme_ns(pl_player* p, const yexp_value* v, int64_t* ns);
 int  pl_eval_var_bool(pl_player* p, const pl_env* env, const char* name, bool* out);
 int  pl_channels_assign(pl_player* p);
 int  pl_columns_build(pl_player* p);
+/* A stream of the data set: its id, or < 0 with pl_fail(). pl_check() runs
+ * yds_stream()'s checks with no data set (yds_stream_check()). */
+int  pl_stream(pl_player* p, const char* name, const ytr_col* cols, int n);
 pl_leaf* pl_leaf_of(pl_player* p, const yexp_node* n);
 bool pl_track_done(void* ctx);
 void pl_row_write_oldest(pl_player* p);

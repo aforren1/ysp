@@ -1,4 +1,4 @@
-/* ysp/dataset.h - v0.3.0 - public domain single-header session data set writer
+/* ysp/dataset.h - v0.4.0 - public domain single-header session data set writer
  *
  *   The folder a session's data goes into (docs/experiment_format.md D9 and
  *   2.10): session.json (canonical JSON, format "ysp-session" 1, written at
@@ -243,6 +243,11 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.4.0 - yds_stream_check(): yds_stream()'s checks of a stream's name
+ *          and columns with no data set, no folder and no file, and the
+ *          same codes and messages. yds_stream() runs it, so a loader that
+ *          checks before a folder exists (the player's pl_check()) refuses
+ *          what the open would. No struct change.
  *   v0.3.0 - frames.csv's last column extension_s (yds_frame.extension_ns,
  *          appended): ysp/screen.h 0.20.0's YSCR_PHASE_EXTENSION, a
  *          renderer extension's CPU time on the frame thread
@@ -265,6 +270,10 @@
  *          stored zip. On ysp/trials.h v0.6 (256 columns, a 38 KB writer):
  *          yds_seed_text() for a trial_seed column in trials' spelling.
  *
+ *   STATUS: v0.4.0, 2026-11-18, the Linux desktop (GCC 12.2): 800 checks of
+ *   tests/adapt/dataset_test.c pass, -O2; each stream call of the refusal
+ *   test is checked first by yds_stream_check(), with the same code and
+ *   message; mutants dk-01 to dk-07 killed.
  *   STATUS: v0.3.0, 2026-11-18, the Linux desktop (GCC 12.2): 659 checks of
  *   tests/adapt/dataset_test.c pass, -O2 and ASan with UBSan; the golden
  *   frames.csv and zip have extension_s; mutants dx-01 to dx-03 killed.
@@ -290,9 +299,9 @@
 #define YSP_DATASET_H_INCLUDED
 
 #define YDS_VERSION_MAJOR 0
-#define YDS_VERSION_MINOR 3
+#define YDS_VERSION_MINOR 4
 #define YDS_VERSION_PATCH 0
-#define YDS_VERSION_STRING "0.3.0"
+#define YDS_VERSION_STRING "0.4.0"
 
 /* mkdir(), fsync() and fileno() under -std=c11: the feature-test macro of
  * ysp/rt.h and ysp/trials.h, set before the first system header (Linux and
@@ -457,6 +466,14 @@ YDS_API int yds_write_clock(yds_dataset* ds, const yds_clock* c);
  * stream's id (0 or more), or YDS_ERR_ARG, YDS_ERR_FULL, YDS_ERR_CLOSED,
  * YDS_ERR_IO. */
 YDS_API int yds_stream(yds_dataset* ds, const char* name, const ytr_col* cols, int n_cols);
+/* yds_stream()'s checks with no data set: name against the n_taken names
+ * of the streams made before it, the count, then cols through scratch (any
+ * ytr_data; closed again, and not otherwise kept). YDS_OK, or the code
+ * yds_stream() returns, with the message yds_error() would give in err
+ * (cap bytes; err may be NULL). Makes no file. For a loader that checks a
+ * session's streams before its folder exists (v0.4.0). */
+YDS_API int yds_stream_check(const char* const* taken, int n_taken, const char* name, const ytr_col* cols, int n_cols,
+                             ytr_data* scratch, char* err, size_t cap);
 YDS_API int yds_write_stream(yds_dataset* ds, int id, const void* row);
 
 /* The writers, for ytr_data_col(), ytr_data_set_*() and yrsp_data_set().
@@ -726,10 +743,23 @@ YDS_API const char* yds_strerror(int code) {
     }
 }
 
-static void yds__vfail(yds_dataset* ds, const char* fmt, va_list ap) {
-    int n = snprintf(ds->error, sizeof ds->error, "ysp_dataset: ");
+static void yds__vformat(char* out, size_t cap, const char* fmt, va_list ap) {
+    int n;
+    if (!out || cap == 0) return;
+    n = snprintf(out, cap, "ysp_dataset: ");
     if (n < 0) n = 0;
-    vsnprintf(ds->error + n, sizeof ds->error - (size_t)n, fmt, ap);
+    if ((size_t)n >= cap) return;
+    vsnprintf(out + n, cap - (size_t)n, fmt, ap);
+}
+
+static void yds__vfail(yds_dataset* ds, const char* fmt, va_list ap) { yds__vformat(ds->error, sizeof ds->error, fmt, ap); }
+
+static int yds__msg(char* out, size_t cap, int code, const char* fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    yds__vformat(out, cap, fmt, ap);
+    va_end(ap);
+    return code;
 }
 
 static int yds__fail(yds_dataset* ds, int code, const char* fmt, ...) {
@@ -982,16 +1012,22 @@ static bool yds__discard(void* ctx, const void* bytes, size_t n) {
 }
 
 /* Columns checked with no file, so a refused column makes nothing. */
-static int yds__check_cols(yds_dataset* ds, ytr_data* w, const ytr_col* cols, int n, const char* what) {
+static int yds__cols_msg(ytr_data* w, const ytr_col* cols, int n, const char* what, char* err, size_t cap) {
     ytr_data_desc dd;
     int rc = YDS_OK;
     memset(&dd, 0, sizeof dd);
     dd.write = yds__discard;
     dd.cols = cols;
     dd.n_cols = n;
-    if (!ytr_data_open(w, &dd)) rc = yds__fail(ds, YDS_ERR_ARG, "%s: %s", what, ytr_data_error(w));
+    if (!ytr_data_open(w, &dd)) rc = yds__msg(err, cap, YDS_ERR_ARG, "%s: %s", what, ytr_data_error(w));
     ytr_data_close(w);
     memset(w, 0, sizeof *w);
+    return rc;
+}
+
+static int yds__check_cols(yds_dataset* ds, ytr_data* w, const ytr_col* cols, int n, const char* what) {
+    int rc = yds__cols_msg(w, cols, n, what, ds->error, sizeof ds->error);
+    if (rc < 0) ds->error_code = rc;
     return rc;
 }
 
@@ -1169,22 +1205,49 @@ YDS_API int yds_write_clock(yds_dataset* ds, const yds_clock* c) {
     return yds__write(ds, ds ? &ds->clock : NULL, "clock.csv", c, "yds_write_clock");
 }
 
+/* yds_stream()'s checks, its messages into err: one rule for the data set
+ * and for a loader with no folder yet. scratch may be NULL only when
+ * n_taken is YDS_MAX_STREAMS or more (the count refuses first). */
+static int yds__stream_check(const char* const* taken, int n_taken, const char* name, const ytr_col* cols, int n_cols,
+                             ytr_data* scratch, char* err, size_t cap) {
+    int i;
+    if (!yds__is_name(name))
+        return yds__msg(err, cap, YDS_ERR_ARG, "yds_stream: '%s' is not a name ([A-Za-z_][A-Za-z0-9_]*, at most %d "
+                        "bytes)", name ? name : "(null)", YDS_MAX_NAME);
+    for (i = 0; i < n_taken; i++)
+        if (yds__same_ci(taken[i], name))
+            return yds__msg(err, cap, YDS_ERR_ARG, "yds_stream: '%s' is taken by '%s' (names differ in more than "
+                            "case)", name, taken[i]);
+    if (n_taken >= YDS_MAX_STREAMS)
+        return yds__msg(err, cap, YDS_ERR_FULL, "yds_stream: %d streams already (YDS_MAX_STREAMS)", YDS_MAX_STREAMS);
+    return yds__cols_msg(scratch, cols, n_cols, "yds_stream", err, cap);
+}
+
+YDS_API int yds_stream_check(const char* const* taken, int n_taken, const char* name, const ytr_col* cols, int n_cols,
+                             ytr_data* scratch, char* err, size_t cap) {
+    int i;
+    if (err && cap) err[0] = '\0';
+    if (n_taken < 0 || (n_taken > 0 && !taken) || !scratch)
+        return yds__msg(err, cap, YDS_ERR_ARG, "yds_stream_check: a negative n_taken, or a NULL taken or scratch");
+    for (i = 0; i < n_taken; i++)
+        if (!taken[i]) return yds__msg(err, cap, YDS_ERR_ARG, "yds_stream_check: taken[%d] is NULL", i);
+    return yds__stream_check(taken, n_taken, name, cols, n_cols, scratch, err, cap);
+}
+
 YDS_API int yds_stream(yds_dataset* ds, const char* name, const ytr_col* cols, int n_cols) {
     char file[YDS_MAX_NAME + 16];
+    const char* taken[YDS_MAX_STREAMS];
     int i, id, rc;
     if (!ds) return YDS_ERR_ARG;
     if (!ds->open) return yds__fail(ds, YDS_ERR_CLOSED, "yds_stream: the data set is not open");
-    if (!yds__is_name(name))
-        return yds__fail(ds, YDS_ERR_ARG, "yds_stream: '%s' is not a name ([A-Za-z_][A-Za-z0-9_]*, at most %d "
-                         "bytes)", name ? name : "(null)", YDS_MAX_NAME);
-    for (i = 0; i < ds->n_streams; i++)
-        if (yds__same_ci(ds->stream_name[i], name))
-            return yds__fail(ds, YDS_ERR_ARG, "yds_stream: '%s' is taken by '%s' (names differ in more than "
-                             "case)", name, ds->stream_name[i]);
-    if (ds->n_streams >= YDS_MAX_STREAMS)
-        return yds__fail(ds, YDS_ERR_FULL, "yds_stream: %d streams already (YDS_MAX_STREAMS)", YDS_MAX_STREAMS);
+    for (i = 0; i < ds->n_streams; i++) taken[i] = ds->stream_name[i];
     id = ds->n_streams;
-    if ((rc = yds__check_cols(ds, &ds->stream[id], cols, n_cols, "yds_stream")) < 0) return rc;
+    rc = yds__stream_check(taken, ds->n_streams, name, cols, n_cols, id < YDS_MAX_STREAMS ? &ds->stream[id] : NULL, ds->error,
+                           sizeof ds->error);
+    if (rc < 0) {
+        ds->error_code = rc;
+        return rc;
+    }
     snprintf(file, sizeof file, "streams/%s.csv", name);
     if ((rc = yds__open_table(ds, &ds->stream[id], file, cols, n_cols, "yds_stream")) < 0) return rc;
     memcpy(ds->stream_name[id], name, strlen(name) + 1);

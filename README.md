@@ -13,7 +13,7 @@ C11 or C++17, and its top comment is its manual.
 | [parallel](docs/parallel.md) | `ypar_` | Parallel port trigger output and line input | 0.4.1 | no device |
 | [serial](docs/serial.md) | `yser_` | Serial port byte I/O for trigger and response boxes | 0.7.1 | 3 machines |
 | [trials](docs/trials.md) | `ytr_` | Trial orders, blocks, adaptive tracks, jitter, variables per trial, walks, replay, a CSV row per trial | 0.8.1 | tested |
-| [dataset](docs/dataset.md) | `yds_` | A session's data set: session.json, trial, frame, event, clock and stream tables, a zip for the web | 0.3.0 | tested |
+| [dataset](docs/dataset.md) | `yds_` | A session's data set: session.json, trial, frame, event, clock and stream tables, a zip for the web | 0.4.0 | tested |
 | [table](docs/table.md) | `ytb_` | Typed tables and a bounded CSV parser | 0.3.1 | tested |
 | [pack](docs/pack.md) | `ypak_` | Read and verify ysp packs (store-only zip); pack formats 1 and 2 (color glyphs) | 0.5.0 | tested |
 | [json](docs/json.md) | `yjs_` | Strict JSON reader and canonical writer | 0.2.1 | tested |

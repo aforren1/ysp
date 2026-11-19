@@ -770,6 +770,41 @@ id = "ck-r1"
 name = "the check opens the data set"
 test = "check"
 why = "pl_check() writes no file: the columns are checked through a writer that discards."
-find = '''    if (p->checking) return pl_columns_check(p);
-'''
-replace = ''''''
+find = '''    if (p->checking ? pl_columns_check(p) < 0 : pl_dataset_open(p) < 0) return -1;'''
+replace = '''    if (pl_dataset_open(p) < 0) return -1;'''
+
+# 0.14.1: the streams' checks in pl_check() (yds_stream_check())
+
+[[mutant]]
+id = "ck-r2"
+name = "the check keeps no stream name"
+test = "check"
+why = "Two streams whose names differ in case are refused by the check as by yds_stream() (rdk streams)."
+find = '''        p->check_streams[p->n_check_streams] = name;
+        return p->n_check_streams++;'''
+replace = '''        return p->n_check_streams;'''
+
+[[mutant]]
+id = "ck-r3"
+name = "the check makes no stream"
+test = "check"
+why = "The rdk and trace streams' names and columns are checked with no data set (rdk streams, trace streams, trace columns)."
+find = '''    return pl_streams_open(p);'''
+replace = '''    return p->checking ? 0 : pl_streams_open(p);'''
+
+[[mutant]]
+id = "ck-r4"
+name = "an rdk stream's refusal names no stimulus"
+test = "check"
+why = "The designer shows a refusal on its object: the rdk whose stream is refused."
+find = '''            pl_at(p, PL_OBJ_STIMULUS, p->stims[i].def->name);
+            if ((sid = pl_stream('''
+replace = '''            if ((sid = pl_stream('''
+
+[[mutant]]
+id = "ck-r5"
+name = "the check's stream count from zero each time"
+test = "check"
+why = "The 17th stream is refused as yds_stream() refuses it (YDS_MAX_STREAMS)."
+find = '''        id = yds_stream_check(p->check_streams, p->n_check_streams, name, cols, n, w, err, sizeof err);'''
+replace = '''        id = yds_stream_check(p->check_streams, p->n_check_streams % YDS_MAX_STREAMS, name, cols, n, w, err, sizeof err);'''

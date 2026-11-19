@@ -4939,8 +4939,8 @@ static int v2_trace_stream(pl_player* p, pl_v2* v, v2_trace* tr) {
         } else COL("flags", YTR_COL_INT, offsetof(v2_srow_data, flags));
 #undef COL
     }
-    tr->stream = yds_stream(&p->ds, tr->def->name, tr->cols, tr->n_cols);
-    if (tr->stream < 0) { pl_fail(p, "the stream '%s': %s", tr->def->name, yds_error(&p->ds)); return -1; }
+    tr->stream = pl_stream(p, tr->def->name, tr->cols, tr->n_cols);
+    if (tr->stream < 0) return -1;
     (void)v;
     return 0;
 }
@@ -5160,8 +5160,10 @@ int pl_v2_streams(pl_player* p) {
     for (ti = 0; ti < S->n_t; ti++) {
         pl_v2* v = S->t[ti];
         if (!v) continue;
+        pl_at(p, PL_OBJ_TEMPLATE, v->def->name);
         for (i = 0; i < v->n_traces; i++, n++) if (v2_trace_stream(p, v, &v->traces[i]) < 0) return -1;
     }
+    pl_at(p, PL_OBJ_NONE, NULL);
     /* a trace's rows are wider than the writer's job (pl_wq_push_row) */
     if (n > 0 && p->wq && !p->wq_rows) {
         p->wq_rows = (unsigned char*)pl_alloc(p, (size_t)PL_WRITE_QUEUE * PL_WQ_ROW_BYTES);
