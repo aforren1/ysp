@@ -17,7 +17,8 @@ void skf_set_text(SkfField* f, const char* utf8, int len);
 int skf_text(const SkfField* f, ImVector<char>* out);
 // Draws the field and handles its input; true when its text changed
 // (typing, a paste, an undo, a committed composition). width or height <= 0:
-// the window's available space.
+// the window's available space. A one-line field lays its text out to the
+// width it is drawn at.
 bool skf_draw(const char* id, SkfField* f, float width, float height);
 
 // The caret as a codepoint offset into the text.
@@ -26,6 +27,24 @@ int skf_caret(const SkfField* f);
 // the caret into view at the next skf_draw().
 void skf_set_caret(SkfField* f, int cp);
 bool skf_focused(const SkfField* f);
+// The caret as skf_set_caret() puts it, without taking the focus: the text
+// view follows an undo that another view started.
+void skf_move_caret(SkfField* f, int cp);
+// own: the field's Ctrl+Z, Ctrl+Y and Ctrl+Shift+Z go to Skribidi's undo
+// (the default). The definition editor sets false: the document's one undo
+// stack takes those keys (docs/designer.md, "Plan of step 4").
+void skf_set_own_undo(SkfField* f, bool own);
+bool skf_owns_undo(const SkfField* f);
+// The field that takes text now, or NULL.
+SkfField* skf_focus_field();
+// Drops the keyboard focus; no SKF_EV_BLUR for it.
+void skf_blur(SkfField* f);
+
+// What happened to a field since the last call: a one-line field's Enter and
+// Escape, and the focus lost to a click elsewhere or to another field. The
+// caller commits on Enter or a blur, and reverts on Escape (a form's field).
+enum : unsigned { SKF_EV_ENTER = 1u, SKF_EV_ESCAPE = 2u, SKF_EV_BLUR = 4u };
+unsigned skf_take_events(SkfField* f);
 
 // Input that does not come through ImGui's queue, for the focused field:
 // the IME's composition (SDL_EVENT_TEXT_EDITING natively; the web glue's

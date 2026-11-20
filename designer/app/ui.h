@@ -1,4 +1,4 @@
-// ui.h - the designer's panels and state, with no SDL and no GL (ui.cpp).
+// ui.h - the designer's window and state, with no SDL and no GL (ui.cpp).
 // main.cpp gives it a window, events and a renderer; tests/designer/ui_test.cpp
 // drives it headless.
 #pragma once
@@ -34,6 +34,8 @@ bool ui_request_quit();
 void ui_frame();
 // Work that wants another frame: a check after an edit, a scroll to restore.
 bool ui_work_pending();
+// A view animates: draw every frame (the redraw rule).
+bool ui_animating();
 
 // For the test and the platform layer.
 const dsg_project* ui_project();      // NULL when none is open
@@ -45,3 +47,6 @@ bool ui_dirty();
 int ui_checks_run();                 // how many checks have run
 bool ui_save();
 void ui_jump_to_issue(int i);        // as a click on issue i
+// The main view shown: "text", "chart", "tables" (views.h ids).
+const char* ui_main_view();
+bool ui_show_view(const char* id);   // false: no such main view

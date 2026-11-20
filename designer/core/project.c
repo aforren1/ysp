@@ -42,8 +42,79 @@ static char* dup_bytes(const char* s, size_t n) {
 /* --- view state ------------------------------------------------------------ */
 
 void dsg_view_free(dsg_view* v) {
+    int i;
     free(v->imgui_ini);
+    for (i = 0; i < v->n_parts; i++) free(v->parts[i].json);
     memset(v, 0, sizeof *v);
+}
+
+/* Keys of the view file that are not parts. */
+static bool reserved_key(const char* k) {
+    static const char* const keys[] = { "format", "version", "caret", "scroll_y", "imgui", "view", "selection" };
+    size_t i;
+    for (i = 0; i < sizeof keys / sizeof keys[0]; i++)
+        if (strcmp(k, keys[i]) == 0) return true;
+    return false;
+}
+
+const char* dsg_view_part_get(const dsg_view* v, const char* key, size_t* n) {
+    int i;
+    for (i = 0; i < v->n_parts; i++)
+        if (strcmp(v->parts[i].key, key) == 0) {
+            if (n) *n = v->parts[i].n;
+            return v->parts[i].json;
+        }
+    if (n) *n = 0;
+    return NULL;
+}
+
+/* The value's compact JSON, malloc'd. */
+static char* compact(const yjs_value* x, size_t* n) {
+    size_t k = yjs_write_mem(x, YJS_WRITE_COMPACT, NULL, 0);
+    char* out = (char*)malloc(k + 1);
+    if (!out) return NULL;
+    yjs_write_mem(x, YJS_WRITE_COMPACT, out, k + 1);
+    *n = k;
+    return out;
+}
+
+static int part_put(dsg_view* v, const char* key, char* json, size_t n) {
+    int i;
+    for (i = 0; i < v->n_parts; i++)
+        if (strcmp(v->parts[i].key, key) == 0) break;
+    if (!json) {
+        if (i < v->n_parts) {
+            free(v->parts[i].json);
+            v->parts[i] = v->parts[v->n_parts - 1];
+            v->n_parts--;
+        }
+        return 0;
+    }
+    if (i == v->n_parts) {
+        if (v->n_parts == DSG_VIEW_PARTS) { free(json); return -1; }
+        v->n_parts++;
+        snprintf(v->parts[i].key, sizeof v->parts[i].key, "%s", key);
+    } else {
+        free(v->parts[i].json);
+    }
+    v->parts[i].json = json;
+    v->parts[i].n = n;
+    return 0;
+}
+
+int dsg_view_part_set(dsg_view* v, const char* key, const char* json, size_t n) {
+    yjs_arena a;
+    yjs_value* root = NULL;
+    yjs_error e;
+    char* c = NULL;
+    size_t cn = 0;
+    if (strlen(key) >= sizeof v->parts[0].key || !key[0] || reserved_key(key)) return -1;
+    if (!json) return part_put(v, key, NULL, 0);
+    yjs_arena_init_heap(&a, 0);
+    if (yjs_parse(&a, json, n, NULL, &root, &e) == YJS_OK && root->type == YJS_OBJECT) c = compact(root, &cn);
+    yjs_arena_free(&a);
+    if (!c) return -1;
+    return part_put(v, key, c, cn);
 }
 
 int dsg_view_read(const char* folder, dsg_view* v, char* err, size_t cap) {
@@ -82,6 +153,21 @@ int dsg_view_read(const char* folder, dsg_view* v, char* err, size_t cap) {
             v->imgui_ini = dup_bytes(x->u.s, x->n);
             v->imgui_ini_len = v->imgui_ini ? x->n : 0;
         }
+        x = yjs_get(root, "view");
+        if (x && x->type == YJS_STRING && x->n < sizeof v->main_view) memcpy(v->main_view, x->u.s, x->n + 1);
+        x = yjs_get(root, "selection");
+        if (x && x->type == YJS_STRING && x->n < sizeof v->selection) memcpy(v->selection, x->u.s, x->n + 1);
+        {
+            uint32_t i;
+            for (i = 0; i < root->n; i++) {
+                const yjs_member* m = &root->u.members[i];
+                size_t pn = 0;
+                char* pj;
+                if (m->value->type != YJS_OBJECT || reserved_key(m->key) || m->key_len >= sizeof v->parts[0].key) continue;
+                pj = compact(m->value, &pn);
+                if (pj) part_put(v, m->key, pj, pn);
+            }
+        }
     }
     yjs_arena_free(&a);
     free(text);
@@ -110,6 +196,17 @@ int dsg_view_write(const char* folder, const dsg_view* v, char* err, size_t cap)
     }
     if (!rc) rc |= yjs_set(&a, root, "scroll_y", yjs_new_double(&a, (double)v->scroll_y));
     if (!rc && v->imgui_ini && v->imgui_ini_len) rc |= yjs_set(&a, root, "imgui", yjs_new_string(&a, v->imgui_ini, v->imgui_ini_len));
+    if (!rc && v->main_view[0]) rc |= yjs_set(&a, root, "view", yjs_new_stringz(&a, v->main_view));
+    if (!rc && v->selection[0]) rc |= yjs_set(&a, root, "selection", yjs_new_stringz(&a, v->selection));
+    {
+        int i;
+        for (i = 0; !rc && i < v->n_parts; i++) {
+            yjs_value* pv = NULL;
+            yjs_error pe;
+            /* a part was checked when it was set; one that fails here is dropped */
+            if (yjs_parse(&a, v->parts[i].json, v->parts[i].n, NULL, &pv, &pe) == YJS_OK) rc |= yjs_set(&a, root, v->parts[i].key, pv);
+        }
+    }
     if (rc) { yjs_arena_free(&a); return fail(err, cap, "the view state: out of memory"); }
     n = yjs_write_mem(root, YJS_WRITE_PRETTY, NULL, 0);
     buf = (char*)malloc(n + 2);
@@ -320,8 +417,8 @@ int dsg_project_create(const char* folder, char* err, size_t cap) {
     yjs_arena a;
     yexp_def* d = NULL;
     yexp_report* r;
-    const char* bytes;
-    size_t n;
+    const char* bytes = NULL;   /* MSVC C4701: set only when the load is, and read only then */
+    size_t n = 0;
     int rc;
     if (join(desc, sizeof desc, folder, DSG_DESC_FILE) || join(def, sizeof def, folder, "experiment.json"))
         return fail(err, cap, "'%s': the path is too long", folder);

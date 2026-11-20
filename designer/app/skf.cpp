@@ -11,6 +11,12 @@
 #include "skribidi/skb_editor.h"
 #include "skribidi/skb_rich_layout.h"
 
+// skb_common.h tests __cplusplus__ (sic), so in C++ too its SKB_LITERAL()
+// makes a C compound literal, which MSVC refuses (C4576). As a C++20
+// designated initializer it is the same value.
+#undef SKB_LITERAL
+#define SKB_LITERAL(type) type
+
 #include <string.h>
 
 struct SkfField {
@@ -20,7 +26,10 @@ struct SkfField {
     bool composing = false;
     bool changed = false;      // set by the editor's text callback
     bool reveal = false;       // scroll the caret into view at the next draw
+    bool own_undo = true;      // Ctrl+Z is Skribidi's, not the document's
+    unsigned events = 0;       // SKF_EV_*, until skf_take_events()
     float size = 16.0f;
+    float width = 0;           // a one-line field's layout width
 };
 
 namespace {
@@ -29,6 +38,70 @@ const float kPad = 6.0f;      // inner margin
 SkfField* focus = nullptr;     // the field that takes text, IME and clipboard
 
 void on_change(skb_editor_t*, skb_editor_text_change_reason_t, void* ctx) { ((SkfField*)ctx)->changed = true; }
+
+// One field has the keyboard: a click in a second field would otherwise
+// leave the first focused too (a click on an item keeps the focus), and the
+// first one drawn would take the characters.
+void take_focus(SkfField* f) {
+    if (focus && focus != f && focus->focused) {
+        focus->focused = false;
+        focus->events |= SKF_EV_BLUR;
+    }
+    f->focused = true;
+    focus = f;
+}
+
+void lose_focus(SkfField* f, bool event) {
+    if (f->focused && event) f->events |= SKF_EV_BLUR;
+    f->focused = false;
+    if (focus == f) focus = nullptr;
+}
+
+skb_editor_t* make_editor(SkfField* f, float width) {
+    static const skb_attribute_t line_attrs[] = {
+        skb_attribute_make_text_overflow(SKB_OVERFLOW_SCROLL),
+        skb_attribute_make_vertical_align(SKB_ALIGN_CENTER),
+    };
+    const skb_attribute_t text_attrs[] = { skb_attribute_make_font_size(f->size) };
+    // A color for the composition; skt_draw_layout() tints every glyph alike,
+    // so it does not show yet (probe part 2, section 6).
+    static const skb_attribute_t comp_attrs[] = {
+        skb_attribute_make_paint_color(SKB_PAINT_TEXT, SKB_PAINT_STATE_DEFAULT, skb_rgba(120, 200, 255, 255)),
+    };
+    skb_editor_params_t p = {};
+    p.font_collection = skt_fonts();
+    if (!f->multiline) p.layout_attributes = SKB_ATTRIBUTE_SET_FROM_STATIC_ARRAY(line_attrs);
+    p.paragraph_attributes = SKB_ATTRIBUTE_SET_FROM_STATIC_ARRAY(text_attrs);
+    p.composition_attributes = SKB_ATTRIBUTE_SET_FROM_STATIC_ARRAY(comp_attrs);
+    // a multi-line field is as large as its text: its window scrolls it
+    p.editor_width = f->multiline ? SKB_SIZE_AUTO : width;
+    p.editor_height = f->multiline ? SKB_SIZE_AUTO : f->size * 1.6f;
+    f->width = width;
+    return skb_editor_create(&p);
+}
+
+// A one-line editor lays out to a fixed width (its scroll). A new editor
+// keeps the text and the caret, not Skribidi's undo, so it is made only when
+// the width changes (a resized window or column). skb_editor_reset() with
+// new params would copy the attributes from the editor's own array while it
+// grows it.
+void fit_width(SkfField* f, float w) {
+    if (f->multiline || w <= 0 || ImAbs(w - f->width) < 1.0f) return;
+    ImVector<char> text;
+    const int n = skf_text(f, &text);
+    const int caret = skf_caret(f);
+    const bool changed = f->changed;
+    skb_editor_destroy(f->ed);
+    f->ed = make_editor(f, w);
+    skb_editor_set_on_text_change_callback(f->ed, nullptr, nullptr);
+    skb_editor_set_text_utf8(f->ed, skt_temp(), text.Data, n);
+    skb_editor_set_on_text_change_callback(f->ed, on_change, f);
+    skb_text_range_t r;
+    r.start.offset = r.end.offset = caret;
+    r.start.affinity = r.end.affinity = SKB_AFFINITY_TRAILING;
+    skb_editor_select(f->ed, r);
+    f->changed = changed;
+}
 
 // UTF-8 to codepoints; invalid bytes become U+FFFD one by one.
 void decode(const char* s, int n, ImVector<uint32_t>* out) {
@@ -88,6 +161,9 @@ void keys(SkfField* f, uint32_t mods) {
         skb_editor_process_key_pressed(f->ed, skt_temp(), SKB_KEY_ENTER, mods);
         f->reveal = true;
     }
+    if (!f->multiline && (ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false)))
+        f->events |= SKF_EV_ENTER;
+    if (!f->multiline && ImGui::IsKeyPressed(ImGuiKey_Escape, false)) f->events |= SKF_EV_ESCAPE;
     // JSON is indented with spaces; a tab character would not survive the
     // canonical writer anyway.
     if (f->multiline && ImGui::IsKeyPressed(ImGuiKey_Tab, true) && !io.KeyCtrl) {
@@ -110,12 +186,12 @@ void keys(SkfField* f, uint32_t mods) {
             if (s && *s) skb_editor_insert_text_utf8(f->ed, skt_temp(), SKB_CURRENT_SELECTION, s, -1);
             f->reveal = true;
         }
-        if (ImGui::IsKeyPressed(ImGuiKey_Z, false)) {
+        if (f->own_undo && ImGui::IsKeyPressed(ImGuiKey_Z, false)) {
             if (io.KeyShift) skb_editor_redo(f->ed, skt_temp());
             else skb_editor_undo(f->ed, skt_temp());
             f->reveal = true;
         }
-        if (ImGui::IsKeyPressed(ImGuiKey_Y, false)) { skb_editor_redo(f->ed, skt_temp()); f->reveal = true; }
+        if (f->own_undo && ImGui::IsKeyPressed(ImGuiKey_Y, false)) { skb_editor_redo(f->ed, skt_temp()); f->reveal = true; }
     }
     // Characters, in the order ImGui's queue kept them with the keys.
     if (!io.InputQueueCharacters.empty()) {
@@ -136,25 +212,7 @@ SkfField* skf_create(float font_size, bool multiline) {
     SkfField* f = IM_NEW(SkfField)();
     f->size = font_size;
     f->multiline = multiline;
-    static const skb_attribute_t line_attrs[] = {
-        skb_attribute_make_text_overflow(SKB_OVERFLOW_SCROLL),
-        skb_attribute_make_vertical_align(SKB_ALIGN_CENTER),
-    };
-    const skb_attribute_t text_attrs[] = { skb_attribute_make_font_size(font_size) };
-    // A color for the composition; skt_draw_layout() tints every glyph alike,
-    // so it does not show yet (probe part 2, section 6).
-    static const skb_attribute_t comp_attrs[] = {
-        skb_attribute_make_paint_color(SKB_PAINT_TEXT, SKB_PAINT_STATE_DEFAULT, skb_rgba(120, 200, 255, 255)),
-    };
-    skb_editor_params_t p = {};
-    p.font_collection = skt_fonts();
-    if (!multiline) p.layout_attributes = SKB_ATTRIBUTE_SET_FROM_STATIC_ARRAY(line_attrs);
-    p.paragraph_attributes = SKB_ATTRIBUTE_SET_FROM_STATIC_ARRAY(text_attrs);
-    p.composition_attributes = SKB_ATTRIBUTE_SET_FROM_STATIC_ARRAY(comp_attrs);
-    // a multi-line field is as large as its text: its window scrolls it
-    p.editor_width = multiline ? SKB_SIZE_AUTO : 200.0f;
-    p.editor_height = multiline ? SKB_SIZE_AUTO : font_size * 1.6f;
-    f->ed = skb_editor_create(&p);
+    f->ed = make_editor(f, 200.0f);
     /* A new editor has no paragraph: its caret has height 0 and an IME
      * composition does not show (docs/layout.md, Known issues). An empty
      * text gives it one; set before the callback so it is not an edit. */
@@ -196,12 +254,30 @@ void skf_set_caret(SkfField* f, int cp) {
     r.start.offset = r.end.offset = cp;
     r.start.affinity = r.end.affinity = SKB_AFFINITY_TRAILING;
     skb_editor_select(f->ed, r);
-    f->focused = true;
-    focus = f;
+    take_focus(f);
     f->reveal = true;
 }
 
 bool skf_focused(const SkfField* f) { return f->focused; }
+
+void skf_move_caret(SkfField* f, int cp) {
+    skb_text_range_t r;
+    r.start.offset = r.end.offset = cp;
+    r.start.affinity = r.end.affinity = SKB_AFFINITY_TRAILING;
+    skb_editor_select(f->ed, r);
+    f->reveal = true;
+}
+
+void skf_set_own_undo(SkfField* f, bool own) { f->own_undo = own; }
+bool skf_owns_undo(const SkfField* f) { return f->own_undo; }
+SkfField* skf_focus_field() { return focus; }
+void skf_blur(SkfField* f) { lose_focus(f, false); }
+
+unsigned skf_take_events(SkfField* f) {
+    const unsigned e = f->events;
+    f->events = 0;
+    return e;
+}
 
 void skf_compose(const char* utf8, int caret_cp) {
     if (!focus) return;
@@ -231,6 +307,7 @@ bool skf_draw(const char* id_label, SkfField* f, float width, float height) {
     const ImVec2 avail = ImGui::GetContentRegionAvail();
     if (width <= 0) width = avail.x;
     if (height <= 0) height = avail.y;
+    if (!f->multiline) fit_width(f, width - 2 * kPad);
     if (f->multiline) {
         const skb_rect2_t lb = skb_editor_get_layout_bounds(f->ed);
         width = ImMax(width, lb.x + lb.width + 2 * kPad + f->size);
@@ -248,8 +325,7 @@ bool skf_draw(const char* id_label, SkfField* f, float width, float height) {
 
     if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
         if (hovered) {
-            f->focused = true;
-            focus = f;
+            take_focus(f);
             ImGui::SetActiveID(id, win);
             ImGui::SetFocusID(id, win);
             const skb_vec2_t vo = skb_editor_get_view_offset(f->ed);
@@ -258,8 +334,7 @@ bool skf_draw(const char* id_label, SkfField* f, float width, float height) {
         } else if (f->focused && !ImGui::IsAnyItemHovered()) {
             // a click on empty space; a click on a button keeps the focus, so
             // Save or a jump to an issue does not take the caret away
-            f->focused = false;
-            if (focus == f) focus = nullptr;
+            lose_focus(f, true);
         }
     } else if (g.ActiveId == id && ImGui::IsMouseDown(ImGuiMouseButton_Left) && (io.MouseDelta.x != 0 || io.MouseDelta.y != 0)) {
         const skb_vec2_t vo = skb_editor_get_view_offset(f->ed);
@@ -267,10 +342,7 @@ bool skf_draw(const char* id_label, SkfField* f, float width, float height) {
     }
     if (g.ActiveId == id && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) ImGui::ClearActiveID();
     // An ImGui text field took the keyboard: both would read the characters.
-    if (f->focused && g.ActiveId != 0 && g.ActiveId != id && g.InputTextState.ID == g.ActiveId) {
-        f->focused = false;
-        if (focus == f) focus = nullptr;
-    }
+    if (f->focused && g.ActiveId != 0 && g.ActiveId != id && g.InputTextState.ID == g.ActiveId) lose_focus(f, true);
     if (f->focused) keys(f, mods);
 
     ImDrawList* dl = win->DrawList;

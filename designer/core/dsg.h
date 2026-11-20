@@ -26,7 +26,7 @@
 extern "C" {
 #endif
 
-#define DSG_VERSION_STRING "0.1.0"
+#define DSG_VERSION_STRING "0.2.0"
 
 /* The designer's folder inside a project, and the files in it. */
 #define DSG_DIR            ".designer"
@@ -55,15 +55,38 @@ int  dsg_join(char* out, size_t cap, const char* folder, const char* rel);
 
 /* --- view state ------------------------------------------------------------ */
 
+/* A view's own state: one top-level key of the view file whose value is an
+ * object ("chart", "tables", "panels"; docs/designer.md, "Plan of step 4"),
+ * kept as compact JSON. The view that owns the key reads and writes it; the
+ * file keeps keys that no view of this designer reads. */
+#define DSG_VIEW_PARTS 8
+typedef struct dsg_view_part {
+    char   key[32];
+    char*  json;                         /* compact JSON of an object, NUL-ended */
+    size_t n;
+} dsg_view_part;
+
 /* What the designer shows, never part of the definition (format D13). */
 typedef struct dsg_view {
     uint32_t caret_line, caret_column;   /* 1-based; 0: none                  */
     float    scroll_y;                   /* the editor's scroll, px           */
     char*    imgui_ini;                  /* ImGui's window settings; NULL: none */
     size_t   imgui_ini_len;
+    char     main_view[32];              /* the main area's view ("text", "chart",
+                                          * "tables"); "": the text            */
+    char     selection[512];             /* the selected value's JSON Pointer;
+                                          * "": none                          */
+    dsg_view_part parts[DSG_VIEW_PARTS];
+    int      n_parts;
 } dsg_view;
 
 void dsg_view_free(dsg_view* v);
+/* The part's JSON, or NULL when the view file has none. */
+const char* dsg_view_part_get(const dsg_view* v, const char* key, size_t* n);
+/* Sets a part from the JSON of an object (checked), or removes it (json
+ * NULL). -1 when it is not an object, the key is reserved or too long, or
+ * the parts are full. */
+int  dsg_view_part_set(dsg_view* v, const char* key, const char* json, size_t n);
 /* Reads DSG_VIEW_FILE. A missing file gives an empty view and 0; a file that
  * does not parse gives an empty view and -1 with the reason (the caller
  * notes it: view state is not worth refusing a project for). */
@@ -196,8 +219,16 @@ void dsg_checker_forget(dsg_checker* c);
  * pl_check() on text against the check pack in memory.
  *
  * Without a check pack (none yet, or its build failed), the issues are the
- * pack tool's message and yexp_load()'s diagnostics with no host. */
-int dsg_check(dsg_checker* c, const dsg_project* p, const char* text, size_t n, dsg_report* r);
+ * pack tool's message and yexp_load()'s diagnostics with no host.
+ *
+ * tables: the document (doc.h) whose table buffers hold the tables as
+ * edited, or NULL for the tables on disk. Each dirty table's bytes are
+ * written under DSG_DIR/check/ and the check description's source points at
+ * them, so the check sees a table edit before Save; a buffer's name is its
+ * "source" in the description. The pack is built again when the set of
+ * dirty tables or the revision of one changes. */
+struct dsg_doc;
+int dsg_check(dsg_checker* c, const dsg_project* p, const char* text, size_t n, const struct dsg_doc* tables, dsg_report* r);
 
 /* --- the redraw rule ----------------------------------------------------- */
 

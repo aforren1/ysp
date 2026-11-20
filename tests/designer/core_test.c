@@ -335,7 +335,7 @@ static void test_create(dsg_checker* c) {
     CHECK(dsg_project_create(dir, err, sizeof err) != 0 && strstr(err, "already"), "a second create refuses: %s", err);
     CHECK(dsg_project_open(&p, dir, err, sizeof err) == 0 && p.version == 2 && !dsg_project_dirty(&p, p.text, p.text_len),
           "the new project opens, version 2, clean: %s", err);
-    CHECK(dsg_check(c, &p, p.text, p.text_len, &r) == 0 && r.status == PL_CHECK_OK && r.n_errors == 0 && r.built,
+    CHECK(dsg_check(c, &p, p.text, p.text_len, NULL, &r) == 0 && r.status == PL_CHECK_OK && r.n_errors == 0 && r.built,
           "and checks clean (status %d)", r.status);
     if (r.n_errors) dump(&r);
     dsg_project_close(&p);
@@ -353,17 +353,17 @@ static void test_check(dsg_checker* c) {
     if (dsg_project_open(&p, dir, err, sizeof err)) { CHECK(0, "open rdk: %s", err); return; }
 
     /* clean: one build, then checks against it */
-    CHECK(dsg_check(c, &p, p.text, p.text_len, &r) == 0 && r.status == PL_CHECK_OK && r.n_errors == 0 && r.built && r.have_pack,
+    CHECK(dsg_check(c, &p, p.text, p.text_len, NULL, &r) == 0 && r.status == PL_CHECK_OK && r.n_errors == 0 && r.built && r.have_pack,
           "rdk checks clean and builds its check pack (status %d, %d errors)", r.status, r.n_errors);
     if (r.n_errors) dump(&r);
     is = find_need(&r, PL_NEED_FIELD);
     CHECK(is && is->severity == DSG_SEV_NEED && is->name && strcmp(is->name, "participant") == 0 && is->place.line == 0,
           "the default participant field is a need with no place in the text");
-    CHECK(dsg_check(c, &p, p.text, p.text_len, &r) == 0 && r.status == PL_CHECK_OK && !r.built, "a second check does not build");
+    CHECK(dsg_check(c, &p, p.text, p.text_len, NULL, &r) == 0 && r.status == PL_CHECK_OK && !r.built, "a second check does not build");
 
     /* tier 1: the loader's error, at its key */
     t = replaced(p.text, "\"dot_size\"", "\"dot_sizes\"", &m);
-    CHECK(dsg_check(c, &p, t, m, &r) == 0 && r.status == PL_CHECK_DEFINITION && r.n_errors > 0, "an unknown key: status %d", r.status);
+    CHECK(dsg_check(c, &p, t, m, NULL, &r) == 0 && r.status == PL_CHECK_DEFINITION && r.n_errors > 0, "an unknown key: status %d", r.status);
     is = find_issue(&r, DSG_FROM_LOADER);
     CHECK(is && is->severity == DSG_SEV_ERROR && at_text(t, &is->place, "\"dot_sizes\""), "the loader's error is at the key (%u:%u)",
           is ? is->place.line : 0, is ? is->place.column : 0);
@@ -374,7 +374,7 @@ static void test_check(dsg_checker* c) {
     t = replaced(p.text, "\"count\": 200", "\"count\": \"$coherence\"", &m);
     CHECK(t != NULL, "the rdk count");
     if (t) {
-        CHECK(dsg_check(c, &p, t, m, &r) == 0 && r.status == PL_CHECK_REFUSED, "an rdk count that varies: status %d", r.status);
+        CHECK(dsg_check(c, &p, t, m, NULL, &r) == 0 && r.status == PL_CHECK_REFUSED, "an rdk count that varies: status %d", r.status);
         is = find_issue(&r, DSG_FROM_PLAYER);
         CHECK(is && is->object == PL_OBJ_STIMULUS && is->name && strcmp(is->name, "dots") == 0 && at_text(t, &is->place, "\"dots\""),
               "the refusal names stimulus 'dots' and is at its key");
@@ -383,7 +383,7 @@ static void test_check(dsg_checker* c) {
     }
     /* tier 2: a node, at its name */
     t = replaced(p.text, "\"name\": \"main\"", "\"name\": \"main\", \"vars\": { \"x\": 1 }, \"data\": { \"x\": 2 }", &m);
-    CHECK(t && dsg_check(c, &p, t, m, &r) == 0 && r.status == PL_CHECK_REFUSED, "x in a node's vars and data: status %d", r.status);
+    CHECK(t && dsg_check(c, &p, t, m, NULL, &r) == 0 && r.status == PL_CHECK_REFUSED, "x in a node's vars and data: status %d", r.status);
     is = find_issue(&r, DSG_FROM_PLAYER);
     CHECK(is && is->object == PL_OBJ_NODE && is->name && strcmp(is->name, "main") == 0 && t && at_text(t, &is->place, "\"name\": \"main\""),
           "the refusal names node 'main' and is at its name");
@@ -393,20 +393,20 @@ static void test_check(dsg_checker* c) {
     /* a text that does not parse, with no check pack yet: the loader alone */
     dsg_checker_forget(c);
     t = replaced(p.text, "\"stimuli\": {", "\"stimuli\": {,", &m);
-    CHECK(dsg_check(c, &p, t, m, &r) == 0 && r.status == -1 && !r.have_pack && r.n_errors == 1, "no pack: status %d, %d errors",
+    CHECK(dsg_check(c, &p, t, m, NULL, &r) == 0 && r.status == -1 && !r.have_pack && r.n_errors == 1, "no pack: status %d, %d errors",
           r.status, r.n_errors);
     is = find_issue(&r, DSG_FROM_LOADER);
     CHECK(is && is->place.line > 1 && t[is->place.offset] == ',', "the parse error's place is the comma (%u:%u)",
           is ? is->place.line : 0, is ? is->place.column : 0);
     CHECK(find_issue(&r, DSG_FROM_DESIGNER) != NULL, "and a note that the pack's checks wait");
     free(t);
-    CHECK(dsg_check(c, &p, p.text, p.text_len, &r) == 0 && r.status == PL_CHECK_OK && r.built, "fixed, it builds and checks");
+    CHECK(dsg_check(c, &p, p.text, p.text_len, NULL, &r) == 0 && r.status == PL_CHECK_OK && r.built, "fixed, it builds and checks");
     dsg_project_close(&p);
 
     /* tier 3: a required calibration, at its key */
     if (project_copy("afc2", afc2_files, dir, sizeof dir)) { CHECK(0, "copy afc2"); return; }
     if (dsg_project_open(&p, dir, err, sizeof err)) { CHECK(0, "open afc2: %s", err); return; }
-    CHECK(dsg_check(c, &p, p.text, p.text_len, &r) == 0 && r.status == PL_CHECK_OK && r.built, "afc2 checks: status %d", r.status);
+    CHECK(dsg_check(c, &p, p.text, p.text_len, NULL, &r) == 0 && r.status == PL_CHECK_OK && r.built, "afc2 checks: status %d", r.status);
     if (r.status != PL_CHECK_OK) dump(&r);
     is = find_need(&r, PL_NEED_CALIBRATION);
     CHECK(is && at_text(p.text, &is->place, "\"calibration\""), "the calibration need is at its key");
@@ -421,7 +421,7 @@ static void test_texts(dsg_checker* c) {
     dsg_project p;
     dsg_report r;
     char *t, *t2;
-    size_t m, m2;
+    size_t m = 0, m2 = 0;   /* MSVC C4701: m2 is set only when t is */
     if (!dsg_is_file(YSP_DESIGNER_TEST_FONT)) {
         printf("8. skipped: no font at '%s' (YSP_DESIGNER_TEST_FONT)\n", YSP_DESIGNER_TEST_FONT);
         return;
@@ -432,15 +432,15 @@ static void test_texts(dsg_checker* c) {
     path2(f, sizeof f, fonts, "NotoSans-Regular.ttf");
     if (copy_file(YSP_DESIGNER_TEST_FONT, f)) { CHECK(0, "copy the font"); return; }
     if (dsg_project_open(&p, dir, err, sizeof err)) { CHECK(0, "open stroop: %s", err); return; }
-    CHECK(dsg_check(c, &p, p.text, p.text_len, &r) == 0 && r.status == PL_CHECK_OK && r.built, "stroop checks: status %d", r.status);
+    CHECK(dsg_check(c, &p, p.text, p.text_len, NULL, &r) == 0 && r.status == PL_CHECK_OK && r.built, "stroop checks: status %d", r.status);
     if (r.status != PL_CHECK_OK) dump(&r);
 
     t = replaced(p.text, "R red", "K red", &m);
-    CHECK(t && dsg_check(c, &p, t, m, &r) == 0 && r.built && r.status == PL_CHECK_OK,
+    CHECK(t && dsg_check(c, &p, t, m, NULL, &r) == 0 && r.built && r.status == PL_CHECK_OK,
           "a new text rebuilds the check pack and checks clean (built %d, status %d)", r.built, r.status);
     if (r.status != PL_CHECK_OK) dump(&r);
     t2 = t ? replaced(t, "\"wait_s\": 0.4", "\"wait_s\": 0.45", &m2) : NULL;
-    CHECK(t2 && dsg_check(c, &p, t2, m2, &r) == 0 && !r.built && r.status == PL_CHECK_OK, "a change to no text does not rebuild");
+    CHECK(t2 && dsg_check(c, &p, t2, m2, NULL, &r) == 0 && !r.built && r.status == PL_CHECK_OK, "a change to no text does not rebuild");
     free(t);
     free(t2);
     dsg_project_close(&p);
