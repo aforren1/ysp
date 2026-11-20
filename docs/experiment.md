@@ -1,6 +1,6 @@
 # ysp/experiment.h
 
-Status: v0.4.0, 2026-11-12. The header's top comment is the reference for
+Status: v0.6.0, 2026-11-20. The header's top comment is the reference for
 the calls (USAGE, THE CHECKED FORM, REFUSALS, THE HOST, CANONICAL BYTES,
 BOUNDS AND MEMORY). This page records why the header exists, the format's
 defaults table, the decisions, and the results.
@@ -194,6 +194,43 @@ page and compares every row, and requires every row that version 2 adds
 to be in 3.17 or in its list of nine with a reason (a form's own key,
 a step's verb, the signal response's keys "as 2.6", `over`'s `outcome`).
 
+## Reference: a row of the table (v0.6.0)
+
+`yexp_row` has the fields of the parameter tables' row shape (G6;
+[conventions.md](conventions.md), "Parameter tables"), with the format's
+own fields first.
+
+| Field | Meaning |
+|---|---|
+| `section` | A `yexp_section` (`YEXP_S_*`). `yexp_section_name()` gives its name: `"stimulus"`, `"response with signal choices"` |
+| `kinds` | The kinds of the section that have the key: bit `1 << yexp_stim_kind` for a stimulus, `1 << yexp_control_kind` for a control, `1 << yexp_step_op` for a step; for an exit, bit 0 a state's own exit and bit 1 a shared exit; for a template, bit 1 one with states and no `key_answer` and bit 0 the others. `0xffff`: every kind |
+| `type` | A `yexp_row_type` (`YEXP_T_*`): what the loader takes for the key |
+| `flags` | `YEXP_R_REQ` (required), `YEXP_R_LIT` (a literal only), `YEXP_R_NONE` (optional, no default), `YEXP_R_SELF` (the section writes the canonical key), `YEXP_R_STEP` (version 2: a step's property, not a key of the stimulus) |
+| `key`, `def` | The key, and its default as canonical JSON text (NULL: none) |
+| `unit` | The unit; `""` for none. A duration's is `"s"` |
+| `doc` | One line of text from [experiment_format.md](experiment_format.md). `""` for a stimulus or method key that a header's parameter table has |
+| `values` | An enum's `"name=value,..."`; NULL for other types |
+
+The rules for `unit` and `doc`:
+
+- A key that only the format has (a node's `repetitions`, a state's
+  `max_visits`, a text's `font`, a sound's `offset`) has its own text, and
+  its unit when it has one (`"rgb"`, `"frame"`, `"dB"`).
+- A stimulus key that `ygfx_params()`, `ygfx_enum_params()` or
+  `yrdk_params()` has for every kind of the row, and a method key that
+  `yst_params()`, `yqst_params()` or `yaep_params()` has, keeps that row's
+  unit and has an empty `doc`. A gfx row joins only the kinds it reads, so
+  a sound's `offset` is not a shape's. `tests/adapt/experiment_tables_test.c`
+  checks both directions: an empty `doc` exactly where a header's row joins,
+  and its unit equal to that row's.
+- A response, control or step key has the format's text, also where a
+  header's row gives its range: the format names the key in its own terms
+  (a region's `radius`, not `detect`'s `level`).
+- A key that both versions' tables have has one unit in both. Its text is
+  the same but where version 2 adds to the key's meaning: `version`,
+  `display.units`, a template's `events` and `outcome`, and a step's
+  `at_s`, `if` and `unless`.
+
 ## Explanation: decisions
 
 | Question | Choice and why |
@@ -249,6 +286,15 @@ a step's verb, the signal response's keys "as 2.6", `over`'s `outcome`).
 | The `outcome` default with states | `1` when the template has no `key_answer` (3.11), from the template's second `outcome` row; `"correct"` with one; written at its default it is left out |
 | A written `[]` for `events` or `after` beside `states` | The default, as D2 has it, so not "with events" |
 | The sigrole bit | Set only when the file has signal roles, so the reports of version 1 files and of hosts that predate it do not change |
+
+### The table for a designer (v0.6.0)
+
+| Question | Choice and why |
+|---|---|
+| Public sections and types | `yexp_section`, `yexp_row_type` and `YEXP_R_*` are public with the numbers of 0.5.3's internal names. The designer had a mirror of them and a test of the mirror (docs/designer.md, P1); a reader now uses the names. A new section or type goes at the end, before `_COUNT` |
+| The text of a stimulus or method key | Empty, with the header's unit. The header's row is the one text: a copy here would drift when the header's text changes, and the defaults test already joins every such row to its header. The designer shows the header's text for it |
+| The text of a response or control key that a header's row also gives a range for | The format's. The header's row describes the op the key lowers to (`detect`'s `level`), not the key (a region's `radius`) |
+| Where `unit` and `doc` go | After `def`, before `values`, as in the shared row shape: a reader by field name finds them where it finds a header's |
 
 ## Explanation: gaps found in the format
 
@@ -344,6 +390,22 @@ reading below and marks it in the code as "finding Fn". The lines are of
 | A message about a lane | Names the role or control without its lane (`'hand' gives 1 lane` for `hand.x`) |
 
 ## Results
+
+### v0.6.0: the table for a designer (2026-11-20)
+
+The loader, the canonical bytes and the IDs do not change: the golden
+dumps, the refusal messages and the IDs of the corpus are as before.
+Linux desktop (i5-14500), gcc 12.2.
+
+| Check | Result |
+|---|---|
+| `tests/adapt/experiment_test.c` | 12,601 checks pass (4,677 before). New: the public numbers equal 0.5.3's internal ones; every row of both tables has a section and type below its `_COUNT`, `YEXP_R_*` flags only, a duration type exactly for a key that ends in `_s`, values exactly for an enum, a non-NULL unit and doc, `"s"` for a duration, one line of text, and a text outside the stimulus and method sections; a key in both tables has one unit, and one text but for the seven keys version 2 changes |
+| `tests/adapt/experiment_tables_test.c` | 2,027 checks pass (923 before). New: a stimulus or method row's doc is empty exactly when a header's row joins it for every kind of the row, and its unit is that row's |
+| Compile checks | C99, C11 and C++17, warnings as errors; the check reads `yexp_section`, `yexp_row_type`, `YEXP_R_STEP`, `unit` and `doc` |
+| Mutants | `tests/mutate/experiment.toml`: 322 of 322 as expected (319 killed, r-44 by the time limit, w-18 and f26-04 kept as survivors, as before). 7 new (t6-01 to t6-07), all killed; four anchors that held whole rows follow the new row shape. The list has a second test, `experiment_tables` |
+| ASan and UBSan (built and run under `setarch -R`) | `test_experiment`, the C++17 unit test, `test_experiment_tables` and the compile checks: no report |
+| Fuzzing (`tests/fuzz/experiment_fuzz.c`, self-driven, 8 processes, 187 s, ASan and UBSan, `setarch -R`; seeds: the good files, the version 2 ones three times, the 200 version 2 refusals) | 4,801,904 inputs: 149,173 loaded and round-tripped, 4,652,731 refused, no report |
+| Full ctest (Release, the designer with the Test Engine, `DISPLAY` unset) | 138 of 138; `test_designer_te` 26 of 26 |
 
 ### v0.5.3: a finite test without isfinite() (2026-11-16)
 

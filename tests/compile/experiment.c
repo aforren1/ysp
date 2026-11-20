@@ -43,5 +43,17 @@ int main(void) {
         if (d->templates[0].n_states != 2 || d->templates[0].states[0].exits[0].to.index != 1) return 8;
         if (yexp_migrated(d, &a, &bytes, &n, id) != YEXP_OK) return 9;
     }
+    {
+        /* the table's public names, unit and doc (0.6.0) */
+        int nr = 0, i, durs = 0;
+        const yexp_row* rows = yexp_defaults(2, &nr);
+        for (i = 0; rows && i < nr; i++) {
+            const yexp_section s = (yexp_section)rows[i].section;
+            const yexp_row_type t = (yexp_row_type)rows[i].type;
+            if (s >= YEXP_S_COUNT || t >= YEXP_T_COUNT || !rows[i].unit || !rows[i].doc) return 10;
+            if (t == YEXP_T_DUR && (rows[i].flags & YEXP_R_STEP) == 0) durs += rows[i].unit[0] == 's';
+        }
+        if (durs == 0) return 11;
+    }
     return strlen(yexp_version()) ? 0 : 5;
 }

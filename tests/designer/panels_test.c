@@ -3,13 +3,16 @@
  * panels"). OWNED BY PART C.
  *
  * Usage: test_designer_panels WORK
- *   1. The schema has format 2's rows. The mirror of ysp/experiment.h's
- *      internal enums holds where the rows show it: every key that ends in
- *      _s is a duration in seconds, every row with enum values is an enum,
- *      the required flag is yexp_row_required().
- *   2. A key that a header's parameter table has takes its unit, range and
- *      text: stimuli (gfx, rdk), methods (stair, quest, aep), responses and
- *      choices (response), controls (sig, through the op it lowers to).
+ *   1. The schema has format 2's rows, with ysp/experiment.h's types and
+ *      flags (public since 0.6.0): every key that ends in _s is a duration
+ *      in seconds, every row with enum values is an enum, the required flag
+ *      is yexp_row_required().
+ *   2. A key that a header's parameter table has takes its unit and range:
+ *      stimuli (gfx for the kinds a row reads, rdk), methods (stair, quest,
+ *      aep), responses and choices (response), controls (sig, through the
+ *      op it lowers to). Its text is the format row's, or the header's
+ *      where the row's is empty. A key that only the format has takes the
+ *      row's unit and text. Every field has a text.
  *   3. The object at a path, for each object kind and each kind of stimulus,
  *      control, method, step, exit and variable; the chain up to the
  *      template; the key the path names.
@@ -127,15 +130,15 @@ static void test_schema(void) {
     for (i = 0; f && i < n; i++) {
         size_t kl = strlen(f[i].key);
         const bool dur_key = kl > 2 && strcmp(f[i].key + kl - 2, "_s") == 0;
-        if (dur_key != (f[i].type == DSG_T_DUR)) { bad_dur++; printf("  duration? %s (type %d)\n", f[i].key, f[i].type); }
-        if (f[i].type == DSG_T_DUR && strcmp(f[i].unit, "s") != 0) bad_dur++;
-        if ((f[i].values != NULL) != (f[i].type == DSG_T_ENUM || f[i].type == DSG_T_ENUMS)) {
+        if (dur_key != (f[i].type == YEXP_T_DUR)) { bad_dur++; printf("  duration? %s (type %d)\n", f[i].key, f[i].type); }
+        if (f[i].type == YEXP_T_DUR && strcmp(f[i].unit, "s") != 0) bad_dur++;
+        if ((f[i].values != NULL) != (f[i].type == YEXP_T_ENUM || f[i].type == YEXP_T_ENUMS)) {
             bad_enum++;
             printf("  enum? %s (type %d)\n", f[i].key, f[i].type);
         }
-        if (f[i].required != ((f[i].flags & DSG_R_REQ) != 0)) bad_req++;
+        if (f[i].required != ((f[i].flags & YEXP_R_REQ) != 0)) bad_req++;
         /* optional with no default: the row has no default text */
-        if (((f[i].flags & (DSG_R_NONE | DSG_R_REQ)) != 0) != (f[i].def == NULL)) {
+        if (((f[i].flags & (YEXP_R_NONE | YEXP_R_REQ)) != 0) != (f[i].def == NULL)) {
             bad_flags++;
             printf("  flags? %s %s (flags %u)\n", yexp_section_name(f[i].section), f[i].key, f[i].flags);
         }
@@ -161,14 +164,28 @@ static void test_schema(void) {
 
 /* --- 2. the headers' tables --------------------------------------------------- */
 
+/* The gfx kinds that draw a format kind (ysp/gfx.h's kinds bits). */
+static uint32_t gfx_kinds(unsigned kind_bit) {
+    uint32_t g = 0;
+    if (kind_bit & (1u << YEXP_SHAPE)) g |= 1u << YGFX_SHAPE;
+    if (kind_bit & (1u << YEXP_GRATING)) g |= 1u << YGFX_GRATING;
+    if (kind_bit & (1u << YEXP_GABOR)) g |= 1u << YGFX_GABOR;
+    if (kind_bit & (1u << YEXP_NOISE)) g |= 1u << YGFX_NOISE;
+    if (kind_bit & ((1u << YEXP_IMAGE) | (1u << YEXP_VIDEO))) g |= 1u << YGFX_IMAGE;
+    if (kind_bit & ((1u << YEXP_TEXT) | (1u << YEXP_ARTWORK))) g |= 1u << YGFX_TEXT;
+    if (kind_bit & (1u << YEXP_RDK)) g |= 1u << YGFX_DOTS;
+    return g;
+}
+
 static bool header_has(int section, unsigned kind_bit, const char* key) {
     int n = 0, i;
     if (section == dsg_schema_section("stimulus")) {
+        const uint32_t gk = gfx_kinds(kind_bit);
         const ygfx_param* g = ygfx_params(&n);
         if (strcmp(key, "color") == 0) key = "color_r";
-        for (i = 0; i < n; i++) if (strcmp(g[i].name, key) == 0) return true;
+        for (i = 0; i < n; i++) if ((g[i].kinds & gk) && strcmp(g[i].name, key) == 0) return true;
         g = ygfx_enum_params(&n);
-        for (i = 0; i < n; i++) if (strcmp(g[i].name, key) == 0) return true;
+        for (i = 0; i < n; i++) if ((g[i].kinds & gk) && strcmp(g[i].name, key) == 0) return true;
         if (kind_bit & (1u << YEXP_RDK)) {
             const yrdk_param* r = yrdk_params(&n);
             for (i = 0; i < n; i++) if (strcmp(r[i].name, key) == 0) return true;
@@ -192,6 +209,16 @@ static bool header_has(int section, unsigned kind_bit, const char* key) {
 
 static const dsg_field* field(const char* section, unsigned kind_bit, const char* key) {
     return dsg_schema_field(dsg_schema_section(section), kind_bit, key);
+}
+
+/* The format 2 row of a key, as yexp_defaults(2) has it. */
+static const yexp_row* row_of(const char* section, unsigned kind_bit, const char* key) {
+    int n = 0, i;
+    const yexp_row* rows = yexp_defaults(2, &n);
+    const int s = dsg_schema_section(section);
+    for (i = 0; rows && i < n; i++)
+        if (rows[i].section == s && (rows[i].kinds & kind_bit) && strcmp(rows[i].key, key) == 0) return &rows[i];
+    return NULL;
 }
 
 static void test_headers(void) {
@@ -239,7 +266,8 @@ static void test_headers(void) {
     CHECK(f && strstr(f->from, "response.h"), "a choice's key: choices.key");
     /* controls: the op each key lowers to (3.7), per kind */
     f = field("control", 1u << YEXP_REGION, "radius");
-    CHECK(f && strcmp(f->from, "ysp/sig.h") == 0 && f->doc[0], "a region's radius: detect's level");
+    CHECK(f && strcmp(f->from, "ysp/sig.h") == 0 && f->doc[0] && f->doc == row_of("control", 1u << YEXP_REGION, "radius")->doc,
+          "a region's radius: detect's level, with the format's text");
     f = field("control", 1u << YEXP_REGION, "stay_s");
     CHECK(f && strcmp(f->unit, "s") == 0 && strcmp(f->from, "ysp/sig.h") == 0, "a region's stay_s: detect's hold");
     f = field("control", 1u << YEXP_PEAK, "lag_s");
@@ -247,23 +275,57 @@ static void test_headers(void) {
     f = field("control", 1u << YEXP_TRACE, "rate");
     {
         const dsg_field* g = field("control", 1u << YEXP_REGION, "rate");
-        int n = 0;
-        const ysig_param* rec = ysig_op_params(YSIG_OP_RECORD, &n);
-        CHECK(f && g && f != g && rec && strcmp(f->from, "ysp/sig.h") == 0 && strcmp(f->doc, rec[0].doc) == 0 &&
-                  strcmp(g->from, "ysp/sig.h") == 0 && f->doc != g->doc,
-              "rate splits: a trace's is record's per, a region's is detect's at");
+        const yexp_row* r = row_of("control", 1u << YEXP_TRACE, "rate");
+        CHECK(f && g && f != g && r && strcmp(f->from, "ysp/sig.h") == 0 && strcmp(g->from, "ysp/sig.h") == 0 &&
+                  f->doc == r->doc && g->doc == r->doc,
+              "rate splits: a trace's is record's per, a region's is detect's at; both have the row's text");
     }
     f = field("control", 1u << YEXP_SIGNAL_LOST, "after_s");
     CHECK(f && strcmp(f->from, "ysp/sig.h") == 0, "signal_lost's after_s: silent's after");
     f = field("control", 1u << YEXP_MOVEMENT, "onset");
     CHECK(f && strstr(f->from, "response.h"), "a movement's onset: a choice's level");
-    /* every duration has a unit, every key has a unit string */
+    /* every duration has a unit, every key has a unit string and a text */
     {
         int n, i, bad = 0;
         const dsg_field* all = dsg_schema_fields(&n);
         for (i = 0; all && i < n; i++)
-            if (!all[i].unit || !all[i].doc || !all[i].from || (all[i].type == DSG_T_DUR && strcmp(all[i].unit, "s") != 0)) bad++;
+            if (!all[i].unit || !all[i].doc || !all[i].doc[0] || !all[i].from ||
+                (all[i].type == YEXP_T_DUR && strcmp(all[i].unit, "s") != 0)) {
+                bad++;
+                printf("  no text? %s %s\n", yexp_section_name(all[i].section), all[i].key);
+            }
         CHECK(bad == 0, "every field has a unit, a text and a source (%d not)", bad);
+    }
+    /* format-only keys: the row's unit and text (ysp/experiment.h 0.6.0) */
+    {
+        static const struct { const char* section; unsigned kind_bit; const char* key; const char* unit; } fo[] = {
+            { "node", 0xffff, "repetitions", "" }, { "state", 0xffff, "max_visits", "" },
+            { "step", 1u << YEXP_UNTIL, "timeout_s", "s" }, { "display", 0xffff, "background", "rgb" },
+            { "walk2d", 0xffff, "step", "" }, { "stimulus", 1u << YEXP_TEXT, "font", "" },
+            /* a sound's offset is a frame: gfx's offset is a shape's and does not join it */
+            { "stimulus", 1u << YEXP_SOUND, "offset", "frame" },
+        };
+        int k, bad = 0;
+        for (k = 0; k < (int)(sizeof fo / sizeof fo[0]); k++) {
+            const yexp_row* r = row_of(fo[k].section, fo[k].kind_bit, fo[k].key);
+            f = field(fo[k].section, fo[k].kind_bit, fo[k].key);
+            if (!f || !r || strcmp(f->from, "format") != 0 || f->doc != r->doc || !f->doc[0] || strcmp(f->unit, fo[k].unit) != 0) {
+                bad++;
+                printf("  format-only? %s %s\n", fo[k].section, fo[k].key);
+            }
+        }
+        CHECK(bad == 0, "a key only the format has takes the row's unit and text (%d not)", bad);
+        /* a key a header's table has: the row's doc is empty, the header's shows */
+        f = field("stimulus", 1u << YEXP_GRATING, "sf");
+        {
+            int n = 0, i;
+            const ygfx_param* g = ygfx_params(&n);
+            const yexp_row* r = row_of("stimulus", 1u << YEXP_GRATING, "sf");
+            const char* want = NULL;
+            for (i = 0; i < n; i++) if (strcmp(g[i].name, "sf") == 0) want = g[i].doc;
+            CHECK(f && r && r->doc[0] == 0 && want && f->doc == want && strcmp(f->unit, r->unit) == 0,
+                  "a grating's sf: gfx's text and the row's unit, which is gfx's");
+        }
     }
 }
 
@@ -393,7 +455,7 @@ static void test_cover(void) {
         objs++;
         for (j = 0; j < nr; j++) {
             int q, found = 0;
-            if (rows[j].section != o.section || !(rows[j].kinds & o.kind_bit) || (rows[j].flags & DSG_R_STEP)) continue;
+            if (rows[j].section != o.section || !(rows[j].kinds & o.kind_bit) || (rows[j].flags & YEXP_R_STEP)) continue;
             for (q = 0; q < k && q < 256; q++) found += strcmp(sel[q]->key, rows[j].key) == 0 && sel[q]->type == rows[j].type;
             if (found != 1) { missing++; printf("  %s: '%s' shows %d times\n", paths[i], rows[j].key, found); }
             shown++;
@@ -413,7 +475,7 @@ static void test_cover(void) {
             int b, any = 0;
             for (b = 0; b < 16; b++)
                 if ((rows[j].kinds & (1u << b)) && rows[j].section < 64 && seen[rows[j].section][b]) any = 1;
-            if (!any && !(rows[j].flags & DSG_R_STEP)) { unseen++; printf("  no object for %s %s\n", yexp_section_name(rows[j].section), rows[j].key); }
+            if (!any && !(rows[j].flags & YEXP_R_STEP)) { unseen++; printf("  no object for %s %s\n", yexp_section_name(rows[j].section), rows[j].key); }
         }
         CHECK(unseen == 0, "the test has an object for every section and kind (%d rows not)", unseen);
     }

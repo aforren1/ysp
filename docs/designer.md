@@ -222,10 +222,13 @@ format row to a header's row by name, at the first call:
   field per group of kinds (`rate`: a region's and a trace's).
 - A duration's unit is `s` whatever the header's unit is (D4); a range in
   ns is converted to seconds.
-- The tooltip of a key gives the header's text, the range, the default,
-  and the source. A key that only the format has (a node's `repetitions`, a
-  state's `max_visits`) shows its name and its default only (prerequisite
-  P2 adds a unit and a text to the format's rows).
+- The tooltip of a key gives its text, the range, the default, and the
+  source. The text is the format row's (ysp/experiment.h 0.6.0, P2); the
+  row's text is empty only for a stimulus or method key that a header's
+  table has, and then the header's text shows. A key that only the format
+  has (a node's `repetitions`, a state's `max_visits`) takes the row's unit
+  too. A gfx row joins only the kinds it reads, so a sound's `offset` is
+  the format's, not a shape's.
 
 **Widgets.** By the row's type, when the value has that type:
 
@@ -348,12 +351,12 @@ two runs within 3 % at the median. Microseconds, median and p99.
   came from a harness in the session's scratch folder that draws frames as
   `test_designer_ui` does; it is not kept.
 
-**Tests.** `test_designer_panels` (207 checks) and nine tests on the
+**Tests.** `test_designer_panels` (209 checks) and nine tests on the
 Test Engine (`te_panels.cpp`):
 
 | Test | What it checks | Hand mutants killed |
 |---|---|---|
-| `test_designer_panels` 1, 2 | The type mirror where the rows show it (every `_s` key is a duration in seconds, every row with values is an enum, the flags); every row's kinds covered once by the split fields; the joins: every stimulus and method key that a header's table has takes its row, and the response, choice and control joins | no gfx join; no join of a trace's `rate`; no split |
+| `test_designer_panels` 1, 2 | The rows' types and flags (every `_s` key is a duration in seconds, every row with values is an enum, the flags); every row's kinds covered once by the split fields; the joins: every stimulus and method key that a header's table has takes its row, and the response, choice and control joins; every field has a text; a format-only key takes the row's unit and text (0.6.0) | no gfx join; no join of a trace's `rate`; no split; the row's text not used; the row's unit not used; a gfx row joined to every kind; the header's text first |
 | 3, 4 | The object at a path for each object kind and each kind of stimulus, control, method, step, exit, template and variable; the chain; every key of each section and kind shows once for its object | a step's property shown; `walk2d`'s keys at the variable; the template's kind always 1 |
 | 5, 6 | Each type writes the canonical value in one step; bad text writes nothing; Reset; a string choice; a value out of range written and named by the check at its key | a duration written as typed; text trimmed; Reset that keeps the key; a string choice kept; a number as text; a write clamped to the range |
 | 7, 8 | Candidates; renames of a state, a stimulus, controls, a role, a template, variables and a node, each one step, the check clean after each, undo to the same bytes, the listener; a shared variable; a state in one of two templates; refusals | lanes dropped; no forms in `props`; a state's rename global; a variable counted twice; a shared variable renamed; candidates not filtered |
@@ -377,10 +380,10 @@ Release).
   `ui_jump_to_issue()` from `ui.h` (to open the text view at a key and to
   go to an issue). `views.h` did not list them for a view; it does since
   the integration.
-- Prerequisites P1 and P2 did not block anything. Without P1, `schema.h`
-  mirrors the type enum and the row flags, and the test checks the mirror
-  where the rows show it. Without P2, a key that only the format has shows
-  no unit or text.
+- Prerequisites P1 and P2 did not block anything. Both are made in
+  ysp/experiment.h 0.6.0 (2026-11-20): `schema.h` uses the header's
+  `YEXP_T_*` and `YEXP_R_*` with no mirror, and a key that only the format
+  has shows the row's unit and text.
 
 #### The chart
 
@@ -860,7 +863,6 @@ mutants that fail the test (reverted; not in a mutation list).
   `designer` builds `designer_tests` on both and has not run on this
   branch.
 - The Test Engine ran in its fast mode only.
-- Prerequisites P1 and P2 (ysp/experiment.h) are not made.
 
 ## First version
 
@@ -1201,11 +1203,10 @@ the program, with no generated table:
   in seconds and writes it with `dsg_def_set_seconds_ns()` from the
   decimal text that the person typed (`yjs_parse_fixed()`), so no binary
   fraction comes between.
-- The section and the value type of a format row are internal numbers in
-  ysp/experiment.h 0.5.3. `schema.h` mirrors the type enum, and
-  `test_designer_panels` checks the mirror where the rows show it (every
-  `_s` key is a duration, every row with enum values is an enum).
-  Prerequisite P1 removes the mirror.
+- The section and the value type of a format row are public in
+  ysp/experiment.h 0.6.0 (`yexp_section`, `yexp_row_type`, `YEXP_R_*`;
+  P1). `schema.h` uses them; in 0.5.3 they were internal, and `schema.h`
+  had a mirror.
 
 ### Who owns which file
 
@@ -1257,12 +1258,12 @@ check of a part's test has a hand mutant that fails it, as in step 3.
 
 ### Prerequisites outside designer/
 
-- **P1** (for C, not blocking): ysp/experiment.h makes the format table's
+- **P1** (done in ysp/experiment.h 0.6.0, 2026-11-20): ysp/experiment.h makes the format table's
   section numbers and value types public (`yexp_row.section` and
   `yexp_row.type` as named enums), so `schema.h` drops its mirror. New
   public names, no layout change: 0.5.3 to 0.6.0, with docs/experiment.md,
   the README row, docs/status.md, the header's test and its mutation list.
-- **P2** (for C, not blocking): the format table's rows have no `unit` or
+- **P2** (done in ysp/experiment.h 0.6.0, 2026-11-20): the format table's rows have no `unit` or
   `doc` (G6's row shape has them). A panel shows a format-only key (a
   node's `repeat`, a state's `max_visits`) with its name and its default
   only. Adding `unit` and `doc` changes `yexp_row`'s layout: a minor

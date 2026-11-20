@@ -53,13 +53,45 @@ static void join_none(join* j) {
 /* Ids keep the joins of different tables apart. */
 enum { ID_RDK = 1000, ID_GFX = 2000, ID_GFXE = 3000, ID_RSP = 4000, ID_ST = 5000, ID_QST = 6000, ID_AEP = 7000, ID_SIG = 10000 };
 
-static void join_gfx(const char* key, join* j) {
+/* The gfx kind that draws a format kind, as a bit of ygfx_param.kinds; 0
+ * for a sound. A key of one name can mean another thing in another kind (a
+ * sound's offset is a frame, a shape's a distance), so a gfx row joins only
+ * the kinds it reads. */
+static uint32_t gfx_kind_bit(unsigned kind_bit) {
+    static const struct { int yexp; int ygfx; } map[] = {
+        { YEXP_SHAPE, YGFX_SHAPE }, { YEXP_GRATING, YGFX_GRATING }, { YEXP_GABOR, YGFX_GABOR }, { YEXP_NOISE, YGFX_NOISE },
+        { YEXP_IMAGE, YGFX_IMAGE }, { YEXP_VIDEO, YGFX_IMAGE }, { YEXP_TEXT, YGFX_TEXT }, { YEXP_ARTWORK, YGFX_TEXT },
+        { YEXP_RDK, YGFX_DOTS },
+    };
+    uint32_t out = 0;
+    int k;
+    for (k = 0; k < (int)(sizeof map / sizeof map[0]); k++)
+        if (kind_bit & (1u << map[k].yexp)) out |= 1u << map[k].ygfx;
+    return out;
+}
+
+static void join_gfx_table(const ygfx_param* rows, int n, const char* key, uint32_t gk, join* j, int id0) {
+    int i;
+    for (i = 0; rows && i < n; i++)
+        if ((rows[i].kinds & gk) && strcmp(rows[i].name, key) == 0) {
+            j->unit = rows[i].unit;
+            j->doc = rows[i].doc ? rows[i].doc : "";
+            j->min = rows[i].min;
+            j->max = rows[i].max;
+            j->from = "ysp/gfx.h";
+            j->id = id0 + i + 1;
+            return;
+        }
+}
+
+static void join_gfx(const char* key, unsigned kind_bit, join* j) {
     int n = 0;
+    const uint32_t gk = gfx_kind_bit(kind_bit);
     const ygfx_param* r = ygfx_params(&n);
-    FIND_ROW(ygfx_param, r, n, key, j, "ysp/gfx.h", ID_GFX, 1.0);
+    join_gfx_table(r, n, key, gk, j, ID_GFX);
     if (j->id) return;
     r = ygfx_enum_params(&n);
-    FIND_ROW(ygfx_param, r, n, key, j, "ysp/gfx.h", ID_GFXE, 1.0);
+    join_gfx_table(r, n, key, gk, j, ID_GFXE);
 }
 
 /* A stimulus key for one kind: rdk's own fields first, then gfx's, as the
@@ -72,7 +104,7 @@ static void join_stimulus(const char* key, unsigned kind_bit, join* j) {
         FIND_ROW(yrdk_param, r, n, key, j, "ysp/rdk.h", ID_RDK, 1.0);
         if (j->id) return;
     }
-    join_gfx(strcmp(key, "color") == 0 ? "color_r" : key, j);
+    join_gfx(strcmp(key, "color") == 0 ? "color_r" : key, kind_bit, j);
 }
 
 /* A response key: yrsp_desc's field. persist is response_ends_trial's
@@ -129,13 +161,13 @@ static void join_control(const char* key, unsigned kind_bit, join* j) {
 
 static void join_method(int section, const char* key, join* j) {
     int n = 0;
-    if (section == sec("stair method")) {
+    if (section == YEXP_S_STAIR) {
         const yst_param* r = yst_params(&n);
         FIND_ROW(yst_param, r, n, key, j, "ysp/stair.h", ID_ST, 1.0);
-    } else if (section == sec("quest method")) {
+    } else if (section == YEXP_S_QUEST) {
         const yqst_param* r = yqst_params(&n);
         FIND_ROW(yqst_param, r, n, key, j, "ysp/quest.h", ID_QST, 1.0);
-    } else if (section == sec("aep method")) {
+    } else if (section == YEXP_S_AEP) {
         const yaep_param* r = yaep_params(&n);
         FIND_ROW(yaep_param, r, n, key, j, "ysp/aep.h", ID_AEP, 1.0);
     }
@@ -145,14 +177,20 @@ static void join_method(int section, const char* key, join* j) {
 static void join_row(const yexp_row* r, unsigned kind_bit, join* j) {
     const int s = r->section;
     join_none(j);
-    if (s == sec("stimulus")) join_stimulus(r->key, kind_bit, j);
-    else if (s == sec("response") || s == sec("response with signal choices") || s == sec("choice")) join_response(r->key, j);
-    else if (s == sec("control")) join_control(r->key, kind_bit, j);
+    if (s == YEXP_S_STIM) join_stimulus(r->key, kind_bit, j);
+    else if (s == YEXP_S_RESPONSE || s == YEXP_S_SRESPONSE || s == YEXP_S_CHOICE) join_response(r->key, j);
+    else if (s == YEXP_S_CONTROL) join_control(r->key, kind_bit, j);
     else join_method(s, r->key, j);
+    /* The format's text names the key in the format's terms (a region's
+     * radius, not detect's level); its doc is empty only where a header's
+     * table is the text (ysp/experiment.h 0.6.0). A key no header has takes
+     * the format's unit too. */
+    if (r->doc && r->doc[0]) j->doc = r->doc;
+    if (!j->id && r->unit) j->unit = r->unit;
     /* a duration's unit is seconds whatever the header's (D4); an enum or a
      * bool has no range worth showing */
-    if (r->type == DSG_T_DUR) j->unit = "s";
-    if (r->type != DSG_T_NUM && r->type != DSG_T_INT && r->type != DSG_T_DUR) j->min = j->max = NAN;
+    if (r->type == YEXP_T_DUR) j->unit = "s";
+    if (r->type != YEXP_T_NUM && r->type != YEXP_T_INT && r->type != YEXP_T_DUR) j->min = j->max = NAN;
     if (!j->unit) j->unit = "";
 }
 
@@ -183,8 +221,8 @@ static unsigned refs_of(int section, const char* key, int type) {
         { "template", "record", DSG_REF_STIM },
     };
     int k;
-    if (type != DSG_T_NAME && type != DSG_T_NAMEZ && type != DSG_T_NAMES && type != DSG_T_REF && type != DSG_T_REFS &&
-        type != DSG_T_TARGETS && type != DSG_T_VAR)
+    if (type != YEXP_T_NAME && type != YEXP_T_NAMEZ && type != YEXP_T_NAMES && type != YEXP_T_REF && type != YEXP_T_REFS &&
+        type != YEXP_T_TARGETS && type != YEXP_T_VAR)
         return 0;
     for (k = 0; k < (int)(sizeof map / sizeof map[0]); k++)
         if (section == sec(map[k].section) && strcmp(map[k].key, key) == 0) return map[k].refs;
@@ -274,7 +312,7 @@ int dsg_schema_select(int section, unsigned kind_bit, const dsg_field** out, int
     int n, i, k = 0;
     const dsg_field* f = dsg_schema_fields(&n);
     for (i = 0; f && i < n; i++)
-        if (f[i].section == section && (f[i].kinds & kind_bit) && !(f[i].flags & DSG_R_STEP)) {
+        if (f[i].section == section && (f[i].kinds & kind_bit) && !(f[i].flags & YEXP_R_STEP)) {
             if (k < cap) out[k] = &f[i];
             k++;
         }
@@ -285,7 +323,7 @@ const dsg_field* dsg_schema_field(int section, unsigned kind_bit, const char* ke
     int n, i;
     const dsg_field* f = dsg_schema_fields(&n);
     for (i = 0; f && i < n; i++)
-        if (f[i].section == section && (f[i].kinds & kind_bit) && !(f[i].flags & DSG_R_STEP) && strcmp(f[i].key, key) == 0)
+        if (f[i].section == section && (f[i].kinds & kind_bit) && !(f[i].flags & YEXP_R_STEP) && strcmp(f[i].key, key) == 0)
             return &f[i];
     return NULL;
 }
@@ -357,31 +395,31 @@ static void finish(dsg_obj* o, const yjs_value* v) {
     o->kind[0] = 0;
     copy(o->keys, sizeof o->keys, o->path);
     switch (o->obj) {
-    case DSG_OBJ_FILE: o->section = sec("file"); break;
-    case DSG_OBJ_DISPLAY: o->section = sec("display"); break;
-    case DSG_OBJ_SESSION: o->section = sec("session"); break;
-    case DSG_OBJ_SFIELD: o->section = sec("session field"); break;
-    case DSG_OBJ_WEB: o->section = sec("web"); break;
-    case DSG_OBJ_EVROLE: o->section = sec("role"); break;
-    case DSG_OBJ_SIGROLE: o->section = sec("signal role"); break;
+    case DSG_OBJ_FILE: o->section = YEXP_S_ROOT; break;
+    case DSG_OBJ_DISPLAY: o->section = YEXP_S_DISPLAY; break;
+    case DSG_OBJ_SESSION: o->section = YEXP_S_SESSION; break;
+    case DSG_OBJ_SFIELD: o->section = YEXP_S_SFIELD; break;
+    case DSG_OBJ_WEB: o->section = YEXP_S_WEB; break;
+    case DSG_OBJ_EVROLE: o->section = YEXP_S_ROLE; break;
+    case DSG_OBJ_SIGROLE: o->section = YEXP_S_SIGROLE; break;
     case DSG_OBJ_STIMULUS:
-        o->section = sec("stimulus");
+        o->section = YEXP_S_STIM;
         k = str_of(v, "kind");
         o->kind_bit = kind_bit_of(o->section, "kind", k);
         break;
     case DSG_OBJ_METHOD:
         k = str_of(v, "type");
-        o->section = k ? (strcmp(k, "stair") == 0 ? sec("stair method") : strcmp(k, "quest") == 0 ? sec("quest method")
-                                                                          : strcmp(k, "aep") == 0 ? sec("aep method") : -1)
+        o->section = k ? (strcmp(k, "stair") == 0 ? YEXP_S_STAIR : strcmp(k, "quest") == 0 ? YEXP_S_QUEST
+                                                                          : strcmp(k, "aep") == 0 ? YEXP_S_AEP : -1)
                        : -1;
         if (o->section < 0) {
             /* no known type: only the type key shows */
-            o->section = sec("stair method");
+            o->section = YEXP_S_STAIR;
             o->kind_bit = 0;
         }
         break;
     case DSG_OBJ_CONTROL:
-        o->section = sec("control");
+        o->section = YEXP_S_CONTROL;
         k = str_of(v, "control");
         o->kind_bit = kind_bit_of(o->section, "control", k);
         break;
@@ -389,37 +427,37 @@ static void finish(dsg_obj* o, const yjs_value* v) {
         const yjs_value* rsp = v && v->type == YJS_OBJECT ? yjs_get(v, "response") : NULL;
         const bool states = v && v->type == YJS_OBJECT && yjs_get(v, "states");
         const bool key_answer = rsp && rsp->type == YJS_OBJECT && yjs_get(rsp, "key_answer");
-        o->section = sec("template");
+        o->section = YEXP_S_TEMPLATE;
         /* the template rows' kinds: 2 with states and no key_answer (3.11, D36) */
         o->kind_bit = states && !key_answer ? 2u : 1u;
         break;
     }
     case DSG_OBJ_RESPONSE:
-        o->section = has_signal_choices(v) ? sec("response with signal choices") : sec("response");
+        o->section = has_signal_choices(v) ? YEXP_S_SRESPONSE : YEXP_S_RESPONSE;
         break;
-    case DSG_OBJ_RTRIGGER: o->section = sec("response trigger"); break;
+    case DSG_OBJ_RTRIGGER: o->section = YEXP_S_RTRIGGER; break;
     case DSG_OBJ_CHOICE:
         /* a signal choice is {"signal": MOVEMENT} and nothing else (3.13) */
-        o->section = v && v->type == YJS_OBJECT && yjs_get(v, "signal") ? -1 : sec("choice");
+        o->section = v && v->type == YJS_OBJECT && yjs_get(v, "signal") ? -1 : YEXP_S_CHOICE;
         break;
-    case DSG_OBJ_STATE: o->section = sec("state"); break;
-    case DSG_OBJ_OVER: o->section = sec("over"); break;
-    case DSG_OBJ_EXIT: o->section = sec("exit"); o->kind_bit = 1u; break;
-    case DSG_OBJ_SHARED_EXIT: o->section = sec("exit"); o->kind_bit = 2u; break;
+    case DSG_OBJ_STATE: o->section = YEXP_S_STATE; break;
+    case DSG_OBJ_OVER: o->section = YEXP_S_OVER; break;
+    case DSG_OBJ_EXIT: o->section = YEXP_S_EXIT; o->kind_bit = 1u; break;
+    case DSG_OBJ_SHARED_EXIT: o->section = YEXP_S_EXIT; o->kind_bit = 2u; break;
     case DSG_OBJ_STEP: {
         const int op = step_op(v, &k);
-        o->section = sec("step");
+        o->section = YEXP_S_STEP;
         o->kind_bit = op >= 0 ? 1u << op : 0u;
         break;
     }
-    case DSG_OBJ_NODE: o->section = sec("node"); break;
-    case DSG_OBJ_LOOP: o->section = sec("loop"); break;
+    case DSG_OBJ_NODE: o->section = YEXP_S_NODE; break;
+    case DSG_OBJ_LOOP: o->section = YEXP_S_LOOP; break;
     case DSG_OBJ_VAR:
         if (v && v->type == YJS_OBJECT && yjs_get(v, "uniform")) {
-            o->section = sec("uniform");
+            o->section = YEXP_S_UNIFORM;
             k = "uniform";
         } else if (v && v->type == YJS_OBJECT && yjs_get(v, "walk2d")) {
-            o->section = sec("walk2d");
+            o->section = YEXP_S_WALK2D;
             k = "walk2d";
             dsg_path_key(o->keys, sizeof o->keys, o->path, "walk2d");
         } else if (v && v->type == YJS_OBJECT && yjs_get(v, "choice")) {
@@ -580,21 +618,21 @@ int dsg_schema_key_path(const dsg_obj* o, const char* key, char* out, size_t cap
 }
 
 static bool string_type(int t) {
-    return t == DSG_T_STR || t == DSG_T_ENUM || t == DSG_T_TEXT || t == DSG_T_RES || t == DSG_T_VAR || t == DSG_T_NAME ||
-           t == DSG_T_NAMEZ || t == DSG_T_REF;
+    return t == YEXP_T_STR || t == YEXP_T_ENUM || t == YEXP_T_TEXT || t == YEXP_T_RES || t == YEXP_T_VAR || t == YEXP_T_NAME ||
+           t == YEXP_T_NAMEZ || t == YEXP_T_REF;
 }
 
 bool dsg_schema_complex(int t) {
-    return t == DSG_T_ENUMS || t == DSG_T_VEC3 || t == DSG_T_NUMS || t == DSG_T_GRID || t == DSG_T_NAMES || t == DSG_T_STRS ||
-           t == DSG_T_TARGETS || t == DSG_T_SMAP || t == DSG_T_ANY || t == DSG_T_OBJ || t == DSG_T_SET || t == DSG_T_LIST ||
-           t == DSG_T_POINT || t == DSG_T_CENTER || t == DSG_T_TRANSFORM || t == DSG_T_REFS || t == DSG_T_SINES || t == DSG_T_BOX;
+    return t == YEXP_T_ENUMS || t == YEXP_T_VEC3 || t == YEXP_T_NUMS || t == YEXP_T_GRID || t == YEXP_T_NAMES || t == YEXP_T_STRS ||
+           t == YEXP_T_TARGETS || t == YEXP_T_SMAP || t == YEXP_T_ANY || t == YEXP_T_OBJ || t == YEXP_T_SET || t == YEXP_T_LIST ||
+           t == YEXP_T_POINT || t == YEXP_T_CENTER || t == YEXP_T_TRANSFORM || t == YEXP_T_REFS || t == YEXP_T_SINES || t == YEXP_T_BOX;
 }
 
 bool dsg_schema_fits(const dsg_field* f, const yjs_value* v) {
     if (!v) return true;
     switch (f->type) {
-    case DSG_T_NUM: case DSG_T_INT: case DSG_T_DUR: return v->type == YJS_NUMBER;
-    case DSG_T_BOOL: return v->type == YJS_TRUE || v->type == YJS_FALSE;
+    case YEXP_T_NUM: case YEXP_T_INT: case YEXP_T_DUR: return v->type == YJS_NUMBER;
+    case YEXP_T_BOOL: return v->type == YJS_TRUE || v->type == YJS_FALSE;
     default: break;
     }
     if (string_type(f->type)) return v->type == YJS_STRING && v->u.s[0] != '$';
@@ -675,22 +713,22 @@ static int write_in(dsg_doc* d, const char* path, const dsg_field* f, const char
     const size_t n = strlen(t);
     unsigned nf = 0;
     if ((how & DSG_WRITE_JSON) && (is_json(t) || t[0] == '"')) return set_checked(d, dsg_def_set(d, path, t, n), err, cap);
-    if (f->type == DSG_T_TEXT || f->type == DSG_T_STR || f->type == DSG_T_RES || f->type == DSG_T_NAMEZ ||
-        f->type == DSG_T_NAME || f->type == DSG_T_ENUM || f->type == DSG_T_REF || f->type == DSG_T_VAR) {
+    if (f->type == YEXP_T_TEXT || f->type == YEXP_T_STR || f->type == YEXP_T_RES || f->type == YEXP_T_NAMEZ ||
+        f->type == YEXP_T_NAME || f->type == YEXP_T_ENUM || f->type == YEXP_T_REF || f->type == YEXP_T_VAR) {
         return set_checked(d, dsg_def_set_string(d, path, t), err, cap);
     }
     if (t[0] == '$') return set_checked(d, dsg_def_set_string(d, path, t), err, cap);
     if (is_json(t)) return set_checked(d, dsg_def_set(d, path, t, n), err, cap);
     switch (f->type) {
-    case DSG_T_DUR: {
+    case YEXP_T_DUR: {
         int64_t ns = 0;
         if (yjs_parse_fixed(t, n, 9, &ns) != YJS_OK) return err_out(err, cap, "'%s' is not a number of seconds%s", t, "");
         return set_checked(d, dsg_def_set_seconds_ns(d, path, ns), err, cap);
     }
-    case DSG_T_NUM:
+    case YEXP_T_NUM:
         if (!yjs_number_ok(t, n, &nf)) return err_out(err, cap, "'%s' is not a number%s", t, "");
         return set_checked(d, dsg_def_set_number_text(d, path, t), err, cap);
-    case DSG_T_INT: {
+    case YEXP_T_INT: {
         int64_t x = 0;
         if (!yjs_number_ok(t, n, &nf) || yjs_parse_fixed(t, n, 0, &x) != YJS_OK)
             return err_out(err, cap, "'%s' is not an integer%s", t, "");
@@ -698,17 +736,17 @@ static int write_in(dsg_doc* d, const char* path, const dsg_field* f, const char
         if (!(nf & YJS_NUM_INT)) return set_checked(d, dsg_def_set_number_text(d, path, t), err, cap);
         return set_checked(d, dsg_def_set_int(d, path, x), err, cap);
     }
-    case DSG_T_BOOL:
+    case YEXP_T_BOOL:
         if (strcmp(t, "true") == 0) return set_checked(d, dsg_def_set_bool(d, path, true), err, cap);
         if (strcmp(t, "false") == 0) return set_checked(d, dsg_def_set_bool(d, path, false), err, cap);
         return err_out(err, cap, "'%s' is not true or false%s", t, "");
-    case DSG_T_VAL: case DSG_T_CODE: case DSG_T_OUTCOME:
+    case YEXP_T_VAL: case YEXP_T_CODE: case YEXP_T_OUTCOME:
         if (yjs_number_ok(t, n, &nf)) return set_checked(d, dsg_def_set_number_text(d, path, t), err, cap);
         if (strcmp(t, "true") == 0 || strcmp(t, "false") == 0) return set_checked(d, dsg_def_set_bool(d, path, t[0] == 't'), err, cap);
         return set_checked(d, dsg_def_set_string(d, path, t), err, cap);
     default:
         /* a list, a map or a form: JSON, or a bare name for a TARGETS key */
-        if (f->type == DSG_T_TARGETS) return set_checked(d, dsg_def_set_string(d, path, t), err, cap);
+        if (f->type == YEXP_T_TARGETS) return set_checked(d, dsg_def_set_string(d, path, t), err, cap);
         return set_checked(d, dsg_def_set(d, path, t, n), err, cap);
     }
 }
@@ -722,7 +760,7 @@ int dsg_schema_write(dsg_doc* d, const dsg_obj* o, const dsg_field* f, const cha
     t = (char*)malloc(n);
     if (!t) return err_out(err, cap, "out of memory%s%s", "", "");
     /* user text keeps its spaces; a typed number or name does not */
-    if ((f->type == DSG_T_TEXT || f->type == DSG_T_STR) && !(how & DSG_WRITE_JSON)) memcpy(t, text, n);
+    if ((f->type == YEXP_T_TEXT || f->type == YEXP_T_STR) && !(how & DSG_WRITE_JSON)) memcpy(t, text, n);
     else trim(text, t, n);
     snprintf(label, sizeof label, "Set %s", f->key);
     dsg_doc_begin(d, label);

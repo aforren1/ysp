@@ -322,6 +322,64 @@ static void check_reverse(void) {
     if (total < 90) FAIL("only %d stimulus rows", total);
 }
 
+/* --- units and texts (0.6.0) ------------------------------------------ */
+
+/* A stimulus or method key's row in a header's table, as the designer and
+ * the player's param host join them: rdk first for an rdk, then gfx's rows
+ * that read the kind; the method's own table. NULL: the format's own key. */
+static const char* source_unit(int section, unsigned kind, const char* key) {
+    int n = 0, i;
+    if (section == YEXP_S_STIM) {
+        const ygfx_param* p;
+        if (kind == YEXP_RDK) {
+            const yrdk_param* r = yrdk_params(&n);
+            for (i = 0; i < n; i++) if (!strcmp(r[i].name, key)) return r[i].unit;
+        }
+        if (!strcmp(key, "color")) key = "color_r";
+        p = ygfx_params(&n);
+        for (i = 0; i < n; i++) if ((gfx_mask(p[i].kinds) & (1u << kind)) && !strcmp(p[i].name, key)) return p[i].unit;
+        p = ygfx_enum_params(&n);
+        for (i = 0; i < n; i++) if ((gfx_mask(p[i].kinds) & (1u << kind)) && !strcmp(p[i].name, key)) return p[i].unit;
+        return NULL;
+    }
+#define SRC_(T, get) do { const T* r_ = get(&n); for (i = 0; i < n; i++) if (!strcmp(r_[i].name, key)) return r_[i].unit; } while (0)
+    if (section == YEXP_S_STAIR) SRC_(yst_param, yst_params);
+    if (section == YEXP_S_QUEST) SRC_(yqst_param, yqst_params);
+    if (section == YEXP_S_AEP) SRC_(yaep_param, yaep_params);
+#undef SRC_
+    return NULL;
+}
+
+/* A stimulus or method row's doc is empty exactly when a header's table has
+ * the key for every kind of the row, and then its unit is that table's. */
+static void check_units(void) {
+    int v, n = 0, i;
+    for (v = 1; v <= 2; v++) {
+        const yexp_row* rows = yexp_defaults(v, &n);
+        for (i = 0; i < n; i++) {
+            const yexp_row* r = &rows[i];
+            unsigned k;
+            int have = 0, kinds = 0, unit_ok = 1;
+            if (r->section != YEXP_S_STIM && r->section != YEXP_S_STAIR && r->section != YEXP_S_QUEST && r->section != YEXP_S_AEP) continue;
+            for (k = 0; k < 16; k++) {
+                const char* u;
+                if (r->section == YEXP_S_STIM ? !(r->kinds & (1u << k)) : k != 0) continue;
+                kinds++;
+                u = source_unit(r->section, k, r->key);
+                if (!u) continue;
+                have++;
+                if (strcmp(u, r->unit) != 0 && r->type != YEXP_T_DUR) unit_ok = 0;
+            }
+            g_checks++;
+            if ((have == kinds) != (r->doc[0] == 0))
+                FAIL("%s %s: a header's table has it for %d of %d kinds, and the doc is \"%s\"", yexp_section_name(r->section), r->key, have,
+                     kinds, r->doc);
+            g_checks++;
+            if (!unit_ok) FAIL("%s %s: the unit %s is not the header's", yexp_section_name(r->section), r->key, r->unit);
+        }
+    }
+}
+
 int main(void) {
     check_gfx();
     check_rdk();
@@ -329,6 +387,7 @@ int main(void) {
     check_response();
     check_timeline();
     check_reverse();
+    check_units();
     if (g_failures) {
         fprintf(stderr, "experiment_tables_test: %d failure(s) in %d checks\n", g_failures, g_checks);
         return 1;

@@ -1,4 +1,4 @@
-/* ysp/experiment.h - v0.5.3 - public domain single-header loader for experiment definitions
+/* ysp/experiment.h - v0.6.0 - public domain single-header loader for experiment definitions
  *
  *   Reads a ysp experiment definition of format version 1 or 2
  *   (docs/experiment_format.md, the pack's EXPERIMENT entry) into a checked,
@@ -153,6 +153,15 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.6.0 - the format table for a designer (2026-11-20): yexp_section,
+ *          yexp_row_type and the YEXP_R_* flags are public (were internal
+ *          YEXP__S_*, YEXP__T_*, YEXP__R_*; the numbers do not change), so a
+ *          reader needs no mirror of them. yexp_row gains unit and doc after
+ *          def, as the parameter tables' rows have (G6): every format key
+ *          has its text from docs/experiment_format.md, and a stimulus or
+ *          method key that a header's table has holds that table's unit and
+ *          an empty doc. A layout change of yexp_row, so a minor bump. The
+ *          loader, the canonical bytes and the IDs do not change.
  *   v0.5.3 - no behavior change (2026-11-16): a uniform's width is
  *          tested finite by comparisons, not isfinite(), whose
  *          MinGW-w64 macro fails -Wfloat-conversion on a double.
@@ -250,7 +259,7 @@
  *   v0.1.0 - first version: the loader for format version 1, its defaults
  *          table, the host interface and the canonical writer.
  *
- *   STATUS: v0.5.3 (2026-11-16). Tested; the player (docs/player.md) uses
+ *   STATUS: v0.6.0 (2026-11-20). Tested; the player (docs/player.md) uses
  *   it for both versions. A version 2 file with a signal role runs on --sim
  *   only (the rig profile has no adapter block, G18); one with none runs in
  *   a real window too.
@@ -263,9 +272,9 @@
 #define YSP_EXPERIMENT_H_INCLUDED
 
 #define YEXP_VERSION_MAJOR 0
-#define YEXP_VERSION_MINOR 5
-#define YEXP_VERSION_PATCH 3
-#define YEXP_VERSION_STRING "0.5.3"
+#define YEXP_VERSION_MINOR 6
+#define YEXP_VERSION_PATCH 0
+#define YEXP_VERSION_STRING "0.6.0"
 
 /* The newest format version this header reads (D12). */
 #define YEXP_FORMAT_VERSION 2
@@ -754,13 +763,92 @@ typedef struct yexp_host {
 
 /* --- the format's table of keys and defaults (D2) ---------------------- */
 
+/* A row's section: what object of the definition has the key. Its name is
+ * yexp_section_name(). A new section or type goes before its _COUNT, so a
+ * number that a reader kept keeps its meaning. */
+typedef enum yexp_section {
+    YEXP_S_ROOT,       /* "file": the definition's top-level object          */
+    YEXP_S_DISPLAY, YEXP_S_SESSION,
+    YEXP_S_SFIELD,     /* "session field": one of session.fields            */
+    YEXP_S_WEB,
+    YEXP_S_ROLE,       /* "role": an event role, a member of `devices`       */
+    YEXP_S_STIM, YEXP_S_STAIR, YEXP_S_QUEST, YEXP_S_AEP, YEXP_S_TEMPLATE, YEXP_S_RESPONSE,
+    YEXP_S_RTRIGGER,   /* "response trigger": a response's `trigger`         */
+    YEXP_S_CHOICE,     /* a key response's choice object                     */
+    YEXP_S_NODE, YEXP_S_LOOP, YEXP_S_STEP,
+    /* format version 2 */
+    YEXP_S_SIGROLE,    /* "signal role": a member of `roles`                 */
+    YEXP_S_CONTROL, YEXP_S_STATE, YEXP_S_OVER,
+    YEXP_S_EXIT,       /* kinds bit 0: a state's own exit; bit 1: a shared one */
+    YEXP_S_SRESPONSE,  /* "response with signal choices" (3.13)              */
+    YEXP_S_UNIFORM, YEXP_S_WALK2D,  /* the `vars` forms of 3.14              */
+    YEXP_S_COUNT
+} yexp_section;
+
+/* A row's value type: what the loader takes for the key. */
+typedef enum yexp_row_type {
+    YEXP_T_NUM,        /* a number, a variable, a lookup, a gamut            */
+    YEXP_T_INT,        /* an integer, a variable, a lookup                   */
+    YEXP_T_DUR,        /* a duration in seconds (D4); the form holds ns      */
+    YEXP_T_BOOL,       /* true or false                                      */
+    YEXP_T_STR,        /* a literal string                                   */
+    YEXP_T_ENUM,       /* one name of the row's `values`                     */
+    YEXP_T_ENUMS,      /* an array of names of the row's `values`            */
+    YEXP_T_TEXT,       /* a string, a variable, a lookup (a text's `text`)   */
+    YEXP_T_RES,        /* a pack entry's name                                */
+    YEXP_T_VEC3,       /* [r, g, b]                                          */
+    YEXP_T_NUMS,       /* an array of numbers                                */
+    YEXP_T_GRID,       /* quest's axes: numbers, arrays of numbers, linspaces */
+    YEXP_T_VAL,        /* any value of 2.2                                   */
+    YEXP_T_CODE,       /* a trigger code: an integer from 0, a variable, a lookup */
+    YEXP_T_VAR,        /* a boolean variable, "$name"                        */
+    YEXP_T_NAME,       /* a name, [A-Za-z_][A-Za-z0-9_]*                     */
+    YEXP_T_NAMEZ,      /* a name or ""                                       */
+    YEXP_T_NAMES,      /* an array of names                                  */
+    YEXP_T_STRS,       /* an array of strings                                */
+    YEXP_T_TARGETS,    /* a name or an array of names (`on`, `off`)          */
+    YEXP_T_SMAP,       /* an object of strings                               */
+    YEXP_T_ANY,        /* any JSON, recorded only                            */
+    YEXP_T_OBJ,        /* an object with a section of its own                */
+    YEXP_T_SET,        /* an object of named members                         */
+    YEXP_T_LIST,       /* an array of objects                                */
+    /* format version 2 */
+    YEXP_T_POINT,      /* [x, y]: numbers or variables; a variable; a lookup */
+    YEXP_T_CENTER,     /* a point, or {"signal": NAME} (a region's center)   */
+    YEXP_T_TRANSFORM,  /* "identity", {"rotation_deg": A}, {"mirror_deg": A}, a lookup */
+    YEXP_T_REF,        /* a name with an optional lane: "hand", "hand.x"     */
+    YEXP_T_REFS,       /* an array of them                                   */
+    YEXP_T_SINES,      /* a moving target's lane: its builder reads it       */
+    YEXP_T_BOX,        /* walk2d's [[x0, y0], [x1, y1]]: literal numbers     */
+    YEXP_T_OUTCOME,    /* an exit's or over's outcome: text, integer, boolean */
+    YEXP_T_COUNT
+} yexp_row_type;
+
+/* A row's flags. */
+#define YEXP_R_REQ  0x01u   /* required                                     */
+#define YEXP_R_LIT  0x02u   /* a literal, never a variable or lookup        */
+#define YEXP_R_NONE 0x04u   /* optional, with no default                    */
+#define YEXP_R_SELF 0x08u   /* the section's builder writes the canonical key */
+#define YEXP_R_STEP 0x10u   /* version 2: a step's property, no stimulus key (D41) */
+
+/* unit and doc follow the parameter tables' row shape (G6; conventions.md,
+ * "Parameter tables"), so a designer reads a format key as it reads a
+ * header's field. A duration's unit is "s". A stimulus or method key that a
+ * header's parameter table has (gfx, rdk, stair, quest, aep; format 2.7,
+ * 2.8) holds that table's unit and an empty doc: the header's row is the
+ * one text, so the two cannot drift apart. */
 typedef struct yexp_row {
-    uint8_t     section;       /* internal section number                    */
-    uint16_t    kinds;         /* stimuli: bit 1 << kind; steps: bit 1 << op */
-    uint8_t     type;          /* internal value type                        */
-    uint8_t     flags;
+    uint8_t     section;       /* yexp_section                               */
+    uint16_t    kinds;         /* stimuli, controls: bit 1 << kind; steps:
+                                * bit 1 << op; exits: 1 own, 2 shared;
+                                * templates: 2 with states and no key_answer,
+                                * 1 the others; 0xffff: all                 */
+    uint8_t     type;          /* yexp_row_type                              */
+    uint8_t     flags;         /* YEXP_R_*                                   */
     const char* key;
     const char* def;           /* canonical JSON text; NULL: no default      */
+    const char* unit;          /* "" for none                                */
+    const char* doc;           /* one line; "" when a header's table has it  */
     const char* values;        /* an enum's "name=value,..."; NULL otherwise */
 } yexp_row;
 
@@ -830,419 +918,385 @@ YEXP_API const char* yexp_version(void) { return YEXP_VERSION_STRING; }
  * makes an error (the CI's MinGW build of the player). */
 static bool yexp__finite(double x) { return x > -HUGE_VAL && x < HUGE_VAL; }
 
-/* Sections of the table. */
-enum {
-    YEXP__S_ROOT, YEXP__S_DISPLAY, YEXP__S_SESSION, YEXP__S_SFIELD, YEXP__S_WEB, YEXP__S_ROLE,
-    YEXP__S_STIM, YEXP__S_STAIR, YEXP__S_QUEST, YEXP__S_AEP, YEXP__S_TEMPLATE, YEXP__S_RESPONSE,
-    YEXP__S_RTRIGGER, YEXP__S_CHOICE, YEXP__S_NODE, YEXP__S_LOOP, YEXP__S_STEP,
-    /* format version 2 */
-    YEXP__S_SIGROLE, YEXP__S_CONTROL, YEXP__S_STATE, YEXP__S_OVER, YEXP__S_EXIT, YEXP__S_SRESPONSE,
-    YEXP__S_UNIFORM, YEXP__S_WALK2D, YEXP__S_COUNT
-};
-
-/* Value types of a row. */
-enum {
-    YEXP__T_NUM, YEXP__T_INT, YEXP__T_DUR, YEXP__T_BOOL, YEXP__T_STR, YEXP__T_ENUM, YEXP__T_ENUMS,
-    YEXP__T_TEXT, YEXP__T_RES, YEXP__T_VEC3, YEXP__T_NUMS, YEXP__T_GRID, YEXP__T_VAL, YEXP__T_CODE,
-    YEXP__T_VAR, YEXP__T_NAME, YEXP__T_NAMEZ, YEXP__T_NAMES, YEXP__T_STRS, YEXP__T_TARGETS,
-    YEXP__T_SMAP, YEXP__T_ANY, YEXP__T_OBJ, YEXP__T_SET, YEXP__T_LIST,
-    /* format version 2 */
-    YEXP__T_POINT,      /* [x, y]: numbers or variables; a variable; a lookup */
-    YEXP__T_CENTER,     /* a point, or {"signal": NAME} (a region's center)   */
-    YEXP__T_TRANSFORM,  /* "identity", {"rotation_deg": A}, {"mirror_deg": A}, a lookup */
-    YEXP__T_REF,        /* a name with an optional lane: "hand", "hand.x"     */
-    YEXP__T_REFS,       /* an array of them                                   */
-    YEXP__T_SINES,      /* a moving target's lane: its builder reads it       */
-    YEXP__T_BOX,        /* walk2d's [[x0, y0], [x1, y1]]: literal numbers     */
-    YEXP__T_OUTCOME     /* an exit's or over's outcome: text, integer, boolean */
-};
-
-/* Flags of a row. */
-#define YEXP__R_REQ  0x01u   /* required                                     */
-#define YEXP__R_LIT  0x02u   /* a literal, never a variable or lookup        */
-#define YEXP__R_NONE 0x04u   /* optional, with no default                    */
-#define YEXP__R_SELF 0x08u   /* the section's builder writes the canonical key */
-#define YEXP__R_STEP 0x10u   /* version 2: a step's property, no stimulus key (D41) */
-
 /* Blocks that both versions' tables share. */
 #define YEXP__ROWS_SESSION_ROLE \
-    { YEXP__S_SESSION, 0xffff, YEXP__T_SET, YEXP__R_REQ, "fields", NULL, NULL }, \
-    { YEXP__S_SFIELD, 0xffff, YEXP__T_BOOL, YEXP__R_REQ, "required", NULL, NULL }, \
-    { YEXP__S_SFIELD, 0xffff, YEXP__T_ENUM, YEXP__R_REQ, "type", NULL, "integer=0,string=1" }, \
-    { YEXP__S_WEB, 0xffff, YEXP__T_BOOL, 0, "allowed", "false", NULL }, \
-    { YEXP__S_WEB, 0xffff, YEXP__T_ANY, YEXP__R_NONE, "exclusion", NULL, NULL }, \
-    { YEXP__S_ROLE, 0xffff, YEXP__T_SMAP, 0, "buttons", "{}", NULL }, \
-    { YEXP__S_ROLE, 0xffff, YEXP__T_ENUM, YEXP__R_REQ, "direction", NULL, "in=0,out=1,both=2" }, \
-    { YEXP__S_ROLE, 0xffff, YEXP__T_STRS, YEXP__R_REQ, "family", NULL, NULL }, \
-    { YEXP__S_ROLE, 0xffff, YEXP__T_STR, 0, "kind", "\"\"", NULL }, \
-    { YEXP__S_ROLE, 0xffff, YEXP__T_SMAP, 0, "map", "{}", NULL }, \
-    { YEXP__S_ROLE, 0xffff, YEXP__T_INT, YEXP__R_LIT, "min_tier", "0", NULL }, \
-    { YEXP__S_ROLE, 0xffff, YEXP__T_DUR, 0, "pulse_s", "0", NULL }, \
-    { YEXP__S_ROLE, 0xffff, YEXP__T_BOOL, 0, "required", "true", NULL },
+    { YEXP_S_SESSION, 0xffff, YEXP_T_SET, YEXP_R_REQ, "fields", NULL, "", "the session fields by name, each with its type and required", NULL }, \
+    { YEXP_S_SFIELD, 0xffff, YEXP_T_BOOL, YEXP_R_REQ, "required", NULL, "", "the session does not start without a value", NULL }, \
+    { YEXP_S_SFIELD, 0xffff, YEXP_T_ENUM, YEXP_R_REQ, "type", NULL, "", "the type of the operator's value", "integer=0,string=1" }, \
+    { YEXP_S_WEB, 0xffff, YEXP_T_BOOL, 0, "allowed", "false", "", "the web player can run the experiment", NULL }, \
+    { YEXP_S_WEB, 0xffff, YEXP_T_ANY, YEXP_R_NONE, "exclusion", NULL, "", "the web's exclusion criteria; recorded, not applied", NULL }, \
+    { YEXP_S_ROLE, 0xffff, YEXP_T_SMAP, 0, "buttons", "{}", "", "the device's button numbers to button names", NULL }, \
+    { YEXP_S_ROLE, 0xffff, YEXP_T_ENUM, YEXP_R_REQ, "direction", NULL, "", "in: the device gives input; out: it takes triggers; both: both", "in=0,out=1,both=2" }, \
+    { YEXP_S_ROLE, 0xffff, YEXP_T_STRS, YEXP_R_REQ, "family", NULL, "", "the device families that can bind the role; the first that the rig has binds", NULL }, \
+    { YEXP_S_ROLE, 0xffff, YEXP_T_STR, 0, "kind", "\"\"", "", "what the input is, for example sync (a scanner's pulse); \"\" for none", NULL }, \
+    { YEXP_S_ROLE, 0xffff, YEXP_T_SMAP, 0, "map", "{}", "", "a family's options, for example the keyboard key of a scanner's pulse", NULL }, \
+    { YEXP_S_ROLE, 0xffff, YEXP_T_INT, YEXP_R_LIT, "min_tier", "0", "", "the timing tier, 1 to 3, that the device must reach; 0: none", NULL }, \
+    { YEXP_S_ROLE, 0xffff, YEXP_T_DUR, 0, "pulse_s", "0", "s", "an output's pulse width", NULL }, \
+    { YEXP_S_ROLE, 0xffff, YEXP_T_BOOL, 0, "required", "true", "", "the session does not start without the role bound", NULL },
 #define YEXP__ROWS_STIM_A \
-    { YEXP__S_STIM, 0x0210, YEXP__T_INT, 0, "add", "0", NULL }, \
-    { YEXP__S_STIM, 0x0200, YEXP__T_INT, 0, "ahead", "6", NULL }, \
-    { YEXP__S_STIM, 0x0080, YEXP__T_ENUM, 0, "algorithm", "\"custom\"", "custom=0,wn=1,mn=2,ll=3,bm=4" }, \
-    { YEXP__S_STIM, 0x0060, YEXP__T_INT, 0, "aliased", "0", NULL }, \
-    { YEXP__S_STIM, 0x0020, YEXP__T_ENUM, YEXP__R_LIT, "align", "\"start\"", "start=0,end=1,center=2" }, \
-    { YEXP__S_STIM, 0x02ff, YEXP__T_ENUM, 0, "anchor", "\"center\"", "center=0,top_left=1,top=2,top_right=3,left=4,right=5,bottom_left=6,bottom=7,bottom_right=8" }, \
-    { YEXP__S_STIM, 0x000a, YEXP__T_ENUM, 0, "aperture", "\"rect\"", "rect=0,circle=1,annulus=2,line=3,polygon=4,cross=5,no_aperture=6,mask_tex=7" }, \
-    { YEXP__S_STIM, 0x0080, YEXP__T_ENUM, 0, "aperture", "\"circle\"", "circle=0,rect=1" }, \
-    { YEXP__S_STIM, 0x0040, YEXP__T_RES, YEXP__R_REQ, "artwork", NULL, NULL }, \
-    { YEXP__S_STIM, 0x0004, YEXP__T_NUM, 0, "aspect", "1", NULL }, \
-    { YEXP__S_STIM, 0x0100, YEXP__T_RES, YEXP__R_REQ, "audio", NULL, NULL }, \
-    { YEXP__S_STIM, 0x02ff, YEXP__T_NUM, 0, "ax", "0.5", NULL }, \
-    { YEXP__S_STIM, 0x02ff, YEXP__T_NUM, 0, "ay", "0.5", NULL }, \
-    { YEXP__S_STIM, 0x0200, YEXP__T_INT, 0, "base", "0", NULL }, \
-    { YEXP__S_STIM, 0x0061, YEXP__T_ENUM, 0, "blend", "\"over\"", "over=0,add=1,multiply=2" }, \
-    { YEXP__S_STIM, 0x0001, YEXP__T_ENUM, 0, "cap", "\"butt\"", "butt=0,round=1,square=2" }, \
-    { YEXP__S_STIM, 0x0100, YEXP__T_INT, 0, "channels", "0", NULL }, \
-    { YEXP__S_STIM, 0x0008, YEXP__T_NUM, 0, "check", "1", NULL }, \
-    { YEXP__S_STIM, 0x0200, YEXP__T_ENUM, 0, "chroma", "\"sited\"", "sited=0,nearest=1" }, \
-    { YEXP__S_STIM, 0x0080, YEXP__T_ENUM, 0, "clock", "\"onset\"", "onset=0,frames=1" }, \
-    { YEXP__S_STIM, 0x0080, YEXP__T_NUM, 0, "coherence", "0", NULL }, \
-    { YEXP__S_STIM, 0x02f1, YEXP__T_VEC3, 0, "color", "[0,0,0]", NULL }, \
-    { YEXP__S_STIM, 0x021e, YEXP__T_NUM, 0, "contrast", "1", NULL }, \
-    { YEXP__S_STIM, 0x0080, YEXP__T_INT, 0, "count", "0", NULL }, \
-    { YEXP__S_STIM, 0x0210, YEXP__T_INT, 0, "coverage", "0", NULL }, \
-    { YEXP__S_STIM, 0x0001, YEXP__T_NUM, 0, "dash", "0", NULL }, \
-    { YEXP__S_STIM, 0x0001, YEXP__T_NUM, 0, "dash_offset", "0", NULL }, \
-    { YEXP__S_STIM, 0x0001, YEXP__T_INT, 0, "dash_snap", "0", NULL }, \
-    { YEXP__S_STIM, 0x0100, YEXP__T_NUM, 0, "db", "0", NULL }, \
-    { YEXP__S_STIM, 0x0200, YEXP__T_INT, 0, "decode_threads", "0", NULL }, \
-    { YEXP__S_STIM, 0x0080, YEXP__T_NUM, 0, "density", "0", NULL }, \
-    { YEXP__S_STIM, 0x0020, YEXP__T_ENUM, YEXP__R_LIT, "dir", "\"auto\"", "auto=0,ltr=1,rtl=2" }, \
-    { YEXP__S_STIM, 0x021e, YEXP__T_NUM, 0, "dir_b", "0", NULL }, \
-    { YEXP__S_STIM, 0x021e, YEXP__T_NUM, 0, "dir_g", "0", NULL }, \
-    { YEXP__S_STIM, 0x021e, YEXP__T_NUM, 0, "dir_r", "0", NULL }, \
-    { YEXP__S_STIM, 0x0080, YEXP__T_NUM, 0, "direction", "0", NULL }, \
-    { YEXP__S_STIM, 0x0008, YEXP__T_ENUM, 0, "dist", "\"uniform\"", "uniform=0,binary=1,gaussian=2,simplex=3" }, \
-    { YEXP__S_STIM, 0x0080, YEXP__T_NUM, 0, "dot_size", "0", NULL }, \
-    { YEXP__S_STIM, 0x000b, YEXP__T_ENUM, 0, "edge", "\"hard\"", "hard=0,cosine=1,gaussian=2" }, \
-    { YEXP__S_STIM, 0x0080, YEXP__T_ENUM, 0, "edge", "\"wrap\"", "wrap=0,replot=1" }, \
-    { YEXP__S_STIM, 0x008b, YEXP__T_NUM, 0, "edge_width", "0", NULL }, \
-    { YEXP__S_STIM, 0x0020, YEXP__T_STR, YEXP__R_REQ | YEXP__R_LIT, "font", NULL, NULL }, \
-    { YEXP__S_STIM, 0x0080, YEXP__T_DUR, 0, "frame_s", "0", NULL }, \
-    { YEXP__S_STIM, 0x0100, YEXP__T_INT, 0, "frames", "0", NULL }, \
-    { YEXP__S_STIM, 0x0001, YEXP__T_NUM, 0, "gap", "0", NULL }, \
-    { YEXP__S_STIM, 0x02ff, YEXP__T_NUM, 0, "gate", "1", NULL }, \
-    { YEXP__S_STIM, 0x0200, YEXP__T_ENUM, 0, "gpu_path", "\"auto\"", "auto=0,upload=1,shared=2,gpu=3" }, \
-    { YEXP__S_STIM, 0x02ff, YEXP__T_NUM, 0, "h", "0", NULL }, \
-    { YEXP__S_STIM, 0x0200, YEXP__T_ENUM, 0, "hw_decode", "\"auto\"", "auto=0,off=1,dxva=2,videotoolbox=3,vaapi=4" }, \
-    { YEXP__S_STIM, 0x0001, YEXP__T_ENUM, 0, "join", "\"round\"", "round=0,miter=1,bevel=2" }, \
-    { YEXP__S_STIM, 0x03ff, YEXP__T_ENUM, YEXP__R_REQ, "kind", NULL, "shape=0,grating=1,gabor=2,noise=3,image=4,text=5,artwork=6,rdk=7,sound=8,video=9" }, \
-    { YEXP__S_STIM, 0x0020, YEXP__T_STR, YEXP__R_LIT, "lang", "\"\"", NULL }, \
-    { YEXP__S_STIM, 0x02ff, YEXP__T_INT, 0, "layer", "0", NULL }, \
-    { YEXP__S_STIM, 0x0200, YEXP__T_NUM, 0, "lead", "0.5", NULL }, \
-    { YEXP__S_STIM, 0x0080, YEXP__T_INT, 0, "lifetime_frames", "0", NULL }, \
-    { YEXP__S_STIM, 0x0080, YEXP__T_DUR, 0, "lifetime_s", "0", NULL }, \
-    { YEXP__S_STIM, 0x0200, YEXP__T_ENUM, 0, "light", "\"auto\"", "auto=0,codes=1,eotf=2" }, \
-    { YEXP__S_STIM, 0x0020, YEXP__T_NUM, YEXP__R_LIT, "line_height", "0", NULL }, \
-    { YEXP__S_STIM, 0x0210, YEXP__T_INT, 0, "linear", "0", NULL }, \
-    { YEXP__S_STIM, 0x0200, YEXP__T_BOOL, 0, "loop", "false", NULL }, \
-    { YEXP__S_STIM, 0x0100, YEXP__T_INT, 0, "loops", "0", NULL }, \
-    { YEXP__S_STIM, 0x0200, YEXP__T_INT, 0, "min_tier", "0", NULL }, \
-    { YEXP__S_STIM, 0x008b, YEXP__T_NUM, 0, "miter_limit", "4", NULL }, \
-    { YEXP__S_STIM, 0x0210, YEXP__T_INT, 0, "modulation", "0", NULL }, \
-    { YEXP__S_STIM, 0x0200, YEXP__T_INT, 0, "movie_index", "0", NULL }, \
-    { YEXP__S_STIM, 0x0080, YEXP__T_ENUM, 0, "noise", "\"direction\"", "direction=0,position=1,walk=2" }, \
-    { YEXP__S_STIM, 0x0008, YEXP__T_NUM, 0, "noise_gain", "0.5", NULL }, \
-    { YEXP__S_STIM, 0x0008, YEXP__T_NUM, 0, "noise_lacunarity", "2", NULL }, \
-    { YEXP__S_STIM, 0x0008, YEXP__T_NUM, 0, "noise_scale", "0", NULL }, \
-    { YEXP__S_STIM, 0x0008, YEXP__T_NUM, 0, "noise_z", "0", NULL }, \
-    { YEXP__S_STIM, 0x0008, YEXP__T_INT, 0, "octaves", "1", NULL }, \
-    { YEXP__S_STIM, 0x0001, YEXP__T_NUM, 0, "offset", "0", NULL }, \
-    { YEXP__S_STIM, 0x0100, YEXP__T_INT, 0, "offset", "0", NULL }, \
-    { YEXP__S_STIM, 0x02f1, YEXP__T_NUM, 0, "opacity", "1", NULL }, \
-    { YEXP__S_STIM, 0x02ff, YEXP__T_NUM, 0, "ori", "0", NULL }, \
-    { YEXP__S_STIM, 0x0001, YEXP__T_NUM, 0, "p0", "0", NULL }, \
-    { YEXP__S_STIM, 0x0001, YEXP__T_NUM, 0, "p1", "0", NULL }, \
-    { YEXP__S_STIM, 0x0001, YEXP__T_NUM, 0, "p10", "0", NULL }, \
-    { YEXP__S_STIM, 0x0001, YEXP__T_NUM, 0, "p11", "0", NULL }, \
-    { YEXP__S_STIM, 0x0001, YEXP__T_NUM, 0, "p12", "0", NULL }, \
-    { YEXP__S_STIM, 0x0001, YEXP__T_NUM, 0, "p13", "0", NULL }, \
-    { YEXP__S_STIM, 0x0001, YEXP__T_NUM, 0, "p14", "0", NULL }, \
-    { YEXP__S_STIM, 0x0001, YEXP__T_NUM, 0, "p15", "0", NULL }, \
-    { YEXP__S_STIM, 0x0001, YEXP__T_NUM, 0, "p16", "0", NULL }, \
-    { YEXP__S_STIM, 0x0001, YEXP__T_NUM, 0, "p17", "0", NULL }, \
-    { YEXP__S_STIM, 0x0001, YEXP__T_NUM, 0, "p18", "0", NULL }, \
-    { YEXP__S_STIM, 0x0001, YEXP__T_NUM, 0, "p19", "0", NULL }, \
-    { YEXP__S_STIM, 0x0001, YEXP__T_NUM, 0, "p2", "0", NULL }, \
-    { YEXP__S_STIM, 0x0001, YEXP__T_NUM, 0, "p20", "0", NULL }, \
-    { YEXP__S_STIM, 0x0001, YEXP__T_NUM, 0, "p21", "0", NULL }, \
-    { YEXP__S_STIM, 0x0001, YEXP__T_NUM, 0, "p22", "0", NULL }, \
-    { YEXP__S_STIM, 0x0001, YEXP__T_NUM, 0, "p23", "0", NULL }, \
-    { YEXP__S_STIM, 0x0001, YEXP__T_NUM, 0, "p24", "0", NULL }, \
-    { YEXP__S_STIM, 0x0001, YEXP__T_NUM, 0, "p25", "0", NULL }, \
-    { YEXP__S_STIM, 0x0001, YEXP__T_NUM, 0, "p26", "0", NULL }, \
-    { YEXP__S_STIM, 0x0001, YEXP__T_NUM, 0, "p27", "0", NULL }, \
-    { YEXP__S_STIM, 0x0001, YEXP__T_NUM, 0, "p28", "0", NULL }, \
-    { YEXP__S_STIM, 0x0001, YEXP__T_NUM, 0, "p29", "0", NULL }, \
-    { YEXP__S_STIM, 0x0001, YEXP__T_NUM, 0, "p3", "0", NULL }, \
-    { YEXP__S_STIM, 0x0001, YEXP__T_NUM, 0, "p30", "0", NULL }, \
-    { YEXP__S_STIM, 0x0001, YEXP__T_NUM, 0, "p31", "0", NULL }, \
-    { YEXP__S_STIM, 0x0001, YEXP__T_NUM, 0, "p4", "0", NULL }, \
-    { YEXP__S_STIM, 0x0001, YEXP__T_NUM, 0, "p5", "0", NULL }, \
-    { YEXP__S_STIM, 0x0001, YEXP__T_NUM, 0, "p6", "0", NULL }, \
-    { YEXP__S_STIM, 0x0001, YEXP__T_NUM, 0, "p7", "0", NULL }, \
-    { YEXP__S_STIM, 0x0001, YEXP__T_NUM, 0, "p8", "0", NULL }, \
-    { YEXP__S_STIM, 0x0001, YEXP__T_NUM, 0, "p9", "0", NULL }, \
-    { YEXP__S_STIM, 0x0006, YEXP__T_NUM, 0, "phase", "0", NULL }, \
-    { YEXP__S_STIM, 0x0200, YEXP__T_INT, 0, "pin_cpu", "0", NULL }, \
-    { YEXP__S_STIM, 0x02ff, YEXP__T_ENUM, 0, "place", "\"center\"", "center=0,top_left=1,top=2,top_right=3,left=4,right=5,bottom_left=6,bottom=7,bottom_right=8" }, \
-    { YEXP__S_STIM, 0x0210, YEXP__T_INT, 0, "premultiplied", "0", NULL }, \
-    { YEXP__S_STIM, 0x0200, YEXP__T_INT, 0, "preroll", "6", NULL }, \
-    { YEXP__S_STIM, 0x0060, YEXP__T_INT, 0, "rays", "0", NULL }, \
-    { YEXP__S_STIM, 0x0008, YEXP__T_INT, 0, "seed", "0", NULL }, \
-    { YEXP__S_STIM, 0x0080, YEXP__T_ENUM, 0, "select", "\"exact\"", "exact=0,bernoulli=1" }, \
-    { YEXP__S_STIM, 0x0080, YEXP__T_INT, 0, "sets", "1", NULL }, \
-    { YEXP__S_STIM, 0x0006, YEXP__T_NUM, 0, "sf", "0", NULL }, \
-    { YEXP__S_STIM, 0x0001, YEXP__T_ENUM, 0, "shape", "\"rect\"", "rect=0,circle=1,annulus=2,line=3,polygon=4,cross=5,no_aperture=6,mask_tex=7,rrect=8,arc=9,pie=10,capsule=11,ngon=12,star=13,ellipse=14,qbezier=15,polyline=16,compound=17" }, \
-    { YEXP__S_STIM, 0x008b, YEXP__T_NUM, 0, "shape_p0", "0", NULL }, \
-    { YEXP__S_STIM, 0x008b, YEXP__T_NUM, 0, "shape_p1", "0", NULL }, \
-    { YEXP__S_STIM, 0x008b, YEXP__T_NUM, 0, "shape_p2", "0", NULL }, \
-    { YEXP__S_STIM, 0x008b, YEXP__T_NUM, 0, "shape_p3", "0", NULL }, \
-    { YEXP__S_STIM, 0x0004, YEXP__T_NUM, 0, "sigma", "0", NULL }, \
-    { YEXP__S_STIM, 0x0080, YEXP__T_ENUM, 0, "signal", "\"same\"", "same=0,different=1,least_recent=2" }, \
-    { YEXP__S_STIM, 0x0020, YEXP__T_NUM, YEXP__R_REQ | YEXP__R_LIT, "size", NULL, NULL }, \
-    { YEXP__S_STIM, 0x0040, YEXP__T_NUM, 0, "size", "0", NULL }, \
-    { YEXP__S_STIM, 0x0080, YEXP__T_NUM, 0, "speed", "0", NULL }, \
-    { YEXP__S_STIM, 0x0002, YEXP__T_INT, 0, "square", "0", NULL }, \
-    { YEXP__S_STIM, 0x0210, YEXP__T_NUM, 0, "src_h", "0", NULL }, \
-    { YEXP__S_STIM, 0x0210, YEXP__T_NUM, 0, "src_w", "0", NULL }, \
-    { YEXP__S_STIM, 0x0210, YEXP__T_NUM, 0, "src_x", "0", NULL }, \
-    { YEXP__S_STIM, 0x0210, YEXP__T_NUM, 0, "src_y", "0", NULL }, \
-    { YEXP__S_STIM, 0x0200, YEXP__T_BOOL, 0, "strict_cadence", "false", NULL }, \
-    { YEXP__S_STIM, 0x008b, YEXP__T_NUM, 0, "stroke", "0", NULL }, \
-    { YEXP__S_STIM, 0x008b, YEXP__T_ENUM, 0, "stroke_align", "\"center\"", "center=0,inside=1,outside=2" }, \
-    { YEXP__S_STIM, 0x0020, YEXP__T_TEXT, YEXP__R_REQ, "text", NULL, NULL }, \
-    { YEXP__S_STIM, 0x0010, YEXP__T_RES, YEXP__R_REQ, "texture", NULL, NULL }, \
-    { YEXP__S_STIM, 0x0210, YEXP__T_NUM, 0, "tint_a", "1", NULL }, \
-    { YEXP__S_STIM, 0x0210, YEXP__T_NUM, 0, "tint_b", "1", NULL }, \
-    { YEXP__S_STIM, 0x0210, YEXP__T_NUM, 0, "tint_g", "1", NULL }, \
-    { YEXP__S_STIM, 0x0210, YEXP__T_NUM, 0, "tint_r", "1", NULL }, \
-    { YEXP__S_STIM, 0x0001, YEXP__T_NUM, 0, "trim_end", "0", NULL }, \
-    { YEXP__S_STIM, 0x0001, YEXP__T_INT, 0, "trim_set", "0", NULL }, \
-    { YEXP__S_STIM, 0x0001, YEXP__T_NUM, 0, "trim_start", "0", NULL }, \
-    { YEXP__S_STIM, 0x0200, YEXP__T_RES, YEXP__R_REQ, "video", NULL, NULL },
+    { YEXP_S_STIM, 0x0210, YEXP_T_INT, 0, "add", "0", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0200, YEXP_T_INT, 0, "ahead", "6", "frame", "frames decoded ahead", NULL }, \
+    { YEXP_S_STIM, 0x0080, YEXP_T_ENUM, 0, "algorithm", "\"custom\"", "", "a published dot algorithm, which sets signal, select, noise and sets; custom: those keys", "custom=0,wn=1,mn=2,ll=3,bm=4" }, \
+    { YEXP_S_STIM, 0x0060, YEXP_T_INT, 0, "aliased", "0", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0020, YEXP_T_ENUM, YEXP_R_LIT, "align", "\"start\"", "", "the lines' alignment; start and end follow dir; a literal", "start=0,end=1,center=2" }, \
+    { YEXP_S_STIM, 0x02ff, YEXP_T_ENUM, 0, "anchor", "\"center\"", "", "", "center=0,top_left=1,top=2,top_right=3,left=4,right=5,bottom_left=6,bottom=7,bottom_right=8" }, \
+    { YEXP_S_STIM, 0x000a, YEXP_T_ENUM, 0, "aperture", "\"rect\"", "", "", "rect=0,circle=1,annulus=2,line=3,polygon=4,cross=5,no_aperture=6,mask_tex=7" }, \
+    { YEXP_S_STIM, 0x0080, YEXP_T_ENUM, 0, "aperture", "\"circle\"", "", "", "circle=0,rect=1" }, \
+    { YEXP_S_STIM, 0x0040, YEXP_T_RES, YEXP_R_REQ, "artwork", NULL, "", "the ARTWORK entry", NULL }, \
+    { YEXP_S_STIM, 0x0004, YEXP_T_NUM, 0, "aspect", "1", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0100, YEXP_T_RES, YEXP_R_REQ, "audio", NULL, "", "the AUDIO entry", NULL }, \
+    { YEXP_S_STIM, 0x02ff, YEXP_T_NUM, 0, "ax", "0.5", "", "", NULL }, \
+    { YEXP_S_STIM, 0x02ff, YEXP_T_NUM, 0, "ay", "0.5", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0200, YEXP_T_INT, 0, "base", "0", "", "the video's base on the timeline", NULL }, \
+    { YEXP_S_STIM, 0x0061, YEXP_T_ENUM, 0, "blend", "\"over\"", "", "", "over=0,add=1,multiply=2" }, \
+    { YEXP_S_STIM, 0x0001, YEXP_T_ENUM, 0, "cap", "\"butt\"", "", "", "butt=0,round=1,square=2" }, \
+    { YEXP_S_STIM, 0x0100, YEXP_T_INT, 0, "channels", "0", "", "the output channels as a bit mask; 0: all", NULL }, \
+    { YEXP_S_STIM, 0x0008, YEXP_T_NUM, 0, "check", "1", "px", "", NULL }, \
+    { YEXP_S_STIM, 0x0200, YEXP_T_ENUM, 0, "chroma", "\"sited\"", "", "4:2:0 chroma upsampling: weighted at the stream's siting, or replicated", "sited=0,nearest=1" }, \
+    { YEXP_S_STIM, 0x0080, YEXP_T_ENUM, 0, "clock", "\"onset\"", "", "onset: an update moves by the time since the last; frames: by frame_s", "onset=0,frames=1" }, \
+    { YEXP_S_STIM, 0x0080, YEXP_T_NUM, 0, "coherence", "0", "", "", NULL }, \
+    { YEXP_S_STIM, 0x02f1, YEXP_T_VEC3, 0, "color", "[0,0,0]", "rgb", "", NULL }, \
+    { YEXP_S_STIM, 0x021e, YEXP_T_NUM, 0, "contrast", "1", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0080, YEXP_T_INT, 0, "count", "0", "", "dots shown per update; give count or density", NULL }, \
+    { YEXP_S_STIM, 0x0210, YEXP_T_INT, 0, "coverage", "0", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0001, YEXP_T_NUM, 0, "dash", "0", "px", "", NULL }, \
+    { YEXP_S_STIM, 0x0001, YEXP_T_NUM, 0, "dash_offset", "0", "px", "", NULL }, \
+    { YEXP_S_STIM, 0x0001, YEXP_T_INT, 0, "dash_snap", "0", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0100, YEXP_T_NUM, 0, "db", "0", "dB", "the sound's gain; 0: unity", NULL }, \
+    { YEXP_S_STIM, 0x0200, YEXP_T_INT, 0, "decode_threads", "0", "", "the decoder's threads; 0: its measured default", NULL }, \
+    { YEXP_S_STIM, 0x0080, YEXP_T_NUM, 0, "density", "0", "1/u^2", "dots shown per update per square unit; give count or density", NULL }, \
+    { YEXP_S_STIM, 0x0020, YEXP_T_ENUM, YEXP_R_LIT, "dir", "\"auto\"", "", "the text direction; auto: from the first strong character; a literal", "auto=0,ltr=1,rtl=2" }, \
+    { YEXP_S_STIM, 0x021e, YEXP_T_NUM, 0, "dir_b", "0", "rgb", "", NULL }, \
+    { YEXP_S_STIM, 0x021e, YEXP_T_NUM, 0, "dir_g", "0", "rgb", "", NULL }, \
+    { YEXP_S_STIM, 0x021e, YEXP_T_NUM, 0, "dir_r", "0", "rgb", "", NULL }, \
+    { YEXP_S_STIM, 0x0080, YEXP_T_NUM, 0, "direction", "0", "deg", "", NULL }, \
+    { YEXP_S_STIM, 0x0008, YEXP_T_ENUM, 0, "dist", "\"uniform\"", "", "", "uniform=0,binary=1,gaussian=2,simplex=3" }, \
+    { YEXP_S_STIM, 0x0080, YEXP_T_NUM, 0, "dot_size", "0", "px", "", NULL }, \
+    { YEXP_S_STIM, 0x000b, YEXP_T_ENUM, 0, "edge", "\"hard\"", "", "", "hard=0,cosine=1,gaussian=2" }, \
+    { YEXP_S_STIM, 0x0080, YEXP_T_ENUM, 0, "edge", "\"wrap\"", "", "", "wrap=0,replot=1" }, \
+    { YEXP_S_STIM, 0x008b, YEXP_T_NUM, 0, "edge_width", "0", "px", "", NULL }, \
+    { YEXP_S_STIM, 0x0020, YEXP_T_STR, YEXP_R_REQ | YEXP_R_LIT, "font", NULL, "", "the FONT entry; a literal, since the pack tool lays the text out", NULL }, \
+    { YEXP_S_STIM, 0x0080, YEXP_T_DUR, 0, "frame_s", "0", "s", "the time of one update for clock frames and lifetime_frames", NULL }, \
+    { YEXP_S_STIM, 0x0100, YEXP_T_INT, 0, "frames", "0", "frame", "frames per pass; 0: to the end", NULL }, \
+    { YEXP_S_STIM, 0x0001, YEXP_T_NUM, 0, "gap", "0", "px", "", NULL }, \
+    { YEXP_S_STIM, 0x02ff, YEXP_T_NUM, 0, "gate", "1", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0200, YEXP_T_ENUM, 0, "gpu_path", "\"auto\"", "", "how a frame reaches a texture; shared is not built", "auto=0,upload=1,shared=2,gpu=3" }, \
+    { YEXP_S_STIM, 0x02ff, YEXP_T_NUM, 0, "h", "0", "u", "", NULL }, \
+    { YEXP_S_STIM, 0x0200, YEXP_T_ENUM, 0, "hw_decode", "\"auto\"", "", "the MP4 decoder: auto is the platform's hardware decoder, else software", "auto=0,off=1,dxva=2,videotoolbox=3,vaapi=4" }, \
+    { YEXP_S_STIM, 0x0001, YEXP_T_ENUM, 0, "join", "\"round\"", "", "", "round=0,miter=1,bevel=2" }, \
+    { YEXP_S_STIM, 0x03ff, YEXP_T_ENUM, YEXP_R_REQ, "kind", NULL, "", "what the stimulus is; it decides the other keys", "shape=0,grating=1,gabor=2,noise=3,image=4,text=5,artwork=6,rdk=7,sound=8,video=9" }, \
+    { YEXP_S_STIM, 0x0020, YEXP_T_STR, YEXP_R_LIT, "lang", "\"\"", "", "the text's language, BCP 47; it sets line breaks; a literal", NULL }, \
+    { YEXP_S_STIM, 0x02ff, YEXP_T_INT, 0, "layer", "0", "", "the draw order: a higher layer draws over a lower one (D3)", NULL }, \
+    { YEXP_S_STIM, 0x0200, YEXP_T_NUM, 0, "lead", "0.5", "frame", "how early a frame can be shown; -1: never early", NULL }, \
+    { YEXP_S_STIM, 0x0080, YEXP_T_INT, 0, "lifetime_frames", "0", "", "a dot's life in updates of frame_s; 0: no limit", NULL }, \
+    { YEXP_S_STIM, 0x0080, YEXP_T_DUR, 0, "lifetime_s", "0", "s", "a dot's life; 0: no limit", NULL }, \
+    { YEXP_S_STIM, 0x0200, YEXP_T_ENUM, 0, "light", "\"auto\"", "", "how a frame's values reach the screen", "auto=0,codes=1,eotf=2" }, \
+    { YEXP_S_STIM, 0x0020, YEXP_T_NUM, YEXP_R_LIT, "line_height", "0", "", "the line spacing, times the font's own line; 0: 1; a literal", NULL }, \
+    { YEXP_S_STIM, 0x0210, YEXP_T_INT, 0, "linear", "0", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0200, YEXP_T_BOOL, 0, "loop", "false", "", "frame 0 follows the last frame; annotations fire again", NULL }, \
+    { YEXP_S_STIM, 0x0100, YEXP_T_INT, 0, "loops", "0", "", "passes after the first; -1: without end", NULL }, \
+    { YEXP_S_STIM, 0x0200, YEXP_T_INT, 0, "min_tier", "0", "", "flag the frames whose timing tier is worse than this; 0: none", NULL }, \
+    { YEXP_S_STIM, 0x008b, YEXP_T_NUM, 0, "miter_limit", "4", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0210, YEXP_T_INT, 0, "modulation", "0", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0200, YEXP_T_INT, 0, "movie_index", "0", "", "the number in every frame record of the video", NULL }, \
+    { YEXP_S_STIM, 0x0080, YEXP_T_ENUM, 0, "noise", "\"direction\"", "", "how a noise dot moves: its own direction, a random position, or a random walk", "direction=0,position=1,walk=2" }, \
+    { YEXP_S_STIM, 0x0008, YEXP_T_NUM, 0, "noise_gain", "0.5", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0008, YEXP_T_NUM, 0, "noise_lacunarity", "2", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0008, YEXP_T_NUM, 0, "noise_scale", "0", "u", "", NULL }, \
+    { YEXP_S_STIM, 0x0008, YEXP_T_NUM, 0, "noise_z", "0", "cells", "", NULL }, \
+    { YEXP_S_STIM, 0x0008, YEXP_T_INT, 0, "octaves", "1", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0001, YEXP_T_NUM, 0, "offset", "0", "px", "", NULL }, \
+    { YEXP_S_STIM, 0x0100, YEXP_T_INT, 0, "offset", "0", "frame", "the sound's first frame", NULL }, \
+    { YEXP_S_STIM, 0x02f1, YEXP_T_NUM, 0, "opacity", "1", "", "", NULL }, \
+    { YEXP_S_STIM, 0x02ff, YEXP_T_NUM, 0, "ori", "0", "deg", "", NULL }, \
+    { YEXP_S_STIM, 0x0001, YEXP_T_NUM, 0, "p0", "0", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0001, YEXP_T_NUM, 0, "p1", "0", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0001, YEXP_T_NUM, 0, "p10", "0", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0001, YEXP_T_NUM, 0, "p11", "0", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0001, YEXP_T_NUM, 0, "p12", "0", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0001, YEXP_T_NUM, 0, "p13", "0", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0001, YEXP_T_NUM, 0, "p14", "0", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0001, YEXP_T_NUM, 0, "p15", "0", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0001, YEXP_T_NUM, 0, "p16", "0", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0001, YEXP_T_NUM, 0, "p17", "0", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0001, YEXP_T_NUM, 0, "p18", "0", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0001, YEXP_T_NUM, 0, "p19", "0", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0001, YEXP_T_NUM, 0, "p2", "0", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0001, YEXP_T_NUM, 0, "p20", "0", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0001, YEXP_T_NUM, 0, "p21", "0", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0001, YEXP_T_NUM, 0, "p22", "0", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0001, YEXP_T_NUM, 0, "p23", "0", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0001, YEXP_T_NUM, 0, "p24", "0", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0001, YEXP_T_NUM, 0, "p25", "0", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0001, YEXP_T_NUM, 0, "p26", "0", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0001, YEXP_T_NUM, 0, "p27", "0", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0001, YEXP_T_NUM, 0, "p28", "0", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0001, YEXP_T_NUM, 0, "p29", "0", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0001, YEXP_T_NUM, 0, "p3", "0", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0001, YEXP_T_NUM, 0, "p30", "0", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0001, YEXP_T_NUM, 0, "p31", "0", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0001, YEXP_T_NUM, 0, "p4", "0", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0001, YEXP_T_NUM, 0, "p5", "0", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0001, YEXP_T_NUM, 0, "p6", "0", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0001, YEXP_T_NUM, 0, "p7", "0", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0001, YEXP_T_NUM, 0, "p8", "0", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0001, YEXP_T_NUM, 0, "p9", "0", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0006, YEXP_T_NUM, 0, "phase", "0", "cyc", "", NULL }, \
+    { YEXP_S_STIM, 0x0200, YEXP_T_INT, 0, "pin_cpu", "0", "", "the CPU of the decode thread; 0: no pin", NULL }, \
+    { YEXP_S_STIM, 0x02ff, YEXP_T_ENUM, 0, "place", "\"center\"", "", "", "center=0,top_left=1,top=2,top_right=3,left=4,right=5,bottom_left=6,bottom=7,bottom_right=8" }, \
+    { YEXP_S_STIM, 0x0210, YEXP_T_INT, 0, "premultiplied", "0", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0200, YEXP_T_INT, 0, "preroll", "6", "frame", "frames ready before a start as soon as possible; 0: ahead", NULL }, \
+    { YEXP_S_STIM, 0x0060, YEXP_T_INT, 0, "rays", "0", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0008, YEXP_T_INT, 0, "seed", "0", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0080, YEXP_T_ENUM, 0, "select", "\"exact\"", "", "how many dots are signal: exactly coherence times count, or each with probability coherence", "exact=0,bernoulli=1" }, \
+    { YEXP_S_STIM, 0x0080, YEXP_T_INT, 0, "sets", "1", "", "interleaved sets of dots; one set moves at each update", NULL }, \
+    { YEXP_S_STIM, 0x0006, YEXP_T_NUM, 0, "sf", "0", "cyc/u", "", NULL }, \
+    { YEXP_S_STIM, 0x0001, YEXP_T_ENUM, 0, "shape", "\"rect\"", "", "", "rect=0,circle=1,annulus=2,line=3,polygon=4,cross=5,no_aperture=6,mask_tex=7,rrect=8,arc=9,pie=10,capsule=11,ngon=12,star=13,ellipse=14,qbezier=15,polyline=16,compound=17" }, \
+    { YEXP_S_STIM, 0x008b, YEXP_T_NUM, 0, "shape_p0", "0", "u", "", NULL }, \
+    { YEXP_S_STIM, 0x008b, YEXP_T_NUM, 0, "shape_p1", "0", "u", "", NULL }, \
+    { YEXP_S_STIM, 0x008b, YEXP_T_NUM, 0, "shape_p2", "0", "u", "", NULL }, \
+    { YEXP_S_STIM, 0x008b, YEXP_T_NUM, 0, "shape_p3", "0", "u", "", NULL }, \
+    { YEXP_S_STIM, 0x0004, YEXP_T_NUM, 0, "sigma", "0", "u", "", NULL }, \
+    { YEXP_S_STIM, 0x0080, YEXP_T_ENUM, 0, "signal", "\"same\"", "", "which dots are signal: the same all trial, chosen at each update, or the least recent", "same=0,different=1,least_recent=2" }, \
+    { YEXP_S_STIM, 0x0020, YEXP_T_NUM, YEXP_R_REQ | YEXP_R_LIT, "size", NULL, "u", "", NULL }, \
+    { YEXP_S_STIM, 0x0040, YEXP_T_NUM, 0, "size", "0", "u", "", NULL }, \
+    { YEXP_S_STIM, 0x0080, YEXP_T_NUM, 0, "speed", "0", "u/s", "", NULL }, \
+    { YEXP_S_STIM, 0x0002, YEXP_T_INT, 0, "square", "0", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0210, YEXP_T_NUM, 0, "src_h", "0", "texel", "", NULL }, \
+    { YEXP_S_STIM, 0x0210, YEXP_T_NUM, 0, "src_w", "0", "texel", "", NULL }, \
+    { YEXP_S_STIM, 0x0210, YEXP_T_NUM, 0, "src_x", "0", "texel", "", NULL }, \
+    { YEXP_S_STIM, 0x0210, YEXP_T_NUM, 0, "src_y", "0", "texel", "", NULL }, \
+    { YEXP_S_STIM, 0x0200, YEXP_T_BOOL, 0, "strict_cadence", "false", "", "refuse a refresh rate that is not a multiple of the video's rate", NULL }, \
+    { YEXP_S_STIM, 0x008b, YEXP_T_NUM, 0, "stroke", "0", "px", "", NULL }, \
+    { YEXP_S_STIM, 0x008b, YEXP_T_ENUM, 0, "stroke_align", "\"center\"", "", "", "center=0,inside=1,outside=2" }, \
+    { YEXP_S_STIM, 0x0020, YEXP_T_TEXT, YEXP_R_REQ, "text", NULL, "", "the text to show; a variable's levels are laid out at pack build", NULL }, \
+    { YEXP_S_STIM, 0x0010, YEXP_T_RES, YEXP_R_REQ, "texture", NULL, "", "the TEXTURE entry, or a variable whose levels are entries", NULL }, \
+    { YEXP_S_STIM, 0x0210, YEXP_T_NUM, 0, "tint_a", "1", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0210, YEXP_T_NUM, 0, "tint_b", "1", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0210, YEXP_T_NUM, 0, "tint_g", "1", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0210, YEXP_T_NUM, 0, "tint_r", "1", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0001, YEXP_T_NUM, 0, "trim_end", "0", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0001, YEXP_T_INT, 0, "trim_set", "0", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0001, YEXP_T_NUM, 0, "trim_start", "0", "", "", NULL }, \
+    { YEXP_S_STIM, 0x0200, YEXP_T_RES, YEXP_R_REQ, "video", NULL, "", "the VIDEO entry", NULL },
 #define YEXP__ROWS_STIM_B \
-    { YEXP__S_STIM, 0x02ff, YEXP__T_NUM, 0, "w", "0", NULL }, \
-    { YEXP__S_STIM, 0x0020, YEXP__T_NUM, YEXP__R_LIT, "width", "0", NULL }, \
-    { YEXP__S_STIM, 0x02ff, YEXP__T_NUM, 0, "x", "0", NULL }, \
-    { YEXP__S_STIM, 0x02ff, YEXP__T_NUM, 0, "y", "0", NULL },
+    { YEXP_S_STIM, 0x02ff, YEXP_T_NUM, 0, "w", "0", "u", "", NULL }, \
+    { YEXP_S_STIM, 0x0020, YEXP_T_NUM, YEXP_R_LIT, "width", "0", "u", "the line width at which the text wraps; 0: no wrapping; a literal", NULL }, \
+    { YEXP_S_STIM, 0x02ff, YEXP_T_NUM, 0, "x", "0", "u", "", NULL }, \
+    { YEXP_S_STIM, 0x02ff, YEXP_T_NUM, 0, "y", "0", "u", "", NULL },
 #define YEXP__ROWS_METHODS \
-    { YEXP__S_STAIR, 0xffff, YEXP__T_INT, 0, "est_reversals", "0", NULL }, \
-    { YEXP__S_STAIR, 0xffff, YEXP__T_INT, 0, "est_trials", "0", NULL }, \
-    { YEXP__S_STAIR, 0xffff, YEXP__T_ENUM, 0, "estimate", "\"reversals\"", "reversals=0,trials=1" }, \
-    { YEXP__S_STAIR, 0xffff, YEXP__T_BOOL, 0, "harder_is_up", "false", NULL }, \
-    { YEXP__S_STAIR, 0xffff, YEXP__T_BOOL, 0, "initial_rule", "false", NULL }, \
-    { YEXP__S_STAIR, 0xffff, YEXP__T_NUM, 0, "max", "0", NULL }, \
-    { YEXP__S_STAIR, 0xffff, YEXP__T_NUM, 0, "min", "0", NULL }, \
-    { YEXP__S_STAIR, 0xffff, YEXP__T_INT, 0, "n_down", "1", NULL }, \
-    { YEXP__S_STAIR, 0xffff, YEXP__T_INT, 0, "n_up", "1", NULL }, \
-    { YEXP__S_STAIR, 0xffff, YEXP__T_ENUM, 0, "rule", "\"updown\"", "updown=0,asa=1" }, \
-    { YEXP__S_STAIR, 0xffff, YEXP__T_ENUM, 0, "scale", "\"linear\"", "linear=0,log10=1" }, \
-    { YEXP__S_STAIR, 0xffff, YEXP__T_NUM, 0, "start", "0", NULL }, \
-    { YEXP__S_STAIR, 0xffff, YEXP__T_NUM, 0, "step_down_scale", "1", NULL }, \
-    { YEXP__S_STAIR, 0xffff, YEXP__T_ENUM, 0, "step_type", "\"lin\"", "lin=0,log=1,db=2" }, \
-    { YEXP__S_STAIR, 0xffff, YEXP__T_NUMS, YEXP__R_REQ, "steps", NULL, NULL }, \
-    { YEXP__S_STAIR, 0xffff, YEXP__T_INT, 0, "stop_at_limit", "0", NULL }, \
-    { YEXP__S_STAIR, 0xffff, YEXP__T_INT, 0, "stop_reversals", "0", NULL }, \
-    { YEXP__S_STAIR, 0xffff, YEXP__T_INT, 0, "stop_trials", "0", NULL }, \
-    { YEXP__S_STAIR, 0xffff, YEXP__T_NUM, 0, "target_p", "0", NULL }, \
-    { YEXP__S_STAIR, 0xffff, YEXP__T_ENUM, YEXP__R_REQ, "type", NULL, "stair=0,quest=1,aep=2" }, \
-    { YEXP__S_STAIR, 0xffff, YEXP__T_BOOL, 0, "use_limits", "false", NULL }, \
-    { YEXP__S_QUEST, 0xffff, YEXP__T_ENUM, 0, "estimate", "\"mean\"", "mean=0,mode=1" }, \
-    { YEXP__S_QUEST, 0xffff, YEXP__T_NUMS, 0, "joint_prior", "[]", NULL }, \
-    { YEXP__S_QUEST, 0xffff, YEXP__T_INT, 0, "n_outcomes", "2", NULL }, \
-    { YEXP__S_QUEST, 0xffff, YEXP__T_BOOL, 0, "no_table", "false", NULL }, \
-    { YEXP__S_QUEST, 0xffff, YEXP__T_GRID, YEXP__R_REQ, "param", NULL, NULL }, \
-    { YEXP__S_QUEST, 0xffff, YEXP__T_ENUM, 0, "pf", "\"gumbel\"", "gumbel=0,weibull=1,logistic=2,normal=3,hypsec=4,custom=5" }, \
-    { YEXP__S_QUEST, 0xffff, YEXP__T_ENUM, 0, "scale", "\"linear\"", "linear=0,log10=1" }, \
-    { YEXP__S_QUEST, 0xffff, YEXP__T_ENUM, 0, "select", "\"entropy\"", "entropy=0,quantile=1,mean=2,mode=3" }, \
-    { YEXP__S_QUEST, 0xffff, YEXP__T_INT, 0, "select_param", "0", NULL }, \
-    { YEXP__S_QUEST, 0xffff, YEXP__T_NUM, 0, "select_quantile", "0.5", NULL }, \
-    { YEXP__S_QUEST, 0xffff, YEXP__T_GRID, YEXP__R_REQ, "stim", NULL, NULL }, \
-    { YEXP__S_QUEST, 0xffff, YEXP__T_NUM, 0, "stop_entropy", "0", NULL }, \
-    { YEXP__S_QUEST, 0xffff, YEXP__T_NUM, 0, "stop_sd", "0", NULL }, \
-    { YEXP__S_QUEST, 0xffff, YEXP__T_INT, 0, "stop_sd_param", "0", NULL }, \
-    { YEXP__S_QUEST, 0xffff, YEXP__T_INT, 0, "stop_trials", "0", NULL }, \
-    { YEXP__S_QUEST, 0xffff, YEXP__T_INT, 0, "subset_size", "0", NULL }, \
-    { YEXP__S_QUEST, 0xffff, YEXP__T_NUM, 0, "tie_tolerance", "1e-09", NULL }, \
-    { YEXP__S_QUEST, 0xffff, YEXP__T_ENUM, 0, "tiebreak", "\"lowest\"", "lowest=0,nearest=1,alternate=2,random=3" }, \
-    { YEXP__S_QUEST, 0xffff, YEXP__T_ENUM, YEXP__R_REQ, "type", NULL, "stair=0,quest=1,aep=2" }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_ENUM, 0, "acq", "\"lse\"", "lse=0,eavc=1,localmi=2,balv=3,bald=4,random=5,ucb=6,ei=7,thompson=8" }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "acq_beta", "1.96", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUMS, 0, "candidates", "[]", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_ENUMS, 0, "dim_kind", "[]", "continuous=0,integer=1,categorical=2" }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUMS, 0, "dim_levels", "[]", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NAMES, YEXP__R_NONE, "dims", NULL, NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_ENUM, 0, "estimate", "\"mean\"", "mean=0,mode=1" }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_BOOL, 0, "fit", "false", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_INT, 0, "fit_every", "0", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_INT, 0, "fit_max_evals", "40", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_BOOL, 0, "fit_pcg", "false", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "fit_tol", "1e-08", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUMS, 0, "grid", "[]", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "guess", "0", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUMS, YEXP__R_REQ, "hi", NULL, NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUMS, 0, "hyperparams.cutpoint", "[]", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUMS, 0, "hyperparams.lengthscale", "[]", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUMS, 0, "hyperparams.lengthscale_b", "[]", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUMS, 0, "hyperparams.lengthscale_g", "[]", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyperparams.mean", "0", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyperparams.mean_g", "0", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyperparams.noise_sd", "0.1", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyperparams.outputscale", "1", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyperparams.outputscale_b", "1", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyperparams.outputscale_g", "0.3", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUMS, 0, "hyperparams_max.cutpoint", "[]", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUMS, 0, "hyperparams_max.lengthscale", "[]", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUMS, 0, "hyperparams_max.lengthscale_b", "[]", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUMS, 0, "hyperparams_max.lengthscale_g", "[]", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyperparams_max.mean", "5", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyperparams_max.mean_g", "0", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyperparams_max.noise_sd", "10", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyperparams_max.outputscale", "10", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyperparams_max.outputscale_b", "10", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyperparams_max.outputscale_g", "10", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUMS, 0, "hyperparams_min.cutpoint", "[]", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUMS, 0, "hyperparams_min.lengthscale", "[]", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUMS, 0, "hyperparams_min.lengthscale_b", "[]", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUMS, 0, "hyperparams_min.lengthscale_g", "[]", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyperparams_min.mean", "-5", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyperparams_min.mean_g", "0", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyperparams_min.noise_sd", "0.001", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyperparams_min.outputscale", "0.1", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyperparams_min.outputscale_b", "0.1", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "hyperparams_min.outputscale_g", "0.01", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_INT, 0, "intensity_dim", "0", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "jitter", "1e-06", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_ENUM, 0, "kernel", "\"rbf\"", "rbf=0,semip=1" }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "lapse", "0", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_ENUM, 0, "lik", "\"bernoulli\"", "bernoulli=0,ordinal=1,categorical=2,gaussian=3,pairwise=4" }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_ENUM, 0, "link", "\"probit\"", "probit=0,logit=1" }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUMS, YEXP__R_REQ, "lo", NULL, NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_INT, 0, "max_trials", "512", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_BOOL, 0, "minimize", "false", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_ENUM, 0, "model", "\"gp\"", "gp=0,psychometric=1" }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_INT, 0, "monotone_dims", "0", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_INT, 0, "n_candidates", "512", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_INT, 0, "n_init", "0", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_INT, 0, "n_outcomes", "2", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_BOOL, 0, "no_hyper_prior", "false", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_INT, 0, "pcg_threshold", "512", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "priors.lengthscale.center", "0.25", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "priors.lengthscale.sd", "1", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "priors.mean.center", "0", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "priors.mean.sd", "0.7", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "priors.mean_g.ceiling", "0.00390625", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "priors.mean_g.center", "0.25", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "priors.mean_g.sd", "1", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "priors.noise_sd.center", "0", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "priors.noise_sd.sd", "0", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "priors.outputscale.center", "1", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "priors.outputscale.sd", "0.7", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "priors.outputscale_b.center", "1", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "priors.outputscale_b.sd", "0.7", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "priors.outputscale_g.center", "0.3", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "priors.outputscale_g.sd", "0.7", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_INT, 0, "refine_steps", "0", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_INT, 0, "refit_every", "1", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_ENUM, 0, "scale", "\"linear\"", "linear=0,log10=1" }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUMS, 0, "stop_context", "[]", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "stop_threshold_sd", "0", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_INT, 0, "stop_trials", "0", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_INT, 0, "target_outcome", "0", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "target_p", "0", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_NUM, 0, "target_value", "0", NULL }, \
-    { YEXP__S_AEP, 0xffff, YEXP__T_ENUM, YEXP__R_REQ, "type", NULL, "stair=0,quest=1,aep=2" },
+    { YEXP_S_STAIR, 0xffff, YEXP_T_INT, 0, "est_reversals", "0", "", "", NULL }, \
+    { YEXP_S_STAIR, 0xffff, YEXP_T_INT, 0, "est_trials", "0", "", "", NULL }, \
+    { YEXP_S_STAIR, 0xffff, YEXP_T_ENUM, 0, "estimate", "\"reversals\"", "", "the estimate that $estimate gives", "reversals=0,trials=1" }, \
+    { YEXP_S_STAIR, 0xffff, YEXP_T_BOOL, 0, "harder_is_up", "false", "", "", NULL }, \
+    { YEXP_S_STAIR, 0xffff, YEXP_T_BOOL, 0, "initial_rule", "false", "", "", NULL }, \
+    { YEXP_S_STAIR, 0xffff, YEXP_T_NUM, 0, "max", "0", "", "", NULL }, \
+    { YEXP_S_STAIR, 0xffff, YEXP_T_NUM, 0, "min", "0", "", "", NULL }, \
+    { YEXP_S_STAIR, 0xffff, YEXP_T_INT, 0, "n_down", "1", "", "", NULL }, \
+    { YEXP_S_STAIR, 0xffff, YEXP_T_INT, 0, "n_up", "1", "", "", NULL }, \
+    { YEXP_S_STAIR, 0xffff, YEXP_T_ENUM, 0, "rule", "\"updown\"", "", "", "updown=0,asa=1" }, \
+    { YEXP_S_STAIR, 0xffff, YEXP_T_ENUM, 0, "scale", "\"linear\"", "", "log10: the method works in log10 of the stimulus value; $level stays in stimulus units", "linear=0,log10=1" }, \
+    { YEXP_S_STAIR, 0xffff, YEXP_T_NUM, 0, "start", "0", "", "", NULL }, \
+    { YEXP_S_STAIR, 0xffff, YEXP_T_NUM, 0, "step_down_scale", "1", "", "", NULL }, \
+    { YEXP_S_STAIR, 0xffff, YEXP_T_ENUM, 0, "step_type", "\"lin\"", "", "", "lin=0,log=1,db=2" }, \
+    { YEXP_S_STAIR, 0xffff, YEXP_T_NUMS, YEXP_R_REQ, "steps", NULL, "", "", NULL }, \
+    { YEXP_S_STAIR, 0xffff, YEXP_T_INT, 0, "stop_at_limit", "0", "", "", NULL }, \
+    { YEXP_S_STAIR, 0xffff, YEXP_T_INT, 0, "stop_reversals", "0", "", "", NULL }, \
+    { YEXP_S_STAIR, 0xffff, YEXP_T_INT, 0, "stop_trials", "0", "", "", NULL }, \
+    { YEXP_S_STAIR, 0xffff, YEXP_T_NUM, 0, "target_p", "0", "", "", NULL }, \
+    { YEXP_S_STAIR, 0xffff, YEXP_T_ENUM, YEXP_R_REQ, "type", NULL, "", "the method", "stair=0,quest=1,aep=2" }, \
+    { YEXP_S_STAIR, 0xffff, YEXP_T_BOOL, 0, "use_limits", "false", "", "", NULL }, \
+    { YEXP_S_QUEST, 0xffff, YEXP_T_ENUM, 0, "estimate", "\"mean\"", "", "the estimate that $estimate gives", "mean=0,mode=1" }, \
+    { YEXP_S_QUEST, 0xffff, YEXP_T_NUMS, 0, "joint_prior", "[]", "", "", NULL }, \
+    { YEXP_S_QUEST, 0xffff, YEXP_T_INT, 0, "n_outcomes", "2", "", "", NULL }, \
+    { YEXP_S_QUEST, 0xffff, YEXP_T_BOOL, 0, "no_table", "false", "", "", NULL }, \
+    { YEXP_S_QUEST, 0xffff, YEXP_T_GRID, YEXP_R_REQ, "param", NULL, "", "the parameter axes: a fixed number, an array of values, or a linspace each", NULL }, \
+    { YEXP_S_QUEST, 0xffff, YEXP_T_ENUM, 0, "pf", "\"gumbel\"", "", "", "gumbel=0,weibull=1,logistic=2,normal=3,hypsec=4,custom=5" }, \
+    { YEXP_S_QUEST, 0xffff, YEXP_T_ENUM, 0, "scale", "\"linear\"", "", "log10: the method works in log10 of the stimulus value; $level stays in stimulus units", "linear=0,log10=1" }, \
+    { YEXP_S_QUEST, 0xffff, YEXP_T_ENUM, 0, "select", "\"entropy\"", "", "", "entropy=0,quantile=1,mean=2,mode=3" }, \
+    { YEXP_S_QUEST, 0xffff, YEXP_T_INT, 0, "select_param", "0", "", "", NULL }, \
+    { YEXP_S_QUEST, 0xffff, YEXP_T_NUM, 0, "select_quantile", "0.5", "", "", NULL }, \
+    { YEXP_S_QUEST, 0xffff, YEXP_T_GRID, YEXP_R_REQ, "stim", NULL, "", "the stimulus axes: a fixed number, an array of values, or a linspace each", NULL }, \
+    { YEXP_S_QUEST, 0xffff, YEXP_T_NUM, 0, "stop_entropy", "0", "bit", "", NULL }, \
+    { YEXP_S_QUEST, 0xffff, YEXP_T_NUM, 0, "stop_sd", "0", "", "", NULL }, \
+    { YEXP_S_QUEST, 0xffff, YEXP_T_INT, 0, "stop_sd_param", "0", "", "", NULL }, \
+    { YEXP_S_QUEST, 0xffff, YEXP_T_INT, 0, "stop_trials", "0", "", "", NULL }, \
+    { YEXP_S_QUEST, 0xffff, YEXP_T_INT, 0, "subset_size", "0", "", "", NULL }, \
+    { YEXP_S_QUEST, 0xffff, YEXP_T_NUM, 0, "tie_tolerance", "1e-09", "bit", "", NULL }, \
+    { YEXP_S_QUEST, 0xffff, YEXP_T_ENUM, 0, "tiebreak", "\"lowest\"", "", "", "lowest=0,nearest=1,alternate=2,random=3" }, \
+    { YEXP_S_QUEST, 0xffff, YEXP_T_ENUM, YEXP_R_REQ, "type", NULL, "", "the method", "stair=0,quest=1,aep=2" }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_ENUM, 0, "acq", "\"lse\"", "", "", "lse=0,eavc=1,localmi=2,balv=3,bald=4,random=5,ucb=6,ei=7,thompson=8" }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUM, 0, "acq_beta", "1.96", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUMS, 0, "candidates", "[]", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_ENUMS, 0, "dim_kind", "[]", "", "", "continuous=0,integer=1,categorical=2" }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUMS, 0, "dim_levels", "[]", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NAMES, YEXP_R_NONE, "dims", NULL, "", "names for the dimensions; each becomes a variable", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_ENUM, 0, "estimate", "\"mean\"", "", "the estimate that $estimate gives", "mean=0,mode=1" }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_BOOL, 0, "fit", "false", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_INT, 0, "fit_every", "0", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_INT, 0, "fit_max_evals", "40", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_BOOL, 0, "fit_pcg", "false", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUM, 0, "fit_tol", "1e-08", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUMS, 0, "grid", "[]", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUM, 0, "guess", "0", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUMS, YEXP_R_REQ, "hi", NULL, "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUMS, 0, "hyperparams.cutpoint", "[]", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUMS, 0, "hyperparams.lengthscale", "[]", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUMS, 0, "hyperparams.lengthscale_b", "[]", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUMS, 0, "hyperparams.lengthscale_g", "[]", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUM, 0, "hyperparams.mean", "0", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUM, 0, "hyperparams.mean_g", "0", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUM, 0, "hyperparams.noise_sd", "0.1", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUM, 0, "hyperparams.outputscale", "1", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUM, 0, "hyperparams.outputscale_b", "1", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUM, 0, "hyperparams.outputscale_g", "0.3", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUMS, 0, "hyperparams_max.cutpoint", "[]", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUMS, 0, "hyperparams_max.lengthscale", "[]", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUMS, 0, "hyperparams_max.lengthscale_b", "[]", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUMS, 0, "hyperparams_max.lengthscale_g", "[]", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUM, 0, "hyperparams_max.mean", "5", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUM, 0, "hyperparams_max.mean_g", "0", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUM, 0, "hyperparams_max.noise_sd", "10", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUM, 0, "hyperparams_max.outputscale", "10", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUM, 0, "hyperparams_max.outputscale_b", "10", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUM, 0, "hyperparams_max.outputscale_g", "10", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUMS, 0, "hyperparams_min.cutpoint", "[]", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUMS, 0, "hyperparams_min.lengthscale", "[]", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUMS, 0, "hyperparams_min.lengthscale_b", "[]", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUMS, 0, "hyperparams_min.lengthscale_g", "[]", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUM, 0, "hyperparams_min.mean", "-5", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUM, 0, "hyperparams_min.mean_g", "0", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUM, 0, "hyperparams_min.noise_sd", "0.001", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUM, 0, "hyperparams_min.outputscale", "0.1", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUM, 0, "hyperparams_min.outputscale_b", "0.1", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUM, 0, "hyperparams_min.outputscale_g", "0.01", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_INT, 0, "intensity_dim", "0", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUM, 0, "jitter", "1e-06", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_ENUM, 0, "kernel", "\"rbf\"", "", "", "rbf=0,semip=1" }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUM, 0, "lapse", "0", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_ENUM, 0, "lik", "\"bernoulli\"", "", "", "bernoulli=0,ordinal=1,categorical=2,gaussian=3,pairwise=4" }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_ENUM, 0, "link", "\"probit\"", "", "", "probit=0,logit=1" }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUMS, YEXP_R_REQ, "lo", NULL, "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_INT, 0, "max_trials", "512", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_BOOL, 0, "minimize", "false", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_ENUM, 0, "model", "\"gp\"", "", "", "gp=0,psychometric=1" }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_INT, 0, "monotone_dims", "0", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_INT, 0, "n_candidates", "512", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_INT, 0, "n_init", "0", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_INT, 0, "n_outcomes", "2", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_BOOL, 0, "no_hyper_prior", "false", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_INT, 0, "pcg_threshold", "512", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUM, 0, "priors.lengthscale.center", "0.25", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUM, 0, "priors.lengthscale.sd", "1", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUM, 0, "priors.mean.center", "0", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUM, 0, "priors.mean.sd", "0.7", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUM, 0, "priors.mean_g.ceiling", "0.00390625", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUM, 0, "priors.mean_g.center", "0.25", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUM, 0, "priors.mean_g.sd", "1", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUM, 0, "priors.noise_sd.center", "0", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUM, 0, "priors.noise_sd.sd", "0", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUM, 0, "priors.outputscale.center", "1", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUM, 0, "priors.outputscale.sd", "0.7", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUM, 0, "priors.outputscale_b.center", "1", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUM, 0, "priors.outputscale_b.sd", "0.7", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUM, 0, "priors.outputscale_g.center", "0.3", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUM, 0, "priors.outputscale_g.sd", "0.7", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_INT, 0, "refine_steps", "0", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_INT, 0, "refit_every", "1", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_ENUM, 0, "scale", "\"linear\"", "", "log10: the method works in log10 of the stimulus value; $level stays in stimulus units", "linear=0,log10=1" }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUMS, 0, "stop_context", "[]", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUM, 0, "stop_threshold_sd", "0", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_INT, 0, "stop_trials", "0", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_INT, 0, "target_outcome", "0", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUM, 0, "target_p", "0", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_NUM, 0, "target_value", "0", "", "", NULL }, \
+    { YEXP_S_AEP, 0xffff, YEXP_T_ENUM, YEXP_R_REQ, "type", NULL, "", "the method", "stair=0,quest=1,aep=2" },
 #define YEXP__ROWS_RESPONSE_LOOP \
-    { YEXP__S_RESPONSE, 0xffff, YEXP__T_BOOL, 0, "allow_held_key", "false", NULL }, \
-    { YEXP__S_RESPONSE, 0xffff, YEXP__T_LIST, YEXP__R_NONE, "choices", NULL, NULL }, \
-    { YEXP__S_RESPONSE, 0xffff, YEXP__T_DUR, 0, "duration_s", "0", NULL }, \
-    { YEXP__S_RESPONSE, 0xffff, YEXP__T_NAME, YEXP__R_REQ, "from", NULL, NULL }, \
-    { YEXP__S_RESPONSE, 0xffff, YEXP__T_VAL, YEXP__R_NONE, "key_answer", NULL, NULL }, \
-    { YEXP__S_RESPONSE, 0xffff, YEXP__T_INT, YEXP__R_LIT, "max_responses", "0", NULL }, \
-    { YEXP__S_RESPONSE, 0xffff, YEXP__T_DUR, 0, "minimum_valid_rt_s", "0", NULL }, \
-    { YEXP__S_RESPONSE, 0xffff, YEXP__T_BOOL, 0, "response_ends_trial", "true", NULL }, \
-    { YEXP__S_RESPONSE, 0xffff, YEXP__T_NAME, YEXP__R_REQ, "role", NULL, NULL }, \
-    { YEXP__S_RESPONSE, 0xffff, YEXP__T_OBJ, YEXP__R_NONE, "trigger", NULL, NULL }, \
-    { YEXP__S_RESPONSE, 0xffff, YEXP__T_BOOL, 0, "wait_for_key_release", "false", NULL }, \
-    { YEXP__S_RTRIGGER, 0xffff, YEXP__T_CODE, YEXP__R_REQ, "code", NULL, NULL }, \
-    { YEXP__S_RTRIGGER, 0xffff, YEXP__T_NAME, YEXP__R_REQ, "role", NULL, NULL }, \
-    { YEXP__S_CHOICE, 0xffff, YEXP__T_STR, YEXP__R_REQ, "key", NULL, NULL }, \
-    { YEXP__S_CHOICE, 0xffff, YEXP__T_STR, YEXP__R_NONE, "name", NULL, NULL }, \
-    { YEXP__S_NODE, 0xffff, YEXP__T_SET, 0, "data", "{}", NULL }, \
-    { YEXP__S_NODE, 0xffff, YEXP__T_VAR, YEXP__R_NONE, "if", NULL, NULL }, \
-    { YEXP__S_NODE, 0xffff, YEXP__T_ENUM, 0, "interleave", "\"random\"", "random=0,round_robin=1" }, \
-    { YEXP__S_NODE, 0xffff, YEXP__T_OBJ, YEXP__R_NONE, "loop", NULL, NULL }, \
-    { YEXP__S_NODE, 0xffff, YEXP__T_NAME, YEXP__R_REQ, "name", NULL, NULL }, \
-    { YEXP__S_NODE, 0xffff, YEXP__T_BOOL, 0, "record_data", "true", NULL }, \
-    { YEXP__S_NODE, 0xffff, YEXP__T_INT, 0, "repetitions", "1", NULL }, \
-    { YEXP__S_NODE, 0xffff, YEXP__T_ENUM, YEXP__R_NONE, "requeue", NULL, "no_response=0" }, \
-    { YEXP__S_NODE, 0xffff, YEXP__T_STRS, 0, "rules", "[]", NULL }, \
-    { YEXP__S_NODE, 0xffff, YEXP__T_LIST, YEXP__R_NONE, "timeline", NULL, NULL }, \
-    { YEXP__S_NODE, 0xffff, YEXP__T_STR, YEXP__R_NONE, "timeline_variables", NULL, NULL }, \
-    { YEXP__S_NODE, 0xffff, YEXP__T_NUM, 0, "track_rate", "0", NULL }, \
-    { YEXP__S_NODE, 0xffff, YEXP__T_NAMES, 0, "tracks", "[]", NULL }, \
-    { YEXP__S_NODE, 0xffff, YEXP__T_NAME, YEXP__R_NONE, "trial", NULL, NULL }, \
-    { YEXP__S_NODE, 0xffff, YEXP__T_VAR, YEXP__R_NONE, "unless", NULL, NULL }, \
-    { YEXP__S_NODE, 0xffff, YEXP__T_SET, 0, "vars", "{}", NULL }, \
-    { YEXP__S_LOOP, 0xffff, YEXP__T_INT, YEXP__R_REQ, "max", NULL, NULL }, \
-    { YEXP__S_LOOP, 0xffff, YEXP__T_NUM, YEXP__R_REQ, "until_accuracy", NULL, NULL },
+    { YEXP_S_RESPONSE, 0xffff, YEXP_T_BOOL, 0, "allow_held_key", "false", "", "a key held down at the window's start can count", NULL }, \
+    { YEXP_S_RESPONSE, 0xffff, YEXP_T_LIST, YEXP_R_NONE, "choices", NULL, "", "the keys or buttons that count; none: any press of the role", NULL }, \
+    { YEXP_S_RESPONSE, 0xffff, YEXP_T_DUR, 0, "duration_s", "0", "s", "the deadline from the onset of from; 0: none", NULL }, \
+    { YEXP_S_RESPONSE, 0xffff, YEXP_T_NAME, YEXP_R_REQ, "from", NULL, "", "the stimulus whose onset starts the reaction time", NULL }, \
+    { YEXP_S_RESPONSE, 0xffff, YEXP_T_VAL, YEXP_R_NONE, "key_answer", NULL, "", "the correct choice: $correct is true when the response is this key", NULL }, \
+    { YEXP_S_RESPONSE, 0xffff, YEXP_T_INT, YEXP_R_LIT, "max_responses", "0", "", "with response_ends_trial false: the window ends after this many responses; 0: never", NULL }, \
+    { YEXP_S_RESPONSE, 0xffff, YEXP_T_DUR, 0, "minimum_valid_rt_s", "0", "s", "a press earlier than this from the onset is an anticipation; below 0: valid before the onset", NULL }, \
+    { YEXP_S_RESPONSE, 0xffff, YEXP_T_BOOL, 0, "response_ends_trial", "true", "", "true: after starts at the response; false: at the window's end", NULL }, \
+    { YEXP_S_RESPONSE, 0xffff, YEXP_T_NAME, YEXP_R_REQ, "role", NULL, "", "the event role that gives the presses", NULL }, \
+    { YEXP_S_RESPONSE, 0xffff, YEXP_T_OBJ, YEXP_R_NONE, "trigger", NULL, "", "a code on an output role for each choice, sent when the response is made", NULL }, \
+    { YEXP_S_RESPONSE, 0xffff, YEXP_T_BOOL, 0, "wait_for_key_release", "false", "", "the window ends at the response's release", NULL }, \
+    { YEXP_S_RTRIGGER, 0xffff, YEXP_T_CODE, YEXP_R_REQ, "code", NULL, "", "the trigger code: an integer from 0, a variable or a lookup", NULL }, \
+    { YEXP_S_RTRIGGER, 0xffff, YEXP_T_NAME, YEXP_R_REQ, "role", NULL, "", "the output role that sends the code", NULL }, \
+    { YEXP_S_CHOICE, 0xffff, YEXP_T_STR, YEXP_R_REQ, "key", NULL, "", "the key or button name", NULL }, \
+    { YEXP_S_CHOICE, 0xffff, YEXP_T_STR, YEXP_R_NONE, "name", NULL, "", "the response's name in the data; none: the key", NULL }, \
+    { YEXP_S_NODE, 0xffff, YEXP_T_SET, 0, "data", "{}", "", "constant columns by name; children inherit them", NULL }, \
+    { YEXP_S_NODE, 0xffff, YEXP_T_VAR, YEXP_R_NONE, "if", NULL, "", "a boolean variable, read when the node starts: the node runs only when it is true", NULL }, \
+    { YEXP_S_NODE, 0xffff, YEXP_T_ENUM, 0, "interleave", "\"random\"", "", "how the tracks take turns: random, or round_robin", "random=0,round_robin=1" }, \
+    { YEXP_S_NODE, 0xffff, YEXP_T_OBJ, YEXP_R_NONE, "loop", NULL, "", "run the node again until the last run's proportion correct reaches until_accuracy, at most max times", NULL }, \
+    { YEXP_S_NODE, 0xffff, YEXP_T_NAME, YEXP_R_REQ, "name", NULL, "", "the node's name, unique among its siblings; the path a/b names it in data and seeds", NULL }, \
+    { YEXP_S_NODE, 0xffff, YEXP_T_BOOL, 0, "record_data", "true", "", "false: its trials write no row", NULL }, \
+    { YEXP_S_NODE, 0xffff, YEXP_T_INT, 0, "repetitions", "1", "", "a container runs its children this many times", NULL }, \
+    { YEXP_S_NODE, 0xffff, YEXP_T_ENUM, YEXP_R_NONE, "requeue", NULL, "", "no_response: a trial with no response runs again later", "no_response=0" }, \
+    { YEXP_S_NODE, 0xffff, YEXP_T_STRS, 0, "rules", "[]", "", "rules statements for the trial order (ytr_rules()), joined with LF", NULL }, \
+    { YEXP_S_NODE, 0xffff, YEXP_T_LIST, YEXP_R_NONE, "timeline", NULL, "", "child nodes, run in order: the node is a container", NULL }, \
+    { YEXP_S_NODE, 0xffff, YEXP_T_STR, YEXP_R_NONE, "timeline_variables", NULL, "", "a TABLE entry: one trial, or one run of the children, per row", NULL }, \
+    { YEXP_S_NODE, 0xffff, YEXP_T_NUM, 0, "track_rate", "0", "", "the probability of a track trial while tracks and scheduled trials are left", NULL }, \
+    { YEXP_S_NODE, 0xffff, YEXP_T_NAMES, 0, "tracks", "[]", "", "the methods that propose the levels of track trials", NULL }, \
+    { YEXP_S_NODE, 0xffff, YEXP_T_NAME, YEXP_R_NONE, "trial", NULL, "", "the template that the node runs: the node is a leaf", NULL }, \
+    { YEXP_S_NODE, 0xffff, YEXP_T_VAR, YEXP_R_NONE, "unless", NULL, "", "a boolean variable, read when the node starts: the node runs only when it is false", NULL }, \
+    { YEXP_S_NODE, 0xffff, YEXP_T_SET, 0, "vars", "{}", "", "variables by name: a value, a choice drawn per trial, and in version 2 uniform or walk2d", NULL }, \
+    { YEXP_S_LOOP, 0xffff, YEXP_T_INT, YEXP_R_REQ, "max", NULL, "", "the most runs", NULL }, \
+    { YEXP_S_LOOP, 0xffff, YEXP_T_NUM, YEXP_R_REQ, "until_accuracy", NULL, "", "the proportion correct of the last run that ends the loop", NULL },
 
 /* The format's keys and defaults, version 1 (D2). Sorted by section, then key.
  * The stimulus, method and step rows came from the parameter tables of the
  * headers as they stood when version 1 was fixed; a later change to a header
  * does not change a row, since these are the format's defaults. */
 static const yexp_row yexp__rows[] = {
-    { YEXP__S_ROOT, 0xffff, YEXP__T_SET, 0, "devices", "{}", NULL },
-    { YEXP__S_ROOT, 0xffff, YEXP__T_OBJ, 0, "display", "{}", NULL },
-    { YEXP__S_ROOT, 0xffff, YEXP__T_STR, YEXP__R_REQ, "format", NULL, NULL },
-    { YEXP__S_ROOT, 0xffff, YEXP__T_SET, 0, "methods", "{}", NULL },
-    { YEXP__S_ROOT, 0xffff, YEXP__T_NAMEZ, 0, "name", "\"\"", NULL },
-    { YEXP__S_ROOT, 0xffff, YEXP__T_OBJ, 0, "session", "{\"fields\":{\"participant\":{\"required\":true,\"type\":\"integer\"}}}", NULL },
-    { YEXP__S_ROOT, 0xffff, YEXP__T_SET, 0, "stimuli", "{}", NULL },
-    { YEXP__S_ROOT, 0xffff, YEXP__T_LIST, YEXP__R_REQ, "timeline", NULL, NULL },
-    { YEXP__S_ROOT, 0xffff, YEXP__T_SET, YEXP__R_REQ, "trials", NULL, NULL },
-    { YEXP__S_ROOT, 0xffff, YEXP__T_INT, YEXP__R_REQ, "version", NULL, NULL },
-    { YEXP__S_ROOT, 0xffff, YEXP__T_OBJ, 0, "web", "{}", NULL },
-    { YEXP__S_DISPLAY, 0xffff, YEXP__T_VEC3, 0, "background", "[0.5,0.5,0.5]", NULL },
-    { YEXP__S_DISPLAY, 0xffff, YEXP__T_ENUM, 0, "calibration", "\"optional\"", "required=0,optional=1" },
-    { YEXP__S_DISPLAY, 0xffff, YEXP__T_INT, 0, "min_tier", "0", NULL },
-    { YEXP__S_DISPLAY, 0xffff, YEXP__T_ENUM, 0, "units", "\"px\"", "px=0,deg=1" },
+    { YEXP_S_ROOT, 0xffff, YEXP_T_SET, 0, "devices", "{}", "", "event roles by name: keys, buttons, triggers (2.9)", NULL },
+    { YEXP_S_ROOT, 0xffff, YEXP_T_OBJ, 0, "display", "{}", "", "the display: units, background, calibration, min_tier", NULL },
+    { YEXP_S_ROOT, 0xffff, YEXP_T_STR, YEXP_R_REQ, "format", NULL, "", "always \"ysp-experiment\"", NULL },
+    { YEXP_S_ROOT, 0xffff, YEXP_T_SET, 0, "methods", "{}", "", "adaptive methods by name: stair, quest or aep (2.8)", NULL },
+    { YEXP_S_ROOT, 0xffff, YEXP_T_NAMEZ, 0, "name", "\"\"", "", "the experiment's name; \"\" for none", NULL },
+    { YEXP_S_ROOT, 0xffff, YEXP_T_OBJ, 0, "session", "{\"fields\":{\"participant\":{\"required\":true,\"type\":\"integer\"}}}", "", "the values the operator gives at the start (the web: the URL query), by name", NULL },
+    { YEXP_S_ROOT, 0xffff, YEXP_T_SET, 0, "stimuli", "{}", "", "stimuli by name (2.7)", NULL },
+    { YEXP_S_ROOT, 0xffff, YEXP_T_LIST, YEXP_R_REQ, "timeline", NULL, "", "the nodes, run in order (2.4)", NULL },
+    { YEXP_S_ROOT, 0xffff, YEXP_T_SET, YEXP_R_REQ, "trials", NULL, "", "trial templates by name (2.5)", NULL },
+    { YEXP_S_ROOT, 0xffff, YEXP_T_INT, YEXP_R_REQ, "version", NULL, "", "the format version: 1", NULL },
+    { YEXP_S_ROOT, 0xffff, YEXP_T_OBJ, 0, "web", "{}", "", "whether the web player can run the experiment", NULL },
+    { YEXP_S_DISPLAY, 0xffff, YEXP_T_VEC3, 0, "background", "[0.5,0.5,0.5]", "rgb", "the background color, [r, g, b] in linear device RGB", NULL },
+    { YEXP_S_DISPLAY, 0xffff, YEXP_T_ENUM, 0, "calibration", "\"optional\"", "", "required: the session does not start without the rig's display calibration; optional: a nominal one, flagged", "required=0,optional=1" },
+    { YEXP_S_DISPLAY, 0xffff, YEXP_T_INT, 0, "min_tier", "0", "", "the timing tier, 1 to 3, that frames must reach; frames below it are flagged (D11); 0: none", NULL },
+    { YEXP_S_DISPLAY, 0xffff, YEXP_T_ENUM, 0, "units", "\"px\"", "", "the unit of positions and sizes: px or deg", "px=0,deg=1" },
     YEXP__ROWS_SESSION_ROLE
     YEXP__ROWS_STIM_A
-    { YEXP__S_STIM, 0x02ff, YEXP__T_NUM, 0, "visible", "1", NULL },
+    { YEXP_S_STIM, 0x02ff, YEXP_T_NUM, 0, "visible", "1", "", "", NULL },
     YEXP__ROWS_STIM_B
     YEXP__ROWS_METHODS
-    { YEXP__S_TEMPLATE, 0xffff, YEXP__T_LIST, 0, "after", "[]", NULL },
-    { YEXP__S_TEMPLATE, 0xffff, YEXP__T_SET, 0, "columns", "{}", NULL },
-    { YEXP__S_TEMPLATE, 0xffff, YEXP__T_LIST, 0, "events", "[]", NULL },
-    { YEXP__S_TEMPLATE, 0xffff, YEXP__T_VAL, YEXP__R_SELF, "method_value", "\"$level\"", NULL },
-    { YEXP__S_TEMPLATE, 0xffff, YEXP__T_VAL, YEXP__R_SELF, "outcome", "\"correct\"", NULL },
-    { YEXP__S_TEMPLATE, 0xffff, YEXP__T_NAMES, YEXP__R_NONE | YEXP__R_SELF, "record", NULL, NULL },
-    { YEXP__S_TEMPLATE, 0xffff, YEXP__T_OBJ, YEXP__R_NONE, "response", NULL, NULL },
+    { YEXP_S_TEMPLATE, 0xffff, YEXP_T_LIST, 0, "after", "[]", "", "steps from the later of the response's end and the events' end", NULL },
+    { YEXP_S_TEMPLATE, 0xffff, YEXP_T_SET, 0, "columns", "{}", "", "the template's own data columns, by name", NULL },
+    { YEXP_S_TEMPLATE, 0xffff, YEXP_T_LIST, 0, "events", "[]", "", "steps from the trial's first frame", NULL },
+    { YEXP_S_TEMPLATE, 0xffff, YEXP_T_VAL, YEXP_R_SELF, "method_value", "\"$level\"", "", "the value that the method's update hears; ignored when no leaf with tracks runs the template", NULL },
+    { YEXP_S_TEMPLATE, 0xffff, YEXP_T_VAL, YEXP_R_SELF, "outcome", "\"correct\"", "", "the outcome that the method's update hears: correct, or an integer or boolean value", NULL },
+    { YEXP_S_TEMPLATE, 0xffff, YEXP_T_NAMES, YEXP_R_NONE | YEXP_R_SELF, "record", NULL, "", "the stimuli whose onsets and frames are columns; default: the response's from and stimuli with a trigger at onset", NULL },
+    { YEXP_S_TEMPLATE, 0xffff, YEXP_T_OBJ, YEXP_R_NONE, "response", NULL, "", "the response: its role, choices and window (2.6, 3.13)", NULL },
     YEXP__ROWS_RESPONSE_LOOP
-    { YEXP__S_STEP, 0x0008, YEXP__T_DUR, YEXP__R_REQ, "at_s", NULL, NULL },
-    { YEXP__S_STEP, 0x0060, YEXP__T_DUR, 0, "delay_s", "0", NULL },
-    { YEXP__S_STEP, 0x0060, YEXP__T_DUR, 0, "duration_s", "0", NULL },
-    { YEXP__S_STEP, 0x0060, YEXP__T_ENUM, 0, "ease", "\"linear\"", "linear=0,step=1,cosine=2,quad_in=3,quad_out=4,log=5,bezier=6,quad_in_out=7,cubic_in=8,cubic_out=9,cubic_in_out=10" },
-    { YEXP__S_STEP, 0x0200, YEXP__T_VAR, YEXP__R_REQ, "if", NULL, NULL },
-    { YEXP__S_STEP, 0x0100, YEXP__T_STR, YEXP__R_REQ, "mark", NULL, NULL },
-    { YEXP__S_STEP, 0x0002, YEXP__T_TARGETS, YEXP__R_REQ, "off", NULL, NULL },
-    { YEXP__S_STEP, 0x0001, YEXP__T_TARGETS, YEXP__R_REQ, "on", NULL, NULL },
-    { YEXP__S_STEP, 0x0070, YEXP__T_OBJ, YEXP__R_REQ, "props", NULL, NULL },
-    { YEXP__S_STEP, 0x0080, YEXP__T_NAME, YEXP__R_REQ, "role", NULL, NULL },
-    { YEXP__S_STEP, 0x0010, YEXP__T_NAME, YEXP__R_REQ, "set", NULL, NULL },
-    { YEXP__S_STEP, 0x0003, YEXP__T_DUR, YEXP__R_SELF, "stagger_s", "0", NULL },
-    { YEXP__S_STEP, 0x0600, YEXP__T_LIST, YEXP__R_REQ, "steps", NULL, NULL },
-    { YEXP__S_STEP, 0x0040, YEXP__T_NAME, YEXP__R_REQ, "then", NULL, NULL },
-    { YEXP__S_STEP, 0x0020, YEXP__T_NAME, YEXP__R_REQ, "to", NULL, NULL },
-    { YEXP__S_STEP, 0x0080, YEXP__T_CODE, YEXP__R_REQ, "trigger", NULL, NULL },
-    { YEXP__S_STEP, 0x0400, YEXP__T_VAR, YEXP__R_REQ, "unless", NULL, NULL },
-    { YEXP__S_STEP, 0x0004, YEXP__T_DUR, YEXP__R_REQ, "wait_s", NULL, NULL },
+    { YEXP_S_STEP, 0x0008, YEXP_T_DUR, YEXP_R_REQ, "at_s", NULL, "s", "move the cursor to this trial time", NULL },
+    { YEXP_S_STEP, 0x0060, YEXP_T_DUR, 0, "delay_s", "0", "s", "the tween starts this long after the cursor", NULL },
+    { YEXP_S_STEP, 0x0060, YEXP_T_DUR, 0, "duration_s", "0", "s", "the tween's duration; 0: jump", NULL },
+    { YEXP_S_STEP, 0x0060, YEXP_T_ENUM, 0, "ease", "\"linear\"", "", "the tween's curve", "linear=0,step=1,cosine=2,quad_in=3,quad_out=4,log=5,bezier=6,quad_in_out=7,cubic_in=8,cubic_out=9,cubic_in_out=10" },
+    { YEXP_S_STEP, 0x0200, YEXP_T_VAR, YEXP_R_REQ, "if", NULL, "", "a boolean variable: the steps go in when it is true", NULL },
+    { YEXP_S_STEP, 0x0100, YEXP_T_STR, YEXP_R_REQ, "mark", NULL, "", "a label in the events data", NULL },
+    { YEXP_S_STEP, 0x0002, YEXP_T_TARGETS, YEXP_R_REQ, "off", NULL, "", "the stimuli to hide", NULL },
+    { YEXP_S_STEP, 0x0001, YEXP_T_TARGETS, YEXP_R_REQ, "on", NULL, "", "the stimuli to show", NULL },
+    { YEXP_S_STEP, 0x0070, YEXP_T_OBJ, YEXP_R_REQ, "props", NULL, "", "stimulus properties to their values", NULL },
+    { YEXP_S_STEP, 0x0080, YEXP_T_NAME, YEXP_R_REQ, "role", NULL, "", "the output role that sends the trigger", NULL },
+    { YEXP_S_STEP, 0x0010, YEXP_T_NAME, YEXP_R_REQ, "set", NULL, "", "the stimulus whose properties the step sets", NULL },
+    { YEXP_S_STEP, 0x0003, YEXP_T_DUR, YEXP_R_SELF, "stagger_s", "0", "s", "the time between the onsets or offsets of the listed stimuli", NULL },
+    { YEXP_S_STEP, 0x0600, YEXP_T_LIST, YEXP_R_REQ, "steps", NULL, "", "the steps that the condition puts in", NULL },
+    { YEXP_S_STEP, 0x0040, YEXP_T_NAME, YEXP_R_REQ, "then", NULL, "", "the stimulus to tween; the cursor then moves to the tween's end", NULL },
+    { YEXP_S_STEP, 0x0020, YEXP_T_NAME, YEXP_R_REQ, "to", NULL, "", "the stimulus to tween", NULL },
+    { YEXP_S_STEP, 0x0080, YEXP_T_CODE, YEXP_R_REQ, "trigger", NULL, "", "the trigger code: an integer from 0, a variable or a lookup", NULL },
+    { YEXP_S_STEP, 0x0400, YEXP_T_VAR, YEXP_R_REQ, "unless", NULL, "", "a boolean variable: the steps go in when it is false", NULL },
+    { YEXP_S_STEP, 0x0004, YEXP_T_DUR, YEXP_R_REQ, "wait_s", NULL, "s", "move the cursor on by this much", NULL },
 };
 #define YEXP__N_ROWS ((int)(sizeof yexp__rows / sizeof yexp__rows[0]))
 
@@ -1252,129 +1306,129 @@ static const yexp_row yexp__rows[] = {
  * second default, 1, for a template with states), then the sections that
  * version 2 adds. Sorted by section, then key. */
 static const yexp_row yexp__rows2[] = {
-    { YEXP__S_ROOT, 0xffff, YEXP__T_SET, 0, "controls", "{}", NULL },
-    { YEXP__S_ROOT, 0xffff, YEXP__T_SET, 0, "devices", "{}", NULL },
-    { YEXP__S_ROOT, 0xffff, YEXP__T_OBJ, 0, "display", "{}", NULL },
-    { YEXP__S_ROOT, 0xffff, YEXP__T_STR, YEXP__R_REQ, "format", NULL, NULL },
-    { YEXP__S_ROOT, 0xffff, YEXP__T_SET, 0, "methods", "{}", NULL },
-    { YEXP__S_ROOT, 0xffff, YEXP__T_NAMEZ, 0, "name", "\"\"", NULL },
-    { YEXP__S_ROOT, 0xffff, YEXP__T_SET, 0, "roles", "{}", NULL },
-    { YEXP__S_ROOT, 0xffff, YEXP__T_OBJ, 0, "session", "{\"fields\":{\"participant\":{\"required\":true,\"type\":\"integer\"}}}", NULL },
-    { YEXP__S_ROOT, 0xffff, YEXP__T_SET, 0, "stimuli", "{}", NULL },
-    { YEXP__S_ROOT, 0xffff, YEXP__T_LIST, YEXP__R_REQ, "timeline", NULL, NULL },
-    { YEXP__S_ROOT, 0xffff, YEXP__T_SET, YEXP__R_REQ, "trials", NULL, NULL },
-    { YEXP__S_ROOT, 0xffff, YEXP__T_INT, YEXP__R_REQ, "version", NULL, NULL },
-    { YEXP__S_ROOT, 0xffff, YEXP__T_OBJ, 0, "web", "{}", NULL },
-    { YEXP__S_DISPLAY, 0xffff, YEXP__T_VEC3, 0, "background", "[0.5,0.5,0.5]", NULL },
-    { YEXP__S_DISPLAY, 0xffff, YEXP__T_ENUM, 0, "calibration", "\"optional\"", "required=0,optional=1" },
-    { YEXP__S_DISPLAY, 0xffff, YEXP__T_INT, 0, "min_tier", "0", NULL },
-    { YEXP__S_DISPLAY, 0xffff, YEXP__T_ENUM, 0, "units", "\"px\"", "px=0,deg=1,cm=2" },
+    { YEXP_S_ROOT, 0xffff, YEXP_T_SET, 0, "controls", "{}", "", "controls by name that every template can name (3.7)", NULL },
+    { YEXP_S_ROOT, 0xffff, YEXP_T_SET, 0, "devices", "{}", "", "event roles by name: keys, buttons, triggers (2.9)", NULL },
+    { YEXP_S_ROOT, 0xffff, YEXP_T_OBJ, 0, "display", "{}", "", "the display: units, background, calibration, min_tier", NULL },
+    { YEXP_S_ROOT, 0xffff, YEXP_T_STR, YEXP_R_REQ, "format", NULL, "", "always \"ysp-experiment\"", NULL },
+    { YEXP_S_ROOT, 0xffff, YEXP_T_SET, 0, "methods", "{}", "", "adaptive methods by name: stair, quest or aep (2.8)", NULL },
+    { YEXP_S_ROOT, 0xffff, YEXP_T_NAMEZ, 0, "name", "\"\"", "", "the experiment's name; \"\" for none", NULL },
+    { YEXP_S_ROOT, 0xffff, YEXP_T_SET, 0, "roles", "{}", "", "signal roles by name: inputs that give values all the time, such as a hand's position (3.5)", NULL },
+    { YEXP_S_ROOT, 0xffff, YEXP_T_OBJ, 0, "session", "{\"fields\":{\"participant\":{\"required\":true,\"type\":\"integer\"}}}", "", "the values the operator gives at the start (the web: the URL query), by name", NULL },
+    { YEXP_S_ROOT, 0xffff, YEXP_T_SET, 0, "stimuli", "{}", "", "stimuli by name (2.7)", NULL },
+    { YEXP_S_ROOT, 0xffff, YEXP_T_LIST, YEXP_R_REQ, "timeline", NULL, "", "the nodes, run in order (2.4)", NULL },
+    { YEXP_S_ROOT, 0xffff, YEXP_T_SET, YEXP_R_REQ, "trials", NULL, "", "trial templates by name (2.5)", NULL },
+    { YEXP_S_ROOT, 0xffff, YEXP_T_INT, YEXP_R_REQ, "version", NULL, "", "the format version: 1 or 2", NULL },
+    { YEXP_S_ROOT, 0xffff, YEXP_T_OBJ, 0, "web", "{}", "", "whether the web player can run the experiment", NULL },
+    { YEXP_S_DISPLAY, 0xffff, YEXP_T_VEC3, 0, "background", "[0.5,0.5,0.5]", "rgb", "the background color, [r, g, b] in linear device RGB", NULL },
+    { YEXP_S_DISPLAY, 0xffff, YEXP_T_ENUM, 0, "calibration", "\"optional\"", "", "required: the session does not start without the rig's display calibration; optional: a nominal one, flagged", "required=0,optional=1" },
+    { YEXP_S_DISPLAY, 0xffff, YEXP_T_INT, 0, "min_tier", "0", "", "the timing tier, 1 to 3, that frames must reach; frames below it are flagged (D11); 0: none", NULL },
+    { YEXP_S_DISPLAY, 0xffff, YEXP_T_ENUM, 0, "units", "\"px\"", "", "the unit of positions and sizes: px, deg or cm (3.4)", "px=0,deg=1,cm=2" },
     YEXP__ROWS_SESSION_ROLE
     YEXP__ROWS_STIM_A
-    { YEXP__S_STIM, 0x02ff, YEXP__T_NUM, YEXP__R_STEP, "visible", "1", NULL },
+    { YEXP_S_STIM, 0x02ff, YEXP_T_NUM, YEXP_R_STEP, "visible", "1", "", "", NULL },
     YEXP__ROWS_STIM_B
     YEXP__ROWS_METHODS
-    { YEXP__S_TEMPLATE, 0xffff, YEXP__T_LIST, 0, "after", "[]", NULL },
-    { YEXP__S_TEMPLATE, 0xffff, YEXP__T_SET, 0, "columns", "{}", NULL },
-    { YEXP__S_TEMPLATE, 0xffff, YEXP__T_SET, 0, "controls", "{}", NULL },
-    { YEXP__S_TEMPLATE, 0xffff, YEXP__T_LIST, 0, "events", "[]", NULL },
-    { YEXP__S_TEMPLATE, 0xffff, YEXP__T_LIST, 0, "exits", "[]", NULL },
-    { YEXP__S_TEMPLATE, 0xffff, YEXP__T_NAMES, 0, "flags", "[]", NULL },
-    { YEXP__S_TEMPLATE, 0xffff, YEXP__T_VAL, YEXP__R_SELF, "method_value", "\"$level\"", NULL },
-    { YEXP__S_TEMPLATE, 0x0001, YEXP__T_VAL, YEXP__R_SELF, "outcome", "\"correct\"", NULL },
-    { YEXP__S_TEMPLATE, 0x0002, YEXP__T_VAL, YEXP__R_SELF, "outcome", "1", NULL },
-    { YEXP__S_TEMPLATE, 0xffff, YEXP__T_NAMES, YEXP__R_NONE | YEXP__R_SELF, "record", NULL, NULL },
-    { YEXP__S_TEMPLATE, 0xffff, YEXP__T_LIST, 0, "requeue_outcomes", "[]", NULL },
-    { YEXP__S_TEMPLATE, 0xffff, YEXP__T_OBJ, YEXP__R_NONE, "response", NULL, NULL },
-    { YEXP__S_TEMPLATE, 0xffff, YEXP__T_LIST, YEXP__R_NONE, "states", NULL, NULL },
+    { YEXP_S_TEMPLATE, 0xffff, YEXP_T_LIST, 0, "after", "[]", "", "steps from the later of the response's end and the events' end", NULL },
+    { YEXP_S_TEMPLATE, 0xffff, YEXP_T_SET, 0, "columns", "{}", "", "the template's own data columns, by name", NULL },
+    { YEXP_S_TEMPLATE, 0xffff, YEXP_T_SET, 0, "controls", "{}", "", "the template's controls by name (3.7)", NULL },
+    { YEXP_S_TEMPLATE, 0xffff, YEXP_T_LIST, 0, "events", "[]", "", "steps from the trial's first frame; until splits them into states", NULL },
+    { YEXP_S_TEMPLATE, 0xffff, YEXP_T_LIST, 0, "exits", "[]", "", "shared exits: each is an exit of the states in its in; only with states", NULL },
+    { YEXP_S_TEMPLATE, 0xffff, YEXP_T_NAMES, 0, "flags", "[]", "", "names of booleans that flag steps set; each is a column", NULL },
+    { YEXP_S_TEMPLATE, 0xffff, YEXP_T_VAL, YEXP_R_SELF, "method_value", "\"$level\"", "", "the value that the method's update hears; ignored when no leaf with tracks runs the template", NULL },
+    { YEXP_S_TEMPLATE, 0x0001, YEXP_T_VAL, YEXP_R_SELF, "outcome", "\"correct\"", "", "the outcome that the method's update hears: correct, or an integer or boolean value", NULL },
+    { YEXP_S_TEMPLATE, 0x0002, YEXP_T_VAL, YEXP_R_SELF, "outcome", "1", "", "the outcome that the method's update hears, with states and no key_answer", NULL },
+    { YEXP_S_TEMPLATE, 0xffff, YEXP_T_NAMES, YEXP_R_NONE | YEXP_R_SELF, "record", NULL, "", "the stimuli whose onsets and frames are columns; default: the response's from and stimuli with a trigger at onset", NULL },
+    { YEXP_S_TEMPLATE, 0xffff, YEXP_T_LIST, 0, "requeue_outcomes", "[]", "", "outcomes that make the trial invalid; a node with requeue runs it again", NULL },
+    { YEXP_S_TEMPLATE, 0xffff, YEXP_T_OBJ, YEXP_R_NONE, "response", NULL, "", "the response: its role, choices and window (2.6, 3.13)", NULL },
+    { YEXP_S_TEMPLATE, 0xffff, YEXP_T_LIST, YEXP_R_NONE, "states", NULL, "", "the trial's states (3.11); not with events or after", NULL },
     YEXP__ROWS_RESPONSE_LOOP
-    { YEXP__S_STEP, 0x0008, YEXP__T_DUR, YEXP__R_REQ, "at_s", NULL, NULL },
-    { YEXP__S_STEP, 0x0060, YEXP__T_DUR, 0, "delay_s", "0", NULL },
-    { YEXP__S_STEP, 0x0060, YEXP__T_DUR, 0, "duration_s", "0", NULL },
-    { YEXP__S_STEP, 0x0060, YEXP__T_ENUM, 0, "ease", "\"linear\"", "linear=0,step=1,cosine=2,quad_in=3,quad_out=4,log=5,bezier=6,quad_in_out=7,cubic_in=8,cubic_out=9,cubic_in_out=10" },
-    { YEXP__S_STEP, 0x2000, YEXP__T_NAME, YEXP__R_REQ, "flag", NULL, NULL },
-    { YEXP__S_STEP, 0x0200, YEXP__T_VAR, YEXP__R_REQ, "if", NULL, NULL },
-    { YEXP__S_STEP, 0x0100, YEXP__T_STR, YEXP__R_REQ, "mark", NULL, NULL },
-    { YEXP__S_STEP, 0x0002, YEXP__T_TARGETS, YEXP__R_REQ, "off", NULL, NULL },
-    { YEXP__S_STEP, 0x0001, YEXP__T_TARGETS, YEXP__R_REQ, "on", NULL, NULL },
-    { YEXP__S_STEP, 0x0070, YEXP__T_OBJ, YEXP__R_REQ, "props", NULL, NULL },
-    { YEXP__S_STEP, 0x1000, YEXP__T_NAME, YEXP__R_REQ, "recenter", NULL, NULL },
-    { YEXP__S_STEP, 0x0080, YEXP__T_NAME, YEXP__R_REQ, "role", NULL, NULL },
-    { YEXP__S_STEP, 0x0010, YEXP__T_NAME, YEXP__R_REQ, "set", NULL, NULL },
-    { YEXP__S_STEP, 0x0003, YEXP__T_DUR, YEXP__R_SELF, "stagger_s", "0", NULL },
-    { YEXP__S_STEP, 0x0600, YEXP__T_LIST, YEXP__R_REQ, "steps", NULL, NULL },
-    { YEXP__S_STEP, 0x0040, YEXP__T_NAME, YEXP__R_REQ, "then", NULL, NULL },
-    { YEXP__S_STEP, 0x0800, YEXP__T_DUR, YEXP__R_NONE, "timeout_s", NULL, NULL },
-    { YEXP__S_STEP, 0x0020, YEXP__T_NAME, YEXP__R_REQ, "to", NULL, NULL },
-    { YEXP__S_STEP, 0x1000, YEXP__T_POINT, YEXP__R_REQ, "to", NULL, NULL },
-    { YEXP__S_STEP, 0x0080, YEXP__T_CODE, YEXP__R_REQ, "trigger", NULL, NULL },
-    { YEXP__S_STEP, 0x0400, YEXP__T_VAR, YEXP__R_REQ, "unless", NULL, NULL },
-    { YEXP__S_STEP, 0x0800, YEXP__T_NAME, YEXP__R_REQ, "until", NULL, NULL },
-    { YEXP__S_STEP, 0x2000, YEXP__T_BOOL, YEXP__R_REQ, "value", NULL, NULL },
-    { YEXP__S_STEP, 0x0004, YEXP__T_DUR, YEXP__R_REQ, "wait_s", NULL, NULL },
-    { YEXP__S_SIGROLE, 0xffff, YEXP__T_BOOL, 0, "allow_relative", "false", NULL },
-    { YEXP__S_SIGROLE, 0xffff, YEXP__T_BOOL, 0, "required", "true", NULL },
-    { YEXP__S_SIGROLE, 0xffff, YEXP__T_ENUM, YEXP__R_REQ, "type", NULL, "position2d=0,position2d_relative=1,position3d=2,scalar=3,gaze=4" },
-    { YEXP__S_SIGROLE, 0xffff, YEXP__T_ENUM, YEXP__R_REQ, "units", NULL, "display_px=0,display_cm=1,display_deg=2,workspace_cm=3,device=4" },
-    { YEXP__S_CONTROL, 0x0001, YEXP__T_POINT, 0, "about", "[0,0]", NULL },
-    { YEXP__S_CONTROL, 0x0080, YEXP__T_DUR, YEXP__R_REQ, "after_s", NULL, NULL },
-    { YEXP__S_CONTROL, 0x0002, YEXP__T_CENTER, 0, "center", "[0,0]", NULL },
-    { YEXP__S_CONTROL, 0x0004, YEXP__T_POINT, 0, "center", "[0,0]", NULL },
-    { YEXP__S_CONTROL, 0x00ff, YEXP__T_ENUM, YEXP__R_REQ, "control", NULL, "cursor=0,region=1,distance=2,movement=3,peak=4,moving_target=5,trace=6,signal_lost=7" },
-    { YEXP__S_CONTROL, 0x0011, YEXP__T_NAME, YEXP__R_NONE, "freeze_at", NULL, NULL },
-    { YEXP__S_CONTROL, 0x0078, YEXP__T_NAME, YEXP__R_NONE, "from", NULL, NULL },
-    { YEXP__S_CONTROL, 0x0010, YEXP__T_DUR, 0, "lag_s", "0.01", NULL },
-    { YEXP__S_CONTROL, 0x0001, YEXP__T_NAMES, YEXP__R_NONE, "mean", NULL, NULL },
-    { YEXP__S_CONTROL, 0x0010, YEXP__T_ENUM, 0, "measure", "\"speed\"", "speed=0" },
-    { YEXP__S_CONTROL, 0x0040, YEXP__T_REFS, YEXP__R_REQ, "of", NULL, NULL },
-    { YEXP__S_CONTROL, 0x009e, YEXP__T_REF, YEXP__R_REQ, "of", NULL, NULL },
-    { YEXP__S_CONTROL, 0x0008, YEXP__T_NUM, YEXP__R_REQ, "onset", NULL, NULL },
-    { YEXP__S_CONTROL, 0x0008, YEXP__T_POINT, YEXP__R_NONE, "origin", NULL, NULL },
-    { YEXP__S_CONTROL, 0x0002, YEXP__T_BOOL, 0, "outside", "false", NULL },
-    { YEXP__S_CONTROL, 0x0002, YEXP__T_NUM, YEXP__R_REQ, "radius", NULL, NULL },
-    { YEXP__S_CONTROL, 0x0020, YEXP__T_DUR, 0, "ramp_s", "0", NULL },
-    { YEXP__S_CONTROL, 0x0042, YEXP__T_ENUM, 0, "rate", "\"sample\"", "sample=0,frame=1" },
-    { YEXP__S_CONTROL, 0x0001, YEXP__T_NAME, YEXP__R_NONE, "role", NULL, NULL },
-    { YEXP__S_CONTROL, 0x0004, YEXP__T_NUM, 0, "scale", "1", NULL },
-    { YEXP__S_CONTROL, 0x0002, YEXP__T_NUM, YEXP__R_NONE, "speed_below", NULL, NULL },
-    { YEXP__S_CONTROL, 0x0002, YEXP__T_DUR, 0, "speed_lag_s", "0.01", NULL },
-    { YEXP__S_CONTROL, 0x0002, YEXP__T_DUR, 0, "stay_s", "0", NULL },
-    { YEXP__S_CONTROL, 0x0021, YEXP__T_NAME, YEXP__R_NONE, "stimulus", NULL, NULL },
-    { YEXP__S_CONTROL, 0x0040, YEXP__T_NAME, 0, "to", "\"end\"", NULL },
-    { YEXP__S_CONTROL, 0x0001, YEXP__T_TRANSFORM, 0, "transform", "\"identity\"", NULL },
-    { YEXP__S_CONTROL, 0x0001, YEXP__T_REF, YEXP__R_NONE, "x", NULL, NULL },
-    { YEXP__S_CONTROL, 0x0020, YEXP__T_SINES, YEXP__R_REQ, "x", NULL, NULL },
-    { YEXP__S_CONTROL, 0x0001, YEXP__T_REF, YEXP__R_NONE, "y", NULL, NULL },
-    { YEXP__S_CONTROL, 0x0020, YEXP__T_SINES, YEXP__R_REQ, "y", NULL, NULL },
-    { YEXP__S_STATE, 0xffff, YEXP__T_LIST, 0, "exits", "[]", NULL },
-    { YEXP__S_STATE, 0xffff, YEXP__T_INT, YEXP__R_NONE | YEXP__R_LIT, "max_visits", NULL, NULL },
-    { YEXP__S_STATE, 0xffff, YEXP__T_NAME, YEXP__R_REQ, "name", NULL, NULL },
-    { YEXP__S_STATE, 0xffff, YEXP__T_OBJ, YEXP__R_NONE, "over", NULL, NULL },
-    { YEXP__S_STATE, 0xffff, YEXP__T_LIST, 0, "steps", "[]", NULL },
-    { YEXP__S_OVER, 0xffff, YEXP__T_OUTCOME, YEXP__R_NONE, "outcome", NULL, NULL },
-    { YEXP__S_OVER, 0xffff, YEXP__T_NAME, YEXP__R_REQ, "to", NULL, NULL },
-    { YEXP__S_EXIT, 0x0003, YEXP__T_DUR, YEXP__R_NONE, "after_s", NULL, NULL },
-    { YEXP__S_EXIT, 0x0003, YEXP__T_VAR, YEXP__R_NONE, "if", NULL, NULL },
-    { YEXP__S_EXIT, 0x0002, YEXP__T_NAMES, YEXP__R_REQ, "in", NULL, NULL },
-    { YEXP__S_EXIT, 0x0003, YEXP__T_NAME, YEXP__R_NONE, "on", NULL, NULL },
-    { YEXP__S_EXIT, 0x0003, YEXP__T_OUTCOME, YEXP__R_NONE, "outcome", NULL, NULL },
-    { YEXP__S_EXIT, 0x0003, YEXP__T_NAME, YEXP__R_REQ, "to", NULL, NULL },
-    { YEXP__S_SRESPONSE, 0xffff, YEXP__T_LIST, YEXP__R_REQ, "choices", NULL, NULL },
-    { YEXP__S_SRESPONSE, 0xffff, YEXP__T_DUR, 0, "duration_s", "0", NULL },
-    { YEXP__S_SRESPONSE, 0xffff, YEXP__T_NAME, YEXP__R_REQ, "from", NULL, NULL },
-    { YEXP__S_SRESPONSE, 0xffff, YEXP__T_INT, YEXP__R_LIT, "max_responses", "0", NULL },
-    { YEXP__S_SRESPONSE, 0xffff, YEXP__T_DUR, 0, "minimum_valid_rt_s", "0", NULL },
-    { YEXP__S_SRESPONSE, 0xffff, YEXP__T_BOOL, 0, "response_ends_trial", "false", NULL },
-    { YEXP__S_UNIFORM, 0xffff, YEXP__T_INT, YEXP__R_LIT, "n", "1", NULL },
-    { YEXP__S_UNIFORM, 0xffff, YEXP__T_ENUM, 0, "per", "\"node\"", "node=0" },
-    { YEXP__S_UNIFORM, 0xffff, YEXP__T_NUMS, YEXP__R_REQ, "uniform", NULL, NULL },
-    { YEXP__S_WALK2D, 0xffff, YEXP__T_BOX, YEXP__R_REQ, "box", NULL, NULL },
-    { YEXP__S_WALK2D, 0xffff, YEXP__T_POINT, YEXP__R_LIT, "start", "[0,0]", NULL },
-    { YEXP__S_WALK2D, 0xffff, YEXP__T_NUM, YEXP__R_REQ | YEXP__R_LIT, "step", NULL, NULL },
+    { YEXP_S_STEP, 0x0008, YEXP_T_DUR, YEXP_R_REQ, "at_s", NULL, "s", "move the cursor to this time: trial time in events and after, from the entry in a state", NULL },
+    { YEXP_S_STEP, 0x0060, YEXP_T_DUR, 0, "delay_s", "0", "s", "the tween starts this long after the cursor", NULL },
+    { YEXP_S_STEP, 0x0060, YEXP_T_DUR, 0, "duration_s", "0", "s", "the tween's duration; 0: jump", NULL },
+    { YEXP_S_STEP, 0x0060, YEXP_T_ENUM, 0, "ease", "\"linear\"", "", "the tween's curve", "linear=0,step=1,cosine=2,quad_in=3,quad_out=4,log=5,bezier=6,quad_in_out=7,cubic_in=8,cubic_out=9,cubic_in_out=10" },
+    { YEXP_S_STEP, 0x2000, YEXP_T_NAME, YEXP_R_REQ, "flag", NULL, "", "the flag that the step sets when it lands", NULL },
+    { YEXP_S_STEP, 0x0200, YEXP_T_VAR, YEXP_R_REQ, "if", NULL, "", "a boolean variable or flag: the steps go in when it is true", NULL },
+    { YEXP_S_STEP, 0x0100, YEXP_T_STR, YEXP_R_REQ, "mark", NULL, "", "a label in the events data", NULL },
+    { YEXP_S_STEP, 0x0002, YEXP_T_TARGETS, YEXP_R_REQ, "off", NULL, "", "the stimuli to hide", NULL },
+    { YEXP_S_STEP, 0x0001, YEXP_T_TARGETS, YEXP_R_REQ, "on", NULL, "", "the stimuli to show", NULL },
+    { YEXP_S_STEP, 0x0070, YEXP_T_OBJ, YEXP_R_REQ, "props", NULL, "", "stimulus properties to their values", NULL },
+    { YEXP_S_STEP, 0x1000, YEXP_T_NAME, YEXP_R_REQ, "recenter", NULL, "", "a relative signal role to set to the point in to", NULL },
+    { YEXP_S_STEP, 0x0080, YEXP_T_NAME, YEXP_R_REQ, "role", NULL, "", "the output role that sends the trigger", NULL },
+    { YEXP_S_STEP, 0x0010, YEXP_T_NAME, YEXP_R_REQ, "set", NULL, "", "the stimulus whose properties the step sets", NULL },
+    { YEXP_S_STEP, 0x0003, YEXP_T_DUR, YEXP_R_SELF, "stagger_s", "0", "s", "the time between the onsets or offsets of the listed stimuli", NULL },
+    { YEXP_S_STEP, 0x0600, YEXP_T_LIST, YEXP_R_REQ, "steps", NULL, "", "the steps that the condition puts in", NULL },
+    { YEXP_S_STEP, 0x0040, YEXP_T_NAME, YEXP_R_REQ, "then", NULL, "", "the stimulus to tween; the cursor then moves to the tween's end", NULL },
+    { YEXP_S_STEP, 0x0800, YEXP_T_DUR, YEXP_R_NONE, "timeout_s", NULL, "s", "the wait ends the trial with outcome timeout after this; none: no timeout", NULL },
+    { YEXP_S_STEP, 0x0020, YEXP_T_NAME, YEXP_R_REQ, "to", NULL, "", "the stimulus to tween", NULL },
+    { YEXP_S_STEP, 0x1000, YEXP_T_POINT, YEXP_R_REQ, "to", NULL, "", "the point that the role then reads", NULL },
+    { YEXP_S_STEP, 0x0080, YEXP_T_CODE, YEXP_R_REQ, "trigger", NULL, "", "the trigger code: an integer from 0, a variable or a lookup", NULL },
+    { YEXP_S_STEP, 0x0400, YEXP_T_VAR, YEXP_R_REQ, "unless", NULL, "", "a boolean variable or flag: the steps go in when it is false", NULL },
+    { YEXP_S_STEP, 0x0800, YEXP_T_NAME, YEXP_R_REQ, "until", NULL, "", "wait for a hit of this control; the steps before and after are states", NULL },
+    { YEXP_S_STEP, 0x2000, YEXP_T_BOOL, YEXP_R_REQ, "value", NULL, "", "the flag's new value", NULL },
+    { YEXP_S_STEP, 0x0004, YEXP_T_DUR, YEXP_R_REQ, "wait_s", NULL, "s", "move the cursor on by this much", NULL },
+    { YEXP_S_SIGROLE, 0xffff, YEXP_T_BOOL, 0, "allow_relative", "false", "", "a relative device can bind a position2d role", NULL },
+    { YEXP_S_SIGROLE, 0xffff, YEXP_T_BOOL, 0, "required", "true", "", "the session does not start without an adapter for the role", NULL },
+    { YEXP_S_SIGROLE, 0xffff, YEXP_T_ENUM, YEXP_R_REQ, "type", NULL, "", "the value's type: position2d, its relative form and gaze have x and y, position3d x, y and z, scalar x", "position2d=0,position2d_relative=1,position3d=2,scalar=3,gaze=4" },
+    { YEXP_S_SIGROLE, 0xffff, YEXP_T_ENUM, YEXP_R_REQ, "units", NULL, "", "the units of the role's values", "display_px=0,display_cm=1,display_deg=2,workspace_cm=3,device=4" },
+    { YEXP_S_CONTROL, 0x0001, YEXP_T_POINT, 0, "about", "[0,0]", "", "the center of the rotation or mirror", NULL },
+    { YEXP_S_CONTROL, 0x0080, YEXP_T_DUR, YEXP_R_REQ, "after_s", NULL, "s", "the test is true when no sample came for this long", NULL },
+    { YEXP_S_CONTROL, 0x0002, YEXP_T_CENTER, 0, "center", "[0,0]", "", "the circle's center: a point, or a signal of the lanes of of", NULL },
+    { YEXP_S_CONTROL, 0x0004, YEXP_T_POINT, 0, "center", "[0,0]", "", "the point that the distance is from", NULL },
+    { YEXP_S_CONTROL, 0x00ff, YEXP_T_ENUM, YEXP_R_REQ, "control", NULL, "", "what the control is; it decides the other keys", "cursor=0,region=1,distance=2,movement=3,peak=4,moving_target=5,trace=6,signal_lost=7" },
+    { YEXP_S_CONTROL, 0x0011, YEXP_T_NAME, YEXP_R_NONE, "freeze_at", NULL, "", "a control with hits: from its hit to the trial's end the value holds", NULL },
+    { YEXP_S_CONTROL, 0x0078, YEXP_T_NAME, YEXP_R_NONE, "from", NULL, "", "a name with a time at which the control starts; none: the trial's start", NULL },
+    { YEXP_S_CONTROL, 0x0010, YEXP_T_DUR, 0, "lag_s", "0.01", "s", "the time over which the speed is measured", NULL },
+    { YEXP_S_CONTROL, 0x0001, YEXP_T_NAMES, YEXP_R_NONE, "mean", NULL, "", "2 to 4 roles of one type: the cursor is their mean", NULL },
+    { YEXP_S_CONTROL, 0x0010, YEXP_T_ENUM, 0, "measure", "\"speed\"", "", "what the peak follows", "speed=0" },
+    { YEXP_S_CONTROL, 0x0040, YEXP_T_REFS, YEXP_R_REQ, "of", NULL, "", "the roles and controls whose values the trace writes", NULL },
+    { YEXP_S_CONTROL, 0x009e, YEXP_T_REF, YEXP_R_REQ, "of", NULL, "", "the role or control whose value the control reads", NULL },
+    { YEXP_S_CONTROL, 0x0008, YEXP_T_NUM, YEXP_R_REQ, "onset", NULL, "", "the distance from origin that makes the movement's response, in the units of of", NULL },
+    { YEXP_S_CONTROL, 0x0008, YEXP_T_POINT, YEXP_R_NONE, "origin", NULL, "", "the point that onset is from; none: the last position at the arm", NULL },
+    { YEXP_S_CONTROL, 0x0002, YEXP_T_BOOL, 0, "outside", "false", "", "the test is outside the circle, not inside", NULL },
+    { YEXP_S_CONTROL, 0x0002, YEXP_T_NUM, YEXP_R_REQ, "radius", NULL, "", "the circle's radius, in the units of of", NULL },
+    { YEXP_S_CONTROL, 0x0020, YEXP_T_DUR, 0, "ramp_s", "0", "s", "the amplitude rises from 0 to 1 over this time; 0: no ramp", NULL },
+    { YEXP_S_CONTROL, 0x0042, YEXP_T_ENUM, 0, "rate", "\"sample\"", "", "sample: test or write at each sample; frame: at each frame's onset", "sample=0,frame=1" },
+    { YEXP_S_CONTROL, 0x0001, YEXP_T_NAME, YEXP_R_NONE, "role", NULL, "", "a role of 2 lanes that the cursor follows", NULL },
+    { YEXP_S_CONTROL, 0x0004, YEXP_T_NUM, 0, "scale", "1", "", "the value is the distance times this", NULL },
+    { YEXP_S_CONTROL, 0x0002, YEXP_T_NUM, YEXP_R_NONE, "speed_below", NULL, "", "the test also needs the speed of of below this, in units of of per second", NULL },
+    { YEXP_S_CONTROL, 0x0002, YEXP_T_DUR, 0, "speed_lag_s", "0.01", "s", "the time over which the speed is measured", NULL },
+    { YEXP_S_CONTROL, 0x0002, YEXP_T_DUR, 0, "stay_s", "0", "s", "how long the test holds before a hit", NULL },
+    { YEXP_S_CONTROL, 0x0021, YEXP_T_NAME, YEXP_R_NONE, "stimulus", NULL, "", "a stimulus whose x and y follow the value", NULL },
+    { YEXP_S_CONTROL, 0x0040, YEXP_T_NAME, 0, "to", "\"end\"", "", "a name with a time, or end: the last row", NULL },
+    { YEXP_S_CONTROL, 0x0001, YEXP_T_TRANSFORM, 0, "transform", "\"identity\"", "", "identity, or a rotation or a mirror of the input; angles in degrees, counterclockwise", NULL },
+    { YEXP_S_CONTROL, 0x0001, YEXP_T_REF, YEXP_R_NONE, "x", NULL, "", "one lane of a role, ROLE.x or ROLE.y: the cursor's x", NULL },
+    { YEXP_S_CONTROL, 0x0020, YEXP_T_SINES, YEXP_R_REQ, "x", NULL, "", "x's amplitudes (in display units), frequencies (Hz) and phases (radians)", NULL },
+    { YEXP_S_CONTROL, 0x0001, YEXP_T_REF, YEXP_R_NONE, "y", NULL, "", "one lane of a role, ROLE.x or ROLE.y: the cursor's y", NULL },
+    { YEXP_S_CONTROL, 0x0020, YEXP_T_SINES, YEXP_R_REQ, "y", NULL, "", "y's amplitudes (in display units), frequencies (Hz) and phases (radians)", NULL },
+    { YEXP_S_STATE, 0xffff, YEXP_T_LIST, 0, "exits", "[]", "", "the state's exits, tested in order", NULL },
+    { YEXP_S_STATE, 0xffff, YEXP_T_INT, YEXP_R_NONE | YEXP_R_LIT, "max_visits", NULL, "", "the most entries in a trial; one more goes to over", NULL },
+    { YEXP_S_STATE, 0xffff, YEXP_T_NAME, YEXP_R_REQ, "name", NULL, "", "the state's name, unique in the template", NULL },
+    { YEXP_S_STATE, 0xffff, YEXP_T_OBJ, YEXP_R_NONE, "over", NULL, "", "where the trial goes past max_visits", NULL },
+    { YEXP_S_STATE, 0xffff, YEXP_T_LIST, 0, "steps", "[]", "", "the steps from the state's entry", NULL },
+    { YEXP_S_OVER, 0xffff, YEXP_T_OUTCOME, YEXP_R_NONE, "outcome", NULL, "", "the outcome to set; none: no change", NULL },
+    { YEXP_S_OVER, 0xffff, YEXP_T_NAME, YEXP_R_REQ, "to", NULL, "", "a state, or end", NULL },
+    { YEXP_S_EXIT, 0x0003, YEXP_T_DUR, YEXP_R_NONE, "after_s", NULL, "s", "take the exit this long after the entry frame's onset", NULL },
+    { YEXP_S_EXIT, 0x0003, YEXP_T_VAR, YEXP_R_NONE, "if", NULL, "", "a boolean variable or flag: an instant exit is taken only when it is true", NULL },
+    { YEXP_S_EXIT, 0x0002, YEXP_T_NAMES, YEXP_R_REQ, "in", NULL, "", "the states that have this exit", NULL },
+    { YEXP_S_EXIT, 0x0003, YEXP_T_NAME, YEXP_R_NONE, "on", NULL, "", "take the exit at a hit of this control, or at the response", NULL },
+    { YEXP_S_EXIT, 0x0003, YEXP_T_OUTCOME, YEXP_R_NONE, "outcome", NULL, "", "the outcome to set; none: no change", NULL },
+    { YEXP_S_EXIT, 0x0003, YEXP_T_NAME, YEXP_R_REQ, "to", NULL, "", "a state, or end", NULL },
+    { YEXP_S_SRESPONSE, 0xffff, YEXP_T_LIST, YEXP_R_REQ, "choices", NULL, "", "the movements that can be the response, each {\"signal\": NAME}", NULL },
+    { YEXP_S_SRESPONSE, 0xffff, YEXP_T_DUR, 0, "duration_s", "0", "s", "the deadline from the onset of from; 0: none", NULL },
+    { YEXP_S_SRESPONSE, 0xffff, YEXP_T_NAME, YEXP_R_REQ, "from", NULL, "", "the stimulus whose onset starts the reaction time", NULL },
+    { YEXP_S_SRESPONSE, 0xffff, YEXP_T_INT, YEXP_R_LIT, "max_responses", "0", "", "with response_ends_trial false: the window ends after this many responses; 0: never", NULL },
+    { YEXP_S_SRESPONSE, 0xffff, YEXP_T_DUR, 0, "minimum_valid_rt_s", "0", "s", "a crossing earlier than this from the onset is an anticipation", NULL },
+    { YEXP_S_SRESPONSE, 0xffff, YEXP_T_BOOL, 0, "response_ends_trial", "false", "", "true: the response is an exit to end from every state", NULL },
+    { YEXP_S_UNIFORM, 0xffff, YEXP_T_INT, YEXP_R_LIT, "n", "1", "", "how many values, 1 to 64: a number when 1, else an array", NULL },
+    { YEXP_S_UNIFORM, 0xffff, YEXP_T_ENUM, 0, "per", "\"node\"", "", "when a new draw is made: once per run of the leaf", "node=0" },
+    { YEXP_S_UNIFORM, 0xffff, YEXP_T_NUMS, YEXP_R_REQ, "uniform", NULL, "", "[lo, hi]: the values are uniform in [lo, hi)", NULL },
+    { YEXP_S_WALK2D, 0xffff, YEXP_T_BOX, YEXP_R_REQ, "box", NULL, "", "[[x0, y0], [x1, y1]]: every point is in this box", NULL },
+    { YEXP_S_WALK2D, 0xffff, YEXP_T_POINT, YEXP_R_LIT, "start", "[0,0]", "", "the leaf's first point", NULL },
+    { YEXP_S_WALK2D, 0xffff, YEXP_T_NUM, YEXP_R_REQ | YEXP_R_LIT, "step", NULL, "", "the distance from the previous trial's point", NULL },
 };
 #define YEXP__N_ROWS2 ((int)(sizeof yexp__rows2 / sizeof yexp__rows2[0]))
 
-static const char* const yexp__section_names[YEXP__S_COUNT] = {
+static const char* const yexp__section_names[YEXP_S_COUNT] = {
     "file", "display", "session", "session field", "web", "role", "stimulus", "stair method",
     "quest method", "aep method", "template", "response", "response trigger", "choice", "node",
     "loop", "step", "signal role", "control", "state", "over", "exit", "response with signal choices",
@@ -1389,10 +1443,10 @@ YEXP_API const yexp_row* yexp_defaults(int version, int* n) {
 }
 
 YEXP_API const char* yexp_section_name(int section) {
-    return section >= 0 && section < YEXP__S_COUNT ? yexp__section_names[section] : "";
+    return section >= 0 && section < YEXP_S_COUNT ? yexp__section_names[section] : "";
 }
 
-YEXP_API bool yexp_row_required(const yexp_row* r) { return r && (r->flags & YEXP__R_REQ) != 0; }
+YEXP_API bool yexp_row_required(const yexp_row* r) { return r && (r->flags & YEXP_R_REQ) != 0; }
 
 
 /* --- work space --------------------------------------------------------- */
@@ -1455,8 +1509,8 @@ typedef struct yexp__ctx {
     yexp_report*       r;
     const yexp_host*   h;
     yexp_def*          d;
-    int                first[YEXP__S_COUNT];
-    int                count[YEXP__S_COUNT];
+    int                first[YEXP_S_COUNT];
+    int                count[YEXP_S_COUNT];
     const yexp_value*  defs[YEXP__N_ROWS2];
     const yjs_value*   cdefs[YEXP__N_ROWS2];
     yexp__slot*        slots;
@@ -1664,7 +1718,7 @@ static const yexp_value* yexp__literal_from_json(yexp__ctx* c, const yexp_row* r
         yjs_double(j, &x);
         v->kind = YEXP_V_NUMBER;
         v->num = x;
-        if (row->type == YEXP__T_DUR) { v->flags = YEXP_VF_DURATION; yjs_fixed(j, 9, &v->i); }
+        if (row->type == YEXP_T_DUR) { v->flags = YEXP_VF_DURATION; yjs_fixed(j, 9, &v->i); }
         else if (j->flags & YJS_NUM_I64) { v->flags = YEXP_VF_INT; v->i = j->i; }
         break;
     }
@@ -2271,10 +2325,10 @@ static yexp_value* yexp__uniform_form(yexp__ctx* c, const yjs_value* src, const 
     yexp_value* it;
     int before = c->r->n_errors;
     snprintf(sub, sizeof sub, "%s: '%s': uniform", elem, key);
-    s = yexp__object(c, YEXP__S_UNIFORM, 0xffffu, src, sub, &cu);
+    s = yexp__object(c, YEXP_S_UNIFORM, 0xffffu, src, sub, &cu);
     if (!s) return NULL;
-    lh = yexp__slotv(c, s, YEXP__S_UNIFORM, "uniform");
-    nv = yexp__slotv(c, s, YEXP__S_UNIFORM, "n");
+    lh = yexp__slotv(c, s, YEXP_S_UNIFORM, "uniform");
+    nv = yexp__slotv(c, s, YEXP_S_UNIFORM, "n");
     v = yexp__vnew(c, YEXP_V_UNIFORM, src->pos);
     it = (yexp_value*)yexp__alloc(c, 2 * sizeof *it);
     if (v && it && lh) {
@@ -2292,7 +2346,7 @@ static yexp_value* yexp__uniform_form(yexp__ctx* c, const yjs_value* src, const 
     }
     if (v && nv && (nv->kind != YEXP_V_NUMBER || nv->i < 1 || nv->i > 64))
         yexp__err(c, nv->pos, "%s: 'n' is an integer from 1 to 64", sub);
-    yexp__release(c, YEXP__S_UNIFORM);
+    yexp__release(c, YEXP_S_UNIFORM);
     if (!v || !it || c->r->n_errors != before) return NULL;
     v->items = it;
     v->n = 2;
@@ -2321,11 +2375,11 @@ static yexp_value* yexp__walk2d_form(yexp__ctx* c, const yjs_value* src, const c
             yexp__err(c, src->u.members[i].key_pos, "%s: '%s': a walk is {\"walk2d\": {\"step\": s, \"box\": [[x0, y0], [x1, y1]], \"start\": [x, y]}}; '%s' is an unknown key", elem, key, src->u.members[i].key);
             return NULL;
         }
-    s = yexp__object(c, YEXP__S_WALK2D, 0xffffu, w, sub, &cw);
+    s = yexp__object(c, YEXP_S_WALK2D, 0xffffu, w, sub, &cw);
     if (!s) return NULL;
-    step = yexp__slotv(c, s, YEXP__S_WALK2D, "step");
-    box = yexp__slotv(c, s, YEXP__S_WALK2D, "box");
-    start = yexp__slotv(c, s, YEXP__S_WALK2D, "start");
+    step = yexp__slotv(c, s, YEXP_S_WALK2D, "step");
+    box = yexp__slotv(c, s, YEXP_S_WALK2D, "box");
+    start = yexp__slotv(c, s, YEXP_S_WALK2D, "start");
     v = yexp__vnew(c, YEXP_V_WALK2D, src->pos);
     it = (yexp_value*)yexp__alloc(c, 7 * sizeof *it);
     if (v && it && step && box && start && c->r->n_errors == before) {
@@ -2346,7 +2400,7 @@ static yexp_value* yexp__walk2d_form(yexp__ctx* c, const yjs_value* src, const c
             it[5] = start->items[0]; it[6] = start->items[1];
         }
     }
-    yexp__release(c, YEXP__S_WALK2D);
+    yexp__release(c, YEXP_S_WALK2D);
     if (!v || !it || c->r->n_errors != before) return NULL;
     v->items = it;
     v->n = 7;
@@ -2840,7 +2894,7 @@ static void yexp__unknown(yexp__ctx* c, int sect, unsigned mask, const yjs_membe
             yexp__err(c, m->key_pos, "%s: 'assign_roles' is of format version 3; version 2 binds a role in the rig profile (D32)", elem);
             return;
         }
-        if (sect == YEXP__S_SRESPONSE && (yexp__streq(key, "role") || yexp__streq(key, "key_answer") || yexp__streq(key, "trigger") ||
+        if (sect == YEXP_S_SRESPONSE && (yexp__streq(key, "role") || yexp__streq(key, "key_answer") || yexp__streq(key, "trigger") ||
                                           yexp__streq(key, "allow_held_key") || yexp__streq(key, "wait_for_key_release"))) {
             yexp__err(c, m->key_pos, "%s: '%s' is refused with signal choices: each movement's 'of' gives the input (3.13)", elem, key);
             return;
@@ -2855,15 +2909,15 @@ static void yexp__unknown(yexp__ctx* c, int sect, unsigned mask, const yjs_membe
             ri = yexp__find(c, sect, mask, stem);
         }
     }
-    if (ri >= 0 && c->rows[ri].type == YEXP__T_DUR) {
+    if (ri >= 0 && c->rows[ri].type == YEXP_T_DUR) {
         yexp__err(c, m->key_pos, "%s: '%s' is a duration; write the key '%s', in seconds (D4)", elem, key, c->rows[ri].key);
         return;
     }
-    if (sect == YEXP__S_STIM && yexp__streq(key, "color_r")) {
+    if (sect == YEXP_S_STIM && yexp__streq(key, "color_r")) {
         yexp__err(c, m->key_pos, "%s: '%s': write 'color' as [r, g, b]", elem, key);
         return;
     }
-    if (sect == YEXP__S_RESPONSE && yexp__streq(key, "persist")) {
+    if (sect == YEXP_S_RESPONSE && yexp__streq(key, "persist")) {
         yexp__err(c, m->key_pos, "%s: unknown key 'persist': 'response_ends_trial' is the one key for this (false: a response does not end the window)", elem);
         return;
     }
@@ -2872,7 +2926,7 @@ static void yexp__unknown(yexp__ctx* c, int sect, unsigned mask, const yjs_membe
         yexp__err(c, m->key_pos, "%s: key '%s' does not apply to this kind", elem, key);
         return;
     }
-    if (sect == YEXP__S_STAIR || sect == YEXP__S_QUEST || sect == YEXP__S_AEP) {
+    if (sect == YEXP_S_STAIR || sect == YEXP_S_QUEST || sect == YEXP_S_AEP) {
         if (yexp__streq(key, "n_steps") || yexp__streq(key, "n_stim") || yexp__streq(key, "n_param") || yexp__streq(key, "n_dims")) {
             yexp__err(c, m->key_pos, "%s: '%s' is not a key: it comes from the length of the array it counts", elem, key);
             return;
@@ -2958,35 +3012,35 @@ static bool yexp__transform_ok(yexp__ctx* c, const yexp_value* v, const char* el
 static bool yexp__row_value(yexp__ctx* c, int ri, const yjs_member* m, const char* elem, yexp__slot* slot, yjs_value** canon) {
     const yexp_row* r = &c->rows[ri];
     const yjs_value* src = m->value;
-    unsigned lit = (r->flags & YEXP__R_LIT) ? ~(unsigned)(YEXP__AV_VAR | YEXP__AV_LOOKUP | YEXP__AV_GAMUT) : ~0u;
+    unsigned lit = (r->flags & YEXP_R_LIT) ? ~(unsigned)(YEXP__AV_VAR | YEXP__AV_LOOKUP | YEXP__AV_GAMUT) : ~0u;
     const yexp_value* v = NULL;
     *canon = NULL;
     switch (r->type) {
-    case YEXP__T_NUM: {
+    case YEXP_T_NUM: {
         unsigned al = (YEXP__AV_NUM | YEXP__AV_VAR | YEXP__AV_LOOKUP | YEXP__AV_GAMUT | (yexp__streq(r->key, "contrast") ? YEXP__AV_MICH : 0u) | c->extra_allow) & lit;
         v = yexp__value(c, src, al, 0, elem, r->key, canon);
         break;
     }
-    case YEXP__T_INT:
+    case YEXP_T_INT:
         v = yexp__value(c, src, (YEXP__AV_NUM | YEXP__AV_INT | YEXP__AV_VAR | YEXP__AV_LOOKUP) & lit, 0, elem, r->key, canon);
         break;
-    case YEXP__T_DUR:
+    case YEXP_T_DUR:
         /* a negative minimum RT makes presses before the onset responses
          * (ysp/response.h 0.8.0); no other duration can run backward */
         v = yexp__value(c, src, (YEXP__AV_NUM | YEXP__AV_DUR | YEXP__AV_VAR | YEXP__AV_LOOKUP | (yexp__streq(r->key, "minimum_valid_rt_s") ? 0u : YEXP__AV_NONNEG)) & lit, 0, elem, r->key, canon);
         break;
-    case YEXP__T_BOOL:
+    case YEXP_T_BOOL:
         if (src->type != YJS_TRUE && src->type != YJS_FALSE) {
             yexp__err(c, src->pos, "%s: '%s': wrong type; this key takes true or false", elem, r->key);
             return false;
         }
         v = yexp__value(c, src, YEXP__AV_BOOL, 0, elem, r->key, canon);
         break;
-    case YEXP__T_STR:
+    case YEXP_T_STR:
         v = yexp__literal_string(c, src, elem, r->key, canon);
         if (!v) return false;
         break;
-    case YEXP__T_ENUM:
+    case YEXP_T_ENUM:
         if (src->type != YJS_STRING) {
             char list[160];
             yexp__enum_list(r->values, list, sizeof list);
@@ -3001,7 +3055,7 @@ static bool yexp__row_value(yexp__ctx* c, int ri, const yjs_member* m, const cha
         }
         v = yexp__value(c, src, YEXP__AV_STR, 0, elem, r->key, canon);
         break;
-    case YEXP__T_ENUMS: {
+    case YEXP_T_ENUMS: {
         size_t i;
         if (src->type != YJS_ARRAY) {
             yexp__err(c, src->pos, "%s: '%s': wrong type; this key takes an array of names", elem, r->key);
@@ -3017,24 +3071,24 @@ static bool yexp__row_value(yexp__ctx* c, int ri, const yjs_member* m, const cha
         v = yexp__value(c, src, YEXP__AV_ARRAY, YEXP__AV_STR, elem, r->key, canon);
         break;
     }
-    case YEXP__T_TEXT:
+    case YEXP_T_TEXT:
         v = yexp__value(c, src, YEXP__AV_STR | YEXP__AV_VAR | YEXP__AV_LOOKUP, 0, elem, r->key, canon);
         break;
-    case YEXP__T_RES:
+    case YEXP_T_RES:
         if (src->type != YJS_STRING) {
             yexp__err(c, src->pos, "%s: '%s': wrong type; this key takes a pack entry's name", elem, r->key);
             return false;
         }
         v = yexp__value(c, src, YEXP__AV_STR | (yexp__streq(r->key, "texture") ? YEXP__AV_VAR : 0u), 0, elem, r->key, canon);
         break;
-    case YEXP__T_VEC3:
+    case YEXP_T_VEC3:
         v = yexp__value(c, src, YEXP__AV_ARRAY | YEXP__AV_VAR | YEXP__AV_LOOKUP | c->extra_allow, YEXP__AV_NUM, elem, r->key, canon);
         if (v && !yexp__vec3_ok(c, v, elem, r->key)) return false;
         break;
-    case YEXP__T_NUMS:
+    case YEXP_T_NUMS:
         v = yexp__value(c, src, YEXP__AV_ARRAY, YEXP__AV_NUM | YEXP__AV_GAMUT, elem, r->key, canon);
         break;
-    case YEXP__T_GRID: {
+    case YEXP_T_GRID: {
         /* quest's axes: a fixed number, a list of points or a linspace */
         size_t i;
         yexp_value* it;
@@ -3065,43 +3119,43 @@ static bool yexp__row_value(yexp__ctx* c, int ri, const yjs_member* m, const cha
         *canon = carr;
         break;
     }
-    case YEXP__T_VAL:
+    case YEXP_T_VAL:
         v = yexp__value(c, src, YEXP__AV_VALUE, YEXP__AV_NUM, elem, r->key, canon);
         break;
-    case YEXP__T_CODE:
+    case YEXP_T_CODE:
         v = yexp__value(c, src, YEXP__AV_NUM | YEXP__AV_INT | YEXP__AV_NONNEG | YEXP__AV_INT32 | YEXP__AV_VAR | YEXP__AV_LOOKUP, 0, elem, r->key, canon);
         break;
-    case YEXP__T_VAR:
+    case YEXP_T_VAR:
         if (src->type != YJS_STRING || src->u.s[0] != '$' || src->u.s[1] == '$') {
             yexp__err(c, src->pos, "%s: '%s': a boolean variable: \"$name\"", elem, r->key);
             return false;
         }
         v = yexp__value(c, src, YEXP__AV_VAR, 0, elem, r->key, canon);
         break;
-    case YEXP__T_NAME:
-    case YEXP__T_NAMEZ:
-        if (c->version >= 2 && src->type == YJS_STRING && strchr(src->u.s, '.') && r->section >= YEXP__S_STEP) {
+    case YEXP_T_NAME:
+    case YEXP_T_NAMEZ:
+        if (c->version >= 2 && src->type == YJS_STRING && strchr(src->u.s, '.') && r->section >= YEXP_S_STEP) {
             yexp__err(c, src->pos, "%s: '%s': '%s': a lane goes only where a value is read (3.9); this key takes a name", elem, r->key, src->u.s);
             return false;
         }
-        if (src->type != YJS_STRING || !(yexp__name_ok(src->u.s) || (r->type == YEXP__T_NAMEZ && !src->u.s[0]))) {
+        if (src->type != YJS_STRING || !(yexp__name_ok(src->u.s) || (r->type == YEXP_T_NAMEZ && !src->u.s[0]))) {
             yexp__err(c, src->pos, "%s: '%s': a name is [A-Za-z_][A-Za-z0-9_]*, at most 63 bytes", elem, r->key);
             return false;
         }
         v = yexp__value(c, src, YEXP__AV_STR, 0, elem, r->key, canon);
         break;
-    case YEXP__T_NAMES:
-    case YEXP__T_STRS:
-    case YEXP__T_TARGETS: {
+    case YEXP_T_NAMES:
+    case YEXP_T_STRS:
+    case YEXP_T_TARGETS: {
         size_t i, n;
         yexp_value* vv;
         yexp_value* it;
         yjs_value* carr;
         const yjs_value* arr = src;
         bool one = false;
-        if (r->type == YEXP__T_TARGETS && src->type == YJS_STRING) one = true;
+        if (r->type == YEXP_T_TARGETS && src->type == YJS_STRING) one = true;
         else if (src->type != YJS_ARRAY) {
-            yexp__err(c, src->pos, "%s: '%s': wrong type; this key takes %s", elem, r->key, r->type == YEXP__T_TARGETS ? "a name or an array of names" : "an array");
+            yexp__err(c, src->pos, "%s: '%s': wrong type; this key takes %s", elem, r->key, r->type == YEXP_T_TARGETS ? "a name or an array of names" : "an array");
             return false;
         }
         n = one ? 1 : arr->n;
@@ -3116,8 +3170,8 @@ static bool yexp__row_value(yexp__ctx* c, int ri, const yjs_member* m, const cha
         for (i = 0; i < n; i++) {
             const yjs_value* e = one ? src : arr->u.items[i];
             yjs_value* ce = NULL;
-            if (e->type != YJS_STRING || (r->type != YEXP__T_STRS && !yexp__name_ok(e->u.s))) {
-                yexp__err(c, e->pos, "%s: '%s': %s", elem, r->key, r->type == YEXP__T_STRS ? "every item is a string" : "a name is [A-Za-z_][A-Za-z0-9_]*, at most 63 bytes");
+            if (e->type != YJS_STRING || (r->type != YEXP_T_STRS && !yexp__name_ok(e->u.s))) {
+                yexp__err(c, e->pos, "%s: '%s': %s", elem, r->key, r->type == YEXP_T_STRS ? "every item is a string" : "a name is [A-Za-z_][A-Za-z0-9_]*, at most 63 bytes");
                 return false;
             }
             {
@@ -3126,16 +3180,16 @@ static bool yexp__row_value(yexp__ctx* c, int ri, const yjs_member* m, const cha
                 it[i] = *ev;
             }
             /* one target has one spelling: the shorter, the bare name */
-            if (one || (r->type == YEXP__T_TARGETS && n == 1)) *canon = ce;
+            if (one || (r->type == YEXP_T_TARGETS && n == 1)) *canon = ce;
             else yexp__cpush(c, carr, ce);
         }
         vv->items = it;
         vv->n = (uint32_t)n;
         v = vv;
-        if (!one && !(r->type == YEXP__T_TARGETS && n == 1)) *canon = carr;
+        if (!one && !(r->type == YEXP_T_TARGETS && n == 1)) *canon = carr;
         break;
     }
-    case YEXP__T_SMAP: {
+    case YEXP_T_SMAP: {
         size_t i;
         yexp_value* vv;
         yexp_kv* kv;
@@ -3167,20 +3221,20 @@ static bool yexp__row_value(yexp__ctx* c, int ri, const yjs_member* m, const cha
         *canon = cobj;
         break;
     }
-    case YEXP__T_POINT:
-        if (r->flags & YEXP__R_LIT) v = yexp__value(c, src, YEXP__AV_ARRAY, YEXP__AV_NUM, elem, r->key, canon);
+    case YEXP_T_POINT:
+        if (r->flags & YEXP_R_LIT) v = yexp__value(c, src, YEXP__AV_ARRAY, YEXP__AV_NUM, elem, r->key, canon);
         else v = yexp__value(c, src, YEXP__AV_ARRAY | YEXP__AV_VAR | YEXP__AV_LOOKUP, YEXP__AV_NUM | YEXP__AV_VAR, elem, r->key, canon);
         if (v && !yexp__point_ok(c, v, elem, r->key)) return false;
         break;
-    case YEXP__T_CENTER:
+    case YEXP_T_CENTER:
         v = yexp__value(c, src, YEXP__AV_ARRAY | YEXP__AV_VAR | YEXP__AV_LOOKUP | YEXP__AV_SIG, YEXP__AV_NUM | YEXP__AV_VAR, elem, r->key, canon);
         if (v && !yexp__point_ok(c, v, elem, r->key)) return false;
         break;
-    case YEXP__T_TRANSFORM:
+    case YEXP_T_TRANSFORM:
         v = yexp__value(c, src, YEXP__AV_STR | YEXP__AV_LOOKUP | YEXP__AV_TRANSFORM, 0, elem, r->key, canon);
         if (v && !yexp__transform_ok(c, v, elem, r->key)) return false;
         break;
-    case YEXP__T_OUTCOME:
+    case YEXP_T_OUTCOME:
         if (src->type != YJS_STRING && src->type != YJS_NUMBER && src->type != YJS_TRUE && src->type != YJS_FALSE &&
             !(src->type == YJS_OBJECT && (yjs_get(src, "by") || yjs_get(src, "map")))) {
             yexp__err(c, src->pos, "%s: '%s': an outcome is text, an integer or a boolean, a \"$variable\" or a lookup (3.11)", elem, r->key);
@@ -3189,14 +3243,14 @@ static bool yexp__row_value(yexp__ctx* c, int ri, const yjs_member* m, const cha
         v = yexp__value(c, src, YEXP__AV_STR | YEXP__AV_NUM | YEXP__AV_BOOL | YEXP__AV_VAR | YEXP__AV_LOOKUP, 0, elem, r->key, canon);
         if (v && !yexp__outcome_ok(c, v, elem, r->key)) return false;
         break;
-    case YEXP__T_REF:
+    case YEXP_T_REF:
         if (src->type != YJS_STRING) {
             yexp__err(c, src->pos, "%s: '%s': wrong type; this key takes a name, with a lane where one is read (\"hand.x\")", elem, r->key);
             return false;
         }
         v = yexp__value(c, src, YEXP__AV_STR, 0, elem, r->key, canon);
         break;
-    case YEXP__T_REFS: {
+    case YEXP_T_REFS: {
         size_t i;
         if (src->type != YJS_ARRAY || src->n == 0 || src->n > YEXP__MAX_LIST) {
             yexp__err(c, src->pos, "%s: '%s': an array of names, at least one", elem, r->key);
@@ -3210,7 +3264,7 @@ static bool yexp__row_value(yexp__ctx* c, int ri, const yjs_member* m, const cha
         v = yexp__value(c, src, YEXP__AV_ARRAY, YEXP__AV_STR, elem, r->key, canon);
         break;
     }
-    case YEXP__T_BOX: {
+    case YEXP_T_BOX: {
         /* walk2d's box: its checks need its numbers at load */
         yexp_value* vv;
         yexp_value* it;
@@ -3281,7 +3335,7 @@ static yexp__slot* yexp__object(yexp__ctx* c, int sect, unsigned mask, const yjs
         }
         ri = yexp__find(c, sect, mask, m->key);
         if (ri < 0) { yexp__unknown(c, sect, mask, m, elem); continue; }
-        if (c->rows[ri].flags & YEXP__R_STEP) {
+        if (c->rows[ri].flags & YEXP_R_STEP) {
             yexp__err(c, m->key_pos, "%s: '%s' is not a stimulus key in version 2: the steps 'on' and 'off' drive it (D41)", elem, m->key);
             continue;
         }
@@ -3293,12 +3347,12 @@ static yexp__slot* yexp__object(yexp__ctx* c, int sect, unsigned mask, const yjs
         if (slot->v && cv) {
             const yexp_row* r = &c->rows[ri];
             const yexp_value* d = r->def ? yexp__default(c, ri) : NULL;
-            bool at_default = d && (yexp__same(slot->v, d) || (r->type == YEXP__T_SMAP && slot->v->n == 0));
-            if (at_default && (r->flags & YEXP__R_SELF) == 0) {
+            bool at_default = d && (yexp__same(slot->v, d) || (r->type == YEXP_T_SMAP && slot->v->n == 0));
+            if (at_default && (r->flags & YEXP_R_SELF) == 0) {
                 /* the same form and the same checks as when it is left out */
                 slot->v = d;
                 slot->given = false;
-            } else if (r->flags & YEXP__R_SELF) {
+            } else if (r->flags & YEXP_R_SELF) {
                 slot->src = (const yjs_value*)cv;
             } else {
                 yexp__put(c, out, m->key, cv);
@@ -3309,9 +3363,9 @@ static yexp__slot* yexp__object(yexp__ctx* c, int sect, unsigned mask, const yjs
         const yexp_row* r = &c->rows[f + i];
         if (!(r->kinds & mask)) continue;
         if (!slots[i].given) {
-            if (r->flags & YEXP__R_REQ) {
+            if (r->flags & YEXP_R_REQ) {
                 yexp__err(c, src->pos, "%s: '%s' is required", elem, r->key);
-            } else if (r->def && r->type != YEXP__T_OBJ && r->type != YEXP__T_SET && r->type != YEXP__T_LIST) {
+            } else if (r->def && r->type != YEXP_T_OBJ && r->type != YEXP_T_SET && r->type != YEXP_T_LIST) {
                 slots[i].v = yexp__default(c, f + i);
             }
         }
@@ -3430,15 +3484,15 @@ static void yexp__parse_session(yexp__ctx* c, const yjs_value* src, yjs_value** 
         c->d->n_fields = 1;
         return;
     }
-    slots = yexp__object(c, YEXP__S_SESSION, 0xffffu, src, "session", &cs);
+    slots = yexp__object(c, YEXP_S_SESSION, 0xffffu, src, "session", &cs);
     if (!slots) return;
-    sf = yexp__slot_at(c, slots, YEXP__S_SESSION, "fields");
+    sf = yexp__slot_at(c, slots, YEXP_S_SESSION, "fields");
     fields = sf->src;
-    if (!fields) { yexp__release(c, YEXP__S_SESSION); return; }
-    if (!yexp__set_begin(c, fields, "session: 'fields'", YEXP__MAX_SET, &n)) { yexp__release(c, YEXP__S_SESSION); return; }
+    if (!fields) { yexp__release(c, YEXP_S_SESSION); return; }
+    if (!yexp__set_begin(c, fields, "session: 'fields'", YEXP__MAX_SET, &n)) { yexp__release(c, YEXP_S_SESSION); return; }
     out = (yexp_field*)yexp__alloc(c, (size_t)(n ? n : 1) * sizeof *out);
     cfields = yexp__cnew(c, YJS_OBJECT);
-    if (!out || !cfields) { yexp__release(c, YEXP__S_SESSION); return; }
+    if (!out || !cfields) { yexp__release(c, YEXP_S_SESSION); return; }
     for (k = 0; k < fields->n; k++) {
         const yjs_member* m = &fields->u.members[k];
         char elem[96];
@@ -3447,25 +3501,25 @@ static void yexp__parse_session(yexp__ctx* c, const yjs_value* src, yjs_value** 
         if (yexp__is_set_note(m)) { yexp__put(c, cfields, "note", yexp__cstr(c, m->value->u.s)); continue; }
         snprintf(elem, sizeof elem, "session field '%s'", m->key);
         if (yexp__is_builtin(m->key)) yexp__err(c, m->key_pos, "%s: the name is a built-in variable's", elem);
-        s2 = yexp__object(c, YEXP__S_SFIELD, 0xffffu, m->value, elem, &cf);
+        s2 = yexp__object(c, YEXP_S_SFIELD, 0xffffu, m->value, elem, &cf);
         if (!s2) continue;
         out[i].name = m->key;
         {
-            const char* t = yexp__v_str(yexp__slotv(c, s2, YEXP__S_SFIELD, "type"));
+            const char* t = yexp__v_str(yexp__slotv(c, s2, YEXP_S_SFIELD, "type"));
             out[i].is_string = t && yexp__streq(t, "string");
         }
-        out[i].required = yexp__v_bool(yexp__slotv(c, s2, YEXP__S_SFIELD, "required"), false);
+        out[i].required = yexp__v_bool(yexp__slotv(c, s2, YEXP_S_SFIELD, "required"), false);
         if (yexp__streq(m->key, "participant")) has_participant = true;
         i++;
         yexp__put(c, cfields, m->key, cf);
-        yexp__release(c, YEXP__S_SFIELD);
+        yexp__release(c, YEXP_S_SFIELD);
     }
     if (!has_participant)
         yexp__err(c, fields->pos, "session: 'fields' has no 'participant': rules take the participant number from it (2.4)");
     c->d->fields = out;
     c->d->n_fields = i;
     yexp__put(c, cs, "fields", cfields);
-    yexp__release(c, YEXP__S_SESSION);
+    yexp__release(c, YEXP_S_SESSION);
     *canon = cs;
 }
 
@@ -3477,16 +3531,16 @@ static void yexp__parse_display(yexp__ctx* c, const yjs_value* src, yjs_value** 
     int mt = 0;
     d->background[0] = d->background[1] = d->background[2] = 0.5;
     if (!src) return;
-    s = yexp__object(c, YEXP__S_DISPLAY, 0xffffu, src, "display", &cd);
+    s = yexp__object(c, YEXP_S_DISPLAY, 0xffffu, src, "display", &cd);
     if (!s) return;
     {
-        const char* u = yexp__v_str(yexp__slotv(c, s, YEXP__S_DISPLAY, "units"));
+        const char* u = yexp__v_str(yexp__slotv(c, s, YEXP_S_DISPLAY, "units"));
         d->units_deg = u && yexp__streq(u, "deg");
         d->units = !u ? 0 : yexp__streq(u, "deg") ? 1 : yexp__streq(u, "cm") ? 2 : 0;
-        u = yexp__v_str(yexp__slotv(c, s, YEXP__S_DISPLAY, "calibration"));
+        u = yexp__v_str(yexp__slotv(c, s, YEXP_S_DISPLAY, "calibration"));
         d->calibration_required = u && yexp__streq(u, "required");
     }
-    bg = yexp__slotv(c, s, YEXP__S_DISPLAY, "background");
+    bg = yexp__slotv(c, s, YEXP_S_DISPLAY, "background");
     if (bg && bg->kind == YEXP_V_ARRAY && bg->n == 3) {
         int k;
         for (k = 0; k < 3; k++) {
@@ -3499,9 +3553,9 @@ static void yexp__parse_display(yexp__ctx* c, const yjs_value* src, yjs_value** 
     } else if (bg && bg->kind != YEXP_V_ARRAY) {
         yexp__err(c, bg->pos, "display: 'background': literal [r, g, b]");
     }
-    mt = yexp__int_field(c, yexp__slotv(c, s, YEXP__S_DISPLAY, "min_tier"), "display", "min_tier", 0, 3, 0);
+    mt = yexp__int_field(c, yexp__slotv(c, s, YEXP_S_DISPLAY, "min_tier"), "display", "min_tier", 0, 3, 0);
     d->min_tier = mt;
-    yexp__release(c, YEXP__S_DISPLAY);
+    yexp__release(c, YEXP_S_DISPLAY);
     *canon = cd;
 }
 
@@ -3509,11 +3563,11 @@ static void yexp__parse_web(yexp__ctx* c, const yjs_value* src, yjs_value** cano
     yjs_value* cw = NULL;
     yexp__slot* s;
     if (!src) return;
-    s = yexp__object(c, YEXP__S_WEB, 0xffffu, src, "web", &cw);
+    s = yexp__object(c, YEXP_S_WEB, 0xffffu, src, "web", &cw);
     if (!s) return;
-    c->d->web_allowed = yexp__v_bool(yexp__slotv(c, s, YEXP__S_WEB, "allowed"), false);
+    c->d->web_allowed = yexp__v_bool(yexp__slotv(c, s, YEXP_S_WEB, "allowed"), false);
     {
-        yexp__slot* ex = yexp__slot_at(c, s, YEXP__S_WEB, "exclusion");
+        yexp__slot* ex = yexp__slot_at(c, s, YEXP_S_WEB, "exclusion");
         if (ex && ex->src) {
             if (ex->src->type != YJS_OBJECT) {
                 yexp__err(c, ex->src->pos, "web: 'exclusion' is an object");
@@ -3523,7 +3577,7 @@ static void yexp__parse_web(yexp__ctx* c, const yjs_value* src, yjs_value** cano
             }
         }
     }
-    yexp__release(c, YEXP__S_WEB);
+    yexp__release(c, YEXP_S_WEB);
     *canon = cw;
 }
 
@@ -3550,7 +3604,7 @@ static void yexp__parse_devices(yexp__ctx* c, const yjs_value* src, yjs_value** 
         if (yexp__is_set_note(m)) { yexp__put(c, cset, "note", yexp__cstr(c, m->value->u.s)); continue; }
         snprintf(elem, sizeof elem, "role '%s'", m->key);
         before = c->r->n_errors;
-        s = yexp__object(c, YEXP__S_ROLE, 0xffffu, m->value, elem, &cr);
+        s = yexp__object(c, YEXP_S_ROLE, 0xffffu, m->value, elem, &cr);
         r = &out[i++];
         /* a refused role keeps its name, so a reference to it is no second error */
         r->name = m->key;
@@ -3558,21 +3612,21 @@ static void yexp__parse_devices(yexp__ctx* c, const yjs_value* src, yjs_value** 
         r->failed_ = !s;
         if (!s) continue;
         {
-            const char* dir = yexp__v_str(yexp__slotv(c, s, YEXP__S_ROLE, "direction"));
+            const char* dir = yexp__v_str(yexp__slotv(c, s, YEXP_S_ROLE, "direction"));
             r->direction = !dir ? 0 : yexp__streq(dir, "out") ? 1 : yexp__streq(dir, "both") ? 2 : 0;
         }
-        v = yexp__slotv(c, s, YEXP__S_ROLE, "family");
+        v = yexp__slotv(c, s, YEXP_S_ROLE, "family");
         r->family = yexp__str_array(c, v, &r->n_family);
         if (v && v->n == 0) yexp__err(c, v->pos, "%s: 'family' has at least one name", elem);
-        r->required = yexp__v_bool(yexp__slotv(c, s, YEXP__S_ROLE, "required"), true);
-        r->min_tier = yexp__int_field(c, yexp__slotv(c, s, YEXP__S_ROLE, "min_tier"), elem, "min_tier", 0, 3, 0);
+        r->required = yexp__v_bool(yexp__slotv(c, s, YEXP_S_ROLE, "required"), true);
+        r->min_tier = yexp__int_field(c, yexp__slotv(c, s, YEXP_S_ROLE, "min_tier"), elem, "min_tier", 0, 3, 0);
         {
-            const yexp_value* p = yexp__slotv(c, s, YEXP__S_ROLE, "pulse_s");
+            const yexp_value* p = yexp__slotv(c, s, YEXP_S_ROLE, "pulse_s");
             r->pulse_ns = p && p->kind == YEXP_V_NUMBER ? p->i : 0;
             if (p && p->kind != YEXP_V_NUMBER) yexp__err(c, p->pos, "%s: 'pulse_s' is a number of seconds, not a variable: a role is read before any trial", elem);
         }
-        r->kind = yexp__v_str(yexp__slotv(c, s, YEXP__S_ROLE, "kind"));
-        v = yexp__slotv(c, s, YEXP__S_ROLE, "buttons");
+        r->kind = yexp__v_str(yexp__slotv(c, s, YEXP_S_ROLE, "kind"));
+        v = yexp__slotv(c, s, YEXP_S_ROLE, "buttons");
         if (v) {
             r->buttons = v->map;
             r->n_buttons = (int)v->n;
@@ -3587,11 +3641,11 @@ static void yexp__parse_devices(yexp__ctx* c, const yjs_value* src, yjs_value** 
                 }
             }
         }
-        v = yexp__slotv(c, s, YEXP__S_ROLE, "map");
+        v = yexp__slotv(c, s, YEXP_S_ROLE, "map");
         if (v) { r->map = v->map; r->n_map = (int)v->n; }
         r->failed_ = c->r->n_errors != before;
         yexp__put(c, cset, m->key, cr);
-        yexp__release(c, YEXP__S_ROLE);
+        yexp__release(c, YEXP_S_ROLE);
     }
     c->d->roles = out;
     c->d->n_roles = i;
@@ -3625,22 +3679,22 @@ static void yexp__parse_sigroles(yexp__ctx* c, const yjs_value* src, yjs_value**
         r = &out[i++];
         r->name = m->key;
         r->pos_ = m->key_pos;
-        s = yexp__object(c, YEXP__S_SIGROLE, 0xffffu, m->value, elem, &cr);
+        s = yexp__object(c, YEXP_S_SIGROLE, 0xffffu, m->value, elem, &cr);
         if (!s) { r->failed_ = true; continue; }
-        t = yexp__v_str(yexp__slotv(c, s, YEXP__S_SIGROLE, "type"));
-        u = yexp__v_str(yexp__slotv(c, s, YEXP__S_SIGROLE, "units"));
+        t = yexp__v_str(yexp__slotv(c, s, YEXP_S_SIGROLE, "type"));
+        u = yexp__v_str(yexp__slotv(c, s, YEXP_S_SIGROLE, "units"));
         r->type = !t ? 0 : yexp__streq(t, "position2d_relative") ? 1 : yexp__streq(t, "position3d") ? 2 : yexp__streq(t, "scalar") ? 3 : yexp__streq(t, "gaze") ? 4 : 0;
         r->units = !u ? 0 : yexp__streq(u, "display_cm") ? 1 : yexp__streq(u, "display_deg") ? 2 : yexp__streq(u, "workspace_cm") ? 3 : yexp__streq(u, "device") ? 4 : 0;
         r->lanes = lanes[r->type];
-        r->allow_relative = yexp__v_bool(yexp__slotv(c, s, YEXP__S_SIGROLE, "allow_relative"), false);
-        r->required = yexp__v_bool(yexp__slotv(c, s, YEXP__S_SIGROLE, "required"), true);
+        r->allow_relative = yexp__v_bool(yexp__slotv(c, s, YEXP_S_SIGROLE, "allow_relative"), false);
+        r->required = yexp__v_bool(yexp__slotv(c, s, YEXP_S_SIGROLE, "required"), true);
         if (r->allow_relative && r->type != YEXP_SIG_POSITION2D) {
-            const yexp__slot* ar = yexp__slot_at(c, s, YEXP__S_SIGROLE, "allow_relative");
+            const yexp__slot* ar = yexp__slot_at(c, s, YEXP_S_SIGROLE, "allow_relative");
             yexp__err(c, ar->pos, "%s: 'allow_relative' is only for the type position2d (3.5)", elem);
         }
         r->failed_ = c->r->n_errors != before;
         yexp__put(c, cset, m->key, cr);
-        yexp__release(c, YEXP__S_SIGROLE);
+        yexp__release(c, YEXP_S_SIGROLE);
     }
     c->d->sigroles = out;
     c->d->n_sigroles = i;
@@ -3714,7 +3768,7 @@ static void yexp__above0(yexp__ctx* c, const yexp_value* v, const char* elem, co
 
 /* A ref key's text into r, unresolved. */
 static void yexp__ref_slot(yexp__ctx* c, yexp__slot* s, unsigned mask, const char* key, bool lane_ok, yexp_ref* r, const char* elem) {
-    yexp__slot* x = yexp__slot_at_m(c, s, YEXP__S_CONTROL, mask, key);
+    yexp__slot* x = yexp__slot_at_m(c, s, YEXP_S_CONTROL, mask, key);
     memset(r, 0, sizeof *r);
     r->index = -1;
     r->lane = -1;
@@ -3724,7 +3778,7 @@ static void yexp__ref_slot(yexp__ctx* c, yexp__slot* s, unsigned mask, const cha
 static void yexp__parse_control(yexp__ctx* c, const yjs_member* m, yexp_control* out, yjs_value* cset, bool shared, const char* prefix) {
     char elem[160];
     const yjs_value* kv;
-    int kind = -1, i, f = c->first[YEXP__S_CONTROL], rows = c->count[YEXP__S_CONTROL], np = 0;
+    int kind = -1, i, f = c->first[YEXP_S_CONTROL], rows = c->count[YEXP_S_CONTROL], np = 0;
     unsigned mask;
     yexp__slot* s;
     yjs_value* cs = NULL;
@@ -3747,18 +3801,18 @@ static void yexp__parse_control(yexp__ctx* c, const yjs_member* m, yexp_control*
     mask = 1u << kind;
     {
         int before = c->r->n_errors;
-        s = yexp__object(c, YEXP__S_CONTROL, mask, m->value, elem, &cs);
+        s = yexp__object(c, YEXP_S_CONTROL, mask, m->value, elem, &cs);
         if (!s) return;
         out->kind = (yexp_control_kind)kind;
         yexp__ctl_gives(out->kind, &out->lanes, &out->has_test, &out->has_hits);
         for (i = 0; i < rows; i++)
-            if ((c->rows[f + i].kinds & mask) && c->rows[f + i].type != YEXP__T_SINES && !yexp__streq(c->rows[f + i].key, "control")) np++;
+            if ((c->rows[f + i].kinds & mask) && c->rows[f + i].type != YEXP_T_SINES && !yexp__streq(c->rows[f + i].key, "control")) np++;
         props = (yexp_prop*)yexp__alloc(c, (size_t)(np ? np : 1) * sizeof *props);
         np = 0;
-        if (!props) { yexp__release(c, YEXP__S_CONTROL); return; }
+        if (!props) { yexp__release(c, YEXP_S_CONTROL); return; }
         for (i = 0; i < rows; i++) {
             const yexp_row* r = &c->rows[f + i];
-            if (!(r->kinds & mask) || r->type == YEXP__T_SINES || yexp__streq(r->key, "control")) continue;
+            if (!(r->kinds & mask) || r->type == YEXP_T_SINES || yexp__streq(r->key, "control")) continue;
             if (!s[i].v) continue;
             props[np].key = r->key;
             props[np].value = s[i].v;
@@ -3774,7 +3828,7 @@ static void yexp__parse_control(yexp__ctx* c, const yjs_member* m, yexp_control*
         yexp__ref_slot(c, s, mask, "freeze_at", false, &out->freeze_at, elem);
         yexp__ref_slot(c, s, mask, "stimulus", false, &out->stimulus, elem);
         if (kind == YEXP_CURSOR) {
-            const yexp_value* mean = yexp__slotv_m(c, s, YEXP__S_CONTROL, mask, "mean");
+            const yexp_value* mean = yexp__slotv_m(c, s, YEXP_S_CONTROL, mask, "mean");
             int given = 0;
             yexp__ref_slot(c, s, mask, "role", false, &out->of, elem);
             yexp__ref_slot(c, s, mask, "x", true, &out->x, elem);
@@ -3794,7 +3848,7 @@ static void yexp__parse_control(yexp__ctx* c, const yjs_member* m, yexp_control*
             }
         }
         if (kind == YEXP_TRACE) {
-            const yexp_value* of = yexp__slotv_m(c, s, YEXP__S_CONTROL, mask, "of");
+            const yexp_value* of = yexp__slotv_m(c, s, YEXP_S_CONTROL, mask, "of");
             if (of && of->kind == YEXP_V_ARRAY) {
                 uint32_t q;
                 yexp_ref* items = (yexp_ref*)yexp__alloc(c, (of->n ? of->n : 1) * sizeof *items);
@@ -3809,7 +3863,7 @@ static void yexp__parse_control(yexp__ctx* c, const yjs_member* m, yexp_control*
             out->of.lane = -1;
         }
         if (kind == YEXP_REGION) {
-            const yexp_value* cv = yexp__slotv_m(c, s, YEXP__S_CONTROL, mask, "center");
+            const yexp_value* cv = yexp__slotv_m(c, s, YEXP_S_CONTROL, mask, "center");
             memset(&out->center, 0, sizeof out->center);
             out->center.index = -1;
             out->center.lane = -1;
@@ -3823,7 +3877,7 @@ static void yexp__parse_control(yexp__ctx* c, const yjs_member* m, yexp_control*
             static const char* const lanes[2] = { "x", "y" };
             int q;
             for (q = 0; q < 2; q++) {
-                yexp__slot* x = yexp__slot_at_m(c, s, YEXP__S_CONTROL, mask, lanes[q]);
+                yexp__slot* x = yexp__slot_at_m(c, s, YEXP_S_CONTROL, mask, lanes[q]);
                 yjs_value* cl = NULL;
                 if (x && x->src && yexp__parse_sines(c, x->src, elem, lanes[q], q ? &out->sy : &out->sx, &cl)) yexp__put(c, cs, lanes[q], cl);
             }
@@ -3832,13 +3886,13 @@ static void yexp__parse_control(yexp__ctx* c, const yjs_member* m, yexp_control*
         }
         /* the numbers of 3.16: above 0, or 0 and more (the rows refuse a
          * negative duration) */
-        yexp__above0(c, yexp__slotv_m(c, s, YEXP__S_CONTROL, mask, "radius"), elem, "radius");
-        yexp__above0(c, yexp__slotv_m(c, s, YEXP__S_CONTROL, mask, "onset"), elem, "onset");
-        yexp__above0(c, yexp__slotv_m(c, s, YEXP__S_CONTROL, mask, "speed_below"), elem, "speed_below");
-        yexp__above0(c, yexp__slotv_m(c, s, YEXP__S_CONTROL, mask, "lag_s"), elem, "lag_s");
-        yexp__above0(c, yexp__slotv_m(c, s, YEXP__S_CONTROL, mask, "speed_lag_s"), elem, "speed_lag_s");
-        yexp__above0(c, yexp__slotv_m(c, s, YEXP__S_CONTROL, mask, "after_s"), elem, "after_s");
-        yexp__release(c, YEXP__S_CONTROL);
+        yexp__above0(c, yexp__slotv_m(c, s, YEXP_S_CONTROL, mask, "radius"), elem, "radius");
+        yexp__above0(c, yexp__slotv_m(c, s, YEXP_S_CONTROL, mask, "onset"), elem, "onset");
+        yexp__above0(c, yexp__slotv_m(c, s, YEXP_S_CONTROL, mask, "speed_below"), elem, "speed_below");
+        yexp__above0(c, yexp__slotv_m(c, s, YEXP_S_CONTROL, mask, "lag_s"), elem, "lag_s");
+        yexp__above0(c, yexp__slotv_m(c, s, YEXP_S_CONTROL, mask, "speed_lag_s"), elem, "speed_lag_s");
+        yexp__above0(c, yexp__slotv_m(c, s, YEXP_S_CONTROL, mask, "after_s"), elem, "after_s");
+        yexp__release(c, YEXP_S_CONTROL);
         yexp__put(c, cset, m->key, cs);
         out->failed_ = c->r->n_errors != before;
     }
@@ -4049,7 +4103,7 @@ static const char* const yexp__kinds[] = { "shape", "grating", "gabor", "noise",
 static void yexp__parse_stimulus(yexp__ctx* c, const yjs_member* m, yexp_stim* out, yjs_value* cset) {
     char elem[96];
     const yjs_value* kv;
-    int kind = -1, i, f = c->first[YEXP__S_STIM], rows = c->count[YEXP__S_STIM], np = 0, nd = 0;
+    int kind = -1, i, f = c->first[YEXP_S_STIM], rows = c->count[YEXP_S_STIM], np = 0, nd = 0;
     unsigned mask;
     yexp__slot* s;
     yjs_value* cs = NULL;
@@ -4067,7 +4121,7 @@ static void yexp__parse_stimulus(yexp__ctx* c, const yjs_member* m, yexp_stim* o
         return;
     }
     mask = 1u << kind;
-    s = yexp__object(c, YEXP__S_STIM, mask, m->value, elem, &cs);
+    s = yexp__object(c, YEXP_S_STIM, mask, m->value, elem, &cs);
     if (!s) return;
     for (i = 0; i < rows; i++)
         if (c->rows[f + i].kinds & mask) np++;
@@ -4075,7 +4129,7 @@ static void yexp__parse_stimulus(yexp__ctx* c, const yjs_member* m, yexp_stim* o
     /* version 2: `visible` is a step's property, no stimulus key (D41) */
     dyn = (int*)yexp__alloc(c, (size_t)np * sizeof *dyn);
     np = 0;
-    if (!props || !dyn) { yexp__release(c, YEXP__S_STIM); return; }
+    if (!props || !dyn) { yexp__release(c, YEXP_S_STIM); return; }
     out->name = m->key;
     out->pos_ = m->key_pos;
     out->kind = (yexp_stim_kind)kind;
@@ -4088,7 +4142,7 @@ static void yexp__parse_stimulus(yexp__ctx* c, const yjs_member* m, yexp_stim* o
             out->layer = yexp__int_field(c, s[i].v, elem, "layer", INT32_MIN, INT32_MAX, 0);
             continue;
         }
-        if (!s[i].v || (r->flags & YEXP__R_STEP)) continue;
+        if (!s[i].v || (r->flags & YEXP_R_STEP)) continue;
         props[np].key = r->key;
         props[np].value = s[i].v;
         props[np].given = s[i].given;
@@ -4101,7 +4155,7 @@ static void yexp__parse_stimulus(yexp__ctx* c, const yjs_member* m, yexp_stim* o
     out->dyn_ = dyn;
     out->n_dyn_ = nd;
     if (kind == YEXP_TEXT) {
-        const yexp_value* tv = yexp__slotv(c, s, YEXP__S_STIM, "text");
+        const yexp_value* tv = yexp__slotv(c, s, YEXP_S_STIM, "text");
         if (tv && tv->kind == YEXP_V_VAR) {
             bool session = false;
             int j;
@@ -4113,7 +4167,7 @@ static void yexp__parse_stimulus(yexp__ctx* c, const yjs_member* m, yexp_stim* o
         }
     }
     yexp__put(c, cset, m->key, cs);
-    yexp__release(c, YEXP__S_STIM);
+    yexp__release(c, YEXP_S_STIM);
 }
 
 static void yexp__parse_stimuli(yexp__ctx* c, const yjs_value* src, yjs_value** canon) {
@@ -4170,9 +4224,9 @@ static void yexp__parse_method(yexp__ctx* c, const yjs_member* m, yexp_method* o
     if (m->value->type != YJS_OBJECT) { yexp__err(c, m->value->pos, "%s: wrong type; expected an object", elem); return; }
     tv = yjs_get(m->value, "type");
     if (!tv) { yexp__err(c, m->value->pos, "%s: 'type' is required", elem); return; }
-    if (tv->type == YJS_STRING && yexp__streq(tv->u.s, "stair")) { sect = YEXP__S_STAIR; mtype = YEXP_STAIR; }
-    else if (tv->type == YJS_STRING && yexp__streq(tv->u.s, "quest")) { sect = YEXP__S_QUEST; mtype = YEXP_QUEST; }
-    else if (tv->type == YJS_STRING && yexp__streq(tv->u.s, "aep")) { sect = YEXP__S_AEP; mtype = YEXP_AEP; }
+    if (tv->type == YJS_STRING && yexp__streq(tv->u.s, "stair")) { sect = YEXP_S_STAIR; mtype = YEXP_STAIR; }
+    else if (tv->type == YJS_STRING && yexp__streq(tv->u.s, "quest")) { sect = YEXP_S_QUEST; mtype = YEXP_QUEST; }
+    else if (tv->type == YJS_STRING && yexp__streq(tv->u.s, "aep")) { sect = YEXP_S_AEP; mtype = YEXP_AEP; }
     else { yexp__err(c, tv->pos, "%s: 'type': not one of: stair, quest, aep", elem); return; }
     s = yexp__object(c, sect, 0xffffu, m->value, elem, &cm);
     if (!s) return;
@@ -4282,7 +4336,7 @@ static bool yexp__tweenable(const yexp_row* r) {
     /* `ygfx_bind` reaches gfx's float fields and rdk's three update floats;
      * these three T_NUM rows are read once, by an open or a play */
     if (yexp__streq(r->key, "density") || yexp__streq(r->key, "lead") || yexp__streq(r->key, "db")) return false;
-    return (r->type == YEXP__T_NUM || r->type == YEXP__T_VEC3) && !(r->flags & YEXP__R_LIT);
+    return (r->type == YEXP_T_NUM || r->type == YEXP_T_VEC3) && !(r->flags & YEXP_R_LIT);
 }
 
 /* The names in a value's forms (3.10, 3.15), resolved in the template being
@@ -4376,9 +4430,9 @@ static void yexp__parse_props(yexp__ctx* c, const yjs_value* props, const yexp_s
             yexp__put(c, cp, "note", yexp__cstr(c, m->value->u.s));
             continue;
         }
-        ri = yexp__find(c, YEXP__S_STIM, mask, m->key);
+        ri = yexp__find(c, YEXP_S_STIM, mask, m->key);
         if (ri < 0) {
-            if (yexp__streq(m->key, "color_r")) { yexp__unknown(c, YEXP__S_STIM, mask, m, elem); continue; }
+            if (yexp__streq(m->key, "color_r")) { yexp__unknown(c, YEXP_S_STIM, mask, m, elem); continue; }
             yexp__err(c, m->key_pos, "%s: property '%s' is not a property of the %s stimulus '%s'", elem, m->key, yexp__kinds[(int)st->kind], st->name);
             continue;
         }
@@ -4390,7 +4444,7 @@ static void yexp__parse_props(yexp__ctx* c, const yjs_value* props, const yexp_s
         if (forms) c->extra_allow = YEXP__AV_SIG | YEXP__AV_WHEN;
         if (!yexp__row_value(c, ri, m, elem, &slot, &cv)) { c->extra_allow = 0; continue; }
         c->extra_allow = 0;
-        if (forms && yexp__is_form(slot.v) && !yexp__forms_resolve(c, slot.v, c->rows[ri].type == YEXP__T_VEC3 ? 3 : 1, elem, m->key)) continue;
+        if (forms && yexp__is_form(slot.v) && !yexp__forms_resolve(c, slot.v, c->rows[ri].type == YEXP_T_VEC3 ? 3 : 1, elem, m->key)) continue;
         if (c->version >= 2 && (yexp__streq(m->key, "x") || yexp__streq(m->key, "y"))) {
             /* checked against the controls' stimuli at the template's end */
             yexp__xy* xy = (yexp__xy*)yexp__alloc(c, sizeof *xy);
@@ -4439,28 +4493,28 @@ static void yexp__parse_step(yexp__ctx* c, const yjs_value* src, const char* ele
          * suffix gets its own message */
         for (i = 0; i < src->n; i++)
             if (!yexp__streq(src->u.members[i].key, "note")) {
-                yexp__unknown(c, YEXP__S_STEP, 0xffffu, &src->u.members[i], elem);
+                yexp__unknown(c, YEXP_S_STEP, 0xffffu, &src->u.members[i], elem);
                 return;
             }
         yexp__err(c, src->pos, "%s: an empty step", elem);
         return;
     }
     mask = 1u << verb;
-    s = yexp__object(c, YEXP__S_STEP, mask, src, elem, &cs);
+    s = yexp__object(c, YEXP_S_STEP, mask, src, elem, &cs);
     if (!s) return;
     out->op = (yexp_step_op)verb;
     switch (verb) {
     case YEXP_ON: case YEXP_OFF: {
-        const yexp_value* tg = yexp__slotv(c, s, YEXP__S_STEP, yexp__verbs[verb]);
+        const yexp_value* tg = yexp__slotv(c, s, YEXP_S_STEP, yexp__verbs[verb]);
         out->stims = yexp__str_array(c, tg, &out->n_stims);
-        out->stagger = yexp__slotv(c, s, YEXP__S_STEP, "stagger_s");
+        out->stagger = yexp__slotv(c, s, YEXP_S_STEP, "stagger_s");
         {
-            const yexp__slot* st = yexp__slot_at(c, s, YEXP__S_STEP, "stagger_s");
+            const yexp__slot* st = yexp__slot_at(c, s, YEXP_S_STEP, "stagger_s");
             /* a stagger has no effect on one stimulus: it is dropped, so a
              * written one and none give one form and one ID */
             if (st && st->given && tg) {
-                const yexp_value* sv = yexp__slotv(c, s, YEXP__S_STEP, "stagger_s");
-                int ri = yexp__find(c, YEXP__S_STEP, mask, "stagger_s");
+                const yexp_value* sv = yexp__slotv(c, s, YEXP_S_STEP, "stagger_s");
+                int ri = yexp__find(c, YEXP_S_STEP, mask, "stagger_s");
                 const yexp_value* d = ri >= 0 ? yexp__default(c, ri) : NULL;
                 if (tg->n < 2) out->stagger = d;
                 else if (sv && st->src && !(d && yexp__same(sv, d))) yexp__put(c, cs, "stagger_s", (yjs_value*)st->src);
@@ -4482,24 +4536,24 @@ static void yexp__parse_step(yexp__ctx* c, const yjs_value* src, const char* ele
         break;
     }
     case YEXP_WAIT: case YEXP_AT:
-        out->t = yexp__slotv(c, s, YEXP__S_STEP, yexp__verbs[verb]);
+        out->t = yexp__slotv(c, s, YEXP_S_STEP, yexp__verbs[verb]);
         /* 3.11 rule 6: in events at_s is trial time, and the time an until
          * splits at is not known */
         if (verb == YEXP_AT && c->step_place == 0 && c->until_seen)
             yexp__err(c, src->pos, "%s: 'at_s' after an 'until' in 'events': the time the until splits at is not known (3.11 rule 6); put the steps in states", elem);
         break;
     case YEXP_SET: case YEXP_TO: case YEXP_THEN: {
-        const char* name = yexp__v_str(yexp__slotv(c, s, YEXP__S_STEP, yexp__verbs[verb]));
+        const char* name = yexp__v_str(yexp__slotv(c, s, YEXP_S_STEP, yexp__verbs[verb]));
         const yexp_stim* st = name ? yexp_stim_get(c->d, name) : NULL;
-        yexp__slot* ps = yexp__slot_at(c, s, YEXP__S_STEP, "props");
+        yexp__slot* ps = yexp__slot_at(c, s, YEXP_S_STEP, "props");
         const char** names = (const char**)yexp__alloc(c, sizeof(char*));
         if (names && name) { names[0] = name; out->stims = names; out->n_stims = 1; }
         if (!st && name && yexp__is_control_name(c, name)) yexp__err(c, src->pos, "%s: '%s': '%s' is a control; a step cannot name a control (3.12)", elem, yexp__verbs[verb], name);
         else if (!st && name && !(c->bad_sets & YEXP__BAD_STIMULI)) yexp__err(c, src->pos, "%s: '%s': no stimulus named '%s'", elem, yexp__verbs[verb], name);
         if (verb != YEXP_SET) {
-            out->duration = yexp__slotv(c, s, YEXP__S_STEP, "duration_s");
-            out->delay = yexp__slotv(c, s, YEXP__S_STEP, "delay_s");
-            out->ease = yexp__v_str(yexp__slotv(c, s, YEXP__S_STEP, "ease"));
+            out->duration = yexp__slotv(c, s, YEXP_S_STEP, "duration_s");
+            out->delay = yexp__slotv(c, s, YEXP_S_STEP, "delay_s");
+            out->ease = yexp__v_str(yexp__slotv(c, s, YEXP_S_STEP, "ease"));
         }
         if (st && !st->failed_ && ps && ps->src) {
             yjs_value* cp = NULL;
@@ -4509,8 +4563,8 @@ static void yexp__parse_step(yexp__ctx* c, const yjs_value* src, const char* ele
         break;
     }
     case YEXP_TRIGGER: {
-        const char* role = yexp__v_str(yexp__slotv(c, s, YEXP__S_STEP, "role"));
-        out->code = yexp__slotv(c, s, YEXP__S_STEP, "trigger");
+        const char* role = yexp__v_str(yexp__slotv(c, s, YEXP_S_STEP, "role"));
+        out->code = yexp__slotv(c, s, YEXP_S_STEP, "trigger");
         out->role = role;
         if (role) {
             const yexp_role* r = yexp__role_get(c->d, role);
@@ -4520,13 +4574,13 @@ static void yexp__parse_step(yexp__ctx* c, const yjs_value* src, const char* ele
         break;
     }
     case YEXP_MARK:
-        out->mark = yexp__v_str(yexp__slotv(c, s, YEXP__S_STEP, "mark"));
+        out->mark = yexp__v_str(yexp__slotv(c, s, YEXP_S_STEP, "mark"));
         if (out->mark && !out->mark[0]) yexp__err(c, src->pos, "%s: 'mark' is a name, not empty", elem);
         break;
     case YEXP_IF: case YEXP_UNLESS: {
-        yexp__slot* st = yexp__slot_at(c, s, YEXP__S_STEP, "steps");
-        out->cond = yexp__v_str(yexp__slotv(c, s, YEXP__S_STEP, yexp__verbs[verb]));
-        out->cond_pos_ = yexp__slot_at(c, s, YEXP__S_STEP, yexp__verbs[verb])->pos;
+        yexp__slot* st = yexp__slot_at(c, s, YEXP_S_STEP, "steps");
+        out->cond = yexp__v_str(yexp__slotv(c, s, YEXP_S_STEP, yexp__verbs[verb]));
+        out->cond_pos_ = yexp__slot_at(c, s, YEXP_S_STEP, yexp__verbs[verb])->pos;
         if (st && st->src) {
             yjs_value* ca = NULL;
             yexp__parse_steps(c, st->src, elem, depth + 1, &out->steps, &out->n_steps, &ca);
@@ -4535,8 +4589,8 @@ static void yexp__parse_step(yexp__ctx* c, const yjs_value* src, const char* ele
         break;
     }
     case YEXP_UNTIL: {
-        const yexp__slot* us = yexp__slot_at_m(c, s, YEXP__S_STEP, mask, "until");
-        const yexp_value* to = yexp__slotv_m(c, s, YEXP__S_STEP, mask, "timeout_s");
+        const yexp__slot* us = yexp__slot_at_m(c, s, YEXP_S_STEP, mask, "until");
+        const yexp_value* to = yexp__slotv_m(c, s, YEXP_S_STEP, mask, "timeout_s");
         const char* nm = yexp__v_str(us ? us->v : NULL);
         /* format finding F4: in events or a state's own steps, not in an if
          * body or in after (3.11 rule 9) */
@@ -4554,9 +4608,9 @@ static void yexp__parse_step(yexp__ctx* c, const yjs_value* src, const char* ele
         break;
     }
     case YEXP_RECENTER: {
-        const yexp__slot* rs = yexp__slot_at_m(c, s, YEXP__S_STEP, mask, "recenter");
+        const yexp__slot* rs = yexp__slot_at_m(c, s, YEXP_S_STEP, mask, "recenter");
         const char* nm = yexp__v_str(rs ? rs->v : NULL);
-        out->point = yexp__slotv_m(c, s, YEXP__S_STEP, mask, "to");
+        out->point = yexp__slotv_m(c, s, YEXP_S_STEP, mask, "to");
         if (nm && yexp__ref_text(c, nm, rs->pos, false, &out->target, elem, "recenter") &&
             yexp__name_use(c, &out->target, YEXP__N_ROLE, elem, "recenter")) {
             const yexp_sigrole* sr = &c->d->sigroles[out->target.index];
@@ -4569,8 +4623,8 @@ static void yexp__parse_step(yexp__ctx* c, const yjs_value* src, const char* ele
         break;
     }
     case YEXP_FLAG: {
-        const yexp__slot* fs = yexp__slot_at_m(c, s, YEXP__S_STEP, mask, "flag");
-        const yexp_value* fv = yexp__slotv_m(c, s, YEXP__S_STEP, mask, "value");
+        const yexp__slot* fs = yexp__slot_at_m(c, s, YEXP_S_STEP, mask, "flag");
+        const yexp_value* fv = yexp__slotv_m(c, s, YEXP_S_STEP, mask, "value");
         out->flag = yexp__v_str(fs ? fs->v : NULL);
         out->flag_value = yexp__v_bool(fv, false);
         if (out->flag && yexp__kfind(c->fl_idx, c->n_fl, out->flag) < 0)
@@ -4579,7 +4633,7 @@ static void yexp__parse_step(yexp__ctx* c, const yjs_value* src, const char* ele
     }
     default: break;
     }
-    yexp__release(c, YEXP__S_STEP);
+    yexp__release(c, YEXP_S_STEP);
     *canon = cs;
 }
 
@@ -4630,15 +4684,15 @@ static bool yexp__parse_exit(yexp__ctx* c, const yjs_value* src, bool shared, co
     out->on.index = out->to.index = -1;
     out->on.lane = out->to.lane = -1;
     out->pos_ = src->pos;
-    s = yexp__object(c, YEXP__S_EXIT, mask, src, elem, &ce);
+    s = yexp__object(c, YEXP_S_EXIT, mask, src, elem, &ce);
     if (!s) return false;
-    on = yexp__slot_at_m(c, s, YEXP__S_EXIT, mask, "on");
-    to = yexp__slot_at_m(c, s, YEXP__S_EXIT, mask, "to");
-    iff = yexp__slot_at_m(c, s, YEXP__S_EXIT, mask, "if");
-    out->after = yexp__slotv_m(c, s, YEXP__S_EXIT, mask, "after_s");
+    on = yexp__slot_at_m(c, s, YEXP_S_EXIT, mask, "on");
+    to = yexp__slot_at_m(c, s, YEXP_S_EXIT, mask, "to");
+    iff = yexp__slot_at_m(c, s, YEXP_S_EXIT, mask, "if");
+    out->after = yexp__slotv_m(c, s, YEXP_S_EXIT, mask, "after_s");
     /* format finding F6: text, an integer or a boolean, the outcome column's
      * value, as D20 and 3.11 rule 9 write it ("timeout") */
-    out->outcome = yexp__slotv_m(c, s, YEXP__S_EXIT, mask, "outcome");
+    out->outcome = yexp__slotv_m(c, s, YEXP_S_EXIT, mask, "outcome");
     if (on && on->v && yexp__ref_text(c, on->v->str, on->pos, false, &out->on, elem, "on"))
         yexp__name_use(c, &out->on, YEXP__N_HITS | YEXP__N_RESPONSE, elem, "on");
     if (out->after && out->after->kind == YEXP_V_NUMBER && out->after->i <= 0)
@@ -4654,7 +4708,7 @@ static bool yexp__parse_exit(yexp__ctx* c, const yjs_value* src, bool shared, co
     if (to && to->v && yexp__ref_text(c, to->v->str, to->pos, false, &out->to, elem, "to"))
         yexp__name_use(c, &out->to, YEXP__N_STATE | YEXP__N_END, elem, "to");
     if (shared) {
-        const yexp__slot* in = yexp__slot_at_m(c, s, YEXP__S_EXIT, mask, "in");
+        const yexp__slot* in = yexp__slot_at_m(c, s, YEXP_S_EXIT, mask, "in");
         if (!(on && on->v) && !out->after)
             yexp__err(c, src->pos, "%s: a shared exit is 'on' or 'after_s'; an instant shared exit is refused (D20 rule 11)", elem);
         if (in && in->v) {
@@ -4671,7 +4725,7 @@ static bool yexp__parse_exit(yexp__ctx* c, const yjs_value* src, bool shared, co
             }
         }
     }
-    yexp__release(c, YEXP__S_EXIT);
+    yexp__release(c, YEXP_S_EXIT);
     *canon = ce;
     return c->r->n_errors == before;
 }
@@ -4701,10 +4755,10 @@ static void yexp__parse_states(yexp__ctx* c, yexp_template* t, const yjs_value* 
         st->pos_ = src->u.items[i]->pos;
         nv = src->u.items[i]->type == YJS_OBJECT ? yjs_get(src->u.items[i], "name") : NULL;
         snprintf(elem, sizeof elem, "%s: state '%s'", telem, nv && nv->type == YJS_STRING ? nv->u.s : "?");
-        s = yexp__object(c, YEXP__S_STATE, 0xffffu, src->u.items[i], elem, &cs);
+        s = yexp__object(c, YEXP_S_STATE, 0xffffu, src->u.items[i], elem, &cs);
         if (!s) continue;
-        st->name = yexp__v_str(yexp__slotv(c, s, YEXP__S_STATE, "name"));
-        x = yexp__slot_at(c, s, YEXP__S_STATE, "steps");
+        st->name = yexp__v_str(yexp__slotv(c, s, YEXP_S_STATE, "name"));
+        x = yexp__slot_at(c, s, YEXP_S_STATE, "steps");
         if (x && x->src) {
             yjs_value* ca = NULL;
             snprintf(sub, sizeof sub, "%s: steps", elem);
@@ -4713,7 +4767,7 @@ static void yexp__parse_states(yexp__ctx* c, yexp_template* t, const yjs_value* 
             yexp__parse_steps(c, x->src, sub, 0, &st->steps, &st->n_steps, &ca);
             if (ca && ca->n) yexp__put(c, cs, "steps", ca);
         }
-        x = yexp__slot_at(c, s, YEXP__S_STATE, "exits");
+        x = yexp__slot_at(c, s, YEXP_S_STATE, "exits");
         if (x && x->src) {
             if (x->src->type != YJS_ARRAY || x->src->n > YEXP__MAX_LIST) {
                 yexp__err(c, x->src->pos, "%s: 'exits' is an array of exits", elem);
@@ -4735,8 +4789,8 @@ static void yexp__parse_states(yexp__ctx* c, yexp_template* t, const yjs_value* 
             }
         }
         {
-            const yexp_value* mv = yexp__slotv(c, s, YEXP__S_STATE, "max_visits");
-            x = yexp__slot_at(c, s, YEXP__S_STATE, "over");
+            const yexp_value* mv = yexp__slotv(c, s, YEXP_S_STATE, "max_visits");
+            x = yexp__slot_at(c, s, YEXP_S_STATE, "over");
             st->max_visits = yexp__int_field(c, mv, elem, "max_visits", 1, INT32_MAX, 0);
             if ((mv != NULL) != (x && x->src))
                 yexp__err(c, mv ? mv->pos : x->src->pos, "%s: 'max_visits' and 'over' go together (D20 rule 12)", elem);
@@ -4744,19 +4798,19 @@ static void yexp__parse_states(yexp__ctx* c, yexp_template* t, const yjs_value* 
                 yjs_value* co = NULL;
                 yexp__slot* s2;
                 snprintf(sub, sizeof sub, "%s: over", elem);
-                s2 = yexp__object(c, YEXP__S_OVER, 0xffffu, x->src, sub, &co);
+                s2 = yexp__object(c, YEXP_S_OVER, 0xffffu, x->src, sub, &co);
                 if (s2) {
-                    const yexp__slot* ot = yexp__slot_at(c, s2, YEXP__S_OVER, "to");
+                    const yexp__slot* ot = yexp__slot_at(c, s2, YEXP_S_OVER, "to");
                     /* format finding F15: 3.17 omits it; 3.11 says none */
-                    st->over_outcome = yexp__slotv(c, s2, YEXP__S_OVER, "outcome");
+                    st->over_outcome = yexp__slotv(c, s2, YEXP_S_OVER, "outcome");
                     if (ot && ot->v && yexp__ref_text(c, ot->v->str, ot->pos, false, &st->over_to, sub, "to"))
                         yexp__name_use(c, &st->over_to, YEXP__N_STATE | YEXP__N_END, sub, "to");
                     yexp__put(c, cs, "over", co);
-                    yexp__release(c, YEXP__S_OVER);
+                    yexp__release(c, YEXP_S_OVER);
                 }
             }
         }
-        yexp__release(c, YEXP__S_STATE);
+        yexp__release(c, YEXP_S_STATE);
         yexp__cpush(c, carr, cs);
     }
     c->step_place = 0;
@@ -5242,19 +5296,19 @@ static void yexp__parse_sresponse(yexp__ctx* c, const yjs_value* src, const char
     const yexp__slot* chs;
     const yexp_control* first = NULL;
     snprintf(elem, sizeof elem, "%s: response", telem);
-    s = yexp__object(c, YEXP__S_SRESPONSE, 0xffffu, src, elem, &cr);
+    s = yexp__object(c, YEXP_S_SRESPONSE, 0xffffu, src, elem, &cr);
     if (!s) return;
     r = (yexp_response*)yexp__alloc(c, sizeof *r);
-    if (!r) { yexp__release(c, YEXP__S_SRESPONSE); return; }
+    if (!r) { yexp__release(c, YEXP_S_SRESPONSE); return; }
     r->signal_choices = true;
-    r->from = yexp__v_str(yexp__slotv(c, s, YEXP__S_SRESPONSE, "from"));
-    r->duration = yexp__slotv(c, s, YEXP__S_SRESPONSE, "duration_s");
-    r->min_rt = yexp__slotv(c, s, YEXP__S_SRESPONSE, "minimum_valid_rt_s");
-    r->ends_trial = yexp__v_bool(yexp__slotv(c, s, YEXP__S_SRESPONSE, "response_ends_trial"), false);
-    r->max_responses = yexp__int_field(c, yexp__slotv(c, s, YEXP__S_SRESPONSE, "max_responses"), elem, "max_responses", 0, INT32_MAX, 0);
+    r->from = yexp__v_str(yexp__slotv(c, s, YEXP_S_SRESPONSE, "from"));
+    r->duration = yexp__slotv(c, s, YEXP_S_SRESPONSE, "duration_s");
+    r->min_rt = yexp__slotv(c, s, YEXP_S_SRESPONSE, "minimum_valid_rt_s");
+    r->ends_trial = yexp__v_bool(yexp__slotv(c, s, YEXP_S_SRESPONSE, "response_ends_trial"), false);
+    r->max_responses = yexp__int_field(c, yexp__slotv(c, s, YEXP_S_SRESPONSE, "max_responses"), elem, "max_responses", 0, INT32_MAX, 0);
     yexp__window_lit(c, src->pos, elem, r);
     if (r->from && !yexp_stim_get(c->d, r->from) && !(c->bad_sets & YEXP__BAD_STIMULI)) yexp__err(c, src->pos, "%s: 'from': no stimulus named '%s'", elem, r->from);
-    chs = yexp__slot_at(c, s, YEXP__S_SRESPONSE, "choices");
+    chs = yexp__slot_at(c, s, YEXP_S_SRESPONSE, "choices");
     if (chs && chs->src) {
         const yjs_value* arr = chs->src;
         yexp_choice* ch = (yexp_choice*)yexp__alloc(c, (arr->n ? arr->n : 1) * sizeof *ch);
@@ -5309,7 +5363,7 @@ static void yexp__parse_sresponse(yexp__ctx* c, const yjs_value* src, const char
         }
     }
     *out_r = r;
-    yexp__release(c, YEXP__S_SRESPONSE);
+    yexp__release(c, YEXP_S_SRESPONSE);
     *canon = cr;
 }
 
@@ -5336,19 +5390,19 @@ static void yexp__parse_response(yexp__ctx* c, const yjs_value* src, const char*
         return;
     }
     snprintf(elem, sizeof elem, "%s: response", telem);
-    s = yexp__object(c, YEXP__S_RESPONSE, 0xffffu, src, elem, &cr);
+    s = yexp__object(c, YEXP_S_RESPONSE, 0xffffu, src, elem, &cr);
     if (!s) return;
     r = (yexp_response*)yexp__alloc(c, sizeof *r);
-    if (!r) { yexp__release(c, YEXP__S_RESPONSE); return; }
-    r->role = yexp__v_str(yexp__slotv(c, s, YEXP__S_RESPONSE, "role"));
-    r->from = yexp__v_str(yexp__slotv(c, s, YEXP__S_RESPONSE, "from"));
-    r->duration = yexp__slotv(c, s, YEXP__S_RESPONSE, "duration_s");
-    r->min_rt = yexp__slotv(c, s, YEXP__S_RESPONSE, "minimum_valid_rt_s");
-    r->key_answer = yexp__slotv(c, s, YEXP__S_RESPONSE, "key_answer");
-    r->ends_trial = yexp__v_bool(yexp__slotv(c, s, YEXP__S_RESPONSE, "response_ends_trial"), true);
-    r->max_responses = yexp__int_field(c, yexp__slotv(c, s, YEXP__S_RESPONSE, "max_responses"), elem, "max_responses", 0, INT32_MAX, 0);
-    r->allow_held_key = yexp__v_bool(yexp__slotv(c, s, YEXP__S_RESPONSE, "allow_held_key"), false);
-    r->wait_for_key_release = yexp__v_bool(yexp__slotv(c, s, YEXP__S_RESPONSE, "wait_for_key_release"), false);
+    if (!r) { yexp__release(c, YEXP_S_RESPONSE); return; }
+    r->role = yexp__v_str(yexp__slotv(c, s, YEXP_S_RESPONSE, "role"));
+    r->from = yexp__v_str(yexp__slotv(c, s, YEXP_S_RESPONSE, "from"));
+    r->duration = yexp__slotv(c, s, YEXP_S_RESPONSE, "duration_s");
+    r->min_rt = yexp__slotv(c, s, YEXP_S_RESPONSE, "minimum_valid_rt_s");
+    r->key_answer = yexp__slotv(c, s, YEXP_S_RESPONSE, "key_answer");
+    r->ends_trial = yexp__v_bool(yexp__slotv(c, s, YEXP_S_RESPONSE, "response_ends_trial"), true);
+    r->max_responses = yexp__int_field(c, yexp__slotv(c, s, YEXP_S_RESPONSE, "max_responses"), elem, "max_responses", 0, INT32_MAX, 0);
+    r->allow_held_key = yexp__v_bool(yexp__slotv(c, s, YEXP_S_RESPONSE, "allow_held_key"), false);
+    r->wait_for_key_release = yexp__v_bool(yexp__slotv(c, s, YEXP_S_RESPONSE, "wait_for_key_release"), false);
     /* F37 (decided 2026-11-12, both versions): a window that a press does
      * not end, with no deadline and no count, has nothing that ends it */
     if (!r->ends_trial && r->max_responses == 0 && (!r->duration || (r->duration->kind == YEXP_V_NUMBER && yexp__ns0(r->duration))))
@@ -5361,7 +5415,7 @@ static void yexp__parse_response(yexp__ctx* c, const yjs_value* src, const char*
     }
     name = r->from;
     if (name && !yexp_stim_get(c->d, name) && !(c->bad_sets & YEXP__BAD_STIMULI)) yexp__err(c, src->pos, "%s: 'from': no stimulus named '%s'", elem, name);
-    chs = yexp__slot_at(c, s, YEXP__S_RESPONSE, "choices");
+    chs = yexp__slot_at(c, s, YEXP_S_RESPONSE, "choices");
     if (chs && chs->src) {
         const yjs_value* arr = chs->src;
         yexp_choice* ch;
@@ -5383,16 +5437,16 @@ static void yexp__parse_response(yexp__ctx* c, const yjs_value* src, const char*
                         if (kv2) { ch[i].key = kv2->str; ch[i].name = kv2->str; yexp__cpush(c, ca, cs2); }
                     } else {
                         yjs_value* co = NULL;
-                        yexp__slot* s2 = yexp__object(c, YEXP__S_CHOICE, 0xffffu, it, ce, &co);
+                        yexp__slot* s2 = yexp__object(c, YEXP_S_CHOICE, 0xffffu, it, ce, &co);
                         if (s2) {
-                            ch[i].key = yexp__v_str(yexp__slotv(c, s2, YEXP__S_CHOICE, "key"));
-                            ch[i].name = yexp__v_str(yexp__slotv(c, s2, YEXP__S_CHOICE, "name"));
+                            ch[i].key = yexp__v_str(yexp__slotv(c, s2, YEXP_S_CHOICE, "key"));
+                            ch[i].name = yexp__v_str(yexp__slotv(c, s2, YEXP_S_CHOICE, "name"));
                             if (!ch[i].name) ch[i].name = ch[i].key;
                             else if (ch[i].key && yexp__streq(ch[i].name, ch[i].key))
                                 yexp__err(c, it->pos, "%s: 'name' equals 'key': write the key alone", ce);
                             /* a key alone has one spelling: the bare string */
                             yexp__cpush(c, ca, co && co->n == 1 && yjs_get(co, "key") ? yjs_get(co, "key") : co);
-                            yexp__release(c, YEXP__S_CHOICE);
+                            yexp__release(c, YEXP_S_CHOICE);
                         }
                     }
                     if (ch[i].key && !ch[i].key[0]) yexp__err(c, it->pos, "%s: an empty key", ce);
@@ -5423,27 +5477,27 @@ static void yexp__parse_response(yexp__ctx* c, const yjs_value* src, const char*
             }
         }
     }
-    trg = yexp__slot_at(c, s, YEXP__S_RESPONSE, "trigger");
+    trg = yexp__slot_at(c, s, YEXP_S_RESPONSE, "trigger");
     if (trg && trg->src) {
         char te[140];
         yjs_value* ct = NULL;
         yexp__slot* s2;
         snprintf(te, sizeof te, "%s: 'trigger'", elem);
-        s2 = yexp__object(c, YEXP__S_RTRIGGER, 0xffffu, trg->src, te, &ct);
+        s2 = yexp__object(c, YEXP_S_RTRIGGER, 0xffffu, trg->src, te, &ct);
         if (s2) {
-            r->trigger_role = yexp__v_str(yexp__slotv(c, s2, YEXP__S_RTRIGGER, "role"));
-            r->trigger_code = yexp__slotv(c, s2, YEXP__S_RTRIGGER, "code");
+            r->trigger_role = yexp__v_str(yexp__slotv(c, s2, YEXP_S_RTRIGGER, "role"));
+            r->trigger_code = yexp__slotv(c, s2, YEXP_S_RTRIGGER, "code");
             if (r->trigger_role) {
                 const yexp_role* ro = yexp__role_get(c->d, r->trigger_role);
                 if (!ro) { if (!(c->bad_sets & YEXP__BAD_ROLES)) yexp__err(c, trg->src->pos, "%s: 'role': no role named '%s'", te, r->trigger_role); }
                 else if (!ro->failed_ && ro->direction == 0) yexp__err(c, trg->src->pos, "%s: 'role': '%s' is an input role; a trigger needs an output", te, r->trigger_role);
             }
             yexp__put(c, cr, "trigger", ct);
-            yexp__release(c, YEXP__S_RTRIGGER);
+            yexp__release(c, YEXP_S_RTRIGGER);
         }
     }
     *out_r = r;
-    yexp__release(c, YEXP__S_RESPONSE);
+    yexp__release(c, YEXP_S_RESPONSE);
     *canon = cr;
 }
 
@@ -5600,11 +5654,11 @@ static void yexp__parse_values_set(yexp__ctx* c, const yjs_value* src, const cha
  * the names of its states and flags, its controls, and its namespace. */
 static void yexp__template_begin(yexp__ctx* c, yexp_template* out, yexp__slot* s, unsigned mask, yjs_value* ct, const char* elem) {
     yexp__slot* x;
-    yexp__slot* st = yexp__slot_at_m(c, s, YEXP__S_TEMPLATE, mask, "states");
-    yexp__slot* ev = yexp__slot_at_m(c, s, YEXP__S_TEMPLATE, mask, "events");
-    yexp__slot* af = yexp__slot_at_m(c, s, YEXP__S_TEMPLATE, mask, "after");
-    yexp__slot* ex = yexp__slot_at_m(c, s, YEXP__S_TEMPLATE, mask, "exits");
-    yexp__slot* rs = yexp__slot_at_m(c, s, YEXP__S_TEMPLATE, mask, "response");
+    yexp__slot* st = yexp__slot_at_m(c, s, YEXP_S_TEMPLATE, mask, "states");
+    yexp__slot* ev = yexp__slot_at_m(c, s, YEXP_S_TEMPLATE, mask, "events");
+    yexp__slot* af = yexp__slot_at_m(c, s, YEXP_S_TEMPLATE, mask, "after");
+    yexp__slot* ex = yexp__slot_at_m(c, s, YEXP_S_TEMPLATE, mask, "exits");
+    yexp__slot* rs = yexp__slot_at_m(c, s, YEXP_S_TEMPLATE, mask, "response");
     c->tp = out;
     c->xy = NULL;
     c->top_sp = 0;
@@ -5618,9 +5672,9 @@ static void yexp__template_begin(yexp__ctx* c, yexp_template* out, yexp__slot* s
         yexp__err(c, st->pos, "%s: 'states' replaces 'events' and 'after'; a template has one or the other (3.6)", elem);
     if (!c->t_states && ex && ex->src && ex->src->type == YJS_ARRAY && ex->src->n)
         yexp__err(c, ex->pos, "%s: 'exits' (shared exits) needs 'states' (3.6)", elem);
-    yexp__template_names(c, out, st ? st->src : NULL, yexp__slotv_m(c, s, YEXP__S_TEMPLATE, mask, "flags"), elem);
-    if (out->n_flags) yexp__put(c, ct, "flags", (yjs_value*)(void*)yexp__slot_at_m(c, s, YEXP__S_TEMPLATE, mask, "flags")->src);
-    x = yexp__slot_at_m(c, s, YEXP__S_TEMPLATE, mask, "controls");
+    yexp__template_names(c, out, st ? st->src : NULL, yexp__slotv_m(c, s, YEXP_S_TEMPLATE, mask, "flags"), elem);
+    if (out->n_flags) yexp__put(c, ct, "flags", (yjs_value*)(void*)yexp__slot_at_m(c, s, YEXP_S_TEMPLATE, mask, "flags")->src);
+    x = yexp__slot_at_m(c, s, YEXP_S_TEMPLATE, mask, "controls");
     if (x && x->src) {
         yjs_value* cc = NULL;
         char prefix[128];
@@ -5651,12 +5705,12 @@ static void yexp__parse_template(yexp__ctx* c, const yjs_member* m, yexp_templat
         yexp__err(c, mm ? mm->key_pos : m->value->pos, "%s: 'script' needs a later format version; version %d refuses it (D6)", elem, c->version);
         return;
     }
-    s = yexp__object(c, YEXP__S_TEMPLATE, mask, m->value, elem, &ct);
+    s = yexp__object(c, YEXP_S_TEMPLATE, mask, m->value, elem, &ct);
     if (!s) return;
     out->name = m->key;
     out->pos_ = m->key_pos;
     if (c->version >= 2) yexp__template_begin(c, out, s, mask, ct, elem);
-    x = yexp__slot_at(c, s, YEXP__S_TEMPLATE, "events");
+    x = yexp__slot_at(c, s, YEXP_S_TEMPLATE, "events");
     before_events = c->r->n_errors;
     if (x && x->src) {
         yjs_value* ca = NULL;
@@ -5667,7 +5721,7 @@ static void yexp__parse_template(yexp__ctx* c, const yjs_member* m, yexp_templat
         if (ca && ca->n) yexp__put(c, ct, "events", ca);
     }
     events_errors = c->r->n_errors - before_events;
-    x = yexp__slot_at(c, s, YEXP__S_TEMPLATE, "after");
+    x = yexp__slot_at(c, s, YEXP_S_TEMPLATE, "after");
     if (x && x->src) {
         yjs_value* ca = NULL;
         snprintf(sub, sizeof sub, "%s: after", elem);
@@ -5678,13 +5732,13 @@ static void yexp__parse_template(yexp__ctx* c, const yjs_member* m, yexp_templat
     }
     if (c->version >= 2) {
         before_events = c->r->n_errors;
-        x = yexp__slot_at_m(c, s, YEXP__S_TEMPLATE, mask, "states");
+        x = yexp__slot_at_m(c, s, YEXP_S_TEMPLATE, mask, "states");
         if (x && x->src) {
             yjs_value* ca = NULL;
             yexp__parse_states(c, out, x->src, elem, &ca);
             if (ca) yexp__put(c, ct, "states", ca);
         }
-        x = yexp__slot_at_m(c, s, YEXP__S_TEMPLATE, mask, "exits");
+        x = yexp__slot_at_m(c, s, YEXP_S_TEMPLATE, mask, "exits");
         if (x && x->src && c->t_states) {
             yjs_value* ca = NULL;
             yexp__parse_shared_exits(c, out, x->src, elem, &ca);
@@ -5692,7 +5746,7 @@ static void yexp__parse_template(yexp__ctx* c, const yjs_member* m, yexp_templat
         }
         events_errors += c->r->n_errors - before_events;
     }
-    x = yexp__slot_at(c, s, YEXP__S_TEMPLATE, "response");
+    x = yexp__slot_at(c, s, YEXP_S_TEMPLATE, "response");
     if (x && x->src) {
         yjs_value* cr = NULL;
         yexp__parse_response(c, x->src, elem, &out->response, &cr);
@@ -5703,8 +5757,8 @@ static void yexp__parse_template(yexp__ctx* c, const yjs_member* m, yexp_templat
             yexp__err(c, x->src->pos, "%s: response: 'from': no step in '%s' shows '%s', so its onset never comes", elem, out->states ? "states" : "events", out->response->from);
     }
     {
-        const yexp_value* rv = yexp__slotv(c, s, YEXP__S_TEMPLATE, "record");
-        yexp__slot* rslot = yexp__slot_at(c, s, YEXP__S_TEMPLATE, "record");
+        const yexp_value* rv = yexp__slotv(c, s, YEXP_S_TEMPLATE, "record");
+        yexp__slot* rslot = yexp__slot_at(c, s, YEXP_S_TEMPLATE, "record");
         yexp_template tmp = *out;
         yexp__default_record(c, &tmp);
         if (rslot && rslot->given && rv) {
@@ -5728,7 +5782,7 @@ static void yexp__parse_template(yexp__ctx* c, const yjs_member* m, yexp_templat
             out->n_record = tmp.n_record;
         }
     }
-    x = yexp__slot_at(c, s, YEXP__S_TEMPLATE, "columns");
+    x = yexp__slot_at(c, s, YEXP_S_TEMPLATE, "columns");
     if (x && x->src) {
         yjs_value* co = NULL;
         snprintf(sub, sizeof sub, "%s: columns", elem);
@@ -5742,12 +5796,12 @@ static void yexp__parse_template(yexp__ctx* c, const yjs_member* m, yexp_templat
     {
         /* with no response there is no correctness, so nothing to default to;
          * with states and no key_answer the default is 1 (3.11, D36) */
-        yexp__slot* oc = yexp__slot_at_m(c, s, YEXP__S_TEMPLATE, mask, "outcome");
+        yexp__slot* oc = yexp__slot_at_m(c, s, YEXP_S_TEMPLATE, mask, "outcome");
         const yexp_value* dflt;
         if (c->version >= 2 && out->states && !(out->response && out->response->key_answer)) {
-            dflt = yexp__default(c, yexp__find(c, YEXP__S_TEMPLATE, 2u, "outcome"));
+            dflt = yexp__default(c, yexp__find(c, YEXP_S_TEMPLATE, 2u, "outcome"));
         } else if (out->response) {
-            dflt = yexp__default(c, yexp__find(c, YEXP__S_TEMPLATE, c->version >= 2 ? 1u : 0xffffu, "outcome"));
+            dflt = yexp__default(c, yexp__find(c, YEXP_S_TEMPLATE, c->version >= 2 ? 1u : 0xffffu, "outcome"));
         } else {
             yexp_value* e = yexp__vnew(c, YEXP_V_STRING, UINT32_MAX);
             if (e) e->str = "";
@@ -5763,17 +5817,17 @@ static void yexp__parse_template(yexp__ctx* c, const yjs_member* m, yexp_templat
     {
         /* whether a leaf with tracks runs this is known after the timeline:
          * yexp__finish_method_values() */
-        yexp__slot* mv = yexp__slot_at(c, s, YEXP__S_TEMPLATE, "method_value");
+        yexp__slot* mv = yexp__slot_at(c, s, YEXP_S_TEMPLATE, "method_value");
         out->method_value = mv->v;
         out->canon_ = ct;
         out->mv_written_ = mv->given;
         out->mv_pos_ = mv->pos;
-        if (mv->given && mv->v && !yexp__same(mv->v, yexp__default(c, yexp__find(c, YEXP__S_TEMPLATE, 0xffffu, "method_value"))))
+        if (mv->given && mv->v && !yexp__same(mv->v, yexp__default(c, yexp__find(c, YEXP_S_TEMPLATE, 0xffffu, "method_value"))))
             out->mv_canon_ = (void*)mv->src;
     }
     if (c->version >= 2) {
         out->end_unset_ = yexp__may_end_unset(c, out);
-        x = yexp__slot_at_m(c, s, YEXP__S_TEMPLATE, mask, "requeue_outcomes");
+        x = yexp__slot_at_m(c, s, YEXP_S_TEMPLATE, mask, "requeue_outcomes");
         if (x && x->src) {
             if (x->src->type != YJS_ARRAY || x->src->n > YEXP__MAX_LIST) {
                 yexp__err(c, x->src->pos, "%s: 'requeue_outcomes' is an array of outcome values", elem);
@@ -5805,7 +5859,7 @@ static void yexp__parse_template(yexp__ctx* c, const yjs_member* m, yexp_templat
         c->st_idx = c->fl_idx = NULL;
         c->n_st = c->n_fl = 0;
     }
-    yexp__release(c, YEXP__S_TEMPLATE);
+    yexp__release(c, YEXP_S_TEMPLATE);
     yexp__put(c, cset, m->key, ct);
 }
 
@@ -6025,19 +6079,19 @@ static void yexp__parse_node(yexp__ctx* c, const yjs_value* src, const yexp_node
     if (!path) return;
     snprintf(path, pn, "%s%s%s", parent_path, parent_path[0] ? "/" : "", nm);
     snprintf(elem, sizeof elem, "node '%s'", path);
-    s = yexp__object(c, YEXP__S_NODE, 0xffffu, src, elem, &cn);
+    s = yexp__object(c, YEXP_S_NODE, 0xffffu, src, elem, &cn);
     if (!s) return;
-    out->name = yexp__v_str(yexp__slotv(c, s, YEXP__S_NODE, "name"));
+    out->name = yexp__v_str(yexp__slotv(c, s, YEXP_S_NODE, "name"));
     out->path = path;
     out->parent = parent;
     out->pos_ = src->pos;
     out->rules = "";
     out->repetitions = 1;
     out->record_data = true;
-    x = yexp__slot_at(c, s, YEXP__S_NODE, "trial");
+    x = yexp__slot_at(c, s, YEXP_S_NODE, "trial");
     leaf = x && x->given;
     {
-        yexp__slot* tl = yexp__slot_at(c, s, YEXP__S_NODE, "timeline");
+        yexp__slot* tl = yexp__slot_at(c, s, YEXP_S_NODE, "timeline");
         container = tl && tl->given;
         if (leaf && container) yexp__err(c, src->pos, "%s: a node has 'timeline' or 'trial', not both", elem);
         else if (!leaf && !container) yexp__err(c, src->pos, "%s: a node has 'timeline' or 'trial'", elem);
@@ -6048,11 +6102,11 @@ static void yexp__parse_node(yexp__ctx* c, const yjs_value* src, const yexp_node
         }
     }
     if (leaf) {
-        const char* tn = yexp__v_str(yexp__slotv(c, s, YEXP__S_NODE, "trial"));
+        const char* tn = yexp__v_str(yexp__slotv(c, s, YEXP_S_NODE, "trial"));
         out->trial = tn ? yexp__template_get(c->d, tn) : NULL;
         if (tn && !out->trial && !(c->bad_sets & YEXP__BAD_TRIALS)) yexp__err(c, x->pos, "%s: 'trial': no template named '%s'", elem, tn);
     }
-    x = yexp__slot_at(c, s, YEXP__S_NODE, "timeline_variables");
+    x = yexp__slot_at(c, s, YEXP_S_NODE, "timeline_variables");
     if (x->v) {
         out->table = yexp__v_str(x->v);
     }
@@ -6060,15 +6114,15 @@ static void yexp__parse_node(yexp__ctx* c, const yjs_value* src, const yexp_node
         static const char* const leaf_only[] = { "rules", "tracks", "interleave", "track_rate", "requeue", NULL };
         int k;
         for (k = 0; leaf_only[k]; k++) {
-            yexp__slot* y = yexp__slot_at(c, s, YEXP__S_NODE, leaf_only[k]);
+            yexp__slot* y = yexp__slot_at(c, s, YEXP_S_NODE, leaf_only[k]);
             if (y && y->given) yexp__err(c, y->pos, "%s: '%s' is for a leaf (a node with 'trial'); a container opens no sequence", elem, leaf_only[k]);
         }
     }
     if (leaf) {
-        yexp__slot* y = yexp__slot_at(c, s, YEXP__S_NODE, "repetitions");
+        yexp__slot* y = yexp__slot_at(c, s, YEXP_S_NODE, "repetitions");
         if (y && y->given) yexp__err(c, y->pos, "%s: 'repetitions' is for a container; a leaf repeats by its rules ('reps')", elem);
     }
-    x = yexp__slot_at(c, s, YEXP__S_NODE, "rules");
+    x = yexp__slot_at(c, s, YEXP_S_NODE, "rules");
     if (x->v && x->given) {
         const yexp_value* rv = x->v;
         size_t total = 0, off = 0;
@@ -6093,7 +6147,7 @@ static void yexp__parse_node(yexp__ctx* c, const yjs_value* src, const yexp_node
         out->rule_items = yexp__str_array(c, rv, &out->n_rules);
         yexp__scan_rules(c, x->src, out, elem);
     }
-    x = yexp__slot_at(c, s, YEXP__S_NODE, "tracks");
+    x = yexp__slot_at(c, s, YEXP_S_NODE, "tracks");
     if (x->v && x->given) {
         const yexp_value* tv = x->v;
         if (out->trial && tv->n) ((yexp_template*)(void*)out->trial)->has_tracks_ = true;
@@ -6117,15 +6171,15 @@ static void yexp__parse_node(yexp__ctx* c, const yjs_value* src, const yexp_node
         }
     }
     {
-        const char* il = yexp__v_str(yexp__slotv(c, s, YEXP__S_NODE, "interleave"));
+        const char* il = yexp__v_str(yexp__slotv(c, s, YEXP_S_NODE, "interleave"));
         out->interleave = il && yexp__streq(il, "round_robin");
     }
     {
-        const yexp_value* tr = yexp__slotv(c, s, YEXP__S_NODE, "track_rate");
+        const yexp_value* tr = yexp__slotv(c, s, YEXP_S_NODE, "track_rate");
         out->track_rate = tr && tr->kind == YEXP_V_NUMBER ? tr->num : 0;
         if (tr && tr->kind != YEXP_V_NUMBER) yexp__err(c, tr->pos, "%s: 'track_rate' is a literal number", elem);
     }
-    x = yexp__slot_at(c, s, YEXP__S_NODE, "vars");
+    x = yexp__slot_at(c, s, YEXP_S_NODE, "vars");
     if (x->src) {
         char sub[140];
         yjs_value* co = NULL;
@@ -6133,7 +6187,7 @@ static void yexp__parse_node(yexp__ctx* c, const yjs_value* src, const yexp_node
         yexp__parse_values_set(c, x->src, sub, YEXP__AV_VALUE | YEXP__AV_CHOICE | (c->version >= 2 ? YEXP__AV_VARFORM : 0u), true, &out->vars, &out->n_vars, &co);
         if (co && co->n) yexp__put(c, cn, "vars", co);
     }
-    x = yexp__slot_at(c, s, YEXP__S_NODE, "data");
+    x = yexp__slot_at(c, s, YEXP_S_NODE, "data");
     if (x->src) {
         char sub[140];
         yjs_value* co = NULL;
@@ -6142,36 +6196,36 @@ static void yexp__parse_node(yexp__ctx* c, const yjs_value* src, const yexp_node
         if (co && co->n) yexp__put(c, cn, "data", co);
     }
     {
-        const yexp_value* r = yexp__slotv(c, s, YEXP__S_NODE, "repetitions");
+        const yexp_value* r = yexp__slotv(c, s, YEXP_S_NODE, "repetitions");
         if (r && r->kind == YEXP_V_NUMBER && r->i >= 1 && r->i <= 1000000) out->repetitions = (int)r->i;
         else if (r) yexp__err(c, r->pos, "%s: 'repetitions' is a literal integer of at least 1", elem);
     }
-    out->if_var = yexp__v_str(yexp__slotv(c, s, YEXP__S_NODE, "if"));
-    out->if_pos_ = yexp__slot_at(c, s, YEXP__S_NODE, "if")->pos;
-    out->unless_var = yexp__v_str(yexp__slotv(c, s, YEXP__S_NODE, "unless"));
-    out->unless_pos_ = yexp__slot_at(c, s, YEXP__S_NODE, "unless")->pos;
-    out->requeue_no_response = yexp__v_str(yexp__slotv(c, s, YEXP__S_NODE, "requeue")) != NULL;
-    out->record_data = yexp__v_bool(yexp__slotv(c, s, YEXP__S_NODE, "record_data"), true);
-    x = yexp__slot_at(c, s, YEXP__S_NODE, "loop");
+    out->if_var = yexp__v_str(yexp__slotv(c, s, YEXP_S_NODE, "if"));
+    out->if_pos_ = yexp__slot_at(c, s, YEXP_S_NODE, "if")->pos;
+    out->unless_var = yexp__v_str(yexp__slotv(c, s, YEXP_S_NODE, "unless"));
+    out->unless_pos_ = yexp__slot_at(c, s, YEXP_S_NODE, "unless")->pos;
+    out->requeue_no_response = yexp__v_str(yexp__slotv(c, s, YEXP_S_NODE, "requeue")) != NULL;
+    out->record_data = yexp__v_bool(yexp__slotv(c, s, YEXP_S_NODE, "record_data"), true);
+    x = yexp__slot_at(c, s, YEXP_S_NODE, "loop");
     if (x->src) {
         char sub[140];
         yjs_value* cl = NULL;
         yexp__slot* s2;
         snprintf(sub, sizeof sub, "%s: loop", elem);
-        s2 = yexp__object(c, YEXP__S_LOOP, 0xffffu, x->src, sub, &cl);
+        s2 = yexp__object(c, YEXP_S_LOOP, 0xffffu, x->src, sub, &cl);
         if (s2) {
-            const yexp_value* p = yexp__slotv(c, s2, YEXP__S_LOOP, "until_accuracy");
-            const yexp_value* mx = yexp__slotv(c, s2, YEXP__S_LOOP, "max");
+            const yexp_value* p = yexp__slotv(c, s2, YEXP_S_LOOP, "until_accuracy");
+            const yexp_value* mx = yexp__slotv(c, s2, YEXP_S_LOOP, "max");
             out->has_loop = true;
             if (p && p->kind == YEXP_V_NUMBER && p->num >= 0 && p->num <= 1) out->loop_until = p->num;
             else if (p) yexp__err(c, p->pos, "%s: 'until_accuracy' is a literal proportion from 0 to 1", sub);
             if (mx && mx->kind == YEXP_V_NUMBER && mx->i >= 1 && mx->i <= 1000000) out->loop_max = (int)mx->i;
             else if (mx) yexp__err(c, mx->pos, "%s: 'max' is a literal integer of at least 1", sub);
             yexp__put(c, cn, "loop", cl);
-            yexp__release(c, YEXP__S_LOOP);
+            yexp__release(c, YEXP_S_LOOP);
         }
     }
-    yexp__release(c, YEXP__S_NODE);
+    yexp__release(c, YEXP_S_NODE);
     *canon = cn;
 }
 
@@ -6874,17 +6928,17 @@ static void yexp__check_value(yexp__ctx* c, const yexp__scope* s, const yexp_val
 /* What a row's key expects of a variable. */
 static int yexp__row_want(const yexp_row* r) {
     switch (r->type) {
-    case YEXP__T_NUM: case YEXP__T_INT: return YEXP__W_NUM;
-    case YEXP__T_DUR: return yexp__streq(r->key, "minimum_valid_rt_s") ? YEXP__W_NUM : YEXP__W_NONNEG;
-    case YEXP__T_CODE: return YEXP__W_NONNEG;
-    case YEXP__T_VEC3: return YEXP__W_VEC3;
-    case YEXP__T_TEXT: case YEXP__T_RES: return YEXP__W_TEXT;
+    case YEXP_T_NUM: case YEXP_T_INT: return YEXP__W_NUM;
+    case YEXP_T_DUR: return yexp__streq(r->key, "minimum_valid_rt_s") ? YEXP__W_NUM : YEXP__W_NONNEG;
+    case YEXP_T_CODE: return YEXP__W_NONNEG;
+    case YEXP_T_VEC3: return YEXP__W_VEC3;
+    case YEXP_T_TEXT: case YEXP_T_RES: return YEXP__W_TEXT;
     default: return YEXP__W_ANY;
     }
 }
 
 static int yexp__stim_want(const yexp__ctx* c, const yexp_stim* st, const char* key) {
-    int ri = yexp__find(c, YEXP__S_STIM, 1u << (int)st->kind, key);
+    int ri = yexp__find(c, YEXP_S_STIM, 1u << (int)st->kind, key);
     return ri >= 0 ? yexp__row_want(&c->rows[ri]) : YEXP__W_ANY;
 }
 
@@ -7103,11 +7157,11 @@ static void yexp__check_control_vars(yexp__ctx* c, yexp__scope* s, const yexp_co
     unsigned mask = 1u << (int)x->kind;
     for (k = 0; k < x->n_props; k++) {
         const yexp_value* v = x->props[k].value;
-        int ri = yexp__find(c, YEXP__S_CONTROL, mask, x->props[k].key);
+        int ri = yexp__find(c, YEXP_S_CONTROL, mask, x->props[k].key);
         int want = YEXP__W_ANY;
         if (ri >= 0) {
             int ty = c->rows[ri].type;
-            want = ty == YEXP__T_DUR ? YEXP__W_NONNEG : ty == YEXP__T_NUM ? YEXP__W_NUM : (ty == YEXP__T_POINT || ty == YEXP__T_CENTER) ? YEXP__W_POINT : YEXP__W_ANY;
+            want = ty == YEXP_T_DUR ? YEXP__W_NONNEG : ty == YEXP_T_NUM ? YEXP__W_NUM : (ty == YEXP_T_POINT || ty == YEXP_T_CENTER) ? YEXP__W_POINT : YEXP__W_ANY;
             /* the literal's rule, also through a variable (3.16: above 0) */
             if (yexp__key_above0(x->props[k].key)) want = YEXP__W_POS;
         }
@@ -7657,8 +7711,8 @@ static void yexp__check_gamuts(yexp__ctx* c) {
         p = yexp_prop_get(st->props, st->n_props, dot + 1);
         if (!p) { yexp__err(c, g->v->pos, "%s: '%s': '%s' has no property '%s'", g->elem, g->key, name, dot + 1); continue; }
         {
-            int ri = yexp__find(c, YEXP__S_STIM, 1u << (int)st->kind, dot + 1);
-            if (ri < 0 || c->rows[ri].type != YEXP__T_NUM)
+            int ri = yexp__find(c, YEXP_S_STIM, 1u << (int)st->kind, dot + 1);
+            if (ri < 0 || c->rows[ri].type != YEXP_T_NUM)
                 yexp__err(c, g->v->pos, "%s: '%s': a gamut is the largest value of a number; '%s' of '%s' is not one", g->elem, g->key, dot + 1, name);
         }
     }
@@ -7876,44 +7930,44 @@ static void yexp__parse_root(yexp__ctx* c, const yjs_value* root) {
     }
     d->format_version = (int)version;
     yexp__use_rows(c, (int)version);
-    s = yexp__object(c, YEXP__S_ROOT, 0xffffu, root, "the file", &croot);
+    s = yexp__object(c, YEXP_S_ROOT, 0xffffu, root, "the file", &croot);
     if (!s) return;
     {
-        const char* nm = yexp__v_str(yexp__slotv(c, s, YEXP__S_ROOT, "name"));
+        const char* nm = yexp__v_str(yexp__slotv(c, s, YEXP_S_ROOT, "name"));
         d->name = nm ? nm : "";
     }
     cc = NULL;
-    x = yexp__slot_at(c, s, YEXP__S_ROOT, "session");
+    x = yexp__slot_at(c, s, YEXP_S_ROOT, "session");
     yexp__parse_session(c, x->src, &cc);
-    if (cc && !yexp__at_default(c, (int)(yexp__slot_at(c, s, YEXP__S_ROOT, "session") - s) + c->first[YEXP__S_ROOT], cc)) yexp__put(c, croot, "session", cc);
+    if (cc && !yexp__at_default(c, (int)(yexp__slot_at(c, s, YEXP_S_ROOT, "session") - s) + c->first[YEXP_S_ROOT], cc)) yexp__put(c, croot, "session", cc);
     cc = NULL;
-    x = yexp__slot_at(c, s, YEXP__S_ROOT, "display");
+    x = yexp__slot_at(c, s, YEXP_S_ROOT, "display");
     yexp__parse_display(c, x->src, &cc);
     if (cc && cc->n) yexp__put(c, croot, "display", cc);
     cc = NULL;
-    x = yexp__slot_at(c, s, YEXP__S_ROOT, "web");
+    x = yexp__slot_at(c, s, YEXP_S_ROOT, "web");
     yexp__parse_web(c, x->src, &cc);
     if (cc && cc->n) yexp__put(c, croot, "web", cc);
     cc = NULL;
-    x = yexp__slot_at(c, s, YEXP__S_ROOT, "devices");
+    x = yexp__slot_at(c, s, YEXP_S_ROOT, "devices");
     yexp__parse_devices(c, x->src, &cc);
     if (cc && cc->n) yexp__put(c, croot, "devices", cc);
     if (c->version >= 2) {
         cc = NULL;
-        x = yexp__slot_at(c, s, YEXP__S_ROOT, "roles");
+        x = yexp__slot_at(c, s, YEXP_S_ROOT, "roles");
         yexp__parse_sigroles(c, x->src, &cc);
         if (cc && cc->n) yexp__put(c, croot, "roles", cc);
     }
     cc = NULL;
-    x = yexp__slot_at(c, s, YEXP__S_ROOT, "stimuli");
+    x = yexp__slot_at(c, s, YEXP_S_ROOT, "stimuli");
     yexp__parse_stimuli(c, x->src, &cc);
     if (cc && cc->n) yexp__put(c, croot, "stimuli", cc);
     cc = NULL;
-    x = yexp__slot_at(c, s, YEXP__S_ROOT, "methods");
+    x = yexp__slot_at(c, s, YEXP_S_ROOT, "methods");
     yexp__parse_methods(c, x->src, &cc);
     if (cc && cc->n) yexp__put(c, croot, "methods", cc);
     if (c->version >= 2) {
-        x = yexp__slot_at(c, s, YEXP__S_ROOT, "controls");
+        x = yexp__slot_at(c, s, YEXP_S_ROOT, "controls");
         if (x->src) {
             cc = NULL;
             yexp__parse_controls(c, x->src, true, "", &d->controls, &d->n_controls, &cc);
@@ -7928,7 +7982,7 @@ static void yexp__parse_root(yexp__ctx* c, const yjs_value* root) {
     /* the duplicate checks below are linear: one stamp per name */
     c->stim_stamp = (uint32_t*)yexp__alloc(c, ((size_t)d->n_stimuli + 1) * sizeof(uint32_t));
     c->method_stamp = (uint32_t*)yexp__alloc(c, ((size_t)d->n_methods + 1) * sizeof(uint32_t));
-    x = yexp__slot_at(c, s, YEXP__S_ROOT, "trials");
+    x = yexp__slot_at(c, s, YEXP_S_ROOT, "trials");
     if (x->src) {
         cc = NULL;
         yexp__parse_trials(c, x->src, &cc);
@@ -7936,14 +7990,14 @@ static void yexp__parse_root(yexp__ctx* c, const yjs_value* root) {
     } else {
         c->bad_sets |= YEXP__BAD_TRIALS;
     }
-    x = yexp__slot_at(c, s, YEXP__S_ROOT, "timeline");
+    x = yexp__slot_at(c, s, YEXP_S_ROOT, "timeline");
     if (x->src) {
         cc = NULL;
         yexp__parse_children(c, x->src, NULL, "", 0, &d->timeline, &d->n_timeline, &cc);
         yexp__put(c, croot, "timeline", cc);
     }
     if (c->version >= 2) yexp__root_end(c);
-    yexp__release(c, YEXP__S_ROOT);
+    yexp__release(c, YEXP_S_ROOT);
     d->canon_ = croot;
 }
 
