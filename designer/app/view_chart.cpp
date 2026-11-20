@@ -40,6 +40,7 @@ const ImU32 kSel = IM_COL32(255, 200, 80, 255), kText = IM_COL32(235, 235, 240, 
 const ImU32 kEdge = IM_COL32(200, 200, 210, 255), kNext = IM_COL32(130, 130, 140, 255), kShared = IM_COL32(120, 170, 230, 255);
 const ImU32 kOver = IM_COL32(200, 140, 220, 255), kLabel = IM_COL32(230, 220, 160, 255);
 const ImU32 kErr = IM_COL32(255, 110, 100, 255), kWarn = IM_COL32(240, 200, 90, 255);
+const ImU32 kBannerEvents = IM_COL32(40, 80, 140, 255), kBannerStale = IM_COL32(130, 40, 40, 255);
 
 enum ActKind { ACT_NONE, ACT_ADD, ACT_CONNECT, ACT_DELETE_STATE, ACT_DELETE_EXIT, ACT_RENAME, ACT_FIRST, ACT_SELECT };
 
@@ -524,6 +525,24 @@ void template_combo(const yjs_value* trials) {
     ImGui::SetItemTooltip("The template whose states the chart shows");
 }
 
+// Why a read-only chart is read-only, in a colored band the width of the
+// view. As gray text at the end of the toolbar it went unseen in a hand test
+// (2026-11-20): the person tried to drag and add states and found nothing
+// worked. The ID lets the Test Engine find it.
+void banner(ImU32 bg, const char* text) {
+    const ImGuiStyle& st = ImGui::GetStyle();
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const float w = ImMax(ImGui::GetContentRegionAvail().x, 50.0f);
+    const ImVec2 ts = ImGui::CalcTextSize(text, nullptr, false, w - 2 * st.FramePadding.x);
+    const ImRect r(p, ImVec2(p.x + w, p.y + ts.y + 2 * st.FramePadding.y));
+    ImGui::ItemSize(r);
+    if (!ImGui::ItemAdd(r, ImGui::GetID("##readonly"))) return;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(r.Min, r.Max, bg, st.FrameRounding);
+    dl->AddText(nullptr, 0.0f, ImVec2(p.x + st.FramePadding.x, p.y + st.FramePadding.y), kText, text, nullptr,
+                w - 2 * st.FramePadding.x);
+}
+
 void toolbar(const yjs_value* trials, bool stale, int sel_state, const char* sel_edge) {
     template_combo(trials);
     const bool edit = editable(stale);
@@ -582,9 +601,9 @@ void toolbar(const yjs_value* trials, bool stale, int sel_state, const char* sel
     ImGui::SameLine();
     const dsg_chart_tview* t = dsg_chart_view_template(&C->view, C->tmpl, false);
     ImGui::TextDisabled("%.0f %%", (t ? t->zoom : 1.0f) * 100.0f);
-    if (stale) ImGui::TextColored(ImVec4(1, 0.43f, 0.4f, 1), "The text does not parse: this is the last text that parsed, read-only.");
+    if (stale) banner(kBannerStale, "The text does not parse. The chart shows the last text that parsed, read-only.");
     else if (C->have_model && !C->model.has_states)
-        ImGui::TextDisabled("This template uses events. The chart shows its parts, split at each until, read-only; edit it in the text view.");
+        banner(kBannerEvents, "Read-only: this template uses events, not states. The chart shows its parts, split at each until. To edit it, use the text view.");
 }
 
 // --- the canvas -------------------------------------------------------------------

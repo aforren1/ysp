@@ -11,6 +11,12 @@
 //   chart/rename    A double click opens the name field; keys typed with the
 //                   engine and Enter rename the state, its references and its
 //                   position; Ctrl+Z after it reaches the document.
+//   chart/add       Add state appends a state at the middle of the canvas,
+//                   selected, as one undo step.
+//   chart/view      The wheel zooms about the mouse; a drag on empty space
+//                   pans. Neither changes the definition.
+//   chart/events    An events template is read-only: the banner shows, Add
+//                   state is disabled, a box does not move, no port shows.
 #include "te_common.h"
 #include "ui.h"
 #include "views.h"
@@ -176,6 +182,87 @@ void test_rename(ImGuiTestContext* ctx) {
     IM_CHECK_STR_EQ(str_at("/trials/reach/states/2/name"), "go");
 }
 
+void test_add(ImGuiTestContext* ctx) {
+    IM_CHECK(open_bimanual(ctx, "chart_add"));
+    IM_CHECK(dsg_def_get(ui_doc(), "/trials/reach/states/3") == nullptr);
+    ImVector<char> b0;
+    bytes(&b0);
+    const int depth = dsg_doc_undo_depth(ui_doc());
+    ctx->ItemClick(te_in_child(ctx, kChart, "Add state"));
+    IM_CHECK_STR_EQ(str_at("/trials/reach/states/3/name"), "state");
+    IM_CHECK_EQ(dsg_doc_undo_depth(ui_doc()), depth + 1);
+    IM_CHECK_STR_EQ(dsg_doc_selection(ui_doc())->path, "/trials/reach/states/3");
+    ctx->Yield(2);
+    const ImRect b = ctx->ItemInfo(box(ctx, "state")).RectFull;
+    const ImRect c = ctx->ItemInfo(te_in_child(ctx, kChart, "##canvas")).RectFull;
+    IM_CHECK_LT(fabsf(b.GetCenter().x - c.GetCenter().x), 2.0f);
+    IM_CHECK_LT(fabsf(b.GetCenter().y - c.GetCenter().y), 2.0f);
+    // a second one takes the next free name
+    ctx->ItemClick(te_in_child(ctx, kChart, "Add state"));
+    IM_CHECK_STR_EQ(str_at("/trials/reach/states/4/name"), "state2");
+    ctx->KeyPress(ImGuiMod_Ctrl | ImGuiKey_Z);
+    ctx->KeyPress(ImGuiMod_Ctrl | ImGuiKey_Z);
+    IM_CHECK(same_bytes(b0));
+}
+
+void test_view(ImGuiTestContext* ctx) {
+    IM_CHECK(open_bimanual(ctx, "chart_view"));
+    ImVector<char> b0;
+    bytes(&b0);
+    const ImGuiID id = box(ctx, "hold_start");
+    const ImRect r0 = ctx->ItemInfo(id).RectFull;
+    // the wheel over a point of the box: that point stays under the mouse
+    const ImVec2 m(r0.Min.x + r0.GetWidth() * 0.25f, r0.Min.y + r0.GetHeight() * 0.75f);
+    ctx->MouseMoveToPos(m);
+    ctx->MouseWheelY(1.0f);
+    ctx->Yield(2);
+    const ImRect r1 = ctx->ItemInfo(id).RectFull;
+    IM_CHECK_LT(fabsf(r1.GetWidth() / r0.GetWidth() - 1.15f), 0.01f);
+    IM_CHECK_LT(fabsf(r1.Min.x + r1.GetWidth() * 0.25f - m.x), 1.0f);
+    IM_CHECK_LT(fabsf(r1.Min.y + r1.GetHeight() * 0.75f - m.y), 1.0f);
+    // a drag on empty space pans by the drag
+    const ImRect c = ctx->ItemInfo(te_in_child(ctx, kChart, "##canvas")).RectFull;
+    ImVec2 e(c.Min.x + 6, c.Max.y - 6);
+    const char* const names[] = { "begin", "hold_start", "go" };
+    for (const char* nm : names) IM_CHECK(!ctx->ItemInfo(box(ctx, nm)).RectFull.Contains(e));
+    ctx->MouseMoveToPos(e);
+    ctx->MouseDown(ImGuiMouseButton_Left);
+    ctx->MouseMoveToPos(ImVec2(e.x + 50, e.y - 30));
+    ctx->MouseUp(ImGuiMouseButton_Left);
+    ctx->Yield(2);
+    const ImRect r2 = ctx->ItemInfo(id).RectFull;
+    IM_CHECK_LT(fabsf(r2.Min.x - r1.Min.x - 50), 1.0f);
+    IM_CHECK_LT(fabsf(r2.Min.y - r1.Min.y + 30), 1.0f);
+    IM_CHECK(same_bytes(b0));
+    IM_CHECK(!ui_dirty());
+}
+
+// oddball's one template uses events and has no until: one part.
+void test_events(ImGuiTestContext* ctx) {
+    const char* const files[] = { "pack.json", "experiment.json", "oddball.csv", "standard.png", "target.png", nullptr };
+    char dir[DSG_PATH_MAX];
+    IM_CHECK(te_copy_project("oddball", "chart_events", files, dir, sizeof dir));
+    te_open(ctx, dir);
+    te_show(ctx, "Chart");
+    IM_CHECK_STR_EQ(ui_main_view(), "chart");
+    IM_CHECK(ctx->ItemExists(te_in_child(ctx, kChart, "##readonly")));
+    IM_CHECK((ctx->ItemInfo(te_in_child(ctx, kChart, "Add state")).ItemFlags & ImGuiItemFlags_Disabled) != 0);
+    const ImGuiID id = box(ctx, "steps 1 to 6");
+    const ImRect r0 = ctx->ItemInfo(id).RectFull;
+    IM_CHECK(r0.GetWidth() > 0);
+    IM_CHECK(!ctx->ItemExists(port(ctx, "steps 1 to 6")));
+    ImVector<char> b0;
+    bytes(&b0);
+    ctx->ItemDragWithDelta(id, ImVec2(60, 45));
+    const ImRect r1 = ctx->ItemInfo(id).RectFull;
+    IM_CHECK_EQ(r1.Min.x, r0.Min.x);
+    IM_CHECK_EQ(r1.Min.y, r0.Min.y);
+    IM_CHECK(same_bytes(b0));
+    // a template with states shows no banner
+    IM_CHECK(open_bimanual(ctx, "chart_events_b"));
+    IM_CHECK(!ctx->ItemExists(te_in_child(ctx, kChart, "##readonly")));
+}
+
 } // namespace
 
 void te_register_chart(ImGuiTestEngine* e) {
@@ -184,4 +271,7 @@ void te_register_chart(ImGuiTestEngine* e) {
     IM_REGISTER_TEST(e, "chart", "issue")->TestFunc = test_issue;
     IM_REGISTER_TEST(e, "chart", "delete")->TestFunc = test_delete;
     IM_REGISTER_TEST(e, "chart", "rename")->TestFunc = test_rename;
+    IM_REGISTER_TEST(e, "chart", "add")->TestFunc = test_add;
+    IM_REGISTER_TEST(e, "chart", "view")->TestFunc = test_view;
+    IM_REGISTER_TEST(e, "chart", "events")->TestFunc = test_events;
 }

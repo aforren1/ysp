@@ -408,7 +408,8 @@ default it is the first template with `states`, in byte order.
 Two arrows between the same two nodes bow to opposite sides. An arrow
 from a state to the same state is a loop above the box.
 
-A template that uses `events` shows read-only, with a note. Its boxes are
+A template that uses `events` shows read-only, with a blue banner across
+the view that says so. Its boxes are
 the parts that `until` splits it into (format 3.11 rule 9): the steps
 before an `until`, the wait, and the steps after it. To edit such a
 template, use the text view.
@@ -517,7 +518,7 @@ bows) and of an events template; the places of paths; each command as one
 step that undo and redo take to the same bytes, with the player's check
 clean after it where the definition allows; the refusals; the positions
 through a rename, its undo and its redo; and the part `chart` through the
-view file. `test_designer_te` (optional) has five chart tests:
+view file. `test_designer_te` (optional) has eight chart tests:
 
 | Test | What it does |
 |---|---|
@@ -526,6 +527,9 @@ view file. `test_designer_te` (optional) has five chart tests:
 | `chart/issue` | Gives a state `max_visits` with no `over`, then clicks the issue in the text view. The chart shows, the state is selected, and its box is in the middle of the canvas. |
 | `chart/delete` | Clicks a box (the selection is its path), presses Delete, then Ctrl+Z: the same bytes and the same selection. |
 | `chart/rename` | Double-clicks a box, types a name with the keys of the engine and presses Enter. The state and the two exits to it have the new name, the box stays where it was, and the check is clean. Then Ctrl+Z goes to the document. |
+| `chart/add` | Clicks Add state twice. The new states are `state` and `state2`, the first one is selected and centered on the canvas, and each click is one undo step. Two Ctrl+Z give the same bytes. |
+| `chart/view` | Turns the wheel over a point of a box: the box grows by 1.15 and the point stays under the mouse. Then drags on empty space by (50, -30): the box moves by the same amount. The definition's bytes do not change. |
+| `chart/events` | Opens oddball, whose template uses `events`. The banner shows, Add state is disabled, the part has no port, and a drag does not move its box. A template with states shows no banner. |
 
 86 hand mutants of `chart.c` (76) and `view_chart.cpp` (10) each fail
 `test_designer_chart` or a `chart/` test of `test_designer_te`. They were
@@ -533,6 +537,15 @@ reverted and are not in a mutation list. The 159 checks of a run come
 from 129 lines with a check. For 13 of these lines no mutant of part A's
 code fails the check: the projects' clean check before any command, and
 the checks of the shared document's undo, redo, selection and listeners.
+
+The last three tests came after a hand test (2026-11-20). In it, a person
+opened oddball, could not drag or add states, and did not see the gray
+note that said the chart was read-only. The note is now the banner. 4 of 5
+hand mutants of `view_chart.cpp` each fail one of the three tests (no
+banner, Add state enabled, zoom not about the mouse, no pan); they were
+reverted. The fifth, a box drag allowed in an events template, is
+equivalent: `resolve_positions()` puts the boxes of an events template back
+at their default positions each frame.
 
 **Not done.**
 - The window was not opened: no person used the chart. No test checks
@@ -1398,7 +1411,7 @@ ctest --test-dir build/designer -R test_designer_te
 | `edit_jump` | The engine opens a project through the path field and clicks Discard on the question. Its Ctrl+click focuses the Skribidi editor. It types a note with Arabic text, then an `x` before `"stimuli"`; the test puts the caret before each with `skf_set_caret()`. The check finds the error at the `x`. The engine moves the caret with Up and Home, then clicks issue 0: the caret goes to the `x` as a codepoint offset. Ctrl+Z removes the `x`. | `ui_jump_to_issue()` gives the byte offset (caret 177, not 172). Also: `skf.cpp` drops characters above U+007F (the note is not in the text). |
 | `unsaved` | The engine types into the editor, then types another folder in the path field and presses Enter. The question opens and the project stays. Cancel keeps the project, the text and the unsaved state. The Open path button asks again, and Discard opens the other project. | `ask_or_run()` does not ask. |
 | `undo_views` (step 4) | A structured edit through the document shows in the text. With the chart shown, the engine's Ctrl+Z takes it back and Ctrl+Shift+Z puts it in again. | `undo_keys_free()` in `ui.cpp` always false; also: `sync_editor()` does not show the document's change. |
-| `chart/*` (5), `tables/*` (5), `panels/*` (9) (step 4) | The parts' tests: "The chart", "The tables" and "The panels" give each test and its mutants. | - |
+| `chart/*` (8), `tables/*` (5), `panels/*` (9) (step 4) | The parts' tests: "The chart", "The tables" and "The panels" give each test and its mutants. | - |
 
 Each mutant of the first three tests (step 3) failed its test, and the
 other tests passed. The mutants were reverted; they are not in a mutation

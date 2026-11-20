@@ -13,8 +13,8 @@
 //                        Cancel keeps the text, Discard opens the other.
 //   designer/undo_views  A structured edit shows in the text; Ctrl+Z with
 //                        another view shown takes it back (one undo stack).
-//   chart/*              5 tests of the state chart (te_chart.cpp): drag,
-//                        connect, issue, delete, rename.
+//   chart/*              8 tests of the state chart (te_chart.cpp): drag,
+//                        connect, issue, delete, rename, add, view, events.
 //   tables/*             5 tests of the tables (te_tables.cpp): shows,
 //                        scroll, edit, add_row, widths.
 //   panels/*             9 tests of the property panels (te_panels.cpp):
