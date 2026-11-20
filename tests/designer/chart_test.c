@@ -438,7 +438,7 @@ static void test_commands(void) {
         dsg_chart_view w;
         size_t n = 0, m = 0;
         char* json;
-        const char* part;
+        const char* part = NULL; /* set only when the read succeeds (C4701, -Wsometimes-uninitialized) */
         dsg_chart_tview* tv = dsg_chart_view_template(&v, "track", true);
         memset(&vf, 0, sizeof vf);
         memset(&back, 0, sizeof back);
