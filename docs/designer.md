@@ -6,7 +6,8 @@ check on each change with its refusals linked to their places in the
 text, and redraw on input only. Step 4 is partly done (2026-11-19,
 branch `designer-step4`): the state chart, the tables and the property
 panels are built and merged, and the items left are in "The
-integration". Steps 5 to 7 are not started. This document
+integration". Step 5 is built on branch `step5-int2`; step 6 is
+planned ("Plan of step 6"); step 7 is not started. This document
 gives the designer's decisions, its first version's scope, its architecture
 and its order of work. [rig_spec.md](rig_spec.md) section 7 gives the
 designer's place in the rig. The measurements behind the UI decision are
@@ -1848,6 +1849,9 @@ ysp_designer (C++, Dear ImGui, SDL3, GL ES 3.0)
      (the check thread), built and merged ("Wave 1 integrated"). The
      preview itself (parts S, A, B, C, D) is not built.
 6. Build and Run.
+   - Planned 2026-11-21 (branch `designer-step6-plan`): "Plan of step 6",
+     below. Its 16 decisions wait for the user. Wave 1 is parts P (the
+     player 0.18.0), K (the pack tool 0.12.0) and X (the process).
 7. The web build, with the text glue.
 
 ## Plan of step 4
@@ -3345,6 +3349,611 @@ place and puts the caret there.
 - The web build's `gl_proc` (`SDL_GL_GetProcAddress()` under
   emscripten) is not tried.
 - No ThreadSanitizer run: S adds no thread code.
+
+## Plan of step 6
+
+Status: planned 2026-11-21 on branch `designer-step6-plan`, from
+`step5-int2` at `f8908c7`. Nothing is built. The decisions below wait for
+the user. This section answers, from the code at `f8908c7`, what Build and
+Run need from the pack tool, the player, ysp/rigfile.h and the OS, and
+gives the decisions, the shared interfaces, the parts, the tests, the
+measurements and the order of merges.
+
+The goal ("First version"):
+- Build: the pack tool, linked in. Its messages show with the entry
+  selected.
+- Run, native only: the designer starts the command-line player with the
+  built pack, a rig profile and an output folder, and shows its output.
+- Rig profiles replace the preview's built-in simulated rig (step 5,
+  decision 8).
+
+Out of step 6, as "First version" says: the runner protocol, hot reload,
+the operator console, binding by activity (devices_spec 11.3, which needs
+the runner protocol), import as normalization, build jobs.
+
+### Decisions for the user
+
+Each one's evidence is in the subsection that it names. The numbers are
+from "Measured", below.
+
+1. **Where Build writes.** `PROJECT/build/NAME.ysppak`, NAME the project
+   folder's name, through the tool's temporary file and rename. Not in
+   `.designer/`: that folder is a cache that a person may delete, and the
+   pack is the artifact that goes to the rig and whose ID a methods
+   section cites. The Run view shows the path and the pack ID ("Build").
+2. **Build saves first, and builds from the files.** Build is Save, then
+   `ypt_build()` of the project's own description. It does not reuse the
+   check pack: the check pack's manifest names
+   `.designer/check/experiment.json` as the experiment's source, so its
+   pack ID differs from a build of the project's files, and `ypak rebuild`
+   of it fails against the project. Measured: for stroop and rdk the two
+   packs differ only in that `path` line of the manifest; every entry is
+   the same ("Build").
+3. **Build has a thread of its own.** Not the check thread: a project
+   with a video builds for seconds (ffmpeg's step), and the checks would
+   wait behind it. Each Build is a full build: measured in a process of
+   its own, the repository's projects take 0.7 to 7.1 ms median, the
+   generated worst cases 36 and 146 ms, and a 10 s 1080p video 3.6 s
+   ("Build").
+4. **A Build can be canceled between entries.** The pack tool 0.12.0
+   gets `ypt_options.cancel`, read before each resource and before an
+   ffmpeg step; an ffmpeg encode that runs goes to its end. Without it a
+   Quit during a video build waits for the build (part K). Recommended:
+   yes.
+5. **The player is the one beside the designer, of the same version.**
+   CMake writes `ysp_player` into the designer's folder. At the first Run
+   the designer runs `ysp_player --version` (new, player 0.18.0) and
+   refuses another version than the player library it links: its check
+   must be the run's check ("Run").
+6. **The player writes its output to a file, not to a pipe.** Its
+   standard output and standard error go to `DIR.log` beside the data set
+   folder `DIR`. The designer reads the file. With a pipe, a designer that
+   quits or ends would end the session: the player's next write to the
+   closed pipe ends it with SIGPIPE. Measured: `ysp_player --sim` into a
+   closed pipe ended with status 141 (SIGPIPE). A real run writes such
+   lines during the session (the signal roles' "click the mouse" lines,
+   v2.c) ("Run").
+7. **Progress comes from `trials.csv`.** The player prints nothing
+   between its start line and its end line. The designer reads the rows
+   that the player's writer thread appends (trial count, the last row's
+   response, rt and outcome). No player change, and nothing more on the
+   player's frame thread ("Run").
+8. **Stop asks; Kill forces.** Stop sends SIGTERM (Windows: WM_CLOSE to
+   the player's windows). A real run's SDL 3.4.18 turns SIGTERM into
+   `SDL_EVENT_QUIT`, which ysp/screen.h makes an abort: the data set
+   closes, `session.json` gets `"aborted"`, exit code 3. Kill (SIGKILL,
+   `TerminateProcess()`) comes only after Stop, with a warning: the
+   display's mode and gamma ramp may stay changed. The player 0.18.0 also
+   stops `--sim` on SIGTERM as an operator stop: measured, `--sim` ended
+   by SIGTERM with status -15 and a `session.json` without `"aborted"`
+   ("Stop").
+9. **While a real run goes, the designer steps back.** The preview stops
+   and closes its session, Build and Run are disabled, edits and checks go
+   on. The designer draws on input only, and at most 2 times a second for
+   the Run view's progress (knob `RUN_REDRAW_HZ`). It starts the player
+   with SCHED_OTHER set explicitly. Whether a designer frame costs the
+   player a frame is not measured: that needs the real player on the
+   display ("The designer's own frames during a run").
+10. **Run can be simulated.** The Run view has a "Simulated (--sim)"
+    check box: the same spawn path, the whole session on the virtual
+    clock, its data set in seconds. The designer passes `--max-seconds`
+    (default 600) and each relative signal role's `--sim-gain`, because a
+    version 2 definition with no samples runs to the player's 48 h budget:
+    measured, bimanual 50 s and 872 MB, visuomotor 45 s and 871 MB, exit
+    1 ("Run").
+11. **The output folder.** `PROJECT/data/PARTICIPANT_YYYYMMDD-HHMMSS`
+    (the `participant` field, UTC), editable before the run; the player
+    refuses a folder that exists. The Run view checks first and names the
+    folder.
+12. **Rig profiles: choose and view; no edit in step 6.** A combo lists
+    the profiles of the user's rig folder (`yrig_dir()`: `profile.json`
+    and `NAME.json`), "No profile (keyboard only)" and, for the preview
+    only, "Built-in simulated rig". A view shows the chosen profile:
+    roles and their devices, view, signals, the calibration file, and each
+    check note of `yrig_load()` (a loopback file missing or changed). No
+    edit: the profile is written by tools (the loopback runs, a binder by
+    activity), a tier must come from a checked loopback, and binding by
+    activity needs the runner protocol (devices_spec 11.3). A person edits
+    the view or signals in a text editor; the designer loads the file
+    again when its size or time changes ("Rig profiles").
+13. **The check takes the chosen profile.** `pl_check_desc` gains `rig`
+    (player 0.18.0, a layout change). With a profile, the loader's role
+    and signal checks against a rig run (today `r->report->skipped`), and
+    a tier 3 need that the profile meets is not listed: a bound device, a
+    view, a calibration, a signal's adapter, a role's tier from a checked
+    loopback. So a refusal that a real start would give shows while the
+    person edits, not as exit code 1 after a Build. Measured: a
+    profile's load is 176 us; the designer loads it once per choice or
+    file change, not per check ("Rig profiles").
+14. **The preview takes the chosen profile** (step 5, decision 8):
+    `pl_sim_desc.rig` and `.cal` from it, so deg and cm units, the
+    calibration and the signals' adapters are the rig's. Devices never
+    open in the preview (`stand_in`). The display's size and rate stay
+    the pane's choice: a profile has neither. "Built-in simulated rig"
+    stays as a choice and is the default when no profile exists.
+15. **Placement.** A view "Run" in `UI_SLOT_AUX`, with its own toolbar
+    check box, stacked under the preview when both show (the slot stacks
+    its views already). The toolbar gets Build, Run and Stop, so they
+    work with the pane hidden. Build's messages go into the Issues panel
+    (`DSG_FROM_BUILD`); a click selects the entry, as a check's issue does
+    ("The views").
+16. **Web.** Run is not built for WebAssembly. Build in the browser (a
+    download of the pack) goes to step 7 with the rest of the web build;
+    step 6 keeps the web build compiling with stubs.
+
+### What the code allows today
+
+| Need | What the code does now | Where |
+|---|---|---|
+| Build a pack in process | `ypt_build()` and `ypt_build_text()`; messages to `FILE*` (`ypt_options.log`, `.warn`) and one error line; no cancel; a failed build leaves no pack (temporary file and rename). The ffmpeg step blocks in `run_program()` until ffmpeg ends | `pack/ysp/pack_tool.h`, `pack/pack_tool.c` |
+| The check pack | Built on the check thread from the project's description with the experiment's source replaced by `.designer/check/experiment.json` and each dirty table by a copy; default options; kept in memory, shared by reference count | `designer/core/check.c` `build()` |
+| Start a process | Only the pack tool's `run_program()`: `posix_spawnp()` or `CreateProcessW()`, output into a buffer, a blocking wait, no kill, every inheritable handle inherited on Windows. The designer has no process code | `pack/pack_tool.c` |
+| The player's command line | `PACK --out DIR [--sim] [--seed N] [--field NAME=VALUE]... [--rig FILE|NAME] [--cal FILE] [--windowed] [--allow-below-tier ROLE[,ROLE]] [--max-trials N]`; `--sim` adds `--participant`, `--rt`, `--max-seconds`, `--samples`, `--sim-gain`, `--sim-hz`. No `--version` | `player/main.c` |
+| Exit codes | 0; 1 refused or failed (one line on stderr); 2 a bad argument; 3 the operator stopped it (`"aborted"`); 99 the panic watchdog (`panic.json`). A signal otherwise | `player/main.c`, player.md |
+| Output | A real run prints `running; Shift+Esc stops the session` at its start, the signal roles' click lines during the session, and one end line; `--sim` prints only the end line | `run.c` 2915, `v2.c` 3867 to 3924, `main.c` |
+| The rig | `--rig NAME` reads `NAME.json` from `yrig_dir()`; with no `--rig` a real run takes `profile.json` there; `--sim` takes no profile unless named. `pl_sim_desc.rig` exists; `pl_check_desc` has no rig | `player/lower.c` `pl_rig_load()` |
+| Stop | Shift+Esc; the window's close; SDL's quit. A real run opens SDL video, and SDL 3.4.18 turns SIGTERM into `SDL_EVENT_QUIT` (measured, `sdlterm`); `--sim` has no handler | `ysp/screen.h` the abort watch |
+| The UI | Toolbar (New, Open, Save, Undo, Redo, the AUX check box, the path); the main view; the AUX pane (stacks its views; the check box shows the first); the side panels; the Issues panel. `ui_report()` is the check's report, which the tables view's `issue_sel` maps to cells | `designer/app/ui.cpp`, `view_tables.cpp` |
+
+### Build
+
+**What Build does.** On the UI thread: Save (the definition and every
+dirty table; as Ctrl+S), then a build job with the project's paths and
+the document's revision. On the build thread: `ypt_build(desc_path,
+out_path, &o)` with `o.log` and `o.warn` on `tmpfile()` (C standard, also
+in WebAssembly), then the pack ID (ysp/pack.h's reader), then the result: the
+status, the pack's path, size and ID, the time, the revision, the issues
+(`DSG_FROM_BUILD`: the error line and each `warning:` line), and the
+stamp of the sources (each source's size and modification time, from the
+description's resources). The result goes to the UI through the event that
+the check thread uses (`UiPlatform.wake`).
+
+**Its messages, with the entry selected.** The pack tool's lines name the
+place in the forms that the check already reads: "line N, column M" of the
+definition (`place_in_message()` in `check.c`), and a table's entry, row
+and column (`dsg_csv_place()`, which the tables view's `issue_sel` reads).
+`ui_report()` becomes the check's issues followed by the last Build's,
+so the Issues panel, its click and the tables view's marks take Build's
+issues with no new code in the views. A message that names another
+resource (a font, an image, a video) shows its name and source path; the
+designer has no editor for those.
+
+**What the check pack gives, and what it does not.** The check pack is
+built from the editor's text and the dirty tables, before Save, with the
+same tool and options. Its entries equal Build's when the text and the
+tables are saved; its manifest does not (decision 2). So Build reuses the
+check's code path (the description, the tool, the place of a message),
+not its bytes.
+
+**Full builds.** The pack tool has no entry cache: each build derives
+every entry again. A full build of each repository project costs 0.7 to
+7.1 ms in its own process ("Measured"), the generated worst case 36 and
+146 ms, so no cache pays there. The 1080p video case costs 3.6 s, nearly
+all ffmpeg's encode on 2 threads. Run builds only when the pack is stale:
+the document changed since the last Build, or a source's size or time
+differs from Build's stamp.
+
+**The check pack and a video** (found by this plan, not new). The check
+pack is built from the whole description, so a project with a video
+re-encodes the video at each check pack build: at the first check and at
+each keystroke that changes a text. On the check thread that is seconds
+(3.6 s for the 1080p case here) in which no check result comes. Not
+fixed by step 6; the fix is an entry cache keyed by the source's hash and
+the derivation, or a check pack that leaves out the video entries the
+check does not read. It goes to "Risks" and needs its own measurement.
+
+**The build thread.** A second `yrt_pump`, as part T's: SCHED_OTHER with
+explicit attributes, never elevated, blocks when idle. One job at a time;
+a Build posted while one runs waits, and a newer one replaces it (newest
+wins). Two pack tool builds can then run at once, the check pack's and
+Build's. Part T's table of process globals says the pack tool's statics
+are benign (each write stores the same value). Skribidi's font collection
+counter (`skb_font_collection.c` line 328, `++id`) is a race between two
+builds: two collections can get one id, which only keys that collection's
+layout cache. Part B runs two builds at once under ThreadSanitizer; if it
+reports the counter, a Skribidi patch makes it atomic (pack/layout patch
+release).
+
+### Run
+
+**The command line.** The designer composes the arguments from the Run
+view's settings (part R, `dsg_run_args()`, a pure function):
+
+```
+ysp_player PACK --out DIR [--rig NAME|FILE] [--seed N] [--field NAME=VALUE]...
+           [--allow-below-tier ROLE[,ROLE]] [--windowed]
+           [--sim --max-seconds S [--sim-gain ROLE=UNITS]... [--participant SPEC]]
+```
+
+- PACK: decision 1's file. Run builds first when it is stale.
+- `--rig`: the chosen profile's name (`--rig NAME`), or no `--rig` for "No
+  profile". The player reads the profile itself; the designer reads it
+  only for the check and the preview.
+- `--field`: the session fields (the preview's fields are the defaults;
+  each required field must have a value, as the check's
+  `PL_NEED_FIELD` says).
+- `--allow-below-tier`: the roles that the person ticks, each with the
+  check's `PL_NEED_ROLE_TIER` text beside it; `session.json` records them.
+- `--windowed`: "Window (development)", off by default; a window is tier 2
+  at best.
+- `--seed`: empty by default (the player draws one and records it).
+- The working folder is the project's folder.
+
+**The process.** `dsg_proc_start()` (part X, `platform.c`):
+- POSIX: `posix_spawn()`, not `fork()`. Its file actions put `/dev/null`
+  on standard input and the log file (decision 6, opened `O_CREAT|O_EXCL`)
+  on standard output and error, and close every other descriptor
+  (`posix_spawn_file_actions_addclosefrom_np()`, glibc 2.34 and later;
+  macOS: `POSIX_SPAWN_CLOEXEC_DEFAULT`). Its attributes set SCHED_OTHER
+  (`POSIX_SPAWN_SETSCHEDULER`) and the default action of SIGTERM, SIGINT
+  and SIGPIPE (`POSIX_SPAWN_SETSIGDEF`), with an empty signal mask. So the
+  player never inherits a designer thread's policy (rt.md, "Inherited
+  policy": inherited SCHED_FIFO froze this machine), a descriptor of the
+  designer's, or an ignored signal.
+- Windows: `CreateProcessW()` with a quoted UTF-16 command line (the
+  pack tool's quoting), `NORMAL_PRIORITY_CLASS`, an explicit list of the
+  three handles to inherit (`PROC_THREAD_ATTRIBUTE_HANDLE_LIST`; the pack
+  tool's `run_program()` inherits every inheritable handle), and then
+  `AllowSetForegroundWindow(pid)`: the designer holds the foreground when
+  the person clicks Run, and the player needs it (rig_spec 6, "The runner
+  gives the player the foreground").
+- macOS: as POSIX. The player raises its own window (`desc.foreground`).
+- A watch thread per run (SCHED_OTHER, never elevated) waits for the
+  exit (`waitpid()` with `WNOHANG` every 250 ms; Windows
+  `WaitForSingleObject()` with 250 ms) and, at each wait, looks at the
+  log's and `trials.csv`'s sizes; when one grew or the process ended, it
+  wakes the UI. So the UI reads at most 4 times a second and blocks on
+  nothing.
+- Measured: `posix_spawn()` holds the caller 42 us median (37 us with
+  1 GB of the caller's memory touched); `fork()` 17 us, but 8.5 ms median
+  and 29.5 ms max with the 1 GB. The player's start to its exit with a
+  usage error is 0.3 ms. So the UI thread may call `posix_spawn()`
+  whatever the designer's size, and `fork()` is rejected ("Measured").
+
+**What the Run view shows.** The state (building, starting, running,
+stopping, ended), the elapsed time, the trials written and the last
+trial's response, rt and outcome (from `trials.csv`), the log's last
+lines, and at the end the exit code's meaning:
+
+| Exit | The Run view says | Then |
+|---|---|---|
+| 0 | Done: N trials in DIR | "Open trials.csv" (read-only, as the preview's) |
+| 1 | Refused or failed: the log's last line | The message as a Run issue in the Issues panel; the check with the same profile should have said it first (decision 13) |
+| 2 | A bad argument: the designer's fault | The command line, for a report |
+| 3 | Stopped: N trials written; trial K has no row | `session.json`'s `aborted` |
+| 99 | The panic watchdog ended it; the display was put back | `panic.json`'s trial |
+| a signal | Ended by signal S | X11: "if the display's mode or ramp is wrong: `xrandr --output OUT --mode 1920x1080 --rate 60 --gamma 1:1:1`"; the data set is not closed |
+
+**Quit during a run.** The designer asks: Stop the run, Leave it running,
+or Cancel. "Leave it running" frees the watch thread and leaves the
+player alone: its output goes to its log file, so the designer's end does
+not touch it (decision 6).
+
+### Stop
+
+- POSIX: `kill(pid, SIGTERM)`. A real run has SDL's video subsystem open;
+  SDL 3.4.18 turns SIGTERM into `SDL_EVENT_QUIT` (measured with a test
+  program, `SDL_Init(SDL_INIT_EVENTS)`, no window), ysp/screen.h's watch
+  makes that `YSCR_ABORT_QUIT`, and `pl_run()` stops as for Shift+Esc:
+  exit 3, `"aborted"` with reason `quit`. Not run with the real player
+  (no display was used for this plan).
+- Windows: `PostMessageW(WM_CLOSE)` to each top-level window of the
+  player's process (`EnumWindows()`), which SDL gives as
+  `SDL_EVENT_WINDOW_CLOSE_REQUESTED`: reason `close`, exit 3. A console
+  control event would need a shared console.
+- `--sim`: no SDL video, so SIGTERM ends the process. Measured: status -15
+  after 1 s of the generated project's 12.9 s session; `session.json` was
+  the one written at the start. Part P adds a handler (an atomic flag
+  that the frame loop reads) so that `--sim` stops as a real run does:
+  exit 3, reason `request`.
+- Kill: shown 5 s after Stop when the player has not ended. SIGKILL and
+  `TerminateProcess()` skip the player's restore of the display's mode
+  and ramp (`atexit()` does not run), so the button says so.
+
+### The designer's own frames during a run
+
+The player wants the display and, on Linux, SCHED_FIFO for its frame
+thread under an `rtprio` grant (rt.md, "Linux real-time priority"). The
+designer runs on the same machine and the same GPU.
+- No designer thread elevates: the UI thread, the check thread, the build
+  thread and the watch thread are SCHED_OTHER. The player is started with
+  SCHED_OTHER set explicitly, and elevates its own frame thread.
+- The preview stops and closes its session at Run: a running preview draws
+  every frame, 0.6 to 2.2 ms of a UI frame on the RX 6600 (step 5, part D),
+  most of it GPU time. With the pane hidden a frame costs 0.20 to 0.39 ms.
+- The redraw rule: a run adds no animation. The watch thread's wake-ups
+  bring a frame at most `RUN_REDRAW_HZ` (2) times a second; a person's
+  input brings frames as before (an operator's second monitor).
+- Edits and checks go on: the check thread is SCHED_OTHER, and the
+  player's frame thread at FIFO takes its CPU first. A check costs up to
+  41 ms of one core on the generated project (step 3's evidence).
+- Not measured, and needed before step 6 closes: the player's dropped
+  frames (`frames.csv`) on this machine's display with the designer idle,
+  redrawing at 2 Hz, and redrawing every frame with the preview, each for
+  a whole stroop session at 60 Hz. That needs the real player on the
+  user's display, which this plan did not use. If 2 Hz costs frames, the
+  knob is 0 (draw only on input) while the player's window has the
+  foreground.
+
+### Rig profiles
+
+**Choose.** The Run view's combo lists `yrig_dir()`'s `*.json` files
+(`profile.json` first, as "profile (default)"), "No profile (keyboard
+only)", and, in the preview only, "Built-in simulated rig". The view
+file's part `run` keeps the choice by name. A folder that `yrig_dir()`
+refuses (other users can write it) shows its reason, as the player gives
+it.
+
+**View.** Read-only: the rig's name and `written`; each role (family,
+key, options, `latency` and `bounds` with their check: OK, MISSING,
+CHANGED, DIFFERS); `display.onset_offset_s` and the calibration file and
+its check; `view` (distance, width, px, and the px per degree,
+`yrig_ppd()`); `signals`; the notes of the load. A button opens the
+folder in the OS's file manager (`SDL_OpenURL()` of a `file://` URL).
+
+**Load.** `yrig_load()` on the check thread, when the choice changes or
+the file's size or time changes (the UI looks at them once a second while
+the Run view shows). 176 us median for a profile with a calibration
+(`yrig_profile` is 48 KB, so the checker keeps one, on the heap). The
+calibration file (62,528 bytes) is read with it, for `pl_check_desc.cal`
+and `pl_sim_desc.cal`.
+
+**What the check needs of the rig** (decision 13). Today `pl_check()`
+runs the player's load with stand-ins for every rig need and lists each
+one (`PL_NEED_*`). With `pl_check_desc.rig`:
+
+| Need today | With a profile |
+|---|---|
+| `PL_NEED_DEVICE` (a role the keyboard cannot take) | Bound in the profile: no need, and the role's response rules and buttons are checked against the bound family, as a real start does (`pl_rules_check()` for the bound roles). Not bound: the need stays |
+| `PL_NEED_ROLE_TIER` | The tier from `yrig_source_role()` (a checked loopback): met, no need; not met, the need stays, with the profile's tier, and the Run view offers `--allow-below-tier` |
+| `PL_NEED_VIEW` | The profile's `view`: met; the stand-in view is replaced by it, so deg sizes are the rig's |
+| `PL_NEED_CALIBRATION` | The profile's calibration (its check OK): met, and it is the check's calibration |
+| `PL_NEED_SIGNAL`, `PL_NEED_SIM_GAIN` | The profile's `signals`: met, and the loader's signal checks against the rig run |
+| `PL_NEED_DISPLAY_TIER` | Stays: only a run's lead-in frames give it |
+| `PL_NEED_FIELD` | Stays: the Run view's fields give it |
+
+The check still opens no device and no display (`stand_in`); a device
+that is in the profile and not plugged in is the player's refusal at the
+start (exit 1), not the check's.
+
+### The views
+
+- **Toolbar** (`ui.cpp`): Build, Run, Stop after Redo. Build is disabled
+  with no project or while a build or a run goes; Run is disabled while
+  the last check of the current revision has errors, or while a build or
+  a run goes; Stop shows only while a run goes. One check box per AUX
+  view (today the first only).
+- **The view "Run"** (`view_run.cpp`, `UI_SLOT_AUX`, test path
+  `//##designer/Run`): sections Rig (the combo, the profile's summary,
+  "Show"), Build (path, pack ID, size, time, stale or up to date; Build),
+  Run (Simulated, participant and the other fields, seed, the roles below
+  tier, Window, the output folder; Run, Stop, Kill), Output (state,
+  trials, the last trial, the log's last 200 lines, the exit's meaning,
+  Open trials.csv, Open the folder).
+- **The preview pane** gets the rig combo's choice through its settings;
+  its banner names the profile in use: "Rig: NAME (view 570 mm, 1920 px
+  over 518.4 mm)" in place of "Built-in simulated rig: ...".
+- **The Issues panel** shows Build's issues after the check's (from
+  "Build"), and a failed Run's line (from "Run").
+
+### The designer's shared interfaces
+
+Frozen by part S after wave 1; a part that needs a change stops and
+reports it.
+
+`designer/core/dsg.h` (0.4.0):
+- `DSG_FROM_BUILD`, `DSG_FROM_PLAYER_RUN`.
+- The process (`platform.c`, part X):
+  ```c
+  typedef struct dsg_proc dsg_proc;
+  typedef struct dsg_proc_desc {
+      const char* const* argv;      /* argv[0]: the program's path          */
+      const char* cwd;              /* NULL: the designer's                 */
+      const char* out_path;         /* stdout and stderr; made, must not exist */
+      const char* const* watch;     /* files whose growth wakes (NULL-ended) */
+      void (*wake)(void* ctx);      /* on the watch thread                  */
+      void* ctx;
+  } dsg_proc_desc;
+  int  dsg_proc_start(dsg_proc** out, const dsg_proc_desc* d, char* err, size_t cap);
+  void dsg_proc_stop(dsg_proc* p);           /* SIGTERM; Windows WM_CLOSE */
+  void dsg_proc_kill(dsg_proc* p);           /* SIGKILL; TerminateProcess */
+  /* 1 ended (status: exit code >= 0, or -signal), 0 running */
+  int  dsg_proc_poll(dsg_proc* p, int* status);
+  /* Joins the watch thread. A process still running is left running. */
+  void dsg_proc_free(dsg_proc* p);
+  ```
+  WebAssembly: `dsg_proc_start()` fails with "no processes in a browser".
+- Build (`build.c`, part B): `dsg_builder_start(desc)`,
+  `dsg_builder_stop()`, `dsg_build_post(b, project, out_path, revision)`,
+  `dsg_build_cancel(b)`, `dsg_build_take(b, &result)` (`dsg_build_result`:
+  revision, status, `dsg_report` of `DSG_FROM_BUILD` issues, path, size,
+  pack ID, ms, the sources' stamp), `dsg_build_stale(project, result,
+  revision)`.
+- Run (`run.c`, part R): `dsg_run_settings` (rig name, sim, participant
+  and fields, seed, allow-below-tier roles, windowed, max_seconds, gains,
+  out_dir); `dsg_run_args(settings, pack, argv_out, buf, cap)`;
+  `dsg_run_out_dir(project, settings, now, out, cap)`;
+  `dsg_run_start()`, `_stop()`, `_kill()`, `_tick(now)` (reads the log and
+  `trials.csv`), `dsg_run_info` (state, trials, last row, log lines,
+  exit, its text); `dsg_run_exit_text(status)`; `dsg_player_version(path,
+  out, cap)`.
+- Rig (`rig.c`, part G): `dsg_rig_list(names, cap)`; `dsg_rig_load(name,
+  &rig, err, cap)` (the profile and its calibration; `dsg_rig` owns both);
+  `dsg_rig_changed(rig)` (size or time); `dsg_rig_summary(rig, lines)`.
+- The check job and the session settings carry the rig's name:
+  `dsg_worker_check()` gains `rig` (the checker loads and keeps it);
+  `dsg_session_settings` gains `char rig[64]` ("": the built-in rig).
+
+`designer/app/views.h`: the slots do not change; the check box per AUX
+view is `ui.cpp`'s. `ui.h`: `UiPlatform.player_path` (main.cpp:
+`SDL_GetBasePath()` + `ysp_player`), `ui_run_active()`. `ui_report()`
+returns the merged report.
+
+The view file's part `run`: `{"open": bool, "rig": NAME, "sim": bool,
+"fields": {...}, "seed": "", "allow_below_tier": [ROLE], "windowed":
+bool, "max_seconds": s}`.
+
+### Who owns which file
+
+| Files | Owner |
+|---|---|
+| `player/main.c` (`--version`, the `--sim` signal handler), `player/player.h` and `lower.c` (`pl_check_desc.rig`), `run.c` (the stop flag), `tests/player/check_test.c`, `player_test.py`; the player's mutation lists; `docs/player.md`; `docs/status.md` | P (player 0.18.0) |
+| `pack/ysp/pack_tool.h`, `pack/pack_tool.c` (`ypt_options.cancel`), `tests/pack/tool_test.c`, `docs/pack.md`, `docs/status.md` | K (pack tool 0.12.0) |
+| `designer/core/platform.c` (`dsg_proc_*`), `tests/designer/platform_test.c` (the process part), `tests/designer/test_child.c` (new: a child that prints, waits, exits with a code, ignores or takes SIGTERM, lists its descriptors and its policy) | X (the process) |
+| `designer/core/dsg.h`, `views.h`, `ui.h`, `ui.cpp` (toolbar, AUX check boxes, the merged report, the Run state), `main.cpp` (the player's path, the quit question), `views.cpp`, `designer/CMakeLists.txt` (`ysp_player` beside the designer; `test_child`); stubs of B, R, G and V; `preview_part.c`'s `run` sibling (`run_part.c`) | Shared (S): frozen during step 6, after wave 1 |
+| `designer/core/build.c` (new), `tests/designer/build_test.c` (new) | B (Build) |
+| `designer/core/run.c` (new), `tests/designer/run_test.c` (new), `tests/designer/fake_player.c` (new) | R (Run) |
+| `designer/core/rig.c` (new), the rig's parts of `check.c`, `worker.c` and `preview.c`, `tests/designer/rig_test.c` (new) | G (rig profiles) |
+| `designer/app/view_run.cpp` (new), `designer/app/view_preview.cpp` (the rig's banner), `tests/designer/te_run.cpp` (new), `test_designer_ui`'s Run part | V (the views) |
+| `docs/designer.md`: a subsection each under "Decisions of step 6"; `docs/status.md`: an entry each | Each part its own |
+| The measurement of "The designer's own frames during a run" | M (with the user, on the display) |
+
+### Tests
+
+Every part keeps the designer suite passing in ctest from the build tree
+with `DISPLAY` and `WAYLAND_DISPLAY` unset, with
+`YSP_DESIGNER_TEST_ENGINE` off and on, and the player's and the pack
+tool's tests and mutation lists. Each new check has a hand mutant that
+fails it. The threaded tests also run under ThreadSanitizer (gcc 12,
+`setarch -R`). **No test starts the player without `--sim`**: the tests
+that start a process start `test_child`, `fake_player` or `ysp_player
+--sim`, and `dsg_run_args()` refuses a real run when the environment
+variable `YSP_DESIGNER_TEST` is set.
+
+| Part | Tests |
+|---|---|
+| P | `test_player_check`: with a profile from `player_make_rig` that binds a role, has a view, a calibration and a signal, the matching needs are gone and the others stay; a profile whose role's family the definition does not list gives the start's refusal by name; a profile changes no result of a definition that needs nothing of it. `player_test.py`: `--version`; `--sim` stopped by SIGTERM exits 3 with `"aborted"` (reason `request`) and the finished trials' rows; `--sim`'s output bytes otherwise unchanged. Mutants in `player_lower.toml` and `player_main`. |
+| K | `test_pack_tool`: a cancel before the second resource gives the new `YPT_ERR_CANCELED`, no pack and no temporary file; a cancel set during an ffmpeg step stops after it; no cancel gives the same bytes as 0.11.0. |
+| X | `test_designer_platform` (process part, POSIX and Windows): `test_child` gives its exit code; its output is in the log file; argv with spaces, quotes, a trailing backslash and UTF-8 arrive whole (Windows quoting); the child sees only descriptors 0, 1 and 2; its policy is SCHED_OTHER when the parent thread is SCHED_FIFO (with an `rtprio` grant; skipped without); SIGPIPE is default in the child when the parent ignores it; Stop ends a child that takes SIGTERM with its code, and Kill one that ignores it; the watch thread wakes on a log's growth and at the exit, within 300 ms; no zombie after `dsg_proc_free()`; a log path that exists is refused. |
+| S | The designer runs as before with the stubs; `test_designer_ui`: the toolbar's Build and Run disabled with no project; the AUX check boxes; the merged report's order. |
+| B | `test_designer_build`: each `tests/player` project's Build has the pack ID of `ypak build` of the same description; a table with a bad cell gives a `DSG_FROM_BUILD` issue that the tables view maps to the cell; a definition error has its line and column; a warning is an issue of severity warning; Build saves first (the file's bytes are the document's); newest wins; cancel; a stale check by revision and by a source's time; two builds at once (a check pack and a Build) under ThreadSanitizer. |
+| R | `test_designer_run`: `dsg_run_args()` for every setting (exact argv); the output folder's name and its refusal when it exists; each exit code's text; with `fake_player` (writes `trials.csv` rows and log lines on a schedule, exits with a given code, takes or ignores SIGTERM): the trials and last row, the log's lines, Stop, Kill after 5 s; with `ysp_player --sim` of rdk through the real spawn: exit 0, 40 rows, the log's end line; the version check refuses another version. |
+| G | `test_designer_rig`: with `XDG_CONFIG_HOME` (Windows: `APPDATA`) at a test folder, the list, a load, a changed loopback file's note, a folder that others can write refused; the check with a profile (the needs as in P); a preview session with the profile's view: a stimulus in deg at `yrig_ppd()`'s scale; the file's change reloads it. |
+| V | `te_run.cpp`: Build gives the pack ID; Build with a table error shows the issue, and a click selects the cell in Tables; Run (Simulated, `fake_player`) shows the trials and the end; Stop gives "Stopped"; Run disabled while the check has errors; the rig combo lists the test folder's profiles and the preview's banner names the chosen one. `test_designer_ui`: idle frames 0 while a run goes and nothing changes; at most `RUN_REDRAW_HZ` frames a second while `trials.csv` grows. |
+
+### Order of merges
+
+1. Wave 1, in parallel, each on a branch from the merged step 5
+   (`step5-int2` or its successor): P, K and X. None needs designer step
+   6 code.
+2. Into `designer-step6`: P, then K, then X, then S. Each merge runs the
+   player's, the pack tool's and the designer's suites and the mutation
+   lists.
+3. Wave 2, in parallel, each on a branch from `designer-step6`: B, R, G,
+   V (V on S's stubs). Merge B, then G, then R, then V.
+4. Wave 3: the integration (V's tests on the real B, R and G), then M:
+   the measurement of "The designer's own frames during a run" on the
+   display, with the user.
+5. `designer-step6` into `main` only when the user says so.
+
+### Risks
+
+- **The real player is not run by this plan or by the tests.** Stop's
+  path through SDL, the foreground, the player's frames beside the
+  designer: each is from the code and a small test program, not from a
+  run. Part M is the check, with the user.
+- **The check pack re-encodes videos** ("Build"): seconds of no check
+  results for a project with a video. Not step 6's to fix; it needs a
+  decision and a measurement of its own.
+- **Two pack tool builds at once** (the check thread and the build
+  thread). Skribidi's collection counter is a known race; others may be
+  unknown. ThreadSanitizer in part B is the check.
+- **Process code on three systems.** The Windows branch (quoting, the
+  handle list, WM_CLOSE, the foreground) and the macOS branch are built
+  and tested only by CI. CI's `designer` job has not run yet.
+- **A Kill leaves the display changed** (mode, ramp). The Run view shows
+  how to put it back; a test cannot check it without the display.
+- **Disk.** A `--sim` run of a version 2 definition with no samples wrote
+  871 MB before its budget ended it; decision 10's `--max-seconds` caps
+  that, and the Run view shows the folder's size.
+- **Version drift.** A `ysp_player` of another version would check
+  differently from the designer's linked library; decision 5 refuses it.
+- **`trials.csv` as progress** depends on the data set's format; a change
+  of its columns changes the Run view's last row (the parse reads columns
+  by name, not by place).
+
+### Not done in the plan
+
+- Nothing is built. The real player and the display were not used.
+- Windows and macOS were not measured or compiled; their process code
+  is from the documentation of the calls.
+- The check pack's video cost is a finding, not a plan.
+
+### Measured
+
+Conditions: Linux desktop, Intel Core i5-14500, Debian 12, kernel
+6.11.5-liquorix, governor `performance`, gcc 12.2, Release (Ninja), SDL
+3.4.18, ffmpeg 5.1.6, 2026-11-21, from `f8908c7`. One block at a time
+under the measuring lock, pinned with `taskset` to CPUs 2 and 4 (two
+P-cores), `DISPLAY` and `WAYLAND_DISPLAY` unset. Each block waited for a
+1-minute load average below 1.0: it was 0.83 to 0.95 before each block
+and at most 1.20 after one (the video build's own two ffmpeg threads).
+The files were on `/tmp`, ext4 on NVMe. A harness (`spawnm`, not kept)
+starts each process with `posix_spawn()` (or `fork()` and `execv()`),
+times the call and the exit, and takes the child's peak resident memory
+from `wait4()`. Milliseconds unless the column says otherwise; median,
+p95 and max.
+
+**Build: `ypak build` of the project, a process each** (the same
+`ypt_build()` that Build calls; a process that only prints its usage takes
+0.46 ms). Peak memory is the process's; for the video case it is the
+largest of `ypak` and its ffmpeg child.
+
+| Project | Runs | Pack | Time | Peak memory |
+|---|---|---|---|---|
+| rdk | 20 | 17 KB | 0.72, 0.87, 0.87 | 4.4 MB |
+| oddball | 20 | 25 KB | 0.80, 0.93, 0.93 | 4.6 MB |
+| visuomotor | 20 | 21 KB | 0.92, 1.01, 1.01 | 4.7 MB |
+| bimanual | 20 | 21 KB | 1.00, 1.08, 1.08 | 4.7 MB |
+| stroop | 20 | 599 KB | 7.06, 7.41, 7.41 | 6.6 MB |
+| many (generated, 200 texts in 4 scripts) | 10 | 2.5 MB | 35.7, 36.2, 36.2 | 10.5 MB |
+| many+words (and 10,000 texts from tables) | 5 | 12.6 MB | 146, 163, 163 | 40.4 MB |
+| rdk with a 10 s 1080p video (MJPEG source, MPEG-1 at q 3, `"threads": 2`) | 3 | 27.0 MB | 3,567, 3,574, 3,574 | 103.8 MB |
+
+The in-process build times of step 3 ("Evidence: the check's cost") agree
+for the shared projects (stroop 6.36 ms, many 33.9 ms, many+words 143 ms):
+the process adds about 0.5 ms.
+
+**The check pack against Build's pack.** For stroop and rdk, a build of
+the project's description and one with the experiment's source at
+`.designer/check/experiment.json` (as `check.c` makes it): different
+pack IDs; the manifests differ in one line (the source's `path`); the
+experiment entries have the same SHA-256.
+
+**Starting a process** (`ysp_player` with no arguments: usage, exit 2;
+200 runs). "Call" is the time the caller spends in `posix_spawn()` or
+`fork()`, which the UI thread would pay.
+
+| Caller | Call, us | Start to exit |
+|---|---|---|
+| `posix_spawn()` | 41.8, 303, 435 | 0.32, 0.42, 0.49 |
+| `posix_spawn()`, 1 GB of the caller's memory touched | 36.7, 51.5, 123 | 0.30, 0.34, 0.63 |
+| `fork()` and `execv()` | 16.8, 30.1, 119 | 0.34, 0.40, 0.54 |
+| `fork()` and `execv()`, 1 GB touched | 8,542, 10,384, 29,513 | 20.1, 23.4, 49.8 |
+
+**A whole `--sim` session as a process** (10 runs each, with a
+`player_make_rig` profile): rdk 64.1, 67.8, 67.8 (40 trials); oddball
+59.9, 61.8, 61.8 (16 trials); stroop 61.8, 61.9, 61.9 (40 trials); peak
+memory 7.6 to 8.0 MB. Single runs, not pinned, load about 3: the
+generated "many" 12.9 s and 317 MB of data (10,000 trials); bimanual and
+visuomotor with a gain and no samples ran to the 172,800 s budget, 50.0 s
+and 45.4 s, 872 MB and 871 MB of data, exit 1.
+
+**Stop and the pipe** (single runs, not timed):
+- `sdlterm` (a test program: `SDL_Init(SDL_INIT_EVENTS)`, `raise(SIGTERM)`,
+  then `SDL_PollEvent()`): SDL 3.4.18 gave `SDL_EVENT_QUIT`. The player's
+  real run inits SDL's video, which inits its events.
+- `ysp_player --sim` of "many", SIGTERM after 1 s: ended by signal 15;
+  `session.json` was the one of the start, with no `"aborted"`; the
+  writes stopped where they were.
+- `ysp_player --sim` of rdk with its standard output to a pipe that was
+  closed: status 141 (SIGPIPE) at its end line, after the data set was
+  done. A real run's earlier lines would end it mid-session.
+
+**A rig profile's load** (`yrig_load_file()` of `player_make_rig`'s
+profile with its 62,528-byte calibration file, 1,000 loads, CPU 2):
+175.6 us median, 178.2 us p95, 230.7 us max. `yrig_profile` is 48,072
+bytes.
 
 ## How to build and run the skeleton
 
