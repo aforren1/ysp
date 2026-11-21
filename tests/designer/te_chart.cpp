@@ -27,9 +27,12 @@
 //                   the next; it stays between trials, is kept in the view
 //                   file, and a jump to another template turns it off.
 //   chart/pin       "Preview this template" pins the shown template and
-//                   shows the pane; a refusal says so and shows nothing.
+//                   shows the pane; with no session it shows the pane and
+//                   pins when a session shows; a refusal says so and shows
+//                   nothing.
 // These two use the real preview.c and skip on S's stub (no session load):
-//   chart/pin_real  The pin is the first leaf that runs the template, any row.
+//   chart/pin_real  The pin is the first leaf that runs the template, any row;
+//                   with no session yet, after the first session shows.
 //   chart/ring_real A session that runs bimanual, paused: the ring is on the
 //                   state that the preview says.
 #include "te_common.h"
@@ -480,6 +483,24 @@ void test_pin(ImGuiTestContext* ctx) {
     IM_CHECK(open_bimanual(ctx, "chart_pin"));
     IM_CHECK(!ui_aux_open());
     const ImGuiID button = te_in_child(ctx, kChart, "Preview this template");
+    // No session yet: the pane shows, and the pin waits for a session.
+    ctx->ItemClick(button);
+    IM_CHECK_STR_EQ(g_pinned, "reach");
+    IM_CHECK(ui_aux_open());
+    IM_CHECK(strstr(ui_status(), "then it pins 'reach'") != nullptr);
+    g_pinned[0] = 0;
+    ctx->Yield(2);
+    IM_CHECK_STR_EQ(g_pinned, "");
+    g_pin_ok = true;
+    at(nullptr, nullptr, DSG_PV_PHASE_BETWEEN);
+    ctx->Yield(2);
+    IM_CHECK_STR_EQ(g_pinned, "reach");
+    g_pinned[0] = 0;
+    ctx->Yield(2);
+    IM_CHECK_STR_EQ(g_pinned, "");
+    ui_show_aux(false);
+    // A session that no leaf of runs the template: refused, no pane.
+    g_pin_ok = false;
     ctx->ItemClick(button);
     IM_CHECK_STR_EQ(g_pinned, "reach");
     IM_CHECK(!ui_aux_open());
@@ -510,18 +531,31 @@ void test_pin_real(ImGuiTestContext* ctx) {
     IM_CHECK(open_bimanual(ctx, "chart_pin_real"));
     ctx->Yield(2);
     dsg_preview* pv = ui_preview();
+    // The pane is hidden, so no session and no leaves: the click shows the
+    // pane, and the pin follows when the first session shows.
+    IM_CHECK(!ui_aux_open() && ui_preview_where() == nullptr);
+    ctx->ItemClick(te_in_child(ctx, kChart, "Preview this template"));
+    IM_CHECK(ui_aux_open());
+    dsg_preview_settings st = {};
+    for (int i = 0; i < 600; i++) {
+        dsg_preview_get(pv, &st);
+        if (st.session.pin_leaf[0]) break;
+        ctx->Yield();
+    }
     char leaf[512] = "";
     for (int i = 0; i < dsg_preview_leaves(pv) && !leaf[0]; i++) {
         dsg_preview_leaf l = {};
         if (dsg_preview_leaf_at(pv, i, &l) && l.tmpl && strcmp(l.tmpl, "reach") == 0) snprintf(leaf, sizeof leaf, "%s", l.path);
     }
     IM_CHECK(leaf[0] != 0);
-    ctx->ItemClick(te_in_child(ctx, kChart, "Preview this template"));
-    dsg_preview_settings st = {};
-    dsg_preview_get(pv, &st);
     IM_CHECK_STR_EQ(st.session.pin_leaf, leaf);
     IM_CHECK_EQ(st.session.pin_row, -1);
-    IM_CHECK(ui_aux_open());
+    // With a session shown the pin is at once.
+    st.session.pin_leaf[0] = 0;
+    dsg_preview_set(pv, &st);
+    ctx->ItemClick(te_in_child(ctx, kChart, "Preview this template"));
+    dsg_preview_get(pv, &st);
+    IM_CHECK_STR_EQ(st.session.pin_leaf, leaf);
     ui_show_aux(false);
 }
 

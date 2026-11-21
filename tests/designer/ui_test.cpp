@@ -402,6 +402,8 @@ int main(int argc, char** argv) {
 
     // 8. the AUX pane and the view file's part "preview"
     CHECK(!ui_aux_open() && !child_drawn("Preview"), "the preview pane is hidden at first");
+    // A hidden pane posts no session job, so no session yet.
+    CHECK(ui_preview_where() == nullptr, "no session: nowhere");
     CHECK(child_drawn("Definition") && child_drawn("Properties"), "the text view and the side column draw");
     ui_show_aux(true);
     settle();
@@ -499,7 +501,18 @@ int main(int argc, char** argv) {
     ui_show_aux(false);
     settle();
     CHECK(!ui_preview_has_keyboard(), "hiding the pane drops the claim");
-    CHECK(ui_preview_where() == nullptr, "no session: nowhere");
+    // The pane was shown with an accepted text, so the real preview loaded a
+    // session (the double, off, never does). The place goes with the shown
+    // session: there is one exactly when a data set shows.
+    {
+        dsg_preview_info pi = {};
+        dsg_preview_get_info(ui_preview(), &pi);
+        const bool shown = pi.out_dir && pi.out_dir[0];
+        CHECK((ui_preview_where() != nullptr) == shown, "a place only with a session shown (%s)", shown ? "shown" : "none");
+#if !DSG_PREVIEW_DOUBLE
+        CHECK(shown, "the real preview loaded a session while the pane showed");
+#endif
+    }
 
     // 9. the pane on the double, with no GL caps (the headless case)
 #if DSG_PREVIEW_DOUBLE

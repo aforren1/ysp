@@ -642,6 +642,9 @@ void dsg_preview_adopt(dsg_preview* pv, dsg_session_result* r, int64_t now_ns) {
         return;
     }
     if (!x || stale(pv, s)) {
+        /* the newest job's, dropped for an edit since its post: no job
+         * follows until the check accepts a text, so nothing loads now */
+        if (pv->open && pv->have_posted && s->revision == pv->posted_rev && !dsg_worker_session_queued(pv->worker)) pv->waiting = false;
         hand_back(pv, s, true, 0);
         return;
     }

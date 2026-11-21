@@ -209,6 +209,15 @@ if(YSP_BUILD_TESTS)
     set_target_properties(test_designer_ui PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
     add_test(NAME test_designer_ui COMMAND test_designer_ui ${CMAKE_CURRENT_BINARY_DIR}/designer_ui_work)
     dsg_test(test_designer_ui)
+    # Parts 1 to 8 again on part A's preview.c: they also hold with real
+    # sessions loading on the check thread (parts 9 and 10 need the double).
+    add_executable(test_designer_ui_real ${PROJECT_SOURCE_DIR}/tests/designer/ui_test.cpp)
+    target_link_libraries(test_designer_ui_real PRIVATE ysp_designer_ui)
+    target_compile_definitions(test_designer_ui_real PRIVATE DSG_PREVIEW_DOUBLE=0 YSP_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+        YSP_DESIGNER_FONT_DIR="${CMAKE_CURRENT_BINARY_DIR}/fonts")
+    set_target_properties(test_designer_ui_real PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+    add_test(NAME test_designer_ui_real COMMAND test_designer_ui_real ${CMAKE_CURRENT_BINARY_DIR}/designer_ui_real_work)
+    dsg_test(test_designer_ui_real)
 
     # The Tables view with 10,000 rows: only the visible cells are laid out
     # (docs/designer.md, "The tables"); --bench times a scroll.
@@ -261,7 +270,7 @@ if(YSP_BUILD_TESTS AND YSP_DESIGNER_TEST_ENGINE)
     # The runner, the UI layer and ImGui, with the designer's flags.
     add_executable(test_designer_te ${PROJECT_SOURCE_DIR}/tests/designer/te_test.cpp ${_te_config}/imconfig_designer_te.h
         ${_te_config}/te_common.h ${_te_config}/te_chart.cpp ${_te_config}/te_tables.cpp ${_te_config}/te_panels.cpp
-        ${_te_config}/te_preview.cpp ${_te_config}/preview_double.c
+        ${_te_config}/te_preview.cpp
         ${_ui_sources})
     target_link_libraries(test_designer_te PRIVATE ysp_designer_te_engine ysp_designer_core ysp_designer_skb ysp_skribidi)
     target_compile_definitions(test_designer_te PRIVATE YSP_SOURCE_DIR="${PROJECT_SOURCE_DIR}"

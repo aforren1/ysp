@@ -1113,7 +1113,8 @@ A the pane shows a project that the check accepts, so a session loads,
 and the check fails. It is the only failure in ctest (141 of 142,
 Release, examples and the Test Engine on, `DISPLAY` unset). The check
 needs a change in S's file: for example, read `ui_preview_where()` before
-the pane first shows, or after the project closes.
+the pane first shows, or after the project closes. Fixed at the
+integration ("Parts A, B and C integrated").
 
 **Not done.**
 - No GL context: the attach's GL work, the texture and the drawn frame
@@ -1167,7 +1168,10 @@ shows the template that the preview runs, and changes with it.
 **"Preview this template".** A button in the toolbar. It calls
 `dsg_preview_pin_template()` with the shown template. When the preview
 pins a leaf, the AUX pane shows; when no leaf runs the template, the status
-line says "Not pinned: no leaf of the timeline runs 'T'." A read-only chart
+line says "Not pinned: no leaf of the timeline runs 'T'." With no session
+(the pane was never shown), the preview has no leaves to look in: the pane
+shows, the status line says "The preview loads; then it pins 'T'.", and the
+chart pins when the first session shows (added at the integration). A read-only chart
 (an events template, or a text that does not parse) pins too: the pin
 edits no definition. The pin runs at the end of the chart's frame, after
 the last read of the place, because a pin restarts the preview and the
@@ -1226,7 +1230,8 @@ load.
   On S's stub they log "skipped" and pass: a stub's
   `dsg_preview_session_ops()` gives no `load`, and the tests check that.
   With part A they run, and they were not run here. Also re-run the other
-  `chart/` tests and `test_designer_chart`, which do not depend on A.
+  `chart/` tests and `test_designer_chart`, which do not depend on A. Done
+  at the integration: both run and pass on A.
 - ctest from the Release build tree, examples and the Test Engine on,
   `DISPLAY` unset: 141 of 141. `test_designer_te` 32 of 32, three runs.
 - ASan with UBSan (gcc 12, Debug, built and run under `setarch -R`):
@@ -1373,7 +1378,8 @@ the top of `te_preview.cpp`. Then re-run all five `preview/*` tests:
 (`DSG_PV_PHASE_RESPONSE`) before it answers, and detects a restart by a
 new data set folder. `test_designer_ui` parts 9 and 10 keep the double:
 they need an end, a run-time refusal and a texture with fake GL caps on
-demand.
+demand. Done at the integration: the five pass on A after two changes to
+the tests ("Parts A, B and C integrated").
 
 **Tests** (Linux desktop, i5-14500, Debian 12, gcc 12.2):
 - `test_designer_ui` (now 113 checks). Part 9, no GL caps: no session job
@@ -1439,6 +1445,68 @@ demand.
   after A merges.
 - MSVC, clang and macOS were not compiled. Locals that a call fills are
   initialized, and the narrowing conversions are cast.
+
+#### Parts A, B and C integrated (2026-11-21)
+
+Branch `step5-int2`, from `step5-s` (`813e40b`): `step5-a-core` (A),
+`step5-c-chart` (C) and `step5-b-pane` (B), merged in that order with
+`--no-ff`.
+
+**Conflicts.** Each part added the heading "Decisions of step 5" and its
+subsection at the same place in this file, and an entry at the top of
+`docs/status.md`. One heading keeps the three subsections, and
+`status.md` keeps the three entries. Git merged the CMake files and the
+code itself.
+
+**Changes to the tests.**
+- `test_designer_ui` part 8 ended with "no session: nowhere". With part
+  A a session loads while the pane shows. The check now runs before the
+  pane first shows (a hidden pane posts no session job), and the end of
+  part 8 checks that `ui_preview_where()` gives a place exactly when a
+  session shows (its data set's folder).
+- `test_designer_ui_real` (new): `ui_test.cpp` with `DSG_PREVIEW_DOUBLE`
+  0 and no double, so parts 1 to 8 run on A's `preview.c` with real
+  sessions on the check thread (68 checks; it also checks that a session
+  loaded). Parts 9 and 10 keep the double in `test_designer_ui`.
+- `test_designer_te` runs on A's `preview.c`: `preview_double.c` is out
+  of its sources, and `te_preview.cpp` defines `DSG_PREVIEW_DOUBLE` 0.
+  `preview/choice` read the choices before a trial ran: A gives the
+  running template's choices, so 0 between trials (`preview.h`). It reads
+  them in the response window now. `preview/key_space` and
+  `preview/choice` answered as soon as the window opened. rdk's collector
+  waits from the trial's start, but its rt counts from the dots, 0.5 s
+  in, so the press was early and the trial timed out (`n_early` 1 in
+  `trials.csv`). The test now answers 0.8 s into the next trial's window.
+
+**Faults found and fixed.**
+
+| Part | Fault | Fix | Test that fails without the fix |
+|---|---|---|---|
+| A | A session that the preview drops as stale, because the text changed after its post, left `info.loading` true. When the new text does not check, no job follows, so the pane said "A new session loads" (or "Waiting") until the next accepted edit. A's own test (4a) relied on the flag. | `dsg_preview_adopt()` clears `waiting` when it drops the newest job's session and no job waits. | `test_designer_preview` (4d): "a session still loads, but no job waits or runs" |
+| C (with A) | "Preview this template" with the pane never shown said "Not pinned: no leaf of the timeline runs 'reach'". A gives the leaves of the shown session only (`preview.h` says "the last accepted definition"), and a hidden pane loads none. This is the button's first use in a project. | The chart shows the pane and pins when the first session shows (above). | `chart/pin_real` and `chart/pin` (the pane does not show) |
+
+`preview.h` is frozen, so its comment on `dsg_preview_leaves()` still says
+"the last accepted definition"; A's preview gives the shown session's.
+
+**Tests** (Linux desktop, i5-14500, Debian 12, gcc 12.2):
+- ctest from the Release build tree, examples and the Test Engine on,
+  `DISPLAY` unset: 143 of 143. `test_designer_preview` 197 checks,
+  `test_designer_ui` 114, `test_designer_ui_real` 68, `test_designer_te`
+  37 of 37 (`chart/pin_real` and `chart/ring_real` run on A).
+- ASan with UBSan (Debug, built and run under `setarch -R`,
+  `halt_on_error`): the 12 designer tests (`test_designer_te` with leak
+  checks off), `test_player_sim` and `test_gfx` with llvmpipe: no report
+  but Mesa's known 336 bytes in 6 blocks in `test_gfx`.
+- ThreadSanitizer (the same): the 12 designer tests, `test_player_sim`
+  and `test_gfx`, with `race:swrast_dri.so`; then 5 more runs each of
+  `test_designer_te` and `test_designer_preview`: no report.
+- `-Wconversion -Wsign-conversion` on the designer's sources and tests:
+  no warning. The merged diff was read for locals that a call fills
+  (C4701, `-Wsometimes-uninitialized`) and narrowing conversions (C4244):
+  none found.
+- Hand mutants (each reverted): A's fix undone fails (4d); C's fix undone
+  fails `chart/pin` and `chart/pin_real`; `ui_preview_where()` that gives a
+  place with no session fails part 8 in both UI tests.
 
 ## First version
 
@@ -1899,8 +1967,9 @@ Status: planned 2026-11-20 on branch `designer-step5-plan`; the user
 accepted its decisions the same day ("Decisions of the plan"). Wave 1
 (parts P3, P4 and T) is built and merged on branch `step5-int` the same
 day ("Wave 1 integrated"). Part S (the shared interfaces and the stubs)
-is built on branch `step5-s` ("Part S as built"); parts A, B, C and D are
-not built. This
+is built on branch `step5-s` ("Part S as built"). Parts A, B and C are
+built and merged on branch `step5-int2`, and part D is built there
+("Decisions of step 5"). This
 section answers, from the code at `98de716`, what the preview
 needs from the player, from `ysp/gfx.h` and from the check, and gives
 the decisions, the shared interfaces, the parts, the tests, the

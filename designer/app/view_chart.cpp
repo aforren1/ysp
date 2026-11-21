@@ -93,6 +93,9 @@ struct Chart {
                                         // not kept, as its positions are not
     Action act;
     int ring_first = -1, ring_last = -1;   // the nodes the preview runs, this frame
+    // A pin asked for before any session showed: the leaves come with the
+    // session, so the pin waits for it ("Part C as built").
+    char pin_wait[DSG_SEL_PATH] = "";
 };
 Chart* C = nullptr;
 
@@ -251,8 +254,18 @@ void run_action(bool stale) {
         // A read-only chart may pin too: the pin edits no definition. It
         // runs here, after the frame's last read of the place, because a pin
         // restarts the preview and the place's strings end with that.
-        if (g_hooks.pin(ui_preview(), a.text)) ui_show_aux(true);
-        else ui_set_status("Not pinned: no leaf of the timeline runs '%s'.", a.text);
+        C->pin_wait[0] = 0;
+        if (g_hooks.pin(ui_preview(), a.text)) {
+            ui_show_aux(true);
+        } else if (!g_hooks.where()) {
+            // No session, so no leaves to look in: a hidden pane loads none.
+            // Show the pane, and pin when its session shows.
+            snprintf(C->pin_wait, sizeof C->pin_wait, "%s", a.text);
+            ui_show_aux(true);
+            ui_set_status("The preview loads; then it pins '%s'.", a.text);
+        } else {
+            ui_set_status("Not pinned: no leaf of the timeline runs '%s'.", a.text);
+        }
         return;
     }
     if (!editable(stale)) return;
@@ -825,6 +838,7 @@ void reset() {
     C->drag = C->connect = -1;
     C->center[0] = 0;
     C->act.kind = ACT_NONE;
+    C->pin_wait[0] = 0;
 }
 
 void opened(const dsg_view* v) {
@@ -877,6 +891,10 @@ void draw() {
     // The place, read once a frame. Its strings live until the preview
     // changes, which only the pin does, after the last read (run_action()).
     const dsg_preview_where* running = g_hooks.where();
+    if (C->pin_wait[0] && running && C->act.kind == ACT_NONE) {
+        C->act.kind = ACT_PIN;
+        snprintf(C->act.text, sizeof C->act.text, "%s", C->pin_wait);
+    }
     if (C->view.follow) {
         const char* f = dsg_chart_follow(root, running);
         if (f) dsg_chart_view_set_current(&C->view, f);   // copies only on a change

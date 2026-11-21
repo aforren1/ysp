@@ -311,6 +311,16 @@ static bool until_running(U* u, int k) {
     return false;
 }
 
+/* Frames until a session other than the one with data set out0 runs. */
+static bool until_other(U* u, const char* out0, int k) {
+    int i;
+    for (i = 0; i < k; i++) {
+        frame(u);
+        if (info(u).status == DSG_PV_RUNNING && !info(u).attaching && strcmp(info(u).out_dir, out0) != 0) return true;
+    }
+    return false;
+}
+
 static bool until_status(U* u, int status, int k) {
     int i;
     for (i = 0; i < k; i++) {
@@ -559,7 +569,7 @@ static void part_stale(U* u, const char* folder) {
     (void)dsg_worker_wait(u->w, 0);
     CHECK(!info(u).attaching && strcmp(info(u).out_dir, out0) == 0, "stale (a): an edit's stale session attached");
     CHECK(stats(u).sessions_closed > s0.sessions_closed, "stale (a): the session was not closed");
-    CHECK(until_running(u, 40) && strcmp(info(u).out_dir, out0) != 0, "stale (a): the edit's own session did not show");
+    CHECK(until_other(u, out0, 40), "stale (a): the edit's own session did not show");
     snprintf(out0, sizeof out0, "%s", info(u).out_dir);
 
     /* (b) settings changed after the post */
@@ -596,6 +606,23 @@ static void part_stale(U* u, const char* folder) {
     (void)dsg_worker_wait(u->w, 0);   /* the test's job: no pack, it fails */
     frame(u);
     CHECK(!dsg_preview_issue(u->pv, &(dsg_issue){ 0 }), "stale (c): another job's failure became the issue");
+
+    /* (d) an edit after the post to a text that the check refuses: the
+     * newest job's session is dropped and no job follows, so nothing loads */
+    CHECK(until_status(u, DSG_PV_RUNNING, 10), "stale (d): no session");
+    snprintf(out0, sizeof out0, "%s", info(u).out_dir);
+    s0 = stats(u);
+    dsg_preview_restart(u->pv);
+    frame(u);
+    CHECK(info(u).loading, "stale (d): the restart's job loads");
+    CHECK(edit(u, "\"reps 4\"", "\"reps 4\"x") == 0, "stale (d): edit");
+    frame(u);   /* takes the session: stale; posts the check */
+    frame(u);   /* the check refuses the text */
+    CHECK(stats(u).sessions_loaded == s0.sessions_loaded + 1, "stale (d): another job posted");
+    CHECK(strcmp(info(u).out_dir, out0) == 0 && info(u).stale, "stale (d): the last good session is not shown, stale");
+    CHECK(!info(u).loading, "stale (d): a session still loads, but no job waits or runs");
+    CHECK(edit(u, "\"reps 4\"x", "\"reps 4\"") == 0, "stale (d): edit back");
+    CHECK(until_other(u, out0, 40) && !info(u).stale, "stale (d): the fixed text's session did not show");
 }
 
 /* --- (5) the attach over frames, newest wins ----------------------------------------------- */

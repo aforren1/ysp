@@ -15,11 +15,11 @@
 //   preview/stale         A text that does not parse shows the banner and
 //                         keeps the session; Ctrl+Z restarts it.
 //
-// Until part A merges, preview.c is S's stub, so these run on the test
-// double (preview_double.h). Each test is written against preview.h's
-// contract, so it runs against A's preview.c too: set DSG_PREVIEW_DOUBLE to
-// 0 and take preview_double.c out of test_designer_te's sources. Every test
-// here must be re-run then.
+// These run on part A's preview.c: real sessions, loaded on the check thread
+// and stepped by ui.cpp. Part B wrote them on a test double
+// (preview_double.h); with DSG_PREVIEW_DOUBLE 1 here and preview_double.c
+// in test_designer_te's sources they run on it again.
+#define DSG_PREVIEW_DOUBLE 0
 #include "te_common.h"
 #include "ui.h"
 #include "views.h"
@@ -88,12 +88,24 @@ bool start(ImGuiTestContext* ctx, const char* copy, bool space) {
     return info().status == DSG_PV_RUNNING;
 }
 
-// Frames until the running trial takes a response (A's session: rdk's
-// response window opens after the fixation).
+// Frames until the running trial takes a response. rdk's collector waits
+// from the trial's start, but its rt counts from the dots, 0.5 s in, and a
+// press before them or under minimum_valid_rt_s (0.1 s) after them is no
+// response. So 0.8 s of session time after a trial's window opens: inside
+// the 1.5 s that the dots allow. The first trial seen may be part way
+// through, so the wait starts at the next trial's start.
 void to_response(ImGuiTestContext* ctx) {
     dsg_preview_where w = {};
-    for (int i = 0; i < 240; i++) {
-        if (dsg_preview_where_now(ui_preview(), &w) && w.phase == DSG_PV_PHASE_RESPONSE) return;
+    int64_t t0 = -1;
+    int trial0 = -2;
+    for (int i = 0; i < 600; i++) {
+        if (dsg_preview_where_now(ui_preview(), &w)) {
+            if (trial0 == -2) trial0 = w.trial;
+            if (w.trial != trial0 && w.phase == DSG_PV_PHASE_RESPONSE) {
+                if (t0 < 0) t0 = w.t_ns;
+                if (w.t_ns - t0 >= 800000000) return;
+            }
+        }
         ctx->Yield();
     }
 }
@@ -218,9 +230,10 @@ void test_edit_restart(ImGuiTestContext* ctx) {
 void test_choice(ImGuiTestContext* ctx) {
     Double dbl;
     IM_CHECK(start(ctx, "preview_choice", false));
+    // the running template's choices: a trial must run
+    to_response(ctx);
     IM_CHECK_EQ(dsg_preview_choices(ui_preview()), 2);
     IM_CHECK_STR_EQ(dsg_preview_choice_label(ui_preview(), 1), "right");
-    to_response(ctx);
     dsg_preview_where w = {};
     IM_CHECK(dsg_preview_where_now(ui_preview(), &w));
     const int trial0 = w.trial;
