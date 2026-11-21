@@ -930,6 +930,181 @@ mutants that fail the test (reverted; not in a mutation list).
   branch.
 - The Test Engine ran in its fast mode only.
 
+### Decisions of step 5
+
+#### Part B as built (2026-11-21)
+
+Branch `step5-b-pane`, from `step5-s` (`813e40b`). Part B is the
+preview's pane, `designer/app/view_preview.cpp`, in the AUX slot. Part A
+(`preview.c`) was built at the same time, so the pane was tested on a test
+double of `preview.h` (below). No frozen file of part S changed, and B
+needed no change in them.
+
+**What the pane shows, from the top.**
+- The controls: Run, Pause, Step, Restart, New seed, Speed (0.25x, 0.5x,
+  1x, 2x), and Fit or 1:1. A button that cannot act now is disabled: Run
+  only while paused, Pause only while running, Step while running or
+  paused. New seed draws a 63-bit seed (splitmix64 of the clock and the old
+  seed) and restarts through `dsg_preview_set()`.
+- The status: waiting, attaching, running, paused, ended ("Session over: N
+  trials"), failed, with the preview issue's text under it; "Slower than
+  real time" when the last tick dropped frames; a line when a newer session
+  loads or attaches while the shown one runs.
+- The banner, in a blue band: "Faithful in logic, not in timing: a
+  simulated N Hz display paced by this window; input times are frame
+  times; no sound." N is the shown session's rate, else the settings'.
+- The stale flag, in a red band: "Shows the definition as of HH:MM:SS; the
+  text has N errors." The time is local, from `shown_unix_s`. The fast
+  forward's note, when there is one, in a brown band.
+- Where the session is: the trial, the leaf and its row, the template, the
+  state, the frame and the time; then the last trial's outcome, response
+  and rt.
+- The display, then the choice strip, then four sections: Settings
+  (collapsed at first), Roles not driven (only when there are some),
+  Outputs and Data set.
+
+**The display.**
+- Fit: the scale `s` is the largest that fits the room the details leave,
+  at most 1. 1:1: `s` = 1 in a child window with scroll bars. The size in
+  points is `W x s / io.DisplayFramebufferScale`, at a position snapped to a
+  whole framebuffer px.
+- The texture is drawn with `ImDrawList::AddImage()`, not
+  `ImGui::Image()`: a white tint and no style alpha, so ImGui's blend does
+  not mix the device codes with the background. The rows are bottom up: uv
+  (0, 1) at the top-left corner.
+- At 1:1, `platform_io.DrawCallback_SetSamplerNearest` before the image and
+  `DrawCallback_SetSamplerLinear` after it (ImGui 1.93; the GL backend sets
+  them). The pane makes no GL call. At Fit, no callback: ImGui's own linear
+  sampler. Scaled, the pane says "Scaled: fine patterns alias; use 1:1".
+- `UiPlatform.gl_caps` NULL (the headless tests): a gray box at the
+  display's aspect, with "No image: the session draws with no GL." The
+  cursor and the click work on the box as on an image. With caps and no
+  texture yet: a dark box, "No frame yet."
+
+**Input.**
+- The cursor over the display goes to `dsg_preview_pointer()` in
+  participant px from the top-left corner: `(mouse - corner) x W / width
+  in points`. Only a change is sent, so a still cursor over a paused
+  display gives no input. Leaving the display sends `inside` false once.
+- A press on the display claims the keyboard (`dsg_preview_set_keyboard()`)
+  and draws an amber frame around it. Escape gives it back (in
+  `dsg_preview_key()`), and so does a click outside the pane: the pane
+  gives it back when its window and its children lose ImGui's focus.
+- A choice button sends `dsg_preview_choice(i, true)` when pressed and
+  `false` when released, so a hold is a hold. Its label is the choice's
+  name through Skribidi.
+
+**Settings.** Display (px), Rate (Hz), Seed, Participant, Its rt (s), the
+trial (the pin: "Any: from the start", or a leaf with its template, and a
+row when the leaf has a table), and the session fields that the check's
+needs name (`DSG_FROM_RUN`, `PL_NEED_FIELD`), empty for the check's
+stand-in. A field takes effect when the person leaves it
+(`IsItemDeactivatedAfterEdit()`), so typing does not restart the session
+at each key. The bounds are the view file's (`preview_part.c`): sides 1 to
+16,384 px, 1 to 1,000 Hz, rt over 0 and at most 60 s. A participant other
+than `correct`, `silent` or `p=` and a probability from 0 to 1 is not taken,
+and the status line says what to type.
+
+**Outputs and the data set.** Outputs: a table of the codes sent, oldest
+first (time in seconds, role, code), that keeps the newest in view unless
+the person scrolled up. Data set: the run's folder; "Open trials.csv"
+(`ui_open_file()`; no view opens a file yet, so the status line names the
+folder) and "Copy path".
+
+**User text.** Leaf, template, state, response, role and choice names, the
+issue's text and the folder go through Skribidi (`skt_layout()`), from the
+shared layout cache. Each also goes to ImGui's log (`ImGui::LogText()`, a
+no-op while the log is off), so a test reads them as ImGui's own text.
+
+**The test double.** `tests/designer/preview_double.c` defines every call
+of `preview.h`. It is in the sources of `test_designer_ui` and
+`test_designer_te`, so the linker does not take `preview.c`'s object from
+`ysp_designer_core`. Off (the default), it acts as S's stub, so the other
+tests see no change. On (`pvd_enable()`), it posts real session jobs to the
+worker after a 300 ms settle and an accepted check of the current
+revision, gets them back through `ui.cpp`'s take and adopt, attaches at the
+next tick, and steps a frame grid at the rate and speed, at most 16 steps a
+tick. A key or a choice ends the trial with that response; a trial with
+none ends after 2 s. The test scripts the choices, the roles not driven,
+the leaves, the output role, a texture name, an end and a run-time refusal.
+`DSG_PREVIEW_DOUBLE` 0 compiles it to nothing.
+
+**After A merges.** `test_designer_te` must run on A's `preview.c`: take
+`preview_double.c` out of its sources and define `DSG_PREVIEW_DOUBLE` 0 at
+the top of `te_preview.cpp`. Then re-run all five `preview/*` tests:
+`key_space` (with A it also reads the row from the run's `trials.csv`),
+`pause`, `edit_restart`, `choice` and `stale`. They are written to
+`preview.h`'s contract: each waits for the response window
+(`DSG_PV_PHASE_RESPONSE`) before it answers, and detects a restart by a
+new data set folder. `test_designer_ui` parts 9 and 10 keep the double:
+they need an end, a run-time refusal and a texture with fake GL caps on
+demand.
+
+**Tests** (Linux desktop, i5-14500, Debian 12, gcc 12.2):
+- `test_designer_ui` (now 113 checks). Part 9, no GL caps: no session job
+  before the settle and one after it; the session runs; the display is a
+  gray box and the texture is never drawn; the banner at the session's
+  rate (75 Hz); the roles not driven, each with why; the choice strip; the
+  outputs' code and role after a choice; the data set's folder; `animating`
+  while running, not while paused, not while the pane is hidden (the
+  preview pauses then), and again after Run; no frame steps while paused; a
+  text that does not parse keeps the session (no new adoption) and shows
+  "Shows the definition as of HH:MM:SS; the text has N errors."; Ctrl+Z
+  gives a new session after the settle; the end and a run-time refusal say
+  so. Part 10, `ui_init()` again with a fake caps pointer: at 1:1 the image
+  is 800 x 600 px at a whole px, uv (0, 1) at the top-left corner, the
+  nearest callback just before it and the linear one just after it; the
+  cursor at (100, 50) px gives (100, 50), once, and leaving gives `inside`
+  false; at Fit, smaller at the same aspect, no sampler callback, the alias
+  note, and the middle gives (400, 300) within a px.
+- `test_designer_te`, `preview/*`, 5 tests on the double (list above), and
+  32 of 32 in all.
+- ctest from the Release build tree, examples and the Test Engine on,
+  `DISPLAY` unset: 141 of 141. The Release build gives no compiler
+  warning; B's four files give none with `-Wconversion -Wsign-conversion`
+  either, but two `snprintf()` truncation notes in the double.
+- ASan with UBSan (gcc 12, Debug, built and run under `setarch -R`,
+  `halt_on_error`): the eleven designer tests, no report
+  (`test_designer_te` with leak checks off, as in step 4).
+- With `DSG_PREVIEW_DOUBLE` 0, the tests link S's stub: `test_designer_ui`
+  passes its 66 checks of parts 1 to 8, and the five `preview/*` tests
+  fail, as they must with no session.
+
+**Hand mutants** (each reverted; each fails its test):
+
+| Mutant | Fails |
+|---|---|
+| b-01: the texture drawn with no GL caps | part 9: no GL caps, the texture is not drawn; a gray box in its place |
+| b-02: no nearest sampler at 1:1 | part 10: the nearest sampler before the image |
+| b-03: rows not flipped (uv 0 to 1) | part 10: the top-left corner's uv is (0, 1) |
+| b-04: the sampler callbacks at Fit too | part 10: Fit, no sampler change |
+| b-05: the cursor not scaled to participant px | part 10: Fit, the middle is (400, 300) px |
+| b-06: a still cursor sent each frame | part 10: a still cursor sends nothing more |
+| b-07: leaving the display not sent | part 10: the cursor left the display |
+| b-08: no faithful banner | part 9: the banner, at the session's rate |
+| b-09: no stale banner | part 9: the stale banner; `preview/stale` |
+| b-10: the roles not driven not listed | part 9: the roles not driven are listed |
+| b-11: no `animating` hook | part 9: running, the view animates; `preview/pause` |
+| b-12: Pause runs | `preview/pause` |
+| b-13: a press on the display claims no keyboard | `preview/key_space` |
+| b-14: the keyboard kept when the pane loses the focus | `preview/key_space` |
+| b-15: a choice button sends the next choice | `preview/choice` |
+| b-16: the outputs not listed | part 9: the outputs list the code with its role |
+| b-17: Step runs | `preview/pause` |
+| b-18: the banner at a fixed 60 Hz | part 9: the banner, at the session's rate |
+| b-19: no gray box headless | part 9: a gray box in its place |
+
+**Not done.**
+- The window was not opened: the pane, the sampler callbacks and the key
+  hook were not seen on a display, and no person used them. Part D's GL
+  test reads the bytes.
+- The pane's own cost per frame is not measured (part D measures the
+  whole UI frame).
+- A's real core was not linked: the five `preview/*` tests must run again
+  after A merges.
+- MSVC, clang and macOS were not compiled. Locals that a call fills are
+  initialized, and the narrowing conversions are cast.
+
 ## First version
 
 In:
