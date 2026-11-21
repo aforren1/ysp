@@ -85,9 +85,13 @@ int __wrap_pl_sim_frame(pl_player* p, bool draw) {
 #define WRAPPED 0
 #define TICK_IN() ((void)0)
 #define TICK_OUT() ((void)0)
-static int attach_hold, attach_calls, count_frames, n_frames, n_draws;
+static int attach_calls, n_frames, n_draws;
+/* only the wraps read these; volatile keeps clang's
+ * -Wunused-but-set-global quiet about the parts' writes */
+static volatile int attach_hold, count_frames;
 static int64_t attach_budget;
 static bool last_draw;
+static long long tick_heap;   /* part_heap skips at run time without --wrap */
 #endif
 
 /* --- projects ---------------------------------------------------------------------- */
@@ -671,6 +675,8 @@ static void part_attach(U* u, const char* folder) {
     CHECK(where(u).frame == 0, "attach: the new session stepped in its attach frame (%lld)", (long long)where(u).frame);
     frame(u);
     CHECK(where(u).frame >= 1, "attach: the new session did not step after its attach");
+    /* 5 + 2 held calls in all, and the one that attached */
+    CHECK(attach_calls >= 8, "attach: %d calls to pl_sim_attach()", attach_calls);
     attach_hold = 0;
 }
 
