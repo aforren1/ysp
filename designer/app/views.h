@@ -1,18 +1,27 @@
 // views.h - the views of the designer's window and what they share
-// (docs/designer.md, "Plan of step 4"). ui.cpp owns the window, the
-// toolbar, the text view, the issues and the document; each other view is
-// one UiView in a file of its own (view_chart.cpp, view_tables.cpp,
-// view_panels.cpp), listed once in views.cpp. A view edits only through the
-// document (designer/core/doc.h) and keeps its own state in its part of the
-// view file (dsg_view_part_get/set, under its id).
+// (docs/designer.md, "Plan of step 4" and "Plan of step 5"). ui.cpp owns the
+// window, the toolbar, the text view, the issues, the document and the
+// preview; each other view is one UiView in a file of its own
+// (view_chart.cpp, view_tables.cpp, view_panels.cpp, view_preview.cpp),
+// listed once in views.cpp. A view edits only through the document
+// (designer/core/doc.h) and keeps its own state in its part of the view file
+// (dsg_view_part_get/set, under its id). Frozen during step 5 (part S).
 #pragma once
 #include <stddef.h>
+#include <stdint.h>
 #include "dsg.h"
 #include "doc.h"
+#include "preview.h"
 
 enum UiSlot {
     UI_SLOT_MAIN = 0,   // the main area: one of these shows, by the switch
-    UI_SLOT_SIDE = 1    // the side column: always shown (the panels)
+    UI_SLOT_SIDE = 1,   // the side column: always shown (the panels)
+    // Step 5: a pane at the right of the main area, beside whichever main
+    // view shows (so the chart and the preview show at once). A toolbar
+    // check box shows or hides it; the view file's part "preview" keeps
+    // that ("open"). Its views stack in it, each a child window named by
+    // its label ("//##designer/Preview").
+    UI_SLOT_AUX = 2
 };
 
 struct UiView {
@@ -37,6 +46,10 @@ struct UiView {
     // ui_jump_to_issue() takes the first view's answer before the issue's
     // path in the definition, and reveals it as above.
     bool (*issue_sel)(int i, dsg_sel* out);
+    // Step 5: opens a file that is not in the project (the preview's
+    // trials.csv) read-only; false when the view cannot. ui_open_file()
+    // asks each view in turn.
+    bool (*open_file)(const char* path);
 };
 
 // The views, in the switch's order (views.cpp).
@@ -59,3 +72,26 @@ void ui_reveal(const dsg_sel* s);
 void ui_set_status(const char* fmt, ...);
 // The size of user text (Skribidi), px.
 float ui_text_size();
+
+// Step 5, the preview (preview.h). ui.cpp makes it, feeds it the check's
+// and the session jobs' results and ticks it once a frame before the views
+// draw; a view calls its controls and reads its state. Never NULL after
+// ui_init(). The view file's part "preview" is ui.cpp's: it reads the part
+// into dsg_preview_set() at an open and writes dsg_preview_get() with the
+// view file, so no view reads or writes that part.
+dsg_preview* ui_preview();
+// The GL context the sessions draw on (UiPlatform's): caps NULL headless.
+const dsg_preview_gl* ui_preview_gl();
+// The UI's clock this frame, ns: UiPlatform.now_ns, or ImGui's time when
+// the platform gives none (the tests, which set io.DeltaTime).
+int64_t ui_now_ns();
+// Where the shown session is (the chart's ring and Follow), or NULL when no
+// session shows. Each call reads it again; the strings stay valid until a
+// call that changes the preview (preview.h, "Pointers").
+const dsg_preview_where* ui_preview_where();
+// The AUX pane, as its toolbar check box shows and hides it.
+bool ui_aux_open();
+void ui_show_aux(bool open);
+// Opens a file outside the project read-only in the first view whose
+// open_file hook takes it, and shows that view; false when none does.
+bool ui_open_file(const char* path);

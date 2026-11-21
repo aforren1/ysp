@@ -845,6 +845,10 @@ void draw() {
         read_positions();
         mark_issues();
     }
+    // Step 5, part C: the ring on the running state and Follow read the
+    // preview's place here. STUB from part S: nothing is drawn yet.
+    const dsg_preview_where* running = ui_preview_where();
+    (void)running;
 
     dsg_chart_place sel = { -1, -1, -1 };
     const int sel_state = C->have_model ? selected_state(&sel) : -1;
@@ -878,5 +882,5 @@ void draw() {
 extern const UiView ui_view_chart = {
     "chart", "Chart", UI_SLOT_MAIN,
     init, shutdown, opened, closed, save_view,
-    draw, claims, reveal, nullptr, nullptr,
+    draw, claims, reveal, nullptr, nullptr, nullptr,
 };

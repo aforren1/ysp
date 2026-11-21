@@ -834,5 +834,5 @@ SkfField* view_tables_field() { return T ? T->field : nullptr; }
 extern const UiView ui_view_tables = {
     "tables", "Tables", UI_SLOT_MAIN,
     init, shutdown, opened, closed, save_view,
-    draw, claims, reveal, nullptr, issue_sel,
+    draw, claims, reveal, nullptr, issue_sel, nullptr,
 };

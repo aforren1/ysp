@@ -1,10 +1,10 @@
-// ui.cpp - the designer's window (docs/designer.md, steps 3 and 4): the
+// ui.cpp - the designer's window (docs/designer.md, steps 3 to 5): the
 // toolbar, the switch between the main views, the text view (a Skribidi
-// editor of the definition), the side column, the issues, open and save.
-// Every view edits one document (designer/core/doc.h): its bytes are the
-// truth, and one undo stack serves them all. The views other than the text
-// are in their own files (views.h). Everything that needs no ImGui is in
-// designer/core.
+// editor of the definition), the AUX pane (the preview), the side column,
+// the issues, open and save. Every view edits one document
+// (designer/core/doc.h): its bytes are the truth, and one undo stack serves
+// them all. The views other than the text are in their own files (views.h).
+// Everything that needs no ImGui is in designer/core.
 #include "ui.h"
 #include "views.h"
 #include "skf.h"
@@ -27,12 +27,20 @@ enum Pending { PENDING_NONE, PENDING_OPEN, PENDING_NEW, PENDING_QUIT };
 // The text view is a view like the others, kept here because the skeleton's
 // tests and the issues' jumps reach into it.
 const int kTextView = -1;
+// S->selected for the preview's issue, which is not in the check's report.
+const int kPreviewIssue = -2;
 
 struct State {
     UiPlatform plat = {};
     dsg_project proj = {};
     bool open = false;
     dsg_worker* worker = nullptr;    // the check thread (worker.c)
+    dsg_preview_gl gl = {};          // read by the check thread: fixed at ui_init()
+    dsg_preview* pv = nullptr;       // the preview (preview.h)
+    bool aux_open = false;           // the AUX pane shows
+    bool window_shown = true;
+    int64_t now = 0;                 // the UI's clock this frame
+    dsg_preview_where where = {};    // ui_preview_where()'s
     dsg_doc* doc = nullptr;
     SkfField* editor = nullptr;
     ImVector<char> scratch;          // the editor's text, read after a change
@@ -146,6 +154,9 @@ void write_view() {
     const UiView* const* v = views(&nv);
     for (int i = 0; i < nv; i++)
         if (v[i]->save_view) v[i]->save_view(&S->proj.view);
+    dsg_preview_settings ps = {};
+    dsg_preview_get(S->pv, &ps);
+    if (dsg_preview_part_write(&S->proj.view, &ps, S->aux_open)) set_status("The preview's view state was not kept: the view file is full.");
     // a shallow copy: the parts stay the project's, the ImGui text is ImGui's
     dsg_view w = S->proj.view;
     caret_line_col(&w.caret_line, &w.caret_column);
@@ -167,6 +178,8 @@ void close_project() {
         write_view();
         for (int i = 0; i < nv; i++)
             if (v[i]->closed) v[i]->closed();
+        // its sessions go back to the check thread to close
+        dsg_preview_close(S->pv);
         dsg_project_close(&S->proj);
     }
     S->open = false;
@@ -202,6 +215,13 @@ void open_now(const char* path) {
         if (v[i]->slot == UI_SLOT_MAIN && strcmp(v[i]->id, S->proj.view.main_view) == 0) S->main_view = i;
         if (v[i]->opened) v[i]->opened(&S->proj.view);
     }
+    // After the document's reset: its revision now is the preview's floor.
+    dsg_preview_open(S->pv, &S->proj);
+    dsg_preview_settings ps = {};
+    bool aux = false;
+    dsg_preview_part_read(&S->proj.view, &ps, &aux);
+    dsg_preview_set(S->pv, &ps);
+    S->aux_open = aux;
     if (S->proj.view.selection[0]) {
         dsg_sel s;
         dsg_sel_def(&s, S->proj.view.selection);
@@ -299,10 +319,21 @@ void take_check() {
     S->checks++;
     map_issues();
     if (S->selected >= S->report.n_issues) S->selected = -1;
+    dsg_preview_checked(S->pv, res, S->now);
 }
 
-const char* sev_name(int s) {
-    switch (s) {
+// A session job's outcome; the preview owns it from here, also when no
+// project is open (it hands it back to the check thread).
+void take_session() {
+    dsg_session_result r = {};
+    if (S->worker && dsg_worker_take_session(S->worker, &r)) dsg_preview_adopt(S->pv, &r, S->now);
+}
+
+bool aux_shown() { return S->open && S->aux_open && S->window_shown; }
+
+const char* sev_name(const dsg_issue* is) {
+    if (is->from == DSG_FROM_PREVIEW) return "preview";
+    switch (is->severity) {
     case DSG_SEV_ERROR: return "error";
     case DSG_SEV_WARNING: return "warning";
     case DSG_SEV_NEED: return "run needs";
@@ -366,6 +397,18 @@ void toolbar() {
     if (ImGui::Button("Redo")) redo();
     ImGui::SetItemTooltip("%s", dsg_doc_redo_label(S->doc));
     ImGui::EndDisabled();
+    // the AUX pane; its own ID scope, as the pane's child has the label
+    int nv;
+    const UiView* const* v = views(&nv);
+    for (int i = 0; i < nv; i++) {
+        if (v[i]->slot != UI_SLOT_AUX) continue;
+        ImGui::SameLine();
+        ImGui::PushID("aux");
+        ImGui::Checkbox(v[i]->label, &S->aux_open);
+        ImGui::SetItemTooltip("Show the %s pane beside the main view", v[i]->label);
+        ImGui::PopID();
+        break;
+    }
     ImGui::SameLine();
     ImGui::TextUnformatted("Path");
     ImGui::SameLine();
@@ -436,6 +479,55 @@ void text_reveal(const dsg_sel* s) {
     S->last_caret = skf_caret(S->editor);
 }
 
+// One row of the issues panel; true when it was clicked.
+bool issue_row(const dsg_issue* is, bool selected) {
+    const float row = kTextSize * 1.5f;
+    char place[48];
+    if (is->place.line) snprintf(place, sizeof place, "%u:%u", is->place.line, is->place.column);
+    else snprintf(place, sizeof place, "-");
+    const ImVec2 at = ImGui::GetCursorScreenPos();
+    const bool clicked = ImGui::Selectable("##issue", selected, 0, ImVec2(0, row));
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddText(ImVec2(at.x, at.y + 2), IM_COL32(170, 170, 170, 255), place);
+    dl->AddText(ImVec2(at.x + 70, at.y + 2), sev_color(is->severity), sev_name(is));
+    // The message names the definition's own things, which can be in any
+    // script, so it is laid out by Skribidi.
+    const skb_layout_t* lay = skt_layout(is->message, kTextSize);
+    if (lay) {
+        dl->PushClipRect(ImVec2(at.x + 150, at.y), ImVec2(at.x + ImGui::GetContentRegionAvail().x + 150, at.y + row), true);
+        skt_draw_layout(dl, lay, at.x + 150, at.y + 2, 1.0f, IM_COL32(230, 230, 235, 255));
+        dl->PopClipRect();
+    }
+    return clicked;
+}
+
+// The caret to an issue's place. The place is in the text that the check
+// (or the session) read: the editor's text, or an older one while a newer
+// check runs; dsg_codepoints_before() clamps an offset past the end.
+void caret_to_issue(const dsg_issue* is) {
+    if (!is->place.line) return;
+    size_t n;
+    const char* t = def_bytes(&n);
+    skf_set_caret(S->editor, (int)dsg_codepoints_before(t, n, is->place.offset));
+    S->last_caret = skf_caret(S->editor);
+}
+
+// As ui_jump_to_issue() for the preview's issue: it names the definition's
+// object, as a tier 2 refusal does, so its path comes from its place.
+void jump_to_preview_issue() {
+    dsg_issue is = {};
+    if (!dsg_preview_issue(S->pv, &is)) return;
+    S->selected = kPreviewIssue;
+    const yjs_value* root = dsg_doc_root(S->doc);
+    char p[DSG_SEL_PATH] = "";
+    if (root && is.place.line && dsg_path_at(root, is.place.offset, p, sizeof p) == 0 && p[0]) {
+        dsg_sel s = {};
+        dsg_sel_def(&s, p);
+        ui_reveal(&s);
+    }
+    caret_to_issue(&is);
+}
+
 void issues_panel() {
     if (!S->open) return;
     if (!S->have_report) {
@@ -455,26 +547,17 @@ void issues_panel() {
                     r->have_pack ? "" : " No check pack yet: the player's own checks wait for one.");
     ImGui::Separator();
     ImGui::BeginChild("##issue_list");
-    const float row = kTextSize * 1.5f;
     for (int i = 0; i < r->n_issues; i++) {
-        const dsg_issue* is = &r->issues[i];
         ImGui::PushID(i);
-        char place[48];
-        if (is->place.line) snprintf(place, sizeof place, "%u:%u", is->place.line, is->place.column);
-        else snprintf(place, sizeof place, "-");
-        const ImVec2 at = ImGui::GetCursorScreenPos();
-        if (ImGui::Selectable("##issue", S->selected == i, 0, ImVec2(0, row))) ui_jump_to_issue(i);
-        ImDrawList* dl = ImGui::GetWindowDrawList();
-        dl->AddText(ImVec2(at.x, at.y + 2), IM_COL32(170, 170, 170, 255), place);
-        dl->AddText(ImVec2(at.x + 70, at.y + 2), sev_color(is->severity), sev_name(is->severity));
-        // The message names the definition's own things, which can be in any
-        // script, so it is laid out by Skribidi.
-        const skb_layout_t* lay = skt_layout(is->message, kTextSize);
-        if (lay) {
-            dl->PushClipRect(ImVec2(at.x + 150, at.y), ImVec2(at.x + ImGui::GetContentRegionAvail().x + 150, at.y + row), true);
-            skt_draw_layout(dl, lay, at.x + 150, at.y + 2, 1.0f, IM_COL32(230, 230, 235, 255));
-            dl->PopClipRect();
-        }
+        if (issue_row(&r->issues[i], S->selected == i)) ui_jump_to_issue(i);
+        ImGui::PopID();
+    }
+    // Read here, not kept from the frame's start: a view's control may
+    // have changed it since (preview.h, "Pointers").
+    dsg_issue pis = {};
+    if (dsg_preview_issue(S->pv, &pis)) {
+        ImGui::PushID("preview");
+        if (issue_row(&pis, S->selected == kPreviewIssue)) jump_to_preview_issue();
         ImGui::PopID();
     }
     ImGui::EndChild();
@@ -515,16 +598,30 @@ bool ui_init(const char* font_dir, const UiPlatform* platform, char* err, size_t
     if (!skt_init(font_dir, err, cap)) return false;
     // After skt_init(): Skribidi numbers its font collections with a plain
     // static counter, and the pack tool on the check thread makes them too.
+    // The preview's session ops read S->gl on the check thread, so it is
+    // filled before the thread starts and never written after.
+    if (platform) {
+        S->gl.caps = platform->gl_caps;
+        S->gl.share = platform->gl_share;
+        S->gl.proc = platform->gl_proc;
+        S->gl.proc_ctx = platform->gl_proc_ctx;
+    }
     dsg_worker_desc wd = {};
     if (platform) {
         wd.wake = platform->wake;
         wd.ctx = platform->ctx;
     }
+    dsg_preview_session_ops(&S->gl, &wd.session);
     S->worker = dsg_worker_start(&wd, err, cap);
     if (!S->worker) return false;
     S->doc = dsg_doc_new();
     if (!S->doc || dsg_doc_reset(S->doc, "", "", 0)) {
         snprintf(err, cap, "out of memory for the document");
+        return false;
+    }
+    S->pv = dsg_preview_new(&S->gl, S->worker, S->doc);
+    if (!S->pv) {
+        snprintf(err, cap, "out of memory for the preview");
         return false;
     }
     S->editor = skf_create(kTextSize, true);
@@ -551,6 +648,9 @@ void ui_shutdown() {
     const UiView* const* v = views(&nv);
     for (int i = 0; i < nv; i++)
         if (v[i]->shutdown) v[i]->shutdown();
+    // before the worker stops: the preview hands its sessions to it
+    dsg_preview_free(S->pv);
+    S->pv = nullptr;
     skf_destroy(S->editor);
     dsg_worker_stop(S->worker);
     dsg_doc_free(S->doc);
@@ -639,20 +739,19 @@ void ui_jump_to_issue(int i) {
         have = true;
     }
     if (have) ui_reveal(&s);
-    if (!is->place.line) return;
-    // The place is in the text the check read. That is the editor's text,
-    // or an older one while a newer check runs; dsg_codepoints_before()
-    // clamps an offset past the end.
-    size_t n;
-    const char* t = def_bytes(&n);
-    skf_set_caret(S->editor, (int)dsg_codepoints_before(t, n, is->place.offset));
-    S->last_caret = skf_caret(S->editor);
+    caret_to_issue(is);
 }
 
 void ui_frame() {
+    S->now = S->plat.now_ns ? S->plat.now_ns(S->plat.ctx) : (int64_t)(ImGui::GetTime() * 1e9);
     // A result that landed since the last frame shows in this one: its
     // issues, before the views mark them.
     take_check();
+    take_session();
+    // A hidden pane cannot hold the keyboard.
+    if (!aux_shown() && dsg_preview_keyboard(S->pv)) dsg_preview_set_keyboard(S->pv, false);
+    // Before the views draw: they show this frame's session.
+    dsg_preview_tick(S->pv, S->now, aux_shown());
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(vp->WorkPos);
     ImGui::SetNextWindowSize(vp->WorkSize);
@@ -671,10 +770,19 @@ void ui_frame() {
     int nv;
     const UiView* const* v = views(&nv);
     bool side = false;
-    for (int i = 0; i < nv; i++) side = side || v[i]->slot == UI_SLOT_SIDE;
+    int n_aux = 0;
+    for (int i = 0; i < nv; i++) {
+        side = side || v[i]->slot == UI_SLOT_SIDE;
+        n_aux += v[i]->slot == UI_SLOT_AUX;
+    }
+    const bool aux = n_aux > 0 && S->aux_open;
+    const float sp = ImGui::GetStyle().ItemSpacing.x;
+    const float avail_w = ImGui::GetContentRegionAvail().x;
     const float issues_h = ImMax(120.0f, ImGui::GetContentRegionAvail().y * 0.3f);
-    const float side_w = side ? ImMax(280.0f, ImGui::GetContentRegionAvail().x * 0.3f) : 0.0f;
-    const float main_w = side ? -(side_w + ImGui::GetStyle().ItemSpacing.x) : 0.0f;
+    const float side_w = side ? ImMax(280.0f, avail_w * 0.3f) : 0.0f;
+    // the preview at Fit wants room; the main view keeps at least a third
+    const float aux_w = aux ? ImMax(320.0f, (avail_w - side_w) * 0.45f) : 0.0f;
+    const float main_w = -((side ? side_w + sp : 0.0f) + (aux ? aux_w + sp : 0.0f));
 
     // The text view keeps the skeleton's child name, so its tests' paths hold.
     if (S->main_view == kTextView) {
@@ -686,6 +794,20 @@ void ui_frame() {
         else ImGui::TextUnformatted("No project is open.");
     }
     ImGui::EndChild();
+    if (aux) {
+        // AUX views are children of the main window too: "//##designer/LABEL".
+        ImGui::SameLine();
+        ImGui::BeginGroup();
+        const float h = (ImGui::GetContentRegionAvail().y - issues_h - ImGui::GetStyle().ItemSpacing.y * (float)(n_aux - 1)) / (float)n_aux;
+        for (int i = 0; i < nv; i++) {
+            if (v[i]->slot != UI_SLOT_AUX) continue;
+            ImGui::BeginChild(v[i]->label, ImVec2(aux_w, ImMax(h, 40.0f)), ImGuiChildFlags_Borders);
+            if (S->open) v[i]->draw();
+            else ImGui::TextUnformatted("No project is open.");
+            ImGui::EndChild();
+        }
+        ImGui::EndGroup();
+    }
     if (side) {
         // Side views are children of the main window too, so a test finds
         // them as "//##designer/LABEL".
@@ -720,7 +842,7 @@ void ui_frame() {
 // A check that runs on the thread is not work for a frame: its wake-up
 // (UiPlatform.wake) brings the frame that takes the result.
 bool ui_work_pending() {
-    return S && (S->check_due || S->restore_scroll >= 0 || S->ask_unsaved ||
+    return S && (S->check_due || S->restore_scroll >= 0 || S->ask_unsaved || (S->pv && dsg_preview_work(S->pv)) ||
                  (S->open && dsg_doc_revision(S->doc) != S->posted) || dsg_doc_rev(S->doc, DSG_BUF_DEF) != S->text_rev ||
                  (S->worker && !dsg_worker_threaded(S->worker) && S->open && S->checked != S->posted));
 }
@@ -729,9 +851,24 @@ bool ui_animating() {
     if (!S) return false;
     int nv;
     const UiView* const* v = views(&nv);
-    for (int i = 0; i < nv; i++)
+    for (int i = 0; i < nv; i++) {
+        // a hidden pane does not animate (the preview pauses there)
+        if (v[i]->slot == UI_SLOT_AUX && !aux_shown()) continue;
         if (v[i]->animating && v[i]->animating()) return true;
+    }
     return false;
+}
+
+bool ui_preview_key(int scancode, bool down, bool repeat) {
+    if (!S || !S->pv) return false;
+    if (repeat) return dsg_preview_keyboard(S->pv);
+    return dsg_preview_key(S->pv, scancode, down);
+}
+
+bool ui_preview_has_keyboard() { return S && S->pv && dsg_preview_keyboard(S->pv); }
+
+void ui_set_window_shown(bool shown) {
+    if (S) S->window_shown = shown;
 }
 
 const dsg_project* ui_project() { return S && S->open ? &S->proj : nullptr; }
@@ -793,7 +930,7 @@ void ui_reveal(const dsg_sel* s) {
     S->main_view = best;
     if (best == kTextView) text_reveal(s);
     for (int i = 0; i < nv; i++)
-        if ((i == best || v[i]->slot == UI_SLOT_SIDE) && v[i]->reveal) v[i]->reveal(s);
+        if ((i == best || v[i]->slot == UI_SLOT_SIDE || (v[i]->slot == UI_SLOT_AUX && S->aux_open)) && v[i]->reveal) v[i]->reveal(s);
 }
 
 void ui_set_status(const char* fmt, ...) {
@@ -804,3 +941,30 @@ void ui_set_status(const char* fmt, ...) {
 }
 
 float ui_text_size() { return kTextSize; }
+
+dsg_preview* ui_preview() { return S->pv; }
+
+const dsg_preview_gl* ui_preview_gl() { return &S->gl; }
+
+int64_t ui_now_ns() { return S->now; }
+
+const dsg_preview_where* ui_preview_where() {
+    if (!S || !S->pv || !dsg_preview_where_now(S->pv, &S->where)) return nullptr;
+    return &S->where;
+}
+
+bool ui_aux_open() { return S->aux_open; }
+
+void ui_show_aux(bool open) { S->aux_open = open; }
+
+bool ui_open_file(const char* path) {
+    int nv;
+    const UiView* const* v = views(&nv);
+    for (int i = 0; i < nv; i++) {
+        if (!v[i]->open_file || !v[i]->open_file(path)) continue;
+        if (v[i]->slot == UI_SLOT_MAIN) S->main_view = i;
+        else if (v[i]->slot == UI_SLOT_AUX) S->aux_open = true;
+        return true;
+    }
+    return false;
+}

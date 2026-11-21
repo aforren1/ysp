@@ -848,5 +848,5 @@ void draw() {
 extern const UiView ui_view_panels = {
     "panels", "Properties", UI_SLOT_SIDE,
     init, shutdown, opened, closed, save_view,
-    draw, nullptr, reveal, nullptr, nullptr,
+    draw, nullptr, reveal, nullptr, nullptr, nullptr,
 };

@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "dsg.h"
+#include "preview.h"
 
 struct SkfField;
 
@@ -20,6 +21,19 @@ struct UiPlatform {
     // event that wakes the loop (the loop then draws the frame that takes
     // it). NULL: none (the tests wait with ui_wait_checks()).
     void (*wake)(void* ctx);
+    // Step 5. The UI's clock, ns (main.cpp: SDL_GetTicksNS()); NULL: ImGui's
+    // time, which the tests drive with io.DeltaTime.
+    int64_t (*now_ns)(void* ctx);
+    // The GL gfx that main.cpp opened on the window's context before
+    // ui_init() (ygfx_gl_caps_get() of it, and the gfx itself), and the GL
+    // loader: the preview's sessions draw with them (preview.h,
+    // dsg_preview_gl). Kept by the caller, unchanged, until ui_shutdown()
+    // returns. gl_caps NULL (the headless tests): the sessions draw on gfx's
+    // null backend and the pane shows no image.
+    const struct ygfx_gl_caps* gl_caps;
+    struct ygfx_gfx* gl_share;
+    dsg_gl_fn (*gl_proc)(void* ctx, const char* name);
+    void* gl_proc_ctx;
 };
 
 bool ui_init(const char* font_dir, const UiPlatform* platform, char* err, size_t cap);
@@ -41,6 +55,17 @@ void ui_frame();
 bool ui_work_pending();
 // A view animates: draw every frame (the redraw rule).
 bool ui_animating();
+
+// Step 5, the preview's input. main.cpp gives each key event's SDL
+// scancode, before ImGui sees it; true: the preview took it, so ImGui does
+// not get it. Repeats are taken while the preview has the keyboard and are
+// not passed to the session.
+bool ui_preview_key(int scancode, bool down, bool repeat);
+// The preview has the keyboard: main.cpp keeps text input from ImGui too.
+bool ui_preview_has_keyboard();
+// The window is shown (not minimized or hidden); while false the preview
+// pauses.
+void ui_set_window_shown(bool shown);
 
 // For the test and the platform layer.
 const dsg_project* ui_project();      // NULL when none is open

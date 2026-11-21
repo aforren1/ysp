@@ -18,6 +18,13 @@
 //   7. The document (step 4): a structured edit shows in the text view; each
 //      main view draws; Ctrl+Z with the chart shown takes the edit back, and
 //      Ctrl+Shift+Z puts it in again.
+//   8. The AUX pane (step 5, part S): hidden at first; shown, its view's
+//      child draws beside the main view and the side column; hidden, it does
+//      not. Its state and the preview's settings round-trip through the
+//      view file's part "preview"; a project without the part gets the
+//      defaults, and so does a part with values out of range. The keyboard:
+//      no key is taken until the pane claims it, Escape gives it back, and
+//      hiding the pane drops the claim.
 // Exit 0 on pass, 1 on a failure.
 #include "ui.h"
 #include "views.h"
@@ -110,6 +117,35 @@ static bool project(const char* work, const char* name, char* out, size_t cap) {
     for (const char* f : files)
         if (dsg_join(a, sizeof a, src, f) || dsg_join(b, sizeof b, out, f) || !copy_file(a, b)) return false;
     if (dsg_join(b, sizeof b, out, DSG_VIEW_FILE) == 0) remove(b);
+    return true;
+}
+
+// The child window that ui.cpp makes for a view, by its label, if it drew
+// in the last frame.
+static bool child_drawn(const char* label) {
+    ImGuiContext& g = *ImGui::GetCurrentContext();
+    ImGuiWindow* top = ImGui::FindWindowByName("##designer");
+    if (!top) return false;
+    const ImGuiID id = ImHashStr(label, 0, top->ID);
+    for (ImGuiWindow* w : g.Windows)
+        if (w->ParentWindow == top && w->ChildId == id) return w->Active;
+    return false;
+}
+
+static bool same_settings(const dsg_preview_settings& a, const dsg_preview_settings& b) {
+    const dsg_session_settings& x = a.session;
+    const dsg_session_settings& y = b.session;
+    if (x.width != y.width || x.height != y.height || x.hz != y.hz || x.seed != y.seed || strcmp(x.participant, y.participant) != 0 ||
+        x.rt_s != y.rt_s || strcmp(x.pin_leaf, y.pin_leaf) != 0 || x.pin_row != y.pin_row || x.n_fields != y.n_fields ||
+        a.speed != b.speed || a.scale != b.scale)
+        return false;
+    for (int i = 0; i < x.n_fields; i++) {
+        // the file keeps fields sorted by name, so look each one up
+        bool found = false;
+        for (int j = 0; j < y.n_fields && !found; j++)
+            found = strcmp(x.fields[i].name, y.fields[j].name) == 0 && strcmp(x.fields[i].value, y.fields[j].value) == 0;
+        if (!found) return false;
+    }
     return true;
 }
 
@@ -266,6 +302,107 @@ int main(int argc, char** argv) {
     CHECK(strstr(t, "\"name\": \"views\"") != nullptr, "Ctrl+Shift+Z puts it in again");
     ui_show_view("text");
     settle();
+
+    // 8. the AUX pane and the view file's part "preview"
+    CHECK(!ui_aux_open() && !child_drawn("Preview"), "the preview pane is hidden at first");
+    CHECK(child_drawn("Definition") && child_drawn("Properties"), "the text view and the side column draw");
+    ui_show_aux(true);
+    settle();
+    CHECK(ui_aux_open() && child_drawn("Preview"), "shown, the pane draws");
+    CHECK(child_drawn("Definition") && child_drawn("Properties"), "beside the main view and the side column");
+    ui_show_view("chart");
+    settle();
+    CHECK(child_drawn("Chart") && child_drawn("Preview"), "and beside the chart");
+    ui_show_view("text");
+    ui_show_aux(false);
+    settle();
+    CHECK(!child_drawn("Preview") && child_drawn("Definition"), "hidden, it does not draw");
+
+    dsg_preview_settings ps = {}, got = {};
+    dsg_preview_settings_default(&ps);
+    dsg_preview_get(ui_preview(), &got);
+    CHECK(same_settings(ps, got), "a project with no part has the default settings");
+    ps.session.width = 800;
+    ps.session.height = 600;
+    ps.session.hz = 120;
+    ps.session.seed = 9223372036854775813ull;   // above INT64_MAX: kept as text
+    snprintf(ps.session.participant, sizeof ps.session.participant, "p=0.8");
+    ps.session.rt_s = 0.45;
+    snprintf(ps.session.pin_leaf, sizeof ps.session.pin_leaf, "/timeline/0");
+    ps.session.pin_row = 3;
+    ps.session.n_fields = 2;
+    snprintf(ps.session.fields[0].name, sizeof ps.session.fields[0].name, "subject");
+    snprintf(ps.session.fields[0].value, sizeof ps.session.fields[0].value, "s01");
+    snprintf(ps.session.fields[1].name, sizeof ps.session.fields[1].name, "age");
+    snprintf(ps.session.fields[1].value, sizeof ps.session.fields[1].value, "42");
+    ps.speed = 0.5;
+    ps.scale = DSG_PV_SCALE_1TO1;
+    dsg_preview_set(ui_preview(), &ps);
+    ui_show_aux(true);
+    settle();
+    CHECK(ui_save(), "saved with the pane open: '%s'", ui_status());
+    CHECK(dsg_view_read(dir, &v, err, sizeof err) == 0, "the view file reads: %s", err);
+    bool open = false;
+    dsg_preview_part_read(&v, &got, &open);
+    CHECK(open && same_settings(ps, got), "the view file's part holds the pane and the settings");
+    size_t pn = 0;
+    const char* part = dsg_view_part_get(&v, "preview", &pn);
+    CHECK(part && strstr(part, "\"seed\":9223372036854775813") && strstr(part, "\"scale\":\"1:1\""), "the part's JSON: %.*s", (int)pn,
+          part ? part : "");
+    dsg_view_free(&v);
+
+    // another project: no part, so the defaults
+    ui_open(dir2);
+    settle();
+    CHECK(ui_project() && strcmp(ui_project()->folder, dir2) == 0, "the other project opened");
+    dsg_preview_settings def = {};
+    dsg_preview_settings_default(&def);
+    dsg_preview_get(ui_preview(), &got);
+    CHECK(!ui_aux_open() && same_settings(def, got) && !child_drawn("Preview"), "the other project: pane hidden, defaults");
+    // and back: the pane and the settings as they were (saved first: the
+    // other project is version 1, shown migrated, so the open would ask)
+    CHECK(ui_save(), "the other project saved: '%s'", ui_status());
+    ui_open(dir);
+    settle();
+    dsg_preview_get(ui_preview(), &got);
+    CHECK(ui_aux_open() && same_settings(ps, got) && child_drawn("Preview"), "reopened: the pane shows, with the settings");
+
+    // a part written by hand with values out of range: each takes its default
+    {
+        dsg_view hv;
+        memset(&hv, 0, sizeof hv);
+        static const char bad[] = "{\"open\":1,\"display\":[0,600],\"hz\":5000,\"speed\":3,\"seed\":-4,\"participant\":7,"
+                                  "\"rt_s\":-1,\"pin\":{\"leaf\":5,\"row\":2},\"fields\":{\"a\":1},\"scale\":\"2:1\"}";
+        CHECK(dsg_view_part_set(&hv, "preview", bad, sizeof bad - 1) == 0, "a part by hand");
+        dsg_preview_part_read(&hv, &got, &open);
+        CHECK(!open && same_settings(def, got), "out of range: the defaults");
+        static const char junk[] = "{\"display\":[1024,768]";
+        dsg_view_part_set(&hv, "preview", nullptr, 0);
+        CHECK(dsg_view_part_set(&hv, "preview", junk, sizeof junk - 1) == -1, "the view file keeps no part that does not parse");
+        dsg_preview_part_read(&hv, &got, &open);
+        CHECK(!open && same_settings(def, got), "no part: the defaults");
+        // a row with no leaf is no pin: the file says "any"
+        dsg_preview_settings np = def;
+        np.session.pin_row = 4;
+        size_t hn = 0;
+        CHECK(dsg_preview_part_write(&hv, &np, false) == 0, "the part written");
+        const char* hj = dsg_view_part_get(&hv, "preview", &hn);
+        CHECK(hj && strstr(hj, "\"pin\":{\"leaf\":\"\",\"row\":-1}"), "a row with no leaf is written as any: %.*s", (int)hn, hj ? hj : "");
+        dsg_view_free(&hv);
+    }
+
+    // the keyboard: taken only while the pane claims it
+    CHECK(!ui_preview_key(4, true, false) && !ui_preview_has_keyboard(), "no claim: a key is the designer's");
+    dsg_preview_set_keyboard(ui_preview(), true);
+    CHECK(ui_preview_has_keyboard() && ui_preview_key(4, true, false) && ui_preview_key(4, true, true) && ui_preview_key(4, false, false),
+          "claimed: a key, its repeat and its release are the preview's");
+    CHECK(ui_preview_key(DSG_SCANCODE_ESCAPE, true, false) && !ui_preview_has_keyboard(), "Escape gives the keyboard back");
+    CHECK(!ui_preview_key(4, true, false), "and then a key is the designer's again");
+    dsg_preview_set_keyboard(ui_preview(), true);
+    ui_show_aux(false);
+    settle();
+    CHECK(!ui_preview_has_keyboard(), "hiding the pane drops the claim");
+    CHECK(ui_preview_where() == nullptr, "no session: nowhere");
 
     ui_shutdown();
     ImGui::DestroyContext();

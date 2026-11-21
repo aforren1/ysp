@@ -10,6 +10,8 @@
 #include "imgui_impl_sdl3.h"
 #include "imgui_internal.h"   // InputEventsQueue: see the loop
 
+#include "ysp/gfx.h"
+
 #include <SDL3/SDL.h>
 #include <GLES3/gl3.h>
 
@@ -29,8 +31,41 @@ struct App {
     Uint32 check_event = 0;    // a result of the check thread is ready
     dsg_redraw redraw = {};
     bool quit = false;
+    // The first gfx on the window's context (docs/designer.md, "Part S as
+    // built"): its caps let the check thread record a session's gfx, and the
+    // sessions take its programs (desc.share). Open from before ui_init()
+    // until after ui_shutdown().
+    ygfx_gfx gfx = {};
+    ygfx_gl_caps caps = {};
+    bool have_gfx = false;
 };
 App A;
+
+dsg_gl_fn gl_proc(void*, const char* name) { return (dsg_gl_fn)SDL_GL_GetProcAddress(name); }
+
+int64_t now_ns(void*) { return (int64_t)SDL_GetTicksNS(); }
+
+// Opens the first gfx; without it the preview's sessions draw on gfx's null
+// backend and the pane shows no image, as in the headless tests. 64 x 64 into
+// its own output texture: it never draws, so it never touches the window.
+void open_first_gfx(UiPlatform* plat) {
+    ygfx_desc d;
+    memset(&d, 0, sizeof d);
+    d.gl_proc = gl_proc;
+    d.width = 64;
+    d.height = 64;
+    d.output_texture = true;
+    if (ygfx_open(&A.gfx, &d) && ygfx_gl_caps_get(&A.gfx, &A.caps) == YGFX_OK) {
+        A.have_gfx = true;
+        plat->gl_caps = &A.caps;
+        plat->gl_share = &A.gfx;
+        plat->gl_proc = gl_proc;
+        plat->gl_proc_ctx = nullptr;
+    } else {
+        fprintf(stderr, "ysp_designer: no gfx on the window's GL context (%s): the preview shows no image\n", ygfx_error(&A.gfx));
+        ygfx_close(&A.gfx);
+    }
+}
 
 // SDL may call a dialog's callback on another thread, and the UI is not
 // thread safe: the answer goes through the event queue, which also wakes
@@ -72,6 +107,23 @@ void set_title(void*, const char* t) { SDL_SetWindowTitle(A.win, t); }
 void quit(void*) { A.quit = true; }
 
 void handle(const SDL_Event& e) {
+    // The preview's keys are physical (scancodes), as the player's choices
+    // are, so they come from SDL, not from ImGui's layout-mapped keys. A key
+    // down that the preview takes does not reach ImGui; a key up always
+    // does, so a key that ImGui saw go down (Ctrl before a click on the
+    // display) does not stay down there.
+    if ((e.type == SDL_EVENT_KEY_DOWN || e.type == SDL_EVENT_KEY_UP) &&
+        ui_preview_key((int)e.key.scancode, e.type == SDL_EVENT_KEY_DOWN, e.key.repeat) && e.type == SDL_EVENT_KEY_DOWN) {
+        dsg_redraw_event(&A.redraw);
+        return;
+    }
+    if (e.type == SDL_EVENT_TEXT_INPUT && ui_preview_has_keyboard()) {
+        dsg_redraw_event(&A.redraw);
+        return;
+    }
+    if (e.type == SDL_EVENT_WINDOW_MINIMIZED || e.type == SDL_EVENT_WINDOW_HIDDEN) ui_set_window_shown(false);
+    else if (e.type == SDL_EVENT_WINDOW_RESTORED || e.type == SDL_EVENT_WINDOW_SHOWN || e.type == SDL_EVENT_WINDOW_MAXIMIZED)
+        ui_set_window_shown(true);
     if (e.type == SDL_EVENT_QUIT || (e.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED && e.window.windowID == SDL_GetWindowID(A.win))) {
         if (ui_request_quit()) A.quit = true;
     } else if (e.type == SDL_EVENT_TEXT_EDITING) {
@@ -98,6 +150,10 @@ void draw_frame() {
     skt_frame_end();   // new glyphs, before ImGui::Render() collects the textures
     ImGui::Render();
     ImGuiIO& io = ImGui::GetIO();
+    // The preview's gfx binds its texture's framebuffer while it draws, in
+    // ui_frame(); gfx 0.23.0 binds 0 again at its end, and this makes sure
+    // that ImGui never draws into the preview's texture.
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glViewport(0, 0, (int)(io.DisplaySize.x * io.DisplayFramebufferScale.x), (int)(io.DisplaySize.y * io.DisplayFramebufferScale.y));
     glClearColor(0.12f, 0.12f, 0.12f, 1);
     glClear(GL_COLOR_BUFFER_BIT);
@@ -173,14 +229,21 @@ int main(int argc, char** argv) {
     const char* base = SDL_GetBasePath();
     snprintf(font_dir, sizeof font_dir, "%sfonts", base ? base : "");
 #endif
-    UiPlatform plat = { nullptr, pick_folder, set_title, quit, check_done };
+    UiPlatform plat = {};
+    plat.pick_folder = pick_folder;
+    plat.set_title = set_title;
+    plat.quit = quit;
+    plat.wake = check_done;
+    plat.now_ns = now_ns;
+    // The first gfx, on this thread and the window's context, before
+    // ui_init() starts the check thread: the sessions that the thread loads
+    // record their gfx with its caps. Its open is also the process's first
+    // use of ysp/gfx.h, so it builds gfx's NOISE table before any other
+    // thread exists (dsg_worker_start() builds it again, a no-op then).
+    open_first_gfx(&plat);
     char err[512];
     // ui_init() starts the check thread, so it comes after everything that
     // the thread's wake-up uses (the event type) and after the GL context.
-    // The thread's first use of ysp/gfx.h is pl_check()'s null gfx; gfx's
-    // NOISE table, not thread safe before its first build, is built by
-    // dsg_worker_start() on this thread. The preview's GL gfx (step 5, part
-    // A) opens on this thread too.
     if (!ui_init(font_dir, &plat, err, sizeof err)) {
         fprintf(stderr, "ysp_designer: %s\n", err);
         return 1;
@@ -203,7 +266,10 @@ int main(int argc, char** argv) {
         }
         if (!A.quit && dsg_redraw_due(&A.redraw, queued(), ui_animating())) draw_frame();
     }
+    // the sessions are detached and closed by now; the first gfx goes with
+    // the context current
     ui_shutdown();
+    if (A.have_gfx) ygfx_close(&A.gfx);
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplSDL3_Shutdown();
     ImGui::DestroyContext();

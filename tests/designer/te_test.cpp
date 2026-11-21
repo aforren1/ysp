@@ -13,6 +13,8 @@
 //                        Cancel keeps the text, Discard opens the other.
 //   designer/undo_views  A structured edit shows in the text; Ctrl+Z with
 //                        another view shown takes it back (one undo stack).
+//   designer/aux_pane    The toolbar's Preview check box shows the AUX pane
+//                        beside the main view and hides it (step 5).
 //   chart/*              8 tests of the state chart (te_chart.cpp): drag,
 //                        connect, issue, delete, rename, add, view, events.
 //   tables/*             5 tests of the tables (te_tables.cpp): shows,
@@ -21,6 +23,7 @@
 //                        follows_text, contrast, issue_mark, hebrew,
 //                        long_panel, drag, select_commits, rename,
 //                        collapsed.
+//   preview/*            the preview's pane (te_preview.cpp, step 5 part B).
 //   docs/designer.md, "Decisions of step 4", says what each one checks.
 // Each test sends the engine's mouse and keys through ImGui's input queue,
 // as a person would. Exit 0 when every test passes, 1 otherwise.
@@ -214,6 +217,27 @@ void test_undo_views(ImGuiTestContext* ctx) {
     te_show(ctx, "Text");
 }
 
+// The AUX pane's check box: a click shows the pane's child beside the main
+// view, another hides it (docs/designer.md, "Part S as built").
+void test_aux_pane(ImGuiTestContext* ctx) {
+    open_by_path(ctx, 1);
+    if (ctx->IsError()) return;
+    IM_CHECK(!ui_aux_open());
+    ctx->ItemClick("//##designer/aux/Preview");
+    IM_CHECK(ui_aux_open());
+    ctx->Yield();
+    const ImGuiTestItemInfo pane = ctx->WindowInfo("//##designer/Preview");
+    IM_CHECK(pane.Window != nullptr && pane.Window->Active);
+    te_show(ctx, "Chart");
+    IM_CHECK(ctx->WindowInfo("//##designer/Chart").Window->Active && ctx->WindowInfo("//##designer/Preview").Window->Active);
+    te_show(ctx, "Text");
+    ctx->ItemClick("//##designer/aux/Preview");
+    IM_CHECK(!ui_aux_open());
+    ctx->Yield();
+    const ImGuiTestItemInfo gone = ctx->WindowInfo("//##designer/Preview", ImGuiTestOpFlags_NoError);
+    IM_CHECK(gone.Window == nullptr || !gone.Window->Active);
+}
+
 void test_unsaved(ImGuiTestContext* ctx) {
     open_by_path(ctx, 2);
     if (ctx->IsError()) return;
@@ -330,9 +354,11 @@ int main(int argc, char** argv) {
     IM_REGISTER_TEST(engine, "designer", "edit_jump")->TestFunc = test_edit_jump;
     IM_REGISTER_TEST(engine, "designer", "unsaved")->TestFunc = test_unsaved;
     IM_REGISTER_TEST(engine, "designer", "undo_views")->TestFunc = test_undo_views;
+    IM_REGISTER_TEST(engine, "designer", "aux_pane")->TestFunc = test_aux_pane;
     te_register_chart(engine);
     te_register_tables(engine);
     te_register_panels(engine);
+    te_register_preview(engine);
 
     ImGuiTestEngine_Start(engine, ImGui::GetCurrentContext());
     ImGuiTestEngine_QueueTests(engine, ImGuiTestGroup_Tests, argc > 2 ? argv[2] : nullptr, ImGuiTestRunFlags_RunFromCommandLine);

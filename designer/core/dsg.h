@@ -27,7 +27,7 @@
 extern "C" {
 #endif
 
-#define DSG_VERSION_STRING "0.2.0"
+#define DSG_VERSION_STRING "0.3.0"
 
 /* The designer's folder inside a project, and the files in it. */
 #define DSG_DIR            ".designer"
@@ -53,6 +53,20 @@ bool dsg_is_file(const char* path);
 
 /* folder/rel into out; -1 when it does not fit. */
 int  dsg_join(char* out, size_t cap, const char* folder, const char* rel);
+
+/* Removes root/rel and everything in it (the preview's old data sets,
+ * DSG_DIR/preview/run-N, on the check thread). rel is relative: names
+ * joined by '/', none of them empty, "." or "..", and no ':' or '\\' (a
+ * drive or a stream on Windows). No name on the way, the last one too, may
+ * be a symbolic link or a junction (on Windows a name surrogate; a cloud
+ * folder's placeholder is not one). Inside the tree, a link is removed and
+ * never followed, so nothing outside root/rel goes.
+ * A rel that is not there is not an error. -1 with the reason in err when
+ * rel is refused, or when something could not be removed (the rest is
+ * gone). On POSIX the walk opens each folder with O_NOFOLLOW from the one
+ * above it, so a folder swapped for a link during the walk is refused; on
+ * Windows a link made during the walk is not seen. */
+int  dsg_remove_tree(const char* root, const char* rel, char* err, size_t cap);
 
 /* An atomic add on a counter that two threads share; the new value. */
 int32_t dsg_atomic_add(volatile int32_t* v, int32_t d);
@@ -175,7 +189,9 @@ enum {
     DSG_FROM_PLAYER,       /* tier 2: the player's refusal                    */
     DSG_FROM_RUN,          /* tier 3: what a real run needs                   */
     DSG_FROM_PACK,         /* the pack tool, building the check pack          */
-    DSG_FROM_DESIGNER      /* the designer itself (a file it cannot write)    */
+    DSG_FROM_DESIGNER,     /* the designer itself (a file it cannot write)    */
+    DSG_FROM_PREVIEW       /* the preview: a session's refusal at its load or
+                            * at run time (preview.h)                         */
 };
 
 typedef struct dsg_issue {

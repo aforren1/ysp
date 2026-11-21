@@ -31,11 +31,13 @@ endfunction()
 # ysp_pack_tool). pack/CMakeLists.txt says how the libraries are split.
 # Step 4 (docs/designer.md, "Plan of step 4"): the document (doc.c, shared),
 # the chart (chart.c, part A), the tables (csv.c, part B) and the panels'
-# fields (schema.c, part C).
+# fields (schema.c, part C). Step 5: the check thread (worker.c, part T),
+# the preview (preview.c, part A) and its view file part (preview_part.c,
+# shared).
 add_library(ysp_designer_core STATIC
     core/dsg.h core/check.c core/locate.c core/platform.c core/project.c core/redraw.c
     core/doc.h core/doc.c core/chart.h core/chart.c core/csv.h core/csv.c core/schema.h core/schema.c
-    core/worker.c)
+    core/worker.c core/preview.h core/preview.c core/preview_part.c)
 target_include_directories(ysp_designer_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core)
 target_compile_definitions(ysp_designer_core PUBLIC $<$<C_COMPILER_ID:MSVC>:_CRT_SECURE_NO_WARNINGS _CRT_NONSTDC_NO_DEPRECATE>)
 target_link_libraries(ysp_designer_core PUBLIC ysp_player_lib ysp_pack_tool_code ysp_player_impl)
@@ -75,6 +77,14 @@ if(YSP_BUILD_TESTS)
     target_compile_definitions(test_designer_worker PRIVATE YSP_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
     add_test(NAME test_designer_worker COMMAND test_designer_worker ${CMAKE_CURRENT_BINARY_DIR}/designer_worker_work)
     dsg_test(test_designer_worker)
+    # Step 5, part S: dsg_remove_tree(), which deletes files: its work
+    # folder must be absolute and the build tree's.
+    add_executable(test_designer_platform ${PROJECT_SOURCE_DIR}/tests/designer/platform_test.c)
+    target_link_libraries(test_designer_platform PRIVATE ysp_designer_core)
+    target_compile_options(test_designer_platform PRIVATE ${YSP_WARNINGS})
+    set_target_properties(test_designer_platform PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    add_test(NAME test_designer_platform COMMAND test_designer_platform ${CMAKE_CURRENT_BINARY_DIR}/designer_platform_work)
+    dsg_test(test_designer_platform)
     add_test(NAME test_designer_doc COMMAND test_designer_doc ${CMAKE_CURRENT_BINARY_DIR}/designer_doc_work)
     add_test(NAME test_designer_chart COMMAND test_designer_chart ${CMAKE_CURRENT_BINARY_DIR}/designer_chart_work)
     add_test(NAME test_designer_table COMMAND test_designer_table ${CMAKE_CURRENT_BINARY_DIR}/designer_table_work)
@@ -131,6 +141,7 @@ set_target_properties(ysp_designer_skb PROPERTIES C_STANDARD 17 C_STANDARD_REQUI
 # compiler and no C++ runtime (docs/imgui_probe.md, finding 6).
 set(_ui_sources app/ui.cpp app/ui.h app/skt.cpp app/skt.h app/skf.cpp app/skf.h app/imconfig_designer.h
     app/views.h app/views.cpp app/view_chart.cpp app/view_tables.h app/view_tables.cpp app/view_panels.cpp
+    app/view_preview.cpp
     ${_imgui}/imgui.cpp ${_imgui}/imgui_draw.cpp ${_imgui}/imgui_tables.cpp ${_imgui}/imgui_widgets.cpp)
 add_library(ysp_designer_ui STATIC ${_ui_sources})
 target_include_directories(ysp_designer_ui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/app)
@@ -222,6 +233,7 @@ if(YSP_BUILD_TESTS AND YSP_DESIGNER_TEST_ENGINE)
     # The runner, the UI layer and ImGui, with the designer's flags.
     add_executable(test_designer_te ${PROJECT_SOURCE_DIR}/tests/designer/te_test.cpp ${_te_config}/imconfig_designer_te.h
         ${_te_config}/te_common.h ${_te_config}/te_chart.cpp ${_te_config}/te_tables.cpp ${_te_config}/te_panels.cpp
+        ${_te_config}/te_preview.cpp
         ${_ui_sources})
     target_link_libraries(test_designer_te PRIVATE ysp_designer_te_engine ysp_designer_core ysp_designer_skb ysp_skribidi)
     target_compile_definitions(test_designer_te PRIVATE YSP_SOURCE_DIR="${PROJECT_SOURCE_DIR}"

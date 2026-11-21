@@ -1388,7 +1388,9 @@ check of a part's test has a hand mutant that fails it, as in step 3.
 Status: planned 2026-11-20 on branch `designer-step5-plan`; the user
 accepted its decisions the same day ("Decisions of the plan"). Wave 1
 (parts P3, P4 and T) is built and merged on branch `step5-int` the same
-day ("Wave 1 integrated"); parts S, A, B, C and D are not built. This
+day ("Wave 1 integrated"). Part S (the shared interfaces and the stubs)
+is built on branch `step5-s` ("Part S as built"); parts A, B, C and D are
+not built. This
 section answers, from the code at `98de716`, what the preview
 needs from the player, from `ysp/gfx.h` and from the check, and gives
 the decisions, the shared interfaces, the parts, the tests, the
@@ -2251,9 +2253,9 @@ PATH, "row": n}, "fields": {...}, "scale": "fit"}`.
 | `include/ysp/gfx.h`, `docs/gfx.md`, its README row and `docs/status.md` entry, its test and compile checks, `tests/mutate/gfx.toml`; ysp-vis's `pyproject.toml` and `YV_VERSION` | P3 |
 | `player/player.h`, `sim.c` (new), `run.c`, `lower.c`, `v2.c`, `host.c`, `player/CMakeLists.txt`; `tests/player/sim_test.c` (new); `tests/mutate/player_sim.toml` (new) and the entries of `player_run`, `player_lower`, `player_v2`, `player_host`; `docs/player.md` ("Reference: the stepped session"); `docs/status.md` | P4 |
 | `designer/core/worker.c` (new), `check.c`, the worker's and the check's parts of `dsg.h`, the check's call in `ui.cpp`, the job event and the first gfx open in `main.cpp`; `tests/designer/worker_test.c` (new) | T (the check thread) |
-| `designer/core/preview.h`, the rest of `dsg.h`, `platform.c` (`dsg_remove_tree()`), `views.h`, `ui.h`, `ui.cpp` (the AUX slot, the preview issue in the Issues panel), `main.cpp` (the key hook, framebuffer 0 before the clear), `views.cpp`, `designer/CMakeLists.txt`; stubs of parts A, B and C | Shared (S): frozen during step 5, after T |
+| `designer/core/preview.h`, the rest of `dsg.h`, `platform.c` (`dsg_remove_tree()`), `views.h`, `ui.h`, `ui.cpp` (the AUX slot, the preview issue in the Issues panel), `main.cpp` (the key hook, framebuffer 0 before the clear), `views.cpp`, `designer/CMakeLists.txt`; stubs of parts A, B and C. As built, also `designer/core/preview_part.c` (the view file's part), `tests/designer/platform_test.c`, `te_common.h`, `te_test.cpp`, `ui_test.cpp` parts 1 to 8 | Shared (S): frozen during step 5, after T |
 | `designer/core/preview.c`; `tests/designer/preview_test.c`, `preview_bench.c` | A (core) |
-| `designer/app/view_preview.cpp`; `tests/designer/te_preview.cpp`; `test_designer_ui`'s preview part | B (pane) |
+| `designer/app/view_preview.cpp`; `tests/designer/te_preview.cpp`; `test_designer_ui`'s preview part (as built: part 9 and later of `ui_test.cpp`) | B (pane) |
 | `designer/app/view_chart.cpp` (the ring, Follow, "Preview this template"); `tests/designer/te_chart.cpp` (added tests) | C (chart) |
 | `tests/designer/preview_gl_test.cpp` (new); the measurements | D |
 | `docs/designer.md`: a subsection each under "Decisions of step 5"; `docs/status.md`: an entry each | Each part its own |
@@ -2383,6 +2385,194 @@ P4's GL path had been written against the plan's names behind
 
 **Not done.** Parts S, A, B, C and D. T's ten hand mutants are not in a
 list and were not run again.
+
+### Part S as built (2026-11-21)
+
+Branch `step5-s`, from `step5-int` (`82c0561`). Part S gives parts A, B
+and C frozen interfaces and stubs, as the shared step of step 4 did. With
+the stubs the designer runs as before step 5: the preview never posts a
+session job, and the pane says "Preview not built."
+
+**The frozen interfaces.** After S, parts A, B and C change none of these
+files. A part that needs a change stops and reports it.
+
+| File | What it gives | Who calls it |
+|---|---|---|
+| `designer/core/dsg.h` (0.3.0) | `DSG_FROM_PREVIEW`; `dsg_remove_tree(root, rel, err, cap)` | A (the old `run-*` folders, on the check thread) |
+| `designer/core/preview.h` | The whole preview API (below), `dsg_preview_gl`, `dsg_preview_settings` | A implements it in `preview.c`; B and C call it; `ui.cpp` drives it |
+| `designer/core/preview_part.c` | `dsg_preview_settings_default()`, `dsg_preview_part_read()`, `dsg_preview_part_write()`: the view file's part `preview` | `ui.cpp` only |
+| `designer/app/views.h` | `UI_SLOT_AUX`; `UiView.open_file`; `ui_preview()`, `ui_preview_gl()`, `ui_now_ns()`, `ui_preview_where()`, `ui_aux_open()`, `ui_show_aux()`, `ui_open_file()` | B and C |
+| `designer/app/ui.h` | `UiPlatform.now_ns`, `gl_caps`, `gl_share`, `gl_proc`, `gl_proc_ctx`; `ui_preview_key()`, `ui_preview_has_keyboard()`, `ui_set_window_shown()` | `main.cpp`, the tests |
+| `tests/designer/te_common.h` | `te_register_preview()`, which `te_test.cpp` calls | B, in `te_preview.cpp` |
+
+`preview.h`, by caller:
+- `ui.cpp`: `dsg_preview_session_ops()`, `_new()`, `_free()`, `_open()`,
+  `_close()`, `_checked()`, `_adopt()`, `_tick()`, `_animating()`,
+  `_work()`, `_get()`, `_set()`, `_key()`, `_keyboard()`,
+  `_set_keyboard()`, `_issue()`, `_where_now()`.
+- The pane (B): the controls `dsg_preview_run()`, `_pause()`, `_step()`,
+  `_restart()`, `_set()`, `_get()`; the input `_set_keyboard()`,
+  `_choice()`, `_pointer()`; the state `_get_info()`, `_texture()`,
+  `_outputs()`, `_output_at()`, `_undriven()`, `_undriven_role()`,
+  `_choices()`, `_choice_label()`, `_leaves()`, `_leaf_at()`. The
+  session fields' needs come from `ui_report()` (`DSG_FROM_RUN`,
+  `PL_NEED_FIELD`). For 1:1, ImGui 1.93's
+  `platform_io.DrawCallback_SetSamplerNearest` gives the nearest sampler
+  with no GL call in the pane.
+- The chart (C): `ui_preview_where()` for the ring and Follow,
+  `dsg_preview_pin_template()` for "Preview this template", and
+  `ui_show_aux(true)` to show the pane.
+- The check thread (A's session ops): `dsg_worker_session_queued()`,
+  `dsg_pack_bytes()`, `dsg_remove_tree()`, `dsg_locate_object()`, and the
+  player's `pl_sim_*` calls, unchanged from player 0.17.0.
+
+**Changes from the plan.**
+- `dsg_preview_new(gl, worker, doc)`, not `(gl_caps)`. `pl_sim_desc` also
+  takes `share`, `gl_proc` and `gl_ctx` (player 0.17.0), so the preview
+  gets a `dsg_preview_gl` with all of them, and the cache. The preview
+  posts jobs to the worker and reads the document's revision and text.
+- `dsg_preview_open()` and `_close()` are new. The open gives the folder
+  of the runs and the floor revision: a session of a lower revision is
+  another project's.
+- `dsg_preview_checked(pv, result, now)` takes the check result.
+  `dsg_preview_adopt(pv, session_result, now)` takes the whole result,
+  not a session and a revision, because a failed load is a preview issue.
+- `ui.cpp` calls `dsg_preview_tick(pv, now, shown)` once a frame before
+  the views draw, not the pane's draw hook. `shown` is the pane open and
+  the window not minimized or hidden (`ui_set_window_shown()`). So the
+  pane only shows and controls, and a hidden pane pauses the preview.
+- Names: `dsg_preview_where_now()`, `_output_at()` and `_leaf_at()`. C
+  does not allow a function and a type of the same name
+  (`dsg_preview_where`).
+- The state is one struct, `dsg_preview_info`. "Stale" is a flag, not a
+  status, because a stale session still runs or pauses.
+- The keyboard: the pane claims it (`dsg_preview_set_keyboard()`).
+  `dsg_preview_key()` gives true when it takes a key, and Escape gives
+  the keyboard back. `main.cpp` then keeps a taken key down and text
+  input from ImGui. It gives every key up to ImGui, so a key that ImGui
+  saw go down does not stay down there.
+- `ui_preview_key(scancode, down, repeat)`: repeats are taken while the
+  keyboard is claimed and do not reach the session.
+- The clock: `UiPlatform.now_ns` (`SDL_GetTicksNS()`). With none, the UI
+  uses ImGui's time, which the tests drive with `io.DeltaTime`. So
+  `te_test.cpp` and `ui_test.cpp` need no clock of their own.
+- `ui_preview_where()` is in `views.h`, not `ui.h`, because the chart
+  includes `views.h`. Each call reads the place again.
+- The view file's part is `ui.cpp`'s, not the pane's: `ui.cpp` reads it at
+  an open into `dsg_preview_set()` and writes `dsg_preview_get()` with the
+  view file. Every key is written, defaults too. It gains `rt_s` (the
+  scripted participant's rt, which the session settings have). A value
+  out of range reads as its default.
+- `UiView.open_file` and `ui_open_file()` are new: the pane's button that
+  opens `trials.csv` in the Tables view. No view has the hook yet, so
+  `ui_open_file()` gives false. The Tables view's read-only file is not
+  built.
+- `dsg_preview_texture()` gives the GL name and the size as integers, so
+  `preview.h` needs no ysp header.
+
+**The session seam.** The real `pl_sim_load()` call goes in `preview.c`,
+not in `worker.c`. `preview.h` declares `dsg_preview_session_ops(gl,
+&ops)`, and `ui_init()` gives its result to `dsg_worker_desc.session`.
+The stub gives a NULL `load`, which is T's stub: it loads nothing and
+succeeds. Why:
+- Part A then changes only `preview.c`. T's `worker.c` stays as T built
+  and tested it, with no player call of the stepped session.
+- The ops' `ctx` is the `dsg_preview_gl` that `ui.cpp` keeps. It is fixed
+  before the thread starts and never written after, so the two threads
+  share no mutable state through it. The settings, the pack and the text
+  come in the `dsg_session`, as T designed.
+- The load and the adoption share the session's private struct (the
+  `pl_player`, the text copy, the hooks' state, the run folder) in one
+  file. No other file needs its layout.
+
+**The first gfx** (`main.cpp`). After the GL context is current and before
+`ui_init()` starts the check thread, `main.cpp` opens one gfx on the
+window's context: 64 x 64 into its own output texture, so it never
+writes framebuffer 0. `ygfx_gl_caps_get()` of it goes to
+`UiPlatform.gl_caps`, the gfx itself to `gl_share` (`pl_sim_desc.share`),
+and `SDL_GL_GetProcAddress()` to `gl_proc`. It is the process's first use
+of ysp/gfx.h, so it builds gfx's NOISE table on the UI thread before any
+other thread exists; `dsg_worker_start()` builds it again, a no-op then,
+so T's order still holds for the headless tests. It closes after
+`ui_shutdown()`, with the context current. If it does not open, the
+designer says so on stderr and the sessions draw on the null backend.
+`main.cpp` also binds framebuffer 0 before its clear.
+
+**The AUX pane.** A check box in the toolbar (the AUX view's label,
+"Preview") shows the pane at the right of the main area, between the
+main view and the side column, beside any main view. Its width is 45 % of
+the room the side column leaves, at least 320 px. AUX views get `reveal`
+while the pane shows. An AUX view's `animating` counts only while the
+pane shows and the window is not hidden. A hidden pane drops the
+keyboard claim. The Issues panel lists the preview issue after the
+check's issues as "preview", and a click on it selects the value at its
+place and puts the caret there.
+
+**Tests** (Linux desktop, i5-14500, Debian 12, gcc 12.2):
+- `test_designer_platform` (new, 47 checks): `dsg_remove_tree()` in a
+  sandbox under the build tree's work folder (refuses a relative WORK).
+  It refuses NULL, an empty path, `.`, `a/.`, `..`, `../sibling`,
+  `a/../..`, `a//sub`, `a/`, an absolute path, `C:/outside`, a
+  backslash, an empty root, a link out of the root as the name and on
+  the way, and a link inside the root; after each, nothing is gone. It
+  removes a file, a folder below another, and a tree with links in it
+  (the links go, their targets stay), and leaves the root's other
+  children, its links and its siblings. A missing name, a missing folder
+  on the way and a file on the way remove nothing and are not errors.
+  Each refusal, if it did not hold, would remove only inside the
+  sandbox. The test cleans with `nftw(FTW_PHYS)`, not with the code
+  under test. The link cases are POSIX only; Windows runs the rest in CI.
+- `test_designer_ui` part 8 (now 66 checks): the pane hidden at first;
+  shown, its child draws beside the text view, the side column and the
+  chart; hidden, it does not. The settings and the pane round-trip
+  through the view file, a seed above `INT64_MAX` too; a project with no
+  part gets the defaults; a part with values out of range reads as the
+  defaults; a row with no leaf is written as "any". The keyboard: no key
+  is taken until the pane claims it; a claimed key, its repeat and its
+  release are taken; Escape gives the keyboard back; hiding the pane
+  drops the claim. No session: `ui_preview_where()` is NULL.
+- `test_designer_te`: `designer/aux_pane`, a click on the check box
+  shows the pane beside the text and the chart, and another hides it.
+- ctest from the Release build tree, examples and the Test Engine on,
+  `DISPLAY` unset: 141 of 141.
+- ASan with UBSan (gcc 12, Debug, built and run under `setarch -R`,
+  `halt_on_error`): the ten designer tests, no report.
+
+**Hand mutants** (each reverted; each fails its test):
+
+| Mutant | Fails |
+|---|---|
+| rm-01: an empty name accepted | `a//sub` gave 0 |
+| rm-02: `..` accepted | `..` removed something |
+| rm-03: `.` accepted | `.` removed something |
+| rm-04: a link as the last name removed | `link_out` gave 0 |
+| rm-05: a link on the way followed (no check, no `O_NOFOLLOW`) | `link_out/keep` gave 0 |
+| rm-06: a link inside the tree followed | removing `a` failed at `esc` |
+| rm-07: a drive or a backslash accepted | `C:/outside` gave 0 |
+| rm-08: an empty root accepted | an empty root is refused |
+| u-01: the view file without the part | the part holds the pane and the settings |
+| u-02: an open reads no part | the other project: pane hidden, defaults |
+| u-03: the AUX pane never drawn | shown, the pane draws |
+| u-04: a hidden pane keeps the keyboard | hiding the pane drops the claim |
+| u-05: repeats reach ImGui | a key, its repeat and its release |
+| p-01: a seed above `INT64_MAX` dropped | the part holds the settings |
+| p-02: any speed read | out of range: the defaults |
+| p-03: a display of 0 px read | out of range: the defaults |
+| p-04: the fields not written | the part holds the settings |
+| p-05: the pin's row kept without a leaf | a row with no leaf is written as any |
+
+**Not done.**
+- The window was not opened: the first gfx, the key hook and the pane
+  were not seen on a display. `main.cpp`'s changes are compiled only.
+- MSVC, clang and macOS were not compiled. The Windows branch of
+  `dsg_remove_tree()` (`GetFileAttributesW()`, name-surrogate reparse
+  tags, `RemoveDirectoryW()`, `DeleteFileW()`) runs first in CI; its
+  test has no link cases there, because a symbolic link needs a
+  privilege on Windows. Locals that a call fills are initialized for
+  C4701.
+- The web build's `gl_proc` (`SDL_GL_GetProcAddress()` under
+  emscripten) is not tried.
+- No ThreadSanitizer run: S adds no thread code.
 
 ## How to build and run the skeleton
 
