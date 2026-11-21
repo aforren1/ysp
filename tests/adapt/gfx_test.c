@@ -6203,6 +6203,7 @@ typedef struct stats23 {
     int  ran;
     long frames, frames_bad;   /* read_output: the texture against framebuffer 0 */
     long native_bad;           /* the native name: format, size, its texels */
+    long size_queried;         /* its size and format read back (GL ES 3.1) */
     long fb0_bad;              /* not framebuffer 0 after end() or prime() */
     long foreign_frames;       /* frames after foreign GL calls and a reset */
     long cap_bad;              /* captured frames against read_output */
@@ -10107,7 +10108,7 @@ typedef void (YGFX_HL__API *v23_vp_fn)(int, int, int, int);
 typedef void (YGFX_HL__API *v23_pi_fn)(uint32_t, int);
 typedef struct v23_gl {
     v23_geti_fn GetIntegerv;
-    v23_texlev_fn GetTexLevelParameteriv;   /* GL ES 3.1; NULL on 3.0 */
+    v23_texlev_fn GetTexLevelParameteriv;   /* GL ES 3.1: NULL below */
     v23_u_fn UseProgram, BindVertexArray, ActiveTexture, Enable;
     v23_uu_fn BindTexture, BlendFunc;
     v23_vp_fn Viewport;
@@ -10201,11 +10202,15 @@ static int v23_stims(ygfx_gfx* g, const tcs_set* s, ygfx_cset* set, ygfx_citem* 
     return 5;
 }
 
+typedef struct v23_bufs {
+    unsigned char oa[W * H * 4], ob[W * H * 4], nat_px[W * H * 4];
+    unsigned char want[CAP_N][W * H * 4];
+    gl_cap_store cs;
+} v23_bufs;
+
 static void gl_v23_output(stats* st) {
     static ygfx_gfx ga, gb;
-    static unsigned char oa[W * H * 4], ob[W * H * 4], nat_px[W * H * 4];
-    static gl_cap_store cs;
-    static unsigned char want[CAP_N][W * H * 4];
+    v23_bufs* B;
     tcs_set s;
     ygfx_citem it[CS_N];
     double org[CS_N][2], cell;
@@ -10232,6 +10237,18 @@ static void gl_v23_output(stats* st) {
     v23_sym(&f.Viewport, "glViewport");
     v23_sym(&f.PixelStorei, "glPixelStorei");
     if (!f.GetIntegerv || !f.UseProgram || !f.BindTexture || !f.Viewport) { CHECK(0 && "GL entry points"); return; }
+    {
+        /* ANGLE gives the entry point to a GL ES 3.0 context too (its D3D11
+         * backend's), where the call is GL_INVALID_OPERATION; the gfx's next
+         * glGetError() then takes that error for its own */
+        int32_t major = 0, minor = 0;
+        f.GetIntegerv(0x821B, &major);   /* GL_MAJOR_VERSION */
+        f.GetIntegerv(0x821C, &minor);   /* GL_MINOR_VERSION */
+        if (major * 10 + minor < 31) f.GetTexLevelParameteriv = NULL;
+    }
+    /* on the heap: emcc's initial memory holds the test's statics */
+    B = (v23_bufs*)calloc(1, sizeof *B);
+    if (!B) { CHECK(0 && "v0.23 buffers"); return; }
     S23.ran = 1;
     cs_build(&s, 0, 0);
     n_it = cs_layout(&s, 18, 0, 0.21, 0.43, it, org, &cell);
@@ -10263,12 +10280,13 @@ static void gl_v23_output(stats* st) {
             f.GetTexLevelParameteriv(0x0DE1, 0, 0x1001, &th);
             f.GetTexLevelParameteriv(0x0DE1, 0, 0x1003, &tf);
             S23.native_bad += tw != W || th != H || tf != 0x8058;
+            S23.size_queried++;
             f.BindTexture(0x0DE1, 0);
         }
         for (k = 0; k < 6; k++) {
             sa[0].phase = sb[0].phase = 0.7f * (float)k;   /* each frame differs */
             sa[2].x = sb[2].x = 10.0f + 7.0f * (float)k;
-            v23_frame(&ga, &gb, sa, sb, na < nb ? na : nb, &f, oa, ob);
+            v23_frame(&ga, &gb, sa, sb, na < nb ? na : nb, &f, B->oa, B->ob);
             if (k == 2) {
                 /* the texels through the name: a framebuffer of the host's */
                 v21_gl g21;
@@ -10278,12 +10296,12 @@ static void gl_v23_output(stats* st) {
                     g21.BindFramebuffer(0x8D40, fbo);
                     g21.FramebufferTexture2D(0x8D40, 0x8CE0, 0x0DE1, nat.gl_name, 0);
                     g21.PixelStorei(0x0D05, 1);   /* GL_PACK_ALIGNMENT */
-                    g21.ReadPixels(0, 0, W, H, 0x1908, 0x1401, nat_px);
+                    g21.ReadPixels(0, 0, W, H, 0x1908, 0x1401, B->nat_px);
                     g21.BindFramebuffer(0x8D40, 0);
                     g21.DeleteFramebuffers(1, &fbo);
                     for (y = 0; y < H; y++)   /* GL's rows against read_output's top-first rows */
-                        S23.native_bad += memcmp(nat_px + (size_t)(H - 1 - y) * W * 4, ob + (size_t)y * W * 4, (size_t)W * 4) != 0;
-                    for (i = 3; i < W * H * 4; i += 4) S23.native_bad += nat_px[i] != 255;
+                        S23.native_bad += memcmp(B->nat_px + (size_t)(H - 1 - y) * W * 4, B->ob + (size_t)y * W * 4, (size_t)W * 4) != 0;
+                    for (i = 3; i < W * H * 4; i += 4) S23.native_bad += B->nat_px[i] != 255;
                 }
             }
             if (k >= 3) {
@@ -10301,18 +10319,18 @@ static void gl_v23_output(stats* st) {
             }
         }
         /* capture reads the texture */
-        memset(&cs, 0, sizeof cs);
+        memset(&B->cs, 0, sizeof B->cs);
         memset(&cd, 0, sizeof cd);
         cd.every = 1; cd.slots = CAP_N;
-        cd.on_frame = gl_cap_on_frame; cd.ctx = &cs;
+        cd.on_frame = gl_cap_on_frame; cd.ctx = &B->cs;
         CHECK(ygfx_capture_start(&gb, &cd) == YGFX_OK);
         for (k = 0; k < CAP_N; k++) {
             sb[2].x = sa[2].x = 5.0f + 9.0f * (float)k;
-            v23_frame(&ga, &gb, sa, sb, na < nb ? na : nb, &f, oa, want[k]);
+            v23_frame(&ga, &gb, sa, sb, na < nb ? na : nb, &f, B->oa, B->want[k]);
         }
         CHECK(ygfx_capture_stop(&gb, &cst) == CAP_N);
-        CHECK(cst.dropped == 0 && cst.failed == 0 && cs.n == CAP_N);
-        for (k = 0; k < CAP_N && k < cs.n; k++) S23.cap_bad += memcmp(cs.px[k], want[k], sizeof want[k]) != 0;
+        CHECK(cst.dropped == 0 && cst.failed == 0 && B->cs.n == CAP_N);
+        for (k = 0; k < CAP_N && k < B->cs.n; k++) S23.cap_bad += memcmp(B->cs.px[k], B->want[k], sizeof B->want[k]) != 0;
         if (cfg == 0) {
             char line[400] = { 0 };
             ygfx_describe(&gb, line, sizeof line);
@@ -10323,6 +10341,7 @@ static void gl_v23_output(stats* st) {
         S23.fb0_bad += v23_fb(&f) != 0;
     }
     tcs_free(&s);
+    free(B);
     /* refusals */
     {
         ygfx_desc gd;
@@ -10349,10 +10368,11 @@ static void gl_v23_output(stats* st) {
     CHECK(S23.cap_bad == 0);
     CHECK(S23.refused_ok == S23.refused_n && S23.refused_n == 5);
     printf("v0.23 output: %ld frames (identity and rounding; a CLUT and the noise dither; %ld after foreign GL calls and a reset), "
-           "the output texture against framebuffer 0: %ld differ; the native name (GL_RGBA8 at the size, its texels, alpha 255): %ld bad; "
+           "the output texture against framebuffer 0: %ld differ; the native name (GL_RGBA8 at the size, its texels, alpha 255): %ld bad "
+           "(size and format queried %ld times, GL ES 3.1); "
            "not framebuffer 0 after end, read_output, prime or close: %ld; %d captured frames against read_output, twice: %ld differ; "
            "refusals %ld of %ld\n",
-           S23.frames, S23.foreign_frames, S23.frames_bad, S23.native_bad, S23.fb0_bad, CAP_N, S23.cap_bad, S23.refused_ok, S23.refused_n);
+           S23.frames, S23.foreign_frames, S23.frames_bad, S23.native_bad, S23.size_queried, S23.fb0_bad, CAP_N, S23.cap_bad, S23.refused_ok, S23.refused_n);
 }
 #define V23_TW 1100
 #define V23_TH 1000   /* 4.4 MB of RGBA8: two bands of the attach's upload */
@@ -10454,8 +10474,7 @@ static long v23_ids(const v23_job* a, const v23_job* b) {
 
 static void gl_v23_defer(stats* st) {
     static ygfx_gfx ga, gd, gs;
-    static unsigned char ref[W * H * 4], out[W * H * 4];
-    static unsigned char px[V23_TW * V23_TH * 4];
+    unsigned char *ref, *out, *px;
     static float lut[3 * 256];
     tcs_set s;
     ygfx_citem it[CS_N];
@@ -10465,6 +10484,11 @@ static void gl_v23_defer(stats* st) {
     int k, i, rc, calls;
     (void)st;
     g_where = "v0.23 defer";
+    /* on the heap: emcc's initial memory holds the test's statics */
+    ref = (unsigned char*)malloc((size_t)W * H * 4 * 2 + (size_t)V23_TW * V23_TH * 4);
+    if (!ref) { CHECK(0 && "v0.23 defer buffers"); return; }
+    out = ref + (size_t)W * H * 4;
+    px = out + (size_t)W * H * 4;
     S23D.ran = 1;
     S23D.bands = ygfx__test_bands;
     memset(&caps, 0, sizeof caps);
@@ -10477,7 +10501,7 @@ static void gl_v23_defer(stats* st) {
     ja.n_it = cs_layout(&s, 18, 0, 0.21, 0.43, it, org, &cell);
     jd = ja; js = ja;
     /* the direct open: the reference, and the source of caps and programs */
-    if (!v23_open_desc(&ga, 0, NULL, NULL) || !v23_objects(&ga, &ja)) { CHECK(0 && "v0.23 direct open"); ygfx_close(&ga); tcs_free(&s); return; }
+    if (!v23_open_desc(&ga, 0, NULL, NULL) || !v23_objects(&ga, &ja)) { CHECK(0 && "v0.23 direct open"); ygfx_close(&ga); tcs_free(&s); free(ref); return; }
     CHECK(ygfx_gl_caps_get(&ga, &caps) == YGFX_OK && caps.bytes == sizeof caps);
     /* deferred, on another thread; then a budget that allows one step a call */
     for (k = 0; k < 2; k++) {
@@ -10513,7 +10537,7 @@ static void gl_v23_defer(stats* st) {
             v23_draw(&gd, jd.st, jd.n, out);
             CHECK(yscr_flip(&R->scr) == YSCR_OK);
             S23D.frames++;
-            S23D.frames_bad += memcmp(ref, out, sizeof ref) != 0;
+            S23D.frames_bad += memcmp(ref, out, (size_t)W * H * 4) != 0;
         }
         ygfx_close(&gd);
     }
@@ -10544,7 +10568,7 @@ static void gl_v23_defer(stats* st) {
             v23_draw(&gs, js.st, js.n, out);
             CHECK(yscr_flip(&R->scr) == YSCR_OK);
             S23D.frames++;
-            S23D.order_bad += memcmp(ref, out, sizeof ref) != 0;
+            S23D.order_bad += memcmp(ref, out, (size_t)W * H * 4) != 0;
         }
         ygfx_close(&gs);   /* k = 1: B first, then A at the end */
     }
@@ -10581,6 +10605,7 @@ static void gl_v23_defer(stats* st) {
     }
     ygfx_close(&ga);
     tcs_free(&s);
+    free(ref);
     CHECK(S23D.frames > 0 && S23D.frames_bad == 0 && S23D.order_bad == 0);
     CHECK(S23D.ids_bad == 0);
     CHECK(S23D.steps_small > 3);
