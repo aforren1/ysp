@@ -85,6 +85,21 @@ if(YSP_BUILD_TESTS)
     set_target_properties(test_designer_platform PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
     add_test(NAME test_designer_platform COMMAND test_designer_platform ${CMAKE_CURRENT_BINARY_DIR}/designer_platform_work)
     dsg_test(test_designer_platform)
+    # Step 5, part A: the preview's core (core/preview.c), headless. GNU ld's
+    # --wrap counts heap calls in a tick and holds an attach; neither MSVC's
+    # linker nor Apple's has it, so there those checks skip.
+    add_executable(test_designer_preview ${PROJECT_SOURCE_DIR}/tests/designer/preview_test.c)
+    target_link_libraries(test_designer_preview PRIVATE ysp_designer_core)
+    target_compile_options(test_designer_preview PRIVATE ${YSP_WARNINGS})
+    set_target_properties(test_designer_preview PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_compile_definitions(test_designer_preview PRIVATE YSP_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+    if(NOT WIN32 AND NOT APPLE)
+        target_compile_definitions(test_designer_preview PRIVATE PV_TEST_WRAP)
+        target_link_libraries(test_designer_preview PRIVATE -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc -Wl,--wrap=free
+            -Wl,--wrap=pl_sim_attach -Wl,--wrap=pl_sim_frame)
+    endif()
+    add_test(NAME test_designer_preview COMMAND test_designer_preview ${CMAKE_CURRENT_BINARY_DIR}/designer_preview_work)
+    dsg_test(test_designer_preview)
     add_test(NAME test_designer_doc COMMAND test_designer_doc ${CMAKE_CURRENT_BINARY_DIR}/designer_doc_work)
     add_test(NAME test_designer_chart COMMAND test_designer_chart ${CMAKE_CURRENT_BINARY_DIR}/designer_chart_work)
     add_test(NAME test_designer_table COMMAND test_designer_table ${CMAKE_CURRENT_BINARY_DIR}/designer_table_work)
@@ -103,6 +118,16 @@ if(YSP_BUILD_TESTS)
         set_target_properties(bench_designer_check PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
         target_compile_definitions(bench_designer_check PRIVATE YSP_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
             YSP_DESIGNER_TEST_FONT="${YSP_DESIGNER_TEST_FONT}")
+        # Times the preview per UI frame (docs/designer.md, "Redraw and
+        # cost"); not a test. --wrap times each pl_sim_frame() inside a tick.
+        if(NOT APPLE)
+            add_executable(bench_designer_preview ${PROJECT_SOURCE_DIR}/tests/designer/preview_bench.c)
+            target_link_libraries(bench_designer_preview PRIVATE ysp_designer_core -Wl,--wrap=pl_sim_frame)
+            target_compile_options(bench_designer_preview PRIVATE ${YSP_WARNINGS})
+            set_target_properties(bench_designer_preview PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+            target_compile_definitions(bench_designer_preview PRIVATE YSP_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+                YSP_DESIGNER_TEST_FONT="${YSP_DESIGNER_TEST_FONT}")
+        endif()
     endif()
 endif()
 

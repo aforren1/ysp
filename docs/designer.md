@@ -930,6 +930,196 @@ mutants that fail the test (reverted; not in a mutation list).
   branch.
 - The Test Engine ran in its fast mode only.
 
+### Decisions of step 5
+
+#### Part A as built (2026-11-21)
+
+Branch `step5-a-core`, from `step5-s` (`813e40b`). Part A fills
+`designer/core/preview.c` behind S's frozen `preview.h`. No frozen file
+changed; `designer/CMakeLists.txt` only gains the test and the bench.
+
+**What it does.**
+- **The session ops** (check thread). The load makes the run's folder,
+  calls `pl_sim_load()` with the check's pack, the built-in rig (`rig`
+  and `cal` `NULL`), the settings and `main.cpp`'s first gfx (`gl_caps`,
+  `share`, `cache`, `gl_proc`), and fast-forwards to the pin. The close
+  calls `pl_close()` and removes the data sets that are done with.
+- **The settle.** The tick posts a session job when the document has not
+  changed for 300 ms and a check accepted its current revision. A check
+  of an older revision posts nothing. The first job after an open does
+  not wait: nothing changed.
+- **Adoption.** A session that is not stale starts to attach. The tick
+  calls `pl_sim_attach()` with a budget of 4 ms a frame. The shown
+  session steps in each of these frames. In the frame that the attach
+  ends, the old session stops, detaches and goes back to the worker, and
+  the new one shows; its first step is in the next frame. A newer session
+  that arrives during an attach replaces it.
+- **Steps.** The frames due are those whose onsets are at or before
+  `speed` x (real time since the anchor). A tick steps at most 16, and
+  only the last one draws. Past 16, the rest are dropped, `info.slow` is
+  true, and the anchor moves to the last frame stepped, so the session
+  does not race to catch up. Pause, a hidden pane and a run after a pause
+  move the anchor too.
+- **Idle.** While paused, ended or failed, `animating` and `work` are
+  false. Work is an attach in progress, a step asked for, a restart that
+  can post, or an accepted text that waits for its settle.
+- **Input.** Keys and choices go into a queue of 64. At the next step
+  they reach the session at that frame's onset less 1 ns. While paused,
+  a key or a choice is dropped, but the up of a down that the session
+  took always goes to it. The pointer sends one sample a step, only when
+  it moved, to each `position2d` role that the preview drives.
+- **State.** `where_now`, the outputs ring (the last 64 codes, times from
+  the first frame), the roles not driven, the choices, the leaves and the
+  info all read the shown session.
+
+**Decisions, and the reasons.**
+- **The load numbers the run, not the UI.** The UI sends the runs'
+  folder, `.designer/preview`, in `settings.out_dir`. The load picks
+  `run-N` and writes the folder back. So two loads never race for a
+  name, and a folder that is already there is skipped.
+- **A file keeps the runs' range.** `.designer/preview/runs` holds
+  "LO HI": the lowest run folder that may be left and the highest made.
+  Only the session ops read and write it, on the check thread. The close
+  removes `run-LO` to the run below the one that the UI keeps, then moves
+  LO. Why: `platform.c` cannot list a folder, `dsg.h` is frozen, and a
+  later process must find what an earlier one left. A removal that fails
+  (an open file on Windows) leaves LO, so the next close tries again.
+- **The first session of an open** has no old session to carry that
+  removal, so the preview hands the worker a session with no player
+  (`dsg_worker_close()`), whose close only removes.
+- **What the preview keeps.** At a replacement, the old run goes. At a
+  project's close, the shown run stays, with its `session.json`, so the
+  person can read it. A stale, failed or refused session's run goes at
+  its close.
+- **Stale.** A session is stale when its revision is not the newest
+  job's, the document changed after that job, its settings differ from
+  the preview's settings now, or a newer job waits or runs. A stale
+  session never attaches.
+- **Restart with a refused text** posts the shown session's own text,
+  pack and revision: the last good text again.
+- **A refusal at the load or in the fast forward** comes back as a
+  session that holds the refusal, not as a failed load. Its place in the
+  text is found on the check thread. So the preview issue names the
+  object and its place, and the shown session stays. Only a load that
+  cannot run (no folder, no memory) is a failed load, with no place.
+- **A refusal at run time** stops the session; the image stays. The
+  preview issue gets its message, object and place in the text that the
+  session loaded. The place is found once, in that tick.
+- **The issue goes** when a session that loaded well is adopted.
+- **Paused when a new session shows:** one drawn frame, so the pane shows
+  the new definition. Then it stays paused.
+- **Who answers.** With no pin, `live()` gives every trial to the person.
+  With a pin, the scripted participant answers until the pin.
+- **The fast forward stops** at the pin, when the walk leaves the pinned
+  leaf without the row ("row 5 was not drawn in this run of the leaf:
+  seed 7"), at a trial with a signal role that lasts 30 s of session time
+  ("waits for input that the script cannot give"), or after 200,000
+  frames. The session goes to the UI where it stopped, with the note.
+- **The pointer's scale** is gfx's: px per cm is width x 10 / width_mm,
+  px per deg is width / width_mm x distance x tan(1 deg). The view is the
+  one the load gave the gfx, or the built-in rig's (0.27 mm a px,
+  570 mm). The origin is the display's center, y down (D22).
+- **Without a thread**, the preview runs its session job at the post
+  (`dsg_worker_wait()`), as `ui.cpp` does for a check.
+
+**Measured** (Linux desktop, Intel Core i5-14500, gcc 12.2, Release,
+`bench_designer_preview WORK 1000`, pinned to CPUs 2 and 4, under the
+measuring lock; two passes, load average (1 min) 0.36 before the first
+and 0.84 after the second). gfx's null backend: no GL work is in these
+numbers; part D measures the GL side. Microseconds, median, p99 and max
+of pass 1. Pass 2's medians are within 3 % or 0.1 us of pass 1's; its
+maxima differ where the table says.
+
+| Project | Tick, 60 Hz display (1 step, drawn) | Tick, 500 Hz display (8 or 9 steps) | A step, no draw (500 Hz) | The frame that adopts |
+|---|---|---|---|---|
+| bimanual | 2.0, 4.1, 59 | 13.0, 17.2, 70 | 1.4, 3.0, 54 | 5.3 |
+| stroop | 0.3, 1.6, 33 | 1.5, 4.7, 32 (pass 2: max 245) | 0.1, 1.0, 28 | 2.6 |
+| many (200 text stimuli on) | 37.3, 68, 173 | 42.0, 67, 175 | 0.7, 2.1, 167 | 4.7 |
+
+| Project | Load (check thread), ms | Close (check thread), ms | Load and fast forward to a pin, ms |
+|---|---|---|---|
+| bimanual | 10.4, 30.5, 30.5 (pass 2: max 10.5) | 14.8, 16.5, 16.5 | 13.8 (stops at trial 0: a signal role) |
+| stroop | 3.0, 3.3, 3.3 | 8.1, 8.2, 8.2 | |
+| many | 6.9, 7.4, 7.4 | 8.1, 13.2, 13.2 | 748 (stops at the 200,000-frame cap, before leaf `b9`) |
+
+- The UI thread's part of a frame is at most 0.25 ms in every case, far
+  under the 16 ms frame. The drawn frame is the most of a tick: 37 us
+  median with 200 text stimuli on.
+- The close is the largest cost on the check thread for small projects:
+  `pl_close()` runs the end's frames and the data set waits on the disk.
+  An earlier pass, at a load average of 0.9 to 1.2, gave stroop's close
+  41 ms median and 83 ms max: the disk, not the code.
+- The fast forward of the generated project stops at its cap after
+  0.75 s on the check thread (3.7 us a frame). A pin past about 3,300
+  trials of 60 frames is not reached. The knob is `PV_FF_MAX_FRAMES`.
+
+**Tests.** `test_designer_preview` (189 checks; headless, null gfx, the
+test's clock, the worker inline). (1) The first session at 1920 x 1080
+and 60 Hz, its data set and writer; one step a UI frame; the cap of 16
+with one drawn frame and no catch-up; speed 2 and 0.25; paused: no step
+and no frame wanted in 10 s of frames; step: one drawn frame, then
+paused; a run after 5 s paused and a hidden pane: no catch-up; the end
+after 3 trials. (2) No job 33 ms after an edit or before 300 ms; one
+after; one job after a burst of edits; none for an older revision's
+check. (3) A refused text keeps the session running, stale with its
+errors; restart reloads the last good text; the fixed text loads. (4)
+Stale: an edit after the post, other settings, a newer job waiting.
+(5) With `pl_sim_attach()` held by `--wrap`: the 4 ms budget, the old
+session steps while the new one attaches, a newer session replaces the
+attach, no step in the attach's frame. (6) A run-time refusal as the
+issue (template `win`, its line in the loaded text), cleared by an
+accepted edit; the fast forward's refusal; a failed load (the runs'
+folder is a file). (7) The pin: 2 of 6 rows found under `subset 2`, 4
+with the note; leaf `b` any row; "Preview this template"; the stall on a
+signal role. (8) Keys through the claimed keyboard, Escape, the up after
+the keyboard went back, rt on the grid less 1 ns; oddball's choice, its
+trigger codes (101 last), the sync line not driven; visuomotor's
+relative role not driven. (9) The pointer at a region's center in px,
+cm and deg ends the state; 3 px off does not; leaving the display sends
+nothing. (10) One run folder after restarts; after the close the shown
+one stays; a second "process" numbers on and leaves one. (11) No heap
+call in 1,500 running ticks with keys and the pointer (`--wrap`). (12)
+The real thread: bursts of restarts and edits, a reopen.
+
+**Sanitizers** (gcc 12, Debug, built and run under `setarch -R`,
+`DISPLAY` unset). ASan with UBSan (`halt_on_error`) and ThreadSanitizer:
+the 11 designer tests, no report. ThreadSanitizer: 10 more runs of
+`test_designer_preview` and 3 of `test_designer_te`, no report. The UI
+and Test Engine tests now load real sessions on the check thread.
+
+**Hand mutants** (each reverted; each fails `test_designer_preview`):
+
+| Mutant | Fails |
+|---|---|
+| pv-01 settle: no wait after a change | a session job 33 ms after the edit |
+| pv-02 newest session: an attach in progress keeps its older session | the shown run is not the newest job's |
+| pv-03 stale drop: a stale session is adopted | an edit's stale session attached |
+| pv-04 step cap: no cap | a 1 s frame stepped 59, not 16 |
+| pv-05 pause idle: a paused session animates | paused, 600 of 600 frames wanted a redraw |
+| pv-06 run folders: the close removes no older run | the second process left 2 folders |
+| pv-07 draw: every step draws | 16 frames, 16 drawn |
+| pv-08 input time: half a period before the onset | rt is not a frame onset less 1 ns |
+| pv-09 hidden pane: steps | hidden, stepped 60 |
+| pv-10 pointer: deg at cm's scale | at the region's center the state is `wait` |
+| pv-11 pin: the fast forward goes past a leaf left without the row | row 0, no session |
+| pv-12 refusal: the run-time refusal is no issue | no preview issue |
+
+**Freeze issue.** `test_designer_ui` part 8 (`ui_test.cpp`, S's) ends
+with "no session: nowhere" (line 405). It held with S's stub. With part
+A the pane shows a project that the check accepts, so a session loads,
+and the check fails. It is the only failure in ctest (141 of 142,
+Release, examples and the Test Engine on, `DISPLAY` unset). The check
+needs a change in S's file: for example, read `ui_preview_where()` before
+the pane first shows, or after the project closes.
+
+**Not done.**
+- No GL context: the attach's GL work, the texture and the drawn frame
+  on a GPU are part D's.
+- Windows and macOS were not compiled. The test's `--wrap` parts (the
+  held attach, the heap count, the drawn frames) skip there.
+- A session that ends keeps its data set open until it is replaced: its
+  `session.json` is written at the close.
+
 ## First version
 
 In:
