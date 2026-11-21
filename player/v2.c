@@ -1868,12 +1868,13 @@ static int v2_collector(pl_player* p, pl_v2* v, pl_tmpl* t) {
     rd.persist = !r->ends_trial;
     rd.max_responses = r->max_responses;
     {
-        static yrsp_source src;
-        src = yrsp_raw_mouse_source();
+        /* yrsp_open() copies the sources: a local, which two loads on two
+         * threads do not share (a static through 0.15.0) */
+        yrsp_source src = yrsp_raw_mouse_source();
         rd.sources = &src;
         rd.n_sources = 1;
+        if (!yrsp_open(t->collector, &rd)) { pl_fail(p, "template '%s': %s", v->def->name, yrsp_error(t->collector)); return -1; }
     }
-    if (!yrsp_open(t->collector, &rd)) { pl_fail(p, "template '%s': %s", v->def->name, yrsp_error(t->collector)); return -1; }
     return 0;
 }
 
@@ -2023,9 +2024,10 @@ static int v2_rig_signals(pl_player* p) {
     pl_at(p, PL_OBJ_NONE, NULL);
     S->bnd_max = 0;
     for (i = 0; i < n; i++) if (S->bnd[i] > S->bnd_max) S->bnd_max = S->bnd[i];
-    if (S->real) {
-        /* a poll's inputs: raw mice up to 8 kHz each for a long frame */
-        S->cap_live = p->args.live_cap > 0 ? p->args.live_cap : 8192;
+    if (S->real || p->sim.on) {
+        /* a poll's inputs: raw mice up to 8 kHz each for a long frame; a
+         * stepped session's samples (pl_sim_sample()) between two frames */
+        S->cap_live = p->args.live_cap > 0 ? p->args.live_cap : p->sim.on ? PL_SIM_LIVE_CAP : 8192;
         S->cap_keys = 1024;
         S->live = (yin_event*)pl_alloc(p, sizeof(yin_event) * (size_t)S->cap_live);
         S->keys = (yrsp_input*)pl_alloc(p, sizeof(yrsp_input) * (size_t)S->cap_keys);
@@ -3731,6 +3733,33 @@ static int64_t v2_fed_to(const pl_v2_session* S, const yscr_frame* f, int64_t li
     return c;
 }
 
+/* A --sim sample as its event: --samples' rows and a stepped session's
+ * (pl_sim_sample()) take one path. */
+static void v2_sim_sample(pl_player* p, yin_event* e, int64_t t, int role, float x, float y) {
+    pl_v2_session* S = p->v2s;
+    int ti;
+    memset(e, 0, sizeof *e);
+    e->t = t;
+    {
+        const yexp_sigrole* sr = &p->def->sigroles[role];
+        bool rel = sr->type == YEXP_SIG_POSITION2D_RELATIVE || (sr->type == YEXP_SIG_POSITION2D && sr->allow_relative);
+        e->kind = rel ? YIN_KIND_MOUSE : YIN_KIND_PEN;
+        e->control = rel ? YIN_AXIS_DELTA : YIN_AXIS_POSITION;
+    }
+    e->type = YIN_SAMPLE;
+    e->device = (uint32_t)role + 1;
+    /* reported at or before the role's complete-to time of the last
+     * poll: later than its bound (late_beyond_bound) */
+    if (S->polled && e->t <= (S->poll - S->bnd[role] < S->plim ? S->poll - S->bnd[role] : S->plim)) S->beyond[role]++;
+    if (e->t > S->newest[role]) S->newest[role] = e->t;
+    e->x = x;
+    e->y = y;
+    e->stamp = YIN_TIER_SIM;
+    S->n_sample_rows++;
+    for (ti = 0; ti < S->n_t; ti++)
+        if (S->t[ti] && S->t[ti]->has_graph) v2_late_in(S->t[ti], e->t);
+}
+
 /* The samples up to the frame's onset and `limit` (a key response's end,
  * pl_v2_response()), through every graph, the active one's hits. */
 static int v2_feed(pl_player* p, const yscr_frame* f, int64_t limit) {
@@ -3745,27 +3774,14 @@ static int v2_feed(pl_player* p, const yscr_frame* f, int64_t limit) {
     YRT_ZONE(zs, "sig.samples");
     while (rc == 0 && S->next_smp < S->n_smp && S->t0 + S->smp[S->next_smp].arr <= f->onset && S->t0 + S->smp[S->next_smp].t <= limit) {
         const struct v2_sample* sm = &S->smp[S->next_smp++];
-        yin_event* e = &S->batch[nb++];
-        memset(e, 0, sizeof *e);
-        e->t = S->t0 + sm->t;
-        {
-            const yexp_sigrole* sr = &p->def->sigroles[sm->role];
-            bool rel = sr->type == YEXP_SIG_POSITION2D_RELATIVE || (sr->type == YEXP_SIG_POSITION2D && sr->allow_relative);
-            e->kind = rel ? YIN_KIND_MOUSE : YIN_KIND_PEN;
-            e->control = rel ? YIN_AXIS_DELTA : YIN_AXIS_POSITION;
-        }
-        e->type = YIN_SAMPLE;
-        e->device = (uint32_t)sm->role + 1;
-        /* reported at or before the role's complete-to time of the last
-         * poll: later than its bound (late_beyond_bound) */
-        if (S->polled && e->t <= (S->poll - S->bnd[sm->role] < S->plim ? S->poll - S->bnd[sm->role] : S->plim)) S->beyond[sm->role]++;
-        if (e->t > S->newest[sm->role]) S->newest[sm->role] = e->t;
-        e->x = sm->x;
-        e->y = sm->y;
-        e->stamp = YIN_TIER_SIM;
-        S->n_sample_rows++;
-        for (ti = 0; ti < S->n_t; ti++)
-            if (S->t[ti] && S->t[ti]->has_graph) v2_late_in(S->t[ti], e->t);
+        v2_sim_sample(p, &S->batch[nb++], S->t0 + sm->t, sm->role, sm->x, sm->y);
+        fed++;
+        if (nb == cap) { rc = v2_feed_part(p, v, f, nb); nb = 0; }
+    }
+    /* a stepped session's samples (pl_sim_sample()), as --samples' rows */
+    while (rc == 0 && p->sim.on && S->live_next < S->n_live && S->live[S->live_next].t <= limit) {
+        const yin_event* le = &S->live[S->live_next++];
+        v2_sim_sample(p, &S->batch[nb++], le->t, (int)le->device - 1, le->x, le->y);
         fed++;
         if (nb == cap) { rc = v2_feed_part(p, v, f, nb); nb = 0; }
     }
@@ -5374,9 +5390,11 @@ int pl_v2_session_end(pl_player* p, yjs_arena* a) {
     if (!pl_v2_arm_counts(p, c)) return 0;
     o = yjs_new(a, YJS_OBJECT);
     for (i = 0; i < PL_ARM_COUNTS; i++) yjs_set(a, o, name[i], yjs_new_int(a, c[i]));
-    if (c[1] + c[2] + c[3] + c[8] > 0)
+    /* the command line's lines; a stepped session's caller reads
+     * session.json (sim.c writes nothing to stderr) */
+    if (c[1] + c[2] + c[3] + c[8] > 0 && !p->sim.on)
         fprintf(stderr, "ysp_player: %lld arms in the past fell back (inexact; session.json sig_arms)\n", (long long)(c[1] + c[2] + c[3] + c[8]));
-    if (c[12] + c[13] + c[15] > 0)
+    if (c[12] + c[13] + c[15] > 0 && !p->sim.on)
         fprintf(stderr, "ysp_player: %lld late reports fell back (inexact; session.json sig_arms)\n", (long long)(c[12] + c[13] + c[15]));
     if (yds_session_set(&p->ds, "sig_arms", o) < 0) return -1;
     {
@@ -5413,4 +5431,37 @@ int pl_v2_rs_steps(pl_player* p, int ti, int k, const yexp_step** st, int* n) {
 void pl_v2_select(pl_player* p) {
     if (!p->v2s) return;
     p->v2s->cur_t = p->tmpl && p->tmpl->v2 ? p->tmpl->v2->index : -1;
+}
+
+/* --- the stepped session (sim.c) ------------------------------------------ */
+
+const char* pl_v2_state_now(const pl_player* p) {
+    const pl_v2* v;
+    if (!p->in_trial || !p->tmpl || !(v = p->tmpl->v2) || v->def_cur < 0 || !v->def->states) return NULL;
+    return v->def->states[v->def_cur].name;
+}
+
+/* A sample for the next frame, in the queue a real run's raw mice use; the
+ * frame's feed reads it as a --samples row (v2_feed()). The queue moves
+ * up first: a fixed array, no allocation. */
+int pl_v2_sample_push(pl_player* p, int64_t t, int role, float x, float y) {
+    pl_v2_session* S = p->v2s;
+    yin_event* e;
+    if (!S || !S->live || role < 0 || role >= p->def->n_sigroles) return -1;
+    if (S->live_next > 0) {
+        memmove(S->live, S->live + S->live_next, sizeof(yin_event) * (size_t)(S->n_live - S->live_next));
+        S->n_live -= S->live_next;
+        S->live_next = 0;
+    }
+    if (S->n_live >= S->cap_live) { S->n_live_lost++; return -1; }
+    /* in time order, as --samples: a feed up to a limit then leaves only
+     * later samples queued, so the claim (v2_fed_to()) need not look at them */
+    if (S->n_live > 0 && t < S->live[S->n_live - 1].t) return -1;
+    e = &S->live[S->n_live++];
+    memset(e, 0, sizeof *e);
+    e->t = t;
+    e->device = (uint32_t)role + 1;
+    e->x = x;
+    e->y = y;
+    return 0;
 }

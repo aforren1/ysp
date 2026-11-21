@@ -1083,9 +1083,11 @@ static int pl_stim_make(pl_player* p, pl_stim* s) {
             /* --sim: the null device on the virtual clock; a real run: the
              * one AUTO picks (ysp/audio.h, BACKENDS) */
             ad.backend = p->args.sim ? YAU_BACKEND_NULL : YAU_BACKEND_AUTO;
-            if (p->checking) {
-                /* pl_check(): a device that opens and never runs, so the
-                 * check has no audio thread and needs no virtual clock */
+            if (p->stand_in) {
+                /* pl_check() and the stepped session: a device that opens
+                 * and never runs, so there is no audio thread and no
+                 * virtual clock; a stepped session's sounds keep their
+                 * plan (run.c, pl_sounds()) */
                 ad.backend = YAU_BACKEND_CUSTOM;
                 ad.dev = &pl_check_audio;
             }
@@ -1811,7 +1813,12 @@ static int pl_rig_load(pl_player* p) {
     int rc;
     p->rig = (yrig_profile*)pl_alloc(p, sizeof(yrig_profile));
     if (!p->rig) return -1;
-    if (a) {
+    if (p->sim.on) {
+        /* the stepped session: its caller's rig, else the built-in one,
+         * which is pl_check()'s stand-ins (no profile) */
+        if (!p->sim.rig) return 0;
+        memcpy(p->rig, p->sim.rig, sizeof *p->rig);
+    } else if (a) {
         bool file = strchr(a, '/') || strchr(a, '\\') || (strlen(a) > 5 && strcmp(a + strlen(a) - 5, ".json") == 0);
         rc = file ? yrig_load_file(p->rig, a, err, sizeof err) : yrig_load(p->rig, a, err, sizeof err);
         if (rc != YRIG_OK) { pl_fail(p, "the rig profile '%s': %s", a, err); return -1; }
@@ -1843,12 +1850,15 @@ static int pl_cal_load(pl_player* p) {
     long n;
     ycol_ctx_desc cxd;
     static const ycol_rgb gray = { 0.0, 0.0, 0.0 };
-    if (!path && p->have_rig && p->rig->display.calibration[0]) {
+    /* the stepped session reads no file: its caller gives the calibration */
+    if (!path && p->have_rig && p->rig->display.calibration[0] && !p->sim.on) {
         snprintf(joined, sizeof joined, "%s/%s", p->rig->dir, p->rig->display.calibration);
         path = joined;
     }
-    if (!path) {
-        if (p->def->calibration_required && p->checking) {
+    if (!path && p->sim.on && p->sim.cal) {
+        memcpy(&p->cal, p->sim.cal, sizeof p->cal);
+    } else if (!path) {
+        if (p->def->calibration_required && p->stand_in) {
             /* pl_check(): player_make_rig's nominal calibration stands in */
             pl_need_add(p, PL_NEED_CALIBRATION, NULL, 0);
             if (p->check_cal) memcpy(&p->cal, p->check_cal, sizeof p->cal);
@@ -1918,7 +1928,7 @@ static int pl_roles_bind(pl_player* p) {
         r->rule_out = -1;
         /* pl_check(): a required role that the keyboard cannot take needs a
          * device in the rig profile; --sim binds none */
-        if (p->checking && r->def->required && !(r->def->direction == 0 && pl_role_lists(r->def, "keyboard")))
+        if (p->stand_in && r->def->required && !(r->def->direction == 0 && pl_role_lists(r->def, "keyboard")))
             pl_need_add(p, PL_NEED_DEVICE, r->def->name, r->def->direction);
         if (p->args.sim) continue;
         r->keyboard = !r->rig && r->def->direction == 0 && pl_role_lists(r->def, "keyboard");
@@ -2130,7 +2140,7 @@ static int pl_roles_tier(pl_player* p) {
         pl_role* r = &p->roles[i];
         int tier;
         if (!r->def->min_tier) continue;
-        if (p->checking) {
+        if (p->stand_in) {
             pl_need_add(p, PL_NEED_ROLE_TIER, r->def->name, r->def->min_tier);
             continue;
         }
@@ -2276,7 +2286,7 @@ static void pl_gd_units(pl_player* p, yscr_screen* s, ygfx_desc* gd) {
         /* the simulated display has no mode: the scene is 800 px wide (the
          * default window); a window keeps the panel's pitch (ysp/rigfile.h,
          * VIEWING GEOMETRY), so the width in mm follows the pixels */
-        w = caps.mode.w > 0 ? (double)caps.mode.w : 800.0;
+        w = caps.mode.w > 0 ? (double)caps.mode.w : p->sim.on ? (double)p->sim.width : 800.0;
         gd->units = YGFX_DEG;
         gd->view.distance_mm = (float)p->rig->view.distance_mm;
         gd->view.width_mm = (float)(p->rig->view.width_mm * (w / (double)p->rig->view.width_px));
@@ -2287,7 +2297,7 @@ static void pl_gd_units(pl_player* p, yscr_screen* s, ygfx_desc* gd) {
         double w;
         memset(&caps, 0, sizeof caps);
         if (s) yscr_get_caps(s, &caps);
-        w = caps.mode.w > 0 ? (double)caps.mode.w : 800.0;
+        w = caps.mode.w > 0 ? (double)caps.mode.w : p->sim.on ? (double)p->sim.width : 800.0;
         gd->units = YGFX_CM;
         gd->view.width_mm = (float)(p->rig->view.width_mm * (w / (double)p->rig->view.width_px));
         p->view = gd->view;
@@ -2316,6 +2326,43 @@ static int pl_screen_none(pl_player* p, ygfx_desc* gd) {
     if (!pl_gfx_open_null(&p->gfx, gd)) { pl_fail(p, "the gfx: %s", ygfx_error(&p->gfx)); return -1; }
     p->gfx_open = true;
     p->caps.period_ns = p->args.sim_period_ns > 0 ? p->args.sim_period_ns : 16666667;
+    return 0;
+}
+
+/* The stepped session's screen: none; its caller makes each frame
+ * (sim.c). The gfx at the session's display size: recorded now and made
+ * on the caller's GL thread at pl_sim_attach() (ysp/gfx.h 0.23.0's
+ * deferred open, P3), or on the null backend. Its calibration's check
+ * runs here, on the loading thread. */
+static int pl_screen_stepped(pl_player* p, ygfx_desc* gd) {
+    if (p->def->min_tier) pl_need_add(p, PL_NEED_DISPLAY_TIER, NULL, p->def->min_tier);
+    pl_gd_units(p, NULL, gd);
+    gd->width = p->sim.width;
+    gd->height = p->sim.height;
+    p->caps.period_ns = p->sim.period;
+    p->caps.mode.w = p->sim.width;
+    p->caps.mode.h = p->sim.height;
+    p->caps.mode.period_ns = p->sim.period;
+    if (p->sim.gl_caps) {
+#if PL_GFX_DEFER
+        /* P3: ysp/gfx.h 0.23.0's names, from docs/designer.md ("The GL
+         * context"); not built against 0.23.0 yet */
+        gd->cache = p->sim.cache;
+        gd->gl_proc = p->sim.gl_proc;
+        gd->gl_ctx = p->sim.gl_ctx;
+        gd->defer = true;
+        gd->gl_caps = p->sim.gl_caps;
+        gd->output_texture = true;
+        if (!ygfx_open(&p->gfx, gd)) { pl_fail(p, "the gfx: %s", ygfx_error(&p->gfx)); return -1; }
+        p->gfx_open = true;
+        return 0;
+#else
+        pl_fail(p, "the stepped session on a GL context needs ysp/gfx.h 0.23.0 (a deferred open); this build has %s", YGFX_VERSION_STRING);
+        return -1;
+#endif
+    }
+    if (!pl_gfx_open_null(&p->gfx, gd)) { pl_fail(p, "the gfx: %s", ygfx_error(&p->gfx)); return -1; }
+    p->gfx_open = true;
     return 0;
 }
 
@@ -2390,7 +2437,7 @@ static int pl_screen_open(pl_player* p) {
     c.gd.background[1] = (float)p->def->background[1];
     c.gd.background[2] = (float)p->def->background[2];
     if ((p->def->units_deg || p->def->units == 2) && (!p->have_rig || !p->rig->view.set)) {
-        if (!p->checking) {
+        if (!p->stand_in) {
             pl_fail(p, "display.units is %s: the rig profile needs a view (rigfile_profile --view); give --rig", p->def->units == 2 ? "cm" : "deg");
             return -1;
         }
@@ -2407,6 +2454,11 @@ static int pl_screen_open(pl_player* p) {
     if (p->have_cal && !p->checking) c.gd.cal = &p->cal;
     if (p->checking) {
         if (pl_screen_none(p, &c.gd) < 0) return -1;
+        pl_frame_counts(p);
+        return 0;
+    }
+    if (p->sim.on) {
+        if (pl_screen_stepped(p, &c.gd) < 0) return -1;
         pl_frame_counts(p);
         return 0;
     }
@@ -2463,7 +2515,7 @@ static int pl_fields_init(pl_player* p) {
         for (k = 0; k < p->args.n_fields; k++)
             if (strcmp(p->args.fields[k].name, f->name) == 0) given = p->args.fields[k].value;
         pl_at(p, PL_OBJ_FIELD, f->name);
-        if (!given && f->required && p->checking) {
+        if (!given && f->required && p->stand_in) {
             /* pl_check(): a placeholder of the field's type */
             pl_need_add(p, PL_NEED_FIELD, f->name, f->is_string ? 1 : 0);
             given = f->is_string ? "x" : "1";
@@ -2530,6 +2582,34 @@ static void pl_check_sigroles(pl_player* p) {
     }
 }
 
+/* The text programs' first draws, which ygfx_crun() makes on first use, and
+ * ygfx_prime(): off a trial's frames (docs/gfx.md). */
+void pl_gfx_warm(pl_player* p) {
+    ygfx_crun_desc rd;
+    ygfx_citem item;
+    uint32_t f;
+    memset(&item, 0, sizeof item);
+    memset(&rd, 0, sizeof rd);
+    rd.items = &item;
+    rd.n = 1;
+    rd.size = 1.0f;
+    /* ygfx_crun() builds its per-set draw state on first use: do that here */
+    for (f = 0; f < p->runs.n_fonts; f++) {
+        rd.set = p->csets[f];
+        (void)ygfx_crun(&p->gfx, &rd);
+    }
+    /* and the paint program, when a run has color glyphs */
+    for (f = 0; f < p->runs.n_runs; f++)
+        if (p->runs.runs[f].flags & YPAK_RUN_PAINT) {
+            rd.set = p->csets[p->runs.runs[f].font];
+            rd.fields = YGFX_I_PAINT;
+            (void)ygfx_crun(&p->gfx, &rd);
+            rd.fields = 0;
+            break;
+        }
+    ygfx_prime(&p->gfx);
+}
+
 /* The load, from the pack's open to the data set's columns: pl_load() with
  * the arguments' pack file, pl_check() with its pack and p->checking set.
  * The steps with side effects (the rig and calibration files, the seed
@@ -2593,7 +2673,7 @@ static int pl_load_pack(pl_player* p, const ypak_desc* pd) {
     memset(&p->env, 0, sizeof p->env);
     if (pl_cal_load(p) < 0) return -1;
 
-    if (p->checking) pl_check_sigroles(p);
+    if (p->stand_in) pl_check_sigroles(p);
     if (!a->sim && p->def->n_sigroles > 0 && !p->have_rig) {
         /* a signal role's adapter is the rig's (G18, devices_spec.md 11.2);
          * the definition's checks ran the profile's signals through the
@@ -2631,32 +2711,9 @@ static int pl_load_pack(pl_player* p, const ypak_desc* pd) {
         p->draw_order[j + 1] = v;
     }
     /* the text program's first draw now, off the frame path (docs/gfx.md),
-     * as trial_stroop does; pl_check() has no GPU to warm */
-    if (p->runs_open && !p->checking) {
-        ygfx_crun_desc rd;
-        ygfx_citem item;
-        uint32_t f;
-        memset(&item, 0, sizeof item);
-        memset(&rd, 0, sizeof rd);
-        rd.items = &item;
-        rd.n = 1;
-        rd.size = 1.0f;
-        /* ygfx_crun() builds its per-set draw state on first use: do that here */
-        for (f = 0; f < p->runs.n_fonts; f++) {
-            rd.set = p->csets[f];
-            (void)ygfx_crun(&p->gfx, &rd);
-        }
-        /* and the paint program, when a run has color glyphs */
-        for (f = 0; f < p->runs.n_runs; f++)
-            if (p->runs.runs[f].flags & YPAK_RUN_PAINT) {
-                rd.set = p->csets[p->runs.runs[f].font];
-                rd.fields = YGFX_I_PAINT;
-                (void)ygfx_crun(&p->gfx, &rd);
-                rd.fields = 0;
-                break;
-            }
-        ygfx_prime(&p->gfx);
-    }
+     * as trial_stroop does; pl_check() has no GPU to warm, and a stepped
+     * session warms its GL at its first drawn frame (sim.c) */
+    if (p->runs_open && !p->checking && !p->sim.on) pl_gfx_warm(p);
     /* static properties once, with session-level values */
     memset(&p->env, 0, sizeof p->env);
     for (i = 0; i < p->n_stims; i++) {
@@ -2727,8 +2784,7 @@ static int pl_load_pack(pl_player* p, const ypak_desc* pd) {
         if (c->prop && c->prop[0] == '\x01') {
             /* version 2's selector or value channel: the graph reads it, no
              * stimulus field does (v2.c); it starts each trial at 0 */
-            static float pl_v2_sink;
-            b->field = &pl_v2_sink;
+            b->field = &p->v2_sink;
             p->chan_src[i] = NULL;
             continue;
         } else if (!c->prop) {
@@ -2831,6 +2887,8 @@ static int pl_load_pack(pl_player* p, const ypak_desc* pd) {
     return p->failed ? -1 : 0;
 }
 
+int pl_load_from(pl_player* p, const ypak_desc* pd) { return pl_load_pack(p, pd); }
+
 int pl_load(pl_player* p, const pl_args* a) {
     ypak_desc pd;
     memset(p, 0, sizeof *p);
@@ -2847,6 +2905,7 @@ int pl_load(pl_player* p, const pl_args* a) {
 int pl_check(pl_player* p, const pl_check_desc* d, pl_check_result* r) {
     memset(p, 0, sizeof *p);
     memset(r, 0, sizeof *r);
+    p->stand_in = true;
     p->checking = true;
     p->args.sim = true;
     p->args.have_seed = true;
@@ -2868,6 +2927,9 @@ int pl_check(pl_player* p, const pl_check_desc* d, pl_check_result* r) {
 
 void pl_close(pl_player* p) {
     int i;
+    /* a stepped session's end and session.json (sim.c), on the thread that
+     * closes: the writer's join waits on the disk */
+    if (p->sim.on && p->sim.end) p->sim.end(p);
     (void)pl_writer_close(p);   /* its last writes go to the data set, still open */
     pl_v2_close(p);
     for (i = 0; i < p->n_stims && p->stims; i++) {

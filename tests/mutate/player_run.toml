@@ -32,6 +32,16 @@ timeout = 300
 env = { YPL_REPO = "{repo}" }
 env_default = { YPAK = "{repo}/build/linux/pack/ypak" }
 
+# the stepped session (tests/player/sim_test.c, as in player_sim.toml)
+[test.sim]
+source = "tests/player/sim_test.c"
+compiler = "gcc"
+flags = ["-std=c11", "-O1", "-w", "-DYSCR_NO_SDL", "-DPL_SIM_MUT", "-I$YSP_MINIAUDIO"]
+libs = ["-lm", "-lpthread", "-ldl"]
+timeout = 300
+env = { YPL_REPO = "{repo}" }
+env_default = { YPAK = "{repo}/build/linux/pack/ypak" }
+
 [[mutant]]
 id = "r-01"
 name = "after starts at the response's end alone"
@@ -808,3 +818,103 @@ test = "check"
 why = "The 17th stream is refused as yds_stream() refuses it (YDS_MAX_STREAMS)."
 find = '''        id = yds_stream_check(p->check_streams, p->n_check_streams, name, cols, n, w, err, sizeof err);'''
 replace = '''        id = yds_stream_check(p->check_streams, p->n_check_streams % YDS_MAX_STREAMS, name, cols, n, w, err, sizeof err);'''
+
+[[mutant]]
+id = "rs-01"
+name = "a stepped session's keys reach no collector"
+test = "sim"
+env = { PL_SIM_CASES = "input" }
+why = "pl_sim_key() and pl_sim_choice() feed every collector at the next frame."
+find = '''    if (p->sim.on && p->sim.n_in > 0) {'''
+replace = '''    if (0) {'''
+
+[[mutant]]
+id = "rs-02"
+name = "a live trial still gets the scripted press"
+test = "sim"
+env = { PL_SIM_CASES = "live" }
+why = "A trial that live() takes is the caller's."
+find = '''    if (p->sim.live_trial) return;               /* a stepped session's caller answers it (live()) */'''
+replace = ''''''
+
+[[mutant]]
+id = "rs-03"
+name = "a stepped sound's onset is not its plan"
+test = "sim"
+env = { PL_SIM_CASES = "equal" }
+why = "Decision 2: the onset is the scheduled time; within a sample period of --sim's."
+find = '''        on.onset = s->sound_scheduled;'''
+replace = '''        on.onset = s->sound_scheduled + 1000000;'''
+
+[[mutant]]
+id = "rs-04"
+name = "a flip's code does not reach on_code"
+test = "sim"
+env = { PL_SIM_CASES = "codes" }
+why = "The outputs list shows each code with its role and time."
+find = '''                if (p->sim.on_code) p->sim.on_code(p->sim.ctx, p->trigger_roles[e->target]->name, (uint32_t)e->code, e->onset);'''
+replace = ''''''
+
+[[mutant]]
+id = "rs-05"
+name = "a response's code does not reach on_code"
+test = "sim"
+env = { PL_SIM_CASES = "codes" }
+why = "oddball's response code 101 is a code too."
+find = '''    if (p->sim.on && p->sim.on_code) p->sim.on_code(p->sim.ctx, p->trigger_roles[ch]->name, (uint32_t)code, r->t_response);'''
+replace = ''''''
+
+[[mutant]]
+id = "rs-06"
+name = "a stepped flip's code goes to the screen"
+test = "sim"
+env = { PL_SIM_CASES = "equal" }
+why = "There is no screen: its trigger refuses, and the rows count the code failed (oddball)."
+find = '''            int ok = lose || p->sim.on ? YSCR_OK : yscr_trigger(&p->scr, e->target, (uint32_t)e->code);'''
+replace = '''            int ok = lose ? YSCR_OK : yscr_trigger(&p->scr, e->target, (uint32_t)e->code);'''
+
+[[mutant]]
+id = "rs-07"
+name = "a frame without draw still draws"
+test = "sim"
+env = { PL_SIM_CASES = "threads" }
+why = "A fast forward makes no gfx call (gfx frames stay 0)."
+find = '''static bool pl_draws(const pl_player* p) { return !p->sim.on || p->sim.draw; }'''
+replace = '''static bool pl_draws(const pl_player* p) { (void)p; return true; }'''
+
+[[mutant]]
+id = "rs-08"
+name = "a refusal at run time names no object"
+test = "sim"
+env = { PL_SIM_CASES = "refusal" }
+why = "The preview links a run-time refusal to its template."
+find = '''    pl_at(p, PL_OBJ_TEMPLATE, p->tmpl->def->name);
+'''
+replace = ''''''
+
+[[mutant]]
+id = "rs-09"
+name = "the last trial's outcome is not kept"
+test = "sim"
+env = { PL_SIM_CASES = "input" }
+why = "pl_sim_where_now() shows the last trial's outcome."
+find = '''        p->sim.last_has_outcome = p->env.outcome != NULL;'''
+replace = '''        p->sim.last_has_outcome = false;'''
+
+[[mutant]]
+id = "rs-10"
+name = "a stepped session writes in place"
+test = "sim"
+env = { PL_SIM_CASES = "threads" }
+why = "The writes go to the writer thread: no write() on the UI thread."
+find = '''    if (p->args.sim && !p->sim.on) return 0;'''
+replace = '''    if (p->args.sim) return 0;'''
+
+[[mutant]]
+id = "rs-11"
+name = "live() is asked of the next trial"
+test = "sim"
+env = { PL_SIM_CASES = "live" }
+why = "live() gets the trial that starts."
+find = '''    p->sim.live_trial = p->sim.ask && p->sim.ask(p, p->global_trial);'''
+replace = '''    p->sim.live_trial = p->sim.ask && p->sim.ask(p, p->global_trial + 1);'''

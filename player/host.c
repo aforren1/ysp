@@ -144,7 +144,8 @@ static int h_rules(void* ctx, const yexp_node* leaf, char* msg, size_t cap) {
     pl_player* p = (pl_player*)ctx;
     ytr_desc d;
     ytr_rules_desc r;
-    static ytr_trials t;      /* 253 KB: not the stack */
+    ytr_trials* t;            /* 253 KB: not the stack; the load's own, as
+                               * two loads may run on two threads        */
     const ytb_table* table = leaf->table ? pl_table_get(p, leaf->table) : NULL;
     size_t bytes = ((size_t)1 << 19) + (table ? 32u * (size_t)table->n_rows : 0u);
     void* arena = pl_alloc(p, bytes);
@@ -176,13 +177,15 @@ static int h_rules(void* ctx, const yexp_node* leaf, char* msg, size_t cap) {
     d.seed = 1;
     d.display_rate_num = 60;
     d.display_rate_den = 1;
-    memset(&t, 0, sizeof t);
-    if (!ytr_open(&t, &d)) {
-        snprintf(msg, cap, "%s", ytr_error(&t));
-        ytr_close(&t);
+    if (!p->rules_scratch) p->rules_scratch = (ytr_trials*)pl_alloc(p, sizeof(ytr_trials));
+    if (!(t = p->rules_scratch)) { snprintf(msg, cap, "out of memory for the rules"); return 1; }
+    memset(t, 0, sizeof *t);
+    if (!ytr_open(t, &d)) {
+        snprintf(msg, cap, "%s", ytr_error(t));
+        ytr_close(t);
         return 1;
     }
-    ytr_close(&t);
+    ytr_close(t);
     return 0;
 }
 
@@ -271,7 +274,7 @@ static void h_find_leaves(const yexp_node* n, int count, const yexp_template* t,
 
 static int h_check_ops(void* ctx, const yexp_def* d, const yexp_template* t, char* msg, size_t cap) {
     pl_player* p = (pl_player*)ctx;
-    static ytl_timeline tl;
+    ytl_timeline* tl;         /* the load's own, as h_rules()'s scratch */
     ytl_event* ev;
     ytl_key* keys;
     ytl_desc td;
@@ -294,7 +297,9 @@ static int h_check_ops(void* ctx, const yexp_def* d, const yexp_template* t, cha
     ops = (ytl_op*)pl_alloc(p, sizeof(ytl_op) * (size_t)bound);
     ev = (ytl_event*)pl_alloc(p, sizeof(ytl_event) * (size_t)bound);
     keys = (ytl_key*)pl_alloc(p, sizeof(ytl_key) * (size_t)bound * 4);
-    if (!ops || !ev || !keys) { snprintf(msg, cap, "out of memory"); return 1; }
+    if (!p->ops_scratch) p->ops_scratch = (ytl_timeline*)pl_alloc(p, sizeof(ytl_timeline));
+    tl = p->ops_scratch;
+    if (!ops || !ev || !keys || !tl) { snprintf(msg, cap, "out of memory"); return 1; }
     h_find_leaves(d->timeline, d->n_timeline, t, NULL, &n_leaves, 0);
     leaves = (const yexp_node**)pl_alloc(p, sizeof(yexp_node*) * (size_t)(n_leaves + 1));
     rules_arena = pl_alloc(p, (size_t)1 << 19);
@@ -334,8 +339,8 @@ static int h_check_ops(void* ctx, const yexp_def* d, const yexp_template* t, cha
         memset(&p->env, 0, sizeof p->env);
         p->env.extreme = mode;
         p->env.node = leaf;
-        if (!ytl_open(&tl, &td)) { snprintf(msg, cap, "timeline: %s", ytl_error(&tl)); rc = 1; break; }
-        ytl_anchor(&tl, PL_BASE_TRIAL, 0, 0);
+        if (!ytl_open(tl, &td)) { snprintf(msg, cap, "timeline: %s", ytl_error(tl)); rc = 1; break; }
+        ytl_anchor(tl, PL_BASE_TRIAL, 0, 0);
         if (n_rs > 0) {
             int k;
             for (k = 0; k < n_rs && rc == 0; k++) {
@@ -344,11 +349,11 @@ static int h_check_ops(void* ctx, const yexp_def* d, const yexp_template* t, cha
                 (void)pl_v2_rs_steps(p, ti, k, &st, &n);
                 if (!st || !n) continue;
                 cursor = 0;
-                if (!ytl_open(&tl, &td)) { snprintf(msg, cap, "timeline: %s", ytl_error(&tl)); rc = 1; break; }
-                ytl_anchor(&tl, PL_BASE_TRIAL, 0, 0);
+                if (!ytl_open(tl, &td)) { snprintf(msg, cap, "timeline: %s", ytl_error(tl)); rc = 1; break; }
+                ytl_anchor(tl, PL_BASE_TRIAL, 0, 0);
                 nops = pl_build_ops(p, st, n, ops, bound, &cursor);
                 if (nops < 0) { snprintf(msg, cap, "%s", p->error); p->failed = 0; rc = 1; break; }
-                if (nops > 0 && (e = ytl_check_ops(&tl, PL_BASE_TRIAL, ops, nops, &bad)) != 0) {
+                if (nops > 0 && (e = ytl_check_ops(tl, PL_BASE_TRIAL, ops, nops, &bad)) != 0) {
                     snprintf(msg, cap, "template '%s', a state's op %d: %s", t->name, bad, ytl_strerror(e));
                     rc = 1;
                 }
@@ -373,7 +378,7 @@ static int h_check_ops(void* ctx, const yexp_def* d, const yexp_template* t, cha
             nops = c2 + n2;
         }
         if (nops > 0) {
-            int e = ytl_check_ops(&tl, PL_BASE_TRIAL, ops, nops, &bad);
+            int e = ytl_check_ops(tl, PL_BASE_TRIAL, ops, nops, &bad);
             if (e != 0) { snprintf(msg, cap, "template '%s', op %d of its steps: %s", t->name, bad, ytl_strerror(e)); rc = 1; break; }
         }
     }

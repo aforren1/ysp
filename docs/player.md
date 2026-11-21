@@ -1,6 +1,9 @@
 # The player
 
-Status: v0.15.0, 2026-11-18 (0.15.0: `pl_check()` refuses what a real
+Status: v0.16.0, 2026-11-20 (0.16.0: the stepped session, the `--sim`
+session that its caller steps one frame at a time, for the designer's
+preview, [Reference: the stepped session](#reference-the-stepped-session);
+0.15.0: `pl_check()` refuses what a real
 run refuses from the definition alone: a response trigger or a choice on
 a role that a rig can bind to a device, and the data set's streams;
 0.14.0: `pl_check()` for the designer,
@@ -513,9 +516,11 @@ A refusal's message is the one that the command line prints in a real
 run. The one exception is a refusal of the `trials.csv` columns: its
 message names no folder.
 
-Two calls must not run at the same time in one process. The loader's
-host checks use static scratch (`h_rules()` and `h_check_ops()` in
-`player/host.c`).
+Since 0.16.0, two calls can run at the same time in one process, each on
+its own `pl_player`. The loader's host checks (`h_rules()` and
+`h_check_ops()` in `player/host.c`) take their scratch from the load's
+memory; through 0.15.0 it was static, and ThreadSanitizer reports that
+static in `test_player_sim`'s case (4).
 
 Fixed in 0.14.0: a definition whose `participant` session field is a
 string ended the process (a segmentation fault, found 2026-11-18).
@@ -553,6 +558,132 @@ lost its calibration, in the gfx's check of it. With the gfx's
 calibration, the medians were 49.5 ms (`cal` `NULL`) and 36.8 ms (`cal`
 given). Starting the command line on rdk or stroop
 (`--max-trials 1`) took about 10 ms a process on the same machine.
+
+## Reference: the stepped session
+
+The stepped session is the `--sim` session, stepped by its caller one
+frame at a time. It is for the designer's preview
+([designer.md](designer.md), "Plan of step 5"). It is in the player
+library (`ysp_player_lib`; declared in `player/player.h`, built in
+`player/sim.c`). It runs on the real clock with no screen, no virtual
+clock and no thread of its own. The data set's writer is its one thread,
+as in a real run. No call elevates a thread.
+
+```c
+int  pl_sim_load(pl_player* p, const pl_sim_desc* d, pl_check_result* r);
+int  pl_sim_attach(pl_player* p, int64_t budget_ns);
+int  pl_sim_frame(pl_player* p, bool draw);
+int  pl_sim_key(pl_player* p, int64_t t_ns, int scancode, bool down);
+int  pl_sim_choice(pl_player* p, int64_t t_ns, int choice, bool down);
+int  pl_sim_sample(pl_player* p, int64_t t_ns, int role, float x, float y);
+int64_t pl_sim_next_onset(const pl_player* p);
+void pl_sim_where_now(const pl_player* p, pl_sim_where* w);
+bool pl_sim_texture(const pl_player* p, ygfx_native* out);
+void pl_sim_stop(pl_player* p);
+void pl_sim_detach(pl_player* p);
+void pl_close(pl_player* p);
+```
+
+### The calls and their threads
+
+| Call | Thread | What it does |
+|---|---|---|
+| `pl_sim_load()` | any | The load and lower of `pl_check()`, with the rig, the display and the data set. It starts the data set's writer. It makes no GL call. `r` is as `pl_check()`'s: the status, the refusal and its object, and the needs (tier 3), which the session meets with the check's stand-ins. Call `pl_close()` after any result. |
+| `pl_sim_attach()` | the GL thread | Makes the GL objects that the load recorded, for at most `budget_ns` a call (0: all). 1 when done, 0 when more is left, < 0 an error. Then it draws the text programs once and primes the programs (`ygfx_prime()`). With the null backend it gives 1 at once. |
+| `pl_sim_frame(p, false)` | the owner | One frame's logic with no gfx call: a fast forward, before or after attach. |
+| `pl_sim_frame(p, true)` | the GL thread, after attach | One frame, drawn. |
+| `pl_sim_key()`, `pl_sim_choice()`, `pl_sim_sample()` | the owner | Input for the next frame. |
+| `pl_sim_next_onset()`, `pl_sim_where_now()` | the owner | The next frame's onset; where the session is. |
+| `pl_sim_texture()` | the GL thread | The display's texture: its GL name, GL_RGBA8, rows bottom-up. False before attach and on the null backend. |
+| `pl_sim_stop()` | the owner | Stops the session before its end. `session.json` gets `aborted` with the reason `request`. |
+| `pl_sim_detach()` | the GL thread | Frees the GL objects and closes the gfx. After it, `pl_close()` makes no GL call. |
+| `pl_close()` | any | Runs the end of a session that did not reach it (a stopped one too) with no draw, the writer's last writes and `session.json`; then frees all. It waits on the disk, so the designer calls it on its check thread. |
+
+"The owner" is the thread that owns the session at that time. One thread
+at a time uses a session; the caller orders a handover (the designer
+does it through SDL's event queue). Two sessions on two threads share
+nothing: the statics of 0.15.0 (`p_row_cap`, the host checks' scratch,
+`pl_v2_sink`, a version 2 response's `yrsp_source`) are each load's own.
+
+`pl_sim_frame()` gives 0 to go on, 1 when the session is over, and < 0 for
+a refusal: `p->error` has the message, and `p->fail_obj` and
+`p->fail_name` its object, as a load's refusal has them. A refusal in a
+trial names its template; one in a leaf's trial list names the node.
+After 1, the frames are done, and `pl_close()` writes the last rows and
+`session.json`. `pl_sim_frame()` makes no heap call (`test_player_sim`,
+51,043 frames).
+
+### The description
+
+| Field of `pl_sim_desc` | Meaning |
+|---|---|
+| `pack`, `def_text`, `def_len`, `seed` | As `pl_check_desc`'s. Keep the pack's memory until `pl_close()`. |
+| `rig` | A rig profile in memory, or `NULL`: the built-in simulated rig, which is `pl_check()`'s stand-ins (570 mm away, 1920 px over 518.4 mm, no devices). The session reads no rig file. |
+| `cal` | The display's calibration, or `NULL`: the nominal one of `pl_check_nominal_cal()` for a definition with `"calibration": "required"` (a need), identity for any other. |
+| `n_fields`, `fields` | Session fields. A required field that is not given takes the check's stand-in and is a need. |
+| `out_dir` | The data set's folder. It must not exist. |
+| `participant`, `rt_s` | The scripted participant of the trials that `live()` leaves to it, as `--participant` and `--rt` (`NULL` and 0: `correct`, 0.3 s). |
+| `width`, `height`, `period_ns` | The display. 0: 1920 x 1080 at 60 Hz. `--sim`'s display is 800 x 600. |
+| `gl_caps`, `cache`, `gl_proc`, `gl_ctx` | The gfx on the caller's GL context (ysp/gfx.h 0.23.0; see below). `gl_caps` `NULL`: the null backend, which makes every object and draws nothing. |
+| `live(ctx, w)` | At each trial's start: true, the caller answers the trial (no scripted press); false, the scripted participant does. `w` gives the trial, its leaf, its row and its template. Optional. |
+| `on_code(ctx, role, code, t_ns)` | Each code that the session sends: a flip's at its onset, a response's at its time. These are the codes and times of `events.csv`'s `out` rows. Optional. |
+
+### Time and input
+
+The session's time is its frame grid, not a clock. Frame k's onset is
+`YRT_VIRTUAL_T0_NS + (7 + k) x period`, and its flip record comes with
+frame k + 1: shown on its vblank, tier SIM, no drop. That is what
+`--sim`'s SIM screen gives on the virtual clock. The first frame is
+vblank 7 because the screen's open shows 6 warm-up frames. A caller that
+steps the session late changes no time in its data.
+
+Input times are on the grid. An input's time must be after the last
+frame's onset and at or before the next one's (`pl_sim_next_onset()`).
+The input reaches the session at the next `pl_sim_frame()`.
+
+- A key goes to every collector, as a real run's keys do, with the SDL
+  scancode as its control.
+- A choice is the running template's choice by its index, with its own
+  kind and control, as the scripted participant presses it.
+- A sample is a signal role's (by its index in the definition), as a
+  `--samples` row: an absolute role's in its units, a relative role's in
+  counts at the stand-in gain of 1 (`PL_NEED_SIM_GAIN`). Samples go in
+  time order.
+
+Up to 256 keys and choices and 8,192 samples wait for a frame. A call
+past that, or with a time out of range, gives < 0 and changes nothing.
+
+A sound keeps its plan: its onset is its scheduled time, and a response
+`from` a sound runs from that time. No audio device runs (decision 2).
+
+### Differences from --sim
+
+- `--sim`'s null audio device opens on the virtual clock and moves it
+  0.55 s. So for a definition with a sound, `--sim`'s first frame comes
+  33 frames (60 Hz) later than the grid's. Every other cell is the same,
+  but a time that counts from a sound can differ by less than one sample
+  period: 1.0 us at most in `test_player_sim` (48 kHz: 20.8 us).
+- `session.json`: the `screen` line names the stepped session, and the
+  `audio` line names the device that never runs.
+- The writes go through the writer thread, as a real run's do. `--sim`
+  writes in place.
+
+### What needs ysp/gfx.h 0.23.0
+
+The session draws on the caller's GL context through ysp/gfx.h 0.23.0's
+deferred open and output texture ([designer.md](designer.md), "The GL
+context", prerequisite P3). `PL_GFX_DEFER` is 1 when the header is 0.23.0
+or later. Before 0.23.0, the load refuses a desc with `gl_caps`, and the
+session draws on the null backend only. These calls wait for 0.23.0, in
+`pl_screen_stepped()` (`player/lower.c`) and `player/sim.c`:
+
+- the open: `ygfx_desc.defer`, `.gl_caps` and `.output_texture`;
+- `ygfx_attach(g, gl_proc, gl_ctx, budget_ns)` in `pl_sim_attach()`;
+- `ygfx_output_native()` in `pl_sim_texture()`;
+- `ygfx_reset_state()` after attach and before a drawn frame (in 0.22.0
+  already; called on the GL path only).
+
+They use the plan's names, and nothing has built them against 0.23.0.
 
 ## Explanation: what lowering decided
 
@@ -1510,6 +1641,24 @@ frame, F40, F41, 3.11 rule 8 and the trial's end.
 | L2 (low): the lag per state row | A state row's `t_s` minus the `end_s` of the visit before (no column: the coordinator's decision, 2026-11-15); `trials.csv` `exit_lag_max_s` |
 
 ## Results
+
+### The stepped session (0.16.0, 2026-11-20)
+
+Linux desktop (i5-14500, Debian 12, gcc 12.2), Release unless the row
+says otherwise. Nothing here is a timing claim.
+
+| Check | Result |
+|---|---|
+| `test_player_sim` (1): each example at 800 x 600, against `--sim` in the same process on the virtual clock, which then ends | rdk, stroop, afc2, oddball, and visuomotor and bimanual with their samples through `pl_sim_sample()`: `trials.csv`, `events.csv`, `frames.csv`, `clock.csv` and the streams byte for byte. visuomotor and bimanual are shortened by edits of the definition: fewer repetitions, bimanual's tracking 3 s and a reach that ends after 2 s. The sound pack: the same but for the grid's 0.55 s; with the response from the tone, 40 cells within 1.0 us |
+| (2) heap calls inside `pl_sim_frame()` (GNU ld's `--wrap`) | 0 in 51,043 frames |
+| (3) the load and 600 frames with no draw on one thread, attach and the rest on another | `--sim`'s data; `yrt_is_virtual()` false; both threads SCHED_OTHER; the fast forward drew no frame; the writer runs |
+| (4) two sessions stepped in turn, `pl_check()` on a third thread | each as its `--sim` alone |
+| (5) to (9) | A key and a choice give their response and `rt = t - onset`. A sample past a region ends the reach (`out_s`, `out_x`). `pl_sim_where_now()`'s state equals `--sim`'s state rows on each of 2,545 frames (bimanual). A refusal at run time names its template. `live()` is asked at each trial's start, and its trials get no scripted press. A stopped session's `session.json` has `aborted` and `request` |
+| Also | the built-in rig, and a desc's rig, calibration and 120 Hz; the needs equal `pl_check()`'s for each pack; `on_code` gives `events.csv`'s 32 `out` rows; no audio thread |
+| ctest (Release, `DISPLAY` unset) | 138 of 138 |
+| `--sim`'s bytes | `player_test.py` with 0.15.0's and 0.16.0's `ysp_player`: at 60 Hz, 4,151 of 4,151 files equal but `player_version`; at 500 Hz, 4,047 of 4,059, and the other 12 differ only in the `written` time of `player_make_rig`'s profile and in that profile's hash |
+| Mutants | `player_sim.toml` 16 of 16 killed; the session's entries in `player_run.toml` (11), `player_v2.toml` (5) and `player_lower.toml` (8) killed. One more, the samples' claim in `v2_fed_to()`, survived. It was equivalent, because a stepped session's samples come in time order, so its code went. The six mutants whose anchors moved (`ck-07`, `ck-09`, `ck-10`, `ck-12`, `h-04`, `vs-03`) killed |
+| Sanitizers (`setarch -R`, build and run) | ASan and UBSan: `test_player_sim`, `test_player_check` and `player_test.py` (82 cases), no report. ThreadSanitizer: `test_player_sim` 3 runs, no report. With 0.15.0's static scratch in `host.c`, it reports `h_rules()` in case (4) |
 
 ### pl_check()'s gaps (0.15.0, 2026-11-18)
 

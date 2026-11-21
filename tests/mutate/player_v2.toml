@@ -33,6 +33,16 @@ timeout = 900
 env = { YPL_REPO = "{repo}", YPL_REAL_CASES = "signals,signals_examples,livecap" }
 env_default = { YPL_BIN = "{repo}/build/linux" }
 
+# the stepped session (tests/player/sim_test.c, as in player_sim.toml)
+[test.sim]
+source = "tests/player/sim_test.c"
+compiler = "gcc"
+flags = ["-std=c11", "-O1", "-w", "-DYSCR_NO_SDL", "-DPL_SIM_MUT", "-I$YSP_MINIAUDIO"]
+libs = ["-lm", "-lpthread", "-ldl"]
+timeout = 300
+env = { YPL_REPO = "{repo}" }
+env_default = { YPAK = "{repo}/build/linux/pack/ypak" }
+
 [[mutant]]
 id = "v2-01"
 name = "max_visits counts one visit more"
@@ -1380,3 +1390,50 @@ why = "The designer shows a refusal on its object: the template of the refused t
 find = '''        pl_at(p, PL_OBJ_TEMPLATE, v->def->name);
         for (i = 0; i < v->n_traces; i++, n++)'''
 replace = '''        for (i = 0; i < v->n_traces; i++, n++)'''
+
+[[mutant]]
+id = "vs-01"
+name = "a stepped session's samples are not fed"
+test = "sim"
+env = { PL_SIM_CASES = "input" }
+why = "pl_sim_sample()'s samples go through the graphs as --samples' rows."
+find = '''    while (rc == 0 && p->sim.on && S->live_next < S->n_live && S->live[S->live_next].t <= limit) {'''
+replace = '''    while (rc == 0 && 0 && S->live_next < S->n_live && S->live[S->live_next].t <= limit) {'''
+
+[[mutant]]
+id = "vs-02"
+name = "the state is always the first"
+test = "sim"
+env = { PL_SIM_CASES = "states" }
+why = "pl_sim_where_now() gives the running state."
+find = '''    return v->def->states[v->def_cur].name;'''
+replace = '''    return v->def->states[0].name;'''
+
+[[mutant]]
+id = "vs-03"
+name = "a sample earlier than the last is taken"
+test = "sim"
+env = { PL_SIM_CASES = "input" }
+why = "Samples go in time order, as --samples refuses a time that goes back."
+find = '''    if (S->n_live > 0 && t < S->live[S->n_live - 1].t) return -1;'''
+replace = ''''''
+
+[[mutant]]
+id = "vs-04"
+name = "the sample queue never moves up"
+test = "sim"
+env = { PL_SIM_CASES = "equal" }
+why = "The queue is fixed: without the move it fills (visuomotor's 60000 samples)."
+find = '''    if (!S || !S->live || role < 0 || role >= p->def->n_sigroles) return -1;
+    if (S->live_next > 0) {'''
+replace = '''    if (!S || !S->live || role < 0 || role >= p->def->n_sigroles) return -1;
+    if (0) {'''
+
+[[mutant]]
+id = "vs-05"
+name = "a stepped session has no sample queue"
+test = "sim"
+env = { PL_SIM_CASES = "equal" }
+why = "pl_sim_sample() needs the queue a real run's raw mice use."
+find = '''    if (S->real || p->sim.on) {'''
+replace = '''    if (S->real) {'''

@@ -32,6 +32,16 @@ libs = ["-lm", "-lpthread", "-ldl"]
 timeout = 300
 env = { YPL_REPO = "{repo}" }
 env_default = { YPAK = "{repo}/build/linux/pack/ypak" }
+# the stepped session (tests/player/sim_test.c, as in player_sim.toml)
+[test.sim]
+source = "tests/player/sim_test.c"
+compiler = "gcc"
+flags = ["-std=c11", "-O1", "-w", "-DYSCR_NO_SDL", "-DPL_SIM_MUT", "-I$YSP_MINIAUDIO"]
+libs = ["-lm", "-lpthread", "-ldl"]
+timeout = 300
+env = { YPL_REPO = "{repo}" }
+env_default = { YPAK = "{repo}/build/linux/pack/ypak" }
+
 [[mutant]]
 id = "pl-01"
 name = "the node seed ignores the path"
@@ -455,8 +465,8 @@ id = "ck-07"
 name = "a required calibration refuses the check"
 test = "check"
 why = "afc2 needs a calibration: the nominal one stands in and the check goes on."
-find = '''        if (p->def->calibration_required && p->checking) {'''
-replace = '''        if (p->def->calibration_required && !p->checking) {'''
+find = '''        if (p->def->calibration_required && p->stand_in) {'''
+replace = '''        if (p->def->calibration_required && !p->stand_in) {'''
 
 [[mutant]]
 id = "ck-08"
@@ -471,7 +481,7 @@ id = "ck-09"
 name = "a role's min_tier goes to stderr, not the needs"
 test = "check"
 why = "oddball's resp has min_tier 2: role_tier:resp:2, and pl_check() writes nothing."
-find = '''        if (p->checking) {
+find = '''        if (p->stand_in) {
             pl_need_add(p, PL_NEED_ROLE_TIER'''
 replace = '''        if (false) {
             pl_need_add(p, PL_NEED_ROLE_TIER'''
@@ -481,8 +491,8 @@ id = "ck-10"
 name = "a keyboard role needs a device"
 test = "check"
 why = "A required input role that lists the keyboard takes it in a real run: rdk lists no device need."
-find = '''        if (p->checking && r->def->required && !(r->def->direction == 0 && pl_role_lists(r->def, "keyboard")))'''
-replace = '''        if (p->checking && r->def->required)'''
+find = '''        if (p->stand_in && r->def->required && !(r->def->direction == 0 && pl_role_lists(r->def, "keyboard")))'''
+replace = '''        if (p->stand_in && r->def->required)'''
 
 [[mutant]]
 id = "ck-11"
@@ -499,8 +509,12 @@ id = "ck-12"
 name = "display.min_tier is not a need"
 test = "check"
 why = "afc2 and oddball list display_tier."
-find = '''    if (p->def->min_tier) pl_need_add(p, PL_NEED_DISPLAY_TIER, NULL, p->def->min_tier);'''
-replace = '''    (void)0;'''
+find = '''    if (p->def->min_tier) pl_need_add(p, PL_NEED_DISPLAY_TIER, NULL, p->def->min_tier);
+    pl_gd_units(p, NULL, gd);
+    gd->width = 800;'''
+replace = '''    (void)0;
+    pl_gd_units(p, NULL, gd);
+    gd->width = 800;'''
 
 [[mutant]]
 id = "ck-13"
@@ -609,3 +623,83 @@ test = "check"
 why = "pl_button_of() refuses by name; a return of -1 with no refusal reads as OK (buttons)."
 find = '''    if (found < 0) pl_fail(p, "template '%s': choice '%s' is not one of role '%s''s buttons", t->name, key, role->name);'''
 replace = ''''''
+
+[[mutant]]
+id = "ls-01"
+name = "the desc's rig is not used"
+test = "sim"
+env = { PL_SIM_CASES = "display" }
+why = "A rig profile in the desc gives the session its view."
+find = '''        if (!p->sim.rig) return 0;'''
+replace = '''        return 0;'''
+
+[[mutant]]
+id = "ls-02"
+name = "the desc's calibration is not used"
+test = "sim"
+env = { PL_SIM_CASES = "display" }
+why = "The desc's calibration is the display's."
+find = '''    if (!path && p->sim.on && p->sim.cal) {'''
+replace = '''    if (0) {'''
+
+[[mutant]]
+id = "ls-03"
+name = "deg counts 800 px across"
+test = "sim"
+env = { PL_SIM_CASES = "display" }
+why = "The view's width follows the session's display (1920 px: 518.4 mm)."
+find = '''        w = caps.mode.w > 0 ? (double)caps.mode.w : p->sim.on ? (double)p->sim.width : 800.0;
+        gd->units = YGFX_DEG;'''
+replace = '''        w = caps.mode.w > 0 ? (double)caps.mode.w : 800.0;
+        gd->units = YGFX_DEG;'''
+
+[[mutant]]
+id = "ls-04"
+name = "the gfx is 800 px wide"
+test = "sim"
+env = { PL_SIM_CASES = "display" }
+why = "The gfx is the session's display size."
+find = '''    gd->width = p->sim.width;'''
+replace = '''    gd->width = 800;'''
+
+[[mutant]]
+id = "ls-05"
+name = "a required field refuses the session"
+test = "sim"
+env = { PL_SIM_CASES = "display" }
+why = "A session's fields take the check's stand-ins and list them as needs."
+find = '''        if (!given && f->required && p->stand_in) {'''
+replace = '''        if (!given && f->required && p->checking) {'''
+
+[[mutant]]
+id = "ls-06"
+name = "a stepped sound opens the null device"
+test = "sim"
+env = { PL_SIM_CASES = "display" }
+why = "The null device is a thread on the real clock; the session has the writer only."
+find = '''            if (p->stand_in) {
+                /* pl_check() and the stepped session: a device that opens'''
+replace = '''            if (p->checking) {
+                /* pl_check() and the stepped session: a device that opens'''
+
+[[mutant]]
+id = "ls-07"
+name = "deg with no view refuses the session"
+test = "sim"
+env = { PL_SIM_CASES = "display" }
+why = "The built-in rig's view stands in, as the check's."
+find = '''        if (!p->stand_in) {
+            pl_fail(p, "display.units is %s'''
+replace = '''        if (!p->checking) {
+            pl_fail(p, "display.units is %s'''
+
+[[mutant]]
+id = "ls-08"
+name = "a role's min_tier is not a need"
+test = "sim"
+env = { PL_SIM_CASES = "display" }
+why = "A session lists what a real run asks, as pl_check() (oddball's resp)."
+find = '''        if (p->stand_in) {
+            pl_need_add(p, PL_NEED_ROLE_TIER'''
+replace = '''        if (p->checking) {
+            pl_need_add(p, PL_NEED_ROLE_TIER'''

@@ -1,0 +1,173 @@
+# player/sim.c mutants: the stepped session (docs/player.md, "Reference: the
+# stepped session"). The test (tests/player/sim_test.c) compiles the player's
+# sources into itself, builds the example packs with YPAK, and compares
+# each stepped session with ysp_player --sim run in the same process.
+# PL_SIM_CASES picks a mutant's cases. Mutants of the stepped session's code
+# in run.c, v2.c and lower.c are in those files' lists (test "sim").
+header = "sim.c"
+
+[test.sim]
+source = "tests/player/sim_test.c"
+compiler = "gcc"
+flags = ["-std=c11", "-O1", "-w", "-DYSCR_NO_SDL", "-DPL_SIM_MUT", "-I$YSP_MINIAUDIO"]
+libs = ["-lm", "-lpthread", "-ldl"]
+timeout = 300
+env = { YPL_REPO = "{repo}" }
+env_default = { YPAK = "{repo}/build/linux/pack/ypak" }
+
+[[mutant]]
+id = "s-01"
+name = "the grid starts at the first vblank"
+test = "sim"
+env = { PL_SIM_CASES = "equal" }
+why = "--sim's frame 0 is the SIM screen's vblank 7 (6 warm-up frames): every time in the data moves."
+find = '''enum { PL_SIM_FIRST_VBLANK = 7 };'''
+replace = '''enum { PL_SIM_FIRST_VBLANK = 1 };'''
+
+[[mutant]]
+id = "s-02"
+name = "a frame's record is never handed on"
+test = "sim"
+env = { PL_SIM_CASES = "equal" }
+why = "frames.csv and the rows' onsets come from the records, with the next frame."
+find = '''    if (p->sim.has_rec) {
+        f.done = rec;'''
+replace = '''    if (0) {
+        f.done = rec;'''
+
+[[mutant]]
+id = "s-03"
+name = "a record below display.min_tier is not flagged"
+test = "sim"
+env = { PL_SIM_CASES = "equal" }
+why = "The SIM screen flags every flip BELOW_TIER for a definition with display.min_tier (oddball's frames.csv)."
+find = '''    if (p->def->min_tier && YSCR_TIER_SIM > p->def->min_tier) rec->flags |= YSCR_FLIP_BELOW_TIER;'''
+replace = ''''''
+
+[[mutant]]
+id = "s-04"
+name = "a drawn frame before attach"
+test = "sim"
+env = { PL_SIM_CASES = "display" }
+why = "Before attach a deferred gfx has no GL objects: the frame is refused."
+find = '''    if (draw && !p->sim.attached) {'''
+replace = '''    if (0) {'''
+
+[[mutant]]
+id = "s-05"
+name = "input after the next onset is taken"
+test = "sim"
+env = { PL_SIM_CASES = "input" }
+why = "Input reaches the next frame only: a later time would be fed before its own frame."
+find = '''t_ns <= next && t_ns > next - p->sim.period;'''
+replace = '''t_ns > next - p->sim.period;'''
+
+[[mutant]]
+id = "s-06"
+name = "a stop is not recorded"
+test = "sim"
+env = { PL_SIM_CASES = "stop" }
+why = "session.json says aborted, reason request, as a real run's operator stop."
+find = '''    p->aborted = true;
+    p->abort_reasons = YSCR_ABORT_REQUEST;'''
+replace = '''    p->abort_reasons = YSCR_ABORT_REQUEST;'''
+
+[[mutant]]
+id = "s-07"
+name = "live() is asked and not heard"
+test = "sim"
+env = { PL_SIM_CASES = "live" }
+why = "A trial that live() takes gets no scripted press."
+find = '''    return p->sim.live(p->sim.ctx, &w);'''
+replace = '''    (void)p->sim.live(p->sim.ctx, &w);
+    return false;'''
+
+[[mutant]]
+id = "s-08"
+name = "where_now gives no state"
+test = "sim"
+env = { PL_SIM_CASES = "states" }
+why = "The chart's ring follows pl_sim_where_now()'s state."
+find = '''    w->state = pl_v2_state_now(p);'''
+replace = '''    w->state = NULL;'''
+
+[[mutant]]
+id = "s-09"
+name = "pl_close() does not finish the data set"
+test = "sim"
+env = { PL_SIM_CASES = "stop" }
+why = "The last rows and session.json are written at the close, off the UI thread."
+find = '''    if (p->sim.stage == 3 && !p->failed) (void)pl_run_finish(p);'''
+replace = ''''''
+
+[[mutant]]
+id = "s-10"
+name = "no end frames"
+test = "sim"
+env = { PL_SIM_CASES = "equal" }
+why = "--sim's end shows blank frames that bring the last records in: frames.csv and the last rows."
+find = '''        if (r == 1) {
+            p->sim.stage = 2;
+            p->sim.drain_i = 0;
+        }'''
+replace = '''        if (r == 1) {
+            p->sim.stage = 3;
+            return 1;
+        }'''
+
+[[mutant]]
+id = "s-11"
+name = "a choice presses the first choice's control"
+test = "sim"
+env = { PL_SIM_CASES = "input" }
+why = "pl_sim_choice() presses the choice it names."
+find = '''    ev.control = c->ch[choice].control;'''
+replace = '''    ev.control = c->ch[0].control;'''
+
+[[mutant]]
+id = "s-12"
+name = "a sample is dropped"
+test = "sim"
+env = { PL_SIM_CASES = "input" }
+why = "A sample past the region ends the reach."
+find = '''    return pl_v2_sample_push(p, t_ns, role, x, y);'''
+replace = '''    (void)x;
+    (void)y;
+    return 0;'''
+
+[[mutant]]
+id = "s-13"
+name = "the next onset is a frame late"
+test = "sim"
+env = { PL_SIM_CASES = "input" }
+why = "Input times and the frame grid agree (rt = t - onset)."
+find = '''int64_t pl_sim_next_onset(const pl_player* p) { return p->sim.t0 + p->sim.frame * p->sim.period; }'''
+replace = '''int64_t pl_sim_next_onset(const pl_player* p) { return p->sim.t0 + (p->sim.frame + 1) * p->sim.period; }'''
+
+[[mutant]]
+id = "s-14"
+name = "the session takes no stand-ins"
+test = "sim"
+env = { PL_SIM_CASES = "display" }
+why = "A stepped session has no rig file, no device and no audio thread: pl_check()'s stand-ins and needs."
+find = '''    p->stand_in = true;
+    p->sim.on = true;'''
+replace = '''    p->sim.on = true;'''
+
+[[mutant]]
+id = "s-15"
+name = "the default period is not 60 Hz"
+test = "sim"
+env = { PL_SIM_CASES = "display" }
+why = "The built-in rig is 60 Hz (decision 1)."
+find = '''    p->sim.period = d->period_ns > 0 ? d->period_ns : 16666667;'''
+replace = '''    p->sim.period = d->period_ns > 0 ? d->period_ns : 16666666;'''
+
+[[mutant]]
+id = "s-16"
+name = "the default display is 800 px wide"
+test = "sim"
+env = { PL_SIM_CASES = "display" }
+why = "The built-in rig is 1920 x 1080 (decision 1)."
+find = '''    p->sim.width = d->width > 0 ? d->width : 1920;'''
+replace = '''    p->sim.width = d->width > 0 ? d->width : 800;'''
