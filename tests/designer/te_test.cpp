@@ -60,6 +60,8 @@ bool no_dialog(void*) { return false; }
 // One frame as main.cpp draws it, with a renderer that only accepts textures.
 void frame(ImGuiTestEngine* engine) {
     ImGui::GetIO().DeltaTime = 1.0f / 60.0f;
+    // the check thread's result of the last frame's post lands in this one
+    ui_wait_checks(30000000000LL);
     ImGui::NewFrame();
     skt_frame_begin();
     ui_frame();
@@ -120,6 +122,8 @@ ImGuiID editor_id(ImGuiTestContext* ctx) { return in_child(ctx, "//##designer/De
 void open_by_path(ImGuiTestContext* ctx, int i) {
     ctx->ItemInputValue("//##designer/##path", dir[i]);
     if (modal_open()) ctx->ItemClick("//Unsaved changes/Discard");
+    // the open's check runs on the check thread; its result lands a frame later
+    ctx->Yield();
     IM_CHECK(ui_project() != nullptr);
     IM_CHECK_STR_EQ(ui_project()->folder, dir[i]);
 }
@@ -156,6 +160,7 @@ void test_edit_jump(ImGuiTestContext* ctx) {
     skf_set_caret(ui_editor(), (int)dsg_codepoints_before(t, n, (uint32_t)(at - t)));
     const int checks0 = ui_checks_run();
     ctx->KeyChars("\"note\": \"\xD9\x85\xD8\xB1\xD8\xAD\xD8\xA8\xD8\xA7\", ");
+    ctx->Yield();   // the check's result lands a frame after the edit
     t = editor_text(&n);
     IM_CHECK(strstr(t, "\"note\": \"\xD9\x85\xD8\xB1\xD8\xAD\xD8\xA8\xD8\xA7\", \"format\"") != nullptr);
     IM_CHECK_GT(ui_checks_run(), checks0);
@@ -165,6 +170,7 @@ void test_edit_jump(ImGuiTestContext* ctx) {
     IM_CHECK(st != nullptr);
     skf_set_caret(ui_editor(), (int)dsg_codepoints_before(t, n, (uint32_t)(st - t)));
     ctx->KeyChars("x");
+    ctx->Yield();   // the check's result lands a frame after the edit
     t = editor_text(&n);
     const dsg_report* r = ui_report();
     IM_CHECK_GT(r->n_errors, 0);
@@ -182,6 +188,7 @@ void test_edit_jump(ImGuiTestContext* ctx) {
 
     // The click kept the editor's focus: Ctrl+Z goes to it.
     ctx->KeyPress(ImGuiMod_Ctrl | ImGuiKey_Z);
+    ctx->Yield();   // the check's result lands a frame after the edit
     t = editor_text(&n);
     IM_CHECK(strstr(t, "x\"stimuli\"") == nullptr);
     IM_CHECK_EQ(ui_report()->n_errors, 0);
@@ -258,6 +265,8 @@ bool te_copy_project(const char* name, const char* copy, const char* const* file
 void te_open(ImGuiTestContext* ctx, const char* folder) {
     ctx->ItemInputValue("//##designer/##path", folder);
     if (modal_open()) ctx->ItemClick("//Unsaved changes/Discard");
+    // the open's check runs on the check thread; its result lands a frame later
+    ctx->Yield();
     IM_CHECK(ui_project() != nullptr);
     IM_CHECK_STR_EQ(ui_project()->folder, folder);
 }

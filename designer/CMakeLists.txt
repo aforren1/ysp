@@ -34,7 +34,8 @@ endfunction()
 # fields (schema.c, part C).
 add_library(ysp_designer_core STATIC
     core/dsg.h core/check.c core/locate.c core/platform.c core/project.c core/redraw.c
-    core/doc.h core/doc.c core/chart.h core/chart.c core/csv.h core/csv.c core/schema.h core/schema.c)
+    core/doc.h core/doc.c core/chart.h core/chart.c core/csv.h core/csv.c core/schema.h core/schema.c
+    core/worker.c)
 target_include_directories(ysp_designer_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core)
 target_compile_definitions(ysp_designer_core PUBLIC $<$<C_COMPILER_ID:MSVC>:_CRT_SECURE_NO_WARNINGS _CRT_NONSTDC_NO_DEPRECATE>)
 target_link_libraries(ysp_designer_core PUBLIC ysp_player_lib ysp_pack_tool_code ysp_player_impl)
@@ -66,6 +67,14 @@ if(YSP_BUILD_TESTS)
         target_compile_definitions(test_designer_${_t} PRIVATE YSP_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
         dsg_test(test_designer_${_t})
     endforeach()
+    # Step 5, part T: the check thread (core/worker.c).
+    add_executable(test_designer_worker ${PROJECT_SOURCE_DIR}/tests/designer/worker_test.c)
+    target_link_libraries(test_designer_worker PRIVATE ysp_designer_core)
+    target_compile_options(test_designer_worker PRIVATE ${YSP_WARNINGS})
+    set_target_properties(test_designer_worker PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_compile_definitions(test_designer_worker PRIVATE YSP_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+    add_test(NAME test_designer_worker COMMAND test_designer_worker ${CMAKE_CURRENT_BINARY_DIR}/designer_worker_work)
+    dsg_test(test_designer_worker)
     add_test(NAME test_designer_doc COMMAND test_designer_doc ${CMAKE_CURRENT_BINARY_DIR}/designer_doc_work)
     add_test(NAME test_designer_chart COMMAND test_designer_chart ${CMAKE_CURRENT_BINARY_DIR}/designer_chart_work)
     add_test(NAME test_designer_table COMMAND test_designer_table ${CMAKE_CURRENT_BINARY_DIR}/designer_table_work)

@@ -32,17 +32,19 @@ struct State {
     UiPlatform plat = {};
     dsg_project proj = {};
     bool open = false;
-    dsg_checker* checker = nullptr;
+    dsg_worker* worker = nullptr;    // the check thread (worker.c)
     dsg_doc* doc = nullptr;
     SkfField* editor = nullptr;
     ImVector<char> scratch;          // the editor's text, read after a change
     uint64_t text_rev = 0;           // buffer 0's revision that the editor holds
-    uint64_t checked = 0;            // the document's revision last checked
+    uint64_t checked = 0;            // the revision of the report shown
+    uint64_t posted = 0;             // the document's revision last posted
+    uint64_t floor = 0;              // a result below it is another project's
     int last_caret = -1;             // the editor's caret last frame
     bool dirty = false;
     uint64_t dirty_rev = 0;          // the document's revision that dirty is of
-    bool check_due = false;
-    int checks = 0;
+    bool check_due = false;          // post even if the revision is the same
+    int checks = 0;                  // results taken
     dsg_report report = {};
     bool have_report = false;
     ImVector<char> issue_paths;      // NUL-ended paths, one per issue
@@ -175,7 +177,9 @@ void close_project() {
     S->dirty = false;
     dsg_doc_reset(S->doc, "", "", 0);
     sync_editor();
-    if (S->checker) dsg_checker_forget(S->checker);
+    // the files may change on disk before the next open
+    if (S->worker) dsg_worker_forget(S->worker);
+    S->floor = dsg_doc_revision(S->doc) + 1;
 }
 
 void open_now(const char* path) {
@@ -264,14 +268,33 @@ void map_issues() {
     }
 }
 
-void run_check() {
+// The check runs on the check thread: the post copies the text and the
+// tables as edited (so a table edit is checked before Save), and the result
+// comes back in a later frame with the revision it was posted for.
+void post_check() {
     S->check_due = false;
     if (!S->open) return;
     size_t n;
     const char* t = def_bytes(&n);
-    // the tables as edited, so a table edit is checked before Save
-    dsg_check(S->checker, &S->proj, t, n, S->doc, &S->report);
-    S->checked = dsg_doc_revision(S->doc);
+    const uint64_t rev = dsg_doc_revision(S->doc);
+    if (dsg_worker_check(S->worker, &S->proj, t, n, S->doc, rev) == 0) S->posted = rev;
+    else set_status("The check was not started: out of memory.");
+    // without a thread the check runs here, and the next frame takes it
+    if (!dsg_worker_threaded(S->worker)) dsg_worker_wait(S->worker, 0);
+}
+
+void take_check() {
+    const dsg_check_result* res = nullptr;
+    if (!S->worker || !dsg_worker_take_check(S->worker, &res)) return;
+    // A result posted before the open belongs to the project before it.
+    // The take recycled the storage of the report shown, so drop that too.
+    if (!S->open || res->revision < S->floor) {
+        S->report = dsg_report{};
+        S->have_report = false;
+        return;
+    }
+    S->report = res->report;
+    S->checked = res->revision;
     S->have_report = true;
     S->checks++;
     map_issues();
@@ -490,10 +513,18 @@ bool ui_init(const char* font_dir, const UiPlatform* platform, char* err, size_t
     S = IM_NEW(State)();
     if (platform) S->plat = *platform;
     if (!skt_init(font_dir, err, cap)) return false;
-    S->checker = dsg_checker_new();
+    // After skt_init(): Skribidi numbers its font collections with a plain
+    // static counter, and the pack tool on the check thread makes them too.
+    dsg_worker_desc wd = {};
+    if (platform) {
+        wd.wake = platform->wake;
+        wd.ctx = platform->ctx;
+    }
+    S->worker = dsg_worker_start(&wd, err, cap);
+    if (!S->worker) return false;
     S->doc = dsg_doc_new();
-    if (!S->checker || !S->doc || dsg_doc_reset(S->doc, "", "", 0)) {
-        snprintf(err, cap, "out of memory for the checker and the document");
+    if (!S->doc || dsg_doc_reset(S->doc, "", "", 0)) {
+        snprintf(err, cap, "out of memory for the document");
         return false;
     }
     S->editor = skf_create(kTextSize, true);
@@ -521,8 +552,8 @@ void ui_shutdown() {
     for (int i = 0; i < nv; i++)
         if (v[i]->shutdown) v[i]->shutdown();
     skf_destroy(S->editor);
+    dsg_worker_stop(S->worker);
     dsg_doc_free(S->doc);
-    dsg_checker_free(S->checker);
     skt_shutdown();
     IM_DELETE(S);
     S = nullptr;
@@ -609,7 +640,9 @@ void ui_jump_to_issue(int i) {
     }
     if (have) ui_reveal(&s);
     if (!is->place.line) return;
-    // the place is in the text the check read, which is the editor's text
+    // The place is in the text the check read. That is the editor's text,
+    // or an older one while a newer check runs; dsg_codepoints_before()
+    // clamps an offset past the end.
     size_t n;
     const char* t = def_bytes(&n);
     skf_set_caret(S->editor, (int)dsg_codepoints_before(t, n, is->place.offset));
@@ -617,6 +650,9 @@ void ui_jump_to_issue(int i) {
 }
 
 void ui_frame() {
+    // A result that landed since the last frame shows in this one: its
+    // issues, before the views mark them.
+    take_check();
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(vp->WorkPos);
     ImGui::SetNextWindowSize(vp->WorkSize);
@@ -664,11 +700,12 @@ void ui_frame() {
         ImGui::EndGroup();
     }
 
-    // The check runs in the frame of the change, after the views, so the
-    // issues below show this text's result. pl_check() takes 0.2 to 7 ms on
-    // the example packs (player.md, Measured): inside a frame.
-    if (S->open && dsg_doc_revision(S->doc) != S->checked) S->check_due = true;
-    if (S->check_due) run_check();
+    // Posted in the frame of the change, after the views; the issues show
+    // the result from a later frame. bimanual's check takes up to 12.9 ms
+    // and a generated project's 201 ms (docs/designer.md, "The check
+    // thread"), so the check is not in the frame.
+    if (S->open && dsg_doc_revision(S->doc) != S->posted) S->check_due = true;
+    if (S->check_due) post_check();
 
     ImGui::BeginChild("Issues", ImVec2(0, 0), ImGuiChildFlags_Borders);
     issues_panel();
@@ -680,9 +717,12 @@ void ui_frame() {
     update_title();
 }
 
+// A check that runs on the thread is not work for a frame: its wake-up
+// (UiPlatform.wake) brings the frame that takes the result.
 bool ui_work_pending() {
     return S && (S->check_due || S->restore_scroll >= 0 || S->ask_unsaved ||
-                 (S->open && dsg_doc_revision(S->doc) != S->checked) || dsg_doc_rev(S->doc, DSG_BUF_DEF) != S->text_rev);
+                 (S->open && dsg_doc_revision(S->doc) != S->posted) || dsg_doc_rev(S->doc, DSG_BUF_DEF) != S->text_rev ||
+                 (S->worker && !dsg_worker_threaded(S->worker) && S->open && S->checked != S->posted));
 }
 
 bool ui_animating() {
@@ -704,6 +744,7 @@ bool ui_dirty() {
     return S->dirty;
 }
 int ui_checks_run() { return S->checks; }
+bool ui_wait_checks(int64_t timeout_ns) { return S && dsg_worker_wait(S->worker, timeout_ns) == 0; }
 
 const char* ui_main_view() { return main_id(); }
 

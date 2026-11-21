@@ -2,7 +2,7 @@
  * (designer/core/check.c; docs/designer.md, "The check pack", "Evidence:
  * the check's cost"). Not a test: it prints times.
  *
- * Usage: bench_designer_check WORK [BUILDS] [CHECKS] [PROJECT]
+ * Usage: bench_designer_check WORK [BUILDS] [CHECKS] [PROJECT] [worker]
  *   WORK: a folder for the projects' copies; the check packs are written
  *   under it, so its filesystem is the one measured.
  *   Projects: tests/player/{stroop,oddball,rdk,bimanual,visuomotor,afc2}
@@ -23,6 +23,16 @@
  *               added or removed): no build
  *     changed   dsg_check() of a text with one text stimulus's text changed
  *               (a keystroke in a text literal): one build
+ *   With the check thread (designer/core/worker.c; step 5, part T), what
+ *   the UI frame pays per keystroke and how long the result takes:
+ *     post      dsg_worker_check() of a "same" keystroke: the UI's post
+ *     post_tbl  the same with one dirty table in the document (its copy)
+ *     take      dsg_worker_take_check() of a ready result: the adoption
+ *     lat_same  from the post to the thread's wake-up (the result ready)
+ *               for a "same" keystroke
+ *     lat_chg   the same for a "changed" keystroke
+ *   With "worker" last, only "same", "changed" (the check in the frame,
+ *   as before the thread) and these run.
  * Each line: median, p95 and max in microseconds.
  *
  * The generated projects ("many", "many+words") are the worst case: 200
@@ -297,6 +307,130 @@ static char* edited(const char* text, size_t n, const char* needle, char c, size
     return t;
 }
 
+static bool g_worker_only;
+
+/* The thread's wake-up: the time the result was ready. Read after
+ * dsg_worker_wait(), which orders it. */
+static double g_woke_us;
+static void on_wake(void* ctx) {
+    (void)ctx;
+    g_woke_us = now_us();
+}
+
+/* The first table resource's bytes, as a dirty buffer of a document. */
+static dsg_doc* dirty_table_doc(const dsg_project* p, size_t* bytes) {
+    yjs_arena a;
+    yjs_value* root = NULL;
+    yjs_error e;
+    dsg_doc* d = NULL;
+    *bytes = 0;
+    yjs_arena_init_heap(&a, 0);
+    if (yjs_parse(&a, p->desc, p->desc_len, NULL, &root, &e) == YJS_OK) {
+        const yjs_value* res = yjs_get(root, "resources");
+        size_t i;
+        for (i = 0; res && res->type == YJS_ARRAY && i < res->n && !d; i++) {
+            const yjs_value* r = yjs_at(res, i);
+            const yjs_value* src = r ? yjs_get(r, "source") : NULL;
+            const yjs_value* kind = r ? yjs_get(r, "kind") : NULL;
+            char path[DSG_PATH_MAX], err[256];
+            char* tb = NULL;
+            size_t tn = 0;
+            int b;
+            if (!src || src->type != YJS_STRING || !kind || kind->type != YJS_STRING || strcmp(kind->u.s, "table") != 0) continue;
+            if (dsg_join(path, sizeof path, p->folder, src->u.s) || dsg_read_file(path, &tb, &tn, err, sizeof err)) continue;
+            d = dsg_doc_new();
+            if (d && dsg_doc_reset(d, p->def_source, p->text, p->text_len) == 0 &&
+                (b = dsg_doc_add_buffer(d, DSG_KIND_TABLE, src->u.s, tb, tn)) > 0 && dsg_doc_set_saved(d, b, "", 0) == 0) {
+                *bytes = tn;   /* dirty: its saved bytes differ */
+            } else {
+                dsg_doc_free(d);
+                d = NULL;
+            }
+            free(tb);
+        }
+    }
+    yjs_arena_free(&a);
+    return d;
+}
+
+/* The check on the thread: the UI's cost per keystroke and the latency. */
+static void bench_worker(const char* name, const dsg_project* p, const char* needle, int builds, int checks, double* t) {
+    dsg_worker_desc wd;
+    dsg_worker* w;
+    const dsg_check_result* cr = NULL;
+    char err[512];
+    size_t sn = 0, tbl_bytes = 0;
+    char* spaced = edited(p->text, p->text_len, NULL, 0, &sn);
+    double* lat = (double*)malloc((size_t)(builds > checks ? builds : checks) * sizeof *lat);
+    double* tk = (double*)malloc((size_t)(builds > checks ? builds : checks) * sizeof *tk);
+    dsg_doc* d;
+    uint64_t rev = 1;
+    int i;
+    memset(&wd, 0, sizeof wd);
+    wd.wake = on_wake;
+    w = dsg_worker_start(&wd, err, sizeof err);
+    if (!w || !spaced || !lat || !tk) {
+        printf("  worker: cannot start: %s\n", err);
+        goto out;
+    }
+    /* the first check builds the thread's own pack */
+    dsg_worker_check(w, p, p->text, p->text_len, NULL, rev++);
+    dsg_worker_wait(w, 600000000000LL);
+    dsg_worker_take_check(w, &cr);
+    for (i = 0; i < checks; i++) {
+        double t0, t1, t2;
+        t0 = now_us();
+        if (i & 1) dsg_worker_check(w, p, spaced, sn, NULL, rev++);
+        else dsg_worker_check(w, p, p->text, p->text_len, NULL, rev++);
+        t1 = now_us();
+        dsg_worker_wait(w, 600000000000LL);
+        t[i] = t1 - t0;
+        lat[i] = g_woke_us - t0;
+        t2 = now_us();
+        if (!dsg_worker_take_check(w, &cr) || cr->revision != rev - 1) printf("  worker: no result for %llu\n", (unsigned long long)(rev - 1));
+        tk[i] = now_us() - t2;
+    }
+    report("post", name, t, checks);
+    report("take", name, tk, checks);
+    report("lat_same", name, lat, checks);
+
+    d = dirty_table_doc(p, &tbl_bytes);
+    if (d) {
+        /* one check builds the pack with the table; the rest only post it */
+        for (i = 0; i < checks; i++) {
+            double t0 = now_us();
+            dsg_worker_check(w, p, p->text, p->text_len, d, rev++);
+            t[i] = now_us() - t0;
+            dsg_worker_wait(w, 600000000000LL);
+            dsg_worker_take_check(w, &cr);
+        }
+        printf("  post_tbl: one dirty table of %zu B\n", tbl_bytes);
+        report("post_tbl", name, t, checks);
+        dsg_doc_free(d);
+    }
+
+    if (needle && strstr(p->text, needle)) {
+        for (i = 0; i < builds; i++) {
+            size_t en = 0;
+            char* e = edited(p->text, p->text_len, needle, (char)('a' + i % 26), &en);
+            double t0;
+            if (!e) break;
+            t0 = now_us();
+            dsg_worker_check(w, p, e, en, NULL, rev++);
+            free(e);
+            dsg_worker_wait(w, 600000000000LL);
+            lat[i] = g_woke_us - t0;
+            dsg_worker_take_check(w, &cr);
+        }
+        report("lat_chg", name, lat, i);
+    }
+out:
+    dsg_worker_stop(w);
+    free(spaced);
+    free(lat);
+    free(tk);
+}
+
 static void bench_project(const char* name, const char* folder, const char* needle, int builds, int checks) {
     dsg_project p;
     dsg_checker* c = dsg_checker_new();
@@ -340,74 +474,77 @@ static void bench_project(const char* name, const char* folder, const char* need
         if (r.issues[i].severity == DSG_SEV_ERROR) printf("  error: %s\n", r.issues[i].message);
     fflush(stdout);
 
-    for (i = 0; i < builds; i++) {
-        double t0;
-        dsg_checker_forget(c);
-        t0 = now_us();
-        dsg_check(c, &p, p.text, p.text_len, NULL, &r);
-        t[i] = now_us() - t0;
-        rebuilt += r.built;
-    }
-    report("first", name, t, builds);
+    if (!g_worker_only) {
+        for (i = 0; i < builds; i++) {
+            double t0;
+            dsg_checker_forget(c);
+            t0 = now_us();
+            dsg_check(c, &p, p.text, p.text_len, NULL, &r);
+            t[i] = now_us() - t0;
+            rebuilt += r.built;
+        }
+        report("first", name, t, builds);
 
-    for (i = 0; i < builds; i++) {
-        double t0 = now_us();
-        int rc = build(c, &p, p.text, p.text_len, NULL, tkey, err, sizeof err);
-        t[i] = now_us() - t0;
-        if (rc) { printf("  build failed: %s\n", err); break; }
-    }
-    report("build", name, t, i);
+        for (i = 0; i < builds; i++) {
+            double t0 = now_us();
+            int rc = build(c, &p, p.text, p.text_len, NULL, tkey, err, sizeof err);
+            t[i] = now_us() - t0;
+            if (rc) { printf("  build failed: %s\n", err); break; }
+        }
+        report("build", name, t, i);
 
-    for (i = 0; i < builds; i++) {
-        size_t dl = 0;
-        char* desc;
-        ypt_options o;
-        double t0;
-        int rc;
-        memset(&o, 0, sizeof o);
-        t0 = now_us();
-        desc = check_description(&p, NULL, &dl, err, sizeof err);
-        rc = desc ? ypt_build_text(desc, dl, p.folder, pack, &o, err, sizeof err) : -1;
-        t[i] = now_us() - t0;
-        free(desc);
-        if (rc) { printf("  ypt_build_text failed: %s\n", err); break; }
-    }
-    report("ypt", name, t, i);
+        for (i = 0; i < builds; i++) {
+            size_t dl = 0;
+            char* desc;
+            ypt_options o;
+            double t0;
+            int rc;
+            memset(&o, 0, sizeof o);
+            t0 = now_us();
+            desc = check_description(&p, NULL, &dl, err, sizeof err);
+            rc = desc ? ypt_build_text(desc, dl, p.folder, pack, &o, err, sizeof err) : -1;
+            t[i] = now_us() - t0;
+            free(desc);
+            if (rc) { printf("  ypt_build_text failed: %s\n", err); break; }
+        }
+        report("ypt", name, t, i);
 
-    for (i = 0; i < checks; i++) {
-        char src[DSG_PATH_MAX];
-        double t0;
-        dsg_join(src, sizeof src, p.folder, DSG_CHECK_SOURCE);
-        t0 = now_us();
-        dsg_write_file(src, p.text, p.text_len, err, sizeof err);
-        t[i] = now_us() - t0;
-    }
-    report("wsrc", name, t, checks);
+        for (i = 0; i < checks; i++) {
+            char src[DSG_PATH_MAX];
+            double t0;
+            dsg_join(src, sizeof src, p.folder, DSG_CHECK_SOURCE);
+            t0 = now_us();
+            dsg_write_file(src, p.text, p.text_len, err, sizeof err);
+            t[i] = now_us() - t0;
+        }
+        report("wsrc", name, t, checks);
 
-    for (i = 0; i < checks; i++) {
-        double t0 = now_us();
-        dsg_write_file(copy, c->pack, c->pack_size, err, sizeof err);
-        t[i] = now_us() - t0;
-    }
-    report("wpack", name, t, checks);
-    remove(copy);
+        for (i = 0; i < checks; i++) {
+            double t0 = now_us();
+            dsg_write_file(copy, c->pack, c->pack_size, err, sizeof err);
+            t[i] = now_us() - t0;
+        }
+        report("wpack", name, t, checks);
+        remove(copy);
 
-    for (i = 0; i < checks; i++) {
-        char* b = NULL;
-        size_t bn = 0;
-        double t0 = now_us();
-        dsg_read_file(pack, &b, &bn, err, sizeof err);
-        t[i] = now_us() - t0;
-        free(b);
-    }
-    report("read", name, t, checks);
+        for (i = 0; i < checks; i++) {
+            char* b = NULL;
+            size_t bn = 0;
+            double t0 = now_us();
+            dsg_read_file(pack, &b, &bn, err, sizeof err);
+            t[i] = now_us() - t0;
+            free(b);
+        }
+        report("read", name, t, checks);
 
-    for (i = 0; i < checks; i++) {
-        double t0 = now_us();
-        texts_key(c, p.text, p.text_len, key, err, sizeof err);
-        t[i] = now_us() - t0;
+        for (i = 0; i < checks; i++) {
+            double t0 = now_us();
+            texts_key(c, p.text, p.text_len, key, err, sizeof err);
+            t[i] = now_us() - t0;
+        }
+        report("textskey", name, t, checks);
+
     }
-    report("textskey", name, t, checks);
 
     {
         size_t sn = 0;
@@ -443,7 +580,9 @@ static void bench_project(const char* name, const char* folder, const char* need
     } else {
         printf("  changed   %-12s n/a: no text stimulus\n", name);
     }
-    if (rebuilt != builds) printf("  first: %d of %d checks built a pack\n", rebuilt, builds);
+    if (!g_worker_only && rebuilt != builds) printf("  first: %d of %d checks built a pack\n", rebuilt, builds);
+    /* the checker above is idle now: one pl_check() at a time */
+    bench_worker(name, &p, needle, builds, checks, t);
 
 out:
     dsg_project_close(&p);
@@ -464,7 +603,8 @@ int main(int argc, char** argv) {
     work = argv[1];
     builds = argc > 2 ? atoi(argv[2]) : 30;
     checks = argc > 3 ? atoi(argv[3]) : 200;
-    only = argc > 4 ? argv[4] : NULL;
+    only = argc > 4 && strcmp(argv[4], "all") != 0 ? argv[4] : NULL;
+    g_worker_only = argc > 5 && strcmp(argv[5], "worker") == 0;
     if (builds < 1) builds = 1;
     if (checks < 1) checks = 1;
     if (dsg_make_dir(work, err, sizeof err)) { printf("%s\n", err); return 1; }

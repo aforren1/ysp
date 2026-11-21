@@ -3,6 +3,7 @@
 // drives it headless.
 #pragma once
 #include <stddef.h>
+#include <stdint.h>
 #include "dsg.h"
 
 struct SkfField;
@@ -15,6 +16,10 @@ struct UiPlatform {
     bool (*pick_folder)(void* ctx);
     void (*set_title)(void* ctx, const char* title);
     void (*quit)(void* ctx);
+    // A result of the check thread is ready. Called on that thread: post an
+    // event that wakes the loop (the loop then draws the frame that takes
+    // it). NULL: none (the tests wait with ui_wait_checks()).
+    void (*wake)(void* ctx);
 };
 
 bool ui_init(const char* font_dir, const UiPlatform* platform, char* err, size_t cap);
@@ -44,7 +49,10 @@ SkfField* ui_editor();
 const char* ui_text(size_t* n);      // the editor's text as last read
 const char* ui_status();
 bool ui_dirty();
-int ui_checks_run();                 // how many checks have run
+int ui_checks_run();                 // how many check results were taken
+// Blocks until every check posted so far has run on the check thread, so
+// the next frame takes its result: the tests' frames call it first.
+bool ui_wait_checks(int64_t timeout_ns);
 bool ui_save();
 void ui_jump_to_issue(int i);        // as a click on issue i
 // The main view shown: "text", "chart", "tables" (views.h ids).

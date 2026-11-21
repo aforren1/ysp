@@ -55,6 +55,8 @@ static float begin_ms;   // the last frame's skt_frame_begin(): the caches' comp
 static void frame() {
     ImGuiIO& io = ImGui::GetIO();
     io.DeltaTime = 1.0f / 60.0f;
+    // the check thread's result of the last frame's post lands in this one
+    ui_wait_checks(30000000000LL);
     ImGui::NewFrame();
     const double b0 = now_s();
     skt_frame_begin();
