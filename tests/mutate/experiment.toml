@@ -11,6 +11,13 @@ libs = ["-lm"]
 timeout = 60
 env = { YEXP_CORPUS = "{repo}/tests/experiment" }
 
+[test.experiment_tables]
+source = "tests/adapt/experiment_tables_test.c"
+compiler = "gcc"
+flags = ["-std=c11", "-O1", "-w"]
+libs = ["-lm", "-pthread", "-ldl"]
+timeout = 60
+
 [[mutant]]
 id = "e-01"
 name = "a newer version accepted"
@@ -66,7 +73,7 @@ id = "e-07"
 name = "a duration key without _s not named"
 test = "experiment"
 why = "D4: the loader refuses it and names the suffixed key."
-find = '''if (ri >= 0 && c->rows[ri].type == YEXP__T_DUR) {'''
+find = '''if (ri >= 0 && c->rows[ri].type == YEXP_T_DUR) {'''
 replace = '''if (0) {'''
 
 [[mutant]]
@@ -229,7 +236,7 @@ id = "e-27"
 name = "a key at its default stays in the canonical bytes"
 test = "experiment"
 why = "D2: a key at its default is left out."
-find = '''            if (at_default && (r->flags & YEXP__R_SELF) == 0) {'''
+find = '''            if (at_default && (r->flags & YEXP_R_SELF) == 0) {'''
 replace = '''            if (0) {'''
 
 [[mutant]]
@@ -325,7 +332,7 @@ id = "e-38"
 name = "a required key can be left out"
 test = "experiment"
 why = "A key with no default must be given."
-find = '''            if (r->flags & YEXP__R_REQ) {
+find = '''            if (r->flags & YEXP_R_REQ) {
                 yexp__err(c, src->pos, "%s: '%s' is required", elem, r->key);
             } else if'''
 replace = '''            if (0) {
@@ -337,8 +344,8 @@ id = "e-39"
 name = "the display's min_tier range"
 test = "experiment"
 why = "2.1: 1 to 3."
-find = '''    mt = yexp__int_field(c, yexp__slotv(c, s, YEXP__S_DISPLAY, "min_tier"), "display", "min_tier", 0, 3, 0);'''
-replace = '''    mt = yexp__int_field(c, yexp__slotv(c, s, YEXP__S_DISPLAY, "min_tier"), "display", "min_tier", 0, 99, 0);'''
+find = '''    mt = yexp__int_field(c, yexp__slotv(c, s, YEXP_S_DISPLAY, "min_tier"), "display", "min_tier", 0, 3, 0);'''
+replace = '''    mt = yexp__int_field(c, yexp__slotv(c, s, YEXP_S_DISPLAY, "min_tier"), "display", "min_tier", 0, 99, 0);'''
 
 [[mutant]]
 id = "e-40"
@@ -421,35 +428,35 @@ id = "e-49"
 name = "a default in the table changed"
 test = "experiment"
 why = "The table is the format's: the golden dumps pin every default a corpus file shows."
-find = '''"miter_limit", "4", NULL }'''
-replace = '''"miter_limit", "5", NULL }'''
+find = '''"miter_limit", "4", "", "", NULL }'''
+replace = '''"miter_limit", "5", "", "", NULL }'''
 
 [[mutant]]
 id = "e-50"
 name = "default response_ends_trial false"
 test = "experiment"
 why = "2.6's default; golden dumps pin it."
-find = '''YEXP__T_BOOL, 0, "response_ends_trial", "true", NULL }'''
-replace = '''YEXP__T_BOOL, 0, "response_ends_trial", "false", NULL }'''
+find = '''YEXP_T_BOOL, 0, "response_ends_trial", "true", "",'''
+replace = '''YEXP_T_BOOL, 0, "response_ends_trial", "false", "",'''
 
 [[mutant]]
 id = "e-51"
 name = "default display calibration required"
 test = "experiment"
 why = "2.1's default; golden dumps pin it."
-find = '''YEXP__T_ENUM, 0, "calibration", "\"optional\"", "required=0,optional=1" },
-    { YEXP__S_DISPLAY, 0xffff, YEXP__T_INT, 0, "min_tier", "0", NULL },
-    { YEXP__S_DISPLAY, 0xffff, YEXP__T_ENUM, 0, "units", "\"px\"", "px=0,deg=1" },'''
-replace = '''YEXP__T_ENUM, 0, "calibration", "\"required\"", "required=0,optional=1" },
-    { YEXP__S_DISPLAY, 0xffff, YEXP__T_INT, 0, "min_tier", "0", NULL },
-    { YEXP__S_DISPLAY, 0xffff, YEXP__T_ENUM, 0, "units", "\"px\"", "px=0,deg=1" },'''
+find = '''    { YEXP_S_DISPLAY, 0xffff, YEXP_T_ENUM, 0, "calibration", "\"optional\"", "", "required: the session does not start without the rig's display calibration; optional: a nominal one, flagged", "required=0,optional=1" },
+    { YEXP_S_DISPLAY, 0xffff, YEXP_T_INT, 0, "min_tier", "0", "", "the timing tier, 1 to 3, that frames must reach; frames below it are flagged (D11); 0: none", NULL },
+    { YEXP_S_DISPLAY, 0xffff, YEXP_T_ENUM, 0, "units", "\"px\"", "", "the unit of positions and sizes: px or deg", "px=0,deg=1" },'''
+replace = '''    { YEXP_S_DISPLAY, 0xffff, YEXP_T_ENUM, 0, "calibration", "\"required\"", "", "required: the session does not start without the rig's display calibration; optional: a nominal one, flagged", "required=0,optional=1" },
+    { YEXP_S_DISPLAY, 0xffff, YEXP_T_INT, 0, "min_tier", "0", "", "the timing tier, 1 to 3, that frames must reach; frames below it are flagged (D11); 0: none", NULL },
+    { YEXP_S_DISPLAY, 0xffff, YEXP_T_ENUM, 0, "units", "\"px\"", "", "the unit of positions and sizes: px or deg", "px=0,deg=1" },'''
 
 [[mutant]]
 id = "e-52"
 name = "a canonical composite default stays"
 test = "experiment"
 why = "D2: a key at its default is left out; the default session is written."
-find = '''    if (cc && !yexp__at_default(c, (int)(yexp__slot_at(c, s, YEXP__S_ROOT, "session") - s) + c->first[YEXP__S_ROOT], cc)) yexp__put(c, croot, "session", cc);'''
+find = '''    if (cc && !yexp__at_default(c, (int)(yexp__slot_at(c, s, YEXP_S_ROOT, "session") - s) + c->first[YEXP_S_ROOT], cc)) yexp__put(c, croot, "session", cc);'''
 replace = '''    if (cc) yexp__put(c, croot, "session", cc);'''
 
 [[mutant]]
@@ -828,7 +835,7 @@ id = "r-39"
 name = "a single target keeps its array"
 test = "experiment"
 why = "One meaning, one ID."
-find = '''            if (one || (r->type == YEXP__T_TARGETS && n == 1)) *canon = ce;'''
+find = '''            if (one || (r->type == YEXP_T_TARGETS && n == 1)) *canon = ce;'''
 replace = '''            if (one) *canon = ce;'''
 
 [[mutant]]
@@ -887,15 +894,15 @@ id = "r-46"
 name = "a step may set an integer key"
 test = "experiment"
 why = "A channel carries a float; layer is the draw order."
-find = '''    return (r->type == YEXP__T_NUM || r->type == YEXP__T_VEC3) && !(r->flags & YEXP__R_LIT);'''
-replace = '''    return (r->type == YEXP__T_NUM || r->type == YEXP__T_INT || r->type == YEXP__T_VEC3) && !(r->flags & YEXP__R_LIT);'''
+find = '''    return (r->type == YEXP_T_NUM || r->type == YEXP_T_VEC3) && !(r->flags & YEXP_R_LIT);'''
+replace = '''    return (r->type == YEXP_T_NUM || r->type == YEXP_T_INT || r->type == YEXP_T_VEC3) && !(r->flags & YEXP_R_LIT);'''
 
 [[mutant]]
 id = "r-47"
 name = "a gamut on an enum"
 test = "experiment"
 why = "The largest value of a number."
-find = '''            if (ri < 0 || c->rows[ri].type != YEXP__T_NUM)'''
+find = '''            if (ri < 0 || c->rows[ri].type != YEXP_T_NUM)'''
 replace = '''            if (0)'''
 
 [[mutant]]
@@ -1154,7 +1161,7 @@ id = "t-01"
 name = "persist reads as a plain unknown key"
 test = "experiment"
 why = "The refusal names the key that replaced it."
-find = '''    if (sect == YEXP__S_RESPONSE && yexp__streq(key, "persist")) {'''
+find = '''    if (sect == YEXP_S_RESPONSE && yexp__streq(key, "persist")) {'''
 replace = '''    if (0) {'''
 
 [[mutant]]
@@ -1495,7 +1502,7 @@ id = "v-03"
 name = "visible taken as a stimulus key in version 2"
 test = "experiment"
 why = "D41 item 2: refused."
-find = '''if (c->rows[ri].flags & YEXP__R_STEP) {'''
+find = '''if (c->rows[ri].flags & YEXP_R_STEP) {'''
 replace = '''if (0) {'''
 
 [[mutant]]
@@ -2005,7 +2012,7 @@ id = "v-65"
 name = "role with signal choices, the generic message"
 test = "experiment"
 why = "3.13 names this refusal."
-find = '''if (sect == YEXP__S_SRESPONSE && (yexp__streq(key, "role")'''
+find = '''if (sect == YEXP_S_SRESPONSE && (yexp__streq(key, "role")'''
 replace = '''if (0 && (yexp__streq(key, "role")'''
 
 [[mutant]]
@@ -2199,8 +2206,8 @@ id = "v-89"
 name = "the outcome's default with states is 2"
 test = "experiment"
 why = "3.17: 1."
-find = '''{ YEXP__S_TEMPLATE, 0x0002, YEXP__T_VAL, YEXP__R_SELF, "outcome", "1", NULL },'''
-replace = '''{ YEXP__S_TEMPLATE, 0x0002, YEXP__T_VAL, YEXP__R_SELF, "outcome", "2", NULL },'''
+find = '''{ YEXP_S_TEMPLATE, 0x0002, YEXP_T_VAL, YEXP_R_SELF, "outcome", "1", "",'''
+replace = '''{ YEXP_S_TEMPLATE, 0x0002, YEXP_T_VAL, YEXP_R_SELF, "outcome", "2", "",'''
 
 [[mutant]]
 id = "v-90"
@@ -2215,7 +2222,7 @@ id = "v-91"
 name = "a lane on a name, the generic message"
 test = "experiment"
 why = "3.9: say where a lane goes."
-find = '''if (c->version >= 2 && src->type == YJS_STRING && strchr(src->u.s, '.') && r->section >= YEXP__S_STEP) {'''
+find = '''if (c->version >= 2 && src->type == YJS_STRING && strchr(src->u.s, '.') && r->section >= YEXP_S_STEP) {'''
 replace = '''if (0) {'''
 
 [[mutant]]
@@ -2296,8 +2303,8 @@ id = "w-06"
 name = "a point through a variable read as a number"
 test = "experiment"
 why = "Review item 2: 3.7's point."
-find = '''want = ty == YEXP__T_DUR ? YEXP__W_NONNEG : ty == YEXP__T_NUM ? YEXP__W_NUM : (ty == YEXP__T_POINT || ty == YEXP__T_CENTER) ? YEXP__W_POINT : YEXP__W_ANY;'''
-replace = '''want = ty == YEXP__T_DUR ? YEXP__W_NONNEG : ty == YEXP__T_NUM ? YEXP__W_NUM : (ty == YEXP__T_POINT || ty == YEXP__T_CENTER) ? YEXP__W_NUM : YEXP__W_ANY;'''
+find = '''want = ty == YEXP_T_DUR ? YEXP__W_NONNEG : ty == YEXP_T_NUM ? YEXP__W_NUM : (ty == YEXP_T_POINT || ty == YEXP_T_CENTER) ? YEXP__W_POINT : YEXP__W_ANY;'''
+replace = '''want = ty == YEXP_T_DUR ? YEXP__W_NONNEG : ty == YEXP_T_NUM ? YEXP__W_NUM : (ty == YEXP_T_POINT || ty == YEXP_T_CENTER) ? YEXP__W_NUM : YEXP__W_ANY;'''
 
 [[mutant]]
 id = "w-07"
@@ -2639,9 +2646,9 @@ id = "win-03"
 name = "a signal choice's window not checked"
 test = "experiment"
 why = "2.6 reading: bad/v2_window_no_time_signal.json."
-find = '''    r->max_responses = yexp__int_field(c, yexp__slotv(c, s, YEXP__S_SRESPONSE, "max_responses"), elem, "max_responses", 0, INT32_MAX, 0);
+find = '''    r->max_responses = yexp__int_field(c, yexp__slotv(c, s, YEXP_S_SRESPONSE, "max_responses"), elem, "max_responses", 0, INT32_MAX, 0);
     yexp__window_lit(c, src->pos, elem, r);'''
-replace = '''    r->max_responses = yexp__int_field(c, yexp__slotv(c, s, YEXP__S_SRESPONSE, "max_responses"), elem, "max_responses", 0, INT32_MAX, 0);'''
+replace = '''    r->max_responses = yexp__int_field(c, yexp__slotv(c, s, YEXP_S_SRESPONSE, "max_responses"), elem, "max_responses", 0, INT32_MAX, 0);'''
 
 [[mutant]]
 id = "win-04"
@@ -2658,3 +2665,65 @@ test = "experiment"
 why = "2.6 reading (run_window: the minimum's level against the duration)."
 find = '''        int64_t d = dv ? x : yexp__lit_ns(r->duration), m = dv ? yexp__lit_ns(r->min_rt) : x;'''
 replace = '''        int64_t d = x, m = yexp__lit_ns(r->min_rt);'''
+
+# 0.6.0: the table's public names, units and texts (P1, P2 of docs/designer.md)
+
+[[mutant]]
+id = "t6-01"
+name = "a duration's unit is not s"
+test = "experiment"
+why = "D4: every duration in a definition is seconds; a designer shows the row's unit."
+find = '''"pulse_s", "0", "s", "an output's pulse width"'''
+replace = '''"pulse_s", "0", "", "an output's pulse width"'''
+
+[[mutant]]
+id = "t6-02"
+name = "a format-only key without its text"
+test = "experiment"
+why = "P2: a node's repetitions has no header's row; without the format's text its panel shows only the name."
+find = '''"repetitions", "1", "", "a container runs its children this many times"'''
+replace = '''"repetitions", "1", "", ""'''
+
+[[mutant]]
+id = "t6-03"
+name = "a key's text differs between the version 1 and 2 tables"
+test = "experiment"
+why = "A key whose meaning version 2 does not change has one text."
+find = '''"after", "[]", "", "steps from the later of the response's end and the events' end", NULL },
+    { YEXP_S_TEMPLATE, 0xffff, YEXP_T_SET, 0, "columns", "{}", "", "the template's own data columns, by name", NULL },
+    { YEXP_S_TEMPLATE, 0xffff, YEXP_T_SET, 0, "controls",'''
+replace = '''"after", "[]", "", "steps after the events", NULL },
+    { YEXP_S_TEMPLATE, 0xffff, YEXP_T_SET, 0, "columns", "{}", "", "the template's own data columns, by name", NULL },
+    { YEXP_S_TEMPLATE, 0xffff, YEXP_T_SET, 0, "controls",'''
+
+[[mutant]]
+id = "t6-04"
+name = "two section numbers swap"
+test = "experiment"
+why = "The numbers are 0.5.3's; a reader that kept them must read the same sections."
+find = '''    YEXP_S_CONTROL, YEXP_S_STATE, YEXP_S_OVER,'''
+replace = '''    YEXP_S_STATE, YEXP_S_CONTROL, YEXP_S_OVER,'''
+
+[[mutant]]
+id = "t6-05"
+name = "a stimulus key's unit is not its header's"
+test = "experiment_tables"
+why = "2.7: a stimulus property is in its parameter table's unit."
+find = '''"sf", "0", "cyc/u", "", NULL }'''
+replace = '''"sf", "0", "u", "", NULL }'''
+
+[[mutant]]
+id = "t6-06"
+name = "a header's key with a text of its own"
+test = "experiment_tables"
+why = "The header's row is the one text; a second copy can drift."
+find = '''"src_w", "0", "texel", "", NULL }'''
+replace = '''"src_w", "0", "texel", "the source rectangle's width", NULL }'''
+
+[[mutant]]
+id = "t6-07"
+name = "a sound key without its text"
+test = "experiment_tables"
+why = "gfx's offset is a shape's; a sound's offset is the format's own key and needs its text."
+find = '''"offset", "0", "frame", "the sound's first frame", NULL }'''
+replace = '''"offset", "0", "frame", "", NULL }'''

@@ -8,8 +8,9 @@
  * table (format G6): ygfx_params(), ygfx_enum_params() and yrdk_params()
  * for stimuli, yrsp_params() for responses and choices, ysig_op_params()
  * for controls (through the op that a key lowers to, format 3.7), and
- * yst_params(), yqst_params() and yaep_params() for methods. A duration (a
- * key that ends in _s) is in seconds (D4).
+ * yst_params(), yqst_params() and yaep_params() for methods. A key that no
+ * header's table has takes the format row's own unit and doc (0.6.0). A
+ * duration (a key that ends in _s) is in seconds (D4).
  *
  * Nothing here is a rule: the player's loader stays the only validator. A
  * value that a header's range refuses is still written; the check says so.
@@ -22,32 +23,11 @@
 #include <stdint.h>
 
 #include "doc.h"
+#include "ysp/experiment.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-/* Value types: the order of ysp/experiment.h's internal YEXP__T_* (0.5.3).
- * test_designer_panels checks the mirror where the rows show it;
- * prerequisite P1 of the plan makes the header's own enum public, and this
- * mirror goes. */
-enum {
-    DSG_T_NUM, DSG_T_INT, DSG_T_DUR, DSG_T_BOOL, DSG_T_STR, DSG_T_ENUM, DSG_T_ENUMS,
-    DSG_T_TEXT, DSG_T_RES, DSG_T_VEC3, DSG_T_NUMS, DSG_T_GRID, DSG_T_VAL, DSG_T_CODE,
-    DSG_T_VAR, DSG_T_NAME, DSG_T_NAMEZ, DSG_T_NAMES, DSG_T_STRS, DSG_T_TARGETS,
-    DSG_T_SMAP, DSG_T_ANY, DSG_T_OBJ, DSG_T_SET, DSG_T_LIST,
-    DSG_T_POINT, DSG_T_CENTER, DSG_T_TRANSFORM, DSG_T_REF, DSG_T_REFS, DSG_T_SINES,
-    DSG_T_BOX, DSG_T_OUTCOME,
-    DSG_T_COUNT
-};
-
-/* A row's flags: ysp/experiment.h's internal YEXP__R_* (0.5.3), mirrored as
- * the types are. */
-#define DSG_R_REQ  0x01u   /* required                                         */
-#define DSG_R_LIT  0x02u   /* a literal, never a variable or a lookup          */
-#define DSG_R_NONE 0x04u   /* optional, with no default                        */
-#define DSG_R_SELF 0x08u   /* the section's builder writes the canonical key   */
-#define DSG_R_STEP 0x10u   /* a step's property, not a key of the section (D41) */
 
 /* What a name in a key can name (format 3.9). A key's mask gives the
  * candidates its combo offers and the renames that change it. */
@@ -73,15 +53,16 @@ typedef struct dsg_field {
     uint16_t    kinds;     /* which kinds of the section have it: the format
                             * row's kinds, split where a header's table
                             * differs per kind                              */
-    int         type;      /* DSG_T_*                                         */
-    unsigned    flags;     /* DSG_R_*                                         */
+    int         type;      /* yexp_row_type: YEXP_T_*                         */
+    unsigned    flags;     /* YEXP_R_*                                        */
     bool        required;
     const char* def;       /* the default's canonical JSON; NULL: none        */
     const char* values;    /* an enum's "name=value,..."; NULL otherwise      */
-    const char* unit;      /* "s", a header's unit ("px", "deg", "u"), or ""  */
-    const char* doc;       /* a header's text; "" when none has the key       */
+    const char* unit;      /* "s", a header's unit ("px", "deg", "u"), else
+                            * the format row's; "" for none                  */
+    const char* doc;       /* the format row's text, else a header's          */
     double      min, max;  /* a header's range, in the key's unit; NaN: none  */
-    const char* from;      /* "format", or the header that gave unit and doc  */
+    const char* from;      /* "format", or the header that gave unit and range */
     unsigned    refs;      /* DSG_REF_*: what the key names; 0: not a name    */
 } dsg_field;
 
@@ -93,7 +74,7 @@ int  dsg_schema_section(const char* name);
 /* The fields of one section and kind: kind_bit is 1 << the kind's number
  * (yexp_stim_kind, yexp_step_op, yexp_control_kind; an exit 1, a shared
  * exit 2; a template 1, or 2 with states and no key_answer), or 0xffff for
- * a section without kinds. Rows that are a step's property (DSG_R_STEP) are
+ * a section without kinds. Rows that are a step's property (YEXP_R_STEP) are
  * left out. Writes at most cap pointers; returns the count. */
 int  dsg_schema_select(int section, unsigned kind_bit, const dsg_field** out, int cap);
 /* The field of key in a section and kind, or NULL. */

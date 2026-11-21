@@ -22,7 +22,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 
 KINDS = ["shape", "grating", "gabor", "noise", "image", "text", "artwork", "rdk", "sound", "video"]
-ROW = re.compile(r'\{ YEXP__S_(\w+), 0x([0-9a-f]+), YEXP__T_(\w+), ([^,]+), "([^"]+)", (NULL|"(?:[^"\\]|\\.)*"), (NULL|"[^"]*") \}')
+ROW = re.compile(r'\{ YEXP_S_(\w+), 0x([0-9a-f]+), YEXP_T_(\w+), ([^,]+), "([^"]+)", (NULL|"(?:[^"\\]|\\.)*"), '
+                 r'"(?:[^"\\]|\\.)*", "(?:[^"\\]|\\.)*", (NULL|"[^"]*") \}')   # unit, doc: no sample needs them
 
 
 def rows():

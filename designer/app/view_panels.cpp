@@ -365,7 +365,7 @@ double number_of(const dsg_field* f, const yjs_value* v) {
 // A drag's step per pixel: the header's range over 500 px where it has a
 // sensible one, else a two-hundredth of the value.
 double drag_step(const dsg_field* f, double v0) {
-    if (f->type == DSG_T_INT) return 0.1;
+    if (f->type == YEXP_T_INT) return 0.1;
     const double span = isfinite(f->min) && isfinite(f->max) ? f->max - f->min : 0.0;
     if (span > 0 && span <= 1e4) return span / 500.0;
     return fabs(v0) > 0 ? fabs(v0) / 200.0 : 0.01;
@@ -376,7 +376,7 @@ double drag_step(const dsg_field* f, double v0) {
 void drag_format(const dsg_field* f, double v, double step, char* out, size_t cap) {
     if (isfinite(f->min) && v < f->min) v = f->min;
     if (isfinite(f->max) && v > f->max) v = f->max;
-    if (f->type == DSG_T_INT) {
+    if (f->type == YEXP_T_INT) {
         snprintf(out, cap, "%lld", (long long)llround(v));
         return;
     }
@@ -399,7 +399,7 @@ void key_tooltip(const dsg_field* f) {
     if (f->def) ImGui::Text("Default %s", f->def);
     else if (!f->required) ImGui::TextUnformatted("No default: none when left out");
     ImGui::TextDisabled("From %s", f->from);
-    if (f->type == DSG_T_DUR) ImGui::TextDisabled("Seconds; written as the exact decimal of the nanoseconds.");
+    if (f->type == YEXP_T_DUR) ImGui::TextDisabled("Seconds; written as the exact decimal of the nanoseconds.");
     ImGui::EndTooltip();
 }
 
@@ -510,8 +510,8 @@ void name_combo(const dsg_obj& o, const dsg_field* f, const yjs_value* v, const 
 }
 
 bool string_widget(int t) {
-    return t == DSG_T_STR || t == DSG_T_TEXT || t == DSG_T_RES || t == DSG_T_NAMEZ || t == DSG_T_NAME || t == DSG_T_VAR ||
-           t == DSG_T_REF;
+    return t == YEXP_T_STR || t == YEXP_T_TEXT || t == YEXP_T_RES || t == YEXP_T_NAMEZ || t == YEXP_T_NAME || t == YEXP_T_VAR ||
+           t == YEXP_T_REF;
 }
 
 void value_cell(const dsg_obj& o, const dsg_field* f, const yjs_value* v, const char* path, const yjs_value* root, bool ro,
@@ -519,13 +519,13 @@ void value_cell(const dsg_obj& o, const dsg_field* f, const yjs_value* v, const 
     const bool fits = dsg_schema_fits(f, v);
     const int holds = dsg_schema_holds(o.obj, f->key);
     char text[kText];
-    if (fits && (f->type == DSG_T_NUM || f->type == DSG_T_INT || f->type == DSG_T_DUR)) {
+    if (fits && (f->type == YEXP_T_NUM || f->type == YEXP_T_INT || f->type == YEXP_T_DUR)) {
         if (ro) ImGui::BeginDisabled();
         number_field(o, f, v, drag);
         if (ro) ImGui::EndDisabled();
         return;
     }
-    if (fits && f->type == DSG_T_BOOL) {
+    if (fits && f->type == YEXP_T_BOOL) {
         bool b = v ? v->type == YJS_TRUE : (f->def && strcmp(f->def, "true") == 0);
         if (ro) ImGui::BeginDisabled();
         if (!v) ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.55f);
@@ -534,13 +534,13 @@ void value_cell(const dsg_obj& o, const dsg_field* f, const yjs_value* v, const 
         if (ro) ImGui::EndDisabled();
         return;
     }
-    if (fits && f->type == DSG_T_ENUM) {
+    if (fits && f->type == YEXP_T_ENUM) {
         if (ro) ImGui::BeginDisabled();
         enum_combo(o, f, v);
         if (ro) ImGui::EndDisabled();
         return;
     }
-    if (fits && f->refs && f->type != DSG_T_VAR && (f->type == DSG_T_NAME || f->type == DSG_T_REF)) {
+    if (fits && f->refs && f->type != YEXP_T_VAR && (f->type == YEXP_T_NAME || f->type == YEXP_T_REF)) {
         if (ro) ImGui::BeginDisabled();
         name_combo(o, f, v, root);
         if (ro) ImGui::EndDisabled();
@@ -558,7 +558,7 @@ void value_cell(const dsg_obj& o, const dsg_field* f, const yjs_value* v, const 
         }
         return;
     }
-    if (holds == 2 || f->type == DSG_T_LIST || f->type == DSG_T_SET) {
+    if (holds == 2 || f->type == YEXP_T_LIST || f->type == YEXP_T_SET) {
         // states, steps, stimuli: the chart, the text view and the tree edit them
         ImGui::AlignTextToFramePadding();
         if (v && v->type == YJS_ARRAY) ImGui::TextDisabled("%u items", v->n);
@@ -575,7 +575,7 @@ void key_row(const dsg_obj& o, const dsg_field* f, const yjs_value* root, bool r
     char path[DSG_SEL_PATH];
     if (dsg_schema_key_path(&o, f->key, path, sizeof path)) return;
     const yjs_value* v = dsg_path_get(root, path);
-    const bool numeric = (f->type == DSG_T_NUM || f->type == DSG_T_INT || f->type == DSG_T_DUR) && dsg_schema_fits(f, v);
+    const bool numeric = (f->type == YEXP_T_NUM || f->type == YEXP_T_INT || f->type == YEXP_T_DUR) && dsg_schema_fits(f, v);
     ImGui::TableNextRow();
     ImGui::PushID(f->key);
     const ImGuiID drag = ImGui::GetID("##drag");
@@ -599,7 +599,7 @@ void key_row(const dsg_obj& o, const dsg_field* f, const yjs_value* root, bool r
     ImGui::AlignTextToFramePadding();
     double secs = 0;
     // D4: a duration above a minute is more often a typo than a plan
-    if (f->type == DSG_T_DUR && v && yjs_double(v, &secs) == YJS_OK && secs > 60.0) {
+    if (f->type == YEXP_T_DUR && v && yjs_double(v, &secs) == YJS_OK && secs > 60.0) {
         ImGui::TextColored(ImVec4(0.95f, 0.8f, 0.35f, 1.0f), "s > 60");
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Above 60 s: the format's lint warns (D4). Seconds, not ms?");
     } else {

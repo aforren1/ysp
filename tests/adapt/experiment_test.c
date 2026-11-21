@@ -13,7 +13,8 @@
  *     the same ID as left out, section by section;
  *   - the numbers (D2's open point), the host interface and the skip bits,
  *     the warnings, the arena (a full arena never crashes), the SHA-256
- *     against vectors, the table against itself.
+ *     against vectors, the table against itself;
+ *   - the table's public enums, flags, units and texts (0.6.0).
  *
  *     gcc -std=c11 -Wall -Wextra -Iinclude tests/adapt/experiment_test.c -o t -lm
  *     YEXP_CORPUS=tests/experiment ./t
@@ -561,7 +562,7 @@ static void run_defaults(void) {
             char* b;
             uint8_t ida[32], idb[32];
             if ((!strcmp(sn, "stimulus") || !strcmp(sn, "control")) && !(r->kinds & (1u << kind))) continue;
-            if (!strcmp(sn, "stimulus") && (r->flags & 0x10u)) continue;   /* visible: a step's property in version 2 */
+            if (!strcmp(sn, "stimulus") && (r->flags & YEXP_R_STEP)) continue;   /* visible: a step's property in version 2 */
             base = section_base2(r->section, kind, buf, sizeof buf);
             if (!base) {
                 char* q;
@@ -789,7 +790,7 @@ static void run_defaults_page(void) {
             bool same = r1->type == r->type && ((r1->def == NULL) == (r->def == NULL)) && (!r->def || !strcmp(r1->def, r->def)) &&
                         r1->flags == r->flags && ((r1->values == NULL) == (r->values == NULL)) && (!r->values || !strcmp(r1->values, r->values));
             if (!same) {
-                bool known = (!strcmp(r->key, "visible") && r->flags == (r1->flags | 0x10u)) ||
+                bool known = (!strcmp(r->key, "visible") && r->flags == (r1->flags | YEXP_R_STEP)) ||
                              (!strcmp(r->key, "units") && !strcmp(r->values, "px=0,deg=1,cm=2"));
                 CHECK2(known, "a version 1 row changed only as part 3 says", r->key);
             }
@@ -809,6 +810,89 @@ static void run_defaults_page(void) {
     printf("  defaults table: %d keys of 3.17 against yexp_defaults(2)\n", checked);
     free(seen);
     free(doc);
+}
+
+/* --- the table's public names, units and texts (0.6.0) ------------------ */
+
+/* Keys whose text differs between the version 1 and 2 tables: what version
+ * 2 adds to their meaning (3.3, 3.11, 3.12). */
+static bool doc_differs_ok(const yexp_row* r) {
+    static const struct { int section; const char* key; } M[] = {
+        { YEXP_S_ROOT, "version" }, { YEXP_S_DISPLAY, "units" }, { YEXP_S_TEMPLATE, "events" }, { YEXP_S_TEMPLATE, "outcome" },
+        { YEXP_S_STEP, "at_s" }, { YEXP_S_STEP, "if" }, { YEXP_S_STEP, "unless" },
+    };
+    size_t k;
+    for (k = 0; k < sizeof M / sizeof M[0]; k++)
+        if (r->section == M[k].section && !strcmp(r->key, M[k].key)) return true;
+    return false;
+}
+
+static void run_row_text(void) {
+    int v, i, n = 0;
+    char d[200];
+    /* the numbers of 0.5.3's internal names: a reader that kept them reads on */
+    CHECK(YEXP_S_COUNT == 25 && YEXP_T_COUNT == 33, "the counts of sections and types");
+    CHECK(YEXP_S_STIM == 6 && YEXP_S_STEP == 16 && YEXP_S_SIGROLE == 17 && YEXP_T_DUR == 2 && YEXP_T_LIST == 24 &&
+              YEXP_T_OUTCOME == 32 && YEXP_R_STEP == 0x10u,
+          "the numbers did not move");
+    for (i = 0; i < YEXP_S_COUNT; i++) CHECK2(yexp_section_name(i)[0] != 0, "every section has a name", yexp_section_name(i));
+    CHECK(!strcmp(yexp_section_name(YEXP_S_ROOT), "file") && !strcmp(yexp_section_name(YEXP_S_STIM), "stimulus") &&
+              !strcmp(yexp_section_name(YEXP_S_SRESPONSE), "response with signal choices") &&
+              !strcmp(yexp_section_name(YEXP_S_WALK2D), "walk2d") && yexp_section_name(YEXP_S_COUNT)[0] == 0 &&
+              yexp_section_name(-1)[0] == 0,
+          "the section names by their public numbers");
+    for (v = 1; v <= 2; v++) {
+        const yexp_row* rows = yexp_defaults(v, &n);
+        int empty = 0;
+        for (i = 0; i < n; i++) {
+            const yexp_row* r = &rows[i];
+            const size_t kl = strlen(r->key);
+            const bool dur_key = kl > 2 && !strcmp(r->key + kl - 2, "_s");
+            const bool header_section = r->section == YEXP_S_STIM || r->section == YEXP_S_STAIR || r->section == YEXP_S_QUEST ||
+                                        r->section == YEXP_S_AEP;
+            snprintf(d, sizeof d, "version %d, %s %s", v, yexp_section_name(r->section), r->key);
+            CHECK2(r->section < YEXP_S_COUNT && r->type < YEXP_T_COUNT, "a row's section and type are public names", d);
+            CHECK2((r->flags & ~(YEXP_R_REQ | YEXP_R_LIT | YEXP_R_NONE | YEXP_R_SELF | YEXP_R_STEP)) == 0, "a row's flags are YEXP_R_*", d);
+            CHECK2(yexp_row_required(r) == ((r->flags & YEXP_R_REQ) != 0), "required is YEXP_R_REQ", d);
+            CHECK2(dur_key == (r->type == YEXP_T_DUR), "a key that ends in _s is a duration, and only those (D4)", d);
+            CHECK2((r->values != NULL) == (r->type == YEXP_T_ENUM || r->type == YEXP_T_ENUMS), "values exactly for an enum", d);
+            CHECK2(r->unit != NULL && r->doc != NULL, "a unit and a doc", d);
+            if (!r->unit || !r->doc) continue;
+            CHECK2(r->type != YEXP_T_DUR || !strcmp(r->unit, "s"), "a duration's unit is s", d);
+            CHECK2(strlen(r->doc) <= 160 && !strchr(r->doc, '\n') && !strchr(r->doc, '\t'), "one line of text", d);
+            CHECK2(r->doc[0] || header_section, "a key outside stimuli and methods has its text", d);
+            if (!r->doc[0]) empty++;
+        }
+        /* experiment_tables_test checks each empty doc against its header's row */
+        CHECK(empty > 150 && n - empty > 100, "texts left to the headers' tables, and the format's own");
+    }
+    {
+        /* a key that both tables have: one unit, and one text but where
+         * version 2 adds to its meaning */
+        int n1 = 0, n2 = 0, j, same = 0;
+        const yexp_row* r1 = yexp_defaults(1, &n1);
+        const yexp_row* r2 = yexp_defaults(2, &n2);
+        for (i = 0; i < n1; i++)
+            for (j = 0; j < n2; j++)
+                if (r1[i].section == r2[j].section && r1[i].kinds == r2[j].kinds && !strcmp(r1[i].key, r2[j].key)) {
+                    snprintf(d, sizeof d, "%s %s", yexp_section_name(r1[i].section), r1[i].key);
+                    CHECK2(!strcmp(r1[i].unit, r2[j].unit), "one unit in both versions", d);
+                    if (!doc_differs_ok(&r1[i])) CHECK2(!strcmp(r1[i].doc, r2[j].doc), "one text in both versions", d);
+                    same++;
+                }
+        CHECK(same > 350, "the rows of both versions compared");
+    }
+    {
+        /* format-only keys that a designer shows with their text (P2) */
+        const yexp_row* r = find_row(yexp_defaults(2, &n), n, "node", 0xffffu, "repetitions");
+        CHECK(r && r->doc[0] && !strcmp(r->unit, ""), "a node's repetitions has a text");
+        r = find_row(yexp_defaults(2, &n), n, "state", 0xffffu, "max_visits");
+        CHECK(r && r->doc[0], "a state's max_visits has a text");
+        r = find_row(yexp_defaults(2, &n), n, "display", 0xffffu, "background");
+        CHECK(r && !strcmp(r->unit, "rgb") && r->doc[0], "the background is rgb");
+        r = find_row(yexp_defaults(2, &n), n, "stimulus", 1u << YEXP_GRATING, "sf");
+        CHECK(r && !strcmp(r->unit, "cyc/u") && !r->doc[0], "a grating's sf: gfx's unit; gfx's row has the text");
+    }
 }
 
 /* --- numbers (D2) ------------------------------------------------------- */
@@ -1851,6 +1935,7 @@ int main(void) {
     run_arena();
     run_defaults();
     run_defaults_page();
+    run_row_text();
     run_corpus();
     if (g_failures) {
         fprintf(stderr, "experiment_test: %d failure(s) in %d checks\n", g_failures, g_checks);
