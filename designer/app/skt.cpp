@@ -229,9 +229,14 @@ bool skt_init(const char* font_dir, char* err, size_t err_cap) {
 }
 
 void skt_shutdown() {
+    // ImGui rebuilds the renderer's texture list only at a frame's end, and
+    // the renderer backend's shutdown walks it: a page deleted here and left
+    // in it is read after its free (main.cpp shuts the UI down first).
+    ImVector<ImTextureData*>& listed = ImGui::GetPlatformIO().Textures;
     for (ImTextureData* t : pages) {
         if (!t) continue;
         ImGui::UnregisterUserTexture(t);
+        listed.find_erase(t);
         IM_DELETE(t);
     }
     pages.clear();

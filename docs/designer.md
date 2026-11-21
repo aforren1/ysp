@@ -1508,6 +1508,183 @@ code itself.
   fails `chart/pin` and `chart/pin_real`; `ui_preview_where()` that gives a
   place with no session fails part 8 in both UI tests.
 
+#### Part D as built (2026-11-21)
+
+Branch `step5-int2`. Part D adds `tests/designer/preview_gl_test.cpp`: the
+test `test_designer_preview_gl`, and with `--bench` the measurements of
+"Redraw and cost" for the UI thread on a GL context.
+
+**The test.** Linux only. It makes a pbuffer on EGL's device platform, with
+no window, on the device whose `GL_RENDERER` contains `YSP_GL_DEVICE`
+(default `llvmpipe`). It runs the UI as `main.cpp` does: the first gfx on
+the context (64 x 64, its own output texture), `ui_init()` with its caps,
+`ui_frame()`, then ImGui's OpenGL3 backend into framebuffer 0. A test
+clock gives 16.7 ms a frame. CMake adds the test when it finds `libEGL`.
+The test exits 77 (ctest: skipped) when EGL has no such device or the
+stroop font is missing.
+
+1. A copy of stroop at 1100 x 360 px, 60 Hz, 1:1, paused before the first
+   session. The session loads on the check thread and attaches on the
+   context. Then Step goes to frame 130: the first trial's word is on
+   from frame 120 (banner 1.5 s, fixation 0.5 s).
+2. After one ImGui frame, `glReadPixels()` of framebuffer 0 at the
+   image's rectangle gives the texture's bytes, which the test reads
+   through a framebuffer of its own: 0 of 1,584,000 bytes differ, and
+   every alpha is 255. The image is 1100 x 360 px at a whole px, inside
+   the clip rectangle of the display's child window.
+3. The word is at its place, in its row's ink. Stroop's text box is
+   1000 px wide at the display's center, and its lines start at the box's
+   left edge (align `start`). So the word starts at 57 px (the box's edge,
+   50 px, and B's side bearing: the seed's first word is BLUE), not at the
+   display's center. Its middle is at row 182 of 360. Its strongest
+   channel is its row's ink (red).
+4. Restart, the same seed, stepped again to frame 130 with no ImGui frame
+   drawn between the steps: gfx gives the same bytes as with an ImGui
+   frame before each step.
+
+The pbuffer is 3800 x 1200 px, so the pane (45 % of what the side column
+leaves) holds the 1100 px display at 1:1. Stroop's 1000 px text box does
+not fit a smaller display: at 480 px its word started at -260 px and the
+check found nothing.
+
+Results (Linux desktop, i5-14500, Debian 12, Mesa 22.3.6, gcc 12.2,
+Release): 19 of 19 checks on llvmpipe (LLVM 15.0.6), on the RX 6600
+(radeonsi) and on the UHD 770 (iris); 1.2 s on llvmpipe. ASan with UBSan
+and ThreadSanitizer (`setarch -R`): no report.
+
+| Hand mutant (each reverted) | Result |
+|---|---|
+| d-01: the image's tint alpha 250, not 255 | fails 2: 1,187,795 bytes differ |
+| d-02: rows not flipped (uv 0 at the top) | fails 2: 7,542 bytes differ |
+| d-03: no `ygfx_reset_state()` before a drawn frame (`player/sim.c`) | survives. ImGui's OpenGL3 backend saves the GL state that it changes and puts it back, so gfx finds its own state. `test_player_sim` case (10) sets foreign state itself and keeps the reset tested. |
+| d-04: the image 0.4 px off the px grid | fails 2: not at a whole px |
+| d-05: no nearest sampler at 1:1 | survives. At a whole px each fragment samples a texel's center, where linear and nearest give the same value. The sampler matters only off the grid, which d-04 catches. |
+
+**A fault found by the test** (not in A, B or C). `skt_shutdown()`
+(`designer/app/skt.cpp`, step 3) deleted its glyph pages after it
+unregistered them, but ImGui rebuilds the renderer's texture list only at
+a frame's end. `ImGui_ImplOpenGL3_Shutdown()`, which `main.cpp` calls after
+`ui_shutdown()`, then walked the list and read the freed pages (ASan:
+heap use after free at the program's exit). `skt_shutdown()` now takes each
+page out of that list too.
+
+**The bench.** `test_designer_preview_gl --bench PROJECT HZ FRAMES
+[hidden | WxH]`: the project opens with the pane shown at the default
+display (1920 x 1080, Fit) at HZ, in a 1920 x 1080 window (a full
+1080p monitor). The test clock gives 16.7 ms a frame, and the frames run
+back to back. GNU ld's `--wrap` times `dsg_preview_tick()` and
+`pl_sim_attach()`. Each frame's parts:
+
+- tick: `dsg_preview_tick()`: the attach and the steps, only the last
+  drawn.
+- views: the rest of `ui_frame()`: every view, the pane too. With the pane
+  hidden ("pane hidden" rows) no session runs; the difference is the
+  pane's draw, about 0.03 to 0.08 ms on the RX 6600 (the main view is wider
+  when the pane is hidden, so this is near, not exact).
+- render: `ImGui::Render()`, the clear and `ImGui_ImplOpenGL3_RenderDrawData()`.
+- finish: `glFinish()`, what a swap waits for, less the vsync.
+
+Conditions: Linux desktop, Intel Core i5-14500 (`lscpu`: 2.6 GHz max),
+Debian 12, kernel 6.11.5-liquorix, Mesa 22.3.6, gcc 12.2, Release. EGL's
+device platform, no window. One run at a time under the measuring lock,
+pinned with `taskset` to CPUs 2 and 4 (two P-cores), `LP_NUM_THREADS=2`
+for llvmpipe. The 1-minute load average before each run was 0.40 to 0.99
+(a run that began at 1.03 was repeated); after a run it was up to 1.0 on
+the RX 6600 and up to 3.0 on llvmpipe, from the run's own threads. Mesa's
+shader cache warm unless the row says cold. 1,000 frames after 60 warm-up
+frames (300 for the generated case where the table says), two runs.
+Milliseconds.
+
+| Device | Project | Display | tick | views | render | finish | total: median, p99, max | run 2: median |
+|---|---|---|---|---|---|---|---|---|
+| RX 6600 | bimanual | 60 Hz | 0.04 | 0.16 | 0.02 | 0.57 | 0.82, 0.91, 0.92 | 0.81 |
+| RX 6600 | bimanual | 500 Hz | 0.09 | 0.15 | 0.02 | 0.57 | 0.83, 0.92, 0.94 | 0.83 |
+| RX 6600 | bimanual | pane hidden | 0.00 | 0.13 | 0.02 | 0.21 | 0.36, 0.38, 0.52 | 0.39 |
+| RX 6600 | stroop | 60 Hz | 0.02 | 0.13 | 0.02 | 0.50 | 0.66, 0.90, 0.96 | 0.64 |
+| RX 6600 | stroop | 500 Hz | 0.03 | 0.10 | 0.02 | 0.50 | 0.66, 0.90, 1.14 | 0.66 |
+| RX 6600 | stroop | pane hidden | 0.00 | 0.05 | 0.01 | 0.14 | 0.20, 0.21, 0.25 | 0.20 |
+| RX 6600 | oddball | 60 Hz | 0.02 | 0.11 | 0.02 | 0.50 | 0.65, 0.88, 0.93 | 0.66 |
+| RX 6600 | oddball | 500 Hz | 0.03 | 0.11 | 0.02 | 0.50 | 0.65, 0.87, 0.94 | 0.65 |
+| RX 6600 | oddball | pane hidden | 0.00 | 0.06 | 0.01 | 0.15 | 0.23, 0.27, 0.29 | 0.23 |
+| RX 6600 | many | 60 Hz | 0.17 | 0.09 | 0.02 | 1.84 | 2.15, 2.58, 2.84 | 2.14 |
+| RX 6600 | many | 500 Hz | 0.18 | 0.09 | 0.02 | 1.84 | 2.15, 2.67, 2.98 | 2.14 |
+| RX 6600 | many | pane hidden | 0.00 | 0.06 | 0.01 | 0.14 | 0.22, 0.23, 0.87 | 0.22 |
+| llvmpipe | bimanual | 60 Hz | 1.79 | 0.20 | 28.73 | 1.36 | 32.08, 32.83, 37.13 | 32.03 |
+| llvmpipe | bimanual | 500 Hz | 1.81 | 0.19 | 28.70 | 1.36 | 32.06, 32.52, 35.52 | 32.05 |
+| llvmpipe | bimanual | pane hidden | 0.00 | 0.14 | 0.35 | 11.64 | 12.12, 12.38, 15.24 | 12.11 |
+| llvmpipe | stroop | 60 Hz | 2.12 | 0.13 | 28.05 | 1.07 | 31.37, 33.06, 35.66 | 31.40 |
+| llvmpipe | stroop | 500 Hz | 2.10 | 0.13 | 28.04 | 1.07 | 31.35, 32.88, 33.19 | 31.35 |
+| llvmpipe | stroop | pane hidden | 0.00 | 0.06 | 0.17 | 10.50 | 10.73, 10.78, 10.82 | 10.73 |
+| llvmpipe | oddball | 60 Hz | 1.69 | 0.16 | 28.06 | 1.27 | 31.18, 32.83, 37.03 | 31.20 |
+| llvmpipe | oddball | 500 Hz | 1.71 | 0.15 | 28.06 | 1.27 | 31.19, 32.81, 38.53 | 31.17 |
+| llvmpipe | oddball | pane hidden | 0.00 | 0.07 | 0.19 | 10.58 | 10.84, 10.89, 10.93 | 10.84 |
+| llvmpipe | many | 60 Hz | 456 | 0.20 | 28.10 | 1.08 | 486, 495, 496 | 486 |
+| llvmpipe | many | 500 Hz | 456 | 0.20 | 28.09 | 1.08 | 486, 495, 496 | 486 |
+| llvmpipe | many | pane hidden | 0.00 | 0.07 | 0.18 | 10.54 | 10.79, 10.88, 11.00 | 10.79 |
+
+llvmpipe with more cores, and with a smaller display (the same conditions
+otherwise; total median, p99, max of run 1; run 2's median):
+
+| llvmpipe | Project | Display | total | run 2: median |
+|---|---|---|---|---|
+| CPUs 2, 4, 6, 8, 10, 4 threads | bimanual | 60 Hz / 500 Hz | 16.61, 16.85, 17.20 / 16.61, 16.87, 16.97 | 16.61 / 16.61 |
+| CPUs 2, 4, 6, 8, 10, 4 threads | stroop | 60 Hz / 500 Hz | 8.18, 8.54, 8.66 / 8.20, 8.56, 8.63 | 8.17 / 8.18 |
+| CPUs 2, 4, 6, 8, 10, 4 threads | oddball | 60 Hz / 500 Hz | 16.13, 16.93, 17.00 / 16.14, 16.95, 17.18 | 16.14 / 16.12 |
+| CPUs 2, 4, 6, 8, 10, 4 threads | many (300 frames) | 60 Hz / 500 Hz | 246, 247, 248 / 246, 247, 249 | 246 / 246 |
+| CPUs 2 and 4, 800 x 600 px | stroop | 60 Hz | 15.51, 16.73, 17.30 | 15.52 |
+| CPUs 2 and 4, 800 x 600 px | many (300 frames) | 60 Hz | 303, 304, 309 | 303 |
+
+The frames of the first adoption: those with attach work and the three
+after them. The largest frame's total, and the largest single
+`pl_sim_attach()` call, in two runs (ms). Cold: `MESA_SHADER_CACHE_DISABLE`.
+
+| Device | Cache | bimanual | stroop | oddball | many |
+|---|---|---|---|---|---|
+| RX 6600 | warm | 5.79, 5.74 (0.68, 0.78) | 6.31, 6.83 (1.66, 1.88) | 6.65, 6.55 (1.78, 1.72) | 7.39, 7.20 (2.12, 2.14) |
+| RX 6600 | cold | 6.14, 5.99 (0.78, 0.79) | 71.6, 71.0 (31.0, 31.1) | 37.8, 38.2 (16.7, 17.8) | 71.9, 71.6 (30.3, 30.1) |
+| llvmpipe | warm | 33.5, 33.9 (6.81, 6.96) | 17.6, 17.6 (6.60, 6.49) | 31.9, 31.8 (6.97, 6.15) | 31.8, 31.7 (6.79, 6.75) |
+| llvmpipe | cold | 260, 262 (248, 250) | 259, 259 (248, 249) | 261, 261 (250, 250) | 261, 261 (250, 250) |
+
+On the RX 6600 a warm adoption takes 4 frames; the largest one's other
+part is ImGui's render or the finish (4.2 to 4.7 ms), the GPU's first use
+of the new texture and programs. On llvmpipe a cold adoption takes 18 to
+20 frames with attach work, 1.2 to 1.4 s in all, and one call of 248 to
+250 ms: one program's compile.
+
+**Against the 16 ms frame.**
+
+- **RX 6600: every case fits.** The running preview costs 0.6 to 2.2 ms a
+  frame (p99 at most 2.7 ms, max 3.0 ms), the generated case the most: its
+  GPU time (finish, 1.84 ms). A 500 Hz display costs what a 60 Hz one
+  does, except for the tick's extra steps (0.05 ms in bimanual). A warm adoption's
+  largest frame is 7.4 ms. No knob needs a turn.
+- **RX 6600, cold driver cache: the adoption does not fit** once: 38 to
+  72 ms, 2 to 4 frames lost, then the cache is warm. One compile is one
+  call, so `PV_ATTACH_BUDGET_MS` cannot split it. The knob is a program
+  cache: `dsg_preview_gl.cache`, which `ui.cpp` leaves NULL (gfx's
+  `ygfx_file_cache`). Not measured here.
+- **llvmpipe on two cores: nothing fits while the preview runs** (31 to
+  32 ms; with the pane hidden, 10.7 to 12.1 ms). The cost is the session's
+  drawn frame: ImGui's render waits for it (28 ms). The knob is the
+  display's size: stroop at 800 x 600 takes 15.5 ms (p99 16.7 ms), at the
+  edge. More cores also help: with four llvmpipe threads on five cores
+  stroop takes 8.2 ms, bimanual and oddball 16.1 to 16.6 ms (at the edge).
+- **The generated case on llvmpipe does not fit with any measured knob:** 486 ms
+  on two cores, 246 ms on five, 303 ms at 800 x 600. Its 200 text stimuli
+  are the same size in px on any display, so a smaller display cuts little.
+  It needs a knob that the plan does not have, such as a session frame
+  drawn less often than the UI's frame. That is a design choice; it is
+  not made.
+- **llvmpipe, adoption:** warm, attach calls stay under 7 ms; cold, one
+  call of 250 ms. The same program cache is the knob.
+
+**Not done.**
+- The window was not opened: the test and the bench use a pbuffer.
+  `main.cpp`'s swap and vsync are not in the numbers.
+- gfx's program cache in the designer is not wired or measured.
+- The UHD 770 ran the test, not the bench.
+- MSVC, clang and macOS were not compiled. The test is Linux only.
+
 ## First version
 
 In:
@@ -2736,6 +2913,10 @@ Each UI frame stays within 16 ms. On the UI thread the preview adds a
 step's work while it runs, and the attach's budget while a session is
 adopted. The load, the fast forward, the data set's writes and the old
 session's close are on other threads.
+
+Part D measured the UI thread's frames on the RX 6600 and on llvmpipe
+instead of the UHD 770 ("Part D as built"); part A measured the core's
+side headless ("Part A as built").
 
 **Measure** (Linux desktop, Intel Core i5-14500, Intel UHD 770 with Mesa
 iris, gcc 12.2, Release, pinned to CPU 2, one run at a time on a quiet

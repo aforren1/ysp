@@ -307,3 +307,25 @@ target_link_libraries(ysp_designer PRIVATE ysp_designer_ui SDL3::SDL3 ${YSP_GLES
 # links libstdc++ for one symbol of the vendored HarfBuzz
 # (std::__throw_system_error), as ypak does (docs/designer.md).
 set_target_properties(ysp_designer PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+
+# Step 5, part D: the preview on a GL context (EGL's device platform, a
+# pbuffer, no window): framebuffer 0 against the session's texture, and
+# --bench for the UI frame's cost ("Redraw and cost"). GNU ld's --wrap times
+# the tick and the attach. Not in ctest without libEGL; with it and no
+# llvmpipe device, it skips.
+if(YSP_BUILD_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_library(YSP_EGL EGL)
+    if(YSP_EGL)
+        add_executable(test_designer_preview_gl ${PROJECT_SOURCE_DIR}/tests/designer/preview_gl_test.cpp
+            ${_imgui}/backends/imgui_impl_opengl3.cpp)
+        target_include_directories(test_designer_preview_gl PRIVATE ${_imgui}/backends)
+        target_compile_definitions(test_designer_preview_gl PRIVATE IMGUI_IMPL_OPENGL_ES3 YSP_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+            YSP_DESIGNER_FONT_DIR="${CMAKE_CURRENT_BINARY_DIR}/fonts" YSP_DESIGNER_TEST_FONT="${YSP_DESIGNER_TEST_FONT}")
+        target_link_libraries(test_designer_preview_gl PRIVATE ysp_designer_ui ${YSP_GLESV2} dl
+            -Wl,--wrap=dsg_preview_tick -Wl,--wrap=pl_sim_attach)
+        set_target_properties(test_designer_preview_gl PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+        add_test(NAME test_designer_preview_gl COMMAND test_designer_preview_gl ${CMAKE_CURRENT_BINARY_DIR}/designer_preview_gl_work)
+        set_tests_properties(test_designer_preview_gl PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 300)
+        dsg_test(test_designer_preview_gl)
+    endif()
+endif()
