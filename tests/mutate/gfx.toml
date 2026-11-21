@@ -1848,7 +1848,7 @@ replace = "    if (!g->be->texture_native) {"
 
 [[mutant]]
 id = "rs-18"
-name = "backend version 6 opened"
+name = "backend version 7 opened"
 test = "gfx_linux"
 env = { YGFX_TEST_PARTS = "none", YGFX_TEST_DEVICES = "none" }
 why = "A table newer than the header has members it cannot know."
@@ -2019,3 +2019,184 @@ env = { YGFX_TEST_PARTS = "v0.22 paint", YGFX_TEST_DEVICES = "mesa" }
 why = "COLR's pad extend repeats the first stop's color before it; nothing there is a hole in the gradient."
 find = '"    if (!(t > olo)) return lo;\n"'
 replace = '"    if (!(t > olo)) return vec4(0.0);\n"'
+
+# ot-: v0.23.0, the output texture (Linux desktop, Mesa llvmpipe).
+
+[[mutant]]
+id = "ot-01"
+name = "output stage into framebuffer 0"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.23", YGFX_TEST_DEVICES = "mesa" }
+why = "With desc.output_texture, framebuffer 0 is the host's window: the stimuli would show there, not in the texture."
+find = '''
+        YRT_ZONE(zo, "ygfx.output");
+        g->be->pass_begin(g->bctx, g->out_target, g->w, g->h, NULL);'''
+replace = '''
+        YRT_ZONE(zo, "ygfx.output");
+        g->be->pass_begin(g->bctx, 0, g->w, g->h, NULL);'''
+
+[[mutant]]
+id = "ot-02"
+name = "the texture's framebuffer left bound after end()"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.23", YGFX_TEST_DEVICES = "mesa" }
+why = "ImGui draws into the bound framebuffer: the host's next frame would go into the output texture."
+find = '''
+    ygfx__fb0(g);
+    g->be->present(g->bctx);'''
+replace = '''
+    g->be->present(g->bctx);'''
+
+[[mutant]]
+id = "ot-03"
+name = "the scene's framebuffer left bound after prime()"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.23", YGFX_TEST_DEVICES = "mesa" }
+why = "prime() reads the scene back; a host that draws after an attach would draw into the scene target."
+find = 'ygfx__fb0(g);   /* the read bound the scene'
+replace = '/* */   /* the read bound the scene'
+
+[[mutant]]
+id = "ot-04"
+name = "read_output reads framebuffer 0"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.23", YGFX_TEST_DEVICES = "mesa" }
+why = "A check of the output must read what the host shows, the texture, not the window."
+find = 'rc = g->be->read(g->bctx, g->out_target, x,'
+replace = 'rc = g->be->read(g->bctx, 0, x,'
+
+[[mutant]]
+id = "ot-05"
+name = "capture reads framebuffer 0"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.23", YGFX_TEST_DEVICES = "mesa" }
+why = "v0.22's capture_read bound framebuffer 0 itself: with an output texture it would copy the host's window."
+find = '''
+    /* no bind: the output stage's pass bound its framebuffer just before
+     * (0, or the output texture's, v0.23) */'''
+replace = '''
+    if (gl->c_fbo != 0) { gl->f.BindFramebuffer(YGFX__GL_FRAMEBUFFER, 0); gl->c_fbo = 0; }'''
+
+[[mutant]]
+id = "ot-06"
+name = "no size check of the output texture"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.23", YGFX_TEST_DEVICES = "mesa" }
+why = "A size over GL_MAX_TEXTURE_SIZE must be refused by name, not as a failed GL call."
+find = '''
+        if (g->w > maxt || g->h > maxt) {
+            ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: output texture'''
+replace = '''
+        if (0) {
+            ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: output texture'''
+
+[[mutant]]
+id = "ot-07"
+name = "an output texture on a screen"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.23", YGFX_TEST_DEVICES = "mesa" }
+why = "A screen presents framebuffer 0: an output texture there would show nothing and say nothing."
+find = 'if (d->output_texture && d->screen) {'
+replace = 'if (0) {'
+
+[[mutant]]
+id = "ot-08"
+name = "the native name of the scene"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.23", YGFX_TEST_DEVICES = "mesa" }
+why = "The host must sample the 8-bit device codes, not the linear RGBA16F scene."
+find = 'rc = g->be->texture_native(g->bctx, g->out_target, &out->gl_name, &out->gl_format);'
+replace = 'rc = g->be->texture_native(g->bctx, g->scene, &out->gl_name, &out->gl_format);'
+
+# df-: v0.23.0, the deferred open; sh-: v0.23.0, shared programs (Linux
+# desktop, Mesa llvmpipe).
+
+[[mutant]]
+id = "df-01"
+name = "replay out of order"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.23 defer", YGFX_TEST_DEVICES = "mesa" }
+why = "The ids the recorder gave are the ones the GL backend gives only for the same calls in the same order."
+find = '    ygfx__op* o = &r->ops[r->next];'
+replace = '    ygfx__op* o = &r->ops[r->n - 1 - r->next];'
+
+[[mutant]]
+id = "df-02"
+name = "a copy freed before its call"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.23 defer", YGFX_TEST_DEVICES = "mesa" }
+why = "The caller's texels may be gone at the attach: the recorder's copy is all there is."
+find = '''        o->ts.data = o->data;
+        o->ts.stride = (size_t)d->w * (size_t)bpp;'''
+replace = '''        o->ts.data = o->data;
+        free(o->data);
+        o->data = NULL;
+        o->ts.stride = (size_t)d->w * (size_t)bpp;'''
+
+[[mutant]]
+id = "df-03"
+name = "a frame before the attach"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.23 defer", YGFX_TEST_DEVICES = "mesa" }
+why = "A frame before the attach has no GL objects to draw with: it must be refused by name."
+find = '''    if (!g || !g->rec) return 0;
+    ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: a deferred open draws'''
+replace = '''    if (1) return 0;
+    ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: a deferred open draws'''
+
+[[mutant]]
+id = "df-04"
+name = "the context's caps not compared"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.23 defer", YGFX_TEST_DEVICES = "mesa" }
+why = "The open checked sizes and formats against desc.gl_caps; another context may not have them."
+find = '        if (!ygfx__caps_same(&caps, &r->caps)) {'
+replace = '        if (0) {'
+
+[[mutant]]
+id = "df-05"
+name = "no bands"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.23 defer", YGFX_TEST_DEVICES = "mesa" }
+why = "A 64 MB upload as one call held a frame for 5 to 22 ms."
+find = '        if (o->data && !o->ts.target && row * (size_t)o->ts.h > YGFX__BAND_BYTES) {'
+replace = '        if (0) {'
+
+[[mutant]]
+id = "df-06"
+name = "a band's rows from the texture's start"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.23 defer", YGFX_TEST_DEVICES = "mesa" }
+why = "Each band uploads its own rows; the image would repeat its first band."
+find = '(const unsigned char*)o->data + (size_t)r->band_row * row, row) < 0)'
+replace = '(const unsigned char*)o->data, row) < 0)'
+
+[[mutant]]
+id = "sh-01"
+name = "a shared program deleted by its first owner"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.23 defer", YGFX_TEST_DEVICES = "mesa" }
+why = "The gfx that compiled a program may close first; the others still draw with it."
+find = '''    if (p->share) ygfx__gl_unshare(p->share, 1);
+    else if (p->prog) gl->f.DeleteProgram(p->prog);'''
+replace = '''    if (p->prog) gl->f.DeleteProgram(p->prog);
+    if (p->share) ygfx__gl_unshare(p->share, 0);'''
+
+[[mutant]]
+id = "sh-02"
+name = "any program for a lookup"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.23 defer", YGFX_TEST_DEVICES = "mesa" }
+why = "A program is shared only for the same text, blend and instancing."
+find = '    for (i = 0; i < p->n; i++) if (p->h1[i] == h1 && p->h2[i] == h2) return p->token[i];'
+replace = '    for (i = 0; i < p->n; i++) if (p->h2[i] != h2 || p->h1[i] == h1) return p->token[i];'
+
+[[mutant]]
+id = "sh-03"
+name = "the pool left with its tokens held"
+test = "gfx_linux"
+env = { YGFX_TEST_PARTS = "v0.23 defer", YGFX_TEST_DEVICES = "mesa" }
+why = "A pool that a gfx left must not keep the gfx's programs from a gfx that joins it later: a join counts."
+find = '''    src->pool->refs++;
+    g->pool = src->pool;'''
+replace = '''    g->pool = src->pool;'''

@@ -997,6 +997,17 @@ if(YSP_BUILD_DESIGNER)
         message(FATAL_ERROR "YSP_BUILD_DESIGNER needs YSP_BUILD_PLAYER, YSP_BUILD_PACK and YSP_BUILD_LAYOUT ON")
     endif()
     add_subdirectory(designer)
+    # Times a session's GL work on the UI thread: the deferred open and its
+    # attach (docs/gfx.md, "v0.23.0"); not a test. EGL's device platform and
+    # GNU ld's --wrap: Linux only.
+    if(YSP_BUILD_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_executable(bench_gfx_attach ${PROJECT_SOURCE_DIR}/tests/probe/gfx_attach/attach_bench.c)
+        target_include_directories(bench_gfx_attach PRIVATE ${PROJECT_SOURCE_DIR}/tests/designer ${PROJECT_SOURCE_DIR}/designer/core)
+        target_link_libraries(bench_gfx_attach PRIVATE ysp_designer_core -Wl,--wrap=pl_gfx_open_null -Wl,--wrap=pl_close dl)
+        set_target_properties(bench_gfx_attach PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS ON)
+        target_compile_definitions(bench_gfx_attach PRIVATE YSP_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+            YSP_DESIGNER_TEST_FONT="${YSP_DESIGNER_TEST_FONT}")
+    endif()
 endif()
 
 if((YSP_TRACY_CHECK AND YSP_BUILD_TESTS) OR YSP_TRACY)

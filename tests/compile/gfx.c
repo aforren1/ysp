@@ -171,7 +171,7 @@ int main(void) {
         ygfx_gfx gg;
         memset(&id, 0, sizeof id);
         if (id.rows != YGFX_ROWS_AUTO || (int)YGFX_ROWS_BOTTOM_UP != 1 || (int)YGFX_ROWS_TOP_DOWN != 2) return 32;
-        if (YGFX_BACKEND_VERSION != 5) return 33;
+        if (YGFX_BACKEND_VERSION != 6) return 33;
         memset(&sd, 0, sizeof sd);
         sd.w = sd.h = 4; sd.rows = YGFX_ROWS_BOTTOM_UP; sd.srgb = false;
         memset(&sdd, 0, sizeof sdd);
@@ -191,6 +191,30 @@ int main(void) {
         memset(&pr, 0, sizeof pr);
         pr.fields = YGFX_I_PAINT | YGFX_I_GATE;
         if (YGFX_I_PAINT != 0x80u || (YGFX_I_PAINT & YGFX_I_COLOR) || !(pr.fields & YGFX_I_PAINT)) return 37;
+    }
+    {   /* v0.23: the output texture (appended, false by default), headless
+         * only: refused on a screen; no name without it */
+        ygfx_desc gdd;
+        yscr_desc sdd;
+        yscr_screen ss;
+        ygfx_gfx gg;
+        ygfx_native nat;
+        memset(&gdd, 0, sizeof gdd);
+        if (gdd.output_texture) return 38;
+        memset(&sdd, 0, sizeof sdd);
+        sdd.backend = YSCR_BACKEND_SIM;
+        memset(&ss, 0, sizeof ss);
+        if (!yscr_open(&ss, &sdd)) return 39;
+        gdd.screen = &ss;
+        gdd.output_texture = true;
+        memset(&gg, 0, sizeof gg);
+        if (ygfx_open(&gg, &gdd)) return 40;
+        gdd.output_texture = false;
+        if (!ygfx_open(&gg, &gdd)) return 41;
+        if (ygfx_output_native(&gg, &nat) != YGFX_ERR_ARG || nat.gl_name != 0) return 42;
+        ygfx_close(&gg);
+        if (ygfx_output_native(&gg, &nat) != YGFX_ERR_CLOSED) return 43;
+        yscr_close(&ss);
     }
     return ygfx_params(&n) && n == YGFX_P_COUNT && ygfx_desc_params(&m) && m > 0 &&
            ygfx_group_params(&k) && k > 0 ? 0 : 8;

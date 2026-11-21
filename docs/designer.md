@@ -1747,6 +1747,52 @@ attach's budget or a step's work, not both.
   ysp-vis carries `ygfx_desc` and reports `GFX_VERSION`: its
   `pyproject.toml` and `YV_VERSION` move too.
 
+**P3 as built (branch `step5-p3-gfx`, 2026-11-20).** The numbers and the
+tests are in [gfx.md](gfx.md#v0230-the-output-texture-the-deferred-open-shared-programs).
+- **Measured before the build.** Each backend call of a session's load
+  was timed on the RX 6600 and on llvmpipe (EGL, no window). With Mesa's
+  shader cache warm, a session's GL work was 6.1 ms or more on the RX
+  6600 and 24 ms or more on llvmpipe. Without the cache it was 215 ms or
+  more, with single compiles of up to 65 ms. `ygfx_open()` also spent 24 ms
+  of CPU in the calibration's check. None of this is far under the 4 ms
+  budget, so the deferred open was built. The user then asked for three
+  more things (below).
+- **The calibration's check, once a process.** `ycol_cal_check()` was 24
+  of the open's 29 ms (perf). gfx keeps the hashes of the calibrations that
+  passed. A deferred open now takes 1.3 to 1.4 ms on the check thread, and
+  the first open of a calibration in a process takes 24.6 ms. The NOISE
+  table's first build takes a lock, so the first open no longer has to be
+  on the UI thread for the table's sake (T may keep it, for the caps).
+- **Shared programs.** `desc.share` names a gfx open on the same context,
+  in practice `main.cpp`'s first gfx. A session's gfx then compiles none of
+  the built-in programs. A program that only a session needs (text,
+  images bottom first) is compiled once, by the first session that needs
+  it, and later sessions find it in the pool. Each program counts its users,
+  so the gfx close in any order. A deferred gfx joins the pool at its
+  attach, not at its open: the check thread never reads `main.cpp`'s gfx.
+  Rule: `desc.share` must be open and attached when the attach starts.
+- **The attach primes without waiting.** `ygfx_attach()` draws every
+  program once, a program a step, and skips the prime's read. The attach
+  of a player project then takes one call of 0.16 to 0.29 ms on the RX 6600
+  (shared programs, Mesa's cache warm or not), and 2.3 to 5.6 ms in one or
+  two calls on llvmpipe. The images case takes 8 calls on the RX 6600 and 15
+  to 17 on llvmpipe. Uploads over 4 MB go in bands. One call can pass the
+  budget: the llvmpipe storage of a 4096 x 4096 texture takes 17 to 22 ms,
+  and a cold compile up to 65 ms. The budget is a target.
+- **What P4 changes.** `pl_sim_attach()` must not call `ygfx_prime()`
+  after `ygfx_attach()` returns 1, because the attach has primed every
+  program, and `ygfx_prime()` would add its read's wait (0.6 ms on the RX
+  6600, 9.5 ms on llvmpipe). `pl_gfx_warm()`'s `ygfx_crun()` calls make
+  the text programs and the per-set state. They can run at the load,
+  before the attach (recorded), so the attach makes and primes them. The
+  stepped session's open should set `desc.share` to the gfx that
+  `main.cpp` opens, which T or S hands to the session job, and
+  `desc.gl_caps` from `ygfx_gl_caps_get()` of that gfx. The names are the
+  plan's: `desc.defer`, `desc.gl_caps` (`const struct ygfx_gl_caps*`),
+  `desc.output_texture`, `ygfx_attach(g, gl_proc, gl_ctx, budget_ns)`
+  (1 attached, 0 more to do, < 0 error), `ygfx_output_native()`,
+  `ygfx_reset_state()`.
+
 **State.** Read from the code of gfx.h 0.22.0 and of the vendored
 `imgui_impl_opengl3.cpp`:
 
@@ -2040,10 +2086,13 @@ fails it. The threaded tests also run under ThreadSanitizer (gcc 12,
   test is the check, and it comes first in P4.
 - **The deferred open is the largest new piece** (P3). It must replay
   every backend call in order with the same handles. Its test compares
-  bytes with a direct open.
-- **One attach call cannot be split.** A large image's upload is one GL
-  call; its cost sets the floor of an adoption's frame. Part D measures
-  the largest call on the example packs.
+  bytes with a direct open (built: 0 frames differ, handles equal;
+  gfx.md, "v0.23.0").
+- **One attach call cannot be split.** P3 splits uploads over 4 MB into
+  bands. A texture's storage, one compile and one first draw stay single
+  calls. Measured by P3: up to 4.3 ms on the RX 6600 with Mesa's cache warm,
+  17 to 22 ms on llvmpipe (a 4096 x 4096 texture's storage), and 31 ms for a
+  cold text program on the RX 6600. Part D measures the designer's own frames.
 - **Threads.** Until part T the designer has one thread. The player's
   statics and gfx's first open are the known races; ThreadSanitizer is
   the check for the ones not known.

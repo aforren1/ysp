@@ -87,13 +87,14 @@
  * pack/layout 0.3.1 (Skribidi patches 0005 and 0006). .3: pack/layout
  * 0.3.2 (Skribidi patch 0007). .4: pack/layout 0.3.3 (Skribidi patch
  * 0008, the editor only). .5: pack/layout 0.3.4 (Skribidi patch 0009,
- * the editor only). The fourth number belongs to this
+ * the editor only). .6: ysp/gfx.h 0.23.0 (the output texture, the
+ * deferred open, shared programs; not used here). The fourth number belongs to this
  * screen.h; a new screen.h drops it, so the build stops here until
  * someone does (the review of 0.19.0.1). */
 #if YSCR_VERSION_MAJOR != 0 || YSCR_VERSION_MINOR != 20 || YSCR_VERSION_PATCH != 0
-#error "ysp-vis: YV_VERSION's .5 is for ysp/screen.h 0.20.0; screen.h moved: drop it (docs/bindings.md, ysp-vis)"
+#error "ysp-vis: YV_VERSION's .6 is for ysp/screen.h 0.20.0; screen.h moved: drop it (docs/bindings.md, ysp-vis)"
 #endif
-#define YV_VERSION YSCR_VERSION_STRING ".5"
+#define YV_VERSION YSCR_VERSION_STRING ".6"
 
 #define YV_RECORDS 4096   /* flip records kept between records() calls */
 #define YV_EVENTS  1024   /* input events kept between poll() calls    */
