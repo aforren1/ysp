@@ -1021,7 +1021,7 @@ static void test_null_and_ring(void) {
     CHECK(opens == 1 && clips == 1);   /* none for the frame without a clip */
     {
         /* v0.21: the null backend has no texture_native, so no shared
-         * texture; a version 6 table is refused, 3 to 5 open */
+         * texture; a version 7 table is refused, 3 to 6 open */
         ygfx_shared_desc sd;
         ygfx_native nat;
         static ygfx_backend be6, be4;
@@ -1032,11 +1032,11 @@ static void test_null_and_ring(void) {
         CHECK(ygfx_texture_shared(&g, &sd, &nat).id == 0 && nat.gl_name == 0);
         CHECK(strstr(ygfx_error(&g), "texture_native") != NULL);
         ygfx_close(&g);
-        be6 = ygfx__null_backend; be6.version = 6;
+        be6 = ygfx__null_backend; be6.version = 7;
         be4 = ygfx__null_backend; be4.version = 4;
         gd.backend = &be6;
         gd.backend_ctx = &nctx;
-        CHECK(!ygfx_open(&g, &gd) && strstr(ygfx_error(&g), "backend version 6") != NULL);
+        CHECK(!ygfx_open(&g, &gd) && strstr(ygfx_error(&g), "backend version 7") != NULL);
         gd.backend = &be4;
         CHECK(ygfx_open(&g, &gd));
         if (ygfx_is_open(&g)) {
@@ -6178,6 +6178,37 @@ static void gl_v11_start(stats* st);
 static void gl_v12_capture(stats* st);
 static void gl_v15_first(stats* st);
 static void gl_v18_paths(stats* st);
+static void gl_v23_output(stats* st);
+static void gl_v23_defer(stats* st);
+
+/* ---------------------------------------------- v0.23 deferred and shared */
+
+/* A deferred open on another thread and its attach on the context's; the
+ * programs of one gfx used by another. Against a direct open's bytes. */
+typedef struct stats23d {
+    int  ran;
+    long frames, frames_bad;      /* deferred or shared against the direct open */
+    long ids_bad;                 /* a handle or a stimulus not the direct open's */
+    long steps_small;             /* attach calls with a budget of 1 ns          */
+    long bands;                   /* the 4.4 MB upload's steps, both attaches    */
+    long shared_progs, shared_compiled;
+    long order_bad;               /* close orders A,B and B,A: frames that differ */
+    long refused_ok, refused_n;
+} stats23d;
+static stats23d S23D;
+
+/* What v0.23's checks measured: a headless gfx with desc.output_texture
+ * against one that writes framebuffer 0, on one context, the same frames. */
+typedef struct stats23 {
+    int  ran;
+    long frames, frames_bad;   /* read_output: the texture against framebuffer 0 */
+    long native_bad;           /* the native name: format, size, its texels */
+    long fb0_bad;              /* not framebuffer 0 after end() or prime() */
+    long foreign_frames;       /* frames after foreign GL calls and a reset */
+    long cap_bad;              /* captured frames against read_output */
+    long refused_ok, refused_n;
+} stats23;
+static stats23 S23;
 /* v0.18.0 paths (gl_v18_paths) */
 typedef struct stats18 { double moved, paint_moved, inst; long quad_bad; int ran; } stats18;
 static stats18 S18;
@@ -7074,14 +7105,14 @@ static int gl_suite(const char* name, ygfx_hl_device dev) {
                                                  gl_v04_cache, gl_v04_fixes, gl_v04_video, gl_v04_inst, gl_v04_order, gl_v05_color,
                                                  gl_v06_text, gl_v06_blur, gl_v05_kinds, gl_v08, gl_v10_simplex, gl_v10_user_tex,
                                                  gl_v11_prime, gl_v11_start, gl_v12_capture, gl_v15_first, gl_v18_paths,
-                                                 gl_v21_rows_shared, gl_v22_paint };
+                                                 gl_v21_rows_shared, gl_v22_paint, gl_v23_output, gl_v23_defer };
         static const char* const names[] = { "shapes", "gratings", "gabors", "dots", "images", "noise",
                                              "output", "user+batch+rows", "strokes", "masks", "sprites", "tint",
                                              "groups", "targets", "alpha+passes", "edge truth", "v0.3 kinds", "v0.3 truth", "v0.3 fx", "v0.3 paint", "v0.3 msdf",
                                              "v0.4 cache", "v0.4 fixes", "v0.4 video", "v0.4 inst", "v0.4 order", "v0.5 color",
                                              "v0.6 text", "v0.6 blur", "vspec", "v0.8", "v0.10 simplex", "v0.10 user tex",
                                              "v0.11 prime", "v0.11.1 start", "v0.12 capture", "v0.15 first", "v0.18 paths",
-                                             "v0.21 rows+shared", "v0.22 paint" };
+                                             "v0.21 rows+shared", "v0.22 paint", "v0.23", "v0.23 defer" };
         int k;
         memset(&S2, 0, sizeof S2);
         memset(&S3, 0, sizeof S3);
@@ -7093,6 +7124,8 @@ static int gl_suite(const char* name, ygfx_hl_device dev) {
         memset(&SK, 0, sizeof SK);
         memset(&S18, 0, sizeof S18);
         memset(&S21, 0, sizeof S21);
+        memset(&S23, 0, sizeof S23);
+        memset(&S23D, 0, sizeof S23D);
         mc_clear(&g_mc);
         printf("  seconds:");
         for (k = 0; k < (int)(sizeof parts / sizeof parts[0]); k++) {
@@ -10061,6 +10094,506 @@ static void gl_v12_capture(stats* st) {
     printf("  measured: capture: %d whole frames and a %dx%d rectangle against ygfx_read_output: %ld frames and %ld bytes differ\n",
            CAP_N, 45, 17, bad, rect_bad);
     ygfx_close(&R->g);
+}
+
+/* ------------------------------------------------- v0.23 output texture */
+
+
+typedef void (YGFX_HL__API *v23_geti_fn)(uint32_t, int32_t*);
+typedef void (YGFX_HL__API *v23_texlev_fn)(uint32_t, int, uint32_t, int32_t*);
+typedef void (YGFX_HL__API *v23_u_fn)(uint32_t);
+typedef void (YGFX_HL__API *v23_uu_fn)(uint32_t, uint32_t);
+typedef void (YGFX_HL__API *v23_vp_fn)(int, int, int, int);
+typedef void (YGFX_HL__API *v23_pi_fn)(uint32_t, int);
+typedef struct v23_gl {
+    v23_geti_fn GetIntegerv;
+    v23_texlev_fn GetTexLevelParameteriv;   /* GL ES 3.1; NULL on 3.0 */
+    v23_u_fn UseProgram, BindVertexArray, ActiveTexture, Enable;
+    v23_uu_fn BindTexture, BlendFunc;
+    v23_vp_fn Viewport;
+    v23_pi_fn PixelStorei;
+} v23_gl;
+
+static yscr_proc v23_proc(void* ctx, const char* name) { return yscr_gl_proc((yscr_screen*)ctx, name); }
+
+static void v23_sym(void* dst, const char* name) {
+    yscr_proc p = yscr_gl_proc(&R->scr, name);
+    memcpy(dst, &p, sizeof p);
+}
+
+static int v23_open(ygfx_gfx* g, int out_tex, ygfx_dither dither) {
+    ygfx_desc gd;
+    memset(&gd, 0, sizeof gd);
+    gd.gl_proc = v23_proc;
+    gd.gl_ctx = &R->scr;
+    gd.width = W;
+    gd.height = H;
+    gd.background[0] = gd.background[1] = gd.background[2] = 0.5f;
+    gd.dither = dither;
+    gd.seed = 99;
+    gd.cache = test_cache();
+    gd.output_texture = out_tex != 0;
+    ygfx__test_scene32 = 0;
+    if (!ygfx_open(g, &gd)) {
+        fprintf(stderr, "gfx_test [%s]: open: %s\n", g_where, ygfx_error(g));
+        g_failures++;
+        return 0;
+    }
+    return 1;
+}
+
+static int v23_fb(const v23_gl* f) {
+    int32_t b = -1;
+    f->GetIntegerv(0x8CA6, &b);   /* GL_FRAMEBUFFER_BINDING */
+    return (int)b;
+}
+
+/* One frame of both: the same frame record, each gfx's state reset first
+ * (the other one's calls are foreign to it). The texture's gfx draws
+ * first, so framebuffer 0 then holds the frame before: a read of it in
+ * place of the texture differs. */
+static void v23_frame(ygfx_gfx* a, ygfx_gfx* b, const ygfx_stim* sa, const ygfx_stim* sb, int n, const v23_gl* f,
+                      unsigned char* oa, unsigned char* ob) {
+    CHECK(yscr_begin(&R->scr, &R->f) == YSCR_OK);
+    ygfx_reset_state(b);
+    CHECK(ygfx_begin(b, &R->f) == YGFX_OK);
+    CHECK(ygfx_draw_n(b, sb, n) == YGFX_OK);
+    CHECK(ygfx_end(b) == YGFX_OK);
+    S23.fb0_bad += v23_fb(f) != 0;
+    CHECK(ygfx_read_output(b, 0, 0, W, H, ob) == YGFX_OK);
+    S23.fb0_bad += v23_fb(f) != 0;
+    ygfx_reset_state(a);
+    CHECK(ygfx_begin(a, &R->f) == YGFX_OK);
+    CHECK(ygfx_draw_n(a, sa, n) == YGFX_OK);
+    CHECK(ygfx_end(a) == YGFX_OK);
+    CHECK(ygfx_read_output(a, 0, 0, W, H, oa) == YGFX_OK);
+    CHECK(yscr_flip(&R->scr) == YSCR_OK);
+    S23.frames++;
+    S23.frames_bad += memcmp(oa, ob, (size_t)W * H * 4) != 0;
+}
+
+/* The stimuli of one gfx: a grating, a gabor, two shapes and a text run. */
+static int v23_stims(ygfx_gfx* g, const tcs_set* s, ygfx_cset* set, ygfx_citem* it, int n_it, ygfx_stim* out) {
+    ygfx_grating_desc gd;
+    ygfx_gabor_desc bd;
+    ygfx_shape_desc sd;
+    ygfx_cset_desc cd;
+    ygfx_crun_desc rd;
+    memset(&gd, 0, sizeof gd);
+    gd.x = -60; gd.w = 150; gd.h = 120; gd.sf = 1.0f / 17.0f; gd.ori = 30; gd.contrast = 0.8f;
+    out[0] = ygfx_grating(&gd);
+    memset(&bd, 0, sizeof bd);
+    bd.x = 80; bd.y = 30; bd.sf = 1.0f / 9.0f; bd.sigma = 12; bd.ori = -20; bd.contrast = 0.9f;
+    out[1] = ygfx_gabor(&bd);
+    memset(&sd, 0, sizeof sd);
+    sd.place = YGFX_TOP_LEFT; sd.anchor = YGFX_TOP_LEFT;   /* top-left: a turned row order shows */
+    sd.shape = YGFX_RECT; sd.w = 40; sd.h = 20; sd.y = 12; sd.color[0] = 0.9f; sd.color[1] = 0.2f;
+    out[2] = ygfx_shape(&sd);
+    sd.place = YGFX_BOTTOM_RIGHT; sd.anchor = YGFX_BOTTOM_RIGHT;
+    sd.shape = YGFX_CIRCLE; sd.w = 30; sd.x = -8; sd.y = -6; sd.color[0] = 0.1f; sd.color[2] = 0.7f;
+    out[3] = ygfx_shape(&sd);
+    memset(&cd, 0, sizeof cd);
+    cd.texels = s->texels; cd.n_texels = s->n_texels; cd.words = s->words; cd.n_words = s->n_words; cd.keep = true;
+    *set = ygfx_cset_make(g, &cd);
+    if (!set->id) { fprintf(stderr, "  v0.23: cset: %s\n", ygfx_error(g)); return 4; }
+    rd = cs_rd(*set, it, n_it, 24);
+    out[4] = ygfx_crun(g, &rd);
+    return 5;
+}
+
+static void gl_v23_output(stats* st) {
+    static ygfx_gfx ga, gb;
+    static unsigned char oa[W * H * 4], ob[W * H * 4], nat_px[W * H * 4];
+    static gl_cap_store cs;
+    static unsigned char want[CAP_N][W * H * 4];
+    tcs_set s;
+    ygfx_citem it[CS_N];
+    double org[CS_N][2], cell;
+    ygfx_stim sa[5], sb[5];
+    ygfx_cset seta, setb;
+    ygfx_native nat = { 0, 0 };
+    ygfx_capture_desc cd;
+    ygfx_capture_stats cst;
+    v23_gl f;
+    float lut[3 * 256];
+    int cfg, k, n_it, na, nb, i, y;
+    (void)st;
+    g_where = "v0.23";
+    memset(&cst, 0, sizeof cst);
+    memset(&f, 0, sizeof f);
+    v23_sym(&f.GetIntegerv, "glGetIntegerv");
+    v23_sym(&f.GetTexLevelParameteriv, "glGetTexLevelParameteriv");
+    v23_sym(&f.UseProgram, "glUseProgram");
+    v23_sym(&f.BindVertexArray, "glBindVertexArray");
+    v23_sym(&f.ActiveTexture, "glActiveTexture");
+    v23_sym(&f.Enable, "glEnable");
+    v23_sym(&f.BindTexture, "glBindTexture");
+    v23_sym(&f.BlendFunc, "glBlendFunc");
+    v23_sym(&f.Viewport, "glViewport");
+    v23_sym(&f.PixelStorei, "glPixelStorei");
+    if (!f.GetIntegerv || !f.UseProgram || !f.BindTexture || !f.Viewport) { CHECK(0 && "GL entry points"); return; }
+    S23.ran = 1;
+    cs_build(&s, 0, 0);
+    n_it = cs_layout(&s, 18, 0, 0.21, 0.43, it, org, &cell);
+    for (k = 0; k < 256; k++)   /* a calibration's table: gamma 2.2, channels apart */
+        for (i = 0; i < 3; i++) lut[i * 256 + k] = (float)pow((double)k / 255.0, 1.0 / (2.2 + 0.1 * i));
+    /* identity and rounding; a CLUT and the noise dither (the frame index
+     * counts, so both gfx draw the same frame records) */
+    for (cfg = 0; cfg < 2; cfg++) {
+        ygfx_dither dith = cfg ? YGFX_DITHER_NOISE : YGFX_DITHER_NONE;
+        if (!v23_open(&ga, 0, dith)) break;
+        if (!v23_open(&gb, 1, dith)) { ygfx_close(&ga); break; }
+        if (cfg) {
+            CHECK(ygfx_set_lut(&ga, lut, 256) == YGFX_OK);
+            CHECK(ygfx_set_lut(&gb, lut, 256) == YGFX_OK);
+        }
+        na = v23_stims(&ga, &s, &seta, it, n_it, sa);
+        nb = v23_stims(&gb, &s, &setb, it, n_it, sb);
+        CHECK(na == 5 && nb == 5);
+        CHECK(ygfx_prime(&gb) > 0);
+        S23.fb0_bad += v23_fb(&f) != 0;
+        /* the name: GL_RGBA8 at the size */
+        CHECK(ygfx_output_native(&gb, &nat) == YGFX_OK);
+        S23.native_bad += nat.gl_name == 0 || nat.gl_format != 0x8058u;
+        if (f.GetTexLevelParameteriv && nat.gl_name) {
+            int32_t tw = 0, th = 0, tf = 0;
+            f.ActiveTexture(0x84C0);   /* GL_TEXTURE0 */
+            f.BindTexture(0x0DE1, nat.gl_name);
+            f.GetTexLevelParameteriv(0x0DE1, 0, 0x1000, &tw);
+            f.GetTexLevelParameteriv(0x0DE1, 0, 0x1001, &th);
+            f.GetTexLevelParameteriv(0x0DE1, 0, 0x1003, &tf);
+            S23.native_bad += tw != W || th != H || tf != 0x8058;
+            f.BindTexture(0x0DE1, 0);
+        }
+        for (k = 0; k < 6; k++) {
+            sa[0].phase = sb[0].phase = 0.7f * (float)k;   /* each frame differs */
+            sa[2].x = sb[2].x = 10.0f + 7.0f * (float)k;
+            v23_frame(&ga, &gb, sa, sb, na < nb ? na : nb, &f, oa, ob);
+            if (k == 2) {
+                /* the texels through the name: a framebuffer of the host's */
+                v21_gl g21;
+                if (v21_load(&g21)) {
+                    uint32_t fbo = 0;
+                    g21.GenFramebuffers(1, &fbo);
+                    g21.BindFramebuffer(0x8D40, fbo);
+                    g21.FramebufferTexture2D(0x8D40, 0x8CE0, 0x0DE1, nat.gl_name, 0);
+                    g21.PixelStorei(0x0D05, 1);   /* GL_PACK_ALIGNMENT */
+                    g21.ReadPixels(0, 0, W, H, 0x1908, 0x1401, nat_px);
+                    g21.BindFramebuffer(0x8D40, 0);
+                    g21.DeleteFramebuffers(1, &fbo);
+                    for (y = 0; y < H; y++)   /* GL's rows against read_output's top-first rows */
+                        S23.native_bad += memcmp(nat_px + (size_t)(H - 1 - y) * W * 4, ob + (size_t)y * W * 4, (size_t)W * 4) != 0;
+                    for (i = 3; i < W * H * 4; i += 4) S23.native_bad += nat_px[i] != 255;
+                }
+            }
+            if (k >= 3) {
+                /* a host's GL between frames (ImGui's kind of calls): the
+                 * reset in v23_frame() is all the gfx needs */
+                f.UseProgram(0);
+                if (f.BindVertexArray) f.BindVertexArray(0);
+                f.ActiveTexture(0x84C0);   /* ImGui draws the texture from unit 0 */
+                f.BindTexture(0x0DE1, nat.gl_name);
+                f.Enable(0x0BE2);   /* GL_BLEND */
+                f.BlendFunc(0x0306, 0x0303);   /* DST_COLOR, ONE_MINUS_SRC_ALPHA */
+                f.Viewport(3, 5, 17, 11);
+                f.PixelStorei(0x0CF5, 8);   /* GL_UNPACK_ALIGNMENT */
+                S23.foreign_frames++;
+            }
+        }
+        /* capture reads the texture */
+        memset(&cs, 0, sizeof cs);
+        memset(&cd, 0, sizeof cd);
+        cd.every = 1; cd.slots = CAP_N;
+        cd.on_frame = gl_cap_on_frame; cd.ctx = &cs;
+        CHECK(ygfx_capture_start(&gb, &cd) == YGFX_OK);
+        for (k = 0; k < CAP_N; k++) {
+            sb[2].x = sa[2].x = 5.0f + 9.0f * (float)k;
+            v23_frame(&ga, &gb, sa, sb, na < nb ? na : nb, &f, oa, want[k]);
+        }
+        CHECK(ygfx_capture_stop(&gb, &cst) == CAP_N);
+        CHECK(cst.dropped == 0 && cst.failed == 0 && cs.n == CAP_N);
+        for (k = 0; k < CAP_N && k < cs.n; k++) S23.cap_bad += memcmp(cs.px[k], want[k], sizeof want[k]) != 0;
+        if (cfg == 0) {
+            char line[400] = { 0 };
+            ygfx_describe(&gb, line, sizeof line);
+            CHECK(strstr(line, "output texture") != NULL);
+        }
+        ygfx_close(&ga);
+        ygfx_close(&gb);
+        S23.fb0_bad += v23_fb(&f) != 0;
+    }
+    tcs_free(&s);
+    /* refusals */
+    {
+        ygfx_desc gd;
+        ygfx_native nn = { 0, 0 };
+#define V23_REFUSED(c) do { S23.refused_n++; if (c) S23.refused_ok++; else fprintf(stderr, "  v0.23 refusal %ld not refused\n", S23.refused_n); } while (0)
+        memset(&gd, 0, sizeof gd);
+        gd.screen = &R->scr; gd.output_texture = true;
+        V23_REFUSED(!ygfx_open(&gb, &gd) && strstr(ygfx_error(&gb), "headless"));
+        memset(&gd, 0, sizeof gd);
+        gd.gl_proc = v23_proc; gd.gl_ctx = &R->scr; gd.width = W; gd.height = H; gd.output_texture = true; gd.rows = YGFX_ROWS_TOP_DOWN;
+        V23_REFUSED(!ygfx_open(&gb, &gd) && strstr(ygfx_error(&gb), "TOP_DOWN"));
+        gd.rows = YGFX_ROWS_AUTO; gd.width = 1 << 20;
+        V23_REFUSED(!ygfx_open(&gb, &gd) && strstr(ygfx_error(&gb), "GL_MAX_TEXTURE_SIZE"));
+        V23_REFUSED(ygfx_output_native(&gb, &nn) == YGFX_ERR_CLOSED && nn.gl_name == 0);
+        if (v23_open(&ga, 0, YGFX_DITHER_NONE)) {
+            V23_REFUSED(ygfx_output_native(&ga, &nn) == YGFX_ERR_ARG && nn.gl_name == 0 && strstr(ygfx_error(&ga), "output_texture"));
+            ygfx_close(&ga);
+        }
+#undef V23_REFUSED
+    }
+    CHECK(S23.frames > 0 && S23.frames_bad == 0);
+    CHECK(S23.native_bad == 0);
+    CHECK(S23.fb0_bad == 0);
+    CHECK(S23.cap_bad == 0);
+    CHECK(S23.refused_ok == S23.refused_n && S23.refused_n == 5);
+    printf("v0.23 output: %ld frames (identity and rounding; a CLUT and the noise dither; %ld after foreign GL calls and a reset), "
+           "the output texture against framebuffer 0: %ld differ; the native name (GL_RGBA8 at the size, its texels, alpha 255): %ld bad; "
+           "not framebuffer 0 after end, read_output, prime or close: %ld; %d captured frames against read_output, twice: %ld differ; "
+           "refusals %ld of %ld\n",
+           S23.frames, S23.foreign_frames, S23.frames_bad, S23.native_bad, S23.fb0_bad, CAP_N, S23.cap_bad, S23.refused_ok, S23.refused_n);
+}
+#define V23_TW 1100
+#define V23_TH 1000   /* 4.4 MB of RGBA8: two bands of the attach's upload */
+
+typedef struct v23_job {
+    ygfx_gfx* g;
+    const ygfx_gl_caps* caps;
+    ygfx_gfx* share;
+    const tcs_set* s;
+    ygfx_citem* it;
+    int n_it, ok, n;
+    ygfx_stim st[6];
+    ygfx_cset set;
+    ygfx_tex tex;
+    const unsigned char* px;
+    const float* lut;
+} v23_job;
+
+/* The objects of every gfx of this part, in one order: the ids follow. */
+static int v23_objects(ygfx_gfx* g, v23_job* j) {
+    ygfx_texture_desc td;
+    ygfx_image_desc id;
+    if (j->lut && ygfx_set_lut(g, j->lut, 256) != YGFX_OK) return 0;
+    memset(&td, 0, sizeof td);
+    td.w = V23_TW; td.h = V23_TH; td.format = YGFX_RGBA8; td.linear = true; td.data = j->px;
+    j->tex = ygfx_texture(g, &td);
+    if (!j->tex.id) return 0;
+    j->n = v23_stims(g, j->s, &j->set, j->it, j->n_it, j->st);
+    memset(&id, 0, sizeof id);
+    id.tex = j->tex; id.x = 40; id.y = -30; id.w = 90; id.h = 80; id.linear = true;
+    j->st[j->n++] = ygfx_image(g, &id);
+    return j->n == 6;
+}
+
+static int v23_open_desc(ygfx_gfx* g, int defer, const ygfx_gl_caps* caps, ygfx_gfx* share) {
+    ygfx_desc gd;
+    memset(&gd, 0, sizeof gd);
+    gd.gl_proc = defer ? NULL : v23_proc;
+    gd.gl_ctx = defer ? NULL : &R->scr;
+    gd.width = W;
+    gd.height = H;
+    gd.background[0] = gd.background[1] = gd.background[2] = 0.5f;
+    gd.seed = 99;
+    gd.output_texture = true;
+    gd.defer = defer != 0;
+    gd.gl_caps = caps;
+    gd.share = share;
+    ygfx__test_scene32 = 0;
+    return ygfx_open(g, &gd);
+}
+
+static void v23_job_run(void* p) {
+    v23_job* j = (v23_job*)p;
+    j->ok = v23_open_desc(j->g, 1, j->caps, j->share) && v23_objects(j->g, j);
+}
+
+#if defined(_WIN32)
+static DWORD WINAPI v23_thread(LPVOID p) { v23_job_run(p); return 0; }
+#elif defined(PAR_PTHREADS)
+static void* v23_thread(void* p) { v23_job_run(p); return NULL; }
+#endif
+/* the deferred open and its objects on a thread of their own, as the
+ * designer's check thread makes them */
+static void v23_on_thread(v23_job* j) {
+#if defined(_WIN32)
+    HANDLE h = CreateThread(NULL, 0, v23_thread, j, 0, NULL);
+    if (h) { WaitForSingleObject(h, INFINITE); CloseHandle(h); } else v23_job_run(j);
+#elif defined(PAR_PTHREADS)
+    pthread_t h;
+    if (pthread_create(&h, NULL, v23_thread, j) == 0) pthread_join(h, NULL);
+    else v23_job_run(j);
+#else
+    v23_job_run(j);
+#endif
+}
+
+/* A frame of g into out; its state reset first: other gfx share the context. */
+static void v23_draw(ygfx_gfx* g, const ygfx_stim* s, int n, unsigned char* out) {
+    ygfx_reset_state(g);
+    CHECK(ygfx_begin(g, &R->f) == YGFX_OK);
+    CHECK(ygfx_draw_n(g, s, n) == YGFX_OK);
+    CHECK(ygfx_end(g) == YGFX_OK);
+    CHECK(ygfx_read_output(g, 0, 0, W, H, out) == YGFX_OK);
+}
+
+static long v23_ids(const v23_job* a, const v23_job* b) {
+    if (getenv("YGFX_TEST_VERBOSE")) {
+        int i;
+        fprintf(stderr, "  v0.23 ids: tex %u %u set %u %u n %d %d\n", a->tex.id, b->tex.id, a->set.id, b->set.id, a->n, b->n);
+        for (i = 0; i < a->n && i < b->n; i++) {
+            size_t k;
+            for (k = 0; k < sizeof(ygfx_stim); k++)
+                if (((const unsigned char*)&a->st[i])[k] != ((const unsigned char*)&b->st[i])[k]) { fprintf(stderr, "    stim %d byte %zu\n", i, k); break; }
+        }
+    }
+    return (a->tex.id != b->tex.id) + (a->set.id != b->set.id) + (a->n != b->n) +
+           (memcmp(a->st, b->st, sizeof(ygfx_stim) * (size_t)(a->n < b->n ? a->n : b->n)) != 0);
+}
+
+static void gl_v23_defer(stats* st) {
+    static ygfx_gfx ga, gd, gs;
+    static unsigned char ref[W * H * 4], out[W * H * 4];
+    static unsigned char px[V23_TW * V23_TH * 4];
+    static float lut[3 * 256];
+    tcs_set s;
+    ygfx_citem it[CS_N];
+    double org[CS_N][2], cell;
+    ygfx_gl_caps caps;
+    v23_job ja, jd, js;
+    int k, i, rc, calls;
+    (void)st;
+    g_where = "v0.23 defer";
+    S23D.ran = 1;
+    S23D.bands = ygfx__test_bands;
+    memset(&caps, 0, sizeof caps);
+    cs_build(&s, 0, 0);
+    for (i = 0; i < V23_TW * V23_TH * 4; i++) px[i] = (unsigned char)((i * 7 + (i >> 12) * 13) & 0xFF);
+    for (k = 0; k < 256; k++)
+        for (i = 0; i < 3; i++) lut[i * 256 + k] = (float)pow((double)k / 255.0, 1.0 / (2.0 + 0.15 * i));
+    memset(&ja, 0, sizeof ja);
+    ja.s = &s; ja.it = it; ja.px = px; ja.lut = lut;
+    ja.n_it = cs_layout(&s, 18, 0, 0.21, 0.43, it, org, &cell);
+    jd = ja; js = ja;
+    /* the direct open: the reference, and the source of caps and programs */
+    if (!v23_open_desc(&ga, 0, NULL, NULL) || !v23_objects(&ga, &ja)) { CHECK(0 && "v0.23 direct open"); ygfx_close(&ga); tcs_free(&s); return; }
+    CHECK(ygfx_gl_caps_get(&ga, &caps) == YGFX_OK && caps.bytes == sizeof caps);
+    /* deferred, on another thread; then a budget that allows one step a call */
+    for (k = 0; k < 2; k++) {
+        jd.g = &gd; jd.caps = &caps; jd.share = k ? &ga : NULL;
+        ja.st[0].phase = 0.0f;
+        v23_on_thread(&jd);
+        CHECK(jd.ok);
+        if (!jd.ok) { fprintf(stderr, "  v0.23 deferred: %s\n", ygfx_error(&gd)); ygfx_close(&gd); continue; }
+        S23D.ids_bad += v23_ids(&ja, &jd);
+        CHECK(yscr_begin(&R->scr, &R->f) == YSCR_OK);
+        S23D.refused_n++;
+        if (ygfx_begin(&gd, &R->f) == YGFX_ERR_ORDER && strstr(ygfx_error(&gd), "attach")) S23D.refused_ok++;
+        calls = 0;
+        do {
+            rc = ygfx_attach(&gd, v23_proc, &R->scr, k ? 1 : (int64_t)10000000000);
+            calls++;
+        } while (rc == 0 && calls < 100000);
+        CHECK(rc == 1);
+        if (rc != 1) fprintf(stderr, "  v0.23 attach: %s\n", ygfx_error(&gd));
+        if (k) {
+            ygfx_programs pr;
+            memset(&pr, 0, sizeof pr);
+            S23D.steps_small = calls;
+            ygfx_program_stats(&gd, &pr);
+            S23D.shared_progs = pr.shared;
+            S23D.shared_compiled = pr.compiled;
+        }
+        CHECK(ygfx_attach(&gd, v23_proc, &R->scr, 1) == 1);   /* attached stays attached */
+        for (i = 0; i < 3; i++) {
+            jd.st[0].phase = ja.st[0].phase = 0.9f * (float)i;
+            if (i) CHECK(yscr_begin(&R->scr, &R->f) == YSCR_OK);
+            v23_draw(&ga, ja.st, ja.n, ref);
+            v23_draw(&gd, jd.st, jd.n, out);
+            CHECK(yscr_flip(&R->scr) == YSCR_OK);
+            S23D.frames++;
+            S23D.frames_bad += memcmp(ref, out, sizeof ref) != 0;
+        }
+        ygfx_close(&gd);
+    }
+    /* shared programs, direct; closed in both orders */
+    for (k = 0; k < 2; k++) {
+        js.g = &gs;
+        if (!v23_open_desc(&gs, 0, NULL, &ga) || !v23_objects(&gs, &js)) {
+            CHECK(0 && "v0.23 shared open");
+            fprintf(stderr, "  v0.23 shared: %s\n", ygfx_error(&gs));
+            break;
+        }
+        {
+            ygfx_programs pr;
+            memset(&pr, 0, sizeof pr);
+            ygfx_program_stats(&gs, &pr);
+            S23D.shared_progs += pr.shared > 0 ? 0 : 1000;   /* a miss shows */
+            S23D.shared_compiled += pr.compiled;
+        }
+        if (k == 0) {
+            /* A closes first: B keeps the programs; A opens again on B's */
+            ygfx_close(&ga);
+            CHECK(v23_open_desc(&ga, 0, NULL, &gs) && v23_objects(&ga, &ja));
+        }
+        for (i = 0; i < 3; i++) {
+            js.st[0].phase = ja.st[0].phase = 0.4f * (float)i;
+            CHECK(yscr_begin(&R->scr, &R->f) == YSCR_OK);
+            v23_draw(&ga, ja.st, ja.n, ref);
+            v23_draw(&gs, js.st, js.n, out);
+            CHECK(yscr_flip(&R->scr) == YSCR_OK);
+            S23D.frames++;
+            S23D.order_bad += memcmp(ref, out, sizeof ref) != 0;
+        }
+        ygfx_close(&gs);   /* k = 1: B first, then A at the end */
+    }
+    /* refusals */
+    {
+        ygfx_gl_caps bad = caps;
+        ygfx_texture_desc td;
+        v23_job jb = ja;
+        snprintf(bad.caps.renderer, sizeof bad.caps.renderer, "another GPU");
+        S23D.refused_n++;
+        if (v23_open_desc(&gd, 1, &bad, NULL)) {
+            if (ygfx_attach(&gd, v23_proc, &R->scr, (int64_t)1000000000) < 0 && strstr(ygfx_error(&gd), "caps")) S23D.refused_ok++;
+            ygfx_close(&gd);
+        }
+        S23D.refused_n++;
+        if (v23_open_desc(&gd, 1, &caps, NULL)) {
+            memset(&td, 0, sizeof td);
+            td.w = (caps.caps.max_texture > 0 ? caps.caps.max_texture : 2048) + 1; td.h = 4; td.format = YGFX_RGBA8;
+            if (ygfx_texture(&gd, &td).id == 0 && strstr(ygfx_error(&gd), "MAX_TEXTURE")) S23D.refused_ok++;
+            ygfx_close(&gd);   /* never attached: no GL call */
+        }
+        S23D.refused_n++;
+        if (!v23_open_desc(&gd, 1, NULL, NULL) && strstr(ygfx_error(&gd), "gl_caps")) S23D.refused_ok++;
+        S23D.refused_n++;
+        if (v23_open_desc(&gd, 1, &caps, NULL)) {
+            ygfx_native nn = { 0, 0 };
+            jb.g = &gd;
+            (void)v23_objects(&gd, &jb);
+            if (ygfx_output_native(&gd, &nn) == YGFX_ERR_ORDER && ygfx_prime(&gd) == YGFX_ERR_ORDER &&
+                ygfx_read_output(&gd, 0, 0, 1, 1, out) == YGFX_ERR_ORDER && ygfx_gl_caps_get(&gd, &bad) == YGFX_ERR_ARG)
+                S23D.refused_ok++;
+            ygfx_close(&gd);
+        }
+    }
+    ygfx_close(&ga);
+    tcs_free(&s);
+    CHECK(S23D.frames > 0 && S23D.frames_bad == 0 && S23D.order_bad == 0);
+    CHECK(S23D.ids_bad == 0);
+    CHECK(S23D.steps_small > 3);
+    S23D.bands = ygfx__test_bands - S23D.bands;
+    CHECK(S23D.bands == 4);   /* two bands an attach */
+    CHECK(S23D.shared_progs > 0 && S23D.shared_progs < 1000 && S23D.shared_compiled == 0);
+    CHECK(S23D.refused_ok == S23D.refused_n && S23D.refused_n == 6);
+    printf("v0.23 defer: %ld frames of a deferred open (made on another thread) and of shared programs against a direct open: %ld differ, "
+           "%ld after closes in both orders; handles not the direct open's: %ld; a budget of 1 ns took %ld attach calls; "
+           "the 4.4 MB texture in %ld bands over two attaches; "
+           "programs shared %ld, compiled %ld; refusals %ld of %ld\n",
+           S23D.frames, S23D.frames_bad, S23D.order_bad, S23D.ids_bad, S23D.steps_small, S23D.bands, S23D.shared_progs, S23D.shared_compiled,
+           S23D.refused_ok, S23D.refused_n);
 }
 
 #if defined(__SANITIZE_ADDRESS__)

@@ -1,4 +1,4 @@
-/* ysp/gfx.h - v0.22.0 - public domain single-header stimulus graphics library
+/* ysp/gfx.h - v0.23.0 - public domain single-header stimulus graphics library
  *   (with MIT-licensed parts: see below)
  *
  *   Stimuli on GL ES 3.0, on top of ysp/screen.h: signed-distance shapes
@@ -1158,6 +1158,90 @@
  *   free it after the renderer lets it go.
  *
  *   ---------------------------------------------------------------------
+ *   OUTPUT TEXTURE (v0.23)
+ *   ---------------------------------------------------------------------
+ *   A host that shows the stimuli in its own window (the designer's
+ *   preview, docs/designer.md "The GL context") opens the gfx headless on
+ *   the window's context with desc.output_texture. open() then makes a
+ *   GL_RGBA8 texture of width x height and a framebuffer for it, and the
+ *   output stage writes that texture in place of framebuffer 0, which is
+ *   the host's window:
+ *       ygfx_desc gd = { 0 };
+ *       gd.gl_proc = my_gl_proc;  gd.gl_ctx = my_ctx;   // current context
+ *       gd.width = 1920;  gd.height = 1080;
+ *       gd.output_texture = true;
+ *       if (!ygfx_open(&gfx, &gd)) fputs(ygfx_error(&gfx), stderr);
+ *       ygfx_native nat;
+ *       ygfx_output_native(&gfx, &nat);   // nat.gl_name: sample it
+ *       ... each frame: ygfx_reset_state(), begin, draws, end, then the
+ *           host's own drawing samples nat.gl_name ...
+ *   The texels are the output stage's 8-bit device codes (the CLUT and the
+ *   dither applied), alpha 255, rows bottom first (GL's order: a host
+ *   draws it with v turned). ygfx_read_output() and CAPTURE read the
+ *   texture; their bytes are the bytes that framebuffer 0 gets without
+ *   desc.output_texture (tested bit for bit). end() and prime() leave
+ *   framebuffer 0 bound, and the state cache knows it, so the host's next
+ *   draw does not go into the texture. The gfx makes the texture with its
+ *   own GL calls, so its cache stays right; the host's GL calls between
+ *   frames still change state that the gfx caches (program, textures,
+ *   blend): call ygfx_reset_state() before begin(). The gfx assumes the
+ *   scissor, depth, stencil and cull tests are off and no sampler object
+ *   is on unit 0. Refused: a screen (desc.screen), desc.rows TOP_DOWN, and
+ *   a size over GL_MAX_TEXTURE_SIZE. ygfx_close() deletes the texture.
+ *
+ *   ---------------------------------------------------------------------
+ *   DEFERRED OPEN (v0.23)
+ *   ---------------------------------------------------------------------
+ *   A session loads on a worker thread and shows on the GL thread (the
+ *   designer's preview). With desc.defer and desc.gl_caps (the caps of a
+ *   gfx open on the GL thread's context), ygfx_open() and every call
+ *   after it make no GL call, on any thread: the gfx checks the desc and
+ *   the calibration, builds its tables and records each backend call
+ *   (programs, textures with a copy of their texels, buffers, updates)
+ *   with the id the GL backend will give it. Then, on the GL thread,
+ *   ygfx_attach() makes them in order, at most budget_ns a call, frees
+ *   each copy once it is made, and primes every program (PRIME, without
+ *   the read's wait for the GPU). From its return of 1 the gfx is a GL
+ *   gfx. Handles do not change, so stimuli made before the attach stay
+ *   valid:
+ *       ygfx_gl_caps caps;                       // GL thread, once
+ *       ygfx_gl_caps_get(&first_gfx, &caps);
+ *       gd.defer = true; gd.gl_caps = &caps;     // worker thread
+ *       gd.output_texture = true; gd.width = 1920; gd.height = 1080;
+ *       ygfx_open(&gfx, &gd);  ... make the stimuli ...
+ *       rc = ygfx_attach(&gfx, gl_proc, gl_ctx, 4000000);   // GL thread,
+ *                                         // a call a frame until rc == 1
+ *   Before the attach completes, frames, setup passes, prime(), reads,
+ *   capture, shared textures and ygfx_output_native() are refused
+ *   (YGFX_ERR_ORDER); objects can still be made, and the attach makes
+ *   them too. The attach refuses a context whose caps differ from
+ *   desc.gl_caps. The budget is a target: one step (one compile, one
+ *   texture's make, one band of 4 MB of texels) can pass it; a larger
+ *   upload goes in bands, one a step. A deferred open loads programs from
+ *   desc.cache but stores none. One thread uses the gfx at a time: hand it
+ *   to the GL thread through your own queue. ygfx_close() of a gfx that
+ *   was never attached makes no GL call and may run on any thread; after
+ *   the attach began, close it on the GL thread. Measured: docs/gfx.md,
+ *   "v0.23.0".
+ *
+ *   ---------------------------------------------------------------------
+ *   SHARED PROGRAMS (v0.23)
+ *   ---------------------------------------------------------------------
+ *   Each gfx compiles its own programs: 14 at the open, 211 to 216 ms
+ *   without a shader cache on an RX 6600, 4.8 ms with Mesa's warm. With
+ *   desc.share, a gfx open on the same context, the gfx uses that gfx's
+ *   programs where the text is the same (the built-in kinds' always) and
+ *   compiles only the others, which the next gfx then finds. The gfx that
+ *   share programs hold one pool; each program in it has a count of the
+ *   pipelines and the pool that use it, and the last one deletes it, so
+ *   the gfx close in any order. The pool is joined at the open, or at the
+ *   attach of a deferred open (desc.share must then be open and attached;
+ *   the deferred open itself does not read it). Programs of a user body
+ *   (ygfx_pipeline()) are not shared. Every gfx of a pool runs on the
+ *   one context's thread. ygfx_program_stats().shared counts the programs
+ *   taken.
+ *
+ *   ---------------------------------------------------------------------
  *   INSTANCES (v0.4)
  *   ---------------------------------------------------------------------
  *   One template stimulus and an array of ygfx_inst elements draw in one
@@ -1369,7 +1453,7 @@
  *   ---------------------------------------------------------------------
  *   BACKENDS
  *   ---------------------------------------------------------------------
- *   ygfx_backend (version 5) is a table of 25 calls (pipelines from
+ *   ygfx_backend (version 6) is a table of 27 calls (pipelines from
  *   shader text, textures, buffers, passes, apply, draw, present, read,
  *   reset, pipeline_finish, pipeline_binary, five capture calls and
  *   texture_native): the
@@ -1391,7 +1475,9 @@
  *   (make RGBA8 as SRGB8_ALPHA8) and texture_native (a texture's GL name
  *   and sized format), for SHARED TEXTURES; NULL, or a table of version 3
  *   or 4, and ygfx_texture_shared() fails. The core reads texture_native
- *   only from a version 5 table.
+ *   only from a version 5 table. Version 6 (v0.23) adds
+ *   pipeline_src.shared, pipeline_share and pipeline_unshare (SHARED
+ *   PROGRAMS); NULL, or an older table, and desc.share is refused.
  *   open() starts every built-in program with pipeline_src.deferred set,
  *   then calls pipeline_finish on each: a driver that compiles in parallel
  *   (ANGLE does) then overlaps them. caps.parallel_compile (v0.11.1) says
@@ -1458,8 +1544,15 @@
  *   with runs and blurs allocates nothing.
  *   v0.7: open makes NOISE GAUSSIAN's table texture (256 x 256 R32F, 256
  *   KB) from a static table of the same size, built once per process with
- *   256 KB of static scratch; a run made with .rays compiles the rays
- *   program once.
+ *   256 KB of static scratch (v0.23: under a lock); a run made with .rays
+ *   compiles the rays program once.
+ *   v0.23: a deferred open allocates its record and a copy of every
+ *   texel, buffer update and program text until ygfx_attach() makes them
+ *   (each copy freed as it is made); the attach allocates nothing else. A
+ *   shared program allocates a 24-byte count; the pool of SHARED PROGRAMS
+ *   is about 3 KB. The calibration memo is 128 bytes of static memory.
+ *   One thread at a time per gfx; with desc.defer, that thread need not
+ *   own a context until the attach.
  *   v0.13: ygfx_capture_start() allocates its state (about 10 KB with the
  *   writer's pump) and makes desc.slots pixel buffers on the GPU (w x h x
  *   4 bytes each). The capture's frame work allocates nothing in this
@@ -1489,6 +1582,30 @@
  *   ---------------------------------------------------------------------
  *   CHANGELOG
  *   ---------------------------------------------------------------------
+ *   v0.23.0 - OUTPUT TEXTURE, for the designer's preview: with
+ *          desc.output_texture (appended; headless only) the output stage
+ *          writes a GL_RGBA8 texture that open() makes, in place of
+ *          framebuffer 0; ygfx_output_native() gives its GL name.
+ *          ygfx_read_output() and CAPTURE read it, with the bytes that
+ *          framebuffer 0 gets without it. end() and prime() leave
+ *          framebuffer 0 bound. The GL backend's capture_read reads the
+ *          framebuffer that the output stage bound, not always 0.
+ *          DEFERRED OPEN: desc.defer and desc.gl_caps (ygfx_gl_caps,
+ *          ygfx_gl_caps_get()): open and load with no GL call, on any
+ *          thread; ygfx_attach() makes the recorded calls on the GL thread
+ *          within a budget a call, uploads over 4 MB in bands, and primes
+ *          without waiting for the GPU. SHARED PROGRAMS: desc.share, a gfx
+ *          on the same context whose programs are used, counted per
+ *          program so the gfx close in any order; ygfx_programs.shared.
+ *          Backend version 6: pipeline_src.shared, pipeline_share and
+ *          pipeline_unshare; open() takes 3 to 6. ygfx_open() checks a
+ *          calibration whose bytes passed before from a memo (8 entries,
+ *          a 128-bit hash), not again: the check was 24 of the open's 29
+ *          ms. The NOISE table's first build takes a lock, so two threads
+ *          may open at once. ygfx_texture() and ygfx_target() refuse a size
+ *          over GL_MAX_TEXTURE_SIZE by name. ygfx_desc grows from 136 to
+ *          160 bytes and the handle from 24,832 to 27,584 (x86-64): the
+ *          program list of SHARED PROGRAMS and a larger GL backend area.
  *   v0.22.0 - PAINT RECORDS: color glyphs. YGFX_I_PAINT (crun_desc.fields):
  *          an item's color is the texel index of a paint record in the
  *          run's set (a solid, or a linear or radial gradient with its own
@@ -2119,9 +2236,9 @@
 #define YSP_GFX_H_INCLUDED
 
 #define YGFX_VERSION_MAJOR 0
-#define YGFX_VERSION_MINOR 22
+#define YGFX_VERSION_MINOR 23
 #define YGFX_VERSION_PATCH 0
-#define YGFX_VERSION_STRING "0.22.0"
+#define YGFX_VERSION_STRING "0.23.0"
 
 #include "ysp/screen.h"
 #include "ysp/color.h"
@@ -2406,6 +2523,17 @@ typedef struct ygfx_desc {
                                      * ygfx_color(); 0 = the 2 degree cones   */
     const ycol_lum* lum;          /* a participant's luminance; NULL = the
                                      * standard one of `cones`                  */
+    /* v0.23 (OUTPUT TEXTURE) */
+    bool            output_texture; /* headless only: the output stage writes
+                                     * an RGBA8 texture of width x height that
+                                     * the gfx makes, not framebuffer 0         */
+    bool            defer;          /* DEFERRED OPEN: no GL call, on any thread,
+                                     * until ygfx_attach() on the GL thread     */
+    const struct ygfx_gl_caps* gl_caps;  /* defer: ygfx_gl_caps_get() of a GL
+                                     * gfx on the context of the attach        */
+    struct ygfx_gfx* share;         /* SHARED PROGRAMS: a GL gfx open on the same
+                                     * context; its programs are used, not
+                                     * compiled again. NULL = none              */
 } ygfx_desc;
 
 /* What ygfx_open() and later program builds did with desc.cache. */
@@ -2417,6 +2545,7 @@ typedef struct ygfx_programs {
     int64_t  store_ns;              /* of open_ns: reading binaries back, storing */
     int64_t  open_ns;               /* ygfx_open()'s wall time; with
                                      * ygfx_open_start(), both calls' time  */
+    uint32_t shared;                /* v0.23: from desc.share's programs     */
 } ygfx_programs;
 
 /* --- stimuli -------------------------------------------------------------- */
@@ -3030,11 +3159,13 @@ typedef struct ygfx_param {
 
 /* --- backend (the gfx backend interface) ------------------------------------ */
 
-#define YGFX_BACKEND_VERSION 5   /* 3: v0.4, program binaries (caps strings,
+#define YGFX_BACKEND_VERSION 6   /* 3: v0.4, program binaries (caps strings,
                                     * pipeline_src.binary, pipeline_binary);
                                     * 4: v0.13, the capture calls; 5: v0.21,
-                                    * texture_src.srgb and texture_native.
-                                    * open() takes 3 to 5 */
+                                    * texture_src.srgb and texture_native;
+                                    * 6: v0.23, pipeline_src.shared,
+                                    * pipeline_share and pipeline_unshare.
+                                    * open() takes 3 to 6 */
 
 typedef struct ygfx_backend_open {
     yscr_proc (*gl_proc)(void* ctx, const char* name);
@@ -3081,6 +3212,9 @@ typedef struct ygfx_pipeline_src {
     const void* binary;
     uint32_t    binary_size, binary_format;
     int32_t     retrievable;       /* the core will ask for the binary            */
+    /* version 6: a token from pipeline_share: use its program, compile
+     * nothing; pipeline_make then returns 2 */
+    const void* shared;
 } ygfx_pipeline_src;
 
 typedef struct ygfx_texture_src {
@@ -3144,9 +3278,11 @@ typedef struct ygfx_backend {
      * into out when it fits in cap and returns its size (< 0: none); NULL =
      * the backend has no binaries */
     int  (*pipeline_binary)(void* c, uint32_t id, void* out, size_t cap, uint32_t* format);
-    /* version 4 (CAPTURE): reads of framebuffer 0 that do not wait. NULL =
+    /* version 4 (CAPTURE): reads of the output that do not wait. NULL =
      * no capture. capture_make makes n buffers of bytes each; capture_read
-     * copies a rectangle (GL's rows) into buffer slot and returns at once;
+     * copies a rectangle (GL's rows) of the framebuffer that the output
+     * stage's pass_begin bound just before (0, or v0.23's output texture)
+     * into buffer slot and returns at once;
      * capture_poll returns 1 with *data the bytes when that copy is done
      * (the buffer stays readable, from any thread, until capture_unmap), 0
      * when it is not yet, < 0 on an error; wait_ns > 0 lets it wait that
@@ -3160,7 +3296,24 @@ typedef struct ygfx_backend {
      * format, for a renderer in a context that shares this one; < 0 = none.
      * NULL = no shared textures */
     int  (*texture_native)(void* c, uint32_t id, uint32_t* gl_name, uint32_t* gl_format);
+    /* version 6 (SHARED PROGRAMS): pipeline_share gives a token for a
+     * finished pipeline's program and holds one reference for the caller;
+     * pipeline_src.shared makes a pipeline of this or another context of
+     * the same GL context from it, which holds one more. pipeline_unshare
+     * drops one; the last one deletes the program (with gl 0 it frees the
+     * token only: the context is gone). A pipeline_free of a pipeline made
+     * from a token drops its reference. NULL = no sharing */
+    int  (*pipeline_share)(void* c, uint32_t id, void** token);
+    void (*pipeline_unshare)(void* token, int gl);
 } ygfx_backend;
+
+/* v0.23, DEFERRED OPEN: what a GL gfx's backend reported at its open. A
+ * deferred open takes it in place of the GL calls that would ask. Plain
+ * data: copy it to another thread. */
+typedef struct ygfx_gl_caps {
+    uint32_t          bytes;       /* sizeof(ygfx_gl_caps)                        */
+    ygfx_backend_caps caps;
+} ygfx_gl_caps;
 
 /* --- the handle ------------------------------------------------------------ */
 
@@ -3175,7 +3328,7 @@ typedef struct ygfx_backend {
 #endif
 #define YGFX__N_BUILTIN     10
 #define YGFX__N_VSPEC       3           /* specialized vector programs (KINDS) */
-#define YGFX__BACKEND_WORDS 1344   /* v0.21: the rows programs (was 1280) */
+#define YGFX__BACKEND_WORDS 1424   /* v0.23: a shared program a pipeline (was 1344) */
 #define YGFX__UBO_RING      3
 #ifndef YGFX_MAX_PASSES
 #define YGFX_MAX_PASSES    16          /* target passes per frame              */
@@ -3229,7 +3382,12 @@ typedef struct ygfx__cs {
 typedef struct ygfx__rbatch { int32_t head, tail, count, pad_; float box[4]; } ygfx__rbatch;
 
 /* A program's cache entry, kept from its make to its store. */
-typedef struct ygfx__prec { uint64_t key, key2; uint32_t material; int store; } ygfx__prec;
+/* key, key2: the program cache's; sh1, sh2: the program's own text, blend
+ * and instancing, for SHARED PROGRAMS (pool: 1 = it may go there). */
+typedef struct ygfx__prec { uint64_t key, key2, sh1, sh2; uint32_t material; int store, pool; } ygfx__prec;
+/* A program this gfx built, until a pool takes it (SHARED PROGRAMS). */
+typedef struct ygfx__ph { uint32_t id, pad; uint64_t h1, h2; } ygfx__ph;
+#define YGFX__PH_MAX (YGFX_MAX_PIPELINES + 2 * YGFX__N_BUILTIN + YGFX__N_VSPEC + 16)
 
 /* The gfx. Caller-allocated and zeroed; every field is private. */
 typedef struct ygfx_gfx {
@@ -3328,6 +3486,15 @@ typedef struct ygfx_gfx {
     ygfx_desc            sdesc;                   /* the start's desc         */
     ygfx__prec           prec[YGFX__N_BUILTIN + 1], vprec[YGFX__N_VSPEC];
     struct ygfx__cap*      cap;                     /* v0.13: CAPTURE, from start */
+    uint32_t               out_target;              /* v0.23: the output texture's
+                                                     * backend id; 0 = framebuffer 0 */
+    int32_t                user_build;              /* a user body compiles: not shared */
+    struct ygfx__rec*      rec;                     /* v0.23 DEFERRED OPEN: the calls,
+                                                     * until attached           */
+    struct ygfx__pool*     pool;                    /* v0.23 SHARED PROGRAMS     */
+    struct ygfx_gfx*       share;                   /* desc.share, until the attach */
+    int32_t                n_ph;
+    ygfx__ph               ph[YGFX__PH_MAX];
     char                   error[512];
     uint64_t               backend_mem[YGFX__BACKEND_WORDS];
 } ygfx_gfx;
@@ -3440,8 +3607,9 @@ YGFX_API double ygfx_length(const ygfx_gfx* g, const ygfx_stim* s);
 /* The frame. begin() takes the frame yscr_begin() filled (or one you fill,
  * headless) and records nothing on the GPU; draw() packs the stimulus and
  * queues it; end() uploads the frame's uniforms once, draws the queue into the
- * scene target in order, runs the output stage into framebuffer 0, and
- * returns. Nothing waits for the GPU. Call yscr_flip() after end(). */
+ * scene target in order, runs the output stage into framebuffer 0 (or the
+ * output texture, v0.23), and returns with framebuffer 0 bound. Nothing
+ * waits for the GPU. Call yscr_flip() after end(). */
 YGFX_API int  ygfx_begin(ygfx_gfx* g, const yscr_frame* f);
 YGFX_API int  ygfx_draw(ygfx_gfx* g, const ygfx_stim* s);
 YGFX_API int  ygfx_draw_n(ygfx_gfx* g, const ygfx_stim* s, int n);
@@ -3466,6 +3634,21 @@ YGFX_API int  ygfx_end_setup(ygfx_gfx* g);
 YGFX_API int  ygfx_prime(ygfx_gfx* g);
 /* After your own GL calls between frames: forget the cached GL state. */
 YGFX_API void ygfx_reset_state(ygfx_gfx* g);
+/* v0.23, OUTPUT TEXTURE: the GL name and sized format (GL_RGBA8) of the
+ * texture that desc.output_texture made. YGFX_ERR_ARG without one,
+ * YGFX_ERR_NOT_IMPLEMENTED on a backend without texture_native. */
+YGFX_API int  ygfx_output_native(ygfx_gfx* g, ygfx_native* out);
+/* v0.23, DEFERRED OPEN: the caps of an open GL gfx, for a deferred open's
+ * desc.gl_caps. YGFX_ERR_ARG for a gfx that has made no GL call. */
+YGFX_API int  ygfx_gl_caps_get(const ygfx_gfx* g, ygfx_gl_caps* out);
+/* v0.23, DEFERRED OPEN: on the thread whose context gl_proc loads, makes
+ * the GL objects that a desc.defer open and the calls after it recorded,
+ * in order, with the ids they were given, then primes every program
+ * without waiting for the GPU. Each call works until budget_ns has passed
+ * (at least one step; one large upload or one compile can overrun it).
+ * Returns 1 when attached (also for a gfx that was never deferred), 0 when
+ * more work is left (call it again, in a later frame), < 0 on an error. */
+YGFX_API int  ygfx_attach(ygfx_gfx* g, yscr_proc (*gl_proc)(void* ctx, const char* name), void* gl_ctx, int64_t budget_ns);
 /* Draws that may have left 0..1 since open (a CPU bound per draw). */
 YGFX_API uint64_t ygfx_clipped(const ygfx_gfx* g);
 
@@ -3539,7 +3722,8 @@ YGFX_API int ygfx_set_lut(ygfx_gfx* g, const float* lut, int n);
 
 /* Read back for tests and checks; blocks on the GPU, never in a trial. x, y
  * from the top-left, rows top first. scene: RGBA float in linear device RGB;
- * output: RGBA8 codes of framebuffer 0 after end(). */
+ * output: RGBA8 codes of framebuffer 0 (or of the output texture) after
+ * end(). */
 YGFX_API int ygfx_read_scene(ygfx_gfx* g, int x, int y, int w, int h, float* rgba);
 YGFX_API int ygfx_read_output(ygfx_gfx* g, int x, int y, int w, int h, uint8_t* rgba);
 
@@ -4034,7 +4218,15 @@ typedef struct ygfx__gltex {
     void*   image;                 /* an EGLImage over a D3D11 texture            */
 } ygfx__gltex;
 typedef struct ygfx__glbuf { ygfx__GLuint buf; ygfx__GLenum target; uint32_t bytes; } ygfx__glbuf;
-typedef struct ygfx__glpipe { ygfx__GLuint prog, vao, vs, fs; int32_t blend, inst, pending; } ygfx__glpipe;
+/* SHARED PROGRAMS: a program that pipelines of several gfx on one context
+ * use; the last reference deletes it. References change on the context's
+ * thread only, as every GL call does, so a plain count is enough. */
+typedef struct ygfx__glshare {
+    int32_t refs;
+    ygfx__GLuint prog;
+    void (YGFX__APIENTRY *del)(ygfx__GLuint);
+} ygfx__glshare;
+typedef struct ygfx__glpipe { ygfx__GLuint prog, vao, vs, fs; int32_t blend, inst, pending; ygfx__glshare* share; } ygfx__glpipe;
 
 #define YGFX__GL_TEX  (3 * YGFX_MAX_TEXTURES + 9)   /* three planes a texture */
 #define YGFX__GL_BUF  (YGFX_MAX_BUFFERS + YGFX__UBO_RING + 1)
@@ -4199,6 +4391,8 @@ static int ygfx__gl_open(void* c, const ygfx_backend_open* in, ygfx_backend_caps
 
 static void ygfx__gl_capture_free(void* c);
 
+static void ygfx__gl_drop_prog(ygfx__gl* gl, ygfx__glpipe* p);
+
 static void ygfx__gl_close(void* c) {
     ygfx__gl* gl = (ygfx__gl*)c;
     int i;
@@ -4213,7 +4407,7 @@ static void ygfx__gl_close(void* c) {
     for (i = 0; i < YGFX__GL_PIPE; i++) {
         if (gl->pipe[i].vs) gl->f.DeleteShader(gl->pipe[i].vs);
         if (gl->pipe[i].fs) gl->f.DeleteShader(gl->pipe[i].fs);
-        if (gl->pipe[i].prog) gl->f.DeleteProgram(gl->pipe[i].prog);
+        ygfx__gl_drop_prog(gl, &gl->pipe[i]);
         if (gl->pipe[i].vao) gl->f.DeleteVertexArrays(1, &gl->pipe[i].vao);
     }
     memset(gl, 0, sizeof *gl);
@@ -4293,6 +4487,15 @@ static int ygfx__gl_pipeline_make(void* c, const ygfx_pipeline_src* d, uint32_t*
     p = &gl->pipe[slot];
     p->blend = d->blend;
     p->inst = d->instance_attr;
+    if (d->shared) {
+        /* the program's bindings are its own state: set at its link */
+        p->share = (ygfx__glshare*)d->shared;
+        p->share->refs++;
+        p->prog = p->share->prog;
+        gl->f.GenVertexArrays(1, &p->vao);
+        *id = (uint32_t)slot + 1;
+        return 2;
+    }
     if (d->binary && d->binary_size && gl->ProgramBinary) {
         ygfx__GLint ok = 0;
         p->prog = gl->f.CreateProgram();
@@ -4347,6 +4550,36 @@ static int ygfx__gl_pipeline_binary(void* c, uint32_t id, void* out, size_t cap,
     return got;
 }
 
+static void ygfx__gl_unshare(void* token, int gl_ok) {
+    ygfx__glshare* s = (ygfx__glshare*)token;
+    if (!s || --s->refs > 0) return;
+    if (gl_ok) s->del(s->prog);
+    free(s);
+}
+
+static int ygfx__gl_pipeline_share(void* c, uint32_t id, void** token) {
+    ygfx__gl* gl = (ygfx__gl*)c;
+    ygfx__glpipe* p;
+    if (id < 1 || id > YGFX__GL_PIPE || !gl->pipe[id - 1].prog || gl->pipe[id - 1].pending) return YGFX_ERR_ARG;
+    p = &gl->pipe[id - 1];
+    if (!p->share) {   /* the pipeline's own reference moves into the token */
+        p->share = (ygfx__glshare*)calloc(1, sizeof *p->share);
+        if (!p->share) return YGFX_ERR_FULL;
+        p->share->refs = 1;
+        p->share->prog = p->prog;
+        p->share->del = gl->f.DeleteProgram;
+    }
+    p->share->refs++;
+    *token = p->share;
+    return YGFX_OK;
+}
+
+/* A pipeline's program: its own, or its reference to a shared one. */
+static void ygfx__gl_drop_prog(ygfx__gl* gl, ygfx__glpipe* p) {
+    if (p->share) ygfx__gl_unshare(p->share, 1);
+    else if (p->prog) gl->f.DeleteProgram(p->prog);
+}
+
 static void ygfx__gl_pipeline_free(void* c, uint32_t id) {
     ygfx__gl* gl = (ygfx__gl*)c;
     ygfx__glpipe* p;
@@ -4354,7 +4587,7 @@ static void ygfx__gl_pipeline_free(void* c, uint32_t id) {
     p = &gl->pipe[id - 1];
     if (p->vs) gl->f.DeleteShader(p->vs);
     if (p->fs) gl->f.DeleteShader(p->fs);
-    if (p->prog) gl->f.DeleteProgram(p->prog);
+    ygfx__gl_drop_prog(gl, p);
     if (p->vao) gl->f.DeleteVertexArrays(1, &p->vao);
     memset(p, 0, sizeof *p);
     ygfx__gl_reset(gl);
@@ -4687,7 +4920,8 @@ static int ygfx__gl_capture_read(void* c, int slot, int x, int y, int w, int h) 
     ygfx__gl* gl = (ygfx__gl*)c;
     size_t len = (size_t)w * (size_t)h * 4;
     if (slot < 0 || slot >= gl->cap_n || gl->cap_sync[slot] || gl->cap_map[slot] || len > gl->cap_bytes) return YGFX_ERR_ARG;
-    if (gl->c_fbo != 0) { gl->f.BindFramebuffer(YGFX__GL_FRAMEBUFFER, 0); gl->c_fbo = 0; }
+    /* no bind: the output stage's pass bound its framebuffer just before
+     * (0, or the output texture's, v0.23) */
     gl->f.BindBuffer(YGFX__GL_PIXEL_PACK_BUFFER, gl->cap_buf[slot]);
     gl->f.PixelStorei(YGFX__GL_PACK_ALIGNMENT, 4);
     gl->f.ReadPixels(x, y, w, h, YGFX__GL_RGBA, YGFX__GL_UNSIGNED_BYTE, NULL);
@@ -4753,7 +4987,8 @@ static const ygfx_backend ygfx__gl_backend = {
     ygfx__gl_present, ygfx__gl_read, ygfx__gl_reset, ygfx__gl_pipeline_finish,
     ygfx__gl_pipeline_binary,
     ygfx__gl_capture_make, ygfx__gl_capture_read, ygfx__gl_capture_poll,
-    ygfx__gl_capture_unmap, ygfx__gl_capture_free, ygfx__gl_texture_native
+    ygfx__gl_capture_unmap, ygfx__gl_capture_free, ygfx__gl_texture_native,
+    ygfx__gl_pipeline_share, ygfx__gl_unshare
 };
 
 /* --- null backend: a screen without GL (SIM), and the interface's second
@@ -4868,7 +5103,7 @@ static const ygfx_backend ygfx__null_backend = {
     ygfx__null_pass_begin, ygfx__null_apply, ygfx__null_draw, ygfx__null_void,
     ygfx__null_void, ygfx__null_read, ygfx__null_void, NULL, NULL,
     ygfx__null_capture_make, ygfx__null_capture_read, ygfx__null_capture_poll,
-    ygfx__null_capture_unmap, ygfx__null_capture_free, NULL
+    ygfx__null_capture_unmap, ygfx__null_capture_free, NULL, NULL, NULL
 };
 
 typedef char ygfx__gl_fits[sizeof(ygfx__gl) <= sizeof(((ygfx_gfx*)0)->backend_mem) ? 1 : -1];
@@ -6526,6 +6761,402 @@ static uint64_t ygfx__fnv64(const void* data, size_t n) {
     return h.a;
 }
 
+/* A program's identity for SHARED PROGRAMS: its text, blend and instancing.
+ * The recorder (DEFERRED OPEN) computes the same from the recorded source. */
+static void ygfx__src_hash(const ygfx_pipeline_src* d, uint64_t* h1, uint64_t* h2) {
+    ygfx__h2 h;
+    int32_t k[2];
+    h.a = 0xCBF29CE484222325ull; h.b = 0x2545F4914F6CDD1Dull; h.n = 0;
+    ygfx__h2_str(&h, d->vs ? d->vs : "");
+    ygfx__h2_str(&h, d->fs ? d->fs : "");
+    k[0] = d->blend; k[1] = d->instance_attr;
+    ygfx__h2_add(&h, k, sizeof k);
+    *h1 = h.a; *h2 = h.b;
+}
+
+/* --- shared programs (SHARED PROGRAMS) ------------------------------------- */
+
+/* The programs of the gfx that share them, on one context. Each token holds
+ * one reference to its program, so the programs outlive the gfx that
+ * compiled them; the last gfx to leave drops the tokens. Joined, added to
+ * and left on the context's thread only. */
+#define YGFX__POOL_MAX 128
+typedef struct ygfx__pool {
+    int32_t              refs, n;
+    const ygfx_backend*  be;
+    uint64_t             h1[YGFX__POOL_MAX], h2[YGFX__POOL_MAX];
+    void*                token[YGFX__POOL_MAX];
+} ygfx__pool;
+
+static void* ygfx__pool_find(const ygfx__pool* p, uint64_t h1, uint64_t h2) {
+    int i;
+    if (!p) return NULL;
+    for (i = 0; i < p->n; i++) if (p->h1[i] == h1 && p->h2[i] == h2) return p->token[i];
+    return NULL;
+}
+
+static void ygfx__pool_put(ygfx__pool* p, const ygfx_backend* be, void* bctx, uint32_t id, uint64_t h1, uint64_t h2) {
+    void* t = NULL;
+    if (ygfx__pool_find(p, h1, h2) || p->n == YGFX__POOL_MAX) return;
+    if (be->pipeline_share(bctx, id, &t) < 0) return;
+    p->h1[p->n] = h1; p->h2[p->n] = h2; p->token[p->n] = t;
+    p->n++;
+}
+
+/* A finished program of this gfx: into its pool, or kept in ph until a
+ * pool asks (a gfx is a desc.share only when another one names it). */
+static void ygfx__pool_add(ygfx_gfx* g, uint32_t id, const ygfx__prec* r) {
+    if (!r->pool || !id) return;
+    if (g->pool) { ygfx__pool_put(g->pool, g->be, g->bctx, id, r->sh1, r->sh2); return; }
+    if (g->n_ph < YGFX__PH_MAX) {
+        g->ph[g->n_ph].id = id; g->ph[g->n_ph].h1 = r->sh1; g->ph[g->n_ph].h2 = r->sh2;
+        g->n_ph++;
+    }
+}
+
+static bool ygfx__can_share(const ygfx_backend* be) {
+    return be && be->version >= 6 && be->pipeline_share && be->pipeline_unshare;
+}
+
+/* g joins src's pool, made from src's programs at the first join; be is
+ * the backend g draws with (a deferred gfx's, once attached). */
+static int ygfx__pool_join(ygfx_gfx* g, ygfx_gfx* src, const ygfx_backend* be) {
+    int i;
+    if (!src->open || src->rec || src->be != be || !ygfx__can_share(be)) {
+        ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: desc.share must be an open, attached gfx of this backend with shared programs (version 6)");
+        return YGFX_ERR_ARG;
+    }
+    if (!src->pool) {
+        ygfx__pool* p = (ygfx__pool*)calloc(1, sizeof *p);
+        if (!p) { ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: out of memory"); return YGFX_ERR_FULL; }
+        p->refs = 1;
+        p->be = src->be;
+        for (i = 0; i < src->n_ph; i++) ygfx__pool_put(p, src->be, src->bctx, src->ph[i].id, src->ph[i].h1, src->ph[i].h2);
+        src->n_ph = 0;
+        src->pool = p;
+    }
+    src->pool->refs++;
+    g->pool = src->pool;
+    return YGFX_OK;
+}
+
+/* gl 0: the context is gone; the tokens' memory goes, no GL call. */
+static void ygfx__pool_leave(ygfx_gfx* g, int gl) {
+    ygfx__pool* p = g->pool;
+    int i;
+    g->pool = NULL;
+    if (!p || --p->refs > 0) return;
+    for (i = 0; i < p->n; i++) p->be->pipeline_unshare(p->token[i], gl);
+    free(p);
+}
+
+/* --- the calibration's check, once a process ------------------------------- */
+
+/* ycol_cal_check() derives the CLUT again from the readings (64 bisection
+ * steps for each of 3 x 4096 entries): 24 ms of every open's 29 on the
+ * Linux desktop (perf, docs/gfx.md "v0.23.0"). A calibration whose bytes
+ * passed it once passes again, so the bytes' 128-bit hash is kept. */
+#define YGFX__CAL_MEMO 8
+static uint64_t ygfx__cal_memo[YGFX__CAL_MEMO][2];
+static int ygfx__cal_memo_n;
+/* The process's one lock: the memo and the NOISE table's first build
+ * (two threads may open at once: the designer's check thread). */
+#if defined(_MSC_VER)
+#include <intrin.h>
+static volatile long ygfx__lock_word, ygfx__flag_word;
+static void ygfx__lock(void) { while (_InterlockedExchange(&ygfx__lock_word, 1)) {} }
+static void ygfx__unlock(void) { (void)_InterlockedExchange(&ygfx__lock_word, 0); }
+static int ygfx__flag_get(void) { return (int)_InterlockedCompareExchange(&ygfx__flag_word, 0, 0); }
+static void ygfx__flag_set(void) { (void)_InterlockedExchange(&ygfx__flag_word, 1); }
+#elif defined(__GNUC__) || defined(__clang__)
+static int ygfx__lock_word, ygfx__flag_word;
+static void ygfx__lock(void) { while (__atomic_exchange_n(&ygfx__lock_word, 1, __ATOMIC_ACQUIRE)) {} }
+static void ygfx__unlock(void) { __atomic_store_n(&ygfx__lock_word, 0, __ATOMIC_RELEASE); }
+static int ygfx__flag_get(void) { return __atomic_load_n(&ygfx__flag_word, __ATOMIC_ACQUIRE); }
+static void ygfx__flag_set(void) { __atomic_store_n(&ygfx__flag_word, 1, __ATOMIC_RELEASE); }
+#else
+#define YGFX__NO_LOCK 1   /* one thread: no memo, and the table as before */
+static void ygfx__lock(void) {}
+static void ygfx__unlock(void) {}
+static int ygfx__flag_word;
+static int ygfx__flag_get(void) { return ygfx__flag_word; }
+static void ygfx__flag_set(void) { ygfx__flag_word = 1; }
+#endif
+
+static int ygfx__cal_check(const ycol_cal* c, char* err, size_t cap) {
+    ygfx__h2 h;
+    int i, rc;
+    h.a = 0xCBF29CE484222325ull; h.b = 0x2545F4914F6CDD1Dull; h.n = 0;
+    ygfx__h2_add(&h, c, sizeof *c);
+#if defined(YGFX__NO_LOCK)
+    (void)i;
+#else
+    ygfx__lock();
+    for (i = 0; i < ygfx__cal_memo_n; i++)
+        if (ygfx__cal_memo[i][0] == h.a && ygfx__cal_memo[i][1] == h.b) { ygfx__unlock(); return YCOL_OK; }
+    ygfx__unlock();
+#endif
+    rc = ycol_cal_check(c, err, cap);
+    if (rc < 0) return rc;
+#if !defined(YGFX__NO_LOCK)
+    ygfx__lock();
+    i = ygfx__cal_memo_n < YGFX__CAL_MEMO ? ygfx__cal_memo_n++ : (int)(h.a % YGFX__CAL_MEMO);
+    ygfx__cal_memo[i][0] = h.a;
+    ygfx__cal_memo[i][1] = h.b;
+    ygfx__unlock();
+#endif
+    return rc;
+}
+
+/* Frames, setup passes, reads and GL names wait for ygfx_attach(). */
+static int ygfx__unattached(ygfx_gfx* g) {
+    if (!g || !g->rec) return 0;
+    ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: a deferred open draws, reads and names nothing before ygfx_attach() completes");
+    return 1;
+}
+
+/* --- the recorder (DEFERRED OPEN) ------------------------------------------ */
+
+/* A backend that makes no GL call: it gives each object the id the GL
+ * backend will give it (the same first free slot), and keeps each call
+ * with a copy of its data for ygfx_attach() to make in order. */
+enum { YGFX__OP_PMAKE = 1, YGFX__OP_PFIN, YGFX__OP_PFREE, YGFX__OP_TMAKE, YGFX__OP_TUPD, YGFX__OP_TFREE,
+       YGFX__OP_BMAKE, YGFX__OP_BUPD, YGFX__OP_BFREE };
+
+typedef struct ygfx__op {
+    int32_t           kind, pool;     /* pool: a header program (SHARED PROGRAMS) */
+    uint32_t          id;
+    int32_t           x, y, w, h;     /* TUPD's rectangle                        */
+    size_t            off, n;         /* BMAKE: n bytes, x the kind; BUPD        */
+    void*             data;           /* the copy; freed once made                */
+    char*             vs;             /* PMAKE: vs and fs, one block              */
+    ygfx_pipeline_src ps;
+    ygfx_texture_src  ts;
+    uint64_t          h1, h2;
+} ygfx__op;
+
+/* The upload of a large texture goes in bands of rows, one band a step:
+ * a 4096 x 4096 RGBA8 upload took 5.4 ms (RX 6600) and 21.6 ms (llvmpipe)
+ * as one call. ygfx__test_bands counts them for the test. */
+#define YGFX__BAND_BYTES ((size_t)4 << 20)
+static int ygfx__test_bands = 0;
+
+typedef struct ygfx__rec {
+    ygfx_gfx*          g;
+    ygfx_backend_caps  caps;          /* desc.gl_caps                             */
+    ygfx__op*          ops;
+    int32_t            n, cap, next;  /* next: the attach's next call            */
+    int32_t            band_row;      /* rows of ops[next] made, in bands          */
+    int32_t            bad;           /* a draw or a read: the gfx refused it      */
+    uint8_t            pipe[YGFX__GL_PIPE], buf[YGFX__GL_BUF], tex[YGFX__GL_TEX];
+    int32_t            tex_fmt[YGFX__GL_TEX];
+    /* the attach */
+    int32_t            stage;         /* 0 none, 1 making, 2 priming, < 0 failed  */
+    int32_t            gl_open;       /* the GL backend is open in backend_mem   */
+    uint8_t            p_shared[YGFX__GL_PIPE], p_pool[YGFX__GL_PIPE];
+    uint64_t           p_h1[YGFX__GL_PIPE], p_h2[YGFX__GL_PIPE];
+    int32_t            prime_k, prime_n;
+    uint32_t           prime_ids[YGFX__N_BUILTIN * 2 + YGFX__N_VSPEC + 16 + 2 * YGFX_MAX_PIPELINES];
+    unsigned char      prime_inst[YGFX__N_BUILTIN * 2 + YGFX__N_VSPEC + 16 + 2 * YGFX_MAX_PIPELINES];
+} ygfx__rec;
+
+static ygfx__op* ygfx__rec_op(ygfx__rec* r, int kind, uint32_t id) {
+    ygfx__op* o;
+    if (r->n == r->cap) {
+        int nc = r->cap ? r->cap * 2 : 64;
+        ygfx__op* no = (ygfx__op*)realloc(r->ops, (size_t)nc * sizeof *no);
+        if (!no) return NULL;
+        r->ops = no;
+        r->cap = nc;
+    }
+    o = &r->ops[r->n++];
+    memset(o, 0, sizeof *o);
+    o->kind = kind;
+    o->id = id;
+    return o;
+}
+
+/* rows h of w texels, tight, from data at stride (0 = tight) */
+static void* ygfx__rec_copy(const void* data, int w, int h, int bpp, size_t stride) {
+    size_t row = (size_t)w * (size_t)bpp, y;
+    unsigned char* out;
+    if (!data || w <= 0 || h <= 0 || bpp <= 0) return NULL;
+    out = (unsigned char*)malloc(row * (size_t)h);
+    if (!out) return NULL;
+    if (!stride) stride = row;
+    for (y = 0; y < (size_t)h; y++) memcpy(out + y * row, (const unsigned char*)data + y * stride, row);
+    return out;
+}
+
+static int ygfx__rec_open(void* c, const ygfx_backend_open* in, ygfx_backend_caps* caps, char* err, size_t cap) {
+    ygfx__rec* r = (ygfx__rec*)c;
+    (void)in; (void)err; (void)cap;
+    *caps = r->caps;
+    return YGFX_OK;
+}
+
+static void ygfx__rec_free_ops(ygfx__rec* r) {
+    int i;
+    for (i = 0; i < r->n; i++) { free(r->ops[i].data); free(r->ops[i].vs); }
+    free(r->ops);
+    r->ops = NULL;
+    r->n = r->cap = r->next = 0;
+}
+
+static void ygfx__rec_close(void* c) { ygfx__rec_free_ops((ygfx__rec*)c); }
+
+static int ygfx__rec_pipeline_make(void* c, const ygfx_pipeline_src* d, uint32_t* id, char* err, size_t cap) {
+    ygfx__rec* r = (ygfx__rec*)c;
+    ygfx__op* o;
+    size_t nv, nf;
+    int slot;
+    (void)err; (void)cap;
+    for (slot = 0; slot < YGFX__GL_PIPE && r->pipe[slot]; slot++) {}
+    if (slot == YGFX__GL_PIPE || d->shared) return YGFX_ERR_FULL;
+    o = ygfx__rec_op(r, YGFX__OP_PMAKE, (uint32_t)slot + 1);
+    if (!o) return YGFX_ERR_FULL;
+    nv = strlen(d->vs) + 1;
+    nf = strlen(d->fs) + 1;
+    o->vs = (char*)malloc(nv + nf);
+    if (d->binary && d->binary_size) {
+        o->data = malloc(d->binary_size);
+        if (o->data) memcpy(o->data, d->binary, d->binary_size);
+    }
+    if (!o->vs || (d->binary && d->binary_size && !o->data)) { free(o->vs); free(o->data); r->n--; return YGFX_ERR_FULL; }
+    memcpy(o->vs, d->vs, nv);
+    memcpy(o->vs + nv, d->fs, nf);
+    o->ps = *d;
+    o->ps.vs = o->vs;
+    o->ps.fs = o->vs + nv;
+    o->ps.binary = o->data;
+    ygfx__src_hash(d, &o->h1, &o->h2);
+    o->pool = !r->g->user_build;
+    r->pipe[slot] = 1;
+    *id = (uint32_t)slot + 1;
+    return YGFX_OK;
+}
+
+static int ygfx__rec_pipeline_finish(void* c, uint32_t id, char* err, size_t cap) {
+    (void)err; (void)cap;
+    return ygfx__rec_op((ygfx__rec*)c, YGFX__OP_PFIN, id) ? YGFX_OK : YGFX_ERR_FULL;
+}
+
+static void ygfx__rec_pipeline_free(void* c, uint32_t id) {
+    ygfx__rec* r = (ygfx__rec*)c;
+    if (id < 1 || id > YGFX__GL_PIPE || !r->pipe[id - 1]) return;
+    if (!ygfx__rec_op(r, YGFX__OP_PFREE, id)) { r->bad = 1; return; }
+    r->pipe[id - 1] = 0;
+}
+
+/* a deferred open stores no binary: nothing has been compiled */
+static int ygfx__rec_pipeline_binary(void* c, uint32_t id, void* out, size_t cap, uint32_t* format) {
+    (void)c; (void)id; (void)out; (void)cap; (void)format;
+    return -1;
+}
+
+static int ygfx__rec_texture_make(void* c, const ygfx_texture_src* d, uint32_t* id) {
+    ygfx__rec* r = (ygfx__rec*)c;
+    ygfx__op* o;
+    int slot, bpp = ygfx__texel_bytes(d->format);
+    for (slot = 0; slot < YGFX__GL_TEX && r->tex[slot]; slot++) {}
+    if (slot == YGFX__GL_TEX) return YGFX_ERR_FULL;
+    o = ygfx__rec_op(r, YGFX__OP_TMAKE, (uint32_t)slot + 1);
+    if (!o) return YGFX_ERR_FULL;
+    o->ts = *d;
+    if (d->data) {
+        o->data = ygfx__rec_copy(d->data, d->w, d->h, bpp, d->stride);
+        if (!o->data) { r->n--; return YGFX_ERR_FULL; }
+        o->ts.data = o->data;
+        o->ts.stride = (size_t)d->w * (size_t)bpp;
+    }
+    r->tex[slot] = 1;
+    r->tex_fmt[slot] = (int32_t)d->format;
+    *id = (uint32_t)slot + 1;
+    return YGFX_OK;
+}
+
+static int ygfx__rec_texture_update(void* c, uint32_t id, int x, int y, int w, int h, const void* data, size_t stride) {
+    ygfx__rec* r = (ygfx__rec*)c;
+    ygfx__op* o;
+    if (id < 1 || id > YGFX__GL_TEX || !r->tex[id - 1]) return YGFX_ERR_ARG;
+    o = ygfx__rec_op(r, YGFX__OP_TUPD, id);
+    if (!o) return YGFX_ERR_FULL;
+    o->data = ygfx__rec_copy(data, w, h, ygfx__texel_bytes((ygfx_format)r->tex_fmt[id - 1]), stride);
+    if (!o->data) { r->n--; return YGFX_ERR_FULL; }
+    o->x = x; o->y = y; o->w = w; o->h = h;
+    return YGFX_OK;
+}
+
+static void ygfx__rec_texture_free(void* c, uint32_t id) {
+    ygfx__rec* r = (ygfx__rec*)c;
+    if (id < 1 || id > YGFX__GL_TEX || !r->tex[id - 1]) return;
+    if (!ygfx__rec_op(r, YGFX__OP_TFREE, id)) { r->bad = 1; return; }
+    r->tex[id - 1] = 0;
+}
+
+static int ygfx__rec_buffer_make(void* c, int kind, size_t bytes, uint32_t* id) {
+    ygfx__rec* r = (ygfx__rec*)c;
+    ygfx__op* o;
+    int slot;
+    for (slot = 0; slot < YGFX__GL_BUF && r->buf[slot]; slot++) {}
+    if (slot == YGFX__GL_BUF) return YGFX_ERR_FULL;
+    o = ygfx__rec_op(r, YGFX__OP_BMAKE, (uint32_t)slot + 1);
+    if (!o) return YGFX_ERR_FULL;
+    o->x = kind;
+    o->n = bytes;
+    r->buf[slot] = 1;
+    *id = (uint32_t)slot + 1;
+    return YGFX_OK;
+}
+
+static int ygfx__rec_buffer_update(void* c, uint32_t id, size_t off, const void* data, size_t n) {
+    ygfx__rec* r = (ygfx__rec*)c;
+    ygfx__op* o;
+    if (id < 1 || id > YGFX__GL_BUF || !r->buf[id - 1] || !data || !n) return YGFX_ERR_ARG;
+    o = ygfx__rec_op(r, YGFX__OP_BUPD, id);
+    if (!o) return YGFX_ERR_FULL;
+    o->data = malloc(n);
+    if (!o->data) { r->n--; return YGFX_ERR_FULL; }
+    memcpy(o->data, data, n);
+    o->off = off;
+    o->n = n;
+    return YGFX_OK;
+}
+
+static void ygfx__rec_buffer_free(void* c, uint32_t id) {
+    ygfx__rec* r = (ygfx__rec*)c;
+    if (id < 1 || id > YGFX__GL_BUF || !r->buf[id - 1]) return;
+    if (!ygfx__rec_op(r, YGFX__OP_BFREE, id)) { r->bad = 1; return; }
+    r->buf[id - 1] = 0;
+}
+
+/* The core refuses frames, setup passes and reads before the attach; a
+ * call that gets here anyway fails the attach rather than draw nothing. */
+static void ygfx__rec_pass_begin(void* c, uint32_t t, int w, int h, const float* cl) { (void)t; (void)w; (void)h; (void)cl; ((ygfx__rec*)c)->bad = 1; }
+static void ygfx__rec_apply(void* c, const ygfx_bindings* b) { (void)b; ((ygfx__rec*)c)->bad = 1; }
+static void ygfx__rec_draw(void* c, int v, int i) { (void)v; (void)i; ((ygfx__rec*)c)->bad = 1; }
+static void ygfx__rec_void(void* c) { (void)c; }
+static int ygfx__rec_read(void* c, uint32_t t, int x, int y, int w, int h, int f, void* out) {
+    (void)c; (void)t; (void)x; (void)y; (void)w; (void)h; (void)f; (void)out;
+    return YGFX_ERR_ORDER;
+}
+static int ygfx__rec_texture_native(void* c, uint32_t id, uint32_t* name, uint32_t* format) {
+    (void)c; (void)id; (void)name; (void)format;
+    return YGFX_ERR_ORDER;
+}
+
+static const ygfx_backend ygfx__rec_backend = {
+    YGFX_BACKEND_VERSION, "deferred",
+    ygfx__rec_open, ygfx__rec_close, ygfx__rec_pipeline_make, ygfx__rec_pipeline_free,
+    ygfx__rec_texture_make, ygfx__rec_texture_update, ygfx__rec_texture_free,
+    ygfx__rec_buffer_make, ygfx__rec_buffer_update, ygfx__rec_buffer_free,
+    ygfx__rec_pass_begin, ygfx__rec_apply, ygfx__rec_draw, ygfx__rec_void,
+    ygfx__rec_void, ygfx__rec_read, ygfx__rec_void, ygfx__rec_pipeline_finish,
+    ygfx__rec_pipeline_binary,
+    NULL, NULL, NULL, NULL, NULL, ygfx__rec_texture_native,
+    NULL, NULL
+};
+
 /* What a build left to store once its program is finished. */
 static void ygfx__prog_store2(ygfx_gfx* g, uint32_t id, const ygfx__prec* r) {
     ygfx__prog_head h;
@@ -6553,7 +7184,7 @@ static void ygfx__prog_store2(ygfx_gfx* g, uint32_t id, const ygfx__prec* r) {
 
 static void ygfx__prog_store(ygfx_gfx* g, uint32_t id, const ygfx__prec* r) {
     int64_t t0;
-    if (!r->store || !id) return;
+    if (!r->store || !id || g->rec) return;   /* deferred: nothing compiled yet */
     t0 = yrt_real_ns();
     ygfx__prog_store2(g, id, r);
     g->progs.store_ns += yrt_real_ns() - t0;
@@ -6574,6 +7205,17 @@ static int ygfx__build(ygfx_gfx* g, const char* vs, const char* fs, int blend, i
     src.blend = blend;
     src.instance_attr = inst;
     src.deferred = deferred && g->be->pipeline_finish ? 1 : 0;
+    ygfx__src_hash(&src, &r->sh1, &r->sh2);
+    r->pool = !g->user_build;
+    if (r->pool && g->pool) {   /* SHARED PROGRAMS: no compile, no cache */
+        src.shared = ygfx__pool_find(g->pool, r->sh1, r->sh2);
+        if (src.shared) {
+            rc = g->be->pipeline_make(g->bctx, &src, id, g->error, sizeof g->error);
+            r->pool = 0;
+            if (rc >= 0) { g->progs.shared++; return YGFX_OK; }
+            return rc;
+        }
+    }
     if (g->cache && g->cache->load && g->cache->store && g->caps.binary_format && g->be->pipeline_binary) {
         ygfx__h2 h;
         size_t n;
@@ -6612,13 +7254,19 @@ static int ygfx__build(ygfx_gfx* g, const char* vs, const char* fs, int blend, i
     }
     rc = g->be->pipeline_make(g->bctx, &src, id, g->error, sizeof g->error);
     free(buf);
-    if (rc == 1) { g->progs.loaded++; r->store = 0; return YGFX_OK; }
-    if (rc < 0) { r->store = 0; return rc; }
-    g->progs.compiled++;
-    if (had) g->progs.rejected++;
-    if (!src.deferred) ygfx__prog_store(g, *id, r);   /* finished already */
-    if (!src.deferred) r->store = 0;
-    return rc;
+    if (rc < 0) { r->store = 0; r->pool = 0; return rc; }
+    if (rc == 1) { g->progs.loaded++; r->store = 0; }
+    else {
+        g->progs.compiled++;
+        if (had) g->progs.rejected++;
+    }
+    if (!src.deferred) {   /* finished already */
+        ygfx__prog_store(g, *id, r);
+        ygfx__pool_add(g, *id, r);
+        r->store = 0;
+        r->pool = 0;
+    }
+    return YGFX_OK;
 }
 
 /* mode below 0: the body has its own main and blends OVER. */
@@ -6846,7 +7494,7 @@ static bool ygfx__open_a(ygfx_gfx* g, const ygfx_desc* d) {
     }
     if (d->cal) {
         char e[200];
-        if (ycol_cal_check(d->cal, e, sizeof e) < 0) {
+        if (ygfx__cal_check(d->cal, e, sizeof e) < 0) {
             ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: calibration: %s", e);
             return false;
         }
@@ -6870,7 +7518,7 @@ static bool ygfx__open_a(ygfx_gfx* g, const ygfx_desc* d) {
             in.gl_proc = (yscr_proc (*)(void*, const char*))yscr_gl_proc;
             in.gl_ctx = d->screen;
         }
-    } else if (d->gl_proc) {
+    } else if (d->gl_proc || d->defer) {
         in.gl_proc = d->gl_proc;
         in.gl_ctx = d->gl_ctx;
         g->w = d->width; g->h = d->height;
@@ -6880,9 +7528,30 @@ static bool ygfx__open_a(ygfx_gfx* g, const ygfx_desc* d) {
     }
     if (d->rows == YGFX_ROWS_BOTTOM_UP) g->origin_top = 0;
     if (d->rows == YGFX_ROWS_TOP_DOWN) g->origin_top = 1;
+    if (d->output_texture && d->screen) {
+        ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: desc.output_texture is for a headless gfx (desc.gl_proc), not a screen");
+        return false;
+    }
+    /* GL's rows, as a sampler reads them: a host draws the texture turned */
+    if (d->output_texture && d->rows == YGFX_ROWS_TOP_DOWN) {
+        ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: desc.output_texture holds rows bottom first; desc.rows TOP_DOWN is refused");
+        return false;
+    }
     if (g->w <= 0 || g->h <= 0) { ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: no framebuffer size"); return false; }
     in.w = g->w; in.h = g->h;
-    if (d->backend) { g->be = d->backend; g->bctx = d->backend_ctx; }
+    if (d->defer) {
+        if (d->screen || d->backend || !d->gl_caps || d->gl_caps->bytes != (uint32_t)sizeof(ygfx_gl_caps)) {
+            ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: desc.defer needs desc.gl_caps (ygfx_gl_caps_get()), no screen and the built-in backend");
+            return false;
+        }
+        g->rec = (ygfx__rec*)calloc(1, sizeof *g->rec);
+        if (!g->rec) { ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: out of memory"); return false; }
+        g->rec->g = g;
+        g->rec->caps = d->gl_caps->caps;
+        g->be = &ygfx__rec_backend; g->bctx = g->rec;
+        g->share = d->share;   /* read at the attach, on the context's thread */
+    }
+    else if (d->backend) { g->be = d->backend; g->bctx = d->backend_ctx; }
     else if (in.gl_proc) { g->be = &ygfx__gl_backend; g->bctx = g->backend_mem; }
     else { g->be = &ygfx__null_backend; g->bctx = g->backend_mem; }
     /* a version 3 table ends before the capture calls: CAPTURE checks */
@@ -6891,8 +7560,20 @@ static bool ygfx__open_a(ygfx_gfx* g, const ygfx_desc* d) {
         return false;
     }
     rc = g->be->open(g->bctx, &in, &g->caps, g->error, sizeof g->error);
-    if (rc < 0) { if (!g->error[0]) ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: backend open failed"); return false; }
+    if (rc < 0) {
+        if (!g->error[0]) ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: backend open failed");
+        free(g->rec);
+        g->rec = NULL;
+        return false;
+    }
     g->open = 1;   /* from here ygfx_close() undoes what was made */
+    if (d->share && !d->defer && ygfx__pool_join(g, d->share, g->be) < 0) {
+        char keep[sizeof g->error];
+        memcpy(keep, g->error, sizeof keep);
+        ygfx_close(g);
+        memcpy(g->error, keep, sizeof keep);
+        return false;
+    }
     g->features = (g->caps.features & (YGFX_FEAT_IMPORT_GL | YGFX_FEAT_IMPORT_D3D11 | YGFX_FEAT_IMPORT_NV12)) | YGFX_FEAT_PLANAR | YGFX_FEAT_INSTANCES |
                   (g->caps.binary_format && g->be->pipeline_binary ? YGFX_FEAT_PROGRAM_CACHE : 0u);
 #if defined(YSCR_HAS_GL_EPOCH)
@@ -6953,6 +7634,20 @@ static bool ygfx__open_b(ygfx_gfx* g, const ygfx_desc* d) {
     for (i = 0; i < YGFX__UBO_RING; i++) {
         if (g->be->buffer_make(g->bctx, YGFX_BUFFER_UNIFORM, g->ubo_bytes, &g->ubo[i]) < 0) {
             ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: uniform buffer of %u bytes", g->ubo_bytes);
+            goto fail;
+        }
+    }
+    if (d->output_texture) {
+        int maxt = g->caps.max_texture > 0 ? g->caps.max_texture : 2048;
+        if (g->w > maxt || g->h > maxt) {
+            ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: output texture %dx%d over GL_MAX_TEXTURE_SIZE %d", g->w, g->h, maxt);
+            goto fail;
+        }
+        memset(&ts, 0, sizeof ts);
+        ts.w = g->w; ts.h = g->h; ts.format = YGFX_RGBA8; ts.target = true;
+        if (g->be->texture_make(g->bctx, &ts, &g->out_target) < 0) {
+            g->out_target = 0;
+            ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: output texture %dx%d", g->w, g->h);
             goto fail;
         }
     }
@@ -7069,9 +7764,10 @@ static bool ygfx__open_c(ygfx_gfx* g, const ygfx_desc* d, int64_t t_start) {
         }
         if (g->be->pipeline_finish(g->bctx, g->output_pipe, g->error, sizeof g->error) < 0) { g->output_pipe = 0; goto fail; }
     }
-    for (i = 0; i < YGFX__N_VSPEC; i++) ygfx__prog_store(g, g->vspec[i], &g->vprec[i]);
-    for (i = 0; i < YGFX__N_BUILTIN; i++) ygfx__prog_store(g, g->builtin[i], &g->prec[i]);
+    for (i = 0; i < YGFX__N_VSPEC; i++) { ygfx__prog_store(g, g->vspec[i], &g->vprec[i]); ygfx__pool_add(g, g->vspec[i], &g->vprec[i]); }
+    for (i = 0; i < YGFX__N_BUILTIN; i++) { ygfx__prog_store(g, g->builtin[i], &g->prec[i]); ygfx__pool_add(g, g->builtin[i], &g->prec[i]); }
     ygfx__prog_store(g, g->output_pipe, &g->prec[YGFX__N_BUILTIN]);
+    ygfx__pool_add(g, g->output_pipe, &g->prec[YGFX__N_BUILTIN]);
     g->be->reset(g->bctx);
     g->error[0] = '\0';
     {
@@ -7124,6 +7820,11 @@ YGFX_API bool ygfx_open(ygfx_gfx* g, const ygfx_desc* d) {
 YGFX_API bool ygfx_open_start(ygfx_gfx* g, const ygfx_desc* d) {
     int64_t t_start = yrt_real_ns();
     if (!g) return false;
+    if (d && d->defer) {
+        if (!g->open && !g->started) memset(g, 0, sizeof *g);
+        ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: desc.defer: open with ygfx_open(); it makes no GL call to overlap");
+        return false;
+    }
     if (!ygfx__open_a(g, d)) return false;
     g->sdesc = *d;
     if (g->caps.parallel_compile) {
@@ -7143,9 +7844,19 @@ static void ygfx__cap_records(struct ygfx__cap* c, const yscr_frame* f);
 static void ygfx__cap_frame(ygfx_gfx* g);
 
 YGFX_API void ygfx_close(ygfx_gfx* g) {
+    int gone = 0;
     if (!g) return;
+    if (g->rec) {
+        /* DEFERRED OPEN: the copies go; GL objects only when an attach
+         * began, and then on this thread, the context's */
+        ygfx__rec* r = g->rec;
+        ygfx__rec_free_ops(r);
+        if (r->gl_open) { g->be = &ygfx__gl_backend; g->bctx = g->backend_mem; }
+        else if (g->be == &ygfx__rec_backend) g->be = NULL;
+        free(r);
+        g->rec = NULL;
+    }
     if ((g->open || g->started) && g->be) {
-        int gone = 0;
 #if defined(YSCR_HAS_GL_EPOCH)
         /* a screen that closed (yscr_open() failed after the hook) took
          * the context and every object with it */
@@ -7158,6 +7869,7 @@ YGFX_API void ygfx_close(ygfx_gfx* g) {
         }
     }
     if (g->cap) ygfx__cap_stop(g, 0, NULL);   /* a lost context closed the handle */
+    ygfx__pool_leave(g, !gone);   /* after the close: its pipelines dropped theirs */
     free(g->staging);
     free(g->cmds);
     free(g->staging2);
@@ -7199,11 +7911,11 @@ YGFX_API int ygfx_describe(const ygfx_gfx* g, char* buf, size_t cap) {
     if (g->cache && g->cache->load == ygfx__fc_load) where = ((const ygfx_file_cache*)g->cache->user)->dir;
     else if (g->cache) where = "(caller)";
     if (g->cache && (!g->caps.binary_format || !g->be->pipeline_binary)) unused = " (unused: no binary format)";
-    return snprintf(buf, cap, "ysp_gfx %s: %s, %s, %dx%d, scene %s, CLUT %d%s, dither %s, %.4g px/unit, origin %s, program cache %s%s: %u hit / %u miss (%u rejected)%s",
+    return snprintf(buf, cap, "ysp_gfx %s: %s, %s, %dx%d, scene %s, CLUT %d%s, dither %s, %.4g px/unit, origin %s%s, program cache %s%s: %u hit / %u miss (%u rejected)%s",
                     YGFX_VERSION_STRING, g->be->name, g->caps.renderer, g->w, g->h,
                     g->scene_format == YGFX_RGBA32F ? "RGBA32F" : "RGBA16F", g->lut_n,
                     g->cal_crc ? " (calibration)" : " (identity)", dith[g->dither <= 2 ? g->dither : 0],
-                    (double)g->ppu, g->origin_top ? "top" : "bottom", where, unused,
+                    (double)g->ppu, g->origin_top ? "top" : "bottom", g->out_target ? ", output texture" : "", where, unused,
                     g->progs.loaded, g->progs.compiled, g->progs.rejected,
                     g->start_mode == YGFX__START_PARALLEL ? ", open_start=parallel"
                     : g->start_mode == YGFX__START_SERIAL ? ", open_start=serial(no GL_KHR_parallel_shader_compile)" : "");
@@ -7339,6 +8051,35 @@ YGFX_API int ygfx_default_cache_dir(char* out, size_t cap) {
 
 YGFX_API void ygfx_reset_state(ygfx_gfx* g) {
     if (g && g->open) g->be->reset(g->bctx);
+}
+
+YGFX_API int ygfx_gl_caps_get(const ygfx_gfx* g, ygfx_gl_caps* out) {
+    if (out) memset(out, 0, sizeof *out);
+    if (!g || !g->open || g->rec || g->be != &ygfx__gl_backend || !out) return YGFX_ERR_ARG;
+    out->bytes = (uint32_t)sizeof *out;
+    out->caps = g->caps;
+    return YGFX_OK;
+}
+
+YGFX_API int ygfx_output_native(ygfx_gfx* g, ygfx_native* out) {
+    int rc;
+    if (out) memset(out, 0, sizeof *out);
+    if (!g || !g->open) return YGFX_ERR_CLOSED;
+    if (ygfx__unattached(g)) return YGFX_ERR_ORDER;
+    if (!out || !g->out_target) {
+        ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: output_native: %s", out ? "no output texture (desc.output_texture)" : "out is NULL");
+        return YGFX_ERR_ARG;
+    }
+    if (g->be->version < 5 || g->be->texture_native == NULL) {   /* a version 4 table has no member */
+        ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: backend %s gives no GL names (version 5, texture_native)", g->be->name);
+        return YGFX_ERR_NOT_IMPLEMENTED;
+    }
+    rc = g->be->texture_native(g->bctx, g->out_target, &out->gl_name, &out->gl_format);
+    if (rc < 0) {
+        memset(out, 0, sizeof *out);
+        ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: output_native: the backend has no name for the output texture");
+    }
+    return rc;
 }
 
 /* --- stimuli ---------------------------------------------------------------- */
@@ -7649,6 +8390,7 @@ static int ygfx__begin(ygfx_gfx* g, const yscr_frame* f) {
     int32_t* fi;
     YRT_ZONE(z, "ygfx.begin");
     if (!g || !g->open) { YRT_ZONE_END(z); return YGFX_ERR_CLOSED; }
+    if (ygfx__unattached(g)) { YRT_ZONE_END(z); return YGFX_ERR_ORDER; }
     if (g->in_frame) { YRT_ZONE_END(z); return YGFX_ERR_ORDER; }
     if (!f) { YRT_ZONE_END(z); return YGFX_ERR_ARG; }
     g->frame = *f;
@@ -8524,7 +9266,7 @@ static int ygfx__inst_program(ygfx_gfx* g, uint32_t pipe) {
     ygfx__prec r;
     char defs[160];
     char* body = NULL;
-    int mode, rc, i;
+    int mode, rc, i, user = 0;
     if (!slot) return YGFX_ERR_ARG;
     if (*slot) return YGFX_OK;
     for (i = 0; i < YGFX__N_BUILTIN && g->builtin[i] != pipe; i++) {}
@@ -8548,6 +9290,7 @@ static int ygfx__inst_program(ygfx_gfx* g, uint32_t pipe) {
     } else {
         for (i = 0; i < YGFX_MAX_PIPELINES && !(g->pipe[i].used && g->pipe[i].bid == pipe); i++) {}
         if (i == YGFX_MAX_PIPELINES || !g->pipe_body[i]) return YGFX_ERR_FULL;
+        user = 1;
         mode = g->pipe[i].flags;
         body = (char*)malloc(strlen(g->pipe_body[i]) + 1);
         if (body) memcpy(body, g->pipe_body[i], strlen(g->pipe_body[i]) + 1);
@@ -8555,7 +9298,9 @@ static int ygfx__inst_program(ygfx_gfx* g, uint32_t pipe) {
                  mode == YGFX_MODULATION ? "#define YSP_INST_MOD 1\n" : "");
     }
     if (!body) return YGFX_ERR_FULL;
+    g->user_build = user;
     rc = ygfx__make_pipe(g, defs, body, mode, 2, 0, slot, "instanced", &r);
+    g->user_build = 0;
     free(body);
     g->be->reset(g->bctx);
     return rc < 0 ? rc : YGFX_OK;
@@ -8972,6 +9717,7 @@ static int ygfx__begin_setup(ygfx_gfx* g) {
     yscr_frame f;
     int rc;
     if (!g || !g->open) return YGFX_ERR_CLOSED;
+    if (ygfx__unattached(g)) return YGFX_ERR_ORDER;
     if (g->in_frame) {
         ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: begin_setup inside a frame or a setup pass");
         return YGFX_ERR_ORDER;
@@ -9005,6 +9751,15 @@ static int ygfx__end_frame(ygfx_gfx* g) {
 /* setup 1: the target passes only; the scene's segments (empty: draws
  * there are refused), the output stage, the present, the frame count and
  * the clipped event belong to frames. */
+/* OUTPUT TEXTURE: framebuffer 0 again after a pass into the output texture,
+ * so the host's next draw (ImGui draws into whatever is bound) never lands
+ * in it. Without one, the output stage itself left framebuffer 0 bound. */
+static void ygfx__fb0(ygfx_gfx* g) {
+    if (!g->out_target) return;
+    g->be->pass_begin(g->bctx, 0, g->w, g->h, NULL);
+    g->be->pass_end(g->bctx);
+}
+
 static int ygfx__end(ygfx_gfx* g, int setup) {
     ygfx_bindings bd;
     uint32_t ubo;
@@ -9071,7 +9826,7 @@ static int ygfx__end(ygfx_gfx* g, int setup) {
     }
     {
         YRT_ZONE(zo, "ygfx.output");
-        g->be->pass_begin(g->bctx, 0, g->w, g->h, NULL);
+        g->be->pass_begin(g->bctx, g->out_target, g->w, g->h, NULL);
         memset(&bd, 0, sizeof bd);
         bd.pipeline = g->output_pipe;
         bd.ubo = ubo;
@@ -9088,6 +9843,7 @@ static int ygfx__end(ygfx_gfx* g, int setup) {
         ygfx__cap_frame(g);
         YRT_ZONE_END(zc);
     }
+    ygfx__fb0(g);
     g->be->present(g->bctx);
     g->frames++;
     if (g->clipped) {
@@ -9100,19 +9856,9 @@ static int ygfx__end(ygfx_gfx* g, int setup) {
 
 /* PRIME. Zero-size quads: the stim block is zeros, so no fragment runs and
  * no shader loops over data, but each program is bound and drawn once. */
-static int ygfx__prime(ygfx_gfx* g) {
-    ygfx_bindings bd;
-    uint32_t ids[YGFX__N_BUILTIN * 2 + YGFX__N_VSPEC + 16 + 2 * YGFX_MAX_PIPELINES];
-    unsigned char inst[sizeof ids / sizeof ids[0]];
-    int n = 0, i, rc;
-    float px[4];
-    if (!g || !g->open) return YGFX_ERR_CLOSED;
-    if (g->in_frame) {
-        ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: prime inside a frame or a setup pass");
-        return YGFX_ERR_ORDER;
-    }
-    if (g->screen) yscr_bind(g->screen);
-    if (ygfx__sync(g) < 0) return YGFX_ERR_LOST;
+#define YGFX__PRIME_MAX (YGFX__N_BUILTIN * 2 + YGFX__N_VSPEC + 16 + 2 * YGFX_MAX_PIPELINES)
+static int ygfx__prime_list(const ygfx_gfx* g, uint32_t* ids, unsigned char* inst) {
+    int n = 0, i;
     for (i = 0; i < YGFX__N_BUILTIN; i++) if (g->builtin[i]) { inst[n] = 0; ids[n++] = g->builtin[i]; }
     for (i = 0; i < YGFX__N_VSPEC; i++) if (g->vspec[i]) { inst[n] = 0; ids[n++] = g->vspec[i]; }
     for (i = 0; i < YGFX__N_BUILTIN + 5; i++) if (g->inst_pipe[i]) { inst[n] = 1; ids[n++] = g->inst_pipe[i]; }
@@ -9126,36 +9872,254 @@ static int ygfx__prime(ygfx_gfx* g) {
         if (g->pipe[i].used && g->pipe[i].bid) { inst[n] = 0; ids[n++] = g->pipe[i].bid; }
         if (g->pipe_inst[i]) { inst[n] = 1; ids[n++] = g->pipe_inst[i]; }
     }
+    return n;
+}
+
+/* The zeros of the frame and stim blocks, and the scene's pass. */
+static int ygfx__prime_begin(ygfx_gfx* g) {
     memset(g->staging, 0, YGFX__FRAME_BYTES + YGFX__STIM_RANGE);
-    rc = g->be->buffer_update(g->bctx, g->ubo[g->ubo_i], 0, g->staging, YGFX__FRAME_BYTES + YGFX__STIM_RANGE);
-    if (rc < 0) return YGFX_ERR_GL;
+    if (g->be->buffer_update(g->bctx, g->ubo[g->ubo_i], 0, g->staging, YGFX__FRAME_BYTES + YGFX__STIM_RANGE) < 0) return YGFX_ERR_GL;
+    g->be->pass_begin(g->bctx, g->scene, g->w, g->h, NULL);
+    return YGFX_OK;
+}
+
+static void ygfx__prime_draw(ygfx_gfx* g, uint32_t id, int inst) {
+    ygfx_bindings bd;
     memset(&bd, 0, sizeof bd);
     bd.ubo = g->ubo[g->ubo_i];
     bd.frame_size = YGFX__BLOCK;
     bd.stim_off = YGFX__FRAME_BYTES;
     bd.stim_size = YGFX__STIM_RANGE;
-    g->be->pass_begin(g->bctx, g->scene, g->w, g->h, NULL);
-    for (i = 0; i < n; i++) {
-        bd.pipeline = ids[i];
-        bd.instances = inst[i] ? g->inst_buf[0] : 0;
-        g->be->apply(g->bctx, &bd);
-        g->be->draw(g->bctx, 4, 1);
-    }
-    g->be->pass_end(g->bctx);
-    /* the output stage, into the back buffer: the next frame redraws every pixel */
+    bd.pipeline = id;
+    bd.instances = inst ? g->inst_buf[0] : 0;
+    g->be->apply(g->bctx, &bd);
+    g->be->draw(g->bctx, 4, 1);
+}
+
+/* The output stage, into the back buffer (or the output texture): the
+ * next frame redraws every pixel. */
+static void ygfx__prime_output(ygfx_gfx* g) {
+    ygfx_bindings bd;
     memset(&bd, 0, sizeof bd);
     bd.pipeline = g->output_pipe;
     bd.ubo = g->ubo[g->ubo_i];
     bd.frame_size = YGFX__BLOCK;
     bd.tex[0] = g->scene;
     bd.tex[1] = g->lut;
-    g->be->pass_begin(g->bctx, 0, g->w, g->h, NULL);
+    g->be->pass_begin(g->bctx, g->out_target, g->w, g->h, NULL);
     g->be->apply(g->bctx, &bd);
     g->be->draw(g->bctx, 3, 1);
     g->be->pass_end(g->bctx);
+}
+
+static int ygfx__prime(ygfx_gfx* g) {
+    uint32_t ids[YGFX__PRIME_MAX];
+    unsigned char inst[YGFX__PRIME_MAX];
+    int n, i;
+    float px[4];
+    if (!g || !g->open) return YGFX_ERR_CLOSED;
+    if (ygfx__unattached(g)) return YGFX_ERR_ORDER;
+    if (g->in_frame) {
+        ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: prime inside a frame or a setup pass");
+        return YGFX_ERR_ORDER;
+    }
+    if (g->screen) yscr_bind(g->screen);
+    if (ygfx__sync(g) < 0) return YGFX_ERR_LOST;
+    n = ygfx__prime_list(g, ids, inst);
+    if (ygfx__prime_begin(g) < 0) return YGFX_ERR_GL;
+    for (i = 0; i < n; i++) ygfx__prime_draw(g, ids[i], inst[i]);
+    g->be->pass_end(g->bctx);
+    ygfx__prime_output(g);
     /* a read waits for the GPU, so the cost lands here, not in a trial */
     if (g->be->read) g->be->read(g->bctx, g->scene, 0, 0, 1, 1, YGFX_READ_FLOAT, px);
+    ygfx__fb0(g);   /* the read bound the scene's framebuffer */
     return n + 1;
+}
+
+/* --- the attach (DEFERRED OPEN) --------------------------------------------- */
+
+static int ygfx__attach_fail(ygfx_gfx* g, const char* what, uint32_t got, uint32_t want) {
+    g->rec->stage = -1;
+    if (want) ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: attach: %s gave id %u for the recorded %u", what, got, want);
+    else if (!g->error[0] || !strstr(g->error, "attach")) {
+        char tmp[sizeof g->error];
+        memcpy(tmp, g->error, sizeof tmp);
+        ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: attach: %s%s%s", what, tmp[0] ? ": " : "", tmp);
+    }
+    return YGFX_ERR_GL;
+}
+
+static bool ygfx__caps_same(const ygfx_backend_caps* a, const ygfx_backend_caps* b) {
+    return a->color_buffer_float == b->color_buffer_float && a->float_blend == b->float_blend && a->float_linear == b->float_linear &&
+           a->ubo_align == b->ubo_align && a->max_ubo == b->max_ubo && a->max_texture == b->max_texture &&
+           a->binary_format == b->binary_format && a->features == b->features && !strcmp(a->renderer, b->renderer) &&
+           !strcmp(a->vendor, b->vendor) && !strcmp(a->version, b->version) && !strcmp(a->glsl, b->glsl);
+}
+
+/* One recorded call (or one band of a large upload) into the GL backend. */
+static int ygfx__attach_op(ygfx_gfx* g, ygfx__rec* r) {
+    const ygfx_backend* gb = &ygfx__gl_backend;
+    void* gc = g->backend_mem;
+    ygfx__op* o = &r->ops[r->next];
+    uint32_t id = 0;
+    int rc = YGFX_OK, done = 1;
+    switch (o->kind) {
+    case YGFX__OP_PMAKE: {
+        void* tok = o->pool && g->pool ? ygfx__pool_find(g->pool, o->h1, o->h2) : NULL;
+        o->ps.shared = tok;
+        rc = gb->pipeline_make(gc, &o->ps, &id, g->error, sizeof g->error);
+        if (rc < 0) return ygfx__attach_fail(g, "a program", 0, 0);
+        if (id != o->id) return ygfx__attach_fail(g, "a program", id, o->id);
+        r->p_shared[id - 1] = (uint8_t)(rc == 2);
+        r->p_pool[id - 1] = (uint8_t)o->pool;
+        r->p_h1[id - 1] = o->h1; r->p_h2[id - 1] = o->h2;
+        if (rc == 2) { g->progs.shared++; if (g->progs.compiled) g->progs.compiled--; }
+        else if (!o->ps.deferred && o->pool && g->pool) ygfx__pool_put(g->pool, gb, gc, id, o->h1, o->h2);
+        break;
+    }
+    case YGFX__OP_PFIN:
+        if (gb->pipeline_finish(gc, o->id, g->error, sizeof g->error) < 0) return ygfx__attach_fail(g, "a program", 0, 0);
+        if (!r->p_shared[o->id - 1] && r->p_pool[o->id - 1] && g->pool)
+            ygfx__pool_put(g->pool, gb, gc, o->id, r->p_h1[o->id - 1], r->p_h2[o->id - 1]);
+        break;
+    case YGFX__OP_PFREE: gb->pipeline_free(gc, o->id); break;
+    case YGFX__OP_TMAKE: {
+        int bpp = ygfx__texel_bytes(o->ts.format);
+        size_t row = (size_t)o->ts.w * (size_t)(bpp > 0 ? bpp : 1);
+        if (o->data && !o->ts.target && row * (size_t)o->ts.h > YGFX__BAND_BYTES) {
+            /* in bands: the storage first, then rows, one band a step */
+            int rows = (int)(YGFX__BAND_BYTES / row);
+            if (rows < 1) rows = 1;
+            if (r->band_row == 0) {
+                ygfx_texture_src ts = o->ts;
+                ts.data = NULL;
+                ts.stride = 0;
+                rc = gb->texture_make(gc, &ts, &id);
+                if (rc < 0) return ygfx__attach_fail(g, "a texture", 0, 0);
+                if (id != o->id) return ygfx__attach_fail(g, "a texture", id, o->id);
+            }
+            if (rows > o->ts.h - r->band_row) rows = o->ts.h - r->band_row;
+            if (gb->texture_update(gc, o->id, 0, r->band_row, o->ts.w, rows, (const unsigned char*)o->data + (size_t)r->band_row * row, row) < 0)
+                return ygfx__attach_fail(g, "a texture's upload", 0, 0);
+            r->band_row += rows;
+            ygfx__test_bands++;
+            done = r->band_row >= o->ts.h;
+            if (done) r->band_row = 0;
+        } else {
+            rc = gb->texture_make(gc, &o->ts, &id);
+            if (rc < 0) return ygfx__attach_fail(g, "a texture", 0, 0);
+            if (id != o->id) return ygfx__attach_fail(g, "a texture", id, o->id);
+        }
+        break;
+    }
+    case YGFX__OP_TUPD:
+        if (gb->texture_update(gc, o->id, o->x, o->y, o->w, o->h, o->data,
+                               (size_t)o->w * (size_t)ygfx__texel_bytes((ygfx_format)r->tex_fmt[o->id - 1])) < 0)
+            return ygfx__attach_fail(g, "a texture's update", 0, 0);
+        break;
+    case YGFX__OP_TFREE: gb->texture_free(gc, o->id); break;
+    case YGFX__OP_BMAKE:
+        rc = gb->buffer_make(gc, o->x, o->n, &id);
+        if (rc < 0) return ygfx__attach_fail(g, "a buffer", 0, 0);
+        if (id != o->id) return ygfx__attach_fail(g, "a buffer", id, o->id);
+        break;
+    case YGFX__OP_BUPD:
+        if (gb->buffer_update(gc, o->id, o->off, o->data, o->n) < 0) return ygfx__attach_fail(g, "a buffer's update", 0, 0);
+        break;
+    case YGFX__OP_BFREE: gb->buffer_free(gc, o->id); break;
+    default: return ygfx__attach_fail(g, "an unknown call", 0, 0);
+    }
+    if (done) {   /* made: the copy goes now, not at the end */
+        free(o->data);
+        o->data = NULL;
+        free(o->vs);
+        o->vs = NULL;
+        r->next++;
+    }
+    return YGFX_OK;
+}
+
+YGFX_API int ygfx_attach(ygfx_gfx* g, yscr_proc (*gl_proc)(void* ctx, const char* name), void* gl_ctx, int64_t budget_ns) {
+    ygfx__rec* r;
+    int64_t t0 = yrt_real_ns();
+    int steps = 0;
+    if (!g || !g->open) return YGFX_ERR_CLOSED;
+    if (!g->rec) return 1;
+    r = g->rec;
+    if (r->stage < 0) return YGFX_ERR_GL;
+    if (g->in_frame) return YGFX_ERR_ORDER;
+    if (r->bad) {
+        ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: attach: a draw or a read was made before it");
+        r->stage = -1;
+        return YGFX_ERR_ORDER;
+    }
+    if (r->stage == 0) {
+        ygfx_backend_open in;
+        ygfx_backend_caps caps;
+        memset(&in, 0, sizeof in);
+        memset(&caps, 0, sizeof caps);
+        in.gl_proc = gl_proc;
+        in.gl_ctx = gl_ctx;
+        in.w = g->w; in.h = g->h;
+        if (ygfx__gl_backend.open(g->backend_mem, &in, &caps, g->error, sizeof g->error) < 0) {
+            r->stage = -1;
+            return YGFX_ERR_GL;
+        }
+        r->gl_open = 1;
+        if (!ygfx__caps_same(&caps, &r->caps)) {
+            r->stage = -1;
+            ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: attach: this context's caps (%s) are not desc.gl_caps' (%s)", caps.renderer, r->caps.renderer);
+            return YGFX_ERR_ARG;
+        }
+        if (g->share) {
+            /* the recorded programs go into the pool as they are made */
+            if (ygfx__pool_join(g, g->share, &ygfx__gl_backend) < 0) { r->stage = -1; return YGFX_ERR_ARG; }
+            g->share = NULL;
+            g->n_ph = 0;
+        }
+        r->stage = 1;
+        steps++;
+    } else {
+        ygfx__gl_reset(g->backend_mem);   /* the host drew since the last call */
+    }
+    while (r->stage == 1 && (steps == 0 || yrt_real_ns() - t0 < budget_ns)) {
+        if (r->next < r->n) {
+            if (ygfx__attach_op(g, r) < 0) return YGFX_ERR_GL;
+            steps++;
+            continue;
+        }
+        /* every call made: from here the gfx is a GL gfx */
+        ygfx__rec_free_ops(r);
+        g->be = &ygfx__gl_backend;
+        g->bctx = g->backend_mem;
+        g->be->reset(g->bctx);
+        r->prime_n = ygfx__prime_list(g, r->prime_ids, r->prime_inst);
+        r->prime_k = 0;
+        r->stage = 2;
+    }
+    if (r->stage == 2) {
+        /* PRIME, a program a step, without the read's wait for the GPU: the
+         * driver's work at a first draw lands in a later flush, not here */
+        if (ygfx__prime_begin(g) < 0) { r->stage = -1; return ygfx__attach_fail(g, "the prime", 0, 0); }
+        while (r->prime_k < r->prime_n && (steps == 0 || yrt_real_ns() - t0 < budget_ns)) {
+            ygfx__prime_draw(g, r->prime_ids[r->prime_k], r->prime_inst[r->prime_k]);
+            r->prime_k++;
+            steps++;
+        }
+        g->be->pass_end(g->bctx);
+        if (r->prime_k == r->prime_n && (steps == 0 || yrt_real_ns() - t0 < budget_ns)) {
+            ygfx__prime_output(g);
+            g->be->pass_begin(g->bctx, 0, g->w, g->h, NULL);
+            g->be->pass_end(g->bctx);
+            g->be->reset(g->bctx);
+            free(r);
+            g->rec = NULL;
+            return 1;
+        }
+    }
+    /* framebuffer 0 for the host, whatever a texture's make bound */
+    ygfx__gl_backend.pass_begin(g->backend_mem, 0, g->w, g->h, NULL);
+    return 0;
 }
 
 /* --- resources ---------------------------------------------------------------- */
@@ -9334,6 +10298,14 @@ static ygfx_tex ygfx__texture(ygfx_gfx* g, const ygfx_texture_desc* d) {
         ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: texture size or format");
         return t;
     }
+    {   /* v0.23: by name here, not as a failed GL call (a deferred open
+         * would fail only at its attach) */
+        int maxt = g->caps.max_texture > 0 ? g->caps.max_texture : 2048;
+        if (d->w > maxt || d->h > maxt) {
+            ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: texture %dx%d over GL_MAX_TEXTURE_SIZE %d", d->w, d->h, maxt);
+            return t;
+        }
+    }
     if ((d->sdf == YGFX_SDF_MSDF || d->sdf == YGFX_SDF_MTSDF) &&
         (!(d->sdf_range > 0.0f) || (d->format != YGFX_RGBA8 && d->format != YGFX_RGBA16F && d->format != YGFX_RGBA32F))) {
         ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: an MSDF or MTSDF texture is RGBA8, RGBA16F or RGBA32F with sdf_range > 0");
@@ -9424,6 +10396,7 @@ static ygfx_tex ygfx__texture_shared(ygfx_gfx* g, const ygfx_shared_desc* d, ygf
     t.id = 0;
     if (out) memset(out, 0, sizeof *out);
     if (!g || !g->open || !d || !out) return t;
+    if (ygfx__unattached(g)) return t;
     if (g->in_frame) { ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: texture made inside begin..end"); return t; }
     f = d->format ? d->format : YGFX_RGBA8;
     if (d->w <= 0 || d->h <= 0 || f != YGFX_RGBA8 || (unsigned)d->rows > (unsigned)YGFX_ROWS_TOP_DOWN) {
@@ -9607,7 +10580,11 @@ static ygfx_pipe ygfx__pipeline(ygfx_gfx* g, const ygfx_pipeline_desc* d) {
     if (ygfx__sync(g) < 0) return p;
     {
         ygfx__prec r;
-        if (ygfx__make_pipe(g, "", d->body, (int)d->mode, 0, 0, &g->pipe[slot].bid, d->name ? d->name : "user", &r) < 0) return p;
+        int rc;
+        g->user_build = 1;   /* the caller's body: shared programs are the header's */
+        rc = ygfx__make_pipe(g, "", d->body, (int)d->mode, 0, 0, &g->pipe[slot].bid, d->name ? d->name : "user", &r);
+        g->user_build = 0;
+        if (rc < 0) return p;
     }
     g->be->reset(g->bctx);
     g->pipe[slot].used = 1;
@@ -9668,6 +10645,7 @@ static void ygfx__flip_rows(unsigned char* p, int w, int h, size_t bpp) {
 static int ygfx__read_scene(ygfx_gfx* g, int x, int y, int w, int h, float* rgba) {
     int rc;
     if (!g || !g->open) return YGFX_ERR_CLOSED;
+    if (ygfx__unattached(g)) return YGFX_ERR_ORDER;
     if (g->in_frame) return YGFX_ERR_ORDER;
     if (!rgba || x < 0 || y < 0 || w <= 0 || h <= 0 || x + w > g->w || y + h > g->h) return YGFX_ERR_ARG;
     if (ygfx__sync(g) < 0) return YGFX_ERR_LOST;
@@ -9680,10 +10658,12 @@ static int ygfx__read_scene(ygfx_gfx* g, int x, int y, int w, int h, float* rgba
 static int ygfx__read_output(ygfx_gfx* g, int x, int y, int w, int h, uint8_t* rgba) {
     int rc;
     if (!g || !g->open) return YGFX_ERR_CLOSED;
+    if (ygfx__unattached(g)) return YGFX_ERR_ORDER;
     if (g->in_frame) return YGFX_ERR_ORDER;
     if (!rgba || x < 0 || y < 0 || w <= 0 || h <= 0 || x + w > g->w || y + h > g->h) return YGFX_ERR_ARG;
     if (ygfx__sync(g) < 0) return YGFX_ERR_LOST;
-    rc = g->be->read(g->bctx, 0, x, g->origin_top ? y : g->h - y - h, w, h, YGFX_READ_UNORM, rgba);
+    rc = g->be->read(g->bctx, g->out_target, x, g->origin_top ? y : g->h - y - h, w, h, YGFX_READ_UNORM, rgba);
+    ygfx__fb0(g);
     g->be->reset(g->bctx);
     if (rc >= 0 && !g->origin_top) ygfx__flip_rows(rgba, w, h, 4);
     return rc;
@@ -9700,6 +10680,11 @@ static ygfx_tex ygfx__target(ygfx_gfx* g, const ygfx_target_desc* d) {
     fmt = d->format ? d->format : YGFX_RGBA16F;
     if (d->w <= 0 || d->h <= 0 || (fmt != YGFX_RGBA16F && fmt != YGFX_RGBA8 && fmt != YGFX_R16F && fmt != YGFX_RGBA32F)) {
         ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: a target is RGBA16F, RGBA8, R16F or RGBA32F, with a size");
+        return t;
+    }
+    if (d->w > (g->caps.max_texture > 0 ? g->caps.max_texture : 2048) || d->h > (g->caps.max_texture > 0 ? g->caps.max_texture : 2048)) {
+        ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: target %dx%d over GL_MAX_TEXTURE_SIZE %d", d->w, d->h,
+                          g->caps.max_texture > 0 ? g->caps.max_texture : 2048);
         return t;
     }
     /* draws into a target blend; blending into 32-bit float needs EXT_float_blend */
@@ -9734,6 +10719,7 @@ static int ygfx__read_target(ygfx_gfx* g, ygfx_tex t, int x, int y, int w, int h
     const ygfx__res* r;
     int rc;
     if (!g || !g->open) return YGFX_ERR_CLOSED;
+    if (ygfx__unattached(g)) return YGFX_ERR_ORDER;
     if (g->in_frame) return YGFX_ERR_ORDER;
     if (t.id < 1 || t.id > YGFX_MAX_TEXTURES || !g->tex[t.id - 1].used || !(g->tex[t.id - 1].flags & YGFX__RES_TARGET))
         return YGFX_ERR_ARG;
@@ -10079,6 +11065,7 @@ static int ygfx__capture_start(ygfx_gfx* g, const ygfx_capture_desc* d) {
     ygfx__cap* c;
     int x, y, w, h, n, rc;
     if (!g || !g->open) return YGFX_ERR_CLOSED;
+    if (ygfx__unattached(g)) return YGFX_ERR_ORDER;
     if (g->in_frame || g->cap) {
         ygfx__set_error(g->error, sizeof g->error, "ysp_gfx: capture starts outside a frame, once");
         return YGFX_ERR_ORDER;
@@ -11057,10 +12044,9 @@ YGFX_API float ygfx_simplex_value(const ygfx_gfx* g, const ygfx_stim* s, int32_t
  * the 65536 values have variance 1 exactly in double, then rounded to
  * float. Symmetric bit for bit (the upper half is the lower half negated),
  * so the mean is 0. The largest value is 4.33. Built once, at the first
- * ygfx_open() or GAUSSIAN ygfx_noise_value(); not thread-safe before
- * that first call. */
+ * ygfx_open() or GAUSSIAN ygfx_noise_value(), under the process's lock
+ * (v0.23: two threads may open at once). */
 static float ygfx__gauss_tab[65536];
-static int   ygfx__gauss_ready;
 
 static double ygfx__probit(double p) {
     static const double a[6] = { -3.969683028665376e+01, 2.209460984245205e+02, -2.759285104469687e+02,
@@ -11086,7 +12072,9 @@ static const float* ygfx__gauss_table(void) {
     static double x[32768];
     double ss = 0.0, k;
     int i;
-    if (ygfx__gauss_ready) return ygfx__gauss_tab;
+    if (ygfx__flag_get()) return ygfx__gauss_tab;
+    ygfx__lock();
+    if (ygfx__flag_get()) { ygfx__unlock(); return ygfx__gauss_tab; }
     for (i = 0; i < 32768; i++) {   /* the lower half, every p below 0.5 */
         x[i] = ygfx__probit(((double)i + 0.5) / 65536.0);
         ss += x[i] * x[i];
@@ -11096,7 +12084,8 @@ static const float* ygfx__gauss_table(void) {
         ygfx__gauss_tab[i] = (float)(x[i] * k);
         ygfx__gauss_tab[65535 - i] = -ygfx__gauss_tab[i];
     }
-    ygfx__gauss_ready = 1;
+    ygfx__flag_set();
+    ygfx__unlock();
     return ygfx__gauss_tab;
 }
 

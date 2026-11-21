@@ -4737,6 +4737,174 @@ emoji with the most layers at 600 px; the same window, the same run with
 - Not measured: the cost on Windows (ANGLE) and in a browser; a frame of
   emoji in a target, drawn as an image, costs what an image does.
 
+## v0.23.0: the output texture, the deferred open, shared programs
+
+The designer's preview (designer step 5, part P3;
+[designer.md](designer.md#the-gl-context)) shows a session's frames in a
+pane of the designer's own window. The session loads on the designer's
+check thread, and the UI thread draws it. Version 0.23.0 adds what that
+needs: the output stage writes a texture, the load makes no GL call, and
+a session's gfx uses the programs that the designer compiled once.
+
+| Change | Why |
+|---|---|
+| `ygfx_desc.output_texture` (appended), headless only | The gfx makes a `GL_RGBA8` texture of `width` x `height` and a framebuffer for it at the open, and the output stage writes it in place of framebuffer 0, which is the window. The designer's probe copied framebuffer 0 into a texture (`glCopyTexSubImage2D`). That needed a window at least the display's size and a fixed order of draws, and cost a copy each frame |
+| `ygfx_output_native()` gives the texture's GL name | The host samples it (`ImGui::Image()`). The gfx makes the texture with its own GL calls, so its state cache stays right |
+| `end()` and `prime()` leave framebuffer 0 bound | ImGui draws into the bound framebuffer. A host draw after `end()` must not go into the texture |
+| `ygfx_read_output()` and CAPTURE read the texture | They read what the host shows. The GL backend's `capture_read` no longer binds framebuffer 0: it reads the framebuffer that the output stage bound just before |
+| `desc.defer`, `desc.gl_caps`, `ygfx_gl_caps_get()`, `ygfx_attach()` (DEFERRED OPEN) | The open and the load record their GL calls, with the ids the GL backend will give, on any thread. The attach makes them on the GL thread within a budget a call. Handles do not change, so the player's structs stay valid |
+| `desc.share` (SHARED PROGRAMS); backend version 6 | Each gfx compiled its 14 built-in programs again: 4.8 ms with Mesa's warm shader cache, 215 ms without one, on the GL thread at each preview restart |
+| A memo of checked calibrations | `ycol_cal_check()` was 24 ms of every open's 29 ms (below). A calibration whose bytes passed once passes again |
+| `ygfx_texture()` and `ygfx_target()` refuse a size over `GL_MAX_TEXTURE_SIZE` by name | A deferred open would otherwise fail only at the attach, as a GL error |
+
+### Measured before the build
+
+The plan had a deferred open, and nobody had measured whether it was
+needed. So each backend call of a session's load was timed first.
+
+Conditions: the Linux desktop (i5-14500, Debian 12, Mesa 22.3.6), gfx
+0.22.0, Release (gcc 12.2, `-O3`). EGL's device platform, a 1920 x 1080
+pbuffer, no window: the RX 6600 (radeonsi) and llvmpipe (LLVM 15). The
+designer's check (`dsg_check()`, `pl_check()`) with its null gfx swapped
+for a GL gfx (`--wrap`), the nominal calibration, `ygfx_open()`, then
+`ygfx_prime()`, then the session's stimuli. Pinned to four P-cores
+(`taskset -c 2,4,6,8`), one job under the measuring lock, 20 rounds a
+case. Load average 0.74 to 0.87 before each run. It rose to 2 to 3.8
+during the llvmpipe runs: llvmpipe's own threads, and during the first run
+another worker's compiles. The llvmpipe numbers with Mesa's cache off agreed
+within 3 % between two runs. "Later" is the median of rounds 2 to 20 in
+one process, which is what a preview restart sees. The largest single call
+is in parentheses. ms of GL on the calling thread:
+
+| Case | Open | Prime | The session's stimuli |
+|---|---|---|---|
+| RX 6600, Mesa's cache warm, the six player projects, later | 4.8 to 4.9 (1.0) | 0.63 to 0.68 | 0 to 0.63 |
+| the same, 200 texts in 4 scripts (with and without 10,000 words) | 4.8 to 5.1 | 0.66 to 0.69 | 0.70 |
+| the same, 24 images of 1920 x 1080 and one of 4096 x 4096 | 5.0 | 0.69 | 24.8 (5.35: the 4096 x 4096 upload) |
+| RX 6600, Mesa's cache off | 211 to 216 (65: one compile) | 0.7 (77 to 153 the first time) | the text program 30, the image program 15.6 |
+| llvmpipe, Mesa's cache warm, later | 8.6 to 11.7 (4.0) | 14.3 to 17.6 (9.5: the read) | 0 to 1.15; images 69.8 (21.6) |
+| llvmpipe, Mesa's cache off | 180 to 189 (52) | 1,220 to 1,280 (250: one first draw) | the text program 23 |
+
+- `ygfx_open()`'s wall time was about 24 ms above its GL time in every
+  case.
+- A program cache (`desc.cache`) saved about 1 ms of the warm open
+  (4.8 to 3.9 ms). With Mesa's cache off it saved nothing, because Mesa then
+  offers no program binary format.
+
+The decision: the GL work is not far under 4 ms in any case. So the
+deferred open was built, with the calibration's cost found and removed,
+shared programs, and a prime without a wait (the user's decisions of
+2026-11-20).
+
+### The open's CPU time
+
+`perf record -e cycles:u` over 20 opens of the rdk project (RX 6600):
+`ycol__cal_derive()` had 72 % of the process's user cycles, and nothing
+else had more than 1.2 % (`ygfx__open_a`, `ycol_ctx_open`, `malloc`).
+`ycol_cal_check()` derives the CLUT again from the readings to compare it
+with the stored one: 64 bisection steps of a Hermite spline for each of 3
+x 4,096 entries, 24 ms. A process opens the same calibration again and
+again (each preview restart), so the result is kept: a memo of 8
+calibrations by a 128-bit hash of their bytes, under a spin lock (two
+threads may open at once). The first open of a calibration still takes
+the 24 ms. The NOISE table's first build takes the same lock, so the plan's
+"open one gfx first, for the table" is no longer needed. The derive itself is
+color.h's and is not changed here. A faster inverse (walk the spline's
+segments once, in order) would make the first check cheaper too.
+
+### Measured after the build
+
+The same machine and conditions, gfx 0.23.0, `bench_gfx_attach`
+(`tests/probe/gfx_attach/attach_bench.c`, Linux, built with the designer
+and the tests). A first gfx opens on the context, as the designer's
+`main.cpp` opens one, and gives the caps. Each session is a deferred open
+with the output texture, loaded on the same thread, then
+`ygfx_attach()` with a budget of 4 ms a call, one call a frame. Then
+`glFinish()`. Load average 0.87 before, 1.57 after; 0.87 to 0.99 during the
+RX 6600 runs and 0.99 to 1.86 during the llvmpipe runs (llvmpipe's
+threads). Medians of rounds 2 to 20, ms:
+
+| Case | Open (the check thread) | Attach (the UI thread): total in calls, largest call | glFinish after |
+|---|---|---|---|
+| RX 6600, `ygfx_open()` and `ygfx_prime()`, not deferred | 5.5 to 5.8 | (all of it on the UI thread) | 0.01 to 0.24 |
+| RX 6600, deferred, the player projects and the text cases | 1.3 to 1.4 | 4.2 to 4.9 in 2, 4.03 to 4.17 | 0.40 to 0.66 |
+| RX 6600, deferred and shared | 1.3 to 1.4 | 0.16 to 0.29 in 1 | 0.29 to 0.39 |
+| RX 6600, deferred and shared, Mesa's cache off | 1.3 to 1.4 | 0.16 to 0.29 in 1 | 0.29 to 0.39 |
+| RX 6600, images, deferred and shared | 1.4 | 31.7 in 8, 4.3 | 0.95 |
+| llvmpipe, not deferred | 23.9 to 27.8 | (all of it) | 0 |
+| llvmpipe, deferred | 1.4 | 14.0 to 18.0 in 4, 4.5 to 5.9 | 9.3 |
+| llvmpipe, deferred and shared | 1.4 | 2.3 to 5.6 in 1 or 2, 2.3 to 5.6 | 9.3 |
+| llvmpipe, images, deferred and shared | 1.4 | 87 to 98 in 15 to 17, 17.6 to 18.8 | 9.3 |
+
+- **The first session of a process** pays the calibration's check once:
+  the open takes 24.6 ms on the check thread. With Mesa's cache off, its
+  attach also compiles the programs that the first gfx did not make. For
+  the text program that is one call of 31 ms on the RX 6600, and the
+  glFinish after it takes 61 ms. The next sessions find that program in the
+  pool.
+- **The largest step** on the RX 6600 is a step just past the budget
+  (4.03 to 4.3 ms). On llvmpipe it is the 4096 x 4096 texture's storage
+  (`glTexStorage2D` of 64 MB): 17 to 22 ms in one call. The texels follow
+  in 16 bands of 0.5 ms. A storage call cannot be split.
+- **llvmpipe's 9.3 ms after the attach** is the prime's draws, which
+  llvmpipe runs at the next flush on the CPU. Without the prime's read,
+  this cost goes to the frame that flushes next, not to the attach.
+- **The deferred open** costs 1.3 to 1.4 ms on the check thread: the
+  tables, the shader text and the copies.
+
+### Tests
+
+`test_gfx` parts "v0.23" and "v0.23 defer" (Mesa llvmpipe, headless, the
+Linux desktop, GCC 12.2):
+
+| Check | Result |
+|---|---|
+| Two headless gfx on one context, one with `output_texture` and one without, the same frames (identity and rounding; a CLUT and the noise dither; 6 frames after foreign GL calls of ImGui's kind and `ygfx_reset_state()`) | 24 frames, 0 differ |
+| The native name: `GL_RGBA8`, the size (`glGetTexLevelParameteriv`), its texels read through a framebuffer of the host's against `ygfx_read_output()`, alpha 255 | 0 bad |
+| Framebuffer 0 bound after `end()`, `ygfx_read_output()`, `prime()` and the close | 0 not |
+| CAPTURE of the texture against `ygfx_read_output()`, 6 frames, both configurations | 0 differ |
+| A deferred open and its objects (a CLUT, a 1100 x 1000 RGBA8 texture, a grating, a gabor, two shapes, a text run, an image) made on another thread, attached on the context's, against a direct open's frames; then with a budget of 1 ns, and with `desc.share` | 6 frames, 0 differ; handles and stimuli equal to the direct open's; 67 attach calls at 1 ns; the texture in 2 bands each time |
+| Shared programs: a direct open with `desc.share`, closed after its source (which then opens again on it) and before it | 6 frames, 0 differ; 15 programs shared, 0 compiled |
+| Refusals: output texture on a screen, `rows` `TOP_DOWN`, a size over the maximum, no name without the texture, no name on a closed gfx; attach to a context with other caps; a texture over the maximum at a deferred open; `defer` without `gl_caps`; before the attach: a frame, the name, prime, a read, the caps | 11 of 11 |
+
+The full `test_gfx` passes on Mesa llvmpipe. The C and C++ compile checks
+take the new fields (and `YGFX_BACKEND_VERSION` 6). ASan and UBSan:
+"Sanitizers", below.
+
+Mutants `ot-01` to `ot-08` (the output texture), `df-01` to `df-06` (the
+deferred open) and `sh-01` to `sh-03` (shared programs) in
+`tests/mutate/gfx.toml`, test `gfx_linux`: 17 of 17 killed. `rs-18` now
+opens a version 7 table: killed.
+
+### Sanitizers
+
+GCC 12.2, built and run under `setarch -R`, Mesa llvmpipe:
+
+- **ASan and UBSan:** the whole `test_gfx` passes. There are no UBSan
+  reports. LeakSanitizer reports 336 bytes in 6 blocks, all from an
+  unloaded module (Mesa). A run of part "v0.22 paint" alone reports the
+  same 56-byte blocks.
+- **ThreadSanitizer:** part "v0.23 defer" (the deferred open on a thread)
+  passes. TSan gives two reports, both inside Mesa's `swrast_dri.so` at the
+  screen's open (`yscr__warmup()`). gfx's code has none.
+
+### Sizes
+
+`ygfx_desc` grows from 136 to 160 bytes, and the handle from 24,832 to
+27,584 bytes (x86-64, GCC 12.2). The handle holds the program list of
+SHARED PROGRAMS (1,704 bytes) and a GL backend area that is 640 bytes larger
+(a count pointer for each pipeline).
+
+### Not done
+
+- Not measured on Windows (ANGLE), macOS or WebGL. Every number above is
+  the Linux desktop's.
+- A deferred open stores no program binary in `desc.cache`, because nothing
+  was compiled at the open.
+- A program of a user body (`ygfx_pipeline()`) is not shared.
+- The derive in ysp/color.h is as before: the first check of a calibration
+  in a process still takes 24 ms.
+
 ## Bindings
 
 `ysp/gfx.h` is bound in `ysp-vis` with `ysp/screen.h` and `ysp/video.h`
