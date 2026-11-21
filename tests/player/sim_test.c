@@ -24,13 +24,32 @@
  *   (7) a refusal at run time names its object
  *   (8) live(): the caller's trials and the scripted ones
  *   (9) a stopped session's session.json says so
+ *   (10) PL_SIM_GL (Linux): on a GL ES context (EGL, llvmpipe, no window),
+ *       a session loaded on one thread with gl_caps and share and attached
+ *       on the context's thread draws the frames of a direct gfx, read
+ *       through pl_sim_texture() (stroop and oddball)
  *   and the display, rig and calibration a desc gives, the check's needs,
  *   and on_code against events.csv's out rows
  */
 #if !defined(_WIN32) && !defined(_DEFAULT_SOURCE)
 #define _DEFAULT_SOURCE 1   /* mkdtemp(), setenv(): before any system header */
 #endif
-#if defined(PL_SIM_MUT)
+#if defined(PL_SIM_MUT) && defined(PL_SIM_GL)
+/* one translation unit: GNU ld's --wrap cannot reach lower.c's call of
+ * pl_gfx_open_null(), so the names do what the wrap does in the build */
+#define pl_gfx_open_null __real_pl_gfx_open_null
+#include "impl.c"
+#undef pl_gfx_open_null
+bool __wrap_pl_gfx_open_null(ygfx_gfx* g, ygfx_desc* d);
+#define pl_gfx_open_null __wrap_pl_gfx_open_null
+#include "eval.c"
+#include "host.c"
+#include "lower.c"
+#include "run.c"
+#include "v2.c"
+#include "sim.c"
+#undef pl_gfx_open_null
+#elif defined(PL_SIM_MUT)
 #include "impl.c"
 #include "eval.c"
 #include "host.c"
@@ -212,9 +231,11 @@ static int same_data(const char* ref, const char* got, const char* name) {
     for (n = names; *n; n = e + 1) {
         e = strchr(n, '\n');
         *e = 0;
-        snprintf(a, sizeof a, "%s/streams/%s", ref, n);
-        snprintf(b, sizeof b, "%s/streams/%s", got, n);
-        snprintf(what, sizeof what, "%s streams/%s", name, n);
+        /* a stream's name is short; the precision keeps gcc's
+         * -Wformat-truncation (Debug, -Werror) quiet about names[]'s size */
+        snprintf(a, sizeof a, "%.1100s/streams/%.200s", ref, n);
+        snprintf(b, sizeof b, "%.1100s/streams/%.200s", got, n);
+        snprintf(what, sizeof what, "%.60s streams/%.100s", name, n);
         if (!same_file(a, b, what)) ok = 0;
     }
     return ok;
@@ -1406,6 +1427,342 @@ static int build_packs(const char* dir) {
 }
 #endif
 
+/* --- (10) a GL context: the deferred gfx against a direct one ------------------- */
+
+#if defined(PL_SIM_GL)
+/* A stepped session's gfx on a real GL ES 3.0 context (Mesa's llvmpipe,
+ * EGL's surfaceless platform, no window): loaded on one thread with
+ * desc.gl_caps and desc.share, attached and drawn on the context's thread,
+ * read through pl_sim_texture()'s name. Its frames must equal those of the
+ * same session whose gfx opened directly on the context, which the wrap of
+ * pl_gfx_open_null() below gives: the player has no direct GL path of its
+ * own for a stepped session. No EGL, no context: the case is skipped, as
+ * test_gfx skips. */
+#include <dlfcn.h>
+
+typedef yscr_proc (*gl_gpa_fn)(const char*);
+static struct {
+    void* lib;
+    gl_gpa_fn gpa;
+    void *dpy, *ctx, *surf;
+    unsigned (*make_current)(void*, void*, void*, void*);
+    unsigned (*destroy)(void*, void*);
+    unsigned (*destroy_ctx)(void*, void*);
+    void (*gen_fb)(int32_t, uint32_t*);
+    void (*bind_fb)(uint32_t, uint32_t);
+    void (*fb_tex)(uint32_t, uint32_t, uint32_t, uint32_t, int32_t);
+    uint32_t (*fb_status)(uint32_t);
+    void (*read)(int32_t, int32_t, int32_t, int32_t, uint32_t, uint32_t, void*);
+    void (*del_fb)(int32_t, const uint32_t*);
+    void (*use_program)(uint32_t);
+    void (*bind_vao)(uint32_t);
+    void (*active_texture)(uint32_t);
+    void (*bind_texture)(uint32_t, uint32_t);
+    void (*viewport)(int32_t, int32_t, int32_t, int32_t);
+    uint32_t fb;
+    char renderer[160];
+} gl;
+static int gl_direct;   /* the wrap opens a direct GL gfx: the reference session */
+
+static yscr_proc gl_proc(void* ctx, const char* name) {
+    yscr_proc p = NULL;
+    void* o;
+    (void)ctx;
+    if (gl.gpa) p = gl.gpa(name);
+    if (!p && (o = dlsym(gl.lib, name)) != NULL) memcpy(&p, &o, sizeof p);
+    return p;
+}
+static void* gl_sym(const char* name) {
+    yscr_proc p = gl_proc(NULL, name);
+    void* o;
+    memcpy(&o, &p, sizeof o);
+    return o;
+}
+#define GL_LOAD(dst, name) do { void* o_ = gl_sym(name); memcpy(&(dst), &o_, sizeof o_); } while (0)
+
+static const char* gl_open(void) {
+    void* (*gpd)(unsigned, void*, const int32_t*);
+    unsigned (*init)(void*, int32_t*, int32_t*);
+    unsigned (*bind_api)(unsigned);
+    unsigned (*choose)(void*, const int32_t*, void**, int32_t, int32_t*);
+    void* (*mkctx)(void*, void*, void*, const int32_t*);
+    void* (*mkpb)(void*, void*, const int32_t*);
+    const unsigned char* (*str)(uint32_t);
+    void* cfg = NULL;
+    void* o;
+    int32_t a[13], n = 0, mj, mn;
+    setenv("LIBGL_ALWAYS_SOFTWARE", "1", 0);   /* llvmpipe: no GPU, the same on every machine */
+    if (!(gl.lib = dlopen("libEGL.so.1", RTLD_NOW | RTLD_LOCAL))) return "no libEGL.so.1";
+    o = dlsym(gl.lib, "eglGetProcAddress");
+    memcpy(&gl.gpa, &o, sizeof o);
+    GL_LOAD(gpd, "eglGetPlatformDisplayEXT");
+    GL_LOAD(init, "eglInitialize");
+    GL_LOAD(bind_api, "eglBindAPI");
+    GL_LOAD(choose, "eglChooseConfig");
+    GL_LOAD(mkctx, "eglCreateContext");
+    GL_LOAD(mkpb, "eglCreatePbufferSurface");
+    GL_LOAD(gl.make_current, "eglMakeCurrent");
+    GL_LOAD(gl.destroy, "eglDestroySurface");
+    GL_LOAD(gl.destroy_ctx, "eglDestroyContext");
+    if (!gpd || !init || !bind_api || !choose || !mkctx || !mkpb || !gl.make_current) return "EGL lacks EGL_EXT_platform_base";
+    gl.dpy = gpd(0x31DD, NULL, NULL);   /* EGL_PLATFORM_SURFACELESS_MESA */
+    if (!gl.dpy || !init(gl.dpy, &mj, &mn)) { gl.dpy = NULL; return "no surfaceless EGL display"; }
+    bind_api(0x30A0);   /* EGL_OPENGL_ES_API */
+    a[0] = 0x3024; a[1] = 8; a[2] = 0x3023; a[3] = 8; a[4] = 0x3022; a[5] = 8; a[6] = 0x3021; a[7] = 8;
+    a[8] = 0x3033; a[9] = 0x0001; a[10] = 0x3040; a[11] = 0x0040; a[12] = 0x3038;   /* PBUFFER, ES3 */
+    if (!choose(gl.dpy, a, &cfg, 1, &n) || n < 1) return "no RGBA8 ES 3.0 pbuffer config";
+    a[0] = 0x3098; a[1] = 3; a[2] = 0x30FB; a[3] = 0; a[4] = 0x3038;
+    gl.ctx = mkctx(gl.dpy, cfg, NULL, a);
+    a[0] = 0x3057; a[1] = 16; a[2] = 0x3056; a[3] = 16; a[4] = 0x3038;
+    gl.surf = gl.ctx ? mkpb(gl.dpy, cfg, a) : NULL;
+    if (!gl.surf || !gl.make_current(gl.dpy, gl.surf, gl.surf, gl.ctx)) return "no ES 3.0 context";
+    GL_LOAD(gl.gen_fb, "glGenFramebuffers");
+    GL_LOAD(gl.bind_fb, "glBindFramebuffer");
+    GL_LOAD(gl.fb_tex, "glFramebufferTexture2D");
+    GL_LOAD(gl.fb_status, "glCheckFramebufferStatus");
+    GL_LOAD(gl.read, "glReadPixels");
+    GL_LOAD(gl.del_fb, "glDeleteFramebuffers");
+    GL_LOAD(gl.use_program, "glUseProgram");
+    GL_LOAD(gl.bind_vao, "glBindVertexArray");
+    GL_LOAD(gl.active_texture, "glActiveTexture");
+    GL_LOAD(gl.bind_texture, "glBindTexture");
+    GL_LOAD(gl.viewport, "glViewport");
+    GL_LOAD(str, "glGetString");
+    if (!gl.gen_fb || !gl.bind_fb || !gl.fb_tex || !gl.fb_status || !gl.read || !gl.del_fb || !gl.use_program || !gl.bind_vao ||
+        !gl.active_texture || !gl.bind_texture || !gl.viewport || !str)
+        return "no GL ES 3.0 entry points";
+    snprintf(gl.renderer, sizeof gl.renderer, "%s", (const char*)str(0x1F01));
+    gl.gen_fb(1, &gl.fb);
+    return NULL;
+}
+
+static void gl_close(void) {
+    if (gl.fb) gl.del_fb(1, &gl.fb);
+    gl.fb = 0;
+    if (gl.dpy) {
+        gl.make_current(gl.dpy, NULL, NULL, NULL);
+        if (gl.surf) gl.destroy(gl.dpy, gl.surf);
+        if (gl.ctx) gl.destroy_ctx(gl.dpy, gl.ctx);
+    }
+    /* No eglTerminate() and no dlclose(): Mesa's terminate unloads llvmpipe,
+     * and LeakSanitizer then reports 112 bytes in 2 blocks from that unknown
+     * module, which no suppression can name (gfx.md, "Sanitizers"). The
+     * display stays until the process ends. */
+    memset(&gl, 0, sizeof gl);
+}
+
+/* The texture's texels with our own GL calls, as the designer's ImGui
+ * samples them; rows turned to top first, as ygfx_read_output() gives
+ * them. Then a host's state, as ImGui's draw may leave it: the session's
+ * next drawn frame must forget gfx's cached state (ygfx_reset_state()). */
+static int gl_read_texture(uint32_t name, int w, int h, uint8_t* rgba, uint8_t* row) {
+    int y;
+    const size_t stride = (size_t)w * 4;
+    gl.bind_fb(0x8D40, gl.fb);   /* GL_FRAMEBUFFER */
+    gl.fb_tex(0x8D40, 0x8CE0, 0x0DE1, name, 0);   /* COLOR_ATTACHMENT0, TEXTURE_2D */
+    if (gl.fb_status(0x8D40) != 0x8CD5) return -1;   /* FRAMEBUFFER_COMPLETE */
+    gl.read(0, 0, w, h, 0x1908, 0x1401, rgba);   /* RGBA, UNSIGNED_BYTE */
+    for (y = 0; y < h / 2; y++) {
+        memcpy(row, rgba + (size_t)y * stride, stride);
+        memcpy(rgba + (size_t)y * stride, rgba + (size_t)(h - 1 - y) * stride, stride);
+        memcpy(rgba + (size_t)(h - 1 - y) * stride, row, stride);
+    }
+    gl.use_program(0);
+    gl.bind_vao(0);
+    gl.active_texture(0x84C0);   /* GL_TEXTURE0 */
+    gl.bind_texture(0x0DE1, name);
+    gl.viewport(0, 0, 16, 16);
+    return 0;
+}
+
+/* the reference session: the null gfx's open becomes a direct one on the
+ * current context, with the output texture, at the session's size */
+bool __real_pl_gfx_open_null(ygfx_gfx* g, ygfx_desc* d);
+bool __wrap_pl_gfx_open_null(ygfx_gfx* g, ygfx_desc* d);
+bool __wrap_pl_gfx_open_null(ygfx_gfx* g, ygfx_desc* d) {
+    if (!gl_direct) return __real_pl_gfx_open_null(g, d);
+    d->screen = NULL;
+    d->backend = NULL;
+    d->backend_ctx = NULL;
+    d->gl_proc = gl_proc;
+    d->gl_ctx = NULL;
+    d->output_texture = true;
+    return ygfx_open(g, d);
+}
+
+static uint64_t fnv(const uint8_t* b, size_t n) {
+    uint64_t h = 1469598103934665603ull;
+    size_t i;
+    for (i = 0; i < n; i++) { h ^= b[i]; h *= 1099511628211ull; }
+    return h;
+}
+
+enum { GL_FRAMES = 720, GL_W = 800, GL_H = 600 };
+typedef struct gl_load { pl_player* p; pl_sim_desc d; int ok; char err[300]; } gl_load;
+
+static TH_RET gl_thread_load(void* arg) {
+    gl_load* t = (gl_load*)arg;
+    pl_check_result r;
+    t->ok = pl_sim_load(t->p, &t->d, &r) == PL_CHECK_OK;
+    if (!t->ok) snprintf(t->err, sizeof t->err, "%s", r.message);
+    return TH_OK;
+}
+
+/* One session for GL_FRAMES frames, each other one drawn and read; its
+ * hashes in h[]. deferred: the load on another thread with gl_caps and
+ * share, the attach budget_ns a call; else the direct gfx on this thread. */
+static int gl_session(const pk* k, const run_opts* o, const char* out, bool deferred, const ygfx_gl_caps* caps, ygfx_gfx* share,
+                      int64_t budget_ns, uint64_t* h, int* n_h, int* attach_calls, ygfx_programs* st_attach, ygfx_programs* st_end,
+                      long* lit) {
+    gl_load t;
+    th_t th;
+    ygfx_native nat;
+    uint8_t* rgba = (uint8_t*)malloc((size_t)GL_W * GL_H * 4);
+    uint8_t* row = (uint8_t*)malloc((size_t)GL_W * 4);
+    int rc = 0, f, a;
+    memset(&t, 0, sizeof t);
+    t.p = (pl_player*)calloc(1, sizeof *t.p);
+    sim_desc(&t.d, k, o, out);
+    *n_h = 0;
+    *attach_calls = 0;
+    *lit = 0;
+    if (deferred) {
+        t.d.gl_caps = caps;
+        t.d.gl_proc = gl_proc;
+        t.d.share = share;
+        if (th_start(&th, gl_thread_load, &t) != 0) { printf("  gl: no thread\n"); rc = -1; }
+        else th_join(th);
+    } else {
+        gl_direct = 1;
+        gl_thread_load(&t);
+        gl_direct = 0;
+    }
+    if (rc == 0 && !t.ok) { printf("  gl %s: load: %s\n", k->name, t.err); rc = -1; }
+    if (rc == 0 && deferred) {
+        CHECK(!pl_sim_texture(t.p, &nat), "gl %s: a texture before the attach", k->name);
+        CHECK(pl_sim_frame(t.p, true) < 0 && strstr(t.p->error, "before pl_sim_attach"), "gl %s: a drawn frame before the attach was not refused", k->name);
+        /* the refusal fails the session: load it again */
+        pl_close(t.p);
+        memset(t.p, 0, sizeof *t.p);
+        rm_tree(out);
+        if (th_start(&th, gl_thread_load, &t) != 0) { printf("  gl: no thread\n"); rc = -1; }
+        else th_join(th);
+        if (rc == 0 && !t.ok) { printf("  gl %s: load: %s\n", k->name, t.err); rc = -1; }
+    }
+    while (rc == 0 && (a = pl_sim_attach(t.p, budget_ns)) != 1) {
+        (*attach_calls)++;
+        if (a < 0 || *attach_calls > 10000) { printf("  gl %s: attach: %s\n", k->name, t.p->error); rc = -1; }
+    }
+    if (rc == 0) {
+        (*attach_calls)++;
+        ygfx_program_stats(&t.p->gfx, st_attach);
+    }
+    for (f = 0; rc == 0 && f < GL_FRAMES; f++) {
+        bool draw = f % 2 == 0;
+        int r = sim_frame(t.p, draw);   /* counted for (2): --wrap reaches the player and gfx, not Mesa */
+        if (r < 0) { printf("  gl %s: frame %d: %s\n", k->name, f, t.p->error); rc = -1; break; }
+        if (draw) {
+            size_t i;
+            if (deferred) {
+                if (!pl_sim_texture(t.p, &nat) || nat.gl_format != 0x8058 || gl_read_texture(nat.gl_name, GL_W, GL_H, rgba, row) != 0) {
+                    printf("  gl %s: frame %d: no GL_RGBA8 texture to read (name %u, format 0x%x)\n", k->name, f, nat.gl_name, nat.gl_format);
+                    rc = -1;
+                    break;
+                }
+            } else if (ygfx_read_output(&t.p->gfx, 0, 0, GL_W, GL_H, rgba) != 0) {
+                printf("  gl %s: frame %d: read: %s\n", k->name, f, ygfx_error(&t.p->gfx));
+                rc = -1;
+                break;
+            }
+            h[(*n_h)++] = fnv(rgba, (size_t)GL_W * GL_H * 4);
+            /* the pixels unlike the top-left one, the background's */
+            for (i = 1; i < (size_t)GL_W * GL_H; i++)
+                if (memcmp(rgba + i * 4, rgba, 4) != 0) (*lit)++;
+        }
+        if (r == 1) break;
+    }
+    if (rc == 0) ygfx_program_stats(&t.p->gfx, st_end);
+    pl_sim_stop(t.p);
+    pl_sim_detach(t.p);   /* the GL thread: the session's GL objects go */
+    pl_close(t.p);
+    free(t.p);
+    free(rgba);
+    free(row);
+    return rc;
+}
+
+static void case_gl(void) {
+    static uint64_t h_ref[GL_FRAMES], h_def[GL_FRAMES];
+    static const char* const names[2] = { "stroop", "oddball" };
+    const char* why = gl_open();
+    ygfx_gfx first;
+    ygfx_desc fd;
+    ygfx_gl_caps caps;
+    int i;
+    if (why) {
+        printf("  gl: skipped: %s\n", why);
+        gl_close();
+        return;
+    }
+    /* the designer's first gfx on the window's context (main.cpp): the caps
+     * and the shared programs */
+    memset(&first, 0, sizeof first);
+    memset(&fd, 0, sizeof fd);
+    fd.gl_proc = gl_proc;
+    fd.width = 64;
+    fd.height = 64;
+    if (!ygfx_open(&first, &fd) || ygfx_gl_caps_get(&first, &caps) != YGFX_OK) {
+        CHECK(0, "gl: the first gfx on %s: %s", gl.renderer, ygfx_error(&first));
+        ygfx_close(&first);
+        gl_close();
+        return;
+    }
+    for (i = 0; i < 2; i++) {
+        const pk* k = pack_of(names[i]);
+        char ref[1200], got[1200], lab[64];
+        run_opts o;
+        int n_ref = 0, n_def = 0, calls_ref = 0, calls_def = 0, j, n_same = 0, n_distinct = 1;
+        ygfx_programs pa_ref, pe_ref, pa_def, pe_def;
+        long lit_ref = 0, lit_def = 0;
+        if (!k) { printf("  gl %s: no pack, skipped\n", names[i]); continue; }
+        memset(&o, 0, sizeof o);
+        o.seed = 11;
+        o.rig = i == 1;   /* oddball through the nominal calibration's output stage */
+        memset(&pa_ref, 0, sizeof pa_ref); memset(&pe_ref, 0, sizeof pe_ref);
+        memset(&pa_def, 0, sizeof pa_def); memset(&pe_def, 0, sizeof pe_def);
+        snprintf(lab, sizeof lab, "gl_%s_direct", names[i]);
+        path_in(ref, sizeof ref, lab);
+        snprintf(lab, sizeof lab, "gl_%s_deferred", names[i]);
+        path_in(got, sizeof got, lab);
+        if (gl_session(k, &o, ref, false, NULL, NULL, 0, h_ref, &n_ref, &calls_ref, &pa_ref, &pe_ref, &lit_ref) != 0 ||
+            /* stroop one step a call (budget 1 ns), oddball all in one call (0) */
+            gl_session(k, &o, got, true, &caps, &first, i == 0 ? 1 : 0, h_def, &n_def, &calls_def, &pa_def, &pe_def, &lit_def) != 0) {
+            CHECK(0, "gl %s: a session failed", names[i]);
+            continue;
+        }
+        for (j = 0; j < n_ref && j < n_def; j++) {
+            if (h_ref[j] == h_def[j]) n_same++;
+            if (j > 0 && h_ref[j] != h_ref[j - 1]) n_distinct++;
+        }
+        CHECK(n_ref == n_def && n_same == n_ref, "gl %s: %d of %d drawn frames equal the direct gfx's (%d drawn deferred)", names[i], n_same, n_ref, n_def);
+        CHECK(n_distinct > 2 && lit_ref > 0, "gl %s: the frames show nothing to compare (%d changes, %ld pixels not the background)", names[i], n_distinct, lit_ref);
+        CHECK(pa_def.shared > 0, "gl %s: the deferred gfx took no program from desc.share", names[i]);
+        CHECK(pe_def.compiled + pe_def.loaded + pe_def.shared == pa_def.compiled + pa_def.loaded + pa_def.shared,
+              "gl %s: the frames made programs after the attach (%u then %u): the text programs were not made at the load", names[i],
+              pa_def.compiled + pa_def.loaded + pa_def.shared, pe_def.compiled + pe_def.loaded + pe_def.shared);
+        CHECK(i != 0 || calls_def > 1, "gl %s: a budget of 1 ns attached in %d call", names[i], calls_def);
+        CHECK(i != 1 || calls_def == 1, "gl %s: a budget of 0 (all) took %d calls", names[i], calls_def);
+        CHECK(same_data(ref, got, lab), "gl %s: the data sets differ", names[i]);
+        printf("  gl %s (%s): %d of %d drawn frames equal (%d changes, %ld pixels not the background); attach %d calls; programs: %u shared, %u compiled\n", names[i],
+               gl.renderer, n_same, n_ref, n_distinct, lit_ref, calls_def, pa_def.shared, pa_def.compiled);
+    }
+    ygfx_close(&first);
+    gl_close();
+}
+#else
+static void case_gl(void) { printf("  gl: skipped: not built with PL_SIM_GL (Linux, GNU ld)\n"); }
+#endif
+
 int main(int argc, char** argv) {
     int i;
     const char* keep = NULL;
@@ -1441,6 +1798,7 @@ int main(int argc, char** argv) {
         RUN("stop", case_stop);
         RUN("display", case_display);
         RUN("codes", case_codes);
+        RUN("gl", case_gl);
 #undef RUN
     }
 #if defined(PL_SIM_COUNT)

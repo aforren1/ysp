@@ -44,7 +44,7 @@
 extern "C" {
 #endif
 
-#define PL_VERSION_STRING "0.16.0"
+#define PL_VERSION_STRING "0.17.0"
 /* The newest format version this player lowers (2: format part 3, in
  * v2.c). session.json's format_version is the definition's. */
 #define PL_FORMAT_VERSION 2
@@ -478,15 +478,6 @@ typedef struct pl_script_row { int trial; char* resp; bool silent; double rt_s, 
 
 /* --- the stepped session (sim.c, 0.16.0) ---------------------------------- */
 
-/* The stepped session draws on a GL context through ysp/gfx.h 0.23.0's
- * deferred open and output texture (docs/designer.md, "The GL context",
- * prerequisite P3). Before 0.23.0 it draws on the null backend only. */
-#if YGFX_VERSION_MAJOR > 0 || YGFX_VERSION_MINOR >= 23
-#define PL_GFX_DEFER 1
-#else
-#define PL_GFX_DEFER 0
-#endif
-
 enum { PL_SIM_EVENTS = 0, PL_SIM_RESPONSE, PL_SIM_AFTER, PL_SIM_BETWEEN };
 enum {
     PL_SIM_INPUT_CAP = 256,    /* keys and choices between two frames       */
@@ -528,13 +519,20 @@ typedef struct pl_sim_desc {
     double      rt_s;           /* its rt; 0: 0.3 s                          */
     int32_t     width, height;  /* the display in px; 0: 1920 x 1080         */
     int64_t     period_ns;      /* the frame period; 0: 60 Hz                */
-    /* the gfx (ysp/gfx.h 0.23.0, P3): recorded at the load, made at
-     * pl_sim_attach() on the context that gl_proc reaches, with the caps
-     * of a gfx that the GL thread opened. gl_caps NULL: the null backend */
+    /* the gfx (ysp/gfx.h 0.23.0's deferred open): recorded at the load,
+     * made at pl_sim_attach() on the context that gl_proc reaches, with the
+     * caps of a gfx that the GL thread opened. gl_caps NULL: the null
+     * backend */
     const struct ygfx_gl_caps* gl_caps;
     const ygfx_cache* cache;    /* compiled programs, kept across sessions  */
     yscr_proc (*gl_proc)(void* ctx, const char* name);
     void*       gl_ctx;
+    /* 0.17.0: a GL gfx on the same context whose programs the session's gfx
+     * uses (ygfx_desc.share), so a session compiles none of the built-in
+     * ones. The load only keeps the pointer; the first pl_sim_attach() call
+     * reads it on the GL thread, so it must be open and attached then. The
+     * two gfx may close in any order. NULL: the session compiles its own */
+    struct ygfx_gfx* share;
     /* hooks, each optional, on the thread that steps the session */
     bool (*live)(void* ctx, const pl_sim_where* w);   /* at a trial's start:
                                  * true, the caller answers this trial;
@@ -566,6 +564,7 @@ typedef struct pl_sim {
     const ygfx_cache* cache;
     yscr_proc (*gl_proc)(void* ctx, const char* name);
     void*       gl_ctx;
+    struct ygfx_gfx* share;
     const ycol_cal* cal;
     const yrig_profile* rig;
     bool (*live)(void* ctx, const pl_sim_where* w);
@@ -909,8 +908,9 @@ void pl_close(pl_player* p);
 void pl_fail(pl_player* p, const char* fmt, ...);
 /* The object a refusal from here on names (PL_OBJ_NONE: none). */
 void pl_at(pl_player* p, int obj, const char* name);
-/* The text programs' first draws and ygfx_prime() (lower.c): at the load,
- * or at a stepped session's first drawn frame. */
+/* The text programs and each glyph set's draw state, which ygfx_crun()
+ * makes on first use (lower.c), at the load. The caller primes after it: a
+ * real run with ygfx_prime(), a stepped session's GL gfx in ygfx_attach(). */
 void pl_gfx_warm(pl_player* p);
 /* A gfx on ysp/gfx.h's null backend, with no screen and no GL (impl.c). */
 bool pl_gfx_open_null(ygfx_gfx* g, ygfx_desc* d);

@@ -2332,8 +2332,8 @@ static int pl_screen_none(pl_player* p, ygfx_desc* gd) {
 /* The stepped session's screen: none; its caller makes each frame
  * (sim.c). The gfx at the session's display size: recorded now and made
  * on the caller's GL thread at pl_sim_attach() (ysp/gfx.h 0.23.0's
- * deferred open, P3), or on the null backend. Its calibration's check
- * runs here, on the loading thread. */
+ * deferred open), or on the null backend. Its calibration's check runs
+ * here, on the loading thread. */
 static int pl_screen_stepped(pl_player* p, ygfx_desc* gd) {
     if (p->def->min_tier) pl_need_add(p, PL_NEED_DISPLAY_TIER, NULL, p->def->min_tier);
     pl_gd_units(p, NULL, gd);
@@ -2344,22 +2344,16 @@ static int pl_screen_stepped(pl_player* p, ygfx_desc* gd) {
     p->caps.mode.h = p->sim.height;
     p->caps.mode.period_ns = p->sim.period;
     if (p->sim.gl_caps) {
-#if PL_GFX_DEFER
-        /* P3: ysp/gfx.h 0.23.0's names, from docs/designer.md ("The GL
-         * context"); not built against 0.23.0 yet */
         gd->cache = p->sim.cache;
         gd->gl_proc = p->sim.gl_proc;
         gd->gl_ctx = p->sim.gl_ctx;
         gd->defer = true;
         gd->gl_caps = p->sim.gl_caps;
+        gd->share = p->sim.share;
         gd->output_texture = true;
         if (!ygfx_open(&p->gfx, gd)) { pl_fail(p, "the gfx: %s", ygfx_error(&p->gfx)); return -1; }
         p->gfx_open = true;
         return 0;
-#else
-        pl_fail(p, "the stepped session on a GL context needs ysp/gfx.h 0.23.0 (a deferred open); this build has %s", YGFX_VERSION_STRING);
-        return -1;
-#endif
     }
     if (!pl_gfx_open_null(&p->gfx, gd)) { pl_fail(p, "the gfx: %s", ygfx_error(&p->gfx)); return -1; }
     p->gfx_open = true;
@@ -2582,8 +2576,9 @@ static void pl_check_sigroles(pl_player* p) {
     }
 }
 
-/* The text programs' first draws, which ygfx_crun() makes on first use, and
- * ygfx_prime(): off a trial's frames (docs/gfx.md). */
+/* The text programs and the per-set state, which ygfx_crun() makes on first
+ * use: off a trial's frames (docs/gfx.md). A deferred gfx records them, so
+ * its attach makes and primes them. */
 void pl_gfx_warm(pl_player* p) {
     ygfx_crun_desc rd;
     ygfx_citem item;
@@ -2607,7 +2602,6 @@ void pl_gfx_warm(pl_player* p) {
             rd.fields = 0;
             break;
         }
-    ygfx_prime(&p->gfx);
 }
 
 /* The load, from the pack's open to the data set's columns: pl_load() with
@@ -2710,10 +2704,14 @@ static int pl_load_pack(pl_player* p, const ypak_desc* pd) {
         }
         p->draw_order[j + 1] = v;
     }
-    /* the text program's first draw now, off the frame path (docs/gfx.md),
-     * as trial_stroop does; pl_check() has no GPU to warm, and a stepped
-     * session warms its GL at its first drawn frame (sim.c) */
-    if (p->runs_open && !p->checking && !p->sim.on) pl_gfx_warm(p);
+    /* the text programs now, off the frame path (docs/gfx.md), as
+     * trial_stroop does, then their first draws (ygfx_prime()). pl_check()
+     * has no GPU to warm. A stepped session's gfx is not on its context
+     * yet: pl_sim_attach() primes (sim.c) */
+    if (p->runs_open && !p->checking) {
+        pl_gfx_warm(p);
+        if (!p->sim.on) ygfx_prime(&p->gfx);
+    }
     /* static properties once, with session-level values */
     memset(&p->env, 0, sizeof p->env);
     for (i = 0; i < p->n_stims; i++) {

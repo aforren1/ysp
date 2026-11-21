@@ -218,12 +218,17 @@ when one of these is true:
   hover and focus over two frames.
 - ImGui's input queue holds events: ImGui applies one key or button change
   a frame.
-- Work waits for a frame: a check, a scroll to restore, a question to
-  open.
+- Work waits for a frame: a check to post, a scroll to restore, a
+  question to open. A check that runs on the check thread is not work for
+  a frame: its result wakes the loop (step 5, "Part T as built").
 - A panel animates (none in step 3).
 
-The check runs in the frame of the edit, after the editor and before the
-issues panel. The caret does not blink: a blinking caret is an animation.
+Through step 4, the check ran in the frame of the edit, after the editor
+and before the issues panel. Since step 5 (part T) it runs on the check
+thread: a frame that changes the document posts a check job at its end,
+and the frame after the thread's wake-up takes the result at its start.
+So the issues show one or more frames after the edit. The caret does not
+blink: a blinking caret is an animation.
 The rule is `dsg_redraw_*()` in `designer/core/redraw.c`.
 
 ### Decisions of step 4
@@ -1070,8 +1075,11 @@ ysp_designer (C++, Dear ImGui, SDL3, GL ES 3.0)
 5. The preview.
    - Planned 2026-11-20 (branch `designer-step5-plan`): "Plan of step 5",
      below, with its decisions accepted the same day. Part T (the check
-     and the session's load on a thread of their own) comes first. Nothing
-     is built.
+     and the session's load on a thread of their own) comes first.
+   - Partly done 2026-11-20 (branch `step5-int`): wave 1, parts P3
+     (ysp/gfx.h 0.23.0), P4 (the player's stepped session, 0.17.0) and T
+     (the check thread), built and merged ("Wave 1 integrated"). The
+     preview itself (parts S, A, B, C, D) is not built.
 6. Build and Run.
 7. The web build, with the text glue.
 
@@ -1236,7 +1244,9 @@ column (the panels), the issues, open, save and the view file.
   ImGui's path field or a Skribidi field that keeps its own undo has the
   keyboard. The definition editor gives its undo to the document
   (`skf_set_own_undo()`).
-- The check runs in the frame of any change of any buffer.
+- A change of any buffer posts a check job (through step 4 the check ran
+  in that frame; since step 5 it runs on the check thread, "Part T as
+  built").
 - After each check, `ui_issue_path(i)` gives the JSON Pointer of the value
   at issue i's place (`dsg_path_at()`). Tier 2 and 3 issues have places
   from `locate.c`, so they get a path too.
@@ -1376,8 +1386,10 @@ check of a part's test has a hand mutant that fails it, as in step 3.
 ## Plan of step 5
 
 Status: planned 2026-11-20 on branch `designer-step5-plan`; the user
-accepted its decisions the same day ("Decisions of the plan"). Nothing is
-built. This section answers, from the code at `98de716`, what the preview
+accepted its decisions the same day ("Decisions of the plan"). Wave 1
+(parts P3, P4 and T) is built and merged on branch `step5-int` the same
+day ("Wave 1 integrated"); parts S, A, B, C and D are not built. This
+section answers, from the code at `98de716`, what the preview
 needs from the player, from `ysp/gfx.h` and from the check, and gives
 the decisions, the shared interfaces, the parts, the tests, the
 measurements and the order of merges.
@@ -1604,7 +1616,9 @@ The API above, with these changes. The reference is
   writer's join and the disk wait are on the thread that closes.
 - The text programs' first draws and `ygfx_prime()` are at the end of
   `pl_sim_attach()`, not in the first drawn frame: they may allocate, and
-  a frame allocates nothing.
+  a frame allocates nothing. Changed at the integration (player 0.17.0,
+  "Wave 1 integrated"): the text programs are made at the load, and the
+  attach primes.
 - `live()` is asked at every trial's start, also for a template with no
   response, so a pin can stop at any leaf.
 
@@ -1963,7 +1977,8 @@ tests are in [gfx.md](gfx.md#v0230-the-output-texture-the-deferred-open-shared-p
   to 17 on llvmpipe. Uploads over 4 MB go in bands. One call can pass the
   budget: the llvmpipe storage of a 4096 x 4096 texture takes 17 to 22 ms,
   and a cold compile up to 65 ms. The budget is a target.
-- **What P4 changes.** `pl_sim_attach()` must not call `ygfx_prime()`
+- **What P4 changes** (done at the integration, player 0.17.0, "Wave 1
+  integrated"). `pl_sim_attach()` must not call `ygfx_prime()`
   after `ygfx_attach()` returns 1, because the attach has primed every
   program, and `ygfx_prime()` would add its read's wait (0.6 ms on the RX
   6600, 9.5 ms on llvmpipe). `pl_gfx_warm()`'s `ygfx_crun()` calls make
@@ -2290,9 +2305,10 @@ fails it. The threaded tests also run under ThreadSanitizer (gcc 12,
   calls. Measured by P3: up to 4.3 ms on the RX 6600 with Mesa's cache warm,
   17 to 22 ms on llvmpipe (a 4096 x 4096 texture's storage), and 31 ms for a
   cold text program on the RX 6600. Part D measures the designer's own frames.
-- **Threads.** Until part T the designer has one thread. The player's
-  statics and gfx's first open are the known races; ThreadSanitizer is
-  the check for the ones not known.
+- **Threads.** Part T added the check thread. P4 moved the player's
+  statics into each load, P3 made the NOISE table's first build take a
+  lock, and T builds it before its thread. ThreadSanitizer is the check
+  for the races not known.
 - **A restart shows late** when the check thread is busy: a session job
   waits behind a check (up to 201 ms on the generated project's text
   keystroke). The old session runs meanwhile.
@@ -2312,10 +2328,61 @@ fails it. The threaded tests also run under ThreadSanitizer (gcc 12,
 
 ### Not done in the plan
 
-- Nothing is built. The check's cost is measured (branch
-  `designer-check-cost`); the session's load, attach and step costs are
-  not.
+- At the plan, nothing was built. Wave 1 is built ("Wave 1
+  integrated"). The check's cost is measured (branch
+  `designer-check-cost`), and P3 measured the deferred open and the
+  attach (gfx.md, "v0.23.0"); the session's step costs and the designer's
+  own frames are not measured (part D).
 - Windows and macOS are not considered beyond what CI builds.
+
+### Wave 1 integrated (2026-11-20)
+
+Branch `step5-int`, from `integrate-1120`: `step5-p3-gfx` (P3,
+ysp/gfx.h 0.23.0), `step5-p4-player` (P4, player 0.16.0) and
+`step5-t-worker` (T, the check thread), merged in that order with
+`--no-ff`. Git merged every file itself: the parts' sections of this
+file, `docs/status.md`, the README and the CMake files did not overlap.
+
+**P4 on P3's API** (player 0.17.0; [player.md](player.md#the-gfx-on-a-gl-context)).
+P4's GL path had been written against the plan's names behind
+`PL_GFX_DEFER` and never compiled against 0.23.0.
+- `pl_sim_desc` gains `share`, passed to `ygfx_desc.share`. Part A sets it,
+  and `gl_caps`, from `main.cpp`'s first gfx.
+- `pl_gfx_warm()` (the text programs and each glyph set's draw state)
+  runs at the load, so the deferred gfx records it and the attach makes
+  it. `pl_sim_attach()` no longer calls `ygfx_prime()` after the attach:
+  the attach primes without the read's wait.
+- The guard is gone: the player needs gfx.h 0.23.0, and a desc with
+  `gl_caps` is never refused for the header's version.
+- `pl_sim_attach(p, 0)` is "all", as documented: gfx's own 0 is one step.
+- Found by the GL test: `pl_sim_texture()` said false when the texture was
+  there (`YGFX_OK` is 0).
+
+**Tests** (Linux desktop, i5-14500, Debian 12, gcc 12.2):
+- `test_player_sim` case (10): a session loaded on a second thread with
+  the caps and `share` of a gfx open on an EGL context (llvmpipe, no
+  window), attached and drawn on the context's thread, and read through
+  `pl_sim_texture()`, equals the same session on a direct GL gfx on 360 of
+  360 drawn frames, for stroop and oddball. The test leaves foreign GL
+  state before each drawn frame, as ImGui may. No program is made in a
+  frame, and no heap call (53,923 frames).
+- ctest from the Release build tree, examples and the Test Engine on,
+  `DISPLAY` unset: 140 of 140.
+- Sanitizers, built and run under `setarch -R`: ASan and UBSan: `test_player_sim` (677 checks), the nine designer tests and `test_gfx` with llvmpipe (`YGFX_TEST_DEVICES=mesa`) give no ASan or UBSan report; LeakSanitizer reports only Mesa's known 336 bytes in 6 blocks in `test_gfx`, each a `calloc()` from the unloaded llvmpipe, which no suppression can name (gfx.md, "Sanitizers"). ThreadSanitizer: `test_player_sim`, the nine designer tests and ten more runs of `test_designer_worker` give no report; `test_gfx` with llvmpipe gave 34, every one in Mesa's own mutex and condition variable teardown in `swrast_dri.so`, and with the one suppression `race:swrast_dri.so` none.
+- Mutants: 68 of 68 killed on the merged tree: `player_sim.toml` 20 (4 new: s-17 to s-20), `player_run.toml` rs-01 to rs-11, `player_v2.toml` vs-01 to vs-05, `player_lower.toml` 14 (ls-01 to ls-10, ls-09 and ls-10 new; ck-07, ck-09, ck-10, ck-12), `player_host.toml` h-04 (it needs `YPL_BIN`, the build folder), and `gfx.toml` ot-01 to ot-08, df-01 to df-06, sh-01 to sh-03; `--check` of every list, no anchor missing.
+- ysp-vis 0.20.0.6 in a scratch virtual environment (CPython 3.12):
+  82 passed, 14 skipped (the window tests).
+- A `-Wconversion` build of the designer, the player and their tests: no
+  warning in `designer/` or in the code that the three parts added; the
+  warnings that remain (`v2.c` line 2374, `gfx.h` lines 7319, 12154 to
+  12185, and the vendored headers) are older and only sign conversions.
+- The MSVC and clang warnings that CI treats as errors (C4701, C4244,
+  `-Wsometimes-uninitialized`) were looked for by reading the merged
+  diff, because no MSVC or clang is here: none found. MSVC and macOS were
+  not compiled.
+
+**Not done.** Parts S, A, B, C and D. T's ten hand mutants are not in a
+list and were not run again.
 
 ## How to build and run the skeleton
 
@@ -2532,16 +2599,18 @@ tests ("The integration").
   [lsl-viewer](https://github.com/aforren1/lsl-viewer) uses, is an
   optional test layer, off by default, because its license is not MIT
   ("UI tests with the Test Engine").
-- Does the check stay in the frame of the edit? Measured 2026-11-20
+- Does the check stay in the frame of the edit? Answered 2026-11-20: no.
+  Step 5's part T moved it to a thread of its own (the first option
+  below; "Plan of step 5", "Part T as built"). Measured 2026-11-20
   ("Evidence: the check's cost"; i5-14500, gcc 12.2, Release, one
   P-core). Each project in the repository fits 16 ms: a stroop text
   keystroke 7.1 ms (the build 6.4 ms), a bimanual keystroke 9.1 ms
   median, 12.9 ms max (`pl_check()`). A generated project with 200 texts
   in four scripts does not: 41 ms a text keystroke, and with 10,000 more
   texts from its tables 201 ms a text keystroke and 37 ms each other
-  keystroke. Not decided. The options, none built:
-  - A worker thread for the whole `dsg_check()`, the newest text wins.
-    No keystroke waits for a check. It costs a copy of the text and the
+  keystroke. The options:
+  - Built (part T): a worker thread for the whole `dsg_check()`, the
+    newest text wins. No keystroke waits for a check. It costs a copy of the text and the
     dirty tables per check (60 KB here), a report one check late, and
     one checker thread only (`pl_check()` has static scratch). The
     WebAssembly build needs threads (cross-origin isolation headers) or

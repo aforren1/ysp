@@ -4,13 +4,16 @@
 # each stepped session with ysp_player --sim run in the same process.
 # PL_SIM_CASES picks a mutant's cases. Mutants of the stepped session's code
 # in run.c, v2.c and lower.c are in those files' lists (test "sim").
+# PL_SIM_GL: case "gl" draws on Mesa's llvmpipe through EGL (no window) and
+# is skipped without it; PL_SIM_COUNT and the wraps count the heap calls in
+# pl_sim_frame(), as the CMake build does.
 header = "sim.c"
 
 [test.sim]
 source = "tests/player/sim_test.c"
 compiler = "gcc"
-flags = ["-std=c11", "-O1", "-w", "-DYSCR_NO_SDL", "-DPL_SIM_MUT", "-I$YSP_MINIAUDIO"]
-libs = ["-lm", "-lpthread", "-ldl"]
+flags = ["-std=c11", "-O1", "-w", "-DYSCR_NO_SDL", "-DPL_SIM_MUT", "-DPL_SIM_GL", "-DPL_SIM_COUNT", "-I$YSP_MINIAUDIO"]
+libs = ["-lm", "-lpthread", "-ldl", "-Wl,--wrap=malloc", "-Wl,--wrap=calloc", "-Wl,--wrap=realloc"]
 timeout = 300
 env = { YPL_REPO = "{repo}" }
 env_default = { YPAK = "{repo}/build/linux/pack/ypak" }
@@ -171,3 +174,42 @@ env = { PL_SIM_CASES = "display" }
 why = "The built-in rig is 1920 x 1080 (decision 1)."
 find = '''    p->sim.width = d->width > 0 ? d->width : 1920;'''
 replace = '''    p->sim.width = d->width > 0 ? d->width : 800;'''
+
+# --- s-17 to s-20: 0.17.0, the session on a GL context (ysp/gfx.h 0.23.0) --
+
+[[mutant]]
+id = "s-17"
+name = "the texture's name is refused when gfx gives it"
+test = "sim"
+env = { PL_SIM_CASES = "gl" }
+why = "ygfx_output_native() gives YGFX_OK, 0, on success; read as a bool, the preview would never get its texture."
+find = '''return ygfx_output_native((ygfx_gfx*)&p->gfx, out) == YGFX_OK;'''
+replace = '''return ygfx_output_native((ygfx_gfx*)&p->gfx, out);'''
+
+[[mutant]]
+id = "s-18"
+name = "a budget of 0 attaches one step a call"
+test = "sim"
+env = { PL_SIM_CASES = "gl" }
+why = "pl_sim_attach()'s 0 is all at once; gfx's own 0 is one step, so a caller that passes 0 and wants 1 would get 0."
+find = '''budget_ns > 0 ? budget_ns : INT64_MAX'''
+replace = '''budget_ns'''
+
+[[mutant]]
+id = "s-19"
+name = "the share gfx is not kept"
+test = "sim"
+env = { PL_SIM_CASES = "gl" }
+why = "Without desc.share each session compiles the built-in programs again: 211 ms with no shader cache (gfx.md)."
+find = '''    p->sim.share = d->share;
+'''
+replace = ''''''
+
+[[mutant]]
+id = "s-20"
+name = "no reset of gfx's state before a drawn frame"
+test = "sim"
+env = { PL_SIM_CASES = "gl" }
+why = "The host's GL calls since gfx's last frame (here the test's framebuffer bound to read the texture) are not in gfx's cache."
+find = '''    if (draw && p->sim.gl_caps) ygfx_reset_state(&p->gfx);'''
+replace = '''    if (0) ygfx_reset_state(&p->gfx);'''

@@ -36,8 +36,8 @@ env_default = { YPAK = "{repo}/build/linux/pack/ypak" }
 [test.sim]
 source = "tests/player/sim_test.c"
 compiler = "gcc"
-flags = ["-std=c11", "-O1", "-w", "-DYSCR_NO_SDL", "-DPL_SIM_MUT", "-I$YSP_MINIAUDIO"]
-libs = ["-lm", "-lpthread", "-ldl"]
+flags = ["-std=c11", "-O1", "-w", "-DYSCR_NO_SDL", "-DPL_SIM_MUT", "-DPL_SIM_GL", "-DPL_SIM_COUNT", "-I$YSP_MINIAUDIO"]
+libs = ["-lm", "-lpthread", "-ldl", "-Wl,--wrap=malloc", "-Wl,--wrap=calloc", "-Wl,--wrap=realloc"]
 timeout = 300
 env = { YPL_REPO = "{repo}" }
 env_default = { YPAK = "{repo}/build/linux/pack/ypak" }
@@ -703,3 +703,24 @@ find = '''        if (p->stand_in) {
             pl_need_add(p, PL_NEED_ROLE_TIER'''
 replace = '''        if (p->checking) {
             pl_need_add(p, PL_NEED_ROLE_TIER'''
+
+[[mutant]]
+id = "ls-09"
+name = "the stepped session's gfx is not given desc.share"
+test = "sim"
+env = { PL_SIM_CASES = "gl" }
+why = "0.17.0: the session uses the programs of the designer's first gfx; without it, each session compiles them."
+find = '''        gd->share = p->sim.share;
+'''
+replace = ''''''
+
+[[mutant]]
+id = "ls-10"
+name = "a stepped session makes its text draw state in a frame"
+test = "sim"
+env = { PL_SIM_CASES = "gl" }
+why = "0.17.0: pl_gfx_warm() runs at the load, so a deferred gfx records it and the attach makes it; else a trial's first text allocates in pl_sim_frame()."
+find = '''    if (p->runs_open && !p->checking) {
+        pl_gfx_warm(p);'''
+replace = '''    if (p->runs_open && !p->checking && !p->sim.on) {
+        pl_gfx_warm(p);'''

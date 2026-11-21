@@ -55,6 +55,12 @@ if(YSP_BUILD_TESTS)
         target_compile_definitions(test_player_sim PRIVATE PL_SIM_COUNT)
         target_link_libraries(test_player_sim PRIVATE -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc)
     endif()
+    # case (10), a GL context: EGL loaded at run time (skipped without it);
+    # the wrap gives the reference session a direct GL gfx
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        target_compile_definitions(test_player_sim PRIVATE PL_SIM_GL)
+        target_link_libraries(test_player_sim PRIVATE -Wl,--wrap=pl_gfx_open_null ${CMAKE_DL_LIBS})
+    endif()
     ysp_add_program(player_fuzz ${PROJECT_SOURCE_DIR}/tests/fuzz/player_fuzz.c rig methods devices)
     target_link_libraries(player_fuzz PRIVATE ysp_player_lib)
     # The system tests and the comparison with the C programs build packs

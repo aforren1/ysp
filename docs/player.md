@@ -1,6 +1,9 @@
 # The player
 
-Status: v0.16.0, 2026-11-20 (0.16.0: the stepped session, the `--sim`
+Status: v0.17.0, 2026-11-20 (0.17.0: the stepped session draws on its
+caller's GL context through ysp/gfx.h 0.23.0, with the programs of a
+`share` gfx, [The gfx on a GL context](#the-gfx-on-a-gl-context);
+0.16.0: the stepped session, the `--sim`
 session that its caller steps one frame at a time, for the designer's
 preview, [Reference: the stepped session](#reference-the-stepped-session);
 0.15.0: `pl_check()` refuses what a real
@@ -589,7 +592,7 @@ void pl_close(pl_player* p);
 | Call | Thread | What it does |
 |---|---|---|
 | `pl_sim_load()` | any | The load and lower of `pl_check()`, with the rig, the display and the data set. It starts the data set's writer. It makes no GL call. `r` is as `pl_check()`'s: the status, the refusal and its object, and the needs (tier 3), which the session meets with the check's stand-ins. Call `pl_close()` after any result. |
-| `pl_sim_attach()` | the GL thread | Makes the GL objects that the load recorded, for at most `budget_ns` a call (0: all). 1 when done, 0 when more is left, < 0 an error. Then it draws the text programs once and primes the programs (`ygfx_prime()`). With the null backend it gives 1 at once. |
+| `pl_sim_attach()` | the GL thread | Makes the GL objects that the load recorded (`ygfx_attach()`), for at most `budget_ns` a call (0: all). 1 when done, 0 when more is left, < 0 an error. The attach also draws each program once, the text programs that the load made too, without a wait for the GPU. With the null backend it gives 1 at once. |
 | `pl_sim_frame(p, false)` | the owner | One frame's logic with no gfx call: a fast forward, before or after attach. |
 | `pl_sim_frame(p, true)` | the GL thread, after attach | One frame, drawn. |
 | `pl_sim_key()`, `pl_sim_choice()`, `pl_sim_sample()` | the owner | Input for the next frame. |
@@ -625,6 +628,7 @@ After 1, the frames are done, and `pl_close()` writes the last rows and
 | `participant`, `rt_s` | The scripted participant of the trials that `live()` leaves to it, as `--participant` and `--rt` (`NULL` and 0: `correct`, 0.3 s). |
 | `width`, `height`, `period_ns` | The display. 0: 1920 x 1080 at 60 Hz. `--sim`'s display is 800 x 600. |
 | `gl_caps`, `cache`, `gl_proc`, `gl_ctx` | The gfx on the caller's GL context (ysp/gfx.h 0.23.0; see below). `gl_caps` `NULL`: the null backend, which makes every object and draws nothing. |
+| `share` | 0.17.0: a GL gfx open on the same context, whose programs the session's gfx uses (`ygfx_desc.share`), or `NULL`. The designer gives its first gfx. It must be open and attached when the first `pl_sim_attach()` call runs; the two gfx close in any order. |
 | `live(ctx, w)` | At each trial's start: true, the caller answers the trial (no scripted press); false, the scripted participant does. `w` gives the trial, its leaf, its row and its template. Optional. |
 | `on_code(ctx, role, code, t_ns)` | Each code that the session sends: a flip's at its onset, a response's at its time. These are the codes and times of `events.csv`'s `out` rows. Optional. |
 
@@ -668,22 +672,25 @@ A sound keeps its plan: its onset is its scheduled time, and a response
 - The writes go through the writer thread, as a real run's do. `--sim`
   writes in place.
 
-### What needs ysp/gfx.h 0.23.0
+### The gfx on a GL context
 
 The session draws on the caller's GL context through ysp/gfx.h 0.23.0's
-deferred open and output texture ([designer.md](designer.md), "The GL
-context", prerequisite P3). `PL_GFX_DEFER` is 1 when the header is 0.23.0
-or later. Before 0.23.0, the load refuses a desc with `gl_caps`, and the
-session draws on the null backend only. These calls wait for 0.23.0, in
-`pl_screen_stepped()` (`player/lower.c`) and `player/sim.c`:
+deferred open, shared programs and output texture ([gfx.md](gfx.md),
+"v0.23.0"; [designer.md](designer.md), "The GL context"). The player
+needs gfx.h 0.23.0 or later; 0.16.0's `PL_GFX_DEFER` guard is gone
+(0.17.0).
 
-- the open: `ygfx_desc.defer`, `.gl_caps` and `.output_texture`;
-- `ygfx_attach(g, gl_proc, gl_ctx, budget_ns)` in `pl_sim_attach()`;
-- `ygfx_output_native()` in `pl_sim_texture()`;
-- `ygfx_reset_state()` after attach and before a drawn frame (in 0.22.0
-  already; called on the GL path only).
+| Step | Thread | The gfx calls |
+|---|---|---|
+| `pl_sim_load()` with `gl_caps` | any | `ygfx_open()` with `defer`, `gl_caps`, `share`, `cache` and `output_texture`, at the session's display size. Every later call of the load (textures, glyph sets, buffers) is recorded, with no GL call. Then the text programs and each glyph set's draw state (`pl_gfx_warm()`): recorded too. |
+| `pl_sim_attach()` | the GL thread | `ygfx_attach()`, which makes the recorded calls, joins the `share` gfx's programs, and draws each program once without the read's wait for the GPU. 0.16.0 called `ygfx_prime()` after it; that read waits for the GPU (0.6 ms on an RX 6600, 9.5 ms on llvmpipe, gfx.md), and the attach has primed already. |
+| `pl_sim_frame(p, true)` | the GL thread | `ygfx_reset_state()` first: the caller's own GL calls since the last frame are not in gfx's state cache. |
+| `pl_sim_texture()` | the GL thread | `ygfx_output_native()`. 0.16.0 gave that call's result, `YGFX_OK` (0), as the bool, so it said false when the texture was there. |
+| `pl_sim_detach()` | the GL thread | `ygfx_close()`. |
 
-They use the plan's names, and nothing has built them against 0.23.0.
+`pl_sim_attach()`'s budget 0 is "all": the player passes `INT64_MAX`,
+because gfx's own 0 makes one step a call. The budget is a target: one
+step (one compile, one texture's storage) can pass it (gfx.md).
 
 ## Explanation: what lowering decided
 
@@ -1641,6 +1648,22 @@ frame, F40, F41, 3.11 rule 8 and the trial's end.
 | L2 (low): the lag per state row | A state row's `t_s` minus the `end_s` of the visit before (no column: the coordinator's decision, 2026-11-15); `trials.csv` `exit_lag_max_s` |
 
 ## Results
+
+### The session on a GL context (0.17.0, 2026-11-20)
+
+At the integration of designer step 5's wave 1 (branch `step5-int`), the
+player was built against ysp/gfx.h 0.23.0 for the first time. Linux
+desktop (i5-14500, Debian 12, gcc 12.2), Release unless the row says
+otherwise; Mesa llvmpipe (LLVM 15.0.6) through EGL's surfaceless
+platform, no window. Nothing here is a timing claim.
+
+| Check | Result |
+|---|---|
+| `test_player_sim` case (10), "gl" | stroop (no calibration; attach budget 1 ns) and oddball (the nominal calibration; budget 0): a session loaded on a second thread with `gl_caps` and `share` (a 64 x 64 gfx open on the context first, as the designer's), attached and drawn on the context's thread, 720 frames, each second one drawn and read through `pl_sim_texture()`'s name with the test's own GL calls. 360 of 360 drawn frames equal those of the same session on a direct GL gfx, for each pack (22 and 17 changes of the image over the run). Then the test leaves foreign GL state (program 0, vertex array 0, a texture on unit 0, a 16 x 16 viewport, its framebuffer bound) before each drawn frame. The data sets equal. Stroop attached in 63 calls, oddball in 1. Programs: 14 from `share`, 1 compiled; none made in a frame. |
+| (2) heap calls inside `pl_sim_frame()` | 0 in 53,923 frames, the 2,880 GL frames included (`--wrap` reaches the player and gfx, not Mesa) |
+| A bug that the GL test found | `pl_sim_texture()` gave `ygfx_output_native()`'s result, `YGFX_OK` (0), as its bool, so it said false when the texture was there |
+| Sanitizers (`setarch -R`, build and run) | ASan and UBSan: `test_player_sim` with case (10), no report. ThreadSanitizer: `test_player_sim` with case (10), no report. With `eglTerminate()`, LeakSanitizer reported Mesa's 112 bytes in 2 blocks from the unloaded llvmpipe (gfx.md, "Sanitizers"); the test does not terminate the display |
+| Mutants | `player_sim.toml` s-17 to s-20 (the texture refused on success, a budget of 0 as one step, `share` not kept, no reset before a drawn frame) and `player_lower.toml` ls-09 and ls-10 (`share` not given to the open, the text draw state made in a frame): 6 of 6 killed by case (10). On the merged tree, every mutant of the stepped session (`player_sim.toml` 20, `player_run.toml` 11, `player_v2.toml` 5, `player_lower.toml` 14 with the moved anchors, `h-04`) killed |
 
 ### The stepped session (0.16.0, 2026-11-20)
 

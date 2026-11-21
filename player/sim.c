@@ -52,6 +52,7 @@ int pl_sim_load(pl_player* p, const pl_sim_desc* d, pl_check_result* r) {
     p->sim.cache = d->cache;
     p->sim.gl_proc = d->gl_proc;
     p->sim.gl_ctx = d->gl_ctx;
+    p->sim.share = d->share;
     p->sim.cal = d->cal;
     p->sim.rig = d->rig;
     p->sim.live = d->live;
@@ -95,23 +96,19 @@ int pl_sim_load(pl_player* p, const pl_sim_desc* d, pl_check_result* r) {
 int pl_sim_attach(pl_player* p, int64_t budget_ns) {
     if (!p->sim.on || p->sim.stage == 0 || !p->gfx_open) return -1;
     if (p->sim.attached) return 1;
-#if PL_GFX_DEFER
     if (p->sim.gl_caps) {
-        /* P3: ysp/gfx.h 0.23.0's replay of the recorded calls, in steps of
-         * at most the budget; ImGui changed the GL state since gfx's last
-         * call */
-        int rc = ygfx_attach(&p->gfx, p->sim.gl_proc, p->sim.gl_ctx, budget_ns);
+        /* ysp/gfx.h's replay of the recorded calls, at most the budget a
+         * call. It primes every program the load recorded, the text ones
+         * that pl_gfx_warm() made too, without ygfx_prime()'s wait for the
+         * GPU, which would add 0.6 ms (RX 6600) to 9.5 ms (llvmpipe) to the
+         * UI's frame (docs/gfx.md, "v0.23.0") */
+        int rc = ygfx_attach(&p->gfx, p->sim.gl_proc, p->sim.gl_ctx, budget_ns > 0 ? budget_ns : INT64_MAX);   /* gfx's 0 is one step */
         if (rc < 0) { pl_fail(p, "the gfx: %s", ygfx_error(&p->gfx)); return -1; }
         if (rc == 0) return 0;
-        ygfx_reset_state(&p->gfx);
+    } else {
+        (void)budget_ns;
+        (void)ygfx_prime(&p->gfx);
     }
-#else
-    (void)budget_ns;
-#endif
-    /* the text programs' first draws and the priming, here and not in the
-     * first drawn frame: they may allocate, and a frame allocates nothing */
-    if (p->runs_open) pl_gfx_warm(p);
-    else (void)ygfx_prime(&p->gfx);
     p->sim.attached = true;
     return 1;
 }
@@ -133,9 +130,7 @@ int pl_sim_frame(pl_player* p, bool draw) {
         p->sim.stage = 3;
         return 1;
     }
-#if PL_GFX_DEFER
     if (draw && p->sim.gl_caps) ygfx_reset_state(&p->gfx);   /* the UI drew since gfx's last call */
-#endif
     memset(&f, 0, sizeof f);
     f.index = p->sim.frame;
     f.period = p->sim.period;
@@ -251,12 +246,7 @@ void pl_sim_where_now(const pl_player* p, pl_sim_where* w) {
 
 bool pl_sim_texture(const pl_player* p, ygfx_native* out) {
     memset(out, 0, sizeof *out);
-#if PL_GFX_DEFER
-    /* P3: ysp/gfx.h 0.23.0's output texture */
-    if (p->sim.on && p->sim.attached && p->sim.gl_caps && p->gfx_open) return ygfx_output_native((ygfx_gfx*)&p->gfx, out);
-#else
-    (void)p;
-#endif
+    if (p->sim.on && p->sim.attached && p->sim.gl_caps && p->gfx_open) return ygfx_output_native((ygfx_gfx*)&p->gfx, out) == YGFX_OK;
     return false;
 }
 
