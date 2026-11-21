@@ -12,11 +12,14 @@
 //   For each, after 60 frames that fill the glyph atlas, FRAMES frames
 //   (default 1000) with no input, headless as test_designer_ui draws them:
 //     draw     the chart view's draw() alone, in a 1000 x 700 window
+//     ring     the same with the preview's place on the middle state (a
+//              test double, view_chart.h) and Follow on (step 5, part C)
 //     frame    a whole frame (NewFrame to Render) with the chart shown
 //     build    dsg_chart_build() of the template (each change of the text)
 // Each line: median, p99 and max in microseconds.
 #include "ui.h"
 #include "views.h"
+#include "view_chart.h"
 #include "chart.h"
 #include "skt.h"
 
@@ -36,6 +39,9 @@
 #endif
 
 namespace {
+
+dsg_preview_where g_where;
+const dsg_preview_where* fake_where() { return &g_where; }
 
 double now_us() {
     timespec ts;
@@ -106,7 +112,7 @@ bool write(const char* path, const char* s, size_t n) {
 }
 
 // A project: bimanual's pack.json, the definition, and a view file with
-// the chart's template and zoom.
+// the chart's template and zoom, and Follow on.
 bool project(const char* dir, const char* def, size_t n, const char* tmpl, float zoom) {
     char err[256], a[DSG_PATH_MAX], b[DSG_PATH_MAX];
     char* d = nullptr;
@@ -120,7 +126,7 @@ bool project(const char* dir, const char* def, size_t n, const char* tmpl, float
     dsg_view v;
     memset(&v, 0, sizeof v);
     char part[512];
-    snprintf(part, sizeof part, "{\"template\": \"%s\", \"templates\": {\"%s\": {\"pan\": [20, 20], \"zoom\": %.2f, \"states\": {}}}}",
+    snprintf(part, sizeof part, "{\"follow\": true, \"template\": \"%s\", \"templates\": {\"%s\": {\"pan\": [20, 20], \"zoom\": %.2f, \"states\": {}}}}",
              tmpl, tmpl, zoom);
     snprintf(v.main_view, sizeof v.main_view, "chart");
     ok = ok && dsg_view_part_set(&v, "chart", part, strlen(part)) == 0 && dsg_view_write(dir, &v, err, sizeof err) == 0;
@@ -227,6 +233,16 @@ int main(int argc, char** argv) {
                ui_report() ? ui_report()->n_errors : -1);
         for (int i = 0; i < frames; i++) t[i] = draw_only(chart);
         report("draw", cases[c].name, t, frames);
+        memset(&g_where, 0, sizeof g_where);
+        g_where.trial = 0;
+        g_where.condition = -1;
+        g_where.tmpl = tmpl;
+        g_where.state = model.states[model.n_states / 2].name;
+        const ChartPreviewHooks hooks = { fake_where, nullptr };
+        ui_chart_set_preview_hooks(&hooks);
+        for (int i = 0; i < frames; i++) t[i] = draw_only(chart);
+        report("ring", cases[c].name, t, frames);
+        ui_chart_set_preview_hooks(nullptr);
         for (int i = 0; i < frames; i++) t[i] = frame();
         report("frame", cases[c].name, t, frames);
         for (int i = 0; i < frames; i++) {

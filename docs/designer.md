@@ -473,6 +473,7 @@ default it is the first template with `states`, in byte order.
 | A `to` that names no state | A short red arrow to nowhere. |
 | An issue | A red border (error) or a yellow border (warning) on the box or the arrow that `ui_issue_path()` puts it in. A badge on the box shows the number of issues in the state. |
 | The selection | A yellow border or arrow. |
+| The state that the preview runs (step 5) | A green ring outside the box, or around the end. An events template rings each of its parts while its events run, and the end while `after` runs ("Part C as built"). |
 
 Two arrows between the same two nodes bow to opposite sides. An arrow
 from a state to the same state is a loop above the box.
@@ -496,6 +497,8 @@ template, use the text view.
 | Delete | Press Delete, or click Delete. |
 | Set the first state | Click Set first. |
 | Add a state | Click Add state. The box goes to the middle of the chart, with the name `state`, `state2` and so on. |
+| Show the template that the preview runs (step 5) | Select Follow. A pick in the list, or a jump to another template, clears it. |
+| Preview the template shown (step 5) | Click Preview this template. The preview pins the first leaf of the timeline that runs it, any row, and the pane shows. |
 
 **The commands.** Each command is one transaction, so one undo step. Each
 command selects what it made or changed, so undo and redo put the
@@ -929,6 +932,152 @@ mutants that fail the test (reverted; not in a mutation list).
   `designer` builds `designer_tests` on both and has not run on this
   branch.
 - The Test Engine ran in its fast mode only.
+
+### Decisions of step 5
+
+#### Part C as built (2026-11-21)
+
+Branch `step5-c-chart`, from `step5-s` (`813e40b`). Part C adds the
+preview's hooks to the state chart (`designer/app/view_chart.cpp`): a
+ring on the running state, Follow, and "Preview this template" ("The
+chart" lists what a person does). No frozen file changed.
+
+**The ring.** A green ring outside the box of the state that
+`ui_preview_where()` names, when the chart shows the running template. It
+is outside the box, so the selection's border and an issue's border do not
+hide it. `dsg_chart_running()` (`chart.c`) gives the nodes:
+
+| Template | Place | Ring |
+|---|---|---|
+| `states` | a state | that state |
+| `states` | no state | the end |
+| `states` | a state that the chart does not have (the text changed after the load) | none |
+| `events` | the events run, or the response waits | each part |
+| `events` | `after` runs | the end |
+| any | between trials, another template, no session | none |
+
+- **An events template rings each part.** `pl_sim_where` (player 0.17.0)
+  and `dsg_preview_where` give a state for version 2 and only the phase
+  for an events template, not the step. So the chart cannot tell which part
+  runs. To ring one part, both structs need the part (or the step): a
+  change to the player and to the frozen `preview.h`. Not made; reported.
+  The common case has one part (no `until`), where the ring is exact.
+
+**Follow.** A check box in the chart's toolbar. While it is on, the chart
+shows the template that the preview runs, and changes with it.
+- Off by default: a chart that jumps while a person edits it would lose
+  their place.
+- Between trials, with no session, or when the text no longer has the
+  running template, the chart stays where it is (`dsg_chart_follow()`).
+- A pick in the template list, or a jump to a state of another template
+  (an issue, a panel), clears Follow. Else the next frame would take the
+  chart back.
+- It is view state: the part `chart` holds `"follow": true`, written only
+  when on, so a project that never follows keeps its part's bytes. Any
+  other value reads as off.
+
+**"Preview this template".** A button in the toolbar. It calls
+`dsg_preview_pin_template()` with the shown template. When the preview
+pins a leaf, the AUX pane shows; when no leaf runs the template, the status
+line says "Not pinned: no leaf of the timeline runs 'T'." A read-only chart
+(an events template, or a text that does not parse) pins too: the pin
+edits no definition. The pin runs at the end of the chart's frame, after
+the last read of the place, because a pin restarts the preview and the
+place's strings are valid only until then (`preview.h`, "Pointers").
+
+**The seam.** `designer/app/view_chart.h` (new): the chart reads the
+place and pins only through two hooks, `ui_preview_where()` and
+`dsg_preview_pin_template()` by default. `ui_chart_set_preview_hooks()`
+puts in a test double; NULL puts the real calls back. The double gives
+each place at once, with no session to load and step, and it works on S's
+stub of `preview.c`, which runs no session. The logic that needs no window
+is in `chart.c`, so `test_designer_chart` tests it headless.
+
+**Cost.** The ring is two integers a frame and one `AddRect()` or
+`AddCircle()` into the draw list, which keeps its buffers between frames:
+no allocation per frame (from the code; not counted with an allocator
+hook). Follow copies the template's name only when it changes.
+`bench_designer_chart` gains a line `ring`: the view's `draw()` with the
+place (a test double) on the middle state and Follow on, against `draw`,
+the same with no place. i5-14500, gcc 12.2, Release, pinned to CPU 2,
+1,000 frames, two runs. The machine was not quiet: load average 8.8 to
+11.6 from other jobs. Microseconds, median and p99 of run 1; run 2 was
+within 0.6 us at the median.
+
+| Chart | `draw` | `ring` |
+|---|---|---|
+| `v2_retry`, zoom 1 | 24.6, 25.8 | 24.7, 25.9 |
+| 50 states, zoom 1 | 54.3, 55.9 | 54.5, 57.5 |
+| 50 states, zoom 0.25 | 82.8, 85.0 | 83.2, 85.0 |
+| 200 states, zoom 1 | 195.5, 322.1 | 195.6, 198.7 |
+| 200 states, zoom 0.25 | 199.3, 205.1 | 199.8, 204.1 |
+
+The ring and Follow add at most 0.6 us a frame, within the noise of this
+load.
+
+**Tests** (Linux desktop, i5-14500, Debian 12, gcc 12.2):
+- `test_designer_chart` part 5 (now 184 checks, 25 new): the ring's nodes
+  for each row of the table above, on a states template, an events
+  template of three parts and one of one part; Follow's template (the
+  definition's own key, none for a missing one, between trials, no session
+  or no definition); `"follow"` through the part (absent when off, read
+  back when on, off for a value of another type, off after
+  `dsg_chart_view_free()`).
+- `test_designer_te`, five new chart tests. The first three use the test
+  double and find the ring by its color in the chart's draw list:
+
+| Test | What it does |
+|---|---|
+| `chart/ring` | bimanual: no ring with no place; the ring on `hold_start`, and nowhere else, also with the box selected; on `go`; on the end with no state; none for `track`, between trials or with no session. oddball: the one part while the events run, the end in `after`; after an `until` is set into the text, each of the three parts. |
+| `chart/follow` | Off at first: the chart stays on `reach` while `track` runs. On: it shows `track` with the ring on `wait`, then `reach` when that runs; it stays between trials, with no session and for a template that the text lacks. Save writes `"follow":true`. A jump to `track` clears it, and so does a pick of `track` in the list. |
+| `chart/pin` | The button pins `reach`; a refusal shows the status and not the pane; a pin shows the pane. oddball's read-only chart pins `oddball`. |
+| `chart/pin_real` | With the real `preview.c`: the pin is the first leaf of the definition's timeline that runs `reach`, row any, and the pane shows. |
+| `chart/ring_real` | With the real `preview.c`: Follow on, the pane shown, a session of bimanual runs until it is in a state, then paused; the ring is on that state and nowhere else. |
+
+- **Re-run after part A merges:** `chart/pin_real` and `chart/ring_real`.
+  On S's stub they log "skipped" and pass: a stub's
+  `dsg_preview_session_ops()` gives no `load`, and the tests check that.
+  With part A they run, and they were not run here. Also re-run the other
+  `chart/` tests and `test_designer_chart`, which do not depend on A.
+- ctest from the Release build tree, examples and the Test Engine on,
+  `DISPLAY` unset: 141 of 141. `test_designer_te` 32 of 32, three runs.
+- ASan with UBSan (gcc 12, Debug, built and run under `setarch -R`):
+  the ten designer tests, `halt_on_error`, no report.
+
+**Hand mutants** (each reverted; each fails a test):
+
+| Mutant | Fails |
+|---|---|
+| c-01: another template rings | `chart`: another template: no ring |
+| c-02: no state rings nothing, not the end | `chart`: no state: the end; `chart/ring` |
+| c-03: an events template's `after` rings the parts | `chart`: after: the end; `chart/ring` |
+| c-04: an events template rings its first part only | `chart`: every part |
+| c-05: the between phase rings | `chart`: the between phase: no ring |
+| c-06: Follow takes a template that the text does not have | `chart`: Follow's three checks |
+| c-07: `"follow"` not written | `chart`: on: written; `chart/follow` (Save) |
+| c-08: `"follow"` written when off | `chart`: off: no key |
+| c-09: `"follow"` not read | `chart`: on: read back |
+| v-01: the ring on a box not drawn | `chart/ring`, `chart/follow` |
+| v-02: the end never ringed | `chart/ring` |
+| v-03: only the first node of the range ringed | `chart/ring` (three parts) |
+| v-04: Follow ignored | `chart/follow` |
+| v-05: a pick in the list keeps Follow | `chart/follow` |
+| v-06: a jump to another template keeps Follow | `chart/follow` |
+| v-07: a pin does not show the pane | `chart/pin` |
+| v-08: a refused pin says nothing | `chart/pin` |
+| v-09: the pin names no template | `chart/pin` |
+| v-10: a read-only chart does not pin | `chart/pin` |
+
+An earlier form of v-02 (no circle around the end) survived: the rectangle
+branch then rang the end. That is only a shape; the mutant was replaced by
+one that rings no end.
+
+**Not done.**
+- `chart/pin_real` and `chart/ring_real` did not run (S's stub).
+- The window was not opened: no person saw the ring or used Follow.
+- An events template's ring cannot name one part (above).
+- MSVC, clang and macOS were not compiled. Locals that a call fills are
+  initialized (C4701); no narrowing conversion was added (C4244).
 
 ## First version
 

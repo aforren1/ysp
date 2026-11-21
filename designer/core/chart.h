@@ -105,6 +105,24 @@ bool dsg_chart_locate(const dsg_chart* c, const char* path, dsg_chart_place* out
  * its `over`. */
 bool dsg_chart_place_has_edge(const dsg_chart_place* p, const dsg_chart_edge* e);
 
+/* --- the preview's place (step 5, part C) ------------------------------------ */
+
+struct dsg_preview_where;   /* preview.h */
+
+/* The nodes that the chart rings for the preview's place w, as the range
+ * [*first, *last] (states, then the end at n_states). A states template:
+ * the state that w names, or the end when it names none. An events
+ * template: w gives no step (pl_sim_where has none), so every part while
+ * the events run or the response waits, and the end once `after` runs.
+ * false, with -1 in both: w is NULL, between trials, in another template,
+ * or names a state that this chart does not have (the text changed since
+ * the session loaded). */
+bool dsg_chart_running(const dsg_chart* c, const struct dsg_preview_where* w, int* first, int* last);
+/* Follow: the template that w runs, as root's `trials` names it, so the
+ * pointer lives as long as root. NULL when w is NULL, between trials, or
+ * runs a template that root does not have. */
+const char* dsg_chart_follow(const yjs_value* root, const struct dsg_preview_where* w);
+
 /* --- commands: each one transaction, so one undo step ------------------------ */
 
 /* Each returns 0, or -1 with the transaction cancelled and one line in
@@ -153,6 +171,8 @@ typedef struct dsg_chart_view {
     dsg_chart_tview* t;  int n_t, cap_t;
     uint64_t gen;        /* changes when a position is added, removed or
                           * renamed, so a view can cache lookups              */
+    bool follow;         /* step 5: show the template that the preview runs;
+                          * the part's "follow", written only when true       */
 } dsg_chart_view;
 
 void dsg_chart_view_init(dsg_chart_view* v);

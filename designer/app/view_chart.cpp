@@ -7,7 +7,12 @@
 // the view file's "chart" part, keyed by template and state name, never the
 // definition (format D13). State names and edge labels are user text, so
 // Skribidi lays them out (skt.h).
+//
+// Step 5, part C: a ring on the state that the preview runs, Follow (the
+// chart shows the template that the preview runs) and "Preview this
+// template" (the pin). The place comes through view_chart.h's hooks.
 #include "views.h"
+#include "view_chart.h"
 #include "chart.h"
 #include "skf.h"
 #include "skt.h"
@@ -41,8 +46,11 @@ const ImU32 kEdge = IM_COL32(200, 200, 210, 255), kNext = IM_COL32(130, 130, 140
 const ImU32 kOver = IM_COL32(200, 140, 220, 255), kLabel = IM_COL32(230, 220, 160, 255);
 const ImU32 kErr = IM_COL32(255, 110, 100, 255), kWarn = IM_COL32(240, 200, 90, 255);
 const ImU32 kBannerEvents = IM_COL32(40, 80, 140, 255), kBannerStale = IM_COL32(130, 40, 40, 255);
+// The ring: a color no other mark uses, so a test can find it in the draw list.
+const ImU32 kRun = IM_COL32(90, 230, 140, 255);
+const float kRingGap = 5, kRingW = 3;
 
-enum ActKind { ACT_NONE, ACT_ADD, ACT_CONNECT, ACT_DELETE_STATE, ACT_DELETE_EXIT, ACT_RENAME, ACT_FIRST, ACT_SELECT };
+enum ActKind { ACT_NONE, ACT_ADD, ACT_CONNECT, ACT_DELETE_STATE, ACT_DELETE_EXIT, ACT_RENAME, ACT_FIRST, ACT_SELECT, ACT_PIN };
 
 // An edit waits for the end of the frame's drawing: a command changes the
 // document and, through the rename listener, the positions this frame reads.
@@ -84,8 +92,11 @@ struct Chart {
     dsg_chart_tview events_view = {};   // an events template's pan and zoom:
                                         // not kept, as its positions are not
     Action act;
+    int ring_first = -1, ring_last = -1;   // the nodes the preview runs, this frame
 };
 Chart* C = nullptr;
+
+ChartPreviewHooks g_hooks = { ui_preview_where, dsg_preview_pin_template };
 
 const char* trial_name(const yjs_value* trials, uint32_t i) { return trials->u.members[i].key; }
 
@@ -234,6 +245,14 @@ void run_action(bool stale) {
     if (a.kind == ACT_SELECT) {
         if (a.text[0]) select_path(a.text);
         else select_template();
+        return;
+    }
+    if (a.kind == ACT_PIN) {
+        // A read-only chart may pin too: the pin edits no definition. It
+        // runs here, after the frame's last read of the place, because a pin
+        // restarts the preview and the place's strings end with that.
+        if (g_hooks.pin(ui_preview(), a.text)) ui_show_aux(true);
+        else ui_set_status("Not pinned: no leaf of the timeline runs '%s'.", a.text);
         return;
     }
     if (!editable(stale)) return;
@@ -461,6 +480,13 @@ void draw_nodes(ImDrawList* dl, const Xf& xf, int sel_state, int hovered) {
         const bool sel = i == sel_state;
         ImU32 border = sel ? kSel : (i == hovered ? kHover : kBorder);
         if (C->node_sev[i] >= 0 && !sel) border = sev_color(C->node_sev[i]);
+        // outside the box, so it shows with the selection and an issue's border
+        const bool ring = i >= C->ring_first && i <= C->ring_last;
+        const float gap = kRingGap * xf.z;
+        if (ring && i == C->model.n_states)
+            dl->AddCircle(ImVec2((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f), kEndR * xf.z + gap, kRun, 0, kRingW);
+        else if (ring)
+            dl->AddRect(ImVec2(a.x - gap, a.y - gap), ImVec2(b.x + gap, b.y + gap), kRun, 6 * xf.z + gap, kRingW);
         if (i == C->model.n_states) {
             const ImVec2 c((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f);
             dl->AddCircleFilled(c, kEndR * xf.z, IM_COL32(70, 50, 50, 255));
@@ -511,7 +537,11 @@ void template_combo(const yjs_value* trials) {
             const char* name = trial_name(trials, i);
             ImGui::PushID((int)i);
             const ImVec2 at = ImGui::GetCursorScreenPos();
-            if (ImGui::Selectable("##t", strcmp(name, C->tmpl) == 0, 0, ImVec2(0, row))) dsg_chart_view_set_current(&C->view, name);
+            if (ImGui::Selectable("##t", strcmp(name, C->tmpl) == 0, 0, ImVec2(0, row))) {
+                // a person's pick wins: Follow would take the chart back
+                if (strcmp(name, C->tmpl) != 0) C->view.follow = false;
+                dsg_chart_view_set_current(&C->view, name);
+            }
             skt_draw_layout(ImGui::GetWindowDrawList(), skt_layout(name, ui_text_size()), at.x + 2, at.y + 1, 1.0f, kText);
             ImGui::PopID();
         }
@@ -543,8 +573,21 @@ void banner(ImU32 bg, const char* text) {
                 w - 2 * st.FramePadding.x);
 }
 
+void preview_controls() {
+    ImGui::SameLine();
+    ImGui::Checkbox("Follow", &C->view.follow);
+    ImGui::SetItemTooltip("Show the template that the preview runs");
+    ImGui::SameLine();
+    if (ImGui::Button("Preview this template") && C->act.kind == ACT_NONE) {
+        C->act.kind = ACT_PIN;
+        snprintf(C->act.text, sizeof C->act.text, "%s", C->tmpl);
+    }
+    ImGui::SetItemTooltip("Pin the preview to the first leaf of the timeline that runs this template, any row, and show the preview");
+}
+
 void toolbar(const yjs_value* trials, bool stale, int sel_state, const char* sel_edge) {
     template_combo(trials);
+    preview_controls();
     const bool edit = editable(stale);
     ImGui::SameLine();
     if (C->renaming >= 0 && C->rename) {
@@ -817,6 +860,8 @@ void reveal(const dsg_sel* s) {
     memcpy(head, s->path, k);
     head[k] = 0;
     if (dsg_path_split(head, rest, sizeof rest, tmpl, sizeof tmpl)) return;
+    // the person went to another template: Follow would take the chart back
+    if (strcmp(tmpl, C->tmpl) != 0) C->view.follow = false;
     dsg_chart_view_set_current(&C->view, tmpl);
     snprintf(C->center, sizeof C->center, "%s", s->path);
 }
@@ -829,6 +874,13 @@ void draw() {
         return;
     }
     const yjs_value* trials = yjs_get(root, "trials");
+    // The place, read once a frame. Its strings live until the preview
+    // changes, which only the pin does, after the last read (run_action()).
+    const dsg_preview_where* running = g_hooks.where();
+    if (C->view.follow) {
+        const char* f = dsg_chart_follow(root, running);
+        if (f) dsg_chart_view_set_current(&C->view, f);   // copies only on a change
+    }
     const char* tmpl = pick_template(trials);
     if (!tmpl) {
         ImGui::TextDisabled("The definition has no templates (\"trials\").");
@@ -845,10 +897,8 @@ void draw() {
         read_positions();
         mark_issues();
     }
-    // Step 5, part C: the ring on the running state and Follow read the
-    // preview's place here. STUB from part S: nothing is drawn yet.
-    const dsg_preview_where* running = ui_preview_where();
-    (void)running;
+    C->ring_first = C->ring_last = -1;
+    if (C->have_model) dsg_chart_running(&C->model, running, &C->ring_first, &C->ring_last);
 
     dsg_chart_place sel = { -1, -1, -1 };
     const int sel_state = C->have_model ? selected_state(&sel) : -1;
@@ -878,6 +928,13 @@ void draw() {
 }
 
 } // namespace
+
+void ui_chart_set_preview_hooks(const ChartPreviewHooks* h) {
+    g_hooks.where = h && h->where ? h->where : ui_preview_where;
+    g_hooks.pin = h && h->pin ? h->pin : dsg_preview_pin_template;
+}
+
+uint32_t ui_chart_ring_color() { return kRun; }
 
 extern const UiView ui_view_chart = {
     "chart", "Chart", UI_SLOT_MAIN,
