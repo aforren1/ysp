@@ -67,6 +67,8 @@ void accept_textures() {
 
 double frame() {
     ImGui::GetIO().DeltaTime = 1.0f / 60.0f;
+    // outside the time: the check runs on its own thread
+    ui_wait_checks(30000000000LL);
     const double t0 = now_us();
     ImGui::NewFrame();
     skt_frame_begin();

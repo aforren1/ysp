@@ -26,6 +26,7 @@ struct App {
     SDL_Window* win = nullptr;
     SDL_GLContext gl = nullptr;
     Uint32 dialog_event = 0;   // the folder dialog's answer, on the main thread
+    Uint32 check_event = 0;    // a result of the check thread is ready
     dsg_redraw redraw = {};
     bool quit = false;
 };
@@ -56,6 +57,15 @@ bool pick_folder(void*) {
     // section 6): ui_dialog_failed() then points at the typed path.
     SDL_ShowOpenFolderDialog(dialog_done, nullptr, A.win, nullptr, false);
     return true;
+}
+
+// On the check thread. SDL's event queue is thread safe, and the event wakes
+// SDL_WaitEvent(); the frame it brings takes the result (ui_frame()).
+void SDLCALL check_done(void*) {
+    SDL_Event e;
+    SDL_zero(e);
+    e.type = A.check_event;
+    SDL_PushEvent(&e);
 }
 
 void set_title(void*, const char* t) { SDL_SetWindowTitle(A.win, t); }
@@ -123,7 +133,8 @@ int main(int argc, char** argv) {
         fprintf(stderr, "ysp_designer: SDL_Init: %s\n", SDL_GetError());
         return 1;
     }
-    A.dialog_event = SDL_RegisterEvents(1);
+    A.dialog_event = SDL_RegisterEvents(2);
+    A.check_event = A.dialog_event + 1;
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, 0);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
@@ -162,8 +173,14 @@ int main(int argc, char** argv) {
     const char* base = SDL_GetBasePath();
     snprintf(font_dir, sizeof font_dir, "%sfonts", base ? base : "");
 #endif
-    UiPlatform plat = { nullptr, pick_folder, set_title, quit };
+    UiPlatform plat = { nullptr, pick_folder, set_title, quit, check_done };
     char err[512];
+    // ui_init() starts the check thread, so it comes after everything that
+    // the thread's wake-up uses (the event type) and after the GL context.
+    // The thread's first use of ysp/gfx.h is pl_check()'s null gfx; gfx's
+    // NOISE table, not thread safe before its first build, is built by
+    // dsg_worker_start() on this thread. The preview's GL gfx (step 5, part
+    // A) opens on this thread too.
     if (!ui_init(font_dir, &plat, err, sizeof err)) {
         fprintf(stderr, "ysp_designer: %s\n", err);
         return 1;

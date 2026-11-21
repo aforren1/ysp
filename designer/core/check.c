@@ -29,7 +29,8 @@ struct dsg_checker {
     bool         have_cal;
     yexp_report* rep;           /* yexp_load() without a pack                */
     /* the check pack */
-    void*        pack;          /* in memory, malloc's alignment (>= 8)      */
+    dsg_pack*    pk;            /* the checker's reference                    */
+    void*        pack;          /* pk's bytes, malloc's alignment (>= 8)      */
     size_t       pack_size;
     uint8_t      texts[32];     /* the texts it was built for                */
     uint8_t      tables[32];    /* the unsaved tables it was built from      */
@@ -47,6 +48,49 @@ struct dsg_checker {
     size_t       n_strs, c_strs;
 };
 
+/* --- the pack's bytes, shared ---------------------------------------------- */
+
+struct dsg_pack {
+    volatile int32_t refs;
+    size_t size;
+    void*  data;
+};
+
+/* Atomic: packs are freed on whichever thread drops the last reference. */
+static volatile int32_t g_packs_live;
+
+/* Takes over data (malloc'd). One reference, the caller's. */
+static dsg_pack* pack_new(void* data, size_t size) {
+    dsg_pack* pk = (dsg_pack*)malloc(sizeof *pk);
+    if (!pk) return NULL;
+    pk->refs = 1;
+    pk->size = size;
+    pk->data = data;
+    dsg_atomic_add(&g_packs_live, 1);
+    return pk;
+}
+
+dsg_pack* dsg_pack_retain(dsg_pack* pk) {
+    if (pk) dsg_atomic_add(&pk->refs, 1);
+    return pk;
+}
+
+void dsg_pack_release(dsg_pack* pk) {
+    if (!pk || dsg_atomic_add(&pk->refs, -1) != 0) return;
+    free(pk->data);
+    free(pk);
+    dsg_atomic_add(&g_packs_live, -1);
+}
+
+const void* dsg_pack_bytes(const dsg_pack* pk, size_t* size) {
+    if (size) *size = pk ? pk->size : 0;
+    return pk ? pk->data : NULL;
+}
+
+int32_t dsg_pack_live(void) { return dsg_atomic_load(&g_packs_live); }
+
+dsg_pack* dsg_checker_pack(dsg_checker* c) { return c ? c->pk : NULL; }
+
 dsg_checker* dsg_checker_new(void) {
     dsg_checker* c = (dsg_checker*)calloc(1, sizeof *c);
     if (!c) return NULL;
@@ -59,7 +103,9 @@ dsg_checker* dsg_checker_new(void) {
 }
 
 void dsg_checker_forget(dsg_checker* c) {
-    free(c->pack);
+    /* a session may still hold it: only the checker's reference goes */
+    dsg_pack_release(c->pk);
+    c->pk = NULL;
     c->pack = NULL;
     c->pack_size = 0;
     c->have_failed = false;
@@ -237,20 +283,40 @@ static bool table_dirty(const dsg_doc* d, int b) {
     return d && dsg_doc_buffer_kind(d, b) == DSG_KIND_TABLE && dsg_doc_dirty(d, b);
 }
 
+/* The dirty tables of d, pointing into it: at most DSG_MAX_BUFFERS. */
+static int doc_tables(const dsg_doc* d, dsg_table_bytes* out) {
+    int b, k = 0;
+    for (b = 1; d && b < dsg_doc_buffer_count(d) && k < DSG_MAX_BUFFERS; b++) {
+        if (!table_dirty(d, b)) continue;
+        out[k].buf = b;
+        out[k].name = dsg_doc_buffer_name(d, b);
+        out[k].rev = dsg_doc_rev(d, b);
+        out[k].bytes = dsg_doc_bytes(d, b, &out[k].n);
+        k++;
+    }
+    return k;
+}
+
+typedef struct tables_in { const dsg_table_bytes* t; int n; } tables_in;
+
+static const dsg_table_bytes* find_table(const tables_in* ti, const char* name) {
+    int i;
+    for (i = 0; i < ti->n; i++)
+        if (strcmp(ti->t[i].name, name) == 0) return &ti->t[i];
+    return NULL;
+}
+
 /* Which tables the pack must take from the document, and at which
  * revision: a clean table comes from its file. */
-static void tables_key(const dsg_doc* d, uint8_t key[32]) {
+static void tables_key(const tables_in* ti, uint8_t key[32]) {
     ypak_sha256_state h;
-    int b;
+    int i;
     ypak_sha256_init(&h);
-    for (b = 1; d && b < dsg_doc_buffer_count(d); b++) {
-        if (!table_dirty(d, b)) continue;
-        {
-            const char* nm = dsg_doc_buffer_name(d, b);
-            const uint64_t rev = dsg_doc_rev(d, b);
-            ypak_sha256_update(&h, nm, strlen(nm) + 1);
-            ypak_sha256_update(&h, &rev, sizeof rev);
-        }
+    for (i = 0; ti && i < ti->n; i++) {
+        const char* nm = ti->t[i].name;
+        const uint64_t rev = ti->t[i].rev;
+        ypak_sha256_update(&h, nm, strlen(nm) + 1);
+        ypak_sha256_update(&h, &rev, sizeof rev);
     }
     ypak_sha256_final(&h, key);
 }
@@ -301,7 +367,7 @@ static int texts_key(const dsg_checker* c, const char* text, size_t n, uint8_t k
 /* The project's description with the experiment's source replaced by the
  * text under check, and each dirty table's by its copy. malloc'd,
  * NUL-ended. */
-static char* check_description(const dsg_project* p, const dsg_doc* tables, size_t* len, char* err, size_t cap) {
+static char* check_description(const dsg_project* p, const tables_in* tables, size_t* len, char* err, size_t cap) {
     yjs_arena a;
     yjs_value* root = NULL;
     yjs_value* ex;
@@ -319,13 +385,13 @@ static char* check_description(const dsg_project* p, const dsg_doc* tables, size
             yjs_value* r = yjs_at(res, i);
             const yjs_value* src = r && r->type == YJS_OBJECT ? yjs_get(r, "source") : NULL;
             const yjs_value* kind = r && r->type == YJS_OBJECT ? yjs_get(r, "kind") : NULL;
-            int b;
+            const dsg_table_bytes* tb;
             if (!src || src->type != YJS_STRING || !kind || kind->type != YJS_STRING || strcmp(kind->u.s, "table") != 0 || !tables)
                 continue;
-            b = dsg_doc_find_buffer(tables, src->u.s);
-            if (b > 0 && table_dirty(tables, b)) {
+            tb = find_table(tables, src->u.s);
+            if (tb) {
                 char rel[64];
-                table_copy(rel, sizeof rel, b);
+                table_copy(rel, sizeof rel, tb->buf);
                 yjs_set(&a, r, "source", yjs_new_stringz(&a, rel));
             }
         }
@@ -342,7 +408,7 @@ static char* check_description(const dsg_project* p, const dsg_doc* tables, size
     return out;
 }
 
-static int build(dsg_checker* c, const dsg_project* p, const char* text, size_t n, const dsg_doc* tables, const uint8_t tkey[32],
+static int build(dsg_checker* c, const dsg_project* p, const char* text, size_t n, const tables_in* tables, const uint8_t tkey[32],
                  char* err, size_t cap) {
     char dir[DSG_PATH_MAX], src[DSG_PATH_MAX], pack[DSG_PATH_MAX];
     char* desc;
@@ -350,8 +416,9 @@ static int build(dsg_checker* c, const dsg_project* p, const char* text, size_t 
     char* bytes = NULL;
     size_t blen = 0;
     ypt_options o;
-    int rc, b;
+    int rc, i;
     uint8_t key[32];
+    dsg_pack* pk;
     if (dsg_join(dir, sizeof dir, p->folder, DSG_DIR) || dsg_join(src, sizeof src, p->folder, DSG_CHECK_SOURCE) ||
         dsg_join(pack, sizeof pack, p->folder, DSG_CHECK_PACK)) {
         snprintf(err, cap, "the project's path is too long");
@@ -361,18 +428,14 @@ static int build(dsg_checker* c, const dsg_project* p, const char* text, size_t 
     dsg_join(dir, sizeof dir, p->folder, DSG_DIR "/check");
     if (dsg_make_dir(dir, err, cap)) return -1;
     if (dsg_write_file(src, text, n, err, cap)) return -1;
-    for (b = 1; tables && b < dsg_doc_buffer_count(tables); b++) {
+    for (i = 0; tables && i < tables->n; i++) {
         char rel[64], path[DSG_PATH_MAX];
-        size_t tn = 0;
-        const char* tb;
-        if (!table_dirty(tables, b)) continue;
-        table_copy(rel, sizeof rel, b);
-        tb = dsg_doc_bytes(tables, b, &tn);
+        table_copy(rel, sizeof rel, tables->t[i].buf);
         if (dsg_join(path, sizeof path, p->folder, rel)) {
             snprintf(err, cap, "the project's path is too long");
             return -1;
         }
-        if (dsg_write_file(path, tb, tn, err, cap)) return -1;
+        if (dsg_write_file(path, tables->t[i].bytes, tables->t[i].n, err, cap)) return -1;
     }
     desc = check_description(p, tables, &dlen, err, cap);
     if (!desc) return -1;
@@ -381,7 +444,14 @@ static int build(dsg_checker* c, const dsg_project* p, const char* text, size_t 
     free(desc);
     if (rc != 0) return -1;
     if (dsg_read_file(pack, &bytes, &blen, err, cap)) return -1;
-    free(c->pack);
+    pk = pack_new(bytes, blen);
+    if (!pk) {
+        free(bytes);
+        snprintf(err, cap, "out of memory");
+        return -1;
+    }
+    dsg_pack_release(c->pk);
+    c->pk = pk;
     c->pack = bytes;
     c->pack_size = blen;
     if (texts_key(c, text, n, key, err, cap) == 0) memcpy(c->texts, key, sizeof key);
@@ -392,7 +462,7 @@ static int build(dsg_checker* c, const dsg_project* p, const char* text, size_t 
 
 /* A build, unless this exact text with these tables failed the last one.
  * Adds the failure. */
-static bool try_build(dsg_checker* c, const dsg_project* p, const char* text, size_t n, const dsg_doc* tables, const uint8_t tkey[32],
+static bool try_build(dsg_checker* c, const dsg_project* p, const char* text, size_t n, const tables_in* tables, const uint8_t tkey[32],
                       dsg_report* r) {
     uint8_t h[32];
     dsg_place at;
@@ -418,12 +488,23 @@ static bool try_build(dsg_checker* c, const dsg_project* p, const char* text, si
 /* --- the check ------------------------------------------------------------- */
 
 int dsg_check(dsg_checker* c, const dsg_project* p, const char* text, size_t n, const dsg_doc* tables, dsg_report* r) {
+    dsg_table_bytes t[DSG_MAX_BUFFERS];
+    const int nt = doc_tables(tables, t);
+    return dsg_check_tables(c, p, text, n, t, nt, r);
+}
+
+int dsg_check_tables(dsg_checker* c, const dsg_project* p, const char* text, size_t n, const dsg_table_bytes* tbl, int n_tables,
+                     dsg_report* r) {
     pl_check_desc d;
+    tables_in ti;
+    const tables_in* tables = &ti;
     pl_check_result res;
     int i;
     bool derive_failed = false;
     char derive_err[1024];
     uint8_t tkey[32] = { 0 };
+    ti.t = tbl;
+    ti.n = n_tables > 0 ? n_tables : 0;
     memset(r, 0, sizeof *r);
     r->status = -1;
     c->n_issues = 0;

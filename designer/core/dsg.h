@@ -13,7 +13,8 @@
  * state and its check pack (docs/designer.md, "Project folder").
  *
  * Every function returns 0 on success or -1 with one line in err. Not thread
- * safe: pl_check() keeps static scratch, so call dsg_check() from one thread.
+ * safe: pl_check() keeps static scratch, so call dsg_check() from one thread
+ * at a time. The designer calls it only on its check thread (worker.c).
  */
 #ifndef YSP_DESIGNER_DSG_H
 #define YSP_DESIGNER_DSG_H
@@ -52,6 +53,10 @@ bool dsg_is_file(const char* path);
 
 /* folder/rel into out; -1 when it does not fit. */
 int  dsg_join(char* out, size_t cap, const char* folder, const char* rel);
+
+/* An atomic add on a counter that two threads share; the new value. */
+int32_t dsg_atomic_add(volatile int32_t* v, int32_t d);
+int32_t dsg_atomic_load(const volatile int32_t* v);
 
 /* --- view state ------------------------------------------------------------ */
 
@@ -229,6 +234,159 @@ void dsg_checker_forget(dsg_checker* c);
  * dirty tables or the revision of one changes. */
 struct dsg_doc;
 int dsg_check(dsg_checker* c, const dsg_project* p, const char* text, size_t n, const struct dsg_doc* tables, dsg_report* r);
+
+/* One unsaved table, as dsg_check() takes it from a document: the check
+ * thread gets a copy, because the UI edits the document meanwhile. */
+typedef struct dsg_table_bytes {
+    int         buf;     /* the document's buffer: names the copy's file      */
+    const char* name;    /* its "source" in the description                    */
+    uint64_t    rev;     /* dsg_doc_rev(): a new one rebuilds the pack         */
+    const char* bytes;
+    size_t      n;
+} dsg_table_bytes;
+/* dsg_check() with the dirty tables given as bytes (n_tables 0: none). Only
+ * folder, desc_path, desc and desc_len of p are read. */
+int dsg_check_tables(dsg_checker* c, const dsg_project* p, const char* text, size_t n, const dsg_table_bytes* tables, int n_tables,
+                     dsg_report* r);
+
+/* --- the check pack's bytes, shared (docs/designer.md, "Plan of step 5") ----
+ *
+ * A session points into the pack it loaded, so a rebuild must not free the
+ * bytes under it. The checker holds one reference; each holder adds its own.
+ * Retain and release are atomic: any thread may call them. */
+typedef struct dsg_pack dsg_pack;
+/* The checker's pack, borrowed (NULL: none). Retain it to keep it. */
+dsg_pack*   dsg_checker_pack(dsg_checker* c);
+dsg_pack*   dsg_pack_retain(dsg_pack* pk);       /* gives pk; NULL is a no-op */
+void        dsg_pack_release(dsg_pack* pk);      /* frees at the last; NULL ok */
+const void* dsg_pack_bytes(const dsg_pack* pk, size_t* size);
+/* Packs made and not yet freed, in the process: for the tests. */
+int32_t     dsg_pack_live(void);
+
+/* --- the check thread (worker.c; docs/designer.md, "Plan of step 5") --------
+ *
+ * One thread runs two kinds of job. For each kind the newest job wins: a job
+ * posted while one of its kind waits replaces it. A waiting check runs before
+ * a waiting session job, and sessions handed back to close run between the
+ * two. Each result carries the revision its job was posted with. The thread
+ * is a yrt_pump (ysp/rt.h): it starts SCHED_OTHER with explicit attributes,
+ * never elevates and blocks when idle.
+ *
+ * The UI thread posts and takes; the post copies what the job reads (the
+ * text, the dirty tables, the project's description) into buffers that the
+ * worker reuses, so a post allocates only when a buffer grows. */
+typedef struct dsg_worker dsg_worker;
+
+/* What a check job gives. Every pointer stays valid until the next
+ * dsg_worker_take_check() that returns true. */
+typedef struct dsg_check_result {
+    uint64_t   revision;     /* the job's                                   */
+    dsg_report report;
+    dsg_pack*  pack;         /* the pack the check ran against, held by the
+                              * result; NULL: none. Retain it to keep it.    */
+} dsg_check_result;
+
+/* The preview's settings that a session load reads (part A fills them). */
+#define DSG_SESSION_FIELDS 16
+typedef struct dsg_session_field { char name[64]; char value[256]; } dsg_session_field;
+typedef struct dsg_session_settings {
+    int32_t  width, height, hz;   /* the simulated display; 0: the built-in rig's */
+    uint64_t seed;
+    char     participant[32];     /* the scripted participant: "correct", ... */
+    double   rt_s;
+    char     pin_leaf[512];       /* the pin's leaf path; "": none           */
+    int32_t  pin_row;             /* the pin's table row; -1: any            */
+    int32_t  n_fields;
+    dsg_session_field fields[DSG_SESSION_FIELDS];
+    char     out_dir[DSG_PATH_MAX];   /* the data set's folder               */
+} dsg_session_settings;
+
+/* A loaded session. The worker allocates and frees it; between its take
+ * and dsg_worker_close() the UI thread owns it. */
+typedef struct dsg_session {
+    uint64_t revision;            /* the job's                               */
+    dsg_session_settings settings;
+    dsg_pack* pack;               /* the session's reference: released after
+                                   * the close                               */
+    void*    impl;                /* the load's own state (the player's
+                                   * session); NULL for the stub             */
+    struct dsg_session* next;     /* the worker's close list                 */
+} dsg_session;
+
+/* The seam to the player's stepped session (pl_sim_load(), part A). Both
+ * run on the check thread. load: 0, or -1 with the reason in err (the
+ * worker then calls close). close: frees what load made; the worker then
+ * releases the pack and frees s. A NULL load is the stub: it loads
+ * nothing and succeeds. */
+typedef struct dsg_session_ops {
+    int  (*load)(void* ctx, dsg_session* s, const char* text, size_t n, char* err, size_t cap);
+    void (*close)(void* ctx, dsg_session* s);
+    void* ctx;
+} dsg_session_ops;
+
+typedef struct dsg_session_result {
+    uint64_t     revision;
+    dsg_session* session;         /* the caller's now; NULL: the load failed */
+    char         error[512];      /* why, when session is NULL               */
+} dsg_session_result;
+
+typedef struct dsg_worker_desc {
+    /* On the check thread, after a result is ready: main.cpp pushes an SDL
+     * event, which wakes the UI's wait. NULL: none. */
+    void (*wake)(void* ctx);
+    void* ctx;
+    dsg_session_ops session;
+    /* No thread: the jobs run in dsg_worker_wait(), on its caller's thread
+     * (the preview's tests; a build without threads). */
+    bool  no_thread;
+} dsg_worker_desc;
+
+/* Starts the thread. Builds gfx's NOISE table first, on the calling thread
+ * (ygfx_noise_value(): not thread safe before its first call), so start the
+ * worker before any other thread uses ysp/gfx.h. NULL with the reason in err. */
+dsg_worker* dsg_worker_start(const dsg_worker_desc* d, char* err, size_t cap);
+/* Drops the waiting jobs, joins the thread after the job that runs, closes
+ * the sessions the worker holds and frees it. Sessions that the caller took
+ * must be handed back with dsg_worker_close() first. */
+void dsg_worker_stop(dsg_worker* w);
+
+/* Posts a check job: text as project p's definition, with the dirty tables
+ * of the document (NULL: the tables on disk). 0, or -1 when out of memory. */
+int  dsg_worker_check(dsg_worker* w, const dsg_project* p, const char* text, size_t n, const struct dsg_doc* tables,
+                      uint64_t revision);
+/* The checker forgets its pack before the next check (dsg_checker_forget()). */
+void dsg_worker_forget(dsg_worker* w);
+/* Posts a session job: an accepted text, the pack its check ran against
+ * (the worker adds its own reference) and the settings. 0, or -1. */
+int  dsg_worker_session(dsg_worker* w, const char* text, size_t n, dsg_pack* pack, uint64_t revision,
+                        const dsg_session_settings* s);
+/* A session that the UI thread is done with (detached from GL): closed on
+ * the check thread. */
+void dsg_worker_close(dsg_worker* w, dsg_session* s);
+
+/* On the UI thread: the newest check result since the last take. */
+bool dsg_worker_take_check(dsg_worker* w, const dsg_check_result** out);
+/* On the UI thread: the newest session job's outcome since the last take. */
+bool dsg_worker_take_session(dsg_worker* w, dsg_session_result* out);
+/* A session job waits or runs: a session that arrives now is stale. */
+bool dsg_worker_session_queued(dsg_worker* w);
+
+/* Blocks until every job posted so far has run and posted its result, for
+ * at most timeout_ns. 0, or -1 on the timeout. With no_thread, runs them. */
+int  dsg_worker_wait(dsg_worker* w, int64_t timeout_ns);
+/* false: no thread (desc.no_thread, or a build without threads). */
+bool dsg_worker_threaded(const dsg_worker* w);
+
+typedef struct dsg_worker_stats {
+    int64_t checks;               /* dsg_check() runs                         */
+    int64_t checks_replaced;      /* check jobs replaced while they waited    */
+    int64_t sessions_loaded;      /* loads that succeeded                     */
+    int64_t sessions_failed;
+    int64_t sessions_replaced;    /* session jobs replaced while they waited  */
+    int64_t sessions_dropped;     /* loaded, then closed by the thread: stale */
+    int64_t sessions_closed;      /* every close on the thread                */
+} dsg_worker_stats;
+void dsg_worker_get_stats(dsg_worker* w, dsg_worker_stats* out);
 
 /* --- the redraw rule ----------------------------------------------------- */
 

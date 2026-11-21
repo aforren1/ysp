@@ -52,6 +52,8 @@ static void on_title(void*, const char* t) { titles++; snprintf(title, sizeof ti
 static void frame() {
     ImGuiIO& io = ImGui::GetIO();
     io.DeltaTime = 1.0f / 60.0f;
+    // the check thread's result of the last frame's post lands in this one
+    ui_wait_checks(30000000000LL);
     ImGui::NewFrame();
     skt_frame_begin();
     ui_frame();

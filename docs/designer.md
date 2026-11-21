@@ -170,6 +170,10 @@ median).
   2.6 % of a text keystroke in "many+words" (5.2 ms of 201 ms). On tmpfs
   (`/dev/shm`) the build was 1 % to 2 % faster than on ext4. The time is
   in the pack tool's layout and curve sets.
+- Step 5, part T, moved the check to a thread of its own. The UI frame
+  now pays only the post and the take of a result: at most 25 us a
+  keystroke on bimanual and "many". The check's latency did not change
+  ("Plan of step 5", "Part T as built").
 
 **A refusal's link, while the definition is text.** Step 3 edits the
 definition as JSON text in a multi-line Skribidi editor. Each issue has a
@@ -1692,6 +1696,159 @@ one of its kind waits replaces it.
 - WebAssembly without threads (no cross-origin isolation) runs both jobs
   in the frame. Step 7 decides.
 
+**Part T as built** (2026-11-20, branch `step5-t-worker`;
+`designer/core/worker.c`, `check.c`, `dsg.h`; `ui.cpp`, `main.cpp`).
+- **The thread is a `yrt_pump` (ysp/rt.h), not C11 threads.** The core had
+  no thread code. glibc has `<threads.h>`, macOS has none, and MSVC has it
+  only from Visual Studio 2022 17.8. The pump is in the player's header
+  implementations already and runs on the three CI systems. It starts its
+  thread with `PTHREAD_EXPLICIT_SCHED` and `SCHED_OTHER` (Windows:
+  `CreateThread()`, normal priority), never elevates, and blocks on a
+  condition variable when it has no job. So the thread does not inherit
+  SCHED_FIFO and does not spin.
+- **The atomics** (`dsg_atomic_add()`, `dsg_atomic_load()`) are the
+  compilers' intrinsics in `platform.c`: `<stdatomic.h>` needs
+  `/experimental:c11atomics` on MSVC.
+- **Newest wins.** The pump's messages are only wake-ups. Each kind of job
+  has one slot, and a post into a full slot replaces the job in it. The
+  pump's publish lock guards the slots; no job runs under it. A wake-up
+  that finds no job returns.
+- **No allocation per post at steady state.** A check job copies the
+  text, the project's description and the dirty tables (name, revision,
+  bytes) into buffers of its slot. Three slots rotate: the poster's, the
+  waiting job's and the running job's. A post allocates only when a
+  buffer must grow. `dsg_check()` takes the tables as a document;
+  `dsg_check_tables()` takes the copy, so the thread never reads the
+  document.
+- **Results.** The thread copies the checker's report into storage of the
+  result, because the checker reuses its own at the next check. Three
+  results rotate: the thread's, the ready one and the UI's. The UI's
+  report stays valid until its next take.
+- **Order on the thread:** a waiting check, then the sessions handed back
+  to close, then a waiting session job.
+- **Revision marks.** Each result carries the revision of its job. The UI
+  takes the newest check result at the start of each frame and posts a
+  check at the end of a frame that changed the document.
+  `ui_work_pending()` is false while a job runs: the wake-up
+  (`UiPlatform.wake`, an SDL event that `main.cpp` pushes) brings the
+  frame that takes the result. A result from before the last open is
+  dropped: the document's revision does not go back at a reset, so the
+  UI keeps the revision of the open as a floor.
+- **Sessions: a stub behind a seam.** `dsg_session_ops` (load and close,
+  both on the thread) is where part A puts `pl_sim_load()` and
+  `pl_close()`. With no `load` the stub succeeds and loads nothing. A
+  session that finishes while a newer session job waits is closed on the
+  thread and never posted. A session that is posted and never taken is
+  closed on the thread when a newer one arrives. A failed load posts its
+  error, and the thread closes what the load made.
+- **gfx's NOISE table.** `dsg_worker_start()` calls
+  `ygfx_noise_value(0, 0, 0, YGFX_GAUSSIAN)` on the calling thread before
+  the thread exists. That builds the table, so no two threads build it
+  at once. This covers `main.cpp` and every headless test in one place,
+  in any order of calls. The plan's GL gfx in `main.cpp` (before
+  `ui_init()`) is for the GL caps, which need P3's `ygfx_gl_caps_get()`:
+  it comes with part A. `main.cpp` registers the wake-up's SDL event type
+  before `ui_init()`, and `ui_init()` starts the thread after
+  `skt_init()` (Skribidi's counter, below).
+- **No threads.** `desc.no_thread`, `YRT_NO_THREADS` or WebAssembly
+  without pthreads run the jobs in `dsg_worker_wait()`, on the caller's
+  thread. The UI then runs the check after its post, and takes the result
+  in the next frame.
+- **The tests wait.** `ui_wait_checks()` blocks until every posted check
+  ran. The frames of `test_designer_ui`, `test_designer_table_ui`,
+  `test_designer_te` and `bench_designer_chart` call it first, so a check
+  shows one frame after its edit. `te_test.cpp` yields one more frame
+  after an open and after three edits whose result the test reads.
+
+**Process globals on the check path** (2026-11-20, from the code; the UI
+thread and the check thread at once):
+
+| Global | Where | Threads | Verdict |
+|---|---|---|---|
+| NOISE GAUSSIAN table (`ygfx__gauss_tab`, `_ready`, the scratch `x[]`) | `gfx.h` `ygfx__gauss_table()` | the check thread (`pl_check()`'s null gfx); later the UI's GL gfx | A race at the first build. Fixed: built in `dsg_worker_start()` before the thread |
+| `h_rules()` scratch (253 KB `ytr_trials`), `h_check_ops()` `ytl_timeline` | `player/host.c` 147, 274 | the check thread only: the UI's `yexp_load()` calls pass no host | Safe with one check thread. P4 moves them into the player |
+| `pl_v2_sink`, the raw mouse `yrsp_source` | `player/lower.c` 2730, `v2.c` 1871 | the check thread only, until part A steps a session on the UI thread | Safe now. P4 moves them |
+| `p_row_cap`, `pl_loop_active` | `player/run.c` 1210, 664 | `pl_run()` only; `pl_check()` does not touch them | Safe now. P4 moves `p_row_cap` |
+| `yexp_load()` and `ysp/json.h` | `experiment.h`, `json.h` | both threads | No mutable statics: safe |
+| The pack tool | `pack/layout.c` (HarfBuzz version pointer, same value each time), `pack/colr.c` and `layout.c` (Windows QPC frequency, same value) | the check thread only | Benign: each write stores the same value |
+| ysp/video.h (FFmpeg's `dlopen` once, a heap counter) | `video.h` | the check thread | `pthread_once` and an atomic: safe |
+| Skribidi's font collection id (`static uint32_t id`, `++id`) | `skb_font_collection.c` 328 | the UI once in `skt_init()`; the pack tool at each build | Safe: the thread starts after `skt_init()`, and the UI makes no other collection. A second UI collection later would race (a duplicate id, which only keys that collection's layout cache) |
+| Skribidi's attribute collection id; `skb_script_from_iso15924_tag()`'s lazy sort | `skb_attribute_collection.c` 36, `skb_layout.c` 145 | the check thread only; no caller | Safe |
+| HarfBuzz's lazy loaders (Unicode functions, shapers, fonts) and the language list | `hb-ucd.cc`, `hb-shaper.cc`, `hb-common.cc` | both threads | Atomic compare and exchange (`HB_NO_MT` is not set); the threads share no face or font: safe |
+| ysp/rt.h clock state | `rt.h` | both | Atomic; only `ysp_player --sim` writes the virtual clock: safe |
+| The audio device | `lower.c` | the check thread | `pl_check()` opens a custom stand-in with no thread; miniaudio is not reached |
+| `schema.c` `g_fields`, `chart.c` `chart_err`, `skt.cpp`, `skf.cpp` | designer | the UI only | Safe |
+
+No call on the check path raises a thread's priority. `pl_check()` starts
+no writer thread (`args.sim`). A pack with a video can start one FFmpeg
+thread, made with `PTHREAD_EXPLICIT_SCHED` and `SCHED_OTHER`, or an
+`ffmpeg` process.
+
+**Measured** (Linux desktop, Intel Core i5-14500, gcc 12.2, Release,
+`bench_designer_check WORK 30 200 PROJECT worker` pinned to CPUs 2 and 4,
+two P-cores, under the measuring lock, two passes; load average (1 min)
+0.57 before the first pass and 0.74 after the second, the bench's own two
+threads included). Microseconds, median, p95 and max of each pass; 200
+keystrokes, 30 for a changed text. "Before" is `dsg_check()` in the frame,
+as the UI did it. "Post" and "take" are what the UI frame pays per
+keystroke now. "Latency" is from the post to the thread's wake-up, with
+the result ready.
+
+| Project | Before: the check in the frame | Post | Post with a dirty table (18.9 KB) | Take | Latency |
+|---|---|---|---|---|---|
+| bimanual, a keystroke | 4,781, 5,213, 10,714; 4,788, 5,257, 10,745 | 3.4, 4.7, 11.5; 3.4, 4.7, 11.2 | no table | 0.3, 0.5, 1.6; 0.2, 0.5, 1.7 | 4,795, 4,984, 8,786; 4,789, 5,225, 8,880 |
+| many, a keystroke, the texts unchanged | 5,772, 5,935, 6,209; 5,793, 5,883, 6,160 | 10.3, 16.9, 23.9; 10.0, 13.9, 18.9 | 12.1, 19.6, 25.2; 11.9, 13.2, 24.6 | 0.2, 0.8, 4.1; 0.2, 0.3, 0.9 | 5,327, 6,020, 8,348; 5,288, 5,358, 8,064 |
+| many, a keystroke in a text | 40,837, 41,709, 42,237; 40,977, 41,583, 41,739 | | | | 40,976, 41,683, 41,895; 40,935, 41,662, 42,122 |
+
+- The UI frame's cost per keystroke falls from the whole check (4.8 to 41
+  ms median) to the post and the take: at most 25 us. The post is the
+  copy of the text (60 KB in "many") and of the dirty tables into kept
+  buffers; the take is a swap under the lock.
+- The latency is the check's own time: the hand-over adds nothing that
+  the passes resolve. The result shows in the frame after the wake-up, so
+  up to one more frame (16.7 ms at 60 Hz).
+- **glibc's trim.** The first two passes, without `mallopt()`, gave a
+  "many" latency 1.4 to 1.7 ms above the check in the frame (7.2 ms
+  against 5.8 ms median). On CPU 2 alone the gap stayed (6.9 against
+  5.8 ms), so it was not the move between cores. With
+  `MALLOC_ARENA_MAX=1` it went (5.6 ms), and with
+  `MALLOC_TRIM_THRESHOLD_=67108864` the check took 5.1 ms on either
+  thread. glibc gives a second thread an arena of its own, and gives that
+  arena's freed top back to the kernel after each check, so the next
+  check faults its pages in again. `dsg_worker_start()` now sets
+  `M_TRIM_THRESHOLD` to 64 MB (glibc only): the numbers above. The cost
+  is up to 64 MB of freed memory that each arena keeps. Not measured on
+  Windows or macOS, whose allocators differ.
+- bimanual's check measured 9.1 ms median at CPU 2 alone earlier on
+  2026-11-20 ("Evidence: the check's cost") and 4.8 ms here; the code of
+  the check is the same, the CPUs and the time are not.
+
+**Hand mutants** of the thread (each reverted; each fails
+`test_designer_worker`):
+
+| Mutant | Fails |
+|---|---|
+| Queue: a waiting session job runs before a waiting check | the check before session 21 |
+| Newest wins: a check posted while one waits does not replace it | the result is the last text's |
+| Newest wins: the oldest waiting session job runs | 301 and the newest, 305, loaded |
+| Newest wins: a replaced session job keeps its pack reference | every pack freed at the stop |
+| Reference count: retain does not count | aborts (the pack freed under a session) |
+| Reference count: release frees one reference early | crashes (the same) |
+| Reference count: a rebuild frees the bytes, not its reference | the old pack's bytes are whole |
+| Stale drop: a session is posted though a newer job waits | session 20 was never posted |
+| Stale drop: a session never taken is not closed | 402, never taken, was closed |
+| Revision: the result is not marked | the result's revision |
+
+**Tests and sanitizers.** `test_designer_worker` (62 checks) runs the
+thread with the stub session: the gates in its hooks hold the thread, so
+the jobs wait in a known order. 30 runs in Release and 30 under
+ThreadSanitizer passed. The designer's 9 tests pass in Release, under
+ASan with UBSan (`halt_on_error`) and under ThreadSanitizer (gcc 12,
+`setarch -R`, `halt_on_error`), with `DISPLAY` unset;
+`test_designer_ui` and `test_designer_te` passed 20 times in a row in
+Release and 5 times under ThreadSanitizer. The whole ctest (139 tests)
+passed in Release.
+
 **What the thread hands over.**
 - **Ownership.** The session job allocates the `pl_player` (1.6 MB,
   heap). The job owns it until it posts it; from the event's delivery
@@ -1705,10 +1862,12 @@ one of its kind waits replaces it.
   session that was never attached has no GL objects, and either thread
   may close it.
 - **The pack.** The checker hands out its pack with an atomic reference
-  count (`dsg_checker_pack()`, retain, release). The check thread
-  retains it when it takes a session job; the reference goes with the
-  session; the thread that closes the session releases it after
-  `pl_close()`. A rebuild drops only the checker's own reference, so the
+  count (`dsg_checker_pack()`, retain, release). Each check result holds
+  a reference to the pack it ran against. `dsg_worker_session()` adds the
+  job's own reference when the UI posts the job (as built: not when the
+  thread takes it, because the result's reference can go first); the
+  reference goes with the session; the thread that closes the session
+  releases it after `pl_close()`. A rebuild drops only the checker's own reference, so the
   bytes live while a session uses them. No copy: a pack with images or
   videos can be large.
 - **A session that is ready and stale.** When the event arrives, the UI
@@ -2014,17 +2173,30 @@ GL objects and frees the recorded copies.
 The parts use these and do not change them; a part that needs a change
 stops and reports it, as in step 4.
 
-From part T, `designer/core/dsg.h` and a new `designer/core/worker.c`:
-- `dsg_worker_start(post, ctx)`, `dsg_worker_stop()`: the thread; `post`
-  hands a finished job to the UI thread (main.cpp: `SDL_PushEvent()`).
-- `dsg_worker_check(text, n, tables, revision)`: a check job.
-  `dsg_worker_session(job)`: a session job (`dsg_session_job`: text,
-  pack reference, revision, settings).
-- `dsg_worker_result()`: on the UI thread, the result that an event
-  carries: a check report or a session, with its revision.
-- `dsg_worker_close(session)`: a session to close on the thread.
+From part T, `designer/core/dsg.h` and a new `designer/core/worker.c`
+(as built; each call takes the worker's handle, `dsg_worker*`, which
+`ui.cpp` keeps):
+- `dsg_worker_start(desc, err, cap)`, `dsg_worker_stop(w)`: the thread.
+  `desc.wake(ctx)` runs on the thread when a result is ready (main.cpp:
+  `SDL_PushEvent()`, `UiPlatform.wake`). `desc.session` is the seam to the
+  session's load and close (`dsg_session_ops`). `desc.no_thread` runs the
+  jobs in `dsg_worker_wait()` (part A's tests).
+- `dsg_worker_check(w, project, text, n, doc, revision)`: a check job.
+  `dsg_worker_forget(w)`: the checker forgets its pack before the next
+  check. `dsg_worker_session(w, text, n, pack, revision, settings)`: a
+  session job (`dsg_session_settings`: display, rate, seed, participant,
+  rt, pin, fields, the data set's folder); the worker adds its own
+  reference to the pack.
+- `dsg_worker_take_check(w, &result)` and `dsg_worker_take_session(w,
+  &result)`: on the UI thread, the newest result of each kind, with its
+  revision (`dsg_check_result`: the report and the pack it ran against;
+  `dsg_session_result`: a `dsg_session` or the load's error).
+  `dsg_worker_session_queued(w)`: a session job waits or runs.
+- `dsg_worker_close(w, session)`: a session to close on the thread.
+- `dsg_worker_wait(w, timeout_ns)`: until every job posted so far ran (the
+  tests; `ui_wait_checks()` in the UI tests). `dsg_worker_get_stats()`.
 - `dsg_checker_pack()`, `dsg_pack_retain()`, `dsg_pack_release()`
-  (atomic).
+  (atomic), `dsg_pack_bytes()`, `dsg_pack_live()`.
 
 `designer/core/preview.h` (C, no SDL; `preview.c`, part A):
 - `dsg_preview_new(gl_caps)`, `dsg_preview_free()`.
@@ -2083,7 +2255,7 @@ fails it. The threaded tests also run under ThreadSanitizer (gcc 12,
 |---|---|
 | P3 | `test_gfx` part "v0.23" (EGL, llvmpipe, headless). Output texture: `ygfx_read_output()` gives the same bytes as the framebuffer 0 path for the same frames (gratings, text runs, a calibration); the native name is GL_RGBA8 at the size; framebuffer 0 is bound after `end()`; after foreign GL calls and `ygfx_reset_state()`, the same bytes. Deferred open: opened on one thread, attached on another (the context's), the same bytes as a direct open; the handles unchanged; attach in steps of a small budget gives the same; a draw before attach refused; a texture larger than the caps refused at the open. Mutants: write framebuffer 0; leave the texture's framebuffer bound; replay out of order; free a copy before its call. |
 | P4 | `test_player_sim`: (1) at 800 x 600 with the scripted participant, the same `trials.csv`, `events.csv` and streams as `ysp_player --sim` (run in the same test on the virtual clock, which is then ended) for each example pack, and for visuomotor and bimanual with the samples through `pl_sim_sample()`; `frames.csv` the same but for its measured phase columns; a sound's onset within the tolerance the test measures. (2) No allocation in `pl_sim_frame()` (`--wrap`, Linux). (3) Load and fast forward on one thread, attach and frames on another; no clock change (`yrt_is_virtual()` false). (4) Two sessions stepped in turn, with a `pl_check()` on a third thread at the same time, give the data of each alone. (5) `pl_sim_key()` at a time gives that response and `rt = t - onset`; a choice; a sample that ends a reach. (6) The states of `pl_sim_where_now()` follow `--sim`'s state rows (bimanual). (7) A refusal at run time gives its object. (8) `live()`: the scripted trials and the person's trials. (9) A stopped session's `session.json` says so. Mutants in `player_sim.toml`. |
-| T | `test_designer_worker`: newest-wins for each kind (ten texts in a burst give one result per check, the last for the last text); a check before a waiting session job; a result marked with its revision; a session dropped by the thread when a newer job waits; a pack valid while a session holds it after a rebuild (ASan); a session closed on the thread after it was detached on another. `test_designer_ui` and the `te_*` tests pass with the check one frame late. |
+| T | `test_designer_worker`: newest-wins for each kind (ten texts in a burst give one result per check, the last for the last text); a check before a waiting session job; a result marked with its revision; a session dropped by the thread when a newer job waits; a pack valid while a session holds it after a rebuild (ASan); a session closed on the thread after it was detached on another. `test_designer_ui` and the `te_*` tests pass with the check one frame late. Built: "Part T as built". |
 | A | `test_designer_preview` (headless, null gfx, a test clock, the worker run inline): the steps a UI frame for given times (cap, speed, pause, step); a session job posted after the settle and only for the current revision; a ready and stale session dropped; the attach's budget over frames, with the old session running until it ends; last good on a refusal; a run-time refusal as an issue; the pin's two stops; the cursor to role units for px, cm and deg; the `run-*` folders, one left; idle frames 0 while paused. `bench_designer_preview` (not on Windows): the numbers of "Redraw and cost". |
 | B | `test_designer_ui`: the pane draws with `gl_caps` NULL; `animating` while running, not while paused; the banner texts; the roles not driven listed. `te_preview.cpp`: Space through the key hook gives a row with the response; the Pause button; an edit in the panels restarts the preview after the settle; a choice button; a text that does not parse shows the banner and keeps the session. |
 | C | `te_chart.cpp`: the ring on the running state; Follow changes the template; "Preview this template" sets the pin. |

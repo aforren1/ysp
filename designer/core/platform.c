@@ -1,4 +1,6 @@
-/* platform.c - the designer core's only OS calls: files and folders.
+/* platform.c - the designer core's only OS calls: files and folders, and
+ * the atomics of the check thread's shared counters (worker.c; the thread
+ * itself is ysp/rt.h's yrt_pump).
  * Paths are UTF-8 everywhere; Windows takes them as UTF-16. The POSIX branch
  * also serves emscripten, whose file system is in memory. */
 #if defined(_MSC_VER) && !defined(_CRT_SECURE_NO_WARNINGS)
@@ -160,3 +162,14 @@ int dsg_write_file(const char* path, const void* data, size_t n, char* err, size
     }
     return 0;
 }
+
+/* C11's <stdatomic.h> needs /experimental:c11atomics on MSVC, so the
+ * compilers' own intrinsics. */
+#if defined(_MSC_VER) && !defined(__clang__)
+#include <intrin.h>
+int32_t dsg_atomic_add(volatile int32_t* v, int32_t d) { return (int32_t)_InterlockedExchangeAdd((volatile long*)v, (long)d) + d; }
+int32_t dsg_atomic_load(const volatile int32_t* v) { return (int32_t)_InterlockedCompareExchange((volatile long*)(uintptr_t)v, 0, 0); }
+#else
+int32_t dsg_atomic_add(volatile int32_t* v, int32_t d) { return __atomic_add_fetch(v, d, __ATOMIC_ACQ_REL); }
+int32_t dsg_atomic_load(const volatile int32_t* v) { return __atomic_load_n(v, __ATOMIC_ACQUIRE); }
+#endif
