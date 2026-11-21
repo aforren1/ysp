@@ -381,8 +381,12 @@ jobs:
         with:
           msystem: MINGW64
           update: false
+          # make by name: MSYS2's toolchain group dropped it (and pkgconf,
+          # tools) between 2026-11-20 and 2026-11-21; "MinGW Makefiles"
+          # needs its mingw32-make
           install: >-
             mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-make
             mingw-w64-x86_64-cmake
 
       - uses: actions/checkout@v7
