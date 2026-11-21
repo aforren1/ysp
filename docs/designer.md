@@ -114,6 +114,63 @@ and keeps it in memory.
   Each new source file of either library then also had to go in the
   designer's list. That file and the lists are gone.
 
+**Evidence: the check's cost.** `bench_designer_check`
+(`tests/designer/check_bench.c`) times the real code per edit. It compiles
+`check.c` into itself to reach `build()` and `texts_key()`, so it changes
+no designer code.
+- Conditions: Linux desktop, Intel Core i5-14500, Linux 6.11.5 (Liquorix),
+  gcc 12.2, Release, pinned to CPU 2 (a P-core, governor `performance`),
+  2026-11-20. 30 rounds of each part that builds, 200 of the others.
+  `bench_designer_check WORK 30 200`, four passes, one at a time under the
+  measuring lock. Load average (1 min) 0.13 before the first pass, 0.97
+  after the last. The table gives the pass on the home folder
+  (`~/.cache`, ext4 on NVMe, `/dev/nvme0n1p2`). `/tmp` is on the same
+  ext4 file system; in its two passes the medians of the builds and the
+  checks were within 1 % of these.
+- Projects: the six of `tests/player/` (only stroop has text stimuli), and
+  two that the bench generates. "many": 200 text stimuli, 50 each in
+  Latin, Hebrew, Arabic and Devanagari, each in its script's Noto Sans
+  with a curve set, and 10,000 table rows that the timeline runs. The
+  player refuses a node's table above `YTR_MAX_CONDITIONS` (1,024) rows,
+  so the rows are 10 tables of 1,000, one per node. "many+words": the
+  same, and one more stimulus shows the tables' word column, which gives
+  10,000 more texts.
+- Parts: "Build" is `ypt_build_text()` with the description made from the
+  project. The pack tool writes the pack while it builds, so "Write" is
+  `dsg_write_file()` of the same bytes alone, and "Read" is the read-back.
+  "Same texts" is `dsg_check()` after a keystroke that changes no text
+  (no build). "Text changed" is `dsg_check()` after a keystroke in a text
+  literal (one build). "First check" is `dsg_check()` with no pack (at
+  open).
+
+Milliseconds: median, p95, max ("Write", "Read" and "First check":
+median).
+
+| Project | Pack | Texts | Build | Write; Read | `texts_key()` | Same texts | Text changed | First check |
+|---|---|---|---|---|---|---|---|---|
+| stroop | 599 KB | 9 | 6.36, 6.40, 6.41 | 0.20; 0.03 | 0.04, 0.04, 0.07 | 0.47, 0.49, 0.78 | 7.10, 7.25, 7.26 | 7.07 |
+| oddball | 25 KB | 0 | 0.14, 0.15, 0.15 | 0.02; 0.002 | 0.02, 0.02, 0.03 | 0.26, 0.27, 0.38 | none | 0.51 |
+| rdk | 17 KB | 0 | 0.09, 0.10, 0.10 | 0.02; 0.002 | 0.01, 0.01, 0.02 | 0.22, 0.24, 0.35 | none | 0.40 |
+| bimanual | 21 KB | 0 | 0.36, 0.37, 0.37 | 0.02; 0.002 | 0.02, 0.02, 0.03 | 9.12, 9.41, 12.92 | none | 9.84 |
+| visuomotor | 21 KB | 0 | 0.27, 0.29, 0.29 | 0.02; 0.002 | 0.02, 0.02, 0.05 | 1.61, 1.74, 1.93 | none | 2.20 |
+| afc2 | 13 KB | 0 | 0.10, 0.11, 0.11 | 0.02; 0.001 | 0.01, 0.01, 0.02 | 1.56, 1.59, 1.68 | none | 1.80 |
+| many | 2.5 MB | 200 | 33.9, 34.0, 34.1 | 0.80; 0.14 | 0.74, 0.76, 0.79 | 5.26, 5.30, 5.94 | 40.8, 41.5, 41.6 | 40.9 |
+| many+words | 12.6 MB | 10,200 | 143.2, 144.3, 162.6 | 4.15; 1.04 | 19.5, 19.6, 19.7 | 37.2, 37.8, 39.4 | 201.2, 204.1, 207.5 | 183.2 |
+
+- In the repository's projects the check fits a 16 ms frame. The largest
+  cost per keystroke is bimanual's `pl_check()` (9.1 ms median, 12.9 ms
+  max), not the pack. A keystroke in a stroop text costs 7.1 ms, of which
+  the build is 6.4 ms.
+- In the generated projects it does not fit. A keystroke in a text costs
+  41 ms ("many") and 201 ms ("many+words"). In "many+words" each other
+  keystroke costs 37 ms: `texts_key()` derives the 10,000 table texts
+  again on each check (19.5 ms), and the rest (17.7 ms) is `pl_check()`
+  with a 12.6 MB pack.
+- The file system is not the cost. The pack's write and read-back are
+  2.6 % of a text keystroke in "many+words" (5.2 ms of 201 ms). On tmpfs
+  (`/dev/shm`) the build was 1 % to 2 % faster than on ext4. The time is
+  in the pack tool's layout and curve sets.
+
 **A refusal's link, while the definition is text.** Step 3 edits the
 definition as JSON text in a multi-line Skribidi editor. Each issue has a
 line and a column in that text; a click on the issue puts the caret
@@ -1522,11 +1579,28 @@ tests ("The integration").
   [lsl-viewer](https://github.com/aforren1/lsl-viewer) uses, is an
   optional test layer, off by default, because its license is not MIT
   ("UI tests with the Test Engine").
-- The check pack's build cost is not measured. It runs at open and on each
-  edit that changes the texts of text stimuli (typing in a text literal
-  builds once a keystroke), in the frame of the edit. In
-  `test_designer_core` the whole test, with four builds of the stroop
-  pack, took 0.05 s on the Linux desktop; that is not a measurement.
+- Does the check stay in the frame of the edit? Measured 2026-11-20
+  ("Evidence: the check's cost"; i5-14500, gcc 12.2, Release, one
+  P-core). Each project in the repository fits 16 ms: a stroop text
+  keystroke 7.1 ms (the build 6.4 ms), a bimanual keystroke 9.1 ms
+  median, 12.9 ms max (`pl_check()`). A generated project with 200 texts
+  in four scripts does not: 41 ms a text keystroke, and with 10,000 more
+  texts from its tables 201 ms a text keystroke and 37 ms each other
+  keystroke. Not decided. The options, none built:
+  - A worker thread for the whole `dsg_check()`, the newest text wins.
+    No keystroke waits for a check. It costs a copy of the text and the
+    dirty tables per check (60 KB here), a report one check late, and
+    one checker thread only (`pl_check()` has static scratch). The
+    WebAssembly build needs threads (cross-origin isolation headers) or
+    keeps the check in the frame.
+  - A debounce of the build only (build after an idle time, check against
+    the old pack until then). Typing stops paying for the build, but the
+    build still stops one frame when it runs (201 ms above). Until then
+    the old pack has no glyph run for the new text; if `pl_check()`
+    refuses that (not tried), those issues must be held back.
+  - A `texts_key()` that keeps the texts from the tables until a table
+    changes. At best it removes the 19.5 ms of "many+words", and its
+    other keystrokes then cost 17.7 ms, still above 16 ms.
 - The program links libstdc++ for one symbol: the vendored HarfBuzz
   amalgamation refers to `std::__throw_system_error`. The designer's own
   C++ and ImGui need no C++ runtime (built with `-fno-exceptions

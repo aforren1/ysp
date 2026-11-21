@@ -75,6 +75,15 @@ if(YSP_BUILD_TESTS)
         target_link_libraries(bench_designer_doc PRIVATE ysp_designer_core)
         set_target_properties(bench_designer_doc PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
         target_compile_definitions(bench_designer_doc PRIVATE YSP_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+        # Times the check per edit (docs/designer.md, "Evidence: the check's
+        # cost"); not a test. It compiles core/check.c itself to reach its
+        # static parts.
+        add_executable(bench_designer_check ${PROJECT_SOURCE_DIR}/tests/designer/check_bench.c)
+        target_link_libraries(bench_designer_check PRIVATE ysp_designer_core)
+        target_compile_options(bench_designer_check PRIVATE ${YSP_WARNINGS})
+        set_target_properties(bench_designer_check PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+        target_compile_definitions(bench_designer_check PRIVATE YSP_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+            YSP_DESIGNER_TEST_FONT="${YSP_DESIGNER_TEST_FONT}")
     endif()
 endif()
 
