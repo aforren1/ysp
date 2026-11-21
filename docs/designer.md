@@ -1064,6 +1064,10 @@ ysp_designer (C++, Dear ImGui, SDL3, GL ES 3.0)
      are built and merged ("Decisions of step 4"). The items left are in
      "The integration", "Not done".
 5. The preview.
+   - Planned 2026-11-20 (branch `designer-step5-plan`): "Plan of step 5",
+     below, with its decisions accepted the same day. Part T (the check
+     and the session's load on a thread of their own) comes first. Nothing
+     is built.
 6. Build and Run.
 7. The web build, with the text glue.
 
@@ -1364,6 +1368,708 @@ check of a part's test has a hand mutant that fails it, as in step 3.
 - The Windows build (MSVC with C4701 and C4244 as errors) was not
   compiled; `bench_designer_doc` is not built on Windows (it uses
   `clock_gettime()`).
+
+## Plan of step 5
+
+Status: planned 2026-11-20 on branch `designer-step5-plan`; the user
+accepted its decisions the same day ("Decisions of the plan"). Nothing is
+built. This section answers, from the code at `98de716`, what the preview
+needs from the player, from `ysp/gfx.h` and from the check, and gives
+the decisions, the shared interfaces, the parts, the tests, the
+measurements and the order of merges.
+
+The goal ("First version"): a template's states on the player's simulated
+display, in a panel. Input in the panel drives the response roles and the
+signal roles. The preview is faithful in logic and not in timing, and the
+panel says so.
+
+### Decisions of the plan (2026-11-20)
+
+The user accepted these on 2026-11-20. Each one's reason is in the
+subsection that it names.
+
+1. **Display.** The default simulated display is 1920 x 1080 at 60 Hz
+   when the project names no display ("The built-in simulated rig").
+2. **Sound.** No audible sound in the first version. A sound follows its
+   plan silently: its onset is its scheduled time. Audible sound, off by
+   default, comes later ("Input").
+3. **Relative roles.** No mouse capture. A `position2d_relative` role,
+   and a `position2d` role with `allow_relative`, is listed as "not
+   driven" ("Input").
+4. **Edits.** The preview restarts after 300 ms with no change. Hot
+   reload is outside the first version ("Edits while the preview
+   runs").
+5. **Placement.** The preview is a pane beside the main view
+   (`UI_SLOT_AUX`) ("The designer's shared interfaces").
+6. **Scaling.** No mipmaps: linear sampling for Fit, nearest for 1:1
+   ("The GL context").
+7. **Data.** The preview writes a data set to `.designer/preview/` and
+   replaces it on each run, because a check of the columns that a
+   definition writes is a core authoring task ("The data set").
+8. **Rig.** The preview uses rig profiles when step 6 adds them. Until
+   then it uses a built-in simulated rig ("The built-in simulated
+   rig").
+9. **The load is off the UI thread.** The session's load and lower run
+   on the check thread (part T). The UI thread only adopts a session
+   that is ready ("The check thread and the session's load").
+
+### What the code allows today
+
+The preview needs five operations: start a session, step it one frame,
+give it input, stop it, and start it again after an edit. The player
+library at 0.15.0 has none of them in a form that a UI loop can use.
+
+| Need | What the code does now | Where |
+|---|---|---|
+| Step one frame | `pl_run()` owns the loop. It blocks in `yscr_begin()`. On the real clock the SIM screen sleeps to each vblank, so one simulated frame holds the UI thread for up to one period, on top of the designer's own vsync. `pl_frame()` is the frame's body and takes a `yscr_frame`, so a host can call it. | `player/run.c` `pl_run()`, `pl_frame()`; `ysp/screen.h` SIM presenter |
+| No process-wide clock | `--sim` calls `yrt_virtual_begin(0)` in `main.c`. That puts the whole process on the virtual clock: every `yrt_now_ns()` in the designer reads it, and a wait on another thread blocks until the frame thread moves it. | `player/main.c`; `ysp/rt.h` VIRTUAL CLOCK |
+| No other process-global state | `p_row_cap` is a file-scope static ("one session per process"). `h_rules()` and `h_check_ops()` keep static scratch (253 KB of `ytr_trials`, a `ytl_timeline`). `pl_v2_sink` (lower.c) and the raw mouse `yrsp_source` (v2.c) are statics. `pl_loop_active` is a global for a test. ysp/gfx.h builds its NOISE GAUSSIAN table at the first `ygfx_open()` in the process and says that this is not thread-safe before that first call. With part T, a session loads on the check thread while the UI thread steps another one. `p_row_cap` is then a race (the load sets it, the other session's frames read it), and so is `pl_v2_sink` (both threads' frames write it). The host's scratch is a race only for loads on two threads (the tests, or a second worker later). | `run.c` line 1210; `host.c` lines 147 and 274; `lower.c` line 2730; `v2.c` line 1871; `run.c` line 664; `gfx.h` `ygfx__gauss_table()` |
+| No allocation per frame | `pl_frame()` allocates nothing; `player_alloc_test` checks it. `pl_run()` allocates its buffers before the loop (events, the seed log of 1.5 MB, the rows' text, the frame visibility ring). A host must get them at the load. | `run.c` `pl_run()` |
+| No wait on the UI thread | `--sim` writes its data set in place on the frame thread and hands each row to the OS (`YTR_FLUSH_ROW`): one `write()` a frame for `frames.csv`. A real run queues its writes to a writer thread, because on ext4 one append blocked a frame for 18 ms (player.md). A definition with a sound opens `YAU_BACKEND_NULL`, which on the real clock is miniaudio's null device, a real-time thread; `pl_check()` opens a device that never runs. | `run.c` `pl_wq_push()`, `pl_writer_open()`; `lower.c` the audio open |
+| GL on the right thread | `--sim` and `pl_check()` draw on gfx's null backend. Nothing opens the player's gfx on a context that a host gives, and every gfx call must come from the thread that owns the context (gfx.h, MEMORY AND THREADS), while the load makes textures, glyph sets and buffers. | `lower.c` `pl_screen_open()`, `pl_stim_make()` |
+| Input from a host | `--sim` feeds a scripted participant (`pl_participant_plan()`, `--samples`). A real run reads the screen's queue. No call takes a key, a choice or a sample from the caller. | `run.c` lines 2340 to 2420; `v2.c` `v2_feed()` |
+
+The frame path itself reads no clock: ysp/gfx.h ("NOTHING READS A
+CLOCK"), ysp/timeline.h, ysp/response.h, ysp/sig.h and ysp/trials.h take
+their times from the frame. Only the audio device, the data set's writer
+thread (for its own schedule) and a real run's input poll read the clock.
+So the session can run on its own frame grid, on the real clock, with no
+virtual clock. The frame path's gfx calls are `ygfx_apply()`,
+`ygfx_begin()`, `ygfx_draw()`, `ygfx_buffer_update()` and `ygfx_end()`
+only (run.c, v2.c); a frame that does not draw makes no GL call.
+
+### The player's stepped session
+
+**Decision.** The player library gets a session that its caller steps
+(player 0.16.0). It is the `--sim` session with the built-in simulated
+rig, a data set written by the writer thread of a real run, and a gfx
+that the load records and the GL thread makes. `ysp_player --sim` does
+not change: its output bytes stay the same (`player_test.py`,
+`compare.py`).
+
+```c
+/* player/player.h, 0.16.0: the simulated session, stepped by its caller
+ * (the designer's preview). pl_sim_load() runs on any thread and makes no
+ * GL call. pl_sim_attach(), pl_sim_frame() with draw and pl_sim_detach()
+ * run on the thread whose GL context is current. The other calls run on
+ * the thread that owns the session at the time (see the check thread). */
+typedef struct pl_sim_where {
+    int         trial;          /* the session trial; -1 before the first  */
+    const char* leaf;           /* the leaf node's path, or NULL            */
+    int         condition;      /* ytr_trial_info.condition: the table row,
+                                 * -1 for a track trial                     */
+    const char* tmpl;           /* the template, or NULL between trials     */
+    const char* state;          /* version 2: the current state; NULL: the
+                                 * end, or an events template               */
+    int         phase;          /* PL_SIM_EVENTS, _RESPONSE, _AFTER, _BETWEEN */
+    int64_t     frame;          /* the next frame's index                   */
+    int64_t     t_ns;           /* its onset from the session's first frame */
+    const char* outcome;        /* the last trial's, or NULL                */
+    const char* response; int64_t rt_ns;   /* the last trial's          */
+} pl_sim_where;
+
+typedef struct pl_sim_desc {
+    ypak_desc   pack;           /* in memory; the caller keeps it until pl_close() */
+    const char* def_text; size_t def_len;   /* NULL: the pack's experiment */
+    uint64_t    seed;
+    const yrig_profile* rig;    /* NULL: the built-in simulated rig          */
+    const ycol_cal* cal;        /* the rig's calibration, or NULL           */
+    int         n_fields; pl_field_arg fields[PL_MAX_FIELDS];
+    const char* out_dir;        /* the data set's folder; must not exist    */
+    const char* participant;    /* the scripted participant of the trials
+                                 * that live() leaves to it: "correct",
+                                 * "p=0.8", "silent"                        */
+    double      rt_s;
+    /* the gfx (ysp/gfx.h 0.23.0, prerequisite P3): recorded at the load,
+     * made at pl_sim_attach(); caps from a gfx the GL thread opened.
+     * NULL: the null backend (headless tests) */
+    const ygfx_gl_caps* gl_caps;
+    const ygfx_cache* cache;    /* compiled programs, kept across sessions  */
+    /* hooks, each optional */
+    bool (*live)(void* ctx, const pl_sim_where* w);   /* at a trial's start:
+                                 * true, the caller answers this trial;
+                                 * false, the scripted participant does    */
+    void (*on_code)(void* ctx, const char* role, uint32_t code, int64_t t_ns);
+    void*       ctx;
+} pl_sim_desc;
+
+/* The load and lower: pl_check()'s with the rig and the data set. r as
+ * pl_check()'s. No GL call. */
+int  pl_sim_load(pl_player* p, const pl_sim_desc* d, pl_check_result* r);
+/* Makes the recorded GL objects on the current context, for at most
+ * budget_ns (0: all). 1 when done, 0 when more is left, < 0 an error.
+ * Then the session's first drawn frame primes the programs. */
+int  pl_sim_attach(pl_player* p, int64_t budget_ns);
+/* One frame: its onset is the last one's plus the period. draw false: the
+ * frame's logic and no GL call (a fast forward, before or after attach).
+ * draw true: after attach only. 0 to go on, 1 the session is over, < 0 a
+ * refusal: p->error, and the object in p->fail_obj and p->fail_name.
+ * Allocates nothing. */
+int  pl_sim_frame(pl_player* p, bool draw);
+/* Input, at a time after the last frame's onset and at or before the next
+ * one's; it reaches the session at the next pl_sim_frame(). */
+int  pl_sim_key(pl_player* p, int64_t t_ns, int scancode, bool down);
+int  pl_sim_choice(pl_player* p, int64_t t_ns, int choice, bool down);
+int  pl_sim_sample(pl_player* p, int64_t t_ns, int role, float x, float y);
+int64_t pl_sim_next_onset(const pl_player* p);
+void pl_sim_where_now(const pl_player* p, pl_sim_where* w);
+/* The display's texture: its GL name (GL_RGBA8, rows bottom-up). */
+bool pl_sim_texture(const pl_player* p, ygfx_native* out);
+/* Stops a session before its end: the data set records it as stopped
+ * ("aborted", reason "request"). */
+void pl_sim_stop(pl_player* p);
+/* Frees the GL objects and closes the gfx (the GL thread). After it,
+ * pl_close() makes no GL call and may run on any thread. */
+void pl_sim_detach(pl_player* p);
+```
+
+**What changes in the player, by file.**
+
+- `player.h`: the declarations above. `pl_player` gains `sim` (the
+  desc's hooks, the frame grid, a fixed input queue of 256 entries),
+  `row_cap` (was `p_row_cap`), `rules_scratch` and `ops_scratch` (were
+  the statics of `host.c`), `v2_sink`, and `stand_in`.
+- `lower.c`: `pl_load_pack()` splits `p->checking` into two flags.
+  `stand_in` (no rig file, no devices, the never-running audio device,
+  the tier 3 stand-ins) is set by `pl_check()` and `pl_sim_load()`;
+  `checking` (the null gfx, no warm-up draw, no data set, the
+  device-button check of 0.15.0) by `pl_check()` only. Of the 15 uses of
+  `checking`, each goes to one of the two. The rig is the desc's or the
+  built-in one. `pl_screen_open()` gets a branch for the stepped session:
+  no `yscr_open()`; `ygfx_open()` deferred (P3) at the rig's display
+  size, with its view and calibration, or `pl_gfx_open_null()`. The
+  text programs' warm-up and `ygfx_prime()` move to the first drawn
+  frame after attach. The `pl_v2_sink` static moves into the player.
+- `run.c`: `pl_run()` splits into `pl_run_prepare()` (the allocations),
+  `pl_run_frame()` (the stats reset, `pl_frame()`, the blank frame at the
+  end), `pl_run_drain()` and `pl_run_finish()`. `pl_run()` calls them
+  around `yscr_begin()` and `yscr_flip()`; `pl_sim_frame()` calls them
+  with a frame it makes. `pl_draw()` gets the draw flag (the RDK still
+  steps when it is false). `pl_writer_open()` starts the writer for a
+  stepped session too. A trigger fires to the sink and `on_code` when no
+  screen is open. `pl_participant_plan()` asks `live()`. A sound's onset
+  is its plan (decision 2): `pl_sounds()` and `pl_from_sound()` take the
+  scheduled time, final, and call no audio device.
+- `v2.c`: `pl_sim_sample()` puts samples in the queue that a real run's
+  raw mouse samples use (`S->live`), read by `v2_feed()` for a stepped
+  session too. The `yrsp_source` static moves into the session.
+  `pl_sim_where_now()` reads `def_cur`.
+- `host.c`: the two scratch areas come from `pl_alloc()` at the first
+  use in a load, not from statics. In the designer every load runs on
+  the check thread, so this is not a race there; `test_player_sim` loads
+  on two threads, and a second worker would.
+- New `player/sim.c`: the `pl_sim_*` functions.
+
+**The frame grid.** Frame k's onset is `YRT_VIRTUAL_T0_NS + (k + 1) x
+period`, and its flip record arrives with frame k + 1, with onset equal
+to the plan, tier SIM, no drop: what the SIM screen gives on the virtual
+clock. The equality test (below) checks that the grid gives `--sim`'s
+data.
+
+**Rejected.**
+- `yrt_virtual_begin()` in the designer. It is process-wide (rt.h): the
+  designer's other users of `yrt_now_ns()` and the session's writer
+  thread would read a clock that stands still between waits.
+- `pl_run()` on a thread of its own. The SIM screen would still sleep
+  each period on the real clock, and its gfx calls must come from the
+  GL thread.
+- A custom presenter (`YSCR_BACKEND_CUSTOM`) under `pl_run()`. The screen
+  plans each frame from `yrt_now_ns()`, so a stall of the UI would drop
+  frames and change the session's logic.
+- Sharing the check's `pl_player`. The check closes it after each check
+  and has no rig, data set or GL.
+
+### The built-in simulated rig
+
+Until step 6 adds rig profiles (decision 8), each session gets one rig
+that the player makes in memory (`pl_sim_rig()`), as `player_make_rig`
+makes the test profiles:
+- the display: 1920 x 1080 at 60 Hz (decision 1). The panel can choose
+  1280 x 1024, 2560 x 1440 or 800 x 600 (`--sim`'s) and a rate of 60,
+  120, 144, 240 or 500 Hz; the view file keeps the choice.
+- the view: 570 mm away, 1920 px over 518.4 mm (the check's stand-in,
+  scaled to the width as `pl_gd_units()` does);
+- the calibration: the nominal one of `pl_check_nominal_cal()` (sRGB
+  primaries, D65 white at 100 cd/m2, gamma 2.2), given only to a
+  definition with `"calibration": "required"`; any other gets identity,
+  as on a rig with no calibration;
+- no devices and no signals: every input role is the person or the
+  scripted participant, every output role the sink.
+- Why 1920 x 1080: a stimulus placed in px is where a typical rig shows
+  it. The equality test with `--sim` gives the session 800 x 600.
+- The panel says "Built-in simulated rig: 1920 x 1080, 60 Hz, nominal
+  view" and names the stand-ins in use (the check's tier 3 needs).
+
+### The data set
+
+Decision 7: each session writes a data set, as `ysp_player --sim` does:
+`session.json`, `trials.csv`, `frames.csv`, `events.csv` and the streams.
+- The folder is `.designer/preview/run-N/`, N one more than the last
+  session's. When a session is adopted (below), the old one is stopped
+  and closed, and the check thread removes every other `run-*` folder.
+  So `.designer/preview/` holds the current run, and for a moment the one
+  before it: each run replaces the last. A folder must not exist before
+  `yds_open()`, which is why the name changes.
+- The writes go through the player's writer thread, as in a real run, not
+  in place: no `write()` on the UI thread. The writer is a `yrt_worker`
+  with `no_elevate`, started at the load. Its queue has one producer at a
+  time: the check thread during the fast forward, then the UI thread.
+  The handover goes through SDL's event queue, whose lock orders the
+  two.
+- A session stopped by a restart has `"aborted"` with the reason
+  `"request"` in its `session.json`; its finished trials keep their rows.
+- The panel shows the folder's path, the last trial's response, rt and
+  outcome (`pl_sim_where_now()`), and a button that opens `trials.csv` in
+  the Tables view, read-only.
+- WebAssembly: the folder is in the browser's storage; without threads
+  the writes are in place. Step 7 decides.
+
+### The check thread and the session's load
+
+The check's cost was measured on 2026-11-20 (branch
+`designer-check-cost`, commit `003a186`; Intel Core i5-14500, one
+P-core, gcc 12.2, Release; median and max in ms):
+
+| Project | A keystroke, the texts unchanged | A keystroke in a text literal |
+|---|---|---|
+| bimanual | 9.1, 12.9 (all of it `pl_check()`) | |
+| stroop | 0.5 | 7.1 (the pack's build alone 6.4) |
+| the other projects in the repository | 0.2 to 1.9 | |
+| generated: 200 text stimuli in 4 scripts | 5.3 | 41 |
+| the same, and a stimulus that shows 10,000 words from a table | 37 | 201 |
+
+A session's load repeats the check's load and adds the data set and the
+recorded gfx, so it costs at least as much: up to 12.9 ms on bimanual.
+That does not fit in a 16 ms frame beside the UI's own 1.2 to 2.1 ms and
+a step (decision 9).
+
+**Part T, the check thread** (a prerequisite of step 5). One worker
+thread runs two kinds of job, each newest-wins: a job that arrives while
+one of its kind waits replaces it.
+- A **check job**: the text, a copy of the dirty tables (60 KB in the
+  measured case) and the revision. It runs `dsg_check()` and posts the
+  result.
+- A **session job**: an accepted text, its pack reference, the
+  revision, and a copy of the preview's settings (rig, seed, fields,
+  participant, pin). It runs `pl_sim_load()`, then the fast forward to
+  the pin (`pl_sim_frame()` with `draw` false; no GL), and posts the
+  session.
+- A waiting check runs before a waiting session job: the check gives the
+  issues, and a session job's text was checked already.
+- Results go to the UI thread through SDL's event queue, which also
+  wakes the loop's wait, as the folder dialog's answer does. Each result
+  carries its revision.
+- Before T starts its thread, `main.cpp` opens one GL gfx on the window's
+  context. That builds gfx's NOISE table on the UI thread (not
+  thread-safe before the first open) and gives the GL caps
+  (`ygfx_gl_caps_get()`) that each deferred open takes. The headless
+  tests open a null gfx first, for the same table.
+- WebAssembly without threads (no cross-origin isolation) runs both jobs
+  in the frame. Step 7 decides.
+
+**What the thread hands over.**
+- **Ownership.** The session job allocates the `pl_player` (1.6 MB,
+  heap). The job owns it until it posts it; from the event's delivery
+  the UI thread owns it. No two threads touch one `pl_player` at a time.
+- **Lifetime.** The session and every pointer in it (the definition's
+  arena, the pack's bytes, the data set) live until `pl_close()`. A
+  session that the UI thread drops is detached on the UI thread
+  (`pl_sim_detach()`, the GL objects) and then closed on the check
+  thread (`pl_close()`: the writer's last writes, `session.json`, the
+  memory), so the join and the disk wait are never on the UI thread. A
+  session that was never attached has no GL objects, and either thread
+  may close it.
+- **The pack.** The checker hands out its pack with an atomic reference
+  count (`dsg_checker_pack()`, retain, release). The check thread
+  retains it when it takes a session job; the reference goes with the
+  session; the thread that closes the session releases it after
+  `pl_close()`. A rebuild drops only the checker's own reference, so the
+  bytes live while a session uses them. No copy: a pack with images or
+  videos can be large.
+- **A session that is ready and stale.** When the event arrives, the UI
+  thread compares the session's revision and settings with the
+  document's revision and the preview's settings now. If they differ, or
+  a newer session job waits or runs, it drops the session (above) and
+  keeps the one it shows. The check thread also drops a finished session
+  itself, before it posts it, when a newer session job waits. So a stale
+  session never shows and never makes a GL object.
+- **A session that fails its load** (a refusal that the check did not
+  give, or a data set folder that cannot be made) posts its error; the
+  preview shows it as a preview issue and keeps the session it shows.
+
+**How the UI thread adopts a session.** In the frame the event arrives,
+the preview takes the session and calls `pl_sim_attach()` with a budget
+of `PV_ATTACH_BUDGET_MS` (4 ms) a frame, until it gives 1. The old
+session keeps running meanwhile. In the frame that attach completes, the
+preview stops the old session (`pl_sim_stop()`), detaches it, hands it
+to the check thread to close, and shows the new one; the new one's first
+step is the next frame. So no UI frame does a load, and a frame does the
+attach's budget or a step's work, not both.
+
+**Rejected.**
+- The load on the UI thread, in the frame after the result. bimanual's
+  `pl_check()` alone takes up to 12.9 ms.
+- A second GL context on the check thread, shared with the window's.
+  Framebuffers and vertex arrays are not shared between contexts, gfx
+  makes both, and WebGL has no shared contexts.
+- A load against the null gfx and a player-side remake of each texture
+  and glyph set on the UI thread. The player's structs keep gfx handles
+  (`ygfx_stim`, the text runs), so every handle would need a new value.
+  The deferred gfx (P3) keeps the handles.
+
+### The GL context
+
+**Prerequisite P3, ysp/gfx.h 0.23.0.** Two features:
+- **An output texture.** gfx writes its output stage into framebuffer 0
+  (target 0 in `ygfx__gl_pass_begin()`), which in the designer is the
+  window. With `ygfx_desc.output_texture` (appended; headless only), gfx
+  makes a GL_RGBA8 texture of `width` x `height` and a framebuffer for
+  it, and the output stage writes it in place of framebuffer 0.
+  `ygfx_read_output()` and CAPTURE read it. `ygfx_output_native(g,
+  &nat)` gives its GL name (the `ygfx_native` of v0.21). `end()` leaves
+  framebuffer 0 bound, and its cache says so. The probe's copy from
+  framebuffer 0 (`glCopyTexSubImage2D`) needed a window at least the
+  display's size and a fixed order of draws, and cost a copy a frame.
+- **A deferred open.** With `ygfx_desc.defer` and the caps of a gfx that
+  the GL thread opened (`ygfx_gl_caps`), `ygfx_open()` makes no GL call:
+  it checks the calibration, builds its tables and records each backend
+  call (programs, textures with a copy of their texels, buffers, glyph
+  sets) with the handle the GL backend will give it. `ygfx_attach(g,
+  gl_proc, ctx, budget_ns)` on the GL thread makes them in order, for at
+  most the budget a call, frees the copies, and from then on the gfx is
+  a GL gfx. Draws before the attach are refused. The handles do not
+  change, so the player's structs stay valid. The calibration's check,
+  20 to 33 ms in `pl_check()` before it dropped the gfx's calibration
+  (player.md, "Measured"), is then on the check thread.
+- gfx makes the texture and replays the calls itself, so its state cache
+  stays right, and the host makes no GL call of its own (the reason for
+  v0.21's shared textures). A struct grows, so the version is minor.
+  ysp-vis carries `ygfx_desc` and reports `GFX_VERSION`: its
+  `pyproject.toml` and `YV_VERSION` move too.
+
+**State.** Read from the code of gfx.h 0.22.0 and of the vendored
+`imgui_impl_opengl3.cpp`:
+
+| State | ysp/gfx.h | ImGui's OpenGL3 backend |
+|---|---|---|
+| Program, VAO, array buffer, texture unit 0, active unit, viewport, blend (enable, equations, functions) | Sets them where its cache says they changed; leaves them | Saves and puts back each |
+| Scissor, depth, stencil and cull tests | Assumes all off; never sets them | Saves the enables, sets its own, puts them back |
+| Sampler object on unit 0 | Assumes none | Binds its own while it draws, puts the old one back. Its sampler overrides the texture's own filter |
+| Textures on units 1 to 5, uniform buffer ranges 0 and 1, clear color, color mask | Sets the first three; the color mask only at a clear | Does not touch |
+| Framebuffer | Binds its targets; today leaves the last one bound | Draws into the bound one; does not bind |
+| Unpack alignment and row length | Sets 1 and 0 at an upload | Saves and puts back (since 2026-07-15) |
+
+So: `pl_sim_frame()` with `draw` true and `pl_sim_attach()` call
+`ygfx_reset_state()` first, because ImGui changed the program, the
+textures and the blend since gfx's last call. With 0.23.0, `end()`
+leaves framebuffer 0 bound; `main.cpp` also binds framebuffer 0 before
+its clear, so no later framebuffer user can make ImGui draw into the
+preview's texture. The designer enables no scissor, depth or stencil
+test outside ImGui; a GL test checks that gfx draws the same bytes after
+an ImGui frame as with none.
+
+**Where in the frame.** The preview's view steps the session in its
+`draw` hook, inside `ui_frame()`, then calls `ImGui::Image()` with the
+texture's name. gfx's draw is in the command stream before
+`ImGui_ImplOpenGL3_RenderDrawData()`, on one context, so no fence is
+needed.
+
+**Color.** The texture is GL_RGBA8 (not GL_SRGB8_ALPHA8) and holds the
+output stage's 8-bit device codes. ImGui samples them and writes them
+into the window's framebuffer, which has no sRGB encoding (GL ES and
+WebGL have no `GL_FRAMEBUFFER_SRGB`). So the designer's monitor gets the
+codes that a rig's output stage sends. With the built-in rig's nominal
+calibration, a monitor near sRGB shows the intended luminance. The
+output alpha must be 255, and the image is drawn with a white tint and
+no style alpha, or ImGui's blend mixes it with the background: the GL
+test checks both.
+
+**Size and pixel density.**
+- The panel shows the texture at a scale `s` in the window's framebuffer
+  px: "Fit" (the largest `s` that fits, at most 1) or "1:1" (`s` = 1,
+  with scroll bars). ImGui's size in points is `W x s /
+  io.DisplayFramebufferScale`, at a position snapped to a whole
+  framebuffer px. At 1:1, one participant px is one physical px of the
+  designer's monitor, on a high-density display too.
+- Decision 6: at 1:1 the image draws with ImGui's nearest sampler (its
+  draw callback), so the bytes are exact; at Fit, with ImGui's linear
+  sampler. No mipmaps. Scaled, fine gratings alias, and the panel says
+  "Scaled: fine patterns alias; use 1:1".
+- Rows: the texture is bottom-up (GL's order), so `ImGui::Image()` takes
+  `uv0 = (0, 1)`, `uv1 = (1, 0)`.
+
+### Input
+
+The first version gives the session these inputs, while the panel has
+the keyboard focus or the mouse is over the display:
+
+| Input | To the session | How |
+|---|---|---|
+| A key | `YRSP_KIND_KEYBOARD`, the SDL scancode, to every collector, as a real run does | `main.cpp` passes each key event's scancode to `ui_preview_key()`; ImGui's keys follow the keyboard layout, and the player's choices are physical keys (scancodes). Esc gives the keyboard back to the designer and does not reach the session. |
+| A choice button | The choice's own kind and control, as the scripted participant presses it (`pl_sim_choice()`) | A strip under the display has one button per choice of the running template. It covers choices that a keyboard cannot give: button box, XID and other device roles. |
+| The mouse over the display | A `position2d` role's sample (`pl_sim_sample()`) | The cursor's place in the role's units, with the origin at the display's center, x right, y down (format D22), at the gfx's px per unit. No capture (decision 3). |
+| A trigger code | Not an input: each code shows in an outputs list with its role and time (`on_code`) | |
+
+**Not driven in the first version.** A `position2d_relative` role and a
+`position2d` role with `allow_relative` (decision 3: with no capture, the
+mouse's motion stops at the panel's edge); a role of type `position3d`,
+`scalar` or `gaze`; units `workspace_cm` or `device`; a sync input (a
+`line` role of kind `sync`). The panel lists each such role by name with
+"not driven": the role stays at its origin, as with `--sim` and no
+samples. Format 3's `signals` graph (experiment_format 3.8) and
+`docs/signal_spec.md` are drafts and out.
+
+**Sound** (decision 2): silent. A sound's onset is its scheduled time,
+so a response window `from` a sound opens as planned. `--sim`'s virtual
+null device starts a sound on a sample, so an onset can differ from it by
+less than one sample period; the equality test measures this.
+
+**Times.** An input's time is the onset of the first frame that the UI
+frame steps after it arrives, less 1 ns, so it lands in that frame. The
+resolution is the UI frame (16.7 ms at 60 Hz). A real run stamps keys
+from the kernel. Input that arrives while the session is paused is
+dropped.
+
+**The panel says so**, in one line under the display: "Faithful in
+logic, not in timing: a simulated 60 Hz display paced by this window;
+input times are frame times; no sound."
+
+### Time
+
+**Two clocks.** The session's time is its frame grid. The UI's clock is
+`SDL_GetTicksNS()`, which `main.cpp` gives to the core each frame (the
+tests give their own).
+- **Running.** At each UI frame, the preview steps the frames whose
+  onsets are due by `speed x (real time since the start, less the time
+  paused)`, at most `PV_MAX_STEPS` (16) a UI frame. Only the last of
+  them draws (`draw` true). When more are due, the rest are dropped and
+  the panel says "slower than real time". At a 60 Hz UI this covers a
+  500 Hz display (8 steps) with room. Speed is 0.25, 0.5, 1 or 2.
+- **Paused.** No steps. The texture keeps the last frame. The view's
+  `animating` hook gives false, so the window waits for input
+  (`dsg_redraw_*()`).
+- **Step.** One frame, drawn. Then paused.
+- **Restart.** A session job with the same seed and pin. "New seed"
+  draws one.
+- When the window is minimized or hidden, or the pane is closed, the
+  preview pauses.
+
+**Which trial.** A session runs from the start of the timeline, as
+`--sim` does, so the variables and the table rows are the ones the walk
+gives at the seed. The person picks the trial by a pin: a leaf node
+(from the definition's timeline, listed with its template) and a row of
+its table, or "any".
+- With a pin, the session job fast-forwards on the check thread: it
+  steps with `draw` false and the scripted participant (`live()` gives
+  false) until the walk starts a trial of that leaf with that row. Then
+  `live()` gives true for that trial and the ones after it, and the
+  session goes to the UI thread there. Changing the pin is a restart.
+- The fast forward stops when the walk leaves the leaf without that row
+  ("row 5 was not drawn in this run of the leaf: seed 7"), or when a
+  trial waits for input that the script cannot give (a signal role). The
+  session is handed over where it stopped, with that note.
+- The chart offers "Preview this template": the pin of the first leaf
+  that runs it, row any.
+- Session fields: the check's stand-ins (integer 1, text `x`), shown in a
+  table that the person can edit.
+- Rejected: a player call that starts the walk at a node. The
+  ancestors' rows, loops and methods give the leaf its variables, and a
+  second walk would have to rebuild them; the fast forward uses the
+  player's own walk.
+
+**Where the trial is.** `pl_sim_where_now()` gives the trial, the leaf,
+the row, the template, the state (version 2) or the phase (version 1),
+the frame and the time. The panel shows them in one line. The chart
+draws a ring around the running state when it shows the running
+template; with "Follow" on, it changes to the running template.
+
+### Edits while the preview runs
+
+The preview loads only text that the check accepted (`DSG_CHECK_OK`),
+with the check pack of that check. The check's results come from the
+check thread one or more frames after the edit.
+
+| Change | What the preview does | Why |
+|---|---|---|
+| The definition or a table changes, and the check accepts it | Posts a session job when both are true: no change for `PV_SETTLE_MS` (300 ms, decision 4), and a check result with `DSG_CHECK_OK` for the document's current revision has come. Same seed and pin, running or paused as before. The old session goes on until the new one is adopted. A result for an older revision posts nothing. | A restart per keystroke would reset the trial at each character, and costs a load each time. |
+| The text does not parse, or the check refuses it | Keeps the last good session, running or paused as it was. A banner: "Shows the definition as of HH:MM:SS; the text has N errors." | Typing passes through texts that do not load. Stopping would lose the trial being looked at. |
+| The check pack rebuilds (a text stimulus's texts, a table) | As an accepted change. The old session keeps its reference to the old pack until it closes. | The session points into the pack's bytes. |
+| A change while a session job runs or waits | The newest job wins; a session that is ready and stale is dropped ("The check thread and the session's load"). | |
+| The session refuses at run time (`pl_sim_frame()` < 0) | Stops; the image stays. The refusal goes to the Issues panel as a preview issue, linked by its object as a tier 2 refusal is. The next accepted change restarts. | These are the checks that `pl_check()` cannot reach (player.md, "What it does not do"): the preview finds them. |
+| The session ends | "Session over: N trials", and the data set's folder. Restart. | |
+
+**Rejected: hot reload** in the first version (decision 4; rig_spec 6: an
+update applies at once in preview and keeps the session's state). It
+needs the runner protocol, which is out of the first version. A restart
+at the pin shows the same trial; a staircase's state and the trials
+before the pin start again.
+
+### Redraw and cost
+
+Each UI frame stays within 16 ms. On the UI thread the preview adds a
+step's work while it runs, and the attach's budget while a session is
+adopted. The load, the fast forward, the data set's writes and the old
+session's close are on other threads.
+
+**Measure** (Linux desktop, Intel Core i5-14500, Intel UHD 770 with Mesa
+iris, gcc 12.2, Release, pinned to CPU 2, one run at a time on a quiet
+machine, the load average stated; medians, p99 and max of 1,000 frames,
+two runs):
+
+| What | Thread | Why | Knob if over budget |
+|---|---|---|---|
+| `pl_sim_frame(draw false)` on each example (rdk, stroop, afc2, oddball, sound, visuomotor, bimanual) | UI | Up to 16 of them run in one UI frame | `PV_MAX_STEPS` |
+| `pl_sim_frame(draw true)`, CPU, at 800 x 600 and 1920 x 1080 | UI | The drawn frame | Display size |
+| `pl_sim_attach()`: the whole, and its largest single call, with and without the program cache | UI | One call cannot be split: a large texture's upload is the floor | `PV_ATTACH_BUDGET_MS` |
+| The whole UI frame with the chart and the preview running (bimanual), the frame of an adoption, and the frame interval | UI | The budget itself | |
+| `pl_sim_load()` and the fast forward to a pin | check | How late a restart shows; the checks that wait behind it | Session jobs after checks |
+| `pl_close()` of a session, with its writer's last writes | check | The same | |
+| Idle while paused: frames drawn in 10 s with no input, and CPU | UI | Must be 0 frames after the settle frames | |
+
+**Kept idle.** The view's `animating` hook is true only while the
+session runs, the pane is open, and the window is not minimized. A step,
+an attach in progress or an arriving result sets `ui_work_pending()`. A
+job on the check thread draws no frame until its event arrives. Mouse
+motion over a paused display is input like any other: it gives the
+settle frames and no step.
+
+**Allocation.** `pl_sim_frame()` allocates nothing (the player's test
+with `--wrap`). The preview's input queue and its strings are fixed
+arrays. The load allocates on the check thread; `pl_sim_attach()` makes
+GL objects and frees the recorded copies.
+
+### The designer's shared interfaces
+
+The parts use these and do not change them; a part that needs a change
+stops and reports it, as in step 4.
+
+From part T, `designer/core/dsg.h` and a new `designer/core/worker.c`:
+- `dsg_worker_start(post, ctx)`, `dsg_worker_stop()`: the thread; `post`
+  hands a finished job to the UI thread (main.cpp: `SDL_PushEvent()`).
+- `dsg_worker_check(text, n, tables, revision)`: a check job.
+  `dsg_worker_session(job)`: a session job (`dsg_session_job`: text,
+  pack reference, revision, settings).
+- `dsg_worker_result()`: on the UI thread, the result that an event
+  carries: a check report or a session, with its revision.
+- `dsg_worker_close(session)`: a session to close on the thread.
+- `dsg_checker_pack()`, `dsg_pack_retain()`, `dsg_pack_release()`
+  (atomic).
+
+`designer/core/preview.h` (C, no SDL; `preview.c`, part A):
+- `dsg_preview_new(gl_caps)`, `dsg_preview_free()`.
+- `dsg_preview_checked(pv, report, revision, pack, now_ns)`: a check
+  result arrived; the preview decides whether to post a session job.
+  `dsg_preview_adopt(pv, session, revision, now_ns)`: a session arrived.
+  `dsg_preview_tick(pv, now_ns)`: once a UI frame; attaches, steps,
+  posts after the settle. `dsg_preview_animating()`,
+  `dsg_preview_work()`.
+- Controls: `dsg_preview_run()`, `_pause()`, `_step()`, `_restart()`,
+  `_set()` (display, rate, speed, seed, participant, pin, fields).
+- Input: `dsg_preview_key(scancode, down)`, `_choice(i, down)`,
+  `_pointer(x_px, y_px, inside)` in participant px.
+- State: `dsg_preview_where()`, `dsg_preview_status()` (none, waiting
+  for a session, attaching, running, paused, ended, failed, stale), the
+  preview issue, the outputs list, the data set's folder, the roles not
+  driven, `dsg_preview_texture()`.
+
+`designer/core/dsg.h` (S): `DSG_FROM_PREVIEW`; `dsg_remove_tree()` in
+`platform.c` (the old `run-*` folders, called on the check thread).
+
+`designer/app/views.h` (S): a third slot, `UI_SLOT_AUX` (decision 5): a
+pane at the right of the main area, shown or hidden by a toolbar button,
+beside whichever main view shows, so the chart and the preview show at
+once. `ui.h` (S): `UiPlatform.gl_caps` (NULL in the headless tests,
+where the session draws on gfx's null backend and the pane shows a gray
+box), `ui_preview_key()`, and `ui_preview_where()` for the chart.
+
+The view file's part `preview`: `{"open": bool, "display": [w, h],
+"hz": n, "speed": s, "seed": n, "participant": "...", "pin": {"leaf":
+PATH, "row": n}, "fields": {...}, "scale": "fit"}`.
+
+### Who owns which file
+
+| Files | Owner |
+|---|---|
+| `include/ysp/gfx.h`, `docs/gfx.md`, its README row and `docs/status.md` entry, its test and compile checks, `tests/mutate/gfx.toml`; ysp-vis's `pyproject.toml` and `YV_VERSION` | P3 |
+| `player/player.h`, `sim.c` (new), `run.c`, `lower.c`, `v2.c`, `host.c`, `player/CMakeLists.txt`; `tests/player/sim_test.c` (new); `tests/mutate/player_sim.toml` (new) and the entries of `player_run`, `player_lower`, `player_v2`, `player_host`; `docs/player.md` ("Reference: the stepped session"); `docs/status.md` | P4 |
+| `designer/core/worker.c` (new), `check.c`, the worker's and the check's parts of `dsg.h`, the check's call in `ui.cpp`, the job event and the first gfx open in `main.cpp`; `tests/designer/worker_test.c` (new) | T (the check thread) |
+| `designer/core/preview.h`, the rest of `dsg.h`, `platform.c` (`dsg_remove_tree()`), `views.h`, `ui.h`, `ui.cpp` (the AUX slot, the preview issue in the Issues panel), `main.cpp` (the key hook, framebuffer 0 before the clear), `views.cpp`, `designer/CMakeLists.txt`; stubs of parts A, B and C | Shared (S): frozen during step 5, after T |
+| `designer/core/preview.c`; `tests/designer/preview_test.c`, `preview_bench.c` | A (core) |
+| `designer/app/view_preview.cpp`; `tests/designer/te_preview.cpp`; `test_designer_ui`'s preview part | B (pane) |
+| `designer/app/view_chart.cpp` (the ring, Follow, "Preview this template"); `tests/designer/te_chart.cpp` (added tests) | C (chart) |
+| `tests/designer/preview_gl_test.cpp` (new); the measurements | D |
+| `docs/designer.md`: a subsection each under "Decisions of step 5"; `docs/status.md`: an entry each | Each part its own |
+
+### Tests
+
+Every part keeps the designer suite passing in ctest from the build tree
+with `DISPLAY` unset, with `YSP_DESIGNER_TEST_ENGINE` off and on, and the
+player's tests and mutation lists. Each new check has a hand mutant that
+fails it. The threaded tests also run under ThreadSanitizer (gcc 12,
+`setarch -R`).
+
+| Part | Tests |
+|---|---|
+| P3 | `test_gfx` part "v0.23" (EGL, llvmpipe, headless). Output texture: `ygfx_read_output()` gives the same bytes as the framebuffer 0 path for the same frames (gratings, text runs, a calibration); the native name is GL_RGBA8 at the size; framebuffer 0 is bound after `end()`; after foreign GL calls and `ygfx_reset_state()`, the same bytes. Deferred open: opened on one thread, attached on another (the context's), the same bytes as a direct open; the handles unchanged; attach in steps of a small budget gives the same; a draw before attach refused; a texture larger than the caps refused at the open. Mutants: write framebuffer 0; leave the texture's framebuffer bound; replay out of order; free a copy before its call. |
+| P4 | `test_player_sim`: (1) at 800 x 600 with the scripted participant, the same `trials.csv`, `events.csv` and streams as `ysp_player --sim` (run in the same test on the virtual clock, which is then ended) for each example pack, and for visuomotor and bimanual with the samples through `pl_sim_sample()`; `frames.csv` the same but for its measured phase columns; a sound's onset within the tolerance the test measures. (2) No allocation in `pl_sim_frame()` (`--wrap`, Linux). (3) Load and fast forward on one thread, attach and frames on another; no clock change (`yrt_is_virtual()` false). (4) Two sessions stepped in turn, with a `pl_check()` on a third thread at the same time, give the data of each alone. (5) `pl_sim_key()` at a time gives that response and `rt = t - onset`; a choice; a sample that ends a reach. (6) The states of `pl_sim_where_now()` follow `--sim`'s state rows (bimanual). (7) A refusal at run time gives its object. (8) `live()`: the scripted trials and the person's trials. (9) A stopped session's `session.json` says so. Mutants in `player_sim.toml`. |
+| T | `test_designer_worker`: newest-wins for each kind (ten texts in a burst give one result per check, the last for the last text); a check before a waiting session job; a result marked with its revision; a session dropped by the thread when a newer job waits; a pack valid while a session holds it after a rebuild (ASan); a session closed on the thread after it was detached on another. `test_designer_ui` and the `te_*` tests pass with the check one frame late. |
+| A | `test_designer_preview` (headless, null gfx, a test clock, the worker run inline): the steps a UI frame for given times (cap, speed, pause, step); a session job posted after the settle and only for the current revision; a ready and stale session dropped; the attach's budget over frames, with the old session running until it ends; last good on a refusal; a run-time refusal as an issue; the pin's two stops; the cursor to role units for px, cm and deg; the `run-*` folders, one left; idle frames 0 while paused. `bench_designer_preview` (not on Windows): the numbers of "Redraw and cost". |
+| B | `test_designer_ui`: the pane draws with `gl_caps` NULL; `animating` while running, not while paused; the banner texts; the roles not driven listed. `te_preview.cpp`: Space through the key hook gives a row with the response; the Pause button; an edit in the panels restarts the preview after the settle; a choice button; a text that does not parse shows the banner and keeps the session. |
+| C | `te_chart.cpp`: the ring on the running state; Follow changes the template; "Preview this template" sets the pin. |
+| D | `test_designer_preview_gl` (EGL, llvmpipe, headless; not in the default ctest when EGL is missing): a session loaded on the worker and attached on the context; one ImGui frame with the preview at 1:1 and `glReadPixels()` of framebuffer 0 gives the texture's bytes (alpha 255, no tint); the stroop word at its place; gfx's bytes the same with and without an ImGui frame before. Then the measurements, one at a time. |
+
+### Order of merges
+
+1. Wave 1, in parallel: P3, P4 and T on branches from `main`
+   (`gfx-output-texture`, `player-sim`, `designer-check-thread`). P4
+   builds against P3's branch for the deferred open and works with the
+   null gfx until P3 merges. T needs no step 5 code; its session jobs
+   use P4's `pl_sim_load()` and start as a stub.
+2. Into `designer-step5`: P3, then P4, then T, then S. Each merge runs
+   the player's, gfx's and the designer's suites and the mutation lists.
+3. Wave 2, in parallel, each on a branch from `designer-step5`: A, B, C.
+   Merge A first (B calls its API), then C, then B.
+4. Wave 3: D, then the integration: the measurements in "Redraw and
+   cost", "Decisions of step 5", and the README and status rows.
+5. `designer-step5` into `main` only when the user says so.
+
+### Risks
+
+- **The frame grid against `--sim`.** If a stepped session does not give
+  `--sim`'s data, the preview is not faithful in logic. The equality
+  test is the check, and it comes first in P4.
+- **The deferred open is the largest new piece** (P3). It must replay
+  every backend call in order with the same handles. Its test compares
+  bytes with a direct open.
+- **One attach call cannot be split.** A large image's upload is one GL
+  call; its cost sets the floor of an adoption's frame. Part D measures
+  the largest call on the example packs.
+- **Threads.** Until part T the designer has one thread. The player's
+  statics and gfx's first open are the known races; ThreadSanitizer is
+  the check for the ones not known.
+- **A restart shows late** when the check thread is busy: a session job
+  waits behind a check (up to 201 ms on the generated project's text
+  keystroke). The old session runs meanwhile.
+- **The fast forward can stall** on a trial that waits for signal input
+  the script does not give. It hands over there and says so.
+- **GL state.** A later change to ImGui's backend or the designer's own
+  GL can break the assumptions in the table. The GL test checks the
+  bytes after an ImGui frame.
+- **Disk.** Each session writes a data set (`frames.csv` grows a row a
+  frame). Only the current run and the one before it are kept.
+- **The web build** (step 7) is not tried: WebGL2 headless gfx worked in
+  the probe; the player library in WebAssembly, its writer thread and
+  part T's thread are not built.
+- **Memory.** Up to three 1.6 MB players (the check's, the shown
+  session's, one loading), each session with its 1.5 MB seed log, and a
+  deferred gfx's copies of its texels until the attach.
+
+### Not done in the plan
+
+- Nothing is built. The check's cost is measured (branch
+  `designer-check-cost`); the session's load, attach and step costs are
+  not.
+- Windows and macOS are not considered beyond what CI builds.
 
 ## How to build and run the skeleton
 
