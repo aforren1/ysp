@@ -92,20 +92,19 @@ void* __real_realloc(void* q, size_t n);
 void* __wrap_malloc(size_t n) { if (in_frame) frame_allocs++; return __real_malloc(n); }
 void* __wrap_calloc(size_t a, size_t b) { if (in_frame) frame_allocs++; return __real_calloc(a, b); }
 void* __wrap_realloc(void* q, size_t n) { if (in_frame) frame_allocs++; return __real_realloc(q, n); }
+static long long n_frames_stepped;
 #define FRAME_IN() (in_frame = 1)
-#define FRAME_OUT() (in_frame = 0)
+#define FRAME_OUT() (in_frame = 0, n_frames_stepped++)
 #else
 #define FRAME_IN() ((void)0)
 #define FRAME_OUT() ((void)0)
 #endif
-static long long n_frames_stepped;
 
 static int sim_frame(pl_player* p, bool draw) {
     int rc;
     FRAME_IN();
     rc = pl_sim_frame(p, draw);
     FRAME_OUT();
-    n_frames_stepped++;
     return rc;
 }
 
@@ -277,7 +276,7 @@ static char* def_of(const pk* k) {
 /* text with every `from` replaced by `to` (text is freed); NULL when
  * `from` is missing */
 static char* edit_all(char* text, const char* from, const char* to) {
-    size_t nf = strlen(from), nt = strlen(to), n = 0, k = 0;
+    size_t nf = strlen(from), nt = strlen(to), n = 0;
     const char* c;
     char* out, *w;
     if (!text) return NULL;
@@ -286,7 +285,7 @@ static char* edit_all(char* text, const char* from, const char* to) {
     out = (char*)malloc(strlen(text) + n * (nt + 1) + 1);
     w = out;
     for (c = text; *c;) {
-        if (strncmp(c, from, nf) == 0) { memcpy(w, to, nt); w += nt; c += nf; k++; }
+        if (strncmp(c, from, nf) == 0) { memcpy(w, to, nt); w += nt; c += nf; }
         else *w++ = *c++;
     }
     *w = 0;

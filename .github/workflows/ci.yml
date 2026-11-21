@@ -1555,7 +1555,7 @@ jobs:
           set -eu
           stroop=trial_stroop
           if [ "$RUNNER_OS" = macOS ]; then stroop=""; fi
-          cmake --build build --config Release --target ysp_player player_make_rig test_player_eval test_player_check ypak trial_rdk $stroop trial_2afc_adaptive device_trigger_flip
+          cmake --build build --config Release --target ysp_player player_make_rig test_player_eval test_player_check test_player_sim ypak trial_rdk $stroop trial_2afc_adaptive device_trigger_flip
           ctest --test-dir build -C Release -R test_player --output-on-failure
           if [ "$RUNNER_OS" = Windows ]; then bin=build/player/Release; ypak=build/pack/Release/ypak; else bin=build/player; ypak=build/pack/ypak; fi
           work=$RUNNER_TEMP/player; mkdir -p "$work"
