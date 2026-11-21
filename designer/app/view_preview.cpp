@@ -97,7 +97,9 @@ void banner(const char* id, ImU32 bg, const char* text) {
 
 // --- the status -------------------------------------------------------------------
 
-void status_line(const dsg_preview_info& in) {
+// Gives the height of the rows that come and go (the issue), which the
+// display's Fit size leaves out.
+float status_line(const dsg_preview_info& in) {
     switch (in.status) {
     case DSG_PV_NONE: ImGui::TextWrapped("No session. The preview starts when the check accepts the definition."); break;
     case DSG_PV_WAITING: ImGui::TextWrapped("Waiting: the session loads."); break;
@@ -109,10 +111,13 @@ void status_line(const dsg_preview_info& in) {
     default: ImGui::TextWrapped("Unknown state %d.", in.status); break;
     }
     dsg_issue is = {};
+    float varying = 0.0f;
     if (dsg_preview_issue(pv(), &is) && is.message) {
+        const float y0 = ImGui::GetCursorPosY();
         ImGui::TextDisabled("Issue:");
         ImGui::SameLine();
         user_text(is.message);
+        varying = ImGui::GetCursorPosY() - y0;
     }
     // One row whether or not there is a note: "slow" comes and goes while a
     // session runs, and a row that comes and goes moves the display (hand
@@ -121,6 +126,7 @@ void status_line(const dsg_preview_info& in) {
     else if (in.attaching) ImGui::TextDisabled("A new session is being attached.");
     else if (in.loading && in.status != DSG_PV_WAITING) ImGui::TextDisabled("A new session loads. This one runs until it is ready.");
     else ImGui::NewLine();
+    return varying;
 }
 
 // Where the shown session is.
@@ -551,16 +557,18 @@ void draw() {
     dsg_preview_get(pv(), &ps);
 
     controls(in, ps);
-    status_line(in);
+    // The display's Fit size comes from the room below the controls, less the
+    // rows that are always there, measured, not from the room left after
+    // them: a banner or an issue that comes and goes moves the display down
+    // but does not rescale it (hand test, 2026-11-21).
+    const float room = ImGui::GetContentRegionAvail().y, top = ImGui::GetCursorPosY();
+    float varying = status_line(in);
     char buf[256];
     snprintf(buf, sizeof buf,
              "Faithful in logic, not in timing: a simulated %d Hz display paced by this window; input times are frame times; no sound.",
              in.hz > 0 ? in.hz : ps.session.hz);
     banner("##faithful", kBannerInfo, buf);
-    // The display's Fit size comes from the room here, less fixed rows, not
-    // from the room left after the rows below: a banner or an issue that
-    // comes and goes moves the display down but does not rescale it.
-    const float room = ImGui::GetContentRegionAvail().y;
+    const float y_banners = ImGui::GetCursorPosY();
     if (in.stale) {
         char when[16] = "?";
         const time_t t = (time_t)in.shown_unix_s;
@@ -574,13 +582,14 @@ void draw() {
         snprintf(buf, sizeof buf, "Stopped before the trial chosen: %s", in.note);
         banner("##note", kBannerNote, buf);
     }
+    varying += ImGui::GetCursorPosY() - y_banners;
     where_line();
     if (in.keyboard) ImGui::TextColored(kKeysText, "Keys go to the session. Press Esc to give them back.");
     else ImGui::TextDisabled("Click the display to send it keys.");
 
-    // Rows: status, note, two of where, keys (5); the details below get 7.
-    // At least a third of the room.
-    draw_display(in, ps, ImMax(room - ImGui::GetFrameHeightWithSpacing() * 12.0f, room * 0.33f));
+    // The details below get 7 rows; the display at least a third of the room.
+    const float fixed = ImGui::GetCursorPosY() - top - varying;
+    draw_display(in, ps, ImMax(room - fixed - ImGui::GetFrameHeightWithSpacing() * 7.0f, room * 0.33f));
     choice_strip();
 
     ImGui::BeginChild("##details", ImVec2(0, 0));

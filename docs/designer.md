@@ -1305,11 +1305,15 @@ needed no change in them.
 
 **The display.**
 - Fit: the scale `s` is the largest that fits the room below the
-  "Faithful" banner, less 12 rows (5 above the display, 7 for the
-  details), at most 1. The status's note row and the two rows of where the
+  controls, less the measured height of the rows that are always there
+  (the status, its note row, two rows of where, the keys row, the
+  "Faithful" banner) and 7 rows for the details, at most 1. The status's note row and the two rows of where the
   session is are always there, empty or "Last trial: none yet." when
   there is nothing to show. So the display keeps its size while the
-  session runs; a stale banner or an issue moves it down. Before the 2026-11-21
+  session runs; a stale banner, a fast forward's note or an issue moves it
+  down. A first version reserved 5 widget heights for the rows instead of
+  their measured height; at 1:1 the image then overflowed its child
+  window by 6 px in `test_designer_preview_gl`. Before the 2026-11-21
   hand test the room was what the rows above left, and the display shrank
   after the first trial (403.6 to 368 points in `preview/steady`). 1:1: `s` = 1 in a child window with scroll bars. The size in
   points is `W x s / io.DisplayFramebufferScale`, at a position snapped to a
