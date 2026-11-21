@@ -164,7 +164,9 @@ int pl_wq_push_row(pl_player* p, int stream, const void* row, size_t n) {
  * there (ysp/rt.h), whatever the frame thread gets later. */
 int pl_writer_open(pl_player* p) {
     yrt_worker_desc wd;
-    if (p->args.sim) return 0;
+    /* --sim writes in place; a stepped session's caller is a UI thread,
+     * which must not wait on the disk */
+    if (p->args.sim && !p->sim.on) return 0;
     p->wq = (pl_wjob*)pl_alloc(p, sizeof(pl_wjob) * PL_WRITE_QUEUE);
     if (!p->wq) return -1;
     memset(&wd, 0, sizeof wd);
@@ -378,7 +380,10 @@ static int pl_dataset_open(pl_player* p) {
         yjs_set(&a, fields, p->def->fields[i].name, yjs_new_stringz(&a, p->text_buf));
     }
     yjs_set(&a, s, "session_fields", fields);
-    yscr_describe(&p->scr, line, sizeof line);
+    if (p->sim.on)
+        snprintf(line, sizeof line, "ysp_player %s: a stepped session, no screen: %dx%d, period=%lldns, frames from its caller", PL_VERSION_STRING,
+                 (int)p->sim.width, (int)p->sim.height, (long long)p->sim.period);
+    else yscr_describe(&p->scr, line, sizeof line);
     yjs_set(&a, s, "screen", yjs_new_stringz(&a, line));
     if (p->have_cal) {
         ycol_ctx_describe(&p->cx, line, sizeof line);
@@ -662,6 +667,16 @@ int pl_script_load(pl_player* p, const char* path) {
 }
 
 volatile int pl_loop_active;
+/* Stepped sessions on two threads (the designer's check thread and its UI
+ * thread) both set it: an atomic store, so that is no data race. The flag
+ * is a test's, which counts on one thread. */
+static void pl_loop_set(int v) {
+#if defined(__GNUC__)
+    __atomic_store_n(&pl_loop_active, v, __ATOMIC_RELAXED);
+#else
+    pl_loop_active = v;
+#endif
+}
 
 static double pl_participant_rand(pl_player* p) { return ytr_splitmix(&p->participant_rng); }
 
@@ -676,6 +691,7 @@ static void pl_participant_plan(pl_player* p, int trial) {
     p->silent = true;
     p->script_k = -1;
     if (!t->collector || !p->args.sim) return;   /* a real run's participant is real */
+    if (p->sim.live_trial) return;               /* a stepped session's caller answers it (live()) */
     if (p->env.key_answer_known) {
         for (i = 0; i < t->n_choices; i++)
             if (strcmp(t->choice_keys[i], p->key_answer) == 0) answer = i;
@@ -883,6 +899,7 @@ static int pl_leaf_open_body(pl_player* p, pl_leaf* lf, int iter) {
     int iters[PL_MAX_DEPTH_STACK];
     int n = pl_stack_iters(p, iters, PL_MAX_DEPTH_STACK - 1);
     uint64_t seed;
+    pl_at(p, PL_OBJ_NODE, lf->node->path);   /* the leaf's refusals name it */
     iters[n++] = iter;
     seed = pl_node_seed(p->seed, lf->node->path, iters, n);
     /* compare.py and the operator use these; the session's seed is enough to
@@ -1041,6 +1058,9 @@ int pl_start_trial(pl_player* p, const yscr_frame* f) {
 
     p->walk_steps = 0;
     p->tmpl = p->leaf->tmpl;
+    /* a refusal from here to the trial's end names its template, as one
+     * at the load does (a stepped session links it, pl_check_result) */
+    pl_at(p, PL_OBJ_TEMPLATE, p->tmpl->def->name);
     p->track = NULL;
     if (p->ti.track >= 0) {
         p->track = p->leaf->tracks[p->ti.track];
@@ -1066,6 +1086,9 @@ int pl_start_trial(pl_player* p, const yscr_frame* f) {
     if (ytl_anchor(&p->tl, PL_BASE_TRIAL, f->onset, 0) != 0) { pl_fail(p, "ytl_anchor: %s", ytl_error(&p->tl)); return -1; }
     p->trial_start_onset = f->onset;
     pl_v2_select(p);
+    /* a stepped session's caller takes this trial or leaves it to the
+     * scripted participant (live(), sim.c) */
+    p->sim.live_trial = p->sim.ask && p->sim.ask(p, p->global_trial);
     if (p->tmpl->v2) {
         /* version 2: states, the graph, the forms (v2.c) */
         p->trial_first_frame = f->index;
@@ -1207,12 +1230,10 @@ static pl_row* pl_row_new(pl_player* p) {
     return r;
 }
 
-static size_t p_row_cap;   /* pl_run sets it; one session per process */
-
-static char* pl_row_str(pl_row* r, const char* s) {
+static char* pl_row_str(const pl_player* p, pl_row* r, const char* s) {
     size_t n = strlen(s);
     char* out;
-    if (r->text_len + n + 1 > p_row_cap) return NULL;
+    if (r->text_len + n + 1 > p->row_cap) return NULL;
     out = r->text + r->text_len;
     memcpy(out, s, n + 1);
     r->text_len += n + 1;
@@ -1226,7 +1247,7 @@ static int pl_cell_text(pl_player* p, pl_row* r, const char* name, const pl_val*
     int rc = pl_val_text(x, buf, p->max_text + 1);
     if (rc == -2) { pl_fail(p, "internal: the column '%s' has a value longer than the load's bound of %zu bytes", name, p->max_text); return -1; }
     if (rc < 0) { pl_fail(p, "the column '%s': the value has no text", name); return -1; }
-    *out = pl_row_str(r, buf);
+    *out = pl_row_str(p, r, buf);
     if (!*out) { pl_fail(p, "internal: the row's text for '%s' is over the load's bound of %zu bytes", name, p->row_text_cap); return -1; }
     return 0;
 }
@@ -1351,7 +1372,7 @@ static int pl_row_fill(pl_player* p, pl_row* r) {
             char t[YDS_SEED_TEXT];
             if (p->leaf->desc.seed || p->leaf->desc.n_vars) {
                 yds_seed_text(ytr_trial_seed(&p->trials, p->ti.index), t);
-                s = pl_row_str(r, t);
+                s = pl_row_str(p, r, t);
                 have = 3;
             }
             break;
@@ -1362,7 +1383,7 @@ static int pl_row_fill(pl_player* p, pl_row* r) {
         case CS_RDK_SEED: {
             char t[32];
             snprintf(t, sizeof t, "%llu", (unsigned long long)p->stims[p->csrc[i].ref].rdk_seed);
-            if (p->stims[p->csrc[i].ref].rdk_moving) { s = pl_row_str(r, t); have = 3; }
+            if (p->stims[p->csrc[i].ref].rdk_moving) { s = pl_row_str(p, r, t); have = 3; }
             break;
         }
         case CS_RDK_UPDATES: if (p->stims[p->csrc[i].ref].rdk_moving) { v = p->stims[p->csrc[i].ref].n_flushed + p->stims[p->csrc[i].ref].n_steps; have = 1; } break;
@@ -1370,7 +1391,7 @@ static int pl_row_fill(pl_player* p, pl_row* r) {
             char t[20];
             if (p->stims[p->csrc[i].ref].rdk_moving) {
                 snprintf(t, sizeof t, "%016llx", (unsigned long long)yrdk_digest(&p->stims[p->csrc[i].ref].field));
-                s = pl_row_str(r, t);
+                s = pl_row_str(p, r, t);
                 have = 3;
             }
             break;
@@ -1831,6 +1852,7 @@ static int pl_response_trigger(pl_player* p, const yrsp_result* r) {
         }
     }
     p->out_now[ch].n++;
+    if (p->sim.on && p->sim.on_code) p->sim.on_code(p->sim.ctx, p->trigger_roles[ch]->name, (uint32_t)code, r->t_response);
     yds_event_init(&ev);
     ev.t_ns = r->t_response;
     ev.trial_index = p->global_trial - 1;
@@ -2002,6 +2024,7 @@ static int pl_end_trial_(pl_player* p, const yscr_frame* f) {
             if (pl_rdk_flush(p, s) < 0) return -1;
         }
     }
+    pl_at(p, PL_OBJ_NODE, p->leaf->node->path);   /* the leaf's trial list */
     if (requeue) {
         int r = ytr_requeue(&p->trials);
         if (r == YTR_ERR_FULL) {
@@ -2023,6 +2046,15 @@ static int pl_end_trial_(pl_player* p, const yscr_frame* f) {
         if (r < 0) { pl_fail(p, "node '%s': %s", p->leaf->node->path, ytr_error(&p->trials)); return -1; }
     }
     pl_loop_count(p, have_res, have_res && p->env.responded && p->env.correct);
+    if (p->sim.on) {
+        /* pl_sim_where_now()'s last trial: the env's texts go with the next
+         * trial, so a copy (cut to PL_SIM_TEXT) */
+        p->sim.last_has_outcome = p->env.outcome != NULL;
+        p->sim.last_has_response = p->env.responded && p->env.response != NULL;
+        snprintf(p->sim.last_outcome, sizeof p->sim.last_outcome, "%s", p->env.outcome ? p->env.outcome : "");
+        snprintf(p->sim.last_response, sizeof p->sim.last_response, "%s", p->sim.last_has_response ? p->env.response : "");
+        p->sim.last_rt = p->env.responded ? p->env.rt_ns : YRSP_NO_TIME;
+    }
     p->in_trial = false;
     p->trials_done++;
     return 0;
@@ -2048,7 +2080,9 @@ static int pl_sounds(pl_player* p, const yscr_frame* f) {
         for (k = 0; k < n && k < p->fired_cap; k++) {
             /* every onset once: a sound can play more than once in a trial */
             if (p->peek[k].kind == YTL_ONSET && p->peek[k].target == s->ch_visible && p->peek[k].onset > s->sound_scheduled) {
-                yau_id id = yau_play_at(&p->audio, s->sound, p->peek[k].onset);
+                /* a stepped session is silent (decision 2): its device
+                 * never runs, and the onset is the plan (pl_from_sound()) */
+                yau_id id = p->sim.on ? 0 : yau_play_at(&p->audio, s->sound, p->peek[k].onset);
                 if (id < 0) { pl_fail(p, "'%s': %s", s->def->name, yau_error(&p->audio)); return -1; }
                 if (s->sound_first < 0) { s->sound_first = 1; s->sound_id = id; }
                 {
@@ -2074,8 +2108,18 @@ static int pl_from_sound(pl_player* p) {
     if (!p->in_trial || !p->tmpl->collector || p->from_landed) return 0;
     s = pl_stim_by_name(p, p->tmpl->def->response->from);
     if (!s || s->def->kind != YEXP_SOUND || s->sound_scheduled < 0) return 0;
-    if (yau_update(&p->audio) < 0) { pl_fail(p, "audio: %s", yau_error(&p->audio)); return -1; }
-    if (yau_result(&p->audio, s->sound_id, &on) < 0) { pl_fail(p, "audio: %s", yau_error(&p->audio)); return -1; }
+    if (p->sim.on) {
+        /* a stepped session: the scheduled onset, final, as a device that
+         * starts each sound on its plan would give it */
+        memset(&on, 0, sizeof on);
+        on.id = s->sound_id;
+        on.target = s->sound_scheduled;
+        on.onset = s->sound_scheduled;
+        on.tier = YAU_TIER_SIM;
+    } else {
+        if (yau_update(&p->audio) < 0) { pl_fail(p, "audio: %s", yau_error(&p->audio)); return -1; }
+        if (yau_result(&p->audio, s->sound_id, &on) < 0) { pl_fail(p, "audio: %s", yau_error(&p->audio)); return -1; }
+    }
     if (on.onset) {
         yrsp_onset o = yrsp_onset_audio(&on);
         yrsp_set_onset(p->tmpl->collector, &o);
@@ -2127,7 +2171,16 @@ int pl_on_fired(pl_player* p, const yscr_frame* f, int n) {
             /* tests: a code that the screen never writes, as a trigger of a
              * flip that was not shown (CANCELED) gets no device record */
             bool lose = p->args.lose_code && ++p->n_flip_codes == p->args.lose_code;
-            int ok = lose ? YSCR_OK : yscr_trigger(&p->scr, e->target, (uint32_t)e->code);
+            int ok = lose || p->sim.on ? YSCR_OK : yscr_trigger(&p->scr, e->target, (uint32_t)e->code);
+            if (p->sim.on) {
+                /* no screen: the sink's count, and the caller's hook */
+#if defined(__GNUC__)
+                __atomic_add_fetch(&p->trigger_fired, 1, __ATOMIC_RELAXED);
+#else
+                p->trigger_fired++;
+#endif
+                if (p->sim.on_code) p->sim.on_code(p->sim.ctx, p->trigger_roles[e->target]->name, (uint32_t)e->code, e->onset);
+            }
             pl_out_stats* o = &p->out_now[e->target];
             o->n++;
             if (ok != YSCR_OK) o->failed++;
@@ -2207,9 +2260,14 @@ static void pl_frame_vis(pl_player* p, const yscr_frame* f) {
     }
 }
 
-static int pl_draw(pl_player* p, const yscr_frame* f) {
+/* Whether this frame makes gfx calls: always, but a stepped session's
+ * frame that its caller steps without a draw (a fast forward). */
+static bool pl_draws(const pl_player* p) { return !p->sim.on || p->sim.draw; }
+
+/* draw false: the RDK still steps (its stream is data), with no gfx call */
+static int pl_draw(pl_player* p, const yscr_frame* f, bool draw) {
     int i;
-    ygfx_begin(&p->gfx, f);
+    if (draw) ygfx_begin(&p->gfx, f);
     for (i = 0; i < p->n_stims; i++) {
         pl_stim* s = &p->stims[p->draw_order[i]];
         /* a stimulus no step shows has no channel and is never drawn */
@@ -2224,12 +2282,15 @@ static int pl_draw(pl_player* p, const yscr_frame* f) {
                 if (s->n_steps >= s->max_steps && pl_rdk_flush(p, s) < 0) return -1;
                 if (yrdk_update(&s->field, f->onset - s->rdk_t0) < 0) { pl_fail(p, "'%s': %s", s->def->name, yrdk_error(&s->field)); return -1; }
                 s->steps[s->n_steps++] = s->field.last;
-                yrdk_xy(&s->field, s->xy);
-                ygfx_buffer_update(&p->gfx, s->buf, 0, s->xy, sizeof(float) * 2 * (size_t)s->rdk_count);
+                if (draw) {
+                    yrdk_xy(&s->field, s->xy);
+                    ygfx_buffer_update(&p->gfx, s->buf, 0, s->xy, sizeof(float) * 2 * (size_t)s->rdk_count);
+                }
             }
-            ygfx_draw(&p->gfx, &s->gs);
+            if (draw) ygfx_draw(&p->gfx, &s->gs);
             continue;
         }
+        if (!draw) continue;
         if (s->def->kind == YEXP_TEXT) {
             int r;
             for (r = 0; r < s->n_runs; r++) {
@@ -2247,7 +2308,7 @@ static int pl_draw(pl_player* p, const yscr_frame* f) {
         }
         ygfx_draw(&p->gfx, &s->gs);
     }
-    ygfx_end(&p->gfx);
+    if (draw) ygfx_end(&p->gfx);
     return 0;
 }
 
@@ -2358,6 +2419,14 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
         }
     }
 #endif
+    if (p->sim.on && p->sim.n_in > 0) {
+        /* a stepped session's keys and choices (pl_sim_key(),
+         * pl_sim_choice()): to every collector, as a real run's input */
+        int k, c;
+        for (k = 0; k < p->sim.n_in; k++)
+            for (c = 0; c < p->n_collectors; c++) yrsp_feed(&p->collectors[c], &p->sim.in[k]);
+        p->sim.n_in = 0;
+    }
     /* version 2: the scripted samples to the graphs, the hits, the exits,
      * the timed exits the window reaches (3.11 rules 2 and 4) */
     /* a key response's end and the hits order by time (rule 4): its
@@ -2515,13 +2584,13 @@ int pl_frame(pl_player* p, const yscr_frame* f) {
             fprintf((FILE*)p->trace_file, "%lld,%d,%s,%s,%.6f\n", (long long)f->index, p->global_trial - 1, p->channels[k].stim->name,
                     p->channels[k].prop ? p->channels[k].prop : "visible", (double)values[k]);
     }
-    yscr_mark(&p->scr, YSCR_PHASE_EVALUATE);
+    if (p->scr_open) yscr_mark(&p->scr, YSCR_PHASE_EVALUATE);
     if (drawn) {
         YRT_ZONE(zdr, "pl.draw");
-        rc = pl_draw(p, f);
+        rc = pl_draw(p, f, pl_draws(p));
         YRT_ZONE_END(zdr);
         if (rc < 0) return -1;
-    } else {
+    } else if (pl_draws(p)) {
         /* before the first trial and on a frame where the walk yielded:
          * nothing is shown, as on any frame between two trials */
         ygfx_begin(&p->gfx, f);
@@ -2630,9 +2699,10 @@ static void pl_profile_close(pl_player* p) {
 #endif
 }
 
-int pl_run(pl_player* p) {
-    yscr_frame f;
-    int rc = 0, i, r;
+/* pl_run()'s allocations, before the first frame: the frame path makes
+ * none (player_alloc_test, test_player_sim). */
+int pl_run_prepare(pl_player* p) {
+    int i;
     p->sp = 0;
     memset(&p->stack[0], 0, sizeof p->stack[0]);
     p->stack[0].children = p->def->timeline;
@@ -2656,7 +2726,7 @@ int pl_run(pl_player* p) {
     p->out_now = (pl_out_stats*)pl_alloc(p, sizeof(pl_out_stats) * (size_t)(p->n_triggers + 1));
     if (!p->out_now) return -1;
     for (i = 0; i < PL_PENDING_ROWS; i++) {
-        p_row_cap = p->row_text_cap;
+        p->row_cap = p->row_text_cap;
         p->rows[i].text = (char*)pl_alloc(p, p->row_text_cap + 1);
         if (!p->rows[i].text) return -1;
         p->stat_pool[i] = (pl_stim_stats*)pl_alloc(p, sizeof(pl_stim_stats) * (size_t)(p->pool_stats + 1));
@@ -2685,112 +2755,106 @@ int pl_run(pl_player* p) {
         if (!p->work_hist) return -1;
         memset(p->work_hist, 0, sizeof(uint32_t) * PL_WORK_BINS);
     }
-    if (!p->args.sim) {
-        printf("ysp_player: running; Shift+Esc stops the session\n");
-        fflush(stdout);
-    }
-    for (;;) {
-        rc = yscr_begin(&p->scr, &f);
-        if (rc == YSCR_QUIT) {
-            /* the operator stopped it (ysp/screen.h, ABORT): the running
-             * trial has no row; every finished one keeps its row */
-            p->aborted = true;
-            p->abort_reasons = f.abort;
-            p->abort_presses = (int)f.abort_presses;
-            p->abort_ns = f.abort_ns;
-            p->abort_trial = p->in_trial ? p->global_trial - 1 : -1;
-            p->in_trial = false;
-            break;
-        }
-        if (rc != YSCR_OK) { pl_fail(p, "the screen: %s", yscr_error(&p->scr)); return -1; }
-        if (p->in_trial == 0) {
-            int k;
-            for (k = 0; k < p->pool_stats; k++) {
-                memset(&p->stats_now[k], 0, sizeof p->stats_now[k]);
-                p->stats_now[k].onset_frame = p->stats_now[k].offset_frame = -1;
-                p->stats_now[k].onset_ns = p->stats_now[k].offset_ns = p->stats_now[k].residual_ns = YTR_MISSING_NS;
-            }
-            memset(p->out_now, 0, sizeof(pl_out_stats) * (size_t)(p->n_triggers + 1));
-            p->now_tier = p->now_dropped = p->now_flags = 0;
-        }
-        if (p->args.measure) {
-            int64_t t0 = yrt_real_ns(), t1, wr0 = p->work_wr_ns, wr;
-            YRT_ZONE(zfr, "pl.frame");
-            pl_loop_active = 1;
-            r = pl_frame(p, &f);
-            pl_loop_active = 0;
-            YRT_ZONE_END(zfr);
-            t1 = yrt_real_ns();
-            wr = p->work_wr_ns - wr0;
-            if (wr > p->work_wr_max_ns) { p->work_wr_max_ns = wr; p->work_wr_max_frame = f.index; }
-            t1 -= wr;
-            p->work_n++;
-            if (t1 - t0 > p->work_max_ns) { p->work_max_ns = t1 - t0; p->work_max_frame = f.index; }
-            if (t1 - t0 > 16000000) p->work_over_16ms++;
-            if (t1 - t0 > f.period) p->work_over_period++;
-            if (p->work_hist) {
-                int64_t b = (t1 - t0) / PL_WORK_BIN_NS;
-                p->work_hist[b < PL_WORK_BINS ? b : PL_WORK_BINS - 1]++;
-            }
-        } else {
-            YRT_ZONE(zfr, "pl.frame");
-            pl_loop_active = 1;
-            r = pl_frame(p, &f);
-            pl_loop_active = 0;
-            YRT_ZONE_END(zfr);
-        }
-        YRT_FRAME_MARK();
-        if (p->profile_file && pl_profile_drain(p, f.index) < 0) return -1;
-        if (r < 0) return -1;
-        if (r == 1) {   /* the session ended before this frame drew: a blank frame */
-            ygfx_begin(&p->gfx, &f);
-            ygfx_end(&p->gfx);
-        }
-        {
-            int src = yscr_flip(&p->scr);
-            if (src != YSCR_OK) { pl_fail(p, "the flip: %s", yscr_error(&p->scr)); return -1; }
-        }
-        if (r == 1) break;
-    }
-    /* drain: rows wait for their last frames' records; a few more flips show
-     * the end of the session and bring those records in (the pipeline is at
-     * most a few frames deep) */
-    /* after an abort too: the begin() after the one that reported it starts
-     * a frame again, unless the panic released the display */
-    if (p->aborted && !(p->abort_reasons & YSCR_ABORT_PANIC)) rc = YSCR_OK;
-    /* PL_END_DRAIN_NS (8 frames at 60 Hz), and in a real run up to
-     * PL_OUT_WAIT_NS + PL_RECORD_LAG_NS (32 frames) while a row still waits
-     * for a code's device record: the end has the rows' bound too, and the
-     * flip record that passes it comes up to PL_RECORD_LAG_NS after its
-     * flip */
-    for (i = 0; rc == YSCR_OK && (i < p->end_frames || (i < p->out_wait_frames + p->rec_lag_frames && pl_rows_owed(p))); i++) {
+    return 0;
+}
+
+/* One frame between begin and flip: the counts of a frame with no trial
+ * reset, pl_frame(), and a blank frame when the session ended before this
+ * frame drew. 0 to go on, 1 the session is over, < 0 an error. */
+int pl_run_frame(pl_player* p, const yscr_frame* f) {
+    int r;
+    if (p->in_trial == 0) {
         int k;
-        rc = yscr_begin(&p->scr, &f);
-        if (rc != YSCR_OK) break;
-        if (pl_devices_drain(p) < 0) return -1;
-        p->frame_trial[f.index % PL_FRAME_RING] = YTR_MISSING_INT;
-        for (k = 0; k < f.n_done; k++) {
-            if (p->args.record_late_ns || p->args.record_delay) {
-                yscr_record* q;
-                if (p->rec_n >= PL_REC_DELAY_CAP) break;
-                q = &p->rec_q[(p->rec_head + p->rec_n++) % PL_REC_DELAY_CAP];
-                *q = f.done[k];
-                if (q->onset) q->onset += p->args.record_late_ns;
-                continue;
-            }
-            if (pl_on_record(p, &f.done[k]) < 0) return -1;
+        for (k = 0; k < p->pool_stats; k++) {
+            memset(&p->stats_now[k], 0, sizeof p->stats_now[k]);
+            p->stats_now[k].onset_frame = p->stats_now[k].offset_frame = -1;
+            p->stats_now[k].onset_ns = p->stats_now[k].offset_ns = p->stats_now[k].residual_ns = YTR_MISSING_NS;
         }
-        /* tests: the held records, the session's last ones too */
-        while (p->rec_n > 0 && (p->rec_q[p->rec_head].index + p->args.record_delay < f.index || i == p->end_frames - 1)) {
-            yscr_record rec = p->rec_q[p->rec_head];
-            p->rec_head = (p->rec_head + 1) % PL_REC_DELAY_CAP;
-            p->rec_n--;
-            if (pl_on_record(p, &rec) < 0) return -1;
-        }
-        ygfx_begin(&p->gfx, &f);
-        ygfx_end(&p->gfx);
-        if (yscr_flip(&p->scr) != YSCR_OK) break;
+        memset(p->out_now, 0, sizeof(pl_out_stats) * (size_t)(p->n_triggers + 1));
+        p->now_tier = p->now_dropped = p->now_flags = 0;
     }
+    if (p->args.measure) {
+        int64_t t0 = yrt_real_ns(), t1, wr0 = p->work_wr_ns, wr;
+        YRT_ZONE(zfr, "pl.frame");
+        pl_loop_set(1);
+        r = pl_frame(p, f);
+        pl_loop_set(0);
+        YRT_ZONE_END(zfr);
+        t1 = yrt_real_ns();
+        wr = p->work_wr_ns - wr0;
+        if (wr > p->work_wr_max_ns) { p->work_wr_max_ns = wr; p->work_wr_max_frame = f->index; }
+        t1 -= wr;
+        p->work_n++;
+        if (t1 - t0 > p->work_max_ns) { p->work_max_ns = t1 - t0; p->work_max_frame = f->index; }
+        if (t1 - t0 > 16000000) p->work_over_16ms++;
+        if (t1 - t0 > f->period) p->work_over_period++;
+        if (p->work_hist) {
+            int64_t b = (t1 - t0) / PL_WORK_BIN_NS;
+            p->work_hist[b < PL_WORK_BINS ? b : PL_WORK_BINS - 1]++;
+        }
+    } else {
+        YRT_ZONE(zfr, "pl.frame");
+        pl_loop_set(1);
+        r = pl_frame(p, f);
+        pl_loop_set(0);
+        YRT_ZONE_END(zfr);
+    }
+    YRT_FRAME_MARK();
+    if (p->profile_file && pl_profile_drain(p, f->index) < 0) return -1;
+    if (r < 0) return -1;
+    if (r == 1 && pl_draws(p)) {   /* the session ended before this frame drew: a blank frame */
+        ygfx_begin(&p->gfx, f);
+        ygfx_end(&p->gfx);
+    }
+    return r;
+}
+
+/* Whether the session's end needs its frame i: rows wait for their last
+ * frames' records, and a few more flips show the end of the session and
+ * bring those records in (the pipeline is at most a few frames deep).
+ * PL_END_DRAIN_NS (8 frames at 60 Hz), and in a real run up to
+ * PL_OUT_WAIT_NS + PL_RECORD_LAG_NS (32 frames) while a row still waits
+ * for a code's device record: the end has the rows' bound too, and the
+ * flip record that passes it comes up to PL_RECORD_LAG_NS after its flip */
+bool pl_run_drain_more(const pl_player* p, int i) {
+    return i < p->end_frames || (i < p->out_wait_frames + p->rec_lag_frames && pl_rows_owed(p));
+}
+
+/* The end's frame i, between begin and flip: the records it brings, and a
+ * blank frame. */
+int pl_run_drain(pl_player* p, const yscr_frame* f, int i) {
+    int k;
+    if (pl_devices_drain(p) < 0) return -1;
+    p->frame_trial[f->index % PL_FRAME_RING] = YTR_MISSING_INT;
+    for (k = 0; k < f->n_done; k++) {
+        if (p->args.record_late_ns || p->args.record_delay) {
+            yscr_record* q;
+            if (p->rec_n >= PL_REC_DELAY_CAP) break;
+            q = &p->rec_q[(p->rec_head + p->rec_n++) % PL_REC_DELAY_CAP];
+            *q = f->done[k];
+            if (q->onset) q->onset += p->args.record_late_ns;
+            continue;
+        }
+        if (pl_on_record(p, &f->done[k]) < 0) return -1;
+    }
+    /* tests: the held records, the session's last ones too */
+    while (p->rec_n > 0 && (p->rec_q[p->rec_head].index + p->args.record_delay < f->index || i == p->end_frames - 1)) {
+        yscr_record rec = p->rec_q[p->rec_head];
+        p->rec_head = (p->rec_head + 1) % PL_REC_DELAY_CAP;
+        p->rec_n--;
+        if (pl_on_record(p, &rec) < 0) return -1;
+    }
+    if (pl_draws(p)) {
+        ygfx_begin(&p->gfx, f);
+        ygfx_end(&p->gfx);
+    }
+    return 0;
+}
+
+/* The session's last rows and events, the writer's last writes, and
+ * session.json. */
+int pl_run_finish(pl_player* p) {
+    int i;
     if (pl_v2_finish(p) < 0) return -1;
     /* by count, not head != tail: a full ring has head == tail */
     for (i = 0; i < PL_PENDING_ROWS; i++) {
@@ -2843,6 +2907,49 @@ int pl_run(pl_player* p) {
     return p->failed ? -1 : 0;
 }
 
+int pl_run(pl_player* p) {
+    yscr_frame f;
+    int rc = 0, i, r;
+    if (pl_run_prepare(p) < 0) return -1;
+    if (!p->args.sim) {
+        printf("ysp_player: running; Shift+Esc stops the session\n");
+        fflush(stdout);
+    }
+    for (;;) {
+        rc = yscr_begin(&p->scr, &f);
+        if (rc == YSCR_QUIT) {
+            /* the operator stopped it (ysp/screen.h, ABORT): the running
+             * trial has no row; every finished one keeps its row */
+            p->aborted = true;
+            p->abort_reasons = f.abort;
+            p->abort_presses = (int)f.abort_presses;
+            p->abort_ns = f.abort_ns;
+            p->abort_trial = p->in_trial ? p->global_trial - 1 : -1;
+            p->in_trial = false;
+            break;
+        }
+        if (rc != YSCR_OK) { pl_fail(p, "the screen: %s", yscr_error(&p->scr)); return -1; }
+        r = pl_run_frame(p, &f);
+        if (r < 0) return -1;
+        {
+            int src = yscr_flip(&p->scr);
+            if (src != YSCR_OK) { pl_fail(p, "the flip: %s", yscr_error(&p->scr)); return -1; }
+        }
+        if (r == 1) break;
+    }
+    /* the drain, after an abort too: the begin() after the one that
+     * reported it starts a frame again, unless the panic released the
+     * display */
+    if (p->aborted && !(p->abort_reasons & YSCR_ABORT_PANIC)) rc = YSCR_OK;
+    for (i = 0; rc == YSCR_OK && pl_run_drain_more(p, i); i++) {
+        rc = yscr_begin(&p->scr, &f);
+        if (rc != YSCR_OK) break;
+        if (pl_run_drain(p, &f, i) < 0) return -1;
+        if (yscr_flip(&p->scr) != YSCR_OK) break;
+    }
+    return pl_run_finish(p);
+}
+
 /* --test-draws: every leaf's trials and variables, written without a frame
  * (3.19 item 2): the tree walk, ytr_next() and ytr_update(1) for each
  * trial, and the row's variable cells. The C programs take the order, the
@@ -2861,7 +2968,7 @@ int pl_v2_draws(pl_player* p) {
     p->node_seeds = (pl_node_seed_rec*)pl_alloc(p, sizeof(pl_node_seed_rec) * (size_t)PL_SEED_LOG);
     r = (pl_row*)pl_alloc(p, sizeof(pl_row));
     if (!p->node_seeds || !r) return -1;
-    p_row_cap = p->row_text_cap;
+    p->row_cap = p->row_text_cap;
     r->text = (char*)pl_alloc(p, p->row_text_cap + 1);
     if (!r->text) return -1;
     out = fopen(p->args.draws_path, "w");

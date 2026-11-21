@@ -8,7 +8,7 @@
 # ysp_pack_tool_code, and not ysp_pack_tool's (pack/CMakeLists.txt).
 # ysp_player_lib links it, so the player's other consumers see no change.
 add_library(ysp_player_impl STATIC impl.c)
-add_library(ysp_player_lib STATIC eval.c host.c lower.c run.c v2.c)
+add_library(ysp_player_lib STATIC eval.c host.c lower.c run.c v2.c sim.c)
 target_link_libraries(ysp_player_lib PUBLIC ysp_player_impl)
 foreach(t ysp_player_impl ysp_player_lib)
     target_include_directories(${t} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -43,6 +43,18 @@ if(YSP_BUILD_TESTS)
         target_compile_definitions(test_player_check PRIVATE PL_CHECK_COUNT)
         target_link_libraries(test_player_check PRIVATE -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc -Wl,--wrap=free)
     endif()
+    # the stepped session (docs/player.md); with --wrap it also counts the
+    # heap calls inside pl_sim_frame()
+    ysp_add_program(test_player_sim ${PROJECT_SOURCE_DIR}/tests/player/sim_test.c rig methods devices)
+    target_link_libraries(test_player_sim PRIVATE ysp_player_lib)
+    if(NOT WIN32)
+        find_package(Threads REQUIRED)
+        target_link_libraries(test_player_sim PRIVATE Threads::Threads)
+    endif()
+    if(NOT WIN32 AND NOT APPLE)
+        target_compile_definitions(test_player_sim PRIVATE PL_SIM_COUNT)
+        target_link_libraries(test_player_sim PRIVATE -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc)
+    endif()
     ysp_add_program(player_fuzz ${PROJECT_SOURCE_DIR}/tests/fuzz/player_fuzz.c rig methods devices)
     target_link_libraries(player_fuzz PRIVATE ysp_player_lib)
     # The system tests and the comparison with the C programs build packs
@@ -53,6 +65,8 @@ if(YSP_BUILD_TESTS)
                                                  --out ${CMAKE_BINARY_DIR}/player_test_shapes)
         add_test(NAME test_player_check COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/player/check_test.py --bin ${CMAKE_BINARY_DIR}
                                                 --out ${CMAKE_BINARY_DIR}/player_test_check)
+        add_test(NAME test_player_sim COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/player/sim_test.py --bin ${CMAKE_BINARY_DIR}
+                                              --out ${CMAKE_BINARY_DIR}/player_test_sim)
         add_test(NAME test_player_compare COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/player/compare.py --bin ${CMAKE_BINARY_DIR}
                                                  --out ${CMAKE_BINARY_DIR}/player_test_compare)
     endif()

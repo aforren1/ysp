@@ -49,9 +49,9 @@ id = "h-04"
 name = "the dry open is skipped"
 test = "player"
 why = "An impossible constraint must fail at load."
-find = '''    if (!ytr_open(&t, &d)) {
-        snprintf(msg, cap, "%s", ytr_error(&t));
-        ytr_close(&t);
+find = '''    if (!ytr_open(t, &d)) {
+        snprintf(msg, cap, "%s", ytr_error(t));
+        ytr_close(t);
         return 1;
     }'''
 replace = ''''''

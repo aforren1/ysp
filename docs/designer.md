@@ -1579,6 +1579,31 @@ data.
 - Sharing the check's `pl_player`. The check closes it after each check
   and has no rig, data set or GL.
 
+**As built (P4, player 0.16.0, 2026-11-20; branch `step5-p4-player`).**
+The API above, with these changes. The reference is
+[player.md](player.md#reference-the-stepped-session).
+- `pl_sim_desc` gains `width`, `height` and `period_ns` (0: 1920 x 1080
+  at 60 Hz). A rig profile has no display size or rate, and the panel
+  chooses them. It also gains `gl_proc` and `gl_ctx`, which P3's
+  `ygfx_attach()` takes.
+- No `pl_sim_rig()`: `rig` `NULL` is the built-in rig, which is
+  `pl_check()`'s stand-ins. `cal` is the display's calibration; `NULL`
+  gives the nominal one to a definition that requires one.
+- The grid starts at vblank 7, not 1: frame k's onset is
+  `YRT_VIRTUAL_T0_NS + (7 + k) x period`. `--sim`'s SIM screen shows 6
+  warm-up frames at its open, and with the same start the stepped data
+  equal `--sim`'s byte for byte. With a sound, `--sim`'s null device
+  moves the virtual clock 0.55 s at its open, so there `--sim`'s times are
+  0.55 s later.
+- `pl_sim_frame()` gives 1 when the end's frames are done.
+  `pl_close()` then writes the last rows and `session.json`, so the
+  writer's join and the disk wait are on the thread that closes.
+- The text programs' first draws and `ygfx_prime()` are at the end of
+  `pl_sim_attach()`, not in the first drawn frame: they may allocate, and
+  a frame allocates nothing.
+- `live()` is asked at every trial's start, also for a template with no
+  response, so a pin can stop at any leaf.
+
 ### The built-in simulated rig
 
 Until step 6 adds rig profiles (decision 8), each session gets one rig

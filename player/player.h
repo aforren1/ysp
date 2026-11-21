@@ -44,7 +44,7 @@
 extern "C" {
 #endif
 
-#define PL_VERSION_STRING "0.15.0"
+#define PL_VERSION_STRING "0.16.0"
 /* The newest format version this player lowers (2: format part 3, in
  * v2.c). session.json's format_version is the definition's. */
 #define PL_FORMAT_VERSION 2
@@ -476,6 +476,108 @@ typedef struct pl_args {
 
 typedef struct pl_script_row { int trial; char* resp; bool silent; double rt_s, hold_s; } pl_script_row;
 
+/* --- the stepped session (sim.c, 0.16.0) ---------------------------------- */
+
+/* The stepped session draws on a GL context through ysp/gfx.h 0.23.0's
+ * deferred open and output texture (docs/designer.md, "The GL context",
+ * prerequisite P3). Before 0.23.0 it draws on the null backend only. */
+#if YGFX_VERSION_MAJOR > 0 || YGFX_VERSION_MINOR >= 23
+#define PL_GFX_DEFER 1
+#else
+#define PL_GFX_DEFER 0
+#endif
+
+enum { PL_SIM_EVENTS = 0, PL_SIM_RESPONSE, PL_SIM_AFTER, PL_SIM_BETWEEN };
+enum {
+    PL_SIM_INPUT_CAP = 256,    /* keys and choices between two frames       */
+    PL_SIM_LIVE_CAP  = 8192,   /* samples between two frames, as a real run's
+                                * poll holds                              */
+    PL_SIM_TEXT      = 128     /* the last trial's response and outcome, as
+                                * pl_sim_where_now() gives them (cut)      */
+};
+
+typedef struct pl_sim_where {
+    int         trial;          /* the session trial; -1 before the first  */
+    const char* leaf;           /* the leaf node's path, or NULL            */
+    int         condition;      /* ytr_trial_info.condition: the table row,
+                                 * -1 for a track trial                     */
+    const char* tmpl;           /* the template, or NULL between trials     */
+    const char* state;          /* version 2: the current state; NULL: the
+                                 * end, or an events template               */
+    int         phase;          /* PL_SIM_EVENTS, _RESPONSE, _AFTER, _BETWEEN */
+    int64_t     frame;          /* the next frame's index                   */
+    int64_t     t_ns;           /* its onset from the session's first frame */
+    const char* outcome;        /* the last trial's, or NULL                */
+    const char* response; int64_t rt_ns;   /* the last trial's; NULL and
+                                 * YRSP_NO_TIME with none                  */
+} pl_sim_where;
+
+typedef struct pl_sim_desc {
+    ypak_desc   pack;           /* in memory; the caller keeps it until pl_close() */
+    const char* def_text; size_t def_len;   /* NULL: the pack's experiment */
+    uint64_t    seed;
+    const yrig_profile* rig;    /* NULL: the built-in simulated rig          */
+    const ycol_cal* cal;        /* the display's calibration, or NULL: the
+                                 * nominal one for a definition that requires
+                                 * one (a need), identity for any other      */
+    int         n_fields; pl_field_arg fields[PL_MAX_FIELDS];
+    const char* out_dir;        /* the data set's folder; must not exist    */
+    const char* participant;    /* the scripted participant of the trials
+                                 * that live() leaves to it: "correct",
+                                 * "p=0.8", "silent"; NULL: "correct"       */
+    double      rt_s;           /* its rt; 0: 0.3 s                          */
+    int32_t     width, height;  /* the display in px; 0: 1920 x 1080         */
+    int64_t     period_ns;      /* the frame period; 0: 60 Hz                */
+    /* the gfx (ysp/gfx.h 0.23.0, P3): recorded at the load, made at
+     * pl_sim_attach() on the context that gl_proc reaches, with the caps
+     * of a gfx that the GL thread opened. gl_caps NULL: the null backend */
+    const struct ygfx_gl_caps* gl_caps;
+    const ygfx_cache* cache;    /* compiled programs, kept across sessions  */
+    yscr_proc (*gl_proc)(void* ctx, const char* name);
+    void*       gl_ctx;
+    /* hooks, each optional, on the thread that steps the session */
+    bool (*live)(void* ctx, const pl_sim_where* w);   /* at a trial's start:
+                                 * true, the caller answers this trial;
+                                 * false, the scripted participant does    */
+    void (*on_code)(void* ctx, const char* role, uint32_t code, int64_t t_ns);
+    void*       ctx;
+} pl_sim_desc;
+
+/* The stepped session's state in pl_player (sim.c). */
+typedef struct pl_sim {
+    bool        on;             /* pl_sim_load() made this player            */
+    bool        draw;           /* this frame draws (pl_sim_frame())         */
+    bool        live_trial;     /* live() took the running trial             */
+    bool        attached, warmed, stopped;
+    int         stage;          /* 0 loaded, 1 frames, 2 the end's frames, 3 over */
+    int         drain_i;        /* the end's frames so far                   */
+    int32_t     width, height;
+    int64_t     period;
+    int64_t     t0;             /* frame 0's onset                          */
+    int64_t     frame;          /* the next frame's index                    */
+    yscr_record rec;            /* the last frame's record, given with the next */
+    bool        has_rec;
+    yrsp_input  in[PL_SIM_INPUT_CAP];   /* keys and choices for the next frame */
+    int         n_in;
+    char        last_outcome[PL_SIM_TEXT], last_response[PL_SIM_TEXT];
+    bool        last_has_outcome, last_has_response;
+    int64_t     last_rt;
+    const struct ygfx_gl_caps* gl_caps;
+    const ygfx_cache* cache;
+    yscr_proc (*gl_proc)(void* ctx, const char* name);
+    void*       gl_ctx;
+    const ycol_cal* cal;
+    const yrig_profile* rig;
+    bool (*live)(void* ctx, const pl_sim_where* w);
+    void (*on_code)(void* ctx, const char* role, uint32_t code, int64_t t_ns);
+    void*       ctx;
+    /* sim.c's live() call, through a pointer: run.c then links without
+     * sim.c, as the mutation tests compile only the sources they list */
+    bool (*ask)(pl_player* p, int trial);
+    void (*end)(pl_player* p);   /* pl_close()'s: the end of a session that
+                                  * did not reach it, and session.json    */
+} pl_sim;
+
 typedef struct pl_node_seed_rec { const char* path; int iteration; uint64_t seed; } pl_node_seed_rec;
 
 typedef struct pl_csrc pl_csrc;
@@ -761,9 +863,13 @@ struct pl_player {
     void*     profile_mem;
     yrt_event* profile_buf;
     void*     profile_file;
-    /* pl_check() */
-    bool      checking;       /* stand-ins for the rig, the session, the
-                               * screen and the audio device; no stderr     */
+    /* pl_check() and the stepped session */
+    bool      stand_in;       /* pl_check() and pl_sim_load(): no rig file
+                               * and no devices, an audio device that never
+                               * runs, the tier 3 stand-ins (r->needs)     */
+    bool      checking;       /* pl_check() only: the null gfx, no warm-up
+                               * draw, no data set, the device-button
+                               * check; no stderr                           */
     bool      pack_reader;    /* entries come whole through a cursor       */
     const ycol_cal* check_cal; /* pl_check_desc.cal                        */
     pl_need*  needs; int n_needs, c_needs;
@@ -774,11 +880,22 @@ struct pl_player {
     const char** check_streams; /* the streams named so far, for          */
     int       n_check_streams;    /* yds_stream_check()                     */
     ytr_data* check_scratch;  /* the column checks' writer, which discards */
+    /* each load's own, so two loads on two threads share nothing (statics
+     * through 0.15.0) */
+    size_t    row_cap;        /* a row's text arena (pl_run_prepare())       */
+    ytr_trials*   rules_scratch;   /* h_rules()'s dry open (host.c), 253 KB  */
+    ytl_timeline* ops_scratch;     /* h_check_ops()'s timeline (host.c)      */
+    float     v2_sink;        /* version 2's selector and value channels'
+                               * bind target: written, never read          */
+    pl_sim    sim;            /* the stepped session (sim.c)                */
 };
 
 /* --- load (lower.c) ------------------------------------------------------ */
 
 int  pl_load(pl_player* p, const pl_args* a);
+/* pl_load()'s load on a p that its caller set up (sim.c): p->args, the
+ * stand-ins and the stepped session's fields; no memset. */
+int  pl_load_from(pl_player* p, const ypak_desc* pd);
 /* The load of pl_load() as --sim does it, with no side effects outside
  * memory: no file is written or read but the pack (and its path), no rig
  * profile, device, window, GL, audio device, thread or clock change. Returns
@@ -792,6 +909,9 @@ void pl_close(pl_player* p);
 void pl_fail(pl_player* p, const char* fmt, ...);
 /* The object a refusal from here on names (PL_OBJ_NONE: none). */
 void pl_at(pl_player* p, int obj, const char* name);
+/* The text programs' first draws and ygfx_prime() (lower.c): at the load,
+ * or at a stepped session's first drawn frame. */
+void pl_gfx_warm(pl_player* p);
 /* A gfx on ysp/gfx.h's null backend, with no screen and no GL (impl.c). */
 bool pl_gfx_open_null(ygfx_gfx* g, ygfx_desc* d);
 void* pl_alloc(pl_player* p, size_t n);
@@ -891,10 +1011,23 @@ bool pl_v2_any_graph(pl_player* p);
 int  pl_v2_streams(pl_player* p);
 /* The running template's version 2 runtime, or none (a version 1 template). */
 void pl_v2_select(pl_player* p);
+/* The stepped session (sim.c): the running trial's state, or NULL; a
+ * sample for the next frame (the queue of a real run's raw mice). */
+const char* pl_v2_state_now(const pl_player* p);
+int  pl_v2_sample_push(pl_player* p, int64_t t, int role, float x, float y);
 
 /* --- run (run.c) --------------------------------------------------------- */
 
 int  pl_run(pl_player* p);
+/* pl_run()'s parts, which a stepped session (sim.c) calls around the frames
+ * it makes: the allocations; one frame (the stats' reset, pl_frame(), a
+ * blank frame at the session's end); whether the end needs frame i, and its
+ * work; the session's last writes and session.json. */
+int  pl_run_prepare(pl_player* p);
+int  pl_run_frame(pl_player* p, const yscr_frame* f);
+bool pl_run_drain_more(const pl_player* p, int i);
+int  pl_run_drain(pl_player* p, const yscr_frame* f, int i);
+int  pl_run_finish(pl_player* p);
 /* One frame: the frame loop is this call between yscr_begin() and
  * yscr_flip(), so the callback form of rig_spec 4.2.1 can take it over.
  * 0 to go on, 1 when the session is over, < 0 on an error. */
@@ -937,6 +1070,53 @@ int  pl_v2_frame_timed(pl_player* p, const yscr_frame* f);
 int  pl_window_check(pl_player* p, const yexp_template* d, int64_t dur, int64_t minrt);
 int  pl_writer_close(pl_player* p);
 extern volatile int pl_loop_active;   /* the frame loop is running: a test counts allocations against it */
+
+/* --- the stepped session (sim.c) ------------------------------------------
+ * The --sim session, stepped by its caller (the designer's preview):
+ * docs/player.md, "Reference: the stepped session". pl_sim_load() runs on
+ * any thread and makes no GL call. pl_sim_attach(), pl_sim_frame() with
+ * draw, pl_sim_texture() and pl_sim_detach() run on the thread whose GL
+ * context is current. Every other call runs on the thread that owns the
+ * session at the time; no two threads use one session at once. No call
+ * changes the clock, elevates a thread or reads a file but the pack. */
+
+/* The load and lower: pl_check()'s, with the rig, the display and the data
+ * set (its writer thread starts here). r as pl_check()'s; 0 is
+ * PL_CHECK_OK. Call pl_close() after any result. No GL call. */
+int  pl_sim_load(pl_player* p, const pl_sim_desc* d, pl_check_result* r);
+/* Makes the recorded GL objects on the current context, for at most
+ * budget_ns (0: all). 1 when done, 0 when more is left, < 0 an error.
+ * With the null backend, 1 at once. */
+int  pl_sim_attach(pl_player* p, int64_t budget_ns);
+/* One frame: its onset is the last one's plus the period. draw false: the
+ * frame's logic and no GL call (a fast forward, before or after attach).
+ * draw true: after attach only. 0 to go on, 1 the session is over (its
+ * data set is complete), < 0 a refusal: p->error, and the object in
+ * p->fail_obj and p->fail_name. Allocates nothing. */
+int  pl_sim_frame(pl_player* p, bool draw);
+/* Input at t_ns on the session's frame grid (pl_sim_next_onset()), after
+ * the last frame's onset and at or before the next one's; it reaches the
+ * session at the next pl_sim_frame(). A key goes to every collector as an
+ * SDL scancode; a choice is the running template's choice by index, with
+ * its own kind and control; a sample is a signal role's, by its index in
+ * the definition, in the role's units (a relative role's: counts, at the
+ * stand-in gain of 1). 0, or < 0 refused (a time out of range, a full
+ * queue, no such choice or role). */
+int  pl_sim_key(pl_player* p, int64_t t_ns, int scancode, bool down);
+int  pl_sim_choice(pl_player* p, int64_t t_ns, int choice, bool down);
+int  pl_sim_sample(pl_player* p, int64_t t_ns, int role, float x, float y);
+/* The next frame's onset on the session's grid. */
+int64_t pl_sim_next_onset(const pl_player* p);
+void pl_sim_where_now(const pl_player* p, pl_sim_where* w);
+/* The display's texture: its GL name (GL_RGBA8, rows bottom-up). false
+ * before attach and on the null backend. */
+bool pl_sim_texture(const pl_player* p, ygfx_native* out);
+/* Stops a session before its end: the data set records it as stopped
+ * ("aborted", reason "request"), and pl_sim_frame() then gives 1. */
+void pl_sim_stop(pl_player* p);
+/* Frees the GL objects and closes the gfx (the GL thread). After it,
+ * pl_close() makes no GL call and may run on any thread. */
+void pl_sim_detach(pl_player* p);
 
 #ifdef __cplusplus
 }
