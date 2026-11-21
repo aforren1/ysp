@@ -4,6 +4,7 @@
 #define _CRT_SECURE_NO_WARNINGS
 #endif
 #include "chart.h"
+#include "preview.h"
 
 #include <math.h>
 #include <stdarg.h>
@@ -392,6 +393,36 @@ bool dsg_chart_place_has_edge(const dsg_chart_place* p, const dsg_chart_edge* e)
     case DSG_EDGE_OVER: return e->from == p->state;
     default: return false;
     }
+}
+
+/* --- the preview's place ------------------------------------------------------- */
+
+bool dsg_chart_running(const dsg_chart* c, const dsg_preview_where* w, int* first, int* last) {
+    int i = -1, j = -1;
+    *first = *last = -1;
+    if (!w || !w->tmpl || w->phase == DSG_PV_PHASE_BETWEEN || !c->tmpl || strcmp(w->tmpl, c->tmpl) != 0) return false;
+    if (c->has_states) {
+        /* a state's name is unique in its template, so the first match is it */
+        i = j = w->state ? dsg_chart_find(c, w->state) : c->n_states;
+    } else if (w->phase == DSG_PV_PHASE_AFTER) {
+        i = j = c->n_states;
+    } else if (c->n_states > 0) {
+        i = 0;
+        j = c->n_states - 1;
+    }
+    if (i < 0) return false;
+    *first = i;
+    *last = j;
+    return true;
+}
+
+const char* dsg_chart_follow(const yjs_value* root, const dsg_preview_where* w) {
+    const yjs_value* trials = root ? yjs_get(root, "trials") : NULL;
+    uint32_t i;
+    if (!w || !w->tmpl || !trials || trials->type != YJS_OBJECT) return NULL;
+    for (i = 0; i < trials->n; i++)
+        if (strcmp(trials->u.members[i].key, w->tmpl) == 0) return trials->u.members[i].key;
+    return NULL;
 }
 
 /* --- commands ------------------------------------------------------------------- */
@@ -910,6 +941,10 @@ int dsg_chart_view_read(dsg_chart_view* v, const char* json, size_t n) {
         return -1;
     }
     if (str_of(yjs_get(root, "template"))) dsg_chart_view_set_current(v, str_of(yjs_get(root, "template")));
+    {
+        bool f = false;
+        v->follow = yjs_bool(yjs_get(root, "follow"), &f) == YJS_OK && f;
+    }
     ts = yjs_get(root, "templates");
     for (i = 0; ts && ts->type == YJS_OBJECT && i < ts->n; i++) {
         const yjs_value* tv = ts->u.members[i].value;
@@ -950,6 +985,8 @@ char* dsg_chart_view_write(const dsg_chart_view* v, size_t* n) {
     root = yjs_new(&a, YJS_OBJECT);
     ts = yjs_new(&a, YJS_OBJECT);
     ok = root && ts && yjs_set(&a, root, "templates", ts) == YJS_OK;
+    /* only when on, so a project that never follows keeps its part's bytes */
+    if (ok && v->follow) ok = yjs_set(&a, root, "follow", yjs_new(&a, YJS_TRUE)) == YJS_OK;
     if (ok && v->current) ok = yjs_set(&a, root, "template", yjs_new_stringz(&a, v->current)) == YJS_OK;
     for (i = 0; ok && i < v->n_t; i++) {
         const dsg_chart_tview* t = &v->t[i];

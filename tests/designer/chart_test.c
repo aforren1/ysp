@@ -21,6 +21,9 @@
  *      again; a template's rename moves its entry; the "chart" part
  *      round-trips through the view file; the definition's bytes never
  *      hold a position.
+ *   5. The preview's place (step 5, part C): the nodes that the ring marks
+ *      on a states template and on an events template's parts; Follow's
+ *      template; "follow" in the "chart" part.
  * Exit 0 on pass, 1 on a failure.
  */
 #if defined(_MSC_VER) && !defined(_CRT_SECURE_NO_WARNINGS)
@@ -28,6 +31,7 @@
 #endif
 #include "chart.h"
 #include "dsg.h"
+#include "preview.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -573,6 +577,105 @@ static void test_first_state(void) {
     dsg_doc_free(d);
 }
 
+/* --- 5. the preview's place --------------------------------------------------------- */
+
+static dsg_preview_where place(const char* tmpl, const char* state, int phase) {
+    dsg_preview_where w;
+    memset(&w, 0, sizeof w);
+    w.trial = tmpl ? 0 : -1;
+    w.condition = -1;
+    w.tmpl = tmpl;
+    w.state = state;
+    w.phase = phase;
+    return w;
+}
+
+static bool ring_is(const dsg_chart* c, const dsg_preview_where* w, int first, int last) {
+    int a = 7, b = 7;
+    const bool on = dsg_chart_running(c, w, &a, &b);
+    return first < 0 ? !on && a == -1 && b == -1 : on && a == first && b == last;
+}
+
+static void test_preview_place(void) {
+    static const char def[] =
+        "{\"trials\": {\"s\": {\"states\": [{\"name\": \"a\", \"exits\": [{\"on\": \"k\", \"to\": \"b\"}]}, {\"name\": \"b\"}]},"
+        " \"e\": {\"events\": [{\"on\": \"x\"}, {\"until\": \"c\"}, {\"off\": \"x\"}]},"
+        " \"one\": {\"events\": [{\"on\": \"x\"}, {\"wait_s\": 1}]}}}";
+    dsg_doc* d = dsg_doc_new();
+    dsg_chart c;
+    dsg_preview_where w;
+    memset(&c, 0, sizeof c);
+    dsg_doc_reset(d, "experiment.json", def, sizeof def - 1);
+
+    CHECK(dsg_chart_build(dsg_doc_root(d), "s", &c) == 0 && c.n_states == 2, "s: 2 states");
+    CHECK(ring_is(&c, NULL, -1, -1), "no session: no ring");
+    w = place("s", "b", DSG_PV_PHASE_EVENTS);
+    CHECK(ring_is(&c, &w, 1, 1), "the state named: b");
+    w = place("s", "a", DSG_PV_PHASE_RESPONSE);
+    CHECK(ring_is(&c, &w, 0, 0), "the state named in the response: a");
+    w = place("s", NULL, DSG_PV_PHASE_AFTER);
+    CHECK(ring_is(&c, &w, 2, 2), "no state in a states template: the end");
+    w = place("s", "gone", DSG_PV_PHASE_EVENTS);
+    CHECK(ring_is(&c, &w, -1, -1), "a state the chart does not have: no ring");
+    w = place("e", NULL, DSG_PV_PHASE_EVENTS);
+    CHECK(ring_is(&c, &w, -1, -1), "another template: no ring");
+    w = place(NULL, NULL, DSG_PV_PHASE_BETWEEN);
+    CHECK(ring_is(&c, &w, -1, -1), "between trials: no ring");
+    w = place("s", "a", DSG_PV_PHASE_BETWEEN);
+    CHECK(ring_is(&c, &w, -1, -1), "the between phase: no ring, whatever the names say");
+
+    CHECK(dsg_chart_build(dsg_doc_root(d), "e", &c) == 0 && !c.has_states && c.n_states == 3, "e: 3 parts");
+    w = place("e", NULL, DSG_PV_PHASE_EVENTS);
+    CHECK(ring_is(&c, &w, 0, 2), "an events template while its events run: every part");
+    w = place("e", NULL, DSG_PV_PHASE_RESPONSE);
+    CHECK(ring_is(&c, &w, 0, 2), "and while the response waits");
+    w = place("e", NULL, DSG_PV_PHASE_AFTER);
+    CHECK(ring_is(&c, &w, 3, 3), "after: the end");
+    w = place("e", "a", DSG_PV_PHASE_EVENTS);
+    CHECK(ring_is(&c, &w, 0, 2), "a state name means nothing to an events template");
+    CHECK(dsg_chart_build(dsg_doc_root(d), "one", &c) == 0 && c.n_states == 1, "one: one part");
+    w = place("one", NULL, DSG_PV_PHASE_EVENTS);
+    CHECK(ring_is(&c, &w, 0, 0), "one part: the ring on it");
+
+    {
+        const yjs_value* root = dsg_doc_root(d);
+        const char* f;
+        w = place("e", NULL, DSG_PV_PHASE_EVENTS);
+        f = dsg_chart_follow(root, &w);
+        CHECK(f && strcmp(f, "e") == 0 && f != w.tmpl, "Follow: the template, as the definition names it");
+        w = place("gone", NULL, DSG_PV_PHASE_EVENTS);
+        CHECK(dsg_chart_follow(root, &w) == NULL, "Follow: a template the text no longer has");
+        w = place(NULL, NULL, DSG_PV_PHASE_BETWEEN);
+        CHECK(dsg_chart_follow(root, &w) == NULL && dsg_chart_follow(root, NULL) == NULL, "Follow: between trials, no session");
+        w = place("e", NULL, DSG_PV_PHASE_EVENTS);
+        CHECK(dsg_chart_follow(NULL, &w) == NULL, "Follow: no definition");
+    }
+
+    {
+        /* "follow" in the part: written only when on, read only as a bool */
+        dsg_chart_view v;
+        size_t n = 0;
+        char* json;
+        dsg_chart_view_init(&v);
+        dsg_chart_view_set_current(&v, "s");
+        json = dsg_chart_view_write(&v, &n);
+        CHECK(json && !strstr(json, "follow"), "off: no key, so an older part's bytes stay");
+        free(json);
+        v.follow = true;
+        json = dsg_chart_view_write(&v, &n);
+        CHECK(json && strstr(json, "\"follow\":true"), "on: written (%s)", json ? json : "");
+        dsg_chart_view_free(&v);
+        CHECK(!v.follow, "a freed view does not follow");
+        CHECK(json && dsg_chart_view_read(&v, json, n) == 0 && v.follow && v.current && strcmp(v.current, "s") == 0, "on: read back");
+        free(json);
+        dsg_chart_view_free(&v);
+        CHECK(dsg_chart_view_read(&v, "{\"follow\": 1}", 13) == 0 && !v.follow, "a follow of another type is off");
+        dsg_chart_view_free(&v);
+    }
+    dsg_chart_free(&c);
+    dsg_doc_free(d);
+}
+
 int main(int argc, char** argv) {
     char err[512];
     if (argc < 2) {
@@ -591,6 +694,7 @@ int main(int argc, char** argv) {
     test_commands();
     test_shared();
     test_first_state();
+    test_preview_place();
     dsg_checker_free(checker);
     printf("%s: %d checks, %d failed\n", fails ? "FAIL" : "PASS", checks, fails);
     return fails ? 1 : 0;
