@@ -1304,8 +1304,14 @@ needed no change in them.
   Outputs and Data set.
 
 **The display.**
-- Fit: the scale `s` is the largest that fits the room the details leave,
-  at most 1. 1:1: `s` = 1 in a child window with scroll bars. The size in
+- Fit: the scale `s` is the largest that fits the room below the
+  "Faithful" banner, less 12 rows (5 above the display, 7 for the
+  details), at most 1. The status's note row and the two rows of where the
+  session is are always there, empty or "Last trial: none yet." when
+  there is nothing to show. So the display keeps its size while the
+  session runs; a stale banner or an issue moves it down. Before the 2026-11-21
+  hand test the room was what the rows above left, and the display shrank
+  after the first trial (403.6 to 368 points in `preview/steady`). 1:1: `s` = 1 in a child window with scroll bars. The size in
   points is `W x s / io.DisplayFramebufferScale`, at a position snapped to a
   whole framebuffer px.
 - The texture is drawn with `ImDrawList::AddImage()`, not
@@ -1484,6 +1490,12 @@ code itself.
 |---|---|---|---|
 | A | A session that the preview drops as stale, because the text changed after its post, left `info.loading` true. When the new text does not check, no job follows, so the pane said "A new session loads" (or "Waiting") until the next accepted edit. A's own test (4a) relied on the flag. | `dsg_preview_adopt()` clears `waiting` when it drops the newest job's session and no job waits. | `test_designer_preview` (4d): "a session still loads, but no job waits or runs" |
 | C (with A) | "Preview this template" with the pane never shown said "Not pinned: no leaf of the timeline runs 'reach'". A gives the leaves of the shown session only (`preview.h` says "the last accepted definition"), and a hidden pane loads none. This is the button's first use in a project. | The chart shows the pane and pins when the first session shows (above). | `chart/pin_real` and `chart/pin` (the pane does not show) |
+
+After the hand test (2026-11-21): the display rescaled after the first
+trial, because the "Last trial" row came in above it and Fit took the room
+the rows left. The rows now keep their places ("The display", above), and
+`preview/steady` checks the display's size across the first trial's end
+and the stale banner. With the old layout it fails (403.6 to 368 points).
 
 `preview.h` is frozen, so its comment on `dsg_preview_leaves()` still says
 "the last accepted definition"; A's preview gives the shown session's.

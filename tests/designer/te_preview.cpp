@@ -14,6 +14,9 @@
 //                         response.
 //   preview/stale         A text that does not parse shows the banner and
 //                         keeps the session; Ctrl+Z restarts it.
+//   preview/steady        At Fit, the display keeps its size while rows
+//                         above it come and go: the last trial's row and
+//                         the stale banner (hand test, 2026-11-21).
 //
 // These run on part A's preview.c: real sessions, loaded on the check thread
 // and stepped by ui.cpp. Part B wrote them on a test double
@@ -270,6 +273,39 @@ void test_stale(ImGuiTestContext* ctx) {
     IM_CHECK(!ctx->ItemExists(te_in_child(ctx, kPane, "##stale")));
 }
 
+ImVec2 screen_size(ImGuiTestContext* ctx) {
+    const ImGuiTestItemInfo it = ctx->ItemInfo(ctx->GetID("##screen", ctx->WindowInfo(kDisplay).ID));
+    return it.ID ? it.RectFull.GetSize() : ImVec2(0, 0);
+}
+
+void test_steady(ImGuiTestContext* ctx) {
+    Double dbl;
+    IM_CHECK(start(ctx, "preview_steady", false));
+    // A trial with no last trial yet: the first.
+    dsg_preview_where w = {};
+    for (int i = 0; i < 240 && !(dsg_preview_where_now(ui_preview(), &w) && !w.outcome); i++) ctx->Yield();
+    IM_CHECK(w.outcome == nullptr);
+    const ImVec2 s0 = screen_size(ctx);
+    IM_CHECK_GT(s0.x, 0.0f);
+    for (int i = 0; i < 600 && !(dsg_preview_where_now(ui_preview(), &w) && w.outcome); i++) ctx->Yield();
+    IM_CHECK(w.outcome != nullptr);
+    ImVec2 s1 = screen_size(ctx);
+    IM_CHECK_EQ(s1.x, s0.x);
+    IM_CHECK_EQ(s1.y, s0.y);
+    // The stale banner moves the display down, at the same size.
+    ctx->ItemClick(te_in_child(ctx, "//##designer/Definition", "##definition"));
+    ctx->KeyPress(ImGuiMod_Ctrl | ImGuiKey_End);
+    ctx->KeyChars("x");
+    for (int i = 0; i < 60 && !info().stale; i++) ctx->Yield();
+    IM_CHECK(info().stale);
+    ctx->Yield();
+    IM_CHECK(ctx->ItemExists(te_in_child(ctx, kPane, "##stale")));
+    s1 = screen_size(ctx);
+    IM_CHECK_EQ(s1.x, s0.x);
+    IM_CHECK_EQ(s1.y, s0.y);
+    ctx->KeyPress(ImGuiMod_Ctrl | ImGuiKey_Z);
+}
+
 } // namespace
 
 void te_register_preview(ImGuiTestEngine* e) {
@@ -278,4 +314,5 @@ void te_register_preview(ImGuiTestEngine* e) {
     IM_REGISTER_TEST(e, "preview", "edit_restart")->TestFunc = test_edit_restart;
     IM_REGISTER_TEST(e, "preview", "choice")->TestFunc = test_choice;
     IM_REGISTER_TEST(e, "preview", "stale")->TestFunc = test_stale;
+    IM_REGISTER_TEST(e, "preview", "steady")->TestFunc = test_steady;
 }

@@ -114,15 +114,24 @@ void status_line(const dsg_preview_info& in) {
         ImGui::SameLine();
         user_text(is.message);
     }
+    // One row whether or not there is a note: "slow" comes and goes while a
+    // session runs, and a row that comes and goes moves the display (hand
+    // test, 2026-11-21).
     if (in.status == DSG_PV_RUNNING && in.slow) ImGui::TextColored(kKeysText, "Slower than real time: frames are dropped.");
-    if (in.loading && in.status != DSG_PV_WAITING) ImGui::TextDisabled("A new session loads. This one runs until it is ready.");
-    if (in.attaching) ImGui::TextDisabled("A new session is being attached.");
+    else if (in.attaching) ImGui::TextDisabled("A new session is being attached.");
+    else if (in.loading && in.status != DSG_PV_WAITING) ImGui::TextDisabled("A new session loads. This one runs until it is ready.");
+    else ImGui::NewLine();
 }
 
 // Where the shown session is.
 void where_line() {
+    // Two rows always, for the same reason as the status's note row.
     dsg_preview_where w = {};
-    if (!dsg_preview_where_now(pv(), &w)) return;
+    if (!dsg_preview_where_now(pv(), &w)) {
+        ImGui::NewLine();
+        ImGui::NewLine();
+        return;
+    }
     ImGui::TextDisabled("Trial %d", w.trial + 1);
     if (w.leaf) {
         ImGui::SameLine();
@@ -146,7 +155,8 @@ void where_line() {
     }
     ImGui::SameLine();
     ImGui::TextDisabled("frame %lld, %.3f s", (long long)w.frame, (double)w.t_ns * 1e-9);
-    if (w.outcome) {
+    if (!w.outcome) ImGui::TextDisabled("Last trial: none yet.");
+    else {
         ImGui::TextDisabled("Last trial: %s", w.outcome);
         if (w.response && w.response[0]) {
             ImGui::SameLine();
@@ -547,6 +557,10 @@ void draw() {
              "Faithful in logic, not in timing: a simulated %d Hz display paced by this window; input times are frame times; no sound.",
              in.hz > 0 ? in.hz : ps.session.hz);
     banner("##faithful", kBannerInfo, buf);
+    // The display's Fit size comes from the room here, less fixed rows, not
+    // from the room left after the rows below: a banner or an issue that
+    // comes and goes moves the display down but does not rescale it.
+    const float room = ImGui::GetContentRegionAvail().y;
     if (in.stale) {
         char when[16] = "?";
         const time_t t = (time_t)in.shown_unix_s;
@@ -564,9 +578,9 @@ void draw() {
     if (in.keyboard) ImGui::TextColored(kKeysText, "Keys go to the session. Press Esc to give them back.");
     else ImGui::TextDisabled("Click the display to send it keys.");
 
-    // the display takes what the details leave, at least a third of the pane
-    const float avail = ImGui::GetContentRegionAvail().y;
-    draw_display(in, ps, ImMax(avail - ImGui::GetFrameHeightWithSpacing() * 7.0f, avail * 0.33f));
+    // Rows: status, note, two of where, keys (5); the details below get 7.
+    // At least a third of the room.
+    draw_display(in, ps, ImMax(room - ImGui::GetFrameHeightWithSpacing() * 12.0f, room * 0.33f));
     choice_strip();
 
     ImGui::BeginChild("##details", ImVec2(0, 0));
