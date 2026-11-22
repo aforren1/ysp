@@ -83,7 +83,17 @@ if(YSP_BUILD_TESTS)
     target_link_libraries(test_designer_platform PRIVATE ysp_designer_core)
     target_compile_options(test_designer_platform PRIVATE ${YSP_WARNINGS})
     set_target_properties(test_designer_platform PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
-    add_test(NAME test_designer_platform COMMAND test_designer_platform ${CMAKE_CURRENT_BINARY_DIR}/designer_platform_work)
+    # Step 6, part X: the process (dsg_proc_*), which starts test_child.
+    add_executable(test_child ${PROJECT_SOURCE_DIR}/tests/designer/test_child.c)
+    target_compile_options(test_child PRIVATE ${YSP_WARNINGS})
+    set_target_properties(test_child PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    if(WIN32)
+        target_link_libraries(test_child PRIVATE user32 shell32)
+    endif()
+    dsg_test(test_child)
+    add_test(NAME test_designer_platform COMMAND test_designer_platform ${CMAKE_CURRENT_BINARY_DIR}/designer_platform_work
+        $<TARGET_FILE:test_child>)
+    set_tests_properties(test_designer_platform PROPERTIES TIMEOUT 120)
     dsg_test(test_designer_platform)
     # Step 5, part A: the preview's core (core/preview.c), headless. GNU ld's
     # --wrap counts heap calls in a tick and holds an attach; neither MSVC's
