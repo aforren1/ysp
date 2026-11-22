@@ -2464,6 +2464,277 @@ check named):
 - No ThreadSanitizer run: S adds an atomic counter that the watch thread
   writes and the UI thread reads, and no thread.
 
+#### Part V as built (2026-11-22)
+
+Branch `step6-v`, from `designer-step6` (`1110636`: the plan, P, K, X and
+S merged). Part V is the Run view (`designer/app/view_run.cpp`), the rig's
+band and combo in the preview's pane (`view_preview.cpp`), the Test Engine
+tests `run/*` (`tests/designer/te_run.cpp`) and part 12 of
+`test_designer_ui`. Parts B, R and G were built at the same time, so the
+tests ran on test doubles (below). No frozen interface changed: `dsg.h`
+0.4.0, `views.h` and `ui.h` are as part S left them.
+
+**The Run view** (`//##designer/Run`, in `UI_SLOT_AUX`, under the Preview
+when both are ticked). From the top:
+- Run, Stop and Kill, and one line: the state, the elapsed time and the
+  trials written. Run is disabled as `ui_can_run()` says; its tooltip
+  says why (no project, a Build or a run goes, the check has errors, the
+  check has not come back).
+- **Rig.** The combo of the rig folder's profiles (`dsg_rig_list()`,
+  at most once a second while the view draws, and at each open of the
+  combo): "profile (default)" first, then each other name. "No profile
+  (keyboard only)" is offered for a simulated run, and for a real run
+  only while the folder has no `profile.json`. A folder that the list
+  refuses shows its reason. The chosen profile's line
+  (`dsg_rig_summary()`), its check notes' count, "Copy the folder's
+  path", and "Profile details": the rig's name and `written`, the file,
+  each role (family, key, options, `latency` and `bounds` with their
+  check: OK, MISSING, CHANGED, DIFFERS), the display (onset offset, the
+  photodiode latency, the calibration file and its check, and a warning
+  when the check is OK and `dsg_rig_cal()` gave none), the view (distance,
+  px over mm, `yrig_ppd()`), the signals, and each note of the load.
+- **Build.** The pack's path (`dsg_build_path()`), "Building ..." while
+  one goes, then the last result: the pack ID with "Copy ID", the size,
+  the time and the hour; "Up to date" or "Stale" (`ui_build_stale()`, at
+  most once a second, and at a new result or revision); a failed Build's
+  error count, which the Issues panel lists; Build.
+- **Run settings.** Simulated (`--sim`); with it the simulated
+  participant (correct, silent, `p=` a probability), Max seconds and a
+  gain for each `PL_NEED_SIM_GAIN` role; without it Window
+  (development). The seed (digits, or empty). A row for each session
+  field that a `PL_NEED_FIELD` names, marked "required" while empty. For
+  each `PL_NEED_ROLE_TIER` role: an "Allow ... below its tier" box
+  (`--allow-below-tier`) and, with a profile chosen, "The profile gives it
+  no tier: it has no checked loopback for this role." (Part P: the need's
+  tier is always UNKNOWN). The output folder: empty is decision 11's,
+  and the view names the folder that the next run writes and says when it
+  exists. The bounds are `run_part.c`'s, so a value typed here reads back
+  the same; a field takes effect when the person leaves it.
+- **Output.** "The preview stops while a real run goes." (decision 9);
+  the last trial's outcome, response and rt; at the end the exit's text
+  and what to do next ("What the Run view shows"): exit 1 points at the
+  Issues panel, exit 2 shows the command line with a copy button, exit 3
+  names `session.json`'s record, 99 names `panic.json`, a signal says the
+  data set was not closed. The folder with "Copy path", "Open trials.csv"
+  after an end with trials, the log's path, and the log's last lines (a
+  list clipper over at most `DSG_RUN_LOG_LINES` lines, the newest in view
+  unless the person scrolled up; the line starts in a static array, no
+  allocation).
+
+User text (profile names, roles, keys, notes, paths, the log, the last
+row) goes through Skribidi and into ImGui's log, as the preview's does.
+
+**Decisions taken here** (the plan gave 9, 12, 14 and 15 to part V).
+1. **No frame of its own** (decision 9). The view has no `animating`
+   hook, and its once-a-second work (the folder's list, the profile's
+   stat, the pack's stat) runs only in frames that something else brings:
+   input, or a run's wake-up at most `DSG_RUN_REDRAW_HZ` times a second.
+   So a profile edited in a text editor shows at the next such frame, not
+   by itself. `views.h` has no "draw again in 1 s" hook; a timer frame
+   once a second would cost frames while the player runs.
+2. **"No profile" and `profile.json`** (decision 12; part S's item). A
+   real run with no `--rig` takes `profile.json` (`player/lower.c`), so
+   the check with no profile would not be the run's. While the folder has
+   `profile.json` and Simulated is off, the view sets the rig to
+   `profile`: the check takes it (ui.cpp posts a check on the change) and
+   the run gets `--rig profile`, the same file. This happens only in a
+   frame that draws the Run view: see "Interface findings", 1.
+3. **"Show" copies the folder's path.** The plan opens the folder with
+   `SDL_OpenURL()`; the UI layer has no SDL and `UiPlatform` has no hook
+   for it, so the view copies the path to the clipboard.
+4. **The preview's rig** (decision 14). The preview's Settings get a
+   "Rig" combo: "Built-in simulated rig" (`""`) and the folder's
+   profiles; a choice goes through `dsg_preview_set()`, which restarts.
+   The Run view's choice sets the preview's too ("No profile" is the
+   built-in rig there, which also has the keyboard only); the preview's
+   combo can then differ. A band above "Faithful in logic" names the rig:
+   `dsg_rig_summary()`, "Built-in simulated rig: view 570 mm, 1920 px over
+   518.4 mm; no devices, no signals.", or in red the profile's load error.
+   The pane keeps its own `dsg_rig` for it; when its file changes (a stat,
+   once a second) it loads it again and restarts the session. The Run
+   view, on a change of its profile's file, loads it again and calls
+   `ui_check_again()` and `dsg_preview_restart()`, as part S says; when
+   both use one profile the session restarts twice in a frame, which costs
+   nothing more than one restart.
+5. **Windows and `--sim`** (Part P). Stop cannot reach a simulated run on
+   Windows, so the view shows Kill and no Stop for one. Its Kill calls
+   `ui_run_stop()` first, which gives 0 there, then `ui_run_kill()`: Kill
+   still comes only after a Stop, as `dsg_run_kill()` asks. On POSIX, Kill
+   shows when the run offers it (`kill_offered`); Stop is disabled while
+   the run stops.
+6. **The display after a Kill.** When a real run ends by a signal, a red
+   band says how to put the display back: on Linux the command `xrandr
+   --output OUT --mode 1920x1080 --rate 60 --gamma 1:1:1` with a copy
+   button, and to use the output's name, mode and rate in place of OUT,
+   1920x1080 and 60; on Windows and macOS, to set the resolution and rate
+   again in the system's display settings or restart the computer. A
+   simulated run's end has no band: it has no display.
+7. **Simulated or real** is the run's command line (`--sim` in
+   `dsg_run_info.command`); with no command (part S's double) the
+   settings at the first frame that shows the run. A run that goes after
+   an end is a new run even at the old one's address and folder (the
+   allocator gives one, and the double's folder has a 1 s resolution).
+8. The sections' headers are `Rig##section`, `Build##section` and so on:
+   the Build header and the Build button had one ID, and a click on the
+   button toggled the header.
+
+**Interface findings** (reported, not changed):
+1. `ui_run_settings()->rig` `""` while `profile.json` exists: only the Run
+   view moves it to `profile`, and only when it draws. With the view
+   hidden, a check runs with no profile while the toolbar's Run gives the
+   player none and it takes `profile.json`. A fix is `ui.cpp`'s (at the
+   open, and when the list changes) or `dsg_run_args()`'s (`--rig
+   profile` for a real run when the file exists). Part S's text allowed
+   "say so"; the view does both where it can.
+2. `yrt_user_dir()` refuses every folder under one that all users can
+   write, and `/tmp` is 1777: the real `rig.c` lists nothing for a test
+   folder in a build tree under `/tmp`, as this machine's scratch trees
+   are. The double does not make that check. At the integration, run
+   `test_designer_te` with a work folder outside `/tmp` (CI's build tree
+   is), or the rig tests check only that the view shows the refusal.
+3. `dsg_run_info` has no `sim`: the view reads `--sim` from `command`.
+4. `views.h` has no timed redraw and `UiPlatform` no "open a folder";
+   decisions 1 and 3 above.
+
+**The test double** (`tests/designer/run_view_double.h`, `.c`, part V's).
+Part S's `build_run_double.c` gives no trials, log, exit text, table
+place, `kill_offered` timing or rig, which the view's tests read. The new
+double defines every external symbol of `build.c`, `run.c` and `rig.c`
+and is in `test_designer_te`'s sources only: a Build's result as
+scripted (pack ID, size, ms, an error with a definition's place or a
+table's message, a warning); a run with no process whose progress, end
+and Stop are scripted, `kill_offered` 5 s after a Stop on the UI's clock,
+the plan's exit texts, and `dsg_run_args()` refusing a real run under
+`YSP_DESIGNER_TEST`; a `--sim` run's Stop gives 0 on Windows; the
+profiles of `$XDG_CONFIG_HOME/ysp/rig` (Windows `%APPDATA%\ysp\rig`)
+through `yrig_load_file()`, with `dsg_rig_changed()` by size and time.
+`test_designer_ui` keeps part S's double.
+
+**Tests** (Linux desktop, i5-14500, Debian 12, gcc 12.2, Release, `DISPLAY`
+and `WAYLAND_DISPLAY` unset):
+- `test_designer_te`, `run/*`, 9 tests on the double: `build_id` (the
+  view's Build, its pack ID and "Up to date", then "Stale" after an
+  edit), `build_table` (a Build error that names `conditions.pstb`'s row
+  2, column 2; a click on it in the Issues panel selects that cell in
+  Tables), `sim_end` (the trials, the last row, the log, the end's text,
+  the folder, Open trials.csv, no display band), `stop` ("Stopped"),
+  `kill` (Kill at once when Stop gives 0; after a Stop that goes out,
+  Stop disabled and no Kill until it is offered), `disabled` (Run
+  disabled while the check has errors, enabled after Ctrl+Z), `rig_combo`
+  (the list, `profile` for a real run, "No profile" only simulated, the
+  choice posts a check and is the preview's, the preview's band and its
+  own combo back to the built-in rig, the Run view's profile kept),
+  `rig_changed` (a new view in the file shows within 90 frames and posts
+  a check), `needs` (oddball: the field row writes `--field
+  participant=s07` and the folder `data/s07_...`; the tier box; "The
+  profile gives it no tier" only with a profile). The process's
+  `XDG_CONFIG_HOME` (Windows `APPDATA`) is `WORK/run_xdg`, set before any
+  frame, and `YSP_DESIGNER_TEST` is set. 47 of 47 tests in all.
+- `test_designer_ui` 198 checks (16 new, part 12). The loop of `main.cpp`
+  played on a virtual clock (`UiPlatform.now_ns`; a drawn frame costs one
+  60 Hz refresh), with a simulated run going and the Run view shown: 0
+  frames in 5 s with nothing new; 8 frames in 4 s with a wake-up every
+  50 ms (at most `DSG_RUN_REDRAW_HZ` a second), and no check posted by
+  them; 1 frame in the 3 s after the wake-ups stop. A killed simulated
+  run's end has no display band; a real run (the double starts no
+  process) says that the preview stops, and its Kill shows the xrandr
+  command. `XDG_CONFIG_HOME` is `WORK/xdg`, so the view never lists the
+  user's own rig folder. `test_designer_ui_real` 93 checks: part 12 needs
+  the double.
+- ctest from the Release build tree, examples on: 145 of 145 with the
+  Test Engine on, 144 of 144 with it off.
+- clang 24 (`-fsyntax-only`, `-Wsometimes-uninitialized`, `-Wconversion`,
+  `-Wshorten-64-to-32`) on the changed files, `te_run.cpp` also with
+  `DSG_RUN_VIEW_DOUBLE` 0: no warning in them. em++ on `view_run.cpp`,
+  `view_preview.cpp` and `ui.cpp`: no warning.
+
+**Hand mutants** (each reverted; each fails the test named):
+
+| Mutant | Fails |
+|---|---|
+| v-01: the pack ID not shown | `build_id` |
+| v-02: "Stale" not computed again at a new revision | `build_id` |
+| v-03: the pack's path not shown | `build_id` |
+| v-04: no "The last Build failed" line | `build_table` |
+| v-05: no trials in the top line | `sim_end` |
+| v-06: no last response | `sim_end` |
+| v-07: no log | `sim_end` |
+| v-08: no end text | `sim_end`, `stop`, `kill`; part 12 |
+| v-09: no Open trials.csv | `sim_end` |
+| v-10: the display band for a simulated run too | `kill`; part 12 |
+| v-11: a run after an end at the same address not seen as new | part 12 |
+| v-12: Kill not shown when offered | `kill` |
+| v-13: Stop not disabled while the run stops | `kill` |
+| v-14: Kill shown while the run goes | `sim_end` |
+| v-15: no word on exit 3's record | `stop` |
+| v-16: no "did not close its data set" | `kill`; part 12 |
+| v-17: Run never disabled | `disabled` |
+| v-18: no `profile` for a real run | `rig_combo` |
+| v-19: "No profile" always offered | `rig_combo` |
+| v-20: the Run view's choice not the preview's | `rig_combo` |
+| v-21: no profile line | `rig_combo` |
+| v-22: no profile details | `rig_combo` |
+| v-23: a changed file not loaded again | `rig_changed` |
+| v-24: no check after a changed file | `rig_changed` |
+| v-25: "no tier" with no profile too | `needs` |
+| v-26: "no tier" never | `needs` |
+| v-27: the tier box does nothing | `needs` |
+| v-28: a field's value not kept | `needs` |
+| v-29: the next run's folder not named | `needs` |
+| v-30: no "No run since the project opened." | `sim_end` |
+| v-31: every run taken as real | `sim_end` |
+| v-32: the Run view animates | part 12 |
+| v-33: the Run view posts a check each frame | part 12 |
+| v-34: the preview has no rig band | `rig_combo` |
+| v-35: the band always says built-in | `rig_combo` |
+| v-36: the preview's combo does not apply | `rig_combo` |
+| u-01: `ui_run_wait_ms()` always 0 (`ui.cpp`) | part 12 and part 11 |
+| u-02: a frame does not take the wake-up (`ui.cpp`) | part 12 and part 11 |
+
+**The integration (wave 3): the exact steps.**
+1. `tests/designer/te_run.cpp`: put `#define DSG_RUN_VIEW_DOUBLE 0` at
+   its top, above its `#ifndef`.
+2. `designer/CMakeLists.txt`, `test_designer_te`: remove
+   `${_te_config}/run_view_double.h ${_te_config}/run_view_double.c` from
+   its sources; add
+   `target_compile_definitions(test_designer_te PRIVATE YSP_TE_FAKE_PLAYER="$<TARGET_FILE:fake_player>")`
+   and `add_dependencies(test_designer_te fake_player)` (part R's
+   target). Then the two double files can go.
+3. Check `te_run.cpp`'s scripts against part R's `fake_player` as merged.
+   They assume what R's branch had: PACK read as a script (`header`,
+   `row`, `rows N MS TEXT`, `out`, `sleep`, `term exit CODE`, `term
+   ignore`, `exit`), and the version from `YSP_FAKE_PLAYER_VERSION`, which
+   the test sets to `PL_VERSION_STRING`. The test builds with the view's
+   Build, then writes the script over the built pack and presses Run (the
+   pack is no source, so the Build stays up to date).
+4. Check the names that R's `trials.csv` parse reads: the scripts' header
+   is `trial,response,rt_s,outcome`, and `sim_end` wants "rt 0.412 s";
+   `stop` wants R's exit text for 3 to hold "Stopped".
+5. `build_table` with B writes `conditions.csv` with an unclosed quote in
+   its second row; B's message must name a row that `dsg_csv_place()`
+   reads (the test takes the row from the message, and only the double's
+   case pins row 1, column 1).
+6. Run `test_designer_te` with its work folder outside `/tmp` on this
+   machine (finding 2); under `/tmp` the rig tests check only the
+   refusal's text. ctest's work folder is the build tree's.
+7. `test_designer_ui` keeps part S's double; nothing changes there.
+8. Run the whole `run/*` group and part 12 again, and the hand mutants
+   v-01 to v-36 that the real parts can reach.
+
+**Not done.**
+- The window was not opened: the view, the bands and the combo were not
+  seen on a display, and no person used them. No real or fake player
+  started in part V's tests.
+- The real `build.c`, `run.c` and `rig.c` were not linked (step 6's wave
+  3). `te_run.cpp`'s real-part branch is compiled (clang 24
+  `-fsyntax-only`), not run.
+- The data folder's size ("Risks": 871 MB a run) is not shown: `dsg.h`
+  has no call for it.
+- MSVC, MinGW and macOS were not compiled; the Windows branches (Kill
+  without Stop, the restore text) are only read. Locals that a call fills
+  are initialized, and narrowing conversions are cast.
+- No ASan or ThreadSanitizer run: part V adds no thread.
+
 ## First version
 
 In:
@@ -4836,6 +5107,7 @@ ctest --test-dir build/designer -R test_designer_te
 | `unsaved` | The engine types into the editor, then types another folder in the path field and presses Enter. The question opens and the project stays. Cancel keeps the project, the text and the unsaved state. The Open path button asks again, and Discard opens the other project. | `ask_or_run()` does not ask. |
 | `undo_views` (step 4) | A structured edit through the document shows in the text. With the chart shown, the engine's Ctrl+Z takes it back and Ctrl+Shift+Z puts it in again. | `undo_keys_free()` in `ui.cpp` always false; also: `sync_editor()` does not show the document's change. |
 | `chart/*` (8), `tables/*` (5), `panels/*` (9) (step 4) | The parts' tests: "The chart", "The tables" and "The panels" give each test and its mutants. | - |
+| `preview/*` (6) (step 5), `run/*` (9) (step 6) | The parts' tests: "Part B as built" of step 5 and "Part V as built" of step 6 give each test and its mutants. | - |
 
 Each mutant of the first three tests (step 3) failed its test, and the
 other tests passed. The mutants were reverted; they are not in a mutation
