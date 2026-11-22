@@ -1,0 +1,57 @@
+# player/main.c mutants: the command line's --version and --sim's SIGTERM
+# handler (0.18.0, designer.md "Plan of step 6", decisions 5 and 8). The
+# test (tests/player/mut_test.c) compiles the mutated file into itself as
+# pl_cli_main() and runs tests/player/player_test.py with itself as the
+# player; YPL_SHAPES picks the cases that reach main.c's new code.
+header = "main.c"
+
+[test.player]
+source = "tests/player/mut_test.c"
+compiler = "gcc"
+flags = ["-std=c11", "-O1", "-w", "-DYSCR_NO_SDL", "-DPIN_A0=\"x3b4a1c5afe219da5\"", "-I$YSP_MINIAUDIO"]
+libs = ["-lm", "-lpthread", "-ldl"]
+timeout = 300
+env = { YPL_REPO = "{repo}", YPL_SHAPES = "t_p18_version,t_p18_sigterm" }
+env_default = { YPL_BIN = "{repo}/build/linux", YPAK = "{repo}/build/linux/pack/ypak" }
+
+[[mutant]]
+id = "pm-01"
+name = "--version prints another version"
+test = "player"
+why = "Decision 5: the designer refuses a player whose --version is not its library's PL_VERSION_STRING."
+find = '''            printf("ysp_player %s\n", PL_VERSION_STRING);'''
+replace = '''            printf("ysp_player %s\n", "0.17.0");'''
+
+[[mutant]]
+id = "pm-02"
+name = "--sim installs no SIGTERM handler"
+test = "player"
+why = "Decision 8: without it SIGTERM ends --sim by the signal (status -15), with no \"aborted\"."
+find = '''    if (a.sim && !a.draws_path) pl_term_handler();'''
+replace = ''''''
+
+[[mutant]]
+id = "pm-03"
+name = "the SIGTERM handler sets no flag"
+test = "player"
+why = "The frame loop never sees the stop: the session runs to its end, exit 0."
+find = '''    pl_stop_requested = 1;'''
+replace = '''    pl_stop_requested = 0;'''
+
+[[mutant]]
+id = "pm-04"
+name = "a stopped session exits 0"
+test = "player"
+why = "Exit code 3 is the operator's stop; the designer's Run view reads it."
+find = '''        pl_close(&g_p);
+        return 3;'''
+replace = '''        pl_close(&g_p);
+        return 0;'''
+
+[[mutant]]
+id = "pm-05"
+name = "the stop line names no trial"
+test = "player"
+why = "A stop in a trial names the trial that has no row, as session.json's trial_index."
+find = '''        if (g_p.abort_trial >= 0)'''
+replace = '''        if (g_p.abort_trial > 999999)'''

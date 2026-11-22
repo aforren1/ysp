@@ -1818,6 +1818,11 @@ static int pl_rig_load(pl_player* p) {
          * which is pl_check()'s stand-ins (no profile) */
         if (!p->sim.rig) return 0;
         memcpy(p->rig, p->sim.rig, sizeof *p->rig);
+    } else if (p->checking) {
+        /* pl_check(): its caller's profile, else none; a copy, as the
+         * stand-in view writes into p->rig */
+        if (!p->check_rig) return 0;
+        memcpy(p->rig, p->check_rig, sizeof *p->rig);
     } else if (a) {
         bool file = strchr(a, '/') || strchr(a, '\\') || (strlen(a) > 5 && strcmp(a + strlen(a) - 5, ".json") == 0);
         rc = file ? yrig_load_file(p->rig, a, err, sizeof err) : yrig_load(p->rig, a, err, sizeof err);
@@ -1850,17 +1855,24 @@ static int pl_cal_load(pl_player* p) {
     long n;
     ycol_ctx_desc cxd;
     static const ycol_rgb gray = { 0.0, 0.0, 0.0 };
-    /* the stepped session reads no file: its caller gives the calibration */
-    if (!path && p->have_rig && p->rig->display.calibration[0] && !p->sim.on) {
+    /* the caller's calibration: pl_check_desc.cal, pl_sim_desc.cal */
+    const ycol_cal* given = p->sim.on ? p->sim.cal : p->check_cal;
+    /* pl_check() and the stepped session read no file: with a profile, its
+     * calibration meets a required one when the file passed its check and
+     * the caller gives it */
+    bool rig_cal = p->stand_in && p->have_rig && p->rig->display.calibration[0] && p->rig->display.check == YRIG_CHECK_OK && given;
+    if (!path && p->have_rig && p->rig->display.calibration[0] && !p->stand_in) {
         snprintf(joined, sizeof joined, "%s/%s", p->rig->dir, p->rig->display.calibration);
         path = joined;
     }
     if (!path && p->sim.on && p->sim.cal) {
         memcpy(&p->cal, p->sim.cal, sizeof p->cal);
+        /* with no profile the given calibration meets the need (0.16.0) */
+        if (p->def->calibration_required && p->have_rig && !rig_cal) pl_need_add(p, PL_NEED_CALIBRATION, NULL, 0);
     } else if (!path) {
         if (p->def->calibration_required && p->stand_in) {
-            /* pl_check(): player_make_rig's nominal calibration stands in */
-            pl_need_add(p, PL_NEED_CALIBRATION, NULL, 0);
+            /* player_make_rig's nominal calibration stands in */
+            if (!rig_cal) pl_need_add(p, PL_NEED_CALIBRATION, NULL, 0);
             if (p->check_cal) memcpy(&p->cal, p->check_cal, sizeof p->cal);
             else if (pl_check_nominal_cal(&p->cal) < 0) { pl_fail(p, "the stand-in calibration"); return -1; }
         } else if (p->def->calibration_required) {
@@ -1926,9 +1938,10 @@ static int pl_roles_bind(pl_player* p) {
         r->rig = rr && rr->family[0] ? rr : NULL;
         r->trigger = pl_trigger_channel(p, r->def->name);
         r->rule_out = -1;
-        /* pl_check(): a required role that the keyboard cannot take needs a
-         * device in the rig profile; --sim binds none */
-        if (p->stand_in && r->def->required && !(r->def->direction == 0 && pl_role_lists(r->def, "keyboard")))
+        /* pl_check() and the stepped session: a required role that the
+         * keyboard cannot take needs a device in the rig profile, unless
+         * their profile binds one; --sim binds none */
+        if (p->stand_in && r->def->required && !(r->def->direction == 0 && pl_role_lists(r->def, "keyboard")) && !r->rig)
             pl_need_add(p, PL_NEED_DEVICE, r->def->name, r->def->direction);
         if (p->args.sim) continue;
         r->keyboard = !r->rig && r->def->direction == 0 && pl_role_lists(r->def, "keyboard");
@@ -2141,6 +2154,17 @@ static int pl_roles_tier(pl_player* p) {
         int tier;
         if (!r->def->min_tier) continue;
         if (p->stand_in) {
+            /* pl_check() and the stepped session with a profile: a real
+             * start's tier (below); met,
+             * no need. ysp/rigfile.h gives a role tier 1 or UNKNOWN, so a
+             * need that stays is at UNKNOWN, as with no profile */
+            tier = YIN_TIER_UNKNOWN;
+            if (p->have_rig && r->def->direction == 0) {
+                yin_source none;
+                memset(&none, 0, sizeof none);
+                tier = (int)yrig_source_role(p->rig, r->def->name, none).tier;
+            }
+            if (tier != YIN_TIER_UNKNOWN && tier <= r->def->min_tier) continue;
             pl_need_add(p, PL_NEED_ROLE_TIER, r->def->name, r->def->min_tier);
             continue;
         }
@@ -2558,13 +2582,20 @@ static int pl_fields_init(pl_player* p) {
 extern int pl_columns_build(pl_player* p);
 extern int pl_channels_assign(pl_player* p);
 
-/* pl_check(): what a real run asks of the rig for each signal role, and
- * gain 1 as the --sim adapter of a relative role (a role's units a count),
- * so the check goes on where --sim would ask for --sim-gain. */
+/* pl_check() and the stepped session: what a real run asks of the rig for
+ * each signal role that their profile does not meet, and gain 1 as the
+ * --sim adapter of such a relative role (a role's units a count), so the
+ * load goes on where --sim would ask for --sim-gain. */
 static void pl_check_sigroles(pl_player* p) {
     int i;
     for (i = 0; i < p->def->n_sigroles; i++) {
         const yexp_sigrole* r = &p->def->sigroles[i];
+        /* the profile's signal for the role (pl_check_desc.rig,
+         * pl_sim_desc.rig): the need is met, and the role takes the
+         * profile's adapter, whose checks then run (host.c's sigrole(),
+         * v2_rig_signals()); a stepped session's samples are then counts at
+         * the profile's scale */
+        if (p->have_rig && yrig_find_signal(p->rig, r->name)) continue;
         pl_need_add(p, PL_NEED_SIGNAL, r->name, r->required ? 1 : 0);
         if ((r->type == YEXP_SIG_POSITION2D_RELATIVE || (r->type == YEXP_SIG_POSITION2D && r->allow_relative)) &&
             p->args.n_gains < (int)(sizeof p->args.gains / sizeof p->args.gains[0])) {
@@ -2897,7 +2928,7 @@ int pl_load(pl_player* p, const pl_args* a) {
 }
 
 /* --sim's load with pl_check()'s stand-ins (docs/player.md, "Reference:
- * pl_check()"): no rig, no output folder, the seed given, a field's
+ * pl_check()"): the caller's rig profile or none, no output folder, the seed given, a field's
  * placeholder, the nominal view and calibration, gain 1, no screen, a null
  * gfx and an audio device that never runs. */
 int pl_check(pl_player* p, const pl_check_desc* d, pl_check_result* r) {
@@ -2912,6 +2943,7 @@ int pl_check(pl_player* p, const pl_check_desc* d, pl_check_result* r) {
     p->args.def_len = d->def_text ? d->def_len : 0;
     p->pack_reader = !d->pack.path && !d->pack.data && d->pack.reader;
     p->check_cal = d->cal;
+    p->check_rig = d->rig;
     (void)pl_load_pack(p, &d->pack);
     r->status = !p->failed ? PL_CHECK_OK : p->report.n_errors > 0 ? PL_CHECK_DEFINITION : PL_CHECK_REFUSED;
     r->report = p->arena_open ? &p->report : NULL;

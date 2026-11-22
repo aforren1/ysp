@@ -28,6 +28,9 @@
  *       a session loaded on one thread with gl_caps and share and attached
  *       on the context's thread draws the frames of a direct gfx, read
  *       through pl_sim_texture() (stroop and oddball)
+ *   (12) 0.18.0, a desc's rig profile: the needs and refusals of pl_check()
+ *       with the same profile and calibration; the profile's signal
+ *       adapters, against --sim --rig; what a relative role's sample is
  *   and the display, rig and calibration a desc gives, the check's needs,
  *   and on_code against events.csv's out rows
  */
@@ -379,6 +382,8 @@ typedef struct run_opts {
     const char* samples;      /* --samples, with --sim-gain ROLE=1 */
     const char* gain_roles[2];
     const char* participant;
+    const char* rig_file;     /* --sim --rig FILE (0.18.0, case_rig)        */
+    const yrig_profile* step_rig;   /* pl_sim_desc.rig, the same profile  */
 } run_opts;
 
 static char rig_path[1200];
@@ -401,6 +406,7 @@ static int ref_run(const pk* k, const run_opts* o, const char* out) {
     a.def_text = o->def;
     a.def_len = o->def ? strlen(o->def) : 0;
     if (o->rig) a.rig_path = rig_path;
+    if (o->rig_file) a.rig_path = o->rig_file;
     a.samples_path = o->samples;
     for (i = 0; i < 2; i++)
         if (o->gain_roles[i]) {
@@ -424,7 +430,8 @@ static void sim_desc(pl_sim_desc* d, const pk* k, const run_opts* o, const char*
     d->def_text = o->def;
     d->def_len = o->def ? strlen(o->def) : 0;
     d->seed = o->seed;
-    d->cal = o->rig ? &nominal : NULL;   /* the rig's calibration, which --rig's file holds */
+    d->cal = o->rig || o->step_rig ? &nominal : NULL;   /* the rig's calibration, which --rig's file holds */
+    d->rig = o->step_rig;
     d->n_fields = 1;
     d->fields[0].name = "participant";
     d->fields[0].value = "1";
@@ -1289,6 +1296,222 @@ static void case_display(void) {
     printf("  display: the built-in rig, a rig and a calibration from the desc, 120 Hz; the needs of the check; no drawn frame before attach\n");
 }
 
+/* --- (12) a profile (0.18.0): the check's needs, the profile's adapters --- */
+
+static yrig_profile rig_dev, rig_room, rig_changed;
+static char room_path[1200];
+
+static int write_file(const char* path, const void* data, size_t n) {
+    FILE* fp = fopen(path, "wb");
+    if (!fp) return -1;
+    if (fwrite(data, 1, n, fp) != n) { fclose(fp); return -1; }
+    return fclose(fp) == 0 ? 0 : -1;
+}
+
+static void hex_of(const void* data, size_t n, char hex[65]) {
+    static const char H[] = "0123456789abcdef";
+    uint8_t dg[32];
+    int i;
+    yrig_sha256(data, n, dg);
+    for (i = 0; i < 32; i++) { hex[i * 2] = H[dg[i] >> 4]; hex[i * 2 + 1] = H[dg[i] & 15]; }
+    hex[64] = 0;
+}
+
+/* In work (make_rig()'s folder, with its display.yspcal): dev binds
+ * oddball's resp (xid, a checked bounds loopback: tier 1) and trig, with
+ * make_rig's view; room binds no role, has a view of 1024 px over 320 mm
+ * (32 px a cm) and the signals of hand, left and right; changed is room
+ * with a calibration whose file failed its check. room is also a file,
+ * for --sim --rig. */
+static int rig_profiles(void) {
+    static const char BOUNDS[] = "# a test fixture, not a measurement\nformat ysp-in-bounds 1\ndate 2026-11-22T00:00:00Z\nin_family xid\n"
+                                 "n 200\nmissed 0\nlo_s -0.000100000\nmedian_s 0.000050000\nhi_s 0.000400000\n";
+    static char text[4096], cal[sizeof(ycol_cal) + 16];
+    char path[1300], err[300], bsha[65], csha[65], disp[256];
+    FILE* fp;
+    size_t n;
+    path_in(path, sizeof path, "display.yspcal");
+    if (!(fp = fopen(path, "rb"))) return -1;
+    n = fread(cal, 1, sizeof cal, fp);
+    fclose(fp);
+    hex_of(cal, n, csha);
+    hex_of(BOUNDS, strlen(BOUNDS), bsha);
+    path_in(path, sizeof path, "loopback");
+    if (make_dir(path) != 0) return -1;
+    snprintf(path, sizeof path, "%.900s/loopback/%s.txt", work, bsha);
+    if (write_file(path, BOUNDS, strlen(BOUNDS)) != 0) return -1;
+    snprintf(disp, sizeof disp, "\"display\": {\"onset_offset_s\": 0, \"calibration\": {\"file\": \"display.yspcal\", \"sha256\": \"%s\"}}", csha);
+    snprintf(text, sizeof text,
+             "{\"format\": \"ysp-rig 1\", \"rig\": \"dev\", \"written\": \"2026-11-22T00:00:00Z\", \"roles\": {"
+             "\"resp\": {\"family\": \"xid\", \"key\": \"port:/dev/null\", \"bounds\": {\"n\": 200, \"lo_s\": -0.0001, \"hi_s\": 0.0004, "
+             "\"date\": \"2026-11-22T00:00:00Z\", \"sha256\": \"%s\"}}, \"trig\": {\"family\": \"triggerbox\", \"key\": \"port:/dev/null\"}}, %s, "
+             "\"view\": {\"distance_mm\": 570, \"width_mm\": 518.4, \"width_px\": 1920}}",
+             bsha, disp);
+    if (yrig_parse(&rig_dev, text, strlen(text), work, err, sizeof err) != YRIG_OK) { printf("  dev: %s\n", err); return -1; }
+    snprintf(text, sizeof text,
+             "{\"format\": \"ysp-rig 1\", \"rig\": \"room\", \"written\": \"2026-11-22T00:00:00Z\", \"roles\": {}, %s, "
+             "\"view\": {\"distance_mm\": 570, \"width_mm\": 320, \"width_px\": 1024}, \"signals\": {"
+             "\"hand\": {\"adapter\": \"raw_mouse\", \"units\": \"display_px\", \"per_count\": [2, -1.5], \"device\": \"click\"}, "
+             "\"left\": {\"adapter\": \"raw_mouse\", \"units\": \"display_px\", \"per_count\": 16, \"device\": \"click\"}, "
+             "\"right\": {\"adapter\": \"raw_mouse\", \"units\": \"display_px\", \"per_count\": 16, \"device\": \"click\"}}}\n",
+             disp);
+    if (yrig_parse(&rig_room, text, strlen(text), work, err, sizeof err) != YRIG_OK) { printf("  room: %s\n", err); return -1; }
+    path_in(room_path, sizeof room_path, "room.json");
+    if (write_file(room_path, text, strlen(text)) != 0) return -1;
+    memcpy(&rig_changed, &rig_room, sizeof rig_changed);
+    rig_changed.display.check = YRIG_CHECK_CHANGED;   /* as yrig_load() gives for an edited file */
+    return rig_dev.n_notes == 0 && rig_room.n_notes == 0 && rig_dev.role[0].bounds.check == YRIG_CHECK_OK && rig_room.display.check == YRIG_CHECK_OK ? 0 : -1;
+}
+
+/* status, message and needs */
+static void result_text(const pl_check_result* r, char* buf, size_t cap) {
+    char needs[1024];
+    needs_text(r, needs, sizeof needs);
+    snprintf(buf, cap, "%d|%.400s|%s", r->status, r->message ? r->message : "", needs);
+}
+
+static void case_rig(void) {
+    static const char* const names[] = { "rdk", "stroop", "afc2", "oddball", "visuomotor", "bimanual", "sound" };
+    const yrig_profile* rigs[3] = { &rig_dev, &rig_room, &rig_changed };
+    pl_player* p = (pl_player*)calloc(1, sizeof *p);
+    pl_player* q = (pl_player*)calloc(1, sizeof *q);
+    pl_sim_desc d;
+    pl_check_desc cd;
+    pl_check_result r, rc;
+    run_opts o;
+    char out[1200], a[2048], b[2048], cell[256];
+    size_t i;
+    int j, c, n_same = 0;
+    if (rig_profiles() != 0) { CHECK(0, "rig: the test profiles"); free(p); free(q); return; }
+    memset(&o, 0, sizeof o);
+    o.seed = 3;
+    /* (a) a session's needs and refusals are the check's with the same
+     * profile and calibration; a few by value */
+    for (i = 0; i < sizeof names / sizeof names[0]; i++) {
+        const pk* kk = pack_of(names[i]);
+        if (!kk) continue;
+        for (j = 0; j < 3; j++)
+            for (c = 0; c < 2; c++) {
+                char dir[200];
+                snprintf(dir, sizeof dir, "rigneeds_%s_%d_%d", names[i], j, c);
+                path_in(out, sizeof out, dir);
+                sim_desc(&d, kk, &o, out);
+                d.n_fields = 0;
+                d.rig = rigs[j];
+                d.cal = c ? &nominal : NULL;
+                memset(&cd, 0, sizeof cd);
+                cd.pack.data = kk->data;
+                cd.pack.size = kk->size;
+                cd.seed = 3;
+                cd.rig = rigs[j];
+                cd.cal = d.cal;
+                (void)pl_sim_load(p, &d, &r);
+                (void)pl_check(q, &cd, &rc);
+                result_text(&r, a, sizeof a);
+                result_text(&rc, b, sizeof b);
+                CHECK(strcmp(a, b) == 0, "rig: %s with profile %d, cal %d: the session's '%s', the check's '%s'", names[i], j, c, a, b);
+                n_same += strcmp(a, b) == 0;
+                if (c == 1 && ((j == 0 && !strcmp(names[i], "oddball")) || (j == 1 && (!strcmp(names[i], "afc2") || !strcmp(names[i], "visuomotor") ||
+                                                                                   !strcmp(names[i], "bimanual"))) ||
+                               (j == 2 && !strcmp(names[i], "afc2")))) {
+                    static const struct { const char* name; int rig; const char* want; } W[] = {
+                        { "oddball", 0, "1:participant:0 4::1" }, { "afc2", 1, "1:participant:0 4::2" }, { "visuomotor", 1, "1:participant:0" },
+                        { "bimanual", 1, "1:participant:0" }, { "afc2", 2, "1:participant:0 2::0 4::2" },
+                    };
+                    size_t w;
+                    needs_text(&r, a, sizeof a);
+                    for (w = 0; w < sizeof W / sizeof W[0]; w++)
+                        if (W[w].rig == j && !strcmp(W[w].name, names[i]))
+                            CHECK(r.status == PL_CHECK_OK && strcmp(a, W[w].want) == 0, "rig: %s with profile %d: status %d, needs '%s', want '%s'", names[i], j,
+                                  r.status, a, W[w].want);
+                }
+                if (c == 0 && j == 1 && !strcmp(names[i], "afc2")) {
+                    needs_text(&r, a, sizeof a);
+                    CHECK(strcmp(a, "1:participant:0 2::0 4::2") == 0, "rig: afc2 with room and no calibration: needs '%s'", a);
+                }
+                pl_close(p);
+                pl_close(q);
+            }
+    }
+    /* (b) the profile's adapters: the session equals --sim --rig with no
+     * --sim-gain, sample for sample (hand 2 and -1.5 px a count; left and
+     * right 16 px a count, 0.5 cm through the view) */
+    {
+        const pk* k = pack_of("visuomotor");
+        if (k) {
+            char sp[1200];
+            memset(&o, 0, sizeof o);
+            o.seed = 3;
+            o.def = edit_all(edit_all(def_of(k), "\"reps 5\"", "\"reps 1\""), "\"reps 10\"", "\"reps 1\"");
+            path_in(sp, sizeof sp, "visuomotor_rig_samples.csv");
+            o.samples = sp;
+            o.rig_file = room_path;
+            o.step_rig = &rig_room;
+            if (o.def && write_samples_vm(sp, 120) == 0) compare_pack("visuomotor_rig", k, &o);
+            else CHECK(0, "rig: visuomotor: no definition or samples");
+            free((void*)o.def);
+        }
+        k = pack_of("bimanual");
+        if (k) {
+            char sp[1200];
+            memset(&o, 0, sizeof o);
+            o.seed = 3;
+            o.def = edit_all(edit_all(edit_all(def_of(k), "\"reps 30\"", "\"reps 2\""), "\"wait_s\": 46", "\"wait_s\": 3"), ARRIVED, ARRIVED_OR(2));
+            path_in(sp, sizeof sp, "bimanual_rig_samples.csv");
+            o.samples = sp;
+            o.rig_file = room_path;
+            o.step_rig = &rig_room;
+            if (o.def && write_samples_bi(sp, 120) == 0) compare_pack("bimanual_rig", k, &o);
+            else CHECK(0, "rig: bimanual: no definition or samples");
+            free((void*)o.def);
+        }
+    }
+    /* (c) what a sample is: a relative role's counts, at the profile's
+     * 2 px a count; with no profile, 1 px a count */
+    {
+        static const char reach[] =
+            "{\"format\": \"ysp-experiment\", \"version\": 2, \"name\": \"reach\","
+            " \"roles\": {\"hand\": {\"type\": \"position2d_relative\", \"units\": \"display_px\"}},"
+            " \"stimuli\": {\"dot\": {\"kind\": \"shape\", \"w\": 10, \"h\": 10}},"
+            " \"trials\": {\"t\": {\"controls\": {\"out\": {\"control\": \"region\", \"of\": \"hand\", \"radius\": 100, \"outside\": true}},"
+            "   \"states\": [{\"name\": \"hold\", \"steps\": [{\"on\": \"dot\"}, {\"wait_s\": 0.2}]},"
+            "                {\"name\": \"reach\", \"exits\": [{\"on\": \"out\", \"to\": \"end\", \"outcome\": \"out\"}, {\"after_s\": 2, \"to\": \"end\", \"outcome\": \"late\"}]}],"
+            "   \"columns\": {\"out_x\": {\"hit\": \"out.x\"}}}},"
+            " \"timeline\": [{\"name\": \"l\", \"trial\": \"t\", \"rules\": [\"reps 1\"]}]}";
+        const pk* k = pack_of("rdk");
+        int v, f;
+        for (v = 0; v < 2; v++) {
+            pl_sim_where w;
+            memset(&o, 0, sizeof o);
+            o.seed = 3;
+            o.def = reach;
+            path_in(out, sizeof out, v ? "rig_reach_none" : "rig_reach");
+            sim_desc(&d, k, &o, out);
+            d.rig = v ? NULL : &rig_room;
+            d.cal = v ? NULL : &nominal;
+            CHECK(pl_sim_load(p, &d, &r) == PL_CHECK_OK, "rig: reach %d: load: %s", v, r.message);
+            if (r.status != PL_CHECK_OK) { pl_close(p); continue; }
+            for (f = 0; f < 20; f++) CHECK(sim_frame(p, false) == 0, "rig: reach %d: frame %d", v, f);   /* into reach */
+            CHECK(pl_sim_sample(p, pl_sim_next_onset(p) - 1, 0, 30.0f, 0.0f) == 0, "rig: reach %d: a sample refused", v);
+            CHECK(sim_frame(p, false) == 0, "rig: reach %d: a frame", v);
+            CHECK(pl_sim_sample(p, pl_sim_next_onset(p) - 1, 0, 30.0f, 0.0f) == 0, "rig: reach %d: a sample refused", v);
+            CHECK(step_trial_end(p, 1) == 0, "rig: reach %d: the trial did not end", v);
+            pl_sim_where_now(p, &w);
+            pl_close(p);
+            cell_of(out, 0, "outcome", cell, sizeof cell);
+            CHECK(strcmp(cell, v ? "late" : "out") == 0, "rig: reach %d: outcome '%s', want '%s' (60 counts at %s px a count)", v, cell, v ? "late" : "out", v ? "1" : "2");
+            if (!v) {
+                cell_of(out, 0, "out_x", cell, sizeof cell);
+                CHECK(strtod(cell, NULL) == 120.0, "rig: reach: out_x '%s', want 120 (60 counts at 2 px)", cell);
+            }
+        }
+    }
+    free(p);
+    free(q);
+    printf("  rig: %d sessions' needs and refusals equal the check's with one profile; the profile's adapters equal --sim --rig's; a count is 2 px with the profile, 1 without\n",
+           n_same);
+}
+
 /* on_code: each code the session sends, as events.csv's out rows */
 typedef struct code_log { int n; char rows[512][96]; } code_log;
 static void on_code(void* ctx, const char* role, uint32_t code, int64_t t_ns) {
@@ -1798,6 +2021,7 @@ int main(int argc, char** argv) {
         RUN("display", case_display);
         RUN("codes", case_codes);
         RUN("gl", case_gl);
+        RUN("rig", case_rig);
 #undef RUN
     }
 #if defined(PL_SIM_COUNT)

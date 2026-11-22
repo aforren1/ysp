@@ -1702,6 +1702,102 @@ of the new texture and programs. On llvmpipe a cold adoption takes 18 to
 - The UHD 770 ran the test, not the bench.
 - MSVC, clang and macOS were not compiled. The test is Linux only.
 
+### Decisions of step 6
+
+#### Part P as built (2026-11-22)
+
+Branch `step6-p`, from `designer-step6` (`55f27ea`). The player 0.18.0
+([player.md](player.md), "With a rig profile" and Results). Only P's files
+changed: `player/main.c`, `player.h`, `lower.c`, `run.c`, the player's
+tests and mutation lists, `docs/player.md`, `docs/status.md`.
+
+**What it gives the other parts.**
+- `ysp_player --version`: one line, `ysp_player VERSION` with
+  `PL_VERSION_STRING`, exit 0, for `dsg_player_version()` (part R,
+  decision 5). It is read before any other argument.
+- `--sim` and SIGTERM (decision 8, "Stop"): exit 3, `"aborted"` with
+  reason `request`, the finished trials' rows. The stop line is
+  `ysp_player: stopped by the operator; N trials written to DIR (trial K
+  has no row)`, or `(no trial was running)` when the stop comes between
+  trials; through 0.17.0 that case printed `trial -1`. The handler only
+  sets `pl_stop_requested` (`volatile sig_atomic_t`); `pl_run()` reads it
+  before each frame and calls `yscr_request_abort()`, so the stop takes
+  the path of every other abort. It is installed before the load, so a
+  Stop during the load ends the session at its first frame with no
+  trial. A real run does not install it (SDL makes SIGTERM a quit event,
+  reason `quit`). **Windows**: no process can send SIGTERM to another, and
+  a `--sim` run has no window for `WM_CLOSE`. So on Windows the designer's
+  Stop does nothing to a `--sim` run; it ends at its end, or by Kill
+  (`TerminateProcess()`: no `"aborted"`, the data set not closed). Part R
+  should show Kill at once for a simulated run on Windows, or not offer
+  Stop there.
+- `pl_check_desc.rig` (decision 13): the profile that `dsg_rig_load()`
+  loads, and in `cal` the profile's calibration when it names one. The
+  needs go as the plan's table says, with two readings:
+  - A role tier need that stays is always at UNKNOWN: ysp/rigfile.h gives
+    a role tier 1 or UNKNOWN, and an output UNKNOWN. So `pl_need` gained no
+    field for "the profile's tier"; the Run view can say "the profile
+    gives it no tier" for each `PL_NEED_ROLE_TIER` when a profile is
+    chosen.
+  - The plan's "rules and buttons checked against the bound family (for
+    the bound roles)" was already true: since 0.15.0 the check runs them
+    for every role that a rig can bind, and a profile can bind only a
+    family that the role lists, never the keyboard. The profile adds and
+    drops no rule check.
+  - The calibration need goes only when the profile's calibration passed
+    its check and `cal` is given. The check reads no file, so part G must
+    read the calibration with the profile and pass it.
+  - Profiles bind roles by name. The test's first profile bound `resp` to
+    an xid, and every keyboard example (rdk, stroop, afc2, all with a
+    keyboard role `resp`) was refused: `role 'resp': the rig binds it to
+    family 'xid', which the role does not list`. A real start with that
+    profile refuses them too, so this is right, but a person who keeps one
+    `profile.json` for one rig sees it on every other project. Part V may
+    want the check's issue to name the profile.
+
+**P2: the stepped session takes the profile** (decision 14, accepted
+2026-11-22; the plan had given this player change to no part).
+`pl_sim_load()` with `pl_sim_desc.rig` runs the same rules as the check:
+the gates in `lower.c` key on "a stand-in load with a profile"
+(`p->stand_in && p->have_rig`), not on `p->checking`, so there is one copy
+of each rule. Its needs and refusals equal `pl_check()`'s with the same
+profile and with `pl_sim_desc.cal` as `cal`. With a profile, a given
+calibration meets a required one only when the profile names a
+calibration whose check is OK; with no profile, as in 0.16.0, a given one
+meets it. A relative signal role whose signal is in the profile takes the
+profile's adapter, so **a sample's meaning changes**: through
+`pl_sim_sample()`, a relative role's x and y are a raw mouse's counts at
+the profile's `per_count` (converted through its view, with its sign and
+bounds), not role units at gain 1. Part G or V must turn the pane's
+mouse movement into counts at that scale when a profile is chosen (for
+example, divide the role-unit motion by the profile's scale), or the
+preview's hand moves by the profile's factor. player.md, "Time and
+input", has the table. With no profile, the stepped session's bytes are
+0.17.0's (248 files).
+
+**Found wrong or missing in the plan.**
+- Decision 14 needed a player change that no part owned; built as P2,
+  above.
+- The brief's list of git-ignored folders to copy missed `sheenbidi`,
+  `skribidi`, `skribidi-extra` and `stb`; `YSP_BUILD_LAYOUT` does not
+  configure without them.
+
+**Tests.** `test_player_check` `case_rig`: profiles parsed against a rig
+folder that the test writes (a bounds loopback for an xid role, the
+nominal calibration, `player_make_rig`'s view, signals for hand, left and
+right), not `player_make_rig` itself, so the mutation runner's build of
+the test needs no other program. `player_test.py` `t_p18_version` and
+`t_p18_sigterm` (skipped on Windows). `--only` takes a list, and
+`mut_test.c` passes `YPL_SHAPES` to it, so `player_main.toml`'s mutants run
+two cases, not the suite. Numbers in player.md, Results.
+
+**Not done.**
+- No real run: the real run's Stop through SDL is still the plan's small
+  test program, not a run.
+- MSVC, MinGW, clang and macOS were not compiled; clang 24's
+  `-fsyntax-only` of the changed C files gave no new warning.
+- The designer suite ran with the Test Engine on only.
+
 ## First version
 
 In:
