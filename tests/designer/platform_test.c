@@ -882,7 +882,7 @@ static int proc_measure(const char* work, const char* child) {
         const char* a[] = {"sleep", "120000", NULL};
         const char* watch[] = {ppath("grow.txt"), NULL};
         dsg_proc* p;
-        char put_err[256], buf[16];
+        char buf[16];
         long long c0, c1, t0;
         waker_init(w);
         p = start_child("grow.log", a, NULL, watch, w, err, sizeof err);
@@ -891,9 +891,16 @@ static int proc_measure(const char* work, const char* child) {
             long long t;
             seed = seed * 1103515245u + 12345u;
             t_sleep(300 + (long)((seed >> 16) % 300));
-            snprintf(buf, sizeof buf, "%d", i * 7 + 10);
+            snprintf(buf, sizeof buf, "%d\n", i);
             t = t_now();
-            dsg_write_file(watch[0], buf, strlen(buf), put_err, sizeof put_err);
+            /* an append, as the player's writes: the size grows */
+            {
+                FILE* f = fopen(watch[0], "ab");
+                if (f) {
+                    fwrite(buf, 1, strlen(buf), f);
+                    fclose(f);
+                }
+            }
             t_sleep(400);
             grow[ng++] = waker_after(w, t);
         }
