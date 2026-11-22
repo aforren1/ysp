@@ -1869,6 +1869,225 @@ UBSan, and ThreadSanitizer; the fuzz target `cache_fuzz` (ctest
 skip the entry's SHA-256 by storing it in the record (pack.md 19,
 "Left").
 
+#### Part X as built (2026-11-22)
+
+Branch `step6-x`, from `designer-step6` (`55f27ea`). Part X adds the
+process layer `dsg_proc_*` to `designer/core/platform.c` and the plan's
+declarations to `dsg.h`, with one change: `dsg_proc_stop()` returns
+`int` (decision 7, below). The version of `dsg.h` stays 0.3.0: part S
+makes it 0.4.0. Part X also
+changed `designer/CMakeLists.txt` (S's file): the target `test_child`,
+and its path as the second argument of `test_designer_platform`. The
+plan gives `test_child` to S, but X merges before S, and X's test needs
+it.
+
+**What it does.**
+- **Start, POSIX.** `posix_spawn()` of `argv[0]` (no PATH search). The
+  log is made with `O_CREAT|O_EXCL`, so an old log is never written over.
+  File actions: `/dev/null` on descriptor 0, the log on 1 and 2,
+  `posix_spawn_file_actions_addclosefrom_np(3)` (glibc 2.34 and later;
+  macOS: `POSIX_SPAWN_CLOEXEC_DEFAULT`), and the working folder
+  (`addchdir_np`). Attributes: SCHED_OTHER with priority 0
+  (`POSIX_SPAWN_SETSCHEDULER`, where the system has it; macOS does not),
+  every signal but SIGKILL and SIGSTOP at its default action, an empty
+  mask, and a process group of its own. When the spawn fails, the log is
+  removed.
+- **Start, Windows.** `CreateProcessW()` with the program's path as
+  `lpApplicationName` and a command line that the C runtime splits back
+  into the same argv (the pack tool's rules: quote an argument with a
+  space, a tab, a quote or nothing in it; in it, double the backslashes
+  before a quote and at the end, and escape the quote). UTF-8 to UTF-16
+  with `MB_ERR_INVALID_CHARS`: an argument that is not UTF-8 is refused.
+  The log is made with `CREATE_NEW`. `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`
+  has two handles, NUL and the log (one handle serves standard output
+  and standard error), so no other inheritable handle of the designer's
+  goes to the child. `NORMAL_PRIORITY_CLASS`, `CREATE_NO_WINDOW` (a
+  console program gets no console window, and the designer's console's
+  Ctrl+C does not reach it), then `AllowSetForegroundWindow(pid)`.
+- **The watch thread.** One per run, made with
+  `PTHREAD_EXPLICIT_SCHED` and SCHED_OTHER. It blocks in `poll()` on a
+  stop pipe and, on Linux 5.3 and later, a pidfd of the child, with a
+  timeout of 250 ms (Windows: `WaitForMultipleObjects()` on a stop event
+  and the process handle). At each return it reaps the child if it ended
+  (`waitpid(WNOHANG)`), reads the sizes of `out_path` and of each watched
+  file (`stat()`), and calls `wake` when a size changed or the child
+  ended. It ends after the exit's wake. `out_path` is always watched.
+- **Stop, Kill, poll.** SIGTERM and SIGKILL; on Windows, `WM_CLOSE` to
+  each top-level window of the child (`EnumWindows()`). Stop gives 1
+  when the request went out, and 0 when the child has ended or, on
+  Windows, has no top-level window. Kill is `TerminateProcess()` on
+  Windows, with the exit code -9, so that `dsg_proc_poll()` gives -9 on
+  each system. The reap and the signals are under one lock: a pid is
+  never signaled after its reap, when another process can have it.
+  `dsg_proc_poll()` reaps too, so its answer does not wait for the watch
+  thread.
+- **Free.** When the child ended: the stop pipe, then a join. When it
+  runs: the child is left running, and the watch thread is detached; it
+  blocks in `waitpid()`, so no zombie stays, then frees the struct.
+  `wake` is called under a second lock with a "gone" flag, so it is
+  never called after `dsg_proc_free()` returns. Windows keeps no zombie:
+  free joins and closes the handles.
+- **WebAssembly.** `dsg_proc_start()` fails with "no processes in a
+  browser"; the other calls do nothing (`dsg_proc_poll()` gives 1 and
+  -1).
+
+**Decisions taken here.** S, or the user, can reverse each one.
+1. **The watch: a pidfd and a 250 ms tick, not inotify.** The UI draws a
+   run's progress at most 2 times a second (`RUN_REDRAW_HZ`), so a wake
+   per write gives it nothing. inotify wakes at each write of the log
+   and of `trials.csv`, and `trials.csv` is in a folder that the player
+   makes after the start, so it needs a watch on the parent folder too.
+   macOS and Windows have no same call. The tick reads 1 + N sizes;
+   measured below, the whole process uses 91 us of CPU a second while a
+   child runs. The pidfd costs one descriptor and makes the exit's
+   wake 0.034 ms (median) in place of up to 250 ms.
+2. **Every signal at its default, not only SIGTERM, SIGINT and SIGPIPE**
+   (the plan's list). Any signal that the designer ignores stays ignored
+   across `exec()`: SIGHUP, SIGCHLD, SIGQUIT too.
+3. **A process group of its own** (not in the plan). A Ctrl+C in the
+   designer's terminal sends SIGINT to the terminal's foreground group;
+   SDL turns it into `SDL_EVENT_QUIT`, which aborts the session. Windows
+   gets the same from `CREATE_NO_WINDOW`.
+4. **With `cwd`, `argv[0]` must be absolute.** `posix_spawn()` looks for
+   a relative path after the change of folder, `CreateProcessW()` from
+   the designer's folder. The designer passes an absolute path
+   (`SDL_GetBasePath()`), so the refusal costs it nothing.
+5. **No job object on Windows.** A job with
+   `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` ends the player when the designer
+   ends, which "Leave it running" refuses. Without that limit a job adds
+   nothing for one process that starts no other: `TerminateProcess()`
+   ends it.
+6. **Free of a running child detaches the watch thread** (the plan says
+   free joins it). With a join and no thread left, the player that ends
+   later stays a zombie until the designer ends.
+7. **`dsg_proc_stop()` returns `int`** (the plan: `void`). Part P found
+   that `ysp_player --sim` opens no window, so on Windows `WM_CLOSE`
+   reaches nothing and Stop of a simulated run does nothing. A 0 tells
+   part R to offer Kill at once, not after 5 s. A real run's window can
+   be not yet made in its first moments; Stop then also gives 0.
+
+**Measured.** Linux desktop (i5-14500, Debian 12, kernel
+6.11.5-liquorix, governor `performance`), gcc 12.2, Release (Ninja),
+2026-11-22, from `ce0e7b2`. One run under the measuring lock, pinned with
+`taskset -c 2,4`, `DISPLAY` and `WAYLAND_DISPLAY` unset, the files on
+`/tmp` (ext4 on NVMe). Load average 0.95 before, 0.26 after.
+`test_designer_platform WORK CHILD --measure`. Median, p95 and max.
+
+| What | Samples | Result |
+|---|---|---|
+| `dsg_proc_start()`, the caller's time (the log, the spawn, the pidfd, the thread) | 200 | 88.5, 134.9, 171.6 us |
+| The child's last write before its exit, to the wake (`test_child lines 0 0`) | 200 | 0.034, 0.045, 0.072 ms |
+| A watched file's write, to the wake (random phase of the tick) | 100 | 128, 231, 240 ms |
+| CPU of the whole process while a child sleeps (the UI thread asleep) | 10 s | 91 us a second |
+
+The growth's wake is the tick: from 0 to 250 ms, as expected, under the
+plan's 300 ms. A first run rewrote the file with text of the same length,
+and most writes gave no wake: the watch sees sizes, not writes. The
+player only appends, so that is enough. The start's call is the plan's `posix_spawn()` (42 us
+median) plus the log, the pidfd and the thread.
+
+**Tests.** `test_designer_platform` gets `test_child`'s path as its
+second argument; without it the process part is skipped. 106 checks
+on Linux (47 before). Each child that the test starts is `test_child`;
+none spins, and each wait ends by itself after 30 s.
+- The exit code (7); "out line" and "err line" in the log.
+- argv arrives whole: spaces, an empty argument, quotes, backslashes
+  before a quote and at the end, a UNC-like path with a trailing
+  backslash, a tab, UTF-8 (the child prints each argument's bytes in
+  hex; Windows: it reads `GetCommandLineW()` back with
+  `CommandLineToArgvW()`).
+- Descriptors: with a descriptor and a pipe of the test's open without
+  close-on-exec, and a pipe on the test's standard input, the child has
+  0, 1 and 2 only, its standard input is `/dev/null`, and it leads a
+  process group of its own. Windows: an inheritable event of the test is
+  not inherited.
+- Policy (Linux, with an `rtprio` grant; skipped without): the test's
+  thread at SCHED_FIFO 1 starts the child, then goes back. The child and
+  the watch thread are SCHED_OTHER. Windows: the test at
+  `BELOW_NORMAL_PRIORITY_CLASS` starts a child of the class NORMAL.
+- Signals (POSIX): with SIGPIPE ignored and SIGTERM, SIGINT and SIGPIPE
+  blocked in the test, the child has SIGPIPE at its default and none
+  blocked.
+- The working folder; a relative program with one is refused.
+- Stop ends a child that takes SIGTERM (Windows: `WM_CLOSE` to its
+  hidden window) with its code (5), and gives 1; Stop of the ended child
+  gives 0. A child that ignores it runs 300 ms after Stop; Kill ends it
+  with -9. Windows: Stop of a child with no window gives 0.
+- The wake: each of 4 log lines, 330 ms apart, wakes within 300 ms of
+  the child's write (the child prints its monotonic time); a file in
+  `watch` that the test writes wakes within 300 ms; the exit wakes within
+  50 ms on Linux (the pidfd), within 300 ms elsewhere. A child that
+  writes nothing wakes at its exit.
+- No spin: while a child sleeps 1 s, the process uses less than 50 ms of
+  CPU.
+- A log that exists is refused, and its bytes stay; a program that does
+  not start leaves no log; a NULL description is refused.
+- No zombie: after the frees, `waitid(WNOWAIT)` finds no child to reap.
+  A child freed while it runs still runs; after the test ends it, it is
+  reaped (`kill(pid, 0)` gives ESRCH), and `wake` was not called after
+  the free, though a watched file grew.
+
+Release: 20 of 20 runs pass at load 8 (other jobs). ASan with UBSan and
+ThreadSanitizer (gcc 12, Debug, built and run under `setarch -R`,
+`halt_on_error`): 3 of 3 runs each, no report. ctest from the Release
+tree (examples and the Test Engine on, `DISPLAY` unset): 144 of 144.
+
+**Hand mutants** (each reverted; each fails `test_designer_platform`):
+
+| Mutant | Fails |
+|---|---|
+| x-01: no `addclosefrom_np` | fds: `fds 0 1 2 3 4 5 6` |
+| x-02: no `POSIX_SPAWN_SETSCHEDULER` | policy: the child is FIFO |
+| x-03: the watch thread inherits the policy | policy: the watch thread is FIFO |
+| x-04: no `POSIX_SPAWN_SETSIGDEF` | signals: `sigpipe ignored` |
+| x-05: no `POSIX_SPAWN_SETSIGMASK` | signals: 3 blocked |
+| x-06: no `POSIX_SPAWN_SETPGROUP` | fds: `pgrp parent` |
+| x-07: standard input not `/dev/null` | fds: `stdin other` |
+| x-08: standard error not the log | exit: no "err line" |
+| x-09: `O_TRUNC` in place of `O_EXCL` | exists: not refused, the old log gone |
+| x-10: a failed start keeps its log | missing: the log is left |
+| x-11: the raw wait status | exit: 1792 |
+| x-12: a signal as a positive status | kill: 9 |
+| x-13: Stop sends SIGKILL | stop: -9, no "got term" |
+| x-14: Kill sends SIGTERM | kill: the child does not end in 5 s |
+| x-15: a 1000 ms tick | watch: 671 ms for a line, 551 ms for a file |
+| x-16: no look at the sizes | watch: lines and file late |
+| x-17: no pidfd | watch: the exit after 181 ms |
+| x-18: a `poll()` with no timeout (a spin) | block: 998 ms of CPU in 1 s |
+| x-19: free of a running child leaves the thread as it was | left: 2 wakes after the free |
+| x-20: the detached thread does not reap | left: a zombie |
+| x-21: the status read with `WNOWAIT` (no reap) | zombie: one after the frees |
+| x-22: no change of folder | cwd: the test's folder |
+| x-23: a relative program with a working folder accepted | cwd: not refused as "absolute" |
+| x-24: no wake at the exit | quiet: no wake |
+| x-25: Stop always gives 1 | stop: an ended child gets nothing |
+
+The "gone" flag guards a race (a tick's wake that starts just as free
+returns); no single mutant of it fails a test.
+
+**Checked only in part, or only by CI.**
+- Windows: not compiled with the SDK, and not run. clang 24
+  (`--target=x86_64-pc-windows-gnu`, `-fsyntax-only`) compiled the three
+  files against hand-written stubs of the Win32 declarations: the
+  syntax, the types and `-Wsometimes-uninitialized` only. The quoting
+  function, taken out of `platform.c`, gave back 97,656 argument lists
+  (every string of up to 7 of `a`, space, tab, quote and backslash,
+  beside a fixed one and an empty one) through a parser of the C
+  runtime's documented rules. CI runs the test on Windows first.
+- macOS: not compiled. `addchdir_np` is macOS 10.15 and later; if the SDK
+  marks it deprecated, `-Werror` fails there.
+- glibc before 2.34, and musl: no `addclosefrom_np`, so a descriptor
+  without close-on-exec reaches the child, and the fds check fails.
+- The pack tool's `run_program()` (ffmpeg) inherits every inheritable
+  handle on Windows. If the build thread starts ffmpeg while the
+  designer starts the player, ffmpeg can get the log's handle (it is
+  inheritable from its creation to the end of `dsg_proc_start()`). The
+  fix is the pack tool's: a handle list in `run_program()` (part K or a
+  later pack tool release).
+- clang 24 for Linux (`-fsyntax-only`, glibc's headers,
+  `-Wsometimes-uninitialized`) and emcc (the WebAssembly stubs): no
+  warning.
+
 ## First version
 
 In:

@@ -72,6 +72,47 @@ int  dsg_remove_tree(const char* root, const char* rel, char* err, size_t cap);
 int32_t dsg_atomic_add(volatile int32_t* v, int32_t d);
 int32_t dsg_atomic_load(const volatile int32_t* v);
 
+/* --- the process (platform.c; docs/designer.md, "Part X as built") --------
+ *
+ * One child program (the player), its standard output and error in a file
+ * of their own, and a watch thread that wakes the UI. The child gets
+ * SCHED_OTHER, each signal at its default action, an empty signal mask,
+ * /dev/null (Windows: NUL) as standard input, and no descriptor or handle
+ * of the designer's but the log's. POSIX: it has a process group of its
+ * own, so a Ctrl+C in the designer's terminal does not stop a session.
+ *
+ * The watch thread is SCHED_OTHER, never elevated, and blocks. It wakes at
+ * the child's exit (Linux 5.3 and later: at once, through a pidfd; else
+ * within 250 ms) and every 250 ms, when it reads the sizes of out_path and
+ * of each watch file. It calls wake when a size changed or the child
+ * ended. wake may call dsg_proc_poll(). Call the other functions from one
+ * thread.
+ * WebAssembly: dsg_proc_start() fails with "no processes in a browser". */
+typedef struct dsg_proc dsg_proc;
+typedef struct dsg_proc_desc {
+    const char* const* argv;      /* argv[0]: the program's path; NULL-ended.
+                                     A relative path is from the designer's
+                                     working folder, not from cwd           */
+    const char* cwd;              /* NULL: the designer's                 */
+    const char* out_path;         /* stdout and stderr; made, must not exist */
+    const char* const* watch;     /* files whose growth wakes (NULL-ended) */
+    void (*wake)(void* ctx);      /* on the watch thread                  */
+    void* ctx;
+} dsg_proc_desc;
+int  dsg_proc_start(dsg_proc** out, const dsg_proc_desc* d, char* err, size_t cap);
+/* SIGTERM; Windows WM_CLOSE to each top-level window of the child. 1 when
+ * the request went out; 0 when the child has ended, or (Windows) has no
+ * top-level window, as `ysp_player --sim` has none: then only Kill ends it. */
+int  dsg_proc_stop(dsg_proc* p);
+void dsg_proc_kill(dsg_proc* p);           /* SIGKILL; TerminateProcess */
+/* 1 ended (status: exit code >= 0, or -signal), 0 running. Windows: the
+ * exit code as a signed int; Kill's is -9, as SIGKILL's on POSIX. */
+int  dsg_proc_poll(dsg_proc* p, int* status);
+/* Joins the watch thread. A process still running is left running; on
+ * POSIX the watch thread then stays only to reap it (no zombie) and frees
+ * itself. wake is not called after this returns. */
+void dsg_proc_free(dsg_proc* p);
+
 /* --- view state ------------------------------------------------------------ */
 
 /* A view's own state: one top-level key of the view file whose value is an
