@@ -58,6 +58,11 @@
 //      while trials.csv grows (a wake-up every 50 ms), at most
 //      DSG_RUN_REDRAW_HZ frames a second. After a Kill, a real run's end
 //      shows how to put the display back; a simulated run's does not.
+//  13. The rig with no profile chosen (the integration of step 6), on
+//      build_run_double.c, with profile.json in a rig folder of the test's
+//      own: the check and a real run take "profile" (the player with no
+//      --rig loads profile.json); a simulated run and its check take none;
+//      with profile.json gone, the check takes none again.
 // Exit 0 on pass, 1 on a failure.
 #include "ui.h"
 #include "views.h"
@@ -65,6 +70,7 @@
 #include "skt.h"
 #include "preview_double.h"
 #include "build_run_double.h"
+#include "player.h"   // yrig_dir()
 
 #include "imgui.h"
 #include "imgui_internal.h"
@@ -73,6 +79,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <process.h>
+#define getpid _getpid
+#else
+#include <unistd.h>
+#endif
 
 #ifndef YSP_SOURCE_DIR
 #define YSP_SOURCE_DIR "."
@@ -358,6 +370,10 @@ int main(int argc, char** argv) {
     }
     const char* work = argv[1];
     char err[512], dir[DSG_PATH_MAX], dir2[DSG_PATH_MAX];
+    // the user's own rig folder, before the test points the config folder
+    // at its own: part 13 never writes there
+    char real_rig[DSG_PATH_MAX] = "";
+    (void)yrig_dir(real_rig, sizeof real_rig);
     if (dsg_make_dir(work, err, sizeof err) || !project(work, "rdk", dir, sizeof dir) || !project(work, "rdk2", dir2, sizeof dir2)) {
         printf("FAIL: the work folder: %s\n", err);
         return 1;
@@ -1194,6 +1210,112 @@ int main(int argc, char** argv) {
               "a real run killed: the xrandr command that puts the display back");
 #endif
         brd_reset();
+    }
+
+    // 13. the rig with no profile chosen: one name for the check and Run
+    {
+        // A config folder that yrt_user_dir() takes: WORK's, made absolute
+        // by the caller (ctest), or one under HOME/.cache when WORK is under
+        // a folder that all users can write (/tmp); removed at the end.
+        char cfg[DSG_PATH_MAX] = "", rigdir[DSG_PATH_MAX] = "", home_cfg[DSG_PATH_MAX] = "";
+        auto set_cfg = [](const char* d) {
+#if defined(_WIN32)
+            _putenv_s("APPDATA", d);
+#elif defined(__APPLE__)
+            setenv("HOME", d, 1);
+#else
+            setenv("XDG_CONFIG_HOME", d, 1);
+#endif
+        };
+        bool ok = dsg_join(cfg, sizeof cfg, work, "cfg13") == 0 && dsg_make_dir(cfg, err, sizeof err) == 0;
+        if (ok) set_cfg(cfg);
+#ifndef _WIN32
+        if (yrig_dir(rigdir, sizeof rigdir) != YRIG_OK) {
+            const char* home = getenv("HOME");
+            if (home && home[0] == '/') {
+                snprintf(home_cfg, sizeof home_cfg, "%s/.cache/ysp_designer_ui_test-%d", home, (int)getpid());
+                char cache[DSG_PATH_MAX];
+                snprintf(cache, sizeof cache, "%s/.cache", home);
+                ok = dsg_make_dir(cache, err, sizeof err) == 0 && !dsg_is_dir(home_cfg) && dsg_make_dir(home_cfg, err, sizeof err) == 0;
+                if (ok) set_cfg(home_cfg);
+                else home_cfg[0] = 0;
+            }
+        }
+#endif
+        ok = ok && yrig_dir(rigdir, sizeof rigdir) == YRIG_OK && !(real_rig[0] && strcmp(real_rig, rigdir) == 0);
+        CHECK(ok, "part 13: a rig folder of the test's own: '%s' (the user's: '%s')", rigdir, real_rig);
+        if (ok) {
+            // ysp/rig: the folders up to it (yrig_save() would make them)
+            char part[DSG_PATH_MAX];
+            snprintf(part, sizeof part, "%s", rigdir);
+            for (char* c = part + 1; *c; c++)
+                if (*c == '/' || *c == '\\') {
+                    const char keep = *c;
+                    *c = 0;
+                    if (!dsg_is_dir(part)) (void)dsg_make_dir(part, err, sizeof err);
+                    *c = keep;
+                }
+            (void)dsg_make_dir(rigdir, err, sizeof err);
+            static const char prof[] = "{\"format\": \"ysp-rig 1\", \"rig\": \"desk\", \"written\": \"2026-11-22T00:00:00Z\", "
+                                       "\"roles\": {}, \"view\": {\"distance_mm\": 570, \"width_mm\": 518.4, \"width_px\": 1920}}\n";
+            char pj[DSG_PATH_MAX];
+            ok = dsg_join(pj, sizeof pj, rigdir, "profile.json") == 0 && dsg_write_file(pj, prof, sizeof prof - 1, err, sizeof err) == 0;
+            CHECK(ok, "part 13: profile.json written: %s", err);
+            // the argv's --rig, "" when none
+            auto run_rig = []() -> const char* {
+                for (int i = 0; brd_run_arg(i); i++)
+                    if (strcmp(brd_run_arg(i), "--rig") == 0) return brd_run_arg(i + 1) ? brd_run_arg(i + 1) : "";
+                return "";
+            };
+            brd_reset();
+            ui_open(dir);
+            settle();
+            ui_show_aux(false);
+            ui_show_aux_view("run", false);   // the Run view would set "profile" itself
+            dsg_run_settings* rs = ui_run_settings();
+            rs->rig[0] = 0;
+            rs->sim = false;
+            g_vt += 2000000000LL;
+            settle();
+            ui_wait_checks(30000000000LL);
+            settle();
+            const dsg_report* m = ui_report();
+            CHECK(m && strcmp(m->rig, "profile") == 0, "no profile chosen, profile.json there: the check takes 'profile' ('%s')", m ? m->rig : "-");
+            CHECK(ui_run_start(), "a real run: '%s'", ui_status());
+            frame();
+            CHECK(brd_run_starts() == 1 && strcmp(run_rig(), "profile") == 0, "the real run has --rig profile ('%s')", run_rig());
+            brd_run_end(0, nullptr);
+            frame();
+            // simulated: --sim with no --rig takes no profile, and so does the check
+            rs->sim = true;
+            settle();
+            ui_wait_checks(30000000000LL);
+            settle();
+            m = ui_report();
+            CHECK(m && m->rig[0] == 0, "a simulated run with no profile: the check takes none ('%s')", m ? m->rig : "-");
+            CHECK(ui_run_start(), "a simulated run: '%s'", ui_status());
+            frame();
+            CHECK(brd_run_starts() == 2 && run_rig()[0] == 0, "the simulated run has no --rig ('%s')", run_rig());
+            brd_run_end(0, nullptr);
+            frame();
+            // profile.json gone: a real run's check takes none, after the
+            // next listing (at most once a second)
+            rs->sim = false;
+            (void)remove(pj);
+            g_vt += 2000000000LL;
+            settle();
+            ui_wait_checks(30000000000LL);
+            settle();
+            m = ui_report();
+            CHECK(m && m->rig[0] == 0, "profile.json gone: the check takes none ('%s')", m ? m->rig : "-");
+            brd_reset();
+        }
+        if (home_cfg[0]) {
+            const char* slash = strrchr(home_cfg, '/');
+            char parent[DSG_PATH_MAX];
+            snprintf(parent, sizeof parent, "%.*s", (int)(slash - home_cfg), home_cfg);
+            (void)dsg_remove_tree(parent, slash + 1, err, sizeof err);
+        }
     }
 #endif
 

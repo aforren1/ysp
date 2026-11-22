@@ -88,6 +88,9 @@ struct State {
     // Run
     dsg_run_settings run_set = {};   // the view file's part "run"
     char check_rig[DSG_RIG_NAME] = "";   // the rig of the last check posted
+    bool rig_default = false;        // the rig folder lists profile.json
+    int64_t rig_default_ns = 0;      // when the folder was last listed
+    bool rig_default_seen = false;   // it was listed since the open
     dsg_run* run = nullptr;          // the last run since the open
     bool run_end_seen = false;
     char run_rig[DSG_RIG_NAME] = ""; // the rig that the run had
@@ -103,6 +106,8 @@ struct State {
     dsg_run_argv argv = {};
 };
 State* S = nullptr;
+
+void look_rig_default(bool force);
 
 const float kTextSize = 16.0f;
 
@@ -320,6 +325,7 @@ void open_now(const char* path) {
     aux = false;
     dsg_run_part_read(&S->proj.view, &S->run_set, &aux);
     set_aux_view("run", aux);
+    look_rig_default(true);
     if (S->proj.view.selection[0]) {
         dsg_sel s;
         dsg_sel_def(&s, S->proj.view.selection);
@@ -417,6 +423,28 @@ void rebuild_merged() {
     if (S->selected >= S->mreport.n_issues) S->selected = -1;
 }
 
+// Lists the rig folder for profile.json: at the open and at most once a
+// second after it (a listing allocates; 5 us for 3 profiles, G).
+void look_rig_default(bool force) {
+    if (!force && S->rig_default_seen && S->now - S->rig_default_ns < 1000000000LL) return;
+    S->rig_default_seen = true;
+    S->rig_default_ns = S->now;
+    char first[1][DSG_RIG_NAME] = { "" }, err[256] = "";
+    // rig.c lists "profile" first when profile.json is there
+    S->rig_default = dsg_rig_list(first, 1, err, sizeof err) == 1 && strcmp(first[0], "profile") == 0;
+}
+
+// The rig profile of the check and of a run, one name for both. No profile
+// chosen ("") is "profile" for a real run while the rig folder has
+// profile.json: the player with no --rig loads it (player/lower.c), and so
+// does dsg_rig_load(""), but the checker's "" is no profile. --sim with no
+// --rig takes none, as the check's "" does.
+const char* run_rig_name() {
+    if (S->run_set.rig[0] || S->run_set.sim) return S->run_set.rig;
+    look_rig_default(false);
+    return S->rig_default ? "profile" : "";
+}
+
 // The check runs on the check thread: the post copies the text and the
 // tables as edited (so a table edit is checked before Save), and the result
 // comes back in a later frame with the revision it was posted for. The
@@ -427,7 +455,7 @@ void post_check() {
     size_t n;
     const char* t = def_bytes(&n);
     const uint64_t rev = dsg_doc_revision(S->doc);
-    snprintf(S->check_rig, sizeof S->check_rig, "%s", S->run_set.rig);
+    snprintf(S->check_rig, sizeof S->check_rig, "%s", run_rig_name());
     if (dsg_worker_check(S->worker, &S->proj, t, n, S->doc, rev, S->check_rig) == 0) S->posted = rev;
     else set_status("The check was not started: out of memory.");
     // without a thread the check runs here, and the next frame takes it
@@ -518,7 +546,12 @@ bool start_run() {
         set_status("Not run: the output folder %s exists. Choose another in the Run view.", out_dir);
         return false;
     }
-    if (dsg_run_args(&S->run_set, S->plat.player_path, S->build->path, out_dir, &S->argv, err, sizeof err)) {
+    // the run's profile is the check's (decision 13): --rig profile for a
+    // real run with none chosen while profile.json is there
+    look_rig_default(true);
+    dsg_run_settings rs = S->run_set;
+    snprintf(rs.rig, sizeof rs.rig, "%s", run_rig_name());
+    if (dsg_run_args(&rs, S->plat.player_path, S->build->path, out_dir, &S->argv, err, sizeof err)) {
         set_status("Not run: %s", err);
         return false;
     }
@@ -544,7 +577,7 @@ bool start_run() {
     }
     S->run = r;
     S->run_end_seen = false;
-    snprintf(S->run_rig, sizeof S->run_rig, "%s", S->run_set.rig);
+    snprintf(S->run_rig, sizeof S->run_rig, "%s", rs.rig);
     // A real run wants the display and the GPU: the preview stops and closes
     // its session until the run ends (decision 9). --sim needs neither.
     if (!S->run_set.sim) {
@@ -1208,7 +1241,7 @@ void ui_frame() {
     // thread"), so the check is not in the frame.
     if (S->open && dsg_doc_revision(S->doc) != S->posted) S->check_due = true;
     // the Run view chose another rig profile: the check takes it
-    if (S->open && strcmp(S->check_rig, S->run_set.rig) != 0) S->check_due = true;
+    if (S->open && strcmp(S->check_rig, run_rig_name()) != 0) S->check_due = true;
     if (S->check_due) post_check();
 
     ImGui::BeginChild("Issues", ImVec2(0, 0), ImGuiChildFlags_Borders);
@@ -1226,7 +1259,7 @@ void ui_frame() {
 // (UiPlatform.wake) brings the frame that takes the result.
 bool ui_work_pending() {
     return S && (S->check_due || S->restore_scroll >= 0 || S->ask_unsaved || S->ask_run || (S->pv && dsg_preview_work(S->pv)) ||
-                 (S->open && strcmp(S->check_rig, S->run_set.rig) != 0) ||
+                 (S->open && strcmp(S->check_rig, run_rig_name()) != 0) ||
                  (S->open && dsg_doc_revision(S->doc) != S->posted) || dsg_doc_rev(S->doc, DSG_BUF_DEF) != S->text_rev ||
                  (S->worker && !dsg_worker_threaded(S->worker) && S->open && S->checked != S->posted));
 }
